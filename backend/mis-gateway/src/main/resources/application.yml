@@ -1,0 +1,40 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: mis-gateway
+  profiles:
+    active: ${SPRING_PROFILES_ACTIVE:dev}
+  cloud:
+    nacos:
+      discovery:
+        server-addr: ${NACOS_SERVER:localhost:8848}
+        namespace: ${NACOS_NAMESPACE:dev}
+        enabled: ${NACOS_DISCOVERY_ENABLED:false}
+    gateway:
+      discovery:
+        locator:
+          enabled: false
+      routes:
+        # Sprint 0 占位：BFF 就绪后改为 lb://mis-admin-bff
+        - id: mis-admin-bff
+          uri: http://localhost:8081
+          predicates:
+            - Path=/api/v1/**
+          filters:
+            - StripPrefix=0
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      show-details: when_authorized
+
+logging:
+  level:
+    root: INFO
+    com.mis: DEBUG

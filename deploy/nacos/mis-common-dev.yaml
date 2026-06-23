@@ -1,0 +1,31 @@
+# 各微服务共享配置（数据源、Redis、JWT 公钥等）
+# 导入 Nacos：Data ID = mis-common-dev.yaml, Group = DEFAULT_GROUP
+
+spring:
+  datasource:
+    url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:mis_platform}
+    username: ${DB_USER:mis}
+    password: ${DB_PASSWORD:mis123}
+    driver-class-name: org.postgresql.Driver
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      database: 0
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: none
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+        format_sql: true
+        jdbc:
+          time_zone: Asia/Shanghai
+    show-sql: false
+
+# JWT 公钥路径（开发环境）
+mis:
+  security:
+    jwt:
+      public-key-path: ${JWT_PUBLIC_KEY_PATH:./keys/public.pem}

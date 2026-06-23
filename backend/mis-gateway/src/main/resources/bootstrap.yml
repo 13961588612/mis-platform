@@ -1,0 +1,9 @@
+# 导入 Nacos 配置中心（可选，本地无 Nacos 时使用 application.yml 即可）
+spring:
+  cloud:
+    nacos:
+      config:
+        server-addr: ${NACOS_SERVER:localhost:8848}
+        namespace: ${NACOS_NAMESPACE:dev}
+        file-extension: yaml
+        enabled: ${NACOS_CONFIG_ENABLED:false}
