@@ -1,10 +1,6 @@
 package com.mis.common.jpa.config;
 
-import com.mis.common.jpa.audit.DefaultAuditorAware;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
-import org.springframework.context.annotation.Bean;
-import org.springframework.data.domain.AuditorAware;
 import org.springframework.data.jpa.repository.config.EnableJpaAuditing;
 
 /**
@@ -13,10 +9,4 @@ import org.springframework.data.jpa.repository.config.EnableJpaAuditing;
 @AutoConfiguration
 @EnableJpaAuditing
 public class MisJpaAutoConfiguration {
-
-    @Bean
-    @ConditionalOnMissingBean(AuditorAware.class)
-    public AuditorAware<Long> auditorAware() {
-        return new DefaultAuditorAware();
-    }
 }

@@ -1,9 +1,23 @@
-# 导入 Nacos 配置中心（可选，本地无 Nacos 时使用 application.yml 即可）
+# Nacos 配置中心（可选，默认关闭）
+# 正式环境 prod profile 强制关闭；测试环境可 NACOS_CONFIG_ENABLED=true
 spring:
   cloud:
     nacos:
       config:
+        enabled: ${NACOS_CONFIG_ENABLED:false}
         server-addr: ${NACOS_SERVER:localhost:8848}
         namespace: ${NACOS_NAMESPACE:dev}
+        group: ${NACOS_CONFIG_GROUP:MIS_GROUP}
         file-extension: yaml
-        enabled: ${NACOS_CONFIG_ENABLED:false}
+        shared-configs:
+          - data-id: mis-common.yaml
+            group: ${NACOS_CONFIG_GROUP:MIS_GROUP}
+            refresh: true
+        extension-configs:
+          - data-id: ${spring.application.name}.yaml
+            group: ${NACOS_CONFIG_GROUP:MIS_GROUP}
+            refresh: true
+      discovery:
+        enabled: ${NACOS_DISCOVERY_ENABLED:false}
+        server-addr: ${NACOS_SERVER:localhost:8848}
+        namespace: ${NACOS_NAMESPACE:dev}

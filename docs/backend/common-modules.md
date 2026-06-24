@@ -7,11 +7,11 @@
 ```
 mis-common/
 ├── mis-common-core/          # 工具类、常量、异常、统一响应
-├── mis-common-security/      # Security、JWT、权限注解
-├── mis-common-redis/         # Redis 配置、CacheService
+├── mis-common-security/      # LoginUser、GatewayContextFilter、JWT 验签/签发
+├── mis-common-redis/         # Redis、Token 黑名单 ✅
 ├── mis-common-client/        # WebClient / RestClient 工厂（服务间 HTTP）
 ├── mis-common-jpa/           # Spring Data JPA、分页、数据权限 Specification
-└── mis-common-web/           # 全局异常处理、AOP、Web 配置
+├── mis-common-web/           # TraceId、全局异常、OperLog（Servlet MVC）
 ```
 
 ## 2. mis-common-core
@@ -46,7 +46,7 @@ public class BusinessException extends RuntimeException {
 }
 ```
 
-### 2.4 错误码枚举 `ErrorCode`
+### 2.4 响应码枚举 `ResultCode`
 
 | 枚举 | code | message |
 |------|------|---------|
@@ -57,59 +57,77 @@ public class BusinessException extends RuntimeException {
 | NOT_FOUND | 40400 | 资源不存在 |
 | USER_EXISTS | 40901 | 用户名已存在 |
 | ORG_HAS_CHILDREN | 40902 | 存在子部门 |
+| VALIDATION_ERROR | 40001 | 参数校验失败 |
 | INTERNAL_ERROR | 50000 | 系统错误 |
 
 ### 2.5 常量
 
-- `SecurityConstants` — Token 头、Cookie 名
+- `SecurityConstants` — Token 头、Cookie 名、`X-Trace-Id` 等
 - `CommonConstants` — 状态枚举、删除标记
 - `CacheConstants` — Redis key 前缀
+- `TraceConstants` — MDC 键名 `traceId`（**仅常量**，Filter 在 web 模块）
 
 ### 2.6 工具类
 
-| 类 | 职责 |
-|----|------|
-| IdGenerator | 雪花 ID |
-| ServletUtils | 获取 IP、User-Agent |
-| JsonUtils | JSON 序列化 |
-| DesensitizeUtils | 手机号等脱敏 |
+| 类 | 职责 | 状态 |
+|----|------|------|
+| `TraceIdUtils` | 生成 32 位 hex traceId | ✅ |
+| `IdGenerator` | 雪花 ID | ⏳ 待定 |
+| `ServletUtils` | IP、User-Agent | ⏳ |
+| `JsonUtils` | JSON 序列化 | ⏳ |
+| `DesensitizeUtils` | 脱敏 | ⏳ |
+
+### 2.7 不放 core 的能力（边界）
+
+| 能力 | 模块 |
+|------|------|
+| TraceId Filter、MDC 写入 | `mis-common-web` |
+| 全局异常、`Result.traceId` 填充 | `mis-common-web` |
+| Logback 配置、JSON 日志 | `mis-common-web` 或各服务 |
+| `@OperLog` 操作日志 AOP | `mis-common-web`（待实现） |
+| springdoc / Swagger | 仅 `mis-admin-bff` |
+| OpenAPI YAML 归档 | `docs/api/openapi/` |
+| OpenTelemetry（Phase 2） | `mis-common-web` 或独立 starter |
 
 ## 3. mis-common-security
 
-### 3.1 JWT 工具 `JwtUtils`
+> Servlet MVC 服务依赖本模块识别当前操作人。JWT 签发见 Sprint 1 `JwtUtils`（mis-auth）。
 
-| 方法 | 说明 |
+### 3.1 登录用户 `LoginUser` ✅
+
+| 字段 | 来源 |
 |------|------|
-| generateAccessToken | 签发 JWT |
-| parseToken | 解析并验签 |
-| getClaims | 获取声明 |
+| userId / tenantId / appId | Gateway 透传头 |
+| employeeId / username | Gateway 透传头 |
+| roles / permissions | BFF 从 Redis 加载后 **可写入** LoginUser（Sprint 1+） |
 
-密钥：RSA 2048，私钥签发，公钥验签。
+### 3.2 `SecurityContextHolder` ✅
 
-### 3.2 登录用户上下文 `LoginUser`
+ThreadLocal 存 `LoginUser`；`requireUserId()` 无上下文抛 `UNAUTHORIZED`。
 
-```java
-public class LoginUser {
-    private Long userId;
-    private Long tenantId;
-    private String username;
-    private Long orgId;
-    private Set<String> roles;
-    private Set<String> permissions;
-}
-```
+### 3.3 `GatewayContextFilter` ✅
 
-### 3.3 上下文持有者 `SecurityContextHolder`
+读 `X-User-Id` 等头 → `SecurityContextHolder`；请求结束 `clear()`。
 
-ThreadLocal 存储 `LoginUser`，Gateway 透传头写入。
+### 3.4 JPA 审计 `LoginUserAuditorAware` ✅
 
-### 3.4 权限校验（非 @PreAuthorize）
+与 `mis-common-jpa` 同用时自动注册 `AuditorAware<Long>`。
 
-配合 `ApiPermissionInterceptor` + `api-permissions.yml`（ADR-010）。权限字符串与 `sys_menu.permission` 一致。
+### 3.5 JWT 验签 `RsaJwtVerifier` ✅
 
-**禁止**在 Controller 上使用 `@PreAuthorize` 硬编码。
+| 组件 | 说明 |
+|------|------|
+| `JwtVerifier` / `RsaJwtVerifier` | RS256 公钥验签，解析 tenantId/appId/userId 等 |
+| `JwtIssuer` / `RsaJwtIssuer` | RS256 私钥签发（mis-auth） |
+| `PemPublicKeyLoader` | PEM 公钥加载 |
+| Gateway `JwtAuthenticationGlobalFilter` | WebFlux 验签 + 写透传头 |
+| `RedisTokenBlacklistChecker` | Gateway / mis-auth jti 黑名单 |
 
-## 4. mis-common-redis
+### 3.6 API 权限（BFF）⏳
+
+`ApiPermissionInterceptor` + Redis permissions（Sprint 1），**非** `@PreAuthorize`。
+
+## 4. mis-common-redis ✅
 
 ### 4.1 Key 规范
 
@@ -124,7 +142,14 @@ mis:dict:{typeCode}                TTL 3600s
 mis:config:{key}                   TTL 3600s
 ```
 
-### 4.2 CacheService 封装
+### 4.2 Token 黑名单 ✅
+
+| 类 | 说明 |
+|----|------|
+| `TokenBlacklistService` | 写/读 `mis:auth:token:blacklist:{jti}` |
+| `RedisTokenBlacklistChecker` | 实现 `TokenBlacklistChecker`，供 Gateway 使用 |
+
+### 4.3 CacheService 封装
 
 > 策略详见 [ADR-006](../adr/ADR-006-cache-strategy.md)：全阶段 **Redis 单级**，不引入 Caffeine。
 
@@ -189,19 +214,28 @@ public abstract class BaseEntity {
 ### 5.4 数据权限 `@DataScope`
 
 ```java
-@Target(ElementType.METHOD)
-@Retention(RetentionPolicy.RUNTIME)
 public @interface DataScope {
-    String deptField() default "deptId";
+    String deptField() default "deptId";   // 无部门列时传 ""
+    String orgField() default "";          // 有 orgId 列时填写，如 "orgId"
     String userField() default "createdBy";
 }
 ```
 
 ### 5.5 DataScopeSpecification 逻辑
 
-1. 领域服务根据用户角色计算 `data_scope`（取最大范围）
-2. 构建 `DataScopeContext`（userId、deptId、子部门 ID 列表等）
-3. `DataScopeSpecification.of(context, deptField, userField)` 生成 `Specification`
+| data_scope | 常量 | 过滤策略 |
+|------------|------|----------|
+| 1 | SCOPE_ALL | 不追加 |
+| 2 | SCOPE_DEPT | `dept_id IN (assignedDeptIds)` — 全部在任任职部门 |
+| 3 | SCOPE_DEPT_AND_CHILD | `dept_id IN (assignedDeptSubtreeIds)` |
+| 4 | SCOPE_SELF | `created_by = userId` |
+| 5 | SCOPE_CUSTOM | 角色 `perm_type='org'|'dept'`（与任职无关） |
+| 6 | SCOPE_ORG | `org_id IN (assignedOrgIds)` 或 `dept_id IN (deptIdsInAssignedOrgs)` |
+
+1. 按 `employee_id` 加载在任 `sys_employee_post` → 解析 `assignedDeptIds`、`assignedOrgIds` 等
+2. 根据用户角色计算 `data_scope`（取最大范围）
+3. 构建 `DataScopeContext` 填入上述集合并集
+4. `DataScopeSpecification.of(context, deptField, orgField, userField)` 生成 `Specification`
 4. `repository.findAll(baseSpec.and(dataScopeSpec), pageable)`
 
 ### 5.6 租户（预留）
@@ -214,18 +248,26 @@ Phase 1 查询显式带 `tenant_id`；Phase 2 可考虑 Hibernate `@Filter` 或 
 
 ## 6. mis-common-web
 
-### 6.1 全局异常处理 `GlobalExceptionHandler`
+> **仅 Servlet MVC 服务**（BFF、领域微服务）。`mis-gateway`（WebFlux）不依赖本模块。
+
+### 6.1 全局异常处理 `GlobalExceptionHandler` ✅
 
 | 异常 | HTTP | 响应 code |
 |------|------|-----------|
-| BusinessException | 200 | 业务 code |
-| AccessDeniedException | 403 | 40300 |
+| BusinessException | 200 | ResultCode |
 | MethodArgumentNotValidException | 200 | 40001 |
+| AccessDeniedException | 403 | 40300 |
 | Exception | 500 | 50000 |
 
-> HTTP 状态码策略见待确认项。
+所有响应通过 `TraceContext` 填充 `Result.traceId`。
 
-### 6.2 操作日志 `@OperLog`
+### 6.2 TraceId 过滤器 ✅
+
+`TraceIdFilter`：读 `X-Trace-Id` 或 `TraceIdUtils.generate()` → MDC + 响应头。
+
+logback 示例：`%X{traceId}`（键名见 core `TraceConstants.MDC_TRACE_ID`）。
+
+### 6.3 操作日志 `@OperLog` ⏳
 
 ```java
 @OperLog(module = "用户管理", operation = "新增用户")
@@ -233,11 +275,7 @@ Phase 1 查询显式带 `tenant_id`；Phase 2 可考虑 Hibernate `@Filter` 或 
 public Result<Long> create(@RequestBody UserCreateDTO dto) { ... }
 ```
 
-AOP 采集：userId, module, operation, request URI, params（脱敏）, duration, response code。
-
-### 6.3 TraceId 过滤器
-
-从请求头 `X-Trace-Id` 读取或生成 UUID，写入 MDC 和响应。
+AOP 采集后调 `mis-audit`（Sprint 2+ 实现）。
 
 ### 6.4 服务间 HTTP 客户端（mis-common-client）
 

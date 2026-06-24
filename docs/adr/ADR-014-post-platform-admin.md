@@ -34,11 +34,22 @@ sys_tenant
 
 | 字段要点 | 说明 |
 |----------|------|
-| `sys_employee.dept_id` | **主部门**（数据权限默认锚点） |
+| `sys_employee.dept_id` | **主部门**（展示、默认负责人；与主岗对齐） |
+| `sys_employee_post` | **数据权限锚点**：全部在任任职（`status=1`）→ `post.dept_id` → `dept.org_id` **并集**，不做上下文切换 |
 | `sys_employee_post.is_primary` | 主岗=1；每员工建议仅一条主岗 |
 | `sys_employee_post.status` | 0结束 1在任 |
 
 开户可为 `sys_post_type` 写入可选默认模板；**不强制**预置岗位编制。
+
+### 1.1 多组织多部门任职与数据权限
+
+- 员工可有多条在任 `sys_employee_post`（跨组织、跨部门兼职）。
+- **不做任职上下文切换**；`@DataScope` 预设范围（本部门 / 本部门及下级 / 本组织）以**全部在任任职**为锚，自动并集：
+  - `data_scope=2`：`dept_id IN (全部任职部门)`
+  - `data_scope=3`：`dept_id IN (各任职部门子树并集)`
+  - `data_scope=6`：`org_id IN (任职涉及的全部组织)` 或等价部门并集
+- `data_scope=5`（自定义）仍读角色 `perm_type='org'|'dept'`，与任职无关。
+- 领域服务构建 `DataScopeContext` 时：按 `employee_id` 加载在任任职 → 解析 `assignedDeptIds` / `assignedOrgIds` 等。
 
 ### 2. 平台 superadmin vs 租户 admin
 

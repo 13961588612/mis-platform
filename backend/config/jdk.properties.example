@@ -1,10 +1,13 @@
-# 可选：覆盖环境变量 JDK17_HOME（复制为 jdk.properties 后修改）
+# 可选：覆盖 spring-boot:run / 测试 JVM 路径（复制为 jdk.properties 后修改）
 # cp jdk.properties.example jdk.properties
 #
 # 优先级（高 → 低）:
 #   1. mvn -Djdk.home=C:/path/to/jdk-17
 #   2. 本文件 config/jdk.properties 中的 jdk.home
-#   3. 环境变量 JDK17_HOME（POM 默认：${env.JDK17_HOME}）
+#   3. POM 默认 ${java.home}（即 Maven 启动时使用的 JDK）
+#
+# 注意：Maven 自身须在 JDK 17+ 下运行（父 POM enforcer-plugin 校验）。
+#       若 JAVA_HOME 仍为 JDK 8，构建前执行: $env:JAVA_HOME = $env:JAVA_HOME_17
 #
 # Windows 路径请使用正斜杠，或双反斜杠转义
 

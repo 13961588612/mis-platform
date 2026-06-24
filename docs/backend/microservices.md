@@ -47,7 +47,7 @@ flowchart TD
 | JWT 验签 | RS256 公钥验签 + jti 黑名单 |
 | 限流 | Sentinel（Phase 1 基础规则） |
 | CORS | 开发环境允许 localhost:5173 |
-| 透传头 | X-User-Id, X-Tenant-Id, X-Trace-Id |
+| 透传头 | X-User-Id, X-Tenant-Id, X-App-Id, X-Employee-Id, X-Username, X-Trace-Id |
 
 **不做：** 业务逻辑、数据库访问
 

@@ -1,0 +1,9 @@
+-- Nacos 配置中心专用库（与 mis_platform 业务库隔离）
+CREATE USER nacos WITH PASSWORD 'nacos123';
+CREATE DATABASE nacos OWNER nacos;
+GRANT ALL PRIVILEGES ON DATABASE nacos TO nacos;
+
+\connect nacos
+GRANT ALL ON SCHEMA public TO nacos;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO nacos;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO nacos;

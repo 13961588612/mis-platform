@@ -24,15 +24,18 @@ INSERT INTO sys_module (id, code, name, service_name, sort, status, created_at, 
 (5, 'audit',  '审计模块', 'mis-audit',  5, 1, NOW(), NOW());
 
 -- ===========================================================================
--- 3. 部门类别 + 根部门
+-- 3. 部门类别 + 默认组织 + 根部门
 -- ===========================================================================
 INSERT INTO sys_dept_category (id, tenant_id, code, name, sort, status, created_at, updated_at) VALUES
 (1, 1, 'headquarters', '总部',   1, 1, NOW(), NOW()),
 (2, 1, 'branch',       '分公司', 2, 1, NOW(), NOW()),
 (3, 1, 'department',   '部门',   3, 1, NOW(), NOW());
 
-INSERT INTO sys_dept (id, tenant_id, parent_id, code, name, category_id, ancestors, sort, status, is_root, deleted, created_at, updated_at)
-VALUES (1, 1, 0, '0001', '默认租户', 1, '0', 1, 1, 1, 0, NOW(), NOW());
+INSERT INTO sys_org (id, tenant_id, code, name, sort, status, deleted, created_at, updated_at)
+VALUES (1, 1, 'headquarters', '总部', 1, 1, 0, NOW(), NOW());
+
+INSERT INTO sys_dept (id, tenant_id, org_id, parent_id, code, name, category_id, ancestors, sort, status, is_root, deleted, created_at, updated_at)
+VALUES (1, 1, 1, 0, '0001', '总部', 1, '0', 1, 1, 1, 0, NOW(), NOW());
 
 -- ===========================================================================
 -- 4. 员工 + 租户 admin 用户 + 内置角色
@@ -40,9 +43,9 @@ VALUES (1, 1, 0, '0001', '默认租户', 1, '0', 1, 1, 1, 0, NOW(), NOW());
 INSERT INTO sys_employee (id, tenant_id, dept_id, employee_no, real_name, status, deleted, created_at, updated_at)
 VALUES (1, 1, 1, 'E001', '租户管理员', 1, 0, NOW(), NOW());
 
-INSERT INTO sys_user (id, tenant_id, app_id, employee_id, dept_id, username, password_hash, status, login_fail_count,
+INSERT INTO sys_user (id, tenant_id, app_id, employee_id, username, password_hash, status, login_fail_count,
                       is_tenant_admin, must_change_password, deleted, created_at, updated_at)
-VALUES (1, 1, 1, 1, 1, 'admin', '$2b$10$cIqVItz7UNVFXXZy6abCIOOXulq8qWRZkMfELsfpVJDoek3anNALa', 1, 0, 1, 1, 0, NOW(), NOW());
+VALUES (1, 1, 1, 1, 'admin', '$2b$10$cIqVItz7UNVFXXZy6abCIOOXulq8qWRZkMfELsfpVJDoek3anNALa', 1, 0, 1, 1, 0, NOW(), NOW());
 
 INSERT INTO sys_role (id, tenant_id, app_id, code, name, type, data_scope, status, deleted, created_at, updated_at)
 VALUES (1, 1, 1, 'TENANT_ADMIN', '租户管理员', 1, 1, 1, 0, NOW(), NOW());
@@ -59,20 +62,25 @@ INSERT INTO sys_menu (id, tenant_id, app_id, parent_id, code, name, type, path, 
 -- 系统管理目录
 (200, 1, 1, 0, '0002', '系统管理', 1, 'system', 'Layout', NULL, 'Settings', 2, 1, 1, NOW(), NOW()),
 (201, 1, 1, 200, '00020001', '用户管理', 2, 'user', 'system/user/index', 'system:user:list', 'Users', 1, 1, 1, NOW(), NOW()),
-(202, 1, 1, 200, '00020002', '部门管理', 2, 'dept', 'system/dept/index', 'system:dept:list', 'Building2', 2, 1, 1, NOW(), NOW()),
-(203, 1, 1, 200, '00020003', '角色管理', 2, 'role', 'system/role/index', 'system:role:list', 'Shield', 3, 1, 1, NOW(), NOW()),
-(204, 1, 1, 200, '00020004', '菜单管理', 2, 'menu', 'system/menu/index', 'system:menu:list', 'Menu', 4, 1, 1, NOW(), NOW()),
-(205, 1, 1, 200, '00020005', '字典管理', 2, 'dict', 'system/dict/index', 'system:dict:list', 'BookOpen', 5, 1, 1, NOW(), NOW()),
+(202, 1, 1, 200, '00020002', '组织管理', 2, 'org', 'system/org/index', 'system:org:list', 'Building2', 2, 1, 1, NOW(), NOW()),
+(206, 1, 1, 200, '00020006', '部门管理', 2, 'dept', 'system/dept/index', 'system:dept:list', 'GitBranch', 3, 1, 1, NOW(), NOW()),
+(203, 1, 1, 200, '00020003', '角色管理', 2, 'role', 'system/role/index', 'system:role:list', 'Shield', 4, 1, 1, NOW(), NOW()),
+(204, 1, 1, 200, '00020004', '菜单管理', 2, 'menu', 'system/menu/index', 'system:menu:list', 'Menu', 5, 1, 1, NOW(), NOW()),
+(205, 1, 1, 200, '00020005', '字典管理', 2, 'dict', 'system/dict/index', 'system:dict:list', 'BookOpen', 6, 1, 1, NOW(), NOW()),
 -- 用户按钮
 (211, 1, 1, 201, '000200010001', '新增用户', 3, NULL, NULL, 'system:user:add', NULL, 1, 1, 1, NOW(), NOW()),
 (212, 1, 1, 201, '000200010002', '编辑用户', 3, NULL, NULL, 'system:user:edit', NULL, 2, 1, 1, NOW(), NOW()),
 (213, 1, 1, 201, '000200010003', '删除用户', 3, NULL, NULL, 'system:user:delete', NULL, 3, 1, 1, NOW(), NOW()),
 (214, 1, 1, 201, '000200010004', '重置密码', 3, NULL, NULL, 'system:user:resetPwd', NULL, 4, 1, 1, NOW(), NOW()),
 (215, 1, 1, 201, '000200010005', '分配角色', 3, NULL, NULL, 'system:user:assignRole', NULL, 5, 1, 1, NOW(), NOW()),
+-- 组织按钮
+(216, 1, 1, 202, '000200020001', '新增组织', 3, NULL, NULL, 'system:org:add', NULL, 1, 1, 1, NOW(), NOW()),
+(217, 1, 1, 202, '000200020002', '编辑组织', 3, NULL, NULL, 'system:org:edit', NULL, 2, 1, 1, NOW(), NOW()),
+(218, 1, 1, 202, '000200020003', '删除组织', 3, NULL, NULL, 'system:org:delete', NULL, 3, 1, 1, NOW(), NOW()),
 -- 部门按钮
-(221, 1, 1, 202, '000200020001', '新增部门', 3, NULL, NULL, 'system:dept:add', NULL, 1, 1, 1, NOW(), NOW()),
-(222, 1, 1, 202, '000200020002', '编辑部门', 3, NULL, NULL, 'system:dept:edit', NULL, 2, 1, 1, NOW(), NOW()),
-(223, 1, 1, 202, '000200020003', '删除部门', 3, NULL, NULL, 'system:dept:delete', NULL, 3, 1, 1, NOW(), NOW()),
+(221, 1, 1, 206, '000200060001', '新增部门', 3, NULL, NULL, 'system:dept:add', NULL, 1, 1, 1, NOW(), NOW()),
+(222, 1, 1, 206, '000200060002', '编辑部门', 3, NULL, NULL, 'system:dept:edit', NULL, 2, 1, 1, NOW(), NOW()),
+(223, 1, 1, 206, '000200060003', '删除部门', 3, NULL, NULL, 'system:dept:delete', NULL, 3, 1, 1, NOW(), NOW()),
 -- 角色按钮
 (231, 1, 1, 203, '000200030001', '新增角色', 3, NULL, NULL, 'system:role:add', NULL, 1, 1, 1, NOW(), NOW()),
 (232, 1, 1, 203, '000200030002', '编辑角色', 3, NULL, NULL, 'system:role:edit', NULL, 2, 1, 1, NOW(), NOW()),
@@ -117,6 +125,15 @@ INSERT INTO sys_api (id, tenant_id, app_id, module_id, parent_id, code, type, na
 (1008, 1, 1, 1, 1004, '000100020004', 'api', '用户状态', 'PUT',    '/api/v1/users/{id}/status', 4, 1, NOW(), NOW()),
 (1009, 1, 1, 1, 1004, '000100020005', 'api', '重置密码', 'PUT',    '/api/v1/users/{id}/reset-password', 5, 1, NOW(), NOW()),
 (1010, 1, 1, 1, 1004, '000100020006', 'api', '分配角色', 'PUT',    '/api/v1/users/{id}/roles', 6, 1, NOW(), NOW()),
+-- 组织模块
+(1950, 1, 1, 2, 0,    '0006', 'catalog', '组织模块', NULL, NULL, 1, 1, NOW(), NOW()),
+(1951, 1, 1, 2, 1950, '00060001', 'catalog', '组织查询', NULL, NULL, 1, 1, NOW(), NOW()),
+(1952, 1, 1, 2, 1951, '000600010001', 'api', '组织列表', 'GET',    '/api/v1/orgs', 1, 1, NOW(), NOW()),
+(1953, 1, 1, 2, 1951, '000600010002', 'api', '组织详情', 'GET',    '/api/v1/orgs/{id}', 2, 1, NOW(), NOW()),
+(1954, 1, 1, 2, 1950, '00060002', 'catalog', '组织写入', NULL, NULL, 2, 1, NOW(), NOW()),
+(1955, 1, 1, 2, 1954, '000600020001', 'api', '新增组织', 'POST',   '/api/v1/orgs', 1, 1, NOW(), NOW()),
+(1956, 1, 1, 2, 1954, '000600020002', 'api', '编辑组织', 'PUT',    '/api/v1/orgs/{id}', 2, 1, NOW(), NOW()),
+(1957, 1, 1, 2, 1954, '000600020003', 'api', '删除组织', 'DELETE', '/api/v1/orgs/{id}', 3, 1, NOW(), NOW()),
 -- 部门模块
 (2000, 1, 1, 2, 0,    '0002', 'catalog', '部门模块', NULL, NULL, 2, 1, NOW(), NOW()),
 (2001, 1, 1, 2, 2000, '00020001', 'catalog', '部门查询', NULL, NULL, 1, 1, NOW(), NOW()),
@@ -192,8 +209,14 @@ INSERT INTO sys_menu_api (id, menu_id, api_id, sort, created_at) VALUES
 (17, 214, 1009, 1, NOW()),
 (18, 215, 1010, 1, NOW()),
 (19, 215, 3002, 2, NOW()),
+-- 组织
+(25, 202, 1952, 1, NOW()),
+(26, 217, 1953, 1, NOW()),
+(27, 216, 1955, 1, NOW()),
+(28, 217, 1956, 2, NOW()),
+(29, 218, 1957, 1, NOW()),
 -- 部门
-(20, 202, 2002, 1, NOW()),
+(20, 206, 2002, 1, NOW()),
 (21, 221, 2005, 1, NOW()),
 (22, 222, 2003, 1, NOW()),
 (23, 222, 2006, 2, NOW()),
@@ -259,6 +282,7 @@ INSERT INTO sys_dict_item (id, type_id, label, value, sort, status, created_at, 
 (403, 4, '本部门及下级', '3', 3, 1, NOW(), NOW()),
 (404, 4, '仅本人',       '4', 4, 1, NOW(), NOW()),
 (405, 4, '自定义',       '5', 5, 1, NOW(), NOW()),
+(406, 4, '本组织',       '6', 6, 1, NOW(), NOW()),
 (501, 5, '目录', '1', 1, 1, NOW(), NOW()),
 (502, 5, '菜单', '2', 2, 1, NOW(), NOW()),
 (503, 5, '按钮', '3', 3, 1, NOW(), NOW());

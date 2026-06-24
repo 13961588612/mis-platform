@@ -1,5 +1,8 @@
 # MIS Platform — 本地开发基础设施
 # 用法: docker compose -f deploy/docker-compose.dev.yml up -d
+#
+# Nacos 使用 PostgreSQL 外置存储（库名 nacos，与 mis_platform 隔离）
+# 微服务默认不连 Nacos（NACOS_CONFIG_ENABLED=false），见 docs/devops/configuration.md
 
 services:
   postgres:
@@ -39,21 +42,26 @@ services:
     image: nacos/nacos-server:v2.3.2
     container_name: mis-nacos
     restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file:
+      - ./nacos/nacos-standalone-pg.env
     environment:
-      MODE: standalone
       JVM_XMS: 256m
-      JVM_XMX: 256m
+      JVM_XMX: 512m
     ports:
       - "8848:8848"
       - "9848:9848"
     volumes:
-      - mis-nacos-data:/home/nacos/data
+      - ./nacos/server/application.properties:/home/nacos/conf/application.properties:ro
+      - mis-nacos-logs:/home/nacos/logs
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:8848/nacos/ || exit 1"]
       interval: 10s
       timeout: 5s
-      retries: 12
-      start_period: 30s
+      retries: 18
+      start_period: 60s
 
   minio:
     image: minio/minio:RELEASE.2024-04-18T19-09-19Z
@@ -78,5 +86,5 @@ services:
 volumes:
   mis-pg-data:
   mis-redis-data:
-  mis-nacos-data:
+  mis-nacos-logs:
   mis-minio-data:

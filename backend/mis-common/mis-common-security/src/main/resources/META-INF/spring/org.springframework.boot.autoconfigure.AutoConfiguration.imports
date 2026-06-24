@@ -1,0 +1,2 @@
+com.mis.common.security.config.MisSecurityAutoConfiguration
+com.mis.common.security.config.MisJwtAutoConfiguration

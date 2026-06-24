@@ -32,7 +32,7 @@
 
 | 声明 | 是否保留 | 说明 |
 |------|----------|------|
-| sub, tenantId, username, orgId | ✅ | 身份上下文 |
+| sub, tenantId, appId, employeeId, username | ✅ | 身份上下文（**不含** deptId/orgId；主部门走 `/auth/me`） |
 | roles | ✅ 可选 | 角色编码，用于展示/粗粒度判断，**不作 API 鉴权依据** |
 | **permissions** | ❌ **移除** | 改由 Redis 提供 |
 | permVersion | ✅ 可选 | 用户权限版本号，供前端感知需刷新（见下） |

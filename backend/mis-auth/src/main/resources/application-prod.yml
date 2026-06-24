@@ -1,0 +1,12 @@
+# 正式环境：仅文件配置
+spring:
+  cloud:
+    nacos:
+      config:
+        enabled: false
+      discovery:
+        enabled: false
+  config:
+    import:
+      - optional:file:${MIS_CONFIG_HOME:/etc/mis/config}/mis-common.yaml
+      - optional:file:${MIS_CONFIG_HOME:/etc/mis/config}/${spring.application.name}.yaml

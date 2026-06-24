@@ -4,8 +4,15 @@ server:
 spring:
   application:
     name: mis-gateway
+  main:
+    web-application-type: reactive
   profiles:
     active: ${SPRING_PROFILES_ACTIVE:dev}
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      database: 0
   cloud:
     nacos:
       discovery:
@@ -17,7 +24,11 @@ spring:
         locator:
           enabled: false
       routes:
-        # Sprint 0 占位：BFF 就绪后改为 lb://mis-admin-bff
+        - id: mis-auth
+          uri: http://localhost:8101
+          order: -10
+          predicates:
+            - Path=/api/v1/auth/**
         - id: mis-admin-bff
           uri: http://localhost:8081
           predicates:
@@ -38,3 +49,10 @@ logging:
   level:
     root: INFO
     com.mis: DEBUG
+
+mis:
+  security:
+    gateway:
+      enabled: true
+    jwt:
+      public-key-path: ${JWT_PUBLIC_KEY_PATH:}

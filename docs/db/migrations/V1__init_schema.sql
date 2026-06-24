@@ -5,7 +5,7 @@
 -- ---------------------------------------------------------------------------
 -- 枚举
 -- ---------------------------------------------------------------------------
-CREATE TYPE sys_perm_type AS ENUM ('menu', 'dept', 'store');
+CREATE TYPE sys_perm_type AS ENUM ('menu', 'dept', 'org', 'store');
 
 CREATE TYPE sys_api_node_type AS ENUM ('catalog', 'api');
 
@@ -52,8 +52,26 @@ CREATE TABLE sys_module (
 );
 
 -- ---------------------------------------------------------------------------
--- 部门
+-- 组织与部门（租户 → 组织 → 部门树，见 ADR-013）
 -- ---------------------------------------------------------------------------
+CREATE TABLE sys_org (
+    id          BIGINT PRIMARY KEY,
+    tenant_id   BIGINT       NOT NULL,
+    code        VARCHAR(64)  NOT NULL,
+    name        VARCHAR(128) NOT NULL,
+    sort        INT          NOT NULL DEFAULT 0,
+    status      SMALLINT     NOT NULL DEFAULT 1,
+    remark      VARCHAR(512) NULL,
+    deleted     SMALLINT     NOT NULL DEFAULT 0,
+    created_by  BIGINT       NULL,
+    created_at  TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+    updated_by  BIGINT       NULL,
+    updated_at  TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+);
+
+CREATE UNIQUE INDEX uk_org_tenant_code ON sys_org (tenant_id, code) WHERE deleted = 0;
+CREATE INDEX idx_org_tenant ON sys_org (tenant_id);
+
 CREATE TABLE sys_dept_category (
     id          BIGINT PRIMARY KEY,
     tenant_id   BIGINT       NOT NULL,
@@ -69,6 +87,7 @@ CREATE TABLE sys_dept_category (
 CREATE TABLE sys_dept (
     id                  BIGINT PRIMARY KEY,
     tenant_id           BIGINT       NOT NULL,
+    org_id              BIGINT       NOT NULL,
     parent_id           BIGINT       NOT NULL DEFAULT 0,
     code                VARCHAR(64)  NOT NULL,
     name                VARCHAR(128) NOT NULL,
@@ -85,9 +104,9 @@ CREATE TABLE sys_dept (
     updated_at          TIMESTAMPTZ  NOT NULL DEFAULT NOW()
 );
 
-CREATE UNIQUE INDEX uk_dept_tenant_code ON sys_dept (tenant_id, code) WHERE deleted = 0;
-CREATE UNIQUE INDEX uk_dept_tenant_root ON sys_dept (tenant_id) WHERE is_root = 1 AND deleted = 0;
-CREATE INDEX idx_dept_tenant_parent ON sys_dept (tenant_id, parent_id);
+CREATE UNIQUE INDEX uk_dept_org_code ON sys_dept (tenant_id, org_id, code) WHERE deleted = 0;
+CREATE UNIQUE INDEX uk_dept_org_root ON sys_dept (org_id) WHERE is_root = 1 AND deleted = 0;
+CREATE INDEX idx_dept_org_parent ON sys_dept (org_id, parent_id);
 
 -- ---------------------------------------------------------------------------
 -- 岗位
@@ -178,7 +197,6 @@ CREATE TABLE sys_user (
     tenant_id             BIGINT       NOT NULL,
     app_id                BIGINT       NOT NULL,
     employee_id           BIGINT       NOT NULL,
-    dept_id               BIGINT       NOT NULL,
     username              VARCHAR(64)  NOT NULL,
     password_hash         VARCHAR(128) NOT NULL,
     avatar_url            VARCHAR(512) NULL,

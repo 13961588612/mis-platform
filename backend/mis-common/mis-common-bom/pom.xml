@@ -4,21 +4,23 @@
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
     <modelVersion>4.0.0</modelVersion>
 
-    <parent>
-        <groupId>com.mis</groupId>
-        <artifactId>mis-common</artifactId>
-        <version>0.1.0-SNAPSHOT</version>
-    </parent>
-
+    <!-- 独立 POM：不可继承 mis-platform，否则根 POM import 本 BOM 会形成循环依赖 -->
+    <groupId>com.mis</groupId>
     <artifactId>mis-common-bom</artifactId>
+    <version>0.1.0-SNAPSHOT</version>
     <packaging>pom</packaging>
 
     <name>mis-common-bom</name>
     <description>统一依赖版本管理（BOM）</description>
 
     <properties>
+        <spring-boot.version>3.2.5</spring-boot.version>
+        <spring-cloud.version>2023.0.1</spring-cloud.version>
+        <spring-cloud-alibaba.version>2023.0.1.0</spring-cloud-alibaba.version>
+        <postgresql.version>42.7.3</postgresql.version>
         <lombok.version>1.18.32</lombok.version>
         <hypersistence-utils.version>3.7.3</hypersistence-utils.version>
+        <nimbus-jose-jwt.version>9.37.3</nimbus-jose-jwt.version>
     </properties>
 
     <dependencyManagement>
@@ -61,12 +63,39 @@
                 <artifactId>mis-common-jpa</artifactId>
                 <version>${project.version}</version>
             </dependency>
+            <dependency>
+                <groupId>com.mis</groupId>
+                <artifactId>mis-common-web</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.mis</groupId>
+                <artifactId>mis-common-security</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.mis</groupId>
+                <artifactId>mis-common-security</artifactId>
+                <version>${project.version}</version>
+                <type>test-jar</type>
+                <scope>test</scope>
+            </dependency>
+            <dependency>
+                <groupId>com.mis</groupId>
+                <artifactId>mis-common-redis</artifactId>
+                <version>${project.version}</version>
+            </dependency>
 
             <!-- 常用三方库 -->
             <dependency>
                 <groupId>io.hypersistence</groupId>
                 <artifactId>hypersistence-utils-hibernate-63</artifactId>
                 <version>${hypersistence-utils.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.nimbusds</groupId>
+                <artifactId>nimbus-jose-jwt</artifactId>
+                <version>${nimbus-jose-jwt.version}</version>
             </dependency>
             <dependency>
                 <groupId>org.projectlombok</groupId>

@@ -39,9 +39,8 @@ sequenceDiagram
 | sub | 用户 ID（字符串） |
 | tenantId | 租户 ID |
 | **appId** | **登录所在 APP**（ADR-011） |
-| employeeId | 员工主数据 ID |
+| employeeId | 员工主数据 ID（**DataScope 任职锚点**，服务端按此查 `sys_employee_post`） |
 | username | 登录名 |
-| deptId | 主部门 ID |
 | roles | 角色编码数组（**展示用**，API 鉴权不依赖此字段） |
 | permVersion | 权限版本号（与 Redis 对比，供前端刷新菜单） |
 | iat / exp | 签发 / 过期时间 |
@@ -191,9 +190,9 @@ permission=system:user:add    POST /api/v1/users  →  需要 system:user:add
 ### 4.6 SecurityContext 如何建立
 
 **mis-admin-bff**（必须）：
-1. 解析 JWT → userId
-2. `GET mis:rbac:permissions:{tenantId}:{appId}:{userId}` from Redis
-3. miss → 调 mis-rbac 回源 → 回填 Redis
+1. `GatewayContextFilter` 读透传头 → `SecurityContextHolder`（✅）
+2. BFF 可选再解析 JWT；Phase 1 **信任 Gateway 头**（ADR-003）
+3. `GET mis:rbac:permissions:{tenantId}:{appId}:{userId}` from Redis
 4. `ApiPermissionInterceptor`：method + path → 查映射表 → 比对 permissions
 
 **领域服务**：`@DataScope` only；无 API 权限注解。
@@ -224,7 +223,7 @@ GET  /v3/api-docs/**
 1. 提取 `Authorization: Bearer {token}`
 2. RS256 本地验签（公钥从 Nacos 获取）
 3. 检查 `jti` 是否在 Redis 黑名单
-4. 透传请求头：`X-User-Id`, `X-Tenant-Id`, `X-Username`, `X-Trace-Id`（**不含**权限判断）
+4. 透传请求头：`X-User-Id`, `X-Tenant-Id`, `X-App-Id`, `X-Employee-Id`, `X-Username`, `X-Trace-Id`（**不含** `deptId`/`orgId`；数据权限由 `employeeId` 服务端解析，ADR-014）
 
 > Gateway 这一层只回答「Token 是否合法、用户是谁」，不回答「能否调用 system:user:delete」。
 
@@ -251,10 +250,11 @@ flowchart LR
 | data_scope 值 | 名称 | SQL 策略 |
 |---------------|------|----------|
 | 1 | 全部数据 | 不追加条件 |
-| 2 | 本部门 | `dept_id = #{userDeptId}` |
-| 3 | 本部门及下级 | `dept_id IN (子树 ID 列表)` |
+| 2 | 本部门 | `dept_id IN (员工全部在任任职部门)` |
+| 3 | 本部门及下级 | `dept_id IN (各任职部门子树并集)` |
 | 4 | 仅本人 | `created_by = #{userId}` |
-| 5 | 自定义 | `dept_id IN (SELECT target_id FROM sys_role_permission WHERE perm_type='dept')` |
+| 5 | 自定义 | 角色 `perm_type='org'|'dept'`（与任职无关） |
+| 6 | 本组织 | `org_id IN (任职涉及的全部组织)` 或等价部门并集 |
 
 实现方式：Spring Data JPA **`DataScopeSpecification`** + `@DataScope` 注解（**仅在领域服务**，与 BFF 的 API 权限校验互补）。见 [ADR-015](../adr/ADR-015-jpa-over-mybatis.md)。
 

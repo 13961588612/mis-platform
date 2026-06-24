@@ -89,7 +89,7 @@ POST /auth/login
     "realName": "系统管理员",
     "avatarUrl": null,
     "deptId": "1",
-    "deptName": "默认租户",
+    "deptName": "总部",
     "roles": ["TENANT_ADMIN"],
     "mustChangePassword": true
   }
@@ -350,7 +350,7 @@ PUT /users/{id}/roles
 
 | 方法 | 路径 | 权限 | 说明 |
 |------|------|------|------|
-| GET | `/orgs/tree` | system:org:list | 组织树 |
+| GET | `/orgs` | system:org:list | 组织列表（租户下扁平） |
 | GET | `/orgs/{id}` | system:org:query | 详情 |
 | POST | `/orgs` | system:org:add | 创建 |
 | PUT | `/orgs/{id}` | system:org:edit | 更新 |
@@ -359,18 +359,41 @@ PUT /users/{id}/roles
 **创建 body：**
 ```json
 {
-  "parentId": "1",
-  "name": "新部门",
-  "code": "NEW_DEPT",
+  "code": "shanghai",
+  "name": "上海分公司",
   "sort": 10,
-  "leaderUserId": null,
+  "status": 1,
+  "remark": ""
+}
+```
+
+**删除规则：** 组织下存在部门 → 409（`ORG_HAS_CHILDREN` 或业务 message）。
+
+## 6. 部门模块 `/depts`
+
+| 方法 | 路径 | 权限 | 说明 |
+|------|------|------|------|
+| GET | `/depts/tree?orgId=` | system:dept:list | 指定组织下的部门树 |
+| GET | `/depts/{id}` | system:dept:query | 详情 |
+| POST | `/depts` | system:dept:add | 创建（body 含 `orgId`） |
+| PUT | `/depts/{id}` | system:dept:edit | 更新 |
+| DELETE | `/depts/{id}` | system:dept:delete | 删除 |
+
+**创建 body：**
+```json
+{
+  "orgId": "1",
+  "parentId": "1",
+  "name": "研发部",
+  "categoryId": "3",
+  "sort": 10,
   "status": 1
 }
 ```
 
-**删除规则：** 存在子部门 → 409；存在关联用户 → 409。
+**删除规则：** 存在子部门 → 409；存在关联用户/员工 → 409。
 
-## 6. 角色模块 `/roles`
+## 7. 角色模块 `/roles`
 
 | 方法 | 路径 | 权限 |
 |------|------|------|
@@ -394,11 +417,14 @@ PUT /users/{id}/roles
 ```json
 {
   "dataScope": 5,
-  "orgIds": ["2", "3"]
+  "orgIds": ["2", "3"],
+  "deptIds": ["10", "11"]
 }
 ```
 
-## 7. 字典模块 `/dicts`
+> `orgIds` 写入 `perm_type='org'`；`deptIds` 写入 `perm_type='dept'`；至少一项非空。查询时二者 **OR** 合并。
+
+## 8. 字典模块 `/dicts`
 
 | 方法 | 路径 | 权限 |
 |------|------|------|
@@ -416,7 +442,7 @@ PUT /users/{id}/roles
 GET /dicts/items/by-type/{typeCode}
 ```
 
-## 8. 审计模块 `/audit`
+## 9. 审计模块 `/audit`
 
 ### 8.1 登录日志
 
@@ -435,7 +461,7 @@ GET /audit/oper-logs/{id}
 
 权限：`monitor:operlog:list` / `monitor:operlog:query`
 
-## 9. 系统模块 `/system`
+## 10. 系统模块 `/system`
 
 ### 9.1 系统信息
 
@@ -471,7 +497,7 @@ GET /dashboard/stats
 }
 ```
 
-## 10. OpenAPI 文件规划
+## 11. OpenAPI 文件规划
 
 开工后在 `docs/api/openapi/` 按服务拆分：
 
@@ -486,7 +512,7 @@ openapi/
 └── mis-admin-bff.yaml    # 聚合后的对外契约
 ```
 
-## 11. 待确认项
+## 12. 待确认项
 
 - [ ] 批量删除接口是否纳入 Phase 1（用户、角色）
 - [ ] 用户导入/导出 Excel 是否 Phase 1
@@ -494,7 +520,7 @@ openapi/
 - [ ] 头像上传接口归属 mis-user 还是 mis-file（Phase 2）
 - [ ] API 错误时 HTTP 状态码策略：一律 200 + code，还是 4xx/5xx
 
-## 12. 关联文档
+## 13. 关联文档
 
 - [权限清单](permissions.md)
 - [安全设计](../architecture/03-security.md)

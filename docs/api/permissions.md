@@ -11,7 +11,7 @@
 | 段 | 说明 | 示例 |
 |----|------|------|
 | 模块 | 业务域 | system, monitor, dashboard |
-| 资源 | 实体 | user, org, role, menu, dict |
+| 资源 | 实体 | user, org, dept, role, menu, dict |
 | 操作 | 动作 | list, add, edit, delete, query |
 
 ## 2. 权限与 API 的关系（ADR-011）
@@ -56,13 +56,23 @@ sys_menu（UI 树）                    sys_menu_api              sys_api
 
 | permission | 类型 | 说明 |
 |------------|------|------|
-| system:org:list | 菜单+API | 组织树 |
+| system:org:list | 菜单+API | 组织列表 |
 | system:org:query | API | 组织详情 |
 | system:org:add | 按钮+API | 新增组织 |
 | system:org:edit | 按钮+API | 编辑组织 |
 | system:org:delete | 按钮+API | 删除组织 |
 
-### 3.4 角色管理
+### 3.4 部门管理
+
+| permission | 类型 | 说明 |
+|------------|------|------|
+| system:dept:list | 菜单+API | 部门树（按 orgId） |
+| system:dept:query | API | 部门详情 |
+| system:dept:add | 按钮+API | 新增部门 |
+| system:dept:edit | 按钮+API | 编辑部门 |
+| system:dept:delete | 按钮+API | 删除部门 |
+
+### 3.5 角色管理
 
 | permission | 类型 | 说明 |
 |------------|------|------|
@@ -73,7 +83,7 @@ sys_menu（UI 树）                    sys_menu_api              sys_api
 | system:role:delete | 按钮+API | 删除角色 |
 | system:role:assignMenu | 按钮+API | 分配菜单 |
 
-### 3.5 菜单管理
+### 3.6 菜单管理
 
 | permission | 类型 | 说明 |
 |------------|------|------|
@@ -83,7 +93,7 @@ sys_menu（UI 树）                    sys_menu_api              sys_api
 | system:menu:edit | 按钮+API | 编辑菜单 |
 | system:menu:delete | 按钮+API | 删除菜单 |
 
-### 3.6 字典管理
+### 3.7 字典管理
 
 | permission | 类型 | 说明 |
 |------------|------|------|
@@ -93,7 +103,7 @@ sys_menu（UI 树）                    sys_menu_api              sys_api
 | system:dict:edit | 按钮+API | 编辑字典 |
 | system:dict:delete | 按钮+API | 删除字典 |
 
-### 3.7 系统监控
+### 3.8 系统监控
 
 | permission | 类型 | 说明 |
 |------------|------|------|
@@ -105,28 +115,29 @@ sys_menu（UI 树）                    sys_menu_api              sys_api
 
 | id | parent_id | type | name | path | component | permission | icon |
 |----|-----------|------|------|------|-----------|------------|------|
-| 1 | 0 | 2 | 仪表盘 | /dashboard | dashboard/index | dashboard:view | LayoutDashboard |
-| 10 | 0 | 1 | 系统管理 | /system | Layout | — | Settings |
-| 11 | 10 | 2 | 用户管理 | user | system/user/index | system:user:list | Users |
-| 12 | 10 | 2 | 组织管理 | org | system/org/index | system:org:list | Building2 |
-| 13 | 10 | 2 | 角色管理 | role | system/role/index | system:role:list | Shield |
-| 14 | 10 | 2 | 菜单管理 | menu | system/menu/index | system:menu:list | Menu |
-| 15 | 10 | 2 | 字典管理 | dict | system/dict/index | system:dict:list | BookOpen |
-| 20 | 0 | 1 | 系统监控 | /monitor | Layout | — | Monitor |
-| 21 | 20 | 2 | 登录日志 | login-log | monitor/login-log/index | monitor:loginlog:list | LogIn |
-| 22 | 20 | 2 | 操作日志 | oper-log | monitor/oper-log/index | monitor:operlog:list | FileText |
+| 100 | 0 | 2 | 仪表盘 | dashboard | dashboard/index | dashboard:view | LayoutDashboard |
+| 200 | 0 | 1 | 系统管理 | system | Layout | — | Settings |
+| 201 | 200 | 2 | 用户管理 | user | system/user/index | system:user:list | Users |
+| 202 | 200 | 2 | 组织管理 | org | system/org/index | system:org:list | Building2 |
+| 206 | 200 | 2 | 部门管理 | dept | system/dept/index | system:dept:list | GitBranch |
+| 203 | 200 | 2 | 角色管理 | role | system/role/index | system:role:list | Shield |
+| 204 | 200 | 2 | 菜单管理 | menu | system/menu/index | system:menu:list | Menu |
+| 205 | 200 | 2 | 字典管理 | dict | system/dict/index | system:dict:list | BookOpen |
+| 300 | 0 | 1 | 系统监控 | monitor | Layout | — | Monitor |
+| 301 | 300 | 2 | 登录日志 | login-log | monitor/login-log/index | monitor:loginlog:list | LogIn |
+| 302 | 300 | 2 | 操作日志 | oper-log | monitor/oper-log/index | monitor:operlog:list | FileText |
 
 ### 4.1 按钮子节点（type=3）
 
-以用户管理（id=11）为例：
+以用户管理（id=201）为例：
 
 | parent_id | name | permission |
 |-----------|------|------------|
-| 11 | 新增用户 | system:user:add |
-| 11 | 编辑用户 | system:user:edit |
-| 11 | 删除用户 | system:user:delete |
-| 11 | 重置密码 | system:user:resetPwd |
-| 11 | 分配角色 | system:user:assignRole |
+| 201 | 新增用户 | system:user:add |
+| 201 | 编辑用户 | system:user:edit |
+| 201 | 删除用户 | system:user:delete |
+| 201 | 重置密码 | system:user:resetPwd |
+| 201 | 分配角色 | system:user:assignRole |
 
 > 各 API 的 `sys_api` 明细见 [api-permission-mapping.md](../backend/api-permission-mapping.md)。
 

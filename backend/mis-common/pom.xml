@@ -20,5 +20,8 @@
         <module>mis-common-bom</module>
         <module>mis-common-core</module>
         <module>mis-common-jpa</module>
+        <module>mis-common-web</module>
+        <module>mis-common-security</module>
+        <module>mis-common-redis</module>
     </modules>
 </project>

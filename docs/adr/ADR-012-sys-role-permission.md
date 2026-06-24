@@ -44,20 +44,21 @@ UNIQUE (role_id, perm_type, target_id)
 |-----------|-----------|------|--------|
 | `menu` | `sys_menu.id` | 功能/UI 权限 | 聚合 `permission` → Redis；BFF API 鉴权 |
 | `dept` | `sys_dept.id` | 部门数据范围 | `@DataScope`；`data_scope=5` 时读取 |
+| `org` | `sys_org.id` | 组织数据范围 | `@DataScope`；`data_scope=5` 时与 `dept` **OR** 合并 |
 | `store` | 待定 | 门店权限 | Phase 2+ |
 
 ### 3.1 perm_type 存储（S2 已确认）
 
-Phase 1 使用 PostgreSQL **`sys_perm_type` ENUM**（`menu`, `dept`, `store`）。应用层 Java 枚举与之一一对应；扩展新类型需 `ALTER TYPE ... ADD VALUE` 迁移。
+Phase 1 使用 PostgreSQL **`sys_perm_type` ENUM**（`menu`, `dept`, `org`, `store`）。应用层 Java 枚举与之一一对应；扩展新类型需 `ALTER TYPE ... ADD VALUE` 迁移。
 
 ### 4. 与 sys_role.data_scope 的关系
 
 | data_scope | 行为 |
 |------------|------|
-| 1–4 | 按枚举规则，**不读** `perm_type='dept'` |
-| 5 CUSTOM | 可读部门 ID 列表 = `perm_type='dept'` 的 `target_id` 集合 |
+| 1–4、6 | 按枚举规则，**不读** `perm_type='dept'|'org'` |
+| 5 CUSTOM | `perm_type='org'` 与 `perm_type='dept'` 的 `target_id` 分别加载；查询时 **OR** 合并 |
 
-多角色合并 data_scope 规则不变（取最宽松）；`perm_type='dept'` 的 `target_id` 多角色取 **并集（S1 已确认）**。
+多角色合并 data_scope 规则不变（取最宽松：`ALL > CUSTOM > ORG > DEPT_AND_CHILD > DEPT > SELF`）；`perm_type='dept'|'org'` 的 `target_id` 多角色均取 **并集（S1 已确认）**。
 
 ### 5. Redis evict
 

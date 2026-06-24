@@ -38,7 +38,8 @@ mis-admin-web/
 │   │   │   ├── tab-bar.tsx       # 多 Tab 工作区
 │   │   │   └── copilot-panel.tsx # AI 占位侧栏
 │   │   ├── auth/                 # 权限守卫、PermissionButton
-│   │   └── common/               # DataTable、PageHeader 等
+│   │   └── common/               # DataTable、PageHeader、SubmitButton 等
+│   ├── hooks/                    # useDebouncedValue、useAsyncAction
 │   ├── features/                 # 按业务域划分
 │   │   ├── auth/
 │   │   ├── dashboard/
@@ -229,7 +230,7 @@ flowchart TD
 **编辑 Drawer / Dialog Tabs：**
 1. 基本信息（name, code, dataScope, remark）
 2. 菜单权限（Checkbox 树，支持半选）
-3. 数据权限（data_scope=5 时显示组织多选）
+3. 数据权限（`data_scope=5` 时显示组织多选 + 部门多选；`data_scope=6` 无需额外配置）
 
 ### 5.6 菜单管理 `features/system/menu/`
 
@@ -303,6 +304,103 @@ const client = axios.create({ baseURL: '/api/v1', timeout: 30000 });
 ### 7.2 Refresh 单飞锁
 
 多个 401 并发时，只发一次 refresh，其余请求排队等待新 token。
+
+### 7.3 防抖与防重复提交（全站统一）
+
+两类问题**不要混在一个拦截器里**，分层统一即可覆盖登录页及所有业务页。
+
+| 场景 | 手段 | 落点 |
+|------|------|------|
+| 搜索框、筛选、Cmd+K 输入 | **防抖**（延迟触发请求） | `useDebouncedValue` + Query `enabled` |
+| 表单保存、删除、登录、批量操作 | **防重复提交**（进行中不可再点） | `useMutation` + `SubmitButton` + 可选 Axios 去重 |
+| 写接口最后一道防线 | **幂等**（可选） | 后端 `Idempotency-Key`（Sprint 2 BFF） |
+
+#### 7.3.1 写操作：默认 `useMutation`（推荐）
+
+所有 POST/PUT/DELETE 经 TanStack Query `useMutation`，按钮绑定 `isPending`，全站一致：
+
+```typescript
+// features/system/user/hooks/use-create-user.ts
+export function useCreateUser() {
+  return useMutation({
+    mutationFn: (body: CreateUserDto) => userApi.create(body),
+    onSuccess: () => {
+      toast.success('创建成功');
+      queryClient.invalidateQueries({ queryKey: ['users'] });
+    },
+  });
+}
+
+// 页面内
+const { mutate, isPending } = useCreateUser();
+<SubmitButton loading={isPending} onClick={() => mutate(form.getValues())}>
+  保存
+</SubmitButton>
+```
+
+`isPending` 为 true 时按钮自动 `disabled` + loading，**无需每个页面手写锁**。
+
+#### 7.3.2 通用组件 `SubmitButton`
+
+路径：`src/components/common/submit-button.tsx`
+
+- 包装 shadcn `Button`：`loading` 时 `disabled` + `Loader2` 图标
+- 表单场景配合 RHF：`disabled={isPending || form.formState.isSubmitting}`
+- 登录、弹窗保存、列表行内操作**全部复用同一组件**
+
+#### 7.3.3 通用 Hook `useAsyncAction`（非 Query 场景）
+
+极少数不走 Query 的异步（如导出、文件上传）：
+
+```typescript
+// hooks/use-async-action.ts
+// 返回 { run, loading }；loading 期间再次 run 直接忽略
+const { run, loading } = useAsyncAction(async () => { ... });
+```
+
+#### 7.3.4 Axios 可选：写请求短时去重（兜底）
+
+在 `client.ts` 请求拦截器中，对 **相同 method + url + body** 的并发写请求：
+
+- 默认：**取消前一个** 或 **直接拒绝后一个**（可配置 `meta.dedupe: true`）
+- GET 不走此逻辑（由 Query 缓存与 `staleTime` 负责）
+- 显式跳过去重：`client.post(url, data, { meta: { skipDedupe: true } })`
+
+与 `useMutation.isPending` **叠加**：UI 层防手抖，拦截器防极端连点/双指点击。
+
+#### 7.3.5 搜索防抖：`useDebouncedValue`
+
+```typescript
+const [keyword, setKeyword] = useState('');
+const debounced = useDebouncedValue(keyword, 300);
+
+const { data } = useQuery({
+  queryKey: ['users', debounced],
+  queryFn: () => userApi.list({ keyword: debounced }),
+  enabled: debounced.length === 0 || debounced.length >= 2,
+});
+```
+
+列表、组织树搜索、字典筛选**统一此模式**，不在 `onChange` 里直接打 API。
+
+#### 7.3.6 目录约定（补充 §2）
+
+```
+src/
+├── hooks/
+│   ├── use-debounced-value.ts
+│   └── use-async-action.ts
+├── components/common/
+│   └── submit-button.tsx
+└── lib/api/
+    ├── client.ts              # 含 dedupe 拦截器
+    └── dedupe-pending.ts      # 进行中的写请求 Map
+```
+
+#### 7.3.7 与后端配合
+
+- Phase 1：前端统一策略即可满足 MVP
+- Sprint 2 起：BFF 写接口支持 `Idempotency-Key` 头，与前端 `SubmitButton` 可选联动（同一次点击生成 UUID 放入 header）
 
 ## 8. shadcn 组件清单（Phase 1）
 

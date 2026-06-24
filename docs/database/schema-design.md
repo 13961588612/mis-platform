@@ -11,7 +11,7 @@
 | 租户 | 租户 = 集团公司；业务表含 `tenant_id` |
 | APP | 多应用；用户、菜单、API、角色均带 `app_id`（租户级表除外） |
 | 模块 | **`sys_module` 为平台微服务注册表，与 `app_id` 无对应**；经 `sys_api.module_id` 关联 |
-| 树编码 | `sys_menu`、`sys_api`、**`sys_dept`** 使用层级 **`code`**（ADR-011 / ADR-013） |
+| 树编码 | `sys_menu`、`sys_api`、**`sys_dept`** 使用层级 **`code`**；**`sys_org` 为租户内业务编码**（ADR-011 / ADR-013） |
 | 软删除 | 用户/组织/员工等 `deleted`；菜单/API 用 `status` |
 | 时间 | `TIMESTAMP WITH TIME ZONE`，存储 UTC |
 | 命名 | 表前缀 `sys_`，小写蛇形 |
@@ -23,7 +23,9 @@
 erDiagram
     SYS_TENANT ||--o{ SYS_APP : owns
     SYS_TENANT ||--o{ SYS_EMPLOYEE : employs
+    SYS_TENANT ||--o{ SYS_ORG : owns
     SYS_TENANT ||--o{ SYS_DEPT_CATEGORY : defines
+    SYS_ORG ||--o{ SYS_DEPT : contains
     SYS_TENANT ||--o{ SYS_DEPT : owns
     SYS_DEPT_CATEGORY ||--o{ SYS_DEPT : types
     SYS_DEPT ||--o{ SYS_DEPT : parent_child
@@ -100,7 +102,30 @@ erDiagram
 | created_at | TIMESTAMPTZ | NOT NULL | |
 | updated_at | TIMESTAMPTZ | NOT NULL | |
 
-### 3.4 sys_dept_category — 租户部门类别
+### 3.4 sys_org — 组织（租户下）
+
+| 字段 | 类型 | 约束 | 说明 |
+|------|------|------|------|
+| id | BIGINT | PK | 雪花 ID |
+| tenant_id | BIGINT | NOT NULL | → sys_tenant |
+| code | VARCHAR(64) | NOT NULL | 租户内唯一，如 `headquarters` |
+| name | VARCHAR(128) | NOT NULL | 组织名称 |
+| sort | INT | NOT NULL DEFAULT 0 | |
+| status | SMALLINT | NOT NULL DEFAULT 1 | 0=禁用 1=启用 |
+| remark | VARCHAR(512) | NULL | |
+| deleted | SMALLINT | NOT NULL DEFAULT 0 | |
+| created_by | BIGINT | NULL | |
+| created_at | TIMESTAMPTZ | NOT NULL | |
+| updated_by | BIGINT | NULL | |
+| updated_at | TIMESTAMPTZ | NOT NULL | |
+
+**索引：**
+- `uk_org_tenant_code` UNIQUE (tenant_id, code) WHERE deleted=0
+- `idx_org_tenant` (tenant_id)
+
+> Phase 1 组织为**扁平列表**（无 parent_id）。部门树挂在组织下。
+
+### 3.5 sys_dept_category — 租户部门类别
 
 | 字段 | 类型 | 约束 | 说明 |
 |------|------|------|------|
@@ -117,20 +142,21 @@ erDiagram
 
 > 每租户独立维护；**创建租户时**写入默认类别种子（总部/分公司/部门），租户可增删改。
 
-### 3.5 sys_dept — 部门树
+### 3.6 sys_dept — 部门树（组织内）
 
 | 字段 | 类型 | 约束 | 说明 |
 |------|------|------|------|
 | id | BIGINT | PK | |
 | tenant_id | BIGINT | NOT NULL | |
-| parent_id | BIGINT | NOT NULL DEFAULT 0 | 根=0 |
-| **code** | **VARCHAR(64)** | NOT NULL | 层级编码 `0001`/`00010001`（ADR-013） |
+| **org_id** | BIGINT | NOT NULL | → sys_org |
+| parent_id | BIGINT | NOT NULL DEFAULT 0 | 组织内根=0 |
+| **code** | **VARCHAR(64)** | NOT NULL | 组织内层级编码 `0001`/`00010001`（ADR-013） |
 | name | VARCHAR(128) | NOT NULL | |
 | category_id | BIGINT | NOT NULL | → sys_dept_category |
 | ancestors | VARCHAR(512) | NOT NULL | 如 `0,1,5` |
 | sort | INT | NOT NULL DEFAULT 0 | |
 | **status** | SMALLINT | NOT NULL DEFAULT 1 | 0禁用 1启用 |
-| **is_root** | SMALLINT | NOT NULL DEFAULT 0 | 1=租户自动顶级节点，不可删 |
+| **is_root** | SMALLINT | NOT NULL DEFAULT 0 | 1=该组织自动根部门，不可删 |
 | leader_employee_id | BIGINT | NULL | 负责人 |
 | deleted | SMALLINT | NOT NULL DEFAULT 0 | |
 | created_by | BIGINT | NULL | |
@@ -139,13 +165,13 @@ erDiagram
 | updated_at | TIMESTAMPTZ | NOT NULL | |
 
 **索引：**
-- `uk_dept_tenant_code` UNIQUE (tenant_id, code) WHERE deleted=0
-- `uk_dept_tenant_root` UNIQUE (tenant_id) WHERE is_root=1 AND deleted=0
-- `idx_dept_tenant_parent` (tenant_id, parent_id)
+- `uk_dept_org_code` UNIQUE (tenant_id, org_id, code) WHERE deleted=0
+- `uk_dept_org_root` UNIQUE (org_id) WHERE is_root=1 AND deleted=0
+- `idx_dept_org_parent` (org_id, parent_id)
 
-**开户规则：** 创建 `sys_tenant` 后自动插入根部门；同步创建内置角色 `TENANT_ADMIN`、租户 `admin` 账号（见 ADR-014）。
+**开户规则：** 创建 `sys_tenant` 后自动插入默认 `sys_org` + 该组织下根部门；同步 `TENANT_ADMIN`、admin（见 ADR-014）。
 
-### 3.6 sys_post_type — 租户岗位类型
+### 3.7 sys_post_type — 租户岗位类型
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
@@ -159,7 +185,7 @@ erDiagram
 
 **索引：** `uk_post_type_tenant_code` UNIQUE (tenant_id, code)
 
-### 3.7 sys_post — 部门岗位编制
+### 3.8 sys_post — 部门岗位编制
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
@@ -243,8 +269,7 @@ erDiagram
 | id | BIGINT | PK | |
 | tenant_id | BIGINT | NOT NULL | |
 | app_id | BIGINT | NOT NULL | 所属 APP |
-| employee_id | BIGINT | NOT NULL | 对应员工 |
-| dept_id | BIGINT | NOT NULL | 数据权限主部门（可覆盖员工主部门） |
+| employee_id | BIGINT | NOT NULL | 对应员工（部门/组织展示与 DataScope 均经员工 → 任职解析） |
 | username | VARCHAR(64) | NOT NULL | APP 内登录名 |
 | password_hash | VARCHAR(128) | NOT NULL | BCrypt |
 | avatar_url | VARCHAR(512) | NULL | |
@@ -394,12 +419,13 @@ WHERE a.type = 'api' AND a.status = 1
 | **target_id** | **BIGINT** | 多态目标 ID |
 | created_at | TIMESTAMPTZ | |
 
-**`sys_perm_type` ENUM：** `menu` | `dept` | `store`（S2 已确认；新增类型需迁移扩展 ENUM）
+**`sys_perm_type` ENUM：** `menu` | `dept` | `org` | `store`（S2 已确认；新增类型需迁移扩展 ENUM）
 
 | perm_type | target_id 指向 | Phase | 说明 |
 |-----------|----------------|-------|------|
 | `menu` | `sys_menu.id` | 1 | 菜单/按钮 → `sys_menu.permission` |
 | `dept` | `sys_dept.id` | 1 | 部门数据范围；多角色 **并集**（S1） |
+| `org` | `sys_org.id` | 1 | 组织数据范围；`data_scope=5` 时与 `dept` 取 **并集** |
 | `store` | 待定 | 2+ | 门店数据权限 |
 
 **索引：**
@@ -408,9 +434,11 @@ WHERE a.type = 'api' AND a.status = 1
 - `idx_perm_target` (perm_type, target_id)
 
 **约定：**
-- `data_scope=5`（自定义）时，部门列表取自 `perm_type='dept'` 记录
+- `data_scope=5`（自定义）时，组织取自 `perm_type='org'`，部门取自 `perm_type='dept'`，查询 **OR** 合并
+- `data_scope=6`（本组织）：任职涉及的全部组织下数据（并集）
+- `@DataScope` 预设 2/3/6 以在任 `sys_employee_post` 解析部门/组织并集，见 ADR-014
 - BFF 功能权限（API）：仅 `perm_type='menu'` 参与 Redis `permissions` 聚合
-- `dept` / `store` 等用于**数据权限**（`@DataScope`），与菜单 permission 分离
+- `dept` / `org` / `store` 等用于**数据权限**（`@DataScope`），与菜单 permission 分离
 
 **登录聚合 permissions（仅 menu 类型）：**
 

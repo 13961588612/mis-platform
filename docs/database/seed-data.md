@@ -28,22 +28,23 @@
 **开户自动创建（应用层 / 迁移脚本）：**
 
 1. `sys_dept_category` 默认 3 类（总部/分公司/部门）
-2. `sys_dept` 根节点 `code=0001`, `is_root=1`, `name=默认租户`
-3. `sys_role` 内置 `TENANT_ADMIN`（`type=1`, `data_scope=1`）
-4. `sys_employee` + `sys_user`（`app=system`）：
+2. `sys_org` 默认组织（如 `headquarters` / 总部）
+3. `sys_dept` 在该组织下根节点 `code=0001`, `is_root=1`
+4. `sys_role` 内置 `TENANT_ADMIN`（`type=1`, `data_scope=1`）
+5. `sys_employee` + `sys_user`（`app=system`）：
 
 | username | 说明 | is_tenant_admin | must_change_password |
 |----------|------|-----------------|----------------------|
 | admin | 租户管理员 | 1 | 1 |
 
-5. `sys_user_role`：admin → TENANT_ADMIN
-6. `sys_role_permission`：TENANT_ADMIN → 全部菜单节点（种子写入）
+6. `sys_user_role`：admin → TENANT_ADMIN
+7. `sys_role_permission`：TENANT_ADMIN → 全部菜单节点（种子写入）
 
 > **admin 不可删除自己**；不可禁用租户内最后一个 `is_tenant_admin=1` 的账号。
 
-## 4. 部门树（Phase 1 种子）
+## 4. 组织与部门（Phase 1 种子）
 
-仅保留**自动创建的根部门**；不预置技术中心/研发部等示例子树（租户自行维护）。
+默认 **1 个组织** + 该组织下 **1 个根部门**；不预置子部门树（租户自行维护）。
 
 ## 5. 岗位（Phase 1）
 

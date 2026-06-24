@@ -31,7 +31,7 @@
 | Java 构建        | **Maven**（多模块 `pom.xml`）                                       |
 | HTTP 错误        | 业务错误 **HTTP 200 + body.code**；认证 401、网关层 403 可用 HTTP 状态        |
 | 权限 Redis evict | 角色/菜单变更 → 查 `sys_user_role` **按 roleId 批量 DEL** 用户 permissions |
-| 多角色 data_scope | 取 **最大范围**（ALL > CUSTOM > DEPT_AND_CHILD > DEPT > SELF）        |
+| 多角色 data_scope | 取 **最大范围**（ALL > CUSTOM > ORG > DEPT_AND_CHILD > DEPT > SELF）        |
 | Flyway 执行      | **独立 `mis-migrator` 模块**（见 §9）                                 |
 | 前端包管理          | pnpm（暂定，可再改）                                                   |
 | Python         | uv 或 poetry（Phase 3 前再定）                                       |
@@ -41,7 +41,7 @@
 
 - 权限运行时：**Redis**（key 含 `appId`），JWT 不含 permissions（ADR-009）
 - API 注册：`**sys_api`** 独立树，`type=catalog|api`；菜单树 `**sys_menu**` 独立 `code` 层级（ADR-011）
-- 角色授权：**`sys_role_permission`**（`perm_type` 区分；Phase 1：`menu` / `dept`）
+- 角色授权：**`sys_role_permission`**（`perm_type` 区分；Phase 1：`menu` / `dept` / `org`）
 - BFF：`ApiPermissionInterceptor` 从 `sys_api WHERE type=api` 加载 Registry
 
 ---
@@ -195,9 +195,9 @@ sys_tenant（集团公司）
 | -------- | -------------------------------------------------------- |
 | U1 登录    | **app_code + username + password**                       |
 | U2 用户名   | `(tenant_id, app_id, username)` 唯一                       |
-| U3 员工与账号 | `sys_user.employee_id` FK；每 APP 每员工最多一条 user             |
+| U3 员工与账号 | `sys_user.employee_id` FK；每 APP 每员工最多一条 user；**无** `dept_id`（部门经员工/任职） |
 | U4 令牌    | JWT / Refresh / Redis permissions **均带 appId**，跨 APP 不可用 |
-| U5 多部门 | Phase 1 员工 `dept_id` 主部门；`sys_employee_dept` Phase 2 |
+| U5 多部门 | 在任任职多条；`@DataScope` 预设范围对全部任职部门/组织 **并集**；不做上下文切换（ADR-014） |
 
 ### 3.2 sys_employee
 
@@ -209,7 +209,7 @@ sys_tenant（集团公司）
 
 | 讨论点 | 倾向 |
 |--------|------|
-| O1 表名 | `sys_org` → **`sys_dept`** |
+| O1 表结构 | **`sys_org`（组织）+ `sys_dept`（组织内部门树）** + `sys_dept_category` |
 | O2 层级 code | 与 menu 相同，每层 4 位；`uk(tenant_id, code)` |
 | O3 status | 0禁用 1启用；业务停用不用 deleted |
 | O4 根节点 | **创建租户自动** `is_root=1`, `code=0001`, `name=租户名` |
@@ -252,7 +252,7 @@ sys_tenant（集团公司）
 | ---------- | ------------------- |
 | app_id     | 角色归属 APP            |
 | type       | 1=内置 2=自定义          |
-| data_scope | 1–5，见 schema-design |
+| data_scope | 1–6，见 schema-design |
 
 
 **多角色合并（已确认）：** 取 **最宽松** data_scope（数字越小越宽：ALL=1 最宽）。
@@ -383,8 +383,8 @@ backend/
 | M1–M6 | APP / 模块，见 §12                   | ✅ **已全部确认**                  |
 | M7    | `sys_module` 与 `app_id` 无对应关系   | ✅ 已确认                        |
 | A1–A8 | sys_api + 多 APP 用户，见 §13         | ✅ ADR-011/012 |
-| S1    | 多角色 `perm_type=dept` 取 **并集** | ✅ 已确认 |
-| S2    | `perm_type` 使用 **ENUM**（menu/dept/store） | ✅ 已确认 |
+| S1    | 多角色 `perm_type=dept|org` 取 **并集** | ✅ 已确认 |
+| S2    | `perm_type` 使用 **ENUM**（menu/dept/org/store） | ✅ 已确认 |
 | O1–O7 | 部门模型，见 §3.3、ADR-013 | ✅ 已确认 |
 | P1–P8 | 岗位/管理员/Phase1 范围，见 §14、ADR-014 | ✅ 已确认 |
 | F1–F6 | Phase 1 功能范围 | ✅ 见 ADR-014 |

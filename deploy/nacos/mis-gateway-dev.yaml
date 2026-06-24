@@ -1,10 +1,27 @@
 server:
   port: 8080
 
+mis:
+  security:
+    gateway:
+      enabled: true
+    jwt:
+      public-key-path: ${JWT_PUBLIC_KEY_PATH:./keys/public.pem}
+
 spring:
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      database: 0
   cloud:
     gateway:
       routes:
+        - id: mis-auth
+          uri: http://localhost:8101
+          order: -10
+          predicates:
+            - Path=/api/v1/auth/**
         - id: mis-admin-bff
           uri: http://localhost:8081
           predicates:

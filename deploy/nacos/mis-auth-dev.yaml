@@ -1,0 +1,20 @@
+server:
+  port: 8101
+
+mis:
+  auth:
+    captcha-enabled: true
+  security:
+    jwt:
+      private-key-path: ${JWT_PRIVATE_KEY_PATH:./keys/private.pem}
+      public-key-path: ${JWT_PUBLIC_KEY_PATH:./keys/public.pem}
+
+spring:
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+
+logging:
+  level:
+    com.mis.auth: DEBUG

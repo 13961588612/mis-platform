@@ -6,7 +6,7 @@
 
 | 工具 | 版本 | 用途 |
 |------|------|------|
-| JDK | 17 | 后端（环境变量 **`JDK17_HOME`**，POM 引用 `${env.JDK17_HOME}`） |
+| JDK | 17 | 后端（环境变量 **`JAVA_HOME_17`**，POM 引用 `${env.JAVA_HOME_17}`） |
 | Maven | 3.9+ | 后端构建 |
 | Node.js | 20 LTS | 前端 |
 | pnpm | 8+ | 前端包管理 |
@@ -53,12 +53,21 @@
 redis://localhost:6379/0
 ```
 
-### 2.4 Nacos
+### 2.4 Nacos（PostgreSQL 外置存储）
 
 | 项 | 值 |
 |----|-----|
 | 控制台 | http://localhost:8848/nacos |
 | 默认账号 | nacos / nacos |
+| 配置库 | PostgreSQL `nacos` 库（见 `deploy/postgres/init/02-init-nacos-db.sql`） |
+
+> Nacos Server 用 PG 存配置元数据；**微服务默认不连 Nacos**，见 [配置管理策略](configuration.md)。
+
+导入测试配置：
+
+```powershell
+.\scripts\import-nacos-config.ps1 -Namespace test
+```
 
 ### 2.5 MinIO
 
@@ -148,7 +157,7 @@ mvn -pl mis-migrator flyway:migrate
 | 单服务调试 | IDE 启动 Spring Boot，连本地 Docker 基础设施 |
 | 前端联调 | pnpm dev + Gateway 8080 |
 | 查看 API | http://localhost:8081/swagger-ui.html（BFF） |
-| Nacos 配置 | 控制台修改后 @RefreshScope 热更新 |
+| Nacos 配置 | 测试环境可选；正式环境仅文件，见 [configuration.md](configuration.md) |
 
 ## 9. 环境变量（.env.example 规划）
 
@@ -160,8 +169,8 @@ DB_NAME=mis_platform
 DB_USER=mis
 DB_PASSWORD=mis123
 
-# JDK 17（Maven 父 POM: ${env.JDK17_HOME}）
-JDK17_HOME=C:/Program Files/Eclipse Adoptium/jdk-17.0.11.9-hotspot
+# JDK 17（Maven 父 POM: ${env.JAVA_HOME_17}）
+JAVA_HOME_17=C:/Program Files/Eclipse Adoptium/jdk-17.0.11.9-hotspot
 
 # Redis
 REDIS_HOST=localhost
@@ -170,8 +179,11 @@ REDIS_PORT=6379
 # Nacos
 NACOS_SERVER=localhost:8848
 NACOS_NAMESPACE=dev
+NACOS_CONFIG_ENABLED=false
+NACOS_CONFIG_GROUP=MIS_GROUP
 
-# JWT（开发用，生产走 Nacos/Vault）
+# 配置策略见 docs/devops/configuration.md
+# JWT（开发用；正式走 deploy/config/prod/ 文件）
 JWT_PRIVATE_KEY_PATH=./keys/private.pem
 JWT_PUBLIC_KEY_PATH=./keys/public.pem
 ```
@@ -185,5 +197,6 @@ JWT_PUBLIC_KEY_PATH=./keys/public.pem
 
 ## 11. 关联文档
 
+- [配置管理策略](configuration.md)
 - [CI/CD](ci-cd.md)
 - [Sprint 计划](../project/sprint-plan.md)
