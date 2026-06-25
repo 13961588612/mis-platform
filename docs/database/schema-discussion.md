@@ -273,7 +273,7 @@ sys_tenant（集团公司）
 
 | 事件          | SQL / 动作                                                                   |
 | ----------- | -------------------------------------------------------------------------- |
-| 用户角色变更      | `DEL mis:rbac:permissions:{tenantId}:{appId}:{userId}` + INCR perm-version |
+| 用户角色变更      | `DEL mis:rbac:permissions:{...}` + **`sys_user.perm_version` INCR** + 写 Redis version |
 | 角色菜单/API 变更 | 按 roleId 查 user_id → 批量 DEL（含 appId）                                       |
 | sys_api 变更  | 刷新 BFF Registry；permission 变更时 evict                                       |
 
@@ -298,7 +298,7 @@ sys_tenant（集团公司）
 
 ### 6.1 sys_refresh_token
 
-- 只存 hash，不存明文
+- 存 `token_hash`（校验）+ `token_value` 明文（Phase 1 联调核对；生产可仅 hash）
 - `revoked=1` 保留记录便于审计（可定时清理过期）
 
 ### 6.2 sys_login_log / sys_oper_log
@@ -377,7 +377,7 @@ backend/
 | D6    | 角色树勾选存显式 menu_id，不自动展开父节点        | ✅                            |
 | U1    | Phase 1 单主部门                     | ✅                            |
 | D7    | 种子用固定 ID，生产用雪花                   | ✅                            |
-| D8    | `sys_menu` 是否加 `perm_version` 字段 | ❌ 不需要，用 Redis `perm-version` |
+| D8    | `sys_menu` 是否加 `perm_version` 字段 | ❌ 不需要；用 **`sys_user.perm_version`** + Redis 缓存 |
 | D9    | 角色只勾选菜单/按钮；API 经 `sys_menu_api` 关联 | ✅ 已确认 |
 | D10   | `sys_role_menu` → **`sys_role_permission`**，按 `perm_type` 扩展 | ✅ ADR-012 |
 | M1–M6 | APP / 模块，见 §12                   | ✅ **已全部确认**                  |

@@ -278,6 +278,7 @@ erDiagram
 | login_fail_count | INT | NOT NULL DEFAULT 0 | |
 | **is_tenant_admin** | **SMALLINT** | NOT NULL DEFAULT 0 | 1=租户管理员，**不可删自己** |
 | **must_change_password** | **SMALLINT** | NOT NULL DEFAULT 0 | 1=须先改密再进系统 |
+| **perm_version** | **BIGINT** | NOT NULL DEFAULT 1 | 权限版本权威源（ADR-009）；变更 INCR |
 | deleted | SMALLINT | NOT NULL DEFAULT 0 | |
 | created_at | TIMESTAMPTZ | NOT NULL | |
 | updated_at | TIMESTAMPTZ | NOT NULL | |
@@ -502,7 +503,8 @@ WHERE ur.user_id = ? AND m.app_id = ?
 | id | BIGINT | PK | |
 | user_id | BIGINT | NOT NULL | |
 | app_id | BIGINT | NOT NULL | 与 user 一致，令牌隔离 |
-| token_hash | VARCHAR(128) | NOT NULL | |
+| token_hash | VARCHAR(128) | NOT NULL | SHA-256，校验/吊销用 |
+| token_value | VARCHAR(128) | NOT NULL | 明文（Phase 1 联调核对） |
 | client_id | VARCHAR(64) | NOT NULL DEFAULT 'web' | |
 | expire_at | TIMESTAMPTZ | NOT NULL | |
 | revoked | SMALLINT | NOT NULL DEFAULT 0 | |

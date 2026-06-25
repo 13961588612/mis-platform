@@ -205,6 +205,7 @@ CREATE TABLE sys_user (
     login_fail_count      INT          NOT NULL DEFAULT 0,
     is_tenant_admin       SMALLINT     NOT NULL DEFAULT 0,
     must_change_password  SMALLINT     NOT NULL DEFAULT 0,
+    perm_version          BIGINT       NOT NULL DEFAULT 1,
     deleted               SMALLINT     NOT NULL DEFAULT 0,
     created_at            TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
     updated_at            TIMESTAMPTZ  NOT NULL DEFAULT NOW()
@@ -359,6 +360,7 @@ CREATE TABLE sys_refresh_token (
     user_id     BIGINT       NOT NULL,
     app_id      BIGINT       NOT NULL,
     token_hash  VARCHAR(128) NOT NULL,
+    token_value VARCHAR(128) NOT NULL,
     client_id   VARCHAR(64)  NOT NULL DEFAULT 'web',
     expire_at   TIMESTAMPTZ  NOT NULL,
     revoked     SMALLINT     NOT NULL DEFAULT 0,

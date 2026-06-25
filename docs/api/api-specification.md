@@ -149,7 +149,7 @@ GET /auth/me
 }
 ```
 
-可选响应头：`X-Perm-Stale: true`（JWT 内 permVersion 低于 Redis 当前版本，提示前端刷新）。
+可选响应头：`X-Perm-Stale: true`（JWT 内 `permVersion` **与**当前版本 **不等** 时置位，提示前端调 `GET /auth/me` 刷新菜单；**不**作为 API 鉴权失败条件）。
 
 ## 3. 菜单模块 `/menus`
 

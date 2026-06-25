@@ -1,5 +1,6 @@
 package com.mis.auth.service;
 
+import com.mis.auth.config.AuthProperties;
 import com.mis.auth.domain.entity.RefreshTokenEntity;
 import com.mis.auth.domain.repository.RefreshTokenRepository;
 import com.mis.auth.support.IdGenerator;
@@ -20,7 +21,7 @@ import java.time.Instant;
  * <p>
  * <b>双写</b>（ADR-002）：
  * <ul>
- *   <li>PostgreSQL {@code sys_refresh_token}：存 SHA-256 hash，不存明文</li>
+ *   <li>PostgreSQL {@code sys_refresh_token}：存 SHA-256 hash + 明文 {@code token_value}（Phase 1 联调核对）</li>
  *   <li>Redis {@link CacheConstants#AUTH_REFRESH}：快速校验，TTL 与 Refresh 一致</li>
  * </ul>
  * 客户端仅持有明文 Refresh；Cookie 名 {@code mis_refresh_{appCode}}。
@@ -37,14 +38,17 @@ public class RefreshTokenService {
     private final RefreshTokenRepository refreshTokenRepository;
     private final StringRedisTemplate redisTemplate;
     private final JwtProperties jwtProperties;
+    private final AuthProperties authProperties;
 
     public RefreshTokenService(
             RefreshTokenRepository refreshTokenRepository,
             StringRedisTemplate redisTemplate,
-            JwtProperties jwtProperties) {
+            JwtProperties jwtProperties,
+            AuthProperties authProperties) {
         this.refreshTokenRepository = refreshTokenRepository;
         this.redisTemplate = redisTemplate;
         this.jwtProperties = jwtProperties;
+        this.authProperties = authProperties;
     }
 
     @Transactional
@@ -89,8 +93,8 @@ public class RefreshTokenService {
     }
 
     /** 每 APP 独立 Cookie，避免多 APP 同域冲突 */
-    public static String cookieName(String appCode) {
-        return "mis_refresh_" + appCode;
+    public String cookieName(String appCode) {
+        return authProperties.getRefreshCookiePrefix() + appCode;
     }
 
     private RefreshTokenEntity loadActive(String rawToken) {
@@ -114,7 +118,8 @@ public class RefreshTokenService {
         entity.setUserId(userId);
         entity.setAppId(appId);
         entity.setTokenHash(hash);
-        entity.setClientId("web");
+        entity.setTokenValue(rawToken);
+        entity.setClientId(authProperties.getDefaultClientId());
         entity.setExpireAt(Instant.now().plus(ttl));
         entity.setRevoked(0);
         refreshTokenRepository.save(entity);

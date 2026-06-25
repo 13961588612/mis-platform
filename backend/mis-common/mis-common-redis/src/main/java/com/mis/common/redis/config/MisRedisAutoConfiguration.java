@@ -2,6 +2,7 @@ package com.mis.common.redis.config;
 
 import com.mis.common.redis.auth.RedisTokenBlacklistChecker;
 import com.mis.common.redis.auth.TokenBlacklistService;
+import com.mis.common.redis.rbac.PermVersionService;
 import com.mis.common.security.jwt.TokenBlacklistChecker;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
@@ -39,5 +40,12 @@ public class MisRedisAutoConfiguration {
     @ConditionalOnMissingBean(TokenBlacklistChecker.class)
     public TokenBlacklistChecker redisTokenBlacklistChecker(TokenBlacklistService tokenBlacklistService) {
         return new RedisTokenBlacklistChecker(tokenBlacklistService);
+    }
+
+    @Bean
+    @ConditionalOnBean(StringRedisTemplate.class)
+    @ConditionalOnMissingBean(PermVersionService.class)
+    public PermVersionService permVersionService(StringRedisTemplate redisTemplate) {
+        return new PermVersionService(redisTemplate);
     }
 }

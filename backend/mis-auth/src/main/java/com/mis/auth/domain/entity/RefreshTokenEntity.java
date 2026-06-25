@@ -23,6 +23,10 @@ public class RefreshTokenEntity {
     @Column(name = "token_hash", nullable = false)
     private String tokenHash;
 
+    /** Refresh 明文（Phase 1 便于联调核对；生产可改仅 hash） */
+    @Column(name = "token_value", nullable = false)
+    private String tokenValue;
+
     @Column(name = "client_id", nullable = false)
     private String clientId;
 
@@ -62,6 +66,14 @@ public class RefreshTokenEntity {
 
     public void setTokenHash(String tokenHash) {
         this.tokenHash = tokenHash;
+    }
+
+    public String getTokenValue() {
+        return tokenValue;
+    }
+
+    public void setTokenValue(String tokenValue) {
+        this.tokenValue = tokenValue;
     }
 
     public String getClientId() {

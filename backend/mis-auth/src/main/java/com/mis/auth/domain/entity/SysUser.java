@@ -38,6 +38,9 @@ public class SysUser {
     @Column(name = "must_change_password", nullable = false)
     private Integer mustChangePassword;
 
+    @Column(name = "perm_version", nullable = false)
+    private Long permVersion;
+
     @Column(nullable = false)
     private Integer deleted;
 
@@ -75,6 +78,10 @@ public class SysUser {
 
     public boolean mustChangePassword() {
         return mustChangePassword != null && mustChangePassword == 1;
+    }
+
+    public Long getPermVersion() {
+        return permVersion;
     }
 
     public void setLoginFailCount(Integer loginFailCount) {

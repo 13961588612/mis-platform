@@ -1,5 +1,6 @@
 package com.mis.auth.controller;
 
+import com.mis.auth.config.AuthProperties;
 import com.mis.auth.dto.CaptchaResponse;
 import com.mis.auth.dto.LoginRequest;
 import com.mis.auth.dto.RefreshRequest;
@@ -8,6 +9,7 @@ import com.mis.auth.service.AuthService;
 import com.mis.auth.service.CaptchaService;
 import com.mis.auth.service.RefreshTokenService;
 import com.mis.common.core.result.Result;
+import com.mis.common.security.jwt.JwtProperties;
 import jakarta.servlet.http.Cookie;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
@@ -28,7 +30,7 @@ import java.time.Duration;
  * <p>
  * 同时映射 {@code /api/v1/auth}（经 Gateway 对外）与 {@code /internal/v1/auth}（供未来 BFF 聚合）。
  * <p>
- * Refresh Token 通过 HttpOnly、SameSite=Strict Cookie 下发，不落 localStorage（ADR-002）。
+ * Refresh Token 通过 HttpOnly Cookie 下发，属性见 {@link AuthProperties#getCookie()}（ADR-002）。
  */
 @RestController
 @RequestMapping({"/internal/v1/auth", "/api/v1/auth"})
@@ -36,10 +38,21 @@ public class AuthController {
 
     private final AuthService authService;
     private final CaptchaService captchaService;
+    private final RefreshTokenService refreshTokenService;
+    private final AuthProperties authProperties;
+    private final JwtProperties jwtProperties;
 
-    public AuthController(AuthService authService, CaptchaService captchaService) {
+    public AuthController(
+            AuthService authService,
+            CaptchaService captchaService,
+            RefreshTokenService refreshTokenService,
+            AuthProperties authProperties,
+            JwtProperties jwtProperties) {
         this.authService = authService;
         this.captchaService = captchaService;
+        this.refreshTokenService = refreshTokenService;
+        this.authProperties = authProperties;
+        this.jwtProperties = jwtProperties;
     }
 
     @GetMapping("/captcha")
@@ -73,18 +86,12 @@ public class AuthController {
             @RequestBody(required = false) RefreshRequest request,
             HttpServletRequest httpRequest) {
         authService.logout(authorization, resolveRefreshToken(request, httpRequest));
+        String prefix = authProperties.getRefreshCookiePrefix();
         if (httpRequest.getCookies() != null) {
             for (Cookie cookie : httpRequest.getCookies()) {
-                if (cookie.getName().startsWith("mis_refresh_")) {
-                    ResponseCookie clearCookie = ResponseCookie.from(cookie.getName(), "")
-                            .httpOnly(true)
-                            .sameSite("Strict")
-                            .path("/")
-                            .maxAge(0)
-                            .build();
-                    // 多个 cookie 时仅最后一个 Set-Cookie 会生效；Phase 1 通常只有一个 APP
+                if (cookie.getName().startsWith(prefix)) {
                     return ResponseEntity.ok()
-                            .header(HttpHeaders.SET_COOKIE, clearCookie.toString())
+                            .header(HttpHeaders.SET_COOKIE, clearCookie(cookie.getName()).toString())
                             .body(Result.ok());
                 }
             }
@@ -92,13 +99,14 @@ public class AuthController {
         return ResponseEntity.ok().body(Result.ok());
     }
 
-    private static String resolveRefreshToken(RefreshRequest request, HttpServletRequest httpRequest) {
+    private String resolveRefreshToken(RefreshRequest request, HttpServletRequest httpRequest) {
         if (request != null && request.refreshToken() != null && !request.refreshToken().isBlank()) {
             return request.refreshToken();
         }
+        String prefix = authProperties.getRefreshCookiePrefix();
         if (httpRequest.getCookies() != null) {
             for (Cookie cookie : httpRequest.getCookies()) {
-                if (cookie.getName().startsWith("mis_refresh_")) {
+                if (cookie.getName().startsWith(prefix)) {
                     return cookie.getValue();
                 }
             }
@@ -106,12 +114,40 @@ public class AuthController {
         return null;
     }
 
-    private static ResponseCookie refreshCookie(String appCode, String refreshToken) {
-        return ResponseCookie.from(RefreshTokenService.cookieName(appCode), refreshToken)
+    private ResponseCookie refreshCookie(String appCode, String refreshToken) {
+        AuthProperties.Cookie cookieProps = authProperties.getCookie();
+        long refreshTtlSeconds = jwtProperties.getRefreshTokenTtlSeconds();
+        if (refreshTtlSeconds <= 0) {
+            refreshTtlSeconds = 604800L;
+        }
+        ResponseCookie.ResponseCookieBuilder builder = ResponseCookie.from(
+                        refreshTokenService.cookieName(appCode), refreshToken)
                 .httpOnly(true)
-                .sameSite("Strict")
-                .path("/")
-                .maxAge(Duration.ofDays(7))
-                .build();
+                .path(cookieProps.getPath())
+                .maxAge(Duration.ofSeconds(refreshTtlSeconds));
+        applySameSite(builder, cookieProps.getSameSite());
+        if (cookieProps.isSecure()) {
+            builder.secure(true);
+        }
+        return builder.build();
+    }
+
+    private ResponseCookie clearCookie(String name) {
+        AuthProperties.Cookie cookieProps = authProperties.getCookie();
+        ResponseCookie.ResponseCookieBuilder builder = ResponseCookie.from(name, "")
+                .httpOnly(true)
+                .path(cookieProps.getPath())
+                .maxAge(0);
+        applySameSite(builder, cookieProps.getSameSite());
+        if (cookieProps.isSecure()) {
+            builder.secure(true);
+        }
+        return builder.build();
+    }
+
+    private static void applySameSite(ResponseCookie.ResponseCookieBuilder builder, String sameSite) {
+        if (sameSite != null && !sameSite.isBlank()) {
+            builder.sameSite(sameSite.trim());
+        }
     }
 }

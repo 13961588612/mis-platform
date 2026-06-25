@@ -26,8 +26,17 @@ spring:
 mis:
   auth:
     captcha-enabled: ${AUTH_CAPTCHA_ENABLED:true}
+    captcha-ttl-seconds: 300
+    captcha-length: 4
+    captcha-chars: ABCDEFGHJKLMNPQRSTUVWXYZ23456789
     max-login-failures: 5
     login-lock-seconds: 1800
+    default-client-id: web
+    refresh-cookie-prefix: mis_refresh_
+    cookie:
+      path: /
+      same-site: Strict
+      secure: ${AUTH_COOKIE_SECURE:false}
   security:
     jwt:
       private-key-path: ${JWT_PRIVATE_KEY_PATH:}

@@ -11,18 +11,17 @@ import com.mis.auth.domain.repository.SysUserRepository;
 import com.mis.auth.dto.LoginRequest;
 import com.mis.auth.dto.LoginResponse;
 import com.mis.auth.dto.TokenResponse;
-import com.mis.common.core.constant.CacheConstants;
 import com.mis.common.core.constant.SecurityConstants;
 import com.mis.common.core.exception.BusinessException;
 import com.mis.common.core.exception.ResultCode;
 import com.mis.common.redis.auth.TokenBlacklistService;
+import com.mis.common.redis.rbac.PermVersionService;
 import com.mis.common.security.jwt.AccessTokenClaims;
 import com.mis.common.security.jwt.IssuedAccessToken;
 import com.mis.common.security.jwt.JwtClaims;
 import com.mis.common.security.jwt.JwtIssuer;
 import com.mis.common.security.jwt.JwtProperties;
 import com.mis.common.security.jwt.JwtVerifier;
-import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -55,7 +54,7 @@ public class AuthService {
     private final TokenBlacklistService tokenBlacklistService;
     private final PasswordEncoder passwordEncoder;
     private final AuthProperties authProperties;
-    private final StringRedisTemplate redisTemplate;
+    private final PermVersionService permVersionService;
 
     public AuthService(
             SysAppRepository sysAppRepository,
@@ -71,7 +70,7 @@ public class AuthService {
             TokenBlacklistService tokenBlacklistService,
             PasswordEncoder passwordEncoder,
             AuthProperties authProperties,
-            StringRedisTemplate redisTemplate) {
+            PermVersionService permVersionService) {
         this.sysAppRepository = sysAppRepository;
         this.sysUserRepository = sysUserRepository;
         this.sysEmployeeRepository = sysEmployeeRepository;
@@ -85,7 +84,7 @@ public class AuthService {
         this.tokenBlacklistService = tokenBlacklistService;
         this.passwordEncoder = passwordEncoder;
         this.authProperties = authProperties;
-        this.redisTemplate = redisTemplate;
+        this.permVersionService = permVersionService;
     }
 
     /**
@@ -114,7 +113,7 @@ public class AuthService {
         loginLockService.clearFailures(app.getTenantId(), app.getId(), request.username());
 
         List<String> roles = sysRoleRepository.findRoleCodesByUserId(user.getId());
-        long permVersion = loadPermVersion(user.getTenantId(), app.getId(), user.getId());
+        long permVersion = resolvePermVersion(user, app);
         IssuedAccessToken accessToken = issueAccessToken(user, app, roles, permVersion);
         String refreshToken = refreshTokenService.issue(user.getId(), app.getId());
 
@@ -153,7 +152,7 @@ public class AuthService {
                 .orElseThrow(() -> new BusinessException(ResultCode.UNAUTHORIZED));
 
         List<String> roles = sysRoleRepository.findRoleCodesByUserId(user.getId());
-        long permVersion = loadPermVersion(user.getTenantId(), app.getId(), user.getId());
+        long permVersion = resolvePermVersion(user, app);
         IssuedAccessToken accessToken = issueAccessToken(user, app, roles, permVersion);
 
         return new RefreshResult(
@@ -196,14 +195,11 @@ public class AuthService {
                 permVersion));
     }
 
-    /** 权限版本号由 mis-rbac 维护；未登录写入 Redis 前默认为 1 */
-    private long loadPermVersion(Long tenantId, Long appId, Long userId) {
-        String key = CacheConstants.RBAC_PERM_VERSION.formatted(tenantId, appId, userId);
-        String value = redisTemplate.opsForValue().get(key);
-        if (value == null || value.isBlank()) {
-            return 1L;
-        }
-        return Long.parseLong(value);
+    /** 权威源 {@code sys_user.perm_version}，并写回 Redis 缓存（ADR-009）。 */
+    private long resolvePermVersion(SysUser user, SysApp app) {
+        long dbVersion = user.getPermVersion() != null ? user.getPermVersion() : 1L;
+        return permVersionService.syncCacheFromAuthority(
+                user.getTenantId(), app.getId(), user.getId(), dbVersion);
     }
 
     /** 统一返回 LOGIN_FAILED，避免泄露用户是否存在；同时累计 Redis 失败次数 */

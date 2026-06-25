@@ -4,6 +4,8 @@ server:
 mis:
   auth:
     captcha-enabled: ${AUTH_CAPTCHA_ENABLED:true}
+    cookie:
+      secure: false
   security:
     jwt:
       private-key-path: ${JWT_PRIVATE_KEY_PATH:./keys/private.pem}

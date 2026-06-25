@@ -64,7 +64,7 @@ Phase 1 使用 PostgreSQL **`sys_perm_type` ENUM**（`menu`, `dept`, `org`, `sto
 
 角色 `sys_role_permission` 变更（任意 `perm_type`）→ 查 `sys_user_role` → DEL `mis:rbac:permissions:{tenantId}:{appId}:{userId}`。
 
-`perm_type='dept'` 变更不影响 Redis permissions 集合，但影响数据查询范围（可 bump perm-version 供前端刷新）。
+`perm_type='dept'` 变更不影响 Redis permissions 集合，但影响数据查询范围（可 bump `sys_user.perm_version` + Redis 供前端刷新）。
 
 ## 后果
 

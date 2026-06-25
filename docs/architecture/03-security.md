@@ -42,7 +42,7 @@ sequenceDiagram
 | employeeId | 员工主数据 ID（**DataScope 任职锚点**，服务端按此查 `sys_employee_post`） |
 | username | 登录名 |
 | roles | 角色编码数组（**展示用**，API 鉴权不依赖此字段） |
-| permVersion | 权限版本号（与 Redis 对比，供前端刷新菜单） |
+| permVersion | 权限版本快照（权威源 `sys_user.perm_version`；BFF 用 **!=** 判陈旧） |
 | iat / exp | 签发 / 过期时间 |
 | jti | 唯一 ID（用于黑名单） |
 
@@ -63,7 +63,9 @@ sequenceDiagram
 | **JWT** | — | **不存 permissions** |
 | **前端** | `auth-store.permissions` | 来自 `GET /auth/me`，非 JWT decode |
 
-**登录流程：** mis-rbac 聚合 permissions → **写入 Redis** → JWT 只带 identity + permVersion。
+**登录流程：** mis-rbac 聚合 permissions → 写入 Redis；JWT 带 `permVersion`（来自 `sys_user.perm_version`）。
+
+**陈旧菜单：** BFF 若 `JWT.permVersion != 当前版本` → `X-Perm-Stale: true`（见 ADR-009）。
 
 **业务请求：** BFF 解析 JWT → Redis 取 permissions → **映射表匹配 method/path** → 鉴权。
 
@@ -74,7 +76,7 @@ sequenceDiagram
 | 属性 | 值 |
 |------|-----|
 | 格式 | 256bit 随机字符串 |
-| 存储 | DB `sys_refresh_token.token_hash` + Redis |
+| 存储 | DB `sys_refresh_token`（`token_hash` + `token_value`）+ Redis |
 | 传输 | HttpOnly Cookie `mis_refresh_{appCode}`（或统一名 + payload 含 appId） |
 | SameSite | Strict |
 | Secure | 生产环境 true |

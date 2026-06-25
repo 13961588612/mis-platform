@@ -49,7 +49,8 @@ sequenceDiagram
     Auth->>RBAC: GET /internal/v1/permissions/{userId}
     RBAC->>RBAC: DB 聚合 permissions
     RBAC->>Redis: SET mis:rbac:permissions:{userId}
-    RBAC->>Redis: SET mis:rbac:perm-version:{userId} = version+1
+    RBAC->>RBAC: UPDATE sys_user SET perm_version = perm_version + 1
+    RBAC->>Redis: SET mis:rbac:perm-version = 新 version
     RBAC-->>Auth: { permissions, permVersion }
     Auth->>Auth: 签发 JWT（含 permVersion，不含 permissions）
     Auth-->>FE: accessToken + /auth/me 可返回 permissions
@@ -86,7 +87,7 @@ sequenceDiagram
 
 | 触发操作 | 负责服务 | 动作 |
 |----------|----------|------|
-| 角色-菜单变更 | mis-rbac | 查 `sys_user_role` 得 userId 列表 → **DEL** `mis:rbac:permissions:{userId}` + **INCR** `perm-version` |
+| 角色-菜单变更 | mis-rbac | 查 `sys_user_role` 得 userId 列表 → **DEL** `permissions` + **`sys_user.perm_version` INCR** + 写 Redis version |
 | 用户-角色变更 | mis-user | 同上，针对该 userId |
 | 菜单 permission 变更 | mis-system | 通知 rbac 批量 evict 关联角色下的用户（或 evict 全量权限缓存，Phase 1 可接受） |
 
@@ -94,26 +95,32 @@ sequenceDiagram
 
 可选：WebSocket 推送 `permVersion` 变化，前端主动调 `/auth/me` 刷新菜单（Phase 2）。
 
-### permVersion 用途
+### permVersion 权威源与陈旧判定（2026-06-25 修订）
+
+| 层级 | 存储 | 说明 |
+|------|------|------|
+| **权威源** | PostgreSQL `sys_user.perm_version` | 权限变更时 **INCR** |
+| **缓存** | Redis `mis:rbac:perm-version:{tenantId}:{appId}:{userId}` | 与 DB 同步；miss 时从 DB 回填 |
+| **JWT** | `permVersion` claim | 登录/刷新时快照（来自 DB + 写回 Redis） |
 
 | 位置 | 用途 |
 |------|------|
-| Redis `mis:rbac:perm-version:{userId}` | 每次权限变更 INCR |
-| JWT `permVersion` | 登录时快照 |
-| BFF 可选校验 | JWT.permVersion < Redis 当前版本 → 响应头 `X-Perm-Stale: true`，前端拉 `/auth/me` |
-| 前端 | 对比后刷新菜单，**不强制登出** |
+| BFF | 读当前 version（Redis → miss 回源 `sys_user.perm_version`） |
+| 陈旧判定 | **`JWT.permVersion != currentVersion`** → 响应头 `X-Perm-Stale: true` |
+| 前端 | 收到 stale 后拉 `/auth/me` 刷新菜单，**不强制登出** |
 
-API 鉴权以 **Redis 实时 permissions** 为准，permVersion 主要服务 **前端体验**。
+**不以 version 相等作为 API 鉴权条件**；鉴权仍以 **permissions 集合**（Redis / 回源 DB）为准。`permVersion` 仅服务前端菜单同步与 Redis 断电后的可恢复性。
+
+实现：`com.mis.common.redis.rbac.PermVersionService`（`syncCacheFromAuthority` / `getCurrentVersion` / `isStale`）。
 
 ### Redis Key 结构
 
 ```
 mis:rbac:permissions:{tenantId}:{appId}:{userId}  → JSON ["system:user:list", ...]  TTL 15min
-mis:rbac:perm-version:{tenantId}:{appId}:{userId}  → long
-mis:rbac:perm-version:{userId}    → long，无 TTL 或长 TTL
+mis:rbac:perm-version:{tenantId}:{appId}:{userId}  → long（与 sys_user.perm_version 一致，无 TTL）
 ```
 
-TTL 15min 仅为兜底；**正常依赖变更时主动 DEL**。
+TTL 15min 仅为 permissions 兜底；**正常依赖变更时主动 DEL**。perm-version **不设 TTL**，断电后由 DB 回填修复。
 
 ### 失效范围策略
 
@@ -149,3 +156,4 @@ TTL 15min 仅为兜底；**正常依赖变更时主动 DEL**。
 - [x] JWT **不内嵌** permissions
 - [x] 运行时权限存 **Redis**，权威源 **PostgreSQL**
 - [x] BFF 每请求从 Redis 加载 permissions，经 **映射表** 鉴权（ADR-009/010）
+- [x] `permVersion` 权威源 **sys_user.perm_version**；陈旧判定 **!=**（非 `<`）；不以 version 挡 API

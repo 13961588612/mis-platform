@@ -16,6 +16,18 @@
 
 ```yaml
 mis:
+  auth:
+    captcha-enabled: true
+    captcha-ttl-seconds: 300
+    captcha-length: 4
+    max-login-failures: 5
+    login-lock-seconds: 1800
+    default-client-id: web
+    refresh-cookie-prefix: mis_refresh_
+    cookie:
+      path: /
+      same-site: Strict
+      secure: false   # 生产建议 true
   security:
     jwt:
       private-key-path: ${JWT_PRIVATE_KEY_PATH:./keys/private.pem}
@@ -23,6 +35,8 @@ mis:
       access-token-ttl-seconds: 7200
       refresh-token-ttl-seconds: 604800
 ```
+
+与 `sys_config` 中 `security.login.*`、`security.token.*` 语义对齐；Phase 1 以 yml 为准。
 
 ## API
 

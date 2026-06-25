@@ -59,9 +59,12 @@ public final class CacheConstants {
      * 用户权限版本号（前端对比 JWT / 本地缓存是否过期）。
      * <p>
      * Key：{@code mis:rbac:perm-version:{tenantId}:{appId}:{userId}}<br>
-     * 值：递增 long 字符串<br>
-     * 写入：mis-rbac 权限变更时 INCR；登录时 {@link com.mis.auth.service.AuthService} 读取<br>
-     * TTL：通常不设或长期保留
+     * 权威源：{@code sys_user.perm_version}（ADR-009）<br>
+     * 值：与 DB 一致的 long 字符串<br>
+     * 写入：权限变更时 mis-rbac INCR DB 后 {@link com.mis.common.redis.rbac.PermVersionService#writeVersion}；
+     * 登录时 {@link com.mis.common.redis.rbac.PermVersionService#syncCacheFromAuthority}<br>
+     * 陈旧判定：{@code jwtPermVersion != currentVersion}（非小于比较）<br>
+     * TTL：不设（断电后由 DB 回填）
      */
     public static final String RBAC_PERM_VERSION = "mis:rbac:perm-version:%d:%d:%d";
 

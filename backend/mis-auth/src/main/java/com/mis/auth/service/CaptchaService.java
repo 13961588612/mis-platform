@@ -1,5 +1,6 @@
 package com.mis.auth.service;
 
+import com.mis.auth.config.AuthProperties;
 import com.mis.auth.dto.CaptchaResponse;
 import com.mis.common.core.constant.CacheConstants;
 import com.mis.common.core.exception.BusinessException;
@@ -16,22 +17,24 @@ import java.util.UUID;
 public class CaptchaService {
 
     private static final SecureRandom RANDOM = new SecureRandom();
-    private static final Duration CAPTCHA_TTL = Duration.ofSeconds(300);
-    private static final String CODE_CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 
     private final StringRedisTemplate redisTemplate;
+    private final AuthProperties authProperties;
 
-    public CaptchaService(StringRedisTemplate redisTemplate) {
+    public CaptchaService(StringRedisTemplate redisTemplate, AuthProperties authProperties) {
         this.redisTemplate = redisTemplate;
+        this.authProperties = authProperties;
     }
 
     public CaptchaResponse generate() {
         String captchaId = UUID.randomUUID().toString();
-        String code = randomCode(4);
+        int length = Math.max(1, authProperties.getCaptchaLength());
+        String code = randomCode(length, authProperties.getCaptchaChars());
+        long ttlSeconds = Math.max(1L, authProperties.getCaptchaTtlSeconds());
         redisTemplate.opsForValue().set(
                 CacheConstants.AUTH_CAPTCHA.formatted(captchaId),
                 code.toLowerCase(),
-                CAPTCHA_TTL);
+                Duration.ofSeconds(ttlSeconds));
         return new CaptchaResponse(captchaId, toSvgBase64(code));
     }
 
@@ -47,10 +50,13 @@ public class CaptchaService {
         }
     }
 
-    private static String randomCode(int length) {
+    private static String randomCode(int length, String charset) {
+        if (charset == null || charset.isEmpty()) {
+            throw new IllegalStateException("mis.auth.captcha-chars must not be empty");
+        }
         StringBuilder sb = new StringBuilder(length);
         for (int i = 0; i < length; i++) {
-            sb.append(CODE_CHARS.charAt(RANDOM.nextInt(CODE_CHARS.length())));
+            sb.append(charset.charAt(RANDOM.nextInt(charset.length())));
         }
         return sb.toString();
     }

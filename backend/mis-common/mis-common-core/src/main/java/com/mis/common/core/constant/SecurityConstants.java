@@ -28,6 +28,10 @@ public final class SecurityConstants {
     public static final String HEADER_USERNAME = "X-Username";
     /** 全链路追踪 ID */
     public static final String HEADER_TRACE_ID = "X-Trace-Id";
+    /**
+     * BFF 返回：JWT {@code permVersion} 与当前版本不一致时置 {@code true}，前端应拉 {@code GET /auth/me}（ADR-009）。
+     */
+    public static final String HEADER_PERM_STALE = "X-Perm-Stale";
 
     private SecurityConstants() {
     }
