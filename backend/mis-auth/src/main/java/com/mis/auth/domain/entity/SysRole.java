@@ -18,6 +18,9 @@ public class SysRole {
     private String code;
 
     @Column(nullable = false)
+    private String name;
+
+    @Column(nullable = false)
     private Integer deleted;
 
     public Long getId() {
@@ -26,5 +29,9 @@ public class SysRole {
 
     public String getCode() {
         return code;
+    }
+
+    public String getName() {
+        return name;
     }
 }

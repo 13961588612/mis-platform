@@ -2,6 +2,7 @@ package com.mis.auth.controller;
 
 import com.mis.auth.config.AuthProperties;
 import com.mis.auth.dto.CaptchaResponse;
+import com.mis.auth.dto.LoginClientInfo;
 import com.mis.auth.dto.LoginRequest;
 import com.mis.auth.dto.RefreshRequest;
 import com.mis.auth.dto.TokenResponse;
@@ -62,8 +63,9 @@ public class AuthController {
 
     @PostMapping("/login")
     public ResponseEntity<Result<com.mis.auth.dto.LoginResponse>> login(
-            @Valid @RequestBody LoginRequest request) {
-        AuthService.LoginResult result = authService.login(request);
+            @Valid @RequestBody LoginRequest request,
+            HttpServletRequest httpRequest) {
+        AuthService.LoginResult result = authService.login(request, clientInfo(httpRequest));
         return ResponseEntity.ok()
                 .header(HttpHeaders.SET_COOKIE, refreshCookie(result.appCode(), result.refreshToken()).toString())
                 .body(Result.ok(result.response()));
@@ -149,5 +151,16 @@ public class AuthController {
         if (sameSite != null && !sameSite.isBlank()) {
             builder.sameSite(sameSite.trim());
         }
+    }
+
+    private static LoginClientInfo clientInfo(HttpServletRequest request) {
+        String ip = request.getHeader("X-Forwarded-For");
+        if (ip != null && !ip.isBlank()) {
+            int comma = ip.indexOf(',');
+            ip = comma > 0 ? ip.substring(0, comma).trim() : ip.trim();
+        } else {
+            ip = request.getRemoteAddr();
+        }
+        return new LoginClientInfo(ip, request.getHeader("User-Agent"));
     }
 }

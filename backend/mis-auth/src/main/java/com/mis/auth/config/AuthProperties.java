@@ -24,6 +24,10 @@ public class AuthProperties {
 
     private final Cookie cookie = new Cookie();
 
+    /** 是否异步写入 mis-audit 登录日志 */
+    private boolean auditEnabled = true;
+    private String auditBaseUrl = "http://localhost:8106";
+
     public boolean isCaptchaEnabled() {
         return captchaEnabled;
     }
@@ -90,6 +94,22 @@ public class AuthProperties {
 
     public Cookie getCookie() {
         return cookie;
+    }
+
+    public boolean isAuditEnabled() {
+        return auditEnabled;
+    }
+
+    public void setAuditEnabled(boolean auditEnabled) {
+        this.auditEnabled = auditEnabled;
+    }
+
+    public String getAuditBaseUrl() {
+        return auditBaseUrl;
+    }
+
+    public void setAuditBaseUrl(String auditBaseUrl) {
+        this.auditBaseUrl = auditBaseUrl;
     }
 
     public static class Cookie {

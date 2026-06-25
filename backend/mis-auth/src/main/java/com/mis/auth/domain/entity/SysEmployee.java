@@ -20,6 +20,16 @@ public class SysEmployee {
     @Column(name = "real_name", nullable = false)
     private String realName;
 
+    @Column
+    private String email;
+
+    /** 手机号，对应列 {@code phone} */
+    @Column(name = "phone")
+    private String mobile;
+
+    @Column(nullable = false)
+    private Integer status;
+
     public Long getId() {
         return id;
     }
@@ -30,5 +40,17 @@ public class SysEmployee {
 
     public String getRealName() {
         return realName;
+    }
+
+    public String getEmail() {
+        return email;
+    }
+
+    public String getMobile() {
+        return mobile;
+    }
+
+    public Integer getStatus() {
+        return status;
     }
 }

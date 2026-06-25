@@ -17,6 +17,7 @@
         <module>mis-common</module>
         <module>mis-gateway</module>
         <module>mis-auth</module>
+        <module>mis-audit</module>
     </modules>
 
     <properties>

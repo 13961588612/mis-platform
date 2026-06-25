@@ -29,6 +29,11 @@ spring:
           order: -10
           predicates:
             - Path=/api/v1/auth/**
+        - id: mis-audit
+          uri: http://localhost:8106
+          order: -9
+          predicates:
+            - Path=/api/v1/audit/**
         - id: mis-admin-bff
           uri: http://localhost:8081
           predicates:

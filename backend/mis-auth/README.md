@@ -10,6 +10,7 @@
 
 - PostgreSQL（`sys_user`、`sys_refresh_token`）
 - Redis（验证码、登录锁定、Refresh 缓存、**jti 黑名单**）
+- **mis-audit**（异步写入登录日志）
 - RSA 密钥对（**私钥仅本服务**）
 
 ## 配置
@@ -28,6 +29,8 @@ mis:
       path: /
       same-site: Strict
       secure: false   # 生产建议 true
+    audit-enabled: true
+    audit-base-url: http://localhost:8106
   security:
     jwt:
       private-key-path: ${JWT_PRIVATE_KEY_PATH:./keys/private.pem}

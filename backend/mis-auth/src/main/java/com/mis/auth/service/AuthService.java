@@ -1,5 +1,6 @@
 package com.mis.auth.service;
 
+import com.mis.auth.client.AuditLoginLogClient;
 import com.mis.auth.config.AuthProperties;
 import com.mis.auth.domain.entity.SysApp;
 import com.mis.auth.domain.entity.SysEmployee;
@@ -8,6 +9,7 @@ import com.mis.auth.domain.repository.SysAppRepository;
 import com.mis.auth.domain.repository.SysEmployeeRepository;
 import com.mis.auth.domain.repository.SysRoleRepository;
 import com.mis.auth.domain.repository.SysUserRepository;
+import com.mis.auth.dto.LoginClientInfo;
 import com.mis.auth.dto.LoginRequest;
 import com.mis.auth.dto.LoginResponse;
 import com.mis.auth.dto.TokenResponse;
@@ -55,6 +57,7 @@ public class AuthService {
     private final PasswordEncoder passwordEncoder;
     private final AuthProperties authProperties;
     private final PermVersionService permVersionService;
+    private final AuditLoginLogClient auditLoginLogClient;
 
     public AuthService(
             SysAppRepository sysAppRepository,
@@ -70,7 +73,8 @@ public class AuthService {
             TokenBlacklistService tokenBlacklistService,
             PasswordEncoder passwordEncoder,
             AuthProperties authProperties,
-            PermVersionService permVersionService) {
+            PermVersionService permVersionService,
+            AuditLoginLogClient auditLoginLogClient) {
         this.sysAppRepository = sysAppRepository;
         this.sysUserRepository = sysUserRepository;
         this.sysEmployeeRepository = sysEmployeeRepository;
@@ -85,6 +89,7 @@ public class AuthService {
         this.passwordEncoder = passwordEncoder;
         this.authProperties = authProperties;
         this.permVersionService = permVersionService;
+        this.auditLoginLogClient = auditLoginLogClient;
     }
 
     /**
@@ -92,22 +97,35 @@ public class AuthService {
      * Refresh 明文仅通过 HttpOnly Cookie 返回，不落响应 body。
      */
     @Transactional
-    public LoginResult login(LoginRequest request) {
+    public LoginResult login(LoginRequest request, LoginClientInfo clientInfo) {
         SysApp app = sysAppRepository.findByCodeAndStatus(request.appCode(), 1)
                 .orElseThrow(() -> new BusinessException(ResultCode.NOT_FOUND, "APP 不存在"));
 
-        loginLockService.checkLocked(app.getTenantId(), app.getId(), request.username());
+        try {
+            loginLockService.checkLocked(app.getTenantId(), app.getId(), request.username());
+        } catch (BusinessException ex) {
+            recordLoginLog(app, null, request.username(), 0, ex.getMessage(), clientInfo);
+            throw ex;
+        }
 
         if (authProperties.isCaptchaEnabled()) {
-            captchaService.validate(request.captchaId(), request.captchaCode());
+            try {
+                captchaService.validate(request.captchaId(), request.captchaCode());
+            } catch (BusinessException ex) {
+                recordLoginLog(app, null, request.username(), 0, ex.getMessage(), clientInfo);
+                throw ex;
+            }
         }
 
         SysUser user = sysUserRepository
                 .findByTenantIdAndAppIdAndUsernameAndStatus(app.getTenantId(), app.getId(), request.username(), 1)
-                .orElseThrow(() -> handleLoginFailure(app.getTenantId(), app.getId(), request.username()));
+                .orElse(null);
+        if (user == null) {
+            throw handleLoginFailure(app, null, request.username(), clientInfo);
+        }
 
         if (!passwordEncoder.matches(request.password(), user.getPasswordHash())) {
-            throw handleLoginFailure(app.getTenantId(), app.getId(), request.username());
+            throw handleLoginFailure(app, user.getId(), request.username(), clientInfo);
         }
 
         loginLockService.clearFailures(app.getTenantId(), app.getId(), request.username());
@@ -120,6 +138,8 @@ public class AuthService {
         SysEmployee employee = sysEmployeeRepository.findById(user.getEmployeeId()).orElse(null);
         String realName = employee != null ? employee.getRealName() : user.getUsername();
         String deptId = employee != null ? String.valueOf(employee.getDeptId()) : null;
+
+        recordLoginLog(app, user.getId(), request.username(), 1, "登录成功", clientInfo);
 
         LoginResponse response = new LoginResponse(
                 accessToken.token(),
@@ -203,9 +223,17 @@ public class AuthService {
     }
 
     /** 统一返回 LOGIN_FAILED，避免泄露用户是否存在；同时累计 Redis 失败次数 */
-    private BusinessException handleLoginFailure(Long tenantId, Long appId, String username) {
-        loginLockService.recordFailure(tenantId, appId, username);
+    private BusinessException handleLoginFailure(
+            SysApp app, Long userId, String username, LoginClientInfo clientInfo) {
+        loginLockService.recordFailure(app.getTenantId(), app.getId(), username);
+        recordLoginLog(app, userId, username, 0, ResultCode.LOGIN_FAILED.getMessage(), clientInfo);
         return new BusinessException(ResultCode.LOGIN_FAILED);
+    }
+
+    private void recordLoginLog(
+            SysApp app, Long userId, String username, int status, String msg, LoginClientInfo clientInfo) {
+        auditLoginLogClient.recordAsync(
+                app.getTenantId(), app.getId(), userId, username, status, msg, clientInfo);
     }
 
     public record LoginResult(LoginResponse response, String refreshToken, String appCode) {

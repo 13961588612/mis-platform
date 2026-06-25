@@ -37,6 +37,8 @@ mis:
       path: /
       same-site: Strict
       secure: ${AUTH_COOKIE_SECURE:false}
+    audit-enabled: true
+    audit-base-url: ${AUDIT_BASE_URL:http://localhost:8106}
   security:
     jwt:
       private-key-path: ${JWT_PRIVATE_KEY_PATH:}
