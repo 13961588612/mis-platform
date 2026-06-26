@@ -2,15 +2,13 @@
 
 各命名空间目录下的 `*.yaml` 为 **Nacos 配置中心的 Git 源**，经 `scripts/nacos-push.ps1` 推送到对应命名空间。
 
-| 目录 | Nacos 命名空间 | 用途 |
-|------|----------------|------|
-| `prod/` | `prod` | 正式环境 |
-| `test/` | `test` | 测试环境 |
-| `integration/` | `integration` | 混合联调 |
+| 目录 | Nacos 命名空间 | 操作文档 |
+|------|----------------|----------|
+| `prod/` | `prod` | [正式环境部署](../../docs/devops/prod-deploy.md) |
+| `test/` | `test` | [测试环境部署](../../docs/devops/test-deploy.md) |
+| `integration/` | `integration` | [混合联调](../../docs/devops/integration-test.md) |
 
 ## Data ID 约定
-
-Git 文件名带 `.yaml` 扩展名；Nacos `data_id` **不含扩展名**（由 bootstrap `file-extension: yaml` 声明格式）。
 
 | Git 文件 | Nacos Data ID |
 |----------|---------------|
@@ -26,13 +24,10 @@ Git 文件名带 `.yaml` 扩展名；Nacos `data_id` **不含扩展名**（由 b
 .\scripts\nacos-push.ps1 -Namespace prod
 ```
 
-```bash
-./scripts/nacos-push.sh integration
-```
+## 注意
 
-## 微服务加载
+- 配置通过 Nacos 下发，**不**与 JAR 打包进业务容器
+- 微服务设 `MIS_REMOTE=true` 后从 Nacos 拉取
+- 本地开发不设 `MIS_REMOTE`，见 [本地开发](../../docs/devops/local-dev.md)
 
-设置 `MIS_REMOTE=true` 后，bootstrap 从 Nacos 拉取 `mis-common` + `{spring.application.name}`。  
-本地开发不设 `MIS_REMOTE`，仅使用 jar 内 `application.yml`。
-
-详见 [configuration.md](../../docs/devops/configuration.md)。
+完整说明：[配置管理策略](../../docs/devops/configuration.md) · [运维总览](../../docs/devops/README.md)

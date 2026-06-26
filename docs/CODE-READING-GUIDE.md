@@ -98,7 +98,7 @@
 | G4 | `deploy/nacos-config/prod/*.yaml` | 正式配置 Git 源 → 推送到 Nacos |
 | G5 | `deploy/nacos-config/test/*.yaml` | 测试环境 Nacos 配置 Git 源 |
 | G6 | `deploy/nacos/server/application.properties` | Nacos → PostgreSQL |
-| G7 | `scripts/import-nacos-config.ps1` | 导入 Nacos 配置 |
+| G7 | `scripts/nacos-push.ps1` | 推送配置到 Nacos |
 
 ### 阶段 H：测试（按需）
 

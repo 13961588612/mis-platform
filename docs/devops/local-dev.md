@@ -1,201 +1,185 @@
-# 本地开发环境
+# 本地开发
 
-> 状态：📝 草稿 | 版本：v1.0-draft
+> 模式：**local**（默认不连 Nacos）| 基础设施 Docker + 应用 IDE 直跑
+
+本地开发的目标：**零 Nacos 依赖**，各服务读 jar 内 `application.yml`，Gateway 用 `localhost` 直连路由。
 
 ## 1. 前置依赖
 
 | 工具 | 版本 | 用途 |
 |------|------|------|
-| JDK | 17 | 后端（环境变量 **`JAVA_HOME_17`**，POM 引用 `${env.JAVA_HOME_17}`） |
-| Maven | 3.9+ | 后端构建 |
+| JDK | 17 | 后端（环境变量 `JAVA_HOME_17`） |
+| Maven | 3.9+ | 构建 |
 | Node.js | 20 LTS | 前端 |
 | pnpm | 8+ | 前端包管理 |
-| Python | 3.11 | 智能体 |
 | Docker | 24+ | 基础设施 |
 | Docker Compose | 2.x | 本地编排 |
 
-## 2. 开发模式（已确认）
+## 2. 一次性准备
 
-| 模式 | 说明 |
-|------|------|
-| **A. Docker 基础设施** | Postgres / Redis / Nacos / MinIO 用 `docker-compose.dev.yml` |
-| **B. IDE 直跑应用** | Java 服务在 IDE `spring-boot:run`，连 localhost 基础设施 |
-| **C. 全 Docker（可选）** | 应用也可容器化；与 B **并存**，开发者自选 |
-
-> Phase 1 **同时支持** B（日常开发）与 A（CI/E2E）；不强制全量 Docker 跑 Java。
-
-## 3. 基础设施（Docker Compose）
-
-文件路径：`deploy/docker-compose.dev.yml`
-
-### 2.1 服务清单
-
-| 服务 | 镜像 | 端口 | 说明 |
-|------|------|------|------|
-| postgres | postgres:16 | 5432 | 主数据库 |
-| redis | redis:7.2 | 6379 | 缓存 |
-| nacos | nacos/nacos-server:v2.3.2 | 8848, 9848 | 注册/配置 |
-| minio | minio/minio | 9000, 9001 | 对象存储 |
-
-### 2.2 数据库连接
-
-| 项 | 值 |
-|----|-----|
-| Host | localhost |
-| Port | 5432 |
-| Database | mis_platform |
-| Username | mis |
-| Password | mis123 |
-
-### 2.3 Redis
-
-```
-redis://localhost:6379/0
-```
-
-### 2.4 Nacos（PostgreSQL 外置存储）
-
-| 项 | 值 |
-|----|-----|
-| 控制台 | http://localhost:8848/nacos |
-| 默认账号 | nacos / nacos |
-| 配置库 | PostgreSQL `nacos` 库（见 `deploy/postgres/init/02-init-nacos-db.sql`） |
-
-> Nacos Server 用 PG 存配置元数据；**prod / test（可选）微服务从 Nacos 拉配置**，见 [配置管理策略](configuration.md)。
-
-导入测试配置：
+### 2.1 环境变量
 
 ```powershell
-.\scripts\import-nacos-config.ps1 -Namespace test
+copy .env.example .env
+# 按需修改 JAVA_HOME_17、DB_* 等
 ```
 
-### 2.5 MinIO
+本地开发 **不需要** 设置 `MIS_REMOTE`。
+
+### 2.2 JWT 密钥
+
+```powershell
+mkdir backend\keys
+openssl genrsa -out backend\keys\private.pem 2048
+openssl rsa -in backend\keys\private.pem -pubout -out backend\keys\public.pem
+```
+
+IDE 或 `.env` 中设置：
+
+```
+JWT_PRIVATE_KEY_PATH=./backend/keys/private.pem
+JWT_PUBLIC_KEY_PATH=./backend/keys/public.pem
+```
+
+### 2.3 一键初始化（可选）
+
+```powershell
+.\scripts\init-dev.ps1
+```
+
+等价于：起 Docker 基础设施 → 等待 PG → Flyway 迁移。
+
+## 3. 启动基础设施
+
+```powershell
+docker compose -f deploy/docker-compose.dev.yml up -d
+```
+
+| 服务 | 端口 | 说明 |
+|------|------|------|
+| PostgreSQL | 5432 | 库 `mis_platform`（业务）+ `nacos`（配置中心元数据） |
+| Redis | 6379 | 缓存、验证码、Token 黑名单 |
+| Nacos | 8848 | 控制台 http://localhost:8848/nacos（`nacos`/`nacos`） |
+| MinIO | 9000 / 9001 | 对象存储占位（Phase 2+） |
+
+### 数据库连接
 
 | 项 | 值 |
 |----|-----|
-| API | http://localhost:9000 |
-| Console | http://localhost:9001 |
-| Access Key | minioadmin |
-| Secret Key | minioadmin |
+| Host | `localhost` |
+| Port | `5432` |
+| Database | `mis_platform` |
+| Username | `mis` |
+| Password | `mis123` |
 
-## 3. 应用服务端口
+## 4. 数据库迁移
 
-| 服务 | 端口 | 启动命令（规划） |
-|------|------|------------------|
-| mis-gateway | 8080 | `mvn spring-boot:run -pl mis-gateway` |
-| mis-admin-bff | 8081 | `mvn spring-boot:run -pl mis-admin-bff` |
-| mis-auth | 8101 | 同上 |
-| mis-user | 8102 | 同上 |
-| mis-org | 8103 | 同上 |
-| mis-rbac | 8104 | 同上 |
-| mis-system | 8105 | 同上 |
-| mis-audit | 8106 | 同上 |
-| agent-gateway | 8200 | `uvicorn app.main:app --reload --port 8200` |
-| mis-admin-web | 5173 | `pnpm dev` |
-
-## 4. 启动顺序
-
-```mermaid
-flowchart TD
-    A[docker compose up -d] --> B[等待 PG/Redis/Nacos 就绪]
-    B --> C[Flyway 迁移 V1/V2]
-    C --> D[启动 mis-auth]
-    D --> E[启动 user/org/rbac/system/audit]
-    E --> F[启动 mis-admin-bff]
-    F --> G[启动 mis-gateway]
-    G --> H[启动 agent-gateway]
-    H --> I[启动 mis-admin-web]
-```
-
-## 5. 前端开发代理
-
-`vite.config.ts` 规划：
-
-```typescript
-server: {
-  port: 5173,
-  proxy: {
-    '/api': {
-      target: 'http://localhost:8080',
-      changeOrigin: true,
-    },
-  },
-}
-```
-
-## 6. 数据库迁移
-
-- 工具：**Flyway**（独立模块 `backend/mis-migrator`）
-- 脚本路径：
-  - 评审副本：`docs/db/migrations/`
-  - 执行路径：`backend/mis-migrator/src/main/resources/db/migration/`
-- 业务微服务 **不** 启用 `spring.flyway`（ADR-001 单库集中迁移）
-
-| 文件 | 内容 |
-|------|------|
-| V1__init_schema.sql | 建表 |
-| V2__seed_data.sql | 种子数据 |
-
-```bash
+```powershell
 cd backend
-mvn -pl mis-migrator flyway:migrate
+.\mvn.ps1 -pl mis-migrator flyway:migrate
 ```
 
-## 7. 一键脚本
+- 脚本路径：`backend/mis-migrator/src/main/resources/db/migration/`
+- 业务微服务 **不** 启用 `spring.flyway`（单库集中迁移）
 
-`scripts/init-dev.sh` / `scripts/init-dev.ps1`：
+## 5. 启动后端（Sprint 1 已实现服务）
 
-1. `docker compose -f deploy/docker-compose.dev.yml up -d`
-2. 等待 Postgres 健康检查
-3. `mvn -pl mis-migrator flyway:migrate`
-4. 输出访问地址与默认账号
+**不要** 设置 `MIS_REMOTE`；各服务使用 `application.yml` 默认值。
 
-## 8. 本地调试
+```powershell
+cd backend
 
-| 场景 | 方式 |
+# 分别开终端，或 IDE 启动
+.\mvn.ps1 spring-boot:run -pl mis-auth    # :8101
+.\mvn.ps1 spring-boot:run -pl mis-audit   # :8106
+.\mvn.ps1 spring-boot:run -pl mis-gateway # :8080
+```
+
+### 服务端口
+
+| 服务 | 端口 | 说明 |
+|------|------|------|
+| mis-gateway | 8080 | API 入口，路由到 localhost |
+| mis-auth | 8101 | 登录 / 签发 Token |
+| mis-audit | 8106 | 登录日志 |
+| mis-admin-bff | 8081 | 规划中 |
+| mis-admin-web | 5173 | 前端 dev server |
+
+### Gateway 本地路由
+
+`application.yml` 中已配置直连：
+
+- `/api/v1/auth/**` → `http://localhost:8101`
+- `/api/v1/audit/**` → `http://localhost:8106`
+
+无需 Nacos 注册发现。
+
+## 6. 启动前端
+
+```powershell
+cd frontend/mis-admin-web
+pnpm install
+pnpm dev
+```
+
+访问 http://localhost:5173 ，API 代理到 Gateway `8080`。
+
+默认账号：`admin` / `Mis@123456`
+
+## 7. 本地调试场景
+
+| 场景 | 做法 |
 |------|------|
-| 单服务调试 | IDE 启动 Spring Boot，连本地 Docker 基础设施 |
-| 前端联调 | pnpm dev + Gateway 8080 |
-| 查看 API | http://localhost:8081/swagger-ui.html（BFF） |
-| Nacos 配置 | test/integration/prod 经 Nacos；dev 默认本地 yml，见 [configuration.md](configuration.md) |
+| 单服务断点 | IDE 启动对应 `*Application`，环境变量引用 `.env` |
+| 只改 mis-auth | 只重启 mis-auth，Gateway / audit 保持运行 |
+| 看 SQL | `application.yml` 临时加 `logging.level.org.hibernate.SQL: DEBUG` |
+| 验证码干扰 | `AUTH_CAPTCHA_ENABLED=false` |
+| 验证 Gateway 路由 | `curl http://localhost:8080/api/v1/auth/captcha` |
+| 健康检查 | `curl http://localhost:8101/actuator/health` |
 
-## 9. 环境变量（.env.example 规划）
+### IntelliJ 配置示例
 
-```bash
-# 数据库
-DB_HOST=localhost
-DB_PORT=5432
-DB_NAME=mis_platform
-DB_USER=mis
-DB_PASSWORD=mis123
+- Main Class：`com.mis.auth.AuthApplication`
+- Environment variables：从 `.env` 粘贴，或只设 `JWT_*_PATH`、`DB_HOST=localhost`
+- **Active profiles**：留空（不要用 test/prod profile）
 
-# JDK 17（Maven 父 POM: ${env.JAVA_HOME_17}）
-JAVA_HOME_17=C:/Program Files/Eclipse Adoptium/jdk-17.0.11.9-hotspot
+## 8. 与 remote 模式的区别
 
-# Redis
-REDIS_HOST=localhost
-REDIS_PORT=6379
+| 项 | 本地 local | test/prod/integration |
+|----|------------|------------------------|
+| `MIS_REMOTE` | 不设（`false`） | `true` |
+| 配置来源 | `application.yml` | Nacos |
+| Gateway 路由 | `http://localhost:端口` | `lb://服务名` |
+| 服务发现 | 关闭 | 开启 |
 
-# Nacos
-NACOS_SERVER=localhost:8848
-NACOS_NAMESPACE=dev
-NACOS_CONFIG_GROUP=MIS_GROUP
-# MIS_REMOTE=true  # 联调/测试/正式时开启
+需要 **容器 + IDE 混合联调** 时，见 [混合联调](integration-test.md)，不要在本机日常开发中开启 `MIS_REMOTE`。
 
-# JWT（开发用；正式私钥路径在 Nacos prod 配置或 K8s Secret）
-JWT_PRIVATE_KEY_PATH=./keys/private.pem
-JWT_PUBLIC_KEY_PATH=./keys/public.pem
+## 9. 常见问题
+
+### Maven 报 JDK 版本不对
+
+```powershell
+$env:JAVA_HOME = $env:JAVA_HOME_17
+.\mvn.ps1 clean package
 ```
 
-## 10. 已确认
+或直接使用 `backend/mvn.ps1`（会自动设置 `JAVA_HOME`）。
 
-- [x] Windows 提供 `init-dev.ps1`
-- [x] Flyway 由 **`mis-migrator`** 执行
-- [x] 本地 **Docker 基础设施 + IDE 直跑** 双模式
-- [x] 使用 `.env.example`，`.env` gitignore
+### 连不上数据库
 
-## 11. 关联文档
+确认 `docker compose ps` 中 `mis-postgres` 健康，且 `DB_HOST=localhost`。
 
+### Gateway 502 / Connection refused
+
+确认 mis-auth、mis-audit 已启动且端口与 `application.yml` 一致。
+
+### 登录报 JWT 相关错误
+
+检查 `backend/keys/` 下公私钥是否存在，且 `JWT_PRIVATE_KEY_PATH` / `JWT_PUBLIC_KEY_PATH` 路径正确。
+
+## 10. 关联文档
+
+- [运维总览](README.md)
 - [配置管理策略](configuration.md)
-- [CI/CD](ci-cd.md)
-- [Sprint 计划](../project/sprint-plan.md)
+- [混合联调](integration-test.md)
+- [测试环境部署](test-deploy.md)

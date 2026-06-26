@@ -2,7 +2,7 @@
 # 用法: docker compose -f deploy/docker-compose.dev.yml up -d
 #
 # Nacos 使用 PostgreSQL 外置存储（库名 nacos，与 mis_platform 隔离）
-# 微服务默认 dev 不连 Nacos；prod 经 Nacos 读 PG 库配置，见 docs/devops/configuration.md
+# 微服务 local 模式不连 Nacos；remote 模式见 docs/devops/README.md
 
 services:
   postgres:

@@ -155,12 +155,9 @@ cd backend
 
 ---
 
-## 9. 关联文件
+## 10. 关联文档
 
-| 路径 | 说明 |
-|------|------|
-| `deploy/docker-compose.stack.yml` | 稳定微服务栈 |
-| `deploy/nacos-config/integration/` | integration Nacos 配置 Git 源 |
-| `deploy/ide/*.env` | IDE 环境变量模板 |
-| `.env.integration.example` | 联调环境变量说明 |
-| `scripts/start-integration-stack.ps1` | 一键启动 |
+- [运维总览](README.md)
+- [本地开发](local-dev.md)
+- [测试环境部署](test-deploy.md)
+- [正式环境部署](prod-deploy.md)
