@@ -26,6 +26,10 @@ public class AuthProperties {
 
     /** 是否异步写入 mis-audit 登录日志 */
     private boolean auditEnabled = true;
+    /** 是否经 Nacos + LoadBalancer 调用 mis-audit（integration 为 true） */
+    private boolean auditDiscoveryEnabled = false;
+    /** Nacos 服务名，配合 {@link #auditDiscoveryEnabled} */
+    private String auditServiceId = "mis-audit";
     private String auditBaseUrl = "http://localhost:8106";
 
     public boolean isCaptchaEnabled() {
@@ -110,6 +114,22 @@ public class AuthProperties {
 
     public void setAuditBaseUrl(String auditBaseUrl) {
         this.auditBaseUrl = auditBaseUrl;
+    }
+
+    public boolean isAuditDiscoveryEnabled() {
+        return auditDiscoveryEnabled;
+    }
+
+    public void setAuditDiscoveryEnabled(boolean auditDiscoveryEnabled) {
+        this.auditDiscoveryEnabled = auditDiscoveryEnabled;
+    }
+
+    public String getAuditServiceId() {
+        return auditServiceId;
+    }
+
+    public void setAuditServiceId(String auditServiceId) {
+        this.auditServiceId = auditServiceId;
     }
 
     public static class Cookie {

@@ -1,6 +1,0 @@
-# 测试环境：默认文件配置
-spring:
-  config:
-    import:
-      - optional:file:${MIS_CONFIG_HOME:./deploy/config/test}/mis-common.yaml
-      - optional:file:${MIS_CONFIG_HOME:./deploy/config/test}/${spring.application.name}.yaml

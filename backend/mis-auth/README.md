@@ -31,6 +31,8 @@ mis:
       secure: false   # 生产建议 true
     audit-enabled: true
     audit-base-url: http://localhost:8106
+    audit-discovery-enabled: false
+    audit-service-id: mis-audit
   security:
     jwt:
       private-key-path: ${JWT_PRIVATE_KEY_PATH:./keys/private.pem}
@@ -74,3 +76,7 @@ mvn -pl mis-auth spring-boot:run
 ```
 
 默认账号（V2 种子）：`admin` / `Mis@123456`，appCode=`system`
+
+## 混合联调（integration Profile）
+
+见 [integration-test.md](../../docs/devops/integration-test.md)。IDE 环境变量模板：`deploy/ide/mis-auth-integration.env`。

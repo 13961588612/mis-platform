@@ -53,7 +53,7 @@ docs/
 │   └── ai-agent-design.md             # 📝 智能体层
 ├── devops/
 │   ├── local-dev.md                   # 📝 本地环境
-│   ├── configuration.md               # 📝 配置管理（prod 仅文件）
+│   ├── configuration.md               # 📝 配置管理（Nacos + PG）
 │   └── ci-cd.md                       # 📝 CI/CD
 ├── project/
 │   ├── decisions.md                   # ✅ 全局决策
@@ -97,8 +97,9 @@ docs/
 | 路径 | 说明 |
 |------|------|
 | `deploy/docker-compose.dev.yml` | 本地 PG / Redis / Nacos / MinIO |
-| `deploy/config/prod/` | **正式环境**微服务外部 YAML |
-| `deploy/config/test/` | **测试环境**文件配置 |
+| `deploy/docker-compose.stack.yml` | 混合联调稳定服务（Gateway + Audit） |
+| `deploy/nacos-config/prod/` | 正式配置 Git 源 → 推送到 Nacos `prod` 命名空间 |
+| `deploy/nacos-config/test/` | 测试环境 Nacos 配置 Git 源 |
 | `deploy/nacos/` | Nacos Server（PG 存储）与 import 模板 |
 | `.env.example` | 环境变量模板 |
 

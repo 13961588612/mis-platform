@@ -29,7 +29,7 @@ import java.nio.charset.StandardCharsets;
  *       {@link com.mis.common.redis.auth.RedisTokenBlacklistChecker} 则用之；否则回退 {@link NoOpTokenBlacklistChecker}</li>
  *   <li>{@link JwtAuthenticationGlobalFilter}：注册为 GlobalFilter</li>
  * </ul>
- * 公钥与 mis-auth 私钥配对；正式环境公钥路径见 {@code deploy/config/prod/mis-common.yaml}。
+ * 公钥与 mis-auth 私钥配对；remote 模式公钥路径见 Nacos `mis-common` 配置。
  */
 @Configuration
 @EnableConfigurationProperties({JwtProperties.class, GatewaySecurityProperties.class})

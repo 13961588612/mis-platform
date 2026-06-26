@@ -61,7 +61,7 @@ redis://localhost:6379/0
 | 默认账号 | nacos / nacos |
 | 配置库 | PostgreSQL `nacos` 库（见 `deploy/postgres/init/02-init-nacos-db.sql`） |
 
-> Nacos Server 用 PG 存配置元数据；**微服务默认不连 Nacos**，见 [配置管理策略](configuration.md)。
+> Nacos Server 用 PG 存配置元数据；**prod / test（可选）微服务从 Nacos 拉配置**，见 [配置管理策略](configuration.md)。
 
 导入测试配置：
 
@@ -157,7 +157,7 @@ mvn -pl mis-migrator flyway:migrate
 | 单服务调试 | IDE 启动 Spring Boot，连本地 Docker 基础设施 |
 | 前端联调 | pnpm dev + Gateway 8080 |
 | 查看 API | http://localhost:8081/swagger-ui.html（BFF） |
-| Nacos 配置 | 测试环境可选；正式环境仅文件，见 [configuration.md](configuration.md) |
+| Nacos 配置 | test/integration/prod 经 Nacos；dev 默认本地 yml，见 [configuration.md](configuration.md) |
 
 ## 9. 环境变量（.env.example 规划）
 
@@ -179,11 +179,10 @@ REDIS_PORT=6379
 # Nacos
 NACOS_SERVER=localhost:8848
 NACOS_NAMESPACE=dev
-NACOS_CONFIG_ENABLED=false
 NACOS_CONFIG_GROUP=MIS_GROUP
+# MIS_REMOTE=true  # 联调/测试/正式时开启
 
-# 配置策略见 docs/devops/configuration.md
-# JWT（开发用；正式走 deploy/config/prod/ 文件）
+# JWT（开发用；正式私钥路径在 Nacos prod 配置或 K8s Secret）
 JWT_PRIVATE_KEY_PATH=./keys/private.pem
 JWT_PUBLIC_KEY_PATH=./keys/public.pem
 ```

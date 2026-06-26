@@ -4,6 +4,8 @@ server:
 mis:
   auth:
     captcha-enabled: true
+    audit-discovery-enabled: true
+    audit-service-id: mis-audit
     cookie:
       secure: true
   security:

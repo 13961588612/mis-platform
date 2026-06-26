@@ -70,13 +70,12 @@ mvn -pl mis-auth spring-boot:run      # :8101
 mvn -pl mis-gateway spring-boot:run   # :8080
 ```
 
-## 配置 Profile
+## 配置模式
 
-| Profile | 配置来源 | 说明 |
-|---------|----------|------|
-| `dev` | `application.yml` + 环境变量 | 本地 IDE 默认 |
-| `test` | `deploy/config/test/` 或 Nacos | `NACOS_CONFIG_ENABLED=true` 可选 |
-| `prod` | `deploy/config/prod/` **仅文件** | 不连 Nacos |
+| 模式 | 配置来源 | 说明 |
+|------|----------|------|
+| local（默认） | `application.yml` + 环境变量 | 本地 IDE 默认 |
+| remote | Nacos 命名空间（`test` / `integration` / `prod`） | `MIS_REMOTE=true` |
 
 见 [configuration.md](../docs/devops/configuration.md)。
 

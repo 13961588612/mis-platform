@@ -32,7 +32,7 @@ cd ../frontend/mis-admin-web && pnpm install && pnpm dev
 | 数据库 | [表结构](docs/database/schema-design.md) · [种子数据](docs/database/seed-data.md) |
 | API | [接口规范](docs/api/api-specification.md) · [权限清单](docs/api/permissions.md) |
 | 后端 | [微服务](docs/backend/microservices.md) · [公共模块](docs/backend/common-modules.md) |
-| 运维 | [本地开发](docs/devops/local-dev.md) · [配置策略](docs/devops/configuration.md) |
+| 运维 | [本地开发](docs/devops/local-dev.md) · [混合联调](docs/devops/integration-test.md) · [配置策略](docs/devops/configuration.md) |
 | 决策 | [ADR 索引](docs/adr/README.md) · [全局决策](docs/project/decisions.md) |
 
 ## 后端模块（已实现）
@@ -56,7 +56,7 @@ frontend/
 | 前端 | React 18, TypeScript, Vite, Zustand, Axios（mis-admin-web Sprint 1） |
 | 后端 | JDK 17, Spring Boot 3.2, Spring Cloud Gateway, Spring Data JPA, PostgreSQL |
 | 缓存 | Redis（权限、验证码、Token 黑名单） |
-| 配置 | 正式环境外部 YAML；测试可选 Nacos（PG 存储） |
+| 配置 | 正式/测试经 **Nacos**（PG `nacos` 库）；dev 本地 yml |
 
 ## 文档版本
 

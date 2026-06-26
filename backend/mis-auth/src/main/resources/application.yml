@@ -4,8 +4,6 @@ server:
 spring:
   application:
     name: mis-auth
-  profiles:
-    active: ${SPRING_PROFILES_ACTIVE:dev}
   datasource:
     url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:mis_platform}
     username: ${DB_USER:mis}
@@ -39,6 +37,8 @@ mis:
       secure: ${AUTH_COOKIE_SECURE:false}
     audit-enabled: true
     audit-base-url: ${AUDIT_BASE_URL:http://localhost:8106}
+    audit-discovery-enabled: false
+    audit-service-id: mis-audit
   security:
     jwt:
       private-key-path: ${JWT_PRIVATE_KEY_PATH:}

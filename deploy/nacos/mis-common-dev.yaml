@@ -1,3 +1,2 @@
 # 各微服务共享配置（数据源、Redis、JWT 公钥等）
-# 已迁移至 deploy/config/test/ 与 deploy/nacos/import/
-# 见 docs/devops/configuration.md
+# 已迁移至 deploy/nacos-config/，见 docs/devops/configuration.md

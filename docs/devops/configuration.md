@@ -1,132 +1,123 @@
 # 配置管理策略
 
-> 状态：📝 草稿 | Nacos 2.3 + PostgreSQL 外置存储
+> Nacos 2.3 + PostgreSQL 外置存储
 
-## 1. 总体原则
+## 1. 两档模式
 
-| 环境 | Profile | 配置来源 | Nacos 客户端 |
-|------|---------|----------|--------------|
-| **本地开发** | `dev` | 各服务 `application.yml` + 环境变量 | 默认 **关闭** |
-| **测试** | `test` | `deploy/config/test/*.yaml` 文件 | 可选开启（`NACOS_CONFIG_ENABLED=true`） |
-| **正式** | `prod` | `deploy/config/prod/*.yaml` 文件 **仅文件** | **强制关闭** |
+| 模式 | 环境变量 | 配置来源 |
+|------|----------|----------|
+| **local**（默认） | 无 | 各服务 jar 内 `application.yml` + 环境变量 |
+| **remote** | `MIS_REMOTE=true` + `NACOS_NAMESPACE` + `NACOS_SERVER` | Nacos 命名空间 |
 
-> **正式环境微服务不连接 Nacos 配置中心**，所有参数通过挂载的外部 YAML 注入。  
-> Nacos Server 仍可使用 PostgreSQL 持久化（供测试环境或运维导入配置），与微服务是否连接无关。
+本地开发直接 `java -jar` 或 IDE 启动即可，**不连 Nacos**。  
+测试 / 联调 / 正式环境设置 `MIS_REMOTE=true`，由 `bootstrap.yml` 从 Nacos 拉取 `mis-common` 与服务专属配置。
 
-## 2. Nacos Server（PostgreSQL 存储）
+### 1.1 数据流
 
-### 2.1 架构
+```mermaid
+flowchart LR
+    Git["deploy/nacos-config/prod/*.yaml\n(Git 评审)"] -->|nacos-push| Nacos["Nacos Server"]
+    Nacos -->|JDBC| PG[("PostgreSQL\nnacos 库")]
+    MS["微服务 remote"] -->|bootstrap 拉取| Nacos
+```
+
+敏感项（JWT 私钥、DB 密码）建议用 **K8s Secret / 环境变量** 注入。
+
+## 2. Nacos 配置 Git 源
+
+```
+deploy/nacos-config/
+├── prod/           # → Nacos namespace `prod`
+├── test/           # → Nacos namespace `test`
+├── integration/    # → Nacos namespace `integration`
+└── bootstrap-template.yml
+```
+
+| Git 文件 | Nacos Data ID | Group |
+|----------|---------------|-------|
+| `mis-common.yaml` | `mis-common` | `MIS_GROUP` |
+| `mis-gateway.yaml` | `mis-gateway` | `MIS_GROUP` |
+| `mis-auth.yaml` | `mis-auth` | `MIS_GROUP` |
+| `mis-audit.yaml` | `mis-audit` | `MIS_GROUP` |
+
+Data ID **不带 `.yaml`** 扩展名。
+
+### 推送到 Nacos
+
+```powershell
+.\scripts\ensure-nacos-namespace.ps1 -Namespace prod
+.\scripts\nacos-push.ps1 -Namespace prod
+```
+
+```bash
+./scripts/nacos-push.sh integration
+```
+
+`import-nacos-config.ps1` 为兼容别名，内部调用 `nacos-push`。
+
+## 3. 微服务 resources 布局
+
+每个服务仅保留两个文件：
+
+| 文件 | 作用 |
+|------|------|
+| `application.yml` | local 默认配置（localhost 路由、本地数据源等） |
+| `bootstrap.yml` | `MIS_REMOTE=true` 时连 Nacos 配置中心与注册发现 |
+
+**不再使用** `application-{test,prod,integration}.yml` 等 profile 文件。
+
+### 3.1 关键环境变量
+
+| 变量 | local 默认 | remote | 说明 |
+|------|------------|--------|------|
+| `MIS_REMOTE` | `false` | `true` | 是否连 Nacos |
+| `NACOS_SERVER` | — | `localhost:8848` | Nacos 地址 |
+| `NACOS_NAMESPACE` | — | `prod` / `test` / `integration` | 命名空间 |
+| `NACOS_CONFIG_GROUP` | `MIS_GROUP` | `MIS_GROUP` | 配置分组 |
+| `NACOS_REGISTER_IP` | — | 联调时 `host.docker.internal` | 宿主机注册 IP |
+
+### 3.2 正式环境启动
+
+```bash
+export MIS_REMOTE=true
+export NACOS_NAMESPACE=prod
+export NACOS_SERVER=nacos.mis.svc:8848
+export JWT_PRIVATE_KEY_PATH=/etc/mis/keys/private.pem
+export JWT_PUBLIC_KEY_PATH=/etc/mis/keys/public.pem
+
+java -jar mis-gateway.jar
+```
+
+发版前须将 `deploy/nacos-config/prod/` 推送到 Nacos `prod` 命名空间。
+
+### 3.3 本地开发
+
+```bash
+# 不设 MIS_REMOTE，直接启动
+java -jar mis-gateway.jar
+```
+
+Gateway 使用 `application.yml` 中的 `http://localhost:8101` 等直连路由。
+
+## 4. Nacos Server（PostgreSQL）
 
 ```
 PostgreSQL
 ├── mis_platform    # 业务库（Flyway）
-└── nacos           # 配置中心元数据（config_info 等）
+└── nacos           # 配置中心元数据
 ```
 
-### 2.2 本地 Docker
-
-`deploy/docker-compose.dev.yml` 已配置：
-
-- Postgres 初始化：`deploy/postgres/init/02-init-nacos-db.sql`（建库）
-- 表结构：`deploy/postgres/init/03-nacos-schema.sql`
-- Nacos 连接：`deploy/nacos/server/application.properties`
-
+本地 Docker：`deploy/docker-compose.dev.yml`  
 控制台：http://localhost:8848/nacos（`nacos` / `nacos`）
 
-### 2.3 导入测试配置到 Nacos
+## 5. 新微服务接入
 
-将 `deploy/nacos/import/*.yaml` 导入 Nacos：
-
-| Data ID | Group | Namespace |
-|---------|-------|-----------|
-| `mis-common.yaml` | `MIS_GROUP` | `test`（或 dev） |
-| `mis-gateway.yaml` | `MIS_GROUP` | 同上 |
-| `mis-auth.yaml` | `MIS_GROUP` | 同上 |
-
-```powershell
-# 需 Nacos 已启动
-.\scripts\import-nacos-config.ps1 -Namespace test
-```
-
-## 3. 微服务配置加载顺序
-
-```mermaid
-flowchart TD
-    A[启动] --> B{SPRING_PROFILES_ACTIVE}
-    B -->|dev| C[application.yml + env]
-    B -->|test| D{ NACOS_CONFIG_ENABLED? }
-    B -->|prod| E[application-prod.yml]
-    D -->|false| F[deploy/config/test/*.yaml]
-    D -->|true| G[bootstrap → Nacos]
-    E --> H[deploy/config/prod/*.yaml]
-    F --> I[服务运行]
-    G --> I
-    H --> I
-    C --> I
-```
-
-### 3.1 关键环境变量
-
-| 变量 | 默认 | 说明 |
-|------|------|------|
-| `SPRING_PROFILES_ACTIVE` | `dev` | `dev` / `test` / `prod` |
-| `NACOS_CONFIG_ENABLED` | `false` | 是否连接 Nacos 配置中心 |
-| `NACOS_SERVER` | `localhost:8848` | Nacos 地址 |
-| `NACOS_NAMESPACE` | `dev` | 命名空间 ID |
-| `NACOS_CONFIG_GROUP` | `MIS_GROUP` | 配置分组 |
-| `MIS_CONFIG_HOME` | 见 profile | 外部 YAML 目录 |
-
-### 3.2 正式环境启动示例
-
-```bash
-export SPRING_PROFILES_ACTIVE=prod
-export MIS_CONFIG_HOME=/etc/mis/config   # 内容为 deploy/config/prod/
-java -jar mis-gateway.jar
-```
-
-### 3.3 测试环境 · 纯文件（不连 Nacos）
-
-```bash
-export SPRING_PROFILES_ACTIVE=test
-export MIS_CONFIG_HOME=./deploy/config/test
-# 可不启动 Nacos；可不连 Redis/DB 时仅做部分冒烟
-java -jar mis-gateway.jar
-```
-
-### 3.4 测试环境 · 连接 Nacos
-
-```bash
-export SPRING_PROFILES_ACTIVE=test
-export NACOS_CONFIG_ENABLED=true
-export NACOS_NAMESPACE=test
-export NACOS_SERVER=localhost:8848
-java -jar mis-gateway.jar
-```
-
-## 4. 文件布局
-
-```
-deploy/
-├── config/
-│   ├── prod/           # 正式环境（微服务唯一来源）
-│   ├── test/           # 测试环境文件模式
-│   └── bootstrap-template.yml
-├── nacos/
-│   ├── server/         # Nacos Server 自身配置
-│   ├── import/         # 导入 Nacos 的 YAML 模板
-│   └── schema/         # PG 表结构参考
-└── postgres/init/      # 含 nacos 库与表初始化
-```
-
-## 5. 新微服务接入清单
-
-1. 复制 `deploy/config/bootstrap-template.yml` → `src/main/resources/bootstrap.yml`，改 `application.name`
-2. 新增 `application-prod.yml`、`application-test.yml`（与 gateway/auth 一致）
-3. 在 `deploy/config/{prod,test,nacos/import}/` 添加 `{service}.yaml`
-4. `dev` 阶段可仅在 `application.yml` 写默认值
+1. 复制 `deploy/nacos-config/bootstrap-template.yml` → `bootstrap.yml`，改 `spring.application.name`
+2. 编写 `application.yml`（local 默认）
+3. 在 `deploy/nacos-config/{prod,test,integration}/` 添加 `{service}.yaml`
+4. 发版前：`nacos-push.ps1 -Namespace prod`
 
 ## 6. 关联文档
 
-- [代码阅读顺序](../CODE-READING-GUIDE.md)
+- [混合联调](integration-test.md)
 - [本地开发](local-dev.md)
-- [微服务规划](../backend/microservices.md)

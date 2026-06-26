@@ -1,7 +1,4 @@
-# 导入测试 Nacos 的配置模板（Data ID 与微服务 bootstrap 一致）
-# Namespace: test | Group: MIS_GROUP
-#
-# 控制台导入或使用 scripts/import-nacos-config.ps1
+# integration 环境共享配置（混合联调：容器稳定服务 + IDE 被测服务）
 
 spring:
   datasource:
@@ -12,8 +9,14 @@ spring:
     redis:
       host: ${REDIS_HOST:localhost}
       port: ${REDIS_PORT:6379}
+      database: 0
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: none
 
 mis:
   security:
     jwt:
       public-key-path: ${JWT_PUBLIC_KEY_PATH:./keys/public.pem}
+      private-key-path: ${JWT_PRIVATE_KEY_PATH:./keys/private.pem}

@@ -1,0 +1,82 @@
+# 稳定微服务栈（与 docker-compose.dev.yml 合并使用）
+#
+# 默认 stack：gateway + mis-audit（IDE 可手工起 mis-auth 并注册 Nacos）
+# 全量：    --profile stack-auth 额外起 mis-auth 容器
+#
+# 用法:
+#   docker compose -f deploy/docker-compose.dev.yml -f deploy/docker-compose.stack.yml --profile stack up -d --build
+#
+# 启动前须将 deploy/nacos-config/integration 推送到 Nacos（见 start-integration-stack.ps1）
+
+x-service-env: &service-env
+  MIS_REMOTE: "true"
+  NACOS_NAMESPACE: integration
+  NACOS_SERVER: nacos:8848
+  DB_HOST: postgres
+  REDIS_HOST: redis
+  JWT_PUBLIC_KEY_PATH: /keys/public.pem
+  JWT_PRIVATE_KEY_PATH: /keys/private.pem
+
+services:
+  mis-gateway:
+    profiles: [stack, stack-full]
+    build:
+      context: ../backend/mis-gateway
+      dockerfile: ../../deploy/docker/Dockerfile.service
+      args:
+        MODULE: mis-gateway
+    image: mis-gateway:local
+    container_name: mis-gateway
+    ports:
+      - "8080:8080"
+    environment:
+      <<: *service-env
+    volumes:
+      - ../backend/keys:/keys:ro
+    depends_on:
+      nacos:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+
+  mis-audit:
+    profiles: [stack, stack-full]
+    build:
+      context: ../backend/mis-audit
+      dockerfile: ../../deploy/docker/Dockerfile.service
+      args:
+        MODULE: mis-audit
+    image: mis-audit:local
+    container_name: mis-audit
+    environment:
+      <<: *service-env
+    volumes:
+      - ../backend/keys:/keys:ro
+    depends_on:
+      nacos:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+
+  mis-auth:
+    profiles: [stack-auth, stack-full]
+    build:
+      context: ../backend/mis-auth
+      dockerfile: ../../deploy/docker/Dockerfile.service
+      args:
+        MODULE: mis-auth
+    image: mis-auth:local
+    container_name: mis-auth
+    environment:
+      <<: *service-env
+    volumes:
+      - ../backend/keys:/keys:ro
+    depends_on:
+      nacos:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy

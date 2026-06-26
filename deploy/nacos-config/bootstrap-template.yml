@@ -1,30 +1,28 @@
-# 各微服务 bootstrap 模板（复制到 src/main/resources/bootstrap.yml 并修改 application.name）
+# 复制到各微服务 src/main/resources/bootstrap.yml，并修改 spring.application.name
 #
-# 规则：
-# - NACOS_CONFIG_ENABLED 默认 false
-# - prod profile 在 application-prod.yml 强制关闭 Nacos
-# - test 环境可设 NACOS_CONFIG_ENABLED=true 连接测试配置中心
+# local（默认）：仅 jar 内 application.yml，不连 Nacos
+# remote：MIS_REMOTE=true + NACOS_NAMESPACE + NACOS_SERVER
 
 spring:
   application:
-    name: mis-xxx   # 改为实际服务名
+    name: mis-example
   cloud:
     nacos:
       config:
-        enabled: ${NACOS_CONFIG_ENABLED:false}
+        enabled: ${MIS_REMOTE:false}
         server-addr: ${NACOS_SERVER:localhost:8848}
         namespace: ${NACOS_NAMESPACE:dev}
         group: ${NACOS_CONFIG_GROUP:MIS_GROUP}
         file-extension: yaml
         shared-configs:
-          - data-id: mis-common.yaml
+          - data-id: mis-common
             group: ${NACOS_CONFIG_GROUP:MIS_GROUP}
             refresh: true
         extension-configs:
-          - data-id: ${spring.application.name}.yaml
+          - data-id: ${spring.application.name}
             group: ${NACOS_CONFIG_GROUP:MIS_GROUP}
             refresh: true
       discovery:
-        enabled: ${NACOS_DISCOVERY_ENABLED:false}
+        enabled: ${MIS_REMOTE:false}
         server-addr: ${NACOS_SERVER:localhost:8848}
         namespace: ${NACOS_NAMESPACE:dev}
