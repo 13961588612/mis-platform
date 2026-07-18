@@ -1,0 +1,567 @@
+<!DOCTYPE html>
+<html lang="zh-CN" class="">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>MIS Platform · UI 高保真原型</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+  // —— 设计令牌：与 src/styles/globals.css 1:1（shadcn HSL）——
+  tailwind.config = {
+    darkMode: 'class',
+    theme: {
+      extend: {
+        colors: {
+          border: 'hsl(var(--border) / <alpha-value>)',
+          input: 'hsl(var(--input) / <alpha-value>)',
+          ring: 'hsl(var(--ring) / <alpha-value>)',
+          background: 'hsl(var(--background) / <alpha-value>)',
+          foreground: 'hsl(var(--foreground) / <alpha-value>)',
+          card: { DEFAULT: 'hsl(var(--card) / <alpha-value>)', foreground: 'hsl(var(--card-foreground) / <alpha-value>)' },
+          popover: { DEFAULT: 'hsl(var(--popover) / <alpha-value>)', foreground: 'hsl(var(--popover-foreground) / <alpha-value>)' },
+          primary: { DEFAULT: 'hsl(var(--primary) / <alpha-value>)', foreground: 'hsl(var(--primary-foreground) / <alpha-value>)' },
+          secondary: { DEFAULT: 'hsl(var(--secondary) / <alpha-value>)', foreground: 'hsl(var(--secondary-foreground) / <alpha-value>)' },
+          muted: { DEFAULT: 'hsl(var(--muted) / <alpha-value>)', foreground: 'hsl(var(--muted-foreground) / <alpha-value>)' },
+          accent: { DEFAULT: 'hsl(var(--accent) / <alpha-value>)', foreground: 'hsl(var(--accent-foreground) / <alpha-value>)' },
+          destructive: { DEFAULT: 'hsl(var(--destructive) / <alpha-value>)', foreground: 'hsl(var(--destructive-foreground) / <alpha-value>)' },
+          success: { DEFAULT: 'hsl(var(--success) / <alpha-value>)', foreground: 'hsl(var(--success-foreground) / <alpha-value>)' },
+          warning: { DEFAULT: 'hsl(var(--warning) / <alpha-value>)', foreground: 'hsl(var(--warning-foreground) / <alpha-value>)' },
+          info: { DEFAULT: 'hsl(var(--info) / <alpha-value>)', foreground: 'hsl(var(--info-foreground) / <alpha-value>)' },
+          sidebar: { DEFAULT: 'hsl(var(--sidebar) / <alpha-value>)', foreground: 'hsl(var(--sidebar-foreground) / <alpha-value>)' },
+        },
+      },
+    },
+  };
+</script>
+<script src="https://unpkg.com/lucide@latest"></script>
+<style>
+  :root {
+    --background: 0 0% 100%; --foreground: 222.2 84% 4.9%;
+    --card: 0 0% 100%; --card-foreground: 222.2 84% 4.9%;
+    --popover: 0 0% 100%; --popover-foreground: 222.2 84% 4.9%;
+    --primary: 243 75% 59%; --primary-foreground: 210 40% 98%;
+    --secondary: 210 40% 96.1%; --secondary-foreground: 222.2 47.4% 11.2%;
+    --muted: 210 40% 96.1%; --muted-foreground: 215.4 16.3% 46.9%;
+    --accent: 210 40% 96.1%; --accent-foreground: 222.2 47.4% 11.2%;
+    --destructive: 0 84.2% 60.2%; --destructive-foreground: 210 40% 98%;
+    --success: 142 71% 45%; --success-foreground: 0 0% 100%;
+    --warning: 38 92% 50%; --warning-foreground: 38 92% 12%;
+    --info: 199 89% 48%; --info-foreground: 0 0% 100%;
+    --border: 214.3 31.8% 91.4%; --input: 214.3 31.8% 91.4%;
+    --ring: 243 75% 59%;
+    --sidebar: 210 40% 98%; --sidebar-foreground: 222.2 47.4% 11.2%;
+    --radius: 0.5rem;
+  }
+  .dark {
+    --background: 222.2 84% 4.9%; --foreground: 210 40% 98%;
+    --card: 222.2 84% 4.9%; --card-foreground: 210 40% 98%;
+    --popover: 222.2 84% 4.9%; --popover-foreground: 210 40% 98%;
+    --primary: 243 75% 66%; --primary-foreground: 222.2 47.4% 11.2%;
+    --secondary: 217.2 32.6% 17.5%; --secondary-foreground: 210 40% 98%;
+    --muted: 217.2 32.6% 17.5%; --muted-foreground: 215 20.2% 65.1%;
+    --accent: 217.2 32.6% 17.5%; --accent-foreground: 210 40% 98%;
+    --destructive: 0 62.8% 30.6%; --destructive-foreground: 210 40% 98%;
+    --success: 142 69% 58%; --success-foreground: 144 80% 10%;
+    --warning: 38 92% 60%; --warning-foreground: 38 92% 12%;
+    --info: 199 89% 58%; --info-foreground: 199 90% 10%;
+    --border: 217.2 32.6% 17.5%; --input: 217.2 32.6% 17.5%;
+    --ring: 243 75% 66%;
+    --sidebar: 222.2 47.4% 11.2%; --sidebar-foreground: 210 40% 98%;
+  }
+  * { border-color: hsl(var(--border)); }
+  html, body { height: 100%; }
+  body { font-family: Inter, 'PingFang SC', 'Microsoft YaHei', sans-serif; font-size: 14px; }
+  /* 自定义滚动条，弱化为装饰 */
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-thumb { background: hsl(var(--muted-foreground) / 0.3); border-radius: 9999px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  .sheet-panel { transition: transform .3s cubic-bezier(.16,1,.3,1); }
+  .dialog-card { animation: pop .18s ease-out; }
+  @keyframes pop { from { transform: scale(.96); opacity: 0 } to { transform: scale(1); opacity: 1 } }
+  @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+</style>
+</head>
+<body class="bg-background text-foreground antialiased">
+
+<!-- ============ 登录视图：令牌统一版 vs 遗留版 对比 ============ -->
+<div id="login-view" class="min-h-screen overflow-y-auto bg-gradient-to-br from-muted/60 to-background p-6">
+  <div class="mx-auto max-w-5xl py-8">
+    <div class="mb-6 text-center">
+      <h1 class="text-2xl font-semibold">登录页：统一 vs 未统一</h1>
+      <p class="mt-1 text-sm text-muted-foreground">主色已定为「企业靛」。左为令牌统一版（推荐），右为遗留硬编码版（当前代码）。</p>
+    </div>
+    <div class="grid gap-6 md:grid-cols-2">
+      <!-- ① 令牌统一版 -->
+      <div>
+        <div class="mb-2 flex items-center gap-2 text-sm font-medium"><span class="rounded-md bg-primary px-2 py-0.5 text-xs text-primary-foreground">①</span>令牌统一版（推荐）</div>
+        <div class="rounded-lg border bg-card p-8 shadow-sm">
+          <div class="mb-6 flex items-center gap-2">
+            <div class="grid h-9 w-9 place-items-center rounded-md bg-primary text-primary-foreground font-bold">M</div>
+            <div><h2 class="text-xl font-semibold leading-tight">MIS Platform</h2><p class="text-xs text-muted-foreground">管理后台 · 请登录</p></div>
+          </div>
+          <div class="grid gap-4">
+            <div class="grid gap-1.5"><label class="text-sm font-medium">用户名</label><input class="h-10 rounded-md border bg-background px-3 text-sm outline-none focus:ring-2 focus:ring-ring" placeholder="2–64 字符" /></div>
+            <div class="grid gap-1.5"><label class="text-sm font-medium">密码</label><input type="password" class="h-10 rounded-md border bg-background px-3 text-sm outline-none focus:ring-2 focus:ring-ring" placeholder="6–64 字符" /></div>
+            <div class="grid gap-1.5"><label class="text-sm font-medium">验证码</label><div class="grid grid-cols-[1fr_auto] gap-2"><input class="h-10 rounded-md border bg-background px-3 text-sm outline-none focus:ring-2 focus:ring-ring" placeholder="4 位" /><div class="grid h-10 w-24 place-items-center rounded-md border bg-muted text-xs font-mono text-muted-foreground">A7K2</div></div></div>
+            <button onclick="enterApp()" class="h-10 rounded-md bg-primary text-sm font-medium text-primary-foreground transition hover:opacity-90 active:translate-y-px">登录</button>
+            <p class="text-center text-xs text-muted-foreground">回车提交 · 失败自动刷新验证码</p>
+          </div>
+        </div>
+      </div>
+      <!-- ② 遗留硬编码版 -->
+      <div>
+        <div class="mb-2 flex items-center gap-2 text-sm font-medium"><span class="rounded-md bg-muted px-2 py-0.5 text-xs text-muted-foreground">②</span>遗留版（未统一 · 当前代码）</div>
+        <div style="max-width:400px;padding:32px;border-radius:16px;background:#fff;box-shadow:0 10px 30px rgba(15,23,42,0.08);">
+          <h2 style="margin:0;font-size:1.5rem;font-weight:600;">MIS Platform</h2>
+          <p style="margin:-8px 0 8px;color:#6b7280;font-size:.875rem;">管理后台 · 请登录</p>
+          <div style="display:grid;gap:14px;">
+            <div style="display:grid;gap:6px;"><label style="font-size:.9rem;color:#374151;">用户名</label><input style="width:100%;padding:10px 12px;border:1px solid #d1d5db;border-radius:8px;" placeholder="2–64 字符" /></div>
+            <div style="display:grid;gap:6px;"><label style="font-size:.9rem;color:#374151;">密码</label><input type="password" style="width:100%;padding:10px 12px;border:1px solid #d1d5db;border-radius:8px;" placeholder="6–64 字符" /></div>
+            <div style="display:grid;gap:6px;"><label style="font-size:.9rem;color:#374151;">验证码</label><div style="display:grid;grid-template-columns:1fr auto;gap:8px;"><input style="width:100%;padding:10px 12px;border:1px solid #d1d5db;border-radius:8px;" placeholder="4 位" /><div style="display:grid;place-items:center;height:40px;width:96px;border:1px solid #d1d5db;border-radius:8px;background:#fff;">A7K2</div></div></div>
+            <button onclick="enterApp()" style="margin-top:8px;padding:11px 14px;border:none;border-radius:8px;background:#4f46e5;color:#fff;cursor:pointer;font-size:.875rem;">登录</button>
+            <p style="margin:0;text-align:center;color:#6b7280;font-size:.75rem;">回车提交 · 失败自动刷新验证码</p>
+          </div>
+        </div>
+      </div>
+    </div>
+    <!-- 差异说明 -->
+    <div class="mx-auto mt-6 max-w-5xl rounded-lg border bg-card p-4 text-sm">
+      <div class="mb-2 font-medium">三处不一致（统一版已修正）：</div>
+      <ul class="grid gap-1.5 text-muted-foreground sm:grid-cols-2 lg:grid-cols-3">
+        <li>· 卡片圆角 <b class="text-foreground">16px → 0.5rem（8px）</b></li>
+        <li>· 背景渐变 <b class="text-foreground">蓝调 #eef2ff → 中性</b></li>
+        <li>· 主色 <b class="text-foreground">硬编码 #4f46e5 → 令牌 primary</b></li>
+        <li>· 暗色支持 <b class="text-foreground">仅亮色 → 跟随 Light/Dark</b></li>
+        <li>· 卡片描边 <b class="text-foreground">无 → border 描边</b></li>
+        <li>· 字体栈 <b class="text-foreground">系统默认 → Inter/PingFang</b></li>
+      </ul>
+      <div class="mt-3"><button onclick="enterApp()" class="h-9 rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground hover:opacity-90">进入应用演示（企业靛主题）→</button></div>
+    </div>
+  </div>
+</div>
+
+<!-- ============ 应用壳（AppLayout 复刻） ============ -->
+<div id="app-view" class="hidden h-screen flex-col overflow-hidden md:flex">
+  <!-- 侧栏 -->
+  <aside id="sidebar" class="fixed inset-y-0 left-0 z-50 flex w-64 -translate-x-full flex-col border-r bg-sidebar text-sidebar-foreground transition-transform md:static md:translate-x-0">
+    <div class="flex h-14 items-center gap-2 border-b px-4 font-semibold">
+      <div class="grid h-7 w-7 place-items-center rounded-md bg-primary text-primary-foreground text-sm font-bold">M</div>
+      <span>MIS Platform</span>
+    </div>
+    <nav class="flex flex-1 flex-col gap-1 overflow-y-auto p-2 text-sm">
+      <a href="#" data-nav="dashboard" class="nav-item flex items-center gap-3 rounded-md px-3 py-2 hover:bg-accent"><i data-lucide="layout-dashboard" class="h-4 w-4"></i>仪表盘</a>
+      <div class="px-3 pt-4 pb-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">系统管理</div>
+      <a href="#" data-nav="user" class="nav-item flex items-center gap-3 rounded-md px-3 py-2 hover:bg-accent"><i data-lucide="users" class="h-4 w-4"></i>用户管理</a>
+      <a href="#" data-nav="org" class="nav-item flex items-center gap-3 rounded-md px-3 py-2 hover:bg-accent"><i data-lucide="building-2" class="h-4 w-4"></i>组织管理</a>
+      <a href="#" data-nav="role" class="nav-item flex items-center gap-3 rounded-md px-3 py-2 hover:bg-accent"><i data-lucide="shield" class="h-4 w-4"></i>角色管理</a>
+      <a href="#" data-nav="menu" class="nav-item flex items-center gap-3 rounded-md px-3 py-2 hover:bg-accent"><i data-lucide="menu" class="h-4 w-4"></i>菜单管理</a>
+      <a href="#" data-nav="dict" class="nav-item flex items-center gap-3 rounded-md px-3 py-2 hover:bg-accent"><i data-lucide="book-a" class="h-4 w-4"></i>字典管理</a>
+      <div class="px-3 pt-4 pb-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">监控</div>
+      <a href="#" data-nav="log" class="nav-item flex items-center justify-between rounded-md px-3 py-2 hover:bg-accent"><span class="flex items-center gap-3"><i data-lucide="scroll-text" class="h-4 w-4"></i>操作日志</span><span class="rounded-full bg-destructive px-1.5 text-xs font-medium text-destructive-foreground">3</span></a>
+    </nav>
+    <button onclick="toggleCopilot()" class="m-2 flex items-center gap-2 rounded-md border border-dashed px-3 py-2 text-sm text-muted-foreground hover:bg-accent"><i data-lucide="sparkles" class="h-4 w-4"></i>AI 助手</button>
+  </aside>
+  <div id="backdrop" onclick="toggleSidebar()" class="fixed inset-0 z-40 bg-black/40 hidden md:hidden"></div>
+
+  <div class="flex flex-1 flex-col overflow-hidden">
+    <!-- 顶栏 -->
+    <header class="flex h-14 shrink-0 items-center justify-between border-b px-4">
+      <div class="flex items-center gap-2">
+        <button onclick="toggleSidebar()" class="rounded-md p-2 hover:bg-accent md:hidden" aria-label="切换侧栏"><i data-lucide="menu" class="h-5 w-5"></i></button>
+        <nav class="flex items-center gap-1.5 text-sm text-muted-foreground" id="breadcrumb"><span>仪表盘</span></nav>
+      </div>
+      <div class="flex items-center gap-1">
+        <button class="hidden items-center gap-2 rounded-md border px-3 py-1.5 text-sm text-muted-foreground hover:bg-accent sm:flex" onclick="alert('Cmd+K 命令面板（cmdk）')"><i data-lucide="search" class="h-4 w-4"></i><span>搜索</span><kbd class="rounded bg-muted px-1.5 text-xs">⌘K</kbd></button>
+        <button onclick="toggleTheme()" class="rounded-md p-2 hover:bg-accent" aria-label="切换主题" id="themeBtn"></button>
+        <button class="flex items-center gap-2 rounded-md p-1.5 hover:bg-accent"><span class="grid h-7 w-7 place-items-center rounded-full bg-primary/10 text-xs font-medium text-primary">管</span><span class="hidden text-sm sm:inline">管理员</span></button>
+      </div>
+    </header>
+
+    <!-- TabBar（多标签工作区） -->
+    <div class="flex h-9 shrink-0 items-center gap-1 border-b bg-muted/30 px-3 text-sm">
+      <button class="flex items-center gap-1.5 rounded-md border bg-background px-3 py-1 shadow-sm"><i data-lucide="layout-dashboard" class="h-3.5 w-3.5"></i>仪表盘<i data-lucide="pin" class="h-3 w-3 text-muted-foreground"></i></button>
+    </div>
+
+    <!-- 主内容 -->
+    <main class="flex-1 overflow-auto p-6">
+
+      <!-- ===== 仪表盘 ===== -->
+      <section data-page="dashboard">
+        <div class="mb-6">
+          <h1 class="text-xl font-semibold">仪表盘</h1>
+          <p class="text-sm text-muted-foreground">系统运行概览</p>
+        </div>
+        <div class="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+          <!-- 统计卡：截图风格（大数字 + 状态说明 + 右上圆标） -->
+          <div class="rounded-lg border bg-card p-5 transition-shadow hover:shadow-md">
+            <div class="flex items-start justify-between">
+              <div>
+                <p class="text-sm text-muted-foreground">用户总数</p>
+                <p class="mt-3 text-3xl font-semibold leading-none">1,284</p>
+                <p class="mt-2 text-xs text-success">▲ 12 较上周</p>
+              </div>
+              <span class="grid h-10 w-10 place-items-center rounded-full bg-primary/10 text-primary"><i data-lucide="users" class="h-5 w-5"></i></span>
+            </div>
+          </div>
+          <div class="rounded-lg border bg-card p-5 transition-shadow hover:shadow-md">
+            <div class="flex items-start justify-between">
+              <div>
+                <p class="text-sm text-muted-foreground">部门数</p>
+                <p class="mt-3 text-3xl font-semibold leading-none">36</p>
+                <p class="mt-2 text-xs text-muted-foreground">— 持平</p>
+              </div>
+              <span class="grid h-10 w-10 place-items-center rounded-full bg-primary/10 text-primary"><i data-lucide="building-2" class="h-5 w-5"></i></span>
+            </div>
+          </div>
+          <div class="rounded-lg border bg-card p-5 transition-shadow hover:shadow-md">
+            <div class="flex items-start justify-between">
+              <div>
+                <p class="text-sm text-muted-foreground">今日登录</p>
+                <p class="mt-3 text-3xl font-semibold leading-none">427</p>
+                <p class="mt-2 text-xs text-success">▲ 8 较昨日</p>
+              </div>
+              <span class="grid h-10 w-10 place-items-center rounded-full bg-primary/10 text-primary"><i data-lucide="log-in" class="h-5 w-5"></i></span>
+            </div>
+          </div>
+          <div class="rounded-lg border bg-card p-5 transition-shadow hover:shadow-md">
+            <div class="flex items-start justify-between">
+              <div>
+                <p class="text-sm text-muted-foreground">在线用户</p>
+                <p class="mt-3 text-3xl font-semibold leading-none">93</p>
+                <p class="mt-2 text-xs text-destructive">▼ 5 较 1h 前</p>
+              </div>
+              <span class="grid h-10 w-10 place-items-center rounded-full bg-success/10 text-success"><i data-lucide="radio" class="h-5 w-5"></i></span>
+            </div>
+          </div>
+        </div>
+        <div class="mt-6 grid gap-4 lg:grid-cols-3">
+          <div class="lg:col-span-1 rounded-lg border bg-card p-4">
+            <h2 class="mb-3 text-base font-semibold">快捷入口</h2>
+            <div class="grid gap-2">
+              <a href="#" data-nav="user" class="flex items-center justify-between rounded-md border p-3 text-sm hover:bg-accent"><span class="flex items-center gap-2"><i data-lucide="users" class="h-4 w-4 text-primary"></i>用户管理</span><i data-lucide="chevron-right" class="h-4 w-4 text-muted-foreground"></i></a>
+              <a href="#" data-nav="org" class="flex items-center justify-between rounded-md border p-3 text-sm hover:bg-accent"><span class="flex items-center gap-2"><i data-lucide="building-2" class="h-4 w-4 text-primary"></i>组织管理</span><i data-lucide="chevron-right" class="h-4 w-4 text-muted-foreground"></i></a>
+              <a href="#" data-nav="role" class="flex items-center justify-between rounded-md border p-3 text-sm hover:bg-accent"><span class="flex items-center gap-2"><i data-lucide="shield" class="h-4 w-4 text-primary"></i>角色管理</span><i data-lucide="chevron-right" class="h-4 w-4 text-muted-foreground"></i></a>
+            </div>
+          </div>
+          <div class="lg:col-span-2 rounded-lg border bg-card">
+            <div class="flex items-center justify-between border-b p-4"><h2 class="text-base font-semibold">最近操作日志</h2><span class="text-xs text-muted-foreground">Top 10</span></div>
+            <table class="w-full text-sm">
+              <thead><tr class="border-b bg-muted/50 text-left text-xs uppercase tracking-wide text-muted-foreground"><th class="px-4 py-2.5 font-medium">操作人</th><th class="px-4 py-2.5 font-medium">操作</th><th class="px-4 py-2.5 font-medium">时间</th><th class="px-4 py-2.5 font-medium">状态</th></tr></thead>
+              <tbody id="logRows"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- ===== 用户管理 ===== -->
+      <section data-page="user" class="hidden">
+        <div class="mb-4 flex items-center justify-between">
+          <div><h1 class="text-xl font-semibold">用户管理</h1><p class="text-sm text-muted-foreground">管理系统用户与角色分配 · 共 6 条</p></div>
+          <button onclick="openDialog('dlg-user')" class="flex h-9 items-center gap-1.5 rounded-md bg-primary px-3 text-sm font-medium text-primary-foreground hover:opacity-90"><i data-lucide="plus" class="h-4 w-4"></i>新增用户</button>
+        </div>
+        <div class="grid gap-4 lg:grid-cols-[240px_1fr]">
+          <!-- 组织树 -->
+          <div class="hidden rounded-lg border bg-card p-3 lg:block">
+            <div class="mb-2 flex items-center justify-between"><span class="text-sm font-semibold">组织</span><i data-lucide="folder-tree" class="h-4 w-4 text-muted-foreground"></i></div>
+            <div class="space-y-0.5 text-sm">
+              <div class="flex items-center gap-1.5 rounded-md bg-accent px-2 py-1.5 font-medium"><i data-lucide="building-2" class="h-4 w-4 text-primary"></i>总公司</div>
+              <div class="ml-4 flex items-center gap-1.5 rounded-md px-2 py-1.5 hover:bg-accent"><i data-lucide="users" class="h-4 w-4 text-muted-foreground"></i>技术部</div>
+              <div class="ml-4 flex items-center gap-1.5 rounded-md px-2 py-1.5 hover:bg-accent"><i data-lucide="users" class="h-4 w-4 text-muted-foreground"></i>产品部</div>
+              <div class="ml-4 flex items-center gap-1.5 rounded-md px-2 py-1.5 hover:bg-accent"><i data-lucide="users" class="h-4 w-4 text-muted-foreground"></i>市场部</div>
+            </div>
+          </div>
+          <!-- 右侧：筛选卡 + 表格卡 -->
+          <div class="grid gap-4">
+            <!-- 筛选条件卡片（可折叠 + 计数） -->
+            <div class="rounded-lg border bg-card">
+              <button onclick="toggleFilter()" class="flex w-full items-center justify-between rounded-t-lg p-3 text-sm hover:bg-accent/50">
+                <span class="flex items-center gap-2 font-medium"><i data-lucide="filter" class="h-4 w-4 text-primary"></i>筛选条件
+                  <span id="filterCount" class="rounded-full bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary">已设置 0 项条件</span>
+                </span>
+                <i data-lucide="chevron-down" class="h-4 w-4 text-muted-foreground transition-transform" id="filterChevron"></i>
+              </button>
+              <div id="filterBody" class="grid gap-3 border-t p-3 sm:grid-cols-3">
+                <div class="grid gap-1.5"><label class="text-xs font-medium text-muted-foreground">部门</label><select class="h-9 rounded-md border bg-background px-2 text-sm outline-none focus:ring-2 focus:ring-ring"><option>全部部门</option><option>技术部</option><option>产品部</option><option>市场部</option></select></div>
+                <div class="grid gap-1.5"><label class="text-xs font-medium text-muted-foreground">创建时间</label><input type="date" class="h-9 rounded-md border bg-background px-3 text-sm outline-none focus:ring-2 focus:ring-ring" /></div>
+                <div class="grid gap-1.5"><label class="text-xs font-medium text-muted-foreground">用户名 / 姓名</label><input class="h-9 rounded-md border bg-background px-3 text-sm outline-none focus:ring-2 focus:ring-ring" placeholder="模糊搜索" /></div>
+                <div class="flex items-end gap-2 sm:col-span-3">
+                  <button class="flex h-9 items-center gap-1.5 rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground hover:opacity-90"><i data-lucide="search" class="h-4 w-4"></i>搜索</button>
+                  <button class="flex h-9 items-center gap-1.5 rounded-md border px-4 text-sm hover:bg-accent"><i data-lucide="rotate-ccw" class="h-4 w-4"></i>重置</button>
+                </div>
+              </div>
+            </div>
+            <!-- 表格卡片 -->
+            <div class="rounded-lg border bg-card">
+              <!-- 状态标签页 -->
+              <div class="flex items-center gap-1 border-b px-3">
+                <button class="user-tab border-b-2 border-primary px-3 py-2.5 text-sm font-medium" data-status="all">全部</button>
+                <button class="user-tab border-b-2 border-transparent px-3 py-2.5 text-sm text-muted-foreground hover:text-foreground" data-status="启用">启用</button>
+                <button class="user-tab border-b-2 border-transparent px-3 py-2.5 text-sm text-muted-foreground hover:text-foreground" data-status="禁用">禁用</button>
+                <button class="user-tab border-b-2 border-transparent px-3 py-2.5 text-sm text-muted-foreground hover:text-foreground" data-status="锁定">锁定</button>
+              </div>
+              <div class="flex flex-wrap items-center gap-2 border-b p-3">
+                <div class="relative flex-1 min-w-[180px]">
+                  <i data-lucide="search" class="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground"></i>
+                  <input class="h-9 w-full rounded-md border bg-background pl-8 pr-3 text-sm outline-none focus:ring-2 focus:ring-ring" placeholder="搜索用户名 / 姓名" />
+                </div>
+                <button class="flex h-9 items-center gap-1.5 rounded-md border px-3 text-sm hover:bg-accent"><i data-lucide="download" class="h-4 w-4"></i>导出</button>
+              </div>
+              <div class="overflow-x-auto">
+                <table class="w-full text-sm">
+                  <thead><tr class="border-b bg-muted/50 text-left text-xs uppercase tracking-wide text-muted-foreground"><th class="px-4 py-2.5 font-medium">工号</th><th class="px-4 py-2.5 font-medium">用户名</th><th class="px-4 py-2.5 font-medium">姓名</th><th class="px-4 py-2.5 font-medium">部门</th><th class="px-4 py-2.5 font-medium">手机</th><th class="px-4 py-2.5 font-medium">状态</th><th class="px-4 py-2.5 font-medium text-right">操作</th></tr></thead>
+                  <tbody id="userRows"></tbody>
+                </table>
+              </div>
+              <div class="flex items-center justify-between border-t p-3 text-sm text-muted-foreground"><span>共 6 条</span><div class="flex items-center gap-1"><button class="h-8 w-8 rounded-md border">‹</button><button class="h-8 w-8 rounded-md border bg-primary text-primary-foreground">1</button><button class="h-8 w-8 rounded-md border">2</button><button class="h-8 w-8 rounded-md border">›</button></div></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ===== 角色管理 ===== -->
+      <section data-page="role" class="hidden">
+        <div class="mb-4 flex items-center justify-between">
+          <div><h1 class="text-xl font-semibold">角色管理</h1><p class="text-sm text-muted-foreground">配置角色与数据权限范围</p></div>
+          <button class="flex h-9 items-center gap-1.5 rounded-md bg-primary px-3 text-sm font-medium text-primary-foreground hover:opacity-90"><i data-lucide="plus" class="h-4 w-4"></i>新增角色</button>
+        </div>
+        <div class="rounded-lg border bg-card">
+          <div class="overflow-x-auto">
+            <table class="w-full text-sm">
+              <thead><tr class="border-b bg-muted/50 text-left text-xs uppercase tracking-wide text-muted-foreground"><th class="px-4 py-2.5 font-medium">角色名称</th><th class="px-4 py-2.5 font-medium">编码</th><th class="px-4 py-2.5 font-medium">数据范围</th><th class="px-4 py-2.5 font-medium">状态</th><th class="px-4 py-2.5 font-medium">创建时间</th><th class="px-4 py-2.5 font-medium text-right">操作</th></tr></thead>
+              <tbody>
+                <tr class="border-b hover:bg-muted/40"><td class="px-4 py-3 font-medium">超级管理员</td><td class="px-4 py-3 text-muted-foreground">SUPER_ADMIN</td><td class="px-4 py-3">全部数据</td><td class="px-4 py-3"><span class="inline-flex items-center gap-1.5 rounded-full bg-success/10 px-2.5 py-0.5 text-xs font-medium text-success"><span class="h-1.5 w-1.5 rounded-full bg-success"></span>启用</span></td><td class="px-4 py-3 text-muted-foreground">2026-01-12</td><td class="px-4 py-3 text-right"><button onclick="openRole()" class="rounded-md p-1.5 hover:bg-accent" aria-label="编辑"><i data-lucide="square-pen" class="h-4 w-4"></i></button></td></tr>
+                <tr class="border-b hover:bg-muted/40"><td class="px-4 py-3 font-medium">部门管理员</td><td class="px-4 py-3 text-muted-foreground">DEPT_ADMIN</td><td class="px-4 py-3">本部门及以下</td><td class="px-4 py-3"><span class="inline-flex items-center gap-1.5 rounded-full bg-success/10 px-2.5 py-0.5 text-xs font-medium text-success"><span class="h-1.5 w-1.5 rounded-full bg-success"></span>启用</span></td><td class="px-4 py-3 text-muted-foreground">2026-02-03</td><td class="px-4 py-3 text-right"><button onclick="openRole()" class="rounded-md p-1.5 hover:bg-accent" aria-label="编辑"><i data-lucide="square-pen" class="h-4 w-4"></i></button></td></tr>
+                <tr class="border-b hover:bg-muted/40"><td class="px-4 py-3 font-medium">普通员工</td><td class="px-4 py-3 text-muted-foreground">STAFF</td><td class="px-4 py-3">仅本人</td><td class="px-4 py-3"><span class="inline-flex items-center gap-1.5 rounded-full bg-muted px-2.5 py-0.5 text-xs font-medium text-muted-foreground"><span class="h-1.5 w-1.5 rounded-full bg-muted-foreground"></span>禁用</span></td><td class="px-4 py-3 text-muted-foreground">2026-02-10</td><td class="px-4 py-3 text-right"><button onclick="openRole()" class="rounded-md p-1.5 hover:bg-accent" aria-label="编辑"><i data-lucide="square-pen" class="h-4 w-4"></i></button></td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- ===== 菜单管理（三栏） ===== -->
+      <section data-page="menu" class="hidden">
+        <div class="mb-4"><h1 class="text-xl font-semibold">菜单管理</h1><p class="text-sm text-muted-foreground">菜单树 · 节点配置 · 绑定 API</p></div>
+        <div class="grid gap-4 lg:grid-cols-[260px_1fr_360px]">
+          <div class="rounded-lg border bg-card p-3">
+            <div class="mb-2 text-sm font-semibold">菜单树</div>
+            <div class="space-y-0.5 text-sm">
+              <div class="flex items-center gap-1.5 rounded-md bg-accent px-2 py-1.5 font-medium"><i data-lucide="folder" class="h-4 w-4 text-primary"></i>系统管理</div>
+              <div class="ml-4 flex items-center gap-1.5 rounded-md px-2 py-1.5 hover:bg-accent"><i data-lucide="file" class="h-4 w-4 text-muted-foreground"></i>用户管理</div>
+              <div class="ml-4 flex items-center gap-1.5 rounded-md px-2 py-1.5 hover:bg-accent"><i data-lucide="file" class="h-4 w-4 text-muted-foreground"></i>角色管理</div>
+              <div class="ml-4 flex items-center gap-1.5 rounded-md px-2 py-1.5 hover:bg-accent"><i data-lucide="file" class="h-4 w-4 text-muted-foreground"></i>菜单管理</div>
+            </div>
+          </div>
+          <div class="rounded-lg border bg-card p-4">
+            <div class="mb-3 flex items-center gap-2"><span class="rounded-md bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary">菜单</span><span class="text-sm font-semibold">用户管理</span></div>
+            <div class="grid gap-3 sm:grid-cols-2">
+              <div class="grid gap-1.5"><label class="text-xs font-medium text-muted-foreground">名称</label><input class="h-9 rounded-md border bg-background px-3 text-sm outline-none focus:ring-2 focus:ring-ring" value="用户管理" /></div>
+              <div class="grid gap-1.5"><label class="text-xs font-medium text-muted-foreground">类型</label><select class="h-9 rounded-md border bg-background px-2 text-sm outline-none"><option>菜单页</option><option>目录</option><option>按钮</option></select></div>
+              <div class="grid gap-1.5"><label class="text-xs font-medium text-muted-foreground">路径</label><input class="h-9 rounded-md border bg-background px-3 text-sm outline-none focus:ring-2 focus:ring-ring" value="/system/user" /></div>
+              <div class="grid gap-1.5"><label class="text-xs font-medium text-muted-foreground">组件</label><input class="h-9 rounded-md border bg-background px-3 text-sm outline-none focus:ring-2 focus:ring-ring" value="system/user" /></div>
+              <div class="grid gap-1.5"><label class="text-xs font-medium text-muted-foreground">权限码</label><input class="h-9 rounded-md border bg-background px-3 text-sm outline-none focus:ring-2 focus:ring-ring" value="system:user:list" /></div>
+              <div class="grid gap-1.5"><label class="text-xs font-medium text-muted-foreground">排序</label><input class="h-9 rounded-md border bg-background px-3 text-sm outline-none focus:ring-2 focus:ring-ring" value="1" /></div>
+            </div>
+          </div>
+          <div class="rounded-lg border bg-card p-4">
+            <div class="mb-3 flex items-center justify-between"><span class="text-sm font-semibold">API 列表</span><button class="flex h-7 items-center gap-1 rounded-md border px-2 text-xs hover:bg-accent"><i data-lucide="plus" class="h-3.5 w-3.5"></i>新增</button></div>
+            <div class="space-y-2 text-sm">
+              <div class="flex items-center justify-between rounded-md border p-2"><span class="flex items-center gap-2"><span class="rounded bg-success/10 px-1.5 py-0.5 text-xs font-medium text-success">GET</span><span class="font-mono text-xs">/users</span></span><i data-lucide="trash-2" class="h-4 w-4 text-muted-foreground"></i></div>
+              <div class="flex items-center justify-between rounded-md border p-2"><span class="flex items-center gap-2"><span class="rounded bg-info/10 px-1.5 py-0.5 text-xs font-medium text-info">POST</span><span class="font-mono text-xs">/users</span></span><i data-lucide="trash-2" class="h-4 w-4 text-muted-foreground"></i></div>
+              <div class="flex items-center justify-between rounded-md border p-2"><span class="flex items-center gap-2"><span class="rounded bg-warning/10 px-1.5 py-0.5 text-xs font-medium text-warning">PUT</span><span class="font-mono text-xs">/users/:id</span></span><i data-lucide="trash-2" class="h-4 w-4 text-muted-foreground"></i></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- 占位页（org / dict / log） -->
+      <section data-page="org" class="hidden"><div class="mb-4"><h1 class="text-xl font-semibold">组织管理</h1></div><div id="emptyDemo" class="grid place-items-center rounded-lg border bg-card py-20 text-center"><i data-lucide="building-2" class="h-12 w-12 text-muted-foreground/50"></i><p class="mt-3 text-sm text-muted-foreground">树形表格，详见设计文档 §3.4</p></div></section>
+      <section data-page="dict" class="hidden"><div class="mb-4"><h1 class="text-xl font-semibold">字典管理</h1></div><div class="grid place-items-center rounded-lg border bg-card py-20 text-center"><i data-lucide="book-a" class="h-12 w-12 text-muted-foreground/50"></i><p class="mt-3 text-sm text-muted-foreground">左类型 + 右字典项，详见设计文档 §3.7</p></div></section>
+      <section data-page="log" class="hidden"><div class="mb-4"><h1 class="text-xl font-semibold">操作日志</h1></div><div class="grid place-items-center rounded-lg border bg-card py-20 text-center"><i data-lucide="scroll-text" class="h-12 w-12 text-muted-foreground/50"></i><p class="mt-3 text-sm text-muted-foreground">标准筛选 + DataTable + 详情 Dialog，详见文档 §5.8</p></div></section>
+
+    </main>
+  </div>
+
+  <!-- 右侧 Sheet：角色编辑（3 Tab） -->
+  <div id="roleSheet" class="fixed inset-y-0 right-0 z-50 w-[480px] max-w-full translate-x-full border-l bg-card shadow-xl sheet-panel flex flex-col">
+    <div class="flex items-center justify-between border-b p-4"><h2 class="text-base font-semibold">编辑角色 · 部门管理员</h2><button onclick="closeRole()" class="rounded-md p-1.5 hover:bg-accent"><i data-lucide="x" class="h-5 w-5"></i></button></div>
+    <div class="flex gap-1 border-b px-4">
+      <button class="role-tab -mb-px border-b-2 border-primary px-3 py-2 text-sm font-medium" data-tab="0">基本信息</button>
+      <button class="role-tab border-b-2 border-transparent px-3 py-2 text-sm text-muted-foreground" data-tab="1">菜单权限</button>
+      <button class="role-tab border-b-2 border-transparent px-3 py-2 text-sm text-muted-foreground" data-tab="2">数据权限</button>
+    </div>
+    <div class="flex-1 overflow-y-auto p-4">
+      <div class="role-pane grid gap-3" data-pane="0">
+        <div class="grid gap-1.5"><label class="text-xs font-medium text-muted-foreground">角色名称</label><input class="h-9 rounded-md border bg-background px-3 text-sm outline-none focus:ring-2 focus:ring-ring" value="部门管理员" /></div>
+        <div class="grid gap-1.5"><label class="text-xs font-medium text-muted-foreground">编码</label><input class="h-9 rounded-md border bg-background px-3 text-sm outline-none focus:ring-2 focus:ring-ring" value="DEPT_ADMIN" /></div>
+        <div class="grid gap-1.5"><label class="text-xs font-medium text-muted-foreground">数据范围</label><select class="h-9 rounded-md border bg-background px-2 text-sm outline-none"><option>本部门及以下</option><option>全部数据</option><option>仅本人</option><option>自定义部门</option></select></div>
+        <div class="grid gap-1.5"><label class="text-xs font-medium text-muted-foreground">备注</label><textarea class="rounded-md border bg-background px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-ring" rows="3"></textarea></div>
+      </div>
+      <div class="role-pane hidden" data-pane="1"><p class="mb-2 text-sm text-muted-foreground">勾选菜单权限（支持半选）</p>
+        <div class="space-y-1 text-sm">
+          <label class="flex items-center gap-2 rounded-md px-2 py-1.5 hover:bg-accent"><input type="checkbox" checked class="accent-primary h-4 w-4" />系统管理</label>
+          <label class="ml-4 flex items-center gap-2 rounded-md px-2 py-1.5 hover:bg-accent"><input type="checkbox" checked class="accent-primary h-4 w-4" />用户管理</label>
+          <label class="ml-4 flex items-center gap-2 rounded-md px-2 py-1.5 hover:bg-accent"><input type="checkbox" class="accent-primary h-4 w-4" />角色管理</label>
+          <label class="ml-4 flex items-center gap-2 rounded-md px-2 py-1.5 hover:bg-accent"><input type="checkbox" checked class="accent-primary h-4 w-4" />菜单管理</label>
+        </div>
+      </div>
+      <div class="role-pane hidden" data-pane="2"><p class="mb-2 text-sm text-muted-foreground">数据范围 = 本部门及以下，无需额外配置。</p><div class="rounded-md border border-dashed p-4 text-center text-sm text-muted-foreground">当前选择「本部门及以下」</div></div>
+    </div>
+    <div class="flex justify-end gap-2 border-t p-4">
+      <button onclick="closeRole()" class="h-9 rounded-md border px-4 text-sm hover:bg-accent">取消</button>
+      <button class="h-9 rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground hover:opacity-90">保存</button>
+    </div>
+  </div>
+
+  <!-- AI Copilot 占位（Sheet） -->
+  <div id="copilot" class="fixed inset-y-0 right-0 z-50 w-[360px] max-w-full translate-x-full border-l bg-card shadow-xl sheet-panel flex flex-col">
+    <div class="flex items-center justify-between border-b p-4"><h2 class="flex items-center gap-2 text-base font-semibold"><i data-lucide="sparkles" class="h-4 w-4 text-primary"></i>AI 助手</h2><button onclick="toggleCopilot()" class="rounded-md p-1.5 hover:bg-accent"><i data-lucide="x" class="h-5 w-5"></i></button></div>
+    <div class="flex-1 overflow-y-auto p-4 text-sm text-muted-foreground">你好，我是 MIS 智能助手（占位）。真实能力将在 Phase 3 接入。</div>
+    <div class="border-t p-3"><input disabled placeholder="即将开放…" class="h-9 w-full rounded-md border bg-muted/50 px-3 text-sm text-muted-foreground" /></div>
+  </div>
+
+</div>
+
+<!-- ============ 弹窗层 ============ -->
+<div id="dlg-user" class="fixed inset-0 z-[60] hidden items-center justify-center bg-black/40 p-4">
+  <div class="dialog-card w-full max-w-lg rounded-lg border bg-card shadow-xl">
+    <div class="flex items-center justify-between border-b p-4"><h2 class="text-base font-semibold">新增用户</h2><button onclick="closeDialog('dlg-user')" class="rounded-md p-1.5 hover:bg-accent"><i data-lucide="x" class="h-5 w-5"></i></button></div>
+    <div class="grid gap-3 p-4 sm:grid-cols-2">
+      <div class="grid gap-1.5"><label class="text-xs font-medium text-muted-foreground">用户名</label><input class="h-9 rounded-md border bg-background px-3 text-sm outline-none focus:ring-2 focus:ring-ring" /></div>
+      <div class="grid gap-1.5"><label class="text-xs font-medium text-muted-foreground">姓名</label><input class="h-9 rounded-md border bg-background px-3 text-sm outline-none focus:ring-2 focus:ring-ring" /></div>
+      <div class="grid gap-1.5"><label class="text-xs font-medium text-muted-foreground">部门</label><select class="h-9 rounded-md border bg-background px-2 text-sm outline-none"><option>技术部</option><option>产品部</option></select></div>
+      <div class="grid gap-1.5"><label class="text-xs font-medium text-muted-foreground">手机</label><input class="h-9 rounded-md border bg-background px-3 text-sm outline-none focus:ring-2 focus:ring-ring" /></div>
+      <div class="grid gap-1.5 sm:col-span-2"><label class="text-xs font-medium text-muted-foreground">状态</label><div class="flex items-center gap-2"><span class="inline-flex items-center gap-1.5 rounded-full bg-success/10 px-2.5 py-0.5 text-xs font-medium text-success"><span class="h-1.5 w-1.5 rounded-full bg-success"></span>启用</span></div></div>
+    </div>
+    <div class="flex justify-end gap-2 border-t p-4"><button onclick="closeDialog('dlg-user')" class="h-9 rounded-md border px-4 text-sm hover:bg-accent">取消</button><button onclick="closeDialog('dlg-user')" class="h-9 rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground hover:opacity-90">保存</button></div>
+  </div>
+</div>
+
+<script>
+  // —— 数据填充 ——
+  const logs = [
+    ['管理员','登录系统','09:42','成功'],['张明','编辑用户 李雷','09:38','成功'],
+    ['王芳','禁用用户 韩梅','09:31','成功'],['管理员','分配角色','09:20','成功'],
+    ['赵强','导出用户','09:12','成功'],['李雷','重置密码','09:05','失败'],
+    ['管理员','新增部门','08:58','成功'],['孙丽','修改菜单','08:50','成功'],
+    ['周涛','删除字典项','08:41','成功'],['管理员','系统配置','08:30','成功'],
+  ];
+  document.getElementById('logRows').innerHTML = logs.map(r => `
+    <tr class="border-b hover:bg-muted/40">
+      <td class="px-4 py-2.5">${r[0]}</td>
+      <td class="px-4 py-2.5">${r[1]}</td>
+      <td class="px-4 py-2.5 text-muted-foreground">${r[2]}</td>
+      <td class="px-4 py-2.5"><span class="inline-flex items-center gap-1.5 rounded-full ${r[3]==='成功'?'bg-success/10 text-success':'bg-destructive/10 text-destructive'} px-2.5 py-0.5 text-xs font-medium"><span class="h-1.5 w-1.5 rounded-full ${r[3]==='成功'?'bg-success':'bg-destructive'}"></span>${r[3]}</span></td>
+    </tr>`).join('');
+
+  const users = [
+    ['U001','admin','管理员','总公司','138****0001','启用'],
+    ['U002','zhanglei','张雷','技术部','139****0022','启用'],
+    ['U003','wangfang','王芳','产品部','137****0033','启用'],
+    ['U004','hanmei','韩梅','市场部','136****0044','禁用'],
+    ['U005','zhaoliang','赵亮','技术部','135****0055','启用'],
+    ['U006','sunli','孙丽','产品部','134****0066','启用'],
+  ];
+  document.getElementById('userRows').innerHTML = users.map(u => `
+    <tr class="border-b hover:bg-muted/40">
+      <td class="px-4 py-3 text-muted-foreground">${u[0]}</td>
+      <td class="px-4 py-3 font-medium">${u[1]}</td>
+      <td class="px-4 py-3">${u[2]}</td>
+      <td class="px-4 py-3 text-muted-foreground">${u[3]}</td>
+      <td class="px-4 py-3 text-muted-foreground">${u[4]}</td>
+      <td class="px-4 py-3"><span class="inline-flex items-center gap-1.5 rounded-full ${u[5]==='启用'?'bg-success/10 text-success':'bg-muted text-muted-foreground'} px-2.5 py-0.5 text-xs font-medium"><span class="h-1.5 w-1.5 rounded-full ${u[5]==='启用'?'bg-success':'bg-muted-foreground'}"></span>${u[5]}</span></td>
+      <td class="px-4 py-3">
+        <div class="flex justify-end gap-0.5">
+          <button class="rounded-md p-1.5 hover:bg-accent" aria-label="编辑"><i data-lucide="square-pen" class="h-4 w-4"></i></button>
+          <button class="rounded-md p-1.5 hover:bg-accent" aria-label="重置密码"><i data-lucide="key-round" class="h-4 w-4"></i></button>
+          <button class="rounded-md p-1.5 hover:bg-accent" aria-label="禁用"><i data-lucide="user-x" class="h-4 w-4"></i></button>
+          <button class="rounded-md p-1.5 hover:bg-accent" aria-label="分配角色"><i data-lucide="user-check" class="h-4 w-4"></i></button>
+          <button class="rounded-md p-1.5 text-destructive hover:bg-destructive/10" aria-label="删除"><i data-lucide="trash-2" class="h-4 w-4"></i></button>
+        </div>
+      </td>
+    </tr>`).join('');
+
+  // —— 导航切换 ——
+  const labels = { dashboard:'仪表盘', user:'用户管理', org:'组织管理', role:'角色管理', menu:'菜单管理', dict:'字典管理', log:'操作日志' };
+  function showPage(p) {
+    document.querySelectorAll('[data-page]').forEach(s => s.classList.add('hidden'));
+    const sec = document.querySelector(`[data-page="${p}"]`);
+    if (sec) sec.classList.remove('hidden');
+    document.querySelectorAll('.nav-item').forEach(a => {
+      const active = a.dataset.nav === p;
+      a.classList.toggle('bg-primary', active);
+      a.classList.toggle('text-primary-foreground', active);
+      a.classList.toggle('hover:bg-accent', !active);
+    });
+    document.getElementById('breadcrumb').innerHTML = `<span>${labels[p]||'仪表盘'}</span>`;
+    if (window.innerWidth < 768) toggleSidebar(false);
+  }
+  document.querySelectorAll('[data-nav]').forEach(a => a.addEventListener('click', e => { e.preventDefault(); showPage(a.dataset.nav); }));
+
+  // —— 筛选卡片折叠（演示：角标计数随字段变化）——
+  function toggleFilter() {
+    const b = document.getElementById('filterBody');
+    const c = document.getElementById('filterChevron');
+    const collapsed = b.classList.toggle('hidden');
+    c.style.transform = collapsed ? 'rotate(-90deg)' : 'rotate(0deg)';
+    const filled = b.querySelectorAll('select, input').length;
+    document.getElementById('filterCount').textContent = collapsed ? '已收起筛选条件' : `已设置 0 项条件`;
+  }
+  // —— 用户状态标签页切换（演示高亮）——
+  document.querySelectorAll('.user-tab').forEach(t => t.addEventListener('click', () => {
+    document.querySelectorAll('.user-tab').forEach(x => {
+      const on = x === t;
+      x.classList.toggle('border-primary', on);
+      x.classList.toggle('border-transparent', !on);
+      x.classList.toggle('font-medium', on);
+      x.classList.toggle('text-muted-foreground', !on);
+    });
+  }));
+
+  function enterApp() {
+    document.getElementById('login-view').classList.add('hidden');
+    document.getElementById('app-view').classList.remove('hidden');
+    document.getElementById('app-view').classList.add('flex');
+    showPage('dashboard');
+  }
+
+  // —— 主题 ——
+  function applyThemeIcon() {
+    const dark = document.documentElement.classList.contains('dark');
+    document.getElementById('themeBtn').innerHTML = dark
+      ? '<i data-lucide="sun" class="h-5 w-5"></i>' : '<i data-lucide="moon" class="h-5 w-5"></i>';
+    lucide.createIcons();
+  }
+  function toggleTheme() {
+    document.documentElement.classList.toggle('dark');
+    applyThemeIcon();
+  }
+
+  // —— 侧栏抽屉（移动端）——
+  function toggleSidebar(force) {
+    const sb = document.getElementById('sidebar');
+    const bd = document.getElementById('backdrop');
+    const open = force !== undefined ? force : sb.classList.contains('-translate-x-full');
+    sb.classList.toggle('-translate-x-full', !open);
+    sb.classList.toggle('translate-x-0', open);
+    bd.classList.toggle('hidden', !open);
+  }
+
+  // —— 弹窗 ——
+  function openDialog(id) { document.getElementById(id).classList.remove('hidden'); document.getElementById(id).classList.add('flex'); lucide.createIcons(); }
+  function closeDialog(id) { document.getElementById(id).classList.add('hidden'); document.getElementById(id).classList.remove('flex'); }
+
+  // —— Sheet ——
+  function openRole() { const s = document.getElementById('roleSheet'); s.classList.remove('translate-x-full'); }
+  function closeRole() { document.getElementById('roleSheet').classList.add('translate-x-full'); }
+  document.querySelectorAll('.role-tab').forEach(t => t.addEventListener('click', () => {
+    const i = +t.dataset.tab;
+    document.querySelectorAll('.role-tab').forEach(x => { x.classList.toggle('border-primary', x===t); x.classList.toggle('text-muted-foreground', x!==t); x.classList.toggle('border-transparent', x===t); });
+    document.querySelectorAll('.role-pane').forEach(p => p.classList.toggle('hidden', +p.dataset.pane !== i));
+  }));
+  function toggleCopilot() { const c = document.getElementById('copilot'); c.classList.toggle('translate-x-full'); }
+
+  lucide.createIcons();
+  applyThemeIcon();
+</script>
+</body>
+</html>

@@ -1,0 +1,46 @@
+---
+description: Java 后端编码规范（微服务、JPA、统一响应）
+globs: backend/**/*.java
+alwaysApply: false
+---
+
+# Java 编码规范
+
+## 分层
+
+| 层 | 职责 | 禁止 |
+|----|------|------|
+| controller | 校验、调 service、返回 `Result` | 写业务逻辑 |
+| service | 业务逻辑 | 直接把 Entity 当 API 响应 |
+| domain/entity | JPA 实体 | — |
+| domain/repository | Spring Data JPA | — |
+| dto / vo | 入参 / 出参 | Entity 泄漏到前端 |
+
+包名：`com.mis.{module}.{layer}`（如 `com.mis.auth.service`）。
+
+## 命名
+
+- 实体：`User`、`SysRole`；Service：`UserService`
+- 入参：`UserCreateDTO`；出参：`UserVO` / `*Response`
+- Repository：`SysUserRepository`（不用 Mapper）
+
+## 必须遵守
+
+- 统一响应：`com.mis.common.core.result.Result` / `PageResult`
+- 业务错误：`BusinessException` + `ResultCode`，勿随意 `throw new RuntimeException`
+- 对外路径：`/api/v1/...`；内部：`/internal/v1/...`
+- 复用 `mis-common-*`（security / redis / jpa / web），勿复制 JWT/黑名单逻辑
+- 构造器注入；类与公共方法写简要 JavaDoc（职责/非显而易见规则）
+- 新表/改表：只在 `mis-migrator` 追加 Flyway 脚本
+
+## 示例
+
+```java
+// ✅
+@PostMapping("/login")
+public Result<LoginResponse> login(@Valid @RequestBody LoginRequest req) {
+    return Result.ok(authService.login(req));
+}
+
+// ❌ Controller 内写校验以外的业务、直接返回 Entity
+```

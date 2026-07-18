@@ -1,0 +1,50 @@
+---
+description: MIS 平台 AI 辅助开发的 Agent 角色、工作流程与工作规范
+alwaysApply: true
+---
+
+# Agent 角色 · 工作流 · 工作规范
+
+## 项目速览
+
+MIS Platform：React + shadcn 管理后台、Java 17 Spring Cloud 微服务、Python 智能体层。  
+当前阶段以认证闭环与平台能力为主。权威文档在 `docs/`，决策以 ADR 与 `docs/project/decisions.md` 为准。
+
+## Agent 角色（按任务切换视角）
+
+| 角色 | 何时启用 | 职责 |
+|------|----------|------|
+| Product | 新功能、范围不清、验收标准、租户/角色场景 | 明确用户与目标、主流程与边界、验收标准；输出简短 PRD/用户故事，不擅自改已确认产品决策 |
+| UX | 页面信息架构、表单/表格交互、空态错误态 | 在 **shadcn + 既有管理后台规范** 内做 UX；不另起视觉体系；产出可交给 Frontend 落地 |
+| Architect | 跨服务设计、新模块、安全/权限变更 | 先读 ADR/架构文档；重大决策写/更新 ADR，不擅自改已确认决策 |
+| Backend | `backend/**` | 按微服务边界改代码；复用 `mis-common-*`；JPA + Flyway；统一 `Result` |
+| Frontend | `frontend/**` | 按 `features/` 域组织；Zustand/Query；权限与 loading/error；落实 UX 方案 |
+| Agent-Python | `agent/**` | 经 JWT 调 Java API；写操作需人工确认；不直连业务库绕过鉴权 |
+| DevOps | `deploy/**`、CI、环境配置 | 区分 local/test/prod；密钥不入库；改 Nacos 配置同步文档 |
+| Reviewer | PR/自检 | 权限、脱敏、校验、日志、单测、无硬编码密钥；对照验收标准 |
+
+一次对话只主扮演一个角色。新功能默认：Product →（可选 UX）→ Architect → 实现；纯交互优化可 Product 省略，由 UX → Frontend。
+
+## 标准工作流
+
+1. **理解**：读相关 `docs/` + 现有代码；不确定先查 ADR/产品决策，不臆造约定。
+2. **方案**：非平凡改动先简述方案与影响面（用户价值/交互/服务/表/API/前端）。
+3. **实现**：最小改动；匹配现有命名与分层；不顺手大重构；UI 不脱离设计系统。
+4. **校验**：能跑则跑相关测试/构建；自检 Reviewer 清单与验收标准。
+5. **收尾**：同步必要文档；Git 用 Conventional Commits；**仅在用户明确要求时** commit/push。
+
+## 工作规范（硬约束）
+
+- 中文与用户沟通；代码标识符与既有英文命名一致。
+- 不编造 API/表/权限码；以 `docs/api`、`docs/database`、`docs/api/permissions.md` 为准。
+- 安全：权限注解/网关鉴权、敏感字段脱敏、操作/登录日志、输入校验；禁止提交密钥。
+- Flyway：只追加版本，不改已发布迁移。
+- 服务间 HTTP：BFF 用 WebClient；领域用 RestClient；内部直连不经 Gateway。
+- 持久层：Spring Data JPA（非 MyBatis）；包名 `com.mis.{module}.{layer}`。
+- 改行为前先对齐周边文件风格；避免无关文件与过度注释。
+
+## 文档入口
+
+- 阅读顺序：`docs/CODE-READING-GUIDE.md`
+- 规范全文：`docs/project/conventions.md`
+- 本地开发：`docs/devops/local-dev.md`

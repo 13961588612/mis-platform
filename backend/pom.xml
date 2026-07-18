@@ -17,6 +17,8 @@
         <module>mis-common</module>
         <module>mis-gateway</module>
         <module>mis-auth</module>
+        <module>mis-org</module>
+        <module>mis-iam</module>
         <module>mis-audit</module>
     </modules>
 
@@ -62,6 +64,7 @@
                     <version>3.13.0</version>
                     <configuration>
                         <release>${java.version}</release>
+                        <parameters>true</parameters>
                     </configuration>
                 </plugin>
                 <plugin>

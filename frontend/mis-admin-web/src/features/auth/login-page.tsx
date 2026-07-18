@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { fetchCaptcha, login, logout } from '@/lib/api/auth';
+import { fetchCaptcha, login } from '@/lib/api/auth';
 import { useAuthStore } from '@/stores/auth-store';
 
 export function LoginPage() {
@@ -108,36 +108,16 @@ export function ChangePasswordPlaceholder() {
 export function DashboardPage() {
   const user = useAuthStore((s) => s.user);
   const app = useAuthStore((s) => s.app);
-  const clearSession = useAuthStore((s) => s.clearSession);
-  const navigate = useNavigate();
-
-  const handleLogout = async () => {
-    await logout();
-    clearSession();
-    navigate('/login', { replace: true });
-  };
 
   return (
-    <div className="app-shell">
-      <header className="app-header">
-        <div>
-          <strong>{app?.name ?? 'MIS'}</strong>
-          <span className="muted"> / 仪表盘</span>
-        </div>
-        <div className="header-actions">
-          <span>{user?.realName ?? user?.username}</span>
-          <button type="button" onClick={() => void handleLogout()}>
-            退出
-          </button>
-        </div>
-      </header>
-      <main className="app-main">
-        <div className="card welcome-card">
-          <h2>欢迎，{user?.realName ?? user?.username}</h2>
-          <p>角色：{user?.roles?.join(', ') || '—'}</p>
-          <p className="muted">Sprint 1 认证闭环已就绪。后续 Sprint 将接入动态菜单与用户管理。</p>
-        </div>
-      </main>
+    <div className="mx-auto max-w-3xl space-y-4">
+      <div className="rounded-lg border bg-card p-6 text-card-foreground shadow-sm">
+        <h2 className="text-xl font-medium">欢迎，{user?.realName ?? user?.username}</h2>
+        <p className="mt-2 text-sm text-muted-foreground">角色：{user?.roles?.join(', ') || '—'}</p>
+        <p className="mt-1 text-sm text-muted-foreground">
+          {app?.name ?? 'MIS'} Sprint 1 认证闭环已就绪。后续 Sprint 将接入动态菜单与用户管理。
+        </p>
+      </div>
     </div>
   );
 }

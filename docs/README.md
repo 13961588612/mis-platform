@@ -23,6 +23,7 @@
 | 混合联调 | [integration-test](devops/integration-test.md) |
 | 配置与 Nacos | [configuration](devops/configuration.md) |
 | 读代码从哪开始 | **[CODE-READING-GUIDE](CODE-READING-GUIDE.md)** |
+| 配置 Cursor Agent 角色/规范 | [ai-assisted-dev](project/ai-assisted-dev.md) · [AGENTS.md](../AGENTS.md) |
 
 ---
 
@@ -46,7 +47,7 @@ docs/
 │   ├── integration-test.md          # 混合联调
 │   ├── configuration.md               # 配置策略
 │   └── ci-cd.md                       # CI/CD
-├── project/                           # 决策与 Sprint
+├── project/                           # 决策、Sprint、AI 辅助开发
 └── adr/                               # 架构决策记录
 ```
 
