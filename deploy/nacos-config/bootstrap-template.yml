@@ -1,0 +1,28 @@
+# 复制到各微服务 src/main/resources/bootstrap.yml，并修改 spring.application.name
+#
+# local（默认）：仅 jar 内 application.yml，不连 Nacos
+# remote：MIS_REMOTE=true + NACOS_NAMESPACE + NACOS_SERVER
+
+spring:
+  application:
+    name: mis-example
+  cloud:
+    nacos:
+      config:
+        enabled: ${MIS_REMOTE:false}
+        server-addr: ${NACOS_SERVER:localhost:8848}
+        namespace: ${NACOS_NAMESPACE:dev}
+        group: ${NACOS_CONFIG_GROUP:MIS_GROUP}
+        file-extension: yaml
+        shared-configs:
+          - data-id: mis-common
+            group: ${NACOS_CONFIG_GROUP:MIS_GROUP}
+            refresh: true
+        extension-configs:
+          - data-id: ${spring.application.name}
+            group: ${NACOS_CONFIG_GROUP:MIS_GROUP}
+            refresh: true
+      discovery:
+        enabled: ${MIS_REMOTE:false}
+        server-addr: ${NACOS_SERVER:localhost:8848}
+        namespace: ${NACOS_NAMESPACE:dev}

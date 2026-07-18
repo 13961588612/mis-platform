@@ -127,5 +127,7 @@ jobs:
 
 ## 9. 关联文档
 
-- [本地开发环境](local-dev.md)
+- [运维总览](README.md)
+- [测试环境部署](test-deploy.md)
+- [正式环境部署](prod-deploy.md)
 - [Sprint 计划](../project/sprint-plan.md)

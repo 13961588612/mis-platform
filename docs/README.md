@@ -18,10 +18,13 @@
 | 理解登录与安全 | [03-security](architecture/03-security.md) + [CODE-READING-GUIDE](CODE-READING-GUIDE.md) |
 | 查表结构 | [schema-design](database/schema-design.md) |
 | 查 API | [api-specification](api/api-specification.md) |
-| 本地跑起来 | [local-dev](devops/local-dev.md) |
-| 配置 prod/test/Nacos | [configuration](devops/configuration.md) |
+| **本地跑起来** | **[local-dev](devops/local-dev.md)** |
+| **测试/正式部署** | **[devops/README](devops/README.md)** → [test-deploy](devops/test-deploy.md) / [prod-deploy](devops/prod-deploy.md) |
+| 混合联调 | [integration-test](devops/integration-test.md) |
+| 配置与 Nacos | [configuration](devops/configuration.md) |
 | 读代码从哪开始 | **[CODE-READING-GUIDE](CODE-READING-GUIDE.md)** |
 | 查各模块职责与内容 | **[modules-guide](project/modules-guide.md)** |
+| 配置 Cursor Agent 角色/规范 | [ai-assisted-dev](project/ai-assisted-dev.md) · [AGENTS.md](../AGENTS.md) |
 
 ---
 
@@ -53,6 +56,10 @@ docs/
 ├── agent/
 │   └── ai-agent-design.md             # 📝 智能体层
 ├── devops/
+│   ├── README.md                      # 运维总览（环境对照）
+│   ├── local-dev.md                   # 本地开发
+│   ├── test-deploy.md                 # 测试环境部署
+│   ├── prod-deploy.md                 # 正式环境部署
 │   ├── local-dev.md                   # 📝 本地环境
 │   ├── configuration.md               # 📝 配置管理（prod 仅文件）
 │   └── ci-cd.md                       # 📝 CI/CD
@@ -63,6 +70,7 @@ docs/
 │   └── conventions.md                 # 📝 编码规范
 └── adr/                               # 架构决策记录（ADR-001 … ADR-015）
     └── README.md
+
 ```
 
 ---
@@ -75,7 +83,7 @@ docs/
 4. [表结构设计](database/schema-design.md)
 5. [接口规范](api/api-specification.md) + [权限清单](api/permissions.md)
 6. [微服务划分](backend/microservices.md) + [公共模块](backend/common-modules.md)
-7. [配置管理](devops/configuration.md) + [本地开发](devops/local-dev.md)
+7. **[运维总览](devops/README.md)** → [本地开发](devops/local-dev.md)
 8. [代码阅读顺序](CODE-READING-GUIDE.md)
 
 ---
@@ -88,9 +96,10 @@ docs/
 | mis-common-* | ✅ | core / jpa / web / security / redis |
 | mis-gateway | ✅ | JWT 验签、透传头、Redis 黑名单 |
 | mis-auth | ✅ | 登录/刷新/登出、JWT 签发 |
+| mis-audit | ✅ | 登录日志 |
 | mis-admin-bff | ⏳ | API 权限、聚合 |
 | 领域微服务 | ⏳ | user / rbac / org / … |
-| 前端 mis-admin-web | ⏳ | |
+| 前端 mis-admin-web | ✅ | Sprint 1 登录页 |
 
 ---
 
@@ -99,10 +108,11 @@ docs/
 | 路径 | 说明 |
 |------|------|
 | `deploy/docker-compose.dev.yml` | 本地 PG / Redis / Nacos / MinIO |
-| `deploy/config/prod/` | **正式环境**微服务外部 YAML |
-| `deploy/config/test/` | **测试环境**文件配置 |
-| `deploy/nacos/` | Nacos Server（PG 存储）与 import 模板 |
-| `.env.example` | 环境变量模板 |
+| `deploy/docker-compose.stack.yml` | 混合联调稳定服务 |
+| `deploy/nacos-config/{prod,test,integration}/` | 配置 Git 源 → `nacos-push` |
+| `deploy/nacos/` | Nacos Server（PG 存储） |
+| `deploy/ide/` | IDE 联调环境变量模板 |
+| `.env.example` | 本地环境变量模板 |
 
 ---
 
@@ -111,4 +121,4 @@ docs/
 | 版本 | 日期 | 说明 |
 |------|------|------|
 | v1.0-draft | 2026-06-23 | 初版文档体系 |
-| v1.1-draft | 2026-06-24 | 配置策略、mis-auth/gateway 实现、CODE-READING-GUIDE |
+| v1.1-draft | 2026-06-24 | MIS_REMOTE 配置简化、运维文档拆分 |

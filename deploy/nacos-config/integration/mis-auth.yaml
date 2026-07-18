@@ -1,0 +1,9 @@
+server:
+  port: 8101
+
+mis:
+  auth:
+    captcha-enabled: ${AUTH_CAPTCHA_ENABLED:false}
+    audit-discovery-enabled: true
+    audit-service-id: mis-audit
+    audit-base-url: http://mis-audit

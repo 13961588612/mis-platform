@@ -1,0 +1,32 @@
+---
+description: SQL 迁移与 REST API 设计规范
+globs: "{docs/db/**/*.sql,docs/database/**,docs/api/**,backend/mis-migrator/**}"
+alwaysApply: false
+---
+
+# SQL 与 API 规范
+
+## SQL / Flyway
+
+- 表名：小写蛇形，系统表前缀 `sys_`
+- 索引：`uk_` 唯一，`idx_` 普通
+- 生产查询禁止 `SELECT *`（文档与代码示例亦避免）
+- 迁移：只追加新版本；**禁止修改已发布**的 `V*` 脚本
+- 种子数据与 schema 变更同步 `docs/database/`
+
+## REST API
+
+| 规则 | 说明 |
+|------|------|
+| 前缀 | `/api/v1`（对外经 Gateway） |
+| URL | 复数名词，如 `/users` |
+| 动作 | 用 HTTP 方法，不用动词路径（除非既有惯例如 `/login`） |
+| ID | 路径参数；JSON 中 ID 按既有约定传字符串 |
+| 响应 | `{ code, message, data, traceId }`，成功 `code = 0` |
+| 分页 | 请求 `page/size/sort`；响应 `page/size/total/list` |
+
+## 权限与安全
+
+- 新接口同步权限码到 `docs/api/permissions.md`（及映射文档）
+- 非白名单接口需 Bearer Token；敏感字段响应脱敏
+- 破坏性变更先更新 `docs/api/api-specification.md` 再改代码

@@ -1,0 +1,44 @@
+---
+description: 前端 TypeScript/React 编码规范（mis-admin-web）
+globs: frontend/**/*.{ts,tsx}
+alwaysApply: false
+---
+
+# 前端编码规范
+
+## 目录
+
+- `features/{domain}/`：页面与业务组件
+- `components/ui/`：shadcn；`layout/`、`auth/`、`common/` 按职责放
+- `lib/api/`：Axios 封装；`stores/`：Zustand；`hooks/`：`useXxx`
+
+路径别名：`@/*` → `src/*`。
+
+## 命名
+
+| 类型 | 规则 | 示例 |
+|------|------|------|
+| 组件 | PascalCase | `LoginPage` |
+| 文件 | kebab-case | `login-page.tsx` |
+| hooks | `useXxx` | `usePermission` |
+| 类型 | PascalCase | `UserInfo` |
+| 常量 | UPPER_SNAKE | `API_BASE_URL` |
+
+## 状态与 UI
+
+- 服务端数据：TanStack Query（已引入时）；全局认证/UI：Zustand
+- 表单：React Hook Form + Zod（引入后）；避免多余 `useEffect`
+- 每个异步交互处理 loading / error；按钮级权限用权限组件/钩子
+- UI：shadcn/ui + Tailwind；不引入与设计稿冲突的新组件库
+
+## 结构顺序
+
+```tsx
+// 1. imports  2. types  3. component  4. 小组件（若同文件）
+```
+
+## 禁止
+
+- 硬编码完整后端 URL（走 `lib/api/client` 与环境变量）
+- 在组件内散落未封装的 axios 调用
+- 把 token 存 localStorage 明文以外的既有方案外另搞一套（遵循现有 auth-store）

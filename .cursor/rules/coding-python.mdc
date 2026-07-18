@@ -1,0 +1,34 @@
+---
+description: Python 智能体层编码规范（agent-gateway）
+globs: agent/**/*.py
+alwaysApply: false
+---
+
+# Python Agent 编码规范
+
+## 边界
+
+- 做：LLM 编排、RAG、受控工具、SSE 流式
+- 不做：替代 Java 写核心业务；无鉴权直连业务库
+
+以当前用户 JWT 调用 Java API；写操作需 Human-in-the-loop。
+
+## 风格
+
+| 项 | 规则 |
+|----|------|
+| 格式 / Lint | ruff format / ruff check |
+| 类型 | 公共函数 type hints |
+| 命名 | snake_case |
+| 分层 | `api/` · `services/` · `core/` |
+
+## 约定
+
+- 配置走环境变量（见 `docs/agent/ai-agent-design.md`）
+- JWT 用与 mis-auth 共享的公钥验签；无效 → 401
+- HTTP 客户端集中在 `shared/clients`，勿在路由里裸请求
+- Phase 1 可用 mock LLM；勿在未确认前接入真实密钥到仓库
+
+## 参考
+
+设计文档：`docs/agent/ai-agent-design.md`（ADR-005）

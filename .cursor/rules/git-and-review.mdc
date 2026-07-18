@@ -1,0 +1,29 @@
+---
+description: Git 提交与代码审查清单
+alwaysApply: true
+---
+
+# Git 与审查规范
+
+## Conventional Commits
+
+```
+<type>(<scope>): <subject>
+```
+
+- type：`feat` | `fix` | `docs` | `style` | `refactor` | `test` | `chore`
+- scope 示例：`auth`、`user`、`gateway`、`web`、`agent`、`deploy`
+- 示例：`feat(auth): add captcha on login`
+
+仅在用户明确要求时执行 `git commit` / `git push`。
+
+## Reviewer 清单
+
+- [ ] 权限注解 / 网关与 API 权限映射
+- [ ] 敏感字段脱敏
+- [ ] 操作或登录相关日志（若适用）
+- [ ] 入参校验（`@Valid` / Zod 等）
+- [ ] 关键逻辑有单测或说明为何可免
+- [ ] 无硬编码密钥、无提交 `.env`
+- [ ] 前端 loading / error 已处理
+- [ ] Flyway 仅追加；文档与权限清单已同步（若有 API/表变更）

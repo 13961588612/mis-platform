@@ -4,23 +4,23 @@
 
 > **当前阶段**：Sprint 1 — 认证闭环（mis-auth、mis-audit、Gateway、admin-web 登录页）。
 
-## 快速开始
+## 快速开始（本地开发）
 
-```bash
+```powershell
 # 1. 基础设施
 docker compose -f deploy/docker-compose.dev.yml up -d
 
 # 2. 数据库迁移
-cd backend && .\mvn.ps1 -pl mis-migrator flyway:migrate
+cd backend; .\mvn.ps1 -pl mis-migrator flyway:migrate
 
-# 3. 启动后端（需 JAVA_HOME_17、Maven 3.9+）
+# 3. 启动后端（不设 MIS_REMOTE，默认 local 模式）
 .\mvn.ps1 spring-boot:run -pl mis-gateway,mis-auth,mis-audit
 
 # 4. 启动前端
-cd ../frontend/mis-admin-web && pnpm install && pnpm dev
+cd ..\frontend\mis-admin-web; pnpm install; pnpm dev
 ```
 
-详见 [本地开发](docs/devops/local-dev.md)、[配置管理](docs/devops/configuration.md)。
+详见 **[本地开发](docs/devops/local-dev.md)**。测试/正式部署见 **[运维文档](docs/devops/README.md)**。
 
 ## 文档导航
 
@@ -32,8 +32,9 @@ cd ../frontend/mis-admin-web && pnpm install && pnpm dev
 | 数据库 | [表结构](docs/database/schema-design.md) · [种子数据](docs/database/seed-data.md) |
 | API | [接口规范](docs/api/api-specification.md) · [权限清单](docs/api/permissions.md) |
 | 后端 | [微服务](docs/backend/microservices.md) · [公共模块](docs/backend/common-modules.md) |
-| 运维 | [本地开发](docs/devops/local-dev.md) · [配置策略](docs/devops/configuration.md) |
+| **运维** | **[运维总览](docs/devops/README.md)** · [本地开发](docs/devops/local-dev.md) · [测试部署](docs/devops/test-deploy.md) · [正式部署](docs/devops/prod-deploy.md) · [混合联调](docs/devops/integration-test.md) |
 | 决策 | [ADR 索引](docs/adr/README.md) · [全局决策](docs/project/decisions.md) |
+| **AI 辅助开发** | **[AGENTS.md](AGENTS.md)** · [配置说明](docs/project/ai-assisted-dev.md) · [编码规范](docs/project/conventions.md) |
 
 ## 后端模块（已实现）
 
@@ -56,7 +57,7 @@ frontend/
 | 前端 | React 18, TypeScript, Vite, Zustand, Axios（mis-admin-web Sprint 1） |
 | 后端 | JDK 17, Spring Boot 3.2, Spring Cloud Gateway, Spring Data JPA, PostgreSQL |
 | 缓存 | Redis（权限、验证码、Token 黑名单） |
-| 配置 | 正式环境外部 YAML；测试可选 Nacos（PG 存储） |
+| 配置 | local 用 jar 内 yml；test/prod 经 **Nacos**（PG `nacos` 库） |
 
 ## 文档版本
 

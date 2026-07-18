@@ -1,0 +1,27 @@
+server:
+  port: 8103
+
+spring:
+  application:
+    name: mis-org
+  datasource:
+    url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:mis_platform}
+    username: ${DB_USER:mis}
+    password: ${DB_PASSWORD:mis123}
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: none
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+
+logging:
+  level:
+    com.mis.org: DEBUG

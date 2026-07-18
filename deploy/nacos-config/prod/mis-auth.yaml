@@ -1,0 +1,16 @@
+server:
+  port: 8101
+
+mis:
+  auth:
+    captcha-enabled: true
+    audit-discovery-enabled: true
+    audit-service-id: mis-audit
+    cookie:
+      secure: true
+  security:
+    jwt:
+      private-key-path: ${JWT_PRIVATE_KEY_PATH:/etc/mis/keys/private.pem}
+      public-key-path: ${JWT_PUBLIC_KEY_PATH:/etc/mis/keys/public.pem}
+      access-token-ttl-seconds: 7200
+      refresh-token-ttl-seconds: 604800

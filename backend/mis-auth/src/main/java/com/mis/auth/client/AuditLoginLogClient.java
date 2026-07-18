@@ -2,6 +2,7 @@ package com.mis.auth.client;
 
 import com.mis.auth.config.AuthProperties;
 import com.mis.auth.dto.LoginClientInfo;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.MediaType;
@@ -21,11 +22,15 @@ public class AuditLoginLogClient {
     private final RestClient restClient;
     private final AuthProperties authProperties;
 
-    public AuditLoginLogClient(RestClient.Builder restClientBuilder, AuthProperties authProperties) {
+    public AuditLoginLogClient(
+            @Qualifier("plainRestClientBuilder") RestClient.Builder restClientBuilder,
+            RestClient.Builder loadBalancedRestClientBuilder,
+            AuthProperties authProperties) {
         this.authProperties = authProperties;
-        this.restClient = restClientBuilder
-                .baseUrl(authProperties.getAuditBaseUrl())
-                .build();
+        RestClient.Builder builder = authProperties.isAuditDiscoveryEnabled()
+                ? loadBalancedRestClientBuilder
+                : restClientBuilder;
+        this.restClient = builder.baseUrl(resolveAuditBaseUrl(authProperties)).build();
     }
 
     @Async
@@ -69,5 +74,12 @@ public class AuditLoginLogClient {
         } catch (RestClientException ex) {
             log.warn("写入登录日志失败: username={}", username, ex);
         }
+    }
+
+    private static String resolveAuditBaseUrl(AuthProperties authProperties) {
+        if (authProperties.isAuditDiscoveryEnabled()) {
+            return "http://" + authProperties.getAuditServiceId();
+        }
+        return authProperties.getAuditBaseUrl();
     }
 }

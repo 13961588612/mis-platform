@@ -200,7 +200,6 @@ INSERT INTO sys_menu_api (id, menu_id, api_id, sort, created_at) VALUES
 (1, 100, 4030, 1, NOW()),
 -- 用户
 (10, 201, 1002, 1, NOW()),
-(11, 201, 2002, 2, NOW()),
 (12, 211, 1005, 1, NOW()),
 (13, 212, 1003, 1, NOW()),
 (14, 212, 1006, 2, NOW()),
@@ -208,7 +207,6 @@ INSERT INTO sys_menu_api (id, menu_id, api_id, sort, created_at) VALUES
 (16, 213, 1007, 1, NOW()),
 (17, 214, 1009, 1, NOW()),
 (18, 215, 1010, 1, NOW()),
-(19, 215, 3002, 2, NOW()),
 -- 组织
 (25, 202, 1952, 1, NOW()),
 (26, 217, 1953, 1, NOW()),

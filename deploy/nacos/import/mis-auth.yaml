@@ -1,8 +1,0 @@
-server:
-  port: 8101
-
-mis:
-  security:
-    jwt:
-      private-key-path: ${JWT_PRIVATE_KEY_PATH:./keys/private.pem}
-      public-key-path: ${JWT_PUBLIC_KEY_PATH:./keys/public.pem}

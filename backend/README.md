@@ -65,20 +65,19 @@ mvn -pl mis-gateway,mis-auth,mis-common/mis-common-security -am test
 # 迁移
 mvn -pl mis-migrator flyway:migrate
 
-# 启动（dev profile，默认不连 Nacos）
+# 启动（local 模式，默认不连 Nacos）
 mvn -pl mis-auth spring-boot:run      # :8101
 mvn -pl mis-gateway spring-boot:run   # :8080
 ```
 
-## 配置 Profile
+## 配置模式
 
-| Profile | 配置来源 | 说明 |
-|---------|----------|------|
-| `dev` | `application.yml` + 环境变量 | 本地 IDE 默认 |
-| `test` | `deploy/config/test/` 或 Nacos | `NACOS_CONFIG_ENABLED=true` 可选 |
-| `prod` | `deploy/config/prod/` **仅文件** | 不连 Nacos |
+| 模式 | 配置来源 | 说明 |
+|------|----------|------|
+| local（默认） | `application.yml` + 环境变量 | 本地 IDE，见 [local-dev.md](../docs/devops/local-dev.md) |
+| remote | Nacos 命名空间 | `MIS_REMOTE=true`，见 [test-deploy](../docs/devops/test-deploy.md) / [prod-deploy](../docs/devops/prod-deploy.md) |
 
-见 [configuration.md](../docs/devops/configuration.md)。
+见 [运维总览](../docs/devops/README.md)、[configuration.md](../docs/devops/configuration.md)。
 
 ## 子模块 README
 

@@ -1,0 +1,12 @@
+# 通用微服务镜像：先在模块目录执行 mvn package
+# docker build -f deploy/docker/Dockerfile.service --build-arg MODULE=mis-auth -t mis-auth:local backend/mis-auth
+
+ARG MODULE
+FROM eclipse-temurin:17-jre-alpine
+WORKDIR /app
+
+ARG MODULE
+COPY target/${MODULE}-0.1.0-SNAPSHOT.jar app.jar
+
+ENV JAVA_OPTS=""
+ENTRYPOINT ["sh", "-c", "java $JAVA_OPTS -jar /app/app.jar"]

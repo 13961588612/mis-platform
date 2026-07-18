@@ -50,10 +50,9 @@ com.mis.{module}.{layer}
 |----|------|
 | controller | 参数校验、调用 service、返回 Result |
 | service | 业务逻辑 |
-| mapper | 数据库访问 |
+| domain/repository | Spring Data JPA 数据访问（ADR-015，非 MyBatis Mapper） |
 | domain/entity | 数据库实体 |
-| domain/dto | 请求 DTO |
-| domain/vo | 响应 VO |
+| dto / vo | 请求 DTO / 响应 VO |
 
 **禁止：** Controller 写业务逻辑；Service 直接返回 Entity 给前端。
 
@@ -65,7 +64,7 @@ com.mis.{module}.{layer}
 | Service | XxxService | UserService |
 | DTO | XxxCreateDTO | UserCreateDTO |
 | VO | XxxVO | UserVO |
-| Mapper | XxxMapper | UserMapper |
+| Repository | XxxRepository | SysUserRepository |
 
 ### 2.4 注释
 
@@ -155,7 +154,15 @@ com.mis.{module}.{layer}
 | Python | Phase 3 前再定（uv / poetry） |
 | 代码格式 | Spotless（Java）+ Prettier（前端），pre-commit 建议启用 |
 
-## 9. 关联文档
+## 9. AI 辅助开发
+
+Cursor Agent 角色、工作流与按语言拆分的规则见：
+
+- [AI 辅助开发配置](./ai-assisted-dev.md)
+- 仓库根目录 [AGENTS.md](../../AGENTS.md)
+- `.cursor/rules/`
+
+## 10. 关联文档
 
 - [公共模块](../backend/common-modules.md)
 - [管理后台设计](../frontend/admin-web-design.md)

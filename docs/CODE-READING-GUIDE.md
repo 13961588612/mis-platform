@@ -18,7 +18,7 @@
 | 10 | [api/api-specification.md](api/api-specification.md) | REST 契约（含 `/auth`） |
 | 11 | [backend/microservices.md](backend/microservices.md) | 微服务职责与端口 |
 | 12 | [backend/common-modules.md](backend/common-modules.md) | mis-common-* 模块说明 |
-| 13 | [devops/configuration.md](devops/configuration.md) | **配置策略**（prod 仅文件 / test 可选 Nacos） |
+| 13 | [devops/configuration.md](devops/configuration.md) | **配置策略**（prod/test 经 Nacos PG 库） |
 | 14 | [devops/local-dev.md](devops/local-dev.md) | 本地 Docker + 启动顺序 |
 | 15 | [project/sprint-plan.md](project/sprint-plan.md) | Sprint 与验收 |
 
@@ -95,10 +95,10 @@
 | G1 | `backend/mis-migrator/.../V1__init_schema.sql` | 建表 |
 | G2 | `.../V2__seed_data.sql` | 种子（admin 账号） |
 | G3 | `deploy/docker-compose.dev.yml` | PG / Redis / Nacos |
-| G4 | `deploy/config/prod/*.yaml` | 正式环境外部配置 |
-| G5 | `deploy/config/test/*.yaml` | 测试环境文件配置 |
+| G4 | `deploy/nacos-config/prod/*.yaml` | 正式配置 Git 源 → 推送到 Nacos |
+| G5 | `deploy/nacos-config/test/*.yaml` | 测试环境 Nacos 配置 Git 源 |
 | G6 | `deploy/nacos/server/application.properties` | Nacos → PostgreSQL |
-| G7 | `scripts/import-nacos-config.ps1` | 导入 Nacos 配置 |
+| G7 | `scripts/nacos-push.ps1` | 推送配置到 Nacos |
 
 ### 阶段 H：测试（按需）
 
@@ -146,4 +146,4 @@
 - 根目录：[README.md](../README.md)
 - 后端：[backend/README.md](../backend/README.md)
 - 各服务：`backend/mis-gateway/README.md`、`backend/mis-auth/README.md`
-- 部署：`deploy/config/README.md`、`deploy/nacos/README.md`
+- 部署：`deploy/nacos-config/README.md`、`deploy/nacos/README.md`

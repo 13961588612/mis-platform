@@ -1,23 +1,24 @@
-# Nacos 配置中心（可选，默认关闭）
-# 正式环境 prod profile 强制关闭；测试环境可 NACOS_CONFIG_ENABLED=true
+# MIS_REMOTE=true 时从 Nacos 拉取配置并启用注册发现
 spring:
+  application:
+    name: mis-gateway
   cloud:
     nacos:
       config:
-        enabled: ${NACOS_CONFIG_ENABLED:false}
+        enabled: ${MIS_REMOTE:false}
         server-addr: ${NACOS_SERVER:localhost:8848}
         namespace: ${NACOS_NAMESPACE:dev}
         group: ${NACOS_CONFIG_GROUP:MIS_GROUP}
         file-extension: yaml
         shared-configs:
-          - data-id: mis-common.yaml
+          - data-id: mis-common
             group: ${NACOS_CONFIG_GROUP:MIS_GROUP}
             refresh: true
         extension-configs:
-          - data-id: ${spring.application.name}.yaml
+          - data-id: ${spring.application.name}
             group: ${NACOS_CONFIG_GROUP:MIS_GROUP}
             refresh: true
       discovery:
-        enabled: ${NACOS_DISCOVERY_ENABLED:false}
+        enabled: ${MIS_REMOTE:false}
         server-addr: ${NACOS_SERVER:localhost:8848}
         namespace: ${NACOS_NAMESPACE:dev}
