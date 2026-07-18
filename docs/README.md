@@ -21,6 +21,7 @@
 | 本地跑起来 | [local-dev](devops/local-dev.md) |
 | 配置 prod/test/Nacos | [configuration](devops/configuration.md) |
 | 读代码从哪开始 | **[CODE-READING-GUIDE](CODE-READING-GUIDE.md)** |
+| 查各模块职责与内容 | **[modules-guide](project/modules-guide.md)** |
 
 ---
 
@@ -58,6 +59,7 @@ docs/
 ├── project/
 │   ├── decisions.md                   # ✅ 全局决策
 │   ├── sprint-plan.md                 # 📝 Sprint 计划
+│   ├── modules-guide.md               # 📝 各项目/模块详细说明
 │   └── conventions.md                 # 📝 编码规范
 └── adr/                               # 架构决策记录（ADR-001 … ADR-015）
     └── README.md
