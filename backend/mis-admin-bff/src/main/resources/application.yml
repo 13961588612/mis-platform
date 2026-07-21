@@ -1,0 +1,45 @@
+server:
+  port: 8081
+
+spring:
+  application:
+    name: mis-admin-bff
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      database: 0
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+
+logging:
+  level:
+    com.mis.adminbff: DEBUG
+
+mis:
+  bff:
+    iam-discovery-enabled: false
+    iam-service-id: mis-iam
+    iam-base-url: http://localhost:8102
+    org-discovery-enabled: false
+    org-service-id: mis-org
+    org-base-url: http://localhost:8103
+    system-discovery-enabled: false
+    system-service-id: mis-system
+    system-base-url: http://localhost:8105
+    audit-discovery-enabled: false
+    audit-service-id: mis-audit
+    audit-base-url: http://localhost:8106
+    auth-discovery-enabled: false
+    auth-service-id: mis-auth
+    auth-base-url: http://localhost:8101
+    aggregate-timeout-ms: 3000
+    default-password: Mis@123456
+  api-permission:
+    enabled: true
+    deny-unmapped: false
+    refresh-interval-seconds: 300

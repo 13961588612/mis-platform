@@ -1,0 +1,23 @@
+spring:
+  application:
+    name: mis-system
+  cloud:
+    nacos:
+      config:
+        enabled: ${MIS_REMOTE:false}
+        server-addr: ${NACOS_SERVER:localhost:8848}
+        namespace: ${NACOS_NAMESPACE:dev}
+        group: ${NACOS_CONFIG_GROUP:MIS_GROUP}
+        file-extension: yaml
+        shared-configs:
+          - data-id: mis-common
+            group: ${NACOS_CONFIG_GROUP:MIS_GROUP}
+            refresh: true
+        extension-configs:
+          - data-id: ${spring.application.name}
+            group: ${NACOS_CONFIG_GROUP:MIS_GROUP}
+            refresh: true
+      discovery:
+        enabled: ${MIS_REMOTE:false}
+        server-addr: ${NACOS_SERVER:localhost:8848}
+        namespace: ${NACOS_NAMESPACE:dev}

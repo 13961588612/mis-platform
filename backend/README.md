@@ -30,7 +30,7 @@ backend/
 |------|------|------|
 | L0 | mis-auth | 登录、JWT 签发、Refresh、登出写 jti 黑名单 |
 | L1 | mis-gateway | JWT 验签、查黑名单、透传 `X-*` 头 |
-| L2 | mis-admin-bff（待建） | API 权限（Redis permissions）；PDP 数据在 **mis-iam** |
+| L2 | mis-admin-bff（:8081） | 聚合 Org/IAM 对外 `/api/v1`；API 权限鉴权待 Sprint 3（依赖 mis-system） |
 | L3 | mis-iam / mis-org 等 | 读透传头、`@DataScope` 数据权限 |
 
 ## JDK 17 配置

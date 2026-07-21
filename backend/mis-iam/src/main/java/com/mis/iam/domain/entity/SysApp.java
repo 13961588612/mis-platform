@@ -27,11 +27,26 @@ public class SysApp {
     @Column(name = "base_path")
     private String basePath;
 
+    @Column(name = "mfe_remote")
+    private String mfeRemote;
+
     @Column(nullable = false)
     private Integer sort;
 
     @Column(nullable = false)
     private Integer status;
+
+    @Column(nullable = false)
+    private String kind = "subsystem";
+
+    @Column(nullable = false)
+    private String runtime = "host";
+
+    @Column
+    private String description;
+
+    @Column(name = "portal_group")
+    private String portalGroup;
 
     public Long getId() { return id; }
     public void setId(Long id) { this.id = id; }
@@ -45,8 +60,18 @@ public class SysApp {
     public void setIcon(String icon) { this.icon = icon; }
     public String getBasePath() { return basePath; }
     public void setBasePath(String basePath) { this.basePath = basePath; }
+    public String getMfeRemote() { return mfeRemote; }
+    public void setMfeRemote(String mfeRemote) { this.mfeRemote = mfeRemote; }
     public Integer getSort() { return sort; }
     public void setSort(Integer sort) { this.sort = sort; }
     public Integer getStatus() { return status; }
     public void setStatus(Integer status) { this.status = status; }
+    public String getKind() { return kind; }
+    public void setKind(String kind) { this.kind = kind; }
+    public String getRuntime() { return runtime; }
+    public void setRuntime(String runtime) { this.runtime = runtime; }
+    public String getDescription() { return description; }
+    public void setDescription(String description) { this.description = description; }
+    public String getPortalGroup() { return portalGroup; }
+    public void setPortalGroup(String portalGroup) { this.portalGroup = portalGroup; }
 }

@@ -7,7 +7,7 @@
 | 项 | 决策 |
 |----|------|
 | Phase 1 数据库 | 单库 `mis_platform`（ADR-001） |
-| Phase 1 功能 | F1/F2 不做；F3/F4/F5/F6 做（改密、个人中心、**多 Tab**、**AI 占位**） |
+| Phase 1 功能 | F1/F2 不做；F3/F4/F5/F6 做（改密、个人中心、**多 Tab**、**AI 占位**）；**门户九宫格 + APP 切换**（仅 `system` 可进，其它占位） |
 | 流程引擎 | Phase 2 Flowable |
 | UI 语言 | 默认中文，i18n 预留 |
 | 生产部署 | Kubernetes |
@@ -56,4 +56,13 @@
 
 ## 6. Schema 状态
 
-**SQL 已生成** — `docs/db/migrations/V1__init_schema.sql`、`V2__seed_data.sql`
+**SQL 已生成并持续追加** — `docs/db/migrations/`：
+
+| 版本 | 说明 |
+|------|------|
+| V1 / V2 | 建表 + 种子 |
+| V3 | `sys_module` → mis-iam / mis-org |
+| V4 | API path 对齐 |
+| V5 | `sys_app` 门户字段（kind/runtime/description/portal_group）+ 占位 APP |
+
+执行：`cd backend && .\mvn.ps1 -pl mis-migrator flyway:migrate`

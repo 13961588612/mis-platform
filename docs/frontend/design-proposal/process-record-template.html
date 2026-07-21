@@ -1,0 +1,642 @@
+<!DOCTYPE html>
+<!-- 设计系统：企业靛 shadcn（与门户原型 1:1 同令牌）· 流程中心 · 流程记录查看 / 审批详情模板 -->
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>流程中心 · 流程记录查看模板</title>
+<style>
+/* ============================================================
+   令牌（Light = :root / Dark = .dark）— 与 portal-design-tokens.md 1:1
+   ============================================================ */
+:root {
+  --background: 214 32% 96.5%;
+  --foreground: 222.2 47% 11%;
+  --card: 0 0% 100%;
+  --card-foreground: 222.2 47% 11%;
+  --popover: 0 0% 100%;
+  --popover-foreground: 222.2 47% 11%;
+  --muted: 214 32% 93%;
+  --muted-foreground: 215 19% 42%;
+  --border: 214 30% 88%;
+  --input: 214 30% 88%;
+  --ring: 243 75% 59%;
+  --primary: 243 75% 59%;
+  --primary-foreground: 0 0% 100%;
+  --secondary: 214 32% 93%;
+  --secondary-foreground: 222.2 47% 11%;
+  --accent: 214 32% 93%;
+  --accent-foreground: 222.2 47% 11%;
+  --destructive: 0 72% 51%;
+  --destructive-foreground: 0 0% 100%;
+  --success: 142 71% 40%;
+  --success-foreground: 0 0% 100%;
+  --warning: 35 92% 48%;
+  --warning-foreground: 35 92% 12%;
+  --info: 199 89% 46%;
+  --info-foreground: 0 0% 100%;
+  --radius: 0.375rem;
+  --header-height: 3.5rem;
+  --card-shadow: 0 1px 2px rgb(15 23 42 / .04), 0 2px 6px -2px rgb(15 23 42 / .08);
+  --card-hover-shadow: 0 10px 30px -12px rgb(15 23 42 / .22);
+  --icon-badge-bg: 243 75% 59% / 0.10;
+  --icon-badge-fg: 243 75% 59%;
+  --motion-enter: 200ms cubic-bezier(0.4, 0, 0.2, 1);
+  --motion-hover: 150ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+.dark {
+  --background: 222 47% 7%;
+  --foreground: 210 40% 96%;
+  --card: 222 40% 12%;
+  --card-foreground: 210 40% 96%;
+  --popover: 222 40% 12%;
+  --popover-foreground: 210 40% 96%;
+  --muted: 217.2 33% 18%;
+  --muted-foreground: 215 20% 68%;
+  --border: 217.2 33% 20%;
+  --input: 217.2 33% 20%;
+  --ring: 243 75% 66%;
+  --primary: 243 75% 66%;
+  --primary-foreground: 222.2 47.4% 11%;
+  --secondary: 217.2 32.6% 17.5%;
+  --secondary-foreground: 210 40% 98%;
+  --accent: 217.2 32.6% 17.5%;
+  --accent-foreground: 210 40% 98%;
+  --destructive: 0 62.8% 45%;
+  --destructive-foreground: 210 40% 98%;
+  --success: 142 69% 55%;
+  --success-foreground: 144 80% 10%;
+  --warning: 38 92% 58%;
+  --warning-foreground: 38 92% 12%;
+  --info: 199 89% 56%;
+  --info-foreground: 199 90% 10%;
+  --card-shadow: 0 1px 2px rgb(0 0 0 / .4), 0 2px 8px -2px rgb(0 0 0 / .5);
+  --card-hover-shadow: 0 12px 32px -12px rgb(0 0 0 / .6);
+  --icon-badge-bg: 243 75% 66% / 0.16;
+  --icon-badge-fg: 243 75% 66%;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { height: 100%; }
+body {
+  font-family: Inter, "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+  font-size: 14px; line-height: 1.6; color: hsl(var(--foreground));
+  background: hsl(var(--background)); -webkit-font-smoothing: antialiased;
+}
+button { background: transparent; border: 0; font: inherit; color: inherit; cursor: pointer; }
+svg { display: block; }
+.ic { width: 1.125rem; height: 1.125rem; }
+.ic-sm { width: 1rem; height: 1rem; }
+.ic-lg { width: 1.5rem; height: 1.5rem; }
+.ic-xs { width: .875rem; height: .875rem; }
+
+/* 聚焦可见 */
+a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible,
+.tab:focus-visible, .icon-btn:focus-visible, .att-item:focus-visible {
+  outline: none; box-shadow: 0 0 0 2px hsl(var(--ring)); border-radius: var(--radius);
+}
+
+/* ============================================================ 按钮 / 输入 ============================================================ */
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: .5rem;
+  border: 1px solid transparent; border-radius: var(--radius);
+  padding: .5rem .9rem; font-size: .875rem; font-weight: 500;
+  background: transparent; color: hsl(var(--foreground)); min-height: 2.5rem;
+  transition: background var(--motion-hover), filter var(--motion-hover), border-color var(--motion-hover);
+}
+.btn-primary { background: hsl(var(--primary)); color: hsl(var(--primary-foreground)); }
+.btn-primary:hover { filter: brightness(.95); }
+.btn-outline { border-color: hsl(var(--border)); background: hsl(var(--card)); }
+.btn-outline:hover { background: hsl(var(--accent)); color: hsl(var(--accent-foreground)); }
+.btn-destructive { background: hsl(var(--destructive)); color: hsl(var(--destructive-foreground)); }
+.btn-destructive:hover { filter: brightness(.95); }
+.btn-ghost:hover { background: hsl(var(--accent)); color: hsl(var(--accent-foreground)); }
+.icon-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 2.25rem; height: 2.25rem; border-radius: var(--radius); color: hsl(var(--foreground));
+  transition: background var(--motion-hover), color var(--motion-hover);
+}
+.icon-btn:hover { background: hsl(var(--accent)); color: hsl(var(--accent-foreground)); }
+.input {
+  width: 100%; border: 1px solid hsl(var(--input)); background: hsl(var(--background));
+  border-radius: var(--radius); padding: .5rem .75rem; font-size: .875rem; color: hsl(var(--foreground));
+  transition: border-color var(--motion-hover);
+}
+.input:focus { outline: none; border-color: hsl(var(--ring)); box-shadow: 0 0 0 2px hsl(var(--ring) / .35); }
+textarea.input { resize: vertical; min-height: 5.5rem; line-height: 1.6; }
+
+/* 状态徽标 */
+.badge-status { display: inline-flex; align-items: center; gap: .375rem; border-radius: 9999px; padding: .2rem .65rem; font-size: .75rem; font-weight: 500; }
+.badge-status .dot { width: .4rem; height: .4rem; border-radius: 9999px; }
+.badge-status.success { background: hsl(var(--success) / .1); color: hsl(var(--success)); } .badge-status.success .dot { background: hsl(var(--success)); }
+.badge-status.warning { background: hsl(var(--warning) / .1); color: hsl(var(--warning)); } .badge-status.warning .dot { background: hsl(var(--warning)); }
+.badge-status.info { background: hsl(var(--info) / .1); color: hsl(var(--info)); } .badge-status.info .dot { background: hsl(var(--info)); }
+.badge-status.destructive { background: hsl(var(--destructive) / .1); color: hsl(var(--destructive)); } .badge-status.destructive .dot { background: hsl(var(--destructive)); }
+.badge-status.muted { background: hsl(var(--muted-foreground) / .12); color: hsl(var(--muted-foreground)); } .badge-status.muted .dot { background: hsl(var(--muted-foreground)); }
+.chip-badge { display: inline-flex; align-items: center; padding: .1rem .5rem; border-radius: 9999px; font-size: .7rem; font-weight: 600; }
+.chip-badge.warning { background: hsl(var(--warning) / .14); color: hsl(var(--warning)); }
+
+/* 卡片 */
+.card { background: hsl(var(--card)); border: 1px solid hsl(var(--border)); border-radius: var(--radius); box-shadow: var(--card-shadow); }
+
+/* ============================================================ 抽屉（审批意见 / 确认） ============================================================ */
+.sheet-overlay { position: fixed; inset: 0; background: rgb(15 23 42 / .4); z-index: 55; opacity: 0; pointer-events: none; transition: opacity var(--motion-enter); }
+.sheet-overlay.open { opacity: 1; pointer-events: auto; }
+.sheet-panel {
+  position: fixed; top: 0; right: 0; bottom: 0; width: min(400px, 92vw); z-index: 56;
+  background: hsl(var(--popover)); color: hsl(var(--popover-foreground)); border-left: 1px solid hsl(var(--border));
+  transform: translateX(100%); transition: transform var(--motion-enter);
+  display: flex; flex-direction: column; box-shadow: var(--card-hover-shadow);
+}
+.sheet-panel.open { transform: none; }
+.sheet-header { display: flex; align-items: center; justify-content: space-between; padding: 1rem 1.25rem; border-bottom: 1px solid hsl(var(--border)); }
+.sheet-title { font-size: 1rem; font-weight: 600; display: flex; align-items: center; gap: .5rem; }
+.sheet-body { flex: 1; overflow-y: auto; padding: 1.25rem; display: flex; flex-direction: column; gap: .85rem; }
+.sheet-footer { padding: 1rem 1.25rem; border-top: 1px solid hsl(var(--border)); display: flex; gap: .75rem; justify-content: flex-end; }
+.field-label { display: block; font-size: .8125rem; font-weight: 500; color: hsl(var(--foreground)); margin-bottom: .4rem; }
+
+/* ============================================================ 流程记录查看 框架 ============================================================ */
+.pr { position: fixed; inset: 0; display: flex; flex-direction: column; overflow: hidden; }
+
+/* 顶栏 */
+.pr-header { flex-shrink: 0; height: var(--header-height); display: flex; align-items: center; gap: 1rem; padding: 0 1rem; background: hsl(var(--card)); border-bottom: 1px solid hsl(var(--border)); box-shadow: 0 1px 3px -1px rgb(15 23 42 / .06); }
+.pr-crumb { display: flex; align-items: center; gap: .35rem; font-size: .8125rem; color: hsl(var(--muted-foreground)); white-space: nowrap; }
+.pr-crumb b { color: hsl(var(--foreground)); font-weight: 600; }
+.pr-title { display: flex; align-items: center; gap: .6rem; min-width: 0; }
+.pr-title h1 { font-size: 1rem; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pr-spacer { flex: 1; }
+
+/* 元信息条 */
+.pr-meta { flex-shrink: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 1.5rem; padding: .85rem 1.25rem; background: hsl(var(--card)); border-bottom: 1px solid hsl(var(--border)); }
+.meta-item { display: flex; flex-direction: column; gap: .1rem; }
+.meta-item .k { font-size: .7rem; color: hsl(var(--muted-foreground)); }
+.meta-item .v { font-size: .875rem; font-weight: 500; }
+.pr-meta .now-node { margin-left: auto; display: flex; align-items: center; gap: .5rem; font-size: .8125rem; color: hsl(var(--muted-foreground)); }
+.pr-meta .now-node b { color: hsl(var(--primary)); font-weight: 600; }
+
+/* 流程进度 Stepper */
+.pr-stepper-wrap { flex-shrink: 0; padding: 1.1rem 1.25rem; background: hsl(var(--card)); border-bottom: 1px solid hsl(var(--border)); overflow-x: auto; }
+.pr-stepper { display: flex; min-width: max-content; }
+.step { flex: 1; display: flex; flex-direction: column; align-items: center; position: relative; min-width: 7.5rem; }
+.step::before, .step::after { content: ""; position: absolute; top: 1.1rem; height: 2px; background: hsl(var(--border)); }
+.step::before { left: 0; right: 50%; }
+.step::after { left: 50%; right: 0; }
+.step:first-child::before { display: none; }
+.step:last-child::after { display: none; }
+.step.done::before, .step.done::after { background: hsl(var(--success)); }
+.step.rejected::before { background: hsl(var(--success)); }
+.step.rejected::after { background: hsl(var(--destructive)); }
+.step-dot {
+  position: relative; z-index: 1; width: 2.2rem; height: 2.2rem; border-radius: 9999px;
+  display: flex; align-items: center; justify-content: center; font-size: .8rem; font-weight: 600;
+  background: hsl(var(--card)); border: 2px solid hsl(var(--border)); color: hsl(var(--muted-foreground));
+}
+.step.done .step-dot { background: hsl(var(--success)); border-color: hsl(var(--success)); color: #fff; }
+.step.current .step-dot { background: hsl(var(--primary)); border-color: hsl(var(--primary)); color: #fff; box-shadow: 0 0 0 4px hsl(var(--primary) / .18); }
+.step.rejected .step-dot { background: hsl(var(--destructive)); border-color: hsl(var(--destructive)); color: #fff; }
+.step-name { margin-top: .5rem; font-size: .8125rem; font-weight: 600; text-align: center; }
+.step.done .step-name, .step.current .step-name, .step.rejected .step-name { color: hsl(var(--foreground)); }
+.step-meta { font-size: .72rem; color: hsl(var(--muted-foreground)); text-align: center; margin-top: .1rem; }
+.step.current .step-meta { color: hsl(var(--primary)); }
+
+/* 主体：左内容 + 右信息 */
+.pr-body { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) 21rem; overflow: hidden; }
+.pr-main { display: flex; flex-direction: column; min-height: 0; border-right: 1px solid hsl(var(--border)); }
+.pr-tabs { flex-shrink: 0; display: flex; gap: 1.5rem; padding: 0 1.25rem; border-bottom: 1px solid hsl(var(--border)); background: hsl(var(--card)); }
+.tab { border: none; background: transparent; padding: .75rem 0; font-size: .875rem; color: hsl(var(--muted-foreground)); border-bottom: 2px solid transparent; white-space: nowrap; transition: color var(--motion-hover); }
+.tab:hover { color: hsl(var(--foreground)); }
+.tab.active { color: hsl(var(--foreground)); font-weight: 600; border-bottom-color: hsl(var(--primary)); }
+.pr-content { flex: 1; min-height: 0; overflow-y: auto; padding: 1.25rem; }
+.tabpane { display: none; }
+.tabpane.active { display: block; }
+
+/* 只读表单字段 */
+.ro-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem 1.5rem; }
+.ro-field { display: flex; flex-direction: column; gap: .25rem; }
+.ro-field.span-full { grid-column: 1 / -1; }
+.ro-field .k { font-size: .75rem; color: hsl(var(--muted-foreground)); display: flex; align-items: center; gap: .35rem; }
+.ro-field .vv { font-size: .9375rem; font-weight: 500; }
+.ro-field .vv.amount { font-size: 1.125rem; font-weight: 700; color: hsl(var(--primary)); }
+.ro-section-title { font-size: .9rem; font-weight: 600; margin: 1.5rem 0 .85rem; display: flex; align-items: center; gap: .5rem; }
+.ro-section-title .bar { width: .25rem; height: .85rem; border-radius: 9999px; background: hsl(var(--primary)); }
+
+/* 附件 */
+.att-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr)); gap: .85rem; }
+.att-item { display: flex; align-items: center; gap: .75rem; padding: .75rem .85rem; border: 1px solid hsl(var(--border)); border-radius: var(--radius); background: hsl(var(--card)); text-align: left; width: 100%; transition: border-color var(--motion-hover), box-shadow var(--motion-hover); }
+.att-item:hover { border-color: hsl(var(--primary) / .35); box-shadow: var(--card-shadow); }
+.att-ico { flex-shrink: 0; width: 2.5rem; height: 2.5rem; border-radius: .625rem; display: flex; align-items: center; justify-content: center; color: #fff; }
+.att-ico.pdf { background: hsl(0 72% 51%); }
+.att-ico.doc { background: hsl(217 91% 55%); }
+.att-ico.img { background: hsl(142 71% 40%); }
+.att-info { min-width: 0; flex: 1; }
+.att-name { font-size: .875rem; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.att-size { font-size: .72rem; color: hsl(var(--muted-foreground)); }
+
+/* 流程日志时间线 */
+.log-list { display: flex; flex-direction: column; }
+.log-item { position: relative; display: flex; gap: .85rem; padding-bottom: 1.25rem; }
+.log-item:not(:last-child)::before { content: ""; position: absolute; left: 1.05rem; top: 2.3rem; bottom: 0; width: 2px; background: hsl(var(--border)); }
+.log-dot { flex-shrink: 0; width: 2.2rem; height: 2.2rem; border-radius: 9999px; display: flex; align-items: center; justify-content: center; color: #fff; z-index: 1; }
+.log-dot.submit { background: hsl(var(--info)); }
+.log-dot.approve { background: hsl(var(--success)); }
+.log-dot.reject { background: hsl(var(--destructive)); }
+.log-dot.route { background: hsl(var(--muted-foreground)); }
+.log-dot.revoke { background: hsl(var(--warning)); }
+.log-dot.comment { background: hsl(var(--primary)); }
+.log-body { flex: 1; min-width: 0; padding-top: .15rem; }
+.log-head { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; }
+.log-actor { font-size: .875rem; font-weight: 600; }
+.log-action { font-size: .75rem; padding: .1rem .5rem; border-radius: 9999px; font-weight: 500; }
+.log-action.submit { background: hsl(var(--info) / .12); color: hsl(var(--info)); }
+.log-action.approve { background: hsl(var(--success) / .12); color: hsl(var(--success)); }
+.log-action.reject { background: hsl(var(--destructive) / .12); color: hsl(var(--destructive)); }
+.log-action.route { background: hsl(var(--muted-foreground) / .12); color: hsl(var(--muted-foreground)); }
+.log-action.revoke { background: hsl(var(--warning) / .14); color: hsl(var(--warning)); }
+.log-action.comment { background: hsl(var(--primary) / .12); color: hsl(var(--primary)); }
+.log-time { font-size: .72rem; color: hsl(var(--muted-foreground)); margin-left: auto; }
+.log-comment { margin-top: .35rem; font-size: .8125rem; color: hsl(var(--foreground)); background: hsl(var(--muted) / .5); border-radius: var(--radius); padding: .5rem .7rem; line-height: 1.6; }
+
+/* 右侧信息栏 */
+.pr-aside { display: flex; flex-direction: column; min-height: 0; overflow-y: auto; padding: 1.25rem; gap: 1rem; background: hsl(var(--background)); }
+.aside-card { padding: 1rem 1.1rem; }
+.aside-card h3 { font-size: .875rem; font-weight: 600; margin-bottom: .75rem; display: flex; align-items: center; gap: .45rem; }
+.info-row { display: flex; align-items: center; justify-content: space-between; gap: .75rem; padding: .5rem 0; font-size: .8125rem; border-bottom: 1px dashed hsl(var(--border)); }
+.info-row:last-child { border-bottom: none; }
+.info-row .k { color: hsl(var(--muted-foreground)); display: flex; align-items: center; gap: .4rem; }
+.info-row .v { font-weight: 500; text-align: right; }
+.aside-tip { font-size: .75rem; color: hsl(var(--muted-foreground)); line-height: 1.6; background: hsl(var(--muted) / .5); border-radius: var(--radius); padding: .7rem .8rem; }
+
+/* 底部操作栏 */
+.pr-actions { flex-shrink: 0; display: flex; align-items: center; gap: 1rem; padding: .85rem 1.25rem; background: hsl(var(--card)); border-top: 1px solid hsl(var(--border)); box-shadow: 0 -1px 3px -1px rgb(15 23 42 / .06); }
+.pr-actions .note { font-size: .8125rem; color: hsl(var(--muted-foreground)); display: flex; align-items: center; gap: .5rem; }
+.pr-actions .note b { color: hsl(var(--foreground)); font-weight: 600; }
+.pr-actions .btns { margin-left: auto; display: flex; gap: .75rem; }
+.view-switch { display: inline-flex; align-items: center; gap: .4rem; font-size: .8125rem; color: hsl(var(--muted-foreground)); }
+.view-switch select { width: auto; min-width: 8.5rem; padding: .4rem .6rem; min-height: 2.25rem; }
+
+@media (max-width: 960px) {
+  .pr-body { grid-template-columns: minmax(0, 1fr); }
+  .pr-aside { display: none; }
+  .ro-grid { grid-template-columns: 1fr; }
+}
+@media (prefers-reduced-motion: no-preference) {
+  .step.current .step-dot { animation: pulse 2s infinite; }
+  @keyframes pulse { 0%,100% { box-shadow: 0 0 0 4px hsl(var(--primary) / .18); } 50% { box-shadow: 0 0 0 7px hsl(var(--primary) / .05); } }
+}
+</style>
+</head>
+<body>
+<div class="pr" id="pr">
+  <!-- 顶栏 -->
+  <header class="pr-header">
+    <button class="icon-btn" aria-label="返回" title="返回"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="ic-sm"><path d="m12 19-7-7 7-7"/><path d="M19 12H5"/></svg></button>
+    <nav class="pr-crumb">流程中心 <span class="ic-sm">›</span> <b>我的待办</b></nav>
+    <div class="pr-title">
+      <h1 id="pr-title">采购付款申请 · 服务器扩容</h1>
+      <span id="pr-status" class="badge-status warning"><span class="dot"></span>审批中</span>
+    </div>
+    <div class="pr-spacer"></div>
+    <button class="icon-btn" id="pr-print" aria-label="打印" title="打印"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="ic-sm"><path d="M6 9V2h12v7"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg></button>
+    <button class="icon-btn" id="pr-theme" aria-label="切换主题" title="切换主题"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="ic-sm"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/></svg></button>
+  </header>
+
+  <!-- 元信息条 -->
+  <div class="pr-meta" id="pr-meta"></div>
+
+  <!-- 流程进度 -->
+  <div class="pr-stepper-wrap">
+    <div class="pr-stepper" id="pr-stepper"></div>
+  </div>
+
+  <!-- 主体 -->
+  <div class="pr-body">
+    <div class="pr-main">
+      <div class="pr-tabs" id="pr-tabs">
+        <button class="tab active" data-pane="form">流程表单</button>
+        <button class="tab" data-pane="attach">附件 <span id="att-count" class="chip-badge warning">0</span></button>
+        <button class="tab" data-pane="logs">流程日志</button>
+      </div>
+      <div class="pr-content">
+        <section class="tabpane active" id="pane-form"></section>
+        <section class="tabpane" id="pane-attach"></section>
+        <section class="tabpane" id="pane-logs"></section>
+      </div>
+    </div>
+    <aside class="pr-aside" id="pr-aside"></aside>
+  </div>
+
+  <!-- 底部操作栏 -->
+  <div class="pr-actions" id="pr-actions"></div>
+</div>
+
+<!-- 审批意见 / 确认 抽屉 -->
+<div class="sheet-overlay" id="act-overlay"></div>
+<aside class="sheet-panel" id="act-sheet" aria-label="审批操作">
+  <div class="sheet-header">
+    <div class="sheet-title" id="act-title"></div>
+    <button class="icon-btn" id="act-close" aria-label="关闭"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="ic-sm"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button>
+  </div>
+  <div class="sheet-body">
+    <div>
+      <label class="field-label" id="act-label">审批意见</label>
+      <textarea class="input" id="act-comment" placeholder="请填写意见（选填）"></textarea>
+    </div>
+    <div class="aside-tip" id="act-tip"></div>
+  </div>
+  <div class="sheet-footer">
+    <button class="btn btn-outline" id="act-cancel">取消</button>
+    <button class="btn" id="act-confirm">确认</button>
+  </div>
+</aside>
+
+<script>
+/* ============================================================ 图标 ============================================================ */
+const ICONS = {
+  arrowLeft: '<path d="m12 19-7-7 7-7"/><path d="M19 12H5"/>',
+  chevronRight: '<path d="m9 18 6-6-6-6"/>',
+  printer: '<path d="M6 9V2h12v7"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/>',
+  moon: '<path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/>',
+  sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="m4.9 4.9 1.4 1.4"/><path d="m17.7 17.7 1.4 1.4"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="m6.3 17.7-1.4 1.4"/><path d="m19.1 4.9-1.4 1.4"/>',
+  check: '<path d="M20 6 9 17l-5-5"/>',
+  x: '<path d="M18 6 6 18"/><path d="m6 6 12 12"/>',
+  fileText: '<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M16 13H8"/><path d="M16 17H8"/><path d="M10 9H8"/>',
+  file: '<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/>',
+  image: '<rect width="18" height="18" x="3" y="3" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"/>',
+  download: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/>',
+  clock: '<circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/>',
+  user: '<path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>',
+  building: '<rect width="16" height="20" x="4" y="2" rx="2"/><path d="M9 22v-4h6v4"/><path d="M8 6h.01"/><path d="M16 6h.01"/><path d="M12 6h.01"/><path d="M12 10h.01"/><path d="M12 14h.01"/><path d="M16 10h.01"/><path d="M16 14h.01"/><path d="M8 10h.01"/><path d="M8 14h.01"/>',
+  alertTriangle: '<path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3z"/><path d="M12 9v4"/><path d="M12 17h.01"/>',
+  undo: '<path d="M3 7v6h6"/><path d="M21 17a9 9 0 0 0-9-9 9 9 0 0 0-6 2.3L3 13"/>',
+  rotateCcw: '<path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/>',
+  send: '<path d="M14.536 21.686a.5.5 0 0 0 .937-.024l6.5-19a.496.496 0 0 0-.635-.635l-19 6.5a.5.5 0 0 0-.024.937l7.93 3.18a2 2 0 0 1 1.112 1.11z"/><path d="m21.854 2.147-10.94 10.939"/>',
+  messageSquare: '<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>',
+  checkCircle: '<path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><path d="m22 4-10 10.01-3-3"/>',
+  xCircle: '<circle cx="12" cy="12" r="10"/><path d="m15 9-6 6"/><path d="m9 9 6 6"/>',
+  repeat: '<path d="m17 2 4 4-4 4"/><path d="M3 11v-1a4 4 0 0 1 4-4h14"/><path d="m7 22-4-4 4-4"/><path d="M21 13v1a4 4 0 0 1-4 4H3"/>',
+  info: '<circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/>',
+  hash: '<line x1="4" x2="20" y1="9" y2="9"/><line x1="4" x2="20" y1="15" y2="15"/><line x1="10" x2="8" y1="3" y2="21"/><line x1="16" x2="14" y1="3" y2="21"/>'
+};
+function icon(name, size = 'ic') { return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="' + size + '">' + (ICONS[name] || '') + '</svg>'; }
+function esc(s) { return String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
+
+/* ============================================================ 数据 ============================================================ */
+const process = {
+  id: 'PR-2026-0812',
+  title: '采购付款申请 · 服务器扩容',
+  status: 'pending', // pending | approved | rejected | revoked
+  initiator: '李文博', dept: '基础架构部', urgency: '高',
+  createdAt: '2026-07-18 09:24', category: '对公付款',
+  nodes: [
+    { key: 'submit',  name: '发起提交',     role: '发起人',   actor: '李文博', status: 'done',     time: '07-18 09:24', comment: '因业务增长需扩容服务器，附报价单。' },
+    { key: 'mgr',     name: '部门经理审批', role: '部门经理', actor: '王海',   status: 'done',     time: '07-18 14:02', comment: '同意，属必要扩容。' },
+    { key: 'fin',     name: '财务复核',     role: '财务专员', actor: '赵敏',   status: 'current',  time: '',           comment: '' },
+    { key: 'vp',      name: '分管副总审批', role: '分管副总', actor: '陈昊',   status: 'pending',  time: '',           comment: '' },
+    { key: 'cashier', name: '出纳付款',     role: '出纳',     actor: '系统自动', status: 'pending', time: '',         comment: '' }
+  ],
+  logs: [
+    { actor: '李文博', action: '提交申请',         type: 'submit',  time: '2026-07-18 09:24', comment: '因业务增长需扩容服务器，附报价单。' },
+    { actor: '王海',   action: '审批通过',         type: 'approve', time: '2026-07-18 14:02', comment: '同意，属必要扩容。' },
+    { actor: '系统',   action: '流转至 财务复核',   type: 'route',   time: '2026-07-18 14:02', comment: '' }
+  ],
+  attachments: [
+    { name: '云资源报价单.pdf', size: '1.2 MB', type: 'pdf' },
+    { name: '采购合同-2026-AC-083.pdf', size: '3.8 MB', type: 'pdf' },
+    { name: '架构扩容方案.docx', size: '640 KB', type: 'doc' },
+    { name: '预算审批截图.png', size: '220 KB', type: 'img' }
+  ],
+  formFields: [
+    { k: '申请人', v: '李文博', icon: 'user' },
+    { k: '所属部门', v: '基础架构部', icon: 'building' },
+    { k: '付款类型', v: '对公付款' },
+    { k: '付款金额', v: '¥ 86,400.00', amount: true },
+    { k: '收款方', v: '阿里云（中国）有限公司' },
+    { k: '收款账号', v: '6217 **** **** 3082' },
+    { k: '开户行', v: '招商银行 杭州分行' },
+    { k: '紧急程度', v: '高', badge: 'warning' },
+    { k: '用途说明', v: '2026 Q3 业务增长导致线上流量上升，需扩容 8 台云服务器（4C16G）及配套对象存储，预计可支撑至年底大促。', span: true },
+    { k: '备注', v: '请财务优先处理，合同已走完法务流程。', span: true }
+  ]
+};
+// 演示视角：当前审批人（财务复核·赵敏）/ 发起人（李文博）
+let viewerRole = 'approver';
+
+const STATUS_MAP = {
+  pending:  { cls: 'warning',     text: '审批中' },
+  approved: { cls: 'success',     text: '已通过' },
+  rejected: { cls: 'destructive', text: '已驳回' },
+  revoked:  { cls: 'muted',       text: '已撤销' }
+};
+const nowStr = () => { const d = new Date(); const p = n => String(n).padStart(2, '0'); return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`; };
+
+/* ============================================================ 渲染 ============================================================ */
+function renderStatusBadge() {
+  const s = STATUS_MAP[process.status];
+  $('#pr-status').className = 'badge-status ' + s.cls;
+  $('#pr-status').innerHTML = '<span class="dot"></span>' + s.text;
+}
+function renderMeta() {
+  const cur = process.nodes.find(n => n.status === 'current');
+  $('#pr-meta').innerHTML = `
+    <div class="meta-item"><span class="k">流程编号</span><span class="v">${esc(process.id)}</span></div>
+    <div class="meta-item"><span class="k">发起人</span><span class="v">${esc(process.initiator)}</span></div>
+    <div class="meta-item"><span class="k">发起部门</span><span class="v">${esc(process.dept)}</span></div>
+    <div class="meta-item"><span class="k">发起时间</span><span class="v">${esc(process.createdAt)}</span></div>
+    <div class="meta-item"><span class="k">紧急程度</span><span class="v"><span class="chip-badge warning">${esc(process.urgency)}</span></span></div>
+    <div class="now-node">${cur ? `当前节点：<b>${esc(cur.name)} · ${esc(cur.actor)}</b> 待处理` : '流程已结束'}</div>`;
+}
+function renderStepper() {
+  $('#pr-stepper').innerHTML = process.nodes.map(n => {
+    const dotIcon = n.status === 'done' ? icon('check', 'ic-sm') : n.status === 'rejected' ? icon('x', 'ic-sm') : (n.key === 'submit' ? icon('send', 'ic-xs') : (process.nodes.indexOf(n) + 1));
+    return `<div class="step ${n.status}">
+      <div class="step-dot">${dotIcon}</div>
+      <div class="step-name">${esc(n.name)}</div>
+      <div class="step-meta">${n.status === 'pending' ? esc(n.role) : esc(n.actor)}${n.time ? ' · ' + esc(n.time) : ''}</div>
+    </div>`;
+  }).join('');
+}
+function renderForm() {
+  $('#pane-form').innerHTML = `
+    <div class="ro-grid">
+      ${process.formFields.map(f => `
+        <div class="ro-field ${f.span ? 'span-full' : ''}">
+          <span class="k">${f.icon ? icon(f.icon, 'ic-xs') : ''}${esc(f.k)}</span>
+          <span class="vv ${f.amount ? 'amount' : ''}">${f.badge ? `<span class="chip-badge ${f.badge}">${esc(f.v)}</span>` : esc(f.v)}</span>
+        </div>`).join('')}
+    </div>`;
+}
+function renderAttach() {
+  $('#att-count').textContent = process.attachments.length;
+  $('#pane-attach').innerHTML = `
+    <div class="ro-section-title"><span class="bar"></span>附件清单（${process.attachments.length}）</div>
+    <div class="att-list">
+      ${process.attachments.map(a => `
+        <button class="att-item" title="下载 ${esc(a.name)}">
+          <span class="att-ico ${a.type}">${icon(a.type === 'img' ? 'image' : a.type === 'doc' ? 'file' : 'fileText', 'ic')}</span>
+          <span class="att-info"><span class="att-name">${esc(a.name)}</span><span class="att-size">${esc(a.size)}</span></span>
+          <span class="icon-btn" aria-label="下载">${icon('download', 'ic-sm')}</span>
+        </button>`).join('')}
+    </div>`;
+}
+function renderLogs() {
+  $('#pane-logs').innerHTML = `
+    <div class="ro-section-title"><span class="bar"></span>全流程日志（${process.logs.length}）</div>
+    <div class="log-list">
+      ${process.logs.map(l => `
+        <div class="log-item">
+          <div class="log-dot ${l.type}">${icon(l.type === 'submit' ? 'send' : l.type === 'approve' ? 'check' : l.type === 'reject' ? 'x' : l.type === 'revoke' ? 'undo' : l.type === 'comment' ? 'messageSquare' : 'repeat', 'ic-xs')}</div>
+          <div class="log-body">
+            <div class="log-head">
+              <span class="log-actor">${esc(l.actor)}</span>
+              <span class="log-action ${l.type}">${esc(l.action)}</span>
+              <span class="log-time">${esc(l.time)}</span>
+            </div>
+            ${l.comment ? `<div class="log-comment">${esc(l.comment)}</div>` : ''}
+          </div>
+        </div>`).join('')}
+    </div>`;
+}
+function renderAside() {
+  const cur = process.nodes.find(n => n.status === 'current');
+  $('#pr-aside').innerHTML = `
+    <div class="card aside-card">
+      <h3>${icon('info', 'ic-sm')}流程信息</h3>
+      <div class="info-row"><span class="k">${icon('hash','ic-xs')}流程编号</span><span class="v">${esc(process.id)}</span></div>
+      <div class="info-row"><span class="k">${icon('user','ic-xs')}发起人</span><span class="v">${esc(process.initiator)}</span></div>
+      <div class="info-row"><span class="k">${icon('building','ic-xs')}部门</span><span class="v">${esc(process.dept)}</span></div>
+      <div class="info-row"><span class="k">${icon('clock','ic-xs')}发起时间</span><span class="v">${esc(process.createdAt)}</span></div>
+      <div class="info-row"><span class="k">节点数</span><span class="v">${process.nodes.length} 步</span></div>
+      <div class="info-row"><span class="k">当前节点</span><span class="v">${cur ? esc(cur.name) : '—'}</span></div>
+    </div>
+    <div class="card aside-card">
+      <h3>${icon('user','ic-sm')}审批链</h3>
+      ${process.nodes.map(n => `
+        <div class="info-row">
+          <span class="k">${esc(n.name)}</span>
+          <span class="v">
+            <span class="badge-status ${n.status === 'done' ? 'success' : n.status === 'current' ? 'info' : n.status === 'rejected' ? 'destructive' : 'muted'}"><span class="dot"></span>${n.status === 'done' ? '已通过' : n.status === 'current' ? '处理中' : n.status === 'rejected' ? '已驳回' : '未开始'}</span>
+          </span>
+        </div>`).join('')}
+    </div>
+    <div class="aside-tip">${icon('info','ic-xs')} 本模板覆盖：流程表单 / 附件、流程进度（Stepper）、流程日志（时间线），以及审批通过 / 驳回、发起人撤回等操作。切换右上角主题可预览深色模式。</div>`;
+}
+
+/* 底部操作栏：依据 状态 + 视角 计算可执行动作 */
+function renderActions() {
+  const bar = $('#pr-actions');
+  const cur = process.nodes.find(n => n.status === 'current');
+  let html = '';
+  if (process.status === 'pending') {
+    if (viewerRole === 'approver' && cur) {
+      html = `<div class="note">${icon('clock','ic-sm')} 你是当前审批人：<b>${esc(cur.name)} · ${esc(cur.actor)}</b></div>
+        <div class="btns">
+          <button class="btn btn-outline" id="act-reject">${icon('xCircle','ic-sm')}驳回</button>
+          <button class="btn btn-primary" id="act-approve">${icon('checkCircle','ic-sm')}同意并通过</button>
+        </div>`;
+    } else if (viewerRole === 'initiator') {
+      html = `<div class="note">${icon('info','ic-sm')} 你是<b>发起人</b>，流程处理中可撤回</div>
+        <div class="btns">
+          <button class="btn btn-outline" id="act-revoke">${icon('undo','ic-sm')}撤回申请</button>
+        </div>`;
+    } else {
+      html = `<div class="note">${icon('info','ic-sm')} 当前节点：<b>${esc(cur.name)} · ${esc(cur.actor)}</b> 处理中，你暂无操作权限</div>`;
+    }
+  } else {
+    const m = { approved: '该流程已审批通过', rejected: '该流程已被驳回', revoked: '该流程已由发起人撤回' }[process.status];
+    html = `<div class="note">${icon(process.status==='approved'?'checkCircle':process.status==='rejected'?'xCircle':'undo','ic-sm')} ${m}</div>
+      <div class="btns">
+        <button class="btn btn-outline" id="act-reprint">${icon('printer','ic-sm')}重新打印</button>
+        <button class="btn btn-primary" id="act-restart">${icon('rotateCcw','ic-sm')}重新发起</button>
+      </div>`;
+  }
+  // 视角切换（演示用）
+  const roleSel = `<label class="view-switch">${icon('user','ic-xs')}查看视角
+    <select class="input" id="view-role">
+      <option value="approver" ${viewerRole==='approver'?'selected':''}>当前审批人（赵敏）</option>
+      <option value="initiator" ${viewerRole==='initiator'?'selected':''}>发起人（李文博）</option>
+    </select></label>`;
+  bar.innerHTML = roleSel + html;
+  bindActions();
+}
+function bindActions() {
+  const va = $('#view-role'); if (va) va.addEventListener('change', e => { viewerRole = e.target.value; renderActions(); });
+  const ap = $('#act-approve'); if (ap) ap.addEventListener('click', () => openAct('approve'));
+  const rj = $('#act-reject'); if (rj) rj.addEventListener('click', () => openAct('reject'));
+  const rv = $('#act-revoke'); if (rv) rv.addEventListener('click', () => openAct('revoke'));
+  const rs = $('#act-restart'); if (rs) rs.addEventListener('click', restart);
+  const rp = $('#act-reprint'); if (rp) rp.addEventListener('click', () => alert('已发送打印任务（演示）'));
+}
+
+/* ============================================================ 审批操作抽屉 ============================================================ */
+let actType = null;
+function openAct(type) {
+  actType = type;
+  const map = {
+    approve: { title: '审批通过', label: '审批意见', ph: '请填写审批意见（选填）', tip: '通过后流程将流转至下一节点。', btn: '确认通过', cls: 'btn-primary' },
+    reject:  { title: '驳回申请', label: '驳回原因', ph: '请填写驳回原因（必填）', tip: '驳回后流程终止，发起人可修改后重新提交。', btn: '确认驳回', cls: 'btn-destructive' },
+    revoke:  { title: '撤回申请', label: '撤回说明', ph: '请填写撤回说明（选填）', tip: '撤回后流程终止，可重新发起。', btn: '确认撤回', cls: 'btn-outline' }
+  }[type];
+  $('#act-title').innerHTML = icon(type === 'approve' ? 'checkCircle' : type === 'reject' ? 'xCircle' : 'undo', 'ic-sm') + map.title;
+  $('#act-label').textContent = map.label;
+  $('#act-comment').placeholder = map.ph; $('#act-comment').value = '';
+  $('#act-tip').innerHTML = icon('info', 'ic-xs') + ' ' + map.tip;
+  const cf = $('#act-confirm'); cf.className = 'btn ' + map.cls; cf.textContent = map.btn;
+  $('#act-overlay').classList.add('open'); $('#act-sheet').classList.add('open');
+  setTimeout(() => $('#act-comment').focus(), 220);
+}
+function closeAct() { $('#act-overlay').classList.remove('open'); $('#act-sheet').classList.remove('open'); }
+function submitAct() {
+  const comment = $('#act-comment').value.trim();
+  if (actType === 'reject' && !comment) { $('#act-comment').focus(); $('#act-comment').style.borderColor = 'hsl(var(--destructive))'; return; }
+  const cur = process.nodes.find(n => n.status === 'current');
+  const t = nowStr();
+  if (actType === 'approve') {
+    cur.status = 'done'; cur.time = t.slice(5); cur.comment = comment;
+    process.logs.push({ actor: cur.actor, action: '审批通过', type: 'approve', time: t, comment });
+    const next = process.nodes.find(n => n.status === 'pending');
+    if (next) { next.status = 'current'; process.logs.push({ actor: '系统', action: '流转至 ' + next.name, type: 'route', time: t, comment: '' }); }
+    else { process.status = 'approved'; process.logs.push({ actor: '系统', action: '流程结束 · 已通过', type: 'approve', time: t, comment: '' }); }
+  } else if (actType === 'reject') {
+    cur.status = 'rejected'; cur.time = t.slice(5); cur.comment = comment; process.status = 'rejected';
+    process.logs.push({ actor: cur.actor, action: '驳回申请', type: 'reject', time: t, comment });
+  } else if (actType === 'revoke') {
+    process.status = 'revoked';
+    process.logs.push({ actor: process.initiator, action: '撤回申请', type: 'revoke', time: t, comment });
+  }
+  closeAct(); fullRender();
+}
+function restart() {
+  process.status = 'pending';
+  process.nodes.forEach((n, i) => { n.status = i === 0 ? 'done' : (i === 1 ? 'current' : 'pending'); n.time = i === 0 ? '07-18 09:24' : (i === 1 ? '07-18 14:02' : ''); n.comment = i === 0 ? '因业务增长需扩容服务器，附报价单。' : (i === 1 ? '同意，属必要扩容。' : ''); });
+  process.logs = [
+    { actor: '李文博', action: '提交申请', type: 'submit', time: '2026-07-18 09:24', comment: '因业务增长需扩容服务器，附报价单。' },
+    { actor: '王海', action: '审批通过', type: 'approve', time: '2026-07-18 14:02', comment: '同意，属必要扩容。' },
+    { actor: '系统', action: '流转至 部门经理审批', type: 'route', time: '2026-07-18 14:02', comment: '' }
+  ];
+  viewerRole = 'approver'; fullRender();
+}
+
+/* ============================================================ 初始化 ============================================================ */
+function $(s) { return document.querySelector(s); }
+function $all(s) { return document.querySelectorAll(s); }
+function fullRender() { renderStatusBadge(); renderMeta(); renderStepper(); renderForm(); renderAttach(); renderLogs(); renderAside(); renderActions(); }
+
+$('#pr-tabs').addEventListener('click', e => {
+  const t = e.target.closest('.tab'); if (!t) return;
+  $all('#pr-tabs .tab').forEach(x => x.classList.remove('active'));
+  t.classList.add('active');
+  $all('.tabpane').forEach(p => p.classList.remove('active'));
+  $('#pane-' + t.dataset.pane).classList.add('active');
+});
+$('#pr-theme').addEventListener('click', () => { document.documentElement.classList.toggle('dark'); $('#pr-theme').innerHTML = icon(document.documentElement.classList.contains('dark') ? 'sun' : 'moon', 'ic-sm'); });
+$('#pr-print').addEventListener('click', () => window.print());
+$('#act-close').addEventListener('click', closeAct);
+$('#act-overlay').addEventListener('click', closeAct);
+$('#act-cancel').addEventListener('click', closeAct);
+$('#act-confirm').addEventListener('click', submitAct);
+
+fullRender();
+$('#pr-theme').innerHTML = icon('moon', 'ic-sm');
+</script>
+</body>
+</html>

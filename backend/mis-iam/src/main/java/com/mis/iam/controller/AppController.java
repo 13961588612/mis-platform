@@ -21,7 +21,12 @@ public class AppController {
     }
 
     @GetMapping
-    public Result<List<AppVO>> list(@RequestParam Long tenantId) {
+    public Result<List<AppVO>> list(
+            @RequestParam Long tenantId,
+            @RequestParam(required = false) String kind) {
+        if ("subsystem".equalsIgnoreCase(kind)) {
+            return Result.ok(appService.listPortalSubsystems(tenantId));
+        }
         return Result.ok(appService.listByTenant(tenantId));
     }
 }

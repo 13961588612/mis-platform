@@ -7,7 +7,7 @@
 
 交付可运行的企业管理后台 MVP：
 
-- 登录 / 登出 / Token 刷新
+- 登录 / 登出 / Token 刷新；**门户应用九宫格**（Phase 1 仅 system 可进）
 - 用户、组织、角色、菜单、字典 CRUD
 - RBAC + 数据权限
 - 登录/操作审计日志
@@ -44,7 +44,7 @@
 | axios 拦截器 + auth-store | refresh 单飞锁 |
 | 前端路由守卫 | 未登录跳 /login |
 
-**验收：** admin 可登录进 dashboard；错误密码 5 次锁定；登出后 Token 失效。
+**验收：** admin 可登录进 **门户 `/portal`**，再进入 `system`；错误密码 5 次锁定；登出后 Token 失效。
 
 ---
 
@@ -54,7 +54,7 @@
 |------|------|
 | mis-org 组织树 CRUD | ancestors 维护、员工档案 |
 | mis-iam 用户/角色 CRUD | APP/用户/角色、权限分配 |
-| DataScopeInterceptor v1 | 数据权限 SQL |
+| DataScopeSpecification v1 | 员工列表行级过滤（mis-org + IAM data-scope） |
 | BFF IAM/Org Controller | 对外 API |
 | 前端 UserListPage | 左树右表+弹窗 |
 | 前端 OrgTreePage | 树形管理 |
@@ -118,7 +118,7 @@
 
 | # | 场景 | 预期结果 | 状态 |
 |---|------|----------|------|
-| 1 | admin 登录 | 成功进入 dashboard | ⏳ |
+| 1 | admin 登录 | 成功进入 **门户 `/portal`**，可进 system | ⏳ |
 | 2 | 错误密码连续 5 次 | 账号锁定 30 分钟 | ⏳ |
 | 3 | 无权限用户访问 /system/user | 403 或菜单不可见 | ⏳ |
 | 4 | 用户 CRUD | 增删改查、分页、部门筛选 | ⏳ |

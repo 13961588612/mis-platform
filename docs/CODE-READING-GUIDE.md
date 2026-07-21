@@ -117,10 +117,9 @@
    → Gateway 白名单 → mis-auth
    → AuthService：验证码/密码 → JwtIssuer 签发 → Refresh 写 DB+Redis
 
-2. GET /api/v1/...（受保护）
+2. GET /api/v1/auth/me 或 /api/v1/menus/**、/api/v1/apps 等
    → JwtAuthenticationGlobalFilter：验签 → Redis 查 jti 黑名单 → 写 X-* 头
-   → mis-admin-bff（未来）：Redis 读 permissions → API 鉴权
-   → 领域服务：GatewayContextFilter → SecurityContextHolder
+   → mis-admin-bff：Redis 读 permissions → ApiPermissionInterceptor → 聚合下游
 
 3. POST /api/v1/auth/logout
    → AuthService：jti 入黑名单 + 吊销 Refresh
@@ -134,11 +133,12 @@
 |------|------|
 | mis-common-core / web / jpa / security / redis | ✅ 骨架可用 |
 | mis-gateway JWT + 透传头 | ✅ |
-| mis-auth login/refresh/logout | ✅ |
-| mis-iam（用户/角色） | ⏳ 骨架 |
-| mis-org（组织/员工） | ⏳ 骨架 |
-| mis-admin-bff API 权限 | ⏳ |
-| mis-system | ⏳ |
+| mis-auth login/refresh/logout | ✅ 用户查 **mis-iam**（RestClient） |
+| mis-iam（用户/角色） | ✅ User/Role/App + Org 校验 / 租户管理员保护 |
+| mis-org（组织/员工） | ✅ Org/Dept/Employee 核心规则 |
+| mis-admin-bff | ✅ Org/IAM/System 聚合（menus、`/apps`、`/auth/me`、API 权限） |
+| mis-system | ✅ 菜单树 / router / permissions / dashboard stats |
+| 前端门户 | ✅ `/portal` 九宫格；业务 CRUD 页迭代中 |
 | mis-common-client 透传头 | ⏳ |
 
 ---

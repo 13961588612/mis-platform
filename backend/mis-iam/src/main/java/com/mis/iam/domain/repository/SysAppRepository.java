@@ -10,5 +10,5 @@ public interface SysAppRepository extends JpaRepository<SysApp, Long> {
 
     Optional<SysApp> findByTenantIdAndCode(Long tenantId, String code);
 
-    List<SysApp> findByTenantIdAndStatus(Long tenantId, Integer status);
+    List<SysApp> findByTenantIdAndStatusOrderBySortAscIdAsc(Long tenantId, Integer status);
 }

@@ -89,10 +89,23 @@ cd backend
 ```powershell
 cd backend
 
-# 分别开终端，或 IDE 启动
-.\mvn.ps1 spring-boot:run -pl mis-auth    # :8101
-.\mvn.ps1 spring-boot:run -pl mis-audit   # :8106
-.\mvn.ps1 spring-boot:run -pl mis-gateway # :8080
+# 分别开终端，或 IDE 启动（建议顺序：领域服务 → BFF → Gateway）
+.\mvn.ps1 spring-boot:run -pl mis-auth       # :8101
+.\mvn.ps1 spring-boot:run -pl mis-iam        # :8102
+.\mvn.ps1 spring-boot:run -pl mis-org        # :8103
+.\mvn.ps1 spring-boot:run -pl mis-system     # :8105
+.\mvn.ps1 spring-boot:run -pl mis-audit      # :8106
+.\mvn.ps1 spring-boot:run -pl mis-admin-bff  # :8081
+.\mvn.ps1 spring-boot:run -pl mis-gateway    # :8080
+```
+
+需设置 JWT 密钥路径（绝对路径更稳），例如：
+
+```powershell
+$env:JWT_PRIVATE_KEY_PATH = "D:\code\mis-platform\backend\keys\private.pem"
+$env:JWT_PUBLIC_KEY_PATH  = "D:\code\mis-platform\backend\keys\public.pem"
+# 可选：本地关掉验证码校验
+$env:AUTH_CAPTCHA_ENABLED = "false"
 ```
 
 ### 服务端口
@@ -101,18 +114,21 @@ cd backend
 |------|------|------|
 | mis-gateway | 8080 | API 入口，路由到 localhost |
 | mis-auth | 8101 | 登录 / 签发 Token |
-| mis-iam | 8102 | 身份与权限（Sprint 2） |
-| mis-org | 8103 | 组织与人事（Sprint 2） |
-| mis-admin-bff | 8081 | 规划中 |
+| mis-iam | 8102 | 身份与权限 |
+| mis-org | 8103 | 组织与人事 |
+| mis-system | 8105 | 菜单 / 字典 / 仪表盘统计 |
+| mis-admin-bff | 8081 | 对外 API 聚合 + API 权限拦截 |
 | mis-audit | 8106 | 登录日志 |
 | mis-admin-web | 5173 | 前端 dev server |
 
 ### Gateway 本地路由
 
-`application.yml` 中已配置直连：
+`application.yml` 中已配置直连（`order` 越小越优先）：
 
+- `/api/v1/auth/me` → `http://localhost:8081`（**BFF**，须优先于下方 auth 通配）
 - `/api/v1/auth/**` → `http://localhost:8101`
 - `/api/v1/audit/**` → `http://localhost:8106`
+- `/api/v1/**` → `http://localhost:8081`（BFF）
 
 无需 Nacos 注册发现。
 
@@ -126,7 +142,7 @@ pnpm dev
 
 访问 http://localhost:5173 ，API 代理到 Gateway `8080`。
 
-默认账号：`admin` / `Mis@123456`
+默认账号：`admin` / `Mis@123456`（首次登录强制改密）。登录成功后进入 **`/portal`** 应用九宫格，再进 `system` 子系统。
 
 ## 7. 本地调试场景
 
@@ -173,7 +189,7 @@ $env:JAVA_HOME = $env:JAVA_HOME_17
 
 ### Gateway 502 / Connection refused
 
-确认 mis-auth、mis-audit 已启动且端口与 `application.yml` 一致。
+确认 mis-auth、mis-admin-bff、mis-iam、mis-org、mis-system、mis-audit 已按需启动，且端口与 `application.yml` 一致。
 
 ### 登录报 JWT 相关错误
 

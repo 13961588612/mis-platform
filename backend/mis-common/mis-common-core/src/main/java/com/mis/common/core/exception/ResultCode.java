@@ -58,6 +58,10 @@ public enum ResultCode {
     DEPT_HAS_CHILDREN(40904, "存在子部门，无法删除"),
     DEPT_HAS_EMPLOYEES(40905, "部门下存在员工，无法删除"),
     EMPLOYEE_NO_EXISTS(40906, "工号已存在"),
+    ROLE_CODE_EXISTS(40907, "角色编码已存在"),
+    ROLE_BUILTIN_PROTECTED(40908, "内置角色不可删除或修改编码"),
+    LAST_TENANT_ADMIN(40909, "不可删除或禁用最后一个租户管理员"),
+    EMPLOYEE_ALREADY_BOUND(40910, "该员工已绑定登录账号"),
     INTERNAL_ERROR(50000, "系统错误");
 
     private final int code;

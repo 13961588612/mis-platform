@@ -1,6 +1,8 @@
 package com.mis.iam.domain.repository;
 
 import com.mis.iam.domain.entity.SysRole;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 
@@ -11,8 +13,15 @@ public interface SysRoleRepository extends JpaRepository<SysRole, Long> {
 
     List<SysRole> findByTenantIdAndAppIdAndStatus(Long tenantId, Long appId, Integer status);
 
+    Page<SysRole> findByTenantIdAndAppId(Long tenantId, Long appId, Pageable pageable);
+
     Optional<SysRole> findByTenantIdAndAppIdAndCode(Long tenantId, Long appId, String code);
+
+    boolean existsByTenantIdAndAppIdAndCode(Long tenantId, Long appId, String code);
 
     @Query("SELECT r.code FROM SysRole r JOIN SysUserRole ur ON r.id = ur.roleId WHERE ur.userId = ?1 AND r.status = 1")
     List<String> findRoleCodesByUserId(Long userId);
+
+    @Query("SELECT r FROM SysRole r JOIN SysUserRole ur ON r.id = ur.roleId WHERE ur.userId = ?1 AND r.status = 1")
+    List<SysRole> findRolesByUserId(Long userId);
 }

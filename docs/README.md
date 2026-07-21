@@ -1,6 +1,6 @@
 # MIS Platform 文档中心
 
-> 规格书版本：**v1.1-draft** | 最后更新：2026-06-24
+> 规格书版本：**v1.3-draft** | 最后更新：2026-07-21
 
 ## 文档状态说明
 
@@ -66,20 +66,20 @@ docs/
 
 ---
 
-## 代码实现进度（Sprint 0 摘要）
+## 代码实现进度（摘要 · 2026-07-21）
 
 | 组件 | 状态 | 说明 |
 |------|------|------|
-| mis-migrator + Flyway V1/V2/V3 | ✅ | 单库；V3 对齐 mis-iam/mis-org |
+| mis-migrator + Flyway V1–V5 | ✅ | 单库；V5 门户 `sys_app` 字段 |
 | mis-common-* | ✅ | core / jpa / web / security / redis |
-| mis-gateway | ✅ | JWT 验签、透传头、Redis 黑名单 |
+| mis-gateway | ✅ | JWT 验签、透传头、Redis 黑名单；`/auth/me` → BFF |
 | mis-auth | ✅ | 登录/刷新/登出、JWT 签发 |
 | mis-audit | ✅ | 登录日志 |
-| mis-iam | ⏳ | 用户/角色/APP（Sprint 2） |
-| mis-org | ⏳ | 组织/部门/员工（Sprint 2） |
-| mis-admin-bff | ⏳ | API 权限、聚合 |
-| mis-system | ⏳ | 菜单/字典 |
-| 前端 mis-admin-web | ✅ | Sprint 1 登录页 |
+| mis-iam | ✅ | 用户/角色/APP（Sprint 2+） |
+| mis-org | ✅ | 组织/部门/员工 |
+| mis-admin-bff | ✅ | 聚合、API 权限、门户 `/apps`、`/auth/me` |
+| mis-system | ✅ | 菜单 router/permissions、仪表盘 stats |
+| 前端 mis-admin-web | ✅ | 登录 + 门户九宫格 + 子系统壳；业务 CRUD 页迭代中 |
 
 ---
 
@@ -103,3 +103,4 @@ docs/
 | v1.0-draft | 2026-06-23 | 初版文档体系 |
 | v1.1-draft | 2026-06-24 | MIS_REMOTE 配置简化、运维文档拆分 |
 | v1.2 | 2026-07-21 | Sprint 2 服务边界：mis-iam / mis-org；ADR-016 |
+| v1.3 | 2026-07-21 | 门户壳、`sys_app` V5、文档与进度对齐 |

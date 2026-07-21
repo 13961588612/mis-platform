@@ -8,8 +8,9 @@
 
 ## 依赖
 
-- PostgreSQL（`sys_user`、`sys_refresh_token`）
+- PostgreSQL（`sys_app`、`sys_refresh_token`；用户主数据在 **mis-iam**）
 - Redis（验证码、登录锁定、Refresh 缓存、**jti 黑名单**）
+- **mis-iam**（登录/刷新查用户）
 - **mis-audit**（异步写入登录日志）
 - RSA 密钥对（**私钥仅本服务**）
 
@@ -33,6 +34,8 @@ mis:
     audit-base-url: http://localhost:8106
     audit-discovery-enabled: false
     audit-service-id: mis-audit
+    iam-discovery-enabled: false
+    iam-base-url: http://localhost:8102
   security:
     jwt:
       private-key-path: ${JWT_PRIVATE_KEY_PATH:./keys/private.pem}

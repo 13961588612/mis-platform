@@ -147,7 +147,7 @@ API 树示例：
 | ADR-008 BFF 统一鉴权 | 不变；`sys_api` + permission |
 | ADR-010 → ADR-011 | `sys_menu_api` 演进为 `sys_api` 独立树 |
 | ADR-011 多 APP | 用户/角色/菜单/API 均带 `app_id` |
-| Phase 1 不做微前端 | APP 表先只有 `system` 一个 |
+| Phase 1 不做微前端 | APP 表预置 `system` + 占位 APP；同仓 `runtime=host`；门户九宫格 Phase 1 交付 |
 
 ---
 
@@ -155,9 +155,10 @@ API 树示例：
 
 ### Phase 1（当前）
 
-- 表：`sys_app`、`sys_module`、`sys_employee`、`sys_user`、`sys_menu`、`sys_api`、**`sys_menu_api`**
-- 前端：单仓 `mis-admin-web`
-- BFF：一个 `mis-admin-bff`
+- 表：`sys_app`（含门户字段）、`sys_module`、`sys_employee`、`sys_user`、`sys_menu`、`sys_api`、**`sys_menu_api`**
+- 前端：单仓 `mis-admin-web` — **登录 → `/portal` 九宫格 → 进 system 子系统壳**
+- BFF：一个 `mis-admin-bff`（`/apps`、`/auth/me`、menus、聚合 CRUD）
+- 可进入 APP：仅 `system`；其它 `sys_app` 卡片 `enterable=false`
 
 ### Phase 2
 

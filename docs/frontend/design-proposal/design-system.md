@@ -4,7 +4,8 @@
 > 输出类型：设计系统规格 + 高保真原型（见 `prototype.html`）
 > 约束基线：[design-handoff-brief.md](./design-handoff-brief.md) · [admin-web-design.md](./admin-web-design.md)
 > 画布硬约束：shadcn/ui + Tailwind 3.4 · 主题 `.dark` class · 图标 lucide-react · 布局壳 `AppLayout`
-> **不可逾越的红线**：不另起色彩体系、不破坏 `--radius: 0.5rem`、不脱离 shadcn 组件词汇表。
+> **不可逾越的红线**：不另起色彩体系、不破坏 `--radius: 0.375rem`（门户对齐后全局共用）、不脱离 shadcn 组件词汇表。
+> 门户扩展令牌与冷灰画布见 [portal-design-tokens.md](./portal-design-tokens.md)；admin 子系统与门户**同一套**视觉基线。
 
 ---
 
@@ -134,7 +135,7 @@
 
 | 令牌 | 值 | 用途 |
 |------|----|------|
-| `--radius` | `0.5rem` | **全局圆角，禁止破坏**；卡片 `rounded-lg`、按钮/输入 `rounded-md` |
+| `--radius` | `0.375rem` | **全局圆角**（门户对齐后由 `0.5rem` 收紧）；卡片/按钮/输入均基于此 |
 | 侧栏展开宽 | `16rem` (`w-64`) | ≥1024px 常驻 |
 | 侧栏折叠宽 | `4rem` (`w-16`) | 折叠态仅图标 |
 | 顶栏高 | `3.5rem` (`h-14`) | Header |

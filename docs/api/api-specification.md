@@ -124,32 +124,87 @@ POST /auth/logout
 
 吊销 refresh token，access token jti 加入 Redis 黑名单。
 
-### 2.5 当前用户信息
+### 2.5 修改密码（自助）
+
+```
+PUT /auth/password
+```
+
+**服务：** `mis-auth`（需 Access Token）。权限码：`system:profile:changePassword`（种子 API `9004`）。
+
+**请求：**
+```json
+{
+  "oldPassword": "Mis@123456",
+  "newPassword": "NewPass@123"
+}
+```
+
+校验：旧密码正确；新密码 8–64 位且含字母与数字；新密码 ≠ 旧密码。成功后清除 `must_change_password`。
+
+### 2.6 当前用户信息
 
 ```
 GET /auth/me
 ```
 
-权限：**从 Redis 读取**（`mis:rbac:permissions:{userId}`），非 JWT decode。权限变更后应重新调用本接口刷新前端菜单。
+**服务：** `mis-admin-bff`（Gateway 须将本路径**优先**路由到 BFF，勿落入 `/api/v1/auth/**` → mis-auth）。
+
+权限码列表：**从 Redis 读取**（经 BFF 聚合），非 JWT decode。权限变更后应重新调用本接口或 `/menus/permissions` 刷新前端。
 
 **响应 data：**
 ```json
 {
   "id": "1",
   "username": "admin",
-  "realName": "系统管理员",
+  "realName": "租户管理员",
   "avatarUrl": null,
-  "email": null,
-  "phone": null,
-  "orgId": "1",
-  "orgName": "总公司",
-  "roles": ["ADMIN"],
-  "permVersion": 12,
-  "permissions": ["system:user:list", "..."]
+  "roles": ["TENANT_ADMIN"],
+  "permVersion": null,
+  "permissions": ["system:user:list", "dashboard:view", "..."]
 }
 ```
 
-可选响应头：`X-Perm-Stale: true`（JWT 内 `permVersion` **与**当前版本 **不等** 时置位，提示前端调 `GET /auth/me` 刷新菜单；**不**作为 API 鉴权失败条件）。
+可选响应头：`X-Perm-Stale: true`（JWT 内 `permVersion` **与**当前版本 **不等** 时置位，提示前端刷新菜单；**不**作为 API 鉴权失败条件）。
+
+### 2.7 门户应用列表
+
+```
+GET /apps?kind=subsystem
+```
+
+**服务：** `mis-admin-bff`（内部调 mis-iam `GET /internal/v1/apps`）。登录即可。
+
+**响应 data（节选）：**
+```json
+[
+  {
+    "id": "1",
+    "code": "system",
+    "name": "系统管理",
+    "icon": "Settings",
+    "basePath": "/system",
+    "description": "用户、组织、角色与菜单的统一底座",
+    "portalGroup": "governance",
+    "kind": "subsystem",
+    "runtime": "host",
+    "sort": 1,
+    "status": 1,
+    "enterable": true
+  },
+  {
+    "id": "2",
+    "code": "iam",
+    "name": "统一身份 IAM",
+    "enterable": false
+  }
+]
+```
+
+| 字段 | 说明 |
+|------|------|
+| enterable | Phase 1 白名单：仅 `system` 为 `true`；其余门户卡片为占位 |
+| runtime | `host` 同仓路由；`remote` 预留微前端 |
 
 ## 3. 菜单模块 `/menus`
 
@@ -515,7 +570,7 @@ openapi/
 
 - [ ] 批量删除接口是否纳入 Phase 1（用户、角色）
 - [ ] 用户导入/导出 Excel 是否 Phase 1
-- [ ] 修改密码接口（用户自助）是否 Phase 1
+- [x] 修改密码接口（用户自助）是否 Phase 1 — `PUT /auth/password`（mis-auth）
 - [ ] 头像上传接口归属 mis-org（员工）还是 mis-file（Phase 2）
 - [ ] API 错误时 HTTP 状态码策略：一律 200 + code，还是 4xx/5xx
 

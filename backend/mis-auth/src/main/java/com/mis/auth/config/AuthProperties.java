@@ -32,6 +32,11 @@ public class AuthProperties {
     private String auditServiceId = "mis-audit";
     private String auditBaseUrl = "http://localhost:8106";
 
+    /** 是否经 Nacos + LoadBalancer 调用 mis-iam */
+    private boolean iamDiscoveryEnabled = false;
+    private String iamServiceId = "mis-iam";
+    private String iamBaseUrl = "http://localhost:8102";
+
     public boolean isCaptchaEnabled() {
         return captchaEnabled;
     }
@@ -130,6 +135,30 @@ public class AuthProperties {
 
     public void setAuditServiceId(String auditServiceId) {
         this.auditServiceId = auditServiceId;
+    }
+
+    public boolean isIamDiscoveryEnabled() {
+        return iamDiscoveryEnabled;
+    }
+
+    public void setIamDiscoveryEnabled(boolean iamDiscoveryEnabled) {
+        this.iamDiscoveryEnabled = iamDiscoveryEnabled;
+    }
+
+    public String getIamServiceId() {
+        return iamServiceId;
+    }
+
+    public void setIamServiceId(String iamServiceId) {
+        this.iamServiceId = iamServiceId;
+    }
+
+    public String getIamBaseUrl() {
+        return iamBaseUrl;
+    }
+
+    public void setIamBaseUrl(String iamBaseUrl) {
+        this.iamBaseUrl = iamBaseUrl;
     }
 
     public static class Cookie {

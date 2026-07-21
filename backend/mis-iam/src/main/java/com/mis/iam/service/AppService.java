@@ -19,8 +19,15 @@ public class AppService {
 
     @Transactional(readOnly = true)
     public List<AppVO> listByTenant(Long tenantId) {
-        return appRepository.findByTenantIdAndStatus(tenantId, 1).stream()
+        return appRepository.findByTenantIdAndStatusOrderBySortAscIdAsc(tenantId, 1).stream()
                 .map(this::toVo)
+                .toList();
+    }
+
+    @Transactional(readOnly = true)
+    public List<AppVO> listPortalSubsystems(Long tenantId) {
+        return listByTenant(tenantId).stream()
+                .filter(a -> a.kind() == null || "subsystem".equalsIgnoreCase(a.kind()))
                 .toList();
     }
 
@@ -32,6 +39,10 @@ public class AppService {
                 app.getName(),
                 app.getIcon(),
                 app.getBasePath(),
+                app.getDescription(),
+                app.getPortalGroup(),
+                app.getKind() != null ? app.getKind() : "subsystem",
+                app.getRuntime() != null ? app.getRuntime() : "host",
                 app.getSort(),
                 app.getStatus());
     }

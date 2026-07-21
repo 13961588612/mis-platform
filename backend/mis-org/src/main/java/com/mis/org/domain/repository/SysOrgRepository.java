@@ -11,4 +11,6 @@ public interface SysOrgRepository extends JpaRepository<SysOrg, Long> {
     Optional<SysOrg> findByTenantIdAndCode(Long tenantId, String code);
 
     List<SysOrg> findByTenantIdAndStatus(Long tenantId, Integer status);
+
+    long countByTenantId(Long tenantId);
 }

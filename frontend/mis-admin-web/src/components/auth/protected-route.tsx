@@ -12,7 +12,7 @@ export function ProtectedRoute() {
 export function GuestRoute() {
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated());
   if (isAuthenticated) {
-    return <Navigate to="/dashboard" replace />;
+    return <Navigate to="/portal" replace />;
   }
   return <Outlet />;
 }
