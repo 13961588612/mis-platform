@@ -504,9 +504,8 @@ GET /dashboard/stats
 ```
 openapi/
 ├── mis-auth.yaml
-├── mis-user.yaml
+├── mis-iam.yaml
 ├── mis-org.yaml
-├── mis-rbac.yaml
 ├── mis-system.yaml
 ├── mis-audit.yaml
 └── mis-admin-bff.yaml    # 聚合后的对外契约
@@ -517,7 +516,7 @@ openapi/
 - [ ] 批量删除接口是否纳入 Phase 1（用户、角色）
 - [ ] 用户导入/导出 Excel 是否 Phase 1
 - [ ] 修改密码接口（用户自助）是否 Phase 1
-- [ ] 头像上传接口归属 mis-user 还是 mis-file（Phase 2）
+- [ ] 头像上传接口归属 mis-org（员工）还是 mis-file（Phase 2）
 - [ ] API 错误时 HTTP 状态码策略：一律 200 + code，还是 4xx/5xx
 
 ## 13. 关联文档

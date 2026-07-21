@@ -8,7 +8,7 @@
 APP（应用）
  └── 菜单树（目录 → 菜单页 → 按钮）     ← 对应微前端里的页面/操作
  └── API 树（类似菜单的分层）           ← API 归属某个后端模块（微服务）
- └── 模块 = 业务微服务（mis-user …）
+ └── 模块 = 业务微服务（mis-iam、mis-org …）
 ```
 
 并问：**微前端是否也类似模块？每个页面是否类似一个 API？**
@@ -22,7 +22,7 @@ APP（应用）
 | **API 归属某个模块（微服务）** | ✅ 合理，应在元数据里标明 `module_id` / `service_name` |
 | **菜单归属某个 APP** | ✅ 合理，多应用门户 / 微前端子应用时必需 |
 | **API 也做成树** | ✅ 作为**分类目录**合理；**运行时鉴权仍是扁平** method+path |
-| **一个 service 模块 = 一个业务微服务** | ✅ 与当前 mis-user、mis-org 划分一致 |
+| **一个 service 模块 = 一个业务微服务** | ✅ 与当前 **mis-iam、mis-org、mis-system** 划分一致 |
 | **微前端 ≈ 模块** | △ 部分对：APP ≈ 微前端子应用，不是每个微服务一个 MFE |
 | **每个页面 ≈ 一个 API** | ❌ 不准确：**一个页面消费多个 API**；对应关系是 **菜单页 ↔ MFE 路由/页面，按钮 ↔ API 组** |
 
@@ -59,9 +59,10 @@ flowchart TB
     end
 
     subgraph Svc["sys_module ≈ 微服务"]
-        S1["mis-user"]
+        S1["mis-iam"]
         S2["mis-org"]
-        S3["mis-rbac"]
+        S3["mis-system"]
+        S4["mis-auth"]
     end
 
     Shell --> APP
@@ -77,7 +78,7 @@ flowchart TB
 | 概念 | 数据库 | 后端 | 前端 | 与微服务 |
 |------|--------|------|------|----------|
 | **APP** | `sys_app` | 菜单/API/用户按 `app_id` 隔离 | 微前端**子应用**边界 | 不拥有 module |
-| **模块** | `sys_module` | **平台级**微服务注册表，**无 app_id** | 不暴露给用户 | `service_name=mis-user` |
+| **模块** | `sys_module` | **平台级**微服务注册表，**无 app_id** | 不暴露给用户 | `service_name=mis-iam` |
 | **菜单页** | `sys_menu` type=2 | BFF 路由 | **一个页面**（MFE 一个 route） | 页面可调多个服务 |
 | **按钮** | `sys_menu` type=3 | — | 工具栏按钮 | — |
 | **API 树** | **`sys_api`** | catalog + api 叶子 | — | `module_id` 必填 |
@@ -93,12 +94,12 @@ flowchart TB
 
 ```
 菜单页「用户管理」(1 个 MFE 页面)
-  ├── API: GET  /api/v1/users          (mis-user)
-  ├── API: GET  /api/v1/orgs/tree      (mis-org)
+  ├── API: GET  /api/v1/users          (mis-iam)
+  ├── API: GET  /api/v1/depts/tree     (mis-org)
   ├── 按钮「新增」
-  │     └── POST /api/v1/users         (mis-user)
+  │     └── POST /api/v1/users         (mis-iam)
   └── 按钮「分配角色」
-        └── PUT  /api/v1/users/{id}/roles (mis-user + mis-rbac)
+        └── PUT  /api/v1/users/{id}/roles (mis-iam)
 ```
 
 **菜单页 : API = 1 : N**（页面 API 挂在 type=2 节点下）  
@@ -131,7 +132,7 @@ flowchart TB
 API 树示例：
 
 ```
-0001  catalog  用户模块 (module: mis-user)
+0001  catalog  身份模块 (module: mis-iam)
 00010001  catalog  用户查询
 000100010001  api  GET /api/v1/users
 000100020001  api  POST /api/v1/users

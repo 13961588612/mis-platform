@@ -101,8 +101,10 @@ cd backend
 |------|------|------|
 | mis-gateway | 8080 | API 入口，路由到 localhost |
 | mis-auth | 8101 | 登录 / 签发 Token |
-| mis-audit | 8106 | 登录日志 |
+| mis-iam | 8102 | 身份与权限（Sprint 2） |
+| mis-org | 8103 | 组织与人事（Sprint 2） |
 | mis-admin-bff | 8081 | 规划中 |
+| mis-audit | 8106 | 登录日志 |
 | mis-admin-web | 5173 | 前端 dev server |
 
 ### Gateway 本地路由

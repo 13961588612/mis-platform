@@ -44,6 +44,8 @@ backend/
 ├── mis-common/            # core, jpa, web, security, redis, bom
 ├── mis-gateway/           # JWT 验签 + 透传头
 ├── mis-auth/              # 登录 / 签发 / Refresh / 黑名单写入
+├── mis-iam/               # 身份与权限（Sprint 2）
+├── mis-org/               # 组织与人事（Sprint 2）
 └── mis-audit/             # 登录日志写入 / 查询
 
 frontend/

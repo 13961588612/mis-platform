@@ -70,13 +70,15 @@ docs/
 
 | 组件 | 状态 | 说明 |
 |------|------|------|
-| mis-migrator + Flyway V1/V2 | ✅ | 单库 `mis_platform` |
+| mis-migrator + Flyway V1/V2/V3 | ✅ | 单库；V3 对齐 mis-iam/mis-org |
 | mis-common-* | ✅ | core / jpa / web / security / redis |
 | mis-gateway | ✅ | JWT 验签、透传头、Redis 黑名单 |
 | mis-auth | ✅ | 登录/刷新/登出、JWT 签发 |
 | mis-audit | ✅ | 登录日志 |
+| mis-iam | ⏳ | 用户/角色/APP（Sprint 2） |
+| mis-org | ⏳ | 组织/部门/员工（Sprint 2） |
 | mis-admin-bff | ⏳ | API 权限、聚合 |
-| 领域微服务 | ⏳ | user / rbac / org / … |
+| mis-system | ⏳ | 菜单/字典 |
 | 前端 mis-admin-web | ✅ | Sprint 1 登录页 |
 
 ---
@@ -100,3 +102,4 @@ docs/
 |------|------|------|
 | v1.0-draft | 2026-06-23 | 初版文档体系 |
 | v1.1-draft | 2026-06-24 | MIS_REMOTE 配置简化、运维文档拆分 |
+| v1.2 | 2026-07-21 | Sprint 2 服务边界：mis-iam / mis-org；ADR-016 |

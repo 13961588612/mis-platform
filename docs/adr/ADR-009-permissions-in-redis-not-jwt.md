@@ -1,10 +1,10 @@
 # ADR-009: 权限存储 — JWT 只带身份，Redis 为运行时权限源
 
 ## 状态
-已接受（Redis key 格式见 [ADR-011](ADR-011-sys-api-code-multi-app-auth.md)：`{tenantId}:{appId}:{userId}`）
+已接受（Redis key 格式见 [ADR-011](ADR-011-sys-api-code-multi-app-auth.md)：`{tenantId}:{appId}:{userId}`；2026-07-21：PDP 服务为 **mis-iam**）
 
 ## 日期
-2026-06-23
+2026-06-23（初版） / 2026-07-21（服务边界）
 
 ## 背景
 
@@ -43,15 +43,15 @@
 ```mermaid
 sequenceDiagram
     participant Auth as mis-auth
-    participant RBAC as mis-rbac
+    participant IAM as mis-iam
     participant Redis as Redis
 
-    Auth->>RBAC: GET /internal/v1/permissions/{userId}
-    RBAC->>RBAC: DB 聚合 permissions
-    RBAC->>Redis: SET mis:rbac:permissions:{userId}
-    RBAC->>RBAC: UPDATE sys_user SET perm_version = perm_version + 1
-    RBAC->>Redis: SET mis:rbac:perm-version = 新 version
-    RBAC-->>Auth: { permissions, permVersion }
+    Auth->>IAM: GET /internal/v1/permissions/{userId}
+    IAM->>IAM: DB 聚合 permissions
+    IAM->>Redis: SET mis:rbac:permissions:{userId}
+    IAM->>IAM: UPDATE sys_user SET perm_version = perm_version + 1
+    IAM->>Redis: SET mis:rbac:perm-version = 新 version
+    IAM-->>Auth: { permissions, permVersion }
     Auth->>Auth: 签发 JWT（含 permVersion，不含 permissions）
     Auth-->>FE: accessToken + /auth/me 可返回 permissions
 ```
@@ -65,21 +65,21 @@ sequenceDiagram
 sequenceDiagram
     participant BFF as mis-admin-bff
     participant Redis as Redis
-    participant RBAC as mis-rbac
+    participant IAM as mis-iam
 
     BFF->>BFF: 解析 JWT → userId
     BFF->>Redis: GET mis:rbac:permissions:{userId}
     alt 缓存命中
         Redis-->>BFF: permissions[]
     else 缓存未命中
-        BFF->>RBAC: GET /internal/v1/permissions/{userId}
-        RBAC-->>BFF: permissions[]
+        BFF->>IAM: GET /internal/v1/permissions/{userId}
+        IAM-->>BFF: permissions[]
         BFF->>Redis: SET（回填）
     end
     BFF->>BFF: 映射表 + Redis permissions 鉴权
 ```
 
-- **每请求读 Redis**（~1ms），不 RPC rbac（命中时）
+- **每请求读 Redis**（~1ms），不 RPC mis-iam（命中时）
 - **不读 JWT 中的 permissions**（因为不再存在）
 - 比「每请求 RPC authz-service」轻，比「JWT 内嵌」**变更生效快**
 
@@ -87,9 +87,9 @@ sequenceDiagram
 
 | 触发操作 | 负责服务 | 动作 |
 |----------|----------|------|
-| 角色-菜单变更 | mis-rbac | 查 `sys_user_role` 得 userId 列表 → **DEL** `permissions` + **`sys_user.perm_version` INCR** + 写 Redis version |
-| 用户-角色变更 | mis-user | 同上，针对该 userId |
-| 菜单 permission 变更 | mis-system | 通知 rbac 批量 evict 关联角色下的用户（或 evict 全量权限缓存，Phase 1 可接受） |
+| 角色-菜单变更 | **mis-iam** | 查 `sys_user_role` 得 userId 列表 → **DEL** `permissions` + **`sys_user.perm_version` INCR** + 写 Redis version |
+| 用户-角色变更 | **mis-iam** | 同上，针对该 userId |
+| 菜单 permission 变更 | mis-system | 通知 **mis-iam** 批量 evict 关联角色下的用户（或 evict 全量权限缓存，Phase 1 可接受） |
 
 **生效时间：** 下一次 BFF 请求从 Redis miss → 回源 DB → 得到新 permissions，**无需用户重新登录**。
 

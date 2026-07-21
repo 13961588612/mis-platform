@@ -78,7 +78,7 @@ erDiagram
 | id | BIGINT | PK | |
 | code | VARCHAR(64) | NOT NULL | 如 `user`、`org` |
 | name | VARCHAR(128) | NOT NULL | |
-| service_name | VARCHAR(64) | NOT NULL | Nacos 名 `mis-user` |
+| service_name | VARCHAR(64) | NOT NULL | Nacos 名，如 `mis-iam` |
 | sort | INT | NOT NULL DEFAULT 0 | |
 | status | SMALLINT | NOT NULL DEFAULT 1 | |
 | created_at | TIMESTAMPTZ | NOT NULL | |

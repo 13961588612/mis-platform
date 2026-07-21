@@ -8,6 +8,7 @@ Flyway 迁移脚本，与 `mis-migrator` 模块同步。
 |------|------|------|
 | [V1__init_schema.sql](V1__init_schema.sql) | ✅ | 建表、枚举、索引 |
 | [V2__seed_data.sql](V2__seed_data.sql) | ✅ | 种子：superadmin、租户 admin、菜单/API 全量 |
+| [V3__rename_sys_module_services.sql](V3__rename_sys_module_services.sql) | ✅ | Sprint 2：`sys_module` → mis-iam / mis-org（合并原 mis-user/mis-rbac） |
 
 ## 本地执行
 
@@ -31,6 +32,7 @@ psql -U postgres -c "GRANT ALL PRIVILEGES ON DATABASE mis_platform TO mis;"
 # 执行迁移
 psql -U mis -d mis_platform -f docs/db/migrations/V1__init_schema.sql
 psql -U mis -d mis_platform -f docs/db/migrations/V2__seed_data.sql
+psql -U mis -d mis_platform -f docs/db/migrations/V3__rename_sys_module_services.sql
 ```
 
 ### 方式 C：一键脚本

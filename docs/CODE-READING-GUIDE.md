@@ -135,8 +135,10 @@
 | mis-common-core / web / jpa / security / redis | ✅ 骨架可用 |
 | mis-gateway JWT + 透传头 | ✅ |
 | mis-auth login/refresh/logout | ✅ |
+| mis-iam（用户/角色） | ⏳ 骨架 |
+| mis-org（组织/员工） | ⏳ 骨架 |
 | mis-admin-bff API 权限 | ⏳ |
-| mis-user / mis-rbac / … | ⏳ |
+| mis-system | ⏳ |
 | mis-common-client 透传头 | ⏳ |
 
 ---
