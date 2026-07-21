@@ -8,5 +8,7 @@ public record OrgCreateRequest(
         @NotBlank String code,
         @NotBlank String name,
         Integer sort,
-        String remark
+        String remark,
+        /** 根部门类别；为空则取租户 headquarters 或首个启用类别 */
+        Long categoryId
 ) {}

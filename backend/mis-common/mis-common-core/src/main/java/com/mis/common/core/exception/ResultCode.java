@@ -53,7 +53,11 @@ public enum ResultCode {
     VALIDATION_ERROR(40001, "参数校验失败"),
     CAPTCHA_INVALID(40002, "验证码错误"),
     USER_EXISTS(40901, "用户名已存在"),
-    ORG_HAS_CHILDREN(40902, "存在子部门"),
+    ORG_HAS_CHILDREN(40902, "组织下存在部门，无法删除"),
+    ORG_CODE_EXISTS(40903, "组织编码已存在"),
+    DEPT_HAS_CHILDREN(40904, "存在子部门，无法删除"),
+    DEPT_HAS_EMPLOYEES(40905, "部门下存在员工，无法删除"),
+    EMPLOYEE_NO_EXISTS(40906, "工号已存在"),
     INTERNAL_ERROR(50000, "系统错误");
 
     private final int code;

@@ -16,7 +16,9 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.util.Arrays;
 import java.util.List;
+import java.util.Map;
 
 @RestController
 @RequestMapping("/internal/v1/employees")
@@ -31,6 +33,16 @@ public class EmployeeController {
     @GetMapping
     public Result<List<EmployeeVO>> listByDept(@RequestParam Long tenantId, @RequestParam Long deptId) {
         return Result.ok(employeeService.listByDept(tenantId, deptId));
+    }
+
+    @GetMapping("/names")
+    public Result<Map<Long, String>> names(@RequestParam String ids) {
+        List<Long> idList = Arrays.stream(ids.split(","))
+                .map(String::trim)
+                .filter(s -> !s.isEmpty())
+                .map(Long::valueOf)
+                .toList();
+        return Result.ok(employeeService.namesByIds(idList));
     }
 
     @GetMapping("/{id}")
