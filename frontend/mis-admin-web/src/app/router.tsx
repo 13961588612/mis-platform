@@ -53,6 +53,7 @@ export function AppRouter() {
               <Route path="/dashboard" element={null} />
               <Route path="/system/*" element={null} />
               <Route path="/monitor/*" element={null} />
+              <Route path="/iframe/:code" element={null} />
               <Route path="/403" element={null} />
             </Route>
           </Route>

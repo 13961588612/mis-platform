@@ -59,6 +59,7 @@ export interface RouterNode {
   children?: RouterNode[] | null;
 }
 
+/** runtime: 'host'（单体托管） | 'iframe'（远程页面直嵌） | 'remote'（未来微前端） */
 export interface AppItem {
   id: string;
   tenantId: string;

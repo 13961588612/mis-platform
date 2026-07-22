@@ -21,7 +21,8 @@ import { TabBar } from '@/components/layout/tab-bar';
 import { SideNav } from '@/components/layout/side-nav';
 import { HeaderToolkit } from '@/components/layout/header-toolkit';
 import { CopilotPanel } from '@/components/layout/copilot-panel';
-import { KeepAliveOutlet, KEEP_ALIVE_META } from '@/components/layout/keep-alive-outlet';
+import { KeepAliveOutlet, KEEP_ALIVE_META, registerIframeApps } from '@/components/layout/keep-alive-outlet';
+import { getIframeApp } from '@/lib/nav/iframe-apps';
 import {
   CommandPalette,
   useCommandPaletteHotkey,
@@ -64,8 +65,14 @@ export function AppLayout() {
   const openTab = useTabStore((s) => s.openTab);
 
   const navItem = findSystemNavItem(location.pathname);
-  const pageTitle = navItem?.title ?? KEEP_ALIVE_META[location.pathname]?.title ?? '概览';
-  const pageIcon = navItem?.icon ?? KEEP_ALIVE_META[location.pathname]?.icon ?? 'LayoutDashboard';
+  const iframeCode = location.pathname.startsWith('/iframe/') ? location.pathname.slice('/iframe/'.length) : null;
+  const iframeApp = iframeCode ? apps.find((a) => a.code === iframeCode) : null;
+  const iframeReg = iframeCode ? getIframeApp(iframeCode) : null;
+  const pageTitle =
+    iframeApp?.name ?? iframeReg?.title ?? navItem?.title ?? KEEP_ALIVE_META[location.pathname]?.title ?? '概览';
+  const pageIcon =
+    iframeApp?.icon ?? iframeReg?.icon ?? navItem?.icon ?? KEEP_ALIVE_META[location.pathname]?.icon ?? 'LayoutDashboard';
+  const isIframeApp = Boolean(iframeCode);
 
   const openCommand = useCallback(() => setCmdOpen(true), []);
   useCommandPaletteHotkey(openCommand);
@@ -101,7 +108,10 @@ export function AppLayout() {
 
   useEffect(() => {
     void fetchApps()
-      .then(setApps)
+      .then((data) => {
+        setApps(data);
+        registerIframeApps(data);
+      })
       .catch(() => setApps([]));
   }, []);
 
@@ -178,7 +188,12 @@ export function AppLayout() {
                         )}
                         onClick={() => {
                           setSwitcherOpen(false);
-                          if (item.enterable && (item.code === 'system' || item.runtime === 'host')) {
+                          if (!item.enterable) return;
+                          if (item.runtime === 'iframe' && item.basePath) {
+                            navigate(`/iframe/${item.code}`);
+                            return;
+                          }
+                          if (item.code === 'system' || item.runtime === 'host') {
                             navigate('/dashboard');
                           }
                         }}
@@ -283,13 +298,19 @@ export function AppLayout() {
             ) : null}
           </div>
 
-          <SideNav
-            nodes={SYSTEM_NAV}
-            pathname={location.pathname}
-            collapsed={collapsed}
-            expanded={navExpanded}
-            onToggleBranch={handleToggleBranch}
-          />
+          {isIframeApp ? (
+            <div className="flex flex-1 items-center justify-center px-3 text-center text-xs text-sidebar-muted">
+              {collapsed ? null : '远程页面，无本地菜单'}
+            </div>
+          ) : (
+            <SideNav
+              nodes={SYSTEM_NAV}
+              pathname={location.pathname}
+              collapsed={collapsed}
+              expanded={navExpanded}
+              onToggleBranch={handleToggleBranch}
+            />
+          )}
 
           <div className="border-t border-sidebar-border p-2">
             <Button

@@ -14,6 +14,7 @@ import {
   Users,
 } from 'lucide-react';
 import { fetchApps } from '@/lib/api/platform';
+import { registerIframeApps } from '@/lib/nav/iframe-apps';
 import { logout } from '@/lib/api/auth';
 import { useAuthStore } from '@/stores/auth-store';
 import type { AppItem } from '@/types/api';
@@ -61,7 +62,10 @@ export function PortalPage() {
 
   useEffect(() => {
     void fetchApps()
-      .then(setApps)
+      .then((data) => {
+        setApps(data);
+        registerIframeApps(data);
+      })
       .catch((e) => setError(e instanceof Error ? e.message : '加载失败'))
       .finally(() => setLoading(false));
   }, []);
@@ -85,6 +89,10 @@ export function PortalPage() {
 
   const enterApp = (app: AppItem) => {
     if (!app.enterable) return;
+    if (app.runtime === 'iframe' && app.basePath) {
+      navigate(`/iframe/${app.code}`);
+      return;
+    }
     if (app.code === 'system' || app.runtime === 'host') {
       navigate('/dashboard');
     }
