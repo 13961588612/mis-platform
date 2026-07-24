@@ -13,6 +13,9 @@ import { logger } from './logger.js';
 import type { JwtClaims } from './auth.js';
 import type { Redis } from 'ioredis';
 
+// agent Redis 键统一命名空间前缀（与 Agent Core redis-py 端 `aip:` 一致）。
+const REDIS_KEY_PREFIX = process.env['REDIS_KEY_PREFIX'] ?? 'aip:';
+
 // ============================================================================
 // 类型定义
 // ============================================================================
@@ -147,7 +150,7 @@ export class RedisRateLimiter {
    */
   async checkUser(userId: string): Promise<RateLimitResult> {
     return this.check(
-      `rate:user:${userId}`,
+      `${REDIS_KEY_PREFIX}rate:user:${userId}`,
       this.config.userWindowSec,
       this.config.userMaxRequests,
     );
@@ -160,7 +163,7 @@ export class RedisRateLimiter {
    */
   async checkIp(ip: string): Promise<RateLimitResult> {
     return this.check(
-      `rate:ip:${ip}`,
+      `${REDIS_KEY_PREFIX}rate:ip:${ip}`,
       this.config.ipWindowSec,
       this.config.ipMaxRequests,
     );
@@ -172,7 +175,7 @@ export class RedisRateLimiter {
    */
   async checkGlobal(): Promise<RateLimitResult> {
     return this.check(
-      'rate:global',
+      `${REDIS_KEY_PREFIX}rate:global`,
       this.config.globalWindowSec,
       this.config.globalMaxRequests,
     );

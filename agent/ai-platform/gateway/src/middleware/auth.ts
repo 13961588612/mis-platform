@@ -41,9 +41,9 @@ export interface JwtClaims {
 
 /** 认证配置 */
 export interface AuthConfig {
-  /** JWT 签名密钥 */
+  /** JWT 签名密钥（agent 自有 HS256） */
   jwtSecret: string;
-  /** JWT 签发者 */
+  /** JWT 签发者（agent 自有，默认 ai-platform） */
   jwtIssuer: string;
   /** Access Token 有效期（秒） */
   accessTokenTtl: number;
@@ -51,6 +51,10 @@ export interface AuthConfig {
   wecomCallbackToken: string;
   /** 企业微信回调 EncodingAESKey */
   wecomCallbackAesKey: string;
+  /** MIS JWT 公钥（PEM，RS256 验签用）；未配置则禁用 MIS JWT 信任 */
+  misJwtPublicKey?: string;
+  /** 受信任的 MIS JWT 签发者（默认 mis-platform） */
+  misJwtIssuer: string;
 }
 
 // ============================================================================
@@ -163,6 +167,126 @@ export function extractToken(req: FastifyRequest): string | undefined {
   }
 
   return undefined;
+}
+
+// ============================================================================
+// MIS JWT（RS256）验签
+// ============================================================================
+
+/**
+ * 验证 MIS 签发的 JWT Token（RSA-SHA256 验签 + 载荷映射）。
+ *
+ * 与本地 HS256 验签（{@link verifyJwt}）并存，实现「双验签」：
+ * - agent 自有登录链路仍用 HS256（iss = jwtIssuer）；
+ * - 嵌入场景父系统（MIS）经 postMessage / `?token=` 推来的 MIS JWT
+ *   用 RS256（iss = misJwtIssuer）验签，公钥由部署挂载注入。
+ *
+ * MIS JWT 真实 claim（见 backend mis-common-security RsaJwtIssuer）：
+ * - `sub`       → userId（字符串）
+ * - `username`  → username
+ * - `roles`     → roles（字符串数组，可选）
+ * - `tenantId`/`appId`/`employeeId`/`permVersion`/`jti` → 透传但非必需
+ * - `iss`       → `mis-platform`
+ * 缺失字段给合理默认（channel 默认 `web`、department 默认 `""`），保证
+ * 与本地 JwtClaims 契约一致，不破坏 agent 自身登录链路。
+ *
+ * @param token - MIS JWT Token 字符串
+ * @param publicKeyPem - MIS RSA 公钥（PEM 文本）
+ * @param expectedIssuer - 受信任的 MIS 签发者
+ * @returns 映射到网关契约的 JwtClaims
+ * @throws 验签失败 / issuer 不符 / 过期时抛出 AuthError
+ */
+export function verifyJwtRs256(
+  token: string,
+  publicKeyPem: string,
+  expectedIssuer: string,
+): JwtClaims {
+  const parts = token.split('.');
+  if (parts.length !== 3) {
+    throw new AuthError('Invalid JWT format: expected 3 parts', 1001);
+  }
+
+  const [headerB64, payloadB64, signatureB64] = parts;
+
+  // 校验头部 alg 必须为 RS256
+  const headerRaw = JSON.parse(
+    base64UrlDecode(headerB64).toString('utf-8'),
+  ) as { alg?: string };
+  if (headerRaw.alg !== 'RS256') {
+    throw new AuthError(`Unsupported JWT alg: ${headerRaw.alg ?? 'unknown'}`, 1005);
+  }
+
+  // RSA-SHA256 验签
+  const signingInput = Buffer.from(`${headerB64}.${payloadB64}`);
+  const signature = base64UrlDecode(signatureB64);
+  let publicKey: crypto.KeyObject;
+  try {
+    publicKey = crypto.createPublicKey(publicKeyPem);
+  } catch (err) {
+    throw new AuthError(
+      `Failed to load MIS JWT public key: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+      1006,
+    );
+  }
+  const valid = crypto.verify('RSA-SHA256', signingInput, publicKey, signature);
+  if (!valid) {
+    throw new AuthError('JWT signature verification failed (RS256)', 1002);
+  }
+
+  // 解析载荷并映射到 JwtClaims
+  const raw = JSON.parse(
+    base64UrlDecode(payloadB64).toString('utf-8'),
+  ) as Record<string, unknown> & {
+    sub?: string;
+    userId?: string;
+    user_id?: string;
+    username?: string;
+    roles?: unknown;
+    department?: string;
+    channel?: string;
+    agent_id?: string;
+    agentId?: string;
+    iss?: string;
+    exp?: number;
+    iat?: number;
+  };
+
+  const claims: JwtClaims = {
+    userId: String(raw.sub ?? raw.userId ?? raw.user_id ?? ''),
+    username: typeof raw.username === 'string' ? raw.username : '',
+    department: typeof raw.department === 'string' ? raw.department : '',
+    roles: Array.isArray(raw.roles)
+      ? raw.roles.map((r) => String(r))
+      : [],
+    channel: typeof raw.channel === 'string' ? raw.channel : 'web',
+    agentId:
+      raw.agent_id != null
+        ? String(raw.agent_id)
+        : raw.agentId != null
+          ? String(raw.agentId)
+          : undefined,
+    iss: typeof raw.iss === 'string' ? raw.iss : '',
+    exp: typeof raw.exp === 'number' ? raw.exp : 0,
+    iat: typeof raw.iat === 'number' ? raw.iat : 0,
+  };
+
+  // 校验签发者
+  if (expectedIssuer && claims.iss !== expectedIssuer) {
+    throw new AuthError(
+      `JWT issuer mismatch: expected ${expectedIssuer}, got ${claims.iss}`,
+      1003,
+    );
+  }
+
+  // 校验过期时间
+  const now = Math.floor(Date.now() / 1000);
+  if (claims.exp <= now) {
+    throw new AuthError('JWT token expired', 1004);
+  }
+
+  return claims;
 }
 
 // ============================================================================
@@ -287,9 +411,25 @@ export function registerAuthMiddleware(
       return reply;
     }
 
-    // 验证 Token
+    // 验证 Token（双验签：先 agent 自有 HS256，再 MIS RS256）
     try {
-      const claims = verifyJwt(token, config.jwtSecret, config.jwtIssuer);
+      let claims: JwtClaims;
+      try {
+        // 1) agent 自有登录链路（HS256，iss = config.jwtIssuer）
+        claims = verifyJwt(token, config.jwtSecret, config.jwtIssuer);
+      } catch (agentErr) {
+        // 2) 嵌入场景：父系统（MIS）推来的 RS256 JWT
+        if (config.misJwtPublicKey != null && config.misJwtPublicKey.length > 0) {
+          claims = verifyJwtRs256(
+            token,
+            config.misJwtPublicKey,
+            config.misJwtIssuer,
+          );
+        } else {
+          // 未配置 MIS 公钥 → 仅信任 agent 自有 HS256，抛出原错误
+          throw agentErr;
+        }
+      }
       // 将用户信息注入请求上下文
       (req as unknown as { user: JwtClaims }).user = claims;
     } catch (error) {

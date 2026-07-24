@@ -13,6 +13,7 @@
 
 import 'dotenv/config';
 
+import * as fs from 'node:fs';
 import Redis from 'ioredis';
 import { logger } from './middleware/logger.js';
 import {
@@ -28,6 +29,35 @@ import {
   parseBackendAgentEvent,
   toGatewayChannel,
 } from './router/agentEventParser.js';
+
+// agent Redis 键命名空间前缀（与 Agent Core redis-py 端 `aip:` 一致）。
+const REDIS_KEY_PREFIX = process.env['REDIS_KEY_PREFIX'] ?? 'aip:';
+const AGENT_EVENTS_STREAM = `${REDIS_KEY_PREFIX}stream:agent:events`;
+
+/**
+ * 读取 MIS JWT 公钥（PEM）。
+ *
+ * 未配置 `MIS_JWT_PUBLIC_KEY_PATH` 时返回 `undefined`，网关仅信任 agent 自有
+ * HS256 JWT（向后兼容，不破坏 agent 登录链路）。配置后启用 RS256 验签，
+ * 接受父系统（MIS）推来的嵌入令牌。
+ *
+ * @returns MIS 公钥 PEM 文本，或 undefined
+ */
+function loadMisJwtPublicKey(): string | undefined {
+  const path = process.env['MIS_JWT_PUBLIC_KEY_PATH'];
+  if (path == null || path === '') {
+    return undefined;
+  }
+  try {
+    return fs.readFileSync(path, 'utf-8');
+  } catch (err) {
+    logger.error(
+      { path, error: err instanceof Error ? err.message : String(err) },
+      'Failed to load MIS JWT public key',
+    );
+    return undefined;
+  }
+}
 
 // ============================================================================
 // 配置加载
@@ -74,6 +104,8 @@ function loadConfig(): GatewayServerConfig {
       accessTokenTtl: parseInt(process.env['JWT_ACCESS_TOKEN_TTL'] ?? '7200', 10),
       wecomCallbackToken: process.env['WECOM_BOT_CALLBACK_TOKEN'] ?? '',
       wecomCallbackAesKey: process.env['WECOM_BOT_CALLBACK_ENCODING_AES_KEY'] ?? '',
+      misJwtPublicKey: loadMisJwtPublicKey(),
+      misJwtIssuer: process.env['MIS_JWT_ISSUER'] ?? 'mis-platform',
     },
     wecomH5: {
       corpId: process.env['WECOM_CORP_ID'] ?? '',
@@ -245,7 +277,7 @@ async function main(): Promise<void> {
       'gateway-event-group',
       `gateway-events-${process.pid}`,
     );
-    await eventConsumer.start('stream:agent:events', async (message: InboundMessage) => {
+    await eventConsumer.start(AGENT_EVENTS_STREAM, async (message: InboundMessage) => {
       try {
         if (message.eventJson == null || message.eventJson.length === 0) {
           return;

@@ -15,6 +15,10 @@
 import type { Redis } from 'ioredis';
 import { logger } from '../middleware/logger.js';
 
+// agent Redis 键统一命名空间前缀（与 Agent Core redis-py 端 `aip:` 一致）。
+// 共享 Redis 实例下避免与 MIS(`mis:`)键冲突；db index 已做物理隔离。
+const REDIS_KEY_PREFIX = process.env['REDIS_KEY_PREFIX'] ?? 'aip:';
+
 // ============================================================================
 // 类型定义
 // ============================================================================
@@ -134,7 +138,7 @@ export class StreamProducer {
    * @returns Stream 键名
    */
   static getInboundStreamKey(channel: string): string {
-    return `stream:inbound:${channel}`;
+    return `${REDIS_KEY_PREFIX}stream:inbound:${channel}`;
   }
 
   /**
@@ -143,7 +147,7 @@ export class StreamProducer {
    * @returns Stream 键名
    */
   static getAgentStreamKey(agentId: string): string {
-    return `stream:agent:${agentId}`;
+    return `${REDIS_KEY_PREFIX}stream:agent:${agentId}`;
   }
 }
 
