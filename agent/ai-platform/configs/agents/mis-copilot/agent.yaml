@@ -1,0 +1,43 @@
+# =============================================================================
+# mis-copilot — MIS 通用智能对话助手（Copilot）
+# 供 mis-admin-bff AiProxyController /ai/chat/completions 调用。
+# =============================================================================
+
+agent:
+  name: mis-copilot
+  display_name: MIS 智能对话助手（Copilot）
+  description: >
+    面向 MIS 业务前端的通用 AI 对话助手，支持基于业务上下文的自然语言对话、
+    通知/邮件/审批意见等文案生成。
+  version: "1.0.0"
+  tags:
+    - mis
+    - copilot
+    - chat
+
+  includes:
+    runtime: runtime/runtime.yaml
+    system: system/model.yaml
+
+  # 仅由 BFF 按 agent_id 显式调用，不进入通用路由候选
+  routing:
+    enabled: false
+    priority: 10
+    keywords: []
+
+  memory:
+    static:
+      enabled: true
+      personality: memory/personality.md
+      facts_dir: memory/facts/
+    dynamic:
+      enabled: true
+      collection: agent_memory_index
+      top_k: 5
+      write_back: true
+      ttl_days: 30
+      max_per_user: 200
+
+  push:
+    enabled: false
+    channels: []

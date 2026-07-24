@@ -1,0 +1,12 @@
+runtime:
+  type: openharness
+  version: "1.0.0"
+  allowed_tools:
+    - skill
+  params:
+    maxSteps: 8
+    temperature: 0.2
+    maxTokens: 2048
+  prompts:
+    system: runtime/prompts/system.md
+  middleware: {}

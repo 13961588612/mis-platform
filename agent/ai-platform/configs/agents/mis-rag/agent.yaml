@@ -1,0 +1,43 @@
+# =============================================================================
+# mis-rag — MIS 知识库问答助手（RAG）
+# 供 mis-admin-bff AiProxyController /ai/rag 调用。
+# 输出强制为结构化 JSON：{ answer: str, citations: [{source, chunk, score}] }
+# 说明：本阶段向量检索（Qdrant）尚未接入，回答基于已知信息与通用知识，
+#       citations 在可引用时填充，否则留空（RAG 知识采集为阶段3 任务）。
+# =============================================================================
+
+agent:
+  name: mis-rag
+  display_name: MIS 知识库问答助手
+  description: >
+    面向 MIS 知识库的问答助手，基于知识库内容回答并列出引用来源。
+  version: "1.0.0"
+  tags:
+    - mis
+    - rag
+
+  includes:
+    runtime: runtime/runtime.yaml
+    system: system/model.yaml
+
+  routing:
+    enabled: false
+    priority: 10
+    keywords: []
+
+  memory:
+    static:
+      enabled: true
+      personality: memory/personality.md
+      facts_dir: memory/facts/
+    dynamic:
+      enabled: true
+      collection: agent_memory_index
+      top_k: 5
+      write_back: true
+      ttl_days: 30
+      max_per_user: 200
+
+  push:
+    enabled: false
+    channels: []

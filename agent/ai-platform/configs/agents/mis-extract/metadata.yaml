@@ -1,0 +1,12 @@
+metadata:
+  name: mis-extract
+  display_name: MIS 信息抽取助手
+  description: >
+    MIS 平台表单信息抽取助手，按 schema 从文本中抽取字段值，并要求结构化 JSON 输出。
+  version: "1.0.0"
+  enabled: true
+  tags:
+    - mis
+    - extract
+  capabilities:
+    - extract
