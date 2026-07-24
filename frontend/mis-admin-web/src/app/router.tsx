@@ -7,6 +7,7 @@ import { ChangePasswordPage } from '@/features/auth/change-password-page';
 import { PortalPage } from '@/features/portal/portal-page';
 import { bootstrapSession } from '@/lib/auth/bootstrap';
 import { useAuthStore } from '@/stores/auth-store';
+import { AIProvider } from '@/features/ai/ai-context';
 
 function SessionBootstrap({ children }: { children: React.ReactNode }) {
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated());
@@ -34,7 +35,8 @@ function SessionBootstrap({ children }: { children: React.ReactNode }) {
       </div>
     );
   }
-  return <>{children}</>;
+  // AIProvider 需在 Router 上下文内（消费 useLocation）；挂载于应用根，承载门禁/健康/降级
+  return <AIProvider>{children}</AIProvider>;
 }
 
 export function AppRouter() {

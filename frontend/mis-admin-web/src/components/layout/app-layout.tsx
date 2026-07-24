@@ -13,6 +13,7 @@ import {
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useAuthStore } from '@/stores/auth-store';
+import { useAiStore } from '@/stores/ai-store';
 import { logout } from '@/lib/api/auth';
 import { fetchApps } from '@/lib/api/platform';
 import type { AppItem } from '@/types/api';
@@ -50,7 +51,8 @@ export function AppLayout() {
   const [collapsed, setCollapsed] = useState(false);
   const [navExpanded, setNavExpanded] = useState<Record<string, boolean>>({});
   const [cmdOpen, setCmdOpen] = useState(false);
-  const [copilotOpen, setCopilotOpen] = useState(false);
+  const copilotOpen = useAiStore((s) => s.copilotOpen);
+  const setCopilotOpen = useAiStore((s) => s.setCopilotOpen);
   const [mounted, setMounted] = useState(false);
   const [apps, setApps] = useState<AppItem[]>([]);
   const [switcherOpen, setSwitcherOpen] = useState(false);
@@ -76,6 +78,18 @@ export function AppLayout() {
 
   const openCommand = useCallback(() => setCmdOpen(true), []);
   useCommandPaletteHotkey(openCommand);
+
+  // Copilot 热键：Cmd/Ctrl+J（Cmd+K 已被导航命令面板占用）
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'j') {
+        e.preventDefault();
+        setCopilotOpen(!useAiStore.getState().copilotOpen);
+      }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [setCopilotOpen]);
 
   useEffect(() => {
     const path = location.pathname;

@@ -1,5 +1,5 @@
-import { useMemo, useState, type ReactNode } from 'react';
-import { Eye, Pencil, Plus, Search, Trash2 } from 'lucide-react';
+import { useCallback, useMemo, useState, type ReactNode } from 'react';
+import { Eye, Pencil, Plus, Search, Sparkles, Trash2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -15,6 +15,16 @@ import {
 } from '@/components/ui/sheet';
 import type { AdminField, AdminPageDef } from './types';
 import { SYSTEM_PAGE_DEFS } from './page-defs';
+import { AiFeature } from '@/features/ai/components/ai-feature';
+import { AiFormFill } from '@/features/ai/components/ai-form-fill';
+import { AiTextExtract } from '@/features/ai/components/ai-text-extract';
+import { AiSummary } from '@/features/ai/components/ai-summary';
+import { AiRag } from '@/features/ai/components/ai-rag';
+import {
+  FormFillBridgeProvider,
+  toFormFieldSchema,
+  type FormFillBridge,
+} from '@/features/ai/context/form-fill-bridge';
 
 const COL: Record<number, string> = {
   2: 'col-span-1',
@@ -159,6 +169,46 @@ export function AdminListPage({ def }: { def: AdminPageDef }) {
   const [editing, setEditing] = useState<Record<string, unknown> | null>(null);
   const [formValues, setFormValues] = useState<Record<string, unknown>>({});
   const [toast, setToast] = useState('');
+  // AI 面板开合状态
+  const [aiFormOpen, setAiFormOpen] = useState(false);
+  const [aiExtractOpen, setAiExtractOpen] = useState(false);
+  const [aiRagOpen, setAiRagOpen] = useState(false);
+
+  const openCreate = () => {
+    const seed: Record<string, unknown> = {};
+    for (const f of def.form) {
+      if (f.type === 'switch') seed[f.key] = 1;
+      else seed[f.key] = '';
+    }
+    setSheetMode('create');
+    setEditing(null);
+    setFormValues(seed);
+    setSheetOpen(true);
+  };
+
+  // 表单回填桥接：桥接 AI 组件与当前表单态（schema 真源 = def.form）
+  const bridge = useMemo<FormFillBridge>(
+    () => ({
+      def,
+      getSchema: () => toFormFieldSchema(def.form),
+      getValues: () => formValues,
+      applyFields: (partial) => {
+        setFormValues((prev) => {
+          const next = { ...prev };
+          for (const [k, s] of Object.entries(partial)) next[k] = s.value;
+          return next;
+        });
+      },
+      openCreate: () => openCreate(),
+    }),
+    [def, formValues, openCreate],
+  );
+
+  // UC-3 智能录入：先打开创建 Sheet（seed），再打开抽取面板
+  const openSmartImport = useCallback(() => {
+    openCreate();
+    setAiExtractOpen(true);
+  }, [openCreate]);
 
   const decorate = def.decorate ?? ((r: Record<string, unknown>) => r);
 
@@ -186,18 +236,6 @@ export function AdminListPage({ def }: { def: AdminPageDef }) {
   const showToast = (msg: string) => {
     setToast(msg);
     window.setTimeout(() => setToast(''), 1800);
-  };
-
-  const openCreate = () => {
-    const seed: Record<string, unknown> = {};
-    for (const f of def.form) {
-      if (f.type === 'switch') seed[f.key] = 1;
-      else seed[f.key] = '';
-    }
-    setSheetMode('create');
-    setEditing(null);
-    setFormValues(seed);
-    setSheetOpen(true);
   };
 
   const openView = (row: Record<string, unknown>) => {
@@ -259,7 +297,8 @@ export function AdminListPage({ def }: { def: AdminPageDef }) {
   }, [safePage, totalPages]);
 
   return (
-    <div className="relative flex h-full min-h-0 flex-col">
+    <FormFillBridgeProvider value={bridge}>
+      <div className="relative flex h-full min-h-0 flex-col">
       <PageHeader
         className="mb-4 shrink-0"
         title={def.title}
@@ -272,10 +311,17 @@ export function AdminListPage({ def }: { def: AdminPageDef }) {
         ]}
         actions={
           def.readonly ? null : (
-            <Button type="button" onClick={openCreate}>
-              <Plus className="h-4 w-4" />
-              新建
-            </Button>
+            <div className="flex gap-2">
+              <Button type="button" onClick={openCreate}>
+                <Plus className="h-4 w-4" />
+                新建
+              </Button>
+              <AiFeature feature="text-extract">
+                <Button type="button" variant="outline" onClick={openSmartImport}>
+                  <Sparkles className="h-4 w-4" /> 智能录入
+                </Button>
+              </AiFeature>
+            </div>
           )
         }
       />
@@ -500,6 +546,33 @@ export function AdminListPage({ def }: { def: AdminPageDef }) {
             </SheetDescription>
           </SheetHeader>
 
+          {/* 创建/编辑 Sheet 工具栏：UC-1 AI 填充入口（form-top） */}
+          {sheetMode !== 'view' ? (
+            <div className="flex items-center gap-2 border-b bg-muted/30 px-5 py-2">
+              <AiFeature feature="form-fill">
+                <Button type="button" variant="outline" size="sm" onClick={() => setAiFormOpen(true)}>
+                  <Sparkles className="h-4 w-4" /> AI 填充
+                </Button>
+              </AiFeature>
+              <span className="text-xs text-muted-foreground">对话或上传文档，AI 抽取字段回填（需你确认）</span>
+            </div>
+          ) : null}
+
+          {sheetMode === 'view' ? (
+            <div className="border-b px-5 py-3">
+              <AiFeature feature="detail-summary">
+                <AiSummary record={formValues} defTitle={def.title} />
+              </AiFeature>
+              <div className="mt-2 flex justify-end">
+                <AiFeature feature="rag-qa">
+                  <Button type="button" variant="outline" size="sm" onClick={() => setAiRagOpen(true)}>
+                    <Sparkles className="h-4 w-4" /> AI 问答
+                  </Button>
+                </AiFeature>
+              </div>
+            </div>
+          ) : null}
+
           {sheetMode === 'view' ? (
             <div className="min-h-0 flex-1 overflow-y-auto px-5 py-2">
               {def.form.map((f) => (
@@ -521,6 +594,7 @@ export function AdminListPage({ def }: { def: AdminPageDef }) {
                     key={f.key}
                     className={cn(
                       (f.col ?? 6) >= 12 || f.type === 'textarea' ? 'col-span-2' : COL[f.col ?? 6],
+                      'relative',
                     )}
                   >
                     <FieldControl
@@ -528,6 +602,17 @@ export function AdminListPage({ def }: { def: AdminPageDef }) {
                       value={formValues[f.key]}
                       onChange={(v) => setFormValues((prev) => ({ ...prev, [f.key]: v }))}
                     />
+                    {/* 单字段 Sparkles 入口（form-field）：打开 AI 填充面板 */}
+                    <AiFeature feature="form-fill">
+                      <button
+                        type="button"
+                        onClick={() => setAiFormOpen(true)}
+                        className="absolute right-1 top-1 rounded-md p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
+                        aria-label={`AI 填充 ${f.label}`}
+                      >
+                        <Sparkles className="h-3.5 w-3.5" />
+                      </button>
+                    </AiFeature>
                   </div>
                 ))}
               </div>
@@ -560,12 +645,34 @@ export function AdminListPage({ def }: { def: AdminPageDef }) {
         </SheetContent>
       </Sheet>
 
+      {/* UC-1 AI 表单填充面板 */}
+      <Sheet open={aiFormOpen} onOpenChange={setAiFormOpen}>
+        <SheetContent side="right" className="w-full max-w-[44rem] p-0 sm:max-w-[44rem]">
+          <AiFormFill onClose={() => setAiFormOpen(false)} />
+        </SheetContent>
+      </Sheet>
+
+      {/* UC-3 AI 文本/文档抽取面板（智能录入） */}
+      <Sheet open={aiExtractOpen} onOpenChange={setAiExtractOpen}>
+        <SheetContent side="right" className="w-full max-w-[40rem] p-0 sm:max-w-[40rem]">
+          <AiTextExtract onClose={() => setAiExtractOpen(false)} />
+        </SheetContent>
+      </Sheet>
+
+      {/* UC-4 AI 问答面板 */}
+      <Sheet open={aiRagOpen} onOpenChange={setAiRagOpen}>
+        <SheetContent side="right" className="w-full max-w-[40rem] p-0 sm:max-w-[40rem]">
+          <AiRag record={sheetMode === 'view' ? formValues : null} onClose={() => setAiRagOpen(false)} />
+        </SheetContent>
+      </Sheet>
+
       {toast ? (
         <div className="pointer-events-none absolute bottom-6 left-1/2 z-50 -translate-x-1/2 rounded-md border bg-popover px-4 py-2 text-sm shadow-card">
           {toast}
         </div>
       ) : null}
-    </div>
+      </div>
+    </FormFillBridgeProvider>
   );
 }
 
