@@ -1,0 +1,18 @@
+# Nacos 配置：mis-admin-bff（integration 环境）
+# 融合部署 ai-platform 适配层参数（DEP-5）。推送命令见 deploy/nacos-config/README.md。
+#
+# 容器内 base-url 用服务名 ai-platform-backend（通路 B 汇合点 Python backend:8000）。
+# sse-enabled=true 开启 SSE 流式直连（ai-platform 已具备 /api/v1/agents/{id}/chat/stream）。
+mis:
+  ai-platform:
+    base-url: http://ai-platform-backend:8000
+    enabled: true
+    chat-timeout-ms: 60000
+    sse-enabled: true
+    health-check-interval-ms: 15000
+    features:
+      chat: true
+      summary: true
+      extract: true
+      rag: true
+      nl2sql: false
