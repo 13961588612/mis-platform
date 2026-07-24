@@ -31,6 +31,8 @@ deploy/nacos-config/
 | `mis-common.yaml` | `mis-common` | `MIS_GROUP` |
 | `mis-gateway.yaml` | `mis-gateway` | `MIS_GROUP` |
 | `mis-auth.yaml` | `mis-auth` | `MIS_GROUP` |
+| `mis-iam.yaml` | `mis-iam` | `MIS_GROUP` |
+| `mis-org.yaml` | `mis-org` | `MIS_GROUP` |
 | `mis-audit.yaml` | `mis-audit` | `MIS_GROUP` |
 
 Data ID **不带 `.yaml`** 扩展名。
@@ -81,7 +83,7 @@ PostgreSQL
 
 1. 复制 `deploy/nacos-config/bootstrap-template.yml` → `bootstrap.yml`
 2. 编写 `application.yml`（local 默认）
-3. 在 `deploy/nacos-config/{prod,test,integration}/` 添加 `{service}.yaml`
+3. 在 `deploy/nacos-config/{prod,test,integration}/` 添加 `{service}.yaml`（如 `mis-iam.yaml`）
 4. 发版前：`nacos-push.ps1 -Namespace prod`
 
 ## 7. 关联文档

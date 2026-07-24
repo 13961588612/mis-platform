@@ -86,8 +86,8 @@ WHERE ur.user_id = ? AND m.app_id = ?
 
 | code | type | http_method | path_pattern | module |
 |------|------|-------------|--------------|--------|
-| 000100010001 | api | GET | /api/v1/users | mis-user |
-| 000100020001 | api | POST | /api/v1/users | mis-user |
+| 000100010001 | api | GET | /api/v1/users | mis-iam |
+| 000100020001 | api | POST | /api/v1/users | mis-iam |
 
 ## 4. 仅登录 API
 

@@ -1,0 +1,59 @@
+server:
+  port: 8081
+
+spring:
+  application:
+    name: mis-admin-bff
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      database: 0
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+
+logging:
+  level:
+    com.mis.adminbff: DEBUG
+
+mis:
+  bff:
+    iam-discovery-enabled: false
+    iam-service-id: mis-iam
+    iam-base-url: http://localhost:8102
+    org-discovery-enabled: false
+    org-service-id: mis-org
+    org-base-url: http://localhost:8103
+    system-discovery-enabled: false
+    system-service-id: mis-system
+    system-base-url: http://localhost:8105
+    audit-discovery-enabled: false
+    audit-service-id: mis-audit
+    audit-base-url: http://localhost:8106
+    auth-discovery-enabled: false
+    auth-service-id: mis-auth
+    auth-base-url: http://localhost:8101
+    aggregate-timeout-ms: 3000
+    default-password: Mis@123456
+  api-permission:
+    enabled: true
+    deny-unmapped: false
+    refresh-interval-seconds: 300
+  ai-platform:
+    # 融合部署：容器环境须用服务名（R1）。本地未连 Nacos 时默认即服务名；
+    # 远程模式由 Nacos mis-admin-bff.yaml 覆盖（生产 sse-enabled=true）。
+    base-url: ${AI_PLATFORM_BASE_URL:http://ai-platform-backend:8000}
+    enabled: true
+    chat-timeout-ms: 60000
+    sse-enabled: ${AI_PLATFORM_SSE_ENABLED:false}
+    health-check-interval-ms: 15000
+    features:
+      chat: true
+      summary: true
+      extract: true
+      rag: true
+      nl2sql: false

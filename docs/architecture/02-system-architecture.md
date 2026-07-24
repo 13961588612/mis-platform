@@ -1,6 +1,6 @@
 # 02 — 系统架构
 
-> 状态：📝 草稿 | 版本：v1.0-draft
+> 状态：✅ 已更新 | 版本：v1.1 | 更新：Sprint 2 服务边界重构
 
 ## 1. 逻辑架构图
 
@@ -20,9 +20,8 @@ flowchart TB
 
     subgraph Services["Java 微服务"]
         Auth["mis-auth"]
-        User["mis-user"]
-        Org["mis-org"]
-        RBAC["mis-rbac"]
+        IAM["mis-iam<br/>(身份+权限)"]
+        Org["mis-org<br/>(组织+人事)"]
         System["mis-system"]
         Audit["mis-audit"]
         Notify["mis-notify<br/>(Phase1 骨架)"]
@@ -47,9 +46,8 @@ flowchart TB
     Web --> GW
     GW --> BFFSvc
     BFFSvc --> Auth
-    BFFSvc --> User
+    BFFSvc --> IAM
     BFFSvc --> Org
-    BFFSvc --> RBAC
     BFFSvc --> System
     BFFSvc --> Audit
     BFFSvc --> AGW
@@ -67,7 +65,7 @@ flowchart TB
 | 客户端 | mis-admin-web | UI 渲染、表单校验、权限展示 | 不直连微服务（除 SSE 等特殊场景） |
 | 接入层 | mis-gateway | 路由、JWT 验签、限流、CORS、traceId | 不写业务逻辑 |
 | BFF | mis-admin-bff | 聚合接口、适配前端 DTO、减少往返 | 不承载核心业务规则 |
-| 领域服务 | mis-* | 单一限界上下文、领域规则 | 不跨域直接访问他库表 |
+| 领域服务 | mis-auth / mis-iam / mis-org / mis-system | 单一限界上下文、领域规则 | 不跨域直接访问他库表 |
 | 智能体 | agent-gateway | LLM 编排、RAG、工具调用 | 不承载核心交易写操作 |
 | 基础设施 | Nacos/Redis/PG | 注册发现、配置、缓存、持久化 | — |
 
@@ -78,17 +76,17 @@ sequenceDiagram
     participant FE as 前端
     participant GW as Gateway
     participant BFF as admin-bff
-    participant Svc as user-service
+    participant IAM as mis-iam
     participant DB as PostgreSQL
 
     FE->>GW: GET /api/v1/users?page=1
     Note over GW: JWT 验签 + 透传 X-User-Id
     GW->>BFF: 转发
-    BFF->>Svc: WebClient 调用
-    Note over Svc: @DataScope（无 API 权限注解）
-    Svc->>DB: 查询
-    DB-->>Svc: 结果
-    Svc-->>BFF: UserVO 列表
+    BFF->>IAM: WebClient 调用
+    Note over IAM: 用户查询 + 权限过滤
+    IAM->>DB: 查询
+    DB-->>IAM: 结果
+    IAM-->>BFF: UserVO 列表
     BFF-->>GW: 统一响应
     GW-->>FE: JSON
 ```
@@ -104,9 +102,8 @@ mis-platform/
 │   ├── mis-gateway/
 │   ├── mis-admin-bff/
 │   ├── mis-auth/
-│   ├── mis-user/
+│   ├── mis-iam/
 │   ├── mis-org/
-│   ├── mis-rbac/
 │   ├── mis-system/
 │   ├── mis-audit/
 │   └── mis-notify/
@@ -125,14 +122,15 @@ mis-platform/
 | mis-gateway | 8080 | 1 | 统一入口 |
 | mis-admin-bff | 8081 | 1 | BFF 聚合 |
 | mis-auth | 8101 | 1 | 认证 |
-| mis-user | 8102 | 1 | 用户 |
-| mis-org | 8103 | 1 | 组织 |
-| mis-rbac | 8104 | 1 | 角色权限 |
-| mis-system | 8105 | 1 | 菜单/字典/参数 |
+| mis-iam | 8102 | 1 | 身份+权限（合并原 mis-user/mis-rbac） |
+| mis-org | 8103 | 1 | 组织+人事 |
+| mis-system | 8105 | 1 | 菜单/API/字典/日志 |
 | mis-audit | 8106 | 1 | 审计 |
 | mis-notify | 8107 | 1 | 骨架 |
 | agent-gateway | 8200 | 1 | Mock AI |
 | mis-admin-web | 5173 | 1 | 开发服务器 |
+
+> **Sprint 2 重构：** mis-user（原8102）和 mis-rbac（原8104）已取消，合并为 mis-iam（8102）。端口 8104 回收。
 
 ## 6. 服务间通信
 

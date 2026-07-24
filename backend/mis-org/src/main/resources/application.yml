@@ -25,3 +25,10 @@ management:
 logging:
   level:
     com.mis.org: DEBUG
+
+mis:
+  org:
+    iam-discovery-enabled: false
+    iam-service-id: mis-iam
+    iam-base-url: http://localhost:8102
+    data-scope-skip-when-anonymous: true

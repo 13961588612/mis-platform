@@ -13,10 +13,14 @@ flowchart LR
     subgraph k8s [K8s / 生产集群]
         GW[mis-gateway]
         Auth[mis-auth]
+        IAM[mis-iam]
+        Org[mis-org]
         Audit[mis-audit]
     end
     GW --> Nacos
     Auth --> Nacos
+    IAM --> Nacos
+    Org --> Nacos
     Audit --> Nacos
     Secret["K8s Secret\nJWT 密钥"] --> Auth
     Secret --> GW
@@ -49,8 +53,10 @@ flowchart LR
 | Data ID | 关键项 |
 |---------|--------|
 | `mis-common` | 生产 DB/Redis 地址、JWT 公钥路径 |
-| `mis-gateway` | `lb://mis-auth`、`lb://mis-audit` 路由 |
+| `mis-gateway` | `lb://` 路由（auth/iam/org/audit/bff） |
 | `mis-auth` | `captcha-enabled: true`、`cookie.secure: true`、`audit-discovery-enabled: true` |
+| `mis-iam` | 身份与权限 |
+| `mis-org` | 组织与人事 |
 | `mis-audit` | 端口、业务参数 |
 
 源文件路径：`deploy/nacos-config/prod/`。

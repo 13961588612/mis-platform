@@ -2,9 +2,9 @@
 
 > 角色：设计系统专家（彩格调 / design-system-expert）
 > 用途：直接交付原型构建师（Phase 3）消费，含 B「CSS 变量块」与 C「组件视觉规格」两块核心输入。
-> 基线（1:1 一致，唯一真值）：`design-system.md`（已定稿）· 约束基线 `design-handoff-brief.md` · `admin-web-design.md`
+> 基线：与 [design-system.md](./design-system.md) 同色系（企业靛）；**圆角与画布以本文件为准**（`--radius: 0.375rem`、冷灰画布）。`admin-web-design.md` / admin 实现须跟本令牌，不另起视觉体系。
 > 红线（不可逾越）：沿用既有**企业靛 shadcn** 设计系统；不另起色彩体系；圆角统一为 `--radius: 0.375rem`（商务硬朗、全局共用）；不脱离 shadcn 组件词汇表。
-> 范围：本文件 = **门户层（portal）** 的克制扩展，在基线上新增少量门户变量与组件规格；子系统内页仍走 `design-system.md` 原有规格。
+> 范围：本文件 = **门户层（portal）** 的克制扩展，在基线上新增少量门户变量与组件规格；子系统内页共用同一套中性/主色令牌。
 
 ---
 
@@ -476,7 +476,70 @@ colors: {
 
 沿用既有**企业靛 shadcn** 体系（信任、稳重、企业级，且登录页颜色债本就同色系、改圆角/渐变/描边即合规），**不在色彩上另起炉灶**；门户「不素」仅靠三层**克制扩展**达成层次感——① 图标 tint 圆标让入口有焦点而不喧宾、② 极轻双色渐变只铺 hero 一隅、③ stagger 微动效与 hover 抬升给「活」的反馈；全程统一 `--radius: 0.375rem`、shadcn 词汇表与 WCAG AA，把「清爽专业」落在「可读、可快速完成工作」的极简纪律上，而非视觉装饰。
 
-> **2026-07-20 商务现代更新**：应「配色更商务现代、纯白太素」的反馈，未改主色/令牌体系，仅调整取值——画布由纯白改为柔和冷灰（`214 32% 96.5%`）使白卡浮起、侧栏由近白经深墨蓝方案评估后定为**中灰冷**（`214 32% 90%`，略深于画布，轻层次框架、统一不抢焦点）、顶栏改纯白卡 + 细描边、Hero 强化品牌洗染渐变、卡片加静息/抬升阴影；并新增 `--sidebar-border/--sidebar-accent/--sidebar-muted/--card-shadow` 四个门户扩展令牌；圆角由 `0.5rem` 收紧为 `0.375rem`、表单/按钮/tab 更硬朗商务。本次追加：① 列表表格**分页组件**（`.pager`）；② 登录页**分屏大气版**（`--login-bg-image` 背景图）；③ 侧栏叶子导航 `.nav-item` 补 `width:100%` 实现**整行 hover/激活高亮**；④ 补 `shield` 图标使「权限管理」父级按钮有图标；⑤ 表单/筛选改为 **12 列固定宽度栅格**（`.form-grid` + `.col-2/3/4/6/8/12`，窄屏自动收口单列）。**滚动与栅格微调**：⑥ 子系统壳改为 `100vh` flex 列定高布局（`#view-subsystem` + `.sub-shell` flex:1 + `overflow:hidden`），纵向滚动**限制在表格区**——列表视图筛选卡与状态标签固定顶部、仅 `.table-scroll`（含表头吸顶 `position:sticky`）内部滚动，概览视图整页内容在 `.scroll-y` 内滚动，**整页不再出滚动条**；⑦ 筛选卡字段宽度按语义区分：**创建时间 `col-4`、所属组织/关键词搜索 `col-2`**（新增 `.col-2`）。**外滚动条修复（本轮）**：⑧ 发现每页行数变化仍会牵动整页外滚动条——根因为列表容器 `#list-table-host` 用了 `flex:1 1 auto`（以内容高度为 basis），表格行数增多时其 basis 把高度泄漏到外壳致使整页变高；改为 `flex:1 1 0%` 的**列向 flex**（`flex-direction:column`），高度只由剩余空间分配、与内容无关，表格再高也只在 `.table-scroll` 内部滚动；并给 `.table-scroll` 加 `overscroll-behavior:contain` 阻断滚动链；同时将 `#view-subsystem` 由 `height:100vh` 升级为 `position:fixed; inset:0` 锁死视口，双保险彻底消除整页外滚动条。Light/Dark 双主题同步保持层次与 AA 对比度。
+> **2026-07-20 商务现代更新**：应「配色更商务现代、纯白太素」的反馈，未改主色/令牌体系，仅调整取值——画布由纯白改为柔和冷灰（`214 32% 96.5%`）使白卡浮起、侧栏由近白经深墨蓝方案评估后定为**中灰冷**（`214 32% 90%`，略深于画布，轻层次框架、统一不抢焦点）、顶栏改纯白卡 + 细描边、Hero 强化品牌洗染渐变、卡片加静息/抬升阴影；并新增 `--sidebar-border/--sidebar-accent/--sidebar-muted/--card-shadow` 四个门户扩展令牌；圆角由 `0.5rem` 收紧为 `0.375rem`、表单/按钮/tab 更硬朗商务。本次追加：① 列表表格**分页组件**（`.pager`）；② 登录页**分屏大气版**（`--login-bg-image` 背景图）；③ 侧栏叶子导航 `.nav-item` 补 `width:100%` 实现**整行 hover/激活高亮**；④ 补 `shield` 图标使「权限管理」父级按钮有图标；⑤ 表单/筛选改为 **12 列固定宽度栅格**（`.form-grid` + `.col-2/3/4/6/8/12`，窄屏自动收口单列）。**滚动与栅格微调**：⑥ 子系统壳改为 `100vh` flex 列定高布局（`#view-subsystem` + `.sub-shell` flex:1 + `overflow:hidden`），纵向滚动**限制在表格区**——列表视图筛选卡与状态标签固定顶部、仅 `.table-scroll`（含表头吸顶 `position:sticky`）内部滚动，概览视图整页内容在 `.scroll-y` 内滚动，**整页不再出滚动条**；⑦ 筛选卡字段宽度按语义区分：**创建时间 `col-4`、所属组织/关键词搜索 `col-2`**（新增 `.col-2`）。**外滚动条修复（本轮）**：⑧ 发现每页行数变化仍会牵动整页外滚动条——根因为列表容器 `#list-table-host` 用了 `flex:1 1 auto`（以内容高度为 basis），表格行数增多时其 basis 把高度泄漏到外壳致使整页变高；改为 `flex:1 1 0%` 的**列向 flex**（`flex-direction:column`），高度只由剩余空间分配、与内容无关，表格再高也只在 `.table-scroll` 内部滚动；并给 `.table-scroll` 加 `overscroll-behavior:contain` 阻断滚动链；同时将 `#view-subsystem` 由 `height:100vh` 升级为 `position:fixed; inset:0` 锁死视口，双保险彻底消除整页外滚动条。**登录页精炼（本轮，07-21）**：⑨ 应「右侧登录区字体稍大、整页更商务简洁」——右侧登录卡字号上调：标题 `欢迎登录` 1.5rem→1.75rem、副标 `企业统一管理平台` .875→1rem、字段标签 `.8125→.875rem`（抽屉同步统一为 14px）、登录输入框/主按钮 `.9375rem` 且 `min-height:2.75rem`（更大的点击区、更稳重）；卡内边距 2.25→2.75rem、阴影压平为 `0 1px 3px -1px rgb(15 23 42/.07)`、表单间距与 `.login-main` 留白加大，整体更通透克制；左侧品牌区副文案/要点字号小幅收敛（`.9/.875rem`）使整页更安静商务。Light/Dark 双主题同步保持层次与 AA 对比度。
+
+> **门户首页子系统入口重设计（本轮，07-21）**：应「各子系统风格太松散、空白太多、选中视觉需重设计」——将门户首页子系统卡片由**纵向堆叠大卡**改为**横向紧凑瓦片**：① 栅格由 3 列收紧为桌面 **4 列**（`≥1280px`）、间距 `1rem→.75rem`、卡片内边距 `1rem→.75rem .875rem`，密度显著提升；② 卡片结构改为「**左侧圆角方图标徽标 + 右侧标题/描述（单行省略）+ 右侧进入箭头**」三栏，`subcard-title` 14px/600、`subcard-desc` 12px；③ **选中视觉统一语言**：新增左侧实色高亮条（`::before` 3px 主色，hover/focus/active 三态经 `scaleY` 展开），hover 叠加主色微染底 + 抬升阴影 + 箭头 `translateX` 滑入，键盘 `focus-visible` 用 3px 主色环；④ **显式选中态**：进入子系统后回填 `active` 类标记当前所在子系统，回到门户仍保持高亮，直观呈现「我在哪个系统」；⑤ 顶部统计卡间距 `1rem→.875rem`、内边距收紧，区块/最近访问/页脚纵向间距同步收敛（`.section 2rem→1.5rem`、`.recent/.footer` 同步），整体消除松散留白。Light/Dark 双主题与 AA 对比度不变。
+
+---
+
+## F. 流程中心 · 流程记录查看（审批详情）模板
+
+> 交付物：`docs/frontend/design-proposal/process-record-template.html`（独立高保真原型，复用门户同款企业靛 shadcn 令牌与 `--radius:0.375rem`，Light/Dark 双主题）。
+> 覆盖需求：流程表单 / 附件、流程进度、流程日志，以及**审批通过 / 驳回、发起人撤回**等操作。
+
+> **流程记录详情接入门户整体（本轮，07-21）**：应「把整个流程记录页面集成到门户整体里」——不再作为独立文件，而是**直接打通进 `mis-portal-prototype.html` 的「流程中心」子系统**：① 流程中心各子菜单（待办任务 / 已办归档等）进入后展示**流程记录列表**（栏目：流程编号 / 名称 / 发起人 / 当前节点 / 状态 / 发起时间，整行可点 + 详情按钮），复用门户既有筛选卡（流程类型 `col-2`、发起时间 `col-4`、关键词 `col-2`）、状态 Tab（全部 / 待我审批 / 我发起的）、分页组件与表头吸顶；② 点行/详情 → **进入流程记录查看详情页**，复用门户 `#sub-content` 容器（不再独立全屏），详情含 `pr-detail-head`（返回列表 + 标题 + 状态徽标 + 打印）、`pr-meta` 元信息条、`pr-stepper` 进度 Stepper、`pr-body`（左 Tab【流程表单 / 附件 / 流程日志】+ 右信息栏【流程信息 / 审批链】）、`pr-actions` 底部操作栏；③ 详情内**审批通过 / 驳回（原因必填校验）/ 发起人撤回** 均做成可演示——右侧滑出 `sheet` 抽屉填意见，提交后实时改写节点状态、追加日志、推进 Stepper、更新状态徽标；④ **视角切换**下拉（当前审批人赵敏 / 发起人李文博）演示不同可执行动作；⑤ 详情态隐藏子系统顶部 Tab 条、返回列表恢复，列表页码/筛选态保留；⑥ 所有样式复用门户企业靛 shadcn 令牌与 `.badge-status/.card/.btn*/.sheet*/.table-scroll/.pager` 等既有组件，仅新增 `.pr-*` / `.ro-*` / `.att-*` / `.log-*` / `.aside-*` / `.step-*` 等流程专用类及 `process-record-template.html` 缺的图标（`PR_ICONS` + `pricon()`），Light/Dark 双主题与 AA 对比度不变。独立模板 `process-record-template.html` 保留为组件参考。
+
+### F.1 页面结构（5 区，固定视口 `position:fixed; inset:0` flex 列）
+1. **顶栏 `.pr-header`**：返回 + 面包屑 + 流程标题 + 状态徽标（`badge-status` 语义色）+ 打印/主题切换。
+2. **元信息条 `.pr-meta`**：流程编号 / 发起人 / 部门 / 发起时间 / 紧急程度 + 右侧「当前节点」高亮。
+3. **流程进度 `.pr-stepper`**（横向 Stepper，窄屏可横向滚动）：节点 = 发起提交 → 部门经理 → 财务复核 → 分管副总 → 出纳付款；状态 `done`(绿底✓) / `current`(主色底 + 脉冲光环 + 连接线高亮) / `pending`(灰) / `rejected`(红底✕)；连接线随上一节点完成变绿。
+4. **主体 `.pr-body`**（`grid: 1fr 21rem`，窄屏 `<960px` 收起右栏）：左 = Tab【流程表单 / 附件 / 流程日志】+ 内部滚动内容；右 = `.pr-aside` 信息卡（流程信息 + 审批链状态 + 提示）。
+5. **底部操作栏 `.pr-actions`**（sticky）：按**状态 + 查看视角**计算可执行动作；含「查看视角」切换（演示：当前审批人赵敏 / 发起人李文博）。
+
+### F.2 关键组件与令牌
+- **流程表单**：`.ro-grid` 两列（`.span-full` 整行），只读字段 `label(12px muted) + value(15px/600)`，金额用主色强调 `1.125rem/700`。
+- **附件**：`.att-list` 自适应网格，`.att-item` 按类型着色图标徽标（`pdf`红 / `doc`蓝 / `img`绿）+ 名称 + 大小 + 下载按钮。
+- **流程日志**：`.log-list` 竖向时间线，`.log-dot` 按动作类型着色（submit 信息蓝 / approve 绿 / reject 红 / route 灰 / revoke 橙 / comment 主色），含操作人、动作徽标、时间、意见气泡。
+- **操作抽屉**：复用 `.sheet-panel`（右侧滑出），审批通过/驳回/撤回共用，驳回理由必填校验；提交后实时改写节点状态、追加日志、更新 Stepper 与状态徽标（纯前端 mock，可演示完整流转）。
+- 复用基础类：`.btn(.primary/.outline/.destructive/.ghost)`、`.input`/`textarea.input`、`.badge-status`、`.card`、`.icon-btn`、`.sheet-overlay/.sheet-panel`——与门户完全一致，零新增设计债务。
+
+### F.3 状态 × 视角 动作矩阵（开发落地参考）
+| 流程状态 | 当前审批人视角 | 发起人视角 | 其他/只读 |
+|---|---|---|---|
+| 审批中(pending) | [驳回] [同意并通过] | [撤回申请] | 提示「当前节点处理中，无操作权限」 |
+| 已通过/已驳回/已撤销 | [重新打印] [重新发起] | 同左 | 同左 |
+
+> 注：真实系统应按 `当前节点.actor === 登录人` 与 `发起人 === 登录人` 做权限判断，模板用「查看视角」下拉模拟；驳回/撤回后状态终止，可「重新发起」复位演示。
+
+---
+
+## G. 系统管理控制台（独立模板）
+
+> 交付物：`docs/frontend/design-proposal/system-admin-template.html`（独立高保真模板，复用门户同款企业靛 shadcn 令牌与 `--radius:0.375rem`，Light/Dark 双主题，已 Node 校验 JS 语法 + DOM 桩跑通 14 页无运行时错误）。
+> 范围来源：依据 `docs/database/schema-design.md` 的 `system` 应用（租户管理控制台）表结构，经用户确认「完整 CRUD + 独立模板文件」后落地。
+
+### G.1 页面清单（14 页，按 DB 表映射）
+| 分组 | 页面 | 对应表 |
+|---|---|---|
+| 组织架构 | 组织管理 / 部门管理 / 员工管理 / 岗位管理 | `sys_org` / `sys_dept`(+类别) / `sys_employee` / `sys_post`(+类型+任职) |
+| 应用与接口 | 应用管理 / 接口管理 / 模块管理 | `sys_app` / `sys_api`(+菜单绑定) / `sys_module` |
+| 权限中心 | 用户管理 / 角色权限 / 菜单管理 | `sys_user` / `sys_role`(+权限+数据范围) / `sys_menu` |
+| 基础数据 | 字典管理 / 系统参数 | `sys_dict_type`(+项) / `sys_config` |
+| 审计 | 登录日志 / 操作日志 | `sys_login_log` / `sys_oper_log`（只读） |
+
+> 平台级 `sys_tenant` / `sys_platform_user` / `sys_module`(平台) 不纳入；`sys_user`(每 APP 账号) 与 `sys_employee`(自然人) 拆分为两页，符合 DB 语义。
+
+### G.2 架构（数据驱动，零重复）
+- 单一 **CRUD 引擎** + 一个复用 **Sheet 抽屉**（新建/编辑/详情三态共用），由各页 `PAGES[id]` 描述符（filters / columns / form / sample）实例化——新增页面只需加一个描述对象。
+- 外壳：顶栏（品牌 + 租户标识 + 主题切换）+ 左侧分组导航（激活态整行主色）+ 主区（面包屑 + 标题 + 描述 + 新建按钮）+ 内容区（筛选卡 + 状态 Tab 占位 + 表头吸顶表格 + 分页）。
+- 组件全部复用门户既有语言：`.btn(.primary/.outline/.destructive/.ghost)`、`.input/textarea`、`.badge-status`、`.card`、`.switch`、`.form-grid(.col-*)`、`.table-scroll`(sticky thead)、`.pager`、`.sheet-*`——令牌 1:1 一致，无新增色系。
+- 交互：查询/重置、分页（10/20/50 + 页码省略）、表头吸顶、行内 详情/编辑/删除；删除走确认弹层；`sys_user` 租户管理员不可删（防呆）；只读页（日志）隐藏新建与编辑。
+- **特殊编辑器**：角色权限用菜单树复选框（`buildPermTree`，数据来自 `MENU_TREE`）+ 数据范围下拉；菜单管理用父级下拉树；详情态下角色权限以只读摘要呈现（`customDetail`）。
+- 校验：必填项红框 + toast 提示；保存即写入内存 `dataStore` 并即时刷新列表（纯前端 mock，可演示完整增删改查闭环）。
+
+### G.3 设计约束
+- 圆角 `--radius:0.375rem`、企业靛主色、Light/Dark 双主题、WCAG AA 对比度与门户完全一致。
+- 示例数据参考 `docs/database/seed-data.md`（默认租户、admin/TENANT_ADMIN、应用 system/iam/ops、模块 user/org/system/audit、系统参数等）。
 
 ---
 

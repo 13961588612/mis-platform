@@ -15,6 +15,8 @@
 | `mis-common.yaml` | `mis-common` |
 | `mis-gateway.yaml` | `mis-gateway` |
 | `mis-auth.yaml` | `mis-auth` |
+| `mis-iam.yaml` | `mis-iam` |
+| `mis-org.yaml` | `mis-org` |
 | `mis-audit.yaml` | `mis-audit` |
 
 ## 推送

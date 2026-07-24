@@ -17,6 +17,12 @@ spring:
         locator:
           enabled: false
       routes:
+        # /auth/me 由 BFF 聚合用户+权限，须优先于 mis-auth 通配
+        - id: mis-auth-me
+          uri: http://localhost:8081
+          order: -20
+          predicates:
+            - Path=/api/v1/auth/me
         - id: mis-auth
           uri: http://localhost:8101
           order: -10

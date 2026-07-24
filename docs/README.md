@@ -1,6 +1,6 @@
 # MIS Platform 文档中心
 
-> 规格书版本：**v1.1-draft** | 最后更新：2026-06-24
+> 规格书版本：**v1.3-draft** | 最后更新：2026-07-24
 
 ## 文档状态说明
 
@@ -88,18 +88,21 @@ docs/
 
 ---
 
-## 代码实现进度（Sprint 0 摘要）
+## 代码实现进度（摘要 · 2026-07-21）
 
 | 组件 | 状态 | 说明 |
 |------|------|------|
-| mis-migrator + Flyway V1/V2 | ✅ | 单库 `mis_platform` |
+| mis-migrator + Flyway V1–V5 | ✅ | 单库；V5 门户 `sys_app` 字段 |
 | mis-common-* | ✅ | core / jpa / web / security / redis |
-| mis-gateway | ✅ | JWT 验签、透传头、Redis 黑名单 |
+| mis-gateway | ✅ | JWT 验签、透传头、Redis 黑名单；`/auth/me` → BFF |
 | mis-auth | ✅ | 登录/刷新/登出、JWT 签发 |
 | mis-audit | ✅ | 登录日志 |
-| mis-admin-bff | ⏳ | API 权限、聚合 |
-| 领域微服务 | ⏳ | user / rbac / org / … |
-| 前端 mis-admin-web | ✅ | Sprint 1 登录页 |
+| mis-iam | ✅ | 用户/角色/APP（Sprint 2+） |
+| mis-org | ✅ | 组织/部门/员工 |
+| mis-admin-bff | ✅ | 聚合、API 权限、门户 `/apps`、`/auth/me` |
+| mis-system | ✅ | 菜单 router/permissions、仪表盘 stats |
+| 前端 mis-admin-web | ✅ | 登录 + 门户九宫格 + 子系统壳；业务 CRUD 页迭代中 |
+| **AI 融合（MIS × ai-platform）** | ✅ | 阶段5 前端 MVP + 后端扩展 + 融合部署全闭环；详见 [AI 融合文档中心](ai-fusion/README.md) |
 
 ---
 
@@ -122,3 +125,7 @@ docs/
 |------|------|------|
 | v1.0-draft | 2026-06-23 | 初版文档体系 |
 | v1.1-draft | 2026-06-24 | MIS_REMOTE 配置简化、运维文档拆分 |
+| v1.2 | 2026-07-21 | Sprint 2 服务边界：mis-iam / mis-org；ADR-016 |
+| v1.3 | 2026-07-21 | 门户壳、`sys_app` V5、文档与进度对齐 |
+| v1.4 | 2026-07-24 | AI 融合（MIS × ai-platform）规格与进度同步；见 [ai-fusion/ai-fusion-delivery.md](ai-fusion/ai-fusion-delivery.md) |
+| v1.5 | 2026-07-24 | AI 融合文档整理：`ai-fusion/` 拆分为 decisions/specs/archive 三层 + 新建索引 README；移除过时早期探索稿与进度同步稿 |

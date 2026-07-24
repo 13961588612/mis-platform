@@ -8,6 +8,11 @@ spring:
         enabled: true
     gateway:
       routes:
+        - id: mis-auth-me
+          uri: lb://mis-admin-bff
+          order: -20
+          predicates:
+            - Path=/api/v1/auth/me
         - id: mis-auth
           uri: lb://mis-auth
           order: -10

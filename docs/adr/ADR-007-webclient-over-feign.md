@@ -1,10 +1,10 @@
 # ADR-007: 服务间 HTTP — BFF 用 WebClient，领域服务用 RestClient
 
 ## 状态
-已接受
+已接受（2026-07-21 修订：服务名 mis-user/mis-rbac → **mis-iam**）
 
 ## 日期
-2026-06-23
+2026-06-23（初版） / 2026-07-21（服务边界）
 
 ## 背景
 
@@ -16,8 +16,8 @@
 
 本系统特点：
 
-- **mis-admin-bff** 常需并行调用 user + org + rbac（如用户列表补全 orgName、roles）
-- **领域服务**（auth→user、user→org）多为单次低频同步调用
+- **mis-admin-bff** 常需并行调用 mis-iam + mis-org（如用户列表补全部门名、roles）
+- **领域服务**（auth→iam、iam→org）多为单次低频同步调用
 - 主体业务服务为 **Spring MVC 阻塞模型**（非全面 WebFlux）
 
 ## 决策
@@ -27,7 +27,7 @@
 | 调用方 | 客户端 | 理由 |
 |--------|--------|------|
 | mis-admin-bff | **WebClient** + `@LoadBalanced WebClient.Builder` | 并行聚合、超时精细控制、与 Gateway 技术栈一致 |
-| 领域微服务（auth/user/org/rbac/system/audit） | **RestClient** + `@LoadBalanced RestClient.Builder` | 阻塞栈、调用简单、无需引入 reactive |
+| 领域微服务（auth/iam/org/system/audit） | **RestClient** + `@LoadBalanced RestClient.Builder` | 阻塞栈、调用简单、无需引入 reactive |
 | mis-gateway | 已是 WebFlux | 路由转发，不调用业务 Feign/WebClient |
 
 ### BFF 并行聚合示例（规格）
@@ -35,9 +35,9 @@
 ```
 GET /users 列表页：
   parallel:
-    - user-service: GET /internal/v1/users?page=1
-    - org-service:  GET /internal/v1/orgs/names?ids=...  (批量)
-  merge → UserVO（含 orgName）
+    - mis-iam: GET /internal/v1/users?page=1
+    - mis-org: GET /internal/v1/employees/names?ids=...  (批量)
+  merge → UserVO（含部门名、roles）
 ```
 
 使用 `Mono.zip` / `CompletableFuture` 包装，整体超时建议 **3s**。
@@ -45,8 +45,8 @@ GET /users 列表页：
 ### 领域服务间调用示例
 
 ```
-mis-auth 登录成功 → RestClient 调 mis-user 查用户
-mis-user 创建用户 → RestClient 调 mis-org 校验 orgId
+mis-auth 登录 → RestClient 调 mis-iam 查用户 / 写 permissions
+mis-iam 创建用户 → RestClient 调 mis-org 校验 employeeId / deptId
 ```
 
 单次串行即可，无需 WebClient。
@@ -105,7 +105,7 @@ WebClient.Builder loadBalancedWebClientBuilder() { ... }
 RestClient.Builder loadBalancedRestClientBuilder() { ... }
 ```
 
-调用地址使用服务名：`http://mis-user/internal/v1/users/{id}`
+调用地址使用服务名：`http://mis-iam/internal/v1/users/{id}`
 
 ## 后果
 

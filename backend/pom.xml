@@ -20,6 +20,8 @@
         <module>mis-org</module>
         <module>mis-iam</module>
         <module>mis-audit</module>
+        <module>mis-admin-bff</module>
+        <module>mis-system</module>
     </modules>
 
     <properties>

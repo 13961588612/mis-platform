@@ -1,0 +1,12 @@
+metadata:
+  name: mis-summary
+  display_name: MIS 摘要助手
+  description: >
+    MIS 平台结构化摘要助手，将业务记录压缩为要点清单，并要求结构化 JSON 输出。
+  version: "1.0.0"
+  enabled: true
+  tags:
+    - mis
+    - summary
+  capabilities:
+    - summary

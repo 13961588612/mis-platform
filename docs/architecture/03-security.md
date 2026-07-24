@@ -63,7 +63,7 @@ sequenceDiagram
 | **JWT** | — | **不存 permissions** |
 | **前端** | `auth-store.permissions` | 来自 `GET /auth/me`，非 JWT decode |
 
-**登录流程：** mis-rbac 聚合 permissions → 写入 Redis；JWT 带 `permVersion`（来自 `sys_user.perm_version`）。
+**登录流程：** **mis-iam** 聚合 permissions → 写入 Redis；JWT 带 `permVersion`（来自 `sys_user.perm_version`）。
 
 **陈旧菜单：** BFF 若 `JWT.permVersion != 当前版本` → `X-Perm-Stale: true`（见 ADR-009）。
 
@@ -95,7 +95,7 @@ sequenceDiagram
 | **授权** | Authorization | 你能调这个 API 吗？ | **mis-admin-bff**（`ApiPermissionInterceptor` + 映射表） |
 | **数据权限** | Data Scope | 你能看哪些行？ | 领域服务（`@DataScope` + SQL） |
 
-**mis-auth** 不负责每个业务请求的权限判断；**mis-rbac** 提供权限数据（PDP），不在热路径上对每个 API 做 RPC 校验。
+**mis-auth** 不负责每个业务请求的权限判断；**mis-iam** 提供权限数据（PDP），不在热路径上对每个 API 做 RPC 校验。
 
 > 详见 [ADR-008](../adr/ADR-008-bff-centralized-api-authz.md)：对外 API 权限在 **BFF 统一校验**，不新建独立 authz-service，领域服务不做 `@PreAuthorize`。
 
@@ -109,7 +109,7 @@ flowchart TB
     end
 
     subgraph PDP["策略决策 PDP"]
-        RBAC["mis-rbac<br/>权限数据 + Redis"]
+        IAM["mis-iam<br/>权限数据 + Redis"]
     end
 
     subgraph PEP["策略执行 PEP"]
@@ -117,11 +117,11 @@ flowchart TB
     end
 
     subgraph Domain["领域服务"]
-        Svc["mis-user 等<br/>仅 @DataScope，无 API 权限注解"]
+        Svc["mis-org / mis-iam 等<br/>仅 @DataScope，无 API 权限注解"]
     end
 
     FE[前端] -->|login| Login
-    Login -->|permissions→Redis| RBAC
+    Login -->|permissions→Redis| IAM
     Login -->|JWT 无 permissions| FE
     FE --> GW --> BFF
     BFF -->|映射表鉴权| BFF
@@ -130,10 +130,10 @@ flowchart TB
 
 | 层级 | 组件 | 何时执行 | 做什么 | **不做什么** |
 |------|------|----------|--------|--------------|
-| L0 登录 | **mis-auth** | `login` / `refresh` / `logout` | 密码、验证码、调 rbac **写 Redis**，签发 JWT（**无 permissions**） | 不拦截业务 API |
+| L0 登录 | **mis-auth** | `login` / `refresh` / `logout` | 密码、验证码、调 **mis-iam** **写 Redis**，签发 JWT（**无 permissions**） | 不拦截业务 API |
 | L1 网关 | **mis-gateway** | 每个非白名单请求 | JWT 验签、黑名单、透传 `X-User-Id` | **不做** API 权限判断 |
 | L2 接口授权 | **mis-admin-bff** | 对外请求 | Redis 取 permissions + **method/path 查映射表** | 不在 Controller 硬编码 |
-| — | **mis-rbac** | 登录回填、缓存 miss、权限变更 | DB 聚合、evict Redis | 热路径命中时不 RPC |
+| — | **mis-iam** | 登录回填、缓存 miss、权限变更 | DB 聚合、evict Redis | 热路径命中时不 RPC |
 | L3 数据授权 | **领域服务** | SQL 执行前 | `@DataScope` | **不做** API 权限校验 |
 
 ### 4.3 业务请求时序（已登录用户）
@@ -143,20 +143,20 @@ sequenceDiagram
     participant FE as 前端
     participant GW as Gateway
     participant BFF as admin-bff
-    participant User as mis-user
+    participant IAM as mis-iam
 
     FE->>GW: GET /api/v1/users + Bearer JWT
     Note over GW: ① 认证：验签+黑名单<br/>（不调用 mis-auth RPC）
     GW->>BFF: 透传 X-User-Id, X-Tenant-Id
     Note over BFF: ② Redis permissions<br/>③ 映射表 → 鉴权
-    BFF->>User: /internal/v1/users
-    Note over User: ③ 仅 @DataScope（无 API 权限注解）
-    User-->>FE: 200 + 数据
+    BFF->>IAM: /internal/v1/users
+    Note over IAM: ③ 仅 @DataScope（无 API 权限注解）
+    IAM-->>FE: 200 + 数据
 ```
 
 **要点：**
 - JWT 只证明身份；permissions 在 **Redis**（变更后 DEL，下次请求生效）
-- Redis miss 时 BFF 调 rbac 回源并回填
+- Redis miss 时 BFF 调 **mis-iam** 回源并回填
 - 权限变更频繁时**不必**重新登录
 
 ### 4.4 三种「集中校验」方案对比
@@ -165,9 +165,9 @@ sequenceDiagram
 |------|------|----------|
 | **A. 独立 authz-service，每请求 RPC** | Gateway/BFF 都问 authz | ❌ 延迟高、单点故障 |
 | **B. Gateway 配 route→permission** | 网关层统一 | ❌ 细粒度 RBAC 难维护 |
-| **C. BFF 映射表 + rbac PDP（选定）** | 对外单表配置；Controller 无硬编码 | ✅ ADR-008/010 |
+| **C. BFF 映射表 + mis-iam PDP（选定）** | 对外单表配置；Controller 无硬编码 | ✅ ADR-008/010 |
 
-「单独一个服务管权限」应理解为 **mis-rbac 管权限数据和策略**，而不是 **每个 API 都 RPC 问一次**。
+「单独一个服务管权限」应理解为 **mis-iam 管权限数据和策略**，而不是 **每个 API 都 RPC 问一次**。
 
 ### 4.5 权限校验：菜单树 + API 树（数据库）
 

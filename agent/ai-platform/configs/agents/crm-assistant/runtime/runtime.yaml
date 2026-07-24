@@ -1,0 +1,21 @@
+# =============================================================================
+# crm-assistant — 运行时配置
+# =============================================================================
+
+runtime:
+  type: openharness
+  version: "1.0.0"
+  allowed_tools:
+    - skill
+    - mcp__mcp-api-suite__*
+  params:
+    maxSteps: 20
+    temperature: 0.3
+    maxTokens: 4096
+    # 问数强制实时查询：省略历史助手详答 + 本轮用户消息追加提醒
+    forceLiveQuery: true
+  prompts:
+    system: runtime/prompts/system.md
+    turn_reminder: |
+      【强制】本轮若涉及会员/积分/券/等级/画像等 CRM 数据，必须先调用工具（skill 与/或 mcp__mcp-api-suite__callApi）获取实时结果后再回答；禁止仅根据对话历史中的业务数据作答，也不得说「与之前一致」。
+  middleware: {}

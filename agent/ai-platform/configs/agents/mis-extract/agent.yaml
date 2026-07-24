@@ -1,0 +1,41 @@
+# =============================================================================
+# mis-extract — MIS 表单信息抽取助手
+# 供 mis-admin-bff AiProxyController /ai/extract 调用。
+# 输出强制为结构化 JSON：{ fields: {name: value}, confidence: number }
+# =============================================================================
+
+agent:
+  name: mis-extract
+  display_name: MIS 信息抽取助手
+  description: >
+    面向 MIS 表单的实体抽取助手，从非结构化文本中按 schema 抽取字段值。
+  version: "1.0.0"
+  tags:
+    - mis
+    - extract
+
+  includes:
+    runtime: runtime/runtime.yaml
+    system: system/model.yaml
+
+  routing:
+    enabled: false
+    priority: 10
+    keywords: []
+
+  memory:
+    static:
+      enabled: true
+      personality: memory/personality.md
+      facts_dir: memory/facts/
+    dynamic:
+      enabled: true
+      collection: agent_memory_index
+      top_k: 5
+      write_back: true
+      ttl_days: 30
+      max_per_user: 200
+
+  push:
+    enabled: false
+    channels: []

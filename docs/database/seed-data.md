@@ -56,6 +56,9 @@
 见 [permissions.md](../api/permissions.md)、[api-permission-mapping.md](../backend/api-permission-mapping.md)。  
 仅 `TENANT_ADMIN` 绑定全量菜单权限。
 
+**`sys_module.service_name`（Sprint 2）：** `iam`→`mis-iam`、`org`→`mis-org`、`system`→`mis-system`、`audit`→`mis-audit`。  
+原 `mis-user` / `mis-rbac` 已由 **Flyway V3**（`V3__rename_sys_module_services.sql`）合并到 `mis-iam`；**禁止改已发布的 V2**。
+
 ## 7. 系统参数 sys_config
 
 | config_key | config_value | remark |

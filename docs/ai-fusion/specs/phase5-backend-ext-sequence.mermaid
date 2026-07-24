@@ -1,0 +1,68 @@
+%% T-ext（逐字段 confidence + unmapped）
+sequenceDiagram
+    autonumber
+    participant FE as 前端 useAI(extract)
+    participant BFF as AiProxyController.extract
+    participant TR as AiCapabilityTranslator
+    participant PF as 平台 /agents/mis-extract/chat
+    participant AG as mis-extract Agent
+    FE->>BFF: POST /api/v1/ai/extract {text, schema.fields[]}
+    BFF->>BFF: proxyCapability 门禁(platformAvailable + enabled)
+    BFF->>TR: buildExtractContent + buildBody(capability=extract)
+    TR->>PF: POST /api/v1/agents/mis-extract/chat {content, metadata}
+    PF->>AG: process_message
+    AG-->>PF: JSON {fields, confidence:{key:0~1}, unmapped:[{raw,hint}]}
+    PF-->>BFF: Result{data.response=JSON}
+    BFF->>TR: parseExtract(data)
+    TR->>TR: fields→Map; confidence→Map~String,Double~; unmapped→List~Map~
+    TR-->>BFF: AiExtractResponse
+    BFF-->>FE: Result{AiExtractResponse} (confidence 为 Map + unmapped)
+    FE->>FE: confidence[key]<阈值 标红 + unmapped 卡片(HITL)
+
+%% T-sum（结构化 summary）
+sequenceDiagram
+    autonumber
+    participant FE as 前端 useAI(summary)
+    participant BFF as AiProxyController.summary
+    participant TR as AiCapabilityTranslator
+    participant PF as 平台 /agents/mis-summary/chat
+    participant AG as mis-summary Agent
+    FE->>BFF: POST /api/v1/ai/summary {records, context}
+    BFF->>BFF: proxyCapability 门禁
+    BFF->>TR: buildSummaryContent + buildBody(capability=summary)
+    TR->>PF: POST /api/v1/agents/mis-summary/chat
+    PF->>AG: process_message
+    AG-->>PF: JSON {summary, points:[{label,value,risk}], citations:[{field,value,source}]}
+    PF-->>BFF: Result{data.response=JSON}
+    BFF->>TR: parseSummary(data)
+    TR->>TR: summary→String; points→List~SummaryPoint~; citations→List~SummaryCitation~(字符串兜底 text)
+    TR-->>BFF: AiSummaryResponse
+    BFF-->>FE: Result{AiSummaryResponse}
+    FE->>FE: 结构化要点 + 引用溯源卡片
+
+%% T-stream（SSE 流式透传）
+sequenceDiagram
+    autonumber
+    participant FE as 前端 ai-sse-client(stream:true)
+    participant BFF as AiProxyController.chatCompletions(stream=true)
+    participant CL as AiPlatformClient.chatStream
+    participant PF as 平台 /agents/mis-copilot/chat/stream
+    participant AG as mis-copilot Agent
+    FE->>BFF: POST /api/v1/ai/chat/completions {messages, context, stream:true}
+    BFF->>BFF: 门禁 + sseEnabled 开关判断
+    BFF->>CL: chatStream(mis-copilot, body, JWT, traceId)
+    CL->>PF: POST .../chat/stream (Accept: text/event-stream)
+    PF->>AG: process_message(stream)
+    loop 逐字生成
+        AG-->>PF: TEXT_DELTA
+        PF-->>CL: SSE event:delta {traceId, delta}
+        CL-->>BFF: ServerSentEvent(delta)
+        BFF-->>FE: SSE event:delta (1:1 透传)
+        FE->>FE: onDelta 累积渲染 Markdown
+    end
+    AG-->>PF: 完成
+    PF-->>CL: SSE event:done {traceId, finishReason, sessionId}
+    CL-->>BFF: ServerSentEvent(done)
+    BFF-->>FE: SSE event:done (透传)
+    FE->>FE: onDone 收尾; 保留已输出
+    Note over PF,FE: 任一环节异常 → event:error {message} 透传 → 前端 toast + 保留已输出

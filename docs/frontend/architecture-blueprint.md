@@ -7,21 +7,20 @@
 
 ---
 
-## 0. 现状基线（Sprint 1 完成后）
+## 0. 现状基线（2026-07-21）
 
 | 项 | 状态 | 备注 |
 |----|------|------|
 | 框架 / 构建 | React 18.3 + Vite 5.2 | 已就绪 |
-| 语言 | TypeScript 5.4，`strict` 已开 | `noUnusedLocals/Parameters` 已开，良好 |
-| 路由 | react-router-dom 6.22 | 已做 Guest/Protected 守卫 |
-| 全局状态 | Zustand 4.5 + `persist` | 仅 auth-store（token/user/app） |
+| 语言 | TypeScript 5.4，`strict` 已开 | 良好 |
+| 路由 | react-router-dom 6 | Guest/Protected；`/portal` + 子系统壳 |
+| 全局状态 | Zustand + `persist` | auth-store（token/user/permissions/menus） |
 | 请求层 | axios + 拦截器 + Refresh 单飞 | 已较完整 |
-| 别名 | `@/` → `src` | vite + tsconfig 均已配 |
-| 组件库 | 无 | 仅 globals.css |
-| 数据层 | 无服务端状态管理 | 无 TanStack Query |
-| 规范 / 测试 / CI | 无 | 无 ESLint / Prettier / Husky / 测试 |
+| 组件库 | shadcn/ui + Tailwind | 门户令牌已写入 `globals.css` |
+| 服务端状态 | TanStack Query | 规划中，部分页仍手写 loading |
+| 规范 / 测试 / CI | 部分 | ESLint 等按需补齐 |
 
-结论：**骨架健康（TS strict + 分层雏形），但工程化与数据层几乎是空白**，正好是补蓝图的最佳窗口。
+结论：**壳层（登录 / 门户 / 侧栏）已可联调**；用户/组织/角色/菜单等业务 CRUD 页为下一迭代。
 
 ---
 
@@ -36,8 +35,8 @@
 | 全局状态 | Zustand | 仅放**客户端状态**（会话、UI 偏好） | ✅ |
 | 服务端状态 | **TanStack Query v5** | 缓存 / 失效 / 重试 / 并发，替代手写 loading | ❌ 待引入 |
 | 请求 | axios（沿用 + 封装） | 拦截器已较完整，包一层 `api/*` | ✅ |
-| 组件库 | **shadcn/ui**（Radix + Tailwind） | 代码归你所有、可深度定制、无黑盒 | ❌ 待引入 |
-| 样式 | Tailwind CSS + CSS 变量（设计令牌） | 与 shadcn 配套，主题化方便 | ❌ 待引入 |
+| 组件库 | **shadcn/ui**（Radix + Tailwind） | 代码归你所有、可深度定制、无黑盒 | ✅ 已引入 |
+| 样式 | Tailwind CSS + CSS 变量（门户令牌） | 与 shadcn 配套；`--radius: 0.375rem` | ✅ |
 | 表单 | react-hook-form + zod | 高性能、类型安全校验 | ❌ 待引入 |
 | 表格 | TanStack Table | 与 Query 同生态 | ❌ 待引入 |
 | 规范 | ESLint(flat) + Prettier + Husky + lint-staged | 质量门禁 | ❌ 待引入 |

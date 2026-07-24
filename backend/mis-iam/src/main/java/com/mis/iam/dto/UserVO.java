@@ -15,7 +15,7 @@ public record UserVO(
         Integer mustChangePassword,
         String realName,
         String deptId,
-        List<String> roles,
+        List<RoleVO> roles,
         Instant createdAt,
         Instant updatedAt
 ) {}

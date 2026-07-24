@@ -53,7 +53,7 @@ erDiagram
 
 ## 3. 表结构明细
 
-### 3.1 sys_app — 应用（≈ 微前端子应用边界）
+### 3.1 sys_app — 应用（≈ 门户子系统 / 微前端子应用边界）
 
 | 字段 | 类型 | 约束 | 说明 |
 |------|------|------|------|
@@ -61,15 +61,21 @@ erDiagram
 | tenant_id | BIGINT | NOT NULL DEFAULT 1 | |
 | code | VARCHAR(64) | NOT NULL | 如 `system` |
 | name | VARCHAR(128) | NOT NULL | |
-| icon | VARCHAR(64) | NULL | |
+| icon | VARCHAR(64) | NULL | lucide 图标名等 |
 | base_path | VARCHAR(128) | NULL | 路由前缀 `/system` |
-| mfe_remote | VARCHAR(256) | NULL | 微前端 remote，Phase 1 空 |
+| mfe_remote | VARCHAR(256) | NULL | 微前端 remote；`runtime=host` 时为空 |
+| kind | VARCHAR(32) | NOT NULL DEFAULT `subsystem` | 应用种类（门户分组用） |
+| runtime | VARCHAR(32) | NOT NULL DEFAULT `host` | `host`=同仓壳内路由；`remote`=Module Federation |
+| description | VARCHAR(256) | NULL | 门户卡片说明 |
+| portal_group | VARCHAR(64) | NULL | 门户分组，如 `governance` / `operations` |
 | sort | INT | NOT NULL DEFAULT 0 | |
 | status | SMALLINT | NOT NULL DEFAULT 1 | |
 | created_at | TIMESTAMPTZ | NOT NULL | |
 | updated_at | TIMESTAMPTZ | NOT NULL | |
 
 **索引：** `uk_app_tenant_code` UNIQUE (tenant_id, code)
+
+> Phase 1：种子含 `system`（可进入）及 `iam`/`ops` 占位；前端 `enterable` 由 BFF 白名单计算（当前仅 `system`）。字段增量见 Flyway **V5**。
 
 ### 3.2 sys_module — 业务模块（≈ 微服务 1:1，平台级）
 
@@ -78,7 +84,7 @@ erDiagram
 | id | BIGINT | PK | |
 | code | VARCHAR(64) | NOT NULL | 如 `user`、`org` |
 | name | VARCHAR(128) | NOT NULL | |
-| service_name | VARCHAR(64) | NOT NULL | Nacos 名 `mis-user` |
+| service_name | VARCHAR(64) | NOT NULL | Nacos 名，如 `mis-iam` |
 | sort | INT | NOT NULL DEFAULT 0 | |
 | status | SMALLINT | NOT NULL DEFAULT 1 | |
 | created_at | TIMESTAMPTZ | NOT NULL | |

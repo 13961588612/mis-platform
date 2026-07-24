@@ -39,6 +39,9 @@ mis:
     audit-base-url: ${AUDIT_BASE_URL:http://localhost:8106}
     audit-discovery-enabled: false
     audit-service-id: mis-audit
+    iam-discovery-enabled: false
+    iam-service-id: mis-iam
+    iam-base-url: ${IAM_BASE_URL:http://localhost:8102}
   security:
     jwt:
       private-key-path: ${JWT_PRIVATE_KEY_PATH:}

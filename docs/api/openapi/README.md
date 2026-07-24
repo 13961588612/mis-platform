@@ -8,13 +8,13 @@
 |------|------|------|
 | mis-admin-bff.yaml | ⏳ 待编写 | 对外统一 API 契约 |
 | mis-auth.yaml | ⏳ 待编写 | 认证服务内部 API |
-| mis-user.yaml | ⏳ 待编写 | 用户服务 |
-| mis-org.yaml | ⏳ 待编写 | 组织服务 |
-| mis-rbac.yaml | ⏳ 待编写 | 权限服务 |
-| mis-system.yaml | ⏳ 待编写 | 系统服务 |
+| mis-iam.yaml | ⏳ 待编写 | 身份与权限（用户/角色/APP） |
+| mis-org.yaml | ⏳ 待编写 | 组织 / 部门 / 员工 |
+| mis-system.yaml | ⏳ 待编写 | 菜单 / 字典 / API 注册 |
 | mis-audit.yaml | ⏳ 待编写 | 审计服务 |
 
-> 开工后优先从 BFF 的 SpringDoc 导出 YAML，或手写与 [api-specification.md](../api/api-specification.md) 保持一致。
+> Sprint 2：不再规划独立的 mis-user.yaml / mis-rbac.yaml。  
+> 开工后优先从 BFF 的 SpringDoc 导出 YAML，或手写与 [api-specification.md](../api-specification.md) 保持一致。
 
 ## 维护原则
 

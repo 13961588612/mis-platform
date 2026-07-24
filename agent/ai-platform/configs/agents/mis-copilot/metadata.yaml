@@ -1,0 +1,14 @@
+metadata:
+  name: mis-copilot
+  display_name: MIS 智能对话助手（Copilot）
+  description: >
+    MIS 平台通用 AI 对话助手，服务于业务人员与管理者，支持基于业务上下文的
+    自然语言对话与文案生成。
+  version: "1.0.0"
+  enabled: true
+  tags:
+    - mis
+    - copilot
+    - chat
+  capabilities:
+    - chat

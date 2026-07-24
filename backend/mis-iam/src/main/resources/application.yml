@@ -30,3 +30,15 @@ management:
 logging:
   level:
     com.mis.iam: DEBUG
+
+mis:
+  iam:
+    org-check-enabled: true
+    org-discovery-enabled: false
+    org-service-id: mis-org
+    org-base-url: http://localhost:8103
+    default-password: Mis@123456
+    system-discovery-enabled: false
+    system-service-id: mis-system
+    system-base-url: http://localhost:8105
+    permissions-ttl-minutes: 15

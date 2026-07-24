@@ -1,7 +1,14 @@
 import { useEffect, useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
+import { AlertCircle } from 'lucide-react';
 import { fetchCaptcha, login } from '@/lib/api/auth';
+import { bootstrapSession } from '@/lib/auth/bootstrap';
 import { useAuthStore } from '@/stores/auth-store';
+import { Alert, AlertDescription } from '@/components/ui/alert';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { SubmitButton } from '@/components/common/submit-button';
 
 export function LoginPage() {
   const navigate = useNavigate();
@@ -42,10 +49,11 @@ export function LoginPage() {
         captchaCode,
       });
       setSession(data);
+      await bootstrapSession();
       if (data.user.mustChangePassword) {
         navigate('/change-password', { replace: true });
       } else {
-        navigate('/dashboard', { replace: true });
+        navigate('/portal', { replace: true });
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : '登录失败');
@@ -56,68 +64,95 @@ export function LoginPage() {
   };
 
   return (
-    <div className="login-page">
-      <form className="login-card" onSubmit={handleSubmit}>
-        <h1>MIS Platform</h1>
-        <p className="subtitle">企业管理后台</p>
-        {error ? <div className="error">{error}</div> : null}
-        <label>
-          用户名
-          <input value={username} onChange={(e) => setUsername(e.target.value)} autoComplete="username" />
-        </label>
-        <label>
-          密码
-          <input
-            type="password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            autoComplete="current-password"
-          />
-        </label>
-        <label>
-          验证码
-          <div className="captcha-row">
-            <input value={captchaCode} onChange={(e) => setCaptchaCode(e.target.value)} maxLength={4} />
-            {captchaImage ? (
-              <button type="button" className="captcha-image" onClick={() => void loadCaptcha()} title="点击刷新">
-                <img src={captchaImage} alt="验证码" />
-              </button>
-            ) : null}
+    <div className="grid min-h-screen lg:grid-cols-2">
+      <div
+        className="relative hidden flex-col justify-between overflow-hidden p-10 text-white lg:flex"
+        style={{ backgroundImage: 'var(--login-bg-image)', backgroundSize: 'cover' }}
+      >
+        <div className="relative z-10">
+          <div className="flex items-center gap-2">
+            <span className="flex h-8 w-8 items-center justify-center rounded-md bg-primary text-sm font-bold">
+              M
+            </span>
+            <span className="text-lg font-semibold tracking-tight">MIS Platform</span>
           </div>
-        </label>
-        <button type="submit" disabled={loading}>
-          {loading ? '登录中…' : '登录'}
-        </button>
-      </form>
-    </div>
-  );
-}
+        </div>
+        <div className="relative z-10 max-w-md space-y-3">
+          <h2 className="text-3xl font-semibold leading-tight">一处登录，贯通业务子系统</h2>
+          <p className="text-sm text-white/70">
+            面向企业的一体化身份、权限与运营中台。统一入口、统一权限、可演进微前端。
+          </p>
+        </div>
+        <p className="relative z-10 text-xs text-white/50">© MIS Platform</p>
+      </div>
 
-export function ChangePasswordPlaceholder() {
-  return (
-    <div className="page-center">
-      <div className="card">
-        <h2>首次登录须修改密码</h2>
-        <p>改密页将在 Sprint 2 实现，当前可先跳过验收。</p>
-        <Link to="/dashboard">暂时进入系统</Link>
+      <div className="flex items-center justify-center bg-background p-6">
+        <Card className="w-full max-w-sm border shadow-card">
+          <CardHeader className="space-y-1">
+            <CardTitle className="text-xl">登录</CardTitle>
+            <CardDescription>使用租户管理员账号进入门户</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <form className="space-y-4" onSubmit={handleSubmit}>
+              {error ? (
+                <Alert variant="destructive">
+                  <AlertDescription className="flex items-center gap-2">
+                    <AlertCircle className="h-4 w-4 shrink-0" />
+                    {error}
+                  </AlertDescription>
+                </Alert>
+              ) : null}
+              <div className="space-y-2">
+                <Label htmlFor="username">用户名</Label>
+                <Input
+                  id="username"
+                  value={username}
+                  onChange={(e) => setUsername(e.target.value)}
+                  autoComplete="username"
+                  required
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="password">密码</Label>
+                <Input
+                  id="password"
+                  type="password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  autoComplete="current-password"
+                  required
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="captcha">验证码</Label>
+                <div className="flex gap-2">
+                  <Input
+                    id="captcha"
+                    value={captchaCode}
+                    onChange={(e) => setCaptchaCode(e.target.value)}
+                    maxLength={4}
+                    required
+                  />
+                  {captchaImage ? (
+                    <button
+                      type="button"
+                      className="h-9 shrink-0 overflow-hidden rounded-md border bg-card"
+                      onClick={() => void loadCaptcha()}
+                      title="点击刷新"
+                    >
+                      <img src={captchaImage} alt="验证码" className="h-9 w-[100px] object-cover" />
+                    </button>
+                  ) : null}
+                </div>
+              </div>
+              <SubmitButton type="submit" className="w-full" loading={loading}>
+                {loading ? '登录中…' : '登录'}
+              </SubmitButton>
+            </form>
+          </CardContent>
+        </Card>
       </div>
     </div>
   );
 }
 
-export function DashboardPage() {
-  const user = useAuthStore((s) => s.user);
-  const app = useAuthStore((s) => s.app);
-
-  return (
-    <div className="mx-auto max-w-3xl space-y-4">
-      <div className="rounded-lg border bg-card p-6 text-card-foreground shadow-sm">
-        <h2 className="text-xl font-medium">欢迎，{user?.realName ?? user?.username}</h2>
-        <p className="mt-2 text-sm text-muted-foreground">角色：{user?.roles?.join(', ') || '—'}</p>
-        <p className="mt-1 text-sm text-muted-foreground">
-          {app?.name ?? 'MIS'} Sprint 1 认证闭环已就绪。后续 Sprint 将接入动态菜单与用户管理。
-        </p>
-      </div>
-    </div>
-  );
-}

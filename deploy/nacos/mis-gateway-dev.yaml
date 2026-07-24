@@ -17,6 +17,11 @@ spring:
   cloud:
     gateway:
       routes:
+        - id: mis-auth-me
+          uri: http://localhost:8081
+          order: -20
+          predicates:
+            - Path=/api/v1/auth/me
         - id: mis-auth
           uri: http://localhost:8101
           order: -10

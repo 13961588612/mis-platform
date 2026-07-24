@@ -24,3 +24,13 @@ export async function logout(): Promise<void> {
     // 无论后端是否成功，前端都清本地会话
   }
 }
+
+export async function changePassword(payload: {
+  oldPassword: string;
+  newPassword: string;
+}): Promise<void> {
+  const res = await api.put<ApiResult<null>>('/auth/password', payload);
+  if (res.data.code !== 0) {
+    throw new Error(res.data.message || '修改密码失败');
+  }
+}

@@ -12,6 +12,8 @@ flowchart LR
     Nacos -->|JDBC| PG[("PostgreSQL nacos 库")]
     GW[mis-gateway] -->|MIS_REMOTE=true| Nacos
     Auth[mis-auth] -->|MIS_REMOTE=true| Nacos
+    IAM[mis-iam] -->|MIS_REMOTE=true| Nacos
+    Org[mis-org] -->|MIS_REMOTE=true| Nacos
     Audit[mis-audit] -->|MIS_REMOTE=true| Nacos
     GW -->|lb://| Auth
     GW -->|lb://| Audit
@@ -42,6 +44,8 @@ flowchart LR
 | `mis-common.yaml` | `mis-common` | 数据源、Redis、JWT 公钥路径 |
 | `mis-gateway.yaml` | `mis-gateway` | `lb://` 路由 |
 | `mis-auth.yaml` | `mis-auth` | 认证、Cookie、私钥路径 |
+| `mis-iam.yaml` | `mis-iam` | 身份与权限 |
+| `mis-org.yaml` | `mis-org` | 组织与人事 |
 | `mis-audit.yaml` | `mis-audit` | 审计服务 |
 
 合并 PR 后，由 CI 或运维执行推送。

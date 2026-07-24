@@ -1,14 +1,11 @@
 package com.mis.auth.service;
 
 import com.mis.auth.client.AuditLoginLogClient;
+import com.mis.auth.client.IamUserClient;
+import com.mis.auth.client.IamUserClient.AuthUserPayload;
 import com.mis.auth.config.AuthProperties;
 import com.mis.auth.domain.entity.SysApp;
-import com.mis.auth.domain.entity.SysEmployee;
-import com.mis.auth.domain.entity.SysUser;
 import com.mis.auth.domain.repository.SysAppRepository;
-import com.mis.auth.domain.repository.SysEmployeeRepository;
-import com.mis.auth.domain.repository.SysRoleRepository;
-import com.mis.auth.domain.repository.SysUserRepository;
 import com.mis.auth.dto.LoginClientInfo;
 import com.mis.auth.dto.LoginRequest;
 import com.mis.auth.dto.LoginResponse;
@@ -34,19 +31,14 @@ import java.util.List;
 /**
  * 认证核心业务（L0）：登录、刷新、登出。
  * <p>
- * <b>不做</b> API 权限判断；permissions 由 mis-rbac 写入 Redis，BFF 鉴权时读取（ADR-008/009）。
- * <p>
- * Phase 1 直接 JPA 查 {@code sys_user}；后续可改为调用 mis-user 内部 API。
- *
- * @see com.mis.auth.controller.AuthController
+ * 用户主数据经 RestClient 调 <b>mis-iam</b>（不再直查 {@code sys_user}）。
+ * APP 元数据仍本服务只读；Refresh Token 仍落本库。
  */
 @Service
 public class AuthService {
 
     private final SysAppRepository sysAppRepository;
-    private final SysUserRepository sysUserRepository;
-    private final SysEmployeeRepository sysEmployeeRepository;
-    private final SysRoleRepository sysRoleRepository;
+    private final IamUserClient iamUserClient;
     private final CaptchaService captchaService;
     private final LoginLockService loginLockService;
     private final RefreshTokenService refreshTokenService;
@@ -61,9 +53,7 @@ public class AuthService {
 
     public AuthService(
             SysAppRepository sysAppRepository,
-            SysUserRepository sysUserRepository,
-            SysEmployeeRepository sysEmployeeRepository,
-            SysRoleRepository sysRoleRepository,
+            IamUserClient iamUserClient,
             CaptchaService captchaService,
             LoginLockService loginLockService,
             RefreshTokenService refreshTokenService,
@@ -76,9 +66,7 @@ public class AuthService {
             PermVersionService permVersionService,
             AuditLoginLogClient auditLoginLogClient) {
         this.sysAppRepository = sysAppRepository;
-        this.sysUserRepository = sysUserRepository;
-        this.sysEmployeeRepository = sysEmployeeRepository;
-        this.sysRoleRepository = sysRoleRepository;
+        this.iamUserClient = iamUserClient;
         this.captchaService = captchaService;
         this.loginLockService = loginLockService;
         this.refreshTokenService = refreshTokenService;
@@ -92,10 +80,6 @@ public class AuthService {
         this.auditLoginLogClient = auditLoginLogClient;
     }
 
-    /**
-     * 登录：验证码 → 账号锁定检查 → 密码校验 → 签发 Access + Refresh。
-     * Refresh 明文仅通过 HttpOnly Cookie 返回，不落响应 body。
-     */
     @Transactional
     public LoginResult login(LoginRequest request, LoginClientInfo clientInfo) {
         SysApp app = sysAppRepository.findByCodeAndStatus(request.appCode(), 1)
@@ -117,61 +101,61 @@ public class AuthService {
             }
         }
 
-        SysUser user = sysUserRepository
-                .findByTenantIdAndAppIdAndUsernameAndStatus(app.getTenantId(), app.getId(), request.username(), 1)
-                .orElse(null);
-        if (user == null) {
-            throw handleLoginFailure(app, null, request.username(), clientInfo);
+        AuthUserPayload user = iamUserClient.findByUsername(app.getTenantId(), app.getId(), request.username());
+        if (user == null || !user.isActive()) {
+            throw handleLoginFailure(app, user != null ? user.userId() : null, request.username(), clientInfo);
         }
 
-        if (!passwordEncoder.matches(request.password(), user.getPasswordHash())) {
-            throw handleLoginFailure(app, user.getId(), request.username(), clientInfo);
+        if (!passwordEncoder.matches(request.password(), user.passwordHash())) {
+            throw handleLoginFailure(app, user.userId(), request.username(), clientInfo);
         }
 
         loginLockService.clearFailures(app.getTenantId(), app.getId(), request.username());
 
-        List<String> roles = sysRoleRepository.findRoleCodesByUserId(user.getId());
+        iamUserClient.loadAndCachePermissions(user.userId());
+
+        List<String> roles = user.roleCodes() != null ? user.roleCodes() : List.of();
         long permVersion = resolvePermVersion(user, app);
         IssuedAccessToken accessToken = issueAccessToken(user, app, roles, permVersion);
-        String refreshToken = refreshTokenService.issue(user.getId(), app.getId());
+        String refreshToken = refreshTokenService.issue(user.userId(), app.getId());
 
-        SysEmployee employee = sysEmployeeRepository.findById(user.getEmployeeId()).orElse(null);
-        String realName = employee != null ? employee.getRealName() : user.getUsername();
-        String deptId = employee != null ? String.valueOf(employee.getDeptId()) : null;
+        String realName = user.realName() != null && !user.realName().isBlank()
+                ? user.realName()
+                : user.username();
 
-        recordLoginLog(app, user.getId(), request.username(), 1, "登录成功", clientInfo);
+        recordLoginLog(app, user.userId(), request.username(), 1, "登录成功", clientInfo);
 
         LoginResponse response = new LoginResponse(
                 accessToken.token(),
                 accessToken.expiresInSeconds(),
                 new LoginResponse.AppInfo(String.valueOf(app.getId()), app.getCode(), app.getName()),
                 new LoginResponse.UserInfo(
-                        String.valueOf(user.getId()),
-                        String.valueOf(user.getEmployeeId()),
-                        user.getUsername(),
+                        user.id(),
+                        user.employeeId(),
+                        user.username(),
                         realName,
                         null,
-                        deptId,
+                        user.deptId(),
                         null,
                         roles,
-                        user.mustChangePassword()));
+                        user.mustChangePasswordFlag()));
 
         return new LoginResult(response, refreshToken, app.getCode());
     }
 
-    /**
-     * 刷新：轮换 Refresh（旧 token 吊销 + 发新 token），并签发新 Access。
-     * 见 ADR-002 Refresh Token 轮换策略。
-     */
     @Transactional
     public RefreshResult refresh(String rawRefreshToken) {
         RefreshTokenService.RotateResult rotated = refreshTokenService.rotate(rawRefreshToken);
-        SysUser user = sysUserRepository.findById(rotated.context().userId())
-                .orElseThrow(() -> new BusinessException(ResultCode.UNAUTHORIZED));
+        AuthUserPayload user = iamUserClient.findById(rotated.context().userId());
+        if (user == null || !user.isActive()) {
+            throw new BusinessException(ResultCode.UNAUTHORIZED);
+        }
         SysApp app = sysAppRepository.findById(rotated.context().appId())
                 .orElseThrow(() -> new BusinessException(ResultCode.UNAUTHORIZED));
 
-        List<String> roles = sysRoleRepository.findRoleCodesByUserId(user.getId());
+        iamUserClient.loadAndCachePermissions(user.userId());
+
+        List<String> roles = user.roleCodes() != null ? user.roleCodes() : List.of();
         long permVersion = resolvePermVersion(user, app);
         IssuedAccessToken accessToken = issueAccessToken(user, app, roles, permVersion);
 
@@ -181,16 +165,12 @@ public class AuthService {
                 app.getCode());
     }
 
-    /**
-     * 登出：Access Token jti 入 Redis 黑名单 + 吊销 Refresh（DB + Redis）。
-     */
     @Transactional
     public void logout(String authorizationHeader, String rawRefreshToken) {
         if (authorizationHeader != null && authorizationHeader.startsWith(SecurityConstants.BEARER_PREFIX)) {
             String token = authorizationHeader.substring(SecurityConstants.BEARER_PREFIX.length()).trim();
             try {
                 JwtClaims claims = jwtVerifier.verify(token);
-                // Phase 1：TTL 取配置 TTL；精确剩余时间可在后续从 exp claim 计算
                 Duration ttl = Duration.ofSeconds(jwtProperties.getAccessTokenTtlSeconds());
                 tokenBlacklistService.blacklist(claims.jti(), ttl);
             } catch (RuntimeException ignored) {
@@ -200,29 +180,59 @@ public class AuthService {
         refreshTokenService.revoke(rawRefreshToken);
     }
 
+    @Transactional
+    public void changePassword(String authorizationHeader, String oldPassword, String newPassword) {
+        if (authorizationHeader == null || !authorizationHeader.startsWith(SecurityConstants.BEARER_PREFIX)) {
+            throw new BusinessException(ResultCode.UNAUTHORIZED);
+        }
+        String token = authorizationHeader.substring(SecurityConstants.BEARER_PREFIX.length()).trim();
+        JwtClaims claims;
+        try {
+            claims = jwtVerifier.verify(token);
+        } catch (RuntimeException ex) {
+            throw new BusinessException(ResultCode.TOKEN_INVALID);
+        }
+        if (claims.userId() == null) {
+            throw new BusinessException(ResultCode.UNAUTHORIZED);
+        }
+        if (oldPassword == null || newPassword == null || newPassword.equals(oldPassword)) {
+            throw new BusinessException(ResultCode.VALIDATION_ERROR, "新密码不能与旧密码相同");
+        }
+        if (!newPassword.matches("(?=.*[A-Za-z])(?=.*\\d).{8,64}")) {
+            throw new BusinessException(ResultCode.VALIDATION_ERROR, "新密码须 8–64 位且同时包含字母与数字");
+        }
+
+        AuthUserPayload user = iamUserClient.findById(claims.userId());
+        if (user == null || !user.isActive()) {
+            throw new BusinessException(ResultCode.UNAUTHORIZED);
+        }
+        if (!passwordEncoder.matches(oldPassword, user.passwordHash())) {
+            throw new BusinessException(ResultCode.LOGIN_FAILED, "当前密码不正确");
+        }
+        iamUserClient.changePassword(user.userId(), newPassword);
+    }
+
     private IssuedAccessToken issueAccessToken(
-            SysUser user,
+            AuthUserPayload user,
             SysApp app,
             List<String> roles,
             long permVersion) {
         return jwtIssuer.issue(new AccessTokenClaims(
-                user.getId(),
-                user.getTenantId(),
+                user.userId(),
+                user.tenantIdLong(),
                 app.getId(),
-                user.getEmployeeId(),
-                user.getUsername(),
+                user.employeeIdLong(),
+                user.username(),
                 roles,
                 permVersion));
     }
 
-    /** 权威源 {@code sys_user.perm_version}，并写回 Redis 缓存（ADR-009）。 */
-    private long resolvePermVersion(SysUser user, SysApp app) {
-        long dbVersion = user.getPermVersion() != null ? user.getPermVersion() : 1L;
+    private long resolvePermVersion(AuthUserPayload user, SysApp app) {
+        long dbVersion = user.permVersion() != null ? user.permVersion() : 1L;
         return permVersionService.syncCacheFromAuthority(
-                user.getTenantId(), app.getId(), user.getId(), dbVersion);
+                user.tenantIdLong(), app.getId(), user.userId(), dbVersion);
     }
 
-    /** 统一返回 LOGIN_FAILED，避免泄露用户是否存在；同时累计 Redis 失败次数 */
     private BusinessException handleLoginFailure(
             SysApp app, Long userId, String username, LoginClientInfo clientInfo) {
         loginLockService.recordFailure(app.getTenantId(), app.getId(), username);

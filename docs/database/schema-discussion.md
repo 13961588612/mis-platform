@@ -436,7 +436,7 @@ sys_employee → sys_user（每 APP 一个登录账号）
 | id           | BIGINT       | PK                   |
 | code         | VARCHAR(64)  | 如 `user`、`org`       |
 | name         | VARCHAR(128) | 用户模块                 |
-| service_name | VARCHAR(64)  | Nacos 服务名 `mis-user` |
+| service_name | VARCHAR(64)  | Nacos 服务名，如 `mis-iam` |
 | sort         | INT          |                      |
 | status       | SMALLINT     |                      |
 

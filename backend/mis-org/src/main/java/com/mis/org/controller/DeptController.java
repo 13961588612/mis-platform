@@ -33,6 +33,11 @@ public class DeptController {
         return Result.ok(deptService.tree(orgId));
     }
 
+    @GetMapping("/{id}/subtree-ids")
+    public Result<List<Long>> subtreeIds(@PathVariable Long id) {
+        return Result.ok(deptService.subtreeIds(id));
+    }
+
     @GetMapping("/{id}")
     public Result<DeptVO> get(@PathVariable Long id) {
         return Result.ok(deptService.getById(id));

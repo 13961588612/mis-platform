@@ -44,6 +44,7 @@ public class RsaJwtIssuer implements JwtIssuer {
 
             JWTClaimsSet.Builder builder = new JWTClaimsSet.Builder()
                     .subject(String.valueOf(claims.userId()))
+                    .issuer("mis-platform")   // T1：补 iss（向后兼容；旧 token 无 iss 仍可被平台软比对接受）
                     .jwtID(jti)
                     .issueTime(Date.from(now))
                     .expirationTime(Date.from(expiry))

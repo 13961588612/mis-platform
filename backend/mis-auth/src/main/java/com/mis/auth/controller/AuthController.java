@@ -2,6 +2,7 @@ package com.mis.auth.controller;
 
 import com.mis.auth.config.AuthProperties;
 import com.mis.auth.dto.CaptchaResponse;
+import com.mis.auth.dto.ChangePasswordRequest;
 import com.mis.auth.dto.LoginClientInfo;
 import com.mis.auth.dto.LoginRequest;
 import com.mis.auth.dto.RefreshRequest;
@@ -19,6 +20,7 @@ import org.springframework.http.ResponseCookie;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -99,6 +101,14 @@ public class AuthController {
             }
         }
         return ResponseEntity.ok().body(Result.ok());
+    }
+
+    @PutMapping("/password")
+    public Result<Void> changePassword(
+            @RequestHeader(value = HttpHeaders.AUTHORIZATION, required = false) String authorization,
+            @Valid @RequestBody ChangePasswordRequest request) {
+        authService.changePassword(authorization, request.oldPassword(), request.newPassword());
+        return Result.ok();
     }
 
     private String resolveRefreshToken(RefreshRequest request, HttpServletRequest httpRequest) {

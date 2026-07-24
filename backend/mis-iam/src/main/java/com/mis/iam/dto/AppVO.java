@@ -7,6 +7,10 @@ public record AppVO(
         String name,
         String icon,
         String basePath,
+        String description,
+        String portalGroup,
+        String kind,
+        String runtime,
         Integer sort,
         Integer status
 ) {}

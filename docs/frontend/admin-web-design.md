@@ -1,7 +1,8 @@
 # 管理后台前端设计（mis-admin-web）
 
-> 状态：📝 草稿 | 版本：v1.0-draft  
-> 路径：`frontend/mis-admin-web/`
+> 状态：📝 草稿 | 版本：v1.1-draft | 更新：2026-07-21（门户壳 + 令牌对齐）  
+> 路径：`frontend/mis-admin-web/`  
+> 视觉权威：[portal-design-tokens.md](./design-proposal/portal-design-tokens.md)（admin **跟门户**同一套令牌）
 
 ## 1. 技术选型
 
@@ -42,6 +43,7 @@ mis-admin-web/
 │   ├── hooks/                    # useDebouncedValue、useAsyncAction
 │   ├── features/                 # 按业务域划分
 │   │   ├── auth/
+│   │   ├── portal/               # 应用九宫格 / 门户首页
 │   │   ├── dashboard/
 │   │   ├── system/
 │   │   │   ├── user/
@@ -78,72 +80,90 @@ mis-admin-web/
 
 ## 3. 路由设计
 
-### 3.1 静态路由
+### 3.1 静态 / 壳层路由
 
 | 路径 | 组件 | 鉴权 |
 |------|------|------|
 | `/login` | LoginPage | 公开 |
+| `/portal` | PortalPage | 登录 |
+| `/change-password` | 改密页（首登强制） | 登录 |
 | `/403` | ForbiddenPage | 公开 |
 | `/404` | NotFoundPage | 公开 |
 
-### 3.2 动态路由（登录后注册）
+### 3.2 子系统路由（进 system 后，侧栏由 `/menus/router` 驱动）
 
 | 路径 | 组件 | permission |
 |------|------|------------|
 | `/dashboard` | DashboardPage | dashboard:view |
 | `/system/user` | UserListPage | system:user:list |
 | `/system/org` | OrgTreePage | system:org:list |
+| `/system/dept` | DeptPage | system:dept:list |
 | `/system/role` | RoleListPage | system:role:list |
 | `/system/menu` | MenuTreePage | system:menu:list |
 | `/system/dict` | DictPage | system:dict:list |
 | `/monitor/login-log` | LoginLogPage | monitor:loginlog:list |
 | `/monitor/oper-log` | OperLogPage | monitor:operlog:list |
 
-### 3.3 动态路由注册流程
+> Phase 1：门户九宫格仅 **`system` 可进入**；其它 `sys_app`（如 iam/ops）展示为占位（`enterable=false`）。微前端 `runtime=remote` 为 Phase 2。
+
+### 3.3 登录后会话引导
 
 ```mermaid
 flowchart TD
-    A[登录成功] --> B[GET /auth/me]
-    B --> C[GET /menus/router]
-    C --> D[transformRoutes]
-    D --> E[router.addRoute]
-    E --> F[跳转 /dashboard]
+    A[登录成功] --> B{mustChangePassword?}
+    B -->|是| C[/change-password]
+    B -->|否| D[/portal]
+    D --> E[GET /apps 九宫格]
+    E --> F[进入 system]
+    F --> G[GET /menus/permissions + /menus/router]
+    G --> H[侧栏 + /dashboard]
 ```
+
+说明：壳层 bootstrap 以 **permissions + router** 为主；`GET /auth/me`（BFF）用于补全当前用户与权限列表（Gateway 将该路径优先路由到 BFF，见 microservices Gateway 表）。
 
 ## 4. 布局设计
 
+### 4.0 门户层（无侧栏）
+
 ```
 ┌─────────────────────────────────────────────────────┐
-│ Header: Breadcrumb | Cmd+K | Theme | User Menu      │
+│ Portal Header: 品牌 | 搜索占位 | Theme | User        │
+├─────────────────────────────────────────────────────┤
+│ Hero / 分组标题                                      │
+│ ┌────┐ ┌────┐ ┌────┐   ← GET /apps 九宫格            │
+│ │APP │ │占位│ │占位│                                 │
+│ └────┘ └────┘ └────┘                                 │
+└─────────────────────────────────────────────────────┘
+```
+
+### 4.1 子系统壳（进 APP 后）
+
+```
+┌─────────────────────────────────────────────────────┐
+│ Header: 返回门户 | APP 切换 | Breadcrumb | User      │
 ├──────────┬──────────────────────────────────────────┤
-│          │                                          │
 │ Sidebar  │  Main Content                            │
-│ (collaps)│  ┌────────────────────────────────────┐  │
-│          │  │ PageHeader + Actions               │  │
-│ NavMenu  │  ├────────────────────────────────────┤  │
-│          │  │ Page Body                          │  │
-│          │  └────────────────────────────────────┘  │
+│ (动态菜单)│  PageHeader + Body                       │
 └──────────┴──────────────────────────────────────────┘
 ```
 
-### 4.1 布局组件
+### 4.2 布局组件
 
 | 组件 | 文件 | 职责 |
 |------|------|------|
-| AppLayout | `components/layout/app-layout.tsx` | 整体框架 |
-| Sidebar | `components/layout/sidebar.tsx` | 侧边导航 |
-| Header | `components/layout/header.tsx` | 顶栏 |
-| NavMenu | `components/layout/nav-menu.tsx` | 递归菜单 |
+| PortalPage | `features/portal/portal-page.tsx` | 应用九宫格 |
+| AppLayout | `components/layout/app-layout.tsx` | 子系统框架（含返回门户 / APP 切换） |
+| Sidebar / NavMenu | `components/layout/*` | 动态侧栏 |
 | PageHeader | `components/common/page-header.tsx` | 标题+面包屑+操作区 |
 
-### 4.2 响应式
+### 4.3 响应式
 
 | 断点 | 行为 |
 |------|------|
 | ≥1024px | 侧边栏常驻，可折叠 |
 | <1024px | 侧边栏改为 Sheet 抽屉 |
 
-### 4.3 多 Tab 工作区（Phase 1 ✅）
+### 4.4 多 Tab 工作区（Phase 1 ✅）
 
 主内容区顶部 **TabBar**，行为类似 IDE / 浏览器多标签：
 
@@ -157,7 +177,7 @@ flowchart TD
 
 组件：`components/layout/tab-bar.tsx` + `stores/tab-store.ts`。
 
-### 4.4 AI Copilot 占位（Phase 1 ✅）
+### 4.5 AI Copilot 占位（Phase 1 ✅）
 
 | 项 | Phase 1 | Phase 3 |
 |----|---------|---------|
@@ -413,16 +433,20 @@ alert, sonner, tooltip, scroll-area, sidebar
 
 ## 9. 设计 Token
 
+> 与门户对齐；细则见 [portal-design-tokens.md](./design-proposal/portal-design-tokens.md)。
+
 ```css
 :root {
-  --primary: 221.2 83.2% 53.3%;
-  --radius: 0.5rem;
+  /* 企业靛 + 冷灰画布 */
+  --primary: 243 75% 59%;
+  --background: 214 32% 96.5%;
+  --radius: 0.375rem; /* 全局；禁止回退到 0.5rem */
   --sidebar-width: 16rem;
   --sidebar-width-collapsed: 4rem;
 }
 ```
 
-字体栈：`Inter, "PingFang SC", "Microsoft YaHei", sans-serif`
+字体栈：`Inter, "PingFang SC", "Microsoft YaHei", sans-serif`（与现网 globals 一致；后续可换品牌字体）
 
 ## 10. Command Palette（Cmd+K）
 
@@ -450,6 +474,8 @@ alert, sonner, tooltip, scroll-area, sidebar
 
 ## 13. 关联文档
 
+- [门户设计令牌](./design-proposal/portal-design-tokens.md)
 - [接口规范](../api/api-specification.md)
 - [权限清单](../api/permissions.md)
 - [编码规范](../project/conventions.md)
+- [应用/模块/MFE](../architecture/04-app-module-mfe.md)

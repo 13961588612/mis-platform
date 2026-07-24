@@ -89,7 +89,7 @@ sys_tenant
 
 | 项 | 决策 |
 |----|------|
-| 服务部署 | **mis-auth** 与 **mis-user** **分开**部署 |
+| 服务部署 | **mis-auth** 与 **mis-iam** **分开**部署；组织人事在 **mis-org** |
 | 内部调用 | 服务间 **直连**（RestClient/WebClient），不经 Gateway |
 | SonarQube | Phase 1 **不接入** |
 | 本地开发 | **同时支持** Docker Compose 全栈 **与** IDE 直跑 Java 服务 |
@@ -99,4 +99,4 @@ sys_tenant
 - [x] 岗位类型 + 部门岗位 + 员工多岗任职
 - [x] superadmin + 租户 admin 保护规则
 - [x] DEPT_MANAGER 不预置；无权限通配符；首次改密；无测试账号
-- [x] F1–F6、auth/user 分离、内网直连、无 Sonar、Docker+IDE 本地开发
+- [x] F1–F6、auth/iam 分离、内网直连、无 Sonar、Docker+IDE 本地开发

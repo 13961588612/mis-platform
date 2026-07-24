@@ -1,0 +1,15 @@
+# Nacos 配置：mis-admin-bff（test 环境）
+# 融合部署 ai-platform 适配层参数（DEP-5）。
+mis:
+  ai-platform:
+    base-url: http://ai-platform-backend:8000
+    enabled: true
+    chat-timeout-ms: 60000
+    sse-enabled: true
+    health-check-interval-ms: 15000
+    features:
+      chat: true
+      summary: true
+      extract: true
+      rag: true
+      nl2sql: false
