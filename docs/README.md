@@ -39,6 +39,7 @@ docs/
 ├── frontend/                          # 管理后台设计
 ├── backend/                           # 微服务与公共模块
 ├── agent/                             # 智能体层
+├── ai-fusion/                        # ★ MIS × ai-platform 融合（decisions/specs/archive 分层）
 ├── devops/                            # ★ 运维与部署
 │   ├── README.md                      # 运维总览（环境对照）
 │   ├── local-dev.md                   # 本地开发
@@ -80,7 +81,7 @@ docs/
 | mis-admin-bff | ✅ | 聚合、API 权限、门户 `/apps`、`/auth/me` |
 | mis-system | ✅ | 菜单 router/permissions、仪表盘 stats |
 | 前端 mis-admin-web | ✅ | 登录 + 门户九宫格 + 子系统壳；业务 CRUD 页迭代中 |
-| **AI 融合（MIS × ai-platform）** | 📝 | 阶段5 前端 MVP（F0–F7）+ 后端扩展（T-ext/T-sum/T-stream）；详见 [AI 融合交付与进度](ai-fusion/ai-fusion-delivery.md) |
+| **AI 融合（MIS × ai-platform）** | ✅ | 阶段5 前端 MVP + 后端扩展 + 融合部署全闭环；详见 [AI 融合文档中心](ai-fusion/README.md) |
 
 ---
 
@@ -106,3 +107,4 @@ docs/
 | v1.2 | 2026-07-21 | Sprint 2 服务边界：mis-iam / mis-org；ADR-016 |
 | v1.3 | 2026-07-21 | 门户壳、`sys_app` V5、文档与进度对齐 |
 | v1.4 | 2026-07-24 | AI 融合（MIS × ai-platform）规格与进度同步；见 [ai-fusion/ai-fusion-delivery.md](ai-fusion/ai-fusion-delivery.md) |
+| v1.5 | 2026-07-24 | AI 融合文档整理：`ai-fusion/` 拆分为 decisions/specs/archive 三层 + 新建索引 README；移除过时早期探索稿与进度同步稿 |

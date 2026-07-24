@@ -2,7 +2,7 @@
 
 > 文档定位：实现阶段"增量任务分解"（架构交付物），供工程师编码。
 > 作者：架构师 高见远（software-architect）
-> 依据：`jwt-identity-clarification.md`（§5 落地指引、§7 已确认决策）、`mis_ai_phase1_2_design.md`、已落地代码核实。
+> 依据：`../decisions/identity-jwt.md`（§5 落地指引、§7 已确认决策）、已落地代码核实。
 > 原则：**最小变更、零回归**；路线 B；4 项决策已锁定（见澄清文档 §7）。
 
 ---

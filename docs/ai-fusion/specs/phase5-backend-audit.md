@@ -3,7 +3,7 @@
 > 审计人：QA（接任，重新独立完成）
 > 审计对象：`mis-admin-bff`（Java，静态核对）↔ `ai-platform`（Python，可实跑）
 > 审计方式：BFF 侧仅静态读码；平台侧结合静态读码 + 实跑测试（`tests/test_mis_integration.py`、`tests/test_identity_enrichment.py` 全绿）交叉验证。
-> 参考：架构师《frontend-ai-integration-design.md》§0.2（结论已逐项复核，下文标注「与架构师一致/补充」）。
+> 参考：架构师《phase5-frontend-design.md》§0.2（结论已逐项复核，下文标注「与架构师一致/补充」）。
 > 标注约定：**[实跑]** = 经 pytest/运行时验证；**[静态]** = 仅代码静态推断（含 BFF 外部公共模块不可见部分）。
 
 ---

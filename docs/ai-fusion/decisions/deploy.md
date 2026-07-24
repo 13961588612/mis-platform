@@ -79,7 +79,7 @@
 | **M2 token 查询参数（兜底）** | `<iframe src=".../chat?token=<JWT>">`；复用 gateway 已有的 `?token=` 提取（F8） | 中（token 在 URL，怕日志/referer 泄露；需短时/一次性） | 低（零改动，gateway 已支持） | ⭐⭐（仅作兜底） |
 | **M3 共享 cookie** | 同 SSO 域下 cookie 共享 | 依赖同域；跨域不可行 | 低（但跨系统基本不可用） | ⭐（不推荐跨系统） |
 
-- **前置阻塞（D1-1）**：上述三种模式都要求「TS gateway 接受的令牌」可由父系统签发。若父系统是 MIS，则最干净的做法是 **TS gateway 增加对 MIS JWT（RS256, `iss=mis-platform`）的信任**（加载 MIS 公钥，映射 `userId` 等到 `JwtClaims`），与 `jwt-identity-clarification.md` 的方向一致。否则需建「网关侧 SSO 桥」由父系统跳转到网关 SSO 换发网关 JWT——成本更高。**该决策直接决定嵌入鉴权是否可行**，必须优先拍板。
+- **前置阻塞（D1-1）**：上述三种模式都要求「TS gateway 接受的令牌」可由父系统签发。若父系统是 MIS，则最干净的做法是 **TS gateway 增加对 MIS JWT（RS256, `iss=mis-platform`）的信任**（加载 MIS 公钥，映射 `userId` 等到 `JwtClaims`），与 `identity-jwt.md` 的方向一致。否则需建「网关侧 SSO 桥」由父系统跳转到网关 SSO 换发网关 JWT——成本更高。**该决策直接决定嵌入鉴权是否可行**，必须优先拍板。
 
 ### 【备选方案】
 
@@ -381,7 +381,7 @@ graph TD
 
 | # | 开放问题 | 关联 | 推荐默认 |
 |---|---|---|---|
-| **O1** | TS gateway 鉴权升级为信任 MIS JWT（RS256）还是保留自有 + SSO 桥？ | D1-1 / R3 | 信任 MIS JWT（与 `jwt-identity-clarification` 一致） |
+| **O1** | TS gateway 鉴权升级为信任 MIS JWT（RS256）还是保留自有 + SSO 桥？ | D1-1 / R3 | 信任 MIS JWT（与 `identity-jwt` 一致） |
 | **O2** | H5 独立入口用子域还是路径？ | D1-2 | 子域 `agent.<主域>` |
 | **O3** | iframe 可信父域白名单如何维护（静态/动态/按租户）？ | D1-3 | 静态白名单 + 配置中心 |
 | **O4** | H5 生产形态：静态挂边缘 nginx vs 保留 H5 容器？ | D1-4 | 静态挂边缘 nginx（无 H5 常驻容器） |
@@ -399,7 +399,7 @@ graph TD
 
 - 本地 `package.json` 的 `build` 脚本**保持 `tsc -b && vite build` 不变**（IDE / CI 仍暴露类型错误，不被静默掩盖）；
 - 既有的 13 处类型错误（全部位于融合代码之外，与本次改动无关）已完整登记于
-  **`docs/ai-fusion/ai-fusion-frontend-techdebt.md`**，建议前端单独排期修复，修复后回滚门禁；
+  **`../techdebt.md`**，建议前端单独排期修复，修复后回滚门禁；
 - 用户已拍板「放宽构建门禁」，本项关闭。
 
 ---
@@ -413,4 +413,4 @@ graph TD
 - **通路 A / 通路 B**：见 §0.1。
 - **Flyway / Alembic**：MIS / ai-platform 各自的数据库迁移工具，分工见 §3.1。
 
-> 文档结束。本文为融合部署的**架构决策评审**（结论/推荐/备选/数据流图/待确认项/任务清单草案/风险），不含实现代码；与 `docs/ai-fusion/` 既有 14 份文档（尤其 `jwt-identity-clarification.md`、`frontend-ai-integration-design.md`、`backend-ext-design.md`、`ai-fusion-delivery.md`）及已核实代码事实一致。
+> 文档结束。本文为融合部署的**架构决策评审**（结论/推荐/备选/数据流图/待确认项/任务清单草案/风险），不含实现代码；与 `docs/ai-fusion/` 既有文档（尤其 `identity-jwt.md`、`../specs/phase5-frontend-design.md`、`../specs/phase5-backend-ext-design.md`，详见 `../README.md`）及已核实代码事实一致。

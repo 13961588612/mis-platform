@@ -1,6 +1,6 @@
 # 技术债登记：前端 H5 容器构建门禁放宽（跳过 tsc）
 
-> 关联决策文档：`docs/ai-fusion/ai-fusion-deploy-decision.md` §5「风险与开放问题」
+> 关联决策文档：`decisions/deploy.md` §5「风险与开放问题」
 > 关联部署任务：DEP-6（共享边缘 nginx 托管 H5 静态）
 > 登记原因：开放问题 #1（部署阻断项）已核实、用户拍板「放宽构建门禁」
 
@@ -86,4 +86,4 @@
 
 ---
 
-> 本文件为技术债登记，不含架构决策；架构结论以 `ai-fusion-deploy-decision.md` 为准。
+> 本文件为技术债登记，不含架构决策；架构结论以 `decisions/deploy.md` 为准。

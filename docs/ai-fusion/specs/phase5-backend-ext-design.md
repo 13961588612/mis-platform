@@ -1,6 +1,6 @@
 # 阶段5 后端扩展增量架构设计（T-ext / T-sum / T-stream）
 
-> 文档角色：架构师（高见远）基于《阶段5 后端扩展增量 PRD》（`backend-ext-prd.md`）、阶段5 集成设计（`frontend-ai-integration-design.md`）、契约审计（`backend-integration-audit.md`）与**真实读码**产出的**增量架构设计 + 任务分解**。
+> 文档角色：架构师（高见远）基于《阶段5 后端扩展增量 PRD》（`phase5-backend-ext-prd.md`）、阶段5 集成设计（`phase5-frontend-design.md`）、契约审计（`phase5-backend-audit.md`）与**真实读码**产出的**增量架构设计 + 任务分解**。
 > 范围：仅 T-ext（逐字段 confidence + unmapped）、T-sum（结构化 summary）、T-stream（SSE 流式透传）三个后端扩展点；前端仅做最小接线增强。
 > 语言：中文。约定：路径相对 `backend/`、`agent/ai-platform/`、`frontend/mis-admin-web/`。
 
@@ -371,9 +371,9 @@ graph TD
 
 ## 9. 与既有文档一致性
 
-- 本设计是 `backend-ext-prd.md` 的工程化落地；任务 ID 沿用设计 §7.1（T-ext-1/2、T-sum、T-stream）。
-- 与 `frontend-ai-integration-design.md` 一致：前端类型已就绪、仅最小接线；BFF 透传语义、字段 key 真源、阈值默认 0.85 均对齐。
-- 与 `backend-integration-audit.md` 一致：核心契约无阻断坑；SSE 缺口（§7）由 T-stream 补；401 透传（§6）列为 P2 预留。
+- 本设计是 `phase5-backend-ext-prd.md` 的工程化落地；任务 ID 沿用设计 §7.1（T-ext-1/2、T-sum、T-stream）。
+- 与 `phase5-frontend-design.md` 一致：前端类型已就绪、仅最小接线；BFF 透传语义、字段 key 真源、阈值默认 0.85 均对齐。
+- 与 `phase5-backend-audit.md` 一致：核心契约无阻断坑；SSE 缺口（§7）由 T-stream 补；401 透传（§6）列为 P2 预留。
 - **重要更正**：PRD §4/§8 指向的 `configs/agents/<agent>/system/model.yaml` 实为**模型选择配置**，系统提示文本位于 `runtime/prompts/system.md`；T-ext-2 / T-sum 的 prompt 改动以 `runtime/prompts/system.md` 为准。
 
 > 文档结束。本增量架构设计仅覆盖 T-ext / T-sum / T-stream，供工程师实现与排期；与既有 PRD、集成设计、契约审计一致，不含实现代码。
