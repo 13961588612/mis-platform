@@ -49,13 +49,13 @@
 
 | 文档 | 内容 |
 |------|------|
-| `docs/frontend-ai-integration-prd.md` | 阶段5 主 PRD（UC-1~6 需求池 / UI 设计稿） |
-| `docs/frontend-ai-integration-design.md` | 阶段5 集成设计（前后端契约 / 任务总表） |
-| `docs/backend-integration-audit.md` | 后端集成契约审计（BFF↔ai-platform，无阻断性坑） |
-| `docs/backend-ext-prd.md` | 后端扩展增量 PRD（T-ext / T-sum / T-stream） |
-| `docs/backend-ext-design.md` | 后端扩展增量设计（含 `backend-ext-class.mermaid` / `backend-ext-sequence.mermaid`） |
-| `docs/identity-enrichment-task-list.md` | 身份 enrichment（多组织 T6）任务清单 |
-| `docs/jwt-identity-clarification.md` | JWT / 身份澄清决策 |
+| `frontend-ai-integration-prd.md` | 阶段5 主 PRD（UC-1~6 需求池 / UI 设计稿） |
+| `frontend-ai-integration-design.md` | 阶段5 集成设计（前后端契约 / 任务总表） |
+| `backend-integration-audit.md` | 后端集成契约审计（BFF↔ai-platform，无阻断性坑） |
+| `backend-ext-prd.md` | 后端扩展增量 PRD（T-ext / T-sum / T-stream） |
+| `backend-ext-design.md` | 后端扩展增量设计（含 `backend-ext-class.mermaid` / `backend-ext-sequence.mermaid`） |
+| `identity-enrichment-task-list.md` | 身份 enrichment（多组织 T6）任务清单 |
+| `jwt-identity-clarification.md` | JWT / 身份澄清决策 |
 
 ## 七、下一步
 

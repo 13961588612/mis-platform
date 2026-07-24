@@ -1,6 +1,6 @@
 # MIS × ai-platform 前端 AI 融合集成设计（阶段5）
 
-> 文档角色：架构师（高见远）给出的**前端集成设计 + 任务分解**，承接 PRD `docs/frontend-ai-integration-prd.md`、原集成架构 `mis_ai_integration_architecture.md`、身份文档 `docs/jwt-identity-clarification.md` / `docs/identity-enrichment-task-list.md`。
+> 文档角色：架构师（高见远）给出的**前端集成设计 + 任务分解**，承接 PRD `frontend-ai-integration-prd.md`、原集成架构 `mis_ai_integration_architecture.md`、身份文档 `jwt-identity-clarification.md` / `identity-enrichment-task-list.md`。
 > 范围：仅设计 + 任务分解 + 文件级指引（函数/组件签名、类型、配置、路径）。**不写实现代码**。
 > 语言：中文。
 > 约定：所有路径相对 `frontend/mis-admin-web/`；后端路径相对仓库根。
@@ -424,14 +424,14 @@ graph TD
 
 - **只消费既有 BFF `/api/v1/ai/*`**：`extract`/`summary`/`rag`/`chat/completions`/`health`/`features`（实测存在）。
 - **仅 §4 可能需后端扩展**：已实测标明为 T-ext（响应侧，小改）、T-sum、T-stream（流式，必须）；"发 schema"已具备，无需改。
-- **身份/权限一致**：`AIProvider` 消费 `/features` 的 `allowedCategories`/`canApprove`，与 `docs/jwt-identity-clarification.md` / `docs/identity-enrichment-task-list.md` 的 `UserContext` 演进一致；前端不本地算 category。
+- **身份/权限一致**：`AIProvider` 消费 `/features` 的 `allowedCategories`/`canApprove`，与 `jwt-identity-clarification.md` / `identity-enrichment-task-list.md` 的 `UserContext` 演进一致；前端不本地算 category。
 - **写操作铁律**：AI 仅生成建议/抽取/摘要；回填为"建议值"，用户 HITL 确认后经原领域 API（本期领域为 `AdminListPage` 本地 state）落值，AI 层不承载交易写。
 
 ## 附录 B：引用文件（已读）
 
-- `docs/frontend-ai-integration-prd.md`（主输入）
+- `frontend-ai-integration-prd.md`（主输入）
 - `mis_ai_integration_architecture.md`（原集成架构 §2/§3）
-- `docs/jwt-identity-clarification.md`、`docs/identity-enrichment-task-list.md`
+- `jwt-identity-clarification.md`、`identity-enrichment-task-list.md`
 - 前端：`src/lib/api/client.ts`、`src/stores/auth-store.ts`、`src/app/providers.tsx`、`src/app/router.tsx`、`src/components/layout/{app-layout,copilot-panel,command-palette,keep-alive-outlet}.tsx`、`src/features/system/{admin-list-page,page-defs}.tsx`、`src/components/ui/*`
 - 后端（实测）：`backend/mis-admin-bff/.../controller/AiProxyController.java`、`dto/ai/AiExtractRequest.java`、`dto/ai/AiExtractResponse.java`、`service/AiCapabilityTranslator.java`、`client/AiPlatformClient.java`
 - 平台（实测）：`agent/ai-platform/backend/src/api/routes/mis_capability.py`、`configs/agents/mis-extract/{agent.yaml,metadata.yaml,system/model.yaml}`

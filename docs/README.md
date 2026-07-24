@@ -80,7 +80,7 @@ docs/
 | mis-admin-bff | ✅ | 聚合、API 权限、门户 `/apps`、`/auth/me` |
 | mis-system | ✅ | 菜单 router/permissions、仪表盘 stats |
 | 前端 mis-admin-web | ✅ | 登录 + 门户九宫格 + 子系统壳；业务 CRUD 页迭代中 |
-| **AI 融合（MIS × ai-platform）** | 📝 | 阶段5 前端 MVP（F0–F7）+ 后端扩展（T-ext/T-sum/T-stream）；详见 [AI 融合交付与进度](ai-fusion-delivery.md) |
+| **AI 融合（MIS × ai-platform）** | 📝 | 阶段5 前端 MVP（F0–F7）+ 后端扩展（T-ext/T-sum/T-stream）；详见 [AI 融合交付与进度](ai-fusion/ai-fusion-delivery.md) |
 
 ---
 
@@ -105,4 +105,4 @@ docs/
 | v1.1-draft | 2026-06-24 | MIS_REMOTE 配置简化、运维文档拆分 |
 | v1.2 | 2026-07-21 | Sprint 2 服务边界：mis-iam / mis-org；ADR-016 |
 | v1.3 | 2026-07-21 | 门户壳、`sys_app` V5、文档与进度对齐 |
-| v1.4 | 2026-07-24 | AI 融合（MIS × ai-platform）规格与进度同步；见 [ai-fusion-delivery.md](ai-fusion-delivery.md) |
+| v1.4 | 2026-07-24 | AI 融合（MIS × ai-platform）规格与进度同步；见 [ai-fusion/ai-fusion-delivery.md](ai-fusion/ai-fusion-delivery.md) |

@@ -249,9 +249,9 @@ graph LR
 
 ## 8. 引用 / 依据文件
 
-- 上游 PRD：`docs/frontend-ai-integration-prd.md`（阶段5 主 PRD，UC-1~UC-6、§5 字段映射、§8 待确认）
-- 集成设计：`docs/frontend-ai-integration-design.md` §0.2（契约实测）、§4.3（T-ext-1/2/T-sum/T-stream 四行）、§7.1（任务总表）、§8（待拍板清单 Q1~Q11）
-- 契约审计：`docs/backend-integration-audit.md` §6（错误码/401 透传）、§7（SSE 缺口）、附 file:line 索引
+- 上游 PRD：`frontend-ai-integration-prd.md`（阶段5 主 PRD，UC-1~UC-6、§5 字段映射、§8 待确认）
+- 集成设计：`frontend-ai-integration-design.md` §0.2（契约实测）、§4.3（T-ext-1/2/T-sum/T-stream 四行）、§7.1（任务总表）、§8（待拍板清单 Q1~Q11）
+- 契约审计：`backend-integration-audit.md` §6（错误码/401 透传）、§7（SSE 缺口）、附 file:line 索引
 - 平台端点：`agent/ai-platform/backend/src/api/routes/mis_capability.py:145`（SSE `/agents/{agent_id}/chat/stream`）、`:153-212`（SSE 事件 delta|done|error）
 - BFF 静态：`backend/mis-admin-bff/.../client/AiPlatformClient.java`、`dto/ai/AiExtractResponse.java`、`service/AiCapabilityTranslator.java`、`controller/AiProxyController.java`、`config/AiPlatformProperties.java:25`（`sseEnabled` 死配置）
 
