@@ -43,3 +43,15 @@ mis:
     enabled: true
     deny-unmapped: false
     refresh-interval-seconds: 300
+  ai-platform:
+    base-url: http://localhost:8000
+    enabled: true
+    chat-timeout-ms: 60000
+    sse-enabled: false
+    health-check-interval-ms: 15000
+    features:
+      chat: true
+      summary: true
+      extract: true
+      rag: true
+      nl2sql: false
