@@ -1,0 +1,86 @@
+classDiagram
+    %% ===== 平台侧（Agent 输出契约，Python 概念模型）=====
+    class ExtractAgentOutput {
+        +Map~string,object~ fields
+        +Map~string,float~ confidence
+        +List~Map~ unmapped
+    }
+    class SummaryAgentOutput {
+        +string summary
+        +List~SummaryPoint~ points
+        +List~SummaryCitation~ citations
+    }
+    class SummaryPoint {
+        +string label
+        +string value
+        +string risk
+    }
+    class SummaryCitation {
+        +string field
+        +string value
+        +string source
+    }
+    class AiStreamFrame {
+        +string traceId
+        +string delta
+        +string finishReason
+        +string sessionId
+        +string message
+    }
+    SummaryAgentOutput "1" *-- "0..*" SummaryPoint
+    SummaryAgentOutput "1" *-- "0..*" SummaryCitation
+
+    %% ===== BFF 侧（Java DTO）=====
+    class AiExtractResponse {
+        +Map~string,object~ fields
+        +Map~string,Double~ confidence
+        +List~Map~ unmapped
+        +string sessionId
+    }
+    class AiSummaryResponse {
+        +string summary
+        +List~BffSummaryPoint~ points
+        +List~BffSummaryCitation~ citations
+        +string model
+        +string sessionId
+    }
+    class BffSummaryPoint {
+        +string label
+        +string value
+        +string risk
+        +string text
+    }
+    class BffSummaryCitation {
+        +string field
+        +string value
+        +string source
+    }
+    class AiChatRequest {
+        +List~AiChatMessage~ messages
+        +Map~string,object~ context
+        +Boolean stream
+    }
+    class AiPlatformClient {
+        +chat(...) AiPlatformChatData
+        +chatStream(...) Flux~ServerSentEvent~string~~
+        +healthProbe() Map
+    }
+    class AiProxyController {
+        +summary(...) ResponseEntity
+        +extract(...) ResponseEntity
+        +chatCompletions(...) ResponseEntity
+    }
+    class AiCapabilityTranslator {
+        +parseExtract(...) AiExtractResponse
+        +parseSummary(...) AiSummaryResponse
+        +buildBody(...) Map
+    }
+    AiSummaryResponse "1" *-- "0..*" BffSummaryPoint
+    AiSummaryResponse "1" *-- "0..*" BffSummaryCitation
+    AiProxyController ..> AiPlatformClient : 调用
+    AiProxyController ..> AiCapabilityTranslator : 解析
+    AiPlatformClient ..> AiStreamFrame : 透传(SSE 1:1)
+
+    note for AiExtractResponse "confidence 由 Double 改为 Map；与平台 1:1 透传"
+    note for AiSummaryResponse "points/citations 由 List~String~ 改为结构化"
+    note for AiChatRequest "新增 stream 开关驱动 SSE 分支"
