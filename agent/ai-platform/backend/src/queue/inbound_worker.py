@@ -321,8 +321,9 @@ class InboundStreamWorker:
         )
 
         agent_id: Any = inbound.agent_id
-        if not agent_id and stream_key.startswith("stream:agent:"):
-            agent_id: Any = stream_key.removeprefix("stream:agent:")
+        agent_stream_marker = f"{get_settings().REDIS_KEY_PREFIX}stream:agent:"
+        if not agent_id and stream_key.startswith(agent_stream_marker):
+            agent_id = stream_key.removeprefix(agent_stream_marker)
 
         session_manager: SessionManager = get_session_manager()
         agent_manager: AgentManager = get_agent_manager()

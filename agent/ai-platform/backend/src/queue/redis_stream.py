@@ -10,12 +10,23 @@ from dataclasses import dataclass
 import redis.asyncio as aioredis
 from redis.exceptions import ResponseError
 
+from src.config import get_settings
 from src.runtime.events import AgentEvent
 from src.utils.logging import get_logger
 
 logger = get_logger("queue.redis_stream")
 
-AGENT_EVENTS_STREAM = "stream:agent:events"
+
+def _rk(name: str) -> str:
+    """为 agent Redis 键统一添加命名空间前缀。
+
+    与 TS gateway 端 ioredis 约定的 ``aip:`` 前缀保持一致，确保
+    Gateway <-> Agent Core 之间的 Redis Stream 键在共享 Redis 实例中物理隔离。
+    """
+    return f"{get_settings().REDIS_KEY_PREFIX}{name}"
+
+
+AGENT_EVENTS_STREAM = _rk("stream:agent:events")
 CONSUMER_GROUP = "agent-core-group"
 MAX_STREAM_LENGTH = 10_000
 BLOCK_MS = 5000
@@ -62,9 +73,9 @@ class StreamKeys:
             agent_id: Agent 实例 ID。
 
         Returns:
-            ``stream:agent:{agentId}`` 格式的键名。
+            ``aip:stream:agent:{agentId}`` 格式的键名（含命名空间前缀）。
         """
-        return f"stream:agent:{agent_id}"
+        return _rk(f"stream:agent:{agent_id}")
 
     @staticmethod
     def channel_inbound(channel: str) -> str:
@@ -74,9 +85,9 @@ class StreamKeys:
             channel: Gateway 渠道标识（如 ``h5``）。
 
         Returns:
-            ``stream:inbound:{channel}`` 格式的键名。
+            ``aip:stream:inbound:{channel}`` 格式的键名（含命名空间前缀）。
         """
-        return f"stream:inbound:{channel}"
+        return _rk(f"stream:inbound:{channel}")
 
     @staticmethod
     def agent_events() -> str:

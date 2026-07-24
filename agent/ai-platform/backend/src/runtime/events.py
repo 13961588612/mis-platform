@@ -11,6 +11,10 @@ from enum import Enum
 
 from pydantic import BaseModel, Field
 
+from src.utils.logging import get_logger
+
+logger = get_logger("runtime.events")
+
 
 class AgentEventType(str, Enum):
     """所有 AgentEvent 类型的枚举。"""
@@ -22,6 +26,29 @@ class AgentEventType(str, Enum):
     APPROVAL_REQUEST = "approval.request"
     ERROR = "error"
     DONE = "done"
+
+
+# ============================================================================
+# A2UI 组件目录（与前端 H5 组件注册表双向登记）
+# ============================================================================
+#
+# 后端通过 ``AgentEvent.ui_render(component, props)`` 产出生成式 UI 描述，
+# ``component`` 取值必须来自下方白名单；前端
+# ``frontend/src/components/a2ui/registry.ts`` 维护与之 1:1 对应的
+# React 组件注册表。两端组件名严格一致，新增组件须同步登记。
+#
+# 约定（见 docs/ai-fusion/ai-fusion-deploy-decision.md §决策二 / DEP-9）：
+# - 命名语义化、版本无关（如 ``approval-card``、``data-table``、``form-sheet``）
+# - ``props`` 为纯 JSON，前端渲染前做白名单字段校验 + 防注入
+# - 后端只给「描述」，前端决定「怎么画」
+A2UI_COMPONENTS: frozenset[str] = frozenset(
+    {
+        "approval-card",  # 审批卡片（纯展示 + 可选操作按钮）
+        "data-table",     # 数据表格（只读展示）
+        "form-sheet",     # 表单（字段 + 提交按钮）
+    }
+)
+"""首期支持的 A2UI 组件名集合（与前端注册表双向登记）。"""
 
 
 class TokenUsage(BaseModel):
@@ -87,7 +114,21 @@ class AgentEvent(BaseModel):
 
     @classmethod
     def ui_render(cls, component: str, props: dict[str, Any]) -> AgentEvent:
-        """创建一个 ui.render 事件。"""
+        """创建一个 ui.render 事件。
+
+        Args:
+            component: A2UI 组件名（须登记于 ``A2UI_COMPONENTS``）。
+            props: 传给组件的纯数据 JSON。
+
+        Raises:
+            ValueError: ``component`` 未登记在 ``A2UI_COMPONENTS`` 时（双向登记约束）。
+        """
+        if component not in A2UI_COMPONENTS:
+            logger.warning(
+                "ui_render 使用了未登记的组件名",
+                component=component,
+                registered=sorted(A2UI_COMPONENTS),
+            )
         return cls(type=AgentEventType.UI_RENDER, component=component, props=props)
 
     @classmethod

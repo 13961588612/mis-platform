@@ -170,11 +170,11 @@ class SessionManager:
 
     def _session_key(self, session_id: str) -> str:
         """会话数据的 Redis key。"""
-        return f"session:{session_id}"
+        return f"{self._settings.REDIS_KEY_PREFIX}session:{session_id}"
 
     def _agent_binding_key(self, session_id: str) -> str:
         """会话→agent 绑定的 Redis key。"""
-        return f"session:{session_id}:agent_binding"
+        return f"{self._settings.REDIS_KEY_PREFIX}session:{session_id}:agent_binding"
 
     async def create_session(
         self,

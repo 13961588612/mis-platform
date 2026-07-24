@@ -64,12 +64,12 @@ class QuotaManager:
         return datetime.now(timezone.utc).strftime(DATE_FORMAT)
 
     def _user_key(self, user_id: str) -> str:
-        """用户每日配额的 Redis key。"""
-        return f"{USER_QUOTA_PREFIX}:{user_id}:{self._date_suffix()}"
+        """用户每日配额的 Redis key（含命名空间前缀）。"""
+        return f"{self._settings.REDIS_KEY_PREFIX}{USER_QUOTA_PREFIX}:{user_id}:{self._date_suffix()}"
 
     def _dept_key(self, dept: str) -> str:
-        """部门每日配额的 Redis key。"""
-        return f"{DEPT_QUOTA_PREFIX}:{dept}:{self._date_suffix()}"
+        """部门每日配额的 Redis key（含命名空间前缀）。"""
+        return f"{self._settings.REDIS_KEY_PREFIX}{DEPT_QUOTA_PREFIX}:{dept}:{self._date_suffix()}"
 
     async def check_quota(
         self,

@@ -106,9 +106,13 @@ class Settings(BaseSettings):
     # ===== Redis =====
     REDIS_HOST: str = "redis"
     REDIS_PORT: int = 6379
-    REDIS_DB: int = 0
+    # 融合部署：与 MIS 共享同一 Redis 实例，agent 走独立 db index(2) 做物理隔离
+    REDIS_DB: int = 2
     REDIS_PASSWORD: str = ""
     REDIS_MAX_CONNECTIONS: int = 50
+    # agent Redis 键统一命名空间前缀（与 TS gateway 端 ioredis 约定的 `aip:` 一致）。
+    # db index 已做物理隔离，前缀为可读性 / 误操作兜底的二层保险，杜绝与 MIS(`mis:`)键冲突。
+    REDIS_KEY_PREFIX: str = "aip:"
 
     # ===== Redis Streams（Gateway ↔ Agent Core） =====
     STREAM_CONSUMER_ENABLED: bool = Field(
