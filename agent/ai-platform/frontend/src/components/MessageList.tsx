@@ -17,6 +17,7 @@ import remarkGfm from "remark-gfm";
 import { ApprovalCard } from "./ApprovalCard";
 import { markdownComponents } from "./markdownComponents";
 import { useChatStore } from "../store/chatStore";
+import { A2uiRenderer } from "./a2ui/A2uiRenderer";
 import { formatTime } from "../utils/format";
 import { normalizeMarkdownTables } from "../utils/markdownNormalize";
 import type { ChatMessage } from "../types/message";
@@ -138,6 +139,13 @@ function MessageBubble({ message, currentUserId: _currentUserId }: MessageBubble
             >
               {assistantContent}
             </ReactMarkdown>
+          </div>
+        )}
+
+        {/* A2UI 生成式 UI 渲染（DEP-8） */}
+        {message.a2ui && (
+          <div className="mt-2">
+            <A2uiRenderer render={message.a2ui} />
           </div>
         )}
 

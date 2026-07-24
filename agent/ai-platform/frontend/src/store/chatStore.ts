@@ -66,6 +66,10 @@ interface ChatState {
   addPendingApproval: (approval: PendingApproval) => void;
   /** Remove a pending approval by ID. */
   removePendingApproval: (approvalId: string) => void;
+  /** 审批响应发送器（由 useChat 注入，供 A2UI approval-card 组件调用）。 */
+  approvalSender: ((approvalId: string, decision: "approved" | "rejected", comment?: string) => void) | null;
+  /** 设置审批响应发送器（卸载时置 null）。 */
+  setApprovalSender: (sender: ((approvalId: string, decision: "approved" | "rejected", comment?: string) => void) | null) => void;
   /** Reset the chat state for a new session. */
   reset: () => void;
 }
@@ -99,6 +103,7 @@ export const useChatStore = create<ChatState>((set) => ({
   tokenUsage: { ...INITIAL_TOKEN_USAGE },
   pendingApprovals: [],
   error: null,
+  approvalSender: null,
 
   setSessionId: (sessionId) => {
     set({ sessionId });
@@ -173,6 +178,10 @@ export const useChatStore = create<ChatState>((set) => ({
         (a) => a.approvalId !== approvalId,
       ),
     }));
+  },
+
+  setApprovalSender: (sender) => {
+    set({ approvalSender: sender });
   },
 
   reset: () => {

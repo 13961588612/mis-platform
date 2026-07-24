@@ -103,9 +103,10 @@ export function useChat(sessionId: string | null): UseChatReturn {
     setError,
     addPendingApproval,
     removePendingApproval,
+    setApprovalSender,
   } = useChatStore();
 
-  const { addApproval, updateApprovalStatus } = useApprovalStore();
+  const { addApproval } = useApprovalStore();
   const { user } = useAuthStore();
 
   // ===== Generate unique ID =====
@@ -220,17 +221,23 @@ export function useChat(sessionId: string | null): UseChatReturn {
         }
 
         case "ui.render": {
-          // UI render events can be handled by specific components
-          // For now, we add them as system messages
-          const uiMessage: ChatMessage = {
-            id: generateId(),
-            sessionId: sessionId ?? "",
-            role: "system",
-            content: `[UI: ${event.component ?? "unknown"}]`,
-            status: "delivered",
-            timestamp: new Date().toISOString(),
-          };
-          addMessage(uiMessage);
+          // A2UI 真实渲染（DEP-8）：组件名 + props 存入 message.a2ui，
+          // 由 MessageList 经组件注册表渲染（props 保持原始，A2uiRenderer 内 camelize）。
+          if (event.component != null && event.props != null) {
+            const uiMessage: ChatMessage = {
+              id: generateId(),
+              sessionId: sessionId ?? "",
+              role: "assistant",
+              content: "",
+              status: "delivered",
+              timestamp: new Date().toISOString(),
+              a2ui: {
+                component: event.component,
+                props: event.props as Record<string, unknown>,
+              },
+            };
+            addMessage(uiMessage);
+          }
           break;
         }
 
@@ -587,6 +594,13 @@ export function useChat(sessionId: string | null): UseChatReturn {
     },
     [sessionId, user, sendInbound, removePendingApproval],
   );
+
+  // 将审批发送器注入 chatStore，供 A2UI approval-card 组件调用（DEP-8）。
+  // 置于 respondToApproval 定义之后，避免「声明前使用」的 TDZ 类型错误。
+  useEffect(() => {
+    setApprovalSender((id, decision, comment) => respondToApproval(id, decision, comment));
+    return () => setApprovalSender(null);
+  }, [respondToApproval, setApprovalSender]);
 
   // ===== Create Session =====
   const createSession = useCallback(

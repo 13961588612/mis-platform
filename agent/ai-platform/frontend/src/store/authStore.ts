@@ -52,6 +52,8 @@ interface AuthState {
   loginWithWecom: (code: string, state?: string) => Promise<boolean>;
   /** Logout and clear all tokens. */
   logout: () => void;
+  /** Accept an embedded token pushed by a parent frame (DEP-7, postMessage / ?token=). */
+  acceptEmbeddedToken: (token: string) => void;
   /** Initialize auth state from stored tokens (call on app start). */
   initialize: () => void;
   /** Clear the error state. */
@@ -191,11 +193,27 @@ export const useAuthStore = create<AuthState>((set) => ({
     set({ user: null, isAuthenticated: false, error: null });
   },
 
+  acceptEmbeddedToken: (token: string) => {
+    setAccessToken(token);
+    const payload = decodeJwtPayload(token);
+    const user = payload ? buildAuthUser(payload) : null;
+    set({ user, isAuthenticated: user != null, error: null });
+  },
+
   initialize: () => {
-    const token = getAccessToken();
+    // M2 兜底：父系统经 iframe src="...?token=<JWT>" 注入（网关已支持 ?token= 提取）
+    const urlToken =
+      typeof window !== "undefined"
+        ? new URLSearchParams(window.location.search).get("token")
+        : null;
+    const token = getAccessToken() ?? urlToken;
     if (!token) {
       set({ user: null, isAuthenticated: false });
       return;
+    }
+    // URL 令牌写入 localStorage，供 WS ?token= 复用
+    if (urlToken != null && getAccessToken() == null) {
+      setAccessToken(urlToken);
     }
 
     const payload = decodeJwtPayload(token);

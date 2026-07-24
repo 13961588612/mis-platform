@@ -55,6 +55,7 @@ export function useAuth(): UseAuthReturn {
     loginWithWecom: storeLoginWithWecom,
     logout: storeLogout,
     initialize,
+    acceptEmbeddedToken,
     clearError,
   } = useAuthStore();
 
@@ -67,6 +68,37 @@ export function useAuth(): UseAuthReturn {
       setInitialized(true);
     }
   }, [initialize, initialized]);
+
+  // 嵌入鉴权（DEP-7，模式 M1）：监听父系统经 postMessage 推来的 MIS JWT。
+  // 校验 event.origin 是否在白名单（VITE_PARENT_ORIGINS）内；未配置则拒绝（安全默认）。
+  useEffect(() => {
+    const env = (import.meta as unknown as { env: Record<string, string | undefined> }).env;
+    const allowedOrigins = (env.VITE_PARENT_ORIGINS ?? "")
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
+
+    const handler = (event: MessageEvent): void => {
+      if (allowedOrigins.length === 0) {
+        // 未配置白名单 → 拒绝接受任何嵌入令牌（防止误收）
+        return;
+      }
+      if (!allowedOrigins.includes(event.origin)) {
+        console.warn("[useAuth] 拒绝来自非白名单父域的 postMessage:", event.origin);
+        return;
+      }
+      const data = event.data as { type?: string; token?: string } | null;
+      if (data == null || data.type !== "AUTH_TOKEN" || typeof data.token !== "string") {
+        return;
+      }
+      acceptEmbeddedToken(data.token);
+    };
+
+    window.addEventListener("message", handler);
+    // 通知父系统本 H5 已就绪（非敏感）
+    window.parent?.postMessage({ type: "AUTH_READY" }, "*");
+    return () => window.removeEventListener("message", handler);
+  }, [acceptEmbeddedToken]);
 
   // Login with username/password
   const login = useCallback(

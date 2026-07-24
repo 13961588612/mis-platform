@@ -53,6 +53,13 @@ export interface ChatMessage {
   error?: string;
   /** Token usage for this message (if available). */
   tokenUsage?: TokenUsageSummary;
+  /** A2UI 渲染描述（ui.render 事件），由组件注册表渲染（DEP-8）。 */
+  a2ui?: {
+    /** 组件名（须登记于组件注册表，如 approval-card / data-table / form-sheet）。 */
+    component: string;
+    /** 后端下发的纯数据 props（snake_case，渲染前由 A2uiRenderer camelize）。 */
+    props: Record<string, unknown>;
+  };
 }
 
 // ===== Token Usage Summary =====
