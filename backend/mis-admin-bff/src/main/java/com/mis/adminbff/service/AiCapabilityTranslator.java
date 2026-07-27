@@ -22,6 +22,8 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * BFF 入参 → 平台请求体 的翻译与整形（设计 §2.3）。
@@ -41,6 +43,10 @@ public class AiCapabilityTranslator {
     private static final String SOURCE = "mis-bff";
 
     private final ObjectMapper objectMapper = new ObjectMapper();
+
+    /** 匹配 markdown 代码围栏 ```json ... ``` 或 ``` ... ```（不区分大小写），捕获组 1 为围栏内正文。 */
+    private static final Pattern FENCE_PATTERN =
+            Pattern.compile("```(?:json)?\\s*([\\s\\S]*?)\\s*```", Pattern.CASE_INSENSITIVE);
 
     /** capability → 平台 agent_id 约定映射。 */
     public static String agentIdFor(String capability) {
@@ -128,7 +134,7 @@ public class AiCapabilityTranslator {
         AiSummaryResponse resp = new AiSummaryResponse();
         resp.setSessionId(data.getSessionId());
         try {
-            JsonNode node = objectMapper.readTree(data.getResponse() == null ? "{}" : data.getResponse());
+            JsonNode node = objectMapper.readTree(stripJsonFences(data.getResponse()));
             if (node.has("summary") && !node.get("summary").isNull()) {
                 resp.setSummary(node.get("summary").asText());
             }
@@ -183,7 +189,7 @@ public class AiCapabilityTranslator {
         AiExtractResponse resp = new AiExtractResponse();
         resp.setSessionId(data.getSessionId());
         try {
-            JsonNode node = objectMapper.readTree(data.getResponse() == null ? "{}" : data.getResponse());
+            JsonNode node = objectMapper.readTree(stripJsonFences(data.getResponse()));
             if (node.has("fields") && node.get("fields").isObject()) {
                 Map<String, Object> fields = new LinkedHashMap<>();
                 node.get("fields").fields().forEachRemaining(e ->
@@ -232,7 +238,7 @@ public class AiCapabilityTranslator {
         AiRagResponse resp = new AiRagResponse();
         resp.setSessionId(data.getSessionId());
         try {
-            JsonNode node = objectMapper.readTree(data.getResponse() == null ? "{}" : data.getResponse());
+            JsonNode node = objectMapper.readTree(stripJsonFences(data.getResponse()));
             resp.setAnswer(node.path("answer").asText(""));
             if (node.has("citations") && node.get("citations").isArray()) {
                 List<AiRagCitation> citations = new ArrayList<>();
@@ -262,6 +268,41 @@ public class AiCapabilityTranslator {
     }
 
     // ===== 内部工具 =====
+
+    /**
+     * 清理 LLM 直接输出中裹挟的 markdown 代码围栏，使 {@link ObjectMapper#readTree} 可正常解析。
+     *
+     * <p>ai-platform 的 mis-summary / mis-extract / mis-rag agent 让 LLM 直接输出 JSON，
+     * 但 LLM 实际返回常裹 ```json ... ``` 围栏，导致 Jackson {@code readTree} 抛
+     * {@code JsonParseException} 被上层 {@code catch} 静默吞掉。本方法在解析前剥离围栏，
+     * 并对无围栏但含前后缀噪声的情形做兜底截取。null/blank 统一返回 "{}"。
+     */
+    private static String stripJsonFences(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return "{}";
+        }
+        String s = raw.strip();
+        // 1) 去掉 ```json ... ``` 或 ``` ... ``` 围栏（不区分大小写）
+        Matcher m = FENCE_PATTERN.matcher(s);
+        if (m.find()) {
+            s = m.group(1).strip();
+        }
+        // 2) 兜底：若仍非 JSON 起始，截取第一个 { 到最后一个 }（或 [ 到 ]）
+        if (!s.isEmpty() && !s.startsWith("{") && !s.startsWith("[")) {
+            int start = s.indexOf('{');
+            if (start < 0) {
+                start = s.indexOf('[');
+            }
+            int end = s.lastIndexOf('}');
+            if (end < 0) {
+                end = s.lastIndexOf(']');
+            }
+            if (start >= 0 && end > start) {
+                s = s.substring(start, end + 1);
+            }
+        }
+        return s.isEmpty() ? "{}" : s;
+    }
 
     private List<String> readStringList(JsonNode node, String field) {
         List<String> out = new ArrayList<>();

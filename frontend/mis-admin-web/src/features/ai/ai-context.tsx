@@ -12,6 +12,20 @@ function deriveModule(route: string): string {
   return parts.length >= 2 ? parts[1] : parts[0] ?? '';
 }
 
+/** BFF 返回的能力键(features Map) -> 前端特性键数组，供 <AiFeature> 门禁比对 */
+function translateCapabilitiesToFeatures(
+  features: Record<string, unknown> | undefined,
+): string[] {
+  const f = (features ?? {}) as Record<string, boolean>;
+  const out: string[] = [];
+  if (f.extract) { out.push('form-fill', 'text-extract'); }   // 抽取 -> 表单填充 + 智能录入
+  if (f.summary) { out.push('detail-summary'); }               // 摘要
+  if (f.rag)    { out.push('rag-qa'); }                        // 问答
+  if (f.chat)   { out.push('copilot'); }                       // 流式对话
+  if (f.nl2sql) { out.push('nl2sql'); }                        // 查数(目前注册表无组件，保留键即可)
+  return out;
+}
+
 const AiContext = createContext<AiContextValue | null>(null);
 
 /**
@@ -47,7 +61,9 @@ export function AIProvider({ children }: { children: ReactNode }) {
         const payload = res.data as unknown as { code: number; data?: Record<string, unknown> };
         if (payload && payload.code === 0 && payload.data) {
           const d = payload.data as Record<string, unknown>;
-          const enabled = Array.isArray(d.enabled) ? (d.enabled as string[]) : [];
+          const enabled = Array.isArray(d.enabled)
+            ? (d.enabled as string[])
+            : translateCapabilitiesToFeatures(d.features as Record<string, unknown> | undefined);
           const allowedCategories = Array.isArray(d.allowedCategories)
             ? (d.allowedCategories as string[])
             : [];
@@ -101,7 +117,11 @@ export function AIProvider({ children }: { children: ReactNode }) {
     [enabledFeatures, featuresLoaded, confThreshold, canApprove, location.pathname],
   );
 
-  return <AiContext.Provider value={value}>{children}</AiContext.Provider>;
+  return (
+    <AiContext.Provider value={value}>
+      {children}
+    </AiContext.Provider>
+  );
 }
 
 /** AI 上下文消费 Hook（含门禁/健康/降级/页上下文） */

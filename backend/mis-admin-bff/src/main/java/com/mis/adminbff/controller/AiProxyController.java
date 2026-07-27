@@ -1,6 +1,7 @@
 package com.mis.adminbff.controller;
 
 import com.mis.adminbff.client.AiPlatformClient;
+import com.mis.adminbff.config.AiPlatformProperties;
 import com.mis.adminbff.dto.ai.AiChatRequest;
 import com.mis.adminbff.dto.ai.AiChatResponse;
 import com.mis.adminbff.dto.ai.AiExtractRequest;
@@ -20,9 +21,7 @@ import com.mis.common.core.exception.BusinessException;
 import com.mis.common.core.result.Result;
 import com.mis.common.security.context.LoginUser;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
-import org.springframework.http.ResponseEntity;
 import org.springframework.http.codec.ServerSentEvent;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -115,8 +114,12 @@ public class AiProxyController {
         });
     }
 
-    @PostMapping("/chat/completions")
-    public ResponseEntity<?> chatCompletions(
+    /**
+     * 流式返回 {@link Flux}（勿包进 ResponseEntity.body）：Spring MVC 才能走 ReactiveTypeHandler 写 SSE。
+     * 非流式仍返回 {@link Result} JSON。
+     */
+    @PostMapping(value = "/chat/completions", produces = {MediaType.APPLICATION_JSON_VALUE, MediaType.TEXT_EVENT_STREAM_VALUE})
+    public Object chatCompletions(
             @RequestBody AiChatRequest req,
             @RequestHeader(value = SecurityConstants.AUTHORIZATION_HEADER, required = false) String authorization,
             @RequestHeader(value = SecurityConstants.HEADER_TRACE_ID, required = false) String traceId) {
@@ -125,26 +128,20 @@ public class AiProxyController {
         if (Boolean.TRUE.equals(req.getStream()) && properties.isSseEnabled()) {
             if (!featureConfig.platformAvailable() || !featureConfig.isCapabilityEnabled("chat")) {
                 // 门禁未过：以单帧 error 结束流，语义与前端 onError 对齐（非 SSE 误判）
-                return sseError("AI 平台暂不可用或未启用 chat");
+                return sseErrorFlux("AI 平台暂不可用或未启用 chat");
             }
             String content = translator.buildChatContent(req);
             Map<String, Object> body = translator.buildBody(content, "chat", req.getContext(), employeeId);
-            Flux<ServerSentEvent<String>> stream = aiPlatformClient.chatStream(
+            return aiPlatformClient.chatStream(
                     translator.agentIdFor("chat"), body, authorization, traceId);
-            return ResponseEntity.ok()
-                    .header(HttpHeaders.CACHE_CONTROL, "no-cache")
-                    .header("X-Accel-Buffering", "no")
-                    .contentType(MediaType.TEXT_EVENT_STREAM)
-                    .body(stream);
         }
         // 非流式：原缓冲返回（兼容旧客户端 / sseEnabled=false 降级）
-        Result<AiChatResponse> result = proxyCapability("chat", authorization, traceId, (auth, tid) -> {
+        return proxyCapability("chat", authorization, traceId, (auth, tid) -> {
             String content = translator.buildChatContent(req);
             Map<String, Object> body = translator.buildBody(content, "chat", req.getContext(), employeeId);
             AiPlatformChatData data = aiPlatformClient.chat(translator.agentIdFor("chat"), body, auth, tid);
             return translator.parseChat(data);
         });
-        return ResponseEntity.ok(result);
     }
 
     // ===== 探测类端点（authOnly） =====
@@ -192,8 +189,8 @@ public class AiProxyController {
         return user.getEmployeeId();
     }
 
-    /** 构造一帧 SSE {@code error{message}} 并以 text/event-stream 返回（门禁/降级场景）。 */
-    private ResponseEntity<Flux<ServerSentEvent<String>>> sseError(String message) {
+    /** 构造一帧 SSE {@code error{message}}（门禁/降级场景）；直接返回 Flux 供 MVC 流式写出。 */
+    private Flux<ServerSentEvent<String>> sseErrorFlux(String message) {
         Map<String, String> err = new LinkedHashMap<>();
         err.put("message", message);
         String data;
@@ -202,12 +199,6 @@ public class AiProxyController {
         } catch (Exception e) {
             data = "{\"message\":\"" + message + "\"}";
         }
-        Flux<ServerSentEvent<String>> stream = Flux.just(
-                ServerSentEvent.builder(String.class).event("error").data(data).build());
-        return ResponseEntity.ok()
-                .header(HttpHeaders.CACHE_CONTROL, "no-cache")
-                .header("X-Accel-Buffering", "no")
-                .contentType(MediaType.TEXT_EVENT_STREAM)
-                .body(stream);
+        return Flux.just(ServerSentEvent.<String>builder().event("error").data(data).build());
     }
 }

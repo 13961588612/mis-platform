@@ -44,9 +44,8 @@ mis:
     deny-unmapped: false
     refresh-interval-seconds: 300
   ai-platform:
-    # 融合部署：容器环境须用服务名（R1）。本地未连 Nacos 时默认即服务名；
-    # 远程模式由 Nacos mis-admin-bff.yaml 覆盖（生产 sse-enabled=true）。
-    base-url: ${AI_PLATFORM_BASE_URL:http://ai-platform-backend:8000}
+    # 本地 IDE 默认 localhost；Docker/Nacos 用 AI_PLATFORM_BASE_URL=http://ai-platform-backend:8000 覆盖（R1）。
+    base-url: ${AI_PLATFORM_BASE_URL:http://localhost:8000}
     enabled: true
     chat-timeout-ms: 60000
     sse-enabled: ${AI_PLATFORM_SSE_ENABLED:false}

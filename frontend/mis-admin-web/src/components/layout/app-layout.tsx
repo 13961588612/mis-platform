@@ -33,7 +33,9 @@ import {
   SYSTEM_NAV,
   branchContainsPath,
   findSystemNavItem,
+  type SystemNavNode,
 } from '@/lib/nav/system-nav';
+import { routerMenusToSystemNav } from '@/lib/nav/menus-to-nav';
 import { useTabStore } from '@/stores/tab-store';
 
 const GROUP_LABEL: Record<string, string> = {
@@ -61,12 +63,31 @@ export function AppLayout() {
   const userMenuRef = useRef<HTMLDivElement>(null);
   const app = useAuthStore((s) => s.app);
   const user = useAuthStore((s) => s.user);
+  const menus = useAuthStore((s) => s.menus);
   const clearSession = useAuthStore((s) => s.clearSession);
   const navigate = useNavigate();
   const location = useLocation();
   const openTab = useTabStore((s) => s.openTab);
 
-  const navItem = findSystemNavItem(location.pathname);
+  const navNodes: SystemNavNode[] = useMemo(
+    () => routerMenusToSystemNav(menus) ?? SYSTEM_NAV,
+    [menus],
+  );
+
+  const navItem = useMemo(() => {
+    for (const n of navNodes) {
+      if (n.kind === 'leaf' && (n.path === location.pathname || location.pathname.startsWith(`${n.path}/`))) {
+        return n;
+      }
+      if (n.kind === 'branch') {
+        const hit = n.children.find(
+          (c) => c.path === location.pathname || location.pathname.startsWith(`${c.path}/`),
+        );
+        if (hit) return hit;
+      }
+    }
+    return findSystemNavItem(location.pathname) ?? null;
+  }, [navNodes, location.pathname]);
   const iframeCode = location.pathname.startsWith('/iframe/') ? location.pathname.slice('/iframe/'.length) : null;
   const iframeApp = iframeCode ? apps.find((a) => a.code === iframeCode) : null;
   const iframeReg = iframeCode ? getIframeApp(iframeCode) : null;
@@ -142,14 +163,14 @@ export function AppLayout() {
   const handleToggleBranch = useCallback(
     (title: string) => {
       setNavExpanded((prev) => {
-        const branch = SYSTEM_NAV.find((n) => n.kind === 'branch' && n.title === title);
+        const branch = navNodes.find((n) => n.kind === 'branch' && n.title === title);
         const defaultOpen =
           branch?.kind === 'branch' && branchContainsPath(branch, location.pathname);
         const currently = prev[title] ?? defaultOpen;
         return { ...prev, [title]: !currently };
       });
     },
-    [location.pathname],
+    [location.pathname, navNodes],
   );
 
   const handleLogout = async () => {
@@ -318,7 +339,7 @@ export function AppLayout() {
             </div>
           ) : (
             <SideNav
-              nodes={SYSTEM_NAV}
+              nodes={navNodes}
               pathname={location.pathname}
               collapsed={collapsed}
               expanded={navExpanded}

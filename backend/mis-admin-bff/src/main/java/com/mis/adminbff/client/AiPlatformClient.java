@@ -130,12 +130,12 @@ public class AiPlatformClient extends AbstractDownstreamClient {
                     Map<String, String> err = new LinkedHashMap<>();
                     err.put("message", message);
                     try {
-                        return Flux.just(ServerSentEvent.builder(String.class)
+                        return Flux.just(ServerSentEvent.<String>builder()
                                 .event("error")
                                 .data(objectMapper.writeValueAsString(err))
                                 .build());
                     } catch (Exception e) {
-                        return Flux.just(ServerSentEvent.builder(String.class)
+                        return Flux.just(ServerSentEvent.<String>builder()
                                 .event("error")
                                 .data("{\"message\":\"AI 流式调用失败\"}")
                                 .build());

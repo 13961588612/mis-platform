@@ -30,7 +30,9 @@ export function AiFeature({ feature, trigger, children }: AiFeatureProps) {
 
   if (!enabled) {
     // 本期页面 feature 均为 hide；disable/message 分支供全局 copilot 等预留
-    if (fallback === 'hide') return null;
+    if (fallback === 'hide') {
+      return null;
+    }
     return <>{trigger ?? children}</>;
   }
 
