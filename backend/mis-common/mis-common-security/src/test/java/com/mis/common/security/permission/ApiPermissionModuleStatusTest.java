@@ -3,6 +3,7 @@ package com.mis.common.security.permission;
 import com.mis.common.core.exception.BusinessException;
 import com.mis.common.core.exception.ResultCode;
 import com.mis.common.security.context.LoginUser;
+import com.mis.common.security.context.SecurityContextHolder;
 import org.junit.jupiter.api.Test;
 import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.mock.web.MockHttpServletResponse;
@@ -82,9 +83,17 @@ class ApiPermissionModuleStatusTest {
         MockHttpServletRequest request = new MockHttpServletRequest("GET", "/api/v1/enabled");
         MockHttpServletResponse response = new MockHttpServletResponse();
 
-        assertDoesNotThrow(() -> {
-            boolean allowed = interceptor.preHandle(request, response, new Object());
-            assertTrue(allowed);
-        });
+        // authOnly 路径仍需已登录用户：先写入 SecurityContext（拦截器在命中规则后校验登录态）
+        LoginUser loginUser = new LoginUser();
+        loginUser.setUserId(1L);
+        SecurityContextHolder.setLoginUser(loginUser);
+        try {
+            assertDoesNotThrow(() -> {
+                boolean allowed = interceptor.preHandle(request, response, new Object());
+                assertTrue(allowed);
+            });
+        } finally {
+            SecurityContextHolder.clear();
+        }
     }
 }
