@@ -22,12 +22,6 @@ public class SysApi {
     @Id
     private Long id;
 
-    @Column(name = "tenant_id", nullable = false)
-    private Long tenantId;
-
-    @Column(name = "app_id", nullable = false)
-    private Long appId;
-
     @Column(name = "module_id", nullable = false)
     private Long moduleId;
 
@@ -65,10 +59,6 @@ public class SysApi {
 
     public Long getId() { return id; }
     public void setId(Long id) { this.id = id; }
-    public Long getTenantId() { return tenantId; }
-    public void setTenantId(Long tenantId) { this.tenantId = tenantId; }
-    public Long getAppId() { return appId; }
-    public void setAppId(Long appId) { this.appId = appId; }
     public Long getModuleId() { return moduleId; }
     public void setModuleId(Long moduleId) { this.moduleId = moduleId; }
     public Long getParentId() { return parentId; }

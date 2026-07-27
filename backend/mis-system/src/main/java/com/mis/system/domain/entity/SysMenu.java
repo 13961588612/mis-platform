@@ -29,8 +29,9 @@ public class SysMenu {
     @Column(nullable = false)
     private String name;
 
+    @Convert(converter = MenuTypeConverter.class)
     @Column(nullable = false)
-    private Integer type;
+    private MenuType type;
 
     @Column
     private String path;
@@ -71,8 +72,8 @@ public class SysMenu {
     public void setCode(String code) { this.code = code; }
     public String getName() { return name; }
     public void setName(String name) { this.name = name; }
-    public Integer getType() { return type; }
-    public void setType(Integer type) { this.type = type; }
+    public MenuType getType() { return type; }
+    public void setType(MenuType type) { this.type = type; }
     public String getPath() { return path; }
     public void setPath(String path) { this.path = path; }
     public String getComponent() { return component; }

@@ -3,6 +3,9 @@ package com.mis.adminbff.client;
 import com.mis.adminbff.client.model.ApiPermissionRuleDTO;
 import com.mis.adminbff.client.model.MenuVO;
 import com.mis.adminbff.config.BffProperties;
+import com.mis.adminbff.dto.ApiVO;
+import com.mis.adminbff.dto.ModuleApiBindingVO;
+import com.mis.adminbff.dto.ModuleVO;
 import com.mis.common.core.result.Result;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.core.ParameterizedTypeReference;
@@ -27,6 +30,21 @@ public class SystemWebClient extends AbstractDownstreamClient {
     private static final ParameterizedTypeReference<Result<List<ApiPermissionRuleDTO>>> API_RULE_LIST =
             new ParameterizedTypeReference<>() {};
     private static final ParameterizedTypeReference<Result<Void>> VOID =
+            new ParameterizedTypeReference<>() {};
+    private static final ParameterizedTypeReference<Result<List<Map<String, Object>>>> MAP_LIST =
+            new ParameterizedTypeReference<>() {};
+    private static final ParameterizedTypeReference<Result<Map<String, Object>>> MAP =
+            new ParameterizedTypeReference<>() {};
+
+    private static final ParameterizedTypeReference<Result<List<ModuleVO>>> MODULE_LIST =
+            new ParameterizedTypeReference<>() {};
+    private static final ParameterizedTypeReference<Result<ModuleVO>> MODULE =
+            new ParameterizedTypeReference<>() {};
+    private static final ParameterizedTypeReference<Result<List<ApiVO>>> API_TREE =
+            new ParameterizedTypeReference<>() {};
+    private static final ParameterizedTypeReference<Result<ApiVO>> API =
+            new ParameterizedTypeReference<>() {};
+    private static final ParameterizedTypeReference<Result<List<ModuleApiBindingVO>>> BINDING_LIST =
             new ParameterizedTypeReference<>() {};
 
     public SystemWebClient(
@@ -102,6 +120,96 @@ public class SystemWebClient extends AbstractDownstreamClient {
 
     public void deleteMenu(Long id) {
         blockVoid(delete("/internal/v1/menus/{id}", id));
+    }
+
+    // -----------------------------------------------------------------------
+    // 模块（sys_module）透传
+    // -----------------------------------------------------------------------
+    public List<ModuleVO> listModules() {
+        return block(client().get().uri("/internal/v1/modules").retrieve().bodyToMono(MODULE_LIST));
+    }
+
+    public ModuleVO getModule(Long id) {
+        return block(client().get().uri("/internal/v1/modules/{id}", id).retrieve().bodyToMono(MODULE));
+    }
+
+    public ModuleVO createModule(Map<String, Object> body) {
+        return block(post(body, MODULE, "/internal/v1/modules"));
+    }
+
+    public ModuleVO updateModule(Long id, Map<String, Object> body) {
+        return block(put(body, MODULE, "/internal/v1/modules/{id}", id));
+    }
+
+    public void deleteModule(Long id) {
+        blockVoid(delete("/internal/v1/modules/{id}", id));
+    }
+
+    public List<ApiVO> moduleApiTree(Long moduleId) {
+        String uri = UriComponentsBuilder.fromPath("/internal/v1/modules/{moduleId}/apis")
+                .buildAndExpand(moduleId).toUriString();
+        return block(client().get().uri(uri).retrieve().bodyToMono(API_TREE));
+    }
+
+    public List<ModuleApiBindingVO> moduleBindings(Long moduleId) {
+        String uri = UriComponentsBuilder.fromPath("/internal/v1/modules/{moduleId}/bindings")
+                .buildAndExpand(moduleId).toUriString();
+        return block(client().get().uri(uri).retrieve().bodyToMono(BINDING_LIST));
+    }
+
+    // -----------------------------------------------------------------------
+    // 模块下接口（sys_api）透传
+    // -----------------------------------------------------------------------
+    public ApiVO createApi(Map<String, Object> body) {
+        return block(post(body, API, "/internal/v1/apis"));
+    }
+
+    public ApiVO updateApi(Long id, Map<String, Object> body) {
+        return block(put(body, API, "/internal/v1/apis/{id}", id));
+    }
+
+    public void deleteApi(Long id) {
+        blockVoid(delete("/internal/v1/apis/{id}", id));
+    }
+
+    public List<Map<String, Object>> listDictTypes(Long tenantId) {
+        String uri = UriComponentsBuilder.fromPath("/internal/v1/dicts/types")
+                .queryParam("tenantId", tenantId)
+                .build(true)
+                .toUriString();
+        return block(client().get().uri(uri).retrieve().bodyToMono(MAP_LIST));
+    }
+
+    public Map<String, Object> createDictType(Map<String, Object> body) {
+        return block(post(body, MAP, "/internal/v1/dicts/types"));
+    }
+
+    public Map<String, Object> updateDictType(Long id, Map<String, Object> body) {
+        return block(put(body, MAP, "/internal/v1/dicts/types/{id}", id));
+    }
+
+    public void deleteDictType(Long id) {
+        blockVoid(delete("/internal/v1/dicts/types/{id}", id));
+    }
+
+    public List<Map<String, Object>> listDictItems(Long typeId) {
+        String uri = UriComponentsBuilder.fromPath("/internal/v1/dicts/items")
+                .queryParam("typeId", typeId)
+                .build(true)
+                .toUriString();
+        return block(client().get().uri(uri).retrieve().bodyToMono(MAP_LIST));
+    }
+
+    public Map<String, Object> createDictItem(Map<String, Object> body) {
+        return block(post(body, MAP, "/internal/v1/dicts/items"));
+    }
+
+    public Map<String, Object> updateDictItem(Long id, Map<String, Object> body) {
+        return block(put(body, MAP, "/internal/v1/dicts/items/{id}", id));
+    }
+
+    public void deleteDictItem(Long id) {
+        blockVoid(delete("/internal/v1/dicts/items/{id}", id));
     }
 
     public static Map<String, Object> menuCreateBody(

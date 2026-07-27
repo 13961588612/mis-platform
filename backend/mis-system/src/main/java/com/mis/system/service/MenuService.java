@@ -2,6 +2,7 @@ package com.mis.system.service;
 
 import com.mis.common.core.exception.BusinessException;
 import com.mis.common.core.exception.ResultCode;
+import com.mis.system.domain.entity.MenuType;
 import com.mis.system.domain.entity.SysMenu;
 import com.mis.system.domain.repository.SysMenuRepository;
 import com.mis.system.dto.MenuCreateRequest;
@@ -61,7 +62,7 @@ public class MenuService {
         }
         List<SysMenu> filtered = allById.values().stream()
                 .filter(m -> include.contains(m.getId()))
-                .filter(m -> m.getType() != null && m.getType() != 3)
+                .filter(m -> !MenuType.BUTTON.equals(m.getType()))
                 .filter(m -> m.getVisible() == null || m.getVisible() == 1)
                 .sorted(Comparator.comparing(SysMenu::getSort).thenComparing(SysMenu::getCode))
                 .toList();
@@ -100,7 +101,7 @@ public class MenuService {
         menu.setParentId(request.parentId());
         menu.setCode(code);
         menu.setName(request.name());
-        menu.setType(request.type());
+        menu.setType(MenuType.of(request.type()));
         menu.setPath(request.path());
         menu.setComponent(request.component());
         menu.setPermission(request.permission());
@@ -202,7 +203,7 @@ public class MenuService {
                 String.valueOf(menu.getParentId()),
                 menu.getCode(),
                 menu.getName(),
-                menu.getType(),
+                menu.getType() != null ? menu.getType().getCode() : null,
                 menu.getPath(),
                 menu.getComponent(),
                 menu.getPermission(),

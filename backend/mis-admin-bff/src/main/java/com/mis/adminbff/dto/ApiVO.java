@@ -1,4 +1,4 @@
-package com.mis.system.dto;
+package com.mis.adminbff.dto;
 
 import java.util.List;
 

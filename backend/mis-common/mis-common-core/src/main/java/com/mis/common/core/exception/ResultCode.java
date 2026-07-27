@@ -62,6 +62,12 @@ public enum ResultCode {
     ROLE_BUILTIN_PROTECTED(40908, "内置角色不可删除或修改编码"),
     LAST_TENANT_ADMIN(40909, "不可删除或禁用最后一个租户管理员"),
     EMPLOYEE_ALREADY_BOUND(40910, "该员工已绑定登录账号"),
+    MODULE_CODE_EXISTS(40911, "模块编码已存在"),
+    MODULE_HAS_APIS(40912, "模块下存在接口，无法删除"),
+    MODULE_API_BOUND(40913, "模块接口已被菜单绑定，无法删除"),
+    API_CODE_EXISTS(40914, "接口编码在该模块下已存在"),
+    API_GROUP_NOT_EMPTY(40915, "接口分组非空，无法删除"),
+    API_BOUND(40916, "接口已被菜单绑定，无法删除"),
     INTERNAL_ERROR(50000, "系统错误");
 
     private final int code;

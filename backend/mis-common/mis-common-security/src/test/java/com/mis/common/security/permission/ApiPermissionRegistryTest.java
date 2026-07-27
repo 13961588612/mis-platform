@@ -15,9 +15,9 @@ class ApiPermissionRegistryTest {
     void matchPermissionAndAuthOnly() {
         ApiPermissionRegistry registry = new ApiPermissionRegistry();
         registry.replaceAll(List.of(
-                new ApiPermissionRule("GET", "/api/v1/users", "system:user:list", false),
-                new ApiPermissionRule("GET", "/api/v1/auth/me", null, true),
-                new ApiPermissionRule("GET", "/api/v1/users/{id}", "system:user:query", false)
+                new ApiPermissionRule("GET", "/api/v1/users", "system:user:list", false, 1),
+                new ApiPermissionRule("GET", "/api/v1/auth/me", null, true, 1),
+                new ApiPermissionRule("GET", "/api/v1/users/{id}", "system:user:query", false, 1)
         ));
 
         Optional<ApiPermissionRegistry.Match> list = registry.match("GET", "/api/v1/users");

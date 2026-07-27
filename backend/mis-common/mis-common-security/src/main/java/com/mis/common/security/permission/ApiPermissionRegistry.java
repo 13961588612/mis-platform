@@ -45,6 +45,8 @@ public class ApiPermissionRegistry {
         Set<String> permissions = new LinkedHashSet<>();
         boolean authOnly = false;
         boolean hit = false;
+        boolean moduleDisabled = false;
+        Integer moduleStatus = null;
         for (ApiPermissionRule rule : rules.get()) {
             if (rule.httpMethod() == null || rule.pathPattern() == null) {
                 continue;
@@ -56,6 +58,14 @@ public class ApiPermissionRegistry {
                 continue;
             }
             hit = true;
+            if (rule.moduleStatus() != null) {
+                if (rule.moduleStatus() == 0) {
+                    moduleDisabled = true;
+                }
+                if (moduleStatus == null) {
+                    moduleStatus = rule.moduleStatus();
+                }
+            }
             if (rule.authOnly() || !StringUtils.hasText(rule.permission())) {
                 authOnly = true;
             } else {
@@ -65,11 +75,13 @@ public class ApiPermissionRegistry {
         if (!hit) {
             return Optional.empty();
         }
+        // 模块停用优先：拦截器将据 match.moduleStatus()==0 直接拒绝（Q4）
+        Integer effectiveModuleStatus = moduleDisabled ? 0 : moduleStatus;
         // 同时命中「仅登录」与「需权限」时，以权限为准
         if (!permissions.isEmpty()) {
-            return Optional.of(new Match(false, Set.copyOf(permissions)));
+            return Optional.of(new Match(false, Set.copyOf(permissions), effectiveModuleStatus));
         }
-        return Optional.of(new Match(authOnly, Set.of()));
+        return Optional.of(new Match(authOnly, Set.of(), effectiveModuleStatus));
     }
 
     private static String normalizePath(String requestPath) {
@@ -84,6 +96,6 @@ public class ApiPermissionRegistry {
         return path;
     }
 
-    public record Match(boolean authOnly, Set<String> permissions) {
+    public record Match(boolean authOnly, Set<String> permissions, Integer moduleStatus) {
     }
 }

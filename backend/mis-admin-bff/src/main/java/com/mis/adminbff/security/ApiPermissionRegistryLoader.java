@@ -33,7 +33,8 @@ public class ApiPermissionRegistryLoader {
                         row.httpMethod(),
                         row.pathPattern(),
                         row.permission(),
-                        row.authOnly()));
+                        row.authOnly(),
+                        row.moduleStatus()));
             }
         }
         registry.replaceAll(rules);

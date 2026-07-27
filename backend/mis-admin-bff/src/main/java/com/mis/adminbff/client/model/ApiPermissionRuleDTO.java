@@ -4,6 +4,7 @@ public record ApiPermissionRuleDTO(
         String httpMethod,
         String pathPattern,
         String permission,
-        boolean authOnly
+        boolean authOnly,
+        Integer moduleStatus
 ) {
 }

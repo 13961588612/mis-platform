@@ -36,7 +36,6 @@ export const SYSTEM_NAV: SystemNavNode[] = [
     icon: 'Cable',
     children: [
       { path: '/system/app', title: '应用管理', icon: 'AppWindow' },
-      { path: '/system/api', title: '接口管理', icon: 'Cable' },
       { path: '/system/module', title: '模块管理', icon: 'GitBranch' },
     ],
   },

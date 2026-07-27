@@ -1,5 +1,6 @@
 import { useCallback, useMemo, useState, type ReactNode } from 'react';
 import { Eye, Pencil, Plus, Search, Sparkles, Trash2 } from 'lucide-react';
+import { ModuleManagePage } from '@/features/system/module/module-manage-page';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -409,12 +410,12 @@ export function AdminListPage({ def }: { def: AdminPageDef }) {
                   {def.columns.map((c) => (
                     <th
                       key={c.key}
-                      className="whitespace-nowrap px-4 py-2.5 text-sm font-semibold text-muted-foreground"
+                      className="whitespace-nowrap px-4 py-2.5 text-sm font-bold text-muted-foreground"
                     >
                       {c.label}
                     </th>
                   ))}
-                  <th className="whitespace-nowrap px-4 py-2.5 text-sm font-semibold text-muted-foreground">
+                  <th className="whitespace-nowrap px-4 py-2.5 text-sm font-bold text-muted-foreground">
                     操作
                   </th>
                 </tr>
@@ -735,11 +736,8 @@ export function PostPage() {
 export function AppManagePage() {
   return <SystemAdminPage path="/system/app" />;
 }
-export function ApiManagePage() {
-  return <SystemAdminPage path="/system/api" />;
-}
 export function ModulePage() {
-  return <SystemAdminPage path="/system/module" />;
+  return <ModuleManagePage />;
 }
 export function RolePage() {
   return <SystemAdminPage path="/system/role" />;

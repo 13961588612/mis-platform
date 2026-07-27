@@ -89,3 +89,181 @@ export interface PageResult<T> {
   total: number;
   list: T[];
 }
+
+export interface RoleBrief {
+  id: string;
+  name: string;
+  code: string;
+}
+
+export interface UserView {
+  id: string;
+  username: string;
+  realName: string | null;
+  employeeNo: string | null;
+  employeeId: string | null;
+  deptId: string | null;
+  deptName: string | null;
+  orgId: string | null;
+  orgName: string | null;
+  email: string | null;
+  phone: string | null;
+  status: number;
+  isTenantAdmin: number | null;
+  roles: RoleBrief[];
+  createdAt: string | null;
+}
+
+export interface OrgItem {
+  id: string;
+  tenantId: string;
+  code: string;
+  name: string;
+  sort: number;
+  status: number;
+  remark: string | null;
+  createdAt: string | null;
+  updatedAt: string | null;
+}
+
+export interface DeptNode {
+  id: string;
+  tenantId: string;
+  orgId: string;
+  parentId: string;
+  code: string;
+  name: string;
+  categoryId: string | null;
+  ancestors: string | null;
+  sort: number;
+  status: number;
+  isRoot: number | null;
+  leaderEmployeeId: string | null;
+  createdAt: string | null;
+  updatedAt: string | null;
+  children?: DeptNode[] | null;
+}
+
+export interface RoleItem {
+  id: string;
+  tenantId: string;
+  appId: string;
+  code: string;
+  name: string;
+  type: number;
+  dataScope: number;
+  status: number;
+  remark: string | null;
+  createdAt: string | null;
+}
+
+export interface MenuNode {
+  id: string;
+  tenantId: string;
+  appId: string;
+  parentId: string;
+  code: string;
+  name: string;
+  type: number;
+  path: string | null;
+  component: string | null;
+  permission: string | null;
+  icon: string | null;
+  sort: number;
+  visible: number;
+  status: number;
+  children?: MenuNode[] | null;
+}
+
+export interface DictTypeItem {
+  id: string;
+  tenantId: string;
+  code: string;
+  name: string;
+  status: number;
+  remark: string | null;
+}
+
+export interface DictItem {
+  id: string;
+  typeId: string;
+  label: string;
+  value: string;
+  sort: number;
+  status: number;
+  cssClass: string | null;
+}
+
+export interface OperLogItem {
+  id: string;
+  tenantId: string;
+  userId: string | null;
+  username: string | null;
+  module: string | null;
+  operation: string | null;
+  method: string | null;
+  requestUri: string | null;
+  requestMethod: string | null;
+  responseCode: number | null;
+  durationMs: number | null;
+  ip: string | null;
+  operTime: string | null;
+}
+
+export interface LoginLogItem {
+  id: string;
+  tenantId: string;
+  appId: string;
+  userId: string | null;
+  username: string;
+  ip: string | null;
+  userAgent: string | null;
+  status: number;
+  msg: string | null;
+  loginAt: string | null;
+}
+
+/** 菜单/按钮类型（对齐后端 MenuType：1 目录 / 2 菜单 / 3 按钮） */
+export const MenuType = {
+  CATALOG: 1,
+  MENU: 2,
+  BUTTON: 3,
+} as const;
+
+/** 平台业务模块（sys_module） */
+export interface ModuleItem {
+  id: string;
+  code: string;
+  name: string;
+  serviceName: string;
+  sort: number;
+  status: number;
+  createdAt: string | null;
+  updatedAt: string | null;
+}
+
+/** 模块下接口树节点（sys_api，catalog/api 自引用） */
+export interface ModuleApiNode {
+  id: string;
+  moduleId: string;
+  parentId: string;
+  code: string;
+  type: string;
+  name: string;
+  httpMethod: string | null;
+  pathPattern: string | null;
+  sort: number;
+  status: number;
+  children?: ModuleApiNode[] | null;
+}
+
+/** 模块下「接口 ↔ 菜单」绑定关系 */
+export interface ModuleApiBinding {
+  menuId: string;
+  menuName: string;
+  permission: string | null;
+  apiId: string;
+  apiName: string;
+  httpMethod: string | null;
+  pathPattern: string | null;
+}

@@ -5,6 +5,7 @@ import com.mis.common.core.exception.ResultCode;
 import com.mis.common.security.context.LoginUser;
 import com.mis.common.security.context.SecurityContextHolder;
 import com.mis.common.security.permission.ApiPermissionRegistry.Match;
+import jakarta.servlet.DispatcherType;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.util.StringUtils;
@@ -34,6 +35,12 @@ public class ApiPermissionInterceptor implements HandlerInterceptor {
 
     @Override
     public boolean preHandle(HttpServletRequest request, HttpServletResponse response, Object handler) {
+        // SSE/Flux 异步写出时会二次进入拦截器；此时 GatewayContextFilter 不跑，LoginUser 已空，跳过即可
+        // （REQUEST 阶段已鉴权通过）。
+        if (request.getDispatcherType() == DispatcherType.ASYNC
+                || request.getDispatcherType() == DispatcherType.ERROR) {
+            return true;
+        }
         if (!properties.isEnabled()) {
             return true;
         }
@@ -50,13 +57,18 @@ public class ApiPermissionInterceptor implements HandlerInterceptor {
             return true;
         }
 
+        // Q4：命中规则的接口若所属模块停用（module_status=0），无论 denyUnmapped 如何，一律 403 拒绝。
+        Match m = match.get();
+        if (m.moduleStatus() != null && m.moduleStatus() == 0) {
+            throw new BusinessException(ResultCode.FORBIDDEN, "接口所属模块已停用");
+        }
+
         LoginUser user = SecurityContextHolder.getOptional()
                 .orElseThrow(() -> new BusinessException(ResultCode.UNAUTHORIZED));
         if (user.getUserId() == null) {
             throw new BusinessException(ResultCode.UNAUTHORIZED);
         }
 
-        Match m = match.get();
         if (m.authOnly()) {
             return true;
         }

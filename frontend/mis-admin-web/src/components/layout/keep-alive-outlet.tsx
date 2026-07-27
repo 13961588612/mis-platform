@@ -5,21 +5,19 @@ import { useTabStore } from '@/stores/tab-store';
 import { getIframeApp, useIframeRegistryVersion } from '@/lib/nav/iframe-apps';
 import { DashboardPage } from '@/features/dashboard/dashboard-page';
 import {
-  ApiManagePage,
   AppManagePage,
   ConfigPage,
-  DeptPage,
-  DictPage,
   EmployeePage,
-  LoginLogPage,
-  MenuPage,
   ModulePage,
-  OperLogPage,
-  OrgPage,
   PostPage,
-  RolePage,
-  UserPage,
 } from '@/features/system/admin-list-page';
+import { UserListPage } from '@/features/system/user/user-list-page';
+import { OrgListPage } from '@/features/system/org/org-list-page';
+import { DeptTreePage } from '@/features/system/dept/dept-tree-page';
+import { RoleListPage } from '@/features/system/role/role-list-page';
+import { MenuManagePage } from '@/features/system/menu/menu-manage-page';
+import { DictManagePage } from '@/features/system/dict/dict-manage-page';
+import { LoginLogListPage, OperLogListPage } from '@/features/monitor/log-pages';
 import { flattenSystemNavLeaves } from '@/lib/nav/system-nav';
 
 export { registerIframeApps } from '@/lib/nav/iframe-apps';
@@ -50,20 +48,19 @@ function IframePage({ basePath, title }: { basePath: string; title: string }) {
 const PAGE_MAP: Record<string, ComponentType> = {
   '/dashboard': DashboardPage,
   '/403': ForbiddenPage,
-  '/system/user': UserPage,
-  '/system/org': OrgPage,
-  '/system/dept': DeptPage,
+  '/system/user': UserListPage,
+  '/system/org': OrgListPage,
+  '/system/dept': DeptTreePage,
   '/system/employee': EmployeePage,
   '/system/post': PostPage,
   '/system/app': AppManagePage,
-  '/system/api': ApiManagePage,
   '/system/module': ModulePage,
-  '/system/role': RolePage,
-  '/system/menu': MenuPage,
-  '/system/dict': DictPage,
+  '/system/role': RoleListPage,
+  '/system/menu': MenuManagePage,
+  '/system/dict': DictManagePage,
   '/system/config': ConfigPage,
-  '/monitor/login-log': LoginLogPage,
-  '/monitor/oper-log': OperLogPage,
+  '/monitor/login-log': LoginLogListPage,
+  '/monitor/oper-log': OperLogListPage,
 };
 
 export const KEEP_ALIVE_META: Record<string, { title: string; icon?: string }> = Object.fromEntries(
