@@ -7,6 +7,7 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
+import java.util.Collection;
 import java.util.Optional;
 
 public interface SysUserRepository extends JpaRepository<SysUser, Long> {
@@ -17,13 +18,16 @@ public interface SysUserRepository extends JpaRepository<SysUser, Long> {
             SELECT u FROM SysUser u
             WHERE u.tenantId = :tenantId AND u.appId = :appId
               AND (:status IS NULL OR u.status = :status)
-              AND (:username IS NULL OR u.username LIKE CONCAT('%', :username, '%'))
+              AND (:username = '' OR u.username LIKE CONCAT('%', :username, '%'))
+              AND (:hasEmployeeFilter = false OR u.employeeId IN :employeeIds)
             """)
     Page<SysUser> search(
             @Param("tenantId") Long tenantId,
             @Param("appId") Long appId,
             @Param("status") Integer status,
             @Param("username") String username,
+            @Param("hasEmployeeFilter") boolean hasEmployeeFilter,
+            @Param("employeeIds") Collection<Long> employeeIds,
             Pageable pageable);
 
     boolean existsByTenantIdAndAppIdAndUsername(Long tenantId, Long appId, String username);

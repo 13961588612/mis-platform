@@ -16,6 +16,7 @@ import com.mis.adminbff.support.RequestContext;
 import com.mis.common.core.exception.BusinessException;
 import com.mis.common.core.exception.ResultCode;
 import com.mis.common.core.result.PageResult;
+import com.mis.common.core.util.DesensitizeUtils;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 import reactor.core.publisher.Flux;
@@ -42,10 +43,11 @@ public class UserAggregateService {
         this.properties = properties;
     }
 
-    public PageResult<UserView> page(Integer status, String username, int page, int size) {
+    public PageResult<UserView> page(Integer status, String username, Long deptId, int page, int size) {
         Long tenantId = RequestContext.requireTenantId();
         Long appId = RequestContext.requireAppId();
-        PageResult<IamUserVO> iamPage = iamWebClient.pageUsers(tenantId, appId, status, username, page, size);
+        PageResult<IamUserVO> iamPage =
+                iamWebClient.pageUsers(tenantId, appId, status, username, deptId, page, size);
         List<IamUserVO> users = iamPage.getList() != null ? iamPage.getList() : List.of();
         List<UserView> views = enrich(users);
         return PageResult.of(iamPage.getPage(), iamPage.getSize(), iamPage.getTotal(), views);
@@ -196,8 +198,8 @@ public class UserAggregateService {
                     dept != null ? dept.name() : null,
                     orgId,
                     orgName,
-                    emp != null ? emp.email() : null,
-                    emp != null ? emp.phone() : null,
+                    emp != null ? DesensitizeUtils.email(emp.email()) : null,
+                    emp != null ? DesensitizeUtils.phone(emp.phone()) : null,
                     user.status(),
                     user.isTenantAdmin(),
                     roles,

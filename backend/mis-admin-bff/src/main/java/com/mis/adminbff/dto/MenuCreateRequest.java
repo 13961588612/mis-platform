@@ -12,5 +12,6 @@ public record MenuCreateRequest(
         String permission,
         String icon,
         Integer sort,
-        Integer visible
+        Integer visible,
+        Long appId
 ) {}

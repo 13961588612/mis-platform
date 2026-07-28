@@ -8,6 +8,7 @@ import com.mis.adminbff.dto.UserView;
 import com.mis.adminbff.service.UserAggregateService;
 import com.mis.common.core.result.PageResult;
 import com.mis.common.core.result.Result;
+import com.mis.common.web.audit.OperLog;
 import jakarta.validation.Valid;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -33,9 +34,10 @@ public class UserController {
     public Result<PageResult<UserView>> page(
             @RequestParam(required = false) Integer status,
             @RequestParam(required = false) String username,
+            @RequestParam(required = false) Long deptId,
             @RequestParam(defaultValue = "1") int page,
             @RequestParam(defaultValue = "20") int size) {
-        return Result.ok(userAggregateService.page(status, username, page, size));
+        return Result.ok(userAggregateService.page(status, username, deptId, page, size));
     }
 
     @GetMapping("/{id}")
@@ -44,33 +46,39 @@ public class UserController {
     }
 
     @PostMapping
+    @OperLog(module = "用户管理", operation = "新增用户")
     public Result<UserView> create(@Valid @RequestBody UserCreateRequest request) {
         return Result.ok(userAggregateService.create(request));
     }
 
     @PutMapping("/{id}")
+    @OperLog(module = "用户管理", operation = "编辑用户")
     public Result<UserView> update(@PathVariable Long id, @Valid @RequestBody UserUpdateRequest request) {
         return Result.ok(userAggregateService.update(id, request));
     }
 
     @PutMapping("/{id}/status")
+    @OperLog(module = "用户管理", operation = "变更状态")
     public Result<UserView> updateStatus(@PathVariable Long id, @Valid @RequestBody StatusUpdateRequest request) {
         return Result.ok(userAggregateService.updateStatus(id, request));
     }
 
     @PutMapping("/{id}/reset-password")
+    @OperLog(module = "用户管理", operation = "重置密码")
     public Result<Void> resetPassword(@PathVariable Long id) {
         userAggregateService.resetPassword(id);
         return Result.ok();
     }
 
     @DeleteMapping("/{id}")
+    @OperLog(module = "用户管理", operation = "删除用户")
     public Result<Void> delete(@PathVariable Long id) {
         userAggregateService.delete(id);
         return Result.ok();
     }
 
     @PutMapping("/{id}/roles")
+    @OperLog(module = "用户管理", operation = "分配角色")
     public Result<Void> assignRoles(@PathVariable Long id, @Valid @RequestBody RoleAssignRequest request) {
         userAggregateService.assignRoles(id, request);
         return Result.ok();

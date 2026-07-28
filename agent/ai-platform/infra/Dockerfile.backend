@@ -1,6 +1,11 @@
 # =============================================================================
 # Dockerfile.backend — Agent Core (Python/FastAPI)
 # =============================================================================
+# build context 须为 agent/ai-platform/（含 backend/ 与 configs/）。
+# compose 示例：
+#   context: ../agent/ai-platform
+#   dockerfile: infra/Dockerfile.backend
+# =============================================================================
 
 FROM python:3.12-slim AS base
 
@@ -26,7 +31,7 @@ FROM base AS builder
 RUN pip install --upgrade pip
 
 # Copy project definition and install dependencies
-COPY pyproject.toml ./
+COPY backend/pyproject.toml ./
 RUN pip install --no-cache-dir \
     "fastapi[standard]>=0.111.0" \
     "uvicorn[standard]>=0.29.0" \
@@ -50,7 +55,8 @@ RUN pip install --no-cache-dir \
     "tenacity>=8.2.0" \
     "pyyaml>=6.0" \
     "APScheduler>=3.10.0" \
-    "mcp>=0.1.0"
+    "mcp>=0.1.0" \
+    "openharness-ai>=0.1.9"
 
 # ===== Stage 2: Production runtime =====
 FROM base AS production
@@ -59,13 +65,14 @@ FROM base AS production
 COPY --from=builder /usr/local/lib/python3.12/site-packages /usr/local/lib/python3.12/site-packages
 COPY --from=builder /usr/local/bin /usr/local/bin
 
-# Copy application source
-COPY src/ ./src/
-COPY configs/ ./configs/ 2>/dev/null || true
+# Copy application source + agent configs（CONFIG_BASE_PATH=/app/configs）
+COPY backend/src/ ./src/
+COPY configs/ ./configs/
 
 ENV ENVIRONMENT=production \
     HOST=0.0.0.0 \
-    PORT=8000
+    PORT=8000 \
+    CONFIG_BASE_PATH=/app/configs
 
 EXPOSE 8000
 
@@ -81,8 +88,9 @@ FROM base AS development
 COPY --from=builder /usr/local/lib/python3.12/site-packages /usr/local/lib/python3.12/site-packages
 COPY --from=builder /usr/local/bin /usr/local/bin
 
-# Copy application source
-COPY src/ ./src/
+# Copy application source + configs
+COPY backend/src/ ./src/
+COPY configs/ ./configs/
 
 # Install dev dependencies
 RUN pip install --no-cache-dir \
@@ -94,7 +102,8 @@ RUN pip install --no-cache-dir \
 ENV ENVIRONMENT=development \
     DEBUG=true \
     HOST=0.0.0.0 \
-    PORT=8000
+    PORT=8000 \
+    CONFIG_BASE_PATH=/app/configs
 
 EXPOSE 8000
 

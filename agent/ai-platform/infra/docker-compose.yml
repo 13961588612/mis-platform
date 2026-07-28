@@ -152,8 +152,9 @@ services:
   # ===== Agent Core Backend (Python/FastAPI) =====
   backend:
     build:
-      context: ../backend
-      dockerfile: ../infra/Dockerfile.backend
+      context: ..
+      dockerfile: infra/Dockerfile.backend
+      target: production
     container_name: ai-platform-backend
     restart: unless-stopped
     environment:

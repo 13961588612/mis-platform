@@ -1,0 +1,8 @@
+# Pinned for reproducible Docker builds (avoid pip backtracking on pydantic).
+fastapi[standard]==0.115.14
+uvicorn[standard]==0.34.3
+pydantic==2.11.7
+numpy==2.2.6
+transformers==4.53.2
+sentence-transformers==5.0.0
+onnxruntime==1.22.1

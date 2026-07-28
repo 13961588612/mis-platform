@@ -1,6 +1,6 @@
 # 配置管理策略
 
-> Nacos 2.3 + PostgreSQL 外置存储 | 操作手册见 [运维总览](README.md)
+> Nacos **Server 2.3.2**（运行 **JDK 17**）+ 测试/正式 PostgreSQL 外置存储 | 操作手册见 [运维总览](README.md)
 
 ## 1. 两档模式
 
@@ -70,14 +70,21 @@ bootstrap 加载 `mis-common`（共享）+ `${spring.application.name}`（服务
 
 ## 5. Nacos Server
 
+| 项 | 约定 |
+|----|------|
+| 版本 | **2.3.2**（对齐 SCA 2023.0.1.0 / nacos-client 2.3.2） |
+| 运行 JDK | **17**（自建镜像 `mis-nacos:2.3.2-jdk17`；可与 mis-auth 同机共用 `JAVA_HOME_17`） |
+| 本地存储 | 内嵌（`docker-compose.dev.yml`） |
+| 测试/正式存储 | PostgreSQL 库 `nacos`（`docker-compose.nacos-pg.yml`） |
+
 ```
 PostgreSQL
 ├── mis_platform    # 业务库（Flyway）
-└── nacos           # 配置中心元数据
+└── nacos           # 配置中心元数据（remote 环境）
 ```
 
-本地：`deploy/docker-compose.dev.yml`  
-详见 [deploy/nacos/README.md](../../deploy/nacos/README.md)
+业务模块（mis-auth 等）**不改 JDK、不改 SCA 版本**；仅 Nacos **进程**改为 JDK 17 运行。  
+详见 [deploy/nacos/README.md](../../deploy/nacos/README.md)。
 
 ## 6. 新微服务接入
 

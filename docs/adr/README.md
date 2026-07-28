@@ -20,12 +20,13 @@ Architecture Decision Record，记录重要架构决策的**背景、选项、�
 | [ADR-008](ADR-008-bff-centralized-api-authz.md) | BFF 统一 API 权限，**mis-iam** 作 PDP | 已接受 | 2026-06-23 / 2026-07-21 |
 | [ADR-009](ADR-009-permissions-in-redis-not-jwt.md) | 权限存 Redis，JWT 不带 permissions | 已接受 | 2026-06-23 |
 | [ADR-010](ADR-010-api-permission-mapping.md) | 菜单/按钮 API 绑定（已由 ADR-011 演进） | 已接受 | 2026-06-23 |
-| [ADR-011](ADR-011-sys-api-code-multi-app-auth.md) | sys_api 树 + code 层级 + 按 APP 隔离用户与令牌 | 已接受 | 2026-06-23 |
+| [ADR-011](ADR-011-sys-api-code-multi-app-auth.md) | sys_api 树 + code 层级 + 按 APP 隔离用户与令牌（sys_api 归属/绑定部分已由 ADR-017 接续） | 已接受 | 2026-06-23 |
 | [ADR-012](ADR-012-sys-role-permission.md) | sys_role_permission + perm_type ENUM | 已接受 | 2026-06-23 |
 | [ADR-013](ADR-013-sys-dept-hierarchy.md) | sys_org + sys_dept 分层 | 已接受 | 2026-06-24 |
 | [ADR-014](ADR-014-post-platform-admin.md) | 岗位任职、superadmin/租户 admin、F1–F6 | 已接受 | 2026-06-23 |
 | [ADR-015](ADR-015-jpa-over-mybatis.md) | 持久层 Spring Data JPA（替代 MyBatis-Plus） | 已接受 | 2026-06-23 |
 | [ADR-016](ADR-016-mis-iam-org-service-boundary.md) | Sprint 2：mis-iam / mis-org 合并原 mis-user/mis-rbac | 已接受 | 2026-07-21 |
+| [ADR-017](ADR-017-sys-api-module-ownership.md) | sys_api 归属模块、去租户/应用、API 多绑定 | 已接受 | 2026-07-28 |
 
 ## ADR 模板
 

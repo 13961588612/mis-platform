@@ -48,9 +48,10 @@ public class UserController {
             @RequestParam Long appId,
             @RequestParam(required = false) Integer status,
             @RequestParam(required = false) String username,
+            @RequestParam(required = false) Long deptId,
             @RequestParam(defaultValue = "1") int page,
             @RequestParam(defaultValue = "20") int size) {
-        Page<UserVO> result = userService.page(tenantId, appId, status, username, page, size);
+        Page<UserVO> result = userService.page(tenantId, appId, status, username, deptId, page, size);
         return Result.ok(PageMapper.toPageResult(result));
     }
 

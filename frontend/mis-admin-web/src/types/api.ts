@@ -173,6 +173,12 @@ export interface MenuNode {
   visible: number;
   status: number;
   children?: MenuNode[] | null;
+  apiList?: MenuApiItem[] | null;
+}
+
+export interface MenuApiItem {
+  method: string;
+  path: string;
 }
 
 export interface DictTypeItem {
@@ -207,6 +213,7 @@ export interface OperLogItem {
   responseCode: number | null;
   durationMs: number | null;
   ip: string | null;
+  requestParams: string | null;
   operTime: string | null;
 }
 

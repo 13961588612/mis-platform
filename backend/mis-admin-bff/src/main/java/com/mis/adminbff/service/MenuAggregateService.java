@@ -49,8 +49,9 @@ public class MenuAggregateService {
         return systemWebClient.permissions(menuIds);
     }
 
-    public List<MenuVO> tree() {
-        return systemWebClient.tree(RequestContext.requireAppId());
+    public List<MenuVO> tree(Long appId) {
+        Long resolved = appId != null ? appId : RequestContext.requireAppId();
+        return systemWebClient.tree(resolved);
     }
 
     public MenuVO get(Long id) {
@@ -58,9 +59,10 @@ public class MenuAggregateService {
     }
 
     public MenuVO create(MenuCreateRequest request) {
+        Long appId = request.appId() != null ? request.appId() : RequestContext.requireAppId();
         return systemWebClient.createMenu(SystemWebClient.menuCreateBody(
                 RequestContext.requireTenantId(),
-                RequestContext.requireAppId(),
+                appId,
                 request.parentId(),
                 request.name(),
                 request.type(),

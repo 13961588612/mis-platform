@@ -1,9 +1,8 @@
 # =============================================================================
 # Dockerfile.embedding — Local Embedding Model Service
 # =============================================================================
-# Serves bge-small-zh-v1.5 via a lightweight FastAPI endpoint with
-# sentence-transformers and ONNX Runtime for optimized inference.
-# Vector dimension: 768
+# Serves bge-small-zh-v1.5 via FastAPI + sentence-transformers.
+# Vector dimension: 768. Uses CPU torch wheel to keep the image smaller/stable.
 # =============================================================================
 
 FROM python:3.12-slim
@@ -13,100 +12,33 @@ LABEL description="Local embedding model service (bge-small-zh-v1.5)"
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
-    PIP_NO_CACHE_DIR=1
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
 
-# Install system dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
-# Install Python dependencies
+# 1) CPU-only torch first (separate index; avoids CUDA wheels + resolver churn)
 RUN pip install --no-cache-dir \
-    "fastapi[standard]>=0.111.0" \
-    "uvicorn[standard]>=0.29.0" \
-    "sentence-transformers>=3.0.0" \
-    "onnxruntime>=1.17.0" \
-    "numpy>=1.26.0" \
-    "torch>=2.2.0" \
-    "transformers>=4.40.0" \
-    "pydantic>=2.7.0"
+    --index-url https://download.pytorch.org/whl/cpu \
+    "torch==2.7.1"
 
-# Create model cache directory
+# 2) Remaining deps from pinned requirements
+COPY requirements-embedding.txt /app/requirements-embedding.txt
+RUN pip install --no-cache-dir -r /app/requirements-embedding.txt
+
 RUN mkdir -p /app/models
-
-# Pre-download model during build (optional, speeds up first request)
-ENV SENTENCE_TRANSFORMERS_HOME=/app/models
-ENV TRANSFORMERS_CACHE=/app/models
-
-# Embedding service script
-RUN cat > /app/embedding_server.py << 'PYEOF'
-"""Local embedding model service using bge-small-zh-v1.5."""
-import os
-import time
-from typing import List
-import numpy as np
-from fastapi import FastAPI
-from pydantic import BaseModel, Field
-
-MODEL_NAME = os.environ.get("MODEL_NAME", "BAAI/bge-small-zh-v1.5")
-PORT = int(os.environ.get("PORT", "8001"))
-MAX_BATCH_SIZE = int(os.environ.get("MAX_BATCH_SIZE", "32"))
-
-app = FastAPI(title="Embedding Service", version="1.0.0")
-_model = None
-
-
-def get_model():
-    global _model
-    if _model is None:
-        from sentence_transformers import SentenceTransformer
-        _model = SentenceTransformer(MODEL_NAME, cache_folder="/app/models")
-    return _model
-
-
-class EmbedRequest(BaseModel):
-    texts: List[str] = Field(..., description="Texts to embed")
-    batch_size: int = Field(default=MAX_BATCH_SIZE, description="Batch size")
-
-
-class EmbedResponse(BaseModel):
-    embeddings: List[List[float]]
-    dimension: int
-    model: str
-    elapsed_ms: float
-
-
-@app.get("/health")
-async def health():
-    return {"status": "ok", "model": MODEL_NAME}
-
-
-@app.post("/embed", response_model=EmbedResponse)
-async def embed(request: EmbedRequest):
-    start = time.perf_counter()
-    model = get_model()
-    texts = request.texts[:MAX_BATCH_SIZE]
-    embeddings = model.encode(texts, normalize_embeddings=True)
-    elapsed = (time.perf_counter() - start) * 1000
-    return EmbedResponse(
-        embeddings=embeddings.tolist(),
-        dimension=embeddings.shape[1],
-        model=MODEL_NAME,
-        elapsed_ms=round(elapsed, 2),
-    )
-
-
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=PORT)
-PYEOF
-
-ENV MODEL_NAME="BAAI/bge-small-zh-v1.5" \
+ENV SENTENCE_TRANSFORMERS_HOME=/app/models \
+    TRANSFORMERS_CACHE=/app/models \
+    HF_HOME=/app/models \
+    MODEL_NAME="BAAI/bge-small-zh-v1.5" \
     PORT=8001 \
     MAX_BATCH_SIZE=32
+
+COPY embedding_server.py /app/embedding_server.py
 
 EXPOSE 8001
 

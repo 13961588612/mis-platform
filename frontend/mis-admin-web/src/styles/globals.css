@@ -123,6 +123,11 @@
     font-size: 0.875rem;
     line-height: 1.6;
   }
+
+  /* 各页表格表头统一加粗 */
+  thead th {
+    @apply font-bold;
+  }
 }
 
 /* 侧栏纵向滚动条：轨道同面板底色，滑块用侧栏边框色（适配明暗主题） */

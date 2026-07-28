@@ -338,38 +338,31 @@
         </div>
       </section>
 
-      <!-- ===== 菜单管理（三栏） ===== -->
+      <!-- ===== 菜单管理（树 + 属性面板范式） ===== -->
       <section data-page="menu" class="hidden">
-        <div class="mb-4"><h1 class="text-xl font-semibold">菜单管理</h1><p class="text-sm text-muted-foreground">菜单树 · 节点配置 · 绑定 API</p></div>
-        <div class="grid gap-4 lg:grid-cols-[260px_1fr_360px]">
-          <div class="rounded-lg border bg-card p-3">
-            <div class="mb-2 text-sm font-semibold">菜单树</div>
-            <div class="space-y-0.5 text-sm">
-              <div class="flex items-center gap-1.5 rounded-md bg-accent px-2 py-1.5 font-medium"><i data-lucide="folder" class="h-4 w-4 text-primary"></i>系统管理</div>
-              <div class="ml-4 flex items-center gap-1.5 rounded-md px-2 py-1.5 hover:bg-accent"><i data-lucide="file" class="h-4 w-4 text-muted-foreground"></i>用户管理</div>
-              <div class="ml-4 flex items-center gap-1.5 rounded-md px-2 py-1.5 hover:bg-accent"><i data-lucide="file" class="h-4 w-4 text-muted-foreground"></i>角色管理</div>
-              <div class="ml-4 flex items-center gap-1.5 rounded-md px-2 py-1.5 hover:bg-accent"><i data-lucide="file" class="h-4 w-4 text-muted-foreground"></i>菜单管理</div>
+        <div class="mb-4 flex items-center justify-between">
+          <div><h1 class="text-xl font-semibold">菜单管理</h1><p class="text-sm text-muted-foreground">菜单树 · 类型：目录 / 菜单 / 按钮 · 共 <span id="menuTotal">0</span> 个节点</p></div>
+          <button onclick="openMenuAdd(null)" class="flex h-9 items-center gap-1.5 rounded-md bg-primary px-3 text-sm font-medium text-primary-foreground hover:opacity-90"><i data-lucide="plus" class="h-4 w-4"></i>新增根菜单</button>
+        </div>
+        <div class="grid gap-4 lg:grid-cols-[320px_1fr]">
+          <!-- 左：菜单树面板 -->
+          <div class="rounded-lg border bg-card">
+            <div class="border-b p-3">
+              <div class="relative">
+                <i data-lucide="search" class="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground"></i>
+                <input id="menuSearch" oninput="menuState.search=this.value;renderMenuTree()" class="h-9 w-full rounded-md border bg-background pl-8 pr-3 text-sm outline-none focus:ring-2 focus:ring-ring" placeholder="搜索菜单名称" />
+              </div>
             </div>
-          </div>
-          <div class="rounded-lg border bg-card p-4">
-            <div class="mb-3 flex items-center gap-2"><span class="rounded-md bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary">菜单</span><span class="text-sm font-semibold">用户管理</span></div>
-            <div class="grid gap-3 sm:grid-cols-2">
-              <div class="grid gap-1.5"><label class="text-xs font-medium text-muted-foreground">名称</label><input class="h-9 rounded-md border bg-background px-3 text-sm outline-none focus:ring-2 focus:ring-ring" value="用户管理" /></div>
-              <div class="grid gap-1.5"><label class="text-xs font-medium text-muted-foreground">类型</label><select class="h-9 rounded-md border bg-background px-2 text-sm outline-none"><option>菜单页</option><option>目录</option><option>按钮</option></select></div>
-              <div class="grid gap-1.5"><label class="text-xs font-medium text-muted-foreground">路径</label><input class="h-9 rounded-md border bg-background px-3 text-sm outline-none focus:ring-2 focus:ring-ring" value="/system/user" /></div>
-              <div class="grid gap-1.5"><label class="text-xs font-medium text-muted-foreground">组件</label><input class="h-9 rounded-md border bg-background px-3 text-sm outline-none focus:ring-2 focus:ring-ring" value="system/user" /></div>
-              <div class="grid gap-1.5"><label class="text-xs font-medium text-muted-foreground">权限码</label><input class="h-9 rounded-md border bg-background px-3 text-sm outline-none focus:ring-2 focus:ring-ring" value="system:user:list" /></div>
-              <div class="grid gap-1.5"><label class="text-xs font-medium text-muted-foreground">排序</label><input class="h-9 rounded-md border bg-background px-3 text-sm outline-none focus:ring-2 focus:ring-ring" value="1" /></div>
+            <div class="flex flex-wrap gap-1.5 border-b px-3 py-2">
+              <button class="menu-type-chip rounded-full border border-primary bg-primary px-2.5 py-1 text-xs font-medium text-primary-foreground" data-type="all">全部</button>
+              <button class="menu-type-chip rounded-full border px-2.5 py-1 text-xs text-muted-foreground" data-type="1">目录</button>
+              <button class="menu-type-chip rounded-full border px-2.5 py-1 text-xs text-muted-foreground" data-type="2">菜单</button>
+              <button class="menu-type-chip rounded-full border px-2.5 py-1 text-xs text-muted-foreground" data-type="3">按钮</button>
             </div>
+            <div id="menuTree" class="max-h-[60vh] overflow-y-auto p-2 text-sm"></div>
           </div>
-          <div class="rounded-lg border bg-card p-4">
-            <div class="mb-3 flex items-center justify-between"><span class="text-sm font-semibold">API 列表</span><button class="flex h-7 items-center gap-1 rounded-md border px-2 text-xs hover:bg-accent"><i data-lucide="plus" class="h-3.5 w-3.5"></i>新增</button></div>
-            <div class="space-y-2 text-sm">
-              <div class="flex items-center justify-between rounded-md border p-2"><span class="flex items-center gap-2"><span class="rounded bg-success/10 px-1.5 py-0.5 text-xs font-medium text-success">GET</span><span class="font-mono text-xs">/users</span></span><i data-lucide="trash-2" class="h-4 w-4 text-muted-foreground"></i></div>
-              <div class="flex items-center justify-between rounded-md border p-2"><span class="flex items-center gap-2"><span class="rounded bg-info/10 px-1.5 py-0.5 text-xs font-medium text-info">POST</span><span class="font-mono text-xs">/users</span></span><i data-lucide="trash-2" class="h-4 w-4 text-muted-foreground"></i></div>
-              <div class="flex items-center justify-between rounded-md border p-2"><span class="flex items-center gap-2"><span class="rounded bg-warning/10 px-1.5 py-0.5 text-xs font-medium text-warning">PUT</span><span class="font-mono text-xs">/users/:id</span></span><i data-lucide="trash-2" class="h-4 w-4 text-muted-foreground"></i></div>
-            </div>
-          </div>
+          <!-- 右：属性面板 -->
+          <div id="menuDetail" class="rounded-lg border bg-card p-4"></div>
         </div>
       </section>
 
@@ -419,6 +412,33 @@
     <div class="border-t p-3"><input disabled placeholder="即将开放…" class="h-9 w-full rounded-md border bg-muted/50 px-3 text-sm text-muted-foreground" /></div>
   </div>
 
+  <!-- 菜单编辑 Drawer（按 type 动态显隐字段） -->
+  <div id="menuDrawer" class="fixed inset-y-0 right-0 z-50 w-[460px] max-w-full translate-x-full border-l bg-card shadow-xl sheet-panel flex flex-col">
+    <div class="flex items-center justify-between border-b p-4">
+      <h2 id="menuDrawerTitle" class="text-base font-semibold">新增菜单</h2>
+      <button onclick="closeMenuDrawer()" class="rounded-md p-1.5 hover:bg-accent" aria-label="关闭"><i data-lucide="x" class="h-5 w-5"></i></button>
+    </div>
+    <div class="flex-1 overflow-y-auto p-4 grid gap-3">
+      <input type="hidden" id="f_id" /><input type="hidden" id="f_parent" />
+      <div class="grid gap-1.5"><label class="text-xs font-medium text-muted-foreground">名称</label><input id="f_name" class="h-9 rounded-md border bg-background px-3 text-sm outline-none focus:ring-2 focus:ring-ring" /></div>
+      <div class="grid gap-1.5"><label class="text-xs font-medium text-muted-foreground">类型</label><select id="f_type" onchange="syncMenuFormVisibility()" class="h-9 rounded-md border bg-background px-2 text-sm outline-none"><option value="1">目录</option><option value="2" selected>菜单</option><option value="3">按钮</option></select></div>
+      <div class="grid gap-1.5"><label class="text-xs font-medium text-muted-foreground">父级</label><input id="f_parentName" class="h-9 rounded-md border bg-background px-3 text-sm outline-none focus:ring-2 focus:ring-ring" disabled /></div>
+      <div id="f_pathWrap" class="grid gap-1.5"><label class="text-xs font-medium text-muted-foreground">路由 path</label><input id="f_path" class="h-9 rounded-md border bg-background px-3 text-sm outline-none focus:ring-2 focus:ring-ring" placeholder="如 system/user" /></div>
+      <div id="f_compWrap" class="grid gap-1.5"><label class="text-xs font-medium text-muted-foreground">组件 component</label><input id="f_component" class="h-9 rounded-md border bg-background px-3 text-sm outline-none focus:ring-2 focus:ring-ring" placeholder="如 system/user/index" /></div>
+      <div class="grid gap-1.5"><label class="text-xs font-medium text-muted-foreground">权限码 permission</label><input id="f_permission" class="h-9 rounded-md border bg-background px-3 text-sm font-mono outline-none focus:ring-2 focus:ring-ring" placeholder="如 system:user:list" /></div>
+      <div class="grid gap-1.5"><label class="text-xs font-medium text-muted-foreground">图标（lucide 名）</label><div class="flex items-center gap-2"><span id="f_iconPrev" class="grid h-9 w-9 place-items-center rounded-md border bg-background"></span><input id="f_icon" oninput="syncIconPreview()" class="h-9 flex-1 rounded-md border bg-background px-3 text-sm outline-none focus:ring-2 focus:ring-ring" placeholder="如 users" /></div></div>
+      <div class="grid grid-cols-2 gap-3">
+        <div class="grid gap-1.5"><label class="text-xs font-medium text-muted-foreground">排序</label><input id="f_sort" type="number" class="h-9 rounded-md border bg-background px-3 text-sm outline-none focus:ring-2 focus:ring-ring" value="0" /></div>
+        <div class="grid gap-1.5"><label class="text-xs font-medium text-muted-foreground">状态</label><select id="f_status" class="h-9 rounded-md border bg-background px-2 text-sm outline-none"><option value="1">启用</option><option value="0">禁用</option></select></div>
+      </div>
+      <label class="flex items-center gap-2 text-sm"><input type="checkbox" id="f_visible" checked class="accent-primary h-4 w-4" />可见（在菜单中显示）</label>
+    </div>
+    <div class="flex justify-end gap-2 border-t p-4">
+      <button onclick="closeMenuDrawer()" class="h-9 rounded-md border px-4 text-sm hover:bg-accent">取消</button>
+      <button onclick="saveMenu()" class="h-9 rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground hover:opacity-90">保存</button>
+    </div>
+  </div>
+
 </div>
 
 <!-- ============ 弹窗层 ============ -->
@@ -433,6 +453,19 @@
       <div class="grid gap-1.5 sm:col-span-2"><label class="text-xs font-medium text-muted-foreground">状态</label><div class="flex items-center gap-2"><span class="inline-flex items-center gap-1.5 rounded-full bg-success/10 px-2.5 py-0.5 text-xs font-medium text-success"><span class="h-1.5 w-1.5 rounded-full bg-success"></span>启用</span></div></div>
     </div>
     <div class="flex justify-end gap-2 border-t p-4"><button onclick="closeDialog('dlg-user')" class="h-9 rounded-md border px-4 text-sm hover:bg-accent">取消</button><button onclick="closeDialog('dlg-user')" class="h-9 rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground hover:opacity-90">保存</button></div>
+  </div>
+</div>
+
+<!-- 菜单删除确认 -->
+<div id="dlg-menu-del" class="fixed inset-0 z-[60] hidden items-center justify-center bg-black/40 p-4">
+  <div class="dialog-card w-full max-w-md rounded-lg border bg-card shadow-xl">
+    <div class="flex items-center gap-2 border-b p-4"><i data-lucide="alert-triangle" class="h-5 w-5 text-destructive"></i><h2 class="text-base font-semibold">删除菜单</h2><button onclick="closeDelMenu()" class="ml-auto rounded-md p-1.5 hover:bg-accent"><i data-lucide="x" class="h-5 w-5"></i></button></div>
+    <div class="p-4 text-sm">
+      <p>确定删除菜单 <b id="delMenuName"></b> ？</p>
+      <p id="delMenuWarn" class="mt-1 text-muted-foreground"></p>
+      <input type="hidden" id="delMenuId" />
+    </div>
+    <div class="flex justify-end gap-2 border-t p-4"><button onclick="closeDelMenu()" class="h-9 rounded-md border px-4 text-sm hover:bg-accent">取消</button><button onclick="confirmDelMenu()" class="h-9 rounded-md bg-destructive px-4 text-sm font-medium text-destructive-foreground hover:opacity-90">删除</button></div>
   </div>
 </div>
 
@@ -559,6 +592,218 @@
     document.querySelectorAll('.role-pane').forEach(p => p.classList.toggle('hidden', +p.dataset.pane !== i));
   }));
   function toggleCopilot() { const c = document.getElementById('copilot'); c.classList.toggle('translate-x-full'); }
+
+  // —— 菜单管理：树 + 属性面板（B 类层级范式）——
+  // 数据形状对齐 sys_menu：type(1目录/2菜单/3按钮) + parent_id + code 层级；关联 API 经 sys_menu_api
+  const menus = [
+    {id:200,parent_id:0,code:'0002',name:'系统管理',type:1,path:'',component:'',permission:'',icon:'settings',sort:1,visible:1,status:1,apis:[]},
+    {id:201,parent_id:200,code:'00020001',name:'用户管理',type:2,path:'system/user',component:'system/user/index',permission:'system:user:list',icon:'users',sort:1,visible:1,status:1,apis:[{m:'GET',p:'/api/v1/users'},{m:'POST',p:'/api/v1/users'},{m:'PUT',p:'/api/v1/users/{id}'},{m:'DELETE',p:'/api/v1/users/{id}'}]},
+    {id:211,parent_id:201,code:'000200010001',name:'新增用户',type:3,path:'',component:'',permission:'system:user:add',icon:'',sort:1,visible:1,status:1,apis:[]},
+    {id:212,parent_id:201,code:'000200010002',name:'编辑用户',type:3,path:'',component:'',permission:'system:user:edit',icon:'',sort:2,visible:1,status:1,apis:[]},
+    {id:213,parent_id:201,code:'000200010003',name:'删除用户',type:3,path:'',component:'',permission:'system:user:delete',icon:'',sort:3,visible:1,status:1,apis:[]},
+    {id:202,parent_id:200,code:'00020002',name:'角色管理',type:2,path:'system/role',component:'system/role/index',permission:'system:role:list',icon:'shield',sort:2,visible:1,status:1,apis:[{m:'GET',p:'/api/v1/roles'},{m:'POST',p:'/api/v1/roles'},{m:'PUT',p:'/api/v1/roles/{id}'},{m:'DELETE',p:'/api/v1/roles/{id}'}]},
+    {id:221,parent_id:202,code:'000200020001',name:'新增角色',type:3,path:'',component:'',permission:'system:role:add',icon:'',sort:1,visible:1,status:1,apis:[]},
+    {id:222,parent_id:202,code:'000200020002',name:'编辑角色',type:3,path:'',component:'',permission:'system:role:edit',icon:'',sort:2,visible:1,status:1,apis:[]},
+    {id:223,parent_id:202,code:'000200020003',name:'删除角色',type:3,path:'',component:'',permission:'system:role:delete',icon:'',sort:3,visible:1,status:1,apis:[]},
+    {id:204,parent_id:200,code:'00020004',name:'菜单管理',type:2,path:'system/menu/index',component:'system/menu/index',permission:'system:menu:list',icon:'menu',sort:5,visible:1,status:1,apis:[{m:'GET',p:'/api/v1/menus/tree'},{m:'GET',p:'/api/v1/menus/{id}'},{m:'POST',p:'/api/v1/menus'},{m:'PUT',p:'/api/v1/menus/{id}'},{m:'DELETE',p:'/api/v1/menus/{id}'},{m:'GET',p:'/api/v1/menus/{menuId}/apis'},{m:'PUT',p:'/api/v1/menus/{menuId}/apis'}]},
+    {id:241,parent_id:204,code:'000200040001',name:'新增菜单',type:3,path:'',component:'',permission:'system:menu:add',icon:'',sort:1,visible:1,status:1,apis:[]},
+    {id:242,parent_id:204,code:'000200040002',name:'编辑菜单',type:3,path:'',component:'',permission:'system:menu:edit',icon:'',sort:2,visible:1,status:1,apis:[]},
+    {id:243,parent_id:204,code:'000200040003',name:'删除菜单',type:3,path:'',component:'',permission:'system:menu:delete',icon:'',sort:3,visible:1,status:1,apis:[]},
+    {id:203,parent_id:200,code:'00020003',name:'组织管理',type:2,path:'system/org',component:'system/org/index',permission:'system:org:list',icon:'building-2',sort:3,visible:1,status:1,apis:[]},
+    {id:205,parent_id:200,code:'00020005',name:'部门管理',type:2,path:'system/dept',component:'system/dept/index',permission:'system:dept:list',icon:'git-branch',sort:4,visible:1,status:1,apis:[]},
+    {id:206,parent_id:200,code:'00020006',name:'字典管理',type:2,path:'system/dict',component:'system/dict/index',permission:'system:dict:list',icon:'book-a',sort:6,visible:1,status:1,apis:[]},
+    {id:261,parent_id:206,code:'000200060001',name:'新增字典',type:3,path:'',component:'',permission:'system:dict:add',icon:'',sort:1,visible:1,status:1,apis:[]},
+    {id:262,parent_id:206,code:'000200060002',name:'编辑字典',type:3,path:'',component:'',permission:'system:dict:edit',icon:'',sort:2,visible:1,status:1,apis:[]},
+    {id:263,parent_id:206,code:'000200060003',name:'删除字典',type:3,path:'',component:'',permission:'system:dict:delete',icon:'',sort:3,visible:1,status:1,apis:[]},
+  ];
+  const menuState = { selected: null, search: '', type: 'all' };
+  const findMenu = id => menus.find(m => m.id === id);
+  const childrenOf = id => menus.filter(m => m.parent_id === id);
+  function typeMeta(t){
+    if(t===1) return {label:'目录',icon:'folder',dotBg:'bg-muted text-muted-foreground',iconColor:'text-muted-foreground',badge:'bg-muted text-muted-foreground'};
+    if(t===2) return {label:'菜单',icon:'square',dotBg:'bg-primary/10 text-primary',iconColor:'text-primary',badge:'bg-primary/10 text-primary'};
+    return {label:'按钮',icon:'zap',dotBg:'bg-success/10 text-success',iconColor:'text-success',badge:'bg-success/10 text-success'};
+  }
+  const methodMeta = m => ({GET:'bg-success/10 text-success',POST:'bg-primary/10 text-primary',PUT:'bg-warning/10 text-warning',DELETE:'bg-destructive/10 text-destructive'}[m]||'bg-muted text-muted-foreground');
+  function menuMatches(m){
+    const q = menuState.search.trim().toLowerCase();
+    return (!q || m.name.toLowerCase().includes(q)) && (menuState.type==='all' || String(m.type)===menuState.type);
+  }
+  const subtreeHasMatch = m => menuMatches(m) || childrenOf(m.id).some(subtreeHasMatch);
+  function renderNode(m){
+    const meta = typeMeta(m.type);
+    const kids = childrenOf(m.id).filter(subtreeHasMatch);
+    const sel = menuState.selected === m.id;
+    const childHtml = kids.length ? `<div class="ml-3 space-y-0.5 border-l border-border/60 pl-3">${kids.map(renderNode).join('')}</div>` : '';
+    return `<div>
+      <div class="node-row group flex items-center gap-2 rounded-md px-2 py-1.5 cursor-pointer ${sel?'bg-accent ring-1 ring-primary/30':'hover:bg-accent'}" onclick="selectMenu(${m.id})">
+        <span class="grid h-5 w-5 shrink-0 place-items-center rounded ${meta.dotBg}"><i data-lucide="${meta.icon}" class="h-3.5 w-3.5 ${meta.iconColor}"></i></span>
+        <span class="flex-1 truncate text-sm ${sel?'font-medium':''}">${m.name}</span>
+        ${m.visible?'':'<i data-lucide="eye-off" class="h-3.5 w-3.5 text-muted-foreground/60" title="隐藏"></i>'}
+        <span class="h-1.5 w-1.5 rounded-full ${m.status===0?'bg-muted-foreground':'bg-success'}"></span>
+        <span class="hidden items-center gap-0.5 group-hover:flex">
+          <button onclick="event.stopPropagation();openMenuAdd(${m.id})" class="rounded p-1 hover:bg-background" title="新增子项"><i data-lucide="plus" class="h-3.5 w-3.5 text-muted-foreground"></i></button>
+          <button onclick="event.stopPropagation();openMenuEdit(${m.id})" class="rounded p-1 hover:bg-background" title="编辑"><i data-lucide="square-pen" class="h-3.5 w-3.5 text-muted-foreground"></i></button>
+          <button onclick="event.stopPropagation();askDeleteMenu(${m.id})" class="rounded p-1 hover:bg-destructive/10" title="删除"><i data-lucide="trash-2" class="h-3.5 w-3.5 text-destructive"></i></button>
+        </span>
+      </div>${childHtml}</div>`;
+  }
+  function renderMenuTree(){
+    const roots = menus.filter(m=>m.parent_id===0).filter(subtreeHasMatch);
+    document.getElementById('menuTree').innerHTML = roots.length ? roots.map(renderNode).join('') : '<div class="p-4 text-center text-sm text-muted-foreground">无匹配节点</div>';
+    const t = document.getElementById('menuTotal'); if(t) t.textContent = menus.length;
+    lucide.createIcons();
+  }
+  function infoRow(label, val){ return `<div class="flex flex-col gap-1"><span class="text-xs text-muted-foreground">${label}</span><span class="text-sm">${val}</span></div>`; }
+  function renderMenuDetail(){
+    const el = document.getElementById('menuDetail'); if(!el) return;
+    const m = menuState.selected!=null ? findMenu(menuState.selected) : null;
+    if(!m){ el.innerHTML = `<div class="grid h-full place-items-center py-20 text-center"><i data-lucide="menu" class="h-12 w-12 text-muted-foreground/50"></i><p class="mt-3 text-sm text-muted-foreground">从左侧选择菜单节点查看详情</p><p class="mt-1 text-xs text-muted-foreground">或点击右上角「新增根菜单」</p></div>`; lucide.createIcons(); return; }
+    const meta = typeMeta(m.type);
+    const kids = childrenOf(m.id);
+    const apis = m.apis||[];
+    el.innerHTML = `
+      <div class="mb-4 flex items-start justify-between gap-2">
+        <div class="flex items-center gap-2">
+          <span class="grid h-9 w-9 place-items-center rounded-md ${meta.dotBg}"><i data-lucide="${meta.icon||'circle'}" class="h-5 w-5 ${meta.iconColor}"></i></span>
+          <div>
+            <div class="flex items-center gap-2"><span class="rounded-full ${meta.badge} px-2 py-0.5 text-xs font-medium">${meta.label}</span><h2 class="text-lg font-semibold">${m.name}</h2></div>
+            <p class="text-xs text-muted-foreground">code ${m.code}</p>
+          </div>
+        </div>
+        <div class="flex shrink-0 gap-1.5">
+          <button onclick="openMenuAdd(${m.id})" class="flex h-8 items-center gap-1 rounded-md border px-2.5 text-xs hover:bg-accent"><i data-lucide="plus" class="h-3.5 w-3.5"></i>子项</button>
+          <button onclick="openMenuEdit(${m.id})" class="flex h-8 items-center gap-1 rounded-md border px-2.5 text-xs hover:bg-accent"><i data-lucide="square-pen" class="h-3.5 w-3.5"></i>编辑</button>
+          <button onclick="askDeleteMenu(${m.id})" class="flex h-8 items-center gap-1 rounded-md border border-destructive/40 px-2.5 text-xs text-destructive hover:bg-destructive/10"><i data-lucide="trash-2" class="h-3.5 w-3.5"></i>删除</button>
+        </div>
+      </div>
+      <div class="rounded-lg border bg-muted/30 p-4">
+        <h3 class="mb-3 text-sm font-semibold">基础信息</h3>
+        <div class="grid gap-x-6 gap-y-3 sm:grid-cols-2">
+          ${infoRow('图标', `<span class="grid h-6 w-6 place-items-center rounded bg-background"><i data-lucide="${m.icon||'circle'}" class="h-4 w-4"></i></span>`)}
+          ${infoRow('名称', m.name)}
+          ${infoRow('类型', meta.label)}
+          ${infoRow('路由 path', m.path?`<code class="rounded bg-background px-1.5 py-0.5 text-xs">${m.path}</code>`:'—')}
+          ${infoRow('组件 component', m.component?`<code class="rounded bg-background px-1.5 py-0.5 text-xs">${m.component}</code>`:'—')}
+          ${infoRow('权限码 permission', m.permission?`<code class="rounded bg-background px-1.5 py-0.5 text-xs">${m.permission}</code>`:'—')}
+          ${infoRow('排序', m.sort)}
+          ${infoRow('可见', m.visible?'<span class="inline-flex items-center gap-1.5 rounded-full bg-success/10 px-2 py-0.5 text-xs text-success"><span class="h-1.5 w-1.5 rounded-full bg-success"></span>显示</span>':'<span class="text-xs text-muted-foreground">隐藏</span>')}
+          ${infoRow('状态', m.status?'<span class="inline-flex items-center gap-1.5 rounded-full bg-success/10 px-2 py-0.5 text-xs text-success"><span class="h-1.5 w-1.5 rounded-full bg-success"></span>启用</span>':'<span class="text-xs text-muted-foreground">禁用</span>')}
+        </div>
+      </div>
+      <div class="mt-4">
+        <h3 class="mb-2 text-sm font-semibold">直接子节点（${kids.length}）</h3>
+        ${kids.length?`<div class="overflow-hidden rounded-lg border">${kids.map(k=>{const km=typeMeta(k.type);return `<div class="flex items-center gap-2 border-b px-3 py-2 text-sm last:border-0 hover:bg-muted/40 cursor-pointer" onclick="selectMenu(${k.id})"><span class="grid h-5 w-5 place-items-center rounded ${km.dotBg}"><i data-lucide="${km.icon}" class="h-3.5 w-3.5 ${km.iconColor}"></i></span><span class="flex-1 truncate">${k.name}</span><span class="hidden text-xs text-muted-foreground sm:inline">${k.permission||''}</span><span class="rounded-full ${km.badge} px-2 py-0.5 text-xs">${km.label}</span></div>`}).join('')}</div>`:'<p class="text-sm text-muted-foreground">无子节点</p>'}
+      </div>
+      <div class="mt-4">
+        <div class="mb-2 flex items-center justify-between"><h3 class="text-sm font-semibold">关联 API（${apis.length}）</h3><span class="text-xs text-muted-foreground">经 sys_menu_api 绑定</span></div>
+        ${apis.length?`<div class="space-y-1.5">${apis.map(a=>`<div class="flex items-center justify-between rounded-md border px-3 py-2 text-sm"><span class="flex items-center gap-2"><span class="rounded px-1.5 py-0.5 text-xs font-medium ${methodMeta(a.m)}">${a.m}</span><code class="text-xs">${a.p}</code></span><i data-lucide="unlink" class="h-4 w-4 text-muted-foreground"></i></div>`).join('')}</div>`:'<p class="text-sm text-muted-foreground">该节点未绑定 API</p>'}
+      </div>`;
+    lucide.createIcons();
+  }
+  function selectMenu(id){ menuState.selected=id; renderMenuTree(); renderMenuDetail(); }
+  // 抽屉
+  function syncMenuFormVisibility(){
+    const t = document.getElementById('f_type').value;
+    document.getElementById('f_compWrap').style.display = (t==='3')?'none':'';
+    document.getElementById('f_pathWrap').style.display = (t==='3')?'none':'';
+  }
+  function syncIconPreview(){
+    const ic = document.getElementById('f_icon').value.trim()||'circle';
+    document.getElementById('f_iconPrev').innerHTML = `<i data-lucide="${ic}" class="h-4 w-4"></i>`;
+    lucide.createIcons();
+  }
+  function openMenuAdd(parentId){
+    const parent = parentId!=null ? findMenu(parentId) : null;
+    document.getElementById('menuDrawerTitle').textContent = parent? `新增子菜单 · ${parent.name}` : '新增根菜单';
+    document.getElementById('f_id').value='';
+    document.getElementById('f_parent').value = parentId!=null?parentId:'';
+    document.getElementById('f_parentName').value = parent?parent.name:'（根级）';
+    document.getElementById('f_name').value='';
+    document.getElementById('f_type').value='2';
+    document.getElementById('f_path').value='';
+    document.getElementById('f_component').value='';
+    document.getElementById('f_permission').value='';
+    document.getElementById('f_icon').value='';
+    document.getElementById('f_sort').value='0';
+    document.getElementById('f_status').value='1';
+    document.getElementById('f_visible').checked=true;
+    syncMenuFormVisibility(); syncIconPreview();
+    document.getElementById('menuDrawer').classList.remove('translate-x-full');
+  }
+  function openMenuEdit(id){
+    const m = findMenu(id); if(!m) return;
+    const parent = m.parent_id? findMenu(m.parent_id):null;
+    document.getElementById('menuDrawerTitle').textContent='编辑菜单 · '+m.name;
+    document.getElementById('f_id').value=m.id;
+    document.getElementById('f_parent').value=m.parent_id||'';
+    document.getElementById('f_parentName').value=parent?parent.name:'（根级）';
+    document.getElementById('f_name').value=m.name;
+    document.getElementById('f_type').value=String(m.type);
+    document.getElementById('f_path').value=m.path||'';
+    document.getElementById('f_component').value=m.component||'';
+    document.getElementById('f_permission').value=m.permission||'';
+    document.getElementById('f_icon').value=m.icon||'';
+    document.getElementById('f_sort').value=m.sort||0;
+    document.getElementById('f_status').value=String(m.status);
+    document.getElementById('f_visible').checked=!!m.visible;
+    syncMenuFormVisibility(); syncIconPreview();
+    document.getElementById('menuDrawer').classList.remove('translate-x-full');
+  }
+  function closeMenuDrawer(){ document.getElementById('menuDrawer').classList.add('translate-x-full'); }
+  function nextCode(parentId){
+    const parent = parentId? findMenu(parentId):null;
+    const sibs = menus.filter(m=>m.parent_id===parentId);
+    return (parent?parent.code:'') + String(sibs.length+1).padStart(4,'0');
+  }
+  function saveMenu(){
+    const id = document.getElementById('f_id').value;
+    const type = +document.getElementById('f_type').value;
+    const node = {
+      parent_id: document.getElementById('f_parent').value? +document.getElementById('f_parent').value : 0,
+      name: document.getElementById('f_name').value.trim()||'未命名',
+      type,
+      path: document.getElementById('f_path').value.trim(),
+      component: document.getElementById('f_component').value.trim(),
+      permission: document.getElementById('f_permission').value.trim(),
+      icon: document.getElementById('f_icon').value.trim(),
+      sort: +document.getElementById('f_sort').value||0,
+      status: +document.getElementById('f_status').value,
+      visible: document.getElementById('f_visible').checked?1:0,
+      apis: []
+    };
+    if(id){ Object.assign(findMenu(+id), node); }
+    else { const newId = Math.max(...menus.map(x=>x.id))+1; node.id=newId; node.code=nextCode(node.parent_id); menus.push(node); menuState.selected=newId; }
+    closeMenuDrawer(); renderMenuTree(); renderMenuDetail();
+  }
+  // 删除确认
+  function askDeleteMenu(id){
+    const m = findMenu(id); if(!m) return;
+    document.getElementById('delMenuName').textContent = m.name;
+    document.getElementById('delMenuId').value = id;
+    document.getElementById('delMenuWarn').textContent = childrenOf(id).length ? `该节点包含 ${childrenOf(id).length} 个子节点，删除将一并移除。` : '删除后不可恢复。';
+    const d = document.getElementById('dlg-menu-del'); d.classList.remove('hidden'); d.classList.add('flex'); lucide.createIcons();
+  }
+  function closeDelMenu(){ const d=document.getElementById('dlg-menu-del'); d.classList.add('hidden'); d.classList.remove('flex'); }
+  function confirmDelMenu(){
+    const id = +document.getElementById('delMenuId').value;
+    const toDel = new Set();
+    (function collect(x){ toDel.add(x); childrenOf(x).forEach(c=>collect(c.id)); })(id);
+    for(let i=menus.length-1;i>=0;i--) if(toDel.has(menus[i].id)) menus.splice(i,1);
+    if(menuState.selected!=null && toDel.has(menuState.selected)) menuState.selected=null;
+    closeDelMenu(); renderMenuTree(); renderMenuDetail();
+  }
+  // 类型筛选 chips
+  document.querySelectorAll('.menu-type-chip').forEach(c => c.addEventListener('click', () => {
+    menuState.type = c.dataset.type;
+    document.querySelectorAll('.menu-type-chip').forEach(x => {
+      const on = x.dataset.type === menuState.type;
+      x.classList.toggle('bg-primary', on); x.classList.toggle('text-primary-foreground', on);
+      x.classList.toggle('border-primary', on); x.classList.toggle('text-muted-foreground', !on);
+    });
+    renderMenuTree();
+  }));
+  renderMenuTree(); renderMenuDetail();
 
   lucide.createIcons();
   applyThemeIcon();

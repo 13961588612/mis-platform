@@ -10,7 +10,7 @@ pnpm install
 pnpm dev
 ```
 
-访问 http://localhost:5173 ，API 经 Vite 代理到 Gateway `http://localhost:8080`。
+访问 http://localhost:5174 ，API 经 Vite 代理到 Gateway `http://localhost:8080`。
 
 ## 默认账号
 

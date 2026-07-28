@@ -5,6 +5,8 @@ import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { PageHeader } from '@/components/common/page-header';
+import { DetailDefList } from '@/components/common/detail-def-list';
+import { TreeTable, type TreeTableNode } from '@/components/common/tree-table';
 import { StatusBadge } from '@/components/common/list-page-skeleton';
 import { PermissionGate } from '@/components/auth/permission-gate';
 import {
@@ -37,10 +39,12 @@ const fieldLabel = 'mb-[0.4rem] block text-sm font-medium text-foreground';
 const fieldInput =
   'h-auto min-h-9 w-full rounded-md border border-input bg-card px-[0.7rem] py-[0.55rem] text-sm';
 
-function flattenApis(nodes: ModuleApiNode[], depth = 0): { node: ModuleApiNode; depth: number }[] {
-  const out: { node: ModuleApiNode; depth: number }[] = [];
+type ApiRow = TreeTableNode & { node: ModuleApiNode };
+
+function flattenApis(nodes: ModuleApiNode[], depth = 0): ApiRow[] {
+  const out: ApiRow[] = [];
   for (const n of nodes) {
-    out.push({ node: n, depth });
+    out.push({ id: n.id, depth, node: n });
     if (n.children?.length) out.push(...flattenApis(n.children, depth + 1));
   }
   return out;
@@ -71,7 +75,6 @@ export function ModuleManagePage() {
   const [bindings, setBindings] = useState<ModuleApiBinding[]>([]);
   const [loadingDetail, setLoadingDetail] = useState(false);
   const [activeTab, setActiveTab] = useState<'apis' | 'bindings'>('apis');
-  const [selectedApi, setSelectedApi] = useState<ModuleApiNode | null>(null);
 
   const [moduleDialogOpen, setModuleDialogOpen] = useState(false);
   const [moduleEditing, setModuleEditing] = useState<ModuleItem | null>(null);
@@ -101,6 +104,8 @@ export function ModuleManagePage() {
       .map((f) => ({ value: Number(f.node.id), label: '　'.repeat(f.depth) + f.node.name }));
   }, [apiTree]);
 
+  const apiRows = useMemo(() => flattenApis(apiTree), [apiTree]);
+
   const loadModules = useCallback(async () => {
     setLoadingModules(true);
     try {
@@ -115,7 +120,6 @@ export function ModuleManagePage() {
   const loadDetail = useCallback(
     async (moduleId: string) => {
       setLoadingDetail(true);
-      setSelectedApi(null);
       try {
         const [tree, binds] = await Promise.all([
           fetchModuleApiTree(moduleId),
@@ -267,8 +271,6 @@ export function ModuleManagePage() {
     }
   }
 
-  const flatApis = useMemo(() => flattenApis(apiTree), [apiTree]);
-
   return (
     <div className="flex min-h-0 flex-1 flex-col p-4 md:p-5">
       <PageHeader
@@ -312,42 +314,45 @@ export function ModuleManagePage() {
           )}
         </aside>
 
-        {/* 右：模块详情（左信息卡 + Tabs；右接口树） */}
-        <div className="flex min-w-0 flex-1 gap-3">
-          <section className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border bg-card">
-            {!selected ? (
-              <p className="p-4 text-sm text-muted-foreground">请选择左侧模块</p>
-            ) : (
-              <>
-                <div className="border-b p-4">
-                  <div className="flex items-center justify-between">
-                    <h2 className="text-base font-semibold">{selected.name}</h2>
-                    <div className="flex gap-1">
-                      <PermissionGate permission="system:module:edit">
-                        <Button size="sm" variant="outline" onClick={() => openEditModule(selected)}>
-                          <Pencil className="h-3.5 w-3.5" />
-                          编辑
-                        </Button>
-                      </PermissionGate>
-                      <PermissionGate permission="system:module:delete">
-                        <Button size="sm" variant="outline" onClick={() => void onDeleteModule(selected)}>
-                          <Trash2 className="h-3.5 w-3.5" />
-                          删除
-                        </Button>
-                      </PermissionGate>
-                    </div>
+        {/* 模块详情：信息卡 + Tabs（接口树表 / 绑定关系） */}
+        <section className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border bg-card">
+          {!selected ? (
+            <p className="p-4 text-sm text-muted-foreground">请选择左侧模块</p>
+          ) : (
+            <>
+              <div className="border-b p-4">
+                <div className="flex items-center justify-between">
+                  <h2 className="text-base font-semibold">{selected.name}</h2>
+                  <div className="flex gap-1">
+                    <PermissionGate permission="system:module:edit">
+                      <Button size="sm" variant="outline" onClick={() => openEditModule(selected)}>
+                        <Pencil className="h-3.5 w-3.5" />
+                        编辑
+                      </Button>
+                    </PermissionGate>
+                    <PermissionGate permission="system:module:delete">
+                      <Button size="sm" variant="outline" onClick={() => void onDeleteModule(selected)}>
+                        <Trash2 className="h-3.5 w-3.5" />
+                        删除
+                      </Button>
+                    </PermissionGate>
                   </div>
-                  <dl className="mt-3 grid grid-cols-2 gap-x-4 gap-y-2 text-sm">
-                    <Item label="编码" value={selected.code} />
-                    <Item label="服务名" value={selected.serviceName} />
-                    <Item label="排序" value={String(selected.sort)} />
-                    <Item label="状态" value={selected.status === 1 ? '启用' : '停用'} />
-                    <Item label="创建时间" value={selected.createdAt} />
-                    <Item label="更新时间" value={selected.updatedAt} />
-                  </dl>
                 </div>
+                <DetailDefList
+                  className="mt-3"
+                  items={[
+                    { label: '编码', value: selected.code },
+                    { label: '服务名', value: selected.serviceName },
+                    { label: '排序', value: String(selected.sort) },
+                    { label: '状态', value: selected.status === 1 ? '启用' : '停用' },
+                    { label: '创建时间', value: selected.createdAt },
+                    { label: '更新时间', value: selected.updatedAt },
+                  ]}
+                />
+              </div>
 
-                <div className="flex gap-1 border-b px-3 pt-2">
+              <div className="flex items-center justify-between border-b px-3 pt-2">
+                <div className="flex gap-1">
                   <TabBtn active={activeTab === 'apis'} onClick={() => setActiveTab('apis')}>
                     接口列表
                   </TabBtn>
@@ -355,102 +360,110 @@ export function ModuleManagePage() {
                     绑定关系
                   </TabBtn>
                 </div>
+                {activeTab === 'apis' ? (
+                  <PermissionGate permission="system:module:add">
+                    <Button size="sm" variant="outline" disabled={!selected} onClick={() => openCreateApi(0)}>
+                      <Plus className="h-3.5 w-3.5" />
+                      新增接口
+                    </Button>
+                  </PermissionGate>
+                ) : null}
+              </div>
 
-                <div className="min-h-0 flex-1 overflow-auto p-3">
-                  {activeTab === 'apis' ? (
-                    flatApis.length === 0 ? (
-                      <p className="text-sm text-muted-foreground">暂无接口</p>
-                    ) : (
-                      <table className="w-full border-collapse text-sm">
-                        <thead className="border-b text-left text-xs text-muted-foreground">
-                          <tr>
-                            <th className="px-2 py-1.5">名称</th>
-                            <th className="px-2 py-1.5">类型</th>
-                            <th className="px-2 py-1.5">方法</th>
-                            <th className="px-2 py-1.5">路径</th>
-                            <th className="px-2 py-1.5">状态</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {flatApis.map(({ node }) => (
-                            <tr key={node.id} className="border-b last:border-0">
-                              <td className="px-2 py-1.5">{node.name}</td>
-                              <td className="px-2 py-1.5 text-muted-foreground">{node.type === 'catalog' ? '分组' : '接口'}</td>
-                              <td className="px-2 py-1.5"><MethodBadge method={node.httpMethod} /></td>
-                              <td className="px-2 py-1.5 break-all text-muted-foreground">{node.pathPattern ?? '—'}</td>
-                              <td className="px-2 py-1.5">
-                                <StatusBadge text={node.status === 1 ? '启用' : '停用'} tone={node.status === 1 ? 'success' : 'destructive'} />
-                              </td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    )
-                  ) : bindings.length === 0 ? (
-                    <p className="text-sm text-muted-foreground">暂无绑定关系</p>
-                  ) : (
-                    <table className="w-full border-collapse text-sm">
-                      <thead className="border-b text-left text-xs text-muted-foreground">
-                        <tr>
-                          <th className="px-2 py-1.5">菜单</th>
-                          <th className="px-2 py-1.5">权限码</th>
-                          <th className="px-2 py-1.5">接口</th>
-                          <th className="px-2 py-1.5">方法</th>
-                          <th className="px-2 py-1.5">路径</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {bindings.map((b, i) => (
-                          <tr key={`${b.apiId}-${i}`} className="border-b last:border-0">
-                            <td className="px-2 py-1.5">{b.menuName}</td>
-                            <td className="px-2 py-1.5 text-muted-foreground">{b.permission ?? '—'}</td>
-                            <td className="px-2 py-1.5">{b.apiName}</td>
-                            <td className="px-2 py-1.5"><MethodBadge method={b.httpMethod} /></td>
-                            <td className="px-2 py-1.5 break-all text-muted-foreground">{b.pathPattern ?? '—'}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  )}
-                </div>
-              </>
-            )}
-          </section>
-
-          {/* 右侧：接口树 */}
-          <section className="flex w-72 shrink-0 flex-col overflow-hidden rounded-lg border bg-card">
-            <div className="flex items-center justify-between border-b p-3">
-              <span className="text-sm font-medium">接口树</span>
-              <PermissionGate permission="system:module:add">
-                <Button size="sm" variant="outline" disabled={!selected} onClick={() => openCreateApi(0)}>
-                  <Plus className="h-3.5 w-3.5" />
-                  新增
-                </Button>
-              </PermissionGate>
-            </div>
-            <div className="min-h-0 flex-1 overflow-auto p-2">
-              {loadingDetail ? (
-                <p className="p-2 text-sm text-muted-foreground">加载中…</p>
-              ) : !selected ? (
-                <p className="p-2 text-sm text-muted-foreground">请选择模块</p>
-              ) : apiTree.length === 0 ? (
-                <p className="p-2 text-sm text-muted-foreground">暂无接口</p>
-              ) : (
-                apiTree.map((node) => (
-                  <ApiTreeNode
-                    key={node.id}
-                    node={node}
-                    selectedId={selectedApi?.id ?? null}
-                    onSelect={(n) => setSelectedApi(n)}
-                    onEdit={openEditApi}
-                    onDelete={onDeleteApi}
-                    canEdit={true}
+              <div className="min-h-0 flex-1 overflow-auto p-3">
+                {activeTab === 'apis' ? (
+                  <TreeTable<ApiRow>
+                    rows={apiRows}
+                    treeColumnKey="name"
+                    emptyText="暂无接口"
+                    rowIcon={(r) =>
+                      r.node.type === 'catalog' ? (
+                        <Folder className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                      ) : (
+                        <MethodBadge method={r.node.httpMethod} />
+                      )
+                    }
+                    columns={[
+                      { key: 'name', header: '名称', cell: (r) => <span className="truncate">{r.node.name}</span> },
+                      {
+                        key: 'type',
+                        header: '类型',
+                        cell: (r) => <span className="text-muted-foreground">{r.node.type === 'catalog' ? '分组' : '接口'}</span>,
+                      },
+                      { key: 'method', header: '方法', cell: (r) => <MethodBadge method={r.node.httpMethod} /> },
+                      {
+                        key: 'path',
+                        header: '路径',
+                        cell: (r) => <span className="break-all text-muted-foreground">{r.node.pathPattern ?? '—'}</span>,
+                      },
+                      {
+                        key: 'status',
+                        header: '状态',
+                        cell: (r) => (
+                          <StatusBadge
+                            text={r.node.status === 1 ? '启用' : '停用'}
+                            tone={r.node.status === 1 ? 'success' : 'destructive'}
+                          />
+                        ),
+                      },
+                    ]}
+                    rowActions={(r) => (
+                      <>
+                        <PermissionGate permission="system:module:edit">
+                          <button
+                            type="button"
+                            className="rounded p-1 text-primary hover:bg-primary/10"
+                            onClick={() => openEditApi(r.node)}
+                          >
+                            <Pencil className="h-3 w-3" />
+                          </button>
+                        </PermissionGate>
+                        <PermissionGate permission="system:module:delete">
+                          <button
+                            type="button"
+                            className="rounded p-1 text-destructive hover:bg-destructive/10"
+                            onClick={() => void onDeleteApi(r.node)}
+                          >
+                            <Trash2 className="h-3 w-3" />
+                          </button>
+                        </PermissionGate>
+                      </>
+                    )}
                   />
-                ))
-              )}
-            </div>
-          </section>
-        </div>
+                ) : bindings.length === 0 ? (
+                  <p className="text-sm text-muted-foreground">暂无绑定关系</p>
+                ) : (
+                  <table className="w-full border-collapse text-sm">
+                    <thead className="border-b text-left text-xs text-muted-foreground">
+                      <tr>
+                        <th className="px-2 py-1.5">菜单</th>
+                        <th className="px-2 py-1.5">权限码</th>
+                        <th className="px-2 py-1.5">接口</th>
+                        <th className="px-2 py-1.5">方法</th>
+                        <th className="px-2 py-1.5">路径</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {bindings.map((b, i) => (
+                        <tr key={`${b.apiId}-${i}`} className="border-b last:border-0">
+                          <td className="px-2 py-1.5">{b.menuName}</td>
+                          <td className="px-2 py-1.5 text-muted-foreground">{b.permission ?? '—'}</td>
+                          <td className="px-2 py-1.5">{b.apiName}</td>
+                          <td className="px-2 py-1.5">
+                            <MethodBadge method={b.httpMethod} />
+                          </td>
+                          <td className="px-2 py-1.5 break-all text-muted-foreground">
+                            {b.pathPattern ?? '—'}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+            </>
+          )}
+        </section>
       </div>
 
       {/* 模块弹窗 */}
@@ -609,71 +622,6 @@ export function ModuleManagePage() {
           </SheetFooter>
         </SheetContent>
       </Sheet>
-    </div>
-  );
-}
-
-function ApiTreeNode({
-  node,
-  selectedId,
-  onSelect,
-  onEdit,
-  onDelete,
-}: {
-  node: ModuleApiNode;
-  depth?: number;
-  selectedId: string | null;
-  onSelect: (n: ModuleApiNode) => void;
-  onEdit: (n: ModuleApiNode) => void;
-  onDelete: (n: ModuleApiNode) => void;
-  canEdit: boolean;
-}) {
-  const isCatalog = node.type === 'catalog';
-  return (
-    <>
-      <div
-        className={cn(
-          'group flex items-center gap-1 rounded-md py-1.5 pr-2 pl-2 text-sm',
-          selectedId === node.id ? 'bg-primary/10 font-medium text-primary' : 'hover:bg-accent',
-        )}
-      >
-        {isCatalog ? <Folder className="h-3.5 w-3.5 shrink-0 text-muted-foreground" /> : <MethodBadge method={node.httpMethod} />}
-        <button type="button" className="truncate text-left" onClick={() => onSelect(node)}>
-          {node.name}
-        </button>
-        <span className="ml-auto flex items-center gap-1 opacity-0 group-hover:opacity-100">
-          <PermissionGate permission="system:module:edit">
-            <button type="button" className="text-primary hover:bg-primary/10" onClick={() => onEdit(node)}>
-              <Pencil className="h-3 w-3" />
-            </button>
-          </PermissionGate>
-          <PermissionGate permission="system:module:delete">
-            <button type="button" className="text-destructive hover:bg-destructive/10" onClick={() => void onDelete(node)}>
-              <Trash2 className="h-3 w-3" />
-            </button>
-          </PermissionGate>
-        </span>
-      </div>
-      {node.children?.map((child) => (
-        <ApiTreeNode
-          key={child.id}
-          node={child}
-          selectedId={selectedId}
-          onSelect={onSelect}
-          onEdit={onEdit}
-          onDelete={onDelete}
-          canEdit
-        />
-      ))}
-    </>
-  );
-}
-
-function Item({ label, value }: { label: string; value?: string | null }) {
-  return (
-    <div>
-      <dt className="text-xs text-muted-foreground">{label}</dt>
-      <dd className="mt-0.5 break-all">{value || '—'}</dd>
     </div>
   );
 }

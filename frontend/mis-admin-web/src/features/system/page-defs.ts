@@ -746,6 +746,7 @@ export const SYSTEM_PAGE_DEFS: Record<string, AdminPageDef> = {
     group: '应用与接口',
     title: '应用管理',
     description: '门户子系统 / 微前端应用边界（sys_app）。',
+    view: 'cards',
     filters: [
       { key: 'name', label: '应用名称', type: 'text', col: 4 },
       {
@@ -834,37 +835,6 @@ export const SYSTEM_PAGE_DEFS: Record<string, AdminPageDef> = {
         sort: 3,
         status: 1,
       },
-    ],
-    decorate: withStatus,
-  },
-  '/system/module': {
-    id: 'module',
-    group: '应用与接口',
-    title: '模块管理',
-    description: '平台业务模块（sys_module），与微服务 1:1，平台级。',
-    filters: [
-      { key: 'name', label: '模块名称', type: 'text', col: 4 },
-      { key: 'status', label: '状态', type: 'select', col: 2, options: STATUS_OPTS },
-    ],
-    columns: [
-      { key: 'code', label: '编码' },
-      { key: 'name', label: '名称' },
-      { key: 'service_name', label: 'Nacos 服务名' },
-      { key: 'sort', label: '排序' },
-      { key: 'statusText', label: '状态', status: true },
-    ],
-    form: [
-      { key: 'code', label: '模块编码', type: 'text', col: 6, required: true },
-      { key: 'name', label: '模块名称', type: 'text', col: 6, required: true },
-      { key: 'service_name', label: 'Nacos 服务名', type: 'text', col: 6, placeholder: 'mis-iam' },
-      { key: 'sort', label: '排序', type: 'number', col: 6 },
-      { key: 'status', label: '状态', type: 'switch', col: 6 },
-    ],
-    sample: [
-      { id: 1, code: 'user', name: '用户模块', service_name: 'mis-iam', sort: 1, status: 1 },
-      { id: 2, code: 'org', name: '组织模块', service_name: 'mis-org', sort: 2, status: 1 },
-      { id: 3, code: 'system', name: '系统模块', service_name: 'mis-system', sort: 3, status: 1 },
-      { id: 4, code: 'audit', name: '审计模块', service_name: 'mis-audit', sort: 4, status: 1 },
     ],
     decorate: withStatus,
   },

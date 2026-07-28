@@ -49,6 +49,36 @@ public class OrgEmployeeClient {
     }
 
     /**
+     * 按部门列出员工 ID；下游失败时返回空列表（调用方据此得到空页）。
+     */
+    public java.util.List<Long> listEmployeeIdsByDept(Long tenantId, Long deptId) {
+        if (tenantId == null || deptId == null) {
+            return java.util.List.of();
+        }
+        try {
+            Result<java.util.List<OrgEmployeeView>> result = restClient.get()
+                    .uri(uriBuilder -> uriBuilder
+                            .path("/internal/v1/employees")
+                            .queryParam("tenantId", tenantId)
+                            .queryParam("deptId", deptId)
+                            .build())
+                    .retrieve()
+                    .body(new ParameterizedTypeReference<Result<java.util.List<OrgEmployeeView>>>() {});
+            if (result == null || !result.isSuccess() || result.getData() == null) {
+                return java.util.List.of();
+            }
+            return result.getData().stream()
+                    .map(OrgEmployeeView::id)
+                    .filter(id -> id != null && !id.isBlank())
+                    .map(Long::valueOf)
+                    .toList();
+        } catch (RestClientException | NumberFormatException ex) {
+            log.warn("调用 mis-org 按部门查员工失败: tenantId={}, deptId={}", tenantId, deptId, ex);
+            return java.util.List.of();
+        }
+    }
+
+    /**
      * 查询员工（登录补全姓名等）；下游失败时返回 empty，不阻断主流程。
      */
     public java.util.Optional<OrgEmployeeView> findEmployee(Long employeeId) {

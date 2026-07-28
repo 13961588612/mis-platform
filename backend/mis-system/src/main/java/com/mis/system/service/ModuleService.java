@@ -5,6 +5,7 @@ import com.mis.common.core.exception.ResultCode;
 import com.mis.system.domain.entity.SysApi;
 import com.mis.system.domain.entity.SysMenuApi;
 import com.mis.system.domain.entity.SysModule;
+import com.mis.system.domain.repository.ModuleApiBindingRow;
 import com.mis.system.domain.repository.SysApiRepository;
 import com.mis.system.domain.repository.SysMenuApiRepository;
 import com.mis.system.domain.repository.SysModuleRepository;
@@ -110,7 +111,7 @@ public class ModuleService {
     public List<ModuleApiBindingVO> bindings(Long moduleId) {
         require(moduleId);
         List<ModuleApiBindingVO> result = new ArrayList<>();
-        for (SysMenuApiRepository.ModuleApiBindingRow row : menuApiRepository.findBindingsByModuleId(moduleId)) {
+        for (ModuleApiBindingRow row : menuApiRepository.findBindingsByModuleId(moduleId)) {
             result.add(new ModuleApiBindingVO(
                     String.valueOf(row.getMenuId()),
                     row.getMenuName(),

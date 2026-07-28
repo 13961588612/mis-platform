@@ -61,7 +61,8 @@ public class IamWebClient extends AbstractDownstreamClient {
                 properties.getIamBaseUrl())).build();
     }
 
-    public PageResult<IamUserVO> pageUsers(Long tenantId, Long appId, Integer status, String username, int page, int size) {
+    public PageResult<IamUserVO> pageUsers(
+            Long tenantId, Long appId, Integer status, String username, Long deptId, int page, int size) {
         String uri = UriComponentsBuilder.fromPath("/internal/v1/users")
                 .queryParam("tenantId", tenantId)
                 .queryParam("appId", appId)
@@ -69,6 +70,7 @@ public class IamWebClient extends AbstractDownstreamClient {
                 .queryParam("size", size)
                 .queryParamIfPresent("status", java.util.Optional.ofNullable(status))
                 .queryParamIfPresent("username", java.util.Optional.ofNullable(username).filter(s -> !s.isBlank()))
+                .queryParamIfPresent("deptId", java.util.Optional.ofNullable(deptId))
                 .build(true)
                 .toUriString();
         return block(client().get().uri(uri).retrieve().bodyToMono(USER_PAGE));

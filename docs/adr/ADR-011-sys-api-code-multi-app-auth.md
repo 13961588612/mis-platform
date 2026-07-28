@@ -1,5 +1,13 @@
 # ADR-011: sys_api 统一 API 树、层级 code、按 APP 隔离用户与令牌
 
+> ⚠️ **部分被接续**：本 ADR 中关于 `sys_api` 归属、API 绑定唯一性、BFF Registry SQL、ER 关系的部分，已被 [ADR-017: sys_api 归属模块、去租户/应用、API 多绑定](ADR-017-sys-api-module-ownership.md) 接续。具体被接续条款：
+> - §2 sys_api `归属：tenant_id, app_id（门户隔离）` → 已去 tenant/app，仅 module_id
+> - §3 sys_menu_api `每个 api_id 全局唯一归属一个 menu 节点` → 已放开多绑定
+> - §5 BFF Registry `sys_api ⋈ sys_menu_api ⋈ sys_menu` → 现含 JOIN sys_module + moduleStatus
+> - §ER `sys_api (app=system)` → sys_api 无 app
+>
+> 其余条款（sys_api 树/code 层级、按 APP 隔离用户与令牌、sys_role_permission 等）仍然有效。
+
 ## 状态
 已接受
 

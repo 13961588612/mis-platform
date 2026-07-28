@@ -3,6 +3,7 @@ package com.mis.system.domain.repository;
 import com.mis.system.domain.entity.SysMenuApi;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 
 import java.util.List;
 
@@ -25,21 +26,19 @@ public interface SysMenuApiRepository extends JpaRepository<SysMenuApi, Long> {
             WHERE a.module_id = :moduleId
             ORDER BY ma.menu_id, ma.sort
             """, nativeQuery = true)
-    List<ModuleApiBindingRow> findBindingsByModuleId(Long moduleId);
+    List<ModuleApiBindingRow> findBindingsByModuleId(@Param("moduleId") Long moduleId);
 
-    interface ModuleApiBindingRow {
-        Long getMenuId();
-
-        String getMenuName();
-
-        String getPermission();
-
-        Long getApiId();
-
-        String getApiName();
-
-        String getHttpMethod();
-
-        String getPathPattern();
-    }
+    /**
+     * 给定一批菜单，返回各自绑定的接口（method + path_pattern），供菜单树「关联 API」区展示。
+     */
+    @Query(value = """
+            SELECT ma.menu_id     AS menuId,
+                   a.http_method  AS method,
+                   a.path_pattern AS path
+            FROM sys_menu_api ma
+            JOIN sys_api a ON a.id = ma.api_id
+            WHERE ma.menu_id IN :menuIds
+            ORDER BY ma.menu_id, ma.sort
+            """, nativeQuery = true)
+    List<MenuApiRow> findApisByMenuIds(@Param("menuIds") List<Long> menuIds);
 }

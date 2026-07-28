@@ -69,13 +69,24 @@ public class UserService {
     }
 
     @Transactional(readOnly = true)
-    public Page<UserVO> page(Long tenantId, Long appId, Integer status, String username, int page, int size) {
+    public Page<UserVO> page(
+            Long tenantId, Long appId, Integer status, String username, Long deptId, int page, int size) {
         int safePage = Math.max(page, 1);
         int safeSize = Math.min(Math.max(size, 1), 100);
-        String usernameFilter = StringUtils.hasText(username) ? username.trim() : null;
+        var pageable = PageRequest.of(safePage - 1, safeSize, Sort.by(Sort.Direction.DESC, "createdAt"));
+        String usernameFilter = StringUtils.hasText(username) ? username.trim() : "";
+        boolean hasEmployeeFilter = false;
+        List<Long> employeeIds = List.of(-1L);
+        if (deptId != null) {
+            List<Long> ids = orgEmployeeClient.listEmployeeIdsByDept(tenantId, deptId);
+            if (ids.isEmpty()) {
+                return Page.empty(pageable);
+            }
+            hasEmployeeFilter = true;
+            employeeIds = ids;
+        }
         Page<SysUser> result = userRepository.search(
-                tenantId, appId, status, usernameFilter,
-                PageRequest.of(safePage - 1, safeSize, Sort.by(Sort.Direction.DESC, "createdAt")));
+                tenantId, appId, status, usernameFilter, hasEmployeeFilter, employeeIds, pageable);
         return result.map(this::toVo);
     }
 

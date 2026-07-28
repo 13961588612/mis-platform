@@ -29,7 +29,7 @@ flowchart LR
 ## 2. 前置条件
 
 - [ ] 测试环境 PostgreSQL、Redis、Nacos 已部署且可达
-- [ ] Nacos 使用 PostgreSQL 外置存储（参考 `deploy/nacos/server/application.properties`）
+- [ ] Nacos 使用 **PostgreSQL 外置存储** + 镜像 `mis-nacos:2.3.2-jdk17`（见 `deploy/docker-compose.nacos-pg.yml`、`deploy/nacos/README.md`）
 - [ ] 业务库已执行 Flyway 迁移（`mis-migrator`）
 - [ ] JWT 密钥已生成，通过 Secret 或卷挂载到容器
 

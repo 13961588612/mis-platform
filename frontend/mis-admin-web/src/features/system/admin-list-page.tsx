@@ -1,5 +1,27 @@
-import { useCallback, useMemo, useState, type ReactNode } from 'react';
-import { Eye, Pencil, Plus, Search, Sparkles, Trash2 } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import {
+  Activity,
+  AppWindow,
+  Boxes,
+  ChevronDown,
+  Cog,
+  Eye,
+  Inbox,
+  Layers,
+  LayoutDashboard,
+  LayoutGrid,
+  type LucideIcon,
+  MoreHorizontal,
+  Package,
+  Pencil,
+  Plus,
+  Search,
+  SearchX,
+  Settings,
+  ShieldCheck,
+  Sparkles,
+  Trash2,
+} from 'lucide-react';
 import { ModuleManagePage } from '@/features/system/module/module-manage-page';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
@@ -170,6 +192,29 @@ export function AdminListPage({ def }: { def: AdminPageDef }) {
   const [editing, setEditing] = useState<Record<string, unknown> | null>(null);
   const [formValues, setFormValues] = useState<Record<string, unknown>>({});
   const [toast, setToast] = useState('');
+  // 筛选卡折叠 + 计数
+  const [filterOpen, setFilterOpen] = useState(true);
+  // 真实数据加载态（def.loader 提供时触发骨架；否则用 sample，无加载态）
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if (!def.loader) return;
+    let alive = true;
+    setLoading(true);
+    def
+      .loader()
+      .then((data) => {
+        if (alive) setRows(data.map((r) => ({ ...r })));
+      })
+      .catch(() => {})
+      .finally(() => {
+        if (alive) setLoading(false);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [def]);
+
   // AI 面板开合状态
   const [aiFormOpen, setAiFormOpen] = useState(false);
   const [aiExtractOpen, setAiExtractOpen] = useState(false);
@@ -228,6 +273,12 @@ export function AdminListPage({ def }: { def: AdminPageDef }) {
         }),
       );
   }, [rows, applied, def.filters, decorate]);
+
+  // 已应用筛选条件计数（收起态提示）
+  const filterCount = useMemo(
+    () => Object.values(applied).filter((v) => v !== '' && v != null).length,
+    [applied],
+  );
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
   const safePage = Math.min(page, totalPages);
@@ -330,79 +381,124 @@ export function AdminListPage({ def }: { def: AdminPageDef }) {
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
         {(def.filters?.length ?? 0) > 0 ? (
           <div className="mb-4 shrink-0 overflow-hidden rounded-md border bg-card shadow-card">
-            <div className="grid grid-cols-1 gap-x-4 gap-y-3.5 p-3.5 md:grid-cols-12">
-              {def.filters!.map((f) => (
-                <div
-                  key={f.key}
+            <div className="flex flex-wrap items-center justify-between gap-2 border-b px-3.5 py-2.5">
+              <div className="flex items-center gap-2">
+                <Search className="h-4 w-4 text-muted-foreground" />
+                <span className="text-sm font-medium">筛选</span>
+                <span
                   className={cn(
-                    f.col === 2
-                      ? 'md:col-span-2'
-                      : f.col === 3
-                        ? 'md:col-span-3'
-                        : f.col === 6
-                          ? 'md:col-span-6'
-                          : 'md:col-span-4',
+                    'rounded-full px-2 py-0.5 text-xs',
+                    filterCount > 0 ? 'bg-primary/10 text-primary' : 'bg-muted text-muted-foreground',
                   )}
                 >
-                  <label className="mb-[0.4rem] block text-sm font-medium text-foreground">{f.label}</label>
-                  {f.type === 'select' ? (
-                    <select
-                      className="h-auto min-h-9 w-full rounded-md border border-input bg-card px-[0.7rem] py-[0.55rem] text-sm"
-                      value={draft[f.key] == null ? '' : String(draft[f.key])}
-                      onChange={(e) => {
-                        const raw = e.target.value;
-                        const opt = f.options?.find((o) => String(o.value) === raw);
-                        setDraft((prev) => ({ ...prev, [f.key]: opt ? opt.value : raw }));
-                      }}
-                    >
-                      <option value="">全部</option>
-                      {(f.options ?? []).map((o) => (
-                        <option key={String(o.value)} value={String(o.value)}>
-                          {o.label}
-                        </option>
-                      ))}
-                    </select>
-                  ) : (
-                    <Input
-                      className="h-auto min-h-9 px-[0.7rem] py-[0.55rem] text-sm shadow-none"
-                      value={draft[f.key] == null ? '' : String(draft[f.key])}
-                      onChange={(e) => setDraft((prev) => ({ ...prev, [f.key]: e.target.value }))}
-                    />
-                  )}
-                </div>
-              ))}
+                  已设置 {filterCount} 项条件
+                </span>
+              </div>
+              <div className="flex items-center gap-2">
+                <Button
+                  type="button"
+                  size="sm"
+                  className="h-8 min-h-8 px-[0.6rem] text-[0.8125rem]"
+                  onClick={() => {
+                    setApplied({ ...draft });
+                    setPage(1);
+                  }}
+                >
+                  <Search className="h-3.5 w-3.5" />
+                  查询
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="h-8 min-h-8 px-[0.6rem] text-[0.8125rem]"
+                  onClick={() => {
+                    setDraft({});
+                    setApplied({});
+                    setPage(1);
+                  }}
+                >
+                  重置
+                </Button>
+                <Button
+                  type="button"
+                  size="icon"
+                  variant="ghost"
+                  className="h-8 w-8"
+                  aria-label={filterOpen ? '收起筛选' : '展开筛选'}
+                  aria-expanded={filterOpen}
+                  onClick={() => setFilterOpen((v) => !v)}
+                >
+                  <ChevronDown className={cn('h-4 w-4 transition', filterOpen && 'rotate-180')} />
+                </Button>
+              </div>
             </div>
-            <div className="flex justify-end gap-2 border-t bg-muted/35 px-4 py-3">
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                className="h-8 min-h-8 px-[0.6rem] text-[0.8125rem]"
-                onClick={() => {
-                  setDraft({});
-                  setApplied({});
-                  setPage(1);
-                }}
-              >
-                重置
-              </Button>
-              <Button
-                type="button"
-                size="sm"
-                className="h-8 min-h-8 px-[0.6rem] text-[0.8125rem]"
-                onClick={() => {
-                  setApplied({ ...draft });
-                  setPage(1);
-                }}
-              >
-                <Search className="h-3.5 w-3.5" />
-                查询
-              </Button>
-            </div>
+            {filterOpen ? (
+              <div className="grid grid-cols-1 gap-x-4 gap-y-3.5 p-3.5 md:grid-cols-12">
+                {def.filters!.map((f) => (
+                  <div
+                    key={f.key}
+                    className={cn(
+                      f.col === 2
+                        ? 'md:col-span-2'
+                        : f.col === 3
+                          ? 'md:col-span-3'
+                          : f.col === 6
+                            ? 'md:col-span-6'
+                            : 'md:col-span-4',
+                    )}
+                  >
+                    <label className="mb-[0.4rem] block text-sm font-medium text-foreground">{f.label}</label>
+                    {f.type === 'select' ? (
+                      <select
+                        className="h-auto min-h-9 w-full rounded-md border border-input bg-card px-[0.7rem] py-[0.55rem] text-sm"
+                        value={draft[f.key] == null ? '' : String(draft[f.key])}
+                        onChange={(e) => {
+                          const raw = e.target.value;
+                          const opt = f.options?.find((o) => String(o.value) === raw);
+                          setDraft((prev) => ({ ...prev, [f.key]: opt ? opt.value : raw }));
+                        }}
+                      >
+                        <option value="">全部</option>
+                        {(f.options ?? []).map((o) => (
+                          <option key={String(o.value)} value={String(o.value)}>
+                            {o.label}
+                          </option>
+                        ))}
+                      </select>
+                    ) : (
+                      <Input
+                        className="h-auto min-h-9 px-[0.7rem] py-[0.55rem] text-sm shadow-none"
+                        value={draft[f.key] == null ? '' : String(draft[f.key])}
+                        onChange={(e) => setDraft((prev) => ({ ...prev, [f.key]: e.target.value }))}
+                      />
+                    )}
+                  </div>
+                ))}
+              </div>
+            ) : null}
           </div>
         ) : null}
 
         <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-md border bg-card shadow-card">
+          {def.view === 'cards' ? (
+            <AppCardGrid
+              rows={pageRows}
+              loading={loading}
+              filterCount={filterCount}
+              def={def}
+              readonly={!!def.readonly}
+              onView={openView}
+              onEdit={openEdit}
+              onDelete={removeRow}
+              onCreate={openCreate}
+              onClearFilters={() => {
+                setDraft({});
+                setApplied({});
+                setPage(1);
+              }}
+            />
+          ) : (
           <div className="min-h-0 flex-1 overflow-auto">
             <table className="w-full border-collapse">
               <thead className="sticky top-0 z-10 border-b bg-muted/60 text-left backdrop-blur">
@@ -421,13 +517,65 @@ export function AdminListPage({ def }: { def: AdminPageDef }) {
                 </tr>
               </thead>
               <tbody>
-                {pageRows.length === 0 ? (
+                {loading ? (
+                  Array.from({ length: pageSize }).map((_, i) => (
+                    <tr key={`sk-${i}`} className="border-b last:border-0">
+                      {def.columns.map((c) => (
+                        <td key={c.key} className="px-4 py-[0.7rem]">
+                          <div className="h-4 w-full max-w-[10rem] animate-pulse rounded bg-muted" />
+                        </td>
+                      ))}
+                      <td className="px-4 py-[0.7rem]">
+                        <div className="h-4 w-16 animate-pulse rounded bg-muted" />
+                      </td>
+                    </tr>
+                  ))
+                ) : pageRows.length === 0 ? (
                   <tr>
-                    <td
-                      colSpan={def.columns.length + 1}
-                      className="px-4 py-12 text-center text-sm text-muted-foreground"
-                    >
-                      暂无数据
+                    <td colSpan={def.columns.length + 1} className="px-4 py-12">
+                      <div className="flex flex-col items-center justify-center gap-3 py-6 text-center">
+                        {filterCount > 0 ? (
+                          <>
+                            <SearchX className="h-10 w-10 text-muted-foreground/50" />
+                            <div className="text-sm font-medium text-foreground">没有符合条件的记录</div>
+                            <p className="max-w-xs text-xs text-muted-foreground">
+                              试试调整或清除筛选条件。
+                            </p>
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              className="mt-1 h-8 min-h-8 text-[0.8125rem]"
+                              onClick={() => {
+                                setDraft({});
+                                setApplied({});
+                                setPage(1);
+                              }}
+                            >
+                              清除筛选
+                            </Button>
+                          </>
+                        ) : (
+                          <>
+                            <Inbox className="h-10 w-10 text-muted-foreground/50" />
+                            <div className="text-sm font-medium text-foreground">暂无{def.title}数据</div>
+                            <p className="max-w-xs text-xs text-muted-foreground">
+                              还没有任何记录，创建第一条吧。
+                            </p>
+                            {!def.readonly ? (
+                              <Button
+                                type="button"
+                                size="sm"
+                                className="mt-1 h-8 min-h-8 text-[0.8125rem]"
+                                onClick={openCreate}
+                              >
+                                <Plus className="h-3.5 w-3.5" />
+                                新建
+                              </Button>
+                            ) : null}
+                          </>
+                        )}
+                      </div>
                     </td>
                   </tr>
                 ) : (
@@ -465,14 +613,7 @@ export function AdminListPage({ def }: { def: AdminPageDef }) {
                                 <Pencil className="h-3 w-3" />
                                 编辑
                               </button>
-                              <button
-                                type="button"
-                                className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[0.8125rem] text-destructive hover:bg-destructive/10"
-                                onClick={() => removeRow(row)}
-                              >
-                                <Trash2 className="h-3 w-3" />
-                                删除
-                              </button>
+                              <RowMoreMenu onDelete={() => removeRow(row)} />
                             </>
                           ) : null}
                         </div>
@@ -483,6 +624,7 @@ export function AdminListPage({ def }: { def: AdminPageDef }) {
               </tbody>
             </table>
           </div>
+          )}
 
           <div className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-t px-4 py-3">
             <div className="text-[0.8125rem] text-muted-foreground">
@@ -674,6 +816,259 @@ export function AdminListPage({ def }: { def: AdminPageDef }) {
       ) : null}
       </div>
     </FormFillBridgeProvider>
+  );
+}
+
+function RowMoreMenu({ onDelete }: { onDelete: () => void }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDocPointer = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setOpen(false);
+    };
+    document.addEventListener('mousedown', onDocPointer);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDocPointer);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [open]);
+
+  return (
+    <div className="relative inline-block" ref={ref}>
+      <button
+        type="button"
+        className="inline-flex items-center gap-0.5 rounded-md px-1.5 py-0.5 text-[0.8125rem] text-muted-foreground hover:bg-muted/60"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        onClick={() => setOpen((v) => !v)}
+      >
+        更多
+        <MoreHorizontal className="h-3.5 w-3.5" />
+      </button>
+      {open ? (
+        <div
+          role="menu"
+          className="absolute right-0 z-20 mt-1 w-32 overflow-hidden rounded-md border bg-popover p-1 shadow-card"
+        >
+          <button
+            type="button"
+            role="menuitem"
+            className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-[0.8125rem] text-destructive hover:bg-destructive/10"
+            onClick={() => {
+              setOpen(false);
+              onDelete();
+            }}
+          >
+            <Trash2 className="h-3.5 w-3.5" />
+            删除
+          </button>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+/* ---------- Phase B: app 卡片网格视图（view:'cards'） ---------- */
+
+const APP_ICONS: Record<string, LucideIcon> = {
+  layoutDashboard: LayoutDashboard,
+  shieldCheck: ShieldCheck,
+  activity: Activity,
+  boxes: Boxes,
+  package: Package,
+  cog: Cog,
+  settings: Settings,
+  appWindow: AppWindow,
+  layers: Layers,
+};
+
+function AppTileIcon({ name }: { name?: unknown }) {
+  const Cmp = APP_ICONS[String(name ?? '')] ?? LayoutGrid;
+  return <Cmp className="h-5 w-5" />;
+}
+
+function labelOf(def: AdminPageDef, key: string, value: unknown): string {
+  const field = def.form.find((f) => f.key === key);
+  return field ? optionLabel(field, value) : String(value ?? '—');
+}
+
+function AppTile({
+  row,
+  def,
+  readonly,
+  onView,
+  onEdit,
+  onDelete,
+}: {
+  row: Record<string, unknown>;
+  def: AdminPageDef;
+  readonly: boolean;
+  onView: (row: Record<string, unknown>) => void;
+  onEdit: (row: Record<string, unknown>) => void;
+  onDelete: (row: Record<string, unknown>) => void;
+}) {
+  return (
+    <div className="group relative flex flex-col rounded-lg border bg-card p-4 transition hover:border-primary/40 hover:shadow-md">
+      <div className="flex items-start justify-between gap-3">
+        <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
+          <AppTileIcon name={row.icon} />
+        </div>
+        {row.status != null ? (
+          <StatusBadge
+            text={String(row.statusText ?? (row.status === 1 ? '启用' : '禁用'))}
+            tone={statusTone(row.status)}
+          />
+        ) : null}
+      </div>
+
+      <div className="mt-3 min-w-0">
+        <div className="truncate text-[0.95rem] font-semibold text-foreground">
+          {String(row.name ?? '未命名')}
+        </div>
+        <div className="mt-0.5 truncate font-mono text-xs text-muted-foreground">{String(row.code ?? '')}</div>
+      </div>
+
+      <div className="mt-2 flex flex-wrap items-center gap-1.5">
+        <span className="rounded-md bg-muted/70 px-2 py-0.5 text-xs text-muted-foreground">
+          {labelOf(def, 'kind', row.kind)}
+        </span>
+        <span className="rounded-md bg-muted/70 px-2 py-0.5 text-xs text-muted-foreground">
+          {labelOf(def, 'runtime', row.runtime)}
+        </span>
+      </div>
+
+      <div className="mt-2 truncate rounded-md bg-muted/40 px-2 py-1 font-mono text-xs text-foreground/80">
+        {String(row.base_path ?? '—')}
+      </div>
+
+      <div className="mt-3 flex items-center gap-1 border-t pt-3">
+        <button
+          type="button"
+          className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[0.8125rem] text-primary hover:bg-primary/10"
+          onClick={() => onView(row)}
+        >
+          <Eye className="h-3 w-3" />
+          详情
+        </button>
+        {!readonly ? (
+          <>
+            <button
+              type="button"
+              className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[0.8125rem] text-primary hover:bg-primary/10"
+              onClick={() => onEdit(row)}
+            >
+              <Pencil className="h-3 w-3" />
+              编辑
+            </button>
+            <RowMoreMenu onDelete={() => onDelete(row)} />
+          </>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+function AppCardGrid({
+  rows,
+  loading,
+  filterCount,
+  def,
+  readonly,
+  onView,
+  onEdit,
+  onDelete,
+  onCreate,
+  onClearFilters,
+}: {
+  rows: Record<string, unknown>[];
+  loading: boolean;
+  filterCount: number;
+  def: AdminPageDef;
+  readonly: boolean;
+  onView: (row: Record<string, unknown>) => void;
+  onEdit: (row: Record<string, unknown>) => void;
+  onDelete: (row: Record<string, unknown>) => void;
+  onCreate: () => void;
+  onClearFilters: () => void;
+}) {
+  return (
+    <div className="min-h-0 flex-1 overflow-auto p-4">
+      {loading ? (
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+          {Array.from({ length: 8 }).map((_, i) => (
+            <div key={`sk-${i}`} className="rounded-lg border bg-card p-4">
+              <div className="flex items-start justify-between">
+                <div className="h-11 w-11 animate-pulse rounded-lg bg-muted" />
+                <div className="h-5 w-14 animate-pulse rounded-full bg-muted" />
+              </div>
+              <div className="mt-3 h-4 w-2/3 animate-pulse rounded bg-muted" />
+              <div className="mt-2 h-3 w-1/3 animate-pulse rounded bg-muted" />
+              <div className="mt-3 flex gap-1.5">
+                <div className="h-5 w-12 animate-pulse rounded bg-muted" />
+                <div className="h-5 w-12 animate-pulse rounded bg-muted" />
+              </div>
+              <div className="mt-2 h-7 w-full animate-pulse rounded bg-muted" />
+            </div>
+          ))}
+        </div>
+      ) : rows.length === 0 ? (
+        <div className="flex min-h-[16rem] flex-col items-center justify-center gap-3 py-6 text-center">
+          {filterCount > 0 ? (
+            <>
+              <SearchX className="h-10 w-10 text-muted-foreground/50" />
+              <div className="text-sm font-medium text-foreground">没有符合条件的记录</div>
+              <p className="max-w-xs text-xs text-muted-foreground">试试调整或清除筛选条件。</p>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="mt-1 h-8 min-h-8 text-[0.8125rem]"
+                onClick={onClearFilters}
+              >
+                清除筛选
+              </Button>
+            </>
+          ) : (
+            <>
+              <Inbox className="h-10 w-10 text-muted-foreground/50" />
+              <div className="text-sm font-medium text-foreground">暂无{def.title}数据</div>
+              <p className="max-w-xs text-xs text-muted-foreground">还没有任何记录，创建第一条吧。</p>
+              {!readonly ? (
+                <Button
+                  type="button"
+                  size="sm"
+                  className="mt-1 h-8 min-h-8 text-[0.8125rem]"
+                  onClick={onCreate}
+                >
+                  <Plus className="h-3.5 w-3.5" />
+                  新建
+                </Button>
+              ) : null}
+            </>
+          )}
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+          {rows.map((row) => (
+            <AppTile
+              key={String(row.id)}
+              row={row}
+              def={def}
+              readonly={readonly}
+              onView={onView}
+              onEdit={onEdit}
+              onDelete={onDelete}
+            />
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
 

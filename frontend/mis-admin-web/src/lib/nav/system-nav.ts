@@ -37,6 +37,7 @@ export const SYSTEM_NAV: SystemNavNode[] = [
     children: [
       { path: '/system/app', title: '应用管理', icon: 'AppWindow' },
       { path: '/system/module', title: '模块管理', icon: 'GitBranch' },
+      { path: '/system/menu', title: '菜单管理', icon: 'ListTree' },
     ],
   },
   {
@@ -46,7 +47,6 @@ export const SYSTEM_NAV: SystemNavNode[] = [
     children: [
       { path: '/system/user', title: '用户管理', icon: 'Users' },
       { path: '/system/role', title: '角色权限', icon: 'KeyRound' },
-      { path: '/system/menu', title: '菜单管理', icon: 'ListTree' },
     ],
   },
   {

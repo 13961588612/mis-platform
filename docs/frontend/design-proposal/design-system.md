@@ -163,6 +163,31 @@
 | `FilterCard` | 列表页顶部 | 可折叠筛选卡：`rounded-lg border`；首行 `filter` 图标 + 标题 + 计数徽标(`rounded-full bg-primary/10 text-primary` 「已设置 N 项条件」) + 折叠箭头(chevron，旋转 `-90deg` 收起)。展开区 `grid sm:grid-cols-3 gap-3`：若干字段 + 行尾 `btn--primary` 搜索 + `border` 重置。 |
 | `StatusTabs` | 列表页表头上方 | 状态快速过滤：`flex border-b`；每个 `user-tab` = `border-b-2` 下划线制；激活 `border-primary font-medium`（文字 `foreground`），非激活 `text-muted-foreground`。与搜索/导出工具栏分离。 |
 | `Badge`(状态) | 表格状态列 | **v1.1 起统一为圆点徽标**：`inline-flex items-center gap-1.5 rounded-full bg-{sem}/10 px-2.5 py-0.5 text-xs font-medium text-{sem}` + 前置 `<span class="h-1.5 w-1.5 rounded-full bg-{sem}">` 圆点。语义色：success/warning/info/destructive/muted。 |
+| `TypeBadge` | 树/列表类型列 | **层级类型徽标（菜单管理专属，B 类范式）**：按 `sys_menu.type` 三态着色——目录=`bg-muted text-muted-foreground`（图标 `folder`）、菜单=`bg-primary/10 text-primary`（图标 `square`）、按钮=`bg-success/10 text-success`（图标 `zap`）。节点行前置同色小图标块 `h-5 w-5 rounded`，状态用 `h-1.5 w-1.5 rounded-full`（success=启用 / muted-foreground=禁用），隐藏项叠 `eye-off`。 |
+| `TreePanel` | B 类层级页左栏 | **菜单/部门/API 树（v1.2 起）**：`rounded-lg border bg-card`，顶部分页搜索（`relative` + `search` 图标左内缩），下接类型筛选 `chips`（`rounded-full border`，激活 `bg-primary text-primary-foreground border-primary`，非激活 `text-muted-foreground`），树体 `max-h-[60vh] overflow-y-auto p-2`。节点递归缩进：子层 `ml-3 pl-3 border-l border-border/60`；行 `rounded-md px-2 py-1.5 hover:bg-accent`，选中 `bg-accent ring-1 ring-primary/30`；行尾 `group-hover:flex` 显隐 `＋子项/编辑/删除` 操作。 |
+| `DetailPanel` | B 类层级页右栏 | **选中节点的属性面板（v1.2 起）**：顶部 = 类型 `TypeBadge` + H2 名称 + `code` 副标 + 右侧 `子项/编辑/删除` 操作；中部「基础信息」`rounded-lg border bg-muted/30 p-4` 内 `sm:grid-cols-2` 字段栅格（图标预览 / 名称 / 类型 / 路由 / 组件 / 权限码[`code`] / 排序 / 可见 / 状态）；下部「直接子节点(N)」可点击行列表 + 「关联 API(N)」经 `sys_menu_api` 绑定，每项 `method` 徽标（GET=success / POST=primary / PUT=warning / DELETE=destructive）+ `path_pattern`。未选中显示空态插画 + 引导文案。 |
+
+> **范式分层原则（v1.2 新增）**：数据库表按「形状」匹配界面范式，禁止一律套用通用 CRUD——
+> - **A 扁平 CRUD**：`sys_user` / `sys_employee` / `sys_dict_*` / `sys_config` / `sys_role`(基础) / `sys_post` 等 → `PageHeader + FilterCard + StatusTabs + DataTable`（即现有通用列表）。
+> - **B 层级树**：`sys_menu` / `sys_api` / `sys_dept` / `sys_org` → **`TreePanel + DetailPanel`**，树表达层级、右侧面板表达节点详情与关联。
+> - **C 授权矩阵**：`sys_role_permission` / `sys_user_role` / `sys_menu_api` / `sys_employee_post` → 选中对象 → 勾选/分配（非表格）。
+> - **D 日志时间线**：`sys_oper_log` / `sys_login_log` → 只读列表 + 详情 Dialog/抽屉（富详情：参数/耗时/IP）。
+> 菜单管理是 **B 类首个落地样板**；后续部门管理、API 管理按同范式复用 `TreePanel`/`DetailPanel`。
+
+### 3.2.1 真实组件实现映射（v2 · Phase A/B/C 落地后）
+
+上表为视觉规格；下表将四类范式 **1:1 对齐到前端真实落地的组件文件**，避免设计与代码漂移：
+
+| 范式 | 路由 | 真实组件（文件） | 落地状态 | 关键增强 |
+|------|------|------------------|----------|----------|
+| **A 扁平 CRUD** | `/system/employee` `/system/post` `/system/config` | `AdminListPage`（`features/system/admin-list-page.tsx` 通用引擎） | Phase A ✅ | 筛选卡折叠+计数、富空态（双态）、删除入「更多▾」下拉+确认、圆点状态徽标、加载骨架 |
+| **A→卡片** | `/system/app` | 同一引擎 `view:'cards'` → `AppCardGrid` | Phase B ✅ | 卡片网格（图标+名+路由前缀+种类+运行方式+状态徽标），与表格范式拉开差异 |
+| **B 层级树** | `/system/menu` | `MenuManagePage`（`features/system/menu/menu-manage-page.tsx`） | ✅ | `TreePanel` + `DetailPanel`（v1.2 样板） |
+| **B+ 模块+API** | `/system/module` | `ModuleManagePage`（`features/system/module/module-manage-page.tsx`） | ✅ | 左模块列表 + 右信息卡 + Tabs + 接口树（**文档此前缺失，本版补录**） |
+| **C 授权矩阵** | `/system/role` | `RoleListPage`（`features/system/role/role-list-page.tsx`） | Phase C ✅ | 授权矩阵抽屉：可展开复选框树（父子联动+半选）+ 数据范围 radio 组 |
+| **D 日志时间线** | `/monitor/login-log` `/monitor/oper-log` | `LoginLogListPage` / `OperLogListPage`（`features/monitor/log-pages.tsx`） | Phase C ✅ | 详情 Sheet 抽屉（参数 / 耗时 / IP / UA）；操作日志含 `requestParams` |
+
+> 设计纪律：A 类页**共享同一引擎**，差异仅由 `AdminPageDef`（filters/columns/form/sample/view）与 `decorate` 驱动；**不 fork 引擎**。B/C/D 类抽专用页，靠范式分流实现「界面都不一样」，而非每页重画。
 
 ### 3.3 关键页面视觉要点
 
@@ -184,12 +209,79 @@
 - 3 弹窗：`UserFormDialog`（新增/编辑，RHF+Zod 字段）、`AssignRoleDialog`（多选 `badge`/checkbox）、`ResetPasswordDialog`（确认告警 `alert`）。
 - 行内操作：编辑 / 重置密码 / 禁用 / 分配角色 / 删除，放 `DropdownMenu`（更多）或行内 `ghost` 按钮。
 
-**角色管理 `/system/role`**
+**角色管理 `/system/role`（含 Phase C 授权矩阵）**
 - 列表 `DataTable`；编辑开 `Sheet`(右侧抽屉) 含 3 个 `Tabs`：①基本信息 ②菜单权限（`Tree` 复选，支持半选 `indeterminate`）③数据权限（`data_scope=5` 显组织多选）。
+- **Phase C 增强**：菜单权限升级为可展开**复选框树**（`MenuTreeNode` + `MenuTree`），父子联动勾选、半选 `indeterminate`；勾选叶节点**同时向上传播祖先目录**入权限集（否则后端按 `sys_role_menu` 建树无法触达叶子）；数据范围由 `<select>` 改为**单选 radio 组**（6 项，选中态 `border-primary bg-primary/5`）。
 
-**菜单管理 `/system/menu`**
-- 三栏 `grid grid-cols-[260px_1fr_360px]`：左菜单树、中选中节点表单（名称/类型/路径/组件/permission/排序/状态）、右 API 列表（method 徽标 + path + 说明 + 操作）。
-- 类型标签：目录/菜单/按钮，用不同色 Badge 区分。
+**菜单管理 `/system/menu`（B 类层级范式样板 · v1.2）**
+- 两栏 `lg:grid-cols-[320px_1fr]`：**左 `TreePanel`**（搜索 + 类型 `chips` 过滤 + 递归缩进树，节点 `TypeBadge` + 状态点 + hover 操作 `＋子项/编辑/删除`）＋ **右 `DetailPanel`**（类型徽标 + 名称 + `code` + 基础信息栅格 + 直接子节点列表 + 关联 API 经 `sys_menu_api` 绑定）。
+- 编辑用右侧 `Drawer`（`openMenuAdd/openMenuEdit`），按 `type` 动态显隐字段：按钮(type=3)隐藏 path/component；目录(type=1)组件可选。
+- 删除走确认 Dialog，递归移除自身及子孙（`confirmDelMenu`）。
+- 类型标签：目录/菜单/按钮，按 `TypeBadge` 三态着色（muted/primary/success）。
+
+**模块管理 `/system/module`（B+ 模块+API · v2 补录）**
+- 左栏「模块列表」（`TreePanel` 风格）：平台微服务注册表（`sys_module`），每行 = 图标 + 模块名(`font-medium`) + Nacos 服务名(`muted-foreground text-xs` 等宽)；选中高亮 `bg-accent ring-1 ring-primary/30`。
+- 右栏「信息卡」：顶部 H2 模块名 + `code` 副标 + 状态圆点；中部「基础信息」`rounded-lg border bg-muted/30 p-4` 栅格（服务名 / 排序 / 状态 / 描述）；下部 `Tabs`：①接口树表（TreeTable，按 `sys_api.module_id` 聚合，方法徽标 GET=success / POST=primary / PUT=warning / DELETE=destructive + `path_pattern`，层级按 depth 缩进）②关联菜单（经 `sys_menu_api` 绑定）。
+- 工具栏：新建模块（`btn--primary`）、搜索/刷新；删除走确认 Dialog。
+- **范式说明**：`sys_module` / `sys_api` 为**平台级**，与 `sys_app` 无归属关系（见 `schema-design.md` ADR-017），故模块管理归 B+ 而非 A。
+
+**操作/登录日志（`/monitor/oper-log` `/monitor/login-log` · 含 Phase C 详情抽屉）**
+- 只读 `DataTable`（耗时 / 状态码 / 时间等列），无新建/编辑。
+- **Phase C 增强**：行点击开 `Sheet` 详情抽屉。操作日志：时间 / 用户 / 模块 / 操作 / 方法 / URI / 状态码 / 耗时 / IP / **请求参数**（等宽 `font-mono text-xs`）；登录日志：时间 / 用户 / IP / 状态徽标 / 消息 / UserAgent。长值 `break-all` 防溢出；参数 / URI / UA 等宽展示。
+
+---
+
+### 3.4 通用布局组件（可复用 · v2 抽取）
+
+> 来源：菜单管理 / 模块管理落地后，把「基础信息横排」与「接口树表」抽象为两个通用组件，消除重复实现与对齐漂移。后续角色 / 字典 / 部门等详情页直接套用，不再各写一遍。
+
+**`DetailDefList`** — 属性名靠右、值靠左的成对定义列表
+- 文件：`src/components/common/detail-def-list.tsx`
+- 用途：对象详情页「基础信息」等成对属性展示。
+- Props：`items: { label: string; value: ReactNode; key?: string }[]`、`className?: string`。
+- 对齐规范（产品强约束，见菜单管理需求）：
+  - 属性名 `text-right`、属性值 `text-left`；
+  - 默认（≥`sm`）一行两对（`grid-cols-[auto_1fr_auto_1fr]`），窄屏（<`sm`）退回一行一对（`grid-cols-[auto_1fr]`）；
+  - 标签列 `auto` 宽 + 右对齐 → **同一列属性名右边缘上下严格对齐**；
+  - 空值（`null` / `''` / `undefined`）渲染 `—`。
+- 用法：
+  ```tsx
+  <DetailDefList
+    items={[
+      { label: '编码', value: m.code },
+      { label: '状态', value: m.status === 1 ? '启用' : '停用' },
+    ]}
+  />
+  ```
+
+**`TreeTable`** — 层级可见的树表
+- 文件：`src/components/common/tree-table.tsx`
+- 用途：把「扁平化 + 带 `depth` 的树节点」渲染成可看出层级的表格，替代「中间平铺表」与「右侧独立树」两份重复呈现。
+- 数据约定：调用方先 `flatten(nodes)` 成 `{ id, depth, ...node }[]`（`TreeTableNode` 要求 `id` + `depth`），组件按 `depth * indentSize`（默认 16）给 `treeColumnKey` 列加左缩进，并渲染 `rowIcon`。
+- Props：
+  | 名称 | 类型 | 说明 |
+  |------|------|------|
+  | `rows` | `T[]` | 扁平化行（含 `id`/`depth`） |
+  | `columns` | `{ key, header, cell, align? }[]` | 列定义；`cell` 接收行 |
+  | `treeColumnKey` | `string` | 渲染缩进 + 前导图标的列（通常名称列） |
+  | `rowIcon?` | `(row) => ReactNode` | 分支用文件夹、叶子用方法彩色徽标 |
+  | `rowActions?` | `(row) => ReactNode` | 行内操作（默认 hover 显隐） |
+  | `rowClassName?` / `onRowClick?` / `emptyText?` / `indentSize?` | — | 行样式 / 点击 / 空文案 / 缩进像素 |
+- 用法：
+  ```tsx
+  <TreeTable<ApiRow>
+    rows={apiRows}
+    treeColumnKey="name"
+    rowIcon={(r) => (r.type === 'catalog' ? <Folder /> : <MethodBadge method={r.method} />)}
+    columns={[
+      { key: 'name', header: '名称', cell: (r) => r.name },
+      { key: 'method', header: '方法', cell: (r) => <MethodBadge method={r.method} /> },
+    ]}
+    rowActions={(r) => (<><EditBtn /><DeleteBtn /></>)}
+  />
+  ```
+
+**已消费页面**：`MenuManagePage`（基础信息 → `DetailDefList`）、`ModuleManagePage`（基础信息 → `DetailDefList`；接口列表 → `TreeTable`）。
 
 ---
 

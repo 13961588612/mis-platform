@@ -36,3 +36,8 @@ venv/
 
 # Docker volumes（若挂载到仓库内）
 .deploy-data/
+
+# Nacos 本机解压目录与下载包（scripts/start-nacos-native.ps1）
+deploy/nacos/runtime/
+deploy/nacos/_last-boot.txt
+deploy/nacos/plugins/

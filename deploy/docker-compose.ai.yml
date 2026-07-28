@@ -62,6 +62,9 @@ services:
       MODEL_NAME: "BAAI/bge-small-zh-v1.5"
       PORT: 8001
       MAX_BATCH_SIZE: 32
+    ports:
+      # 本机 uvicorn 访问 localhost:8001；容器间仍用服务名
+      - "8001:8001"
     volumes:
       - ai-platform-embedding_models:/app/models
     healthcheck:
@@ -123,11 +126,14 @@ services:
   # ===== Agent Core Backend（Python/FastAPI :8000）===== DEP-1 / DEP-2 / DEP-4
   ai-platform-backend:
     build:
-      context: ../agent/ai-platform/backend
-      dockerfile: ../infra/Dockerfile.backend
+      context: ../agent/ai-platform
+      dockerfile: infra/Dockerfile.backend
       target: production
     container_name: ai-platform-backend
     restart: unless-stopped
+    ports:
+      # 本机 BFF（start-dev）直连 localhost:8000
+      - "${AI_PLATFORM_BACKEND_PORT:-8000}:8000"
     environment:
       ENVIRONMENT: ${AI_ENVIRONMENT:-production}
       DEBUG: "false"
@@ -155,6 +161,9 @@ services:
       GATEWAY_HOST: ai-platform-gateway
       GATEWAY_PORT: 3100
       CONFIG_BASE_PATH: /app/configs
+    volumes:
+      # 开发期热挂载 configs；镜像内已 COPY 一份，卷优先覆盖
+      - ../agent/ai-platform/configs:/app/configs:ro
     depends_on:
       postgres:
         condition: service_healthy

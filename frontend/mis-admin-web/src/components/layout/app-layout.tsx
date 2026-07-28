@@ -35,7 +35,7 @@ import {
   findSystemNavItem,
   type SystemNavNode,
 } from '@/lib/nav/system-nav';
-import { routerMenusToSystemNav } from '@/lib/nav/menus-to-nav';
+import { mergeNavWithFallback, routerMenusToSystemNav } from '@/lib/nav/menus-to-nav';
 import { useTabStore } from '@/stores/tab-store';
 
 const GROUP_LABEL: Record<string, string> = {
@@ -69,10 +69,14 @@ export function AppLayout() {
   const location = useLocation();
   const openTab = useTabStore((s) => s.openTab);
 
-  const navNodes: SystemNavNode[] = useMemo(
-    () => routerMenusToSystemNav(menus) ?? SYSTEM_NAV,
-    [menus],
-  );
+  const navNodes: SystemNavNode[] = useMemo(() => {
+    const dyn = routerMenusToSystemNav(menus);
+    if (!dyn) return SYSTEM_NAV;
+    // 系统管理子系统：SYSTEM_NAV 是权威完整清单，后端菜单仅作增强。
+    // 后端 seed/权限偶发缺漏时（如迁移未执行）仍保证侧栏结构完整。
+    if (app?.code === 'system') return mergeNavWithFallback(SYSTEM_NAV, dyn);
+    return dyn;
+  }, [menus, app?.code]);
 
   const navItem = useMemo(() => {
     for (const n of navNodes) {

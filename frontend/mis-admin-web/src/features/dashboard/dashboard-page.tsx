@@ -104,10 +104,10 @@ export function DashboardPage() {
           <table className="w-full text-sm">
             <thead className="border-b bg-muted/50 text-left text-xs uppercase tracking-wide text-muted-foreground">
               <tr>
-                <th className="px-4 py-3 font-medium">操作人</th>
-                <th className="px-4 py-3 font-medium">操作</th>
-                <th className="px-4 py-3 font-medium">时间</th>
-                <th className="px-4 py-3 font-medium">状态</th>
+                <th className="px-4 py-3 font-bold">操作人</th>
+                <th className="px-4 py-3 font-bold">操作</th>
+                <th className="px-4 py-3 font-bold">时间</th>
+                <th className="px-4 py-3 font-bold">状态</th>
               </tr>
             </thead>
             <tbody>

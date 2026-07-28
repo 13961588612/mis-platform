@@ -9,7 +9,7 @@
 |------|------|
 | 主键 | `BIGINT` 雪花 ID |
 | 租户 | 租户 = 集团公司；业务表含 `tenant_id` |
-| APP | 多应用；用户、菜单、API、角色均带 `app_id`（租户级表除外） |
+| APP | 多应用；用户、菜单、角色均带 `app_id`（租户级表除外） |
 | 模块 | **`sys_module` 为平台微服务注册表，与 `app_id` 无对应**；经 `sys_api.module_id` 关联 |
 | 树编码 | `sys_menu`、`sys_api`、**`sys_dept`** 使用层级 **`code`**；**`sys_org` 为租户内业务编码**（ADR-011 / ADR-013） |
 | 软删除 | 用户/组织/员工等 `deleted`；菜单/API 用 `status` |
@@ -30,7 +30,6 @@ erDiagram
     SYS_DEPT_CATEGORY ||--o{ SYS_DEPT : types
     SYS_DEPT ||--o{ SYS_DEPT : parent_child
     SYS_APP ||--o{ SYS_MENU : owns
-    SYS_APP ||--o{ SYS_API : owns
     SYS_APP ||--o{ SYS_USER : accounts
     SYS_APP ||--o{ SYS_ROLE : scopes
     SYS_EMPLOYEE ||--o{ SYS_USER : logs_in_per_app
@@ -94,7 +93,7 @@ erDiagram
 - `uk_module_code` UNIQUE (code)
 - `uk_module_service` UNIQUE (service_name)
 
-> **与 `sys_app` 无隶属关系。** 同一微服务模块可被多个 APP 的 `sys_api` 引用（经 `module_id`）。
+> **与 `sys_app` 无隶属关系。** `sys_api` 经 `module_id` 归属 `sys_module`；同一模块的接口可被多个 APP 的菜单绑定。
 
 ### 3.3 sys_tenant — 租户
 
@@ -357,12 +356,10 @@ erDiagram
 | 字段 | 类型 | 说明 |
 |------|------|------|
 | id | BIGINT | PK |
-| tenant_id | BIGINT | |
-| app_id | BIGINT | |
-| module_id | BIGINT | 微服务模块 |
+| module_id | BIGINT | NOT NULL, FK → sys_module | 微服务模块 |
 | parent_id | BIGINT | 根=0 |
 | **code** | **VARCHAR(64)** | 层级编码，与 menu 独立编号 |
-| **type** | **VARCHAR(16)** | **`catalog`** 目录 \| **`api`** HTTP 端点 |
+| **type** | **sys_api_node_type** | **`catalog`** 目录 \| **`api`** HTTP 端点（PostgreSQL ENUM） |
 | name | VARCHAR(64) | |
 | http_method | VARCHAR(16) | type=api 必填 |
 | path_pattern | VARCHAR(256) | type=api 必填，全局唯一 |
@@ -371,20 +368,26 @@ erDiagram
 | created_at / updated_at | TIMESTAMPTZ | |
 
 **索引：**
-- `uk_api_app_code` UNIQUE (app_id, code)
+- `uk_api_module_code` UNIQUE (module_id, code)
 - `uk_api_method_path` UNIQUE (http_method, path_pattern) WHERE type='api' AND status=1
 - `idx_api_parent` (parent_id)
 
 **BFF Registry 加载（经菜单/按钮关联）：**
 
 ```sql
-SELECT a.http_method, a.path_pattern, m.permission
+SELECT a.http_method AS httpMethod,
+       a.path_pattern AS pathPattern,
+       m.permission AS permission,
+       sm.status     AS moduleStatus
 FROM sys_api a
-INNER JOIN sys_menu_api ma ON ma.api_id = a.id
-INNER JOIN sys_menu m ON ma.menu_id = m.id
-WHERE a.type = 'api' AND a.status = 1
-  AND m.status = 1 AND m.permission IS NOT NULL
-  AND m.type IN (2, 3);
+JOIN sys_menu_api ma ON ma.api_id = a.id
+JOIN sys_menu m ON ma.menu_id = m.id
+JOIN sys_module sm ON sm.id = a.module_id
+WHERE a.type = 'api'
+  AND a.status = 1
+  AND m.status = 1
+  AND a.http_method IS NOT NULL
+  AND a.path_pattern IS NOT NULL
 ```
 
 > `sys_api` 仅存 HTTP 端点元数据；**所需 permission 继承自关联的菜单页或按钮**。
@@ -410,9 +413,9 @@ WHERE a.type = 'api' AND a.status = 1
 
 **索引：**
 - `uk_menu_api_pair` UNIQUE (menu_id, api_id)
-- `uk_menu_api_api` UNIQUE (api_id) — 每个 API 端点只归属一个菜单/按钮节点
 
 **约定：**
+- API 可被多个菜单/按钮绑定，所需 permission 取并集
 - type=2 菜单页：挂载页面加载 API（列表、下拉等）
 - type=3 按钮：挂载操作类 API（增删改）；**角色不直接勾选 API 树**
 

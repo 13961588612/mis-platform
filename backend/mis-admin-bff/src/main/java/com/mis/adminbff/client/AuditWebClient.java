@@ -15,6 +15,8 @@ public class AuditWebClient extends AbstractDownstreamClient {
 
     private static final ParameterizedTypeReference<Result<Map<String, Long>>> COUNT =
             new ParameterizedTypeReference<>() {};
+    private static final ParameterizedTypeReference<Result<Void>> VOID =
+            new ParameterizedTypeReference<>() {};
 
     public AuditWebClient(
             @Qualifier("plainWebClientBuilder") WebClient.Builder plainBuilder,
@@ -42,5 +44,13 @@ public class AuditWebClient extends AbstractDownstreamClient {
                 .toUriString();
         Map<String, Long> data = block(client().get().uri(uri).retrieve().bodyToMono(COUNT));
         return data != null && data.get("count") != null ? data.get("count") : 0L;
+    }
+
+    public void createOperLog(Map<String, Object> body) {
+        try {
+            blockVoid(post(body, VOID, "/internal/v1/oper-logs"));
+        } catch (Exception ignored) {
+            // 审计失败不阻断业务
+        }
     }
 }

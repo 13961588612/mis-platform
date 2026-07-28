@@ -1,5 +1,6 @@
-# MIS Platform — 本地开发一键初始化（Windows PowerShell）
+﻿# MIS Platform - 本地开发一键初始化（Windows PowerShell）
 # 用法: .\scripts\init-dev.ps1
+# 须 UTF-8 BOM，否则 Windows PowerShell 5.1 解析中文会报 MissingEndCurlyBrace
 
 $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent $PSScriptRoot
@@ -32,7 +33,6 @@ Write-Host "仓库根目录: $Root"
 if (-not (Test-Command docker)) {
     Write-Error "未找到 docker，请先安装 Docker Desktop"
 }
-$composeV2 = Test-Command "docker"
 docker compose version 2>$null | Out-Null
 if ($LASTEXITCODE -ne 0) {
     Write-Error "需要 Docker Compose v2（docker compose）"
@@ -59,7 +59,12 @@ if (-not (Test-Command mvn)) {
 else {
     Push-Location $BackendDir
     try {
-        mvn -pl mis-migrator flyway:migrate
+        if (Test-Path ".\mvn.ps1") {
+            .\mvn.ps1 -pl mis-migrator flyway:migrate
+        }
+        else {
+            mvn -pl mis-migrator flyway:migrate
+        }
         if ($LASTEXITCODE -ne 0) { throw "Flyway migrate 失败" }
         Write-Host "Flyway 迁移完成" -ForegroundColor Green
     }
@@ -81,5 +86,5 @@ Write-Host @"
   superadmin / Mis@123456
   admin      / Mis@123456  (app=system)
 
-下一步: 在 IDE 启动 Java 微服务，或执行 mvn -pl mis-migrator flyway:info 查看迁移状态
+下一步: 执行 backend\start-dev.ps1 启动 Java，再 pnpm --dir frontend\mis-admin-web dev
 "@

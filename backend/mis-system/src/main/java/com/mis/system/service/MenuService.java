@@ -4,6 +4,8 @@ import com.mis.common.core.exception.BusinessException;
 import com.mis.common.core.exception.ResultCode;
 import com.mis.system.domain.entity.MenuType;
 import com.mis.system.domain.entity.SysMenu;
+import com.mis.system.domain.repository.MenuApiRow;
+import com.mis.system.domain.repository.SysMenuApiRepository;
 import com.mis.system.domain.repository.SysMenuRepository;
 import com.mis.system.dto.MenuCreateRequest;
 import com.mis.system.dto.MenuUpdateRequest;
@@ -28,15 +30,19 @@ import java.util.stream.Collectors;
 public class MenuService {
 
     private final SysMenuRepository menuRepository;
+    private final SysMenuApiRepository menuApiRepository;
 
-    public MenuService(SysMenuRepository menuRepository) {
+    public MenuService(SysMenuRepository menuRepository, SysMenuApiRepository menuApiRepository) {
         this.menuRepository = menuRepository;
+        this.menuApiRepository = menuApiRepository;
     }
 
     @Transactional(readOnly = true)
     public List<MenuVO> tree(Long appId) {
         List<SysMenu> menus = menuRepository.findByAppIdOrderBySortAscCodeAsc(appId);
-        return buildTree(menus);
+        Map<Long, List<MenuVO.MenuApiItem>> apiMap = loadApiMap(
+                menus.stream().map(SysMenu::getId).collect(Collectors.toList()));
+        return buildTree(menus, apiMap);
     }
 
     /**
@@ -66,7 +72,7 @@ public class MenuService {
                 .filter(m -> m.getVisible() == null || m.getVisible() == 1)
                 .sorted(Comparator.comparing(SysMenu::getSort).thenComparing(SysMenu::getCode))
                 .toList();
-        return buildTree(filtered);
+        return buildTree(filtered, Map.of());
     }
 
     @Transactional(readOnly = true)
@@ -83,7 +89,7 @@ public class MenuService {
 
     @Transactional(readOnly = true)
     public MenuVO getById(Long id) {
-        return toVo(require(id), List.of());
+        return toVo(require(id), List.of(), Map.of());
     }
 
     @Transactional
@@ -112,7 +118,7 @@ public class MenuService {
         menu.setCreatedAt(now);
         menu.setUpdatedAt(now);
         menuRepository.save(menu);
-        return toVo(menu, List.of());
+        return toVo(menu, List.of(), Map.of());
     }
 
     @Transactional
@@ -142,7 +148,7 @@ public class MenuService {
         }
         menu.setUpdatedAt(Instant.now());
         menuRepository.save(menu);
-        return toVo(menu, List.of());
+        return toVo(menu, List.of(), Map.of());
     }
 
     @Transactional
@@ -177,25 +183,38 @@ public class MenuService {
                 .orElseThrow(() -> new BusinessException(ResultCode.NOT_FOUND, "菜单不存在"));
     }
 
-    private List<MenuVO> buildTree(List<SysMenu> menus) {
+    private Map<Long, List<MenuVO.MenuApiItem>> loadApiMap(List<Long> menuIds) {
+        if (menuIds.isEmpty()) {
+            return Map.of();
+        }
+        Map<Long, List<MenuVO.MenuApiItem>> map = new HashMap<>();
+        for (MenuApiRow row : menuApiRepository.findApisByMenuIds(menuIds)) {
+            map.computeIfAbsent(row.getMenuId(), k -> new ArrayList<>())
+                    .add(new MenuVO.MenuApiItem(row.getMethod(), row.getPath()));
+        }
+        return map;
+    }
+
+    private List<MenuVO> buildTree(List<SysMenu> menus, Map<Long, List<MenuVO.MenuApiItem>> apiMap) {
         Map<Long, List<SysMenu>> byParent = new HashMap<>();
         for (SysMenu menu : menus) {
             Long pid = menu.getParentId() == null ? 0L : menu.getParentId();
             byParent.computeIfAbsent(pid, k -> new ArrayList<>()).add(menu);
         }
-        return buildChildren(0L, byParent);
+        return buildChildren(0L, byParent, apiMap);
     }
 
-    private List<MenuVO> buildChildren(Long parentId, Map<Long, List<SysMenu>> byParent) {
+    private List<MenuVO> buildChildren(Long parentId, Map<Long, List<SysMenu>> byParent,
+                                       Map<Long, List<MenuVO.MenuApiItem>> apiMap) {
         List<SysMenu> children = byParent.getOrDefault(parentId, List.of());
         List<MenuVO> result = new ArrayList<>(children.size());
         for (SysMenu menu : children) {
-            result.add(toVo(menu, buildChildren(menu.getId(), byParent)));
+            result.add(toVo(menu, buildChildren(menu.getId(), byParent, apiMap), apiMap));
         }
         return result;
     }
 
-    private MenuVO toVo(SysMenu menu, List<MenuVO> children) {
+    private MenuVO toVo(SysMenu menu, List<MenuVO> children, Map<Long, List<MenuVO.MenuApiItem>> apiMap) {
         return new MenuVO(
                 String.valueOf(menu.getId()),
                 String.valueOf(menu.getTenantId()),
@@ -211,7 +230,8 @@ public class MenuService {
                 menu.getSort(),
                 menu.getVisible(),
                 menu.getStatus(),
-                children);
+                children,
+                apiMap.getOrDefault(menu.getId(), List.of()));
     }
 
     public static List<Long> parseIds(String ids) {
