@@ -32,6 +32,7 @@ export function DictManagePage() {
   const [typeId, setTypeId] = useState<string | null>(null);
   const [items, setItems] = useState<DictItem[]>([]);
   const [loading, setLoading] = useState(false);
+  const [loadingItems, setLoadingItems] = useState(false);
   const [open, setOpen] = useState(false);
   const [kind, setKind] = useState<'type' | 'item'>('type');
   const [editingType, setEditingType] = useState<DictTypeItem | null>(null);
@@ -54,10 +55,13 @@ export function DictManagePage() {
   }, []);
 
   const loadItems = useCallback(async (id: string) => {
+    setLoadingItems(true);
     try {
       setItems(await listDictItems(id));
     } catch (e) {
       toast.error(e instanceof Error ? e.message : '加载字典项失败');
+    } finally {
+      setLoadingItems(false);
     }
   }, []);
 
@@ -153,6 +157,29 @@ export function DictManagePage() {
     }
   }
 
+  async function onDeleteType(t: DictTypeItem) {
+    if (!window.confirm(`删除类型「${t.name}」？`)) return;
+    try {
+      await deleteDictType(t.id);
+      toast.success('已删除');
+      if (typeId === t.id) setTypeId(null);
+      await loadTypes();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : '删除失败');
+    }
+  }
+
+  async function onDeleteItem(item: DictItem) {
+    if (!window.confirm(`确认删除「${item.label}」？`)) return;
+    try {
+      await deleteDictItem(item.id);
+      toast.success('已删除');
+      if (typeId) await loadItems(typeId);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : '删除失败');
+    }
+  }
+
   return (
     <div className="flex min-h-0 flex-1 flex-col p-4 md:p-5">
       <PageHeader
@@ -209,19 +236,7 @@ export function DictManagePage() {
                   <button
                     type="button"
                     className="hidden rounded p-1 text-muted-foreground group-hover:inline-flex hover:bg-accent"
-                    onClick={() =>
-                      void (async () => {
-                        if (!window.confirm(`删除类型「${t.name}」？`)) return;
-                        try {
-                          await deleteDictType(t.id);
-                          toast.success('已删除');
-                          if (typeId === t.id) setTypeId(null);
-                          await loadTypes();
-                        } catch (e) {
-                          toast.error(e instanceof Error ? e.message : '删除失败');
-                        }
-                      })()
-                    }
+                    onClick={() => void onDeleteType(t)}
                   >
                     <Trash2 className="h-3.5 w-3.5" />
                   </button>
@@ -242,10 +257,16 @@ export function DictManagePage() {
               </tr>
             </thead>
             <tbody>
-              {!typeId ? (
+              {loadingItems ? (
                 <tr>
                   <td colSpan={4} className="px-3 py-10 text-center text-muted-foreground">
-                    请选择字典类型
+                    加载中…
+                  </td>
+                </tr>
+              ) : !typeId ? (
+                <tr>
+                  <td colSpan={4} className="px-3 py-10 text-center text-muted-foreground">
+                    请选择左侧字典类型
                   </td>
                 </tr>
               ) : items.length === 0 ? (
@@ -261,31 +282,26 @@ export function DictManagePage() {
                     <td className="px-3 py-2 font-mono text-xs">{item.value}</td>
                     <td className="px-3 py-2">{item.sort}</td>
                     <td className="px-3 py-2">
-                      <div className="flex gap-1">
+                      <div className="flex items-center gap-1">
                         <PermissionGate permission="system:dict:edit">
-                          <Button size="sm" variant="ghost" onClick={() => openItemEdit(item)}>
-                            <Pencil className="h-3.5 w-3.5" />
-                          </Button>
+                          <button
+                            type="button"
+                            className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[0.8125rem] text-primary hover:bg-primary/10"
+                            onClick={() => openItemEdit(item)}
+                          >
+                            <Pencil className="h-3 w-3" />
+                            编辑
+                          </button>
                         </PermissionGate>
                         <PermissionGate permission="system:dict:delete">
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            onClick={() =>
-                              void (async () => {
-                                if (!window.confirm('确认删除？')) return;
-                                try {
-                                  await deleteDictItem(item.id);
-                                  toast.success('已删除');
-                                  if (typeId) await loadItems(typeId);
-                                } catch (e) {
-                                  toast.error(e instanceof Error ? e.message : '删除失败');
-                                }
-                              })()
-                            }
+                          <button
+                            type="button"
+                            className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[0.8125rem] text-destructive hover:bg-destructive/10"
+                            onClick={() => void onDeleteItem(item)}
                           >
-                            <Trash2 className="h-3.5 w-3.5" />
-                          </Button>
+                            <Trash2 className="h-3 w-3" />
+                            删除
+                          </button>
                         </PermissionGate>
                       </div>
                     </td>
@@ -298,7 +314,7 @@ export function DictManagePage() {
       </div>
 
       <Sheet open={open} onOpenChange={setOpen}>
-        <SheetContent className="sm:max-w-md">
+        <SheetContent className="flex w-full flex-col sm:max-w-md">
           <SheetHeader>
             <SheetTitle>
               {kind === 'type'
@@ -310,7 +326,7 @@ export function DictManagePage() {
                   : '新增字典项'}
             </SheetTitle>
           </SheetHeader>
-          <div className="space-y-3 py-4">
+          <div className="flex-1 space-y-3 overflow-auto py-4">
             {kind === 'type' ? (
               <>
                 {!editingType ? (

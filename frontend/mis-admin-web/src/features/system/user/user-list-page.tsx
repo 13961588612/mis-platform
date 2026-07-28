@@ -17,6 +17,7 @@ import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { PageHeader } from '@/components/common/page-header';
+import { DetailDefList } from '@/components/common/detail-def-list';
 import { StatusBadge } from '@/components/common/list-page-skeleton';
 import { PermissionGate } from '@/components/auth/permission-gate';
 import {
@@ -830,26 +831,21 @@ function UserDetail({ viewing, onAiRag }: { viewing: UserView; onAiRag: () => vo
         </div>
       </div>
       <div className="mt-1">
-        <DetailRow label="工号" value={viewing.employeeNo ?? '—'} />
-        <DetailRow label="用户名" value={viewing.username} />
-        <DetailRow label="姓名" value={viewing.realName ?? '—'} />
-        <DetailRow label="部门" value={viewing.deptName ?? '—'} />
-        <DetailRow label="组织" value={viewing.orgName ?? '—'} />
-        <DetailRow label="手机" value={viewing.phone ?? '—'} />
-        <DetailRow label="邮箱" value={viewing.email ?? '—'} />
-        <DetailRow label="角色" value={viewing.roles?.map((r) => r.name).join('、') ?? '—'} />
-        <DetailRow label="状态" value={statusLabel(viewing.status)} />
-        <DetailRow label="创建时间" value={formatTime(viewing.createdAt)} />
+        <DetailDefList
+          items={[
+            { label: '工号', value: viewing.employeeNo },
+            { label: '用户名', value: viewing.username },
+            { label: '姓名', value: viewing.realName },
+            { label: '部门', value: viewing.deptName },
+            { label: '组织', value: viewing.orgName },
+            { label: '手机', value: viewing.phone },
+            { label: '邮箱', value: viewing.email },
+            { label: '角色', value: viewing.roles?.map((r) => r.name).join('、') },
+            { label: '状态', value: <StatusBadge tone={statusTone(viewing.status)} text={statusLabel(viewing.status)} /> },
+            { label: '创建时间', value: formatTime(viewing.createdAt) },
+          ]}
+        />
       </div>
     </>
-  );
-}
-
-function DetailRow({ label, value }: { label: string; value: React.ReactNode }) {
-  return (
-    <div className="grid grid-cols-[9rem_1fr] gap-2 border-b border-dashed border-border py-[0.55rem] last:border-0">
-      <span className="text-[0.8125rem] text-muted-foreground">{label}</span>
-      <span className="break-all text-sm text-foreground">{value}</span>
-    </div>
   );
 }

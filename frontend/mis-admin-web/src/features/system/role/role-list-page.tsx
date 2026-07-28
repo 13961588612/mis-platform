@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ChevronRight, Pencil, Plus, Shield, Trash2 } from 'lucide-react';
+import { ChevronRight, Eye, Pencil, Plus, Shield, Trash2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { PageHeader } from '@/components/common/page-header';
+import { DetailDefList } from '@/components/common/detail-def-list';
 import { StatusBadge } from '@/components/common/list-page-skeleton';
 import { PermissionGate } from '@/components/auth/permission-gate';
 import {
@@ -151,8 +152,9 @@ export function RoleListPage() {
   const [loading, setLoading] = useState(false);
   const [menus, setMenus] = useState<MenuNode[]>([]);
   const [open, setOpen] = useState(false);
-  const [mode, setMode] = useState<'edit' | 'menus'>('edit');
+  const [mode, setMode] = useState<'edit' | 'menus' | 'detail'>('edit');
   const [editing, setEditing] = useState<RoleItem | null>(null);
+  const [viewing, setViewing] = useState<RoleItem | null>(null);
   const [saving, setSaving] = useState(false);
   const [form, setForm] = useState({
     code: '',
@@ -209,13 +211,22 @@ export function RoleListPage() {
 
   function openCreate() {
     setEditing(null);
+    setViewing(null);
     setMode('edit');
     setForm({ code: '', name: '', dataScope: 1, remark: '', status: 1, menuIds: [] });
     setOpen(true);
   }
 
+  function openView(row: RoleItem) {
+    setViewing(row);
+    setEditing(null);
+    setMode('detail');
+    setOpen(true);
+  }
+
   function openEdit(row: RoleItem) {
     setEditing(row);
+    setViewing(null);
     setMode('edit');
     setForm({
       code: row.code,
@@ -329,21 +340,44 @@ export function RoleListPage() {
                     <StatusBadge tone={row.status === 1 ? 'success' : 'destructive'} text={row.status === 1 ? '启用' : '禁用'} />
                   </td>
                   <td className="px-3 py-2">
-                    <div className="flex gap-1">
+                    <div className="flex items-center gap-1">
+                      <button
+                        type="button"
+                        className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[0.8125rem] text-primary hover:bg-primary/10"
+                        onClick={() => openView(row)}
+                      >
+                        <Eye className="h-3 w-3" />
+                        详情
+                      </button>
                       <PermissionGate permission="system:role:edit">
-                        <Button size="sm" variant="ghost" onClick={() => openEdit(row)}>
-                          <Pencil className="h-3.5 w-3.5" />
-                        </Button>
+                        <button
+                          type="button"
+                          className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[0.8125rem] text-primary hover:bg-primary/10"
+                          onClick={() => openEdit(row)}
+                        >
+                          <Pencil className="h-3 w-3" />
+                          编辑
+                        </button>
                       </PermissionGate>
                       <PermissionGate permission="system:role:assignMenu">
-                        <Button size="sm" variant="ghost" title="分配菜单" onClick={() => void openMenus(row)}>
-                          <Shield className="h-3.5 w-3.5" />
-                        </Button>
+                        <button
+                          type="button"
+                          className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[0.8125rem] text-primary hover:bg-primary/10"
+                          onClick={() => void openMenus(row)}
+                        >
+                          <Shield className="h-3 w-3" />
+                          权限
+                        </button>
                       </PermissionGate>
                       <PermissionGate permission="system:role:delete">
-                        <Button size="sm" variant="ghost" onClick={() => void onDelete(row)}>
-                          <Trash2 className="h-3.5 w-3.5" />
-                        </Button>
+                        <button
+                          type="button"
+                          className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[0.8125rem] text-destructive hover:bg-destructive/10"
+                          onClick={() => void onDelete(row)}
+                        >
+                          <Trash2 className="h-3 w-3" />
+                          删除
+                        </button>
                       </PermissionGate>
                     </div>
                   </td>
@@ -358,11 +392,21 @@ export function RoleListPage() {
         <SheetContent className="flex w-full flex-col sm:max-w-md">
           <SheetHeader>
             <SheetTitle>
-              {mode === 'menus' ? '分配菜单' : editing ? '编辑角色' : '新增角色'}
+              {mode === 'detail' ? '角色详情' : mode === 'menus' ? '分配菜单' : editing ? '编辑角色' : '新增角色'}
             </SheetTitle>
           </SheetHeader>
           <div className="flex-1 space-y-3 overflow-auto py-4">
-            {mode === 'edit' ? (
+            {mode === 'detail' && viewing ? (
+              <DetailDefList
+                items={[
+                  { label: '编码', value: viewing.code },
+                  { label: '名称', value: viewing.name },
+                  { label: '数据范围', value: DATA_SCOPE[viewing.dataScope] ?? viewing.dataScope },
+                  { label: '状态', value: <StatusBadge tone={viewing.status === 1 ? 'success' : 'destructive'} text={viewing.status === 1 ? '启用' : '禁用'} /> },
+                  { label: '备注', value: viewing.remark },
+                ]}
+              />
+            ) : mode === 'edit' ? (
               <>
                 {!editing ? (
                   <div>
@@ -439,12 +483,20 @@ export function RoleListPage() {
             )}
           </div>
           <SheetFooter>
-            <Button variant="outline" onClick={() => setOpen(false)}>
-              取消
-            </Button>
-            <Button disabled={saving} onClick={() => void onSave()}>
-              保存
-            </Button>
+            {mode === 'detail' ? (
+              <Button variant="outline" onClick={() => setOpen(false)}>
+                关闭
+              </Button>
+            ) : (
+              <>
+                <Button variant="outline" onClick={() => setOpen(false)}>
+                  取消
+                </Button>
+                <Button disabled={saving} onClick={() => void onSave()}>
+                  保存
+                </Button>
+              </>
+            )}
           </SheetFooter>
         </SheetContent>
       </Sheet>

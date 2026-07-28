@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Pencil, Plus, Trash2 } from 'lucide-react';
+import { Eye, Pencil, Plus, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { PageHeader } from '@/components/common/page-header';
+import { DetailDefList } from '@/components/common/detail-def-list';
 import { StatusBadge } from '@/components/common/list-page-skeleton';
 import { PermissionGate } from '@/components/auth/permission-gate';
 import {
@@ -25,6 +26,7 @@ export function OrgListPage() {
   const [loading, setLoading] = useState(false);
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState<OrgItem | null>(null);
+  const [viewing, setViewing] = useState<OrgItem | null>(null);
   const [saving, setSaving] = useState(false);
   const [form, setForm] = useState({ code: '', name: '', sort: '0', remark: '', status: 1 });
 
@@ -45,12 +47,20 @@ export function OrgListPage() {
 
   function openCreate() {
     setEditing(null);
+    setViewing(null);
     setForm({ code: '', name: '', sort: '0', remark: '', status: 1 });
+    setOpen(true);
+  }
+
+  function openView(row: OrgItem) {
+    setViewing(row);
+    setEditing(null);
     setOpen(true);
   }
 
   function openEdit(row: OrgItem) {
     setEditing(row);
+    setViewing(null);
     setForm({
       code: row.code,
       name: row.name,
@@ -155,16 +165,34 @@ export function OrgListPage() {
                   </td>
                   <td className="px-3 py-2 text-muted-foreground">{row.remark ?? '—'}</td>
                   <td className="px-3 py-2">
-                    <div className="flex gap-1">
+                    <div className="flex items-center gap-1">
+                      <button
+                        type="button"
+                        className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[0.8125rem] text-primary hover:bg-primary/10"
+                        onClick={() => openView(row)}
+                      >
+                        <Eye className="h-3 w-3" />
+                        详情
+                      </button>
                       <PermissionGate permission="system:org:edit">
-                        <Button size="sm" variant="ghost" onClick={() => openEdit(row)}>
-                          <Pencil className="h-3.5 w-3.5" />
-                        </Button>
+                        <button
+                          type="button"
+                          className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[0.8125rem] text-primary hover:bg-primary/10"
+                          onClick={() => openEdit(row)}
+                        >
+                          <Pencil className="h-3 w-3" />
+                          编辑
+                        </button>
                       </PermissionGate>
                       <PermissionGate permission="system:org:delete">
-                        <Button size="sm" variant="ghost" onClick={() => void onDelete(row)}>
-                          <Trash2 className="h-3.5 w-3.5" />
-                        </Button>
+                        <button
+                          type="button"
+                          className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[0.8125rem] text-destructive hover:bg-destructive/10"
+                          onClick={() => void onDelete(row)}
+                        >
+                          <Trash2 className="h-3 w-3" />
+                          删除
+                        </button>
                       </PermissionGate>
                     </div>
                   </td>
@@ -176,50 +204,72 @@ export function OrgListPage() {
       </div>
 
       <Sheet open={open} onOpenChange={setOpen}>
-        <SheetContent className="sm:max-w-md">
+        <SheetContent className="flex w-full flex-col sm:max-w-md">
           <SheetHeader>
-            <SheetTitle>{editing ? '编辑组织' : '新增组织'}</SheetTitle>
+            <SheetTitle>{viewing ? '组织详情' : editing ? '编辑组织' : '新增组织'}</SheetTitle>
           </SheetHeader>
-          <div className="space-y-3 py-4">
-            {!editing ? (
+          {viewing ? (
+            <div className="flex-1 overflow-auto py-4">
+              <DetailDefList
+                items={[
+                  { label: '编码', value: viewing.code },
+                  { label: '名称', value: viewing.name },
+                  { label: '排序', value: String(viewing.sort ?? 0) },
+                  { label: '状态', value: <StatusBadge tone={viewing.status === 1 ? 'success' : 'destructive'} text={viewing.status === 1 ? '启用' : '禁用'} /> },
+                  { label: '备注', value: viewing.remark },
+                ]}
+              />
+            </div>
+          ) : (
+            <div className="flex-1 space-y-3 overflow-auto py-4">
+              {!editing ? (
+                <div>
+                  <label className={fieldLabel}>编码 *</label>
+                  <Input value={form.code} onChange={(e) => setForm((f) => ({ ...f, code: e.target.value }))} />
+                </div>
+              ) : null}
               <div>
-                <label className={fieldLabel}>编码 *</label>
-                <Input value={form.code} onChange={(e) => setForm((f) => ({ ...f, code: e.target.value }))} />
+                <label className={fieldLabel}>名称 *</label>
+                <Input value={form.name} onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))} />
               </div>
-            ) : null}
-            <div>
-              <label className={fieldLabel}>名称 *</label>
-              <Input value={form.name} onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))} />
-            </div>
-            <div>
-              <label className={fieldLabel}>排序</label>
-              <Input value={form.sort} onChange={(e) => setForm((f) => ({ ...f, sort: e.target.value }))} />
-            </div>
-            {editing ? (
               <div>
-                <label className={fieldLabel}>状态</label>
-                <select
-                  className={fieldInput}
-                  value={form.status}
-                  onChange={(e) => setForm((f) => ({ ...f, status: Number(e.target.value) }))}
-                >
-                  <option value={1}>启用</option>
-                  <option value={0}>禁用</option>
-                </select>
+                <label className={fieldLabel}>排序</label>
+                <Input value={form.sort} onChange={(e) => setForm((f) => ({ ...f, sort: e.target.value }))} />
               </div>
-            ) : null}
-            <div>
-              <label className={fieldLabel}>备注</label>
-              <Input value={form.remark} onChange={(e) => setForm((f) => ({ ...f, remark: e.target.value }))} />
+              {editing ? (
+                <div>
+                  <label className={fieldLabel}>状态</label>
+                  <select
+                    className={fieldInput}
+                    value={form.status}
+                    onChange={(e) => setForm((f) => ({ ...f, status: Number(e.target.value) }))}
+                  >
+                    <option value={1}>启用</option>
+                    <option value={0}>禁用</option>
+                  </select>
+                </div>
+              ) : null}
+              <div>
+                <label className={fieldLabel}>备注</label>
+                <Input value={form.remark} onChange={(e) => setForm((f) => ({ ...f, remark: e.target.value }))} />
+              </div>
             </div>
-          </div>
+          )}
           <SheetFooter>
-            <Button variant="outline" onClick={() => setOpen(false)}>
-              取消
-            </Button>
-            <Button disabled={saving} onClick={() => void onSave()}>
-              保存
-            </Button>
+            {viewing ? (
+              <Button variant="outline" onClick={() => setOpen(false)}>
+                关闭
+              </Button>
+            ) : (
+              <>
+                <Button variant="outline" onClick={() => setOpen(false)}>
+                  取消
+                </Button>
+                <Button disabled={saving} onClick={() => void onSave()}>
+                  {saving ? '保存中…' : '保存'}
+                </Button>
+              </>
+            )}
           </SheetFooter>
         </SheetContent>
       </Sheet>

@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { ChevronDown, ChevronRight, Pencil, Plus, Trash2 } from 'lucide-react';
+import { Folder, Pencil, Plus, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { PageHeader } from '@/components/common/page-header';
+import { TreeTable, type TreeTableColumn, type TreeTableNode } from '@/components/common/tree-table';
 import { StatusBadge } from '@/components/common/list-page-skeleton';
 import { PermissionGate } from '@/components/auth/permission-gate';
 import {
@@ -25,10 +26,12 @@ const fieldLabel = 'mb-[0.4rem] block text-sm font-medium text-foreground';
 const fieldInput =
   'h-auto min-h-9 w-full rounded-md border border-input bg-card px-[0.7rem] py-[0.55rem] text-sm';
 
-function flatten(nodes: DeptNode[], depth = 0): { node: DeptNode; depth: number }[] {
-  const out: { node: DeptNode; depth: number }[] = [];
+type DeptRow = TreeTableNode & { node: DeptNode };
+
+function flatten(nodes: DeptNode[], depth = 0): DeptRow[] {
+  const out: DeptRow[] = [];
   for (const n of nodes) {
-    out.push({ node: n, depth });
+    out.push({ id: n.id, depth, node: n });
     if (n.children?.length) out.push(...flatten(n.children, depth + 1));
   }
   return out;
@@ -39,14 +42,46 @@ export function DeptTreePage() {
   const [orgId, setOrgId] = useState('');
   const [tree, setTree] = useState<DeptNode[]>([]);
   const [loading, setLoading] = useState(false);
-  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState<DeptNode | null>(null);
   const [parentId, setParentId] = useState('0');
   const [saving, setSaving] = useState(false);
   const [form, setForm] = useState({ name: '', sort: '0', status: 1 });
 
-  const flat = useMemo(() => flatten(tree), [tree]);
+  const rows = useMemo(() => flatten(tree), [tree]);
+
+  const columns: TreeTableColumn<DeptRow>[] = useMemo(
+    () => [
+      {
+        key: 'name',
+        header: '部门名称',
+        cell: (row) => <span className="font-medium">{row.node.name}</span>,
+      },
+      {
+        key: 'code',
+        header: '编码',
+        cell: (row) => <span className="font-mono text-xs text-muted-foreground">{row.node.code ?? '—'}</span>,
+      },
+      {
+        key: 'sort',
+        header: '排序',
+        cell: (row) => row.node.sort ?? 0,
+        className: 'text-center',
+        align: 'center',
+      },
+      {
+        key: 'status',
+        header: '状态',
+        cell: (row) => (
+          <StatusBadge
+            tone={row.node.status === 1 ? 'success' : 'destructive'}
+            text={row.node.status === 1 ? '启用' : '禁用'}
+          />
+        ),
+      },
+    ],
+    [],
+  );
 
   const loadTree = useCallback(async (id: string) => {
     if (!id) return;
@@ -163,92 +198,70 @@ export function DeptTreePage() {
       />
 
       <div className="min-h-0 flex-1 overflow-auto rounded-lg border bg-card">
-        <table className="w-full text-left text-sm">
-          <thead className="sticky top-0 border-b bg-muted/40 text-muted-foreground">
-            <tr>
-              <th className="px-3 py-2 font-bold">部门名称</th>
-              <th className="px-3 py-2 font-bold">编码</th>
-              <th className="px-3 py-2 font-bold">排序</th>
-              <th className="px-3 py-2 font-bold">状态</th>
-              <th className="px-3 py-2 font-bold">操作</th>
-            </tr>
-          </thead>
-          <tbody>
-            {loading ? (
-              <tr>
-                <td colSpan={5} className="px-3 py-10 text-center text-muted-foreground">
-                  加载中…
-                </td>
-              </tr>
-            ) : flat.length === 0 ? (
-              <tr>
-                <td colSpan={5} className="px-3 py-10 text-center text-muted-foreground">
-                  暂无部门
-                </td>
-              </tr>
-            ) : (
-              flat.map(({ node, depth }) => {
-                const hasKids = Boolean(node.children?.length);
-                return (
-                  <tr key={node.id} className="border-b last:border-0 hover:bg-muted/30">
-                    <td className="px-3 py-2">
-                      <div className="flex items-center" style={{ paddingLeft: depth * 16 }}>
-                        <button
-                          type="button"
-                          className="mr-1 rounded p-0.5 text-muted-foreground"
-                          onClick={() => setExpanded((m) => ({ ...m, [node.id]: !(m[node.id] ?? true) }))}
-                        >
-                          {hasKids ? (
-                            (expanded[node.id] ?? true) ? (
-                              <ChevronDown className="h-3.5 w-3.5" />
-                            ) : (
-                              <ChevronRight className="h-3.5 w-3.5" />
-                            )
-                          ) : (
-                            <span className="inline-block w-3.5" />
-                          )}
-                        </button>
-                        <span className="font-medium">{node.name}</span>
-                      </div>
-                    </td>
-                    <td className="px-3 py-2 font-mono text-xs">{node.code}</td>
-                    <td className="px-3 py-2">{node.sort}</td>
-                    <td className="px-3 py-2">
-                      <StatusBadge tone={node.status === 1 ? 'success' : 'destructive'} text={node.status === 1 ? '启用' : '禁用'} />
-                    </td>
-                    <td className="px-3 py-2">
-                      <div className="flex gap-1">
-                        <PermissionGate permission="system:dept:add">
-                          <Button size="sm" variant="ghost" title="新增子部门" onClick={() => openCreate(node.id)}>
-                            <Plus className="h-3.5 w-3.5" />
-                          </Button>
-                        </PermissionGate>
-                        <PermissionGate permission="system:dept:edit">
-                          <Button size="sm" variant="ghost" onClick={() => openEdit(node)}>
-                            <Pencil className="h-3.5 w-3.5" />
-                          </Button>
-                        </PermissionGate>
-                        <PermissionGate permission="system:dept:delete">
-                          <Button size="sm" variant="ghost" onClick={() => void onDelete(node)}>
-                            <Trash2 className="h-3.5 w-3.5" />
-                          </Button>
-                        </PermissionGate>
-                      </div>
-                    </td>
-                  </tr>
-                );
-              })
+        {loading ? (
+          <div className="space-y-2 p-4">
+            {Array.from({ length: 5 }).map((_, i) => (
+              <div key={i} className="h-8 animate-pulse rounded bg-muted" />
+            ))}
+          </div>
+        ) : (
+          <TreeTable
+            rows={rows}
+            columns={columns}
+            treeColumnKey="name"
+            rowIcon={(row) => {
+              const hasKids = Boolean(row.node.children?.length);
+              return hasKids ? (
+                <Folder className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+              ) : (
+                <span className="inline-block w-3.5 shrink-0" />
+              );
+            }}
+            rowActions={(row) => (
+              <>
+                <PermissionGate permission="system:dept:add">
+                  <button
+                    type="button"
+                    className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[0.8125rem] text-primary hover:bg-primary/10"
+                    onClick={() => openCreate(row.node.id)}
+                  >
+                    <Plus className="h-3 w-3" />
+                    子部门
+                  </button>
+                </PermissionGate>
+                <PermissionGate permission="system:dept:edit">
+                  <button
+                    type="button"
+                    className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[0.8125rem] text-primary hover:bg-primary/10"
+                    onClick={() => openEdit(row.node)}
+                  >
+                    <Pencil className="h-3 w-3" />
+                    编辑
+                  </button>
+                </PermissionGate>
+                <PermissionGate permission="system:dept:delete">
+                  <button
+                    type="button"
+                    className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[0.8125rem] text-destructive hover:bg-destructive/10"
+                    onClick={() => void onDelete(row.node)}
+                  >
+                    <Trash2 className="h-3 w-3" />
+                    删除
+                  </button>
+                </PermissionGate>
+              </>
             )}
-          </tbody>
-        </table>
+            emptyText="暂无部门数据"
+          />
+        )}
       </div>
 
       <Sheet open={open} onOpenChange={setOpen}>
-        <SheetContent className="sm:max-w-md">
+        <SheetContent className="flex w-full flex-col sm:max-w-md">
           <SheetHeader>
             <SheetTitle>{editing ? '编辑部门' : '新增部门'}</SheetTitle>
           </SheetHeader>
-          <div className="space-y-3 py-4">
+          <div className="flex-1 space-y-3 overflow-auto py-4">
             <div>
               <label className={fieldLabel}>名称 *</label>
               <Input value={form.name} onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))} />
@@ -276,7 +289,7 @@ export function DeptTreePage() {
               取消
             </Button>
             <Button disabled={saving} onClick={() => void onSave()}>
-              保存
+              {saving ? '保存中…' : '保存'}
             </Button>
           </SheetFooter>
         </SheetContent>

@@ -27,6 +27,7 @@ import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { PageHeader } from '@/components/common/page-header';
+import { DetailDefList } from '@/components/common/detail-def-list';
 import { StatusBadge } from '@/components/common/list-page-skeleton';
 import {
   Sheet,
@@ -718,15 +719,13 @@ export function AdminListPage({ def }: { def: AdminPageDef }) {
 
           {sheetMode === 'view' ? (
             <div className="min-h-0 flex-1 overflow-y-auto px-5 py-2">
-              {def.form.map((f) => (
-                <div
-                  key={f.key}
-                  className="grid grid-cols-[9rem_1fr] gap-2 border-b border-dashed border-border py-[0.55rem] last:border-0"
-                >
-                  <span className="text-[0.8125rem] text-muted-foreground">{f.label}</span>
-                  <span className="break-all text-sm">{detailValue(f, formValues[f.key])}</span>
-                </div>
-              ))}
+              <DetailDefList
+                items={def.form.map((f) => ({
+                  label: f.label,
+                  value: detailValue(f, formValues[f.key]),
+                  key: f.key,
+                }))}
+              />
             </div>
           ) : (
             /* flex-1 只给滚动容器；grid 用 content-start，避免行被撑开留白 */

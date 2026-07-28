@@ -273,3 +273,39 @@ Phase D 已实施（2026-07-28）：见 §9。
 - `design-system.md` 新增 §3.4「通用布局组件（可复用）」：`DetailDefList` / `TreeTable` 的用途、Props、对齐规范、用法示例、已消费页面；并将 §3.3 模块管理「接口树」措辞修正为「接口树表（TreeTable）」。
 
 验收：前端 `npm run typecheck` 0 错误（两个新组件 + 两页回改）。设计系统文档与代码现状对齐：横排定义列表与树表现为平台级可复用范式，后续详情页无需再手写对齐布局。
+
+## 15. 剩余系统管理页面统一改造（2026-07-28）
+
+用户要求：将剩余所有系统管理页面按已建立的 DetailDefList + TreeTable 范式重新规划和设计，设计完成即修改代码。
+
+### 15.1 通用引擎 AdminListPage：详情视图 → DetailDefList
+- `admin-list-page.tsx` Sheet view 模式：原 `grid grid-cols-[9rem_1fr]` 逐行手写 → 替换为 `<DetailDefList items={def.form.map(...)}>`。
+- 影响范围：员工管理、岗位管理、系统参数、登录日志、操作日志等所有走 `AdminListPage` 引擎的页面详情视图统一升级。
+
+### 15.2 组织管理：新增详情视图 + 按钮统一
+- `org-list-page.tsx`：新增 `viewing` 状态 + `openView()` 函数 + "详情" 按钮；Sheet detail 模式用 `DetailDefList` 展示编码/名称/排序/状态/备注。
+- 表格操作按钮从 icon-only `Button variant="ghost"` 改为文字+图标（详情/编辑/删除），Sheet 改为 `flex w-full flex-col` 布局。
+
+### 15.3 部门管理：手写树表 → TreeTable 组件
+- `dept-tree-page.tsx`：删除手写 `flatten` + `paddingLeft: depth*16` + `expanded` 展开/折叠状态 + `ChevronDown/ChevronRight` 图标。
+- 改用 `<TreeTable>` 全展开模式渲染：`DeptRow = TreeTableNode & { node: DeptNode }`，`flatten()` 产出 `{ id, depth, node }[]`，`rowIcon` 按 `hasChildren` 显示 `Folder` 图标或空位。
+- 列定义：部门名称（treeColumn）/ 编码 / 排序 / 状态（StatusBadge）。`rowActions` hover 显示"子部门/编辑/删除"文字按钮。
+- 加载态从纯文字"加载中…"改为骨架行。
+
+### 15.4 用户管理：DetailRow → DetailDefList
+- `user-list-page.tsx`：`UserDetail` 组件内 10 个 `<DetailRow>` 替换为单个 `<DetailDefList items={...}>`。
+- 删除本地 `DetailRow` 组件（`grid grid-cols-[9rem_1fr]` 手写行）。
+- 状态字段从纯文字改为 `<StatusBadge>` 徽章。
+
+### 15.5 角色管理：新增详情视图 + 按钮统一
+- `role-list-page.tsx`：mode 类型扩展为 `'edit' | 'menus' | 'detail'`，新增 `viewing` 状态 + `openView()` + "详情" 按钮。
+- Sheet detail 模式用 `DetailDefList` 展示编码/名称/数据范围/状态/备注。
+- 表格操作按钮从 icon-only `Button variant="ghost"` 改为文字+图标（详情/编辑/权限/删除）。
+
+### 15.6 字典管理：按钮统一 + 加载态 + 空状态优化
+- `dict-manage-page.tsx`：字典项表格操作按钮从 icon-only `Button` 改为文字+图标（编辑/删除）。
+- 提取 `onDeleteType` / `onDeleteItem` 函数，消除内联 async IIFE。
+- 新增 `loadingItems` 状态，字典项表格加载时显示"加载中…"。
+- Sheet 改为 `flex w-full flex-col` 布局 + `flex-1 overflow-auto` 内容区。
+
+验收：前端 `npm run typecheck` 0 错误（6 个文件改动：admin-list-page / org-list-page / dept-tree-page / user-list-page / role-list-page / dict-manage-page）。全部系统管理页面的详情视图统一使用 DetailDefList，层级数据统一使用 TreeTable，操作按钮统一为文字+图标风格。
