@@ -2,9 +2,11 @@ package com.mis.org.controller;
 
 import com.mis.common.core.result.Result;
 import com.mis.org.dto.DeptCreateRequest;
+import com.mis.org.dto.DeptStaffingVO;
 import com.mis.org.dto.DeptUpdateRequest;
 import com.mis.org.dto.DeptVO;
 import com.mis.org.service.DeptService;
+import com.mis.org.service.DeptStaffingService;
 import jakarta.validation.Valid;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -23,9 +25,11 @@ import java.util.List;
 public class DeptController {
 
     private final DeptService deptService;
+    private final DeptStaffingService staffingService;
 
-    public DeptController(DeptService deptService) {
+    public DeptController(DeptService deptService, DeptStaffingService staffingService) {
         this.deptService = deptService;
+        this.staffingService = staffingService;
     }
 
     @GetMapping("/tree")
@@ -41,6 +45,11 @@ public class DeptController {
     @GetMapping("/{id}")
     public Result<DeptVO> get(@PathVariable Long id) {
         return Result.ok(deptService.getById(id));
+    }
+
+    @GetMapping("/{id}/staffing")
+    public Result<DeptStaffingVO> staffing(@PathVariable Long id, @RequestParam Long tenantId) {
+        return Result.ok(staffingService.staffing(tenantId, id));
     }
 
     @PostMapping

@@ -29,6 +29,26 @@ export interface DetailDefListProps {
  * 桌面 `grid-cols-[auto_1fr_auto_1fr]` → 视觉上两对/行；
  * 移动 `grid-cols-[auto_1fr]` → 一对/行。
  */
+function renderValue(value: ReactNode) {
+  if (Array.isArray(value) && value.every((v) => typeof v === 'string' || typeof v === 'number')) {
+    if (value.length === 0) return <span className="text-muted-foreground">—</span>;
+    return (
+      <span className="flex flex-wrap items-center gap-1">
+        {value.map((v, i) => (
+          <span
+            key={i}
+            className="inline-flex items-center rounded-md border border-border bg-muted/40 px-1.5 py-0.5 text-[0.75rem] text-muted-foreground"
+          >
+            {String(v)}
+          </span>
+        ))}
+      </span>
+    );
+  }
+  if (value == null || value === '') return <span className="text-muted-foreground">—</span>;
+  return <>{value}</>;
+}
+
 export function DetailDefList({ items, className }: DetailDefListProps) {
   return (
     <dl
@@ -40,9 +60,7 @@ export function DetailDefList({ items, className }: DetailDefListProps) {
       {items.map((it) => (
         <Fragment key={it.key ?? it.label}>
           <dt className="whitespace-nowrap pr-1 text-right text-xs text-muted-foreground">{it.label}</dt>
-          <dd className="min-w-0 break-all text-left text-sm">
-            {it.value == null || it.value === '' ? '—' : it.value}
-          </dd>
+          <dd className="min-w-0 break-all text-left text-sm">{renderValue(it.value)}</dd>
         </Fragment>
       ))}
     </dl>

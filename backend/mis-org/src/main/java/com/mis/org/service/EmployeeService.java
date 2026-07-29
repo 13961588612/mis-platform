@@ -8,9 +8,17 @@ import com.mis.common.jpa.datascope.DataScopeSpecification.DataScopeContext;
 import com.mis.common.security.context.SecurityContextHolder;
 import com.mis.org.domain.entity.SysDept;
 import com.mis.org.domain.entity.SysEmployee;
+import com.mis.org.domain.entity.SysEmployeeDept;
+import com.mis.org.domain.entity.SysEmployeePost;
+import com.mis.org.domain.entity.SysPost;
 import com.mis.org.domain.repository.SysDeptRepository;
+import com.mis.org.domain.repository.SysEmployeeDeptRepository;
+import com.mis.org.domain.repository.SysEmployeePostRepository;
 import com.mis.org.domain.repository.SysEmployeeRepository;
+import com.mis.org.domain.repository.SysPostRepository;
 import com.mis.org.dto.EmployeeCreateRequest;
+import com.mis.org.dto.EmployeePostItem;
+import com.mis.org.dto.EmployeePostVO;
 import com.mis.org.dto.EmployeeUpdateRequest;
 import com.mis.org.dto.EmployeeVO;
 import com.mis.org.support.IdGenerator;
@@ -19,9 +27,11 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.stream.Collectors;
 
@@ -30,14 +40,23 @@ public class EmployeeService {
 
     private final SysEmployeeRepository employeeRepository;
     private final SysDeptRepository deptRepository;
+    private final SysEmployeeDeptRepository employeeDeptRepository;
+    private final SysEmployeePostRepository employeePostRepository;
+    private final SysPostRepository postRepository;
     private final DataScopeService dataScopeService;
 
     public EmployeeService(
             SysEmployeeRepository employeeRepository,
             SysDeptRepository deptRepository,
+            SysEmployeeDeptRepository employeeDeptRepository,
+            SysEmployeePostRepository employeePostRepository,
+            SysPostRepository postRepository,
             DataScopeService dataScopeService) {
         this.employeeRepository = employeeRepository;
         this.deptRepository = deptRepository;
+        this.employeeDeptRepository = employeeDeptRepository;
+        this.employeePostRepository = employeePostRepository;
+        this.postRepository = postRepository;
         this.dataScopeService = dataScopeService;
     }
 
@@ -124,13 +143,14 @@ public class EmployeeService {
                 .ifPresent(e -> {
                     throw new BusinessException(ResultCode.EMPLOYEE_NO_EXISTS);
                 });
-        requireDept(request.tenantId(), request.deptId());
+        Long primaryDeptId = resolvePrimaryDept(request.deptId(), request.deptIds());
+        requireDept(request.tenantId(), primaryDeptId);
 
         Instant now = Instant.now();
         SysEmployee emp = new SysEmployee();
         emp.setId(IdGenerator.nextId());
         emp.setTenantId(request.tenantId());
-        emp.setDeptId(request.deptId());
+        emp.setDeptId(primaryDeptId);
         emp.setEmployeeNo(request.employeeNo());
         emp.setRealName(request.realName());
         emp.setEmail(request.email());
@@ -143,6 +163,9 @@ public class EmployeeService {
         emp.setCreatedAt(now);
         emp.setUpdatedAt(now);
         employeeRepository.save(emp);
+
+        saveEmployeeDepts(emp.getTenantId(), emp.getId(), request.deptIds(), request.deptId(), now);
+        saveEmployeePosts(emp.getTenantId(), emp.getId(), request.posts(), now);
         return toVo(emp);
     }
 
@@ -163,17 +186,26 @@ public class EmployeeService {
         if (request.title() != null) {
             emp.setTitle(request.title());
         }
-        if (request.deptId() != null) {
-            requireDept(emp.getTenantId(), request.deptId());
-            emp.setDeptId(request.deptId());
+        if (request.status() != null) {
+            emp.setStatus(request.status());
+        }
+
+        Instant now = Instant.now();
+        List<Long> deptIds = request.deptIds();
+        if (deptIds != null || request.deptId() != null) {
+            Long primaryDeptId = resolvePrimaryDept(request.deptId(), deptIds);
+            requireDept(emp.getTenantId(), primaryDeptId);
+            emp.setDeptId(primaryDeptId);
+            saveEmployeeDepts(emp.getTenantId(), emp.getId(), deptIds, request.deptId(), now);
+        }
+        if (request.posts() != null) {
+            saveEmployeePosts(emp.getTenantId(), emp.getId(), request.posts(), now);
         }
         if (request.hireDate() != null) {
             emp.setHireDate(request.hireDate());
         }
-        if (request.status() != null) {
-            emp.setStatus(request.status());
-        }
-        emp.setUpdatedAt(Instant.now());
+
+        emp.setUpdatedAt(now);
         employeeRepository.save(emp);
         return toVo(emp);
     }
@@ -185,6 +217,57 @@ public class EmployeeService {
         emp.setDeleted(1);
         emp.setUpdatedAt(Instant.now());
         employeeRepository.save(emp);
+    }
+
+    private Long resolvePrimaryDept(Long singleDeptId, List<Long> deptIds) {
+        if (deptIds != null && !deptIds.isEmpty()) {
+            return deptIds.get(0);
+        }
+        return Objects.requireNonNull(singleDeptId, "主部门不能为空");
+    }
+
+    private void saveEmployeeDepts(Long tenantId, Long empId, List<Long> deptIds, Long fallbackDeptId, Instant now) {
+        List<Long> ids = (deptIds != null && !deptIds.isEmpty())
+                ? deptIds
+                : (fallbackDeptId != null ? List.of(fallbackDeptId) : List.of());
+        employeeDeptRepository.deleteByEmployeeId(empId);
+        List<SysEmployeeDept> rows = new ArrayList<>();
+        for (int i = 0; i < ids.size(); i++) {
+            SysEmployeeDept ed = new SysEmployeeDept();
+            ed.setId(IdGenerator.nextId());
+            ed.setTenantId(tenantId);
+            ed.setEmployeeId(empId);
+            ed.setDeptId(ids.get(i));
+            ed.setIsPrimary(i == 0 ? 1 : 0);
+            ed.setStatus(1);
+            ed.setCreatedAt(now);
+            rows.add(ed);
+        }
+        if (!rows.isEmpty()) {
+            employeeDeptRepository.saveAll(rows);
+        }
+    }
+
+    private void saveEmployeePosts(Long tenantId, Long empId, List<EmployeePostItem> posts, Instant now) {
+        if (posts == null) return;
+        employeePostRepository.deleteByEmployeeId(empId);
+        List<SysEmployeePost> rows = new ArrayList<>();
+        for (int i = 0; i < posts.size(); i++) {
+            EmployeePostItem item = posts.get(i);
+            SysEmployeePost ep = new SysEmployeePost();
+            ep.setId(IdGenerator.nextId());
+            ep.setTenantId(tenantId);
+            ep.setEmployeeId(empId);
+            ep.setPostId(item.postId());
+            Integer isPrimary = item.isPrimary() != null ? item.isPrimary() : (i == 0 ? 1 : 0);
+            ep.setIsPrimary(isPrimary);
+            ep.setStatus(1);
+            ep.setCreatedAt(now);
+            rows.add(ep);
+        }
+        if (!rows.isEmpty()) {
+            employeePostRepository.saveAll(rows);
+        }
     }
 
     private void requireDept(Long tenantId, Long deptId) {
@@ -199,10 +282,26 @@ public class EmployeeService {
     }
 
     private EmployeeVO toVo(SysEmployee emp) {
+        List<Long> deptIds = employeeDeptRepository.findActiveDeptIds(emp.getId());
+        List<EmployeePostVO> postVos = employeePostRepository.findByEmployeeIdAndStatus(emp.getId(), 1).stream()
+                .map(ep -> {
+                    SysPost p = postRepository.findById(ep.getPostId()).orElse(null);
+                    return new EmployeePostVO(
+                            String.valueOf(ep.getPostId()),
+                            p != null ? p.getName() : null,
+                            p != null ? String.valueOf(p.getDeptId()) : null,
+                            p != null ? deptName(p.getDeptId()) : null,
+                            ep.getIsPrimary(),
+                            ep.getStatus());
+                })
+                .toList();
         return new EmployeeVO(
                 String.valueOf(emp.getId()),
                 String.valueOf(emp.getTenantId()),
                 String.valueOf(emp.getDeptId()),
+                deptIds.stream().map(String::valueOf).toList(),
+                String.valueOf(emp.getDeptId()),
+                postVos,
                 emp.getEmployeeNo(),
                 emp.getRealName(),
                 emp.getEmail(),
@@ -213,5 +312,9 @@ public class EmployeeService {
                 emp.getStatus(),
                 emp.getCreatedAt(),
                 emp.getUpdatedAt());
+    }
+
+    private String deptName(Long deptId) {
+        return deptRepository.findById(deptId).map(SysDept::getName).orElse(null);
     }
 }

@@ -349,3 +349,52 @@ Phase D 已实施（2026-07-28）：见 §9。
 - `updateUser` 扩展 `orgIds` / `deptIds`（数组），保存时发送多选结果。创建/编辑表单仍保留单部门选择（`form.deptId`），互不干扰。
 
 文件改动：`tree-table.tsx` / `dept-tree-page.tsx` / `user-list-page.tsx` / `users.ts`。
+
+---
+
+## 18. 员工多部门多岗位 + 部门岗位编制视图 + 后端接口对齐（2026-07-29）
+
+### 18.1 需求
+1. 后端接口对齐：用户组织/部门多选、员工多部门多岗位。
+2. 员工管理：一个员工任职多部门、多岗位，如何编辑与查看详情。
+3. 部门管理：增加「岗位编制」视图，查看部门下各岗位任职情况、任职人员、岗位空缺。
+
+### 18.2 员工多部门多岗位（前端）
+- 通用引擎 `AdminListPage` 新增能力：
+  - `AdminField.type='multiselect'`：表单内渲染复选框胶囊组，首个勾选标记为「主」（紫底），其余描边；`detailValue` 对数组用 `、` 连接。
+  - `AdminPageDef.detailExtra(row)`：详情 Sheet 在表单派生行之后追加自定义行（用于多值标签簇）。
+  - `DetailDefList` 原生渲染 `string[]`/`number[]` 为描边标签簇。
+- 员工列表：新增「兼任部门」列（`tags`），与「任职岗位」(`tags`) 并列；主部门保留首列。
+- 员工编辑：主部门单选不变；新增「兼任部门」「任职岗位」两个多选字段（首个为主）。
+- 员工详情：`detailExtra` 展示「主部门 + 兼任部门（标签簇）+ 任职岗位（标签簇）」，信息密度高且无需交互。
+
+### 18.3 部门岗位编制视图（前端）
+- `dept-tree-page` 顶部新增「组织架构 | 岗位编制」分段切换。
+- 编制模式：扁平部门列表，每行显示 `X岗 / 已满Y / 空缺Z` 汇总；点击打开 Sheet：
+  - 顶部三卡：岗位数 / 已任职 / 空缺。
+  - 「岗位任职情况」：每个岗位展示名称 + 类型徽标 + 任职人员胶囊（来自员工名）或「空缺」虚线徽标。
+  - 「部门任职人员」：去重后的任职人员胶囊列表。
+
+### 18.4 后端对齐（mis-org）
+- 新增 `sys_employee_dept` 关联表（员工↔部门，含 `is_primary`）；`SysEmployeeDept` 实体 + 仓库。
+- `EmployeeVO` 增加 `deptIds` / `primaryDeptId` / `posts`（`EmployeePostVO` 列表：岗位名/部门/是否主岗）。
+- `EmployeeCreateRequest` / `EmployeeUpdateRequest` 增加 `deptIds` / `posts`（`EmployeePostItem`：postId + isPrimary）。
+- `EmployeeService`：创建/更新时维护 `sys_employee_dept` 与 `sys_employee_post`（首项或 isPrimary=1 为主），`toVo` 聚合部门与岗位。
+- 新增 `DeptStaffingService` + `GET /internal/v1/depts/{id}/staffing?tenantId=` 返回 `DeptStaffingVO`（岗位数/已任职/空缺/各岗位任职/部门任职人员）。
+- 迁移 `V11__employee_multi_dept_and_user_org_dept.sql` 建 `sys_employee_dept` / `sys_user_org` / `sys_user_dept`。
+
+### 18.5 后端对齐（mis-iam）
+- 新增 `sys_user_org` / `sys_user_dept` 关联表（含 `is_primary`）；实体 + 仓库。
+- `UserVO` 增加 `orgIds` / `deptIds`（数组）。
+- `UserUpdateRequest` 增加 `orgIds` / `deptIds`；`UserService.update` 维护两张关联表，`toVo` 聚合返回。
+
+### 18.6 验收与说明
+- 前端 `npm run typecheck` 0 错误。
+- 后端 Java 改动需 JDK17 编译验证（沙箱 JDK8 不可编译）；逻辑按既有 Spring Data JPA 模式编写，`UserController.update` / `EmployeeController` 经 JSON 反序列化自动透传新字段，无需改控制器签名。
+- 注意：`EmployeeService.toVo` 对列表查询引入了按员工的部门/岗位聚合（N+1），小数据量可接受；上线前若员工量大需批量聚合优化。
+
+文件改动：
+- 前端：`types.ts` / `detail-def-list.tsx` / `admin-list-page.tsx` / `page-defs.ts` / `dept-tree-page.tsx`
+- 后端 mis-org：`SysEmployeeDept.java` + 仓库 / `Employee*VO` / `EmployeePostItem` / `EmployeeService` / `DeptStaffingService` / `DeptController` / `SysEmployeePostRepository`
+- 后端 mis-iam：`SysUserOrg.java` + `SysUserDept.java` + 仓库 / `UserVO` / `UserUpdateRequest` / `UserService`
+- 迁移：`V11__employee_multi_dept_and_user_org_dept.sql`

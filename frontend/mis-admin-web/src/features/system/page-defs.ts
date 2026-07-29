@@ -25,6 +25,28 @@ function withStatus(row: Record<string, unknown>) {
   return { ...row, statusText: statusText(row.status) };
 }
 
+/** 员工/部门多选共享：部门可选项 */
+const DEPT_OPTS = [
+  { value: '总经理办公室', label: '总经理办公室' },
+  { value: '研发中心', label: '研发中心' },
+  { value: '财务部', label: '财务部' },
+  { value: '市场部', label: '市场部' },
+  { value: '人力资源部', label: '人力资源部' },
+];
+
+/** 员工任职岗位可选项（覆盖样例中出现的所有岗位名） */
+const POST_OPTS = [
+  { value: '总经理', label: '总经理' },
+  { value: '研发总监', label: '研发总监' },
+  { value: '架构师', label: '架构师' },
+  { value: '技术委员会', label: '技术委员会' },
+  { value: '财务经理', label: '财务经理' },
+  { value: '内审委员', label: '内审委员' },
+  { value: '大区总', label: '大区总' },
+  { value: '研发部经理', label: '研发部经理' },
+  { value: '财务主管', label: '财务主管' },
+];
+
 /** 对齐 system-admin-template.html · 当前菜单已挂载的页面 */
 export const SYSTEM_PAGE_DEFS: Record<string, AdminPageDef> = {
   '/system/org': {
@@ -591,6 +613,7 @@ export const SYSTEM_PAGE_DEFS: Record<string, AdminPageDef> = {
       { key: 'real_name', label: '姓名' },
       { key: 'genderText', label: '性别' },
       { key: 'dept', label: '主部门' },
+      { key: 'depts', label: '兼任部门', tags: true },
       { key: 'posts', label: '任职岗位', tags: true },
       { key: 'statusText', label: '状态', status: true },
     ],
@@ -612,6 +635,7 @@ export const SYSTEM_PAGE_DEFS: Record<string, AdminPageDef> = {
         label: '主部门',
         type: 'select',
         col: 4,
+        required: true,
         options: [
           { value: '总经理办公室', label: '总经理办公室' },
           { value: '研发中心', label: '研发中心' },
@@ -619,10 +643,29 @@ export const SYSTEM_PAGE_DEFS: Record<string, AdminPageDef> = {
         ],
       },
       { key: 'title', label: '职位', type: 'text', col: 4 },
+      {
+        key: 'depts',
+        label: '兼任部门',
+        type: 'multiselect',
+        options: DEPT_OPTS,
+        hint: '可多选，首个为默认兼职部门',
+      },
+      {
+        key: 'posts',
+        label: '任职岗位',
+        type: 'multiselect',
+        options: POST_OPTS,
+        hint: '可多选，首个为主岗',
+      },
       { key: 'email', label: '邮箱', type: 'text', col: 6 },
       { key: 'phone', label: '手机号', type: 'text', col: 6 },
       { key: 'hire_date', label: '入职日期', type: 'text', col: 6 },
       { key: 'status', label: '状态', type: 'switch', col: 6 },
+    ],
+    detailExtra: (row) => [
+      { label: '主部门', value: row.dept as string },
+      { label: '兼任部门', value: (row.depts as string[] | undefined) ?? [] },
+      { label: '任职岗位', value: (row.posts as string[] | undefined) ?? [] },
     ],
     sample: [
       {
@@ -631,6 +674,7 @@ export const SYSTEM_PAGE_DEFS: Record<string, AdminPageDef> = {
         real_name: '李文博',
         gender: 1,
         dept: '总经理办公室',
+        depts: [],
         title: '总经理',
         posts: ['总经理'],
         email: 'liwb@corp.com',
@@ -644,6 +688,7 @@ export const SYSTEM_PAGE_DEFS: Record<string, AdminPageDef> = {
         real_name: '王磊',
         gender: 1,
         dept: '研发中心',
+        depts: ['市场部'],
         title: '研发总监',
         posts: ['研发总监', '架构师', '技术委员会'],
         email: 'wl@corp.com',
@@ -657,6 +702,7 @@ export const SYSTEM_PAGE_DEFS: Record<string, AdminPageDef> = {
         real_name: '赵敏',
         gender: 2,
         dept: '财务部',
+        depts: ['人力资源部'],
         title: '财务经理',
         posts: ['财务经理', '内审委员'],
         email: 'zm@corp.com',
@@ -670,6 +716,7 @@ export const SYSTEM_PAGE_DEFS: Record<string, AdminPageDef> = {
         real_name: '孙强',
         gender: 1,
         dept: '总经理办公室',
+        depts: ['市场部', '人力资源部'],
         title: '大区总',
         posts: ['大区总'],
         email: 'sq@corp.com',

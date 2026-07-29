@@ -1,4 +1,4 @@
-export type FieldType = 'text' | 'number' | 'select' | 'textarea' | 'switch';
+export type FieldType = 'text' | 'number' | 'select' | 'multiselect' | 'textarea' | 'switch';
 
 export interface FieldOption {
   label: string;
@@ -13,6 +13,8 @@ export interface AdminField {
   required?: boolean;
   placeholder?: string;
   options?: FieldOption[];
+  /** multiselect 专用：提示文案（如「首个为默认」） */
+  hint?: string;
 }
 
 export interface AdminColumn {
@@ -40,4 +42,6 @@ export interface AdminPageDef {
   loader?: () => Promise<Record<string, unknown>[]>;
   /** 结果区视图：'table'（默认，标准表格）或 'cards'（卡片网格，与表格范式拉开差异） */
   view?: 'table' | 'cards';
+  /** 详情 Sheet 额外行（如多值标签簇）：返回 DefItem[]，追加在表单派生行之后 */
+  detailExtra?: (row: Record<string, unknown>) => import('@/components/common/detail-def-list').DefItem[];
 }

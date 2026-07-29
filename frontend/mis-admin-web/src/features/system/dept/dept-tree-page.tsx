@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Folder, Pencil, Plus, Trash2 } from 'lucide-react';
+import { Eye, Folder, Layers, Pencil, Plus, Trash2, Users } from 'lucide-react';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
@@ -21,6 +21,27 @@ import type { DeptNode, OrgItem } from '@/types/api';
 
 /** 种子数据：部门类别 id=3（部门） */
 const DEFAULT_CATEGORY_ID = 3;
+
+/** 岗位编制 mock：key = 部门名；holders 为空即岗位空缺 */
+type PostStaffing = { post: string; type: string; holders: string[] };
+const STAFFING: Record<string, PostStaffing[]> = {
+  总经理办公室: [
+    { post: '总经理', type: '管理', holders: ['李文博'] },
+    { post: '大区总', type: '管理', holders: ['孙强'] },
+    { post: '行政专员', type: '职能', holders: [] },
+  ],
+  研发中心: [
+    { post: '研发部经理', type: '技术', holders: ['王磊'] },
+    { post: '架构师', type: '技术', holders: ['王磊'] },
+    { post: '测试工程师', type: '技术', holders: [] },
+  ],
+  财务部: [
+    { post: '财务主管', type: '财务', holders: ['赵敏'] },
+    { post: '出纳', type: '财务', holders: [] },
+  ],
+  市场部: [{ post: '市场经理', type: '市场', holders: [] }],
+  人力资源部: [{ post: 'HRBP', type: '职能', holders: [] }],
+};
 
 const fieldLabel = 'mb-[0.4rem] block text-sm font-medium text-foreground';
 const fieldInput =
@@ -47,8 +68,24 @@ export function DeptTreePage() {
   const [parentId, setParentId] = useState('0');
   const [saving, setSaving] = useState(false);
   const [form, setForm] = useState({ name: '', sort: '0', status: 1 });
+  const [view, setView] = useState<'tree' | 'staffing'>('tree');
+  const [staffingDept, setStaffingDept] = useState<DeptNode | null>(null);
+  const [staffingOpen, setStaffingOpen] = useState(false);
 
   const rows = useMemo(() => flatten(tree), [tree]);
+
+  /** 编制视图：扁平部门 + 各岗位任职/空缺汇总 */
+  const staffingRows = useMemo(() => {
+    return rows
+      .map((r) => {
+        const posts = STAFFING[r.node.name] ?? [];
+        const filled = posts.filter((p) => p.holders.length > 0).length;
+        const vacant = posts.length - filled;
+        const employees = Array.from(new Set(posts.flatMap((p) => p.holders)));
+        return { node: r.node, depth: r.depth, postCount: posts.length, filled, vacant, employees };
+      })
+      .filter((r) => r.postCount > 0);
+  }, [rows]);
 
   const columns: TreeTableColumn<DeptRow>[] = useMemo(
     () => [
@@ -175,7 +212,31 @@ export function DeptTreePage() {
         title="部门管理"
         description="组织内部门树；新增子部门默认类别为「部门」。"
         actions={
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="inline-flex rounded-md border bg-muted/40 p-0.5 text-sm">
+              <button
+                type="button"
+                onClick={() => setView('tree')}
+                className={cn(
+                  'inline-flex items-center gap-1 rounded px-2.5 py-1 font-medium',
+                  view === 'tree' ? 'bg-card text-foreground shadow-sm' : 'text-muted-foreground',
+                )}
+              >
+                <Folder className="h-3.5 w-3.5" />
+                组织架构
+              </button>
+              <button
+                type="button"
+                onClick={() => setView('staffing')}
+                className={cn(
+                  'inline-flex items-center gap-1 rounded px-2.5 py-1 font-medium',
+                  view === 'staffing' ? 'bg-card text-foreground shadow-sm' : 'text-muted-foreground',
+                )}
+              >
+                <Layers className="h-3.5 w-3.5" />
+                岗位编制
+              </button>
+            </div>
             <select
               className={cn(fieldInput, 'w-40')}
               value={orgId}
@@ -187,12 +248,14 @@ export function DeptTreePage() {
                 </option>
               ))}
             </select>
-            <PermissionGate permission="system:dept:add">
-              <Button size="sm" onClick={() => openCreate(tree[0]?.id ?? '0')}>
-                <Plus className="h-4 w-4" />
-                新增部门
-              </Button>
-            </PermissionGate>
+            {view === 'tree' ? (
+              <PermissionGate permission="system:dept:add">
+                <Button size="sm" onClick={() => openCreate(tree[0]?.id ?? '0')}>
+                  <Plus className="h-4 w-4" />
+                  新增部门
+                </Button>
+              </PermissionGate>
+            ) : null}
           </div>
         }
       />
@@ -204,6 +267,53 @@ export function DeptTreePage() {
               <div key={i} className="h-8 animate-pulse rounded bg-muted" />
             ))}
           </div>
+        ) : view === 'staffing' ? (
+          staffingRows.length === 0 ? (
+            <div className="p-10 text-center text-sm text-muted-foreground">该组织下暂无岗位编制数据</div>
+          ) : (
+            <ul className="divide-y">
+              {staffingRows.map((r) => (
+                <li key={r.node.id}>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setStaffingDept(r.node);
+                      setStaffingOpen(true);
+                    }}
+                    className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left transition hover:bg-muted/40"
+                  >
+                    <span className="flex min-w-0 items-center gap-2">
+                      <span
+                        className="inline-block w-1 self-stretch rounded bg-primary/30"
+                        style={{ marginLeft: r.depth * 12 }}
+                      />
+                      <span className="truncate font-medium">{r.node.name}</span>
+                      {r.node.code ? (
+                        <span className="font-mono text-xs text-muted-foreground">{r.node.code}</span>
+                      ) : null}
+                    </span>
+                    <span className="flex shrink-0 items-center gap-2 text-xs">
+                      <span className="rounded-md bg-muted px-2 py-0.5 text-muted-foreground">
+                        {r.postCount} 岗
+                      </span>
+                      <span className="rounded-md bg-success/10 px-2 py-0.5 text-success">
+                        已满 {r.filled}
+                      </span>
+                      <span
+                        className={cn(
+                          'rounded-md px-2 py-0.5',
+                          r.vacant > 0 ? 'bg-destructive/10 text-destructive' : 'bg-muted/50 text-muted-foreground',
+                        )}
+                      >
+                        空缺 {r.vacant}
+                      </span>
+                      <Eye className="h-3.5 w-3.5 text-muted-foreground" />
+                    </span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )
         ) : (
           <TreeTable
             rows={rows}
@@ -291,6 +401,102 @@ export function DeptTreePage() {
             </Button>
             <Button disabled={saving} onClick={() => void onSave()}>
               {saving ? '保存中…' : '保存'}
+            </Button>
+          </SheetFooter>
+        </SheetContent>
+      </Sheet>
+
+      <Sheet open={staffingOpen} onOpenChange={setStaffingOpen}>
+        <SheetContent className="flex w-full flex-col sm:max-w-lg">
+          <SheetHeader>
+            <SheetTitle>岗位编制 · {staffingDept?.name ?? ''}</SheetTitle>
+          </SheetHeader>
+          <div className="flex-1 space-y-4 overflow-auto px-5 py-4">
+            {staffingDept ? (() => {
+              const posts = STAFFING[staffingDept.name] ?? [];
+              const filled = posts.filter((p) => p.holders.length > 0).length;
+              const vacant = posts.length - filled;
+              const employees = Array.from(new Set(posts.flatMap((p) => p.holders)));
+              return (
+                <>
+                  <div className="grid grid-cols-3 gap-2">
+                    <div className="rounded-lg border bg-muted/30 p-3 text-center">
+                      <div className="text-lg font-semibold">{posts.length}</div>
+                      <div className="text-xs text-muted-foreground">岗位数</div>
+                    </div>
+                    <div className="rounded-lg border bg-success/10 p-3 text-center">
+                      <div className="text-lg font-semibold text-success">{filled}</div>
+                      <div className="text-xs text-muted-foreground">已任职</div>
+                    </div>
+                    <div className="rounded-lg border bg-destructive/10 p-3 text-center">
+                      <div className="text-lg font-semibold text-destructive">{vacant}</div>
+                      <div className="text-xs text-muted-foreground">空缺</div>
+                    </div>
+                  </div>
+
+                  <div>
+                    <h4 className="mb-2 text-sm font-semibold text-foreground">岗位任职情况</h4>
+                    <ul className="space-y-2">
+                      {posts.map((p) => (
+                        <li
+                          key={p.post}
+                          className="flex items-center justify-between gap-3 rounded-md border bg-card px-3 py-2"
+                        >
+                          <span className="min-w-0">
+                            <span className="font-medium">{p.post}</span>
+                            <span className="ml-2 rounded bg-muted px-1.5 py-0.5 text-xs text-muted-foreground">
+                              {p.type}
+                            </span>
+                          </span>
+                          {p.holders.length > 0 ? (
+                            <span className="flex flex-wrap justify-end gap-1">
+                              {p.holders.map((h) => (
+                                <span
+                                  key={h}
+                                  className="inline-flex items-center gap-1 rounded-full bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary"
+                                >
+                                  <Users className="h-3 w-3" />
+                                  {h}
+                                </span>
+                              ))}
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center rounded-full border border-dashed border-destructive/50 px-2 py-0.5 text-xs text-destructive">
+                              空缺
+                            </span>
+                          )}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+
+                  <div>
+                    <h4 className="mb-2 text-sm font-semibold text-foreground">
+                      部门任职人员（{employees.length}）
+                    </h4>
+                    {employees.length === 0 ? (
+                      <p className="text-sm text-muted-foreground">暂无任职人员</p>
+                    ) : (
+                      <div className="flex flex-wrap gap-1.5">
+                        {employees.map((e) => (
+                          <span
+                            key={e}
+                            className="inline-flex items-center gap-1 rounded-md bg-muted/60 px-2 py-0.5 text-sm"
+                          >
+                            <Users className="h-3.5 w-3.5 text-muted-foreground" />
+                            {e}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </>
+              );
+            })() : null}
+          </div>
+          <SheetFooter>
+            <Button variant="outline" onClick={() => setStaffingOpen(false)}>
+              关闭
             </Button>
           </SheetFooter>
         </SheetContent>

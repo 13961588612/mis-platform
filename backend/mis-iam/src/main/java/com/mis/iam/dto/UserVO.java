@@ -16,6 +16,8 @@ public record UserVO(
         String realName,
         String deptId,
         List<RoleVO> roles,
+        List<String> orgIds,
+        List<String> deptIds,
         Instant createdAt,
         Instant updatedAt
 ) {}

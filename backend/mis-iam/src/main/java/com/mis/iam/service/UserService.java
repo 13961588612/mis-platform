@@ -7,9 +7,13 @@ import com.mis.iam.config.IamProperties;
 import com.mis.iam.domain.entity.SysRole;
 import com.mis.iam.domain.entity.SysRolePermission;
 import com.mis.iam.domain.entity.SysUser;
+import com.mis.iam.domain.entity.SysUserDept;
+import com.mis.iam.domain.entity.SysUserOrg;
 import com.mis.iam.domain.entity.SysUserRole;
 import com.mis.iam.domain.repository.SysRolePermissionRepository;
 import com.mis.iam.domain.repository.SysRoleRepository;
+import com.mis.iam.domain.repository.SysUserDeptRepository;
+import com.mis.iam.domain.repository.SysUserOrgRepository;
 import com.mis.iam.domain.repository.SysUserRepository;
 import com.mis.iam.domain.repository.SysUserRoleRepository;
 import com.mis.iam.dto.AuthUserVO;
@@ -42,6 +46,8 @@ public class UserService {
     private final SysRoleRepository roleRepository;
     private final SysUserRoleRepository userRoleRepository;
     private final SysRolePermissionRepository rolePermissionRepository;
+    private final SysUserOrgRepository userOrgRepository;
+    private final SysUserDeptRepository userDeptRepository;
     private final PasswordEncoder passwordEncoder;
     private final OrgEmployeeClient orgEmployeeClient;
     private final RbacCacheSupport rbacCacheSupport;
@@ -52,6 +58,8 @@ public class UserService {
                        SysRoleRepository roleRepository,
                        SysUserRoleRepository userRoleRepository,
                        SysRolePermissionRepository rolePermissionRepository,
+                       SysUserOrgRepository userOrgRepository,
+                       SysUserDeptRepository userDeptRepository,
                        PasswordEncoder passwordEncoder,
                        OrgEmployeeClient orgEmployeeClient,
                        RbacCacheSupport rbacCacheSupport,
@@ -61,6 +69,8 @@ public class UserService {
         this.roleRepository = roleRepository;
         this.userRoleRepository = userRoleRepository;
         this.rolePermissionRepository = rolePermissionRepository;
+        this.userOrgRepository = userOrgRepository;
+        this.userDeptRepository = userDeptRepository;
         this.passwordEncoder = passwordEncoder;
         this.orgEmployeeClient = orgEmployeeClient;
         this.rbacCacheSupport = rbacCacheSupport;
@@ -186,7 +196,44 @@ public class UserService {
         }
         user.setUpdatedAt(Instant.now());
         userRepository.save(user);
+
+        if (request.orgIds() != null) {
+            replaceUserOrgs(user, request.orgIds());
+        }
+        if (request.deptIds() != null) {
+            replaceUserDepts(user, request.deptIds());
+        }
         return toVo(user);
+    }
+
+    private void replaceUserOrgs(SysUser user, List<Long> orgIds) {
+        userOrgRepository.deleteByUserId(user.getId());
+        Instant now = Instant.now();
+        for (int i = 0; i < orgIds.size(); i++) {
+            SysUserOrg o = new SysUserOrg();
+            o.setId(IdGenerator.nextId());
+            o.setTenantId(user.getTenantId());
+            o.setUserId(user.getId());
+            o.setOrgId(orgIds.get(i));
+            o.setIsPrimary(i == 0 ? 1 : 0);
+            o.setCreatedAt(now);
+            userOrgRepository.save(o);
+        }
+    }
+
+    private void replaceUserDepts(SysUser user, List<Long> deptIds) {
+        userDeptRepository.deleteByUserId(user.getId());
+        Instant now = Instant.now();
+        for (int i = 0; i < deptIds.size(); i++) {
+            SysUserDept d = new SysUserDept();
+            d.setId(IdGenerator.nextId());
+            d.setTenantId(user.getTenantId());
+            d.setUserId(user.getId());
+            d.setDeptId(deptIds.get(i));
+            d.setIsPrimary(i == 0 ? 1 : 0);
+            d.setCreatedAt(now);
+            userDeptRepository.save(d);
+        }
     }
 
     @Transactional
@@ -336,6 +383,12 @@ public class UserService {
         List<RoleVO> roles = roleRepository.findRolesByUserId(user.getId()).stream()
                 .map(roleService::toVo)
                 .toList();
+        List<String> orgIds = userOrgRepository.findByUserId(user.getId()).stream()
+                .map(o -> String.valueOf(o.getOrgId()))
+                .toList();
+        List<String> deptIds = userDeptRepository.findByUserId(user.getId()).stream()
+                .map(d -> String.valueOf(d.getDeptId()))
+                .toList();
         return new UserVO(
                 String.valueOf(user.getId()),
                 String.valueOf(user.getTenantId()),
@@ -349,6 +402,8 @@ public class UserService {
                 null,
                 null,
                 roles,
+                orgIds,
+                deptIds,
                 user.getCreatedAt(),
                 user.getUpdatedAt());
     }

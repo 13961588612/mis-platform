@@ -3,6 +3,7 @@ import {
   Activity,
   AppWindow,
   Boxes,
+  Check,
   ChevronDown,
   Cog,
   Eye,
@@ -74,12 +75,18 @@ function optionLabel(field: AdminField, value: unknown) {
 function detailValue(field: AdminField, value: unknown): string {
   if (field.type === 'switch') return value === 1 || value === true ? '启用' : '禁用';
   if (field.type === 'select') return optionLabel(field, value);
+  if (field.type === 'multiselect' && Array.isArray(value)) {
+    if (value.length === 0) return '—';
+    return value
+      .map((v) => optionLabel(field, v))
+      .join('、');
+  }
   if (value == null || value === '') return '—';
   return String(value);
 }
 
-/** 标签簇：首项填充色（主岗），其余描边色（兼职） */
-function TagCluster({ values }: { values: unknown[] }) {
+/** 标签簇：首项填充色（主岗），其余描边色（兼职）；flat 时全部描边 */
+function TagCluster({ values, flat = false }: { values: unknown[]; flat?: boolean }) {
   if (!values.length) return <span className="text-muted-foreground">—</span>;
   return (
     <div className="flex flex-wrap items-center gap-1">
@@ -87,7 +94,7 @@ function TagCluster({ values }: { values: unknown[] }) {
         <span
           key={i}
           className={
-            i === 0
+            !flat && i === 0
               ? 'inline-flex items-center rounded-md bg-primary/10 px-1.5 py-0.5 text-[0.75rem] font-medium text-primary'
               : 'inline-flex items-center rounded-md border border-border bg-muted/40 px-1.5 py-0.5 text-[0.75rem] text-muted-foreground'
           }
@@ -169,6 +176,53 @@ function FieldControl({
             </option>
           ))}
         </select>
+      </div>
+    );
+  }
+
+  if (field.type === 'multiselect') {
+    const current = Array.isArray(value) ? (value as (string | number)[]) : [];
+    const toggle = (v: string | number) => {
+      onChange(current.includes(v) ? current.filter((x) => x !== v) : [...current, v]);
+    };
+    return (
+      <div className="col-span-2 min-w-0 self-start">
+        {label}
+        <div className="mt-1.5 flex flex-wrap gap-1.5 rounded-md border border-input bg-card p-2">
+          {(field.options ?? []).length === 0 ? (
+            <span className="px-1 py-0.5 text-xs text-muted-foreground">暂无可选项</span>
+          ) : (
+            (field.options ?? []).map((o) => {
+              const on = current.includes(o.value);
+              const isFirst = on && current[0] === o.value;
+              return (
+                <button
+                  key={String(o.value)}
+                  type="button"
+                  onClick={() => toggle(o.value)}
+                  className={cn(
+                    'inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-xs font-medium transition',
+                    on
+                      ? isFirst
+                        ? 'border-primary bg-primary/10 text-primary'
+                        : 'border-primary/40 bg-primary/5 text-primary/80'
+                      : 'border-input text-muted-foreground hover:border-primary/40 hover:text-foreground',
+                  )}
+                  aria-pressed={on}
+                >
+                  {on ? <Check className="h-3 w-3" /> : null}
+                  {o.label}
+                  {isFirst ? <span className="ml-0.5 text-[0.65rem] opacity-70">主</span> : null}
+                </button>
+              );
+            })
+          )}
+        </div>
+        {field.hint ? (
+          <p className="mt-1 text-xs text-muted-foreground">{field.hint}</p>
+        ) : (
+          <p className="mt-1 text-xs text-muted-foreground">可多选，首个勾选为默认</p>
+        )}
       </div>
     );
   }
@@ -743,11 +797,16 @@ export function AdminListPage({ def }: { def: AdminPageDef }) {
           {sheetMode === 'view' ? (
             <div className="min-h-0 flex-1 overflow-y-auto px-5 py-2">
               <DetailDefList
-                items={def.form.map((f) => ({
-                  label: f.label,
-                  value: detailValue(f, formValues[f.key]),
-                  key: f.key,
-                }))}
+                items={[
+                  ...def.form
+                    .filter((f) => f.type !== 'multiselect')
+                    .map((f) => ({
+                      label: f.label,
+                      value: detailValue(f, formValues[f.key]),
+                      key: f.key,
+                    })),
+                  ...(def.detailExtra ? def.detailExtra(formValues) : []),
+                ]}
               />
             </div>
           ) : (
