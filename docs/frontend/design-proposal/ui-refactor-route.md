@@ -398,3 +398,58 @@ Phase D 已实施（2026-07-28）：见 §9。
 - 后端 mis-org：`SysEmployeeDept.java` + 仓库 / `Employee*VO` / `EmployeePostItem` / `EmployeeService` / `DeptStaffingService` / `DeptController` / `SysEmployeePostRepository`
 - 后端 mis-iam：`SysUserOrg.java` + `SysUserDept.java` + 仓库 / `UserVO` / `UserUpdateRequest` / `UserService`
 - 迁移：`V11__employee_multi_dept_and_user_org_dept.sql`
+
+> ⚠️ **§18.2 的 UI 方案已被本文件 §19 取代**：用户复审后，员工任职的"多选标签簇"演进为"结构化任职子表（多行）"，部门编制视图也改为从员工派生、不再依赖硬编码部门名。以下 §19 为最终落地形态。
+
+## 19. 员工任职多行子表 + 部门编制视图彻底修复（2026-07-29，取代 §18.2 UI）
+
+### 19.1 背景与取舍
+§18.2 采用 `multiselect` 胶囊 + 标签簇，把多部门多岗位挤在一行。用户要求**多行展示**（每行 = 任职部门 / 任职岗位 / 任职开始时间），并复审指出：① 部门编制视图空白；② 展开后首行多余的「任职明细」标题要去掉、表头加粗、每行加分隔线；③ 编辑时要能标「是否主职」，且表单里的「主部门 / 职位」应只读或隐藏（避免与任职记录重复维护）。
+
+结论：**放弃标签簇，改为结构化任职记录 `assignments`**，并在列表/详情/编辑三处统一消费同一个子表组件；部门编制从员工派生，彻底消除"按名匹配后端树"的空白根因。
+
+### 19.2 数据模型
+```ts
+// types.ts
+export interface Assignment {
+  dept: string;        // 任职部门
+  post: string;        // 任职岗位
+  startDate?: string;  // 任职开始时间（YYYY-MM-DD）
+  isPrimary?: boolean; // 是否主职（唯一）
+}
+```
+- `AdminField.type` 新增 `'assignments'`，配套 `deptOptions` / `postOptions`（部门 / 岗位下拉源）。
+- 员工行数据由 `depts: string[]` + `posts: string[]` 两个平行数组，收敛为单一 `assignments: Assignment[]`，开始时间也补上。
+
+### 19.3 员工列表：可展开任职子表
+- 新增「任职数」列（`assignmentCount` = `assignments.length`）。
+- 每行"任职数"按钮切换展开：下方插入子表 `<AssignmentTable>`，**多行**展示 任职部门 / 任职岗位 / 任职开始时间 / 主职。
+- 展开区**去掉**原"任职明细(N)"标题行，直接渲染子表（用户 ②.1）。
+- 子表规格（用户 ②.2）：表头 `font-bold` 加粗；每行 `border-t` 分行线；「主职」列主=蓝徽标、兼职=灰字。
+
+### 19.4 员工详情：独立任职子表
+- 详情 Sheet 过滤掉 `assignments` 表单字段，单独渲染 `<AssignmentTable>`（与列表同一组件，视觉一致）。
+- `detailExtra` 仅保留「主部门」（由主职记录派生）。
+
+### 19.5 员工编辑：逐行任职编辑器
+- 表单内「任职记录」区块用 `<AssignmentEditor>`：每行下拉选 任职部门 + 任职岗位 + 任职开始时间（date），行尾删除按钮，区块底部"添加任职"。
+- **主职标记**（用户 ③）：每行"主"按钮单选，标记唯一 `isPrimary`；新增行默认首行为主，删除主职行后自动补主（保证始终有主）。
+- **主部门 / 职位只读派生**（用户 ③）：表单**移除**「主部门(select)」「职位(text)」两个字段；列表「主部门」列、详情「主部门 / 主职位」全部由"主职任职记录"派生（`isPrimary` 否则取首行），不会与任职记录对不上。
+
+### 19.6 部门岗位编制视图：从员工派生，彻底修复空白
+- **根因（两轮迭代定位）**：旧实现用 `STAFFING[部门名]` 匹配**实时后端部门树**名称，只显示"树里有且 mock 也有"的部门；后端树为空或改名时整页空白，点开也是空。
+- **最终修复**：`staffingRows` 直接由 `Object.keys(STAFFING)`（派生自 `EMPLOYEE_ASSIGNMENTS` 的部门键）生成，**完全不依赖后端树名**——凡是有员工任职的部门一定出现，点开 Sheet 按同源 `staffingDept.name` 取 `STAFFING`（必中）。
+- 编制模式：每行 `X岗 / 已满Y / 空缺Z` 汇总 chips，点击打开 Sheet：三卡（岗位数 / 已任职 / 空缺）+ 「岗位任职情况」列表（岗位名 + 任职人胶囊或「空缺」虚线徽标）+ 「部门任职人员」去重胶囊。
+- 空缺语义：有岗位定义但暂无任职人；当前派生数据暂无空缺示例，后端真实接口返回空缺时正常显示。
+
+### 19.7 与后端契约
+- 前端员工页 / 部门编制页当前仍跑 **mock**（`page-defs.sample` + `EMPLOYEE_ASSIGNMENTS`）。
+- 接真实接口后：员工 `EmployeeVO.posts/deptIds`（§18.4）结构正确无需改；部门编制消费 `GET /internal/v1/depts/{id}/staffing` 返回的 `DeptStaffingVO`（§18.4），前端无需再改即可消费。
+
+### 19.8 验收
+- 前端 `npm run typecheck` 0 错误。
+- 对应提交：`1dea481`（多行子表 + 编制按员工派生修复）、`184d5e7`（编制彻底修复 + 子表去标题/加粗/主职标记 + 主部门职位只读派生），均已推送 origin/master。
+- 后端 Java 改动（§18.4 / §18.5）仍需 JDK17 起服后编译验证；`EmployeeService.toVo` 的 N+1 列表聚合待数据量大时批量优化。
+
+文件改动（第四、五轮累计）：
+- 前端：`types.ts`（Assignment / assignments field / isPrimary）/ `admin-list-page.tsx`（AssignmentEditor + AssignmentTable + 列表展开 + 详情子表）/ `page-defs.ts`（assignments 字段 + 派生 decorate/detailExtra + sample）/ `dept-tree-page.tsx`（STAFFING 派生编制 + 移除按名匹配）/ `detail-def-list.tsx`（string[] 标签簇原生渲染，保留复用）。
