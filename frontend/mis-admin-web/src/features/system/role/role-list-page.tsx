@@ -24,7 +24,8 @@ import {
   updateRole,
 } from '@/lib/api/roles';
 import { fetchMenuTree } from '@/lib/api/menus';
-import type { MenuNode, RoleItem } from '@/types/api';
+import { fetchApps } from '@/lib/api/platform';
+import type { AppItem, MenuNode, RoleItem } from '@/types/api';
 
 const DATA_SCOPE: Record<number, string> = {
   1: '全部数据',
@@ -151,6 +152,8 @@ export function RoleListPage() {
   const [rows, setRows] = useState<RoleItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [menus, setMenus] = useState<MenuNode[]>([]);
+  const [apps, setApps] = useState<AppItem[]>([]);
+  const [menuAppId, setMenuAppId] = useState<string>('');
   const [open, setOpen] = useState(false);
   const [mode, setMode] = useState<'edit' | 'menus' | 'detail'>('edit');
   const [editing, setEditing] = useState<RoleItem | null>(null);
@@ -159,6 +162,7 @@ export function RoleListPage() {
   const [form, setForm] = useState({
     code: '',
     name: '',
+    appId: '',
     dataScope: 1,
     remark: '',
     status: 1,
@@ -195,9 +199,14 @@ export function RoleListPage() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [page, tree] = await Promise.all([pageRoles(1, 100), fetchMenuTree()]);
+      const [page, tree, appList] = await Promise.all([
+        pageRoles(1, 100),
+        fetchMenuTree(),
+        fetchApps(),
+      ]);
       setRows(page.list ?? []);
       setMenus(tree);
+      setApps(appList);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : '加载失败');
     } finally {
@@ -213,7 +222,7 @@ export function RoleListPage() {
     setEditing(null);
     setViewing(null);
     setMode('edit');
-    setForm({ code: '', name: '', dataScope: 1, remark: '', status: 1, menuIds: [] });
+    setForm({ code: '', name: '', appId: '', dataScope: 1, remark: '', status: 1, menuIds: [] });
     setOpen(true);
   }
 
@@ -231,6 +240,7 @@ export function RoleListPage() {
     setForm({
       code: row.code,
       name: row.name,
+      appId: row.appId ?? '',
       dataScope: row.dataScope ?? 1,
       remark: row.remark ?? '',
       status: row.status,
@@ -242,12 +252,27 @@ export function RoleListPage() {
   async function openMenus(row: RoleItem) {
     setEditing(row);
     setMode('menus');
+    setMenuAppId(row.appId ?? '');
     try {
-      const ids = await listRoleMenus(row.id);
+      const [ids, tree] = await Promise.all([
+        listRoleMenus(row.id),
+        fetchMenuTree(row.appId || undefined),
+      ]);
+      setMenus(tree);
       setForm((f) => ({ ...f, menuIds: ids.map(String) }));
       setOpen(true);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : '加载角色菜单失败');
+    }
+  }
+
+  async function reloadMenus(appId: string) {
+    setMenuAppId(appId);
+    try {
+      const tree = await fetchMenuTree(appId || undefined);
+      setMenus(tree);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : '加载菜单树失败');
     }
   }
 
@@ -260,6 +285,7 @@ export function RoleListPage() {
       } else if (editing) {
         await updateRole(editing.id, {
           name: form.name.trim(),
+          appId: form.appId || undefined,
           dataScope: form.dataScope,
           status: form.status,
           remark: form.remark.trim() || undefined,
@@ -273,6 +299,7 @@ export function RoleListPage() {
         await createRole({
           code: form.code.trim(),
           name: form.name.trim(),
+          appId: form.appId || undefined,
           dataScope: form.dataScope,
           remark: form.remark.trim() || undefined,
         });
@@ -317,6 +344,7 @@ export function RoleListPage() {
           <thead className="sticky top-0 border-b bg-muted/40 text-muted-foreground">
             <tr>
               <th className="px-3 py-2 font-bold">名称</th>
+              <th className="px-3 py-2 font-bold">所属应用</th>
               <th className="px-3 py-2 font-bold">编码</th>
               <th className="px-3 py-2 font-bold">数据范围</th>
               <th className="px-3 py-2 font-bold">状态</th>
@@ -326,7 +354,7 @@ export function RoleListPage() {
           <tbody>
             {loading ? (
               <tr>
-                <td colSpan={5} className="px-3 py-10 text-center text-muted-foreground">
+                <td colSpan={6} className="px-3 py-10 text-center text-muted-foreground">
                   加载中…
                 </td>
               </tr>
@@ -334,7 +362,8 @@ export function RoleListPage() {
               rows.map((row) => (
                 <tr key={row.id} className="border-b last:border-0 hover:bg-muted/30">
                   <td className="px-3 py-2 font-medium">{row.name}</td>
-                  <td className="px-3 py-2 font-mono text-xs">{row.code}</td>
+                <td className="px-3 py-2">{apps.find((a) => a.id === row.appId)?.name ?? '—'}</td>
+                <td className="px-3 py-2 font-mono text-xs">{row.code}</td>
                   <td className="px-3 py-2">{DATA_SCOPE[row.dataScope] ?? row.dataScope}</td>
                   <td className="px-3 py-2">
                     <StatusBadge tone={row.status === 1 ? 'success' : 'destructive'} text={row.status === 1 ? '启用' : '禁用'} />
@@ -418,6 +447,21 @@ export function RoleListPage() {
                   </div>
                 ) : null}
                 <div>
+                  <label className={fieldLabel}>所属应用</label>
+                  <select
+                    className={fieldInput}
+                    value={form.appId}
+                    onChange={(e) => setForm((f) => ({ ...f, appId: e.target.value }))}
+                  >
+                    <option value="">请选择</option>
+                    {apps.map((a) => (
+                      <option key={a.id} value={a.id}>
+                        {a.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
                   <label className={fieldLabel}>名称 *</label>
                   <Input
                     value={form.name}
@@ -475,11 +519,28 @@ export function RoleListPage() {
                 </div>
               </>
             ) : (
-              <MenuTree
-                nodes={menus}
-                checkedIds={new Set(form.menuIds)}
-                onToggle={toggleMenus}
-              />
+              <>
+                <div>
+                  <label className={fieldLabel}>菜单所属应用</label>
+                  <select
+                    className={fieldInput}
+                    value={menuAppId}
+                    onChange={(e) => void reloadMenus(e.target.value)}
+                  >
+                    <option value="">全部应用</option>
+                    {apps.map((a) => (
+                      <option key={a.id} value={a.id}>
+                        {a.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <MenuTree
+                  nodes={menus}
+                  checkedIds={new Set(form.menuIds)}
+                  onToggle={toggleMenus}
+                />
+              </>
             )}
           </div>
           <SheetFooter>

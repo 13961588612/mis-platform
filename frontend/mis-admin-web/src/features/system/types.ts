@@ -20,6 +20,8 @@ export interface AdminColumn {
   label: string;
   /** 渲染为状态徽标（读 status + statusText） */
   status?: boolean;
+  /** 渲染为标签簇：值为 string[] 时，首项填充色、其余描边色 */
+  tags?: boolean;
 }
 
 export interface AdminPageDef {

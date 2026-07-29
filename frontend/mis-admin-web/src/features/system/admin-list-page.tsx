@@ -78,6 +78,27 @@ function detailValue(field: AdminField, value: unknown): string {
   return String(value);
 }
 
+/** 标签簇：首项填充色（主岗），其余描边色（兼职） */
+function TagCluster({ values }: { values: unknown[] }) {
+  if (!values.length) return <span className="text-muted-foreground">—</span>;
+  return (
+    <div className="flex flex-wrap items-center gap-1">
+      {values.map((v, i) => (
+        <span
+          key={i}
+          className={
+            i === 0
+              ? 'inline-flex items-center rounded-md bg-primary/10 px-1.5 py-0.5 text-[0.75rem] font-medium text-primary'
+              : 'inline-flex items-center rounded-md border border-border bg-muted/40 px-1.5 py-0.5 text-[0.75rem] text-muted-foreground'
+          }
+        >
+          {String(v)}
+        </span>
+      ))}
+    </div>
+  );
+}
+
 /** 对齐门户 sa-app：field-label .875rem/500；input .875rem + padding .55/.7 */
 const fieldLabelClass = 'mb-[0.4rem] block text-sm font-medium text-foreground';
 const fieldInputClass =
@@ -589,6 +610,8 @@ export function AdminListPage({ def }: { def: AdminPageDef }) {
                               text={String(row[c.key] ?? '—')}
                               tone={statusTone(row.status)}
                             />
+                          ) : c.tags ? (
+                            <TagCluster values={Array.isArray(row[c.key]) ? (row[c.key] as unknown[]) : []} />
                           ) : (
                             (row[c.key] == null || row[c.key] === '' ? '—' : String(row[c.key]))
                           )}

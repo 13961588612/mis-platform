@@ -309,3 +309,30 @@ Phase D 已实施（2026-07-28）：见 §9。
 - Sheet 改为 `flex w-full flex-col` 布局 + `flex-1 overflow-auto` 内容区。
 
 验收：前端 `npm run typecheck` 0 错误（6 个文件改动：admin-list-page / org-list-page / dept-tree-page / user-list-page / role-list-page / dict-manage-page）。全部系统管理页面的详情视图统一使用 DetailDefList，层级数据统一使用 TreeTable，操作按钮统一为文字+图标风格。
+
+## 16. 员工/部门/角色/用户 四项交互补全（2026-07-29）
+
+针对系统管理四个高频页面的交互缺口做补全，均通过 `npm run typecheck` 0 错误验收。
+
+### 16.1 员工管理：多岗位标签簇（一眼可见任职岗位）
+- 通用引擎 `AdminColumn` 新增 `tags?: boolean` 渲染模式：值为 `string[]` 时渲染为标签簇，首项填充色（主岗）、其余描边色（兼职）。
+- `admin-list-page` 表格单元格新增 `c.tags` 分支 + `TagCluster` 组件（`flex-wrap` 自动换行）。
+- `page-defs` 员工定义新增「任职岗位」列（`tags: true`），样例数据为每个员工补 `posts` 数组（如王磊：`['研发总监','架构师','技术委员会']`）。
+- 表格列即满足"一眼看出在哪些岗位任职"；详情 Sheet 仍由 DetailDefList 展示原字段。
+
+### 16.2 部门管理：行内操作 hover 显隐
+- 已确认 `TreeTable` 组件天然支持：`rowActions` 包裹于 `opacity-0 group-hover:opacity-100`，`<tr>` 带 `group` 类。编辑/删除/子部门按钮默认隐藏，鼠标移入整行即显隐。无需改动。
+
+### 16.3 角色管理：应用 + 菜单权限闭环
+- `RoleItem.appId` 已存在，补齐前端闭环：`load()` 并行拉取 `fetchApps()`。
+- 表格新增「所属应用」列（`apps.find(a => a.id === row.appId)?.name`）。
+- 编辑表单新增「所属应用」下拉（`createRole` / `updateRole` body 扩展 `appId`）。
+- 菜单权限 Sheet 顶部新增「菜单所属应用」下拉，切换时 `reloadMenus(appId)` 重载对应应用菜单树（默认取角色 `appId`）。保存仍走 `assignRoleMenus`。
+
+### 16.4 用户管理：统一"权限"模式（组织 / 部门 / 角色）
+- 原仅角色的 `openRoles` 升级为统一 `openPerms`（mode `'perms'`），Sheet 内一次性设置 组织 + 部门 + 角色。
+- 权限 Sheet 内独立的「组织 → 部门」联动：选组织后 `loadPermsDepts(orgId)` 拉取该组织部门树（`permsFlatDepts`），与左侧页面级部门树解耦。
+- `updateUser` 扩展 `orgId` / `deptId`；保存时先 `updateUser` 再 `assignUserRoles`。
+- 列表新增「组织」列（colSpan 8→9）；表格操作按钮"分配角色"改为"权限"（图标不变）。
+
+文件改动：`types.ts` / `admin-list-page.tsx` / `page-defs.ts`（员工 posts）/ `role-list-page.tsx` / `roles.ts` / `user-list-page.tsx` / `users.ts`。

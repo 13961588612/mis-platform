@@ -56,7 +56,7 @@ const fieldLabel = 'mb-[0.4rem] block text-sm font-medium text-foreground';
 const fieldInput =
   'h-auto min-h-9 w-full rounded-md border border-input bg-card px-[0.7rem] py-[0.55rem] text-sm text-foreground';
 
-type FormMode = 'create' | 'edit' | 'roles' | 'detail';
+type FormMode = 'create' | 'edit' | 'perms' | 'detail';
 
 function flattenDepts(nodes: DeptNode[], depth = 0): { node: DeptNode; depth: number }[] {
   const out: { node: DeptNode; depth: number }[] = [];
@@ -118,9 +118,27 @@ export function UserListPage() {
     email: '',
     phone: '',
     password: '',
+    orgId: '',
     deptId: '',
     roleIds: [] as string[],
   });
+
+  // 权限 Sheet 内独立的「组织 → 部门」联动（与左侧页面级部门树解耦）
+  const [permsDeptTree, setPermsDeptTree] = useState<DeptNode[]>([]);
+  const permsFlatDepts = useMemo(() => flattenDepts(permsDeptTree), [permsDeptTree]);
+
+  const loadPermsDepts = useCallback(async (o: string) => {
+    if (!o) {
+      setPermsDeptTree([]);
+      return;
+    }
+    try {
+      const tree = await fetchDeptTree(o);
+      setPermsDeptTree(tree);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : '加载部门树失败');
+    }
+  }, []);
 
   const size = 20;
   const flatDepts = useMemo(() => flattenDepts(deptTree), [deptTree]);
@@ -250,6 +268,7 @@ export function UserListPage() {
       email: '',
       phone: '',
       password: '',
+      orgId: '',
       deptId: deptId ?? '',
       roleIds: [],
     });
@@ -266,16 +285,24 @@ export function UserListPage() {
       email: row.email ?? '',
       phone: row.phone ?? '',
       password: '',
+      orgId: '',
       deptId: row.deptId ?? '',
       roleIds: row.roles?.map((r) => r.id) ?? [],
     });
     setSheetOpen(true);
   }
 
-  function openRoles(row: UserView) {
-    setMode('roles');
+  function openPerms(row: UserView) {
+    setMode('perms');
     setEditing(row);
-    setForm((f) => ({ ...f, roleIds: row.roles?.map((r) => r.id) ?? [] }));
+    const o = row.orgId ?? orgId;
+    setForm((f) => ({
+      ...f,
+      orgId: o,
+      deptId: row.deptId ?? '',
+      roleIds: row.roles?.map((r) => r.id) ?? [],
+    }));
+    void loadPermsDepts(o);
     setSheetOpen(true);
   }
 
@@ -319,9 +346,17 @@ export function UserListPage() {
           phone: form.phone.trim() || undefined,
         });
         toast.success('已更新用户');
-      } else if (mode === 'roles' && editing) {
+      } else if (mode === 'perms' && editing) {
+        await updateUser(editing.id, {
+          username: editing.username,
+          realName: editing.realName ?? undefined,
+          email: editing.email ?? undefined,
+          phone: editing.phone ?? undefined,
+          orgId: form.orgId || undefined,
+          deptId: form.deptId || undefined,
+        });
         await assignUserRoles(editing.id, form.roleIds.map(Number));
-        toast.success('已分配角色');
+        toast.success('已保存权限');
       }
       setSheetOpen(false);
       await loadUsers();
@@ -503,6 +538,7 @@ export function UserListPage() {
                     <th className="px-3 py-2 font-bold">用户名</th>
                     <th className="px-3 py-2 font-bold">姓名</th>
                     <th className="px-3 py-2 font-bold">部门</th>
+                    <th className="px-3 py-2 font-bold">组织</th>
                     <th className="px-3 py-2 font-bold">手机</th>
                     <th className="px-3 py-2 font-bold">状态</th>
                     <th className="px-3 py-2 font-bold">创建时间</th>
@@ -512,16 +548,16 @@ export function UserListPage() {
                 <tbody>
                   {loading ? (
                     <tr>
-                      <td colSpan={8} className="px-3 py-10 text-center text-muted-foreground">
-                        加载中…
-                      </td>
+                <td colSpan={9} className="px-3 py-10 text-center text-muted-foreground">
+                  加载中…
+                </td>
                     </tr>
                   ) : rows.length === 0 ? (
-                    <tr>
-                      <td colSpan={8} className="px-3 py-10 text-center text-muted-foreground">
-                        暂无数据
-                      </td>
-                    </tr>
+                <tr>
+                  <td colSpan={9} className="px-3 py-10 text-center text-muted-foreground">
+                    暂无数据
+                  </td>
+                </tr>
                   ) : (
                     rows.map((row) => (
                       <tr key={row.id} className="border-b last:border-0 hover:bg-muted/30">
@@ -534,6 +570,7 @@ export function UserListPage() {
                         </td>
                         <td className="px-3 py-2">{row.realName ?? '—'}</td>
                         <td className="px-3 py-2">{row.deptName ?? '—'}</td>
+                        <td className="px-3 py-2">{row.orgName ?? '—'}</td>
                         <td className="px-3 py-2">{row.phone ?? '—'}</td>
                         <td className="px-3 py-2">
                           <StatusBadge tone={statusTone(row.status)} text={statusLabel(row.status)} />
@@ -560,7 +597,7 @@ export function UserListPage() {
                               </IconBtn>
                             </PermissionGate>
                             <PermissionGate permission="system:user:assignRole">
-                              <IconBtn title="分配角色" onClick={() => openRoles(row)}>
+                              <IconBtn title="权限" onClick={() => openPerms(row)}>
                                 <Shield className="h-3.5 w-3.5" />
                               </IconBtn>
                             </PermissionGate>
@@ -608,8 +645,8 @@ export function UserListPage() {
                   ? '新增用户'
                   : mode === 'edit'
                     ? '编辑用户'
-                    : mode === 'roles'
-                      ? '分配角色'
+                    : mode === 'perms'
+                      ? '用户权限'
                       : '用户详情'}
               </SheetTitle>
             </SheetHeader>
@@ -631,11 +668,70 @@ export function UserListPage() {
             <div className="flex-1 space-y-3 overflow-auto py-4">
               {mode === 'detail' && viewing ? (
                 <UserDetail viewing={viewing} onAiRag={() => setAiRagOpen(true)} />
+              ) : mode === 'perms' ? (
+                <>
+                  <Field label="组织">
+                    <select
+                      className={fieldInput}
+                      value={form.orgId}
+                      onChange={(e) => {
+                        const v = e.target.value;
+                        setForm((f) => ({ ...f, orgId: v, deptId: '' }));
+                        void loadPermsDepts(v);
+                      }}
+                    >
+                      <option value="">请选择</option>
+                      {orgs.map((o) => (
+                        <option key={o.id} value={o.id}>
+                          {o.name}
+                        </option>
+                      ))}
+                    </select>
+                  </Field>
+                  <Field label="部门">
+                    <select
+                      className={fieldInput}
+                      value={form.deptId}
+                      onChange={(e) => setForm((f) => ({ ...f, deptId: e.target.value }))}
+                    >
+                      <option value="">请选择</option>
+                      {permsFlatDepts.map(({ node, depth }) => (
+                        <option key={node.id} value={node.id}>
+                          {'　'.repeat(depth)}
+                          {node.name}
+                        </option>
+                      ))}
+                    </select>
+                  </Field>
+                  <Field label="角色">
+                    <div className="max-h-48 space-y-1 overflow-auto rounded-md border p-2">
+                      {roles.map((r) => {
+                        const checked = form.roleIds.includes(r.id);
+                        return (
+                          <label key={r.id} className="flex cursor-pointer items-center gap-2 text-sm">
+                            <input
+                              type="checkbox"
+                              checked={checked}
+                              onChange={() =>
+                                setForm((f) => ({
+                                  ...f,
+                                  roleIds: checked
+                                    ? f.roleIds.filter((id) => id !== r.id)
+                                    : [...f.roleIds, r.id],
+                                }))
+                              }
+                            />
+                            {r.name}
+                            <span className="text-xs text-muted-foreground">({r.code})</span>
+                          </label>
+                        );
+                      })}
+                    </div>
+                  </Field>
+                </>
               ) : (
                 <>
-                  {mode !== 'roles' ? (
-                    <>
-                      <Field label="用户名" required>
+                  <Field label="用户名" required>
                         <Input
                           value={form.username}
                           disabled={mode === 'edit'}
@@ -693,10 +789,7 @@ export function UserListPage() {
                           onChange={(e) => setForm((f) => ({ ...f, phone: e.target.value }))}
                         />
                       </Field>
-                    </>
-                  ) : null}
-
-                  {(mode === 'create' || mode === 'roles') && (
+                  {(mode === 'create') && (
                     <Field label="角色">
                       <div className="max-h-48 space-y-1 overflow-auto rounded-md border p-2">
                         {roles.map((r) => {

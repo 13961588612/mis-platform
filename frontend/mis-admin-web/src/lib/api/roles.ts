@@ -21,6 +21,7 @@ export async function listEnabledRoles(): Promise<RoleItem[]> {
 export async function createRole(body: {
   code: string;
   name: string;
+  appId?: string;
   dataScope?: number;
   remark?: string;
 }): Promise<RoleItem> {
@@ -30,7 +31,7 @@ export async function createRole(body: {
 
 export async function updateRole(
   id: string,
-  body: { name: string; dataScope?: number; status?: number; remark?: string },
+  body: { name: string; appId?: string; dataScope?: number; status?: number; remark?: string },
 ): Promise<RoleItem> {
   const res = await api.put<ApiResult<RoleItem>>(`/roles/${id}`, body);
   return unwrap(res, '更新角色失败');

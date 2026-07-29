@@ -42,7 +42,15 @@ export async function createUser(body: {
 
 export async function updateUser(
   id: string,
-  body: { username: string; realName?: string; email?: string; phone?: string; status?: number },
+  body: {
+    username: string;
+    realName?: string;
+    email?: string;
+    phone?: string;
+    status?: number;
+    orgId?: string;
+    deptId?: string | number;
+  },
 ): Promise<UserView> {
   const res = await api.put<ApiResult<UserView>>(`/users/${id}`, body);
   return unwrap(res, '更新用户失败');

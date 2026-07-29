@@ -285,10 +285,10 @@
 - `MenuManagePage`（基础信息 → `DetailDefList`）
 - `ModuleManagePage`（基础信息 → `DetailDefList`；接口列表 → `TreeTable`）
 - `DeptTreePage`（部门树表 → `TreeTable`，全展开模式，Folder 图标区分分支/叶子）
-- `UserListPage`（用户详情 → `DetailDefList`）
-- `RoleListPage`（角色详情 → `DetailDefList`）
+- `UserListPage`（用户详情 → `DetailDefList`；权限 Sheet → 组织/部门/角色联动设置）
+- `RoleListPage`（角色详情 → `DetailDefList`；编辑表单/表格「所属应用」列 + 菜单权限按应用筛选）
 - `OrgListPage`（组织详情 → `DetailDefList`）
-- `AdminListPage`（通用引擎 Sheet 详情 → `DetailDefList`；影响员工/岗位/系统参数/登录日志/操作日志等）
+- `AdminListPage`（通用引擎 Sheet 详情 → `DetailDefList`；员工多岗位 `tags` 渲染模式；影响员工/岗位/系统参数/登录日志/操作日志等）
 
 ---
 
