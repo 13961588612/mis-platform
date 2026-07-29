@@ -1,8 +1,15 @@
-export type FieldType = 'text' | 'number' | 'select' | 'multiselect' | 'textarea' | 'switch';
+export type FieldType = 'text' | 'number' | 'select' | 'multiselect' | 'assignments' | 'textarea' | 'switch';
 
 export interface FieldOption {
   label: string;
   value: string | number;
+}
+
+/** 任职记录：一行 = 任职部门 + 任职岗位 + 任职开始时间 */
+export interface Assignment {
+  dept: string;
+  post: string;
+  startDate?: string;
 }
 
 export interface AdminField {
@@ -15,6 +22,9 @@ export interface AdminField {
   options?: FieldOption[];
   /** multiselect 专用：提示文案（如「首个为默认」） */
   hint?: string;
+  /** assignments 专用：可选项（部门 / 岗位），用于行内下拉 */
+  deptOptions?: FieldOption[];
+  postOptions?: FieldOption[];
 }
 
 export interface AdminColumn {

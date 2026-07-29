@@ -22,26 +22,60 @@ import type { DeptNode, OrgItem } from '@/types/api';
 /** 种子数据：部门类别 id=3（部门） */
 const DEFAULT_CATEGORY_ID = 3;
 
-/** 岗位编制 mock：key = 部门名；holders 为空即岗位空缺 */
-type PostStaffing = { post: string; type: string; holders: string[] };
-const STAFFING: Record<string, PostStaffing[]> = {
-  总经理办公室: [
-    { post: '总经理', type: '管理', holders: ['李文博'] },
-    { post: '大区总', type: '管理', holders: ['孙强'] },
-    { post: '行政专员', type: '职能', holders: [] },
-  ],
-  研发中心: [
-    { post: '研发部经理', type: '技术', holders: ['王磊'] },
-    { post: '架构师', type: '技术', holders: ['王磊'] },
-    { post: '测试工程师', type: '技术', holders: [] },
-  ],
-  财务部: [
-    { post: '财务主管', type: '财务', holders: ['赵敏'] },
-    { post: '出纳', type: '财务', holders: [] },
-  ],
-  市场部: [{ post: '市场经理', type: '市场', holders: [] }],
-  人力资源部: [{ post: 'HRBP', type: '职能', holders: [] }],
-};
+/**
+ * 岗位编制：从「员工任职记录」派生，而非硬编码部门名匹配。
+ * 这样无论部门树来自 mock 还是真实接口，只要有员工任职，编制视图就有数据。
+ */
+type PostStaffing = { post: string; holders: string[] };
+type DeptStaffing = { posts: PostStaffing[]; employees: string[] };
+
+/** 员工任职样例（与员工页保持一致，用于派生部门编制） */
+const EMPLOYEE_ASSIGNMENTS: { name: string; assignments: { dept: string; post: string }[] }[] = [
+  { name: '李文博', assignments: [{ dept: '总经理办公室', post: '总经理' }] },
+  {
+    name: '王磊',
+    assignments: [
+      { dept: '研发中心', post: '研发总监' },
+      { dept: '研发中心', post: '架构师' },
+      { dept: '市场部', post: '技术委员会' },
+    ],
+  },
+  {
+    name: '赵敏',
+    assignments: [
+      { dept: '财务部', post: '财务经理' },
+      { dept: '人力资源部', post: '内审委员' },
+    ],
+  },
+  {
+    name: '孙强',
+    assignments: [
+      { dept: '总经理办公室', post: '大区总' },
+      { dept: '市场部', post: '大区总' },
+      { dept: '人力资源部', post: '大区总' },
+    ],
+  },
+];
+
+/** 由员工任职派生：部门名 -> 岗位 -> 任职人 */
+function deriveStaffing(): Record<string, DeptStaffing> {
+  const map: Record<string, DeptStaffing> = {};
+  for (const emp of EMPLOYEE_ASSIGNMENTS) {
+    for (const a of emp.assignments) {
+      const d = (map[a.dept] ??= { posts: [], employees: [] });
+      let p = d.posts.find((x) => x.post === a.post);
+      if (!p) {
+        p = { post: a.post, holders: [] };
+        d.posts.push(p);
+      }
+      if (!p.holders.includes(emp.name)) p.holders.push(emp.name);
+      if (!d.employees.includes(emp.name)) d.employees.push(emp.name);
+    }
+  }
+  return map;
+}
+
+const STAFFING = deriveStaffing();
 
 const fieldLabel = 'mb-[0.4rem] block text-sm font-medium text-foreground';
 const fieldInput =
@@ -78,10 +112,11 @@ export function DeptTreePage() {
   const staffingRows = useMemo(() => {
     return rows
       .map((r) => {
-        const posts = STAFFING[r.node.name] ?? [];
+        const info = STAFFING[r.node.name];
+        const posts = info?.posts ?? [];
         const filled = posts.filter((p) => p.holders.length > 0).length;
         const vacant = posts.length - filled;
-        const employees = Array.from(new Set(posts.flatMap((p) => p.holders)));
+        const employees = info?.employees ?? [];
         return { node: r.node, depth: r.depth, postCount: posts.length, filled, vacant, employees };
       })
       .filter((r) => r.postCount > 0);
@@ -413,10 +448,11 @@ export function DeptTreePage() {
           </SheetHeader>
           <div className="flex-1 space-y-4 overflow-auto px-5 py-4">
             {staffingDept ? (() => {
-              const posts = STAFFING[staffingDept.name] ?? [];
+              const info = STAFFING[staffingDept.name];
+              const posts = info?.posts ?? [];
               const filled = posts.filter((p) => p.holders.length > 0).length;
               const vacant = posts.length - filled;
-              const employees = Array.from(new Set(posts.flatMap((p) => p.holders)));
+              const employees = info?.employees ?? [];
               return (
                 <>
                   <div className="grid grid-cols-3 gap-2">
@@ -436,38 +472,37 @@ export function DeptTreePage() {
 
                   <div>
                     <h4 className="mb-2 text-sm font-semibold text-foreground">岗位任职情况</h4>
-                    <ul className="space-y-2">
-                      {posts.map((p) => (
-                        <li
-                          key={p.post}
-                          className="flex items-center justify-between gap-3 rounded-md border bg-card px-3 py-2"
-                        >
-                          <span className="min-w-0">
-                            <span className="font-medium">{p.post}</span>
-                            <span className="ml-2 rounded bg-muted px-1.5 py-0.5 text-xs text-muted-foreground">
-                              {p.type}
-                            </span>
-                          </span>
-                          {p.holders.length > 0 ? (
-                            <span className="flex flex-wrap justify-end gap-1">
-                              {p.holders.map((h) => (
-                                <span
-                                  key={h}
-                                  className="inline-flex items-center gap-1 rounded-full bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary"
-                                >
-                                  <Users className="h-3 w-3" />
-                                  {h}
-                                </span>
-                              ))}
-                            </span>
-                          ) : (
-                            <span className="inline-flex items-center rounded-full border border-dashed border-destructive/50 px-2 py-0.5 text-xs text-destructive">
-                              空缺
-                            </span>
-                          )}
-                        </li>
-                      ))}
-                    </ul>
+                    {posts.length === 0 ? (
+                      <p className="text-sm text-muted-foreground">该部门暂无岗位编制数据</p>
+                    ) : (
+                      <ul className="space-y-2">
+                        {posts.map((p) => (
+                          <li
+                            key={p.post}
+                            className="flex items-center justify-between gap-3 rounded-md border bg-card px-3 py-2"
+                          >
+                            <span className="min-w-0 font-medium">{p.post}</span>
+                            {p.holders.length > 0 ? (
+                              <span className="flex flex-wrap justify-end gap-1">
+                                {p.holders.map((h) => (
+                                  <span
+                                    key={h}
+                                    className="inline-flex items-center gap-1 rounded-full bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary"
+                                  >
+                                    <Users className="h-3 w-3" />
+                                    {h}
+                                  </span>
+                                ))}
+                              </span>
+                            ) : (
+                              <span className="inline-flex items-center rounded-full border border-dashed border-destructive/50 px-2 py-0.5 text-xs text-destructive">
+                                空缺
+                              </span>
+                            )}
+                          </li>
+                        ))}
+                      </ul>
+                    )}
                   </div>
 
                   <div>

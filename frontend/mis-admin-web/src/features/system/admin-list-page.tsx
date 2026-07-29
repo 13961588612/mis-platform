@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import type { Assignment } from './types';
 import {
   Activity,
   AppWindow,
@@ -85,6 +86,13 @@ function detailValue(field: AdminField, value: unknown): string {
   return String(value);
 }
 
+/** 从行中取任职记录数组（容错：无则空数组） */
+function getAssignments(row: Record<string, unknown>): Assignment[] {
+  const v = row.assignments;
+  if (Array.isArray(v)) return v as Assignment[];
+  return [];
+}
+
 /** 标签簇：首项填充色（主岗），其余描边色（兼职）；flat 时全部描边 */
 function TagCluster({ values, flat = false }: { values: unknown[]; flat?: boolean }) {
   if (!values.length) return <span className="text-muted-foreground">—</span>;
@@ -103,6 +111,136 @@ function TagCluster({ values, flat = false }: { values: unknown[]; flat?: boolea
         </span>
       ))}
     </div>
+  );
+}
+
+/** 任职记录编辑器：可增删行，每行 = 任职部门 + 任职岗位 + 任职开始时间 */
+function AssignmentEditor({
+  value,
+  onChange,
+  deptOptions = [],
+  postOptions = [],
+}: {
+  value: unknown;
+  onChange: (v: unknown) => void;
+  deptOptions?: { label: string; value: string | number }[];
+  postOptions?: { label: string; value: string | number }[];
+}) {
+  const list: Assignment[] = Array.isArray(value) ? (value as Assignment[]) : [];
+  const update = (next: Assignment[]) => onChange(next);
+  const setAt = (i: number, patch: Partial<Assignment>) =>
+    update(list.map((a, idx) => (idx === i ? { ...a, ...patch } : a)));
+  const removeAt = (i: number) => update(list.filter((_, idx) => idx !== i));
+  const addOne = () => update([...list, { dept: '', post: '', startDate: '' }]);
+
+  return (
+    <div className="col-span-2 min-w-0 self-start">
+      <div className="overflow-hidden rounded-md border border-input">
+        <table className="w-full border-collapse text-sm">
+          <thead className="bg-muted/50 text-left text-xs text-muted-foreground">
+            <tr>
+              <th className="px-2.5 py-1.5 font-medium">任职部门</th>
+              <th className="px-2.5 py-1.5 font-medium">任职岗位</th>
+              <th className="px-2.5 py-1.5 font-medium">任职开始时间</th>
+              <th className="w-12 px-2.5 py-1.5" />
+            </tr>
+          </thead>
+          <tbody>
+            {list.length === 0 ? (
+              <tr>
+                <td colSpan={4} className="px-2.5 py-3 text-center text-xs text-muted-foreground">
+                  暂无任职记录，点击下方按钮添加
+                </td>
+              </tr>
+            ) : (
+              list.map((a, i) => (
+                <tr key={i} className="border-t last:border-0">
+                  <td className="px-2 py-1.5">
+                    <select
+                      className="h-8 w-full rounded-md border border-input bg-card px-2 text-sm"
+                      value={a.dept ?? ''}
+                      onChange={(e) => setAt(i, { dept: e.target.value })}
+                    >
+                      <option value="">请选择</option>
+                      {deptOptions.map((o) => (
+                        <option key={String(o.value)} value={String(o.value)}>
+                          {o.label}
+                        </option>
+                      ))}
+                    </select>
+                  </td>
+                  <td className="px-2 py-1.5">
+                    <select
+                      className="h-8 w-full rounded-md border border-input bg-card px-2 text-sm"
+                      value={a.post ?? ''}
+                      onChange={(e) => setAt(i, { post: e.target.value })}
+                    >
+                      <option value="">请选择</option>
+                      {postOptions.map((o) => (
+                        <option key={String(o.value)} value={String(o.value)}>
+                          {o.label}
+                        </option>
+                      ))}
+                    </select>
+                  </td>
+                  <td className="px-2 py-1.5">
+                    <input
+                      type="date"
+                      className="h-8 w-full rounded-md border border-input bg-card px-2 text-sm"
+                      value={a.startDate ?? ''}
+                      onChange={(e) => setAt(i, { startDate: e.target.value })}
+                    />
+                  </td>
+                  <td className="px-2 py-1.5 text-center">
+                    <button
+                      type="button"
+                      className="inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+                      aria-label="删除该任职"
+                      onClick={() => removeAt(i)}
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </button>
+                  </td>
+                </tr>
+              ))
+            )}
+          </tbody>
+        </table>
+      </div>
+      <button
+        type="button"
+        onClick={addOne}
+        className="mt-1.5 inline-flex items-center gap-1 rounded-md border border-dashed border-input px-2.5 py-1 text-xs font-medium text-primary hover:bg-primary/5"
+      >
+        <Plus className="h-3.5 w-3.5" />
+        添加任职
+      </button>
+    </div>
+  );
+}
+
+/** 任职记录只读子表（详情 / 列表展开用） */
+function AssignmentTable({ list }: { list: Assignment[] }) {
+  if (!list.length) return <span className="text-muted-foreground">—</span>;
+  return (
+    <table className="w-full border-collapse text-sm">
+      <thead className="text-left text-xs text-muted-foreground">
+        <tr>
+          <th className="pb-1 pr-3 font-medium">任职部门</th>
+          <th className="pb-1 pr-3 font-medium">任职岗位</th>
+          <th className="pb-1 font-medium">任职开始时间</th>
+        </tr>
+      </thead>
+      <tbody>
+        {list.map((a, i) => (
+          <tr key={i} className="border-t last:border-0">
+            <td className="py-1 pr-3">{a.dept || '—'}</td>
+            <td className="py-1 pr-3">{a.post || '—'}</td>
+            <td className="py-1">{a.startDate || '—'}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
   );
 }
 
@@ -227,6 +365,17 @@ function FieldControl({
     );
   }
 
+  if (field.type === 'assignments') {
+    return (
+      <AssignmentEditor
+        value={value}
+        onChange={onChange}
+        deptOptions={field.deptOptions}
+        postOptions={field.postOptions}
+      />
+    );
+  }
+
   if (field.type === 'textarea') {
     return (
       <div className="min-w-0 self-start">
@@ -295,6 +444,9 @@ export function AdminListPage({ def }: { def: AdminPageDef }) {
   const [aiFormOpen, setAiFormOpen] = useState(false);
   const [aiExtractOpen, setAiExtractOpen] = useState(false);
   const [aiRagOpen, setAiRagOpen] = useState(false);
+
+  // 列表任职子表展开态（按行 id 记录）
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
 
   const openCreate = () => {
     const seed: Record<string, unknown> = {};
@@ -655,49 +807,87 @@ export function AdminListPage({ def }: { def: AdminPageDef }) {
                     </td>
                   </tr>
                 ) : (
-                  pageRows.map((row) => (
-                    <tr key={String(row.id)} className="border-b last:border-0 hover:bg-muted/40">
-                      {def.columns.map((c) => (
-                        <td key={c.key} className="px-4 py-[0.7rem] align-middle text-sm">
-                          {c.status ? (
-                            <StatusBadge
-                              text={String(row[c.key] ?? '—')}
-                              tone={statusTone(row.status)}
-                            />
-                          ) : c.tags ? (
-                            <TagCluster values={Array.isArray(row[c.key]) ? (row[c.key] as unknown[]) : []} />
-                          ) : (
-                            (row[c.key] == null || row[c.key] === '' ? '—' : String(row[c.key]))
-                          )}
-                        </td>
-                      ))}
-                      <td className="px-4 py-[0.7rem]">
-                        <div className="flex items-center gap-1">
-                          <button
-                            type="button"
-                            className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[0.8125rem] text-primary hover:bg-primary/10"
-                            onClick={() => openView(row)}
-                          >
-                            <Eye className="h-3 w-3" />
-                            详情
-                          </button>
-                          {!def.readonly ? (
-                            <>
+                  pageRows.map((row) => {
+                    const rowId = String(row.id);
+                    const assignments = getAssignments(row);
+                    const isOpen = !!expanded[rowId];
+                    const hasAssignments = assignments.length > 0;
+                    return (
+                      <Fragment key={rowId}>
+                        <tr className="border-b last:border-0 hover:bg-muted/40">
+                          {def.columns.map((c) => (
+                            <td key={c.key} className="px-4 py-[0.7rem] align-middle text-sm">
+                              {c.status ? (
+                                <StatusBadge
+                                  text={String(row[c.key] ?? '—')}
+                                  tone={statusTone(row.status)}
+                                />
+                              ) : c.key === 'assignmentCount' ? (
+                                hasAssignments ? (
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      setExpanded((prev) => ({ ...prev, [rowId]: !isOpen }))
+                                    }
+                                    className="inline-flex items-center gap-1 rounded-md border border-primary/30 bg-primary/5 px-2 py-0.5 text-[0.75rem] font-medium text-primary hover:bg-primary/10"
+                                    aria-expanded={isOpen}
+                                  >
+                                    {assignments.length} 个
+                                    {isOpen ? (
+                                      <ChevronDown className="h-3 w-3 rotate-180" />
+                                    ) : (
+                                      <ChevronDown className="h-3 w-3" />
+                                    )}
+                                  </button>
+                                ) : (
+                                  <span className="text-muted-foreground">—</span>
+                                )
+                              ) : c.tags ? (
+                                <TagCluster values={Array.isArray(row[c.key]) ? (row[c.key] as unknown[]) : []} />
+                              ) : (
+                                (row[c.key] == null || row[c.key] === '' ? '—' : String(row[c.key]))
+                              )}
+                            </td>
+                          ))}
+                          <td className="px-4 py-[0.7rem]">
+                            <div className="flex items-center gap-1">
                               <button
                                 type="button"
                                 className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[0.8125rem] text-primary hover:bg-primary/10"
-                                onClick={() => openEdit(row)}
+                                onClick={() => openView(row)}
                               >
-                                <Pencil className="h-3 w-3" />
-                                编辑
+                                <Eye className="h-3 w-3" />
+                                详情
                               </button>
-                              <RowMoreMenu onDelete={() => removeRow(row)} />
-                            </>
-                          ) : null}
-                        </div>
-                      </td>
-                    </tr>
-                  ))
+                              {!def.readonly ? (
+                                <>
+                                  <button
+                                    type="button"
+                                    className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[0.8125rem] text-primary hover:bg-primary/10"
+                                    onClick={() => openEdit(row)}
+                                  >
+                                    <Pencil className="h-3 w-3" />
+                                    编辑
+                                  </button>
+                                  <RowMoreMenu onDelete={() => removeRow(row)} />
+                                </>
+                              ) : null}
+                            </div>
+                          </td>
+                        </tr>
+                        {isOpen && hasAssignments ? (
+                          <tr className="border-b last:border-0 bg-muted/20">
+                            <td colSpan={def.columns.length + 1} className="px-4 py-3">
+                              <div className="mb-1.5 pl-1 text-xs font-medium text-muted-foreground">
+                                任职明细（{assignments.length}）
+                              </div>
+                              <AssignmentTable list={assignments} />
+                            </td>
+                          </tr>
+                        ) : null}
+                      </Fragment>
+                    );
+                  })
                 )}
               </tbody>
             </table>
@@ -799,7 +989,7 @@ export function AdminListPage({ def }: { def: AdminPageDef }) {
               <DetailDefList
                 items={[
                   ...def.form
-                    .filter((f) => f.type !== 'multiselect')
+                    .filter((f) => f.type !== 'multiselect' && f.type !== 'assignments')
                     .map((f) => ({
                       label: f.label,
                       value: detailValue(f, formValues[f.key]),
@@ -808,6 +998,12 @@ export function AdminListPage({ def }: { def: AdminPageDef }) {
                   ...(def.detailExtra ? def.detailExtra(formValues) : []),
                 ]}
               />
+              {getAssignments(formValues).length > 0 ? (
+                <div className="mt-4 border-t pt-3">
+                  <h4 className="mb-2 text-sm font-semibold text-foreground">任职明细</h4>
+                  <AssignmentTable list={getAssignments(formValues)} />
+                </div>
+              ) : null}
             </div>
           ) : (
             /* flex-1 只给滚动容器；grid 用 content-start，避免行被撑开留白 */
