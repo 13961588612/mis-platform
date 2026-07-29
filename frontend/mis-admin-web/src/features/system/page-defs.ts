@@ -630,21 +630,8 @@ export const SYSTEM_PAGE_DEFS: Record<string, AdminPageDef> = {
         ],
       },
       {
-        key: 'dept',
-        label: '主部门',
-        type: 'select',
-        col: 4,
-        required: true,
-        options: [
-          { value: '总经理办公室', label: '总经理办公室' },
-          { value: '研发中心', label: '研发中心' },
-          { value: '财务部', label: '财务部' },
-        ],
-      },
-      { key: 'title', label: '职位', type: 'text', col: 4 },
-      {
         key: 'assignments',
-        label: '任职记录（可多部门多岗位）',
+        label: '任职记录（可多部门多岗位，每行可标记主职）',
         type: 'assignments',
         col: 12,
         deptOptions: DEPT_OPTS,
@@ -655,7 +642,14 @@ export const SYSTEM_PAGE_DEFS: Record<string, AdminPageDef> = {
       { key: 'hire_date', label: '入职日期', type: 'text', col: 6 },
       { key: 'status', label: '状态', type: 'switch', col: 6 },
     ],
-    detailExtra: (row) => [{ label: '主部门', value: row.dept as string }],
+    detailExtra: (row) => {
+      const asg = (Array.isArray(row.assignments) ? (row.assignments as { dept: string; post: string; isPrimary?: boolean }[]) : []);
+      const primary = asg.find((a) => a.isPrimary) ?? asg[0];
+      return [
+        { label: '主部门', value: (primary?.dept as string) ?? (row.dept as string) ?? '—' },
+        { label: '主职位', value: (primary?.post as string) ?? (row.title as string) ?? '—' },
+      ];
+    },
     sample: [
       {
         id: 1,
@@ -664,7 +658,7 @@ export const SYSTEM_PAGE_DEFS: Record<string, AdminPageDef> = {
         gender: 1,
         dept: '总经理办公室',
         title: '总经理',
-        assignments: [{ dept: '总经理办公室', post: '总经理', startDate: '2020-03-01' }],
+        assignments: [{ dept: '总经理办公室', post: '总经理', startDate: '2020-03-01', isPrimary: true }],
         email: 'liwb@corp.com',
         phone: '13800001001',
         hire_date: '2020-03-01',
@@ -678,7 +672,7 @@ export const SYSTEM_PAGE_DEFS: Record<string, AdminPageDef> = {
         dept: '研发中心',
         title: '研发总监',
         assignments: [
-          { dept: '研发中心', post: '研发总监', startDate: '2021-06-15' },
+          { dept: '研发中心', post: '研发总监', startDate: '2021-06-15', isPrimary: true },
           { dept: '研发中心', post: '架构师', startDate: '2021-06-15' },
           { dept: '市场部', post: '技术委员会', startDate: '2022-01-10' },
         ],
@@ -695,7 +689,7 @@ export const SYSTEM_PAGE_DEFS: Record<string, AdminPageDef> = {
         dept: '财务部',
         title: '财务经理',
         assignments: [
-          { dept: '财务部', post: '财务经理', startDate: '2021-09-01' },
+          { dept: '财务部', post: '财务经理', startDate: '2021-09-01', isPrimary: true },
           { dept: '人力资源部', post: '内审委员', startDate: '2022-03-01' },
         ],
         email: 'zm@corp.com',
@@ -711,7 +705,7 @@ export const SYSTEM_PAGE_DEFS: Record<string, AdminPageDef> = {
         dept: '总经理办公室',
         title: '大区总',
         assignments: [
-          { dept: '总经理办公室', post: '大区总', startDate: '2019-11-20' },
+          { dept: '总经理办公室', post: '大区总', startDate: '2019-11-20', isPrimary: true },
           { dept: '市场部', post: '大区总', startDate: '2020-05-01' },
           { dept: '人力资源部', post: '大区总', startDate: '2020-05-01' },
         ],
@@ -721,11 +715,20 @@ export const SYSTEM_PAGE_DEFS: Record<string, AdminPageDef> = {
         status: 0,
       },
     ],
-    decorate: (row) => ({
-      ...withStatus(row),
-      genderText: row.gender === 1 ? '男' : row.gender === 2 ? '女' : '—',
-      assignmentCount: Array.isArray(row.assignments) ? (row.assignments as unknown[]).length : 0,
-    }),
+    decorate: (row) => {
+      const asg = Array.isArray(row.assignments)
+        ? (row.assignments as { dept: string; post: string; isPrimary?: boolean }[])
+        : [];
+      const primary = asg.find((a) => a.isPrimary) ?? asg[0];
+      return {
+        ...withStatus(row),
+        // 主部门 / 主职位 由「主职」任职行派生（表单不再单独录入，避免重复）
+        dept: primary?.dept ?? (row.dept as string | undefined) ?? '—',
+        title: primary?.post ?? (row.title as string | undefined) ?? '—',
+        genderText: row.gender === 1 ? '男' : row.gender === 2 ? '女' : '—',
+        assignmentCount: asg.length,
+      };
+    },
   },
   '/system/post': {
     id: 'post',

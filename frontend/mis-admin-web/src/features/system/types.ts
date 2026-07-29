@@ -5,11 +5,13 @@ export interface FieldOption {
   value: string | number;
 }
 
-/** 任职记录：一行 = 任职部门 + 任职岗位 + 任职开始时间 */
+/** 任职记录：一行 = 任职部门 + 任职岗位 + 任职开始时间 + 是否主职 */
 export interface Assignment {
   dept: string;
   post: string;
   startDate?: string;
+  /** 是否主职（主部门由此派生）；同一员工仅一行可为 true */
+  isPrimary?: boolean;
 }
 
 export interface AdminField {

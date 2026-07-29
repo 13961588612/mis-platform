@@ -108,18 +108,32 @@ export function DeptTreePage() {
 
   const rows = useMemo(() => flatten(tree), [tree]);
 
-  /** 编制视图：扁平部门 + 各岗位任职/空缺汇总 */
+  /**
+   * 编制视图部门列表：直接从「员工任职派生」的 STAFFING 取键，
+   * 不再依赖后端部门树名称匹配 —— 凡是有任职的部门一定出现，彻底避免空白。
+   * 同时保留后端部门的 code（用于展示），缺失则留空。
+   */
   const staffingRows = useMemo(() => {
-    return rows
-      .map((r) => {
-        const info = STAFFING[r.node.name];
+    const treeByName = new Map(rows.map((r) => [r.node.name, r]));
+    return Object.keys(STAFFING)
+      .map((name) => {
+        const info = STAFFING[name];
         const posts = info?.posts ?? [];
         const filled = posts.filter((p) => p.holders.length > 0).length;
         const vacant = posts.length - filled;
         const employees = info?.employees ?? [];
-        return { node: r.node, depth: r.depth, postCount: posts.length, filled, vacant, employees };
+        const matched = treeByName.get(name);
+        return {
+          name,
+          code: matched?.node.code ?? '',
+          depth: matched?.depth ?? 0,
+          postCount: posts.length,
+          filled,
+          vacant,
+          employees,
+        };
       })
-      .filter((r) => r.postCount > 0);
+      .sort((a, b) => b.postCount - a.postCount);
   }, [rows]);
 
   const columns: TreeTableColumn<DeptRow>[] = useMemo(
@@ -304,15 +318,15 @@ export function DeptTreePage() {
           </div>
         ) : view === 'staffing' ? (
           staffingRows.length === 0 ? (
-            <div className="p-10 text-center text-sm text-muted-foreground">该组织下暂无岗位编制数据</div>
+            <div className="p-10 text-center text-sm text-muted-foreground">暂无岗位编制数据</div>
           ) : (
             <ul className="divide-y">
               {staffingRows.map((r) => (
-                <li key={r.node.id}>
+                <li key={r.name}>
                   <button
                     type="button"
                     onClick={() => {
-                      setStaffingDept(r.node);
+                      setStaffingDept({ id: r.name, name: r.name, code: r.code, depth: r.depth } as unknown as DeptNode);
                       setStaffingOpen(true);
                     }}
                     className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left transition hover:bg-muted/40"
@@ -322,9 +336,9 @@ export function DeptTreePage() {
                         className="inline-block w-1 self-stretch rounded bg-primary/30"
                         style={{ marginLeft: r.depth * 12 }}
                       />
-                      <span className="truncate font-medium">{r.node.name}</span>
-                      {r.node.code ? (
-                        <span className="font-mono text-xs text-muted-foreground">{r.node.code}</span>
+                      <span className="truncate font-medium">{r.name}</span>
+                      {r.code ? (
+                        <span className="font-mono text-xs text-muted-foreground">{r.code}</span>
                       ) : null}
                     </span>
                     <span className="flex shrink-0 items-center gap-2 text-xs">

@@ -130,8 +130,18 @@ function AssignmentEditor({
   const update = (next: Assignment[]) => onChange(next);
   const setAt = (i: number, patch: Partial<Assignment>) =>
     update(list.map((a, idx) => (idx === i ? { ...a, ...patch } : a)));
-  const removeAt = (i: number) => update(list.filter((_, idx) => idx !== i));
-  const addOne = () => update([...list, { dept: '', post: '', startDate: '' }]);
+  const removeAt = (i: number) => {
+    const next = list.filter((_, idx) => idx !== i);
+    // 删除后若无主职，默认把首行设为主职
+    if (next.length && !next.some((a) => a.isPrimary)) next[0] = { ...next[0], isPrimary: true };
+    update(next);
+  };
+  const addOne = () => {
+    const next = [...list, { dept: '', post: '', startDate: '', isPrimary: list.length === 0 }];
+    update(next);
+  };
+  const markPrimary = (i: number) =>
+    update(list.map((a, idx) => ({ ...a, isPrimary: idx === i })));
 
   return (
     <div className="col-span-2 min-w-0 self-start">
@@ -142,13 +152,14 @@ function AssignmentEditor({
               <th className="px-2.5 py-1.5 font-medium">任职部门</th>
               <th className="px-2.5 py-1.5 font-medium">任职岗位</th>
               <th className="px-2.5 py-1.5 font-medium">任职开始时间</th>
+              <th className="w-16 px-2.5 py-1.5 font-medium text-center">主职</th>
               <th className="w-12 px-2.5 py-1.5" />
             </tr>
           </thead>
           <tbody>
             {list.length === 0 ? (
               <tr>
-                <td colSpan={4} className="px-2.5 py-3 text-center text-xs text-muted-foreground">
+                <td colSpan={5} className="px-2.5 py-3 text-center text-xs text-muted-foreground">
                   暂无任职记录，点击下方按钮添加
                 </td>
               </tr>
@@ -194,6 +205,22 @@ function AssignmentEditor({
                   <td className="px-2 py-1.5 text-center">
                     <button
                       type="button"
+                      onClick={() => markPrimary(i)}
+                      className={cn(
+                        'inline-flex h-7 min-w-7 items-center justify-center rounded-md px-1.5 text-xs font-medium transition',
+                        a.isPrimary
+                          ? 'bg-primary text-primary-foreground'
+                          : 'border border-input text-muted-foreground hover:border-primary/40 hover:text-foreground',
+                      )}
+                      aria-pressed={!!a.isPrimary}
+                      title="标记为唯一主职"
+                    >
+                      主
+                    </button>
+                  </td>
+                  <td className="px-2 py-1.5 text-center">
+                    <button
+                      type="button"
                       className="inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
                       aria-label="删除该任职"
                       onClick={() => removeAt(i)}
@@ -226,17 +253,27 @@ function AssignmentTable({ list }: { list: Assignment[] }) {
     <table className="w-full border-collapse text-sm">
       <thead className="text-left text-xs text-muted-foreground">
         <tr>
-          <th className="pb-1 pr-3 font-medium">任职部门</th>
-          <th className="pb-1 pr-3 font-medium">任职岗位</th>
-          <th className="pb-1 font-medium">任职开始时间</th>
+          <th className="pb-1.5 pr-3 font-bold">任职部门</th>
+          <th className="pb-1.5 pr-3 font-bold">任职岗位</th>
+          <th className="pb-1.5 pr-3 font-bold">任职开始时间</th>
+          <th className="pb-1.5 font-bold">主职</th>
         </tr>
       </thead>
       <tbody>
         {list.map((a, i) => (
           <tr key={i} className="border-t last:border-0">
-            <td className="py-1 pr-3">{a.dept || '—'}</td>
-            <td className="py-1 pr-3">{a.post || '—'}</td>
-            <td className="py-1">{a.startDate || '—'}</td>
+            <td className="py-1.5 pr-3 font-medium text-foreground">{a.dept || '—'}</td>
+            <td className="py-1.5 pr-3 font-medium text-foreground">{a.post || '—'}</td>
+            <td className="py-1.5 pr-3">{a.startDate || '—'}</td>
+            <td className="py-1.5">
+              {a.isPrimary ? (
+                <span className="inline-flex items-center rounded-full bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary">
+                  主
+                </span>
+              ) : (
+                <span className="text-xs text-muted-foreground">兼职</span>
+              )}
+            </td>
           </tr>
         ))}
       </tbody>
@@ -878,9 +915,6 @@ export function AdminListPage({ def }: { def: AdminPageDef }) {
                         {isOpen && hasAssignments ? (
                           <tr className="border-b last:border-0 bg-muted/20">
                             <td colSpan={def.columns.length + 1} className="px-4 py-3">
-                              <div className="mb-1.5 pl-1 text-xs font-medium text-muted-foreground">
-                                任职明细（{assignments.length}）
-                              </div>
                               <AssignmentTable list={assignments} />
                             </td>
                           </tr>
