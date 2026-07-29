@@ -453,3 +453,32 @@ export interface Assignment {
 
 文件改动（第四、五轮累计）：
 - 前端：`types.ts`（Assignment / assignments field / isPrimary）/ `admin-list-page.tsx`（AssignmentEditor + AssignmentTable + 列表展开 + 详情子表）/ `page-defs.ts`（assignments 字段 + 派生 decorate/detailExtra + sample）/ `dept-tree-page.tsx`（STAFFING 派生编制 + 移除按名匹配）/ `detail-def-list.tsx`（string[] 标签簇原生渲染，保留复用）。
+
+---
+
+## 20. 侧栏宽度收窄 + 折叠态悬浮飞出子菜单（rail 风格）
+
+> 触发：用户反馈「左边 sidenav 宽度太宽」+「折叠侧栏点击后，有子菜单的项点击没反应」；随后明确要 **悬浮飞出子菜单**（rail 风格），不要点击展开整条侧栏。
+
+### 20.1 侧栏展开宽度收窄
+- 文件：`frontend/mis-admin-web/src/components/layout/app-layout.tsx`
+- `<aside>` 展开态 `w-64`（256px）→ `w-56`（224px），收窄 32px；折叠态 `w-16` 不变。
+
+### 20.2 折叠态子菜单点击无反应（根因 + 两轮迭代）
+- **根因**：`side-nav.tsx` 分支按钮 `onClick` 原 `if (collapsed) return;` 直接丢弃点击；且子项渲染受 `open && !collapsed` 限制，折叠时既不展开侧栏也不弹子菜单 → 表现为"没反应"。
+- **第一轮修复（已回退）**：新增 `onExpandBranch(title)`，折叠态点分支 → `setCollapsed(false)` 并打开该分支（展开整条侧栏）。用户随后明确要 rail 风格飞出，回退此交互。
+- **第二轮最终方案（hover flyout）**：折叠态下鼠标移到带子菜单的分支图标上，旁边弹出固定定位小菜单，移开 140ms 收起。
+- **保留点击兜底**：`onExpandBranch` 回调保留在 props（折叠态点分支仍展开侧栏并打开该分支），作为键盘/点击可达路径；非折叠态仍走原 `onToggleBranch`。
+
+### 20.3 悬浮飞出子菜单实现
+- 文件：`frontend/mis-admin-web/src/components/layout/side-nav.tsx`
+- 状态：`flyout: { title, top, left } | null`（视口坐标，来自 `getBoundingClientRect`）+ `closeTimer` ref 做延迟关闭。
+- 渲染：飞出面板用 `position: fixed`（视口坐标）渲染在 `<nav>` 末尾，规避侧栏 `overflow-x-hidden`/`overflow-hidden` 裁切；`w-52`，含分支标题 + 子项链接。
+- 交互：鼠标移入飞出面板取消收起（跨 6px 间隙不丢）；点子项 `NavLink` 后 `cancelClose + hideFlyout + onNavigate`。
+- 配色：对齐应用其他 popover（飞出面板浮在主区上方，不用 sidebar token）—— `bg-popover` + 标题 `text-muted-foreground` + 子项 `text-foreground hover:bg-accent` + 激活态 `bg-primary text-primary-foreground`。
+- 类型：`flyoutNode` 用 `as Extract<SystemNavNode, { kind: 'branch' }>` 收窄。
+
+### 20.4 验收
+- `npm run typecheck` 0 错误。
+- 对应提交：`6e55b5d`（side-nav 飞出 + 日志，已入库）；`app-layout.tsx`（宽度 + onExpandBranch 接线）随本文档本轮一并本地提交。
+- 按用户「不需要推远端」偏好，本轮提交均未推送。

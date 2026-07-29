@@ -177,6 +177,12 @@ export function AppLayout() {
     [location.pathname, navNodes],
   );
 
+  // 折叠态点击分支：展开侧栏并自动打开该分支
+  const handleExpandBranch = useCallback((title: string) => {
+    setCollapsed(false);
+    setNavExpanded((prev) => ({ ...prev, [title]: true }));
+  }, []);
+
   const handleLogout = async () => {
     await logout();
     clearSession();
@@ -313,7 +319,7 @@ export function AppLayout() {
         <aside
           className={cn(
             'flex min-h-0 shrink-0 flex-col overflow-hidden border-r border-sidebar-border bg-sidebar text-sidebar-foreground',
-            collapsed ? 'w-16' : 'w-64',
+            collapsed ? 'w-16' : 'w-56',
           )}
         >
           <div className={cn('flex items-center gap-2.5 border-b border-sidebar-border px-3 py-3', collapsed && 'justify-center')}>
@@ -348,6 +354,7 @@ export function AppLayout() {
               collapsed={collapsed}
               expanded={navExpanded}
               onToggleBranch={handleToggleBranch}
+              onExpandBranch={handleExpandBranch}
             />
           )}
 
