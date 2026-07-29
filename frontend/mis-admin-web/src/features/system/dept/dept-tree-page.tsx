@@ -209,6 +209,7 @@ export function DeptTreePage() {
             rows={rows}
             columns={columns}
             treeColumnKey="name"
+            actionsAlwaysVisible
             rowIcon={(row) => {
               const hasKids = Boolean(row.node.children?.length);
               return hasKids ? (

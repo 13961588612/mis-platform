@@ -336,3 +336,16 @@ Phase D 已实施（2026-07-28）：见 §9。
 - 列表新增「组织」列（colSpan 8→9）；表格操作按钮"分配角色"改为"权限"（图标不变）。
 
 文件改动：`types.ts` / `admin-list-page.tsx` / `page-defs.ts`（员工 posts）/ `role-list-page.tsx` / `roles.ts` / `user-list-page.tsx` / `users.ts`。
+
+## 17. 交互微调（2026-07-29）
+
+### 17.1 部门管理：行操作常显
+- `TreeTable` 新增 `actionsAlwaysVisible?: boolean` 属性（默认 `false`，保留 hover 显隐的既有行为，不影响其它消费者）。
+- 部门管理页传 `actionsAlwaysVisible`，编辑 / 删除 / 子部门按钮不再依赖 hover 即常显。
+
+### 17.2 用户权限：组织 / 部门改为多选
+- 权限 Sheet（mode `'perms'`）原 `form.orgId` / `form.deptId` 单选改为 `form.orgIds` / `form.deptIds` 数组，与角色多选风格一致，改用复选框列表。
+- 选中组织实时聚合其部门树（`loadPermsDepts(orgIds[])` 并行拉取各组织部门树并 `flatMap` 合并），取消组织时自动剔除该组织下的脏部门选中。
+- `updateUser` 扩展 `orgIds` / `deptIds`（数组），保存时发送多选结果。创建/编辑表单仍保留单部门选择（`form.deptId`），互不干扰。
+
+文件改动：`tree-table.tsx` / `dept-tree-page.tsx` / `user-list-page.tsx` / `users.ts`。

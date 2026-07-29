@@ -25,6 +25,8 @@ export interface TreeTableProps<T extends TreeTableNode> {
   rowIcon?: (row: T) => ReactNode;
   /** 行内操作（默认 hover 显隐）：编辑 / 删除等 */
   rowActions?: (row: T) => ReactNode;
+  /** 行操作是否始终可见；默认 false（hover 显隐）。部门管理等需常显时传 true */
+  actionsAlwaysVisible?: boolean;
   rowClassName?: (row: T) => string | undefined;
   /** 行点击（可选，如选中该行） */
   onRowClick?: (row: T) => void;
@@ -52,6 +54,7 @@ export function TreeTable<T extends TreeTableNode>({
   treeColumnKey,
   rowIcon,
   rowActions,
+  actionsAlwaysVisible = false,
   rowClassName,
   onRowClick,
   emptyText = '暂无数据',
@@ -127,7 +130,12 @@ export function TreeTable<T extends TreeTableNode>({
               })}
               {rowActions ? (
                 <td className="px-2 py-1.5 text-right">
-                  <span className="inline-flex items-center gap-1 opacity-0 group-hover:opacity-100">
+                  <span
+                    className={cn(
+                      'inline-flex items-center gap-1',
+                      !actionsAlwaysVisible && 'opacity-0 group-hover:opacity-100',
+                    )}
+                  >
                     {rowActions(row)}
                   </span>
                 </td>

@@ -118,27 +118,45 @@ export function UserListPage() {
     email: '',
     phone: '',
     password: '',
-    orgId: '',
     deptId: '',
+    orgIds: [] as string[],
+    deptIds: [] as string[],
     roleIds: [] as string[],
   });
 
   // 权限 Sheet 内独立的「组织 → 部门」联动（与左侧页面级部门树解耦）
-  const [permsDeptTree, setPermsDeptTree] = useState<DeptNode[]>([]);
-  const permsFlatDepts = useMemo(() => flattenDepts(permsDeptTree), [permsDeptTree]);
+  // 多选：聚合所有已选组织的部门树（扁平 + 缩进深度）
+  const [permsFlatDepts, setPermsFlatDepts] = useState<{ node: DeptNode; depth: number }[]>([]);
 
-  const loadPermsDepts = useCallback(async (o: string) => {
-    if (!o) {
-      setPermsDeptTree([]);
+  const loadPermsDepts = useCallback(async (orgIds: string[]) => {
+    if (!orgIds.length) {
+      setPermsFlatDepts([]);
       return;
     }
     try {
-      const tree = await fetchDeptTree(o);
-      setPermsDeptTree(tree);
+      const trees = await Promise.all(orgIds.map((id) => fetchDeptTree(id)));
+      setPermsFlatDepts(trees.flatMap((t) => flattenDepts(t)));
     } catch (e) {
       toast.error(e instanceof Error ? e.message : '加载部门树失败');
     }
   }, []);
+
+  // 组织变化 → 重新聚合部门树
+  useEffect(() => {
+    void loadPermsDepts(form.orgIds);
+  }, [form.orgIds, loadPermsDepts]);
+
+  // 部门树变化 → 剔除已不在范围内（如组织被取消勾选）的部门，避免脏选中
+  useEffect(() => {
+    if (permsFlatDepts.length === 0) return;
+    const valid = new Set(permsFlatDepts.map((d) => d.node.id));
+    setForm((f) =>
+      f.deptIds.some((id) => !valid.has(id))
+        ? { ...f, deptIds: f.deptIds.filter((id) => valid.has(id)) }
+        : f,
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- 仅依赖部门树快照
+  }, [permsFlatDepts]);
 
   const size = 20;
   const flatDepts = useMemo(() => flattenDepts(deptTree), [deptTree]);
@@ -268,8 +286,9 @@ export function UserListPage() {
       email: '',
       phone: '',
       password: '',
-      orgId: '',
       deptId: deptId ?? '',
+      orgIds: [],
+      deptIds: [],
       roleIds: [],
     });
     setSheetOpen(true);
@@ -285,8 +304,9 @@ export function UserListPage() {
       email: row.email ?? '',
       phone: row.phone ?? '',
       password: '',
-      orgId: '',
       deptId: row.deptId ?? '',
+      orgIds: [],
+      deptIds: [],
       roleIds: row.roles?.map((r) => r.id) ?? [],
     });
     setSheetOpen(true);
@@ -295,15 +315,31 @@ export function UserListPage() {
   function openPerms(row: UserView) {
     setMode('perms');
     setEditing(row);
-    const o = row.orgId ?? orgId;
+    const orgIds = row.orgId ? [row.orgId] : [];
+    const deptIds = row.deptId ? [row.deptId] : [];
     setForm((f) => ({
       ...f,
-      orgId: o,
-      deptId: row.deptId ?? '',
+      orgIds,
+      deptIds,
+      deptId: '',
       roleIds: row.roles?.map((r) => r.id) ?? [],
     }));
-    void loadPermsDepts(o);
     setSheetOpen(true);
+  }
+
+  // 权限 Sheet 内组织 / 部门多选切换
+  function togglePermsOrg(id: string, checked: boolean) {
+    setForm((f) => ({
+      ...f,
+      orgIds: checked ? [...f.orgIds, id] : f.orgIds.filter((x) => x !== id),
+    }));
+  }
+
+  function togglePermsDept(id: string, checked: boolean) {
+    setForm((f) => ({
+      ...f,
+      deptIds: checked ? [...f.deptIds, id] : f.deptIds.filter((x) => x !== id),
+    }));
   }
 
   // 详情抽屉：只读展示用户字段 + AI 摘要/问答入口
@@ -352,8 +388,8 @@ export function UserListPage() {
           realName: editing.realName ?? undefined,
           email: editing.email ?? undefined,
           phone: editing.phone ?? undefined,
-          orgId: form.orgId || undefined,
-          deptId: form.deptId || undefined,
+          orgIds: form.orgIds.map(Number),
+          deptIds: form.deptIds.map(Number),
         });
         await assignUserRoles(editing.id, form.roleIds.map(Number));
         toast.success('已保存权限');
@@ -670,38 +706,49 @@ export function UserListPage() {
                 <UserDetail viewing={viewing} onAiRag={() => setAiRagOpen(true)} />
               ) : mode === 'perms' ? (
                 <>
-                  <Field label="组织">
-                    <select
-                      className={fieldInput}
-                      value={form.orgId}
-                      onChange={(e) => {
-                        const v = e.target.value;
-                        setForm((f) => ({ ...f, orgId: v, deptId: '' }));
-                        void loadPermsDepts(v);
-                      }}
-                    >
-                      <option value="">请选择</option>
-                      {orgs.map((o) => (
-                        <option key={o.id} value={o.id}>
-                          {o.name}
-                        </option>
-                      ))}
-                    </select>
+                  <Field label="组织（可多选）">
+                    <div className="max-h-40 space-y-1 overflow-auto rounded-md border p-2">
+                      {orgs.map((o) => {
+                        const checked = form.orgIds.includes(o.id);
+                        return (
+                          <label key={o.id} className="flex cursor-pointer items-center gap-2 text-sm">
+                            <input
+                              type="checkbox"
+                              checked={checked}
+                              onChange={() => togglePermsOrg(o.id, checked)}
+                            />
+                            {o.name}
+                          </label>
+                        );
+                      })}
+                    </div>
                   </Field>
-                  <Field label="部门">
-                    <select
-                      className={fieldInput}
-                      value={form.deptId}
-                      onChange={(e) => setForm((f) => ({ ...f, deptId: e.target.value }))}
-                    >
-                      <option value="">请选择</option>
-                      {permsFlatDepts.map(({ node, depth }) => (
-                        <option key={node.id} value={node.id}>
-                          {'　'.repeat(depth)}
-                          {node.name}
-                        </option>
-                      ))}
-                    </select>
+                  <Field label="部门（可多选）">
+                    {form.orgIds.length === 0 ? (
+                      <p className="text-xs text-muted-foreground">请先选择组织</p>
+                    ) : permsFlatDepts.length === 0 ? (
+                      <p className="text-xs text-muted-foreground">该组织下暂无部门</p>
+                    ) : (
+                      <div className="max-h-48 space-y-1 overflow-auto rounded-md border p-2">
+                        {permsFlatDepts.map(({ node, depth }) => {
+                          const checked = form.deptIds.includes(node.id);
+                          return (
+                            <label
+                              key={node.id}
+                              className="flex cursor-pointer items-center gap-2 text-sm"
+                              style={{ paddingLeft: depth * 14 }}
+                            >
+                              <input
+                                type="checkbox"
+                                checked={checked}
+                                onChange={() => togglePermsDept(node.id, checked)}
+                              />
+                              {node.name}
+                            </label>
+                          );
+                        })}
+                      </div>
+                    )}
                   </Field>
                   <Field label="角色">
                     <div className="max-h-48 space-y-1 overflow-auto rounded-md border p-2">

@@ -50,6 +50,10 @@ export async function updateUser(
     status?: number;
     orgId?: string;
     deptId?: string | number;
+    /** 多选：归属组织 id 列表（权限模式） */
+    orgIds?: number[];
+    /** 多选：归属部门 id 列表（权限模式） */
+    deptIds?: number[];
   },
 ): Promise<UserView> {
   const res = await api.put<ApiResult<UserView>>(`/users/${id}`, body);
