@@ -1,5 +1,6 @@
 import { NavLink } from 'react-router-dom';
 import { ChevronRight } from 'lucide-react';
+import { useRef, useState } from 'react';
 import { cn } from '@/lib/utils';
 import { resolveNavIcon } from '@/lib/nav/icons';
 import {
@@ -13,6 +14,8 @@ interface SideNavProps {
   collapsed?: boolean;
   expanded: Record<string, boolean>;
   onToggleBranch: (title: string) => void;
+  /** 折叠态下点击分支：展开侧栏并打开该分支（避免折叠时分支点击无反应） */
+  onExpandBranch?: (title: string) => void;
   onNavigate?: () => void;
 }
 
@@ -23,8 +26,39 @@ export function SideNav({
   collapsed = false,
   expanded,
   onToggleBranch,
+  onExpandBranch,
   onNavigate,
 }: SideNavProps) {
+  // 折叠态悬浮飞出子菜单：用 fixed 定位（视口坐标），避免被侧栏 overflow 裁切
+  const [flyout, setFlyout] = useState<{ title: string; top: number; left: number } | null>(null);
+  const closeTimer = useRef<number | null>(null);
+
+  const showFlyout = (el: HTMLElement, title: string) => {
+    if (closeTimer.current) {
+      clearTimeout(closeTimer.current);
+      closeTimer.current = null;
+    }
+    const r = el.getBoundingClientRect();
+    setFlyout({ title, top: r.top, left: r.right + 6 });
+  };
+  const scheduleClose = () => {
+    if (closeTimer.current) clearTimeout(closeTimer.current);
+    closeTimer.current = window.setTimeout(() => setFlyout(null), 140);
+  };
+  const cancelClose = () => {
+    if (closeTimer.current) {
+      clearTimeout(closeTimer.current);
+      closeTimer.current = null;
+    }
+  };
+  const hideFlyout = () => setFlyout(null);
+
+  const flyoutNode = flyout
+    ? (nodes.find(
+        (n) => n.kind === 'branch' && n.title === flyout.title,
+      ) as Extract<SystemNavNode, { kind: 'branch' }> | undefined)
+    : null;
+
   return (
     <nav className="sidebar-scroll flex min-h-0 min-w-0 flex-1 flex-col gap-0.5 overflow-x-hidden p-2">
       <div className={cn('px-3 pb-2 pt-5 text-[0.7rem] font-normal uppercase tracking-[0.05em] text-sidebar-muted', collapsed && 'sr-only')}>
@@ -68,8 +102,18 @@ export function SideNav({
             <button
               type="button"
               title={node.title}
+              onMouseEnter={(e) => {
+                if (collapsed) showFlyout(e.currentTarget, node.title);
+              }}
+              onMouseLeave={() => {
+                if (collapsed) scheduleClose();
+              }}
               onClick={() => {
-                if (collapsed) return;
+                if (collapsed) {
+                  // 折叠态点击：兜底展开整条侧栏并打开该分支（键盘/点击可达）
+                  onExpandBranch?.(node.title);
+                  return;
+                }
                 onToggleBranch(node.title);
               }}
               className={cn(
@@ -127,6 +171,51 @@ export function SideNav({
           </div>
         );
       })}
+      {collapsed && flyout && flyoutNode ? (
+        <div
+          className="fixed z-[60] w-52 rounded-md border border-sidebar-border bg-popover p-1.5 shadow-card"
+          style={{ top: flyout.top, left: flyout.left }}
+          onMouseEnter={cancelClose}
+          onMouseLeave={scheduleClose}
+        >
+          <div className="px-2 py-1.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+            {flyoutNode.title}
+          </div>
+          <div className="flex flex-col gap-0.5">
+            {flyoutNode.children.map((child) => {
+              const ChildIcon = resolveNavIcon(child.icon);
+              const active =
+                pathname === child.path || pathname.startsWith(`${child.path}/`);
+              return (
+                <NavLink
+                  key={child.path}
+                  to={child.path}
+                  title={child.title}
+                  onClick={() => {
+                    cancelClose();
+                    hideFlyout();
+                    onNavigate?.();
+                  }}
+                  className={cn(
+                    'flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-sm transition',
+                    active
+                      ? 'bg-primary font-semibold text-primary-foreground shadow-sm'
+                      : 'text-foreground hover:bg-accent',
+                  )}
+                >
+                  <ChildIcon
+                    className={cn(
+                      'h-3.5 w-3.5 shrink-0',
+                      active ? 'text-primary-foreground' : 'opacity-80',
+                    )}
+                  />
+                  <span className="truncate">{child.title}</span>
+                </NavLink>
+              );
+            })}
+          </div>
+        </div>
+      ) : null}
     </nav>
   );
 }
