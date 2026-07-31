@@ -198,6 +198,19 @@ class Settings(BaseSettings):
     )
     MIS_JWT_ALGORITHM: str = "RS256"
 
+    # ===== AI Skill / FormFill 反向信任（决策 3：平台侧委托调用 MIS 引擎）=====
+    # mis-admin-bff 的 AI Skill 接口地址（AiProxyController）。
+    MIS_ADMIN_BFF_BASE_URL: str = "http://mis-admin-bff:8080"
+    # 平台 ↔ BFF 共享密钥，作为 X-Platform-Token 标识「这是 ai-platform 自身调用」。
+    AI_PLATFORM_BFF_SHARED_SECRET: str = ""
+    # 上游 MIS RS256 JWT 的回放头名（与 BFF ReverseTrustInterceptor 对齐）。
+    MIS_JWT_REPLAY_HEADER: str = "X-Mis-Upstream-Jwt"
+    # P0 允许的 FormFill Skill ID 白名单（意图 → skillId 由工具内部映射）。
+    FORMFILL_ALLOWED_SKILLS: list[str] = Field(
+        default_factory=lambda: ["user-fill"],
+        description="P0 允许触发的 MIS FormFill 引擎 Skill ID 白名单",
+    )
+
     DEV_TEST_ACCOUNTS_ENABLED: bool = Field(
         default=False,
         description="是否启用 configs/test-accounts.yaml 中的测试账号登录",

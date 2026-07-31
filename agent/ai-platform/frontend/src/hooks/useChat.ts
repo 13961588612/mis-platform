@@ -54,6 +54,12 @@ interface UseChatReturn {
     decision: "approved" | "rejected",
     comment?: string,
   ) => void;
+  /** Respond to a FormFill HITL entity-select request. */
+  respondToEntitySelect: (data: {
+    resumeToken: string;
+    selectedCandidate?: Record<string, unknown>;
+    action: "confirm" | "manual" | "cancel";
+  }) => void;
   /** Create a new session. */
   createSession: (agentId: string) => Promise<void>;
   /** Close the current session. */
@@ -104,6 +110,7 @@ export function useChat(sessionId: string | null): UseChatReturn {
     addPendingApproval,
     removePendingApproval,
     setApprovalSender,
+    setEntitySelectSender,
   } = useChatStore();
 
   const { addApproval } = useApprovalStore();
@@ -602,6 +609,35 @@ export function useChat(sessionId: string | null): UseChatReturn {
     return () => setApprovalSender(null);
   }, [respondToApproval, setApprovalSender]);
 
+  // ===== Respond to Entity Select (FormFill HITL) =====
+  const respondToEntitySelect = useCallback(
+    (data: {
+      resumeToken: string;
+      selectedCandidate?: Record<string, unknown>;
+      action: "confirm" | "manual" | "cancel";
+    }): void => {
+      const inbound: InboundMessage = {
+        type: "entity_select",
+        sessionId: sessionId ?? "",
+        userId: user?.userId ?? "",
+        entitySelectResponse: {
+          resumeToken: data.resumeToken,
+          selectedCandidate: data.selectedCandidate,
+          action: data.action,
+        },
+        timestamp: new Date().toISOString(),
+      };
+      sendInbound(inbound);
+    },
+    [sessionId, user, sendInbound],
+  );
+
+  // 将实体选择发送器注入 chatStore，供 A2UI entity-select 组件调用（T03）。
+  useEffect(() => {
+    setEntitySelectSender((data) => respondToEntitySelect(data));
+    return () => setEntitySelectSender(null);
+  }, [respondToEntitySelect, setEntitySelectSender]);
+
   // ===== Create Session =====
   const createSession = useCallback(
     async (newAgentId: string): Promise<void> => {
@@ -673,6 +709,7 @@ export function useChat(sessionId: string | null): UseChatReturn {
   return {
     sendMessage,
     respondToApproval,
+    respondToEntitySelect,
     createSession,
     closeSession,
     reconnect,

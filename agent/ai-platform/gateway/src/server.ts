@@ -295,6 +295,11 @@ function registerRoutes(
           agentId?: string;
           messageType?: string;
           metadata?: Record<string, unknown>;
+          entitySelectResponse?: {
+            resumeToken?: string;
+            selectedCandidate?: Record<string, unknown>;
+            action?: string;
+          };
         };
 
         if (message.type === 'ping') {
@@ -302,6 +307,35 @@ function registerRoutes(
         }
 
         if (message.type === 'session.create' || message.type === 'session.close') {
+          return;
+        }
+
+        // 表单填充 HITL 实体选择回环（T03 / T05）：H5 提交选择结果。
+        if (message.type === 'entity_select') {
+          const entityResp = message.entitySelectResponse as
+            | {
+                resumeToken?: string;
+                selectedCandidate?: Record<string, unknown>;
+                action?: string;
+              }
+            | undefined;
+          const resumeToken = entityResp?.resumeToken;
+          if (resumeToken != null && resumeToken.length > 0) {
+            const inbound = MessageRouter.createInboundMessage({
+              userId: user.userId,
+              channel: 'h5',
+              content: '',
+              sessionId: message.sessionId ?? clientSessionId,
+              agentId: message.agentId,
+              traceId: String(req.id),
+              messageType: 'entity_select',
+              resumeToken,
+              selectedCandidate: entityResp?.selectedCandidate,
+              action: entityResp?.action,
+              metadata: { source: 'h5-entity-select' },
+            });
+            await messageRouter.route(inbound);
+          }
           return;
         }
 

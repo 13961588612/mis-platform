@@ -10,12 +10,14 @@ import type { A2UIComponent, A2UIComponentName } from "./types";
 import { ApprovalCardView } from "./ApprovalCardView";
 import { DataTableView } from "./DataTableView";
 import { FormSheetView } from "./FormSheetView";
+import { EntitySelectView } from "./EntitySelectView";
 
 /** 已知组件名集合（与后端 A2UI_COMPONENTS 一致）。 */
 export const KNOWN_A2UI_COMPONENTS: ReadonlySet<string> = new Set<string>([
   "approval-card",
   "data-table",
   "form-sheet",
+  "entity-select",
 ] as A2UIComponentName[]);
 
 /** 组件名 → React 组件 注册表。 */
@@ -23,6 +25,7 @@ const registry = new Map<string, A2UIComponent>([
   ["approval-card", ApprovalCardView],
   ["data-table", DataTableView],
   ["form-sheet", FormSheetView],
+  ["entity-select", EntitySelectView],
 ]);
 
 /** 注册/覆盖一个 A2UI 组件（供未来扩展双向登记）。 */

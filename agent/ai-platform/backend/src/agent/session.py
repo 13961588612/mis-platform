@@ -127,6 +127,42 @@ class Session:
         """以字典列表形式返回所有消息。"""
         return [msg.to_dict() for msg in self.messages]
 
+    # ===== FormFill HITL 挂起标记（T05） =====
+    # session.state 持久化，随会话 24h TTL；此处额外记录 30min 过期时间，
+    # 过期后 get_pending_formfill 返回 None，避免恢复已失效的 HITL 任务。
+
+    def set_pending_formfill(self, resume_token: str, ttl_seconds: int = 1800) -> None:
+        """记录当前会话挂起的表单填充任务令牌（TTL 默认 30 分钟）。"""
+        from datetime import datetime, timedelta, timezone
+
+        expires_at = datetime.now(timezone.utc) + timedelta(seconds=ttl_seconds)
+        self.state["pending_formfill"] = {
+            "resume_token": resume_token,
+            "expires_at": expires_at.isoformat(),
+        }
+
+    def get_pending_formfill(self) -> str | None:
+        """返回有效的挂起表单填充令牌；已过期或不存在则返回 None。"""
+        from datetime import datetime, timezone
+
+        pending = self.state.get("pending_formfill")
+        if not isinstance(pending, dict):
+            return None
+        expires_at = pending.get("expires_at")
+        if expires_at:
+            try:
+                if datetime.fromisoformat(expires_at) < datetime.now(timezone.utc):
+                    self.state.pop("pending_formfill", None)
+                    return None
+            except (ValueError, TypeError):
+                self.state.pop("pending_formfill", None)
+                return None
+        return pending.get("resume_token")
+
+    def clear_pending_formfill(self) -> None:
+        """清除挂起的表单填充标记。"""
+        self.state.pop("pending_formfill", None)
+
     def to_dict(self) -> dict[str, Any]:
         """将会话序列化为字典。"""
         return {

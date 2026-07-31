@@ -46,6 +46,7 @@ A2UI_COMPONENTS: frozenset[str] = frozenset(
         "approval-card",  # 审批卡片（纯展示 + 可选操作按钮）
         "data-table",     # 数据表格（只读展示）
         "form-sheet",     # 表单（字段 + 提交按钮）
+        "entity-select",  # 实体选择卡片（HITL：候选实体单选 + 确认/手动/取消）
     }
 )
 """首期支持的 A2UI 组件名集合（与前端注册表双向登记）。"""

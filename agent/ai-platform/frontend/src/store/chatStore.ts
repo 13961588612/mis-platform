@@ -70,6 +70,18 @@ interface ChatState {
   approvalSender: ((approvalId: string, decision: "approved" | "rejected", comment?: string) => void) | null;
   /** 设置审批响应发送器（卸载时置 null）。 */
   setApprovalSender: (sender: ((approvalId: string, decision: "approved" | "rejected", comment?: string) => void) | null) => void;
+  /** 表单填充 HITL 实体选择发送器（由 useChat 注入，供 A2UI entity-select 组件调用）。 */
+  entitySelectSender: ((data: {
+    resumeToken: string;
+    selectedCandidate?: Record<string, unknown>;
+    action: "confirm" | "manual" | "cancel";
+  }) => void) | null;
+  /** 设置实体选择发送器（卸载时置 null）。 */
+  setEntitySelectSender: (sender: ((data: {
+    resumeToken: string;
+    selectedCandidate?: Record<string, unknown>;
+    action: "confirm" | "manual" | "cancel";
+  }) => void) | null) => void;
   /** Reset the chat state for a new session. */
   reset: () => void;
 }
@@ -104,6 +116,7 @@ export const useChatStore = create<ChatState>((set) => ({
   pendingApprovals: [],
   error: null,
   approvalSender: null,
+  entitySelectSender: null,
 
   setSessionId: (sessionId) => {
     set({ sessionId });
@@ -182,6 +195,10 @@ export const useChatStore = create<ChatState>((set) => ({
 
   setApprovalSender: (sender) => {
     set({ approvalSender: sender });
+  },
+
+  setEntitySelectSender: (sender) => {
+    set({ entitySelectSender: sender });
   },
 
   reset: () => {

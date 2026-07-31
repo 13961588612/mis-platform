@@ -148,6 +148,12 @@ export class BotEventMapper {
     component: string,
     props: Record<string, unknown>,
   ): BotMappingResult {
+    const normalized = component.toLowerCase().replace(/[^a-z]/g, '');
+    // 实体选择卡片 → 按钮交互（HITL 表单填充）
+    if (normalized === 'entityselect') {
+      return this.mapEntitySelect(props);
+    }
+
     const cardType = this.resolveCardType(component);
     const title = this.extractTitle(props, component);
 
@@ -227,6 +233,63 @@ export class BotEventMapper {
       card,
       eventType: 'ui.render',
       degraded: cardType === 'text_notice',
+    };
+  }
+
+  /**
+   * 将 entity-select（表单填充 HITL 实体选择）映射为 button_interaction 卡片。
+   *
+   * 每个候选实体一个按钮（key = candidateId），并附「手动输入」「取消」按钮；
+   * ``taskId`` 设为 resumeToken，供按钮回调解析（见 redisStream.buildEntitySelectInbound）。
+   *
+   * @param props - 后端下发的 entity-select 属性（resumeToken/field/prompt/candidates）
+   * @returns 包含 button_interaction 卡片的映射结果
+   */
+  mapEntitySelect(props: Record<string, unknown>): BotMappingResult {
+    const resumeToken = (props['resumeToken'] as string) ?? '';
+    const field = (props['field'] as string) ?? '';
+    const prompt = (props['prompt'] as string) ?? '请选择一个候选实体';
+    const originalValue = (props['originalValue'] as string) ?? '';
+    const candidates = Array.isArray(props['candidates'])
+      ? (props['candidates'] as unknown[])
+      : [];
+
+    const buttons: Array<{
+      text: string;
+      style: 'primary' | 'default' | 'warning';
+      key: string;
+    }> = candidates.map((raw, idx) => {
+      const obj =
+        typeof raw === 'object' && raw != null
+          ? (raw as Record<string, unknown>)
+          : {};
+      const id = (obj['id'] as string) ?? `candidate-${idx}`;
+      const label =
+        (obj['displayName'] as string) ??
+        (obj['name'] as string) ??
+        (obj['label'] as string) ??
+        id;
+      return { text: label, style: 'default' as const, key: id };
+    });
+
+    buttons.push({ text: '手动输入', style: 'default' as const, key: 'manual' });
+    buttons.push({ text: '取消', style: 'warning' as const, key: 'cancel' });
+
+    const content =
+      `${prompt}` + (field ? `（字段：${field}）` : '') +
+      (originalValue ? `\n当前值：${originalValue}` : '');
+
+    const card = this.cardBuilder.buildButtonInteraction(
+      '实体选择',
+      content,
+      buttons,
+      { taskId: resumeToken },
+    );
+
+    return {
+      card,
+      eventType: 'ui.render',
+      degraded: true,
     };
   }
 

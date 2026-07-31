@@ -22,6 +22,8 @@ from src.runtime.mcp_identity import (
     reset_mcp_identity,
     set_mcp_identity,
 )
+from src.skills.tools.formfill_apply import FormFillApplyTool
+from src.skills.tools.formfill_execute import FormFillExecuteTool
 from src.utils.logging import get_logger
 
 logger = get_logger("runtime.tool_registry")
@@ -257,6 +259,10 @@ def create_agent_source_registry(mcp_manager: McpClientManager | None) -> ToolRe
     registry: ToolRegistry = ToolRegistry()
     registry.register(SkillTool())
 
+    # 平台侧 FormFill 工具（ai-platform × MIS FormFill 引擎 P0）
+    registry.register(FormFillExecuteTool())
+    registry.register(FormFillApplyTool())
+
     if mcp_manager is None:
         return registry
 
@@ -332,7 +338,7 @@ def resolve_allowed_tool_patterns(
     """
     if configured:
         return configured
-    patterns: list[str] = ["skill", "mcp__*"]
+    patterns: list[str] = ["skill", "mcp__*", "formfill__*"]
     if mcp_manager is not None:
         mcp_names: list[str] = [
             f"mcp__{info.server_name}__{info.name}"

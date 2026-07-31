@@ -247,6 +247,12 @@ export class MessageRouter {
     userMobile?: string;
     channelUserId?: string;
     metadata?: Record<string, unknown>;
+    /** 表单填充 HITL 的 resumeToken（entity_select 入站） */
+    resumeToken?: string;
+    /** 用户选择的候选实体（entity_select 入站，JSON 对象） */
+    selectedCandidate?: Record<string, unknown>;
+    /** 选择动作：confirm | manual | cancel */
+    action?: string;
   }): InboundMessage {
     // 生成 session_id（如果未提供）
     let sessionId = params.sessionId;
@@ -272,6 +278,15 @@ export class MessageRouter {
       traceId: params.traceId ?? randomUUID(),
       timestamp: new Date().toISOString(),
       ...(params.metadata != null ? { metadata: params.metadata } : {}),
+      ...(params.resumeToken != null && params.resumeToken.length > 0
+        ? { resumeToken: params.resumeToken }
+        : {}),
+      ...(params.selectedCandidate != null
+        ? { selectedCandidate: params.selectedCandidate }
+        : {}),
+      ...(params.action != null && params.action.length > 0
+        ? { action: params.action }
+        : {}),
     };
   }
 }

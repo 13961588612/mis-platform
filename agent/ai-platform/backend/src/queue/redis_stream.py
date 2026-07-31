@@ -60,6 +60,10 @@ class InboundStreamMessage:
     metadata: dict[str, Any] | None = None
     user_mobile: str | None = None
     channel_user_id: str | None = None
+    # entity_select 入站（T05）：表单填充 HITL 恢复
+    resume_token: str | None = None
+    selected_candidate: dict[str, Any] | None = None
+    selection_action: str | None = None
 
 
 class StreamKeys:
@@ -101,6 +105,10 @@ def parse_inbound_fields(fields: dict[str, str]) -> InboundStreamMessage:
     metadata: Any = json.loads(metadata_raw) if metadata_raw else None
     user_mobile: str | None = fields.get("userMobile") or None
     channel_user_id: str | None = fields.get("channelUserId") or None
+    selected_candidate_raw: str | None = fields.get("selectedCandidate")
+    selected_candidate: Any = (
+        json.loads(selected_candidate_raw) if selected_candidate_raw else None
+    )
     return InboundStreamMessage(
         id=fields.get("id", ""),
         session_id=fields.get("sessionId", ""),
@@ -114,6 +122,9 @@ def parse_inbound_fields(fields: dict[str, str]) -> InboundStreamMessage:
         metadata=metadata,
         user_mobile=user_mobile,
         channel_user_id=channel_user_id,
+        resume_token=fields.get("resumeToken"),
+        selected_candidate=selected_candidate,
+        selection_action=fields.get("action") or fields.get("selectionAction"),
     )
 
 

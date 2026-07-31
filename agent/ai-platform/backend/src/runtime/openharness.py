@@ -17,6 +17,7 @@ from src.config import get_settings
 from src.llm.gateway import LLMGateway
 from src.runtime.base import AgentRuntime
 from src.runtime.events import AgentEvent, HealthStatus, TokenUsage
+from src.runtime.a2ui_pending import drain_a2ui_renders
 from src.runtime.oh_runtime_builder import (
     build_native_query_engine,
     connect_mcp_manager,
@@ -449,6 +450,20 @@ class OpenHarnessRuntime(AgentRuntime):
                     )
                 elif isinstance(event, ErrorEvent):
                     yield AgentEvent.error("RUNTIME_ERROR", event.message)
+
+            # 下发本轮回填工具产生的 A2UI 渲染（entity-select 等）。
+            # 工具在 agent 循环内部运行无法直接 yield AgentEvent，故经挂起缓冲，
+            # 在此统一 drain 后作为 ui.render 事件下发，保证选择卡片可靠到达前端。
+            a2ui_items: list[dict[str, Any]] = await drain_a2ui_renders(session_id)
+            for item in a2ui_items:
+                yield AgentEvent.ui_render(item["component"], item["props"])
+                _log_agent_trace(
+                    session_id,
+                    step=step,
+                    phase="a2ui_render",
+                    component=item["component"],
+                    props=item["props"],
+                )
 
             yield AgentEvent.done(total_usage)
             _log_agent_trace(

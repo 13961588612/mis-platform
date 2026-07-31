@@ -13,9 +13,20 @@ import com.mis.adminbff.dto.ai.AiRagRequest;
 import com.mis.adminbff.dto.ai.AiRagResponse;
 import com.mis.adminbff.dto.ai.AiSummaryRequest;
 import com.mis.adminbff.dto.ai.AiSummaryResponse;
+import com.mis.adminbff.dto.ai.SkillExecuteRequest;
+import com.mis.adminbff.dto.ai.SkillExecuteResponse;
 import com.mis.adminbff.service.AiCapabilityTranslator;
 import com.mis.adminbff.service.AiFeatureConfigService;
+import com.mis.adminbff.dto.ai.SkillApplyRequest;
+import com.mis.adminbff.dto.ai.SkillApplyResponse;
+import com.mis.adminbff.security.ReverseTrustContext;
+import com.mis.adminbff.security.ReverseTrustInterceptor;
+import com.mis.adminbff.service.skill.DocWriteRegistry;
+import com.mis.adminbff.service.skill.DocWriteResult;
+import com.mis.adminbff.service.skill.SkillExecutionEngine;
 import com.mis.adminbff.support.RequestContext;
+import com.mis.common.core.exception.ResultCode;
+import jakarta.servlet.http.HttpServletRequest;
 import com.mis.common.core.constant.SecurityConstants;
 import com.mis.common.core.exception.BusinessException;
 import com.mis.common.core.result.Result;
@@ -58,16 +69,22 @@ public class AiProxyController {
     private final AiCapabilityTranslator translator;
     private final AiFeatureConfigService featureConfig;
     private final AiPlatformProperties properties;
+    private final SkillExecutionEngine skillExecutionEngine;
+    private final DocWriteRegistry docWriteRegistry;
 
     public AiProxyController(
             AiPlatformClient aiPlatformClient,
             AiCapabilityTranslator translator,
             AiFeatureConfigService featureConfig,
-            AiPlatformProperties properties) {
+            AiPlatformProperties properties,
+            SkillExecutionEngine skillExecutionEngine,
+            DocWriteRegistry docWriteRegistry) {
         this.aiPlatformClient = aiPlatformClient;
         this.translator = translator;
         this.featureConfig = featureConfig;
         this.properties = properties;
+        this.skillExecutionEngine = skillExecutionEngine;
+        this.docWriteRegistry = docWriteRegistry;
     }
 
     // ===== 写类能力端点 =====
@@ -189,6 +206,63 @@ public class AiProxyController {
         return user.getEmployeeId();
     }
 
+    private Long currentUserId() {
+        LoginUser user = RequestContext.requireLoginUser();
+        return user.getUserId();
+    }
+
+    /**
+     * 执行 Skill 智能填充。
+     *
+     * <p>身份解析（决策3 / Q3）：优先使用 {@link ReverseTrustInterceptor} 经反向信任校验出的委托身份
+     * （ai-platform 反向调用场景）；否则回退网关登录用户（mis-admin-web 前端场景）。
+     * FormFill 引擎本身零改动。
+     *
+     * @param request Skill 执行请求（含 skillId、userInput、pageContext）
+     * @param httpRequest 容器请求，用于读取反向信任上下文属性
+     * @return 执行结果（success / hitl_required / manual_required / error）
+     */
+    @PostMapping("/skill/execute")
+    public Result<SkillExecuteResponse> skillExecute(
+            @RequestBody SkillExecuteRequest request,
+            HttpServletRequest httpRequest) {
+        ResolvedIdentity identity = resolveIdentity(httpRequest);
+
+        SkillExecuteResponse response = skillExecutionEngine.execute(
+                request.getSkillId(),
+                request.getUserInput(),
+                request.getPageContext(),
+                identity.userId(),
+                identity.tenantId()
+        );
+
+        return Result.ok(response);
+    }
+
+    /**
+     * 单据回填（设计 §4.4 / T04，决策5）。
+     *
+     * <p>反向信任已在 {@link ReverseTrustInterceptor} 校验；委托身份已写入 SecurityContextHolder，
+     * 供 {@code DocWriteHandler} 透传下游操作人。返回结构镜像 skillExecute，包裹于 Result 信封内，
+     * ai-platform 侧经 {@code .data} 解包（与 execute 一致）。
+     *
+     * @param request 回填请求 {skillId, docType, docId, values}
+     * @return 回填结果 {status, docId, message}
+     */
+    @PostMapping("/skill/apply")
+    public Result<SkillApplyResponse> applySkillFill(@RequestBody SkillApplyRequest request) {
+        if (request.getDocType() == null || request.getDocType().isBlank()) {
+            return Result.fail(ResultCode.VALIDATION_ERROR.getCode(), "docType 不能为空");
+        }
+        DocWriteResult result = docWriteRegistry.apply(
+                request.getSkillId(), request.getDocType(), request.getDocId(), request.getValues());
+        SkillApplyResponse response = new SkillApplyResponse();
+        response.setStatus(result.getStatus());
+        response.setDocId(result.getDocId());
+        response.setMessage(result.getMessage());
+        return Result.ok(response);
+    }
+
     /** 构造一帧 SSE {@code error{message}}（门禁/降级场景）；直接返回 Flux 供 MVC 流式写出。 */
     private Flux<ServerSentEvent<String>> sseErrorFlux(String message) {
         Map<String, String> err = new LinkedHashMap<>();
@@ -200,5 +274,22 @@ public class AiProxyController {
             data = "{\"message\":\"" + message + "\"}";
         }
         return Flux.just(ServerSentEvent.<String>builder().event("error").data(data).build());
+    }
+
+    /**
+     * 解析执行/写回身份：优先用反向信任注入的身份（ai-platform 反向调用），
+     * 否则回退网关登录用户（mis-admin-web 前端调用）。
+     */
+    private ResolvedIdentity resolveIdentity(HttpServletRequest request) {
+        Object attr = request.getAttribute(ReverseTrustInterceptor.ATTRIBUTE_NAME);
+        if (attr instanceof ReverseTrustContext ctx) {
+            return new ResolvedIdentity(ctx.userId(), ctx.tenantId());
+        }
+        LoginUser user = RequestContext.requireLoginUser();
+        return new ResolvedIdentity(user.getUserId(), user.getTenantId());
+    }
+
+    /** 执行身份（userId / tenantId）。 */
+    private record ResolvedIdentity(Long userId, Long tenantId) {
     }
 }

@@ -56,3 +56,20 @@ mis:
       extract: true
       rag: true
       nl2sql: false
+    # ===== 反向调用信任（决策3 / Q3，design §7.2 / §8.2）=====
+    # 因子一：与 ai-platform 共享的服务凭证（对应请求头 X-Platform-Token）
+    reverse-trust-enabled: ${AI_PLATFORM_REVERSE_TRUST_ENABLED:true}
+    service-token: ${AI_PLATFORM_BFF_SHARED_SECRET:change-me-in-prod}
+    # 因子三：ai-platform 来源网段（CIDR，如 10.20.0.0/16）；为空表示仅靠 service-token 作闸门
+    trusted-network: ${AI_PLATFORM_TRUSTED_NETWORK:}
+    # 因子二：委托 MIS JWT 验签
+    mis-jwt-issuer: ${MIS_JWT_ISSUER:mis-platform}
+    # 因子二：验签 X-Mis-Upstream-Jwt 的 MIS RSA 公钥（PEM，BEGIN/END 包裹）
+    mis-jwt-public-key: ${MIS_JWT_PUBLIC_KEY:}
+    # 单据写回目标微服务基址（DocWriteHandler 复用，design §9.2.1）
+    doc-service-base-url: ${AI_PLATFORM_DOC_SERVICE_BASE_URL:}
+  mcp:
+    servers:
+      org: http://localhost:8103
+      system: http://localhost:8105
+      iam: http://localhost:8102

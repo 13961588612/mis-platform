@@ -9,13 +9,23 @@
 import type { ComponentType } from "react";
 
 /** 受支持的 A2UI 组件名（必须与后端 A2UI_COMPONENTS 严格一致）。 */
-export type A2UIComponentName = "approval-card" | "data-table" | "form-sheet";
+export type A2UIComponentName =
+  | "approval-card"
+  | "data-table"
+  | "form-sheet"
+  | "entity-select";
 
 /** A2UI 动作的回调声明（后端只给描述，前端绑定实际处理函数）。 */
 export interface A2UIActions {
   onApprove?: (data?: Record<string, unknown>) => void;
   onReject?: (data?: Record<string, unknown>) => void;
   onSubmit?: (data: Record<string, unknown>) => void;
+  /** 表单填充 HITL 实体选择回调（entity-select 组件）。 */
+  onEntitySelect?: (data: {
+    resumeToken: string;
+    selectedCandidate?: Record<string, unknown>;
+    action: "confirm" | "manual" | "cancel";
+  }) => void;
 }
 
 /**

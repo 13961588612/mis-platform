@@ -17,6 +17,7 @@ import type { A2UIComponentName, A2UIComponentProps, A2UIRender } from "./types"
 
 export function A2uiRenderer({ render }: { render: A2UIRender }): JSX.Element {
   const approvalSender = useChatStore((s) => s.approvalSender);
+  const entitySelectSender = useChatStore((s) => s.entitySelectSender);
   const component = render.component;
   const props = useMemo(
     () => camelizeKeys(render.props ?? {}) as Record<string, unknown>,
@@ -48,8 +49,21 @@ export function A2uiRenderer({ render }: { render: A2UIRender }): JSX.Element {
         },
       };
     }
+    if (component === "entity-select") {
+      return {
+        onEntitySelect: (data: {
+          resumeToken: string;
+          selectedCandidate?: Record<string, unknown>;
+          action: "confirm" | "manual" | "cancel";
+        }) => {
+          if (data.resumeToken && entitySelectSender) {
+            entitySelectSender(data);
+          }
+        },
+      };
+    }
     return undefined;
-  }, [component, props.approvalId, approvalSender]);
+  }, [component, props.approvalId, approvalSender, entitySelectSender]);
 
   const Comp = getA2uiComponent(component);
 

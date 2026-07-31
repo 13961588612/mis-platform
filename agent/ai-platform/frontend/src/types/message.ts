@@ -81,7 +81,13 @@ export interface TokenUsageSummary {
  */
 export interface InboundMessage {
   /** Message type identifier. */
-  type: "chat" | "approval" | "ping" | "session.create" | "session.close";
+  type:
+    | "chat"
+    | "approval"
+    | "entity_select"
+    | "ping"
+    | "session.create"
+    | "session.close";
   /** Session/conversation ID. */
   sessionId: string;
   /** User ID (from JWT). */
@@ -95,6 +101,15 @@ export interface InboundMessage {
     approvalId: string;
     decision: "approved" | "rejected";
     comment?: string;
+  };
+  /** 表单填充 HITL 实体选择回执（entity_select 类型）。 */
+  entitySelectResponse?: {
+    /** 后端下发的 resumeToken（与 A2UI entity-select 卡片对应）。 */
+    resumeToken: string;
+    /** 用户选择的候选实体（confirm 动作时存在）。 */
+    selectedCandidate?: Record<string, unknown>;
+    /** 选择动作：confirm | manual | cancel。 */
+    action: "confirm" | "manual" | "cancel";
   };
   /** Client timestamp for ordering. */
   timestamp: string;

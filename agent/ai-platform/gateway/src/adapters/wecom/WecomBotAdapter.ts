@@ -15,6 +15,7 @@ import { WecomBotCapability } from '../../channels/ChannelCapability.js';
 import { WecomBotClient, type WecomBotClientConfig, type BotWsMessage } from './WecomBotClient.js';
 import { WecomBotCardBuilder, type TemplateCard } from './WecomBotCardBuilder.js';
 import type { InboundMessage } from '../../queue/redisStream.js';
+import { buildEntitySelectInbound } from '../../queue/redisStream.js';
 import { logger } from '../../middleware/logger.js';
 
 /** 企业微信 Bot 适配器配置 */
@@ -109,7 +110,13 @@ export class WecomBotAdapter {
 
     // 进入会话等事件：不走 Agent（无正文）
     if (botMessage.cmd === 'aibot_event_callback') {
-      logger.info({ msgType: botMessage.msgType }, 'Skip wecom event callback (no agent)');
+      // 企微智能机器人按钮回调（如 entity-select 卡片点击）
+      const inbound = this.receiveEventCallback(botMessage);
+      if (inbound != null) {
+        void onMessage(inbound);
+      } else {
+        logger.info({ msgType: botMessage.msgType }, 'Skip wecom event callback (no agent)');
+      }
       return;
     }
 
@@ -215,7 +222,7 @@ export class WecomBotAdapter {
       userId: channelUserId,    // 平台侧统一用户标识
       channelUserId,
       ...(userMobile.length > 0 ? { userMobile } : {}),
-      
+
       channel: 'wecom-bot',
       content,
       messageType: 'text',
@@ -232,6 +239,89 @@ export class WecomBotAdapter {
         perfT0: t0,
       },
     };
+  }
+
+  /**
+   * 解析企业微信智能机器人按钮回调（aibot_event_callback），构造 entity_select 入站消息。
+   *
+   * 后端 FormFill 工具下发 button_interaction 卡片时，将 ``taskId`` 设为
+   * resumeToken、将每个候选实体的按钮 ``key`` 设为 candidateId。用户点击后
+   * 企微以 aibot_event_callback 回传 ``task_id``（=resumeToken）与 ``event_key``
+   * （=candidateId 或 "manual" / "cancel"）。本方法从中提取并构造
+   * {@link buildEntitySelectInbound} 所需的入站消息，路由至 Redis 供后端续跑
+   * 表单填充（T03 / T05 实体选择回环）。
+   *
+   * 由于企微不同版本回调字段名存在差异，这里对 ``raw`` / ``raw.body`` /
+   * ``raw.body.event`` 中的 ``task_id`` / ``event_key`` 做多候选键容错解析。
+   *
+   * @param botMessage - 标准化后的 Bot WebSocket 消息（raw 为完整回调帧）
+   * @returns entity_select 入站消息；无可解析 task_id 时返回 null（非实体选择回调，忽略）
+   */
+  private receiveEventCallback(botMessage: BotWsMessage): InboundMessage | null {
+    const raw = botMessage.raw ?? {};
+    const body = (raw['body'] as Record<string, unknown> | undefined) ?? {};
+    const bodyEvent =
+      (body['event'] as Record<string, unknown> | undefined) ?? {};
+
+    // 多候选键容错取值（企微不同版本字段名不同）。
+    const pick = (keys: string[], ...scopes: Record<string, unknown>[]): string => {
+      for (const scope of scopes) {
+        for (const key of keys) {
+          const value = scope[key];
+          if (typeof value === 'string' && value.length > 0) {
+            return value;
+          }
+        }
+      }
+      return '';
+    };
+
+    const taskId = pick(['task_id', 'taskId', 'taskID'], raw, body, bodyEvent);
+    if (taskId.length === 0) {
+      // 无 task_id：非实体选择按钮回调（如进入会话等），忽略。
+      logger.info(
+        { cmd: 'aibot_event_callback', keys: Object.keys(raw) },
+        'Skip wecom event callback without task_id (not entity-select)',
+      );
+      return null;
+    }
+
+    const eventKey = pick(
+      ['event_key', 'eventKey', 'EventKey', 'key'],
+      raw, body, bodyEvent,
+    );
+
+    // action 推导：manual / cancel 为显式动作；其余（含 candidateId）视作 confirm。
+    const action =
+      eventKey === 'manual' ? 'manual'
+        : eventKey === 'cancel' ? 'cancel'
+          : 'confirm';
+    const selectedCandidate =
+      action === 'confirm' && eventKey.length > 0 ? { id: eventKey } : undefined;
+
+    // 会话标识：群聊优先 chat_id，否则渠道 userid（与 receive 保持一致）。
+    const chatId = pick(['chat_id', 'chatId', 'chatid'], raw, body, bodyEvent);
+    const fromObj =
+      (typeof bodyEvent['from'] === 'object' ? bodyEvent['from'] : undefined) ??
+      (typeof body['from'] === 'object' ? body['from'] : undefined) ??
+      {};
+    const fromUserId =
+      typeof (fromObj as Record<string, unknown>)['userid'] === 'string'
+        ? ((fromObj as Record<string, unknown>)['userid'] as string)
+        : undefined;
+    const channelUserId = botMessage.from?.userId ?? fromUserId ?? 'unknown';
+    const sessionKey = chatId.length > 0 ? chatId : channelUserId;
+    const sessionId = `wecom-bot-${sessionKey}`;
+
+    return buildEntitySelectInbound({
+      sessionId,
+      userId: channelUserId,
+      channel: 'wecom-bot',
+      resumeToken: taskId,
+      selectedCandidate,
+      action,
+      channelUserId,
+    });
   }
 
   /** Agent text.delta：累积；节流推送到企微（默认 400ms） */

@@ -13,6 +13,7 @@
  */
 
 import type { Redis } from 'ioredis';
+import { randomUUID } from 'node:crypto';
 import { logger } from '../middleware/logger.js';
 
 // agent Redis 键统一命名空间前缀（与 Agent Core redis-py 端 `aip:` 一致）。
@@ -53,6 +54,12 @@ export interface InboundMessage {
   eventType?: string;
   /** AgentEvent JSON（出站事件流，Backend snake_case） */
   eventJson?: string;
+  /** 表单填充 HITL 的 resumeToken（entity_select 入站） */
+  resumeToken?: string;
+  /** 用户选择的候选实体（entity_select 入站，JSON 对象） */
+  selectedCandidate?: Record<string, unknown>;
+  /** 选择动作：confirm | manual | cancel */
+  action?: string;
 }
 
 /** Stream 消息字段 */
@@ -111,6 +118,15 @@ export class StreamProducer {
       ...(message.metadata != null
         ? { metadata: JSON.stringify(message.metadata) }
         : {}),
+      ...(message.resumeToken != null && message.resumeToken.length > 0
+        ? { resumeToken: message.resumeToken }
+        : {}),
+      ...(message.selectedCandidate != null
+        ? { selectedCandidate: JSON.stringify(message.selectedCandidate) }
+        : {}),
+      ...(message.action != null && message.action.length > 0
+        ? { action: message.action }
+        : {}),
     };
 
     const messageId = await this.redis.xadd(
@@ -149,6 +165,48 @@ export class StreamProducer {
   static getAgentStreamKey(agentId: string): string {
     return `${REDIS_KEY_PREFIX}stream:agent:${agentId}`;
   }
+}
+
+// ============================================================================
+// Entity-Select 入站构造（T05 表单填充 HITL 回调）
+// ============================================================================
+
+/**
+ * 构造一条 entity_select 入站消息（企微按钮点击 / H5 提交回调）。
+ *
+ * 解析自 wecom 按钮回调的 ``task_id``（=resumeToken）与 ``event_key``
+ * （=candidateId | "manual" | "cancel"）后，由调用方构造此消息并路由至
+ * Redis 入站流，后端据此续跑表单填充。
+ *
+ * @param params - 入站参数
+ * @returns 标准 InboundMessage（messageType = "entity_select"）
+ */
+export function buildEntitySelectInbound(params: {
+  sessionId: string;
+  userId: string;
+  channel: string;
+  resumeToken: string;
+  selectedCandidate?: Record<string, unknown>;
+  action?: string;
+  traceId?: string;
+  channelUserId?: string;
+  metadata?: Record<string, unknown>;
+}): InboundMessage {
+  return {
+    id: randomUUID(),
+    sessionId: params.sessionId,
+    userId: params.userId,
+    channel: params.channel,
+    content: '',
+    messageType: 'entity_select',
+    traceId: params.traceId ?? randomUUID(),
+    timestamp: new Date().toISOString(),
+    resumeToken: params.resumeToken,
+    selectedCandidate: params.selectedCandidate,
+    action: params.action,
+    ...(params.channelUserId != null ? { channelUserId: params.channelUserId } : {}),
+    ...(params.metadata != null ? { metadata: params.metadata } : {}),
+  };
 }
 
 // ============================================================================

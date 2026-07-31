@@ -28,6 +28,7 @@ from src.queue.redis_stream import (
     parse_inbound_fields,
 )
 from src.runtime.events import AgentEventType
+from src.skills.tools.formfill_execute import resume_formfill
 from src.utils.exceptions import AgentNotFoundError, SessionNotFoundError
 from src.utils.logging import get_logger
 
@@ -291,6 +292,11 @@ class InboundStreamWorker:
             inbound: Gateway 写入的入站消息。
             stream_key: 消息来源 stream 键名（用于推断 ``agent_id``）。
         """
+        if inbound.message_type == "entity_select":
+            # HITL 实体选择回调（企微按钮 / H5 提交）→ 续跑表单填充（T05）
+            await self._process_formfill_resume(inbound, stream_key)
+            return
+
         if not inbound.content.strip():
             logger.debug("Skip empty inbound message", session_id=inbound.session_id)
             return
@@ -444,6 +450,10 @@ class InboundStreamWorker:
             resolved_agent_id = running_now[0].id
             session.agent_id = resolved_agent_id
             await session_manager.save_session(session)
+
+        # 持久化上游 MIS JWT / 租户（供 FormFill 反向信任复用；T01）
+        await self._persist_upstream_identity(session, inbound)
+
         user_msg: Message = await session_manager.add_message(
             session_id=session.session_id,
             role="user",
@@ -625,6 +635,212 @@ class InboundStreamWorker:
             agent_id=agent_id,
             trace_id=inbound.trace_id,
             event=AgentEvent.done(),
+        )
+
+    async def _persist_upstream_identity(
+        self, session: Session, inbound: InboundStreamMessage
+    ) -> None:
+        """将入站 metadata 中的上游 MIS JWT / 租户写入 session.state（供反向信任复用；T01）。
+
+        仅当 gateway 在 inbound.metadata 中携带 ``misUpstreamJwt`` / ``tenantId`` 时生效；
+        非 MIS 门户渠道（H5/企微）无上游 MIS JWT，依赖 X-User-Id/X-Tenant-Id 透传。
+        """
+        meta = inbound.metadata
+        if not isinstance(meta, dict):
+            return
+        mis_jwt = meta.get("misUpstreamJwt") or meta.get("mis_upstream_jwt")
+        tenant = meta.get("tenantId") or meta.get("tenant_id")
+        changed = False
+        if mis_jwt and session.state.get("mis_upstream_jwt") != mis_jwt:
+            session.state["mis_upstream_jwt"] = mis_jwt
+            changed = True
+        if tenant and session.state.get("tenant_id") != tenant:
+            session.state["tenant_id"] = tenant
+            changed = True
+        if changed:
+            await get_session_manager().save_session(session)
+
+    async def _process_formfill_resume(
+        self, inbound: InboundStreamMessage, stream_key: str
+    ) -> None:
+        """处理 entity_select 入站（用户已选候选），续跑表单填充（T05）。
+
+        解析 resume_token / 选择结果，调用 ``resume_formfill`` 提交 apply，
+        并按结果继续驱动 agent 或下发自然语言回执。
+        """
+        t0 = time.perf_counter()
+
+        def _ms_since_start() -> int:
+            return int((time.perf_counter() - t0) * 1000)
+
+        session_manager = get_session_manager()
+        agent_manager = get_agent_manager()
+        producer = self._producer
+        if producer is None:
+            raise RuntimeError("Stream producer not initialized")
+
+        try:
+            session = await session_manager.get_session(inbound.session_id)
+        except SessionNotFoundError:
+            logger.warning(
+                "FormFill resume: session not found",
+                session_id=inbound.session_id,
+            )
+            return
+
+        await self._persist_upstream_identity(session, inbound)
+
+        resolved_agent_id = session.agent_id
+        running_now = [
+            inst
+            for inst in agent_manager.list_agents()
+            if inst.lifecycle.current_state.value == "running"
+        ]
+        running_now_ids = {inst.id for inst in running_now}
+        if resolved_agent_id not in running_now_ids and running_now:
+            resolved_agent_id = running_now[0].id
+            session.agent_id = resolved_agent_id
+            await session_manager.save_session(session)
+
+        t_agent0 = time.perf_counter()
+        try:
+            instance = await agent_manager.ensure_agent_ready(resolved_agent_id)
+        except AgentNotFoundError as exc:
+            await self._publish_error(
+                producer, inbound, resolved_agent_id, "agent_not_found", str(exc)
+            )
+            return
+        ms_ensure_agent = int((time.perf_counter() - t_agent0) * 1000)
+        logger.info(
+            "FormFill resume agent ready",
+            session_id=session.session_id,
+            agent_id=resolved_agent_id,
+            ms_ensure_agent=ms_ensure_agent,
+            ms_since_start=_ms_since_start(),
+            perf_phase="be_ff_agent_ready",
+        )
+
+        outcome = await resume_formfill(
+            instance=instance, session=session, inbound=inbound, producer=producer
+        )
+
+        if outcome.kind == "continue":
+            # 续跑：把 apply 结果作为用户消息，继续驱动 agent
+            user_msg = await session_manager.add_message(
+                session_id=session.session_id,
+                role="user",
+                content=outcome.content,
+                metadata={**(inbound.metadata or {}), "formfill_resume": True},
+            )
+            await self._run_formfill_and_publish(instance, session, user_msg, inbound, producer)
+        elif outcome.kind == "error":
+            await self._publish_error(
+                producer, inbound, resolved_agent_id, "formfill_error", outcome.content
+            )
+        else:  # message
+            await producer.publish_agent_event(
+                session_id=session.session_id,
+                user_id=inbound.user_id,
+                channel=session.channel,
+                agent_id=resolved_agent_id,
+                trace_id=inbound.trace_id,
+                event=AgentEvent.text_delta(outcome.content),
+            )
+            await producer.publish_agent_event(
+                session_id=session.session_id,
+                user_id=inbound.user_id,
+                channel=session.channel,
+                agent_id=resolved_agent_id,
+                trace_id=inbound.trace_id,
+                event=AgentEvent.done(),
+            )
+            if outcome.content.strip():
+                await session_manager.add_message(
+                    session_id=session.session_id, role="assistant", content=outcome.content
+                )
+
+    async def _run_formfill_and_publish(
+        self,
+        instance: AgentInstance,
+        session: Session,
+        user_msg: Message,
+        inbound: InboundStreamMessage,
+        producer: StreamProducer,
+    ) -> None:
+        """运行 agent 并发布事件流（表单填充续跑专用，复用标准发布逻辑）。"""
+        response_parts: list[str] = []
+        runtime_error: str | None = None
+        timeout_sec: Any = self._settings.AGENT_MESSAGE_TIMEOUT
+        first_event_ms: int | None = None
+        first_text_ms: int | None = None
+        event_count: int = 0
+        t_run0: float = time.perf_counter()
+
+        try:
+            async with asyncio.timeout(timeout_sec):
+                async for event in instance.process_message(
+                    session=session, message=user_msg
+                ):
+                    if first_event_ms is None:
+                        first_event_ms = int((time.perf_counter() - t_run0) * 1000)
+                    event_count += 1
+                    await producer.publish_agent_event(
+                        session_id=session.session_id,
+                        user_id=inbound.user_id,
+                        channel=session.channel,
+                        agent_id=session.agent_id,
+                        trace_id=inbound.trace_id,
+                        event=event,
+                    )
+                    if event.type == AgentEventType.TEXT_DELTA and event.content:
+                        if first_text_ms is None:
+                            first_text_ms = int((time.perf_counter() - t_run0) * 1000)
+                        response_parts.append(event.content)
+                    elif event.type == AgentEventType.ERROR:
+                        runtime_error = event.message or "Agent runtime error"
+        except TimeoutError:
+            await self._publish_error(
+                producer,
+                inbound,
+                session.agent_id,
+                "agent_timeout",
+                f"处理超时（{timeout_sec}s），请稍后重试",
+            )
+            return
+        except Exception as exc:
+            await self._publish_error(
+                producer,
+                inbound,
+                session.agent_id,
+                "agent_processing_error",
+                str(exc) or "Agent processing failed",
+            )
+            return
+
+        ms_agent_run = int((time.perf_counter() - t_run0) * 1000)
+        response_text = "".join(response_parts)
+        if response_text.strip():
+            await session_manager.add_message(
+                session_id=session.session_id,
+                role="assistant",
+                content=response_text,
+            )
+        elif runtime_error:
+            logger.warning(
+                "FormFill resume completed without text response",
+                session_id=session.session_id,
+                error=runtime_error,
+            )
+
+        logger.info(
+            "FormFill resume processed (perf summary)",
+            session_id=session.session_id,
+            agent_id=session.agent_id,
+            response_length=len(response_text),
+            event_count=event_count,
+            ms_agent_run=ms_agent_run,
+            ms_total=_ms_since_start(),
+            perf_phase="be_ff_done",
         )
 
 
