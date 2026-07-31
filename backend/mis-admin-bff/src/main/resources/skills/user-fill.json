@@ -1,0 +1,26 @@
+{
+  "id": "user-fill",
+  "name": "人员调动填充",
+  "version": "1.0",
+  "trigger": "把 {person} 调到 {dept}",
+  "outputSchema": {
+    "personId": {
+      "type": "integer",
+      "entityRef": "employee",
+      "tool": "queryEmployeeByName",
+      "params": { "name": "${personName}" }
+    },
+    "deptId": {
+      "type": "integer",
+      "entityRef": "dept",
+      "tool": "queryDeptByName",
+      "params": { "name": "${deptName}", "orgId": "${orgId}" }
+    },
+    "orgId": {
+      "type": "integer",
+      "entityRef": "org",
+      "tool": "queryOrgByName",
+      "params": { "name": "${orgName}" }
+    }
+  }
+}

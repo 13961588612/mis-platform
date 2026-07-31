@@ -1,0 +1,63 @@
+sequenceDiagram
+    participant U as 用户
+    participant FE as 前端
+    participant GW as Gateway
+    participant BFF as AiProxyController
+    participant ENG as SkillExecutionEngine
+    participant DAG as DagBuilder
+    participant RES as ParameterResolver
+    participant LLM as AiPlatform/AiCapabilityTranslator
+    participant MCP as McpClient
+    participant MS as 微服务MCP Server
+
+    U->>FE: "把张三调到财务部"
+    FE->>FE: 解析自然语言 → 提取 skillId + userInput
+    FE->>GW: POST /api/v1/ai/skill/execute
+    GW->>BFF: 转发请求
+    BFF->>BFF: 校验权限 + 提取 userId/tenantId
+
+    BFF->>ENG: execute(skillId, userInput, pageContext)
+    ENG->>ENG: SkillLoader.loadSkill(skillId)
+    ENG->>DAG: build(outputSchema) → 构建依赖图
+    DAG->>DAG: topologicalSort() → [orgId, deptId, personId]
+    DAG-->>ENG: 返回执行顺序
+
+    loop 按拓扑序遍历每个字段
+        ENG->>RES: resolve(fieldDef, userInput, pageContext, prevResults)
+        
+        alt ① LLM 抽取
+            RES->>LLM: 调用 extract 端点
+            LLM-->>RES: 返回抽取结果
+        else ② 上下文/默认值
+            RES-->>RES: 从 pageContext 或默认值填充
+        else ③ HITL 兜底
+            RES-->>ENG: 标记 needHITL
+        end
+
+        RES-->>ENG: resolvedParams
+
+        ENG->>MCP: callTool(toolName, resolvedParams, userId, tenantId)
+        MCP->>MS: JSON-RPC 2.0 POST /mcp/tools/call
+        MS->>MS: 执行 SQL（JOIN user_org 权限过滤）
+        MS-->>MCP: 返回 candidates 数组
+        
+        alt candidates == 1
+            MCP-->>ENG: 直接使用
+        else candidates > 1
+            ENG-->>BFF: 中断，返回 hitl_required
+            BFF-->>FE: SkillFillResult(status=hitl_required)
+            FE->>U: 弹窗展示候选
+            U->>FE: 用户选择
+            FE->>ENG: 回填用户选择
+            ENG->>ENG: 继续执行
+        else candidates == 0
+            ENG-->>BFF: 返回 manual_required
+            BFF-->>FE: 提示手动填写
+        end
+    end
+
+    ENG->>ENG: assembleResult(all field results)
+    ENG-->>BFF: SkillFillResult(status=success, fields)
+    BFF-->>GW: Result~SkillFillResponse~
+    GW-->>FE: 返回填充结果
+    FE->>FE: 回填表单 + 记录映射学习
