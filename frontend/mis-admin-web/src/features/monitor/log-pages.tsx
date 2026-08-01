@@ -136,7 +136,7 @@ export function OperLogListPage() {
               rows.map((row) => (
                 <tr
                   key={row.id}
-                  className="cursor-pointer border-b border-border/50 last:border-0 hover:bg-table-hover even:bg-table-stripe"
+                  className="cursor-pointer border-b border-border/50 last:border-0 even:bg-table-stripe hover:bg-table-hover"
                   onClick={() => setDetail(row)}
                 >
                   <td className="px-3 py-2 text-muted-foreground">{formatTime(row.operTime)}</td>
@@ -290,7 +290,7 @@ export function LoginLogListPage() {
               rows.map((row) => (
                 <tr
                   key={row.id}
-                  className="cursor-pointer border-b border-border/50 last:border-0 hover:bg-table-hover even:bg-table-stripe"
+                  className="cursor-pointer border-b border-border/50 last:border-0 even:bg-table-stripe hover:bg-table-hover"
                   onClick={() => setDetail(row)}
                 >
                   <td className="px-3 py-2 text-muted-foreground">{formatTime(row.loginAt)}</td>

@@ -445,7 +445,7 @@ export function ModuleManagePage() {
                     </thead>
                     <tbody className="bg-table-surface">
                       {bindings.map((b, i) => (
-                        <tr key={`${b.apiId}-${i}`} className="border-b border-border/50 last:border-0 hover:bg-table-hover even:bg-table-stripe">
+                        <tr key={`${b.apiId}-${i}`} className="border-b border-border/50 last:border-0 even:bg-table-stripe hover:bg-table-hover">
                           <td className="px-2 py-1.5">{b.menuName}</td>
                           <td className="px-2 py-1.5 text-muted-foreground">{b.permission ?? '—'}</td>
                           <td className="px-2 py-1.5">{b.apiName}</td>

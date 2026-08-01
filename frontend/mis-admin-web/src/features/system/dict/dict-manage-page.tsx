@@ -277,7 +277,7 @@ export function DictManagePage() {
                 </tr>
               ) : (
                 items.map((item) => (
-                  <tr key={item.id} className="border-b border-border/50 last:border-0 hover:bg-table-hover even:bg-table-stripe">
+                  <tr key={item.id} className="border-b border-border/50 last:border-0 even:bg-table-stripe hover:bg-table-hover">
                     <td className="px-3 py-2">{item.label}</td>
                     <td className="px-3 py-2 font-mono text-xs">{item.value}</td>
                     <td className="px-3 py-2">{item.sort}</td>

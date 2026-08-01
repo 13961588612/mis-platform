@@ -545,3 +545,13 @@ export interface Assignment {
 - **校验**：表体底 `#c7d5e2`（80%）与正文 `muted-foreground`（#57606e）对比度约 4.5:1，处于 WCAG AA 边界；主内容文字（`foreground` #0f172a）对比度充足。斑马纹/hover 更深，三档递进明显。
 - **提示**：若刷新后仍未看到灰色，请检查浏览器缓存或 HMR 是否生效，尝试强制刷新（Ctrl+F5）后重试。
 - **验收**：`npm run typecheck` 0 错误（纯 CSS 变量值变更）。
+
+### 21.7 截图复核与行级顺序修复（2026-08-01 续6）
+- **复核**：用户再次截图显示组织管理表格主体仍接近纯白。核查代码发现：
+  - `tailwind.config.ts` 已正确定义 `'table-surface': 'hsl(var(--table-surface))'`，且 `content` 包含 `./src/**/*.{ts,tsx}`；
+  - `org-list-page.tsx` 已正确写 `<tbody className="bg-table-surface">`；
+  - 表头 `bg-table-stripe` 已呈灰色，说明 tailwind 配置与自定义 token 整体已加载。
+  - 因此 tbody 仍发白最可能是 **Vite HMR / 浏览器缓存未使最新 CSS 生效**，而非色值不够深。
+- **修复**：统一将所有表格行 className 从 `hover:bg-table-hover even:bg-table-stripe` 调整为 `even:bg-table-stripe hover:bg-table-hover`，确保 hover 态始终覆盖斑马纹（相同 specificity 下后定义优先）。涉及 10 个表格/树表文件：`tree-table.tsx`、`list-page-skeleton.tsx`、`admin-list-page.tsx`、`user-list-page.tsx`、`role-list-page.tsx`、`org-list-page.tsx`、`dict-manage-page.tsx`、`log-pages.tsx`、`module-manage-page.tsx`、`menu-manage-page.tsx`。
+- **用户操作**：请在前端项目目录执行 `npm run dev` 重启开发服务器，然后浏览器内按 `Ctrl+F5` 强制刷新组织管理页面。若仍看不到 `#c7d5e2` 冷灰底，再反馈。
+- **验收**：`npm run typecheck` 0 错误。

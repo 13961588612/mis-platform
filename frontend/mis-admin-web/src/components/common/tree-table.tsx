@@ -97,7 +97,7 @@ export function TreeTable<T extends TreeTableNode>({
               key={row.id}
               onClick={onRowClick ? () => onRowClick(row) : undefined}
               className={cn(
-                'group border-b border-border/50 last:border-0 hover:bg-table-hover even:bg-table-stripe',
+                'group border-b border-border/50 last:border-0 even:bg-table-stripe hover:bg-table-hover',
                 onRowClick && 'cursor-pointer',
                 rowClassName?.(row),
               )}

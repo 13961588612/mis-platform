@@ -297,7 +297,7 @@ export function ListPageSkeleton<T extends Record<string, unknown>>({
                   pageRows.map((row) => (
                     <tr
                       key={rowKey(row)}
-                      className="cursor-pointer border-b border-border/50 last:border-0 hover:bg-table-hover even:bg-table-stripe"
+                      className="cursor-pointer border-b border-border/50 last:border-0 even:bg-table-stripe hover:bg-table-hover"
                       onClick={() => enableFormSheet && openView(row)}
                     >
                       {columns.map((col) => (

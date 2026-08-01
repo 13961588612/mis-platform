@@ -156,7 +156,7 @@ export function OrgListPage() {
               </tr>
             ) : (
               rows.map((row) => (
-                <tr key={row.id} className="border-b border-border/50 last:border-0 hover:bg-table-hover even:bg-table-stripe">
+                <tr key={row.id} className="border-b border-border/50 last:border-0 even:bg-table-stripe hover:bg-table-hover">
                   <td className="px-3 py-2 font-mono text-xs">{row.code}</td>
                   <td className="px-3 py-2 font-medium">{row.name}</td>
                   <td className="px-3 py-2">{row.sort}</td>
