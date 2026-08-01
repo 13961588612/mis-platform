@@ -571,3 +571,10 @@ export interface Assignment {
   - 涉及文件：`globals.css`、`tree-table.tsx`、`list-page-skeleton.tsx`、`org-list-page.tsx`、`role-list-page.tsx`、`dict-manage-page.tsx`、`log-pages.tsx`、`module-manage-page.tsx`、`dashboard-page.tsx`，以及含 WIP 的 `admin-list-page.tsx`、`user-list-page.tsx`（工作区已同步修改，暂不带入提交）。
 - **校验**：surface `#e2e8f0` 与正文 `#57606e` 对比度约 5.4:1，满足 WCAG AA；整体层次比上一轮柔和，不再像深蓝灰块。
 - **验收**：`npm run typecheck` 0 错误。
+
+### 21.9 撤销 `min-h-full`：修复行高被撑大问题（2026-08-01 续8）
+- **用户反馈**：组织管理截图显示行被拉得很高，底部出现大片空白；仅 2 行数据却占满整个卡片高度。
+- **根因**：§21.8 为让空白区也有冷灰底，给 `<table>` 加了 `min-h-full`，导致 table 被强制撑到容器高度。行数少时浏览器会把多余高度分配给行/表格，出现行高过大的视觉效果。
+- **修复**：移除所有表格的 `min-h-full`，恢复表格自然行高。涉及文件：`tree-table.tsx`、`list-page-skeleton.tsx`、`dashboard-page.tsx`、`log-pages.tsx`、`admin-list-page.tsx`、`dict-manage-page.tsx`、`module-manage-page.tsx`、`org-list-page.tsx`、`role-list-page.tsx`、`user-list-page.tsx`。
+- **取舍说明**：去掉 `min-h-full` 后，数据行下方到卡片底部的空白区会重新透出外层 `bg-card`（白色）。这是「自然行高」与「整片灰底」之间的权衡；若后续仍希望空白区着色，应在 table 外层 wrapper div 上应用 `bg-table-surface`，而不是强制拉伸 table 高度。
+- **验收**：`npm run typecheck` 0 错误。

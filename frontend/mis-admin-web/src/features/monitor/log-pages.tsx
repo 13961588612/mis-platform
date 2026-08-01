@@ -107,7 +107,7 @@ export function OperLogListPage() {
         </Button>
       </div>
       <div className="min-h-0 flex-1 overflow-auto rounded-lg border bg-card">
-        <table className="min-h-full w-full min-w-[800px] bg-table-surface text-left text-sm">
+        <table className="w-full min-w-[800px] bg-table-surface text-left text-sm">
           <thead className="sticky top-0 z-10 border-b bg-table-stripe text-muted-foreground backdrop-blur">
             <tr>
               <th className="px-3 py-2 font-bold">时间</th>
@@ -263,7 +263,7 @@ export function LoginLogListPage() {
         </Button>
       </div>
       <div className="min-h-0 flex-1 overflow-auto rounded-lg border bg-card">
-        <table className="min-h-full w-full bg-table-surface text-left text-sm">
+        <table className="w-full bg-table-surface text-left text-sm">
           <thead className="sticky top-0 z-10 border-b bg-table-stripe text-muted-foreground backdrop-blur">
             <tr>
               <th className="px-3 py-2 font-bold">时间</th>

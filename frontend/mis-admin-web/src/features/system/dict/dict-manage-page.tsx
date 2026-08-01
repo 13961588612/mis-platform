@@ -247,7 +247,7 @@ export function DictManagePage() {
         </aside>
 
         <div className="min-w-0 flex-1 overflow-auto rounded-lg border bg-card">
-          <table className="min-h-full w-full bg-table-surface text-left text-sm">
+          <table className="w-full bg-table-surface text-left text-sm">
             <thead className="sticky top-0 z-10 border-b bg-table-stripe text-muted-foreground backdrop-blur">
               <tr>
                 <th className="px-3 py-2 font-bold">标签</th>
