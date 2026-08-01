@@ -581,7 +581,7 @@ export function UserListPage() {
                     <th className="px-3 py-2 font-bold">操作</th>
                   </tr>
                 </thead>
-                <tbody className="bg-muted/20">
+                <tbody className="bg-muted/40">
                   {loading ? (
                     <tr>
                 <td colSpan={9} className="px-3 py-10 text-center text-muted-foreground">
@@ -596,7 +596,7 @@ export function UserListPage() {
                 </tr>
                   ) : (
                     rows.map((row) => (
-                      <tr key={row.id} className="border-b border-border/50 last:border-0 hover:bg-muted/50 even:bg-muted/40">
+                      <tr key={row.id} className="border-b border-border/50 last:border-0 hover:bg-muted/70 even:bg-muted/60">
                         <td className="px-3 py-2">{row.employeeNo ?? '—'}</td>
                         <td className="px-3 py-2">
                           <span className="font-medium">{row.username}</span>

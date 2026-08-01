@@ -517,7 +517,7 @@ export function MenuManagePage() {
                   <div>
                     <h3 className="mb-2 text-sm font-semibold">直接子节点（{kids.length}）</h3>
                     {kids.length ? (
-                      <div className="overflow-hidden rounded-lg border bg-muted/20">
+                      <div className="overflow-hidden rounded-lg border bg-muted/40">
                         {kids.map((k) => {
                           const km = typeMeta(k.type);
                           const KIcon = km.Icon;
@@ -526,7 +526,7 @@ export function MenuManagePage() {
                               key={k.id}
                               role="button"
                               tabIndex={0}
-                              className="flex cursor-pointer items-center gap-2 border-b border-border/50 px-3 py-2 text-sm last:border-0 hover:bg-muted/50 even:bg-muted/40"
+                              className="flex cursor-pointer items-center gap-2 border-b border-border/50 px-3 py-2 text-sm last:border-0 hover:bg-muted/70 even:bg-muted/60"
                               onClick={() => setSelectedId(k.id)}
                             >
                               <span className={cn('grid h-5 w-5 place-items-center rounded', km.dotBg)}>

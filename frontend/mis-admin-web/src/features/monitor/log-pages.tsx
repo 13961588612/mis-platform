@@ -119,7 +119,7 @@ export function OperLogListPage() {
               <th className="px-3 py-2 font-bold">结果</th>
             </tr>
           </thead>
-          <tbody className="bg-muted/20">
+          <tbody className="bg-muted/40">
             {loading ? (
               <tr>
                 <td colSpan={7} className="px-3 py-10 text-center text-muted-foreground">
@@ -136,7 +136,7 @@ export function OperLogListPage() {
               rows.map((row) => (
                 <tr
                   key={row.id}
-                  className="cursor-pointer border-b border-border/50 last:border-0 hover:bg-muted/50 even:bg-muted/40"
+                  className="cursor-pointer border-b border-border/50 last:border-0 hover:bg-muted/70 even:bg-muted/60"
                   onClick={() => setDetail(row)}
                 >
                   <td className="px-3 py-2 text-muted-foreground">{formatTime(row.operTime)}</td>
@@ -273,7 +273,7 @@ export function LoginLogListPage() {
               <th className="px-3 py-2 font-bold">消息</th>
             </tr>
           </thead>
-          <tbody className="bg-muted/20">
+          <tbody className="bg-muted/40">
             {loading ? (
               <tr>
                 <td colSpan={5} className="px-3 py-10 text-center text-muted-foreground">
@@ -290,7 +290,7 @@ export function LoginLogListPage() {
               rows.map((row) => (
                 <tr
                   key={row.id}
-                  className="cursor-pointer border-b border-border/50 last:border-0 hover:bg-muted/50 even:bg-muted/40"
+                  className="cursor-pointer border-b border-border/50 last:border-0 hover:bg-muted/70 even:bg-muted/60"
                   onClick={() => setDetail(row)}
                 >
                   <td className="px-3 py-2 text-muted-foreground">{formatTime(row.loginAt)}</td>

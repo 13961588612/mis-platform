@@ -156,7 +156,7 @@ function AssignmentEditor({
               <th className="w-12 px-2.5 py-1.5" />
             </tr>
           </thead>
-          <tbody className="bg-muted/20">
+          <tbody className="bg-muted/40">
             {list.length === 0 ? (
               <tr>
                 <td colSpan={5} className="px-2.5 py-3 text-center text-xs text-muted-foreground">
@@ -259,7 +259,7 @@ function AssignmentTable({ list }: { list: Assignment[] }) {
           <th className="border-l border-border/60 px-3 py-2 font-bold">主职</th>
         </tr>
       </thead>
-      <tbody className="bg-muted/20">
+      <tbody className="bg-muted/40">
         {list.map((a, i) => (
           <tr key={i}>
             <td className="px-3 py-2 font-medium text-foreground">{a.dept || '—'}</td>
@@ -781,7 +781,7 @@ export function AdminListPage({ def }: { def: AdminPageDef }) {
                   </th>
                 </tr>
               </thead>
-              <tbody className="bg-muted/20">
+              <tbody className="bg-muted/40">
                 {loading ? (
                   Array.from({ length: pageSize }).map((_, i) => (
                     <tr key={`sk-${i}`} className="border-b last:border-0">
@@ -851,7 +851,7 @@ export function AdminListPage({ def }: { def: AdminPageDef }) {
                     const hasAssignments = assignments.length > 0;
                     return (
                       <Fragment key={rowId}>
-                        <tr className="border-b border-border/50 last:border-0 hover:bg-muted/50 even:bg-muted/40">
+                        <tr className="border-b border-border/50 last:border-0 hover:bg-muted/70 even:bg-muted/60">
                           {def.columns.map((c) => (
                             <td key={c.key} className="px-4 py-[0.7rem] align-middle text-sm">
                               {c.status ? (
