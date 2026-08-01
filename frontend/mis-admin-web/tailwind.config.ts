@@ -60,6 +60,7 @@ const config: Config = {
           foreground: 'hsl(var(--info-foreground))',
         },
         'table-surface': 'hsl(var(--table-surface))',
+        'table-header': 'hsl(var(--table-header))',
         'table-row': 'hsl(var(--table-row))',
         'table-stripe': 'hsl(var(--table-stripe))',
         'table-hover': 'hsl(var(--table-hover))',

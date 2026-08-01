@@ -63,7 +63,7 @@ export function TreeTable<T extends TreeTableNode>({
 }: TreeTableProps<T>) {
   return (
     <table className={cn('w-full border-collapse bg-table-surface text-sm', className)}>
-      <thead className="sticky top-0 z-10 border-b bg-table-surface text-left text-sm font-bold text-muted-foreground backdrop-blur">
+      <thead className="sticky top-0 z-10 border-b bg-table-header text-left text-sm font-bold text-muted-foreground backdrop-blur">
         <tr>
           {columns.map((col) => (
             <th

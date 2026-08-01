@@ -434,7 +434,7 @@ export function ModuleManagePage() {
                   <p className="text-sm text-muted-foreground">暂无绑定关系</p>
                 ) : (
                   <table className="w-full border-collapse bg-table-surface text-sm">
-                    <thead className="sticky top-0 z-10 border-b bg-table-surface text-left text-sm font-bold text-muted-foreground backdrop-blur">
+                    <thead className="sticky top-0 z-10 border-b bg-table-header text-left text-sm font-bold text-muted-foreground backdrop-blur">
                       <tr>
                         <th className="px-2 py-1.5">菜单</th>
                         <th className="px-2 py-1.5">权限码</th>

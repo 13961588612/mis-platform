@@ -4,36 +4,37 @@
 
 @layer base {
   :root {
-    /* ===== 中性与基础（商务现代：画布冷灰、白卡浮起） ===== */
-    --background: 214 32% 96.5%;
+    /* ===== 中性与基础（专业中性灰：去青、低饱和、层次清晰） ===== */
+    --background: 220 14% 95.5%;    /* 页面背景：明确浅灰，不泛青 */
     --foreground: 222.2 47% 11%;
     --card: 0 0% 100%;
     --card-foreground: 222.2 47% 11%;
     --popover: 0 0% 100%;
     --popover-foreground: 222.2 47% 11%;
-    --muted: 214 32% 93%;
+    --muted: 220 14% 93%;
     --muted-foreground: 215 19% 42%;
-    --border: 214 30% 88%;
+    --border: 220 13% 90%;          /* 边框更淡，减少碎裂感 */
 
-    /* ===== 表格专用冷灰色板（不透明实色，避免浅 --muted 叠透明后接近白底） ===== */
-    --table-surface: 214 32% 90%;   /* 外层容器/空白区/表头底色（可见冷灰） */
-    --table-row: 0 0% 100%;         /* 奇数数据行：近白，比底色更淡 */
-    --table-stripe: 214 32% 94%;    /* 偶数数据行：极淡冷灰，仅做轻微斑马 */
-    --table-hover: 214 32% 84%;     /* hover：清晰可辨 */
-    --input: 214 30% 88%;
+    /* ===== 表格专用色板（白卡浮于灰底，表头/行/斑马层次分离） ===== */
+    --table-surface: 220 14% 98%;   /* 外层容器/空白区：极淡灰，不死白 */
+    --table-header: 220 14% 96%;    /* 表头：独立浅灰，带底边即可脱底 */
+    --table-row: 0 0% 100%;         /* 奇数数据行：纯白，从灰底浮出 */
+    --table-stripe: 220 14% 99%;    /* 偶数数据行：极淡灰，同一色相 */
+    --table-hover: 220 14% 94%;     /* hover：清晰可辨 */
+    --input: 220 13% 90%;
     --ring: 243 75% 59%;
-    --sidebar: 214 32% 90%;
-    --sidebar-foreground: 222 47% 11%;
-    --sidebar-border: 214 30% 82%;
-    --sidebar-accent: 214 32% 84%;
-    --sidebar-muted: 215 16% 45%;
+    --sidebar: 222 47% 11%;         /* 侧边栏：深 slate，与主区形成边界 */
+    --sidebar-foreground: 210 40% 98%;
+    --sidebar-border: 217 33% 20%;
+    --sidebar-accent: 217 33% 20%;
+    --sidebar-muted: 215 18% 62%;
 
     /* ===== 品牌（企业靛） ===== */
     --primary: 243 75% 59%;
     --primary-foreground: 0 0% 100%;
-    --secondary: 214 32% 93%;
+    --secondary: 220 14% 93%;
     --secondary-foreground: 222.2 47% 11%;
-    --accent: 214 32% 93%;
+    --accent: 220 14% 93%;
     --accent-foreground: 222.2 47% 11%;
     --destructive: 0 72% 51%;
     --destructive-foreground: 0 0% 100%;
@@ -72,34 +73,35 @@
   }
 
   .dark {
-    --background: 222 47% 7%;
+    --background: 222 40% 6%;
     --foreground: 210 40% 96%;
-    --card: 222 40% 12%;
+    --card: 222 40% 11%;
     --card-foreground: 210 40% 96%;
-    --popover: 222 40% 12%;
+    --popover: 222 40% 11%;
     --popover-foreground: 210 40% 96%;
-    --muted: 217.2 33% 18%;
+    --muted: 222 30% 15%;
     --muted-foreground: 215 20% 68%;
-    --border: 217.2 33% 20%;
+    --border: 222 30% 18%;
 
-    /* ===== 表格专用冷灰色板（暗色） ===== */
-    --table-surface: 217 33% 15%;   /* 外层容器/空白区/表头底色 */
-    --table-row: 217 33% 22%;       /* 奇数数据行：比底色略亮 */
-    --table-stripe: 217 33% 19%;    /* 偶数数据行：略亮于底色 */
-    --table-hover: 217 33% 26%;     /* hover：最亮 */
-    --input: 217.2 33% 20%;
+    /* ===== 表格专用色板（暗色：卡片浮出、表头独立） ===== */
+    --table-surface: 222 40% 11%;   /* 外层容器/空白区 */
+    --table-header: 222 40% 14%;    /* 表头：比容器略亮 */
+    --table-row: 222 40% 13%;       /* 奇数数据行 */
+    --table-stripe: 222 40% 11.5%;  /* 偶数数据行：极淡斑马 */
+    --table-hover: 222 40% 18%;     /* hover：清晰可辨 */
+    --input: 222 30% 18%;
     --ring: 243 75% 66%;
-    --sidebar: 217 33% 14%;
+    --sidebar: 222 47% 8%;          /* 侧边栏：更深 slate */
     --sidebar-foreground: 210 40% 96%;
-    --sidebar-border: 217 33% 22%;
-    --sidebar-accent: 217 33% 20%;
+    --sidebar-border: 217 33% 18%;
+    --sidebar-accent: 217 33% 16%;
     --sidebar-muted: 215 18% 62%;
 
     --primary: 243 75% 66%;
     --primary-foreground: 222.2 47.4% 11%;
-    --secondary: 217.2 32.6% 17.5%;
+    --secondary: 222 30% 15%;
     --secondary-foreground: 210 40% 98%;
-    --accent: 217.2 32.6% 17.5%;
+    --accent: 222 30% 15%;
     --accent-foreground: 210 40% 98%;
     --destructive: 0 62.8% 45%;
     --destructive-foreground: 210 40% 98%;

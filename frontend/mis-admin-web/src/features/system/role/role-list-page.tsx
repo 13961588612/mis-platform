@@ -341,7 +341,7 @@ export function RoleListPage() {
       />
       <div className="min-h-0 flex-1 overflow-auto rounded-lg border bg-table-surface">
         <table className="w-full bg-table-surface text-left text-sm">
-          <thead className="sticky top-0 z-10 border-b bg-table-surface text-muted-foreground backdrop-blur">
+          <thead className="sticky top-0 z-10 border-b bg-table-header text-muted-foreground backdrop-blur">
             <tr>
               <th className="px-3 py-2 font-bold">名称</th>
               <th className="px-3 py-2 font-bold">所属应用</th>

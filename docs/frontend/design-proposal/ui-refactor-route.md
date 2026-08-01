@@ -591,3 +591,39 @@ export interface Assignment {
   - 数据行 tr/div 增加 `bg-table-row`（奇数行近白），`even:bg-table-stripe`（偶数行极淡）保留，hover 不变。
   - 效果：空白区 + 表头 = 90% 冷灰；奇数数据行近白（最淡）、偶数行 94%（略灰）、hover 84%（最深）。数据行比空白区更淡，层次为「淡行浮于灰场之上」。
 - **验收**：`npm run typecheck` 0 错误。
+
+### 21.11 专业中性灰重构（2026-08-01 续10）
+- **用户反馈**：截图显示整体配色「不够专业」。
+- **问题诊断**：
+  1. 页面背景、表格容器、表头、偶数行全部使用 **214 色相的偏青冷灰**，饱和度偏高，呈现「灰蓝色滤镜」质感，显旧且不高级。
+  2. 奇数行使用 **0 色相的纯白**（`0 0% 100%`），与偶数行的蓝灰不在同一色相，看起来像补丁贴在灰布上。
+  3. 表头与表格容器同色，数据区没有「白卡浮于灰底」的专业层次。
+  4. 侧边栏 token 与页面背景几乎同色（`214 32% 90%`），导航区与工作区边界模糊。
+- **设计方向**：从「偏青冷灰幕布」转向 **「中性银灰底 + 白卡浮出 + 独立表头」** 的专业 SaaS 表格层次；所有灰色统一在 `220` 色相、低饱和度，去除青味。
+- **token 重构（globals.css + tailwind.config.ts 新增 `table-header`）**：
+  - 浅色：
+    - `--background: 220 14% 95.5%`（页面背景：明确浅灰，不泛青）
+    - `--border: 220 13% 90%`（边框更淡，减少碎裂感）
+    - `--table-surface: 220 14% 98%`（外层容器/空白区：极淡灰，不死白）
+    - `--table-header: 220 14% 96%`（表头：独立浅灰，从容器底脱开）
+    - `--table-row: 0 0% 100%`（奇数数据行：纯白，从灰底浮出）
+    - `--table-stripe: 220 14% 99%`（偶数数据行：极淡灰，与奇数行同处一个温和体系）
+    - `--table-hover: 220 14% 94%`（hover：清晰可辨）
+    - `--secondary` / `--accent` / `--muted` 统一从 `214` 改为 `220` 色相，去除青味。
+    - `--sidebar: 222 47% 11%`（侧边栏：深 slate，与主内容区形成清晰边界）。
+  - 暗色：
+    - `--background: 222 40% 6%`
+    - `--table-surface: 222 40% 11%`
+    - `--table-header: 222 40% 14%`
+    - `--table-row: 222 40% 13%`
+    - `--table-stripe: 222 40% 11.5%`
+    - `--table-hover: 222 40% 18%`
+    - `--sidebar: 222 47% 8%`（更深 slate）。
+- **组件改动**：
+  - 所有表格 `<thead className="... border-b bg-table-surface ...">` 改为 `bg-table-header`，使表头从容器底独立出来：
+    - `tree-table.tsx`、`list-page-skeleton.tsx`、`dashboard-page.tsx`、`log-pages.tsx`、`module-manage-page.tsx`、`org-list-page.tsx`、`role-list-page.tsx`、`dict-manage-page.tsx`。
+  - `admin-list-page.tsx`、`user-list-page.tsx` 的表头也已同步改为 `bg-table-header`，但两文件携带此前刻意未提交的 AI 表单 UI WIP，**本轮不纳入提交**，仅保留工作区改动。
+- **层次效果（浅色）**：
+  - 页面背景 95.5% 灰 → 表格容器 98% 极淡灰 → 表头 96% 浅灰 → 奇数行 100% 白 → 偶数行 99% 微灰 → hover 94% 灰。
+  - 无数据空白区保持 98% 极淡灰，不刺眼；数据行以纯白为主，干净专业；hover 态清晰但不突兀。
+- **验收**：`npm run typecheck` 0 错误。
