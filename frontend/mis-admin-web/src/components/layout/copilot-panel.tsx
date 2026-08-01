@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
-import { Sparkles } from 'lucide-react';
+import { useLocation } from 'react-router-dom';
+import { ExternalLink, Sparkles } from 'lucide-react';
 import {
   Sheet,
   SheetContent,
@@ -9,7 +10,14 @@ import {
 } from '@/components/ui/sheet';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
-import { AiCopilot } from '@/features/ai/components/ai-copilot';
+import { useAuthStore } from '@/stores/auth-store';
+import {
+  buildAiH5ChatUrl,
+  deriveModuleFromPath,
+  getAiH5Origin,
+  type AiH5ChildMessage,
+  type AiH5ParentMessage,
+} from '@/lib/ai-h5';
 
 interface CopilotPanelProps {
   open: boolean;
@@ -59,11 +67,11 @@ function saveFabPos(pos: FabPos) {
   try {
     localStorage.setItem(FAB_POS_KEY, JSON.stringify(pos));
   } catch {
-    /* ignore quota / private mode */
+    /* ignore */
   }
 }
 
-/** 可拖动的全局 Copilot FAB；短按打开，拖动仅改位置并持久化。 */
+/** 可拖动的全局 Copilot FAB */
 function CopilotFab({ onOpen }: { onOpen: () => void }) {
   const [pos, setPos] = useState<FabPos>(defaultFabPos);
   const dragRef = useRef<{
@@ -136,7 +144,6 @@ function CopilotFab({ onOpen }: { onOpen: () => void }) {
       onPointerMove={onPointerMove}
       onPointerUp={endPointer}
       onPointerCancel={endPointer}
-      // 点击由 pointer 短按打开；阻止默认 click 以免拖动后误触
       onClick={(e) => e.preventDefault()}
       className={cn(
         'fixed z-50 h-12 w-12 touch-none rounded-full shadow-lg',
@@ -151,28 +158,122 @@ function CopilotFab({ onOpen }: { onOpen: () => void }) {
   );
 }
 
+/** 向 H5 iframe 推送 MIS JWT + 页面上下文（DEP-7 M1） */
+function CopilotH5Frame({ open }: { open: boolean }) {
+  const location = useLocation();
+  const accessToken = useAuthStore((s) => s.accessToken);
+  const iframeRef = useRef<HTMLIFrameElement>(null);
+  const h5ReadyRef = useRef(false);
+  const [frameError, setFrameError] = useState(false);
+  /** 首次打开后再挂载 iframe；关闭 Sheet 不销毁，以保留最近会话 */
+  const [everOpened, setEverOpened] = useState(open);
+
+  const h5Origin = getAiH5Origin();
+  const chatUrl = buildAiH5ChatUrl(h5Origin);
+
+  useEffect(() => {
+    if (open) setEverOpened(true);
+  }, [open]);
+
+  const postToH5 = (msg: AiH5ParentMessage) => {
+    const win = iframeRef.current?.contentWindow;
+    if (!win) return;
+    win.postMessage(msg, h5Origin);
+  };
+
+  const pushAuthAndContext = () => {
+    if (!accessToken) return;
+    postToH5({ type: 'AUTH_TOKEN', token: accessToken });
+    postToH5({
+      type: 'PAGE_CONTEXT',
+      context: {
+        route: location.pathname,
+        module: deriveModuleFromPath(location.pathname),
+      },
+    });
+  };
+
+  // 监听 H5 AUTH_READY（iframe 常驻后仍需持续监听）
+  useEffect(() => {
+    if (!everOpened) return;
+    const onMessage = (event: MessageEvent) => {
+      if (event.origin !== h5Origin) return;
+      const data = event.data as AiH5ChildMessage | null;
+      if (data?.type !== 'AUTH_READY') return;
+      h5ReadyRef.current = true;
+      pushAuthAndContext();
+    };
+    window.addEventListener('message', onMessage);
+    return () => window.removeEventListener('message', onMessage);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- 仅绑定 origin
+  }, [everOpened, h5Origin, accessToken, location.pathname]);
+
+  // 令牌或路由变化时，若 H5 已就绪则重推（打开时也推一次）
+  useEffect(() => {
+    if (!open || !h5ReadyRef.current) return;
+    pushAuthAndContext();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [accessToken, location.pathname, open]);
+
+  if (!everOpened) return null;
+
+  return (
+    <div className={cn('relative min-h-0 flex-1 bg-muted/20', !open && 'hidden')}>
+      {frameError ? (
+        <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center text-sm text-muted-foreground">
+          <p>无法加载 AI 助手页面。</p>
+          <p className="text-xs">
+            请确认 Agent H5 已启动（默认 {h5Origin}），且已配置父域白名单。
+          </p>
+          <a
+            href={chatUrl}
+            target="_blank"
+            rel="noreferrer"
+            className="inline-flex h-8 items-center gap-1.5 rounded-md border px-3 text-xs font-medium hover:bg-accent"
+          >
+            <ExternalLink className="h-3.5 w-3.5" />
+            新窗口打开
+          </a>
+        </div>
+      ) : (
+        <iframe
+          ref={iframeRef}
+          title="AI Copilot"
+          src={chatUrl}
+          className="h-full w-full border-0"
+          allow="clipboard-read; clipboard-write"
+          onError={() => setFrameError(true)}
+        />
+      )}
+    </div>
+  );
+}
+
 /**
- * 全局 Copilot 浮窗（由 ai-store.copilotOpen 驱动；内部渲染 <AiCopilot/>）。
- *
- * 唯一主入口：可拖动全局 FAB（与页内「智能录入」无关）。
- * 另支持 Ctrl/Cmd+J。面板打开时隐藏 FAB，避免与右侧抽屉重叠。
+ * 全局 Copilot：可拖动 FAB + 右侧 Sheet。
+ * 对话 UI 复用 Agent H5（通路 B），经 postMessage 推送 MIS JWT，避免与 H5 双份实现。
  */
 export function CopilotPanel({ open, onOpenChange }: CopilotPanelProps) {
+  const h5Origin = getAiH5Origin();
+
   return (
     <>
       <Sheet open={open} onOpenChange={onOpenChange}>
         <SheetContent
           side="right"
-          className="flex h-dvh max-h-dvh w-full max-w-md flex-col overflow-hidden p-0 sm:max-w-md"
+          forceMount
+          className="flex h-dvh max-h-dvh w-full max-w-xl flex-col overflow-hidden p-0 sm:max-w-xl"
         >
           <SheetHeader className="shrink-0">
             <SheetTitle className="flex items-center gap-2">
               <Sparkles className="h-4 w-4 text-primary" />
               AI Copilot
             </SheetTitle>
-            <SheetDescription>基于当前页面上下文的常驻 AI 助手</SheetDescription>
+            <SheetDescription>
+              复用 Agent 对话能力（{h5Origin}）· 与页内辅助录入相互独立
+            </SheetDescription>
           </SheetHeader>
-          <AiCopilot open={open} onOpenChange={onOpenChange} />
+          <CopilotH5Frame open={open} />
         </SheetContent>
       </Sheet>
 

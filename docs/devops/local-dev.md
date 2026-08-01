@@ -147,9 +147,44 @@ pnpm install
 pnpm dev
 ```
 
-访问 http://localhost:5173 ，API 代理到 Gateway `8080`。
+访问 http://localhost:5174 （见 `vite.config.ts`），API 代理到 Gateway `8080`。
 
 默认账号：`admin` / `Mis@123456`（首次登录强制改密）。登录成功后进入 **`/portal`** 应用九宫格，再进 `system` 子系统。
+
+### 6.1 管理台 Copilot（iframe 嵌入 Agent H5）
+
+全局 FAB / Sheet **不再自建对话 UI**，而是嵌入 `agent/ai-platform/frontend` 的 `/chat?embed=1`（通路 B）。
+
+```powershell
+# 终端 A：Agent H5（默认 :3000）
+cd agent/ai-platform/frontend
+# 已提供 .env.development：VITE_PARENT_ORIGINS 含管理台 5174
+pnpm install
+pnpm dev
+
+# 终端 B：TS gateway（:3100），需信任 MIS JWT
+cd agent/ai-platform/gateway
+$env:MIS_JWT_PUBLIC_KEY_PATH = "D:\code\mis-platform\backend\keys\public.pem"
+$env:MIS_JWT_ISSUER = "mis-platform"
+# REDIS_URL 必须带 /2，与 Agent Core REDIS_DB=2 一致（否则 WS 已连接但无回复）
+# 例：REDIS_URL=redis://127.0.0.1:6379/2（见 gateway/.env.example）
+pnpm dev   # 或项目既有启动方式
+
+# 终端 C：Python Agent Core :8000（若尚未运行）
+cd agent/ai-platform/backend
+uv run uvicorn src.main:app --host 0.0.0.0 --port 8000 --reload
+```
+
+| 变量 | 位置 | 说明 |
+|------|------|------|
+| `VITE_AI_H5_ORIGIN` | mis-admin-web | 默认 `http://127.0.0.1:3000` |
+| `VITE_PARENT_ORIGINS` | Agent H5 | 须含管理台 origin（`http://localhost:5174` 与 `http://127.0.0.1:5174`） |
+| `MIS_JWT_PUBLIC_KEY_PATH` | TS gateway | MIS `backend/keys/public.pem`，否则嵌入令牌验签失败 |
+| `UPLOAD_DIR` / `UPLOAD_MAX_BYTES` | Agent Core | 聊天附件本地目录（默认 `data/uploads`，无需公网 URL） |
+
+握手：H5 `AUTH_READY` → 管理台 `postMessage({ type:'AUTH_TOKEN', token })` + `PAGE_CONTEXT`。
+
+对话附件：H5「附件」→ `POST /api/v1/files/upload` → WS `metadata.attachments`；图片由 Agent 读本地文件转 base64 识图（需 vision 模型）；预览走 `GET /api/v1/files/{id}?token=`。
 
 ## 7. 本地调试场景
 

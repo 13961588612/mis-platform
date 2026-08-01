@@ -56,6 +56,8 @@ interface ChatState {
   updateMessageStatus: (id: string, status: MessageStatus) => void;
   /** Clear all messages. */
   clearMessages: () => void;
+  /** Replace the entire message list (session restore). */
+  setMessages: (messages: ChatMessage[]) => void;
   /** Set the generating flag. */
   setGenerating: (generating: boolean) => void;
   /** Accumulate token usage. */
@@ -155,6 +157,15 @@ export const useChatStore = create<ChatState>((set) => ({
   clearMessages: () => {
     set({
       messages: [],
+      pendingApprovals: [],
+      tokenUsage: { ...INITIAL_TOKEN_USAGE },
+      isGenerating: false,
+    });
+  },
+
+  setMessages: (messages) => {
+    set({
+      messages,
       pendingApprovals: [],
       tokenUsage: { ...INITIAL_TOKEN_USAGE },
       isGenerating: false,

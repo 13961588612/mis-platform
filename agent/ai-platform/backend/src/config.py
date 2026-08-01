@@ -87,9 +87,22 @@ class Settings(BaseSettings):
     CORS_ORIGINS: list[str] = Field(
         default_factory=lambda: [
             "http://localhost:3000",
+            "http://127.0.0.1:3000",
+            "http://localhost:5174",
+            "http://127.0.0.1:5174",
             "http://localhost:80",
             "http://nginx",
         ]
+    )
+
+    # ===== 聊天附件（本地盘，无需公网 URL）=====
+    UPLOAD_DIR: str = Field(
+        default="data/uploads",
+        description="聊天附件本地存储目录（相对 cwd 或绝对路径）",
+    )
+    UPLOAD_MAX_BYTES: int = Field(
+        default=10 * 1024 * 1024,
+        description="单文件上传大小上限（字节）",
     )
 
     # ===== PostgreSQL =====
@@ -144,11 +157,12 @@ class Settings(BaseSettings):
     EMBEDDING_DIMENSION: int = 768
 
     # ===== LLM Gateway =====
+    # 默认主用 Qwen（工具调用 + 可选 VL 识图）；DeepSeek 作故障转移备用
     LLM_GATEWAY_ENABLED: bool = True
-    LLM_PRIMARY_PROVIDER: str = "deepseek"
-    LLM_FALLBACK_PROVIDER: str = "qwen"
-    LLM_PRIMARY_MODEL: str = "deepseek-v4-flash"
-    LLM_FALLBACK_MODEL: str = "qwen3.6-plus"
+    LLM_PRIMARY_PROVIDER: str = "qwen"
+    LLM_FALLBACK_PROVIDER: str = "deepseek"
+    LLM_PRIMARY_MODEL: str = "qwen-plus"
+    LLM_FALLBACK_MODEL: str = "deepseek-v4-flash"
     LLM_REQUEST_TIMEOUT: int = 60
     LLM_MAX_RETRIES: int = 3
     LLM_FAILOVER_AUTO_SWITCH: bool = True
@@ -157,7 +171,7 @@ class Settings(BaseSettings):
     DEEPSEEK_API_KEY: str = ""
     DEEPSEEK_API_ENDPOINT: str = "https://api.deepseek.com/v1"
 
-    # Qwen API
+    # Qwen API（须用 compatible-mode，与 OpenAI SDK 对齐）
     QWEN_API_KEY: str = ""
     QWEN_API_ENDPOINT: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 

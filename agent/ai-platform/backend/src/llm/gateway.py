@@ -86,15 +86,27 @@ class LLMGateway:
             qwen_keys=self._key_manager.get_healthy_key_count("qwen"),
         )
 
+    def _model_for_provider(self, provider: str) -> str:
+        """按 provider 选取可用模型名（不假定 primary 一定是 deepseek）。"""
+        primary = self._settings.LLM_PRIMARY_MODEL
+        fallback = self._settings.LLM_FALLBACK_MODEL
+        if provider in primary.lower():
+            return primary
+        if provider in fallback.lower():
+            return fallback
+        if provider == "deepseek":
+            return "deepseek-v4-flash"
+        if provider == "qwen":
+            return "qwen-plus"
+        return primary
+
     def _remap_request_for_provider(
         self, provider: str, request: LLMRequest
     ) -> LLMRequest:
         """跨 provider 故障转移时使用 provider 对应的模型。"""
         model: Any = request.model
-        if provider == "deepseek" and "deepseek" not in model.lower():
-            model: Any = self._settings.LLM_PRIMARY_MODEL
-        elif provider == "qwen" and "qwen" not in model.lower():
-            model: Any = self._settings.LLM_FALLBACK_MODEL
+        if provider not in model.lower():
+            model = self._model_for_provider(provider)
         if model == request.model:
             return request
         return request.model_copy(update={"model": model})

@@ -178,7 +178,7 @@ async def build_native_query_engine(
     )
     tool_registry: ToolRegistry = create_platform_tool_registry(mcp_manager, allowed_tools)
 
-    model: Any = config.model.primary if config.model else "deepseek-v4-flash"
+    model: Any = config.model.primary if config.model else "qwen-plus"
     runtime_params: Any = config.runtime.params if config.runtime else {}
     max_tokens: int = int(runtime_params.get("maxTokens", 4096))
     max_steps: int = int(runtime_params.get("maxSteps", 20))

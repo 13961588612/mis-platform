@@ -341,6 +341,7 @@ def create_app() -> FastAPI:
     from src.api.routes.admin import router as admin_router
     from src.api.routes.agent import router as agent_router
     from src.api.routes.auth import router as auth_router
+    from src.api.routes.files import router as files_router
     from src.api.routes.mcp import router as mcp_router
     from src.api.routes.mis_capability import router as mis_capability_router
     from src.api.routes.push import router as push_router
@@ -350,6 +351,7 @@ def create_app() -> FastAPI:
     app.include_router(agent_router, prefix="/api/v1")
     app.include_router(auth_router, prefix="/api/v1")
     app.include_router(session_router, prefix="/api/v1")
+    app.include_router(files_router, prefix="/api/v1")
     app.include_router(skill_router, prefix="/api/v1/skills", tags=["skills"])
     app.include_router(mcp_router, prefix="/api/v1/mcp", tags=["mcp"])
     app.include_router(admin_router, prefix="/api/v1")

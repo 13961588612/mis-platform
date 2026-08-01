@@ -16,3 +16,6 @@ export type {
   ApprovalStatus,
   ApprovalStats,
 } from "./approvalStore";
+
+export { default as useEmbedStore } from "./embedStore";
+export type { EmbedPageContext } from "./embedStore";

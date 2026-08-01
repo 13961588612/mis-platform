@@ -91,10 +91,10 @@ export function AgentSelector({
   );
 
   return (
-    <div className="flex items-center gap-2">
+    <div className="flex min-w-0 flex-wrap items-center gap-2">
       <label
         htmlFor="agent-selector"
-        className="text-sm font-medium text-surface-dark/70"
+        className="shrink-0 text-sm font-medium text-surface-dark/70"
       >
         Agent:
       </label>
@@ -104,7 +104,7 @@ export function AgentSelector({
         onChange={handleChange}
         disabled={isLoading || !!error}
         className={clsx(
-          "rounded-md border border-surface-light bg-white px-3 py-1.5 text-sm",
+          "min-w-0 max-w-full flex-1 basis-[10rem] rounded-md border border-surface-light bg-white px-2 py-1.5 text-sm sm:max-w-[14rem] sm:px-3",
           "focus:outline-none focus:border-primary-400 focus:ring-1 focus:ring-primary-400",
           "disabled:cursor-not-allowed disabled:opacity-50",
         )}
@@ -123,7 +123,7 @@ export function AgentSelector({
           ))}
       </select>
 
-      {/* State Badge for Selected Agent */}
+      {/* State Badge：shrink-0，窄屏与下拉换行，避免压到右侧按钮 */}
       {value && agents.length > 0 && (
         <SelectedAgentBadge agents={agents} agentId={value} />
       )}
@@ -152,7 +152,7 @@ function SelectedAgentBadge({
   return (
     <span
       className={clsx(
-        "rounded-full px-2 py-0.5 text-xs font-medium",
+        "shrink-0 rounded-full px-2 py-0.5 text-xs font-medium",
         stateColor,
       )}
     >

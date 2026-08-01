@@ -14,10 +14,14 @@
 import React, { useCallback, useRef, useState, useEffect } from "react";
 import { useChatStore } from "../store/chatStore";
 import { useAuthStore } from "../store/authStore";
+import { useEmbedStore } from "../store/embedStore";
 import { useChat } from "../hooks/useChat";
 import { MessageList } from "./MessageList";
 import { AgentSelector } from "./AgentSelector";
+import { loadLastSession, loadLastSessionForAgent } from "../utils/lastSession";
+import { apiUploadFile, getAuthedFileUrl } from "../utils/api";
 import { clsx } from "../utils/format";
+import type { ChatAttachment } from "../types/message";
 import type { WsConnectionState } from "../types/event";
 
 // ===== Connection Status Indicator =====
@@ -62,10 +66,17 @@ function ConnectionStatus({ state }: { state: WsConnectionState }): JSX.Element 
  */
 export function ChatPanel(): JSX.Element {
   const [input, setInput] = useState("");
+  const [pendingFiles, setPendingFiles] = useState<ChatAttachment[]>([]);
+  const [isUploading, setIsUploading] = useState(false);
   const [isCreatingSession, setIsCreatingSession] = useState(false);
+  /** 完成最近会话恢复前，暂缓 Agent 自动建会话 */
+  const [sessionReady, setSessionReady] = useState(false);
+  const bootstrappedUserRef = useRef<string | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const { user } = useAuthStore();
+  const pageContext = useEmbedStore((s) => s.pageContext);
   const {
     sessionId,
     agentId,
@@ -77,7 +88,35 @@ export function ChatPanel(): JSX.Element {
     setError,
   } = useChatStore();
 
-  const { sendMessage, createSession, closeSession } = useChat(sessionId);
+  const { sendMessage, createSession, restoreSession, closeSession } = useChat(sessionId);
+
+  // 打开聊天：恢复该用户最近活跃智能体的会话；已有内存会话则直接就绪
+  useEffect(() => {
+    if (!user?.userId) {
+      return;
+    }
+    if (sessionId) {
+      setSessionReady(true);
+      bootstrappedUserRef.current = user.userId;
+      return;
+    }
+    if (bootstrappedUserRef.current === user.userId) {
+      // 已尝试过恢复且仍无 session（失败或关闭后），允许 AgentSelector 建新会话
+      setSessionReady(true);
+      return;
+    }
+
+    bootstrappedUserRef.current = user.userId;
+    const last = loadLastSession(user.userId);
+    if (!last) {
+      setSessionReady(true);
+      return;
+    }
+
+    void restoreSession(last.sessionId, last.agentId).finally(() => {
+      setSessionReady(true);
+    });
+  }, [user?.userId, sessionId, restoreSession]);
 
   // Auto-resize textarea
   useEffect(() => {
@@ -88,17 +127,53 @@ export function ChatPanel(): JSX.Element {
     }
   }, [input]);
 
+  const handlePickFiles = useCallback(
+    async (fileList: FileList | null): Promise<void> => {
+      if (!fileList || fileList.length === 0) {
+        return;
+      }
+      setIsUploading(true);
+      setError(null);
+      try {
+        const uploaded: ChatAttachment[] = [];
+        for (const file of Array.from(fileList)) {
+          const res = await apiUploadFile(file);
+          uploaded.push({
+            fileId: res.fileId,
+            name: res.name,
+            mimeType: res.mimeType,
+            size: res.size,
+            url: res.url,
+          });
+        }
+        setPendingFiles((prev) => [...prev, ...uploaded]);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "附件上传失败");
+      } finally {
+        setIsUploading(false);
+        if (fileInputRef.current) {
+          fileInputRef.current.value = "";
+        }
+      }
+    },
+    [setError],
+  );
+
   // Handle send
   const handleSend = useCallback((): void => {
-    if (!input.trim() || isGenerating) {
+    if (isGenerating || isUploading) {
       return;
     }
-    sendMessage(input);
+    if (!input.trim() && pendingFiles.length === 0) {
+      return;
+    }
+    sendMessage(input, pendingFiles);
     setInput("");
+    setPendingFiles([]);
     if (textareaRef.current) {
       textareaRef.current.style.height = "auto";
     }
-  }, [input, isGenerating, sendMessage]);
+  }, [input, pendingFiles, isGenerating, isUploading, sendMessage]);
 
   // Handle Enter key (Shift+Enter for newline)
   const handleKeyDown = useCallback(
@@ -124,45 +199,79 @@ export function ChatPanel(): JSX.Element {
     }
   }, [agentId, createSession]);
 
-  // Handle agent change — 切换 Agent 时创建新会话
+  // 切换智能体：清空当前画面，优先恢复该智能体最近会话，否则新建
   const handleAgentChange = useCallback(
     (newAgentId: string): void => {
       if (newAgentId === agentId && sessionId) {
         return;
       }
-      void createSession(newAgentId);
+      if (!user?.userId) {
+        void createSession(newAgentId);
+        return;
+      }
+      const lastForAgent = loadLastSessionForAgent(user.userId, newAgentId);
+      void (async () => {
+        setIsCreatingSession(true);
+        try {
+          if (lastForAgent) {
+            const ok = await restoreSession(lastForAgent.sessionId, newAgentId);
+            if (ok) {
+              return;
+            }
+          }
+          await createSession(newAgentId);
+        } finally {
+          setIsCreatingSession(false);
+        }
+      })();
     },
-    [agentId, sessionId, createSession],
+    [agentId, sessionId, user?.userId, createSession, restoreSession],
   );
 
   return (
     <div className="flex h-full flex-col bg-white">
-      {/* Header */}
-      <div className="flex items-center justify-between border-b border-surface-light/50 px-6 py-3">
-        <div className="flex items-center gap-4">
-          <AgentSelector value={agentId} onChange={handleAgentChange} />
-          <ConnectionStatus state={wsState} />
-        </div>
-        <div className="flex items-center gap-3">
-          <button
-            type="button"
-            onClick={() => {
-              void handleNewSession();
-            }}
-            className="rounded-md bg-primary-600 px-4 py-1.5 text-sm font-medium text-white hover:bg-primary-700 transition-colors"
-            disabled={!agentId || isCreatingSession}
-          >
-            {isCreatingSession ? "创建中..." : "新建对话"}
-          </button>
-          {sessionId && (
+      {/* Header：窄宽（管理台 Sheet iframe）下换行，避免 Agent 徽标与按钮重叠 */}
+      <div className="flex flex-col gap-2 border-b border-surface-light/50 px-3 py-2.5 sm:px-4">
+        <div className="flex flex-wrap items-start justify-between gap-x-3 gap-y-2">
+          <div className="min-w-0 max-w-full flex-1 basis-[12rem]">
+            {sessionReady ? (
+              <AgentSelector value={agentId} onChange={handleAgentChange} />
+            ) : (
+              <span className="text-sm text-surface-dark/45">正在恢复会话…</span>
+            )}
+          </div>
+          <div className="flex shrink-0 flex-wrap items-center gap-2">
             <button
               type="button"
-              onClick={closeSession}
-              className="rounded-md border border-surface-light px-4 py-1.5 text-sm font-medium text-surface-dark/70 hover:bg-surface-muted transition-colors"
+              onClick={() => {
+                void handleNewSession();
+              }}
+              className="rounded-md bg-primary-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-primary-700 transition-colors"
+              disabled={!agentId || isCreatingSession}
             >
-              关闭对话
+              {isCreatingSession ? "创建中..." : "新建对话"}
             </button>
-          )}
+            {sessionId && (
+              <button
+                type="button"
+                onClick={closeSession}
+                className="rounded-md border border-surface-light px-3 py-1.5 text-sm font-medium text-surface-dark/70 hover:bg-surface-muted transition-colors"
+              >
+                关闭对话
+              </button>
+            )}
+          </div>
+        </div>
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+          <ConnectionStatus state={wsState} />
+          {pageContext?.route ? (
+            <span
+              className="truncate text-xs text-surface-dark/45"
+              title={pageContext.route}
+            >
+              页面 {pageContext.route}
+            </span>
+          ) : null}
         </div>
       </div>
 
@@ -195,13 +304,70 @@ export function ChatPanel(): JSX.Element {
 
       {/* Input Area */}
       <div className="border-t border-surface-light/50 p-4">
-        <div className="flex items-end gap-3">
+        {pendingFiles.length > 0 ? (
+          <div className="mb-2 flex flex-wrap gap-2">
+            {pendingFiles.map((f) => (
+              <div
+                key={f.fileId}
+                className="relative max-w-[9rem] overflow-hidden rounded-md border border-surface-light bg-surface-muted/40"
+              >
+                {(f.mimeType || "").startsWith("image/") ? (
+                  <img
+                    src={getAuthedFileUrl(f.url || f.fileId)}
+                    alt={f.name}
+                    className="h-16 w-full object-cover"
+                  />
+                ) : (
+                  <div className="truncate px-2 py-2 text-[11px] text-surface-dark/70">
+                    {f.name}
+                  </div>
+                )}
+                <button
+                  type="button"
+                  className="absolute right-0.5 top-0.5 rounded bg-black/50 px-1 text-[10px] text-white"
+                  onClick={() =>
+                    setPendingFiles((prev) => prev.filter((x) => x.fileId !== f.fileId))
+                  }
+                >
+                  ×
+                </button>
+              </div>
+            ))}
+          </div>
+        ) : null}
+        <div className="flex items-end gap-2">
+          <input
+            ref={fileInputRef}
+            type="file"
+            className="hidden"
+            multiple
+            accept="image/*,.pdf,.txt,.csv,.json,.doc,.docx,.xls,.xlsx"
+            onChange={(e) => {
+              void handlePickFiles(e.target.files);
+            }}
+          />
+          <button
+            type="button"
+            title="添加图片或附件"
+            disabled={!agentId || isGenerating || isUploading}
+            onClick={() => fileInputRef.current?.click()}
+            className={clsx(
+              "shrink-0 rounded-lg border border-surface-light px-3 py-3 text-sm text-surface-dark/70",
+              "hover:bg-surface-muted disabled:cursor-not-allowed disabled:opacity-50",
+            )}
+          >
+            {isUploading ? "…" : "附件"}
+          </button>
           <textarea
             ref={textareaRef}
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder={agentId ? "输入消息，按 Enter 发送..." : "请先选择一个 Agent"}
+            placeholder={
+              agentId
+                ? "输入消息，可附带图片/文件，按 Enter 发送..."
+                : "请先选择一个 Agent"
+            }
             disabled={!agentId || isGenerating}
             rows={1}
             className={clsx(
@@ -214,7 +380,12 @@ export function ChatPanel(): JSX.Element {
           <button
             type="button"
             onClick={handleSend}
-            disabled={!input.trim() || isGenerating || !agentId}
+            disabled={
+              (!input.trim() && pendingFiles.length === 0) ||
+              isGenerating ||
+              isUploading ||
+              !agentId
+            }
             className={clsx(
               "rounded-lg px-6 py-3 text-sm font-medium text-white transition-colors",
               "bg-primary-600 hover:bg-primary-700",

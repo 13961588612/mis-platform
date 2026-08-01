@@ -181,10 +181,10 @@ flowchart TD
 
 | 项 | Phase 1 | Phase 3 |
 |----|---------|---------|
-| UI | 右侧 **Sheet/抽屉** `CopilotPanel` | 流式对话、上下文 |
+| UI | 右侧 **Sheet** `CopilotPanel` → **iframe 嵌入 Agent H5** `/chat?embed=1` | 复用 H5 全量对话（WS / A2UI / 审批） |
 | 入口 | 右下角全局 FAB（Ctrl/⌘+J）；与页内「智能录入」分离 | — |
-| 能力 | 静态欢迎文案 + 输入框 **禁用或 mock** | 真实 LLM + agent-gateway |
-| API | 无或 `GET /agent/health` 展示在线状态 | `POST /chat/completions` |
+| 鉴权 | 父页 `postMessage(AUTH_TOKEN)` 推送 MIS JWT；H5 `VITE_PARENT_ORIGINS` 白名单 | TS gateway 双验签（HS256 + MIS RS256） |
+| 能力 | 通路 B：Agent H5 `ChatPanel`（唯一对话实现） | 通路 A（BFF SSE）仅服务辅助录入等内嵌能力 |
 
 > 占位目的：预留布局与路由，避免 Phase 3 大改壳层。
 

@@ -199,6 +199,72 @@ export async function apiPost<T>(
   return response.data.data as T;
 }
 
+/** Upload a chat attachment (multipart). */
+export async function apiUploadFile(file: File): Promise<{
+  fileId: string;
+  name: string;
+  mimeType: string;
+  size: number;
+  url: string;
+}> {
+  const form = new FormData();
+  form.append("file", file);
+  const response = await apiClient.post<ApiResponse<{
+    fileId?: string;
+    file_id?: string;
+    name?: string;
+    mimeType?: string;
+    mime_type?: string;
+    size?: number;
+    url?: string;
+  }>>("/files/upload", form, {
+    // 让浏览器自动带 multipart boundary；勿手写 Content-Type
+    headers: { "Content-Type": undefined as unknown as string },
+    timeout: 120000,
+  });
+  if (response.data.code !== 0) {
+    throw new ApiError(
+      response.data.message || "上传失败",
+      response.data.code,
+      response.data.traceId,
+    );
+  }
+  const data = response.data.data ?? {};
+  const fileId = data.fileId ?? data.file_id ?? "";
+  if (!fileId) {
+    throw new ApiError("上传失败：未返回 fileId", -1);
+  }
+  return {
+    fileId,
+    name: data.name ?? file.name,
+    mimeType: data.mimeType ?? data.mime_type ?? file.type,
+    size: data.size ?? file.size,
+    url: data.url ?? `/api/v1/files/${fileId}`,
+  };
+}
+
+/** Build authenticated file URL for <img src> / download links. */
+export function getAuthedFileUrl(pathOrUrl: string): string {
+  const token = getAccessToken();
+  let path = pathOrUrl;
+  if (path.startsWith("http://") || path.startsWith("https://")) {
+    try {
+      const u = new URL(path);
+      path = u.pathname + u.search;
+    } catch {
+      /* keep */
+    }
+  }
+  if (!path.startsWith("/")) {
+    path = `/api/v1/files/${path}`;
+  }
+  if (!token) {
+    return path;
+  }
+  const sep = path.includes("?") ? "&" : "?";
+  return `${path}${sep}token=${encodeURIComponent(token)}`;
+}
+
 /**
  * Perform a PUT request and unwrap the ApiResponse data.
  * @throws Error with message from ApiResponse if code !== 0.

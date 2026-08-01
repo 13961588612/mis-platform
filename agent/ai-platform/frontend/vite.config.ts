@@ -21,9 +21,9 @@ export default defineConfig({
     host: "0.0.0.0",
     port: 3000,
     proxy: {
-      // Agent Core REST API（本地 backend，默认 8002）
+      // Agent Core REST API（本地 uvicorn 默认 8000；可用 VITE_BACKEND_URL 覆盖）
       "/api/v1": {
-        target: process.env.VITE_BACKEND_URL ?? "http://127.0.0.1:8002",
+        target: process.env.VITE_BACKEND_URL ?? "http://127.0.0.1:8000",
         changeOrigin: true,
       },
       // Gateway REST API

@@ -16,9 +16,10 @@ interface AiCopilotProps {
 }
 
 /**
- * UC-5 全局 Copilot 对话内容。
- * 走流式 POST /api/v1/ai/chat/completions（stream:true → BFF SSE 透传平台 delta|done|error）。
- * 自动注入当前路由/模块作为上下文；对话不触发任何写操作（铁律）。
+ * @deprecated 全局 Copilot 已改为 iframe 嵌入 Agent H5（见 CopilotPanel + lib/ai-h5.ts）。
+ * 本组件保留作通路 A SSE 参考实现，管理台壳层不再引用。
+ *
+ * 历史：流式 POST /api/v1/ai/chat/completions（BFF SSE 透传）。
  */
 export function AiCopilot(_props: AiCopilotProps) {
   const ai = useAiContext();

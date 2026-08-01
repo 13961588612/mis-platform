@@ -18,12 +18,20 @@ import { useCallback, useEffect, useRef } from "react";
 import { useChatStore, type PendingApproval } from "../store/chatStore";
 import { useApprovalStore } from "../store/approvalStore";
 import { useAuthStore } from "../store/authStore";
-import { apiPost } from "../utils/api";
+import { apiGet, apiPost } from "../utils/api";
 import { adaptAgentEvent } from "../utils/cardAdapter";
 import { getChatWsUrl } from "../utils/api";
 import {
+  clearLastSession,
+  saveLastSession,
+} from "../utils/lastSession";
+import {
   normalizeCreateSessionResponse,
+  normalizeSessionDetail,
+  normalizeSessionMessages,
   type RawCreateSessionResponse,
+  type RawSessionDetail,
+  type RawSessionMessage,
 } from "../utils/sessionAdapter";
 import type { AgentEvent, RawAgentEvent } from "../types/event";
 import type { ChatMessage, InboundMessage } from "../types/message";
@@ -46,8 +54,8 @@ const GENERATION_TIMEOUT_MS = 120_000;
 
 /** Return type of the useChat hook. */
 interface UseChatReturn {
-  /** Send a chat message. */
-  sendMessage: (content: string) => void;
+  /** Send a chat message (optional attachments already uploaded). */
+  sendMessage: (content: string, attachments?: ChatMessage["attachments"]) => void;
   /** Respond to an approval request. */
   respondToApproval: (
     approvalId: string,
@@ -62,6 +70,8 @@ interface UseChatReturn {
   }) => void;
   /** Create a new session. */
   createSession: (agentId: string) => Promise<void>;
+  /** Restore an existing session (+ message history) from the backend. */
+  restoreSession: (sessionId: string, preferredAgentId?: string) => Promise<boolean>;
   /** Close the current session. */
   closeSession: () => void;
   /** Manually reconnect the WebSocket. */
@@ -104,6 +114,7 @@ export function useChat(sessionId: string | null): UseChatReturn {
     updateMessage,
     updateMessageStatus,
     clearMessages,
+    setMessages,
     setGenerating,
     addTokenUsage,
     setError,
@@ -519,19 +530,26 @@ export function useChat(sessionId: string | null): UseChatReturn {
 
   // ===== Send Chat Message =====
   const sendMessage = useCallback(
-    (content: string): void => {
-      if (!content.trim()) {
+    (content: string, attachments?: ChatMessage["attachments"]): void => {
+      const text = content.trim();
+      const files = attachments?.filter((a) => a.fileId) ?? [];
+      if (!text && files.length === 0) {
         return;
       }
+
+      const hasImage = files.some((a) => (a.mimeType || "").startsWith("image/"));
+      const messageType =
+        files.length === 0 ? "text" : hasImage && !text ? "image" : "file";
 
       // Add user message to history
       const userMessage: ChatMessage = {
         id: generateId(),
         sessionId: sessionId ?? "",
         role: "user",
-        content,
+        content: text || (files.length > 0 ? "（附件）" : ""),
         status: "delivered",
         timestamp: new Date().toISOString(),
+        attachments: files.length > 0 ? files : undefined,
       };
       addMessage(userMessage);
 
@@ -557,7 +575,22 @@ export function useChat(sessionId: string | null): UseChatReturn {
         sessionId: sessionId ?? "",
         userId: user?.userId ?? "",
         agentId: agentId ?? undefined,
-        content,
+        content: text,
+        messageType,
+        metadata:
+          files.length > 0
+            ? {
+                attachments: files.map((a) => ({
+                  fileId: a.fileId,
+                  file_id: a.fileId,
+                  name: a.name,
+                  mimeType: a.mimeType,
+                  mime_type: a.mimeType,
+                  size: a.size,
+                  url: a.url,
+                })),
+              }
+            : undefined,
         timestamp: new Date().toISOString(),
       };
       if (!sendInbound(inbound)) {
@@ -662,6 +695,9 @@ export function useChat(sessionId: string | null): UseChatReturn {
         clearMessages();
         setSessionId(data.sessionId);
         setError(null);
+        if (user.userId) {
+          saveLastSession(user.userId, data.sessionId, newAgentId);
+        }
       } catch (err) {
         const message =
           err instanceof Error ? err.message : "创建会话失败，请稍后重试";
@@ -669,6 +705,55 @@ export function useChat(sessionId: string | null): UseChatReturn {
       }
     },
     [user, setAgentId, setSessionId, clearMessages, setError, setGenerating, clearGenerationWatchdog],
+  );
+
+  // ===== Restore Session =====
+  const restoreSession = useCallback(
+    async (targetSessionId: string, preferredAgentId?: string): Promise<boolean> => {
+      if (!user?.userId || !targetSessionId) {
+        return false;
+      }
+
+      streamingMessageIdRef.current = null;
+      clearGenerationWatchdog();
+      setGenerating(false);
+
+      try {
+        const rawSession = await apiGet<RawSessionDetail>(`/sessions/${targetSessionId}`);
+        const detail = normalizeSessionDetail(rawSession);
+        if (detail.userId && detail.userId !== user.userId) {
+          clearLastSession(user.userId);
+          return false;
+        }
+
+        const rawMessages = await apiGet<RawSessionMessage[]>(
+          `/sessions/${targetSessionId}/messages`,
+        );
+        const history = normalizeSessionMessages(detail.sessionId, rawMessages);
+        const nextAgentId = detail.agentId || preferredAgentId || "";
+
+        setAgentId(nextAgentId || null);
+        setMessages(history);
+        setSessionId(detail.sessionId);
+        setError(null);
+        if (nextAgentId) {
+          saveLastSession(user.userId, detail.sessionId, nextAgentId);
+        }
+        return true;
+      } catch {
+        clearLastSession(user.userId);
+        return false;
+      }
+    },
+    [
+      user,
+      clearGenerationWatchdog,
+      setGenerating,
+      setAgentId,
+      setMessages,
+      setSessionId,
+      setError,
+    ],
   );
 
   // ===== Close Session =====
@@ -683,6 +768,11 @@ export function useChat(sessionId: string | null): UseChatReturn {
       sendInbound(inbound);
     }
 
+    if (user?.userId) {
+      // 仅清除当前智能体的最近会话，其它智能体记录保留
+      clearLastSession(user.userId, agentId ?? undefined);
+    }
+
     closeSocketIntentionally();
     clearMessages();
     setSessionId(null);
@@ -690,6 +780,7 @@ export function useChat(sessionId: string | null): UseChatReturn {
     setGenerating(false);
   }, [
     sessionId,
+    agentId,
     user,
     sendInbound,
     closeSocketIntentionally,
@@ -711,6 +802,7 @@ export function useChat(sessionId: string | null): UseChatReturn {
     respondToApproval,
     respondToEntitySelect,
     createSession,
+    restoreSession,
     closeSession,
     reconnect,
   };

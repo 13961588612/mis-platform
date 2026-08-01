@@ -4,7 +4,7 @@
  * Displays messages from the chatStore, handling different message roles:
  * - user: Right-aligned blue bubbles
  * - assistant: Left-aligned white bubbles with markdown rendering
- * - tool: Collapsible tool call/result display
+ * - tool: Compact ToolCallTrace (collapsed by default; expand for logs)
  * - system: Centered gray notification
  *
  * Auto-scrolls to bottom on new messages. Includes the ApprovalCard
@@ -18,18 +18,59 @@ import { ApprovalCard } from "./ApprovalCard";
 import { markdownComponents } from "./markdownComponents";
 import { useChatStore } from "../store/chatStore";
 import { A2uiRenderer } from "./a2ui/A2uiRenderer";
+import { AssistantAvatar } from "./AssistantAvatar";
+import { ToolCallTrace, groupMessagesForDisplay } from "./ToolCallTrace";
+import { getAuthedFileUrl } from "../utils/api";
 import { formatTime } from "../utils/format";
 import { normalizeMarkdownTables } from "../utils/markdownNormalize";
-import type { ChatMessage } from "../types/message";
+import type { ChatAttachment, ChatMessage } from "../types/message";
 
-/** Assistant avatar shown beside agent messages. */
-function AssistantAvatar(): JSX.Element {
+function MessageAttachments({
+  attachments,
+  tone,
+}: {
+  attachments: ChatAttachment[];
+  tone: "user" | "assistant";
+}): JSX.Element {
   return (
-    <div
-      className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-primary-100 text-lg ring-2 ring-white"
-      aria-hidden
-    >
-      🤖
+    <div className="mt-2 flex flex-col gap-2">
+      {attachments.map((att) => {
+        const href = getAuthedFileUrl(att.url || att.fileId);
+        const isImage = (att.mimeType || "").startsWith("image/");
+        if (isImage) {
+          return (
+            <a
+              key={att.fileId}
+              href={href}
+              target="_blank"
+              rel="noreferrer"
+              className="block overflow-hidden rounded-lg"
+            >
+              <img
+                src={href}
+                alt={att.name}
+                className="max-h-48 max-w-full object-contain"
+              />
+            </a>
+          );
+        }
+        return (
+          <a
+            key={att.fileId}
+            href={href}
+            target="_blank"
+            rel="noreferrer"
+            className={
+              tone === "user"
+                ? "truncate rounded border border-white/25 bg-white/10 px-2 py-1 text-xs text-white/90 hover:bg-white/20"
+                : "truncate rounded border border-surface-light bg-white px-2 py-1 text-xs text-primary-700 hover:bg-surface-muted"
+            }
+          >
+            {att.name}
+            {att.size > 0 ? ` · ${Math.max(1, Math.round(att.size / 1024))}KB` : ""}
+          </a>
+        );
+      })}
     </div>
   );
 }
@@ -52,11 +93,10 @@ interface MessageBubbleProps {
   currentUserId: string;
 }
 
-/** Render a single message bubble based on its role. */
+/** Render a single message bubble based on its role (non-tool). */
 function MessageBubble({ message, currentUserId: _currentUserId }: MessageBubbleProps): JSX.Element {
   const isUser = message.role === "user";
   const isSystem = message.role === "system";
-  const isTool = message.role === "tool";
 
   const assistantContent = useMemo(
     () => normalizeMarkdownTables(message.content ?? ""),
@@ -78,45 +118,21 @@ function MessageBubble({ message, currentUserId: _currentUserId }: MessageBubble
     );
   }
 
-  // Tool messages — collapsible
-  if (isTool) {
-    return (
-      <div className="flex justify-start py-1">
-        <div className="max-w-[80%] rounded-lg border border-surface-light bg-surface-muted/30 p-3 text-sm">
-          <div className="mb-1 font-medium text-surface-dark/70">
-            {message.toolName ?? "工具调用"}
-          </div>
-          {message.toolArgs && (
-            <details className="mb-1">
-              <summary className="cursor-pointer text-xs text-surface-dark/50">
-                参数
-              </summary>
-              <pre className="mt-1 overflow-x-auto rounded bg-gray-900 p-2 text-xs text-gray-100">
-                {message.toolArgs}
-              </pre>
-            </details>
-          )}
-          {message.toolResult && (
-            <details>
-              <summary className="cursor-pointer text-xs text-surface-dark/50">
-                结果
-              </summary>
-              <pre className="mt-1 overflow-x-auto rounded bg-gray-900 p-2 text-xs text-gray-100">
-                {message.toolResult}
-              </pre>
-            </details>
-          )}
-        </div>
-      </div>
-    );
-  }
-
   // User / Assistant messages
   if (isUser) {
+    const showText =
+      message.content &&
+      message.content !== "（附件）" &&
+      !(message.attachments?.length && message.content.startsWith("（用户发送了附件）"));
     return (
       <div className="flex justify-end py-2">
         <div className="max-w-[75%] rounded-2xl bg-primary-600 px-4 py-2.5 text-sm text-white">
-          <p className="whitespace-pre-wrap">{message.content}</p>
+          {showText ? (
+            <p className="whitespace-pre-wrap">{message.content}</p>
+          ) : null}
+          {message.attachments && message.attachments.length > 0 ? (
+            <MessageAttachments attachments={message.attachments} tone="user" />
+          ) : null}
           <div className="mt-1 text-xs text-white/60">
             {formatTime(message.timestamp)}
           </div>
@@ -196,12 +212,17 @@ export function MessageList({ messages, currentUserId }: MessageListProps): JSX.
     [pendingApprovals],
   );
 
+  const displayItems = useMemo(
+    () => groupMessagesForDisplay(messages),
+    [messages],
+  );
+
   // Empty state
   if (messages.length === 0) {
     return (
       <div className="flex h-full items-center justify-center">
-        <div className="text-center">
-          <div className="mb-4 text-6xl">🤖</div>
+        <div className="flex flex-col items-center text-center">
+          <AssistantAvatar className="mb-4 h-16 w-16" />
           <h3 className="text-lg font-medium text-surface-dark/70">
             AI 智能助手
           </h3>
@@ -216,22 +237,32 @@ export function MessageList({ messages, currentUserId }: MessageListProps): JSX.
   return (
     <div
       ref={scrollRef}
-      className="h-full overflow-y-auto px-6 py-4"
+      className="h-full overflow-y-auto px-4 py-3 sm:px-6 sm:py-4"
     >
-      {messages.map((message) => (
-        <div key={message.id}>
-          <MessageBubble message={message} currentUserId={currentUserId} />
-          {/* Show approval card for messages that require approval */}
-          {message.requiresApproval && message.approvalId && (
-            <ApprovalCard
-              approvalId={message.approvalId}
-              title={message.content}
-              description="此操作需要您的审批"
-              isPending={pendingApprovalIds.has(message.approvalId)}
+      {displayItems.map((item) => {
+        if (item.kind === "tools") {
+          return (
+            <ToolCallTrace
+              key={`tools-${item.messages[0]?.id ?? "empty"}`}
+              messages={item.messages}
             />
-          )}
-        </div>
-      ))}
+          );
+        }
+        const message = item.message;
+        return (
+          <div key={message.id}>
+            <MessageBubble message={message} currentUserId={currentUserId} />
+            {message.requiresApproval && message.approvalId && (
+              <ApprovalCard
+                approvalId={message.approvalId}
+                title={message.content}
+                description="此操作需要您的审批"
+                isPending={pendingApprovalIds.has(message.approvalId)}
+              />
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 }

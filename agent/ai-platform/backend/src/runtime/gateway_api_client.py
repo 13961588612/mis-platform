@@ -60,7 +60,13 @@ def _openai_messages_to_llm(openai_messages: list[dict[str, Any]]) -> list[LLMMe
                 )
             )
             continue
-        llm_messages.append(LLMMessage(role=LLMRole.USER, content=msg.get("content", "") or ""))
+        raw_content = msg.get("content", "")
+        # 保留多模态 list（含 image_url），供 Qwen-VL 等；勿强制转 str
+        if isinstance(raw_content, list):
+            content: str | list[dict[str, Any]] = raw_content
+        else:
+            content = raw_content or ""
+        llm_messages.append(LLMMessage(role=LLMRole.USER, content=content))
     return llm_messages
 
 

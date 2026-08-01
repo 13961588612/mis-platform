@@ -297,7 +297,12 @@ class InboundStreamWorker:
             await self._process_formfill_resume(inbound, stream_key)
             return
 
-        if not inbound.content.strip():
+        has_attachments = False
+        if inbound.metadata and isinstance(inbound.metadata, dict):
+            atts = inbound.metadata.get("attachments")
+            has_attachments = isinstance(atts, list) and len(atts) > 0
+
+        if not inbound.content.strip() and not has_attachments:
             logger.debug("Skip empty inbound message", session_id=inbound.session_id)
             return
 
@@ -454,10 +459,22 @@ class InboundStreamWorker:
         # 持久化上游 MIS JWT / 租户（供 FormFill 反向信任复用；T01）
         await self._persist_upstream_identity(session, inbound)
 
+        user_content = inbound.content.strip()
+        if not user_content and has_attachments:
+            att_names: list[str] = []
+            for item in inbound.metadata.get("attachments") or []:  # type: ignore[union-attr]
+                if isinstance(item, dict):
+                    name = item.get("name") or item.get("fileId") or item.get("file_id")
+                    if name:
+                        att_names.append(str(name))
+            user_content = "（用户发送了附件）" + (
+                "：" + "、".join(att_names) if att_names else ""
+            )
+
         user_msg: Message = await session_manager.add_message(
             session_id=session.session_id,
             role="user",
-            content=inbound.content,
+            content=user_content or inbound.content,
             metadata=inbound.metadata,
         )
 

@@ -17,10 +17,16 @@
  * BrowserRouter is configured in main.tsx.
  */
 
+import { EmbedAuthBridge } from "./components/EmbedAuthBridge";
 import { Router } from "./routes/router";
 
 function App(): JSX.Element {
-  return <Router />;
+  return (
+    <>
+      <EmbedAuthBridge />
+      <Router />
+    </>
+  );
 }
 
 export default App;

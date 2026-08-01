@@ -41,8 +41,8 @@ class RuntimeConfig(BaseModel):
 class ModelConfig(BaseModel):
     """Agent 的 LLM 模型配置。"""
 
-    primary: str = Field(default="deepseek-v4-flash", description="主模型")
-    fallback: str = Field(default="qwen3.6-plus", description="回退模型")
+    primary: str = Field(default="qwen-plus", description="主模型")
+    fallback: str = Field(default="deepseek-v4-flash", description="回退模型")
     strategy: str = Field(default="default-primary", description="模型选择策略")
     gateway: str = Field(default="llm-gateway", description="LLM gateway 引用")
 
@@ -176,8 +176,8 @@ class AgentConfig(BaseModel):
         # Parse model section
         model_data: dict[str, Any] = agent_section.get("model", data.get("model", {}))
         model: ModelConfig = ModelConfig(
-            primary=model_data.get("primary", "deepseek-v4-flash"),
-            fallback=model_data.get("fallback", "qwen3.6-plus"),
+            primary=model_data.get("primary", "qwen-plus"),
+            fallback=model_data.get("fallback", "deepseek-v4-flash"),
             strategy=model_data.get("strategy", "default-primary"),
             gateway=model_data.get("gateway", "llm-gateway"),
         )

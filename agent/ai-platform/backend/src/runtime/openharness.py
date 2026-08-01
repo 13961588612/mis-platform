@@ -26,7 +26,11 @@ from src.runtime.oh_runtime_builder import (
 from src.utils.logging import get_logger
 
 try:
-    from openharness.engine.messages import ConversationMessage, TextBlock
+    from openharness.engine.messages import (
+        ConversationMessage,
+        ImageBlock,
+        TextBlock,
+    )
     from openharness.engine.query_engine import QueryEngine
     from openharness.engine.stream_events import (
         AssistantTextDelta,
@@ -42,6 +46,7 @@ except ImportError:  # pragma: no cover
     _OPENHARNESS_AVAILABLE = False
     McpClientManager = None  # type: ignore[misc, assignment]
     QueryEngine = None  # type: ignore[misc, assignment]
+    ImageBlock = None  # type: ignore[misc, assignment]
 
 logger = get_logger("runtime.openharness")
 
@@ -150,6 +155,70 @@ def _log_agent_trace(session_id: str, step: int, phase: str, **fields: Any) -> N
     logger.info("Agent trace", **payload)
 
 
+def _attachments_from_meta(metadata: Any) -> list[dict[str, Any]]:
+    if not isinstance(metadata, dict):
+        return []
+    raw = metadata.get("attachments")
+    if not isinstance(raw, list):
+        return []
+    return [a for a in raw if isinstance(a, dict)]
+
+
+def _user_message_with_attachments(content: str, metadata: Any) -> Any:
+    """用户消息：图片附件以 ImageBlock(base64) 注入；其它附件以文本说明。"""
+    import base64
+
+    from src.storage.local_files import is_image_mime, read_file_bytes
+
+    text = str(content or "").strip()
+    attachments = _attachments_from_meta(metadata)
+    if not attachments or ImageBlock is None:
+        return ConversationMessage.from_user_text(text or "（空消息）")
+
+    blocks: list[Any] = []
+    file_notes: list[str] = []
+    for att in attachments:
+        file_id = str(att.get("fileId") or att.get("file_id") or "")
+        name = str(att.get("name") or file_id or "附件")
+        mime = str(att.get("mimeType") or att.get("mime_type") or "")
+        if not file_id:
+            file_notes.append(f"- {name}")
+            continue
+        loaded = read_file_bytes(file_id)
+        if loaded is None:
+            file_notes.append(f"- {name}（文件不可用）")
+            continue
+        meta, data = loaded
+        mime = mime or meta.mime_type
+        if is_image_mime(mime):
+            # 过大图片不塞进上下文，避免撑爆 prompt
+            if len(data) > 4 * 1024 * 1024:
+                file_notes.append(f"- 图片 {name}（过大，未送入识图，请压缩后重试）")
+                continue
+            blocks.append(
+                ImageBlock(
+                    media_type=mime.split(";")[0].strip() or "image/png",
+                    data=base64.b64encode(data).decode("ascii"),
+                    source_path=meta.original_name,
+                )
+            )
+        else:
+            file_notes.append(f"- {name} ({mime or 'file'}, {meta.size} bytes)")
+
+    note_parts: list[str] = []
+    if text:
+        note_parts.append(text)
+    if file_notes:
+        note_parts.append("用户上传的附件：\n" + "\n".join(file_notes))
+    if not note_parts and blocks:
+        note_parts.append("请结合用户上传的图片回答。")
+    if note_parts:
+        blocks.insert(0, TextBlock(text="\n\n".join(note_parts)))
+    if not blocks:
+        return ConversationMessage.from_user_text(text or "（空消息）")
+    return ConversationMessage.from_user_content(blocks)
+
+
 def _platform_messages_to_conversation(messages: list[dict[str, Any]]) -> list[Any]:
     """将平台会话消息转换为 OpenHarness 的 ConversationMessage 列表。"""
     if not _OPENHARNESS_AVAILABLE:
@@ -158,12 +227,13 @@ def _platform_messages_to_conversation(messages: list[dict[str, Any]]) -> list[A
     for msg in messages:
         role: str = msg.get("role", "user")
         content: str = msg.get("content", "")
+        metadata = msg.get("metadata")
         if role == "assistant":
             result.append(
                 ConversationMessage(role="assistant", content=[TextBlock(text=str(content or ""))])
             )
         else:
-            result.append(ConversationMessage.from_user_text(str(content or "")))
+            result.append(_user_message_with_attachments(str(content or ""), metadata))
     return result
 
 
@@ -233,7 +303,7 @@ class OpenHarnessRuntime(AgentRuntime):
         self._temperature = 0.7
         self._max_tokens = 4096
         self._system_prompt = ""
-        self._model = "deepseek-v4-flash"
+        self._model = "qwen-plus"
         self._native_mcp_manager: McpClientManager | None = None
         self._initialized = False
 

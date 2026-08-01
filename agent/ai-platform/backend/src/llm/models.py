@@ -26,7 +26,8 @@ class LLMMessage(BaseModel):
     """LLM 对话中的单条消息。"""
 
     role: LLMRole = LLMRole.USER
-    content: str = ""
+    # str：纯文本；list：OpenAI 多模态 parts（text / image_url），供 Qwen-VL 等识图
+    content: str | list[dict[str, Any]] = ""
     name: str = Field(default="", description="tool 角色消息的工具名称")
     tool_call_id: str = Field(default="", description="tool 结果消息的工具调用 ID")
     tool_calls: list[dict[str, Any]] = Field(
@@ -40,12 +41,13 @@ class LLMMessage(BaseModel):
         result: dict[str, Any] = {"role": self.role.value}
 
         if self.role == LLMRole.ASSISTANT and self.tool_calls:
-            result["content"] = self.content or None
+            text = self.content if isinstance(self.content, str) else ""
+            result["content"] = text or None
             result["tool_calls"] = self.tool_calls
             return result
 
         if self.role == LLMRole.TOOL:
-            result["content"] = self.content
+            result["content"] = self.content if isinstance(self.content, str) else str(self.content)
             result["tool_call_id"] = self.tool_call_id
             return result
 
@@ -84,7 +86,7 @@ class LLMRequest(BaseModel):
     """发送到 LLM Gateway 的请求。"""
 
     messages: list[LLMMessage] = Field(default_factory=list)
-    model: str = Field(default="deepseek-v4-flash", description="模型名称")
+    model: str = Field(default="qwen-plus", description="模型名称")
     temperature: float = Field(default=0.7, ge=0.0, le=2.0)
     max_tokens: int = Field(default=4096, ge=1)
     top_p: float = Field(default=1.0, ge=0.0, le=1.0)

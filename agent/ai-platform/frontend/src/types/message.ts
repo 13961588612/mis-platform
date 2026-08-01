@@ -21,6 +21,16 @@ export type MessageStatus =
   | "delivered"
   | "error";
 
+/** Chat attachment reference (uploaded via /files/upload). */
+export interface ChatAttachment {
+  fileId: string;
+  name: string;
+  mimeType: string;
+  size: number;
+  /** Relative API path, e.g. /api/v1/files/{id} */
+  url?: string;
+}
+
 // ===== Chat Message =====
 
 /** A single chat message in a conversation. */
@@ -39,6 +49,8 @@ export interface ChatMessage {
   timestamp: string;
   /** Agent ID that produced this message (for assistant role). */
   agentId?: string;
+  /** Uploaded attachments (images / files). */
+  attachments?: ChatAttachment[];
   /** Tool name if this is a tool message. */
   toolName?: string;
   /** Tool call arguments (JSON string). */
@@ -96,6 +108,10 @@ export interface InboundMessage {
   agentId?: string;
   /** Message text content (for chat type). */
   content?: string;
+  /** Optional message type (text | image | file). */
+  messageType?: string;
+  /** Extra payload (e.g. attachments). */
+  metadata?: Record<string, unknown>;
   /** Approval response (for approval type). */
   approvalResponse?: {
     approvalId: string;

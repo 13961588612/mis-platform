@@ -86,15 +86,15 @@ function decodeJwtPayload(token: string): Record<string, unknown> | null {
  * Build an AuthUser from a decoded JWT payload.
  */
 function buildAuthUser(payload: Record<string, unknown>): AuthUser {
+  // MIS RS256 JWT 用 sub 表示 userId；agent 自有 HS256 可能用 userId / user_id
+  const rawId = payload.userId ?? payload.user_id ?? payload.sub ?? "";
   return {
-    userId:
-      (payload.userId as string) ??
-      (payload.user_id as string) ??
-      "",
+    userId: String(rawId),
     username: (payload.username as string) ?? "",
     department: (payload.department as string) ?? "",
-    roles: (payload.roles as string[]) ?? [],
-    channel: (payload.channel as string) ?? "wecom_h5",
+    roles: Array.isArray(payload.roles) ? (payload.roles as string[]) : [],
+    // 嵌入场景默认 web，避免误标 wecom_h5
+    channel: (payload.channel as string) ?? (payload.iss === "mis-platform" ? "web" : "wecom_h5"),
     agentId: (payload.agent_id as string) ?? (payload.agentId as string) ?? null,
   };
 }

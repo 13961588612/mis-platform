@@ -2,39 +2,39 @@
  * ChatPage — Main AI chat page.
  *
  * Full-screen chat interface with the ChatPanel component.
- * Includes an authentication guard — redirects to /login if not
- * authenticated.
+ * Auth 由外层 RequireAuth 统一处理（含 iframe 嵌入等待态）。
  */
 
 import { useEffect } from "react";
-import { Navigate } from "react-router-dom";
 import { ChatPanel } from "../components/ChatPanel";
 import { useAuthStore } from "../store/authStore";
+
+function isEmbedMode(): boolean {
+  try {
+    if (new URLSearchParams(window.location.search).get("embed") === "1") return true;
+    return window.self !== window.top;
+  } catch {
+    return true;
+  }
+}
 
 // ===== Component =====
 
 /**
  * ChatPage — the primary AI conversation interface.
- *
- * Renders the ChatPanel in a full-height container.
- * Redirects to /login if the user is not authenticated.
+ * 嵌入 Sheet 时用 h-full，独立打开用 h-screen。
  */
 export function ChatPage(): JSX.Element {
-  const { isAuthenticated, initialize } = useAuthStore();
+  const initialize = useAuthStore((s) => s.initialize);
+  const embed = isEmbedMode();
 
-  // Initialize auth state on mount
   useEffect(() => {
     initialize();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Auth guard
-  if (!isAuthenticated) {
-    return <Navigate to="/login" replace />;
-  }
-
   return (
-    <div className="h-screen w-full bg-surface-muted">
+    <div className={embed ? "h-full min-h-0 w-full bg-surface-muted" : "h-screen w-full bg-surface-muted"}>
       <ChatPanel />
     </div>
   );

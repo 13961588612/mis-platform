@@ -16,6 +16,8 @@ const SheetOverlay = React.forwardRef<
     ref={ref}
     className={cn(
       'fixed inset-0 z-50 bg-slate-950/40 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0',
+      // forceMount 关闭态不拦截点击、不挡画面
+      'data-[state=closed]:pointer-events-none data-[state=closed]:invisible',
       className,
     )}
     {...props}
@@ -27,14 +29,20 @@ const SheetContent = React.forwardRef<
   React.ElementRef<typeof DialogPrimitive.Content>,
   React.ComponentPropsWithoutRef<typeof DialogPrimitive.Content> & {
     side?: 'right' | 'left';
+    /** 关闭时也保留 DOM（如 Copilot iframe 需保持会话状态） */
+    forceMount?: true;
   }
->(({ className, children, side = 'right', ...props }, ref) => (
-  <SheetPortal>
-    <SheetOverlay />
+>(({ className, children, side = 'right', forceMount, ...props }, ref) => (
+  <SheetPortal forceMount={forceMount}>
+    <SheetOverlay forceMount={forceMount} />
     <DialogPrimitive.Content
       ref={ref}
+      forceMount={forceMount}
       className={cn(
         'fixed z-50 flex h-full w-full flex-col border bg-popover text-popover-foreground shadow-card-hover transition ease-in-out data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:duration-200 data-[state=open]:duration-300',
+        // forceMount 关闭态：移出交互层，避免挡住页面点击
+        forceMount &&
+          'data-[state=closed]:pointer-events-none data-[state=closed]:invisible',
         side === 'right' &&
           'inset-y-0 right-0 max-w-md border-l data-[state=closed]:slide-out-to-right data-[state=open]:slide-in-from-right',
         side === 'left' &&
