@@ -248,7 +248,7 @@ export function DictManagePage() {
 
         <div className="min-w-0 flex-1 overflow-auto rounded-lg border bg-card">
           <table className="w-full text-left text-sm">
-            <thead className="sticky top-0 border-b bg-muted/40 text-muted-foreground">
+            <thead className="sticky top-0 z-10 border-b bg-muted/60 text-muted-foreground backdrop-blur">
               <tr>
                 <th className="px-3 py-2 font-bold">标签</th>
                 <th className="px-3 py-2 font-bold">值</th>
@@ -277,7 +277,7 @@ export function DictManagePage() {
                 </tr>
               ) : (
                 items.map((item) => (
-                  <tr key={item.id} className="border-b last:border-0 hover:bg-muted/30">
+                  <tr key={item.id} className="border-b border-border/50 last:border-0 hover:bg-muted/30 even:bg-muted/20">
                     <td className="px-3 py-2">{item.label}</td>
                     <td className="px-3 py-2 font-mono text-xs">{item.value}</td>
                     <td className="px-3 py-2">{item.sort}</td>

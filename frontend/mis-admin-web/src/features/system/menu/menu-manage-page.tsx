@@ -526,7 +526,7 @@ export function MenuManagePage() {
                               key={k.id}
                               role="button"
                               tabIndex={0}
-                              className="flex cursor-pointer items-center gap-2 border-b px-3 py-2 text-sm last:border-0 hover:bg-muted/40"
+                              className="flex cursor-pointer items-center gap-2 border-b border-border/50 px-3 py-2 text-sm last:border-0 hover:bg-muted/30 even:bg-muted/20"
                               onClick={() => setSelectedId(k.id)}
                             >
                               <span className={cn('grid h-5 w-5 place-items-center rounded', km.dotBg)}>

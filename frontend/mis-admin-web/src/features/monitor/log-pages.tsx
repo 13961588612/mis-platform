@@ -108,7 +108,7 @@ export function OperLogListPage() {
       </div>
       <div className="min-h-0 flex-1 overflow-auto rounded-lg border bg-card">
         <table className="w-full min-w-[800px] text-left text-sm">
-          <thead className="sticky top-0 border-b bg-muted/40 text-muted-foreground">
+          <thead className="sticky top-0 z-10 border-b bg-muted/60 text-muted-foreground backdrop-blur">
             <tr>
               <th className="px-3 py-2 font-bold">时间</th>
               <th className="px-3 py-2 font-bold">用户</th>
@@ -136,7 +136,7 @@ export function OperLogListPage() {
               rows.map((row) => (
                 <tr
                   key={row.id}
-                  className="cursor-pointer border-b last:border-0 hover:bg-muted/30"
+                  className="cursor-pointer border-b border-border/50 last:border-0 hover:bg-muted/30 even:bg-muted/20"
                   onClick={() => setDetail(row)}
                 >
                   <td className="px-3 py-2 text-muted-foreground">{formatTime(row.operTime)}</td>
@@ -264,7 +264,7 @@ export function LoginLogListPage() {
       </div>
       <div className="min-h-0 flex-1 overflow-auto rounded-lg border bg-card">
         <table className="w-full text-left text-sm">
-          <thead className="sticky top-0 border-b bg-muted/40 text-muted-foreground">
+          <thead className="sticky top-0 z-10 border-b bg-muted/60 text-muted-foreground backdrop-blur">
             <tr>
               <th className="px-3 py-2 font-bold">时间</th>
               <th className="px-3 py-2 font-bold">用户</th>
@@ -290,7 +290,7 @@ export function LoginLogListPage() {
               rows.map((row) => (
                 <tr
                   key={row.id}
-                  className="cursor-pointer border-b last:border-0 hover:bg-muted/30"
+                  className="cursor-pointer border-b border-border/50 last:border-0 hover:bg-muted/30 even:bg-muted/20"
                   onClick={() => setDetail(row)}
                 >
                   <td className="px-3 py-2 text-muted-foreground">{formatTime(row.loginAt)}</td>

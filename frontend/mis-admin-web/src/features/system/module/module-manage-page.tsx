@@ -434,7 +434,7 @@ export function ModuleManagePage() {
                   <p className="text-sm text-muted-foreground">暂无绑定关系</p>
                 ) : (
                   <table className="w-full border-collapse text-sm">
-                    <thead className="border-b text-left text-xs text-muted-foreground">
+                    <thead className="sticky top-0 z-10 border-b bg-muted/60 text-left text-sm font-bold text-muted-foreground backdrop-blur">
                       <tr>
                         <th className="px-2 py-1.5">菜单</th>
                         <th className="px-2 py-1.5">权限码</th>
@@ -445,7 +445,7 @@ export function ModuleManagePage() {
                     </thead>
                     <tbody>
                       {bindings.map((b, i) => (
-                        <tr key={`${b.apiId}-${i}`} className="border-b last:border-0">
+                        <tr key={`${b.apiId}-${i}`} className="border-b border-border/50 last:border-0 hover:bg-muted/30 even:bg-muted/20">
                           <td className="px-2 py-1.5">{b.menuName}</td>
                           <td className="px-2 py-1.5 text-muted-foreground">{b.permission ?? '—'}</td>
                           <td className="px-2 py-1.5">{b.apiName}</td>

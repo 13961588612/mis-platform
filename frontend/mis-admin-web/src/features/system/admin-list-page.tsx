@@ -147,12 +147,12 @@ function AssignmentEditor({
     <div className="col-span-2 min-w-0 self-start">
       <div className="overflow-hidden rounded-md border border-input">
         <table className="w-full border-collapse text-sm">
-          <thead className="bg-muted/50 text-left text-xs text-muted-foreground">
+          <thead className="border-b bg-muted/60 text-left text-sm font-bold text-muted-foreground">
             <tr>
-              <th className="px-2.5 py-1.5 font-medium">任职部门</th>
-              <th className="px-2.5 py-1.5 font-medium">任职岗位</th>
-              <th className="px-2.5 py-1.5 font-medium">任职开始时间</th>
-              <th className="w-16 px-2.5 py-1.5 font-medium text-center">主职</th>
+              <th className="px-2.5 py-1.5 font-bold">任职部门</th>
+              <th className="px-2.5 py-1.5 font-bold">任职岗位</th>
+              <th className="px-2.5 py-1.5 font-bold">任职开始时间</th>
+              <th className="w-16 px-2.5 py-1.5 text-center font-bold">主职</th>
               <th className="w-12 px-2.5 py-1.5" />
             </tr>
           </thead>
@@ -165,7 +165,7 @@ function AssignmentEditor({
               </tr>
             ) : (
               list.map((a, i) => (
-                <tr key={i} className="border-t last:border-0">
+                <tr key={i} className="border-t border-border/50 last:border-0">
                   <td className="px-2 py-1.5">
                     <select
                       className="h-8 w-full rounded-md border border-input bg-card px-2 text-sm"
@@ -246,26 +246,26 @@ function AssignmentEditor({
   );
 }
 
-/** 任职记录只读子表（详情 / 列表展开用） */
+/** 任职记录只读子表（详情 / 列表展开用）：表头加粗带底色；表体只显示列分隔线（竖线），不显示行间横线 */
 function AssignmentTable({ list }: { list: Assignment[] }) {
   if (!list.length) return <span className="text-muted-foreground">—</span>;
   return (
     <table className="w-full border-collapse text-sm">
-      <thead className="text-left text-xs text-muted-foreground">
+      <thead className="border-b bg-muted/60 text-left text-sm font-bold text-muted-foreground">
         <tr>
-          <th className="pb-1.5 pr-3 font-bold">任职部门</th>
-          <th className="pb-1.5 pr-3 font-bold">任职岗位</th>
-          <th className="pb-1.5 pr-3 font-bold">任职开始时间</th>
-          <th className="pb-1.5 font-bold">主职</th>
+          <th className="px-3 py-2 font-bold">任职部门</th>
+          <th className="border-l border-border/60 px-3 py-2 font-bold">任职岗位</th>
+          <th className="border-l border-border/60 px-3 py-2 font-bold">任职开始时间</th>
+          <th className="border-l border-border/60 px-3 py-2 font-bold">主职</th>
         </tr>
       </thead>
       <tbody>
         {list.map((a, i) => (
-          <tr key={i} className="border-t last:border-0">
-            <td className="py-1.5 pr-3 font-medium text-foreground">{a.dept || '—'}</td>
-            <td className="py-1.5 pr-3 font-medium text-foreground">{a.post || '—'}</td>
-            <td className="py-1.5 pr-3">{a.startDate || '—'}</td>
-            <td className="py-1.5">
+          <tr key={i}>
+            <td className="px-3 py-2 font-medium text-foreground">{a.dept || '—'}</td>
+            <td className="border-l border-border/60 px-3 py-2 font-medium text-foreground">{a.post || '—'}</td>
+            <td className="border-l border-border/60 px-3 py-2">{a.startDate || '—'}</td>
+            <td className="border-l border-border/60 px-3 py-2">
               {a.isPrimary ? (
                 <span className="inline-flex items-center rounded-full bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary">
                   主
@@ -851,7 +851,7 @@ export function AdminListPage({ def }: { def: AdminPageDef }) {
                     const hasAssignments = assignments.length > 0;
                     return (
                       <Fragment key={rowId}>
-                        <tr className="border-b last:border-0 hover:bg-muted/40">
+                        <tr className="border-b border-border/50 last:border-0 hover:bg-muted/30 even:bg-muted/20">
                           {def.columns.map((c) => (
                             <td key={c.key} className="px-4 py-[0.7rem] align-middle text-sm">
                               {c.status ? (

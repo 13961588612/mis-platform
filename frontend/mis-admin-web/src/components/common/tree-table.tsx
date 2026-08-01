@@ -63,13 +63,13 @@ export function TreeTable<T extends TreeTableNode>({
 }: TreeTableProps<T>) {
   return (
     <table className={cn('w-full border-collapse text-sm', className)}>
-      <thead className="border-b text-left text-xs text-muted-foreground">
+      <thead className="sticky top-0 z-10 border-b bg-muted/60 text-left text-sm font-bold text-muted-foreground backdrop-blur">
         <tr>
           {columns.map((col) => (
             <th
               key={col.key}
               className={cn(
-                'px-2 py-1.5',
+                'px-2 py-1.5 font-bold',
                 col.align === 'right' && 'text-right',
                 col.align === 'center' && 'text-center',
                 col.className,
@@ -78,7 +78,7 @@ export function TreeTable<T extends TreeTableNode>({
               {col.header}
             </th>
           ))}
-          {rowActions ? <th className="px-2 py-1.5 text-right">操作</th> : null}
+          {rowActions ? <th className="px-2 py-1.5 text-right font-bold">操作</th> : null}
         </tr>
       </thead>
       <tbody>
@@ -97,7 +97,7 @@ export function TreeTable<T extends TreeTableNode>({
               key={row.id}
               onClick={onRowClick ? () => onRowClick(row) : undefined}
               className={cn(
-                'group border-b last:border-0 hover:bg-accent/40',
+                'group border-b border-border/50 last:border-0 hover:bg-muted/30 even:bg-muted/20',
                 onRowClick && 'cursor-pointer',
                 rowClassName?.(row),
               )}

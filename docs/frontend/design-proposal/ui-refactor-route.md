@@ -482,3 +482,29 @@ export interface Assignment {
 - `npm run typecheck` 0 错误。
 - 对应提交：`6e55b5d`（side-nav 飞出 + 日志，已入库）；`app-layout.tsx`（宽度 + onExpandBranch 接线）随本文档本轮一并本地提交。
 - 按用户「不需要推远端」偏好，本轮提交均未推送。
+
+---
+
+## 21. 表格表头字号统一（text-sm）+ 方案 A 配色（精炼冷灰）
+
+> 触发：用户反馈「部门管理的表头没修改」「模块管理的接口列表和绑定关系表头也要修改」；并确认新表格配色用 **方案 A**。
+
+### 21.1 表头字号统一为 text-sm（对齐员工管理主表）
+- **根因**：上一轮（§19 之后）把员工主表之外的表头设成 `text-xs`，但员工管理主表表头是 `text-sm`（`px-4 py-2.5 text-sm font-bold`），导致部门管理（TreeTable）/ 模块接口列表（TreeTable）/ 模块绑定关系（裸 `<table>`）看起来"没改成"。
+- **修复**：所有表格表头统一 `text-sm font-bold`，与员工管理主表一致。
+  - `tree-table.tsx`：thead `text-xs`→`text-sm`（同时影响部门树 + 模块接口树）。
+  - `module-manage-page.tsx`：绑定关系裸表 thead `text-xs`→`text-sm`，并补 `sticky top-0 z-10 backdrop-blur` 对齐员工主表。
+  - `dashboard-page.tsx` / `admin-list-page.tsx`（AssignmentEditor + AssignmentTable 两个内嵌子表）：thead `text-xs`→`text-sm`。
+
+### 21.2 方案 A 配色落地（不改色值，只优化渲染）
+- **行线**：`border-b`（默认 `--border` 满透明）→ `border-b border-border/50`，分隔线更淡。
+- **hover**：`hover:bg-muted/40`（及 TreeTable 的 `hover:bg-accent/40`）→ `hover:bg-muted/30`，hover 更柔和。
+- **斑马纹**：新增 `even:bg-muted/20`（可选浅灰交替），提升长表可读性。
+- **主色 / 语义色不动**：primary、success/destructive/warning 等全部保留。
+- 涉及文件（行级 className）：`admin-list-page.tsx`（主表行 + 任职子表编辑器行 `border-t border-border/50`）、`tree-table.tsx`、`module-manage-page.tsx`（绑定关系行）、`user/role/org/dict` 列表、`log-pages.tsx`、`menu-manage-page.tsx`、`list-page-skeleton.tsx`。
+- 说明：部门编制 `<ul>` 列表项、菜单树 `role=button`、侧栏/表单 hover 不在"表格"范畴，保持原 `hover:bg-muted/40`，避免误伤。
+
+### 21.3 验收
+- `npm run typecheck` 0 错误。
+- 全站表格表头现已统一 `text-sm font-bold` + `bg-muted/60 border-b backdrop-blur`（可滚表带 `sticky top-0 z-10`），行线 `border-border/50` + hover `muted/30` + 斑马 `muted/20`。
+- 按用户「不需要推远端」偏好，本轮仅本地提交，不推送。
