@@ -274,10 +274,10 @@ export function ListPageSkeleton<T extends Record<string, unknown>>({
           ))}
         </nav>
 
-        <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border bg-card shadow-card">
+        <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border bg-table-surface shadow-card">
           <div className="min-h-0 flex-1 overflow-auto">
             <table className="w-full bg-table-surface text-sm">
-              <thead className="sticky top-0 z-10 border-b bg-table-stripe text-left text-sm font-bold text-muted-foreground backdrop-blur">
+              <thead className="sticky top-0 z-10 border-b bg-table-surface text-left text-sm font-bold text-muted-foreground backdrop-blur">
                 <tr>
                   {columns.map((col) => (
                     <th key={col.key} className={cn('px-4 py-3 font-bold', col.className)}>
@@ -297,7 +297,7 @@ export function ListPageSkeleton<T extends Record<string, unknown>>({
                   pageRows.map((row) => (
                     <tr
                       key={rowKey(row)}
-                      className="cursor-pointer border-b border-border/50 last:border-0 even:bg-table-stripe hover:bg-table-hover"
+                      className="cursor-pointer border-b border-border/50 last:border-0 bg-table-row even:bg-table-stripe hover:bg-table-hover"
                       onClick={() => enableFormSheet && openView(row)}
                     >
                       {columns.map((col) => (

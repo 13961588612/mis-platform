@@ -129,9 +129,9 @@ export function OrgListPage() {
           </PermissionGate>
         }
       />
-      <div className="min-h-0 flex-1 overflow-auto rounded-lg border bg-card">
+      <div className="min-h-0 flex-1 overflow-auto rounded-lg border bg-table-surface">
         <table className="w-full bg-table-surface text-left text-sm">
-          <thead className="sticky top-0 z-10 border-b bg-table-stripe text-muted-foreground backdrop-blur">
+          <thead className="sticky top-0 z-10 border-b bg-table-surface text-muted-foreground backdrop-blur">
             <tr>
               <th className="px-3 py-2 font-bold">编码</th>
               <th className="px-3 py-2 font-bold">名称</th>
@@ -156,7 +156,7 @@ export function OrgListPage() {
               </tr>
             ) : (
               rows.map((row) => (
-                <tr key={row.id} className="border-b border-border/50 last:border-0 even:bg-table-stripe hover:bg-table-hover">
+                <tr key={row.id} className="border-b border-border/50 last:border-0 bg-table-row even:bg-table-stripe hover:bg-table-hover">
                   <td className="px-3 py-2 font-mono text-xs">{row.code}</td>
                   <td className="px-3 py-2 font-medium">{row.name}</td>
                   <td className="px-3 py-2">{row.sort}</td>

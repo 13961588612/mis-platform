@@ -309,7 +309,7 @@ export function DeptTreePage() {
         }
       />
 
-      <div className="min-h-0 flex-1 overflow-auto rounded-lg border bg-card">
+      <div className="min-h-0 flex-1 overflow-auto rounded-lg border bg-table-surface">
         {loading ? (
           <div className="space-y-2 p-4">
             {Array.from({ length: 5 }).map((_, i) => (

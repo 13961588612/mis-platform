@@ -578,3 +578,16 @@ export interface Assignment {
 - **修复**：移除所有表格的 `min-h-full`，恢复表格自然行高。涉及文件：`tree-table.tsx`、`list-page-skeleton.tsx`、`dashboard-page.tsx`、`log-pages.tsx`、`admin-list-page.tsx`、`dict-manage-page.tsx`、`module-manage-page.tsx`、`org-list-page.tsx`、`role-list-page.tsx`、`user-list-page.tsx`。
 - **取舍说明**：去掉 `min-h-full` 后，数据行下方到卡片底部的空白区会重新透出外层 `bg-card`（白色）。这是「自然行高」与「整片灰底」之间的权衡；若后续仍希望空白区着色，应在 table 外层 wrapper div 上应用 `bg-table-surface`，而不是强制拉伸 table 高度。
 - **验收**：`npm run typecheck` 0 错误。
+
+### 21.10 空白区着色 + 数据行底色调淡（2026-08-01 续9）
+- **用户反馈**：① 需要把数据行下方空白区也填上冷灰（采用 §21.9 提出的 wrapper 着色方案）；② 数据行的背景色要「淡一点」。
+- **根因 / 设计**：§21.9 已明确——外层容器（`flex-1 overflow-auto rounded-lg border bg-card`）本身就是撑满页面高度的，只需把它的 `bg-card` 改为 `bg-table-surface` 即可让空白区变灰，且不影响行高。
+- **token 调整（globals.css + tailwind.config.ts 新增 `table-row`）**：
+  - 浅色：`--table-surface: 214 32% 90%`（外层/空白区/表头底色，可见冷灰）｜`--table-row: 0 0% 100%`（奇数数据行：近白，比底色更淡）｜`--table-stripe: 214 32% 94%`（偶数数据行：极淡冷灰，仅做轻微斑马）｜`--table-hover: 214 32% 84%`（hover 清晰）。
+  - 暗色：surface 15%｜row 22%｜stripe 19%｜hover 26%。
+- **组件改动**：
+  - 外层容器 `bg-card` → `bg-table-surface`（org/role/dict/log×2/module/menu/dashboard/dept-tree/user 内层滚动容器/list-page-skeleton）。侧栏（`aside`）与筛选区外层保持 `bg-card` 不动。
+  - 表头 `bg-table-stripe` → `bg-table-surface`（保持灰带，与底色同色系）。
+  - 数据行 tr/div 增加 `bg-table-row`（奇数行近白），`even:bg-table-stripe`（偶数行极淡）保留，hover 不变。
+  - 效果：空白区 + 表头 = 90% 冷灰；奇数数据行近白（最淡）、偶数行 94%（略灰）、hover 84%（最深）。数据行比空白区更淡，层次为「淡行浮于灰场之上」。
+- **验收**：`npm run typecheck` 0 错误。

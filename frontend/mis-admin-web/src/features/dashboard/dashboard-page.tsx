@@ -100,9 +100,9 @@ export function DashboardPage() {
           <span className="h-4 w-1 rounded-full bg-[hsl(var(--portal-card-accent))]" />
           最近操作
         </h2>
-        <div className="overflow-hidden rounded-lg border bg-card shadow-card">
+        <div className="overflow-hidden rounded-lg border bg-table-surface shadow-card">
           <table className="w-full bg-table-surface text-sm">
-            <thead className="border-b bg-table-stripe text-left text-sm font-bold text-muted-foreground">
+            <thead className="border-b bg-table-surface text-left text-sm font-bold text-muted-foreground">
               <tr>
                 <th className="px-4 py-3 font-bold">操作人</th>
                 <th className="px-4 py-3 font-bold">操作</th>

@@ -315,7 +315,7 @@ export function ModuleManagePage() {
         </aside>
 
         {/* 模块详情：信息卡 + Tabs（接口树表 / 绑定关系） */}
-        <section className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border bg-card">
+        <section className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border bg-table-surface">
           {!selected ? (
             <p className="p-4 text-sm text-muted-foreground">请选择左侧模块</p>
           ) : (
@@ -434,7 +434,7 @@ export function ModuleManagePage() {
                   <p className="text-sm text-muted-foreground">暂无绑定关系</p>
                 ) : (
                   <table className="w-full border-collapse bg-table-surface text-sm">
-                    <thead className="sticky top-0 z-10 border-b bg-table-stripe text-left text-sm font-bold text-muted-foreground backdrop-blur">
+                    <thead className="sticky top-0 z-10 border-b bg-table-surface text-left text-sm font-bold text-muted-foreground backdrop-blur">
                       <tr>
                         <th className="px-2 py-1.5">菜单</th>
                         <th className="px-2 py-1.5">权限码</th>
@@ -445,7 +445,7 @@ export function ModuleManagePage() {
                     </thead>
                     <tbody>
                       {bindings.map((b, i) => (
-                        <tr key={`${b.apiId}-${i}`} className="border-b border-border/50 last:border-0 even:bg-table-stripe hover:bg-table-hover">
+                        <tr key={`${b.apiId}-${i}`} className="border-b border-border/50 last:border-0 bg-table-row even:bg-table-stripe hover:bg-table-hover">
                           <td className="px-2 py-1.5">{b.menuName}</td>
                           <td className="px-2 py-1.5 text-muted-foreground">{b.permission ?? '—'}</td>
                           <td className="px-2 py-1.5">{b.apiName}</td>

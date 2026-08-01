@@ -406,7 +406,7 @@ export function MenuManagePage() {
           </div>
         </aside>
 
-        <div className="min-w-0 flex-1 overflow-auto rounded-lg border bg-card p-4">
+        <div className="min-w-0 flex-1 overflow-auto rounded-lg border bg-table-surface p-4">
           {!selected ? (
             <div className="grid h-full place-items-center py-20 text-center">
               <div>
@@ -526,7 +526,7 @@ export function MenuManagePage() {
                               key={k.id}
                               role="button"
                               tabIndex={0}
-                              className="flex cursor-pointer items-center gap-2 border-b border-border/50 px-3 py-2 text-sm last:border-0 even:bg-table-stripe hover:bg-table-hover"
+                              className="flex cursor-pointer items-center gap-2 border-b border-border/50 px-3 py-2 text-sm last:border-0 bg-table-row even:bg-table-stripe hover:bg-table-hover"
                               onClick={() => setSelectedId(k.id)}
                             >
                               <span className={cn('grid h-5 w-5 place-items-center rounded', km.dotBg)}>

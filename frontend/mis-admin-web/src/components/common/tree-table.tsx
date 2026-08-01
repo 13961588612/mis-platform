@@ -63,7 +63,7 @@ export function TreeTable<T extends TreeTableNode>({
 }: TreeTableProps<T>) {
   return (
     <table className={cn('w-full border-collapse bg-table-surface text-sm', className)}>
-      <thead className="sticky top-0 z-10 border-b bg-table-stripe text-left text-sm font-bold text-muted-foreground backdrop-blur">
+      <thead className="sticky top-0 z-10 border-b bg-table-surface text-left text-sm font-bold text-muted-foreground backdrop-blur">
         <tr>
           {columns.map((col) => (
             <th
@@ -97,7 +97,7 @@ export function TreeTable<T extends TreeTableNode>({
               key={row.id}
               onClick={onRowClick ? () => onRowClick(row) : undefined}
               className={cn(
-                'group border-b border-border/50 last:border-0 even:bg-table-stripe hover:bg-table-hover',
+                'group border-b border-border/50 last:border-0 bg-table-row even:bg-table-stripe hover:bg-table-hover',
                 onRowClick && 'cursor-pointer',
                 rowClassName?.(row),
               )}
