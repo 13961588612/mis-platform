@@ -7,6 +7,8 @@ runtime:
     # AI Skill 表单填充引擎（FormFill）反向信任调用工具（P0: user-fill）。
     # 工具内部已按 FORMFILL_ALLOWED_SKILLS 白名单与意图→skillId 映射校验。
     - formfill__*
+    # 调度：委托专用智能体（白名单见 Settings.INVOKE_AGENT_WHITELIST）
+    - agent__invoke
   params:
     maxSteps: 20
     temperature: 0.3

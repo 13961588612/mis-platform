@@ -33,6 +33,7 @@ import com.mis.common.core.result.Result;
 import com.mis.common.security.context.LoginUser;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.http.codec.ServerSentEvent;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -153,12 +154,14 @@ public class AiProxyController {
                     translator.agentIdFor("chat"), body, authorization, traceId);
         }
         // 非流式：原缓冲返回（兼容旧客户端 / sseEnabled=false 降级）
-        return proxyCapability("chat", authorization, traceId, (auth, tid) -> {
+        // 显式 application/json，避免客户端 Accept:text/event-stream 时 Result 无法写出 → 500
+        Result<AiChatResponse> result = proxyCapability("chat", authorization, traceId, (auth, tid) -> {
             String content = translator.buildChatContent(req);
             Map<String, Object> body = translator.buildBody(content, "chat", req.getContext(), employeeId);
             AiPlatformChatData data = aiPlatformClient.chat(translator.agentIdFor("chat"), body, auth, tid);
             return translator.parseChat(data);
         });
+        return ResponseEntity.ok().contentType(MediaType.APPLICATION_JSON).body(result);
     }
 
     // ===== 探测类端点（authOnly） =====

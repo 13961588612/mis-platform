@@ -54,6 +54,14 @@ export const AI_FEATURES: Record<string, AiFeatureDeclaration> = {
     title: 'AI 查数',
     fallback: 'hide',
   },
+  // F9 Skill Fill（实体映射 HITL 填充）
+  'skill-fill': {
+    key: 'skill-fill',
+    capability: 'extract',
+    mountPoint: 'form-top',
+    title: '智能填充',
+    fallback: 'hide',
+  },
 };
 
 export function getFeatureDeclaration(key: string): AiFeatureDeclaration | undefined {

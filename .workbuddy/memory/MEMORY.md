@@ -21,3 +21,12 @@
 - **BFF** `mis-admin-bff` 端口 **8081**，聚合 mis-iam:8102 / mis-org:8103 / mis-system:8105；本地 `.\mvn.ps1 spring-boot:run -pl mis-admin-bff`。请求经 mis-gateway 登录后透传 `X-User-Id/X-Tenant-Id/X-App-Id`。
 - **测试约束**：① 主 MIS 前端 `mis-admin-web` **无 vitest/jest 运行器**，唯一自动门禁是 `npm run typecheck`（tsc --noEmit）；验证靠手动联调。② Java 微服务需 **JDK17**，沙箱 JDK8 编译受限，优先用 Docker 镜像起 / 内网 JDK17 跑 `mvn test`。③ Python 测试在 `agent/ai-platform/backend`（`.venv/Scripts/python.exe -m pytest`），与 Sprint2 主 MIS 无关。
 - **`deploy/docker-compose.stack.yml`** 是混合联调稳定服务栈（含 mis-gateway/audit/auth 等微服务）；AI 融合用 `docker-compose.ai.yml` 叠加。
+
+## FormFill × Agent 平台整合（2026-07-30 锁定 P0）
+- **目标**：把 mis-admin-bff 的 AI Skill 表单填充引擎暴露为 agent 平台（企微/H5）可调能力，打通「对话→填充→HITL→写回」端到端。
+- **反向信任（关键，新建链路）**：ai-platform→BFF 镜像 identity-jwt 双因子——平台凭证 `X-Platform-Token` + 委托用户 MIS JWT `X-Mis-Upstream-Jwt`(RS256,iss=mis-platform) + 信任域(来源 IP CIDR)；BFF `ReverseTrustInterceptor`(@Order HIGHEST_PRECEDENCE) 校验，失败写 401+Result JSON。与既有 BFF→ai-platform(MIS JWT) 方向相反。
+- **status 枚举实际值（大写是设计文档笔误）**：Java 用小写 `success|hitl_required|manual_required|error`。
+- **契约要点**：Python `FormFillClient.execute_skill` 必须发**顶层 `pageContext`**（含 docType/docId + 内层表单上下文），Java `SkillExecuteRequest` 无 `context`/`sessionId`；响应 `Result{code,message,data}` 需解 `.data` 层。success 路径在 Python 侧自动调 `submit_formfill_apply` 写回。
+- **A2UI entity-select**：单一事件双通道同构降级（H5 表单 / 企微 button_interaction 卡片），resumeToken 绑定 conversationId。
+- **文件分布**：批次1 mis-admin-bff(Java 12 文件) + 批次2 ai-platform(Py/TS 29 文件)；整合层依赖 FormFill 引擎地基(SkillExecutionEngine/DagBuilder/ParameterResolver/SkillLoader + DTO)。
+- **提交状态（2026-07-31）**：全部已提交。拆为两提交——`ccf1ec2`(引擎地基 15 文件) + `cae4a60`(整合层 43 文件)；O1 修复 `5da8ad1`(formfill_client.py)；交付报告 `b03eaf5`(`deliverables/software-company/formfill-agent-integration-delivery-2026-07-31.md`)。提交时**刻意排除**并行改动：mis-org MCP、adminbff 独立 MCP 模块(McpConfig/McpClient/...)、AiCapabilityTranslator、frontend/mis-admin-web 的 AI 表单 UI、记忆文件。详见 2026-07-31 日志。

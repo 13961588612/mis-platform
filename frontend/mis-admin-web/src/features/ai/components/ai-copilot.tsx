@@ -58,9 +58,10 @@ export function AiCopilot(_props: AiCopilotProps) {
   const unavailable = chat.unavailable;
 
   return (
-    <div className="flex h-full flex-col">
+    // flex-1 + min-h-0：占满 Sheet 剩余高度，消息区内部滚动，避免把输入框顶出视口（含任务栏）
+    <div className="flex min-h-0 flex-1 flex-col">
       {unavailable ? (
-        <div className="px-5 py-3 text-xs text-muted-foreground">
+        <div className="shrink-0 px-5 py-3 text-xs text-muted-foreground">
           AI 对话暂不可用（未启用或无权限）。主流程不受影响。
         </div>
       ) : null}
@@ -91,7 +92,7 @@ export function AiCopilot(_props: AiCopilotProps) {
         {chat.loading ? <Skeleton className="h-16 w-3/4 rounded-lg" /> : null}
       </div>
 
-      <div className="border-t px-4 py-3">
+      <div className="shrink-0 border-t bg-background px-4 py-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
         <div className="flex items-end gap-2">
           <Textarea
             value={input}

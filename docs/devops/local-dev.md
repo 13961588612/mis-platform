@@ -89,7 +89,12 @@ cd backend
 ```powershell
 cd backend
 
-# 分别开终端，或 IDE 启动（建议顺序：领域服务 → BFF → Gateway）
+# 推荐：脚本启动（会等端口就绪；已在跑则跳过）
+.\start-dev.ps1                 # 全部
+.\start-dev.ps1 mis-admin-bff   # 仅 BFF
+.\start-dev.ps1 mis-admin-bff -Restart  # 强制重启
+
+# 或分别开终端 / IDE（建议顺序：领域服务 → BFF → Gateway）
 .\mvn.ps1 spring-boot:run -pl mis-auth       # :8101
 .\mvn.ps1 spring-boot:run -pl mis-iam        # :8102
 .\mvn.ps1 spring-boot:run -pl mis-org        # :8103
@@ -98,6 +103,8 @@ cd backend
 .\mvn.ps1 spring-boot:run -pl mis-admin-bff  # :8081
 .\mvn.ps1 spring-boot:run -pl mis-gateway    # :8080
 ```
+
+> **注意：** 旧版 `start-dev.ps1` 只 `Start-Process` 即报成功，重复执行时 BFF 常因 `8081` 已被占用而启动失败，需手动再启。现脚本会：已监听则跳过、`-Restart` 时先停再启、等待端口就绪后再报成功。
 
 需设置 JWT 密钥路径（绝对路径更稳），例如：
 

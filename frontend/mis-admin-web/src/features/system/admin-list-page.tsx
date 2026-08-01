@@ -42,7 +42,6 @@ import {
 import type { AdminField, AdminPageDef } from './types';
 import { SYSTEM_PAGE_DEFS } from './page-defs';
 import { AiFeature } from '@/features/ai/components/ai-feature';
-import { AiFormFill } from '@/features/ai/components/ai-form-fill';
 import { AiTextExtract } from '@/features/ai/components/ai-text-extract';
 import { AiSummary } from '@/features/ai/components/ai-summary';
 import { AiRag } from '@/features/ai/components/ai-rag';
@@ -146,8 +145,8 @@ function AssignmentEditor({
   return (
     <div className="col-span-2 min-w-0 self-start">
       <div className="overflow-hidden rounded-md border border-input">
-        <table className="w-full border-collapse text-sm">
-          <thead className="border-b bg-table-stripe text-left text-sm font-bold text-muted-foreground">
+        <table className="w-full border-collapse bg-table-surface text-sm">
+          <thead className="border-b-2 border-foreground/20 bg-table-header text-left text-sm font-bold text-muted-foreground">
             <tr>
               <th className="px-2.5 py-1.5 font-bold">任职部门</th>
               <th className="px-2.5 py-1.5 font-bold">任职岗位</th>
@@ -156,7 +155,7 @@ function AssignmentEditor({
               <th className="w-12 px-2.5 py-1.5" />
             </tr>
           </thead>
-          <tbody className="bg-table-surface">
+          <tbody>
             {list.length === 0 ? (
               <tr>
                 <td colSpan={5} className="px-2.5 py-3 text-center text-xs text-muted-foreground">
@@ -250,8 +249,8 @@ function AssignmentEditor({
 function AssignmentTable({ list }: { list: Assignment[] }) {
   if (!list.length) return <span className="text-muted-foreground">—</span>;
   return (
-    <table className="w-full border-collapse text-sm">
-      <thead className="border-b bg-table-stripe text-left text-sm font-bold text-muted-foreground">
+    <table className="w-full border-collapse bg-table-surface text-sm">
+      <thead className="border-b-2 border-foreground/20 bg-table-header text-left text-sm font-bold text-muted-foreground">
         <tr>
           <th className="px-3 py-2 font-bold">任职部门</th>
           <th className="border-l border-border/60 px-3 py-2 font-bold">任职岗位</th>
@@ -259,7 +258,7 @@ function AssignmentTable({ list }: { list: Assignment[] }) {
           <th className="border-l border-border/60 px-3 py-2 font-bold">主职</th>
         </tr>
       </thead>
-      <tbody className="bg-table-surface">
+      <tbody>
         {list.map((a, i) => (
           <tr key={i}>
             <td className="px-3 py-2 font-medium text-foreground">{a.dept || '—'}</td>
@@ -477,15 +476,14 @@ export function AdminListPage({ def }: { def: AdminPageDef }) {
     };
   }, [def]);
 
-  // AI 面板开合状态
-  const [aiFormOpen, setAiFormOpen] = useState(false);
-  const [aiExtractOpen, setAiExtractOpen] = useState(false);
+  // AI：辅助录入嵌在表单 Sheet 右侧；问答仍用独立 Sheet
+  const [aiAssistOpen, setAiAssistOpen] = useState(false);
   const [aiRagOpen, setAiRagOpen] = useState(false);
 
   // 列表任职子表展开态（按行 id 记录）
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
 
-  const openCreate = () => {
+  const openCreate = useCallback((opts?: { withAssist?: boolean }) => {
     const seed: Record<string, unknown> = {};
     for (const f of def.form) {
       if (f.type === 'switch') seed[f.key] = 1;
@@ -494,8 +492,9 @@ export function AdminListPage({ def }: { def: AdminPageDef }) {
     setSheetMode('create');
     setEditing(null);
     setFormValues(seed);
+    setAiAssistOpen(!!opts?.withAssist);
     setSheetOpen(true);
-  };
+  }, [def.form]);
 
   // 表单回填桥接：桥接 AI 组件与当前表单态（schema 真源 = def.form）
   const bridge = useMemo<FormFillBridge>(
@@ -515,11 +514,18 @@ export function AdminListPage({ def }: { def: AdminPageDef }) {
     [def, formValues, openCreate],
   );
 
-  // UC-3 智能录入：先打开创建 Sheet（seed），再打开抽取面板
+  // UC-3 智能录入：打开新增表单，并在右侧展开辅助录入
   const openSmartImport = useCallback(() => {
-    openCreate();
-    setAiExtractOpen(true);
+    openCreate({ withAssist: true });
   }, [openCreate]);
+
+  const closeSheet = (open: boolean) => {
+    setSheetOpen(open);
+    if (!open) setAiAssistOpen(false);
+  };
+
+  const formModes = sheetMode === 'create' || sheetMode === 'edit';
+  const splitAssist = formModes && aiAssistOpen;
 
   const decorate = def.decorate ?? ((r: Record<string, unknown>) => r);
 
@@ -566,6 +572,7 @@ export function AdminListPage({ def }: { def: AdminPageDef }) {
     setSheetMode('edit');
     setEditing(row);
     setFormValues({ ...row });
+    setAiAssistOpen(false);
     setSheetOpen(true);
   };
 
@@ -629,7 +636,7 @@ export function AdminListPage({ def }: { def: AdminPageDef }) {
         actions={
           def.readonly ? null : (
             <div className="flex gap-2">
-              <Button type="button" onClick={openCreate}>
+              <Button type="button" onClick={() => openCreate()}>
                 <Plus className="h-4 w-4" />
                 新建
               </Button>
@@ -765,8 +772,8 @@ export function AdminListPage({ def }: { def: AdminPageDef }) {
             />
           ) : (
           <div className="min-h-0 flex-1 overflow-auto">
-            <table className="w-full border-collapse">
-              <thead className="sticky top-0 z-10 border-b bg-table-stripe text-left backdrop-blur">
+            <table className="w-full border-collapse bg-table-surface">
+              <thead className="sticky top-0 z-10 border-b-2 border-foreground/20 bg-table-header text-left backdrop-blur">
                 <tr>
                   {def.columns.map((c) => (
                     <th
@@ -781,7 +788,7 @@ export function AdminListPage({ def }: { def: AdminPageDef }) {
                   </th>
                 </tr>
               </thead>
-              <tbody className="bg-table-surface">
+              <tbody>
                 {loading ? (
                   Array.from({ length: pageSize }).map((_, i) => (
                     <tr key={`sk-${i}`} className="border-b last:border-0">
@@ -832,7 +839,7 @@ export function AdminListPage({ def }: { def: AdminPageDef }) {
                                 type="button"
                                 size="sm"
                                 className="mt-1 h-8 min-h-8 text-[0.8125rem]"
-                                onClick={openCreate}
+                                onClick={() => openCreate()}
                               >
                                 <Plus className="h-3.5 w-3.5" />
                                 新建
@@ -851,7 +858,7 @@ export function AdminListPage({ def }: { def: AdminPageDef }) {
                     const hasAssignments = assignments.length > 0;
                     return (
                       <Fragment key={rowId}>
-                        <tr className="border-b border-border/50 last:border-0 hover:bg-table-hover even:bg-table-stripe">
+                        <tr className="border-b border-border/50 last:border-0 bg-table-row even:bg-table-stripe hover:bg-table-hover">
                           {def.columns.map((c) => (
                             <td key={c.key} className="px-4 py-[0.7rem] align-middle text-sm">
                               {c.status ? (
@@ -980,8 +987,14 @@ export function AdminListPage({ def }: { def: AdminPageDef }) {
         </div>
       </div>
 
-      <Sheet open={sheetOpen} onOpenChange={setSheetOpen}>
-        <SheetContent side="right" className="w-full max-w-[32rem] p-0 sm:max-w-[32rem]">
+      <Sheet open={sheetOpen} onOpenChange={closeSheet}>
+        <SheetContent
+          side="right"
+          className={cn(
+            'flex w-full flex-col p-0',
+            splitAssist ? 'sm:max-w-4xl' : 'max-w-[32rem] sm:max-w-[32rem]',
+          )}
+        >
           <SheetHeader className="border-b px-5 py-4">
             <SheetTitle className="text-[1.05rem] font-semibold leading-none">
               {sheetMode === 'create' ? '新建' : sheetMode === 'edit' ? '编辑' : '详情'} · {def.title}
@@ -991,18 +1004,35 @@ export function AdminListPage({ def }: { def: AdminPageDef }) {
             </SheetDescription>
           </SheetHeader>
 
-          {/* 创建/编辑 Sheet 工具栏：UC-1 AI 填充入口（form-top） */}
-          {sheetMode !== 'view' ? (
+          {/* 创建/编辑：可展开右侧辅助录入 */}
+          {formModes ? (
             <div className="flex items-center gap-2 border-b bg-muted/30 px-5 py-2">
-              <AiFeature feature="form-fill">
-                <Button type="button" variant="outline" size="sm" onClick={() => setAiFormOpen(true)}>
-                  <Sparkles className="h-4 w-4" /> AI 填充
+              <AiFeature feature="text-extract">
+                <Button
+                  type="button"
+                  variant={aiAssistOpen ? 'default' : 'outline'}
+                  size="sm"
+                  onClick={() => setAiAssistOpen((v) => !v)}
+                >
+                  <Sparkles className="h-4 w-4" />
+                  {aiAssistOpen ? '收起辅助' : '辅助录入'}
                 </Button>
               </AiFeature>
-              <span className="text-xs text-muted-foreground">对话或上传文档，AI 抽取字段回填（需你确认）</span>
+              <span className="text-xs text-muted-foreground">
+                {aiAssistOpen
+                  ? '右侧抽取后自动填入左侧表单，请核对后保存'
+                  : '打开后在右侧粘贴/上传，识别结果写入左侧'}
+              </span>
             </div>
           ) : null}
 
+          <div className={cn('flex min-h-0 flex-1', splitAssist ? 'flex-row' : 'flex-col')}>
+            <div
+              className={cn(
+                'flex min-h-0 min-w-0 flex-col',
+                splitAssist ? 'w-1/2 border-r' : 'flex-1',
+              )}
+            >
           {sheetMode === 'view' ? (
             <div className="border-b px-5 py-3">
               <AiFeature feature="detail-summary">
@@ -1056,13 +1086,13 @@ export function AdminListPage({ def }: { def: AdminPageDef }) {
                       value={formValues[f.key]}
                       onChange={(v) => setFormValues((prev) => ({ ...prev, [f.key]: v }))}
                     />
-                    {/* 单字段 Sparkles 入口（form-field）：打开 AI 填充面板 */}
-                    <AiFeature feature="form-fill">
+                    {/* 单字段 Sparkles：打开右侧辅助录入 */}
+                    <AiFeature feature="text-extract">
                       <button
                         type="button"
-                        onClick={() => setAiFormOpen(true)}
+                        onClick={() => setAiAssistOpen(true)}
                         className="absolute right-1 top-1 rounded-md p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
-                        aria-label={`AI 填充 ${f.label}`}
+                        aria-label={`辅助录入 ${f.label}`}
                       >
                         <Sparkles className="h-3.5 w-3.5" />
                       </button>
@@ -1076,7 +1106,7 @@ export function AdminListPage({ def }: { def: AdminPageDef }) {
           <SheetFooter className="justify-end gap-2 border-t px-5 py-4">
             {sheetMode === 'view' ? (
               <>
-                <Button type="button" variant="outline" className="min-h-9 text-sm font-medium" onClick={() => setSheetOpen(false)}>
+                <Button type="button" variant="outline" className="min-h-9 text-sm font-medium" onClick={() => closeSheet(false)}>
                   关闭
                 </Button>
                 {!def.readonly && editing ? (
@@ -1087,7 +1117,7 @@ export function AdminListPage({ def }: { def: AdminPageDef }) {
               </>
             ) : (
               <>
-                <Button type="button" variant="outline" className="min-h-9 text-sm font-medium" onClick={() => setSheetOpen(false)}>
+                <Button type="button" variant="outline" className="min-h-9 text-sm font-medium" onClick={() => closeSheet(false)}>
                   取消
                 </Button>
                 <Button type="button" className="min-h-9 text-sm font-medium" onClick={saveForm}>
@@ -1096,20 +1126,18 @@ export function AdminListPage({ def }: { def: AdminPageDef }) {
               </>
             )}
           </SheetFooter>
-        </SheetContent>
-      </Sheet>
+            </div>
 
-      {/* UC-1 AI 表单填充面板 */}
-      <Sheet open={aiFormOpen} onOpenChange={setAiFormOpen}>
-        <SheetContent side="right" className="w-full max-w-[44rem] p-0 sm:max-w-[44rem]">
-          <AiFormFill onClose={() => setAiFormOpen(false)} />
-        </SheetContent>
-      </Sheet>
-
-      {/* UC-3 AI 文本/文档抽取面板（智能录入） */}
-      <Sheet open={aiExtractOpen} onOpenChange={setAiExtractOpen}>
-        <SheetContent side="right" className="w-full max-w-[40rem] p-0 sm:max-w-[40rem]">
-          <AiTextExtract onClose={() => setAiExtractOpen(false)} />
+            {splitAssist ? (
+              <div className="flex w-1/2 min-h-0 min-w-0 flex-col bg-muted/10">
+                <AiTextExtract
+                  embedded
+                  autoApplyOnDone
+                  onClose={() => setAiAssistOpen(false)}
+                />
+              </div>
+            ) : null}
+          </div>
         </SheetContent>
       </Sheet>
 

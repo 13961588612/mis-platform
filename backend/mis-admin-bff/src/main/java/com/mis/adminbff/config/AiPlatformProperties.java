@@ -12,7 +12,7 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 @ConfigurationProperties(prefix = "mis.ai-platform")
 public class AiPlatformProperties {
 
-    /** AI 平台 Agent Core 基址（融合部署默认服务名 http://ai-platform-backend:8000；本地 http://localhost:8000）。 */
+    /** AI 平台 Agent Core 基址（融合部署默认服务名 http://ai-platform-backend:8000；本地 http://127.0.0.1:8000）。 */
     private String baseUrl = "http://ai-platform-backend:8000";
 
     /** 单次 chat 调用超时（毫秒）。 */

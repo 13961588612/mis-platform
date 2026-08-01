@@ -29,7 +29,6 @@ import {
 } from '@/components/ui/sheet';
 import type { AdminField, AdminPageDef } from '@/features/system/types';
 import { AiFeature } from '@/features/ai/components/ai-feature';
-import { AiFormFill } from '@/features/ai/components/ai-form-fill';
 import { AiTextExtract } from '@/features/ai/components/ai-text-extract';
 import { AiSummary } from '@/features/ai/components/ai-summary';
 import { AiRag } from '@/features/ai/components/ai-rag';
@@ -107,9 +106,8 @@ export function UserListPage() {
   const [editing, setEditing] = useState<UserView | null>(null);
   const [viewing, setViewing] = useState<UserView | null>(null);
   const [saving, setSaving] = useState(false);
-  // AI 面板开合状态
-  const [aiFormOpen, setAiFormOpen] = useState(false);
-  const [aiExtractOpen, setAiExtractOpen] = useState(false);
+  // AI：辅助录入嵌在表单 Sheet 右侧；问答仍用独立 Sheet
+  const [aiAssistOpen, setAiAssistOpen] = useState(false);
   const [aiRagOpen, setAiRagOpen] = useState(false);
   const [form, setForm] = useState({
     username: '',
@@ -276,7 +274,7 @@ export function UserListPage() {
     void loadUsers();
   }, [loadUsers]);
 
-  function openCreate() {
+  function openCreate(opts?: { withAssist?: boolean }) {
     setMode('create');
     setEditing(null);
     setForm({
@@ -291,6 +289,7 @@ export function UserListPage() {
       deptIds: [],
       roleIds: [],
     });
+    setAiAssistOpen(!!opts?.withAssist);
     setSheetOpen(true);
   }
 
@@ -309,6 +308,7 @@ export function UserListPage() {
       deptIds: [],
       roleIds: row.roles?.map((r) => r.id) ?? [],
     });
+    setAiAssistOpen(false);
     setSheetOpen(true);
   }
 
@@ -349,11 +349,18 @@ export function UserListPage() {
     setSheetOpen(true);
   }
 
-  // UC-3 智能录入：先打开创建 Sheet（seed），再打开抽取面板
+  // UC-3 智能录入：打开新增表单，并在右侧展开辅助录入
   const openSmartImport = () => {
-    openCreate();
-    setAiExtractOpen(true);
+    openCreate({ withAssist: true });
   };
+
+  const closeSheet = (open: boolean) => {
+    setSheetOpen(open);
+    if (!open) setAiAssistOpen(false);
+  };
+
+  const formModes = mode === 'create' || mode === 'edit';
+  const splitAssist = formModes && aiAssistOpen;
 
   async function onSave() {
     setSaving(true);
@@ -446,7 +453,7 @@ export function UserListPage() {
           actions={
             <div className="flex gap-2">
               <PermissionGate permission="system:user:add">
-                <Button size="sm" onClick={openCreate}>
+                <Button size="sm" onClick={() => openCreate()}>
                   <Plus className="h-4 w-4" />
                   新增用户
                 </Button>
@@ -566,9 +573,9 @@ export function UserListPage() {
               </Button>
             </div>
 
-            <div className="min-h-0 flex-1 overflow-auto">
-              <table className="w-full min-w-[720px] text-left text-sm">
-                <thead className="sticky top-0 z-10 border-b bg-muted/60 text-muted-foreground backdrop-blur">
+            <div className="min-h-0 flex-1 overflow-auto bg-table-surface">
+              <table className="w-full min-w-[720px] bg-table-surface text-left text-sm">
+                <thead className="sticky top-0 z-10 border-b-2 border-foreground/20 bg-table-header text-muted-foreground backdrop-blur">
                   <tr>
                     <th className="px-3 py-2 font-bold">工号</th>
                     <th className="px-3 py-2 font-bold">用户名</th>
@@ -581,7 +588,7 @@ export function UserListPage() {
                     <th className="px-3 py-2 font-bold">操作</th>
                   </tr>
                 </thead>
-                <tbody className="bg-muted/40">
+                <tbody>
                   {loading ? (
                     <tr>
                 <td colSpan={9} className="px-3 py-10 text-center text-muted-foreground">
@@ -596,7 +603,7 @@ export function UserListPage() {
                 </tr>
                   ) : (
                     rows.map((row) => (
-                      <tr key={row.id} className="border-b border-border/50 last:border-0 hover:bg-muted/70 even:bg-muted/60">
+                      <tr key={row.id} className="border-b border-border/50 last:border-0 bg-table-row even:bg-table-stripe hover:bg-table-hover">
                         <td className="px-3 py-2">{row.employeeNo ?? '—'}</td>
                         <td className="px-3 py-2">
                           <span className="font-medium">{row.username}</span>
@@ -673,8 +680,13 @@ export function UserListPage() {
           </div>
         </div>
 
-        <Sheet open={sheetOpen} onOpenChange={setSheetOpen}>
-          <SheetContent className="flex w-full flex-col sm:max-w-md">
+        <Sheet open={sheetOpen} onOpenChange={closeSheet}>
+          <SheetContent
+            className={cn(
+              'flex w-full flex-col',
+              splitAssist ? 'sm:max-w-4xl' : 'sm:max-w-md',
+            )}
+          >
             <SheetHeader>
               <SheetTitle>
                 {mode === 'create'
@@ -687,21 +699,35 @@ export function UserListPage() {
               </SheetTitle>
             </SheetHeader>
 
-            {/* UC-1 AI 填充入口（创建/编辑 Sheet 顶部） */}
-            {(mode === 'create' || mode === 'edit') && (
+            {/* 创建/编辑：可展开右侧辅助录入（与独立叠层 Sheet 互斥） */}
+            {formModes && (
               <div className="flex items-center gap-2 border-b bg-muted/30 px-4 py-2">
-                <AiFeature feature="form-fill">
-                  <Button variant="outline" size="sm" onClick={() => setAiFormOpen(true)}>
-                    <Sparkles className="h-4 w-4" /> AI 填充
+                <AiFeature feature="text-extract">
+                  <Button
+                    variant={aiAssistOpen ? 'default' : 'outline'}
+                    size="sm"
+                    onClick={() => setAiAssistOpen((v) => !v)}
+                  >
+                    <Sparkles className="h-4 w-4" />
+                    {aiAssistOpen ? '收起辅助' : '辅助录入'}
                   </Button>
                 </AiFeature>
                 <span className="text-xs text-muted-foreground">
-                  对话或上传文档，AI 抽取字段回填（需你确认）
+                  {aiAssistOpen
+                    ? '右侧抽取后自动填入左侧表单，请核对后保存'
+                    : '打开后在右侧粘贴/上传，识别结果写入左侧'}
                 </span>
               </div>
             )}
 
-            <div className="flex-1 space-y-3 overflow-auto py-4">
+            <div className={cn('flex min-h-0 flex-1', splitAssist ? 'flex-row' : 'flex-col')}>
+              <div
+                className={cn(
+                  'flex min-h-0 min-w-0 flex-col',
+                  splitAssist ? 'w-1/2 border-r' : 'flex-1',
+                )}
+              >
+            <div className="flex-1 space-y-3 overflow-auto px-1 py-4">
               {mode === 'detail' && viewing ? (
                 <UserDetail viewing={viewing} onAiRag={() => setAiRagOpen(true)} />
               ) : mode === 'perms' ? (
@@ -868,12 +894,12 @@ export function UserListPage() {
             </div>
             <SheetFooter>
               {mode === 'detail' ? (
-                <Button variant="outline" onClick={() => setSheetOpen(false)}>
+                <Button variant="outline" onClick={() => closeSheet(false)}>
                   关闭
                 </Button>
               ) : (
                 <>
-                  <Button variant="outline" onClick={() => setSheetOpen(false)}>
+                  <Button variant="outline" onClick={() => closeSheet(false)}>
                     取消
                   </Button>
                   <Button disabled={saving} onClick={() => void onSave()}>
@@ -882,24 +908,22 @@ export function UserListPage() {
                 </>
               )}
             </SheetFooter>
+              </div>
+
+              {splitAssist ? (
+                <div className="flex w-1/2 min-h-0 min-w-0 flex-col bg-muted/10">
+                  <AiTextExtract
+                    embedded
+                    autoApplyOnDone
+                    onClose={() => setAiAssistOpen(false)}
+                  />
+                </div>
+              ) : null}
+            </div>
           </SheetContent>
         </Sheet>
 
-        {/* UC-1 AI 表单填充面板 */}
-        <Sheet open={aiFormOpen} onOpenChange={setAiFormOpen}>
-          <SheetContent className="w-full max-w-[44rem] p-0 sm:max-w-[44rem]">
-            <AiFormFill onClose={() => setAiFormOpen(false)} />
-          </SheetContent>
-        </Sheet>
-
-        {/* UC-3 AI 智能录入面板（文本/文档抽取） */}
-        <Sheet open={aiExtractOpen} onOpenChange={setAiExtractOpen}>
-          <SheetContent className="w-full max-w-[40rem] p-0 sm:max-w-[40rem]">
-            <AiTextExtract onClose={() => setAiExtractOpen(false)} />
-          </SheetContent>
-        </Sheet>
-
-        {/* UC-4 AI 问答面板 */}
+        {/* UC-4 AI 问答面板（详情场景仍独立） */}
         <Sheet open={aiRagOpen} onOpenChange={setAiRagOpen}>
           <SheetContent className="w-full max-w-[40rem] p-0 sm:max-w-[40rem]">
             <AiRag

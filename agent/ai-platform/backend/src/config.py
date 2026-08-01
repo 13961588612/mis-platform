@@ -211,6 +211,25 @@ class Settings(BaseSettings):
         description="P0 允许触发的 MIS FormFill 引擎 Skill ID 白名单",
     )
 
+    # ===== Copilot 调度（agent__invoke）=====
+    INVOKE_AGENT_WHITELIST: list[str] = Field(
+        default_factory=lambda: [
+            "mis-extract",
+            "mis-summary",
+            "mis-rag",
+            "crm-assistant",
+        ],
+        description="mis-copilot 可委托的目标 Agent 白名单",
+    )
+    INVOKE_AGENT_MAX_DEPTH: int = Field(
+        default=1,
+        description="invoke_agent 最大深度（1=仅顶层 Copilot 可委托，禁止递归）",
+    )
+    INVOKE_AGENT_TIMEOUT_SECONDS: int = Field(
+        default=120,
+        description="单次子 Agent 委托超时（秒）",
+    )
+
     DEV_TEST_ACCOUNTS_ENABLED: bool = Field(
         default=False,
         description="是否启用 configs/test-accounts.yaml 中的测试账号登录",

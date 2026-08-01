@@ -13,7 +13,8 @@ export type AiFeatureKey =
   | 'detail-summary'
   | 'rag-qa'
   | 'copilot'
-  | 'nl2sql';
+  | 'nl2sql'
+  | 'skill-fill';
 
 /** 入口降级策略 */
 export type AiFallback = 'hide' | 'disable' | 'message';

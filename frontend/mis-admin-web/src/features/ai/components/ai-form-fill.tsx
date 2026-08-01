@@ -7,9 +7,13 @@ import { Textarea } from '@/components/ui/textarea';
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Skeleton } from '@/components/ui/skeleton';
+import { useAuthStore } from '@/stores/auth-store';
 import { useFormFillBridge } from '../context/form-fill-bridge';
 import { useAI } from '../use-ai';
 import { useAiContext } from '../ai-context';
+import { useSkillFill } from '../hooks/useSkillFill';
+import { HitlDialog } from './HitlDialog';
+import { EntitySelector } from './EntitySelector';
 import type { ExtractResponse, FieldSuggestion, FormFieldSchema } from '../types';
 
 interface ExtractRequestBody {
@@ -37,6 +41,23 @@ export function AiFormFill({ onClose }: { onClose: () => void }) {
   const aiCtx = useAiContext();
   const schema = bridge.getSchema();
   const schemaMap = useMemo(() => Object.fromEntries(schema.map((s) => [s.name, s])), [schema]);
+  const userId = useAuthStore((s) => s.user?.id);
+
+  const skillFill = useSkillFill({
+    userId,
+    onFillComplete: (fields) => {
+      const partial: Record<string, FieldSuggestion> = {};
+      for (const [k, v] of Object.entries(fields)) {
+        const field = schemaMap[k];
+        if (field) partial[k] = { value: v, confidence: 1 };
+      }
+      bridge.applyFields(partial);
+      toast.success(`智能填充已回填 ${Object.keys(partial).length} 个字段`);
+    },
+    onManualSelect: (field) => {
+      toast.info(`请手动选择 ${field}`);
+    },
+  });
 
   const [tab, setTab] = useState<'chat' | 'text'>('chat');
   const [text, setText] = useState('');
@@ -196,6 +217,43 @@ export function AiFormFill({ onClose }: { onClose: () => void }) {
             抽取字段
           </Button>
 
+          <div className="flex items-center gap-2">
+            <div className="h-px flex-1 bg-border" />
+            <span className="text-xs text-muted-foreground">或</span>
+            <div className="h-px flex-1 bg-border" />
+          </div>
+
+          <Button
+            type="button"
+            variant="secondary"
+            className="w-full"
+            onClick={() => {
+              const content = text.trim();
+              if (!content) {
+                toast.warning('请输入自然语言描述');
+                return;
+              }
+              skillFill.execute({
+                skillId: 'form-fill',
+                userInput: content,
+              });
+            }}
+            disabled={skillFill.loading}
+          >
+            {skillFill.loading ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <Sparkles className="h-4 w-4" />
+            )}
+            智能填充
+          </Button>
+
+          {skillFill.error ? (
+            <div className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+              {skillFill.error}
+            </div>
+          ) : null}
+
           {extract.loading ? <Skeleton className="h-24 w-full rounded-md" /> : null}
           {extract.error ? (
             <div className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
@@ -288,6 +346,30 @@ export function AiFormFill({ onClose }: { onClose: () => void }) {
           <Check className="h-4 w-4" /> 回填 {confirmedCount > 0 ? `(${confirmedCount})` : ''}
         </Button>
       </div>
+
+      {/* HITL 弹窗 */}
+      {skillFill.hitlOpen && skillFill.hitlDialog ? (
+        <HitlDialog
+          open={skillFill.hitlOpen}
+          field={skillFill.hitlDialog.field}
+          originalValue={skillFill.hitlDialog.originalValue}
+          candidates={skillFill.hitlDialog.candidates}
+          onConfirm={skillFill.handleHitlConfirm}
+          onCancel={skillFill.handleHitlCancel}
+          onManual={skillFill.handleManualSelect}
+        />
+      ) : null}
+
+      {/* 手动选择弹窗 */}
+      {skillFill.manualOpen && skillFill.hitlDialog ? (
+        <EntitySelector
+          open={skillFill.manualOpen}
+          field={skillFill.hitlDialog.field}
+          originalValue={skillFill.hitlDialog.originalValue}
+          onClose={skillFill.handleHitlCancel}
+          onManualSelect={skillFill.handleManualSelect}
+        />
+      ) : null}
     </div>
   );
 }

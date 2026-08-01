@@ -55,11 +55,23 @@ public class AiFeatureConfigService {
         try {
             Map<String, Object> health = aiPlatformClient.healthProbe();
             latencyMs = System.currentTimeMillis() - start;
-            platformUp = health != null
+            boolean up = health != null
                     && "ok".equalsIgnoreCase(String.valueOf(health.get("status")));
+            if (!up) {
+                log.warn(
+                        "AI platform health probe failed: baseUrl={}, response={}",
+                        properties.getBaseUrl(),
+                        health);
+            } else if (!platformUp) {
+                log.info("AI platform health probe ok: baseUrl={}, latencyMs={}",
+                        properties.getBaseUrl(), latencyMs);
+            }
+            platformUp = up;
         } catch (Exception ex) {
             platformUp = false;
-            log.warn("AI platform health probe failed: {}", ex.getMessage());
+            latencyMs = -1;
+            log.warn("AI platform health probe failed: baseUrl={}, error={}",
+                    properties.getBaseUrl(), ex.getMessage());
         }
         lastCheckAt.set(System.currentTimeMillis());
     }

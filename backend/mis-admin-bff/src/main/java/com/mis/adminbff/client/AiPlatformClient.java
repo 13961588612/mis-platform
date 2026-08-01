@@ -149,15 +149,11 @@ public class AiPlatformClient extends AbstractDownstreamClient {
      * @return 平台 health 响应；异常或不可达时返回 {@code null}
      */
     public Map<String, Object> healthProbe() {
-        try {
-            return client().get()
-                    .uri("/health")
-                    .retrieve()
-                    .bodyToMono(new ParameterizedTypeReference<Map<String, Object>>() {})
-                    .block(Duration.ofSeconds(3));
-        } catch (Exception ex) {
-            return null;
-        }
+        return client().get()
+                .uri("/health")
+                .retrieve()
+                .bodyToMono(new ParameterizedTypeReference<Map<String, Object>>() {})
+                .block(Duration.ofSeconds(3));
     }
 
     /** 组合转发头：复用基类 loginContextHeaders() + Authorization + X-Trace-Id + MIS 身份 enrichment 头。 */

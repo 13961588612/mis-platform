@@ -182,7 +182,7 @@ flowchart TD
 | 项 | Phase 1 | Phase 3 |
 |----|---------|---------|
 | UI | 右侧 **Sheet/抽屉** `CopilotPanel` | 流式对话、上下文 |
-| 入口 | Header 图标按钮打开 | — |
+| 入口 | 右下角全局 FAB（Ctrl/⌘+J）；与页内「智能录入」分离 | — |
 | 能力 | 静态欢迎文案 + 输入框 **禁用或 mock** | 真实 LLM + agent-gateway |
 | API | 无或 `GET /agent/health` 展示在线状态 | `POST /chat/completions` |
 

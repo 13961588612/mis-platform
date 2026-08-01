@@ -91,7 +91,11 @@ export function AIProvider({ children }: { children: ReactNode }) {
       .get('/ai/health')
       .then((res) => {
         const payload = res.data as unknown as { code: number; data?: Record<string, unknown> };
-        const up = payload?.code === 0 && (payload?.data?.status === 'up' || payload?.data?.up === true);
+        const d = payload?.data;
+        // BFF AiHealthResponse 字段为 platformUp；兼容 status/up
+        const up =
+          payload?.code === 0 &&
+          (d?.platformUp === true || d?.status === 'up' || d?.up === true);
         setHealth(up ? 'up' : 'down');
       })
       .catch(() => setHealth('down'));

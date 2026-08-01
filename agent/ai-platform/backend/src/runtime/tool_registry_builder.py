@@ -24,6 +24,7 @@ from src.runtime.mcp_identity import (
 )
 from src.skills.tools.formfill_apply import FormFillApplyTool
 from src.skills.tools.formfill_execute import FormFillExecuteTool
+from src.skills.tools.invoke_agent import InvokeAgentTool
 from src.utils.logging import get_logger
 
 logger = get_logger("runtime.tool_registry")
@@ -262,6 +263,8 @@ def create_agent_source_registry(mcp_manager: McpClientManager | None) -> ToolRe
     # 平台侧 FormFill 工具（ai-platform × MIS FormFill 引擎 P0）
     registry.register(FormFillExecuteTool())
     registry.register(FormFillApplyTool())
+    # Copilot 调度：委托专用 Agent（仅 mis-copilot allowed_tools 放开）
+    registry.register(InvokeAgentTool())
 
     if mcp_manager is None:
         return registry

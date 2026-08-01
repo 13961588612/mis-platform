@@ -7,7 +7,6 @@ import {
   LogOut,
   Menu,
   Moon,
-  Sparkles,
   Sun,
   UserRound,
 } from 'lucide-react';
@@ -261,17 +260,6 @@ export function AppLayout() {
 
         <Button type="button" variant="ghost" size="icon" className="h-9 w-9 shrink-0" onClick={toggleTheme} aria-label="切换主题">
           {mounted && resolvedTheme === 'dark' ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
-        </Button>
-
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon"
-          className="h-9 w-9 shrink-0"
-          aria-label="AI 助手"
-          onClick={() => setCopilotOpen(true)}
-        >
-          <Sparkles className="h-4 w-4" />
         </Button>
 
         <div className="relative shrink-0" ref={userMenuRef}>

@@ -334,4 +334,16 @@ public class AiCapabilityTranslator {
             return String.valueOf(obj);
         }
     }
+
+    /**
+     * 判断字段定义是否为实体引用类型。
+     *
+     * @param fieldDef 字段定义，可为 null
+     * @return true 当 fieldDef 存在且 entityRef 非空时
+     */
+    public boolean isEntityRef(com.mis.adminbff.dto.ai.FieldDef fieldDef) {
+        return fieldDef != null
+                && fieldDef.getEntityRef() != null
+                && !fieldDef.getEntityRef().isEmpty();
+    }
 }

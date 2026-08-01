@@ -12,21 +12,29 @@
 -- ---------------------------------------------------------------------------
 -- 1. sys_api 去租户/应用，归属模块
 -- ---------------------------------------------------------------------------
-ALTER TABLE sys_api DROP COLUMN tenant_id;
-ALTER TABLE sys_api DROP COLUMN app_id;
+-- 防御：V3 已删 module=3(rbac)，若仍有脏行指向已删模块，FK 会失败
+UPDATE sys_api SET module_id = 1, updated_at = NOW()
+WHERE module_id NOT IN (SELECT id FROM sys_module);
 
+-- 先删依赖 app_id 的唯一约束，再删列（否则 DROP COLUMN app_id 会连带删掉约束，
+-- 后续 DROP CONSTRAINT uk_api_app_code 报「不存在」）
+ALTER TABLE sys_api DROP CONSTRAINT IF EXISTS uk_api_app_code;
+ALTER TABLE sys_api DROP COLUMN IF EXISTS tenant_id;
+ALTER TABLE sys_api DROP COLUMN IF EXISTS app_id;
+
+ALTER TABLE sys_api DROP CONSTRAINT IF EXISTS fk_api_module;
 ALTER TABLE sys_api
     ADD CONSTRAINT fk_api_module FOREIGN KEY (module_id) REFERENCES sys_module (id);
 
--- 唯一约束由 (app_id, code) 改为 (module_id, code)
-ALTER TABLE sys_api DROP CONSTRAINT uk_api_app_code;
+-- 唯一约束改为 (module_id, code)
+ALTER TABLE sys_api DROP CONSTRAINT IF EXISTS uk_api_module_code;
 ALTER TABLE sys_api
     ADD CONSTRAINT uk_api_module_code UNIQUE (module_id, code);
 
 -- ---------------------------------------------------------------------------
 -- 2. sys_menu_api 放开 UNIQUE(api_id)，保留 uk_menu_api_pair
 -- ---------------------------------------------------------------------------
-ALTER TABLE sys_menu_api DROP CONSTRAINT uk_menu_api_api;
+ALTER TABLE sys_menu_api DROP CONSTRAINT IF EXISTS uk_menu_api_api;
 
 -- ---------------------------------------------------------------------------
 -- 3. 种子：接口模块菜单 + 权限，授权给内置角色

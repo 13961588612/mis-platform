@@ -44,11 +44,12 @@ mis:
     deny-unmapped: false
     refresh-interval-seconds: 300
   ai-platform:
-    # 本地 IDE 默认 localhost；Docker/Nacos 用 AI_PLATFORM_BASE_URL=http://ai-platform-backend:8000 覆盖（R1）。
-    base-url: ${AI_PLATFORM_BASE_URL:http://localhost:8000}
+    # 本地默认 127.0.0.1（避免 Windows 上 localhost→::1 而 Agent 仅听 IPv4）；Docker/Nacos 用服务名覆盖（R1）。
+    base-url: ${AI_PLATFORM_BASE_URL:http://127.0.0.1:8000}
     enabled: true
     chat-timeout-ms: 60000
-    sse-enabled: ${AI_PLATFORM_SSE_ENABLED:false}
+    # 前端 Copilot 固定 stream:true；本地默认开启，否则 Accept:text/event-stream 与 Result JSON 协商会 500
+    sse-enabled: ${AI_PLATFORM_SSE_ENABLED:true}
     health-check-interval-ms: 15000
     features:
       chat: true

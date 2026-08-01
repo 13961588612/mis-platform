@@ -1,7 +1,7 @@
 # MIS × ai-platform 融合文档中心
 
-> 最后更新：2026-07-24 ｜ 范围：MIS 主项目与 `agent/ai-platform` 的 AI 能力融合
-> （阶段5 前端 AI 融合 MVP + 后端扩展 T-ext/T-sum/T-stream + 容器/部署融合）
+> 最后更新：2026-07-31 ｜ 范围：MIS 主项目与 `agent/ai-platform` 的 AI 能力融合
+> （阶段5 前端 AI 融合 MVP + 后端扩展 T-ext/T-sum/T-stream + 容器/部署融合 + Copilot 调度）
 
 ## 当前状态
 
@@ -11,6 +11,17 @@
 | 阶段5 前端 AI 融合 MVP（F0–F7） | ✅ | build 绿（tsc 0 错误，vite build 通过） |
 | 阶段5 后端扩展（T-ext/T-sum/T-stream） | ✅ | pytest 175 passed；BFF SSE 流式透传；生产须 `sse-enabled=true` |
 | 融合部署（DEP-0~10） | ✅ | 共享 PG/Redis、去 agent nginx、TS gateway 信任 MIS JWT、A2UI 渲染器落地；详见 `decisions/deploy.md` |
+| Copilot 调度智能体 | ✅ | `mis-copilot` 经平台工具 `agent__invoke` 委托 `mis-extract` / `mis-summary` / `mis-rag` / `crm-assistant`；FormFill 仍走 `formfill__*` |
+
+## Copilot 调度边界（对话 vs 专用端点）
+
+| 入口 | 行为 |
+|------|------|
+| 管理台 Copilot（`capability=chat` → BFF → `mis-copilot`） | Copilot 判断意图后可 `agent__invoke` 委托白名单 Agent，或 `formfill__*` 填单 |
+| 专用 UI（`/ai/extract` `/ai/summary` `/ai/rag`） | BFF **仍直连**对应 Agent，不经 Copilot（避免双重 LLM） |
+| CRM 委托 | 依赖 MCP `mcp-api-suite`（本地常见 `:3333`）；不可达时工具返回友好错误，禁止臆造会员数据 |
+
+白名单配置：`INVOKE_AGENT_WHITELIST`（默认含上述四 Agent）；深度 `INVOKE_AGENT_MAX_DEPTH=1`（禁止递归调度）。
 
 ## 目录导航
 

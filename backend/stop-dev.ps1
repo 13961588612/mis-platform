@@ -12,10 +12,16 @@ if ($PSVersionTable.PSVersion.Major -lt 6) {
     } catch {}
 }
 
-$all = @(
-    'mis-auth', 'mis-iam', 'mis-org', 'mis-system',
-    'mis-audit', 'mis-admin-bff', 'mis-gateway'
-)
+$servicePorts = [ordered]@{
+    'mis-auth'      = 8101
+    'mis-iam'       = 8102
+    'mis-org'       = 8103
+    'mis-system'    = 8105
+    'mis-audit'     = 8106
+    'mis-admin-bff' = 8081
+    'mis-gateway'   = 8080
+}
+$all = @($servicePorts.Keys)
 
 if ($Service) {
     if ($Service -notin $all) {
@@ -43,37 +49,88 @@ function Test-MatchesTarget {
     return $false
 }
 
+function Stop-ProcessTree {
+    param([int]$ProcessId)
+    try {
+        # /T 结束子进程树，避免只杀 powershell 留下 orphan java 占端口
+        & taskkill.exe /PID $ProcessId /T /F 2>$null | Out-Null
+    } catch {
+        Stop-Process -Id $ProcessId -Force -ErrorAction SilentlyContinue
+    }
+}
+
+function Test-PortListening {
+    param([int]$Port)
+    $c = @(Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue)
+    return ($c.Count -gt 0)
+}
+
+function Wait-PortFree {
+    param([int]$Port, [int]$TimeoutSec = 30)
+    $deadline = (Get-Date).AddSeconds($TimeoutSec)
+    while ((Get-Date) -lt $deadline) {
+        if (-not (Test-PortListening -Port $Port)) { return $true }
+        Start-Sleep -Milliseconds 400
+    }
+    return $false
+}
+
 Write-Host "正在停止后端服务 ..." -ForegroundColor Cyan
 
 $procs = Get-CimInstance Win32_Process |
     Where-Object {
-        $_.Name -in @('java.exe', 'powershell.exe', 'pwsh.exe') -and
+        $_.Name -in @('java.exe', 'powershell.exe', 'pwsh.exe', 'cmd.exe') -and
         (Test-MatchesTarget -CommandLine $_.CommandLine -Names $targets)
     }
 
 if (-not $procs) {
     Write-Host "未找到匹配进程: $($targets -join ', ')" -ForegroundColor Yellow
-    exit 0
-}
-
-foreach ($p in $procs) {
-    $preview = if ($p.CommandLine -and $p.CommandLine.Length -gt 100) {
-        $p.CommandLine.Substring(0, 100) + '...'
-    } else {
-        $p.CommandLine
+} else {
+    # 先停监听端口的 java，再清包装进程，减少 Address already in use
+    $ordered = $procs | Sort-Object {
+        if ($_.Name -eq 'java.exe' -and $_.CommandLine -match 'TieredStopAtLevel|target\\classes') { 0 }
+        elseif ($_.Name -eq 'java.exe') { 1 }
+        else { 2 }
     }
-    Write-Host "  停止 PID $($p.ProcessId) [$($p.Name)] $preview" -ForegroundColor Yellow
-    Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue
+
+    foreach ($p in $ordered) {
+        $preview = if ($p.CommandLine -and $p.CommandLine.Length -gt 100) {
+            $p.CommandLine.Substring(0, 100) + '...'
+        } else {
+            $p.CommandLine
+        }
+        Write-Host "  停止 PID $($p.ProcessId) [$($p.Name)] $preview" -ForegroundColor Yellow
+        Stop-ProcessTree -ProcessId $p.ProcessId
+    }
 }
 
 Start-Sleep -Seconds 1
 
-$left = Get-CimInstance Win32_Process -Filter "Name='java.exe'" |
-    Where-Object { Test-MatchesTarget -CommandLine $_.CommandLine -Names $targets }
-
+$left = Get-CimInstance Win32_Process |
+    Where-Object {
+        $_.Name -in @('java.exe', 'powershell.exe', 'pwsh.exe', 'cmd.exe') -and
+        (Test-MatchesTarget -CommandLine $_.CommandLine -Names $targets)
+    }
 if ($left) {
     Write-Host "仍有残留，再次结束..." -ForegroundColor Yellow
-    $left | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+    $left | ForEach-Object { Stop-ProcessTree -ProcessId $_.ProcessId }
+    Start-Sleep -Seconds 1
+}
+
+foreach ($name in $targets) {
+    $port = [int]$servicePorts[$name]
+    if (Test-PortListening -Port $port) {
+        # 端口仍被占：按端口杀监听进程（防止匹配漏掉）
+        $owners = @(Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue |
+            Select-Object -ExpandProperty OwningProcess -Unique)
+        foreach ($opid in $owners) {
+            Write-Host "  端口 $port 仍监听，结束 PID $opid" -ForegroundColor Yellow
+            Stop-ProcessTree -ProcessId $opid
+        }
+        if (-not (Wait-PortFree -Port $port -TimeoutSec 20)) {
+            Write-Host "  ! $name 端口 $port 未能释放" -ForegroundColor Red
+        }
+    }
 }
 
 if ($Service) {
