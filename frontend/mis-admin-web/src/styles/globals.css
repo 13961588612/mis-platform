@@ -17,17 +17,17 @@
 
     /* ===== 表格专用色板（白卡浮于灰底，表头/行/斑马层次分离） ===== */
     --table-surface: 220 14% 98%;   /* 外层容器/空白区：极淡灰，不死白 */
-    --table-header: 220 14% 96%;    /* 表头：独立浅灰，带底边即可脱底 */
+    --table-header: 220 14% 92%;    /* 表头：明显浅灰带，与数据区拉开层次 */
     --table-row: 0 0% 100%;         /* 奇数数据行：纯白，从灰底浮出 */
     --table-stripe: 220 14% 99%;    /* 偶数数据行：极淡灰，同一色相 */
     --table-hover: 220 14% 94%;     /* hover：清晰可辨 */
     --input: 220 13% 90%;
     --ring: 243 75% 59%;
-    --sidebar: 222 47% 11%;         /* 侧边栏：深 slate，与主区形成边界 */
-    --sidebar-foreground: 210 40% 98%;
-    --sidebar-border: 217 33% 20%;
-    --sidebar-accent: 217 33% 20%;
-    --sidebar-muted: 215 18% 62%;
+    --sidebar: 214 32% 90%;         /* 侧边栏：恢复浅色（与页面同源 214 色相） */
+    --sidebar-foreground: 222 47% 11%;
+    --sidebar-border: 214 30% 82%;
+    --sidebar-accent: 214 32% 84%;
+    --sidebar-muted: 215 16% 45%;
 
     /* ===== 品牌（企业靛） ===== */
     --primary: 243 75% 59%;
@@ -91,10 +91,10 @@
     --table-hover: 222 40% 18%;     /* hover：清晰可辨 */
     --input: 222 30% 18%;
     --ring: 243 75% 66%;
-    --sidebar: 222 47% 8%;          /* 侧边栏：更深 slate */
+    --sidebar: 217 33% 14%;         /* 侧边栏：恢复（暗色） */
     --sidebar-foreground: 210 40% 96%;
-    --sidebar-border: 217 33% 18%;
-    --sidebar-accent: 217 33% 16%;
+    --sidebar-border: 217 33% 22%;
+    --sidebar-accent: 217 33% 20%;
     --sidebar-muted: 215 18% 62%;
 
     --primary: 243 75% 66%;
@@ -138,9 +138,11 @@
     line-height: 1.6;
   }
 
-  /* 各页表格表头统一加粗 */
+  /* 各页表格表头：统一加粗 + 增加垂直高度（覆盖行内 py，保证与数据区明显分层） */
   thead th {
     @apply font-bold;
+    padding-top: 0.75rem !important;
+    padding-bottom: 0.75rem !important;
   }
 }
 

@@ -102,7 +102,7 @@ export function DashboardPage() {
         </h2>
         <div className="overflow-hidden rounded-lg border bg-table-surface shadow-card">
           <table className="w-full bg-table-surface text-sm">
-            <thead className="border-b bg-table-header text-left text-sm font-bold text-muted-foreground">
+            <thead className="border-b-2 border-foreground/20 bg-table-header text-left text-sm font-bold text-muted-foreground">
               <tr>
                 <th className="px-4 py-3 font-bold">操作人</th>
                 <th className="px-4 py-3 font-bold">操作</th>

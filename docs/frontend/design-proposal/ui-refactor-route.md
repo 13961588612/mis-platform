@@ -627,3 +627,15 @@ export interface Assignment {
   - 页面背景 95.5% 灰 → 表格容器 98% 极淡灰 → 表头 96% 浅灰 → 奇数行 100% 白 → 偶数行 99% 微灰 → hover 94% 灰。
   - 无数据空白区保持 98% 极淡灰，不刺眼；数据行以纯白为主，干净专业；hover 态清晰但不突兀。
 - **验收**：`npm run typecheck` 0 错误。
+
+### 21.12 侧边栏恢复 + 表头强化（2026-08-01 续11）
+- **用户反馈**：① side-nav 恢复（撤销 §21.11 的深 slate 侧栏）；② 表格头颜色与表主体区分一下；③ 表格头高度加高；④ 增加与数据部分的分隔线。
+- **侧边栏恢复**：把浅色 `--sidebar` 系 token 撤销为 §21.11 之前的浅色值（与页面同源 `214` 色相）：
+  - 浅色：`--sidebar: 214 32% 90%`、`--sidebar-foreground: 222 47% 11%`、`--sidebar-border: 214 30% 82%`、`--sidebar-accent: 214 32% 84%`、`--sidebar-muted: 215 16% 45%`。
+  - 暗色：`--sidebar: 217 33% 14%`、`--sidebar-foreground: 210 40% 96%`、`--sidebar-border: 217 33% 22%`、`--sidebar-accent: 217 33% 20%`、`--sidebar-muted: 215 18% 62%`。
+  - 说明：页面背景仍是 §21.11 的 `220 14% 95.5%` 中性灰，侧栏用 `214` 浅蓝灰，两者饱和度都低、差异极小，视觉协调。
+- **表头颜色区分**：`--table-header` 从 `220 14% 96%` 调深到 `220 14% 92%`，与表格容器 `--table-surface: 220 14% 98%` 拉开约 6% 明度差，形成清晰的「表头浅灰带」；数据行仍以白 / 99% 微灰为主，层次为「深一档的表头带 → 白底数据区」。
+- **表头高度加高**：在 `globals.css` 的 `thead th` 统一追加 `padding-top/bottom: 0.75rem !important`，覆盖各组件行内 `py-1.5 / py-2`，全站表头垂直内边距统一为 12px（水平 padding 仍由各表自定 `px-2 ~ px-4`）。内嵌小表（任职子表 / 接口列表）表头同步加高，保证一致性。
+- **表头分隔线强化**：所有表格 `<thead>` 的 `border-b` 升级为 `border-b-2 border-foreground/20`（2px + 前景色 20% 透明线），与数据区形成明显分界；sticky 表头滚动时该分隔线始终可见。
+  - 涉及：tree-table / list-page-skeleton / dashboard / log-pages×2 / module / org / role / dict / admin×3 / user（user 含 WIP，仅工作区改动不提交）。
+- **验收**：`npm run typecheck` 0 错误。

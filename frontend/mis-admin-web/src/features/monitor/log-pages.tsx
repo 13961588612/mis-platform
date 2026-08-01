@@ -108,7 +108,7 @@ export function OperLogListPage() {
       </div>
       <div className="min-h-0 flex-1 overflow-auto rounded-lg border bg-table-surface">
         <table className="w-full min-w-[800px] bg-table-surface text-left text-sm">
-          <thead className="sticky top-0 z-10 border-b bg-table-header text-muted-foreground backdrop-blur">
+          <thead className="sticky top-0 z-10 border-b-2 border-foreground/20 bg-table-header text-muted-foreground backdrop-blur">
             <tr>
               <th className="px-3 py-2 font-bold">时间</th>
               <th className="px-3 py-2 font-bold">用户</th>
@@ -264,7 +264,7 @@ export function LoginLogListPage() {
       </div>
       <div className="min-h-0 flex-1 overflow-auto rounded-lg border bg-table-surface">
         <table className="w-full bg-table-surface text-left text-sm">
-          <thead className="sticky top-0 z-10 border-b bg-table-header text-muted-foreground backdrop-blur">
+          <thead className="sticky top-0 z-10 border-b-2 border-foreground/20 bg-table-header text-muted-foreground backdrop-blur">
             <tr>
               <th className="px-3 py-2 font-bold">时间</th>
               <th className="px-3 py-2 font-bold">用户</th>
