@@ -256,7 +256,7 @@ export function DictManagePage() {
                 <th className="px-3 py-2 font-bold">操作</th>
               </tr>
             </thead>
-            <tbody>
+            <tbody className="bg-muted/20">
               {loadingItems ? (
                 <tr>
                   <td colSpan={4} className="px-3 py-10 text-center text-muted-foreground">
@@ -277,7 +277,7 @@ export function DictManagePage() {
                 </tr>
               ) : (
                 items.map((item) => (
-                  <tr key={item.id} className="border-b border-border/50 last:border-0 hover:bg-muted/30 even:bg-muted/20">
+                  <tr key={item.id} className="border-b border-border/50 last:border-0 hover:bg-muted/50 even:bg-muted/40">
                     <td className="px-3 py-2">{item.label}</td>
                     <td className="px-3 py-2 font-mono text-xs">{item.value}</td>
                     <td className="px-3 py-2">{item.sort}</td>

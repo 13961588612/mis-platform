@@ -81,7 +81,7 @@ export function TreeTable<T extends TreeTableNode>({
           {rowActions ? <th className="px-2 py-1.5 text-right font-bold">操作</th> : null}
         </tr>
       </thead>
-      <tbody>
+      <tbody className="bg-muted/20">
         {rows.length === 0 ? (
           <tr>
             <td
@@ -97,7 +97,7 @@ export function TreeTable<T extends TreeTableNode>({
               key={row.id}
               onClick={onRowClick ? () => onRowClick(row) : undefined}
               className={cn(
-                'group border-b border-border/50 last:border-0 hover:bg-muted/30 even:bg-muted/20',
+                'group border-b border-border/50 last:border-0 hover:bg-muted/50 even:bg-muted/40',
                 onRowClick && 'cursor-pointer',
                 rowClassName?.(row),
               )}

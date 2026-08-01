@@ -351,7 +351,7 @@ export function RoleListPage() {
               <th className="px-3 py-2 font-bold">操作</th>
             </tr>
           </thead>
-          <tbody>
+          <tbody className="bg-muted/20">
             {loading ? (
               <tr>
                 <td colSpan={6} className="px-3 py-10 text-center text-muted-foreground">
@@ -360,7 +360,7 @@ export function RoleListPage() {
               </tr>
             ) : (
               rows.map((row) => (
-                <tr key={row.id} className="border-b border-border/50 last:border-0 hover:bg-muted/30 even:bg-muted/20">
+                <tr key={row.id} className="border-b border-border/50 last:border-0 hover:bg-muted/50 even:bg-muted/40">
                   <td className="px-3 py-2 font-medium">{row.name}</td>
                 <td className="px-3 py-2">{apps.find((a) => a.id === row.appId)?.name ?? '—'}</td>
                 <td className="px-3 py-2 font-mono text-xs">{row.code}</td>

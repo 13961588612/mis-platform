@@ -508,3 +508,13 @@ export interface Assignment {
 - `npm run typecheck` 0 错误。
 - 全站表格表头现已统一 `text-sm font-bold` + `bg-muted/60 border-b backdrop-blur`（可滚表带 `sticky top-0 z-10`），行线 `border-border/50` + hover `muted/30` + 斑马 `muted/20`。
 - 按用户「不需要推远端」偏好，本轮仅本地提交，不推送。
+
+### 21.4 表格主体「整体冷灰底」增强（2026-08-01 用户选定）
+- **背景**：用户确认表格主体数据区仍为白底，质疑方案 A 是否覆盖主体。澄清：方案 A 已覆盖主体（斑马纹/行线/hover 均作用于主体行），白底是因方案 A 定位「不改底色、用极淡冷灰点缀」；而 `even:bg-muted/20` 在白底上（muted 浅色 `214 32% 93%` 叠 20% 透明）几乎不可见，冷灰质感未真正落地。
+- **选型**：用户选「整体冷灰底」——表格主体整片加极淡冷灰底，呈现冷灰卡片质感。
+- **落地**：
+  - 行级 `hover:bg-muted/30 even:bg-muted/20` → `hover:bg-muted/50 even:bg-muted/40`（斑马纹加深、hover 同步加深到最突出层级）。
+  - 各表格 `<tbody>` 加 `bg-muted/20`（admin-list-page 含 3 个、log-pages 含 2 个 tbody 一并加）；菜单管理的「直接子节点」卡片容器（纯 div 列表，无 tbody）加 `bg-muted/20`。
+  - 层次：odd 行透出 tbody 底 `/20`（极淡灰）→ even 行 `/40`（明显冷灰）→ hover `/50`（最深、最突出）。
+- **边界**：主菜单树侧栏（导航树，`hover:bg-accent` + 缩进圆角）属 §21 非表格范畴，保持 `bg-card` 不动；任职子表按 §21 设计只显示列分隔线、无斑马纹，保持原样。
+- **验收**：`npm run typecheck` 0 错误。涉及文件同 §21.2（行级 className + tbody/容器底为同一批 11 个前端文件）。

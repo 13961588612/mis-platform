@@ -286,7 +286,7 @@ export function ListPageSkeleton<T extends Record<string, unknown>>({
                   ))}
                 </tr>
               </thead>
-              <tbody>
+              <tbody className="bg-muted/20">
                 {pageRows.length === 0 ? (
                   <tr>
                     <td colSpan={columns.length} className="px-4 py-12 text-center text-muted-foreground">
@@ -297,7 +297,7 @@ export function ListPageSkeleton<T extends Record<string, unknown>>({
                   pageRows.map((row) => (
                     <tr
                       key={rowKey(row)}
-                      className="cursor-pointer border-b border-border/50 last:border-0 hover:bg-muted/30 even:bg-muted/20"
+                      className="cursor-pointer border-b border-border/50 last:border-0 hover:bg-muted/50 even:bg-muted/40"
                       onClick={() => enableFormSheet && openView(row)}
                     >
                       {columns.map((col) => (
