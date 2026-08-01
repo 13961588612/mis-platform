@@ -108,7 +108,7 @@ export function OperLogListPage() {
       </div>
       <div className="min-h-0 flex-1 overflow-auto rounded-lg border bg-card">
         <table className="w-full min-w-[800px] text-left text-sm">
-          <thead className="sticky top-0 z-10 border-b bg-muted/60 text-muted-foreground backdrop-blur">
+          <thead className="sticky top-0 z-10 border-b bg-table-stripe text-muted-foreground backdrop-blur">
             <tr>
               <th className="px-3 py-2 font-bold">时间</th>
               <th className="px-3 py-2 font-bold">用户</th>
@@ -119,7 +119,7 @@ export function OperLogListPage() {
               <th className="px-3 py-2 font-bold">结果</th>
             </tr>
           </thead>
-          <tbody className="bg-muted/40">
+          <tbody className="bg-table-surface">
             {loading ? (
               <tr>
                 <td colSpan={7} className="px-3 py-10 text-center text-muted-foreground">
@@ -136,7 +136,7 @@ export function OperLogListPage() {
               rows.map((row) => (
                 <tr
                   key={row.id}
-                  className="cursor-pointer border-b border-border/50 last:border-0 hover:bg-muted/70 even:bg-muted/60"
+                  className="cursor-pointer border-b border-border/50 last:border-0 hover:bg-table-hover even:bg-table-stripe"
                   onClick={() => setDetail(row)}
                 >
                   <td className="px-3 py-2 text-muted-foreground">{formatTime(row.operTime)}</td>
@@ -264,7 +264,7 @@ export function LoginLogListPage() {
       </div>
       <div className="min-h-0 flex-1 overflow-auto rounded-lg border bg-card">
         <table className="w-full text-left text-sm">
-          <thead className="sticky top-0 z-10 border-b bg-muted/60 text-muted-foreground backdrop-blur">
+          <thead className="sticky top-0 z-10 border-b bg-table-stripe text-muted-foreground backdrop-blur">
             <tr>
               <th className="px-3 py-2 font-bold">时间</th>
               <th className="px-3 py-2 font-bold">用户</th>
@@ -273,7 +273,7 @@ export function LoginLogListPage() {
               <th className="px-3 py-2 font-bold">消息</th>
             </tr>
           </thead>
-          <tbody className="bg-muted/40">
+          <tbody className="bg-table-surface">
             {loading ? (
               <tr>
                 <td colSpan={5} className="px-3 py-10 text-center text-muted-foreground">
@@ -290,7 +290,7 @@ export function LoginLogListPage() {
               rows.map((row) => (
                 <tr
                   key={row.id}
-                  className="cursor-pointer border-b border-border/50 last:border-0 hover:bg-muted/70 even:bg-muted/60"
+                  className="cursor-pointer border-b border-border/50 last:border-0 hover:bg-table-hover even:bg-table-stripe"
                   onClick={() => setDetail(row)}
                 >
                   <td className="px-3 py-2 text-muted-foreground">{formatTime(row.loginAt)}</td>

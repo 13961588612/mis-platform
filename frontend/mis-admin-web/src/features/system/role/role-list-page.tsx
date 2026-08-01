@@ -341,7 +341,7 @@ export function RoleListPage() {
       />
       <div className="min-h-0 flex-1 overflow-auto rounded-lg border bg-card">
         <table className="w-full text-left text-sm">
-          <thead className="sticky top-0 z-10 border-b bg-muted/60 text-muted-foreground backdrop-blur">
+          <thead className="sticky top-0 z-10 border-b bg-table-stripe text-muted-foreground backdrop-blur">
             <tr>
               <th className="px-3 py-2 font-bold">名称</th>
               <th className="px-3 py-2 font-bold">所属应用</th>
@@ -351,7 +351,7 @@ export function RoleListPage() {
               <th className="px-3 py-2 font-bold">操作</th>
             </tr>
           </thead>
-          <tbody className="bg-muted/40">
+          <tbody className="bg-table-surface">
             {loading ? (
               <tr>
                 <td colSpan={6} className="px-3 py-10 text-center text-muted-foreground">
@@ -360,7 +360,7 @@ export function RoleListPage() {
               </tr>
             ) : (
               rows.map((row) => (
-                <tr key={row.id} className="border-b border-border/50 last:border-0 hover:bg-muted/70 even:bg-muted/60">
+                <tr key={row.id} className="border-b border-border/50 last:border-0 hover:bg-table-hover even:bg-table-stripe">
                   <td className="px-3 py-2 font-medium">{row.name}</td>
                 <td className="px-3 py-2">{apps.find((a) => a.id === row.appId)?.name ?? '—'}</td>
                 <td className="px-3 py-2 font-mono text-xs">{row.code}</td>

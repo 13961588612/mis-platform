@@ -519,3 +519,15 @@ export interface Assignment {
 - **力度调整**：用户截图确认 tbody `/20` 仍偏白后，将 tbody/容器底从 `/20` 加到 `/40`，斑马纹 `/40→/60`、hover `/50→/70`，保证单行数据也能看出冷灰卡片感。
 - **边界**：主菜单树侧栏（导航树，`hover:bg-accent` + 缩进圆角）属 §21 非表格范畴，保持 `bg-card` 不动；任职子表按 §21 设计只显示列分隔线、无斑马纹，保持原样。
 - **验收**：`npm run typecheck` 0 错误。涉及文件同 §21.2（行级 className + tbody/容器底为同一批 11 个前端文件）。
+
+### 21.5 根因修正：专用不透明冷灰色板（token）替换透明度写法（2026-08-01 续）
+- **根因**：用户再次反馈组织管理/部门管理表格主体「还是一片白」。复盘确认：**根因不是力度不够，而是 `--muted` 浅色值 `214 32% 93%` 明度高达 93%，叠加任何透明度（`/40`、`/60`）在白底上算得明度≈96–97%，与白底无差**——故 §21.4「加深透明度」等于没加深。表头看似灰，实为 `border` + 深色字制造的视觉带，填充本身亦近白。
+- **最终方案**：弃用对浅 `--muted` 叠透明的做法，新增 **3 个表格专用不透明色板 token**（浅色 + 暗色各一套），并在 `tailwind.config.ts` 映射为 `bg-table-surface / bg-table-stripe / bg-table-hover`：
+  - 浅色：`--table-surface: 214 32% 95%`（表体底，明显冷灰）｜`--table-stripe: 214 32% 90%`（斑马纹 + 表头带）｜`--table-hover: 214 32% 85%`（hover，最突出）。
+  - 暗色：`--table-surface: 217 33% 16%`｜`--table-stripe: 217 33% 19%`｜`--table-hover: 217 33% 23%`。
+- **落地（替换 §21.4 的透明度写法）**：
+  - 表头 `bg-muted/60` → `bg-table-stripe`；表体 `<tbody>` `bg-muted/40` → `bg-table-surface`；斑马纹 `even:bg-muted/60` → `even:bg-table-stripe`；hover `hover:bg-muted/70` → `hover:bg-table-hover`。
+  - 涉及 10 个表格文件 + 菜单「直接子节点」容器 + dashboard「最近操作」表头；`tree-table.tsx` 一处改动同时覆盖所有 TreeTable 渲染（部门树接口列表、模块接口列表等）。
+- **层次**：odd 行透出表体 `bg-table-surface`（明显冷灰）→ even 行 `bg-table-stripe`（更深冷灰）→ hover `bg-table-hover`（最深、最突出）。**单行数据亦呈明显冷灰卡片，不再发白**。
+- **边界**：同 §21.4——主菜单树侧栏、任职只读子表（只显列线）等保持原样，未误改。
+- **验收**：`npm run typecheck` 0 错误。注：`user-list-page.tsx` 预存一个与本次无关的 `openCreate` 类型错误（`onClick={openCreate}` 参数类型不匹配），已顺手改为 `onClick={() => openCreate()}`；但该文件含此前刻意未提交的 AI 表单 UI 改动，故本轮未将其纳入提交（其表格配色改动已落工作区，dev 预览可见）。

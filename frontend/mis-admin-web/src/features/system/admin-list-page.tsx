@@ -147,7 +147,7 @@ function AssignmentEditor({
     <div className="col-span-2 min-w-0 self-start">
       <div className="overflow-hidden rounded-md border border-input">
         <table className="w-full border-collapse text-sm">
-          <thead className="border-b bg-muted/60 text-left text-sm font-bold text-muted-foreground">
+          <thead className="border-b bg-table-stripe text-left text-sm font-bold text-muted-foreground">
             <tr>
               <th className="px-2.5 py-1.5 font-bold">任职部门</th>
               <th className="px-2.5 py-1.5 font-bold">任职岗位</th>
@@ -156,7 +156,7 @@ function AssignmentEditor({
               <th className="w-12 px-2.5 py-1.5" />
             </tr>
           </thead>
-          <tbody className="bg-muted/40">
+          <tbody className="bg-table-surface">
             {list.length === 0 ? (
               <tr>
                 <td colSpan={5} className="px-2.5 py-3 text-center text-xs text-muted-foreground">
@@ -251,7 +251,7 @@ function AssignmentTable({ list }: { list: Assignment[] }) {
   if (!list.length) return <span className="text-muted-foreground">—</span>;
   return (
     <table className="w-full border-collapse text-sm">
-      <thead className="border-b bg-muted/60 text-left text-sm font-bold text-muted-foreground">
+      <thead className="border-b bg-table-stripe text-left text-sm font-bold text-muted-foreground">
         <tr>
           <th className="px-3 py-2 font-bold">任职部门</th>
           <th className="border-l border-border/60 px-3 py-2 font-bold">任职岗位</th>
@@ -259,7 +259,7 @@ function AssignmentTable({ list }: { list: Assignment[] }) {
           <th className="border-l border-border/60 px-3 py-2 font-bold">主职</th>
         </tr>
       </thead>
-      <tbody className="bg-muted/40">
+      <tbody className="bg-table-surface">
         {list.map((a, i) => (
           <tr key={i}>
             <td className="px-3 py-2 font-medium text-foreground">{a.dept || '—'}</td>
@@ -766,7 +766,7 @@ export function AdminListPage({ def }: { def: AdminPageDef }) {
           ) : (
           <div className="min-h-0 flex-1 overflow-auto">
             <table className="w-full border-collapse">
-              <thead className="sticky top-0 z-10 border-b bg-muted/60 text-left backdrop-blur">
+              <thead className="sticky top-0 z-10 border-b bg-table-stripe text-left backdrop-blur">
                 <tr>
                   {def.columns.map((c) => (
                     <th
@@ -781,7 +781,7 @@ export function AdminListPage({ def }: { def: AdminPageDef }) {
                   </th>
                 </tr>
               </thead>
-              <tbody className="bg-muted/40">
+              <tbody className="bg-table-surface">
                 {loading ? (
                   Array.from({ length: pageSize }).map((_, i) => (
                     <tr key={`sk-${i}`} className="border-b last:border-0">
@@ -851,7 +851,7 @@ export function AdminListPage({ def }: { def: AdminPageDef }) {
                     const hasAssignments = assignments.length > 0;
                     return (
                       <Fragment key={rowId}>
-                        <tr className="border-b border-border/50 last:border-0 hover:bg-muted/70 even:bg-muted/60">
+                        <tr className="border-b border-border/50 last:border-0 hover:bg-table-hover even:bg-table-stripe">
                           {def.columns.map((c) => (
                             <td key={c.key} className="px-4 py-[0.7rem] align-middle text-sm">
                               {c.status ? (

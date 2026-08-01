@@ -59,6 +59,9 @@ const config: Config = {
           DEFAULT: 'hsl(var(--info))',
           foreground: 'hsl(var(--info-foreground))',
         },
+        'table-surface': 'hsl(var(--table-surface))',
+        'table-stripe': 'hsl(var(--table-stripe))',
+        'table-hover': 'hsl(var(--table-hover))',
       },
       borderRadius: {
         lg: 'var(--radius)',
