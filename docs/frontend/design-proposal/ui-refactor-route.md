@@ -555,3 +555,19 @@ export interface Assignment {
 - **修复**：统一将所有表格行 className 从 `hover:bg-table-hover even:bg-table-stripe` 调整为 `even:bg-table-stripe hover:bg-table-hover`，确保 hover 态始终覆盖斑马纹（相同 specificity 下后定义优先）。涉及 10 个表格/树表文件：`tree-table.tsx`、`list-page-skeleton.tsx`、`admin-list-page.tsx`、`user-list-page.tsx`、`role-list-page.tsx`、`org-list-page.tsx`、`dict-manage-page.tsx`、`log-pages.tsx`、`module-manage-page.tsx`、`menu-manage-page.tsx`。
 - **用户操作**：请在前端项目目录执行 `npm run dev` 重启开发服务器，然后浏览器内按 `Ctrl+F5` 强制刷新组织管理页面。若仍看不到 `#c7d5e2` 冷灰底，再反馈。
 - **验收**：`npm run typecheck` 0 错误。
+
+### 21.8 表格主体颜色调浅 + 空白区补底（2026-08-01 续7）
+- **用户反馈**：刷新后能看到颜色，但觉得太深；且数据下方没有数据行的空白区域仍是白色（透出外层 `bg-card`）。
+- **分析**：
+  - 之前把背景色放在 `<tbody>` 上，而 tbody 高度由数据行决定，不会撑满 table 下方空白区；
+  - 当前 token `214 32% 80%` 在浅色主题下确实偏深，像 screenshot 里的蓝灰块。
+- **调整**：
+  - **token 整体调浅一档**（浅色主题）：
+    - `--table-surface: 214 32% 90%`（#e2e8f0，很淡的冷灰）
+    - `--table-stripe: 214 32% 84%`（#cdd8e3，略深一点的冷灰，用于斑马纹和表头）
+    - `--table-hover: 214 32% 76%`（#b5c4d6，hover 态）
+  - 暗色主题同步微调：`--table-surface: 217 33% 15%`｜`--table-stripe: 217 33% 19%`｜`--table-hover: 217 33% 24%`。
+  - **结构修复**：把 `bg-table-surface` 从 `<tbody>` 移到 `<table>` 根，并给 table 加 `min-h-full`，这样整片表格区域（含数据行下方空白）都会是冷灰底，不再透出外层 card 白底。
+  - 涉及文件：`globals.css`、`tree-table.tsx`、`list-page-skeleton.tsx`、`org-list-page.tsx`、`role-list-page.tsx`、`dict-manage-page.tsx`、`log-pages.tsx`、`module-manage-page.tsx`、`dashboard-page.tsx`，以及含 WIP 的 `admin-list-page.tsx`、`user-list-page.tsx`（工作区已同步修改，暂不带入提交）。
+- **校验**：surface `#e2e8f0` 与正文 `#57606e` 对比度约 5.4:1，满足 WCAG AA；整体层次比上一轮柔和，不再像深蓝灰块。
+- **验收**：`npm run typecheck` 0 错误。

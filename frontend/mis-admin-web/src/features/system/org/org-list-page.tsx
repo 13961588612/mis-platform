@@ -130,7 +130,7 @@ export function OrgListPage() {
         }
       />
       <div className="min-h-0 flex-1 overflow-auto rounded-lg border bg-card">
-        <table className="w-full text-left text-sm">
+        <table className="min-h-full w-full bg-table-surface text-left text-sm">
           <thead className="sticky top-0 z-10 border-b bg-table-stripe text-muted-foreground backdrop-blur">
             <tr>
               <th className="px-3 py-2 font-bold">编码</th>
@@ -141,7 +141,7 @@ export function OrgListPage() {
               <th className="px-3 py-2 font-bold">操作</th>
             </tr>
           </thead>
-          <tbody className="bg-table-surface">
+          <tbody>
             {loading ? (
               <tr>
                 <td colSpan={6} className="px-3 py-10 text-center text-muted-foreground">

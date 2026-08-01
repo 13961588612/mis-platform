@@ -276,7 +276,7 @@ export function ListPageSkeleton<T extends Record<string, unknown>>({
 
         <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border bg-card shadow-card">
           <div className="min-h-0 flex-1 overflow-auto">
-            <table className="w-full text-sm">
+            <table className="min-h-full w-full bg-table-surface text-sm">
               <thead className="sticky top-0 z-10 border-b bg-table-stripe text-left text-sm font-bold text-muted-foreground backdrop-blur">
                 <tr>
                   {columns.map((col) => (
@@ -286,7 +286,7 @@ export function ListPageSkeleton<T extends Record<string, unknown>>({
                   ))}
                 </tr>
               </thead>
-              <tbody className="bg-table-surface">
+              <tbody>
                 {pageRows.length === 0 ? (
                   <tr>
                     <td colSpan={columns.length} className="px-4 py-12 text-center text-muted-foreground">

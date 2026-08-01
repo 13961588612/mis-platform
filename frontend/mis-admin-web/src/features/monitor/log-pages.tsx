@@ -107,7 +107,7 @@ export function OperLogListPage() {
         </Button>
       </div>
       <div className="min-h-0 flex-1 overflow-auto rounded-lg border bg-card">
-        <table className="w-full min-w-[800px] text-left text-sm">
+        <table className="min-h-full w-full min-w-[800px] bg-table-surface text-left text-sm">
           <thead className="sticky top-0 z-10 border-b bg-table-stripe text-muted-foreground backdrop-blur">
             <tr>
               <th className="px-3 py-2 font-bold">时间</th>
@@ -119,7 +119,7 @@ export function OperLogListPage() {
               <th className="px-3 py-2 font-bold">结果</th>
             </tr>
           </thead>
-          <tbody className="bg-table-surface">
+          <tbody>
             {loading ? (
               <tr>
                 <td colSpan={7} className="px-3 py-10 text-center text-muted-foreground">
@@ -263,7 +263,7 @@ export function LoginLogListPage() {
         </Button>
       </div>
       <div className="min-h-0 flex-1 overflow-auto rounded-lg border bg-card">
-        <table className="w-full text-left text-sm">
+        <table className="min-h-full w-full bg-table-surface text-left text-sm">
           <thead className="sticky top-0 z-10 border-b bg-table-stripe text-muted-foreground backdrop-blur">
             <tr>
               <th className="px-3 py-2 font-bold">时间</th>
@@ -273,7 +273,7 @@ export function LoginLogListPage() {
               <th className="px-3 py-2 font-bold">消息</th>
             </tr>
           </thead>
-          <tbody className="bg-table-surface">
+          <tbody>
             {loading ? (
               <tr>
                 <td colSpan={5} className="px-3 py-10 text-center text-muted-foreground">

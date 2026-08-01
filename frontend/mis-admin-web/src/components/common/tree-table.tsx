@@ -62,7 +62,7 @@ export function TreeTable<T extends TreeTableNode>({
   className,
 }: TreeTableProps<T>) {
   return (
-    <table className={cn('w-full border-collapse text-sm', className)}>
+    <table className={cn('min-h-full w-full border-collapse bg-table-surface text-sm', className)}>
       <thead className="sticky top-0 z-10 border-b bg-table-stripe text-left text-sm font-bold text-muted-foreground backdrop-blur">
         <tr>
           {columns.map((col) => (
@@ -81,7 +81,7 @@ export function TreeTable<T extends TreeTableNode>({
           {rowActions ? <th className="px-2 py-1.5 text-right font-bold">操作</th> : null}
         </tr>
       </thead>
-      <tbody className="bg-table-surface">
+      <tbody>
         {rows.length === 0 ? (
           <tr>
             <td

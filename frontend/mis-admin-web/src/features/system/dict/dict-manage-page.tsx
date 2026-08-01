@@ -247,7 +247,7 @@ export function DictManagePage() {
         </aside>
 
         <div className="min-w-0 flex-1 overflow-auto rounded-lg border bg-card">
-          <table className="w-full text-left text-sm">
+          <table className="min-h-full w-full bg-table-surface text-left text-sm">
             <thead className="sticky top-0 z-10 border-b bg-table-stripe text-muted-foreground backdrop-blur">
               <tr>
                 <th className="px-3 py-2 font-bold">标签</th>
@@ -256,7 +256,7 @@ export function DictManagePage() {
                 <th className="px-3 py-2 font-bold">操作</th>
               </tr>
             </thead>
-            <tbody className="bg-table-surface">
+            <tbody>
               {loadingItems ? (
                 <tr>
                   <td colSpan={4} className="px-3 py-10 text-center text-muted-foreground">
