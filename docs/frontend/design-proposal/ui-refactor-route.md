@@ -539,5 +539,9 @@ export interface Assignment {
 - **第二轮调整（根据截图复核）**：用户截图显示 88% 表体底在白色页面上仍显偏白，继续整体加深约 4–5% 明度，使表格主体呈现明显冷灰卡片感：
   - 浅色：`--table-surface: 214 32% 84%`（#d4dde7）｜`--table-stripe: 214 32% 77%`（#c2cedb）｜`--table-hover: 214 32% 69%`（#aab9cd）。
   - 暗色：`--table-surface: 217 33% 17%`｜`--table-stripe: 217 33% 21%`｜`--table-hover: 217 33% 26%`。
-- **校验**：表体底 `#d4dde7`（84%）与正文 `muted-foreground`（#57606e）对比度约 5.0:1，仍满足 WCAG AA；斑马纹/hover 更深形成清晰三档递进。仅改 `globals.css` token 值，未动组件 className，覆盖全部已接 token 的表格。
+- **第三轮调整（再次根据截图复核）**：用户新截图显示表格主体仍接近纯白。将浅色 token 继续整体加深约 4–5% 明度，确保在白色页面上也能看到明显冷灰：
+  - 浅色：`--table-surface: 214 32% 80%`（#c7d5e2）｜`--table-stripe: 214 32% 72%`（#afbfd2）｜`--table-hover: 214 32% 64%`（#98acc5）。
+  - 暗色：`--table-surface: 217 33% 19%`｜`--table-stripe: 217 33% 24%`｜`--table-hover: 217 33% 30%`。
+- **校验**：表体底 `#c7d5e2`（80%）与正文 `muted-foreground`（#57606e）对比度约 4.5:1，处于 WCAG AA 边界；主内容文字（`foreground` #0f172a）对比度充足。斑马纹/hover 更深，三档递进明显。
+- **提示**：若刷新后仍未看到灰色，请检查浏览器缓存或 HMR 是否生效，尝试强制刷新（Ctrl+F5）后重试。
 - **验收**：`npm run typecheck` 0 错误（纯 CSS 变量值变更）。
