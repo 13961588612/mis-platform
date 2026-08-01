@@ -16,9 +16,9 @@
     --border: 214 30% 88%;
 
     /* ===== 表格专用冷灰色板（不透明实色，避免浅 --muted 叠透明后接近白底） ===== */
-    --table-surface: 214 32% 88%;
-    --table-stripe: 214 32% 81%;
-    --table-hover: 214 32% 73%;
+    --table-surface: 214 32% 84%;
+    --table-stripe: 214 32% 77%;
+    --table-hover: 214 32% 69%;
     --input: 214 30% 88%;
     --ring: 243 75% 59%;
     --sidebar: 214 32% 90%;
@@ -82,9 +82,9 @@
     --border: 217.2 33% 20%;
 
     /* ===== 表格专用冷灰色板（暗色） ===== */
-    --table-surface: 217 33% 14%;
-    --table-stripe: 217 33% 17%;
-    --table-hover: 217 33% 21%;
+    --table-surface: 217 33% 17%;
+    --table-stripe: 217 33% 21%;
+    --table-hover: 217 33% 26%;
     --input: 217.2 33% 20%;
     --ring: 243 75% 66%;
     --sidebar: 217 33% 14%;

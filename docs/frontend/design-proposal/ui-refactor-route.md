@@ -533,8 +533,11 @@ export interface Assignment {
 - **验收**：`npm run typecheck` 0 错误。注：`user-list-page.tsx` 预存一个与本次无关的 `openCreate` 类型错误（`onClick={openCreate}` 参数类型不匹配），已顺手改为 `onClick={() => openCreate()}`；但该文件含此前刻意未提交的 AI 表单 UI 改动，故本轮未将其纳入提交（其表格配色改动已落工作区，dev 预览可见）。
 
 ### 21.6 冷灰底加深（2026-08-01 用户要求「深一点的底色」）
-- **调整**：在 §21.5 专用 token 基础上整体加深一档（降低明度），使表格主体冷灰观感更明显：
+- **第一轮调整**：在 §21.5 专用 token 基础上整体加深一档：
   - 浅色：`--table-surface: 214 32% 88%`（#d4dde7）｜`--table-stripe: 214 32% 81%`（#c2cedb）｜`--table-hover: 214 32% 73%`（#aab9cd）。
   - 暗色：`--table-surface: 217 33% 14%`｜`--table-stripe: 217 33% 17%`｜`--table-hover: 217 33% 21%`。
-- **校验**：表体底 `#d4dde7` 与正文 `muted-foreground`（#57606e）对比度约 4.7:1，仍满足 WCAG AA（≥4.5:1）；斑马纹/hover 更深形成清晰三档递进。仅改 `globals.css` token 值，未动组件 className，覆盖全部已接 token 的表格。
+- **第二轮调整（根据截图复核）**：用户截图显示 88% 表体底在白色页面上仍显偏白，继续整体加深约 4–5% 明度，使表格主体呈现明显冷灰卡片感：
+  - 浅色：`--table-surface: 214 32% 84%`（#d4dde7）｜`--table-stripe: 214 32% 77%`（#c2cedb）｜`--table-hover: 214 32% 69%`（#aab9cd）。
+  - 暗色：`--table-surface: 217 33% 17%`｜`--table-stripe: 217 33% 21%`｜`--table-hover: 217 33% 26%`。
+- **校验**：表体底 `#d4dde7`（84%）与正文 `muted-foreground`（#57606e）对比度约 5.0:1，仍满足 WCAG AA；斑马纹/hover 更深形成清晰三档递进。仅改 `globals.css` token 值，未动组件 className，覆盖全部已接 token 的表格。
 - **验收**：`npm run typecheck` 0 错误（纯 CSS 变量值变更）。
