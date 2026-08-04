@@ -28,7 +28,7 @@ class SemanticSearchStrategy(RoutingStrategy):
     """
     基于用户输入与 Agent 元数据之间的语义相似度进行路由。
 
-    使用 bge-small-zh-v1.5 嵌入（768 维）和 Qdrant agent_router_index
+    使用 bge-small-zh-v1.5 嵌入（512 维）和 Qdrant agent_router_index
     集合来找到最相似的 Agent。
     """
 

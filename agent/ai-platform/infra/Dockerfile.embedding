@@ -2,7 +2,7 @@
 # Dockerfile.embedding — Local Embedding Model Service
 # =============================================================================
 # Serves bge-small-zh-v1.5 via FastAPI + sentence-transformers.
-# Vector dimension: 768. Uses CPU torch wheel to keep the image smaller/stable.
+# Vector dimension: 512 (bge-small-zh-v1.5). CPU torch wheel keeps image smaller.
 # =============================================================================
 
 FROM python:3.12-slim
@@ -31,18 +31,22 @@ COPY requirements-embedding.txt /app/requirements-embedding.txt
 RUN pip install --no-cache-dir -r /app/requirements-embedding.txt
 
 RUN mkdir -p /app/models
+# 国内默认走 HF 镜像；compose 可覆盖。能直连 huggingface.co 时可设为空。
 ENV SENTENCE_TRANSFORMERS_HOME=/app/models \
     TRANSFORMERS_CACHE=/app/models \
     HF_HOME=/app/models \
+    HF_HUB_CACHE=/app/models \
     MODEL_NAME="BAAI/bge-small-zh-v1.5" \
     PORT=8001 \
-    MAX_BATCH_SIZE=32
+    MAX_BATCH_SIZE=32 \
+    HF_ENDPOINT="https://hf-mirror.com"
 
 COPY embedding_server.py /app/embedding_server.py
 
 EXPOSE 8001
 
-HEALTHCHECK --interval=30s --timeout=10s --retries=5 \
+# 模型首次下载可能较久，给足 start_period
+HEALTHCHECK --interval=30s --timeout=10s --start-period=300s --retries=5 \
   CMD curl -f http://localhost:8001/health || exit 1
 
 CMD ["uvicorn", "embedding_server:app", "--host", "0.0.0.0", "--port", "8001"]

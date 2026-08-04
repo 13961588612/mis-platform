@@ -10,3 +10,19 @@ runtime:
   prompts:
     system: runtime/prompts/system.md
   middleware: {}
+
+# KB 问答管线参数（T10）。
+# 运行时由 src/agent/mis_rag/qa_pipeline.py 读取同名 Settings 项，
+# 本节仅作为该 Agent 的期望默认值声明与运维可读文档；
+# 实际生效值以环境变量 MIS_KB_* 为准（见 src/config.py）。
+kb:
+  # 默认召回条数；请求体 topK 优先级更高
+  retrieve_top_k: 5
+  # 相关性阈值（留空表示不过滤，由引擎默认策略裁定）
+  retrieve_threshold: null
+  # 注入提示词的检索上下文总字符上限，防止超出模型窗口
+  max_context_chars: 6000
+  # 返回给前端的单条引用摘要最大字符数
+  snippet_limit: 200
+  # 落库失败是否降级（true=仍返回答案，仅 sessionId/messageId 为空）
+  persist_degradable: true

@@ -27,6 +27,7 @@ Architecture Decision Record，记录重要架构决策的**背景、选项、�
 | [ADR-015](ADR-015-jpa-over-mybatis.md) | 持久层 Spring Data JPA（替代 MyBatis-Plus） | 已接受 | 2026-06-23 |
 | [ADR-016](ADR-016-mis-iam-org-service-boundary.md) | Sprint 2：mis-iam / mis-org 合并原 mis-user/mis-rbac | 已接受 | 2026-07-21 |
 | [ADR-017](ADR-017-sys-api-module-ownership.md) | sys_api 归属模块、去租户/应用、API 多绑定 | 已接受 | 2026-07-28 |
+| [ADR-018](ADR-018-knowledge-base-mis-kb.md) | 知识库 APP、mis-kb、RAGFlow 引擎与测试 Docker 交付 | 已接受 | 2026-08-03 |
 
 ## ADR 模板
 

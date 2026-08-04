@@ -1,0 +1,49 @@
+sequenceDiagram
+    actor User
+    participant FE as 知识APP前端
+    participant BFF as mis-admin-bff<br/>/api/v1/kb
+    participant KB as mis-kb<br/>/internal/v1/kb
+    participant Port as KnowledgeEnginePort
+    participant RF as RAGFlow
+
+    Note over User,RF: (a) 新建知识库并建引擎 dataset
+    User->>FE: 新建知识库(分类, 名称, 密级)
+    FE->>BFF: POST /api/v1/kb/libraries
+    BFF->>KB: POST /internal/v1/kb/libraries<br/>(X-User-Id + JWT + X-Trace-Id)
+    KB->>KB: 校验同级名称唯一 + 密级合法(sys_dict)
+    KB->>Port: createLibrary(meta, ragSettings)
+    Port->>RF: POST /api/v1/datasets (Bearer API Key)
+    RF-->>Port: {id: datasetId}
+    Port-->>KB: EngineLibraryRef(ragflow, datasetId)
+    KB->>KB: 落库 kb_library(engine_library_ref=datasetId)
+    KB-->>BFF: KbLibraryVO
+    BFF-->>FE: Result~KbLibraryVO~
+    FE-->>User: 创建成功(普通级提示全员可读)
+
+    Note over User,KB: (b) 用户问答（经 ai-copilot → mis-rag → mis-kb 可见库+retrieve → 生成 → 落库）
+    User->>FE: 提问(question)
+    FE->>BFF: POST /api/v1/ai/rag {capability:'rag', question, kb?}
+    BFF->>RF2 as mis-rag Agent: chat(mis-rag, {question, kb}, JWT+X-Trace-Id)
+    RF2->>KB: GET /internal/v1/kb/rag/visible-libraries (带JWT)
+    KB->>KB: KbVisibilityService 算可见库(普通级 ∪ ACL读)
+    KB-->>RF2: {libraryIds:[...]}
+    RF2->>KB: POST /internal/v1/kb/rag/retrieve {question, libraryIds, topK}
+    KB->>Port: retrieve(RetrieveQuery)
+    Port->>RF: POST /api/v1/retrieval (dataset_ids, question)
+    RF-->>Port: List~ChunkHit~
+    Port-->>KB: List~ChunkHit~
+    KB-->>RF2: RetrieveHits(ChunkHit[])
+    RF2->>RF2: 组装 Prompt + 生成 answer + 结构化 citations
+    RF2->>KB: POST /internal/v1/kb/qa/sessions (建会话)
+    RF2->>KB: POST /internal/v1/kb/qa/messages (user + assistant)
+    RF2->>KB: POST /internal/v1/kb/qa/citations/batch (引用快照)
+    KB-->>RF2: sessionId
+    RF2-->>BFF: {answer, citations(libraryId,documentId,chunkText,score,messageId), sessionId}
+    BFF-->>FE: Result~AiRagResponse~
+    FE-->>User: 展示答案 + 引用
+    Note over User,KB: 评价（异步，走 BFF → mis-kb）
+    User->>FE: 提交评价(accuracy, helpful, offtopic, citeError)
+    FE->>BFF: POST /api/v1/kb/qa/feedback {sessionId, ...}
+    BFF->>KB: POST /internal/v1/kb/qa/feedback
+    KB-->>BFF: ok
+    BFF-->>FE: ok

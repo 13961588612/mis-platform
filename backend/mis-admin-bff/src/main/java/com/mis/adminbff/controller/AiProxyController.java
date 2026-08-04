@@ -118,18 +118,53 @@ public class AiProxyController {
         });
     }
 
-    @PostMapping("/rag")
-    public Result<AiRagResponse> rag(
+    /**
+     * 知识库问答（F-01：支持 SSE 流式）。
+     *
+     * <p><b>为什么用「同路径 + stream 开关」而不是新开 {@code /rag/stream} 路径：</b>
+     * 新路径意味着网关白名单、权限码、前端 api 层都要各加一份，而两条链路的
+     * 鉴权、metadata 装配、能力门禁完全一致——多一条路径只多一处会漂移的配置。
+     * 这里复用 {@code /chat/completions} 已验证过的分支写法，行为可预期。
+     *
+     * <p>流式分支直接返回 {@link Flux}（不能包进 {@code ResponseEntity.body}），
+     * 否则 Spring MVC 走不到 ReactiveTypeHandler，SSE 写不出去。
+     *
+     * @param req           请求体；{@code stream=true} 时走 SSE
+     * @param authorization MIS JWT
+     * @param traceId       链路追踪 id
+     * @return SSE {@code Flux} 或 {@code Result<AiRagResponse>}
+     */
+    @PostMapping(value = "/rag",
+            produces = {MediaType.APPLICATION_JSON_VALUE, MediaType.TEXT_EVENT_STREAM_VALUE})
+    public Object rag(
             @RequestBody AiRagRequest req,
             @RequestHeader(value = SecurityConstants.AUTHORIZATION_HEADER, required = false) String authorization,
             @RequestHeader(value = SecurityConstants.HEADER_TRACE_ID, required = false) String traceId) {
         Long employeeId = employeeId();
-        return proxyCapability("rag", authorization, traceId, (auth, tid) -> {
+
+        if (Boolean.TRUE.equals(req.getStream()) && properties.isSseEnabled()) {
+            if (!featureConfig.platformAvailable() || !featureConfig.isCapabilityEnabled("rag")) {
+                // 门禁未过时也必须以 SSE 单帧 error 收尾：前端此时已经在监听事件流，
+                // 突然返回一个 JSON 错误体会被当成协议异常，报错信息反而丢失。
+                return sseErrorFlux("AI 平台暂不可用或未启用 rag");
+            }
             String content = translator.buildRagContent(req);
-            Map<String, Object> body = translator.buildBody(content, "rag", req.getContext(), employeeId);
+            Map<String, Object> body = translator.buildBody(
+                    content, "rag", req.getContext(), employeeId, translator.buildRagMetadata(req));
+            return aiPlatformClient.chatStream(
+                    translator.agentIdFor("rag"), body, authorization, traceId);
+        }
+
+        Result<AiRagResponse> result = proxyCapability("rag", authorization, traceId, (auth, tid) -> {
+            String content = translator.buildRagContent(req);
+            // T10：libraryIds / topK / threshold / sessionId 以结构化 metadata 下传，
+            // 供 mis-rag 的 KB 问答管线做可见性解析、检索与会话落库。
+            Map<String, Object> body = translator.buildBody(
+                    content, "rag", req.getContext(), employeeId, translator.buildRagMetadata(req));
             AiPlatformChatData data = aiPlatformClient.chat(translator.agentIdFor("rag"), body, auth, tid);
             return translator.parseRag(data);
         });
+        return ResponseEntity.ok().contentType(MediaType.APPLICATION_JSON).body(result);
     }
 
     /**

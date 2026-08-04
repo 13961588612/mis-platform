@@ -1,0 +1,201 @@
+# RAGFlow 引擎栈 —— MIS 知识库（mis-kb）的检索/切片后端
+#
+# 版本已钉扎（禁止 latest）：见 .env.example 与 README「已钉扎版本」表。
+# 依赖栈与上游 ragflow/docker/docker-compose-base.yml 对齐：MySQL / Valkey(Redis) / MinIO / Elasticsearch。
+#
+# 端口策略：所有宿主机端口相对 MIS 开发栈（deploy/docker-compose.dev.yml）做了偏移，
+# 避免与 mis-postgres(5432) / mis-redis(6379) / mis-minio(9000,9001) / mis-nacos(8848) 冲突。
+#
+# 用法：
+#   cd deploy/ragflow && cp .env.example .env && docker compose --env-file .env up -d
+# 与 MIS 开发栈联调（同网络，mis-kb 可用 http://ragflow 直连）：
+#   docker compose -f deploy/docker-compose.dev.yml -f deploy/ragflow/docker-compose.yml up -d
+
+name: mis-ragflow
+
+networks:
+  default:
+    name: ${RAGFLOW_NETWORK:-mis-ragflow-net}
+    # 与 dev 栈叠加时，把 .env 的 RAGFLOW_NETWORK 改成 dev 栈网络名，
+    # 或在此处改为 external: true，使 mis-kb 能按服务名解析 ragflow。
+
+volumes:
+  ragflow-mysql:
+    name: mis-ragflow-mysql
+  ragflow-minio:
+    name: mis-ragflow-minio
+  ragflow-redis:
+    name: mis-ragflow-redis
+  ragflow-es:
+    name: mis-ragflow-es
+  ragflow-logs:
+    name: mis-ragflow-logs
+
+services:
+  # ===== 元数据库：租户 / 知识库 / 文档解析状态 =====
+  mysql:
+    image: mysql:${MYSQL_IMAGE_TAG:-8.0.39}
+    container_name: mis-ragflow-mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_PASSWORD:?MYSQL_PASSWORD is required}
+      MYSQL_DATABASE: ${MYSQL_DBNAME:-rag_flow}
+      TZ: ${TIMEZONE:-Asia/Shanghai}
+    command:
+      # RAGFlow 上游要求：utf8mb4 + 放宽 packet 以容纳大块解析结果
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      - --max_connections=1000
+      - --max_allowed_packet=128M
+      - --binlog_expire_logs_seconds=604800
+    ports:
+      - "${MYSQL_HOST_PORT:-5455}:3306"
+    volumes:
+      - ragflow-mysql:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -uroot -p$$MYSQL_ROOT_PASSWORD --silent"]
+      interval: 10s
+      timeout: 10s
+      retries: 30
+      start_period: 30s
+    restart: unless-stopped
+    labels:
+      - "com.mis.stack=ragflow"
+
+  # ===== 对象存储：原始文件与切片产物 =====
+  minio:
+    image: quay.io/minio/minio:${MINIO_IMAGE_TAG:-RELEASE.2023-12-20T01-00-02Z}
+    container_name: mis-ragflow-minio
+    command: server --console-address ":9001" /data
+    environment:
+      MINIO_ROOT_USER: ${MINIO_USER:-rag_flow}
+      MINIO_ROOT_PASSWORD: ${MINIO_PASSWORD:?MINIO_PASSWORD is required}
+      TZ: ${TIMEZONE:-Asia/Shanghai}
+    ports:
+      - "${MINIO_HOST_PORT:-9100}:9000"
+      - "${MINIO_CONSOLE_HOST_PORT:-9101}:9001"
+    volumes:
+      - ragflow-minio:/data
+    healthcheck:
+      test: ["CMD-SHELL", "mc ready local || exit 1"]
+      interval: 10s
+      timeout: 10s
+      retries: 30
+      start_period: 20s
+    restart: unless-stopped
+    labels:
+      - "com.mis.stack=ragflow"
+
+  # ===== 任务队列 / 缓存（上游自 v0.15 起使用 Valkey，Redis 协议兼容）=====
+  redis:
+    image: valkey/valkey:${VALKEY_IMAGE_TAG:-8}
+    container_name: mis-ragflow-redis
+    command: >
+      redis-server
+      --requirepass ${REDIS_PASSWORD:?REDIS_PASSWORD is required}
+      --maxmemory ${REDIS_MAXMEMORY:-256mb}
+      --maxmemory-policy allkeys-lru
+      --appendonly yes
+    environment:
+      # 同时注入容器内，供 healthcheck 里的 $$REDIS_PASSWORD 展开
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD is required}
+      TZ: ${TIMEZONE:-Asia/Shanghai}
+    ports:
+      - "${REDIS_HOST_PORT:-6479}:6379"
+    volumes:
+      - ragflow-redis:/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a $$REDIS_PASSWORD ping | grep -q PONG"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 15s
+    restart: unless-stopped
+    labels:
+      - "com.mis.stack=ragflow"
+
+  # ===== 向量 / 全文检索引擎 =====
+  es01:
+    image: docker.elastic.co/elasticsearch/elasticsearch:${STACK_VERSION:-8.11.3}
+    container_name: mis-ragflow-es
+    environment:
+      node.name: es01
+      discovery.type: single-node
+      ELASTIC_PASSWORD: ${ELASTIC_PASSWORD:?ELASTIC_PASSWORD is required}
+      bootstrap.memory_lock: "false"
+      xpack.security.enabled: "true"
+      xpack.security.http.ssl.enabled: "false"
+      xpack.security.transport.ssl.enabled: "false"
+      cluster.routing.allocation.disk.watermark.low: "5gb"
+      cluster.routing.allocation.disk.watermark.high: "3gb"
+      cluster.routing.allocation.disk.watermark.flood_stage: "2gb"
+      ES_JAVA_OPTS: "-Xms${ES_HEAP_SIZE:-1g} -Xmx${ES_HEAP_SIZE:-1g}"
+      TZ: ${TIMEZONE:-Asia/Shanghai}
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+      nofile:
+        soft: 65536
+        hard: 65536
+    ports:
+      - "${ES_HOST_PORT:-1200}:9200"
+    volumes:
+      - ragflow-es:/usr/share/elasticsearch/data
+    healthcheck:
+      test:
+        - "CMD-SHELL"
+        - "curl -s -u elastic:$$ELASTIC_PASSWORD http://localhost:9200/_cluster/health | grep -qE '\"status\":\"(green|yellow)\"'"
+      interval: 15s
+      timeout: 10s
+      retries: 40
+      start_period: 60s
+    restart: unless-stopped
+    labels:
+      - "com.mis.stack=ragflow"
+
+  # ===== RAGFlow 应用（API + Web + 解析 worker）=====
+  ragflow:
+    image: ${RAGFLOW_IMAGE:-infiniflow/ragflow:v0.26.4}
+    container_name: mis-ragflow
+    depends_on:
+      mysql:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      es01:
+        condition: service_healthy
+    env_file:
+      # 可选注入：全新克隆的仓库里 .env 不存在（未纳入 git，见 §7「不要做的事」）。
+      # 用 Compose v2.24+ 长语法声明 required:false，避免 `docker compose config`
+      # 在没有 .env 时因「env file not found」直接失败；用户 `cp .env.example .env`
+      # 后仍会被正常注入。注意：`--env-file` 只影响插值，不能替代这里的服务级声明。
+      - path: .env
+        required: false
+    environment:
+      # 上游 entrypoint 用这些变量渲染 service_conf.yaml，故须与依赖服务名一致
+      DOC_ENGINE: ${DOC_ENGINE:-elasticsearch}
+      MYSQL_HOST: mysql
+      MYSQL_PORT: 3306
+      MINIO_HOST: minio:9000
+      REDIS_HOST: redis:6379
+      ES_HOST: es01
+      ES_PORT: 9200
+      TZ: ${TIMEZONE:-Asia/Shanghai}
+    ports:
+      - "${RAGFLOW_HTTP_PORT:-9380}:80"
+    volumes:
+      - ragflow-logs:/ragflow/logs
+    healthcheck:
+      # 探活只打 nginx 静态根路径：RAGFlow 的 /v1/** API 需 API Key 鉴权，
+      # 用鉴权端点会让容器长期显示 unhealthy，误导运维。
+      test: ["CMD-SHELL", "curl -sf -o /dev/null http://localhost:80/ || exit 1"]
+      interval: 20s
+      timeout: 10s
+      retries: 30
+      start_period: 120s
+    restart: unless-stopped
+    labels:
+      - "com.mis.stack=ragflow"
+      - "com.mis.note=mis-kb 通过 mis.kb.engine.base-url=http://ragflow:80 直连"

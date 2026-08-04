@@ -1,0 +1,20 @@
+# Nacos 配置：mis-kb（integration 环境）
+# 知识库微服务（T8 引擎连接配置，见 docs/backend/mis-kb-system-design.md §S-04）。
+#
+# 引擎选型 type：
+#   ragflow — 连真实 RAGFlow 实例（需同时配 base-url + api-key）
+#   mock    — CI 假数据适配器
+#   noop    — 无引擎占位；建库/传文档不报错，retrieve 返回空 hits（默认，保证可跑通）
+#
+# 安全：api-key 仅服务端持有，浏览器永不接触。
+# 生产/集成环境请用 Nacos 密文或环境变量注入，切勿把真实 key 提交进 Git。
+server:
+  port: 8108
+
+mis:
+  kb:
+    engine:
+      # 与 deploy/ragflow/docker-compose.yml 同网络时用服务名 ragflow:80
+      type: ${MIS_KB_ENGINE_TYPE:ragflow}
+      base-url: ${MIS_KB_ENGINE_BASE_URL:http://ragflow:80}
+      api-key: ${MIS_KB_ENGINE_API_KEY:}

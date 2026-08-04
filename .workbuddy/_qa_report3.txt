@@ -1,0 +1,134 @@
+Wave A 第一轮静态审查报告（3/3）—— 严过关
+
+===== 任务4：权限落地真实有效性 —— 不通过【阻塞发布 P0-B，比工程师自报的更严重】 =====
+【静态代码阅读 + grep，未起服务、未真的 curl。以下「会发生什么」是逐行读拦截器代码推断出的结论，不是实测。】
+
+■ 结论一：KbController.java:355-356 的注释与事实不符，确认无疑。
+
+注释原文声称「V17 已登记 POST /api/v1/kb/hit-test → kb:hittest:run」。事实：
+  - `grep -ln "INSERT INTO sys_api"` 在整个 migration 目录只命中 V2、V4、V5、V6 四个文件，V12-V17 一个都没有
+  - `grep -n "/api/v1/kb" *.sql` → **零命中**。整个 KB 模块没有任何一个 API 登记进 sys_api
+  - V17 自己只碰了两张表：sys_menu 和 sys_role_permission，通篇没有 sys_api
+所以这条注释是纯粹的事实错误。而且是最坏的一类错误：它让后来的维护者相信 API 层已有防护，从而不会去加代码级判权。定时炸弹的说法不夸张。
+
+■ 结论二：拦截器不是「拦不住」，是「连看都不看就放行」。
+
+ApiPermissionInterceptor.java:52-58：
+    Optional<Match> match = registry.match(request.getMethod(), path);
+    if (match.isEmpty()) {
+        if (properties.isDenyUnmapped()) {
+            throw new BusinessException(ResultCode.FORBIDDEN, "接口未授权映射");
+        }
+        return true;          // ← 未映射直接放行
+    }
+关键就在 denyUnmapped 的取值。我查了：
+  - ApiPermissionProperties.java:12 → `private boolean denyUnmapped = false;`（默认 false）
+  - 全仓 `grep -rn "deny-unmapped|denyUnmapped|api-permission"` 扫所有 *.yml / *.yaml / *.properties（含 deploy/nacos-config 下 test / integration / prod 三套）→ **零命中，没有任何环境覆盖这个默认值**
+即 denyUnmapped 在所有环境都是 false → hit-test 请求走到第 57 行 `return true` → 判权逻辑（第 76-87 行）根本没被执行。
+
+还有一处比工程师描述的更糟：第 57 行的 return 发生在第 66-70 行 LoginUser 判空**之前**。也就是说对未映射路径，这个拦截器连「是否已登录」都不校验。登录态实际由上游网关 + GatewayContextFilter 头透传承担（GatewayContextFilter 只是 `LoginUserHeaderResolver.resolve` 后写入上下文，resolve 不到就什么都不做，本身不拒绝请求）。
+
+■ 结论三：兜底 ACL 到底兜住了什么、漏了什么。
+
+KbHitTestService.java:96-99 调 visibilityService.hasPermission(userId, libraryId, READ)。
+KbVisibilityService.java:152-167 的实现：
+    152  public boolean hasPermission(Long userId, Long libraryId, String action) {
+    153      if (userId == null || libraryId == null || action == null) {
+    154          return false;                       ← 兜住了：无身份头的匿名请求
+    155      }
+    156      if (AclAction.READ.code().equals(action)) {
+    157          KbLibrary lib = libraryRepository.findById(libraryId).orElse(null);
+    159          if (lib != null
+    160                  && Secrecy.isPublic(lib.getSecrecy())
+    161                  && lib.getStatus() != null
+    162                  && LibraryStatus.isEnabled(lib.getStatus())) {
+    163              return true;                    ← 公开库无条件放行，不查任何 ACL 授权
+    164          }
+    165      }
+    166      return resolveGrantedLibraryIds(userId, action).contains(libraryId);
+    167  }
+
+兜住了：
+  - 匿名/无 X-User-Id 的请求（userId 为 null → false）。QaInternalController.currentUserId():128-129 在无 LoginUser 时返回 null，链路一致。这是唯一真正生效的兜底。
+  - 非公开密级库（内部/秘密/机密）：仍需显式 ACL 授权，第 166 行查得到才放行。这层是实的。
+
+没兜住：
+  - **第 156-164 行对 public 密级 + 启用状态的库无条件返回 true，完全跳过 ACL 表。**
+
+■ 你问的那个具体问题：无 kb:hittest:run 但有某库读权限的用户，直接 curl POST /api/v1/kb/hit-test 会怎样？
+
+答：**完全跑通，返回 200 + chunk 原文。** 拦截器放行（未映射），ACL 查到显式授权也放行，一路无阻。
+
+而且实际暴露面比你设的这个前提还大一圈：**连「某个库的读权限」都不需要。任何能通过网关拿到登录态的用户 —— 哪怕在 kb_acl 表里一条授权都没有 —— 都能对任意「public 密级且启用」的知识库跑命中测试，直接读出 chunk 原文。** 因为第 156-164 行对公开库根本不看授权表。
+
+这与设计文档验收项 A4（第 1360 行）「无 kb:hittest:run 的用户看不到菜单、直接访问被拦、直接调 API 返 403」直接冲突。静态分析结论是返 200，A4 不成立。
+
+顺带一个实现与设计的偏差：设计文档第 44 行的架构图画的是
+    KbController ── @Permission("kb:hittest:run") ──▶ KbFacadeService
+但实际代码 KbController.java:367-368 只有 @PostMapping 和 @OperLog，没有 @Permission。我进一步查了全仓：`find -name "Permission.java" / "RequiresPermission*.java"` 无结果，`grep "@Permission("` 无结果 —— **这个注解机制在仓库里根本不存在**。所以设计图画的是一个不存在的东西，工程师也没法照着实现。这个偏差建议同步反馈给架构师（按纪律我不直接联系他，走你中转）。
+
+■ 风险定级：阻塞发布。
+三条理由：
+  1. 它是设计文档白纸黑字的 L0 级验收项 A4，静态判定不成立，不是「建议关注」级别的问题；
+  2. 命中测试是设计文档自己定性为「能读跨密级知识库 chunk 原文」的敏感功能（KbController.java:358-360 的注释就是这么写的），越权面是内容泄露而非功能滥用；
+  3. 修复成本极低，没有留到 Wave B 的理由。
+
+■ 修复建议（本轮修）：
+  1.【必做，5 分钟】KbController.hitTest 加显式代码级判权。因为仓库没有 @Permission 注解机制，只能在方法体里从 SecurityContextHolder 取 LoginUser.getPermissions() 判断是否含 "kb:hittest:run"，不含则抛 BusinessException(ResultCode.FORBIDDEN)。这是当前架构下唯一能真正兜住的位置。
+  2.【必做，2 分钟】把 355-356 行注释改成陈述事实 —— 说明 KB 未登记 sys_api、拦截器不生效、判权由本方法内联完成。宁可注释难看，也不能留假信息。
+  3.【本轮修】V17 的问题见报告 2/3，两个 P0 是同一条链上的，建议一起返工一次交付。
+  4.【留 Wave B】补 V18 把 KB 全量 API 登记进 sys_api；并单独评估把 denyUnmapped 打开（这是全局开关，影响面超出 KB，必须先盘清所有未映射接口，不能在 Wave A 动）。
+  5.【留 Wave B，需产品确认】KbVisibilityService:156-164 对 public 库跳过 ACL 是全局口径，问答链路也在用，不是 Wave A 引入的。要不要收紧得产品拍板，本轮只登记不改。
+
+===== 任务5：Rerank 三道防线 —— 通过 =====
+【静态代码阅读，未运行】
+
+第一道（保存期强制 false + WARN）：落地确认。
+  RagSettingsService.java:96-107 save() → 第 99 行 `enforceRerankAvailability(validate(settings).withDefaults(), libraryId)`
+  实现在 195-212 行：
+    196  if (!Boolean.TRUE.equals(settings.rerank()) || engineProperties.hasRerankModel()) return settings;
+    199  log.warn("未配置全局重排模型（mis.kb.engine.rerank-model-id 为空），已强制关闭该库的 rerank 开关 libraryId={}", libraryId);
+    204  → new RagSettings(..., Boolean.FALSE, ...)   // 第 3 个位置就是 rerank
+  且第 101 行 `lib.setRagSettingsJson(KbJson.writeSettings(effective))` 落库的是收敛后的 effective，不是原始入参。顺序对。
+  hasRerankModel() 定义在 RagflowProperties.java:75-77 → `rerankModelId != null && !rerankModelId.isBlank()`。语义正确。
+
+第三道（前端置灰）：落地确认。
+  数据源 RagflowAdapter.capabilities():166-172 → `boolean rerankAvailable = props != null && props.hasRerankModel();` 采「当前配置下实际可用」口径而非「理论支持」，这点做得对。
+  前端三处消费，全部 disabled 绑定：
+    - features/kb/library/kb-library-page.tsx:106 定义 + :458 disabled={!rerankSupported}
+    - features/kb/library/kb-library-detail-page.tsx:146 定义 + :394 disabled={!rerankSupported}
+    - features/kb/hittest/kb-hit-test-page.tsx:120 定义 + :268 disabled={!rerankSupported}
+  三处都还带了未配模型时的文案提示（如 detail-page:399 的分支）。
+
+顺带复核了第二道与 L0-3（你说已核过，我做了独立确认，结论一致）：
+  - 第二道：RetrieveQueryResolver.java:171-174，未配模型则 rerank=false 且 degradedReasons.add("平台未配置全局重排模型（mis.kb.engine.rerank-model-id），重排已自动关闭")。另有 167-168 行按引擎能力位再降级一次。
+  - L0-3：RagflowClient.java:250-252 `if (query.shouldSendRerankId()) { body.put("rerank_id", ...); }`，谓词定义在 RetrieveQuery.java:116-117 = `effectiveRerank() && rerankModelId != null && !rerankModelId.isBlank()`。键确实完全缺席，不是空串不是 null。第 255 行 `body.getOrDefault("rerank_id", "<未下发>")` 的日志断言途径也在。
+
+【一处低风险瑕疵，可延后】
+三个前端组件都写的是 `const rerankSupported = capabilities?.rerankSupported !== false;`。而 types.ts:389 声明 `rerankSupported: boolean | null` —— null 是合法返回值。于是当 capabilities 接口未返回、加载中、或返回 null 时，推导结果是 **true（开关可用）**，属 fail-open。
+后果被第一道防线兜住（保存时强制 false），不会造成引擎 400，但 UX 不一致：用户勾上保存后开关自己弹回去，没有任何解释。
+建议改为 `=== true`，三处同一写法一起改。定级：可延后，不阻塞。
+
+===== 问题清单（按严重度排序） =====
+【阻塞发布】
+  P0-A  V17 违反 uk_menu_app_permission 唯一索引，Flyway 首次执行即失败并阻塞应用启动。V17__kb_hittest_perms.sql:26 与 :41，约束在 V1__init_schema.sql:269。
+  P0-B  POST /api/v1/kb/hit-test 无任何 API 层判权，任意登录用户可对任意 public 启用库读取 chunk 原文；设计文档验收项 A4 不成立。KbController.java:367-371 缺判权、ApiPermissionInterceptor.java:52-58 + ApiPermissionProperties.java:12 fail-open、KbVisibilityService.java:156-164 公开库跳过 ACL。
+【应修】
+  P1-A  KbController.java:355-356 注释与事实不符（声称 V17 已登记 sys_api，实际 KB 零登记）。随 P0-B 一并改。
+  P1-B  设计文档第 44 行标注的 @Permission 注解在仓库中不存在，设计与实现口径脱节，需架构师确认判权落点。
+【可延后】
+  P2-A  前端 rerankSupported 在 capabilities 为 null/未加载时 fail-open，建议 `!== false` 改 `=== true`（三处）。
+  P2-B  KB 全量 API 未登记 sys_api（Wave B，出 V18）。
+  P2-C  denyUnmapped 全局默认 false 且无环境覆盖，属平台级安全默认值问题，影响面超出 KB，需专项评估。
+  P2-D  KbVisibilityService 对 public 库跳过 ACL 的口径需产品确认（非 Wave A 引入）。
+  P2-E  存量前端技术债实为 11 项 eslint error（arch/no-cross-feature），非 13 项类型错误，账目口径待修正。
+
+===== 第二轮建议重点 =====
+1. 【最高优先】V17 必须真跑一次，不能只做静态审查。起一个空库执行 Flyway migrate，确认 V17 能过；再手工重跑一次验证幂等。这是唯一能证伪/证实 P0-A 的方式，也是本轮我没条件做的部分。
+2. 回归 P0-B：起 BFF，用一个不含 kb:hittest:run 的账号真的 curl `POST /api/v1/kb/hit-test`，看返回 200 还是 403。我这轮给的是静态推断，需要实测坐实。同时验设计文档 C5-5（越权调用仍应落 sys_oper_log 一行、responseCode=1）。
+3. 全量 `mvn test`（工程师返工完成后）。重点盯 RetrieveQueryResolverTest —— 他这轮动了 361/370 两处断言，要确认改的是断言错误而不是把测试改成迁就实现。这两行我按纪律没看，第二轮我会重点比对断言与设计文档 §7.2 五步合并算法的口径是否一致。
+4. OperLog / OperLogAspect 三个文件改动的回归：审计链路是 P0-B 唯一的事后追溯手段，如果判权补不上，审计就更不能有洞。建议专门验一次失败路径留痕。
+5. 前端 typecheck 复跑（工程师若动了前端）。本轮 exit 0，作为基线。
+6. D1 断点本身的端到端验证：改库级 RAG 设置（检索方式改 keyword、权重 0.6）后，确认 KbRetrieveService 经 RetrieveQueryResolver 真的把参数带到引擎请求体。这是 Wave A 的立项理由，静态看代码是通的，但必须端到端跑一次才算数。
+
+任务 3（本轮审查）已在任务系统标记完成。以上两个 P0 建议合并成一次返工交给工程师，不要分两次。

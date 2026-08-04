@@ -1,0 +1,115 @@
+%% ===== 4.1 F-01 流式问答（完整 SSE 链路） =====
+sequenceDiagram
+    actor U as 业务用户
+    participant FE as kb-qa-page
+    participant SSE as aiFetchEventSource
+    participant BFF as AiProxyController(BFF)
+    participant AP as AiPlatformClient(BFF)
+    participant MC as mis_capability(ai-platform)
+    participant PL as KbQaPipeline(mis-rag)
+    participant KB as mis-kb(内部API)
+
+    U->>FE: 输入问题并发送
+    FE->>SSE: POST /api/v1/ai/rag {question, libraryIds, sessionId?}
+    SSE->>BFF: 流式请求
+    BFF->>AP: chatStream(POST /agents/{id}/chat/stream)
+    AP->>MC: SSE 转发
+    MC->>PL: run_stream(question, ctx)
+    loop yield tokens
+        PL-->>MC: QaDelta(text)
+        MC-->>AP: SSE event=delta
+        AP-->>BFF: SSE event=delta
+        BFF-->>SSE: SSE event=delta
+        SSE-->>FE: onDelta(append)
+    end
+    PL->>KB: _persist(session, message, citations)
+    KB-->>PL: {sessionId, messageId, citations}
+    PL-->>MC: SSE event=done {sessionId, citations}
+    MC-->>BFF: SSE event=done
+    BFF-->>SSE: SSE event=done
+    SSE-->>FE: onDone(渲染引用 + 复制/重新生成/报告按钮)
+
+%% ===== 4.2 F-10 -> A-02c 报告问题 -> 工单关闭 =====
+sequenceDiagram
+    actor U as 业务用户
+    actor O as 运营管理员
+    participant FE as kb-qa-page / ticket-detail
+    participant BFF as KbController(BFF)
+    participant KB as KbQaTicketService(mis-kb)
+
+    U->>FE: 点击「报告」->填写内容
+    FE->>BFF: POST /api/v1/kb/operations/qa/tickets {sessionId, messageId, content, type}
+    BFF->>KB: create -> KbQaTicket(status=OPEN)
+    KB-->>BFF: KbQaTicket
+    BFF-->>FE: 提示「已提交」
+    O->>FE: 打开工单列表 -> 选工单
+    FE->>BFF: GET /api/v1/kb/operations/qa/tickets?status=OPEN
+    BFF->>KB: list
+    KB-->>BFF: Page<KbQaTicket>
+    O->>FE: 查看并填写处理意见 -> 关闭
+    FE->>BFF: PATCH /api/v1/kb/operations/qa/tickets/{id} {note, relAction, status:CLOSED, processorId}
+    BFF->>KB: close -> 更新 note/timeLine/relAction/processorId/updatedAt
+    KB-->>BFF: KbQaTicket(CLOSED)
+    BFF-->>FE: 成功
+
+%% ===== 4.3 L-06 知识库详情 三 Tab 加载 =====
+sequenceDiagram
+    actor U as 知识管理员
+    participant FE as kb-library-detail-page
+    participant BFF as KbController(BFF)
+    participant KB as mis-kb
+
+    U->>FE: 点击库 -> /kb/libraries/:id
+    FE->>BFF: GET /api/v1/kb/libraries/{id}/detail
+    BFF->>KB: 聚合 meta+docCount+aclSummary+ragSettings
+    KB-->>BFF: LibraryDetailVO
+    BFF-->>FE: LibraryDetailVO
+    FE->>FE: 默认渲染「概览」Tab
+    U->>FE: 切到「文档」Tab
+    FE->>BFF: GET /api/v1/kb/libraries/{id}/documents
+    BFF->>KB: listDocuments
+    KB-->>FE: 文档列表
+    U->>FE: 切到「权限」Tab
+    FE->>BFF: GET /api/v1/kb/libraries/{id}/acls
+    BFF->>KB: listAcls
+    KB-->>FE: ACL 列表
+    FE->>FE: 渲染 kb-subject-selector 供新增授权(I-03)
+
+%% ===== 4.4 L-08 RAG 设置保存 -> 引擎同步（含 X-03 修复） =====
+sequenceDiagram
+    actor U as 知识管理员
+    participant FE as kb-library-detail-page(RAG Tab)
+    participant BFF as KbController(BFF)
+    participant SVC as RagSettingsService(mis-kb)
+    participant PORT as KnowledgeEnginePort
+    participant RF as RagflowAdapter->RagflowClient
+    participant ENG as RAGFlow
+
+    U->>FE: 编辑 topK/阈值/retrievalMethod/chunkMethod/chunkTokenNum/separator/emptyResultStrategy -> 保存
+    FE->>BFF: PUT /api/v1/kb/libraries/{id}/engine/settings {RagSettings}
+    BFF->>SVC: save(libraryId, settings)
+    SVC->>PORT: updateDatasetSettings(settings)
+    PORT->>RF: updateDatasetSettings
+    Note over RF: 修复 X-03：retrievalMethod -> "retrieval_method" 字段（非 embedding_model）；新增 chunk_method / parser_config{separator,chunkTokenNum}
+    RF->>ENG: PATCH /api/v1/datasets/{id}（含正确字段）
+    ENG-->>RF: 200（触发后台重解析）
+    RF-->>SVC: ok
+    SVC->>SVC: 持久化 RagSettings（+4 字段）
+    SVC-->>BFF: RagSettings
+    BFF-->>FE: 成功
+    FE->>FE: 若 chunkMethod 变化 -> 显示「解析中」badge（轮询文档状态）
+
+%% ===== 4.5 A-02e 运营问答记录导出（CSV + 脱敏） =====
+sequenceDiagram
+    actor O as 运营/知识管理员
+    participant FE as qa-list-page / dashboard
+    participant BFF as KbController+KbExportService(BFF)
+    participant KB as mis-kb(内部API)
+
+    O->>FE: 选择筛选 + 是否含身份 -> 点「导出」
+    FE->>BFF: GET /api/v1/kb/operations/qa/export?from&to&libraryId&hasFeedback&withIdentity=false
+    BFF->>KB: GET /internal/v1/kb/operations/qa/export(同参)
+    KB-->>BFF: List<ExportRow>{sessionId,question,answer,feedback,userId}
+    BFF->>BFF: KbExportService 拼 CSV（withIdentity=false 时 userId 脱敏/哈希）
+    BFF-->>FE: text/csv 文件流
+    FE->>FE: 触发浏览器下载

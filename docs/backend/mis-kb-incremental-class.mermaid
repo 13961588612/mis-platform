@@ -1,0 +1,196 @@
+classDiagram
+    %% ===== 实体（mis-kb）=====
+    class KbQaTicket {
+        +Long id
+        +Long sessionId
+        +String type
+        +String status
+        +String content
+        +Long handlerId
+        +LocalDateTime createdAt
+        +String note
+        +String timeLine
+        +String relAction
+        +Long processorId
+        +LocalDateTime updatedAt
+        +create(sessionId, content, type) Ticket
+        +close(note, processorId, relAction) void
+    }
+    class KbQaCitation {
+        +Long id
+        +Long messageId
+        +Long libraryId
+        +Long documentId
+        +String chunkText
+        +Float score
+        +Integer offset
+        +Integer page
+        +String source
+    }
+    class KbAcl {
+        +Long id
+        +Long libraryId
+        +String subjectType
+        +Long subjectId
+        +String action
+    }
+    class KbLibrary {
+        +Long id
+        +String name
+        +String secrecy
+        +Integer status
+    }
+
+    %% ===== 模型/VO =====
+    class RagSettings {
+        +Integer topK
+        +Float scoreThreshold
+        +Boolean rerank
+        +String embeddingModel
+        +String retrievalMethod
+        +String chunkMethod
+        +Integer chunkTokenNum
+        +String separator
+        +String emptyResultStrategy
+    }
+    class ChunkHit {
+        +Long libraryId
+        +Long documentId
+        +String chunkText
+        +Float score
+        +Integer offset
+        +Integer page
+    }
+    class SessionDetailVO {
+        +String sessionId
+        +String question
+        +String answer
+        +List~Citation~ citations
+        +Visibility visibility
+        +RecallParams recallParams
+    }
+    class RecallParams {
+        +Integer topK
+        +Float scoreThreshold
+        +String embeddingModel
+        +String retrievalMethod
+    }
+    class Visibility {
+        +String secrecy
+        +List~AclSummary~ acls
+    }
+    class AclSummary {
+        +String subjectType
+        +Long subjectId
+        +String subjectName
+        +String action
+    }
+
+    %% ===== 枚举 =====
+    class SubjectType {
+        <<enum>>
+        USER
+        ROLE
+        DEPT
+    }
+    class AclAction {
+        <<enum>>
+        READ
+        MANAGE
+        ACL
+    }
+    class EmptyResultStrategy {
+        <<enum>>
+        SUGGEST
+        EMPTY
+        TRANSFER
+    }
+
+    %% ===== 服务/端口 =====
+    class KbQaService {
+        +getSessionDetail(userId) SessionDetailVO
+        +submitFeedback(...) Result
+    }
+    class KbQaTicketService {
+        +create(CreateTicketCmd) KbQaTicket
+        +close(ticketId, note, processorId, relAction) KbQaTicket
+        +list(filter) List~KbQaTicket~
+    }
+    class RagSettingsService {
+        +get(libraryId) RagSettings
+        +save(libraryId, RagSettings) RagSettings
+    }
+    class KbVisibilityService {
+        +resolveVisibleLibraryIds(userId, tenantId) List~Long~
+    }
+    class KbSubjectClient {
+        +fetchUserRoleIds(userId) List~Long~
+        +fetchUserDeptId(userId) Long
+    }
+    class KnowledgeEnginePort {
+        <<interface>>
+        +updateDatasetSettings(settings) void
+        +query(question, ctx) List~ChunkHit~
+    }
+    class RagflowAdapter {
+        +updateDatasetSettings(settings) void
+    }
+    class NoopAdapter
+    class MockAdapter
+
+    %% ===== BFF =====
+    class AiProxyController {
+        +rag(SseRequest) Flux~ServerSentEvent~
+    }
+    class KbController {
+        +libraryDetail(id) LibraryDetailVO
+        +qaSessions(filter) Page
+        +qaSessionDetail(id) SessionDetailVO
+        +createTicket(cmd) Ticket
+        +closeTicket(id, cmd) Ticket
+        +stats() DashboardVO
+        +export(filter) CSV
+        +searchSubjects(type, q) List
+    }
+    class SubjectProxyService {
+        +searchUsers(q) List~IamUserVO~
+        +searchRoles() List~IamRoleVO~
+        +deptTree(orgId) List~DeptVO~
+    }
+    class IamWebClient {
+        +pageUsers(...) PageResult~IamUserVO~
+        +listEnabledRoles(...) List~IamRoleVO~
+    }
+    class OrgWebClient {
+        +deptTree(orgId) List~DeptVO~
+        +orgNames(ids) Map
+    }
+
+    %% ===== Python(mis-rag) =====
+    class KbQaPipeline {
+        +run_stream(question, ctx) *QaDelta
+        -_persist(session, message, citations) void
+    }
+    class QaDelta {
+        +String text
+        +String event
+    }
+
+    %% ===== 关系 =====
+    KbQaTicket --> KbQaSession : sessionId
+    KbQaCitation --> KbQaMessage : messageId
+    KbAcl ..> SubjectType : subjectType
+    KbAcl ..> AclAction : action
+    RagSettingsService --> KnowledgeEnginePort
+    RagflowAdapter ..|> KnowledgeEnginePort
+    NoopAdapter ..|> KnowledgeEnginePort
+    MockAdapter ..|> KnowledgeEnginePort
+    RagflowAdapter ..> RagflowClient : HTTP(RAGFlow)
+    KbVisibilityService --> KbSubjectClient
+    KbVisibilityService --> KbAcl
+    KbQaService --> KbQaCitation
+    KbController --> SubjectProxyService
+    SubjectProxyService --> IamWebClient
+    SubjectProxyService --> OrgWebClient
+    AiProxyController ..> KbQaPipeline : SSE via ai-platform
+    KbQaPipeline ..> KbWebClient : _persist to mis-kb

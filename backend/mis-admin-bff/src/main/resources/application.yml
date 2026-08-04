@@ -37,6 +37,10 @@ mis:
     auth-discovery-enabled: false
     auth-service-id: mis-auth
     auth-base-url: http://localhost:8101
+    kb-discovery-enabled: false
+    kb-service-id: mis-kb
+    kb-base-url: http://localhost:8108
+    # 文档上传走 multipart 透传，比普通聚合慢，单独放宽超时
     aggregate-timeout-ms: 3000
     default-password: Mis@123456
   api-permission:

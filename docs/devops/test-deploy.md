@@ -25,6 +25,7 @@ flowchart LR
 | Redis | 缓存、黑名单 |
 | Nacos | 配置中心 + 服务发现（命名空间 `test`） |
 | 微服务镜像 | 仅含 JAR，`MIS_REMOTE=true` 启动 |
+| **RAGFlow 引擎** | Docker Compose，脚本在 [`deploy/ragflow/`](../../deploy/ragflow/)；与业务镜像分离 |
 
 ## 2. 前置条件
 
@@ -32,6 +33,22 @@ flowchart LR
 - [ ] Nacos 使用 **PostgreSQL 外置存储** + 镜像 `mis-nacos:2.3.2-jdk17`（见 `deploy/docker-compose.nacos-pg.yml`、`deploy/nacos/README.md`）
 - [ ] 业务库已执行 Flyway 迁移（`mis-migrator`）
 - [ ] JWT 密钥已生成，通过 Secret 或卷挂载到容器
+- [ ] **（知识库迭代）** 测试机已按 [`deploy/ragflow/README.md`](../../deploy/ragflow/README.md) 拉起 RAGFlow，或确认资源与脚本可用
+
+## 2.1 RAGFlow（知识库引擎）
+
+> 设计见 [knowledge-base.md](../backend/knowledge-base.md) / [ADR-018](../adr/ADR-018-knowledge-base-mis-kb.md)。  
+> **开发硬要求：** 做 `mis-kb` / Adapter 时须同步维护 `deploy/ragflow`，测试环境用同一套脚本，禁止仅本机手工 `docker run`。
+
+```powershell
+cd deploy/ragflow
+copy .env.example .env
+# 钉死 RAGFLOW_IMAGE 后：
+docker compose --env-file .env --profile full up -d
+# 或与主栈叠加（见 deploy/ragflow/README.md）
+```
+
+验收：运维可打开 RAGFlow Web（内网）；`mis-kb` 配置 base-url + API Key 后健康检查与建库 PoC 通过；API Key 不进 Git、不下发浏览器。
 
 ## 3. 配置管理
 

@@ -3,9 +3,9 @@
 # init-qdrant.sh — Qdrant Collection Initialization Script
 # =============================================================================
 # Creates three Qdrant collections required by the AI Platform:
-#   1. skills_index          — Skill semantic search (768-dim, bge-small-zh-v1.5)
-#   2. agent_router_index    — AgentRouter semantic routing (768-dim)
-#   3. agent_memory_index    — Agent dynamic memory retrieval (768-dim)
+#   1. skills_index          — Skill semantic search (512-dim, bge-small-zh-v1.5)
+#   2. agent_router_index    — AgentRouter semantic routing (512-dim)
+#   3. agent_memory_index    — Agent dynamic memory retrieval (512-dim)
 #
 # All collections use cosine distance (normalized embeddings from bge-small-zh)
 # and HNSW index for fast approximate nearest neighbor search.
@@ -25,7 +25,7 @@
 set -euo pipefail
 
 QDRANT_URL="${1:-http://localhost:6333}"
-VECTOR_SIZE=768
+VECTOR_SIZE=512
 DISTANCE="Cosine"
 
 # Collections to create

@@ -23,9 +23,19 @@ public class GlobalExceptionHandler {
 
   private static final Logger log = LoggerFactory.getLogger(GlobalExceptionHandler.class);
 
+  /**
+   * 业务异常 → HTTP 200 + {@code body.code}（Phase 1 约定）。
+   *
+   * <p>{@link BusinessException#getData()} 非空时一并写入响应体的 {@code data} 字段。
+   * 这条通道是「错误也可以带结构化明细」的唯一出口——例如同义词词条冲突（40927）要把
+   * {@code {term, ownerGroupId, ownerCanonicalTerm}} 交给前端拼「指名道姓」的提示。
+   * 未携带明细时 {@code data} 保持 {@code null}，与改造前的响应体完全一致。
+   */
   @ExceptionHandler(BusinessException.class)
-  public ResponseEntity<Result<Void>> handleBusinessException(BusinessException ex) {
-    return ResponseEntity.ok(withTrace(Result.fail(ex.getCode(), ex.getMessage())));
+  public ResponseEntity<Result<Object>> handleBusinessException(BusinessException ex) {
+    Result<Object> body = Result.fail(ex.getCode(), ex.getMessage());
+    body.setData(ex.getData());
+    return ResponseEntity.ok(withTrace(body));
   }
 
   @ExceptionHandler(MethodArgumentNotValidException.class)

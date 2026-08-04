@@ -1,8 +1,10 @@
 """
 VectorIndexer — 构建和维护 Skills 的 Qdrant 向量索引。
 
-使用本地 Embedding 服务（bge-small-zh-v1.5）生成 512 维
-向量，并将其 upsert 到 ``skills_index`` Qdrant 集合中。
+使用本地 Embedding 服务（bge-small-zh-v1.5）生成向量，
+并 upsert 到 ``skills_index`` Qdrant 集合中。
+
+Embedding 不可用时快速跳过（探测一次），避免每个 Skill 卡 30s 拖垮启动。
 """
 
 from __future__ import annotations
@@ -47,6 +49,12 @@ class VectorIndexer:
         self._collection_name = self._settings.QDRANT_COLLECTION_SKILLS
         self._vector_size = self._settings.EMBEDDING_DIMENSION
         self._collection_ready = False
+        # None=未探测；True/False=探测结果（失败后本进程内不再重试，避免启动串行超时）
+        self._embedding_ok: bool | None = None
+
+    def _timeout(self) -> httpx.Timeout:
+        sec = float(self._settings.EMBEDDING_TIMEOUT_SECONDS)
+        return httpx.Timeout(sec, connect=min(5.0, sec))
 
     async def ensure_collection(self) -> None:
         """如果 Qdrant 集合不存在则创建。"""
@@ -83,10 +91,55 @@ class VectorIndexer:
             )
             raise
 
+    async def _probe_embedding(self) -> bool:
+        """探测 Embedding 服务是否可用（只探测一次）。"""
+        if self._embedding_ok is not None:
+            return self._embedding_ok
+        if not self._settings.SKILL_VECTOR_INDEX_ENABLED:
+            self._embedding_ok = False
+            logger.warning(
+                "Skill vector indexing disabled (SKILL_VECTOR_INDEX_ENABLED=false); "
+                "skills still register for tool calling"
+            )
+            return False
+
+        probe_timeout = httpx.Timeout(3.0, connect=2.0)
+        url = f"{self._embedding_url.rstrip('/')}/health"
+        try:
+            async with httpx.AsyncClient(timeout=probe_timeout) as client:
+                resp = await client.get(url)
+                if resp.status_code < 500:
+                    self._embedding_ok = True
+                    return True
+        except Exception:
+            pass
+
+        # /health 没有时，用极短文本试 /embed
+        try:
+            async with httpx.AsyncClient(timeout=probe_timeout) as client:
+                resp = await client.post(
+                    f"{self._embedding_url.rstrip('/')}/embed",
+                    json={"text": "ping"},
+                )
+                resp.raise_for_status()
+                self._embedding_ok = True
+                return True
+        except Exception as exc:
+            self._embedding_ok = False
+            logger.warning(
+                "Embedding service unavailable; skip skill vector indexing "
+                "(CRM tools still work). Fix EMBEDDING_SERVICE_URL or start embedding on :8001.",
+                url=self._embedding_url,
+                error=str(exc),
+            )
+            return False
+
     async def generate_embedding(self, text: str) -> list[float]:
         """调用本地 Embedding 服务为 *text* 生成向量。"""
-        url: str = f"{self._embedding_url}/embed"
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        if not await self._probe_embedding():
+            raise RuntimeError(f"Embedding unavailable: {self._embedding_url}")
+        url: str = f"{self._embedding_url.rstrip('/')}/embed"
+        async with httpx.AsyncClient(timeout=self._timeout()) as client:
             resp: Any = await client.post(url, json={"text": text})
             resp.raise_for_status()
             data: Any = resp.json()
@@ -94,14 +147,20 @@ class VectorIndexer:
 
     async def index_skill(self, skill: Skill) -> None:
         """为 *skill* 生成 embedding 并 upsert 到 Qdrant。"""
+        if not await self._probe_embedding():
+            return
+
         await self.ensure_collection()
         text: str = skill.index_text()
         try:
             vector: list[float] = await self.generate_embedding(text)
-        except Exception:
-            logger.exception(
-                "Failed to generate embedding for skill",
+        except Exception as exc:
+            # 运行中 embedding 又挂了：标记不可用，避免后续每个 skill 再卡超时
+            self._embedding_ok = False
+            logger.warning(
+                "Failed to generate embedding for skill; further indexing skipped",
                 skill_id=skill.skill_id,
+                error=str(exc),
             )
             return
 
@@ -139,12 +198,19 @@ class VectorIndexer:
 
         返回成功建立索引的 Skill 数量。
         """
+        # 强制重新探测
+        self._embedding_ok = None
+        if not await self._probe_embedding():
+            return 0
         await self.ensure_collection()
         count: int = 0
         for skill in skills:
+            if not self._embedding_ok:
+                break
             try:
                 await self.index_skill(skill)
-                count += 1
+                if skill.embedding:
+                    count += 1
             except Exception:
                 logger.exception(
                     "Failed to reindex skill", skill_id=skill.skill_id
@@ -183,7 +249,7 @@ class VectorIndexer:
     ) -> list[dict]:
         """在 Qdrant 索引中搜索 *query_vector* 的最近邻。
 
-        返回包含 ``skill_id``、``score`` 和 ``payload`` 的字典列表。
+        返回包含 ``skill_id``、``score`` 与 ``payload`` 的字典列表。
         """
         await self.ensure_collection()
 

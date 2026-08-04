@@ -25,6 +25,10 @@ public class BffProperties {
     private String authServiceId = "mis-auth";
     private String authBaseUrl = "http://localhost:8101";
 
+    private boolean kbDiscoveryEnabled = false;
+    private String kbServiceId = "mis-kb";
+    private String kbBaseUrl = "http://localhost:8108";
+
     private long aggregateTimeoutMs = 3000;
     private String defaultPassword = "Mis@123456";
 
@@ -146,6 +150,30 @@ public class BffProperties {
 
     public void setAuthBaseUrl(String authBaseUrl) {
         this.authBaseUrl = authBaseUrl;
+    }
+
+    public boolean isKbDiscoveryEnabled() {
+        return kbDiscoveryEnabled;
+    }
+
+    public void setKbDiscoveryEnabled(boolean kbDiscoveryEnabled) {
+        this.kbDiscoveryEnabled = kbDiscoveryEnabled;
+    }
+
+    public String getKbServiceId() {
+        return kbServiceId;
+    }
+
+    public void setKbServiceId(String kbServiceId) {
+        this.kbServiceId = kbServiceId;
+    }
+
+    public String getKbBaseUrl() {
+        return kbBaseUrl;
+    }
+
+    public void setKbBaseUrl(String kbBaseUrl) {
+        this.kbBaseUrl = kbBaseUrl;
     }
 
     public long getAggregateTimeoutMs() {

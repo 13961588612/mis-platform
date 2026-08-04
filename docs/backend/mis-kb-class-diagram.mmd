@@ -1,0 +1,153 @@
+classDiagram
+    class KbCategory {
+        +Long id
+        +Long parentId
+        +String name
+        +Boolean enabled
+        +Integer sort
+        +String remark
+        +Instant createdAt
+        +Instant updatedAt
+    }
+    class KbLibrary {
+        +Long id
+        +Long categoryId
+        +String name
+        +String secrecy
+        +Integer status
+        +Long owner
+        +String engineType
+        +String engineLibraryRef
+        +String ragSettingsJson
+        +Instant createdAt
+        +Instant updatedAt
+    }
+    class KbDocument {
+        +Long id
+        +Long libraryId
+        +String title
+        +String engineDocumentRef
+        +Integer version
+        +String parseStatus
+        +Boolean enabled
+        +Long size
+        +String format
+        +Instant createdAt
+        +Instant updatedAt
+    }
+    class KbAcl {
+        +Long id
+        +Long libraryId
+        +String subjectType
+        +Long subjectId
+        +String action
+        +Instant createdAt
+        +Instant updatedAt
+    }
+    class KbQaSession {
+        +Long id
+        +Long userId
+        +Long appId
+        +Instant createdAt
+    }
+    class KbQaMessage {
+        +Long id
+        +Long sessionId
+        +String role
+        +String content
+        +Instant createdAt
+    }
+    class KbQaCitation {
+        +Long id
+        +Long messageId
+        +Long libraryId
+        +Long documentId
+        +String chunkText
+        +Double score
+        +Instant createdAt
+    }
+    class KbQaFeedback {
+        +Long id
+        +Long sessionId
+        +Integer accuracy
+        +Integer helpful
+        +Integer offtopic
+        +Integer citeError
+        +Boolean editableOnce
+        +Instant createdAt
+        +Instant updatedAt
+    }
+    class KbQaTicket {
+        +Long id
+        +Long sessionId
+        +String type
+        +String status
+        +String content
+        +Long handlerId
+        +Instant createdAt
+    }
+
+    KbCategory "1" *-- "0..*" KbLibrary : categoryId
+    KbLibrary "1" *-- "0..*" KbDocument : libraryId
+    KbLibrary "1" *-- "0..*" KbAcl : libraryId
+    KbQaSession "1" *-- "0..*" KbQaMessage : sessionId
+    KbQaMessage "1" *-- "0..*" KbQaCitation : messageId
+    KbQaSession "1" *-- "0..1" KbQaFeedback : sessionId
+    KbQaSession "1" *-- "0..*" KbQaTicket : sessionId
+    KbQaCitation --> KbLibrary : libraryId
+    KbQaCitation --> KbDocument : documentId
+
+    class KnowledgeEnginePort {
+        <<interface>>
+        +createLibrary(CreateLibraryCmd) EngineLibraryRef
+        +updateLibrarySettings(EngineLibraryRef, RagSettings)
+        +deleteLibrary(EngineLibraryRef)
+        +uploadDocument(EngineLibraryRef, file, meta) EngineDocumentRef
+        +replaceDocument(EngineLibraryRef, EngineDocumentRef, file)
+        +deleteDocument(EngineLibraryRef, EngineDocumentRef)
+        +setDocumentEnabled(EngineLibraryRef, EngineDocumentRef, Boolean)
+        +reparseDocument(EngineLibraryRef, EngineDocumentRef)
+        +retrieve(RetrieveQuery) List~ChunkHit~
+        +health() HealthStatus
+        +capabilities() EngineCapabilities
+    }
+    class RagflowAdapter {
+        +createLibrary(...)
+        +retrieve(RetrieveQuery) List~ChunkHit~
+    }
+    class NoopAdapter
+    class MockAdapter
+    class ChunkHit {
+        +Long libraryId
+        +Long documentId
+        +String chunkText
+        +Double score
+        +String docTitle
+    }
+    class RetrieveQuery {
+        +String question
+        +List~Long~ libraryIds
+        +Integer topK
+        +Double threshold
+    }
+    class EngineLibraryRef {
+        +String engineType
+        +String nativeId
+    }
+    class KbVisibilityService {
+        +resolveVisibleLibraryIds(Long userId, Long tenantId) List~Long~
+    }
+    class KbLibraryService
+    class KbDocumentService
+    class KbAclService
+    class KbQaService
+
+    KnowledgeEnginePort <|.. RagflowAdapter
+    KnowledgeEnginePort <|.. NoopAdapter
+    KnowledgeEnginePort <|.. MockAdapter
+    KbLibraryService ..> KnowledgeEnginePort : uses
+    KbDocumentService ..> KnowledgeEnginePort : uses
+    KbVisibilityService ..> KbAcl : reads
+    KbVisibilityService ..> KbLibrary : reads
+    KbQaService ..> KbQaSession : persists
+    RetrieveQuery ..> ChunkHit : produces

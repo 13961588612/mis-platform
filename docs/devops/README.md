@@ -32,6 +32,9 @@
 | **[正式环境部署](prod-deploy.md)** | 推送 prod 配置、密钥、发版与回滚 |
 | [配置管理策略](configuration.md) | Nacos 数据流、Data ID 约定、新服务接入 |
 | [CI/CD](ci-cd.md) | 流水线与质量门禁（规划） |
+| [知识库完整规划](../backend/knowledge-base-app-plan.md) | APP 功能清单、方案 B、mis-kb、RAGFlow Docker 交付 |
+| [知识库二期扩展](../backend/knowledge-base-phase2-plan.md) | Hybrid/Rerank/命中测试、同义词 Wave D、GraphRAG PoC（不上 Neo4j） |
+| [知识库设计摘要](../backend/knowledge-base.md) | 架构要点与部署硬要求 |
 
 ## 快速命令
 

@@ -8,7 +8,7 @@ import { Badge } from '@/components/ui/badge';
 import { useAI } from '../use-ai';
 import { useAiContext } from '../ai-context';
 import type { ChatMessage, ChatResponse } from '../types';
-import { MarkdownView } from './markdown-view';
+import { MarkdownView } from '@/components/common/markdown-view';
 
 interface AiCopilotProps {
   open: boolean;

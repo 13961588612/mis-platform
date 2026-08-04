@@ -65,6 +65,7 @@ inputSchema:
 
 - WorkBuddy / QwenPaw 中已配置 MCP 服务，**名称为 `mcp-api-suite`**（与下文的工具调用对应）。
 - 所有接口均通过该服务上的工具 **`callApi`** 调用：传入 **`apiName`**（字符串）与 **`params`**（对象）。
+- **`params` 必须是对象**，不要写成 JSON 字符串（错误示例：`"params": "{\"mobile\":\"...\"}"`）。
 - 进程内查询时不要传 **`serviceName`**，或传空/省略。
 - **会员域**接口的 **`params` 中不需要、也不要传 `datasourceId`**。
 

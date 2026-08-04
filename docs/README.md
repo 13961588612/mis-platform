@@ -24,6 +24,7 @@
 | 配置与 Nacos | [configuration](devops/configuration.md) |
 | 读代码从哪开始 | **[CODE-READING-GUIDE](CODE-READING-GUIDE.md)** |
 | 查各模块职责与内容 | **[modules-guide](project/modules-guide.md)** |
+| 知识库 / RAG 引擎 | **[完整规划](backend/knowledge-base-app-plan.md)** · [**二期扩展**](backend/knowledge-base-phase2-plan.md)（含同义词 Wave D） · [设计摘要](backend/knowledge-base.md) · [ADR-018](adr/ADR-018-knowledge-base-mis-kb.md) · [`deploy/ragflow`](../deploy/ragflow/) |
 | 配置 Cursor Agent 角色/规范 | [ai-assisted-dev](project/ai-assisted-dev.md) · [AGENTS.md](../AGENTS.md) |
 
 ---
@@ -103,6 +104,8 @@ docs/
 | mis-system | ✅ | 菜单 router/permissions、仪表盘 stats |
 | 前端 mis-admin-web | ✅ | 登录 + 门户九宫格 + 子系统壳；业务 CRUD 页迭代中 |
 | **AI 融合（MIS × ai-platform）** | ✅ | 阶段5 前端 MVP + 后端扩展 + 融合部署全闭环；详见 [AI 融合文档中心](ai-fusion/README.md) |
+| **Coordinator–Worker 调度基座** | ✅ | 需求/架构/ADR/规范齐套；目录 [ai-fusion/coordinator-worker/](ai-fusion/coordinator-worker/README.md) |
+| **智能体运营控制台** | ✅ | 需求/架构/ADR/规范齐套（O0）；目录 [ai-fusion/agent-ops-console/](ai-fusion/agent-ops-console/README.md) |
 
 ---
 

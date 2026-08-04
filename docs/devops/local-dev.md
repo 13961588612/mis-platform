@@ -26,6 +26,19 @@ copy .env.example .env
 
 本地开发 **不需要** 设置 `MIS_REMOTE`。
 
+### 2.3 知识库引擎 RAGFlow（可选，知识库迭代时必开）
+
+企业文档 RAG 引擎以 Docker 运行，脚本见 [`deploy/ragflow/`](../../deploy/ragflow/)。**开发 mis-kb 时须同步维护该目录，并保证测试环境同一套脚本可用**（[ADR-018](../adr/ADR-018-knowledge-base-mis-kb.md)）。
+
+```powershell
+cd deploy/ragflow
+copy .env.example .env
+# K0 完成完整 compose 后：
+docker compose --env-file .env --profile full up -d
+```
+
+说明：[knowledge-base.md](../backend/knowledge-base.md)。ai-platform 自带的 Qdrant 用于 Agent 记忆，与 RAGFlow 企业知识库职责不同。
+
 ### 2.2 JWT 密钥
 
 ```powershell

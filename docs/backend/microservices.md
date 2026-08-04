@@ -14,6 +14,7 @@
 | 系统 | mis-system | 8105 | 1 | 菜单/API/字典/参数/日志 |
 | 审计 | mis-audit | 8106 | 1 | 日志采集与查询 |
 | 通知 | mis-notify | 8107 | 1 | 骨架占位 |
+| 知识库 | mis-kb | 8108 | 规划中/P0 已落地 | 分类/库/文档/ACL/引擎适配/问答运营；[完整规划](knowledge-base-app-plan.md) · [二期扩展](knowledge-base-phase2-plan.md) · [ADR-018](../adr/ADR-018-knowledge-base-mis-kb.md) |
 
 > **Sprint 2 重构说明：** 取消 mis-user（8102）和 mis-rbac（8104），合并为 mis-iam（8102）；员工档案从 mis-user 迁入 mis-org。
 

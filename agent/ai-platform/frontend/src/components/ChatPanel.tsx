@@ -127,16 +127,17 @@ export function ChatPanel(): JSX.Element {
     }
   }, [input]);
 
-  const handlePickFiles = useCallback(
-    async (fileList: FileList | null): Promise<void> => {
-      if (!fileList || fileList.length === 0) {
+  /** 上传文件列表（选文件 / 粘贴截图 / 粘贴文件共用） */
+  const uploadFiles = useCallback(
+    async (files: File[]): Promise<void> => {
+      if (files.length === 0) {
         return;
       }
       setIsUploading(true);
       setError(null);
       try {
         const uploaded: ChatAttachment[] = [];
-        for (const file of Array.from(fileList)) {
+        for (const file of files) {
           const res = await apiUploadFile(file);
           uploaded.push({
             fileId: res.fileId,
@@ -157,6 +158,74 @@ export function ChatPanel(): JSX.Element {
       }
     },
     [setError],
+  );
+
+  const handlePickFiles = useCallback(
+    (fileList: FileList | null): void => {
+      void uploadFiles(fileList ? Array.from(fileList) : []);
+    },
+    [uploadFiles],
+  );
+
+  /** 粘贴截图 / 剪贴板文件 → 走附件上传（只绑在 textarea，避免冒泡重复） */
+  const handlePaste = useCallback(
+    (e: React.ClipboardEvent<HTMLTextAreaElement>): void => {
+      if (!agentId || isGenerating || isUploading) {
+        return;
+      }
+      const dt = e.clipboardData;
+      if (!dt) {
+        return;
+      }
+
+      // 优先用 items；部分浏览器 items/files 会各报同一张截图
+      const files: File[] = [];
+      const seen = new Set<string>();
+
+      const pushFile = (file: File | null) => {
+        if (!file || file.size <= 0) {
+          return;
+        }
+        // 截图用 size+type 去重（name/lastModified 不可靠）
+        const key = `${file.type}:${file.size}`;
+        if (seen.has(key)) {
+          return;
+        }
+        seen.add(key);
+        const blankName =
+          !file.name ||
+          file.name === "image.png" ||
+          file.name === "blob" ||
+          file.name === "image.jpg";
+        if (blankName && file.type.startsWith("image/")) {
+          const ext = file.type.split("/")[1]?.split("+")[0] || "png";
+          files.push(
+            new File([file], `screenshot-${Date.now()}.${ext}`, { type: file.type }),
+          );
+        } else {
+          files.push(file);
+        }
+      };
+
+      const items = Array.from(dt.items ?? []).filter((i) => i.kind === "file");
+      if (items.length > 0) {
+        for (const item of items) {
+          pushFile(item.getAsFile());
+        }
+      } else {
+        for (const file of Array.from(dt.files ?? [])) {
+          pushFile(file);
+        }
+      }
+
+      if (files.length === 0) {
+        return; // 纯文本粘贴交给 textarea 默认行为
+      }
+      e.preventDefault();
+      e.stopPropagation();
+      void uploadFiles(files);
+    },
+    [agentId, isGenerating, isUploading, uploadFiles],
   );
 
   // Handle send
@@ -302,7 +371,7 @@ export function ChatPanel(): JSX.Element {
         </div>
       )}
 
-      {/* Input Area */}
+      {/* Input Area：支持选文件、粘贴截图/剪贴板文件 */}
       <div className="border-t border-surface-light/50 p-4">
         {pendingFiles.length > 0 ? (
           <div className="mb-2 flex flex-wrap gap-2">
@@ -343,12 +412,12 @@ export function ChatPanel(): JSX.Element {
             multiple
             accept="image/*,.pdf,.txt,.csv,.json,.doc,.docx,.xls,.xlsx"
             onChange={(e) => {
-              void handlePickFiles(e.target.files);
+              handlePickFiles(e.target.files);
             }}
           />
           <button
             type="button"
-            title="添加图片或附件"
+            title="添加图片或附件（也可 Ctrl+V 粘贴截图）"
             disabled={!agentId || isGenerating || isUploading}
             onClick={() => fileInputRef.current?.click()}
             className={clsx(
@@ -363,9 +432,10 @@ export function ChatPanel(): JSX.Element {
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
+            onPaste={handlePaste}
             placeholder={
               agentId
-                ? "输入消息，可附带图片/文件，按 Enter 发送..."
+                ? "输入消息，可粘贴截图/文件，按 Enter 发送..."
                 : "请先选择一个 Agent"
             }
             disabled={!agentId || isGenerating}

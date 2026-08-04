@@ -13,7 +13,7 @@ import { useAI } from '../use-ai';
 import { useAiContext } from '../ai-context';
 import { desensitizeRecord } from '../lib/desensitize';
 import type { SummaryCitation, SummaryPoint, SummaryResponse } from '../types';
-import { MarkdownView } from './markdown-view';
+import { MarkdownView } from '@/components/common/markdown-view';
 
 interface SummaryRequestBody {
   records: Record<string, unknown>[];

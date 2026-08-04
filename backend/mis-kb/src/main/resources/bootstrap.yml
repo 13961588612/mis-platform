@@ -1,0 +1,32 @@
+spring:
+  application:
+    name: mis-kb
+  cloud:
+    nacos:
+      config:
+        enabled: ${MIS_REMOTE:false}
+        server-addr: ${NACOS_SERVER:localhost:8848}
+        namespace: ${NACOS_NAMESPACE:dev}
+        group: ${NACOS_CONFIG_GROUP:MIS_GROUP}
+        file-extension: yaml
+        shared-configs:
+          - data-id: mis-common
+            group: ${NACOS_CONFIG_GROUP:MIS_GROUP}
+            refresh: true
+        extension-configs:
+          - data-id: ${spring.application.name}
+            group: ${NACOS_CONFIG_GROUP:MIS_GROUP}
+            refresh: true
+      discovery:
+        enabled: ${MIS_REMOTE:false}
+        server-addr: ${NACOS_SERVER:localhost:8848}
+        namespace: ${NACOS_NAMESPACE:dev}
+
+# 引擎连接（S-04）：优先由 Nacos 的 mis.kb.engine.* 覆盖；本地/CI 默认 noop（无 RAGFlow 实例）。
+# 不建配置表；ragflow.api-key 仅服务端持有，禁止进 Git。
+mis:
+  kb:
+    engine:
+      type: ${MIS_KB_ENGINE_TYPE:noop}
+      base-url: ${MIS_KB_ENGINE_BASE_URL:}
+      api-key: ${MIS_KB_ENGINE_API_KEY:}

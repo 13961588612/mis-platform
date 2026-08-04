@@ -9,7 +9,7 @@ MemoryManager — Agent 记忆的中央编排器。
    - 批次 2：会话级记忆（按 ``session_id`` 严格隔离）
    结果合并并按 ``importance × similarity × recency`` 排序。
 3. **动态记忆写回** — 同时持久化到 PostgreSQL（结构化数据）和 Qdrant
-   （向量索引），使用共享的 bge-small-zh-v1.5 嵌入模型（768 维，与
+   （向量索引），使用共享的 bge-small-zh-v1.5 嵌入模型（512 维，与
    Skills 相同）。
 4. **遗忘策略** — TTL 过期、容量强制执行、会话级升级（importance ≥ 0.8）
    和 importance 衰减（每月 ×0.95）。
@@ -192,7 +192,7 @@ class MemoryManager:
         """
         通过共享的 Embedding 服务为 *text* 生成嵌入向量。
 
-        使用与 Skills 索引器相同的 bge-small-zh-v1.5 模型（768 维），
+        使用与 Skills 索引器相同的 bge-small-zh-v1.5 模型（512 维），
         确保所有向量集合之间的一致性。
         """
         url: str = f"{self._embedding_url}/embed"

@@ -12,18 +12,28 @@
 """
 
 from __future__ import annotations
-from typing import Any
+from typing import Any, AsyncIterator
 
 import json
 
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, Header, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from src.agent.manager import AgentManager, get_agent_manager
+from src.agent.mis_rag import (
+    EVENT_DELTA,
+    EVENT_DONE,
+    EVENT_ERROR,
+    KbQaPipeline,
+    KbQaRequest,
+    build_kb_call_context,
+    is_kb_qa_request,
+)
 from src.agent.session import Message, SessionManager, get_session_manager
 from src.api.deps import get_current_user, get_trace_id
 from src.api.response import error_response, success
+from src.config import get_settings
 from src.runtime.events import AgentEventType
 from src.utils.exceptions import AgentNotFoundError
 from src.utils.logging import get_logger
@@ -55,6 +65,226 @@ def _sse_frame(event: str, data: dict[str, Any]) -> str:
     return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
 
 
+# ===== Agent 运行辅助 =====
+
+
+async def _collect_agent_response(
+    instance: Any,
+    session: Any,
+    message: Message,
+) -> tuple[str, str | None, list[str]]:
+    """驱动 Agent 处理一条消息，并汇总文本增量 / 运行时错误 / 工具错误。
+
+    Args:
+        instance: 已就绪的 Agent 实例。
+        session: 平台会话对象。
+        message: 待处理消息。
+
+    Returns:
+        ``(response_text, runtime_error, tool_errors)``。
+    """
+    response_parts: list[str] = []
+    runtime_error: str | None = None
+    tool_errors: list[str] = []
+
+    async for event in instance.process_message(session=session, message=message):
+        if event.type == AgentEventType.TEXT_DELTA and event.content:
+            response_parts.append(event.content)
+        elif event.type == AgentEventType.TOOL_RESULT and event.result:
+            err: Any | None = event.result.get("error")
+            if err:
+                tool_errors.append(f"{event.tool_name}: {err}")
+        elif event.type == AgentEventType.ERROR:
+            runtime_error = event.message or "Agent runtime error"
+
+    return "".join(response_parts), runtime_error, tool_errors
+
+
+async def _run_kb_qa(
+    *,
+    agent_id: str,
+    req: AgentChatRequest,
+    instance: Any,
+    session: Any,
+    current_user: dict[str, Any],
+    authorization: str,
+    tenant_id: str,
+    app_id: str,
+    trace_id: str,
+) -> tuple[str, str | None, list[str]]:
+    """执行 KB 问答管线（T10），返回可直接作为 ``response`` 的 JSON 文本。
+
+    链路：``visible-libraries → retrieve → 拼 Prompt → 生成 → citations → 落库``。
+    生成步骤复用既有 Agent 运行时（``instance.process_message``），
+    管线只负责检索增强与结构化落库。
+
+    Returns:
+        ``(response_json_text, runtime_error, tool_errors)``；
+        ``response_json_text`` 形如
+        ``{"answer":...,"citations":[...],"sessionId":...,"messageId":...}``。
+    """
+    settings = get_settings()
+    kb_req = KbQaRequest.from_message(
+        req.content,
+        req.metadata,
+        default_top_k=settings.MIS_KB_RETRIEVE_TOP_K,
+    )
+    ctx = build_kb_call_context(
+        current_user,
+        authorization=authorization,
+        trace_id=trace_id,
+        tenant_id=tenant_id,
+        app_id=app_id,
+        metadata=req.metadata,
+    )
+
+    captured_error: str | None = None
+    captured_tool_errors: list[str] = []
+
+    async def _generate(prompt: str) -> str:
+        """把增强后的提示词交给 mis-rag Agent 运行时生成答案。"""
+        nonlocal captured_error, captured_tool_errors
+        text, err, tool_errs = await _collect_agent_response(
+            instance,
+            session,
+            Message(role=req.role, content=prompt, metadata=req.metadata),
+        )
+        captured_error = err
+        captured_tool_errors = tool_errs
+        return text
+
+    pipeline = KbQaPipeline()
+    try:
+        answer = await pipeline.run(kb_req, ctx, _generate)
+    finally:
+        await pipeline.aclose()
+
+    logger.info(
+        "KB QA completed",
+        agent_id=agent_id,
+        kb_session_id=answer.session_id,
+        citation_count=len(answer.citations),
+        trace_id=trace_id,
+    )
+    payload = json.dumps(answer.to_api(), ensure_ascii=False)
+    return payload, captured_error, captured_tool_errors
+
+
+async def _stream_kb_qa(
+    *,
+    agent_id: str,
+    req: AgentChatRequest,
+    instance: Any,
+    session: Any,
+    current_user: dict[str, Any],
+    authorization: str,
+    tenant_id: str,
+    app_id: str,
+    trace_id: str,
+) -> AsyncIterator[str]:
+    """流式执行 KB 问答管线（F-01），逐帧产出 SSE 文本。
+
+    与 :func:`_run_kb_qa` 共用同一条检索增强链路，差异仅在生成回调为异步生成器、
+    落库在流结束后一次性完成（设计 §7-Q1）。
+
+    事件契约：
+    - ``delta`` → ``{traceId, text, delta}``（``text``/``delta`` 同值，兼容新旧前端）
+    - ``done``  → ``{traceId, sessionId, messageId, citations, finishReason, platformSessionId}``
+    - ``error`` → ``{traceId, code, message}``
+
+    Yields:
+        已格式化的 SSE 帧字符串。
+    """
+    settings = get_settings()
+    kb_req = KbQaRequest.from_message(
+        req.content,
+        req.metadata,
+        default_top_k=settings.MIS_KB_RETRIEVE_TOP_K,
+    )
+    ctx = build_kb_call_context(
+        current_user,
+        authorization=authorization,
+        trace_id=trace_id,
+        tenant_id=tenant_id,
+        app_id=app_id,
+        metadata=req.metadata,
+    )
+
+    runtime_error: str | None = None
+    produced_text: bool = False
+
+    async def _generate_stream(prompt: str) -> AsyncIterator[str]:
+        """把增强提示词交给 Agent 运行时，转发其 TEXT_DELTA 增量。"""
+        nonlocal runtime_error, produced_text
+        async for event in instance.process_message(
+            session=session,
+            message=Message(role=req.role, content=prompt, metadata=req.metadata),
+        ):
+            if event.type == AgentEventType.TEXT_DELTA and event.content:
+                produced_text = True
+                yield event.content
+            elif event.type == AgentEventType.ERROR:
+                runtime_error = event.message or "Agent runtime error"
+                return
+
+    answer_parts: list[str] = []
+    pipeline = KbQaPipeline()
+    try:
+        async for frame in pipeline.run_stream(kb_req, ctx, _generate_stream):
+            payload = frame.to_payload()
+            payload["traceId"] = trace_id
+
+            if frame.event == EVENT_DELTA:
+                answer_parts.append(frame.text)
+                yield _sse_frame(EVENT_DELTA, payload)
+                continue
+
+            if frame.event == EVENT_ERROR:
+                yield _sse_frame(EVENT_ERROR, payload)
+                return
+
+            # done：运行时报错且一个字都没产出 ⇒ 降级为 error 帧，避免前端渲染空答案
+            if runtime_error and not produced_text:
+                yield _sse_frame(
+                    EVENT_ERROR,
+                    {"traceId": trace_id, "code": 9000, "message": runtime_error},
+                )
+                return
+            if runtime_error:
+                logger.warning(
+                    "KB QA stream completed with runtime warning",
+                    agent_id=agent_id,
+                    error=runtime_error,
+                    trace_id=trace_id,
+                )
+            await _save_platform_message(session, "".join(answer_parts))
+            payload["platformSessionId"] = session.session_id
+            logger.info(
+                "KB QA stream done",
+                agent_id=agent_id,
+                kb_session_id=frame.session_id,
+                citation_count=len(frame.citations),
+                trace_id=trace_id,
+            )
+            yield _sse_frame(EVENT_DONE, payload)
+    finally:
+        await pipeline.aclose()
+
+
+async def _save_platform_message(session: Any, content: str) -> None:
+    """把助手最终答案写回平台会话，供多轮续聊；失败仅告警不影响流。"""
+    if not content:
+        return
+    try:
+        await get_session_manager().add_message(
+            session_id=session.session_id,
+            role="assistant",
+            content=content,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Failed to save platform session message", error=str(exc))
+
+
 # ===== 端点 =====
 
 
@@ -64,8 +294,15 @@ async def agent_chat(
     req: AgentChatRequest,
     current_user: dict[str, Any] = Depends(get_current_user),
     trace_id: str = Depends(get_trace_id),
+    authorization: str = Header(default=""),
+    x_tenant_id: str = Header(default="", alias="X-Tenant-Id"),
+    x_app_id: str = Header(default="", alias="X-App-Id"),
 ) -> dict[str, Any]:
-    """受 MIS RS256 保护的 Agent 非流式对话端点（供 BFF 适配层调用）。"""
+    """受 MIS RS256 保护的 Agent 非流式对话端点（供 BFF 适配层调用）。
+
+    当目标为 ``mis-rag``（或 ``metadata.capability == "rag"``）且 KB 问答开关开启时，
+    走 :func:`_run_kb_qa` 的知识库增强管线；其余 Agent 保持原有通用流程零改动。
+    """
     try:
         session_manager: SessionManager = get_session_manager()
         agent_manager: AgentManager = get_agent_manager()
@@ -79,24 +316,24 @@ async def agent_chat(
         )
         instance = await agent_manager.ensure_agent_ready(agent_id)
 
-        response_parts: list[str] = []
-        runtime_error: str | None = None
-        tool_errors: list[str] = []
-
-        async for event in instance.process_message(
-            session=session,
-            message=Message(role=req.role, content=req.content, metadata=req.metadata),
-        ):
-            if event.type == AgentEventType.TEXT_DELTA and event.content:
-                response_parts.append(event.content)
-            elif event.type == AgentEventType.TOOL_RESULT and event.result:
-                err: Any | None = event.result.get("error")
-                if err:
-                    tool_errors.append(f"{event.tool_name}: {err}")
-            elif event.type == AgentEventType.ERROR:
-                runtime_error = event.message or "Agent runtime error"
-
-        response_text: str = "".join(response_parts)
+        if is_kb_qa_request(agent_id, req.metadata):
+            response_text, runtime_error, tool_errors = await _run_kb_qa(
+                agent_id=agent_id,
+                req=req,
+                instance=instance,
+                session=session,
+                current_user=current_user,
+                authorization=authorization if isinstance(authorization, str) else "",
+                tenant_id=x_tenant_id if isinstance(x_tenant_id, str) else "",
+                app_id=x_app_id if isinstance(x_app_id, str) else "",
+                trace_id=trace_id,
+            )
+        else:
+            response_text, runtime_error, tool_errors = await _collect_agent_response(
+                instance,
+                session,
+                Message(role=req.role, content=req.content, metadata=req.metadata),
+            )
 
         # 保存助手响应，便于后续多轮会话
         await session_manager.add_message(
@@ -148,12 +385,20 @@ async def agent_chat_stream(
     req: AgentChatRequest,
     current_user: dict[str, Any] = Depends(get_current_user),
     trace_id: str = Depends(get_trace_id),
+    authorization: str = Header(default=""),
+    x_tenant_id: str = Header(default="", alias="X-Tenant-Id"),
+    x_app_id: str = Header(default="", alias="X-App-Id"),
 ) -> StreamingResponse:
     """受 MIS RS256 保护的 Agent SSE 流式对话端点（供 BFF 适配层调用）。
 
-    事件契约（与 BFF 侧一致）：
-    - ``event: delta`` → ``{ traceId, delta }``
-    - ``event: done``  → ``{ traceId, finishReason, sessionId }``
+    当目标为 ``mis-rag``（或 ``metadata.capability == "rag"``）且 KB 问答开关开启时，
+    走 :func:`_stream_kb_qa` 的知识库增强流式管线（F-01）；其余 Agent 保持原有通用流程。
+
+    事件契约（与 BFF / 前端 ``ai-sse-client.ts`` 一致）：
+    - ``event: delta`` → 通用 ``{ traceId, delta }``；KB 分支额外带同值 ``text``
+    - ``event: done``  → 通用 ``{ traceId, finishReason, sessionId }``；
+      KB 分支 ``sessionId`` 为 **mis-kb 业务会话 ID（数值）**，
+      平台会话 UUID 另置于 ``platformSessionId``，并附 ``messageId`` / ``citations``
     - ``event: error`` → ``{ traceId, message }``
     """
 
@@ -173,6 +418,21 @@ async def agent_chat_stream(
             )
             session_id = session.session_id
             instance = await agent_manager.ensure_agent_ready(agent_id)
+
+            if is_kb_qa_request(agent_id, req.metadata):
+                async for kb_frame in _stream_kb_qa(
+                    agent_id=agent_id,
+                    req=req,
+                    instance=instance,
+                    session=session,
+                    current_user=current_user,
+                    authorization=authorization if isinstance(authorization, str) else "",
+                    tenant_id=x_tenant_id if isinstance(x_tenant_id, str) else "",
+                    app_id=x_app_id if isinstance(x_app_id, str) else "",
+                    trace_id=trace_id,
+                ):
+                    yield kb_frame
+                return
 
             async for event in instance.process_message(
                 session=session,

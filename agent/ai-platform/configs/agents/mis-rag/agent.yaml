@@ -1,20 +1,31 @@
 # =============================================================================
 # mis-rag — MIS 知识库问答助手（RAG）
 # 供 mis-admin-bff AiProxyController /ai/rag 调用。
-# 输出强制为结构化 JSON：{ answer: str, citations: [{source, chunk, score}] }
-# 说明：本阶段向量检索（Qdrant）尚未接入，回答基于已知信息与通用知识，
-#       citations 在可引用时填充，否则留空（RAG 知识采集为阶段3 任务）。
+#
+# 编排链路（设计文档 §13 第 1/2 项裁定，编排权由 BFF 下沉到 mis-rag）：
+#   前端 → BFF /api/v1/ai/rag → POST /api/v1/agents/mis-rag/chat
+#        → src/agent/mis_rag/qa_pipeline.KbQaPipeline
+#        → mis-kb /internal/v1/kb/rag/resolve-visible（可见库，ACL 在 Java 侧）
+#        → mis-kb /internal/v1/kb/rag/retrieve（检索命中片段）
+#        → 本 Agent 生成答案（严格基于片段）
+#        → mis-kb /internal/v1/kb/qa/{sessions,messages,citations/batch} 落库
+#
+# 输出强制为结构化 JSON：{ answer: str, citations: [{ index: int }] }
+# 引用的溯源字段（libraryId/documentId/chunkText/score/messageId）由管线补全，
+# 模型只需回引片段编号。feedback 不走本链路（前端 → BFF → mis-kb）。
 # =============================================================================
 
 agent:
   name: mis-rag
   display_name: MIS 知识库问答助手
   description: >
-    面向 MIS 知识库的问答助手，基于知识库内容回答并列出引用来源。
-  version: "1.0.0"
+    面向 MIS 知识库的问答助手：基于 mis-kb 检索到的可见范围片段回答，
+    并按编号回引来源，问答会话与引用由 mis-kb 统一落库。
+  version: "1.1.0"
   tags:
     - mis
     - rag
+    - kb
 
   includes:
     runtime: runtime/runtime.yaml
@@ -24,6 +35,22 @@ agent:
     enabled: false
     priority: 10
     keywords: []
+
+  # KB 检索步骤（T10）：由 qa_pipeline 在生成前置阶段执行。
+  # 依赖 src/adapters/kb_client.py（KbClient），透传用户 JWT 调 mis-kb 内部端点。
+  kb_retrieval:
+    enabled: true
+    client: kb_client
+    # 检索范围：请求未指定 libraryIds 时先解析用户全部可见库
+    resolve_visible_first: true
+    # 会话/消息/引用落库回调（ACL + 审计留在 Java 侧）
+    persist:
+      enabled: true
+      session: true
+      message: true
+      citation: true
+      # feedback 由前端 → BFF → mis-kb 落库，不在本链路
+      feedback: false
 
   memory:
     static:

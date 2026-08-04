@@ -1,0 +1,15 @@
+# Nacos 配置：mis-kb（test 环境）
+# 知识库微服务（T8 引擎连接配置，见 docs/backend/mis-kb-system-design.md §S-04）。
+#
+# test 环境默认 noop：无需部署 RAGFlow 实例即可跑通主流程
+# （建库/传文档返回占位 ref，retrieve 返回空 hits，health 恒为绿）。
+# 需要联调真实引擎时，把 type 改为 ragflow 并补 base-url / api-key。
+server:
+  port: 8108
+
+mis:
+  kb:
+    engine:
+      type: ${MIS_KB_ENGINE_TYPE:noop}
+      base-url: ${MIS_KB_ENGINE_BASE_URL:}
+      api-key: ${MIS_KB_ENGINE_API_KEY:}

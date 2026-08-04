@@ -119,27 +119,57 @@ class OutboundProxyManager:
         except ProxyUnavailableError:
             return None
 
+    @staticmethod
+    def _normalize_host(value: str) -> str:
+        """从 URL / host:port / 纯域名中提取 hostname（不含端口）。"""
+        raw = (value or "").strip().lower()
+        if not raw:
+            return ""
+        if "://" not in raw:
+            # host:port 或纯域名
+            raw = f"http://{raw}"
+        host = urlparse(raw).hostname or ""
+        return host.lower()
+
+    def _allowed_hosts(self) -> set[str]:
+        """白名单 host 集合：默认值 + 配置项 + 已配置的 LLM 端点。"""
+        hosts: set[str] = set()
+        for entry in self.ALLOWED_DOMAINS + self._settings.OUTBOUND_PROXY_ALLOWED_DOMAINS:
+            h = self._normalize_host(entry)
+            if h:
+                hosts.add(h)
+        # .env 里显式配置的 provider 端点自动放行（如内网网关 10.x）
+        for endpoint in (
+            self._settings.DEEPSEEK_API_ENDPOINT,
+            self._settings.QWEN_API_ENDPOINT,
+        ):
+            h = self._normalize_host(endpoint)
+            if h:
+                hosts.add(h)
+        return hosts
+
     def is_allowed(self, domain: str) -> bool:
         """
         检查域名是否在白名单中。
 
         Args:
-            domain: 要检查的域名（例如 "api.deepseek.com"）。
+            domain: 要检查的域名（例如 "api.deepseek.com" 或 "10.254.6.83"）。
 
         Returns:
             域名是否被允许。
         """
-        # 合并配置的允许域名与默认值
-        allowed: set[Any] = set(
-            self.ALLOWED_DOMAINS + self._settings.OUTBOUND_PROXY_ALLOWED_DOMAINS
-        )
-        return any(domain.endswith(d) for d in allowed)
+        host = self._normalize_host(domain)
+        if not host:
+            return False
+        allowed = self._allowed_hosts()
+        if host in allowed:
+            return True
+        # 允许子域：foo.dashscope.aliyuncs.com 匹配 dashscope.aliyuncs.com
+        return any(host == d or host.endswith(f".{d}") for d in allowed)
 
     def check_domain(self, url: str) -> bool:
-        """检查 URL 的域名是否被允许通过代理。"""
-        parsed: Any = urlparse(url)
-        domain: Any = parsed.hostname or ""
-        return self.is_allowed(domain)
+        """检查 URL 的域名是否被允许（比较 hostname，忽略端口）。"""
+        return self.is_allowed(url)
 
     def log_request(
         self,

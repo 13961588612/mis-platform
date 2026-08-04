@@ -67,6 +67,28 @@ public class AiCapabilityTranslator {
             String capability,
             Map<String, Object> pageContext,
             Long employeeId) {
+        return buildBody(content, capability, pageContext, employeeId, null);
+    }
+
+    /**
+     * 组装平台 chat 请求体，并允许注入能力专属的附加 metadata。
+     *
+     * <p>附加项在基础项（source / capability / page_context / employee_id）之后写入，
+     * 同名键以附加项为准；值为 null 的附加项跳过，避免向平台传 null 造成解析歧义。
+     *
+     * @param content       平台消息正文
+     * @param capability    能力标识（summary / extract / rag / chat）
+     * @param pageContext   页面上下文，可为 null
+     * @param employeeId    当前登录员工 ID，可为 null
+     * @param extraMetadata 能力专属元数据，可为 null
+     * @return 平台 chat 请求体
+     */
+    public Map<String, Object> buildBody(
+            String content,
+            String capability,
+            Map<String, Object> pageContext,
+            Long employeeId,
+            Map<String, Object> extraMetadata) {
         Map<String, Object> metadata = new LinkedHashMap<>();
         metadata.put("source", SOURCE);
         metadata.put("capability", capability);
@@ -74,12 +96,44 @@ public class AiCapabilityTranslator {
         if (employeeId != null) {
             metadata.put("employee_id", employeeId);
         }
+        if (extraMetadata != null) {
+            extraMetadata.forEach((k, v) -> {
+                if (v != null) {
+                    metadata.put(k, v);
+                }
+            });
+        }
 
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("content", content);
         body.put("role", "user");
         body.put("metadata", metadata);
         return body;
+    }
+
+    /**
+     * 构造 KB 问答专属 metadata（T10）。
+     *
+     * <p>mis-rag 侧 {@code KbQaRequest.from_message} 优先读取这些结构化字段，
+     * 仅在缺失时才回退解析 {@link #buildRagContent(AiRagRequest)} 生成的中文文本行，
+     * 因此这里的键名必须与管线约定保持一致（snake_case）。
+     *
+     * @param req RAG 请求体
+     * @return 附加 metadata；调用方直接交给 {@code buildBody}
+     */
+    public Map<String, Object> buildRagMetadata(AiRagRequest req) {
+        Map<String, Object> meta = new LinkedHashMap<>();
+        meta.put("question", req.getQuestion());
+        if (req.getLibraryIds() != null && !req.getLibraryIds().isEmpty()) {
+            meta.put("library_ids", req.getLibraryIds());
+        }
+        meta.put("top_k", req.getTopK());
+        meta.put("threshold", req.getThreshold());
+        meta.put("session_id", req.getSessionId());
+        if (req.getKb() != null && !req.getKb().isBlank()) {
+            meta.put("kb", req.getKb());
+        }
+        return meta;
     }
 
     public String buildSummaryContent(AiSummaryRequest req) {
@@ -234,12 +288,27 @@ public class AiCapabilityTranslator {
         return resp;
     }
 
+    /**
+     * 解析 mis-rag 返回的结构化 JSON。
+     *
+     * <p>兼容两种形态：
+     * <ol>
+     *   <li>KB 问答管线（T10）：额外带 {@code sessionId} / {@code messageId} 数值，
+     *       且 {@code citations[]} 含 {@code id} / {@code libraryId} / {@code documentId} /
+     *       {@code chunkText} 业务标识 → 映射到 {@code kbSessionId} 等字段。</li>
+     *   <li>纯 LLM 输出（无 KB 落库）：仅 {@code answer} + {@code citations[].source/chunk/score}，
+     *       KB 字段留空，前端通用 RAG 面板行为不变。</li>
+     * </ol>
+     * {@link AiRagResponse#getSessionId()} 始终为平台会话 UUID，不被 KB 数值 ID 覆盖。
+     */
     public AiRagResponse parseRag(AiPlatformChatData data) {
         AiRagResponse resp = new AiRagResponse();
         resp.setSessionId(data.getSessionId());
         try {
             JsonNode node = objectMapper.readTree(stripJsonFences(data.getResponse()));
             resp.setAnswer(node.path("answer").asText(""));
+            resp.setKbSessionId(readLong(node, "sessionId"));
+            resp.setMessageId(readLong(node, "messageId"));
             if (node.has("citations") && node.get("citations").isArray()) {
                 List<AiRagCitation> citations = new ArrayList<>();
                 for (JsonNode c : node.get("citations")) {
@@ -249,6 +318,13 @@ public class AiCapabilityTranslator {
                     if (c.has("score") && !c.get("score").isNull()) {
                         cit.setScore(c.get("score").asDouble());
                     }
+                    cit.setId(readLong(c, "id"));
+                    cit.setLibraryId(readLong(c, "libraryId"));
+                    cit.setDocumentId(readLong(c, "documentId"));
+                    cit.setMessageId(readLong(c, "messageId"));
+                    if (c.has("chunkText") && !c.get("chunkText").isNull()) {
+                        cit.setChunkText(c.get("chunkText").asText(""));
+                    }
                     citations.add(cit);
                 }
                 resp.setCitations(citations);
@@ -257,6 +333,32 @@ public class AiCapabilityTranslator {
             log.warn("Failed to parse rag JSON, raw={}", data.getResponse(), ex);
         }
         return resp;
+    }
+
+    /**
+     * 读取可空的数值字段，容忍字符串数字与非法值。
+     *
+     * @param node  载体节点
+     * @param field 字段名
+     * @return 解析成功返回 Long；字段缺失 / 为 null / 非数值时返回 null
+     */
+    private static Long readLong(JsonNode node, String field) {
+        if (node == null || !node.has(field) || node.get(field).isNull()) {
+            return null;
+        }
+        JsonNode v = node.get(field);
+        if (v.isNumber()) {
+            return v.asLong();
+        }
+        String text = v.asText("").trim();
+        if (text.isEmpty()) {
+            return null;
+        }
+        try {
+            return Long.parseLong(text);
+        } catch (NumberFormatException ex) {
+            return null;
+        }
     }
 
     public AiChatResponse parseChat(AiPlatformChatData data) {

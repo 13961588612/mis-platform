@@ -1,0 +1,19 @@
+# Nacos 配置：mis-kb（prod 环境）
+# 知识库微服务（T8 引擎连接配置，见 docs/backend/mis-kb-system-design.md §S-04）。
+#
+# 生产必须连真实引擎：type=ragflow，且 base-url / api-key 由运维经
+# Nacos 密文或容器环境变量注入，严禁写入本文件并提交 Git。
+# 引擎版本已钉扎 v0.26.4（见 deploy/ragflow/README.md「已钉扎版本」表）。
+server:
+  port: 8108
+
+mis:
+  kb:
+    engine:
+      type: ${MIS_KB_ENGINE_TYPE:ragflow}
+      base-url: ${MIS_KB_ENGINE_BASE_URL:}
+      api-key: ${MIS_KB_ENGINE_API_KEY:}
+
+logging:
+  level:
+    com.mis.kb: INFO

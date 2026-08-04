@@ -16,8 +16,15 @@ import java.util.Set;
 @RequestMapping("/api/v1/apps")
 public class AppController {
 
-    /** Phase 1 本仓已实现、可进入的 host 子系统 code。 */
-    private static final Set<String> ENTERABLE_CODES = Set.of("system");
+    /**
+     * 本仓已实现、可进入的 host 子系统 code。
+     *
+     * <p>I-01：知识库（{@code kb}）在 P1 完成前端页面与路由后加入白名单，
+     * 门户卡片由「不可进入」变为可点击。<b>仅加入白名单还不够</b>——
+     * 该 app 必须在 IAM 侧存在且 {@code runtime=host}、{@code status=1}，
+     * 否则这里加了也不会变可进入（见 {@link #toView} 的三重判断）。
+     */
+    private static final Set<String> ENTERABLE_CODES = Set.of("system", "kb");
 
     private final IamWebClient iamWebClient;
 

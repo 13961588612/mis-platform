@@ -33,7 +33,7 @@
 
 1. **先 Skill 后 MCP**：不确定接口时，先用 `skill` 加载对应 Skill（如 `member-profile`），再调用 `mcp__mcp-api-suite__callApi`。
 2. **`apiName` 禁止猜测**：`apiName` 必须来自已加载 Skill 文档或 MCP 工具说明中的**明确接口名**；不得臆造、拼写变体或使用未文档化的名称。
-3. **参数对齐文档**：`params` 字段名与类型须与 Skill 文档一致；会员域查询**不要**传 `datasourceId` 或 `serviceName`（除非 Skill 明确要求）。
+3. **参数对齐文档**：`params` 必须是 **JSON 对象**（例如 `{"mobile":"13800000000"}`），**禁止**把对象再序列化成字符串传入；会员域查询**不要**传 `datasourceId` 或 `serviceName`（除非 Skill 明确要求）。
 4. **调用失败时**：检查 `apiName` 与 `params` 是否与 Skill 一致；仍无法解决则告知用户，不要反复尝试随机接口名。
 
 ### 推荐流程

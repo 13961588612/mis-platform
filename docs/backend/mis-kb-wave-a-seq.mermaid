@@ -1,0 +1,209 @@
+%% MIS 知识库二期 Wave A —— 程序调用流程时序图
+%% 来源：docs/backend/mis-kb-phase2-wave-a-design-2026-08-04.md §4
+%% 架构师 高见远 / 2026-08-04
+%% 本文件包含三张图，使用时按分隔注释拆分渲染。
+
+%% ============================================================
+%% 图 1 · 主链路：问答检索（库级参数真正生效，WA-02 / WA-11）
+%% ============================================================
+sequenceDiagram
+    autonumber
+    participant U as 用户(智能问答页)
+    participant RAG as mis-rag (kb_client.py)
+    participant CTL as QaInternalController
+    participant RS as KbRetrieveService
+    participant VIS as KbVisibilityService
+    participant REPO as KbLibraryRepository
+    participant RES as RetrieveQueryResolver
+    participant PORT as KnowledgeEnginePort
+    participant AD as RagflowAdapter
+    participant CLI as RagflowClient
+    participant RF as RAGFlow REST
+
+    U->>RAG: 提问 question + 选定知识库
+    RAG->>CTL: GET /internal/v1/kb/rag/resolve-visible?userId
+    CTL-->>RAG: visibleLibraryIds[]
+    RAG->>CTL: POST /internal/v1/kb/rag/retrieve<br/>{question, libraryIds, topK?, threshold?}
+    CTL->>RS: retrieve(request, userId)
+
+    RS->>VIS: filterVisible(userId, libraryIds)
+    VIS-->>RS: scoped[] (ACL 过滤后)
+    alt scoped 为空
+        RS-->>CTL: RetrieveHitsVO(hits=[], emptyResultStrategy=GLOBAL_DEFAULT)
+    end
+
+    RS->>REPO: findAllById(scoped) 取 rag_settings_json
+    REPO-->>RS: Map<libraryId, RagSettings>
+    RS->>PORT: capabilities()
+    PORT-->>RS: EngineCapabilities{hybridSupported, rerankSupported}
+
+    RS->>RES: resolve(ctx{scoped, perLibSettings, caps, requestOverride=null})
+    Note over RES: ① scoped.size()==1 → 取库级设置<br/>② scoped.size()>1 → 取 RagSettings.defaults()（决策⑥）<br/>③ 请求显式 topK/threshold 覆盖<br/>④ hybrid 但 !hybridSupported → 降级 vector，记 degradedReason<br/>⑤ rerank=true 但 rerankModelId 空 → 关闭，记 degradedReason
+    RES-->>RS: RetrieveQuery + EffectiveRetrieveParams
+
+    RS->>PORT: retrieve(RetrieveQuery)
+    PORT->>AD: retrieve(query)
+    AD->>CLI: retrieve(query, datasetIds)
+    CLI->>RF: POST /api/v1/retrieval<br/>{question, dataset_ids, page_size=topK,<br/>similarity_threshold, vector_similarity_weight,<br/>keyword=(retrievalMethod!=vector), rerank_id?}
+    RF-->>CLI: {chunks[]}
+    CLI-->>AD: List<RfChunk>
+    AD-->>RS: List<ChunkHit>
+
+    RS->>RS: 组装 RetrieveHitsVO<br/>(hits, recallParams, effectiveParams,<br/> emptyResultStrategy=生效策略)
+    RS-->>CTL: RetrieveHitsVO
+    CTL-->>RAG: {code:0, data:RetrieveHitsVO}
+
+    alt hits 为空
+        RAG->>RAG: 按 emptyResultStrategy 分支
+        Note right of RAG: SUGGEST → 返回引导语 + 推荐问法<br/>EMPTY → 返回固定"未找到"文案<br/>TRANSFER → 触发转人工/建工单入口
+    else hits 非空
+        RAG->>RAG: 拼 Prompt 调 LLM，生成答案 + 引用
+    end
+    RAG-->>U: 答案 + 引用（或空结果策略对应表现）
+
+
+%% ============================================================
+%% 图 2 · 主链路：命中测试（WA-07 / WA-08 / WA-14）
+%% ============================================================
+sequenceDiagram
+    autonumber
+    participant U as 管理员(命中测试页)
+    participant FE as kb-hit-test-page.tsx
+    participant GATE as PermissionGate / usePermission
+    participant BFF as BFF KbController
+    participant ITC as ApiPermissionInterceptor
+    participant FAC as KbFacadeService
+    participant WC as KbWebClient
+    participant CTL as QaInternalController
+    participant HT as KbHitTestService
+    participant VIS as KbVisibilityService
+    participant REPO as KbLibraryRepository
+    participant RES as RetrieveQueryResolver
+    participant PORT as KnowledgeEnginePort
+    participant RF as RAGFlow REST
+    participant AUD as mis-audit (sys_oper_log)
+
+    U->>FE: 打开 /kb/hit-test
+    FE->>GATE: 检查 kb:hittest:run
+    alt 无权限
+        GATE-->>U: 403 无权限页
+    end
+    FE->>BFF: GET /api/v1/kb/libraries?scope=visible
+    BFF-->>FE: 可见知识库列表（用于单选下拉）
+    FE->>BFF: GET /api/v1/kb/libraries/{id}/engine/settings
+    BFF-->>FE: 当前库 RagSettings（作为调参面板初值）
+
+    U->>FE: 输入 question + 调整覆盖参数(topK/threshold/method/weight/rerank)
+    FE->>BFF: POST /api/v1/kb/hit-test<br/>{libraryId, question, 覆盖参数...}
+    BFF->>ITC: 权限校验 kb:hittest:run
+    ITC-->>BFF: pass
+    Note over BFF: @OperLog(module="知识库",<br/>operation="命中测试", recordParams=true)<br/>AOP 环绕，finally 保证失败路径也留痕
+    BFF->>FAC: hitTest(req, currentUserId)
+    FAC->>WC: POST /internal/v1/kb/hit-test (X-User-Id)
+    WC->>CTL: 转发
+    CTL->>HT: run(request, userId)
+
+    HT->>VIS: hasPermission(userId, libraryId)
+    alt 无 ACL 可见权
+        VIS-->>HT: false
+        HT-->>CTL: throw KB_LIBRARY_FORBIDDEN
+        CTL-->>FE: {code: KB_LIBRARY_FORBIDDEN}
+        FE-->>U: 提示"你无该知识库的访问权限"
+    end
+    VIS-->>HT: true
+
+    HT->>REPO: findById(libraryId)
+    REPO-->>HT: KbLibrary(ragSettingsJson, engineLibraryRef)
+    HT->>PORT: capabilities()
+    PORT-->>HT: EngineCapabilities
+    HT->>RES: resolve(ctx{single=libraryId, libSettings,<br/>caps, requestOverride=非空})
+    Note over RES: 覆盖参数优先级最高；<br/>未传的字段回落库级设置；<br/>能力不支持则降级并记录原因
+    RES-->>HT: RetrieveQuery + EffectiveRetrieveParams
+
+    HT->>HT: t0 = now()
+    HT->>PORT: retrieve(query)
+    PORT->>RF: POST /api/v1/retrieval
+    RF-->>PORT: chunks[]
+    PORT-->>HT: List<ChunkHit>
+    HT->>HT: elapsedMs = now()-t0
+    Note over HT: ⚠️ 不写 kb_qa_session / kb_qa_message
+
+    HT-->>CTL: HitTestResultVO{hits, effectiveParams,<br/>elapsedMs, emptyResultStrategy, degraded}
+    CTL-->>WC: {code:0, data}
+    WC-->>FAC: KbHitTestResultVO
+    FAC-->>BFF: 同上
+    BFF->>AUD: OperLogAspect 写 sys_oper_log<br/>{userId, module, operation, uri,<br/>responseCode, durationMs, ip,<br/>request_params:{libraryId, question, resultCount}}
+    Note over BFF,AUD: request_params 需 T19 打通<br/>（切面当前硬编码 null）<br/>失败/越权路径同样写入
+    BFF-->>FE: 结果
+
+    FE->>FE: 渲染命中列表(chunk 原文/score/文档名/页码)<br/>+ 生效参数回显 + 降级提示
+    U->>FE: 切换知识库
+    FE->>FE: 对比槽自动清空(WA-14，跨库对比无意义)
+    U->>FE: 修改参数再次运行
+    FE->>FE: 上一次结果存入"对比槽"<br/>两侧各自回显生效参数(WA-14)
+    U->>FE: 点击导出
+    FE->>FE: 前端生成 CSV Blob 下载<br/>(WA-15，不落服务端、不单独记审计)
+
+
+%% ============================================================
+%% 图 3 · 支撑链路：RAG 设置保存 + 切片引导 + 重解析生效
+%%        （WA-01 / WA-06 / WA-09 / WA-10）
+%% ============================================================
+sequenceDiagram
+    autonumber
+    participant U as 管理员(知识库详情-RAG设置Tab)
+    participant FE as kb-library-detail-page.tsx
+    participant BFF as BFF KbController
+    participant RSS as RagSettingsService
+    participant DB as kb_library.rag_settings_json
+    participant PORT as KnowledgeEnginePort
+    participant DOC as KbDocumentService
+    participant CLI as RagflowClient
+    participant RF as RAGFlow REST
+
+    FE->>BFF: GET /api/v1/kb/engine/capabilities
+    BFF-->>FE: {hybridSupported, rerankSupported, rerankModelName?}
+    Note over FE: rerankSupported=false →<br/>checkbox 置灰 + "未配置重排模型"
+
+    U->>FE: retrievalMethod 选 hybrid
+    FE->>FE: 显示权重滑条（vector 0.3 / keyword 0.7）
+    Note over FE: 非 hybrid 时滑条隐藏，<br/>但已有值不清空（保留用户上次设定）
+
+    U->>FE: 调整 chunkTokenNum / separator / chunkMethod
+    FE->>FE: 标记 chunkDirty = true
+
+    U->>FE: 点击保存
+    FE->>BFF: PUT /api/v1/kb/libraries/{id}/engine/settings<br/>{...,vectorSimilarityWeight}
+    BFF->>RSS: save(libraryId, settings)
+    RSS->>RSS: validate()
+    Note over RSS: topK∈[1,100] / threshold∈[0,1] /<br/>chunkTokenNum∈[16,4096] /<br/>vectorSimilarityWeight∈[0,1] /<br/>retrievalMethod∈{vector,keyword,hybrid} /<br/>emptyResultStrategy∈{SUGGEST,EMPTY,TRANSFER}<br/>无全局 rerankModelId → rerank 强制 false + WARN
+    RSS->>DB: save(rag_settings_json)
+    DB-->>RSS: ok
+    RSS->>PORT: updateLibrarySettings(ref, settings)
+    alt 引擎同步失败
+        PORT-->>RSS: Exception
+        RSS->>RSS: log.error，不回滚（本地为唯一事实源）
+    end
+    RSS-->>BFF: effective RagSettings
+    BFF-->>FE: 200 + 生效值
+
+    alt chunkDirty == true
+        FE-->>U: 弹窗「切片参数已更新，此后新解析的文档生效；<br/>是否对现有文档重新解析？」
+        U->>FE: 确认重解析（选单个/批量）
+        FE->>BFF: POST /libraries/{lib}/documents/{docId}/reparse
+        BFF->>DOC: reparse(libraryId, docId)
+        DOC->>DOC: 校验 engineDocId；若已 PARSING → 幂等返回
+        DOC->>DB: status = PARSING, parseError = null
+        DOC->>PORT: reparseDocument(ref, engineDocId)
+        PORT->>CLI: parseDocuments(datasetId, [docId])
+        CLI->>RF: POST /api/v1/datasets/{id}/chunks<br/>{"document_ids": ["..."]}
+        alt 引擎返回失败
+            RF-->>CLI: 4xx/5xx
+            CLI-->>DOC: Exception
+            DOC->>DB: status = FAILED, parseError = msg
+            DOC-->>FE: 抛错（用户主动触发，必须可见反馈）
+        else 成功
+            RF-->>CLI: 202/200
+            DOC-->>FE: ok（状态 PARSING，由列表轮询/刷新收敛）
+        end
+    end

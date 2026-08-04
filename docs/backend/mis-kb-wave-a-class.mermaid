@@ -1,0 +1,259 @@
+%% MIS 知识库二期 Wave A —— 数据结构与接口类图
+%% 来源：docs/backend/mis-kb-phase2-wave-a-design-2026-08-04.md §3
+%% 架构师 高见远 / 2026-08-04
+classDiagram
+    direction LR
+
+    class RagSettings {
+        <<record>>
+        +Integer topK
+        +Double scoreThreshold
+        +Boolean rerank
+        +String embeddingModel
+        +String retrievalMethod
+        +String chunkMethod
+        +Integer chunkTokenNum
+        +String separator
+        +String emptyResultStrategy
+        +Double vectorSimilarityWeight
+        +RagSettings defaults()$
+        +RagSettings withDefaults()
+        +boolean isHybrid()
+    }
+    note for RagSettings "«+vectorSimilarityWeight» 默认 0.3\n持久化于 kb_library.rag_settings_json，无 DDL"
+
+    class RetrieveQuery {
+        <<record>>
+        +String question
+        +List~Long~ libraryIds
+        +Integer topK
+        +Double threshold
+        +String retrievalMethod
+        +Double vectorSimilarityWeight
+        +Boolean rerank
+        +String rerankModelId
+        +String emptyResultStrategy
+        +int DEFAULT_TOP_K$
+    }
+
+    class EffectiveRetrieveParams {
+        <<record new>>
+        +Integer topK
+        +Double threshold
+        +String retrievalMethod
+        +Double vectorSimilarityWeight
+        +Boolean rerank
+        +String rerankModelId
+        +String emptyResultStrategy
+        +String source
+        +List~String~ degradedReasons
+    }
+    note for EffectiveRetrieveParams "source ∈ {LIBRARY, GLOBAL_DEFAULT, REQUEST_OVERRIDE}\ndegradedReasons 记录每一次降级原因"
+
+    class EngineCapabilities {
+        <<record>>
+        +List~String~ capabilities
+        +boolean rerankSupported
+        +boolean metadataFilterSupported
+        +boolean replaceSupported
+        +boolean hybridSupported
+        +EngineCapabilities unsupported()$
+        +boolean supports(String)
+    }
+
+    class EmptyResultStrategy {
+        <<enumeration>>
+        SUGGEST
+        EMPTY
+        TRANSFER
+        +EmptyResultStrategy fromCode(String)$
+        +String normalize(String)$
+        +boolean isValid(String)$
+    }
+
+    class RetrieveQueryResolver {
+        <<new component>>
+        -RagflowProperties props
+        +RetrieveQuery resolve(RetrieveContext ctx)
+        +EffectiveRetrieveParams effective(RetrieveContext ctx)
+        -RagSettings pickBase(List~Long~ ids, Map~Long,RagSettings~ perLib)
+        -RagSettings applyOverride(RagSettings base, ParamOverride ov)
+        -RagSettings degradeByCapability(RagSettings s, EngineCapabilities cap, List~String~ out)
+    }
+    note for RetrieveQueryResolver "参数合并唯一收口\n优先级: REQUEST_OVERRIDE > LIBRARY(单库) > GLOBAL_DEFAULT\n再经 capabilities 降级"
+
+    class KnowledgeEnginePort {
+        <<interface>>
+        +EngineLibraryRef createLibrary(...)
+        +void updateLibrarySettings(EngineLibraryRef, RagSettings)
+        +List~ChunkHit~ retrieve(RetrieveQuery)
+        +void reparseDocument(EngineLibraryRef, String docId)
+        +EngineCapabilities capabilities()
+        +EngineHealth health()
+    }
+
+    class RagflowAdapter {
+        -RagflowClient client
+        -RagflowProperties props
+        +List~ChunkHit~ retrieve(RetrieveQuery)
+        +void reparseDocument(EngineLibraryRef, String)
+        +EngineCapabilities capabilities()
+    }
+    class NoopAdapter {
+        +List~ChunkHit~ retrieve(RetrieveQuery)
+        +EngineCapabilities capabilities()
+    }
+    class MockAdapter
+    class EngineAdapterSelector
+
+    class RagflowClient {
+        -RagflowProperties props
+        +List~RfChunk~ retrieve(RetrieveQuery, List~String~ datasetIds)
+        +void updateDatasetSettings(String, RagSettings)
+        +void parseDocuments(String datasetId, List~String~ docIds)
+        -String mapRetrievalMethodToKeyword(String)
+    }
+    note for RagflowClient "«+» retrieve body: vector_similarity_weight / rerank_id / keyword\n«+» parseDocuments -> POST /api/v1/datasets/{id}/chunks"
+
+    class RagflowProperties {
+        +String type
+        +String baseUrl
+        +String apiKey
+        +String rerankModelId
+    }
+
+    class KbRetrieveService {
+        -KbVisibilityService visibilityService
+        -KbLibraryRepository libraryRepository
+        -RetrieveQueryResolver resolver
+        -KnowledgeEnginePort enginePort
+        +RetrieveHitsVO retrieve(RetrieveRequest, Long userId)
+    }
+
+    class KbHitTestService {
+        <<new service>>
+        -KbVisibilityService visibilityService
+        -KbLibraryRepository libraryRepository
+        -RetrieveQueryResolver resolver
+        -KnowledgeEnginePort enginePort
+        +HitTestResultVO run(HitTestRequest, Long userId)
+    }
+    note for KbHitTestService "单库 + ACL 强制过滤 + 不写 kb_qa_*"
+
+    class KbVisibilityService {
+        +Set~Long~ resolveVisibleLibraryIds(Long userId)
+        +List~Long~ filterVisible(Long userId, List~Long~ ids)
+        +boolean hasPermission(Long userId, Long libraryId)
+    }
+
+    class RagSettingsService {
+        +RagSettings get(Long)
+        +RagSettings save(Long, RagSettings)
+        +KbLibraryDetailVO detail(Long)
+        -RagSettings validate(RagSettings)
+        -void syncToEngine(KbLibrary, RagSettings)
+    }
+
+    class KbDocumentService {
+        +void reparse(Long libraryId, Long docId)
+    }
+
+    class HitTestRequest {
+        <<record new>>
+        +Long libraryId
+        +String question
+        +Integer topK
+        +Double threshold
+        +String retrievalMethod
+        +Double vectorSimilarityWeight
+        +Boolean rerank
+    }
+    class HitTestResultVO {
+        <<record new>>
+        +List~ChunkHitVO~ hits
+        +EffectiveParamsVO effectiveParams
+        +long elapsedMs
+        +String emptyResultStrategy
+        +boolean degraded
+    }
+    class RetrieveHitsVO {
+        +List~ChunkHitVO~ hits
+        +RecallParamsVO recallParams
+        +String emptyResultStrategy
+        +EffectiveParamsVO effectiveParams
+    }
+    class ChunkHitVO {
+        +Long libraryId
+        +String documentId
+        +String documentName
+        +String text
+        +Double score
+        +Integer page
+    }
+
+    class QaInternalController {
+        +RetrieveHitsVO retrieve(RetrieveRequest)
+        +HitTestResultVO hitTest(HitTestRequest)
+    }
+    class BffKbController {
+        +KbHitTestResultVO hitTest(KbHitTestRequest)
+        +KbRagSettings updateRagSettings(Long, KbRagSettings)
+    }
+    note for BffKbController "hitTest 判权（非注解机制）:\n1) 主路径 ApiPermissionInterceptor + sys_api 注册表，\n   permission 取自 sys_menu(91039).permission=kb:hittest:run\n   （V17 D 段登记 sys_api 91061 / sys_menu_api 91061→91039）\n2) 兜底 KbController.requireHitTestPermission()：\n   复用 UserPermissionLoader.load(LoginUser) 真实查询，\n   不读 LoginUser.getPermissions() 空集缓存\n@OperLog(module=知识库,\n operation=命中测试,\n recordParams=true) 保留"
+    class KbFacadeService
+    class KbWebClient
+
+    class OperLog {
+        <<annotation>>
+        +String module()
+        +String operation()
+        +boolean recordParams()
+    }
+    note for OperLog "«+recordParams» 默认 false\n存量端点行为零变化"
+
+    class OperLogAspect {
+        -AuditWebClient auditWebClient
+        +Object around(ProceedingJoinPoint, OperLog)
+        -void writeLog(...)
+    }
+    note for OperLogAspect "⚠️ 现状第 73 行 requestParams 硬编码 null\nT19 改为：recordParams=true 时采集\n{libraryId, question, resultCount} + 截断"
+
+    KnowledgeEnginePort <|.. RagflowAdapter
+    KnowledgeEnginePort <|.. NoopAdapter
+    KnowledgeEnginePort <|.. MockAdapter
+    EngineAdapterSelector ..> KnowledgeEnginePort : selects by mis.kb.engine.type
+    RagflowAdapter --> RagflowClient
+    RagflowAdapter --> RagflowProperties
+    RagflowClient --> RagflowProperties
+
+    KbRetrieveService --> RetrieveQueryResolver
+    KbRetrieveService --> KbVisibilityService
+    KbRetrieveService --> KnowledgeEnginePort
+    KbHitTestService --> RetrieveQueryResolver
+    KbHitTestService --> KbVisibilityService
+    KbHitTestService --> KnowledgeEnginePort
+
+    RetrieveQueryResolver ..> RagSettings : merges
+    RetrieveQueryResolver ..> EngineCapabilities : degrades by
+    RetrieveQueryResolver --> RetrieveQuery : produces
+    RetrieveQueryResolver --> EffectiveRetrieveParams : produces
+    RagSettings ..> EmptyResultStrategy : validates
+
+    RagSettingsService --> RagSettings
+    RagSettingsService --> KnowledgeEnginePort
+    KbDocumentService --> KnowledgeEnginePort
+
+    QaInternalController --> KbRetrieveService
+    QaInternalController --> KbHitTestService
+    QaInternalController ..> HitTestRequest
+    QaInternalController ..> HitTestResultVO
+    QaInternalController ..> RetrieveHitsVO
+    HitTestResultVO o-- ChunkHitVO
+    RetrieveHitsVO o-- ChunkHitVO
+
+    BffKbController --> KbFacadeService
+    KbFacadeService --> KbWebClient
+    KbWebClient ..> QaInternalController : HTTP /internal/v1/kb/**
+    BffKbController ..> OperLog : annotated with
+    OperLogAspect ..> OperLog : @Around
+    OperLogAspect ..> BffKbController : intercepts

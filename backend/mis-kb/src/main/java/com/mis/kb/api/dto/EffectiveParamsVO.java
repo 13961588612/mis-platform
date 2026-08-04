@@ -1,0 +1,56 @@
+package com.mis.kb.api.dto;
+
+import com.mis.kb.domain.model.EffectiveRetrieveParams;
+
+import java.util.List;
+
+/**
+ * 本次检索生效参数回显（WA-02 / WA-14）。
+ *
+ * <p>{@link EffectiveRetrieveParams} 的对外视图。为什么要单独一层而不直接透出领域对象：
+ * 领域对象随实现演进，API 契约要稳；且 {@code rerankModelId} 属平台配置，
+ * 这里如实回显是为了让管理员知道「用的是哪个重排模型」，不含密钥性质信息。
+ *
+ * @param topK                   生效召回条数
+ * @param threshold              生效相似度阈值
+ * @param retrievalMethod        生效检索方式 vector/keyword/hybrid
+ * @param vectorSimilarityWeight 生效向量相似度权重
+ * @param rerank                 生效重排开关
+ * @param rerankModelId          实际下发的重排模型 ID；未启用时为 {@code null}
+ * @param emptyResultStrategy    生效空结果策略
+ * @param source                 参数来源 LIBRARY / GLOBAL_DEFAULT / REQUEST_OVERRIDE
+ * @param degradedReasons        降级原因列表；空表示未降级
+ */
+public record EffectiveParamsVO(
+        Integer topK,
+        Double threshold,
+        String retrievalMethod,
+        Double vectorSimilarityWeight,
+        Boolean rerank,
+        String rerankModelId,
+        String emptyResultStrategy,
+        String source,
+        List<String> degradedReasons) {
+
+    /**
+     * 由领域对象构造视图。
+     *
+     * @param params 生效参数；{@code null} 时返回 {@code null}（响应里该字段直接缺省）
+     * @return 视图对象
+     */
+    public static EffectiveParamsVO from(EffectiveRetrieveParams params) {
+        if (params == null) {
+            return null;
+        }
+        return new EffectiveParamsVO(
+                params.topK(),
+                params.threshold(),
+                params.retrievalMethod(),
+                params.vectorSimilarityWeight(),
+                params.rerank(),
+                params.rerankModelId(),
+                params.emptyResultStrategy(),
+                params.source(),
+                params.degradedReasons());
+    }
+}

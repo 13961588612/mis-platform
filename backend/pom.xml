@@ -22,6 +22,7 @@
         <module>mis-audit</module>
         <module>mis-admin-bff</module>
         <module>mis-system</module>
+        <module>mis-kb</module>
     </modules>
 
     <properties>

@@ -21,6 +21,7 @@ import type { AppItem } from '@/types/api';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import { resolveNavIcon } from '@/lib/nav/icons';
+import { resolveHostLanding } from '@/lib/nav/host-apps';
 import { HeaderToolkit } from '@/components/layout/header-toolkit';
 import {
   CommandPalette,
@@ -94,7 +95,7 @@ export function PortalPage() {
       return;
     }
     if (app.code === 'system' || app.runtime === 'host') {
-      navigate('/dashboard');
+      navigate(resolveHostLanding(app.code, app.basePath));
     }
   };
 

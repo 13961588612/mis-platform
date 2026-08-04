@@ -1,18 +1,18 @@
 """按 Agent 配置构建 OpenHarness 工具注册表。"""
 
 from __future__ import annotations
-from typing import Any
 
 import asyncio
 import fnmatch
 import json
 import re
+from typing import Annotated, Any
 
 from openharness.mcp.client import McpClientManager, McpServerNotConnectedError
 from openharness.mcp.types import McpToolInfo
 from openharness.tools.base import BaseTool, ToolExecutionContext, ToolRegistry, ToolResult
 from openharness.tools.skill_tool import SkillTool
-from pydantic import BaseModel, ConfigDict, Field, create_model
+from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, create_model
 
 from src.config import get_settings
 from src.runtime.mcp_identity import (
@@ -58,13 +58,35 @@ def _format_mcp_output(output: str) -> str:
     except (json.JSONDecodeError, TypeError):
         return _clip_mcp_log(cleaned)
 
-_JSON_TYPE_MAP: dict[str, type] = {
+def _coerce_json_container(value: Any) -> Any:
+    """将 LLM 误传的 JSON 字符串还原为 object/array。
+
+    MCP ``callApi`` 的 ``params`` 要求 object；模型常把
+    ``{"mobile":"..."}`` 再序列化成字符串，触发
+    ``Expected object, received string``。
+    """
+    if not isinstance(value, str):
+        return value
+    text: str = value.strip()
+    if not text or text[0] not in "{[":
+        return value
+    try:
+        return json.loads(text)
+    except (json.JSONDecodeError, TypeError):
+        return value
+
+
+# object/array 字段：校验前自动把 JSON 字符串反序列化
+_JsonObject = Annotated[dict, BeforeValidator(_coerce_json_container)]
+_JsonArray = Annotated[list, BeforeValidator(_coerce_json_container)]
+
+_JSON_TYPE_MAP: dict[str, Any] = {
     "string": str,
     "integer": int,
     "number": float,
     "boolean": bool,
-    "array": list,
-    "object": dict,
+    "array": _JsonArray,
+    "object": _JsonObject,
 }
 
 
@@ -111,7 +133,15 @@ def _input_model_from_schema(tool_name: str, schema: dict[str, object]) -> type[
     )
     for json_key in properties:
         prop: Any = properties[json_key] if isinstance(properties[json_key], dict) else {}
-        py_type: type = _JSON_TYPE_MAP.get(str(prop.get("type", "")), object)
+        json_type: str = str(prop.get("type", "") or "")
+        # anyOf / oneOf 常见于可空 object（如 identity）；按 object 处理并做字符串反序列化
+        if not json_type and isinstance(prop.get("anyOf") or prop.get("oneOf"), list):
+            variants: list[Any] = list(prop.get("anyOf") or prop.get("oneOf") or [])
+            if any(
+                isinstance(v, dict) and v.get("type") == "object" for v in variants
+            ):
+                json_type = "object"
+        py_type: Any = _JSON_TYPE_MAP.get(json_type, object)
         attr_name: str = _pydantic_field_name(str(json_key))
         field_kwargs: dict[str, Any] = {}
         if str(json_key) != attr_name:
@@ -171,6 +201,11 @@ class PlatformMcpToolAdapter(BaseTool):
         payload: dict[str, Any] = arguments.model_dump(
             mode="json", exclude_none=True, by_alias=True
         )
+        # 兜底：即便校验层漏过，仍确保 object 型字段不是 JSON 字符串
+        for key, value in list(payload.items()):
+            coerced: Any = _coerce_json_container(value)
+            if coerced is not value:
+                payload[key] = coerced
         payload = merge_identity_into_args(payload, identity)
 
         logger.info(

@@ -1,0 +1,291 @@
+%% MIS 知识库二期 Wave D —— 程序调用流程时序图
+%% 来源：docs/backend/mis-kb-wave-d-design-2026-08-04.md §4
+%% 架构师 高见远 / 2026-08-04
+%% 本文件包含四张图，使用时按分隔注释拆分渲染。
+%% 风格对齐：docs/backend/mis-kb-wave-a-seq.mermaid
+
+%% ============================================================
+%% 图 1 · 主链路：问答检索的 S6 同义词扩展（WD-05 / WD-06 红线）
+%% ============================================================
+sequenceDiagram
+    autonumber
+    participant U as 用户(智能问答页)
+    participant RAG as mis-rag (kb_client.py)
+    participant CTL as QaInternalController
+    participant RS as KbRetrieveService
+    participant RES as RetrieveQueryResolver
+    participant EXP as SynonymExpandService
+    participant DL as SynonymDictLoader
+    participant DICT as SynonymDictionary(内存快照)
+    participant PORT as KnowledgeEnginePort
+    participant LLM as 大模型
+
+    U->>RAG: 提问「OKR 怎么填」
+    Note over RAG: 原问句从这一刻起<br/>由 mis-rag 自己持有，<br/>不依赖 mis-kb 回传
+    RAG->>CTL: POST /internal/v1/kb/rag/retrieve<br/>{question:"OKR 怎么填", libraryIds, topK}
+    CTL->>RS: retrieve(userId, tenantId, req)
+
+    RS->>RS: ACL 过滤 + 库级设置加载（Wave A 既有）
+    RS->>RES: resolveAll(RetrieveContext(<br/>question="OKR 怎么填", ..., synonymMode=AUTO))
+
+    Note over RES: S1 选基准 → S2 覆盖 → S3 归一化<br/>→ S4 能力降级 → S5 兜底（Wave A 五步不变）
+    RES->>EXP: S6 expand("OKR 怎么填", disabledForThisRun=false)
+
+    EXP->>DL: current()
+    Note over DL: 热路径**不调用** ensureFresh()<br/>零 DB 访问、零锁
+    DL-->>EXP: SynonymDictionary(version=17)
+
+    alt 全局开关关闭（config.enabled=false 或 Nacos 熔断闸关）
+        EXP-->>RES: SynonymExpansion(status=DISABLED_GLOBAL,<br/>expandedQuery == originalQuestion)
+    else 开启
+        EXP->>DICT: 最长匹配扫描（窗口上界 maxTermLength）
+        DICT-->>EXP: 命中 groupId=42「目标与关键结果」
+        EXP->>EXP: 短词过滤（<minTermLength 记入 skippedShortTerms）
+        EXP->>EXP: ASCII 词边界校验（避免 IT 命中 WITH）
+        EXP->>EXP: 预算截断（maxGroups / maxTermsPerGroup / maxQueryChars）<br/>超限按组丢弃，记入 droppedGroups
+        EXP->>EXP: 就地装配（原问句字符 100% 保留）
+        EXP-->>RES: SynonymExpansion(status=EXPANDED,<br/>expandedQuery="OKR（目标与关键结果 …） 怎么填",<br/>hits=[…], truncated=false)
+    end
+
+    RES->>RES: new RetrieveQuery(question = expansion.expandedQuery(), …)
+    RES-->>RS: Resolution(query, effectiveParams, expansion)
+
+    RS->>PORT: retrieve(resolution.query())
+    Note over PORT: 引擎收到的是**扩展后**的串
+    PORT-->>RS: List~ChunkHit~
+
+    RS->>RS: log.debug("同义词扩展 status={} hits={} …", …)
+    Note over RS: ⛔ 红线：**只打日志**<br/>RetrieveHitsVO 不加任何字段
+    RS-->>CTL: RetrieveHitsVO(hits, emptyResultStrategy, effectiveParams)
+    CTL-->>RAG: 三字段响应（无 query 回传）
+
+    RAG->>LLM: prompt(question = "OKR 怎么填", context = chunks)
+    Note over RAG,LLM: ✅ 传给大模型的是**用户原话**<br/>✅ 落库 kb_qa_message.content 也是原话<br/>✅ 界面回显同上（AC-03b 三处）
+    LLM-->>RAG: 答案
+    RAG-->>U: 答案（原问句 + 答案）
+
+%% ============================================================
+%% 图 2 · 核心链路：词表写入 → 词典刷新 → 跨实例一致性（Q7 / WD-16）
+%% ============================================================
+sequenceDiagram
+    autonumber
+    participant A as 管理员(S-07 页面)
+    participant BFF as KbSynonymController
+    participant IC as SynonymInternalController
+    participant GS as SynonymGroupService
+    participant CS as SynonymConfigService
+    participant DB as PostgreSQL
+    participant DLA as SynonymDictLoader@实例A(写入实例)
+    participant DLB as SynonymDictLoader@实例B(其它实例)
+    participant HT as KbHitTestService@任意实例
+
+    rect rgb(240, 248, 255)
+    Note over A,DB: 阶段一 · 写入（L1：写实例 0 延迟）
+    A->>BFF: PUT /api/v1/kb/synonyms/42<br/>{canonicalTerm:"目标与关键结果", terms:["OKR", …]}
+    Note over BFF: @OperLog(recordParams=true)<br/>ApiPermissionInterceptor 校验 kb:config:synonym:write
+    BFF->>IC: PUT /internal/v1/kb/synonyms/42（X-User-Id 透传）
+    IC->>GS: update(42, req, userId)
+
+    GS->>DB: findByTermNormIn([…]) 批量冲突检测
+    DB-->>GS: 冲突行（若有）
+    alt 存在跨组冲突
+        GS-->>IC: throw KB_SYNONYM_TERM_CONFLICT<br/>data={term, ownerGroupId, ownerCanonicalTerm}
+        IC-->>A: 40927「"OKR" 已属于术语组「关键结果法」」
+    else 无冲突
+        GS->>DB: UPDATE kb_synonym_group / DELETE+INSERT kb_synonym_term
+        Note over DB: UNIQUE(term_norm) 是最后一道闸<br/>（不带 status 条件，停用仍占用）
+        GS->>CS: bumpVersion()
+        CS->>DB: UPDATE kb_synonym_config<br/>SET dict_version = dict_version + 1<br/>WHERE id = 1 RETURNING dict_version
+        DB-->>CS: 18
+        Note over GS,DB: ⬆ 以上全部在同一个 @Transactional 内
+        GS->>DLA: reloadNow(18)   %% 事务提交后
+        DLA->>DB: 全量 SELECT 启用组及其词条
+        DB-->>DLA: 词表全量
+        DLA->>DLA: 构建新 SynonymDictionary(version=18)<br/>volatile current = 新快照（整体引用替换）
+        Note over DLA: 实例 A 时延 = **0 秒**
+        GS-->>IC: SynonymGroupVO
+        IC-->>BFF: 200
+        BFF-->>A: 「已保存，可立即在命中测试中验证；<br/>问答链路约 3 秒内全平台生效。」
+    end
+    end
+
+    rect rgb(255, 250, 240)
+    Note over DLB,DB: 阶段二 · 其它实例同步（L2：轮询，≤3 秒）
+    loop @Scheduled(fixedDelayString="${mis.kb.synonym.refresh-interval-ms:3000}")
+        DLB->>DB: SELECT dict_version FROM kb_synonym_config WHERE id = 1
+        Note over DB: 单行主键查，一次索引命中
+        DB-->>DLB: 18
+        alt current.version() == 18
+            DLB->>DLB: 无变化，直接返回（绝大多数轮次走这里）
+        else current.version() == 17 < 18
+            DLB->>DB: 全量 SELECT 重载
+            DB-->>DLB: 词表全量
+            DLB->>DLB: volatile current = 新快照(version=18)
+        end
+    end
+    end
+
+    rect rgb(245, 255, 245)
+    Note over A,HT: 阶段三 · 命中测试强一致（L3：0 延迟，与实例无关）
+    A->>HT: 立刻去命中测试页跑一次（synonymMode = FRESH）
+    HT->>DLB: ensureFresh()
+    DLB->>DB: SELECT dict_version WHERE id = 1
+    DB-->>DLB: 18
+    alt 本实例快照落后
+        DLB->>DB: 就地全量重载
+        DB-->>DLB: 词表全量
+        DLB->>DLB: current = 新快照(version=18)
+    end
+    DLB-->>HT: SynonymDictionary(version=18)
+    Note over HT: ✅ 无论请求落到哪个实例，<br/>命中测试看到的一定是最新词表 —— 这是 Q7<br/>「即时生效」承诺的兑现点
+    end
+
+%% ============================================================
+%% 图 3 · 批量导入两段式 + dict_version 版本校验（WD-04 / 主理人 Q10）
+%% ============================================================
+sequenceDiagram
+    autonumber
+    participant A as 管理员
+    participant FE as KbSynonymImportDialog
+    participant BFF as KbSynonymController
+    participant IC as SynonymInternalController
+    participant IS as SynonymImportService
+    participant CODEC as SynonymCsvCodec / SynonymJsonCodec
+    participant CS as SynonymConfigService
+    participant DB as PostgreSQL
+    participant DL as SynonymDictLoader
+
+    rect rgb(240, 248, 255)
+    Note over A,DB: 阶段一 · 预检（不写任何词表数据）
+    A->>FE: 选择 terms.csv（400 行）
+    FE->>BFF: POST /api/v1/kb/synonyms/import/precheck（multipart）
+    Note over BFF: 权限 kb:config:synonym:import<br/>@OperLog 记录文件名与大小
+    BFF->>IC: multipart 透传（BFF **不解析文件**）
+    IC->>IS: precheck(bytes, filename, userId)
+
+    IS->>IS: 体积/行数闸：>2MB 或 >2000 组 → KB_SYNONYM_IMPORT_TOO_LARGE
+    IS->>CODEC: parse(bytes)
+    alt 格式级错误（JSON 语法错 / CSV 缺 canonical_term 列 / 编码不可识别）
+        CODEC-->>IS: throw
+        IS-->>A: 40928 整批拒绝，**不建 batch 行、不写一行数据**<br/>「文件格式不合法：缺少必需列 canonical_term…」
+    else 解析成功
+        CODEC-->>IS: List~ParsedGroup~
+        IS->>CS: currentVersion()
+        CS->>DB: SELECT dict_version WHERE id = 1
+        DB-->>CS: 18
+        CS-->>IS: 18
+        IS->>DB: findByTermNormIn(全量待入词) 批量冲突检测
+        DB-->>IS: 已占用词 → 现属组
+        IS->>IS: buildPlan(rows, dictVersion=18)<br/>逐行判定 CREATE / MERGE / SKIP(+skipReason)
+        IS->>DB: INSERT kb_synonym_import_batch<br/>(token, status=PENDING, dict_version=18,<br/> plan_json=<行级计划全文>, expiresAt=now+30min)
+        Note over DB: ⚠️ 计划**落库**而非放内存：<br/>预检落实例 A、提交可能落实例 B（KbWebClient 是 @LoadBalanced）
+        IS-->>FE: ImportPrecheckVO(token, 新增38 / 并入6 / 跳过4, rows[], warnings[])
+        FE-->>A: 预检报告（含逐行明细：行号 + 冲突词 + 现属组）
+    end
+    end
+
+    rect rgb(255, 250, 240)
+    Note over A,DL: 阶段二 · 确认提交（版本校验是硬闸）
+    A->>FE: 点击「确认导入」（可选：已存在组 合并/跳过）
+    FE->>BFF: POST /api/v1/kb/synonyms/import/commit {token, mergeExisting}
+    BFF->>IC: 透传
+    IC->>IS: commit(token, mergeExisting, userId)
+
+    IS->>DB: SELECT * FROM kb_synonym_import_batch WHERE token = ?
+    DB-->>IS: batch(status=PENDING, dict_version=18, plan_json)
+    alt token 不存在 / 已 COMMITTED / 已过期
+        IS-->>A: 40931 KB_SYNONYM_IMPORT_TOKEN_INVALID「预检已失效，请重新上传」
+    else token 有效
+        IS->>CS: currentVersion()
+        CS->>DB: SELECT dict_version WHERE id = 1
+        DB-->>CS: 19（有人在预检后改了词表）
+        CS-->>IS: 19
+        alt 19 != 18（词表已变更）
+            IS-->>A: 40930 KB_SYNONYM_IMPORT_STALE<br/>「词表已变更，请重新预检」
+            Note over IS: ⛔ 主理人 Q10 硬约束：<br/>**不允许静默多跳几行**——预检报告承诺的<br/>「38/6/4」若照旧执行，回执数字就是假的
+        else 版本一致
+            IS->>DB: BEGIN；严格按 plan_json 逐行执行 CREATE / MERGE
+            alt UNIQUE(term_norm) 仍报冲突（理论已被版本校验挡住）
+                DB-->>IS: 唯一约束异常
+                IS->>DB: ROLLBACK（整批回滚）
+                IS-->>A: 40930 同一个 STALE 错误
+            else 全部成功
+                IS->>CS: bumpVersion() → 20
+                IS->>DB: UPDATE batch SET status=COMMITTED, committed_at=now()
+                IS->>DB: COMMIT
+                IS->>DL: reloadNow(20)
+                IS-->>FE: ImportCommitVO(成功38 / 并入6 / 跳过4, batchId)
+                FE-->>A: 回执 + [下载未导入行]
+            end
+        end
+    end
+    end
+
+    rect rgb(245, 255, 245)
+    Note over A,DB: 阶段三 · 下载未导入行（直接读 plan_json，不重解析原文件）
+    A->>FE: 点击「下载未导入行」
+    FE->>BFF: GET /api/v1/kb/synonyms/import/{batchId}/rejected
+    BFF->>IC: 透传
+    IC->>IS: rejectedRows(batchId, userId)
+    IS->>DB: SELECT plan_json FROM kb_synonym_import_batch WHERE id = ?
+    DB-->>IS: plan_json
+    IS->>CODEC: writeRejected(仅 action=SKIP 的行)
+    Note over CODEC: **按原格式返回**：CSV 传的还 CSV、JSON 传的还 JSON<br/>并追加 skip_reason 列/字段
+    CODEC-->>IS: 文件内容
+    IS-->>A: 下载（管理员改完可直接再传一次，形成闭环）
+    end
+
+%% ============================================================
+%% 图 4 · 命中测试扩展轨迹与「本次临时关闭」（WD-10 / WD-11 / WD-19）
+%% ============================================================
+sequenceDiagram
+    autonumber
+    participant A as 管理员(命中测试页)
+    participant FE as KbHitTestPage
+    participant BFF as KbController
+    participant HT as KbHitTestService
+    participant RES as RetrieveQueryResolver
+    participant EXP as SynonymExpandService
+    participant DL as SynonymDictLoader
+    participant PORT as KnowledgeEnginePort
+    participant CARD as KbSynonymTraceCard
+
+    A->>FE: 输入问句 + 选库 + 调参（可勾选「本次不使用同义词扩展」）
+    FE->>BFF: POST /api/v1/kb/hit-test<br/>{libraryId, question, …, disableSynonym: true|null}
+    Note over BFF: 权限 kb:hittest:run（V17 已登记）<br/>本波次仅新增一个请求体字段的透传
+    BFF->>HT: run(request, userId)
+
+    HT->>HT: 单库校验 + 强制 ACL（Wave A 既有硬约束，不动）
+    HT->>HT: synonymMode = request.disableSynonym()==TRUE<br/>  ? OFF_THIS_RUN : FRESH
+    HT->>RES: resolveAll(RetrieveContext(…, synonymMode))
+
+    RES->>EXP: S6
+    alt synonymMode == OFF_THIS_RUN（WD-11）
+        EXP-->>RES: SynonymExpansion(status=DISABLED_REQUEST,<br/>expandedQuery == originalQuestion)
+        Note over EXP: ⛔ 仅影响本次；**不触碰全局开关**
+    else synonymMode == FRESH
+        EXP->>DL: ensureFresh()
+        DL->>DL: 同步查 dict_version，落后即就地重载
+        DL-->>EXP: 最新 SynonymDictionary
+        EXP-->>RES: SynonymExpansion(EXPANDED / NO_MATCH / DISABLED_GLOBAL)
+    end
+    RES-->>HT: Resolution(query, effectiveParams, expansion)
+
+    HT->>PORT: retrieve(resolution.query())
+    PORT-->>HT: List~ChunkHit~
+    HT->>HT: 映射 expansion → SynonymExpansionVO
+    Note over HT: ✅ 命中测试是唯一被允许回显扩展结果的出口
+    HT-->>BFF: HitTestResultVO(hits, effectiveParams, elapsedMs,<br/>emptyResultStrategy, degraded, synonym)
+    BFF-->>FE: Result<HitTestResultVO>
+
+    FE->>CARD: 渲染 synonym 段
+    CARD->>CARD: ① 四态徽标（EXPANDED/NO_MATCH/<br/>DISABLED_REQUEST/DISABLED_GLOBAL，**NO_MATCH 也显式显示**）
+    CARD->>CARD: ② 原始问题 / 实际检索 对照（扩展词高亮 + 复制按钮）
+    CARD->>CARD: ③ 命中术语组 chip → navigate('/kb/synonyms?groupId=42')<br/>（无 kb:config:synonym:view 权限时降级为纯文本）
+    CARD->>CARD: ④ 截断提示：「共命中 12 组，实际使用前 8 组，<br/>未参与：报销单、差旅、审批流、印章」
+    CARD->>CARD: ⑤ 短词跳过：「以下词因过短未参与匹配：IT、法」（WD-19）
+    CARD->>CARD: ⑥ engineNativeHint === true 时追加引擎原生词表提示行（Q9）
+    CARD-->>A: 完整扩展轨迹
+
+    A->>FE: 勾选「本次不使用」后重跑
+    Note over FE: 结果进入既有的「本次 / 上一次」并排对比槽<br/>（Wave A 已实现 previous/current TestRun 状态），<br/>两侧各自显示自己的扩展状态徽标（AC-03a）

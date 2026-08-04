@@ -62,6 +62,9 @@ services:
       MODEL_NAME: "BAAI/bge-small-zh-v1.5"
       PORT: 8001
       MAX_BATCH_SIZE: 32
+      # 容器内常无法直连 huggingface.co；用镜像拉取模型到 volume
+      HF_ENDPOINT: ${HF_ENDPOINT:-https://hf-mirror.com}
+      HUGGINGFACE_HUB_ENDPOINT: ${HF_ENDPOINT:-https://hf-mirror.com}
     ports:
       # 本机 uvicorn 访问 localhost:8001；容器间仍用服务名
       - "8001:8001"
@@ -69,9 +72,10 @@ services:
       - ai-platform-embedding_models:/app/models
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:8001/health || exit 1"]
-      interval: 15s
+      interval: 20s
       timeout: 10s
-      retries: 5
+      retries: 10
+      start_period: 300s
 
   # ===== 出站代理（Squid，LLM API 白名单）===== DEP-4
   ai-platform-outbound-proxy:

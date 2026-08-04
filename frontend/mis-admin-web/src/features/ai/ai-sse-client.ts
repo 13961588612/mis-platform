@@ -1,14 +1,12 @@
-import { fetchEventSource } from '@microsoft/fetch-event-source';
-import { useAuthStore } from '@/stores/auth-store';
+import { deltaText, isDeltaFrame, postEventSource, type SseFrame } from '@/lib/api/sse-client';
 
-// 使用 @microsoft/fetch-event-source 标准具名导出 fetchEventSource（v2）。
-// BFF T-stream 就绪后由 useAI 在 capability=chat/rag 且 stream:true 时调用本封装，
-// 1:1 透传平台 delta|done|error 事件。
-// 注：原 `fetch-event-source`(1.0.0-alpha.x) 仅默认导出且无 v3，改用微软官方同名导出包。
+// SSE 底座已下沉到 `@/lib/api/sse-client`（F-01 起知识问答也要用，放在 features/ai 下
+// 会逼 features/kb 跨 feature 依赖）。本文件只保留 AI 对话侧的语义封装，
+// 对外签名与行为完全不变，既有调用方零改动。
 
 /**
- * AI SSE 封装（基于 fetch-event-source）。
- * 手工注入 Authorization（fetch-event-source 不走 axios 拦截器）。
+ * AI SSE 封装。
+ *
  * 解析帧：event: delta / done / error。
  */
 export interface AiSseOptions {
@@ -21,48 +19,33 @@ export interface AiSseOptions {
 
 /** 发起一次 SSE 流式请求；调用方持有 signal（AbortController）以便中断 */
 export async function aiFetchEventSource(path: string, opts: AiSseOptions): Promise<void> {
-  const token = useAuthStore.getState().accessToken;
-  await fetchEventSource(`/api/v1${path}`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-    },
-    body: JSON.stringify(opts.body),
+  await postEventSource(path, {
+    body: opts.body,
     signal: opts.signal,
-    openWhenHidden: true,
-    onopen: async (res: Response) => {
-      if (res.ok && res.status === 200) return;
-      opts.onError?.({ message: `AI 连接失败 (${res.status})` });
-      throw new Error(`SSE open failed: ${res.status}`);
-    },
-    onmessage: (ev: { data: string; event: string; id?: string }) => {
-      if (!ev.data) return;
-      try {
-        const frame = JSON.parse(ev.data) as Record<string, unknown>;
-        if (ev.event === 'delta' || frame.type === 'delta' || 'delta' in frame) {
-          opts.onDelta(String((frame.delta as unknown) ?? ''));
-          return;
-        }
-        if (ev.event === 'done' || frame.type === 'done') {
-          opts.onDone?.({
-            finishReason: frame.finishReason as string | undefined,
-            sessionId: frame.sessionId as string | undefined,
-          });
-          return;
-        }
-        if (ev.event === 'error' || frame.type === 'error') {
-          opts.onError?.({ message: String(frame.message ?? 'AI 响应错误') });
-          return;
-        }
-      } catch {
+    onError: (err) => opts.onError?.(err),
+    onFrame: (frame: SseFrame) => {
+      const data = frame.data;
+      if (data === null) {
         // 非 JSON 增量（纯文本流）按 delta 处理
-        opts.onDelta(ev.data);
+        opts.onDelta(frame.raw);
+        return;
       }
-    },
-    onerror: (err: unknown) => {
-      const message = err instanceof Error ? err.message : String((err as { message?: string })?.message ?? 'AI 响应中断');
-      opts.onError?.({ message });
+      if (isDeltaFrame(frame)) {
+        opts.onDelta(deltaText(frame));
+        return;
+      }
+      if (frame.event === 'done' || data.type === 'done') {
+        opts.onDone?.({
+          finishReason: typeof data.finishReason === 'string' ? data.finishReason : undefined,
+          sessionId: typeof data.sessionId === 'string' ? data.sessionId : undefined,
+        });
+        return;
+      }
+      if (frame.event === 'error' || data.type === 'error') {
+        opts.onError?.({
+          message: typeof data.message === 'string' ? data.message : 'AI 响应错误',
+        });
+      }
     },
   });
 }

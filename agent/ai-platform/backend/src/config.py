@@ -7,14 +7,32 @@
 """
 
 from __future__ import annotations
-from typing import Any
+from typing import Annotated, Any
 
 from enum import Enum
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import Field, field_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import BeforeValidator, Field, field_validator
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
+
+
+def _parse_str_list(v: Any) -> list[str]:
+    """解析 list 环境变量：支持 JSON 数组、逗号分隔，或已是 list。"""
+    if v is None or v == "":
+        return []
+    if isinstance(v, list):
+        return [str(x).strip() for x in v if str(x).strip()]
+    if isinstance(v, str):
+        s = v.strip()
+        if s.startswith("["):
+            import json
+
+            parsed = json.loads(s)
+            if isinstance(parsed, list):
+                return [str(x).strip() for x in parsed if str(x).strip()]
+        return [part.strip() for part in s.split(",") if part.strip()]
+    return v
 
 
 class Environment(str, Enum):
@@ -149,19 +167,27 @@ class Settings(BaseSettings):
     QDRANT_COLLECTION_SKILLS: str = "skills_index"
     QDRANT_COLLECTION_AGENT_ROUTER: str = "agent_router_index"
     QDRANT_COLLECTION_AGENT_MEMORY: str = "agent_memory_index"
-    QDRANT_VECTOR_SIZE: int = 768
+    QDRANT_VECTOR_SIZE: int = 512
 
     # ===== 嵌入模型 =====
     EMBEDDING_SERVICE_URL: str = "http://embedding:8001"
     EMBEDDING_MODEL_NAME: str = "bge-small-zh-v1.5"
-    EMBEDDING_DIMENSION: int = 768
+    EMBEDDING_DIMENSION: int = 512
+    EMBEDDING_TIMEOUT_SECONDS: float = Field(
+        default=15.0,
+        description="调用 Embedding 服务的超时（秒）",
+    )
+    SKILL_VECTOR_INDEX_ENABLED: bool = Field(
+        default=True,
+        description="是否在注册 Skill 时写入 Qdrant 向量索引；本地无 embedding 服务时可关",
+    )
 
     # ===== LLM Gateway =====
     # 默认主用 Qwen（工具调用 + 可选 VL 识图）；DeepSeek 作故障转移备用
     LLM_GATEWAY_ENABLED: bool = True
     LLM_PRIMARY_PROVIDER: str = "qwen"
     LLM_FALLBACK_PROVIDER: str = "deepseek"
-    LLM_PRIMARY_MODEL: str = "qwen-plus"
+    LLM_PRIMARY_MODEL: str = "qwen3.6-plus"
     LLM_FALLBACK_MODEL: str = "deepseek-v4-flash"
     LLM_REQUEST_TIMEOUT: int = 60
     LLM_MAX_RETRIES: int = 3
@@ -179,11 +205,12 @@ class Settings(BaseSettings):
     OUTBOUND_PROXY_ENABLED: bool = True
     OUTBOUND_PROXY_HOST: str = "outbound-proxy"
     OUTBOUND_PROXY_PORT: int = 3128
-    OUTBOUND_PROXY_ALLOWED_DOMAINS: list[str] = Field(
+    OUTBOUND_PROXY_ALLOWED_DOMAINS: Annotated[list[str], NoDecode, BeforeValidator(_parse_str_list)] = Field(
         default_factory=lambda: [
             "api.deepseek.com",
             "dashscope.aliyuncs.com",
-        ]
+        ],
+        description="额外允许的 LLM 出站域名/IP；.env 中的 QWEN/DEEPSEEK 端点会自动加入白名单",
     )
 
     # ===== JWT / 认证 =====
@@ -223,6 +250,38 @@ class Settings(BaseSettings):
     FORMFILL_ALLOWED_SKILLS: list[str] = Field(
         default_factory=lambda: ["user-fill"],
         description="P0 允许触发的 MIS FormFill 引擎 Skill ID 白名单",
+    )
+
+    # ===== 知识库 mis-kb 对接（T10：mis-rag 内部编排 KB 问答）=====
+    # mis-kb 微服务基址；mis-rag 带用户 JWT 调其 /internal/v1/kb/** 内部端点。
+    MIS_KB_BASE_URL: str = Field(
+        default="http://mis-kb:8108",
+        description="mis-kb 服务基址（内网直连，非经 Gateway）",
+    )
+    # 内部服务账号 JWT：仅当请求未携带用户 JWT 时兜底使用（RS256，iss=mis-platform）。
+    MIS_KB_AGENT_TOKEN: str = Field(
+        default="",
+        description="mis-rag 调 mis-kb 的服务账号令牌；留空表示只透传用户 JWT",
+    )
+    MIS_KB_TIMEOUT_SECONDS: int = Field(
+        default=20,
+        description="调用 mis-kb 内部端点的单次超时（秒）",
+    )
+    MIS_KB_QA_ENABLED: bool = Field(
+        default=True,
+        description="KB 问答管线总开关；关闭后 mis-rag 退化为纯提示词问答",
+    )
+    MIS_KB_RETRIEVE_TOP_K: int = Field(
+        default=5,
+        description="KB 检索默认召回条数（请求未指定 topK 时生效）",
+    )
+    MIS_KB_SNIPPET_LIMIT: int = Field(
+        default=200,
+        description="返回给前端的单条引用摘要最大字符数",
+    )
+    MIS_KB_MAX_CONTEXT_CHARS: int = Field(
+        default=6000,
+        description="注入提示词的检索上下文总字符上限，防止超出模型窗口",
     )
 
     # ===== Copilot 调度（agent__invoke）=====
@@ -322,14 +381,6 @@ class Settings(BaseSettings):
         """从逗号分隔字符串或列表中解析 CORS Origins。"""
         if isinstance(v, str):
             return [origin.strip() for origin in v.split(",") if origin.strip()]
-        return v
-
-    @field_validator("OUTBOUND_PROXY_ALLOWED_DOMAINS", mode="before")
-    @classmethod
-    def parse_allowed_domains(cls, v: Any) -> list[str]:
-        """从逗号分隔字符串或列表中解析允许的域名。"""
-        if isinstance(v, str):
-            return [domain.strip() for domain in v.split(",") if domain.strip()]
         return v
 
     # ===== 派生属性 =====

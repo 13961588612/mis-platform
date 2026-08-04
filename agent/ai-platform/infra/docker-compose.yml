@@ -94,15 +94,18 @@ services:
       MODEL_NAME: "BAAI/bge-small-zh-v1.5"
       PORT: 8001
       MAX_BATCH_SIZE: 32
+      HF_ENDPOINT: ${HF_ENDPOINT:-https://hf-mirror.com}
+      HUGGINGFACE_HUB_ENDPOINT: ${HF_ENDPOINT:-https://hf-mirror.com}
     ports:
       - "8001:8001"
     volumes:
       - embedding_models:/app/models
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:8001/health || exit 1"]
-      interval: 15s
+      interval: 20s
       timeout: 10s
-      retries: 5
+      retries: 10
+      start_period: 300s
     networks:
       - ai-platform-net
 

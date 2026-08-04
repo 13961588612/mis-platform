@@ -1,0 +1,475 @@
+%% MIS 知识库二期 Wave D —— 同义词与术语扩展 数据结构与接口类图
+%% 来源：docs/backend/mis-kb-wave-d-design-2026-08-04.md §3
+%% 架构师 高见远 / 2026-08-04
+%% 风格对齐：docs/backend/mis-kb-wave-a-class.mermaid
+classDiagram
+    direction LR
+
+    %% ==================== 持久化实体（V18 新建 4 张表） ====================
+
+    class KbSynonymGroup {
+        <<entity new>>
+        +Long id
+        +String canonicalTerm
+        +Integer status
+        +String remark
+        +Instant createdAt
+        +Instant updatedAt
+        +Long updatedBy
+    }
+    note for KbSynonymGroup "表 kb_synonym_group\nstatus 1=启用 0=停用\ncanonical_term 不独立唯一，\n唯一性统一由 kb_synonym_term.term_norm 承担"
+
+    class KbSynonymTerm {
+        <<entity new>>
+        +Long id
+        +Long groupId
+        +String term
+        +String termNorm
+        +Integer canonical
+        +Integer sortNo
+        +Instant createdAt
+    }
+    note for KbSynonymTerm "表 kb_synonym_term\nUNIQUE(term_norm) —— 全局唯一，**不带 status 条件**（Q3 裁决：停用仍占用）\nterm 存录入原文（保留大小写用于展示）\nterm_norm = trim + toLowerCase(Locale.ROOT)\ncanonical=1 的行即规范词自身，随组自动维护\nsort_no 决定预算截断时的入选优先级\nFK group_id → kb_synonym_group ON DELETE CASCADE（Q4 硬删）"
+
+    class KbSynonymConfig {
+        <<entity new>>
+        +Long id
+        +Integer enabled
+        +Long dictVersion
+        +Instant updatedAt
+        +Long updatedBy
+    }
+    note for KbSynonymConfig "表 kb_synonym_config，**单行**（id 固定 1）\nenabled = 业务开关（S-07 页面可写）\ndict_version = 词表版本号，任何写操作 +1\n跨实例词典一致性的唯一权威源（§4.2）"
+
+    class KbSynonymImportBatch {
+        <<entity new>>
+        +Long id
+        +String token
+        +String status
+        +Long dictVersion
+        +String fileName
+        +String format
+        +String planJson
+        +Integer plannedCreate
+        +Integer plannedMerge
+        +Integer plannedSkip
+        +Long createdBy
+        +Instant createdAt
+        +Instant expiresAt
+        +Instant committedAt
+    }
+    note for KbSynonymImportBatch "表 kb_synonym_import_batch\n**预检计划必须落库**：预检可能落在实例 A、提交落在实例 B，\n内存 Map 在多实例下会「找不到 token」（§4.2 同一个根因）\nplan_json = 行级计划全文（含 skip_reason），\n提交执行 / 下载未导入行 / 回执计数三处共用一份\nstatus ∈ {PENDING, COMMITTED, EXPIRED}\ndict_version 为提交期版本校验凭据（Q10 硬约束）"
+
+    %% ==================== 内存词典与扩展（D-core 核心） ====================
+
+    class SynonymDictionary {
+        <<immutable snapshot new>>
+        -long version
+        -Map~String,Long~ termIndex
+        -Map~Long,GroupEntry~ groups
+        -int maxTermLength
+        +long version()
+        +int groupCount()
+        +int termCount()
+        +Long lookup(String termNorm)
+        +GroupEntry group(Long groupId)
+        +int maxTermLength()
+        +SynonymDictionary empty()$
+    }
+    note for SynonymDictionary "**不可变快照**：加载完成后字段只读，\n刷新 = 整体替换引用（volatile），\n读侧零锁、零全表扫（D6-1）\ntermIndex: term_norm → groupId（仅含启用组的词条）\nmaxTermLength 用于最长匹配的窗口上界"
+
+    class GroupEntry {
+        <<record new>>
+        +Long groupId
+        +String canonicalTerm
+        +List~String~ orderedTerms
+    }
+    note for GroupEntry "orderedTerms 按 sort_no 升序，规范词恒在首位\n预算「每组最多并入 M 个别名」即取本列表前 M+1 项"
+
+    class SynonymDictLoader {
+        <<service new>>
+        -KbSynonymConfigRepository configRepository
+        -KbSynonymGroupRepository groupRepository
+        -KbSynonymTermRepository termRepository
+        -volatile SynonymDictionary current
+        -volatile boolean enabledSnapshot
+        +SynonymDictionary current()
+        +boolean enabled()
+        +SynonymDictionary ensureFresh()
+        +void reloadNow(long newVersion)
+        +void pollForChanges()
+        -SynonymDictionary loadFromDb(long version)
+    }
+    note for SynonymDictLoader "**跨实例一致性三层机制（§4.2 / Q7）**\nL1 写实例即时：写事务提交后 reloadNow()，本实例 0 延迟\nL2 其它实例轮询：@Scheduled(fixedDelayString=\n   ${mis.kb.synonym.refresh-interval-ms:3000}) pollForChanges()，\n   只读 kb_synonym_config 单行 PK，version 变了才全量重载\nL3 命中测试强一致：ensureFresh() 同步查一次 version，\n   落后即就地重载 —— 管理员侧「即时生效」由此保证\n热路径 KbRetrieveService **不调用** ensureFresh()，只用 current()"
+
+    class SynonymBudget {
+        <<record new>>
+        +int maxGroups
+        +int maxTermsPerGroup
+        +int maxQueryChars
+        +int minTermLength
+    }
+    note for SynonymBudget "来源 SynonymProperties（Nacos，Q5：页面只读）\n默认 8 / 5 / 512 / 2"
+
+    class SynonymExpansion {
+        <<record new>>
+        +String status
+        +String originalQuestion
+        +String expandedQuery
+        +List~SynonymHit~ hits
+        +List~String~ droppedGroups
+        +List~String~ skippedShortTerms
+        +int totalMatchedGroups
+        +int usedGroups
+        +boolean truncated
+        +boolean engineNativeHint
+        +SynonymBudget budget
+        +SynonymExpansion disabled(String status, String question)$
+        +SynonymExpansion noMatch(String question, SynonymBudget b)$
+        +boolean expanded()
+    }
+    note for SynonymExpansion "status ∈ {EXPANDED, NO_MATCH, DISABLED_REQUEST, DISABLED_GLOBAL}\n**四态互斥且必有值**，NO_MATCH 也要显式回传（PRD §5.2-1）\nexpandedQuery 恒非空：未扩展时 == originalQuestion\n**本对象只挂在 Resolution 上，禁止进入 RetrieveHitsVO**（WD-06 红线，§7.3）"
+
+    class SynonymHit {
+        <<record new>>
+        +Long groupId
+        +String matchedTerm
+        +String canonicalTerm
+        +int addedTermCount
+    }
+
+    class SynonymTermNormalizer {
+        <<utility new>>
+        +String normalize(String raw)$
+        +boolean tooShort(String norm, int min)$
+        +boolean isAsciiWord(String norm)$
+        +boolean boundaryOk(String text, int start, int end)$
+    }
+    note for SynonymTermNormalizer "normalize = trim + toLowerCase(Locale.ROOT)\n**不做全半角折叠**（超出 PRD 范围，见 §8 待明确 U2）\nboundaryOk：纯 ASCII 词要求前后为非字母数字，\n避免 IT 命中 WITH（D6-3）；中文不设边界"
+
+    class SynonymExpandService {
+        <<service new>>
+        -SynonymDictLoader dictLoader
+        -SynonymProperties properties
+        +SynonymExpansion expand(String question, boolean disabledForThisRun)
+        +SynonymExpansion expandFresh(String question, boolean disabledForThisRun)
+        -List~Match~ longestMatchScan(String q, SynonymDictionary d)
+        -String assemble(String q, List~Match~ picked)
+    }
+    note for SynonymExpandService "**扩展逻辑唯一收口**（WD-05）——问答与命中测试同一份实现、同一份词典\nexpand()      → 用 dictLoader.current()，热路径，零全表扫\nexpandFresh() → 先 ensureFresh() 再扩展，仅命中测试调用\n装配规则（§7.4）：**就地插入**，原问句字符 100% 保留；\n超字符预算时**按组丢弃**而非字符硬截，\n仅当原问句自身超限才发生字符级截断"
+
+    class SynonymProperties {
+        <<config new>>
+        +boolean enabled
+        +int maxGroups
+        +int maxTermsPerGroup
+        +int maxQueryChars
+        +int minTermLength
+        +long refreshIntervalMs
+        +int importMaxGroups
+        +long importMaxBytes
+        +int recommendedTermLimit
+        +boolean engineNativeHint
+        +SynonymBudget toBudget()
+    }
+    note for SynonymProperties "@ConfigurationProperties(prefix=\"mis.kb.synonym\")\nenabled 语义 = **运维熔断闸**（Q2），默认 true，页面不可写\n生效开关 = properties.enabled AND config.enabled\nengineNativeHint = Q9 裁决：引擎原生词表**不可探测**（synonym.json 是\n挂进 RAGFlow 容器的文件，HTTP API 无从得知），改为运维声明式开关，\n默认 false；置 true 时命中测试轨迹显示固定提示行，前端用 === true 判定"
+
+    %% ==================== 检索链路（Wave A 既有，本波次改造） ====================
+
+    class RetrieveQuery {
+        <<record modified>>
+        +String question
+        +List~Long~ libraryIds
+        +Integer topK
+        +Double threshold
+        +String retrievalMethod
+        +Double vectorSimilarityWeight
+        +Boolean rerank
+        +String rerankModelId
+        +String emptyResultStrategy
+    }
+    note for RetrieveQuery "⚠️ **本波次语义改写（无字段增减）**：\nquestion 自 Wave D 起 = 「发给引擎的检索字符串」（可能已扩展），\n**不再等于用户原话**。需要用户原话的地方只有一个来源：调用方自己的入参。\n本条写进 Javadoc 与 §7.3 铁律。\n为什么不加 originalQuestion 字段：见 §1.3-(3) 取舍"
+
+    class RetrieveQueryResolver {
+        <<modified>>
+        -RagflowProperties engineProperties
+        -SynonymExpandService synonymExpandService
+        +Resolution resolveAll(RetrieveContext ctx)
+        +RetrieveQuery resolve(RetrieveContext ctx)
+        +EffectiveRetrieveParams effective(RetrieveContext ctx)
+        +String resolveEmptyResultStrategy(List~Long~, Map~Long,RagSettings~)
+    }
+    note for RetrieveQueryResolver "S1–S5 五步不变；**新增 S6 同义词扩展**（在 S5 之后、构造 RetrieveQuery 之前）\nS6 输入 ctx.question() 与 ctx.synonymMode()，产出 SynonymExpansion；\nRetrieveQuery.question 取 expansion.expandedQuery()"
+
+    class RetrieveContext {
+        <<record modified>>
+        +String question
+        +List~Long~ scopedLibraryIds
+        +Map~Long,RagSettings~ perLibrarySettings
+        +ParamOverride requestOverride
+        +EngineCapabilities capabilities
+        +SynonymMode synonymMode
+    }
+    note for RetrieveContext "«+synonymMode» 紧凑构造中 null → SynonymMode.AUTO\n问答链路恒传 AUTO；命中测试按勾选传 AUTO / OFF_THIS_RUN"
+
+    class SynonymMode {
+        <<enumeration new>>
+        AUTO
+        OFF_THIS_RUN
+        FRESH
+    }
+    note for SynonymMode "AUTO         问答热路径，用当前内存词典\nOFF_THIS_RUN 命中测试勾选「本次不使用」（WD-11）\nFRESH        命中测试常规运行，先 ensureFresh 再扩展（Q7 即时生效）"
+
+    class Resolution {
+        <<record modified>>
+        +RetrieveQuery query
+        +EffectiveRetrieveParams effectiveParams
+        +SynonymExpansion expansion
+    }
+    note for Resolution "「发引擎的入参 + 给人看的解释」既有模式的第三份产出。\nexpansion 恒非 null。\n**只有 KbHitTestService 把它放进响应；\nKbRetrieveService 只用于打日志**（WD-06 红线的结构性保证）"
+
+    class KbRetrieveService {
+        <<modified>>
+        -KbVisibilityService visibilityService
+        -KbLibraryRepository libraryRepository
+        -RetrieveQueryResolver retrieveQueryResolver
+        -KnowledgeEnginePort enginePort
+        +RetrieveHitsVO retrieve(Long userId, Long tenantId, RetrieveRequest req)
+    }
+    note for KbRetrieveService "本波次唯一改动：resolution.expansion() 写 DEBUG 日志。\n**RetrieveHitsVO 不新增任何字段**——问答链路对外零 query 回传，\n原问句从头到尾没离开过调用方（已核对源码：现响应仅 hits /\nemptyResultStrategy / effectiveParams 三字段）"
+
+    class KbHitTestService {
+        <<modified>>
+        -KbLibraryRepository libraryRepository
+        -KbVisibilityService visibilityService
+        -RetrieveQueryResolver retrieveQueryResolver
+        -KnowledgeEnginePort enginePort
+        +HitTestResultVO run(HitTestRequest request, Long userId)
+    }
+    note for KbHitTestService "synonymMode = request.disableSynonym()==TRUE ? OFF_THIS_RUN : FRESH\n三条既有硬约束（单库 / 强制 ACL / 不写 kb_qa_*）原样不变"
+
+    class HitTestRequest {
+        <<record modified>>
+        +Long libraryId
+        +String question
+        +Integer topK
+        +Double threshold
+        +String retrievalMethod
+        +Double vectorSimilarityWeight
+        +Boolean rerank
+        +Boolean disableSynonym
+    }
+
+    class HitTestResultVO {
+        <<record modified>>
+        +List~ChunkHitVO~ hits
+        +EffectiveParamsVO effectiveParams
+        +long elapsedMs
+        +String emptyResultStrategy
+        +boolean degraded
+        +SynonymExpansionVO synonym
+    }
+
+    class RetrieveHitsVO {
+        <<unchanged>>
+        +List~ChunkHitVO~ hits
+        +String emptyResultStrategy
+        +EffectiveParamsVO effectiveParams
+    }
+    note for RetrieveHitsVO "🚫 **本波次禁止改动**。加任何 query 字段即违反 WD-06 红线。\nT06 以序列化断言把这条钉死，T14 回归复验"
+
+    %% ==================== 管理服务（D-core / D-ui 后端） ====================
+
+    class SynonymGroupService {
+        <<service new>>
+        -KbSynonymGroupRepository groupRepository
+        -KbSynonymTermRepository termRepository
+        -SynonymConfigService configService
+        -SynonymDictLoader dictLoader
+        +PageVO~SynonymGroupVO~ page(SynonymGroupQuery q)
+        +SynonymGroupVO detail(Long id)
+        +SynonymGroupVO create(SynonymGroupSaveRequest req, Long userId)
+        +SynonymGroupVO update(Long id, SynonymGroupSaveRequest req, Long userId)
+        +void delete(Long id, Long userId)
+        -void checkTermConflicts(Long selfGroupId, List~String~ norms)
+    }
+    note for SynonymGroupService "checkTermConflicts 一次 findByTermNormIn 批量查，\n冲突时抛 KB_SYNONYM_TERM_CONFLICT 并在 data 里带\n{term, ownerGroupId, ownerCanonicalTerm} —— PRD §4.3「指名道姓」的数据基础\n每次写成功后：configService.bumpVersion() → dictLoader.reloadNow()"
+
+    class SynonymConfigService {
+        <<service new>>
+        -KbSynonymConfigRepository configRepository
+        -SynonymProperties properties
+        -SynonymDictLoader dictLoader
+        +SynonymConfigVO get()
+        +SynonymConfigVO setEnabled(boolean enabled, Long userId)
+        +long bumpVersion()
+        +long currentVersion()
+    }
+    note for SynonymConfigService "bumpVersion() = UPDATE kb_synonym_config\n  SET dict_version = dict_version + 1 WHERE id = 1 RETURNING dict_version\n（DB 侧自增，多实例并发安全）\nget() 同时返回 killSwitch 只读态、预算值、规模水位"
+
+    class SynonymImportService {
+        <<service new>>
+        -SynonymCsvCodec csvCodec
+        -SynonymJsonCodec jsonCodec
+        -KbSynonymImportBatchRepository batchRepository
+        -SynonymGroupService groupService
+        -SynonymConfigService configService
+        -SynonymProperties properties
+        +ImportPrecheckVO precheck(byte[] file, String filename, Long userId)
+        +ImportCommitVO commit(String token, boolean mergeExisting, Long userId)
+        +RejectedFile rejectedRows(Long batchId, Long userId)
+        -ImportPlan buildPlan(List~ParsedGroup~ rows, long dictVersion)
+    }
+    note for SynonymImportService "两段式（PRD §4.4.4 + 主理人 Q10 追加硬约束）：\n① precheck 不写任何词表数据，只写一行 kb_synonym_import_batch\n   （含 token + 当时的 dict_version + 完整 plan_json）\n② commit 先校验 dict_version 是否仍等于预检时的值；\n   不等 → 抛 KB_SYNONYM_IMPORT_STALE「词表已变更，请重新预检」，\n   **不允许静默多跳几行**\n③ commit 严格按 plan_json 执行；若 DB 唯一约束仍报冲突（理论已被②挡住），\n   整批回滚并返回同一 stale 错误\n格式级错误 → 整批拒绝，precheck 阶段即抛，不建 batch 行"
+
+    class SynonymCsvCodec {
+        <<utility new>>
+        +List~ParsedGroup~ parse(byte[] bytes)
+        +String write(List~SynonymGroupVO~ groups)
+        +String writeRejected(List~RejectedRow~ rows)
+    }
+    note for SynonymCsvCodec "UTF-8 BOM；别名列内分隔符 **半角竖线 |**（PRD §4.4.2）\n转义与公式注入防护口径复用 BFF KbExportService 既有实现（§7.6）\nwriteRejected 追加 skip_reason 列"
+
+    class SynonymJsonCodec {
+        <<utility new>>
+        +List~ParsedGroup~ parse(byte[] bytes)
+        +String write(List~SynonymGroupVO~ groups)
+        +String writeRejected(List~RejectedRow~ rows)
+    }
+
+    class KbResultCode {
+        <<enumeration modified>>
+        +KB_SYNONYM_TERM_CONFLICT
+        +KB_SYNONYM_GROUP_NOT_FOUND
+        +KB_SYNONYM_IMPORT_FORMAT_INVALID
+        +KB_SYNONYM_IMPORT_TOO_LARGE
+        +KB_SYNONYM_IMPORT_STALE
+        +KB_SYNONYM_IMPORT_TOKEN_INVALID
+    }
+    note for KbResultCode "码段沿用既有约定（已核对源码：4092x 冲突段末位 40926 KB_EXPORT_TOO_LARGE，\n4041x 不存在段末位 40414 KB_TICKET_NOT_FOUND）：\n40927 TERM_CONFLICT · 40928 IMPORT_FORMAT_INVALID\n40929 IMPORT_TOO_LARGE · 40930 IMPORT_STALE\n40931 IMPORT_TOKEN_INVALID · 40415 SYNONYM_GROUP_NOT_FOUND\n权限类不新增码，沿用 40310 / 公共 FORBIDDEN"
+
+    %% ==================== API 层与 BFF ====================
+
+    class SynonymInternalController {
+        <<controller new>>
+        +PageVO~SynonymGroupVO~ page(...)
+        +SynonymGroupVO detail(Long id)
+        +SynonymGroupVO create(SynonymGroupSaveRequest)
+        +SynonymGroupVO update(Long, SynonymGroupSaveRequest)
+        +void delete(Long id)
+        +SynonymConfigVO config()
+        +SynonymConfigVO setEnabled(SynonymEnabledRequest)
+        +ImportPrecheckVO precheck(MultipartFile)
+        +ImportCommitVO commit(ImportCommitRequest)
+        +String rejectedRows(Long batchId)
+        +String export(SynonymExportQuery)
+    }
+    note for SynonymInternalController "@RequestMapping(\"/internal/v1/kb/synonyms\")\n身份取 X-User-Id 请求头，**不信任请求体**（与 QaInternalController 同口径）"
+
+    class KbSynonymController {
+        <<controller new>>
+        -KbSynonymFacadeService facade
+        +Result~PageResult~ listGroups(...)
+        +Result~KbSynonymGroupVO~ getGroup(Long)
+        +Result~KbSynonymGroupVO~ createGroup(...)
+        +Result~KbSynonymGroupVO~ updateGroup(...)
+        +Result~Void~ deleteGroup(Long)
+        +Result~KbSynonymConfigVO~ config()
+        +Result~KbSynonymConfigVO~ setEnabled(...)
+        +ResponseEntity~ByteArrayResource~ export(...)
+        +Result~KbSynonymPrecheckVO~ precheck(MultipartFile)
+        +Result~KbSynonymCommitVO~ commit(...)
+        +ResponseEntity~ByteArrayResource~ rejected(Long)
+    }
+    note for KbSynonymController "@RequestMapping(\"/api/v1/kb/synonyms\")\n**独立于 KbController**（后者已 700+ 行）\n写端点全部 @OperLog(module=\"知识库\", operation=..., recordParams=true)（WD-12）\n判权走主路径 ApiPermissionInterceptor + sys_api 注册表；\n三档权限码见 §7.2 三方映射表"
+
+    class KbSynonymFacadeService {
+        <<service new>>
+        -KbWebClient kbWebClient
+        +...透传各方法
+    }
+
+    class KbWebClient {
+        <<modified>>
+        +KbSynonymPageVO listSynonymGroups(...)
+        +KbSynonymGroupVO saveSynonymGroup(...)
+        +KbSynonymPrecheckVO precheckSynonymImport(String, String, byte[])
+        +...
+    }
+    note for KbWebClient "导入沿用既有 multipart 透传能力（uploadDocument 同款）\n**BFF 不解析文件**：格式解析属领域逻辑，收口在 mis-kb，\n否则 CSV/JSON 语义会在两个服务里各写一份"
+
+    %% ==================== 前端（features/kb/synonym，Q1 裁决） ====================
+
+    class KbSynonymPage {
+        <<tsx new>>
+        +搜索 + 状态筛选 + 服务端分页
+        +规模水位区
+        +全局开关（页头 actions）
+        +新建/编辑抽屉 + 导入对话框
+    }
+    note for KbSynonymPage "features/kb/synonym/kb-synonym-page.tsx\n路由 /kb/synonyms —— 归属 features/kb 是 Q1 裁决结果：\n跨域会直接撞 eslint arch/no-cross-feature（error）"
+
+    class KbSynonymTraceCard {
+        <<tsx new>>
+        +四态徽标
+        +原始问题 / 实际检索对照（扩展词高亮 + 复制）
+        +命中术语组 chip（跳 S-07）
+        +截断与短词提示
+    }
+    note for KbSynonymTraceCard "features/kb/hittest/kb-synonym-trace-card.tsx\n**同域文件，不跨 feature**；跳 S-07 用 navigate('/kb/synonyms?groupId=..')，\n不 import S-07 组件（避免与 keep-alive PAGE_MAP 形成环）\n无 kb:config:synonym:view 权限时 chip 降级为纯文本"
+
+    %% ==================== 关系 ====================
+
+    KbSynonymGroup "1" *-- "N" KbSynonymTerm : ON DELETE CASCADE
+    SynonymDictionary o-- GroupEntry
+    SynonymDictLoader --> SynonymDictionary : publishes snapshot
+    SynonymDictLoader ..> KbSynonymConfig : polls dict_version
+    SynonymDictLoader ..> KbSynonymGroup : full load on version change
+    SynonymDictLoader ..> KbSynonymTerm : full load on version change
+
+    SynonymExpandService --> SynonymDictLoader
+    SynonymExpandService --> SynonymProperties
+    SynonymExpandService ..> SynonymTermNormalizer : uses
+    SynonymExpandService --> SynonymExpansion : produces
+    SynonymExpansion o-- SynonymHit
+    SynonymExpansion --> SynonymBudget
+    SynonymProperties --> SynonymBudget : toBudget()
+
+    RetrieveQueryResolver --> SynonymExpandService : S6
+    RetrieveQueryResolver --> Resolution : produces
+    RetrieveQueryResolver ..> RetrieveContext : consumes
+    RetrieveContext --> SynonymMode
+    Resolution --> RetrieveQuery
+    Resolution --> SynonymExpansion
+
+    KbRetrieveService --> RetrieveQueryResolver
+    KbRetrieveService --> RetrieveHitsVO : produces (no query echoed)
+    KbHitTestService --> RetrieveQueryResolver
+    KbHitTestService ..> HitTestRequest
+    KbHitTestService --> HitTestResultVO : produces
+    HitTestResultVO ..> SynonymExpansion : maps to SynonymExpansionVO
+
+    SynonymGroupService --> KbSynonymGroup
+    SynonymGroupService --> KbSynonymTerm
+    SynonymGroupService --> SynonymConfigService
+    SynonymGroupService --> SynonymDictLoader : reloadNow after write
+    SynonymGroupService ..> KbResultCode : throws
+    SynonymConfigService --> KbSynonymConfig
+    SynonymConfigService --> SynonymProperties
+    SynonymImportService --> KbSynonymImportBatch
+    SynonymImportService --> SynonymGroupService
+    SynonymImportService --> SynonymConfigService
+    SynonymImportService --> SynonymCsvCodec
+    SynonymImportService --> SynonymJsonCodec
+    SynonymImportService ..> KbResultCode : throws
+
+    SynonymInternalController --> SynonymGroupService
+    SynonymInternalController --> SynonymConfigService
+    SynonymInternalController --> SynonymImportService
+
+    KbSynonymController --> KbSynonymFacadeService
+    KbSynonymFacadeService --> KbWebClient
+    KbWebClient ..> SynonymInternalController : HTTP /internal/v1/kb/synonyms/**
+
+    KbSynonymPage ..> KbSynonymController : HTTP /api/v1/kb/synonyms/**
+    KbSynonymTraceCard ..> HitTestResultVO : renders synonym段

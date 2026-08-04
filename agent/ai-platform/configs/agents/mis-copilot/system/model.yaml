@@ -1,5 +1,5 @@
 model:
-  primary: qwen-plus
+  primary: qwen3.6-plus
   fallback: deepseek-v4-flash
   strategy: default-primary
   gateway: llm-gateway
