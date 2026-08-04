@@ -1,5 +1,8 @@
 package com.mis.adminbff.client;
 
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.mis.adminbff.config.BffProperties;
 import com.mis.adminbff.dto.kb.KbAclVO;
 import com.mis.adminbff.dto.kb.KbCategoryVO;
@@ -19,6 +22,16 @@ import com.mis.adminbff.dto.kb.KbQaSessionListVO;
 import com.mis.adminbff.dto.kb.KbQaSessionVO;
 import com.mis.adminbff.dto.kb.KbQaTicketVO;
 import com.mis.adminbff.dto.kb.KbRagSettings;
+import com.mis.adminbff.dto.kb.KbSynonymConfigUpdateRequest;
+import com.mis.adminbff.dto.kb.KbSynonymConfigVO;
+import com.mis.adminbff.dto.kb.KbSynonymFileVO;
+import com.mis.adminbff.dto.kb.KbSynonymGroupSaveRequest;
+import com.mis.adminbff.dto.kb.KbSynonymGroupVO;
+import com.mis.adminbff.dto.kb.KbSynonymImportCommitRequest;
+import com.mis.adminbff.dto.kb.KbSynonymImportCommitVO;
+import com.mis.adminbff.dto.kb.KbSynonymImportPrecheckVO;
+import com.mis.common.core.exception.BusinessException;
+import com.mis.common.core.exception.ResultCode;
 import com.mis.common.core.result.PageResult;
 import com.mis.common.core.result.Result;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -29,7 +42,9 @@ import org.springframework.http.client.MultipartBodyBuilder;
 import org.springframework.stereotype.Component;
 import org.springframework.web.reactive.function.BodyInserters;
 import org.springframework.web.reactive.function.client.WebClient;
+import org.springframework.web.reactive.function.client.WebClientResponseException;
 import org.springframework.web.util.UriComponentsBuilder;
+import reactor.core.publisher.Mono;
 
 import java.util.List;
 import java.util.Map;
@@ -96,22 +111,103 @@ public class KbWebClient extends AbstractDownstreamClient {
     private static final ParameterizedTypeReference<Result<KbHitTestResultVO>> HIT_TEST =
             new ParameterizedTypeReference<>() {};
 
+    // ---------------------------------------------------------------- 同义词（Wave D / T10）
+
+    /**
+     * 同义词各端点<b>统一</b>的下游响应类型：{@code data} 一律先落成未定型的 {@link JsonNode}。
+     *
+     * <p><b>为什么不直接写成 {@code Result<KbSynonymGroupVO>}：</b>词条冲突（40927）时
+     * mis-kb 往 {@code data} 里塞的是 {@code {term, ownerGroupId, ownerCanonicalTerm}}，
+     * 与成功态的 {@code KbSynonymGroupVO} 形状完全不同。若按成功态类型解码，
+     * Jackson 会把这三个「不认识」的字段悄悄丢掉（默认
+     * {@code FAIL_ON_UNKNOWN_PROPERTIES=false}），得到一个字段全 {@code null} 的空壳——
+     * 链路无异常、无日志，前端却只能显示一个没有意义的 {@code #-}，AC-11 当场判死。
+     *
+     * <p>先解成 {@code JsonNode}、成功后再按目标类型转换，成本是一次内存内的
+     * {@code convertValue}，换来的是<b>错误明细的形状不受成功态类型约束</b>。
+     */
+    private static final ParameterizedTypeReference<Result<JsonNode>> SYNONYM_RAW =
+            new ParameterizedTypeReference<>() {};
+
+    private static final TypeReference<PageResult<KbSynonymGroupVO>> SYNONYM_GROUP_PAGE =
+            new TypeReference<>() {};
+    private static final TypeReference<KbSynonymGroupVO> SYNONYM_GROUP =
+            new TypeReference<>() {};
+    private static final TypeReference<KbSynonymConfigVO> SYNONYM_CONFIG =
+            new TypeReference<>() {};
+    private static final TypeReference<KbSynonymFileVO> SYNONYM_FILE =
+            new TypeReference<>() {};
+    private static final TypeReference<KbSynonymImportPrecheckVO> SYNONYM_PRECHECK =
+            new TypeReference<>() {};
+    private static final TypeReference<KbSynonymImportCommitVO> SYNONYM_COMMIT =
+            new TypeReference<>() {};
+
+    /**
+     * 单次响应允许缓冲的最大字节数（16MB）。
+     *
+     * <p>WebClient 默认只给 256KB。同义词导出的硬上限是 10000 个术语组
+     * （{@code SynonymImportService.EXPORT_MAX_GROUPS}），整份词表以 JSON 字符串形态
+     * 装在 {@code Result<SynonymFileVO>.data.content} 里回传，5k～1 万词条的验收规模
+     * 轻松越过 256KB —— 越过后抛的是 {@code DataBufferLimitException}，
+     * 表现为「导出功能在小词表上一直好好的，词表一大就报下游调用失败」，
+     * 排查成本极高。导入预检报告（最多 2000 行逐行明细）同理。
+     *
+     * <p>只放宽<b>本客户端</b>的编解码上限——见 {@link #buildClient} 里的 {@code clone()}，
+     * 那一步是这句话能成立的前提。
+     */
+    private static final int MAX_IN_MEMORY_BYTES = 16 * 1024 * 1024;
+
+    /**
+     * 用于「{@link JsonNode} ↔ 目标 DTO」互转的映射器。
+     *
+     * <p>注入容器里那一个而不是 {@code new ObjectMapper()}：目标 DTO 含
+     * {@code Instant}（{@code KbSynonymGroupVO.updatedAt} 等），裸实例没有注册
+     * JavaTimeModule，转换会直接抛异常。用容器实例还能保证与 BFF 对外响应
+     * 的日期格式口径完全一致。
+     */
+    private final ObjectMapper objectMapper;
+
     public KbWebClient(
             @Qualifier("plainWebClientBuilder") WebClient.Builder plainBuilder,
             @Qualifier("loadBalancedWebClientBuilder") WebClient.Builder loadBalancedBuilder,
-            BffProperties properties) {
+            BffProperties properties,
+            ObjectMapper objectMapper) {
         super(buildClient(plainBuilder, loadBalancedBuilder, properties), properties.getAggregateTimeoutMs());
+        this.objectMapper = objectMapper;
     }
 
+    /**
+     * 组装本客户端专属的 {@link WebClient}。
+     *
+     * <p><b>{@code clone()} 不是防御性写法，是必需的。</b>
+     * {@code plainWebClientBuilder} / {@code loadBalancedWebClientBuilder} 在
+     * {@code BffConfiguration} 里是<b>单例 Bean</b>，而 {@code WebClient.Builder} 是可变对象。
+     * {@code baseUrl()} 每次调用是<b>覆盖</b>，各客户端各设各的、互不干扰；
+     * 但 {@code codecs()} 是<b>追加</b>（{@code DefaultWebClientBuilder} 把 configurer 存进列表），
+     * 直接调用会让此后<b>所有</b>用同一个 builder 构建的下游客户端
+     * （AiPlatform / Iam / Org / System / Audit …）统统继承这里的 16MB 上限。
+     * 更糟的是 Bean 创建顺序不保证，「谁受影响」会随启动顺序漂移——
+     * 这种问题在测试里永远复现不出来。{@code clone()} 出一份私有副本后，
+     * 改动只作用于本客户端；{@code @LoadBalanced} 注入的负载均衡过滤器
+     * 会随副本一起带走，服务发现不受影响。
+     *
+     * @param plainBuilder        直连构建器
+     * @param loadBalancedBuilder 服务发现构建器
+     * @param properties          BFF 配置
+     * @return 本客户端专属实例
+     */
     private static WebClient buildClient(
             WebClient.Builder plainBuilder,
             WebClient.Builder loadBalancedBuilder,
             BffProperties properties) {
-        WebClient.Builder builder = properties.isKbDiscoveryEnabled() ? loadBalancedBuilder : plainBuilder;
-        return builder.baseUrl(resolveBaseUrl(
-                properties.isKbDiscoveryEnabled(),
-                properties.getKbServiceId(),
-                properties.getKbBaseUrl())).build();
+        WebClient.Builder shared = properties.isKbDiscoveryEnabled() ? loadBalancedBuilder : plainBuilder;
+        return shared.clone()
+                .baseUrl(resolveBaseUrl(
+                        properties.isKbDiscoveryEnabled(),
+                        properties.getKbServiceId(),
+                        properties.getKbBaseUrl()))
+                .codecs(configurer -> configurer.defaultCodecs().maxInMemorySize(MAX_IN_MEMORY_BYTES))
+                .build();
     }
 
     // ------------------------------------------------------------------ 分类
@@ -534,7 +630,313 @@ public class KbWebClient extends AbstractDownstreamClient {
                 .bodyToMono(STRING));
     }
 
+    // ------------------------------------------------------------------ 同义词（S-07 / Wave D）
+
+    /**
+     * 术语组分页列表。
+     *
+     * @param params {@code keyword} / {@code status} / {@code page} / {@code size} / {@code sort}
+     * @return 分页结果
+     */
+    public PageResult<KbSynonymGroupVO> listSynonymGroups(Map<String, Object> params) {
+        return blockSynonym(client().get()
+                .uri(buildUri("/internal/v1/kb/synonyms", params))
+                .headers(loginContextHeaders())
+                .retrieve()
+                .bodyToMono(SYNONYM_RAW), SYNONYM_GROUP_PAGE);
+    }
+
+    /**
+     * 术语组详情（含完整词条列表）。
+     *
+     * @param id 组 ID
+     * @return 详情视图
+     */
+    public KbSynonymGroupVO getSynonymGroup(Long id) {
+        return blockSynonym(client().get()
+                .uri("/internal/v1/kb/synonyms/{id}", id)
+                .headers(loginContextHeaders())
+                .retrieve()
+                .bodyToMono(SYNONYM_RAW), SYNONYM_GROUP);
+    }
+
+    /**
+     * 新建术语组。
+     *
+     * <p>词条冲突时下游返回 40927，明细经 {@link #blockSynonym} 原样上抛。
+     *
+     * @param request 保存请求
+     * @return 新建后的详情
+     */
+    public KbSynonymGroupVO createSynonymGroup(KbSynonymGroupSaveRequest request) {
+        return blockSynonym(client().post()
+                .uri("/internal/v1/kb/synonyms")
+                .headers(loginContextHeaders())
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(request)
+                .retrieve()
+                .bodyToMono(SYNONYM_RAW), SYNONYM_GROUP);
+    }
+
+    /**
+     * 编辑术语组。冲突语义同 {@link #createSynonymGroup}。
+     *
+     * @param id      组 ID
+     * @param request 保存请求
+     * @return 保存后的详情
+     */
+    public KbSynonymGroupVO updateSynonymGroup(Long id, KbSynonymGroupSaveRequest request) {
+        return blockSynonym(client().put()
+                .uri("/internal/v1/kb/synonyms/{id}", id)
+                .headers(loginContextHeaders())
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(request)
+                .retrieve()
+                .bodyToMono(SYNONYM_RAW), SYNONYM_GROUP);
+    }
+
+    /**
+     * 删除术语组（硬删，级联删词条）。
+     *
+     * @param id 组 ID
+     */
+    public void deleteSynonymGroup(Long id) {
+        discardSynonym(client().delete()
+                .uri("/internal/v1/kb/synonyms/{id}", id)
+                .headers(loginContextHeaders())
+                .retrieve()
+                .bodyToMono(SYNONYM_RAW));
+    }
+
+    /**
+     * 读取同义词全局配置（双闸 + 预算 + 规模水位）。
+     *
+     * @return 配置视图
+     */
+    public KbSynonymConfigVO getSynonymConfig() {
+        return blockSynonym(client().get()
+                .uri("/internal/v1/kb/synonyms/config")
+                .headers(loginContextHeaders())
+                .retrieve()
+                .bodyToMono(SYNONYM_RAW), SYNONYM_CONFIG);
+    }
+
+    /**
+     * 切换库内业务开关。
+     *
+     * @param request 开关请求
+     * @return 切换后的配置视图
+     */
+    public KbSynonymConfigVO updateSynonymConfig(KbSynonymConfigUpdateRequest request) {
+        return blockSynonym(client().put()
+                .uri("/internal/v1/kb/synonyms/config")
+                .headers(loginContextHeaders())
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(request)
+                .retrieve()
+                .bodyToMono(SYNONYM_RAW), SYNONYM_CONFIG);
+    }
+
+    /**
+     * 导出词表。
+     *
+     * <p>内部这一跳走 JSON（{@code Result<SynonymFileVO>}）而非字节流，
+     * 导出超限（40926）才能沿统一错误通道把 code/message 带回来。
+     *
+     * @param params {@code keyword} / {@code status} / {@code format}
+     * @return 文件载荷（文本内容，CSV 场景已含 BOM）
+     */
+    public KbSynonymFileVO exportSynonyms(Map<String, Object> params) {
+        return blockSynonym(client().get()
+                .uri(buildUri("/internal/v1/kb/synonyms/export", params))
+                .headers(loginContextHeaders())
+                .retrieve()
+                .bodyToMono(SYNONYM_RAW), SYNONYM_FILE);
+    }
+
+    /**
+     * 导入阶段一 · 预检：<b>原样透传 multipart</b>。
+     *
+     * <p>照 {@link #uploadDocument} 同款写法。<b>BFF 不解析文件内容</b>——
+     * CSV/JSON 的表头校验、别名切分、BOM 容忍全部是领域语义，收口在 mis-kb。
+     * 在这里「顺手」解析一次，等于让同一套格式规则有两份实现，
+     * 将来改分隔符只改一边就是线上事故。
+     *
+     * @param filename    原始文件名（下游按扩展名嗅探格式，必须原样带上）
+     * @param contentType 原始内容类型；{@code null} 时回落 octet-stream
+     * @param bytes       文件字节
+     * @return 预检报告
+     */
+    public KbSynonymImportPrecheckVO precheckSynonymImport(
+            String filename, String contentType, byte[] bytes) {
+        MultipartBodyBuilder builder = new MultipartBodyBuilder();
+        ByteArrayResource resource = new ByteArrayResource(bytes) {
+            @Override
+            public String getFilename() {
+                return filename;
+            }
+        };
+        builder.part("file", resource)
+                .filename(filename)
+                .contentType(contentType != null
+                        ? MediaType.parseMediaType(contentType)
+                        : MediaType.APPLICATION_OCTET_STREAM);
+        return blockSynonym(client().post()
+                .uri("/internal/v1/kb/synonyms/import/precheck")
+                .headers(loginContextHeaders())
+                .contentType(MediaType.MULTIPART_FORM_DATA)
+                .body(BodyInserters.fromMultipartData(builder.build()))
+                .retrieve()
+                .bodyToMono(SYNONYM_RAW), SYNONYM_PRECHECK);
+    }
+
+    /**
+     * 导入阶段二 · 提交。
+     *
+     * @param request 提交请求（token + 同名规范词处置策略）
+     * @return 执行计数
+     */
+    public KbSynonymImportCommitVO commitSynonymImport(KbSynonymImportCommitRequest request) {
+        return blockSynonym(client().post()
+                .uri("/internal/v1/kb/synonyms/import/commit")
+                .headers(loginContextHeaders())
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(request)
+                .retrieve()
+                .bodyToMono(SYNONYM_RAW), SYNONYM_COMMIT);
+    }
+
+    /**
+     * 导入阶段三 · 下载未导入行。
+     *
+     * @param batchId 批次 ID
+     * @return 文件载荷
+     */
+    public KbSynonymFileVO rejectedSynonymRows(Long batchId) {
+        return blockSynonym(client().get()
+                .uri("/internal/v1/kb/synonyms/import/{batchId}/rejected", batchId)
+                .headers(loginContextHeaders())
+                .retrieve()
+                .bodyToMono(SYNONYM_RAW), SYNONYM_FILE);
+    }
+
     // ------------------------------------------------------------------ 内部
+
+    /**
+     * 发起调用并把未定型的 {@code data} 转成目标类型；失败时<b>连同明细</b>抛出。
+     *
+     * @param mono   下游响应
+     * @param target 成功态目标类型
+     * @param <T>    目标类型
+     * @return 成功态数据；下游 {@code data} 为空时返回 {@code null}
+     */
+    private <T> T blockSynonym(Mono<Result<JsonNode>> mono, TypeReference<T> target) {
+        return resolveSynonym(awaitSynonym(mono), objectMapper, target);
+    }
+
+    /**
+     * 发起调用但丢弃 {@code data}（删除等无返回体的端点）。
+     *
+     * <p>不复用 {@link #blockSynonym} 是因为那条路径会对 {@code data} 做类型转换，
+     * 而删除成功时下游给的是 {@code null}；单开一条只判成败的通道更直白，
+     * 也避免将来下游「顺手」在成功响应里加个字段就把删除打挂。
+     *
+     * @param mono 下游响应
+     */
+    private void discardSynonym(Mono<Result<JsonNode>> mono) {
+        Result<JsonNode> result = awaitSynonym(mono);
+        if (result == null) {
+            throw new BusinessException(ResultCode.INTERNAL_ERROR, "下游无响应");
+        }
+        if (!result.isSuccess()) {
+            throw new BusinessException(
+                    result.getCode(), result.getMessage(), toPlainData(objectMapper, result.getData()));
+        }
+    }
+
+    /**
+     * 阻塞取下游响应，把传输层故障归一成 {@link BusinessException}。
+     *
+     * @param mono 下游响应
+     * @return 下游 {@code Result}；可能为 {@code null}
+     */
+    private Result<JsonNode> awaitSynonym(Mono<Result<JsonNode>> mono) {
+        try {
+            return mono.block(timeout());
+        } catch (BusinessException ex) {
+            throw ex;
+        } catch (WebClientResponseException ex) {
+            throw new BusinessException(ResultCode.INTERNAL_ERROR,
+                    "下游调用失败: HTTP " + ex.getStatusCode().value());
+        } catch (Exception ex) {
+            throw new BusinessException(ResultCode.INTERNAL_ERROR, "下游调用失败: " + ex.getMessage());
+        }
+    }
+
+    /**
+     * 解包同义词端点的下游响应。
+     *
+     * <p><b>这是 40927 冲突明细能活着到前端的关键一跳</b>，故拆成静态方法以便直接单测
+     * （见 {@code KbWebClientSynonymPayloadTest}）：
+     * <ul>
+     *   <li>下游成功 —— 把 {@code data} 按<b>成功态</b>类型转换后返回；</li>
+     *   <li>下游失败 —— 把 {@code code} / {@code message} / <b>{@code data} 原样</b>
+     *       装进 {@link BusinessException}。{@code data} 先摊平成
+     *       {@code Map}/{@code List}/标量，由全局异常处理器写回响应体，
+     *       形状与下游给的逐字段一致，<b>一个字段都不丢</b>。</li>
+     * </ul>
+     *
+     * <p>失败分支<b>刻意不做类型转换</b>：错误态的 {@code data} 与成功态类型无关，
+     * 一转就把 {@code {term, ownerGroupId, ownerCanonicalTerm}} 转没了。
+     *
+     * @param result 下游响应
+     * @param mapper 转换用映射器
+     * @param target 成功态目标类型
+     * @param <T>    目标类型
+     * @return 成功态数据；{@code data} 为空时返回 {@code null}
+     */
+    static <T> T resolveSynonym(Result<JsonNode> result, ObjectMapper mapper, TypeReference<T> target) {
+        if (result == null) {
+            throw new BusinessException(ResultCode.INTERNAL_ERROR, "下游无响应");
+        }
+        if (!result.isSuccess()) {
+            throw new BusinessException(
+                    result.getCode(), result.getMessage(), toPlainData(mapper, result.getData()));
+        }
+        JsonNode data = result.getData();
+        if (data == null || data.isNull()) {
+            return null;
+        }
+        try {
+            return mapper.convertValue(data, target);
+        } catch (IllegalArgumentException ex) {
+            throw new BusinessException(ResultCode.INTERNAL_ERROR,
+                    "下游响应解析失败: " + ex.getMessage());
+        }
+    }
+
+    /**
+     * 把错误态 {@code data} 摊平成普通 Java 结构。
+     *
+     * <p>不直接把 {@link JsonNode} 塞进异常，是为了让审计切面、日志与响应序列化
+     * 面对的都是最普通的 {@code Map}/{@code List}/标量——{@code JsonNode} 能被
+     * Jackson 正确写出，却会在别处（比如 {@code toString()} 拼日志）表现得不一样。
+     *
+     * @param mapper 转换用映射器
+     * @param node   错误态明细节点，可为 {@code null}
+     * @return 摊平后的对象；无明细时 {@code null}
+     */
+    private static Object toPlainData(ObjectMapper mapper, JsonNode node) {
+        if (node == null || node.isNull()) {
+            return null;
+        }
+        try {
+            return mapper.convertValue(node, Object.class);
+        } catch (IllegalArgumentException ex) {
+            // 明细转换失败也绝不能把整个错误吞成 500：宁可退化成字符串，也要保住 code + message
+            return node.toString();
+        }
+    }
 
     /**
      * 拼接带可选查询参数的 URI。
