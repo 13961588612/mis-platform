@@ -21,7 +21,12 @@ import { TabBar } from '@/components/layout/tab-bar';
 import { SideNav } from '@/components/layout/side-nav';
 import { HeaderToolkit } from '@/components/layout/header-toolkit';
 import { CopilotPanel } from '@/components/layout/copilot-panel';
-import { KeepAliveOutlet, KEEP_ALIVE_META, registerIframeApps } from '@/components/layout/keep-alive-outlet';
+import {
+  KeepAliveOutlet,
+  KEEP_ALIVE_META,
+  registerIframeApps,
+  resolveDynamicPageMeta,
+} from '@/components/layout/keep-alive-outlet';
 import { getIframeApp } from '@/lib/nav/iframe-apps';
 import {
   CommandPalette,
@@ -34,6 +39,8 @@ import {
   findSystemNavItem,
   type SystemNavNode,
 } from '@/lib/nav/system-nav';
+import { KB_NAV } from '@/lib/nav/kb-nav';
+import { resolveHostLanding } from '@/lib/nav/host-apps';
 import { mergeNavWithFallback, routerMenusToSystemNav } from '@/lib/nav/menus-to-nav';
 import { useTabStore } from '@/stores/tab-store';
 
@@ -69,13 +76,15 @@ export function AppLayout() {
   const openTab = useTabStore((s) => s.openTab);
 
   const navNodes: SystemNavNode[] = useMemo(() => {
+    // 各子系统的静态权威清单：动态菜单仅作增强，避免 seed/授权缺漏导致侧栏空洞。
+    // 优先按路由前缀判定（用户可能以 system 登录后跨子系统跳转），再回退 app.code。
+    const inKb = location.pathname === '/kb' || location.pathname.startsWith('/kb/');
+    const fallback = inKb || app?.code === 'kb' ? KB_NAV : app?.code === 'system' ? SYSTEM_NAV : null;
     const dyn = routerMenusToSystemNav(menus);
-    if (!dyn) return SYSTEM_NAV;
-    // 系统管理子系统：SYSTEM_NAV 是权威完整清单，后端菜单仅作增强。
-    // 后端 seed/权限偶发缺漏时（如迁移未执行）仍保证侧栏结构完整。
-    if (app?.code === 'system') return mergeNavWithFallback(SYSTEM_NAV, dyn);
+    if (!dyn) return fallback ?? SYSTEM_NAV;
+    if (fallback) return mergeNavWithFallback(fallback, dyn);
     return dyn;
-  }, [menus, app?.code]);
+  }, [menus, app?.code, location.pathname]);
 
   const navItem = useMemo(() => {
     for (const n of navNodes) {
@@ -94,10 +103,23 @@ export function AppLayout() {
   const iframeCode = location.pathname.startsWith('/iframe/') ? location.pathname.slice('/iframe/'.length) : null;
   const iframeApp = iframeCode ? apps.find((a) => a.code === iframeCode) : null;
   const iframeReg = iframeCode ? getIframeApp(iframeCode) : null;
+  // 明细页（如 /kb/libraries/12）不在侧栏清单里，navItem 会前缀命中列表页导致标题重名，
+  // 因此动态元信息必须排在 navItem 之前。
+  const dynamicMeta = useMemo(() => resolveDynamicPageMeta(location.pathname), [location.pathname]);
   const pageTitle =
-    iframeApp?.name ?? iframeReg?.title ?? navItem?.title ?? KEEP_ALIVE_META[location.pathname]?.title ?? '概览';
+    iframeApp?.name ??
+    iframeReg?.title ??
+    dynamicMeta?.title ??
+    navItem?.title ??
+    KEEP_ALIVE_META[location.pathname]?.title ??
+    '概览';
   const pageIcon =
-    iframeApp?.icon ?? iframeReg?.icon ?? navItem?.icon ?? KEEP_ALIVE_META[location.pathname]?.icon ?? 'LayoutDashboard';
+    iframeApp?.icon ??
+    iframeReg?.icon ??
+    dynamicMeta?.icon ??
+    navItem?.icon ??
+    KEEP_ALIVE_META[location.pathname]?.icon ??
+    'LayoutDashboard';
   const isIframeApp = Boolean(iframeCode);
 
   const openCommand = useCallback(() => setCmdOpen(true), []);
@@ -238,7 +260,7 @@ export function AppLayout() {
                             return;
                           }
                           if (item.code === 'system' || item.runtime === 'host') {
-                            navigate('/dashboard');
+                            navigate(resolveHostLanding(item.code, item.basePath));
                           }
                         }}
                       >
