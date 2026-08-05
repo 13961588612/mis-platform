@@ -298,6 +298,25 @@ query**。排查召回异常（召回过多 / 召回了看似无关的文档）�
 「距上次加载 ≥ 1 小时」**且**「自上次加载后已发生 ≥ 100 次查表」才会重新拉取。
 写进去之后长时间不生效是**预期行为**，极易被误判成故障。真要用，改完请直接重启 `ragflow`。
 
+### 5.7 ⚠️ MIS 侧同义词开关是「双闸」——库内开了还不够（U2 / 设计 §8.3）
+
+与 §5 的引擎侧词表无关，但**运维必须同时知道**这一条：MIS 自己的同义词扩展受**两个开关**
+控制，是**与（AND）**关系，任一为 `false` 即完全不扩展：
+
+| 闸 | 位置 | 谁能改 |
+|----|------|--------|
+| `kb_synonym_config.enabled` | **库内**（PostgreSQL） | 管理员在「同义词配置」页面自助开关 |
+| `killSwitchEnabled` | **Nacos** 配置项 `mis.kb.synonym.enabled`（默认 `true`） | **只有运维**，页面只读 |
+
+页面上显示的 `effective = enabled && killSwitchEnabled` 才是真正生效状态。
+
+> **运维动作**：当业务方在库内把同义词开关打开后，**需同步确认 / 将 Nacos 对应熔断闸
+> `mis.kb.synonym.enabled`（即页面上的 `killSwitchEnabled`）置为 `true`**，否则库内开关
+> 开了也不会扩展，页面 `effective` 仍为 `false`。
+>
+> 该项默认即为 `true`；只有此前因故障熔断把它降为 `false` 过，才需要显式改回。
+> 排障口诀：**用户说「开关明明开了却没效果」，先看 `killSwitchEnabled`。**
+
 ## 6. 与 MIS 的边界约定
 
 - `mis-kb` **不得**把 API Key 下发前端；调用链只能是 前端 → BFF → mis-kb → RAGFlow

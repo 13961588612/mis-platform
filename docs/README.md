@@ -105,7 +105,7 @@ docs/
 | 前端 mis-admin-web | ✅ | 登录 + 门户九宫格 + 子系统壳；业务 CRUD 页迭代中 |
 | **AI 融合（MIS × ai-platform）** | ✅ | 阶段5 前端 MVP + 后端扩展 + 融合部署全闭环；详见 [AI 融合文档中心](ai-fusion/README.md) |
 | **Coordinator–Worker 调度基座** | ✅ | 需求/架构/ADR/规范齐套；目录 [ai-fusion/coordinator-worker/](ai-fusion/coordinator-worker/README.md) |
-| **智能体运营控制台** | ✅ | 需求/架构/ADR/规范齐套（O0）；目录 [ai-fusion/agent-ops-console/](ai-fusion/agent-ops-console/README.md) |
+| **智能体运营控制台** | ✅ | host App 优先 + ai-platform 运行时（O0 文档）；[ai-fusion/agent-ops-console/](ai-fusion/agent-ops-console/README.md) |
 
 ---
 

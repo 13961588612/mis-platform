@@ -1,6 +1,6 @@
 # 运维与部署文档
 
-> 最后更新：2026-06-24
+> 最后更新：2026-08-05
 
 本目录说明如何在 **本地**、**测试**、**正式** 三类环境中运行 MIS Platform。
 
@@ -8,7 +8,8 @@
 
 | 环境 | 配置模式 | Nacos 命名空间 | 典型场景 |
 |------|----------|----------------|----------|
-| **本地开发** | local（默认） | 不连接 | IDE 直跑，连 Docker 基础设施 |
+| **本地开发** | local（默认） | 不连接 | IDE 直跑，连本机 Docker 基础设施 |
+| **远端基础设施 + 本机代码** | local 或 remote | 可选 `integration` / `test` | 中间件全在远端，本机不跑 Docker |
 | **混合联调** | remote | `integration` | 容器稳定服务 + IDE 调试被测服务 |
 | **测试环境** | remote | `test` | 测试集群 / 预发验证 |
 | **正式环境** | remote | `prod` | 生产运行 |
@@ -26,7 +27,8 @@
 
 | 文档 | 内容 |
 |------|------|
-| **[本地开发](local-dev.md)** | 基础设施、Flyway、IDE 启动、前端联调、日常调试 |
+| **[本地开发](local-dev.md)** | 本机 Docker 基础设施、Flyway、IDE 启动、前端联调 |
+| **[远端基础设施 + 本机代码](remote-infra-local-dev.md)** | PG/Redis/Nacos/MinIO/Embedding/Qdrant/RAGFlow 在远端的初始化与本地配置 |
 | **[混合联调](integration-test.md)** | 容器栈 + IDE 被测服务、集成测试 |
 | **[测试环境部署](test-deploy.md)** | 推送 test 配置、构建镜像、启动与验收 |
 | **[正式环境部署](prod-deploy.md)** | 推送 prod 配置、密钥、发版与回滚 |

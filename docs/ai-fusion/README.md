@@ -32,11 +32,11 @@
 
 ## 智能体运营控制台（规范）
 
-面向平台研发 / AI 运营的 **运营控制台**（非业务 host App）：落点 `ai-platform/frontend` `/admin/*`，管理 Agent 启停、Worker Catalog、调度观测。与 C–W 分期对齐。
+面向平台研发 / AI 运营的 **运营控制台**：**MIS host App（`sys_app=agent`，`/agent/**`）优先**；**运行时仍在 ai-platform**；Skill 权限对接 mis-system。
 
-**→ [agent-ops-console/](agent-ops-console/README.md)**（PRD · **界面设计 ui.md** · 架构 · ADR · Spec）
+**→ [agent-ops-console/](agent-ops-console/README.md)**（PRD · **界面 ui.md** · 架构 · ADR · Spec）
 
-界面强制含：技能池/权限、企微多机器人、会话、Agent 绑技能、本地对话、技能 CRUD/停用、MCP、人设与配置、**Coordinator–Worker 调度配置**（详见 [ui.md](agent-ops-console/ui.md) #1–#10）。
+界面强制含：技能池/权限、企微多机器人、会话、绑技能、本地对话、MCP、人设、**C–W 调度配置**（[ui.md](agent-ops-console/ui.md) #1–#10）。
 
 ## 目录导航
 
@@ -60,6 +60,6 @@
 - `decisions/`：当前生效的架构决策评审，作为开发依据。
 - `specs/`：各阶段需求 / 设计 / 审计快照，按阶段归档。
 - `coordinator-worker/`：**对话调度基座**专题（PRD / 架构 / ADR / Spec 齐套）
-- `agent-ops-console/`：**智能体运营控制台**专题（PRD / 架构 / ADR / Spec 齐套；落点 ai-platform `/admin`）
+- `agent-ops-console/`：**智能体运营控制台**（host App 优先 + ai-platform 运行时；PRD / UI / 架构 / ADR / Spec）
 - `archive/`：已完成或已过时的历史交付物，仅供追溯。
 - 早期探索稿（能力蓝图 PRD、集成架构、可行性评估、阶段1-2 设计）已于 2026-07-24 文档整理时移除——它们已被后续阶段5 的具体 PRD / 设计 / 实现完全取代。

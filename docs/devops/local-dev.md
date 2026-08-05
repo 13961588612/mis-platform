@@ -113,6 +113,7 @@ cd backend
 .\mvn.ps1 spring-boot:run -pl mis-org        # :8103
 .\mvn.ps1 spring-boot:run -pl mis-system     # :8105
 .\mvn.ps1 spring-boot:run -pl mis-audit      # :8106
+.\mvn.ps1 spring-boot:run -pl mis-kb         # :8108
 .\mvn.ps1 spring-boot:run -pl mis-admin-bff  # :8081
 .\mvn.ps1 spring-boot:run -pl mis-gateway    # :8080
 ```
@@ -137,8 +138,9 @@ $env:AUTH_CAPTCHA_ENABLED = "false"
 | mis-iam | 8102 | 身份与权限 |
 | mis-org | 8103 | 组织与人事 |
 | mis-system | 8105 | 菜单 / 字典 / 仪表盘统计 |
-| mis-admin-bff | 8081 | 对外 API 聚合 + API 权限拦截 |
 | mis-audit | 8106 | 登录日志 |
+| mis-kb | 8108 | 知识库（已纳入 start-dev / stop-dev） |
+| mis-admin-bff | 8081 | 对外 API 聚合 + API 权限拦截 |
 | mis-admin-web | 5173 | 前端 dev server |
 
 ### Gateway 本地路由
@@ -254,5 +256,6 @@ $env:JAVA_HOME = $env:JAVA_HOME_17
 
 - [运维总览](README.md)
 - [配置管理策略](configuration.md)
+- [远端基础设施 + 本机代码](remote-infra-local-dev.md)（中间件全在远端、本机不跑 Docker）
 - [混合联调](integration-test.md)
 - [测试环境部署](test-deploy.md)
