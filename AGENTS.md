@@ -12,7 +12,7 @@
 | 改 Java 微服务 | Backend | `docs/backend/`、对应模块 README、`mis-common` |
 | 改管理后台实现 | Frontend | `docs/frontend/admin-web-design.md` |
 | 改智能体 / 对话调度 | Agent-Python | `docs/ai-fusion/coordinator-worker/`（PRD·架构·ADR·Spec）；背景见 `docs/agent/ai-agent-design.md` |
-| 智能体运营控制台（Agent/Catalog/调度观测） | Agent-Python | `docs/ai-fusion/agent-ops-console/`（PRD·架构·ADR·Spec）；落点 `agent/ai-platform/frontend` `/admin` |
+| 智能体运营控制台（Agent/Catalog/调度观测） | Frontend + BFF + Agent-Python | `docs/ai-fusion/agent-ops-console/`；UI=`features/agent` host App；运行时=`agent/ai-platform` |
 | 部署/配置/CI | DevOps | `docs/devops/`、`deploy/` |
 | 自检 / 审 diff | Reviewer | `.cursor/rules/git-and-review.mdc` |
 

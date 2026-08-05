@@ -6,7 +6,7 @@
 > 下游技术契约：[spec.md](spec.md)  
 > 本目录首页：[README.md](README.md)  
 > 协同规范：[../coordinator-worker/](../coordinator-worker/README.md)  
-> 版本：v1.2｜状态：✅ 需求已发布｜日期：2026-08-04｜语言：中文
+> 版本：v1.4｜状态：✅ 需求已发布｜日期：2026-08-05｜语言：中文
 
 ---
 
@@ -16,30 +16,31 @@
 |---|---|
 | Language | 中文 |
 | Project Name | `agent_ops_console` |
-| 技术栈（复用既有） | 前端：`agent/ai-platform/frontend`；后端：`agent/ai-platform/backend`；Gateway：`agent/ai-platform/gateway`；配置：`configs/agents/**`、`configs/skills/**` |
-| 原始需求复述 | 规划「智能体管理」运营后台；并**强制**覆盖技能池、技能权限、企微多机器人、会话管理、Agent 绑技能、本地对话、技能 CRUD/停用、MCP、人设与配置文件管理。 |
-| 产品选型（已确认） | ① 定位 = **平台运营控制台**；② 界面落点 = **ai-platform frontend**（非 MIS host App）。 |
-| 界面硬约束 | [ui.md](ui.md) §0 **十项**必须有菜单/路由；含 **Coordinator–Worker 调度配置（#10）**。 |
+| 技术栈 | **UI**：`mis-admin-web` `features/agent`（host App）；**BFF**：`mis-admin-bff`；**运行时**：`agent/ai-platform`（backend/gateway/configs）；权限：mis-system / IAM |
+| 原始需求复述 | 运营后台强制覆盖技能池/权限、企微多机器人、会话、绑技能、本地对话、技能 CRUD、MCP、人设配置、C–W 调度配置等。 |
+| 产品选型（已确认） | ① 定位 = **平台运营控制台**；② **界面 = MIS host App 优先**；③ **运行时仍留 ai-platform**；④ Skill 权限对接 `sys_role`，未授权全路径不可执行。 |
+| 界面硬约束 | [ui.md](ui.md) §0 十项，路径前缀 **`/agent/**`**。 |
 
 ---
 
 ## 1. 产品目标
 
-> 一句话定位：**给平台研发与 AI 运营一套控制台，管理智能体配置与人设、技能池与权限、MCP、企微多机器人与全量会话，并支持本地发起调试对话；业务用户仍只通过「MIS 智能助手」对话。**
+> 一句话定位：**在 MIS 门户「智能体」host App 中**，为平台研发与 AI 运营提供控制台（人设、技能池与权限、MCP、企微多机器人、会话、C–W 调度配置、本地调试对话）；执行引擎仍在 ai-platform；业务用户仍只通过「MIS 智能助手」对话。
 
 | # | 目标 | 关键结果 |
 |---|---|---|
 | G1 Agent 可运维 | 列表/启停/详情；人设与配置文件可改 | UI #9；Agent 总览可用 |
 | G2 技能池闭环 | 池化管理 + 创建/删除/停用 | UI #1 #7 |
-| G3 技能权限 | 主体→Skill 运行授权可配 | UI #2 |
+| G3 技能权限 | 向 mis-system 角色授予执行码；未授权全路径不可跑 | UI #2 |
 | G4 Agent 绑技能 | 每 Agent 可配可用技能集 | UI #5 |
 | G5 MCP 可管 | Server 注册/连接/工具可见 | UI #8 |
 | G6 企微多机器人 | 多 Bot 配置与启停 | UI #3 |
 | G7 会话可管 | 全量记录可查可删 | UI #4 |
-| G8 本地对话 | `/chat` 选 Agent 发起 | UI #6 |
-| G9 Catalog/调度配置 | 每 Agent 可配 role / 白名单 / Catalog 元数据；全局 Catalog 可管 | UI #10；对齐 C–W Spec |
-| G10 调度可观测 | dispatch_trace 可查 | Dispatch 页 |
-| G11 业务入口不破坏 | 不向业务暴露多 Agent 选择器 | 与 C–W C4 一致 |
+| G8 本地对话 | host App `/agent/chat` 选 Agent | UI #6 |
+| G9 Catalog/调度配置 | role / 白名单 / Catalog 元数据 | UI #10 |
+| G10 调度可观测 | dispatch_trace | Dispatch 页 |
+| G11 业务入口不破坏 | 不向业务暴露多 Agent 选择器 | C–W C4 |
+| G12 门户可进 | `sys_app=agent` enterable | 对标 kb |
 
 ---
 
@@ -75,24 +76,25 @@
 
 | 用例 | 优先级 | UI# | 期望 |
 |---|---|---|---|
-| UC-SK-1 技能池浏览 | P0 | #1 | `/admin/skills` 列表/筛选/统计 |
+| UC-SK-1 技能池浏览 | P0 | #1 | `/agent/skills` 列表/筛选/统计 |
 | UC-SK-2 技能创建 | P0 | #7 | 创建自定义 Skill |
 | UC-SK-3 技能停用/启用 | P0 | #7 | enable/disable |
 | UC-SK-4 技能删除 | P0 | #7 | 确认后删除 |
-| UC-SK-5 技能权限配置 | P0 | #2 | `/admin/skills/permissions` 主体授权 |
-| UC-AG-1 Agent 绑技能 | P0 | #5 | `/admin/agents/:id/skills` 勾选保存 |
-| UC-AG-2 人设与配置编辑 | P0 | #9 | `/admin/agents/:id/config` 编辑保存 |
+| UC-SK-5 技能权限配置 | P0 | #2 | 向 **mis-system 角色**授予 Skill 执行码；未授权全路径不可执行 |
+| UC-AG-1 Agent 绑技能 | P0 | #5 | `/agent/agents/:id/skills` 勾选保存 |
+| UC-AG-2 人设与配置编辑 | P0 | #9 | `/agent/agents/:id/config` 编辑保存 |
 | UC-CW-1 Agent 调度角色 | P0 | #10 | 设置 `role=coordinator\|worker` |
 | UC-CW-2 Coordinator 委派白名单 | P0 | #10 | 勾选可委派 Worker；禁自调 |
 | UC-CW-3 Worker Catalog 元数据 | P0 | #10 | when_to_use、capabilities、契约、超时、enabled |
-| UC-CW-4 全局 Catalog 页 | P0 | #10 | `/admin/catalog` 浏览/启停；深链到 Agent 调度配置 |
+| UC-CW-4 全局 Catalog 页 | P0 | #10 | `/agent/catalog` 浏览/启停；深链到 Agent 调度配置 |
 | UC-CW-5 TaskBrief/超时/depth | P1 | #10 | Coordinator 侧治理开关与数值 |
-| UC-AG-3 Agent 列表启停 | P0 | — | `/admin/agents` |
-| UC-MCP-1 MCP 管理 | P0 | #8 | `/admin/mcp` 注册/连接/工具 |
-| UC-CH-1 企微多机器人 | P0 | #3 | `/admin/channels/wecom` CRUD/启停，**≥2 个实例可并存** |
-| UC-SS-1 会话列表与详情 | P0 | #4 | `/admin/sessions` 跨用户可查 |
+| UC-AG-3 Agent 列表启停 | P0 | — | `/agent/agents` |
+| UC-MCP-1 MCP 管理 | P0 | #8 | `/agent/mcp` 注册/连接/工具 |
+| UC-CH-1 企微多机器人 | P0 | #3 | `/agent/channels/wecom` CRUD/启停，**≥2 个实例可并存** |
+| UC-SS-1 会话列表与详情 | P0 | #4 | `/agent/sessions` 跨用户可查 |
 | UC-SS-2 删除会话 | P0 | #4 | 单删/可选批删 |
-| UC-CH-2 本地发起对话 | P0 | #6 | `/chat` 选 Agent 发消息 |
+| UC-CH-2 本地发起对话 | P0 | #6 | `/agent/chat` 选 Agent 发消息 |
+| UC-APP-1 门户进入 | P0 | — | 九宫格进入 `agent` App |
 
 ### 4.2 协同观测（C–W）
 
@@ -107,57 +109,59 @@
 
 ## 5. 信息架构
 
-**权威界面设计见 [ui.md](ui.md)。** 摘要：
+**权威界面设计见 [ui.md](ui.md)（路径 `/agent/**`）。**
 
 | 分组 | 路径 | UI# |
 |---|---|---|
-| 本地对话 | `/chat` | #6 |
-| 会话管理 | `/admin/sessions` | #4 |
-| Agent 总览 | `/admin/agents` | — |
-| Agent 可用技能 | `/admin/agents/:id/skills` | #5 |
-| Agent 人设与配置 | `/admin/agents/:id/config` | #9 |
-| **Agent 调度配置（C–W）** | `/admin/agents/:id/coordination` | **#10** |
-| **Worker Catalog** | `/admin/catalog` | **#10** |
-| 调度观测 | `/admin/dispatch` | — |
-| 技能池 | `/admin/skills` | #1 #7 |
-| 技能权限 | `/admin/skills/permissions` | #2 |
-| MCP 管理 | `/admin/mcp` | #8 |
-| 企微机器人 | `/admin/channels/wecom` | #3 |
-| 系统监控 / 审批 / 用户 | 既有路径 | — |
+| 本地对话 | `/agent/chat` | #6 |
+| 会话管理 | `/agent/sessions` | #4 |
+| Agent 总览 | `/agent/agents` | — |
+| Agent 可用技能 | `/agent/agents/:id/skills` | #5 |
+| Agent 人设与配置 | `/agent/agents/:id/config` | #9 |
+| Agent 调度配置（C–W） | `/agent/agents/:id/coordination` | #10 |
+| Worker Catalog | `/agent/catalog` | #10 |
+| 调度观测 | `/agent/dispatch` | — |
+| 技能池 | `/agent/skills` | #1 #7 |
+| 技能权限 | `/agent/skills/permissions` | #2 |
+| MCP | `/agent/mcp` | #8 |
+| 企微机器人 | `/agent/channels/wecom` | #3 |
 
-**验收门禁：** 无 [ui.md](ui.md) §5 对照表任一项「菜单可见=否」，则界面设计验收不通过。
+**验收门禁：** ui.md §5 对照表任一项缺失，或门户无法进入 `agent` App，则验收不通过。
 
 ---
 
 ## 6. 功能需求明细
 
-### 6.1 前端（必须进界面）
+### 6.1 前端（mis-admin-web host App）
 
 | ID | 需求 | UI# | 优先级 |
 |---|---|---|---|
-| FR-FE-SK-1 | 技能池页：列表/筛选/统计/重建索引 | #1 | P0 |
+| FR-FE-APP-1 | `features/agent` + 路由 `/agent/**` + 门户落地 | — | P0 |
+| FR-FE-SK-1 | 技能池页 | #1 | P0 |
 | FR-FE-SK-2 | 技能创建、删除、启用/停用 | #7 | P0 |
-| FR-FE-SK-3 | 技能权限页：按 Skill 配置用户/角色(/部门) allow/deny | #2 | P0 |
-| FR-FE-AG-1 | Agent 总览 + 启停；取消 redirect | — | P0 |
-| FR-FE-AG-2 | Agent 可用技能配置页并保存 | #5 | P0 |
-| FR-FE-AG-3 | 人设/Prompt/facts/model/runtime 等编辑器 | #9 | P0 |
-| FR-FE-CW-1 | Agent「调度配置」页：role 切换；Coordinator/Worker 分表单 | #10 | P0 |
-| FR-FE-CW-2 | Coordinator：可委派 Worker 多选、TaskBrief/超时/depth/trace 开关 | #10 | P0 |
-| FR-FE-CW-3 | Worker：when_to_use、capabilities、契约、安全级别、降级文案、catalog.enabled | #10 | P0 |
-| FR-FE-CW-4 | 全局 Catalog 页 + 深链到 Agent 调度配置；总览展示 role 徽章 | #10 | P0 |
-| FR-FE-MCP-1 | MCP 管理页：注册/连接/断开/工具/健康 | #8 | P0 |
-| FR-FE-CH-1 | 企微机器人页：多 Bot CRUD、启停、脱敏凭证 | #3 | P0 |
-| FR-FE-SS-1 | 会话管理：全量列表、详情消息、删除 | #4 | P0 |
-| FR-FE-CHAT-1 | 本地对话页标明运营调试，可选 Agent 发起 | #6 | P0 |
-| FR-FE-NAV-1 | 侧栏按 [ui.md](ui.md) §2 完整注册 | 全部 | P0 |
-| FR-FE-UX-1 | loading / empty / error；危险操作二次确认 | — | P0 |
+| FR-FE-SK-3 | 技能权限页：MIS 角色授权 | #2 | P0 |
+| FR-FE-AG-1 | Agent 总览 + 启停 | — | P0 |
+| FR-FE-AG-2 | Agent 可用技能 | #5 | P0 |
+| FR-FE-AG-3 | 人设/配置文件编辑 | #9 | P0 |
+| FR-FE-CW-1 | 调度配置页 role 分表单 | #10 | P0 |
+| FR-FE-CW-2 | Coordinator 白名单 / TaskBrief / 超时等 | #10 | P0 |
+| FR-FE-CW-3 | Worker Catalog 元数据 | #10 | P0 |
+| FR-FE-CW-4 | 全局 Catalog 页 | #10 | P0 |
+| FR-FE-MCP-1 | MCP 管理页 | #8 | P0 |
+| FR-FE-CH-1 | 企微多机器人 | #3 | P0 |
+| FR-FE-SS-1 | 会话列表/详情/删除 | #4 | P0 |
+| FR-FE-CHAT-1 | `/agent/chat` 运营调试对话 | #6 | P0 |
+| FR-FE-NAV-1 | 侧栏按 ui.md + sys_menu | 全部 | P0 |
+| FR-FE-UX-1 | loading / empty / error；危险确认 | — | P0 |
 
 ### 6.2 后端 / Gateway
 
 | ID | 需求 | 优先级 |
 |---|---|---|
 | FR-BE-SK-1 | 既有 Skill CRUD/enable/disable API 对齐 UI | P0 |
-| FR-BE-SK-2 | Skill ACL API（主体×skill×allow/deny）；运行时强制校验 | P0（现网缺口，需新建） |
+| FR-BE-SK-2 | Skill 执行权对接 mis-system：`sys_role` + permission 码；**一切执行路径** fail-closed | P0 |
+| FR-BE-SK-3 | 新建/注册 Skill 时同步权限码登记（防 authOnly 静默放行） | P0 |
+| FR-BE-SK-4 | 运行时用 MIS 权限码集合鉴权（JWT→IAM/Redis） | P0 |
 | FR-BE-AG-1 | Agent 可用技能读写（`enabled-skills` 或等价） | P0 |
 | FR-BE-AG-2 | Agent 配置文件读写 API（路径白名单 + 校验 + 热更新） | P0 |
 | FR-BE-CW-1 | `agent.role` 读写；Coordinator 禁止入白名单 | P0 |
@@ -173,10 +177,13 @@
 
 | ID | 需求 | 优先级 |
 |---|---|---|
-| FR-MIS-1 | 不新建 host App | P0 |
-| FR-MIS-2 | 运营 API 不经 BFF 暴露给业务主路径 | P0 |
-| FR-MIS-3 | 技能 ACL 主体 ID 与 MIS 用户/角色对齐（JWT claims） | P0 |
+| FR-MIS-1 | **新建 host App**：`sys_app(agent)` + 菜单 + `ENTERABLE_CODES` + `host-apps` 落地 | P0 |
+| FR-MIS-2 | 浏览器经 BFF `/api/v1/agent-ops/**`（或等价）访问运营能力；不直连 Python | P0 |
+| FR-MIS-3 | 技能 ACL：执行码默认挂 **system** App 的 `sys_role`；运营菜单挂 **agent** App 的 `sys_role`；授权 UI 按目标 App 选角色 | P0 |
+| FR-MIS-3b | 文档与 UI 文案区分：`sys_role` ≠ Agent YAML `role`；≠ 不存在的 mis-agent 服务角色 | P0 |
 | FR-MIS-4 | 业务 Copilot 仅 Coordinator（C–W C4） | — |
+| FR-MIS-5 | 运营台角色选择器经 BFF/IAM | P0 |
+| FR-MIS-6 | **不**新建运行时级 `mis-agent`；运行时留 ai-platform | P0 |
 
 ---
 
@@ -194,14 +201,14 @@
 
 ## 8. 边界与非目标
 
-**做：** ui.md 九项 + Agent 运维 + Catalog/调度（分期）+ 本地调试对话。
+**做：** host App UI（#1–#10）+ BFF 聚合 + ai-platform 运行时 + mis-system 权限。
 
 **不做：**
 
-- MIS 门户 host App、业务多 Agent 选择器
-- 新建 `mis-agent` Java 领域服务（配置真相仍在 ai-platform）
-- 用控制台替代知识库内容管理 / CRM 主数据管理
-- 无校验的任意宿主机文件浏览器
+- 业务用户多 Agent / Worker 选择器  
+- 将 QueryEngine/YAML 运行时搬进 Java `mis-agent`（本期）  
+- 以 ai-platform/frontend 作为产品主验收面  
+- 无校验任意文件浏览；替代 KB/CRM 主数据管理  
 
 ---
 
@@ -209,25 +216,25 @@
 
 | 阶段 | 产品交付 | 验收 |
 |---|---|---|
-| **O0** | 文档齐套（含 **ui.md**） | 九项均写入界面设计 |
-| **O1a** | 技能池 CRUD/停用 + 本地对话文案 + Agent 总览 | UI #1 #6 #7；B1 |
-| **O1b** | 会话列表/详情/删除 | UI #4 |
-| **O1c** | MCP 管理页 | UI #8 |
-| **O1d** | Agent 绑技能 + 人设/配置编辑 | UI #5 #9 |
-| **O1g** | **C–W 调度配置页 + Catalog 页**（role/白名单/元数据） | UI #10；可与 C2–C3 并行 |
-| **O1e** | 技能权限 ACL | UI #2 |
+| **O0** | 文档齐套（host App 优先） | 评审通过 |
+| **O1-portal** | `sys_app`+菜单+ENTERABLE+`features/agent` 壳 | 九宫格可进 `/agent/**` |
+| **O1a** | 技能池 + 本地对话 + Agent 总览 | UI #1 #6 #7 |
+| **O1b** | 会话 | UI #4 |
+| **O1c** | MCP | UI #8 |
+| **O1d** | 绑技能 + 人设配置 | UI #5 #9 |
+| **O1g** | C–W 调度 + Catalog | UI #10 |
+| **O1e** | 技能权限对接 `sys_role` | UI #2 |
 | **O1f** | 企微多机器人 | UI #3 |
-| **O2** | Dispatch 观测 | 依赖 C1 |
-| **O3** | Catalog↔工具 schema 深度同步、虚假 multi_agent 修正 | 依赖 C3；承接 O1g |
-| **O4** | 门户外链说明 | 文档 |
-
+| **O2** | Dispatch | C1 |
+| **O3** | Catalog↔schema | C3 |
 ### 黄金验收用例
 
 | # | 场景 | 期望 |
 |---|---|---|
-| B1 | 侧栏对照 ui.md §5 | 九项菜单均存在 |
+| B1 | 侧栏对照 ui.md §5 | 十项菜单/入口均存在（含 #10） |
 | B2 | 创建→停用→删除 Skill | 状态正确 |
-| B3 | 为角色授权 Skill，无权限用户触发被拒 | ACL 生效 |
+| B3 | 角色未授予执行码时，任意路径触发该 Skill | **一律拒绝**（含自动调用） |
+| B3b | 授权 UI 角色列表 | 来自 mis-system/`sys_role` |
 | B4 | 配置 ≥2 个企微机器人 | 列表并存、可独立停用 |
 | B5 | 会话页查看消息并删除 | 记录消失 |
 | B6 | 给 Agent 绑定技能并本地对话验证 | 工具面符合配置 |
@@ -243,11 +250,12 @@
 
 | # | 项 | 建议默认 |
 |---|---|---|
-| Q1 | Skill ACL 默认策略 | 未授权 = 不允许显式 `skill` 执行（fail-closed）；平台管理员豁免 |
-| Q2 | 多企微 Bot 热更新 | 优先管理 API + Gateway 热加载；否则保存后滚动重启并 UI 提示 |
-| Q3 | 会话列表数据源 | SessionManager/DB 扩展 list；保留期可配 |
-| Q4 | 配置文件可编辑路径白名单 | 仅 `configs/agents/<id>/` 下约定相对路径 |
-| Q5 | traces 存储 | 同原 Q1：环形缓冲 → Redis/PG |
+| Q1 | Skill 未授权策略 | **锁定**：一律不可执行（全路径）；角色对接 `sys_role` |
+| Q2 | 多企微 Bot 热更新 | 优先管理 API + Gateway 热加载；否则滚动重启并 UI 提示 |
+| Q3 | 会话列表数据源 | SessionManager/DB 扩展 list |
+| Q4 | 配置文件可编辑路径白名单 | 仅 `configs/agents/<id>/` 约定相对路径 |
+| Q5 | traces 存储 | 环形缓冲 → Redis/PG |
+| Q6 | 运行时是否建 mis-agent | **本期不做**；host App + BFF + ai-platform |
 
 ---
 
