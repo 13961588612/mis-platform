@@ -1,0 +1,103 @@
+classDiagram
+    direction LR
+
+    class AgentConfig {
+        +str agent_id
+        +AgentRole role
+    }
+    class AgentRole {
+        <<enumeration>>
+        COORDINATOR = "coordinator"
+        WORKER = "worker"
+    }
+    class AgentSummary {
+        +str agent_id
+        +str display_name
+        +str state
+        +str runtime_type
+        +int active_sessions
+        +bool is_active
+        +str role
+    }
+    class DispatchTraceEntry {
+        +str intent
+        +str worker_id
+        +str tool
+        +str status
+        +int latency_ms
+        +str task_id
+        +bool brief_rejected
+    }
+    class AgentEvent {
+        +AgentEventType type
+        +dict trace
+    }
+
+    AgentConfig --> AgentRole
+    AgentConfig ..> AgentSummary : list_agents 投影(含 role)
+
+    class RawBackendEvent {
+        +string type
+        +object trace
+    }
+    class GatewayAgentEvent {
+        +string type
+        +object trace
+    }
+    class EventTransformer {
+        +transform(event, channel)
+        +toH5Event(event)
+    }
+    class parseBackendAgentEvent {
+        <<function>>
+    }
+    parseBackendAgentEvent ..> RawBackendEvent : JSON.parse
+    parseBackendAgentEvent ..> GatewayAgentEvent : 构建(透传 trace)
+    EventTransformer --> GatewayAgentEvent
+
+    class RawAgentSummary {
+        +string agent_id
+        +string role
+    }
+    class FAgentSummary {
+        +string agentId
+        +AgentRole role
+    }
+    class RawAgentEvent {
+        +string type
+        +object trace
+    }
+    class FAgentEvent {
+        +string type
+        +DispatchTraceEntry[] trace.entries
+    }
+    class AgentSelector {
+        +fetchAgents()
+        +filter role==coordinator
+        +autoSelectFirst()
+    }
+    class useChat {
+        +handleRawEvent()
+        +case dispatch.trace
+    }
+    class chatStore {
+        +DispatchTraceEntry[] dispatchTrace
+        +setDispatchTrace(entries)
+    }
+    class ChatPanel {
+        +render DispatchHint
+    }
+    class DispatchHint {
+        +render(entries)
+    }
+    class ToolCallTrace {
+        +视觉样式复用
+    }
+
+    normalizeAgentList ..> RawAgentSummary : 适配
+    AgentSelector --> FAgentSummary
+    useChat --> FAgentEvent
+    adaptAgentEvent ..> RawAgentEvent : 转换
+    ChatPanel --> DispatchHint
+    DispatchHint ..> ToolCallTrace : 复用样式
+    chatStore --> DispatchTraceEntry : 持有

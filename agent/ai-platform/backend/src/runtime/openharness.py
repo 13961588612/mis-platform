@@ -14,6 +14,12 @@ from pathlib import Path
 
 from src.agent.config import AgentConfig
 from src.config import get_settings
+from src.coordinator.trace import (
+    dispatch_trace_enabled,
+    dispatch_trace_event_enabled,
+    drain_dispatch_traces,
+    persist_dispatch_traces,
+)
 from src.llm.gateway import LLMGateway
 from src.runtime.base import AgentRuntime
 from src.runtime.events import AgentEvent, HealthStatus, TokenUsage
@@ -534,6 +540,34 @@ class OpenHarnessRuntime(AgentRuntime):
                     component=item["component"],
                     props=item["props"],
                 )
+
+            # 下发本轮 Coordinator→Worker 委派轨迹（design-impl.md §4.4）。
+            # 委派工具同样运行在 agent 循环内部，无法直接 yield，故复用
+            # a2ui 的挂起缓冲范式，在此统一 drain 后按三通道分发：
+            #   通道 A（DISPATCH_TRACE_ENABLED，默认开）：写 session.state + 结构化日志；
+            #   通道 B（DISPATCH_TRACE_SSE_ENABLED，默认关）：由 SSE 路由读取本轮快照；
+            #   通道 C（DISPATCH_TRACE_EVENT_ENABLED，默认开）：额外 yield dispatch.trace 事件。
+            # 三通道全关时本段除一次空 drain 外无任何外部可见副作用，
+            # 默认 SSE done 帧保持逐字节一致。
+            dispatch_items: list[dict[str, Any]] = await drain_dispatch_traces(session_id)
+            if dispatch_items:
+                if dispatch_trace_enabled():
+                    await persist_dispatch_traces(session_id, dispatch_items)
+                    for entry in dispatch_items:
+                        _log_agent_trace(
+                            session_id,
+                            step=step,
+                            phase="dispatch",
+                            intent=entry.get("intent"),
+                            worker_id=entry.get("worker_id"),
+                            tool=entry.get("tool"),
+                            status=entry.get("status"),
+                            latency_ms=entry.get("latency_ms"),
+                            task_id=entry.get("task_id"),
+                            brief_rejected=entry.get("brief_rejected"),
+                        )
+                if dispatch_trace_event_enabled():
+                    yield AgentEvent.dispatch_trace(dispatch_items)
 
             yield AgentEvent.done(total_usage)
             _log_agent_trace(

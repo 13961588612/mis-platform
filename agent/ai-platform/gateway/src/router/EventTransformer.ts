@@ -128,6 +128,10 @@ export class EventTransformer {
       case 'tool.result':
         type = 'tool';
         break;
+      case 'dispatch.trace':
+        // 通道 C：调度轨迹按流式事件原样透传，H5 从 eventData.trace 取数
+        type = 'stream';
+        break;
       case 'error':
         type = 'error';
         break;
@@ -251,6 +255,15 @@ export class EventTransformer {
           event.result ?? {},
         );
         break;
+
+      case 'dispatch.trace':
+        // 通道 C：调度轨迹事件在 Bot 渠道不渲染卡片（设计 §8.3：不显示），静默忽略。
+        return {
+          type: 'stream',
+          channel: 'wecom-bot',
+          eventType: event.type,
+          degraded: true,
+        };
 
       case 'error':
         mappingResult = this.botEventMapper.mapError(

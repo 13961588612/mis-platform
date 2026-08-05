@@ -1,0 +1,44 @@
+%% ① Agent 选择器仅列 Coordinator + 默认选中（FR-FE-1 / FR-FE-2）
+sequenceDiagram
+    autonumber
+    participant CP as ChatPanel (H5)
+    participant AS as AgentSelector (H5)
+    participant API as backend /agents (list_agents)
+    participant Cfg as AgentConfig
+
+    CP->>AS: 挂载
+    AS->>API: GET /agents
+    API->>Cfg: 读取 inst.config.role
+    API-->>AS: AgentSummary[]{agent_id, role="coordinator":mis-copilot, ...}
+    AS->>AS: normalizeAgentList + filter role==coordinator
+    AS->>AS: 若 !value 且列表>0 → onChange(首个 coordinator)
+    AS-->>CP: onChange("mis-copilot") 自动选中
+    Note over CP: 单 coordinator 时隐藏下拉，仅显示 MIS Copilot 徽标
+    CP->>CP: createSession(agentId="mis-copilot")
+
+%% ② 对话 + 调度轨迹透传（FR-FE-3 / FR-BF-2，通道 C）
+sequenceDiagram
+    autonumber
+    participant U as 用户
+    participant CP as ChatPanel (H5)
+    participant WS as useChat (H5)
+    participant GW as Gateway
+    participant RS as Redis Stream
+    participant RT as OpenHarnessRuntime
+
+    U->>CP: 发送消息
+    CP->>GW: WS /ws/chat (chat → mis-copilot)
+    GW->>RT: 转发至 coordinator
+    RT->>RT: 引擎执行，drain dispatch_items
+    alt DISPATCH_TRACE_EVENT_ENABLED=True（通道 C）
+        RT-->>RS: yield dispatch.trace {trace:{entries:[...]}}
+    end
+    RT-->>RS: yield done(total_usage)
+    RS-->>GW: XREAD dispatch.trace / done
+    GW->>GW: parseBackendAgentEvent（透传 trace）
+    GW->>GW: EventTransformer.toH5Event（原样透传）
+    GW-->>WS: agent_event 信封 {type, event:{type:"dispatch.trace", trace}}
+    WS->>WS: handleRawEvent → adaptAgentEvent
+    WS->>WS: case "dispatch.trace" → setDispatchTrace(entries)
+    WS-->>CP: store 更新
+    CP->>CP: 渲染 <DispatchHint entries/>

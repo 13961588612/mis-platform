@@ -21,7 +21,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, status
 from pydantic import BaseModel, Field
 
-from src.agent.config import AgentConfig
+from src.agent.config import AgentConfig, AgentRole
 from src.agent.manager import AgentManager
 from src.api.deps import get_agent_manager_dep, get_config_manager_dep, get_current_user
 from src.api.response import error_response, success
@@ -85,6 +85,10 @@ class AgentSummary(BaseModel):
     runtime_type: str
     active_sessions: int
     is_active: bool
+    role: str = Field(
+        default=AgentRole.WORKER.value,
+        description="调度角色：coordinator（可委派）/ worker（不可再委派）",
+    )
 
 
 class AgentDetail(BaseModel):
@@ -104,6 +108,30 @@ class AgentDetail(BaseModel):
     routing_priority: int
     routing_keywords: list[str]
     started_at: str | None = None
+
+
+# ===== 内部工具 =====
+
+
+def _resolve_role_value(config: Any) -> str:
+    """从 AgentConfig 取出调度角色的字符串值（C4：/agents 暴露 role）。
+
+    Args:
+        config: Agent 实例的配置对象（通常为 :class:`AgentConfig`）。
+
+    Returns:
+        ``"coordinator"`` 或 ``"worker"``；无法识别时回落为 ``"worker"``，
+        保证 `/agents` 响应始终携带合法 role，不破坏既有序列化。
+    """
+    raw: Any = getattr(config, "role", None)
+    if isinstance(raw, AgentRole):
+        return raw.value
+    if isinstance(raw, str):
+        normalized: str = raw.strip().lower()
+        for role in AgentRole:
+            if role.value == normalized:
+                return role.value
+    return AgentRole.WORKER.value
 
 
 # ===== 端点 =====
@@ -175,6 +203,7 @@ async def list_agents(
             runtime_type=inst.config.runtime.type,
             active_sessions=inst.active_sessions,
             is_active=inst.lifecycle.is_active(),
+            role=_resolve_role_value(inst.config),
         ).model_dump()
         for inst in instances
     ]

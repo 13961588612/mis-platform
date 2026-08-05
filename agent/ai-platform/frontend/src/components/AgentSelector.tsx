@@ -1,16 +1,23 @@
 /**
- * AgentSelector — Agent selection dropdown component.
+ * AgentSelector — Coordinator selection component (C4 / FR-FE-1, FR-FE-2).
  *
  * Fetches the list of available agents from the backend API
- * (GET /api/v1/agents) and provides a dropdown for the user
- * to select which Agent to chat with.
+ * (GET /api/v1/agents) and exposes **only Coordinators** as chat entries.
+ * Workers (mis-rag / mis-summary / mis-extract / crm-assistant) are
+ * dispatched by the Coordinator and must never be user-selectable.
  *
- * Displays agent display name and state badge.
+ * Behaviour:
+ * - Filter: state ∈ {running, paused} AND role === "coordinator".
+ * - Auto-select the first Coordinator when nothing is selected yet
+ *   (today that is mis-copilot — resolved by role, never hardcoded).
+ * - Single Coordinator → hide the dropdown, render a plain badge instead.
+ * - Multiple Coordinators → keep the native select.
  */
 
 import React, { useCallback, useEffect, useState } from "react";
 import { apiGet } from "../utils/api";
 import { normalizeAgentList, type RawAgentSummary } from "../utils/agentAdapter";
+import { isCoordinator } from "../utils/agentRole";
 import { getAgentStateLabel, getAgentStateColor, clsx } from "../utils/format";
 import type { AgentSummary, AgentState } from "../types/agent";
 
@@ -27,11 +34,11 @@ interface AgentSelectorProps {
 // ===== Component =====
 
 /**
- * AgentSelector — dropdown for selecting an Agent to chat with.
+ * AgentSelector — Coordinator entry point for the chat panel.
  *
- * Fetches the agent list on mount and provides a native select
- * element styled with Tailwind. Only shows agents that are
- * running or paused (i.e., available for chat).
+ * Fetches the agent list on mount, keeps only chat-ready Coordinators
+ * and auto-selects the first one. Collapses to a static badge when the
+ * deployment exposes exactly one Coordinator (the default MIS setup).
  */
 export function AgentSelector({
   value,
@@ -51,12 +58,15 @@ export function AgentSelector({
       try {
         const data = await apiGet<RawAgentSummary[]>("/agents");
         if (!cancelled) {
-          const availableAgents = normalizeAgentList(data).filter(
-            (agent) => agent.state === "running" || agent.state === "paused",
-          );
+          // 1) chat-ready states, 2) Coordinator role only (FR-FE-1)
+          const availableAgents = normalizeAgentList(data)
+            .filter(
+              (agent) => agent.state === "running" || agent.state === "paused",
+            )
+            .filter((agent) => isCoordinator(agent.role));
           setAgents(availableAgents);
 
-          // Auto-select first available agent if none selected
+          // Auto-select the first Coordinator if none selected (FR-FE-2)
           if (!value && availableAgents.length > 0) {
             onChange(availableAgents[0].agentId);
           }
@@ -89,6 +99,19 @@ export function AgentSelector({
     },
     [onChange],
   );
+
+  // ===== Single Coordinator: hide the dropdown, show a label + badge =====
+  if (!isLoading && !error && agents.length === 1) {
+    const only = agents[0];
+    return (
+      <div className="flex min-w-0 flex-wrap items-center gap-2">
+        <span className="min-w-0 truncate text-sm font-medium text-surface-dark/80">
+          {only.displayName || only.agentId}
+        </span>
+        <SelectedAgentBadge agents={agents} agentId={only.agentId} />
+      </div>
+    );
+  }
 
   return (
     <div className="flex min-w-0 flex-wrap items-center gap-2">

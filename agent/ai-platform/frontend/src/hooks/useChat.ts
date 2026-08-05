@@ -33,7 +33,11 @@ import {
   type RawSessionDetail,
   type RawSessionMessage,
 } from "../utils/sessionAdapter";
-import type { AgentEvent, RawAgentEvent } from "../types/event";
+import type {
+  AgentEvent,
+  DispatchTraceEntry,
+  RawAgentEvent,
+} from "../types/event";
 import type { ChatMessage, InboundMessage } from "../types/message";
 
 // ===== Configuration =====
@@ -117,6 +121,7 @@ export function useChat(sessionId: string | null): UseChatReturn {
     setMessages,
     setGenerating,
     addTokenUsage,
+    setDispatchTrace,
     setError,
     addPendingApproval,
     removePendingApproval,
@@ -302,6 +307,16 @@ export function useChat(sessionId: string | null): UseChatReturn {
           break;
         }
 
+        case "dispatch.trace": {
+          // 通道 C：Coordinator→Worker 调度轨迹，写入 store 供 DispatchHint 渲染。
+          // 空 entries 不覆盖既有提示（避免 Worker 无调度时闪烁清空）。
+          const entries: DispatchTraceEntry[] = event.trace?.entries ?? [];
+          if (entries.length > 0) {
+            setDispatchTrace(entries);
+          }
+          break;
+        }
+
         case "error": {
           setError(
             `错误 [${event.errorCode ?? "unknown"}]: ${event.message ?? "未知错误"}`,
@@ -348,6 +363,7 @@ export function useChat(sessionId: string | null): UseChatReturn {
       updateMessage,
       updateMessageStatus,
       addTokenUsage,
+      setDispatchTrace,
       setGenerating,
       setError,
       addPendingApproval,
@@ -567,6 +583,7 @@ export function useChat(sessionId: string | null): UseChatReturn {
       addMessage(assistantMessage);
       streamingMessageIdRef.current = assistantMessageId;
       setGenerating(true);
+      setDispatchTrace([]);
       armGenerationWatchdog();
 
       // Send inbound message
@@ -605,6 +622,7 @@ export function useChat(sessionId: string | null): UseChatReturn {
       generateId,
       addMessage,
       setGenerating,
+      setDispatchTrace,
       sendInbound,
       abortGenerating,
       armGenerationWatchdog,

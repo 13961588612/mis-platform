@@ -14,6 +14,8 @@
 import type {
   AgentEvent,
   ApprovalDetail,
+  DispatchTraceEntry,
+  DispatchTracePayload,
   RawAgentEvent,
   TokenUsage,
 } from "../types/event";
@@ -121,7 +123,35 @@ export function adaptAgentEvent(raw: RawAgentEvent): AgentEvent {
     };
   }
 
+  // Dispatch trace (channel C) — keys stay snake_case by contract
+  if (raw.trace !== undefined) {
+    event.trace = adaptDispatchTrace(raw.trace);
+  }
+
   return event;
+}
+
+// ===== Dispatch Trace Adapter =====
+
+/**
+ * Normalize a raw `trace` payload into `{ entries: DispatchTraceEntry[] }`.
+ *
+ * Defensive by design: a malformed / missing payload yields an empty entry
+ * list instead of throwing, so a bad trace can never break the chat stream.
+ */
+export function adaptDispatchTrace(
+  raw: DispatchTracePayload | undefined | null,
+): DispatchTracePayload {
+  const entries = raw?.entries;
+  if (!Array.isArray(entries)) {
+    return { entries: [] };
+  }
+  return {
+    entries: entries.filter(
+      (entry): entry is DispatchTraceEntry =>
+        entry !== null && typeof entry === "object",
+    ),
+  };
 }
 
 // ===== Approval Detail Adapter =====

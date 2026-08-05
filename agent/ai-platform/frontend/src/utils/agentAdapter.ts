@@ -3,6 +3,7 @@
  */
 
 import type { AgentState, AgentSummary } from "../types/agent";
+import { normalizeAgentRole } from "./agentRole";
 
 /** Raw agent summary as returned by GET /api/v1/agents. */
 export interface RawAgentSummary {
@@ -17,6 +18,8 @@ export interface RawAgentSummary {
   activeSessions?: number;
   is_active?: boolean;
   isActive?: boolean;
+  /** Scheduling role ("coordinator" | "worker"); snake/camel are identical. */
+  role?: string;
 }
 
 /** Convert a backend agent summary to frontend AgentSummary. */
@@ -28,6 +31,8 @@ export function normalizeAgentSummary(raw: RawAgentSummary): AgentSummary {
     runtimeType: raw.runtimeType ?? raw.runtime_type ?? "",
     activeSessions: raw.activeSessions ?? raw.active_sessions ?? 0,
     isActive: raw.isActive ?? raw.is_active ?? false,
+    // Older backends omit `role` → degrade to "worker" (fail-closed).
+    role: normalizeAgentRole(raw.role),
   };
 }
 

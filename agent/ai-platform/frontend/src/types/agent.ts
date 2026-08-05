@@ -19,6 +19,18 @@ export type AgentState =
   | "stopped"
   | "error";
 
+// ===== Agent Role (Coordinator–Worker scheduling) =====
+
+/**
+ * Agent scheduling role (mirrors backend AgentRole in src/agent/config.py).
+ *
+ * - coordinator: holds the global session and may delegate to Workers.
+ * - worker:      single-skill executor, never delegates further.
+ *
+ * Only coordinators are user-selectable chat entries (C4, FR-FE-1/FR-FE-2).
+ */
+export type AgentRole = "coordinator" | "worker";
+
 // ===== Agent Summary (list response) =====
 
 /** Summary of an Agent instance for list responses. */
@@ -29,6 +41,8 @@ export interface AgentSummary {
   runtimeType: string;
   activeSessions: number;
   isActive: boolean;
+  /** Scheduling role; backend defaults to "worker" when unset. */
+  role: AgentRole;
 }
 
 // ===== Agent Detail =====

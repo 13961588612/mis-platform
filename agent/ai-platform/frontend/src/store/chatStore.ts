@@ -16,6 +16,7 @@ import { create } from "zustand";
 import type { ChatMessage, MessageStatus } from "../types/message";
 import type {
   ApprovalDetail,
+  DispatchTraceEntry,
   TokenUsage,
   WsConnectionState,
 } from "../types/event";
@@ -38,6 +39,8 @@ interface ChatState {
   tokenUsage: TokenUsage;
   /** Pending approval requests (HITL) in the current session. */
   pendingApprovals: PendingApproval[];
+  /** Coordinator→Worker dispatch trace of the latest turn (channel C). */
+  dispatchTrace: DispatchTraceEntry[];
   /** Error message (if any). */
   error: string | null;
 
@@ -62,6 +65,8 @@ interface ChatState {
   setGenerating: (generating: boolean) => void;
   /** Accumulate token usage. */
   addTokenUsage: (usage: TokenUsage) => void;
+  /** Replace the dispatch trace of the latest turn (empty array clears it). */
+  setDispatchTrace: (entries: DispatchTraceEntry[]) => void;
   /** Set the error message. */
   setError: (error: string | null) => void;
   /** Add a pending approval request. */
@@ -116,6 +121,7 @@ export const useChatStore = create<ChatState>((set) => ({
   isGenerating: false,
   tokenUsage: { ...INITIAL_TOKEN_USAGE },
   pendingApprovals: [],
+  dispatchTrace: [],
   error: null,
   approvalSender: null,
   entitySelectSender: null,
@@ -158,6 +164,7 @@ export const useChatStore = create<ChatState>((set) => ({
     set({
       messages: [],
       pendingApprovals: [],
+      dispatchTrace: [],
       tokenUsage: { ...INITIAL_TOKEN_USAGE },
       isGenerating: false,
     });
@@ -167,6 +174,7 @@ export const useChatStore = create<ChatState>((set) => ({
     set({
       messages,
       pendingApprovals: [],
+      dispatchTrace: [],
       tokenUsage: { ...INITIAL_TOKEN_USAGE },
       isGenerating: false,
     });
@@ -184,6 +192,10 @@ export const useChatStore = create<ChatState>((set) => ({
         total: state.tokenUsage.total + usage.total,
       },
     }));
+  },
+
+  setDispatchTrace: (entries) => {
+    set({ dispatchTrace: entries });
   },
 
   setError: (error) => {
@@ -221,6 +233,7 @@ export const useChatStore = create<ChatState>((set) => ({
       isGenerating: false,
       tokenUsage: { ...INITIAL_TOKEN_USAGE },
       pendingApprovals: [],
+      dispatchTrace: [],
       error: null,
     });
   },

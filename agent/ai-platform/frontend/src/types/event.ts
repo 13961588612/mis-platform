@@ -17,6 +17,7 @@ export type AgentEventType =
   | "tool.result"
   | "ui.render"
   | "approval.request"
+  | "dispatch.trace"
   | "error"
   | "done";
 
@@ -45,6 +46,38 @@ export interface ApprovalDetail {
   [key: string]: unknown;
 }
 
+// ===== Dispatch Trace (Coordinator → Worker, channel C) =====
+
+/**
+ * A single Coordinator→Worker dispatch record.
+ *
+ * Mirrors backend `DispatchTraceEntry` (src/coordinator/trace.py) field for
+ * field — these keys stay snake_case end-to-end because the backend emits
+ * them inside an opaque `trace` payload that the Gateway passes through
+ * verbatim (design-c4.md §7.3).
+ */
+export interface DispatchTraceEntry {
+  /** Declared intent, e.g. "rag" / "crm" / "summary" / "extract". */
+  intent?: string;
+  /** Target Worker agent ID, e.g. "mis-rag". */
+  worker_id?: string;
+  /** Delegation tool name, e.g. "agent__invoke". */
+  tool?: string;
+  /** Dispatch status: "completed" / "failed" / "rejected". */
+  status?: string;
+  /** End-to-end latency of the delegation in milliseconds. */
+  latency_ms?: number;
+  /** Correlation ID shared with the result envelope header and logs. */
+  task_id?: string;
+  /** True when the TaskBrief validation rejected the delegation. */
+  brief_rejected?: boolean;
+}
+
+/** Payload of a `dispatch.trace` event — fixed shape `{ entries: [...] }`. */
+export interface DispatchTracePayload {
+  entries: DispatchTraceEntry[];
+}
+
 // ===== Agent Event =====
 
 /**
@@ -56,6 +89,7 @@ export interface ApprovalDetail {
  * - tool.result:      toolName, result
  * - ui.render:        component, props
  * - approval.request: skillId, detail
+ * - dispatch.trace:   trace
  * - error:            errorCode, message
  * - done:             tokenUsage
  */
@@ -72,6 +106,8 @@ export interface AgentEvent {
   errorCode?: string;
   message?: string;
   tokenUsage?: TokenUsage;
+  /** Dispatch trace (dispatch.trace only); snake/camel identical. */
+  trace?: DispatchTracePayload;
 }
 
 // ===== Raw Event (from WebSocket, snake_case) =====
@@ -97,6 +133,8 @@ export interface RawAgentEvent {
     completion: number;
     total: number;
   };
+  /** Dispatch trace (dispatch.trace only); snake/camel identical. */
+  trace?: DispatchTracePayload;
 }
 
 // ===== WebSocket Connection State =====

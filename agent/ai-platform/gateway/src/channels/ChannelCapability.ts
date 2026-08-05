@@ -24,6 +24,7 @@ export type AgentEventType =
   | 'tool.result'
   | 'ui.render'
   | 'approval.request'
+  | 'dispatch.trace'
   | 'error'
   | 'done';
 
@@ -76,6 +77,13 @@ export interface AgentEvent {
   errorMessage?: string;
   /** Token 用量（done 使用） */
   tokenUsage?: TokenUsage;
+  /**
+   * Coordinator→Worker 委派轨迹（dispatch.trace 使用，通道 C）。
+   *
+   * 形状固定为 `{ entries: DispatchTraceEntry[] }`，由 Backend 原样透传到 H5，
+   * Gateway 不解析其内部结构。可选字段，不影响既有事件序列化。
+   */
+  trace?: Record<string, unknown>;
 }
 
 // ============================================================================

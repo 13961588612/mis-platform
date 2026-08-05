@@ -23,6 +23,8 @@ interface RawBackendEvent {
   errorMessage?: string;
   token_usage?: { prompt: number; completion: number; total: number };
   tokenUsage?: { prompt: number; completion: number; total: number };
+  /** 委派轨迹（dispatch.trace，通道 C）；snake/camel 同形，单字 trace。 */
+  trace?: Record<string, unknown>;
 }
 
 /**
@@ -65,6 +67,10 @@ export function parseBackendAgentEvent(eventJson: string): AgentEvent {
   const usage = raw.tokenUsage ?? raw.token_usage;
   if (usage != null) {
     event.tokenUsage = usage;
+  }
+  // 通道 C：dispatch.trace 的委派轨迹原样透传，Gateway 不解析内部结构
+  if (raw.trace != null) {
+    event.trace = raw.trace;
   }
 
   return event;

@@ -18,6 +18,7 @@ import { useEmbedStore } from "../store/embedStore";
 import { useChat } from "../hooks/useChat";
 import { MessageList } from "./MessageList";
 import { AgentSelector } from "./AgentSelector";
+import { DispatchHint } from "./DispatchHint";
 import { loadLastSession, loadLastSessionForAgent } from "../utils/lastSession";
 import { apiUploadFile, getAuthedFileUrl } from "../utils/api";
 import { clsx } from "../utils/format";
@@ -86,6 +87,7 @@ export function ChatPanel(): JSX.Element {
     tokenUsage,
     error,
     setError,
+    dispatchTrace,
   } = useChatStore();
 
   const { sendMessage, createSession, restoreSession, closeSession } = useChat(sessionId);
@@ -357,6 +359,9 @@ export function ChatPanel(): JSX.Element {
           </button>
         </div>
       )}
+
+      {/* Dispatch Hint：消费通道 C 的调度轻提示（仅展示，不暴露 Worker 选择器） */}
+      <DispatchHint entries={dispatchTrace} />
 
       {/* Message List */}
       <div className="flex-1 overflow-hidden">

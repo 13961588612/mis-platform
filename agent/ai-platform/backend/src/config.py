@@ -303,6 +303,44 @@ class Settings(BaseSettings):
         description="单次子 Agent 委托超时（秒）",
     )
 
+    # ===== Coordinator–Worker 调度基座（C1/C3/C5，design-impl.md §6.2）=====
+    DISPATCH_TRACE_ENABLED: bool = Field(
+        default=True,
+        description="通道 A：委派轨迹写 session.state[\"dispatch_trace\"] + 结构化日志",
+    )
+    DISPATCH_TRACE_SSE_ENABLED: bool = Field(
+        default=False,
+        description="通道 B：SSE done 帧附加 dispatchTrace（需 Java BFF 侧确认后再开）",
+    )
+    DISPATCH_TRACE_EVENT_ENABLED: bool = Field(
+        default=True,
+        description="通道 C：新增 dispatch.trace AgentEvent（C4 前端就绪，通道 C 已开启）",
+    )
+    TASK_BRIEF_STRICT: bool = Field(
+        default=True,
+        description="True（默认）=TaskBrief 校验不通过即拒绝委派；False=只记 warning 并放行（灰度回滚开关）",
+    )
+    TASK_NOTIFICATION_MODE: str = Field(
+        default="text_with_header",
+        description="结果信封渲染模式：text_with_header（默认）/ json",
+    )
+    DELEGATE_TOOL_ALIAS_ENABLED: bool = Field(
+        default=False,
+        description="是否额外注册 agent 别名（双名过渡）；默认关闭，绝不同时暴露两个工具名",
+    )
+    INVOKE_AGENT_MAX_PARALLEL: int = Field(
+        default=1,
+        description="同轮并行 spawn 上限（1=语义等价串行，只读 Worker 才可并行）",
+    )
+    INVOKE_AGENT_FAILURE_THRESHOLD: int = Field(
+        default=3,
+        description="单 Worker 连续失败熔断阈值（达到后本会话内短路 60 秒）",
+    )
+    INVOKE_AGENT_CONTINUE_ENABLED: bool = Field(
+        default=False,
+        description="是否允许 mode=\"continue\" 复用已有 Worker 子会话（未命中静默降级 spawn）",
+    )
+
     DEV_TEST_ACCOUNTS_ENABLED: bool = Field(
         default=False,
         description="是否启用 configs/test-accounts.yaml 中的测试账号登录",
