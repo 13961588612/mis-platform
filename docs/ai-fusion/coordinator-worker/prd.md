@@ -225,7 +225,7 @@
 | Q2 | IntentGate（规则/小模型）是否进 C1 | C1 以 TaskBrief+LLM 调度为主；IntentGate 可并行评估 |
 | Q3 | 第二 Coordinator（强隔离域）是否允许 | 默认不允许；须另开 ADR |
 | Q4 | 专用页是否中长期全部改走 Coordinator | 默认保留直连；结构化 UI 场景优先直连 |
-| Q5 | 智能体运营控制台落点 | **已确认**：`agent/ai-platform/frontend` 运营控制台（非 MIS host App）；见 [`../agent-ops-console/`](../agent-ops-console/README.md) |
+| Q5 | 智能体运营控制台落点 | **已确认（v1.4）**：**MIS host App 优先**（`sys_app=agent`）；运行时仍留 ai-platform；见 [`../agent-ops-console/`](../agent-ops-console/README.md) |
 
 ---
 

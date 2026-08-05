@@ -25,3 +25,15 @@ metadata:
     - query_member_profile
     - query_marketing_campaigns
     - query_customer_journey
+
+  # ---------------------------------------------------------------------------
+  # Coordinator–Worker 委派契约（spec.md §4.2 / design-impl.md §6 T04）
+  # safety_level=needs_hitl：具备 adjust_member_points / update_member_tags 等
+  # 写能力，按 spec.md §8 必须人工确认，且不参与 C5 并行委派（强制串行）。
+  # ---------------------------------------------------------------------------
+  when_to_use: 会员、积分、等级、标签、客户画像与营销活动等 CRM 业务数据查询
+  input_contract:
+    - user_question
+    - page_context_slice
+  output_contract: text
+  safety_level: needs_hitl

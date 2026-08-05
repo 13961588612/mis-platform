@@ -26,6 +26,9 @@ class AgentEventType(str, Enum):
     APPROVAL_REQUEST = "approval.request"
     ERROR = "error"
     DONE = "done"
+    # 追加在末尾：Coordinator 委派轨迹（通道 C，默认关闭，C4 前端就绪后再开）。
+    # 既有取值一律不改，保证 Gateway / BFF / 前端的现网映射零回归。
+    DISPATCH_TRACE = "dispatch.trace"
 
 
 # ============================================================================
@@ -80,6 +83,7 @@ class AgentEvent(BaseModel):
     - approval.request: skill_id、detail
     - error:            error_code、message
     - done:             token_usage
+    - dispatch.trace:   trace（Coordinator 委派轨迹，默认不产出）
     """
 
     type: AgentEventType
@@ -97,6 +101,9 @@ class AgentEvent(BaseModel):
     error_code: str | None = None
     message: str | None = None
     token_usage: TokenUsage | None = None
+    # dispatch.trace：本轮 Coordinator 委派轨迹（{"entries": [...]}）。
+    # 新增**可选**字段，默认 None → 既有事件的序列化结果不变。
+    trace: dict[str, Any] | None = None
 
     @classmethod
     def text_delta(cls, content: str) -> AgentEvent:
@@ -146,6 +153,23 @@ class AgentEvent(BaseModel):
     def done(cls, token_usage: TokenUsage | None = None) -> AgentEvent:
         """创建一个 done 事件。"""
         return cls(type=AgentEventType.DONE, token_usage=token_usage)
+
+    @classmethod
+    def dispatch_trace(cls, entries: list[dict[str, Any]]) -> AgentEvent:
+        """创建一个 dispatch.trace 事件（Coordinator 委派轨迹，通道 C）。
+
+        Args:
+            entries: 本轮委派轨迹条目列表（`DispatchTraceEntry.model_dump()`）。
+
+        Returns:
+            `dispatch.trace` 类型的 AgentEvent，`trace` 字段形如
+            ``{"entries": [...]}``。
+
+        Note:
+            仅当 ``DISPATCH_TRACE_EVENT_ENABLED=True`` 时才会被运行时产出；
+            默认关闭，避免 Gateway ``toH5Event`` 无 default 分支导致语义误标。
+        """
+        return cls(type=AgentEventType.DISPATCH_TRACE, trace={"entries": entries})
 
 
 class HealthStatus(BaseModel):

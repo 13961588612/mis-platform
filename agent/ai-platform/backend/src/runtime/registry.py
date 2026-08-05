@@ -27,6 +27,7 @@ class RuntimeCapabilities:
         multi_agent: bool = False,
         hitl: bool = True,
         stateful: bool = True,
+        delegation: bool = False,
     ) -> None:
         """声明运行时支持的能力开关。
 
@@ -34,9 +35,11 @@ class RuntimeCapabilities:
             streaming: 是否支持流式输出。
             generative_ui: 是否支持生成式 UI。
             mcp: 是否支持 MCP 工具。
-            multi_agent: 是否支持多 Agent 协作。
+            multi_agent: 是否支持运行时原生的多 Agent 协作（OH Swarm）。
             hitl: 是否支持人机协同（HITL）。
             stateful: 是否支持有状态会话。
+            delegation: 是否支持平台级 Coordinator–Worker 委派
+                （由 ``src/coordinator`` in-process 适配层提供，非运行时原生）。
         """
         self.streaming = streaming
         self.generative_ui = generative_ui
@@ -44,6 +47,7 @@ class RuntimeCapabilities:
         self.multi_agent = multi_agent
         self.hitl = hitl
         self.stateful = stateful
+        self.delegation = delegation
 
     def to_dict(self) -> dict[str, bool]:
         """以字典形式返回能力集。"""
@@ -54,6 +58,7 @@ class RuntimeCapabilities:
             "multi_agent": self.multi_agent,
             "hitl": self.hitl,
             "stateful": self.stateful,
+            "delegation": self.delegation,
         }
 
 

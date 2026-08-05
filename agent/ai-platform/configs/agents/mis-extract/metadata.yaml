@@ -10,3 +10,15 @@ metadata:
     - extract
   capabilities:
     - extract
+
+  # ---------------------------------------------------------------------------
+  # Coordinator–Worker 委派契约（spec.md §4.2 / design-impl.md §6 T04）
+  # 与 mis-summary 的边界：抽取「字段值」而非「要点」，输出为 JSON 字段表。
+  # ---------------------------------------------------------------------------
+  when_to_use: 从已给定文本中按字段名抽取结构化字段值；不做检索、不做摘要
+  input_contract:
+    - user_question
+    - attachments_text
+    - page_context_slice
+  output_contract: json
+  safety_level: read_only

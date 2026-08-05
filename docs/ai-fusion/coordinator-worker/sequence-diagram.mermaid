@@ -1,0 +1,173 @@
+%% 4.1 主流程：成功委派（A1 -> mis-rag）
+sequenceDiagram
+    autonumber
+    participant BFF as MIS BFF (Java, 不改)
+    participant API as mis_capability.py<br/>chat/stream 端点
+    participant RT as OpenHarnessRuntime.run()
+    participant QE as OH QueryEngine
+    participant Tool as InvokeAgentTool.execute()
+    participant Cat as WorkerCatalog
+    participant TBB as TaskBriefBuilder
+    participant Buf as DispatchTraceBuffer
+    participant SM as SessionManager
+    participant AM as AgentManager
+    participant W as Worker Agent (mis-rag)
+
+    BFF->>API: POST chat/stream (agent_id=mis-copilot, content)
+    API->>SM: create_session(mis-copilot)
+    API->>RT: instance.process_message(session, message)
+    RT->>QE: build_native_query_engine(config, role=coordinator)
+    Note over QE: 工具面 = allowed_tools ∩ role 约束<br/>agent__invoke 的 description/schema<br/>已由 Catalog 动态渲染
+    QE->>QE: LLM 决策 → tool_use(agent__invoke)
+    QE->>Tool: execute(InvokeAgentInput{agent_id, task_brief|content, intent}, ctx)
+
+    Tool->>Tool: 1) settings / 空值 / 深度 / FORBIDDEN / 白名单（既有顺序不变）
+    Tool->>Cat: 2) get(agent_id) → WorkerSpec
+    Cat-->>Tool: WorkerSpec(when_to_use, input_contract, safety_level)
+    Tool->>TBB: 3) build(task_brief, content, metadata, identity, spec)
+    TBB->>TBB: sanitize_page_context() 白名单裁剪 + 敏感掩码 + 截断
+    TBB-->>Tool: (TaskBrief, None)
+    Tool->>Tool: 4) _invoke_depth.set(depth+1)；task_id = uuid4[:12]；t0 = perf_counter()
+
+    Tool->>SM: 5) create_session(worker_id, user_id, channel)
+    SM-->>Tool: child_session
+    Tool->>AM: ensure_agent_ready(worker_id)
+    Tool->>W: process_message(child_session, Message(brief.render()))
+    W-->>Tool: AgentEvent 流 (TEXT_DELTA / TOOL_RESULT / ERROR)
+    Tool->>Tool: 6) 汇总文本 + 工具错误（既有 _run_child_agent 逻辑保留）
+
+    Tool->>Tool: 7) TaskNotification(status=COMPLETED, summary, result, usage, latency_ms)
+    Tool->>Buf: 8) push_dispatch_trace(parent_session_id, DispatchTraceEntry)
+    Tool->>Tool: 9) _invoke_depth.reset(token)
+    Tool-->>QE: ToolResult(output=notification.to_tool_output())
+
+    QE->>QE: LLM 基于信封转述给用户
+    QE-->>RT: AssistantTextDelta ...
+    RT-->>API: AgentEvent.text_delta(...)
+    API-->>BFF: SSE event: delta
+
+    Note over RT: engine 循环结束后统一 drain
+    RT->>Buf: drain_dispatch_traces(session_id)
+    Buf-->>RT: [entry, ...]
+    RT->>SM: 通道A：session.state["dispatch_trace"] += entries（截断 50）
+    RT->>RT: 通道A：_log_agent_trace(phase="dispatch", ...)
+    alt DISPATCH_TRACE_EVENT_ENABLED（默认 False，C4 开）
+        RT-->>API: AgentEvent.dispatch_trace(entries)
+    end
+    RT-->>API: AgentEvent.done(total_usage)
+    alt DISPATCH_TRACE_SSE_ENABLED（默认 False，需 Java 侧确认）
+        API-->>BFF: SSE done {traceId, finishReason, sessionId, dispatchTrace:[...]}
+    else 默认
+        API-->>BFF: SSE done {traceId, finishReason, sessionId}
+    end
+
+%% 4.2 Brief 校验失败：懒委托拦截与 LLM 自我修复
+sequenceDiagram
+    autonumber
+    participant QE as OH QueryEngine
+    participant Tool as InvokeAgentTool.execute()
+    participant TBB as TaskBriefBuilder
+    participant Buf as DispatchTraceBuffer
+
+    QE->>Tool: execute({agent_id:"mis-rag", content:"帮我查一下"})
+    Tool->>Tool: 治理校验通过（白名单/深度 OK）
+    Tool->>TBB: build(task_brief=None, content="帮我查一下", ...)
+    TBB->>TBB: 命中 LAZY_PATTERNS 且 len<MIN_BRIEF_CHARS
+    TBB-->>Tool: (None, BriefValidationError{reason:"lazy_delegation", missing_fields:["goal","user_question"]})
+    Note over Tool: 关键：不创建 child_session、不消耗 Worker 配额
+    Tool->>Buf: push(DispatchTraceEntry{status:"rejected", brief_rejected:true, latency_ms:~0})
+    Tool-->>QE: ToolResult(is_error=True, output=error.to_tool_output())
+    Note right of QE: output 是给 LLM 的重写模板：<br/>「缺少 goal / user_question。<br/>请按下列格式重写后重试：<br/>{goal:..., inputs:{user_question:...}, expected_output:...}<br/>示例：goal=检索差旅报销标准并给出条款依据」
+    QE->>QE: LLM 依模板重写 Brief
+    QE->>Tool: execute({agent_id:"mis-rag", task_brief:{goal:"检索差旅报销标准...", ...}})
+    Tool-->>QE: ToolResult(output=TaskNotification(COMPLETED))
+
+%% 4.3 超时 / Worker 失败（A2 CRM MCP 不可达）
+sequenceDiagram
+    autonumber
+    participant Tool as InvokeAgentTool.execute()
+    participant W as Worker (crm-assistant)
+    participant Buf as DispatchTraceBuffer
+    participant QE as OH QueryEngine
+
+    Tool->>W: asyncio.wait_for(_run_child_agent(...), timeout=INVOKE_AGENT_TIMEOUT_SECONDS)
+    alt TimeoutError
+        W--xTool: 超时
+        Tool->>Tool: TaskNotification(status=TIMEOUT, error_code="WORKER_TIMEOUT",<br/>result="子智能体 {id} 调用超时（>{n}s）")
+    else RuntimeError（MCP 工具失败且无正文）
+        W-->>Tool: raise RuntimeError("CRM 工具调用失败（请确认 mcp-api-suite / :3333 可用）")
+        Tool->>Tool: TaskNotification(status=FAILED, error_code="WORKER_TOOL_ERROR")
+    else AgentNotFoundError / AgentNotRunningError
+        W--xTool: 异常
+        Tool->>Tool: TaskNotification(status=FAILED, error_code="WORKER_UNAVAILABLE")
+    end
+    Tool->>Buf: push(DispatchTraceEntry{status:"timeout"|"failed", latency_ms})
+    Tool->>Tool: finally: _invoke_depth.reset(token)
+    Tool-->>QE: ToolResult(is_error=True, output=notification.to_tool_output())
+    Note over QE: Coordinator 须如实转述失败与建议，<br/>system prompt 硬性禁止臆造 CRM 数据（A2 断言）
+
+%% 4.4 A7：Worker 二次委派被深度/role 双重拒绝
+sequenceDiagram
+    autonumber
+    participant Tool1 as InvokeAgentTool (Coordinator 侧, depth=0)
+    participant W as Worker (mis-rag)
+    participant Tool2 as InvokeAgentTool (Worker 侧, depth=1)
+
+    Tool1->>Tool1: _invoke_depth.set(1)
+    Tool1->>W: process_message(...)  ← 同一协程 Context，深度可见
+    W->>Tool2: execute({agent_id:"mis-summary"})
+    Tool2->>Tool2: get_invoke_depth()==1 >= max_depth(1)
+    Tool2-->>W: ToolResult(is_error=True, "调度深度超限（depth=1，max=1）")
+    Note over Tool2: 纵深防御 1：depth（既有，保持）<br/>纵深防御 2（C3 新增）：role=worker 的 Agent<br/>在 resolve_allowed_tool_patterns 阶段<br/>就被剔除 agent__invoke，工具根本不出现
+    W-->>Tool1: 汇总文本
+
+%% 4.5 C5：续聊 / 并行 spawn / 停止与熔断
+sequenceDiagram
+    autonumber
+    participant QE as OH QueryEngine
+    participant Tool as InvokeAgentTool
+    participant WSR as WorkerSessionRegistry
+    participant SM as SessionManager
+    participant W1 as Worker mis-rag
+    participant W2 as Worker crm-assistant
+
+    rect rgb(240,247,255)
+    Note over QE,W1: ① Continue：同 Worker 上下文高度重叠（纠错/补问）
+    QE->>Tool: execute({agent_id:"mis-rag", mode:"continue", task_brief:{...}})
+    Tool->>WSR: get_or_none(parent_sid, "mis-rag")
+    alt 命中已有子会话
+        WSR-->>Tool: child_session_id
+        Tool->>SM: get_session(child_session_id)  ← 复用，保留检索上下文
+    else 未命中 → 自动降级为 spawn
+        WSR-->>Tool: None
+        Tool->>SM: create_session("mis-rag")
+        Tool->>WSR: bind(parent_sid, "mis-rag", child_sid)
+    end
+    Tool->>W1: process_message(child_session, brief.render())
+    W1-->>Tool: 结果
+    Tool-->>QE: TaskNotification(worker_session_id=child_sid)
+    end
+
+    rect rgb(245,255,245)
+    Note over QE,W2: ② 同轮并行 spawn（仅限 safety_level=read_only 的独立任务）
+    QE->>Tool: execute(agent_id:"mis-rag")  ─┐ 两次 tool_use
+    QE->>Tool: execute(agent_id:"crm-assistant") ─┘
+    Note over Tool: 深度在 gather 之前 set → asyncio 子任务拷贝 Context，<br/>兄弟任务互不污染；并发上限 INVOKE_AGENT_MAX_PARALLEL(默认2)<br/>由 asyncio.Semaphore 控制
+    par 并行
+        Tool->>W1: process_message(...)
+    and
+        Tool->>W2: process_message(...)
+    end
+    W1-->>Tool: notification#1
+    W2-->>Tool: notification#2
+    Tool-->>QE: 各自 ToolResult（两条 trace 分别入缓冲）
+    end
+
+    rect rgb(255,248,240)
+    Note over QE,WSR: ③ task_stop / 超时熔断
+    QE->>Tool: execute({agent_id:"mis-rag", mode:"stop"})  或 熔断器触发
+    Tool->>WSR: list_active(parent_sid) → 取 child_sid
+    Tool->>Tool: task.cancel() + TaskNotification(status=KILLED)
+    Tool->>WSR: unbind(parent_sid, "mis-rag")
+    Note over Tool: 熔断：同一 worker 连续 INVOKE_AGENT_FAILURE_THRESHOLD(默认3)<br/>次 timeout/failed → 本会话内短路 60s，直接返回 FAILED，<br/>避免拖垮整轮对话
+    end

@@ -10,3 +10,15 @@ metadata:
     - summary
   capabilities:
     - summary
+
+  # ---------------------------------------------------------------------------
+  # Coordinator–Worker 委派契约（spec.md §4.2 / design-impl.md §6 T04）
+  # 与 mis-rag 的边界：只对「已给定文本」做归纳，绝不发起知识库检索。
+  # ---------------------------------------------------------------------------
+  when_to_use: 对已给定的业务记录或审批意见做要点归纳；不做检索、不抽字段
+  input_contract:
+    - user_question
+    - attachments_text
+    - page_context_slice
+  output_contract: json
+  safety_level: read_only

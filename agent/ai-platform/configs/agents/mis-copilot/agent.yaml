@@ -15,6 +15,11 @@ agent:
     - copilot
     - chat
 
+  # Coordinator–Worker 调度角色（spec.md §2.1）：
+  # coordinator = 持有全局会话、可通过 agent__invoke 委派 Worker；
+  # 平台默认只把本 Agent 作为用户可选的对话入口。
+  role: coordinator
+
   includes:
     runtime: runtime/runtime.yaml
     system: system/model.yaml

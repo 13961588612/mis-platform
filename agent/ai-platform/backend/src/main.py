@@ -99,11 +99,19 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         router: AgentRouter = get_agent_router()
 
         async def on_config_change(agent_id: str, change_type: str, config: Any) -> None:
-            """配置变更时更新 AgentRouter 候选列表。"""
+            """配置变更时更新 AgentRouter 候选列表与 Worker 目录。"""
             if change_type == "deleted":
                 router.remove_candidate(agent_id)
             elif config is not None:
                 router.add_candidate(config)
+            # Coordinator–Worker：配置热更新后重建 Worker 目录，
+            # 新会话构建工具注册表时即刻生效（design-impl.md §8 Q12）。
+            try:
+                from src.coordinator.catalog import refresh_worker_catalog
+
+                refresh_worker_catalog()
+            except Exception as exc:  # noqa: BLE001 - 目录刷新失败不影响配置生效
+                logger.warning("Worker catalog refresh failed", error=str(exc))
 
         config_manager.on_config_change(on_config_change)
 

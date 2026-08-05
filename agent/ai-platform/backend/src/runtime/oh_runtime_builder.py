@@ -23,6 +23,7 @@ from src.config import get_settings
 from src.runtime.gateway_api_client import GatewayApiClient
 from src.runtime.mcp_identity import IdentityAwareAsyncClient, build_mcp_identity
 from src.runtime.tool_registry_builder import (
+    apply_role_tool_constraint,
     create_agent_source_registry,
     create_platform_tool_registry,
     is_tool_allowed,
@@ -165,8 +166,13 @@ async def build_native_query_engine(
 
     mcp_configs: dict[str, McpServerConfig] = agent_mcp_to_openharness_configs(config.mcp_servers)
     allowed_tools: Any = config.runtime.allowed_tools if config.runtime else []
+    # 调度角色（C3）：coordinator 自动补齐委派工具，worker 强制剔除；
+    # 未配置 role 的旧配置解析为默认值，行为与改造前一致。
+    agent_role: Any = getattr(config, "role", None)
     source_registry: ToolRegistry = create_agent_source_registry(mcp_manager)
-    allowed_patterns: Any = allowed_tools or ["skill", "mcp__*"]
+    allowed_patterns: Any = apply_role_tool_constraint(
+        allowed_tools or ["skill", "mcp__*"], agent_role
+    )
     concrete_allowed: list[Any] = [
         tool.name
         for tool in source_registry.list_tools()
@@ -176,7 +182,9 @@ async def build_native_query_engine(
         mode=PermissionMode.FULL_AUTO,
         allowed_tools=concrete_allowed,
     )
-    tool_registry: ToolRegistry = create_platform_tool_registry(mcp_manager, allowed_tools)
+    tool_registry: ToolRegistry = create_platform_tool_registry(
+        mcp_manager, allowed_tools, agent_role
+    )
 
     model: Any = config.model.primary if config.model else "qwen-plus"
     runtime_params: Any = config.runtime.params if config.runtime else {}

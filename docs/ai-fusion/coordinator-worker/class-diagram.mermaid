@@ -1,0 +1,193 @@
+classDiagram
+    direction LR
+
+    class InvokeAgentTool {
+        +str name
+        +str description
+        +type input_model
+        -WorkerCatalog _catalog
+        -TaskBriefBuilder _builder
+        +__init__(tool_name, catalog)
+        +execute(arguments, context) ToolResult
+        +is_read_only(arguments) bool
+    }
+
+    class InvokeAgentInput {
+        +str agent_id
+        +str content
+        +dict metadata
+        +dict task_brief
+        +str intent
+        +str mode
+    }
+
+    class TaskBriefBuilder {
+        +build(task_brief, content, metadata, identity, worker_spec) tuple
+        -_parse_from_text(content) TaskBrief
+        -_validate(brief) BriefValidationError
+    }
+
+    class TaskBrief {
+        +str goal
+        +str purpose
+        +TaskBriefInputs inputs
+        +list~str~ constraints
+        +dict identity
+        +str expected_output
+        +render() str
+    }
+
+    class TaskBriefInputs {
+        +str user_question
+        +dict page_context_slice
+        +str attachments_text
+    }
+
+    class BriefValidationError {
+        +list~str~ missing_fields
+        +str reason
+        +str rewrite_hint
+        +to_tool_output() str
+    }
+
+    class TaskNotification {
+        +str task_id
+        +str worker_id
+        +TaskStatus status
+        +str summary
+        +str result
+        +TaskUsage usage
+        +int latency_ms
+        +str error_code
+        +str worker_session_id
+        +to_tool_output() str
+    }
+
+    class TaskUsage {
+        +int tokens
+        +int tool_uses
+        +int duration_ms
+    }
+
+    class TaskStatus {
+        <<enumeration>>
+        COMPLETED
+        FAILED
+        KILLED
+        TIMEOUT
+    }
+
+    class DispatchTraceEntry {
+        +str intent
+        +str worker_id
+        +str tool
+        +str status
+        +int latency_ms
+        +str task_id
+        +bool brief_rejected
+    }
+
+    class DispatchTraceBuffer {
+        <<module>>
+        -dict _pending
+        -Lock _lock
+        +push_dispatch_trace(session_id, entry)
+        +drain_dispatch_traces(session_id) list
+        +peek_dispatch_traces(session_id) list
+    }
+
+    class WorkerCatalog {
+        +dict~str,WorkerSpec~ workers
+        +worker_ids() list
+        +render_tool_description(base) str
+        +build_input_model(static_model) type
+        +get(agent_id) WorkerSpec
+    }
+
+    class WorkerSpec {
+        +str agent_id
+        +str display_name
+        +str when_to_use
+        +list~str~ capabilities
+        +list~str~ input_contract
+        +str output_contract
+        +str safety_level
+        +bool enabled
+    }
+
+    class WorkerSessionRegistry {
+        +get_or_none(parent_sid, worker_id) str
+        +bind(parent_sid, worker_id, child_sid)
+        +unbind(parent_sid, worker_id)
+        +list_active(parent_sid) dict
+    }
+
+    class AgentConfig {
+        +str agent_id
+        +AgentRole role
+        +RuntimeConfig runtime
+        +AgentMetadata metadata
+        +from_yaml_dict(data) AgentConfig
+    }
+
+    class AgentMetadata {
+        +str name
+        +list~str~ capabilities
+        +str when_to_use
+        +list~str~ input_contract
+        +str output_contract
+        +str safety_level
+    }
+
+    class AgentRole {
+        <<enumeration>>
+        COORDINATOR
+        WORKER
+    }
+
+    class ToolRegistryBuilder {
+        <<module>>
+        +create_agent_source_registry(mcp_manager) ToolRegistry
+        +resolve_allowed_tool_patterns(configured, mcp_manager, role) list
+        +create_platform_tool_registry(mcp_manager, allowed_tools, role) ToolRegistry
+    }
+
+    class OpenHarnessRuntime {
+        +run(...) AsyncIterator~AgentEvent~
+    }
+
+    class AgentEvent {
+        +AgentEventType type
+        +str content
+        +dict trace
+        +dispatch_trace(entry) AgentEvent
+    }
+
+    class Session {
+        +str session_id
+        +dict state
+    }
+
+    InvokeAgentTool --> InvokeAgentInput : input_model
+    InvokeAgentTool --> TaskBriefBuilder : uses
+    InvokeAgentTool --> WorkerCatalog : reads
+    InvokeAgentTool --> TaskNotification : produces
+    InvokeAgentTool --> DispatchTraceBuffer : push
+    InvokeAgentTool ..> WorkerSessionRegistry : C5 continue/stop
+    TaskBriefBuilder --> TaskBrief : builds
+    TaskBriefBuilder --> BriefValidationError : rejects
+    TaskBrief *-- TaskBriefInputs
+    TaskNotification *-- TaskUsage
+    TaskNotification --> TaskStatus
+    DispatchTraceBuffer --> DispatchTraceEntry : buffers
+    WorkerCatalog *-- WorkerSpec
+    WorkerCatalog ..> AgentConfig : built from
+    AgentConfig *-- AgentMetadata
+    AgentConfig --> AgentRole
+    ToolRegistryBuilder --> InvokeAgentTool : registers x2 (dual-name)
+    ToolRegistryBuilder ..> WorkerCatalog : dynamic schema
+    ToolRegistryBuilder ..> AgentRole : role constraint
+    OpenHarnessRuntime --> DispatchTraceBuffer : drain
+    OpenHarnessRuntime --> AgentEvent : yields
+    OpenHarnessRuntime --> Session : writes state
+    WorkerSessionRegistry ..> Session : persists in state

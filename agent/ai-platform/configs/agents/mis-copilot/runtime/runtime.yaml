@@ -8,6 +8,9 @@ runtime:
     # 工具内部已按 FORMFILL_ALLOWED_SKILLS 白名单与意图→skillId 映射校验。
     - formfill__*
     # 调度：委托专用智能体（白名单见 Settings.INVOKE_AGENT_WHITELIST）
+    # 本 Agent 的 role=coordinator，即便此行漏配，平台也会在
+    # resolve_allowed_tool_patterns() 中自动补齐 agent__invoke（纵深防御 D6）。
+    # 双名过渡工具 `agent` 由 Settings.DELEGATE_TOOL_ALIAS_ENABLED 控制（默认关）。
     - agent__invoke
   params:
     maxSteps: 20

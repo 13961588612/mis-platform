@@ -16,6 +16,10 @@ agent:
     - 积分
     - 营销
 
+  # Coordinator–Worker 调度角色（spec.md §2.1）：
+  # worker = 单一专长执行者，不可再委派其他 Agent（平台会剔除 agent__invoke）。
+  role: worker
+
   includes:
     runtime: runtime/runtime.yaml
     system: system/model.yaml

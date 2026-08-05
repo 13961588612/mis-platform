@@ -8,8 +8,21 @@ from __future__ import annotations
 from typing import Any
 
 from datetime import datetime, timezone
+from enum import Enum
 
 from pydantic import BaseModel, Field
+
+
+class AgentRole(str, Enum):
+    """Agent 调度角色（Coordinator–Worker 规范 spec.md §2.1）。
+
+    Attributes:
+        COORDINATOR: 调度器模式，持有全局会话并可委派 Worker。
+        WORKER: 执行者模式，单一专长，不可再委派其他 Agent。
+    """
+
+    COORDINATOR = "coordinator"
+    WORKER = "worker"
 
 
 class RuntimeConfig(BaseModel):
@@ -107,7 +120,12 @@ class RoutingConfig(BaseModel):
 
 
 class AgentMetadata(BaseModel):
-    """用于 AgentRouter 语义搜索的 Agent 元数据。"""
+    """用于 AgentRouter 语义搜索的 Agent 元数据。
+
+    C3 起同时作为 **Worker 可委派契约** 的来源（`WorkerCatalog` 读取
+    `when_to_use` / `input_contract` / `output_contract` / `safety_level`）。
+    新增字段全部带默认值，既有 metadata.yaml 无需改动即可加载。
+    """
 
     name: str
     display_name: str
@@ -116,6 +134,17 @@ class AgentMetadata(BaseModel):
     version: str = "1.0.0"
     enabled: bool = True
     capabilities: list[str] = Field(default_factory=list)
+    when_to_use: str = Field(
+        default="", description="供 Coordinator 判断的适用场景一句话"
+    )
+    input_contract: list[str] = Field(
+        default_factory=list,
+        description="接受的 TaskBrief 字段，如 user_question/page_context_slice",
+    )
+    output_contract: str = Field(
+        default="text", description="text / json / answer+citations"
+    )
+    safety_level: str = Field(default="read_only", description="read_only / needs_hitl")
 
 
 class AgentConfig(BaseModel):
@@ -132,6 +161,10 @@ class AgentConfig(BaseModel):
     description: str = Field(default="")
     version: str = Field(default="1.0.0")
     tags: list[str] = Field(default_factory=list)
+    role: AgentRole = Field(
+        default=AgentRole.WORKER,
+        description="调度角色：coordinator（可委派）/ worker（不可再委派），未配置默认 worker",
+    )
 
     # Sub-configurations
     runtime: RuntimeConfig = Field(default_factory=RuntimeConfig)
@@ -248,6 +281,17 @@ class AgentConfig(BaseModel):
 
         system_prompt: str = data.get("system_prompt", agent_section.get("system_prompt", ""))
 
+        # Parse metadata section（由 ConfigLoader 从 metadata.yaml 合并而来）
+        metadata: AgentMetadata | None = cls._parse_metadata(
+            data.get("metadata", agent_section.get("metadata", {})),
+            agent_section=agent_section,
+        )
+
+        # Parse role（Coordinator–Worker 调度角色，未配置默认 worker）
+        role: AgentRole = cls._parse_role(
+            agent_section.get("role", data.get("role", None))
+        )
+
         return cls(
             agent_id=agent_section.get("name", ""),
             name=agent_section.get("name", ""),
@@ -255,6 +299,8 @@ class AgentConfig(BaseModel):
             description=agent_section.get("description", ""),
             version=agent_section.get("version", "1.0.0"),
             tags=agent_section.get("tags", []),
+            role=role,
+            metadata=metadata,
             runtime=runtime,
             model=model,
             system_prompt=system_prompt,
@@ -263,4 +309,60 @@ class AgentConfig(BaseModel):
             routing=routing,
             memory=memory,
             includes=includes,
+        )
+
+    @staticmethod
+    def _parse_role(raw: Any) -> AgentRole:
+        """解析 `role` 字段，非法值降级为 `worker`（不抛异常）。
+
+        Args:
+            raw: YAML 中的原始取值（可能为 None / 任意字符串）。
+
+        Returns:
+            解析后的 :class:`AgentRole`；无法识别时为 ``AgentRole.WORKER``。
+        """
+        if isinstance(raw, AgentRole):
+            return raw
+        if isinstance(raw, str):
+            normalized: str = raw.strip().lower()
+            for role in AgentRole:
+                if role.value == normalized:
+                    return role
+        return AgentRole.WORKER
+
+    @staticmethod
+    def _parse_metadata(
+        raw: Any,
+        *,
+        agent_section: dict[str, Any],
+    ) -> AgentMetadata | None:
+        """解析 `metadata` section（缺失或非法时返回 None，保持既有行为）。
+
+        Args:
+            raw: metadata.yaml 合并进来的字典（可能为空）。
+            agent_section: agent.yaml 的 ``agent`` 段，用于补齐 name/display_name。
+
+        Returns:
+            :class:`AgentMetadata`；无可用数据时返回 ``None``。
+        """
+        if not isinstance(raw, dict) or not raw:
+            return None
+        name: str = str(raw.get("name") or agent_section.get("name") or "")
+        if not name:
+            return None
+        display_name: str = str(
+            raw.get("display_name") or agent_section.get("display_name") or name
+        )
+        return AgentMetadata(
+            name=name,
+            display_name=display_name,
+            description=str(raw.get("description", "") or ""),
+            tags=list(raw.get("tags", []) or []),
+            version=str(raw.get("version", "1.0.0") or "1.0.0"),
+            enabled=bool(raw.get("enabled", True)),
+            capabilities=list(raw.get("capabilities", []) or []),
+            when_to_use=str(raw.get("when_to_use", "") or ""),
+            input_contract=list(raw.get("input_contract", []) or []),
+            output_contract=str(raw.get("output_contract", "text") or "text"),
+            safety_level=str(raw.get("safety_level", "read_only") or "read_only"),
         )

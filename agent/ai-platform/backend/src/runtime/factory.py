@@ -83,17 +83,24 @@ class OpenHarnessFactory:
         - 流式 LLM 响应
         - 生成式 UI 渲染
         - MCP 协议客户端，用于接入业务系统适配器
-        - Multi-Agent Swarm 协调（通过 openharness.coordinator）
         - Human-in-the-loop 审批流程
         - 有状态的会话管理
+        - Coordinator–Worker 委派（`delegation=True`）
+
+        关于 `multi_agent`：平台级 Coordinator–Worker 由 `src/coordinator`
+        in-process Adapter 提供（`agent__invoke` + WorkerCatalog），**不是**
+        OpenHarness 原生 Swarm / subprocess teammate，故运行时原生多 Agent
+        能力如实声明为 `False`（adr.md 点名的虚假能力声明修正，design-impl.md
+        §1.1 现状 8）。
         """
         return RuntimeCapabilities(
             streaming=True,
             generative_ui=True,
             mcp=True,
-            multi_agent=True,
+            multi_agent=False,
             hitl=True,
             stateful=True,
+            delegation=True,
         )
 
 

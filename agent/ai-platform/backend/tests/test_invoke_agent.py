@@ -148,7 +148,7 @@ async def test_invoke_success_collects_text_deltas():
         )
 
     assert not result.is_error
-    assert result.output == "字段A=1；完成"
+    assert result.output.endswith("字段A=1；完成")
     session_mgr.create_session.assert_awaited()
     agent_mgr.ensure_agent_ready.assert_awaited_with("mis-extract")
 

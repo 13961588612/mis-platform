@@ -1,0 +1,16 @@
+graph TD
+    T01["T01 · 调度适配层基础设施<br/>brief/notification/trace + config<br/>P0 · C1"]
+    T02["T02 · 委派工具接入 + trace 三通道<br/>invoke_agent/events/openharness/SSE<br/>P0 · C1"]
+    T03["T03 · WorkerCatalog + role + 注册/能力修正<br/>catalog/agent.config/tool_registry_builder/factory<br/>P0 · C3"]
+    T04["T04 · Coordinator 纪律 + Worker 契约元数据<br/>system.md / agent.yaml / metadata.yaml / 黄金用例<br/>P0 · C2"]
+    T05["T05 · C5 增强：续聊/并行/停止/熔断<br/>sessions.py + invoke_agent 增量<br/>P2 · C5"]
+
+    T01 --> T02
+    T01 --> T03
+    T03 --> T04
+    T02 --> T05
+
+    classDef p0 fill:#e8f4ff,stroke:#2f7ed8,stroke-width:1px;
+    classDef p2 fill:#fff6e6,stroke:#e8a33d,stroke-width:1px;
+    class T01,T02,T03,T04 p0;
+    class T05 p2;

@@ -24,12 +24,19 @@ from src.runtime.mcp_identity import (
 )
 from src.skills.tools.formfill_apply import FormFillApplyTool
 from src.skills.tools.formfill_execute import FormFillExecuteTool
-from src.skills.tools.invoke_agent import InvokeAgentTool
+from src.skills.tools.invoke_agent import (
+    DELEGATE_TOOL_ALIAS,
+    DELEGATE_TOOL_NAME,
+    InvokeAgentTool,
+)
 from src.utils.logging import get_logger
 
 logger = get_logger("runtime.tool_registry")
 
 _MCP_LOG_LIMIT = 4000
+
+#: 委派工具名集合（role 约束的作用对象，design-impl.md §6 T03 要点 3）
+DELEGATE_TOOL_NAMES: tuple[str, ...] = (DELEGATE_TOOL_NAME, DELEGATE_TOOL_ALIAS)
 
 
 def _clip_mcp_log(text: str, limit: int = _MCP_LOG_LIMIT) -> str:
@@ -290,6 +297,35 @@ class PlatformMcpToolAdapter(BaseTool):
         return True
 
 
+def _resolve_worker_catalog() -> Any | None:
+    """取 Worker 目录单例（失败时返回 None → 委派工具退回静态 schema）。
+
+    Returns:
+        :class:`src.coordinator.catalog.WorkerCatalog` 或 ``None``。
+    """
+    try:
+        from src.coordinator.catalog import get_worker_catalog
+
+        return get_worker_catalog()
+    except Exception as exc:  # noqa: BLE001 - 目录不可用不得阻断工具注册
+        logger.warning("Worker catalog unavailable; using static schema", error=str(exc))
+        return None
+
+
+def _delegate_alias_enabled() -> bool:
+    """读取双名过渡开关 ``DELEGATE_TOOL_ALIAS_ENABLED``（默认关）。
+
+    Returns:
+        开关为真时返回 True。
+    """
+    from src.coordinator.flags import bool_flag
+
+    try:
+        return bool_flag(get_settings(), "DELEGATE_TOOL_ALIAS_ENABLED", False)
+    except Exception:  # noqa: BLE001 - 读配置失败按关闭处理
+        return False
+
+
 def create_agent_source_registry(mcp_manager: McpClientManager | None) -> ToolRegistry:
     """构建 Agent 可用工具源：skill + MCP（跳过 schema 不兼容的工具）。"""
     registry: ToolRegistry = ToolRegistry()
@@ -298,8 +334,12 @@ def create_agent_source_registry(mcp_manager: McpClientManager | None) -> ToolRe
     # 平台侧 FormFill 工具（ai-platform × MIS FormFill 引擎 P0）
     registry.register(FormFillExecuteTool())
     registry.register(FormFillApplyTool())
-    # Copilot 调度：委托专用 Agent（仅 mis-copilot allowed_tools 放开）
-    registry.register(InvokeAgentTool())
+    # Copilot 调度：委托专用 Agent（仅 role=coordinator / allowed_tools 放开）
+    # Catalog 注入后按 metadata.yaml 动态渲染 description 与 agent_id 枚举。
+    catalog: Any | None = _resolve_worker_catalog()
+    registry.register(InvokeAgentTool(catalog=catalog))
+    if _delegate_alias_enabled():
+        registry.register(InvokeAgentTool(tool_name=DELEGATE_TOOL_ALIAS, catalog=catalog))
 
     if mcp_manager is None:
         return registry
@@ -365,17 +405,78 @@ class SafeToolWrapper(BaseTool):
         return self._inner.is_read_only(arguments)
 
 
+def normalize_role(role: Any) -> str | None:
+    """归一化调度角色取值。
+
+    Args:
+        role: ``AgentRole`` 枚举、字符串或 ``None``。
+
+    Returns:
+        ``"coordinator"`` / ``"worker"``；无法识别时返回 ``None``
+        （= 保持既有行为，零回归）。
+    """
+    value: Any = getattr(role, "value", role)
+    if not isinstance(value, str):
+        return None
+    normalized: str = value.strip().lower()
+    return normalized if normalized in ("coordinator", "worker") else None
+
+
+def apply_role_tool_constraint(patterns: list[str], role: Any = None) -> list[str]:
+    """按调度角色对工具白名单做后置约束（纵深防御 D6 / A7 第二道闸）。
+
+    Args:
+        patterns: 已解析的 allowed_tools 模式列表。
+        role: 调度角色；``None`` 表示不约束（既有行为）。
+
+    Returns:
+        约束后的模式列表：``coordinator`` 自动补齐委派工具；``worker``
+        强制剔除委派工具名；``None`` 原样返回。
+    """
+    normalized: str | None = normalize_role(role)
+    if normalized is None:
+        return list(patterns)
+
+    if normalized == "worker":
+        constrained: list[str] = [
+            pattern for pattern in patterns if pattern.strip() not in DELEGATE_TOOL_NAMES
+        ]
+        if len(constrained) != len(patterns):
+            logger.info(
+                "Delegation tools stripped for worker role",
+                before=list(patterns),
+                after=constrained,
+            )
+        return constrained
+
+    constrained = list(patterns)
+    if not is_tool_allowed(DELEGATE_TOOL_NAME, constrained):
+        constrained.append(DELEGATE_TOOL_NAME)
+    if _delegate_alias_enabled() and not is_tool_allowed(DELEGATE_TOOL_ALIAS, constrained):
+        constrained.append(DELEGATE_TOOL_ALIAS)
+    return constrained
+
+
 def resolve_allowed_tool_patterns(
     configured: list[str],
     mcp_manager: McpClientManager | None,
+    role: Any = None,
 ) -> list[str]:
     """
     解析 allowed_tools 配置。
 
     未配置时默认仅暴露 ``skill`` 与 ``mcp__*``（业务 Agent 安全默认值）。
+
+    Args:
+        configured: agent.yaml / runtime.yaml 中配置的模式列表。
+        mcp_manager: 已连接的 MCP 管理器（仅用于调试日志）。
+        role: 调度角色；``None``（默认）时行为与改造前完全一致。
+
+    Returns:
+        最终生效的模式列表（已应用 role 后置约束）。
     """
     if configured:
-        return configured
+        return apply_role_tool_constraint(configured, role)
     patterns: list[str] = ["skill", "mcp__*", "formfill__*"]
     if mcp_manager is not None:
         mcp_names: list[str] = [
@@ -383,7 +484,7 @@ def resolve_allowed_tool_patterns(
             for info in mcp_manager.list_tools()
         ]
         logger.debug("Default allowed_tools patterns", patterns=patterns, mcp_tools=mcp_names)
-    return patterns
+    return apply_role_tool_constraint(patterns, role)
 
 
 def is_tool_allowed(tool_name: str, patterns: list[str]) -> bool:
@@ -397,6 +498,7 @@ def is_tool_allowed(tool_name: str, patterns: list[str]) -> bool:
 def create_platform_tool_registry(
     mcp_manager: McpClientManager | None,
     allowed_tools: list[str] | None = None,
+    role: Any = None,
 ) -> ToolRegistry:
     """
     从 OpenHarness 默认工具集按 allowed_tools 过滤，并包装为安全执行。
@@ -404,13 +506,22 @@ def create_platform_tool_registry(
     Args:
         mcp_manager: 已连接的 MCP 管理器。
         allowed_tools: agent.yaml / runtime.yaml 中的工具白名单；空则使用平台默认。
+        role: 调度角色（``coordinator`` / ``worker``）；``None`` 时行为与改造前
+            完全一致。``worker`` 会在模式过滤之外再做一次委派工具剔除，
+            确保 YAML 写了通配符（如 ``*``）也不会越权拿到 ``agent__invoke``。
     """
-    patterns: list[str] = resolve_allowed_tool_patterns(allowed_tools or [], mcp_manager)
+    patterns: list[str] = resolve_allowed_tool_patterns(
+        allowed_tools or [], mcp_manager, role
+    )
     source: ToolRegistry = create_agent_source_registry(mcp_manager)
+    is_worker: bool = normalize_role(role) == "worker"
 
     registry: ToolRegistry = ToolRegistry()
     registered: list[str] = []
     for tool in source.list_tools():
+        if is_worker and tool.name in DELEGATE_TOOL_NAMES:
+            logger.info("Delegation tool denied for worker role", tool=tool.name)
+            continue
         if not is_tool_allowed(tool.name, patterns):
             continue
         registry.register(SafeToolWrapper(tool))

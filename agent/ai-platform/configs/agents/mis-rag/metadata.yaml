@@ -11,3 +11,15 @@ metadata:
     - rag
   capabilities:
     - rag
+
+  # ---------------------------------------------------------------------------
+  # Coordinator–Worker 委派契约（spec.md §4.2 / design-impl.md §6 T04）
+  # 由 WorkerCatalog 读取并渲染进 agent__invoke 的 description 与 agent_id 枚举。
+  # when_to_use 必须一句话可判定，且与其他 Worker 语义不重叠。
+  # ---------------------------------------------------------------------------
+  when_to_use: 制度、规章、手册等知识库条款检索，必须给出条款依据；只检索不做摘要
+  input_contract:
+    - user_question
+    - page_context_slice
+  output_contract: answer+citations
+  safety_level: read_only

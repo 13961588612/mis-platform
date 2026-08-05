@@ -34,6 +34,7 @@ from src.agent.session import Message, SessionManager, get_session_manager
 from src.api.deps import get_current_user, get_trace_id
 from src.api.response import error_response, success
 from src.config import get_settings
+from src.coordinator.trace import dispatch_trace_sse_enabled, take_last_turn_traces
 from src.runtime.events import AgentEventType
 from src.utils.exceptions import AgentNotFoundError
 from src.utils.logging import get_logger
@@ -455,14 +456,21 @@ async def agent_chat_stream(
                 role="assistant",
                 content="".join(response_parts),
             )
-            yield _sse_frame(
-                "done",
-                {
-                    "traceId": trace_id,
-                    "finishReason": "stop",
-                    "sessionId": session_id,
-                },
-            )
+            done_payload: dict[str, Any] = {
+                "traceId": trace_id,
+                "finishReason": "stop",
+                "sessionId": session_id,
+            }
+            # 通道 B（DISPATCH_TRACE_SSE_ENABLED，默认关）：在 done 帧尾部追加
+            # dispatchTrace。开关关闭时 payload 与改动前**逐字节一致**，
+            # 既有 BFF / 前端契约零影响（design-impl.md §4.4 / §7.5）。
+            if dispatch_trace_sse_enabled():
+                dispatch_trace: list[dict[str, Any]] = await take_last_turn_traces(
+                    session_id
+                )
+                if dispatch_trace:
+                    done_payload["dispatchTrace"] = dispatch_trace
+            yield _sse_frame("done", done_payload)
         except AgentNotFoundError as exc:
             yield _sse_frame("error", {"traceId": trace_id, "message": exc.message})
         except Exception as exc:  # noqa: BLE001
