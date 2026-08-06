@@ -39,16 +39,22 @@ import { AgentConfirmDialog } from '../components/agent-confirm-dialog';
 import { getMonitorOverview, resetFailover } from '../api/agent-ops-api';
 import { useAgentStore } from '../stores/use-agent-store';
 import { agentErrorMessage, formatTime } from '../types';
-import type { MonitorOverview } from '../types';
+import type { ProxyStatus } from '../types';
 
 const selectClass =
   'h-9 rounded-md border border-input bg-card px-[0.7rem] text-sm text-foreground shadow-none';
 
-/** Proxy 状态 → 中文 + 语义色（`AgentStatusBadge` 无此类别，仅此一处使用）。 */
-const PROXY_STATUS_TEXT: Record<MonitorOverview['proxy_status'], { label: string; cls: string }> = {
+/**
+ * Proxy 状态 → 中文 + 语义色（`AgentStatusBadge` 无此类别，仅此一处使用）。
+ *
+ * <p>与概览页同源问题：#55 的 wire 数据不保证带 `proxy_status`（见 types.ts），
+ * 故键类型改用 `ProxyStatus` 并补 `unknown` 一档作为兜底文案。
+ */
+const PROXY_STATUS_TEXT: Record<ProxyStatus, { label: string; cls: string }> = {
   up: { label: '正常', cls: 'text-success' },
   degraded: { label: '降级', cls: 'text-warning' },
   down: { label: '不可用', cls: 'text-destructive' },
+  unknown: { label: '状态未知', cls: 'text-muted-foreground' },
 };
 
 const POLLING_OPTIONS = [5_000, 15_000, 30_000, 60_000];
@@ -148,7 +154,9 @@ export function AgentMonitorPage() {
         <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
           <StatCard
             label="Proxy 状态"
-            value={data ? PROXY_STATUS_TEXT[data.proxy_status].label : '-'}
+            value={
+              data ? (PROXY_STATUS_TEXT[data.proxy_status ?? 'unknown']?.label ?? '状态未知') : '-'
+            }
             icon={ServerCog}
           />
           <StatCard

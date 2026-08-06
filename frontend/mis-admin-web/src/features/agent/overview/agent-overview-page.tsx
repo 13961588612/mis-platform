@@ -36,13 +36,20 @@ import { AgentPageShell } from '../components/agent-page-shell';
 import { AgentStatusBadge } from '../components/agent-status-badge';
 import { getMonitorOverview, listAgents } from '../api/agent-ops-api';
 import { agentErrorMessage, formatTime } from '../types';
-import type { AgentSummary, MonitorOverview } from '../types';
+import type { AgentSummary, MonitorOverview, ProxyStatus } from '../types';
 
-/** Proxy 状态 → 中文 + 语义色。`AgentStatusBadge` 没有这一类，且只此一处用，就地映射。 */
-const PROXY_STATUS_TEXT: Record<MonitorOverview['proxy_status'], { label: string; cls: string }> = {
+/**
+ * Proxy 状态 → 中文 + 语义色。`AgentStatusBadge` 没有这一类，且只此一处用，就地映射。
+ *
+ * <p>键类型用 `ProxyStatus` 而非 `MonitorOverview['proxy_status']`：后者现在是可选且可为 null
+ * （wire 上不保证有这个字段，见 types.ts），直接当 Record 的键会把 `undefined | null` 也算进去。
+ * `unknown` 一档是**必须**的兜底文案，缺它就等于把「后端没给值」渲染成空白。
+ */
+const PROXY_STATUS_TEXT: Record<ProxyStatus, { label: string; cls: string }> = {
   up: { label: '正常', cls: 'text-success' },
   degraded: { label: '降级', cls: 'text-warning' },
   down: { label: '不可用', cls: 'text-destructive' },
+  unknown: { label: '状态未知', cls: 'text-muted-foreground' },
 };
 
 /** 快捷入口：`permission` 与 ui.md §2 的菜单码一致，无权限者直接不渲染该卡。 */
@@ -163,7 +170,13 @@ export function AgentOverviewPage() {
               <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
                 <StatCard
                   label="Proxy 状态"
-                  value={monitor ? PROXY_STATUS_TEXT[monitor.proxy_status].label : '-'}
+                  // 三重兜底：字段缺失/为 null → 归 'unknown'；取到未登记的新枚举值 →
+                  // `?.` 让查表落空时返回 undefined 而不是抛错；最后 `??` 给出可读文案。
+                  value={
+                    monitor
+                      ? (PROXY_STATUS_TEXT[monitor.proxy_status ?? 'unknown']?.label ?? '状态未知')
+                      : '-'
+                  }
                   icon={ServerCog}
                   description={monitor ? `更新于 ${formatTime(monitor.updated_at)}` : undefined}
                 />
@@ -219,16 +232,16 @@ export function AgentOverviewPage() {
                 {agents
                   .filter((a) => a.state === 'error')
                   .map((a) => (
-                    <div key={a.id} className="flex flex-wrap items-center gap-2 text-xs">
+                    <div key={a.agent_id} className="flex flex-wrap items-center gap-2 text-xs">
                       <span className="min-w-[10rem] font-medium text-foreground">
                         {a.display_name}
                       </span>
-                      <span className="font-mono text-muted-foreground">{a.id}</span>
+                      <span className="font-mono text-muted-foreground">{a.agent_id}</span>
                       <AgentStatusBadge kind="agentRole" value={a.role} />
                       <AgentStatusBadge kind="agentState" value={a.state} />
                       <PermissionGate permission="agent:agent:list">
                         <Link
-                          to={`/agent/agents/${encodeURIComponent(a.id)}`}
+                          to={`/agent/agents/${encodeURIComponent(a.agent_id)}`}
                           className="ml-auto inline-flex items-center gap-1 text-primary hover:underline"
                         >
                           查看详情

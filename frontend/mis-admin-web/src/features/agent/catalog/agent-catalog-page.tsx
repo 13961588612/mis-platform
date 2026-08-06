@@ -283,7 +283,9 @@ export function AgentCatalogPage() {
                     </tr>
                   ) : (
                     sorted.map((entry) => {
-                      const safety = SAFETY_TEXT[entry.safety_level ?? 'low'];
+                      // `?? 'low'` 只挡住 null/undefined；后端若给出未登记的等级，
+                      // 裸查表同样会得到 undefined 再在 `.label` 处崩，故再补一层 `??`。
+                      const safety = SAFETY_TEXT[entry.safety_level ?? 'low'] ?? SAFETY_TEXT.low;
                       return (
                         <tr
                           key={entry.agent_id}
