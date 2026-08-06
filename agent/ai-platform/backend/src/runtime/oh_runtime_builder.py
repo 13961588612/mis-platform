@@ -156,9 +156,27 @@ async def build_native_query_engine(
     user_mobile: str = "",
     channel: str = "",
     channel_user_id: str = "",
+    mis_user_id: int | None = None,
     dept: str = "",
 ) -> QueryEngine:
-    """使用原生 SkillTool + MCP 工具组装 OpenHarness QueryEngine。"""
+    """使用原生 SkillTool + MCP 工具组装 OpenHarness QueryEngine。
+
+    Args:
+        config: Agent 配置。
+        gateway: LLM 网关。
+        mcp_manager: 已连接的 MCP 管理器。
+        session_id: 会话 ID。
+        user_id: 平台用户 ID。
+        user_mobile: 用户手机号。
+        channel: 接入渠道。
+        channel_user_id: 渠道侧 userId。
+        mis_user_id: MIS userId（T03 S9 第 4 跳）；写入 ``tool_metadata["identity"]``
+            的 ``misUserId`` 键，是 E1–E5 判权的唯一身份来源。
+        dept: 部门标识（透传给 Gateway 计费/审计）。
+
+    Returns:
+        已装配工具注册表与身份元数据的 ``QueryEngine``。
+    """
     settings: Any = load_settings()
     config_base: Path = Path(get_settings().CONFIG_BASE_PATH)
     cwd: str = str(config_base.resolve())
@@ -220,6 +238,7 @@ async def build_native_query_engine(
         user_mobile=user_mobile,
         channel=channel,
         channel_user_id=channel_user_id,
+        mis_user_id=mis_user_id,
     )
     engine: QueryEngine = QueryEngine(
         api_client=api_client,

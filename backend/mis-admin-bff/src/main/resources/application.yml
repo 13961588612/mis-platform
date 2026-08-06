@@ -73,6 +73,17 @@ mis:
     mis-jwt-public-key: ${MIS_JWT_PUBLIC_KEY:}
     # 单据写回目标微服务基址（DocWriteHandler 复用，design §9.2.1）
     doc-service-base-url: ${AI_PLATFORM_DOC_SERVICE_BASE_URL:}
+  agent-ops:
+    # 智能体运营控制台（impl-plan §9.2）。§4.3 的 58 条端点里 57 条落 backend，
+    # 仅 #54「企微 Bot 健康」落 gateway —— 两者是不同进程不同端口，不可合并。
+    # 本地默认 127.0.0.1（Windows 上 localhost 会先解析 ::1，而 uvicorn 只听 IPv4）。
+    backend-base-url: ${AGENT_OPS_BACKEND_BASE_URL:http://127.0.0.1:8000}
+    # ⚠ 端口取 3100（spec.md §2.1 口径）；impl-plan §9.2 示例片段写的是 3000，已列为文档待订正项。
+    gateway-base-url: ${AGENT_OPS_GATEWAY_BASE_URL:http://127.0.0.1:3100}
+    # 启停 Agent / 重建索引 / 连接 MCP 都涉及真实进程与网络初始化，3s（aggregate-timeout-ms）会误判超时
+    timeout-ms: ${AGENT_OPS_TIMEOUT_MS:15000}
+    # 对话消息背后是一次完整 LLM 推理，与其它端点不是一个量级
+    chat-timeout-ms: ${AGENT_OPS_CHAT_TIMEOUT_MS:60000}
   mcp:
     servers:
       org: http://localhost:8103

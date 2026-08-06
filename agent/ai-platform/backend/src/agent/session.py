@@ -29,6 +29,27 @@ CHANNEL_PREFIXES: dict[str, str] = {
 }
 
 
+def _coerce_mis_user_id(value: Any) -> int | None:
+    """把 Redis 反序列化出的 ``mis_user_id`` 规约为 ``int | None``（T03 S9）。
+
+    历史会话没有该字段 → ``None``；非法值也归 ``None``（fail-closed，
+    下游判权时视为无身份而非猜一个 userId）。
+
+    Args:
+        value: JSON 反序列化后的原始值。
+
+    Returns:
+        正整数或 ``None``。
+    """
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        parsed: int = int(str(value).strip())
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed > 0 else None
+
+
 class Message:
     """会话中的单条消息。"""
 
@@ -87,6 +108,7 @@ class Session:
         runtime_type: str = "openharness",
         user_mobile: str = "",
         channel_user_id: str = "",
+        mis_user_id: int | None = None,
     ) -> None:
         """构造会话对象（尚未持久化）。
 
@@ -98,6 +120,9 @@ class Session:
             runtime_type: 运行时类型标识。
             user_mobile: 用户手机号（可选）。
             channel_user_id: 渠道侧 userId（可选）。
+            mis_user_id: MIS userId（T03 S9 第五键起点）。会话创建点解析一次、
+                全链透传；``None`` 表示解析不出 → 下游 E1–E5 fail-closed 拒绝。
+                **绝不**用 ``user_id`` / ``channel_user_id`` 回退填充。
         """
         self.session_id = session_id
         self.agent_id = agent_id
@@ -106,6 +131,7 @@ class Session:
         self.runtime_type = runtime_type
         self.user_mobile = user_mobile
         self.channel_user_id = channel_user_id
+        self.mis_user_id: int | None = mis_user_id
         self.messages: list[Message] = []
         self.state: dict[str, Any] = {}
         self.created_at = datetime.now(timezone.utc)
@@ -173,6 +199,7 @@ class Session:
             "runtime_type": self.runtime_type,
             "user_mobile": self.user_mobile,
             "channel_user_id": self.channel_user_id,
+            "mis_user_id": self.mis_user_id,
             "messages": self.get_messages(),
             "state": self.state,
             "created_at": self.created_at.isoformat(),
@@ -218,12 +245,27 @@ class SessionManager:
         user_id: str,
         channel: str,
         runtime_type: str = "openharness",
+        user_mobile: str = "",
+        channel_user_id: str = "",
+        mis_user_id: int | None = None,
     ) -> Session:
         """
         使用渠道特定的 ID 命名规范创建一个新会话。
 
         会话 ID 格式：{channel_prefix}{uuid}
         示例：web-{uuid}、wecom-h5-{uuid}、wecom-bot-{uuid}
+
+        Args:
+            agent_id: 绑定的 Agent ID。
+            user_id: 用户 ID。
+            channel: 接入渠道。
+            runtime_type: 运行时类型标识。
+            user_mobile: 用户手机号（T03 gap 修复：此前漏传，导致 MCP 身份缺字段）。
+            channel_user_id: 渠道侧 userId（同上）。
+            mis_user_id: MIS userId（T03 S9 第五键）；由调用方在会话创建点解析。
+
+        Returns:
+            已写入 Redis 的新会话。
         """
         prefix: str = CHANNEL_PREFIXES.get(channel, f"{channel}-")
         session_id: str = f"{prefix}{uuid.uuid4()}"
@@ -234,6 +276,9 @@ class SessionManager:
             user_id=user_id,
             channel=channel,
             runtime_type=runtime_type,
+            user_mobile=user_mobile,
+            channel_user_id=channel_user_id,
+            mis_user_id=mis_user_id,
         )
 
         # 存储到 Redis
@@ -257,6 +302,7 @@ class SessionManager:
             agent_id=agent_id,
             user_id=user_id,
             channel=channel,
+            mis_user_id=mis_user_id,
         )
         return session
 
@@ -269,8 +315,23 @@ class SessionManager:
         runtime_type: str = "openharness",
         user_mobile: str = "",
         channel_user_id: str = "",
+        mis_user_id: int | None = None,
     ) -> Session:
-        """按给定 session_id 获取会话；不存在则创建（Gateway 稳定会话场景）。"""
+        """按给定 session_id 获取会话；不存在则创建（Gateway 稳定会话场景）。
+
+        Args:
+            session_id: Gateway 侧稳定会话 ID。
+            agent_id: 绑定的 Agent ID。
+            user_id: 用户 ID。
+            channel: 接入渠道。
+            runtime_type: 运行时类型标识。
+            user_mobile: 用户手机号。
+            channel_user_id: 渠道侧 userId。
+            mis_user_id: MIS userId（T03 S9）；非 ``None`` 时刷新到既有会话。
+
+        Returns:
+            既有或新建的会话。
+        """
         try:
             session: Session = await self.get_session(session_id)
             # 刷新渠道身份（每条入站消息可能更新）
@@ -287,6 +348,11 @@ class SessionManager:
             if channel_user_id and session.channel_user_id != channel_user_id:
                 session.channel_user_id = channel_user_id
                 changed = True
+            # T03 S9：mis_user_id 仅在解析出真值时刷新；
+            # 解析不出（None）不得把既有值清空，也不得回退 user_id。
+            if mis_user_id is not None and session.mis_user_id != mis_user_id:
+                session.mis_user_id = mis_user_id
+                changed = True
             if changed:
                 await self.save_session(session)
             return session
@@ -301,6 +367,7 @@ class SessionManager:
             runtime_type=runtime_type,
             user_mobile=user_mobile,
             channel_user_id=channel_user_id,
+            mis_user_id=mis_user_id,
         )
         redis: aioredis.Redis = await self._get_redis()
         await redis.setex(
@@ -339,6 +406,7 @@ class SessionManager:
             runtime_type=session_data.get("runtime_type", "openharness"),
             user_mobile=session_data.get("user_mobile", "") or "",
             channel_user_id=session_data.get("channel_user_id", "") or "",
+            mis_user_id=_coerce_mis_user_id(session_data.get("mis_user_id")),
         )
         session.messages = [
             Message.from_dict(msg) for msg in session_data.get("messages", [])

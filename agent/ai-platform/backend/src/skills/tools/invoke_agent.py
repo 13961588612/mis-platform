@@ -52,6 +52,24 @@ logger = get_logger("skills.invoke_agent")
 # 协程内调度深度（防止子 Agent 再 invoke）
 _invoke_depth: ContextVar[int] = ContextVar("invoke_agent_depth", default=0)
 
+
+def _coerce_mis_user_id(value: Any) -> int | None:
+    """把 identity 第五键 ``misUserId`` 规约为 ``int | None``（T03 S9）。
+
+    Args:
+        value: identity 字典中的原始值（多为字符串）。
+
+    Returns:
+        正整数或 ``None``（非法/空值一律 ``None``，下游 fail-closed）。
+    """
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        parsed: int = int(str(value).strip())
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed > 0 else None
+
 DEFAULT_WHITELIST: frozenset[str] = frozenset(
     {
         "mis-extract",
@@ -341,6 +359,11 @@ class InvokeAgentTool(BaseTool):
             or (getattr(parent, "channel_user_id", "") if parent else "")
             or user_id
         )
+        # T03 S9：MIS userId 只从 identity 第五键 / 父会话继承。
+        # ⚠ 绝不用 userId / channelUserId 回退 —— 那是企微 userid / employeeId。
+        mis_user_id: int | None = _coerce_mis_user_id(
+            identity.get("misUserId")
+        ) or (getattr(parent, "mis_user_id", None) if parent else None)
 
         child_meta: dict[str, Any] = dict(arguments.metadata or {})
         child_meta.setdefault("source", "mis-copilot-delegate")
@@ -373,6 +396,7 @@ class InvokeAgentTool(BaseTool):
                             channel=channel,
                             user_mobile=user_mobile,
                             channel_user_id=channel_user_id,
+                            mis_user_id=mis_user_id,
                             reuse_session_id=reuse_session_id,
                         ),
                         timeout=timeout_s,
@@ -596,6 +620,7 @@ class InvokeAgentTool(BaseTool):
         channel: str,
         user_mobile: str,
         channel_user_id: str,
+        mis_user_id: int | None = None,
         reuse_session_id: str | None,
     ) -> "_WorkerRunResult":
         """在可取消的 asyncio Task 中执行 Worker，并登记以支持 `mode="stop"`。
@@ -609,6 +634,8 @@ class InvokeAgentTool(BaseTool):
             channel: 渠道。
             user_mobile: 用户手机号。
             channel_user_id: 渠道侧用户 ID。
+            mis_user_id: MIS userId（T03 S9）；子会话继承父身份，使子 Agent
+                的 E1–E5 判权与父会话同源。
             reuse_session_id: 续聊复用的子会话 ID；`None` 表示新建。
 
         Returns:
@@ -622,6 +649,7 @@ class InvokeAgentTool(BaseTool):
             channel=channel,
             user_mobile=user_mobile,
             channel_user_id=channel_user_id,
+            mis_user_id=mis_user_id,
             reuse_session_id=reuse_session_id,
         )
         if not parent_session_id:
@@ -801,6 +829,7 @@ async def _run_child_agent(
     channel: str,
     user_mobile: str,
     channel_user_id: str,
+    mis_user_id: int | None = None,
     reuse_session_id: str | None = None,
 ) -> _WorkerRunResult:
     """创建（或复用）子会话、跑完子 Agent，返回汇总文本与用量。
@@ -813,6 +842,7 @@ async def _run_child_agent(
         channel: 渠道。
         user_mobile: 用户手机号。
         channel_user_id: 渠道侧用户 ID。
+        mis_user_id: MIS userId（T03 S9）；写入子会话供下游 E1–E5 判权。
         reuse_session_id: 续聊复用的子会话 ID；`None` 或载入失败时新建。
 
     Returns:
@@ -845,9 +875,14 @@ async def _run_child_agent(
             agent_id=agent_id,
             user_id=user_id,
             channel=channel,
+            mis_user_id=mis_user_id,
         )
     child_session.user_mobile = user_mobile or ""
     child_session.channel_user_id = channel_user_id or user_id
+    # 续聊复用的子会话可能是 mis_user_id 补齐之前建的，这里按父身份刷新；
+    # 父身份缺失（None）时保留子会话既有值，不清空、不回退 user_id。
+    if mis_user_id is not None:
+        child_session.mis_user_id = mis_user_id
     # 标记委托会话，便于排障
     child_session.state["delegated_from"] = "mis-copilot"
     child_session.state["parent_hint"] = metadata.get("parent_session_id")

@@ -56,6 +56,7 @@ class AgentRuntime(ABC):
         user_mobile: str = "",
         channel: str = "",
         channel_user_id: str = "",
+        mis_user_id: int | None = None,
     ) -> AsyncIterator[AgentEvent]:
         """
         执行 Agent 并产出 AgentEvent 对象。
@@ -68,6 +69,7 @@ class AgentRuntime(ABC):
             user_mobile: 用户手机号（注入 MCP）。
             channel: 渠道类型（注入 MCP）。
             channel_user_id: 渠道侧 userId（注入 MCP）。
+            mis_user_id: MIS userId（T03 S9 第五键，注入 MCP identity 供 E1–E5 判权）。
 
         Yields:
             按顺序产出 AgentEvent 对象（text.delta、tool.call 等）。

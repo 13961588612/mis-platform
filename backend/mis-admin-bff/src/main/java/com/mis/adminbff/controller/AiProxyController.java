@@ -21,6 +21,7 @@ import com.mis.adminbff.dto.ai.SkillApplyRequest;
 import com.mis.adminbff.dto.ai.SkillApplyResponse;
 import com.mis.adminbff.security.ReverseTrustContext;
 import com.mis.adminbff.security.ReverseTrustInterceptor;
+import com.mis.adminbff.security.SkillPermissionChecker;
 import com.mis.adminbff.service.skill.DocWriteRegistry;
 import com.mis.adminbff.service.skill.DocWriteResult;
 import com.mis.adminbff.service.skill.SkillExecutionEngine;
@@ -72,6 +73,7 @@ public class AiProxyController {
     private final AiPlatformProperties properties;
     private final SkillExecutionEngine skillExecutionEngine;
     private final DocWriteRegistry docWriteRegistry;
+    private final SkillPermissionChecker skillPermissionChecker;
 
     public AiProxyController(
             AiPlatformClient aiPlatformClient,
@@ -79,13 +81,15 @@ public class AiProxyController {
             AiFeatureConfigService featureConfig,
             AiPlatformProperties properties,
             SkillExecutionEngine skillExecutionEngine,
-            DocWriteRegistry docWriteRegistry) {
+            DocWriteRegistry docWriteRegistry,
+            SkillPermissionChecker skillPermissionChecker) {
         this.aiPlatformClient = aiPlatformClient;
         this.translator = translator;
         this.featureConfig = featureConfig;
         this.properties = properties;
         this.skillExecutionEngine = skillExecutionEngine;
         this.docWriteRegistry = docWriteRegistry;
+        this.skillPermissionChecker = skillPermissionChecker;
     }
 
     // ===== 写类能力端点 =====
@@ -265,6 +269,7 @@ public class AiProxyController {
             @RequestBody SkillExecuteRequest request,
             HttpServletRequest httpRequest) {
         ResolvedIdentity identity = resolveIdentity(httpRequest);
+        skillPermissionChecker.assertCanRun(httpRequest, request.getSkillId());
 
         SkillExecuteResponse response = skillExecutionEngine.execute(
                 request.getSkillId(),
@@ -288,10 +293,12 @@ public class AiProxyController {
      * @return 回填结果 {status, docId, message}
      */
     @PostMapping("/skill/apply")
-    public Result<SkillApplyResponse> applySkillFill(@RequestBody SkillApplyRequest request) {
+    public Result<SkillApplyResponse> applySkillFill(
+            @RequestBody SkillApplyRequest request, HttpServletRequest httpRequest) {
         if (request.getDocType() == null || request.getDocType().isBlank()) {
             return Result.fail(ResultCode.VALIDATION_ERROR.getCode(), "docType 不能为空");
         }
+        skillPermissionChecker.assertCanRun(httpRequest, request.getSkillId());
         DocWriteResult result = docWriteRegistry.apply(
                 request.getSkillId(), request.getDocType(), request.getDocId(), request.getValues());
         SkillApplyResponse response = new SkillApplyResponse();

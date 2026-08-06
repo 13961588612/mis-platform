@@ -24,6 +24,7 @@ from pydantic import BaseModel, Field
 
 from src.mcp.client import MCPClientError, MCPTransportType
 from src.mcp.manager import MCPServerConfig
+from src.mcp.naming import McpServerNameError, assert_valid_mcp_server_name
 
 logger = structlog.get_logger(__name__)
 
@@ -68,6 +69,9 @@ def _api_response(code: int, data: Any, message: str) -> dict[str, Any]:
 class RegisterServerRequest(BaseModel):
     """注册 MCP Server 的请求体。"""
 
+    #: MCP Server 名。受 T03 命名准入约束 :data:`~src.mcp.naming.MCP_SERVER_NAME_PATTERN`：
+    #: 含非 ``[A-Za-z0-9_-]`` 字符会在生成工具展示名时被净化并撞名，故入口直接拒绝。
+    #: 校验放在 handler 内（而非 Field(pattern=...)），以返回 400 而不是 Pydantic 的 422。
     name: str
     transport: MCPTransportType = MCPTransportType.HTTP
     endpoint: str
@@ -96,9 +100,24 @@ async def list_servers() -> dict[str, Any]:
 
 @router.post("", response_model=dict, status_code=status.HTTP_201_CREATED)
 async def register_server(req: RegisterServerRequest) -> dict[str, Any]:
-    """注册新的 MCP Server。"""
+    """注册新的 MCP Server。
+
+    Raises:
+        HTTPException: ``400`` —— server 名不满足 T03 命名准入正则
+            :data:`~src.mcp.naming.MCP_SERVER_NAME_PATTERN`。
+    """
     if _manager is None:
         return _api_response(9001, None, "MCPManager not initialized")
+
+    # T03 §2.6：命名准入。非法名会在净化后与其他 server 撞展示名 → 工具覆盖 → 越权。
+    try:
+        assert_valid_mcp_server_name(req.name)
+    except McpServerNameError as exc:
+        logger.warning("Rejected MCP server registration: illegal name", name=req.name)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
 
     config: MCPServerConfig = MCPServerConfig(
         name=req.name,

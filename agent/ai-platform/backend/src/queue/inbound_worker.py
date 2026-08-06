@@ -37,6 +37,44 @@ logger = get_logger("queue.inbound_worker")
 _worker: InboundStreamWorker | None = None
 
 
+async def _resolve_inbound_mis_user_id(
+    inbound: InboundStreamMessage,
+) -> int | None:
+    """解析入站消息对应的 MIS userId（T03 S9 · 企微渠道档 2）。
+
+    企微渠道的 ``user_id`` / ``channel_user_id`` 是企微 userid 字符串（F28），
+    需查 ``users.mis_user_id`` 换取 MIS 权限主体。
+
+    **fail-closed 契约**：未绑定 / DB 不可用 → 返回 ``None``（**不阻断消息处理**，
+    但下游 E1–E5 会拒绝执行）。**绝不**把企微 userid 当 MIS userId 回退。
+
+    Args:
+        inbound: 入站流消息。
+
+    Returns:
+        MIS userId 或 ``None``。
+    """
+    from src.identity.mis_user_id import resolve_mis_user_id_async
+
+    identity: dict[str, Any] = {
+        "user_id": inbound.user_id or "",
+        "channel_user_id": inbound.channel_user_id or "",
+        "channel": inbound.channel or "",
+    }
+    try:
+        from src.db.session import db_session_context
+
+        async with db_session_context() as db:
+            return await resolve_mis_user_id_async(identity, db=db)
+    except Exception as exc:  # noqa: BLE001 - DB 不可用不得阻断入站消息处理
+        logger.warning(
+            "Inbound MIS userId lookup unavailable; downstream will fail-closed",
+            session_id=inbound.session_id,
+            error=str(exc),
+        )
+        return None
+
+
 class InboundStreamWorker:
     """消费 stream:agent:{agentId} 与 stream:inbound:{channel}。"""
 
@@ -362,6 +400,13 @@ class InboundStreamWorker:
             if inbound_channel_uid and session.channel_user_id != inbound_channel_uid:
                 session.channel_user_id = inbound_channel_uid
                 identity_changed = True
+            # T03 S9：企微渠道走档 2（查 users.mis_user_id）。仅在会话尚未持有
+            # mis_user_id 时才查库，避免每条入站消息都打 DB。
+            if session.mis_user_id is None:
+                resolved_mis_uid: int | None = await _resolve_inbound_mis_user_id(inbound)
+                if resolved_mis_uid is not None:
+                    session.mis_user_id = resolved_mis_uid
+                    identity_changed = True
             if identity_changed:
                 await session_manager.save_session(session)
         except SessionNotFoundError:
@@ -430,6 +475,9 @@ class InboundStreamWorker:
                 channel=inbound.channel,
                 user_mobile=inbound.user_mobile or "",
                 channel_user_id=inbound.channel_user_id or "",
+                # T03 S9：企微渠道创建点解析 MIS userId（档 2，查 users.mis_user_id）。
+                # 未绑定 → None → 下游 E1–E5 fail-closed 拒绝（#15-c 绑定流程在 T06）。
+                mis_user_id=await _resolve_inbound_mis_user_id(inbound),
             )
 
         ms_session: int = int((time.perf_counter() - t_session0) * 1000)

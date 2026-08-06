@@ -23,8 +23,18 @@ public class AppController {
      * 门户卡片由「不可进入」变为可点击。<b>仅加入白名单还不够</b>——
      * 该 app 必须在 IAM 侧存在且 {@code runtime=host}、{@code status=1}，
      * 否则这里加了也不会变可进入（见 {@link #toView} 的三重判断）。
+     *
+     * <p>T01：智能体运营控制台（{@code agent}）加入白名单。配套前置条件：
+     * <ul>
+     *   <li>{@code V19__agent_ops_seed.sql} 已写入 {@code sys_app(92010, 'agent')}，
+     *       且 {@code runtime='host'}、{@code status=1}、{@code kind='subsystem'}
+     *       （{@link #list} 只拉 {@code kind=subsystem} 的应用）；</li>
+     *   <li>前端已注册 {@code /agent/*} 路由与 {@code HOST_APP_LANDING.agent}，
+     *       否则卡片可点但会落到空白页。</li>
+     * </ul>
+     * 本常量是编译期硬编码，<b>只跑迁移不重新部署 BFF 不会生效</b>。
      */
-    private static final Set<String> ENTERABLE_CODES = Set.of("system", "kb");
+    private static final Set<String> ENTERABLE_CODES = Set.of("system", "kb", "agent");
 
     private final IamWebClient iamWebClient;
 

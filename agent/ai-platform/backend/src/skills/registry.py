@@ -162,6 +162,42 @@ class SkillRegistry:
         """返回来自指定 *source* 的所有 Skill。"""
         return [s for s in self._skills.values() if s.source == source]
 
+    # ---- 权限码（T03 spec §2.2）----
+
+    def permission_code(self, skill_id: str) -> str:
+        """返回该 Skill 的**执行**权限码。
+
+        格式 ``ai:skill:{skill_id}:run``，与 Java ``SkillGrantVO.permissionCodeOf``
+        逐字节一致 —— 点号 / 大写 / 连字符**原样保留**，严禁 lower / 转义 / 改写。
+
+        Args:
+            skill_id: 技能 ID，如 ``member.profile``。
+
+        Returns:
+            形如 ``ai:skill:member.profile:run`` 的权限码。
+        """
+        # 延迟导入：acl 模块依赖 httpx / redis，避免注册表被轻量导入时连带拉起。
+        from src.skills.acl import permission_code_of
+
+        return permission_code_of(skill_id)
+
+    def all_permission_codes(self, *, active_only: bool = True) -> list[str]:
+        """返回注册表内所有 Skill 的执行权限码（去重后按字典序排序）。
+
+        供 MIS 运营控制台「授权页」列出可分配的码，保证授权页与运行时
+        判定使用**同一份**码生成逻辑（避免两处手写导致漂移）。
+
+        Args:
+            active_only: 仅统计 ``ACTIVE`` 状态的 Skill（默认 ``True``）。
+
+        Returns:
+            排序后的权限码列表。
+        """
+        from src.skills.acl import permission_code_of
+
+        skills: list[Skill] = self.list_active() if active_only else self.list_all()
+        return sorted({permission_code_of(s.skill_id) for s in skills})
+
     # ---- 索引 ----
 
     async def update_embedding(self, skill_id: str) -> None:

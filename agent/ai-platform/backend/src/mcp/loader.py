@@ -10,6 +10,7 @@ import yaml
 from src.config import get_settings
 from src.mcp.client import MCPTransportType
 from src.mcp.manager import MCPManager, MCPServerConfig
+from src.mcp.naming import assert_valid_mcp_server_name
 from src.utils.logging import get_logger
 
 logger = get_logger("mcp.loader")
@@ -47,11 +48,18 @@ def _parse_server(entry: dict[str, Any]) -> MCPServerConfig | None:
 
     Returns:
         解析成功时返回配置对象；缺少 ``name`` 或 ``endpoint`` 时返回 ``None``。
+
+    Raises:
+        McpServerNameError: server 名不满足 T03 命名准入正则
+            :data:`~src.mcp.naming.MCP_SERVER_NAME_PATTERN`。**故意不吞异常** ——
+            非法命名会让工具展示名撞车进而越权，宁可启动失败。
     """
     name: str | None = entry.get("name")
     endpoint: str = entry.get("endpoint", "")
     if not name:
         return None
+    # T03 §2.6：命名准入。校验先于 endpoint 检查，避免非法命名靠"缺 endpoint"被静默跳过。
+    assert_valid_mcp_server_name(name)
     if not endpoint:
         logger.warning("MCP server missing endpoint, skipped", name=name)
         return None
@@ -73,7 +81,19 @@ def load_mcp_servers_from_files(
     *,
     config_base: Path | None = None,
 ) -> int:
-    """注册 configs/agents/*/system/mcp-servers.yaml 下声明的 MCP Server。"""
+    """注册 configs/agents/*/system/mcp-servers.yaml 下声明的 MCP Server。
+
+    Args:
+        manager: 待填充的 MCP 管理器。
+        config_base: 配置根目录；省略时取 ``CONFIG_BASE_PATH``。
+
+    Returns:
+        成功装载的 server 数量。
+
+    Raises:
+        McpServerNameError: 任一 **启用中** 的 server 名不满足 T03 命名准入正则。
+            异常向上冒泡 → 应用启动失败（fail-closed，spec §2.6）。
+    """
     base: Any = config_base or Path(get_settings().CONFIG_BASE_PATH)
     agents_dir: Any = base / "agents"
     if not agents_dir.is_dir():

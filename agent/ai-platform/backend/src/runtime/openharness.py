@@ -375,6 +375,7 @@ class OpenHarnessRuntime(AgentRuntime):
         user_mobile: str = "",
         channel: str = "",
         channel_user_id: str = "",
+        mis_user_id: int | None = None,
     ) -> AsyncIterator[AgentEvent]:
         """驱动原生 QueryEngine 执行一轮对话并映射为平台 AgentEvent。
 
@@ -390,6 +391,8 @@ class OpenHarnessRuntime(AgentRuntime):
             user_mobile: 用户手机号。
             channel: 渠道类型。
             channel_user_id: 渠道侧 userId。
+            mis_user_id: MIS userId（T03 S9 第 3 跳）；注入 MCP identity 第五键，
+                供 ``AclToolWrapper`` 做 E1–E5 fail-closed 判权。
 
         Yields:
             文本增量、工具事件、错误及最终的 ``done`` 事件。
@@ -470,6 +473,7 @@ class OpenHarnessRuntime(AgentRuntime):
                 user_mobile=user_mobile,
                 channel=channel,
                 channel_user_id=channel_user_id,
+                mis_user_id=mis_user_id,
             )
 
             if len(oh_messages) > 1:

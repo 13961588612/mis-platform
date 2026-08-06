@@ -252,6 +252,32 @@ class Settings(BaseSettings):
         description="P0 允许触发的 MIS FormFill 引擎 Skill ID 白名单",
     )
 
+    # ===== T03 fail-closed 权限闸门（E1–E5 Python 侧）=====
+    # 端用户 Skill 执行权限码来源：mis-admin-bff GET /internal/permissions。
+    # 语义硬约束：未授权 / 匿名 / 码集合为空 / 权限源不可达 → 一律拒绝，绝不 fallback 放行。
+    MIS_ACL_ENABLED: bool = Field(
+        default=True,
+        description="T03 权限闸门总开关；False 仅用于本地联调，生产必须 True",
+    )
+    # 权限码缓存 key 前缀，与 Java 侧 mis:acl:skillperm:{userId} 逐字节对齐（跨语言共享）。
+    # ⚠ 刻意不带 REDIS_KEY_PREFIX（aip:），否则与 Java 侧缓存分裂。
+    MIS_ACL_CACHE_KEY_PREFIX: str = "mis:acl:skillperm:"
+    # 缓存 TTL（秒）；与 impl-plan.md §6.2 / §8.3 及 Java 侧一致。
+    MIS_ACL_CACHE_TTL: int = 300
+    # 回源 BFF 的 HTTP 超时（秒）；超时 → PermissionUnavailable → fail-closed 拒绝。
+    MIS_ACL_HTTP_TIMEOUT: float = 3.0
+    # 回源路径（挂在 MIS_ADMIN_BFF_BASE_URL 之下）。
+    MIS_ACL_PERMISSIONS_PATH: str = "/internal/permissions"
+    # 回源时 appId 入参的默认值（工具执行链路无 JWT，取此默认；REST 链路优先取 ctx.profile["app_id"]）。
+    MIS_ACL_DEFAULT_APP_ID: str = ""
+    # MCP 工具（E2）在 skill 注册表未命中时的兜底权限码（V20 已落真实码：菜单 92060 / api 92141）。
+    MIS_ACL_MCP_FALLBACK_PERMISSION: str = "agent:mcp:call"
+    # 超管豁免角色码；**默认空 = 豁免关闭**（§4.2 规则 4）。显式配置后命中角色方可绕过。
+    MIS_ACL_SUPERADMIN_BYPASS_ROLE_CODES: list[str] = Field(
+        default_factory=list,
+        description="超管豁免角色码白名单；默认空集合表示豁免关闭（fail-closed）",
+    )
+
     # ===== 知识库 mis-kb 对接（T10：mis-rag 内部编排 KB 问答）=====
     # mis-kb 微服务基址；mis-rag 带用户 JWT 调其 /internal/v1/kb/** 内部端点。
     MIS_KB_BASE_URL: str = Field(

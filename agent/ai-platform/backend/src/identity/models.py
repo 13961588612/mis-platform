@@ -58,6 +58,28 @@ class UserContext(BaseModel):
     can_approve: bool = False
     profile: dict[str, Any] = Field(default_factory=dict)
 
+    # —— T03 fail-closed 权限闸门（spec §4.1 ``UserContext o-- MisPermissionResolver``）——
+    # ⚠ 与 allowed_categories（分类可见性/排序语义）不是一回事：
+    #   permission_codes 是 MIS 授予的**执行权**码集合，形如 ``ai:skill:{skill_id}:run``。
+    # 由 SkillAclGuard.resolve_codes() 解析后回写；默认空集合 = 无任何执行权（fail-closed）。
+    permission_codes: set[str] = Field(default_factory=set)
+    # 原始 JWT（不含 ``Bearer `` 前缀）：权限回源 mis-admin-bff 时透传，
+    # 使 BFF 能以端用户身份鉴权。工具执行链路无 JWT → None（改走 X-Platform-Token）。
+    raw_jwt: str | None = None
+
+    def has(self, code: str) -> bool:
+        """判断是否持有指定权限码（**原样比对，禁 normalize**）。
+
+        Args:
+            code: 权限码，如 ``ai:skill:member.profile:run``。
+
+        Returns:
+            持有返回 ``True``；码集合为空或未命中返回 ``False``（fail-closed）。
+        """
+        if not code:
+            return False
+        return code in self.permission_codes
+
 
 # ---------------------------------------------------------------------------
 # 身份 enrichment 协议与数据类（T2）

@@ -16,14 +16,18 @@ _mcp_identity: ContextVar[dict[str, str] | None] = ContextVar(
 IDENTITY_OBJECT_KEY = "identity"
 
 # identity 对象内字段（camelCase，与 Gateway InboundMessage 对齐）
+# T03 S9：追加第五键 misUserId —— E1–E5 判权的**唯一** MIS userId 来源。
 IDENTITY_ARG_KEYS: tuple[str, ...] = (
     "userId",
     "userMobile",
     "channel",
     "channelUserId",
+    "misUserId",
 )
 
 # HTTP Header 映射
+# ⚠ T03 S9 决策：**刻意不含 misUserId** —— 它只在进程内工具链路参与判权，
+# 不随 MCP HTTP 请求外泄给下游业务系统（避免把内部身份主键扩散到信任边界之外）。
 IDENTITY_HEADER_MAP: dict[str, str] = {
     "userId": "X-User-Id",
     "userMobile": "X-User-Mobile",
@@ -38,13 +42,27 @@ def build_mcp_identity(
     user_mobile: str = "",
     channel: str = "",
     channel_user_id: str = "",
+    mis_user_id: str | int | None = None,
 ) -> dict[str, str]:
-    """构建完整身份字典（四个字段始终存在，空字符串也不省略）。"""
+    """构建完整身份字典（五个字段始终存在，空字符串也不省略）。
+
+    Args:
+        user_id: 平台用户 ID（企微 userid / employeeId，**不是** MIS userId）。
+        user_mobile: 用户手机号。
+        channel: 接入渠道。
+        channel_user_id: 渠道侧 userId。
+        mis_user_id: MIS userId（T03 S9 第五键）；``None`` / 空 → 空串，
+            下游判权时视为无身份并 fail-closed 拒绝。
+
+    Returns:
+        含五个 camelCase 键的身份字典。
+    """
     return {
         "userId": (user_id or "").strip(),
         "userMobile": (user_mobile or "").strip(),
         "channel": (channel or "").strip(),
         "channelUserId": (channel_user_id or "").strip(),
+        "misUserId": ("" if mis_user_id is None else str(mis_user_id)).strip(),
     }
 
 
@@ -117,6 +135,7 @@ def identity_from_tool_metadata(metadata: dict[str, Any] | None) -> dict[str, st
             channel_user_id=str(
                 nested.get("channelUserId") or nested.get("channel_user_id") or ""
             ),
+            mis_user_id=nested.get("misUserId") or nested.get("mis_user_id") or "",
         )
     return build_mcp_identity(
         user_id=str(metadata.get("userId") or metadata.get("user_id") or ""),
@@ -125,6 +144,7 @@ def identity_from_tool_metadata(metadata: dict[str, Any] | None) -> dict[str, st
         channel_user_id=str(
             metadata.get("channelUserId") or metadata.get("channel_user_id") or ""
         ),
+        mis_user_id=metadata.get("misUserId") or metadata.get("mis_user_id") or "",
     )
 
 

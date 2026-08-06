@@ -87,6 +87,8 @@ class AgentInstance:
                 user_mobile=session.user_mobile,
                 channel=session.channel,
                 channel_user_id=session.channel_user_id or session.user_id,
+                # T03 S9 第 2 跳：MIS userId 全链透传（None 时下游 fail-closed）。
+                mis_user_id=session.mis_user_id,
             ):
                 yield event
         finally:

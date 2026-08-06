@@ -22,6 +22,7 @@ from src.api.deps import (
     get_agent_manager_dep,
     get_agent_router_dep,
     get_session_manager_dep,
+    resolve_request_mis_user_id,
 )
 from src.api.response import error_response, success
 from src.router.agent_router import AgentRouter
@@ -44,6 +45,8 @@ class CreateSessionRequest(BaseModel):
     user_id: str = Field(..., description="用户标识符")
     channel: str = Field(default="web", description="来源渠道：web | wecom_h5 | wecom_bot")
     runtime_type: str = Field(default="openharness")
+    user_mobile: str = Field(default="", description="用户手机号（透传至 MCP identity）")
+    channel_user_id: str = Field(default="", description="渠道侧 userId（透传至 MCP identity）")
 
 
 class SendMessageRequest(BaseModel):
@@ -95,14 +98,22 @@ class MessageResponse(BaseModel):
 async def create_session(
     req: CreateSessionRequest,
     session_manager: SessionManager = Depends(get_session_manager_dep),
+    mis_user_id: int | None = Depends(resolve_request_mis_user_id),
 ) -> dict[str, Any]:
-    """创建带有渠道特定 ID 命名的新聊天会话。"""
+    """创建带有渠道特定 ID 命名的新聊天会话。
+
+    T03 S9：在此创建点解析一次 MIS userId 并写入会话，后续全链透传；
+    解析不出（``None``）不阻断建会话，但下游 E1–E5 会 fail-closed 拒绝执行。
+    """
     try:
         session: dict[str, Any] = await session_manager.create_session(
             agent_id=req.agent_id,
             user_id=req.user_id,
             channel=req.channel,
             runtime_type=req.runtime_type,
+            user_mobile=req.user_mobile,
+            channel_user_id=req.channel_user_id,
+            mis_user_id=mis_user_id,
         )
         return success(
             data={

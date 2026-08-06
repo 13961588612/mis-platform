@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, String, Text
+from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, String, Text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -100,6 +100,13 @@ class UserModel(Base, UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMixin):
         String(64), nullable=True, index=True
     )
 
+    # MIS userId（T03 #15-a）：企微渠道身份 → MIS 权限主体的绑定列。
+    # nullable + 无回填：未绑定时为 NULL，resolve_mis_user_id 档 2 返回 None → fail-closed。
+    # ⚠ 这是 MIS 侧 userId，**不是** employeeId，也不是 users.user_id。
+    mis_user_id: Mapped[int | None] = mapped_column(
+        BigInteger, nullable=True, unique=True, index=True
+    )
+
     # 本地（非企业微信）登录的密码哈希
     password_hash: Mapped[str | None] = mapped_column(String(256), nullable=True)
 
@@ -131,6 +138,7 @@ class UserModel(Base, UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMixin):
             "dept_id": self.dept_id,
             "roles": self.roles,
             "wecom_user_id": self.wecom_user_id,
+            "mis_user_id": self.mis_user_id,
             "channel": self.channel,
             "skill_allow_list": self.skill_allow_list,
             "skill_deny_list": self.skill_deny_list,

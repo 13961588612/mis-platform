@@ -31,7 +31,7 @@ from src.agent.mis_rag import (
     is_kb_qa_request,
 )
 from src.agent.session import Message, SessionManager, get_session_manager
-from src.api.deps import get_current_user, get_trace_id
+from src.api.deps import get_current_user, get_trace_id, resolve_mis_user_id_with_db
 from src.api.response import error_response, success
 from src.config import get_settings
 from src.coordinator.trace import dispatch_trace_sse_enabled, take_last_turn_traces
@@ -310,10 +310,12 @@ async def agent_chat(
         user_id: str = current_user.get("user_id", "mis-user")
         channel: str = current_user.get("channel", "mis_bff")
 
+        # T03 S9：MIS RS256 身份 → profile["mis_user_id"]（档 1），在创建点解析并落会话。
         session = await session_manager.create_session(
             agent_id=agent_id,
             user_id=user_id,
             channel=channel,
+            mis_user_id=await resolve_mis_user_id_with_db(current_user),
         )
         instance = await agent_manager.ensure_agent_ready(agent_id)
 
@@ -412,10 +414,12 @@ async def agent_chat_stream(
             user_id: str = current_user.get("user_id", "mis-user")
             channel: str = current_user.get("channel", "mis_bff")
 
+            # T03 S9：与非流式分支同源，创建点解析一次 MIS userId 后全链透传。
             session = await session_manager.create_session(
                 agent_id=agent_id,
                 user_id=user_id,
                 channel=channel,
+                mis_user_id=await resolve_mis_user_id_with_db(current_user),
             )
             session_id = session.session_id
             instance = await agent_manager.ensure_agent_ready(agent_id)

@@ -15,6 +15,8 @@ from openharness.tools.skill_tool import SkillTool
 from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, create_model
 
 from src.config import get_settings
+from src.identity.mis_permission_resolver import get_mis_permission_resolver
+from src.runtime.acl_tool_wrapper import AclToolWrapper
 from src.runtime.mcp_identity import (
     identity_from_tool_metadata,
     identity_to_headers,
@@ -22,6 +24,7 @@ from src.runtime.mcp_identity import (
     reset_mcp_identity,
     set_mcp_identity,
 )
+from src.skills.acl import SkillAclGuard
 from src.skills.tools.formfill_apply import FormFillApplyTool
 from src.skills.tools.formfill_execute import FormFillExecuteTool
 from src.skills.tools.invoke_agent import (
@@ -405,6 +408,69 @@ class SafeToolWrapper(BaseTool):
         return self._inner.is_read_only(arguments)
 
 
+# ---------------------------------------------------------------------------
+# T03 fail-closed 权限闸门装配（spec §2.4）
+# ---------------------------------------------------------------------------
+
+
+def resolve_acl_lookup_registry(source: ToolRegistry) -> Any:
+    """取 E2 判别名反查用的注册表。
+
+    E2（MCP 工具）需要用 ``mcp-{server}-{tool}`` 判别名反查平台 Skill，
+    因此优先使用 :class:`~src.skills.registry.SkillRegistry`
+    （``import_from_mcp`` 正是以该判别名作为 ``skill_id`` 注册的）。
+
+    平台尚未 bootstrap（如单测直接构建注册表）时回落到工具源注册表 —— 此时
+    反查必然未命中，E2 走 ``agent:mcp:call`` 兜底码，**仍是 fail-closed**。
+
+    Args:
+        source: Agent 工具源注册表（回落对象）。
+
+    Returns:
+        用于 ``registry.get(discriminant)`` 反查的对象。
+    """
+    try:
+        from src.bootstrap.skills_mcp import get_skill_registry
+
+        skill_registry: Any = get_skill_registry()
+    except Exception as exc:  # noqa: BLE001 - 反查注册表不可用不得阻断工具装配
+        logger.warning(
+            "Skill registry unavailable for ACL lookup; falling back to tool source",
+            error=str(exc),
+        )
+        return source
+    return skill_registry if skill_registry is not None else source
+
+
+def create_acl_guard(lookup_registry: Any | None = None) -> SkillAclGuard:
+    """构造 T03 fail-closed 判权闸门。
+
+    Args:
+        lookup_registry: E2 判别名反查注册表（见 :func:`resolve_acl_lookup_registry`）。
+
+    Returns:
+        绑定进程内单例 ``MisPermissionResolver`` 的守卫。
+    """
+    return SkillAclGuard(get_mis_permission_resolver(), lookup_registry, get_settings())
+
+
+def _wrap_tool(tool: BaseTool, guard: SkillAclGuard, lookup_registry: Any) -> BaseTool:
+    """按 T03 装配铁律包装工具：``AclToolWrapper(SafeToolWrapper(tool))``。
+
+    ``AclToolWrapper`` **必须在外层** —— 先判权、后执行，被拒的调用不进入
+    任何副作用逻辑（spec §4.1 读图要点 1）。
+
+    Args:
+        tool: 工具源中的原始工具。
+        guard: fail-closed 判定器。
+        lookup_registry: E2 判别名反查注册表。
+
+    Returns:
+        双层包装后的工具。
+    """
+    return AclToolWrapper(SafeToolWrapper(tool), guard, lookup_registry)
+
+
 def normalize_role(role: Any) -> str | None:
     """归一化调度角色取值。
 
@@ -516,6 +582,10 @@ def create_platform_tool_registry(
     source: ToolRegistry = create_agent_source_registry(mcp_manager)
     is_worker: bool = normalize_role(role) == "worker"
 
+    # T03 §2.4：每个工具在执行前先过 fail-closed 权限闸门。
+    acl_lookup: Any = resolve_acl_lookup_registry(source)
+    guard: SkillAclGuard = create_acl_guard(acl_lookup)
+
     registry: ToolRegistry = ToolRegistry()
     registered: list[str] = []
     for tool in source.list_tools():
@@ -524,7 +594,7 @@ def create_platform_tool_registry(
             continue
         if not is_tool_allowed(tool.name, patterns):
             continue
-        registry.register(SafeToolWrapper(tool))
+        registry.register(_wrap_tool(tool, guard, acl_lookup))
         registered.append(tool.name)
 
     if not registered:
@@ -534,12 +604,13 @@ def create_platform_tool_registry(
         )
         skill_tool: BaseTool | None = source.get("skill")
         if skill_tool is not None:
-            registry.register(SafeToolWrapper(skill_tool))
+            registry.register(_wrap_tool(skill_tool, guard, acl_lookup))
             registered.append(skill_tool.name)
 
     logger.info(
         "Platform tool registry built",
         allowed_patterns=patterns,
         tools=registered,
+        acl_enabled=bool(getattr(get_settings(), "MIS_ACL_ENABLED", True)),
     )
     return registry
