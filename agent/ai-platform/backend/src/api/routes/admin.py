@@ -23,6 +23,7 @@ from pydantic import BaseModel, Field
 
 from src.api.deps import (
     get_config_manager_dep,
+    get_current_user,
     get_llm_gateway_dep,
     get_route_logger_dep,
 )
@@ -35,6 +36,8 @@ from src.llm.quota_manager import QuotaManager, get_quota_manager
 from src.llm.token_tracker import TokenTracker
 from src.router.models import RouteLog, RouteLogFilter, RouteStats
 from src.router.route_logger import RouteLogger
+from src.coordinator.catalog import serialize_worker_catalog, update_catalog_entry
+from src.coordinator.trace import query_dispatch_traces
 from src.utils.logging import get_logger
 
 logger = get_logger("api.routes.admin")
@@ -271,4 +274,75 @@ async def list_configs(
         )
     except Exception as exc:
         logger.error("Failed to list configs", error=str(exc))
+        return error_response(9000, str(exc), status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+# ===== O1g / O2：Worker Catalog 与调度 Traces（UI#10 / C1） =====
+
+
+class WorkerCatalogUpdateItem(BaseModel):
+    """单个 Worker catalog 的批量更新项。"""
+
+    agent_id: str = Field(..., description="Worker Agent ID")
+    enabled: bool | None = Field(default=None, description="新的启用状态（None = 不改）")
+    when_to_use: str | None = Field(default=None, description="新的适用场景（None = 不改）")
+
+
+class WorkerCatalogUpdateRequest(BaseModel):
+    """``PUT /admin/worker-catalog`` 请求体。"""
+
+    updates: list[WorkerCatalogUpdateItem] = Field(default_factory=list)
+
+
+@router.get("/worker-catalog")
+async def get_worker_catalog_admin() -> dict[str, Any]:
+    """获取聚合的 Worker Catalog（由各 Worker catalog 段聚合，spec.md §3.8）。"""
+    try:
+        return success(data=serialize_worker_catalog())
+    except Exception as exc:
+        logger.error("Failed to serialize worker catalog", error=str(exc))
+        return error_response(9000, str(exc), status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@router.put("/worker-catalog")
+async def update_worker_catalog_admin(
+    req: WorkerCatalogUpdateRequest,
+    user: dict[str, Any] = Depends(get_current_user),
+) -> dict[str, Any]:
+    """批量改写 Worker 的 ``enabled`` / ``when_to_use``（转调各 Agent metadata）。"""
+    try:
+        results: list[dict[str, Any]] = []
+        for item in req.updates:
+            result: dict[str, Any] = update_catalog_entry(
+                item.agent_id,
+                enabled=item.enabled,
+                when_to_use=item.when_to_use,
+            )
+            results.append(result)
+        return success(data={"updated": results}, message="Worker catalog updated")
+    except Exception as exc:
+        logger.error("Failed to update worker catalog", error=str(exc))
+        return error_response(9000, str(exc), status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@router.get("/dispatch-traces")
+async def get_dispatch_traces(
+    session_id: str | None = Query(default=None),
+    worker_id: str | None = Query(default=None),
+    intent: str | None = Query(default=None),
+    limit: int = Query(default=100, ge=1, le=1000),
+    offset: int = Query(default=0, ge=0),
+) -> dict[str, Any]:
+    """获取委派轨迹（O2 / C1，只读内存环形缓冲）。"""
+    try:
+        result: dict[str, Any] = await query_dispatch_traces(
+            session_id=session_id,
+            worker_id=worker_id,
+            intent=intent,
+            limit=limit,
+            offset=offset,
+        )
+        return success(data=result)
+    except Exception as exc:
+        logger.error("Failed to query dispatch traces", error=str(exc))
         return error_response(9000, str(exc), status.HTTP_500_INTERNAL_SERVER_ERROR)

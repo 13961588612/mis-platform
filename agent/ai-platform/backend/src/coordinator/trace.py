@@ -13,6 +13,8 @@
 from __future__ import annotations
 
 import asyncio
+from collections import deque
+from datetime import datetime, timezone
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -56,6 +58,11 @@ class DispatchTraceEntry(BaseModel):
 _pending: dict[str, list[dict[str, Any]]] = {}
 _last_turn: dict[str, list[dict[str, Any]]] = {}
 _lock = asyncio.Lock()
+
+#: O2 全局只读轨迹环形缓冲（内存，不持久化，impl-plan §11 Q5 裁定）。
+#: 跨会话聚合最近 N 条委派轨迹，供 ``GET /admin/dispatch-traces`` 只读展示。
+GLOBAL_TRACE_LIMIT: int = 500
+_global_traces: deque[dict[str, Any]] = deque(maxlen=GLOBAL_TRACE_LIMIT)
 
 
 # ===== feature flag（三通道开关，统一经 flags 安全读取）=====
@@ -106,6 +113,14 @@ async def push_dispatch_trace(session_id: str, entry: DispatchTraceEntry) -> Non
         return
     async with _lock:
         _pending.setdefault(session_id, []).append(entry.model_dump())
+        # 同时写入全局只读环形缓冲（带会话归属与时间戳）
+        _global_traces.append(
+            {
+                **entry.model_dump(),
+                "session_id": session_id,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            }
+        )
     logger.info(
         "dispatch trace pushed",
         session_id=session_id,
@@ -218,3 +233,48 @@ def _reset_for_test() -> None:
     """清空全部会话缓冲（仅供单测 fixture 调用，见 design-impl.md §7.7）。"""
     _pending.clear()
     _last_turn.clear()
+    _global_traces.clear()
+
+
+async def query_dispatch_traces(
+    *,
+    session_id: str | None = None,
+    worker_id: str | None = None,
+    intent: str | None = None,
+    limit: int = 100,
+    offset: int = 0,
+) -> dict[str, Any]:
+    """查询全局委派轨迹（O2 / C1，只读展示，不持久化）。
+
+    Args:
+        session_id: 按会话过滤（可选）。
+        worker_id: 按 Worker 过滤（可选）。
+        intent: 按意图过滤（可选，如 rag/crm/...）。
+        limit: 返回条数上限（1–1000）。
+        offset: 分页偏移。
+
+    Returns:
+        ``{ traces, total }``；``traces`` 为最新的若干条（已按时间倒序）。
+    """
+    limit = max(1, min(int(limit), 1000))
+    offset = max(0, int(offset))
+
+    async with _lock:
+        all_items: list[dict[str, Any]] = list(_global_traces)
+
+    # 最近写入在队尾，倒序展示
+    all_items.reverse()
+
+    filtered: list[dict[str, Any]] = []
+    for item in all_items:
+        if session_id and item.get("session_id") != session_id:
+            continue
+        if worker_id and item.get("worker_id") != worker_id:
+            continue
+        if intent and item.get("intent") != intent:
+            continue
+        filtered.append(item)
+
+    total: int = len(filtered)
+    page: list[dict[str, Any]] = filtered[offset : offset + limit]
+    return {"traces": page, "total": total}

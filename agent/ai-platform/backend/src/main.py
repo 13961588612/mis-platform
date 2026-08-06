@@ -348,6 +348,7 @@ def create_app() -> FastAPI:
     # ===== API 路由 =====
     from src.api.routes.admin import router as admin_router
     from src.api.routes.agent import router as agent_router
+    from src.api.routes.agent_config_files import router as agent_config_files_router
     from src.api.routes.auth import router as auth_router
     from src.api.routes.files import router as files_router
     from src.api.routes.mcp import router as mcp_router
@@ -357,6 +358,7 @@ def create_app() -> FastAPI:
     from src.api.routes.skill import router as skill_router
 
     app.include_router(agent_router, prefix="/api/v1")
+    app.include_router(agent_config_files_router, prefix="/api/v1")
     app.include_router(auth_router, prefix="/api/v1")
     app.include_router(session_router, prefix="/api/v1")
     app.include_router(files_router, prefix="/api/v1")

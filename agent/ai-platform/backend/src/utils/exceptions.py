@@ -268,6 +268,54 @@ class ConfigNotFoundError(AIPlatformError):
         super().__init__(f"Configuration not found: {path}", code=7002)
 
 
+class ConfigPathError(AIPlatformError):
+    """配置文件相对路径非法（越界 / 不在白名单 / 绝对路径）时抛出。"""
+
+    def __init__(self, path: str, detail: str = "") -> None:
+        """根据非法路径与详情构造错误码 7004 的异常消息。
+
+        Args:
+            path: 被拒绝的相对路径。
+            detail: 可选的拒绝原因。
+        """
+        message = f"Invalid config file path: {path}"
+        if detail:
+            message = f"{message} — {detail}"
+        super().__init__(message, code=7004)
+
+
+class ConfigFileMaskedError(AIPlatformError):
+    """尝试整体保存包含脱敏占位符（密钥类字段）的配置文件时抛出。"""
+
+    def __init__(self, path: str) -> None:
+        """根据文件路径构造错误码 7005 的异常消息。
+
+        Args:
+            path: 含脱敏字段、被拒绝整体保存的配置文件路径。
+        """
+        super().__init__(
+            f"Config file contains masked secret fields and cannot be saved as-is: {path}. "
+            f"Restore real secret values before saving.",
+            code=7005,
+        )
+
+
+class ConfigFileTooLargeError(AIPlatformError):
+    """配置文件超过体积上限时抛出。"""
+
+    def __init__(self, path: str, limit_kb: int) -> None:
+        """根据路径与上限构造错误码 7006 的异常消息。
+
+        Args:
+            path: 超体积的配置文件路径。
+            limit_kb: 体积上限（KB）。
+        """
+        super().__init__(
+            f"Config file too large: {path} (limit {limit_kb} KB)",
+            code=7006,
+        )
+
+
 class ConfigLoadError(AIPlatformError):
     """配置文件无法加载/解析时抛出。"""
 

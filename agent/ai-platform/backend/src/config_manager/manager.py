@@ -223,6 +223,65 @@ class ConfigManager:
                     error=str(exc),
                 )
 
+    async def reload_agent(self, agent_id: str) -> AgentConfig | None:
+        """重新加载单个 Agent 配置并触发热更新链路。
+
+        用于运营台直接改文件（配置文件 / coordination / skills 绑定）后，
+        让 ConfigManager 缓存、已运行的 Agent 实例、以及 WorkerCatalog
+        全部与磁盘对齐（design-impl.md §8 Q12：新会话即刻生效）。
+
+        Args:
+            agent_id: Agent ID（= 目录名）。
+
+        Returns:
+            重新加载后的 AgentConfig；文件已删除时返回 ``None``。
+        """
+        from src.agent.manager import get_agent_manager
+
+        config: AgentConfig | None = None
+        change_type: str = "updated"
+        try:
+            config = await self._loader.load_agent_config(agent_id)
+            self._configs[agent_id] = config
+        except Exception as exc:
+            # 文件不存在 / 解析失败：视为删除，清理缓存。
+            self._configs.pop(agent_id, None)
+            config = None
+            change_type = "deleted"
+            logger.warning(
+                "reload_agent: config reload failed, treating as deleted",
+                agent_id=agent_id,
+                error=str(exc),
+            )
+
+        # 通知所有已注册回调（含 main.py 中刷新 WorkerCatalog 的钩子）。
+        for callback in self._on_config_change_callbacks:
+            try:
+                result: Any = callback(agent_id, change_type, config)
+                if hasattr(result, "__await__"):
+                    await result
+            except Exception as exc:
+                logger.error(
+                    "reload_agent callback failed",
+                    agent_id=agent_id,
+                    error=str(exc),
+                )
+
+        # 热更新已运行的 Agent 实例（新会话生效；旧会话沿用旧配置至完成）。
+        if config is not None:
+            try:
+                manager: Any = get_agent_manager()
+                if manager.has_instance(agent_id):
+                    await manager.reload_config(agent_id, config)
+            except Exception as exc:
+                logger.warning(
+                    "reload_agent: agent runtime hot-reload skipped",
+                    agent_id=agent_id,
+                    error=str(exc),
+                )
+
+        return config
+
     async def _save_to_file(self, config: AgentConfig) -> None:
         """将配置保存到文件系统。"""
         import yaml

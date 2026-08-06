@@ -19,13 +19,23 @@ from typing import Any
 
 
 from fastapi import APIRouter, Depends, status
+from pathlib import Path
 from pydantic import BaseModel, Field
+
+import yaml
 
 from src.agent.config import AgentConfig, AgentRole
 from src.agent.manager import AgentManager
 from src.api.deps import get_agent_manager_dep, get_config_manager_dep, get_current_user
 from src.api.response import error_response, success
+from src.config_manager.file_service import agent_dir
 from src.config_manager.manager import ConfigManager
+from src.coordinator.coordination_service import (
+    AgentCoordination,
+    read_coordination,
+    write_coordination,
+)
+from src.skills.models import SkillStatus
 from src.utils.exceptions import (
     AgentAlreadyExistsError,
     AgentNotFoundError,
@@ -403,3 +413,182 @@ async def switch_runtime(
         return error_response(exc.code, exc.message, status.HTTP_404_NOT_FOUND)
     except AgentStateError as exc:
         return error_response(exc.code, exc.message, status.HTTP_409_CONFLICT)
+
+
+# ===== O1c：Agent 技能绑定（UI#5） =====
+
+
+class PutSkillsRequest(BaseModel):
+    """更新 Agent 启用技能的请求体。"""
+
+    skill_ids: list[str] = Field(default_factory=list, description="要绑定的技能 ID 列表")
+
+
+class SkillPoolItem(BaseModel):
+    """技能池中的可选技能。"""
+
+    skill_id: str
+    name: str
+    description: str = ""
+    category: str = ""
+    status: str = ""
+    enabled: bool = False
+
+
+def _read_yaml_file(path: Path) -> dict[str, Any]:
+    """读取 YAML 文件（不存在 / 解析失败返回 ``{}``）。"""
+    if not path.exists():
+        return {}
+    try:
+        with open(path, encoding="utf-8") as f:
+            return yaml.safe_load(f) or {}
+    except yaml.YAMLError:
+        return {}
+
+
+def _write_yaml_file(path: Path, data: dict[str, Any]) -> None:
+    """写 YAML 文件（保 Unicode，不排序键）。"""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        yaml.dump(data, f, allow_unicode=True, default_flow_style=False, sort_keys=False)
+
+
+@router.get("/{agent_id}/skills")
+async def get_agent_skills(
+    agent_id: str,
+    agent_manager: AgentManager = Depends(get_agent_manager_dep),
+    user: dict[str, Any] = Depends(get_current_user),
+) -> dict[str, Any]:
+    """获取 Agent 当前启用技能 + 池内可选集（仅 status=active）。"""
+    try:
+        instance: dict[str, Any] = agent_manager.get_agent(agent_id)
+    except AgentNotFoundError as exc:
+        return error_response(exc.code, exc.message, status.HTTP_404_NOT_FOUND)
+
+    config: Any = instance.config
+    enabled_ids: list[str] = [
+        s.skill_id for s in getattr(config, "skills", []) if getattr(s, "enabled", True)
+    ]
+
+    pool: list[SkillPoolItem] = []
+    from src.bootstrap.skills_mcp import get_skill_registry
+
+    registry = get_skill_registry()
+    if registry is not None:
+        for skill in registry.list_active():
+            status_val: str = (
+                skill.status.value if hasattr(skill.status, "value") else str(skill.status)
+            )
+            pool.append(
+                SkillPoolItem(
+                    skill_id=skill.skill_id,
+                    name=skill.name,
+                    description=skill.description,
+                    category=str(skill.category),
+                    status=status_val,
+                    enabled=skill.skill_id in enabled_ids,
+                )
+            )
+
+    return success(
+        data={
+            "agent_id": agent_id,
+            "enabled_skill_ids": enabled_ids,
+            "pool": [p.model_dump() for p in pool],
+        }
+    )
+
+
+@router.put("/{agent_id}/skills")
+async def update_agent_skills(
+    req: PutSkillsRequest,
+    agent_id: str,
+    agent_manager: AgentManager = Depends(get_agent_manager_dep),
+    config_manager: ConfigManager = Depends(get_config_manager_dep),
+    user: dict[str, Any] = Depends(get_current_user),
+) -> dict[str, Any]:
+    """更新 Agent 绑定的技能（持久化到 skills/enabled-skills.yaml + 热更新）。"""
+    try:
+        agent_manager.get_agent(agent_id)
+    except AgentNotFoundError as exc:
+        return error_response(exc.code, exc.message, status.HTTP_404_NOT_FOUND)
+
+    # 校验：所有请求的技能必须在池内且 status=active
+    from src.bootstrap.skills_mcp import get_skill_registry
+
+    registry = get_skill_registry()
+    if registry is not None:
+        for sid in req.skill_ids:
+            skill = registry.get(sid)
+            if skill is None or skill.status != SkillStatus.ACTIVE:
+                return error_response(
+                    7001,
+                    f"skill is not available for binding: {sid}",
+                    status.HTTP_400_BAD_REQUEST,
+                )
+
+    # 写回 enabled-skills.yaml（保留 custom_skills_dir / overrides_dir）
+    path: Path = agent_dir(agent_id) / "skills" / "enabled-skills.yaml"
+    existing: dict[str, Any] = _read_yaml_file(path)
+    skills_section: dict[str, Any] = existing.get("skills", {}) if isinstance(existing, dict) else {}
+    if not isinstance(skills_section, dict):
+        skills_section = {}
+    skills_section["enabled"] = list(req.skill_ids)
+    if "custom_skills_dir" not in skills_section:
+        skills_section["custom_skills_dir"] = "skills/custom-skills/"
+    if "overrides_dir" not in skills_section:
+        skills_section["overrides_dir"] = "skills/skill-overrides/"
+    _write_yaml_file(path, {"skills": skills_section})
+
+    # 触发配置热更新链路（含 WorkerCatalog 刷新）
+    try:
+        await config_manager.reload_agent(agent_id)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("update_agent_skills: reload_agent failed", agent_id=agent_id, error=str(exc))
+
+    return success(
+        data={"agent_id": agent_id, "enabled_skill_ids": list(req.skill_ids)},
+        message="Agent skills updated",
+    )
+
+
+# ===== O1g：Coordinator–Worker 调度配置（UI#10） =====
+
+
+@router.get("/{agent_id}/coordination")
+async def get_agent_coordination(
+    agent_id: str,
+    user: dict[str, Any] = Depends(get_current_user),
+) -> dict[str, Any]:
+    """获取单个 Agent 的调度配置（role / delegation / catalog）。"""
+    try:
+        coord: AgentCoordination = await read_coordination(agent_id)
+    except AgentNotFoundError as exc:
+        return error_response(exc.code, exc.message, status.HTTP_404_NOT_FOUND)
+    except Exception as exc:
+        logger.error("Failed to read coordination", agent_id=agent_id, error=str(exc))
+        return error_response(9000, str(exc), status.HTTP_500_INTERNAL_SERVER_ERROR)
+    return success(data=coord.model_dump())
+
+
+@router.put("/{agent_id}/coordination")
+async def update_agent_coordination(
+    req: AgentCoordination,
+    agent_id: str,
+    user: dict[str, Any] = Depends(get_current_user),
+) -> dict[str, Any]:
+    """保存单个 Agent 的调度配置（四条校验 + 持久化 + 重建 Catalog）。"""
+    req.agent_id = agent_id
+    try:
+        saved, affected = await write_coordination(agent_id, req)
+    except AgentNotFoundError as exc:
+        return error_response(exc.code, exc.message, status.HTTP_404_NOT_FOUND)
+    except ConfigValidationError as exc:
+        return error_response(exc.code, exc.message, status.HTTP_400_BAD_REQUEST)
+    except Exception as exc:
+        logger.error("Failed to write coordination", agent_id=agent_id, error=str(exc))
+        return error_response(9000, str(exc), status.HTTP_500_INTERNAL_SERVER_ERROR)
+    return success(
+        data={"coordination": saved.model_dump(), "affected_agents": affected},
+        message="Coordination updated",
+    )

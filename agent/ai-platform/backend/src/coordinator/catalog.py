@@ -485,3 +485,121 @@ def _reset_for_test() -> None:
     """清空单例（仅供单测隔离使用）。"""
     global _catalog
     _catalog = None
+
+
+# ===========================================================================
+# T04 O1g / O2：Worker Catalog 写回 + 管理台序列化出口
+# ===========================================================================
+
+
+def _read_yaml(path: Any) -> dict[str, Any]:
+    """读取 YAML 文件，不存在 / 解析失败返回 ``{}``（写回辅助，零副作用）。"""
+    from pathlib import Path
+
+    p: Any = Path(path)
+    if not p.exists():
+        return {}
+    try:
+        with open(p, encoding="utf-8") as f:
+            return yaml.safe_load(f) or {}
+    except Exception:  # noqa: BLE001 - 兜底解析失败按空处理
+        return {}
+
+
+def _read_catalog_extras(agent_id: str) -> tuple[bool, str, int, str]:
+    """从 ``metadata.yaml`` 读取 Worker catalog 的扩展字段。
+
+    Returns:
+        ``(enabled, when_to_use, timeout_seconds, degrade_message)``；
+        缺失时回落默认值。
+    """
+    from src.config_manager.file_service import agent_dir
+
+    data: dict[str, Any] = _read_yaml(agent_dir(agent_id) / "metadata.yaml")
+    meta: dict[str, Any] = data.get("metadata", data)
+    return (
+        bool(meta.get("enabled", True)),
+        str(meta.get("when_to_use", "") or ""),
+        int(meta.get("timeout_seconds", 120) or 120),
+        str(meta.get("degrade_message", "") or ""),
+    )
+
+
+def serialize_worker_catalog() -> dict[str, Any]:
+    """把当前 :class:`WorkerCatalog` 序列化为管理台 ``GET /admin/worker-catalog`` 负载。
+
+    Returns:
+        ``{ workers, coordinators, fallback }``；每个 worker 含 spec.md §3.8
+        Worker 形态的全部字段（含 ``security_level`` / ``timeout_seconds`` /
+        ``degrade_message`` 等扩展字段）。
+    """
+    catalog: WorkerCatalog = get_worker_catalog()
+    workers: list[dict[str, Any]] = []
+    for worker_id in catalog.worker_ids():
+        spec: WorkerSpec = catalog.workers[worker_id]
+        enabled, when_to_use, timeout_seconds, degrade_message = _read_catalog_extras(worker_id)
+        workers.append(
+            {
+                "agent_id": spec.agent_id,
+                "display_name": spec.display_name,
+                "when_to_use": when_to_use or spec.when_to_use,
+                "capabilities": spec.capabilities,
+                "input_contract": spec.input_contract,
+                "output_contract": spec.output_contract,
+                "security_level": spec.safety_level,
+                "enabled": enabled,
+                "timeout_seconds": timeout_seconds,
+                "degrade_message": degrade_message,
+            }
+        )
+    return {
+        "workers": workers,
+        "coordinators": catalog.coordinators,
+        "fallback": catalog.fallback,
+    }
+
+
+def update_catalog_entry(
+    agent_id: str,
+    *,
+    enabled: bool | None = None,
+    when_to_use: str | None = None,
+) -> dict[str, Any]:
+    """写回单个 Worker 的 catalog 字段（``enabled`` / ``when_to_use``）并刷新目录。
+
+    对应 ``PUT /admin/worker-catalog`` 对单个条目的批量改 ``enabled`` /
+    ``when_to_use``（spec.md §3.8 全局 Catalog）。
+
+    Args:
+        agent_id: 目标 Worker ID。
+        enabled: 新的启用状态；``None`` 表示不改。
+        when_to_use: 新的适用场景；``None`` 表示不改。
+
+    Returns:
+        写回后的该条目序列化字典。
+    """
+    from src.config_manager.file_service import agent_dir
+
+    path: Any = agent_dir(agent_id) / "metadata.yaml"
+    data: dict[str, Any] = _read_yaml(path)
+    meta: dict[str, Any] = data.setdefault("metadata", {})
+    if enabled is not None:
+        meta["enabled"] = bool(enabled)
+    if when_to_use is not None:
+        meta["when_to_use"] = str(when_to_use)
+
+    from pathlib import Path
+
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        yaml.dump(data, f, allow_unicode=True, default_flow_style=False, sort_keys=False)
+
+    refresh_worker_catalog()
+    enabled_out, when_out, timeout_out, degrade_out = _read_catalog_extras(agent_id)
+    return {
+        "agent_id": agent_id,
+        "enabled": enabled_out,
+        "when_to_use": when_out,
+        "timeout_seconds": timeout_out,
+        "degrade_message": degrade_out,
+    }

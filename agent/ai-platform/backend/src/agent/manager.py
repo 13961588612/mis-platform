@@ -210,6 +210,33 @@ class AgentManager:
         """按 ID 获取一个 Agent 实例。"""
         return self._get_instance(agent_id)
 
+    def has_instance(self, agent_id: str) -> bool:
+        """判断指定 Agent 的运行实例是否存在。
+
+        Args:
+            agent_id: Agent ID。
+
+        Returns:
+            存在且未删除返回 ``True``。
+        """
+        return agent_id in self._instances
+
+    async def reload_config(self, agent_id: str, config: AgentConfig) -> None:
+        """用新配置热重载已运行的 Agent 实例（实例存在时）。
+
+        仅对已存在的实例生效；新配置对新会话生效，旧会话沿用旧配置至完成。
+        实例不存在时静默跳过（由 ``sync_from_configs`` 在下次启动时补齐）。
+
+        Args:
+            agent_id: Agent ID。
+            config: 重新加载后的 AgentConfig。
+        """
+        if agent_id not in self._instances:
+            logger.info("reload_config skipped (no running instance)", agent_id=agent_id)
+            return
+        await self.update_config(agent_id, config)
+        logger.info("Agent config hot-reloaded", agent_id=agent_id)
+
     def list_agents(self) -> list[AgentInstance]:
         """列出所有 Agent 实例。"""
         return list(self._instances.values())
