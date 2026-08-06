@@ -4,11 +4,14 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.NullNode;
 import com.mis.adminbff.support.AgentOpsErrorCodes;
+import com.mis.adminbff.support.DownstreamAuthContext;
 import com.mis.adminbff.support.DownstreamNotImplementedException;
+import com.mis.common.core.constant.SecurityConstants;
 import com.mis.common.core.exception.BusinessException;
 import com.mis.common.core.exception.ResultCode;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -122,6 +125,23 @@ abstract class AgentOpsTransport extends AbstractDownstreamClient {
     // 核心
     // ------------------------------------------------------------------
 
+    /**
+     * 下游请求头：复用基类 {@link #loginContextHeaders()} 的 MIS 上下文头
+     * （X-User-Id / X-Tenant-Id / X-App-Id / X-Employee-Id / X-Username），
+     * 并补上 BFF 收到的原始 MIS JWT（Authorization），使 ai-platform 的
+     * {@code get_current_user} 能走 RS256 分支验签。
+     *
+     * <p>若无 JWT（非登录上下文 / Gateway 未透传）则不加 Authorization 头，
+     * 保持与改造前一致的行为，避免对其它下游产生副作用。
+     */
+    private void agentOpsHeaders(HttpHeaders headers) {
+        loginContextHeaders().accept(headers);
+        String jwt = DownstreamAuthContext.getToken();
+        if (jwt != null && !jwt.isBlank()) {
+            headers.set(SecurityConstants.AUTHORIZATION_HEADER, jwt);
+        }
+    }
+
     private JsonNode exchange(
             WebClient client,
             Duration timeout,
@@ -132,7 +152,7 @@ abstract class AgentOpsTransport extends AbstractDownstreamClient {
         try {
             WebClient.RequestBodySpec spec = client.method(method)
                     .uri(uri)
-                    .headers(loginContextHeaders())
+                    .headers(this::agentOpsHeaders)
                     .accept(MediaType.APPLICATION_JSON);
             WebClient.RequestHeadersSpec<?> request = (body == null)
                     ? spec
