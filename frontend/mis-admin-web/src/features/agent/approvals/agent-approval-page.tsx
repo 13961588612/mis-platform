@@ -10,7 +10,7 @@
  * 审批意见模板等）—— 在上游语义确定前做这些，八成要推倒重来。
  *
  * <p>形态一旦明确，需要补的大概率是：
- *   ① `payload_summary` 的结构化渲染（当前按纯文本展示）；
+ *   ① `detail` 的结构化渲染（当前按纯文本展示）；
  *   ② 决策附言（`ApprovalDecisionPayload.comment` 已在类型里预留，当前不传）；
  *   ③ 与会话页的双向跳转（`session_id` 已在列里展示，尚未做深链）。
  *
@@ -32,20 +32,20 @@ import { AgentPageShell, AgentContentState } from '../components/agent-page-shel
 import { AgentConfirmDialog } from '../components/agent-confirm-dialog';
 import { AgentStatusBadge } from '../components/agent-status-badge';
 import { decideApproval, listApprovals } from '../api/agent-ops-api';
-import { agentErrorMessage, formatTime } from '../types';
+import { agentErrorMessage, approvalDetailText, formatTime } from '../types';
 import type { Approval, ApprovalStatus } from '../types';
 
 const selectClass =
   'h-9 w-full rounded-md border border-input bg-card px-[0.7rem] text-sm text-foreground shadow-none';
 
 const APPROVAL_COLS: ResizableColumn[] = [
-  { key: 'requested_at', label: '申请时间' },
-  { key: 'action', label: '操作' },
-  { key: 'agent_id', label: 'Agent' },
-  { key: 'session_id', label: '会话' },
+  { key: 'createdAt', label: '申请时间' },
+  { key: '__title__', label: '操作类型' },
+  { key: 'agentId', label: 'Agent' },
+  { key: 'sessionId', label: '会话' },
   { key: 'status', label: '状态' },
-  { key: 'decided_by', label: '处理人' },
-  { key: 'payload_summary', label: '内容摘要' },
+  { key: 'userId', label: '处理人' },
+  { key: '__detail__', label: '内容摘要' },
   { key: '__ops__', label: '操作', locked: true },
 ];
 
@@ -95,9 +95,9 @@ export function AgentApprovalsPage() {
   async function runDecision(): Promise<void> {
     if (!pending) return;
     const { approved, approval } = pending;
-    setBusy(approval.id);
+    setBusy(approval.approvalId);
     try {
-      await decideApproval(approval.id, { approved });
+      await decideApproval(approval.approvalId, { approved });
       toast.success(approved ? '已通过该审批' : '已驳回该审批');
       setPending(null);
       await load(statusFilter);
@@ -113,10 +113,11 @@ export function AgentApprovalsPage() {
     if (!kw) return rows;
     return rows.filter(
       (r) =>
-        r.action.toLowerCase().includes(kw) ||
-        (r.agent_id ?? '').toLowerCase().includes(kw) ||
-        (r.session_id ?? '').toLowerCase().includes(kw) ||
-        (r.payload_summary ?? '').toLowerCase().includes(kw),
+        (r.agentId ?? '').toLowerCase().includes(kw) ||
+        (r.sessionId ?? '').toLowerCase().includes(kw) ||
+        (r.userId ?? '').toLowerCase().includes(kw) ||
+        approvalDetailText(r.detail, 'title').toLowerCase().includes(kw) ||
+        approvalDetailText(r.detail, 'description').toLowerCase().includes(kw),
     );
   }, [rows, keyword]);
 
@@ -279,39 +280,42 @@ export function AgentApprovalsPage() {
                     </tr>
                   ) : (
                     sorted.map((approval) => {
-                      const rowBusy = busy === approval.id;
+                      const rowBusy = busy === approval.approvalId;
                       const decidable = approval.status === 'pending';
                       return (
                         <tr
-                          key={approval.id}
+                          key={approval.approvalId}
                           className="border-b border-border/50 bg-table-row last:border-0 even:bg-table-stripe hover:bg-table-hover"
                         >
                           <td className="whitespace-nowrap px-3 py-2 text-xs text-muted-foreground">
-                            {formatTime(approval.requested_at)}
+                            {formatTime(approval.createdAt)}
                           </td>
-                          <td className="truncate px-3 py-2 font-medium" title={approval.action}>
-                            {approval.action}
+                          <td
+                            className="truncate px-3 py-2 font-medium"
+                            title={approvalDetailText(approval.detail, 'title')}
+                          >
+                            {approvalDetailText(approval.detail, 'title')}
                           </td>
                           <td
                             className="truncate px-3 py-2 text-xs"
-                            title={approval.agent_id ?? ''}
+                            title={approval.agentId ?? ''}
                           >
-                            {approval.agent_id || '-'}
+                            {approval.agentId || '-'}
                           </td>
                           <td
                             className="truncate px-3 py-2 font-mono text-xs text-muted-foreground"
-                            title={approval.session_id ?? ''}
+                            title={approval.sessionId ?? ''}
                           >
-                            {approval.session_id || '-'}
+                            {approval.sessionId || '-'}
                           </td>
                           <td className="px-3 py-2">
                             <AgentStatusBadge kind="approval" value={approval.status} />
                           </td>
                           <td className="truncate px-3 py-2 text-xs text-muted-foreground">
-                            {approval.decided_by ? (
+                            {approval.userId ? (
                               <>
-                                {approval.decided_by}
-                                <span className="ml-1">{formatTime(approval.decided_at)}</span>
+                                {approval.userId}
+                                <span className="ml-1">{formatTime(approval.resolvedAt)}</span>
                               </>
                             ) : (
                               '-'
@@ -319,9 +323,9 @@ export function AgentApprovalsPage() {
                           </td>
                           <td
                             className="truncate px-3 py-2 text-xs text-muted-foreground"
-                            title={approval.payload_summary ?? ''}
+                            title={approvalDetailText(approval.detail, 'description')}
                           >
-                            {approval.payload_summary || '-'}
+                            {approvalDetailText(approval.detail, 'description')}
                           </td>
                           <td className="px-3 py-2">
                             <div className="flex flex-wrap items-center justify-end gap-1">
@@ -379,16 +383,18 @@ export function AgentApprovalsPage() {
           pending ? (
             <>
               <p>
-                操作：「{pending.approval.action}」
-                {pending.approval.agent_id ? (
+                操作：「{approvalDetailText(pending.approval.detail, 'title')}」
+                {pending.approval.agentId ? (
                   <>
-                    ，来自 Agent <span className="font-mono">{pending.approval.agent_id}</span>
+                    ，来自 Agent <span className="font-mono">{pending.approval.agentId}</span>
                   </>
                 ) : null}
                 。
               </p>
-              {pending.approval.payload_summary ? (
-                <p className="break-words">内容摘要：{pending.approval.payload_summary}</p>
+              {approvalDetailText(pending.approval.detail, 'description') !== '-' ? (
+                <p className="break-words">
+                  内容摘要：{approvalDetailText(pending.approval.detail, 'description')}
+                </p>
               ) : null}
               <p>
                 {pending.approved

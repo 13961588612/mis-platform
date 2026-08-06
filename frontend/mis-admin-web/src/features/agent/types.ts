@@ -31,8 +31,16 @@ export interface AgentPageQuery {
 
 export type SkillStatus = 'active' | 'disabled';
 
+/**
+ * 技能池条目。
+ *
+ * <p>**主键是 `skill_id` 而不是 `id`**：ai-platform `api/routes/skill.py` 的 `Skill`
+ * 模型定义即为 `skill_id`，BFF 原样透传。此前这里写成 `id` 是照设计文档臆造的，
+ * 运行时取到 `undefined`，导致列表 `key`、选中集合、`getSkill(s.id)` 全部错位
+ * （拼出 `/agent-ops/skills/undefined`）。
+ */
 export interface Skill {
-  id: string;
+  skill_id: string;
   name: string;
   description: string;
   status: SkillStatus;
@@ -86,8 +94,20 @@ export interface AgentRoleOption {
 export type AgentRole = 'coordinator' | 'worker';
 export type AgentState = 'running' | 'paused' | 'stopped' | 'error';
 
+/**
+ * Agent 概要。
+ *
+ * <p>**主键是 `agent_id` 而不是 `id`**：ai-platform `api/routes/agent.py` 的
+ * `AgentSummary(agent_id=inst.id, ...)` 明确以 `agent_id` 出网，BFF 原样透传。
+ * 此前声明为 `id`，导致所有下拉选中判等（`a.id === value`）恒为 `undefined === x`
+ * 即恒 false，且 `startAgent(agent.id)` 拼出 `/agent-ops/agents/undefined`。
+ *
+ * <p>`enabled_skill_count` 真实 wire 上**并不存在**（ai-platform 未产出该字段），
+ * 属已知 P2 差异：消费点只做数字展示，取到 `undefined` 时渲染为空而不崩溃，
+ * 故本次不动，留待后端补字段或前端改为可选。
+ */
 export interface AgentSummary {
-  id: string;
+  agent_id: string;
   display_name: string;
   role: AgentRole;
   state: AgentState;
@@ -204,7 +224,11 @@ export type SessionChannel = 'web' | 'wecom' | 'api' | 'unknown';
  * 即列表不限于内存中的活跃会话，历史会话同样可检索，故这里带齐时间与统计字段。
  */
 export interface Session {
-  id: string;
+  /**
+   * 会话主键。**wire 上是 `session_id`**（ai-platform `SessionResponse.session_id`，
+   * 见 `api/routes/session.py`），此前写成 `id` 属臆造。
+   */
+  session_id: string;
   agent_id: string;
   agent_name?: string;
   channel: SessionChannel;
@@ -218,14 +242,21 @@ export interface Session {
 
 export type MessageRole = 'user' | 'assistant' | 'system' | 'tool';
 
+/**
+ * 会话消息。
+ *
+ * <p>字段名对齐 ai-platform `MessageResponse`（`api/routes/session.py`）：
+ * 时间字段是 `timestamp` 不是 `created_at`，附加信息是 `metadata` 不是 `meta`。
+ * 用错名字不会报错、只会静默渲染成 `-`，比崩溃更难查，故一并收口。
+ */
 export interface SessionMessage {
   id: string;
   session_id: string;
   role: MessageRole;
   content: string;
-  created_at: string;
+  timestamp: string;
   /** 工具调用类消息的附加信息（tool 名、入参摘要等）。 */
-  meta?: Record<string, unknown>;
+  metadata?: Record<string, unknown>;
 }
 
 export interface SessionQuery extends AgentPageQuery {
@@ -275,18 +306,56 @@ export interface DispatchTrace {
   duration_ms?: number;
 }
 
+/**
+ * 单条路由日志。对齐 ai-platform `src/router/models.py` 的 `RouteLog`。
+ *
+ * <p>#46 `GET /api/v1/admin/route-logs` 返回 `[log.model_dump() for log in logs]`，
+ * 是**数组**。此前前端声明的 `reason` / `created_at` 两个字段在 wire 上并不存在，
+ * 实际字段是 `strategy_used` / `timestamp`，表格里那两列一直是空的。
+ */
 export interface RouteLog {
   id: string;
   session_id?: string;
+  user_id?: string;
+  /** 触发路由的原始输入文本，用于替代此前臆造的 `reason` 列。 */
+  input_text?: string;
   matched_agent_id?: string;
-  reason?: string;
-  created_at: string;
+  /** 命中该 Agent 所用的路由策略（keyword / llm / fallback 等）。 */
+  strategy_used?: string;
+  confidence?: number;
+  latency_ms?: number;
+  timestamp: string;
 }
 
-export interface RouteStat {
+/**
+ * 路由统计。**是一个聚合对象，不是数组。**
+ *
+ * <p>#47 `GET /api/v1/admin/route-stats` 返回 `stats.model_dump()`，其中
+ * `stats: RouteStats`（`src/router/route_logger.py#get_stats`）。此前前端把它
+ * 声明成 `RouteStat[]` 并直接 `[...stats].sort()` / `stats.reduce()`，
+ * 对着一个普通对象展开迭代器 → `stats is not iterable` 直接崩页。
+ *
+ * <p>`by_agent` / `by_strategy` 是 `{ 键: 次数 }` 的计数字典，
+ * 占比需前端用 `total_routes` 自行换算（后端不下发 ratio）。
+ */
+export interface RouteStats {
+  total_routes: number;
+  by_agent: Record<string, number>;
+  by_strategy: Record<string, number>;
+  avg_latency_ms: number;
+  avg_confidence: number;
+}
+
+/**
+ * 由 {@link RouteStats.by_agent} 摊平出的单行视图（**纯前端派生，非 wire 类型**）。
+ *
+ * <p>页面表格需要「Agent / 命中数 / 占比」三列，而后端只给计数字典，
+ * 故在页面侧做一次 `Object.entries` + 排序 + 占比换算，得到本结构。
+ */
+export interface RouteAgentShare {
   agent_id: string;
-  display_name?: string;
   hit_count: number;
+  /** 0–1 之间的占比，`total_routes` 为 0 时取 0。 */
   ratio: number;
 }
 
@@ -318,8 +387,31 @@ export interface WecomBotPayload {
 
 // ------------------------------------------------------------------ 监控 / 审批
 
+/**
+ * 出站代理状态。
+ *
+ * <p>`up | degraded | down` 来自 ai-platform 侧的语义；`unknown` 是**前端兜底档**
+ * —— 见 {@link MonitorOverview.proxy_status}，wire 上这个字段并不保证存在。
+ * 把兜底做成枚举成员（而不是每个消费点各写一个 if）是为了让文案/配色只有一处定义。
+ */
+export type ProxyStatus = 'up' | 'down' | 'degraded' | 'unknown';
+
 export interface MonitorOverview {
-  proxy_status: 'up' | 'down' | 'degraded';
+  /**
+   * 出站代理状态。**可选，且可能为 null。**
+   *
+   * <p>为什么不是必填：#55 `GET /agent-ops/monitor/overview` 在 BFF
+   * （`AgentOpsFacadeService#monitorOverview`）里是把 ai-platform 的
+   * `admin/proxy/status`、`admin/llm/status`、`admin/health` 三路响应
+   * 原样拼成 `{proxy, llm, admin}` 返回的，**并不产出 `proxy_status`**。
+   * 也就是说运行时取到 `undefined` 是常态而非异常。
+   *
+   * <p>此前这里声明为 `'up' | 'down' | 'degraded'`（必填），等于向 TS 撒谎：
+   * 消费点 `PROXY_STATUS_TEXT[proxy_status].label` 被静态判定为安全，
+   * 实际查表得 `undefined` 后读 `.label` 直接白屏。
+   * 现在声明为可选，TS 会在每个消费点强制要求兜底 —— 这是修复的核心。
+   */
+  proxy_status?: ProxyStatus | null;
   agents_running: number;
   agents_total: number;
   llm_providers: Array<{
@@ -332,18 +424,65 @@ export interface MonitorOverview {
   updated_at: string;
 }
 
-export type ApprovalStatus = 'pending' | 'approved' | 'rejected';
+/**
+ * 审批状态。
+ *
+ * <p>取值与 ai-platform `src/hitl/store.py#ApprovalStatus` 枚举**逐项对齐**，
+ * 共 5 档。此前前端只声明了前 3 档，一旦后端回 `timeout` / `expired`，
+ * 状态文案表按键查不到就是 `undefined.label` —— 与 `proxy_status` 同款崩法。
+ */
+export type ApprovalStatus = 'pending' | 'approved' | 'rejected' | 'timeout' | 'expired';
 
+/**
+ * HITL 审批记录。
+ *
+ * <p>**本类型是整个 feature 里唯一的 camelCase 例外之二**（另一个是 `AgentRoleOption`）。
+ * 原因：ai-platform `api/routes/push.py#_to_approval_response` 手工拼的就是
+ * camelCase 字典，不走 Pydantic 的 snake_case `model_dump()`，BFF 又是原样透传。
+ * 这里跟随真实 wire，不做映射。
+ *
+ * <p>此前声明的 `action` / `payload_summary` / `requested_at` / `decided_at` /
+ * `decided_by` **在 wire 上全部不存在**：`action` 恒 `undefined`，
+ * 而页面用它查动作文案表 `ACTION_TEXT[approval.action].label` → 白屏。
+ * 真实语义映射为：动作描述在 `detail.title` / `detail.description`，
+ * 发起时间是 `createdAt`，结束时间是 `resolvedAt`，决策人即 `userId`。
+ */
 export interface Approval {
-  id: string;
-  session_id?: string;
-  agent_id?: string;
-  action: string;
-  payload_summary?: string;
+  approvalId: string;
+  sessionId?: string;
+  agentId?: string;
+  /** 触发审批的技能 ID（审批总是由某个 skill 调用发起）。 */
+  skillId?: string;
+  /** 被指派审批的用户；决策后即为决策人。 */
+  userId?: string;
   status: ApprovalStatus;
-  requested_at: string;
-  decided_at?: string;
-  decided_by?: string;
+  /**
+   * 审批详情。后端为自由字典（`ApprovalManager.build_approval_detail`
+   * 约定含 `title` / `description` / `skill_id`），故这里不写死结构。
+   */
+  detail?: Record<string, unknown> | null;
+  createdAt: string;
+  resolvedAt?: string | null;
+  comment?: string | null;
+  timeoutSeconds?: number;
+}
+
+/**
+ * 从 {@link Approval.detail} 里安全取字符串字段。
+ *
+ * <p>`detail` 是后端自由字典，键可能缺失、值可能不是字符串。
+ * 页面若直接 `approval.detail.title` 会在 `detail` 为 null 时崩溃，
+ * 故统一走这个兜底读取器。
+ */
+export function approvalDetailText(
+  detail: Approval['detail'],
+  key: string,
+  fallback = '-',
+): string {
+  const value = detail?.[key];
+  if (typeof value === 'string' && value.length > 0) return value;
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+  return fallback;
 }
 
 export interface ApprovalDecisionPayload {

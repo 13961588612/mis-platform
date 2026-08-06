@@ -175,10 +175,10 @@ export function AgentSessionPage() {
   );
   const { sorted, sortKey, sortDir, toggleSort } = useClientSort(rows, getSortValue);
 
-  const allChecked = rows.length > 0 && rows.every((r) => selected.has(r.id));
+  const allChecked = rows.length > 0 && rows.every((r) => selected.has(r.session_id));
 
   function toggleAll(checked: boolean): void {
-    setSelected(checked ? new Set(rows.map((r) => r.id)) : new Set());
+    setSelected(checked ? new Set(rows.map((r) => r.session_id)) : new Set());
   }
 
   function toggleOne(id: string): void {
@@ -194,7 +194,7 @@ export function AgentSessionPage() {
     if (!pending) return;
     try {
       if (pending.kind === 'single') {
-        await deleteSession(pending.session.id);
+        await deleteSession(pending.session.session_id);
         toast.success('会话已删除');
       } else {
         await batchDeleteSessions(pending.ids);
@@ -258,7 +258,7 @@ export function AgentSessionPage() {
             >
               <option value="">全部 Agent</option>
               {agents.map((a) => (
-                <option key={a.id} value={a.id}>
+                <option key={a.agent_id} value={a.agent_id}>
                   {a.display_name}
                 </option>
               ))}
@@ -401,9 +401,9 @@ export function AgentSessionPage() {
                 <tbody>
                   {sorted.map((session) => (
                     <tr
-                      key={session.id}
+                      key={session.session_id}
                       onClick={() => {
-                        setDetailId(session.id);
+                        setDetailId(session.session_id);
                         setDetailOpen(true);
                       }}
                       className="cursor-pointer border-b border-border/50 bg-table-row last:border-0 even:bg-table-stripe hover:bg-table-hover"
@@ -411,18 +411,21 @@ export function AgentSessionPage() {
                       <td className="px-2 py-2 text-center" onClick={(e) => e.stopPropagation()}>
                         <input
                           type="checkbox"
-                          aria-label={`选择会话 ${session.id}`}
+                          aria-label={`选择会话 ${session.session_id}`}
                           className="h-3.5 w-3.5 cursor-pointer accent-primary"
-                          checked={selected.has(session.id)}
-                          onChange={() => toggleOne(session.id)}
+                          checked={selected.has(session.session_id)}
+                          onChange={() => toggleOne(session.session_id)}
                         />
                       </td>
                       <td className="px-3 py-2">
-                        <div className="truncate font-medium" title={session.title || session.id}>
+                        <div
+                          className="truncate font-medium"
+                          title={session.title || session.session_id}
+                        >
                           {session.title || '（无标题）'}
                         </div>
                         <div className="truncate font-mono text-xs text-muted-foreground">
-                          {session.id}
+                          {session.session_id}
                         </div>
                       </td>
                       <td className="truncate px-3 py-2 text-xs">
@@ -446,7 +449,7 @@ export function AgentSessionPage() {
                             type="button"
                             className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[0.8125rem] text-primary hover:bg-primary/10"
                             onClick={() => {
-                              setDetailId(session.id);
+                              setDetailId(session.session_id);
                               setDetailOpen(true);
                             }}
                           >
@@ -525,7 +528,7 @@ export function AgentSessionPage() {
         open={detailOpen}
         onOpenChange={setDetailOpen}
         sessionId={detailId}
-        fallbackSession={rows.find((r) => r.id === detailId) ?? null}
+        fallbackSession={rows.find((r) => r.session_id === detailId) ?? null}
       />
 
       <AgentConfirmDialog
@@ -550,8 +553,8 @@ export function AgentSessionPage() {
           ) : pending ? (
             <>
               <p>
-                将删除会话「{pending.session.title || pending.session.id}」（
-                <span className="font-mono">{pending.session.id}</span>）及其
+                将删除会话「{pending.session.title || pending.session.session_id}」（
+                <span className="font-mono">{pending.session.session_id}</span>）及其
                 {pending.session.message_count ?? 0} 条消息。
               </p>
               <p>此操作不可撤销。</p>

@@ -275,8 +275,8 @@ export function AgentWecomBotDialog({
               >
                 <option value="">（不绑定，使用 Gateway 默认路由）</option>
                 {agents.map((a) => (
-                  <option key={a.id} value={a.id}>
-                    {a.display_name}（{a.id}）
+                  <option key={a.agent_id} value={a.agent_id}>
+                    {a.display_name}（{a.agent_id}）
                   </option>
                 ))}
               </select>

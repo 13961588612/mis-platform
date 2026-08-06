@@ -58,7 +58,9 @@ export function AgentSkillsPermissionsPage() {
     try {
       const list = await listSkills();
       setSkills(list);
-      setSelectedId((prev) => (prev && list.some((s) => s.id === prev) ? prev : (list[0]?.id ?? '')));
+      setSelectedId((prev) =>
+        prev && list.some((s) => s.skill_id === prev) ? prev : (list[0]?.skill_id ?? ''),
+      );
     } catch (e) {
       setError(agentErrorMessage(e, '获取技能列表失败'));
     } finally {
@@ -98,12 +100,12 @@ export function AgentSkillsPermissionsPage() {
     const kw = keyword.trim().toLowerCase();
     if (!kw) return skills;
     return skills.filter(
-      (s) => s.name.toLowerCase().includes(kw) || s.id.toLowerCase().includes(kw),
+      (s) => s.name.toLowerCase().includes(kw) || s.skill_id.toLowerCase().includes(kw),
     );
   }, [skills, keyword]);
 
   const selectedSkill = useMemo(
-    () => skills.find((s) => s.id === selectedId) ?? null,
+    () => skills.find((s) => s.skill_id === selectedId) ?? null,
     [skills, selectedId],
   );
 
@@ -180,12 +182,12 @@ export function AgentSkillsPermissionsPage() {
             ) : (
               <ul className="divide-y">
                 {filteredSkills.map((skill) => {
-                  const active = skill.id === selectedId;
+                  const active = skill.skill_id === selectedId;
                   return (
-                    <li key={skill.id}>
+                    <li key={skill.skill_id}>
                       <button
                         type="button"
-                        onClick={() => setSelectedId(skill.id)}
+                        onClick={() => setSelectedId(skill.skill_id)}
                         className={cn(
                           'flex w-full flex-col items-start gap-1 px-3 py-2.5 text-left hover:bg-accent/50',
                           active && 'bg-accent',
@@ -198,7 +200,7 @@ export function AgentSkillsPermissionsPage() {
                           <AgentStatusBadge kind="skillStatus" value={skill.status} />
                         </span>
                         <span className="w-full truncate font-mono text-xs text-muted-foreground">
-                          {skill.id}
+                          {skill.skill_id}
                         </span>
                       </button>
                     </li>

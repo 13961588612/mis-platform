@@ -129,7 +129,7 @@ export function AgentAgentDetailPage() {
             <CardContent className="py-5">
               <DetailDefList
                 items={[
-                  { label: 'Agent ID', value: agent?.id ?? agentId },
+                  { label: 'Agent ID', value: agent?.agent_id ?? agentId },
                   { label: '显示名', value: agent?.display_name },
                   { label: '角色', value: agent?.role === 'coordinator' ? '协调者' : '执行者' },
                   { label: '模型', value: agent?.model },

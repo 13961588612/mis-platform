@@ -13,7 +13,7 @@
  * 这里 traces 有自己的 loading / error / empty 与重试按钮，失败只塌陷自己那一块。
  *
  * <p>**筛选口径**：`from` / `to` / `coordinator_id` 三项对三个端点通用；
- * `status` 只对 traces 有意义（`RouteLog` / `RouteStat` 没有状态维度），
+ * `status` 只对 traces 有意义（`RouteLog` / `RouteStats` 没有状态维度），
  * 故 status 下拉放在 traces 区块内，不放主筛选区 —— 放在上面会让用户以为
  * 它能过滤路由日志，然后困惑于"为什么选了失败还是这些行"。
  */
@@ -37,17 +37,33 @@ import {
   type DispatchQuery,
 } from '../api/agent-ops-api';
 import { agentErrorMessage, formatTime } from '../types';
-import type { AgentSummary, DispatchTrace, RouteLog, RouteStat } from '../types';
+import type { AgentSummary, DispatchTrace, RouteAgentShare, RouteLog, RouteStats } from '../types';
 
 const selectClass =
   'h-9 w-full rounded-md border border-input bg-card px-[0.7rem] text-sm text-foreground shadow-none';
 
+/**
+ * 路由日志列。
+ *
+ * <p>key 必须与 `RouteLog` 的真实字段同名（排序走 `row[key]`）：
+ * 时间是 `timestamp` 不是 `created_at`，"为什么命中"由 `strategy_used` 承载 ——
+ * 后端从未下发过 `reason` 字段，那一列此前恒为空。
+ */
 const LOG_COLS: ResizableColumn[] = [
-  { key: 'created_at', label: '时间' },
+  { key: 'timestamp', label: '时间' },
   { key: 'session_id', label: '会话' },
   { key: 'matched_agent_id', label: '命中 Agent' },
-  { key: 'reason', label: '命中原因', locked: true },
+  { key: 'strategy_used', label: '命中策略', locked: true },
 ];
+
+/** `#47` 失败或未加载时的空统计，保证消费点永远拿到可枚举对象。 */
+const EMPTY_ROUTE_STATS: RouteStats = {
+  total_routes: 0,
+  by_agent: {},
+  by_strategy: {},
+  avg_latency_ms: 0,
+  avg_confidence: 0,
+};
 
 const TRACE_COLS: ResizableColumn[] = [
   { key: 'started_at', label: '开始时间' },
@@ -103,7 +119,8 @@ export function AgentDispatchPage() {
 
   // ---- 主视图：#46 路由日志 + #47 命中统计（ready） ----
   const [logs, setLogs] = useState<RouteLog[]>([]);
-  const [stats, setStats] = useState<RouteStat[]>([]);
+  // #47 返回聚合对象而非数组，state 形状必须跟着改，否则 `[...stats]` 直接崩
+  const [stats, setStats] = useState<RouteStats>(EMPTY_ROUTE_STATS);
   const [loading, setLoading] = useState(false);
   const [logsError, setLogsError] = useState<string | null>(null);
   const [statsError, setStatsError] = useState<string | null>(null);
@@ -138,7 +155,7 @@ export function AgentDispatchPage() {
     if (statResult.status === 'fulfilled') {
       setStats(statResult.value);
     } else {
-      setStats([]);
+      setStats(EMPTY_ROUTE_STATS);
       setStatsError(agentErrorMessage(statResult.reason, '获取路由统计失败'));
     }
     setLoading(false);
@@ -216,16 +233,39 @@ export function AgentDispatchPage() {
     toggleSort: toggleTraceSort,
   } = useClientSort(traces, getTraceSortValue);
 
-  /** 命中统计按 hit_count 降序（后端未保证顺序，前端兜一次）。 */
-  const rankedStats = useMemo(
-    () => [...stats].sort((a, b) => (b.hit_count ?? 0) - (a.hit_count ?? 0)),
-    [stats],
-  );
-  const totalHits = useMemo(
-    () => stats.reduce((sum, s) => sum + (s.hit_count ?? 0), 0),
-    [stats],
-  );
+  /** agent_id → 显示名，用于把 `by_agent` 的裸 id 换成人看得懂的名字。 */
+  const agentNames = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const a of agents) m.set(a.agent_id, a.display_name);
+    return m;
+  }, [agents]);
+
+  /**
+   * 把 `by_agent` 计数字典摊平成「Agent / 命中数 / 占比」并按命中数降序。
+   *
+   * <p>后端只给计数不给占比，故用 `total_routes` 现算；`total_routes` 为 0 时
+   * 占比取 0，避免除零得到 `NaN` 再喂给 `toFixed()`。
+   */
+  const rankedStats = useMemo<RouteAgentShare[]>(() => {
+    const total = stats.total_routes > 0 ? stats.total_routes : 0;
+    return Object.entries(stats.by_agent)
+      .map(([agent_id, hit_count]) => ({
+        agent_id,
+        hit_count,
+        ratio: total > 0 ? hit_count / total : 0,
+      }))
+      .sort((a, b) => b.hit_count - a.hit_count);
+  }, [stats]);
+
+  /** 命中总次数：优先用后端的 `total_routes`，缺失时退回逐项求和。 */
+  const totalHits = useMemo(() => {
+    if (stats.total_routes > 0) return stats.total_routes;
+    return rankedStats.reduce((sum, s) => sum + s.hit_count, 0);
+  }, [stats, rankedStats]);
+
   const topStat = rankedStats[0];
+  /** 统计区是否"有内容"，替代此前的 `stats.length`。 */
+  const hasStats = rankedStats.length > 0;
 
   const headerActions = (
     <Button
@@ -249,7 +289,7 @@ export function AgentDispatchPage() {
       permission="agent:dispatch:list"
       actions={headerActions}
       /* 刻意不传 error：筛选区必须常驻，主视图与 traces 各自承载三态 */
-      loading={loading && logs.length === 0 && stats.length === 0 && logsError === null}
+      loading={loading && logs.length === 0 && !hasStats && logsError === null}
     >
       <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-auto">
         {/* ---------------- 筛选区：永远可用 ---------------- */}
@@ -273,7 +313,7 @@ export function AgentDispatchPage() {
               {agents
                 .filter((a) => a.role === 'coordinator')
                 .map((a) => (
-                  <option key={a.id} value={a.id}>
+                  <option key={a.agent_id} value={a.agent_id}>
                     {a.display_name}
                   </option>
                 ))}
@@ -294,12 +334,16 @@ export function AgentDispatchPage() {
             <StatCard label="命中总次数" value={statsError ? '-' : totalHits} icon={Target} />
             <StatCard
               label="参与 Agent 数"
-              value={statsError ? '-' : stats.length}
+              value={statsError ? '-' : rankedStats.length}
               icon={Activity}
             />
             <StatCard
               label="命中最多"
-              value={statsError || !topStat ? '-' : (topStat.display_name ?? topStat.agent_id)}
+              value={
+                statsError || !topStat
+                  ? '-'
+                  : (agentNames.get(topStat.agent_id) ?? topStat.agent_id)
+              }
               icon={Route}
               description={topStat && !statsError ? `${topStat.hit_count} 次` : undefined}
             />
@@ -308,7 +352,7 @@ export function AgentDispatchPage() {
           <AgentContentState
             error={statsError}
             onRetry={() => void loadMain(applied)}
-            empty={!loading && !statsError && stats.length === 0}
+            empty={!loading && !statsError && !hasStats}
             emptyText="所选范围内暂无命中统计"
             emptyHint="放宽时间范围，或确认该时段内确有会话经过路由分发。"
           >
@@ -318,7 +362,7 @@ export function AgentDispatchPage() {
                   <div key={stat.agent_id} className="space-y-1">
                     <div className="flex flex-wrap items-center gap-2 text-xs">
                       <span className="min-w-[10rem] truncate font-medium text-foreground">
-                        {stat.display_name || stat.agent_id}
+                        {agentNames.get(stat.agent_id) ?? stat.agent_id}
                       </span>
                       <span className="font-mono text-muted-foreground">{stat.agent_id}</span>
                       <span className="ml-auto text-muted-foreground">
@@ -417,7 +461,7 @@ export function AgentDispatchPage() {
                       className="border-b border-border/50 bg-table-row last:border-0 even:bg-table-stripe hover:bg-table-hover"
                     >
                       <td className="whitespace-nowrap px-3 py-2 text-xs text-muted-foreground">
-                        {formatTime(log.created_at)}
+                        {formatTime(log.timestamp)}
                       </td>
                       <td
                         className="truncate px-3 py-2 font-mono text-xs"
@@ -433,9 +477,9 @@ export function AgentDispatchPage() {
                       </td>
                       <td
                         className="truncate px-3 py-2 text-xs text-muted-foreground"
-                        title={log.reason ?? ''}
+                        title={log.input_text ?? log.strategy_used ?? ''}
                       >
-                        {log.reason || '-'}
+                        {log.strategy_used || '-'}
                       </td>
                     </tr>
                   ))}

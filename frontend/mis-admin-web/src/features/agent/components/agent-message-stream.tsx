@@ -3,7 +3,7 @@
  *
  * <p>**为什么抽成共享组件**：`sessions/agent-session-detail-dialog.tsx`（#29 回放）
  * 与 `chat/chat-shell.tsx`（#33 实时）要渲染的是**同一种东西** —— 带 role 分色的消息气泡
- * + tool 消息的 `meta` 展开。各写一份的必然结局是两处的 role 配色慢慢分叉，
+ * + tool 消息的 `metadata` 展开。各写一份的必然结局是两处的 role 配色慢慢分叉，
  * 而"同一条 assistant 消息在回放页是蓝的、在对话页是灰的"这种不一致，
  * 比没有配色更让运营困惑。
  *
@@ -62,9 +62,9 @@ const FALLBACK_SPEC: RoleSpec = {
 };
 
 /**
- * 从 tool 消息的 `meta` 里取工具名。
+ * 从 tool 消息的 `metadata` 里取工具名。
  *
- * <p>`meta` 是 `Record<string, unknown>`（形状由下游决定），这里只做保守探测：
+ * <p>`metadata` 是 `Record<string, unknown>`（形状由下游决定），这里只做保守探测：
  * 依次尝试常见键名，都没有就返回空串，绝不 `as any` 硬取。
  */
 function toolNameOf(meta: Record<string, unknown> | undefined): string {
@@ -77,7 +77,7 @@ function toolNameOf(meta: Record<string, unknown> | undefined): string {
 }
 
 /**
- * 入参摘要：把 `meta` 里除工具名以外的字段压成一行 JSON。
+ * 入参摘要：把 `metadata` 里除工具名以外的字段压成一行 JSON。
  *
  * <p>超过 240 字符就截断 —— 完整入参在 `<details>` 里可展开，
  * 摘要行的职责是让运营一眼看出"这次调用大概传了什么"。
@@ -95,7 +95,7 @@ function argsSummaryOf(meta: Record<string, unknown> | undefined): string {
   }
 }
 
-/** 完整 meta 的美化 JSON（展开区用）。 */
+/** 完整 metadata 的美化 JSON（展开区用）。 */
 function prettyMeta(meta: Record<string, unknown>): string {
   try {
     return JSON.stringify(meta, null, 2);
@@ -129,8 +129,8 @@ export function AgentMessageStream({
         const spec = ROLE_SPECS[msg.role] ?? FALLBACK_SPEC;
         const Icon = spec.icon;
         const isTool = msg.role === 'tool';
-        const toolName = isTool ? toolNameOf(msg.meta) : '';
-        const argsSummary = isTool ? argsSummaryOf(msg.meta) : '';
+        const toolName = isTool ? toolNameOf(msg.metadata) : '';
+        const argsSummary = isTool ? argsSummaryOf(msg.metadata) : '';
 
         return (
           <div key={msg.id} className={cn('rounded-lg border p-3', spec.bubble)}>
@@ -146,7 +146,7 @@ export function AgentMessageStream({
               </span>
               {toolName ? <span className="font-mono text-xs">{toolName}</span> : null}
               <span className="ml-auto text-[0.7rem] text-muted-foreground">
-                {formatTime(msg.created_at)}
+                {formatTime(msg.timestamp)}
               </span>
             </div>
 
@@ -169,13 +169,13 @@ export function AgentMessageStream({
               </p>
             ) : null}
 
-            {msg.meta && Object.keys(msg.meta).length > 0 ? (
+            {msg.metadata && Object.keys(msg.metadata).length > 0 ? (
               <details className="mt-1.5">
                 <summary className="cursor-pointer text-[0.7rem] text-muted-foreground hover:text-foreground">
-                  查看完整 meta
+                  查看完整 metadata
                 </summary>
                 <pre className="mt-1 max-h-56 overflow-auto rounded-md border bg-card p-2 font-mono text-[0.7rem] leading-relaxed">
-                  {prettyMeta(msg.meta)}
+                  {prettyMeta(msg.metadata)}
                 </pre>
               </details>
             ) : null}

@@ -36,7 +36,7 @@ import type {
   McpTool,
   MonitorOverview,
   RouteLog,
-  RouteStat,
+  RouteStats,
   SaveConfigFilePayload,
   Session,
   SessionMessage,
@@ -79,10 +79,21 @@ function seg(value: string): string {
 
 // ------------------------------------------------------------------ 技能池（§4.3 #1–#9）
 
-/** §4.3 #1 — agent:skill:list */
+/**
+ * §4.3 #1 — agent:skill:list。
+ *
+ * <p>**下游返回的是分页信封而不是裸数组**：ai-platform `api/routes/skill.py`
+ * 的 `list_skills` 回的是 `SkillListResponse{items,total,page,page_size}`，
+ * BFF 原样透传。此前这里直接把整个信封当 `Skill[]` 返回，
+ * 页面 `setSkills(list)` 塞进数组 state 后 `.map()` 立刻炸。
+ *
+ * <p>仍然兼容裸数组：万一后端某天改回不分页，前端不至于再崩一次。
+ */
 export async function listSkills(): Promise<Skill[]> {
-  const res = await api.get<ApiResult<Skill[]>>('/agent-ops/skills');
-  return unwrap(res, '获取技能列表失败');
+  const res = await api.get<ApiResult<AgentPage<Skill> | Skill[]>>('/agent-ops/skills');
+  const payload = unwrap(res, '获取技能列表失败');
+  if (Array.isArray(payload)) return payload;
+  return Array.isArray(payload.items) ? payload.items : [];
 }
 
 /** §4.3 #2 — agent:skill:list */
@@ -98,7 +109,8 @@ export async function getSkill(id: string): Promise<Skill> {
 }
 
 export interface SkillPayload {
-  id?: string;
+  /** 新建时由表单指定的技能 ID；编辑时不下发。与 wire 的 `skill_id` 同名。 */
+  skill_id?: string;
   name: string;
   description: string;
   category?: string;
@@ -322,16 +334,59 @@ export async function createChatSession(agentId: string): Promise<Session> {
   return unwrap(res, '创建对话会话失败');
 }
 
-/** §4.3 #33 — agent:chat:use */
+/**
+ * §4.3 #33 的**真实 wire 形状**（ai-platform `api/routes/session.py#send_message`）。
+ *
+ * <p>注意它**不是**一条 `MessageResponse`：没有 `content`、没有 `role`，
+ * 助手回复在 `response` 里，而 `message_id` 是**用户那条消息**的落库 id
+ * （源码为 `"message_id": user_msg.id`），不是助手消息的 id。
+ * 全部字段按可选声明 —— 下游异常分支可能少给键，解构时不能假定存在。
+ */
+interface ChatReplyWire {
+  message_id?: string;
+  response?: string;
+  session_id?: string;
+  warnings?: string[];
+  tool_errors?: string[];
+}
+
+/**
+ * §4.3 #33 — agent:chat:use。
+ *
+ * <p>把 #33 的自定义响应**适配成标准 {@link SessionMessage}**，让对话页与
+ * `AgentMessageStream` 只认一种消息结构。此前这里直接 `unwrap` 成 `SessionMessage`
+ * 返回，页面读 `reply.content` 恒为 `undefined` → 气泡永远显示「（空消息体）」，
+ * 助手其实回了话却看不见。
+ *
+ * <p>`warnings` / `tool_errors` 不丢弃：塞进 `metadata`，
+ * 由消息流的「查看完整 metadata」展开区呈现 —— 这正是运营调试台要看的东西。
+ */
 export async function sendChatMessage(
   sessionId: string,
   content: string,
 ): Promise<SessionMessage> {
-  const res = await api.post<ApiResult<SessionMessage>>(
+  const res = await api.post<ApiResult<ChatReplyWire>>(
     `/agent-ops/chat/sessions/${seg(sessionId)}/messages`,
     { content },
   );
-  return unwrap(res, '发送消息失败');
+  const wire = unwrap(res, '发送消息失败');
+
+  const warnings = Array.isArray(wire.warnings) ? wire.warnings : [];
+  const toolErrors = Array.isArray(wire.tool_errors) ? wire.tool_errors : [];
+  const metadata: Record<string, unknown> = {};
+  if (warnings.length > 0) metadata.warnings = warnings;
+  if (toolErrors.length > 0) metadata.tool_errors = toolErrors;
+
+  return {
+    // 用户消息 id 派生助手消息 id，避免与用户那条撞 key
+    id: wire.message_id ? `${wire.message_id}-reply` : `reply-${Date.now()}`,
+    session_id: wire.session_id ?? sessionId,
+    role: 'assistant',
+    content: wire.response ?? '',
+    // #33 不下发时间戳，用本地时间兜底（仅用于展示排序）
+    timestamp: new Date().toISOString(),
+    metadata: Object.keys(metadata).length > 0 ? metadata : undefined,
+  };
 }
 
 // ------------------------------------------------------------------ MCP（§4.3 #34–#42）
@@ -442,12 +497,29 @@ export async function listRouteLogs(query: DispatchQuery = {}): Promise<RouteLog
   return unwrap(res, '获取路由日志失败');
 }
 
-/** §4.3 #47 — agent:dispatch:list */
-export async function listRouteStats(query: DispatchQuery = {}): Promise<RouteStat[]> {
-  const res = await api.get<ApiResult<RouteStat[]>>('/agent-ops/dispatch/route-stats', {
+/**
+ * §4.3 #47 — agent:dispatch:list。
+ *
+ * <p>**返回聚合对象，不是数组**：ai-platform `admin.py#get_route_stats` 回的是
+ * `stats.model_dump()`（`RouteStats`，见 `src/router/models.py`）。
+ * 此前这里声明成 `RouteStat[]`，页面对着一个普通对象做 `[...stats]` 展开，
+ * 直接 `stats is not iterable` 崩页。
+ *
+ * <p>这里把缺省值补齐后再返回，保证调用方拿到的 `by_agent` / `by_strategy`
+ * 一定是可枚举对象 —— 消费点无需再写一遍 `?? {}`。
+ */
+export async function listRouteStats(query: DispatchQuery = {}): Promise<RouteStats> {
+  const res = await api.get<ApiResult<Partial<RouteStats>>>('/agent-ops/dispatch/route-stats', {
     params: cleanParams({ ...query }),
   });
-  return unwrap(res, '获取路由统计失败');
+  const raw = unwrap(res, '获取路由统计失败');
+  return {
+    total_routes: raw.total_routes ?? 0,
+    by_agent: raw.by_agent ?? {},
+    by_strategy: raw.by_strategy ?? {},
+    avg_latency_ms: raw.avg_latency_ms ?? 0,
+    avg_confidence: raw.avg_confidence ?? 0,
+  };
 }
 
 // ------------------------------------------------------------------ 企微机器人（§4.3 #48–#54）

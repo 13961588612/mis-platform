@@ -53,7 +53,8 @@ const selectClass =
 
 const SKILL_COLS: ResizableColumn[] = [
   { key: 'name', label: '名称' },
-  { key: 'id', label: '技能 ID' },
+  // key 必须与 Skill 字段同名：排序取值走 `row[key as keyof Skill]`
+  { key: 'skill_id', label: '技能 ID' },
   { key: 'status', label: '状态' },
   { key: 'category', label: '分类' },
   { key: 'tags', label: '标签' },
@@ -132,7 +133,7 @@ export function AgentSkillPoolPage() {
       if (!kw) return true;
       return (
         s.name.toLowerCase().includes(kw) ||
-        s.id.toLowerCase().includes(kw) ||
+        s.skill_id.toLowerCase().includes(kw) ||
         s.description.toLowerCase().includes(kw)
       );
     });
@@ -160,15 +161,15 @@ export function AgentSkillPoolPage() {
     try {
       switch (pending.kind) {
         case 'delete':
-          await deleteSkill(pending.skill.id);
+          await deleteSkill(pending.skill.skill_id);
           toast.success(`技能「${pending.skill.name}」已删除`);
           break;
         case 'enable':
-          await enableSkill(pending.skill.id);
+          await enableSkill(pending.skill.skill_id);
           toast.success(`技能「${pending.skill.name}」已启用`);
           break;
         case 'disable':
-          await disableSkill(pending.skill.id);
+          await disableSkill(pending.skill.skill_id);
           toast.success(`技能「${pending.skill.name}」已停用`);
           break;
         case 'reindex':
@@ -190,16 +191,16 @@ export function AgentSkillPoolPage() {
           title: '删除技能',
           danger: true,
           confirmText: '删除',
-          confirmKeyword: pending.skill.id,
+          confirmKeyword: pending.skill.skill_id,
           description: (
             <>
               <p>
                 将删除技能「{pending.skill.name}」（
-                <span className="font-mono">{pending.skill.id}</span>）。
+                <span className="font-mono">{pending.skill.skill_id}</span>）。
               </p>
               <p>
                 已绑定该技能的 Agent 会失去这项能力；其执行码
-                <span className="font-mono"> ai:skill:{pending.skill.id}:run </span>
+                <span className="font-mono"> ai:skill:{pending.skill.skill_id}:run </span>
                 的既有授权也将失效。此操作不可撤销。
               </p>
             </>
@@ -416,7 +417,7 @@ export function AgentSkillPoolPage() {
               ) : (
                 sorted.map((skill) => (
                   <tr
-                    key={skill.id}
+                    key={skill.skill_id}
                     className="border-b border-border/50 bg-table-row last:border-0 even:bg-table-stripe hover:bg-table-hover"
                   >
                     <td className="px-3 py-2">
@@ -427,8 +428,8 @@ export function AgentSkillPoolPage() {
                         {skill.description}
                       </div>
                     </td>
-                    <td className="truncate px-3 py-2 font-mono text-xs" title={skill.id}>
-                      {skill.id}
+                    <td className="truncate px-3 py-2 font-mono text-xs" title={skill.skill_id}>
+                      {skill.skill_id}
                     </td>
                     <td className="px-3 py-2">
                       <AgentStatusBadge kind="skillStatus" value={skill.status} />

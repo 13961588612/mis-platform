@@ -42,7 +42,9 @@ const selectClass =
 
 const AGENT_COLS: ResizableColumn[] = [
   { key: 'display_name', label: '显示名' },
-  { key: 'id', label: 'Agent ID' },
+  // key 必须与 AgentSummary 字段同名：排序取值走 `row[key as keyof AgentSummary]`，
+  // 写成 'id' 会取到 undefined，该列点击排序静默失效。
+  { key: 'agent_id', label: 'Agent ID' },
   { key: 'role', label: '角色' },
   { key: 'state', label: '状态' },
   { key: 'enabled_skill_count', label: '已启用技能' },
@@ -93,7 +95,7 @@ export function AgentListPage() {
     return agents.filter((a) => {
       if (agentStateFilter !== 'all' && a.state !== agentStateFilter) return false;
       if (!kw) return true;
-      return a.display_name.toLowerCase().includes(kw) || a.id.toLowerCase().includes(kw);
+      return a.display_name.toLowerCase().includes(kw) || a.agent_id.toLowerCase().includes(kw);
     });
   }, [agents, agentStateFilter, keyword]);
 
@@ -114,7 +116,7 @@ export function AgentListPage() {
   async function runPending(): Promise<void> {
     if (!pending) return;
     try {
-      await pending.action.run(pending.agent.id);
+      await pending.action.run(pending.agent.agent_id);
       toast.success(`「${pending.agent.display_name}」已${pending.action.label}`);
       setPending(null);
       await load();
@@ -261,15 +263,15 @@ export function AgentListPage() {
               ) : (
                 sorted.map((agent) => (
                   <tr
-                    key={agent.id}
-                    onClick={() => navigate(`/agent/agents/${encodeURIComponent(agent.id)}`)}
+                    key={agent.agent_id}
+                    onClick={() => navigate(`/agent/agents/${encodeURIComponent(agent.agent_id)}`)}
                     className="cursor-pointer border-b border-border/50 bg-table-row last:border-0 even:bg-table-stripe hover:bg-table-hover"
                   >
                     <td className="truncate px-3 py-2 font-medium" title={agent.display_name}>
                       {agent.display_name}
                     </td>
-                    <td className="truncate px-3 py-2 font-mono text-xs" title={agent.id}>
-                      {agent.id}
+                    <td className="truncate px-3 py-2 font-mono text-xs" title={agent.agent_id}>
+                      {agent.agent_id}
                     </td>
                     <td className="px-3 py-2">
                       <AgentStatusBadge kind="agentRole" value={agent.role} />
@@ -310,7 +312,9 @@ export function AgentListPage() {
                         <button
                           type="button"
                           className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[0.8125rem] text-muted-foreground hover:bg-accent hover:text-foreground"
-                          onClick={() => navigate(`/agent/agents/${encodeURIComponent(agent.id)}`)}
+                          onClick={() =>
+                            navigate(`/agent/agents/${encodeURIComponent(agent.agent_id)}`)
+                          }
                         >
                           详情
                         </button>
@@ -337,7 +341,7 @@ export function AgentListPage() {
             <>
               <p>
                 目标 Agent：「{pending.agent.display_name}」（
-                <span className="font-mono">{pending.agent.id}</span>）。
+                <span className="font-mono">{pending.agent.agent_id}</span>）。
               </p>
               <p>{pending.action.confirmText}</p>
             </>

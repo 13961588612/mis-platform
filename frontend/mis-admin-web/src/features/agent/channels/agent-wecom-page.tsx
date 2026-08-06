@@ -390,7 +390,7 @@ export function AgentWecomPage() {
                     sorted.map((bot) => {
                       const rowBusy = busy === bot.bot_id;
                       const liveHealth = health[bot.bot_id] ?? bot.health;
-                      const boundAgent = agents.find((a) => a.id === bot.bound_agent_id);
+                      const boundAgent = agents.find((a) => a.agent_id === bot.bound_agent_id);
                       return (
                         <tr
                           key={bot.bot_id}

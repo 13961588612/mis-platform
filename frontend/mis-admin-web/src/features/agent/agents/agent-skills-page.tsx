@@ -116,13 +116,13 @@ export function AgentSkillsPage({ agentId }: AgentSkillsPageProps) {
   /** skill_id → 池内状态，用于置灰与提交时回填 `skill_status`。 */
   const poolStatus = useMemo(() => {
     const m = new Map<string, Skill['status']>();
-    for (const s of pool) m.set(s.id, s.status);
+    for (const s of pool) m.set(s.skill_id, s.status);
     return m;
   }, [pool]);
 
   const poolById = useMemo(() => {
     const m = new Map<string, Skill>();
-    for (const s of pool) m.set(s.id, s);
+    for (const s of pool) m.set(s.skill_id, s);
     return m;
   }, [pool]);
 
@@ -132,7 +132,7 @@ export function AgentSkillsPage({ agentId }: AgentSkillsPageProps) {
     return pool.filter(
       (s) =>
         s.name.toLowerCase().includes(kw) ||
-        s.id.toLowerCase().includes(kw) ||
+        s.skill_id.toLowerCase().includes(kw) ||
         s.description.toLowerCase().includes(kw),
     );
   }, [pool, keyword]);
@@ -144,11 +144,11 @@ export function AgentSkillsPage({ agentId }: AgentSkillsPageProps) {
   function toggleBind(skill: Skill): void {
     if (!editable) return;
     // 已下线技能不允许新增绑定；已绑定的允许取消（这是"清理"，必须放行）
-    if (skill.status !== 'active' && !bindings.has(skill.id)) return;
+    if (skill.status !== 'active' && !bindings.has(skill.skill_id)) return;
     setBindings((prev) => {
       const next = new Map(prev);
-      if (next.has(skill.id)) next.delete(skill.id);
-      else next.set(skill.id, true);
+      if (next.has(skill.skill_id)) next.delete(skill.skill_id);
+      else next.set(skill.skill_id, true);
       return next;
     });
   }
@@ -248,13 +248,13 @@ export function AgentSkillsPage({ agentId }: AgentSkillsPageProps) {
               ) : (
                 <ul className="divide-y">
                   {filteredPool.map((skill) => {
-                    const bound = bindings.has(skill.id);
+                    const bound = bindings.has(skill.skill_id);
                     const offline = skill.status !== 'active';
                     // 已下线且未绑定 ⇒ 不可勾（不能新增下线技能的绑定）
                     const lockAdd = offline && !bound;
                     const disabled = !editable || lockAdd;
                     return (
-                      <li key={skill.id}>
+                      <li key={skill.skill_id}>
                         <label
                           className={cn(
                             'flex items-start gap-2 px-3 py-2 text-sm',
@@ -276,7 +276,7 @@ export function AgentSkillsPage({ agentId }: AgentSkillsPageProps) {
                               <AgentStatusBadge kind="skillStatus" value={skill.status} />
                             </span>
                             <span className="block truncate font-mono text-xs text-muted-foreground">
-                              {skill.id}
+                              {skill.skill_id}
                             </span>
                             {skill.description ? (
                               <span

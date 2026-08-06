@@ -176,7 +176,7 @@ export function AgentCoordinationPage({ agentId }: AgentCoordinationPageProps) {
 
   /** 可选 worker：role=worker 且排除自己（§4.5 校验 3 禁自环）。 */
   const workerOptions = useMemo(
-    () => candidates.filter((a) => a.role === 'worker' && a.id !== agentId),
+    () => candidates.filter((a) => a.role === 'worker' && a.agent_id !== agentId),
     [candidates, agentId],
   );
 
@@ -392,17 +392,17 @@ export function AgentCoordinationPage({ agentId }: AgentCoordinationPageProps) {
                   ) : (
                     <ul className="divide-y">
                       {workerOptions.map((w) => (
-                        <li key={w.id}>
+                        <li key={w.agent_id}>
                           <label className="flex cursor-pointer items-center gap-2 px-3 py-2 text-sm hover:bg-accent/50">
                             <input
                               type="checkbox"
                               className="h-3.5 w-3.5 cursor-pointer accent-primary"
-                              checked={form.allowed_workers.includes(w.id)}
-                              onChange={() => toggleWorker(w.id)}
+                              checked={form.allowed_workers.includes(w.agent_id)}
+                              onChange={() => toggleWorker(w.agent_id)}
                             />
                             <span className="min-w-0 flex-1 truncate">{w.display_name}</span>
                             <span className="shrink-0 font-mono text-xs text-muted-foreground">
-                              {w.id}
+                              {w.agent_id}
                             </span>
                           </label>
                         </li>
@@ -411,13 +411,13 @@ export function AgentCoordinationPage({ agentId }: AgentCoordinationPageProps) {
                   )}
                 </div>
                 {/* 已选但不在候选里的 id：多半是对方角色被改了，必须显式暴露 */}
-                {form.allowed_workers.filter((id) => !workerOptions.some((w) => w.id === id))
+                {form.allowed_workers.filter((id) => !workerOptions.some((w) => w.agent_id === id))
                   .length > 0 ? (
                   <p className="mt-1 flex items-start gap-1 text-xs text-warning">
                     <TriangleAlert className="mt-[0.1rem] h-3 w-3 shrink-0" />
                     以下已配置的执行者当前不可用（已删除或角色已变更）：
                     {form.allowed_workers
-                      .filter((id) => !workerOptions.some((w) => w.id === id))
+                      .filter((id) => !workerOptions.some((w) => w.agent_id === id))
                       .join('、')}
                   </p>
                 ) : null}

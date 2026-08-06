@@ -78,8 +78,8 @@ export function AgentChatPage() {
       setAgents(list);
       // 默认优先选中"运行中"的 Agent —— 选中一个已停止的再去发消息必然失败
       setAgentId((prev) => {
-        if (prev && list.some((a) => a.id === prev)) return prev;
-        return list.find((a) => a.state === 'running')?.id ?? list[0]?.id ?? '';
+        if (prev && list.some((a) => a.agent_id === prev)) return prev;
+        return list.find((a) => a.state === 'running')?.agent_id ?? list[0]?.agent_id ?? '';
       });
     } catch (e) {
       setAgents([]);
@@ -94,7 +94,7 @@ export function AgentChatPage() {
   }, [loadAgents]);
 
   const selectedAgent = useMemo<AgentSummary | null>(
-    () => agents.find((a) => a.id === agentId) ?? null,
+    () => agents.find((a) => a.agent_id === agentId) ?? null,
     [agents, agentId],
   );
 
@@ -136,12 +136,13 @@ export function AgentChatPage() {
     setSendError(null);
 
     // ---- 第一步：确保有会话（懒创建，#32） ----
-    let sid = session?.id ?? '';
+    // #32 回的是 SessionResponse，主键字段是 `session_id`（不是 `id`）
+    let sid = session?.session_id ?? '';
     if (!sid) {
       try {
         const created = await createChatSession(agentId);
         setSession(created);
-        sid = created.id;
+        sid = created.session_id;
       } catch (e) {
         const msg = agentErrorMessage(e, '创建对话会话失败');
         setSendError(msg);
@@ -158,7 +159,7 @@ export function AgentChatPage() {
       session_id: sid,
       role: 'user',
       content,
-      created_at: new Date().toISOString(),
+      timestamp: new Date().toISOString(),
     };
     setMessages((prev) => [...prev, localUser]);
     setInput('');
@@ -194,7 +195,7 @@ export function AgentChatPage() {
   );
 
   const hintParts: string[] = [];
-  if (session) hintParts.push(`会话 ${session.id}`);
+  if (session) hintParts.push(`会话 ${session.session_id}`);
   else hintParts.push('尚未创建会话，发送首条消息时自动创建');
   if (syncBlocked) hintParts.push('当前仅显示本地消息流（无会话读取权限，工具调用轨迹不可见）');
 
@@ -219,7 +220,7 @@ export function AgentChatPage() {
             >
               {agents.length === 0 ? <option value="">暂无可用 Agent</option> : null}
               {agents.map((a) => (
-                <option key={a.id} value={a.id}>
+                <option key={a.agent_id} value={a.agent_id}>
                   {a.display_name}
                 </option>
               ))}

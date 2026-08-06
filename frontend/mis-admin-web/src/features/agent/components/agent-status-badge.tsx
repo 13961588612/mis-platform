@@ -51,10 +51,20 @@ const MCP_STATE_MAP: Record<McpConnectionState, BadgeSpec> = {
   unknown: { label: '未知', variant: 'outline' },
 };
 
+/**
+ * 审批状态文案表。
+ *
+ * <p>必须覆盖 `ApprovalStatus` 的**全部 5 档** —— 后端
+ * `src/hitl/store.py#ApprovalStatus` 除了 pending/approved/rejected，
+ * 还有超时清理任务写入的 `timeout` 与 `expired`。少一档就是
+ * `APPROVAL_STATUS_MAP[status].label` 读 `undefined.label` 白屏。
+ */
 const APPROVAL_STATUS_MAP: Record<ApprovalStatus, BadgeSpec> = {
   pending: { label: '待审批', variant: 'warning' },
   approved: { label: '已通过', variant: 'success' },
   rejected: { label: '已驳回', variant: 'destructive' },
+  timeout: { label: '已超时', variant: 'secondary' },
+  expired: { label: '已失效', variant: 'secondary' },
 };
 
 /**

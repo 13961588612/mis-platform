@@ -100,7 +100,8 @@ export function AgentSkillFormDialog({
     setForm(
       skill
         ? {
-            id: skill.id,
+            // 表单内部字段名保持 `id`，仅在提交时映射到 wire 的 `skill_id`
+            id: skill.skill_id,
             name: skill.name,
             description: skill.description,
             category: skill.category ?? '',
@@ -140,9 +141,9 @@ export function AgentSkillFormDialog({
     setSaving(true);
     try {
       if (isEdit && skill) {
-        await updateSkill(skill.id, payload);
+        await updateSkill(skill.skill_id, payload);
       } else {
-        await createSkill({ ...payload, id: values.id });
+        await createSkill({ ...payload, skill_id: values.id });
       }
       toast.success(isEdit ? '技能已更新' : '技能已创建');
       onOpenChange(false);
