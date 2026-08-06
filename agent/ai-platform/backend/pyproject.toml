@@ -29,6 +29,7 @@ dependencies = [
     "pyyaml>=6.0",
     "APScheduler>=3.10.0",
     "openharness-ai>=0.1.9",
+    "psycopg2-binary>=2.9.12",
 ]
 
 [project.optional-dependencies]
