@@ -285,7 +285,7 @@ export function KbQaRecordTab() {
         >
           <thead className="border-b-2 border-foreground/20 bg-table-header text-muted-foreground">
             <tr>
-              {QA_COLS.map((c, ci) => {
+              {QA_COLS.map((c) => {
                 const active = sortKey === c.key;
                 return (
                   <th
