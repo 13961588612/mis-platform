@@ -593,6 +593,7 @@ export const SYSTEM_PAGE_DEFS: Record<string, AdminPageDef> = {
     group: '组织架构',
     title: '员工管理',
     description: '租户员工自然人主数据（sys_employee），关联主部门。',
+    tableDensity: 'compact',
     filters: [
       { key: 'real_name', label: '姓名', type: 'text', col: 4 },
       {
@@ -735,6 +736,7 @@ export const SYSTEM_PAGE_DEFS: Record<string, AdminPageDef> = {
     group: '组织架构',
     title: '岗位管理',
     description: '部门岗位编制（sys_post / sys_post_type），支持兼职多岗。',
+    tableDensity: 'compact',
     filters: [
       { key: 'name', label: '岗位名称', type: 'text', col: 4 },
       {

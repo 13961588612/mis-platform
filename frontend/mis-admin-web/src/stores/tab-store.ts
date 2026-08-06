@@ -1,5 +1,4 @@
 import { create } from 'zustand';
-import { persist } from 'zustand/middleware';
 
 export interface WorkspaceTab {
   id: string;
@@ -24,20 +23,18 @@ function tabId(path: string) {
   return path;
 }
 
-export const useTabStore = create<TabState>()(
-  persist(
-    (set, get) => ({
-      tabs: [
-        {
-          id: '/dashboard',
-          path: '/dashboard',
-          title: '仪表盘',
-          icon: 'LayoutDashboard',
-          pinned: true,
-        },
-      ],
-      activeId: '/dashboard',
-      openTab: (tab) => {
+export const useTabStore = create<TabState>()((set, get) => ({
+  tabs: [
+    {
+      id: '/dashboard',
+      path: '/dashboard',
+      title: '仪表盘',
+      icon: 'LayoutDashboard',
+      pinned: true,
+    },
+  ],
+  activeId: '/dashboard',
+  openTab: (tab) => {
         const id = tab.id ?? tabId(tab.path);
         set((state) => {
           const exists = state.tabs.find((t) => t.id === id);
@@ -96,14 +93,8 @@ export const useTabStore = create<TabState>()(
         set({ tabs: pinned, activeId: next });
         return next;
       },
-      setActiveByPath: (path) => {
-        const hit = get().tabs.find((t) => t.path === path);
-        if (hit) set({ activeId: hit.id });
-      },
-    }),
-    {
-      name: 'mis-workspace-tabs',
-      partialize: (s) => ({ tabs: s.tabs, activeId: s.activeId }),
-    },
-  ),
-);
+  setActiveByPath: (path) => {
+    const hit = get().tabs.find((t) => t.path === path);
+    if (hit) set({ activeId: hit.id });
+  },
+}));

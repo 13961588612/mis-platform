@@ -42,6 +42,10 @@ services:
       QDRANT__SERVICE__GRPC_PORT: "6334"
       QDRANT__SERVICE__HTTP_PORT: "6333"
       QDRANT__LOG_LEVEL: "INFO"
+    ports:
+      # 本机 uvicorn 访问 localhost:6333；容器间仍用服务名 ai-platform-qdrant
+      - "6333:6333"
+      - "6334:6334"
     volumes:
       - ai-platform-qdrant_data:/qdrant/storage
       - ../agent/ai-platform/infra/init-qdrant.sh:/qdrant/init-qdrant.sh:ro

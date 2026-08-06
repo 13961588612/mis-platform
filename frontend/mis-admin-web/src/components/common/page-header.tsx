@@ -24,7 +24,7 @@ export function PageHeader({
   className,
 }: PageHeaderProps) {
   return (
-    <div className={cn('mb-3 flex flex-wrap items-end justify-between gap-3', className)}>
+    <div className={cn('mb-4 flex flex-wrap items-end justify-between gap-3', className)}>
       <div className="min-w-0">
         {breadcrumbs && breadcrumbs.length > 0 ? (
           <nav

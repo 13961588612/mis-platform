@@ -63,19 +63,23 @@
 用 DBA 账号执行（密码请改掉示例值）。推荐脚本：
 
 ```powershell
-# 依赖本机 psql；用 DBA 账号创建 mis / mis_platform
+# 1) MIS 业务库：mis / mis_platform
 .\scripts\init-mis-platform-db.ps1 `
   -DbHost <INFRA_HOST> -Port 5432 `
   -AdminUser postgres -AdminPassword '<DBA密码>' `
   -MisPassword '<mis密码>'
 # 已存在时可加 -SkipIfExists
-# 亦可用别名 -Host 代替 -DbHost
+
+# 2) Agent 库：aiplatform / ai_platform（对应 02-create-ai-platform.sql）
+.\scripts\init-ai-platform-db.ps1 `
+  -DbHost <INFRA_HOST> -Port 5432 `
+  -AdminUser postgres -AdminPassword '<DBA密码>' `
+  -AiPassword '<aiplatform密码>'
 ```
 
-等价 SQL（对应 `deploy/postgres/init/01-init-db.sql`）：
+等价 SQL — 业务库（`deploy/postgres/init/01-init-db.sql`）：
 
 ```sql
--- 业务库（对应 01-init-db.sql）
 CREATE USER mis WITH PASSWORD '<mis密码>';
 CREATE DATABASE mis_platform OWNER mis;
 GRANT ALL PRIVILEGES ON DATABASE mis_platform TO mis;
@@ -86,20 +90,62 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO mis;
 ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO mis;
 ```
 
-有 Nacos / Agent 时，再分别执行 `02-init-nacos-db.sql`、`03-nacos-schema.sql`、`02-create-ai-platform.sql`（同样用 DBA 账号）。
+等价 SQL — Agent 库（`deploy/postgres/init/02-create-ai-platform.sql`）：
+
+```sql
+CREATE ROLE aiplatform WITH LOGIN PASSWORD 'aiplatform_dev_password';
+CREATE DATABASE ai_platform OWNER aiplatform;
+GRANT ALL PRIVILEGES ON DATABASE ai_platform TO aiplatform;
+
+\connect ai_platform
+GRANT ALL ON SCHEMA public TO aiplatform;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO aiplatform;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO aiplatform;
+```
+
+有 Nacos 外置存储时，再执行 `02-init-nacos-db.sql`、`03-nacos-schema.sql`（同样用 DBA 账号）。
 
 **业务表迁移**（用刚建好的 `mis` 用户；Flyway 读 Maven 属性 `db.*`，**不是** `DB_HOST` 环境变量）：
 
 ```powershell
 cd backend
 .\mvn.ps1 -pl mis-migrator flyway:migrate `
-  "-Ddb.host=10.254.16.6" "-Ddb.port=5432" "-Ddb.name=mis_platform" `
-  "-Ddb.user=mis" "-Ddb.password=mis123"
+  "-Ddb.host=<INFRA_HOST>" "-Ddb.port=5432" "-Ddb.name=mis_platform" `
+  "-Ddb.user=mis" "-Ddb.password=<mis密码>"
 ```
 
-Agent 库 `ai_platform` 另按 `agent/ai-platform` 做 Alembic（有 AI 时）。
+**Agent 表迁移**（建好 `ai_platform` 并写好 `.env` 后）：
 
-> 若 DBA 已按上表建好库与用户，可跳过建库步骤，直接 Flyway，并把 `.env` / Nacos 里的 `DB_USER` / `DB_PASSWORD` 改成实际账号。
+```powershell
+# 1) 确认 D:\code\mis-platform\agent\ai-platform\backend\.env 含：
+#    POSTGRES_HOST=<INFRA_HOST>
+#    POSTGRES_PORT=5432
+#    POSTGRES_DB=ai_platform
+#    POSTGRES_USER=aiplatform
+#    POSTGRES_PASSWORD=<aiplatform密码>
+#    （Alembic 经 env.py → Settings.postgres_dsn_sync 读这些变量）
+
+# 2) 执行迁移到最新版本
+cd D:\code\mis-platform\agent\ai-platform\backend
+uv run alembic upgrade head
+
+# 若报缺 psycopg2 / 无法同步连接，先装驱动再迁移：
+#   uv add psycopg2-binary
+#   或: uv pip install psycopg2-binary
+
+# 查看状态（可选）
+uv run alembic current
+uv run alembic history
+```
+
+若未装 `uv`，可先 `pip install -e .`（或按该目录依赖安装），再：
+
+```powershell
+cd D:\code\mis-platform\agent\ai-platform\backend
+alembic upgrade head
+```
+
+> 若 DBA 已按上表建好库与用户，可跳过建库步骤，直接迁移，并把 `.env.integration` / Agent `.env` 改成实际账号。
 
 ### 3.2 Redis
 
@@ -227,7 +273,7 @@ mis:
   kb:
     engine:
       type: ${MIS_KB_ENGINE_TYPE:ragflow}          # 或 noop
-      base-url: ${MIS_KB_ENGINE_BASE_URL:http://<INFRA_HOST>:9380}
+      base-url: ${MIS_KB_ENGINE_BASE_URL:http://10.254.16.6:9380}
       api-key: ${MIS_KB_ENGINE_API_KEY:}           # 真实 key 用环境变量注入，勿提交 Git
 ```
 
@@ -264,8 +310,8 @@ mis:
 
 ```powershell
 cd D:\code\mis-platform
-.\scripts\ensure-nacos-namespace.ps1 -Namespace integration -NacosServer "http://<INFRA_HOST>:8848"
-.\scripts\nacos-push.ps1 -Namespace integration -NacosServer "http://<INFRA_HOST>:8848"
+.\scripts\ensure-nacos-namespace.ps1 -Namespace integration -NacosServer "http://10.254.16.6:8848"
+.\scripts\nacos-push.ps1 -Namespace integration -NacosServer "http://10.254.16.6:8848"
 ```
 
 控制台核对：`http://<INFRA_HOST>:8848/nacos` → 命名空间 `integration` → Group `MIS_GROUP`。

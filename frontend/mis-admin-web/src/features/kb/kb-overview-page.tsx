@@ -1,11 +1,16 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Boxes, FileText, FolderTree, MessageSquare, RefreshCw } from 'lucide-react';
 import { toast } from 'sonner';
+import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
+import { buildAppBreadcrumbs } from '@/components/common/app-breadcrumbs';
 import { PageHeader } from '@/components/common/page-header';
+import { SortIndicator } from '@/components/common/sort-indicator';
 import { StatCard } from '@/components/common/stat-card';
+import { useClientSort } from '@/components/common/use-client-sort';
+import { useColumnWidths, type ResizableColumn } from '@/components/common/use-column-widths';
 import { EngineHealthBadge } from './components/kb-badges';
 import { listCategories, listLibraries, listMySessions } from './api/kb-api';
 import { useKbStore } from './stores/use-kb-store';
@@ -14,6 +19,15 @@ import { formatTime, secrecyLabel } from './types';
 
 /** 引擎心跳轮询间隔（ms）：与 ai-platform 健康检查节奏保持同量级。 */
 const HEALTH_POLL_MS = 30_000;
+
+/** 概览「最近知识库」表列定义（可调列宽 + 可排序）。 */
+const OVERVIEW_COLS: ResizableColumn[] = [
+  { key: 'name', label: '知识库' },
+  { key: 'secrecy', label: '密级' },
+  { key: 'docCount', label: '文档数' },
+  { key: 'engineType', label: '引擎' },
+  { key: 'updatedAt', label: '更新时间' },
+];
 
 /**
  * 知识库概览页。
@@ -63,15 +77,25 @@ export function KbOverviewPage() {
   }, [refreshHealth]);
 
   const docTotal = libraries.reduce((sum, l) => sum + (l.docCount ?? 0), 0);
-  const recentLibraries = [...libraries]
-    .sort((a, b) => (b.updatedAt ?? '').localeCompare(a.updatedAt ?? ''))
-    .slice(0, 8);
+  const recentLibraries = useMemo(
+    () =>
+      [...libraries]
+        .sort((a, b) => (b.updatedAt ?? '').localeCompare(a.updatedAt ?? ''))
+        .slice(0, 8),
+    [libraries],
+  );
+
+  /* 列宽 + 表头排序（一次性加载数据，前端排序无分页副作用） */
+  const { widthOf, startResize, hasCustom, reset } = useColumnWidths(OVERVIEW_COLS, 'mis-kb-overview-table-widths');
+  const getSortValue = useCallback((row: KbLibrary, key: string) => row[key as keyof KbLibrary], []);
+  const { sorted, sortKey, sortDir, toggleSort } = useClientSort(recentLibraries, getSortValue);
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col p-4 md:p-5">
+    <div className="flex min-h-0 flex-1 flex-col">
       <PageHeader
         title="知识库概览"
         description="分类、知识库、文档与问答的总体运行情况。"
+        breadcrumbs={buildAppBreadcrumbs({ app: 'kb', title: '概览' })}
         actions={
           <Button
             size="sm"
@@ -116,15 +140,51 @@ export function KbOverviewPage() {
         </div>
       </Card>
 
-      <div className="mt-3 min-h-0 flex-1 overflow-auto rounded-lg border bg-table-surface">
-        <table className="w-full bg-table-surface text-left text-sm">
-          <thead className="sticky top-0 z-10 border-b-2 border-foreground/20 bg-table-header text-muted-foreground backdrop-blur">
+      <div className="relative mt-3 min-h-0 flex-1 overflow-auto rounded-lg border bg-table-surface">
+        {hasCustom ? (
+          <button
+            type="button"
+            onClick={reset}
+            className="absolute right-3 top-3 z-20 rounded-md bg-card px-2 py-0.5 text-xs text-muted-foreground shadow-sm hover:text-foreground"
+          >
+            重置列宽
+          </button>
+        ) : null}
+        <table className="w-full table-fixed border-separate border-spacing-0 bg-table-surface text-left text-sm">
+          <thead className="border-b-2 border-foreground/20 bg-table-header text-muted-foreground">
             <tr>
-              <th className="px-3 py-2 font-bold">知识库</th>
-              <th className="px-3 py-2 font-bold">密级</th>
-              <th className="px-3 py-2 font-bold">文档数</th>
-              <th className="px-3 py-2 font-bold">引擎</th>
-              <th className="px-3 py-2 font-bold">更新时间</th>
+              {OVERVIEW_COLS.map((c, ci) => {
+                const active = sortKey === c.key;
+                return (
+                  <th
+                    key={c.key}
+                    style={{ width: widthOf(c.key) }}
+                    aria-sort={active ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'none'}
+                    className={cn(
+                      'overflow-hidden whitespace-nowrap px-3 py-2 font-bold',
+                      ci > 0 && 'border-l border-border/60',
+                    )}
+                  >
+                    <button
+                      type="button"
+                      onClick={() => toggleSort(c.key)}
+                      className={cn(
+                        'flex w-full items-center gap-1 text-left font-bold',
+                        active ? 'text-foreground' : 'text-muted-foreground hover:text-foreground',
+                      )}
+                    >
+                      {c.label}
+                      <SortIndicator state={active ? sortDir : 'none'} />
+                    </button>
+                    <span
+                      role="separator"
+                      aria-label={`调整${c.label}列宽`}
+                      onMouseDown={(e) => startResize(e, c.key)}
+                      className="absolute right-0 top-0 h-full w-[3px] cursor-col-resize"
+                    />
+                  </th>
+                );
+              })}
             </tr>
           </thead>
           <tbody>
@@ -141,16 +201,16 @@ export function KbOverviewPage() {
                 </td>
               </tr>
             ) : (
-              recentLibraries.map((lib) => (
+              sorted.map((lib) => (
                 <tr
                   key={lib.id}
                   className="border-b border-border/50 bg-table-row last:border-0 even:bg-table-stripe hover:bg-table-hover"
                 >
-                  <td className="px-3 py-2">{lib.name}</td>
-                  <td className="px-3 py-2">{secrecyLabel(lib.secrecy)}</td>
+                  <td className="overflow-hidden text-ellipsis whitespace-nowrap px-3 py-2">{lib.name}</td>
+                  <td className="overflow-hidden text-ellipsis whitespace-nowrap px-3 py-2">{secrecyLabel(lib.secrecy)}</td>
                   <td className="px-3 py-2 tabular-nums">{lib.docCount ?? 0}</td>
-                  <td className="px-3 py-2 text-xs text-muted-foreground">{lib.engineType ?? '-'}</td>
-                  <td className="px-3 py-2 text-xs text-muted-foreground">{formatTime(lib.updatedAt)}</td>
+                  <td className="overflow-hidden text-ellipsis whitespace-nowrap px-3 py-2 text-xs text-muted-foreground">{lib.engineType ?? '-'}</td>
+                  <td className="overflow-hidden text-ellipsis whitespace-nowrap px-3 py-2 text-xs text-muted-foreground">{formatTime(lib.updatedAt)}</td>
                 </tr>
               ))
             )}

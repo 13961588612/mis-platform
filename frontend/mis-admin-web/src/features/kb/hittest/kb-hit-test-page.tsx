@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { PageHeader } from '@/components/common/page-header';
+import { buildAppBreadcrumbs } from '@/components/common/app-breadcrumbs';
 import { PermissionGate } from '@/components/auth/permission-gate';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { KbLibraryPicker } from '../components/kb-library-picker';
@@ -248,10 +249,11 @@ export function KbHitTestPage() {
   const previousHits = useMemo<KbHitTestHit[]>(() => previous?.result.hits ?? [], [previous]);
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col gap-4 p-4 md:p-5">
+    <div className="flex min-h-0 flex-1 flex-col gap-4">
       <PageHeader
         title="命中测试"
         description="选择一个知识库并输入问题，查看当前参数下实际召回的片段；此处的调参仅影响本次测试，不会写回知识库设置。"
+        breadcrumbs={buildAppBreadcrumbs({ app: 'kb', title: '命中测试' })}
       />
 
       {/* ------------------------------------------------------ 调参面板 */}
@@ -259,7 +261,11 @@ export function KbHitTestPage() {
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
           <div>
             <label className={fieldLabel}>知识库（单选）</label>
-            <KbLibraryPicker value={libraryId} onChange={onLibraryChange} />
+            <KbLibraryPicker
+              value={libraryId}
+              onChange={onLibraryChange}
+              activePath="/kb/hit-test"
+            />
           </div>
           <div>
             <label className={fieldLabel}>topK（召回条数）</label>

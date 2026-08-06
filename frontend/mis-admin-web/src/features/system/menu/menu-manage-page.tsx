@@ -20,6 +20,7 @@ import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { PageHeader } from '@/components/common/page-header';
+import { buildAppBreadcrumbs } from '@/components/common/app-breadcrumbs';
 import { DetailDefList } from '@/components/common/detail-def-list';
 import { PermissionGate } from '@/components/auth/permission-gate';
 import {
@@ -257,10 +258,14 @@ export function MenuManagePage() {
   const IconPreviewC = iconPreview as LucideIcon;
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col p-4 md:p-5">
+    <div className="flex min-h-0 flex-1 flex-col">
       <PageHeader
         title="菜单管理"
-        breadcrumbs={[{ label: '应用与接口' }, { label: '菜单管理' }]}
+        breadcrumbs={buildAppBreadcrumbs({
+          app: 'system',
+          group: '应用与接口',
+          title: '菜单管理',
+        })}
         description={`菜单树 · 类型：目录 / 菜单 / 按钮 · 共 ${flatAll.length} 个节点 · 可切换应用查看全部应用菜单`}
         actions={
           <div className="flex items-center gap-2">

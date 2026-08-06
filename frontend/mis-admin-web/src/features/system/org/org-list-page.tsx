@@ -1,11 +1,16 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { cn } from '@/lib/utils';
 import { Eye, Pencil, Plus, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { PageHeader } from '@/components/common/page-header';
+import { buildAppBreadcrumbs } from '@/components/common/app-breadcrumbs';
 import { DetailDefList } from '@/components/common/detail-def-list';
 import { StatusBadge } from '@/components/common/list-page-skeleton';
+import { SortIndicator } from '@/components/common/sort-indicator';
+import { useClientSort } from '@/components/common/use-client-sort';
+import { useColumnWidths, type ResizableColumn } from '@/components/common/use-column-widths';
 import { PermissionGate } from '@/components/auth/permission-gate';
 import {
   Sheet,
@@ -21,6 +26,17 @@ const fieldLabel = 'mb-[0.4rem] block text-sm font-medium text-foreground';
 const fieldInput =
   'h-auto min-h-9 w-full rounded-md border border-input bg-card px-[0.7rem] py-[0.55rem] text-sm';
 
+const ORG_COLUMNS: ResizableColumn[] = [
+  { key: 'code', label: '编码' },
+  { key: 'name', label: '名称' },
+  { key: 'sort', label: '排序' },
+  { key: 'status', label: '状态' },
+  { key: 'remark', label: '备注' },
+  { key: '__ops__', label: '操作', locked: true },
+];
+
+const thPad = 'px-3';
+
 export function OrgListPage() {
   const [rows, setRows] = useState<OrgItem[]>([]);
   const [loading, setLoading] = useState(false);
@@ -29,6 +45,29 @@ export function OrgListPage() {
   const [viewing, setViewing] = useState<OrgItem | null>(null);
   const [saving, setSaving] = useState(false);
   const [form, setForm] = useState({ code: '', name: '', sort: '0', remark: '', status: 1 });
+
+  const { widthOf, startResize, hasCustom, reset: resetColWidths, tableStyle } = useColumnWidths(
+    ORG_COLUMNS,
+    'mis-org-table-widths',
+  );
+
+  const getValue = useCallback((row: OrgItem, key: string) => {
+    switch (key) {
+      case 'code':
+        return row.code;
+      case 'name':
+        return row.name;
+      case 'sort':
+        return row.sort;
+      case 'status':
+        return row.status;
+      case 'remark':
+        return row.remark ?? '';
+      default:
+        return null;
+    }
+  }, []);
+  const { sorted, sortKey, sortDir, toggleSort } = useClientSort(rows, getValue);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -115,57 +154,118 @@ export function OrgListPage() {
     }
   }
 
+  const dataCols = useMemo(() => ORG_COLUMNS.filter((c) => !c.locked), []);
+
   return (
-    <div className="flex min-h-0 flex-1 flex-col p-4 md:p-5">
+    <div className="flex min-h-0 flex-1 flex-col">
       <PageHeader
         title="组织管理"
         description="租户下业务组织（扁平列表）。"
+        breadcrumbs={buildAppBreadcrumbs({
+          app: 'system',
+          group: '组织架构',
+          title: '组织管理',
+        })}
         actions={
-          <PermissionGate permission="system:org:add">
-            <Button size="sm" onClick={openCreate}>
-              <Plus className="h-4 w-4" />
-              新增组织
-            </Button>
-          </PermissionGate>
+          <div className="flex items-center gap-2">
+            {hasCustom ? (
+              <Button type="button" variant="outline" size="sm" onClick={resetColWidths}>
+                重置列宽
+              </Button>
+            ) : null}
+            <PermissionGate permission="system:org:add">
+              <Button size="sm" onClick={openCreate}>
+                <Plus className="h-4 w-4" />
+                新增组织
+              </Button>
+            </PermissionGate>
+          </div>
         }
       />
       <div className="min-h-0 flex-1 overflow-auto rounded-lg border bg-table-surface">
-        <table className="w-full bg-table-surface text-left text-sm">
-          <thead className="sticky top-0 z-10 border-b-2 border-foreground/20 bg-table-header text-muted-foreground backdrop-blur">
+        <table className="border-separate border-spacing-0 bg-table-surface text-left text-sm" style={tableStyle}>
+          <thead className="bg-table-header text-muted-foreground">
             <tr>
-              <th className="px-3 py-2 font-bold">编码</th>
-              <th className="px-3 py-2 font-bold">名称</th>
-              <th className="px-3 py-2 font-bold">排序</th>
-              <th className="px-3 py-2 font-bold">状态</th>
-              <th className="px-3 py-2 font-bold">备注</th>
-              <th className="px-3 py-2 font-bold">操作</th>
+              {dataCols.map((col) => {
+                const active = sortKey === col.key;
+                return (
+                  <th
+                    key={col.key}
+                    aria-sort={active ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'none'}
+                    style={{ width: widthOf(col.key) }}
+                    className="whitespace-nowrap px-0 py-0 text-[13px] font-bold"
+                  >
+                    <button
+                      type="button"
+                      onClick={() => toggleSort(col.key)}
+                      className={cn(
+                        'flex w-full items-center gap-1 pr-5 text-left font-bold transition-colors',
+                        thPad,
+                        active ? 'text-foreground' : 'text-muted-foreground hover:text-foreground',
+                      )}
+                      aria-label={`按${col.label}排序`}
+                    >
+                      {col.label}
+                      <SortIndicator state={active ? sortDir : 'none'} />
+                    </button>
+                    <span
+                      role="separator"
+                      aria-orientation="vertical"
+                      onMouseDown={(e) => startResize(e, col.key)}
+                      onClick={(e) => e.stopPropagation()}
+                      className="absolute right-0 top-0 z-10 h-full w-1.5 cursor-col-resize touch-none select-none hover:bg-primary/30"
+                      title={`拖动调整${col.label}列宽`}
+                    />
+                  </th>
+                );
+              })}
+              <th
+                className="whitespace-nowrap px-0 py-0 text-[13px] font-bold"
+                style={{ width: widthOf('__ops__') }}
+              >
+                <span className={cn('block font-bold text-muted-foreground', thPad)}>操作</span>
+              </th>
             </tr>
           </thead>
           <tbody>
             {loading ? (
               <tr>
-                <td colSpan={6} className="px-3 py-10 text-center text-muted-foreground">
+                <td colSpan={ORG_COLUMNS.length} className="px-3 py-10 text-center text-muted-foreground">
                   加载中…
                 </td>
               </tr>
-            ) : rows.length === 0 ? (
+            ) : sorted.length === 0 ? (
               <tr>
-                <td colSpan={6} className="px-3 py-10 text-center text-muted-foreground">
+                <td colSpan={ORG_COLUMNS.length} className="px-3 py-10 text-center text-muted-foreground">
                   暂无数据
                 </td>
               </tr>
             ) : (
-              rows.map((row) => (
-                <tr key={row.id} className="border-b border-border/50 last:border-0 bg-table-row even:bg-table-stripe hover:bg-table-hover">
-                  <td className="px-3 py-2 font-mono text-xs">{row.code}</td>
-                  <td className="px-3 py-2 font-medium">{row.name}</td>
-                  <td className="px-3 py-2">{row.sort}</td>
-                  <td className="px-3 py-2">
-                    <StatusBadge tone={row.status === 1 ? 'success' : 'destructive'} text={row.status === 1 ? '启用' : '禁用'} />
+              sorted.map((row) => (
+                <tr
+                  key={row.id}
+                  className="border-b border-border/50 last:border-0 bg-table-row even:bg-table-stripe hover:bg-table-hover"
+                >
+                  <td className="overflow-hidden text-ellipsis whitespace-nowrap px-3 py-2 align-middle font-mono text-xs">
+                    {row.code}
                   </td>
-                  <td className="px-3 py-2 text-muted-foreground">{row.remark ?? '—'}</td>
-                  <td className="px-3 py-2">
-                    <div className="flex items-center gap-1">
+                  <td className="overflow-hidden text-ellipsis whitespace-nowrap px-3 py-2 align-middle font-medium">
+                    {row.name}
+                  </td>
+                  <td className="overflow-hidden text-ellipsis whitespace-nowrap px-3 py-2 align-middle">
+                    {row.sort}
+                  </td>
+                  <td className="overflow-hidden text-ellipsis whitespace-nowrap px-3 py-2 align-middle">
+                    <StatusBadge
+                      tone={row.status === 1 ? 'success' : 'destructive'}
+                      text={row.status === 1 ? '启用' : '禁用'}
+                    />
+                  </td>
+                  <td className="overflow-hidden text-ellipsis whitespace-nowrap px-3 py-2 align-middle text-muted-foreground">
+                    {row.remark ?? '—'}
+                  </td>
+                  <td className="px-3 py-2 align-middle">
+                    <div className="flex items-center justify-end gap-1">
                       <button
                         type="button"
                         className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[0.8125rem] text-primary hover:bg-primary/10"
@@ -215,7 +315,15 @@ export function OrgListPage() {
                   { label: '编码', value: viewing.code },
                   { label: '名称', value: viewing.name },
                   { label: '排序', value: String(viewing.sort ?? 0) },
-                  { label: '状态', value: <StatusBadge tone={viewing.status === 1 ? 'success' : 'destructive'} text={viewing.status === 1 ? '启用' : '禁用'} /> },
+                  {
+                    label: '状态',
+                    value: (
+                      <StatusBadge
+                        tone={viewing.status === 1 ? 'success' : 'destructive'}
+                        text={viewing.status === 1 ? '启用' : '禁用'}
+                      />
+                    ),
+                  },
                   { label: '备注', value: viewing.remark },
                 ]}
               />

@@ -29,8 +29,11 @@ import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { PageHeader } from '@/components/common/page-header';
+import { buildAppBreadcrumbs } from '@/components/common/app-breadcrumbs';
 import { DetailDefList } from '@/components/common/detail-def-list';
 import { StatusBadge } from '@/components/common/list-page-skeleton';
+import { SortIndicator } from '@/components/common/sort-indicator';
+import { useColumnWidths, type ResizableColumn } from '@/components/common/use-column-widths';
 import {
   Sheet,
   SheetContent,
@@ -281,7 +284,7 @@ function AssignmentTable({ list }: { list: Assignment[] }) {
 }
 
 /** 对齐门户 sa-app：field-label .875rem/500；input .875rem + padding .55/.7 */
-const fieldLabelClass = 'mb-[0.4rem] block text-sm font-medium text-foreground';
+const fieldLabelClass = 'mb-[0.4rem] block text-[13px] font-medium text-foreground';
 const fieldInputClass =
   'h-auto min-h-9 w-full rounded-md border border-input bg-card px-[0.7rem] py-[0.55rem] text-sm text-foreground shadow-none';
 
@@ -457,6 +460,41 @@ export function AdminListPage({ def }: { def: AdminPageDef }) {
   const [filterOpen, setFilterOpen] = useState(true);
   // 真实数据加载态（def.loader 提供时触发骨架；否则用 sample，无加载态）
   const [loading, setLoading] = useState(false);
+  // 表头排序：三态 无 → 升 → 降 → 无（仅对普通文本/数字列生效，徽标/标签簇/任职数列除外）
+  const [sortKey, setSortKey] = useState<string | null>(null);
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
+  // compact：对齐组织管理主表（th 垂直 padding 由 globals.css 的 0.5rem 承担，内层不再叠 py-2.5；td 用 py-2）
+  const compact = def.tableDensity === 'compact';
+  const thInnerPad = compact ? 'px-3 py-0' : 'px-4 py-2.5';
+  const tdPad = compact ? 'px-3 py-2' : 'px-4 py-[0.7rem]';
+  const toggleSort = useCallback(
+    (key: string) => {
+      if (sortKey !== key) {
+        setSortKey(key);
+        setSortDir('asc');
+      } else if (sortDir === 'asc') {
+        setSortDir('desc');
+      } else {
+        setSortKey(null);
+        setSortDir('asc');
+      }
+      setPage(1);
+    },
+    [sortKey, sortDir],
+  );
+
+  // 表头列宽：拖右边缘改宽 + localStorage 记忆（每个 def 独立存储键；操作列 locked）
+  const engineCols = useMemo<ResizableColumn[]>(
+    () => [
+      ...def.columns.map((c) => ({ key: c.key, label: c.label })),
+      { key: '__ops__', label: '操作', locked: true },
+    ],
+    [def.columns],
+  );
+  const { widthOf, startResize, hasCustom, reset: resetColWidths, tableStyle } = useColumnWidths(
+    engineCols,
+    `mis-${def.id}-table-widths`,
+  );
 
   useEffect(() => {
     if (!def.loader) return;
@@ -530,7 +568,7 @@ export function AdminListPage({ def }: { def: AdminPageDef }) {
   const decorate = def.decorate ?? ((r: Record<string, unknown>) => r);
 
   const filtered = useMemo(() => {
-    return rows
+    const base = rows
       .map((r) => decorate({ ...r }))
       .filter((r) =>
         (def.filters ?? []).every((f) => {
@@ -543,7 +581,19 @@ export function AdminListPage({ def }: { def: AdminPageDef }) {
             .includes(String(v).toLowerCase());
         }),
       );
-  }, [rows, applied, def.filters, decorate]);
+    if (!sortKey) return base;
+    const dir = sortDir === 'asc' ? 1 : -1;
+    return [...base].sort((a, b) => {
+      const av = a[sortKey];
+      const bv = b[sortKey];
+      if (av == null || av === '') return 1;
+      if (bv == null || bv === '') return -1;
+      const na = Number(av);
+      const nb = Number(bv);
+      if (!Number.isNaN(na) && !Number.isNaN(nb)) return (na - nb) * dir;
+      return String(av).localeCompare(String(bv), 'zh-Hans-CN') * dir;
+    });
+  }, [rows, applied, def.filters, decorate, sortKey, sortDir]);
 
   // 已应用筛选条件计数（收起态提示）
   const filterCount = useMemo(
@@ -622,31 +672,39 @@ export function AdminListPage({ def }: { def: AdminPageDef }) {
 
   return (
     <FormFillBridgeProvider value={bridge}>
-      <div className="relative flex h-full min-h-0 flex-col">
+      {/* absolute inset-0：钉死在 KeepAlive 槽内，主表区域才能成为唯一纵向滚动容器 */}
+      <div className="relative min-h-0 flex-1">
+      <div className="absolute inset-0 flex flex-col overflow-hidden">
       <PageHeader
         className="mb-4 shrink-0"
         title={def.title}
         description={def.description}
-        breadcrumbs={[
-          { label: '门户', to: '/portal' },
-          { label: '系统管理' },
-          { label: def.group },
-          { label: def.title },
-        ]}
+        breadcrumbs={buildAppBreadcrumbs({
+          app: 'system',
+          group: def.group,
+          title: def.title,
+        })}
         actions={
-          def.readonly ? null : (
-            <div className="flex gap-2">
-              <Button type="button" onClick={() => openCreate()}>
-                <Plus className="h-4 w-4" />
-                新建
+          <div className="flex items-center gap-2">
+            {hasCustom ? (
+              <Button type="button" variant="outline" size="sm" onClick={resetColWidths}>
+                重置列宽
               </Button>
-              <AiFeature feature="text-extract">
-                <Button type="button" variant="outline" onClick={openSmartImport}>
-                  <Sparkles className="h-4 w-4" /> 智能录入
+            ) : null}
+            {def.readonly ? null : (
+              <>
+                <Button type="button" size="sm" onClick={() => openCreate()}>
+                  <Plus className="h-4 w-4" />
+                  新建
                 </Button>
-              </AiFeature>
-            </div>
-          )
+                <AiFeature feature="text-extract">
+                  <Button type="button" variant="outline" size="sm" onClick={openSmartImport}>
+                    <Sparkles className="h-4 w-4" /> 智能录入
+                  </Button>
+                </AiFeature>
+              </>
+            )}
+          </div>
         }
       />
 
@@ -670,7 +728,6 @@ export function AdminListPage({ def }: { def: AdminPageDef }) {
                 <Button
                   type="button"
                   size="sm"
-                  className="h-8 min-h-8 px-[0.6rem] text-[0.8125rem]"
                   onClick={() => {
                     setApplied({ ...draft });
                     setPage(1);
@@ -683,7 +740,6 @@ export function AdminListPage({ def }: { def: AdminPageDef }) {
                   type="button"
                   variant="outline"
                   size="sm"
-                  className="h-8 min-h-8 px-[0.6rem] text-[0.8125rem]"
                   onClick={() => {
                     setDraft({});
                     setApplied({});
@@ -696,7 +752,7 @@ export function AdminListPage({ def }: { def: AdminPageDef }) {
                   type="button"
                   size="icon"
                   variant="ghost"
-                  className="h-8 w-8"
+                  className="h-8 w-8 shrink-0"
                   aria-label={filterOpen ? '收起筛选' : '展开筛选'}
                   aria-expanded={filterOpen}
                   onClick={() => setFilterOpen((v) => !v)}
@@ -720,7 +776,7 @@ export function AdminListPage({ def }: { def: AdminPageDef }) {
                             : 'md:col-span-4',
                     )}
                   >
-                    <label className="mb-[0.4rem] block text-sm font-medium text-foreground">{f.label}</label>
+                    <label className="mb-[0.4rem] block text-[13px] font-medium text-foreground">{f.label}</label>
                     {f.type === 'select' ? (
                       <select
                         className="h-auto min-h-9 w-full rounded-md border border-input bg-card px-[0.7rem] py-[0.55rem] text-sm"
@@ -771,33 +827,70 @@ export function AdminListPage({ def }: { def: AdminPageDef }) {
               }}
             />
           ) : (
-          <div className="min-h-0 flex-1 overflow-auto">
-            <table className="w-full border-collapse bg-table-surface">
-              <thead className="sticky top-0 z-10 border-b-2 border-foreground/20 bg-table-header text-left backdrop-blur">
+            <div className="min-h-0 flex-1 overflow-auto">
+              <table
+                className="border-separate border-spacing-0 bg-table-surface"
+                style={tableStyle}
+              >
+              <thead className="bg-table-header text-left text-muted-foreground">
                 <tr>
-                  {def.columns.map((c) => (
+                {def.columns.map((c) => {
+                  const sortable = !c.status && !c.tags && c.key !== 'assignmentCount';
+                  const active = sortKey === c.key;
+                  return (
                     <th
                       key={c.key}
-                      className="whitespace-nowrap px-4 py-2.5 text-sm font-bold text-muted-foreground"
+                      aria-sort={active ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'none'}
+                      style={{ width: widthOf(c.key) }}
+                      className="whitespace-nowrap px-0 py-0 text-[13px] font-bold"
                     >
-                      {c.label}
+                      {sortable ? (
+                        <button
+                          type="button"
+                          onClick={() => toggleSort(c.key)}
+                          className={cn(
+                            'flex w-full items-center gap-1 pr-5 text-left font-bold transition-colors',
+                            thInnerPad,
+                            active ? 'text-foreground' : 'text-muted-foreground hover:text-foreground',
+                          )}
+                          aria-label={`按${c.label}排序`}
+                        >
+                          {c.label}
+                          <SortIndicator state={active ? sortDir : 'none'} />
+                        </button>
+                      ) : (
+                        <span className={cn('block pr-5 font-bold text-muted-foreground', thInnerPad)}>{c.label}</span>
+                      )}
+                      {/* 列分隔线由 globals.css `thead th + th` 绘制（与组织管理一致）；此处仅右缘拖宽热区 */}
+                      <span
+                        role="separator"
+                        aria-orientation="vertical"
+                        onMouseDown={(e) => startResize(e, c.key)}
+                        onClick={(e) => e.stopPropagation()}
+                        className="absolute right-0 top-0 z-10 h-full w-1.5 cursor-col-resize touch-none select-none hover:bg-primary/30"
+                        title={`拖动调整${c.label}列宽`}
+                      />
                     </th>
-                  ))}
-                  <th className="whitespace-nowrap px-4 py-2.5 text-sm font-bold text-muted-foreground">
-                    操作
-                  </th>
+                  );
+                })}
+                <th
+                  className="whitespace-nowrap px-0 py-0 text-[13px] font-bold"
+                  style={{ width: widthOf('__ops__') }}
+                >
+                  <span className={cn('block font-bold text-muted-foreground', thInnerPad)}>操作</span>
+                </th>
                 </tr>
               </thead>
               <tbody>
                 {loading ? (
                   Array.from({ length: pageSize }).map((_, i) => (
-                    <tr key={`sk-${i}`} className="border-b last:border-0">
+                    <tr key={`sk-${i}`}>
                       {def.columns.map((c) => (
-                        <td key={c.key} className="px-4 py-[0.7rem]">
+                        <td key={c.key} className={cn('border-b border-border/50', tdPad)}>
                           <div className="h-4 w-full max-w-[10rem] animate-pulse rounded bg-muted" />
                         </td>
                       ))}
-                      <td className="px-4 py-[0.7rem]">
+                      <td className={cn('border-b border-border/50', tdPad)}>
                         <div className="h-4 w-16 animate-pulse rounded bg-muted" />
                       </td>
                     </tr>
@@ -858,9 +951,9 @@ export function AdminListPage({ def }: { def: AdminPageDef }) {
                     const hasAssignments = assignments.length > 0;
                     return (
                       <Fragment key={rowId}>
-                        <tr className="border-b border-border/50 last:border-0 bg-table-row even:bg-table-stripe hover:bg-table-hover">
+                        <tr className="bg-table-row even:bg-table-stripe hover:bg-table-hover">
                           {def.columns.map((c) => (
-                            <td key={c.key} className="px-4 py-[0.7rem] align-middle text-sm">
+                            <td key={c.key} className={cn('border-b border-border/50 align-middle text-sm', tdPad, c.tags ? 'break-words' : 'overflow-hidden whitespace-nowrap text-ellipsis')}>
                               {c.status ? (
                                 <StatusBadge
                                   text={String(row[c.key] ?? '—')}
@@ -893,7 +986,7 @@ export function AdminListPage({ def }: { def: AdminPageDef }) {
                               )}
                             </td>
                           ))}
-                          <td className="px-4 py-[0.7rem]">
+                          <td className={cn('whitespace-nowrap border-b border-border/50', tdPad)}>
                             <div className="flex items-center gap-1">
                               <button
                                 type="button"
@@ -920,8 +1013,8 @@ export function AdminListPage({ def }: { def: AdminPageDef }) {
                           </td>
                         </tr>
                         {isOpen && hasAssignments ? (
-                          <tr className="border-b last:border-0 bg-muted/20">
-                            <td colSpan={def.columns.length + 1} className="px-4 py-3">
+                          <tr className="bg-muted/20">
+                            <td colSpan={def.columns.length + 1} className="border-b border-border/50 px-4 py-3">
                               <AssignmentTable list={assignments} />
                             </td>
                           </tr>
@@ -1153,6 +1246,7 @@ export function AdminListPage({ def }: { def: AdminPageDef }) {
           {toast}
         </div>
       ) : null}
+      </div>
       </div>
     </FormFillBridgeProvider>
   );

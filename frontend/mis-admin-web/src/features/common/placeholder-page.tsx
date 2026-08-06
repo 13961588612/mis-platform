@@ -1,9 +1,15 @@
 import { useAuthStore } from '@/stores/auth-store';
+import { buildAppBreadcrumbs, type HostAppKey } from '@/components/common/app-breadcrumbs';
 import {
   ListPageSkeleton,
   StatusBadge,
   buildDemoRows,
 } from '@/components/common/list-page-skeleton';
+
+function resolveHostAppKey(code: string | null | undefined): HostAppKey {
+  if (code === 'kb' || code === 'agent') return code;
+  return 'system';
+}
 
 export function PlaceholderPage({ title, description }: { title: string; description?: string }) {
   const app = useAuthStore((s) => s.app);
@@ -14,11 +20,10 @@ export function PlaceholderPage({ title, description }: { title: string; descrip
     <ListPageSkeleton
       title={title}
       description={description ?? '列表骨架：筛选 / 状态 Tab / 表头吸顶 / 分页 / 新建抽屉'}
-      breadcrumbs={[
-        { label: '门户', to: '/portal' },
-        { label: app?.name ?? '系统管理' },
-        { label: title },
-      ]}
+      breadcrumbs={buildAppBreadcrumbs({
+        app: resolveHostAppKey(app?.code),
+        title,
+      })}
       statusTabs={[
         { key: 'all', label: '全部' },
         { key: 'enabled', label: '启用' },

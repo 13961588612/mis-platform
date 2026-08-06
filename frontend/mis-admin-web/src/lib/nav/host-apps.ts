@@ -9,6 +9,9 @@
 const HOST_APP_LANDING: Record<string, string> = {
   system: '/dashboard',
   kb: '/kb/overview',
+  // T01：智能体运营控制台。sys_app.base_path 是 '/agent'（V19），但 '/agent' 本身
+  // 没有页面（PAGE_MAP 无此键），不显式登记就会落到「页面不存在」。
+  agent: '/agent/overview',
 };
 
 /**
@@ -21,4 +24,24 @@ export function resolveHostLanding(code: string | null | undefined, basePath?: s
   if (code && HOST_APP_LANDING[code]) return HOST_APP_LANDING[code];
   if (basePath && basePath.startsWith('/')) return basePath;
   return '/dashboard';
+}
+
+/**
+ * 按当前路由解析「正在使用的」宿主 / iframe 应用 code。
+ *
+ * <p>登录态里的 {@code auth.app} 是登录时选中的 App（多为 system），跨子系统只
+ * {@code navigate} 不会改它。顶栏切换器与侧栏品牌区必须以路由为准，否则一直显示「系统管理」。
+ */
+export function resolveActiveHostAppCode(
+  pathname: string,
+  loginAppCode?: string | null,
+): string {
+  if (pathname === '/kb' || pathname.startsWith('/kb/')) return 'kb';
+  if (pathname === '/agent' || pathname.startsWith('/agent/')) return 'agent';
+  if (pathname.startsWith('/iframe/')) {
+    const code = pathname.slice('/iframe/'.length).split('/')[0];
+    if (code) return code;
+  }
+  if (loginAppCode) return loginAppCode;
+  return 'system';
 }

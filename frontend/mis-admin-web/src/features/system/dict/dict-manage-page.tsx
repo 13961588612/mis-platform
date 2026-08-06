@@ -5,6 +5,10 @@ import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { PageHeader } from '@/components/common/page-header';
+import { buildAppBreadcrumbs } from '@/components/common/app-breadcrumbs';
+import { SortIndicator } from '@/components/common/sort-indicator';
+import { useClientSort } from '@/components/common/use-client-sort';
+import { useColumnWidths, type ResizableColumn } from '@/components/common/use-column-widths';
 import { PermissionGate } from '@/components/auth/permission-gate';
 import {
   Sheet,
@@ -27,6 +31,15 @@ import type { DictItem, DictTypeItem } from '@/types/api';
 
 const fieldLabel = 'mb-[0.4rem] block text-sm font-medium text-foreground';
 
+const DICT_ITEM_COLUMNS: ResizableColumn[] = [
+  { key: 'label', label: '标签' },
+  { key: 'value', label: '值' },
+  { key: 'sort', label: '排序' },
+  { key: '__ops__', label: '操作', locked: true },
+];
+
+const thPad = 'px-3';
+
 export function DictManagePage() {
   const [types, setTypes] = useState<DictTypeItem[]>([]);
   const [typeId, setTypeId] = useState<string | null>(null);
@@ -40,6 +53,25 @@ export function DictManagePage() {
   const [saving, setSaving] = useState(false);
   const [typeForm, setTypeForm] = useState({ code: '', name: '', remark: '' });
   const [itemForm, setItemForm] = useState({ label: '', value: '', sort: '0' });
+
+  const { widthOf, startResize, hasCustom, reset: resetColWidths, tableStyle } = useColumnWidths(
+    DICT_ITEM_COLUMNS,
+    'mis-dict-item-table-widths',
+  );
+
+  const getValue = useCallback((row: DictItem, key: string) => {
+    switch (key) {
+      case 'label':
+        return row.label;
+      case 'value':
+        return row.value;
+      case 'sort':
+        return row.sort;
+      default:
+        return null;
+    }
+  }, []);
+  const { sorted, sortKey, sortDir, toggleSort } = useClientSort(items, getValue);
 
   const loadTypes = useCallback(async () => {
     setLoading(true);
@@ -181,12 +213,22 @@ export function DictManagePage() {
   }
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col p-4 md:p-5">
+    <div className="flex min-h-0 flex-1 flex-col">
       <PageHeader
         title="字典管理"
         description="字典类型 + 字典项。"
+        breadcrumbs={buildAppBreadcrumbs({
+          app: 'system',
+          group: '基础数据',
+          title: '字典管理',
+        })}
         actions={
           <div className="flex gap-2">
+            {hasCustom ? (
+              <Button type="button" variant="outline" size="sm" onClick={resetColWidths}>
+                重置列宽
+              </Button>
+            ) : null}
             <PermissionGate permission="system:dict:add">
               <Button size="sm" variant="outline" onClick={openTypeCreate}>
                 <Plus className="h-4 w-4" />
@@ -247,36 +289,74 @@ export function DictManagePage() {
         </aside>
 
         <div className="min-w-0 flex-1 overflow-auto rounded-lg border bg-table-surface">
-          <table className="w-full bg-table-surface text-left text-sm">
-            <thead className="sticky top-0 z-10 border-b-2 border-foreground/20 bg-table-header text-muted-foreground backdrop-blur">
+          <table
+            className="border-separate border-spacing-0 bg-table-surface text-left text-sm"
+            style={tableStyle}
+          >
+            <thead className="bg-table-header text-muted-foreground">
               <tr>
-                <th className="px-3 py-2 font-bold">标签</th>
-                <th className="px-3 py-2 font-bold">值</th>
-                <th className="px-3 py-2 font-bold">排序</th>
-                <th className="px-3 py-2 font-bold">操作</th>
+                {DICT_ITEM_COLUMNS.filter((c) => !c.locked).map((col) => {
+                  const active = sortKey === col.key;
+                  return (
+                    <th
+                      key={col.key}
+                      aria-sort={active ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'none'}
+                      style={{ width: widthOf(col.key) }}
+                      className="whitespace-nowrap px-0 py-0 text-[13px] font-bold"
+                    >
+                      <button
+                        type="button"
+                        onClick={() => toggleSort(col.key)}
+                        className={cn(
+                          'flex w-full items-center gap-1 pr-5 text-left font-bold transition-colors',
+                          thPad,
+                          active ? 'text-foreground' : 'text-muted-foreground hover:text-foreground',
+                        )}
+                        aria-label={`按${col.label}排序`}
+                      >
+                        {col.label}
+                        <SortIndicator state={active ? sortDir : 'none'} />
+                      </button>
+                      <span
+                        role="separator"
+                        aria-orientation="vertical"
+                        onMouseDown={(e) => startResize(e, col.key)}
+                        onClick={(e) => e.stopPropagation()}
+                        className="absolute right-0 top-0 z-10 h-full w-1.5 cursor-col-resize touch-none select-none hover:bg-primary/30"
+                        title={`拖动调整${col.label}列宽`}
+                      />
+                    </th>
+                  );
+                })}
+                <th
+                  className="whitespace-nowrap px-0 py-0 text-[13px] font-bold"
+                  style={{ width: widthOf('__ops__') }}
+                >
+                  <span className={cn('block font-bold text-muted-foreground', thPad)}>操作</span>
+                </th>
               </tr>
             </thead>
             <tbody>
               {loadingItems ? (
                 <tr>
-                  <td colSpan={4} className="px-3 py-10 text-center text-muted-foreground">
+                  <td colSpan={DICT_ITEM_COLUMNS.length} className="px-3 py-10 text-center text-muted-foreground">
                     加载中…
                   </td>
                 </tr>
               ) : !typeId ? (
                 <tr>
-                  <td colSpan={4} className="px-3 py-10 text-center text-muted-foreground">
+                  <td colSpan={DICT_ITEM_COLUMNS.length} className="px-3 py-10 text-center text-muted-foreground">
                     请选择左侧字典类型
                   </td>
                 </tr>
-              ) : items.length === 0 ? (
+              ) : sorted.length === 0 ? (
                 <tr>
-                  <td colSpan={4} className="px-3 py-10 text-center text-muted-foreground">
+                  <td colSpan={DICT_ITEM_COLUMNS.length} className="px-3 py-10 text-center text-muted-foreground">
                     暂无字典项
                   </td>
                 </tr>
               ) : (
-                items.map((item) => (
+                sorted.map((item) => (
                   <tr key={item.id} className="border-b border-border/50 last:border-0 bg-table-row even:bg-table-stripe hover:bg-table-hover">
                     <td className="px-3 py-2">{item.label}</td>
                     <td className="px-3 py-2 font-mono text-xs">{item.value}</td>

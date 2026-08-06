@@ -59,7 +59,7 @@ export function DetailDefList({ items, className }: DetailDefListProps) {
     >
       {items.map((it) => (
         <Fragment key={it.key ?? it.label}>
-          <dt className="whitespace-nowrap pr-1 text-right text-xs text-muted-foreground">{it.label}</dt>
+          <dt className="whitespace-nowrap pr-1 text-right text-[13px] text-muted-foreground">{it.label}</dt>
           <dd className="min-w-0 break-all text-left text-sm">{renderValue(it.value)}</dd>
         </Fragment>
       ))}

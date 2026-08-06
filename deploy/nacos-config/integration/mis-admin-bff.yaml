@@ -5,7 +5,7 @@
 # sse-enabled=true 开启 SSE 流式直连（ai-platform 已具备 /api/v1/agents/{id}/chat/stream）。
 mis:
   ai-platform:
-    base-url: http://ai-platform-backend:8000
+    base-url: http://127.0.0.1:8000
     enabled: true
     chat-timeout-ms: 60000
     sse-enabled: true

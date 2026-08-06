@@ -4,6 +4,10 @@ import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { PermissionGate } from '@/components/auth/permission-gate';
 import { EnabledBadge, ParseStatusBadge } from '../components/kb-badges';
+import { SortIndicator } from '@/components/common/sort-indicator';
+import { useClientSort } from '@/components/common/use-client-sort';
+import { useColumnWidths, type ResizableColumn } from '@/components/common/use-column-widths';
+import { cn } from '@/lib/utils';
 import {
   deleteDocument,
   listDocuments,
@@ -19,6 +23,20 @@ const MAX_UPLOAD_BYTES = 50 * 1024 * 1024;
 
 /** 解析中自动刷新间隔（ms）。 */
 const PARSING_POLL_MS = 5_000;
+
+/** 列定义：可排序列（标题/大小/版本/更新时间）+ 操作列锁定（不可拖宽/换位）。 */
+const DOC_COLUMNS: (ResizableColumn & { sortable?: boolean })[] = [
+  { key: 'title', label: '标题', sortable: true },
+  { key: 'format', label: '格式' },
+  { key: 'size', label: '大小', sortable: true },
+  { key: 'version', label: '版本', sortable: true },
+  { key: 'parseStatus', label: '解析状态' },
+  { key: 'enabled', label: '启用' },
+  { key: 'updatedAt', label: '更新时间', sortable: true },
+  { key: '__ops__', label: '操作', locked: true },
+];
+
+const DOC_LAYOUT_STORAGE_KEY = 'mis-kb-document-table-widths';
 
 export interface KbDocumentTableProps {
   /** 固定知识库 id；L-06 库详情 Tab 直接传入，详情页不另选库。 */
@@ -47,6 +65,14 @@ export function KbDocumentTable({
   const [loading, setLoading] = useState(false);
   const [uploading, setUploading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  // 列宽记忆（localStorage）+ 表头排序（三态 无 → 升 → 降 → 无）
+  const { widthOf, startResize, hasCustom, reset: resetWidths } = useColumnWidths(
+    DOC_COLUMNS,
+    DOC_LAYOUT_STORAGE_KEY,
+  );
+  const getSortValue = useCallback((row: KbDocument, key: string) => row[key as keyof KbDocument], []);
+  const { sorted: sortedDocs, sortKey, sortDir, toggleSort } = useClientSort(documents, getSortValue);
 
   const load = useCallback(async (id: number) => {
     setLoading(true);
@@ -144,6 +170,11 @@ export function KbDocumentTable({
             <RefreshCw className="h-4 w-4" />
             刷新
           </Button>
+          {hasCustom ? (
+            <Button size="sm" variant="ghost" onClick={resetWidths}>
+              重置列宽
+            </Button>
+          ) : null}
           <span className="text-xs text-muted-foreground">
             单文件不超过 {formatSize(MAX_UPLOAD_BYTES)}
           </span>
@@ -163,17 +194,52 @@ export function KbDocumentTable({
             : 'overflow-auto rounded-lg border bg-table-surface'
         }
       >
-        <table className="w-full bg-table-surface text-left text-sm">
-          <thead className="sticky top-0 z-10 border-b-2 border-foreground/20 bg-table-header text-muted-foreground backdrop-blur">
+        <table className="w-full table-fixed border-separate border-spacing-0 bg-table-surface text-left text-sm">
+          <thead className="border-b-2 border-foreground/20 bg-table-header text-muted-foreground">
             <tr>
-              <th className="px-3 py-2 font-bold">标题</th>
-              <th className="px-3 py-2 font-bold">格式</th>
-              <th className="px-3 py-2 font-bold">大小</th>
-              <th className="px-3 py-2 font-bold">版本</th>
-              <th className="px-3 py-2 font-bold">解析状态</th>
-              <th className="px-3 py-2 font-bold">启用</th>
-              <th className="px-3 py-2 font-bold">更新时间</th>
-              <th className="px-3 py-2 font-bold">操作</th>
+              {DOC_COLUMNS.map((col, ci) => {
+                const active = sortKey === col.key;
+                const sortable = !!col.sortable;
+                return (
+                  <th
+                    key={col.key}
+                    aria-sort={active ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'none'}
+                    style={{ width: widthOf(col.key) }}
+                    className={cn('px-3 py-2 font-bold', ci > 0 && 'border-l border-border/60')}
+                  >
+                    {sortable ? (
+                      <button
+                        type="button"
+                        onClick={() => toggleSort(col.key)}
+                        className={cn(
+                          'flex w-full items-center gap-1 pr-5 text-left font-bold transition-colors',
+                          active ? 'text-foreground' : 'text-muted-foreground hover:text-foreground',
+                        )}
+                        aria-label={`按${col.label}排序`}
+                      >
+                        {col.label}
+                        <SortIndicator state={active ? sortDir : 'none'} />
+                      </button>
+                    ) : (
+                      <span className="block pr-5 font-bold">{col.label}</span>
+                    )}
+                    {!col.locked ? (
+                      <span
+                        onMouseDown={(e) => startResize(e, col.key)}
+                        className="absolute inset-y-0 right-0 z-10 w-[5px] cursor-col-resize touch-none select-none hover:bg-primary/40"
+                        aria-hidden
+                        title={`拖动调整${col.label}列宽`}
+                      />
+                    ) : null}
+                  </th>
+                );
+              })}
+              <th
+                className="border-l border-border/60 px-3 py-2 font-bold"
+                style={{ width: widthOf('__ops__') ?? 150 }}
+              >
+                操作
+              </th>
             </tr>
           </thead>
           <tbody>
@@ -190,25 +256,29 @@ export function KbDocumentTable({
                 </td>
               </tr>
             ) : (
-              documents.map((doc) => (
+              sortedDocs.map((doc) => (
                 <tr
                   key={doc.id}
                   className="border-b border-border/50 bg-table-row last:border-0 even:bg-table-stripe hover:bg-table-hover"
                 >
-                  <td className="px-3 py-2">{doc.title}</td>
-                  <td className="px-3 py-2 font-mono text-xs">{doc.format ?? '-'}</td>
-                  <td className="px-3 py-2 tabular-nums">{formatSize(doc.size)}</td>
-                  <td className="px-3 py-2 tabular-nums">v{doc.version ?? 1}</td>
-                  <td className="px-3 py-2">
+                  <td className="overflow-hidden whitespace-nowrap text-ellipsis px-3 py-2" title={doc.title}>
+                    {doc.title}
+                  </td>
+                  <td className="overflow-hidden whitespace-nowrap text-ellipsis px-3 py-2 font-mono text-xs">
+                    {doc.format ?? '-'}
+                  </td>
+                  <td className="whitespace-nowrap px-3 py-2 tabular-nums">{formatSize(doc.size)}</td>
+                  <td className="whitespace-nowrap px-3 py-2 tabular-nums">v{doc.version ?? 1}</td>
+                  <td className="whitespace-nowrap px-3 py-2">
                     <ParseStatusBadge status={doc.parseStatus} />
                   </td>
-                  <td className="px-3 py-2">
+                  <td className="whitespace-nowrap px-3 py-2">
                     <EnabledBadge enabled={doc.enabled} />
                   </td>
-                  <td className="px-3 py-2 text-xs text-muted-foreground">
+                  <td className="whitespace-nowrap px-3 py-2 text-xs text-muted-foreground">
                     {formatTime(doc.updatedAt)}
                   </td>
-                  <td className="px-3 py-2">
+                  <td className="whitespace-nowrap px-3 py-2">
                     <div className="flex items-center gap-1">
                       <PermissionGate permission="kb:document:edit">
                         <button

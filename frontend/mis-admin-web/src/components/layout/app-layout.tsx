@@ -40,7 +40,8 @@ import {
   type SystemNavNode,
 } from '@/lib/nav/system-nav';
 import { KB_NAV } from '@/lib/nav/kb-nav';
-import { resolveHostLanding } from '@/lib/nav/host-apps';
+import { AGENT_NAV } from '@/lib/nav/agent-nav';
+import { resolveActiveHostAppCode, resolveHostLanding } from '@/lib/nav/host-apps';
 import { mergeNavWithFallback, routerMenusToSystemNav } from '@/lib/nav/menus-to-nav';
 import { useTabStore } from '@/stores/tab-store';
 
@@ -75,16 +76,27 @@ export function AppLayout() {
   const location = useLocation();
   const openTab = useTabStore((s) => s.openTab);
 
+  const activeAppCode = useMemo(
+    () => resolveActiveHostAppCode(location.pathname, app?.code),
+    [location.pathname, app?.code],
+  );
+
   const navNodes: SystemNavNode[] = useMemo(() => {
     // 各子系统的静态权威清单：动态菜单仅作增强，避免 seed/授权缺漏导致侧栏空洞。
-    // 优先按路由前缀判定（用户可能以 system 登录后跨子系统跳转），再回退 app.code。
-    const inKb = location.pathname === '/kb' || location.pathname.startsWith('/kb/');
-    const fallback = inKb || app?.code === 'kb' ? KB_NAV : app?.code === 'system' ? SYSTEM_NAV : null;
+    // activeAppCode 已按路由前缀优先（kb / agent / iframe），再回退登录 app。
+    const fallback =
+      activeAppCode === 'kb'
+        ? KB_NAV
+        : activeAppCode === 'agent'
+          ? AGENT_NAV
+          : activeAppCode === 'system'
+            ? SYSTEM_NAV
+            : null;
     const dyn = routerMenusToSystemNav(menus);
     if (!dyn) return fallback ?? SYSTEM_NAV;
     if (fallback) return mergeNavWithFallback(fallback, dyn);
     return dyn;
-  }, [menus, app?.code, location.pathname]);
+  }, [menus, activeAppCode]);
 
   const navItem = useMemo(() => {
     for (const n of navNodes) {
@@ -159,10 +171,11 @@ export function AppLayout() {
   }, [apps]);
 
   const currentAppMeta = useMemo(
-    () => apps.find((a) => a.code === app?.code) ?? null,
-    [apps, app?.code],
+    () => apps.find((a) => a.code === activeAppCode) ?? null,
+    [apps, activeAppCode],
   );
-  const AppIcon = resolveNavIcon(currentAppMeta?.icon ?? 'Settings');
+  const activeAppName = currentAppMeta?.name ?? (activeAppCode === 'system' ? '系统管理' : activeAppCode);
+  const AppIcon = resolveNavIcon(currentAppMeta?.icon ?? (activeAppCode === 'agent' ? 'Bot' : activeAppCode === 'kb' ? 'BookOpen' : 'Settings'));
 
   useEffect(() => setMounted(true), []);
 
@@ -230,7 +243,7 @@ export function AppLayout() {
             onClick={() => setSwitcherOpen((v) => !v)}
           >
             <AppIcon className="h-4 w-4 shrink-0" strokeWidth={2} />
-            {app?.name ?? '子系统'}
+            {activeAppName}
             <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground" strokeWidth={2} />
           </button>
           {switcherOpen ? (
@@ -249,7 +262,7 @@ export function AppLayout() {
                         disabled={!item.enterable}
                         className={cn(
                           'flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-sm',
-                          item.code === app?.code ? 'bg-accent' : 'hover:bg-accent',
+                          item.code === activeAppCode ? 'bg-accent' : 'hover:bg-accent',
                           !item.enterable && 'cursor-not-allowed opacity-50',
                         )}
                         onClick={() => {
@@ -324,30 +337,30 @@ export function AppLayout() {
         </div>
       </header>
 
-      {/* 设计稿：侧栏常驻（非抽屉），与主区并排 */}
+      {/* 设计稿：侧栏常驻（非抽屉），与主区并排；min-h-0 + 侧栏 h-0/flex-1 保证菜单可滚 */}
       <div className="flex min-h-0 flex-1 overflow-hidden">
         <aside
           className={cn(
-            'flex min-h-0 shrink-0 flex-col overflow-hidden border-r border-sidebar-border bg-sidebar text-sidebar-foreground',
+            'flex h-full min-h-0 shrink-0 flex-col overflow-hidden border-r border-sidebar-border bg-sidebar text-sidebar-foreground',
             collapsed ? 'w-16' : 'w-56',
           )}
         >
           <div className={cn('flex items-center gap-2.5 border-b border-sidebar-border px-3 py-3', collapsed && 'justify-center')}>
             <span
-              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-sm font-bold text-white shadow-sm"
+              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-white shadow-sm"
               style={{
                 backgroundImage: 'linear-gradient(135deg, hsl(243 75% 64%), hsl(262 70% 58%))',
               }}
             >
-              M
+              <AppIcon className="h-4 w-4" strokeWidth={2} />
             </span>
             {!collapsed ? (
               <div className="min-w-0">
                 <div className="truncate text-[0.9rem] font-semibold leading-tight">
-                  {app?.name ?? '系统管理'}
+                  {activeAppName}
                 </div>
                 <div className="truncate text-[0.68rem] uppercase tracking-[0.04em] text-sidebar-muted">
-                  {app?.code ?? 'system'}
+                  {activeAppCode}
                 </div>
               </div>
             ) : null}
@@ -365,6 +378,15 @@ export function AppLayout() {
               expanded={navExpanded}
               onToggleBranch={handleToggleBranch}
               onExpandBranch={handleExpandBranch}
+              sectionLabel={
+                activeAppCode === 'system'
+                  ? '管理与治理'
+                  : activeAppCode === 'kb'
+                    ? '知识管理'
+                    : activeAppCode === 'agent'
+                      ? '智能体运营'
+                      : undefined
+              }
             />
           )}
 
@@ -382,10 +404,10 @@ export function AppLayout() {
           </div>
         </aside>
 
-        <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
+        <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
           <TabBar />
           <main className="flex min-h-0 flex-1 flex-col overflow-hidden bg-background">
-            <div className="flex min-h-0 flex-1 flex-col overflow-hidden p-4 md:p-6">
+            <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden p-4 md:p-6">
               <KeepAliveOutlet />
             </div>
           </main>

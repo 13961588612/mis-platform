@@ -16,5 +16,5 @@ mis:
     engine:
       # 与 deploy/ragflow/docker-compose.yml 同网络时用服务名 ragflow:80
       type: ${MIS_KB_ENGINE_TYPE:ragflow}
-      base-url: ${MIS_KB_ENGINE_BASE_URL:http://ragflow:80}
-      api-key: ${MIS_KB_ENGINE_API_KEY:}
+      base-url: ${MIS_KB_ENGINE_BASE_URL:http://10.254.16.6:9380}
+      api-key: ${MIS_KB_ENGINE_API_KEY:ragflow-YBgnjYkFz6lHXignh7cjFwLDxT4EW5434DKnb5mZt5U}

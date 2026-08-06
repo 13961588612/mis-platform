@@ -5,6 +5,7 @@ import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { PageHeader } from '@/components/common/page-header';
+import { buildAppBreadcrumbs } from '@/components/common/app-breadcrumbs';
 import { DetailDefList } from '@/components/common/detail-def-list';
 import { TreeTable, type TreeTableNode } from '@/components/common/tree-table';
 import { StatusBadge } from '@/components/common/list-page-skeleton';
@@ -272,10 +273,15 @@ export function ModuleManagePage() {
   }
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col p-4 md:p-5">
+    <div className="flex min-h-0 flex-1 flex-col">
       <PageHeader
         title="接口模块管理"
         description="平台业务模块（sys_module）及其下接口树（sys_api）。模块停用后其接口全部 403 拒绝。"
+        breadcrumbs={buildAppBreadcrumbs({
+          app: 'system',
+          group: '应用与接口',
+          title: '接口模块管理',
+        })}
         actions={
           <PermissionGate permission="system:module:add">
             <Button size="sm" onClick={openCreateModule}>
@@ -370,12 +376,14 @@ export function ModuleManagePage() {
                 ) : null}
               </div>
 
-              <div className="min-h-0 flex-1 overflow-auto p-3">
+              <div className="min-h-0 flex-1 overflow-auto mt-3">
+                <div className="px-3 pb-3">
                 {activeTab === 'apis' ? (
                   <TreeTable<ApiRow>
                     rows={apiRows}
                     treeColumnKey="name"
                     emptyText="暂无接口"
+                    storageKey="mis-module-api-table-widths"
                     rowIcon={(r) =>
                       r.node.type === 'catalog' ? (
                         <Folder className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
@@ -433,14 +441,14 @@ export function ModuleManagePage() {
                 ) : bindings.length === 0 ? (
                   <p className="text-sm text-muted-foreground">暂无绑定关系</p>
                 ) : (
-                  <table className="w-full border-collapse bg-table-surface text-sm">
-                    <thead className="sticky top-0 z-10 border-b-2 border-foreground/20 bg-table-header text-left text-sm font-bold text-muted-foreground backdrop-blur">
+                  <table className="w-full border-separate border-spacing-0 bg-table-surface text-sm">
+                    <thead className="border-b-2 border-foreground/20 text-left text-sm font-bold text-muted-foreground">
                       <tr>
-                        <th className="px-2 py-1.5">菜单</th>
-                        <th className="px-2 py-1.5">权限码</th>
-                        <th className="px-2 py-1.5">接口</th>
-                        <th className="px-2 py-1.5">方法</th>
-                        <th className="px-2 py-1.5">路径</th>
+                        <th className="sticky top-0 z-10 bg-table-header px-2 py-1.5">菜单</th>
+                        <th className="sticky top-0 z-10 bg-table-header px-2 py-1.5">权限码</th>
+                        <th className="sticky top-0 z-10 bg-table-header px-2 py-1.5">接口</th>
+                        <th className="sticky top-0 z-10 bg-table-header px-2 py-1.5">方法</th>
+                        <th className="sticky top-0 z-10 bg-table-header px-2 py-1.5">路径</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -458,8 +466,9 @@ export function ModuleManagePage() {
                         </tr>
                       ))}
                     </tbody>
-                  </table>
+                    </table>
                 )}
+                  </div>
               </div>
             </>
           )}

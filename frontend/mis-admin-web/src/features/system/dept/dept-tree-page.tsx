@@ -5,6 +5,7 @@ import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { PageHeader } from '@/components/common/page-header';
+import { buildAppBreadcrumbs } from '@/components/common/app-breadcrumbs';
 import { TreeTable, type TreeTableColumn, type TreeTableNode } from '@/components/common/tree-table';
 import { StatusBadge } from '@/components/common/list-page-skeleton';
 import { PermissionGate } from '@/components/auth/permission-gate';
@@ -256,10 +257,15 @@ export function DeptTreePage() {
   }
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col p-4 md:p-5">
+    <div className="flex min-h-0 flex-1 flex-col">
       <PageHeader
         title="部门管理"
         description="组织内部门树；新增子部门默认类别为「部门」。"
+        breadcrumbs={buildAppBreadcrumbs({
+          app: 'system',
+          group: '组织架构',
+          title: '部门管理',
+        })}
         actions={
           <div className="flex flex-wrap items-center gap-2">
             <div className="inline-flex rounded-md border bg-muted/40 p-0.5 text-sm">
@@ -369,6 +375,7 @@ export function DeptTreePage() {
             columns={columns}
             treeColumnKey="name"
             actionsAlwaysVisible
+            storageKey="mis-dept-tree-table-widths"
             rowIcon={(row) => {
               const hasKids = Boolean(row.node.children?.length);
               return hasKids ? (

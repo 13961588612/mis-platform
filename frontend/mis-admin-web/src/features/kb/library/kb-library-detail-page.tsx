@@ -2,13 +2,18 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { ArrowLeft, RefreshCw, Save } from 'lucide-react';
 import { toast } from 'sonner';
+import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { PageHeader } from '@/components/common/page-header';
+import { buildAppBreadcrumbs } from '@/components/common/app-breadcrumbs';
 import { PermissionGate } from '@/components/auth/permission-gate';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
+import { SortIndicator } from '@/components/common/sort-indicator';
+import { useClientSort } from '@/components/common/use-client-sort';
+import { useColumnWidths, type ResizableColumn } from '@/components/common/use-column-widths';
 import { EnabledBadge, SecrecyBadge } from '../components/kb-badges';
 import { KbWeightSlider } from '../components/kb-weight-slider';
 import { getLibraryDetail, updateRagSettings } from '../api/kb-api';
@@ -140,6 +145,21 @@ export function KbLibraryDetailPage() {
   /** 保存成功后是否展示重解析引导（WA-10）。 */
   const [showReparseHint, setShowReparseHint] = useState(false);
 
+  /* 授权范围表：列宽 + 排序（当前库 ACL 一次性加载） */
+  const DETAIL_ACL_COLS = useMemo<ResizableColumn[]>(
+    () => [
+      { key: 'subjectType', label: '主体类型' },
+      { key: 'subjectName', label: '主体名称' },
+      { key: 'subjectId', label: '主体 ID' },
+      { key: 'action', label: '权限' },
+    ],
+    [],
+  );
+  const { widthOf, startResize, hasCustom, reset } = useColumnWidths(DETAIL_ACL_COLS, 'mis-kb-detail-acl-table-widths');
+  const aclRows = detail?.aclSummary ?? [];
+  const getSortValue = useCallback((row: KbAclSummary, key: string) => row[key as keyof KbAclSummary], []);
+  const { sorted: sortedAcls, sortKey, sortDir, toggleSort } = useClientSort(aclRows, getSortValue);
+
   const capabilities = useKbStore((s) => s.capabilities);
   const refreshEngine = useKbStore((s) => s.refreshEngine);
   // QA P2-A：原写法 `!== false` 在能力未拉到 / 返回 null 时推导为 true，属 fail-open。
@@ -197,7 +217,7 @@ export function KbLibraryDetailPage() {
 
   if (libraryId == null) {
     return (
-      <div className="flex min-h-0 flex-1 flex-col p-4 md:p-5">
+      <div className="flex min-h-0 flex-1 flex-col">
         <Alert variant="destructive">
           <AlertTitle>路径无效</AlertTitle>
           <AlertDescription>未能从当前地址解析出知识库 ID。</AlertDescription>
@@ -210,10 +230,15 @@ export function KbLibraryDetailPage() {
   const acls: KbAclSummary[] = detail?.aclSummary ?? [];
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col p-4 md:p-5">
+    <div className="flex min-h-0 flex-1 flex-col">
       <PageHeader
         title={meta?.name ? `知识库 · ${meta.name}` : `知识库 #${libraryId}`}
         description="查看知识库元信息与授权范围，并调整检索（RAG）参数；保存后即时同步到引擎。"
+        breadcrumbs={buildAppBreadcrumbs({
+          app: 'kb',
+          title: meta?.name ?? '知识库详情',
+          appTo: '/kb/libraries',
+        })}
         actions={
           <div className="flex items-center gap-2">
             <Button size="sm" variant="outline" onClick={() => navigate('/kb/libraries')}>
@@ -276,14 +301,51 @@ export function KbLibraryDetailPage() {
 
         {/* ---------------------------------------------------------- 授权范围 */}
         <TabsContent value="acls" className="min-h-0 flex-1">
-          <div className="h-full min-h-0 overflow-auto rounded-lg border bg-table-surface">
-            <table className="w-full bg-table-surface text-left text-sm">
-              <thead className="sticky top-0 z-10 border-b-2 border-foreground/20 bg-table-header text-muted-foreground backdrop-blur">
+          <div className="relative h-full min-h-0 overflow-auto rounded-lg border bg-table-surface">
+            {hasCustom ? (
+              <button
+                type="button"
+                onClick={reset}
+                className="absolute right-3 top-3 z-20 rounded-md bg-card px-2 py-0.5 text-xs text-muted-foreground shadow-sm hover:text-foreground"
+              >
+                重置列宽
+              </button>
+            ) : null}
+            <table className="w-full table-fixed border-separate border-spacing-0 bg-table-surface text-left text-sm">
+              <thead className="border-b-2 border-foreground/20 bg-table-header text-muted-foreground">
                 <tr>
-                  <th className="px-3 py-2 font-bold">主体类型</th>
-                  <th className="px-3 py-2 font-bold">主体名称</th>
-                  <th className="px-3 py-2 font-bold">主体 ID</th>
-                  <th className="px-3 py-2 font-bold">权限</th>
+                  {DETAIL_ACL_COLS.map((c, ci) => {
+                    const active = sortKey === c.key;
+                    return (
+                      <th
+                        key={c.key}
+                        style={{ width: widthOf(c.key) }}
+                        aria-sort={active ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'none'}
+                        className={cn(
+                          'overflow-hidden whitespace-nowrap px-3 py-2 font-bold',
+                          ci > 0 && 'border-l border-border/60',
+                        )}
+                      >
+                        <button
+                          type="button"
+                          onClick={() => toggleSort(c.key)}
+                          className={cn(
+                            'flex w-full items-center gap-1 text-left font-bold',
+                            active ? 'text-foreground' : 'text-muted-foreground hover:text-foreground',
+                          )}
+                        >
+                          {c.label}
+                          <SortIndicator state={active ? sortDir : 'none'} />
+                        </button>
+                        <span
+                          role="separator"
+                          aria-label={`调整${c.label}列宽`}
+                          onMouseDown={(e) => startResize(e, c.key)}
+                          className="absolute right-0 top-0 h-full w-[3px] cursor-col-resize"
+                        />
+                      </th>
+                    );
+                  })}
                 </tr>
               </thead>
               <tbody>
@@ -300,7 +362,7 @@ export function KbLibraryDetailPage() {
                     </td>
                   </tr>
                 ) : (
-                  acls.map((a, i) => (
+                  sortedAcls.map((a, i) => (
                     <tr
                       key={`${a.subjectType}-${a.subjectId ?? i}-${a.action}`}
                       className="border-b border-border/50 bg-table-row last:border-0 even:bg-table-stripe hover:bg-table-hover"

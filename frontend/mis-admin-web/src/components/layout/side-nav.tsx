@@ -17,6 +17,8 @@ interface SideNavProps {
   /** 折叠态下点击分支：展开侧栏并打开该分支（避免折叠时分支点击无反应） */
   onExpandBranch?: (title: string) => void;
   onNavigate?: () => void;
+  /** 侧栏分组标题（按当前 APP 动态传入，如「管理与治理 / 知识管理 / 智能体运营」） */
+  sectionLabel?: string;
 }
 
 /** 门户 C9：多级侧栏（父级展开/收起 + 子项左边线），非扁平分组、非抽屉内容 */
@@ -28,6 +30,7 @@ export function SideNav({
   onToggleBranch,
   onExpandBranch,
   onNavigate,
+  sectionLabel,
 }: SideNavProps) {
   // 折叠态悬浮飞出子菜单：用 fixed 定位（视口坐标），避免被侧栏 overflow 裁切
   const [flyout, setFlyout] = useState<{ title: string; top: number; left: number } | null>(null);
@@ -60,10 +63,12 @@ export function SideNav({
     : null;
 
   return (
-    <nav className="sidebar-scroll flex min-h-0 min-w-0 flex-1 flex-col gap-0.5 overflow-x-hidden p-2">
-      <div className={cn('px-3 pb-2 pt-5 text-[0.7rem] font-normal uppercase tracking-[0.05em] text-sidebar-muted', collapsed && 'sr-only')}>
-        管理与治理
-      </div>
+    <nav className="sidebar-scroll h-0 min-h-0 min-w-0 flex-1 flex flex-col gap-0.5 overflow-x-hidden overflow-y-auto p-2">
+      {sectionLabel ? (
+        <div className={cn('px-3 pb-2 pt-5 text-[0.7rem] font-normal uppercase tracking-[0.05em] text-sidebar-muted', collapsed && 'sr-only')}>
+          {sectionLabel}
+        </div>
+      ) : null}
       {nodes.map((node) => {
         if (node.kind === 'leaf') {
           const Icon = resolveNavIcon(node.icon);

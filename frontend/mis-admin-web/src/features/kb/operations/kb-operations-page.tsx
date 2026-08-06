@@ -1,4 +1,5 @@
 import { PageHeader } from '@/components/common/page-header';
+import { buildAppBreadcrumbs } from '@/components/common/app-breadcrumbs';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { KbQaRecordTab } from './kb-qa-record-tab';
 import { KbTicketTab } from './kb-ticket-tab';
@@ -22,26 +23,28 @@ import { KbDashboardTab } from './kb-dashboard-tab';
  */
 export function KbOperationsPage() {
   return (
-    <div className="flex min-h-0 flex-1 flex-col p-4 md:p-5">
+    <div className="flex h-full min-h-0 flex-1 flex-col overflow-hidden">
       <PageHeader
+        className="shrink-0"
         title="问答运营"
         description="问答记录检索与回放、反馈工单闭环、评价指标看板；数据不做用户归属过滤，需运营权限访问。"
+        breadcrumbs={buildAppBreadcrumbs({ app: 'kb', title: '问答运营' })}
       />
 
-      <Tabs defaultValue="records" className="flex min-h-0 flex-1 flex-col">
-        <TabsList className="shrink-0">
+      <Tabs defaultValue="records" className="flex h-full min-h-0 flex-1 flex-col overflow-hidden">
+        <TabsList className="mb-0 w-fit shrink-0">
           <TabsTrigger value="records">问答记录</TabsTrigger>
           <TabsTrigger value="tickets">反馈工单</TabsTrigger>
           <TabsTrigger value="dashboard">评价看板</TabsTrigger>
         </TabsList>
 
-        <TabsContent value="records" className="flex min-h-0 flex-1 flex-col">
+        <TabsContent value="records" className="mt-3 flex min-h-0 flex-1 flex-col overflow-hidden data-[state=inactive]:hidden">
           <KbQaRecordTab />
         </TabsContent>
-        <TabsContent value="tickets" className="flex min-h-0 flex-1 flex-col">
+        <TabsContent value="tickets" className="mt-3 flex min-h-0 flex-1 flex-col overflow-hidden data-[state=inactive]:hidden">
           <KbTicketTab />
         </TabsContent>
-        <TabsContent value="dashboard" className="flex min-h-0 flex-1 flex-col">
+        <TabsContent value="dashboard" className="mt-3 flex min-h-0 flex-1 flex-col overflow-hidden data-[state=inactive]:hidden">
           <KbDashboardTab />
         </TabsContent>
       </Tabs>

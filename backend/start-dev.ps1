@@ -3,7 +3,10 @@
     [string]$Service,
 
     # 已在监听时仍强制停掉再启
-    [switch]$Restart
+    [switch]$Restart,
+
+    # 加载仓库根目录 .env.integration（远程 PG/Redis/Nacos）；默认若该文件存在则自动加载
+    [switch]$Integration
 )
 
 # Windows PowerShell 5.1：脚本须带 UTF-8 BOM；并设置控制台 UTF-8，避免中文乱码
@@ -15,16 +18,60 @@ if ($PSVersionTable.PSVersion.Major -lt 6) {
     } catch {}
 }
 
+$Root = Split-Path -Parent $MyInvocation.MyCommand.Path
+$RepoRoot = Split-Path -Parent $Root
+$LogDir = Join-Path $Root "logs"
+if (-not (Test-Path $LogDir)) { New-Item -ItemType Directory -Path $LogDir -Force | Out-Null }
+
+function Import-DotEnvFile {
+    param([string]$Path)
+    if (-not (Test-Path $Path)) { return $false }
+    Get-Content -Path $Path -Encoding UTF8 | ForEach-Object {
+        $line = $_.Trim()
+        if (-not $line -or $line.StartsWith('#')) { return }
+        $i = $line.IndexOf('=')
+        if ($i -lt 1) { return }
+        $k = $line.Substring(0, $i).Trim()
+        $v = $line.Substring($i + 1).Trim()
+        # 不覆盖调用方已显式导出的变量
+        $existing = [Environment]::GetEnvironmentVariable($k, 'Process')
+        if ([string]::IsNullOrEmpty($existing)) {
+            Set-Item -Path "Env:$k" -Value $v
+        }
+    }
+    return $true
+}
+
+# 远程联调：优先 .env.integration（PG/Redis 已不在本机时必用）
+$integrationEnv = Join-Path $RepoRoot '.env.integration'
+$localEnv = Join-Path $RepoRoot '.env'
+$loadedEnv = $null
+if ($Integration -or (Test-Path $integrationEnv)) {
+    if (Import-DotEnvFile -Path $integrationEnv) {
+        $loadedEnv = $integrationEnv
+    }
+}
+if (-not $loadedEnv) {
+    if (Import-DotEnvFile -Path $localEnv) {
+        $loadedEnv = $localEnv
+    }
+}
+
 $env:JWT_PRIVATE_KEY_PATH = "D:\code\mis-platform\backend\keys\private.pem"
 $env:JWT_PUBLIC_KEY_PATH  = "D:\code\mis-platform\backend\keys\public.pem"
-# 避免 Windows 上 localhost→::1 连不上仅听 IPv4 的 Docker 端口
+# 仅在仍未配置时回落本机；已从 .env.integration 读到远程地址则不要改回 127.0.0.1
 if (-not $env:REDIS_HOST) { $env:REDIS_HOST = '127.0.0.1' }
+if (-not $env:DB_HOST) { $env:DB_HOST = 'localhost' }
 if (-not $env:AI_PLATFORM_BASE_URL) { $env:AI_PLATFORM_BASE_URL = 'http://127.0.0.1:8000' }
 if (-not $env:AI_PLATFORM_SSE_ENABLED) { $env:AI_PLATFORM_SSE_ENABLED = 'true' }
 
-$Root = Split-Path -Parent $MyInvocation.MyCommand.Path
-$LogDir = Join-Path $Root "logs"
-if (-not (Test-Path $LogDir)) { New-Item -ItemType Directory -Path $LogDir -Force | Out-Null }
+if ($loadedEnv) {
+    Write-Host "已加载环境: $loadedEnv" -ForegroundColor Cyan
+    Write-Host ("  DB_HOST={0}  REDIS_HOST={1}  MIS_REMOTE={2}" -f $env:DB_HOST, $env:REDIS_HOST, $env:MIS_REMOTE) -ForegroundColor Cyan
+}
+if ($env:DB_HOST -eq 'localhost' -or $env:DB_HOST -eq '127.0.0.1') {
+    Write-Host "提示: DB_HOST 仍为本机。若 PG 在远程，请配置仓库根 .env.integration 或先 `$env:DB_HOST=...` 再运行本脚本。" -ForegroundColor Yellow
+}
 
 # 启动顺序：领域服务 → BFF → Gateway（BFF 依赖下游与 Redis，不宜与首批并发抢 Maven）
 $servicePorts = [ordered]@{
@@ -91,10 +138,48 @@ function Wait-PortFree {
     return $false
 }
 
+function Test-HttpHealth {
+    param(
+        [int]$Port,
+        [int]$TimeoutSec = 3
+    )
+    try {
+        $r = Invoke-WebRequest -Uri "http://127.0.0.1:$Port/actuator/health" -TimeoutSec $TimeoutSec -UseBasicParsing
+        return ($r.StatusCode -ge 200 -and $r.StatusCode -lt 300)
+    } catch {
+        return $false
+    }
+}
+
 function Stop-DevService {
     param([string]$Name)
     $stopScript = Join-Path $Root 'stop-dev.ps1'
     & $stopScript $Name | Out-Null
+}
+
+# 传给子进程的关键变量（Hidden 窗口不会自动带上「刚从 .env 读入」的全部键，须显式写出）
+function Get-ChildEnvAssignments {
+    $keys = @(
+        'JAVA_HOME_17',
+        'JWT_PRIVATE_KEY_PATH', 'JWT_PUBLIC_KEY_PATH',
+        'DB_HOST', 'DB_PORT', 'DB_NAME', 'DB_USER', 'DB_PASSWORD',
+        'REDIS_HOST', 'REDIS_PORT',
+        'MIS_REMOTE', 'NACOS_SERVER', 'NACOS_NAMESPACE', 'NACOS_CONFIG_GROUP',
+        'MIS_KB_ENGINE_TYPE', 'MIS_KB_ENGINE_BASE_URL', 'MIS_KB_ENGINE_API_KEY', 'MIS_KB_RERANK_MODEL_ID',
+        'AI_PLATFORM_BASE_URL', 'AI_PLATFORM_SSE_ENABLED',
+        'AUTH_CAPTCHA_ENABLED'
+    )
+    $lines = @()
+    $lines += "`$env:JAVA_HOME = '$($env:JAVA_HOME_17)'"
+    foreach ($k in $keys) {
+        $v = [Environment]::GetEnvironmentVariable($k, 'Process')
+        if (-not [string]::IsNullOrEmpty($v)) {
+            # 单引号包裹；值内单引号加倍转义
+            $escaped = $v.Replace("'", "''")
+            $lines += "`$env:$k = '$escaped'"
+        }
+    }
+    return ($lines -join "`n")
 }
 
 Push-Location $Root
@@ -110,8 +195,18 @@ try {
         $log = Join-Path $LogDir "$svc.log"
 
         if ((Test-PortListening -Port $port) -and -not $Restart) {
-            Write-Host "  = $svc 已在 :$port 监听，跳过（需要重启用 -Restart）" -ForegroundColor Green
-            continue
+            # 仅「端口在听」不够：僵死/错库进程也会占端口，start-dev 会误跳过（mis-kb 曾中招）
+            if (Test-HttpHealth -Port $port) {
+                Write-Host "  = $svc 已在 :$port 监听且 health 正常，跳过（需要重启用 -Restart）" -ForegroundColor Green
+                continue
+            }
+            Write-Host "  ! $svc 端口 $port 在听但 health 失败（可能是旧 jar/错 DB_HOST），将停掉再启" -ForegroundColor Yellow
+            Stop-DevService -Name $svc
+            if (-not (Wait-PortFree -Port $port -TimeoutSec 45)) {
+                Write-Host "  x $svc 端口 $port 仍被占用，跳过启动" -ForegroundColor Red
+                $failed += $svc
+                continue
+            }
         }
 
         if (Test-PortListening -Port $port) {
@@ -131,15 +226,10 @@ try {
 
         Write-Host "  -> $svc (port $port, 日志: $log)" -ForegroundColor Yellow
 
-        # 显式传入关键环境，避免 Hidden 子进程丢变量
+        $envBlock = Get-ChildEnvAssignments
         $childCmd = @"
 cd '$Root'
-`$env:JAVA_HOME = '$($env:JAVA_HOME_17)'
-`$env:JWT_PRIVATE_KEY_PATH = '$($env:JWT_PRIVATE_KEY_PATH)'
-`$env:JWT_PUBLIC_KEY_PATH = '$($env:JWT_PUBLIC_KEY_PATH)'
-`$env:REDIS_HOST = '$($env:REDIS_HOST)'
-`$env:AI_PLATFORM_BASE_URL = '$($env:AI_PLATFORM_BASE_URL)'
-`$env:AI_PLATFORM_SSE_ENABLED = '$($env:AI_PLATFORM_SSE_ENABLED)'
+$envBlock
 & mvn spring-boot:run -pl $svc *>&1 | Tee-Object -FilePath '$log'
 "@
 

@@ -1,4 +1,4 @@
-# 确保 Nacos 命名空间存在
+﻿# Ensure Nacos namespace exists (PowerShell 5.1: keep this file UTF-8 with BOM or ASCII-only strings)
 param(
     [string]$Namespace = "integration",
     [string]$NacosServer = "http://localhost:8848"
@@ -15,7 +15,7 @@ if ($list.data) {
 $ErrorActionPreference = "Stop"
 
 if ($exists) {
-    Write-Host "Nacos namespace '$Namespace' 已存在"
+    Write-Host "Nacos namespace '$Namespace' already exists"
     return
 }
 
@@ -25,4 +25,4 @@ $body = @{
     namespaceDesc     = "MIS integration profile"
 }
 Invoke-RestMethod -Method Post -Uri "$NacosServer/nacos/v1/console/namespaces" -Body $body | Out-Null
-Write-Host "已创建 Nacos namespace '$Namespace'"
+Write-Host "Created Nacos namespace '$Namespace'"

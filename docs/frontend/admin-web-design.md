@@ -156,6 +156,21 @@ flowchart TD
 | Sidebar / NavMenu | `components/layout/*` | 动态侧栏 |
 | PageHeader | `components/common/page-header.tsx` | 标题+面包屑+操作区 |
 
+### 4.2.1 列表页壳约定（对齐员工管理）
+
+宿主 App（系统管理 / 知识库 / 智能体）列表与内容页统一遵循：
+
+| 项 | 约定 |
+|----|------|
+| 外距 | **仅** `AppLayout` 主槽 `p-4 md:p-6`；页根禁止再套 `p-4`/`p-5` |
+| 页头 | `PageHeader`（默认 `mb-4`）+ `buildAppBreadcrumbs` |
+| 面包屑 | `门户(/portal)` → App 名 →（可选侧栏分组）→ 当前标题；见 `components/common/app-breadcrumbs.ts` |
+| 主表 | 扁平原表须支持列头三态排序（`SortIndicator` + `useClientSort`）与列宽拖拽（`useColumnWidths`，操作列 `locked`）；有自定义列宽时提供「重置列宽」 |
+| 表头吸顶 | `th` 不要写 `position: relative` / `relative` class，以免覆盖 `globals.css` 的 sticky |
+| 树表 / 无主表 | 树表保留既有列宽即可，不加列排序；对话/总览/占位页只统一面包屑与间距 |
+
+参照实现：`features/system/admin-list-page.tsx`（员工/岗位等共享引擎）。
+
 ### 4.3 响应式
 
 | 断点 | 行为 |

@@ -118,7 +118,10 @@ cd backend
 .\mvn.ps1 spring-boot:run -pl mis-gateway    # :8080
 ```
 
-> **注意：** 旧版 `start-dev.ps1` 只 `Start-Process` 即报成功，重复执行时 BFF 常因 `8081` 已被占用而启动失败，需手动再启。现脚本会：已监听则跳过、`-Restart` 时先停再启、等待端口就绪后再报成功。
+> **注意：**
+> - 现脚本会：已监听且 **health 正常** 则跳过；端口在听但 health 失败（僵死/错库）会停掉再启；`-Restart` 强制重启。
+> - 若仓库根存在 [`.env.integration`](../../.env.integration.example)，会自动加载（`DB_HOST`/`REDIS_HOST`/`MIS_REMOTE` 等）并传给各子进程。PG/Redis 不在本机时务必维护该文件，否则 mis-kb 等会默连 `localhost` 后卡住，BFF 报 3s 下游超时。
+> - 仅「端口在听」不够：曾出现裸 `java -jar mis-kb` 占着 8108、start-dev 误跳过的情况。
 
 需设置 JWT 密钥路径（绝对路径更稳），例如：
 

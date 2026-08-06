@@ -29,8 +29,24 @@ import { KbHitTestPage } from '@/features/kb/hittest/kb-hit-test-page';
 import { KbSynonymPage } from '@/features/kb/synonym/kb-synonym-page';
 import { KbOperationsPage } from '@/features/kb/operations/kb-operations-page';
 import { KbEnginePage } from '@/features/kb/engine/kb-engine-page';
+import {
+  AgentAgentDetailPage,
+  AgentAgentsPage,
+  AgentApprovalsPage,
+  AgentCatalogPage,
+  AgentChatPage,
+  AgentDispatchPage,
+  AgentMcpPage,
+  AgentMonitorPage,
+  AgentOverviewPage,
+  AgentSessionsPage,
+  AgentSkillsPage,
+  AgentSkillsPermissionsPage,
+  AgentWecomPage,
+} from '@/features/agent/pages';
 import { flattenSystemNavLeaves } from '@/lib/nav/system-nav';
 import { flattenKbNavLeaves } from '@/lib/nav/kb-nav';
+import { flattenAgentNavLeaves } from '@/lib/nav/agent-nav';
 
 export { registerIframeApps } from '@/lib/nav/iframe-apps';
 
@@ -84,10 +100,23 @@ const PAGE_MAP: Record<string, ComponentType> = {
   '/kb/synonyms': KbSynonymPage,
   '/kb/operations': KbOperationsPage,
   '/kb/engine': KbEnginePage,
+  // 智能体运营控制台（路径与 V19__agent_ops_seed.sql 的 sys_menu.path 一一对应）
+  '/agent/overview': AgentOverviewPage,
+  '/agent/chat': AgentChatPage,
+  '/agent/sessions': AgentSessionsPage,
+  '/agent/agents': AgentAgentsPage,
+  '/agent/catalog': AgentCatalogPage,
+  '/agent/dispatch': AgentDispatchPage,
+  '/agent/skills': AgentSkillsPage,
+  '/agent/skills/permissions': AgentSkillsPermissionsPage,
+  '/agent/mcp': AgentMcpPage,
+  '/agent/channels/wecom': AgentWecomPage,
+  '/agent/monitor': AgentMonitorPage,
+  '/agent/approvals': AgentApprovalsPage,
 };
 
 export const KEEP_ALIVE_META: Record<string, { title: string; icon?: string }> = Object.fromEntries(
-  [...flattenSystemNavLeaves(), ...flattenKbNavLeaves()].map((i) => [
+  [...flattenSystemNavLeaves(), ...flattenKbNavLeaves(), ...flattenAgentNavLeaves()].map((i) => [
     i.path,
     { title: i.title, icon: i.icon },
   ]),
@@ -97,10 +126,14 @@ export const KEEP_ALIVE_META: Record<string, { title: string; icon?: string }> =
  * 动态明细路由规则（L-06 起引入）。
  *
  * <p>`PAGE_MAP` 是**精确路径**匹配，`/kb/libraries/12` 这类带 ID 的明细页命不中。
- * 这里补一层前缀匹配：`prefix` 之后必须恰好剩一段（不含 `/`），
+ * 这里补一层前缀匹配：`prefix` 之后剩余的段数不得超过 `maxSegments`（默认 1），
  * 避免 `/kb/libraries/12/documents` 这种更深的路径被误吞。
  *
- * <p>明细页不进侧栏（不写入 KB_NAV），但需要独立的 Tab 标题——否则详情 Tab
+ * <p>`maxSegments` 用于带二级 Tab 的明细页：智能体的
+ * `/agent/agents/:id/skills|config|coordination` 剩两段，必须显式放宽到 2，
+ * 否则会落到「页面不存在」。
+ *
+ * <p>明细页不进侧栏（不写入 KB_NAV / AGENT_NAV），但需要独立的 Tab 标题——否则详情 Tab
  * 会沿用列表页的「知识库」标题，同时开多个详情时完全无法区分。
  */
 interface DynamicPageRule {
@@ -108,6 +141,8 @@ interface DynamicPageRule {
   component: ComponentType;
   title: string;
   icon: string;
+  /** 前缀之后允许的最大路径段数，缺省 1（即只允许 `/prefix/{id}`）。 */
+  maxSegments?: number;
 }
 
 const DYNAMIC_PAGES: DynamicPageRule[] = [
@@ -117,6 +152,16 @@ const DYNAMIC_PAGES: DynamicPageRule[] = [
     title: '知识库详情',
     icon: 'Database',
   },
+  // 智能体运营控制台：Agent 详情子路由（V19: type=2 + visible=0，不进侧栏）。
+  // 覆盖 `/agent/agents/:id` 与 `/agent/agents/:id/{skills|config|coordination}`，
+  // 故 maxSegments = 2；更深的路径仍不误吞。
+  {
+    prefix: '/agent/agents/',
+    component: AgentAgentDetailPage,
+    title: 'Agent 详情',
+    icon: 'Bot',
+    maxSegments: 2,
+  },
 ];
 
 /** 命中动态明细规则则返回该规则，否则 null。 */
@@ -124,7 +169,11 @@ function matchDynamicPage(path: string): DynamicPageRule | null {
   for (const rule of DYNAMIC_PAGES) {
     if (!path.startsWith(rule.prefix)) continue;
     const rest = path.slice(rule.prefix.length);
-    if (rest === '' || rest.includes('/')) continue;
+    if (rest === '') continue;
+    const segments = rest.split('/');
+    // 尾部空段（`/agent/agents/7/`）视为无效，避免多出一个重复 Tab
+    if (segments.some((s) => s === '')) continue;
+    if (segments.length > (rule.maxSegments ?? 1)) continue;
     return rule;
   }
   return null;
@@ -163,7 +212,7 @@ export function KeepAliveOutlet() {
   const activeIframeMissing = Boolean(activeIframeCode) && !activeIframe;
 
   return (
-    <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
+    <div className="relative h-full min-h-0 w-full flex-1 overflow-hidden">
       {[...paths].map((path) => {
         const isActive = path === active;
         const iframeCode = path.startsWith('/iframe/') ? path.slice('/iframe/'.length) : null;
@@ -175,8 +224,8 @@ export function KeepAliveOutlet() {
             <div
               key={path}
               className={cn(
-                'flex min-h-0 flex-1 flex-col',
-                isActive ? 'relative' : 'pointer-events-none absolute inset-0 invisible',
+                'absolute inset-0 flex flex-col',
+                isActive ? 'z-10' : 'pointer-events-none invisible z-0',
               )}
               aria-hidden={!isActive}
             >
@@ -191,8 +240,9 @@ export function KeepAliveOutlet() {
           <div
             key={path}
             className={cn(
-              'flex min-h-0 flex-1 flex-col overflow-auto',
-              isActive ? 'relative' : 'pointer-events-none absolute inset-0 invisible',
+              // 铺满主区；overflow-auto 作为无内部滚动区页面的兜底（有内部 overflow-auto 时优先滚内层）
+              'absolute inset-0 flex min-h-0 flex-col overflow-auto',
+              isActive ? 'z-10' : 'pointer-events-none invisible z-0',
             )}
             aria-hidden={!isActive}
           >

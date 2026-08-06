@@ -18,6 +18,7 @@ import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { Badge } from '@/components/ui/badge';
 import { PageHeader } from '@/components/common/page-header';
+import { buildAppBreadcrumbs } from '@/components/common/app-breadcrumbs';
 import { MarkdownView } from '@/components/common/markdown-view';
 import { useAiStore } from '@/stores/ai-store';
 import { KbCitationList } from '../components/kb-citation-list';
@@ -314,10 +315,11 @@ export function KbQaPage() {
   }
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col p-4 md:p-5">
+    <div className="flex min-h-0 flex-1 flex-col">
       <PageHeader
         title="知识问答"
         description="基于可见知识库的检索增强问答；回答流式输出并附带引用来源，可提交质量反馈或报告问题。"
+        breadcrumbs={buildAppBreadcrumbs({ app: 'kb', title: '智能问答' })}
         actions={
           <Button
             size="sm"
@@ -377,6 +379,7 @@ export function KbQaPage() {
                 onChange={setLibraryId}
                 allowEmpty
                 emptyLabel="全部可见知识库"
+                activePath="/kb/qa"
               />
             </div>
             {ragUnavailable ? <Badge variant="warning">RAG 能力当前未启用</Badge> : null}

@@ -16,6 +16,30 @@
 - 待办：上线前填真实域名(mis.local 占位)、存量 PG 卷需 DBA 手跑 init SQL、两项既有技术债单独排期、push 远端。
 - ⚠️ 技术债归属（易串，2026-08-04 实测澄清）：上述「前端 13 类型错误 / 网关 20 tsc」**属 agent/ai-platform**（H5 前端 + TS gateway），**与 `frontend/mis-admin-web` 无关**。别把这笔账安到主 MIS 前端头上。
 
+## UI 风格对齐方向（2026-08-06 决策）
+- 用户决定按一张外部发票系统截图，把 MIS 前端（`frontend/mis-admin-web`）的**字体/表格风格**对齐：圆角 6px→4px（`--radius:0.25rem`）、表头 14→13px、表单标签 14→13px、列表/树表列间加竖线 `border-l border-border/60`。
+- 改动高度集中：`styles/globals.css`（圆角/表头字号/表头底色）+ `components/ui/label.tsx` + `features/system/admin-list-page.tsx`（12 个列表页引擎）+ `components/common/tree-table.tsx`（树表页）。清单见 `.workbuddy/design-analysis/ui-align-checklist.md`。
+- **主色暂不动**：保留企业靛 `#4f46e5`（图里是亮蓝 `#1c64f2`，用户未要求换色，属产品级决定）。
+- 注意：门户原型 `mis-portal-prototype.html` 是独立 HTML、不读 globals.css，**不随上述改动变化**，要统一需单独排期。
+- 此方向与 design-system.md / portal-design-tokens.md 锁定的「6px 圆角 + 弱化表头」基线相偏离，属有意产品调整；靠令牌系统保证全站统一，不新增风格碎片。
+
+## 表格列宽/排序/面包屑/间距 全站规范（2026-08-06 晚追加）
+- **列宽拖拽**：统一走 `components/common/use-column-widths.ts`（拖右缘改宽 64–480px + localStorage + hasCustom 重置）。共享引擎（12 列表页）已接，存储键 `mis-{def.id}-table-widths`；kb 试点 `kb-document-table.tsx`（`mis-kb-document-table-widths`）。组织管理（org-list-page）是带换位的完整版，未迁移到 hook。**新做表格若要列宽：接 hook + table-fixed + th relative 拖拽条 + td 普通列 ellipsis（tags/徽标列留 wrap）+ 操作列 locked**。
+- **表头高度**：全局 `globals.css` `thead th` padding 0.5rem（0.75rem→0.5rem，2026-08-06 用户嫌高后统一调低），新表格别再手写大 padding。
+- **面包屑**：所有页面 PageHeader 统一传 `breadcrumbs=[{门户,/portal},{App 名},{页面}]`（kb 明细页中间层可带 to）；agent 域由 `AgentPageShell` 一次统一。
+- **间距**：页面内**不再写内层 padding**（`p-4 md:p-5` 已全清），由 app-layout 外层 `p-4 md:p-6` 统一控制；新页面直接 `flex min-h-0 flex-1 flex-col`。
+- **tab 持久化已取消**：`tab-store.ts` 无 zustand persist，登录/刷新回到默认「仪表盘」单 tab（auth-store 的 persist 保留不动）。
+- **sidenav 分组 label**：`side-nav.tsx` 接受 `sectionLabel` prop，由 app-layout 按 activeAppCode 传（system→管理与治理 / kb→知识管理 / agent→智能体运营）；**不要**在 side-nav 里硬编码。
+
+## ⚠️ KeepAlive 布局下的表格吸顶陷阱（2026-08-06 实测）
+- 所有页面经 `components/layout/keep-alive-outlet.tsx` 的 `KeepAliveOutlet` 渲染：每个页面被包在 `flex min-h-0 flex-1 overflow-auto` 外层（第243行）。
+- **任何页面内部表格要吸顶（sticky thead/th），必须用 `min-h-0 flex-1 overflow-auto` 单层滚动容器**，让 sticky 锁定在正确滚动容器上。
+- **禁止**在内部再用 `h-full overflow-auto` 嵌套：嵌套滚动上下文里 `h-full` 会塌成「内容高度」而非「可视高度」，导致真实滚动跑到外层、内层不滚、sticky 参照错乱（表头随整页上下抖、滚轮不作用于表格）。2026-08-06 接口模块页即此坑，已修。
+- **禁止**在 sticky `th` 上加 `backdrop-blur`：模糊滤镜强制新堆叠上下文，滚动重绘时表头抖动（CSS 经典坑）。
+- **禁止**表格用 `border-collapse: collapse` + sticky 表头：Chrome/Safari 下 `collapse` 会让 `th` 的 `position: sticky` 直接失效（thead/tr 本身就不支持 sticky），表头随表体一起滚。正确做法：`border-separate border-spacing-0`（视觉等价、竖线规则 `thead th + th / tbody td + td` 仍生效），sticky 才会锁定。2026-08-06 接口模块页「表头滚动时上下移动」即此坑，已修（tree-table.tsx + 模块绑定表改 border-separate）。
+- **表头与上方 Tab/工具条之间要留间距且不抖动**：间距用滚动容器的 `mt-3`（margin 在滚动容器外，滚动时不参与位移），绝不用滚动容器内部 wrapper 的 `pt-0/pt-3` + `sticky top-0`（滚动到底时表头从「间距处」跳到「容器顶」会抖动）；sticky 保持 `top-0` 即可，间距交给外层 margin。
+- **已全局根治（2026-08-06 收口）**：根因是「全站 16+ 处表格都把 `sticky` 写在 `<thead>` 上 + thead 带 `backdrop-blur` + 部分表用 `border-collapse`」三连坑。已在 `styles/globals.css` 的 `thead th` 规则**统一加 `position:sticky;top:0;z-index:10;background-color:hsl(var(--table-header));border-bottom:2px`**，并加 `thead{backdrop-filter:none!important;-webkit-backdrop-filter:none!important}` 关掉抖动源；共享引擎主表 `admin-list-page.tsx` 的 `border-collapse` 转 `border-separate border-spacing-0`、行边框从 `tr` 移到 `td`。**从此所有表格表头自动吸顶、一致、不抖**。新页面/新表格**不要再**手写 `sticky top-0` 在 thead、**不要再**给 thead 加 `backdrop-blur`、表格默认 `border-separate`（别用 `border-collapse`，它会让 th sticky 在 Chrome/Safari 失效）。monitor/kb/组织等手写表一并受益，无需逐文件改。
+
 ## 启动与测试（2026-07-25 核实）
 - **一键集成栈**：`scripts/start-integration-stack.ps1`（项目根，非 deploy/ 下）。先用 `docker compose -f deploy/docker-compose.dev.yml up -d` 起基础设施（PG/Redis/Nacos/MinIO，dev compose 只含这四个，不含 mis 微服务），再跑该脚本起微服务。
 - **主 MIS 前端** `frontend/mis-admin-web`：`npm run dev` → vite :5173，`server.proxy` 把 `/api` 转到 `http://localhost:8080`（**mis-gateway**，不是 BFF 8081）。代码里用相对 `/api/v1/**`，无 baseURL 环境变量。

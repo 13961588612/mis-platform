@@ -1,11 +1,16 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Pencil, Plus, Settings2, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
+import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { PageHeader } from '@/components/common/page-header';
+import { buildAppBreadcrumbs } from '@/components/common/app-breadcrumbs';
 import { PermissionGate } from '@/components/auth/permission-gate';
+import { SortIndicator } from '@/components/common/sort-indicator';
+import { useClientSort } from '@/components/common/use-client-sort';
+import { useColumnWidths, type ResizableColumn } from '@/components/common/use-column-widths';
 import {
   Sheet,
   SheetContent,
@@ -101,8 +106,30 @@ export function KbLibraryPage() {
   const [saving, setSaving] = useState(false);
 
   const navigate = useNavigate();
+
+  /* 列宽 + 表头排序（一次性加载，前端排序无分页副作用） */
+  const LIB_COLS = useMemo<ResizableColumn[]>(
+    () => [
+      { key: 'name', label: '名称' },
+      { key: 'secrecy', label: '密级' },
+      { key: 'status', label: '状态' },
+      { key: 'docCount', label: '文档数' },
+      { key: 'topK', label: 'topK' },
+      { key: 'engineType', label: '引擎' },
+      { key: 'updatedAt', label: '更新时间' },
+      { key: '__ops__', label: '操作', locked: true },
+    ],
+    [],
+  );
+  const { widthOf, startResize, hasCustom, reset } = useColumnWidths(LIB_COLS, 'mis-kb-library-table-widths');
+  const getSortValue = useCallback(
+    (row: KbLibrary, key: string) => (key === 'topK' ? row.settings?.topK : row[key as keyof KbLibrary]),
+    [],
+  );
+  const { sorted: sortedLibraries, sortKey, sortDir, toggleSort } = useClientSort(libraries, getSortValue);
   const capabilities = useKbStore((s) => s.capabilities);
   const refreshEngine = useKbStore((s) => s.refreshEngine);
+  const invalidateLibraries = useKbStore((s) => s.invalidateLibraries);
   // QA P2-A：`!== false` 在 capabilities 未加载 / rerankSupported 为 null 时 fail-open，
   // 改 `=== true`，使「能力未确认」与「明确不支持」一致按不可用处理。
   const rerankSupported = capabilities?.rerankSupported === true;
@@ -178,17 +205,26 @@ export function KbLibraryPage() {
           settings: toSettings(form, editing.settings),
         });
       } else {
+        const createdCategoryId = Number(form.categoryId);
         await createLibrary({
-          categoryId: Number(form.categoryId),
+          categoryId: createdCategoryId,
           name: form.name.trim(),
           secrecy: form.secrecy,
           owner: form.owner.trim() === '' ? null : Number(form.owner),
           settings: toSettings(form, null),
         });
+        // 左侧分类筛选若与新建库不一致，切到目标分类；否则本页列表会「成功但看不见」
+        if (categoryId !== createdCategoryId) {
+          setCategoryId(createdCategoryId);
+        }
       }
       toast.success('已保存');
       setOpen(false);
-      await loadLibraries(categoryId);
+      invalidateLibraries();
+      // 分类未变时 effect 不会重跑，需显式刷新本页列表
+      if (editing || categoryId === Number(form.categoryId) || form.categoryId === '') {
+        await loadLibraries(categoryId);
+      }
     } catch (e) {
       toast.error(e instanceof Error ? e.message : '保存失败');
     } finally {
@@ -201,6 +237,7 @@ export function KbLibraryPage() {
     try {
       await deleteLibrary(lib.id);
       toast.success('已删除');
+      invalidateLibraries();
       await loadLibraries(categoryId);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : '删除失败');
@@ -208,10 +245,11 @@ export function KbLibraryPage() {
   }
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col p-4 md:p-5">
+    <div className="flex min-h-0 flex-1 flex-col">
       <PageHeader
         title="知识库管理"
         description="知识库是检索的最小授权单元；可见性 = 公开∧启用 ∪ 授权 − 停用，由服务端裁定。"
+        breadcrumbs={buildAppBreadcrumbs({ app: 'kb', title: '知识库管理' })}
         actions={
           <PermissionGate permission="kb:library:add">
             <Button size="sm" onClick={openCreate}>
@@ -248,18 +286,58 @@ export function KbLibraryPage() {
           ))}
         </aside>
 
-        <div className="min-w-0 flex-1 overflow-auto rounded-lg border bg-table-surface">
-          <table className="w-full bg-table-surface text-left text-sm">
-            <thead className="sticky top-0 z-10 border-b-2 border-foreground/20 bg-table-header text-muted-foreground backdrop-blur">
+        <div className="relative min-w-0 flex-1 overflow-auto rounded-lg border bg-table-surface">
+          {hasCustom ? (
+            <button
+              type="button"
+              onClick={reset}
+              className="absolute right-3 top-3 z-20 rounded-md bg-card px-2 py-0.5 text-xs text-muted-foreground shadow-sm hover:text-foreground"
+            >
+              重置列宽
+            </button>
+          ) : null}
+          <table className="w-full table-fixed border-separate border-spacing-0 bg-table-surface text-left text-sm">
+            <thead className="border-b-2 border-foreground/20 bg-table-header text-muted-foreground">
               <tr>
-                <th className="px-3 py-2 font-bold">名称</th>
-                <th className="px-3 py-2 font-bold">密级</th>
-                <th className="px-3 py-2 font-bold">状态</th>
-                <th className="px-3 py-2 font-bold">文档数</th>
-                <th className="px-3 py-2 font-bold">topK</th>
-                <th className="px-3 py-2 font-bold">引擎</th>
-                <th className="px-3 py-2 font-bold">更新时间</th>
-                <th className="px-3 py-2 font-bold">操作</th>
+                {LIB_COLS.map((c, ci) => {
+                  const active = sortKey === c.key;
+                  return (
+                    <th
+                      key={c.key}
+                      style={{ width: widthOf(c.key) }}
+                      aria-sort={active ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'none'}
+                      className={cn(
+                        'overflow-hidden whitespace-nowrap px-3 py-2 font-bold',
+                        ci > 0 && 'border-l border-border/60',
+                        c.locked && 'text-right',
+                      )}
+                    >
+                      {c.locked ? (
+                        c.label
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => toggleSort(c.key)}
+                          className={cn(
+                            'flex w-full items-center gap-1 text-left font-bold',
+                            active ? 'text-foreground' : 'text-muted-foreground hover:text-foreground',
+                          )}
+                        >
+                          {c.label}
+                          <SortIndicator state={active ? sortDir : 'none'} />
+                        </button>
+                      )}
+                      {!c.locked ? (
+                        <span
+                          role="separator"
+                          aria-label={`调整${c.label}列宽`}
+                          onMouseDown={(e) => startResize(e, c.key)}
+                          className="absolute right-0 top-0 h-full w-[3px] cursor-col-resize"
+                        />
+                      ) : null}
+                    </th>
+                  );
+                })}
               </tr>
             </thead>
             <tbody>
@@ -276,7 +354,7 @@ export function KbLibraryPage() {
                   </td>
                 </tr>
               ) : (
-                libraries.map((lib) => (
+                sortedLibraries.map((lib) => (
                   <tr
                     key={lib.id}
                     className="border-b border-border/50 bg-table-row last:border-0 even:bg-table-stripe hover:bg-table-hover"

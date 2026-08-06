@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useState } from 'react';
+import { useLocation } from 'react-router-dom';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
 import { listLibraries } from '../api/kb-api';
+import { useKbStore } from '../stores/use-kb-store';
 import type { KbLibrary } from '../types';
 import { secrecyLabel } from '../types';
 
@@ -17,6 +19,12 @@ interface KbLibraryPickerProps {
   className?: string;
   /** 加载完成回调，便于父组件缓存列表 */
   onLoaded?: (libraries: KbLibrary[]) => void;
+  /**
+   * 所在页面的路径（如 `/kb/documents`）。KeepAlive 下组件常驻，
+   * 仅挂载时拉一次会在「他页新建库 → 切回本页」后仍显示空列表；
+   * 传入后会在路由切回本页时重拉。
+   */
+  activePath?: string;
 }
 
 const selectClass =
@@ -25,8 +33,9 @@ const selectClass =
 /**
  * 知识库下拉选择器。
  *
- * <p>列表由 BFF `/kb/libraries` 返回，已由 mis-kb 按可见性过滤（公开∧启用 ∪ ACL − 停用），
- * 前端不再二次裁剪，避免与后端裁定不一致。
+ * <p>列表来自 BFF {@code GET /kb/libraries}（mis-kb 当前按分类可选过滤，
+ * <b>不做</b>密级可见性裁剪——可见性只约束检索/问答，管理端列表看全量）。
+ * 订阅 {@code libraryEpoch}，创建/删除后与 KeepAlive 回切时都会重拉。
  */
 export function KbLibraryPicker({
   value,
@@ -36,9 +45,13 @@ export function KbLibraryPicker({
   emptyLabel = '全部知识库',
   className,
   onLoaded,
+  activePath,
 }: KbLibraryPickerProps) {
   const [libraries, setLibraries] = useState<KbLibrary[]>([]);
   const [loading, setLoading] = useState(false);
+  const libraryEpoch = useKbStore((s) => s.libraryEpoch);
+  const pathname = useLocation().pathname;
+  const pageActive = activePath == null || pathname === activePath;
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -56,8 +69,9 @@ export function KbLibraryPicker({
   }, [categoryId]);
 
   useEffect(() => {
+    if (!pageActive) return;
     void load();
-  }, [load]);
+  }, [load, libraryEpoch, pageActive]);
 
   return (
     <select

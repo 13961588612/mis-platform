@@ -1,9 +1,14 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Plus, RefreshCw, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
+import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { PageHeader } from '@/components/common/page-header';
+import { buildAppBreadcrumbs } from '@/components/common/app-breadcrumbs';
 import { PermissionGate } from '@/components/auth/permission-gate';
+import { SortIndicator } from '@/components/common/sort-indicator';
+import { useClientSort } from '@/components/common/use-client-sort';
+import { useColumnWidths, type ResizableColumn } from '@/components/common/use-column-widths';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import {
   Sheet,
@@ -50,6 +55,21 @@ export function KbPermissionPage() {
   const [subject, setSubject] = useState<KbSubjectSelection | null>(null);
   const [action, setAction] = useState('read');
   const [saving, setSaving] = useState(false);
+
+  /* 列宽 + 表头排序（当前知识库 ACL 一次性加载，无分页副作用） */
+  const ACL_COLS = useMemo<ResizableColumn[]>(
+    () => [
+      { key: 'subjectType', label: '主体类型' },
+      { key: 'subjectId', label: '主体 ID' },
+      { key: 'action', label: '权限' },
+      { key: 'createdAt', label: '授权时间' },
+      { key: '__ops__', label: '操作', locked: true },
+    ],
+    [],
+  );
+  const { widthOf, startResize, hasCustom, reset } = useColumnWidths(ACL_COLS, 'mis-kb-permission-table-widths');
+  const getSortValue = useCallback((row: KbAcl, key: string) => row[key as keyof KbAcl], []);
+  const { sorted: sortedAcls, sortKey, sortDir, toggleSort } = useClientSort(acls, getSortValue);
 
   const load = useCallback(async (id: number | null) => {
     if (id == null) {
@@ -122,10 +142,11 @@ export function KbPermissionPage() {
   }
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col p-4 md:p-5">
+    <div className="flex min-h-0 flex-1 flex-col">
       <PageHeader
         title="知识库权限"
         description="按用户 / 角色 / 部门授予知识库访问权；服务端据此裁定检索可见范围。"
+        breadcrumbs={buildAppBreadcrumbs({ app: 'kb', title: '权限' })}
         actions={
           <div className="flex items-center gap-2">
             <Button
@@ -158,19 +179,66 @@ export function KbPermissionPage() {
       <div className="mb-3 flex flex-wrap items-center gap-2">
         <span className="text-sm text-muted-foreground">知识库</span>
         <div className="w-72">
-          <KbLibraryPicker value={libraryId} onChange={setLibraryId} />
+          <KbLibraryPicker
+            value={libraryId}
+            onChange={setLibraryId}
+            activePath="/kb/permissions"
+          />
         </div>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-auto rounded-lg border bg-table-surface">
-        <table className="w-full bg-table-surface text-left text-sm">
-          <thead className="sticky top-0 z-10 border-b-2 border-foreground/20 bg-table-header text-muted-foreground backdrop-blur">
+      <div className="relative min-h-0 flex-1 overflow-auto rounded-lg border bg-table-surface">
+        {hasCustom ? (
+          <button
+            type="button"
+            onClick={reset}
+            className="absolute right-3 top-3 z-20 rounded-md bg-card px-2 py-0.5 text-xs text-muted-foreground shadow-sm hover:text-foreground"
+          >
+            重置列宽
+          </button>
+        ) : null}
+        <table className="w-full table-fixed border-separate border-spacing-0 bg-table-surface text-left text-sm">
+          <thead className="border-b-2 border-foreground/20 bg-table-header text-muted-foreground">
             <tr>
-              <th className="px-3 py-2 font-bold">主体类型</th>
-              <th className="px-3 py-2 font-bold">主体 ID</th>
-              <th className="px-3 py-2 font-bold">权限</th>
-              <th className="px-3 py-2 font-bold">授权时间</th>
-              <th className="px-3 py-2 font-bold">操作</th>
+              {ACL_COLS.map((c, ci) => {
+                const active = sortKey === c.key;
+                return (
+                  <th
+                    key={c.key}
+                    style={{ width: widthOf(c.key) }}
+                    aria-sort={active ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'none'}
+                    className={cn(
+                      'overflow-hidden whitespace-nowrap px-3 py-2 font-bold',
+                      ci > 0 && 'border-l border-border/60',
+                      c.locked && 'text-right',
+                    )}
+                  >
+                    {c.locked ? (
+                      c.label
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => toggleSort(c.key)}
+                        className={cn(
+                          'flex w-full items-center gap-1 text-left font-bold',
+                          active ? 'text-foreground' : 'text-muted-foreground hover:text-foreground',
+                        )}
+                      >
+                        {c.label}
+                        <SortIndicator state={active ? sortDir : 'none'} />
+                      </button>
+                    )}
+                    {!c.locked ? (
+                      <span
+                        role="separator"
+                        aria-label={`调整${c.label}列宽`}
+                        onMouseDown={(e) => startResize(e, c.key)}
+                        className="absolute right-0 top-0 h-full w-[3px] cursor-col-resize"
+                      />
+                    ) : null}
+                  </th>
+                );
+              })}
             </tr>
           </thead>
           <tbody>
@@ -193,7 +261,7 @@ export function KbPermissionPage() {
                 </td>
               </tr>
             ) : (
-              acls.map((acl) => (
+              sortedAcls.map((acl) => (
                 <tr
                   key={acl.id}
                   className="border-b border-border/50 bg-table-row last:border-0 even:bg-table-stripe hover:bg-table-hover"

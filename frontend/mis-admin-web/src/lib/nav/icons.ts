@@ -3,8 +3,11 @@ import {
   AppWindow,
   BarChart3,
   BookOpen,
+  Bot,
+  Boxes,
   Building2,
   Cable,
+  ClipboardCheck,
   ClipboardList,
   Cpu,
   Crosshair,
@@ -13,6 +16,7 @@ import {
   FolderTree,
   GitBranch,
   Globe,
+  History,
   Home,
   KeyRound,
   Languages,
@@ -21,9 +25,14 @@ import {
   Lock,
   LogIn,
   Menu,
+  MessageSquare,
+  MessagesSquare,
   Network,
+  Plug,
+  Route,
   Settings,
   Shield,
+  ShieldCheck,
   Sparkles,
   UserCog,
   Users,
@@ -62,6 +71,17 @@ const ICON_MAP: Record<string, LucideIcon> = {
   Crosshair,
   // Wave D：同义词管理（Languages，V18 seed）
   Languages,
+  // 智能体运营控制台（V19__agent_ops_seed.sql 的 sys_menu.icon 取值 + V21 的 ShieldCheck）
+  // 缺登记不会报错，只会静默回退成 LayoutDashboard —— 侧栏 12 个菜单图标全一样。
+  Bot,
+  MessageSquare,
+  History,
+  Boxes,
+  Route,
+  Plug,
+  MessagesSquare,
+  ClipboardCheck,
+  ShieldCheck,
 };
 
 export function resolveNavIcon(name?: string | null): LucideIcon {

@@ -5,6 +5,7 @@ import { Card } from '@/components/ui/card';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { PageHeader } from '@/components/common/page-header';
+import { buildAppBreadcrumbs } from '@/components/common/app-breadcrumbs';
 import { CapabilityBadge, EngineHealthBadge } from '../components/kb-badges';
 import { useKbStore } from '../stores/use-kb-store';
 
@@ -34,10 +35,11 @@ export function KbEnginePage() {
   const engineType = health?.engineType ?? capabilities?.engineType ?? null;
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col p-4 md:p-5">
+    <div className="flex min-h-0 flex-1 flex-col">
       <PageHeader
         title="检索引擎"
         description="当前生效的知识库检索引擎与其能力清单（只读）。"
+        breadcrumbs={buildAppBreadcrumbs({ app: 'kb', title: '引擎配置' })}
         actions={
           <Button size="sm" variant="outline" disabled={loading} onClick={() => void refreshEngine()}>
             <RefreshCw className="h-4 w-4" />

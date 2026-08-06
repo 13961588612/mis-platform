@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { buildAppBreadcrumbs } from '@/components/common/app-breadcrumbs';
 import { PageHeader } from '@/components/common/page-header';
 import { KbLibraryPicker } from '../components/kb-library-picker';
 import { KbDocumentTable } from './kb-document-table';
@@ -14,16 +15,21 @@ export function KbDocumentPage() {
   const [libraryId, setLibraryId] = useState<number | null>(null);
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col p-4 md:p-5">
+    <div className="flex min-h-0 flex-1 flex-col">
       <PageHeader
         title="文档管理"
         description="上传后由引擎异步解析切片；停用文档不参与检索但保留记录。"
+        breadcrumbs={buildAppBreadcrumbs({ app: 'kb', title: '文档' })}
       />
 
       <div className="mb-3 flex flex-wrap items-center gap-2">
         <span className="text-sm text-muted-foreground">知识库</span>
         <div className="w-72">
-          <KbLibraryPicker value={libraryId} onChange={setLibraryId} />
+          <KbLibraryPicker
+            value={libraryId}
+            onChange={setLibraryId}
+            activePath="/kb/documents"
+          />
         </div>
         <span className="text-xs text-muted-foreground">
           单文件不超过 {formatSize(50 * 1024 * 1024)}

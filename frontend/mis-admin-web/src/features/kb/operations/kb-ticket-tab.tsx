@@ -1,10 +1,14 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ChevronLeft, ChevronRight, History, RefreshCw, Wrench } from 'lucide-react';
 import { toast } from 'sonner';
+import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Badge } from '@/components/ui/badge';
+import { SortIndicator } from '@/components/common/sort-indicator';
+import { useClientSort } from '@/components/common/use-client-sort';
+import { useColumnWidths, type ResizableColumn } from '@/components/common/use-column-widths';
 import {
   Dialog,
   DialogContent,
@@ -77,6 +81,24 @@ export function KbTicketTab() {
     note: '',
     processorId: '',
   });
+
+  /* 列宽 + 当前页客户端排序（服务端分页，排序仅作用于本页） */
+  const TICKET_COLS = useMemo<ResizableColumn[]>(
+    () => [
+      { key: 'id', label: '工单' },
+      { key: 'sessionId', label: '会话' },
+      { key: 'type', label: '类型' },
+      { key: 'status', label: '状态' },
+      { key: 'content', label: '问题描述' },
+      { key: 'relAction', label: '处理动作' },
+      { key: 'createdAt', label: '提交时间' },
+      { key: '__ops__', label: '操作', locked: true },
+    ],
+    [],
+  );
+  const { widthOf, startResize, hasCustom, reset, tableStyle } = useColumnWidths(TICKET_COLS, 'mis-kb-ticket-table-widths');
+  const getSortValue = useCallback((row: KbQaTicket, key: string) => row[key as keyof KbQaTicket], []);
+  const { sorted: sortedRows, sortKey, sortDir, toggleSort } = useClientSort(rows, getSortValue);
 
   const load = useCallback(async (p: number, s: string) => {
     setLoading(true);
@@ -157,7 +179,7 @@ export function KbTicketTab() {
   const maxPage = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col gap-3">
+    <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-hidden">
       <div className="flex shrink-0 flex-wrap items-end gap-2 rounded-lg border bg-card p-3">
         <div className="w-40">
           <label className={fieldLabel}>状态</label>
@@ -183,18 +205,60 @@ export function KbTicketTab() {
         </Button>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-auto rounded-lg border bg-table-surface">
-        <table className="w-full bg-table-surface text-left text-sm">
-          <thead className="sticky top-0 z-10 border-b-2 border-foreground/20 bg-table-header text-muted-foreground backdrop-blur">
+      <div className="relative min-h-0 flex-1 overflow-auto rounded-lg border bg-table-surface">
+        {hasCustom ? (
+          <button
+            type="button"
+            onClick={reset}
+            className="absolute right-3 top-3 z-20 rounded-md bg-card px-2 py-0.5 text-xs text-muted-foreground shadow-sm hover:text-foreground"
+          >
+            重置列宽
+          </button>
+        ) : null}
+        <table
+          className="border-separate border-spacing-0 bg-table-surface text-left text-sm"
+          style={tableStyle}
+        >
+          <thead className="border-b-2 border-foreground/20 bg-table-header text-muted-foreground">
             <tr>
-              <th className="px-3 py-2 font-bold">工单</th>
-              <th className="px-3 py-2 font-bold">会话</th>
-              <th className="px-3 py-2 font-bold">类型</th>
-              <th className="px-3 py-2 font-bold">状态</th>
-              <th className="px-3 py-2 font-bold">问题描述</th>
-              <th className="px-3 py-2 font-bold">处理动作</th>
-              <th className="px-3 py-2 font-bold">提交时间</th>
-              <th className="px-3 py-2 font-bold">操作</th>
+              {TICKET_COLS.map((c) => {
+                const active = sortKey === c.key;
+                return (
+                  <th
+                    key={c.key}
+                    style={{ width: widthOf(c.key) }}
+                    aria-sort={active ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'none'}
+                    className={cn(
+                      'overflow-hidden whitespace-nowrap px-0 py-0 font-bold',
+                      c.locked && 'text-right',
+                    )}
+                  >
+                    {c.locked ? (
+                      <span className="block px-3 py-2">{c.label}</span>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => toggleSort(c.key)}
+                        className={cn(
+                          'flex w-full items-center gap-1 px-3 py-2 pr-5 text-left font-bold',
+                          active ? 'text-foreground' : 'text-muted-foreground hover:text-foreground',
+                        )}
+                      >
+                        {c.label}
+                        <SortIndicator state={active ? sortDir : 'none'} />
+                      </button>
+                    )}
+                    {!c.locked ? (
+                      <span
+                        role="separator"
+                        aria-label={`调整${c.label}列宽`}
+                        onMouseDown={(e) => startResize(e, c.key)}
+                        className="absolute right-0 top-0 z-10 h-full w-1.5 cursor-col-resize touch-none select-none hover:bg-primary/30"
+                      />
+                    ) : null}
+                  </th>
+                );
+              })}
             </tr>
           </thead>
           <tbody>
@@ -211,13 +275,13 @@ export function KbTicketTab() {
                 </td>
               </tr>
             ) : (
-              rows.map((t) => (
+              sortedRows.map((t) => (
                 <tr
                   key={t.id}
                   className="border-b border-border/50 bg-table-row last:border-0 even:bg-table-stripe hover:bg-table-hover"
                 >
-                  <td className="px-3 py-2 font-mono text-xs">#{t.id}</td>
-                  <td className="px-3 py-2 font-mono text-xs">{t.sessionId ?? '-'}</td>
+                  <td className="overflow-hidden text-ellipsis whitespace-nowrap px-3 py-2 font-mono text-xs">#{t.id}</td>
+                  <td className="overflow-hidden text-ellipsis whitespace-nowrap px-3 py-2 font-mono text-xs">{t.sessionId ?? '-'}</td>
                   <td className="px-3 py-2">
                     <Badge variant="outline">{t.typeLabel ?? ticketTypeLabel(t.type)}</Badge>
                   </td>
@@ -227,10 +291,10 @@ export function KbTicketTab() {
                   <td className="max-w-[22rem] truncate px-3 py-2" title={t.content ?? ''}>
                     {t.content ?? '-'}
                   </td>
-                  <td className="px-3 py-2 text-xs text-muted-foreground">
+                  <td className="overflow-hidden text-ellipsis whitespace-nowrap px-3 py-2 text-xs text-muted-foreground">
                     {t.relAction ? ticketRelActionLabel(t.relAction) : '-'}
                   </td>
-                  <td className="px-3 py-2 text-xs text-muted-foreground">
+                  <td className="overflow-hidden text-ellipsis whitespace-nowrap px-3 py-2 text-xs text-muted-foreground">
                     {formatTime(t.createdAt)}
                   </td>
                   <td className="px-3 py-2">

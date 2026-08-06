@@ -3,6 +3,7 @@ import { Activity, Building2, ChevronRight, Users } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { fetchDashboardStats } from '@/lib/api/platform';
 import { PageHeader } from '@/components/common/page-header';
+import { buildAppBreadcrumbs } from '@/components/common/app-breadcrumbs';
 import { StatCard } from '@/components/common/stat-card';
 import { PermissionGate } from '@/components/auth/permission-gate';
 import { useAuthStore } from '@/stores/auth-store';
@@ -26,11 +27,7 @@ export function DashboardPage() {
       <PageHeader
         title={app?.name ?? '系统管理'}
         description="平台运行概览与常用入口"
-        breadcrumbs={[
-          { label: '门户', to: '/portal' },
-          { label: app?.name ?? '系统管理' },
-          { label: '概览' },
-        ]}
+        breadcrumbs={buildAppBreadcrumbs({ app: 'system', title: '概览' })}
       />
 
       {error ? (

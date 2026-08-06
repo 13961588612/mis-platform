@@ -54,6 +54,11 @@ export interface AdminPageDef {
   loader?: () => Promise<Record<string, unknown>[]>;
   /** 结果区视图：'table'（默认，标准表格）或 'cards'（卡片网格，与表格范式拉开差异） */
   view?: 'table' | 'cards';
+  /**
+   * 主表行高密度。`compact` 对齐组织管理页（表头/表行 `py-2`）；
+   * 默认略高（表头内层 py-2.5 + 表行 py-[0.7rem]）。
+   */
+  tableDensity?: 'default' | 'compact';
   /** 详情 Sheet 额外行（如多值标签簇）：返回 DefItem[]，追加在表单派生行之后 */
   detailExtra?: (row: Record<string, unknown>) => import('@/components/common/detail-def-list').DefItem[];
 }

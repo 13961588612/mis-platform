@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import {
   ChevronLeft,
@@ -12,12 +12,17 @@ import {
   Upload,
 } from 'lucide-react';
 import { toast } from 'sonner';
+import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { PageHeader } from '@/components/common/page-header';
+import { buildAppBreadcrumbs } from '@/components/common/app-breadcrumbs';
 import { PermissionGate } from '@/components/auth/permission-gate';
+import { SortIndicator } from '@/components/common/sort-indicator';
+import { useClientSort } from '@/components/common/use-client-sort';
+import { useColumnWidths, type ResizableColumn } from '@/components/common/use-column-widths';
 import { usePermission } from '@/hooks/use-permission';
 import { KbSynonymDrawer } from './kb-synonym-drawer';
 import { KbSynonymImportDialog } from './kb-synonym-import-dialog';
@@ -173,14 +178,31 @@ export function KbSynonymPage() {
   const [rows, setRows] = useState<KbSynonymGroup[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
-
   const [config, setConfig] = useState<KbSynonymConfig | null>(null);
   const [toggling, setToggling] = useState(false);
   const [exporting, setExporting] = useState(false);
-
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [importOpen, setImportOpen] = useState(false);
+
+  /* 列宽 + 当前页客户端排序（服务端分页，排序仅作用于本页） */
+  const SYNONYM_COLS = useMemo<ResizableColumn[]>(
+    () => [
+      { key: 'canonicalTerm', label: '规范词' },
+      { key: 'aliases', label: '别名（顺序即扩展优先级）' },
+      { key: 'termCount', label: '词条数' },
+      { key: 'status', label: '状态' },
+      { key: 'updatedAt', label: '更新时间' },
+      { key: '__ops__', label: '操作', locked: true },
+    ],
+    [],
+  );
+  const { widthOf, startResize, hasCustom, reset } = useColumnWidths(SYNONYM_COLS, 'mis-kb-synonym-table-widths');
+  const getSortValue = useCallback((row: KbSynonymGroup, key: string) => {
+    if (key === 'aliases') return aliasesOf(row).length;
+    return row[key as keyof KbSynonymGroup];
+  }, []);
+  const { sorted: sortedRows, sortKey, sortDir, toggleSort } = useClientSort(rows, getSortValue);
 
   const loadConfig = useCallback(async () => {
     try {
@@ -330,8 +352,12 @@ export function KbSynonymPage() {
 
   if (!canView) {
     return (
-      <div className="flex min-h-0 flex-1 flex-col p-4 md:p-5">
-        <PageHeader title="同义词" description="同义词与术语表维护。" />
+      <div className="flex min-h-0 flex-1 flex-col">
+        <PageHeader
+          title="同义词"
+          description="同义词与术语表维护。"
+          breadcrumbs={buildAppBreadcrumbs({ app: 'kb', title: '同义词' })}
+        />
         <div className="rounded-lg border bg-table-surface py-10 text-center text-sm text-muted-foreground">
           你没有 <code className="font-mono">kb:config:synonym:view</code> 权限，无法查看词表。
         </div>
@@ -340,10 +366,11 @@ export function KbSynonymPage() {
   }
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col gap-3 p-4 md:p-5">
+    <div className="flex min-h-0 flex-1 flex-col gap-3">
       <PageHeader
         title="同义词"
         description="维护检索时用于扩写问句的术语组；一个规范词 + 若干别名，命中任一即按规范词一并召回。"
+        breadcrumbs={buildAppBreadcrumbs({ app: 'kb', title: '同义词' })}
         actions={
           <div className="flex flex-wrap items-center gap-3">
             <SynonymGlobalSwitch
@@ -483,16 +510,58 @@ export function KbSynonymPage() {
       </div>
 
       {/* 列表（服务端分页，绝不前端二次过滤） */}
-      <div className="min-h-0 flex-1 overflow-auto rounded-lg border bg-table-surface">
-        <table className="w-full bg-table-surface text-left text-sm">
-          <thead className="sticky top-0 z-10 border-b-2 border-foreground/20 bg-table-header text-muted-foreground backdrop-blur">
+      <div className="relative min-h-0 flex-1 overflow-auto rounded-lg border bg-table-surface">
+        {hasCustom ? (
+          <button
+            type="button"
+            onClick={reset}
+            className="absolute right-3 top-3 z-20 rounded-md bg-card px-2 py-0.5 text-xs text-muted-foreground shadow-sm hover:text-foreground"
+          >
+            重置列宽
+          </button>
+        ) : null}
+        <table className="w-full table-fixed border-separate border-spacing-0 bg-table-surface text-left text-sm">
+          <thead className="border-b-2 border-foreground/20 bg-table-header text-muted-foreground">
             <tr>
-              <th className="px-3 py-2 font-bold">规范词</th>
-              <th className="px-3 py-2 font-bold">别名（顺序即扩展优先级）</th>
-              <th className="px-3 py-2 font-bold">词条数</th>
-              <th className="px-3 py-2 font-bold">状态</th>
-              <th className="px-3 py-2 font-bold">更新时间</th>
-              <th className="px-3 py-2 font-bold">操作</th>
+              {SYNONYM_COLS.map((c, ci) => {
+                const active = sortKey === c.key;
+                return (
+                  <th
+                    key={c.key}
+                    style={{ width: widthOf(c.key) }}
+                    aria-sort={active ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'none'}
+                    className={cn(
+                      'overflow-hidden whitespace-nowrap px-3 py-2 font-bold',
+                      ci > 0 && 'border-l border-border/60',
+                      c.locked && 'text-right',
+                    )}
+                  >
+                    {c.locked ? (
+                      c.label
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => toggleSort(c.key)}
+                        className={cn(
+                          'flex w-full items-center gap-1 text-left font-bold',
+                          active ? 'text-foreground' : 'text-muted-foreground hover:text-foreground',
+                        )}
+                      >
+                        {c.label}
+                        <SortIndicator state={active ? sortDir : 'none'} />
+                      </button>
+                    )}
+                    {!c.locked ? (
+                      <span
+                        role="separator"
+                        aria-label={`调整${c.label}列宽`}
+                        onMouseDown={(e) => startResize(e, c.key)}
+                        className="absolute right-0 top-0 h-full w-[3px] cursor-col-resize"
+                      />
+                    ) : null}
+                  </th>
+                );
+              })}
             </tr>
           </thead>
           <tbody>
@@ -511,7 +580,7 @@ export function KbSynonymPage() {
                 </td>
               </tr>
             ) : (
-              rows.map((g) => {
+              sortedRows.map((g) => {
                 const aliases = aliasesOf(g);
                 const matchedKey = g.matchedAlias ? normalizeSynonymTerm(g.matchedAlias) : null;
                 return (

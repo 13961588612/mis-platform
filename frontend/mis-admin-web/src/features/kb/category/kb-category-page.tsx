@@ -1,10 +1,15 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Pencil, Plus, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
+import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { PageHeader } from '@/components/common/page-header';
+import { buildAppBreadcrumbs } from '@/components/common/app-breadcrumbs';
 import { PermissionGate } from '@/components/auth/permission-gate';
+import { SortIndicator } from '@/components/common/sort-indicator';
+import { useClientSort } from '@/components/common/use-client-sort';
+import { useColumnWidths, type ResizableColumn } from '@/components/common/use-column-widths';
 import {
   Sheet,
   SheetContent,
@@ -76,6 +81,20 @@ export function KbCategoryPage() {
   const [form, setForm] = useState<CategoryForm>(EMPTY_FORM);
   const [saving, setSaving] = useState(false);
 
+  /* 列宽 + 表头排序（分类树一次性加载，无分页副作用） */
+  const CATEGORY_COLS = useMemo<ResizableColumn[]>(
+    () => [
+      { key: 'name', label: '名称' },
+      { key: 'enabled', label: '状态' },
+      { key: 'sort', label: '排序' },
+      { key: 'remark', label: '备注' },
+      { key: 'updatedAt', label: '更新时间' },
+      { key: '__ops__', label: '操作', locked: true },
+    ],
+    [],
+  );
+  const { widthOf, startResize, hasCustom, reset } = useColumnWidths(CATEGORY_COLS, 'mis-kb-category-table-widths');
+
   const load = useCallback(async () => {
     setLoading(true);
     try {
@@ -92,6 +111,8 @@ export function KbCategoryPage() {
   }, [load]);
 
   const rows = useMemo(() => flattenCategories(categories), [categories]);
+  const getSortValue = useCallback((row: FlatRow, key: string) => row.category[key as keyof KbCategory], []);
+  const { sorted: sortedRows, sortKey, sortDir, toggleSort } = useClientSort(rows, getSortValue);
   const rootOptions = useMemo(
     () => categories.filter((c) => c.parentId == null || c.parentId === 0),
     [categories],
@@ -160,10 +181,11 @@ export function KbCategoryPage() {
   }
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col p-4 md:p-5">
+    <div className="flex min-h-0 flex-1 flex-col">
       <PageHeader
         title="知识库分类"
         description="两级分类用于组织知识库；停用分类不影响已建知识库的可见性裁定。"
+        breadcrumbs={buildAppBreadcrumbs({ app: 'kb', title: '分类管理' })}
         actions={
           <PermissionGate permission="kb:category:add">
             <Button size="sm" onClick={openCreate}>
@@ -174,16 +196,58 @@ export function KbCategoryPage() {
         }
       />
 
-      <div className="min-h-0 flex-1 overflow-auto rounded-lg border bg-table-surface">
-        <table className="w-full bg-table-surface text-left text-sm">
-          <thead className="sticky top-0 z-10 border-b-2 border-foreground/20 bg-table-header text-muted-foreground backdrop-blur">
+      <div className="relative min-h-0 flex-1 overflow-auto rounded-lg border bg-table-surface">
+        {hasCustom ? (
+          <button
+            type="button"
+            onClick={reset}
+            className="absolute right-3 top-3 z-20 rounded-md bg-card px-2 py-0.5 text-xs text-muted-foreground shadow-sm hover:text-foreground"
+          >
+            重置列宽
+          </button>
+        ) : null}
+        <table className="w-full table-fixed border-separate border-spacing-0 bg-table-surface text-left text-sm">
+          <thead className="border-b-2 border-foreground/20 bg-table-header text-muted-foreground">
             <tr>
-              <th className="px-3 py-2 font-bold">名称</th>
-              <th className="px-3 py-2 font-bold">状态</th>
-              <th className="px-3 py-2 font-bold">排序</th>
-              <th className="px-3 py-2 font-bold">备注</th>
-              <th className="px-3 py-2 font-bold">更新时间</th>
-              <th className="px-3 py-2 font-bold">操作</th>
+              {CATEGORY_COLS.map((c, ci) => {
+                const active = sortKey === c.key;
+                return (
+                  <th
+                    key={c.key}
+                    style={{ width: widthOf(c.key) }}
+                    aria-sort={active ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'none'}
+                    className={cn(
+                      'overflow-hidden whitespace-nowrap px-3 py-2 font-bold',
+                      ci > 0 && 'border-l border-border/60',
+                      c.locked && 'text-right',
+                    )}
+                  >
+                    {c.locked ? (
+                      c.label
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => toggleSort(c.key)}
+                        className={cn(
+                          'flex w-full items-center gap-1 text-left font-bold',
+                          active ? 'text-foreground' : 'text-muted-foreground hover:text-foreground',
+                        )}
+                      >
+                        {c.label}
+                        <SortIndicator state={active ? sortDir : 'none'} />
+                      </button>
+                    )}
+                    {!c.locked ? (
+                      <span
+                        role="separator"
+                        aria-label={`调整${c.label}列宽`}
+                        onMouseDown={(e) => startResize(e, c.key)}
+                        className="absolute right-0 top-0 h-full w-[3px] cursor-col-resize"
+                      />
+                    ) : null}
+                  </th>
+                );
+              })}
             </tr>
           </thead>
           <tbody>
@@ -200,7 +264,7 @@ export function KbCategoryPage() {
                 </td>
               </tr>
             ) : (
-              rows.map(({ category, depth }) => (
+              sortedRows.map(({ category, depth }) => (
                 <tr
                   key={category.id}
                   className="border-b border-border/50 bg-table-row last:border-0 even:bg-table-stripe hover:bg-table-hover"

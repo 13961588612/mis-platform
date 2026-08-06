@@ -1,9 +1,13 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ChevronLeft, ChevronRight, Download, Eye, RefreshCw, Search } from 'lucide-react';
 import { toast } from 'sonner';
+import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
+import { SortIndicator } from '@/components/common/sort-indicator';
+import { useClientSort } from '@/components/common/use-client-sort';
+import { useColumnWidths, type ResizableColumn } from '@/components/common/use-column-widths';
 import { exportOperationsCsv, listLibraries, listOperationSessions } from '../api/kb-api';
 import type { OperationSessionQuery } from '../api/kb-api';
 import type { KbLibrary, KbQaSessionListItem } from '../types';
@@ -76,6 +80,32 @@ export function KbQaRecordTab() {
   const [detailId, setDetailId] = useState<number | null>(null);
   const [detailOpen, setDetailOpen] = useState(false);
 
+  /* 列宽 + 当前页客户端排序（服务端分页，排序仅作用于本页） */
+  const QA_COLS = useMemo<ResizableColumn[]>(
+    () => [
+      { key: 'id', label: '会话' },
+      { key: 'userName', label: '提问人' },
+      { key: 'question', label: '问题' },
+      { key: 'answerBrief', label: '回答摘要' },
+      { key: 'messageCount', label: '消息' },
+      { key: 'citeCount', label: '引用' },
+      { key: 'feedback', label: '评价' },
+      { key: 'createdAt', label: '时间' },
+      { key: '__ops__', label: '操作', locked: true },
+    ],
+    [],
+  );
+  const { widthOf, startResize, hasCustom, reset, tableStyle } = useColumnWidths(QA_COLS, 'mis-kb-qa-record-table-widths');
+  const getSortValue = useCallback((row: KbQaSessionListItem, key: string) => {
+    if (key === 'feedback') {
+      if (!row.hasFeedback) return null;
+      return (row.accuracy ?? 0) * 1000 + (row.helpful ?? 0);
+    }
+    if (key === 'userName') return row.userName ?? row.userId;
+    return row[key as keyof KbQaSessionListItem];
+  }, []);
+  const { sorted: sortedRows, sortKey, sortDir, toggleSort } = useClientSort(rows, getSortValue);
+
   const load = useCallback(async (p: number, f: FilterForm) => {
     setLoading(true);
     try {
@@ -140,8 +170,8 @@ export function KbQaRecordTab() {
   const maxPage = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col gap-3">
-      <div className="rounded-lg border bg-card p-3">
+    <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-hidden">
+      <div className="shrink-0 rounded-lg border bg-card p-3">
         <div className="grid grid-cols-2 gap-3 lg:grid-cols-6">
           <div>
             <label className={fieldLabel}>起始日期</label>
@@ -239,19 +269,60 @@ export function KbQaRecordTab() {
         ) : null}
       </div>
 
-      <div className="min-h-0 flex-1 overflow-auto rounded-lg border bg-table-surface">
-        <table className="w-full bg-table-surface text-left text-sm">
-          <thead className="sticky top-0 z-10 border-b-2 border-foreground/20 bg-table-header text-muted-foreground backdrop-blur">
+      <div className="relative min-h-0 flex-1 overflow-auto rounded-lg border bg-table-surface">
+        {hasCustom ? (
+          <button
+            type="button"
+            onClick={reset}
+            className="absolute right-3 top-3 z-20 rounded-md bg-card px-2 py-0.5 text-xs text-muted-foreground shadow-sm hover:text-foreground"
+          >
+            重置列宽
+          </button>
+        ) : null}
+        <table
+          className="border-separate border-spacing-0 bg-table-surface text-left text-sm"
+          style={tableStyle}
+        >
+          <thead className="border-b-2 border-foreground/20 bg-table-header text-muted-foreground">
             <tr>
-              <th className="px-3 py-2 font-bold">会话</th>
-              <th className="px-3 py-2 font-bold">提问人</th>
-              <th className="px-3 py-2 font-bold">问题</th>
-              <th className="px-3 py-2 font-bold">回答摘要</th>
-              <th className="px-3 py-2 font-bold">消息</th>
-              <th className="px-3 py-2 font-bold">引用</th>
-              <th className="px-3 py-2 font-bold">评价</th>
-              <th className="px-3 py-2 font-bold">时间</th>
-              <th className="px-3 py-2 font-bold">操作</th>
+              {QA_COLS.map((c, ci) => {
+                const active = sortKey === c.key;
+                return (
+                  <th
+                    key={c.key}
+                    style={{ width: widthOf(c.key) }}
+                    aria-sort={active ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'none'}
+                    className={cn(
+                      'overflow-hidden whitespace-nowrap px-0 py-0 font-bold',
+                      c.locked && 'text-right',
+                    )}
+                  >
+                    {c.locked ? (
+                      <span className="block px-3 py-2">{c.label}</span>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => toggleSort(c.key)}
+                        className={cn(
+                          'flex w-full items-center gap-1 px-3 py-2 pr-5 text-left font-bold',
+                          active ? 'text-foreground' : 'text-muted-foreground hover:text-foreground',
+                        )}
+                      >
+                        {c.label}
+                        <SortIndicator state={active ? sortDir : 'none'} />
+                      </button>
+                    )}
+                    {!c.locked ? (
+                      <span
+                        role="separator"
+                        aria-label={`调整${c.label}列宽`}
+                        onMouseDown={(e) => startResize(e, c.key)}
+                        className="absolute right-0 top-0 z-10 h-full w-1.5 cursor-col-resize touch-none select-none hover:bg-primary/30"
+                      />
+                    ) : null}
+                  </th>
+                );
+              })}
             </tr>
           </thead>
           <tbody>
@@ -268,7 +339,7 @@ export function KbQaRecordTab() {
                 </td>
               </tr>
             ) : (
-              rows.map((r) => (
+              sortedRows.map((r) => (
                 <tr
                   key={r.id}
                   className="border-b border-border/50 bg-table-row last:border-0 even:bg-table-stripe hover:bg-table-hover"

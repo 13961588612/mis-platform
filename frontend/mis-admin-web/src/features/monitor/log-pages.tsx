@@ -5,7 +5,11 @@ import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { PageHeader } from '@/components/common/page-header';
+import { buildAppBreadcrumbs } from '@/components/common/app-breadcrumbs';
 import { StatusBadge } from '@/components/common/list-page-skeleton';
+import { SortIndicator } from '@/components/common/sort-indicator';
+import { useClientSort } from '@/components/common/use-client-sort';
+import { useColumnWidths, type ResizableColumn } from '@/components/common/use-column-widths';
 import {
   Sheet,
   SheetContent,
@@ -15,6 +19,26 @@ import {
 } from '@/components/ui/sheet';
 import { pageLoginLogs, pageOperLogs } from '@/lib/api/dicts';
 import type { LoginLogItem, OperLogItem } from '@/types/api';
+
+const thPad = 'px-3';
+
+const OPER_COLUMNS: ResizableColumn[] = [
+  { key: 'operTime', label: '时间' },
+  { key: 'username', label: '用户' },
+  { key: 'module', label: '模块' },
+  { key: 'operation', label: '操作' },
+  { key: 'requestUri', label: 'URI' },
+  { key: 'durationMs', label: '耗时' },
+  { key: 'responseCode', label: '结果', locked: true },
+];
+
+const LOGIN_COLUMNS: ResizableColumn[] = [
+  { key: 'loginAt', label: '时间' },
+  { key: 'username', label: '用户' },
+  { key: 'ip', label: 'IP' },
+  { key: 'status', label: '状态' },
+  { key: 'msg', label: '消息', locked: true },
+];
 
 function formatTime(v: string | null | undefined) {
   if (!v) return '—';
@@ -44,6 +68,75 @@ function DetailField({
   );
 }
 
+function SortableTh({
+  col,
+  sortKey,
+  sortDir,
+  toggleSort,
+  widthOf,
+  startResize,
+}: {
+  col: ResizableColumn;
+  sortKey: string | null;
+  sortDir: 'asc' | 'desc';
+  toggleSort: (key: string) => void;
+  widthOf: (key: string) => number | undefined;
+  startResize: (e: React.MouseEvent, key: string) => void;
+}) {
+  const active = sortKey === col.key;
+  if (col.locked) {
+    return (
+      <th
+        className="whitespace-nowrap px-0 py-0 text-[13px] font-bold"
+        style={{ width: widthOf(col.key) }}
+      >
+        <button
+          type="button"
+          onClick={() => toggleSort(col.key)}
+          className={cn(
+            'flex w-full items-center gap-1 text-left font-bold transition-colors',
+            thPad,
+            active ? 'text-foreground' : 'text-muted-foreground hover:text-foreground',
+          )}
+          aria-label={`按${col.label}排序`}
+        >
+          {col.label}
+          <SortIndicator state={active ? sortDir : 'none'} />
+        </button>
+      </th>
+    );
+  }
+  return (
+    <th
+      aria-sort={active ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'none'}
+      style={{ width: widthOf(col.key) }}
+      className="whitespace-nowrap px-0 py-0 text-[13px] font-bold"
+    >
+      <button
+        type="button"
+        onClick={() => toggleSort(col.key)}
+        className={cn(
+          'flex w-full items-center gap-1 pr-5 text-left font-bold transition-colors',
+          thPad,
+          active ? 'text-foreground' : 'text-muted-foreground hover:text-foreground',
+        )}
+        aria-label={`按${col.label}排序`}
+      >
+        {col.label}
+        <SortIndicator state={active ? sortDir : 'none'} />
+      </button>
+      <span
+        role="separator"
+        aria-orientation="vertical"
+        onMouseDown={(e) => startResize(e, col.key)}
+        onClick={(e) => e.stopPropagation()}
+        className="absolute right-0 top-0 z-10 h-full w-1.5 cursor-col-resize touch-none select-none hover:bg-primary/30"
+        title={`拖动调整${col.label}列宽`}
+      />
+    </th>
+  );
+}
+
 export function OperLogListPage() {
   const [rows, setRows] = useState<OperLogItem[]>([]);
   const [username, setUsername] = useState('');
@@ -53,6 +146,33 @@ export function OperLogListPage() {
   const [loading, setLoading] = useState(false);
   const [detail, setDetail] = useState<OperLogItem | null>(null);
   const size = 20;
+
+  const { widthOf, startResize, hasCustom, reset: resetColWidths, tableStyle } = useColumnWidths(
+    OPER_COLUMNS,
+    'mis-oper-log-table-widths',
+  );
+
+  const getValue = useCallback((row: OperLogItem, key: string) => {
+    switch (key) {
+      case 'operTime':
+        return row.operTime ?? '';
+      case 'username':
+        return row.username ?? '';
+      case 'module':
+        return row.module ?? '';
+      case 'operation':
+        return row.operation ?? '';
+      case 'requestUri':
+        return `${row.requestMethod ?? ''} ${row.requestUri ?? ''}`;
+      case 'durationMs':
+        return row.durationMs ?? -1;
+      case 'responseCode':
+        return row.responseCode ?? '';
+      default:
+        return null;
+    }
+  }, []);
+  const { sorted, sortKey, sortDir, toggleSort } = useClientSort(rows, getValue);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -79,8 +199,23 @@ export function OperLogListPage() {
   const totalPages = Math.max(1, Math.ceil(total / size));
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col p-4 md:p-5">
-      <PageHeader title="操作日志" description="管理端操作审计（只读）。" />
+    <div className="flex min-h-0 flex-1 flex-col">
+      <PageHeader
+        title="操作日志"
+        description="管理端操作审计（只读）。"
+        breadcrumbs={buildAppBreadcrumbs({
+          app: 'system',
+          group: '审计',
+          title: '操作日志',
+        })}
+        actions={
+          hasCustom ? (
+            <Button type="button" variant="outline" size="sm" onClick={resetColWidths}>
+              重置列宽
+            </Button>
+          ) : null
+        }
+      />
       <div className="mb-3 flex flex-wrap gap-2">
         <Input
           className="h-9 w-40"
@@ -107,33 +242,37 @@ export function OperLogListPage() {
         </Button>
       </div>
       <div className="min-h-0 flex-1 overflow-auto rounded-lg border bg-table-surface">
-        <table className="w-full min-w-[800px] bg-table-surface text-left text-sm">
-          <thead className="sticky top-0 z-10 border-b-2 border-foreground/20 bg-table-header text-muted-foreground backdrop-blur">
+        <table className="border-separate border-spacing-0 bg-table-surface text-left text-sm" style={tableStyle}>
+          <thead className="bg-table-header text-muted-foreground">
             <tr>
-              <th className="px-3 py-2 font-bold">时间</th>
-              <th className="px-3 py-2 font-bold">用户</th>
-              <th className="px-3 py-2 font-bold">模块</th>
-              <th className="px-3 py-2 font-bold">操作</th>
-              <th className="px-3 py-2 font-bold">URI</th>
-              <th className="px-3 py-2 font-bold">耗时</th>
-              <th className="px-3 py-2 font-bold">结果</th>
+              {OPER_COLUMNS.map((col) => (
+                <SortableTh
+                  key={col.key}
+                  col={col}
+                  sortKey={sortKey}
+                  sortDir={sortDir}
+                  toggleSort={toggleSort}
+                  widthOf={widthOf}
+                  startResize={startResize}
+                />
+              ))}
             </tr>
           </thead>
           <tbody>
             {loading ? (
               <tr>
-                <td colSpan={7} className="px-3 py-10 text-center text-muted-foreground">
+                <td colSpan={OPER_COLUMNS.length} className="px-3 py-10 text-center text-muted-foreground">
                   加载中…
                 </td>
               </tr>
-            ) : rows.length === 0 ? (
+            ) : sorted.length === 0 ? (
               <tr>
-                <td colSpan={7} className="px-3 py-10 text-center text-muted-foreground">
+                <td colSpan={OPER_COLUMNS.length} className="px-3 py-10 text-center text-muted-foreground">
                   暂无日志
                 </td>
               </tr>
             ) : (
-              rows.map((row) => (
+              sorted.map((row) => (
                 <tr
                   key={row.id}
                   className="cursor-pointer border-b border-border/50 last:border-0 bg-table-row even:bg-table-stripe hover:bg-table-hover"
@@ -217,6 +356,29 @@ export function LoginLogListPage() {
   const [detail, setDetail] = useState<LoginLogItem | null>(null);
   const size = 20;
 
+  const { widthOf, startResize, hasCustom, reset: resetColWidths, tableStyle } = useColumnWidths(
+    LOGIN_COLUMNS,
+    'mis-login-log-table-widths',
+  );
+
+  const getValue = useCallback((row: LoginLogItem, key: string) => {
+    switch (key) {
+      case 'loginAt':
+        return row.loginAt ?? '';
+      case 'username':
+        return row.username;
+      case 'ip':
+        return row.ip ?? '';
+      case 'status':
+        return row.status;
+      case 'msg':
+        return row.msg ?? '';
+      default:
+        return null;
+    }
+  }, []);
+  const { sorted, sortKey, sortDir, toggleSort } = useClientSort(rows, getValue);
+
   const load = useCallback(async () => {
     setLoading(true);
     try {
@@ -241,8 +403,23 @@ export function LoginLogListPage() {
   const totalPages = Math.max(1, Math.ceil(total / size));
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col p-4 md:p-5">
-      <PageHeader title="登录日志" description="登录成功/失败审计。" />
+    <div className="flex min-h-0 flex-1 flex-col">
+      <PageHeader
+        title="登录日志"
+        description="登录成功/失败审计。"
+        breadcrumbs={buildAppBreadcrumbs({
+          app: 'system',
+          group: '审计',
+          title: '登录日志',
+        })}
+        actions={
+          hasCustom ? (
+            <Button type="button" variant="outline" size="sm" onClick={resetColWidths}>
+              重置列宽
+            </Button>
+          ) : null
+        }
+      />
       <div className="mb-3 flex flex-wrap gap-2">
         <Input
           className="h-9 w-40"
@@ -263,31 +440,37 @@ export function LoginLogListPage() {
         </Button>
       </div>
       <div className="min-h-0 flex-1 overflow-auto rounded-lg border bg-table-surface">
-        <table className="w-full bg-table-surface text-left text-sm">
-          <thead className="sticky top-0 z-10 border-b-2 border-foreground/20 bg-table-header text-muted-foreground backdrop-blur">
+        <table className="border-separate border-spacing-0 bg-table-surface text-left text-sm" style={tableStyle}>
+          <thead className="bg-table-header text-muted-foreground">
             <tr>
-              <th className="px-3 py-2 font-bold">时间</th>
-              <th className="px-3 py-2 font-bold">用户</th>
-              <th className="px-3 py-2 font-bold">IP</th>
-              <th className="px-3 py-2 font-bold">状态</th>
-              <th className="px-3 py-2 font-bold">消息</th>
+              {LOGIN_COLUMNS.map((col) => (
+                <SortableTh
+                  key={col.key}
+                  col={col}
+                  sortKey={sortKey}
+                  sortDir={sortDir}
+                  toggleSort={toggleSort}
+                  widthOf={widthOf}
+                  startResize={startResize}
+                />
+              ))}
             </tr>
           </thead>
           <tbody>
             {loading ? (
               <tr>
-                <td colSpan={5} className="px-3 py-10 text-center text-muted-foreground">
+                <td colSpan={LOGIN_COLUMNS.length} className="px-3 py-10 text-center text-muted-foreground">
                   加载中…
                 </td>
               </tr>
-            ) : rows.length === 0 ? (
+            ) : sorted.length === 0 ? (
               <tr>
-                <td colSpan={5} className="px-3 py-10 text-center text-muted-foreground">
+                <td colSpan={LOGIN_COLUMNS.length} className="px-3 py-10 text-center text-muted-foreground">
                   暂无日志
                 </td>
               </tr>
             ) : (
-              rows.map((row) => (
+              sorted.map((row) => (
                 <tr
                   key={row.id}
                   className="cursor-pointer border-b border-border/50 last:border-0 bg-table-row even:bg-table-stripe hover:bg-table-hover"

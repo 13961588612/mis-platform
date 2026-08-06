@@ -17,8 +17,12 @@ import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { PageHeader } from '@/components/common/page-header';
+import { buildAppBreadcrumbs } from '@/components/common/app-breadcrumbs';
 import { DetailDefList } from '@/components/common/detail-def-list';
 import { StatusBadge } from '@/components/common/list-page-skeleton';
+import { SortIndicator } from '@/components/common/sort-indicator';
+import { useClientSort } from '@/components/common/use-client-sort';
+import { useColumnWidths, type ResizableColumn } from '@/components/common/use-column-widths';
 import { PermissionGate } from '@/components/auth/permission-gate';
 import {
   Sheet,
@@ -54,6 +58,20 @@ import type { DeptNode, OrgItem, RoleItem, UserView } from '@/types/api';
 const fieldLabel = 'mb-[0.4rem] block text-sm font-medium text-foreground';
 const fieldInput =
   'h-auto min-h-9 w-full rounded-md border border-input bg-card px-[0.7rem] py-[0.55rem] text-sm text-foreground';
+
+const USER_COLUMNS: ResizableColumn[] = [
+  { key: 'employeeNo', label: '工号' },
+  { key: 'username', label: '用户名' },
+  { key: 'realName', label: '姓名' },
+  { key: 'deptName', label: '部门' },
+  { key: 'orgName', label: '组织' },
+  { key: 'phone', label: '手机' },
+  { key: 'status', label: '状态' },
+  { key: 'createdAt', label: '创建时间' },
+  { key: '__ops__', label: '操作', locked: true },
+];
+
+const thPad = 'px-3';
 
 type FormMode = 'create' | 'edit' | 'perms' | 'detail';
 
@@ -158,6 +176,35 @@ export function UserListPage() {
 
   const size = 20;
   const flatDepts = useMemo(() => flattenDepts(deptTree), [deptTree]);
+
+  const { widthOf, startResize, hasCustom, reset: resetColWidths, tableStyle } = useColumnWidths(
+    USER_COLUMNS,
+    'mis-user-table-widths',
+  );
+
+  const getValue = useCallback((row: UserView, key: string) => {
+    switch (key) {
+      case 'employeeNo':
+        return row.employeeNo ?? '';
+      case 'username':
+        return row.username;
+      case 'realName':
+        return row.realName ?? '';
+      case 'deptName':
+        return row.deptName ?? '';
+      case 'orgName':
+        return row.orgName ?? '';
+      case 'phone':
+        return row.phone ?? '';
+      case 'status':
+        return row.status;
+      case 'createdAt':
+        return row.createdAt ?? '';
+      default:
+        return null;
+    }
+  }, []);
+  const { sorted, sortKey, sortDir, toggleSort } = useClientSort(rows, getValue);
 
   // 最小合法 AdminPageDef：仅用于驱动 AI 表单回填桥接（schema 真源 = 本页表单字段）
   const userAiDef = useMemo<AdminPageDef>(
@@ -443,15 +490,26 @@ export function UserListPage() {
   }
 
   const totalPages = Math.max(1, Math.ceil(total / size));
+  const dataCols = USER_COLUMNS.filter((c) => !c.locked);
 
   return (
     <FormFillBridgeProvider value={bridge}>
-      <div className="flex min-h-0 flex-1 flex-col p-4 md:p-5">
+      <div className="flex min-h-0 flex-1 flex-col">
         <PageHeader
           title="用户管理"
           description="左侧部门树筛选，右侧用户列表；手机号已脱敏。"
+          breadcrumbs={buildAppBreadcrumbs({
+            app: 'system',
+            group: '权限中心',
+            title: '用户管理',
+          })}
           actions={
             <div className="flex gap-2">
+              {hasCustom ? (
+                <Button type="button" variant="outline" size="sm" onClick={resetColWidths}>
+                  重置列宽
+                </Button>
+              ) : null}
               <PermissionGate permission="system:user:add">
                 <Button size="sm" onClick={() => openCreate()}>
                   <Plus className="h-4 w-4" />
@@ -574,35 +632,68 @@ export function UserListPage() {
             </div>
 
             <div className="min-h-0 flex-1 overflow-auto bg-table-surface">
-              <table className="w-full min-w-[720px] bg-table-surface text-left text-sm">
-                <thead className="sticky top-0 z-10 border-b-2 border-foreground/20 bg-table-header text-muted-foreground backdrop-blur">
+              <table
+                className="border-separate border-spacing-0 bg-table-surface text-left text-sm"
+                style={tableStyle}
+              >
+                <thead className="bg-table-header text-muted-foreground">
                   <tr>
-                    <th className="px-3 py-2 font-bold">工号</th>
-                    <th className="px-3 py-2 font-bold">用户名</th>
-                    <th className="px-3 py-2 font-bold">姓名</th>
-                    <th className="px-3 py-2 font-bold">部门</th>
-                    <th className="px-3 py-2 font-bold">组织</th>
-                    <th className="px-3 py-2 font-bold">手机</th>
-                    <th className="px-3 py-2 font-bold">状态</th>
-                    <th className="px-3 py-2 font-bold">创建时间</th>
-                    <th className="px-3 py-2 font-bold">操作</th>
+                    {dataCols.map((col) => {
+                      const active = sortKey === col.key;
+                      return (
+                        <th
+                          key={col.key}
+                          aria-sort={active ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'none'}
+                          style={{ width: widthOf(col.key) }}
+                          className="whitespace-nowrap px-0 py-0 text-[13px] font-bold"
+                        >
+                          <button
+                            type="button"
+                            onClick={() => toggleSort(col.key)}
+                            className={cn(
+                              'flex w-full items-center gap-1 pr-5 text-left font-bold transition-colors',
+                              thPad,
+                              active ? 'text-foreground' : 'text-muted-foreground hover:text-foreground',
+                            )}
+                            aria-label={`按${col.label}排序`}
+                          >
+                            {col.label}
+                            <SortIndicator state={active ? sortDir : 'none'} />
+                          </button>
+                          <span
+                            role="separator"
+                            aria-orientation="vertical"
+                            onMouseDown={(e) => startResize(e, col.key)}
+                            onClick={(e) => e.stopPropagation()}
+                            className="absolute right-0 top-0 z-10 h-full w-1.5 cursor-col-resize touch-none select-none hover:bg-primary/30"
+                            title={`拖动调整${col.label}列宽`}
+                          />
+                        </th>
+                      );
+                    })}
+                    <th
+                      className="whitespace-nowrap px-0 py-0 text-[13px] font-bold"
+                      style={{ width: widthOf('__ops__') }}
+                    >
+                      <span className={cn('block font-bold text-muted-foreground', thPad)}>操作</span>
+                    </th>
                   </tr>
                 </thead>
                 <tbody>
                   {loading ? (
                     <tr>
-                <td colSpan={9} className="px-3 py-10 text-center text-muted-foreground">
-                  加载中…
-                </td>
+                      <td colSpan={USER_COLUMNS.length} className="px-3 py-10 text-center text-muted-foreground">
+                        加载中…
+                      </td>
                     </tr>
-                  ) : rows.length === 0 ? (
-                <tr>
-                  <td colSpan={9} className="px-3 py-10 text-center text-muted-foreground">
-                    暂无数据
-                  </td>
-                </tr>
+                  ) : sorted.length === 0 ? (
+                    <tr>
+                      <td colSpan={USER_COLUMNS.length} className="px-3 py-10 text-center text-muted-foreground">
+                        暂无数据
+                      </td>
+                    </tr>
                   ) : (
-                    rows.map((row) => (
+                    sorted.map((row) => (
                       <tr key={row.id} className="border-b border-border/50 last:border-0 bg-table-row even:bg-table-stripe hover:bg-table-hover">
                         <td className="px-3 py-2">{row.employeeNo ?? '—'}</td>
                         <td className="px-3 py-2">

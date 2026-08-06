@@ -1,5 +1,7 @@
+import { useMemo, useRef } from 'react';
 import type { ReactNode } from 'react';
 import { cn } from '@/lib/utils';
+import { useColumnWidths, type ResizableColumn } from '@/components/common/use-column-widths';
 
 /** 树表行必须携带的字段：稳定 id 与层级深度 */
 export interface TreeTableNode {
@@ -35,6 +37,8 @@ export interface TreeTableProps<T extends TreeTableNode> {
   /** 每层级缩进像素，默认 16 */
   indentSize?: number;
   className?: string;
+  /** 传入 localStorage 存储键即启用「拖拽改列宽 + 记忆 + 重置」；不传保持纯展示 */
+  storageKey?: string;
 }
 
 /**
@@ -60,25 +64,68 @@ export function TreeTable<T extends TreeTableNode>({
   emptyText = '暂无数据',
   indentSize = 16,
   className,
+  storageKey,
 }: TreeTableProps<T>) {
+  /* 列宽能力（可选）：传 storageKey 才启用，向后兼容纯展示用法 */
+  const baseColumns = useMemo<ResizableColumn[]>(() => {
+    const cols: ResizableColumn[] = columns.map((c) => ({ key: c.key, label: String(c.header) }));
+    if (rowActions) cols.push({ key: '__ops__', label: '操作', locked: true });
+    return cols;
+  }, [columns, rowActions]);
+  // 未启用时给一个实例级随机键，避免多个纯展示 TreeTable 相互串写 localStorage
+  const disabledKey = useRef(`tree-table-no-persist-${Math.random().toString(36).slice(2)}`);
+  const { widthOf, startResize, hasCustom, reset } = useColumnWidths(
+    baseColumns,
+    storageKey ?? disabledKey.current,
+  );
+  const resizable = storageKey !== undefined;
+
   return (
-    <table className={cn('w-full border-collapse bg-table-surface text-sm', className)}>
-      <thead className="sticky top-0 z-10 border-b-2 border-foreground/20 bg-table-header text-left text-sm font-bold text-muted-foreground backdrop-blur">
+    <div className={cn('relative', className)}>
+      {resizable && hasCustom ? (
+        <button
+          type="button"
+          onClick={reset}
+          className="absolute -top-8 right-0 z-20 rounded-md px-2 py-0.5 text-xs text-muted-foreground hover:bg-muted hover:text-foreground"
+        >
+          重置列宽
+        </button>
+      ) : null}
+      <table className={cn('w-full border-separate border-spacing-0 bg-table-surface text-sm', resizable && 'table-fixed')}>
+      <thead className="border-b-2 border-foreground/20 text-left text-sm font-bold text-muted-foreground">
         <tr>
-          {columns.map((col) => (
-            <th
-              key={col.key}
-              className={cn(
-                'px-2 py-1.5 font-bold',
-                col.align === 'right' && 'text-right',
-                col.align === 'center' && 'text-center',
-                col.className,
-              )}
-            >
-              {col.header}
-            </th>
-          ))}
-          {rowActions ? <th className="px-2 py-1.5 text-right font-bold">操作</th> : null}
+        {columns.map((col, ci) => (
+          <th
+            key={col.key}
+            style={resizable ? { width: widthOf(col.key) } : undefined}
+            className={cn(
+              'sticky top-0 z-10 bg-table-header px-2 py-1.5 font-bold',
+              ci > 0 && 'border-l border-border/60',
+              resizable && 'relative overflow-hidden',
+              col.align === 'right' && 'text-right',
+              col.align === 'center' && 'text-center',
+              col.className,
+            )}
+          >
+            {col.header}
+            {resizable ? (
+              <span
+                role="separator"
+                aria-label={`调整${String(col.header)}列宽`}
+                onMouseDown={(e) => startResize(e, col.key)}
+                className="absolute right-0 top-0 h-full w-[3px] cursor-col-resize"
+              />
+            ) : null}
+          </th>
+        ))}
+        {rowActions ? (
+          <th
+            style={resizable ? { width: widthOf('__ops__') } : undefined}
+            className="sticky top-0 z-10 border-l border-border/60 bg-table-header px-2 py-1.5 text-right font-bold"
+          >
+            操作
+          </th>
+        ) : null}
         </tr>
       </thead>
       <tbody>
@@ -102,13 +149,15 @@ export function TreeTable<T extends TreeTableNode>({
                 rowClassName?.(row),
               )}
             >
-              {columns.map((col) => {
+              {columns.map((col, ci) => {
                 const isTree = col.key === treeColumnKey;
                 return (
                   <td
                     key={col.key}
                     className={cn(
                       'px-2 py-1.5',
+                      ci > 0 && 'border-l border-border/60',
+                      resizable && !isTree && 'overflow-hidden whitespace-nowrap text-ellipsis',
                       col.align === 'right' && 'text-right',
                       col.align === 'center' && 'text-center',
                       col.className,
@@ -129,7 +178,7 @@ export function TreeTable<T extends TreeTableNode>({
                 );
               })}
               {rowActions ? (
-                <td className="px-2 py-1.5 text-right">
+                <td className="border-l border-border/60 px-2 py-1.5 text-right">
                   <span
                     className={cn(
                       'inline-flex items-center gap-1',
@@ -145,5 +194,6 @@ export function TreeTable<T extends TreeTableNode>({
         )}
       </tbody>
     </table>
+    </div>
   );
 }
