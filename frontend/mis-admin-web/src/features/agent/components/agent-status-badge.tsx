@@ -14,8 +14,10 @@ import type {
   AgentRole,
   AgentState,
   ApprovalStatus,
+  DispatchTrace,
   McpConnectionState,
   SkillStatus,
+  WecomBot,
 } from '../types';
 
 type BadgeVariant = NonNullable<BadgeProps['variant']>;
@@ -55,8 +57,34 @@ const APPROVAL_STATUS_MAP: Record<ApprovalStatus, BadgeSpec> = {
   rejected: { label: '已驳回', variant: 'destructive' },
 };
 
+/**
+ * 企微 Bot 健康态（UI#3）。
+ *
+ * <p>与 `mcpState` 取值高度相似但**刻意分表**：Bot 没有 `error` 态（WS 断开就是
+ * `disconnected`），共用一张表会让「MCP 新增了一个态」悄悄污染 Bot 页的文案。
+ */
+const WECOM_HEALTH_MAP: Record<WecomBot['health'], BadgeSpec> = {
+  connected: { label: '在线', variant: 'success' },
+  disconnected: { label: '离线', variant: 'secondary' },
+  unknown: { label: '未知', variant: 'outline' },
+};
+
+/** 调度链路执行结果（调度观测页）。 */
+const DISPATCH_STATUS_MAP: Record<DispatchTrace['status'], BadgeSpec> = {
+  success: { label: '成功', variant: 'success' },
+  failed: { label: '失败', variant: 'destructive' },
+  running: { label: '执行中', variant: 'info' },
+};
+
 /** 徽章类别；决定用哪张映射表。 */
-export type AgentBadgeKind = 'agentState' | 'agentRole' | 'skillStatus' | 'mcpState' | 'approval';
+export type AgentBadgeKind =
+  | 'agentState'
+  | 'agentRole'
+  | 'skillStatus'
+  | 'mcpState'
+  | 'approval'
+  | 'wecomHealth'
+  | 'dispatchStatus';
 
 const MAPS: Record<AgentBadgeKind, Record<string, BadgeSpec>> = {
   agentState: AGENT_STATE_MAP,
@@ -64,6 +92,8 @@ const MAPS: Record<AgentBadgeKind, Record<string, BadgeSpec>> = {
   skillStatus: SKILL_STATUS_MAP,
   mcpState: MCP_STATE_MAP,
   approval: APPROVAL_STATUS_MAP,
+  wecomHealth: WECOM_HEALTH_MAP,
+  dispatchStatus: DISPATCH_STATUS_MAP,
 };
 
 export interface AgentStatusBadgeProps {

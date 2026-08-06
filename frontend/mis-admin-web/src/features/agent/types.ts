@@ -62,6 +62,15 @@ export interface SkillGrant {
   permission_code: string;
   target_app_code: 'system' | 'agent';
   role_ids: number[];
+  /**
+   * 执行码是否已在 IAM 注册（impl-plan §5.4 / §11.3 Q1-b 方案 A）。
+   *
+   * <p>BFF 创建 Skill 时懒注册 `ai:skill:{id}:run`，注册失败**不回滚主流程**，
+   * 只回传 `false`。为 `false` 时授权页必须提示「码尚未注册，保存将顺带补建」，
+   * 否则运营会以为授权成功但运行时依旧 fail-closed 拒绝。
+   * 字段来自 Java 侧，故为 camelCase（与 `AgentRoleOption` 同理）。
+   */
+  permissionCodeRegistered?: boolean;
 }
 
 /** 授权选择器用的角色项（来源：IAM sys_role，camelCase）。 */
@@ -340,4 +349,69 @@ export interface Approval {
 export interface ApprovalDecisionPayload {
   approved: boolean;
   comment?: string;
+}
+
+// ------------------------------------------------------------------ 展示辅助（T05 增量）
+
+/**
+ * ISO 8601 UTC → 本地可读串（impl-plan §10.5「时间」约定）。
+ *
+ * <p>本 feature **自建**一份而不复用 `features/kb/types.ts` 的同名函数：
+ * `arch/no-cross-feature` 是 error 级，跨 feature import 直接构建失败。
+ * 与 `unwrap` / `cleanParams` 一样属于刻意的重复（§10.1 约定 1）。
+ */
+export function formatTime(iso: string | null | undefined): string {
+  if (!iso) return '-';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  return d.toLocaleString('zh-CN', { hour12: false });
+}
+
+/**
+ * 后端业务错误码 → 面向运营的中文文案（impl-plan §10.5「错误码」）。
+ *
+ * <p>键为错误码字符串，取值为**不带占位符**的固定文案；
+ * `AI_SKILL_FORBIDDEN` 需要拼具体权限码，单独在下方处理。
+ */
+const AGENT_ERROR_TEXTS: Record<string, string> = {
+  AI_ACL_UNAVAILABLE: '权限服务不可用，已按最小权限拒绝。请稍后重试或联系管理员。',
+  AI_OPS_FORBIDDEN: '缺少该运营操作的权限码，请联系管理员。',
+  CONFIG_CONFLICT: '文件已被他人修改，请重新加载后再保存。',
+  COORD_FIELD_NOT_APPLICABLE: '提交了与当前角色不匹配的字段（协调者/执行者字段互斥），请检查后重试。',
+};
+
+/** 从任意异常里尽量取出后端 message（不 import axios，纯鸭子类型探测）。 */
+function rawErrorMessage(error: unknown): string {
+  if (typeof error === 'string') return error;
+  if (error && typeof error === 'object') {
+    const shaped = error as {
+      response?: { data?: { message?: unknown } };
+      message?: unknown;
+    };
+    const fromBody = shaped.response?.data?.message;
+    if (typeof fromBody === 'string' && fromBody.length > 0) return fromBody;
+    if (typeof shaped.message === 'string') return shaped.message;
+  }
+  return '';
+}
+
+/**
+ * 统一错误提示：识别已知错误码则换成运营看得懂的话，否则透传后端 message。
+ *
+ * <p>为什么按**子串**匹配而不是精确等值：BFF 透传下游时 message 形如
+ * `AI_SKILL_FORBIDDEN: missing ai:skill:member.points:run`，
+ * 精确匹配会全部落到 fallback，等于这层文案白写。
+ */
+export function agentErrorMessage(error: unknown, fallback: string): string {
+  const raw = rawErrorMessage(error);
+  if (!raw) return fallback;
+
+  if (raw.includes('AI_SKILL_FORBIDDEN')) {
+    const code = /ai:skill:[^\s,'"]+:run/.exec(raw)?.[0];
+    return code ? `缺少权限码 ${code}，请联系管理员。` : '缺少该技能的执行权限码，请联系管理员。';
+  }
+  for (const [code, text] of Object.entries(AGENT_ERROR_TEXTS)) {
+    if (raw.includes(code)) return text;
+  }
+  return raw;
 }
