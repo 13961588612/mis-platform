@@ -399,6 +399,29 @@ class Settings(BaseSettings):
     CONFIG_WATCH_ENABLED: bool = True
     CONFIG_RELOAD_INTERVAL: int = 5
 
+    # ===== 会话持久化（T04 Q1 方案 B：Redis 热 + PG 冷双写）=====
+    #: 总开关。关掉后 SessionManager 退回「只写 Redis」的历史行为，
+    #: 运营后台的会话列表会读不到新数据 —— 仅在 PG 不可用需要临时降级时关闭。
+    SESSION_PG_DUAL_WRITE_ENABLED: bool = True
+    #: 单次 save_session 最多向 PG 补写多少条消息（按时间倒序取最近 N 条）。
+    #: 消息 id 是稳定 uuid + ``ON CONFLICT DO NOTHING``，重复补写幂等；
+    #: 设上限只是为了给单条 INSERT 语句的体积封顶。
+    SESSION_PG_MESSAGE_SYNC_LIMIT: int = 500
+    #: 会话标题自动截取长度（取首条 user 消息前 N 个字符）。
+    SESSION_TITLE_MAX_LENGTH: int = 60
+
+    # ===== 企微多 Bot（T04 Q4 方案 A：配置文件持久化）=====
+    #: 相对 CONFIG_BASE_PATH 的企微 Bot 清单文件路径。
+    WECOM_BOT_CONFIG_FILE: str = "channels/wecom-bots.yaml"
+    #: Gateway ⇄ backend 服务间共享令牌。
+    #:
+    #: Gateway 启动时需要拉取**含明文 secret** 的 Bot 运行时清单
+    #: （``GET /api/v1/channels/wecom/bots/runtime``），该端点不能用普通用户
+    #: 身份保护（任何登录用户都能读到明文密钥）。因此用一个独立的服务间
+    #: 共享令牌闸门：**留空 = 端点直接 503**（fail-closed），Gateway 自动
+    #: 降级为 ``WECOM_BOT_*`` 环境变量单 Bot 模式。
+    GATEWAY_INTERNAL_TOKEN: str = ""
+
     # ===== Agent Router =====
     AGENT_ROUTER_SESSION_AFFINITY_TTL: int = 1800
     AGENT_ROUTER_SEMANTIC_TOP_K: int = 5

@@ -22,6 +22,7 @@ import {
   shutdownServer,
   type GatewayServerConfig,
 } from './server.js';
+import { createBotConfigSourceFromEnv } from './config/botConfigSource.js';
 import { StreamConsumer } from './queue/redisStream.js';
 import type { InboundMessage } from './queue/redisStream.js';
 import { EventTransformer } from './router/EventTransformer.js';
@@ -112,22 +113,6 @@ function loadConfig(): GatewayServerConfig {
       agentId: process.env['WECOM_AGENT_ID'] ?? '',
       corpSecret: process.env['WECOM_SECRET'] ?? '',
       apiBaseUrl: process.env['WECOM_API_BASE_URL'] ?? 'https://qyapi.weixin.qq.com',
-    },
-    wecomBot: {
-      botId: process.env['WECOM_BOT_ID'] ?? '',
-      secret: process.env['WECOM_BOT_SECRET'] ?? '',
-      wsUrl: process.env['WECOM_BOT_WS_URL'] ?? 'wss://openws.work.weixin.qq.com',
-      heartbeatIntervalSec: parseInt(process.env['WECOM_BOT_HEARTBEAT_INTERVAL'] ?? '30', 10),
-      heartbeatTimeoutCount: 3,
-      maxReconnectAttempts: 10,
-      initialReconnectDelayMs: 1000,
-      maxReconnectDelayMs: 30000,
-      reconnectBackoffMultiplier: 2,
-      subscribeTimeoutMs: parseInt(process.env['WECOM_BOT_SUBSCRIBE_TIMEOUT_MS'] ?? '10000', 10),
-      sourceName: process.env['WECOM_BOT_SOURCE_NAME'] ?? 'AI智能助手',
-      ...(process.env['WECOM_BOT_SOURCE_ICON_URL'] != null
-        ? { sourceIconUrl: process.env['WECOM_BOT_SOURCE_ICON_URL'] }
-        : {}),
     },
     agentCoreApiUrl: process.env['AGENT_CORE_API_URL'] ?? 'http://backend:8000',
   };
@@ -243,7 +228,7 @@ async function main(): Promise<void> {
     const {
       app,
       wecomH5Adapter,
-      wecomBotAdapter,
+      botRegistry,
       h5Adapter,
       messageRouter,
       eventTransformer,
@@ -252,24 +237,17 @@ async function main(): Promise<void> {
     // 启动 HTTP 服务器
     await startServer(app, { port: config.port, host: config.host });
 
-    // 启动企业微信 Bot WebSocket 长连接（BotID + Secret → aibot_subscribe）
-    if (config.wecomBot.botId.length > 0 && config.wecomBot.secret.length > 0) {
-      try {
-        await wecomBotAdapter.start(async (inboundMessage: InboundMessage) => {
-          await messageRouter.route(inboundMessage);
-        });
-        logger.info({ botId: config.wecomBot.botId }, 'Wecom Bot adapter started');
-      } catch (error) {
-        logger.error(
-          { error: error instanceof Error ? error.message : String(error) },
-          'Failed to start Wecom Bot adapter, continuing without Bot',
-        );
-      }
-    } else {
-      logger.warn(
-        'WECOM_BOT_ID / WECOM_BOT_SECRET not configured, skipping Bot adapter startup',
-      );
-    }
+    // 启动企业微信多 Bot WebSocket 长连接（从 backend 拉取配置，环境变量兜底）
+    const botConfigSource = createBotConfigSourceFromEnv(config.agentCoreApiUrl);
+    const botConfigs = await botConfigSource.load();
+    botRegistry.register(botConfigs);
+    const startedBots = await botRegistry.startAll(async (inboundMessage: InboundMessage) => {
+      await messageRouter.route(inboundMessage);
+    });
+    logger.info(
+      { registered: botRegistry.size(), started: startedBots },
+      'Wecom Bot adapters startup finished',
+    );
 
     // 启动事件流消费者（消费 Agent Core 返回的事件）— 使用独立 Redis 连接
     const eventConsumer = new StreamConsumer(
@@ -299,14 +277,14 @@ async function main(): Promise<void> {
         // 企微 Bot：用 aibot_respond_msg 流式更新（收到消息时已回「思考中...」）
         if (channel === 'wecom-bot') {
           if (event.type === 'text.delta' && event.content != null) {
-            await wecomBotAdapter.onAgentTextDelta(message.sessionId, event.content);
+            await botRegistry.dispatchTextDelta(message.sessionId, event.content);
           } else if (event.type === 'error') {
-            await wecomBotAdapter.onAgentError(
+            await botRegistry.dispatchError(
               message.sessionId,
               event.errorMessage ?? event.errorCode ?? '处理出错',
             );
           } else if (event.type === 'done') {
-            await wecomBotAdapter.onAgentDone(message.sessionId);
+            await botRegistry.dispatchDone(message.sessionId);
           }
           return;
         }
@@ -334,7 +312,7 @@ async function main(): Promise<void> {
         port: config.port,
         wecomH5Connections: wecomH5Adapter.getConnectionCount(),
         h5Connections: h5Adapter.getConnectionCount(),
-        botConnected: wecomBotAdapter.isConnected(),
+        botConnected: botRegistry.connectedCount(),
       },
       'AI Platform Gateway is running',
     );
@@ -356,7 +334,7 @@ async function main(): Promise<void> {
       // 关闭服务器和适配器
       await shutdownServer(app, {
         wecomH5Adapter,
-        wecomBotAdapter,
+        botRegistry,
         h5Adapter,
       });
 

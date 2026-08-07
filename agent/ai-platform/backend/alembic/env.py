@@ -24,6 +24,7 @@ from src.models.base import Base  # noqa: E402
 # Import all model modules so that Base.metadata is fully populated
 import src.models.agent  # noqa: F401, E402
 import src.models.agent_memory  # noqa: F401, E402
+import src.models.agent_session  # noqa: F401, E402
 import src.models.session  # noqa: F401, E402
 import src.models.skill  # noqa: F401, E402
 import src.models.user  # noqa: F401, E402

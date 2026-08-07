@@ -350,6 +350,7 @@ def create_app() -> FastAPI:
     from src.api.routes.agent import router as agent_router
     from src.api.routes.agent_config_files import router as agent_config_files_router
     from src.api.routes.auth import router as auth_router
+    from src.api.routes.channels import router as channels_router
     from src.api.routes.files import router as files_router
     from src.api.routes.mcp import router as mcp_router
     from src.api.routes.mis_capability import router as mis_capability_router
@@ -361,6 +362,8 @@ def create_app() -> FastAPI:
     app.include_router(agent_config_files_router, prefix="/api/v1")
     app.include_router(auth_router, prefix="/api/v1")
     app.include_router(session_router, prefix="/api/v1")
+    # T04 O1f：企微多 Bot 管理（#48–#54），BFF /agent-ops/channels/** 透传至此
+    app.include_router(channels_router, prefix="/api/v1")
     app.include_router(files_router, prefix="/api/v1")
     app.include_router(skill_router, prefix="/api/v1/skills", tags=["skills"])
     app.include_router(mcp_router, prefix="/api/v1/mcp", tags=["mcp"])

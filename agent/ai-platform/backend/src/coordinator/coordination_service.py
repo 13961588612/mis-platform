@@ -308,7 +308,7 @@ def _cascade_remove_worker(worker_id: str) -> list[str]:
         被改写的 Coordinator agent_id 列表。
     """
     affected: list[str] = []
-    root: Path = agent_dir("").parent  # .../configs/agents
+    root: Path = agent_dir("")  # .../configs/agents
     if not root.exists():
         return affected
     for entry in root.iterdir():

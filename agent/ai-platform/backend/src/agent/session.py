@@ -3,11 +3,22 @@
 实现 session_id 命名规范（v1.4.1）：
   web-{uuid} / wecom-bot-{uuid} / wecom-h5-{uuid}
 
-会话状态存储在 Redis（主要存储，TTL 24 小时）和 PostgreSQL（备份）中。
+存储模型（T04 Q1 方案 B：双写）
+--------------------------------
+- **Redis 是权威热存储**（TTL 24 小时）：所有运行时读写走这里，延迟不变。
+- **PostgreSQL 是冷备投影**：``agent_session`` / ``agent_session_message`` 两张表，
+  由 :mod:`src.agent.session_store` 负责落库，供运营后台做列表 / 详情 / 消息回溯。
+
+改造前这个模块的 docstring 就写着「PostgreSQL 作为备份」，但代码从没写过 PG——
+TTL 一过历史就没了。本次把双写真正接上，并保证：
+
+1. **热路径零阻断**：PG 写失败只打 WARNING 并降级，绝不向上抛异常打断对话；
+2. **幂等**：会话 upsert、消息 ``ON CONFLICT DO NOTHING``，重复写不产生脏数据；
+3. **可关闭**：``SESSION_PG_DUAL_WRITE_ENABLED=false`` 即退回纯 Redis 行为。
 """
 
 from __future__ import annotations
-from typing import Any
+from typing import Any, Sequence
 
 import json
 import uuid
@@ -15,6 +26,13 @@ from datetime import datetime, timezone
 
 import redis.asyncio as aioredis
 
+from src.agent.session_store import (
+    MessagePage,
+    SessionListQuery,
+    SessionPage,
+    SessionPgStore,
+    get_session_pg_store,
+)
 from src.config import get_settings
 from src.utils.exceptions import SessionNotFoundError
 from src.utils.logging import get_logger
@@ -212,14 +230,44 @@ class SessionManager:
     管理会话生命周期：创建、恢复、持久化。
 
     使用 Redis 作为主要存储（TTL 24 小时）以实现快速访问，
-    将 PostgreSQL 作为持久化备份用于长期存储。
+    将 PostgreSQL 作为持久化备份用于长期存储（见 :class:`SessionPgStore`）。
+
+    双写发生在三个写入点：:meth:`create_session`、:meth:`ensure_session`、
+    :meth:`save_session`。由于 :meth:`add_message` 内部调用 ``save_session``，
+    消息也自动被覆盖，调用方无需改动任何现有代码。
     """
 
-    def __init__(self) -> None:
-        """初始化会话管理器（Redis 连接懒创建）。"""
+    def __init__(self, pg_store: SessionPgStore | None = None) -> None:
+        """初始化会话管理器（Redis 连接懒创建）。
+
+        Args:
+            pg_store: 可注入的 PG 冷存储实现，缺省取全局单例。测试里传入
+                替身即可在不连库的情况下断言双写行为。
+        """
         self._redis: aioredis.Redis | None = None
         self._settings = get_settings()
         self._session_ttl = 86400  # 24 小时
+        self._pg_store: SessionPgStore = pg_store or get_session_pg_store()
+
+    @property
+    def pg_store(self) -> SessionPgStore:
+        """返回底层 PG 冷存储（路由层做列表 / 详情查询时直接用）。"""
+        return self._pg_store
+
+    async def _dual_write(self, session: Session) -> None:
+        """把会话投影到 PG。失败只降级，不抛异常（热路径保护）。
+
+        Args:
+            session: 刚写入 Redis 的会话对象。
+        """
+        try:
+            await self._pg_store.upsert_session(session)
+        except Exception as exc:  # noqa: BLE001 - 双保险：store 内部已兜底，这里再兜一层
+            logger.warning(
+                "Session dual-write raised unexpectedly (degraded)",
+                session_id=session.session_id,
+                error=str(exc),
+            )
 
     async def _get_redis(self) -> aioredis.Redis:
         """获取或创建 Redis 连接。"""
@@ -295,6 +343,10 @@ class SessionManager:
             self._session_ttl,
             agent_id,
         )
+
+        # PG 冷备：创建即落库，保证运营后台能立刻看到「进行中」的空会话，
+        # 而不是等第一条消息到达才出现。
+        await self._dual_write(session)
 
         logger.info(
             "Session created",
@@ -380,6 +432,7 @@ class SessionManager:
             self._session_ttl,
             agent_id,
         )
+        await self._dual_write(session)
         logger.info(
             "Session ensured (created)",
             session_id=session_id,
@@ -417,7 +470,15 @@ class SessionManager:
         return session
 
     async def save_session(self, session: Session) -> None:
-        """将会话持久化到 Redis。"""
+        """将会话持久化到 Redis，并投影一份到 PG（双写）。
+
+        这是全平台最高频的会话写入点（``add_message`` / inbound_worker /
+        formfill / coordinator 全部经由此处），所以双写挂在这里能覆盖所有
+        新增消息，不需要逐个改调用方。
+
+        Args:
+            session: 待持久化的会话对象。
+        """
         redis: aioredis.Redis = await self._get_redis()
         session.updated_at = datetime.now(timezone.utc)
         await redis.setex(
@@ -425,6 +486,7 @@ class SessionManager:
             self._session_ttl,
             json.dumps(session.to_dict()),
         )
+        await self._dual_write(session)
 
     async def get_agent_binding(self, session_id: str) -> str | None:
         """获取会话绑定的 agent ID（用于会话亲和路由）。"""
@@ -441,10 +503,25 @@ class SessionManager:
         )
 
     async def close_session(self, session_id: str) -> None:
-        """关闭一个会话（从 Redis 中移除）。"""
+        """关闭一个会话：从 Redis 移除，并把 PG 里的状态标成 ``closed``。
+
+        注意 PG 侧**不删数据**——关闭只是结束热会话，历史消息要留给运营后台回溯。
+        真正的「删除」是 :meth:`delete_sessions`（软删除）。
+
+        Args:
+            session_id: 会话 ID。
+        """
         redis: aioredis.Redis = await self._get_redis()
         await redis.delete(self._session_key(session_id))
         await redis.delete(self._agent_binding_key(session_id))
+        try:
+            await self._pg_store.mark_closed(session_id)
+        except Exception as exc:  # noqa: BLE001 - 关闭失败不应让接口报错
+            logger.warning(
+                "Mark session closed in PG raised unexpectedly (degraded)",
+                session_id=session_id,
+                error=str(exc),
+            )
         logger.info("Session closed", session_id=session_id)
 
     async def add_message(
@@ -454,11 +531,181 @@ class SessionManager:
         content: str,
         metadata: dict[str, Any] | None = None,
     ) -> Message:
-        """向现有会话添加一条消息并持久化。"""
-        session: dict[str, Any] = await self.get_session(session_id)
+        """向现有会话添加一条消息并持久化（Redis + PG 双写）。
+
+        Args:
+            session_id: 会话 ID。
+            role: 消息角色。
+            content: 消息正文。
+            metadata: 可选元数据。
+
+        Returns:
+            新创建的消息对象。
+        """
+        session: Session = await self.get_session(session_id)
         msg: Message = session.add_message(role, content, metadata)
         await self.save_session(session)
         return msg
+
+    # ==================================================================
+    # 运营后台读路径（T04 #27–#31）：一律走 PG，Redis 无分页 / 过滤能力
+    # ==================================================================
+
+    async def list_sessions(self, query: SessionListQuery) -> SessionPage:
+        """分页查询会话列表（PG）。
+
+        Args:
+            query: 过滤 + 分页条件。
+
+        Returns:
+            一页会话数据。
+        """
+        return await self._pg_store.list_sessions(query)
+
+    async def get_session_record(self, session_id: str) -> dict[str, Any] | None:
+        """读取会话详情，PG 优先、Redis 兜底。
+
+        PG 优先的原因：只有 PG 有 ``title`` / ``message_count`` / ``agent_name``
+        这些列表页字段。但会话刚创建、双写尚未落地（或 PG 降级）时 PG 会查不到，
+        此时回落到 Redis 现场拼一份，保证「刚建的会话点不开详情」不会发生。
+
+        Args:
+            session_id: 会话 ID。
+
+        Returns:
+            前端 ``Session`` 契约的 dict；两边都没有则返回 ``None``。
+        """
+        record: dict[str, Any] | None = None
+        try:
+            record = await self._pg_store.get_session(session_id)
+        except Exception as exc:  # noqa: BLE001 - PG 不可用时仍要能看详情
+            logger.warning(
+                "Read session from PG failed, falling back to Redis",
+                session_id=session_id,
+                error=str(exc),
+            )
+        if record is not None:
+            return record
+
+        try:
+            session: Session = await self.get_session(session_id)
+        except SessionNotFoundError:
+            return None
+        return self._session_to_wire(session)
+
+    async def list_session_messages(
+        self,
+        session_id: str,
+        page: int = 1,
+        page_size: int = 50,
+    ) -> MessagePage:
+        """分页读取会话消息，PG 优先、Redis 兜底。
+
+        Args:
+            session_id: 会话 ID。
+            page: 页码，从 1 开始。
+            page_size: 每页条数。
+
+        Returns:
+            一页消息数据。
+        """
+        try:
+            page_result: MessagePage = await self._pg_store.list_messages(
+                session_id, page=page, page_size=page_size
+            )
+            if page_result.total > 0:
+                return page_result
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "Read messages from PG failed, falling back to Redis",
+                session_id=session_id,
+                error=str(exc),
+            )
+
+        # PG 里一条都没有：可能是双写尚未落地的新会话，用 Redis 现场分页。
+        try:
+            session: Session = await self.get_session(session_id)
+        except SessionNotFoundError:
+            return MessagePage(items=[], total=0, page=page, page_size=page_size)
+
+        all_messages: list[dict[str, Any]] = [
+            {
+                "id": msg.id,
+                "session_id": session_id,
+                "role": msg.role,
+                "content": msg.content,
+                "timestamp": msg.timestamp.isoformat(),
+                "metadata": msg.metadata or {},
+            }
+            for msg in session.messages
+        ]
+        start: int = max(page - 1, 0) * page_size
+        return MessagePage(
+            items=all_messages[start : start + page_size],
+            total=len(all_messages),
+            page=page,
+            page_size=page_size,
+        )
+
+    async def delete_sessions(self, session_ids: Sequence[str]) -> int:
+        """删除若干会话：PG 软删除 + Redis 热数据清理。
+
+        Args:
+            session_ids: 待删除的会话 ID 列表。
+
+        Returns:
+            PG 侧实际被标记删除的行数。
+        """
+        if not session_ids:
+            return 0
+
+        redis: aioredis.Redis = await self._get_redis()
+        for session_id in session_ids:
+            await redis.delete(self._session_key(session_id))
+            await redis.delete(self._agent_binding_key(session_id))
+
+        deleted: int = await self._pg_store.soft_delete(list(session_ids))
+        logger.info(
+            "Sessions deleted",
+            requested=len(session_ids),
+            soft_deleted=deleted,
+        )
+        return deleted
+
+    @staticmethod
+    def _session_to_wire(session: Session) -> dict[str, Any]:
+        """把 Redis 里的运行时会话拼成前端 ``Session`` 契约（兜底路径用）。
+
+        Args:
+            session: 运行时会话对象。
+
+        Returns:
+            与 PG 的 ``AgentSessionModel.to_wire()`` 字段完全一致的 dict——
+            两条路径必须同形，否则前端会因为缺字段而崩。
+        """
+        from src.agent.session_store import normalize_channel
+
+        title: str | None = None
+        for msg in session.messages:
+            if msg.role == "user" and (msg.content or "").strip():
+                flattened: str = " ".join(msg.content.split())
+                title = flattened[:60] + ("…" if len(flattened) > 60 else "")
+                break
+
+        return {
+            "session_id": session.session_id,
+            "agent_id": session.agent_id,
+            "agent_name": None,
+            "channel": normalize_channel(session.channel),
+            "user_id": session.user_id or None,
+            "user_name": session.user_mobile or None,
+            "title": title,
+            "status": "active",
+            "runtime_type": session.runtime_type or None,
+            "message_count": len(session.messages),
+            "created_at": session.created_at.isoformat(),
+            "updated_at": session.updated_at.isoformat(),
+        }
 
 
 # Singleton instance

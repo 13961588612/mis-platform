@@ -22,6 +22,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field, PrivateAttr, create_model
 
 from src.config import get_settings
+from src.config_manager.file_service import yaml
 from src.utils.logging import get_logger
 
 logger = get_logger("coordinator.catalog")

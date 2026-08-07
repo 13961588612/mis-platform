@@ -24,8 +24,8 @@ import { logger, registerLoggerMiddleware } from './middleware/logger.js';
 import { registerAuthMiddleware, type AuthConfig, type JwtClaims } from './middleware/auth.js';
 import { registerRateLimitMiddleware } from './middleware/rateLimit.js';
 import { WecomH5Adapter } from './adapters/wecom/WecomH5Adapter.js';
-import { WecomBotAdapter, type WecomBotAdapterConfig } from './adapters/wecom/WecomBotAdapter.js';
 import { H5Adapter } from './adapters/h5/H5Adapter.js';
+import { BotRegistry } from './channels/BotRegistry.js';
 import { MessageRouter } from './router/MessageRouter.js';
 import { EventTransformer } from './router/EventTransformer.js';
 import { ChannelResolver } from './router/ChannelResolver.js';
@@ -52,8 +52,6 @@ export interface GatewayServerConfig {
     corpSecret: string;
     apiBaseUrl: string;
   };
-  /** 企业微信 Bot 配置 */
-  wecomBot: WecomBotAdapterConfig;
   /** 后端 Agent Core API URL */
   agentCoreApiUrl: string;
 }
@@ -75,8 +73,8 @@ export async function createServer(
 ): Promise<{
   app: FastifyInstance;
   wecomH5Adapter: WecomH5Adapter;
-  wecomBotAdapter: WecomBotAdapter;
   h5Adapter: H5Adapter;
+  botRegistry: BotRegistry;
   messageRouter: MessageRouter;
   eventTransformer: EventTransformer;
 }> {
@@ -125,7 +123,7 @@ export async function createServer(
     apiBaseUrl: config.wecomH5.apiBaseUrl,
   });
 
-  const wecomBotAdapter = new WecomBotAdapter(config.wecomBot);
+  const botRegistry = new BotRegistry();
 
   const h5Adapter = new H5Adapter();
 
@@ -139,7 +137,7 @@ export async function createServer(
     app,
     redis,
     wecomH5Adapter,
-    wecomBotAdapter,
+    botRegistry,
     h5Adapter,
     messageRouter,
     eventTransformer,
@@ -154,7 +152,7 @@ export async function createServer(
   return {
     app,
     wecomH5Adapter,
-    wecomBotAdapter,
+    botRegistry,
     h5Adapter,
     messageRouter,
     eventTransformer,
@@ -172,7 +170,7 @@ function registerRoutes(
   app: FastifyInstance,
   _redis: Redis,
   wecomH5Adapter: WecomH5Adapter,
-  wecomBotAdapter: WecomBotAdapter,
+  botRegistry: BotRegistry,
   h5Adapter: H5Adapter,
   messageRouter: MessageRouter,
   eventTransformer: EventTransformer,
@@ -191,7 +189,8 @@ function registerRoutes(
         connections: {
           wecomH5: wecomH5Adapter.getConnectionCount(),
           h5: h5Adapter.getConnectionCount(),
-          wecomBot: wecomBotAdapter.isConnected() ? 1 : 0,
+          wecomBot: botRegistry.connectedCount(),
+          wecomBotTotal: botRegistry.size(),
         },
       },
       message: 'ok',
@@ -204,7 +203,7 @@ function registerRoutes(
   });
 
   app.get('/health/ready', async (req: FastifyRequest, reply: FastifyReply) => {
-    const botConnected = wecomBotAdapter.isConnected();
+    const botConnected = botRegistry.connectedCount() > 0;
     const ready = true; // 可根据实际依赖检查调整
     return reply.code(ready ? 200 : 503).send({
       code: ready ? 0 : 5001,
@@ -553,7 +552,7 @@ export async function shutdownServer(
   app: FastifyInstance,
   adapters: {
     wecomH5Adapter?: WecomH5Adapter;
-    wecomBotAdapter?: WecomBotAdapter;
+    botRegistry?: BotRegistry;
     h5Adapter?: H5Adapter;
   },
 ): Promise<void> {
@@ -561,7 +560,7 @@ export async function shutdownServer(
 
   // 关闭适配器连接
   adapters.wecomH5Adapter?.closeAllConnections();
-  adapters.wecomBotAdapter?.stop();
+  adapters.botRegistry?.stopAll();
   adapters.h5Adapter?.closeAllConnections();
 
   // 关闭 Fastify
