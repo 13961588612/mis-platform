@@ -18,6 +18,7 @@
 import api from '@/lib/api/client';
 import type { ApiResult } from '@/types/api';
 import type {
+  AgentCoordination,
   AgentDetail,
   AgentHealth,
   AgentPage,
@@ -28,7 +29,6 @@ import type {
   ApprovalDecisionPayload,
   ConfigFileContent,
   ConfigFileNode,
-  Coordination,
   CoordinationSaveResult,
   DispatchTrace,
   McpCallPayload,
@@ -38,6 +38,7 @@ import type {
   RouteLog,
   RouteStats,
   SaveConfigFilePayload,
+  SaveConfigFileResult,
   Session,
   SessionMessage,
   SessionQuery,
@@ -46,7 +47,8 @@ import type {
   SkillStats,
   WecomBot,
   WecomBotPayload,
-  WorkerCatalogEntry,
+  WorkerCatalog,
+  WorkerCatalogWorker,
 } from '../types';
 
 /** 统一解包 BFF `ApiResult`：code!=0 抛错（message 透传）。 */
@@ -75,6 +77,21 @@ function cleanParams(raw: Record<string, unknown>): Record<string, unknown> {
  */
 function seg(value: string): string {
   return encodeURIComponent(value);
+}
+
+/**
+ * 配置文件相对路径 → URL 路径段（**逐段**编码）。
+ *
+ * <p>ai-platform 的读/写端点把文件路径放在路径段里（`/config-files/{file_path:path}`），
+ * 后端收到后 `unquote` 还原。这里刻意**保留 `/` 作为分隔符**（只编码每段内容），
+ * 让 BFF 的 `{file:.*}` 路由能捕获完整相对路径；若对整个 path 做 `encodeURIComponent`，
+ * `/` 会变成 `%2F`，多数 Servlet 容器默认直接 400。
+ */
+function segPath(path: string): string {
+  return path
+    .split('/')
+    .map(seg)
+    .join('/');
 }
 
 // ------------------------------------------------------------------ 技能池（§4.3 #1–#9）
@@ -221,22 +238,41 @@ export async function getAgentHealth(id: string): Promise<AgentHealth> {
 
 // ------------------------------------------------------------------ Agent 技能绑定（§4.3 #20–#21）
 
-/** §4.3 #20 — agent:agent:skills */
+/**
+ * #20 — agent:agent:skills。
+ *
+ * <p>**下游返回的是对象而不是数组**：ai-platform `GET /agents/{id}/skills` 回的是
+ * `{agent_id, enabled_skill_ids, pool[]}`。这里把 `enabled_skill_ids` 摊平成
+ * `AgentSkillBinding[]`（`{skill_id, enabled: true}`），页面零改动即可继续消费。
+ */
 export async function getAgentSkills(id: string): Promise<AgentSkillBinding[]> {
-  const res = await api.get<ApiResult<AgentSkillBinding[]>>(`/agent-ops/agents/${seg(id)}/skills`);
-  return unwrap(res, '获取 Agent 技能绑定失败');
+  const res = await api.get<ApiResult<{ agent_id: string; enabled_skill_ids?: string[] }>>(
+    `/agent-ops/agents/${seg(id)}/skills`,
+  );
+  const wire = unwrap(res, '获取 Agent 技能绑定失败');
+  const ids = Array.isArray(wire.enabled_skill_ids) ? wire.enabled_skill_ids : [];
+  return ids.map((skill_id) => ({ skill_id, enabled: true }));
 }
 
-/** §4.3 #21 — agent:agent:skills:save */
+/**
+ * #21 — agent:agent:skills:save。
+ *
+ * <p>下游 `PUT /agents/{id}/skills` 只收 `{skill_ids: string[]}`（启用集合），
+ * 没有「已绑定但停用」的概念。这里把 `bindings` 压缩成启用 id 列表，
+ * 页面零改动即可继续提交。
+ */
 export async function saveAgentSkills(
   id: string,
   bindings: AgentSkillBinding[],
 ): Promise<AgentSkillBinding[]> {
-  const res = await api.put<ApiResult<AgentSkillBinding[]>>(
+  const skillIds = bindings.filter((b) => b.enabled).map((b) => b.skill_id);
+  const res = await api.put<ApiResult<{ agent_id: string; enabled_skill_ids?: string[] }>>(
     `/agent-ops/agents/${seg(id)}/skills`,
-    { bindings },
+    { skill_ids: skillIds },
   );
-  return unwrap(res, '保存 Agent 技能绑定失败');
+  const wire = unwrap(res, '保存 Agent 技能绑定失败');
+  const ids = Array.isArray(wire.enabled_skill_ids) ? wire.enabled_skill_ids : [];
+  return ids.map((skill_id) => ({ skill_id, enabled: true }));
 }
 
 // ------------------------------------------------------------------ 配置文件（§4.3 #22–#24）
@@ -249,23 +285,34 @@ export async function listConfigFiles(id: string): Promise<ConfigFileNode[]> {
   return unwrap(res, '获取配置文件列表失败');
 }
 
-/** §4.3 #23 — agent:agent:config */
+/**
+ * §4.3 #23 — agent:agent:config。
+ *
+ * <p>真实 wire 是**路径段**（`/config-files/{file_path:path}`），不是
+ * `/config-files/content?path=` 的 query 形式。BFF 已把 `content` 段收口为
+ * `{file}` 模板变量（见 AgentOpsClient#configFileContent），这里逐段编码 path。
+ */
 export async function getConfigFileContent(id: string, path: string): Promise<ConfigFileContent> {
   const res = await api.get<ApiResult<ConfigFileContent>>(
-    `/agent-ops/agents/${seg(id)}/config-files/content`,
-    { params: cleanParams({ path }) },
+    `/agent-ops/agents/${seg(id)}/config-files/${segPath(path)}`,
   );
   return unwrap(res, '读取配置文件失败');
 }
 
-/** §4.3 #24 — agent:agent:config:write。base_sha256 不符时后端返回 409 CONFIG_CONFLICT。 */
+/**
+ * §4.3 #24 — agent:agent:config:write。
+ *
+ * <p>path 走 URL 路径段；body **只发 `{content}`**（后端无 sha256 并发保护）。
+ * 响应是 `{path, masked, reloaded}`，不是完整 content —— 调用方保存后应重新拉取内容。
+ */
 export async function saveConfigFileContent(
   id: string,
+  path: string,
   payload: SaveConfigFilePayload,
-): Promise<ConfigFileContent> {
-  const res = await api.put<ApiResult<ConfigFileContent>>(
-    `/agent-ops/agents/${seg(id)}/config-files/content`,
-    payload,
+): Promise<SaveConfigFileResult> {
+  const res = await api.put<ApiResult<SaveConfigFileResult>>(
+    `/agent-ops/agents/${seg(id)}/config-files/${segPath(path)}`,
+    { content: payload.content },
   );
   return unwrap(res, '保存配置文件失败');
 }
@@ -273,15 +320,17 @@ export async function saveConfigFileContent(
 // ------------------------------------------------------------------ 调度配置（§4.3 #25–#26）
 
 /** §4.3 #25 — agent:agent:coordination */
-export async function getCoordination(id: string): Promise<Coordination> {
-  const res = await api.get<ApiResult<Coordination>>(`/agent-ops/agents/${seg(id)}/coordination`);
+export async function getCoordination(id: string): Promise<AgentCoordination> {
+  const res = await api.get<ApiResult<AgentCoordination>>(
+    `/agent-ops/agents/${seg(id)}/coordination`,
+  );
   return unwrap(res, '获取调度配置失败');
 }
 
 /** §4.3 #26 — agent:agent:coordination:save */
 export async function saveCoordination(
   id: string,
-  payload: Coordination,
+  payload: AgentCoordination,
 ): Promise<CoordinationSaveResult> {
   const res = await api.put<ApiResult<CoordinationSaveResult>>(
     `/agent-ops/agents/${seg(id)}/coordination`,
@@ -418,7 +467,13 @@ export async function listMcpTools(name: string): Promise<McpTool[]> {
 export interface McpServerPayload {
   name: string;
   transport: 'stdio' | 'sse' | 'http';
-  endpoint?: string;
+  /** ai-platform `RegisterServerRequest.endpoint: str` 必填（stdio 也必填）。 */
+  endpoint: string;
+  args?: string[];
+  env?: Record<string, string>;
+  timeout?: number;
+  auto_connect?: boolean;
+  description?: string;
 }
 
 /** §4.3 #38 — agent:mcp:manage */
@@ -458,35 +513,57 @@ export async function callMcpTool(name: string, payload: McpCallPayload): Promis
 
 // ------------------------------------------------------------------ Worker Catalog（§4.3 #43–#44）
 
-/** §4.3 #43 — agent:catalog:list */
-export async function getWorkerCatalog(): Promise<WorkerCatalogEntry[]> {
-  const res = await api.get<ApiResult<WorkerCatalogEntry[]>>('/agent-ops/catalog');
+/**
+ * §4.3 #43 — agent:catalog:list。
+ *
+ * <p>**下游返回聚合对象而不是数组**：ai-platform `GET /admin/worker-catalog` 回的是
+ * `{workers[], coordinators[], fallback}`。此前声明成数组、页面直接
+ * `entries.filter` 会 `entries.filter is not a function` 崩页。
+ */
+export async function getWorkerCatalog(): Promise<WorkerCatalog> {
+  const res = await api.get<ApiResult<WorkerCatalog>>('/agent-ops/catalog');
   return unwrap(res, '获取 Worker Catalog 失败');
 }
 
-/** §4.3 #44 — agent:catalog:manage */
+/**
+ * §4.3 #44 — agent:catalog:manage。
+ *
+ * <p>下游 `PUT /admin/worker-catalog` 只收 `{updates: [{agent_id, enabled?, when_to_use?}]}`，
+ * 不再接受整表 `{entries}`。本页定位为只读总览，此函数对齐 wire 供后续编辑能力使用。
+ */
 export async function saveWorkerCatalog(
-  entries: WorkerCatalogEntry[],
-): Promise<WorkerCatalogEntry[]> {
-  const res = await api.put<ApiResult<WorkerCatalogEntry[]>>('/agent-ops/catalog', { entries });
-  return unwrap(res, '保存 Worker Catalog 失败');
+  updates: Array<Partial<Pick<WorkerCatalogWorker, 'enabled' | 'when_to_use'>> & { agent_id: string }>,
+): Promise<WorkerCatalogWorker[]> {
+  const res = await api.put<ApiResult<{ updated?: WorkerCatalogWorker[] }>>('/agent-ops/catalog', {
+    updates,
+  });
+  const wire = unwrap(res, '保存 Worker Catalog 失败');
+  return wire.updated ?? [];
 }
 
 // ------------------------------------------------------------------ 调度观测（§4.3 #45–#47）
 
+/** 路由日志 / 统计共用查询条件（#46/#47）。 */
 export interface DispatchQuery {
   from?: string;
   to?: string;
   coordinator_id?: string;
-  status?: DispatchTrace['status'];
 }
 
-/** §4.3 #45 — agent:dispatch:list */
-export async function listDispatchTraces(query: DispatchQuery = {}): Promise<DispatchTrace[]> {
-  const res = await api.get<ApiResult<DispatchTrace[]>>('/agent-ops/dispatch/traces', {
-    params: cleanParams({ ...query }),
-  });
-  return unwrap(res, '获取调度链路失败');
+/**
+ * §4.3 #45 — agent:dispatch:list。
+ *
+ * <p>**下游返回 `{traces, total}` 信封**（ai-platform `query_dispatch_traces`），
+ * 且只支持 `session_id / worker_id / intent / limit / offset` 过滤 ——
+ * `from/to/coordinator_id/status` 均不支持，故这里只透传 `limit`，并剥掉信封返回 `traces`。
+ */
+export async function listDispatchTraces(limit = 100): Promise<DispatchTrace[]> {
+  const res = await api.get<ApiResult<{ traces?: DispatchTrace[]; total?: number }>>(
+    '/agent-ops/dispatch/traces',
+    { params: cleanParams({ limit }) },
+  );
+  const wire = unwrap(res, '获取调度链路失败');
+  return Array.isArray(wire.traces) ? wire.traces : [];
 }
 
 /** §4.3 #46 — agent:dispatch:list */

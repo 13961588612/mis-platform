@@ -1,21 +1,14 @@
 /**
  * 调度观测页（路径 `/agent/dispatch`，V19 菜单 `92036`，权限 `agent:dispatch:list`）。
  *
- * <p>三个端点的**就绪度不同**，因此本页刻意拆成两条互不牵连的加载链：
- *   - **主视图（已就绪）**：§4.3 #46 `listRouteLogs()` + #47 `listRouteStats()`
- *     —— 路由日志表 + 命中统计。真实数据。
- *   - **调度链路（pending）**：§4.3 #45 `listDispatchTraces()` —— ai-platform 侧
- *     尚无 trace 落库，BFF 返回 501。
- *
- * <p>**为什么 traces 必须独立成区块而不是并进主加载**：
- * 若用一次 `Promise.all` 拉三个端点，#45 的 501 会把已经能用的路由日志与命中统计
- * 一起拖进 error 态 —— 等于让一个未上线的次要能力，废掉两个已上线的主要能力。
- * 这里 traces 有自己的 loading / error / empty 与重试按钮，失败只塌陷自己那一块。
- *
- * <p>**筛选口径**：`from` / `to` / `coordinator_id` 三项对三个端点通用；
- * `status` 只对 traces 有意义（`RouteLog` / `RouteStats` 没有状态维度），
- * 故 status 下拉放在 traces 区块内，不放主筛选区 —— 放在上面会让用户以为
- * 它能过滤路由日志，然后困惑于"为什么选了失败还是这些行"。
+ * <p>三个区块的就绪度不同，但都是真实数据流：
+ *   - **主视图**：§4.3 #46 `listRouteLogs()` + #47 `listRouteStats()`
+ *     —— 路由日志表 + 命中统计。`from` / `to` / `coordinator_id` 三个筛选
+ *     只作用于这两个端点。
+ *   - **调度链路（traces）**：§4.3 #45 `listDispatchTraces()` —— T04 收口后
+ *     ai-platform 返回 `{traces, total}` 信封，只支持 `limit` 过滤（不支持
+ *     from/to/status/coordinator），故本区块固定拉最近 100 条、独立刷新，
+ *     与主筛选区解耦 —— 失败只塌陷自己那一块，不影响路由日志与命中统计。
  */
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Activity, GitBranch, Info, RefreshCw, Route, Target } from 'lucide-react';
@@ -65,15 +58,23 @@ const EMPTY_ROUTE_STATS: RouteStats = {
   avg_confidence: 0,
 };
 
+/**
+ * 调度链路列（对齐 `DispatchTrace` 真实 wire）。
+ *
+ * <p>key 必须与字段同名（排序走 `row[key]`）：时间是 `created_at`（不是
+ * `started_at`）、会话是 `session_id`（不是 `trace_id`）、协调者不在行内
+ * （trace 由当前 Agent 发起，无 `coordinator_id` 字段）、深度与 duration_ms
+ * 均不存在 —— 真实字段是 `tool` / `intent` / `latency_ms` / `brief_rejected`。
+ */
 const TRACE_COLS: ResizableColumn[] = [
-  { key: 'started_at', label: '开始时间' },
-  { key: 'trace_id', label: 'Trace ID' },
-  { key: 'coordinator_id', label: '协调者' },
+  { key: 'created_at', label: '时间' },
+  { key: 'session_id', label: '会话' },
   { key: 'worker_id', label: '执行者' },
-  { key: 'depth', label: '深度' },
-  { key: 'duration_ms', label: '耗时' },
+  { key: 'tool', label: '工具' },
+  { key: 'intent', label: '意图' },
+  { key: 'latency_ms', label: '耗时' },
   { key: 'status', label: '结果' },
-  { key: 'task_brief', label: '任务摘要', locked: true },
+  { key: 'brief_rejected', label: 'Brief 拒绝', locked: true },
 ];
 
 /**
@@ -112,7 +113,6 @@ export function AgentDispatchPage() {
   const [fromDate, setFromDate] = useState('');
   const [toDate, setToDate] = useState('');
   const [coordinatorId, setCoordinatorId] = useState('');
-  const [traceStatus, setTraceStatus] = useState<DispatchTrace['status'] | 'all'>('all');
 
   /** 已提交的查询条件；与输入态分开，避免改一个字符就打一次后端。 */
   const [applied, setApplied] = useState<DispatchQuery>({});
@@ -125,7 +125,7 @@ export function AgentDispatchPage() {
   const [logsError, setLogsError] = useState<string | null>(null);
   const [statsError, setStatsError] = useState<string | null>(null);
 
-  // ---- 独立区块：#45 调度链路（pending） ----
+  // ---- 独立区块：#45 调度链路（ready，固定拉最近 100 条） ----
   const [traces, setTraces] = useState<DispatchTrace[]>([]);
   const [tracesLoading, setTracesLoading] = useState(false);
   const [tracesError, setTracesError] = useState<string | null>(null);
@@ -161,11 +161,12 @@ export function AgentDispatchPage() {
     setLoading(false);
   }, []);
 
-  const loadTraces = useCallback(async (query: DispatchQuery) => {
+  const loadTraces = useCallback(async () => {
     setTracesLoading(true);
     setTracesError(null);
     try {
-      setTraces(await listDispatchTraces(query));
+      // #45 只支持 limit 过滤，固定拉最近 100 条；信封在 api 层已剥掉
+      setTraces(await listDispatchTraces(100));
     } catch (e) {
       setTraces([]);
       setTracesError(agentErrorMessage(e, '获取调度链路失败'));
@@ -191,10 +192,10 @@ export function AgentDispatchPage() {
   }, [loadMain, applied]);
 
   useEffect(() => {
-    void loadTraces({ ...applied, status: traceStatus === 'all' ? undefined : traceStatus });
-  }, [loadTraces, applied, traceStatus]);
+    void loadTraces();
+  }, [loadTraces]);
 
-  /** 点「查询」：把输入态固化成查询条件，两条加载链各自重跑。 */
+  /** 点「查询」：把输入态固化成查询条件，主视图重跑（traces 不受筛选影响）。 */
   function applyFilter(): void {
     setApplied({
       from: toIsoUtc(fromDate, false),
@@ -207,7 +208,6 @@ export function AgentDispatchPage() {
     setFromDate('');
     setToDate('');
     setCoordinatorId('');
-    setTraceStatus('all');
     setApplied({});
   }
 
@@ -274,7 +274,7 @@ export function AgentDispatchPage() {
       disabled={loading}
       onClick={() => {
         void loadMain(applied);
-        void loadTraces({ ...applied, status: traceStatus === 'all' ? undefined : traceStatus });
+        void loadTraces();
       }}
     >
       <RefreshCw className={cn('h-4 w-4', loading && 'animate-spin')} />
@@ -489,34 +489,19 @@ export function AgentDispatchPage() {
           </AgentContentState>
         </section>
 
-        {/* ---------------- 调度链路（#45 pending，独立塌陷） ---------------- */}
+        {/* ---------------- 调度链路（#45 ready，独立塌陷） ---------------- */}
         <section className="flex min-h-0 flex-col gap-2">
           <div className="flex flex-wrap items-end gap-2">
             <h2 className="text-sm font-medium text-foreground">调度链路（Traces）</h2>
-            <div className="w-36">
-              <select
-                className={selectClass}
-                value={traceStatus}
-                onChange={(e) =>
-                  setTraceStatus(e.target.value as DispatchTrace['status'] | 'all')
-                }
-              >
-                <option value="all">全部结果</option>
-                <option value="success">成功</option>
-                <option value="failed">失败</option>
-                <option value="running">执行中</option>
-              </select>
-            </div>
+            <span className="pb-1.5 text-xs text-muted-foreground">
+              最近 {traces.length} 条 · 固定取最新 100 条，不受上方筛选影响
+            </span>
             <Button
               size="sm"
               variant="outline"
+              className="ml-auto"
               disabled={tracesLoading}
-              onClick={() =>
-                void loadTraces({
-                  ...applied,
-                  status: traceStatus === 'all' ? undefined : traceStatus,
-                })
-              }
+              onClick={() => void loadTraces()}
             >
               <RefreshCw className={cn('h-4 w-4', tracesLoading && 'animate-spin')} />
               刷新链路
@@ -526,23 +511,18 @@ export function AgentDispatchPage() {
           <div className="flex gap-2 rounded-md border border-info/30 bg-info/5 p-3 text-xs text-muted-foreground">
             <Info className="mt-[0.1rem] h-3.5 w-3.5 shrink-0 text-info" />
             <p className="leading-relaxed">
-              调度链路依赖 ai-platform 侧的 trace 落库能力，尚未上线；此区块失败
-              <span className="font-medium text-foreground">不影响</span>
-              上方的路由日志与命中统计。后端就绪后点「刷新链路」即可，无需刷新浏览器。
+              调度链路来自 ai-platform 的 trace 落库，按时间倒序展示最近委派记录；
+              <span className="font-medium text-foreground">失败不影响</span>
+              上方的路由日志与命中统计。
             </p>
           </div>
 
           <AgentContentState
             loading={tracesLoading && traces.length === 0}
             error={tracesError}
-            onRetry={() =>
-              void loadTraces({
-                ...applied,
-                status: traceStatus === 'all' ? undefined : traceStatus,
-              })
-            }
+            onRetry={() => void loadTraces()}
             empty={!tracesLoading && !tracesError && traces.length === 0}
-            emptyText="所选范围内暂无调度链路"
+            emptyText="暂无调度链路"
             emptyHint="协调者派发任务后才会产生链路记录。"
           >
             <div className="relative max-h-[26rem] overflow-auto rounded-lg border bg-table-surface">
@@ -602,19 +582,19 @@ export function AgentDispatchPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {sortedTraces.map((trace) => (
+                  {sortedTraces.map((trace, index) => (
                     <tr
-                      key={trace.trace_id}
+                      key={`${trace.session_id}-${trace.task_id}-${index}`}
                       className="border-b border-border/50 bg-table-row last:border-0 even:bg-table-stripe hover:bg-table-hover"
                     >
                       <td className="whitespace-nowrap px-3 py-2 text-xs text-muted-foreground">
-                        {formatTime(trace.started_at)}
+                        {formatTime(trace.created_at)}
                       </td>
-                      <td className="truncate px-3 py-2 font-mono text-xs" title={trace.trace_id}>
-                        {trace.trace_id}
-                      </td>
-                      <td className="truncate px-3 py-2 text-xs" title={trace.coordinator_id}>
-                        {trace.coordinator_id}
+                      <td
+                        className="truncate px-3 py-2 font-mono text-xs"
+                        title={trace.session_id}
+                      >
+                        {trace.session_id || '-'}
                       </td>
                       <td
                         className="truncate px-3 py-2 text-xs"
@@ -622,18 +602,30 @@ export function AgentDispatchPage() {
                       >
                         {trace.worker_id || '-'}
                       </td>
-                      <td className="px-3 py-2 text-xs text-muted-foreground">{trace.depth}</td>
+                      <td
+                        className="truncate px-3 py-2 text-xs"
+                        title={trace.tool ?? ''}
+                      >
+                        {trace.tool || '-'}
+                      </td>
+                      <td
+                        className="truncate px-3 py-2 text-xs text-muted-foreground"
+                        title={trace.intent ?? ''}
+                      >
+                        {trace.intent || '-'}
+                      </td>
                       <td className="px-3 py-2 text-xs text-muted-foreground">
-                        {typeof trace.duration_ms === 'number' ? `${trace.duration_ms} ms` : '-'}
+                        {typeof trace.latency_ms === 'number' ? `${trace.latency_ms} ms` : '-'}
                       </td>
                       <td className="px-3 py-2">
                         <AgentStatusBadge kind="dispatchStatus" value={trace.status} />
                       </td>
-                      <td
-                        className="truncate px-3 py-2 text-xs text-muted-foreground"
-                        title={trace.task_brief ?? ''}
-                      >
-                        {trace.task_brief || '-'}
+                      <td className="px-3 py-2 text-xs">
+                        {trace.brief_rejected ? (
+                          <span className="text-warning">是</span>
+                        ) : (
+                          <span className="text-muted-foreground">-</span>
+                        )}
                       </td>
                     </tr>
                   ))}
@@ -645,7 +637,7 @@ export function AgentDispatchPage() {
 
         <p className="flex items-center gap-1.5 pb-1 text-xs text-muted-foreground">
           <GitBranch className="h-3.5 w-3.5" />
-          路由日志与命中统计来自 BFF 已就绪端点；调度链路待 ai-platform 侧 trace 落库后自动可用。
+          路由日志、命中统计与调度链路均来自 BFF 已就绪端点；调度链路固定取最新 100 条。
         </p>
       </div>
     </AgentPageShell>

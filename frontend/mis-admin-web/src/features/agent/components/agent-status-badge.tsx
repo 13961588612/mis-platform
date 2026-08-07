@@ -14,8 +14,7 @@ import type {
   AgentRole,
   AgentState,
   ApprovalStatus,
-  DispatchTrace,
-  McpConnectionState,
+  DispatchTraceStatus,
   SkillStatus,
   WecomBot,
 } from '../types';
@@ -44,13 +43,6 @@ const SKILL_STATUS_MAP: Record<SkillStatus, BadgeSpec> = {
   disabled: { label: '已停用', variant: 'secondary' },
 };
 
-const MCP_STATE_MAP: Record<McpConnectionState, BadgeSpec> = {
-  connected: { label: '已连接', variant: 'success' },
-  disconnected: { label: '未连接', variant: 'secondary' },
-  error: { label: '连接失败', variant: 'destructive' },
-  unknown: { label: '未知', variant: 'outline' },
-};
-
 /**
  * 审批状态文案表。
  *
@@ -70,8 +62,8 @@ const APPROVAL_STATUS_MAP: Record<ApprovalStatus, BadgeSpec> = {
 /**
  * 企微 Bot 健康态（UI#3）。
  *
- * <p>与 `mcpState` 取值高度相似但**刻意分表**：Bot 没有 `error` 态（WS 断开就是
- * `disconnected`），共用一张表会让「MCP 新增了一个态」悄悄污染 Bot 页的文案。
+ * <p>取值与 MCP 探测结果相似但**刻意分表**：Bot 没有 `error` 态（WS 断开就是
+ * `disconnected`），共用一张表会让「某处新增了一个态」悄悄污染 Bot 页的文案。
  */
 const WECOM_HEALTH_MAP: Record<WecomBot['health'], BadgeSpec> = {
   connected: { label: '在线', variant: 'success' },
@@ -79,10 +71,13 @@ const WECOM_HEALTH_MAP: Record<WecomBot['health'], BadgeSpec> = {
   unknown: { label: '未知', variant: 'outline' },
 };
 
-/** 调度链路执行结果（调度观测页）。 */
-const DISPATCH_STATUS_MAP: Record<DispatchTrace['status'], BadgeSpec> = {
-  success: { label: '成功', variant: 'success' },
+/** 委派轨迹执行结果（调度观测页；未登记的状态由 fallback 原样显示）。 */
+const DISPATCH_STATUS_MAP: Record<DispatchTraceStatus, BadgeSpec> = {
+  completed: { label: '成功', variant: 'success' },
+  rejected: { label: '已拒绝', variant: 'warning' },
   failed: { label: '失败', variant: 'destructive' },
+  killed: { label: '已终止', variant: 'destructive' },
+  timeout: { label: '超时', variant: 'warning' },
   running: { label: '执行中', variant: 'info' },
 };
 
@@ -91,7 +86,6 @@ export type AgentBadgeKind =
   | 'agentState'
   | 'agentRole'
   | 'skillStatus'
-  | 'mcpState'
   | 'approval'
   | 'wecomHealth'
   | 'dispatchStatus';
@@ -100,7 +94,6 @@ const MAPS: Record<AgentBadgeKind, Record<string, BadgeSpec>> = {
   agentState: AGENT_STATE_MAP,
   agentRole: AGENT_ROLE_MAP,
   skillStatus: SKILL_STATUS_MAP,
-  mcpState: MCP_STATE_MAP,
   approval: APPROVAL_STATUS_MAP,
   wecomHealth: WECOM_HEALTH_MAP,
   dispatchStatus: DISPATCH_STATUS_MAP,

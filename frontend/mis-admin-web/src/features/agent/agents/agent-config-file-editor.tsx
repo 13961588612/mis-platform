@@ -1,23 +1,24 @@
 /**
  * 配置文件编辑器（UI#9 右栏，§4.3 #23 读 / #24 写）。
  *
- * <p>后端 T04 未实现 ⇒ 两个端点当前返回 **501**，本组件走 `AgentContentState` 的
- * error 态 + 重试，**不白屏**。接好后无需改前端即自动转真数据。
+ * <p>T04 收口后两个端点已接真实数据流：读返回 `{content, masked, read_only, type}`，
+ * 写只发 `{content}`、响应为 `{path, masked, reloaded}`（**不含 content**），
+ * 故保存成功后必须重拉一次内容。
  *
  * <p>**为什么是纯 `<textarea>` 而不是 CodeMirror / Monaco**：impl-plan §2.1「零新框架」，
  * 禁止新增依赖。等宽字体 + 关闭拼写检查 + `Tab` 键插入两个空格，
  * 已覆盖 YAML / Markdown 的日常编辑需求；语法高亮不是本期验收项。
  *
- * <p>**三道保存护栏**（缺一都会造成真实的数据损坏）：
+ * <p>**两道保存护栏**（缺一都会造成真实的数据损坏）：
  *   1. `masked === true` ⇒ **禁用保存**。内容里的密钥已被替换成 `***`，
  *      整体回写会把 `***` 当成真值覆盖掉真密钥（impl-plan §4.4 必备护栏）;
- *   2. `editable === false` ⇒ 禁用保存。白名单只读项;
- *   3. `base_sha256` 并发保护。落后于磁盘时后端返回 **409 `CONFIG_CONFLICT`**，
- *      此时给专属提示「文件已被他人修改，请重新加载」并**就地给出「重新加载」按钮** ——
- *      只弹 toast 的话用户不知道下一步该干嘛，多半会反复点保存。
+ *   2. `read_only === true` ⇒ 禁用保存。白名单只读项。
+ *
+ * <p>**不再有第三道 sha256 并发护栏**：ai-platform 的写接口无并发保护能力
+ * （T04 前臆造的 `CONFIG_CONFLICT` 409 已不存在），冲突提示逻辑整体删除。
  */
 import { useCallback, useEffect, useState } from 'react';
-import { FileWarning, Lock, RefreshCw, RotateCcw, Save } from 'lucide-react';
+import { Lock, RefreshCw, RotateCcw, Save } from 'lucide-react';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
@@ -25,31 +26,19 @@ import { SubmitButton } from '@/components/common/submit-button';
 import { PermissionGate } from '@/components/auth/permission-gate';
 import { AgentContentState } from '../components/agent-page-shell';
 import { getConfigFileContent, saveConfigFileContent } from '../api/agent-ops-api';
-import { agentErrorMessage, formatTime } from '../types';
-import type { ConfigFileContent, ConfigFileNode } from '../types';
+import { agentErrorMessage } from '../types';
+import type { ConfigFileContent, ConfigFileTreeRow } from '../types';
 
 export interface AgentConfigFileEditorProps {
   agentId: string;
-  /** 当前选中的文件节点；null 时提示「请选择文件」。 */
-  file: ConfigFileNode | null;
+  /** 当前选中的文件节点；null 时提示「请选择文件」。目录节点不会被选中（无内容可读）。 */
+  file: ConfigFileTreeRow | null;
 }
 
-/** 冲突文案（impl-plan §10.5 错误码约定）。 */
-const CONFLICT_TEXT = '文件已被他人修改，请重新加载。';
-
-/** 判断异常是否为 409 CONFIG_CONFLICT（鸭子类型探测，不 import axios）。 */
-function isConfigConflict(error: unknown): boolean {
-  if (!error || typeof error !== 'object') {
-    return typeof error === 'string' && error.includes('CONFIG_CONFLICT');
-  }
-  const shaped = error as {
-    response?: { status?: unknown; data?: { code?: unknown; message?: unknown } };
-    message?: unknown;
-  };
-  if (shaped.response?.status === 409) return true;
-  const body = shaped.response?.data?.message;
-  if (typeof body === 'string' && body.includes('CONFIG_CONFLICT')) return true;
-  return typeof shaped.message === 'string' && shaped.message.includes('CONFIG_CONFLICT');
+/** 字节数 → 人类可读（目录不适用，编辑器只会拿到 file 节点）。 */
+function formatSize(sizeBytes: number): string {
+  if (sizeBytes < 1024) return `${sizeBytes} B`;
+  return `${(sizeBytes / 1024).toFixed(1)} KB`;
 }
 
 export function AgentConfigFileEditor({ agentId, file }: AgentConfigFileEditorProps) {
@@ -58,8 +47,6 @@ export function AgentConfigFileEditor({ agentId, file }: AgentConfigFileEditorPr
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
-  /** 并发冲突态：非空时在编辑器上方显示红条 + 重新加载入口。 */
-  const [conflict, setConflict] = useState<string | null>(null);
 
   const path = file?.path ?? '';
 
@@ -71,7 +58,6 @@ export function AgentConfigFileEditor({ agentId, file }: AgentConfigFileEditorPr
     }
     setLoading(true);
     setError(null);
-    setConflict(null);
     try {
       const content = await getConfigFileContent(agentId, path);
       setData(content);
@@ -90,30 +76,19 @@ export function AgentConfigFileEditor({ agentId, file }: AgentConfigFileEditorPr
   }, [load]);
 
   const masked = data?.masked === true;
-  const readOnly = data === null || masked || data.editable === false;
+  const readOnly = data === null || masked || data.read_only === true;
   const dirty = data !== null && draft !== data.content;
 
   async function onSave(): Promise<void> {
     if (!data || readOnly || saving) return;
     setSaving(true);
     try {
-      const saved = await saveConfigFileContent(agentId, {
-        path: data.path,
-        content: draft,
-        base_sha256: data.sha256,
-      });
-      setData(saved);
-      setDraft(saved.content);
-      setConflict(null);
+      // 后端只回 {path, masked, reloaded}，无 content → 保存后重拉最新内容
+      await saveConfigFileContent(agentId, path, { content: draft });
+      await load();
       toast.success('配置文件已保存');
     } catch (e) {
-      if (isConfigConflict(e)) {
-        // 专属处理：保留用户的编辑内容，只提示需要重新加载后再提交
-        setConflict(CONFLICT_TEXT);
-        toast.error(CONFLICT_TEXT);
-      } else {
-        toast.error(agentErrorMessage(e, '保存配置文件失败'));
-      }
+      toast.error(agentErrorMessage(e, '保存配置文件失败'));
     } finally {
       setSaving(false);
     }
@@ -149,7 +124,8 @@ export function AgentConfigFileEditor({ agentId, file }: AgentConfigFileEditorPr
             {file.path}
           </p>
           <p className="text-xs text-muted-foreground">
-            {file.format.toUpperCase()} · {file.size} 字节 · 更新于 {formatTime(file.updated_at)}
+            {(file.type || 'text').toUpperCase()} · {formatSize(file.size_bytes)} ·{' '}
+            {file.read_only ? '只读' : '可编辑'}
           </p>
         </div>
         <Button size="sm" variant="outline" onClick={() => void load()} disabled={loading}>
@@ -162,7 +138,6 @@ export function AgentConfigFileEditor({ agentId, file }: AgentConfigFileEditorPr
             variant="ghost"
             onClick={() => {
               setDraft(data?.content ?? '');
-              setConflict(null);
             }}
           >
             <RotateCcw className="h-4 w-4" />
@@ -208,30 +183,10 @@ export function AgentConfigFileEditor({ agentId, file }: AgentConfigFileEditorPr
               </div>
             ) : null}
 
-            {!masked && data?.editable === false ? (
+            {!masked && data?.read_only === true ? (
               <div className="flex gap-2 rounded-md border border-border bg-muted/30 p-3 text-xs text-muted-foreground">
                 <Lock className="mt-[0.1rem] h-3.5 w-3.5 shrink-0" />
                 <p>该文件在白名单中标记为只读，仅供查看。</p>
-              </div>
-            ) : null}
-
-            {/* 409 冲突：给出明确的下一步动作，而不是只弹一个 toast */}
-            {conflict ? (
-              <div className="flex flex-wrap items-center gap-2 rounded-md border border-destructive/40 bg-destructive/5 p-3 text-xs">
-                <FileWarning className="h-3.5 w-3.5 shrink-0 text-destructive" />
-                <span className="font-medium text-destructive">{conflict}</span>
-                <span className="text-muted-foreground">
-                  你的编辑内容仍保留在编辑框中，请先重新加载再手动合并。
-                </span>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  className="ml-auto"
-                  onClick={() => void load()}
-                >
-                  <RefreshCw className="h-4 w-4" />
-                  重新加载
-                </Button>
               </div>
             ) : null}
 
@@ -255,11 +210,6 @@ export function AgentConfigFileEditor({ agentId, file }: AgentConfigFileEditorPr
             <div className="flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
               <span>{draft.length} 字符</span>
               <span>{draft.split('\n').length} 行</span>
-              {data ? (
-                <span className="truncate font-mono" title={data.sha256}>
-                  base_sha256: {data.sha256.slice(0, 12)}…
-                </span>
-              ) : null}
               {dirty ? <span className="text-warning">有未保存的改动</span> : null}
             </div>
           </div>

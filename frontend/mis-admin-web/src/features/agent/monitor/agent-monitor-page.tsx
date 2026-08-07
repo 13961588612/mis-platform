@@ -4,6 +4,15 @@
  * <p>覆盖 §4.3 #55 `getMonitorOverview()`（运行指标，**已就绪**）与
  * #56 `resetFailover()`（熔断重置，操作码 `agent:monitor:operate`）。
  *
+ * <p>**T04 收口：真实 wire 是 BFF 三路聚合 `{proxy, llm, admin}`**：
+ *   - `proxy`：出站代理节点数组（`GET /admin/proxy/status`）；
+ *   - `llm`：LLM 网关状态（`GET /admin/llm/status`），含 `failover` 与
+ *     `providers: { name: {healthy_keys, key_stats} }`；
+ *   - `admin`：`GET /admin/health` 聚合出的 `proxy_nodes / healthy_proxy_nodes`。
+ * 前端臆造的 `proxy_status / agents_running / agents_total / llm_providers / updated_at`
+ * 全部删除 ——「运行中 / 已登记 Agent」卡在 wire 上无数据，一并删除
+ * （Agent 计数由概览页 / 列表页从 `listAgents()` 承担）。
+ *
  * <p>**本页是全 feature 唯一使用 react-query 的地方**（impl-plan §10.1 数据流约定）：
  * 其余 11 页一律 `useState + load() + useEffect`。这里破例是因为**只有本页需要轮询** ——
  * 盯盘场景下手动点刷新不现实，而自己写 `setInterval` 要处理组件卸载、
@@ -18,11 +27,10 @@
  * 可用态。若故障根因未消除，重置只是让流量重新打进一个坏节点、把快速失败换成大面积超时。
  * 因此走 `AgentConfirmDialog` 并在文案里写清这一点，而不是做成一键按钮。
  */
-import { useState } from 'react';
+import { Fragment, useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import {
   Activity,
-  CirclePlay,
   Cpu,
   RefreshCw,
   ServerCog,
@@ -39,29 +47,27 @@ import { AgentConfirmDialog } from '../components/agent-confirm-dialog';
 import { getMonitorOverview, resetFailover } from '../api/agent-ops-api';
 import { useAgentStore } from '../stores/use-agent-store';
 import { agentErrorMessage, formatTime } from '../types';
-import type { ProxyStatus } from '../types';
+import type { MonitorLlmProvider, MonitorOverview } from '../types';
 
 const selectClass =
   'h-9 rounded-md border border-input bg-card px-[0.7rem] text-sm text-foreground shadow-none';
-
-/**
- * Proxy 状态 → 中文 + 语义色（`AgentStatusBadge` 无此类别，仅此一处使用）。
- *
- * <p>与概览页同源问题：#55 的 wire 数据不保证带 `proxy_status`（见 types.ts），
- * 故键类型改用 `ProxyStatus` 并补 `unknown` 一档作为兜底文案。
- */
-const PROXY_STATUS_TEXT: Record<ProxyStatus, { label: string; cls: string }> = {
-  up: { label: '正常', cls: 'text-success' },
-  degraded: { label: '降级', cls: 'text-warning' },
-  down: { label: '不可用', cls: 'text-destructive' },
-  unknown: { label: '状态未知', cls: 'text-muted-foreground' },
-};
 
 const POLLING_OPTIONS = [5_000, 15_000, 30_000, 60_000];
 
 /** 待确认的熔断重置目标；`provider === null` 表示重置全部。 */
 interface PendingReset {
   provider: string | null;
+}
+
+/** 把 `llm.providers`（Record）摊平成带 `name` 的行，供明细表消费。 */
+function toProviderList(data: MonitorOverview | undefined): MonitorLlmProvider[] {
+  const providers = data?.llm?.providers;
+  if (!providers) return [];
+  return Object.entries(providers).map(([name, value]) => ({
+    name,
+    healthy_keys: value.healthy_keys,
+    key_stats: value.key_stats,
+  }));
 }
 
 export function AgentMonitorPage() {
@@ -71,6 +77,8 @@ export function AgentMonitorPage() {
   const setPollingIntervalMs = useAgentStore((s) => s.setPollingIntervalMs);
 
   const [pending, setPending] = useState<PendingReset | null>(null);
+  /** wire 无时间戳字段；fetch 成功时打点本地时间用于页脚展示。 */
+  const [loadedAt, setLoadedAt] = useState<Date | null>(null);
 
   const { data, isLoading, isFetching, error, refetch } = useQuery({
     queryKey: ['agent-ops', 'monitor', 'overview'],
@@ -78,9 +86,21 @@ export function AgentMonitorPage() {
     refetchInterval: pollingEnabled ? pollingIntervalMs : false,
   });
 
-  const providers = data?.llm_providers ?? [];
-  const healthyCount = providers.filter((p) => p.healthy).length;
-  const trippedCount = providers.filter((p) => p.tripped).length;
+  useEffect(() => {
+    if (data) setLoadedAt(new Date());
+  }, [data]);
+
+  const providers = toProviderList(data);
+  const providerCount = providers.length;
+  const healthyKeyTotal = providers.reduce(
+    (sum, p) => sum + (typeof p.healthy_keys === 'number' ? p.healthy_keys : 0),
+    0,
+  );
+  const isFailoverActive = data?.llm?.failover?.is_failover_active === true;
+  const activeProvider = data?.llm?.failover?.active_provider ?? '';
+  /** 每行可展开的 key 明细（provider 名 → 是否展开）。 */
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+
   const errorText = error ? agentErrorMessage(error, '获取监控总览失败') : null;
 
   /** #56 重置熔断：成功关弹窗 + 立即重取；失败保持打开让用户看清 toast。 */
@@ -130,11 +150,11 @@ export function AgentMonitorPage() {
         <Button
           size="sm"
           variant="destructive"
-          disabled={trippedCount === 0}
+          disabled={!isFailoverActive}
           onClick={() => setPending({ provider: null })}
         >
           <Zap className="h-4 w-4" />
-          重置全部熔断{trippedCount > 0 ? `（${trippedCount}）` : ''}
+          重置全部熔断{isFailoverActive ? '（1）' : ''}
         </Button>
       </PermissionGate>
     </>
@@ -151,38 +171,40 @@ export function AgentMonitorPage() {
       onRetry={() => void refetch()}
     >
       <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-auto">
-        <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+        <div className="grid grid-cols-2 gap-3 lg:grid-cols-3">
           <StatCard
-            label="Proxy 状态"
+            label="Proxy 健康"
             value={
-              data ? (PROXY_STATUS_TEXT[data.proxy_status ?? 'unknown']?.label ?? '状态未知') : '-'
+              data?.admin ? `${data.admin.healthy_proxy_nodes} / ${data.admin.proxy_nodes}` : '-'
             }
             icon={ServerCog}
           />
           <StatCard
-            label="运行中 / 已登记 Agent"
-            value={data ? `${data.agents_running} / ${data.agents_total}` : '-'}
-            icon={CirclePlay}
-          />
-          <StatCard
-            label="提供方健康"
-            value={data ? `${healthyCount} / ${providers.length}` : '-'}
+            label="模型提供方"
+            value={data ? providerCount : '-'}
             icon={Cpu}
+            description={data ? `健康 key 合计 ${healthyKeyTotal}` : undefined}
           />
           <StatCard
             label="熔断中"
-            value={data ? trippedCount : '-'}
+            value={data ? (isFailoverActive ? 1 : 0) : '-'}
             icon={ShieldAlert}
-            description={trippedCount > 0 ? '排障后再重置，否则会重新打爆下游' : undefined}
+            description={
+              data
+                ? isFailoverActive
+                  ? `当前提供方 ${activeProvider || '未知'}`
+                  : '未触发熔断'
+                : undefined
+            }
           />
         </div>
 
-        {/* ---------------- LLM 提供方明细（原生 table） ---------------- */}
+        {/* ---------------- LLM 提供方明细（原生 table + 展开 key_stats） ---------------- */}
         <div className="flex min-h-0 flex-col gap-2">
           <h2 className="text-sm font-medium text-foreground">
             模型提供方
             <span className="ml-2 text-xs font-normal text-muted-foreground">
-              共 {providers.length} 个
+              共 {providerCount} 个
             </span>
           </h2>
           <div className="overflow-auto rounded-lg border bg-table-surface">
@@ -191,13 +213,10 @@ export function AgentMonitorPage() {
                 <tr>
                   <th className="whitespace-nowrap px-3 py-2 font-bold">提供方</th>
                   <th className="whitespace-nowrap border-l border-border/60 px-3 py-2 font-bold">
-                    健康
+                    健康 Key
                   </th>
                   <th className="whitespace-nowrap border-l border-border/60 px-3 py-2 font-bold">
-                    熔断
-                  </th>
-                  <th className="whitespace-nowrap border-l border-border/60 px-3 py-2 font-bold">
-                    延迟
+                    Key 明细
                   </th>
                   <th className="whitespace-nowrap border-l border-border/60 px-3 py-2 text-right font-bold">
                     操作
@@ -207,53 +226,127 @@ export function AgentMonitorPage() {
               <tbody>
                 {providers.length === 0 ? (
                   <tr>
-                    <td colSpan={5} className="px-3 py-10 text-center text-muted-foreground">
+                    <td colSpan={4} className="px-3 py-10 text-center text-muted-foreground">
                       暂无模型提供方数据
                     </td>
                   </tr>
                 ) : (
-                  providers.map((provider) => (
-                    <tr
-                      key={provider.name}
-                      className="border-b border-border/50 bg-table-row last:border-0 even:bg-table-stripe hover:bg-table-hover"
-                    >
-                      <td className="truncate px-3 py-2 font-mono text-xs" title={provider.name}>
-                        {provider.name}
-                      </td>
-                      <td className="px-3 py-2 text-xs">
-                        {provider.healthy ? (
-                          <span className="text-success">健康</span>
-                        ) : (
-                          <span className="text-destructive">异常</span>
-                        )}
-                      </td>
-                      <td className="px-3 py-2 text-xs">
-                        {provider.tripped ? (
-                          <span className="text-warning">熔断中</span>
-                        ) : (
-                          <span className="text-muted-foreground">正常</span>
-                        )}
-                      </td>
-                      <td className="px-3 py-2 text-xs text-muted-foreground">
-                        {typeof provider.latency_ms === 'number' ? `${provider.latency_ms} ms` : '-'}
-                      </td>
-                      <td className="px-3 py-2">
-                        <div className="flex items-center justify-end gap-1">
-                          <PermissionGate permission="agent:monitor:operate">
+                  providers.map((provider) => {
+                    const open = expanded[provider.name] === true;
+                    const keyStats = Array.isArray(provider.key_stats) ? provider.key_stats : [];
+                    return (
+                      <Fragment key={provider.name}>
+                        <tr
+                          className="border-b border-border/50 bg-table-row last:border-0 even:bg-table-stripe hover:bg-table-hover"
+                        >
+                          <td className="px-3 py-2">
+                            <div className="truncate font-mono text-xs" title={provider.name}>
+                              {provider.name}
+                            </div>
+                          </td>
+                          <td className="px-3 py-2 text-xs">
+                            {typeof provider.healthy_keys === 'number' ? (
+                              provider.healthy_keys > 0 ? (
+                                <span className="text-success">{provider.healthy_keys}</span>
+                              ) : (
+                                <span className="text-destructive">{provider.healthy_keys}</span>
+                              )
+                            ) : (
+                              '-'
+                            )}
+                          </td>
+                          <td className="px-3 py-2 text-xs text-muted-foreground">
                             <button
                               type="button"
-                              disabled={!provider.tripped}
-                              className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[0.8125rem] text-primary hover:bg-primary/10 disabled:opacity-40"
-                              onClick={() => setPending({ provider: provider.name })}
+                              className="inline-flex items-center gap-1 text-primary hover:underline"
+                              onClick={() =>
+                                setExpanded((prev) => ({ ...prev, [provider.name]: !open }))
+                              }
                             >
-                              <Zap className="h-3 w-3" />
-                              重置熔断
+                              {keyStats.length} 条
+                              <span className={cn('transition-transform', open && 'rotate-180')}>
+                                ▾
+                              </span>
                             </button>
-                          </PermissionGate>
-                        </div>
-                      </td>
-                    </tr>
-                  ))
+                          </td>
+                          <td className="px-3 py-2">
+                            <div className="flex items-center justify-end gap-1">
+                              <PermissionGate permission="agent:monitor:operate">
+                                <button
+                                  type="button"
+                                  disabled={!isFailoverActive}
+                                  className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[0.8125rem] text-primary hover:bg-primary/10 disabled:opacity-40"
+                                  onClick={() => setPending({ provider: provider.name })}
+                                >
+                                  <Zap className="h-3 w-3" />
+                                  重置熔断
+                                </button>
+                              </PermissionGate>
+                            </div>
+                          </td>
+                        </tr>
+                        {open ? (
+                          <tr className="bg-muted/20">
+                            <td colSpan={4} className="px-3 py-2">
+                              {keyStats.length === 0 ? (
+                                <p className="px-2 py-2 text-xs text-muted-foreground">
+                                  该提供方暂无 Key 统计
+                                </p>
+                              ) : (
+                                <div className="overflow-x-auto">
+                                  <table className="w-full border-separate border-spacing-0 text-left text-xs">
+                                    <thead className="text-muted-foreground">
+                                      <tr>
+                                        <th className="px-2 py-1.5 font-bold">Label</th>
+                                        <th className="px-2 py-1.5 font-bold">状态</th>
+                                        <th className="px-2 py-1.5 font-bold">调用数</th>
+                                        <th className="px-2 py-1.5 font-bold">错误率</th>
+                                        <th className="px-2 py-1.5 font-bold">最后使用</th>
+                                      </tr>
+                                    </thead>
+                                    <tbody>
+                                      {keyStats.map((stat) => (
+                                        <tr
+                                          key={stat.label}
+                                          className="border-t border-border/40"
+                                        >
+                                          <td className="px-2 py-1.5 font-mono" title={stat.label}>
+                                            {stat.label}
+                                          </td>
+                                          <td className="px-2 py-1.5">
+                                            {stat.is_healthy ? (
+                                              <span className="text-success">健康</span>
+                                            ) : stat.is_active ? (
+                                              <span className="text-warning">活跃但异常</span>
+                                            ) : (
+                                              <span className="text-muted-foreground">未激活</span>
+                                            )}
+                                          </td>
+                                          <td className="px-2 py-1.5 text-muted-foreground">
+                                            {typeof stat.total_calls === 'number'
+                                              ? stat.total_calls
+                                              : '-'}
+                                          </td>
+                                          <td className="px-2 py-1.5 text-muted-foreground">
+                                            {typeof stat.error_rate === 'number'
+                                              ? `${(stat.error_rate * 100).toFixed(1)}%`
+                                              : '-'}
+                                          </td>
+                                          <td className="px-2 py-1.5 text-muted-foreground">
+                                            {formatTime(stat.last_used_at)}
+                                          </td>
+                                        </tr>
+                                      ))}
+                                    </tbody>
+                                  </table>
+                                </div>
+                              )}
+                            </td>
+                          </tr>
+                        ) : null}
+                      </Fragment>
+                    );
+                  })
                 )}
               </tbody>
             </table>
@@ -262,7 +355,7 @@ export function AgentMonitorPage() {
 
         <p className="flex items-center gap-1.5 pb-1 text-xs text-muted-foreground">
           <Activity className="h-3.5 w-3.5" />
-          数据更新于 {formatTime(data?.updated_at)}
+          数据更新于 {formatTime(loadedAt ? loadedAt.toISOString() : null)}
           {pollingEnabled ? ` · 每 ${pollingIntervalMs / 1000} 秒自动刷新` : ' · 自动刷新已关闭'}
         </p>
       </div>

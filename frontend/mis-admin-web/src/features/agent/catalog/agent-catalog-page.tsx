@@ -1,11 +1,12 @@
 /**
  * Worker Catalog 页（UI#10 全局视图，路径 `/agent/catalog`，V19 菜单 `92035`）。
  *
- * <p>覆盖 §4.3 #43 `getWorkerCatalog()`。**后端当前 pending**（`#43`/`#44` 在
- * ai-platform 侧无 HTTP 出口，BFF 返回 501），故列表区走 501 容错。
+ * <p>覆盖 §4.3 #43 `getWorkerCatalog()`。T04 收口后真实 wire 是**聚合对象**
+ * `{workers[], coordinators[], fallback}` —— 行内全是 worker，协调者是 `coordinators`
+ * 字符串数组（无元数据，仅计数展示）。
  *
  * <p>**为什么没有"就地编辑"，只有深链**：
- * §4.3 #44 `saveWorkerCatalog()` 是**整表覆盖**语义（`PUT /catalog` + `{entries}`），
+ * §4.3 #44 `saveWorkerCatalog()` 是**整表覆盖**语义（`PUT /catalog` + `{updates}`），
  * 在一个多人同时操作的运营台里做整表提交，等于把"最后保存者覆盖所有人"写进产品 ——
  * 而单 Agent 的 `PUT /agents/{id}/coordination`（#26）本身就有角色互斥校验与
  * 级联清理回执（`CoordinationSaveResult.affected_agents`）。
@@ -27,10 +28,9 @@ import { SortIndicator } from '@/components/common/sort-indicator';
 import { useClientSort } from '@/components/common/use-client-sort';
 import { useColumnWidths, type ResizableColumn } from '@/components/common/use-column-widths';
 import { AgentPageShell, AgentContentState } from '../components/agent-page-shell';
-import { AgentStatusBadge } from '../components/agent-status-badge';
 import { getWorkerCatalog } from '../api/agent-ops-api';
 import { agentErrorMessage } from '../types';
-import type { AgentRole, SafetyLevel, WorkerCatalogEntry } from '../types';
+import type { SecurityLevel, WorkerCatalog, WorkerCatalogWorker } from '../types';
 
 const selectClass =
   'h-9 w-full rounded-md border border-input bg-card px-[0.7rem] text-sm text-foreground shadow-none';
@@ -38,33 +38,30 @@ const selectClass =
 const CATALOG_COLS: ResizableColumn[] = [
   { key: 'display_name', label: '显示名' },
   { key: 'agent_id', label: 'Agent ID' },
-  { key: 'role', label: '角色' },
   { key: 'when_to_use', label: '适用场景（when_to_use）' },
-  { key: 'safety_level', label: '安全等级' },
+  { key: 'security_level', label: '安全等级' },
   { key: 'enabled', label: '可调度' },
   { key: '__ops__', label: '操作', locked: true },
 ];
 
-/** 与 `agents/agent-coordination-page.tsx` 的 SAFETY_OPTIONS 语义一致（此处为短标签版）。 */
-const SAFETY_TEXT: Record<SafetyLevel, { label: string; cls: string }> = {
-  low: { label: '低', cls: 'text-success' },
-  medium: { label: '中', cls: 'text-warning' },
-  high: { label: '高', cls: 'text-destructive' },
+/** 安全等级文案（真实 wire 仅两档：read_only / needs_hitl）。 */
+const SECURITY_TEXT: Record<SecurityLevel, { label: string; cls: string }> = {
+  read_only: { label: '只读', cls: 'text-info' },
+  needs_hitl: { label: '需人工审批（HITL）', cls: 'text-warning' },
 };
 
-/** 安全等级排序权重：高风险排在一端，便于集中复核。 */
-const SAFETY_WEIGHT: Record<SafetyLevel, number> = { low: 1, medium: 2, high: 3 };
+/** 安全等级排序权重：需人工审批排前面，便于集中复核。 */
+const SECURITY_WEIGHT: Record<SecurityLevel, number> = { needs_hitl: 1, read_only: 2 };
 
 export function AgentCatalogPage() {
   const navigate = useNavigate();
 
-  const [entries, setEntries] = useState<WorkerCatalogEntry[]>([]);
+  const [catalog, setCatalog] = useState<WorkerCatalog | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const [keyword, setKeyword] = useState('');
-  const [roleFilter, setRoleFilter] = useState<AgentRole | 'all'>('all');
-  const [safetyFilter, setSafetyFilter] = useState<SafetyLevel | 'all'>('all');
+  const [securityFilter, setSecurityFilter] = useState<SecurityLevel | 'all'>('all');
 
   const { widthOf, startResize, hasCustom, reset, tableStyle } = useColumnWidths(
     CATALOG_COLS,
@@ -75,9 +72,9 @@ export function AgentCatalogPage() {
     setLoading(true);
     setError(null);
     try {
-      setEntries(await getWorkerCatalog());
+      setCatalog(await getWorkerCatalog());
     } catch (e) {
-      setEntries([]);
+      setCatalog(null);
       setError(agentErrorMessage(e, '获取 Worker Catalog 失败'));
     } finally {
       setLoading(false);
@@ -88,31 +85,33 @@ export function AgentCatalogPage() {
     void load();
   }, [load]);
 
+  const workers = useMemo(() => catalog?.workers ?? [], [catalog]);
+
   const filtered = useMemo(() => {
     const kw = keyword.trim().toLowerCase();
-    return entries.filter((entry) => {
-      if (roleFilter !== 'all' && entry.role !== roleFilter) return false;
-      if (safetyFilter !== 'all' && (entry.safety_level ?? 'low') !== safetyFilter) return false;
+    return workers.filter((worker) => {
+      if (securityFilter !== 'all' && worker.security_level !== securityFilter) return false;
       if (!kw) return true;
       return (
-        entry.display_name.toLowerCase().includes(kw) ||
-        entry.agent_id.toLowerCase().includes(kw) ||
-        (entry.when_to_use ?? '').toLowerCase().includes(kw)
+        worker.display_name.toLowerCase().includes(kw) ||
+        worker.agent_id.toLowerCase().includes(kw) ||
+        (worker.when_to_use ?? '').toLowerCase().includes(kw)
       );
     });
-  }, [entries, keyword, roleFilter, safetyFilter]);
+  }, [workers, keyword, securityFilter]);
 
-  const getSortValue = useCallback((row: WorkerCatalogEntry, key: string) => {
-    if (key === 'safety_level') return SAFETY_WEIGHT[row.safety_level ?? 'low'];
-    return row[key as keyof WorkerCatalogEntry] as unknown;
+  const getSortValue = useCallback((row: WorkerCatalogWorker, key: string) => {
+    if (key === 'security_level') return SECURITY_WEIGHT[row.security_level];
+    return row[key as keyof WorkerCatalogWorker] as unknown;
   }, []);
   const { sorted, sortKey, sortDir, toggleSort } = useClientSort(filtered, getSortValue);
 
-  const workerCount = useMemo(() => entries.filter((e) => e.role === 'worker').length, [entries]);
-  const dispatchableCount = useMemo(() => entries.filter((e) => e.enabled).length, [entries]);
+  const workerCount = workers.length;
+  const coordinatorCount = useMemo(() => catalog?.coordinators.length ?? 0, [catalog]);
+  const dispatchableCount = useMemo(() => workers.filter((w) => w.enabled).length, [workers]);
   const highRiskCount = useMemo(
-    () => entries.filter((e) => e.safety_level === 'high').length,
-    [entries],
+    () => workers.filter((w) => w.security_level === 'needs_hitl').length,
+    [workers],
   );
 
   const headerActions = (
@@ -129,14 +128,14 @@ export function AgentCatalogPage() {
       permission="agent:catalog:list"
       actions={headerActions}
       /* 刻意不传 error：筛选区在 #43 未就绪时仍需可用，表格区自带三态 */
-      loading={loading && entries.length === 0 && error === null}
+      loading={loading && workers.length === 0 && error === null}
     >
       <div className="flex min-h-0 flex-1 flex-col gap-3">
         <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-          <StatCard label="Catalog 条目" value={entries.length} icon={ListChecks} />
           <StatCard label="执行者（Worker）" value={workerCount} icon={Users} />
+          <StatCard label="协调者（Coordinator）" value={coordinatorCount} icon={ListChecks} />
           <StatCard label="可被调度" value={dispatchableCount} icon={Settings2} />
-          <StatCard label="高风险（safety=high）" value={highRiskCount} icon={ShieldAlert} />
+          <StatCard label="需人工审批（needs_hitl）" value={highRiskCount} icon={ShieldAlert} />
         </div>
 
         <div className="flex gap-2 rounded-md border border-info/30 bg-info/5 p-3 text-xs text-muted-foreground">
@@ -159,29 +158,16 @@ export function AgentCatalogPage() {
               onChange={(e) => setKeyword(e.target.value)}
             />
           </div>
-          <div className="w-40">
-            <label className="mb-[0.4rem] block text-xs text-muted-foreground">角色</label>
-            <select
-              className={selectClass}
-              value={roleFilter}
-              onChange={(e) => setRoleFilter(e.target.value as AgentRole | 'all')}
-            >
-              <option value="all">全部角色</option>
-              <option value="coordinator">协调者</option>
-              <option value="worker">执行者</option>
-            </select>
-          </div>
-          <div className="w-40">
+          <div className="w-44">
             <label className="mb-[0.4rem] block text-xs text-muted-foreground">安全等级</label>
             <select
               className={selectClass}
-              value={safetyFilter}
-              onChange={(e) => setSafetyFilter(e.target.value as SafetyLevel | 'all')}
+              value={securityFilter}
+              onChange={(e) => setSecurityFilter(e.target.value as SecurityLevel | 'all')}
             >
               <option value="all">全部等级</option>
-              <option value="low">低</option>
-              <option value="medium">中</option>
-              <option value="high">高</option>
+              <option value="read_only">只读</option>
+              <option value="needs_hitl">需人工审批</option>
             </select>
           </div>
           <Button
@@ -189,24 +175,23 @@ export function AgentCatalogPage() {
             variant="ghost"
             onClick={() => {
               setKeyword('');
-              setRoleFilter('all');
-              setSafetyFilter('all');
+              setSecurityFilter('all');
             }}
           >
             重置
           </Button>
           <span className="ml-auto pb-1.5 text-xs text-muted-foreground">
-            共 {filtered.length} / {entries.length} 条
+            共 {filtered.length} / {workers.length} 条
           </span>
         </div>
 
         {/* ---------------- 表格区：独立三态（#43 pending 时只有这里变红） ---------------- */}
         <div className="flex min-h-0 flex-1 flex-col">
           <AgentContentState
-            loading={loading && entries.length === 0}
+            loading={loading && workers.length === 0}
             error={error}
             onRetry={() => void load()}
-            empty={!loading && !error && entries.length === 0}
+            empty={!loading && !error && workers.length === 0}
             emptyText="Catalog 暂无条目"
             emptyHint="Catalog 由各 Agent 的 metadata.yaml 汇总而来，请确认已有 Agent 配置了 when_to_use 等调度元数据。"
           >
@@ -282,39 +267,37 @@ export function AgentCatalogPage() {
                       </td>
                     </tr>
                   ) : (
-                    sorted.map((entry) => {
-                      // `?? 'low'` 只挡住 null/undefined；后端若给出未登记的等级，
-                      // 裸查表同样会得到 undefined 再在 `.label` 处崩，故再补一层 `??`。
-                      const safety = SAFETY_TEXT[entry.safety_level ?? 'low'] ?? SAFETY_TEXT.low;
+                    sorted.map((worker) => {
+                      const security =
+                        SECURITY_TEXT[worker.security_level] ?? SECURITY_TEXT.read_only;
                       return (
                         <tr
-                          key={entry.agent_id}
+                          key={worker.agent_id}
                           className="border-b border-border/50 bg-table-row last:border-0 even:bg-table-stripe hover:bg-table-hover"
                         >
                           <td
                             className="truncate px-3 py-2 font-medium"
-                            title={entry.display_name}
+                            title={worker.display_name}
                           >
-                            {entry.display_name}
+                            {worker.display_name}
                           </td>
                           <td
                             className="truncate px-3 py-2 font-mono text-xs"
-                            title={entry.agent_id}
+                            title={worker.agent_id}
                           >
-                            {entry.agent_id}
-                          </td>
-                          <td className="px-3 py-2">
-                            <AgentStatusBadge kind="agentRole" value={entry.role} />
+                            {worker.agent_id}
                           </td>
                           <td
                             className="truncate px-3 py-2 text-xs text-muted-foreground"
-                            title={entry.when_to_use ?? ''}
+                            title={worker.when_to_use ?? ''}
                           >
-                            {entry.when_to_use || '（未声明）'}
+                            {worker.when_to_use || '（未声明）'}
                           </td>
-                          <td className={cn('px-3 py-2 text-xs', safety.cls)}>{safety.label}</td>
+                          <td className={cn('px-3 py-2 text-xs', security.cls)}>
+                            {security.label}
+                          </td>
                           <td className="px-3 py-2 text-xs">
-                            {entry.enabled ? (
+                            {worker.enabled ? (
                               <span className="text-success">可调度</span>
                             ) : (
                               <span className="text-muted-foreground">已排除</span>
@@ -327,7 +310,7 @@ export function AgentCatalogPage() {
                                 className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[0.8125rem] text-primary hover:bg-primary/10"
                                 onClick={() =>
                                   navigate(
-                                    `/agent/agents/${encodeURIComponent(entry.agent_id)}/coordination`,
+                                    `/agent/agents/${encodeURIComponent(worker.agent_id)}/coordination`,
                                   )
                                 }
                               >

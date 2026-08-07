@@ -1,0 +1,198 @@
+%% T04 收口 · 类图：前端重写后的核心类型 + API 层 + BFF Client
+classDiagram
+    class Session {
+        +string session_id
+        +string agent_id
+        +string? agent_name
+        +SessionChannel channel
+        +string? user_id
+        +string? user_name
+        +string? title
+        +number message_count
+        +string created_at
+        +string updated_at
+    }
+    class SessionMessage {
+        +string id
+        +string session_id
+        +MessageRole role
+        +string content
+        +string timestamp
+        +Record~string,unknown~? metadata
+    }
+    class WecomBot {
+        +string bot_id
+        +string name
+        +boolean enabled
+        +string ws_url
+        +string secret_masked
+        +string? bound_agent_id
+        +string health
+    }
+    class ConfigFileNode {
+        +string path
+        +string type
+        +boolean read_only
+        +number size_bytes
+    }
+    class ConfigFileContent {
+        +string content
+        +boolean masked
+        +boolean read_only
+        +string type
+    }
+    class SaveConfigFilePayload {
+        +string content
+    }
+    class WorkerCatalogWorker {
+        +string agent_id
+        +string display_name
+        +string? when_to_use
+        +string[] capabilities
+        +string[] input_contract
+        +string output_contract
+        +string security_level
+        +boolean enabled
+    }
+    class WorkerCatalog {
+        +WorkerCatalogWorker[] workers
+        +string[] coordinators
+        +boolean fallback
+    }
+    class DispatchTraceItem {
+        +string intent
+        +string worker_id
+        +string tool
+        +string status
+        +number latency_ms
+        +string task_id
+        +boolean brief_rejected
+        +string session_id
+        +string created_at
+    }
+    class Approval {
+        +string approvalId
+        +string? sessionId
+        +string? agentId
+        +string? skillId
+        +string? userId
+        +ApprovalStatus status
+        +Record~string,unknown~? detail
+        +string createdAt
+        +string? resolvedAt
+        +string? comment
+        +number? timeoutSeconds
+    }
+    class McpServer {
+        +string name
+        +string transport
+        +string endpoint
+        +string[] args
+        +Record~string,string~ env
+        +number timeout
+        +boolean auto_connect
+        +string description
+    }
+    class McpTool {
+        +string name
+        +string? description
+        +Record~string,unknown~? inputSchema
+    }
+    class AgentSummary {
+        +string agent_id
+        +string display_name
+        +AgentState state
+        +string runtime_type
+        +number active_sessions
+        +boolean is_active
+        +AgentRole role
+    }
+    class MonitorProxyNode {
+        +string host
+        +number port
+        +string url
+        +boolean is_healthy
+        +number consecutive_failures
+        +number total_requests
+        +string? last_check_at
+    }
+    class MonitorLlmKeyStats {
+        +string label
+        +boolean is_active
+        +boolean is_healthy
+        +number total_calls
+        +number error_count
+        +number error_rate
+        +string? last_used_at
+    }
+    class MonitorOverview {
+        +MonitorProxyNode[] proxy
+        +object llm
+        +object admin
+    }
+    class AgentCoordination {
+        +string agent_id
+        +string role
+        +boolean routing_enabled
+        +CoordinationDelegation? delegation
+        +CoordinationCatalog? catalog
+    }
+    class CoordinationDelegation {
+        +boolean spawn_tools_enabled
+        +boolean enforce_task_brief
+        +number max_depth
+        +number timeout_seconds
+        +boolean emit_dispatch_trace
+        +boolean forbid_self_invoke
+        +string[] worker_ids
+    }
+    class CoordinationCatalog {
+        +boolean enabled
+        +string when_to_use
+        +string[] capabilities
+        +string[] input_contract
+        +string output_contract
+        +string security_level
+        +number timeout_seconds
+        +string degrade_message
+    }
+
+    class AgentOpsApi {
+        +listSessions(query) AgentPage~Session~
+        +getConfigFileContent(id, path) ConfigFileContent
+        +saveConfigFileContent(id, payload) ConfigFileContent
+        +getWorkerCatalog() WorkerCatalog
+        +listDispatchTraces(query) DispatchTraceItem[]
+        +getAgentSkills(id) AgentSkillBinding[]
+        +callMcpTool(name, payload) unknown
+        +decideApproval(id, payload) Approval
+        +getMonitorOverview() MonitorOverview
+        +listMcpServers() McpServer[]
+    }
+    class AgentOpsClient {
+        <<Java BFF>>
+        +listApprovals(query) JsonNode
+        +decideApproval(id, body) JsonNode
+        +configFileContent(id, path) JsonNode
+        +saveConfigFileContent(id, body) JsonNode
+        +proxyStatus() JsonNode
+        +llmStatus() JsonNode
+        +adminHealth() JsonNode
+    }
+
+    AgentOpsApi ..> Session : 返回
+    AgentOpsApi ..> ConfigFileNode : 返回
+    AgentOpsApi ..> WorkerCatalog : 返回
+    AgentOpsApi ..> DispatchTraceItem : 返回
+    AgentOpsApi ..> Approval : 返回
+    AgentOpsApi ..> McpServer : 返回
+    AgentOpsApi ..> MonitorOverview : 返回
+    AgentOpsApi ..> AgentSummary : 返回
+    AgentOpsApi ..> AgentCoordination : 返回
+    AgentOpsClient ..> MonitorOverview : BFF #55 聚合 {proxy,llm,admin}
+    AgentOpsClient ..> Approval : push/approvals 透传 camelCase
+    AgentCoordination *-- CoordinationDelegation
+    AgentCoordination *-- CoordinationCatalog
+    MonitorOverview *-- MonitorProxyNode
+    MonitorOverview *-- MonitorLlmKeyStats
+    WorkerCatalog *-- WorkerCatalogWorker

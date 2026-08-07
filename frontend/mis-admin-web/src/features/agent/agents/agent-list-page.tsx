@@ -47,7 +47,7 @@ const AGENT_COLS: ResizableColumn[] = [
   { key: 'agent_id', label: 'Agent ID' },
   { key: 'role', label: '角色' },
   { key: 'state', label: '状态' },
-  { key: 'enabled_skill_count', label: '已启用技能' },
+  { key: 'active_sessions', label: '活跃会话' },
   { key: '__ops__', label: '操作', locked: true },
 ];
 
@@ -107,8 +107,8 @@ export function AgentListPage() {
 
   const runningCount = useMemo(() => agents.filter((a) => a.state === 'running').length, [agents]);
   const errorCount = useMemo(() => agents.filter((a) => a.state === 'error').length, [agents]);
-  const skillCount = useMemo(
-    () => agents.reduce((sum, a) => sum + (a.enabled_skill_count ?? 0), 0),
+  const activeSessions = useMemo(
+    () => agents.reduce((sum, a) => sum + (a.active_sessions ?? 0), 0),
     [agents],
   );
 
@@ -150,7 +150,7 @@ export function AgentListPage() {
           <StatCard label="Agent 总数" value={agents.length} icon={Bot} />
           <StatCard label="运行中" value={runningCount} icon={CirclePlay} />
           <StatCard label="异常" value={errorCount} icon={TriangleAlert} />
-          <StatCard label="已启用技能合计" value={skillCount} icon={Sparkles} />
+          <StatCard label="活跃会话合计" value={activeSessions} icon={Sparkles} />
         </div>
 
         <div className="flex flex-wrap items-end gap-2 rounded-lg border bg-card p-3">
@@ -280,7 +280,7 @@ export function AgentListPage() {
                       <AgentStatusBadge kind="agentState" value={agent.state} />
                     </td>
                     <td className="px-3 py-2 text-xs text-muted-foreground">
-                      {agent.enabled_skill_count ?? 0}
+                      {agent.active_sessions ?? 0}
                     </td>
                     {/*
                       操作列吞掉行点击：否则点「停止」会在弹确认框的同时跳进详情页，

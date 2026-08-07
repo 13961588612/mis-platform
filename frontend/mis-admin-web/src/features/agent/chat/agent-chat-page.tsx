@@ -233,7 +233,7 @@ export function AgentChatPage() {
                 <AgentStatusBadge kind="agentState" value={selectedAgent.state} />
                 <AgentStatusBadge kind="agentRole" value={selectedAgent.role} />
                 <span className="text-xs text-muted-foreground">
-                  已启用技能 {selectedAgent.enabled_skill_count ?? 0}
+                  活跃会话 {selectedAgent.active_sessions ?? 0}
                 </span>
               </>
             ) : null}

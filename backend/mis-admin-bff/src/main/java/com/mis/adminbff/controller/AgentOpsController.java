@@ -158,16 +158,26 @@ public class AgentOpsController {
         return Result.ok(facade.configFileTree(id));
     }
 
-    /** #23 读取配置文件内容（T04 待建）。 */
-    @GetMapping("/agents/{id}/config-files/content")
-    public Result<JsonNode> configFileContent(@PathVariable String id, @RequestParam("path") String path) {
-        return Result.ok(facade.configFileContent(id, path));
+    /**
+     * #23 读取配置文件内容。
+     *
+     * <p>T04 收口：真实下游把文件路径放在路径段里（`/config-files/{file_path:path}`），
+     * BFF 侧同步改为 `{*file}` 捕获多段相对路径（含 `/`），不再用 `?path=` query
+     * （那会错打到名为 `content` 的文件）。前端按 `/` 逐段编码，此处拿到的
+     * `file` 已由容器解码为原相对路径。
+     */
+    @GetMapping("/agents/{id}/config-files/{*file}")
+    public Result<JsonNode> configFileContent(@PathVariable String id, @PathVariable("file") String file) {
+        return Result.ok(facade.configFileContent(id, file));
     }
 
-    /** #24 保存配置文件内容（T04 待建）。 */
-    @PutMapping("/agents/{id}/config-files/content")
-    public Result<JsonNode> saveConfigFileContent(@PathVariable String id, @RequestBody JsonNode body) {
-        return Result.ok(facade.saveConfigFileContent(id, body));
+    /** #24 保存配置文件内容（路径语义同上，body 仅 `{content}`）。 */
+    @PutMapping("/agents/{id}/config-files/{*file}")
+    public Result<JsonNode> saveConfigFileContent(
+            @PathVariable String id,
+            @PathVariable("file") String file,
+            @RequestBody JsonNode body) {
+        return Result.ok(facade.saveConfigFileContent(id, file, body));
     }
 
     /** #25 读取调度配置（T04 待建）。 */

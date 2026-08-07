@@ -166,14 +166,14 @@ public class AgentOpsFacadeService {
         return client.configFileTree(agentId);
     }
 
-    /** #23 读取配置文件（透传，T04 待建）。 */
+    /** #23 读取配置文件（透传，T04 已建）。 */
     public JsonNode configFileContent(String agentId, String path) {
         return client.configFileContent(agentId, path);
     }
 
-    /** #24 保存配置文件（透传，T04 待建）。 */
-    public JsonNode saveConfigFileContent(String agentId, JsonNode body) {
-        return client.saveConfigFileContent(agentId, body);
+    /** #24 保存配置文件（透传，T04 已建）。 */
+    public JsonNode saveConfigFileContent(String agentId, String path, JsonNode body) {
+        return client.saveConfigFileContent(agentId, path, body);
     }
 
     /** #25 读取调度配置（透传，T04 待建）。 */

@@ -2,6 +2,7 @@ package com.mis.adminbff.client;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.mis.adminbff.config.AgentOpsProperties;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Component;
@@ -48,6 +49,8 @@ public class AgentOpsClient extends AgentOpsTransport {
     private static final String SESSIONS = "/api/v1/sessions";
     private static final String MCP = "/api/v1/mcp";
     private static final String ADMIN = "/api/v1/admin";
+    /** HITL 审批与主动推送域（T04 收口：审批端点从 /admin 迁到 /push）。 */
+    private static final String PUSH = "/api/v1/push";
 
     public AgentOpsClient(
             @Qualifier("plainWebClientBuilder") WebClient.Builder plainBuilder,
@@ -175,22 +178,36 @@ public class AgentOpsClient extends AgentOpsTransport {
     }
 
     /**
-     * #23 {@code GET /api/v1/agents/{id}/config-files/content?path=}（T04 待建）。
+     * #23 {@code GET /api/v1/agents/{id}/config-files/{file}}。
      *
-     * <p>{@code path} 走 query 而非路径段：配置文件路径含 {@code /}，
-     * 塞进路径段会被解析成多级路径，白名单校验拿到的就不是原值了。
+     * <p>真实下游把文件路径放在<b>路径段</b>里（ai-platform
+     * `@router.get("/{agent_id}/config-files/{file_path:path}")`，随后 `unquote` 还原）。
+     * 这里用模板变量 `{file}` + {@code build(agentId, path)}：Spring 会把变量值里的
+     * `/` 编码成 `%2F`，下游 `unquote` 后再得到原路径 —— 不再走
+     * `/config-files/content?path=` 的 query 形式（那会错打到名为 `content` 的文件）。
      */
     public JsonNode configFileContent(String agentId, String path) {
-        return getJson(builder -> builder.path(AGENTS + "/{id}/config-files/content")
-                        .queryParam("path", path)
-                        .build(agentId),
-                "GET " + AGENTS + "/{id}/config-files/content");
+        return getJson(builder -> builder.path(AGENTS + "/{id}/config-files/{file}")
+                        .build(agentId, path),
+                "GET " + AGENTS + "/{id}/config-files/{file}");
     }
 
-    /** #24 {@code PUT /api/v1/agents/{id}/config-files/content}（T04 待建）。 */
-    public JsonNode saveConfigFileContent(String agentId, Object body) {
-        return putJson(builder -> builder.path(AGENTS + "/{id}/config-files/content").build(agentId), body,
-                "PUT " + AGENTS + "/{id}/config-files/content");
+    /**
+     * #24 {@code PUT /api/v1/agents/{id}/config-files/{file}}。
+     *
+     * <p>路径修正同上；body 只透传 `{content}`（下游 `WriteConfigFileRequest`
+     * 只认 content，无 sha256 并发保护）。从入参里摘出 content 重建对象，
+     * 避免旧客户端把 `path`/`base_sha256` 一起带过去被忽略或误伤。
+     */
+    public JsonNode saveConfigFileContent(String agentId, String path, Object body) {
+        Object outbound = body;
+        if (body instanceof JsonNode node && node.has("content")) {
+            outbound = mapper().createObjectNode().set("content", node.get("content"));
+        }
+        return putJson(builder -> builder.path(AGENTS + "/{id}/config-files/{file}")
+                        .build(agentId, path),
+                outbound,
+                "PUT " + AGENTS + "/{id}/config-files/{file}");
     }
 
     /** #25 {@code GET /api/v1/agents/{id}/coordination}（T04 待建）。 */
@@ -417,15 +434,37 @@ public class AgentOpsClient extends AgentOpsTransport {
                 "POST " + ADMIN + "/failover/reset");
     }
 
-    /** #57 {@code GET /api/v1/admin/approvals}（HITL，T04 待建）。 */
+    /**
+     * #57 {@code GET /api/v1/push/approvals}（HITL）。
+     *
+     * <p>T04 收口：真实下游在 `/push` 域（`api/routes/push.py`），不在 `/admin`。
+     * query 原样透传 `status` / `user_id` / `limit`。
+     */
     public JsonNode listApprovals(Map<String, String> query) {
-        return getJson(builder -> AgentOpsUri.query(builder.path(ADMIN + "/approvals"), query).build(),
-                "GET " + ADMIN + "/approvals");
+        return getJson(builder -> AgentOpsUri.query(builder.path(PUSH + "/approvals"), query).build(),
+                "GET " + PUSH + "/approvals");
     }
 
-    /** #58 {@code POST /api/v1/admin/approvals/{id}/decision}（HITL，T04 待建）。 */
+    /**
+     * #58 {@code POST /api/v1/push/approvals/{id}/respond}（HITL）。
+     *
+     * <p>T04 收口两处修正：路径从 `/admin/approvals/{id}/decision` 迁到
+     * `/push/approvals/{id}/respond`；body 从前端透传的 `{approved, comment}`
+     * 加工成下游契约 `{decision: "approved"|"rejected", comment}` —— 归一下游
+     * 契约是 BFF 的既有职责，前端 `decideApproval` 语义保持不变。
+     */
     public JsonNode decideApproval(String approvalId, Object body) {
-        return postJson(builder -> builder.path(ADMIN + "/approvals/{id}/decision").build(approvalId), body,
-                "POST " + ADMIN + "/approvals/{id}/decision");
+        boolean approved = false;
+        String comment = "";
+        if (body instanceof JsonNode node) {
+            approved = node.path("approved").asBoolean(false);
+            comment = node.path("comment").asText("");
+        }
+        ObjectNode outbound = mapper().createObjectNode();
+        outbound.put("decision", approved ? "approved" : "rejected");
+        outbound.put("comment", comment == null ? "" : comment);
+        return postJson(builder -> builder.path(PUSH + "/approvals/{id}/respond").build(approvalId),
+                outbound,
+                "POST " + PUSH + "/approvals/{id}/respond");
     }
 }

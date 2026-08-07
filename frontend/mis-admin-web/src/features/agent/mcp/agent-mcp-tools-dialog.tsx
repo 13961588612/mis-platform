@@ -58,7 +58,7 @@ export interface AgentMcpToolsDialogProps {
   onOpenChange: (open: boolean) => void;
   /** 目标 Server；null 时不渲染内容。 */
   server: McpServer | null;
-  /** discover 成功后回调，供外层刷新 tool_count。 */
+  /** discover 成功后回调，供外层刷新列表。 */
   onDiscovered?: () => void;
 }
 
@@ -124,7 +124,7 @@ export function AgentMcpToolsDialog({
     if (!serverName || !activeTool || !parsedArgs.ok) return;
     try {
       const result = await callMcpTool(serverName, {
-        tool: activeTool.name,
+        tool_name: activeTool.name,
         arguments: parsedArgs.value,
       });
       setCallResult(JSON.stringify(result, null, 2));
@@ -203,7 +203,7 @@ export function AgentMcpToolsDialog({
                 <tbody>
                   {tools.map((tool) => {
                     const paramCount = Object.keys(
-                      (tool.input_schema?.properties as Record<string, unknown> | undefined) ?? {},
+                      (tool.inputSchema?.properties as Record<string, unknown> | undefined) ?? {},
                     ).length;
                     return (
                       <tr
@@ -215,7 +215,7 @@ export function AgentMcpToolsDialog({
                           {tool.description ?? '-'}
                         </td>
                         <td className="px-3 py-2 text-xs text-muted-foreground">
-                          {tool.input_schema ? `${paramCount} 个字段` : '未声明'}
+                          {tool.inputSchema ? `${paramCount} 个字段` : '未声明'}
                         </td>
                         <td className="px-3 py-2 text-right">
                           {/* 无 fallback：无 agent:mcp:call 的用户完全看不到此入口 */}

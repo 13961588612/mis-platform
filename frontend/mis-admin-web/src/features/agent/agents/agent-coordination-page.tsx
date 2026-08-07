@@ -1,8 +1,14 @@
 /**
  * C–W 调度配置（UI#10，路径 `/agent/agents/:id/coordination`，V19 菜单 `92045`）。
  *
- * <p>覆盖 §4.3 #25 读（后端 T04 未实现 ⇒ **501**）/ #26 写（同 pending）
- * / #13 列 Agent（**已就绪**，用于 `allowed_workers` 候选）。
+ * <p>覆盖 §4.3 #25 读 / #26 写 / #13 列 Agent（**已就绪**，用于 `worker_ids` 候选）。
+ *
+ * <p>**T05 收口：真实 wire 是嵌套结构 `AgentCoordination`**
+ * `{agent_id, role, routing_enabled, delegation?, catalog?}` ——
+ * coordinator 字段收进 `delegation`、worker 字段收进 `catalog`。
+ * 此前扁平化的 `when_to_use / safety_level / allowed_workers / max_depth /
+ * max_fanout / task_brief_template` 全部不存在；`safety_level` 的真实名是
+ * `security_level`，且仅 `read_only | needs_hitl` 两档。
  *
  * <p>**role 取值是 `coordinator` | `worker`**，不是 "scheduler"。
  * 契约见 impl-plan §4.5 与 `types.ts` 的 `AgentRole` —— 它直接映射到
@@ -11,10 +17,11 @@
  *
  * <p>**C/W 字段互斥**（§4.5 校验 1）：提交不适用的字段服务端返回
  * `COORD_FIELD_NOT_APPLICABLE`。所以这里**按 role 分表单**，且提交时
- * `buildPayload()` 只挑当前 role 适用的字段 —— 不能把两组字段都发过去。
+ * `buildPayload()` 只挑当前 role 适用的嵌套段（delegation 或 catalog），
+ * 另一段置 null —— 不能把两组字段都发过去。
  *
  * <p>**role 切换要强二次确认**（§4.5 校验 4）：worker → coordinator 会触发服务端
- * 级联清理，把该 agent 从所有其它 coordinator 的 `allowed_workers` 里摘掉。
+ * 级联清理，把该 agent 从所有其它 coordinator 的 `worker_ids` 里摘掉。
  * 这是会影响别人配置的操作，故用 `confirmKeyword` 强确认（逐字输入 agentId），
  * 并在保存成功后把响应里的 `affected_agents[]` 显式列给运营看。
  */
@@ -31,10 +38,17 @@ import { AgentContentState } from '../components/agent-page-shell';
 import { AgentConfirmDialog } from '../components/agent-confirm-dialog';
 import { getCoordination, listAgents, saveCoordination } from '../api/agent-ops-api';
 import { agentErrorMessage } from '../types';
-import type { AgentRole, AgentSummary, Coordination, SafetyLevel } from '../types';
+import type {
+  AgentCoordination,
+  AgentRole,
+  AgentSummary,
+  SecurityLevel,
+} from '../types';
 
 const selectClass =
   'h-9 w-full rounded-md border border-input bg-card px-[0.7rem] text-sm text-foreground shadow-none';
+
+const fieldLabel = 'mb-[0.4rem] block text-xs text-muted-foreground';
 
 export interface AgentCoordinationPageProps {
   agentId: string;
@@ -54,76 +68,144 @@ const ROLE_OPTIONS: Array<{ value: AgentRole; label: string; hint: string }> = [
   },
 ];
 
-const SAFETY_OPTIONS: Array<{ value: SafetyLevel; label: string }> = [
-  { value: 'low', label: '低 — 只读 / 无副作用' },
-  { value: 'medium', label: '中 — 有限写入，可回滚' },
-  { value: 'high', label: '高 — 不可逆写入，需审批' },
+/** 安全等级（真实 wire 仅两档：read_only / needs_hitl）。 */
+const SECURITY_OPTIONS: Array<{ value: SecurityLevel; label: string }> = [
+  { value: 'read_only', label: '只读 — 无副作用' },
+  { value: 'needs_hitl', label: '需人工审批（HITL）— 写操作前必须有人确认' },
 ];
 
-/** 表单态：把 Coordination 的可选字段摊平成受控输入需要的非空值。 */
+/** 文本域（按行展开成数组）与数值（字符串受控）的中间态。 */
 interface FormState {
   role: AgentRole;
+  routing_enabled: boolean;
+  // delegation（coordinator）
+  spawn_tools_enabled: boolean;
+  enforce_task_brief: boolean;
+  max_depth: string;
+  delegation_timeout_seconds: string;
+  emit_dispatch_trace: boolean;
+  forbid_self_invoke: boolean;
+  worker_ids: string[];
+  // catalog（worker）
+  catalog_enabled: boolean;
   when_to_use: string;
+  capabilities: string;
   input_contract: string;
   output_contract: string;
-  safety_level: SafetyLevel;
-  allowed_workers: string[];
-  max_depth: string;
-  max_fanout: string;
-  task_brief_template: string;
+  security_level: SecurityLevel;
+  catalog_timeout_seconds: string;
+  degrade_message: string;
 }
 
 const EMPTY_FORM: FormState = {
   role: 'worker',
+  routing_enabled: true,
+  spawn_tools_enabled: true,
+  enforce_task_brief: true,
+  max_depth: '3',
+  delegation_timeout_seconds: '60',
+  emit_dispatch_trace: true,
+  forbid_self_invoke: true,
+  worker_ids: [],
+  catalog_enabled: true,
   when_to_use: '',
+  capabilities: '',
   input_contract: '',
   output_contract: '',
-  safety_level: 'low',
-  allowed_workers: [],
-  max_depth: '',
-  max_fanout: '',
-  task_brief_template: '',
+  security_level: 'read_only',
+  catalog_timeout_seconds: '60',
+  degrade_message: '',
 };
 
-/** 后端契约 → 表单态。 */
-function toForm(c: Coordination): FormState {
+/** 字符串数组 → 文本域（每行一项）。 */
+function toLines(arr: string[] | undefined): string {
+  return Array.isArray(arr) ? arr.join('\n') : '';
+}
+
+/** 文本域 → 字符串数组（按行拆分 + 去空 + 去重）。 */
+function toList(text: string): string[] {
+  return Array.from(
+    new Set(
+      text
+        .split('\n')
+        .map((line) => line.trim())
+        .filter((line) => line.length > 0),
+    ),
+  );
+}
+
+/** 后端嵌套契约 → 表单态。 */
+function toForm(c: AgentCoordination): FormState {
+  const delegation = c.delegation;
+  const catalog = c.catalog;
   return {
     role: c.role,
-    when_to_use: c.when_to_use ?? '',
-    input_contract: c.input_contract ?? '',
-    output_contract: c.output_contract ?? '',
-    safety_level: c.safety_level ?? 'low',
-    allowed_workers: c.allowed_workers ?? [],
-    max_depth: c.max_depth === undefined ? '' : String(c.max_depth),
-    max_fanout: c.max_fanout === undefined ? '' : String(c.max_fanout),
-    task_brief_template: c.task_brief_template ?? '',
+    routing_enabled: c.routing_enabled,
+    spawn_tools_enabled: delegation?.spawn_tools_enabled ?? true,
+    enforce_task_brief: delegation?.enforce_task_brief ?? true,
+    max_depth: delegation?.max_depth === undefined ? '3' : String(delegation.max_depth),
+    delegation_timeout_seconds:
+      delegation?.timeout_seconds === undefined ? '60' : String(delegation.timeout_seconds),
+    emit_dispatch_trace: delegation?.emit_dispatch_trace ?? true,
+    forbid_self_invoke: delegation?.forbid_self_invoke ?? true,
+    worker_ids: delegation?.worker_ids ?? [],
+    catalog_enabled: catalog?.enabled ?? true,
+    when_to_use: catalog?.when_to_use ?? '',
+    capabilities: toLines(catalog?.capabilities),
+    input_contract: toLines(catalog?.input_contract),
+    output_contract: catalog?.output_contract ?? '',
+    security_level: catalog?.security_level ?? 'read_only',
+    catalog_timeout_seconds:
+      catalog?.timeout_seconds === undefined ? '60' : String(catalog.timeout_seconds),
+    degrade_message: catalog?.degrade_message ?? '',
   };
 }
 
+/** 数值文本域 → number；空或非法时给兜底值，避免把 NaN 发给下游。 */
+function toNumber(text: string, fallback: number): number {
+  const n = Number.parseInt(text, 10);
+  return Number.isFinite(n) && n >= 1 ? n : fallback;
+}
+
 /**
- * 表单态 → 提交契约，**只带当前 role 适用的字段**。
+ * 表单态 → 提交契约，**只带当前 role 适用的嵌套段**。
  *
  * <p>带上不适用的字段会被服务端以 `COORD_FIELD_NOT_APPLICABLE` 整体拒绝（§4.5 校验 1），
- * 所以这里必须裁剪，而不是把 `EMPTY_FORM` 的残留一起发过去。
+ * 所以这里把另一段置 null，而不是把残留一起发过去。
  */
-function buildPayload(form: FormState): Coordination {
-  if (form.role === 'worker') {
+function buildPayload(agentId: string, form: FormState): AgentCoordination {
+  if (form.role === 'coordinator') {
     return {
-      role: 'worker',
-      when_to_use: form.when_to_use.trim(),
-      input_contract: form.input_contract.trim(),
-      output_contract: form.output_contract.trim(),
-      safety_level: form.safety_level,
+      agent_id: agentId,
+      role: 'coordinator',
+      routing_enabled: form.routing_enabled,
+      delegation: {
+        spawn_tools_enabled: form.spawn_tools_enabled,
+        enforce_task_brief: form.enforce_task_brief,
+        max_depth: toNumber(form.max_depth, 3),
+        timeout_seconds: toNumber(form.delegation_timeout_seconds, 60),
+        emit_dispatch_trace: form.emit_dispatch_trace,
+        forbid_self_invoke: form.forbid_self_invoke,
+        worker_ids: form.worker_ids,
+      },
+      catalog: null,
     };
   }
-  const depth = Number.parseInt(form.max_depth, 10);
-  const fanout = Number.parseInt(form.max_fanout, 10);
   return {
-    role: 'coordinator',
-    allowed_workers: form.allowed_workers,
-    max_depth: Number.isFinite(depth) ? depth : undefined,
-    max_fanout: Number.isFinite(fanout) ? fanout : undefined,
-    task_brief_template: form.task_brief_template.trim(),
+    agent_id: agentId,
+    role: 'worker',
+    routing_enabled: form.routing_enabled,
+    delegation: null,
+    catalog: {
+      enabled: form.catalog_enabled,
+      when_to_use: form.when_to_use.trim(),
+      capabilities: toList(form.capabilities),
+      input_contract: toList(form.input_contract),
+      output_contract: form.output_contract.trim(),
+      security_level: form.security_level,
+      timeout_seconds: toNumber(form.catalog_timeout_seconds, 60),
+      degrade_message: form.degrade_message.trim(),
+    },
   };
 }
 
@@ -189,9 +271,9 @@ export function AgentCoordinationPage({ agentId }: AgentCoordinationPageProps) {
   function toggleWorker(id: string): void {
     setForm((prev) => ({
       ...prev,
-      allowed_workers: prev.allowed_workers.includes(id)
-        ? prev.allowed_workers.filter((x) => x !== id)
-        : [...prev.allowed_workers, id],
+      worker_ids: prev.worker_ids.includes(id)
+        ? prev.worker_ids.filter((x) => x !== id)
+        : [...prev.worker_ids, id],
     }));
   }
 
@@ -199,7 +281,7 @@ export function AgentCoordinationPage({ agentId }: AgentCoordinationPageProps) {
     if (saving) return;
     setSaving(true);
     try {
-      const result = await saveCoordination(agentId, buildPayload(form));
+      const result = await saveCoordination(agentId, buildPayload(agentId, form));
       setForm(toForm(result.coordination));
       setServerRole(result.coordination.role);
       setAffected(result.affected_agents ?? []);
@@ -242,7 +324,7 @@ export function AgentCoordinationPage({ agentId }: AgentCoordinationPageProps) {
               <div className="leading-relaxed text-muted-foreground">
                 <p className="font-medium text-foreground">本次保存触发了级联清理</p>
                 <p>
-                  以下 Agent 的 <span className="font-mono">allowed_workers</span> 中已移除对{' '}
+                  以下 Agent 的 <span className="font-mono">worker_ids</span> 中已移除对{' '}
                   <span className="font-mono">{agentId}</span> 的引用，请确认其调度链路仍然完整：
                 </p>
                 <p className="mt-1 flex flex-wrap gap-1">
@@ -256,7 +338,7 @@ export function AgentCoordinationPage({ agentId }: AgentCoordinationPageProps) {
             </div>
           ) : null}
 
-          {/* ---------------- 角色单选 ---------------- */}
+          {/* ---------------- 角色单选 + 路由开关 ---------------- */}
           <div className="rounded-lg border bg-card p-3">
             <div className="mb-2 flex flex-wrap items-center gap-2">
               <span className="text-sm font-medium">调度角色</span>
@@ -303,25 +385,78 @@ export function AgentCoordinationPage({ agentId }: AgentCoordinationPageProps) {
                 {form.role === 'coordinator' ? '协调者' : '执行者'}」，保存时需要二次确认。
               </p>
             ) : null}
+
+            {/* routing_enabled：顶层字段，两种角色都适用 */}
+            <div className="mt-3 flex items-center gap-3 rounded-md border bg-muted/30 p-3">
+              <div className="min-w-0 flex-1">
+                <p className="text-sm font-medium text-foreground">启用智能路由</p>
+                <p className="mt-0.5 text-xs text-muted-foreground">
+                  关闭后该 Agent 不参与路由分发（协调者不再把任务派给它，自身也不接收派发）。
+                </p>
+              </div>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={form.routing_enabled}
+                className={cn(
+                  'relative h-5 w-9 shrink-0 rounded-full transition-colors',
+                  form.routing_enabled ? 'bg-primary' : 'bg-muted-foreground/30',
+                )}
+                onClick={() => patch({ routing_enabled: !form.routing_enabled })}
+              >
+                <span
+                  className={cn(
+                    'absolute top-0.5 h-4 w-4 rounded-full bg-background shadow transition-transform',
+                    form.routing_enabled ? 'translate-x-[1.125rem]' : 'translate-x-0.5',
+                  )}
+                />
+              </button>
+            </div>
           </div>
 
           <div className="flex gap-2 rounded-md border border-info/30 bg-info/5 p-3 text-xs text-muted-foreground">
             <Info className="mt-[0.1rem] h-3.5 w-3.5 shrink-0 text-info" />
             <p className="leading-relaxed">
               {activeRoleHint}
-              协调者字段与执行者字段<span className="font-medium text-foreground">互斥</span>，
-              保存时只会提交当前角色适用的字段。
+              协调者字段（delegation）与执行者字段（catalog）
+              <span className="font-medium text-foreground">互斥</span>，
+              保存时只会提交当前角色适用的嵌套段。
             </p>
           </div>
 
-          {/* ---------------- 分表单：worker ---------------- */}
+          {/* ---------------- 分表单：worker（catalog） ---------------- */}
           {form.role === 'worker' ? (
             <div className="space-y-3 rounded-lg border bg-card p-3">
-              <p className="text-sm font-medium">执行者配置</p>
+              <p className="text-sm font-medium">执行者配置（catalog）</p>
+
+              <div className="flex items-center gap-3 rounded-md border bg-muted/30 p-3">
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-medium text-foreground">登记进 Worker Catalog</p>
+                  <p className="mt-0.5 text-xs text-muted-foreground">
+                    关闭后该 Agent 从全局 Worker Catalog 中排除，协调者不再把它当作可派发对象。
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={form.catalog_enabled}
+                  className={cn(
+                    'relative h-5 w-9 shrink-0 rounded-full transition-colors',
+                    form.catalog_enabled ? 'bg-primary' : 'bg-muted-foreground/30',
+                  )}
+                  onClick={() => patch({ catalog_enabled: !form.catalog_enabled })}
+                >
+                  <span
+                    className={cn(
+                      'absolute top-0.5 h-4 w-4 rounded-full bg-background shadow transition-transform',
+                      form.catalog_enabled ? 'translate-x-[1.125rem]' : 'translate-x-0.5',
+                    )}
+                  />
+                </button>
+              </div>
+
               <div>
-                <label className="mb-[0.4rem] block text-xs text-muted-foreground">
-                  适用场景（when_to_use）
-                </label>
+                <label className={fieldLabel}>适用场景（when_to_use）</label>
                 <Textarea
                   rows={3}
                   placeholder="描述什么情况下应该把任务派发给该执行者，协调者据此选路。"
@@ -329,11 +464,19 @@ export function AgentCoordinationPage({ agentId }: AgentCoordinationPageProps) {
                   onChange={(e) => patch({ when_to_use: e.target.value })}
                 />
               </div>
+
               <div className="grid gap-3 sm:grid-cols-2">
                 <div>
-                  <label className="mb-[0.4rem] block text-xs text-muted-foreground">
-                    输入契约（input_contract）
-                  </label>
+                  <label className={fieldLabel}>能力（capabilities，每行一项）</label>
+                  <Textarea
+                    rows={4}
+                    placeholder={'例如：\n文件读取\n数据查询'}
+                    value={form.capabilities}
+                    onChange={(e) => patch({ capabilities: e.target.value })}
+                  />
+                </div>
+                <div>
+                  <label className={fieldLabel}>输入契约（input_contract，每行一项）</label>
                   <Textarea
                     rows={4}
                     placeholder="期望接收的任务描述格式 / 必填字段。"
@@ -341,47 +484,149 @@ export function AgentCoordinationPage({ agentId }: AgentCoordinationPageProps) {
                     onChange={(e) => patch({ input_contract: e.target.value })}
                   />
                 </div>
+              </div>
+
+              <div>
+                <label className={fieldLabel}>输出契约（output_contract）</label>
+                <Textarea
+                  rows={3}
+                  placeholder="返回结果的结构约定，供协调者聚合。"
+                  value={form.output_contract}
+                  onChange={(e) => patch({ output_contract: e.target.value })}
+                />
+              </div>
+
+              <div className="grid gap-3 sm:grid-cols-2">
                 <div>
-                  <label className="mb-[0.4rem] block text-xs text-muted-foreground">
-                    输出契约（output_contract）
-                  </label>
-                  <Textarea
-                    rows={4}
-                    placeholder="返回结果的结构约定，供协调者聚合。"
-                    value={form.output_contract}
-                    onChange={(e) => patch({ output_contract: e.target.value })}
+                  <label className={fieldLabel}>安全等级（security_level）</label>
+                  <select
+                    className={selectClass}
+                    value={form.security_level}
+                    onChange={(e) => patch({ security_level: e.target.value as SecurityLevel })}
+                  >
+                    {SECURITY_OPTIONS.map((o) => (
+                      <option key={o.value} value={o.value}>
+                        {o.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className={fieldLabel}>超时秒数（timeout_seconds）</label>
+                  <Input
+                    type="number"
+                    min={1}
+                    placeholder="如 60"
+                    value={form.catalog_timeout_seconds}
+                    onChange={(e) => patch({ catalog_timeout_seconds: e.target.value })}
                   />
                 </div>
               </div>
-              <div className="max-w-sm">
-                <label className="mb-[0.4rem] block text-xs text-muted-foreground">
-                  安全等级（safety_level）
-                </label>
-                <select
-                  className={selectClass}
-                  value={form.safety_level}
-                  onChange={(e) => patch({ safety_level: e.target.value as SafetyLevel })}
-                >
-                  {SAFETY_OPTIONS.map((o) => (
-                    <option key={o.value} value={o.value}>
-                      {o.label}
-                    </option>
-                  ))}
-                </select>
+
+              <div>
+                <label className={fieldLabel}>降级提示（degrade_message）</label>
+                <Textarea
+                  rows={2}
+                  placeholder="该执行者不可用/超时后，协调者回给用户的降级说明。"
+                  value={form.degrade_message}
+                  onChange={(e) => patch({ degrade_message: e.target.value })}
+                />
               </div>
             </div>
           ) : (
-            /* ---------------- 分表单：coordinator ---------------- */
+            /* ---------------- 分表单：coordinator（delegation） ---------------- */
             <div className="space-y-3 rounded-lg border bg-card p-3">
-              <p className="text-sm font-medium">协调者配置</p>
+              <p className="text-sm font-medium">协调者配置（delegation）</p>
+
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div className="flex items-center justify-between gap-3 rounded-md border bg-muted/30 p-3">
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-medium text-foreground">启用 Spawn 工具</p>
+                    <p className="mt-0.5 text-xs text-muted-foreground">
+                      允许协调者通过 Spawn 工具临时拉起新执行者。
+                    </p>
+                  </div>
+                  <input
+                    type="checkbox"
+                    className="h-3.5 w-3.5 cursor-pointer accent-primary"
+                    checked={form.spawn_tools_enabled}
+                    onChange={(e) => patch({ spawn_tools_enabled: e.target.checked })}
+                  />
+                </div>
+                <div className="flex items-center justify-between gap-3 rounded-md border bg-muted/30 p-3">
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-medium text-foreground">强制任务简报</p>
+                    <p className="mt-0.5 text-xs text-muted-foreground">
+                      派发前必须先生成任务简报，未通过校验的请求直接拒绝。
+                    </p>
+                  </div>
+                  <input
+                    type="checkbox"
+                    className="h-3.5 w-3.5 cursor-pointer accent-primary"
+                    checked={form.enforce_task_brief}
+                    onChange={(e) => patch({ enforce_task_brief: e.target.checked })}
+                  />
+                </div>
+                <div className="flex items-center justify-between gap-3 rounded-md border bg-muted/30 p-3">
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-medium text-foreground">记录派发轨迹</p>
+                    <p className="mt-0.5 text-xs text-muted-foreground">
+                      每次委派写入 dispatch trace，供调度观测页回放。
+                    </p>
+                  </div>
+                  <input
+                    type="checkbox"
+                    className="h-3.5 w-3.5 cursor-pointer accent-primary"
+                    checked={form.emit_dispatch_trace}
+                    onChange={(e) => patch({ emit_dispatch_trace: e.target.checked })}
+                  />
+                </div>
+                <div className="flex items-center justify-between gap-3 rounded-md border bg-muted/30 p-3">
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-medium text-foreground">禁止自调用</p>
+                    <p className="mt-0.5 text-xs text-muted-foreground">
+                      不允许把任务派发给自身（防环）。
+                    </p>
+                  </div>
+                  <input
+                    type="checkbox"
+                    className="h-3.5 w-3.5 cursor-pointer accent-primary"
+                    checked={form.forbid_self_invoke}
+                    onChange={(e) => patch({ forbid_self_invoke: e.target.checked })}
+                  />
+                </div>
+              </div>
+
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div>
+                  <label className={fieldLabel}>最大派发深度（max_depth）</label>
+                  <Input
+                    type="number"
+                    min={1}
+                    placeholder="如 3"
+                    value={form.max_depth}
+                    onChange={(e) => patch({ max_depth: e.target.value })}
+                  />
+                </div>
+                <div>
+                  <label className={fieldLabel}>委派超时秒数（timeout_seconds）</label>
+                  <Input
+                    type="number"
+                    min={1}
+                    placeholder="如 60"
+                    value={form.delegation_timeout_seconds}
+                    onChange={(e) => patch({ delegation_timeout_seconds: e.target.value })}
+                  />
+                </div>
+              </div>
 
               <div>
                 <div className="mb-[0.4rem] flex flex-wrap items-center gap-2">
                   <label className="text-xs text-muted-foreground">
-                    可派发的执行者（allowed_workers）
+                    可派发的执行者（worker_ids）
                   </label>
                   <span className="text-xs text-muted-foreground">
-                    已选 {form.allowed_workers.length} 个
+                    已选 {form.worker_ids.length} 个
                   </span>
                 </div>
                 <div className="max-h-56 overflow-auto rounded-md border">
@@ -397,7 +642,7 @@ export function AgentCoordinationPage({ agentId }: AgentCoordinationPageProps) {
                             <input
                               type="checkbox"
                               className="h-3.5 w-3.5 cursor-pointer accent-primary"
-                              checked={form.allowed_workers.includes(w.agent_id)}
+                              checked={form.worker_ids.includes(w.agent_id)}
                               onChange={() => toggleWorker(w.agent_id)}
                             />
                             <span className="min-w-0 flex-1 truncate">{w.display_name}</span>
@@ -411,56 +656,16 @@ export function AgentCoordinationPage({ agentId }: AgentCoordinationPageProps) {
                   )}
                 </div>
                 {/* 已选但不在候选里的 id：多半是对方角色被改了，必须显式暴露 */}
-                {form.allowed_workers.filter((id) => !workerOptions.some((w) => w.agent_id === id))
+                {form.worker_ids.filter((id) => !workerOptions.some((w) => w.agent_id === id))
                   .length > 0 ? (
                   <p className="mt-1 flex items-start gap-1 text-xs text-warning">
                     <TriangleAlert className="mt-[0.1rem] h-3 w-3 shrink-0" />
                     以下已配置的执行者当前不可用（已删除或角色已变更）：
-                    {form.allowed_workers
+                    {form.worker_ids
                       .filter((id) => !workerOptions.some((w) => w.agent_id === id))
                       .join('、')}
                   </p>
                 ) : null}
-              </div>
-
-              <div className="grid gap-3 sm:grid-cols-2">
-                <div>
-                  <label className="mb-[0.4rem] block text-xs text-muted-foreground">
-                    最大派发深度（max_depth）
-                  </label>
-                  <Input
-                    type="number"
-                    min={1}
-                    placeholder="如 3"
-                    value={form.max_depth}
-                    onChange={(e) => patch({ max_depth: e.target.value })}
-                  />
-                </div>
-                <div>
-                  <label className="mb-[0.4rem] block text-xs text-muted-foreground">
-                    单层最大并发（max_fanout）
-                  </label>
-                  <Input
-                    type="number"
-                    min={1}
-                    placeholder="如 5"
-                    value={form.max_fanout}
-                    onChange={(e) => patch({ max_fanout: e.target.value })}
-                  />
-                </div>
-              </div>
-
-              <div>
-                <label className="mb-[0.4rem] block text-xs text-muted-foreground">
-                  任务简报模板（task_brief_template）
-                </label>
-                <Textarea
-                  rows={5}
-                  className="font-mono text-xs"
-                  placeholder="派发给执行者的任务描述模板，可含占位符。"
-                  value={form.task_brief_template}
-                  onChange={(e) => patch({ task_brief_template: e.target.value })}
-                />
               </div>
             </div>
           )}
@@ -493,8 +698,8 @@ export function AgentCoordinationPage({ agentId }: AgentCoordinationPageProps) {
             <p>
               角色变更会触发<span className="font-medium text-foreground">服务端级联清理</span>：
               {form.role === 'coordinator'
-                ? '该 Agent 将从所有其它协调者的 allowed_workers 中被移除，相关调度链路会立即改变。'
-                : '该 Agent 原有的 allowed_workers / 派发上限等协调者配置将不再适用。'}
+                ? '该 Agent 将从所有其它协调者的 worker_ids 中被移除，相关调度链路会立即改变。'
+                : '该 Agent 原有的 worker_ids / 派发上限等协调者配置将不再适用。'}
             </p>
             <p>受影响的 Agent 清单会在保存成功后列出。</p>
           </>

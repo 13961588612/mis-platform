@@ -1,0 +1,64 @@
+%% T04 收口 · 时序图：三条关键流（配置文件读/写、审批决策、监控总览）
+sequenceDiagram
+    autonumber
+    actor Op as 运营（前端页面）
+    participant Page as features/agent 页面
+    participant Api as api/agent-ops-api.ts
+    participant BFF as AgentOpsClient.java (BFF)
+    participant AP as ai-platform (T04 已定型)
+
+    %% ---- 流 1：配置文件读/写 ----
+    Note over Op,AP: 流 1 · 配置文件读/写（#22–#24）
+    Op->>Page: 打开配置文件页
+    Page->>Api: listConfigFiles(agentId)
+    Api->>BFF: GET /agent-ops/agents/{id}/config-files
+    BFF->>AP: GET /api/v1/agents/{id}/config-files
+    AP-->>BFF: [{path,type,read_only,size_bytes}]
+    BFF-->>Api: 透传
+    Api-->>Page: ConfigFileNode[]（扁平）
+    Page->>Page: 按 path 拆段构建树 → TreeTable
+    Op->>Page: 选中文件
+    Page->>Api: getConfigFileContent(id, path)
+    Api->>BFF: GET /agent-ops/agents/{id}/config-files/{path}
+    BFF->>AP: GET /api/v1/agents/{id}/config-files/{file}（URL 编码）
+    AP-->>BFF: {content, masked, read_only, type}
+    BFF-->>Api: 透传
+    Api-->>Page: ConfigFileContent
+    Op->>Page: 编辑并保存
+    Page->>Api: saveConfigFileContent(id, {content})
+    Api->>BFF: PUT /agent-ops/agents/{id}/config-files/{path} body {content}
+    BFF->>AP: PUT /api/v1/agents/{id}/config-files/{file} body {content}
+    AP-->>BFF: {path, masked, reloaded}
+    BFF-->>Page: 成功
+
+    %% ---- 流 2：审批决策 ----
+    Note over Op,AP: 流 2 · 审批列表与决策（#57–#58）
+    Op->>Page: 打开审批中心（默认 status=pending）
+    Page->>Api: listApprovals('pending')
+    Api->>BFF: GET /agent-ops/approvals?status=pending
+    BFF->>AP: GET /api/v1/push/approvals?status=pending
+    AP-->>BFF: Approval[]（camelCase，5 状态）
+    BFF-->>Api: 透传
+    Api-->>Page: Approval[] → 表格
+    Op->>Page: 点「通过」
+    Page->>Api: decideApproval(id, {approved:true})
+    Api->>BFF: POST /agent-ops/approvals/{id}/decision body {approved:true}
+    BFF->>BFF: 加工 body → {decision:'approved', comment:''}
+    BFF->>AP: POST /api/v1/push/approvals/{id}/respond
+    AP-->>BFF: Approval（已更新）
+    BFF-->>Page: 成功 → 刷新列表
+
+    %% ---- 流 3：监控总览 ----
+    Note over Op,AP: 流 3 · 监控总览 #55（{proxy,llm,admin} 三路聚合）
+    Op->>Page: 打开系统监控页
+    Page->>Api: getMonitorOverview()
+    Api->>BFF: GET /agent-ops/monitor/overview
+    BFF->>AP: GET /api/v1/admin/proxy/status
+    AP-->>BFF: proxy_pool[]
+    BFF->>AP: GET /api/v1/admin/llm/status
+    AP-->>BFF: llm gateway status（failover/providers/proxy_pool）
+    BFF->>AP: GET /api/v1/admin/health
+    AP-->>BFF: {llm_gateway, proxy_nodes, healthy_proxy_nodes}
+    BFF-->>Api: {proxy, llm, admin}
+    Api-->>Page: MonitorOverview（重写后的类型）
+    Page->>Page: 渲染 Proxy 健康 / 提供方 / 熔断状态

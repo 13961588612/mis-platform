@@ -4,12 +4,13 @@
  * <p>覆盖 §4.3 的 #34 列表、#35 健康探测、#38 新增 Server、#39 连接、#40 断开、
  * #41 discover；#37 工具清单与 #42 手动调用在 {@link AgentMcpToolsDialog} 内。
  *
- * <p>**为什么「登记状态」和「实时探测」是两列而不是一列**：
- *   - `server.state`（#34 返回）是注册表里**记录**的连接态，来源是最后一次连接 / 断开操作；
- *   - `health[name]`（#35 返回）是本次打开页面时的**实时**探活结果。
- * 两者不一致恰恰是最需要被看见的故障形态 —— 记录里写着 `connected`、探测却是 false，
- * 说明进程还活着但链路已经死了，此时 Agent 调用会超时而不是快速失败。
- * 合并成一列就把这个信号抹平了。
+ * <p>**T04 收口：`MCPServerConfig` wire 只有八字段**
+ * `{name, transport, endpoint, args, env, timeout, auto_connect, description}` ——
+ * 前端臆造的 `state / tool_count / enabled / updated_at` 全部删除：
+ *   - 「登记状态」列删除：连接态以 **#35 实时探测**为准（本页打开时的探活结果）；
+ *   - 「工具数」「更新时间」列删除；
+ *   - 「已禁用」副标题 → `auto_connect`（「自动连接 / 手动连接」）；
+ *   - 连接 / 断开按钮改按探测结果决策：探测正常 → 可断开，否则 → 可连接。
  *
  * <p>#35 失败**不阻断**列表：探活是旁路信息，让它把整页拖进 error 态属于因小失大，
  * 失败时探测列统一显示「未探测」。
@@ -24,6 +25,7 @@ import {
   ServerCog,
   Unlink,
   Wrench,
+  Zap,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { z } from 'zod';
@@ -45,7 +47,6 @@ import {
 } from '@/components/ui/dialog';
 import { AgentPageShell } from '../components/agent-page-shell';
 import { AgentConfirmDialog } from '../components/agent-confirm-dialog';
-import { AgentStatusBadge } from '../components/agent-status-badge';
 import { AgentMcpToolsDialog } from './agent-mcp-tools-dialog';
 import {
   connectMcpServer,
@@ -56,22 +57,23 @@ import {
   listMcpServers,
   type McpServerPayload,
 } from '../api/agent-ops-api';
-import { agentErrorMessage, formatTime } from '../types';
-import type { McpConnectionState, McpServer } from '../types';
+import { agentErrorMessage } from '../types';
+import type { McpServer } from '../types';
 
 const selectClass =
   'h-9 w-full rounded-md border border-input bg-card px-[0.7rem] text-sm text-foreground shadow-none';
 
 const fieldLabel = 'mb-[0.4rem] block text-sm font-medium text-foreground';
 
+/** 探测结果筛选值（#35 health map 派生，非 wire 字段）。 */
+type ProbeFilter = 'healthy' | 'unhealthy' | 'unknown' | 'all';
+
 const MCP_COLS: ResizableColumn[] = [
   { key: 'name', label: 'Server 名称' },
   { key: 'transport', label: '传输' },
   { key: 'endpoint', label: 'Endpoint' },
-  { key: 'state', label: '登记状态' },
   { key: 'health', label: '实时探测' },
-  { key: 'tool_count', label: '工具数' },
-  { key: 'updated_at', label: '更新时间' },
+  { key: 'auto_connect', label: '连接策略' },
   { key: '__ops__', label: '操作', locked: true },
 ];
 
@@ -90,29 +92,19 @@ const TRANSPORT_LABEL: Record<McpServer['transport'], string> = {
  * 因此字符集收紧到 `[a-zA-Z0-9._-]`：含 `/` 会把路径切歧义，含空格 / 中文则
  * 编码后在日志与审计里不可读。
  *
- * <p>`endpoint` 对 `stdio` 可空（本地进程由后端配置拉起），对 `sse` / `http` 必填 ——
- * 少了它连接必然失败，与其让用户点了「连接」再收一个后端报错，不如在提交前拦住。
+ * <p>`endpoint` **必填**：ai-platform `RegisterServerRequest.endpoint: str` 必填
+ * （stdio 也必填），此前「stdio 可空」的假设来自臆造的 wire，T04 已收口。
  */
-const serverFormSchema = z
-  .object({
-    name: z
-      .string()
-      .trim()
-      .min(1, 'Server 名称必填')
-      .max(64, '名称不超过 64 字符')
-      .regex(/^[a-zA-Z0-9._-]+$/, '仅允许字母、数字、点、下划线与连字符'),
-    transport: z.enum(['stdio', 'sse', 'http']),
-    endpoint: z.string().trim().max(500, 'Endpoint 不超过 500 字符'),
-  })
-  .superRefine((value, ctx) => {
-    if (value.transport !== 'stdio' && value.endpoint === '') {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ['endpoint'],
-        message: 'SSE / HTTP 传输必须填写 Endpoint',
-      });
-    }
-  });
+const serverFormSchema = z.object({
+  name: z
+    .string()
+    .trim()
+    .min(1, 'Server 名称必填')
+    .max(64, '名称不超过 64 字符')
+    .regex(/^[a-zA-Z0-9._-]+$/, '仅允许字母、数字、点、下划线与连字符'),
+  transport: z.enum(['stdio', 'sse', 'http']),
+  endpoint: z.string().trim().min(1, 'Endpoint 必填').max(500, 'Endpoint 不超过 500 字符'),
+});
 
 type ServerFormValues = z.infer<typeof serverFormSchema>;
 
@@ -169,7 +161,7 @@ function McpServerFormDialog({ open, onOpenChange, onSaved }: McpServerFormDialo
     const payload: McpServerPayload = {
       name: values.name,
       transport: values.transport,
-      endpoint: values.endpoint || undefined,
+      endpoint: values.endpoint,
     };
 
     setSaving(true);
@@ -228,19 +220,18 @@ function McpServerFormDialog({ open, onOpenChange, onSaved }: McpServerFormDialo
 
           <div>
             <label className={fieldLabel} htmlFor="mcp-endpoint">
-              Endpoint{form.transport === 'stdio' ? '' : ' *'}
+              Endpoint *
             </label>
             <Input
               id="mcp-endpoint"
               value={form.endpoint}
               autoComplete="off"
-              placeholder={
-                form.transport === 'stdio'
-                  ? '留空则由后端配置拉起本地进程'
-                  : 'https://mcp.example.com/sse'
-              }
+              placeholder="https://mcp.example.com/sse"
               onChange={(e) => patch('endpoint', e.target.value)}
             />
+            <p className="mt-[0.35rem] text-xs text-muted-foreground">
+              所有传输方式（含 stdio）都必须填写；stdio 填本地拉起命令或留空由后端默认。
+            </p>
             {errors.endpoint ? (
               <p className="mt-1 text-xs text-destructive">{errors.endpoint}</p>
             ) : null}
@@ -276,7 +267,7 @@ export function AgentMcpPage() {
   const [error, setError] = useState<string | null>(null);
 
   const [keyword, setKeyword] = useState('');
-  const [stateFilter, setStateFilter] = useState<McpConnectionState | 'all'>('all');
+  const [probeFilter, setProbeFilter] = useState<ProbeFilter>('all');
 
   const [formOpen, setFormOpen] = useState(false);
   const [toolsTarget, setToolsTarget] = useState<McpServer | null>(null);
@@ -382,13 +373,14 @@ export function AgentMcpPage() {
   const filtered = useMemo(() => {
     const kw = keyword.trim().toLowerCase();
     return servers.filter((s) => {
-      if (stateFilter !== 'all' && s.state !== stateFilter) return false;
+      const probe = health[s.name];
+      if (probeFilter === 'healthy' && probe !== true) return false;
+      if (probeFilter === 'unhealthy' && probe !== false) return false;
+      if (probeFilter === 'unknown' && probe !== undefined) return false;
       if (!kw) return true;
-      return (
-        s.name.toLowerCase().includes(kw) || (s.endpoint ?? '').toLowerCase().includes(kw)
-      );
+      return s.name.toLowerCase().includes(kw) || (s.endpoint ?? '').toLowerCase().includes(kw);
     });
-  }, [servers, keyword, stateFilter]);
+  }, [servers, keyword, probeFilter, health]);
 
   /** 探测列排序：正常(2) > 异常(1) > 未探测(0)，让异常项集中可见。 */
   const getSortValue = useCallback(
@@ -405,9 +397,9 @@ export function AgentMcpPage() {
   );
   const { sorted, sortKey, sortDir, toggleSort } = useClientSort(filtered, getSortValue);
 
-  const connectedCount = servers.filter((s) => s.state === 'connected').length;
+  const healthyCount = servers.filter((s) => health[s.name] === true).length;
   const unhealthyCount = servers.filter((s) => health[s.name] === false).length;
-  const toolTotal = servers.reduce((sum, s) => sum + (s.tool_count ?? 0), 0);
+  const autoConnectCount = servers.filter((s) => s.auto_connect).length;
 
   const headerActions = (
     <>
@@ -444,21 +436,25 @@ export function AgentMcpPage() {
       <div className="flex min-h-0 flex-1 flex-col gap-3">
         <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
           <StatCard label="Server 总数" value={servers.length} icon={ServerCog} />
-          <StatCard label="已连接" value={connectedCount} icon={Link2} />
+          <StatCard
+            label="探测正常"
+            value={healthLoaded ? healthyCount : '-'}
+            icon={Activity}
+          />
           <StatCard
             label="探测异常"
             value={healthLoaded ? unhealthyCount : '-'}
-            icon={Activity}
+            icon={Zap}
           />
-          <StatCard label="工具总数" value={toolTotal} icon={Wrench} />
+          <StatCard label="自动连接" value={autoConnectCount} icon={Link2} />
         </div>
 
         <div className="flex gap-2 rounded-md border border-info/30 bg-info/5 p-3 text-xs text-muted-foreground">
           <Info className="mt-[0.1rem] h-3.5 w-3.5 shrink-0 text-info" />
           <p className="leading-relaxed">
-            「登记状态」是注册表记录的连接态，「实时探测」是本次打开页面时的探活结果。
-            两者不一致（例如记录已连接但探测异常）说明链路已断而记录未更新，此时 Agent 调用会超时，
-            建议先「断开」再「连接」以刷新链路。
+            「实时探测」是本次打开页面时的探活结果：探测异常说明链路已断，
+            此时 Agent 调用会超时而非快速失败，建议先「断开」再「连接」以刷新链路；
+            「自动连接」表示该 Server 在注册表中配置为随系统启动自动拉起。
           </p>
         </div>
 
@@ -472,17 +468,16 @@ export function AgentMcpPage() {
             />
           </div>
           <div className="w-44">
-            <label className="mb-[0.4rem] block text-xs text-muted-foreground">登记状态</label>
+            <label className="mb-[0.4rem] block text-xs text-muted-foreground">探测结果</label>
             <select
               className={selectClass}
-              value={stateFilter}
-              onChange={(e) => setStateFilter(e.target.value as McpConnectionState | 'all')}
+              value={probeFilter}
+              onChange={(e) => setProbeFilter(e.target.value as ProbeFilter)}
             >
-              <option value="all">全部状态</option>
-              <option value="connected">已连接</option>
-              <option value="disconnected">未连接</option>
-              <option value="error">连接失败</option>
-              <option value="unknown">未知</option>
+              <option value="all">全部结果</option>
+              <option value="healthy">探测正常</option>
+              <option value="unhealthy">探测异常</option>
+              <option value="unknown">未探测</option>
             </select>
           </div>
           <Button
@@ -490,7 +485,7 @@ export function AgentMcpPage() {
             variant="ghost"
             onClick={() => {
               setKeyword('');
-              setStateFilter('all');
+              setProbeFilter('all');
             }}
           >
             重置
@@ -582,21 +577,22 @@ export function AgentMcpPage() {
                         <div className="truncate font-medium" title={server.name}>
                           {server.name}
                         </div>
-                        {!server.enabled ? (
-                          <div className="text-xs text-muted-foreground">已禁用</div>
-                        ) : null}
+                        <div className="text-xs text-muted-foreground">
+                          {server.auto_connect ? (
+                            <span className="text-success">自动连接</span>
+                          ) : (
+                            <span className="text-muted-foreground">手动连接</span>
+                          )}
+                        </div>
                       </td>
                       <td className="truncate px-3 py-2 text-xs text-muted-foreground">
                         {TRANSPORT_LABEL[server.transport] ?? server.transport}
                       </td>
                       <td
                         className="truncate px-3 py-2 font-mono text-xs text-muted-foreground"
-                        title={server.endpoint ?? ''}
+                        title={server.endpoint}
                       >
-                        {server.endpoint ?? '-'}
-                      </td>
-                      <td className="px-3 py-2">
-                        <AgentStatusBadge kind="mcpState" value={server.state} />
+                        {server.endpoint || '-'}
                       </td>
                       <td className="px-3 py-2 text-xs">
                         {probe === true ? (
@@ -608,10 +604,7 @@ export function AgentMcpPage() {
                         )}
                       </td>
                       <td className="px-3 py-2 text-xs text-muted-foreground">
-                        {server.tool_count}
-                      </td>
-                      <td className="px-3 py-2 text-xs text-muted-foreground">
-                        {formatTime(server.updated_at)}
+                        {server.auto_connect ? '自动连接' : '手动连接'}
                       </td>
                       <td className="px-3 py-2">
                         <div className="flex flex-wrap items-center justify-end gap-1">
@@ -635,7 +628,7 @@ export function AgentMcpPage() {
                             </button>
                           </PermissionGate>
                           <PermissionGate permission="agent:mcp:manage">
-                            {server.state === 'connected' ? (
+                            {probe === true ? (
                               <button
                                 type="button"
                                 disabled={rowBusy}

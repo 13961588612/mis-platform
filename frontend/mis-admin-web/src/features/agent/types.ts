@@ -9,6 +9,10 @@
  * 用 camelCase 是因为它的对端是 Java BFF 自建 DTO，两者不是一回事。
  * 这里跟随实际 wire format，避免在页面里到处写映射函数。
  * 仅 `AgentRoleOption` 例外 —— 它来自 IAM（Java）侧的 sys_role，保持 camelCase。
+ *
+ * <p>**T04 收口后 wire 事实以 `docs/ai-fusion/agent-ops-console/t04-closeout-design.md`
+ * §7 事实表为准**：本文件与 ai-platform 真实源码（`agent/ai-platform/backend/src`）
+ * 逐字段对齐，不再保留任何臆造字段。
  */
 
 // ------------------------------------------------------------------ 通用
@@ -102,24 +106,42 @@ export type AgentState = 'running' | 'paused' | 'stopped' | 'error';
  * 此前声明为 `id`，导致所有下拉选中判等（`a.id === value`）恒为 `undefined === x`
  * 即恒 false，且 `startAgent(agent.id)` 拼出 `/agent-ops/agents/undefined`。
  *
- * <p>`enabled_skill_count` 真实 wire 上**并不存在**（ai-platform 未产出该字段），
- * 属已知 P2 差异：消费点只做数字展示，取到 `undefined` 时渲染为空而不崩溃，
- * 故本次不动，留待后端补字段或前端改为可选。
+ * <p>**T04 收口**：真实 wire 字段为
+ * `{agent_id, display_name, state, runtime_type, active_sessions, is_active, role}`，
+ * **不存在 `enabled_skill_count`**（属 P2 已知债，本期删除）。
+ * 「已启用技能」展示统一替换为 `active_sessions`（活跃会话，真实且有运营价值）。
  */
 export interface AgentSummary {
   agent_id: string;
   display_name: string;
   role: AgentRole;
   state: AgentState;
-  enabled_skill_count: number;
+  /** 运行时类型（openharness / custom / langgraph）。 */
+  runtime_type?: string;
+  /** 当前活跃会话数，替代已删除的臆造字段 `enabled_skill_count`。 */
+  active_sessions?: number;
+  is_active?: boolean;
 }
 
+/**
+ * Agent 详情。
+ *
+ * <p>对齐 ai-platform `AgentDetail`（`api/routes/agent.py`）：
+ * `{agent_id, display_name, description, version, tags, state, runtime_type,
+ * active_sessions, model_primary, model_fallback, routing_enabled,
+ * routing_priority, routing_keywords, started_at}`。
+ * T04 收口时删除臆造的 `model` / `workspace` / `updated_at`。
+ */
 export interface AgentDetail extends AgentSummary {
   description?: string;
-  model?: string;
-  /** 磁盘上的 agent 目录名，配置文件接口以此定位。 */
-  workspace?: string;
-  updated_at?: string;
+  version?: string;
+  tags?: string[];
+  model_primary?: string;
+  model_fallback?: string;
+  routing_enabled?: boolean;
+  routing_priority?: number;
+  routing_keywords?: string[];
+  started_at?: string;
 }
 
 export interface AgentHealth {
@@ -142,75 +164,155 @@ export interface AgentSkillBinding {
 
 // ------------------------------------------------------------------ 配置文件（UI#9）
 
+/**
+ * 配置文件列表项（**真实 wire 是扁平数组，不是树**）。
+ *
+ * <p>对齐 ai-platform `file_service.list_editable_files()`：
+ * `[{path, type, read_only, size_bytes}]`。其中 `type` 是文件扩展名（yaml / md / …），
+ * `read_only` 表示白名单只读；**无** `name` / `format` / `editable` / `size` /
+ * `updated_at` / `children` —— 这些都是 T04 前臆造的字段。
+ */
 export interface ConfigFileNode {
   path: string;
+  /** 文件扩展名（如 `yaml` / `md`），目录项不产生（目录由前端按 path 拆段派生）。 */
+  type: string;
+  read_only: boolean;
+  size_bytes: number;
+}
+
+/**
+ * 前端派生：由扁平 wire 项按 `/` 拆段构建的目录树节点（供 TreeTable）。
+ *
+ * <p>TreeTable 要求行是「扁平化 + 带 `id`/`depth`」的数组，这里把 path 的
+ * 目录部分合成 `kind='dir'` 节点、叶子为 `kind='file'` 节点，再统一 flatten。
+ * **不是 wire 类型**，只在 `agent-config-page.tsx` 内部构建与消费。
+ */
+export interface ConfigFileTreeRow {
+  /** 完整相对路径；目录节点为前缀路径（不带尾部 `/`）。 */
+  path: string;
+  /** 最后一段（文件或目录名）。 */
   name: string;
-  type: 'dir' | 'file';
-  format: 'yaml' | 'markdown';
-  editable: boolean;
-  size: number;
-  updated_at: string;
-  children?: ConfigFileNode[];
+  kind: 'dir' | 'file';
+  /** 文件扩展名（wire `type`），目录节点为空串。 */
+  type: string;
+  read_only: boolean;
+  size_bytes: number;
+  /** TreeTable 硬性契约：稳定 id 与层级深度。 */
+  id: string;
+  depth: number;
+  children?: ConfigFileTreeRow[];
 }
 
 /**
  * 配置文件内容。
  *
- * <p>`masked=true` 表示内容里的密钥已被替换成 `***`，
- * 此时**禁止整体保存**（会把 `***` 写回覆盖真密钥）—— 这是 impl-plan §4.4 的必备护栏。
- * `sha256` 用于保存时的并发保护，回传为 `base_sha256`，不符则 409 CONFIG_CONFLICT。
+ * <p>对齐 ai-platform `file_service.read_config_file()`：`{content, masked, read_only, type}`。
+ * `masked=true` 表示内容里的密钥已被替换成 `***`，此时**禁止整体保存**（会把 `***`
+ * 写回覆盖真密钥）—— 这是 impl-plan §4.4 的必备护栏，与 T04 前的语义一致。
+ * **无** `sha256` / `base_sha256`：后端没有并发保护能力（CONFIG_CONFLICT 409 已不存在）。
  */
 export interface ConfigFileContent {
-  path: string;
   content: string;
-  format: 'yaml' | 'markdown';
-  editable: boolean;
   masked: boolean;
-  sha256: string;
+  read_only: boolean;
+  type: string;
 }
 
+/** 保存配置文件请求体：**只发 `{content}`**（path 走 URL 路径段）。 */
 export interface SaveConfigFilePayload {
-  path: string;
   content: string;
-  base_sha256: string;
+}
+
+/** 保存配置文件响应：`{path, masked, reloaded}`（后端不下发 content）。 */
+export interface SaveConfigFileResult {
+  path: string;
+  masked: boolean;
+  reloaded: boolean;
 }
 
 // ------------------------------------------------------------------ 调度配置（UI#10）
 
-export type SafetyLevel = 'low' | 'medium' | 'high';
+/**
+ * Worker 安全等级。
+ *
+ * <p>对齐 ai-platform `coordination_service.CoordinationCatalog.security_level`
+ * 与 `coordinator/catalog.py` 的 WorkerSpec：仅 `read_only` / `needs_hitl` 两档，
+ * **不是** T04 前臆造的 `low|medium|high`。
+ */
+export type SecurityLevel = 'read_only' | 'needs_hitl';
+
+/** Coordinator 委派段（真实 wire `delegation`）。 */
+export interface CoordinationDelegation {
+  spawn_tools_enabled: boolean;
+  enforce_task_brief: boolean;
+  max_depth: number;
+  timeout_seconds: number;
+  emit_dispatch_trace: boolean;
+  forbid_self_invoke: boolean;
+  worker_ids: string[];
+}
+
+/** Worker Catalog 段（真实 wire `catalog`）。 */
+export interface CoordinationCatalog {
+  enabled: boolean;
+  when_to_use: string;
+  capabilities: string[];
+  input_contract: string[];
+  output_contract: string;
+  security_level: SecurityLevel;
+  timeout_seconds: number;
+  degrade_message: string;
+}
 
 /**
- * C–W 调度契约。coordinator 字段与 worker 字段**互斥**，
- * 提交不适用的字段服务端返回 COORD_FIELD_NOT_APPLICABLE（impl-plan §4.5）。
+ * C–W 调度契约（**嵌套结构**，T05 收口）。
+ *
+ * <p>对齐 ai-platform `AgentCoordination`（`coordinator/coordination_service.py`）：
+ * `{agent_id, role, routing_enabled, delegation?, catalog?}`。
+ * 此前扁平化的 `when_to_use / safety_level / allowed_workers / max_depth /
+ * max_fanout / task_brief_template` 全部不存在 —— coordinator 字段收进 `delegation`、
+ * worker 字段收进 `catalog`。
  */
-export interface Coordination {
+export interface AgentCoordination {
+  agent_id: string;
   role: AgentRole;
-  // worker 侧
-  when_to_use?: string;
-  input_contract?: string;
-  output_contract?: string;
-  safety_level?: SafetyLevel;
-  // coordinator 侧
-  allowed_workers?: string[];
-  max_depth?: number;
-  max_fanout?: number;
-  task_brief_template?: string;
+  routing_enabled: boolean;
+  delegation?: CoordinationDelegation | null;
+  catalog?: CoordinationCatalog | null;
 }
 
 /** 保存 coordination 的响应：role 变更引发级联清理时回传受影响的 agent。 */
 export interface CoordinationSaveResult {
-  coordination: Coordination;
+  coordination: AgentCoordination;
   affected_agents: string[];
 }
 
-/** Worker Catalog 单行（全局视图，深链到各自的 coordination 页）。 */
-export interface WorkerCatalogEntry {
+/**
+ * Worker Catalog 单行（全局视图，深链到各自的 coordination 页）。
+ *
+ * <p>对齐 ai-platform `serialize_worker_catalog()`：wire 字段为
+ * `{agent_id, display_name, when_to_use, capabilities, input_contract,
+ * output_contract, security_level, enabled, timeout_seconds, degrade_message}`。
+ * **无 `role`**（行内全是 worker）；安全等级是 `security_level` 而非 `safety_level`。
+ */
+export interface WorkerCatalogWorker {
   agent_id: string;
   display_name: string;
-  role: AgentRole;
   when_to_use?: string;
-  safety_level?: SafetyLevel;
+  capabilities?: string[];
+  input_contract?: string[];
+  output_contract?: string;
+  security_level: SecurityLevel;
   enabled: boolean;
+  timeout_seconds?: number;
+  degrade_message?: string;
+}
+
+/** Worker Catalog 聚合对象：`{workers, coordinators, fallback}`（**不是数组**）。 */
+export interface WorkerCatalog {
+  workers: WorkerCatalogWorker[];
+  coordinators: string[];
+  fallback: boolean;
 }
 
 // ------------------------------------------------------------------ 会话（UI#4）
@@ -269,42 +371,70 @@ export interface SessionQuery extends AgentPageQuery {
 
 // ------------------------------------------------------------------ MCP（UI#8）
 
-export type McpConnectionState = 'connected' | 'disconnected' | 'error' | 'unknown';
-
+/**
+ * MCP Server（真实 wire 八字段）。
+ *
+ * <p>对齐 ai-platform `MCPServerConfig`：`{name, transport, endpoint, args, env,
+ * timeout, auto_connect, description}`。T04 收口删除臆造的
+ * `state` / `tool_count` / `enabled` / `updated_at` 四字段；「是否自动连接」用
+ * `auto_connect` 表达。
+ */
 export interface McpServer {
   name: string;
   transport: 'stdio' | 'sse' | 'http';
-  endpoint?: string;
-  state: McpConnectionState;
-  tool_count: number;
-  enabled: boolean;
-  updated_at?: string;
+  endpoint: string;
+  args?: string[];
+  env?: Record<string, string>;
+  timeout?: number;
+  auto_connect: boolean;
+  description?: string;
 }
 
 export interface McpTool {
   name: string;
   description?: string;
-  /** JSON Schema，形状由各 MCP Server 自定，前端只做只读展示。 */
-  input_schema?: Record<string, unknown>;
+  /** JSON Schema，形状由各 MCP Server 自定，前端只做只读展示。wire 上是 camelCase `inputSchema`。 */
+  inputSchema?: Record<string, unknown>;
 }
 
 export interface McpCallPayload {
-  tool: string;
+  /** ai-platform `CallToolRequest.tool_name`（不是 `tool`）。 */
+  tool_name: string;
   arguments: Record<string, unknown>;
 }
 
 // ------------------------------------------------------------------ 调度观测
 
+/**
+ * 单条委派轨迹。
+ *
+ * <p>对齐 ai-platform `DispatchTraceEntry` + `session_id`/`created_at`
+ * （`coordinator/trace.py`）：`{intent, worker_id, tool, status, latency_ms,
+ * task_id, brief_rejected, session_id, created_at}`。
+ * T04 前声明的 `trace_id / coordinator_id / task_brief / depth / started_at /
+ * duration_ms` 全部不存在，已删除。
+ */
 export interface DispatchTrace {
-  trace_id: string;
-  coordinator_id: string;
-  worker_id?: string;
-  task_brief?: string;
-  status: 'success' | 'failed' | 'running';
-  depth: number;
-  started_at: string;
-  duration_ms?: number;
+  intent: string;
+  worker_id: string;
+  tool: string;
+  status: DispatchTraceStatus;
+  latency_ms: number;
+  task_id: string;
+  /** 是否因 Brief 校验失败而未真正委派（此时 status 多为 rejected）。 */
+  brief_rejected: boolean;
+  session_id: string;
+  created_at: string;
 }
+
+/** 委派轨迹状态：TaskStatus 终态（completed/failed/killed/timeout）+ brief 拒绝 + 进行中。 */
+export type DispatchTraceStatus =
+  | 'completed'
+  | 'rejected'
+  | 'failed'
+  | 'killed'
+  | 'timeout'
+  | 'running';
 
 /**
  * 单条路由日志。对齐 ai-platform `src/router/models.py` 的 `RouteLog`。
@@ -387,41 +517,69 @@ export interface WecomBotPayload {
 
 // ------------------------------------------------------------------ 监控 / 审批
 
-/**
- * 出站代理状态。
- *
- * <p>`up | degraded | down` 来自 ai-platform 侧的语义；`unknown` 是**前端兜底档**
- * —— 见 {@link MonitorOverview.proxy_status}，wire 上这个字段并不保证存在。
- * 把兜底做成枚举成员（而不是每个消费点各写一个 if）是为了让文案/配色只有一处定义。
- */
-export type ProxyStatus = 'up' | 'down' | 'degraded' | 'unknown';
+/** 出站代理节点（#55 `proxy` 与 `llm.proxy_pool` 共用）。 */
+export interface MonitorProxyNode {
+  host: string;
+  port: number;
+  url: string;
+  is_healthy: boolean;
+  consecutive_failures: number;
+  total_requests: number;
+  last_check_at: string | null;
+}
 
+/** 单个 LLM Key 的统计（#55 `llm.providers[*].key_stats[]`）。 */
+export interface MonitorLlmKeyStats {
+  label: string;
+  is_active: boolean;
+  is_healthy: boolean;
+  total_calls: number;
+  error_count: number;
+  error_rate: number;
+  last_used_at: string | null;
+}
+
+/** 单个 LLM 提供方（#55 `llm.providers[*]`；键为提供方名，`name` 字段由前端从键取）。 */
+export interface MonitorLlmProvider {
+  name: string;
+  healthy_keys: number;
+  key_stats: MonitorLlmKeyStats[];
+}
+
+/**
+ * 监控总览（#55 BFF 三路聚合 `{proxy, llm, admin}`）。
+ *
+ * <p>对齐 `AgentOpsFacadeService#monitorOverview`：`proxy` 来自
+ * `GET /admin/proxy/status`（= `proxy_pool` 数组）、`llm` 来自
+ * `GET /admin/llm/status`（= `llm_gateway.get_status()`）、`admin` 来自
+ * `GET /admin/health`。T04 收口删除臆造的
+ * `proxy_status / agents_running / agents_total / llm_providers / updated_at`。
+ */
 export interface MonitorOverview {
-  /**
-   * 出站代理状态。**可选，且可能为 null。**
-   *
-   * <p>为什么不是必填：#55 `GET /agent-ops/monitor/overview` 在 BFF
-   * （`AgentOpsFacadeService#monitorOverview`）里是把 ai-platform 的
-   * `admin/proxy/status`、`admin/llm/status`、`admin/health` 三路响应
-   * 原样拼成 `{proxy, llm, admin}` 返回的，**并不产出 `proxy_status`**。
-   * 也就是说运行时取到 `undefined` 是常态而非异常。
-   *
-   * <p>此前这里声明为 `'up' | 'down' | 'degraded'`（必填），等于向 TS 撒谎：
-   * 消费点 `PROXY_STATUS_TEXT[proxy_status].label` 被静态判定为安全，
-   * 实际查表得 `undefined` 后读 `.label` 直接白屏。
-   * 现在声明为可选，TS 会在每个消费点强制要求兜底 —— 这是修复的核心。
-   */
-  proxy_status?: ProxyStatus | null;
-  agents_running: number;
-  agents_total: number;
-  llm_providers: Array<{
-    name: string;
-    healthy: boolean;
-    /** failover 熔断中为 true，可由 agent:monitor:operate 重置。 */
-    tripped: boolean;
-    latency_ms?: number;
-  }>;
-  updated_at: string;
+  proxy: MonitorProxyNode[];
+  llm: {
+    initialized: boolean;
+    failover: {
+      active_provider: string;
+      is_failover_active: boolean;
+      primary: string;
+      fallback: string;
+      failure_counts: Record<string, number>;
+      last_failure_at: Record<string, string | null>;
+    };
+    proxy_pool: MonitorProxyNode[];
+    /** 键为提供方名，值为 `{healthy_keys, key_stats}`。 */
+    providers: Record<string, Omit<MonitorLlmProvider, 'name'>>;
+  };
+  admin: {
+    llm_gateway: {
+      initialized: boolean;
+      active_provider: string;
+      is_failover_active: boolean;
+    };
+    proxy_nodes: number;
+    healthy_proxy_nodes: number;
+  };
 }
 
 /**

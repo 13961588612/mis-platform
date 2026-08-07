@@ -132,10 +132,10 @@ export function AgentAgentDetailPage() {
                   { label: 'Agent ID', value: agent?.agent_id ?? agentId },
                   { label: '显示名', value: agent?.display_name },
                   { label: '角色', value: agent?.role === 'coordinator' ? '协调者' : '执行者' },
-                  { label: '模型', value: agent?.model },
-                  { label: '工作目录', value: agent?.workspace },
-                  { label: '已启用技能数', value: agent?.enabled_skill_count ?? 0 },
-                  { label: '更新时间', value: formatTime(agent?.updated_at) },
+                  { label: '主模型', value: agent?.model_primary },
+                  { label: '备用模型', value: agent?.model_fallback },
+                  { label: '活跃会话数', value: agent?.active_sessions ?? 0 },
+                  { label: '启动时间', value: formatTime(agent?.started_at) },
                   { label: '描述', value: agent?.description },
                 ]}
               />

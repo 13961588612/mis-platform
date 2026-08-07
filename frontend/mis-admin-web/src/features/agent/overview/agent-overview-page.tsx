@@ -36,21 +36,7 @@ import { AgentPageShell } from '../components/agent-page-shell';
 import { AgentStatusBadge } from '../components/agent-status-badge';
 import { getMonitorOverview, listAgents } from '../api/agent-ops-api';
 import { agentErrorMessage, formatTime } from '../types';
-import type { AgentSummary, MonitorOverview, ProxyStatus } from '../types';
-
-/**
- * Proxy 状态 → 中文 + 语义色。`AgentStatusBadge` 没有这一类，且只此一处用，就地映射。
- *
- * <p>键类型用 `ProxyStatus` 而非 `MonitorOverview['proxy_status']`：后者现在是可选且可为 null
- * （wire 上不保证有这个字段，见 types.ts），直接当 Record 的键会把 `undefined | null` 也算进去。
- * `unknown` 一档是**必须**的兜底文案，缺它就等于把「后端没给值」渲染成空白。
- */
-const PROXY_STATUS_TEXT: Record<ProxyStatus, { label: string; cls: string }> = {
-  up: { label: '正常', cls: 'text-success' },
-  degraded: { label: '降级', cls: 'text-warning' },
-  down: { label: '不可用', cls: 'text-destructive' },
-  unknown: { label: '状态未知', cls: 'text-muted-foreground' },
-};
+import type { AgentSummary, MonitorLlmProvider, MonitorOverview } from '../types';
 
 /** 快捷入口：`permission` 与 ui.md §2 的菜单码一致，无权限者直接不渲染该卡。 */
 const QUICK_LINKS: ReadonlyArray<{
@@ -71,6 +57,8 @@ export function AgentOverviewPage() {
   const [loading, setLoading] = useState(false);
   const [agentsError, setAgentsError] = useState<string | null>(null);
   const [monitorError, setMonitorError] = useState<string | null>(null);
+  /** wire 无时间戳字段；#55 fetch 成功时打点本地时间用于卡副文案。 */
+  const [loadedAt, setLoadedAt] = useState<Date | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -90,6 +78,7 @@ export function AgentOverviewPage() {
 
     if (monitorResult.status === 'fulfilled') {
       setMonitor(monitorResult.value);
+      setLoadedAt(new Date());
     } else {
       setMonitor(null);
       setMonitorError(agentErrorMessage(monitorResult.reason, '获取监控总览失败'));
@@ -103,14 +92,33 @@ export function AgentOverviewPage() {
 
   const runningCount = useMemo(() => agents.filter((a) => a.state === 'running').length, [agents]);
   const errorCount = useMemo(() => agents.filter((a) => a.state === 'error').length, [agents]);
-  const skillCount = useMemo(
-    () => agents.reduce((sum, a) => sum + (a.enabled_skill_count ?? 0), 0),
+  const activeSessions = useMemo(
+    () => agents.reduce((sum, a) => sum + (a.active_sessions ?? 0), 0),
     [agents],
   );
 
-  const providers = monitor?.llm_providers ?? [];
-  const healthyProviders = providers.filter((p) => p.healthy).length;
-  const trippedProviders = providers.filter((p) => p.tripped).length;
+  /** 把 `llm.providers`（Record）摊平成带 `name` 的行，供下方明细消费。 */
+  const providers = useMemo<MonitorLlmProvider[]>(() => {
+    const raw = monitor?.llm?.providers;
+    if (!raw) return [];
+    return Object.entries(raw).map(([name, value]) => ({
+      name,
+      healthy_keys: value.healthy_keys,
+      key_stats: value.key_stats,
+    }));
+  }, [monitor]);
+
+  const isFailoverActive = monitor?.llm?.failover?.is_failover_active === true;
+  const activeProvider = monitor?.llm?.failover?.active_provider ?? '';
+  const healthyKeyTotal = useMemo(
+    () =>
+      providers.reduce(
+        (sum, p) => sum + (typeof p.healthy_keys === 'number' ? p.healthy_keys : 0),
+        0,
+      ),
+    [providers],
+  );
+  const loadedAtIso = loadedAt ? loadedAt.toISOString() : null;
 
   /** 两侧都失败才算整页失败：一半可用时不该整页红。 */
   const bothFailed = agentsError !== null && monitorError !== null;
@@ -149,7 +157,7 @@ export function AgentOverviewPage() {
               <StatCard label="Agent 总数" value={agents.length} icon={Bot} />
               <StatCard label="运行中" value={runningCount} icon={CirclePlay} />
               <StatCard label="异常" value={errorCount} icon={AlertTriangle} />
-              <StatCard label="已启用技能合计" value={skillCount} icon={Sparkles} />
+              <StatCard label="活跃会话合计" value={activeSessions} icon={Sparkles} />
             </div>
           )}
         </section>
@@ -167,34 +175,34 @@ export function AgentOverviewPage() {
             </div>
           ) : (
             <>
-              <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+              <div className="grid grid-cols-2 gap-3 lg:grid-cols-3">
                 <StatCard
-                  label="Proxy 状态"
-                  // 三重兜底：字段缺失/为 null → 归 'unknown'；取到未登记的新枚举值 →
-                  // `?.` 让查表落空时返回 undefined 而不是抛错；最后 `??` 给出可读文案。
+                  label="Proxy 健康"
                   value={
-                    monitor
-                      ? (PROXY_STATUS_TEXT[monitor.proxy_status ?? 'unknown']?.label ?? '状态未知')
+                    monitor?.admin
+                      ? `${monitor.admin.healthy_proxy_nodes} / ${monitor.admin.proxy_nodes}`
                       : '-'
                   }
                   icon={ServerCog}
-                  description={monitor ? `更新于 ${formatTime(monitor.updated_at)}` : undefined}
+                  description={monitor ? `更新于 ${formatTime(loadedAtIso)}` : undefined}
                 />
                 <StatCard
-                  label="运行中 / 已登记 Agent"
-                  value={monitor ? `${monitor.agents_running} / ${monitor.agents_total}` : '-'}
-                  icon={CirclePlay}
-                />
-                <StatCard
-                  label="模型提供方健康"
-                  value={monitor ? `${healthyProviders} / ${providers.length}` : '-'}
+                  label="模型提供方"
+                  value={monitor ? providers.length : '-'}
                   icon={Cpu}
+                  description={monitor ? `健康 key 合计 ${healthyKeyTotal}` : undefined}
                 />
                 <StatCard
-                  label="熔断中提供方"
-                  value={monitor ? trippedProviders : '-'}
+                  label="熔断中"
+                  value={monitor ? (isFailoverActive ? 1 : 0) : '-'}
                   icon={ShieldAlert}
-                  description={trippedProviders > 0 ? '可在系统监控页重置' : undefined}
+                  description={
+                    monitor
+                      ? isFailoverActive
+                        ? `当前提供方 ${activeProvider || '未知'}，可在系统监控页重置`
+                        : '未触发熔断'
+                      : undefined
+                  }
                 />
               </div>
 
@@ -207,12 +215,15 @@ export function AgentOverviewPage() {
                         className="flex flex-wrap items-center gap-2 text-xs"
                       >
                         <span className="min-w-[8rem] font-mono text-foreground">{p.name}</span>
-                        <span className={p.healthy ? 'text-success' : 'text-destructive'}>
-                          {p.healthy ? '健康' : '异常'}
+                        <span
+                          className={
+                            (p.healthy_keys ?? 0) > 0 ? 'text-success' : 'text-destructive'
+                          }
+                        >
+                          {p.healthy_keys} 个健康 key
                         </span>
-                        {p.tripped ? <span className="text-warning">熔断中</span> : null}
                         <span className="text-muted-foreground">
-                          {typeof p.latency_ms === 'number' ? `${p.latency_ms} ms` : '延迟未知'}
+                          {p.key_stats?.length ?? 0} 个 key 明细
                         </span>
                       </div>
                     ))}
