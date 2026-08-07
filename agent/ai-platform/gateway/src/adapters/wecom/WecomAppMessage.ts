@@ -139,7 +139,8 @@ export class WecomAppMessage {
       },
     );
 
-    const data = response.data as { errcode: number; errmsg: string; access_token: string; expires_in: number };
+    // withRetry 返回 RetryResult 信封：真实响应在 .value（不是裸 AxiosResponse）。
+    const data = response.value.data as { errcode: number; errmsg: string; access_token: string; expires_in: number };
     if (data.errcode !== 0) {
       throw new Error(`Failed to get access_token: ${data.errcode} ${data.errmsg}`);
     }
@@ -273,7 +274,8 @@ export class WecomAppMessage {
       },
     );
 
-    const data = response.data;
+    // withRetry 返回 RetryResult 信封：真实响应在 .value（不是裸 AxiosResponse）。
+    const data = response.value.data;
     if (data.errcode !== 0) {
       throw new Error(
         `Failed to send app message: ${data.errcode} ${data.errmsg}`,

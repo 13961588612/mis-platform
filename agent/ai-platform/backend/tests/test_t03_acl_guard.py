@@ -151,7 +151,7 @@ async def test_rule3_empty_code_set_is_denied() -> None:
 
 async def test_rule3_missing_required_code_is_denied() -> None:
     """规则 3b：持有其它码但缺所需码 → 拒绝。"""
-    resolver = FakeResolver(codes={"ai:skill:other.skill:run", "agent:mcp:call"})
+    resolver = FakeResolver(codes={"ai:skill:other.skill:run", "ai:mcp:call"})
     guard = SkillAclGuard(resolver, None, make_settings())
 
     with pytest.raises(SkillAclDenied) as exc:

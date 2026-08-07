@@ -270,8 +270,10 @@ class Settings(BaseSettings):
     MIS_ACL_PERMISSIONS_PATH: str = "/internal/permissions"
     # 回源时 appId 入参的默认值（工具执行链路无 JWT，取此默认；REST 链路优先取 ctx.profile["app_id"]）。
     MIS_ACL_DEFAULT_APP_ID: str = ""
-    # MCP 工具（E2）在 skill 注册表未命中时的兜底权限码（V20 已落真实码：菜单 92060 / api 92141）。
-    MIS_ACL_MCP_FALLBACK_PERMISSION: str = "agent:mcp:call"
+    # MCP 工具（E2）在 skill 注册表未命中时的兜底权限码（V22 已落真实码：菜单 92301，
+    # App=system，授 role_id=1）。注意与 V20 的运营台操作码 agent:mcp:call 解耦：
+    # 运行时执行码 = ai:mcp:call，运营台手动调用码 = agent:mcp:call（Q7 方案 B+）。
+    MIS_ACL_MCP_FALLBACK_PERMISSION: str = "ai:mcp:call"
     # 超管豁免角色码；**默认空 = 豁免关闭**（§4.2 规则 4）。显式配置后命中角色方可绕过。
     MIS_ACL_SUPERADMIN_BYPASS_ROLE_CODES: list[str] = Field(
         default_factory=list,

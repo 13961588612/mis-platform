@@ -139,7 +139,8 @@ export class WecomJSSDKHelper {
       },
     );
 
-    const data = response.data;
+    // withRetry 返回 RetryResult 信封：真实响应在 .value（不是裸 AxiosResponse）。
+    const data = response.value.data;
     if (data.errcode !== 0) {
       throw new Error(
         `Failed to get access_token: ${data.errcode} ${data.errmsg}`,
@@ -191,7 +192,8 @@ export class WecomJSSDKHelper {
       },
     );
 
-    const data = response.data;
+    // withRetry 返回 RetryResult 信封：真实响应在 .value（不是裸 AxiosResponse）。
+    const data = response.value.data;
     if (data.errcode !== 0) {
       throw new Error(
         `Failed to get jsapi_ticket: ${data.errcode} ${data.errmsg}`,

@@ -12,12 +12,13 @@
  *    `WECOM_BOT_ID` + `WECOM_BOT_SECRET` 环境变量，保证仍能起单 Bot
  *    （§9.4 明确要求保留）。
  *
- * 本期只做 **O1f-1（启动时拉取 + 多实例）**；O1f-2 热重载不做，运营台
- * 已常驻「保存后需重启 Gateway 生效」提示。
+ * O1f-1（启动时拉取 + 多实例）由 `load()` 提供；O1f-2（热加载）由
+ * `fetchRuntime()` 三态拉取 + `startPolling()` / `stopPolling()` 周期轮询提供。
+ * 轮询语义铁律：`null`=拉取失败**跳过本轮**（严禁当空清单）、`[]`=收敛到零、
+ * 数组=正常差量。
  *
  * @module config/botConfigSource
  */
-
 import axios, { type AxiosInstance } from 'axios';
 import type { WecomBotAdapterConfig } from '../adapters/wecom/WecomBotAdapter.js';
 import { logger } from '../middleware/logger.js';
@@ -122,6 +123,10 @@ function asString(value: unknown): string {
 export class BotConfigSource {
   private readonly options: BotConfigSourceOptions;
   private readonly http: AxiosInstance;
+  /** 轮询定时器句柄；未启动轮询时为 null */
+  private pollTimer: NodeJS.Timeout | null = null;
+  /** 重入保护：上一轮拉取未完成时跳过本轮 */
+  private polling = false;
 
   /**
    * @param options - 配置来源选项
@@ -215,6 +220,148 @@ export class BotConfigSource {
         'Backend bot config pull failed',
       );
       return [];
+    }
+  }
+
+  /**
+   * 拉取 backend 启用中的运行时清单（O1f-2 轮询用，**三态语义**）。
+   *
+   * - `null`：拉取失败（backend 不可达 / 非 200 / 无 token）⇒ 调用方**跳过本轮**，
+   *   严禁把失败当成空清单（否则 backend 抖动会误停全部 Bot）；
+   * - `[]`：backend 健康但零启用 Bot ⇒ 收敛到零（停掉全部，含 env 兜底 Bot）；
+   * - 数组：正常差量（含明文 secret，**严禁写日志**）。
+   *
+   * @returns 三态结果
+   */
+  async fetchRuntime(): Promise<BotRuntimeConfig[] | null> {
+    if (this.options.internalToken.length === 0) {
+      logger.warn(
+        'GATEWAY_INTERNAL_TOKEN not set, skipping runtime pull (fail-closed)',
+      );
+      return null;
+    }
+
+    try {
+      const response = await this.http.get<ResultEnvelope<RuntimeBotWire[]>>(
+        '/api/v1/channels/wecom/bots/runtime',
+        {
+          params: { enabled: true },
+          headers: { 'X-Internal-Token': this.options.internalToken },
+        },
+      );
+
+      if (response.status !== 200) {
+        logger.warn(
+          { status: response.status, message: response.data?.message },
+          'Backend bot runtime pull returned non-200',
+        );
+        return null;
+      }
+
+      const items = Array.isArray(response.data?.data) ? response.data.data : [];
+      const configs: BotRuntimeConfig[] = [];
+      for (const item of items) {
+        const config = this.toRuntimeConfig(item);
+        if (config != null) {
+          configs.push(config);
+        }
+      }
+      return configs;
+    } catch (error) {
+      logger.warn(
+        { error: error instanceof Error ? error.message : String(error) },
+        'Backend bot runtime pull failed',
+      );
+      return null;
+    }
+  }
+
+  /**
+   * 启动周期轮询（O1f-2 热加载拉取侧）。
+   *
+   * - 仅当 `GATEWAY_INTERNAL_TOKEN` 非空时才有意义（无 token 时 `fetchRuntime()`
+   *   恒返回 null，轮询无意义 ⇒ 不启动，保持 fail-closed）；
+   * - `intervalMs <= 0` 时不启动（退回 O1f-1 行为）；
+   * - 内置重入保护：上一轮未完成则跳过本轮；
+   * - 启动后**立即执行一轮**（首个配置变更不用等一个完整周期）。
+   *
+   * @param intervalMs - 轮询周期（毫秒）
+   * @param onConfigs - 每轮结果回调（三态：null=跳过、[]=收敛到零、数组=差量）
+   * @returns 停止函数（幂等）
+   */
+  startPolling(
+    intervalMs: number,
+    onConfigs: (configs: BotRuntimeConfig[] | null) => void | Promise<void>,
+  ): () => void {
+    if (intervalMs <= 0 || this.options.internalToken.length === 0) {
+      logger.warn(
+        {
+          intervalMs,
+          hasToken: this.options.internalToken.length > 0,
+        },
+        'Bot config polling not started (interval<=0 or no internal token)',
+      );
+      return () => undefined;
+    }
+
+    if (this.pollTimer != null) {
+      logger.warn('Bot config polling already started');
+      return () => this.stopPolling();
+    }
+
+    this.polling = false;
+    this.pollTimer = setInterval(() => {
+      void this.pollOnce(onConfigs);
+    }, intervalMs);
+
+    // 优雅关停由 stopPolling 显式清除；unref 避免定时器阻塞进程退出兜底。
+    if (typeof this.pollTimer.unref === 'function') {
+      this.pollTimer.unref();
+    }
+
+    logger.info({ intervalMs }, 'Bot config polling started');
+
+    // 立即执行一轮，避免首个配置变更要等一个完整周期。
+    void this.pollOnce(onConfigs);
+
+    return () => this.stopPolling();
+  }
+
+  /**
+   * 停止轮询（幂等）。
+   */
+  stopPolling(): void {
+    if (this.pollTimer != null) {
+      clearInterval(this.pollTimer);
+      this.pollTimer = null;
+    }
+    this.polling = false;
+    logger.info('Bot config polling stopped');
+  }
+
+  /**
+   * 单轮拉取：失败/无 token → 回调 null（调用方跳过本轮）；成功 → 回调清单。
+   *
+   * @param onConfigs - 本轮结果回调
+   */
+  private async pollOnce(
+    onConfigs: (configs: BotRuntimeConfig[] | null) => void | Promise<void>,
+  ): Promise<void> {
+    if (this.polling) {
+      logger.debug('Bot config poll skipped (previous round still in flight)');
+      return;
+    }
+    this.polling = true;
+    try {
+      const configs = await this.fetchRuntime();
+      await onConfigs(configs);
+    } catch (error) {
+      logger.error(
+        { error: error instanceof Error ? error.message : String(error) },
+        'Bot config poll round failed',
+      );
+    } finally {
+      this.polling = false;
     }
   }
 

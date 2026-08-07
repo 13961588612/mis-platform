@@ -68,6 +68,14 @@ export type StreamMessage = Record<string, string>;
 /** 消费回调类型 */
 export type ConsumeCallback = (message: InboundMessage) => Promise<void>;
 
+/**
+ * `xreadgroup` 返回的一批流结果（ioredis 无重载多参调用时类型退化为 unknown）。
+ *
+ * 结构：`[[streamKey, [[messageId, fields[]], ...]], ...]`
+ * 只在 `consumeLoop` 消费侧使用，`fields` 为偶数长度的扁平键值数组。
+ */
+type XReadGroupStream = [string, Array<[string, string[]]>];
+
 // ============================================================================
 // 常量
 // ============================================================================
@@ -323,7 +331,9 @@ export class StreamConsumer {
           continue;
         }
 
-        for (const [, messages] of result) {
+        // ioredis 的多参 xreadgroup 重载无返回类型（unknown），此处显式断言。
+        const streams = result as XReadGroupStream[];
+        for (const [, messages] of streams) {
           for (const [messageId, fields] of messages) {
             await this.processMessage(
               streamKey,

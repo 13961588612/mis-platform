@@ -73,19 +73,6 @@ function base64UrlDecode(input: string): Buffer {
 }
 
 /**
- * Base64URL 编码
- * @param buffer - 原始 Buffer
- * @returns Base64URL 字符串
- */
-function base64UrlEncode(buffer: Buffer): string {
-  return buffer
-    .toString('base64')
-    .replace(/\+/g, '-')
-    .replace(/\//g, '_')
-    .replace(/=/g, '');
-}
-
-/**
  * 验证 JWT Token（本地 HS256 验签）
  *
  * @param token - JWT Token 字符串
@@ -368,6 +355,9 @@ const PUBLIC_PATHS = [
   '/auth/wecom/callback',
   '/auth/login',
   '/auth/refresh',
+  // backend #54 无 token 直连健康端点（零 backend 改动）；仅暴露 botId→健康状态。
+  // 注意：前缀匹配会把 `/admin/bots/health` 放行；`/admin/bots` 本身不在列表 ⇒ 保持鉴权。
+  '/admin/bots/health',
 ];
 
 /**

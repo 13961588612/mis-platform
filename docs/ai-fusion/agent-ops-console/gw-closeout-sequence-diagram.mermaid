@@ -1,0 +1,40 @@
+sequenceDiagram
+    autonumber
+    participant M as main (index.ts)
+    participant S as BotConfigSource
+    participant B as backend /channels/wecom/bots/runtime
+    participant R as BotRegistry
+    participant A as WecomBotAdapter
+
+    Note over M: 启动（O1f-1，既有）
+    M->>S: load()
+    S->>B: GET /runtime?enabled=true (X-Internal-Token)
+    B-->>S: {code:0, data:[{bot_id,name,enabled,ws_url,secret,bound_agent_id}]}
+    S-->>M: BotRuntimeConfig[]
+    M->>R: register(configs) + startAll(onMessage)
+
+    Note over M: 热加载轮询（O1f-2，新增）
+    M->>S: startPolling(30000, onConfigs)
+    loop 每 30s
+        S->>B: GET /runtime?enabled=true
+        alt 拉取失败 / 非200 / 无token
+            B-->>S: null
+            S-->>M: 跳过本轮（保持现状）
+        else 成功
+            B-->>S: BotRuntimeConfig[]
+            S-->>M: onConfigs(desired)
+            M->>R: reconcile(desired)
+            alt 新增 enabled
+                R->>A: new WecomBotAdapter + start()
+            else ws_url/secret 变更
+                R->>A: adapter.stop() → new adapter → start()
+            else name/bound_agent_id 变更
+                R->>R: entry.config 原地更新（不重启）
+            else 消失（停用/删除）
+                R->>A: adapter.stop() + dropSessionsOf + entries.delete
+            end
+        end
+    end
+    Note over M: 关停
+    M->>S: stopPolling()（清除 timer）
+    M->>R: stopAll()

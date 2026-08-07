@@ -148,8 +148,8 @@ export class MessageRouter {
    * @returns 绑定的 Agent ID 或 null
    */
   async resolveAgent(
-    channel: string,
-    userId: string,
+    _channel: string,
+    _userId: string,
     sessionId: string,
   ): Promise<string | null> {
     // 查询会话绑定

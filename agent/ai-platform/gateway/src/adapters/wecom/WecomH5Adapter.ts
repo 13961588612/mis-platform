@@ -240,7 +240,7 @@ export class WecomH5Adapter {
    * 关闭所有连接
    */
   closeAllConnections(): void {
-    for (const [sessionId, ws] of this.connections) {
+    for (const ws of this.connections.values()) {
       if (ws.readyState === ws.OPEN) {
         ws.close(1001, 'Server shutting down');
       }

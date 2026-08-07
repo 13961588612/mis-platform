@@ -14,7 +14,7 @@
 import 'dotenv/config';
 
 import * as fs from 'node:fs';
-import Redis from 'ioredis';
+import { Redis } from 'ioredis';
 import { logger } from './middleware/logger.js';
 import {
   createServer,
@@ -25,7 +25,6 @@ import {
 import { createBotConfigSourceFromEnv } from './config/botConfigSource.js';
 import { StreamConsumer } from './queue/redisStream.js';
 import type { InboundMessage } from './queue/redisStream.js';
-import { EventTransformer } from './router/EventTransformer.js';
 import {
   parseBackendAgentEvent,
   toGatewayChannel,
@@ -202,7 +201,7 @@ async function main(): Promise<void> {
         clearTimeout(timeout);
         resolve();
       });
-      redis!.on('error', (error) => {
+      redis!.on('error', (error: Error) => {
         clearTimeout(timeout);
         reject(error);
       });
@@ -218,7 +217,7 @@ async function main(): Promise<void> {
         clearTimeout(timeout);
         resolve();
       });
-      redisConsumer.on('error', (error) => {
+      redisConsumer.on('error', (error: Error) => {
         clearTimeout(timeout);
         reject(error);
       });
@@ -247,6 +246,36 @@ async function main(): Promise<void> {
     logger.info(
       { registered: botRegistry.size(), started: startedBots },
       'Wecom Bot adapters startup finished',
+    );
+
+    // 启动热加载轮询（O1f-2）：周期拉取 backend 启用清单，差量 reconcile。
+    // 无 GATEWAY_INTERNAL_TOKEN 时 startPolling 内部直接跳过（保持 fail-closed）；
+    // BOT_CONFIG_POLL_INTERVAL_MS<=0 时不轮询（退回 O1f-1 行为）。
+    const botPollIntervalMs = parseInt(
+      process.env['BOT_CONFIG_POLL_INTERVAL_MS'] ?? '30000',
+      10,
+    );
+    const stopBotPolling = botConfigSource.startPolling(
+      botPollIntervalMs,
+      async (runtimeConfigs) => {
+        if (runtimeConfigs == null) {
+          // 拉取失败 / 无 token：跳过本轮，保持现状（严禁把失败当空清单）。
+          logger.warn('Bot config poll skipped (pull failed)');
+          return;
+        }
+        const reconcileReport = await botRegistry.reconcile(runtimeConfigs);
+        logger.info(
+          {
+            started: reconcileReport.started,
+            restarted: reconcileReport.restarted,
+            metadataUpdated: reconcileReport.metadataUpdated,
+            stopped: reconcileReport.stopped,
+            removed: reconcileReport.removed,
+            errors: reconcileReport.errors,
+          },
+          'Bot config reconciled',
+        );
+      },
     );
 
     // 启动事件流消费者（消费 Agent Core 返回的事件）— 使用独立 Redis 连接
@@ -327,6 +356,9 @@ async function main(): Promise<void> {
       isShuttingDown = true;
 
       logger.info({ signal }, 'Received shutdown signal, shutting down gracefully');
+
+      // 停止热加载轮询（先停拉取，避免关停期间再触发 reconcile）
+      stopBotPolling();
 
       // 停止事件消费者
       eventConsumer.stop();

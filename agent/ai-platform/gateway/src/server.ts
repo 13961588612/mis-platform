@@ -173,8 +173,8 @@ function registerRoutes(
   botRegistry: BotRegistry,
   h5Adapter: H5Adapter,
   messageRouter: MessageRouter,
-  eventTransformer: EventTransformer,
-  config: GatewayServerConfig,
+  _eventTransformer: EventTransformer,
+  _config: GatewayServerConfig,
 ): void {
   // ===== 健康检查 =====
 
@@ -209,6 +209,31 @@ function registerRoutes(
       code: ready ? 0 : 5001,
       data: { ready, botConnected },
       message: ready ? 'ready' : 'not ready',
+      traceId: req.id,
+    });
+  });
+
+  // ===== 企微 Bot 管理 / 健康（impl-plan §3.4 原定项，backend #54 消费） =====
+  // 注意路由顺序：静态路径 `/admin/bots`、`/admin/bots/health` 必须注册在
+  // 任何动态 `/{botId}` 之前（Fastify 按注册顺序匹配字面量优先）。
+  // `/admin/bots/health` 已在 auth.ts PUBLIC_PATHS 放行 —— backend #54
+  // 无 token 直连（零 backend 改动），且只暴露 botId→健康状态，敏感度低。
+  // `/admin/bots` 保持 JWT 保护（含 name/wsUrl/lastError，仅内部排障用）。
+
+  app.get('/admin/bots', async (req: FastifyRequest, reply: FastifyReply) => {
+    return reply.send({
+      code: 0,
+      data: botRegistry.list(),
+      message: 'ok',
+      traceId: req.id,
+    });
+  });
+
+  app.get('/admin/bots/health', async (req: FastifyRequest, reply: FastifyReply) => {
+    return reply.send({
+      code: 0,
+      data: botRegistry.health(),
+      message: 'ok',
       traceId: req.id,
     });
   });
@@ -486,7 +511,6 @@ function registerRoutes(
   // ===== 事件流 SSE 端点 =====
 
   app.get('/api/events/stream', async (req: FastifyRequest, reply: FastifyReply) => {
-    const user = (req as unknown as { user: JwtClaims }).user;
     const query = req.query as { sessionId?: string };
 
     if (query.sessionId == null) {

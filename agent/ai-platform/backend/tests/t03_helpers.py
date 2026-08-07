@@ -146,7 +146,7 @@ def make_settings(**overrides: Any) -> SimpleNamespace:
         "MIS_ACL_ENABLED": True,
         "MIS_ACL_SUPERADMIN_BYPASS_ROLE_CODES": [],
         "MIS_ACL_DEFAULT_APP_ID": "",
-        "MIS_ACL_MCP_FALLBACK_PERMISSION": "agent:mcp:call",
+        "MIS_ACL_MCP_FALLBACK_PERMISSION": "ai:mcp:call",
         "acl": None,
     }
     base.update(overrides)

@@ -230,10 +230,10 @@ async def test_tc47_dot_and_underscore_servers_do_not_cross_match() -> None:
     assert r2.metadata["acl"]["data"]["skill_id"] == "mcp-member_profile-query"
 
 
-async def test_e2_tier2_falls_back_to_agent_mcp_call() -> None:
-    """TC-04：registry 未命中 → 退判 ``agent:mcp:call``。"""
+async def test_e2_tier2_falls_back_to_ai_mcp_call() -> None:
+    """TC-04：registry 未命中 → 退判 ``ai:mcp:call``（V22 执行码，Q7 方案 B+）。"""
     inner = McpInnerTool("unknown", "x", "mcp__unknown__x")
-    wrapper, _ = _wrap(inner, codes={"agent:mcp:call"}, registry=FakeRegistry())
+    wrapper, _ = _wrap(inner, codes={"ai:mcp:call"}, registry=FakeRegistry())
 
     result = await wrapper.execute(AnyArgs(), make_ctx(_identity()))
 
@@ -261,7 +261,7 @@ async def test_e2_tier3_denies_and_names_server_and_tool() -> None:
 async def test_e2_missing_tool_info_is_fail_closed() -> None:
     """MCP 展示名但取不到 ``_tool_info`` → 拒绝，不退回反解。"""
     inner = InnerTool(name="mcp__crm__lookup")  # 无 _tool_info
-    wrapper, resolver = _wrap(inner, codes={"agent:mcp:call"}, registry=FakeRegistry())
+    wrapper, resolver = _wrap(inner, codes={"ai:mcp:call"}, registry=FakeRegistry())
 
     result = await wrapper.execute(AnyArgs(), make_ctx(_identity()))
 

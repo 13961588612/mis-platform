@@ -1,0 +1,62 @@
+classDiagram
+    class BotRuntimeConfig {
+        +botId: string
+        +name: string
+        +enabled: boolean
+        +secret: string
+        +wsUrl: string
+        +boundAgentId?: string
+        +heartbeatIntervalSec: number
+        +heartbeatTimeoutCount: number
+        +maxReconnectAttempts: number
+        +sourceName: string
+        +sourceIconUrl?: string
+    }
+    class BotConfigSource {
+        -options: BotConfigSourceOptions
+        -http: AxiosInstance
+        +load() Promise~BotRuntimeConfig[]~
+        +fetchRuntime() Promise~BotRuntimeConfig[] | null~
+        +startPolling(intervalMs, onConfigs) (() => void)
+        -loadFromBackend() Promise~BotRuntimeConfig[]~
+        -toRuntimeConfig(wire) BotRuntimeConfig | null
+        -loadFromEnv() BotRuntimeConfig[]
+    }
+    class BotRegistry {
+        -entries: Map~string, BotEntry~
+        -sessionOwner: Map~string, string~
+        +register(configs) void
+        +startAll(onMessage) Promise~number~
+        +startBot(botId) Promise~boolean~
+        +stopBot(botId) boolean
+        +stopAll() void
+        +reconcile(desired) Promise~ReconcileReport~
+        +dispatchTextDelta(sessionId, delta) Promise~void~
+        +dispatchError(sessionId, message) Promise~void~
+        +dispatchDone(sessionId) Promise~void~
+        +health() Record~string, BotHealth~
+        +list() BotStatusView[]
+        +connectedCount() number
+        -startEntry(botId, entry) Promise~boolean~
+        -restartEntry(botId, entry, config) Promise~boolean~
+        -rememberSessionOwner(sessionId, botId) void
+        -dropSessionsOf(botId) void
+    }
+    class WecomBotAdapter {
+        +start(onMessage) Promise~void~
+        +stop() void
+        +isConnected() boolean
+        -pendingBySession: Map~string, PendingStream~
+    }
+    class ReconcileReport {
+        +started: string[]
+        +stopped: string[]
+        +restarted: string[]
+        +metadataUpdated: string[]
+        +removed: string[]
+        +errors: Array~{botId, reason}~
+    }
+    BotRegistry o-- WecomBotAdapter
+    BotRegistry --> ReconcileReport
+    BotConfigSource --> BotRuntimeConfig
+    BotRegistry ..> BotRuntimeConfig : reconcile(desired)

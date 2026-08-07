@@ -421,7 +421,7 @@ def resolve_acl_lookup_registry(source: ToolRegistry) -> Any:
     （``import_from_mcp`` 正是以该判别名作为 ``skill_id`` 注册的）。
 
     平台尚未 bootstrap（如单测直接构建注册表）时回落到工具源注册表 —— 此时
-    反查必然未命中，E2 走 ``agent:mcp:call`` 兜底码，**仍是 fail-closed**。
+    反查必然未命中，E2 走 ``ai:mcp:call`` 兜底码（V22 执行码），**仍是 fail-closed**。
 
     Args:
         source: Agent 工具源注册表（回落对象）。

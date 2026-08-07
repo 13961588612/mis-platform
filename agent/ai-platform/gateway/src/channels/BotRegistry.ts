@@ -1,5 +1,5 @@
 /**
- * BotRegistry.ts — 企微多 Bot 实例注册表（T04 O1f-1 / B4 验收）
+ * BotRegistry.ts — 企微多 Bot 实例注册表（T04 O1f-1 / B4 验收 + O1f-2 热加载）
  *
  * 把原本「`index.ts` 里写死一个 `WecomBotAdapter`」的单实例结构，换成
  * 「一份配置清单 → N 个 adapter 实例」的注册表，满足 B4 验收：
@@ -8,15 +8,13 @@
  * 核心职责：
  * - `startAll` / `stopAll`：批量生命周期；单个 Bot 启动失败不影响其他 Bot。
  * - `startBot` / `stopBot`：单实例启停（B4「独立停用」）。
+ * - `reconcile`：O1f-2 热加载差量收敛（新增 / 重启 / 元数据更新 / 消失 / 幂等）。
  * - `health()`：给 backend `#54` 消费的 `{botId: 状态}` 映射。
  * - **回程事件派发**：Agent Core 的 `text.delta` / `error` / `done` 事件只带
  *   `sessionId`，不带 `botId`。注册表在入站时记录 `sessionId → botId` 归属，
  *   回程时精确投递；归属未知（如 Gateway 重启后收到旧会话事件）时广播给
  *   全部实例——`WecomBotAdapter` 内部按 `pendingBySession` 判断，不属于自己
  *   的 sessionId 会直接 no-op，所以广播是安全的。
- *
- * 不做的事（O1f-2，本期显式不做）：配置热重载。运营台保存后需重启 Gateway，
- * 前端 `agent-wecom-page.tsx` 已常驻该提示横幅。
  *
  * @module channels/BotRegistry
  */
@@ -56,6 +54,22 @@ export interface BotStatusView {
   wsUrl: string;
   boundAgentId?: string;
   lastError?: string;
+}
+
+/** `reconcile` 差量报告（O1f-2 热加载） */
+export interface ReconcileReport {
+  /** 本轮新增并成功启动的 botId */
+  started: string[];
+  /** 本轮从「运行中」变为停止的 botId（含重启前的旧实例与消失场景） */
+  stopped: string[];
+  /** 本轮因 wsUrl/secret 变更而重启的 botId */
+  restarted: string[];
+  /** 本轮仅元数据（name/boundAgentId）原地更新的 botId（未重启） */
+  metadataUpdated: string[];
+  /** 本轮从注册表删除的 botId（停用/删除） */
+  removed: string[];
+  /** 启动/重启失败项 */
+  errors: Array<{ botId: string; reason: string }>;
 }
 
 // ============================================================================
@@ -201,6 +215,96 @@ export class BotRegistry {
   }
 
   /**
+   * 按期望清单差量收敛（O1f-2 热加载收敛侧）。
+   *
+   * `desired` 是轮询到的**启用中** Bot 清单（含明文 secret，严禁写日志）：
+   * - 新增 → 建条目 + `startBot`（失败只记 `lastError` 不阻塞其他 Bot）；
+   * - 已存在且 `wsUrl`/`secret` 任一变化 → **重启**（新 adapter，保留 sessionOwner）；
+   * - 已存在且仅 `name`/`boundAgentId` 变化 → 原地更新配置，**不重启**；
+   * - 已存在且配置全等 → no-op（幂等）；
+   * - 清单中消失（停用/删除）→ `stopBot` + drop 会话归属 + 删除条目。
+   *
+   * 注册表只保留「需要运行的 Bot」：期望清单之外一律移除（停用与删除动作相同，
+   * 都从启用清单消失，无需区分）。调用方保证：`desired` 为空数组 = 收敛到零；
+   * **`null`（拉取失败）不得进入本方法**，由调用方跳过本轮。
+   *
+   * @param desired - 期望运行的启用 Bot 配置数组
+   * @returns 差量报告
+   */
+  async reconcile(desired: BotRuntimeConfig[]): Promise<ReconcileReport> {
+    const report: ReconcileReport = {
+      started: [],
+      stopped: [],
+      restarted: [],
+      metadataUpdated: [],
+      removed: [],
+      errors: [],
+    };
+
+    const desiredIds = new Set<string>();
+    for (const config of desired) {
+      desiredIds.add(config.botId);
+      const entry = this.entries.get(config.botId);
+
+      if (entry == null) {
+        // 新增（enabled）：建条目并启动；启动失败只记 lastError，不阻塞。
+        const newEntry: BotEntry = {
+          config,
+          adapter: new WecomBotAdapter(config),
+          started: false,
+        };
+        this.entries.set(config.botId, newEntry);
+        const ok = await this.startBot(config.botId);
+        if (ok) {
+          report.started.push(config.botId);
+        } else {
+          report.errors.push({
+            botId: config.botId,
+            reason: newEntry.lastError ?? 'start failed',
+          });
+        }
+        continue;
+      }
+
+      // 已存在：连接参数变更 → 重启；仅元数据变更 → 原地更新；全等 → no-op。
+      if (this.configsEqual(entry.config, config)) {
+        continue;
+      }
+      if (
+        entry.config.wsUrl !== config.wsUrl ||
+        entry.config.secret !== config.secret
+      ) {
+        const ok = await this.restartEntry(config.botId, entry, config);
+        if (ok) {
+          report.restarted.push(config.botId);
+        } else {
+          report.errors.push({
+            botId: config.botId,
+            reason: entry.lastError ?? 'restart failed',
+          });
+        }
+        continue;
+      }
+      entry.config = config;
+      report.metadataUpdated.push(config.botId);
+    }
+
+    // 清单中消失（停用/删除）：stop + drop 会话归属 + 删除条目。
+    for (const [botId, entry] of [...this.entries]) {
+      if (!desiredIds.has(botId)) {
+        if (entry.started) {
+          this.stopBot(botId);
+          report.stopped.push(botId);
+        }
+        this.entries.delete(botId);
+        report.removed.push(botId);
+      }
+    }
+
+    return report;
+  }
+
+  /**
    * 实际执行单实例启动并包装入站回调（记录 session 归属）。
    *
    * @param botId - 目标 Bot ID
@@ -236,6 +340,54 @@ export class BotRegistry {
       );
       return false;
     }
+  }
+
+  /**
+   * 重启单实例（连接参数变更路径）。
+   *
+   * 关键差异 vs `stopBot`：**保留 sessionOwner 映射**（不调 `dropSessionsOf`），
+   * 回程事件仍能精确投递到新 adapter（新 adapter 无 pending ⇒ no-op，不误广播）。
+   * 进行中的流式回复至多断一条（设计裁定：连接参数变更重启不做 drain）。
+   *
+   * @param botId - 目标 Bot ID
+   * @param entry - 注册表条目（原地替换 adapter）
+   * @param config - 新配置（含变更后的 wsUrl/secret）
+   * @returns 是否重启成功
+   */
+  private async restartEntry(
+    botId: string,
+    entry: BotEntry,
+    config: BotRuntimeConfig,
+  ): Promise<boolean> {
+    entry.adapter.stop();
+    entry.config = config;
+    entry.adapter = new WecomBotAdapter(config);
+    entry.started = false;
+    logger.info(
+      { botId, name: config.name, wsUrl: config.wsUrl },
+      'Wecom bot connection config changed, restarting adapter',
+    );
+    return this.startEntry(botId, entry);
+  }
+
+  /**
+   * 判断两份配置是否等价（决定 reconcile 是否需要重启/更新）。
+   *
+   * 只比较管理面与连接参数（name/enabled/wsUrl/secret/boundAgentId）；
+   * 心跳/重连等运行参数来自全局默认（env），不参与差量。
+   *
+   * @param a - 现配置
+   * @param b - 期望配置
+   * @returns 是否等价
+   */
+  private configsEqual(a: BotRuntimeConfig, b: BotRuntimeConfig): boolean {
+    return (
+      a.name === b.name &&
+      a.enabled === b.enabled &&
+      a.wsUrl === b.wsUrl &&
+      a.secret === b.secret &&
+      (a.boundAgentId ?? '') === (b.boundAgentId ?? '')
+    );
   }
 
   // --------------------------------------------------------------------

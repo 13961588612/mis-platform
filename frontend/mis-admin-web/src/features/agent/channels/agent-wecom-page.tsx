@@ -12,9 +12,9 @@
  * `AgentContentState`。运营在后端未就绪时依然能打开表单看清字段形态，
  * 后端上线后点「重试」即可，无需刷新浏览器。这与会话页 #27 的处理一致。
  *
- * <p>② **常驻「保存后需重启 Gateway 生效」提示条**：当前 Gateway 启动时一次性装载单 Bot 配置，
- * 没有热更新通道。配置写库成功 ≠ 线上生效，如果不说明，运营会在改完后盯着
- * "健康：离线"反复怀疑自己填错了。这是策略降级，T04 改造 Gateway 后再撤掉这条。
+ * <p>② **常驻「配置已热生效」提示条**：Gateway 已实现 O1f-2 热加载（轮询 backend
+ * 启用清单，默认 30s 差量收敛）。配置写库成功 ≈ 线上生效，新增 / 编辑 / 启停
+ * 保存后约 30 秒内自动应用，无需重启 Gateway。横幅语义已从「需重启」反转为「热生效」。
  *
  * <p>**为什么不做健康轮询**：`pollingEnabled` 默认 false 且本组端点整体 501，
  * 轮询一个必然失败的接口只会刷屏 toast。改为「健康探测」按钮手动触发，
@@ -163,10 +163,10 @@ export function AgentWecomPage() {
     try {
       if (kind === 'enable') {
         await enableWecomBot(bot.bot_id);
-        toast.success(`Bot「${bot.name}」已启用，重启 Gateway 后生效`);
+        toast.success(`Bot「${bot.name}」已启用，约 30 秒内自动生效`);
       } else if (kind === 'disable') {
         await disableWecomBot(bot.bot_id);
-        toast.success(`Bot「${bot.name}」已停用，重启 Gateway 后生效`);
+        toast.success(`Bot「${bot.name}」已停用，约 30 秒内自动断开`);
       } else {
         await deleteWecomBot(bot.bot_id);
         toast.success(`Bot「${bot.name}」已删除`);
@@ -249,16 +249,15 @@ export function AgentWecomPage() {
       loading={loading && bots.length === 0 && error === null}
     >
       <div className="flex min-h-0 flex-1 flex-col gap-3">
-        {/* ---------------- 常驻策略提示：写库 ≠ 线上生效 ---------------- */}
+        {/* ---------------- 常驻策略提示：配置已热生效（O1f-2） ---------------- */}
         <div className="flex gap-2 rounded-md border border-warning/30 bg-warning/5 p-3 text-xs text-muted-foreground">
           <Info className="mt-[0.1rem] h-3.5 w-3.5 shrink-0 text-warning" />
           <p className="leading-relaxed">
-            <span className="font-medium text-foreground">保存后需重启 Gateway 生效。</span>{' '}
-            当前 Gateway 在启动时一次性装载机器人配置，没有热更新通道 ——
+            <span className="font-medium text-foreground">配置已热生效。</span>{' '}
             新增 / 编辑 / 启停在此页保存成功后
-            <span className="font-medium text-foreground">不会</span>
-            立即作用于线上连接，需要运维重启 Gateway 进程。
-            重启前「连接健康」列仍会显示旧连接的状态。
+            <span className="font-medium text-foreground">约 30 秒内</span>
+            自动应用到线上连接，无需重启 Gateway。
+            生效前「连接健康」列会在下一个轮询周期内更新。
           </p>
         </div>
 
@@ -313,7 +312,7 @@ export function AgentWecomPage() {
             onRetry={() => void load()}
             empty={!loading && !error && bots.length === 0}
             emptyText="尚未接入任何企微机器人"
-            emptyHint="点击右上角「新增 Bot」登记第一个实例；保存后需重启 Gateway 才会建立连接。"
+            emptyHint="点击右上角「新增 Bot」登记第一个实例；保存后约 30 秒内自动建立连接。"
           >
             <div className="relative min-h-0 flex-1 overflow-auto rounded-lg border bg-table-surface">
               {hasCustom ? (
@@ -517,13 +516,13 @@ export function AgentWecomPage() {
                 <span className="font-mono">{pending.bot.bot_id}</span>）。
               </p>
               {pending.kind === 'enable' ? (
-                <p>启用后该 Bot 会在下次 Gateway 启动时建立连接并接收企微消息。</p>
+                <p>启用后该 Bot 约 30 秒内自动建立连接并接收企微消息。</p>
               ) : pending.kind === 'disable' ? (
-                <p>停用后该 Bot 不再接收企微消息；已建立的连接会在 Gateway 重启后断开。</p>
+                <p>停用后该 Bot 不再接收企微消息；已建立的连接会在约 30 秒内自动断开。</p>
               ) : (
                 <p>删除会同时移除该 Bot 的接入配置与 Agent 绑定关系，且不可撤销。</p>
               )}
-              <p className="text-warning">该变更需重启 Gateway 后才在线上生效。</p>
+              <p className="text-warning">该变更约 30 秒内自动生效。</p>
             </>
           ) : null
         }

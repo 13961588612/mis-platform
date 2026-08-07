@@ -412,7 +412,7 @@ export class WecomBotCardBuilder {
       },
       select_list: fields
         .filter((f) => f.type === 'select')
-        .map((f, idx) => ({
+        .map((f) => ({
           question_key: f.name,
           title: f.placeholder,
           option_list:

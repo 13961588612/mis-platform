@@ -159,7 +159,7 @@ class AclToolWrapper(BaseTool):
             found: Any = getter(discriminant)
         except Exception as exc:  # noqa: BLE001 - 反查失败按未命中处理（退到兜底码）
             logger.warning(
-                "MCP skill lookup failed; falling back to agent:mcp:call",
+                "MCP skill lookup failed; falling back to ai:mcp:call",
                 discriminant=discriminant,
                 error=str(exc),
             )
@@ -172,7 +172,7 @@ class AclToolWrapper(BaseTool):
         """构造 E2 的权限要求（三档解析，#5 / #16 裁定）。
 
         1. ``registry.get("mcp-{server}-{tool}")`` 命中 → ``ai:skill:{id}:run``；
-        2. 未命中 → 兜底 ``agent:mcp:call``；
+        2. 未命中 → 兜底 ``ai:mcp:call``（V22 执行码，与运营台操作码 agent:mcp:call 解耦）；
         3. 连兜底码也不在集合 ⇒ 由 guard 拒绝（fail-closed）。
 
         取不到 ``_tool_info`` ⇒ 返回 :data:`DENY_SENTINEL`（**不**从 ``self.name`` 反解）。
@@ -189,8 +189,8 @@ class AclToolWrapper(BaseTool):
         discriminant: str = f"mcp-{server_name}-{tool_name}"
         skill_id: str = self._lookup_skill_id(discriminant)
         fallback: str = str(
-            getattr(get_settings(), "MIS_ACL_MCP_FALLBACK_PERMISSION", "agent:mcp:call")
-            or "agent:mcp:call"
+            getattr(get_settings(), "MIS_ACL_MCP_FALLBACK_PERMISSION", "ai:mcp:call")
+            or "ai:mcp:call"
         )
         extra: dict[str, Any] = {
             "server": server_name,
