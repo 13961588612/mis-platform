@@ -43,11 +43,15 @@ import org.springframework.stereotype.Component;
 import org.springframework.web.reactive.function.BodyInserters;
 import org.springframework.web.reactive.function.client.WebClient;
 import org.springframework.web.reactive.function.client.WebClientResponseException;
+import org.springframework.web.util.UriBuilder;
 import org.springframework.web.util.UriComponentsBuilder;
 import reactor.core.publisher.Mono;
 
+import java.net.URI;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.function.Function;
 
 /**
  * mis-kb 下游客户端。
@@ -939,30 +943,62 @@ public class KbWebClient extends AbstractDownstreamClient {
     }
 
     /**
-     * 拼接带可选查询参数的 URI。
+     * 拼接带可选查询参数的下游 URI。
      *
      * <p>{@code null} 与空字符串一律跳过——把 {@code from=} 这种空参数发给下游，
      * 会被当成「传了但值为空」而不是「没传」，容易踩出莫名其妙的筛选结果。
      *
-     * @param path   路径
-     * @param params 查询参数
-     * @return 已编码的 URI 字符串
+     * <h2>为什么返回函数而不是字符串（DEF-01 修复点，别改回去）</h2>
+     * 旧实现返回 {@code builder.build().encode().toUriString()}，即一段<b>已经百分号编码</b>
+     * 的字符串（{@code keyword=%E5%AD%A3%E5%BA%A6}），再交给 {@code uri(String)}。
+     * 而 {@code WebClient} 的 {@code uri(String)} 走的是
+     * {@code DefaultUriBuilderFactory}，默认编码模式 {@code TEMPLATE_AND_VALUES}
+     * 会把整段模板<b>再编码一次</b>，已编码的 {@code %} 变成 {@code %25}：
+     * {@code %E5%AD%A3%E5%BA%A6} → {@code %25E5%25AD%25A3%25E5%25BA%25A6}，
+     * 空格 {@code %20} → {@code %2520}。下游解码后拿到的是字面量乱码，
+     * 于是「含中文或空格的关键词一律命中 0 行」，而纯 ASCII 无空格的关键词
+     * （没有任何字符需要编码，二次编码是恒等变换）看起来一切正常。
+     *
+     * <p>修复思路是<b>让编码只发生一次，且由 WebClient 自己做</b>：返回一个作用在
+     * WebClient 自身 {@link UriBuilder} 上的函数，交给 {@code uri(Function)} 重载。
+     * 该 builder 由 {@code DefaultUriBuilderFactory} 携带 baseUrl 产出，
+     * 因此拼出来的是<b>绝对</b> URI，与既有 {@code uri(String)} 调用的寻址行为完全一致。
+     *
+     * <p><b>不要「简化」成返回 {@link URI}</b>：{@code uri(URI)} 会把 URI 原样当成最终地址
+     * （{@code DefaultWebClient.initUri()} 直接返回它，不经过 {@code uriBuilderFactory}），
+     * 相对路径 {@code /internal/...} 会丢掉 baseUrl 的 scheme/host/port，
+     * 静默打到默认主机上——比双重编码更难查。
+     *
+     * <p>参数值一律以 {@code {p0}} 形式的 URI 变量占位，真值走
+     * {@link UriBuilder#build(Map)} 展开：这样值里的 {@code &}、{@code =}、
+     * 乃至 {@code &#123;}{@code &#125;} 都会被当成纯数据整体编码，既防查询串注入，
+     * 也避免用户输入里的花括号被误解析成模板变量。
+     *
+     * @param path   路径（相对 baseUrl）
+     * @param params 查询参数，值为原文（未编码）
+     * @return 供 {@code WebClient.uri(Function)} 消费的 URI 构造函数
      */
-    private static String buildUri(String path, Map<String, Object> params) {
-        UriComponentsBuilder builder = UriComponentsBuilder.fromPath(path);
-        if (params != null) {
-            for (Map.Entry<String, Object> entry : params.entrySet()) {
-                Object value = entry.getValue();
-                if (value == null) {
-                    continue;
+    private static Function<UriBuilder, URI> buildUri(String path, Map<String, Object> params) {
+        return uriBuilder -> {
+            uriBuilder.path(path);
+            Map<String, Object> uriVariables = new LinkedHashMap<>();
+            if (params != null) {
+                int index = 0;
+                for (Map.Entry<String, Object> entry : params.entrySet()) {
+                    Object value = entry.getValue();
+                    if (value == null) {
+                        continue;
+                    }
+                    String text = String.valueOf(value);
+                    if (text.isBlank()) {
+                        continue;
+                    }
+                    String variableName = "p" + index++;
+                    uriBuilder.queryParam(entry.getKey(), "{" + variableName + "}");
+                    uriVariables.put(variableName, text);
                 }
-                String text = String.valueOf(value);
-                if (text.isBlank()) {
-                    continue;
-                }
-                builder.queryParam(entry.getKey(), text);
             }
-        }
-        return builder.build().encode().toUriString();
+            return uriBuilder.build(uriVariables);
+        };
     }
 }
