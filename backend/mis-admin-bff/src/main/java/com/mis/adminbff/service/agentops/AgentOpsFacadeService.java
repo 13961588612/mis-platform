@@ -8,7 +8,10 @@ import com.mis.adminbff.client.AgentOpsUri;
 import com.mis.adminbff.dto.agentops.SessionQuery;
 import com.mis.adminbff.dto.agentops.SkillUpsertRequest;
 import com.mis.adminbff.support.AgentOpsErrorCodes;
+import com.mis.adminbff.support.RequestContext;
 import com.mis.common.core.exception.BusinessException;
+import com.mis.common.core.exception.ResultCode;
+import com.mis.common.security.context.LoginUser;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -25,7 +28,7 @@ import java.util.Map;
  * 改动点就从「Client 一处」扩散成「Client + 所有 Controller」。门面把这道边界收口在 Service 层，
  * 真正「什么都不做」的方法集中在这一个文件，未来改路径只动 Client。
  *
- * <h2>本门面承担的两处加工</h2>
+ * <h2>本门面承担的加工</h2>
  * <ul>
  *   <li><b>新建技能后懒注册执行码</b>（{@link #createSkill}）：详见
  *       {@code SkillPermissionCodeService} —— 技能一建出来就必须可授权，否则授权页第一次打开
@@ -33,6 +36,9 @@ import java.util.Map;
  *   <li><b>监控总览聚合</b>（{@link #monitorOverview}）：#55 在 SQL 里是<b>一条</b>端点，
  *       但真实数据是三个下游只读接口拼出来的。聚合放在 BFF，前端一次请求拿齐，
  *       而不是并发打三个接口再自己拼 —— 并发失败的竞态、部分的 loading 状态都留给后端处理。</li>
+ *   <li><b>新建对话会话注入 {@code user_id}</b>（{@link #createChatSession}）：下游
+ *       {@code POST /api/v1/sessions} 强制要求 body {@code user_id}；Web 渠道该字段即为
+ *       MIS userId。前端只传 {@code agent_id}，由本门面从登录上下文写入，禁止信任客户端伪造。</li>
  * </ul>
  *
  * <h2>会话列表的分页兜底在门面里做</h2>
@@ -166,14 +172,38 @@ public class AgentOpsFacadeService {
         return client.configFileTree(agentId);
     }
 
-    /** #23 读取配置文件（透传，T04 已建）。 */
+    /**
+     * #23 读取配置文件。
+     *
+     * <p>Spring {@code {*file}} 捕获值带前导 {@code /}（如 {@code /runtime/prompts/system.md}），
+     * 下游 {@code resolve_path} 会按绝对路径拒绝；此处剥成相对路径再转发。
+     */
     public JsonNode configFileContent(String agentId, String path) {
-        return client.configFileContent(agentId, path);
+        return client.configFileContent(agentId, relativeConfigPath(path));
     }
 
-    /** #24 保存配置文件（透传，T04 已建）。 */
+    /**
+     * #24 保存配置文件（路径语义同 {@link #configFileContent}）。
+     */
     public JsonNode saveConfigFileContent(String agentId, String path, JsonNode body) {
-        return client.saveConfigFileContent(agentId, path, body);
+        return client.saveConfigFileContent(agentId, relativeConfigPath(path), body);
+    }
+
+    /**
+     * 把 Controller {@code {*file}} 捕获的路径规范成下游要求的 POSIX 相对路径。
+     */
+    static String relativeConfigPath(String path) {
+        if (path == null || path.isBlank()) {
+            throw new BusinessException(ResultCode.VALIDATION_ERROR, "配置文件路径不能为空");
+        }
+        String normalized = path.replace('\\', '/');
+        while (normalized.startsWith("/")) {
+            normalized = normalized.substring(1);
+        }
+        if (normalized.isBlank()) {
+            throw new BusinessException(ResultCode.VALIDATION_ERROR, "配置文件路径不能为空");
+        }
+        return normalized;
     }
 
     /** #25 读取调度配置（透传，T04 待建）。 */
@@ -228,9 +258,26 @@ public class AgentOpsFacadeService {
         return client.batchDeleteSessions(body);
     }
 
-    /** #32 新建对话会话（透传）。 */
+    /**
+     * #32 新建对话会话。
+     *
+     * <p>下游 {@code CreateSessionRequest.user_id} 必填；运营台 Web 对话只提交 {@code agent_id}。
+     * 在此用当前登录用户的 MIS {@code userId} 覆盖写入（客户端若带了 {@code user_id} 也不采信），
+     * 缺省 {@code channel=web}。
+     */
     public JsonNode createChatSession(JsonNode body) {
-        return client.createChatSession(body);
+        ObjectNode payload = body != null && body.isObject()
+                ? ((ObjectNode) body).deepCopy()
+                : objectMapper.createObjectNode();
+        LoginUser user = RequestContext.requireLoginUser();
+        if (user.getUserId() == null) {
+            throw new BusinessException(ResultCode.UNAUTHORIZED);
+        }
+        payload.put("user_id", String.valueOf(user.getUserId()));
+        if (!payload.hasNonNull("channel") || payload.get("channel").asText().isBlank()) {
+            payload.put("channel", "web");
+        }
+        return client.createChatSession(payload);
     }
 
     /** #33 发送对话消息（透传，走 chat 超时）。 */

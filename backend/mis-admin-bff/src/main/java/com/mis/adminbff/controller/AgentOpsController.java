@@ -162,9 +162,9 @@ public class AgentOpsController {
      * #23 读取配置文件内容。
      *
      * <p>T04 收口：真实下游把文件路径放在路径段里（`/config-files/{file_path:path}`），
-     * BFF 侧同步改为 `{*file}` 捕获多段相对路径（含 `/`），不再用 `?path=` query
-     * （那会错打到名为 `content` 的文件）。前端按 `/` 逐段编码，此处拿到的
-     * `file` 已由容器解码为原相对路径。
+     * BFF 侧同步改为 `{*file}` 捕获多段路径（含 `/`），不再用 `?path=` query
+     * （那会错打到名为 `content` 的文件）。注意 Spring `{*file}` 捕获值自带前导 `/`，
+     * 门面层会剥成下游要求的相对路径后再转发。
      */
     @GetMapping("/agents/{id}/config-files/{*file}")
     public Result<JsonNode> configFileContent(@PathVariable String id, @PathVariable("file") String file) {
