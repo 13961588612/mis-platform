@@ -1,9 +1,9 @@
-# Nacos 配置：mis-kb（test 环境）
-# 知识库微服务（T8 引擎连接配置，见 docs/backend/mis-kb-system-design.md §S-04）。
+# Nacos config: mis-kb (test)
+# Knowledge base service (T8 engine connection config, see docs/backend/mis-kb-system-design.md S-04).
 #
-# test 环境默认 noop：无需部署 RAGFlow 实例即可跑通主流程
-# （建库/传文档返回占位 ref，retrieve 返回空 hits，health 恒为绿）。
-# 需要联调真实引擎时，把 type 改为 ragflow 并补 base-url / api-key。
+# test defaults to noop: main flow runs without deploying a RAGFlow instance
+# (create/upload return placeholder ref, retrieve returns empty hits, health stays green).
+# To use a real engine, set type=ragflow and fill in base-url / api-key.
 server:
   port: 8108
 
@@ -13,5 +13,5 @@ mis:
       type: ${MIS_KB_ENGINE_TYPE:noop}
       base-url: ${MIS_KB_ENGINE_BASE_URL:}
       api-key: ${MIS_KB_ENGINE_API_KEY:}
-      # 全局重排模型；空=禁用。联调 ragflow 时可设为 qwen3-rerank 等
+      # Global rerank model; empty = disabled. Set e.g. qwen3-rerank when integrating ragflow
       rerank-model-id: ${MIS_KB_RERANK_MODEL_ID:}

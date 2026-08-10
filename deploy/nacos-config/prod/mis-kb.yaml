@@ -1,9 +1,9 @@
-# Nacos 配置：mis-kb（prod 环境）
-# 知识库微服务（T8 引擎连接配置，见 docs/backend/mis-kb-system-design.md §S-04）。
+# Nacos config: mis-kb (prod)
+# Knowledge base service (T8 engine connection config, see docs/backend/mis-kb-system-design.md S-04).
 #
-# 生产必须连真实引擎：type=ragflow，且 base-url / api-key 由运维经
-# Nacos 密文或容器环境变量注入，严禁写入本文件并提交 Git。
-# 引擎版本已钉扎 v0.26.4（见 deploy/ragflow/README.md「已钉扎版本」表）。
+# prod MUST connect to a real engine: type=ragflow, base-url / api-key injected by ops via
+# Nacos secrets or container env vars. NEVER write real keys into this file or commit them.
+# Engine version pinned to v0.26.4 (see pinned-versions table in deploy/ragflow/README.md).
 server:
   port: 8108
 
@@ -13,7 +13,7 @@ mis:
       type: ${MIS_KB_ENGINE_TYPE:ragflow}
       base-url: ${MIS_KB_ENGINE_BASE_URL:}
       api-key: ${MIS_KB_ENGINE_API_KEY:}
-      # 全局重排模型 ID，由运维注入；空=全平台禁用重排
+      # Platform-wide rerank model id, injected by ops; empty = rerank disabled platform-wide
       rerank-model-id: ${MIS_KB_RERANK_MODEL_ID:}
 
 logging:

@@ -1,4 +1,4 @@
-# integration 环境共享配置（混合联调：容器稳定服务 + IDE 被测服务）
+# Shared config for integration env (hybrid: stable container services + IDE services under test)
 
 spring:
   datasource:

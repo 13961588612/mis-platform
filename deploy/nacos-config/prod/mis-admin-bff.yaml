@@ -1,5 +1,5 @@
-# Nacos 配置：mis-admin-bff（prod 环境）
-# 融合部署 ai-platform 适配层参数（DEP-5）。生产环境 sse-enabled=true。
+# Nacos config: mis-admin-bff (prod)
+# Fused-deploy ai-platform adapter params (DEP-5). prod: sse-enabled=true.
 mis:
   ai-platform:
     base-url: http://ai-platform-backend:8000

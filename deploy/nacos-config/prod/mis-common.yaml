@@ -1,4 +1,4 @@
-# 各微服务共享配置（数据源、Redis、JWT 公钥等）
+# Shared config for all services (datasource, Redis, JWT public key, etc.)
 
 spring:
   datasource:

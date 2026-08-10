@@ -1,5 +1,5 @@
-# Nacos 配置：mis-admin-bff（test 环境）
-# 融合部署 ai-platform 适配层参数（DEP-5）。
+# Nacos config: mis-admin-bff (test)
+# Fused-deploy ai-platform adapter params (DEP-5).
 mis:
   ai-platform:
     base-url: http://ai-platform-backend:8000

@@ -1,4 +1,4 @@
-# 测试环境共享配置（可与 Nacos test 命名空间内容保持一致）
+# Shared config for test env (keep in sync with the Nacos test namespace)
 
 spring:
   datasource:
