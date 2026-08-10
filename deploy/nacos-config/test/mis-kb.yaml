@@ -13,3 +13,5 @@ mis:
       type: ${MIS_KB_ENGINE_TYPE:noop}
       base-url: ${MIS_KB_ENGINE_BASE_URL:}
       api-key: ${MIS_KB_ENGINE_API_KEY:}
+      # 全局重排模型；空=禁用。联调 ragflow 时可设为 qwen3-rerank 等
+      rerank-model-id: ${MIS_KB_RERANK_MODEL_ID:}

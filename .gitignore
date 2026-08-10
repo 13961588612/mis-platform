@@ -11,6 +11,7 @@ Thumbs.db
 
 # Env & secrets
 .env
+.env.integration
 backend/config/jdk.properties
 *.pem
 keys/

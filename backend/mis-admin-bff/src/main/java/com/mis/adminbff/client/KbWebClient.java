@@ -259,12 +259,8 @@ public class KbWebClient extends AbstractDownstreamClient {
     // ------------------------------------------------------------------ 知识库
 
     public List<KbLibraryVO> listLibraries(Long categoryId) {
-        UriComponentsBuilder uri = UriComponentsBuilder.fromPath("/internal/v1/kb/libraries");
-        if (categoryId != null) {
-            uri.queryParam("categoryId", categoryId);
-        }
         List<KbLibraryVO> data = block(client().get()
-                .uri(uri.build(true).toUriString())
+                .uri(queryUri("/internal/v1/kb/libraries", "categoryId", categoryId))
                 .headers(loginContextHeaders())
                 .retrieve()
                 .bodyToMono(LIBRARY_LIST));

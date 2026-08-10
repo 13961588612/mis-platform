@@ -9,7 +9,6 @@ import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.core.ParameterizedTypeReference;
 import org.springframework.stereotype.Component;
 import org.springframework.web.reactive.function.client.WebClient;
-import org.springframework.web.util.UriComponentsBuilder;
 import reactor.core.publisher.Mono;
 
 import java.util.HashMap;
@@ -58,19 +57,17 @@ public class OrgWebClient extends AbstractDownstreamClient {
     }
 
     public List<OrgVO> listOrgs(Long tenantId) {
-        String uri = UriComponentsBuilder.fromPath("/internal/v1/orgs")
-                .queryParam("tenantId", tenantId)
-                .build(true)
-                .toUriString();
-        return block(client().get().uri(uri).retrieve().bodyToMono(ORG_LIST));
+        return block(client().get()
+                .uri(queryUri("/internal/v1/orgs", "tenantId", tenantId))
+                .retrieve()
+                .bodyToMono(ORG_LIST));
     }
 
     public long orgCount(Long tenantId) {
-        String uri = UriComponentsBuilder.fromPath("/internal/v1/stats/orgs")
-                .queryParam("tenantId", tenantId)
-                .build(true)
-                .toUriString();
-        Map<String, Long> data = block(client().get().uri(uri).retrieve().bodyToMono(COUNT));
+        Map<String, Long> data = block(client().get()
+                .uri(queryUri("/internal/v1/stats/orgs", "tenantId", tenantId))
+                .retrieve()
+                .bodyToMono(COUNT));
         return data != null && data.get("count") != null ? data.get("count") : 0L;
     }
 
@@ -79,11 +76,10 @@ public class OrgWebClient extends AbstractDownstreamClient {
             return Map.of();
         }
         String idsParam = ids.stream().map(String::valueOf).collect(Collectors.joining(","));
-        String uri = UriComponentsBuilder.fromPath("/internal/v1/orgs/names")
-                .queryParam("ids", idsParam)
-                .build(true)
-                .toUriString();
-        Map<Long, String> data = block(client().get().uri(uri).retrieve().bodyToMono(NAME_MAP));
+        Map<Long, String> data = block(client().get()
+                .uri(queryUri("/internal/v1/orgs/names", "ids", idsParam))
+                .retrieve()
+                .bodyToMono(NAME_MAP));
         return data != null ? data : Map.of();
     }
 
@@ -104,11 +100,10 @@ public class OrgWebClient extends AbstractDownstreamClient {
     }
 
     public List<DeptVO> deptTree(Long orgId) {
-        String uri = UriComponentsBuilder.fromPath("/internal/v1/depts/tree")
-                .queryParam("orgId", orgId)
-                .build(true)
-                .toUriString();
-        return block(client().get().uri(uri).retrieve().bodyToMono(DEPT_LIST));
+        return block(client().get()
+                .uri(queryUri("/internal/v1/depts/tree", "orgId", orgId))
+                .retrieve()
+                .bodyToMono(DEPT_LIST));
     }
 
     public DeptVO getDept(Long id) {
@@ -132,12 +127,11 @@ public class OrgWebClient extends AbstractDownstreamClient {
     }
 
     public List<EmployeeVO> listEmployeesByDept(Long tenantId, Long deptId) {
-        String uri = UriComponentsBuilder.fromPath("/internal/v1/employees")
-                .queryParam("tenantId", tenantId)
-                .queryParam("deptId", deptId)
-                .build(true)
-                .toUriString();
-        return block(client().get().uri(uri).headers(loginContextHeaders()).retrieve().bodyToMono(EMP_LIST));
+        return block(client().get()
+                .uri(queryUri("/internal/v1/employees", "tenantId", tenantId, "deptId", deptId))
+                .headers(loginContextHeaders())
+                .retrieve()
+                .bodyToMono(EMP_LIST));
     }
 
     public Map<Long, String> employeeNames(List<Long> ids) {
@@ -145,11 +139,10 @@ public class OrgWebClient extends AbstractDownstreamClient {
             return Map.of();
         }
         String idsParam = ids.stream().map(String::valueOf).collect(Collectors.joining(","));
-        String uri = UriComponentsBuilder.fromPath("/internal/v1/employees/names")
-                .queryParam("ids", idsParam)
-                .build(true)
-                .toUriString();
-        Map<Long, String> data = block(client().get().uri(uri).retrieve().bodyToMono(NAME_MAP));
+        Map<Long, String> data = block(client().get()
+                .uri(queryUri("/internal/v1/employees/names", "ids", idsParam))
+                .retrieve()
+                .bodyToMono(NAME_MAP));
         return data != null ? data : Map.of();
     }
 

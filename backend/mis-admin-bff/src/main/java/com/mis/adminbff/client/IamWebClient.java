@@ -11,7 +11,6 @@ import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.core.ParameterizedTypeReference;
 import org.springframework.stereotype.Component;
 import org.springframework.web.reactive.function.client.WebClient;
-import org.springframework.web.util.UriComponentsBuilder;
 
 import java.util.HashMap;
 import java.util.List;
@@ -144,23 +143,19 @@ public class IamWebClient extends AbstractDownstreamClient {
     }
 
     public PageResult<IamRoleVO> pageRoles(Long tenantId, Long appId, int page, int size) {
-        String uri = UriComponentsBuilder.fromPath("/internal/v1/roles")
-                .queryParam("tenantId", tenantId)
-                .queryParam("appId", appId)
-                .queryParam("page", page)
-                .queryParam("size", size)
-                .build(true)
-                .toUriString();
-        return block(client().get().uri(uri).retrieve().bodyToMono(ROLE_PAGE));
+        return block(client().get()
+                .uri(queryUri("/internal/v1/roles",
+                        "tenantId", tenantId, "appId", appId, "page", page, "size", size))
+                .retrieve()
+                .bodyToMono(ROLE_PAGE));
     }
 
     public List<IamRoleVO> listEnabledRoles(Long tenantId, Long appId) {
-        String uri = UriComponentsBuilder.fromPath("/internal/v1/roles/enabled")
-                .queryParam("tenantId", tenantId)
-                .queryParam("appId", appId)
-                .build(true)
-                .toUriString();
-        return block(client().get().uri(uri).retrieve().bodyToMono(ROLE_LIST));
+        return block(client().get()
+                .uri(queryUri("/internal/v1/roles/enabled",
+                        "tenantId", tenantId, "appId", appId))
+                .retrieve()
+                .bodyToMono(ROLE_LIST));
     }
 
     public IamRoleVO getRole(Long id) {
@@ -208,22 +203,18 @@ public class IamWebClient extends AbstractDownstreamClient {
     }
 
     public long userCount(Long tenantId, Long appId) {
-        String uri = UriComponentsBuilder.fromPath("/internal/v1/stats/users")
-                .queryParam("tenantId", tenantId)
-                .queryParam("appId", appId)
-                .build(true)
-                .toUriString();
-        Map<String, Long> data = block(client().get().uri(uri).retrieve().bodyToMono(COUNT));
+        Map<String, Long> data = block(client().get()
+                .uri(queryUri("/internal/v1/stats/users", "tenantId", tenantId, "appId", appId))
+                .retrieve()
+                .bodyToMono(COUNT));
         return data != null && data.get("count") != null ? data.get("count") : 0L;
     }
 
     public List<AppVO> listApps(Long tenantId, String kind) {
-        UriComponentsBuilder builder = UriComponentsBuilder.fromPath("/internal/v1/apps")
-                .queryParam("tenantId", tenantId);
-        if (kind != null && !kind.isBlank()) {
-            builder.queryParam("kind", kind);
-        }
-        List<AppVO> data = block(client().get().uri(builder.build(true).toUriString()).retrieve().bodyToMono(APP_LIST));
+        List<AppVO> data = block(client().get()
+                .uri(queryUri("/internal/v1/apps", "tenantId", tenantId, "kind", kind))
+                .retrieve()
+                .bodyToMono(APP_LIST));
         return data != null ? data : List.of();
     }
 

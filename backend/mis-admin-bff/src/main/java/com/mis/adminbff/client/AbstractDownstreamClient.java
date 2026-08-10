@@ -10,10 +10,15 @@ import org.springframework.core.ParameterizedTypeReference;
 import org.springframework.http.MediaType;
 import org.springframework.web.reactive.function.client.WebClient;
 import org.springframework.web.reactive.function.client.WebClientResponseException;
+import org.springframework.web.util.UriBuilder;
 import reactor.core.publisher.Mono;
 
+import java.net.URI;
 import java.time.Duration;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.function.Consumer;
+import java.util.function.Function;
 
 abstract class AbstractDownstreamClient {
 
@@ -151,6 +156,54 @@ abstract class AbstractDownstreamClient {
                 .uri(uri, uriVariables)
                 .retrieve()
                 .bodyToMono(new ParameterizedTypeReference<Result<Void>>() {});
+    }
+
+    /**
+     * 统一的带查询串 GET URI 构造（T3 收口，DEF-01/DEF-02/C-1 范式统一）。
+     *
+     * <p>返回一个作用在 WebClient 自身 {@link UriBuilder}（由携带 baseUrl 的
+     * {@code DefaultUriBuilderFactory} 产出）上的函数，交给 {@code uri(Function)}
+     * 重载：<b>编码只发生一次，且 baseUrl 的 scheme/host/port 不会丢</b>（服务发现
+     * 依赖的 host=服务名也保留）。这是 {@code KbWebClient.buildUri()} /
+     * {@code IamWebClient.pageUsers()} 已验证的 DEF 修复范式，本方法把同一套语义
+     * 收口到基类，供各下游客户端把剩余「巧合安全」的 {@code .build(true).toUriString()}
+     * 调用点替换掉。
+     *
+     * <p>参数以 {@code name, value, name, value, ...} 交替传入；{@code null} 与
+     * 空白值一律跳过（「没传」≠「传了空值」，与旧实现 {@code queryParamIfPresent}
+     * /空白过滤语义一致）。非空值以 {@code {pN}} 占位 + {@code build(Map)} 展开：
+     * 值里的 {@code &}、{@code =}、花括号都被当成纯数据整体编码，既防查询串注入，
+     * 也不会被误解析成 URI 模板变量。
+     *
+     * <p><b>不要「简化」成返回 {@link URI}</b>：{@code uri(URI)} 不经过
+     * {@code uriBuilderFactory}，相对路径会丢掉 baseUrl——比双重编码更难查。
+     *
+     * @param path          路径（相对 baseUrl）
+     * @param nameValuePairs 查询参数名值对（{@code name1, value1, name2, value2, ...}）
+     * @return 供 {@code WebClient.uri(Function)} 消费的 URI 构造函数
+     */
+    protected static Function<UriBuilder, URI> queryUri(String path, Object... nameValuePairs) {
+        return uriBuilder -> {
+            uriBuilder.path(path);
+            Map<String, Object> uriVariables = new LinkedHashMap<>();
+            if (nameValuePairs != null) {
+                for (int i = 0; i + 1 < nameValuePairs.length; i += 2) {
+                    String name = String.valueOf(nameValuePairs[i]);
+                    Object value = nameValuePairs[i + 1];
+                    if (value == null) {
+                        continue;
+                    }
+                    String text = String.valueOf(value);
+                    if (text.isBlank()) {
+                        continue;
+                    }
+                    String variableName = "p" + uriVariables.size();
+                    uriBuilder.queryParam(name, "{" + variableName + "}");
+                    uriVariables.put(variableName, text);
+                }
+            }
+            return uriBuilder.build(uriVariables);
+        };
     }
 
     protected static String resolveBaseUrl(boolean discovery, String serviceId, String baseUrl) {

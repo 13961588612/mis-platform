@@ -13,6 +13,8 @@ mis:
       type: ${MIS_KB_ENGINE_TYPE:ragflow}
       base-url: ${MIS_KB_ENGINE_BASE_URL:}
       api-key: ${MIS_KB_ENGINE_API_KEY:}
+      # 全局重排模型 ID，由运维注入；空=全平台禁用重排
+      rerank-model-id: ${MIS_KB_RERANK_MODEL_ID:}
 
 logging:
   level:

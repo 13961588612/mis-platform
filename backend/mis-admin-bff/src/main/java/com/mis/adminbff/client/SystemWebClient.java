@@ -66,23 +66,20 @@ public class SystemWebClient extends AbstractDownstreamClient {
     }
 
     public List<MenuVO> tree(Long appId) {
-        String uri = UriComponentsBuilder.fromPath("/internal/v1/menus/tree")
-                .queryParam("appId", appId)
-                .build(true)
-                .toUriString();
-        return block(client().get().uri(uri).retrieve().bodyToMono(MENU_LIST));
+        return block(client().get()
+                .uri(queryUri("/internal/v1/menus/tree", "appId", appId))
+                .retrieve()
+                .bodyToMono(MENU_LIST));
     }
 
     public List<MenuVO> router(Long appId, List<Long> menuIds) {
         String ids = menuIds == null || menuIds.isEmpty()
                 ? ""
                 : menuIds.stream().map(String::valueOf).collect(Collectors.joining(","));
-        UriComponentsBuilder builder = UriComponentsBuilder.fromPath("/internal/v1/menus/router")
-                .queryParam("appId", appId);
-        if (!ids.isEmpty()) {
-            builder.queryParam("menuIds", ids);
-        }
-        return block(client().get().uri(builder.build(true).toUriString()).retrieve().bodyToMono(MENU_LIST));
+        return block(client().get()
+                .uri(queryUri("/internal/v1/menus/router", "appId", appId, "menuIds", ids))
+                .retrieve()
+                .bodyToMono(MENU_LIST));
     }
 
     public List<String> permissions(List<Long> menuIds) {
@@ -90,11 +87,10 @@ public class SystemWebClient extends AbstractDownstreamClient {
             return List.of();
         }
         String ids = menuIds.stream().map(String::valueOf).collect(Collectors.joining(","));
-        String uri = UriComponentsBuilder.fromPath("/internal/v1/menus/permissions")
-                .queryParam("menuIds", ids)
-                .build(true)
-                .toUriString();
-        List<String> data = block(client().get().uri(uri).retrieve().bodyToMono(STRING_LIST));
+        List<String> data = block(client().get()
+                .uri(queryUri("/internal/v1/menus/permissions", "menuIds", ids))
+                .retrieve()
+                .bodyToMono(STRING_LIST));
         return data != null ? data : List.of();
     }
 
@@ -173,11 +169,10 @@ public class SystemWebClient extends AbstractDownstreamClient {
     }
 
     public List<Map<String, Object>> listDictTypes(Long tenantId) {
-        String uri = UriComponentsBuilder.fromPath("/internal/v1/dicts/types")
-                .queryParam("tenantId", tenantId)
-                .build(true)
-                .toUriString();
-        return block(client().get().uri(uri).retrieve().bodyToMono(MAP_LIST));
+        return block(client().get()
+                .uri(queryUri("/internal/v1/dicts/types", "tenantId", tenantId))
+                .retrieve()
+                .bodyToMono(MAP_LIST));
     }
 
     public Map<String, Object> createDictType(Map<String, Object> body) {
@@ -193,11 +188,10 @@ public class SystemWebClient extends AbstractDownstreamClient {
     }
 
     public List<Map<String, Object>> listDictItems(Long typeId) {
-        String uri = UriComponentsBuilder.fromPath("/internal/v1/dicts/items")
-                .queryParam("typeId", typeId)
-                .build(true)
-                .toUriString();
-        return block(client().get().uri(uri).retrieve().bodyToMono(MAP_LIST));
+        return block(client().get()
+                .uri(queryUri("/internal/v1/dicts/items", "typeId", typeId))
+                .retrieve()
+                .bodyToMono(MAP_LIST));
     }
 
     public Map<String, Object> createDictItem(Map<String, Object> body) {
