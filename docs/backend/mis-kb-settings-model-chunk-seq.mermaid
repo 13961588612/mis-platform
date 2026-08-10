@@ -1,0 +1,114 @@
+sequenceDiagram
+    autonumber
+
+    %% ==================== 流程 1：建库选嵌入模型（R-P0-01/02） ====================
+    rect rgb(235, 245, 255)
+    Note over F1,B1,K1,P1,R1,RF1: 流程 1 · 建库选嵌入模型
+    participant F1 as 前端(创建向导)
+    participant B1 as BFF
+    participant K1 as mis-kb
+    participant P1 as EngineModelPoolService
+    participant R1 as RagflowClient
+    participant RF1 as RAGFlow
+
+    F1->>B1: GET /kb/engine/models
+    B1->>K1: GET /internal/v1/kb/engine/models
+    K1->>P1: getPool()（60s TTL 命中则直接返回缓存）
+    P1->>R1: probeModelPool() → listModels()
+    R1->>RF1: GET /api/v1/llm/list（T00 固化路径）
+    RF1-->>R1: {llm 列表}
+    R1-->>P1: 按 model_type 分类 embedding/rerank，id 全限定化
+    P1-->>K1: EngineModelPool(embedding[], rerank[], globalRerankModelId)
+    K1-->>B1: KbEngineModelPoolVO
+    B1-->>F1: 下拉渲染（首项「引擎默认（留空）」+ 名称(维度·语言)）
+    alt 模型池不可达
+        B1-->>F1: available=false + degradedReason → 回落自由文本 + 告警 + 重试
+    end
+    F1->>B1: POST /kb/libraries {settings.embeddingModel: 选中id 或 null}
+    B1->>K1: POST /internal/v1/kb/libraries
+    K1->>K1: KbLibraryService.create → CreateLibraryCmd(settings)
+    K1->>R1: createDataset + updateDatasetSettings(embedding_model=选中id)
+    K1-->>B1: KbLibraryVO（embeddingModel 落库）
+    B1-->>F1: 创建成功 + 锁定提示（创建后不可修改）
+    end
+
+    %% ==================== 流程 2：改重排模型（R-P0-04/05） ====================
+    rect rgb(240, 250, 240)
+    Note over F2,B2,K2,S2,R2,X2,RF2: 流程 2 · 改重排模型（保存 + 检索期合并）
+    participant F2 as 前端(库详情·检索设置)
+    participant B2 as BFF
+    participant K2 as mis-kb
+    participant S2 as RagSettingsService
+    participant R2 as RagflowClient
+    participant X2 as RetrieveQueryResolver
+    participant RF2 as RAGFlow
+
+    F2->>B2: PUT /kb/libraries/{id}/engine/settings {rerank:true, rerankModelId:"qwen3-rerank@Tongyi-Qianwen@Tongyi-Qianwen"}
+    B2->>K2: PUT /internal/v1/kb/libraries/{id}/engine/settings
+    K2->>S2: save(id, settings)
+    S2->>S2: validate（rerankModelId 非空即可）+ enforceRerankAvailability（全局未配→强制关闭）
+    S2-->>K2: 落库 rag_settings_json（rerankModelId 持久化，零 DDL）
+    S2->>R2: updateLibrarySettings（白名单四键；rerank 不在此下发）
+    Note over X2: 检索期（问答/命中测试）
+    X2->>X2: S4：rerank 模型 = base.rerankModelId ?? engineProperties.getRerankModelId()
+    X2->>X2: peekPool() 有缓存且 available → 库级模型不在池 → 回退全局 + degradedReasons
+    X2-->>R2: RetrieveQuery.rerankModelId = 全限定 id（裸名被拒 code:100）
+    R2->>RF2: POST /api/v1/retrieval {rerank_id}
+    end
+
+    %% ==================== 流程 3：上传文件带切片参数（R-P0-06/07） ====================
+    rect rgb(255, 250, 235)
+    Note over F3,B3,K3,D3,A3,R3,RF3: 流程 3 · 上传文件带切片参数（两段式）
+    participant F3 as 前端(上传弹窗)
+    participant B3 as BFF
+    participant K3 as mis-kb
+    participant D3 as KbDocumentService
+    participant A3 as RagflowAdapter
+    participant R3 as RagflowClient
+    participant RF3 as RAGFlow
+
+    F3->>B3: POST /kb/libraries/{id}/documents multipart(file, chunkMethod=table, chunkTokenNum, separator)
+    B3->>K3: POST /internal/v1/kb/libraries/{id}/documents（透传三参数）
+    K3->>D3: upload(id, file, DocumentChunkConfig)
+    D3->>A3: uploadDocument(ref, DocumentUploadInput(file, chunkConfig))
+    A3->>R3: uploadDocument(datasetId, input)
+    R3->>RF3: POST /datasets/{id}/documents（multipart）
+    RF3-->>R3: docId
+    alt 文件级任一字段非空
+        A3->>R3: updateDocumentConfig(datasetId, docId, config)  %仅文件级非空字段（白名单）%
+        R3->>RF3: PUT /datasets/{id}/documents/{docId} {chunk_method?, parser_config?}
+    end
+    A3->>R3: parseDocuments(datasetId, [docId])
+    R3->>RF3: POST /datasets/{id}/chunks {document_ids}
+    D3-->>K3: 落库 kb_document 三列 + parse_status=parsing
+    K3-->>B3: KbDocumentUploadResponse
+    B3-->>F3: 上传成功（解析中，列表轮询收敛）
+    end
+
+    %% ==================== 流程 4：改文件级参数触发重解析（R-P0-08） ====================
+    rect rgb(250, 240, 250)
+    Note over F4,B4,K4,D4,A4,R4,RF4: 流程 4 · 改文件级参数触发重解析
+    participant F4 as 前端(文档列表·切片设置)
+    participant B4 as BFF
+    participant K4 as mis-kb
+    participant D4 as KbDocumentService
+    participant A4 as RagflowAdapter
+    participant R4 as RagflowClient
+    participant RF4 as RAGFlow
+
+    F4->>B4: PUT /kb/libraries/{id}/documents/{docId}/chunk-config {chunkMethod:paper,...}
+    B4->>K4: PUT /internal/v1/kb/libraries/{id}/documents/{docId}/chunk-config
+    K4->>D4: updateChunkConfig(id, config)
+    D4->>D4: 校验（DocumentChunkConfig 常量）+ 落库三列（null=清空继承）
+    alt 引擎有映射
+        D4->>A4: updateDocumentChunkConfig(ref, docRef, config)
+        A4->>R4: updateDocumentConfig(datasetId, docId, config)  %全 null 时下发库级有效值%
+        R4->>RF4: PUT /datasets/{id}/documents/{docId}
+        D4->>A4: reparseDocument(ref, docRef)
+        A4->>R4: parseDocuments(datasetId, [docId])
+        R4->>RF4: POST /datasets/{id}/chunks
+    end
+    D4-->>K4: parse_status=parsing（引擎失败→FAILED + 抛异常）
+    K4-->>B4: Result.ok
+    B4-->>F4: 提示「解析期间该文档暂不参与检索」
+    end

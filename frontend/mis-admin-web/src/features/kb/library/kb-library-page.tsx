@@ -29,7 +29,6 @@ import {
 import { useKbStore } from '../stores/use-kb-store';
 import type { KbCategory, KbLibrary, KbRagSettings } from '../types';
 import { KB_SECRECY_OPTIONS, formatTime } from '../types';
-
 const fieldLabel = 'mb-[0.4rem] block text-sm font-medium text-foreground';
 const selectClass =
   'h-9 w-full rounded-md border border-input bg-card px-[0.7rem] text-sm text-foreground shadow-none';
@@ -86,6 +85,8 @@ function toSettings(form: LibraryForm, base: KbRagSettings | null): KbRagSetting
     separator: base?.separator ?? null,
     emptyResultStrategy: base?.emptyResultStrategy ?? null,
     vectorSimilarityWeight: base?.vectorSimilarityWeight ?? null,
+    // kb_settings_model_chunk：库级重排模型 id 只在详情页维护，此处原样带回
+    rerankModelId: base?.rerankModelId ?? null,
   };
 }
 
@@ -115,7 +116,7 @@ export function KbLibraryPage() {
       { key: 'status', label: '状态' },
       { key: 'docCount', label: '文档数' },
       { key: 'topK', label: 'topK' },
-      { key: 'engineType', label: '引擎' },
+      { key: 'engineType', label: '建库引擎' },
       { key: 'updatedAt', label: '更新时间' },
       { key: '__ops__', label: '操作', locked: true },
     ],
@@ -129,10 +130,15 @@ export function KbLibraryPage() {
   const { sorted: sortedLibraries, sortKey, sortDir, toggleSort } = useClientSort(libraries, getSortValue);
   const capabilities = useKbStore((s) => s.capabilities);
   const refreshEngine = useKbStore((s) => s.refreshEngine);
+  const modelPool = useKbStore((s) => s.modelPool);
+  const refreshModels = useKbStore((s) => s.refreshModels);
   const invalidateLibraries = useKbStore((s) => s.invalidateLibraries);
   // QA P2-A：`!== false` 在 capabilities 未加载 / rerankSupported 为 null 时 fail-open，
   // 改 `=== true`，使「能力未确认」与「明确不支持」一致按不可用处理。
   const rerankSupported = capabilities?.rerankSupported === true;
+  // kb_settings_model_chunk：池可用才展示下拉；不可用/未加载一律按「不可判定」回落自由文本
+  const embeddingPool = modelPool?.available === true ? modelPool.embedding ?? [] : null;
+  const poolDegraded = modelPool != null && modelPool.available !== true;
 
   const loadCategories = useCallback(async () => {
     try {
@@ -165,6 +171,8 @@ export function KbLibraryPage() {
   function openCreate() {
     setEditing(null);
     setForm({ ...EMPTY_FORM, categoryId: categoryId == null ? '' : String(categoryId) });
+    // kb_settings_model_chunk：创建向导需要模型池，打开时显式刷新（60s TTL 内后端不重打引擎）
+    void refreshModels();
     setOpen(true);
   }
 
@@ -524,11 +532,56 @@ export function KbLibraryPage() {
               </div>
               <div className="mt-3">
                 <label className={fieldLabel}>嵌入模型</label>
-                <Input
-                  value={form.embeddingModel}
-                  onChange={(e) => setForm((f) => ({ ...f, embeddingModel: e.target.value }))}
-                  placeholder="留空使用引擎默认"
-                />
+                {editing ? (
+                  <Input
+                    value={form.embeddingModel}
+                    disabled
+                    placeholder="留空使用引擎默认"
+                    title="嵌入模型在创建后不可修改"
+                  />
+                ) : embeddingPool != null && embeddingPool.length > 0 ? (
+                  <select
+                    className={selectClass}
+                    value={form.embeddingModel}
+                    onChange={(e) => setForm((f) => ({ ...f, embeddingModel: e.target.value }))}
+                  >
+                    <option value="">引擎默认（留空）</option>
+                    {embeddingPool.map((m) => (
+                      <option key={m.id} value={m.id}>
+                        {m.name}
+                        {m.dimension != null || m.language != null
+                          ? `（${[m.dimension, m.language].filter(Boolean).join('·')}）`
+                          : ''}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <div className="space-y-1.5">
+                    <Input
+                      value={form.embeddingModel}
+                      onChange={(e) => setForm((f) => ({ ...f, embeddingModel: e.target.value }))}
+                      placeholder="留空使用引擎默认"
+                    />
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-xs text-amber-600">
+                        {poolDegraded
+                          ? `模型池不可用：${modelPool?.degradedReason ?? '未知原因'}。可手动填写模型 ID 或重试。`
+                          : '模型池加载中…'}
+                      </span>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={() => void refreshModels()}
+                      >
+                        重试
+                      </Button>
+                    </div>
+                  </div>
+                )}
+                {editing ? (
+                  <p className="mt-1 text-xs text-muted-foreground">嵌入模型在创建后不可修改。</p>
+                ) : null}
               </div>
               <label className="mt-3 flex items-center gap-2 text-sm">
                 <input

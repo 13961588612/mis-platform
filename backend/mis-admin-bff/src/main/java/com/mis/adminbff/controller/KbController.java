@@ -7,6 +7,7 @@ import com.mis.adminbff.dto.kb.KbDocumentUploadResponse;
 import com.mis.adminbff.dto.kb.KbDocumentVO;
 import com.mis.adminbff.dto.kb.KbEngineCapabilitiesVO;
 import com.mis.adminbff.dto.kb.KbEngineHealthVO;
+import com.mis.adminbff.dto.kb.KbEngineModelPoolVO;
 import com.mis.adminbff.dto.kb.KbHitTestRequest;
 import com.mis.adminbff.dto.kb.KbHitTestResultVO;
 import com.mis.adminbff.dto.kb.KbLibraryDetailVO;
@@ -49,6 +50,7 @@ import org.springframework.web.multipart.MultipartFile;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 /**
@@ -163,8 +165,23 @@ public class KbController {
 
     @PostMapping("/libraries/{libraryId}/documents")
     public Result<KbDocumentUploadResponse> uploadDocument(
-            @PathVariable Long libraryId, @RequestParam("file") MultipartFile file) {
-        return Result.ok(kbFacadeService.uploadDocument(libraryId, file));
+            @PathVariable Long libraryId,
+            @RequestParam("file") MultipartFile file,
+            @RequestParam(required = false) String chunkMethod,
+            @RequestParam(required = false) Integer chunkTokenNum,
+            @RequestParam(required = false) String separator) {
+        return Result.ok(kbFacadeService.uploadDocument(
+                libraryId, file, chunkMethod, chunkTokenNum, separator));
+    }
+
+    /** 更新文档级切片配置（kb_settings_model_chunk；改参触发重解析）。 */
+    @PutMapping("/libraries/{libraryId}/documents/{id}/chunk-config")
+    public Result<Void> updateDocumentChunkConfig(
+            @PathVariable Long libraryId,
+            @PathVariable Long id,
+            @RequestBody Map<String, Object> body) {
+        kbFacadeService.updateDocumentChunkConfig(libraryId, id, body);
+        return Result.ok();
     }
 
     @PutMapping("/libraries/{libraryId}/documents/{id}/enable")
@@ -450,6 +467,11 @@ public class KbController {
     @GetMapping("/engine/capabilities")
     public Result<KbEngineCapabilitiesVO> engineCapabilities() {
         return Result.ok(kbFacadeService.engineCapabilities());
+    }
+
+    @GetMapping("/engine/models")
+    public Result<KbEngineModelPoolVO> engineModels() {
+        return Result.ok(kbFacadeService.listEngineModels());
     }
 
     // ------------------------------------------------------------------ 请求体

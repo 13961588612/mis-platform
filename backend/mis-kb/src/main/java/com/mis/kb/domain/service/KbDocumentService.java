@@ -6,6 +6,7 @@ import com.mis.kb.api.dto.KbDocumentUploadResponse;
 import com.mis.kb.api.dto.KbDocumentVO;
 import com.mis.kb.domain.entity.KbDocument;
 import com.mis.kb.domain.entity.KbLibrary;
+import com.mis.kb.domain.model.DocumentChunkConfig;
 import com.mis.kb.domain.model.DocumentUploadInput;
 import com.mis.kb.domain.model.EngineDocumentRef;
 import com.mis.kb.domain.model.EngineLibraryRef;
@@ -24,7 +25,10 @@ import org.springframework.web.multipart.MultipartFile;
 
 import java.io.IOException;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
+import java.util.Objects;
 
 /** 文档服务（D-01~10）。 */
 @Service
@@ -45,23 +49,44 @@ public class KbDocumentService {
         this.enginePort = enginePort;
     }
 
-    @Transactional(readOnly = true)
+    /**
+     * 列出知识库文档；对仍处于 pending/parsing 的文档向引擎拉取 {@code run/progress} 并回写
+     * {@code parse_status}（设计文档：解析状态异步回写；前端列表轮询依赖本方法收敛）。
+     */
+    @Transactional
     public List<KbDocumentVO> list(Long libraryId) {
-        requireLibrary(libraryId);
-        return documentRepository.findByLibraryIdOrderByCreatedAtDesc(libraryId).stream().map(this::toVo).toList();
-    }
-
-    @Transactional(readOnly = true)
-    public KbDocumentVO get(Long id) {
-        return toVo(require(id));
+        KbLibrary lib = requireLibrary(libraryId);
+        List<KbDocument> docs = documentRepository.findByLibraryIdOrderByCreatedAtDesc(libraryId);
+        syncOpenParseStatuses(lib, docs);
+        return docs.stream().map(this::toVo).toList();
     }
 
     @Transactional
-    public KbDocumentUploadResponse upload(Long libraryId, MultipartFile file) {
+    public KbDocumentVO get(Long id) {
+        KbDocument entity = require(id);
+        KbLibrary lib = libraryRepository.findById(entity.getLibraryId()).orElse(null);
+        if (lib != null) {
+            syncOpenParseStatuses(lib, List.of(entity));
+        }
+        return toVo(entity);
+    }
+
+    /**
+     * 上传文档（D-01；kb_settings_model_chunk 支持可选文件级切片参数）。
+     *
+     * @param libraryId   知识库 id
+     * @param file        上传文件
+     * @param chunkConfig 文件级切片配置；null/全空 = 继承库级（行为与旧版完全一致）
+     * @return 上传结果（id + 解析状态）
+     */
+    @Transactional
+    public KbDocumentUploadResponse upload(
+            Long libraryId, MultipartFile file, DocumentChunkConfig chunkConfig) {
         KbLibrary lib = requireLibrary(libraryId);
         if (file == null || file.isEmpty()) {
             throw new BusinessException(ResultCode.VALIDATION_ERROR, "文件不能为空");
         }
+        validateChunkConfig(chunkConfig);
         byte[] content;
         try {
             content = file.getBytes();
@@ -69,7 +94,7 @@ public class KbDocumentService {
             throw new BusinessException(ResultCode.VALIDATION_ERROR, "读取文件失败");
         }
         DocumentUploadInput input = new DocumentUploadInput(
-                file.getOriginalFilename(), file.getContentType(), file.getSize(), content);
+                file.getOriginalFilename(), file.getContentType(), file.getSize(), content, chunkConfig);
         EngineDocumentRef ref = enginePort.uploadDocument(
                 new EngineLibraryRef(lib.getEngineType(), lib.getEngineLibraryRef()), input);
         Instant now = Instant.now();
@@ -86,12 +111,62 @@ public class KbDocumentService {
         entity.setEnabled(1);
         entity.setSize(file.getSize());
         entity.setFormat(deriveFormat(file.getOriginalFilename()));
+        entity.setChunkMethod(normalizeChunkMethod(chunkConfig == null ? null : chunkConfig.chunkMethod()));
+        entity.setChunkTokenNum(chunkConfig == null ? null : chunkConfig.chunkTokenNum());
+        entity.setSeparator(chunkConfig == null ? null : chunkConfig.separator());
         entity.setCreatedAt(now);
         entity.setUpdatedAt(now);
         KbDocument saved = documentRepository.save(entity);
-        log.info("文档已上传 id={} libraryId={} engineRef={} parseStatus={}",
-                saved.getId(), libraryId, ref.nativeId(), parseStatus);
+        log.info("文档已上传 id={} libraryId={} engineRef={} parseStatus={} chunkMethod={} chunkTokenNum={}",
+                saved.getId(), libraryId, ref.nativeId(), parseStatus,
+                entity.getChunkMethod(), entity.getChunkTokenNum());
         return new KbDocumentUploadResponse(saved.getId(), saved.getParseStatus());
+    }
+
+    /**
+     * 更新文档级切片配置（kb_settings_model_chunk，R-P0-08；改参触发重解析）。
+     *
+     * <p><b>语义：</b>config 全 null = 清空文件级覆盖（继承库级，快照式下发库级当前有效值）；
+     * 任一字段非空 = 文件指定。校验常量统一引用 {@link DocumentChunkConfig}（单一事实源）。
+     *
+     * <p><b>错误处理：</b>改参是用户主动动作，引擎失败不吞——置 {@code FAILED} 并抛异常
+     * （错误处理分野，§7.5-6），前端据此提示「解析期间该文档暂不参与检索」。
+     *
+     * @param id     文档 id
+     * @param config 文件级切片配置；全 null = 清空覆盖
+     */
+    @Transactional
+    public void updateChunkConfig(Long id, DocumentChunkConfig config) {
+        KbDocument entity = require(id);
+        validateChunkConfig(config);
+        entity.setChunkMethod(normalizeChunkMethod(config == null ? null : config.chunkMethod()));
+        entity.setChunkTokenNum(config == null ? null : config.chunkTokenNum());
+        entity.setSeparator(config == null ? null : config.separator());
+        entity.setUpdatedAt(Instant.now());
+        documentRepository.save(entity);
+
+        KbLibrary lib = libraryRepository.findById(entity.getLibraryId()).orElse(null);
+        if (lib == null || lib.getEngineLibraryRef() == null || lib.getEngineLibraryRef().isBlank()
+                || entity.getEngineDocumentRef() == null || entity.getEngineDocumentRef().isBlank()) {
+            log.info("文档无引擎映射，切片配置仅本地生效 id={} libraryId={}", id, entity.getLibraryId());
+            return;
+        }
+        try {
+            enginePort.updateDocumentChunkConfig(
+                    new EngineLibraryRef(lib.getEngineType(), lib.getEngineLibraryRef()),
+                    new EngineDocumentRef(lib.getEngineType(), entity.getEngineDocumentRef()),
+                    config);
+            entity.setParseStatus(ParseStatus.PARSING.code());
+            entity.setUpdatedAt(Instant.now());
+            documentRepository.save(entity);
+            log.info("文档切片配置已更新并触发重解析 id={} config={}", id, config);
+        } catch (Exception e) {
+            entity.setParseStatus(ParseStatus.FAILED.code());
+            entity.setUpdatedAt(Instant.now());
+            documentRepository.save(entity);
+            log.error("文档切片配置更新失败，已置 FAILED id={}: {}", id, e.getMessage(), e);
+            throw new KbBusinessException(KbResultCode.KB_DOC_NOT_FOUND, "更新切片配置失败：" + e.getMessage());
+        }
     }
 
     @Transactional
@@ -148,12 +223,6 @@ public class KbDocumentService {
     @Transactional
     public void reparse(Long id) {
         KbDocument entity = require(id);
-
-        // 幂等短路：解析中重复触发不再打引擎
-        if (ParseStatus.PARSING.code().equals(entity.getParseStatus())) {
-            log.info("文档已在解析中，重解析请求幂等短路 id={}", id);
-            return;
-        }
         if (entity.getEngineDocumentRef() == null || entity.getEngineDocumentRef().isBlank()) {
             log.warn("文档无引擎映射，无法重解析 id={} libraryId={}", id, entity.getLibraryId());
             throw new KbBusinessException(KbResultCode.KB_DOC_NOT_FOUND, "该文档尚未同步到引擎，无法重新解析");
@@ -162,6 +231,15 @@ public class KbDocumentService {
         if (lib == null || lib.getEngineLibraryRef() == null || lib.getEngineLibraryRef().isBlank()) {
             log.warn("知识库无引擎映射，无法重解析 id={} libraryId={}", id, entity.getLibraryId());
             throw new KbBusinessException(KbResultCode.KB_LIBRARY_NOT_FOUND, "该知识库尚未同步到引擎，无法重新解析");
+        }
+
+        // 先向引擎收敛一次，避免本地卡在 parsing、引擎已 DONE 时无法重解析/也无法显示成功
+        syncOpenParseStatuses(lib, List.of(entity));
+
+        // 幂等短路：引擎侧仍在跑才短路；本地 stale parsing 已在上方被纠正
+        if (ParseStatus.PARSING.code().equals(entity.getParseStatus())) {
+            log.info("文档已在解析中，重解析请求幂等短路 id={}", id);
+            return;
         }
 
         entity.setParseStatus(ParseStatus.PARSING.code());
@@ -181,6 +259,57 @@ public class KbDocumentService {
                     id, entity.getLibraryId(), e.getMessage(), e);
             throw new KbBusinessException(
                     KbResultCode.KB_DOC_NOT_FOUND, "重新解析失败：" + e.getMessage());
+        }
+    }
+
+    /**
+     * 对 pending/parsing 文档拉取引擎状态并落库；引擎不可达时静默保留原值（列表仍可展示）。
+     */
+    private void syncOpenParseStatuses(KbLibrary lib, List<KbDocument> docs) {
+        if (lib == null || lib.getEngineLibraryRef() == null || lib.getEngineLibraryRef().isBlank()
+                || docs == null || docs.isEmpty()) {
+            return;
+        }
+        List<KbDocument> open = new ArrayList<>();
+        List<String> nativeIds = new ArrayList<>();
+        for (KbDocument doc : docs) {
+            if (doc == null || doc.getEngineDocumentRef() == null || doc.getEngineDocumentRef().isBlank()) {
+                continue;
+            }
+            String status = doc.getParseStatus();
+            if (ParseStatus.PENDING.code().equals(status) || ParseStatus.PARSING.code().equals(status)) {
+                open.add(doc);
+                nativeIds.add(doc.getEngineDocumentRef());
+            }
+        }
+        if (nativeIds.isEmpty()) {
+            return;
+        }
+        Map<String, String> remote;
+        try {
+            remote = enginePort.queryDocumentParseStatuses(
+                    new EngineLibraryRef(lib.getEngineType(), lib.getEngineLibraryRef()), nativeIds);
+        } catch (Exception e) {
+            log.warn("批量查询引擎文档解析状态失败 libraryId={}: {}", lib.getId(), e.getMessage());
+            return;
+        }
+        if (remote == null || remote.isEmpty()) {
+            return;
+        }
+        Instant now = Instant.now();
+        for (KbDocument doc : open) {
+            String next = remote.get(doc.getEngineDocumentRef());
+            if (next == null || Objects.equals(next, doc.getParseStatus())) {
+                continue;
+            }
+            if (!ParseStatus.isValid(next)) {
+                continue;
+            }
+            log.info("回写文档解析状态 id={} {} -> {} (engineRef={})",
+                    doc.getId(), doc.getParseStatus(), next, doc.getEngineDocumentRef());
+            doc.setParseStatus(next);
+            doc.setUpdatedAt(now);
+            documentRepository.save(doc);
         }
     }
 
@@ -207,7 +336,8 @@ public class KbDocumentService {
     private KbDocumentVO toVo(KbDocument e) {
         return new KbDocumentVO(
                 e.getId(), e.getLibraryId(), e.getTitle(), e.getVersion(), e.getParseStatus(),
-                e.getEnabled(), e.getSize(), e.getFormat(), e.getCreatedAt(), e.getUpdatedAt());
+                e.getEnabled(), e.getSize(), e.getFormat(), e.getCreatedAt(), e.getUpdatedAt(),
+                e.getChunkMethod(), e.getChunkTokenNum(), e.getSeparator());
     }
 
     private static String deriveFormat(String filename) {
@@ -216,5 +346,36 @@ public class KbDocumentService {
         }
         int idx = filename.lastIndexOf('.');
         return idx >= 0 ? filename.substring(idx + 1).toLowerCase() : null;
+    }
+
+    /**
+     * 文件级切片配置校验（常量唯一事实源 {@link DocumentChunkConfig}，设计 §3.2.2）。
+     *
+     * <p>null/全空 = 继承库级，直接放行；越界/非法一律拒绝（用户主动动作不静默截断）。
+     *
+     * @param config 文件级切片配置
+     */
+    private static void validateChunkConfig(DocumentChunkConfig config) {
+        if (config == null) {
+            return;
+        }
+        if (config.chunkMethod() != null && !config.chunkMethod().isBlank()
+                && !DocumentChunkConfig.isValidChunkMethod(config.chunkMethod())) {
+            throw new BusinessException(ResultCode.VALIDATION_ERROR, "非法的切片方法：" + config.chunkMethod());
+        }
+        if (!DocumentChunkConfig.isValidTokenNum(config.chunkTokenNum())) {
+            throw new BusinessException(
+                    ResultCode.VALIDATION_ERROR,
+                    "切片 token 数需在 [" + DocumentChunkConfig.MIN_TOKEN_NUM + ", "
+                            + DocumentChunkConfig.MAX_TOKEN_NUM + "] 区间");
+        }
+    }
+
+    /** 切片方法归一化（小写去空白）；null/空白统一为 null（继承库级）。 */
+    private static String normalizeChunkMethod(String method) {
+        if (method == null || method.isBlank()) {
+            return null;
+        }
+        return method.trim().toLowerCase();
     }
 }

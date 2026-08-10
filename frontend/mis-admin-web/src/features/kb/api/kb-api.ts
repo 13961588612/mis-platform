@@ -6,9 +6,11 @@ import type {
   KbCategory,
   KbDashboard,
   KbDocument,
+  KbDocumentChunkConfig,
   KbDocumentUploadResult,
   KbEngineCapabilities,
   KbEngineHealth,
+  KbEngineModelPool,
   KbFeedbackForm,
   KbHitTestRequest,
   KbHitTestResult,
@@ -163,16 +165,40 @@ export async function getDocument(libraryId: number, id: number): Promise<KbDocu
   return unwrap(res, '获取文档详情失败');
 }
 
-/** 上传文档（multipart/form-data，文件二进制透传，保留原始文件名）。 */
-export async function uploadDocument(libraryId: number, file: File): Promise<KbDocumentUploadResult> {
+/** 上传文档（multipart/form-data；可选文件级切片参数，全空 = 继承库级）。 */
+export async function uploadDocument(
+  libraryId: number,
+  file: File,
+  chunk?: KbDocumentChunkConfig | null,
+): Promise<KbDocumentUploadResult> {
   const form = new FormData();
   form.append('file', file);
+  if (chunk?.chunkMethod) form.append('chunkMethod', chunk.chunkMethod);
+  if (chunk?.chunkTokenNum != null) form.append('chunkTokenNum', String(chunk.chunkTokenNum));
+  if (chunk?.separator != null) form.append('separator', chunk.separator);
   const res = await api.post<ApiResult<KbDocumentUploadResult>>(
     `/kb/libraries/${libraryId}/documents`,
     form,
     { headers: { 'Content-Type': 'multipart/form-data' } },
   );
   return unwrap(res, '上传文档失败');
+}
+
+/** 更新文档级切片配置（改参触发重解析；全 null = 清空文件级覆盖继承库级）。 */
+export async function updateDocumentChunkConfig(
+  libraryId: number,
+  docId: number,
+  config: KbDocumentChunkConfig,
+): Promise<void> {
+  const res = await api.put<ApiResult<null>>(
+    `/kb/libraries/${libraryId}/documents/${docId}/chunk-config`,
+    {
+      chunkMethod: config.chunkMethod ?? null,
+      chunkTokenNum: config.chunkTokenNum ?? null,
+      separator: config.separator ?? null,
+    },
+  );
+  if (res.data.code !== 0) throw new Error(res.data.message || '更新切片配置失败');
 }
 
 export async function setDocumentEnabled(
@@ -471,6 +497,12 @@ export async function engineHealth(): Promise<KbEngineHealth> {
 export async function engineCapabilities(): Promise<KbEngineCapabilities> {
   const res = await api.get<ApiResult<KbEngineCapabilities>>('/kb/engine/capabilities');
   return unwrap(res, '获取引擎能力失败');
+}
+
+/** 模型池（embedding[]/rerank[]/available/degradedReason/globalRerankModelId）。 */
+export async function listEngineModels(): Promise<KbEngineModelPool> {
+  const res = await api.get<ApiResult<KbEngineModelPool>>('/kb/engine/models');
+  return unwrap(res, '获取模型池失败');
 }
 
 // ------------------------------------------------------------------ 命中测试（Q-04 / WA-07）

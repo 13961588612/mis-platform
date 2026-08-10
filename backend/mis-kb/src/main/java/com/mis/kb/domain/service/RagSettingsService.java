@@ -5,6 +5,7 @@ import com.mis.kb.api.dto.KbLibraryDetailVO;
 import com.mis.kb.api.dto.KbLibraryVO;
 import com.mis.kb.domain.entity.KbAcl;
 import com.mis.kb.domain.entity.KbLibrary;
+import com.mis.kb.domain.model.DocumentChunkConfig;
 import com.mis.kb.domain.model.EmptyResultStrategy;
 import com.mis.kb.domain.model.EngineLibraryRef;
 import com.mis.kb.domain.model.KbResultCode;
@@ -46,10 +47,6 @@ import java.util.Set;
 public class RagSettingsService {
 
     private static final Logger log = LoggerFactory.getLogger(RagSettingsService.class);
-
-    /** 合法的分块方法码值（对齐 RAGFlow chunk_method）。 */
-    private static final Set<String> VALID_CHUNK_METHODS = Set.of(
-            "naive", "qa", "paper", "book", "laws", "presentation", "table", "picture", "one");
 
     /** 合法的检索方式码值。 */
     private static final Set<String> VALID_RETRIEVAL_METHODS = Set.of("vector", "keyword", "hybrid");
@@ -167,7 +164,7 @@ public class RagSettingsService {
             throw new KbBusinessException(KbResultCode.KB_RAG_SETTINGS_INVALID);
         }
         if (settings.chunkMethod() != null && !settings.chunkMethod().isBlank()
-                && !VALID_CHUNK_METHODS.contains(settings.chunkMethod().trim().toLowerCase())) {
+                && !DocumentChunkConfig.isValidChunkMethod(settings.chunkMethod())) {
             throw new KbBusinessException(KbResultCode.KB_RAG_SETTINGS_INVALID);
         }
         if (settings.emptyResultStrategy() != null && !settings.emptyResultStrategy().isBlank()
@@ -178,11 +175,14 @@ public class RagSettingsService {
     }
 
     /**
-     * 重排可用性收敛（WA-06，Rerank 三道防线的第一道）。
+     * 重排可用性收敛（WA-06 演进 + kb_settings_model_chunk，Rerank 三道防线的第一道）。
      *
-     * <p>重排模型是<b>平台级</b>资源（{@code mis.kb.engine.rerank-model-id}）。没配模型却让
-     * {@code rerank=true} 落库，会造成「界面显示已开启、实际检索永远不重排」的静默偏差——
-     * 管理员反复调参也看不出所以然。因此保存时直接改写为 {@code false} 并记 WARN。
+     * <p>kb_settings_model_chunk 后重排模型可以<b>库级</b>（{@code rerankModelId}），但
+     * <b>全局模型仍是开关闸门</b>（设计 U3：库级 rerankModelId 仅在有全局模型时参与合并链；
+     * PRD R-P0-05 验收「全局未配置 → 现有置灰逻辑不变」）。因此这里仍以
+     * {@code mis.kb.engine.rerank-model-id} 是否配置为判据：未配全局却让 {@code rerank=true}
+     * 落库，会造成「界面显示已开启、实际检索永远不重排」的静默偏差——保存时直接改写为
+     * {@code false} 并记 WARN。
      *
      * <p>为什么是<b>静默强制</b>而不是抛错：用户可能只是在改别的参数，顺带把历史遗留的
      * {@code rerank=true} 带上来；为此整单保存失败属于误伤。前端另有置灰 + 理由文案
@@ -208,7 +208,8 @@ public class RagSettingsService {
                 settings.chunkTokenNum(),
                 settings.separator(),
                 settings.emptyResultStrategy(),
-                settings.vectorSimilarityWeight());
+                settings.vectorSimilarityWeight(),
+                settings.rerankModelId());
     }
 
     /**

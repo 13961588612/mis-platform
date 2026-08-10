@@ -11,6 +11,10 @@ import java.time.Instant;
  * 知识库文档（kb_document）。
  *
  * <p>{@code engine_document_ref} 为引擎 doc 原生 id；{@code parse_status} 由引擎异步回写。
+ *
+ * <p><b>V23（kb_settings_model_chunk）新增三列：</b>{@code chunkMethod} / {@code chunkTokenNum} /
+ * {@code separator}，均为文件级切片覆盖字段，可空 = 继承库级（方案 B：库级默认 + 文件级覆盖）。
+ * 合并语义由 {@code DocumentChunkConfigResolver} 统一收口，本实体只做持久化承载。
  */
 @Entity
 @Table(name = "kb_document")
@@ -42,6 +46,18 @@ public class KbDocument {
 
     @Column
     private String format;
+
+    /** 文件级切片方法（V23；null = 继承库级）。 */
+    @Column(name = "chunk_method")
+    private String chunkMethod;
+
+    /** 文件级切片 token 数（V23；null = 继承库级）。 */
+    @Column(name = "chunk_token_num")
+    private Integer chunkTokenNum;
+
+    /** 文件级切片分隔符（V23；null = 继承库级）。 */
+    @Column(name = "separator")
+    private String separator;
 
     @Column(name = "created_at", nullable = false)
     private Instant createdAt;
@@ -119,6 +135,30 @@ public class KbDocument {
 
     public void setFormat(String format) {
         this.format = format;
+    }
+
+    public String getChunkMethod() {
+        return chunkMethod;
+    }
+
+    public void setChunkMethod(String chunkMethod) {
+        this.chunkMethod = chunkMethod;
+    }
+
+    public Integer getChunkTokenNum() {
+        return chunkTokenNum;
+    }
+
+    public void setChunkTokenNum(Integer chunkTokenNum) {
+        this.chunkTokenNum = chunkTokenNum;
+    }
+
+    public String getSeparator() {
+        return separator;
+    }
+
+    public void setSeparator(String separator) {
+        this.separator = separator;
     }
 
     public Instant getCreatedAt() {

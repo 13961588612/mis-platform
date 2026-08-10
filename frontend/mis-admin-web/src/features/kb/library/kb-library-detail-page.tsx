@@ -49,6 +49,13 @@ interface RagForm {
   emptyResultStrategy: string;
   /** 权重是滑条驱动的，天生就是合法数值，不需要走字符串中转。 */
   vectorSimilarityWeight: number;
+  /**
+   * 库级重排模型 id（kb_settings_model_chunk）。
+   *
+   * <p>空串 = 继承全局 `mis.kb.engine.rerank-model-id`；非空 = 本库固定使用该模型。
+   * 由模型池下拉选择（不自建配置），池不可用时回落仅「继承全局」。
+   */
+  rerankModelId: string;
 }
 
 const EMPTY_RAG_FORM: RagForm = {
@@ -62,6 +69,7 @@ const EMPTY_RAG_FORM: RagForm = {
   separator: '',
   emptyResultStrategy: 'SUGGEST',
   vectorSimilarityWeight: DEFAULT_WEIGHT,
+  rerankModelId: '',
 };
 
 /** 切片相关字段：这几个改了才需要弹重解析引导（WA-10）。 */
@@ -81,6 +89,7 @@ function toForm(s: KbRagSettings | null | undefined): RagForm {
     separator: s.separator ?? '',
     emptyResultStrategy: s.emptyResultStrategy ?? 'SUGGEST',
     vectorSimilarityWeight: s.vectorSimilarityWeight ?? DEFAULT_WEIGHT,
+    rerankModelId: s.rerankModelId ?? '',
   };
 }
 
@@ -111,6 +120,8 @@ function toSettings(f: RagForm): KbRagSettings {
     separator: f.separator === '' ? null : f.separator,
     emptyResultStrategy: f.emptyResultStrategy || null,
     vectorSimilarityWeight: f.vectorSimilarityWeight,
+    // 库级重排模型：空串 → null（继承全局），非空原样提交（不自建配置，来自模型池下拉）
+    rerankModelId: f.rerankModelId.trim() || null,
   };
 }
 
@@ -162,6 +173,15 @@ export function KbLibraryDetailPage() {
 
   const capabilities = useKbStore((s) => s.capabilities);
   const refreshEngine = useKbStore((s) => s.refreshEngine);
+  // kb_settings_model_chunk：模型池（嵌入/重排下拉数据源）。可用才展示下拉；
+  // 不可用/未加载一律按「不可判定」回落自由文本/仅继承全局（设计 §8-6 降级语义）。
+  const modelPool = useKbStore((s) => s.modelPool);
+  const refreshModels = useKbStore((s) => s.refreshModels);
+  const embeddingPool = modelPool?.available === true ? modelPool.embedding ?? [] : null;
+  const rerankPool = modelPool?.available === true ? modelPool.rerank ?? [] : null;
+  const globalRerankModelId =
+    modelPool?.available === true ? modelPool.globalRerankModelId ?? '' : '';
+  const poolDegraded = modelPool != null && modelPool.available !== true;
   // QA P2-A：原写法 `!== false` 在能力未拉到 / 返回 null 时推导为 true，属 fail-open。
   // 现改 `=== true`——能力未确认即置灰，与后端保存期强制关闭 rerank 的口径一致。
   const rerankSupported = capabilities?.rerankSupported === true;
@@ -169,6 +189,9 @@ export function KbLibraryDetailPage() {
   // 临时禁用 hybrid 选项并提示，但已保存的 hybrid 配置仍照常回显、权重滑条照常显示。
   const hybridSupported = capabilities?.hybridSupported === true;
   const isHybrid = form.retrievalMethod === 'hybrid';
+  // 全局重排模型友好名：池内按 id 反查 name，查不到原样回显 id（不吞）。
+  const globalRerankName =
+    (rerankPool ?? []).find((m) => m.id === globalRerankModelId)?.name ?? globalRerankModelId;
 
   const load = useCallback(async (id: number) => {
     setLoading(true);
@@ -195,6 +218,11 @@ export function KbLibraryDetailPage() {
   useEffect(() => {
     if (!capabilities) void refreshEngine();
   }, [capabilities, refreshEngine]);
+
+  // kb_settings_model_chunk：模型池下拉数据，打开页即拉一次（60s TTL 内后端不重打引擎）
+  useEffect(() => {
+    if (modelPool == null) void refreshModels();
+  }, [modelPool, refreshModels]);
 
   async function onSaveSettings(): Promise<void> {
     if (libraryId == null) return;
@@ -285,7 +313,7 @@ export function KbLibraryDetailPage() {
                 value={<span className="tabular-nums">{detail?.docCount ?? meta.docCount ?? 0}</span>}
               />
               <MetaRow
-                label="引擎"
+                label="建库引擎"
                 value={<Badge variant="outline">{meta.engineType ?? '未知'}</Badge>}
               />
               <MetaRow label="创建时间" value={formatTime(meta.createdAt)} />
@@ -296,7 +324,12 @@ export function KbLibraryDetailPage() {
 
         {/* ---------------------------------------------------------- 文档（L-06） */}
         <TabsContent value="docs" className="min-h-0 flex-1">
-          <KbDocumentTable libraryId={libraryId} showUpload fill />
+          <KbDocumentTable
+            libraryId={libraryId}
+            showUpload
+            fill
+            librarySettings={detail?.ragSettings ?? null}
+          />
         </TabsContent>
 
         {/* ---------------------------------------------------------- 授权范围 */}
@@ -430,11 +463,22 @@ export function KbLibraryDetailPage() {
                 </div>
                 <div>
                   <label className={fieldLabel}>嵌入模型</label>
+                  {/* kb_settings_model_chunk：嵌入模型创建后不可修改，详情页只读展示（设计 T05） */}
                   <Input
-                    value={form.embeddingModel}
-                    onChange={(e) => setForm((f) => ({ ...f, embeddingModel: e.target.value }))}
-                    placeholder="留空使用引擎默认"
+                    value={
+                      embeddingPool != null && embeddingPool.length > 0
+                        ? ((embeddingPool.find((m) => m.id === form.embeddingModel)?.name ??
+                            form.embeddingModel) || '')
+                        : form.embeddingModel
+                    }
+                    disabled
+                    placeholder="未指定（使用引擎默认）"
+                    title="嵌入模型在创建后不可修改"
                   />
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    嵌入模型在创建时从模型池确定，创建后不可修改
+                    {form.embeddingModel ? '（如需更换请删除后重建知识库）' : '；未指定时使用引擎默认模型'}。
+                  </p>
                 </div>
               </div>
 
@@ -449,7 +493,8 @@ export function KbLibraryDetailPage() {
                 </div>
               ) : null}
 
-              {/* WA-06：rerank 区展示全局模型名，不可用时置灰并给出明确理由 */}
+              {/* WA-06 + kb_settings_model_chunk：rerank 区。全局模型是开关闸门（U3），
+                  库级 rerankModelId 仅在有全局模型时可指定；从模型池下拉选择，不自建配置 */}
               <div className="mt-4 rounded-md border border-dashed bg-muted/30 p-3">
                 <label className="flex items-center gap-2 text-sm">
                   <input
@@ -462,11 +507,65 @@ export function KbLibraryDetailPage() {
                   启用重排（rerank）
                 </label>
                 {rerankSupported ? (
-                  <p className="mt-2 text-xs text-muted-foreground">
-                    重排模型由平台统一配置（
-                    <span className="font-mono">mis.kb.engine.rerank-model-id</span>
-                    ），库级只控制开关，不可单独指定模型。
-                  </p>
+                  <>
+                    <div className="mt-2">
+                      <label className="mb-1 block text-xs text-muted-foreground">重排模型</label>
+                      {rerankPool != null && rerankPool.length > 0 ? (
+                        <select
+                          className={selectClass}
+                          value={form.rerankModelId}
+                          disabled={!form.rerank}
+                          onChange={(e) => setForm((f) => ({ ...f, rerankModelId: e.target.value }))}
+                        >
+                          <option value="">
+                            继承全局{globalRerankModelId ? `（${globalRerankName}）` : ''}
+                          </option>
+                          {rerankPool.map((m) => (
+                            <option key={m.id} value={m.id}>
+                              {modelOptionLabel(m)}
+                            </option>
+                          ))}
+                        </select>
+                      ) : (
+                        <div className="space-y-1.5">
+                          <select className={selectClass} value="" disabled>
+                            <option value="">
+                              继承全局{globalRerankModelId ? `（${globalRerankName}）` : ''}
+                            </option>
+                          </select>
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="text-xs text-amber-600">
+                              {poolDegraded
+                                ? `模型池不可用：${modelPool?.degradedReason ?? '未知原因'}，当前仅可继承全局。`
+                                : '模型池加载中，当前仅可继承全局。'}
+                            </span>
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              onClick={() => void refreshModels()}
+                            >
+                              重试
+                            </Button>
+                          </div>
+                        </div>
+                      )}
+                      {form.rerankModelId &&
+                      rerankPool != null &&
+                      rerankPool.length > 0 &&
+                      !rerankPool.some((m) => m.id === form.rerankModelId) ? (
+                        <p className="mt-1 text-xs text-amber-600">
+                          已选模型不在当前模型池，保存后检索时将自动回退全局模型
+                          {globalRerankName ? `（${globalRerankName}）` : ''}。
+                        </p>
+                      ) : null}
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        从平台已配置模型池选择；「继承全局」即使用{' '}
+                        <span className="font-mono">mis.kb.engine.rerank-model-id</span>
+                        指定的平台统一模型。
+                      </p>
+                    </div>
+                  </>
                 ) : (
                   <p className="mt-2 text-xs text-amber-600">
                     平台未配置全局重排模型，重排当前不可用。请联系运维配置{' '}
@@ -515,11 +614,12 @@ export function KbLibraryDetailPage() {
               {/* WA-12：此处原文写的是 Markdown 星号，在 JSX 里不会被渲染成加粗，
                   只会原样显示两个星号。改用 <strong> 才是对的。 */}
               <p className="mt-2 text-xs text-muted-foreground">
-                切片参数改动只影响<strong>此后新解析</strong>的文档；已入库文档需在「文档」页重新解析才会生效。
+                切片参数改动只影响<strong>此后新上传</strong>的文档；已入库文档需先<strong>删除、再重新上传</strong>
+                才会按新参数切片（「重新解析」沿用文档上传时的参数，不会应用新分隔符）。
               </p>
               {chunkDirty(form, baseline) ? (
                 <p className="mt-1 text-xs text-amber-600">
-                  检测到切片参数已修改，保存后请记得对相关文档执行「重新解析」。
+                  检测到切片参数已修改，保存后请对相关文档执行「删除后重新上传」才会生效。
                 </p>
               ) : null}
             </section>
@@ -543,14 +643,16 @@ export function KbLibraryDetailPage() {
               </p>
             </section>
 
-            {/* WA-10：保存成功且切片参数确有改动时，才弹重解析引导 */}
+            {/* WA-10：保存成功且切片参数确有改动时，才弹重解析引导（B2 已校正文案：
+                RAGFlow 重新解析沿用文档上传时的参数，需删除后重新上传才会按新分隔符切片） */}
             {showReparseHint ? (
               <Alert>
-                <AlertTitle>切片参数已更新，建议重新解析文档</AlertTitle>
+                <AlertTitle>切片参数已更新，存量文档需重新上传</AlertTitle>
                 <AlertDescription>
                   <p>
-                    新的切片方法 / 长度 / 分隔符只对<strong>此后新解析</strong>的内容生效。
-                    已入库文档需要重新解析才会按新参数重新切片。
+                    新的切片方法 / 长度 / 分隔符只对<strong>此后新上传</strong>的内容生效。
+                    已入库文档请先<strong>删除、再重新上传</strong>，才会按新参数重新切片
+                    （「重新解析」不会应用新分隔符）。
                   </p>
                   <Button
                     size="sm"
@@ -587,4 +689,19 @@ function MetaRow({ label, value }: { label: string; value: React.ReactNode }) {
       <dd className="min-w-0 flex-1 truncate text-sm">{value}</dd>
     </div>
   );
+}
+
+/**
+ * 模型下拉选项展示名（与库管理页创建向导同口径）。
+ *
+ * <p>列表接口不提供维度/语言时为 null，此时省略后缀（T00 实测）。
+ */
+function modelOptionLabel(m: {
+  name: string;
+  dimension: number | null;
+  language: string | null;
+}): string {
+  return m.dimension != null || m.language != null
+    ? `${m.name}（${[m.dimension, m.language].filter(Boolean).join('·')}）`
+    : m.name;
 }

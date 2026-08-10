@@ -1,9 +1,12 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { Power, RefreshCw, RotateCw, Trash2, Upload } from 'lucide-react';
+import { useCallback, useEffect, useState } from 'react';
+import { Power, RefreshCw, RotateCw, Settings2, Trash2, Upload } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
+import { Badge } from '@/components/ui/badge';
 import { PermissionGate } from '@/components/auth/permission-gate';
 import { EnabledBadge, ParseStatusBadge } from '../components/kb-badges';
+import { KbDocumentUploadDialog } from '../components/kb-document-upload-dialog';
+import { KbDocChunkDialog } from '../components/kb-doc-chunk-dialog';
 import { SortIndicator } from '@/components/common/sort-indicator';
 import { useClientSort } from '@/components/common/use-client-sort';
 import { useColumnWidths, type ResizableColumn } from '@/components/common/use-column-widths';
@@ -13,13 +16,9 @@ import {
   listDocuments,
   reparseDocument,
   setDocumentEnabled,
-  uploadDocument,
 } from '../api/kb-api';
-import type { KbDocument } from '../types';
-import { formatSize, formatTime } from '../types';
-
-/** 与 BFF `KbFacadeService` 的 50MB 上限保持一致，前端提前拦截避免无谓上传。 */
-const MAX_UPLOAD_BYTES = 50 * 1024 * 1024;
+import type { KbDocument, KbRagSettings } from '../types';
+import { chunkMethodLabel, formatSize, formatTime } from '../types';
 
 /** 解析中自动刷新间隔（ms）。 */
 const PARSING_POLL_MS = 5_000;
@@ -31,6 +30,7 @@ const DOC_COLUMNS: (ResizableColumn & { sortable?: boolean })[] = [
   { key: 'size', label: '大小', sortable: true },
   { key: 'version', label: '版本', sortable: true },
   { key: 'parseStatus', label: '解析状态' },
+  { key: 'chunk', label: '切片方式' },
   { key: 'enabled', label: '启用' },
   { key: 'updatedAt', label: '更新时间', sortable: true },
   { key: '__ops__', label: '操作', locked: true },
@@ -45,26 +45,36 @@ export interface KbDocumentTableProps {
   showUpload?: boolean;
   /** 表格是否占满父容器高度（嵌在 Tab 内需要 flex-1；文档整页场景可省略）。 */
   fill?: boolean;
+  /**
+   * 库级 RAG 设置（kb_settings_model_chunk）：供「切片方式」列对「继承库级」文档
+   * 标注库级当前有效值（title 提示）。详情页传入；文档管理页不传也不影响功能。
+   */
+  librarySettings?: KbRagSettings | null;
 }
 
 /**
  * 文档列表（复用单元）。
  *
- * <p>把「知识库文档列表 + 启用/重解析/删除/上传」收敛到一处，避免库详情页（L-06 文档 Tab）
- * 与文档管理页各写一份相同 UI 造成漂移。库详情 Tab 固定传 `libraryId`、开 `showUpload`；
- * 文档管理页则把选择器选出的 `libraryId` 透传进来。
+ * <p>把「知识库文档列表 + 启用/重解析/删除/上传/切片设置」收敛到一处，避免库详情页
+ * （L-06 文档 Tab）与文档管理页各写一份相同 UI 造成漂移。库详情 Tab 固定传
+ * `libraryId`、开 `showUpload`；文档管理页则把选择器选出的 `libraryId` 透传进来。
  *
  * <p>解析为异步流程，存在 pending/parsing 文档时自动轮询刷新，直至收敛为 success/failed。
+ *
+ * <p>「切片方式」列来源徽标（kb_settings_model_chunk，PRD §5.3）：任一文件级字段非空
+ * = FILE_OVERRIDE（文件指定），否则 LIBRARY（继承库级，title 提示库级当前有效值）。
  */
 export function KbDocumentTable({
   libraryId,
   showUpload = false,
   fill = false,
+  librarySettings = null,
 }: KbDocumentTableProps) {
   const [documents, setDocuments] = useState<KbDocument[]>([]);
   const [loading, setLoading] = useState(false);
-  const [uploading, setUploading] = useState(false);
-  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const [uploadOpen, setUploadOpen] = useState(false);
+  const [chunkDoc, setChunkDoc] = useState<KbDocument | null>(null);
+  const [chunkOpen, setChunkOpen] = useState(false);
 
   // 列宽记忆（localStorage）+ 表头排序（三态 无 → 升 → 降 → 无）
   const { widthOf, startResize, hasCustom, reset: resetWidths } = useColumnWidths(
@@ -101,23 +111,53 @@ export function KbDocumentTable({
     return () => window.clearInterval(timer);
   }, [hasPending, libraryId, load]);
 
-  async function onPickFile(file: File | null) {
-    if (!file) return;
-    if (file.size > MAX_UPLOAD_BYTES) {
-      toast.error(`文件超过 ${formatSize(MAX_UPLOAD_BYTES)} 上限`);
-      return;
-    }
-    setUploading(true);
-    try {
-      const result = await uploadDocument(libraryId, file);
-      toast.success(`已上传「${file.name}」，解析状态：${result.parseStatus}`);
-      await load(libraryId);
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : '上传失败');
-    } finally {
-      setUploading(false);
-      if (fileInputRef.current) fileInputRef.current.value = '';
-    }
+  /** 文档是否有文件级切片覆盖（任一字段非空）。 */
+  function hasChunkOverride(doc: KbDocument): boolean {
+    return (
+      (doc.chunkMethod != null && doc.chunkMethod !== '') ||
+      doc.chunkTokenNum != null ||
+      doc.separator != null
+    );
+  }
+
+  /** 切片方式单元格：方法名 + 来源徽标。 */
+  function renderChunkCell(doc: KbDocument) {
+    const override = hasChunkOverride(doc);
+    const method = doc.chunkMethod != null && doc.chunkMethod !== '' ? doc.chunkMethod : null;
+    const libraryMethod = librarySettings?.chunkMethod ?? null;
+    const effective = method ?? libraryMethod ?? null;
+    const detail = [
+      doc.chunkTokenNum != null ? `${doc.chunkTokenNum} token` : null,
+      doc.separator != null ? `分隔符: ${doc.separator}` : null,
+    ]
+      .filter(Boolean)
+      .join(' · ');
+    const title = [
+      effective ? `生效切片方式: ${chunkMethodLabel(effective)}` : '切片方式: 引擎默认',
+      detail,
+      override ? '来源: 文件指定' : `来源: 继承库级${libraryMethod ? `（库级 ${chunkMethodLabel(libraryMethod)}）` : ''}`,
+    ]
+      .filter(Boolean)
+      .join('\n');
+    return (
+      <span className="inline-flex items-center gap-1.5 whitespace-nowrap" title={title}>
+        <span className="max-w-[8rem] truncate text-xs">{chunkMethodLabel(effective)}</span>
+        {override ? (
+          <Badge variant="info" className="px-1.5 py-0 text-[0.6875rem]">
+            文件指定
+          </Badge>
+        ) : (
+          <Badge variant="secondary" className="px-1.5 py-0 text-[0.6875rem]">
+            继承库级
+          </Badge>
+        )}
+      </span>
+    );
+  }
+
+  function openChunkDialog(doc: KbDocument) {
+    setChunkDoc(doc);
+    setChunkOpen(true);
   }
 
   async function onToggleEnabled(doc: KbDocument) {
@@ -156,9 +196,9 @@ export function KbDocumentTable({
       {showUpload && (
         <div className="flex flex-wrap items-center gap-2">
           <PermissionGate permission="kb:document:add">
-            <Button size="sm" disabled={uploading} onClick={() => fileInputRef.current?.click()}>
+            <Button size="sm" onClick={() => setUploadOpen(true)}>
               <Upload className="h-4 w-4" />
-              {uploading ? '上传中…' : '上传文档'}
+              上传文档
             </Button>
           </PermissionGate>
           <Button
@@ -176,15 +216,24 @@ export function KbDocumentTable({
             </Button>
           ) : null}
           <span className="text-xs text-muted-foreground">
-            单文件不超过 {formatSize(MAX_UPLOAD_BYTES)}
+            单文件不超过 {formatSize(50 * 1024 * 1024)}
           </span>
         </div>
       )}
-      <input
-        ref={fileInputRef}
-        type="file"
-        className="hidden"
-        onChange={(e) => void onPickFile(e.target.files?.[0] ?? null)}
+
+      <KbDocumentUploadDialog
+        open={uploadOpen}
+        onOpenChange={setUploadOpen}
+        libraryId={libraryId}
+        onUploaded={() => void load(libraryId)}
+      />
+      <KbDocChunkDialog
+        open={chunkOpen}
+        onOpenChange={setChunkOpen}
+        libraryId={libraryId}
+        doc={chunkDoc}
+        librarySettings={librarySettings}
+        onUpdated={() => void load(libraryId)}
       />
 
       <div
@@ -245,13 +294,13 @@ export function KbDocumentTable({
           <tbody>
             {loading ? (
               <tr>
-                <td colSpan={8} className="px-3 py-10 text-center text-muted-foreground">
+                <td colSpan={9} className="px-3 py-10 text-center text-muted-foreground">
                   加载中…
                 </td>
               </tr>
             ) : documents.length === 0 ? (
               <tr>
-                <td colSpan={8} className="px-3 py-10 text-center text-muted-foreground">
+                <td colSpan={9} className="px-3 py-10 text-center text-muted-foreground">
                   暂无文档
                 </td>
               </tr>
@@ -272,6 +321,7 @@ export function KbDocumentTable({
                   <td className="whitespace-nowrap px-3 py-2">
                     <ParseStatusBadge status={doc.parseStatus} />
                   </td>
+                  <td className="whitespace-nowrap px-3 py-2">{renderChunkCell(doc)}</td>
                   <td className="whitespace-nowrap px-3 py-2">
                     <EnabledBadge enabled={doc.enabled} />
                   </td>
@@ -280,6 +330,16 @@ export function KbDocumentTable({
                   </td>
                   <td className="whitespace-nowrap px-3 py-2">
                     <div className="flex items-center gap-1">
+                      <PermissionGate permission="kb:document:edit">
+                        <button
+                          type="button"
+                          className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[0.8125rem] text-primary hover:bg-primary/10"
+                          onClick={() => openChunkDialog(doc)}
+                        >
+                          <Settings2 className="h-3 w-3" />
+                          切片设置
+                        </button>
+                      </PermissionGate>
                       <PermissionGate permission="kb:document:edit">
                         <button
                           type="button"

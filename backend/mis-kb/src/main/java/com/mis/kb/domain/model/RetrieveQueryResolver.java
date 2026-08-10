@@ -1,5 +1,6 @@
 package com.mis.kb.domain.model;
 
+import com.mis.kb.domain.service.EngineModelPoolService;
 import com.mis.kb.domain.service.SynonymExpandService;
 import com.mis.kb.engine.RagflowProperties;
 import org.slf4j.Logger;
@@ -59,6 +60,7 @@ public class RetrieveQueryResolver {
 
     private final RagflowProperties engineProperties;
     private final SynonymExpandService synonymExpandService;
+    private final EngineModelPoolService modelPoolService;
 
     /**
      * 构造。
@@ -68,11 +70,17 @@ public class RetrieveQueryResolver {
      *                             刻意不做 null 兜底：装配缺失时就该在第一次检索时以 NPE 炸出来。
      *                             若在这里静默回落成「同义词已全局关闭」，管理员会去翻一个
      *                             根本没关的开关，排障成本远高于一个堆栈
+     * @param modelPoolService     模型池服务（T03，kb_settings_model_chunk）。
+     *                             S4 阶段用 {@code peekPool()}（只读缓存，绝不触发网络）校验
+     *                             「库级重排模型是否在池内」；热路径零网络铁律见设计 §8-8
      */
     public RetrieveQueryResolver(
-            RagflowProperties engineProperties, SynonymExpandService synonymExpandService) {
+            RagflowProperties engineProperties,
+            SynonymExpandService synonymExpandService,
+            EngineModelPoolService modelPoolService) {
         this.engineProperties = engineProperties;
         this.synonymExpandService = synonymExpandService;
+        this.modelPoolService = modelPoolService;
     }
 
     // ---------------------------------------------------------------- 入参类型
@@ -213,10 +221,34 @@ public class RetrieveQueryResolver {
             rerank = false;
             degradedReasons.add("当前引擎不支持重排，已自动关闭");
         }
-        String rerankModelId = engineProperties == null ? null : engineProperties.getRerankModelId();
-        if (rerank && (rerankModelId == null || rerankModelId.isBlank())) {
+        // T03（kb_settings_model_chunk）：重排模型合并链 = 库级 ?? 全局（设计 §4.2 / U3）。
+        // 全局未配是闸门：库级 rerankModelId 仅在有全局模型时参与合并链（PRD R-P0-05）。
+        String globalRerankModelId = engineProperties == null ? null : engineProperties.getRerankModelId();
+        boolean globalConfigured = globalRerankModelId != null && !globalRerankModelId.isBlank();
+        boolean librarySpecified = base.rerankModelId() != null && !base.rerankModelId().isBlank();
+        String rerankModelId = (globalConfigured && librarySpecified)
+                ? base.rerankModelId() : globalRerankModelId;
+        if (rerank && !globalConfigured) {
             rerank = false;
-            degradedReasons.add("平台未配置全局重排模型（mis.kb.engine.rerank-model-id），重排已自动关闭");
+            degradedReasons.add("平台未配置全局重排模型（mis.kb.engine.rerank-model-id 为空），重排已自动关闭");
+        } else if (rerank && modelPoolService != null) {
+            // peekPool()：只读缓存，绝不触发网络（热路径零网络铁律，设计 §8-8）。
+            // 池可判定时校验「库级模型在池内」，不在 → 回退全局（T03 验收）。
+            EngineModelPool pool = modelPoolService.peekPool();
+            if (pool != null && pool.available() && !pool.rerankIds().isEmpty()) {
+                if (librarySpecified && !pool.rerankIds().contains(base.rerankModelId())) {
+                    if (pool.rerankIds().contains(globalRerankModelId)) {
+                        rerankModelId = globalRerankModelId;
+                        degradedReasons.add("库级重排模型不在当前模型池，已回退全局模型");
+                    } else {
+                        rerank = false;
+                        degradedReasons.add("库级重排模型不在当前模型池且全局模型亦不在池，重排已自动关闭");
+                    }
+                } else if (!pool.rerankIds().contains(rerankModelId)) {
+                    rerank = false;
+                    degradedReasons.add("重排模型不在当前模型池，重排已自动关闭");
+                }
+            }
         }
 
         // S5 兜底
@@ -333,7 +365,8 @@ public class RetrieveQueryResolver {
                 base.separator(),
                 base.emptyResultStrategy(),
                 ov.vectorSimilarityWeight() != null
-                        ? ov.vectorSimilarityWeight() : base.vectorSimilarityWeight());
+                        ? ov.vectorSimilarityWeight() : base.vectorSimilarityWeight(),
+                base.rerankModelId());
     }
 
     /**

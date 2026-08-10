@@ -78,6 +78,15 @@ export interface KbRagSettings {
    * 「vector→1.0 / keyword→0.0」的强制换算只发生在后端检索期合并阶段。
    */
   vectorSimilarityWeight: number | null;
+  /**
+   * 库级重排模型 id（kb_settings_model_chunk，末位追加）。
+   *
+   * <p>全限定格式 `name@provider@provider`（如
+   * `qwen3-rerank@Tongyi-Qianwen@Tongyi-Qianwen`）；`null` = 继承全局
+   * `mis.kb.engine.rerank-model-id`。全局未配置时重排开关整体置灰，
+   * 库级值不参与合并链（设计 U3）。
+   */
+  rerankModelId: string | null;
 }
 
 /** 知识库分类。 */
@@ -119,6 +128,23 @@ export interface KbDocument {
   format: string | null;
   createdAt: string | null;
   updatedAt: string | null;
+  /** 文件级切片方法（kb_settings_model_chunk；null = 继承库级）。 */
+  chunkMethod: string | null;
+  /** 文件级切片 token 数（null = 继承库级）。 */
+  chunkTokenNum: number | null;
+  /** 文件级切片分隔符（null = 继承库级）。 */
+  separator: string | null;
+}
+
+/**
+ * 文件级切片配置（上传/改参请求体；三字段全 null = 继承库级）。
+ *
+ * <p>「任一字段非空 = 文件指定」，后端据此判定来源徽标（FILE_OVERRIDE / LIBRARY）。
+ */
+export interface KbDocumentChunkConfig {
+  chunkMethod: string | null;
+  chunkTokenNum: number | null;
+  separator: string | null;
 }
 
 /** 文档上传响应。 */
@@ -391,6 +417,40 @@ export interface KbEngineCapabilities {
   replaceSupported: boolean | null;
   /** 是否支持混合检索（关键字 + 语义）与权重调节（WA-03）。 */
   hybridSupported: boolean | null;
+}
+
+/**
+ * 模型池项（kb_settings_model_chunk；BFF `KbEngineModelVO` 镜像）。
+ *
+ * <p>`id` = 全限定 id（embedding/rerank 均为 `name@instance@provider`），
+ * 创建/检索直接可用；`dimension`/`language` 列表接口不提供时为 null。
+ */
+export interface KbEngineModel {
+  id: string;
+  name: string;
+  type: string;
+  provider: string | null;
+  dimension: number | null;
+  language: string | null;
+}
+
+/**
+ * 模型池快照（kb_settings_model_chunk；BFF `KbEngineModelPoolVO` 镜像）。
+ *
+ * <p>⚠️ **`available === false` 是探测失败/引擎不可达，绝不当空列表展示**
+ * （设计 §8-6 降级语义）——此时必须渲染告警态 + `degradedReason` + 重试，
+ * 而不是把「拉不到模型」误当「平台没有模型」。
+ *
+ * <p>`globalRerankModelId` = 全局配置重排模型 id（可为空串），
+ * 供「默认项 = 全局」标注与「库级不在池回退全局」的文案对齐。
+ */
+export interface KbEngineModelPool {
+  embedding: KbEngineModel[] | null;
+  rerank: KbEngineModel[] | null;
+  available: boolean | null;
+  degradedReason: string | null;
+  globalRerankModelId: string | null;
+  probedAt: string | null;
 }
 
 // --------------------------------------------------------------- 同义词与术语扩展（Wave D / S-07）
@@ -749,6 +809,29 @@ export function emptyResultStrategyLabel(strategy: string | null | undefined): s
   return (
     KB_EMPTY_RESULT_STRATEGY_OPTIONS.find((o) => o.value === strategy)?.label ?? strategy ?? '-'
   );
+}
+
+/**
+ * 切片方法选项（kb_settings_model_chunk；对齐 RAGFlow `chunk_method`）。
+ *
+ * <p>与后端 `DocumentChunkConfig.VALID_CHUNK_METHODS` 一一对应，新增码值必须两侧同步。
+ */
+export const KB_CHUNK_METHOD_OPTIONS: { value: string; label: string }[] = [
+  { value: 'naive', label: '通用（Naive）' },
+  { value: 'qa', label: '问答对（QA）' },
+  { value: 'paper', label: '论文（Paper）' },
+  { value: 'book', label: '书籍（Book）' },
+  { value: 'laws', label: '法律法规（Laws）' },
+  { value: 'presentation', label: '演示文稿（Presentation）' },
+  { value: 'table', label: '表格（Table）' },
+  { value: 'picture', label: '图片（Picture）' },
+  { value: 'one', label: '整篇（One）' },
+];
+
+/** 切片方法中文名（未知值原样回显，不吞）。 */
+export function chunkMethodLabel(method: string | null | undefined): string {
+  if (!method) return '-';
+  return KB_CHUNK_METHOD_OPTIONS.find((o) => o.value === method)?.label ?? method;
 }
 
 /** 检索方式中文名（未知值原样回显）。 */

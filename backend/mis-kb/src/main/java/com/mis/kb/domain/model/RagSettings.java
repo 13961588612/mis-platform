@@ -17,6 +17,13 @@ package com.mis.kb.domain.model;
  * {@link com.mis.kb.support.KbJson} 已关闭 {@code FAIL_ON_UNKNOWN_PROPERTIES}，
  * 灰度期间老进程读到新字段也能正常降级解析。
  *
+ * <p><b>kb_settings_model_chunk（R-P0-04）新增 {@code rerankModelId}（追加末位，零 DDL）：</b>
+ * 库级重排模型 id（全限定 {@code name@provider@provider}）；{@code null} = 继承全局
+ * {@code mis.kb.engine.rerank-model-id}。仅在 {@link RetrieveQueryResolver} S4 阶段
+ * 参与合并链（库级值 ?? 全局值），服务层不得内联判断（设计 §7.2 Resolver 铁律）。
+ * record 是位置参数，新字段<b>必须追加末位</b>——插中间会让所有既有构造点静默错位
+ * （设计 §8-1 铁律）。
+ *
  * <p><b>非 hybrid 时权重不清空（U8 + 主理人约束②）：</b>用户在 vector/keyword 与 hybrid
  * 之间来回切换时权重原值必须保留，<b>保存/校验路径绝不因 retrievalMethod 非 hybrid 而改写它</b>；
  * 「vector→1.0 / keyword→0.0」的强制覆写<b>只发生在检索期合并阶段</b>
@@ -32,6 +39,7 @@ package com.mis.kb.domain.model;
  * @param separator              分块分隔符
  * @param emptyResultStrategy    空结果策略码值（见 {@link EmptyResultStrategy}）
  * @param vectorSimilarityWeight 向量相似度权重（0~1），仅 hybrid 有意义；WA-01 新增
+ * @param rerankModelId          库级重排模型 id（全限定）；null = 继承全局；kb_settings_model_chunk 新增
  */
 public record RagSettings(
         Integer topK,
@@ -43,7 +51,8 @@ public record RagSettings(
         Integer chunkTokenNum,
         String separator,
         String emptyResultStrategy,
-        Double vectorSimilarityWeight) {
+        Double vectorSimilarityWeight,
+        String rerankModelId) {
 
     /** 默认召回条数。 */
     public static final int DEFAULT_TOP_K = 5;
@@ -81,7 +90,8 @@ public record RagSettings(
                 DEFAULT_CHUNK_TOKEN_NUM,
                 null,
                 EmptyResultStrategy.SUGGEST.code(),
-                DEFAULT_VECTOR_SIMILARITY_WEIGHT);
+                DEFAULT_VECTOR_SIMILARITY_WEIGHT,
+                null);
     }
 
     /**
@@ -92,6 +102,9 @@ public record RagSettings(
      *
      * <p>{@code vectorSimilarityWeight} 只做「null → 默认值」的补齐，<b>不</b>根据
      * {@code retrievalMethod} 做任何覆写——覆写只属于检索期合并阶段。
+     *
+     * <p>{@code rerankModelId} 保持 {@code null}（null = 继承全局
+     * {@code mis.kb.engine.rerank-model-id}，库级不指定，设计 §3.2.1）。
      *
      * @return 补齐默认值后的新实例（本记录不可变，原实例不受影响）
      */
@@ -109,7 +122,8 @@ public record RagSettings(
                 separator,
                 EmptyResultStrategy.normalize(emptyResultStrategy),
                 vectorSimilarityWeight != null
-                        ? vectorSimilarityWeight : DEFAULT_VECTOR_SIMILARITY_WEIGHT);
+                        ? vectorSimilarityWeight : DEFAULT_VECTOR_SIMILARITY_WEIGHT,
+                rerankModelId);
     }
 
     /**

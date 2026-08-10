@@ -13,5 +13,8 @@ public record KbDocumentVO(
         Long size,
         String format,
         Instant createdAt,
-        Instant updatedAt) {
+        Instant updatedAt,
+        String chunkMethod,
+        Integer chunkTokenNum,
+        String separator) {
 }

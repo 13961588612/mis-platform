@@ -3,8 +3,9 @@ package com.mis.adminbff.dto.kb;
 /**
  * 知识库 RAG 设置（BFF 侧镜像，字段与 mis-kb {@code RagSettings} 对齐）。
  *
- * <p>L-08 新增分块与空结果策略字段。<b>本层不做默认值补齐</b>——
- * 默认值只在 mis-kb 一处定义，BFF 再补一遍必然出现两套默认值漂移。
+ * <p>L-08 新增分块与空结果策略字段；WA-01 新增 {@code vectorSimilarityWeight}；
+ * kb_settings_model_chunk（R-P0-04）末位追加 {@code rerankModelId}。
+ * <b>本层不做默认值补齐</b>——默认值只在 mis-kb 一处定义，BFF 再补一遍必然出现两套默认值漂移。
  *
  * @param topK                召回条数
  * @param scoreThreshold      相似度阈值 [0,1]
@@ -16,6 +17,7 @@ package com.mis.adminbff.dto.kb;
  * @param separator           分块分隔符
  * @param emptyResultStrategy 空结果策略 SUGGEST/EMPTY/TRANSFER
  * @param vectorSimilarityWeight 向量相似度权重 [0,1]，仅 hybrid 生效（WA-01 新增）
+ * @param rerankModelId       库级重排模型 id（全限定）；null=继承全局；kb_settings_model_chunk 新增
  */
 public record KbRagSettings(
         Integer topK,
@@ -27,5 +29,6 @@ public record KbRagSettings(
         Integer chunkTokenNum,
         String separator,
         String emptyResultStrategy,
-        Double vectorSimilarityWeight) {
+        Double vectorSimilarityWeight,
+        String rerankModelId) {
 }

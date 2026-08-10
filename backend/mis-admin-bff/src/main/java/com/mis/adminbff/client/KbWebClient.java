@@ -11,6 +11,7 @@ import com.mis.adminbff.dto.kb.KbDocumentUploadResponse;
 import com.mis.adminbff.dto.kb.KbDocumentVO;
 import com.mis.adminbff.dto.kb.KbEngineCapabilitiesVO;
 import com.mis.adminbff.dto.kb.KbEngineHealthVO;
+import com.mis.adminbff.dto.kb.KbEngineModelPoolVO;
 import com.mis.adminbff.dto.kb.KbHitTestRequest;
 import com.mis.adminbff.dto.kb.KbHitTestResultVO;
 import com.mis.adminbff.dto.kb.KbLibraryDetailVO;
@@ -91,6 +92,8 @@ public class KbWebClient extends AbstractDownstreamClient {
     private static final ParameterizedTypeReference<Result<KbEngineHealthVO>> ENGINE_HEALTH =
             new ParameterizedTypeReference<>() {};
     private static final ParameterizedTypeReference<Result<KbEngineCapabilitiesVO>> ENGINE_CAPS =
+            new ParameterizedTypeReference<>() {};
+    private static final ParameterizedTypeReference<Result<KbEngineModelPoolVO>> ENGINE_MODEL_POOL =
             new ParameterizedTypeReference<>() {};
     private static final ParameterizedTypeReference<Result<String>> STRING =
             new ParameterizedTypeReference<>() {};
@@ -352,9 +355,10 @@ public class KbWebClient extends AbstractDownstreamClient {
                 .bodyToMono(DOCUMENT));
     }
 
-    /** 透传 multipart 上传（保留原始文件名与内容类型）。 */
+    /** 透传 multipart 上传（保留原始文件名与内容类型；可选文件级切片参数）。 */
     public KbDocumentUploadResponse uploadDocument(
-            Long libraryId, String filename, String contentType, byte[] bytes) {
+            Long libraryId, String filename, String contentType, byte[] bytes,
+            String chunkMethod, Integer chunkTokenNum, String separator) {
         MultipartBodyBuilder builder = new MultipartBodyBuilder();
         ByteArrayResource resource = new ByteArrayResource(bytes) {
             @Override
@@ -367,6 +371,15 @@ public class KbWebClient extends AbstractDownstreamClient {
                 .contentType(contentType != null
                         ? MediaType.parseMediaType(contentType)
                         : MediaType.APPLICATION_OCTET_STREAM);
+        if (chunkMethod != null && !chunkMethod.isBlank()) {
+            builder.part("chunkMethod", chunkMethod);
+        }
+        if (chunkTokenNum != null) {
+            builder.part("chunkTokenNum", String.valueOf(chunkTokenNum));
+        }
+        if (separator != null) {
+            builder.part("separator", separator);
+        }
         return block(client().post()
                 .uri("/internal/v1/kb/libraries/{libraryId}/documents", libraryId)
                 .headers(loginContextHeaders())
@@ -393,6 +406,19 @@ public class KbWebClient extends AbstractDownstreamClient {
         block(client().post()
                 .uri("/internal/v1/kb/libraries/{libraryId}/documents/{id}/reparse", libraryId, id)
                 .headers(loginContextHeaders())
+                .retrieve()
+                .bodyToMono(VOID));
+    }
+
+    /** 更新文档级切片配置（kb_settings_model_chunk；改参触发重解析）。 */
+    public void updateDocumentChunkConfig(
+            Long libraryId, Long docId, Map<String, Object> body) {
+        block(client().put()
+                .uri("/internal/v1/kb/libraries/{libraryId}/documents/{docId}/chunk-config",
+                        libraryId, docId)
+                .headers(loginContextHeaders())
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(body)
                 .retrieve()
                 .bodyToMono(VOID));
     }
@@ -624,6 +650,15 @@ public class KbWebClient extends AbstractDownstreamClient {
                 .headers(loginContextHeaders())
                 .retrieve()
                 .bodyToMono(ENGINE_CAPS));
+    }
+
+    /** 模型池（embedding[]/rerank[]/available/degradedReason/globalRerankModelId）。 */
+    public KbEngineModelPoolVO listEngineModels() {
+        return block(client().get()
+                .uri("/internal/v1/kb/engine/models")
+                .headers(loginContextHeaders())
+                .retrieve()
+                .bodyToMono(ENGINE_MODEL_POOL));
     }
 
     public String engineType() {

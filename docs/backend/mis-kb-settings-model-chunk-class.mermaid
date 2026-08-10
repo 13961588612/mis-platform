@@ -1,0 +1,228 @@
+classDiagram
+    direction LR
+
+    class RagSettings {
+        <<record>>
+        +Integer topK
+        +Double scoreThreshold
+        +Boolean rerank
+        +String embeddingModel
+        +String retrievalMethod
+        +String chunkMethod
+        +Integer chunkTokenNum
+        +String separator
+        +String emptyResultStrategy
+        +Double vectorSimilarityWeight
+        +String rerankModelId  %NEW: null=继承全局%
+        +defaults() RagSettings
+        +withDefaults() RagSettings
+        +normalizeRetrievalMethod(String) String
+    }
+
+    class KbDocument {
+        <<entity>>
+        +Long id
+        +Long libraryId
+        +String title
+        +String engineDocumentRef
+        +Integer version
+        +String parseStatus
+        +Integer enabled
+        +Long size
+        +String format
+        +Instant createdAt
+        +Instant updatedAt
+        +String chunkMethod  %NEW V23%
+        +Integer chunkTokenNum  %NEW V23%
+        +String separator  %NEW V23%
+    }
+
+    class DocumentChunkConfig {
+        <<record>>
+        +String chunkMethod
+        +Integer chunkTokenNum
+        +String separator
+        +hasAnyOverride() boolean
+        +isValidChunkMethod(String) boolean
+        +isValidTokenNum(Integer) boolean
+    }
+
+    class EffectiveChunkConfig {
+        <<record>>
+        +String chunkMethod
+        +Integer chunkTokenNum
+        +String separator
+        +String source  %FILE_OVERRIDE | LIBRARY%
+        +String SOURCE_FILE_OVERRIDE
+        +String SOURCE_LIBRARY
+    }
+
+    class DocumentChunkConfigResolver {
+        +resolve(DocumentChunkConfig file, RagSettings library) EffectiveChunkConfig
+    }
+
+    class DocumentUploadInput {
+        <<record>>
+        +String filename
+        +String contentType
+        +long size
+        +byte[] content
+        +DocumentChunkConfig chunkConfig  %NEW 末位%
+        +DocumentUploadInput(fn, ct, size, content)  %紧凑构造兼容旧调用点%
+    }
+
+    class EngineModel {
+        <<record>>
+        +String id  %全限定 id（rerank: name@factory@factory）%
+        +String name
+        +String type  %embedding | rerank%
+        +String provider
+        +Integer dimension
+        +String language
+    }
+
+    class EngineModelPool {
+        <<record>>
+        +List~EngineModel~ embedding
+        +List~EngineModel~ rerank
+        +boolean available
+        +String degradedReason
+        +String globalRerankModelId
+        +Instant probedAt
+        +static unavailable(String reason, String globalRerankModelId) EngineModelPool
+        +rerankIds() Set~String~
+    }
+
+    class EngineModelPoolService {
+        -volatile EngineModelPool cache
+        -volatile Instant expireAt
+        -Object lock
+        +getPool() EngineModelPool  %UI：60s TTL，过期同步刷新（唯一网络点）%
+        +peekPool() EngineModelPool  %热路径：只读缓存，绝不刷新%
+        +invalidate() void
+    }
+
+    class RetrieveQueryResolver {
+        -RagflowProperties engineProperties
+        -SynonymExpandService synonymExpandService
+        -EngineModelPoolService modelPoolService  %NEW%
+        +resolveAll(RetrieveContext) Resolution
+        +resolve(RetrieveContext) RetrieveQuery
+        +effective(RetrieveContext) EffectiveRetrieveParams
+        -pickBase(List~Long~, Map~Long,RagSettings~) RagSettings
+        -applyOverride(RagSettings, ParamOverride) RagSettings
+    }
+
+    class RagSettingsService {
+        -KbLibraryRepository libraryRepository
+        -KnowledgeEnginePort enginePort
+        -RagflowProperties engineProperties
+        +get(Long) RagSettings
+        +save(Long, RagSettings) RagSettings
+        +detail(Long) KbLibraryDetailVO
+        -validate(RagSettings) RagSettings
+        -enforceRerankAvailability(RagSettings, Long) RagSettings
+        -syncToEngine(KbLibrary, RagSettings) void
+    }
+
+    class KbDocumentService {
+        -KbDocumentRepository documentRepository
+        -KbLibraryRepository libraryRepository
+        -KnowledgeEnginePort enginePort
+        +list(Long) List~KbDocumentVO~
+        +upload(Long, MultipartFile, DocumentChunkConfig) KbDocumentUploadResponse
+        +updateChunkConfig(Long, DocumentChunkConfig) KbDocumentVO
+        +reparse(Long) void
+        -syncOpenParseStatuses(KbLibrary, List~KbDocument~) void
+    }
+
+    class KnowledgeEnginePort {
+        <<interface>>
+        +engineType() String
+        +createLibrary(CreateLibraryCmd) EngineLibraryRef
+        +updateLibrarySettings(EngineLibraryRef, RagSettings)
+        +deleteLibrary(EngineLibraryRef)
+        +uploadDocument(EngineLibraryRef, DocumentUploadInput) EngineDocumentRef
+        +replaceDocument(EngineLibraryRef, EngineDocumentRef, DocumentUploadInput)
+        +deleteDocument(EngineLibraryRef, EngineDocumentRef)
+        +setDocumentEnabled(EngineLibraryRef, EngineDocumentRef, boolean)
+        +reparseDocument(EngineLibraryRef, EngineDocumentRef)
+        +queryDocumentParseStatuses(EngineLibraryRef, List~String~) Map~String,String~
+        +retrieve(RetrieveQuery) List~ChunkHit~
+        +health() EngineHealth
+        +capabilities() EngineCapabilities
+        +probeModelPool() EngineModelPool  %NEW default: unavailable%
+        +updateDocumentChunkConfig(EngineLibraryRef, EngineDocumentRef, DocumentChunkConfig)  %NEW default: noop%
+    }
+
+    class RagflowClient {
+        -RestClient client
+        -String apiKey
+        +createDataset(String) String
+        +updateDatasetSettings(String, RagSettings)
+        +deleteDataset(String)
+        +uploadDocument(String, DocumentUploadInput) String
+        +listDocuments(String, int, int) List~RfDocument~
+        +getDocument(String, String) RfDocument
+        +deleteDocument(String, String)
+        +updateDocumentEnabled(String, String, boolean)
+        +parseDocuments(String, List~String~)
+        +listModels() List~RfModel~  %NEW%
+        +updateDocumentConfig(String, String, DocumentChunkConfig)  %NEW%
+        +retrieve(RetrieveQuery, List~String~) List~RfChunk~
+        +health() boolean
+    }
+
+    class RagflowAdapter {
+        +String ENGINE_TYPE = "ragflow"
+        -RagflowClient client
+        -RagflowProperties props
+        -KbLibraryRepository libraryRepository
+        -KbDocumentRepository documentRepository
+        +probeModelPool() EngineModelPool  %NEW%
+        +updateDocumentChunkConfig(EngineLibraryRef, EngineDocumentRef, DocumentChunkConfig)  %NEW%
+        +uploadDocument(EngineLibraryRef, DocumentUploadInput) EngineDocumentRef  %两段式%
+        +capabilities() EngineCapabilities
+    }
+
+    class RfModel {
+        <<record>>
+        +String llm_name
+        +String model_type
+        +String llm_factory
+        +Integer max_tokens
+        +Integer dimension
+        +String language
+    }
+
+    class EngineConfigController {
+        +health() Result~EngineHealth~
+        +capabilities() Result~EngineCapabilities~
+        +engineType() Result~String~
+        +models() Result~EngineModelPool~  %NEW%
+    }
+
+    class DocumentController {
+        +list(Long) Result~List~KbDocumentVO~~
+        +upload(Long, MultipartFile, String, Integer, String) Result~KbDocumentUploadResponse~  %NEW 三参%
+        +updateChunkConfig(Long, Long, DocumentChunkConfig) Result~KbDocumentVO~  %NEW%
+        +setEnabled(Long, Long, boolean) Result~Void~
+        +reparse(Long, Long) Result~Void~
+        +delete(Long, Long) Result~Void~
+    }
+
+    RagSettings <.. RetrieveQueryResolver : 读取
+    RagSettings <.. RagSettingsService : 读写
+    RagSettings <.. DocumentChunkConfigResolver : 读取
+    KbDocument <.. KbDocumentService : 读写
+    DocumentChunkConfig ..> EffectiveChunkConfig : resolve 产出
+    DocumentChunkConfigResolver ..> EffectiveChunkConfig : 返回
+    RetrieveQueryResolver --> EngineModelPoolService : peekPool 校验 rerank 池成员
+    EngineModelPoolService --> KnowledgeEnginePort : probeModelPool
+    KnowledgeEnginePort <|.. RagflowAdapter : implements
+    RagflowAdapter ..> RagflowClient : 委托（含两段式上传）
+    RagflowClient ..> RfModel : listModels 产出
+    RagSettingsService --> KnowledgeEnginePort : updateLibrarySettings
+    KbDocumentService --> KnowledgeEnginePort : upload/updateChunkConfig/reparse
+    EngineConfigController --> EngineModelPoolService : getPool
+    DocumentController --> KbDocumentService : upload/updateChunkConfig

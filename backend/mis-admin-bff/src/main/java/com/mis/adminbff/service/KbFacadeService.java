@@ -9,6 +9,7 @@ import com.mis.adminbff.dto.kb.KbDocumentUploadResponse;
 import com.mis.adminbff.dto.kb.KbDocumentVO;
 import com.mis.adminbff.dto.kb.KbEngineCapabilitiesVO;
 import com.mis.adminbff.dto.kb.KbEngineHealthVO;
+import com.mis.adminbff.dto.kb.KbEngineModelPoolVO;
 import com.mis.adminbff.dto.kb.KbLibraryDetailVO;
 import com.mis.adminbff.dto.kb.KbLibraryVO;
 import com.mis.adminbff.dto.kb.KbQaExportRow;
@@ -171,8 +172,10 @@ public class KbFacadeService {
         return kbWebClient.getDocument(libraryId, id);
     }
 
-    /** 透传文档上传；BFF 侧只做大小/空文件校验，解析交给引擎。 */
-    public KbDocumentUploadResponse uploadDocument(Long libraryId, MultipartFile file) {
+    /** 透传文档上传；BFF 侧只做大小/空文件校验，解析交给引擎。可选文件级切片参数。 */
+    public KbDocumentUploadResponse uploadDocument(
+            Long libraryId, MultipartFile file,
+            String chunkMethod, Integer chunkTokenNum, String separator) {
         if (file == null || file.isEmpty()) {
             throw new BusinessException(ResultCode.VALIDATION_ERROR, "上传文件不能为空");
         }
@@ -189,7 +192,8 @@ public class KbFacadeService {
         String filename = file.getOriginalFilename() != null && !file.getOriginalFilename().isBlank()
                 ? file.getOriginalFilename()
                 : "upload.bin";
-        return kbWebClient.uploadDocument(libraryId, filename, file.getContentType(), bytes);
+        return kbWebClient.uploadDocument(libraryId, filename, file.getContentType(), bytes,
+                chunkMethod, chunkTokenNum, separator);
     }
 
     public void setDocumentEnabled(Long libraryId, Long id, boolean enabled) {
@@ -198,6 +202,11 @@ public class KbFacadeService {
 
     public void reparseDocument(Long libraryId, Long id) {
         kbWebClient.reparseDocument(libraryId, id);
+    }
+
+    /** 更新文档级切片配置（kb_settings_model_chunk；改参触发重解析）。 */
+    public void updateDocumentChunkConfig(Long libraryId, Long docId, Map<String, Object> body) {
+        kbWebClient.updateDocumentChunkConfig(libraryId, docId, body);
     }
 
     public void deleteDocument(Long libraryId, Long id) {
@@ -545,6 +554,28 @@ public class KbFacadeService {
         } catch (Exception e) {
             log.warn("取引擎能力失败: {}", e.getMessage());
             return unsupportedCapabilities(engineType);
+        }
+    }
+
+    /**
+     * 模型池（kb_settings_model_chunk；纯透传）。
+     *
+     * <p>mis-kb 已按降级语义返回 {@code available=false + degradedReason}（绝不空列表），
+     * 本层只透传；下游不可达时补一个同语义的降级池，避免前端把异常当成「平台没有模型」。
+     *
+     * @return 模型池视图，恒非 {@code null}
+     */
+    public KbEngineModelPoolVO listEngineModels() {
+        try {
+            KbEngineModelPoolVO pool = kbWebClient.listEngineModels();
+            if (pool == null) {
+                return new KbEngineModelPoolVO(List.of(), List.of(), false, "下游无响应", null, null);
+            }
+            return pool;
+        } catch (Exception e) {
+            log.warn("取模型池失败: {}", e.getMessage());
+            return new KbEngineModelPoolVO(
+                    List.of(), List.of(), false, "模型池探测失败：" + e.getMessage(), null, null);
         }
     }
 

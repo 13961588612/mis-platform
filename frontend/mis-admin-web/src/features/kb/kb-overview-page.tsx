@@ -25,7 +25,7 @@ const OVERVIEW_COLS: ResizableColumn[] = [
   { key: 'name', label: '知识库' },
   { key: 'secrecy', label: '密级' },
   { key: 'docCount', label: '文档数' },
-  { key: 'engineType', label: '引擎' },
+  { key: 'engineType', label: '建库引擎' },
   { key: 'updatedAt', label: '更新时间' },
 ];
 
@@ -122,10 +122,13 @@ export function KbOverviewPage() {
       <Card className="mt-3 p-4 shadow-card">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div>
-            <p className="text-sm font-medium">检索引擎</p>
+            <p className="text-sm font-medium">当前平台引擎</p>
             <p className="mt-0.5 text-xs text-muted-foreground">
               类型：{health?.engineType ?? '未知'} · 状态：{health?.status ?? '未知'}
               {health?.detail ? ` · ${health.detail}` : ''}
+            </p>
+            <p className="mt-1 text-[11px] text-muted-foreground">
+              指 Nacos 当前生效的检索引擎；下方「建库引擎」是创建知识库时落库的绑定类型，二者可能不同。
             </p>
           </div>
           <div className="flex items-center gap-2">
@@ -209,7 +212,19 @@ export function KbOverviewPage() {
                   <td className="overflow-hidden text-ellipsis whitespace-nowrap px-3 py-2">{lib.name}</td>
                   <td className="overflow-hidden text-ellipsis whitespace-nowrap px-3 py-2">{secrecyLabel(lib.secrecy)}</td>
                   <td className="px-3 py-2 tabular-nums">{lib.docCount ?? 0}</td>
-                  <td className="overflow-hidden text-ellipsis whitespace-nowrap px-3 py-2 text-xs text-muted-foreground">{lib.engineType ?? '-'}</td>
+                  <td className="overflow-hidden text-ellipsis whitespace-nowrap px-3 py-2 text-xs text-muted-foreground">
+                    <span className="font-mono">{lib.engineType ?? '-'}</span>
+                    {health?.engineType &&
+                    lib.engineType &&
+                    lib.engineType !== health.engineType ? (
+                      <span
+                        className="ml-1.5 rounded bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-medium text-amber-700 dark:text-amber-400"
+                        title={`该库在 ${lib.engineType} 下创建；当前平台引擎为 ${health.engineType}。noop 占位库无法直接用于 ragflow 检索，需在 ragflow 下重建知识库并重新上传文档。`}
+                      >
+                        与平台不一致
+                      </span>
+                    ) : null}
+                  </td>
                   <td className="overflow-hidden text-ellipsis whitespace-nowrap px-3 py-2 text-xs text-muted-foreground">{formatTime(lib.updatedAt)}</td>
                 </tr>
               ))

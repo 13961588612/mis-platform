@@ -59,7 +59,8 @@ public class MockAdapter implements KnowledgeEnginePort {
 
     @Override
     public void setDocumentEnabled(EngineLibraryRef ref, EngineDocumentRef docRef, boolean enabled) {
-        // no-op
+        // no-op（刻意）：mock 引擎仅 CI 假数据，无真实状态可同步；检索可见性由
+        // mis-kb 侧 enabled 过滤兜底（RagflowAdapter.retrieve 的 B1 过滤逻辑）。
     }
 
     @Override

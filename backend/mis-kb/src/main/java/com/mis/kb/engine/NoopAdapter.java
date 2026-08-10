@@ -68,7 +68,9 @@ public class NoopAdapter implements KnowledgeEnginePort {
 
     @Override
     public void setDocumentEnabled(EngineLibraryRef ref, EngineDocumentRef docRef, boolean enabled) {
-        // no-op
+        // no-op（刻意）：noop 引擎不存在「引擎侧状态」，无需同步。
+        // 停用文档的检索可见性由 mis-kb 侧按 enabled 过滤兜底（RagflowAdapter.retrieve
+        // 的 B1 过滤逻辑，且 noop 检索恒返空），不会泄漏进检索结果。
     }
 
     @Override

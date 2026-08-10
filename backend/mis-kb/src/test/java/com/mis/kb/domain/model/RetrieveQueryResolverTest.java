@@ -7,6 +7,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -111,15 +112,43 @@ class RetrieveQueryResolverTest {
             Integer topK, Double threshold, String method, Double weight,
             Boolean rerank, String emptyStrategy) {
         return new RagSettings(topK, threshold, rerank, null, method,
-                null, null, null, emptyStrategy, weight).withDefaults();
+                null, null, null, emptyStrategy, weight, null).withDefaults();
+    }
+
+    /** 构造一份带库级重排模型 id 的库级设置（T03，kb_settings_model_chunk）。 */
+    private static RagSettings librarySettingsWithRerankModel(
+            Integer topK, Double threshold, String method, Double weight,
+            Boolean rerank, String emptyStrategy, String rerankModelId) {
+        return new RagSettings(topK, threshold, rerank, null, method,
+                null, null, null, emptyStrategy, weight, rerankModelId).withDefaults();
     }
 
     private RetrieveQueryResolver resolverWithRerankModel() {
-        return new RetrieveQueryResolver(propsWithRerank, expandService);
+        return new RetrieveQueryResolver(propsWithRerank, expandService, null);
     }
 
     private RetrieveQueryResolver resolverWithoutRerankModel() {
-        return new RetrieveQueryResolver(propsWithoutRerank, expandService);
+        return new RetrieveQueryResolver(propsWithoutRerank, expandService, null);
+    }
+
+    /**
+     * 模型池替身（T03，kb_settings_model_chunk）。
+     *
+     * <p>只覆写 {@code peekPool()} 返回固定池快照；构造传 {@code null} 引擎端口，
+     * 因为本测试绝不调用 {@code getPool()}（热路径零网络铁律）。
+     */
+    private static final class StubModelPoolService extends com.mis.kb.domain.service.EngineModelPoolService {
+        private final EngineModelPool pool;
+
+        StubModelPoolService(EngineModelPool pool) {
+            super(null);
+            this.pool = pool;
+        }
+
+        @Override
+        public EngineModelPool peekPool() {
+            return pool;
+        }
     }
 
     /**
@@ -476,7 +505,7 @@ class RetrieveQueryResolverTest {
                             "q",
                             List.of(10L),
                             Map.of(10L, new RagSettings(null, null, null, null, "graph",
-                                    null, null, null, null, null)),
+                                    null, null, null, null, null, null)),
                             null,
                             FULL,
                             null));
@@ -492,7 +521,7 @@ class RetrieveQueryResolverTest {
                             "q",
                             List.of(10L),
                             Map.of(10L, new RagSettings(null, null, null, null, null,
-                                    null, null, null, "general_prompt", null)),
+                                    null, null, null, "general_prompt", null, null)),
                             null,
                             FULL,
                             null));
@@ -662,6 +691,133 @@ class RetrieveQueryResolverTest {
                     RagSettings.METHOD_HYBRID, 0.6D, false, null, "SUGGEST");
             assertEquals(0.6D, q.effectiveVectorSimilarityWeight(), 1e-9);
             assertEquals(0.6D, q.vectorSimilarityWeight(), 1e-9);
+        }
+    }
+
+    // ------------------------------------------------------------ T03：库级重排模型合并（kb_settings_model_chunk）
+
+    @Nested
+    @DisplayName("T03 库级重排模型合并：库级 ?? 全局 + 池校验回退（S4）")
+    class ModelPoolMerge {
+
+        private static final String GLOBAL = "BAAI/bge-reranker-v2-m3";
+        private static final String LIB = "lib-rerank@Tongyi-Qianwen@Tongyi-Qianwen";
+
+        private static EngineModel rerankModel(String id) {
+            return new EngineModel(id, id, EngineModel.TYPE_RERANK, "Tongyi-Qianwen", null, null);
+        }
+
+        private static EngineModelPool poolOf(String... rerankIds) {
+            List<EngineModel> rerank = new ArrayList<>();
+            for (String id : rerankIds) {
+                rerank.add(rerankModel(id));
+            }
+            return new EngineModelPool(List.of(), rerank, true, null, GLOBAL, Instant.now());
+        }
+
+        private RetrieveQueryResolver resolver(EngineModelPool pool) {
+            return new RetrieveQueryResolver(
+                    propsWithRerank, expandService, new StubModelPoolService(pool));
+        }
+
+        @Test
+        @DisplayName("库级选模型且在池内 → rerank_id = 库级值（不降级）")
+        void libraryModelInPoolIsUsed() {
+            RetrieveQueryResolver.Resolution r = resolver(poolOf(LIB, GLOBAL)).resolveAll(
+                    new RetrieveQueryResolver.RetrieveContext(
+                            "q",
+                            List.of(10L),
+                            Map.of(10L, librarySettingsWithRerankModel(
+                                    null, null, "hybrid", null, true, null, LIB)),
+                            null,
+                            FULL,
+                            null));
+
+            assertTrue(r.query().effectiveRerank());
+            assertEquals(LIB, r.query().rerankModelId());
+            assertFalse(r.effectiveParams().degraded());
+        }
+
+        @Test
+        @DisplayName("库级模型不在池 → 回退全局 + degradedReasons 回显")
+        void libraryModelNotInPoolFallsBackToGlobal() {
+            RetrieveQueryResolver.Resolution r = resolver(poolOf(GLOBAL)).resolveAll(
+                    new RetrieveQueryResolver.RetrieveContext(
+                            "q",
+                            List.of(10L),
+                            Map.of(10L, librarySettingsWithRerankModel(
+                                    null, null, "hybrid", null, true, null, "missing@P@P")),
+                            null,
+                            FULL,
+                            null));
+
+            assertTrue(r.query().effectiveRerank());
+            assertEquals(GLOBAL, r.query().rerankModelId());
+            assertTrue(r.effectiveParams().degraded());
+            assertTrue(r.effectiveParams().degradedReasons().get(0).contains("回退全局"),
+                    "库级模型不在池必须回显「回退全局」，实际 reasons=" + r.effectiveParams().degradedReasons());
+        }
+
+        @Test
+        @DisplayName("库级模型不在池且全局亦不在池 → 重排关闭")
+        void libraryAndGlobalNotInPoolDisablesRerank() {
+            RetrieveQueryResolver.Resolution r = resolver(poolOf("some-other@P@P")).resolveAll(
+                    new RetrieveQueryResolver.RetrieveContext(
+                            "q",
+                            List.of(10L),
+                            Map.of(10L, librarySettingsWithRerankModel(
+                                    null, null, "hybrid", null, true, null, "missing@P@P")),
+                            null,
+                            FULL,
+                            null));
+
+            assertFalse(r.query().effectiveRerank());
+            assertNull(r.query().rerankModelId());
+            assertTrue(r.effectiveParams().degraded());
+        }
+
+        @Test
+        @DisplayName("U3 闸门：全局未配时库级值不参与合并链 → 重排关闭")
+        void libraryModelIgnoredWhenGlobalNotConfigured() {
+            EngineModelPool pool = new EngineModelPool(
+                    List.of(), List.of(rerankModel(LIB)), true, null, "", Instant.now());
+            RetrieveQueryResolver resolver = new RetrieveQueryResolver(
+                    propsWithoutRerank, expandService, new StubModelPoolService(pool));
+
+            RetrieveQueryResolver.Resolution r = resolver.resolveAll(
+                    new RetrieveQueryResolver.RetrieveContext(
+                            "q",
+                            List.of(10L),
+                            Map.of(10L, librarySettingsWithRerankModel(
+                                    null, null, "hybrid", null, true, null, LIB)),
+                            null,
+                            FULL,
+                            null));
+
+            assertFalse(r.query().effectiveRerank());
+            assertNull(r.query().rerankModelId());
+            assertTrue(r.effectiveParams().degradedReasons().get(0).contains("全局重排模型"));
+        }
+
+        @Test
+        @DisplayName("池不可判定（peekPool=null/未缓存）→ 跳过池校验，信任库级模型")
+        void poolUnavailableSkipsValidation() {
+            RetrieveQueryResolver resolver = new RetrieveQueryResolver(
+                    propsWithRerank, expandService, new StubModelPoolService(null));
+
+            RetrieveQueryResolver.Resolution r = resolver.resolveAll(
+                    new RetrieveQueryResolver.RetrieveContext(
+                            "q",
+                            List.of(10L),
+                            Map.of(10L, librarySettingsWithRerankModel(
+                                    null, null, "hybrid", null, true, null, LIB)),
+                            null,
+                            FULL,
+                            null));
+
+            assertTrue(r.query().effectiveRerank());
+            assertEquals(LIB, r.query().rerankModelId());
+            assertFalse(r.effectiveParams().degraded());
         }
     }
 }
