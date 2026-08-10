@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Power, RefreshCw, RotateCw, Settings2, Trash2, Upload } from 'lucide-react';
+import { ListRestart, Power, RefreshCw, RotateCw, Settings2, Trash2, Upload } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -14,6 +14,7 @@ import { cn } from '@/lib/utils';
 import {
   deleteDocument,
   listDocuments,
+  reparseAllDocuments,
   reparseDocument,
   setDocumentEnabled,
 } from '../api/kb-api';
@@ -75,6 +76,7 @@ export function KbDocumentTable({
   const [uploadOpen, setUploadOpen] = useState(false);
   const [chunkDoc, setChunkDoc] = useState<KbDocument | null>(null);
   const [chunkOpen, setChunkOpen] = useState(false);
+  const [reparsingAll, setReparsingAll] = useState(false);
 
   // 列宽记忆（localStorage）+ 表头排序（三态 无 → 升 → 降 → 无）
   const { widthOf, startResize, hasCustom, reset: resetWidths } = useColumnWidths(
@@ -180,6 +182,49 @@ export function KbDocumentTable({
     }
   }
 
+  /**
+   * 库级一键全部重解析（P1-1：换嵌入模型后全量重解析恢复检索）。
+   *
+   * <p>确认弹窗内置换模型提示：换嵌入模型后若未全量重解析，检索会因向量映射错误
+   * （`q_1536_vec`）报错；重解析期间该库检索可能不可用。此处不做「最近是否改过
+   * 嵌入模型」的运行时探测——库侧没有重解析时间戳可比对，静态提示是最小且诚实的方案。
+   */
+  async function onReparseAll() {
+    const count = documents.length;
+    if (count === 0) {
+      toast.info('该库暂无文档，无需重解析');
+      return;
+    }
+    const ok = window.confirm(
+      `确定对该库全部 ${count} 个文档执行重新解析？\n\n` +
+        '重解析期间该库检索可能不可用；若刚切换过嵌入模型，解析完成前检索可能报错。\n\n' +
+        '已处于解析中的文档将自动跳过。',
+    );
+    if (!ok) return;
+    setReparsingAll(true);
+    try {
+      const result = await reparseAllDocuments(libraryId);
+      if (result.failed > 0) {
+        const shown = result.failedDocuments.slice(0, 5).map((d) => d.title ?? `#${d.documentId}`);
+        const more =
+          result.failedDocuments.length > 5 ? ` 等 ${result.failedDocuments.length} 个` : '';
+        toast.error(
+          `全部重解析完成：成功 ${result.success}，失败 ${result.failed}，跳过 ${result.skipped}（${shown.join('、')}${more}）`,
+        );
+      } else {
+        toast.success(
+          `全部重解析完成：成功 ${result.success}` +
+            (result.skipped > 0 ? `，跳过（解析中）${result.skipped}` : ''),
+        );
+      }
+      await load(libraryId);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : '全部重解析失败');
+    } finally {
+      setReparsingAll(false);
+    }
+  }
+
   async function onDelete(doc: KbDocument) {
     if (!window.confirm(`删除文档「${doc.title}」？引擎侧索引将一并清除。`)) return;
     try {
@@ -199,6 +244,18 @@ export function KbDocumentTable({
             <Button size="sm" onClick={() => setUploadOpen(true)}>
               <Upload className="h-4 w-4" />
               上传文档
+            </Button>
+          </PermissionGate>
+          <PermissionGate permission="kb:document:edit">
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={reparsingAll || documents.length === 0}
+              onClick={() => void onReparseAll()}
+              title="遍历该库全部文档重新解析；换嵌入模型后需全量重解析恢复检索"
+            >
+              <ListRestart className="h-4 w-4" />
+              {reparsingAll ? '提交中…' : '全部重解析'}
             </Button>
           </PermissionGate>
           <Button

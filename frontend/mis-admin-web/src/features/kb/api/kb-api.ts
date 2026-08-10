@@ -23,6 +23,7 @@ import type {
   KbQaSessionListItem,
   KbQaTicket,
   KbRagSettings,
+  KbReparseAllResult,
   KbSubject,
   KbSynonymConfig,
   KbSynonymGroup,
@@ -217,6 +218,19 @@ export async function setDocumentEnabled(
 export async function reparseDocument(libraryId: number, id: number): Promise<void> {
   const res = await api.post<ApiResult<null>>(`/kb/libraries/${libraryId}/documents/${id}/reparse`);
   if (res.data.code !== 0) throw new Error(res.data.message || '重新解析失败');
+}
+
+/**
+ * 库级一键全部重解析（P1-1：换嵌入模型后全量重解析恢复检索）。
+ *
+ * <p>后端串行逐文档触发，单文档失败不中断其余；已解析中的文档自动跳过。
+ * 返回结构化结果（成功/失败/跳过 + 失败明细），由调用方做结果反馈。
+ */
+export async function reparseAllDocuments(libraryId: number): Promise<KbReparseAllResult> {
+  const res = await api.post<ApiResult<KbReparseAllResult>>(
+    `/kb/libraries/${libraryId}/documents/reparse-all`,
+  );
+  return unwrap(res, '全部重解析失败');
 }
 
 export async function deleteDocument(libraryId: number, id: number): Promise<void> {

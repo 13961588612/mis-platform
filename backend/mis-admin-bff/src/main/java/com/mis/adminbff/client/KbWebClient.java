@@ -23,6 +23,7 @@ import com.mis.adminbff.dto.kb.KbQaSessionListVO;
 import com.mis.adminbff.dto.kb.KbQaSessionVO;
 import com.mis.adminbff.dto.kb.KbQaTicketVO;
 import com.mis.adminbff.dto.kb.KbRagSettings;
+import com.mis.adminbff.dto.kb.KbReparseAllResultVO;
 import com.mis.adminbff.dto.kb.KbSynonymConfigUpdateRequest;
 import com.mis.adminbff.dto.kb.KbSynonymConfigVO;
 import com.mis.adminbff.dto.kb.KbSynonymFileVO;
@@ -76,6 +77,8 @@ public class KbWebClient extends AbstractDownstreamClient {
     private static final ParameterizedTypeReference<Result<KbDocumentVO>> DOCUMENT =
             new ParameterizedTypeReference<>() {};
     private static final ParameterizedTypeReference<Result<KbDocumentUploadResponse>> UPLOAD =
+            new ParameterizedTypeReference<>() {};
+    private static final ParameterizedTypeReference<Result<KbReparseAllResultVO>> REPARSE_ALL =
             new ParameterizedTypeReference<>() {};
     private static final ParameterizedTypeReference<Result<List<KbAclVO>>> ACL_LIST =
             new ParameterizedTypeReference<>() {};
@@ -404,6 +407,15 @@ public class KbWebClient extends AbstractDownstreamClient {
                 .headers(loginContextHeaders())
                 .retrieve()
                 .bodyToMono(VOID));
+    }
+
+    /** 库级一键全部重解析（P1-1：换嵌入模型后全量重解析恢复检索）。 */
+    public KbReparseAllResultVO reparseAllDocuments(Long libraryId) {
+        return block(client().post()
+                .uri("/internal/v1/kb/libraries/{libraryId}/documents/reparse-all", libraryId)
+                .headers(loginContextHeaders())
+                .retrieve()
+                .bodyToMono(REPARSE_ALL));
     }
 
     /** 更新文档级切片配置（kb_settings_model_chunk；改参触发重解析）。 */

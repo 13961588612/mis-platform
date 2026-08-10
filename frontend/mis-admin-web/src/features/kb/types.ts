@@ -153,6 +153,29 @@ export interface KbDocumentUploadResult {
   parseStatus: string;
 }
 
+/**
+ * 库级一键重解析结果（P1-1：换嵌入模型后全量重解析恢复检索）。
+ *
+ * <p>批量语义：`total` = 库内文档总数；`success` = 本次新触发解析的文档数；
+ * `failed` = 触发失败或无引擎映射的文档数；`skipped` = 已处于解析中、按幂等跳过数。
+ * 单文档失败不中断其余，失败明细随 `failedDocuments` 返回供失败列表展示。
+ */
+export interface KbReparseAllResult {
+  libraryId: number;
+  total: number;
+  success: number;
+  failed: number;
+  skipped: number;
+  failedDocuments: KbReparseFailedDocument[];
+}
+
+/** 库级一键重解析失败明细。 */
+export interface KbReparseFailedDocument {
+  documentId: number;
+  title: string | null;
+  reason: string | null;
+}
+
 /** 知识库 ACL 授权项。 */
 export interface KbAcl {
   id: number;

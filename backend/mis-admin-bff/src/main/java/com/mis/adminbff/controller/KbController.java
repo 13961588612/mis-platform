@@ -18,6 +18,7 @@ import com.mis.adminbff.dto.kb.KbQaSessionListVO;
 import com.mis.adminbff.dto.kb.KbQaSessionVO;
 import com.mis.adminbff.dto.kb.KbQaTicketVO;
 import com.mis.adminbff.dto.kb.KbRagSettings;
+import com.mis.adminbff.dto.kb.KbReparseAllResultVO;
 import com.mis.adminbff.dto.kb.KbSubjectVO;
 import com.mis.adminbff.security.UserPermissionLoader;
 import com.mis.adminbff.service.KbFacadeService;
@@ -195,6 +196,16 @@ public class KbController {
     public Result<Void> reparseDocument(@PathVariable Long libraryId, @PathVariable Long id) {
         kbFacadeService.reparseDocument(libraryId, id);
         return Result.ok();
+    }
+
+    /**
+     * 库级一键全部重解析（P1-1：换嵌入模型后全量重解析恢复检索）。
+     *
+     * <p>返回结构化结果（成功/失败/跳过 + 失败明细）供前端反馈。
+     */
+    @PostMapping("/libraries/{libraryId}/documents/reparse-all")
+    public Result<KbReparseAllResultVO> reparseAllDocuments(@PathVariable Long libraryId) {
+        return Result.ok(kbFacadeService.reparseAllDocuments(libraryId));
     }
 
     @DeleteMapping("/libraries/{libraryId}/documents/{id}")

@@ -21,6 +21,7 @@ import com.mis.adminbff.dto.kb.KbQaTicketVO;
 import com.mis.adminbff.dto.kb.KbHitTestRequest;
 import com.mis.adminbff.dto.kb.KbHitTestResultVO;
 import com.mis.adminbff.dto.kb.KbRagSettings;
+import com.mis.adminbff.dto.kb.KbReparseAllResultVO;
 import com.mis.adminbff.dto.kb.KbSubjectVO;
 import com.mis.adminbff.dto.kb.KbVisibilityVO;
 import com.mis.adminbff.support.RequestContext;
@@ -202,6 +203,11 @@ public class KbFacadeService {
 
     public void reparseDocument(Long libraryId, Long id) {
         kbWebClient.reparseDocument(libraryId, id);
+    }
+
+    /** 库级一键全部重解析（P1-1：换嵌入模型后全量重解析恢复检索；纯透传）。 */
+    public KbReparseAllResultVO reparseAllDocuments(Long libraryId) {
+        return kbWebClient.reparseAllDocuments(libraryId);
     }
 
     /** 更新文档级切片配置（kb_settings_model_chunk；改参触发重解析）。 */

@@ -4,6 +4,7 @@ import com.mis.common.core.exception.BusinessException;
 import com.mis.common.core.exception.ResultCode;
 import com.mis.kb.api.dto.KbDocumentUploadResponse;
 import com.mis.kb.api.dto.KbDocumentVO;
+import com.mis.kb.api.dto.KbReparseAllResult;
 import com.mis.kb.domain.entity.KbDocument;
 import com.mis.kb.domain.entity.KbLibrary;
 import com.mis.kb.domain.model.DocumentChunkConfig;
@@ -260,6 +261,87 @@ public class KbDocumentService {
             throw new KbBusinessException(
                     KbResultCode.KB_DOC_NOT_FOUND, "重新解析失败：" + e.getMessage());
         }
+    }
+
+    /**
+     * 库级一键全部重解析（P1-1：换嵌入模型后全量重解析恢复检索）。
+     *
+     * <p><b>同步/异步取舍：</b>RAGFlow 的 {@code POST /chunks}（{@code RagflowClient.parseDocuments}）
+     * 是<b>同步 HTTP 返回、异步排队执行</b>——提交后引擎侧 {@code run}/{@code progress}
+     * 异步变化。因此库级实现=串行循环逐文档提交即可，单次调用耗时≈文档数×单次提交耗时，
+     * 解析本身由引擎队列异步完成，列表页靠 {@link #list} 的解析状态回写收敛；
+     * 不需要分批/异步编排（P1-1 联调实测：全量 POST /chunks 后检索即恢复）。
+     *
+     * <p><b>失败容忍：</b>单文档失败<b>不中断全部</b>——记录失败数 + 失败文档明细后继续处理
+     * 后续文档。无引擎映射的文档视为失败（原因=尚未同步到引擎，与单文档 {@link #reparse}
+     * 语义一致）。
+     *
+     * <p><b>幂等/防重入：</b>沿用单文档 {@link #reparse} 的 {@code PARSING} 短路语义——
+     * 引擎侧仍在跑的文档跳过并计入 {@code skipped}，不重复入队；不做库级锁
+     * （重复触发至多重复提交非解析中文档，RAGFlow 解析队列本身幂等，最小实现）。
+     *
+     * @param libraryId 知识库 id
+     * @return 批量结果（成功/失败/跳过/失败明细）；空库返回 success=0 的明确结果
+     * @throws KbBusinessException 知识库不存在、或库内有文档但库无引擎映射
+     */
+    @Transactional
+    public KbReparseAllResult reparseAll(Long libraryId) {
+        KbLibrary lib = requireLibrary(libraryId);
+        List<KbDocument> docs = documentRepository.findByLibraryIdOrderByCreatedAtDesc(libraryId);
+        if (docs.isEmpty()) {
+            log.info("库级重解析：库内无文档 libraryId={}", libraryId);
+            return new KbReparseAllResult(libraryId, 0, 0, 0, 0, List.of());
+        }
+        if (lib.getEngineLibraryRef() == null || lib.getEngineLibraryRef().isBlank()) {
+            log.warn("知识库无引擎映射，无法库级重解析 libraryId={}", libraryId);
+            throw new KbBusinessException(
+                    KbResultCode.KB_LIBRARY_NOT_FOUND, "该知识库尚未同步到引擎，无法重新解析");
+        }
+
+        // 批量收敛一次引擎解析状态（纠正本地 stale parsing），避免把「引擎已 DONE、
+        // 本地仍 parsing」的文档当解析中跳过、或重复触发。
+        syncOpenParseStatuses(lib, docs);
+
+        EngineLibraryRef libRef = new EngineLibraryRef(lib.getEngineType(), lib.getEngineLibraryRef());
+        int success = 0;
+        int failed = 0;
+        int skipped = 0;
+        List<KbReparseAllResult.FailedDocument> failedDocs = new ArrayList<>();
+        Instant now = Instant.now();
+        for (KbDocument doc : docs) {
+            if (doc.getEngineDocumentRef() == null || doc.getEngineDocumentRef().isBlank()) {
+                failed++;
+                failedDocs.add(new KbReparseAllResult.FailedDocument(
+                        doc.getId(), doc.getTitle(), "该文档尚未同步到引擎，无法重新解析"));
+                continue;
+            }
+            if (ParseStatus.PARSING.code().equals(doc.getParseStatus())) {
+                skipped++;
+                continue;
+            }
+            doc.setParseStatus(ParseStatus.PARSING.code());
+            doc.setUpdatedAt(now);
+            documentRepository.save(doc);
+            try {
+                enginePort.reparseDocument(
+                        libRef,
+                        new EngineDocumentRef(lib.getEngineType(), doc.getEngineDocumentRef()));
+                success++;
+            } catch (Exception e) {
+                doc.setParseStatus(ParseStatus.FAILED.code());
+                doc.setUpdatedAt(now);
+                documentRepository.save(doc);
+                failed++;
+                failedDocs.add(new KbReparseAllResult.FailedDocument(
+                        doc.getId(), doc.getTitle(), String.valueOf(e.getMessage())));
+                log.error("库级重解析：文档触发失败，已置 FAILED id={} libraryId={}: {}",
+                        doc.getId(), libraryId, e.getMessage(), e);
+            }
+        }
+        log.info("库级重解析完成 libraryId={} total={} success={} failed={} skipped={}",
+                libraryId, docs.size(), success, failed, skipped);
+        return new KbReparseAllResult(
+                libraryId, docs.size(), success, failed, skipped, List.copyOf(failedDocs));
     }
 
     /**

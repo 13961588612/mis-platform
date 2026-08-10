@@ -3,6 +3,7 @@ package com.mis.kb.api.controller;
 import com.mis.common.core.result.Result;
 import com.mis.kb.api.dto.KbDocumentUploadResponse;
 import com.mis.kb.api.dto.KbDocumentVO;
+import com.mis.kb.api.dto.KbReparseAllResult;
 import com.mis.kb.domain.model.DocumentChunkConfig;
 import com.mis.kb.domain.service.KbDocumentService;
 import org.springframework.web.bind.annotation.DeleteMapping;
@@ -73,6 +74,18 @@ public class DocumentController {
     public Result<Void> reparse(@PathVariable Long libraryId, @PathVariable Long id) {
         documentService.reparse(id);
         return Result.ok();
+    }
+
+    /**
+     * 库级一键全部重解析（P1-1：换嵌入模型后全量重解析恢复检索）。
+     *
+     * <p>遍历该库全部文档逐个触发重解析；单文档失败不中断其余，返回结构化结果
+     * （成功/失败/跳过 + 失败明细）。字面量段 {@code reparse-all} 与
+     * {@code /{id}/reparse} 无路由冲突（Spring 字面量优先）。
+     */
+    @PostMapping("/{libraryId}/documents/reparse-all")
+    public Result<KbReparseAllResult> reparseAll(@PathVariable Long libraryId) {
+        return Result.ok(documentService.reparseAll(libraryId));
     }
 
     @DeleteMapping("/{libraryId}/documents/{id}")
