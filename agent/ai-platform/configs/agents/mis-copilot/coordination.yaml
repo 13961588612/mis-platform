@@ -1,0 +1,14 @@
+role: coordinator
+routing_enabled: false
+delegation:
+  spawn_tools_enabled: true
+  enforce_task_brief: true
+  max_depth: 1
+  timeout_seconds: 120
+  emit_dispatch_trace: true
+  forbid_self_invoke: true
+  worker_ids:
+  - crm-assistant
+  - mis-extract
+  - mis-rag
+  - mis-summary
