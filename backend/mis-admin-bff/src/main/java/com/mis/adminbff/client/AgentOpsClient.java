@@ -356,30 +356,36 @@ public class AgentOpsClient extends AgentOpsTransport {
     }
 
     // ==================================================================
-    // 企微 Bot §4.3 #48–#54（T04 待建）
+    // 企微 Bot §4.3 #48–#54
     //
     // #48–#53 落 backend；#54 落 gateway —— 这是全表唯一跨进程的一条。
+    //
+    // ⚠ 路径不带 /admin 段：T04 的 channels 路由在 ai-platform 以
+    // `prefix="/api/v1"` 挂载（main.py），router 自身前缀是 `/channels`
+    // （channels.py），故最终下游路径是 /api/v1/channels/wecom/bots。
+    // 曾在常量里误写 ADMIN + "/channels/wecom/bots"（即 /api/v1/admin/...），
+    // 后端 404 被归一成「T04 未实现」——与历史 bug 的表现完全一致。
     // ==================================================================
 
-    private static final String WECOM_BOTS = ADMIN + "/channels/wecom/bots";
+    private static final String WECOM_BOTS = "/api/v1/channels/wecom/bots";
 
-    /** #48 {@code GET /api/v1/admin/channels/wecom/bots}。 */
+    /** #48 {@code GET /api/v1/channels/wecom/bots}。 */
     public JsonNode listWecomBots() {
         return getJson(builder -> builder.path(WECOM_BOTS).build(), "GET " + WECOM_BOTS);
     }
 
-    /** #49 {@code POST /api/v1/admin/channels/wecom/bots}。 */
+    /** #49 {@code POST /api/v1/channels/wecom/bots}。 */
     public JsonNode createWecomBot(Object body) {
         return postJson(builder -> builder.path(WECOM_BOTS).build(), body, "POST " + WECOM_BOTS);
     }
 
-    /** #50 {@code PUT /api/v1/admin/channels/wecom/bots/{botId}}。 */
+    /** #50 {@code PUT /api/v1/channels/wecom/bots/{botId}}。 */
     public JsonNode updateWecomBot(String botId, Object body) {
         return putJson(builder -> builder.path(WECOM_BOTS + "/{botId}").build(botId), body,
                 "PUT " + WECOM_BOTS + "/{botId}");
     }
 
-    /** #51 {@code DELETE /api/v1/admin/channels/wecom/bots/{botId}}。 */
+    /** #51 {@code DELETE /api/v1/channels/wecom/bots/{botId}}。 */
     public JsonNode deleteWecomBot(String botId) {
         return deleteJson(builder -> builder.path(WECOM_BOTS + "/{botId}").build(botId),
                 "DELETE " + WECOM_BOTS + "/{botId}");

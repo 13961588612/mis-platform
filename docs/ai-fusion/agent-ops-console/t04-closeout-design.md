@@ -306,8 +306,8 @@ interface MonitorOverview {
 |---|---|---|
 | `GET /sessions` | `{items,total,page,page_size}`，item=`SessionResponse` | `Session` ✅ |
 | `GET /sessions/{id}/messages` | `SessionMessage[]` | `SessionMessage` ✅ |
-| `GET /admin/channels/wecom/bots` | `WecomBot[]`（snake，secret_masked，health 内嵌） | `WecomBot` ✅ |
-| `GET /admin/channels/wecom/bots/health` | `{bot_id: connected\|disconnected\|unknown}` | `Record<string, WecomBot['health']>` ✅ |
+| `GET /api/v1/channels/wecom/bots` | `WecomBot[]`（snake，secret_masked，health 内嵌） | `WecomBot` ✅ |
+| `GET /api/v1/channels/wecom/bots/health` | `{bot_id: connected\|disconnected\|unknown}` | `Record<string, WecomBot['health']>` ✅ |
 | `GET /agents/{id}/config-files` | `[{path,type,read_only,size_bytes}]` 扁平 | 重写 |
 | `GET\|PUT /agents/{id}/config-files/{path}` | 读 `{content,masked,read_only,type}`；写 body `{content}` | 重写 + BFF |
 | `GET /admin/worker-catalog` | `{workers[],coordinators[],fallback}` | 重写 |
