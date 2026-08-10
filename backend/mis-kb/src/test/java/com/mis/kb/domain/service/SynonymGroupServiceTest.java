@@ -446,10 +446,10 @@ class SynonymGroupServiceTest {
                     term(1L, GROUP_A, "关键结果法", true, 0),
                     term(2L, GROUP_A, "OKR", false, 1)));
 
-            PageResult<SynonymGroupVO> byAlias = service.search("okr", null, 0, 20);
+            PageResult<SynonymGroupVO> byAlias = service.search("okr", null, 1, 20);
             assertEquals("OKR", byAlias.getList().get(0).matchedAlias());
 
-            PageResult<SynonymGroupVO> byCanonical = service.search("关键", null, 0, 20);
+            PageResult<SynonymGroupVO> byCanonical = service.search("关键", null, 1, 20);
             assertNull(byCanonical.getList().get(0).matchedAlias(),
                     "规范词自己就显示在列表上，再提示一次纯属噪声");
         }
@@ -463,7 +463,7 @@ class SynonymGroupServiceTest {
                     term(1L, GROUP_A, "关键结果法", true, 0),
                     term(2L, GROUP_A, "OKR", false, 1)));
 
-            SynonymGroupVO vo = service.search(null, null, 0, 20).getList().get(0);
+            SynonymGroupVO vo = service.search(null, null, 1, 20).getList().get(0);
 
             assertNull(vo.terms());
             assertEquals(2, vo.termCount());
@@ -477,12 +477,37 @@ class SynonymGroupServiceTest {
 
             ArgumentCaptor<Pageable> captor = ArgumentCaptor.forClass(Pageable.class);
 
-            service.search(null, null, 0, 100000);
-            service.search(null, null, 0, 0);
+            service.search(null, null, 1, 100000);
+            service.search(null, null, 1, 0);
             verify(groupRepository, times(2)).search(any(), any(), captor.capture());
 
             assertEquals(200, captor.getAllValues().get(0).getPageSize());
             assertEquals(20, captor.getAllValues().get(1).getPageSize());
+            assertEquals(0, captor.getAllValues().get(0).getPageNumber(),
+                    "对外 page=1 应对应 Spring Data 第 0 页");
+        }
+
+        @Test
+        @DisplayName("★ 对外 page 1-based：page=1→仓储第0页；page=0/null 收敛为第1页")
+        void pageIsOneBasedForApiContract() {
+            when(groupRepository.search(any(), any(), any(Pageable.class)))
+                    .thenReturn(new PageImpl<>(List.of()));
+
+            ArgumentCaptor<Pageable> captor = ArgumentCaptor.forClass(Pageable.class);
+
+            service.search(null, null, 1, 20);
+            service.search(null, null, 0, 20);
+            service.search(null, null, null, 20);
+            service.search(null, null, 2, 20);
+            verify(groupRepository, times(4)).search(any(), any(), captor.capture());
+
+            assertEquals(0, captor.getAllValues().get(0).getPageNumber());
+            assertEquals(0, captor.getAllValues().get(1).getPageNumber());
+            assertEquals(0, captor.getAllValues().get(2).getPageNumber());
+            assertEquals(1, captor.getAllValues().get(3).getPageNumber());
+
+            PageResult<SynonymGroupVO> echo = service.search(null, null, 2, 20);
+            assertEquals(2, echo.getPage(), "回传 page 须保持 1-based，不能把仓储下标泄漏出去");
         }
 
         @Test
@@ -493,8 +518,8 @@ class SynonymGroupServiceTest {
 
             ArgumentCaptor<String> captor = ArgumentCaptor.forClass(String.class);
 
-            service.search("OKR", null, 0, 20);
-            service.search("   ", null, 0, 20);
+            service.search("OKR", null, 1, 20);
+            service.search("   ", null, 1, 20);
             verify(groupRepository, times(2)).search(captor.capture(), any(), any(Pageable.class));
 
             assertEquals("%okr%", captor.getAllValues().get(0));
@@ -532,7 +557,7 @@ class SynonymGroupServiceTest {
             Page<KbSynonymGroup> empty = new PageImpl<>(List.of());
             when(groupRepository.search(any(), any(), any(Pageable.class))).thenReturn(empty);
 
-            PageResult<SynonymGroupVO> result = service.search("查不到的词", null, 0, 20);
+            PageResult<SynonymGroupVO> result = service.search("查不到的词", null, 1, 20);
 
             assertTrue(result.getList().isEmpty());
             verify(termRepository, never()).findByGroupIdInOrderBySortNo(any());

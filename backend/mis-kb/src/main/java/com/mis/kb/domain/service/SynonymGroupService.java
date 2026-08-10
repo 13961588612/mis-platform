@@ -112,15 +112,17 @@ public class SynonymGroupService {
      *
      * @param keyword 关键词；空白视为不过滤
      * @param status  状态过滤；{@code null} 表示不过滤
-     * @param page    页码，从 0 开始；负数收敛为 0
+     * @param page    页码，从 <b>1</b> 开始（与 {@code docs/api/api-specification.md} 一致）；
+     *                {@code null} / ≤0 收敛为 1
      * @param size    每页条数；非正数回落默认值，超过 {@link #MAX_PAGE_SIZE} 被截断
-     * @return 分页结果，恒非 {@code null}
+     * @return 分页结果，恒非 {@code null}；{@code page} 字段回传 1-based 页码
      */
     @Transactional(readOnly = true)
     public PageResult<SynonymGroupVO> search(String keyword, Integer status, Integer page, Integer size) {
-        int pageNo = page == null || page < 0 ? 0 : page;
+        int pageNo = page == null || page < 1 ? 1 : page;
         int pageSize = size == null || size <= 0 ? DEFAULT_PAGE_SIZE : Math.min(size, MAX_PAGE_SIZE);
-        Pageable pageable = PageRequest.of(pageNo, pageSize, Sort.by(Sort.Direction.DESC, "updatedAt"));
+        // Spring Data 页码从 0 起；对外契约是 1-based，这里只在进仓储时减一。
+        Pageable pageable = PageRequest.of(pageNo - 1, pageSize, Sort.by(Sort.Direction.DESC, "updatedAt"));
 
         String trimmed = keyword == null ? null : keyword.trim();
         // 仓储侧的 LIKE 已对列做 LOWER()，这里把参数也转小写，两边口径才对齐。

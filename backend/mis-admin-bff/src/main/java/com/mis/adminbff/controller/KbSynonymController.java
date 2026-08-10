@@ -95,7 +95,7 @@ public class KbSynonymController {
      *
      * @param keyword 关键词，同时匹配规范词与别名，大小写不敏感
      * @param status  1 启用 / 0 停用；不传为全部
-     * @param page    页码，从 0 开始
+     * @param page    页码，从 1 开始
      * @param size    每页条数
      * @param sort    排序表达式，原样透传
      * @return 分页结果

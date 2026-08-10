@@ -84,7 +84,7 @@ public class SynonymInternalController {
      *
      * @param keyword 关键词，同时匹配规范词与别名，大小写不敏感；空白视为不过滤
      * @param status  1 启用 / 0 停用；{@code null} 为全部
-     * @param page    页码，从 0 开始
+     * @param page    页码，从 1 开始
      * @param size    每页条数
      * @return 分页结果
      */

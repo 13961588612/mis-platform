@@ -353,10 +353,33 @@ Flyway **只追加**新版本（如 `V1x__kb_synonym.sql`）。
 
 ### Wave A
 
-- [ ] 文档与 UI 口径：hybrid = keyword + semantic；与 Graph 分离  
-- [ ] 库可配 `retrievalMethod` + `vectorSimilarityWeight`；capabilities 含 `hybrid`/`rerank`  
-- [ ] 命中测试只 retrieve、可调参  
+> **验收状态（2026-08-07 QA 门禁收口）：** 离线门禁已执行，报告见
+> [`mis-kb-wave-a-qa-2026-08-07.md`](../../deliverables/software-company/mis-kb-wave-a-qa-2026-08-07.md)。
+> 后端 270 用例 0 失败（`BUILD SUCCESS`，退出码 0）；前端 `tsc --noEmit` 退出码 0 零错误、
+> `eslint src/features/kb` 零 error 零 warning。**IS_PASS = YES（有条件）**，
+> 条件为上线前补一轮 dev 栈冒烟（RAGFlow + PG），详见报告 §8.3。
+> 图例：`[x]` = 离线门禁已验；`🟡 待 dev 栈联调` = 需真实 RAGFlow/PG 环境实测复核。
+
+- [x] 文档与 UI 口径：hybrid = keyword + semantic；与 Graph 分离  
+  ✅ **离线门禁已验**（WA-12）：前端术语统一为「混合检索（关键字 + 语义）」，
+  与 Graph/知识图谱分列不同开关；`RetrieveQueryResolverTest` 30 用例锁定 hybrid 语义。
+- [x] 库可配 `retrievalMethod` + `vectorSimilarityWeight`；capabilities 含 `hybrid`/`rerank`  
+  ✅ **离线门禁已验**（WA-01/03/05/06）：`RagSettingsServiceTest`（QA 本轮补齐，26 用例）
+  覆盖「默认 0.3 / 区间 [0,1] 越界返回 `KB_RAG_SETTINGS_INVALID` / 无全局模型时
+  `rerank=true` 落库为 `false`」；`RagflowAdapter#capabilities()` 声明
+  `hybridSupported=true`、`rerankSupported` 按 `rerank-model-id` 动态判定。
+- [x] 命中测试只 retrieve、可调参  
+  ✅ **离线门禁已验**（WA-07/08/14/15）：`KbHitTestService` 不注入任何 `kb_qa_*` 仓储
+  且 `@Transactional(readOnly = true)`，从依赖与事务两侧断掉写五表可能；
+  `KbControllerHitTestPermissionTest`（9 用例）锁定判权先于下游调用；
+  `RetrieveHitsVoContractTest`（8 用例）对问答链路响应体做键集合恒等断言。
+  🟡 端到端命中结果渲染与 `sys_oper_log` 实际落行**待 dev 栈联调**。
 - [ ] 切片参数 MIS 可配，改后提示重解析并可用  
+  🟡 **待 dev 栈联调**：`chunkMethod`/`chunkTokenNum` 校验与落库、dirty 后弹重解析引导、
+  `RagflowAdapter#reparseDocument → RagflowClient#parseDocuments →
+  POST /api/v1/datasets/{id}/chunks` 接线均已读码确认且编译通过（T04/T10 已实现），
+  但**「可用」一词要求 RAGFlow 侧 `run/progress` 状态真实变化**，
+  该验证无法在离线单测覆盖，故本项保留未勾选，待 dev 栈冒烟后由验收人补勾。
 
 ### Wave D
 

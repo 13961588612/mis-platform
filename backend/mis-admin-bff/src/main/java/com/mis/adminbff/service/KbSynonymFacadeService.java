@@ -78,7 +78,7 @@ public class KbSynonymFacadeService {
      *
      * @param keyword 关键词，同时匹配规范词与别名
      * @param status  1 启用 / 0 停用；{@code null} 为全部
-     * @param page    页码，从 0 开始
+     * @param page    页码，从 1 开始（平台统一契约）
      * @param size    每页条数
      * @param sort    排序表达式
      * @return 分页结果；下游异常返回空时收敛为空页
@@ -94,7 +94,7 @@ public class KbSynonymFacadeService {
         PageResult<KbSynonymGroupVO> result = kbWebClient.listSynonymGroups(params);
         return result != null
                 ? result
-                : PageResult.empty(page != null ? page : 0, size != null ? size : 20);
+                : PageResult.empty(page != null && page > 0 ? page : 1, size != null ? size : 20);
     }
 
     /**
