@@ -6,6 +6,7 @@ import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Label } from '@/components/ui/label';
 import { Sheet, SheetContent, SheetFooter, SheetHeader, SheetTitle } from '@/components/ui/sheet';
+import { SHEET_FORM_BODY, SHEET_FORM_FIELD, SHEET_FORM_LABEL } from '@/components/common/sheet-form-styles';
 import {
   createSynonymGroup,
   getSynonymGroup,
@@ -15,7 +16,7 @@ import {
 import type { KbSynonymBudget, KbSynonymGroup } from '../types';
 import { normalizeSynonymTerm } from '../types';
 
-const fieldLabel = 'mb-[0.4rem] block text-sm font-medium text-foreground';
+const fieldLabel = SHEET_FORM_LABEL;
 const selectClass =
   'h-9 w-full rounded-md border border-input bg-card px-[0.7rem] text-sm text-foreground shadow-none';
 
@@ -244,8 +245,8 @@ export function KbSynonymDrawer({ open, groupId, budget, onClose, onSaved, onVie
             加载中…
           </div>
         ) : (
-          <div className="flex-1 space-y-4 overflow-auto py-4">
-            <div>
+          <div className={SHEET_FORM_BODY}>
+            <div className={SHEET_FORM_FIELD}>
               <Label className={fieldLabel}>规范词 *</Label>
               <Input
                 value={canonicalTerm}
@@ -282,7 +283,7 @@ export function KbSynonymDrawer({ open, groupId, budget, onClose, onSaved, onVie
             ) : null}
 
             {/* 别名录入区 */}
-            <div>
+            <div className={SHEET_FORM_FIELD}>
               <Label className={fieldLabel}>别名（同义词）</Label>
               <div className="flex gap-2">
                 <Input
@@ -386,7 +387,7 @@ export function KbSynonymDrawer({ open, groupId, budget, onClose, onSaved, onVie
               ) : null}
             </div>
 
-            <div>
+            <div className={SHEET_FORM_FIELD}>
               <Label className={fieldLabel}>状态</Label>
               <select
                 className={selectClass}
@@ -401,7 +402,7 @@ export function KbSynonymDrawer({ open, groupId, budget, onClose, onSaved, onVie
               </p>
             </div>
 
-            <div>
+            <div className={SHEET_FORM_FIELD}>
               <Label className={fieldLabel}>备注</Label>
               <Textarea
                 value={remark}

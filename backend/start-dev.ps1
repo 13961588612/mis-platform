@@ -167,8 +167,16 @@ function Get-ChildEnvAssignments {
         'MIS_REMOTE', 'NACOS_SERVER', 'NACOS_NAMESPACE', 'NACOS_CONFIG_GROUP',
         'MIS_KB_ENGINE_TYPE', 'MIS_KB_ENGINE_BASE_URL', 'MIS_KB_ENGINE_API_KEY', 'MIS_KB_RERANK_MODEL_ID',
         'AI_PLATFORM_BASE_URL', 'AI_PLATFORM_SSE_ENABLED',
-        'AUTH_CAPTCHA_ENABLED'
+        'AUTH_CAPTCHA_ENABLED',
+        'JAVA_TOOL_OPTIONS', 'MAVEN_OPTS'
     )
+    # Windows 默认 GBK：Nacos 中文 YAML 用平台编码 getBytes 再按 UTF-8 解析会失败，
+    # mis-kb 引擎配置被忽略并回退本地 noop。强制子进程 JVM UTF-8。
+    if ([string]::IsNullOrEmpty([Environment]::GetEnvironmentVariable('JAVA_TOOL_OPTIONS', 'Process'))) {
+        Set-Item -Path 'Env:JAVA_TOOL_OPTIONS' -Value '-Dfile.encoding=UTF-8'
+    } elseif ($env:JAVA_TOOL_OPTIONS -notmatch 'file\.encoding') {
+        Set-Item -Path 'Env:JAVA_TOOL_OPTIONS' -Value ($env:JAVA_TOOL_OPTIONS.Trim() + ' -Dfile.encoding=UTF-8')
+    }
     $lines = @()
     $lines += "`$env:JAVA_HOME = '$($env:JAVA_HOME_17)'"
     foreach ($k in $keys) {

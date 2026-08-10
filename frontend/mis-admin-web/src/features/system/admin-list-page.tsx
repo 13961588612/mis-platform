@@ -34,6 +34,7 @@ import { DetailDefList } from '@/components/common/detail-def-list';
 import { StatusBadge } from '@/components/common/list-page-skeleton';
 import { SortIndicator } from '@/components/common/sort-indicator';
 import { useColumnWidths, type ResizableColumn } from '@/components/common/use-column-widths';
+import { SHEET_FORM_FIELD, SHEET_FORM_LABEL } from '@/components/common/sheet-form-styles';
 import {
   Sheet,
   SheetContent,
@@ -146,7 +147,7 @@ function AssignmentEditor({
     update(list.map((a, idx) => ({ ...a, isPrimary: idx === i })));
 
   return (
-    <div className="col-span-2 min-w-0 self-start">
+    <div className={cn(SHEET_FORM_FIELD, 'col-span-2 min-w-0 self-start')}>
       <div className="overflow-hidden rounded-md border border-input">
         <table className="w-full border-collapse bg-table-surface text-sm">
           <thead className="border-b-2 border-foreground/20 bg-table-header text-left text-sm font-bold text-muted-foreground">
@@ -283,8 +284,8 @@ function AssignmentTable({ list }: { list: Assignment[] }) {
   );
 }
 
-/** 对齐门户 sa-app：field-label .875rem/500；input .875rem + padding .55/.7 */
-const fieldLabelClass = 'mb-[0.4rem] block text-[13px] font-medium text-foreground';
+/** 对齐 Sheet 表单间距约定：标签↔控件 space-y-1.5，行距由外层 gap-y-3 承担。 */
+const fieldLabelClass = SHEET_FORM_LABEL;
 const fieldInputClass =
   'h-auto min-h-9 w-full rounded-md border border-input bg-card px-[0.7rem] py-[0.55rem] text-sm text-foreground shadow-none';
 
@@ -307,7 +308,7 @@ function FieldControl({
   if (field.type === 'switch') {
     const on = value === 1 || value === true;
     return (
-      <div className="min-w-0 self-start">
+      <div className={cn(SHEET_FORM_FIELD, 'min-w-0 self-start')}>
         {label}
         <label className="inline-flex cursor-pointer items-center gap-2 text-sm">
           <button
@@ -335,7 +336,7 @@ function FieldControl({
 
   if (field.type === 'select') {
     return (
-      <div className="min-w-0 self-start">
+      <div className={cn(SHEET_FORM_FIELD, 'min-w-0 self-start')}>
         {label}
         <select
           className={fieldInputClass}
@@ -363,7 +364,7 @@ function FieldControl({
       onChange(current.includes(v) ? current.filter((x) => x !== v) : [...current, v]);
     };
     return (
-      <div className="col-span-2 min-w-0 self-start">
+      <div className={cn(SHEET_FORM_FIELD, 'col-span-2 min-w-0 self-start')}>
         {label}
         <div className="mt-1.5 flex flex-wrap gap-1.5 rounded-md border border-input bg-card p-2">
           {(field.options ?? []).length === 0 ? (
@@ -417,7 +418,7 @@ function FieldControl({
 
   if (field.type === 'textarea') {
     return (
-      <div className="min-w-0 self-start">
+      <div className={cn(SHEET_FORM_FIELD, 'min-w-0 self-start')}>
         {label}
         <textarea
           className="min-h-[4.5rem] w-full resize-y rounded-md border border-input bg-card px-[0.7rem] py-[0.55rem] text-sm leading-normal text-foreground"
@@ -430,7 +431,7 @@ function FieldControl({
   }
 
   return (
-    <div className="min-w-0 self-start">
+    <div className={cn(SHEET_FORM_FIELD, 'min-w-0 self-start')}>
       {label}
       <Input
         className={fieldInputClass}
@@ -762,7 +763,7 @@ export function AdminListPage({ def }: { def: AdminPageDef }) {
               </div>
             </div>
             {filterOpen ? (
-              <div className="grid grid-cols-1 gap-x-4 gap-y-3.5 p-3.5 md:grid-cols-12">
+              <div className="grid grid-cols-1 gap-x-4 gap-y-3 p-3.5 md:grid-cols-12">
                 {def.filters!.map((f) => (
                   <div
                     key={f.key}
@@ -1164,8 +1165,8 @@ export function AdminListPage({ def }: { def: AdminPageDef }) {
             </div>
           ) : (
             /* flex-1 只给滚动容器；grid 用 content-start，避免行被撑开留白 */
-            <div className="min-h-0 flex-1 overflow-y-auto px-5 py-5">
-              <div className="grid grid-cols-2 content-start items-start gap-x-4 gap-y-3.5">
+            <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
+              <div className="grid grid-cols-2 content-start items-start gap-x-4 gap-y-3">
                 {def.form.map((f) => (
                   <div
                     key={f.key}

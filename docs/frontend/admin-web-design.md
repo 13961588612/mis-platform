@@ -171,6 +171,18 @@ flowchart TD
 
 参照实现：`features/system/admin-list-page.tsx`（员工/岗位等共享引擎）。
 
+### 4.2.2 右侧划入编辑表单间距
+
+所有右侧 `Sheet` 编辑/新建表单统一：
+
+| 项 | 约定 | 常量 |
+|----|------|------|
+| 表单体 | `flex-1 space-y-3 overflow-auto px-5 py-4` | `SHEET_FORM_BODY` |
+| 字段行 | 标签↔控件 `space-y-1.5` | `SHEET_FORM_FIELD` |
+| 标签 | 不自带 `mb-*` | `SHEET_FORM_LABEL` |
+
+定义：`components/common/sheet-form-styles.ts`。参照：`features/kb/library/kb-library-page.tsx`。
+
 ### 4.3 响应式
 
 | 断点 | 行为 |

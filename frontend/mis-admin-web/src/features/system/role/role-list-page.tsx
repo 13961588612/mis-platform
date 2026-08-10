@@ -11,6 +11,7 @@ import { StatusBadge } from '@/components/common/list-page-skeleton';
 import { SortIndicator } from '@/components/common/sort-indicator';
 import { useClientSort } from '@/components/common/use-client-sort';
 import { useColumnWidths, type ResizableColumn } from '@/components/common/use-column-widths';
+import { SHEET_FORM_BODY, SHEET_FORM_FIELD, SHEET_FORM_LABEL } from '@/components/common/sheet-form-styles';
 import { PermissionGate } from '@/components/auth/permission-gate';
 import {
   Sheet,
@@ -40,7 +41,7 @@ const DATA_SCOPE: Record<number, string> = {
   6: '本组织',
 };
 
-const fieldLabel = 'mb-[0.4rem] block text-sm font-medium text-foreground';
+const fieldLabel = SHEET_FORM_LABEL;
 const fieldInput =
   'h-auto min-h-9 w-full rounded-md border border-input bg-card px-[0.7rem] py-[0.55rem] text-sm';
 
@@ -512,7 +513,7 @@ export function RoleListPage() {
               {mode === 'detail' ? '角色详情' : mode === 'menus' ? '分配菜单' : editing ? '编辑角色' : '新增角色'}
             </SheetTitle>
           </SheetHeader>
-          <div className="flex-1 space-y-3 overflow-auto py-4">
+          <div className={SHEET_FORM_BODY}>
             {mode === 'detail' && viewing ? (
               <DetailDefList
                 items={[
@@ -526,7 +527,7 @@ export function RoleListPage() {
             ) : mode === 'edit' ? (
               <>
                 {!editing ? (
-                  <div>
+                  <div className={SHEET_FORM_FIELD}>
                     <label className={fieldLabel}>编码 *</label>
                     <Input
                       value={form.code}
@@ -534,7 +535,7 @@ export function RoleListPage() {
                     />
                   </div>
                 ) : null}
-                <div>
+                <div className={SHEET_FORM_FIELD}>
                   <label className={fieldLabel}>所属应用</label>
                   <select
                     className={fieldInput}
@@ -549,14 +550,14 @@ export function RoleListPage() {
                     ))}
                   </select>
                 </div>
-                <div>
+                <div className={SHEET_FORM_FIELD}>
                   <label className={fieldLabel}>名称 *</label>
                   <Input
                     value={form.name}
                     onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
                   />
                 </div>
-                <div>
+                <div className={SHEET_FORM_FIELD}>
                   <label className={fieldLabel}>数据范围</label>
                   <div className="space-y-1.5">
                     {Object.entries(DATA_SCOPE).map(([k, v]) => {
@@ -586,7 +587,7 @@ export function RoleListPage() {
                   </div>
                 </div>
                 {editing ? (
-                  <div>
+                  <div className={SHEET_FORM_FIELD}>
                     <label className={fieldLabel}>状态</label>
                     <select
                       className={fieldInput}
@@ -598,7 +599,7 @@ export function RoleListPage() {
                     </select>
                   </div>
                 ) : null}
-                <div>
+                <div className={SHEET_FORM_FIELD}>
                   <label className={fieldLabel}>备注</label>
                   <Input
                     value={form.remark}
@@ -608,7 +609,7 @@ export function RoleListPage() {
               </>
             ) : (
               <>
-                <div>
+                <div className={SHEET_FORM_FIELD}>
                   <label className={fieldLabel}>菜单所属应用</label>
                   <select
                     className={fieldInput}

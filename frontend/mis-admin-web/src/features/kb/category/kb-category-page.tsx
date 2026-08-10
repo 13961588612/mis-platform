@@ -10,6 +10,7 @@ import { PermissionGate } from '@/components/auth/permission-gate';
 import { SortIndicator } from '@/components/common/sort-indicator';
 import { useClientSort } from '@/components/common/use-client-sort';
 import { useColumnWidths, type ResizableColumn } from '@/components/common/use-column-widths';
+import { SHEET_FORM_BODY, SHEET_FORM_FIELD, SHEET_FORM_LABEL } from '@/components/common/sheet-form-styles';
 import {
   Sheet,
   SheetContent,
@@ -27,7 +28,7 @@ import {
 import type { KbCategory } from '../types';
 import { formatTime } from '../types';
 
-const fieldLabel = 'mb-[0.4rem] block text-sm font-medium text-foreground';
+const fieldLabel = SHEET_FORM_LABEL;
 const selectClass =
   'h-9 w-full rounded-md border border-input bg-card px-[0.7rem] text-sm text-foreground shadow-none';
 
@@ -319,8 +320,8 @@ export function KbCategoryPage() {
           <SheetHeader>
             <SheetTitle>{editing ? '编辑分类' : '新增分类'}</SheetTitle>
           </SheetHeader>
-          <div className="flex-1 space-y-3 overflow-auto py-4">
-            <div>
+          <div className={SHEET_FORM_BODY}>
+            <div className={SHEET_FORM_FIELD}>
               <label className={fieldLabel}>名称 *</label>
               <Input
                 value={form.name}
@@ -328,7 +329,7 @@ export function KbCategoryPage() {
               />
             </div>
             {!editing ? (
-              <div>
+              <div className={SHEET_FORM_FIELD}>
                 <label className={fieldLabel}>上级分类</label>
                 <select
                   className={selectClass}
@@ -344,7 +345,7 @@ export function KbCategoryPage() {
                 </select>
               </div>
             ) : null}
-            <div>
+            <div className={SHEET_FORM_FIELD}>
               <label className={fieldLabel}>状态</label>
               <select
                 className={selectClass}
@@ -355,14 +356,14 @@ export function KbCategoryPage() {
                 <option value="0">停用</option>
               </select>
             </div>
-            <div>
+            <div className={SHEET_FORM_FIELD}>
               <label className={fieldLabel}>排序</label>
               <Input
                 value={form.sort}
                 onChange={(e) => setForm((f) => ({ ...f, sort: e.target.value }))}
               />
             </div>
-            <div>
+            <div className={SHEET_FORM_FIELD}>
               <label className={fieldLabel}>备注</label>
               <Input
                 value={form.remark}

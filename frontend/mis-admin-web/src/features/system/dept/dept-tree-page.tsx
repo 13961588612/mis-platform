@@ -1,3 +1,4 @@
+import { SHEET_FORM_BODY, SHEET_FORM_FIELD, SHEET_FORM_LABEL } from '@/components/common/sheet-form-styles';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Eye, Folder, Layers, Pencil, Plus, Trash2, Users } from 'lucide-react';
 import { toast } from 'sonner';
@@ -78,7 +79,7 @@ function deriveStaffing(): Record<string, DeptStaffing> {
 
 const STAFFING = deriveStaffing();
 
-const fieldLabel = 'mb-[0.4rem] block text-sm font-medium text-foreground';
+const fieldLabel = SHEET_FORM_LABEL;
 const fieldInput =
   'h-auto min-h-9 w-full rounded-md border border-input bg-card px-[0.7rem] py-[0.55rem] text-sm';
 
@@ -428,17 +429,17 @@ export function DeptTreePage() {
           <SheetHeader>
             <SheetTitle>{editing ? '编辑部门' : '新增部门'}</SheetTitle>
           </SheetHeader>
-          <div className="flex-1 space-y-3 overflow-auto py-4">
-            <div>
+          <div className={SHEET_FORM_BODY}>
+            <div className={SHEET_FORM_FIELD}>
               <label className={fieldLabel}>名称 *</label>
               <Input value={form.name} onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))} />
             </div>
-            <div>
+            <div className={SHEET_FORM_FIELD}>
               <label className={fieldLabel}>排序</label>
               <Input value={form.sort} onChange={(e) => setForm((f) => ({ ...f, sort: e.target.value }))} />
             </div>
             {editing ? (
-              <div>
+              <div className={SHEET_FORM_FIELD}>
                 <label className={fieldLabel}>状态</label>
                 <select
                   className={fieldInput}
@@ -467,7 +468,7 @@ export function DeptTreePage() {
           <SheetHeader>
             <SheetTitle>岗位编制 · {staffingDept?.name ?? ''}</SheetTitle>
           </SheetHeader>
-          <div className="flex-1 space-y-4 overflow-auto px-5 py-4">
+          <div className={SHEET_FORM_BODY}>
             {staffingDept ? (() => {
               const info = STAFFING[staffingDept.name];
               const posts = info?.posts ?? [];

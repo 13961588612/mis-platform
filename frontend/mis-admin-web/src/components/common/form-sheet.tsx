@@ -90,7 +90,7 @@ export function FormSheet({
               (mode === 'create' ? '填写后保存（骨架演示，未写库）' : '查看或编辑记录（骨架演示）')}
           </SheetDescription>
         </SheetHeader>
-        <div className="flex-1 space-y-4 overflow-y-auto px-5 py-4">
+        <div className="flex-1 space-y-3 overflow-y-auto px-5 py-4">
           {fields.map((field) => (
             <div key={field.key} className="space-y-1.5">
               <Label htmlFor={`sheet-${field.key}`}>

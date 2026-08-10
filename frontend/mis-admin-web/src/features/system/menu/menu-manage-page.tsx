@@ -1,3 +1,4 @@
+import { SHEET_FORM_BODY, SHEET_FORM_FIELD, SHEET_FORM_LABEL } from '@/components/common/sheet-form-styles';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   AlertTriangle,
@@ -88,7 +89,7 @@ function filterTree(
   return out;
 }
 
-const fieldLabel = 'mb-[0.4rem] block text-sm font-medium text-foreground';
+const fieldLabel = SHEET_FORM_LABEL;
 const fieldInput =
   'h-auto min-h-9 w-full rounded-md border border-input bg-card px-[0.7rem] py-[0.55rem] text-sm';
 
@@ -592,17 +593,17 @@ export function MenuManagePage() {
       </div>
 
       <Sheet open={open} onOpenChange={setOpen}>
-        <SheetContent className="sm:max-w-md">
+        <SheetContent className="flex w-full flex-col sm:max-w-md">
           <SheetHeader>
             <SheetTitle>{editing ? '编辑菜单' : '新增菜单'}</SheetTitle>
           </SheetHeader>
-          <div className="space-y-3 py-4">
-            <div>
+          <div className={SHEET_FORM_BODY}>
+            <div className={SHEET_FORM_FIELD}>
               <label className={fieldLabel}>名称 *</label>
               <Input value={form.name} onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))} />
             </div>
             {!editing ? (
-              <div>
+              <div className={SHEET_FORM_FIELD}>
                 <label className={fieldLabel}>类型</label>
                 <select
                   className={fieldInput}
@@ -617,14 +618,14 @@ export function MenuManagePage() {
             ) : null}
             {form.type !== 3 ? (
               <>
-                <div>
+                <div className={SHEET_FORM_FIELD}>
                   <label className={fieldLabel}>路径</label>
                   <Input
                     value={form.path}
                     onChange={(e) => setForm((f) => ({ ...f, path: e.target.value }))}
                   />
                 </div>
-                <div>
+                <div className={SHEET_FORM_FIELD}>
                   <label className={fieldLabel}>组件</label>
                   <Input
                     value={form.component}
@@ -633,14 +634,14 @@ export function MenuManagePage() {
                 </div>
               </>
             ) : null}
-            <div>
+            <div className={SHEET_FORM_FIELD}>
               <label className={fieldLabel}>权限码</label>
               <Input
                 value={form.permission}
                 onChange={(e) => setForm((f) => ({ ...f, permission: e.target.value }))}
               />
             </div>
-            <div>
+            <div className={SHEET_FORM_FIELD}>
               <label className={fieldLabel}>图标（lucide 名称）</label>
               <div className="flex items-center gap-2">
                 <Input
@@ -657,7 +658,7 @@ export function MenuManagePage() {
                 </span>
               </div>
             </div>
-            <div>
+            <div className={SHEET_FORM_FIELD}>
               <label className={fieldLabel}>排序</label>
               <Input
                 value={form.sort}

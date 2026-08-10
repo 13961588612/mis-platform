@@ -10,6 +10,7 @@ import { SortIndicator } from '@/components/common/sort-indicator';
 import { useClientSort } from '@/components/common/use-client-sort';
 import { useColumnWidths, type ResizableColumn } from '@/components/common/use-column-widths';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
+import { SHEET_FORM_BODY, SHEET_FORM_FIELD, SHEET_FORM_LABEL } from '@/components/common/sheet-form-styles';
 import {
   Sheet,
   SheetContent,
@@ -31,7 +32,7 @@ import {
   subjectTypeLabel,
 } from '../types';
 
-const fieldLabel = 'mb-[0.4rem] block text-sm font-medium text-foreground';
+const fieldLabel = SHEET_FORM_LABEL;
 const selectClass =
   'h-9 w-full rounded-md border border-input bg-card px-[0.7rem] text-sm text-foreground shadow-none';
 
@@ -296,8 +297,8 @@ export function KbPermissionPage() {
           <SheetHeader>
             <SheetTitle>新增授权</SheetTitle>
           </SheetHeader>
-          <div className="flex-1 space-y-3 overflow-auto py-4">
-            <div>
+          <div className={SHEET_FORM_BODY}>
+            <div className={SHEET_FORM_FIELD}>
               <label className={fieldLabel}>授权主体 *</label>
               <KbSubjectSelector
                 subjectType={subjectType}
@@ -306,7 +307,7 @@ export function KbPermissionPage() {
                 onChange={setSubject}
               />
             </div>
-            <div>
+            <div className={SHEET_FORM_FIELD}>
               <label className={fieldLabel}>权限 *</label>
               <select
                 className={selectClass}

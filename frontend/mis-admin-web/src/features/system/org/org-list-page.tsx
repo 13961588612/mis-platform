@@ -1,3 +1,4 @@
+import { SHEET_FORM_BODY, SHEET_FORM_FIELD, SHEET_FORM_LABEL } from '@/components/common/sheet-form-styles';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { cn } from '@/lib/utils';
 import { Eye, Pencil, Plus, Trash2 } from 'lucide-react';
@@ -22,7 +23,7 @@ import {
 import { createOrg, deleteOrg, listOrgs, updateOrg } from '@/lib/api/orgs';
 import type { OrgItem } from '@/types/api';
 
-const fieldLabel = 'mb-[0.4rem] block text-sm font-medium text-foreground';
+const fieldLabel = SHEET_FORM_LABEL;
 const fieldInput =
   'h-auto min-h-9 w-full rounded-md border border-input bg-card px-[0.7rem] py-[0.55rem] text-sm';
 
@@ -309,7 +310,7 @@ export function OrgListPage() {
             <SheetTitle>{viewing ? '组织详情' : editing ? '编辑组织' : '新增组织'}</SheetTitle>
           </SheetHeader>
           {viewing ? (
-            <div className="flex-1 overflow-auto py-4">
+            <div className={SHEET_FORM_BODY}>
               <DetailDefList
                 items={[
                   { label: '编码', value: viewing.code },
@@ -329,23 +330,23 @@ export function OrgListPage() {
               />
             </div>
           ) : (
-            <div className="flex-1 space-y-3 overflow-auto py-4">
+            <div className={SHEET_FORM_BODY}>
               {!editing ? (
-                <div>
+                <div className={SHEET_FORM_FIELD}>
                   <label className={fieldLabel}>编码 *</label>
                   <Input value={form.code} onChange={(e) => setForm((f) => ({ ...f, code: e.target.value }))} />
                 </div>
               ) : null}
-              <div>
+              <div className={SHEET_FORM_FIELD}>
                 <label className={fieldLabel}>名称 *</label>
                 <Input value={form.name} onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))} />
               </div>
-              <div>
+              <div className={SHEET_FORM_FIELD}>
                 <label className={fieldLabel}>排序</label>
                 <Input value={form.sort} onChange={(e) => setForm((f) => ({ ...f, sort: e.target.value }))} />
               </div>
               {editing ? (
-                <div>
+                <div className={SHEET_FORM_FIELD}>
                   <label className={fieldLabel}>状态</label>
                   <select
                     className={fieldInput}
@@ -357,7 +358,7 @@ export function OrgListPage() {
                   </select>
                 </div>
               ) : null}
-              <div>
+              <div className={SHEET_FORM_FIELD}>
                 <label className={fieldLabel}>备注</label>
                 <Input value={form.remark} onChange={(e) => setForm((f) => ({ ...f, remark: e.target.value }))} />
               </div>

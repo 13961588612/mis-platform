@@ -1,3 +1,4 @@
+import { SHEET_FORM_BODY, SHEET_FORM_FIELD, SHEET_FORM_LABEL } from '@/components/common/sheet-form-styles';
 import { useCallback, useEffect, useState } from 'react';
 import { Pencil, Plus, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
@@ -29,7 +30,7 @@ import {
 } from '@/lib/api/dicts';
 import type { DictItem, DictTypeItem } from '@/types/api';
 
-const fieldLabel = 'mb-[0.4rem] block text-sm font-medium text-foreground';
+const fieldLabel = SHEET_FORM_LABEL;
 
 const DICT_ITEM_COLUMNS: ResizableColumn[] = [
   { key: 'label', label: '标签' },
@@ -406,11 +407,11 @@ export function DictManagePage() {
                   : '新增字典项'}
             </SheetTitle>
           </SheetHeader>
-          <div className="flex-1 space-y-3 overflow-auto py-4">
+          <div className={SHEET_FORM_BODY}>
             {kind === 'type' ? (
               <>
                 {!editingType ? (
-                  <div>
+                  <div className={SHEET_FORM_FIELD}>
                     <label className={fieldLabel}>编码 *</label>
                     <Input
                       value={typeForm.code}
@@ -418,14 +419,14 @@ export function DictManagePage() {
                     />
                   </div>
                 ) : null}
-                <div>
+                <div className={SHEET_FORM_FIELD}>
                   <label className={fieldLabel}>名称 *</label>
                   <Input
                     value={typeForm.name}
                     onChange={(e) => setTypeForm((f) => ({ ...f, name: e.target.value }))}
                   />
                 </div>
-                <div>
+                <div className={SHEET_FORM_FIELD}>
                   <label className={fieldLabel}>备注</label>
                   <Input
                     value={typeForm.remark}
@@ -435,21 +436,21 @@ export function DictManagePage() {
               </>
             ) : (
               <>
-                <div>
+                <div className={SHEET_FORM_FIELD}>
                   <label className={fieldLabel}>标签 *</label>
                   <Input
                     value={itemForm.label}
                     onChange={(e) => setItemForm((f) => ({ ...f, label: e.target.value }))}
                   />
                 </div>
-                <div>
+                <div className={SHEET_FORM_FIELD}>
                   <label className={fieldLabel}>值 *</label>
                   <Input
                     value={itemForm.value}
                     onChange={(e) => setItemForm((f) => ({ ...f, value: e.target.value }))}
                   />
                 </div>
-                <div>
+                <div className={SHEET_FORM_FIELD}>
                   <label className={fieldLabel}>排序</label>
                   <Input
                     value={itemForm.sort}

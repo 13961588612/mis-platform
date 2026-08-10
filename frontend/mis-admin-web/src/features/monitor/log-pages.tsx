@@ -319,9 +319,9 @@ export function OperLogListPage() {
             <SheetTitle>操作日志详情</SheetTitle>
             <SheetDescription>请求与执行明细（只读）。</SheetDescription>
           </SheetHeader>
-          <div className="flex-1 overflow-auto py-4">
+          <div className="flex-1 space-y-3 overflow-auto px-5 py-4">
             {detail ? (
-              <div>
+              <div className="space-y-3">
                 <DetailField label="时间">{formatTime(detail.operTime)}</DetailField>
                 <DetailField label="用户">{detail.username ?? '—'}</DetailField>
                 <DetailField label="模块">{detail.module ?? '—'}</DetailField>
@@ -515,9 +515,9 @@ export function LoginLogListPage() {
             <SheetTitle>登录日志详情</SheetTitle>
             <SheetDescription>登录环境与结果明细（只读）。</SheetDescription>
           </SheetHeader>
-          <div className="flex-1 overflow-auto py-4">
+          <div className="flex-1 space-y-3 overflow-auto px-5 py-4">
             {detail ? (
-              <div>
+              <div className="space-y-3">
                 <DetailField label="时间">{formatTime(detail.loginAt)}</DetailField>
                 <DetailField label="用户">{detail.username}</DetailField>
                 <DetailField label="IP">{detail.ip ?? '—'}</DetailField>

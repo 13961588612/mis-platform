@@ -1,3 +1,4 @@
+import { SHEET_FORM_BODY, SHEET_FORM_FIELD, SHEET_FORM_LABEL } from '@/components/common/sheet-form-styles';
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { Boxes, Folder, Pencil, Plus, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
@@ -36,7 +37,7 @@ const API_TYPE_OPTS = [
 ];
 const HTTP_METHOD_OPTS = ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'];
 
-const fieldLabel = 'mb-[0.4rem] block text-sm font-medium text-foreground';
+const fieldLabel = SHEET_FORM_LABEL;
 const fieldInput =
   'h-auto min-h-9 w-full rounded-md border border-input bg-card px-[0.7rem] py-[0.55rem] text-sm';
 
@@ -477,12 +478,12 @@ export function ModuleManagePage() {
 
       {/* 模块弹窗 */}
       <Sheet open={moduleDialogOpen} onOpenChange={setModuleDialogOpen}>
-        <SheetContent className="sm:max-w-md">
+        <SheetContent className="flex w-full flex-col sm:max-w-md">
           <SheetHeader>
             <SheetTitle>{moduleEditing ? '编辑模块' : '新增模块'}</SheetTitle>
           </SheetHeader>
-          <div className="space-y-3 py-4">
-            <div>
+          <div className={SHEET_FORM_BODY}>
+            <div className={SHEET_FORM_FIELD}>
               <label className={fieldLabel}>编码 *</label>
               <Input
                 disabled={!!moduleEditing}
@@ -490,23 +491,23 @@ export function ModuleManagePage() {
                 onChange={(e) => setModuleForm((f) => ({ ...f, code: e.target.value }))}
               />
             </div>
-            <div>
+            <div className={SHEET_FORM_FIELD}>
               <label className={fieldLabel}>名称 *</label>
               <Input value={moduleForm.name} onChange={(e) => setModuleForm((f) => ({ ...f, name: e.target.value }))} />
             </div>
-            <div>
+            <div className={SHEET_FORM_FIELD}>
               <label className={fieldLabel}>服务名 *</label>
               <Input
                 value={moduleForm.serviceName}
                 onChange={(e) => setModuleForm((f) => ({ ...f, serviceName: e.target.value }))}
               />
             </div>
-            <div>
+            <div className={SHEET_FORM_FIELD}>
               <label className={fieldLabel}>排序</label>
               <Input value={moduleForm.sort} onChange={(e) => setModuleForm((f) => ({ ...f, sort: e.target.value }))} />
             </div>
             {moduleEditing ? (
-              <div>
+              <div className={SHEET_FORM_FIELD}>
                 <label className={fieldLabel}>状态</label>
                 <select
                   className={fieldInput}
@@ -533,16 +534,16 @@ export function ModuleManagePage() {
 
       {/* 接口弹窗 */}
       <Sheet open={apiDialogOpen} onOpenChange={setApiDialogOpen}>
-        <SheetContent className="sm:max-w-md">
+        <SheetContent className="flex w-full flex-col sm:max-w-md">
           <SheetHeader>
             <SheetTitle>{apiEditing ? '编辑接口' : '新增接口'}</SheetTitle>
           </SheetHeader>
-          <div className="space-y-3 py-4">
-            <div>
+          <div className={SHEET_FORM_BODY}>
+            <div className={SHEET_FORM_FIELD}>
               <label className={fieldLabel}>所属模块</label>
               <Input value={selected?.name ?? ''} disabled />
             </div>
-            <div>
+            <div className={SHEET_FORM_FIELD}>
               <label className={fieldLabel}>类型</label>
               <select
                 className={fieldInput}
@@ -556,7 +557,7 @@ export function ModuleManagePage() {
                 ))}
               </select>
             </div>
-            <div>
+            <div className={SHEET_FORM_FIELD}>
               <label className={fieldLabel}>父级分组</label>
               <select
                 className={fieldInput}
@@ -571,17 +572,17 @@ export function ModuleManagePage() {
                 ))}
               </select>
             </div>
-            <div>
+            <div className={SHEET_FORM_FIELD}>
               <label className={fieldLabel}>编码 *</label>
               <Input value={apiForm.code} onChange={(e) => setApiForm((f) => ({ ...f, code: e.target.value }))} />
             </div>
-            <div>
+            <div className={SHEET_FORM_FIELD}>
               <label className={fieldLabel}>名称 *</label>
               <Input value={apiForm.name} onChange={(e) => setApiForm((f) => ({ ...f, name: e.target.value }))} />
             </div>
             {apiForm.type === 'api' ? (
               <>
-                <div>
+                <div className={SHEET_FORM_FIELD}>
                   <label className={fieldLabel}>HTTP 方法</label>
                   <select
                     className={fieldInput}
@@ -595,7 +596,7 @@ export function ModuleManagePage() {
                     ))}
                   </select>
                 </div>
-                <div>
+                <div className={SHEET_FORM_FIELD}>
                   <label className={fieldLabel}>路径模式</label>
                   <Input
                     value={apiForm.pathPattern}
@@ -605,11 +606,11 @@ export function ModuleManagePage() {
                 </div>
               </>
             ) : null}
-            <div>
+            <div className={SHEET_FORM_FIELD}>
               <label className={fieldLabel}>排序</label>
               <Input value={apiForm.sort} onChange={(e) => setApiForm((f) => ({ ...f, sort: e.target.value }))} />
             </div>
-            <div>
+            <div className={SHEET_FORM_FIELD}>
               <label className={fieldLabel}>状态</label>
               <select
                 className={fieldInput}

@@ -29,7 +29,11 @@ import {
 import { useKbStore } from '../stores/use-kb-store';
 import type { KbCategory, KbLibrary, KbRagSettings } from '../types';
 import { KB_SECRECY_OPTIONS, formatTime } from '../types';
-const fieldLabel = 'mb-[0.4rem] block text-sm font-medium text-foreground';
+import { SHEET_FORM_BODY, SHEET_FORM_FIELD, SHEET_FORM_LABEL } from '@/components/common/sheet-form-styles';
+
+/** 标签与控件间距由外层 field 的 space-y-1.5 统一，避免上下半区疏密不一致。 */
+const fieldLabel = SHEET_FORM_LABEL;
+const fieldStack = SHEET_FORM_FIELD;
 const selectClass =
   'h-9 w-full rounded-md border border-input bg-card px-[0.7rem] text-sm text-foreground shadow-none';
 
@@ -432,85 +436,88 @@ export function KbLibraryPage() {
           <SheetHeader>
             <SheetTitle>{editing ? '编辑知识库' : '新增知识库'}</SheetTitle>
           </SheetHeader>
-          <div className="flex-1 space-y-3 overflow-auto py-4">
-            {!editing ? (
-              <div>
-                <label className={fieldLabel}>所属分类 *</label>
+          <div className={cn(SHEET_FORM_BODY)}>
+            {/* 上半基础字段：行距与下方 RAG 区统一为 space-y-3 / 标签-控件 space-y-1.5 */}
+            <div className="space-y-3">
+              {!editing ? (
+                <div className={fieldStack}>
+                  <label className={fieldLabel}>所属分类 *</label>
+                  <select
+                    className={selectClass}
+                    value={form.categoryId}
+                    onChange={(e) => setForm((f) => ({ ...f, categoryId: e.target.value }))}
+                  >
+                    <option value="">请选择</option>
+                    {categories.map((c) => (
+                      <option key={c.id} value={String(c.id)}>
+                        {c.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              ) : null}
+              <div className={fieldStack}>
+                <label className={fieldLabel}>名称 *</label>
+                <Input
+                  value={form.name}
+                  onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
+                />
+              </div>
+              <div className={fieldStack}>
+                <label className={fieldLabel}>密级 *</label>
                 <select
                   className={selectClass}
-                  value={form.categoryId}
-                  onChange={(e) => setForm((f) => ({ ...f, categoryId: e.target.value }))}
+                  value={form.secrecy}
+                  onChange={(e) => setForm((f) => ({ ...f, secrecy: e.target.value }))}
                 >
-                  <option value="">请选择</option>
-                  {categories.map((c) => (
-                    <option key={c.id} value={String(c.id)}>
-                      {c.name}
+                  {KB_SECRECY_OPTIONS.map((o) => (
+                    <option key={o.value} value={o.value}>
+                      {o.label}
                     </option>
                   ))}
                 </select>
-              </div>
-            ) : null}
-            <div>
-              <label className={fieldLabel}>名称 *</label>
-              <Input
-                value={form.name}
-                onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
-              />
-            </div>
-            <div>
-              <label className={fieldLabel}>密级 *</label>
-              <select
-                className={selectClass}
-                value={form.secrecy}
-                onChange={(e) => setForm((f) => ({ ...f, secrecy: e.target.value }))}
-              >
-                {KB_SECRECY_OPTIONS.map((o) => (
-                  <option key={o.value} value={o.value}>
-                    {o.label}
-                  </option>
-                ))}
-              </select>
-              <p className="mt-1 text-xs text-muted-foreground">
-                「公开」且启用的知识库对全员可见；其余需在「权限」页显式授权。
-              </p>
-            </div>
-            {editing ? (
-              <div>
-                <label className={fieldLabel}>状态</label>
-                <select
-                  className={selectClass}
-                  value={form.status}
-                  onChange={(e) => setForm((f) => ({ ...f, status: e.target.value }))}
-                >
-                  <option value="1">启用</option>
-                  <option value="0">停用</option>
-                </select>
-                <p className="mt-1 text-xs text-muted-foreground">
-                  停用后即便已授权也不可见（停用优先级最高）。
+                <p className="text-xs text-muted-foreground">
+                  「公开」且启用的知识库对全员可见；其余需在「权限」页显式授权。
                 </p>
               </div>
-            ) : (
-              <div>
-                <label className={fieldLabel}>责任人用户 ID</label>
-                <Input
-                  value={form.owner}
-                  onChange={(e) => setForm((f) => ({ ...f, owner: e.target.value }))}
-                  placeholder="留空则默认当前用户"
-                />
-              </div>
-            )}
+              {editing ? (
+                <div className={fieldStack}>
+                  <label className={fieldLabel}>状态</label>
+                  <select
+                    className={selectClass}
+                    value={form.status}
+                    onChange={(e) => setForm((f) => ({ ...f, status: e.target.value }))}
+                  >
+                    <option value="1">启用</option>
+                    <option value="0">停用</option>
+                  </select>
+                  <p className="text-xs text-muted-foreground">
+                    停用后即便已授权也不可见（停用优先级最高）。
+                  </p>
+                </div>
+              ) : (
+                <div className={fieldStack}>
+                  <label className={fieldLabel}>责任人用户 ID</label>
+                  <Input
+                    value={form.owner}
+                    onChange={(e) => setForm((f) => ({ ...f, owner: e.target.value }))}
+                    placeholder="留空则默认当前用户"
+                  />
+                </div>
+              )}
+            </div>
 
-            <div className="rounded-md border border-dashed p-3">
-              <p className="mb-2 text-sm font-medium">RAG 设置</p>
+            <div className="space-y-3 rounded-md border border-dashed p-3">
+              <p className="text-sm font-medium">RAG 设置</p>
               <div className="grid grid-cols-2 gap-3">
-                <div>
+                <div className={fieldStack}>
                   <label className={fieldLabel}>topK</label>
                   <Input
                     value={form.topK}
                     onChange={(e) => setForm((f) => ({ ...f, topK: e.target.value }))}
                   />
                 </div>
-                <div>
+                <div className={fieldStack}>
                   <label className={fieldLabel}>相似度阈值</label>
                   <Input
                     value={form.scoreThreshold}
@@ -518,7 +525,7 @@ export function KbLibraryPage() {
                   />
                 </div>
               </div>
-              <div className="mt-3">
+              <div className={fieldStack}>
                 <label className={fieldLabel}>检索方式</label>
                 <select
                   className={selectClass}
@@ -530,7 +537,7 @@ export function KbLibraryPage() {
                   <option value="keyword">关键词检索</option>
                 </select>
               </div>
-              <div className="mt-3">
+              <div className={fieldStack}>
                 <label className={fieldLabel}>嵌入模型</label>
                 {editing ? (
                   <Input
@@ -580,10 +587,10 @@ export function KbLibraryPage() {
                   </div>
                 )}
                 {editing ? (
-                  <p className="mt-1 text-xs text-muted-foreground">嵌入模型在创建后不可修改。</p>
+                  <p className="text-xs text-muted-foreground">嵌入模型在创建后不可修改。</p>
                 ) : null}
               </div>
-              <label className="mt-3 flex items-center gap-2 text-sm">
+              <label className="flex items-center gap-2 text-sm">
                 <input
                   type="checkbox"
                   className="h-4 w-4"
@@ -596,7 +603,7 @@ export function KbLibraryPage() {
                   <span className="text-xs text-muted-foreground">当前引擎不支持</span>
                 ) : null}
               </label>
-              <p className="mt-2 text-xs text-muted-foreground">
+              <p className="text-xs text-muted-foreground">
                 切片方法、切片长度、分隔符、空结果策略在「详情 → RAG 设置」中维护，此处保存不会覆盖。
               </p>
             </div>

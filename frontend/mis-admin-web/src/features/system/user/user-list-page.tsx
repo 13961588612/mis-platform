@@ -55,7 +55,9 @@ import {
 import { listEnabledRoles } from '@/lib/api/roles';
 import type { DeptNode, OrgItem, RoleItem, UserView } from '@/types/api';
 
-const fieldLabel = 'mb-[0.4rem] block text-sm font-medium text-foreground';
+import { SHEET_FORM_BODY, SHEET_FORM_FIELD, SHEET_FORM_LABEL } from '@/components/common/sheet-form-styles';
+
+const fieldLabel = SHEET_FORM_LABEL;
 const fieldInput =
   'h-auto min-h-9 w-full rounded-md border border-input bg-card px-[0.7rem] py-[0.55rem] text-sm text-foreground';
 
@@ -818,7 +820,7 @@ export function UserListPage() {
                   splitAssist ? 'w-1/2 border-r' : 'flex-1',
                 )}
               >
-            <div className="flex-1 space-y-3 overflow-auto px-1 py-4">
+            <div className={SHEET_FORM_BODY}>
               {mode === 'detail' && viewing ? (
                 <UserDetail viewing={viewing} onAiRag={() => setAiRagOpen(true)} />
               ) : mode === 'perms' ? (
@@ -1038,7 +1040,7 @@ function Field({
   children: React.ReactNode;
 }) {
   return (
-    <div>
+    <div className={SHEET_FORM_FIELD}>
       <label className={fieldLabel}>
         {label}
         {required ? <span className="ml-0.5 text-destructive">*</span> : null}
