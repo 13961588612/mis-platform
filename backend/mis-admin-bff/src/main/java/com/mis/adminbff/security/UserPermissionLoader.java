@@ -59,9 +59,34 @@ public class UserPermissionLoader {
         }
     }
 
+    /**
+     * 读取权限缓存。返回 {@code null} 表示「不可用」——调用方 {@link #load(LoginUser)}
+     * 会据此落入回源分支（ADR-009：miss 时回源）。
+     *
+     * <p><b>C-2 修复点（别把 try-catch 去掉）</b>：这里的 Redis 访问原先是裸调用。
+     * 连接故障 / 读超时抛出的 {@code RedisConnectionFailureException}、
+     * {@code QueryTimeoutException} 等都是 {@link RuntimeException}，会直接冒泡出
+     * {@code load()}——注意 {@code load()} 只在<b>回源</b>那一段有 try-catch，
+     * 缓存读取这一段的调用点是裸的，于是整条鉴权链路 500。
+     *
+     * <p>把「Redis 挂了」降级成「缓存 miss」是这里唯一正确的语义：权限的权威源是
+     * mis-iam，缓存只是加速层，加速层不可用不该让请求失败。
+     *
+     * <p>catch 的是 {@code Exception} 而非 {@code DataAccessException}：Lettuce 的部分
+     * 底层异常（如 {@code RedisCommandTimeoutException}）未必都能被 Spring 的异常转换器
+     * 翻译成 {@code DataAccessException}，收窄捕获范围等于给 500 留后门。
+     * 与下方回源分支 catch {@code Exception} 的口径保持一致。
+     */
     private Set<String> readRedis(long tenantId, long appId, long userId) {
-        String json = redisTemplate.opsForValue()
-                .get(CacheConstants.RBAC_PERMISSIONS.formatted(tenantId, appId, userId));
+        String json;
+        try {
+            json = redisTemplate.opsForValue()
+                    .get(CacheConstants.RBAC_PERMISSIONS.formatted(tenantId, appId, userId));
+        } catch (Exception ex) {
+            log.warn("读取 permissions 缓存失败，降级为回源: tenantId={}, appId={}, userId={}",
+                    tenantId, appId, userId, ex);
+            return null;
+        }
         if (json == null || json.isBlank()) {
             return null;
         }
