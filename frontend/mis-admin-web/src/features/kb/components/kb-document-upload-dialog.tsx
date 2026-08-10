@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react';
+import type { ChangeEvent } from 'react';
 import { toast } from 'sonner';
 import { Upload } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -21,6 +22,47 @@ const MAX_UPLOAD_BYTES = 50 * 1024 * 1024;
 const fieldLabel = 'mb-[0.4rem] block text-sm font-medium text-foreground';
 const selectClass =
   'h-9 w-full rounded-md border border-input bg-card px-[0.7rem] text-sm text-foreground shadow-none';
+
+/**
+ * 按扩展名建议默认切片方式（P1-3）。
+ *
+ * <p>仅作「带出默认值」的便利：用户仍可在弹窗内手动修改，或改回「继承库级（不指定）」。
+ * 映射基于 RAGFlow 现有 chunk_method 枚举（见 {@code KB_CHUNK_METHOD_OPTIONS}）：
+ * <ul>
+ *   <li>纯文本/ Markdown → {@code naive}（通用切块，最稳）；</li>
+ *   <li>PDF → {@code paper}（论文/结构化文档专用，按章节/标题切，比 naive 更适合 PDF 版面）；</li>
+ *   <li>Word → {@code naive}（docx/doc 无专用方法，naive 通用处理最稳）；</li>
+ *   <li>Excel/CSV → {@code table}（表格专用，按表格结构切片）；</li>
+ *   <li>PPT → {@code presentation}（演示文稿专用，按幻灯片切）；</li>
+ *   <li>图片 → {@code picture}（图片专用，OCR 后整图切块）；</li>
+ *   <li>其他/未知 → {@code naive}（通用兜底，不强制）。</li>
+ * </ul>
+ *
+ * @param fileName 上传文件名
+ * @return 建议的 chunk_method 码值
+ */
+function suggestChunkMethodByFileName(fileName: string): string {
+  const ext = fileName.split('.').pop()?.toLowerCase() ?? '';
+  const EXT_TO_METHOD: Record<string, string> = {
+    md: 'naive',
+    txt: 'naive',
+    markdown: 'naive',
+    pdf: 'paper',
+    doc: 'naive',
+    docx: 'naive',
+    xls: 'table',
+    xlsx: 'table',
+    csv: 'table',
+    ppt: 'presentation',
+    pptx: 'presentation',
+    jpg: 'picture',
+    jpeg: 'picture',
+    png: 'picture',
+    json: 'naive',
+    html: 'naive',
+  };
+  return EXT_TO_METHOD[ext] ?? 'naive';
+}
 
 export interface KbDocumentUploadDialogProps {
   open: boolean;
@@ -48,6 +90,8 @@ export function KbDocumentUploadDialog({
   const [chunkTokenNum, setChunkTokenNum] = useState('');
   const [separator, setSeparator] = useState('');
   const [uploading, setUploading] = useState(false);
+  /** 用户是否手动改过切片方式（P1-3：手动改过后不再按扩展名覆盖预填）。 */
+  const [chunkMethodTouched, setChunkMethodTouched] = useState(false);
 
   // 打开时重置表单，避免上次残留
   const reset = () => {
@@ -56,6 +100,16 @@ export function KbDocumentUploadDialog({
     setChunkTokenNum('');
     setSeparator('');
     setUploading(false);
+    setChunkMethodTouched(false);
+  };
+
+  /** 选择文件：仅当用户尚未手动改过切片方式时，按扩展名预填默认值。 */
+  const handleFileChange = (e: ChangeEvent<HTMLInputElement>) => {
+    const next = e.target.files?.[0] ?? null;
+    setFile(next);
+    if (next != null && !chunkMethodTouched) {
+      setChunkMethod(suggestChunkMethodByFileName(next.name));
+    }
   };
 
   const tokenNum = useMemo(() => {
@@ -125,7 +179,7 @@ export function KbDocumentUploadDialog({
             <Input
               type="file"
               accept=".txt,.md,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.csv,.json,.html,.jpg,.jpeg,.png"
-              onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+              onChange={handleFileChange}
             />
             {file != null ? (
               <p className="mt-1 text-xs text-muted-foreground">
@@ -141,7 +195,10 @@ export function KbDocumentUploadDialog({
             <select
               className={selectClass}
               value={chunkMethod}
-              onChange={(e) => setChunkMethod(e.target.value)}
+              onChange={(e) => {
+                setChunkMethodTouched(true);
+                setChunkMethod(e.target.value);
+              }}
             >
               <option value="">继承库级（不指定）</option>
               {KB_CHUNK_METHOD_OPTIONS.map((o) => (
@@ -150,6 +207,9 @@ export function KbDocumentUploadDialog({
                 </option>
               ))}
             </select>
+            <p className="mt-1 text-xs text-muted-foreground">
+              已按文件类型预填推荐方式；可手动修改，或选「继承库级」改回默认。
+            </p>
           </div>
 
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
