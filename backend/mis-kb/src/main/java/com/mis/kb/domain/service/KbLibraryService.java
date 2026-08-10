@@ -39,16 +39,29 @@ public class KbLibraryService {
     private final KbDocumentRepository documentRepository;
     private final KbAclRepository aclRepository;
     private final KnowledgeEnginePort enginePort;
+    private final NodeAdminResolver nodeAdminResolver;
 
     public KbLibraryService(
             KbLibraryRepository libraryRepository,
             KbDocumentRepository documentRepository,
             KbAclRepository aclRepository,
-            KnowledgeEnginePort enginePort) {
+            KnowledgeEnginePort enginePort,
+            NodeAdminResolver nodeAdminResolver) {
         this.libraryRepository = libraryRepository;
         this.documentRepository = documentRepository;
         this.aclRepository = aclRepository;
         this.enginePort = enginePort;
+        this.nodeAdminResolver = nodeAdminResolver;
+    }
+
+    /**
+     * 库级管理合成（知识库域一期，Q9）：{@code 节点管辖 ∨ kb_acl.manage}。
+     *
+     * <p>文档写操作双闸门（权限码 + 管辖）统一走这里；判定收口在
+     * {@link NodeAdminResolver#hasLibraryManage}，禁止内联。
+     */
+    public boolean hasLibraryManage(Long userId, Long libraryId) {
+        return nodeAdminResolver.hasLibraryManage(userId, libraryId);
     }
 
     @Transactional(readOnly = true)

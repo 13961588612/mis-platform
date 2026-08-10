@@ -4,7 +4,10 @@ import com.mis.kb.api.dto.KbReparseAllResult;
 import com.mis.kb.domain.model.KbResultCode;
 import com.mis.kb.domain.service.KbDocumentService;
 import com.mis.kb.support.KbBusinessException;
+import com.mis.common.security.context.LoginUser;
+import com.mis.common.security.context.SecurityContextHolder;
 import com.mis.common.web.exception.GlobalExceptionHandler;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -26,8 +29,13 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  *
  * <p>沿用 BFF {@code KbSynonymControllerTest} 同款 standaloneSetup + 真
  * {@link GlobalExceptionHandler}：验「Controller 不 catch + 异常处理器写回 code」的组合。
+ *
+ * <p>知识库域一期：写操作双闸门之二（管辖校验）在 Service 层，Controller 只负责把
+ * {@link SecurityContextHolder} 的用户 id 透传给 Service，故用例需先注入登录上下文。
  */
 class DocumentControllerReparseAllTest {
+
+    private static final long USER = 42L;
 
     private KbDocumentService documentService;
     private MockMvc mockMvc;
@@ -38,6 +46,17 @@ class DocumentControllerReparseAllTest {
         mockMvc = MockMvcBuilders.standaloneSetup(new DocumentController(documentService))
                 .setControllerAdvice(new GlobalExceptionHandler())
                 .build();
+        LoginUser user = new LoginUser();
+        user.setUserId(USER);
+        user.setTenantId(1L);
+        user.setAppId(91010L);
+        user.setUsername("tester");
+        SecurityContextHolder.setLoginUser(user);
+    }
+
+    @AfterEach
+    void tearDown() {
+        SecurityContextHolder.clear();
     }
 
     @Test
@@ -46,7 +65,7 @@ class DocumentControllerReparseAllTest {
         KbReparseAllResult result = new KbReparseAllResult(
                 1L, 3, 2, 1, 0,
                 List.of(new KbReparseAllResult.FailedDocument(99L, "a.pdf", "boom")));
-        when(documentService.reparseAll(1L)).thenReturn(result);
+        when(documentService.reparseAll(1L, USER)).thenReturn(result);
 
         mockMvc.perform(post("/internal/v1/kb/libraries/1/documents/reparse-all"))
                 .andExpect(status().isOk())
@@ -60,13 +79,13 @@ class DocumentControllerReparseAllTest {
                 .andExpect(jsonPath("$.data.failedDocuments[0].title").value("a.pdf"))
                 .andExpect(jsonPath("$.data.failedDocuments[0].reason").value("boom"));
 
-        verify(documentService).reparseAll(1L);
+        verify(documentService).reparseAll(1L, USER);
     }
 
     @Test
     @DisplayName("空库结果同样经 Result 包装（success=0）")
     void emptyLibraryResultWraps() throws Exception {
-        when(documentService.reparseAll(2L)).thenReturn(new KbReparseAllResult(2L, 0, 0, 0, 0, List.of()));
+        when(documentService.reparseAll(2L, USER)).thenReturn(new KbReparseAllResult(2L, 0, 0, 0, 0, List.of()));
 
         mockMvc.perform(post("/internal/v1/kb/libraries/2/documents/reparse-all"))
                 .andExpect(status().isOk())
@@ -75,19 +94,19 @@ class DocumentControllerReparseAllTest {
                 .andExpect(jsonPath("$.data.failedDocuments").isArray())
                 .andExpect(jsonPath("$.data.failedDocuments").isEmpty());
 
-        verify(documentService).reparseAll(2L);
+        verify(documentService).reparseAll(2L, USER);
     }
 
     @Test
     @DisplayName("知识库不存在：走统一异常通道返回业务错误码")
     void libraryNotFoundPropagatesErrorChannel() throws Exception {
-        when(documentService.reparseAll(404L)).thenThrow(
+        when(documentService.reparseAll(404L, USER)).thenThrow(
                 new KbBusinessException(KbResultCode.KB_LIBRARY_NOT_FOUND));
 
         mockMvc.perform(post("/internal/v1/kb/libraries/404/documents/reparse-all"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.code").value(KbResultCode.KB_LIBRARY_NOT_FOUND.getCode()));
 
-        verify(documentService).reparseAll(404L);
+        verify(documentService).reparseAll(404L, USER);
     }
 }

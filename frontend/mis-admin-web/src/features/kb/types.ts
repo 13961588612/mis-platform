@@ -101,6 +101,36 @@ export interface KbCategory {
   updatedAt: string | null;
 }
 
+/**
+ * 分类节点管理员授权（知识库域一期）。
+ *
+ * <p>管理范围 = 以 `categoryId` 为根的整棵子树；`createdBy` 为「授权人」（O-2 采纳，可空）。
+ */
+export interface KbCategoryAdmin {
+  id: number;
+  categoryId: number;
+  subjectType: string;
+  subjectId: number;
+  createdBy: number | null;
+  createdAt: string | null;
+  updatedAt: string | null;
+}
+
+/** 新增分类节点管理员请求体。 */
+export interface KbCategoryAdminCreatePayload {
+  subjectType: string;
+  subjectId: number;
+}
+
+/**
+ * 管辖节点信息（知识库域一期，树高亮/只看管辖）。
+ *
+ * <p>`manageableIds` = 本人可管理的全部节点 id（授权节点的子树并集；全局管理员 = 全量）。
+ */
+export interface KbCategoryManageableInfo {
+  manageableIds: number[];
+}
+
 /** 知识库。 */
 export interface KbLibrary {
   id: number;

@@ -4,6 +4,8 @@ import { postEventSource, type SseFrame } from '@/lib/api/sse-client';
 import type {
   KbAcl,
   KbCategory,
+  KbCategoryAdmin,
+  KbCategoryAdminCreatePayload,
   KbDashboard,
   KbDocument,
   KbDocumentChunkConfig,
@@ -84,6 +86,41 @@ export async function updateCategory(id: number, body: UpdateCategoryPayload): P
 export async function deleteCategory(id: number): Promise<void> {
   const res = await api.delete<ApiResult<null>>(`/kb/categories/${id}`);
   if (res.data.code !== 0) throw new Error(res.data.message || '删除分类失败');
+}
+
+// ------------------------------------------------------------------ 分类管理员 / 移动（知识库域一期）
+
+/** 管辖节点 id 列表（列表页即需，页面码 kb:category:list）。 */
+export async function listManageableCategoryIds(): Promise<number[]> {
+  const res = await api.get<ApiResult<number[]>>('/kb/categories/manageable-ids');
+  return unwrap(res, '获取管辖范围失败');
+}
+
+/** 移动分类节点（权限码 kb:category:manage；目标须在管辖内且非自己后代）。 */
+export async function moveCategory(id: number, newParentId: number | null): Promise<KbCategory> {
+  const res = await api.put<ApiResult<KbCategory>>(`/kb/categories/${id}/move`, { newParentId });
+  return unwrap(res, '移动分类失败');
+}
+
+/** 分类节点管理员列表（权限码 kb:category:manage）。 */
+export async function listCategoryAdmins(categoryId: number): Promise<KbCategoryAdmin[]> {
+  const res = await api.get<ApiResult<KbCategoryAdmin[]>>(`/kb/categories/${categoryId}/admins`);
+  return unwrap(res, '获取管理员列表失败');
+}
+
+/** 新增分类节点管理员（权限码 kb:category:manage）。 */
+export async function grantCategoryAdmin(
+  categoryId: number,
+  body: KbCategoryAdminCreatePayload,
+): Promise<KbCategoryAdmin> {
+  const res = await api.post<ApiResult<KbCategoryAdmin>>(`/kb/categories/${categoryId}/admins`, body);
+  return unwrap(res, '新增管理员失败');
+}
+
+/** 移除分类节点管理员（权限码 kb:category:manage）。 */
+export async function revokeCategoryAdmin(adminId: number): Promise<void> {
+  const res = await api.delete<ApiResult<null>>(`/kb/category-admins/${adminId}`);
+  if (res.data.code !== 0) throw new Error(res.data.message || '移除管理员失败');
 }
 
 // ------------------------------------------------------------------ 知识库

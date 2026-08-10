@@ -1,6 +1,8 @@
 package com.mis.kb.api.controller;
 
 import com.mis.common.core.result.Result;
+import com.mis.common.security.context.LoginUser;
+import com.mis.common.security.context.SecurityContextHolder;
 import com.mis.kb.api.dto.KbDocumentUploadResponse;
 import com.mis.kb.api.dto.KbDocumentVO;
 import com.mis.kb.api.dto.KbReparseAllResult;
@@ -48,7 +50,8 @@ public class DocumentController {
             @RequestParam(required = false) Integer chunkTokenNum,
             @RequestParam(required = false) String separator) {
         return Result.ok(documentService.upload(
-                libraryId, file, new DocumentChunkConfig(chunkMethod, chunkTokenNum, separator)));
+                libraryId, file, new DocumentChunkConfig(chunkMethod, chunkTokenNum, separator),
+                currentUserId()));
     }
 
     /** 更新文档级切片配置（kb_settings_model_chunk；改参触发重解析）。 */
@@ -66,13 +69,13 @@ public class DocumentController {
             @PathVariable Long libraryId,
             @PathVariable Long id,
             @RequestParam boolean enabled) {
-        documentService.setEnabled(id, enabled);
+        documentService.setEnabled(id, enabled, currentUserId());
         return Result.ok();
     }
 
     @PostMapping("/{libraryId}/documents/{id}/reparse")
     public Result<Void> reparse(@PathVariable Long libraryId, @PathVariable Long id) {
-        documentService.reparse(id);
+        documentService.reparse(id, currentUserId());
         return Result.ok();
     }
 
@@ -85,12 +88,17 @@ public class DocumentController {
      */
     @PostMapping("/{libraryId}/documents/reparse-all")
     public Result<KbReparseAllResult> reparseAll(@PathVariable Long libraryId) {
-        return Result.ok(documentService.reparseAll(libraryId));
+        return Result.ok(documentService.reparseAll(libraryId, currentUserId()));
     }
 
     @DeleteMapping("/{libraryId}/documents/{id}")
     public Result<Void> delete(@PathVariable Long libraryId, @PathVariable Long id) {
-        documentService.delete(id);
+        documentService.delete(id, currentUserId());
         return Result.ok();
     }
+
+    private Long currentUserId() {
+        return SecurityContextHolder.getOptional().map(LoginUser::getUserId).orElse(null);
+    }
 }
+

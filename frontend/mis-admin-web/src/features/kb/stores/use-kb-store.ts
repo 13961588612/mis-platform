@@ -29,6 +29,8 @@ interface KbState {
   loaded: boolean;
   /** 知识库列表变更世代（picker 订阅） */
   libraryEpoch: number;
+  /** 分类树变更世代（知识库域一期：新建/移动/删除分类后递增，供 KeepAlive 页面联动失效） */
+  categoryEpoch: number;
   /** 拉取引擎健康 + 能力 */
   refreshEngine: () => Promise<void>;
   /** 仅拉取健康（轻量心跳，可由概览页定时触发） */
@@ -37,6 +39,8 @@ interface KbState {
   refreshModels: () => Promise<void>;
   /** 通知所有 KbLibraryPicker 重新拉列表 */
   invalidateLibraries: () => void;
+  /** 通知分类相关页面/组件重新拉取（知识库域一期） */
+  invalidateCategories: () => void;
   reset: () => void;
 }
 
@@ -47,6 +51,7 @@ export const useKbStore = create<KbState>((set) => ({
   loading: false,
   loaded: false,
   libraryEpoch: 0,
+  categoryEpoch: 0,
 
   refreshEngine: async () => {
     set({ loading: true });
@@ -82,6 +87,8 @@ export const useKbStore = create<KbState>((set) => ({
 
   invalidateLibraries: () => set((s) => ({ libraryEpoch: s.libraryEpoch + 1 })),
 
+  invalidateCategories: () => set((s) => ({ categoryEpoch: s.categoryEpoch + 1 })),
+
   reset: () =>
     set({
       health: null,
@@ -90,5 +97,6 @@ export const useKbStore = create<KbState>((set) => ({
       loading: false,
       loaded: false,
       libraryEpoch: 0,
+      categoryEpoch: 0,
     }),
 }));

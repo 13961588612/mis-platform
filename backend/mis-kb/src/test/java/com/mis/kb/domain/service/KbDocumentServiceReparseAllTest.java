@@ -44,10 +44,12 @@ import static org.mockito.Mockito.when;
 class KbDocumentServiceReparseAllTest {
 
     private static final long LIBRARY_ID = 7L;
+    private static final long USER = 42L;
 
     private KbDocumentRepository documentRepository;
     private KbLibraryRepository libraryRepository;
     private KnowledgeEnginePort enginePort;
+    private KbLibraryService libraryService;
     private KbDocumentService service;
 
     @BeforeEach
@@ -55,9 +57,12 @@ class KbDocumentServiceReparseAllTest {
         documentRepository = mock(KbDocumentRepository.class);
         libraryRepository = mock(KbLibraryRepository.class);
         enginePort = mock(KnowledgeEnginePort.class);
-        service = new KbDocumentService(documentRepository, libraryRepository, enginePort);
+        libraryService = mock(KbLibraryService.class);
+        service = new KbDocumentService(documentRepository, libraryRepository, enginePort, libraryService);
         when(libraryRepository.findById(LIBRARY_ID))
                 .thenReturn(Optional.of(library()));
+        // 知识库域一期：写操作双闸门（权限码 + 管辖），默认放行管辖，专项用例再拒
+        when(libraryService.hasLibraryManage(USER, LIBRARY_ID)).thenReturn(true);
     }
 
     private static KbLibrary library() {
@@ -87,7 +92,7 @@ class KbDocumentServiceReparseAllTest {
     void emptyLibraryReturnsZeroResult() {
         when(documentRepository.findByLibraryIdOrderByCreatedAtDesc(LIBRARY_ID)).thenReturn(List.of());
 
-        KbReparseAllResult result = service.reparseAll(LIBRARY_ID);
+        KbReparseAllResult result = service.reparseAll(LIBRARY_ID, USER);
 
         assertEquals(LIBRARY_ID, result.libraryId());
         assertEquals(0, result.total());
@@ -106,7 +111,7 @@ class KbDocumentServiceReparseAllTest {
         KbDocument d2 = doc(2L, "b.pdf", "doc-2", ParseStatus.FAILED.code());
         when(documentRepository.findByLibraryIdOrderByCreatedAtDesc(LIBRARY_ID)).thenReturn(List.of(d1, d2));
 
-        KbReparseAllResult result = service.reparseAll(LIBRARY_ID);
+        KbReparseAllResult result = service.reparseAll(LIBRARY_ID, USER);
 
         assertEquals(2, result.total());
         assertEquals(2, result.success());
@@ -137,7 +142,7 @@ class KbDocumentServiceReparseAllTest {
                 .when(enginePort).reparseDocument(
                         any(EngineLibraryRef.class), eq(new EngineDocumentRef("ragflow", "doc-2")));
 
-        KbReparseAllResult result = service.reparseAll(LIBRARY_ID);
+        KbReparseAllResult result = service.reparseAll(LIBRARY_ID, USER);
 
         assertEquals(3, result.total());
         assertEquals(2, result.success());
@@ -171,7 +176,7 @@ class KbDocumentServiceReparseAllTest {
                 eq(new EngineLibraryRef("ragflow", "ds-test")), anyList()))
                 .thenReturn(Map.of());
 
-        KbReparseAllResult result = service.reparseAll(LIBRARY_ID);
+        KbReparseAllResult result = service.reparseAll(LIBRARY_ID, USER);
 
         assertEquals(1, result.success());
         assertEquals(1, result.skipped());
@@ -191,7 +196,7 @@ class KbDocumentServiceReparseAllTest {
         KbDocument d2 = doc(2L, "orphan.pdf", null, ParseStatus.SUCCESS.code());
         when(documentRepository.findByLibraryIdOrderByCreatedAtDesc(LIBRARY_ID)).thenReturn(List.of(d1, d2));
 
-        KbReparseAllResult result = service.reparseAll(LIBRARY_ID);
+        KbReparseAllResult result = service.reparseAll(LIBRARY_ID, USER);
 
         assertEquals(2, result.total());
         assertEquals(1, result.success());
@@ -208,10 +213,23 @@ class KbDocumentServiceReparseAllTest {
         when(libraryRepository.findById(LIBRARY_ID)).thenReturn(Optional.empty());
 
         KbBusinessException ex = assertThrows(
-                KbBusinessException.class, () -> service.reparseAll(LIBRARY_ID));
+                KbBusinessException.class, () -> service.reparseAll(LIBRARY_ID, USER));
 
         assertEquals(KbResultCode.KB_LIBRARY_NOT_FOUND.getCode(), ex.getCode());
         verify(documentRepository, never()).findByLibraryIdOrderByCreatedAtDesc(any());
+    }
+
+    @Test
+    @DisplayName("管辖外（hasLibraryManage=false）：抛 40311 且不触碰引擎（双闸门之二）")
+    void outOfManageScopeRejected() {
+        when(libraryService.hasLibraryManage(USER, LIBRARY_ID)).thenReturn(false);
+
+        KbBusinessException ex = assertThrows(
+                KbBusinessException.class, () -> service.reparseAll(LIBRARY_ID, USER));
+
+        assertEquals(KbResultCode.KB_CATEGORY_NOT_MANAGEABLE.getCode(), ex.getCode());
+        verify(documentRepository, never()).findByLibraryIdOrderByCreatedAtDesc(any());
+        verify(enginePort, never()).reparseDocument(any(), any());
     }
 
     @Test
@@ -224,7 +242,7 @@ class KbDocumentServiceReparseAllTest {
                 .thenReturn(List.of(doc(1L, "a.pdf", "doc-1", ParseStatus.SUCCESS.code())));
 
         KbBusinessException ex = assertThrows(
-                KbBusinessException.class, () -> service.reparseAll(LIBRARY_ID));
+                KbBusinessException.class, () -> service.reparseAll(LIBRARY_ID, USER));
 
         assertEquals(KbResultCode.KB_LIBRARY_NOT_FOUND.getCode(), ex.getCode());
         verify(enginePort, never()).reparseDocument(any(), any());
@@ -239,7 +257,7 @@ class KbDocumentServiceReparseAllTest {
                 .when(enginePort).reparseDocument(
                         any(EngineLibraryRef.class), eq(new EngineDocumentRef("ragflow", "doc-1")));
 
-        KbReparseAllResult result = service.reparseAll(LIBRARY_ID);
+        KbReparseAllResult result = service.reparseAll(LIBRARY_ID, USER);
 
         assertThrows(UnsupportedOperationException.class,
                 () -> result.failedDocuments().add(

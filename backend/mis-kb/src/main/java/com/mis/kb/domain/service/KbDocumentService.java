@@ -40,14 +40,17 @@ public class KbDocumentService {
     private final KbDocumentRepository documentRepository;
     private final KbLibraryRepository libraryRepository;
     private final KnowledgeEnginePort enginePort;
+    private final KbLibraryService libraryService;
 
     public KbDocumentService(
             KbDocumentRepository documentRepository,
             KbLibraryRepository libraryRepository,
-            KnowledgeEnginePort enginePort) {
+            KnowledgeEnginePort enginePort,
+            KbLibraryService libraryService) {
         this.documentRepository = documentRepository;
         this.libraryRepository = libraryRepository;
         this.enginePort = enginePort;
+        this.libraryService = libraryService;
     }
 
     /**
@@ -78,12 +81,14 @@ public class KbDocumentService {
      * @param libraryId   知识库 id
      * @param file        上传文件
      * @param chunkConfig 文件级切片配置；null/全空 = 继承库级（行为与旧版完全一致）
+     * @param userId      当前用户 id（管辖校验；BFF 透传，可为 null → 拒绝）
      * @return 上传结果（id + 解析状态）
      */
     @Transactional
     public KbDocumentUploadResponse upload(
-            Long libraryId, MultipartFile file, DocumentChunkConfig chunkConfig) {
+            Long libraryId, MultipartFile file, DocumentChunkConfig chunkConfig, Long userId) {
         KbLibrary lib = requireLibrary(libraryId);
+        requireLibraryManage(libraryId, userId);
         if (file == null || file.isEmpty()) {
             throw new BusinessException(ResultCode.VALIDATION_ERROR, "文件不能为空");
         }
@@ -171,8 +176,9 @@ public class KbDocumentService {
     }
 
     @Transactional
-    public void setEnabled(Long id, boolean enabled) {
+    public void setEnabled(Long id, boolean enabled, Long userId) {
         KbDocument entity = require(id);
+        requireLibraryManage(entity.getLibraryId(), userId);
         entity.setEnabled(enabled ? 1 : 0);
         entity.setUpdatedAt(Instant.now());
         documentRepository.save(entity);
@@ -183,8 +189,9 @@ public class KbDocumentService {
     }
 
     @Transactional
-    public void delete(Long id) {
+    public void delete(Long id, Long userId) {
         KbDocument entity = require(id);
+        requireLibraryManage(entity.getLibraryId(), userId);
         syncEngineDocument(entity, lib -> {
             try {
                 enginePort.deleteDocument(
@@ -219,11 +226,13 @@ public class KbDocumentService {
      * 失败原因，需补一条迁移加列。
      *
      * @param id 文档 id
-     * @throws KbBusinessException 文档不存在、无引擎映射、或引擎调用失败
+     * @param userId 当前用户 id（管辖校验；BFF 透传，可为 null → 拒绝）
+     * @throws KbBusinessException 文档不存在、无引擎映射、管辖外、或引擎调用失败
      */
     @Transactional
-    public void reparse(Long id) {
+    public void reparse(Long id, Long userId) {
         KbDocument entity = require(id);
+        requireLibraryManage(entity.getLibraryId(), userId);
         if (entity.getEngineDocumentRef() == null || entity.getEngineDocumentRef().isBlank()) {
             log.warn("文档无引擎映射，无法重解析 id={} libraryId={}", id, entity.getLibraryId());
             throw new KbBusinessException(KbResultCode.KB_DOC_NOT_FOUND, "该文档尚未同步到引擎，无法重新解析");
@@ -281,12 +290,14 @@ public class KbDocumentService {
      * （重复触发至多重复提交非解析中文档，RAGFlow 解析队列本身幂等，最小实现）。
      *
      * @param libraryId 知识库 id
+     * @param userId    当前用户 id（管辖校验；BFF 透传，可为 null → 拒绝）
      * @return 批量结果（成功/失败/跳过/失败明细）；空库返回 success=0 的明确结果
-     * @throws KbBusinessException 知识库不存在、或库内有文档但库无引擎映射
+     * @throws KbBusinessException 知识库不存在、管辖外、或库内有文档但库无引擎映射
      */
     @Transactional
-    public KbReparseAllResult reparseAll(Long libraryId) {
+    public KbReparseAllResult reparseAll(Long libraryId, Long userId) {
         KbLibrary lib = requireLibrary(libraryId);
+        requireLibraryManage(libraryId, userId);
         List<KbDocument> docs = documentRepository.findByLibraryIdOrderByCreatedAtDesc(libraryId);
         if (docs.isEmpty()) {
             log.info("库级重解析：库内无文档 libraryId={}", libraryId);
@@ -408,6 +419,18 @@ public class KbDocumentService {
     private KbDocument require(Long id) {
         return documentRepository.findById(id)
                 .orElseThrow(() -> new KbBusinessException(KbResultCode.KB_DOC_NOT_FOUND));
+    }
+
+    /**
+     * 文档写操作管辖校验（知识库域一期，双闸门之二：权限码由 BFF 拦截，管辖在此判定）。
+     *
+     * <p>不通过抛 {@code KB_CATEGORY_NOT_MANAGEABLE(40311)}——设计时序图 5.2 明确
+     * 「越权路径：hasLibraryManage=false → 抛 40311」。
+     */
+    private void requireLibraryManage(Long libraryId, Long userId) {
+        if (!libraryService.hasLibraryManage(userId, libraryId)) {
+            throw new KbBusinessException(KbResultCode.KB_CATEGORY_NOT_MANAGEABLE);
+        }
     }
 
     private KbLibrary requireLibrary(Long libraryId) {

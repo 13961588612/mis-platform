@@ -115,6 +115,30 @@ public class KbSubjectClient {
         return new ArrayList<>(ids);
     }
 
+    /**
+     * 取用户角色码列表（知识库域一期：全局管理员短路判定用）。
+     *
+     * <p>复用内部 {@code fetchUser} 已返回的 {@code roles[].code}——mis-iam 的
+     * {@code UserVO} 同时带角色 id 与角色码，无需额外请求。IAM 未配置/不可达时
+     * 降级返回空（安全侧收紧：角色码短路不命中，回到祖先链逐节点判定）。
+     *
+     * @param userId 用户 id
+     * @return 角色码列表（去重、保持顺序），永不为 {@code null}
+     */
+    public List<String> fetchUserRoleCodes(Long userId) {
+        IamUserVO user = fetchUser(userId);
+        if (user == null || user.roles() == null) {
+            return Collections.emptyList();
+        }
+        LinkedHashSet<String> codes = new LinkedHashSet<>();
+        for (IamRoleVO role : user.roles()) {
+            if (role != null && role.code() != null && !role.code().isBlank()) {
+                codes.add(role.code());
+            }
+        }
+        return new ArrayList<>(codes);
+    }
+
     // ---------------------------------------------------------------- 内部
 
     /**

@@ -65,8 +65,10 @@ class UserPermissionLoaderLocalCacheTest {
     private static UserPermissionLoader newLoader(
             StringRedisTemplate redisTemplate, ObjectMapper mapper, IamWebClient client) {
         UserPermissionLoader loader = new UserPermissionLoader(redisTemplate, mapper, client);
-        // 收紧 TTL：单测不等待真实 3 秒
-        loader.localTtlMillis = 50L;
+        // 收紧 TTL：单测不等待真实 3 秒；但 50ms 对「连续 3 次 load」太脆——
+        // 慢机/JIT/杀软扫描下三连调用可能跨过窗口导致偶发 2 次回源（QA 修复 2026-08-10）。
+        // 默认放宽到 5s 保证「窗口内不重查」的断言稳定；唯一需要过期的用例单独改回 500ms。
+        loader.localTtlMillis = 5_000L;
         return loader;
     }
 
@@ -127,10 +129,13 @@ class UserPermissionLoaderLocalCacheTest {
             givenRedisDown(redisTemplate, ops);
             when(iamWebClient.loadPermissions(USER_ID)).thenReturn(List.of("p1"));
             UserPermissionLoader loader = newLoader(redisTemplate, mock(ObjectMapper.class), iamWebClient);
+            // 过期用例单独改回短 TTL：500ms 对慢机/JIT/杀软扫描仍有余量（QA 修复 2026-08-10），
+            // sleep 1.1s 后快照必须过期、重新回源
+            loader.localTtlMillis = 500L;
 
             loader.load(loginUser());
-            // 等 TTL（50ms）过期后再查一次
-            Thread.sleep(120L);
+            // 等 TTL（500ms）过期后再查一次（1.1s > 500ms，留足高负载余量）
+            Thread.sleep(1_100L);
             loader.load(loginUser());
 
             verify(iamWebClient, times(2)).loadPermissions(USER_ID);

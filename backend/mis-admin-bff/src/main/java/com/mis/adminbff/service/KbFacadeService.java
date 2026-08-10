@@ -3,6 +3,7 @@ package com.mis.adminbff.service;
 import com.mis.adminbff.client.KbWebClient;
 import com.mis.adminbff.dto.kb.KbAclSummaryVO;
 import com.mis.adminbff.dto.kb.KbAclVO;
+import com.mis.adminbff.dto.kb.KbCategoryAdminVO;
 import com.mis.adminbff.dto.kb.KbCategoryVO;
 import com.mis.adminbff.dto.kb.KbDashboardVO;
 import com.mis.adminbff.dto.kb.KbDocumentUploadResponse;
@@ -97,6 +98,33 @@ public class KbFacadeService {
 
     public void deleteCategory(Long id) {
         kbWebClient.deleteCategory(id);
+    }
+
+    /** 管辖节点 id 列表（知识库域一期；纯透传）。 */
+    public Set<Long> listManageableCategoryIds() {
+        return kbWebClient.listManageableCategoryIds();
+    }
+
+    /** 移动分类节点（知识库域一期；纯透传）。 */
+    public KbCategoryVO moveCategory(Long id, Long newParentId) {
+        return kbWebClient.moveCategory(id, newParentId);
+    }
+
+    // ------------------------------------------------------------------ 分类管理员（知识库域一期）
+
+    public List<KbCategoryAdminVO> listCategoryAdmins(Long categoryId) {
+        return kbWebClient.listCategoryAdmins(categoryId);
+    }
+
+    public KbCategoryAdminVO grantCategoryAdmin(Long categoryId, String subjectType, Long subjectId) {
+        Map<String, Object> body = new HashMap<>();
+        body.put("subjectType", subjectType);
+        body.put("subjectId", subjectId);
+        return kbWebClient.grantCategoryAdmin(categoryId, body);
+    }
+
+    public void revokeCategoryAdmin(Long adminId) {
+        kbWebClient.revokeCategoryAdmin(adminId);
     }
 
     // ------------------------------------------------------------------ 知识库

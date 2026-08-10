@@ -37,6 +37,10 @@ public enum KbResultCode {
     KB_SYNONYM_IMPORT_STALE(40930, "词表已变更，请重新预检"),
     /** WD-04 预检令牌不存在或已过期。 */
     KB_SYNONYM_IMPORT_TOKEN_INVALID(40931, "导入预检令牌不存在或已过期，请重新预检"),
+    /** 分类节点管理员：同节点同主体重复授权（知识库域一期，T01）。 */
+    KB_CATEGORY_ADMIN_EXISTS(40932, "该分类节点已授权给该主体，请勿重复授权"),
+    /** 移动分类节点：目标节点是自己的后代（防环，知识库域一期，T01）。 */
+    KB_CATEGORY_MOVE_CYCLE(40933, "不能把分类移动到其自身或后代节点下"),
 
     KB_LIBRARY_NOT_FOUND(40410, "知识库不存在"),
     KB_DOC_NOT_FOUND(40411, "文档不存在"),
@@ -47,7 +51,11 @@ public enum KbResultCode {
     /** WD-02 同义词术语组不存在。 */
     KB_SYNONYM_GROUP_NOT_FOUND(40415, "术语组不存在"),
 
-    KB_NO_READ_PERMISSION(40310, "无该知识库的读取权限");
+    KB_NO_READ_PERMISSION(40310, "无该知识库的读取权限"),
+    /** 该节点不在您的管理范围内（节点管辖判定，知识库域一期，T01）。 */
+    KB_CATEGORY_NOT_MANAGEABLE(40311, "该节点不在您的管理范围内"),
+    /** 移动目标位置不在您的管理范围内（知识库域一期，T01）。 */
+    KB_CATEGORY_MOVE_OUT_OF_SCOPE(40312, "目标位置不在您的管理范围内");
 
     private final int code;
     private final String message;

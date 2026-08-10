@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.mis.adminbff.config.BffProperties;
 import com.mis.adminbff.dto.kb.KbAclVO;
+import com.mis.adminbff.dto.kb.KbCategoryAdminVO;
 import com.mis.adminbff.dto.kb.KbCategoryVO;
 import com.mis.adminbff.dto.kb.KbDashboardVO;
 import com.mis.adminbff.dto.kb.KbDocumentUploadResponse;
@@ -53,6 +54,7 @@ import java.net.URI;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.function.Function;
 
 /**
@@ -119,6 +121,12 @@ public class KbWebClient extends AbstractDownstreamClient {
     private static final ParameterizedTypeReference<Result<KbQaTicketVO>> TICKET =
             new ParameterizedTypeReference<>() {};
     private static final ParameterizedTypeReference<Result<KbHitTestResultVO>> HIT_TEST =
+            new ParameterizedTypeReference<>() {};
+    private static final ParameterizedTypeReference<Result<List<KbCategoryAdminVO>>> CATEGORY_ADMIN_LIST =
+            new ParameterizedTypeReference<>() {};
+    private static final ParameterizedTypeReference<Result<KbCategoryAdminVO>> CATEGORY_ADMIN =
+            new ParameterizedTypeReference<>() {};
+    private static final ParameterizedTypeReference<Result<Set<Long>>> CATEGORY_ID_SET =
             new ParameterizedTypeReference<>() {};
 
     // ---------------------------------------------------------------- 同义词（Wave D / T10）
@@ -254,6 +262,61 @@ public class KbWebClient extends AbstractDownstreamClient {
     public void deleteCategory(Long id) {
         block(client().delete()
                 .uri("/internal/v1/kb/categories/{id}", id)
+                .headers(loginContextHeaders())
+                .retrieve()
+                .bodyToMono(VOID));
+    }
+
+    /** 管辖节点 id 列表（本人可管理的全部节点；知识库域一期）。 */
+    public Set<Long> listManageableCategoryIds() {
+        Set<Long> data = block(client().get()
+                .uri("/internal/v1/kb/categories/manageable-ids")
+                .headers(loginContextHeaders())
+                .retrieve()
+                .bodyToMono(CATEGORY_ID_SET));
+        return data != null ? data : Set.of();
+    }
+
+    /** 移动分类节点（知识库域一期；目标父节点须在管辖内且非自己后代）。 */
+    public KbCategoryVO moveCategory(Long id, Long newParentId) {
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("newParentId", newParentId);
+        return block(client().put()
+                .uri("/internal/v1/kb/categories/{id}/move", id)
+                .headers(loginContextHeaders())
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(body)
+                .retrieve()
+                .bodyToMono(CATEGORY));
+    }
+
+    // ------------------------------------------------------------------ 分类管理员（知识库域一期）
+
+    /** 分类节点管理员列表。 */
+    public List<KbCategoryAdminVO> listCategoryAdmins(Long categoryId) {
+        List<KbCategoryAdminVO> data = block(client().get()
+                .uri("/internal/v1/kb/categories/{id}/admins", categoryId)
+                .headers(loginContextHeaders())
+                .retrieve()
+                .bodyToMono(CATEGORY_ADMIN_LIST));
+        return data != null ? data : List.of();
+    }
+
+    /** 新增分类节点管理员。 */
+    public KbCategoryAdminVO grantCategoryAdmin(Long categoryId, Map<String, Object> body) {
+        return block(client().post()
+                .uri("/internal/v1/kb/categories/{id}/admins", categoryId)
+                .headers(loginContextHeaders())
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(body)
+                .retrieve()
+                .bodyToMono(CATEGORY_ADMIN));
+    }
+
+    /** 移除分类节点管理员。 */
+    public void revokeCategoryAdmin(Long adminId) {
+        block(client().delete()
+                .uri("/internal/v1/kb/category-admins/{adminId}", adminId)
                 .headers(loginContextHeaders())
                 .retrieve()
                 .bodyToMono(VOID));

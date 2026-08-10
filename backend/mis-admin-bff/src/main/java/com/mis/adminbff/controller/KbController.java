@@ -1,6 +1,8 @@
 package com.mis.adminbff.controller;
 
 import com.mis.adminbff.dto.kb.KbAclVO;
+import com.mis.adminbff.dto.kb.KbCategoryAdminCreateRequest;
+import com.mis.adminbff.dto.kb.KbCategoryAdminVO;
 import com.mis.adminbff.dto.kb.KbCategoryVO;
 import com.mis.adminbff.dto.kb.KbDashboardVO;
 import com.mis.adminbff.dto.kb.KbDocumentUploadResponse;
@@ -70,6 +72,12 @@ public class KbController {
      */
     private static final String PERM_HIT_TEST_RUN = "kb:hittest:run";
 
+    /**
+     * 分类管理权限码（知识库域一期）。取值必须与 V24__kb_category_admin.sql 写入
+     * {@code sys_menu(id=91052).permission} 的字面量保持一致；用于「设置管理员/移动」功能门控。
+     */
+    private static final String PERM_CATEGORY_MANAGE = "kb:category:manage";
+
     private final KbFacadeService kbFacadeService;
     private final UserPermissionLoader userPermissionLoader;
 
@@ -100,6 +108,55 @@ public class KbController {
     @DeleteMapping("/categories/{id}")
     public Result<Void> deleteCategory(@PathVariable Long id) {
         kbFacadeService.deleteCategory(id);
+        return Result.ok();
+    }
+
+    // ------------------------------------------------------------------ 分类节点管理员 / 移动（知识库域一期）
+
+    /**
+     * 管辖节点 id 列表（本人可管理的全部节点；列表页即需，权限码 {@code kb:category:list}）。
+     */
+    @GetMapping("/categories/manageable-ids")
+    public Result<Set<Long>> manageableCategoryIds() {
+        return Result.ok(kbFacadeService.listManageableCategoryIds());
+    }
+
+    /**
+     * 移动分类节点（权限码 {@code kb:category:manage} + 兜底判权；目标须在管辖内且非自己后代）。
+     */
+    @PutMapping("/categories/{id}/move")
+    public Result<KbCategoryVO> moveCategory(
+            @PathVariable Long id, @Valid @RequestBody CategoryMoveBody body) {
+        requireCategoryManagePermission();
+        return Result.ok(kbFacadeService.moveCategory(id, body.newParentId()));
+    }
+
+    /**
+     * 分类节点管理员列表（权限码 {@code kb:category:manage} + 兜底判权）。
+     */
+    @GetMapping("/categories/{id}/admins")
+    public Result<List<KbCategoryAdminVO>> listCategoryAdmins(@PathVariable Long id) {
+        requireCategoryManagePermission();
+        return Result.ok(kbFacadeService.listCategoryAdmins(id));
+    }
+
+    /**
+     * 新增分类节点管理员（权限码 {@code kb:category:manage} + 兜底判权）。
+     */
+    @PostMapping("/categories/{id}/admins")
+    public Result<KbCategoryAdminVO> grantCategoryAdmin(
+            @PathVariable Long id, @Valid @RequestBody KbCategoryAdminCreateRequest body) {
+        requireCategoryManagePermission();
+        return Result.ok(kbFacadeService.grantCategoryAdmin(id, body.subjectType(), body.subjectId()));
+    }
+
+    /**
+     * 移除分类节点管理员（权限码 {@code kb:category:manage} + 兜底判权）。
+     */
+    @DeleteMapping("/category-admins/{adminId}")
+    public Result<Void> revokeCategoryAdmin(@PathVariable Long adminId) {
+        requireCategoryManagePermission();
+        kbFacadeService.revokeCategoryAdmin(adminId);
         return Result.ok();
     }
 
@@ -468,6 +525,26 @@ public class KbController {
         }
     }
 
+    /**
+     * 分类管理功能的兜底判权（知识库域一期，双闸门：主路径 {@code ApiPermissionInterceptor}
+     * + sys_api 注册表；本方法只覆盖注册表尚未生效的空窗期）。
+     *
+     * <p>与 {@link #requireHitTestPermission()} 同款：读 {@link UserPermissionLoader#load(LoginUser)}
+     * 而非 {@code LoginUser.getPermissions()}（后者在未映射路径下恒为空集，照读会 fail-close 事故）。
+     *
+     * @throws BusinessException 未登录时 {@code UNAUTHORIZED}；缺 {@code kb:category:manage} 时 {@code FORBIDDEN}
+     */
+    private void requireCategoryManagePermission() {
+        LoginUser user = RequestContext.requireLoginUser();
+        if (user.getUserId() == null) {
+            throw new BusinessException(ResultCode.UNAUTHORIZED);
+        }
+        Set<String> permissions = userPermissionLoader.load(user);
+        if (permissions == null || !permissions.contains(PERM_CATEGORY_MANAGE)) {
+            throw new BusinessException(ResultCode.FORBIDDEN);
+        }
+    }
+
     // ------------------------------------------------------------------ 引擎（S-04）
 
     @GetMapping("/engine/health")
@@ -544,6 +621,10 @@ public class KbController {
             Long messageId,
             @NotBlank String type,
             @NotBlank String content) {
+    }
+
+    /** 移动分类节点请求体（知识库域一期；newParentId 为空 = 移为根）。 */
+    public record CategoryMoveBody(Long newParentId) {
     }
 
     /**

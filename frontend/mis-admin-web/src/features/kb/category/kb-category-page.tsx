@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Pencil, Plus, Trash2 } from 'lucide-react';
+import { ArrowRight, Pencil, Plus, ShieldCheck, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
@@ -23,10 +23,20 @@ import {
   createCategory,
   deleteCategory,
   listCategories,
+  listManageableCategoryIds,
   updateCategory,
 } from '../api/kb-api';
 import type { KbCategory } from '../types';
 import { formatTime } from '../types';
+import {
+  CategoryTreeCell,
+  buildCategoryOptions,
+  flattenCategoryTree,
+  initialExpandedSet,
+  type FlatCategoryRow,
+} from './kb-category-tree';
+import { KbCategoryAdminDialog } from './kb-category-admin-dialog';
+import { KbCategoryMoveDialog } from './kb-category-move-dialog';
 
 const fieldLabel = SHEET_FORM_LABEL;
 const selectClass =
@@ -48,39 +58,21 @@ const EMPTY_FORM: CategoryForm = {
   remark: '',
 };
 
-/** 单层缩进渲染：按 parentId 组织为「根 → 子」两级列表（分类树 P0 仅两级）。 */
-interface FlatRow {
-  category: KbCategory;
-  depth: number;
-}
-
-function flattenCategories(list: KbCategory[]): FlatRow[] {
-  const roots = list.filter((c) => c.parentId == null || c.parentId === 0);
-  const childrenOf = (pid: number): KbCategory[] =>
-    list.filter((c) => c.parentId === pid).sort((a, b) => (a.sort ?? 0) - (b.sort ?? 0));
-  const out: FlatRow[] = [];
-  for (const root of roots.sort((a, b) => (a.sort ?? 0) - (b.sort ?? 0))) {
-    out.push({ category: root, depth: 0 });
-    for (const child of childrenOf(root.id)) {
-      out.push({ category: child, depth: 1 });
-    }
-  }
-  // 补齐父节点不可见的孤儿节点，避免数据丢失
-  const rendered = new Set(out.map((r) => r.category.id));
-  for (const c of list) {
-    if (!rendered.has(c.id)) out.push({ category: c, depth: 0 });
-  }
-  return out;
-}
-
-/** 知识库分类管理页：两级分类的增删改查 + 启停。 */
+/** 知识库分类管理页：任意层级分类的增删改查 + 启停 + 移动 + 管理员授权。 */
 export function KbCategoryPage() {
   const [categories, setCategories] = useState<KbCategory[]>([]);
+  const [manageableIds, setManageableIds] = useState<Set<number>>(new Set());
+  const [expanded, setExpanded] = useState<Set<number>>(new Set());
+  const [onlyManageable, setOnlyManageable] = useState(false);
   const [loading, setLoading] = useState(false);
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState<KbCategory | null>(null);
   const [form, setForm] = useState<CategoryForm>(EMPTY_FORM);
   const [saving, setSaving] = useState(false);
+
+  // 管理员弹窗 / 移动弹窗
+  const [adminCategory, setAdminCategory] = useState<KbCategory | null>(null);
+  const [moveNode, setMoveNode] = useState<KbCategory | null>(null);
 
   /* 列宽 + 表头排序（分类树一次性加载，无分页副作用） */
   const CATEGORY_COLS = useMemo<ResizableColumn[]>(
@@ -99,7 +91,11 @@ export function KbCategoryPage() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      setCategories(await listCategories());
+      const [list, ids] = await Promise.all([listCategories(), listManageableCategoryIds()]);
+      setCategories(list);
+      setManageableIds(new Set(ids));
+      // 首次加载时全部展开；后续刷新保留用户折叠状态
+      setExpanded((prev) => (prev.size === 0 ? initialExpandedSet(list) : prev));
     } catch (e) {
       toast.error(e instanceof Error ? e.message : '加载分类失败');
     } finally {
@@ -111,17 +107,44 @@ export function KbCategoryPage() {
     void load();
   }, [load]);
 
-  const rows = useMemo(() => flattenCategories(categories), [categories]);
-  const getSortValue = useCallback((row: FlatRow, key: string) => row.category[key as keyof KbCategory], []);
-  const { sorted: sortedRows, sortKey, sortDir, toggleSort } = useClientSort(rows, getSortValue);
-  const rootOptions = useMemo(
-    () => categories.filter((c) => c.parentId == null || c.parentId === 0),
-    [categories],
+  const rows = useMemo(
+    () => flattenCategoryTree(categories, expanded),
+    [categories, expanded],
   );
+  const getSortValue = useCallback((row: FlatCategoryRow, key: string) => {
+    if (key === 'name') return row.category.name;
+    return row.category[key as keyof KbCategory] as string | number | null;
+  }, []);
+  const { sorted: sortedRows, sortKey, sortDir, toggleSort } = useClientSort(rows, getSortValue);
+
+  const visibleRows = useMemo(() => {
+    if (!onlyManageable) return sortedRows;
+    return sortedRows.filter((r) => manageableIds.has(r.category.id));
+  }, [sortedRows, onlyManageable, manageableIds]);
+
+  const parentOptions = useMemo(
+    () => buildCategoryOptions(categories, editing?.id ?? null),
+    [categories, editing],
+  );
+
+  function toggleNode(id: number): void {
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
 
   function openCreate() {
     setEditing(null);
     setForm(EMPTY_FORM);
+    setOpen(true);
+  }
+
+  function openCreateChild(parent: KbCategory) {
+    setEditing(null);
+    setForm({ ...EMPTY_FORM, parentId: String(parent.id) });
     setOpen(true);
   }
 
@@ -171,7 +194,12 @@ export function KbCategoryPage() {
   }
 
   async function onDelete(c: KbCategory) {
-    if (!window.confirm(`删除分类「${c.name}」？分类下若仍有知识库将被后端拒绝。`)) return;
+    if (
+      !window.confirm(
+        `删除分类「${c.name}」？若仍有子分类或知识库，后端将拒绝删除；该节点的管理员授权将随节点一并清除。`,
+      )
+    )
+      return;
     try {
       await deleteCategory(c.id);
       toast.success('已删除');
@@ -185,7 +213,7 @@ export function KbCategoryPage() {
     <div className="flex min-h-0 flex-1 flex-col">
       <PageHeader
         title="知识库分类"
-        description="两级分类用于组织知识库；停用分类不影响已建知识库的可见性裁定。"
+        description="任意层级分类用于组织知识库；停用分类不影响已建知识库的可见性裁定。"
         breadcrumbs={buildAppBreadcrumbs({ app: 'kb', title: '分类管理' })}
         actions={
           <PermissionGate permission="kb:category:add">
@@ -196,6 +224,22 @@ export function KbCategoryPage() {
           </PermissionGate>
         }
       />
+
+      <div className="mb-2 flex items-center justify-between gap-2">
+        <label className="inline-flex cursor-pointer items-center gap-1.5 text-sm text-muted-foreground">
+          <input
+            type="checkbox"
+            className="h-3.5 w-3.5"
+            checked={onlyManageable}
+            onChange={(e) => setOnlyManageable(e.target.checked)}
+          />
+          只看我可管理的节点
+          <span className="text-xs text-muted-foreground/70">（高亮节点 = 在管辖范围内）</span>
+        </label>
+        <span className="text-xs text-muted-foreground">
+          管辖范围 = 授权节点的整棵子树；全局管理员 = 全部分类
+        </span>
+      </div>
 
       <div className="relative min-h-0 flex-1 overflow-auto rounded-lg border bg-table-surface">
         {hasCustom ? (
@@ -258,58 +302,94 @@ export function KbCategoryPage() {
                   加载中…
                 </td>
               </tr>
-            ) : rows.length === 0 ? (
+            ) : visibleRows.length === 0 ? (
               <tr>
                 <td colSpan={6} className="px-3 py-10 text-center text-muted-foreground">
-                  暂无分类
+                  {onlyManageable ? '当前管辖范围内暂无分类' : '暂无分类'}
                 </td>
               </tr>
             ) : (
-              sortedRows.map(({ category, depth }) => (
-                <tr
-                  key={category.id}
-                  className="border-b border-border/50 bg-table-row last:border-0 even:bg-table-stripe hover:bg-table-hover"
-                >
-                  <td className="px-3 py-2">
-                    <span style={{ paddingLeft: `${depth * 1.25}rem` }}>
-                      {depth > 0 ? <span className="mr-1 text-muted-foreground">└</span> : null}
-                      {category.name}
-                    </span>
-                  </td>
-                  <td className="px-3 py-2">
-                    <EnabledBadge enabled={category.enabled} />
-                  </td>
-                  <td className="px-3 py-2 tabular-nums">{category.sort ?? 0}</td>
-                  <td className="px-3 py-2 text-xs text-muted-foreground">{category.remark ?? '-'}</td>
-                  <td className="px-3 py-2 text-xs text-muted-foreground">
-                    {formatTime(category.updatedAt)}
-                  </td>
-                  <td className="px-3 py-2">
-                    <div className="flex items-center gap-1">
-                      <PermissionGate permission="kb:category:edit">
-                        <button
-                          type="button"
-                          className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[0.8125rem] text-primary hover:bg-primary/10"
-                          onClick={() => openEdit(category)}
-                        >
-                          <Pencil className="h-3 w-3" />
-                          编辑
-                        </button>
-                      </PermissionGate>
-                      <PermissionGate permission="kb:category:delete">
-                        <button
-                          type="button"
-                          className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[0.8125rem] text-destructive hover:bg-destructive/10"
-                          onClick={() => void onDelete(category)}
-                        >
-                          <Trash2 className="h-3 w-3" />
-                          删除
-                        </button>
-                      </PermissionGate>
-                    </div>
-                  </td>
-                </tr>
-              ))
+              visibleRows.map(({ category, depth }) => {
+                const hasChildren = categories.some((c) => c.parentId === category.id);
+                const manageable = manageableIds.has(category.id);
+                return (
+                  <tr
+                    key={category.id}
+                    className="border-b border-border/50 bg-table-row last:border-0 even:bg-table-stripe hover:bg-table-hover"
+                  >
+                    <td className="px-3 py-2">
+                      <CategoryTreeCell
+                        category={category}
+                        depth={depth}
+                        expanded={expanded.has(category.id)}
+                        hasChildren={hasChildren}
+                        onToggle={() => toggleNode(category.id)}
+                        manageable={manageable}
+                      />
+                    </td>
+                    <td className="px-3 py-2">
+                      <EnabledBadge enabled={category.enabled} />
+                    </td>
+                    <td className="px-3 py-2 tabular-nums">{category.sort ?? 0}</td>
+                    <td className="px-3 py-2 text-xs text-muted-foreground">{category.remark ?? '-'}</td>
+                    <td className="px-3 py-2 text-xs text-muted-foreground">
+                      {formatTime(category.updatedAt)}
+                    </td>
+                    <td className="px-3 py-2">
+                      <div className="flex items-center gap-1">
+                        <PermissionGate permission="kb:category:add">
+                          <button
+                            type="button"
+                            className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[0.8125rem] text-primary hover:bg-primary/10"
+                            onClick={() => openCreateChild(category)}
+                          >
+                            <Plus className="h-3 w-3" />
+                            子分类
+                          </button>
+                        </PermissionGate>
+                        <PermissionGate permission="kb:category:edit">
+                          <button
+                            type="button"
+                            className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[0.8125rem] text-primary hover:bg-primary/10"
+                            onClick={() => openEdit(category)}
+                          >
+                            <Pencil className="h-3 w-3" />
+                            编辑
+                          </button>
+                        </PermissionGate>
+                        <PermissionGate permission="kb:category:manage">
+                          <button
+                            type="button"
+                            className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[0.8125rem] text-primary hover:bg-primary/10"
+                            onClick={() => setMoveNode(category)}
+                          >
+                            <ArrowRight className="h-3 w-3" />
+                            移动
+                          </button>
+                          <button
+                            type="button"
+                            className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[0.8125rem] text-primary hover:bg-primary/10"
+                            onClick={() => setAdminCategory(category)}
+                          >
+                            <ShieldCheck className="h-3 w-3" />
+                            管理员
+                          </button>
+                        </PermissionGate>
+                        <PermissionGate permission="kb:category:delete">
+                          <button
+                            type="button"
+                            className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[0.8125rem] text-destructive hover:bg-destructive/10"
+                            onClick={() => void onDelete(category)}
+                          >
+                            <Trash2 className="h-3 w-3" />
+                            删除
+                          </button>
+                        </PermissionGate>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })
             )}
           </tbody>
         </table>
@@ -337,12 +417,17 @@ export function KbCategoryPage() {
                   onChange={(e) => setForm((f) => ({ ...f, parentId: e.target.value }))}
                 >
                   <option value="">（作为根分类）</option>
-                  {rootOptions.map((c) => (
-                    <option key={c.id} value={String(c.id)}>
-                      {c.name}
+                  {parentOptions.map((o) => (
+                    <option key={o.id} value={String(o.id)} disabled={!manageableIds.has(o.id)}>
+                      {'　'.repeat(o.depth)}
+                      {o.name}
+                      {!manageableIds.has(o.id) ? '（管辖外）' : ''}
                     </option>
                   ))}
                 </select>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  上级分类须在管辖范围内（根分类需全局管理员）。
+                </p>
               </div>
             ) : null}
             <div className={SHEET_FORM_FIELD}>
@@ -381,6 +466,27 @@ export function KbCategoryPage() {
           </SheetFooter>
         </SheetContent>
       </Sheet>
+
+      <KbCategoryAdminDialog
+        open={adminCategory != null}
+        onOpenChange={(o) => {
+          if (!o) setAdminCategory(null);
+        }}
+        categoryId={adminCategory?.id ?? null}
+        categoryName={adminCategory?.name ?? ''}
+        onChanged={() => void load()}
+      />
+
+      <KbCategoryMoveDialog
+        open={moveNode != null}
+        onOpenChange={(o) => {
+          if (!o) setMoveNode(null);
+        }}
+        node={moveNode}
+        categories={categories}
+        manageableIds={manageableIds}
+        onMoved={() => void load()}
+      />
     </div>
   );
 }
