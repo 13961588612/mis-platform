@@ -1,0 +1,28 @@
+sequenceDiagram
+    autonumber
+    actor U as 节点管理员
+    participant FE as kb-document-table/upload-dialog
+    participant BFF as KbController(KbFacadeService)
+    participant WC as KbWebClient
+    participant KB as mis-kb DocumentController
+    participant DS as KbDocumentService
+    participant LS as KbLibraryService
+    participant RES as NodeAdminResolver
+    participant ACL as KbAclRepository
+
+    U->>FE: 在管辖子树某库上传/编辑/删除/重解析文档
+    FE->>BFF: POST /api/v1/kb/libraries/{libraryId}/documents 等
+    BFF->>WC: uploadDocument(libraryId, file)
+    WC->>KB: POST /internal/v1/kb/libraries/{libraryId}/documents
+    KB->>DS: upload(libraryId, ...)
+    DS->>LS: hasLibraryManage(userId, libraryId)
+    LS->>RES: hasNodeManage(userId, categoryId)   // 节点管辖命中
+    RES-->>LS: true | false
+    LS->>ACL: exists(libraryId, subjects, action=manage)  // kb_acl 补充
+    ACL-->>LS: false
+    LS-->>DS: true（合成）
+    DS->>DS: 引擎上传 + 落库
+    DS-->>KB: KbDocumentUploadResponse
+    KB-->>FE: 成功
+
+    Note over RES,ACL: 越权路径：hasLibraryManage=false → 抛 KB_CATEGORY_NOT_MANAGEABLE(40311)

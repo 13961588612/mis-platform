@@ -1,0 +1,45 @@
+sequenceDiagram
+    autonumber
+    actor U as 节点管理员/全局管理员
+    participant FE as kb-category-admin-dialog.tsx
+    participant BFF as KbController(KbFacadeService)
+    participant WC as KbWebClient
+    participant KB as mis-kb CategoryAdminController
+    participant SVC as KbCategoryAdminService
+    participant RES as NodeAdminResolver
+    participant REPO as KbCategoryAdminRepository
+
+    U->>FE: 打开「设置管理员」弹窗(节点id)
+    FE->>BFF: GET /api/v1/kb/categories/{id}/admins
+    BFF->>WC: listCategoryAdmins(id)
+    WC->>KB: GET /internal/v1/kb/categories/{id}/admins
+    KB->>SVC: list(categoryId)
+    SVC->>RES: assertNodeManage(userId, categoryId)  // 设置者须先管该节点
+    RES-->>SVC: ok
+    SVC->>REPO: findByCategoryId(categoryId)
+    REPO-->>SVC: 授权行列表
+    SVC-->>KB: List<KbCategoryAdminVO>
+    KB-->>FE: 当前管理员列表
+
+    U->>FE: 选择 user/role/dept + 保存
+    FE->>BFF: POST /api/v1/kb/categories/{id}/admins
+    BFF->>WC: grantCategoryAdmin(id, body)
+    WC->>KB: POST /internal/v1/kb/categories/{id}/admins
+    KB->>SVC: grant(categoryId, req)
+    SVC->>SVC: SubjectType.isValid + 节点存在
+    SVC->>REPO: existsByCategoryIdAndSubjectTypeAndSubjectId  // UK 去重
+    SVC-->>SVC: 冲突 → KB_CATEGORY_ADMIN_EXISTS
+    SVC->>REPO: save(KbCategoryAdmin(createdBy=userId))
+    REPO-->>SVC: 已落库
+    SVC-->>KB: KbCategoryAdminVO
+    KB-->>FE: 成功 → 刷新列表
+
+    U->>FE: 移除某管理员（二次确认）
+    FE->>BFF: DELETE /api/v1/kb/category-admins/{adminId}
+    BFF->>WC: revokeCategoryAdmin(adminId)
+    WC->>KB: DELETE /internal/v1/kb/category-admins/{adminId}
+    KB->>SVC: revoke(adminId)
+    SVC->>REPO: findById(adminId) → delete
+    REPO-->>SVC: deleted
+    SVC-->>KB: ok（O-1：其名下已建子目录保留，仅失权）
+    KB-->>FE: 成功 → 刷新列表

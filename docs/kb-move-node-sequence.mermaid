@@ -1,0 +1,30 @@
+sequenceDiagram
+    autonumber
+    actor U as 节点管理员
+    participant FE as kb-category-move-dialog.tsx
+    participant BFF as KbController(KbFacadeService)
+    participant WC as KbWebClient
+    participant KB as mis-kb CategoryController
+    participant CS as KbCategoryService
+    participant RES as NodeAdminResolver
+    participant CAT as KbCategoryRepository
+
+    U->>FE: 移动「技术/后端」到某目标父节点
+    FE->>FE: 目标下拉仅列「管辖内 ∧ 非自己后代」（前端先行约束）
+    U->>FE: 提交移动
+    FE->>BFF: PUT /api/v1/kb/categories/{id}/move {newParentId}
+    BFF->>WC: moveCategory(id, newParentId)
+    WC->>KB: PUT /internal/v1/kb/categories/{id}/move
+    KB->>CS: move(nodeId, newParentId)
+    CS->>RES: canMove(userId, nodeId, newParentId)
+    RES->>CAT: 祖先链(自身+上级) 查询
+    CAT-->>RES: chain
+    RES->>CAT: subtree(nodeId) 查询（防环）
+    CAT-->>RES: descendants
+    RES-->>CS: true（管辖 + 非后代）
+    CS->>CAT: 更新 parentId
+    CAT-->>CS: saved
+    CS-->>KB: KbCategoryVO
+    KB-->>FE: 成功 → 刷新树
+
+    Note over RES,CS: 防环命中 → KB_CATEGORY_MOVE_CYCLE(40933)<br/>目标越权 → KB_CATEGORY_MOVE_OUT_OF_SCOPE(40312)

@@ -1,0 +1,86 @@
+classDiagram
+    class KbCategoryAdmin {
+        +Long id
+        +Long categoryId
+        +String subjectType
+        +Long subjectId
+        +Long createdBy
+        +Instant createdAt
+        +Instant updatedAt
+    }
+    class KbCategoryAdminRepository {
+        +findByCategoryId(Long) List~KbCategoryAdmin~
+        +existsByCategoryIdAndSubjectTypeAndSubjectId(Long,String,Long) boolean
+        +findBySubjectTypeAndSubjectId(String,Long) List~KbCategoryAdmin~
+        +deleteByCategoryId(Long) void
+    }
+    class NodeAdminResolver {
+        -KbCategoryAdminRepository adminRepository
+        -KbCategoryRepository categoryRepository
+        -KbSubjectClient subjectClient
+        -Set~String~ globalAdminRoleCodes
+        +hasNodeManage(Long userId, Long nodeId) boolean
+        +resolveManageableCategoryIds(Long userId) Set~Long~
+        +canMove(Long userId, Long nodeId, Long newParentId) boolean
+        +hasLibraryManage(Long userId, Long libraryId) boolean
+        +assertNodeManage(Long userId, Long nodeId) void
+        -ancestorChain(Long nodeId) List~Long~
+        -subjectsOf(Long userId) SubjectSet
+    }
+    class KbCategoryAdminService {
+        +list(Long categoryId) List~KbCategoryAdminVO~
+        +grant(Long categoryId, KbCategoryAdminCreateRequest) KbCategoryAdminVO
+        +revoke(Long adminId) void
+    }
+    class KbCategoryService {
+        +listAll() List~KbCategoryVO~
+        +create(KbCategoryCreateRequest) KbCategoryVO
+        +update(Long, KbCategoryUpdateRequest) KbCategoryVO
+        +delete(Long) void
+        +move(Long nodeId, Long newParentId) KbCategoryVO
+    }
+    class KbLibraryService {
+        +hasLibraryManage(Long userId, Long libraryId) boolean
+    }
+    class KbDocumentService {
+        +upload(...) KbDocumentUploadResponse
+        +setEnabled(Long, boolean) void
+        +delete(Long) void
+        +reparseAll(Long) KbReparseAllResult
+    }
+    class KbVisibilityService {
+        +resolveVisibleLibraryIds(Long, Long) List~Long~
+        +hasPermission(Long, Long, String) boolean
+    }
+    class KbSubjectClient {
+        +fetchUserRoleIds(Long) List~Long~
+        +fetchUserDeptIds(Long) List~Long~
+        +fetchUserRoleCodes(Long) List~String~  <<新增>>
+    }
+    class KbAcl {
+        +Long libraryId
+        +String subjectType
+        +Long subjectId
+        +String action
+    }
+    class KbCategory {
+        +Long id
+        +Long parentId
+        +String name
+        +Integer enabled
+        +Integer sort
+    }
+
+    KbCategoryAdmin --> KbCategory : categoryId FK(CASCADE)
+    KbCategoryAdminRepository --> KbCategoryAdmin
+    NodeAdminResolver --> KbCategoryAdminRepository
+    NodeAdminResolver --> KbCategoryRepository
+    NodeAdminResolver --> KbSubjectClient
+    NodeAdminResolver ..> KbCategoryAdmin : 祖先链查询
+    KbCategoryAdminService --> KbCategoryAdminRepository
+    KbCategoryAdminService --> NodeAdminResolver : 校验 grant 权限
+    KbCategoryService --> NodeAdminResolver : 管辖校验/move
+    KbCategoryService --> KbCategoryAdminRepository : delete 级联说明
+    KbLibraryService --> NodeAdminResolver : hasLibraryManage 合成
+    KbDocumentService --> KbLibraryService : 写操作管辖校验(hasLibraryManage)
+    KbVisibilityService --> KbAcl : 读语义不变(不依赖 NodeAdminResolver)
