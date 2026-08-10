@@ -78,14 +78,57 @@ export function flattenSystemNavLeaves(): SystemNavLeaf[] {
   return out;
 }
 
+/** 任意侧栏树展平为叶子（与 {@link flattenSystemNavLeaves} 同形，可吃 AGENT_NAV / KB_NAV）。 */
+export function flattenNavLeaves(nodes: readonly SystemNavNode[]): SystemNavLeaf[] {
+  const out: SystemNavLeaf[] = [];
+  for (const n of nodes) {
+    if (n.kind === 'leaf') out.push(n);
+    else out.push(...n.children);
+  }
+  return out;
+}
+
+/** 精确匹配，或 pathname 落在 navPath 的子路径下。 */
+export function pathMatches(pathname: string, navPath: string): boolean {
+  return pathname === navPath || pathname.startsWith(`${navPath}/`);
+}
+
+/**
+ * 侧栏叶子是否应高亮：前缀匹配 + **最长命中优先**。
+ *
+ * <p>否则 `/agent/skills` 与 `/agent/skills/permissions` 会在权限页同时高亮——
+ * 短路径是长路径的前缀，单纯 `startsWith` 无法区分「列表页」与「同前缀的兄弟页」。
+ */
+export function isNavPathActive(
+  pathname: string,
+  candidatePath: string,
+  competingPaths: readonly string[],
+): boolean {
+  if (!pathMatches(pathname, candidatePath)) return false;
+  for (const other of competingPaths) {
+    if (other === candidatePath || other.length <= candidatePath.length) continue;
+    if (pathMatches(pathname, other)) return false;
+  }
+  return true;
+}
+
+/** 在一组叶子中选出与 pathname 匹配且路径最长的一项。 */
+export function pickBestNavLeaf<T extends { path: string }>(
+  pathname: string,
+  leaves: readonly T[],
+): T | undefined {
+  let best: T | undefined;
+  for (const leaf of leaves) {
+    if (!pathMatches(pathname, leaf.path)) continue;
+    if (!best || leaf.path.length > best.path.length) best = leaf;
+  }
+  return best;
+}
+
 export function findSystemNavItem(pathname: string): SystemNavLeaf | undefined {
-  return flattenSystemNavLeaves().find(
-    (i) => pathname === i.path || pathname.startsWith(`${i.path}/`),
-  );
+  return pickBestNavLeaf(pathname, flattenSystemNavLeaves());
 }
 
 export function branchContainsPath(branch: SystemNavBranch, pathname: string): boolean {
-  return branch.children.some(
-    (c) => pathname === c.path || pathname.startsWith(`${c.path}/`),
-  );
+  return branch.children.some((c) => pathMatches(pathname, c.path));
 }

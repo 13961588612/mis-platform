@@ -5,6 +5,8 @@ import { cn } from '@/lib/utils';
 import { resolveNavIcon } from '@/lib/nav/icons';
 import {
   branchContainsPath,
+  flattenNavLeaves,
+  isNavPathActive,
   type SystemNavNode,
 } from '@/lib/nav/system-nav';
 
@@ -62,6 +64,9 @@ export function SideNav({
       ) as Extract<SystemNavNode, { kind: 'branch' }> | undefined)
     : null;
 
+  // 同树内所有叶子路径参与「最长命中」竞争，避免短前缀与兄弟长路径双高亮
+  const competingPaths = flattenNavLeaves(nodes).map((l) => l.path);
+
   return (
     <nav className="sidebar-scroll h-0 min-h-0 min-w-0 flex-1 flex flex-col gap-0.5 overflow-x-hidden overflow-y-auto p-2">
       {sectionLabel ? (
@@ -72,7 +77,7 @@ export function SideNav({
       {nodes.map((node) => {
         if (node.kind === 'leaf') {
           const Icon = resolveNavIcon(node.icon);
-          const active = pathname === node.path || pathname.startsWith(`${node.path}/`);
+          const active = isNavPathActive(pathname, node.path, competingPaths);
           return (
             <NavLink
               key={node.path}
@@ -146,8 +151,7 @@ export function SideNav({
               <div className="ml-3.5 flex flex-col gap-0.5 border-l border-sidebar-border py-0.5 pl-1.5">
                 {node.children.map((child) => {
                   const ChildIcon = resolveNavIcon(child.icon);
-                  const active =
-                    pathname === child.path || pathname.startsWith(`${child.path}/`);
+                  const active = isNavPathActive(pathname, child.path, competingPaths);
                   return (
                     <NavLink
                       key={child.path}
@@ -189,8 +193,7 @@ export function SideNav({
           <div className="flex flex-col gap-0.5">
             {flyoutNode.children.map((child) => {
               const ChildIcon = resolveNavIcon(child.icon);
-              const active =
-                pathname === child.path || pathname.startsWith(`${child.path}/`);
+              const active = isNavPathActive(pathname, child.path, competingPaths);
               return (
                 <NavLink
                   key={child.path}

@@ -88,19 +88,17 @@ export function findNavIcon(entries: NavEntry[], pathname: string): string | nul
 }
 
 function findNavLeaf(entries: NavEntry[], pathname: string): NavLeaf | undefined {
+  const leaves: NavLeaf[] = [];
   for (const entry of entries) {
-    if (entry.kind === 'leaf' && (pathname === entry.path || pathname.startsWith(`${entry.path}/`))) {
-      return entry;
-    }
-    if (entry.kind === 'group') {
-      for (const child of entry.children) {
-        if (pathname === child.path || pathname.startsWith(`${child.path}/`)) {
-          return child;
-        }
-      }
-    }
+    if (entry.kind === 'leaf') leaves.push(entry);
+    else leaves.push(...entry.children);
   }
-  return undefined;
+  let best: NavLeaf | undefined;
+  for (const leaf of leaves) {
+    if (pathname !== leaf.path && !pathname.startsWith(`${leaf.path}/`)) continue;
+    if (!best || leaf.path.length > best.path.length) best = leaf;
+  }
+  return best;
 }
 
 export function groupIsActive(group: NavGroup, pathname: string): boolean {

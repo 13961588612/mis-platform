@@ -37,6 +37,8 @@ import {
   SYSTEM_NAV,
   branchContainsPath,
   findSystemNavItem,
+  flattenNavLeaves,
+  pickBestNavLeaf,
   type SystemNavNode,
 } from '@/lib/nav/system-nav';
 import { KB_NAV } from '@/lib/nav/kb-nav';
@@ -99,18 +101,12 @@ export function AppLayout() {
   }, [menus, activeAppCode]);
 
   const navItem = useMemo(() => {
-    for (const n of navNodes) {
-      if (n.kind === 'leaf' && (n.path === location.pathname || location.pathname.startsWith(`${n.path}/`))) {
-        return n;
-      }
-      if (n.kind === 'branch') {
-        const hit = n.children.find(
-          (c) => c.path === location.pathname || location.pathname.startsWith(`${c.path}/`),
-        );
-        if (hit) return hit;
-      }
-    }
-    return findSystemNavItem(location.pathname) ?? null;
+    // 最长命中优先：否则 /agent/skills/permissions 会先命中短路径「技能池」
+    return (
+      pickBestNavLeaf(location.pathname, flattenNavLeaves(navNodes)) ??
+      findSystemNavItem(location.pathname) ??
+      null
+    );
   }, [navNodes, location.pathname]);
   const iframeCode = location.pathname.startsWith('/iframe/') ? location.pathname.slice('/iframe/'.length) : null;
   const iframeApp = iframeCode ? apps.find((a) => a.code === iframeCode) : null;
