@@ -36,3 +36,10 @@
 - **T04 尚未交付的端点（设计内、非故障，联调返回 501/404）**：`/api/v1/admin/worker-catalog`、`/api/v1/sessions`、`/api/v1/admin/channels/wecom/bots`、`/api/v1/admin/approvals`（⚠️ BFF 路径写错，应为 `/push/approvals`）、`/api/v1/agents/{id}/config-files`。这些回来前 Agent 控制台部分页为占位/空态属正常。
 - **P2 已知遗留（等 T04 后端定型后统一收）**：① `MonitorOverview` 整块虚构（真实 wire 是 `{proxy,llm,admin}` 三路聚合），`agents_running/agents_total` 不在 wire → 概览页「运行中 / 已登记 Agent」显示 `undefined / undefined`（非崩溃，模板字面量）；② MCP 四字段 `state/tool_count/enabled/updated_at` 恒 0；③ `enabled_skill_count` 恒 0。
 - ⚠️ 主理人角色铁律：走 SOP 时严禁自己下场写码，须 TeamCreate + 派 `software-engineer`/`software-qa-engineer` 等子 Agent（name 与 subagent_type 同传 Agent ID）；BugFix/快速模式可跳过 PRD/架构。
+
+## BFF 启动黄金知识（2026-08-10 agent-ops 503 修复实锤，高频踩坑）
+- **网关路由**：mis-gateway 对 `/api/v1/**` 走 **Nacos 服务发现 `lb://mis-admin-bff`**（namespace=integration, group=MIS_GROUP）——BFF 必须注册进该 Nacos 且心跳正常，否则 503（网关日志 `No servers available for service: mis-admin-bff`）。
+- **启动 BFF 必带环境变量**：`MIS_REMOTE=true` + `NACOS_SERVER=10.254.16.6:8848` + `NACOS_NAMESPACE=integration` + `NACOS_CONFIG_GROUP=MIS_GROUP` + DB/REDIS 指向 10.254.16.6 + JWT key 绝对路径；**必须显式置 `SERVER_PORT=8081`/`SERVER__PORT=8081`**（宿主机注入 `SERVER__PORT=20231` 会经宽松绑定覆盖 server.port → 启动失败）。
+- **一键脚本**：`backend/start-bff-standalone.bat`（纯 ASCII，构建+`start /b` 脱离启动；`nopkg` 参数跳构建直接用现有 jar）。BFF 重启/驻留跑它即可。
+- **本 Agent 环境硬限制**：① 后台任务 ~13-15s 被系统 killed → 长生命周期服务须 nohup/start /b 脱离或用户独立终端执行；② Bash/PowerShell 禁调 cmd.exe；③ **.bat 必须纯 ASCII**（UTF-8 中文在 GBK cmd 乱码）；④ 登录接口需 `appCode`（前端固定 'system'）；⑤ 验证码 SVG 可文本解码（可编程登录）。
+- **登录链路**（验收用）：GET `/api/v1/auth/captcha`（SVG base64 解码取 4 位码）→ POST `/api/v1/auth/login`（appCode=system + admin/Mis@123456）→ accessToken → 业务接口带 `Authorization: Bearer`。
