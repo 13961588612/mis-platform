@@ -4,6 +4,7 @@ import com.mis.kb.domain.entity.KbEngineRenameLog;
 import com.mis.kb.domain.entity.KbLibrary;
 import com.mis.kb.domain.model.EngineLibraryBrief;
 import com.mis.kb.domain.model.EngineLibraryRef;
+import com.mis.kb.domain.model.EngineSyncStatus;
 import com.mis.kb.domain.model.KbEngineRenameAction;
 import com.mis.kb.domain.model.KbEngineRenamePlan;
 import com.mis.kb.domain.model.KbEngineRenameReq;
@@ -46,8 +47,10 @@ import java.util.UUID;
  * <p><b>幂等：</b>{@code expectedName.equals(actualName)} 的行直接 {@code SKIP}，不改引擎。
  *
  * <p><b>审计与回滚：</b>每条 rename（含 SKIP/FAILED）都落 {@code kb_engine_rename_log} 一行，
- * 按 {@code batchId} 成组；回滚时反向执行该批次 {@code status=1} 的行（new_name → old_name）。
- * 每条日志用独立的 {@code REQUIRES_NEW} 子事务提交（见 {@link #commitLog}），中途中断
+ * 按 {@code batchId} 成组；回滚时反向执行该批次 {@code status=1} 的行（new_name → old_name），
+ * 回滚日志 {@code action=ROLLBACK}。执行成功同时把库 {@code engine_sync_status} 回写为 1
+ * （一致），回滚成功回写为 3（漂移），见 {@link #writeSyncStatus}。
+ * 每条日志/状态回写用独立的 {@code REQUIRES_NEW} 子事务提交（见 {@link #commitLog}），中途中断
  * 不影响其他行与日志一致性。
  */
 @Service
@@ -137,6 +140,9 @@ public class KbEngineLegacyRenameService {
                     action = KbEngineRenameAction.RENAME.code();
                     status = 1;
                     renamed++;
+                    // 设计 T4：成功同时回写 lib.engine_sync_status=1（CONSISTENT），
+                    // 不能等下一轮对账（最长 30 分钟）才把刚改成功的库从「漂移」纠正过来。
+                    self.writeSyncStatus(plan.libraryId(), EngineSyncStatus.CONSISTENT, now);
                 } catch (Exception e) {
                     action = KbEngineRenameAction.FAILED.code();
                     status = 2;
@@ -187,9 +193,12 @@ public class KbEngineLegacyRenameService {
             try {
                 enginePort.renameLibrary(
                         new EngineLibraryRef(row.getEngineType(), row.getNativeId()), row.getOldName());
-                action = KbEngineRenameAction.RENAME.code();
+                action = KbEngineRenameAction.ROLLBACK.code();
                 status = 1;
                 renamed++;
+                // 回滚成功后名称回到旧名（非规范名），同步状态应还原为「漂移」，
+                // 避免执行时置 1 的状态在回滚后残留成假一致；下一轮对账会再判漂移。
+                self.writeSyncStatus(row.getLibraryId(), EngineSyncStatus.DRIFT_OR_FAILED, now);
             } catch (Exception e) {
                 action = KbEngineRenameAction.FAILED.code();
                 status = 2;
@@ -307,6 +316,26 @@ public class KbEngineLegacyRenameService {
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void commitLog(KbEngineRenameLog log) {
         renameLogRepository.save(log);
+    }
+
+    /**
+     * 回写库的 {@code engine_sync_status}（改名成功=一致 / 回滚成功=漂移）。
+     *
+     * <p>{@link #rename} / {@link #rollback} 外层事务都是 {@code readOnly=true}，直接
+     * {@code save} 不会落库（只读连接 + FlushMode.MANUAL）；这里用与 {@link #commitLog}
+     * 同粒度的 {@code REQUIRES_NEW} 独立读写子事务，保证「引擎侧已改 + 日志已落 + 本地
+     * 状态回写」一致提交。库不存在时仅告警，不阻断批次其余行。
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void writeSyncStatus(long libraryId, int status, Instant checkedAt) {
+        KbLibrary lib = libraryRepository.findById(libraryId).orElse(null);
+        if (lib == null) {
+            log.warn("存量改名回写同步状态失败：库不存在 libraryId={}", libraryId);
+            return;
+        }
+        lib.setEngineSyncStatus(status);
+        lib.setEngineCheckedAt(checkedAt);
+        libraryRepository.save(lib);
     }
 
     private static int normalizeLimit(Integer limit) {

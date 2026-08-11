@@ -13,7 +13,9 @@ public enum KbEngineRenameAction {
     /** 名称已规范，无需改（幂等跳过）。 */
     SKIP("SKIP"),
     /** 引擎侧改名调用失败。 */
-    FAILED("FAILED");
+    FAILED("FAILED"),
+    /** 回滚：把某批次的成功改名还原（new_name → old_name）。 */
+    ROLLBACK("ROLLBACK");
 
     private final String code;
 

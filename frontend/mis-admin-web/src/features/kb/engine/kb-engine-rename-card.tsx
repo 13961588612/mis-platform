@@ -35,6 +35,7 @@ const ACTION_LABEL: Record<string, string> = {
   RENAME: '改名',
   SKIP: '跳过',
   FAILED: '失败',
+  ROLLBACK: '回滚',
 };
 
 /**
