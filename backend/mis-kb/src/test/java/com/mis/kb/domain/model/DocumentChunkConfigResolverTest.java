@@ -43,10 +43,11 @@ class DocumentChunkConfigResolverTest {
         @Test
         @DisplayName("null 文件级 → 同样继承库级")
         void nullFileFallsBackToLibrary() {
-            EffectiveChunkConfig r = resolver.resolve(null, libSettings("naive", 128, null));
+            EffectiveChunkConfig r = resolver.resolve(
+                    null, libSettings("naive", RagSettings.DEFAULT_CHUNK_TOKEN_NUM, null));
 
             assertEquals("naive", r.chunkMethod());
-            assertEquals(128, r.chunkTokenNum());
+            assertEquals(RagSettings.DEFAULT_CHUNK_TOKEN_NUM, r.chunkTokenNum());
             assertEquals(EffectiveChunkConfig.SOURCE_LIBRARY, r.source());
         }
 
@@ -71,10 +72,10 @@ class DocumentChunkConfigResolverTest {
         void methodOverride() {
             EffectiveChunkConfig r = resolver.resolve(
                     new DocumentChunkConfig("paper", null, null),
-                    libSettings("naive", 128, null));
+                    libSettings("naive", RagSettings.DEFAULT_CHUNK_TOKEN_NUM, null));
 
             assertEquals("paper", r.chunkMethod());
-            assertEquals(128, r.chunkTokenNum(), "未指定字段应继承库级");
+            assertEquals(RagSettings.DEFAULT_CHUNK_TOKEN_NUM, r.chunkTokenNum(), "未指定字段应继承库级");
             assertEquals(EffectiveChunkConfig.SOURCE_FILE_OVERRIDE, r.source());
         }
 

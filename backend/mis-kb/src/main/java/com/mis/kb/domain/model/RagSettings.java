@@ -62,8 +62,14 @@ public record RagSettings(
     public static final String DEFAULT_RETRIEVAL_METHOD = "hybrid";
     /** 默认分块方法。 */
     public static final String DEFAULT_CHUNK_METHOD = "naive";
-    /** 默认分块 token 数。 */
-    public static final int DEFAULT_CHUNK_TOKEN_NUM = 128;
+    /**
+     * 默认分块 token 数。
+     *
+     * <p>2026-08-11 盘点后由 128 调整为 4096：默认 128（约 60~85 中文字/片）对中文业务知识库
+     * 过小，切片过碎导致上下文割裂；集成库「百货收银」已手动调至系统上限 4096，故默认值对齐现状。
+     * 仅影响未显式设置 chunkTokenNum 的库（withDefaults() 仅在 null 时兜底），存量显式值不受影响。
+     */
+    public static final int DEFAULT_CHUNK_TOKEN_NUM = 4096;
     /** 默认向量相似度权重（WA-01；hybrid 下语义 30% / 关键字 70%）。 */
     public static final double DEFAULT_VECTOR_SIMILARITY_WEIGHT = 0.3D;
 
