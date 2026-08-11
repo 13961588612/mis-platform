@@ -9,6 +9,7 @@ import com.mis.kb.domain.entity.KbDocument;
 import com.mis.kb.domain.entity.KbLibrary;
 import com.mis.kb.domain.model.AclAction;
 import com.mis.kb.domain.model.ChunkHit;
+import com.mis.kb.domain.model.KbDocumentFilter;
 import com.mis.kb.domain.model.KbResultCode;
 import com.mis.kb.domain.model.RagSettings;
 import com.mis.kb.domain.model.RetrieveQueryResolver;
@@ -126,6 +127,11 @@ public class KbHitTestService {
                 ? SynonymMode.OFF_THIS_RUN
                 : SynonymMode.FRESH;
 
+        // KE-08/KE-09：解析文档/时间过滤 → 具体 MIS 文档 id 集（空 = 不过滤，R5）
+        KbDocumentFilter filter = new KbDocumentFilter(
+                request.documentIds(), request.uploadFrom(), request.uploadTo());
+        List<Long> filteredDocumentIds = resolveFilteredDocumentIds(libraryId, filter);
+
         RetrieveQueryResolver.Resolution resolution = retrieveQueryResolver.resolveAll(
                 new RetrieveQueryResolver.RetrieveContext(
                         request.question(),
@@ -138,7 +144,9 @@ public class KbHitTestService {
                                 request.vectorSimilarityWeight(),
                                 request.rerank()),
                         enginePort.capabilities(),
-                        synonymMode));
+                        synonymMode,
+                        filteredDocumentIds,
+                        filter.hasAnyCondition()));
 
         long startedAt = System.nanoTime();
         List<ChunkHit> hits = enginePort.retrieve(resolution.query());
@@ -179,5 +187,27 @@ public class KbHitTestService {
         List<KbDocument> docs = documentRepository.findByLibraryIdIn(List.of(libraryId));
         return docs.stream().collect(Collectors.toMap(
                 KbDocument::getId, KbDocument::getTitle, (a, b) -> a));
+    }
+
+    // ---------------------------------------------------------------- 过滤解析（KE-08/KE-09）
+
+    /**
+     * 把文档/时间过滤解析为具体的 MIS 文档 id 集（KE-08/KE-09，口径同 {@code KbRetrieveService}）。
+     *
+     * <p>按库 + {@code enabled=1} + 显式 id 集 + {@code created_at} 时间范围取交集；
+     * 无条件过滤返回空集（适配器不下发 {@code document_ids} 键 = 全量，R5）。
+     *
+     * @param libraryId 目标库 id（单库）
+     * @param filter    文档过滤条件（文档 id 集 + 上传时间范围）
+     * @return 命中的启用文档 id 列表；恒非 {@code null}
+     */
+    private List<Long> resolveFilteredDocumentIds(Long libraryId, KbDocumentFilter filter) {
+        if (filter == null || !filter.hasAnyCondition()) {
+            return List.of();
+        }
+        List<Long> explicitIds = filter.safeDocumentIds().isEmpty()
+                ? null : filter.safeDocumentIds();
+        return documentRepository.findEnabledIdsByFilter(
+                List.of(libraryId), explicitIds, filter.uploadFrom(), filter.uploadTo());
     }
 }

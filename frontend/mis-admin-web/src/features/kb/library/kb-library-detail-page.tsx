@@ -56,6 +56,17 @@ interface RagForm {
    * 由模型池下拉选择（不自建配置），池不可用时回落仅「继承全局」。
    */
   rerankModelId: string;
+  /**
+   * OCR 开关（企业级增强一期 KE-06，末位追加）。
+   *
+   * <p>当前引擎不支持（`parserOcrSupported=false`）时置灰 + 提示，但值仍可回显、
+   * 保存照常成功（后端只落库不下发）。
+   */
+  ocrEnabled: boolean;
+  /** OCR 语言码值 zh/en/zh_en（KE-06）；非法值由后端回落 zh。 */
+  ocrLanguage: string;
+  /** 分块重叠 token 数（KE-07）；空串 = 引擎默认/0。 */
+  chunkOverlapTokenNum: string;
 }
 
 const EMPTY_RAG_FORM: RagForm = {
@@ -70,6 +81,9 @@ const EMPTY_RAG_FORM: RagForm = {
   emptyResultStrategy: 'SUGGEST',
   vectorSimilarityWeight: DEFAULT_WEIGHT,
   rerankModelId: '',
+  ocrEnabled: false,
+  ocrLanguage: 'zh',
+  chunkOverlapTokenNum: '',
 };
 
 /** 切片相关字段：这几个改了才需要弹重解析引导（WA-10）。 */
@@ -90,6 +104,9 @@ function toForm(s: KbRagSettings | null | undefined): RagForm {
     emptyResultStrategy: s.emptyResultStrategy ?? 'SUGGEST',
     vectorSimilarityWeight: s.vectorSimilarityWeight ?? DEFAULT_WEIGHT,
     rerankModelId: s.rerankModelId ?? '',
+    ocrEnabled: s.ocrEnabled === true,
+    ocrLanguage: s.ocrLanguage ?? 'zh',
+    chunkOverlapTokenNum: s.chunkOverlapTokenNum == null ? '' : String(s.chunkOverlapTokenNum),
   };
 }
 
@@ -122,6 +139,13 @@ function toSettings(f: RagForm): KbRagSettings {
     vectorSimilarityWeight: f.vectorSimilarityWeight,
     // 库级重排模型：空串 → null（继承全局），非空原样提交（不自建配置，来自模型池下拉）
     rerankModelId: f.rerankModelId.trim() || null,
+    // OCR/overlap（KE-06/KE-07）：值一律随保存提交；能力不支持时后端只落库不下发
+    ocrEnabled: f.ocrEnabled,
+    ocrLanguage: f.ocrLanguage.trim() || 'zh',
+    chunkOverlapTokenNum:
+      f.chunkOverlapTokenNum.trim() !== '' && Number.isFinite(Number(f.chunkOverlapTokenNum))
+        ? Math.max(0, Math.trunc(Number(f.chunkOverlapTokenNum)))
+        : null,
   };
 }
 
@@ -188,6 +212,10 @@ export function KbLibraryDetailPage() {
   // 同 rerankSupported：fail-safe，能力未确认即置灰（QA P2-A）。检索方式选择器据此
   // 临时禁用 hybrid 选项并提示，但已保存的 hybrid 配置仍照常回显、权重滑条照常显示。
   const hybridSupported = capabilities?.hybridSupported === true;
+  // KE-06/KE-07：OCR/overlap 能力（fail-safe，未确认即置灰）。当前 RAGFlow 实测不支持，
+  // 置灰 + 提示「暂不生效」，但保存照常成功（只落库，引擎升级后翻转能力即放行下发）。
+  const ocrSupported = capabilities?.parserOcrSupported === true;
+  const overlapSupported = capabilities?.parserOverlapSupported === true;
   const isHybrid = form.retrievalMethod === 'hybrid';
   // 全局重排模型友好名：池内按 id 反查 name，查不到原样回显 id（不吞）。
   const globalRerankName =
@@ -232,6 +260,15 @@ export function KbLibraryDetailPage() {
       const tokenNum = Number(tokenRaw);
       if (!Number.isFinite(tokenNum) || tokenNum < 256 || tokenNum > 4096) {
         toast.warning('切片长度需在 256 ~ 4096 之间（留空则继承默认 4096）');
+        return;
+      }
+    }
+    // KE-07：overlap 为非负整数（空值 = 引擎默认/0）
+    const overlapRaw = form.chunkOverlapTokenNum.trim();
+    if (overlapRaw !== '') {
+      const overlap = Number(overlapRaw);
+      if (!Number.isFinite(overlap) || overlap < 0 || !Number.isInteger(overlap)) {
+        toast.warning('分块重叠需为非负整数（留空 = 引擎默认/0）');
         return;
       }
     }
@@ -625,6 +662,64 @@ export function KbLibraryDetailPage() {
                     placeholder={'如 \\n。；！？'}
                   />
                 </div>
+              </div>
+
+              {/* KE-06/KE-07：OCR 开关 / 语言 / 分块重叠（企业级增强一期）。
+                  当前引擎实测不支持（能力 false）→ 控件置灰 + 「暂不生效」提示；
+                  值仍可回显、保存照常成功（后端只落库不下发，引擎升级后翻转能力即放行）。 */}
+              <div className="mt-4 rounded-md border border-dashed bg-muted/30 p-3">
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                  <div>
+                    <label className="flex items-center gap-2 text-sm">
+                      <input
+                        type="checkbox"
+                        className="h-4 w-4"
+                        checked={form.ocrEnabled && ocrSupported}
+                        disabled={!ocrSupported}
+                        onChange={(e) => setForm((f) => ({ ...f, ocrEnabled: e.target.checked }))}
+                      />
+                      启用 OCR（图片/扫描件识别）
+                    </label>
+                  </div>
+                  <div>
+                    <label className={fieldLabel}>OCR 语言</label>
+                    <select
+                      className={selectClass}
+                      value={form.ocrLanguage}
+                      disabled={!ocrSupported}
+                      onChange={(e) => setForm((f) => ({ ...f, ocrLanguage: e.target.value }))}
+                    >
+                      <option value="zh">中文（zh）</option>
+                      <option value="en">英文（en）</option>
+                      <option value="zh_en">中英混合（zh_en）</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className={fieldLabel}>分块重叠（token）</label>
+                    <Input
+                      type="number"
+                      min={0}
+                      step={1}
+                      value={form.chunkOverlapTokenNum}
+                      disabled={!overlapSupported}
+                      onChange={(e) => setForm((f) => ({ ...f, chunkOverlapTokenNum: e.target.value }))}
+                      placeholder="留空 = 引擎默认/0"
+                    />
+                  </div>
+                </div>
+                {!ocrSupported || !overlapSupported ? (
+                  <p className="mt-2 text-xs text-amber-600">
+                    当前引擎版本暂不支持
+                    {!ocrSupported ? 'OCR' : ''}
+                    {!ocrSupported && !overlapSupported ? ' / ' : ''}
+                    {!overlapSupported ? '分块重叠' : ''}
+                    ，参数已保留待引擎升级生效（保存仅落库，暂不生效）。
+                  </p>
+                ) : (
+                  <p className="mt-2 text-xs text-muted-foreground">
+                    OCR 与分块重叠为解析期参数，改动只影响<strong>此后新上传/重解析</strong>的文档。
+                  </p>
+                )}
               </div>
               {/* WA-12：此处原文写的是 Markdown 星号，在 JSX 里不会被渲染成加粗，
                   只会原样显示两个星号。改用 <strong> 才是对的。 */}

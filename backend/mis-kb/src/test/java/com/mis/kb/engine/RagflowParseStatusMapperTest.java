@@ -31,4 +31,23 @@ class RagflowParseStatusMapperTest {
         assertEquals("pending", RagflowParseStatusMapper.toParseStatus(null, 0.0));
         assertNull(RagflowParseStatusMapper.toParseStatus(null, null));
     }
+
+    @Test
+    void mapsProgressToPercent() {
+        // 0~1 小数 → 0~100 整数百分比（KE-03）
+        assertEquals(0, RagflowParseStatusMapper.toProgress(0.0).intValue());
+        assertEquals(42, RagflowParseStatusMapper.toProgress(0.42).intValue());
+        assertEquals(100, RagflowParseStatusMapper.toProgress(1.0).intValue());
+        assertNull(RagflowParseStatusMapper.toProgress(null));
+        // 越界一律回落 null（不写入脏值）
+        assertNull(RagflowParseStatusMapper.toProgress(-0.1));
+        assertNull(RagflowParseStatusMapper.toProgress(1.5));
+    }
+
+    @Test
+    void roundsProgressInsteadOfTruncating() {
+        assertEquals(67, RagflowParseStatusMapper.toProgress(0.666).intValue(),
+                "0.666 应四舍五入为 67 而非截断为 66");
+        assertEquals(33, RagflowParseStatusMapper.toProgress(0.334).intValue());
+    }
 }

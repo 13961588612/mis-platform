@@ -130,6 +130,11 @@ public class RetrieveQueryResolver {
      * 新字段一律追加末位，绝不插在中间 —— 插中间会让所有既有构造点<b>静默错位</b>，
      * 编译器不会报错，因为类型恰好能对上）。
      *
+     * <p><b>企业级增强一期（KE-08/KE-09）新增末位 {@code documentIds} / {@code filterRequested}：</b>
+     * 服务层把前端「按文档 + 上传时间范围」的原始过滤意图解析成具体的 MIS 文档 id 集后放入
+     * {@code documentIds}（空 = 无过滤，R5 语义）；{@code filterRequested} 标记<b>原始意图</b>——
+     * 即便解析后为空集（如全部文档已停用），仍据此判断是否要对「引擎不支持过滤」做降级提示。
+     *
      * @param question           问题文本（<b>用户原话</b>；扩展在 S6 内部完成，调用方不必预处理）
      * @param scopedLibraryIds   已经过 ACL 过滤的库 ID 列表（合并器不做任何权限判断）
      * @param perLibrarySettings 库 ID → 库级设置；缺失的库按全局默认处理
@@ -137,6 +142,8 @@ public class RetrieveQueryResolver {
      * @param capabilities       引擎能力；{@code null} 视为全不支持（保守降级）
      * @param synonymMode        同义词请求模式；{@code null} 收敛为 {@link SynonymMode#AUTO}
      *                           （老调用方语义不变：走热路径、不做版本校验）
+     * @param documentIds        文档过滤：MIS 文档 id 集（服务层已解析）；空 = 不过滤
+     * @param filterRequested    是否请求了文档/时间过滤（原始意图，供能力降级提示用）
      */
     public record RetrieveContext(
             String question,
@@ -144,7 +151,25 @@ public class RetrieveQueryResolver {
             Map<Long, RagSettings> perLibrarySettings,
             ParamOverride requestOverride,
             EngineCapabilities capabilities,
-            SynonymMode synonymMode) {
+            SynonymMode synonymMode,
+            List<Long> documentIds,
+            boolean filterRequested) {
+
+        /**
+         * 兼容构造：6 参数旧签名，文档过滤两字段取「不过滤」语义。
+         *
+         * <p>record 是位置参数，新增字段后既有 6 参构造点（老调用方、单测夹具）保持零改动。
+         */
+        public RetrieveContext(
+                String question,
+                List<Long> scopedLibraryIds,
+                Map<Long, RagSettings> perLibrarySettings,
+                ParamOverride requestOverride,
+                EngineCapabilities capabilities,
+                SynonymMode synonymMode) {
+            this(question, scopedLibraryIds, perLibrarySettings, requestOverride,
+                    capabilities, synonymMode, List.of(), false);
+        }
 
         /** 紧凑构造：把 null 集合统一收敛成空集合，省掉下游满地判空。 */
         public RetrieveContext {
@@ -153,6 +178,7 @@ public class RetrieveQueryResolver {
             requestOverride = requestOverride == null ? ParamOverride.none() : requestOverride;
             capabilities = capabilities == null ? EngineCapabilities.unsupported() : capabilities;
             synonymMode = synonymMode == null ? SynonymMode.AUTO : synonymMode;
+            documentIds = documentIds == null ? List.of() : List.copyOf(documentIds);
         }
     }
 
@@ -257,6 +283,21 @@ public class RetrieveQueryResolver {
         String emptyStrategy = EmptyResultStrategy.normalize(base.emptyResultStrategy());
         String effectiveRerankModelId = rerank ? rerankModelId : null;
 
+        // S4.5（KE-08/KE-09）：文档/时间范围过滤能力降级。
+        // 未请求过滤（filterRequested=false）→ 一律不下发 document_ids（R5：空 = 全量），
+        // 即使上下文带了残留 id 也不透传——「原始意图」与「解析结果」的硬边界：
+        // 服务层只在有过滤意图时解析 id 集，resolver 只在有过滤意图时透传。
+        // 请求了过滤但引擎不支持（metadataFilterSupported=false）→ 清空过滤集并记一条
+        // 降级原因，绝不静默忽略（对齐 WA-06「前端置灰 + 后端强制 + 降级提示」三道防线）。
+        List<Long> effectiveDocumentIds = List.of();
+        if (context.filterRequested()) {
+            effectiveDocumentIds = context.documentIds();
+            if (!caps.metadataFilterSupported()) {
+                effectiveDocumentIds = List.of();
+                degradedReasons.add("当前引擎不支持文档/时间范围过滤，已忽略过滤条件");
+            }
+        }
+
         // S6 同义词扩展（Wave D）。必须在构造 RetrieveQuery 之前完成 ——
         // RetrieveQuery.question 的语义是「实际送引擎的串」，不是用户原话（§7.3）。
         SynonymExpansion expansion = expandSynonyms(context);
@@ -270,7 +311,8 @@ public class RetrieveQueryResolver {
                 weight,
                 rerank,
                 effectiveRerankModelId,
-                emptyStrategy);
+                emptyStrategy,
+                effectiveDocumentIds);
 
         EffectiveRetrieveParams effective = new EffectiveRetrieveParams(
                 topK, threshold, method, weight, rerank, effectiveRerankModelId,
@@ -346,7 +388,9 @@ public class RetrieveQueryResolver {
      * S2：逐字段应用显式覆盖。
      *
      * <p>只覆盖检索相关的 5 个字段；切片类字段（chunkMethod 等）属建库期参数，
-     * 单次检索无从覆盖，原样保留。
+     * 单次检索无从覆盖，原样保留。OCR/overlap 三字段（KE-06/KE-07）同样属建库期
+     * parser_config 参数，单次检索不消费，但<b>原样透传</b>（record 位置参数，
+     * 用 11 参旧构造会静默置 null，破坏设置完整性）。
      *
      * @param base 基准设置
      * @param ov   覆盖项
@@ -366,7 +410,10 @@ public class RetrieveQueryResolver {
                 base.emptyResultStrategy(),
                 ov.vectorSimilarityWeight() != null
                         ? ov.vectorSimilarityWeight() : base.vectorSimilarityWeight(),
-                base.rerankModelId());
+                base.rerankModelId(),
+                base.ocrEnabled(),
+                base.ocrLanguage(),
+                base.chunkOverlapTokenNum());
     }
 
     /**

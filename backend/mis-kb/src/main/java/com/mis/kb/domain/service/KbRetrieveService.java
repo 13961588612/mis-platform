@@ -7,6 +7,7 @@ import com.mis.kb.api.dto.RetrieveRequest;
 import com.mis.kb.domain.entity.KbDocument;
 import com.mis.kb.domain.entity.KbLibrary;
 import com.mis.kb.domain.model.ChunkHit;
+import com.mis.kb.domain.model.KbDocumentFilter;
 import com.mis.kb.domain.model.RagSettings;
 import com.mis.kb.domain.model.RetrieveQueryResolver;
 import com.mis.kb.domain.model.SynonymMode;
@@ -101,6 +102,11 @@ public class KbRetrieveService {
         List<Long> scoped = visibilityService.filterVisible(request.libraryIds(), visible);
         Map<Long, RagSettings> perLibrarySettings = loadSettings(scoped);
 
+        // KE-08/KE-09：解析文档/时间过滤 → 具体 MIS 文档 id 集（空 = 不过滤，R5）
+        KbDocumentFilter filter = new KbDocumentFilter(
+                request.documentIds(), request.uploadFrom(), request.uploadTo());
+        List<Long> filteredDocumentIds = resolveFilteredDocumentIds(scoped, filter);
+
         if (scoped.isEmpty()) {
             // 无可见库：不调引擎，但仍要告诉调用方按什么策略兜底（WA-11）
             return new RetrieveHitsVO(
@@ -118,7 +124,9 @@ public class KbRetrieveService {
                                 request.topK(), request.threshold(), null, null, null),
                         enginePort.capabilities(),
                         // Wave D：问答热路径固定 AUTO —— 用内存快照，不做版本校验
-                        SynonymMode.AUTO));
+                        SynonymMode.AUTO,
+                        filteredDocumentIds,
+                        filter.hasAnyCondition()));
 
         // WD-06：expansion 在问答链路里【只能进日志】，绝不进 RetrieveHitsVO
         if (log.isDebugEnabled()) {
@@ -175,5 +183,37 @@ public class KbRetrieveService {
         List<KbDocument> docs = documentRepository.findByLibraryIdIn(libraryIds);
         return docs.stream().collect(Collectors.toMap(
                 KbDocument::getId, KbDocument::getTitle, (a, b) -> a));
+    }
+
+    // ---------------------------------------------------------------- 过滤解析（KE-08/KE-09）
+
+    /**
+     * 把文档/时间过滤解析为具体的 MIS 文档 id 集（KE-08/KE-09）。
+     *
+     * <p>解析规则（设计 §1.5 / R5）：
+     * <ul>
+     *   <li>无条件过滤 → 返回空集（适配器不下发 {@code document_ids} 键 = 全量）；</li>
+     *   <li>按库 + {@code enabled=1} + 显式 id 集 + {@code created_at} 时间范围取交集；
+     *       显式 id 集为空时传 {@code null} 给仓储（空 List 在 JPQL 里恒假，会误伤全量）；</li>
+     *   <li>解析结果为空 = 过滤条件无命中，仍按 R5「不下发键」处理（不产生空结果死路）。</li>
+     * </ul>
+     *
+     * @param scopedLibraryIds 可见库 id 集
+     * @param filter           文档过滤条件（文档 id 集 + 上传时间范围）
+     * @return 命中的启用文档 id 列表；恒非 {@code null}
+     */
+    private List<Long> resolveFilteredDocumentIds(
+            List<Long> scopedLibraryIds, KbDocumentFilter filter) {
+        if (filter == null || !filter.hasAnyCondition()) {
+            return List.of();
+        }
+        if (scopedLibraryIds == null || scopedLibraryIds.isEmpty()) {
+            return List.of();
+        }
+        // 显式 id 集为空 → null（JPQL :explicitIds is null 分支 = 不限制 id）
+        List<Long> explicitIds = filter.safeDocumentIds().isEmpty()
+                ? null : filter.safeDocumentIds();
+        return documentRepository.findEnabledIdsByFilter(
+                scopedLibraryIds, explicitIds, filter.uploadFrom(), filter.uploadTo());
     }
 }

@@ -15,6 +15,10 @@ import java.time.Instant;
  * <p><b>V23（kb_settings_model_chunk）新增三列：</b>{@code chunkMethod} / {@code chunkTokenNum} /
  * {@code separator}，均为文件级切片覆盖字段，可空 = 继承库级（方案 B：库级默认 + 文件级覆盖）。
  * 合并语义由 {@code DocumentChunkConfigResolver} 统一收口，本实体只做持久化承载。
+ *
+ * <p><b>V30（企业级增强一期 KE-03/KE-04）新增两列：</b>{@code parseProgress} / {@code parseError}。
+ * {@code parseProgress}（0~100）与 {@code parseError}（引擎 progress_msg 摘要 ≤500 字符）
+ * 随既有 {@code syncOpenParseStatuses} 同步批次一并回写；解析成功/重试时清空 error。
  */
 @Entity
 @Table(name = "kb_document")
@@ -58,6 +62,14 @@ public class KbDocument {
     /** 文件级切片分隔符（V23；null = 继承库级）。 */
     @Column(name = "separator")
     private String separator;
+
+    /** 解析进度百分比 0~100（V30；null=未解析/未知）。 */
+    @Column(name = "parse_progress")
+    private Integer parseProgress;
+
+    /** 最近一次解析失败原因（V30；引擎 progress_msg 摘要 ≤500 字符，成功/重试时清空）。 */
+    @Column(name = "parse_error")
+    private String parseError;
 
     @Column(name = "created_at", nullable = false)
     private Instant createdAt;
@@ -159,6 +171,22 @@ public class KbDocument {
 
     public void setSeparator(String separator) {
         this.separator = separator;
+    }
+
+    public Integer getParseProgress() {
+        return parseProgress;
+    }
+
+    public void setParseProgress(Integer parseProgress) {
+        this.parseProgress = parseProgress;
+    }
+
+    public String getParseError() {
+        return parseError;
+    }
+
+    public void setParseError(String parseError) {
+        this.parseError = parseError;
     }
 
     public Instant getCreatedAt() {

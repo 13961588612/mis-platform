@@ -48,6 +48,9 @@ import java.util.List;
  * @param rerank                 是否启用重排（已过引擎能力与模型 ID 双重降级）
  * @param rerankModelId          全局重排模型 ID；{@code rerank=false} 时无意义
  * @param emptyResultStrategy    空结果策略码值（MIS 业务语义，不下发引擎）
+ * @param documentIds            文档过滤：MIS 侧 {@code kb_document.id} 列表
+ *                               （KE-08/KE-09，已由服务层按库+enabled=1+时间范围解析收敛）；
+ *                               空/null = 不过滤（适配器不下发 {@code document_ids} 键，R5）
  */
 public record RetrieveQuery(
         String question,
@@ -58,7 +61,8 @@ public record RetrieveQuery(
         Double vectorSimilarityWeight,
         Boolean rerank,
         String rerankModelId,
-        String emptyResultStrategy) {
+        String emptyResultStrategy,
+        List<Long> documentIds) {
 
     /** 默认召回条数。 */
     public static final int DEFAULT_TOP_K = 5;
@@ -76,7 +80,7 @@ public record RetrieveQuery(
      * @param threshold 相似度阈值
      */
     public RetrieveQuery(String question, List<Long> libraryIds, Integer topK, Double threshold) {
-        this(question, libraryIds, topK, threshold, null, null, null, null, null);
+        this(question, libraryIds, topK, threshold, null, null, null, null, null, null);
     }
 
     /**

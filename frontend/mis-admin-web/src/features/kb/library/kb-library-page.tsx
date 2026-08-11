@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Archive, ArchiveRestore, Pencil, Plus, Settings2 } from 'lucide-react';
+import { Archive, ArchiveRestore, ClipboardList, Pencil, Plus, Settings2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
@@ -93,6 +93,11 @@ function toSettings(form: LibraryForm, base: KbRagSettings | null): KbRagSetting
     vectorSimilarityWeight: base?.vectorSimilarityWeight ?? null,
     // kb_settings_model_chunk：库级重排模型 id 只在详情页维护，此处原样带回
     rerankModelId: base?.rerankModelId ?? null,
+    // 企业级增强一期 KE-06/KE-07：OCR/overlap 只在详情页维护（引擎不支持时仅落库），
+    // 此处必须原样带回——否则一次「改个名字」就会把详情页调好的 OCR 参数悄悄清空。
+    ocrEnabled: base?.ocrEnabled ?? null,
+    ocrLanguage: base?.ocrLanguage ?? null,
+    chunkOverlapTokenNum: base?.chunkOverlapTokenNum ?? null,
   };
 }
 
@@ -350,12 +355,26 @@ export function KbLibraryPage() {
         description="知识库是检索的最小授权单元；可见性 = 公开∧启用 ∪ 授权 − 停用，由服务端裁定。"
         breadcrumbs={buildAppBreadcrumbs({ app: 'kb', title: '知识库管理' })}
         actions={
-          <PermissionGate permission="kb:library:add">
-            <Button size="sm" onClick={openCreate}>
-              <Plus className="h-4 w-4" />
-              新增知识库
-            </Button>
-          </PermissionGate>
+          <>
+            {/* 企业级增强一期 KE-02：快捷入口跳转系统监控-操作日志并按 module=知识库 预筛选
+                （权限码 monitor:operlog:list，对齐 V2 菜单 302 操作日志页） */}
+            <PermissionGate permission="monitor:operlog:list">
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => navigate('/monitor/oper-log?module=' + encodeURIComponent('知识库'))}
+              >
+                <ClipboardList className="h-4 w-4" />
+                操作日志
+              </Button>
+            </PermissionGate>
+            <PermissionGate permission="kb:library:add">
+              <Button size="sm" onClick={openCreate}>
+                <Plus className="h-4 w-4" />
+                新增知识库
+              </Button>
+            </PermissionGate>
+          </>
         }
       />
 

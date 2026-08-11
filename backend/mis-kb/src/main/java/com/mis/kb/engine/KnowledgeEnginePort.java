@@ -10,6 +10,7 @@ import com.mis.kb.domain.model.EngineHealth;
 import com.mis.kb.domain.model.EngineLibraryBrief;
 import com.mis.kb.domain.model.EngineLibraryRef;
 import com.mis.kb.domain.model.EngineModelPool;
+import com.mis.kb.domain.model.ParseStatusSnapshot;
 import com.mis.kb.domain.model.RagSettings;
 import com.mis.kb.domain.model.RetrieveQuery;
 import org.slf4j.LoggerFactory;
@@ -114,15 +115,17 @@ public interface KnowledgeEnginePort {
     }
 
     /**
-     * 查询引擎侧文档解析状态，回写到 {@code kb_document.parse_status} 用。
+     * 查询引擎侧文档解析状态，回写到 {@code kb_document.parse_status / parse_progress / parse_error} 用。
      *
-     * <p>key = 引擎原生 document id；value = MIS {@code pending|parsing|success|failed}。
+     * <p>key = 引擎原生 document id；value = 解析状态快照（状态码值 + 进度 0~100 + 失败原因摘要）。
      * 查不到或引擎不支持时返回空 map（调用方保留本地原值）。
      *
      * @param ref          知识库引擎引用
      * @param nativeDocIds 待查询的原生文档 id；空则返回空 map
+     * @return 文档 id → 解析状态快照；恒非 {@code null}
      */
-    default Map<String, String> queryDocumentParseStatuses(EngineLibraryRef ref, List<String> nativeDocIds) {
+    default Map<String, ParseStatusSnapshot> queryDocumentParseStatuses(
+            EngineLibraryRef ref, List<String> nativeDocIds) {
         return Map.of();
     }
 

@@ -4,6 +4,9 @@ import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Size;
 
+import java.time.Instant;
+import java.util.List;
+
 /**
  * 命中测试请求（Q-04 / WA-07）。
  *
@@ -16,6 +19,10 @@ import jakarta.validation.constraints.Size;
  * <p><b>Wave D 新增末位字段 {@code disableSynonym}</b>（WD-11）。record 是位置参数，
  * 新字段一律追加末位——插在中间会让所有既有构造点<b>静默错位</b>，
  * 编译器不报错，因为类型恰好能对上。
+ *
+ * <p><b>企业级增强一期（KE-08/KE-09）新增末位三字段</b>：{@code documentIds}（按文档过滤）+
+ * {@code uploadFrom}/{@code uploadTo}（按上传时间过滤）。三者均未设置 = 不过滤；
+ * 引擎不支持过滤时（{@code metadataFilterSupported=false}）由合并器降级并回显原因。
  *
  * @param libraryId              目标知识库 id（必填，单库）
  * @param question               测试问题（必填）
@@ -31,6 +38,9 @@ import jakarta.validation.constraints.Size;
  *                               若勾一下就把全局开关关了，线上问答会跟着一起变，
  *                               那就不是对照实验而是生产事故。
  *                               {@code null} 与 {@code false} 同义（不禁用）
+ * @param documentIds            按文档过滤：MIS 文档 id 列表；空 = 不过滤（企业级增强一期新增）
+ * @param uploadFrom             按上传时间过滤下界（含）；{@code null} = 不限制（企业级增强一期新增）
+ * @param uploadTo               按上传时间过滤上界（含）；{@code null} = 不限制（企业级增强一期新增）
  */
 public record HitTestRequest(
         @NotNull Long libraryId,
@@ -40,7 +50,10 @@ public record HitTestRequest(
         String retrievalMethod,
         Double vectorSimilarityWeight,
         Boolean rerank,
-        Boolean disableSynonym) {
+        Boolean disableSynonym,
+        List<Long> documentIds,
+        Instant uploadFrom,
+        Instant uploadTo) {
 
     /**
      * 是否本次禁用同义词扩展。

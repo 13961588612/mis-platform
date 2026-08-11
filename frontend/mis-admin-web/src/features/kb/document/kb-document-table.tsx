@@ -24,6 +24,30 @@ import { chunkMethodLabel, formatSize, formatTime } from '../types';
 /** 解析中自动刷新间隔（ms）。 */
 const PARSING_POLL_MS = 5_000;
 
+/**
+ * 解析状态单元格（KE-03/KE-04，企业级增强一期）。
+ *
+ * <p>在既有徽标基础上增强两处：
+ * <ul>
+ *   <li><b>parsing</b>：徽标旁展示解析进度百分比（{@code parseProgress}，0~100；null = 未知）；</li>
+ *   <li><b>failed</b>：把失败原因（{@code parseError}，引擎 progress_msg 摘要）挂到徽标的
+ *       title 上，鼠标悬停可见；无失败原因时仅展示徽标。</li>
+ * </ul>
+ */
+function ParseStatusCell({ doc }: { doc: KbDocument }) {
+  const progress = doc.parseStatus === 'parsing' && doc.parseProgress != null ? doc.parseProgress : null;
+  const error = doc.parseStatus === 'failed' && doc.parseError ? doc.parseError : null;
+  return (
+    <span
+      className="inline-flex items-center gap-1.5 whitespace-nowrap"
+      title={error ? `失败原因：${error}` : undefined}
+    >
+      <ParseStatusBadge status={doc.parseStatus} />
+      {progress != null ? <span className="text-xs tabular-nums text-muted-foreground">{progress}%</span> : null}
+    </span>
+  );
+}
+
 /** 列定义：可排序列（标题/大小/版本/更新时间）+ 操作列锁定（不可拖宽/换位）。 */
 const DOC_COLUMNS: (ResizableColumn & { sortable?: boolean })[] = [
   { key: 'title', label: '标题', sortable: true },
@@ -77,6 +101,7 @@ export function KbDocumentTable({
   const [chunkDoc, setChunkDoc] = useState<KbDocument | null>(null);
   const [chunkOpen, setChunkOpen] = useState(false);
   const [reparsingAll, setReparsingAll] = useState(false);
+  const [reparsingFailed, setReparsingFailed] = useState(false);
 
   // 列宽记忆（localStorage）+ 表头排序（三态 无 → 升 → 降 → 无）
   const { widthOf, startResize, hasCustom, reset: resetWidths } = useColumnWidths(
@@ -203,7 +228,7 @@ export function KbDocumentTable({
     if (!ok) return;
     setReparsingAll(true);
     try {
-      const result = await reparseAllDocuments(libraryId);
+      const result = await reparseAllDocuments(libraryId, false);
       if (result.failed > 0) {
         const shown = result.failedDocuments.slice(0, 5).map((d) => d.title ?? `#${d.documentId}`);
         const more =
@@ -222,6 +247,47 @@ export function KbDocumentTable({
       toast.error(e instanceof Error ? e.message : '全部重解析失败');
     } finally {
       setReparsingAll(false);
+    }
+  }
+
+  /**
+   * 仅重试失败文档（KE-05，企业级增强一期）。
+   *
+   * <p>只对 {@code parse_status=failed} 的文档触发；后端先收敛一次引擎状态再按 failed
+   * 过滤，引擎侧实际已成功的 stale-failed 不会重复提交。
+   */
+  async function onReparseFailed() {
+    const failedCount = documents.filter((d) => d.parseStatus === 'failed').length;
+    if (failedCount === 0) {
+      toast.info('当前没有解析失败的文档');
+      return;
+    }
+    const ok = window.confirm(
+      `确定重试 ${failedCount} 个解析失败的文档？\n\n` +
+        '仅重试失败文档；已成功/解析中的文档不受影响。',
+    );
+    if (!ok) return;
+    setReparsingFailed(true);
+    try {
+      const result = await reparseAllDocuments(libraryId, true);
+      if (result.failed > 0) {
+        const shown = result.failedDocuments.slice(0, 5).map((d) => d.title ?? `#${d.documentId}`);
+        const more =
+          result.failedDocuments.length > 5 ? ` 等 ${result.failedDocuments.length} 个` : '';
+        toast.error(
+          `重试完成：成功 ${result.success}，仍失败 ${result.failed}（${shown.join('、')}${more}）`,
+        );
+      } else {
+        toast.success(
+          `重试完成：成功 ${result.success}` +
+            (result.skipped > 0 ? `，跳过 ${result.skipped}` : ''),
+        );
+      }
+      await load(libraryId);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : '重试失败文档失败');
+    } finally {
+      setReparsingFailed(false);
     }
   }
 
@@ -256,6 +322,18 @@ export function KbDocumentTable({
             >
               <ListRestart className="h-4 w-4" />
               {reparsingAll ? '提交中…' : '全部重解析'}
+            </Button>
+          </PermissionGate>
+          <PermissionGate permission="kb:document:edit">
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={reparsingFailed || !documents.some((d) => d.parseStatus === 'failed')}
+              onClick={() => void onReparseFailed()}
+              title="仅重试解析失败的文档（先收敛引擎状态再按 failed 过滤）"
+            >
+              <RotateCw className="h-4 w-4" />
+              {reparsingFailed ? '提交中…' : '重试全部失败文档'}
             </Button>
           </PermissionGate>
           <Button
@@ -376,7 +454,7 @@ export function KbDocumentTable({
                   <td className="whitespace-nowrap px-3 py-2 tabular-nums">{formatSize(doc.size)}</td>
                   <td className="whitespace-nowrap px-3 py-2 tabular-nums">v{doc.version ?? 1}</td>
                   <td className="whitespace-nowrap px-3 py-2">
-                    <ParseStatusBadge status={doc.parseStatus} />
+                    <ParseStatusCell doc={doc} />
                   </td>
                   <td className="whitespace-nowrap px-3 py-2">{renderChunkCell(doc)}</td>
                   <td className="whitespace-nowrap px-3 py-2">

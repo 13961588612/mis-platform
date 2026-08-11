@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { Search } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
@@ -140,7 +141,10 @@ function SortableTh({
 export function OperLogListPage() {
   const [rows, setRows] = useState<OperLogItem[]>([]);
   const [username, setUsername] = useState('');
-  const [module, setModule] = useState('');
+  // 企业级增强一期 KE-02：支持 ?module= 查询参数预填模块筛选（KB 页「操作日志」快捷入口携带
+  // module=知识库 跳转）。缺省空串行为与改造前完全一致；参数变化不覆盖用户已输入的筛选。
+  const [searchParams] = useSearchParams();
+  const [module, setModule] = useState(() => searchParams.get('module') ?? '');
   const [page, setPage] = useState(1);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);

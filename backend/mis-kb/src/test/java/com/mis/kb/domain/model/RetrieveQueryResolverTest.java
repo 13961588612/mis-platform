@@ -642,6 +642,104 @@ class RetrieveQueryResolverTest {
         }
     }
 
+    // ------------------------------------------------------------ 文档/时间过滤（KE-08/KE-09）
+
+    /**
+     * 企业级增强一期 T4：文档过滤 id 集透传 + 引擎不支持时降级提示（三道防线之「后端强制」）。
+     */
+    @Nested
+    @DisplayName("文档过滤：透传 documentIds；引擎不支持 → 清空 + 降级原因")
+    class DocumentFilter {
+
+        @Test
+        @DisplayName("引擎支持过滤（metadataFilterSupported=true）→ documentIds 原样透传、不降级")
+        void filterPassesThroughWhenSupported() {
+            RetrieveQueryResolver.Resolution r = resolverWithRerankModel().resolveAll(
+                    new RetrieveQueryResolver.RetrieveContext(
+                            "q",
+                            List.of(10L),
+                            Map.of(10L, librarySettings(null, null, "hybrid", 0.6D, false, null)),
+                            null,
+                            FULL,
+                            null,
+                            List.of(101L, 102L),
+                            true));
+
+            assertEquals(List.of(101L, 102L), r.query().documentIds(),
+                    "引擎支持过滤时必须原样透传服务层解析好的文档 id 集");
+            assertFalse(r.effectiveParams().degraded(),
+                    "支持过滤时不得产生降级提示（避免误伤正常检索）");
+        }
+
+        @Test
+        @DisplayName("未请求过滤（filterRequested=false）→ 空集透传、不降级")
+        void noFilterRequestedYieldsEmptyIds() {
+            // 引擎「不支持过滤」但其余能力全开（不能用 NONE：NONE 无 hybrid，
+            // 会让降级位被 hybrid 降级污染，测不到「过滤未请求不降级」这一条）。
+            EngineCapabilities noMetadataFilterOnly =
+                    EngineCapabilities.of(true, false, true, true, true);
+            RetrieveQueryResolver.Resolution r = resolverWithRerankModel().resolveAll(
+                    new RetrieveQueryResolver.RetrieveContext(
+                            "q",
+                            List.of(10L),
+                            Map.of(10L, librarySettings(null, null, "hybrid", 0.6D, false, null)),
+                            null,
+                            noMetadataFilterOnly,
+                            null,
+                            List.of(101L),
+                            false));
+
+            assertTrue(r.query().documentIds().isEmpty(),
+                    "未请求过滤时不得下发 document_ids（R5：空 = 全量）");
+            assertFalse(r.effectiveParams().degraded(),
+                    "未请求过滤时即使引擎不支持也不该降级（没有可降级的东西）");
+        }
+
+        @Test
+        @DisplayName("请求过滤但引擎不支持（metadataFilterSupported=false）→ 清空过滤集 + 降级原因")
+        void filterDegradedWhenUnsupported() {
+            // metadataFilter=false 的引擎（如 noop/旧版 ragflow）
+            EngineCapabilities noMetadataFilter = EngineCapabilities.of(true, false, true, true, true);
+            RetrieveQueryResolver.Resolution r = resolverWithRerankModel().resolveAll(
+                    new RetrieveQueryResolver.RetrieveContext(
+                            "q",
+                            List.of(10L),
+                            Map.of(10L, librarySettings(null, null, "hybrid", 0.6D, false, null)),
+                            null,
+                            noMetadataFilter,
+                            null,
+                            List.of(101L, 102L),
+                            true));
+
+            assertTrue(r.query().documentIds().isEmpty(),
+                    "引擎不支持过滤时必须清空过滤集（绝不把引擎不认的 document_ids 下发）");
+            assertTrue(r.effectiveParams().degraded());
+            assertEquals(1, r.effectiveParams().degradedReasons().size());
+            assertTrue(r.effectiveParams().degradedReasons().get(0).contains("不支持"),
+                    "必须回显明确的降级原因，绝不静默忽略，实际=" + r.effectiveParams().degradedReasons());
+        }
+
+        @Test
+        @DisplayName("请求过滤但解析结果为空（R5）→ 空集透传、不降级（引擎支持时）")
+        void emptyResolvedSetNoDegradationWhenSupported() {
+            RetrieveQueryResolver.Resolution r = resolverWithRerankModel().resolveAll(
+                    new RetrieveQueryResolver.RetrieveContext(
+                            "q",
+                            List.of(10L),
+                            Map.of(10L, librarySettings(null, null, "hybrid", 0.6D, false, null)),
+                            null,
+                            FULL,
+                            null,
+                            List.of(),
+                            true));
+
+            assertTrue(r.query().documentIds().isEmpty(),
+                    "解析结果为空 = 不过滤（R5：不下发 document_ids 键，引擎全量）");
+            assertFalse(r.effectiveParams().degraded(),
+                    "引擎支持过滤时解析为空不应降级（R5 语义是回退全量而非报错）");
+        }
+    }
+
     // ------------------------------------------------------------ 记录级兜底（与合并器验证分离）
 
     /**
@@ -661,7 +759,7 @@ class RetrieveQueryResolverTest {
         void vectorFallsBackToOne() {
             RetrieveQuery q = new RetrieveQuery(
                     "q", List.of(10L), 5, 0.3D,
-                    RagSettings.METHOD_VECTOR, null, false, null, "SUGGEST");
+                    RagSettings.METHOD_VECTOR, null, false, null, "SUGGEST", null);
             assertEquals(1.0D, q.effectiveVectorSimilarityWeight(), 1e-9);
             assertNull(q.vectorSimilarityWeight(),
                     "走兜底路径时原始字段必须仍是 null——这正是与合并器产出的区别");
@@ -672,7 +770,7 @@ class RetrieveQueryResolverTest {
         void keywordFallsBackToZero() {
             RetrieveQuery q = new RetrieveQuery(
                     "q", List.of(10L), 5, 0.3D,
-                    RagSettings.METHOD_KEYWORD, null, false, null, "SUGGEST");
+                    RagSettings.METHOD_KEYWORD, null, false, null, "SUGGEST", null);
             assertEquals(0.0D, q.effectiveVectorSimilarityWeight(), 1e-9);
             assertNull(q.vectorSimilarityWeight());
         }
@@ -682,7 +780,7 @@ class RetrieveQueryResolverTest {
         void hybridFallsBackToDefaultWeight() {
             RetrieveQuery q = new RetrieveQuery(
                     "q", List.of(10L), 5, 0.3D,
-                    RagSettings.METHOD_HYBRID, null, false, null, "SUGGEST");
+                    RagSettings.METHOD_HYBRID, null, false, null, "SUGGEST", null);
             assertEquals(RagSettings.DEFAULT_VECTOR_SIMILARITY_WEIGHT,
                     q.effectiveVectorSimilarityWeight(), 1e-9);
             assertNull(q.vectorSimilarityWeight());
@@ -693,7 +791,7 @@ class RetrieveQueryResolverTest {
         void explicitWeightNotOverriddenByFallback() {
             RetrieveQuery q = new RetrieveQuery(
                     "q", List.of(10L), 5, 0.3D,
-                    RagSettings.METHOD_HYBRID, 0.6D, false, null, "SUGGEST");
+                    RagSettings.METHOD_HYBRID, 0.6D, false, null, "SUGGEST", null);
             assertEquals(0.6D, q.effectiveVectorSimilarityWeight(), 1e-9);
             assertEquals(0.6D, q.vectorSimilarityWeight(), 1e-9);
         }

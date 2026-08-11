@@ -1,6 +1,7 @@
 package com.mis.adminbff.controller;
 
 import com.mis.adminbff.dto.kb.KbAclVO;
+import com.mis.adminbff.dto.kb.KbAuditBefore;
 import com.mis.adminbff.dto.kb.KbCategoryAdminCreateRequest;
 import com.mis.adminbff.dto.kb.KbCategoryAdminVO;
 import com.mis.adminbff.dto.kb.KbCategoryVO;
@@ -104,6 +105,7 @@ public class KbController {
     }
 
     @PostMapping("/categories")
+    @OperLog(module = "知识库", operation = "创建分类", recordParams = true)
     public Result<KbCategoryVO> createCategory(@Valid @RequestBody CategoryBody body) {
         return Result.ok(kbFacadeService.createCategory(
                 body.name(), body.parentId(), body.enabled(), body.sort(), body.remark()));
@@ -112,12 +114,13 @@ public class KbController {
     @PutMapping("/categories/{id}")
     public Result<KbCategoryVO> updateCategory(@PathVariable Long id, @Valid @RequestBody CategoryUpdateBody body) {
         return Result.ok(kbFacadeService.updateCategory(
-                id, body.name(), body.enabled(), body.sort(), body.remark()));
+                id, body.name(), body.enabled(), body.sort(), body.remark(),
+                kbFacadeService.loadCategoryBefore(id)));
     }
 
     @DeleteMapping("/categories/{id}")
     public Result<Void> deleteCategory(@PathVariable Long id) {
-        kbFacadeService.deleteCategory(id);
+        kbFacadeService.deleteCategory(id, kbFacadeService.loadCategoryBefore(id));
         return Result.ok();
     }
 
@@ -138,7 +141,8 @@ public class KbController {
     public Result<KbCategoryVO> moveCategory(
             @PathVariable Long id, @Valid @RequestBody CategoryMoveBody body) {
         requireCategoryManagePermission();
-        return Result.ok(kbFacadeService.moveCategory(id, body.newParentId()));
+        return Result.ok(kbFacadeService.moveCategory(id, body.newParentId(),
+                kbFacadeService.loadCategoryBefore(id)));
     }
 
     /**
@@ -157,7 +161,8 @@ public class KbController {
     public Result<KbCategoryAdminVO> grantCategoryAdmin(
             @PathVariable Long id, @Valid @RequestBody KbCategoryAdminCreateRequest body) {
         requireCategoryManagePermission();
-        return Result.ok(kbFacadeService.grantCategoryAdmin(id, body.subjectType(), body.subjectId()));
+        return Result.ok(kbFacadeService.grantCategoryAdmin(id, body.subjectType(), body.subjectId(),
+                kbFacadeService.loadCategoryAdminListBefore(id)));
     }
 
     /**
@@ -166,7 +171,7 @@ public class KbController {
     @DeleteMapping("/category-admins/{adminId}")
     public Result<Void> revokeCategoryAdmin(@PathVariable Long adminId) {
         requireCategoryManagePermission();
-        kbFacadeService.revokeCategoryAdmin(adminId);
+        kbFacadeService.revokeCategoryAdmin(adminId, KbAuditBefore.minimal(adminId));
         return Result.ok();
     }
 
@@ -183,6 +188,7 @@ public class KbController {
     }
 
     @PostMapping("/libraries")
+    @OperLog(module = "知识库", operation = "创建知识库", recordParams = true)
     public Result<KbLibraryVO> createLibrary(@Valid @RequestBody LibraryBody body) {
         return Result.ok(kbFacadeService.createLibrary(
                 body.categoryId(), body.name(), body.secrecy(), body.owner(), body.settings()));
@@ -191,7 +197,8 @@ public class KbController {
     @PutMapping("/libraries/{id}")
     public Result<KbLibraryVO> updateLibrary(@PathVariable Long id, @Valid @RequestBody LibraryUpdateBody body) {
         return Result.ok(kbFacadeService.updateLibrary(
-                id, body.name(), body.secrecy(), body.status(), body.settings()));
+                id, body.name(), body.secrecy(), body.status(), body.settings(),
+                kbFacadeService.loadLibraryBefore(id)));
     }
 
     /**
@@ -241,11 +248,12 @@ public class KbController {
         return Result.ok(kbFacadeService.getRagSettings(id));
     }
 
-    /** 保存知识库 RAG 设置并同步引擎（L-08）。 */
+    /** 保存知识库 RAG 设置并同步引擎（L-08；KE-01 审计快照入参，before=旧设置）。 */
     @PutMapping("/libraries/{id}/engine/settings")
     public Result<KbRagSettings> updateRagSettings(
             @PathVariable Long id, @RequestBody KbRagSettings settings) {
-        return Result.ok(kbFacadeService.updateRagSettings(id, settings));
+        return Result.ok(kbFacadeService.updateRagSettings(id, settings,
+                kbFacadeService.loadRagSettingsBefore(id)));
     }
 
     // ------------------------------------------------------------------ 文档
@@ -261,6 +269,7 @@ public class KbController {
     }
 
     @PostMapping("/libraries/{libraryId}/documents")
+    @OperLog(module = "知识库", operation = "上传文档", recordParams = true)
     public Result<KbDocumentUploadResponse> uploadDocument(
             @PathVariable Long libraryId,
             @RequestParam("file") MultipartFile file,
@@ -271,42 +280,52 @@ public class KbController {
                 libraryId, file, chunkMethod, chunkTokenNum, separator));
     }
 
-    /** 更新文档级切片配置（kb_settings_model_chunk；改参触发重解析）。 */
+    /** 更新文档级切片配置（kb_settings_model_chunk；KE-01 审计快照入参，before=旧切片配置）。 */
     @PutMapping("/libraries/{libraryId}/documents/{id}/chunk-config")
     public Result<Void> updateDocumentChunkConfig(
             @PathVariable Long libraryId,
             @PathVariable Long id,
             @RequestBody Map<String, Object> body) {
-        kbFacadeService.updateDocumentChunkConfig(libraryId, id, body);
+        kbFacadeService.updateDocumentChunkConfig(libraryId, id, body,
+                kbFacadeService.loadDocumentBefore(libraryId, id));
         return Result.ok();
     }
 
     @PutMapping("/libraries/{libraryId}/documents/{id}/enable")
     public Result<Void> setDocumentEnabled(
             @PathVariable Long libraryId, @PathVariable Long id, @RequestParam boolean enabled) {
-        kbFacadeService.setDocumentEnabled(libraryId, id, enabled);
+        kbFacadeService.setDocumentEnabled(libraryId, id, enabled,
+                kbFacadeService.loadDocumentBefore(libraryId, id));
         return Result.ok();
     }
 
     @PostMapping("/libraries/{libraryId}/documents/{id}/reparse")
+    @OperLog(module = "知识库", operation = "文档重解析", recordParams = true)
     public Result<Void> reparseDocument(@PathVariable Long libraryId, @PathVariable Long id) {
         kbFacadeService.reparseDocument(libraryId, id);
         return Result.ok();
     }
 
     /**
-     * 库级一键全部重解析（P1-1：换嵌入模型后全量重解析恢复检索）。
+     * 库级一键全部重解析（P1-1；KE-05 扩展 {@code onlyFailed=true} 仅重试失败文档）。
      *
      * <p>返回结构化结果（成功/失败/跳过 + 失败明细）供前端反馈。
+     *
+     * @param libraryId  知识库 id
+     * @param onlyFailed 仅重试 {@code parse_status=failed} 文档；缺省 false = 全量
      */
     @PostMapping("/libraries/{libraryId}/documents/reparse-all")
-    public Result<KbReparseAllResultVO> reparseAllDocuments(@PathVariable Long libraryId) {
-        return Result.ok(kbFacadeService.reparseAllDocuments(libraryId));
+    @OperLog(module = "知识库", operation = "全部重解析", recordParams = true)
+    public Result<KbReparseAllResultVO> reparseAllDocuments(
+            @PathVariable Long libraryId,
+            @RequestParam(defaultValue = "false") boolean onlyFailed) {
+        return Result.ok(kbFacadeService.reparseAllDocuments(libraryId, onlyFailed));
     }
 
     @DeleteMapping("/libraries/{libraryId}/documents/{id}")
     public Result<Void> deleteDocument(@PathVariable Long libraryId, @PathVariable Long id) {
-        kbFacadeService.deleteDocument(libraryId, id);
+        kbFacadeService.deleteDocument(libraryId, id,
+                kbFacadeService.loadDocumentBefore(libraryId, id));
         return Result.ok();
     }
 
@@ -320,12 +339,13 @@ public class KbController {
     @PostMapping("/libraries/{libraryId}/acls")
     public Result<KbAclVO> grantAcl(@PathVariable Long libraryId, @Valid @RequestBody AclBody body) {
         return Result.ok(kbFacadeService.grantAcl(
-                libraryId, body.subjectType(), body.subjectId(), body.action()));
+                libraryId, body.subjectType(), body.subjectId(), body.action(),
+                kbFacadeService.loadAclListBefore(libraryId)));
     }
 
     @DeleteMapping("/acls/{id}")
     public Result<Void> revokeAcl(@PathVariable Long id) {
-        kbFacadeService.revokeAcl(id);
+        kbFacadeService.revokeAcl(id, KbAuditBefore.minimal(id));
         return Result.ok();
     }
 
@@ -342,6 +362,7 @@ public class KbController {
     }
 
     @PostMapping("/qa/feedback")
+    @OperLog(module = "知识库", operation = "提交问答反馈", recordParams = true)
     public Result<KbQaFeedbackVO> submitFeedback(@Valid @RequestBody FeedbackBody body) {
         return Result.ok(kbFacadeService.submitFeedback(
                 body.sessionId(), body.accuracy(), body.helpful(), body.offtopic(), body.citeError()));
@@ -435,6 +456,7 @@ public class KbController {
 
     /** 建工单（F-10 问答一键报错）。 */
     @PostMapping("/operations/qa/tickets")
+    @OperLog(module = "知识库", operation = "创建问答工单", recordParams = true)
     public Result<KbQaTicketVO> createTicket(@Valid @RequestBody TicketBody body) {
         return Result.ok(kbFacadeService.createTicket(
                 body.sessionId(), body.messageId(), body.type(), body.content()));
@@ -457,6 +479,7 @@ public class KbController {
 
     /** 处理/关闭工单（A-02c）。 */
     @PatchMapping("/operations/qa/tickets/{ticketId}")
+    @OperLog(module = "知识库", operation = "处理问答工单", recordParams = true)
     public Result<KbQaTicketVO> patchTicket(
             @PathVariable Long ticketId, @RequestBody TicketPatchBody body) {
         return Result.ok(kbFacadeService.patchTicket(
@@ -623,7 +646,7 @@ public class KbController {
      * @return 本次对账报告
      */
     @PostMapping("/engine/reconcile")
-    @OperLog(module = "知识库", operation = "触发引擎对账")
+    @OperLog(module = "知识库", operation = "触发引擎对账", recordParams = true)
     public Result<KbEngineReconcileVO> runEngineReconcile() {
         return Result.ok(kbFacadeService.runEngineReconcile());
     }

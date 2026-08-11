@@ -1,0 +1,37 @@
+sequenceDiagram
+    autonumber
+    participant U as 前端
+    participant B as BFF KbController/Facade
+    participant A as OperLogAspect
+    participant K as mis-kb
+    participant E as RAGFlow
+
+    Note over U,E: 链路一：审计采集（以修改 RAG 设置为例）
+    U->>B: PUT /libraries/{id}/engine/settings {新设置}
+    B->>B: 门面先读旧设置 getRagSettings(id) → before
+    B->>K: PUT /internal/v1/kb/libraries/{id}/engine/settings
+    K-->>B: 落库+引擎同步后返回生效设置
+    B-->>A: 门面方法返回（@OperLog 环绕）
+    A->>A: collectParams: 序列化入参(含 before+after) + 脱敏(归一化) + resultCount
+    A->>A: 组装六要素(userId/username/operTime/operation/requestParams/responseCode)
+    A->>A: 异步/同步写 sys_oper_log（失败不影响业务）
+
+    Note over U,E: 链路二：解析状态回写（KE-03/04）
+    U->>K: GET /libraries/{id}/documents（列表）
+    K->>K: syncOpenParseStatuses(pending/parsing docs)
+    K->>E: queryDocumentParseStatuses(datasetId, nativeDocIds)
+    E-->>K: Map<docId, ParseStatusSnapshot{status,progress,error}>
+    K->>K: 回写 parse_status/parse_progress/parse_error（failed→error 截断500，success→清空）
+    K-->>U: KbDocumentVO[]（含 parseProgress/parseError）
+    U->>K: POST /documents/reparse-all?onlyFailed=true
+    K->>K: 仅 failed 文档触发引擎重解析 + 清空 parse_error
+    K-->>U: KbReparseAllResult
+
+    Note over U,E: 链路三：检索过滤（KE-08/09）
+    U->>B: POST /hit-test {documentIds, uploadFrom, uploadTo, question}
+    B->>K: 透传 HitTestRequest
+    K->>K: KbHitTestService.run → RetrieveQueryResolver 合并
+    K->>K: 按 documentIds+created_at 范围过滤 kb_document(enabled=1) → engine doc ref 集合
+    K->>E: POST /retrieval {question, dataset_ids, document_ids:[...], ...}
+    E-->>K: chunks（仅命中过滤范围）
+    K-->>U: HitTestResultVO（回显生效过滤条件）

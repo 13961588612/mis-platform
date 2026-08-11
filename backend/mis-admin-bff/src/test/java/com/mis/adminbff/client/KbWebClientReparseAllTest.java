@@ -38,17 +38,20 @@ class KbWebClientReparseAllTest {
     private KbWebClient client;
 
     private final AtomicReference<String> rawPath = new AtomicReference<>();
+    private final AtomicReference<String> rawQuery = new AtomicReference<>();
     private final AtomicReference<String> method = new AtomicReference<>();
 
     @BeforeEach
     void setUp() throws IOException {
         rawPath.set(null);
+        rawQuery.set(null);
         method.set(null);
 
         server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
         server.createContext("/", exchange -> {
             URI requestUri = exchange.getRequestURI();
             rawPath.set(requestUri.getRawPath());
+            rawQuery.set(requestUri.getRawQuery());
             method.set(exchange.getRequestMethod());
             byte[] body = RESPONSE_BODY.getBytes(StandardCharsets.UTF_8);
             exchange.getResponseHeaders().add("Content-Type", MediaType.APPLICATION_JSON_VALUE);
@@ -78,12 +81,14 @@ class KbWebClientReparseAllTest {
     }
 
     @Test
-    @DisplayName("POST reparse-all 路径正确且结果反序列化完整")
+    @DisplayName("POST reparse-all 路径正确且结果反序列化完整（缺省 onlyFailed=false）")
     void reparseAllPostsCorrectPathAndDeserializes() {
-        KbReparseAllResultVO result = client.reparseAllDocuments(1L);
+        KbReparseAllResultVO result = client.reparseAllDocuments(1L, false);
 
         assertEquals("/internal/v1/kb/libraries/1/documents/reparse-all", rawPath.get());
         assertEquals("POST", method.get());
+        assertEquals("onlyFailed=false", rawQuery.get(),
+                "Q8 裁决：onlyFailed 走查询参数透传，缺省 false = 全量重解析");
 
         assertNotNull(result);
         assertEquals(1L, result.libraryId());
@@ -96,5 +101,15 @@ class KbWebClientReparseAllTest {
         assertEquals(99L, result.failedDocuments().get(0).documentId());
         assertEquals("a.pdf", result.failedDocuments().get(0).title());
         assertEquals("boom", result.failedDocuments().get(0).reason());
+    }
+
+    @Test
+    @DisplayName("onlyFailed=true 透传为查询参数（Q8：仅重试失败文档）")
+    void onlyFailedTruePassesQueryParam() {
+        KbReparseAllResultVO result = client.reparseAllDocuments(7L, true);
+
+        assertEquals("/internal/v1/kb/libraries/7/documents/reparse-all", rawPath.get());
+        assertEquals("onlyFailed=true", rawQuery.get());
+        assertNotNull(result);
     }
 }

@@ -222,7 +222,7 @@ class KbControllerCategoryAdminPermissionTest {
 
         KbCategoryVO expected = new KbCategoryVO(
                 2L, 1L, "改名", 1, 0, null, Instant.now(), Instant.now());
-        when(kbFacadeService.moveCategory(2L, 1L)).thenReturn(expected);
+        when(kbFacadeService.moveCategory(eq(2L), eq(1L), any())).thenReturn(expected);
 
         Result<KbCategoryVO> result = controller.moveCategory(
                 2L, new KbController.CategoryMoveBody(1L));
@@ -230,7 +230,7 @@ class KbControllerCategoryAdminPermissionTest {
         assertNotNull(result);
         assertTrue(result.isSuccess(), "放行时应返回成功 Result");
         assertSame(expected, result.getData());
-        verify(kbFacadeService).moveCategory(2L, 1L);
+        verify(kbFacadeService).moveCategory(eq(2L), eq(1L), any());
     }
 
     @Test
@@ -262,7 +262,7 @@ class KbControllerCategoryAdminPermissionTest {
 
         KbCategoryAdminVO row = new KbCategoryAdminVO(
                 9L, 2L, "role", 100L, 42L, Instant.now(), Instant.now());
-        when(kbFacadeService.grantCategoryAdmin(2L, "role", 100L)).thenReturn(row);
+        when(kbFacadeService.grantCategoryAdmin(eq(2L), eq("role"), eq(100L), any())).thenReturn(row);
 
         Result<KbCategoryAdminVO> result = controller.grantCategoryAdmin(
                 2L, new KbCategoryAdminCreateRequest("role", 100L));
@@ -270,7 +270,7 @@ class KbControllerCategoryAdminPermissionTest {
         assertNotNull(result);
         assertTrue(result.isSuccess());
         assertSame(row, result.getData());
-        verify(kbFacadeService).grantCategoryAdmin(2L, "role", 100L);
+        verify(kbFacadeService).grantCategoryAdmin(eq(2L), eq("role"), eq(100L), any());
     }
 
     @Test
@@ -284,7 +284,7 @@ class KbControllerCategoryAdminPermissionTest {
 
         assertNotNull(result);
         assertTrue(result.isSuccess());
-        verify(kbFacadeService).revokeCategoryAdmin(9L);
+        verify(kbFacadeService).revokeCategoryAdmin(eq(9L), any());
     }
 
     // ---------------------------------------------------------------- 顺序锁
@@ -301,8 +301,8 @@ class KbControllerCategoryAdminPermissionTest {
 
         // 若将来有人把 requireCategoryManagePermission() 挪到 kbFacadeService.moveCategory() 之后，
         // 这条断言会立刻失败。
-        verify(kbFacadeService, never()).moveCategory(any(), any());
-        verify(kbFacadeService, never()).grantCategoryAdmin(any(), any(), any());
-        verify(kbFacadeService, never()).revokeCategoryAdmin(any());
+        verify(kbFacadeService, never()).moveCategory(any(), any(), any());
+        verify(kbFacadeService, never()).grantCategoryAdmin(any(), any(), any(), any());
+        verify(kbFacadeService, never()).revokeCategoryAdmin(any(), any());
     }
 }

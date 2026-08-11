@@ -178,6 +178,21 @@ public class RagSettingsService {
                 && !EmptyResultStrategy.isValid(settings.emptyResultStrategy())) {
             throw new KbBusinessException(KbResultCode.KB_RAG_SETTINGS_INVALID);
         }
+        // KE-06/KE-07：OCR/overlap 校验（只校验不改写）。当前引擎不支持时仍允许保存
+        // （落库 + 回显 + 提示，设计 §1.4 降级路径），但非法取值直接拒绝。
+        if (settings.chunkOverlapTokenNum() != null && settings.chunkOverlapTokenNum() < 0) {
+            throw new KbBusinessException(KbResultCode.KB_RAG_SETTINGS_INVALID);
+        }
+        // 语言码值只认产品三档（zh/en/zh_en）：null = 缺省（前端不选时不发）；
+        // 非 null 一律 trim+小写后比对，空白串/超集码值同样拒绝（不静默改写）。
+        if (settings.ocrLanguage() != null) {
+            String lang = settings.ocrLanguage().trim().toLowerCase();
+            if (!RagSettings.OCR_LANGUAGE_ZH.equals(lang)
+                    && !RagSettings.OCR_LANGUAGE_EN.equals(lang)
+                    && !RagSettings.OCR_LANGUAGE_ZH_EN.equals(lang)) {
+                throw new KbBusinessException(KbResultCode.KB_RAG_SETTINGS_INVALID);
+            }
+        }
         return settings;
     }
 
@@ -216,7 +231,10 @@ public class RagSettingsService {
                 settings.separator(),
                 settings.emptyResultStrategy(),
                 settings.vectorSimilarityWeight(),
-                settings.rerankModelId());
+                settings.rerankModelId(),
+                settings.ocrEnabled(),
+                settings.ocrLanguage(),
+                settings.chunkOverlapTokenNum());
     }
 
     /**

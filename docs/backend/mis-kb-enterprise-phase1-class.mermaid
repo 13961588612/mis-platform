@@ -1,0 +1,126 @@
+classDiagram
+    class RagSettings {
+        +Integer topK
+        +Double scoreThreshold
+        +Boolean rerank
+        +String embeddingModel
+        +String retrievalMethod
+        +String chunkMethod
+        +Integer chunkTokenNum
+        +String separator
+        +String emptyResultStrategy
+        +Double vectorSimilarityWeight
+        +String rerankModelId
+        +Boolean ocrEnabled
+        +String ocrLanguage
+        +Integer chunkOverlapTokenNum
+        +defaults() RagSettings
+        +withDefaults() RagSettings
+    }
+    class KbDocument {
+        +Long id
+        +Long libraryId
+        +String title
+        +String engineDocumentRef
+        +String parseStatus
+        +Integer enabled
+        +String chunkMethod
+        +Integer chunkTokenNum
+        +String separator
+        +Integer parseProgress
+        +String parseError
+        +Instant createdAt
+        +Instant updatedAt
+    }
+    class ParseStatusSnapshot {
+        +String status
+        +Integer progress
+        +String error
+    }
+    class KbDocumentFilter {
+        +List~Long~ documentIds
+        +Instant uploadFrom
+        +Instant uploadTo
+        +Boolean enabledOnly
+    }
+    class RetrieveQuery {
+        +String question
+        +List~Long~ libraryIds
+        +Integer topK
+        +Double threshold
+        +String retrievalMethod
+        +Double vectorSimilarityWeight
+        +Boolean rerank
+        +String rerankModelId
+        +String emptyResultStrategy
+        +List~Long~ documentIds
+        +Instant uploadFrom
+        +Instant uploadTo
+    }
+    class RetrieveQueryResolver {
+        +resolveAll(ctx) Resolution
+    }
+    class EngineCapabilities {
+        +List~String~ capabilities
+        +boolean metadataFilterSupported
+        +boolean parserOcrSupported
+        +boolean parserOverlapSupported
+    }
+    class KnowledgeEnginePort {
+        <<interface>>
+        +queryDocumentParseStatuses(ref, ids) Map~String,ParseStatusSnapshot~
+        +retrieve(query) List~ChunkHit~
+        +capabilities() EngineCapabilities
+    }
+    class RagflowAdapter {
+        +queryDocumentParseStatuses(ref, ids) Map~String,ParseStatusSnapshot~
+        +retrieve(query) List~ChunkHit~
+        +capabilities() EngineCapabilities
+    }
+    class RagflowClient {
+        +retrieve(query, datasetIds) List~RfChunk~
+        +getDocument(datasetId, docId) RfDocument
+        +updateDatasetSettings(datasetId, settings)
+        +updateDocumentConfig(datasetId, docId, config)
+    }
+    class KbDocumentService {
+        +list(libraryId) List~KbDocumentVO~
+        +reparse(id, userId)
+        +reparseAll(libraryId, onlyFailed, userId) KbReparseAllResult
+        -syncOpenParseStatuses(lib, docs)
+    }
+    class KbRetrieveService {
+        +retrieve(userId, tenantId, request) RetrieveHitsVO
+    }
+    class KbHitTestService {
+        +run(request, userId) HitTestResultVO
+    }
+    class KbAuditBefore {
+        +Long targetId
+        +String targetTitle
+        +Object before
+    }
+    class OperLogAspect {
+        +around(pjp, operLog)
+        -isSensitiveKey(key) boolean
+        -collectParams(pjp, result) String
+    }
+    class KbController {
+        +updateRagSettings(id, settings, auditBefore)
+        +reparseAllDocuments(libraryId, onlyFailed)
+        +grantAcl(libraryId, body, auditBefore)
+    }
+
+    RagSettings "1" --> "1" KbDocument : 库级默认(文件级 null 继承)
+    KbDocument "1" --> "0..1" ParseStatusSnapshot : 回写
+    KbDocumentFilter "1" --> "0..*" KbDocument : 过滤
+    RetrieveQuery "1" --> "0..*" KbDocument : documentIds 引用
+    RetrieveQueryResolver ..> RetrieveQuery : 产出
+    KnowledgeEnginePort <|.. RagflowAdapter
+    RagflowAdapter --> RagflowClient
+    KbDocumentService --> KnowledgeEnginePort
+    KbRetrieveService --> KnowledgeEnginePort
+    KbRetrieveService --> RetrieveQueryResolver
+    KbHitTestService --> RetrieveQueryResolver
+    KbController ..> OperLogAspect : @OperLog
+    KbController --> KbAuditBefore : 快照入参

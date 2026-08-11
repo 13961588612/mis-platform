@@ -29,6 +29,14 @@ package com.mis.kb.domain.model;
  * 「vector→1.0 / keyword→0.0」的强制覆写<b>只发生在检索期合并阶段</b>
  * （{@link RetrieveQueryResolver} S3），不落库。
  *
+ * <p><b>企业级增强一期（KE-06/KE-07）新增三字段（追加末位，零 DDL）：</b>
+ * {@code ocrEnabled} / {@code ocrLanguage} / {@code chunkOverlapTokenNum}。
+ * 当前引擎实测<b>不支持</b> OCR/overlap 键（RAGFlow parser_config 白名单不含，
+ * 硬下发即 code:101/102 拒整单），故三字段<b>只落库 + 回显 + 提示</b>，
+ * <b>绝不参与下发</b>（{@code RagflowAdapter} / {@code RagflowClient} 白名单天然不含）。
+ * 引擎升级后翻转 {@link EngineCapabilities} 的 {@code parser_ocr} / {@code parser_overlap}
+ * 能力码即放行下发，代码分支不动（设计 §1.4 / §3.2）。
+ *
  * @param topK                   召回条数上限
  * @param scoreThreshold         相似度阈值（0~1）
  * @param rerank                 是否启用重排（模型 ID 来自全局配置 {@code mis.kb.engine.rerank-model-id}）
@@ -40,6 +48,9 @@ package com.mis.kb.domain.model;
  * @param emptyResultStrategy    空结果策略码值（见 {@link EmptyResultStrategy}）
  * @param vectorSimilarityWeight 向量相似度权重（0~1），仅 hybrid 有意义；WA-01 新增
  * @param rerankModelId          库级重排模型 id（全限定）；null = 继承全局；kb_settings_model_chunk 新增
+ * @param ocrEnabled             OCR 开关；能力 {@code parser_ocr=true} 前**不下发**；企业级增强一期新增
+ * @param ocrLanguage            OCR 语言码值 zh/en/zh_en；能力支持前**不下发**；企业级增强一期新增
+ * @param chunkOverlapTokenNum   分块重叠 token 数（正整数，null=引擎默认/0）；能力 {@code parser_overlap=true} 前**不下发**；企业级增强一期新增
  */
 public record RagSettings(
         Integer topK,
@@ -52,7 +63,34 @@ public record RagSettings(
         String separator,
         String emptyResultStrategy,
         Double vectorSimilarityWeight,
-        String rerankModelId) {
+        String rerankModelId,
+        Boolean ocrEnabled,
+        String ocrLanguage,
+        Integer chunkOverlapTokenNum) {
+
+    /**
+     * 兼容构造：11 参数旧签名，OCR/overlap 三字段置 {@code null}（未设置）。
+     *
+     * <p>record 是位置参数，新增字段后既有 11 参构造点（测试夹具、门面组装等）
+     * 无法再用旧签名；本构造器保持旧调用点零改动，同时保证「未设置」语义
+     * 由 {@link #withDefaults()} 兜底（ocrEnabled→false、ocrLanguage→zh）。
+     */
+    public RagSettings(
+            Integer topK,
+            Double scoreThreshold,
+            Boolean rerank,
+            String embeddingModel,
+            String retrievalMethod,
+            String chunkMethod,
+            Integer chunkTokenNum,
+            String separator,
+            String emptyResultStrategy,
+            Double vectorSimilarityWeight,
+            String rerankModelId) {
+        this(topK, scoreThreshold, rerank, embeddingModel, retrievalMethod, chunkMethod,
+                chunkTokenNum, separator, emptyResultStrategy, vectorSimilarityWeight,
+                rerankModelId, null, null, null);
+    }
 
     /** 默认召回条数。 */
     public static final int DEFAULT_TOP_K = 5;
@@ -73,6 +111,15 @@ public record RagSettings(
     /** 默认向量相似度权重（WA-01；hybrid 下语义 30% / 关键字 70%）。 */
     public static final double DEFAULT_VECTOR_SIMILARITY_WEIGHT = 0.3D;
 
+    /** 默认 OCR 语言码值（企业级增强一期 KE-06；能力 {@code parser_ocr=true} 前不下发）。 */
+    public static final String DEFAULT_OCR_LANGUAGE = "zh";
+    /** OCR 语言码值：中文。 */
+    public static final String OCR_LANGUAGE_ZH = "zh";
+    /** OCR 语言码值：英文。 */
+    public static final String OCR_LANGUAGE_EN = "en";
+    /** OCR 语言码值：中英混合。 */
+    public static final String OCR_LANGUAGE_ZH_EN = "zh_en";
+
     /** 检索方式码值：纯向量（语义）检索。 */
     public static final String METHOD_VECTOR = "vector";
     /** 检索方式码值：纯关键字检索。 */
@@ -82,6 +129,9 @@ public record RagSettings(
 
     /**
      * 全局默认设置（无库级配置、或多库检索回落时使用）。
+     *
+     * <p>OCR 三字段默认：{@code ocrEnabled=false}、{@code ocrLanguage="zh"}、
+     * {@code chunkOverlapTokenNum=null}（null = 引擎默认/0，能力不支持时不下发）。
      *
      * @return 一份关键字段非空的默认设置
      */
@@ -97,6 +147,9 @@ public record RagSettings(
                 null,
                 EmptyResultStrategy.SUGGEST.code(),
                 DEFAULT_VECTOR_SIMILARITY_WEIGHT,
+                null,
+                Boolean.FALSE,
+                DEFAULT_OCR_LANGUAGE,
                 null);
     }
 
@@ -111,6 +164,9 @@ public record RagSettings(
      *
      * <p>{@code rerankModelId} 保持 {@code null}（null = 继承全局
      * {@code mis.kb.engine.rerank-model-id}，库级不指定，设计 §3.2.1）。
+     *
+     * <p>{@code ocrEnabled} null → {@code false}；{@code ocrLanguage} 空 → {@code zh}；
+     * {@code chunkOverlapTokenNum} 保持 {@code null}（null = 引擎默认/0，不硬编码兜底）。
      *
      * @return 补齐默认值后的新实例（本记录不可变，原实例不受影响）
      */
@@ -129,7 +185,10 @@ public record RagSettings(
                 EmptyResultStrategy.normalize(emptyResultStrategy),
                 vectorSimilarityWeight != null
                         ? vectorSimilarityWeight : DEFAULT_VECTOR_SIMILARITY_WEIGHT,
-                rerankModelId);
+                rerankModelId,
+                ocrEnabled != null ? ocrEnabled : Boolean.FALSE,
+                ocrLanguage != null && !ocrLanguage.isBlank() ? ocrLanguage : DEFAULT_OCR_LANGUAGE,
+                chunkOverlapTokenNum);
     }
 
     /**
@@ -159,6 +218,27 @@ public record RagSettings(
      */
     public boolean isHybrid() {
         return METHOD_HYBRID.equals(normalizedRetrievalMethod());
+    }
+
+    /**
+     * 归一化 OCR 语言码值（静态工具，供校验层与合并器共用）。
+     *
+     * <p>产品三档固化 {@code zh}/{@code en}/{@code zh_en}；非法/空值回落
+     * {@value #DEFAULT_OCR_LANGUAGE}。存库原样，能力不支持时不参与下发。
+     *
+     * @param language 原始码值，可为 {@code null}
+     * @return 合法码值之一；非法/空值回落 {@value #DEFAULT_OCR_LANGUAGE}
+     */
+    public static String normalizeOcrLanguage(String language) {
+        if (language == null || language.isBlank()) {
+            return DEFAULT_OCR_LANGUAGE;
+        }
+        String lower = language.trim().toLowerCase();
+        if (OCR_LANGUAGE_ZH.equals(lower) || OCR_LANGUAGE_EN.equals(lower)
+                || OCR_LANGUAGE_ZH_EN.equals(lower)) {
+            return lower;
+        }
+        return DEFAULT_OCR_LANGUAGE;
     }
 
     /**

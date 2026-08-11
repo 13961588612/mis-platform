@@ -7,6 +7,7 @@ import com.mis.kb.domain.model.EngineDocumentRef;
 import com.mis.kb.domain.model.EngineLibraryRef;
 import com.mis.kb.domain.model.KbResultCode;
 import com.mis.kb.domain.model.ParseStatus;
+import com.mis.kb.domain.model.ParseStatusSnapshot;
 import com.mis.kb.domain.repository.KbDocumentRepository;
 import com.mis.kb.domain.repository.KbLibraryRepository;
 import com.mis.kb.engine.KnowledgeEnginePort;
@@ -22,6 +23,7 @@ import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
@@ -92,7 +94,7 @@ class KbDocumentServiceReparseAllTest {
     void emptyLibraryReturnsZeroResult() {
         when(documentRepository.findByLibraryIdOrderByCreatedAtDesc(LIBRARY_ID)).thenReturn(List.of());
 
-        KbReparseAllResult result = service.reparseAll(LIBRARY_ID, USER);
+        KbReparseAllResult result = service.reparseAll(LIBRARY_ID, false, USER);
 
         assertEquals(LIBRARY_ID, result.libraryId());
         assertEquals(0, result.total());
@@ -111,7 +113,7 @@ class KbDocumentServiceReparseAllTest {
         KbDocument d2 = doc(2L, "b.pdf", "doc-2", ParseStatus.FAILED.code());
         when(documentRepository.findByLibraryIdOrderByCreatedAtDesc(LIBRARY_ID)).thenReturn(List.of(d1, d2));
 
-        KbReparseAllResult result = service.reparseAll(LIBRARY_ID, USER);
+        KbReparseAllResult result = service.reparseAll(LIBRARY_ID, false, USER);
 
         assertEquals(2, result.total());
         assertEquals(2, result.success());
@@ -142,7 +144,7 @@ class KbDocumentServiceReparseAllTest {
                 .when(enginePort).reparseDocument(
                         any(EngineLibraryRef.class), eq(new EngineDocumentRef("ragflow", "doc-2")));
 
-        KbReparseAllResult result = service.reparseAll(LIBRARY_ID, USER);
+        KbReparseAllResult result = service.reparseAll(LIBRARY_ID, false, USER);
 
         assertEquals(3, result.total());
         assertEquals(2, result.success());
@@ -176,7 +178,7 @@ class KbDocumentServiceReparseAllTest {
                 eq(new EngineLibraryRef("ragflow", "ds-test")), anyList()))
                 .thenReturn(Map.of());
 
-        KbReparseAllResult result = service.reparseAll(LIBRARY_ID, USER);
+        KbReparseAllResult result = service.reparseAll(LIBRARY_ID, false, USER);
 
         assertEquals(1, result.success());
         assertEquals(1, result.skipped());
@@ -196,7 +198,7 @@ class KbDocumentServiceReparseAllTest {
         KbDocument d2 = doc(2L, "orphan.pdf", null, ParseStatus.SUCCESS.code());
         when(documentRepository.findByLibraryIdOrderByCreatedAtDesc(LIBRARY_ID)).thenReturn(List.of(d1, d2));
 
-        KbReparseAllResult result = service.reparseAll(LIBRARY_ID, USER);
+        KbReparseAllResult result = service.reparseAll(LIBRARY_ID, false, USER);
 
         assertEquals(2, result.total());
         assertEquals(1, result.success());
@@ -213,7 +215,7 @@ class KbDocumentServiceReparseAllTest {
         when(libraryRepository.findById(LIBRARY_ID)).thenReturn(Optional.empty());
 
         KbBusinessException ex = assertThrows(
-                KbBusinessException.class, () -> service.reparseAll(LIBRARY_ID, USER));
+                KbBusinessException.class, () -> service.reparseAll(LIBRARY_ID, false, USER));
 
         assertEquals(KbResultCode.KB_LIBRARY_NOT_FOUND.getCode(), ex.getCode());
         verify(documentRepository, never()).findByLibraryIdOrderByCreatedAtDesc(any());
@@ -225,7 +227,7 @@ class KbDocumentServiceReparseAllTest {
         when(libraryService.hasLibraryManage(USER, LIBRARY_ID)).thenReturn(false);
 
         KbBusinessException ex = assertThrows(
-                KbBusinessException.class, () -> service.reparseAll(LIBRARY_ID, USER));
+                KbBusinessException.class, () -> service.reparseAll(LIBRARY_ID, false, USER));
 
         assertEquals(KbResultCode.KB_CATEGORY_NOT_MANAGEABLE.getCode(), ex.getCode());
         verify(documentRepository, never()).findByLibraryIdOrderByCreatedAtDesc(any());
@@ -242,7 +244,7 @@ class KbDocumentServiceReparseAllTest {
                 .thenReturn(List.of(doc(1L, "a.pdf", "doc-1", ParseStatus.SUCCESS.code())));
 
         KbBusinessException ex = assertThrows(
-                KbBusinessException.class, () -> service.reparseAll(LIBRARY_ID, USER));
+                KbBusinessException.class, () -> service.reparseAll(LIBRARY_ID, false, USER));
 
         assertEquals(KbResultCode.KB_LIBRARY_NOT_FOUND.getCode(), ex.getCode());
         verify(enginePort, never()).reparseDocument(any(), any());
@@ -257,11 +259,74 @@ class KbDocumentServiceReparseAllTest {
                 .when(enginePort).reparseDocument(
                         any(EngineLibraryRef.class), eq(new EngineDocumentRef("ragflow", "doc-1")));
 
-        KbReparseAllResult result = service.reparseAll(LIBRARY_ID, USER);
+        KbReparseAllResult result = service.reparseAll(LIBRARY_ID, false, USER);
 
         assertThrows(UnsupportedOperationException.class,
                 () -> result.failedDocuments().add(
                         new KbReparseAllResult.FailedDocument(9L, "x", "y")));
         assertFalse(result.failedDocuments().isEmpty());
+    }
+
+    @Test
+    @DisplayName("onlyFailed=true：仅触发 failed 文档，其余计入 skipped")
+    void onlyFailedTriggersOnlyFailedDocuments() {
+        KbDocument d1 = doc(1L, "ok.pdf", "doc-1", ParseStatus.SUCCESS.code());
+        KbDocument d2 = doc(2L, "broken.pdf", "doc-2", ParseStatus.FAILED.code());
+        KbDocument d3 = doc(3L, "pending.pdf", "doc-3", ParseStatus.PENDING.code());
+        when(documentRepository.findByLibraryIdOrderByCreatedAtDesc(LIBRARY_ID))
+                .thenReturn(List.of(d1, d2, d3));
+
+        KbReparseAllResult result = service.reparseAll(LIBRARY_ID, true, USER);
+
+        assertEquals(3, result.total());
+        assertEquals(1, result.success());
+        assertEquals(0, result.failed());
+        assertEquals(2, result.skipped());
+        verify(enginePort, times(1)).reparseDocument(
+                eq(new EngineLibraryRef("ragflow", "ds-test")),
+                eq(new EngineDocumentRef("ragflow", "doc-2")));
+        verify(enginePort, never()).reparseDocument(
+                eq(new EngineLibraryRef("ragflow", "ds-test")),
+                eq(new EngineDocumentRef("ragflow", "doc-1")));
+        verify(enginePort, never()).reparseDocument(
+                eq(new EngineLibraryRef("ragflow", "ds-test")),
+                eq(new EngineDocumentRef("ragflow", "doc-3")));
+        // 触发前清空失败原因（KE-04 口径）
+        assertNull(d2.getParseError());
+    }
+
+    @Test
+    @DisplayName("onlyFailed=true：先 sync 收敛 open 文档，收敛后不再触发（R8）")
+    void onlyFailedSkipsConvergedOpenDocuments() {
+        KbDocument d1 = doc(1L, "broken.pdf", "doc-1", ParseStatus.FAILED.code());
+        KbDocument d2 = doc(2L, "real-broken.pdf", "doc-2", ParseStatus.FAILED.code());
+        KbDocument d3 = doc(3L, "converged.pdf", "doc-3", ParseStatus.PENDING.code());
+        when(documentRepository.findByLibraryIdOrderByCreatedAtDesc(LIBRARY_ID))
+                .thenReturn(List.of(d1, d2, d3));
+        // syncOpenParseStatuses 只查 pending/parsing（设计 §3.3 明确不增加引擎调用次数）：
+        // 引擎侧 d3 实际已 DONE，收敛为 SUCCESS；d1/d2 为 failed 不入 sync 批次、保持 failed
+        when(enginePort.queryDocumentParseStatuses(
+                eq(new EngineLibraryRef("ragflow", "ds-test")), anyList()))
+                .thenReturn(Map.of("doc-3", new ParseStatusSnapshot(
+                        ParseStatus.SUCCESS.code(), 100, null)));
+
+        KbReparseAllResult result = service.reparseAll(LIBRARY_ID, true, USER);
+
+        // d1/d2（failed）触发、d3 经 sync 收敛为 SUCCESS 后按 onlyFailed 语义跳过
+        assertEquals(3, result.total());
+        assertEquals(2, result.success());
+        assertEquals(0, result.failed());
+        assertEquals(1, result.skipped());
+        assertEquals(ParseStatus.SUCCESS.code(), d3.getParseStatus());
+        assertNull(d3.getParseError());
+        verify(enginePort).reparseDocument(
+                eq(new EngineLibraryRef("ragflow", "ds-test")),
+                eq(new EngineDocumentRef("ragflow", "doc-1")));
+        verify(enginePort).reparseDocument(
+                eq(new EngineLibraryRef("ragflow", "ds-test")),
+                eq(new EngineDocumentRef("ragflow", "doc-2")));
+        verify(enginePort, never()).reparseDocument(
+                eq(new EngineLibraryRef("ragflow", "ds-test")),
+                eq(new EngineDocumentRef("ragflow", "doc-3")));
     }
 }

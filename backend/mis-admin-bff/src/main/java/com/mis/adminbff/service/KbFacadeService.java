@@ -3,6 +3,7 @@ package com.mis.adminbff.service;
 import com.mis.adminbff.client.KbWebClient;
 import com.mis.adminbff.dto.kb.KbAclSummaryVO;
 import com.mis.adminbff.dto.kb.KbAclVO;
+import com.mis.adminbff.dto.kb.KbAuditBefore;
 import com.mis.adminbff.dto.kb.KbCategoryAdminVO;
 import com.mis.adminbff.dto.kb.KbCategoryVO;
 import com.mis.adminbff.dto.kb.KbDashboardVO;
@@ -38,6 +39,7 @@ import com.mis.adminbff.support.RequestContext;
 import com.mis.common.core.exception.BusinessException;
 import com.mis.common.core.exception.ResultCode;
 import com.mis.common.core.result.PageResult;
+import com.mis.common.web.audit.OperLog;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -47,9 +49,11 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 
 /**
@@ -96,7 +100,22 @@ public class KbFacadeService {
         return kbWebClient.createCategory(body);
     }
 
-    public KbCategoryVO updateCategory(Long id, String name, Integer enabled, Integer sort, String remark) {
+    /**
+     * 修改分类（企业级增强一期 KE-01：审计快照入参，before=旧分类信息）。
+     *
+     * <p>{@code @OperLog} 挂门面方法而非 Controller：切面只能序列化方法入参，
+     * 旧值必须以 {@code auditBefore} 形态出现在本次跨 Bean 调用上（deleteGroup 同款范式）。
+     *
+     * @param id          分类 id
+     * @param name        新分类名
+     * @param enabled     新启用状态
+     * @param sort        新排序
+     * @param remark      新备注
+     * @param auditBefore 修改前快照（由 {@link #loadCategoryBefore} 取得；仅留痕，不参与业务）
+     */
+    @OperLog(module = "知识库", operation = "修改分类", recordParams = true)
+    public KbCategoryVO updateCategory(Long id, String name, Integer enabled, Integer sort, String remark,
+                                       KbAuditBefore auditBefore) {
         Map<String, Object> body = new HashMap<>();
         body.put("name", name);
         body.put("enabled", enabled != null ? enabled : 1);
@@ -105,7 +124,14 @@ public class KbFacadeService {
         return kbWebClient.updateCategory(id, body);
     }
 
-    public void deleteCategory(Long id) {
+    /**
+     * 删除分类（KE-01：审计快照入参，before=删除前快照）。
+     *
+     * @param id          分类 id
+     * @param auditBefore 删除前快照（由 {@link #loadCategoryBefore} 取得；仅留痕）
+     */
+    @OperLog(module = "知识库", operation = "删除分类", recordParams = true)
+    public void deleteCategory(Long id, KbAuditBefore auditBefore) {
         kbWebClient.deleteCategory(id);
     }
 
@@ -114,8 +140,9 @@ public class KbFacadeService {
         return kbWebClient.listManageableCategoryIds();
     }
 
-    /** 移动分类节点（知识库域一期；纯透传）。 */
-    public KbCategoryVO moveCategory(Long id, Long newParentId) {
+    /** 移动分类节点（知识库域一期；纯透传 + 审计快照入参，before=旧分类信息含原 parentId）。 */
+    @OperLog(module = "知识库", operation = "移动分类", recordParams = true)
+    public KbCategoryVO moveCategory(Long id, Long newParentId, KbAuditBefore auditBefore) {
         return kbWebClient.moveCategory(id, newParentId);
     }
 
@@ -125,14 +152,35 @@ public class KbFacadeService {
         return kbWebClient.listCategoryAdmins(categoryId);
     }
 
-    public KbCategoryAdminVO grantCategoryAdmin(Long categoryId, String subjectType, Long subjectId) {
+    /**
+     * 授予分类管理员（KE-01：审计快照入参，before=现有管理员列表）。
+     *
+     * @param categoryId  分类 id
+     * @param subjectType 主体类型 user/role/dept
+     * @param subjectId   主体 id
+     * @param auditBefore 授予前快照（由 {@link #loadCategoryAdminListBefore} 取得；仅留痕）
+     */
+    @OperLog(module = "知识库", operation = "授予分类管理员", recordParams = true)
+    public KbCategoryAdminVO grantCategoryAdmin(
+            Long categoryId, String subjectType, Long subjectId, KbAuditBefore auditBefore) {
         Map<String, Object> body = new HashMap<>();
         body.put("subjectType", subjectType);
         body.put("subjectId", subjectId);
         return kbWebClient.grantCategoryAdmin(categoryId, body);
     }
 
-    public void revokeCategoryAdmin(Long adminId) {
+    /**
+     * 撤销分类管理员（KE-01：审计快照入参，before=目标管理员 id 最小快照）。
+     *
+     * <p>撤销端点只暴露 {@code adminId}，BFF 侧无「按 id 取管理员」读端点，
+     * 故 before 取最小快照（adminId）；行级详情（subjectType/subjectId）随授予时的
+     * 管理员列表快照留痕。
+     *
+     * @param adminId     管理员授权行 id
+     * @param auditBefore 撤销前快照（最小快照；仅留痕）
+     */
+    @OperLog(module = "知识库", operation = "撤销分类管理员", recordParams = true)
+    public void revokeCategoryAdmin(Long adminId, KbAuditBefore auditBefore) {
         kbWebClient.revokeCategoryAdmin(adminId);
     }
 
@@ -158,8 +206,20 @@ public class KbFacadeService {
         return kbWebClient.createLibrary(body);
     }
 
+    /**
+     * 修改知识库（KE-01：审计快照入参，before=旧库元信息）。
+     *
+     * @param id          知识库 id
+     * @param name        新库名
+     * @param secrecy     新密级
+     * @param status      新状态
+     * @param settings    新 RAG 设置
+     * @param auditBefore 修改前快照（由 {@link #loadLibraryBefore} 取得；仅留痕）
+     */
+    @OperLog(module = "知识库", operation = "修改知识库", recordParams = true)
     public KbLibraryVO updateLibrary(
-            Long id, String name, String secrecy, Integer status, KbRagSettings settings) {
+            Long id, String name, String secrecy, Integer status, KbRagSettings settings,
+            KbAuditBefore auditBefore) {
         Map<String, Object> body = new HashMap<>();
         body.put("name", name);
         body.put("secrecy", secrecy);
@@ -219,8 +279,18 @@ public class KbFacadeService {
         return kbWebClient.getRagSettings(libraryId);
     }
 
-    /** 保存知识库 RAG 设置（L-08）。 */
-    public KbRagSettings updateRagSettings(Long libraryId, KbRagSettings settings) {
+    /**
+     * 保存知识库 RAG 设置（L-08；KE-01 审计快照入参，before=旧设置）。
+     *
+     * <p>{@code KbRagSettings} 本身不含 {@code java.time} 字段，可直接作为
+     * {@code auditBefore.before} 值（KbAuditBefore 注释中的「RAG 设置例外」）。
+     *
+     * @param libraryId   知识库 id
+     * @param settings    新设置
+     * @param auditBefore 修改前快照（由 {@link #loadRagSettingsBefore} 取得；仅留痕）
+     */
+    @OperLog(module = "知识库", operation = "修改 RAG 设置", recordParams = true)
+    public KbRagSettings updateRagSettings(Long libraryId, KbRagSettings settings, KbAuditBefore auditBefore) {
         return kbWebClient.updateRagSettings(libraryId, settings);
     }
 
@@ -258,7 +328,16 @@ public class KbFacadeService {
                 chunkMethod, chunkTokenNum, separator);
     }
 
-    public void setDocumentEnabled(Long libraryId, Long id, boolean enabled) {
+    /**
+     * 启停文档（KE-01：审计快照入参，before=旧 enabled 等文档信息）。
+     *
+     * @param libraryId   知识库 id
+     * @param id          文档 id
+     * @param enabled     目标启用状态
+     * @param auditBefore 修改前快照（由 {@link #loadDocumentBefore} 取得；仅留痕）
+     */
+    @OperLog(module = "知识库", operation = "启停文档", recordParams = true)
+    public void setDocumentEnabled(Long libraryId, Long id, boolean enabled, KbAuditBefore auditBefore) {
         kbWebClient.setDocumentEnabled(libraryId, id, enabled);
     }
 
@@ -266,17 +345,40 @@ public class KbFacadeService {
         kbWebClient.reparseDocument(libraryId, id);
     }
 
-    /** 库级一键全部重解析（P1-1：换嵌入模型后全量重解析恢复检索；纯透传）。 */
-    public KbReparseAllResultVO reparseAllDocuments(Long libraryId) {
-        return kbWebClient.reparseAllDocuments(libraryId);
+    /**
+     * 库级一键全部重解析（P1-1；KE-05 扩展 {@code onlyFailed=true} 仅重试失败文档；纯透传）。
+     *
+     * @param libraryId 知识库 id
+     * @param onlyFailed 仅重试 {@code parse_status=failed} 文档；{@code false} = 全量
+     * @return 批量结果
+     */
+    public KbReparseAllResultVO reparseAllDocuments(Long libraryId, boolean onlyFailed) {
+        return kbWebClient.reparseAllDocuments(libraryId, onlyFailed);
     }
 
-    /** 更新文档级切片配置（kb_settings_model_chunk；改参触发重解析）。 */
-    public void updateDocumentChunkConfig(Long libraryId, Long docId, Map<String, Object> body) {
+    /**
+     * 更新文档级切片配置（kb_settings_model_chunk；KE-01 审计快照入参，before=旧文件级切片配置）。
+     *
+     * @param libraryId   知识库 id
+     * @param docId       文档 id
+     * @param body        新切片配置（chunkMethod/chunkTokenNum/separator；全 null=清空覆盖）
+     * @param auditBefore 修改前快照（由 {@link #loadDocumentBefore} 取得；仅留痕）
+     */
+    @OperLog(module = "知识库", operation = "修改文档切片配置", recordParams = true)
+    public void updateDocumentChunkConfig(
+            Long libraryId, Long docId, Map<String, Object> body, KbAuditBefore auditBefore) {
         kbWebClient.updateDocumentChunkConfig(libraryId, docId, body);
     }
 
-    public void deleteDocument(Long libraryId, Long id) {
+    /**
+     * 删除文档（KE-01：审计快照入参，before=删除前快照）。
+     *
+     * @param libraryId   知识库 id
+     * @param id          文档 id
+     * @param auditBefore 删除前快照（由 {@link #loadDocumentBefore} 取得；仅留痕）
+     */
+    @OperLog(module = "知识库", operation = "删除文档", recordParams = true)
+    public void deleteDocument(Long libraryId, Long id, KbAuditBefore auditBefore) {
         kbWebClient.deleteDocument(libraryId, id);
     }
 
@@ -286,7 +388,18 @@ public class KbFacadeService {
         return kbWebClient.listAcls(libraryId);
     }
 
-    public KbAclVO grantAcl(Long libraryId, String subjectType, Long subjectId, String action) {
+    /**
+     * 授予库权限（KE-01：审计快照入参，before=现有 ACL 列表）。
+     *
+     * @param libraryId   知识库 id
+     * @param subjectType 主体类型 user/role/dept
+     * @param subjectId   主体 id
+     * @param action      权限动作（read/write/manage）
+     * @param auditBefore 授予前快照（由 {@link #loadAclListBefore} 取得；仅留痕）
+     */
+    @OperLog(module = "知识库", operation = "授予库权限", recordParams = true)
+    public KbAclVO grantAcl(Long libraryId, String subjectType, Long subjectId, String action,
+                            KbAuditBefore auditBefore) {
         Map<String, Object> body = new HashMap<>();
         body.put("subjectType", subjectType);
         body.put("subjectId", subjectId);
@@ -294,8 +407,211 @@ public class KbFacadeService {
         return kbWebClient.grantAcl(libraryId, body);
     }
 
-    public void revokeAcl(Long aclId) {
+    /**
+     * 撤销库权限（KE-01：审计快照入参，before=目标 ACL 最小快照）。
+     *
+     * <p>撤销端点只暴露 {@code aclId}，BFF 侧无「按 id 取 ACL」读端点，
+     * 故 before 取最小快照（aclId）；行级详情随授予时的 ACL 列表快照留痕。
+     *
+     * @param aclId       ACL 行 id
+     * @param auditBefore 撤销前快照（最小快照；仅留痕）
+     */
+    @OperLog(module = "知识库", operation = "撤销库权限", recordParams = true)
+    public void revokeAcl(Long aclId, KbAuditBefore auditBefore) {
         kbWebClient.revokeAcl(aclId);
+    }
+
+    // ------------------------------------------------------------------ 审计快照采集（企业级增强一期 KE-01 / Q2）
+
+    /**
+     * 采集「修改/删除分类」前的旧值快照。
+     *
+     * <p><b>R2 铁律：</b>读旧值失败<b>不阻断主链路</b>——异常一律吞掉并回退最小快照
+     * （仅 id），审计主干六要素不丢。快照字段只用 Jackson 免注册类型（无
+     * {@code java.time}），避免裸 ObjectMapper 序列化炸掉整条 requestParams。
+     *
+     * @param id 分类 id
+     * @return 快照包装，恒非 {@code null}
+     */
+    public KbAuditBefore loadCategoryBefore(Long id) {
+        try {
+            return kbWebClient.listCategories().stream()
+                    .filter(c -> c != null && Objects.equals(c.id(), id))
+                    .findFirst()
+                    .map(c -> KbAuditBefore.of(id, c.name(), categorySnapshot(c)))
+                    .orElseGet(() -> KbAuditBefore.minimal(id));
+        } catch (Exception e) {
+            log.warn("采集分类审计快照失败 id={}: {}", id, e.getMessage());
+            return KbAuditBefore.minimal(id);
+        }
+    }
+
+    /**
+     * 采集「授予分类管理员」前的现有管理员列表快照。
+     *
+     * @param categoryId 分类 id
+     * @return 快照包装（before=管理员行窄快照列表），恒非 {@code null}
+     */
+    public KbAuditBefore loadCategoryAdminListBefore(Long categoryId) {
+        try {
+            List<Object> admins = kbWebClient.listCategoryAdmins(categoryId).stream()
+                    .filter(Objects::nonNull)
+                    .map(KbFacadeService::categoryAdminSnapshot)
+                    .map(a -> (Object) a)
+                    .toList();
+            return KbAuditBefore.of(categoryId, "分类管理员", admins);
+        } catch (Exception e) {
+            log.warn("采集分类管理员审计快照失败 categoryId={}: {}", categoryId, e.getMessage());
+            return KbAuditBefore.minimal(categoryId);
+        }
+    }
+
+    /**
+     * 采集「修改知识库」前的旧库元信息快照。
+     *
+     * @param id 知识库 id
+     * @return 快照包装，恒非 {@code null}
+     */
+    public KbAuditBefore loadLibraryBefore(Long id) {
+        try {
+            KbLibraryVO lib = kbWebClient.getLibrary(id);
+            if (lib == null) {
+                return KbAuditBefore.minimal(id);
+            }
+            return KbAuditBefore.of(id, lib.name(), librarySnapshot(lib));
+        } catch (Exception e) {
+            log.warn("采集知识库审计快照失败 id={}: {}", id, e.getMessage());
+            return KbAuditBefore.minimal(id);
+        }
+    }
+
+    /**
+     * 采集「修改 RAG 设置」前的旧设置快照。
+     *
+     * <p>{@code KbRagSettings} 不含 {@code java.time}，可直接作 before（KbAuditBefore 例外）。
+     *
+     * @param libraryId 知识库 id
+     * @return 快照包装（before=旧设置或 null），恒非 {@code null}
+     */
+    public KbAuditBefore loadRagSettingsBefore(Long libraryId) {
+        try {
+            KbRagSettings old = kbWebClient.getRagSettings(libraryId);
+            if (old == null) {
+                return KbAuditBefore.minimal(libraryId);
+            }
+            return KbAuditBefore.of(libraryId, "RAG 设置", old);
+        } catch (Exception e) {
+            log.warn("采集 RAG 设置审计快照失败 libraryId={}: {}", libraryId, e.getMessage());
+            return KbAuditBefore.minimal(libraryId);
+        }
+    }
+
+    /**
+     * 采集「修改切片配置 / 启停 / 删除文档」前的旧文档快照。
+     *
+     * @param libraryId 知识库 id
+     * @param id        文档 id
+     * @return 快照包装，恒非 {@code null}
+     */
+    public KbAuditBefore loadDocumentBefore(Long libraryId, Long id) {
+        try {
+            KbDocumentVO doc = kbWebClient.getDocument(libraryId, id);
+            if (doc == null) {
+                return KbAuditBefore.minimal(id);
+            }
+            return KbAuditBefore.of(id, doc.title(), documentSnapshot(doc));
+        } catch (Exception e) {
+            log.warn("采集文档审计快照失败 libraryId={} id={}: {}", libraryId, id, e.getMessage());
+            return KbAuditBefore.minimal(id);
+        }
+    }
+
+    /**
+     * 采集「授予库权限」前的现有 ACL 列表快照。
+     *
+     * @param libraryId 知识库 id
+     * @return 快照包装（before=ACL 行窄快照列表），恒非 {@code null}
+     */
+    public KbAuditBefore loadAclListBefore(Long libraryId) {
+        try {
+            List<Object> acls = kbWebClient.listAcls(libraryId).stream()
+                    .filter(Objects::nonNull)
+                    .map(KbFacadeService::aclSnapshot)
+                    .map(a -> (Object) a)
+                    .toList();
+            return KbAuditBefore.of(libraryId, "库权限", acls);
+        } catch (Exception e) {
+            log.warn("采集 ACL 审计快照失败 libraryId={}: {}", libraryId, e.getMessage());
+            return KbAuditBefore.minimal(libraryId);
+        }
+    }
+
+    /** 分类窄快照（仅 Jackson 免注册类型，剔除 Instant）。 */
+    private static Map<String, Object> categorySnapshot(KbCategoryVO c) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("id", c.id());
+        m.put("parentId", c.parentId());
+        m.put("name", c.name());
+        m.put("enabled", c.enabled());
+        m.put("sort", c.sort());
+        m.put("remark", c.remark());
+        return m;
+    }
+
+    /** 分类管理员窄快照（剔除 Instant）。 */
+    private static Map<String, Object> categoryAdminSnapshot(KbCategoryAdminVO a) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("id", a.id());
+        m.put("categoryId", a.categoryId());
+        m.put("subjectType", a.subjectType());
+        m.put("subjectId", a.subjectId());
+        m.put("createdBy", a.createdBy());
+        return m;
+    }
+
+    /** 知识库窄快照（剔除 Instant；settings 为不含 java.time 的 KbRagSettings，可直接嵌套）。 */
+    private static Map<String, Object> librarySnapshot(KbLibraryVO l) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("id", l.id());
+        m.put("categoryId", l.categoryId());
+        m.put("name", l.name());
+        m.put("secrecy", l.secrecy());
+        m.put("status", l.status());
+        m.put("owner", l.owner());
+        m.put("engineType", l.engineType());
+        m.put("docCount", l.docCount());
+        m.put("settings", l.settings());
+        return m;
+    }
+
+    /** 文档窄快照（剔除 Instant createdAt/updatedAt）。 */
+    private static Map<String, Object> documentSnapshot(KbDocumentVO d) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("id", d.id());
+        m.put("libraryId", d.libraryId());
+        m.put("title", d.title());
+        m.put("version", d.version());
+        m.put("parseStatus", d.parseStatus());
+        m.put("enabled", d.enabled());
+        m.put("size", d.size());
+        m.put("format", d.format());
+        m.put("chunkMethod", d.chunkMethod());
+        m.put("chunkTokenNum", d.chunkTokenNum());
+        m.put("separator", d.separator());
+        m.put("parseProgress", d.parseProgress());
+        m.put("parseError", d.parseError());
+        return m;
+    }
+
+    /** ACL 窄快照（剔除 Instant）。 */
+    private static Map<String, Object> aclSnapshot(KbAclVO a) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("id", a.id());
+        m.put("libraryId", a.libraryId());
+        m.put("subjectType", a.subjectType());
+        m.put("subjectId", a.subjectId());
+        m.put("action", a.action());
+        return m;
     }
 
     // ------------------------------------------------------------------ 问答历史 / 反馈
@@ -618,7 +934,9 @@ public class KbFacadeService {
                     caps.metadataFilterSupported() != null ? caps.metadataFilterSupported() : false,
                     caps.replaceSupported() != null ? caps.replaceSupported() : false,
                     caps.hybridSupported() != null ? caps.hybridSupported() : false,
-                    caps.deleteSupported() != null ? caps.deleteSupported() : false);
+                    caps.deleteSupported() != null ? caps.deleteSupported() : false,
+                    caps.parserOcrSupported() != null ? caps.parserOcrSupported() : false,
+                    caps.parserOverlapSupported() != null ? caps.parserOverlapSupported() : false);
         } catch (Exception e) {
             log.warn("取引擎能力失败: {}", e.getMessage());
             return unsupportedCapabilities(engineType);
@@ -743,7 +1061,7 @@ public class KbFacadeService {
      */
     private static KbEngineCapabilitiesVO unsupportedCapabilities(String engineType) {
         return new KbEngineCapabilitiesVO(
-                engineType, List.of("UNSUPPORTED"), false, false, false, false, false);
+                engineType, List.of("UNSUPPORTED"), false, false, false, false, false, false, false);
     }
 
     // ------------------------------------------------------------------ 命中测试（Q-04 / WA-07）

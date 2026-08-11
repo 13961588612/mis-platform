@@ -3,7 +3,6 @@ package com.mis.adminbff.audit;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.DisplayName;
-import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
@@ -22,14 +21,17 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * （要 mock ProceedingJoinPoint + MethodSignature + AuditWebClient），
  * 反射的信噪比高得多，且本次要验的正是「片段字面量写对没有」这一件事。
  *
- * <p><b>本测试同时固化两件事</b>：
- * <ol>
- *   <li>驼峰形态的 privateKey / accessKey 各种大小写<b>必须</b>被脱敏；</li>
- *   <li>蛇形 {@code private_key} / 连字符 {@code access-key} <b>确实不命中</b>——
- *       这是已在源码注释（第 66-68 行）登记的已知盲区。把它写成断言而不是口头约定，
- *       是为了让将来「补上蛇形片段」这个动作有个明确的失败信号：
- *       届时本组断言会红，改测试的人就必须同步确认技术债是否可以销账。</li>
- * </ol>
+ * <p><b>企业级增强一期（Q6 裁决 / 技术债 11.5 销账）后口径：</b>
+ * {@code isSensitiveKey} 采用<b>归一化匹配</b>（小写 + 剥离非字母数字），
+ * 使驼峰 / 蛇形 / 连字符三种写法同形（{@code privateKey} / {@code private_key} /
+ * {@code private-key} 均归一化为 {@code privatekey}）。因此：
+ * <ul>
+ *   <li>既有 7 个黑名单片段<b>不动</b>（password/pwd/secret/token/credential/
+ *       privatekey/accesskey）；</li>
+ *   <li>原「已知盲区」组（蛇形/连字符不命中）断言<b>翻转</b>——现在全部命中；</li>
+ *   <li>单调变化只增命中不丢命中，`max_tokens` 类既有过度脱敏与本改动无关；</li>
+ *   <li>反向断言锁定正常业务字段（topK/docType/retrievalMethod/question 等）仍不命中。</li>
+ * </ul>
  */
 class OperLogAspectSensitiveKeyTest {
 
@@ -65,18 +67,21 @@ class OperLogAspectSensitiveKeyTest {
         }
     }
 
-    // ------------------------------------------------------- 本次新增的两个片段
+    // ------------------------------------------------------- privatekey / accesskey 全形态命中
 
     @ParameterizedTest(name = "[{index}] {0} 应被判定为敏感")
     @ValueSource(strings = {
-            // privatekey 片段的各种大小写与前后缀形态
+            // privatekey 片段：驼峰 / 全大写 / 前后缀
             "privatekey", "privateKey", "PrivateKey", "PRIVATEKEY",
             "privateKeyPem", "userPrivateKey", "sshPrivateKeyContent",
-            // accesskey 片段的各种大小写与前后缀形态
+            // accesskey 片段
             "accesskey", "accessKey", "AccessKey", "ACCESSKEY",
-            "accessKeyId", "aliyunAccessKeySecret", "myACCESSKEYvalue"
+            "accessKeyId", "aliyunAccessKeySecret", "myACCESSKEYvalue",
+            // 11.5 销账：蛇形 / 连字符 / 混合分隔形态全部同形命中
+            "private_key", "private-key", "PRIVATE_KEY", "ACCESS-KEY",
+            "access_key", "user_private_key", "aliyun_access_key_secret"
     })
-    @DisplayName("新增片段 privatekey / accesskey：驼峰与全大小写形态均命中")
+    @DisplayName("privatekey / accesskey：驼峰/蛇形/连字符全形态均命中（11.5 销账）")
     void newFragmentsShouldBeDetected(String key) {
         assertTrue(sensitive(key), "字段名 " + key + " 应命中敏感黑名单");
     }
@@ -85,17 +90,25 @@ class OperLogAspectSensitiveKeyTest {
     @ValueSource(strings = {
             "password", "userPassword", "oldPwd", "pwd",
             "clientSecret", "SECRET", "accessToken", "refreshToken",
-            "credential", "userCredentials"
+            "credential", "userCredentials",
+            // 既有过度脱敏（含 token 片段）保持不变：单调变化不丢命中
+            "max_tokens", "maxTokens"
     })
-    @DisplayName("既有 5 个片段不得回归")
+    @DisplayName("既有黑名单片段不得回归（含 max_tokens 类既有过度脱敏保持不变）")
     void legacyFragmentsShouldStillBeDetected(String key) {
         assertTrue(sensitive(key), "字段名 " + key + " 应命中敏感黑名单");
     }
 
+    // ------------------------------------------------------- 反向断言：正常业务字段不命中
+
     @ParameterizedTest(name = "[{index}] {0} 不应被判定为敏感")
     @ValueSource(strings = {
             "libraryId", "question", "topK", "threshold",
-            "retrievalMethod", "rerank", "keyName", "publicKeyless"
+            "retrievalMethod", "rerank", "keyName", "publicKeyless",
+            "docType", "chunkTokenNum", "separator", "scoreThreshold",
+            "embeddingModel", "vectorSimilarityWeight", "emptyResultStrategy",
+            "ocrEnabled", "ocrLanguage", "chunkOverlapTokenNum",
+            "subjectId", "subjectType", "action", "enabled", "onlyFailed"
     })
     @DisplayName("正常业务字段不得误伤（question 是追责证据，必须原样留存）")
     void normalFieldsShouldNotBeDetected(String key) {
@@ -136,6 +149,24 @@ class OperLogAspectSensitiveKeyTest {
     }
 
     @Test
+    @DisplayName("sanitize：11.5 销账后蛇形/连字符键同样被脱敏（原盲区闭合）")
+    void sanitizeMasksSeparatedForms() {
+        JsonNode out = sanitizeJson("""
+                {
+                  "private_key": "snake-leaked",
+                  "access-key": "kebab-leaked",
+                  "PRIVATE_KEY": "upper-snake-leaked",
+                  "privateKey": "camel-masked"
+                }
+                """);
+
+        assertEquals("***", out.get("private_key").asText(), "蛇形键 11.5 销账后必须脱敏");
+        assertEquals("***", out.get("access-key").asText(), "连字符键 11.5 销账后必须脱敏");
+        assertEquals("***", out.get("PRIVATE_KEY").asText(), "全大写蛇形键 11.5 销账后必须脱敏");
+        assertEquals("***", out.get("privateKey").asText(), "驼峰键保持既有脱敏");
+    }
+
+    @Test
     @DisplayName("sanitize：非字符串值（数字/对象/数组）命中黑名单同样被屏蔽")
     void sanitizeMasksNonStringValues() {
         JsonNode out = sanitizeJson("""
@@ -167,45 +198,5 @@ class OperLogAspectSensitiveKeyTest {
         assertEquals("keep", out.get("outer").get("inner").get("name").asText());
         assertEquals("***", out.get("outer").get("list").get(0).get("accessKey").asText());
         assertEquals("v", out.get("outer").get("list").get(1).get("plain").asText());
-    }
-
-    // ------------------------------------------------------- 已登记的已知盲区
-
-    /**
-     * 蛇形 / 连字符命名的盲区。
-     *
-     * <p>这些断言<b>刻意断言「不命中」</b>，用来固化 OperLogAspect 第 66-68 行注释里
-     * 登记的已知盲区。它不是「测试通过=安全」，而是「测试通过=现状与登记一致」。
-     * 若将来给黑名单补上 {@code private_key} / {@code access-key} 片段，本组断言会失败，
-     * 那时应当同步删除本 Nested 类并销掉对应技术债。
-     */
-    @Nested
-    @DisplayName("已知盲区（与源码注释登记一致）")
-    class KnownBlindSpots {
-
-        @ParameterizedTest(name = "[{index}] {0} 当前不命中（已登记盲区）")
-        @ValueSource(strings = {"private_key", "access-key", "PRIVATE_KEY", "ACCESS-KEY"})
-        @DisplayName("带下划线/连字符的分隔形态当前确实不命中")
-        void separatedFormsAreCurrentlyMissed(String key) {
-            assertFalse(sensitive(key),
-                    "若此断言失败，说明黑名单已补上分隔符变体，请同步销账技术债并删除本用例");
-        }
-
-        @Test
-        @DisplayName("盲区在 sanitize 端到端同样存在：private_key 的值会原样落进审计")
-        void blindSpotLeaksThroughSanitize() {
-            JsonNode out = sanitizeJson("{\"private_key\":\"SHOULD-BE-MASKED-BUT-ISNT\"}");
-            assertEquals("SHOULD-BE-MASKED-BUT-ISNT", out.get("private_key").asText(),
-                    "现状：蛇形键未脱敏。这是已登记盲区，不是本次回归引入的新问题");
-        }
-
-        @Test
-        @DisplayName("对照组：同义驼峰键在同一 payload 里正常脱敏")
-        void camelCaseCounterpartIsMasked() {
-            JsonNode out = sanitizeJson(
-                    "{\"private_key\":\"leaked\",\"privateKey\":\"masked\"}");
-            assertEquals("leaked", out.get("private_key").asText());
-            assertEquals("***", out.get("privateKey").asText());
-        }
     }
 }

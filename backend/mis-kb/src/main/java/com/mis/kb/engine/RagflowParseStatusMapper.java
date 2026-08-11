@@ -45,4 +45,25 @@ public final class RagflowParseStatusMapper {
         }
         return ParseStatus.PENDING.code();
     }
+
+    /**
+     * RAGFlow {@code progress}（0~1）→ MIS 进度百分比（0~100）。
+     *
+     * <p>RAGFlow 的 progress 是 0~1 的小数（如 {@code 0.42}），而 MIS 侧
+     * {@code kb_document.parse_progress} 存 0~100 的整数百分比，入库前必须换算。
+     * 越界/非法一律回落 {@code null}（未知），不写入脏值——由
+     * {@link ParseStatusSnapshot#normalizeProgress} 兜底二次校验。
+     *
+     * @param progress RAGFlow progress（0~1），可为 {@code null}
+     * @return 0~100 的整数百分比；无法判定时返回 {@code null}
+     */
+    public static Integer toProgress(Double progress) {
+        if (progress == null) {
+            return null;
+        }
+        if (progress < 0.0D || progress > 1.0D) {
+            return null;
+        }
+        return (int) Math.round(progress * 100.0D);
+    }
 }

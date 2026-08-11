@@ -57,7 +57,8 @@ class KbControllerHitTestPermissionTest {
     private KbController controller;
 
     private static final KbHitTestRequest REQUEST =
-            new KbHitTestRequest(100L, "年假怎么休", null, null, null, null, null, null);
+            new KbHitTestRequest(100L, "年假怎么休", null, null, null, null, null, null,
+                    null, null, null);
 
     @BeforeEach
     void setUp() {

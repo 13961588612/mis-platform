@@ -23,6 +23,13 @@ import java.util.List;
  * （{@code KB_ENGINE_DELETE_UNSUPPORTED}），业务侧只能走归档；等 RAGFLOW 升级后
  * 翻配置即可放开，代码分支不用动。
  *
+ * <p><b>企业级增强一期（KE-06/KE-07）新增 {@code parserOcrSupported} / {@code parserOverlapSupported}：</b>
+ * 语义是「当前引擎版本是否支持 parser_config 的 OCR / overlap 键」。当前 RAGFlow 实例
+ * <b>实测不支持</b>（硬下发即 code:101/102 拒整单），默认 {@code false}；为 false 时
+ * {@code RagflowAdapter}/{@code RagflowClient} 一律<b>不下发</b>这三个键（只落库 + 回显 + 提示），
+ * 前端据此置灰 + 提示「当前引擎版本暂不支持」。引擎升级后翻转能力声明即可放行下发，
+ * 代码分支不动（与 {@code deleteSupported} 同款配置化口径）。
+ *
  * <p>码值字符串常量集中定义在本类，禁止在各适配器/服务中硬编码字面量。
  *
  * @param capabilities            能力码值列表
@@ -31,6 +38,8 @@ import java.util.List;
  * @param replaceSupported        是否支持同名文档替换
  * @param hybridSupported         是否支持混合检索（关键字 + 语义）与权重调节
  * @param deleteSupported         是否支持在线删除知识库（配置项决定，默认 false）
+ * @param parserOcrSupported      当前引擎是否支持 parser_config OCR 键（企业级增强一期新增，默认 false）
+ * @param parserOverlapSupported  当前引擎是否支持 parser_config overlap 键（企业级增强一期新增，默认 false）
  */
 public record EngineCapabilities(
         List<String> capabilities,
@@ -38,7 +47,9 @@ public record EngineCapabilities(
         boolean metadataFilterSupported,
         boolean replaceSupported,
         boolean hybridSupported,
-        boolean deleteSupported) {
+        boolean deleteSupported,
+        boolean parserOcrSupported,
+        boolean parserOverlapSupported) {
 
     /** 无任何能力的占位码值。 */
     public static final String UNSUPPORTED = "UNSUPPORTED";
@@ -53,18 +64,42 @@ public record EngineCapabilities(
     public static final String CAP_REPLACE = "replace";
     /** 能力码值：在线删除知识库（dataset）。 */
     public static final String CAP_DELETE = "delete";
+    /** 能力码值：parser_config OCR 键（企业级增强一期新增；默认不支持）。 */
+    public static final String CAP_PARSER_OCR = "parser_ocr";
+    /** 能力码值：parser_config overlap 键（企业级增强一期新增；默认不支持）。 */
+    public static final String CAP_PARSER_OVERLAP = "parser_overlap";
+
+    /**
+     * 兼容构造：6 参数旧签名，OCR/overlap 两个布尔位置 {@code false}（不支持）。
+     *
+     * <p>新增布尔位后既有 6 参构造点（适配器、测试夹具）保持零改动；
+     * 需要显式声明 parser 能力时请用 {@link #of(boolean, boolean, boolean, boolean, boolean, boolean, boolean)}。
+     */
+    public EngineCapabilities(
+            List<String> capabilities,
+            boolean rerankSupported,
+            boolean metadataFilterSupported,
+            boolean replaceSupported,
+            boolean hybridSupported,
+            boolean deleteSupported) {
+        this(capabilities, rerankSupported, metadataFilterSupported, replaceSupported,
+                hybridSupported, deleteSupported, false, false);
+    }
 
     /**
      * 全不支持的能力声明（noop 引擎、能力探测失败时使用）。
      *
-     * @return 五个布尔位全 false 的声明
+     * @return 七个布尔位全 false 的声明
      */
     public static EngineCapabilities unsupported() {
-        return new EngineCapabilities(List.of(UNSUPPORTED), false, false, false, false, false);
+        return new EngineCapabilities(
+                List.of(UNSUPPORTED), false, false, false, false, false, false, false);
     }
 
     /**
-     * 由五个布尔位反推 {@code capabilities} 列表，避免各适配器手工维护两份信息导致漂移。
+     * 由五个布尔位反推 {@code capabilities} 列表（OCR/overlap 默认不支持）。
+     *
+     * <p>保持既有 5 参调用点零改动（OCR/overlap 恒为 false）。
      *
      * @param rerank         重排是否可用
      * @param metadataFilter 元数据过滤是否可用
@@ -75,7 +110,25 @@ public record EngineCapabilities(
      */
     public static EngineCapabilities of(
             boolean rerank, boolean metadataFilter, boolean replace, boolean hybrid, boolean delete) {
-        List<String> caps = new ArrayList<>(5);
+        return of(rerank, metadataFilter, replace, hybrid, delete, false, false);
+    }
+
+    /**
+     * 由七个布尔位反推 {@code capabilities} 列表，避免各适配器手工维护两份信息导致漂移。
+     *
+     * @param rerank         重排是否可用
+     * @param metadataFilter 元数据过滤是否可用
+     * @param replace        同名替换是否可用
+     * @param hybrid         混合检索是否可用
+     * @param delete         在线删除知识库是否可用
+     * @param parserOcr      parser_config OCR 键是否可用（企业级增强一期新增）
+     * @param parserOverlap  parser_config overlap 键是否可用（企业级增强一期新增）
+     * @return 列表与布尔位严格一致的能力声明；全 false 时等价 {@link #unsupported()}
+     */
+    public static EngineCapabilities of(
+            boolean rerank, boolean metadataFilter, boolean replace, boolean hybrid, boolean delete,
+            boolean parserOcr, boolean parserOverlap) {
+        List<String> caps = new ArrayList<>(7);
         if (hybrid) {
             caps.add(CAP_HYBRID);
         }
@@ -91,11 +144,18 @@ public record EngineCapabilities(
         if (delete) {
             caps.add(CAP_DELETE);
         }
+        if (parserOcr) {
+            caps.add(CAP_PARSER_OCR);
+        }
+        if (parserOverlap) {
+            caps.add(CAP_PARSER_OVERLAP);
+        }
         if (caps.isEmpty()) {
             caps.add(UNSUPPORTED);
         }
         return new EngineCapabilities(
-                List.copyOf(caps), rerank, metadataFilter, replace, hybrid, delete);
+                List.copyOf(caps), rerank, metadataFilter, replace, hybrid, delete,
+                parserOcr, parserOverlap);
     }
 
     /**

@@ -426,6 +426,101 @@ class RagSettingsServiceTest {
         }
     }
 
+    // ------------------------------------------------------------ OCR/overlap（KE-06/KE-07）
+
+    @Nested
+    @DisplayName("OCR/overlap：非法值拒绝；合法值落库回显（引擎不支持时仅落库不下发）")
+    class OcrOverlap {
+
+        @Test
+        @DisplayName("chunkOverlapTokenNum 为负 → KB_RAG_SETTINGS_INVALID，且拒绝先于落库")
+        void rejectsNegativeOverlap() {
+            RagSettings bad = new RagSettings(null, null, null, null, null,
+                    null, null, null, null, null, null,
+                    false, "zh", -1);
+
+            KbBusinessException ex = assertThrows(KbBusinessException.class,
+                    () -> serviceWithRerankModel().save(LIBRARY_ID, bad));
+            assertEquals(KbResultCode.KB_RAG_SETTINGS_INVALID.getCode(), ex.getCode());
+            verify(libraryRepository, never()).save(any(KbLibrary.class));
+            verify(enginePort, never()).updateLibrarySettings(any(), any());
+        }
+
+        @Test
+        @DisplayName("chunkOverlapTokenNum=0（=不重叠，设计口径）→ 放行")
+        void acceptsZeroOverlap() {
+            RagSettings saved = serviceWithRerankModel().save(LIBRARY_ID,
+                    new RagSettings(null, null, null, null, null,
+                            null, null, null, null, null, null,
+                            false, "zh", 0));
+            assertEquals(0, saved.chunkOverlapTokenNum().intValue());
+        }
+
+        @ParameterizedTest(name = "ocrLanguage={0} → KB_RAG_SETTINGS_INVALID")
+        @ValueSource(strings = {"fr", "CH", "zh_en_us", "en-US", "  "})
+        @DisplayName("非法 OCR 语言码值一律拒绝（产品三档固化 zh/en/zh_en）")
+        void rejectsIllegalOcrLanguage(String language) {
+            RagSettings bad = new RagSettings(null, null, null, null, null,
+                    null, null, null, null, null, null,
+                    true, language, null);
+
+            KbBusinessException ex = assertThrows(KbBusinessException.class,
+                    () -> serviceWithRerankModel().save(LIBRARY_ID, bad));
+            assertEquals(KbResultCode.KB_RAG_SETTINGS_INVALID.getCode(), ex.getCode());
+        }
+
+        @Test
+        @DisplayName("合法 OCR 三字段 → 原样落库 + 回显（引擎不支持也允许保存，降级路径）")
+        void validOcrFieldsPersistAndRoundTrip() {
+            RagSettings request = new RagSettings(null, null, null, null, "hybrid",
+                    null, null, null, null, 0.5D, null,
+                    true, "zh_en", 64);
+
+            RagSettings saved = serviceWithRerankModel().save(LIBRARY_ID, request);
+
+            assertTrue(saved.ocrEnabled());
+            assertEquals("zh_en", saved.ocrLanguage());
+            assertEquals(64, saved.chunkOverlapTokenNum().intValue());
+            // 落库 JSON 必须同样携带（下次加载不丢）
+            assertEquals(Boolean.TRUE, persisted().ocrEnabled());
+            assertEquals("zh_en", persisted().ocrLanguage());
+            assertEquals(64, persisted().chunkOverlapTokenNum().intValue());
+
+            // 重新读取（模拟刷新页面）回显一致
+            RagSettings reloaded = serviceWithRerankModel().get(LIBRARY_ID);
+            assertTrue(reloaded.ocrEnabled());
+            assertEquals("zh_en", reloaded.ocrLanguage());
+            assertEquals(64, reloaded.chunkOverlapTokenNum().intValue());
+        }
+
+        @Test
+        @DisplayName("★ rerank 强制关闭（无全局模型）时 OCR 三字段必须透传不被吞")
+        void ocrFieldsSurviveRerankConvergence() {
+            RagSettings request = new RagSettings(null, null, Boolean.TRUE, null, "hybrid",
+                    null, null, null, null, 0.5D, null,
+                    true, "en", 32);
+
+            RagSettings saved = serviceWithoutRerankModel().save(LIBRARY_ID, request);
+
+            assertFalse(saved.rerank(), "无全局模型时 rerank 仍强制关闭");
+            assertTrue(saved.ocrEnabled(),
+                    "enforceRerankAvailability 用 11 参构造会把 OCR 字段吞成 null —— 必须全量透传");
+            assertEquals("en", saved.ocrLanguage());
+            assertEquals(32, saved.chunkOverlapTokenNum().intValue());
+        }
+
+        @Test
+        @DisplayName("OCR 字段缺省 → withDefaults 兜底 ocrEnabled=false / ocrLanguage=zh")
+        void ocrDefaultsApplied() {
+            RagSettings saved = serviceWithRerankModel().save(LIBRARY_ID, weightOnly(0.5D));
+
+            assertFalse(saved.ocrEnabled());
+            assertEquals(RagSettings.DEFAULT_OCR_LANGUAGE, saved.ocrLanguage());
+            assertTrue(saved.chunkOverlapTokenNum() == null,
+                    "chunkOverlapTokenNum 缺省保持 null（=引擎默认/0，不硬编码兜底）");
+        }
+    }
+
     // ------------------------------------------------------------ 不存在的库
 
     @Test

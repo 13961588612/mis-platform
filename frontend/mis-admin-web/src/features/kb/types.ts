@@ -87,6 +87,21 @@ export interface KbRagSettings {
    * 库级值不参与合并链（设计 U3）。
    */
   rerankModelId: string | null;
+  /**
+   * OCR 开关（企业级增强一期 KE-06，末位追加）。
+   *
+   * <p>当前引擎<b>实测不支持</b> parser_config.ocr 键（硬下发即 code:102 拒整单），
+   * 故该字段<b>只落库 + 回显</b>，引擎能力 `parserOcrSupported=false` 时置灰 +
+   * 提示「当前引擎版本暂不支持」，绝不参与下发。
+   */
+  ocrEnabled: boolean | null;
+  /** OCR 语言码值 zh/en/zh_en（企业级增强一期 KE-06）；非法值由后端回落 zh。 */
+  ocrLanguage: string | null;
+  /**
+   * 分块重叠 token 数（企业级增强一期 KE-07）；null = 引擎默认/0。
+   * 引擎能力 `parserOverlapSupported=false` 时置灰 + 提示，不参与下发。
+   */
+  chunkOverlapTokenNum: number | null;
 }
 
 /** 知识库分类。 */
@@ -226,6 +241,19 @@ export interface KbDocument {
   chunkTokenNum: number | null;
   /** 文件级切片分隔符（null = 继承库级）。 */
   separator: string | null;
+  /**
+   * 解析进度百分比 0~100（企业级增强一期 KE-03，末位追加）；null = 未知。
+   *
+   * <p>随 `syncOpenParseStatuses` 批量回写引擎 progress；parsing 时展示百分比，
+   * pending/success/failed 可能为 null。
+   */
+  parseProgress: number | null;
+  /**
+   * 解析失败原因摘要（企业级增强一期 KE-04，末位追加）；null = 无失败。
+   *
+   * <p>来源引擎 `progress_msg`，≤500 字符；成功/重试时后端清空。
+   */
+  parseError: string | null;
 }
 
 /**
@@ -539,6 +567,15 @@ export interface KbEngineCapabilities {
    * 而不是让人点进去再吃一个 40934。
    */
   deleteSupported: boolean | null;
+  /**
+   * 当前引擎是否支持 parser_config OCR 键（企业级增强一期 KE-06，末位追加）。
+   *
+   * <p>当前 RAGFlow 实例实测不支持（默认 false）。为 false 时前端把 OCR 开关/语言
+   * 置灰并提示「当前引擎版本暂不支持，参数已保留待引擎升级生效」，保存照常成功（只落库）。
+   */
+  parserOcrSupported: boolean | null;
+  /** 当前引擎是否支持 parser_config overlap 键（企业级增强一期 KE-07，默认 false）。 */
+  parserOverlapSupported: boolean | null;
 }
 
 // --------------------------------------------------------------- 引擎对账（T04）
@@ -908,6 +945,17 @@ export interface KbHitTestRequest {
    * <p>⛔ **仅影响本次测试**，绝不写回全局开关——与本页「调参只影响本次」口径一致。
    */
   disableSynonym?: boolean | null;
+  /**
+   * 按文档过滤：MIS 文档 id 列表（企业级增强一期 KE-08，末位追加）；空/缺省 = 不过滤。
+   *
+   * <p>引擎不支持过滤（`metadataFilterSupported=false`）时过滤区整体置灰 + 提示，
+   * 后端会降级并回显原因（绝不静默忽略）。
+   */
+  documentIds?: number[] | null;
+  /** 按上传时间过滤下界（ISO-8601，含）；缺省 = 不限制（KE-09，用 kb_document.created_at）。 */
+  uploadFrom?: string | null;
+  /** 按上传时间过滤上界（ISO-8601，含）；缺省 = 不限制（KE-09）。 */
+  uploadTo?: string | null;
 }
 
 /** 命中测试单条命中（与 BFF `KbHitTestHitVO` 镜像）。 */

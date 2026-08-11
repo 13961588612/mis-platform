@@ -80,15 +80,21 @@ public class DocumentController {
     }
 
     /**
-     * 库级一键全部重解析（P1-1：换嵌入模型后全量重解析恢复检索）。
+     * 库级一键全部重解析（P1-1：换嵌入模型后全量重解析恢复检索；KE-05 扩展 onlyFailed）。
      *
      * <p>遍历该库全部文档逐个触发重解析；单文档失败不中断其余，返回结构化结果
      * （成功/失败/跳过 + 失败明细）。字面量段 {@code reparse-all} 与
      * {@code /{id}/reparse} 无路由冲突（Spring 字面量优先）。
+     *
+     * @param libraryId  知识库 id
+     * @param onlyFailed 仅重试 {@code parse_status=failed} 文档（Q8 裁决，不新增独立端点）；
+     *                   缺省 false = 全量
      */
     @PostMapping("/{libraryId}/documents/reparse-all")
-    public Result<KbReparseAllResult> reparseAll(@PathVariable Long libraryId) {
-        return Result.ok(documentService.reparseAll(libraryId, currentUserId()));
+    public Result<KbReparseAllResult> reparseAll(
+            @PathVariable Long libraryId,
+            @RequestParam(defaultValue = "false") boolean onlyFailed) {
+        return Result.ok(documentService.reparseAll(libraryId, onlyFailed, currentUserId()));
     }
 
     @DeleteMapping("/{libraryId}/documents/{id}")

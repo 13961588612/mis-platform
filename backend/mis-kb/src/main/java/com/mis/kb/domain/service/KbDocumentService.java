@@ -13,6 +13,7 @@ import com.mis.kb.domain.model.EngineDocumentRef;
 import com.mis.kb.domain.model.EngineLibraryRef;
 import com.mis.kb.domain.model.KbResultCode;
 import com.mis.kb.domain.model.ParseStatus;
+import com.mis.kb.domain.model.ParseStatusSnapshot;
 import com.mis.kb.domain.repository.KbDocumentRepository;
 import com.mis.kb.domain.repository.KbLibraryRepository;
 import com.mis.kb.engine.KnowledgeEnginePort;
@@ -163,6 +164,8 @@ public class KbDocumentService {
                     new EngineDocumentRef(lib.getEngineType(), entity.getEngineDocumentRef()),
                     config);
             entity.setParseStatus(ParseStatus.PARSING.code());
+            // KE-04 口径：重新触发解析时清空上次失败原因（成功/重试时清空）
+            entity.setParseError(null);
             entity.setUpdatedAt(Instant.now());
             documentRepository.save(entity);
             log.info("文档切片配置已更新并触发重解析 id={} config={}", id, config);
@@ -253,6 +256,8 @@ public class KbDocumentService {
         }
 
         entity.setParseStatus(ParseStatus.PARSING.code());
+        // KE-04 口径：重新触发解析时清空上次失败原因（成功/重试时清空）
+        entity.setParseError(null);
         entity.setUpdatedAt(Instant.now());
         documentRepository.save(entity);
 
@@ -273,7 +278,7 @@ public class KbDocumentService {
     }
 
     /**
-     * 库级一键全部重解析（P1-1：换嵌入模型后全量重解析恢复检索）。
+     * 库级一键全部重解析（P1-1：换嵌入模型后全量重解析恢复检索；KE-05 扩展 onlyFailed）。
      *
      * <p><b>同步/异步取舍：</b>RAGFlow 的 {@code POST /chunks}（{@code RagflowClient.parseDocuments}）
      * 是<b>同步 HTTP 返回、异步排队执行</b>——提交后引擎侧 {@code run}/{@code progress}
@@ -289,13 +294,18 @@ public class KbDocumentService {
      * 引擎侧仍在跑的文档跳过并计入 {@code skipped}，不重复入队；不做库级锁
      * （重复触发至多重复提交非解析中文档，RAGFlow 解析队列本身幂等，最小实现）。
      *
-     * @param libraryId 知识库 id
-     * @param userId    当前用户 id（管辖校验；BFF 透传，可为 null → 拒绝）
+     * <p><b>{@code onlyFailed} 语义（Q8 / R8）：</b>仅重试 {@code parse_status=failed} 的文档。
+     * 本地 stale failed（引擎侧实际已 DONE）先经 {@link #syncOpenParseStatuses} 收敛一次
+     * 再按 failed 过滤——收敛后已恢复成功的文档不再触发，避免「重复提交已成功的文档」。
+     *
+     * @param libraryId  知识库 id
+     * @param onlyFailed 仅重试 failed 文档；{@code false} = 全量
+     * @param userId     当前用户 id（管辖校验；BFF 透传，可为 null → 拒绝）
      * @return 批量结果（成功/失败/跳过/失败明细）；空库返回 success=0 的明确结果
      * @throws KbBusinessException 知识库不存在、管辖外、或库内有文档但库无引擎映射
      */
     @Transactional
-    public KbReparseAllResult reparseAll(Long libraryId, Long userId) {
+    public KbReparseAllResult reparseAll(Long libraryId, boolean onlyFailed, Long userId) {
         KbLibrary lib = requireLibrary(libraryId);
         requireLibraryManage(libraryId, userId);
         List<KbDocument> docs = documentRepository.findByLibraryIdOrderByCreatedAtDesc(libraryId);
@@ -309,8 +319,8 @@ public class KbDocumentService {
                     KbResultCode.KB_LIBRARY_NOT_FOUND, "该知识库尚未同步到引擎，无法重新解析");
         }
 
-        // 批量收敛一次引擎解析状态（纠正本地 stale parsing），避免把「引擎已 DONE、
-        // 本地仍 parsing」的文档当解析中跳过、或重复触发。
+        // 批量收敛一次引擎解析状态（纠正本地 stale parsing/failed），避免把「引擎已 DONE、
+        // 本地仍 parsing/failed」的文档当解析中跳过、或对已成功的文档重复触发（R8）。
         syncOpenParseStatuses(lib, docs);
 
         EngineLibraryRef libRef = new EngineLibraryRef(lib.getEngineType(), lib.getEngineLibraryRef());
@@ -330,7 +340,14 @@ public class KbDocumentService {
                 skipped++;
                 continue;
             }
+            // onlyFailed：收敛后仍 failed 的文档才触发；其余跳过（Q8）
+            if (onlyFailed && !ParseStatus.FAILED.code().equals(doc.getParseStatus())) {
+                skipped++;
+                continue;
+            }
             doc.setParseStatus(ParseStatus.PARSING.code());
+            // KE-04 口径：重新触发解析时清空上次失败原因（成功/重试时清空）
+            doc.setParseError(null);
             doc.setUpdatedAt(now);
             documentRepository.save(doc);
             try {
@@ -349,14 +366,15 @@ public class KbDocumentService {
                         doc.getId(), libraryId, e.getMessage(), e);
             }
         }
-        log.info("库级重解析完成 libraryId={} total={} success={} failed={} skipped={}",
-                libraryId, docs.size(), success, failed, skipped);
+        log.info("库级重解析完成 libraryId={} onlyFailed={} total={} success={} failed={} skipped={}",
+                libraryId, onlyFailed, docs.size(), success, failed, skipped);
         return new KbReparseAllResult(
                 libraryId, docs.size(), success, failed, skipped, List.copyOf(failedDocs));
     }
 
     /**
-     * 对 pending/parsing 文档拉取引擎状态并落库；引擎不可达时静默保留原值（列表仍可展示）。
+     * 对 pending/parsing 文档拉取引擎状态并落库（KE-03/KE-04：进度 + 失败原因一并回写）；
+     * 引擎不可达时静默保留原值（列表仍可展示）。
      */
     private void syncOpenParseStatuses(KbLibrary lib, List<KbDocument> docs) {
         if (lib == null || lib.getEngineLibraryRef() == null || lib.getEngineLibraryRef().isBlank()
@@ -378,7 +396,7 @@ public class KbDocumentService {
         if (nativeIds.isEmpty()) {
             return;
         }
-        Map<String, String> remote;
+        Map<String, ParseStatusSnapshot> remote;
         try {
             remote = enginePort.queryDocumentParseStatuses(
                     new EngineLibraryRef(lib.getEngineType(), lib.getEngineLibraryRef()), nativeIds);
@@ -391,16 +409,25 @@ public class KbDocumentService {
         }
         Instant now = Instant.now();
         for (KbDocument doc : open) {
-            String next = remote.get(doc.getEngineDocumentRef());
-            if (next == null || Objects.equals(next, doc.getParseStatus())) {
+            ParseStatusSnapshot snapshot = remote.get(doc.getEngineDocumentRef());
+            if (snapshot == null || !snapshot.hasValidStatus()) {
                 continue;
             }
-            if (!ParseStatus.isValid(next)) {
+            String next = snapshot.status();
+            Integer nextProgress = snapshot.progress();
+            // KE-04 口径：success 清空 error；其余（failed）落 progress_msg 摘要（≤500 已在快照截断）
+            String nextError = ParseStatus.SUCCESS.code().equals(next) ? null : snapshot.error();
+            if (Objects.equals(next, doc.getParseStatus())
+                    && Objects.equals(nextProgress, doc.getParseProgress())
+                    && Objects.equals(nextError, doc.getParseError())) {
                 continue;
             }
-            log.info("回写文档解析状态 id={} {} -> {} (engineRef={})",
-                    doc.getId(), doc.getParseStatus(), next, doc.getEngineDocumentRef());
+            log.info("回写文档解析状态 id={} {} -> {} progress={} error={} (engineRef={})",
+                    doc.getId(), doc.getParseStatus(), next, nextProgress, nextError,
+                    doc.getEngineDocumentRef());
             doc.setParseStatus(next);
+            doc.setParseProgress(nextProgress);
+            doc.setParseError(nextError);
             doc.setUpdatedAt(now);
             documentRepository.save(doc);
         }
@@ -442,7 +469,8 @@ public class KbDocumentService {
         return new KbDocumentVO(
                 e.getId(), e.getLibraryId(), e.getTitle(), e.getVersion(), e.getParseStatus(),
                 e.getEnabled(), e.getSize(), e.getFormat(), e.getCreatedAt(), e.getUpdatedAt(),
-                e.getChunkMethod(), e.getChunkTokenNum(), e.getSeparator());
+                e.getChunkMethod(), e.getChunkTokenNum(), e.getSeparator(),
+                e.getParseProgress(), e.getParseError());
     }
 
     private static String deriveFormat(String filename) {

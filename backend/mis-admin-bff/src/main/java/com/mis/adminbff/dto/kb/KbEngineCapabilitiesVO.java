@@ -16,6 +16,10 @@ import java.util.List;
  * 探测）。当前部署的 RAGFLOW 版本删除接口不可用，该值为 {@code false}，前端据此把
  * 「物理删除」置灰并只提供归档。
  *
+ * <p><b>企业级增强一期（KE-06/KE-07）：</b>新增 {@code parserOcrSupported} /
+ * {@code parserOverlapSupported}，直读 mis-kb {@code EngineCapabilities} 的对应布尔位。
+ * 当前引擎不支持时前端据此置灰 OCR/overlap 控件并提示「暂不生效」。
+ *
  * @param engineType              引擎类型 ragflow/noop/mock
  * @param capabilities            能力码值列表
  * @param rerankSupported         当前配置下重排是否可用
@@ -23,6 +27,8 @@ import java.util.List;
  * @param replaceSupported        是否支持同名文档替换
  * @param hybridSupported         是否支持混合检索（关键字 + 语义）
  * @param deleteSupported         是否支持在线删除知识库（false 时只能归档）
+ * @param parserOcrSupported      当前引擎是否支持 parser_config OCR 键（企业级增强一期新增）
+ * @param parserOverlapSupported  当前引擎是否支持 parser_config overlap 键（企业级增强一期新增）
  */
 public record KbEngineCapabilitiesVO(
         String engineType,
@@ -31,5 +37,7 @@ public record KbEngineCapabilitiesVO(
         Boolean metadataFilterSupported,
         Boolean replaceSupported,
         Boolean hybridSupported,
-        Boolean deleteSupported) {
+        Boolean deleteSupported,
+        Boolean parserOcrSupported,
+        Boolean parserOverlapSupported) {
 }

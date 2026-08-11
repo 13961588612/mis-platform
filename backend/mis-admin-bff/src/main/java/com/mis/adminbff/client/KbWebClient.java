@@ -523,10 +523,21 @@ public class KbWebClient extends AbstractDownstreamClient {
                 .bodyToMono(VOID));
     }
 
-    /** 库级一键全部重解析（P1-1：换嵌入模型后全量重解析恢复检索）。 */
-    public KbReparseAllResultVO reparseAllDocuments(Long libraryId) {
+    /**
+     * 库级一键全部重解析（P1-1：换嵌入模型后全量重解析恢复检索；KE-05 扩展 onlyFailed）。
+     *
+     * @param libraryId  知识库 id
+     * @param onlyFailed 仅重试 {@code parse_status=failed} 文档；{@code false} = 全量
+     * @return 批量结果
+     */
+    public KbReparseAllResultVO reparseAllDocuments(Long libraryId, boolean onlyFailed) {
+        String uri = UriComponentsBuilder
+                .fromPath("/internal/v1/kb/libraries/{libraryId}/documents/reparse-all")
+                .queryParam("onlyFailed", onlyFailed)
+                .buildAndExpand(libraryId)
+                .toUriString();
         return block(client().post()
-                .uri("/internal/v1/kb/libraries/{libraryId}/documents/reparse-all", libraryId)
+                .uri(uri)
                 .headers(loginContextHeaders())
                 .retrieve()
                 .bodyToMono(REPARSE_ALL));

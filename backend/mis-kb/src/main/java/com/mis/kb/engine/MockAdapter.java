@@ -167,10 +167,14 @@ public class MockAdapter implements KnowledgeEnginePort {
      * remove，本来就"支持"；这样 CI 才能覆盖 {@code physical} 删除成功的那条分支
      * （真实 ragflow 因配置 false 永远走不到）。
      *
-     * @return 五项能力全开的声明
+     * <p>企业级增强一期（KE-06/KE-07）起 {@code parser_ocr}/{@code parser_overlap} 同样为
+     * {@code true}：mock 引擎没有真实 parser_config 下发，声明支持让 CI 能覆盖 OCR/overlap
+     * 参数合并、校验、UI 回显的完整分支（真实 ragflow 本期恒 false 走置灰分支）。
+     *
+     * @return 七项能力全开的声明
      */
     @Override
     public EngineCapabilities capabilities() {
-        return EngineCapabilities.of(true, true, true, true, true);
+        return EngineCapabilities.of(true, true, true, true, true, true, true);
     }
 }

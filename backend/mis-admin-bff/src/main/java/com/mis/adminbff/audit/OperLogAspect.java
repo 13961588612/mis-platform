@@ -50,7 +50,7 @@ public class OperLogAspect {
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
     /**
-     * 敏感字段名黑名单（C5-2），<b>不区分大小写的包含匹配</b>。
+     * 敏感字段名黑名单（C5-2），<b>归一化后的包含匹配</b>。
      *
      * <p>用「包含」而非「相等」，是因为真实字段名从来不是干净的 {@code password}：
      * {@code userPassword} / {@code oldPwd} / {@code accessToken} / {@code clientSecret}
@@ -59,16 +59,26 @@ public class OperLogAspect {
      * 所以这一层不是重复劳动，是在<b>源头</b>就不让凭据离开 BFF 进程。
      *
      * <p>片段<b>必须全部小写</b>：{@link #isSensitiveKey(String)} 先把待检字段名
-     * {@code toLowerCase(Locale.ROOT)}，再用 {@code lower.contains(fragment)} 比对——
-     * 片段里只要出现大写字母就永远匹配不上。故 privateKey / accessKey 两项
-     * 写作 {@code privatekey} / {@code accesskey}，可命中 {@code privateKey} /
-     * {@code PrivateKeyPem} / {@code accessKeyId} / {@code ACCESSKEY} 等写法。
-     * <b>已知盲区</b>：带分隔符的 {@code private_key} / {@code access-key} 不会命中
-     * （小写后仍含下划线/连字符，contains 不成立）。JSON 入参在本仓库统一走驼峰，
-     * 故暂不额外加片段；若将来出现蛇形入参，在此补 {@code private_key} 等变体即可。
+     * 小写 + 剥离非字母数字（{@code private_key} → {@code privatekey}，
+     * {@code access-key} → {@code accesskey}，驼峰/蛇形/连字符三种写法同形），
+     * 再用归一化后的字符串 {@code contains} 比对。企业级增强一期（Q6 裁决，
+     * 技术债 11.5 销账）修复「带分隔符的 {@code private_key} / {@code access-key}
+     * 不命中」的盲区；本改动单调变化（只增命中不丢命中），黑名单 7 项不动。
      */
     private static final List<String> SENSITIVE_KEY_FRAGMENTS =
             List.of("password", "pwd", "secret", "token", "credential", "privatekey", "accesskey");
+
+    /**
+     * 反例排除清单（误伤修复）：命中黑名单片段但确属合法业务字段的<b>完整归一化名</b>。
+     *
+     * <p>黑名单用「包含」而非「相等」，必然会把含 {@code token} 片段的业务字段也扫进来。
+     * {@code chunkTokenNum} / {@code chunkOverlapTokenNum} 是 RAG 分块参数（每块/重叠
+     * 的 token 数），与令牌、凭据毫无关系，审计里必须原样留存。这里用归一化后的
+     * <b>精确相等</b>排除，字段名一旦变化就不再豁免——宁可少豁免也不扩大豁免面，
+     * 避免真正的 {@code accessToken} 变体漏网。
+     */
+    private static final java.util.Set<String> SENSITIVE_KEY_EXCLUSIONS =
+            java.util.Set.of("chunktokennum", "chunkoverlaptokennum");
 
     /** 命中黑名单后的替换值。 */
     private static final String MASK = "***";
@@ -108,7 +118,9 @@ public class OperLogAspect {
             try {
                 writeLog(pjp, operLog, System.currentTimeMillis() - start, responseCode, error, result);
             } catch (Exception ex) {
-                log.debug("写操作日志失败: {}", ex.getMessage());
+                // 主理人裁决（企业级增强一期）：审计写失败提升为 WARN，便于运维感知。
+                // 仍不影响业务（审计失败绝不阻断主链路，既有语义）。
+                log.warn("写操作日志失败: {}", ex.getMessage());
             }
         }
     }
@@ -245,7 +257,15 @@ public class OperLogAspect {
     }
 
     /**
-     * 字段名是否命中敏感黑名单（不区分大小写的包含匹配）。
+     * 字段名是否命中敏感黑名单（归一化包含匹配，Q6 裁决 / 技术债 11.5 销账）。
+     *
+     * <p>归一化 = 小写 + 剥离所有非字母数字字符（{@code replaceAll("[^a-z0-9]", "")}），
+     * 使 {@code private_key} / {@code privateKey} / {@code private-key} 三种写法同形，
+     * 全部命中黑名单片段 {@code privatekey}。单调变化：只增命中不丢命中。
+     *
+     * <p>例外：{@link #SENSITIVE_KEY_EXCLUSIONS} 中的完整归一化名（如
+     * {@code chunkTokenNum} / {@code chunkOverlapTokenNum}）即使 contains 命中
+     * {@code token} 片段也直接放行——它们是合法业务字段，不得误伤。
      *
      * @param key 字段名
      * @return 命中返回 {@code true}
@@ -254,9 +274,13 @@ public class OperLogAspect {
         if (key == null || key.isEmpty()) {
             return false;
         }
-        String lower = key.toLowerCase(Locale.ROOT);
+        String normalized = key.toLowerCase(Locale.ROOT).replaceAll("[^a-z0-9]", "");
+        // 反例排除须先于黑名单判定：归一化精确相等命中即放行，避免误伤业务字段。
+        if (SENSITIVE_KEY_EXCLUSIONS.contains(normalized)) {
+            return false;
+        }
         for (String fragment : SENSITIVE_KEY_FRAGMENTS) {
-            if (lower.contains(fragment)) {
+            if (normalized.contains(fragment)) {
                 return true;
             }
         }

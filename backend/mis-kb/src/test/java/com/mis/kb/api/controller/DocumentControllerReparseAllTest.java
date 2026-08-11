@@ -65,7 +65,7 @@ class DocumentControllerReparseAllTest {
         KbReparseAllResult result = new KbReparseAllResult(
                 1L, 3, 2, 1, 0,
                 List.of(new KbReparseAllResult.FailedDocument(99L, "a.pdf", "boom")));
-        when(documentService.reparseAll(1L, USER)).thenReturn(result);
+        when(documentService.reparseAll(1L, false, USER)).thenReturn(result);
 
         mockMvc.perform(post("/internal/v1/kb/libraries/1/documents/reparse-all"))
                 .andExpect(status().isOk())
@@ -79,13 +79,29 @@ class DocumentControllerReparseAllTest {
                 .andExpect(jsonPath("$.data.failedDocuments[0].title").value("a.pdf"))
                 .andExpect(jsonPath("$.data.failedDocuments[0].reason").value("boom"));
 
-        verify(documentService).reparseAll(1L, USER);
+        verify(documentService).reparseAll(1L, false, USER);
+    }
+
+    @Test
+    @DisplayName("onlyFailed=true 透传给 Service（Q8：仅重试失败文档，不新增独立端点）")
+    void onlyFailedQueryParamRoutesToService() throws Exception {
+        when(documentService.reparseAll(3L, true, USER))
+                .thenReturn(new KbReparseAllResult(3L, 2, 2, 0, 0, List.of()));
+
+        mockMvc.perform(post("/internal/v1/kb/libraries/3/documents/reparse-all")
+                        .param("onlyFailed", "true"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(0))
+                .andExpect(jsonPath("$.data.libraryId").value(3))
+                .andExpect(jsonPath("$.data.success").value(2));
+
+        verify(documentService).reparseAll(3L, true, USER);
     }
 
     @Test
     @DisplayName("空库结果同样经 Result 包装（success=0）")
     void emptyLibraryResultWraps() throws Exception {
-        when(documentService.reparseAll(2L, USER)).thenReturn(new KbReparseAllResult(2L, 0, 0, 0, 0, List.of()));
+        when(documentService.reparseAll(2L, false, USER)).thenReturn(new KbReparseAllResult(2L, 0, 0, 0, 0, List.of()));
 
         mockMvc.perform(post("/internal/v1/kb/libraries/2/documents/reparse-all"))
                 .andExpect(status().isOk())
@@ -94,19 +110,19 @@ class DocumentControllerReparseAllTest {
                 .andExpect(jsonPath("$.data.failedDocuments").isArray())
                 .andExpect(jsonPath("$.data.failedDocuments").isEmpty());
 
-        verify(documentService).reparseAll(2L, USER);
+        verify(documentService).reparseAll(2L, false, USER);
     }
 
     @Test
     @DisplayName("知识库不存在：走统一异常通道返回业务错误码")
     void libraryNotFoundPropagatesErrorChannel() throws Exception {
-        when(documentService.reparseAll(404L, USER)).thenThrow(
+        when(documentService.reparseAll(404L, false, USER)).thenThrow(
                 new KbBusinessException(KbResultCode.KB_LIBRARY_NOT_FOUND));
 
         mockMvc.perform(post("/internal/v1/kb/libraries/404/documents/reparse-all"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.code").value(KbResultCode.KB_LIBRARY_NOT_FOUND.getCode()));
 
-        verify(documentService).reparseAll(404L, USER);
+        verify(documentService).reparseAll(404L, false, USER);
     }
 }

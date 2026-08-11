@@ -295,16 +295,22 @@ export async function reparseDocument(libraryId: number, id: number): Promise<vo
 }
 
 /**
- * 库级一键全部重解析（P1-1：换嵌入模型后全量重解析恢复检索）。
+ * 库级一键重解析（P1-1：换嵌入模型后全量重解析恢复检索；企业级增强一期 KE-05 扩展 onlyFailed）。
  *
  * <p>后端串行逐文档触发，单文档失败不中断其余；已解析中的文档自动跳过。
+ * `onlyFailed=true` 时仅重试 `parse_status=failed` 的文档（先收敛引擎状态再按 failed 过滤）。
  * 返回结构化结果（成功/失败/跳过 + 失败明细），由调用方做结果反馈。
  */
-export async function reparseAllDocuments(libraryId: number): Promise<KbReparseAllResult> {
+export async function reparseAllDocuments(
+  libraryId: number,
+  onlyFailed = false,
+): Promise<KbReparseAllResult> {
   const res = await api.post<ApiResult<KbReparseAllResult>>(
     `/kb/libraries/${libraryId}/documents/reparse-all`,
+    undefined,
+    { params: { onlyFailed } },
   );
-  return unwrap(res, '全部重解析失败');
+  return unwrap(res, onlyFailed ? '重试失败文档失败' : '全部重解析失败');
 }
 
 export async function deleteDocument(libraryId: number, id: number): Promise<void> {
@@ -713,6 +719,12 @@ export async function hitTest(req: KbHitTestRequest): Promise<KbHitTestResult> {
     // Wave D：只在勾选时发 true。不勾选一律不发（cleanParams 会剔除 false？不会——
     // false 不在剔除名单里），所以这里显式转成 true|null，让后端走「AUTO/FRESH」默认分支。
     disableSynonym: req.disableSynonym === true ? true : null,
+    // KE-08/09：按文档 / 上传时间范围过滤。空数组与空串归 null（cleanParams 剔除），
+    // 保证「均未设置时行为与现状一致」——后端不会收到 document_ids 键（R5：空 = 全量）。
+    documentIds:
+      req.documentIds && req.documentIds.length > 0 ? [...req.documentIds] : null,
+    uploadFrom: req.uploadFrom && req.uploadFrom.trim() !== '' ? req.uploadFrom : null,
+    uploadTo: req.uploadTo && req.uploadTo.trim() !== '' ? req.uploadTo : null,
   });
   const res = await api.post<ApiResult<KbHitTestResult>>('/kb/hit-test', body);
   return unwrap(res, '命中测试失败');

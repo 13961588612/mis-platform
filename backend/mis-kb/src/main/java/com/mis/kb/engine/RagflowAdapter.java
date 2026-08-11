@@ -13,6 +13,8 @@ import com.mis.kb.domain.model.EngineLibraryBrief;
 import com.mis.kb.domain.model.EngineLibraryRef;
 import com.mis.kb.domain.model.EngineModel;
 import com.mis.kb.domain.model.EngineModelPool;
+import com.mis.kb.domain.model.ParseStatus;
+import com.mis.kb.domain.model.ParseStatusSnapshot;
 import com.mis.kb.domain.model.RagSettings;
 import com.mis.kb.domain.model.RetrieveQuery;
 import com.mis.kb.domain.repository.KbDocumentRepository;
@@ -292,9 +294,26 @@ public class RagflowAdapter implements KnowledgeEnginePort {
                 + "@" + (m.providerName() == null ? "" : m.providerName());
     }
 
+    /**
+     * 查询 RAGFlow 文档解析状态快照（KE-03/KE-04）。
+     *
+     * <p>逐文档 {@code GET /datasets/{id}/documents/{docId}}，组装
+     * {@link ParseStatusSnapshot}（状态码值 + 进度 0~100 + 失败原因摘要）：
+     * <ul>
+     *   <li>status：{@link RagflowParseStatusMapper#toParseStatus}（兼容字符串/数字 run）；</li>
+     *   <li>progress：{@link RagflowParseStatusMapper#toProgress}（0~1 → 0~100）；</li>
+     *   <li>error：仅失败态携带 RAGFlow {@code progress_msg} 摘要（≤500 由快照构造截断）。</li>
+     * </ul>
+     * 单个文档查询异常记 WARN 后跳过（保留本地原值），不阻断整批。
+     *
+     * @param ref          知识库引擎引用
+     * @param nativeDocIds 待查询的原生文档 id
+     * @return 文档 id → 解析状态快照；恒非 {@code null}
+     */
     @Override
-    public Map<String, String> queryDocumentParseStatuses(EngineLibraryRef ref, List<String> nativeDocIds) {
-        Map<String, String> out = new HashMap<>();
+    public Map<String, ParseStatusSnapshot> queryDocumentParseStatuses(
+            EngineLibraryRef ref, List<String> nativeDocIds) {
+        Map<String, ParseStatusSnapshot> out = new HashMap<>();
         if (ref == null || ref.nativeId() == null || ref.nativeId().isBlank()
                 || nativeDocIds == null || nativeDocIds.isEmpty()) {
             return out;
@@ -309,9 +328,14 @@ public class RagflowAdapter implements KnowledgeEnginePort {
                     continue;
                 }
                 String status = RagflowParseStatusMapper.toParseStatus(doc.run(), doc.progress());
-                if (status != null) {
-                    out.put(docId, status);
+                if (status == null) {
+                    continue;
                 }
+                Integer progress = RagflowParseStatusMapper.toProgress(doc.progress());
+                // progress_msg 仅在失败态有意义；成功/进行中一律不携带 error（清空口径）
+                String error = ParseStatus.FAILED.code().equals(status)
+                        ? doc.progressMsg() : null;
+                out.put(docId, new ParseStatusSnapshot(status, progress, error));
             } catch (Exception e) {
                 log.warn("查询 RAGFlow 文档解析状态失败 datasetId={} docId={}: {}",
                         ref.nativeId(), docId, e.getMessage());
@@ -370,18 +394,24 @@ public class RagflowAdapter implements KnowledgeEnginePort {
     @Override
     public List<ChunkHit> retrieve(RetrieveQuery query) {
         List<String> datasetIds = new ArrayList<>();
+        Map<Long, String> libraryRefById = new HashMap<>();
         if (query.libraryIds() != null) {
             for (Long libraryId : query.libraryIds()) {
                 KbLibrary lib = libraryRepository.findById(libraryId).orElse(null);
                 if (lib != null && lib.getEngineLibraryRef() != null) {
                     datasetIds.add(lib.getEngineLibraryRef());
+                    libraryRefById.put(libraryId, lib.getEngineLibraryRef());
                 }
             }
         }
         if (datasetIds.isEmpty()) {
             return List.of();
         }
-        List<RfChunk> chunks = client.retrieve(query, datasetIds);
+        // KE-08/KE-09：文档过滤（MIS 文档 id → 引擎原生 document ref 集）。
+        // 只下发「本次检索库内 + enabled=1 + 有引擎映射」的文档；解析结果为空 = 不过滤
+        // （R5：不下发 document_ids 键，引擎返回全量）。
+        List<String> nativeDocIds = resolveDocumentIds(query.documentIds(), libraryRefById);
+        List<RfChunk> chunks = client.retrieve(query, datasetIds, nativeDocIds);
         List<ChunkHit> hits = new ArrayList<>();
         for (RfChunk c : chunks) {
             KbDocument doc = documentRepository.findByEngineDocumentRef(c.documentId()).orElse(null);
@@ -401,6 +431,50 @@ public class RagflowAdapter implements KnowledgeEnginePort {
                     c.charOffset(), c.firstPage()));
         }
         return hits;
+    }
+
+    /**
+     * MIS 文档 id 集 → 引擎原生 document ref 集（KE-08/KE-09）。
+     *
+     * <p>翻译铁律（设计 §1.5）：
+     * <ul>
+     *   <li><b>只下发本次检索库内的文档</b>——引擎会校验 document 归属（code:102），
+     *       越库下发直接拒整单；</li>
+     *   <li><b>仅 enabled=1</b>——双保险，避免检索到停用文档；</li>
+     *   <li>无引擎映射的文档跳过（本地尚未同步的文档引擎侧不存在）；</li>
+     *   <li>结果为空 = 无过滤（R5：不下发 {@code document_ids} 键，引擎全量返回）。</li>
+     * </ul>
+     *
+     * @param misDocumentIds MIS 文档 id 集；空 = 不过滤
+     * @param libraryRefById 本次检索库 id → 引擎 dataset ref 映射
+     * @return 引擎原生 document ref 列表；恒非 {@code null}
+     */
+    private List<String> resolveDocumentIds(List<Long> misDocumentIds, Map<Long, String> libraryRefById) {
+        if (misDocumentIds == null || misDocumentIds.isEmpty()) {
+            return List.of();
+        }
+        List<String> nativeIds = new ArrayList<>();
+        for (KbDocument doc : documentRepository.findAllById(misDocumentIds)) {
+            if (doc == null) {
+                continue;
+            }
+            if (!Integer.valueOf(1).equals(doc.getEnabled())) {
+                log.debug("文档过滤：跳过已停用文档 docId={}", doc.getId());
+                continue;
+            }
+            String libRef = doc.getLibraryId() == null ? null : libraryRefById.get(doc.getLibraryId());
+            if (libRef == null) {
+                log.debug("文档过滤：跳过非本次检索库文档 docId={} libraryId={}",
+                        doc.getId(), doc.getLibraryId());
+                continue;
+            }
+            if (doc.getEngineDocumentRef() == null || doc.getEngineDocumentRef().isBlank()) {
+                log.debug("文档过滤：跳过无引擎映射文档 docId={}", doc.getId());
+                continue;
+            }
+            nativeIds.add(doc.getEngineDocumentRef());
+        }
+        return nativeIds;
     }
 
     @Override
@@ -424,8 +498,14 @@ public class RagflowAdapter implements KnowledgeEnginePort {
      * {@code DELETE /datasets/{id}} 返回 405，所以这里恒为 false，前端据此把「物理删除」
      * 置灰并给出说明；升级后翻配置即可，本方法不用改。
      *
+     * <p><b>企业级增强一期（KE-06/KE-07）新增 parser 两位恒 false：</b>
+     * 当前 RAGFlow 实例实测<b>不支持</b> parser_config 的 OCR / overlap 键（硬下发即
+     * code:101/102 拒整单），所以 {@code parser_ocr}/{@code parser_overlap} 能力恒不声明，
+     * 前端据此置灰 + 提示「当前引擎版本暂不支持」；同时 {@code RagflowClient} 侧白名单
+     * 保证这两个键一律不下发。引擎升级后翻转下方两个 {@code false} 即可放行，代码分支不动。
+     *
      * @return 能力声明；{@code hybrid} 恒支持，{@code rerank} 随模型 ID 配置动态变化，
-     *         {@code delete} 随 {@code delete-supported} 配置变化
+     *         {@code delete} 随 {@code delete-supported} 配置变化，OCR/overlap 本期恒不支持
      */
     @Override
     public EngineCapabilities capabilities() {
@@ -434,6 +514,7 @@ public class RagflowAdapter implements KnowledgeEnginePort {
             log.debug("未配置 mis.kb.engine.rerank-model-id，capabilities 声明 rerankSupported=false");
         }
         boolean deleteAvailable = props != null && props.isDeleteSupported();
-        return EngineCapabilities.of(rerankAvailable, true, true, true, deleteAvailable);
+        return EngineCapabilities.of(rerankAvailable, true, true, true, deleteAvailable,
+                false, false);
     }
 }

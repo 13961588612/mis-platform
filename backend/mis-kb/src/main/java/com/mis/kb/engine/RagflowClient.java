@@ -627,11 +627,19 @@ public class RagflowClient {
      * <p>{@code rerank_id} <b>仅在</b>「开关为真 且 全局模型 ID 非空」时放入请求体；
      * 否则连键都不出现——传空串会被 RAGFlow 当成一个名为 "" 的模型去查，直接报错。
      *
-     * @param query      已由 {@code RetrieveQueryResolver} 合并完成的检索参数
-     * @param datasetIds 原生 dataset id 列表
+     * <p><b>企业级增强一期（KE-08/KE-09）：{@code document_ids} 下发。</b>
+     * 实测（2026-08-11）：携带合法 {@code document_ids} → code:0 且只命中这些文档；
+     * 携带不存在/越库 id → code:102（引擎校验归属）；空数组 → code:0 全量（空=不过滤）。
+     * 因此 <b>MIS 侧解析结果为空时不下发该键</b>（R5），避免「空=全量」的歧义；
+     * 非空才下发，且只允许本次检索库内的启用文档（由适配器 {@code resolveDocumentIds} 保证）。
+     *
+     * @param query       已由 {@code RetrieveQueryResolver} 合并完成的检索参数
+     * @param datasetIds  原生 dataset id 列表
+     * @param documentIds 引擎原生 document id 列表（文档过滤，KE-08/KE-09）；
+     *                    空/非空见上方说明，空 = 不下发键（全量）
      * @return 原生 chunk 列表
      */
-    public List<RfChunk> retrieve(RetrieveQuery query, List<String> datasetIds) {
+    public List<RfChunk> retrieve(RetrieveQuery query, List<String> datasetIds, List<String> documentIds) {
         String method = query.effectiveRetrievalMethod();
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("question", query.question());
@@ -645,10 +653,16 @@ public class RagflowClient {
         if (query.shouldSendRerankId()) {
             body.put("rerank_id", query.rerankModelId());
         }
-        log.debug("RAGFlow 检索请求 datasets={} method={} keyword={} weight={} pageSize={} threshold={} rerankId={}",
+        // KE-08/KE-09：非空才下发 document_ids（R5：空 = 不下发键 = 全量）
+        if (documentIds != null && !documentIds.isEmpty()) {
+            body.put("document_ids", documentIds);
+        }
+        log.debug("RAGFlow 检索请求 datasets={} method={} keyword={} weight={} pageSize={} threshold={} "
+                        + "rerankId={} documentIds={}",
                 datasetIds, method, body.get("keyword"), body.get("vector_similarity_weight"),
                 body.get("page_size"), body.get("similarity_threshold"),
-                body.getOrDefault("rerank_id", "<未下发>"));
+                body.getOrDefault("rerank_id", "<未下发>"),
+                body.getOrDefault("document_ids", "<未下发>"));
 
         RfResponse<RfRetrievalData> resp = postFor("/api/v1/retrieval", body,
                 new ParameterizedTypeReference<>() {});

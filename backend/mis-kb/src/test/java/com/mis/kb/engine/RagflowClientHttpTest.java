@@ -294,9 +294,9 @@ class RagflowClientHttpTest {
         @DisplayName("请求体：顶层扁平字段，无嵌套 retrieval_setting，无 top_k")
         void bodyIsFlatWithoutRetrievalSetting() throws Exception {
             RetrieveQuery query = new RetrieveQuery(
-                    "季度报表", List.of(1L), 10, 0.2, "hybrid", 0.3, false, null, null);
+                    "季度报表", List.of(1L), 10, 0.2, "hybrid", 0.3, false, null, null, null);
 
-            newClient().retrieve(query, List.of("ds-1"));
+            newClient().retrieve(query, List.of("ds-1"), List.of());
 
             JsonNode body = mapper.readTree(lastBody.get());
             assertEquals("季度报表", body.get("question").asText());
@@ -324,14 +324,14 @@ class RagflowClientHttpTest {
         void methodToKeywordWeightMapping() throws Exception {
             // vector
             newClient().retrieve(new RetrieveQuery(
-                    "q", List.of(1L), 5, 0.2, "vector", 0.4, false, null, null), List.of("ds-1"));
+                    "q", List.of(1L), 5, 0.2, "vector", 0.4, false, null, null, null), List.of("ds-1"), List.of());
             JsonNode vectorBody = mapper.readTree(lastBody.get());
             assertFalse(vectorBody.get("keyword").asBoolean());
             assertEquals(1.0, vectorBody.get("vector_similarity_weight").asDouble(), 0.0001);
 
             // keyword
             newClient().retrieve(new RetrieveQuery(
-                    "q", List.of(1L), 5, 0.2, "keyword", 0.4, false, null, null), List.of("ds-1"));
+                    "q", List.of(1L), 5, 0.2, "keyword", 0.4, false, null, null, null), List.of("ds-1"), List.of());
             JsonNode keywordBody = mapper.readTree(lastBody.get());
             assertTrue(keywordBody.get("keyword").asBoolean());
             assertEquals(0.0, keywordBody.get("vector_similarity_weight").asDouble(), 0.0001);
@@ -341,8 +341,8 @@ class RagflowClientHttpTest {
         @DisplayName("rerank=true 且模型 ID 非空 → 顶层下发 rerank_id")
         void rerankIdSentWhenEnabled() throws Exception {
             newClient().retrieve(new RetrieveQuery(
-                    "q", List.of(1L), 5, 0.2, "hybrid", 0.3, true, "qwen3-rerank@Tongyi-Qianwen@Tongyi-Qianwen", null),
-                    List.of("ds-1"));
+                    "q", List.of(1L), 5, 0.2, "hybrid", 0.3, true, "qwen3-rerank@Tongyi-Qianwen@Tongyi-Qianwen", null, null),
+                    List.of("ds-1"), List.of());
 
             JsonNode body = mapper.readTree(lastBody.get());
             assertEquals("qwen3-rerank@Tongyi-Qianwen@Tongyi-Qianwen", body.get("rerank_id").asText(),

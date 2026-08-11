@@ -12,9 +12,10 @@ import { KbLibraryCombobox } from '../components/kb-library-combobox';
 import { KbWeightSlider } from '../components/kb-weight-slider';
 import { KbHitTestResultList } from './kb-hit-test-result-list';
 import { KbSynonymStatusBadge, KbSynonymTraceCard } from './kb-synonym-trace-card';
-import { getRagSettings, getSynonymConfig, hitTest } from '../api/kb-api';
+import { getRagSettings, getSynonymConfig, hitTest, listDocuments } from '../api/kb-api';
 import { useKbStore } from '../stores/use-kb-store';
 import type {
+  KbDocument,
   KbEffectiveParams,
   KbHitTestHit,
   KbHitTestResult,
@@ -46,6 +47,12 @@ interface TuneForm {
   rerank: boolean;
   /** 本次不使用同义词扩展（Wave D；仅影响本次测试，不写回全局开关）。 */
   disableSynonym: boolean;
+  /** 按文档过滤：MIS 文档 id 多选（KE-08）；空数组 = 不过滤。 */
+  documentIds: number[];
+  /** 上传时间范围下界（datetime-local 原始值，KE-09）；空串 = 不限制。 */
+  uploadFrom: string;
+  /** 上传时间范围上界（datetime-local 原始值，KE-09）；空串 = 不限制。 */
+  uploadTo: string;
 }
 
 const EMPTY_TUNE: TuneForm = {
@@ -56,6 +63,9 @@ const EMPTY_TUNE: TuneForm = {
   vectorSimilarityWeight: DEFAULT_WEIGHT,
   rerank: false,
   disableSynonym: false,
+  documentIds: [],
+  uploadFrom: '',
+  uploadTo: '',
 };
 
 /** 一次已完成的测试记录（用于 WA-14 并排对比）。 */
@@ -63,6 +73,8 @@ interface TestRun {
   question: string;
   result: KbHitTestResult;
   at: string;
+  /** 本次实际下发的过滤条件摘要（KE-08/09 结果回显，随运行定格）。 */
+  filterEcho: string | null;
 }
 
 /** CSV 单元格转义：双引号翻倍并整体加引号，避免逗号/换行撕裂表格。 */
@@ -117,6 +129,42 @@ function exportCsv(
 }
 
 /**
+ * datetime-local 原始值（"YYYY-MM-DDTHH:mm"）→ ISO-8601 UTC 串（KE-09）。
+ *
+ * <p>浏览器规范：不带时区的日期时间串按「本地时区」解释，`toISOString()`
+ * 再转成 UTC——用户选的是本地时刻，后端拿到的就是绝对时刻，不硬编码 +08:00。
+ * 空串 / 非法输入返回 null（= 不限制，与后端「空 = 不过滤」语义对齐）。
+ */
+function toIsoInstant(localValue: string): string | null {
+  const v = localValue.trim();
+  if (!v) return null;
+  // "YYYY-MM-DDTHH:mm" 补秒成 "YYYY-MM-DDTHH:mm:ss"，避免省略秒导致的解析歧义
+  const withSeconds = v.length === 16 ? `${v}:00` : v;
+  const d = new Date(withSeconds);
+  return Number.isNaN(d.getTime()) ? null : d.toISOString();
+}
+
+/**
+ * 本次请求的过滤条件摘要（结果回显用，设计 §2.2「结果回显过滤条件」）。
+ *
+ * <p>只反映「本次请求下发了什么」，不做生效性判断——引擎不支持时由后端
+ * 降级并在 `effectiveParams.degradedReasons` 回显原因，前端不重复解读。
+ */
+function filterSummaryText(form: TuneForm, documents: KbDocument[]): string | null {
+  const parts: string[] = [];
+  if (form.documentIds.length > 0) {
+    const matched = documents.filter((d) => form.documentIds.includes(d.id)).length;
+    parts.push(`文档 ${matched}/${form.documentIds.length} 篇`);
+  }
+  const from = form.uploadFrom ? form.uploadFrom.slice(0, 10) : '';
+  const to = form.uploadTo ? form.uploadTo.slice(0, 10) : '';
+  if (from || to) {
+    parts.push(`上传时间 ${from || '不限'} ~ ${to || '不限'}`);
+  }
+  return parts.length > 0 ? parts.join('，') : null;
+}
+
+/**
  * 命中测试页（Q-04 / WA-08 / WA-14 / WA-15）。
  *
  * <p>知识管理员的调参工作台：选一个库、输一个问题、临时改几个参数，
@@ -134,6 +182,8 @@ export function KbHitTestPage() {
   const [current, setCurrent] = useState<TestRun | null>(null);
   const [previous, setPrevious] = useState<TestRun | null>(null);
   const [synonymConfig, setSynonymConfig] = useState<KbSynonymConfig | null>(null);
+  // 当前库文档列表，供「限定文档」多选数据源（KE-08）；切库时随设置一并刷新。
+  const [documents, setDocuments] = useState<KbDocument[]>([]);
 
   const capabilities = useKbStore((s) => s.capabilities);
   const refreshEngine = useKbStore((s) => s.refreshEngine);
@@ -149,6 +199,9 @@ export function KbHitTestPage() {
   // 同义词全局生效态：`=== true` 收敛（设计 §7.8）。未加载 / 被熔断 / 已关
   // 一律视为「未生效」——此时「本次不使用」开关无意义，置灰更安全。
   const synonymEffective = synonymConfig?.effective === true;
+  // 文档/时间范围过滤能力：`=== true`（fail-safe，对齐 rerankSupported 口径）。
+  // 未确认一律置灰——过滤条件在引擎不支持时会被后端清空，与其让人白勾不如提前挡住。
+  const filterSupported = capabilities?.metadataFilterSupported === true;
 
   useEffect(() => {
     if (!capabilities) void refreshEngine();
@@ -175,12 +228,16 @@ export function KbHitTestPage() {
    *
    * <p>清空是硬要求（WA-14）：跨库对比会误导。哪怕用户只是手滑点错库，
    * 也宁可让他重跑一次，也不能留着上一个库的结果假装可比。
+   *
+   * <p>过滤条件一并清空（KE-08/09）：文档 id 属于具体库，切库后原 id 在新库
+   * 可能指向别的文档甚至不存在——留着只会让结果莫名其妙，重置最安全。
    */
   const onLibraryChange = useCallback((id: number | null) => {
     setLibraryId(id);
     setCurrent(null);
     setPrevious(null);
     if (id == null) {
+      setDocuments([]);
       setForm((f) => ({ ...EMPTY_TUNE, question: f.question }));
       return;
     }
@@ -195,9 +252,18 @@ export function KbHitTestPage() {
           vectorSimilarityWeight: s.vectorSimilarityWeight ?? DEFAULT_WEIGHT,
           rerank: s.rerank === true,
           disableSynonym: f.disableSynonym,
+          documentIds: [],
+          uploadFrom: '',
+          uploadTo: '',
         }));
       } catch (e) {
         toast.error(e instanceof Error ? e.message : '加载该库 RAG 设置失败');
+      }
+      // 文档列表供「限定文档」多选；拉取失败只影响过滤区数据，不阻塞主流程。
+      try {
+        setDocuments(await listDocuments(id));
+      } catch {
+        setDocuments([]);
       }
     })();
   }, []);
@@ -227,6 +293,11 @@ export function KbHitTestPage() {
         rerank: form.rerank,
         // Wave D：仅影响本次测试，绝不写回全局开关。
         disableSynonym: form.disableSynonym,
+        // KE-08/09：空数组/空串归 null（cleanParams 会剔除 null），
+        // 保证「均未设置时行为与现状一致」——不下发 document_ids 键。
+        documentIds: form.documentIds.length > 0 ? [...form.documentIds] : null,
+        uploadFrom: toIsoInstant(form.uploadFrom),
+        uploadTo: toIsoInstant(form.uploadTo),
       });
       // 当前结果挤到「上一次」，形成 1 组对比
       setPrevious(current);
@@ -234,6 +305,7 @@ export function KbHitTestPage() {
         question: form.question.trim(),
         result,
         at: new Date().toLocaleTimeString('zh-CN', { hour12: false }),
+        filterEcho: filterSummaryText(form, documents),
       });
       if ((result.hits?.length ?? 0) === 0) {
         toast.warning('本次未命中任何片段，可尝试降低阈值或切换检索方式');
@@ -344,6 +416,104 @@ export function KbHitTestPage() {
           ) : null}
         </label>
 
+        {/* 检索范围过滤（KE-08/09）：限定文档多选 + 上传时间范围。
+            能力未确认/不支持时整体置灰（fail-safe，`=== true`），与 rerank 区同款
+            置灰 + amber 提示结构；后端仍会二次清洗（仅库内 + enabled=1）与强制降级。 */}
+        <div className="space-y-2 rounded-md border border-dashed bg-muted/30 p-3">
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-sm font-medium text-foreground">检索范围过滤（KE-08/09）</span>
+            {filterSupported &&
+            (form.documentIds.length > 0 || form.uploadFrom || form.uploadTo) ? (
+              <Button
+                type="button"
+                size="sm"
+                variant="ghost"
+                className="h-6 px-2 text-xs"
+                onClick={() =>
+                  setForm((f) => ({ ...f, documentIds: [], uploadFrom: '', uploadTo: '' }))
+                }
+              >
+                清除过滤
+              </Button>
+            ) : null}
+          </div>
+          <p className="text-xs text-muted-foreground">
+            限定只在选中文档 / 上传时间范围内的片段中检索；留空 = 不限。
+          </p>
+          {!filterSupported ? (
+            <p className="text-xs text-amber-600">
+              当前引擎不支持文档/时间范围过滤，过滤条件不可用
+            </p>
+          ) : null}
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+            <div className="min-w-0">
+              <label className={fieldLabel}>限定文档（多选）</label>
+              {!filterSupported ? (
+                <div className="rounded-md border border-input bg-card px-2 py-1 text-xs text-amber-600">
+                  引擎不支持过滤，文档列表不可用
+                </div>
+              ) : documents.length === 0 ? (
+                <div className="rounded-md border border-input bg-card px-2 py-1 text-xs text-muted-foreground">
+                  该库暂无文档
+                </div>
+              ) : (
+                <div className="max-h-44 overflow-auto rounded-md border border-input bg-card p-1">
+                  {documents.map((doc) => {
+                    const selectable = doc.enabled === 1;
+                    const checked = form.documentIds.includes(doc.id);
+                    return (
+                      <label
+                        key={doc.id}
+                        className="flex cursor-pointer items-center gap-2 rounded px-2 py-1 text-sm hover:bg-muted/60"
+                        title={doc.title}
+                      >
+                        <input
+                          type="checkbox"
+                          className="h-3.5 w-3.5 shrink-0"
+                          checked={checked}
+                          // 停用文档后端必然清洗掉（enabled=1），勾了也白勾，直接禁选
+                          disabled={!selectable}
+                          onChange={(e) => {
+                            const next = e.target.checked
+                              ? [...form.documentIds, doc.id]
+                              : form.documentIds.filter((id) => id !== doc.id);
+                            setForm((f) => ({ ...f, documentIds: next }));
+                          }}
+                        />
+                        <span className="min-w-0 flex-1 truncate">{doc.title}</span>
+                        {!selectable ? (
+                          <Badge variant="outline" className="shrink-0 text-[0.65rem]">
+                            已停用
+                          </Badge>
+                        ) : null}
+                      </label>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+            <div className="min-w-0">
+              <label className={fieldLabel}>上传时间范围（按 kb_document.created_at）</label>
+              <div className="grid grid-cols-2 gap-2">
+                <Input
+                  type="datetime-local"
+                  aria-label="上传时间起"
+                  value={form.uploadFrom}
+                  disabled={!filterSupported}
+                  onChange={(e) => setForm((f) => ({ ...f, uploadFrom: e.target.value }))}
+                />
+                <Input
+                  type="datetime-local"
+                  aria-label="上传时间止"
+                  value={form.uploadTo}
+                  disabled={!filterSupported}
+                  onChange={(e) => setForm((f) => ({ ...f, uploadTo: e.target.value }))}
+                />
+              </div>
+            </div>
+          </div>
+        </div>
+
         <div>
           <label className={fieldLabel}>测试问题</label>
           <Input
@@ -388,7 +558,9 @@ export function KbHitTestPage() {
       </div>
 
       {/* ------------------------------------------------------ 生效参数与降级提示 */}
-      {current ? <EffectiveParamsPanel result={current.result} /> : null}
+      {current ? (
+        <EffectiveParamsPanel result={current.result} filterEcho={current.filterEcho} />
+      ) : null}
 
       {/* ------------------------------------------------------ 同义词扩展轨迹（唯一回显出口，T13） */}
       {current?.result.synonym ? <KbSynonymTraceCard expansion={current.result.synonym} /> : null}
@@ -457,8 +629,18 @@ export function KbHitTestPage() {
   );
 }
 
-/** 生效参数回显 + 降级原因（WA-14 / WA-02）。 */
-function EffectiveParamsPanel({ result }: { result: KbHitTestResult }) {
+/**
+ * 生效参数回显 + 降级原因（WA-14 / WA-02）。
+ *
+ * @param filterEcho 本次请求的过滤条件摘要（KE-08/09 结果回显）；无过滤时为空。
+ */
+function EffectiveParamsPanel({
+  result,
+  filterEcho,
+}: {
+  result: KbHitTestResult;
+  filterEcho?: string | null;
+}) {
   const p: KbEffectiveParams | null = result.effectiveParams;
   const reasons = p?.degradedReasons ?? [];
 
@@ -488,6 +670,9 @@ function EffectiveParamsPanel({ result }: { result: KbHitTestResult }) {
         />
         <ParamItem label="耗时" value={`${result.elapsedMs ?? '-'} ms`} />
       </dl>
+      {filterEcho ? (
+        <p className="text-xs text-muted-foreground">本次过滤条件：{filterEcho}</p>
+      ) : null}
       {p?.source === 'GLOBAL_DEFAULT' ? (
         <p className="text-xs text-muted-foreground">
           提示：本次参数来自全局默认而非库级设置（该库未配置或走了多库回落）。
