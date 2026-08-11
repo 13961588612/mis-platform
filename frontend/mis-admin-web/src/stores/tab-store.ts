@@ -6,6 +6,8 @@ export interface WorkspaceTab {
   title: string;
   icon?: string | null;
   pinned?: boolean;
+  /** 归属 APP（sys_app.code）。缺省视为 system（历史 tab / 初始 pinned 仪表盘）。 */
+  appCode?: string;
 }
 
 interface TabState {
@@ -48,6 +50,7 @@ export const useTabStore = create<TabState>()((set, get) => ({
                       title: tab.title || t.title,
                       icon: tab.icon ?? t.icon,
                       pinned: tab.pinned ?? t.pinned,
+                      appCode: tab.appCode ?? t.appCode,
                     }
                   : t,
               ),

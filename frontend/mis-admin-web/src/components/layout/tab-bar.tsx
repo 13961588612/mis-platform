@@ -1,24 +1,42 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { ChevronLeft, ChevronRight, Pin, X } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useTabStore } from '@/stores/tab-store';
+import { useAuthStore } from '@/stores/auth-store';
 import { resolveNavIcon } from '@/lib/nav/icons';
+import { resolveActiveHostAppCode } from '@/lib/nav/host-apps';
+import { isTabIsolationEnabled, DEFAULT_TAB_APP_CODE } from '@/lib/tabs-config';
 
 const SCROLL_STEP = 200;
 
 export function TabBar() {
   const navigate = useNavigate();
+  const location = useLocation();
   const tabs = useTabStore((s) => s.tabs);
   const activeId = useTabStore((s) => s.activeId);
   const activateTab = useTabStore((s) => s.activateTab);
   const closeTab = useTabStore((s) => s.closeTab);
   const closeOthers = useTabStore((s) => s.closeOthers);
   const closeAll = useTabStore((s) => s.closeAll);
+  const app = useAuthStore((s) => s.app);
   const [menu, setMenu] = useState<{ x: number; y: number; id: string } | null>(null);
   const scrollerRef = useRef<HTMLDivElement>(null);
   const [canLeft, setCanLeft] = useState(false);
   const [canRight, setCanRight] = useState(false);
+
+  // 与 AppLayout 同口径解析当前 APP（路由前缀优先，回退登录 app）；隔离开启时按此过滤 Tab。
+  const activeAppCode = useMemo(
+    () => resolveActiveHostAppCode(location.pathname, app?.code),
+    [location.pathname, app?.code],
+  );
+
+  // 按 APP 隔离（配置项，默认开启）：仅展示当前 APP 的 tab；关闭则回退旧行为（全部展示）。
+  // 无 appCode 的 tab（历史遗留 / 初始 pinned 仪表盘）按 system 归属。
+  const visibleTabs = useMemo(() => {
+    if (!isTabIsolationEnabled()) return tabs;
+    return tabs.filter((t) => (t.appCode ?? DEFAULT_TAB_APP_CODE) === activeAppCode);
+  }, [tabs, activeAppCode]);
 
   const updateScrollState = useCallback(() => {
     const el = scrollerRef.current;
@@ -43,7 +61,7 @@ export function TabBar() {
       el.removeEventListener('scroll', updateScrollState);
       ro.disconnect();
     };
-  }, [tabs, updateScrollState]);
+  }, [visibleTabs, updateScrollState]);
 
   useEffect(() => {
     const el = scrollerRef.current;
@@ -54,13 +72,13 @@ export function TabBar() {
     if (!activeBtn) return;
     activeBtn.scrollIntoView({ inline: 'nearest', block: 'nearest', behavior: 'smooth' });
     requestAnimationFrame(updateScrollState);
-  }, [activeId, tabs, updateScrollState]);
+  }, [activeId, visibleTabs, updateScrollState]);
 
   const scrollBy = (delta: number) => {
     scrollerRef.current?.scrollBy({ left: delta, behavior: 'smooth' });
   };
 
-  if (tabs.length === 0) return null;
+  if (visibleTabs.length === 0) return null;
 
   return (
     <div className="relative flex shrink-0 items-end border-b border-border bg-card">
@@ -81,7 +99,7 @@ export function TabBar() {
         ref={scrollerRef}
         className="flex min-w-0 flex-1 items-end gap-0.5 overflow-x-auto overflow-y-hidden pt-2 [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden"
       >
-        {tabs.map((tab) => {
+        {visibleTabs.map((tab) => {
           const active = tab.id === activeId;
           const Icon = resolveNavIcon(tab.icon);
           return (

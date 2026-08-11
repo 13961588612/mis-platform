@@ -17,29 +17,27 @@ import { fetchApps } from '@/lib/api/platform';
 import { registerIframeApps } from '@/lib/nav/iframe-apps';
 import { logout } from '@/lib/api/auth';
 import { useAuthStore } from '@/stores/auth-store';
+import { useAiStore } from '@/stores/ai-store';
 import type { AppItem } from '@/types/api';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import { resolveNavIcon } from '@/lib/nav/icons';
 import { resolveHostLanding } from '@/lib/nav/host-apps';
+import { APP_GROUP_LABEL } from '@/lib/nav/app-groups';
 import { HeaderToolkit } from '@/components/layout/header-toolkit';
 import {
   CommandPalette,
   useCommandPaletteHotkey,
 } from '@/components/layout/command-palette';
+import { CopilotPanel } from '@/components/layout/copilot-panel';
 import { StatCard } from '@/components/common/stat-card';
-
-const GROUP_LABEL: Record<string, string> = {
-  governance: '管理与治理',
-  operations: '业务与运营',
-  platform: '协同与平台',
-};
 
 const FILTERS = [
   { key: 'all', label: '全部' },
   { key: 'governance', label: '管理与治理' },
   { key: 'operations', label: '业务与运营' },
   { key: 'platform', label: '协同与平台' },
+  { key: 'ai', label: 'AI助手' },
 ] as const;
 
 export function PortalPage() {
@@ -52,12 +50,26 @@ export function PortalPage() {
   const user = useAuthStore((s) => s.user);
   const currentApp = useAuthStore((s) => s.app);
   const clearSession = useAuthStore((s) => s.clearSession);
+  const copilotOpen = useAiStore((s) => s.copilotOpen);
+  const setCopilotOpen = useAiStore((s) => s.setCopilotOpen);
   const navigate = useNavigate();
   const { setTheme, resolvedTheme } = useTheme();
   const [mounted, setMounted] = useState(false);
 
   const openCommand = useCallback(() => setCmdOpen(true), []);
   useCommandPaletteHotkey(openCommand);
+
+  // Copilot 热键：Cmd/Ctrl+J（与 AppLayout 对齐；Cmd+K 已被命令面板占用）
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'j') {
+        e.preventDefault();
+        setCopilotOpen(!useAiStore.getState().copilotOpen);
+      }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [setCopilotOpen]);
 
   useEffect(() => setMounted(true), []);
 
@@ -230,7 +242,7 @@ export function PortalPage() {
           <section key={group} className="space-y-3">
             <div className="mb-1 flex items-center gap-2">
               <span className="h-4 w-1 rounded-full bg-[hsl(var(--portal-card-accent))]" />
-              <h2 className="text-base font-semibold">{GROUP_LABEL[group] ?? group}</h2>
+              <h2 className="text-base font-semibold">{APP_GROUP_LABEL[group] ?? group}</h2>
             </div>
             <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
               {list.map((app) => {
@@ -281,6 +293,7 @@ export function PortalPage() {
       </main>
 
       <CommandPalette open={cmdOpen} onOpenChange={setCmdOpen} />
+      <CopilotPanel open={copilotOpen} onOpenChange={setCopilotOpen} />
     </div>
   );
 }

@@ -44,14 +44,9 @@ import {
 import { KB_NAV } from '@/lib/nav/kb-nav';
 import { AGENT_NAV } from '@/lib/nav/agent-nav';
 import { resolveActiveHostAppCode, resolveHostLanding } from '@/lib/nav/host-apps';
+import { APP_GROUP_LABEL } from '@/lib/nav/app-groups';
 import { mergeNavWithFallback, routerMenusToSystemNav } from '@/lib/nav/menus-to-nav';
 import { useTabStore } from '@/stores/tab-store';
-
-const GROUP_LABEL: Record<string, string> = {
-  governance: '管理与治理',
-  operations: '业务与运营',
-  platform: '协同与平台',
-};
 
 /** 原型 .btn.btn-ghost：text-sm / font-medium / gap-2 / 无描边 */
 const shellBtn =
@@ -153,8 +148,9 @@ export function AppLayout() {
       title: path === '/dashboard' ? '仪表盘' : pageTitle,
       icon: path === '/dashboard' ? 'LayoutDashboard' : pageIcon,
       pinned: path === '/dashboard',
+      appCode: activeAppCode,
     });
-  }, [location.pathname, pageTitle, pageIcon, openTab]);
+  }, [location.pathname, pageTitle, pageIcon, openTab, activeAppCode]);
 
   const appsByGroup = useMemo(() => {
     const map = new Map<string, AppItem[]>();
@@ -247,7 +243,7 @@ export function AppLayout() {
               {appsByGroup.map(([group, list]) => (
                 <div key={group} className="mb-1 last:mb-0">
                   <div className="px-2 py-1.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
-                    {GROUP_LABEL[group] ?? group}
+                    {APP_GROUP_LABEL[group] ?? group}
                   </div>
                   {list.map((item) => {
                     const Icon = resolveNavIcon(item.icon);
