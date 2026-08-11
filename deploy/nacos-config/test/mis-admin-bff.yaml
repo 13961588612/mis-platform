@@ -1,5 +1,8 @@
 # Nacos config: mis-admin-bff (test)
 # Fused-deploy ai-platform adapter params (DEP-5).
+server:
+  port: 8081
+
 mis:
   ai-platform:
     base-url: http://ai-platform-backend:8000
@@ -13,3 +16,8 @@ mis:
       extract: true
       rag: true
       nl2sql: false
+  agent-ops:
+    backend-base-url: http://ai-platform-backend:8000
+    gateway-base-url: http://ai-platform-gateway:3100
+    timeout-ms: 15000
+    chat-timeout-ms: 180000

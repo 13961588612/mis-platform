@@ -1,0 +1,3 @@
+# Nacos config: mis-system (prod)
+server:
+  port: 8105

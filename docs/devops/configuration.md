@@ -26,16 +26,38 @@ deploy/nacos-config/
 └── bootstrap-template.yml
 ```
 
-| Git 文件 | Nacos Data ID | Group |
-|----------|---------------|-------|
-| `mis-common.yaml` | `mis-common` | `MIS_GROUP` |
-| `mis-gateway.yaml` | `mis-gateway` | `MIS_GROUP` |
-| `mis-auth.yaml` | `mis-auth` | `MIS_GROUP` |
-| `mis-iam.yaml` | `mis-iam` | `MIS_GROUP` |
-| `mis-org.yaml` | `mis-org` | `MIS_GROUP` |
-| `mis-audit.yaml` | `mis-audit` | `MIS_GROUP` |
+| Git 文件 | Nacos Data ID | Group | `server.port` |
+|----------|---------------|-------|---------------|
+| `mis-common.yaml` | `mis-common` | `MIS_GROUP` | —（共享，无服务端口） |
+| `mis-gateway.yaml` | `mis-gateway` | `MIS_GROUP` | 8080 |
+| `mis-auth.yaml` | `mis-auth` | `MIS_GROUP` | 8101 |
+| `mis-iam.yaml` | `mis-iam` | `MIS_GROUP` | 8102 |
+| `mis-org.yaml` | `mis-org` | `MIS_GROUP` | 8103 |
+| `mis-system.yaml` | `mis-system` | `MIS_GROUP` | 8105 |
+| `mis-audit.yaml` | `mis-audit` | `MIS_GROUP` | 8106 |
+| `mis-kb.yaml` | `mis-kb` | `MIS_GROUP` | 8108 |
+| `mis-admin-bff.yaml` | `mis-admin-bff` | `MIS_GROUP` | 8081 |
 
 Data ID **不带 `.yaml`** 扩展名。
+
+### 建议迁入 / 留在本地的配置清单
+
+| 服务 | 建议进 Nacos（环境相关、可热改） | 建议留 jar / 环境变量（密钥或本机路径） |
+|------|----------------------------------|----------------------------------------|
+| **mis-common** | datasource URL 模板、Redis host/port/db、JPA 通用项 | `JWT_*_PATH`、真实 DB/Redis 密码（用 `${ENV}` 引用） |
+| **mis-gateway** | `server.port`、路由表（lb 服务名）、`mis.security.gateway.enabled` | JWT 公钥路径 |
+| **mis-auth** | `server.port`、验证码开关/TTL、登录失败锁定、下游 discovery/base-url、token TTL | JWT 私钥路径、cookie secure |
+| **mis-iam** | `server.port`、`mis.iam.org-*` / `system-*` 下游地址与 discovery | — |
+| **mis-org** | `server.port`、`mis.org.iam-*` 下游地址与 discovery | — |
+| **mis-system** | `server.port` | —（业务配置较少） |
+| **mis-audit** | `server.port` | — |
+| **mis-kb** | `server.port`、`mis.kb.engine.type/base-url/rerank-model-id` | `MIS_KB_ENGINE_API_KEY`（密钥用 env 注入） |
+| **mis-admin-bff** | `server.port`、下游 `mis.bff.*-base-url` + discovery 开关、`aggregate-timeout-ms`、`api-permission.*`、`mis.ai-platform.*`（非密钥）、`mis.agent-ops.*`（含 `chat-timeout-ms`）、`mis.mcp.servers` | `service-token` / `MIS_JWT_PUBLIC_KEY` / 默认密码等密钥类 |
+
+原则：
+1. **端口、路由、下游地址、超时、功能开关** → Nacos
+2. **密钥、私钥/公钥路径、默认口令** → 环境变量 / Secret，Nacos 里只写 `${VAR}` 占位
+3. **本机 IDE 默认** 仍保留在各模块 `application.yml`（`MIS_REMOTE=false` 时生效）
 
 ### 推送
 

@@ -17,7 +17,10 @@
 | `mis-auth.yaml` | `mis-auth` |
 | `mis-iam.yaml` | `mis-iam` |
 | `mis-org.yaml` | `mis-org` |
+| `mis-system.yaml` | `mis-system` |
 | `mis-audit.yaml` | `mis-audit` |
+| `mis-kb.yaml` | `mis-kb` |
+| `mis-admin-bff.yaml` | `mis-admin-bff` |
 
 ## 推送
 

@@ -50,11 +50,11 @@ public class AgentOpsProperties {
     /**
      * 对话类调用超时（毫秒），用于 §4.3 #33 {@code POST /chat/sessions/{id}/messages}。
      *
-     * <p>这一跳背后是一次完整的 LLM 推理，与其它端点不是一个数量级；
-     * 复用 {@link #timeoutMs} 会让「消息发出去了、BFF 先超时」成为常态 ——
+     * <p>这一跳背后是一次完整的 LLM 推理，运营台经 Coordinator→Worker 多跳时经常超过 60s；
+     * 复用 {@link #timeoutMs} 或沿用 60s 会让「消息发出去了、BFF 先超时」成为常态 ——
      * 用户看到失败，下游其实已经写入会话，属于最难排查的一类不一致。
      */
-    private long chatTimeoutMs = 60000;
+    private long chatTimeoutMs = 180000;
 
     public String getBackendBaseUrl() {
         return backendBaseUrl;

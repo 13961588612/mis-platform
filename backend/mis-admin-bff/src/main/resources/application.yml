@@ -82,8 +82,9 @@ mis:
     gateway-base-url: ${AGENT_OPS_GATEWAY_BASE_URL:http://127.0.0.1:3100}
     # 启停 Agent / 重建索引 / 连接 MCP 都涉及真实进程与网络初始化，3s（aggregate-timeout-ms）会误判超时
     timeout-ms: ${AGENT_OPS_TIMEOUT_MS:15000}
-    # 对话消息背后是一次完整 LLM 推理，与其它端点不是一个量级
-    chat-timeout-ms: ${AGENT_OPS_CHAT_TIMEOUT_MS:60000}
+    # 对话消息背后是一次完整 LLM 推理（运营台本地对话还可能经 Coordinator→Worker 多跳），
+    # 60s 在委派场景会常态误判超时（BFF 先断、下游仍在跑）。默认放宽到 180s，可用环境变量覆盖。
+    chat-timeout-ms: ${AGENT_OPS_CHAT_TIMEOUT_MS:180000}
   mcp:
     servers:
       org: http://localhost:8103

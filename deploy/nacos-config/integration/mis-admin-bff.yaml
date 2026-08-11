@@ -1,10 +1,13 @@
 # Nacos config: mis-admin-bff (integration)
-# Fused-deploy ai-platform adapter params (DEP-5). Push commands: see deploy/nacos-config/README.md.
+# Fused-deploy ai-platform adapter params (DEP-5). Push: scripts/nacos-push.ps1
 #
-# In-container base-url uses service name ai-platform-backend (path B joins Python backend:8000).
-# sse-enabled=true enables SSE streaming (ai-platform exposes /api/v1/agents/{id}/chat/stream).
+# Keep comments ASCII-only (Windows JVM / Nacos YAML charset).
+server:
+  port: 8081
+
 mis:
   ai-platform:
+    # Local Agent Core; Docker fused-deploy uses http://ai-platform-backend:8000
     base-url: http://127.0.0.1:8000
     enabled: true
     chat-timeout-ms: 60000
@@ -16,3 +19,9 @@ mis:
       extract: true
       rag: true
       nl2sql: false
+  agent-ops:
+    backend-base-url: http://127.0.0.1:8000
+    gateway-base-url: http://127.0.0.1:3100
+    timeout-ms: 15000
+    # Coordinator->Worker multi-hop often exceeds 60s
+    chat-timeout-ms: 180000
