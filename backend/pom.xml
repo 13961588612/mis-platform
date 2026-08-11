@@ -87,6 +87,15 @@
                     <groupId>org.apache.maven.plugins</groupId>
                     <artifactId>maven-surefire-plugin</artifactId>
                     <version>3.2.5</version>
+                    <configuration>
+                        <!--
+                          Windows 下 surefire 3.2.5 fork 的 classpath 可能混用不同盘符/根，
+                          触发 "'other' has different root" 导致整模块测试崩掉（非 clean 构建正常）。
+                          关掉 URLClassPath 的根一致性校验即可在 Windows 复现全量构建；
+                          JVM 参数级别，对测试行为无副作用。CI 仍可用 -DforkCount=0 兜底。
+                        -->
+                        <argLine>-Djdk.net.URLClassPath.disableClassPathURLCheck=true</argLine>
+                    </configuration>
                 </plugin>
                 <plugin>
                     <groupId>org.apache.maven.plugins</groupId>
