@@ -17,10 +17,10 @@ mis:
       same-site: Strict
       secure: ${AUTH_COOKIE_SECURE:false}
     audit-enabled: true
-    audit-discovery-enabled: true
+    audit-discovery-enabled: false
     audit-service-id: mis-audit
     audit-base-url: http://127.0.0.1:8106
-    iam-discovery-enabled: true
+    iam-discovery-enabled: false
     iam-service-id: mis-iam
     iam-base-url: http://127.0.0.1:8102
   security:

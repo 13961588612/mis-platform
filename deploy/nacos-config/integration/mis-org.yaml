@@ -1,10 +1,11 @@
 # Nacos config: mis-org (integration)
+# Hybrid local Java + remote Nacos: use localhost direct.
 server:
   port: 8103
 
 mis:
   org:
-    iam-discovery-enabled: true
+    iam-discovery-enabled: false
     iam-service-id: mis-iam
     iam-base-url: http://127.0.0.1:8102
     data-scope-skip-when-anonymous: true

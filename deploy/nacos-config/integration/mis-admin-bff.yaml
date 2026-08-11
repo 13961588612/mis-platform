@@ -1,28 +1,27 @@
 # Nacos config: mis-admin-bff (integration)
 # ASCII comments only (Windows JVM / Nacos YAML charset).
-# Push: scripts/nacos-push.ps1 -Namespace integration
+# Hybrid: Java on localhost; discovery=false avoids unresolved service hostnames.
 server:
   port: 8081
 
 mis:
   bff:
-    # Hybrid: services register to Nacos integration; discovery preferred.
-    iam-discovery-enabled: true
+    iam-discovery-enabled: false
     iam-service-id: mis-iam
     iam-base-url: http://127.0.0.1:8102
-    org-discovery-enabled: true
+    org-discovery-enabled: false
     org-service-id: mis-org
     org-base-url: http://127.0.0.1:8103
-    system-discovery-enabled: true
+    system-discovery-enabled: false
     system-service-id: mis-system
     system-base-url: http://127.0.0.1:8105
-    audit-discovery-enabled: true
+    audit-discovery-enabled: false
     audit-service-id: mis-audit
     audit-base-url: http://127.0.0.1:8106
-    auth-discovery-enabled: true
+    auth-discovery-enabled: false
     auth-service-id: mis-auth
     auth-base-url: http://127.0.0.1:8101
-    kb-discovery-enabled: true
+    kb-discovery-enabled: false
     kb-service-id: mis-kb
     kb-base-url: http://127.0.0.1:8108
     aggregate-timeout-ms: 3000
@@ -32,7 +31,6 @@ mis:
     deny-unmapped: false
     refresh-interval-seconds: 300
   ai-platform:
-    # Local Agent Core on host; Docker fused-deploy uses http://ai-platform-backend:8000
     base-url: ${AI_PLATFORM_BASE_URL:http://127.0.0.1:8000}
     enabled: true
     chat-timeout-ms: 60000
@@ -54,7 +52,6 @@ mis:
     backend-base-url: ${AGENT_OPS_BACKEND_BASE_URL:http://127.0.0.1:8000}
     gateway-base-url: ${AGENT_OPS_GATEWAY_BASE_URL:http://127.0.0.1:3100}
     timeout-ms: ${AGENT_OPS_TIMEOUT_MS:15000}
-    # Coordinator->Worker multi-hop often exceeds 60s
     chat-timeout-ms: ${AGENT_OPS_CHAT_TIMEOUT_MS:180000}
   mcp:
     servers:

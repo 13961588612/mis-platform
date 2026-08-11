@@ -1,15 +1,16 @@
 # Nacos config: mis-iam (integration)
+# Hybrid local Java + remote Nacos: use localhost direct (no DNS for service names).
 server:
   port: 8102
 
 mis:
   iam:
     org-check-enabled: true
-    org-discovery-enabled: true
+    org-discovery-enabled: false
     org-service-id: mis-org
     org-base-url: http://127.0.0.1:8103
     default-password: ${MIS_DEFAULT_PASSWORD:}
-    system-discovery-enabled: true
+    system-discovery-enabled: false
     system-service-id: mis-system
     system-base-url: http://127.0.0.1:8105
     permissions-ttl-minutes: 15
