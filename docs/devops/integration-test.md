@@ -127,7 +127,7 @@ cd backend
 
 | 模式 | 发现 | Gateway 路由 | 配置来源 |
 |------|------|-------------|----------|
-| local（默认） | 关 | `localhost:端口` 直连 | `application.yml` |
+| local（显式 `MIS_REMOTE=false`） | 关 | `localhost:端口` 直连 | `application.yml` |
 | remote + `integration` | 开 | `lb://服务名` | Nacos `integration` 命名空间 |
 | remote + `test` | 开 | `lb://服务名` | Nacos `test` 命名空间 |
 | remote + `prod` | 开 | `lb://服务名` | Nacos `prod` 命名空间 |

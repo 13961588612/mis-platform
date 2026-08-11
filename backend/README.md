@@ -77,7 +77,7 @@ mvn -pl mis-gateway spring-boot:run   # :8080
 
 | 模式 | 配置来源 | 说明 |
 |------|----------|------|
-| local（默认） | `application.yml` + 环境变量 | 本地 IDE，见 [local-dev.md](../docs/devops/local-dev.md) |
+| local（`MIS_REMOTE=false`） | `application.yml` + 环境变量 | 本地 IDE，见 [local-dev.md](../docs/devops/local-dev.md) |
 | remote | Nacos 命名空间 | `MIS_REMOTE=true`，见 [test-deploy](../docs/devops/test-deploy.md) / [prod-deploy](../docs/devops/prod-deploy.md) |
 
 见 [运维总览](../docs/devops/README.md)、[configuration.md](../docs/devops/configuration.md)。

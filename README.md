@@ -13,7 +13,8 @@ docker compose -f deploy/docker-compose.dev.yml up -d
 # 2. 数据库迁移
 cd backend; .\mvn.ps1 -pl mis-migrator flyway:migrate
 
-# 3. 启动后端（不设 MIS_REMOTE，默认 local 模式）
+# 3. 启动后端（纯本地须显式 MIS_REMOTE=false；默认会连 Nacos）
+$env:MIS_REMOTE = "false"
 .\mvn.ps1 spring-boot:run -pl mis-gateway,mis-auth,mis-audit
 
 # 4. 启动前端

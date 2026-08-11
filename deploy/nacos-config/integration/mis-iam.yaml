@@ -1,2 +1,15 @@
+# Nacos config: mis-iam (integration)
 server:
   port: 8102
+
+mis:
+  iam:
+    org-check-enabled: true
+    org-discovery-enabled: true
+    org-service-id: mis-org
+    org-base-url: http://127.0.0.1:8103
+    default-password: ${MIS_DEFAULT_PASSWORD:}
+    system-discovery-enabled: true
+    system-service-id: mis-system
+    system-base-url: http://127.0.0.1:8105
+    permissions-ttl-minutes: 15

@@ -1,8 +1,10 @@
 # 本地开发
 
-> 模式：**local**（默认不连 Nacos）| 基础设施 Docker + 应用 IDE 直跑
+> 模式：**local**（须显式 `MIS_REMOTE=false`，不连 Nacos）| 基础设施 Docker + 应用 IDE 直跑
 
 本地开发的目标：**零 Nacos 依赖**，各服务读 jar 内 `application.yml`，Gateway 用 `localhost` 直连路由。
+
+> **注意**：各服务 `bootstrap.yml` 中 `MIS_REMOTE` **默认已是 `true`**。纯本地开发必须在环境变量或 `.env` 中写 `MIS_REMOTE=false`。
 
 ## 1. 前置依赖
 
@@ -24,7 +26,7 @@ copy .env.example .env
 # 按需修改 JAVA_HOME_17、DB_* 等
 ```
 
-本地开发 **不需要** 设置 `MIS_REMOTE`。
+本地开发 **必须** 设置 `MIS_REMOTE=false`（否则会按默认连 Nacos）。
 
 ### 2.3 知识库引擎 RAGFlow（可选，知识库迭代时必开）
 
@@ -97,7 +99,7 @@ cd backend
 
 ## 5. 启动后端（Sprint 1 已实现服务）
 
-**不要** 设置 `MIS_REMOTE`；各服务使用 `application.yml` 默认值。
+**必须** 设置 `MIS_REMOTE=false`；各服务使用 `application.yml` 默认值。
 
 ```powershell
 cd backend
@@ -225,12 +227,12 @@ uv run uvicorn src.main:app --host 0.0.0.0 --port 8000 --reload
 
 | 项 | 本地 local | test/prod/integration |
 |----|------------|------------------------|
-| `MIS_REMOTE` | 不设（`false`） | `true` |
+| `MIS_REMOTE` | 显式 `false` | `true`（jar 默认） |
 | 配置来源 | `application.yml` | Nacos |
 | Gateway 路由 | `http://localhost:端口` | `lb://服务名` |
 | 服务发现 | 关闭 | 开启 |
 
-需要 **容器 + IDE 混合联调** 时，见 [混合联调](integration-test.md)，不要在本机日常开发中开启 `MIS_REMOTE`。
+需要 **容器 + IDE 混合联调** 时，见 [混合联调](integration-test.md)；纯本地务必 `MIS_REMOTE=false`，不要依赖「不设变量」。
 
 ## 9. 常见问题
 

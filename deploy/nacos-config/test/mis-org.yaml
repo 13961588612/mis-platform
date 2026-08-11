@@ -1,2 +1,10 @@
+# Nacos config: mis-org (test)
 server:
   port: 8103
+
+mis:
+  org:
+    iam-discovery-enabled: true
+    iam-service-id: mis-iam
+    iam-base-url: http://mis-iam:8102
+    data-scope-skip-when-anonymous: true

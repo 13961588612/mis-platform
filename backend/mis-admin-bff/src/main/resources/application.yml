@@ -42,7 +42,7 @@ mis:
     kb-base-url: http://localhost:8108
     # 文档上传走 multipart 透传，比普通聚合慢，单独放宽超时
     aggregate-timeout-ms: 3000
-    default-password: Mis@123456
+    default-password: ${MIS_DEFAULT_PASSWORD:Mis@123456}
   api-permission:
     enabled: true
     deny-unmapped: false

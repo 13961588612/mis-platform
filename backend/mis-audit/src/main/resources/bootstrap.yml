@@ -5,8 +5,8 @@ spring:
   cloud:
     nacos:
       config:
-        enabled: ${MIS_REMOTE:false}
-        server-addr: ${NACOS_SERVER:localhost:8848}
+        enabled: ${MIS_REMOTE:true}
+        server-addr: ${NACOS_SERVER:10.254.16.6:8848}
         namespace: ${NACOS_NAMESPACE:dev}
         group: ${NACOS_CONFIG_GROUP:MIS_GROUP}
         file-extension: yaml
@@ -19,6 +19,6 @@ spring:
             group: ${NACOS_CONFIG_GROUP:MIS_GROUP}
             refresh: true
       discovery:
-        enabled: ${MIS_REMOTE:false}
-        server-addr: ${NACOS_SERVER:localhost:8848}
+        enabled: ${MIS_REMOTE:true}
+        server-addr: ${NACOS_SERVER:10.254.16.6:8848}
         namespace: ${NACOS_NAMESPACE:dev}

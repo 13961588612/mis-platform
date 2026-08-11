@@ -22,17 +22,20 @@
 | `mis-kb.yaml` | `mis-kb` |
 | `mis-admin-bff.yaml` | `mis-admin-bff` |
 
-## 推送
+## 推送与核对
 
 ```powershell
-.\scripts\ensure-nacos-namespace.ps1 -Namespace prod
-.\scripts\nacos-push.ps1 -Namespace prod
+.\scripts\ensure-nacos-namespace.ps1 -Namespace integration
+.\scripts\nacos-push.ps1 -Namespace integration
+.\scripts\nacos-diff.ps1 -Namespace integration
 ```
+
+`nacos-diff.ps1`：对比 Git 源与线上 Data ID（方案 B L2）；有差异 exit 1，两侧正文落到 `%TEMP%`。
 
 ## 注意
 
 - 配置通过 Nacos 下发，**不**与 JAR 打包进业务容器
-- 微服务设 `MIS_REMOTE=true` 后从 Nacos 拉取
-- 本地开发不设 `MIS_REMOTE`，见 [本地开发](../../docs/devops/local-dev.md)
+- 微服务 `bootstrap` 默认 `MIS_REMOTE=true`，从 Nacos 拉取
+- 纯本地开发须显式 `MIS_REMOTE=false`，见 [本地开发](../../docs/devops/local-dev.md)
 
 完整说明：[配置管理策略](../../docs/devops/configuration.md) · [运维总览](../../docs/devops/README.md)

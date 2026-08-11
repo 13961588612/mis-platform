@@ -18,8 +18,8 @@
 
 | 模式 | 开关 | 配置来源 |
 |------|------|----------|
-| **local** | 不设 `MIS_REMOTE`（默认 `false`） | jar 内 `application.yml` + 环境变量 |
-| **remote** | `MIS_REMOTE=true` | Nacos 命名空间（Git 源在 `deploy/nacos-config/`） |
+| **local** | 显式 `MIS_REMOTE=false` | jar 内 `application.yml` + 环境变量 |
+| **remote** | 默认 / `MIS_REMOTE=true` | Nacos 命名空间（Git 源在 `deploy/nacos-config/`） |
 
 详见 [配置管理策略](configuration.md)。
 

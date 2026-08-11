@@ -1,17 +1,42 @@
 # Nacos config: mis-admin-bff (integration)
-# Fused-deploy ai-platform adapter params (DEP-5). Push: scripts/nacos-push.ps1
-#
-# Keep comments ASCII-only (Windows JVM / Nacos YAML charset).
+# ASCII comments only (Windows JVM / Nacos YAML charset).
+# Push: scripts/nacos-push.ps1 -Namespace integration
 server:
   port: 8081
 
 mis:
+  bff:
+    # Hybrid: services register to Nacos integration; discovery preferred.
+    iam-discovery-enabled: true
+    iam-service-id: mis-iam
+    iam-base-url: http://127.0.0.1:8102
+    org-discovery-enabled: true
+    org-service-id: mis-org
+    org-base-url: http://127.0.0.1:8103
+    system-discovery-enabled: true
+    system-service-id: mis-system
+    system-base-url: http://127.0.0.1:8105
+    audit-discovery-enabled: true
+    audit-service-id: mis-audit
+    audit-base-url: http://127.0.0.1:8106
+    auth-discovery-enabled: true
+    auth-service-id: mis-auth
+    auth-base-url: http://127.0.0.1:8101
+    kb-discovery-enabled: true
+    kb-service-id: mis-kb
+    kb-base-url: http://127.0.0.1:8108
+    aggregate-timeout-ms: 3000
+    default-password: ${MIS_DEFAULT_PASSWORD:}
+  api-permission:
+    enabled: true
+    deny-unmapped: false
+    refresh-interval-seconds: 300
   ai-platform:
-    # Local Agent Core; Docker fused-deploy uses http://ai-platform-backend:8000
-    base-url: http://127.0.0.1:8000
+    # Local Agent Core on host; Docker fused-deploy uses http://ai-platform-backend:8000
+    base-url: ${AI_PLATFORM_BASE_URL:http://127.0.0.1:8000}
     enabled: true
     chat-timeout-ms: 60000
-    sse-enabled: true
+    sse-enabled: ${AI_PLATFORM_SSE_ENABLED:true}
     health-check-interval-ms: 15000
     features:
       chat: true
@@ -19,9 +44,20 @@ mis:
       extract: true
       rag: true
       nl2sql: false
+    reverse-trust-enabled: ${AI_PLATFORM_REVERSE_TRUST_ENABLED:true}
+    service-token: ${AI_PLATFORM_BFF_SHARED_SECRET:}
+    trusted-network: ${AI_PLATFORM_TRUSTED_NETWORK:}
+    mis-jwt-issuer: ${MIS_JWT_ISSUER:mis-platform}
+    mis-jwt-public-key: ${MIS_JWT_PUBLIC_KEY:}
+    doc-service-base-url: ${AI_PLATFORM_DOC_SERVICE_BASE_URL:}
   agent-ops:
-    backend-base-url: http://127.0.0.1:8000
-    gateway-base-url: http://127.0.0.1:3100
-    timeout-ms: 15000
+    backend-base-url: ${AGENT_OPS_BACKEND_BASE_URL:http://127.0.0.1:8000}
+    gateway-base-url: ${AGENT_OPS_GATEWAY_BASE_URL:http://127.0.0.1:3100}
+    timeout-ms: ${AGENT_OPS_TIMEOUT_MS:15000}
     # Coordinator->Worker multi-hop often exceeds 60s
-    chat-timeout-ms: 180000
+    chat-timeout-ms: ${AGENT_OPS_CHAT_TIMEOUT_MS:180000}
+  mcp:
+    servers:
+      org: http://127.0.0.1:8103
+      system: http://127.0.0.1:8105
+      iam: http://127.0.0.1:8102

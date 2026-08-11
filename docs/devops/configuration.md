@@ -6,8 +6,8 @@
 
 | 模式 | 环境变量 | 配置来源 | 文档 |
 |------|----------|----------|------|
-| **local** | 不设 `MIS_REMOTE` | jar 内 `application.yml` | [本地开发](local-dev.md) |
-| **remote** | `MIS_REMOTE=true` + `NACOS_NAMESPACE` + `NACOS_SERVER` | Nacos 命名空间 | [测试部署](test-deploy.md) / [正式部署](prod-deploy.md) |
+| **local** | 显式 `MIS_REMOTE=false` | jar 内 `application.yml` | [本地开发](local-dev.md) |
+| **remote** | 默认 `true`（或不设，因默认已是 true）+ `NACOS_NAMESPACE` + `NACOS_SERVER` | Nacos 命名空间 | [测试部署](test-deploy.md) / [正式部署](prod-deploy.md) |
 
 ```mermaid
 flowchart LR
@@ -57,7 +57,7 @@ Data ID **不带 `.yaml`** 扩展名。
 原则：
 1. **端口、路由、下游地址、超时、功能开关** → Nacos
 2. **密钥、私钥/公钥路径、默认口令** → 环境变量 / Secret，Nacos 里只写 `${VAR}` 占位
-3. **本机 IDE 默认** 仍保留在各模块 `application.yml`（`MIS_REMOTE=false` 时生效）
+3. **本机纯 local**：显式 `MIS_REMOTE=false`，仍用各模块 `application.yml`；不设该变量时**默认连 Nacos**（`${MIS_REMOTE:true}`）
 
 ### 推送
 
@@ -87,7 +87,7 @@ remote（`MIS_REMOTE=true`）时：Nacos（`mis-common` + 本服务 Data ID）�
 
 ```yaml
 spring.application.name          # 与 Nacos Data ID 一致，如 mis-auth
-spring.cloud.nacos.config.*      # enabled=${MIS_REMOTE:false}、server-addr、namespace、group
+spring.cloud.nacos.config.*      # enabled=${MIS_REMOTE:true}、server-addr、namespace、group
                                  # shared-configs: mis-common
                                  # extension-configs: ${spring.application.name}
 spring.cloud.nacos.discovery.*   # enabled 与 config 同步；server-addr / namespace
@@ -97,7 +97,7 @@ spring.cloud.nacos.discovery.*   # enabled 与 config 同步；server-addr / nam
 
 ### 3.2 `application.yml` 应写内容（local 完整画像）
 
-原则：**本机不设 `MIS_REMOTE` 时，仅靠本文件 + 少量本机 env（JWT 路径等）即可启动联调**。
+原则：**本机显式 `MIS_REMOTE=false` 时，仅靠本文件 + 少量本机 env（JWT 路径等）即可启动联调**；不设该变量则默认连 Nacos。
 
 | 区块 | 是否写入 | 约定 |
 |------|----------|------|
@@ -137,13 +137,13 @@ spring.cloud.nacos.discovery.*   # enabled 与 config 同步；server-addr / nam
 | `DB_*` / `REDIS_*` | 仅当不用 yml 默认 localhost 时 |
 | 可选业务密钥 | 如 `MIS_KB_ENGINE_API_KEY`、`AI_PLATFORM_BFF_SHARED_SECRET` |
 
-**不要** 在 local 日常开发设 `MIS_REMOTE=true`（除非按 [混合联调](integration-test.md) / [远端基础设施](remote-infra-local-dev.md) 刻意连远程 Nacos）。
+**纯 local 开发必须显式设 `MIS_REMOTE=false`**（jar 默认已是 `true`）。连远程 Nacos 时见 [混合联调](integration-test.md) / [远端基础设施](remote-infra-local-dev.md)。
 
 ## 4. 环境变量
 
 | 变量 | local | remote |
 |------|-------|--------|
-| `MIS_REMOTE` | `false`（默认） | `true` |
+| `MIS_REMOTE` | 显式 `false` | `true`（**bootstrap 默认**，不设即 true） |
 | `NACOS_SERVER` | — | Nacos 地址 |
 | `NACOS_NAMESPACE` | — | `test` / `prod` / `integration` |
 | `NACOS_CONFIG_GROUP` | `MIS_GROUP` | `MIS_GROUP` |
@@ -175,10 +175,25 @@ PostgreSQL
 3. 在 `deploy/nacos-config/{prod,test,integration}/` 添加 `{service}.yaml`（如 `mis-iam.yaml`）
 4. 发版前：`nacos-push.ps1 -Namespace prod`
 
-## 7. 关联文档
+## 7. 方案 B 变更核对（开工用）
+
+每一批改完按 **L1 → L2 → L3** 过一遍；超时类（如 `chat-timeout-ms`）改完后 **必须重启** 对应服务再验。
+
+| 层 | 时机 | 做什么 | 通过标准 |
+|----|------|--------|----------|
+| **L1 静态** | push 前 | 三环境同名 yaml **键集合**一致；`rg` 扫 `nacos-config` 无真实密钥；`application.yml`/`bootstrap.yml` 未被掏空 | 仅允许 host/url 等**值**因环境不同；密钥只有 `${VAR}` |
+| **L2 推送** | `nacos-push` 后 | OpenAPI 列出 Data ID；逐个拉取正文与 Git 源 diff；抽查本批关键键 | 9 个 Data ID 齐全；无控制台手工漂移（以 Git 为准） |
+| **L3 运行** | 重启本批服务后 | **local**：`MIS_REMOTE=false` 能登录；**remote**：默认/`true` + `.env.integration` 起服务后行为来自 Nacos | 冒烟：登录 → Gateway 路由 →（若涉及）KB → Agent Ops 对话约 180s |
+
+**每批最小包**：B1 盯 BFF+对话；B2 盯登录/组织权限；B3 盯明文清零 + 缺 Secret 负向；B4 对 test/prod 重复 L2 并做一次 Nacos 历史回滚演练。
+
+> L2 可用 `scripts/nacos-diff.ps1`（Git ↔ 线上）。推送仍用 `scripts/nacos-push.ps1`。
+
+## 8. 关联文档
 
 - [运维总览](README.md)
 - [本地开发](local-dev.md)
 - [混合联调](integration-test.md)
 - [测试环境部署](test-deploy.md)
 - [正式环境部署](prod-deploy.md)
+- [远端基础设施 + 本机代码](remote-infra-local-dev.md)
