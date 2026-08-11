@@ -35,12 +35,8 @@ import { Button } from '@/components/ui/button';
 import { AgentContentState, AgentPageShell } from '../components/agent-page-shell';
 import { AgentStatusBadge } from '../components/agent-status-badge';
 import { ChatShell } from './chat-shell';
-import {
-  createChatSession,
-  listAgents,
-  listSessionMessages,
-  sendChatMessage,
-} from '../api/agent-ops-api';
+import { createChatSession, sendChatMessage } from '../api/agent-chat-api';
+import { listAgents, listSessionMessages } from '../api/agent-ops-api';
 import { agentErrorMessage } from '../types';
 import type { AgentSummary, Session, SessionMessage } from '../types';
 

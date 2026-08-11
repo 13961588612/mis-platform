@@ -374,69 +374,9 @@ export async function batchDeleteSessions(ids: string[]): Promise<void> {
 }
 
 // ------------------------------------------------------------------ 本地对话（§4.3 #32–#33）
+// 实现已迁至 agent-chat-api.ts（独立 180s 超时客户端）；此处再导出保持旧 import 兼容。
 
-/** §4.3 #32 — agent:chat:use */
-export async function createChatSession(agentId: string): Promise<Session> {
-  const res = await api.post<ApiResult<Session>>('/agent-ops/chat/sessions', {
-    agent_id: agentId,
-  });
-  return unwrap(res, '创建对话会话失败');
-}
-
-/**
- * §4.3 #33 的**真实 wire 形状**（ai-platform `api/routes/session.py#send_message`）。
- *
- * <p>注意它**不是**一条 `MessageResponse`：没有 `content`、没有 `role`，
- * 助手回复在 `response` 里，而 `message_id` 是**用户那条消息**的落库 id
- * （源码为 `"message_id": user_msg.id`），不是助手消息的 id。
- * 全部字段按可选声明 —— 下游异常分支可能少给键，解构时不能假定存在。
- */
-interface ChatReplyWire {
-  message_id?: string;
-  response?: string;
-  session_id?: string;
-  warnings?: string[];
-  tool_errors?: string[];
-}
-
-/**
- * §4.3 #33 — agent:chat:use。
- *
- * <p>把 #33 的自定义响应**适配成标准 {@link SessionMessage}**，让对话页与
- * `AgentMessageStream` 只认一种消息结构。此前这里直接 `unwrap` 成 `SessionMessage`
- * 返回，页面读 `reply.content` 恒为 `undefined` → 气泡永远显示「（空消息体）」，
- * 助手其实回了话却看不见。
- *
- * <p>`warnings` / `tool_errors` 不丢弃：塞进 `metadata`，
- * 由消息流的「查看完整 metadata」展开区呈现 —— 这正是运营调试台要看的东西。
- */
-export async function sendChatMessage(
-  sessionId: string,
-  content: string,
-): Promise<SessionMessage> {
-  const res = await api.post<ApiResult<ChatReplyWire>>(
-    `/agent-ops/chat/sessions/${seg(sessionId)}/messages`,
-    { content },
-  );
-  const wire = unwrap(res, '发送消息失败');
-
-  const warnings = Array.isArray(wire.warnings) ? wire.warnings : [];
-  const toolErrors = Array.isArray(wire.tool_errors) ? wire.tool_errors : [];
-  const metadata: Record<string, unknown> = {};
-  if (warnings.length > 0) metadata.warnings = warnings;
-  if (toolErrors.length > 0) metadata.tool_errors = toolErrors;
-
-  return {
-    // 用户消息 id 派生助手消息 id，避免与用户那条撞 key
-    id: wire.message_id ? `${wire.message_id}-reply` : `reply-${Date.now()}`,
-    session_id: wire.session_id ?? sessionId,
-    role: 'assistant',
-    content: wire.response ?? '',
-    // #33 不下发时间戳，用本地时间兜底（仅用于展示排序）
-    timestamp: new Date().toISOString(),
-    metadata: Object.keys(metadata).length > 0 ? metadata : undefined,
-  };
-}
+export { createChatSession, sendChatMessage } from './agent-chat-api';
 
 // ------------------------------------------------------------------ MCP（§4.3 #34–#42）
 
