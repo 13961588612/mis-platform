@@ -131,6 +131,18 @@ export interface KbCategoryManageableInfo {
   manageableIds: number[];
 }
 
+/**
+ * 引擎同步状态（与 mis-kb `EngineSyncStatus` 码值对齐）。
+ *
+ * <p>0 未知（新建后尚未对账）/ 1 一致 / 2 引擎侧缺失 / 3 名称漂移或同步失败。
+ * ⚠️「引擎有、MIS 无」不落在本字段——那类差异记在 `kb_engine_orphan`，
+ * 由引擎页对账区展示，因为它根本没有对应的 `kb_library` 行可挂。
+ */
+export type KbEngineSyncStatus = 0 | 1 | 2 | 3;
+
+/** 知识库删除模式（T04 契约；缺省 `archive`）。 */
+export type KbLibraryDeleteMode = 'archive' | 'physical';
+
 /** 知识库。 */
 export interface KbLibrary {
   id: number;
@@ -144,6 +156,56 @@ export interface KbLibrary {
   docCount: number | null;
   createdAt: string | null;
   updatedAt: string | null;
+  /** 引擎同步状态（0/1/2/3，见 {@link KbEngineSyncStatus}）；老后端为 undefined。 */
+  engineSyncStatus?: number | null;
+  /** 最近一次对账时间（ISO-8601）。 */
+  engineCheckedAt?: string | null;
+  /** 归档时间；非空即「已归档」。 */
+  archivedAt?: string | null;
+  /**
+   * 本次写操作的引擎同步是否失败（仅创建/更新的即时回执带，列表接口不返回）。
+   *
+   * <p>为 true 时 MIS 侧已落库成功、引擎侧没跟上——**不能**当成整体失败回滚 UI。
+   */
+  engineSyncFailed?: boolean | null;
+  /** 引擎同步失败原因（与 `engineSyncFailed` 配对）。 */
+  engineSyncMessage?: string | null;
+}
+
+/**
+ * 知识库删除回执（T04）。
+ *
+ * <p>⚠️ `message` **必须原样展示**：默认模式是「归档」，引擎数据一条没删，
+ * 前端自行改写成「删除成功」会让管理员误判存储已释放。
+ */
+export interface KbLibraryDeleteResult {
+  mode: string | null;
+  /** 引擎侧动作是否成功（归档 = 改名成功；物理 = 删除成功）。 */
+  engineSynced: boolean | null;
+  /** 引擎侧失败原因；`engineSynced=false` 时非空。 */
+  engineError: string | null;
+  /** 归档后引擎侧的新 dataset 名（仅归档模式）。 */
+  archivedName: string | null;
+  /** 清理的本地文档行数（归档模式恒为 0）。 */
+  docCleaned: number | null;
+  /** 清理的本地授权行数（归档模式恒为 0）。 */
+  aclCleaned: number | null;
+  /** 面向用户的结论文案，原样展示。 */
+  message: string | null;
+}
+
+/**
+ * 知识库的引擎引用（Q4 有限暴露 dataset_id）。
+ *
+ * <p>需 `kb:library:engine-ref:view` 权限，后端每次读取都会记审计。
+ */
+export interface KbEngineRef {
+  libraryId: number | null;
+  engineType: string | null;
+  /** 引擎侧原生 dataset id；运维据此在引擎控制台手工清理。 */
+  engineLibraryRef: string | null;
+  engineSyncStatus: number | null;
+  engineCheckedAt: string | null;
 }
 
 /** 知识库文档。 */
@@ -470,6 +532,72 @@ export interface KbEngineCapabilities {
   replaceSupported: boolean | null;
   /** 是否支持混合检索（关键字 + 语义）与权重调节（WA-03）。 */
   hybridSupported: boolean | null;
+  /**
+   * 是否支持在线删除引擎侧知识库（Q5：来自配置项 `mis.kb.engine.delete-supported`，非探测）。
+   *
+   * <p>为 false 时删除走归档流程，不下发引擎；前端必须把「物理删除」置灰并说明原因，
+   * 而不是让人点进去再吃一个 40934。
+   */
+  deleteSupported: boolean | null;
+}
+
+// --------------------------------------------------------------- 引擎对账（T04）
+
+/** 对账差异计数。 */
+export interface KbEngineReconcileCounts {
+  /** 参与对账的 MIS 知识库总数（`engineLibraryRef` 非空者）。 */
+  total: number | null;
+  consistent: number | null;
+  /** MIS 有、引擎没有。 */
+  missingInEngine: number | null;
+  /** 引擎有、MIS 没有（游离 dataset）。 */
+  orphan: number | null;
+  /** 两侧都有但名字对不上。 */
+  nameDrift: number | null;
+}
+
+/** 「MIS 有、引擎无」明细。 */
+export interface KbEngineMissingItem {
+  libraryId: number | null;
+  name: string | null;
+  /** 已失效的引擎 dataset id。 */
+  engineLibraryRef: string | null;
+}
+
+/** 游离 dataset 明细（引擎有、MIS 无）。 */
+export interface KbEngineOrphanItem {
+  /** 引擎原生 dataset id。 */
+  nativeId: string | null;
+  nativeName: string | null;
+  docCount: number | null;
+  firstSeenAt: string | null;
+  lastSeenAt: string | null;
+}
+
+/** 名称漂移明细。 */
+export interface KbEngineDriftItem {
+  libraryId: number | null;
+  name: string | null;
+  expectedName: string | null;
+  /** 引擎侧实际名；由 DB 现状重算的报告里为 null。 */
+  actualName: string | null;
+}
+
+/**
+ * 引擎对账报告（T04）。
+ *
+ * <p>`skipped=true` 表示当前引擎类型（noop/mock）不参与对账——这不是错误，
+ * 整块要显示 `skipReason` 而非报错，否则本地开发环境天天红。
+ */
+export interface KbEngineReconcileReport {
+  lastRunAt: string | null;
+  skipped: boolean | null;
+  skipReason: string | null;
+  engineType: string | null;
+  counts: KbEngineReconcileCounts | null;
+  missingInEngine: KbEngineMissingItem[] | null;
+  orphans: KbEngineOrphanItem[] | null;
+  nameDrift: KbEngineDriftItem[] | null;
 }
 
 /**
@@ -993,6 +1121,37 @@ export function synonymImportActionLabel(action: string | null | undefined): str
  */
 export function normalizeSynonymTerm(raw: string): string {
   return raw.trim().normalize('NFKC').toLowerCase();
+}
+
+// --------------------------------------------------------------- 引擎同步 / 删除展示常量（T05）
+
+/**
+ * 引擎同步状态徽标口径（0/1/2/3 四态**都要显式展示**）。
+ *
+ * <p>`variant` 与 `Badge` 组件的变体一一对应：灰 / 绿 / 红 / 黄。
+ * 未知（0）刻意用灰而不是绿——「还没对过账」不等于「一致」。
+ */
+export const KB_ENGINE_SYNC_STATUS_META: Record<
+  number,
+  { label: string; variant: 'secondary' | 'success' | 'destructive' | 'warning'; hint: string }
+> = {
+  0: { label: '未对账', variant: 'secondary', hint: '尚未与引擎核对过，状态未知' },
+  1: { label: '已同步', variant: 'success', hint: '引擎侧存在且名称一致' },
+  2: { label: '引擎缺失', variant: 'destructive', hint: '引擎侧找不到对应数据集，检索会失败' },
+  3: { label: '名称漂移', variant: 'warning', hint: '引擎侧名称与期望不一致，或最近一次同步失败' },
+};
+
+/** 引擎同步状态中文名（未知码值原样回显，不吞）。 */
+export function engineSyncStatusLabel(status: number | null | undefined): string {
+  if (status == null) return '未对账';
+  return KB_ENGINE_SYNC_STATUS_META[status]?.label ?? `未知(${status})`;
+}
+
+/** 删除模式中文名。 */
+export function libraryDeleteModeLabel(mode: string | null | undefined): string {
+  if (mode === 'archive') return '归档';
+  if (mode === 'physical') return '物理删除';
+  return mode ?? '-';
 }
 
 /** 从当前 pathname 尾段解析数值 ID（KeepAlive 路由无 useParams，详情页统一走这里）。 */

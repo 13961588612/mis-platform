@@ -44,6 +44,29 @@ public class KbLibrary {
     @Column(name = "rag_settings_json")
     private String ragSettingsJson;
 
+    /**
+     * 引擎同步状态，码值见 {@link com.mis.kb.domain.model.EngineSyncStatus}
+     * （0 未知 / 1 一致 / 2 引擎缺失 / 3 名称漂移或同步失败）。
+     *
+     * <p>建库默认 0；由对账服务、{@code update()} 引擎调用失败、归档改名失败三处写入。
+     */
+    @Column(name = "engine_sync_status", nullable = false)
+    private Integer engineSyncStatus = 0;
+
+    /** 最近一次与引擎对账 / 同步的时刻；从未对过账为 {@code null}。 */
+    @Column(name = "engine_checked_at")
+    private Instant engineCheckedAt;
+
+    /**
+     * 归档时刻。
+     *
+     * <p><b>归档判定 = {@code status == 0 && archivedAt != null}。</b>
+     * 光靠 {@code status=0} 分不清「停用」（引擎名不变、可随时恢复）与
+     * 「归档」（引擎侧已改名为 {@code [已归档-yyyyMMdd]-xxx}），对账时期望名也不同。
+     */
+    @Column(name = "archived_at")
+    private Instant archivedAt;
+
     @Column(name = "created_at", nullable = false)
     private Instant createdAt;
 
@@ -120,6 +143,39 @@ public class KbLibrary {
 
     public void setRagSettingsJson(String ragSettingsJson) {
         this.ragSettingsJson = ragSettingsJson;
+    }
+
+    public Integer getEngineSyncStatus() {
+        return engineSyncStatus;
+    }
+
+    public void setEngineSyncStatus(Integer engineSyncStatus) {
+        this.engineSyncStatus = engineSyncStatus;
+    }
+
+    public Instant getEngineCheckedAt() {
+        return engineCheckedAt;
+    }
+
+    public void setEngineCheckedAt(Instant engineCheckedAt) {
+        this.engineCheckedAt = engineCheckedAt;
+    }
+
+    public Instant getArchivedAt() {
+        return archivedAt;
+    }
+
+    public void setArchivedAt(Instant archivedAt) {
+        this.archivedAt = archivedAt;
+    }
+
+    /**
+     * 是否已归档（{@code status == 0 && archivedAt != null}）。
+     *
+     * @return 已归档返回 {@code true}；仅「停用」返回 {@code false}
+     */
+    public boolean isArchived() {
+        return archivedAt != null && status != null && status == 0;
     }
 
     public Instant getCreatedAt() {

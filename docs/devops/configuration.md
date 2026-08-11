@@ -70,14 +70,74 @@ Data ID **不带 `.yaml`** 扩展名。
 
 > **重要**：`deploy/nacos-config/` 通过脚本推送到 Nacos，**不**与 JAR 打包进业务容器。
 
-## 3. 微服务 resources
+## 3. 微服务 resources（方案 B：本地保留范围）
 
-| 文件 | 作用 |
+每个 Java 微服务 **只保留这两个** 配置文件（不另建 `application-local.yml` / `application-dev.yml`，除非有强隔离需求再议）：
+
+| 文件 | 是否保留 | 作用 |
+|------|----------|------|
+| `bootstrap.yml` | **保留** | 仅负责：应用名 + 是否连 Nacos + Nacos 地址/命名空间/Group；**不写业务配置** |
+| `application.yml` | **保留** | **local 完整可跑画像**：`MIS_REMOTE=false` 时唯一权威；本机 Docker PG/Redis、localhost 直连下游 |
+
+remote（`MIS_REMOTE=true`）时：Nacos（`mis-common` + 本服务 Data ID）覆盖同名键；`application.yml` 仍打进 jar，作未迁入键的兜底，**不以删空 jar 配置为目标**。
+
+### 3.1 `bootstrap.yml` 应写内容（全服务同构）
+
+只允许下列几类，模板见 `deploy/nacos-config/bootstrap-template.yml`：
+
+```yaml
+spring.application.name          # 与 Nacos Data ID 一致，如 mis-auth
+spring.cloud.nacos.config.*      # enabled=${MIS_REMOTE:false}、server-addr、namespace、group
+                                 # shared-configs: mis-common
+                                 # extension-configs: ${spring.application.name}
+spring.cloud.nacos.discovery.*   # enabled 与 config 同步；server-addr / namespace
+```
+
+**禁止** 在 `bootstrap.yml` 写：`server.port`、数据源、业务 `mis.*`、路由表。
+
+### 3.2 `application.yml` 应写内容（local 完整画像）
+
+原则：**本机不设 `MIS_REMOTE` 时，仅靠本文件 + 少量本机 env（JWT 路径等）即可启动联调**。
+
+| 区块 | 是否写入 | 约定 |
+|------|----------|------|
+| `server.port` | 是 | 固定本机端口（与文档端口表一致） |
+| `spring.application.name` | 是 | 与 bootstrap 一致 |
+| `spring.datasource` / `redis` / `jpa` | 有则写 | 默认 `localhost` + `${DB_*}` / `${REDIS_*}`；开发口令可有默认值（仅 local） |
+| `spring.cloud.gateway.routes` | 仅 gateway | **localhost:端口** 直连，不用 `lb://` |
+| `management` / `logging` | 是 | health 暴露；本机可 `DEBUG` |
+| `mis.*.*-discovery-enabled` | 是 | local **一律 `false`** |
+| `mis.*.*-base-url` | 是 | `http://localhost:{port}` |
+| `mis.*` 业务开关 / 超时 / TTL | 是 | local 合理默认（如 agent-ops `chat-timeout-ms: 180000`） |
+| 密钥类 | **只写 `${ENV}` 或空默认** | JWT 路径、`api-key`、`service-token`、`MIS_JWT_PUBLIC_KEY`；**不要**把生产密钥写进仓库 |
+| `default-password` | 可保留开发默认 | local 可用文档约定口令；remote/Nacos 改为 `${ENV}` |
+
+### 3.3 各服务 `application.yml` 内容清单（local）
+
+| 服务 | 必写 |
 |------|------|
-| `application.yml` | local 默认（端口、localhost 路由、数据源等） |
-| `bootstrap.yml` | `${MIS_REMOTE:false}` 控制 Nacos 连接 |
+| **mis-gateway** | `port:8080`；Redis；**localhost 路由表**（auth-me→8081、auth→8101、audit→8106、其余→BFF）；`mis.security.gateway`；`jwt.public-key-path: ${JWT_PUBLIC_KEY_PATH:}` |
+| **mis-auth** | `port:8101`；DB+Redis+JPA；验证码/锁定/cookie；audit/iam **discovery=false** + localhost base-url；`jwt.*-path: ${JWT_*_PATH:}` + token TTL |
+| **mis-iam** | `port:8102`；DB+Redis+JPA；org/system discovery=false + localhost；`default-password`（开发默认）；permissions TTL |
+| **mis-org** | `port:8103`；DB+JPA；iam discovery=false + localhost |
+| **mis-system** | `port:8105`；DB+JPA |
+| **mis-audit** | `port:8106`；DB+JPA |
+| **mis-kb** | `port:8108`；DB+JPA；`mis.kb.engine.*`（type/base-url/api-key/rerank/reconcile 等，密钥用 `${MIS_KB_*}`） |
+| **mis-admin-bff** | `port:8081`；Redis；`mis.bff.*` 下游全套 discovery=false + localhost；`aggregate-timeout-ms`；`api-permission.*`；`ai-platform.*`（含 reverse-trust 的 `${ENV}`）；`agent-ops.*`（含 180s chat-timeout）；`mcp.servers` localhost |
 
-bootstrap 加载 `mis-common`（共享）+ `${spring.application.name}`（服务专属）。
+> **没有** 独立的「本地 mis-common 文件」：共享项在 local 模式下由各服务 `application.yml` **各自写齐**（或靠本机 env）；remote 才由 Nacos `mis-common` 统一下发。
+
+### 3.4 本地进程环境变量（文件外）
+
+即使不连 Nacos，本机通常仍需：
+
+| 变量 | 说明 |
+|------|------|
+| `JWT_PRIVATE_KEY_PATH` / `JWT_PUBLIC_KEY_PATH` | 指向 `backend/keys/*.pem` |
+| `DB_*` / `REDIS_*` | 仅当不用 yml 默认 localhost 时 |
+| 可选业务密钥 | 如 `MIS_KB_ENGINE_API_KEY`、`AI_PLATFORM_BFF_SHARED_SECRET` |
+
+**不要** 在 local 日常开发设 `MIS_REMOTE=true`（除非按 [混合联调](integration-test.md) / [远端基础设施](remote-infra-local-dev.md) 刻意连远程 Nacos）。
 
 ## 4. 环境变量
 

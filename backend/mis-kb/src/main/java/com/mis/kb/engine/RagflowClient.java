@@ -1,5 +1,6 @@
 package com.mis.kb.engine;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import com.mis.common.core.exception.BusinessException;
 import com.mis.kb.domain.model.DocumentChunkConfig;
 import com.mis.kb.domain.model.DocumentUploadInput;
@@ -21,6 +22,7 @@ import org.springframework.http.client.MultipartBodyBuilder;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientResponseException;
 
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -197,6 +199,135 @@ public class RagflowClient {
      */
     public void deleteDataset(String datasetId) {
         deleteFor("/api/v1/datasets/" + datasetId, "RAGFlow 删除知识库失败");
+    }
+
+    /**
+     * 重命名 dataset（归档流程的核心动作，引擎删除策略 P0 / T02）。
+     *
+     * <p>{@code PUT /api/v1/datasets/{id}}，body 只带 {@code {"name": name}}。
+     * 复用 {@link #putFor} 与「{@code code != 0} 即抛异常」的统一口径——
+     * 与 {@link #updateDatasetSettings} 同一个接口、同一套错误约定。
+     *
+     * <p><b>为什么归档要靠改名：</b>该 RAGFlow 版本的 {@code DELETE /datasets/{id}} 返回 405
+     * （见 {@link #deleteDataset}），删不掉。改名是这个版本里唯一能在引擎控制台上
+     * 一眼看出「这个库已经在 MIS 侧下线了」的手段，数据本身完整保留、可恢复。
+     *
+     * @param datasetId 原生 dataset id
+     * @param name      新名字（已由 {@link RagflowDatasetNaming} 清洗并截断）
+     * @throws BusinessException 参数非法或 RAGFlow 返回非 0 code
+     */
+    public void renameDataset(String datasetId, String name) {
+        if (datasetId == null || datasetId.isBlank()) {
+            throw new BusinessException(50000, "RAGFlow 重命名知识库失败: datasetId 为空");
+        }
+        if (name == null || name.isBlank()) {
+            throw new BusinessException(50000, "RAGFlow 重命名知识库失败: 新名称为空");
+        }
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("name", name);
+        RfResponse<RfDataset> resp = putFor("/api/v1/datasets/" + datasetId, body,
+                new ParameterizedTypeReference<>() {});
+        if (resp == null || !resp.ok()) {
+            throw new BusinessException(50000,
+                    "RAGFlow 重命名知识库失败: " + (resp == null ? "无响应" : resp.message()));
+        }
+    }
+
+    /**
+     * 分页列举 dataset（引擎对账用，引擎删除策略 P0 / T02）。
+     *
+     * <p>{@code GET /api/v1/datasets?page=&page_size=}，{@code page} 从 1 起
+     * （与 {@link #listDocuments} 口径一致）。{@link #health()} 已经在用这个路径探活，
+     * 证明其连通且鉴权有效，不需要再造第二个探测。
+     *
+     * <p><b>响应体做了双形态兼容</b>：不同 RAGFlow 版本的 {@code data} 有两种形态——
+     * 数组（{@code data: [ {...} ]}，文档版本）与对象（{@code data: {kbs: [...], total: n}}，
+     * 部分老版本）。本项目当前没有可用的联调环境去实测线上实例是哪一种，
+     * 而一旦形态猜错，反序列化异常会让整个对账任务直接挂掉。故这里用 {@code JsonNode}
+     * 解析并同时接住两种形态——比赌一把再等线上告警划算得多。
+     *
+     * @param page     页码，1-based（小于 1 按 1 处理）
+     * @param pageSize 每页条数（小于 1 按 1 处理）
+     * @return 该页的 dataset 列表，恒非 {@code null}（无数据返回空列表）
+     * @throws BusinessException 无响应或 RAGFlow 返回非 0 code
+     */
+    public List<RfDataset> listDatasets(int page, int pageSize) {
+        int safePage = Math.max(page, 1);
+        int safeSize = Math.max(pageSize, 1);
+        JsonNode root = client.get()
+                .uri(uriBuilder -> uriBuilder
+                        .path("/api/v1/datasets")
+                        .queryParam("page", safePage)
+                        .queryParam("page_size", safeSize)
+                        .build())
+                .header("Authorization", bearer())
+                .retrieve()
+                .body(JsonNode.class);
+        if (root == null) {
+            throw new BusinessException(50000, "RAGFlow 查询知识库列表失败: 无响应");
+        }
+        int code = root.path("code").asInt(-1);
+        if (code != 0) {
+            throw new BusinessException(50000,
+                    "RAGFlow 查询知识库列表失败: code=" + code + " " + root.path("message").asText(""));
+        }
+        JsonNode datasets = resolveDatasetArray(root.path("data"));
+        if (datasets == null || !datasets.isArray()) {
+            return List.of();
+        }
+        List<RfDataset> result = new ArrayList<>(datasets.size());
+        for (JsonNode node : datasets) {
+            String id = text(node, "id");
+            if (id == null || id.isBlank()) {
+                // 没有 id 的行对账毫无意义（无法与 engine_library_ref join），直接跳过
+                log.warn("RAGFlow 返回了缺少 id 的 dataset，已跳过: {}", node);
+                continue;
+            }
+            result.add(new RfDataset(
+                    id,
+                    text(node, "name"),
+                    intOrNull(node, "document_count"),
+                    intOrNull(node, "chunk_count"),
+                    longOrNull(node, "update_time")));
+        }
+        return result;
+    }
+
+    /**
+     * 从 {@code data} 中取出 dataset 数组，兼容「数组」与「对象包裹」两种形态。
+     *
+     * @param data 响应体的 {@code data} 节点
+     * @return 数组节点；无法识别时返回 {@code null}
+     */
+    private static JsonNode resolveDatasetArray(JsonNode data) {
+        if (data == null || data.isNull() || data.isMissingNode()) {
+            return null;
+        }
+        if (data.isArray()) {
+            return data;
+        }
+        for (String key : new String[] {"kbs", "datasets", "items", "list"}) {
+            JsonNode candidate = data.get(key);
+            if (candidate != null && candidate.isArray()) {
+                return candidate;
+            }
+        }
+        return null;
+    }
+
+    private static String text(JsonNode node, String field) {
+        JsonNode value = node.get(field);
+        return value == null || value.isNull() ? null : value.asText();
+    }
+
+    private static Integer intOrNull(JsonNode node, String field) {
+        JsonNode value = node.get(field);
+        return value == null || value.isNull() || !value.isNumber() ? null : value.asInt();
+    }
+
+    private static Long longOrNull(JsonNode node, String field) {
+        JsonNode value = node.get(field);
+        return value == null || value.isNull() || !value.isNumber() ? null : value.asLong();
     }
 
     /**

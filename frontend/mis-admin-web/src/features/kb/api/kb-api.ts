@@ -13,10 +13,14 @@ import type {
   KbEngineCapabilities,
   KbEngineHealth,
   KbEngineModelPool,
+  KbEngineReconcileReport,
+  KbEngineRef,
   KbFeedbackForm,
   KbHitTestRequest,
   KbHitTestResult,
   KbLibrary,
+  KbLibraryDeleteMode,
+  KbLibraryDeleteResult,
   KbLibraryDetail,
   KbQaCitation,
   KbQaFeedback,
@@ -162,9 +166,35 @@ export async function updateLibrary(id: number, body: UpdateLibraryPayload): Pro
   return unwrap(res, '更新知识库失败');
 }
 
-export async function deleteLibrary(id: number): Promise<void> {
-  const res = await api.delete<ApiResult<null>>(`/kb/libraries/${id}`);
-  if (res.data.code !== 0) throw new Error(res.data.message || '删除知识库失败');
+/**
+ * 删除知识库（T04：**默认归档，不是物理删除**）。
+ *
+ * <p>返回回执而不是 void——`message` / `engineSynced` 必须让用户看见：
+ * 归档模式下引擎侧数据一条没删，只是改了名 + 本地停用。调用方**不许**
+ * 用自己的「删除成功」文案覆盖 `message`。
+ *
+ * @param id   知识库 id
+ * @param mode `archive`（默认）/ `physical`
+ */
+export async function deleteLibrary(
+  id: number,
+  mode: KbLibraryDeleteMode = 'archive',
+): Promise<KbLibraryDeleteResult> {
+  const res = await api.delete<ApiResult<KbLibraryDeleteResult>>(`/kb/libraries/${id}`, {
+    params: { mode },
+  });
+  return unwrap(res, '删除知识库失败');
+}
+
+/**
+ * 查看知识库的引擎引用（含 `dataset_id`）。
+ *
+ * <p>需 `kb:library:engine-ref:view`；后端每次调用都会记审计，
+ * 因此**只在用户展开「删除指引单」时才请求**，不要随详情页预加载。
+ */
+export async function getEngineRef(id: number): Promise<KbEngineRef> {
+  const res = await api.get<ApiResult<KbEngineRef>>(`/kb/libraries/${id}/engine-ref`);
+  return unwrap(res, '获取引擎引用失败');
 }
 
 /** 知识库详情聚合（L-06：元信息 + 文档数 + ACL 摘要 + RAG 设置，一次拉全）。 */
@@ -554,6 +584,27 @@ export async function engineCapabilities(): Promise<KbEngineCapabilities> {
 export async function listEngineModels(): Promise<KbEngineModelPool> {
   const res = await api.get<ApiResult<KbEngineModelPool>>('/kb/engine/models');
   return unwrap(res, '获取模型池失败');
+}
+
+/**
+ * 读取最近一次引擎对账报告（T04）。
+ *
+ * <p>只读缓存，不触发引擎调用，页面可放心随挂载拉取。
+ */
+export async function getReconcileReport(): Promise<KbEngineReconcileReport> {
+  const res = await api.get<ApiResult<KbEngineReconcileReport>>('/kb/engine/reconcile');
+  return unwrap(res, '获取对账报告失败');
+}
+
+/**
+ * 手动触发一次引擎对账（权限码 `kb:engine:reconcile`）。
+ *
+ * <p>会真实打引擎接口并写 `kb_engine_orphan`，耗时随库数量线性增长，
+ * 调用方要给按钮加 loading 态。
+ */
+export async function runReconcile(): Promise<KbEngineReconcileReport> {
+  const res = await api.post<ApiResult<KbEngineReconcileReport>>('/kb/engine/reconcile');
+  return unwrap(res, '触发对账失败');
 }
 
 // ------------------------------------------------------------------ 命中测试（Q-04 / WA-07）

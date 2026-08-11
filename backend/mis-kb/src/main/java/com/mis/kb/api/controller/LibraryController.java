@@ -1,12 +1,17 @@
 package com.mis.kb.api.controller;
 
+import com.mis.common.core.exception.BusinessException;
+import com.mis.common.core.exception.ResultCode;
 import com.mis.common.core.result.Result;
 import com.mis.common.security.context.LoginUser;
 import com.mis.common.security.context.SecurityContextHolder;
+import com.mis.kb.api.dto.KbEngineRefVO;
 import com.mis.kb.api.dto.KbLibraryCreateRequest;
+import com.mis.kb.api.dto.KbLibraryDeleteResultVO;
 import com.mis.kb.api.dto.KbLibraryDetailVO;
 import com.mis.kb.api.dto.KbLibraryUpdateRequest;
 import com.mis.kb.api.dto.KbLibraryVO;
+import com.mis.kb.domain.model.LibraryDeleteMode;
 import com.mis.kb.domain.model.RagSettings;
 import com.mis.kb.domain.service.KbLibraryService;
 import com.mis.kb.domain.service.RagSettingsService;
@@ -104,10 +109,46 @@ public class LibraryController {
         return Result.ok(libraryService.update(id, request));
     }
 
+    /**
+     * 删除知识库（T03，语义按 {@code mode} 分两支）。
+     *
+     * <p><b>破坏性语义变更：</b>不带 {@code mode} 时走<b>归档</b>（引擎侧改名保留数据 +
+     * 本地停用），而不是旧版的「物理删且吞异常假成功」。回执 {@code message} 会明说
+     * 「已归档，未删除引擎数据」，前端必须原样展示。
+     *
+     * <p>非法 {@code mode} <b>直接拒</b>而不是静默回落归档——用户把 {@code physical}
+     * 拼成 {@code physicial} 时若静默归档，他会以为数据已经删干净了。
+     *
+     * @param id   知识库 id
+     * @param mode {@code archive}（默认）或 {@code physical}
+     * @return 删除回执
+     */
     @DeleteMapping("/{id}")
-    public Result<Void> delete(@PathVariable Long id) {
-        libraryService.delete(id);
-        return Result.ok();
+    public Result<KbLibraryDeleteResultVO> delete(
+            @PathVariable Long id,
+            @RequestParam(required = false, defaultValue = "archive") String mode) {
+        LibraryDeleteMode parsed = LibraryDeleteMode.parse(mode);
+        if (parsed == null) {
+            throw new BusinessException(
+                    ResultCode.VALIDATION_ERROR, "删除模式非法（应为 archive/physical）：" + mode);
+        }
+        return Result.ok(libraryService.delete(id, parsed));
+    }
+
+    /**
+     * 查看知识库的引擎引用（Q4 有限暴露 dataset_id）。
+     *
+     * <p><b>内部端点不重复判权</b>（与仓库既有口径一致）：权限码
+     * {@code kb:library:engine-ref:view} 与 {@code @OperLog} 审计都在 BFF 侧收口。
+     * 这条端点破了「不暴露 engine_library_ref」的架构红线，审计是它成立的前提，
+     * BFF 那行 {@code @OperLog} 不能省。
+     *
+     * @param id 知识库 id
+     * @return 引擎引用视图（含 dataset_id 与同步状态）
+     */
+    @GetMapping("/{id}/engine-ref")
+    public Result<KbEngineRefVO> engineRef(@PathVariable Long id) {
+        return Result.ok(libraryService.engineRef(id));
     }
 
     private Long currentUserId() {

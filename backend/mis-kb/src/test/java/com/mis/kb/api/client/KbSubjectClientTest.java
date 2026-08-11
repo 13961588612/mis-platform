@@ -52,6 +52,11 @@ class KbSubjectClientTest {
 
     private static void respond(HttpExchange exchange, String body) throws IOException {
         byte[] bytes = body.getBytes(StandardCharsets.UTF_8);
+        // 必须声明 Content-Type：否则 HttpServer 默认 application/octet-stream，
+        // RestClient（独立 builder，无 Spring 容器兜底）找不到对应 HttpMessageConverter
+        // 会抛「no suitable HttpMessageConverter found」被客户端降级吞掉 → 解析恒为空。
+        // 生产环境 mis-iam 返回 application/json，此处补齐以贴合真实契约。
+        exchange.getResponseHeaders().set("Content-Type", "application/json; charset=utf-8");
         exchange.sendResponseHeaders(200, bytes.length);
         try (OutputStream os = exchange.getResponseBody()) {
             os.write(bytes);

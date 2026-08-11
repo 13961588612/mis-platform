@@ -7,10 +7,12 @@ import com.mis.kb.domain.model.DocumentUploadInput;
 import com.mis.kb.domain.model.EngineCapabilities;
 import com.mis.kb.domain.model.EngineDocumentRef;
 import com.mis.kb.domain.model.EngineHealth;
+import com.mis.kb.domain.model.EngineLibraryBrief;
 import com.mis.kb.domain.model.EngineLibraryRef;
 import com.mis.kb.domain.model.EngineModelPool;
 import com.mis.kb.domain.model.RagSettings;
 import com.mis.kb.domain.model.RetrieveQuery;
+import org.slf4j.LoggerFactory;
 
 import java.util.List;
 import java.util.Map;
@@ -37,6 +39,37 @@ public interface KnowledgeEnginePort {
 
     /** 删除知识库。 */
     void deleteLibrary(EngineLibraryRef ref);
+
+    /**
+     * 重命名引擎侧知识库（dataset）——归档流程的核心动作（引擎删除策略 P0 / T01）。
+     *
+     * <p><b>默认实现：空操作 + WARN 日志</b>，noop/mock 引擎零改动。
+     * 归档以本地语义为主，引擎改名失败不阻断归档，但会被记 {@code engine_sync_status=3}
+     * 等待对账，所以这里的「静默成功」对上层是可接受的（上层看 engineSynced 标志）。
+     *
+     * @param ref     知识库引擎引用
+     * @param newName 新的 dataset 名（已在 adapter 层按命名规范加工并截断）
+     */
+    default void renameLibrary(EngineLibraryRef ref, String newName) {
+        LoggerFactory.getLogger(KnowledgeEnginePort.class)
+                .warn("当前引擎[{}]不支持重命名知识库，已跳过：ref={}, newName={}",
+                        engineType(), ref == null ? null : ref.nativeId(), newName);
+    }
+
+    /**
+     * 列举引擎侧全部知识库（dataset）摘要——对账服务用（引擎删除策略 P0 / T01）。
+     *
+     * <p><b>默认实现返回空列表</b>，noop/mock 引擎零改动。
+     *
+     * <p><b>护栏提醒：</b>空列表会让对账把全部 MIS 库判成「引擎缺失」，
+     * 所以 {@code KbEngineReconcileService} 入口第一行就判 {@code engineType != "ragflow"}
+     * → {@code skipped=true} 直接返回，一个字段都不写库。别把这个护栏挪走。
+     *
+     * @return 引擎侧 dataset 摘要列表，恒非 {@code null}
+     */
+    default List<EngineLibraryBrief> listLibraries() {
+        return List.of();
+    }
 
     /** 上传文档，返回 MIS↔引擎文档映射引用。 */
     EngineDocumentRef uploadDocument(EngineLibraryRef ref, DocumentUploadInput input);

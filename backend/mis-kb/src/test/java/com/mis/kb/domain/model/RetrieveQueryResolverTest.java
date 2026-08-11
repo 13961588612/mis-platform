@@ -33,8 +33,13 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 class RetrieveQueryResolverTest {
 
-    /** 全能力引擎（ragflow + 已配重排模型）。 */
-    private static final EngineCapabilities FULL = EngineCapabilities.of(true, true, true, true);
+    /**
+     * 全能力引擎（ragflow + 已配重排模型）。
+     *
+     * <p>第 5 个参数是 T01 新增的 {@code deleteSupported}。本测试类只关心检索参数合并，
+     * 删除能力与合并逻辑完全无关，取 {@code true} 是为了贴合本常量「全能力」的语义。
+     */
+    private static final EngineCapabilities FULL = EngineCapabilities.of(true, true, true, true, true);
     /** 无 hybrid、无 rerank 的引擎（noop）。 */
     private static final EngineCapabilities NONE = EngineCapabilities.unsupported();
 

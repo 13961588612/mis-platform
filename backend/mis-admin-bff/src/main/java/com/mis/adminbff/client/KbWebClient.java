@@ -13,8 +13,11 @@ import com.mis.adminbff.dto.kb.KbDocumentVO;
 import com.mis.adminbff.dto.kb.KbEngineCapabilitiesVO;
 import com.mis.adminbff.dto.kb.KbEngineHealthVO;
 import com.mis.adminbff.dto.kb.KbEngineModelPoolVO;
+import com.mis.adminbff.dto.kb.KbEngineReconcileVO;
+import com.mis.adminbff.dto.kb.KbEngineRefVO;
 import com.mis.adminbff.dto.kb.KbHitTestRequest;
 import com.mis.adminbff.dto.kb.KbHitTestResultVO;
+import com.mis.adminbff.dto.kb.KbLibraryDeleteResultVO;
 import com.mis.adminbff.dto.kb.KbLibraryDetailVO;
 import com.mis.adminbff.dto.kb.KbLibraryVO;
 import com.mis.adminbff.dto.kb.KbQaExportRow;
@@ -99,6 +102,12 @@ public class KbWebClient extends AbstractDownstreamClient {
     private static final ParameterizedTypeReference<Result<KbEngineCapabilitiesVO>> ENGINE_CAPS =
             new ParameterizedTypeReference<>() {};
     private static final ParameterizedTypeReference<Result<KbEngineModelPoolVO>> ENGINE_MODEL_POOL =
+            new ParameterizedTypeReference<>() {};
+    private static final ParameterizedTypeReference<Result<KbLibraryDeleteResultVO>> LIBRARY_DELETE_RESULT =
+            new ParameterizedTypeReference<>() {};
+    private static final ParameterizedTypeReference<Result<KbEngineRefVO>> ENGINE_REF =
+            new ParameterizedTypeReference<>() {};
+    private static final ParameterizedTypeReference<Result<KbEngineReconcileVO>> ENGINE_RECONCILE =
             new ParameterizedTypeReference<>() {};
     private static final ParameterizedTypeReference<Result<String>> STRING =
             new ParameterizedTypeReference<>() {};
@@ -361,12 +370,39 @@ public class KbWebClient extends AbstractDownstreamClient {
                 .bodyToMono(LIBRARY));
     }
 
-    public void deleteLibrary(Long id) {
-        block(client().delete()
-                .uri("/internal/v1/kb/libraries/{id}", id)
+    /**
+     * 删除知识库（T04：透传 {@code mode}，返回回执）。
+     *
+     * <p>下游默认语义是<b>归档</b>而非物理删除，回执 {@code message} 已把这件事写清楚，
+     * BFF 原样透传不做加工。
+     *
+     * @param id   知识库 id
+     * @param mode {@code archive} / {@code physical}
+     * @return 删除回执
+     */
+    public KbLibraryDeleteResultVO deleteLibrary(Long id, String mode) {
+        return block(client().method(org.springframework.http.HttpMethod.DELETE)
+                .uri(uriBuilder -> uriBuilder
+                        .path("/internal/v1/kb/libraries/{id}")
+                        .queryParam("mode", mode)
+                        .build(id))
                 .headers(loginContextHeaders())
                 .retrieve()
-                .bodyToMono(VOID));
+                .bodyToMono(LIBRARY_DELETE_RESULT));
+    }
+
+    /**
+     * 查看知识库的引擎引用（Q4，含 dataset_id）。
+     *
+     * @param id 知识库 id
+     * @return 引擎引用视图
+     */
+    public KbEngineRefVO getEngineRef(Long id) {
+        return block(client().get()
+                .uri("/internal/v1/kb/libraries/{id}/engine-ref", id)
+                .headers(loginContextHeaders())
+                .retrieve()
+                .bodyToMono(ENGINE_REF));
     }
 
     /** 知识库详情聚合（L-06）。 */
@@ -738,6 +774,34 @@ public class KbWebClient extends AbstractDownstreamClient {
                 .headers(loginContextHeaders())
                 .retrieve()
                 .bodyToMono(STRING));
+    }
+
+    /**
+     * 读取最近一次引擎对账报告（T04）。
+     *
+     * <p>只读缓存，不触发引擎调用。
+     *
+     * @return 对账报告
+     */
+    public KbEngineReconcileVO engineReconcileReport() {
+        return block(client().get()
+                .uri("/internal/v1/kb/engine/reconcile")
+                .headers(loginContextHeaders())
+                .retrieve()
+                .bodyToMono(ENGINE_RECONCILE));
+    }
+
+    /**
+     * 手动触发一次引擎对账（T04）。
+     *
+     * @return 本次对账报告
+     */
+    public KbEngineReconcileVO runEngineReconcile() {
+        return block(client().post()
+                .uri("/internal/v1/kb/engine/reconcile")
+                .headers(loginContextHeaders())
+                .retrieve()
+                .bodyToMono(ENGINE_RECONCILE));
     }
 
     // ------------------------------------------------------------------ 同义词（S-07 / Wave D）

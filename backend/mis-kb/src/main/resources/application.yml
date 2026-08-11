@@ -22,6 +22,23 @@ mis:
       # 全局重排模型 ID（WA-05）。空 = 全平台禁用 rerank：
       # capabilities.rerankSupported=false → 前端置灰 → 保存强制 false → 检索期再降级。
       rerank-model-id: ${MIS_KB_RERANK_MODEL_ID:}
+      # 引擎是否支持在线删除知识库（dataset）。Q5：写死配置，不做启动探测。
+      # false ⇒ DELETE ?mode=physical 一律被拒（40934），业务侧只能走归档；
+      # 等 RAGFLOW 升级（P2）后翻 true 即可放开，代码分支无需改动。
+      delete-supported: ${MIS_KB_ENGINE_DELETE_SUPPORTED:false}
+      reconcile:
+        # 定时对账总开关。刻意不用 @ConditionalOnProperty（那样只能重启生效），
+        # 定时方法体第一行读本值直接 return，支持 Nacos 热关。
+        enabled: ${MIS_KB_RECONCILE_ENABLED:true}
+        # 定时间隔（毫秒），默认 30 分钟。
+        interval-ms: ${MIS_KB_RECONCILE_INTERVAL_MS:1800000}
+        # listDatasets 分页大小。
+        page-size: ${MIS_KB_RECONCILE_PAGE_SIZE:100}
+        # 分页拉取硬上限，防引擎侧 dataset 巨多时打爆。
+        max-pages: ${MIS_KB_RECONCILE_MAX_PAGES:50}
+        # ShedLock 持锁时长（ISO-8601 Duration）。
+        lock-at-most-for: ${MIS_KB_RECONCILE_LOCK_AT_MOST:PT10M}
+        lock-at-least-for: ${MIS_KB_RECONCILE_LOCK_AT_LEAST:PT30S}
 
 management:
   endpoints:

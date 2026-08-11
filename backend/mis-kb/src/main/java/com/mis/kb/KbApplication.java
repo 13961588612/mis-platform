@@ -19,6 +19,12 @@ import org.springframework.scheduling.annotation.EnableScheduling;
  * <b>没有任何其它 {@code @Scheduled} 方法</b>会因此被动激活 —— 否则一个注解就可能
  * 悄悄唤醒一批从未上线跑过的后台任务，这类事故很难在灰度期暴露。
  * 后续若新增 {@code @Scheduled}，务必同步复核此处的假设。
+ *
+ * <p><b>引擎删除策略 P0（T04）新增第 2 个定时任务</b>：
+ * {@code KbEngineReconcileService#scheduledReconcile()}（引擎对账，默认 30 分钟一次）。
+ * 多副本并发跑会互相覆盖对账结果，故用 ShedLock 做数据库级互斥
+ * （见 {@code com.mis.kb.config.ShedLockConfig}，锁名 {@code kb-engine-reconcile}）。
+ * {@link EnableScheduling} 保持在本类这唯一一处，<b>不要在 ShedLockConfig 里重复加</b>。
  */
 @SpringBootApplication
 @EnableDiscoveryClient

@@ -35,6 +35,21 @@ public class RagflowProperties {
      */
     private String rerankModelId = "";
 
+    /**
+     * 当前引擎版本是否支持在线删除知识库（dataset）。
+     *
+     * <p><b>写死配置，不做启动探测</b>（Q5 裁定）。默认 {@code false}：
+     * 当前部署的 RAGFLOW 版本删除接口不可用，{@code DELETE ?mode=physical} 一律被拒
+     * （{@code KB_ENGINE_DELETE_UNSUPPORTED}），业务侧只能走归档。
+     * 等 RAGFLOW 升级（P2）后把这里翻成 {@code true} 即可放开，代码分支无需改动。
+     *
+     * <p>该值同时决定 {@code capabilities().deleteSupported} 与能力码 {@code "delete"}。
+     */
+    private boolean deleteSupported = false;
+
+    /** 引擎对账配置（定时任务 + 手动触发共用）。 */
+    private final Reconcile reconcile = new Reconcile();
+
     public String getType() {
         return type;
     }
@@ -67,6 +82,18 @@ public class RagflowProperties {
         this.rerankModelId = rerankModelId;
     }
 
+    public boolean isDeleteSupported() {
+        return deleteSupported;
+    }
+
+    public void setDeleteSupported(boolean deleteSupported) {
+        this.deleteSupported = deleteSupported;
+    }
+
+    public Reconcile getReconcile() {
+        return reconcile;
+    }
+
     /**
      * 是否已配置全局重排模型。
      *
@@ -74,5 +101,113 @@ public class RagflowProperties {
      */
     public boolean hasRerankModel() {
         return rerankModelId != null && !rerankModelId.isBlank();
+    }
+
+    /**
+     * 是否为真实 RAGFlow 引擎。
+     *
+     * <p>对账服务的入口护栏用：noop/mock 的 {@code listLibraries()} 返回空列表，
+     * 直接对账会把全部 MIS 库判成「引擎缺失」并批量写坏 {@code engine_sync_status}。
+     *
+     * @return {@code type} 为 {@code ragflow}（忽略大小写与首尾空白）返回 {@code true}
+     */
+    public boolean isRagflow() {
+        return type != null && "ragflow".equalsIgnoreCase(type.trim());
+    }
+
+    /**
+     * 引擎对账配置（{@code mis.kb.engine.reconcile.*}）。
+     *
+     * <p>{@code enabled} 刻意不用 {@code @ConditionalOnProperty}——那样只能重启生效，
+     * 而运维需要在 Nacos 里热关。定时方法体第一行读本值直接 return 即可。
+     */
+    public static class Reconcile {
+
+        /** 定时对账总开关（热调）。 */
+        private boolean enabled = true;
+
+        /** 定时对账间隔，毫秒。默认 30 分钟。 */
+        private long intervalMs = 1_800_000L;
+
+        /** {@code listDatasets} 分页大小。 */
+        private int pageSize = 100;
+
+        /** 分页拉取的硬上限，防引擎侧 dataset 巨多时打爆。 */
+        private int maxPages = 50;
+
+        /** ShedLock 最长持锁时长（实例崩溃后锁自动释放的兜底）。 */
+        private String lockAtMostFor = "PT10M";
+
+        /** ShedLock 最短持锁时长（防同一窗口内多实例连续抢跑）。 */
+        private String lockAtLeastFor = "PT30S";
+
+        public boolean isEnabled() {
+            return enabled;
+        }
+
+        public void setEnabled(boolean enabled) {
+            this.enabled = enabled;
+        }
+
+        public long getIntervalMs() {
+            return intervalMs;
+        }
+
+        public void setIntervalMs(long intervalMs) {
+            this.intervalMs = intervalMs;
+        }
+
+        public int getPageSize() {
+            return pageSize;
+        }
+
+        public void setPageSize(int pageSize) {
+            this.pageSize = pageSize;
+        }
+
+        public int getMaxPages() {
+            return maxPages;
+        }
+
+        public void setMaxPages(int maxPages) {
+            this.maxPages = maxPages;
+        }
+
+        public String getLockAtMostFor() {
+            return lockAtMostFor;
+        }
+
+        public void setLockAtMostFor(String lockAtMostFor) {
+            this.lockAtMostFor = lockAtMostFor;
+        }
+
+        public String getLockAtLeastFor() {
+            return lockAtLeastFor;
+        }
+
+        public void setLockAtLeastFor(String lockAtLeastFor) {
+            this.lockAtLeastFor = lockAtLeastFor;
+        }
+
+        /**
+         * 归一化后的分页大小（防配 0 或负数导致死循环）。
+         *
+         * @return 落在 {@code [1, 1000]} 内的分页大小
+         */
+        public int effectivePageSize() {
+            if (pageSize < 1) {
+                return 1;
+            }
+            return Math.min(pageSize, 1000);
+        }
+
+        /**
+         * 归一化后的最大页数（防配 0 导致一页都不拉）。
+         *
+         * @return 至少为 1 的页数上限
+         */
+        public int effectiveMaxPages() {
+            return Math.max(maxPages, 1);
+        }
     }
 }

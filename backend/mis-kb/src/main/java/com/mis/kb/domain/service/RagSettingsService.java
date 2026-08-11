@@ -118,10 +118,14 @@ public class RagSettingsService {
         List<AclSummaryVO> acls = aclRepository.findByLibraryId(libraryId).stream()
                 .map(RagSettingsService::toAclSummary)
                 .toList();
+        // T03：KbLibraryVO 末位追加 5 字段。engineSyncFailed / engineSyncMessage 是
+        // 「本次 update 调用的瞬时结果」，详情接口恒传 null（口径见 KbLibraryVO 类级说明）。
         KbLibraryVO meta = new KbLibraryVO(
                 lib.getId(), lib.getCategoryId(), lib.getName(), lib.getSecrecy(), lib.getStatus(),
                 lib.getOwner(), lib.getEngineType(), effective, docCount,
-                lib.getCreatedAt(), lib.getUpdatedAt());
+                lib.getCreatedAt(), lib.getUpdatedAt(),
+                lib.getEngineSyncStatus(), lib.getEngineCheckedAt(), lib.getArchivedAt(),
+                null, null);
         return new KbLibraryDetailVO(meta, docCount, acls, effective);
     }
 

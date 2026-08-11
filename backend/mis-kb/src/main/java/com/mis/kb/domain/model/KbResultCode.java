@@ -41,6 +41,20 @@ public enum KbResultCode {
     KB_CATEGORY_ADMIN_EXISTS(40932, "该分类节点已授权给该主体，请勿重复授权"),
     /** 移动分类节点：目标节点是自己的后代（防环，知识库域一期，T01）。 */
     KB_CATEGORY_MOVE_CYCLE(40933, "不能把分类移动到其自身或后代节点下"),
+    /**
+     * 物理删除被拒：当前引擎版本不支持在线删除 dataset（Q5，配置项 {@code delete-supported=false}）。
+     *
+     * <p>抛出时**本地零变更**——不能出现「引擎删不掉但 MIS 行没了」的悬空引用。
+     * 前端应引导用户改走归档（{@code DELETE ?mode=archive}）。
+     */
+    KB_ENGINE_DELETE_UNSUPPORTED(40934, "当前引擎不支持在线删除知识库，请改用归档"),
+    /**
+     * 物理删除时引擎侧删除调用失败。
+     *
+     * <p>必须让 {@code @Transactional} 回滚，禁止 catch 后继续删本地
+     * （那正是本次要消灭的「吞异常假成功」）。
+     */
+    KB_ENGINE_DELETE_FAILED(40935, "引擎侧删除失败，本地未做任何变更"),
 
     KB_LIBRARY_NOT_FOUND(40410, "知识库不存在"),
     KB_DOC_NOT_FOUND(40411, "文档不存在"),

@@ -38,6 +38,12 @@
         <spring-cloud-alibaba.version>2023.0.1.0</spring-cloud-alibaba.version>
         <flyway.version>10.14.0</flyway.version>
         <postgresql.version>42.7.3</postgresql.version>
+        <!--
+          ShedLock：定时任务多实例互斥（当前使用者：mis-kb 的引擎对账任务 kb-engine-reconcile）。
+          不在 Spring Boot 3.2.5 BOM 内，故在此显式管版本，子模块只声明 groupId/artifactId、
+          不裸写 <version>。5.x 系列适配 Spring 6 / Boot 3。
+        -->
+        <shedlock.version>5.13.0</shedlock.version>
 
         <db.host>localhost</db.host>
         <db.port>5432</db.port>
@@ -52,6 +58,13 @@
                 <groupId>com.mis</groupId>
                 <artifactId>mis-common-bom</artifactId>
                 <version>${project.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+            <dependency>
+                <groupId>net.javacrumbs.shedlock</groupId>
+                <artifactId>shedlock-bom</artifactId>
+                <version>${shedlock.version}</version>
                 <type>pom</type>
                 <scope>import</scope>
             </dependency>

@@ -18,7 +18,12 @@ import {
   SheetHeader,
   SheetTitle,
 } from '@/components/ui/sheet';
-import { KbLibraryPicker } from '../components/kb-library-picker';
+import { Badge } from '@/components/ui/badge';
+import { ShieldAlert } from 'lucide-react';
+import {
+  KbLibraryCombobox,
+  type KbLibraryOption,
+} from '../components/kb-library-combobox';
 import {
   KbSubjectSelector,
   type KbSubjectSelection,
@@ -29,6 +34,7 @@ import {
   KB_ACL_ACTION_OPTIONS,
   aclActionLabel,
   formatTime,
+  secrecyLabel,
   subjectTypeLabel,
 } from '../types';
 
@@ -49,6 +55,8 @@ const selectClass =
  */
 export function KbPermissionPage() {
   const [libraryId, setLibraryId] = useState<number | null>(null);
+  /** 组合框加载出的全部选项，用于渲染「当前操作对象」卡片（含分类路径）。 */
+  const [options, setOptions] = useState<KbLibraryOption[]>([]);
   const [acls, setAcls] = useState<KbAcl[]>([]);
   const [loading, setLoading] = useState(false);
   const [open, setOpen] = useState(false);
@@ -71,6 +79,17 @@ export function KbPermissionPage() {
   const { widthOf, startResize, hasCustom, reset } = useColumnWidths(ACL_COLS, 'mis-kb-permission-table-widths');
   const getSortValue = useCallback((row: KbAcl, key: string) => row[key as keyof KbAcl], []);
   const { sorted: sortedAcls, sortKey, sortDir, toggleSort } = useClientSort(acls, getSortValue);
+
+  /** 当前操作对象（选中库 + 其分类路径）；未选时为 null。 */
+  const selected = useMemo(
+    () => options.find((o) => o.library.id === libraryId) ?? null,
+    [options, libraryId],
+  );
+  /** 高密级库：卡片挂红色警示条，授权前多看一眼。 */
+  const highSecrecy =
+    selected != null &&
+    (selected.library.secrecy === 'secret' || selected.library.secrecy === 'confidential');
+  const selectedName = selected?.library.name ?? '';
 
   const load = useCallback(async (id: number | null) => {
     if (id == null) {
@@ -179,14 +198,45 @@ export function KbPermissionPage() {
 
       <div className="mb-3 flex flex-wrap items-center gap-2">
         <span className="text-sm text-muted-foreground">知识库</span>
-        <div className="w-72">
-          <KbLibraryPicker
+        {/* Q1：这里必须是可搜索组合框而非原生下拉——两个不同分类下的同名库在
+            <select> 里长得一模一样，选错就是把机密库授权给错误的人。 */}
+        <div className="w-96">
+          <KbLibraryCombobox
             value={libraryId}
-            onChange={setLibraryId}
+            onChange={(id) => setLibraryId(id)}
+            onLoaded={setOptions}
+            allowClear
             activePath="/kb/permissions"
           />
         </div>
       </div>
+
+      {/* 当前操作对象常驻卡片：授权动作全程都要能看见「我在给哪个库授权」 */}
+      {selected ? (
+        <div
+          className={cn(
+            'mb-3 flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg border bg-card px-3 py-2',
+            highSecrecy && 'border-l-4 border-l-destructive',
+          )}
+        >
+          <span className="text-xs text-muted-foreground">当前操作对象</span>
+          <span className="text-sm font-medium text-foreground">{selected.library.name}</span>
+          <Badge variant={highSecrecy ? 'destructive' : 'secondary'}>
+            {secrecyLabel(selected.library.secrecy)}
+          </Badge>
+          <span className="text-xs text-muted-foreground">{selected.categoryPath}</span>
+          <span className="font-mono text-xs text-muted-foreground">#{selected.library.id}</span>
+          {selected.duplicatedName ? (
+            <Badge variant="warning">存在同名库，请核对分类路径</Badge>
+          ) : null}
+          {highSecrecy ? (
+            <span className="flex items-center gap-1 text-xs text-destructive">
+              <ShieldAlert className="h-3.5 w-3.5" />
+              高密级知识库，授权前请确认主体范围
+            </span>
+          ) : null}
+        </div>
+      ) : null}
 
       <div className="relative min-h-0 flex-1 overflow-auto rounded-lg border bg-table-surface">
         {hasCustom ? (
@@ -295,7 +345,10 @@ export function KbPermissionPage() {
       <Sheet open={open} onOpenChange={setOpen}>
         <SheetContent className="flex w-full flex-col sm:max-w-md">
           <SheetHeader>
-            <SheetTitle>新增授权</SheetTitle>
+            {/* 标题带库名：抽屉盖住卡片后，这是唯一还能确认操作对象的地方 */}
+            <SheetTitle>
+              {selectedName ? `为「${selectedName}」新增授权` : '新增授权'}
+            </SheetTitle>
           </SheetHeader>
           <div className={SHEET_FORM_BODY}>
             <div className={SHEET_FORM_FIELD}>

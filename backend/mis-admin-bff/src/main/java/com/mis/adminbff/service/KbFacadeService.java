@@ -11,6 +11,9 @@ import com.mis.adminbff.dto.kb.KbDocumentVO;
 import com.mis.adminbff.dto.kb.KbEngineCapabilitiesVO;
 import com.mis.adminbff.dto.kb.KbEngineHealthVO;
 import com.mis.adminbff.dto.kb.KbEngineModelPoolVO;
+import com.mis.adminbff.dto.kb.KbEngineReconcileVO;
+import com.mis.adminbff.dto.kb.KbEngineRefVO;
+import com.mis.adminbff.dto.kb.KbLibraryDeleteResultVO;
 import com.mis.adminbff.dto.kb.KbLibraryDetailVO;
 import com.mis.adminbff.dto.kb.KbLibraryVO;
 import com.mis.adminbff.dto.kb.KbQaExportRow;
@@ -159,8 +162,32 @@ public class KbFacadeService {
         return kbWebClient.updateLibrary(id, body);
     }
 
-    public void deleteLibrary(Long id) {
-        kbWebClient.deleteLibrary(id);
+    /**
+     * 删除知识库（T04：{@code mode} 透传 + 回执透传）。
+     *
+     * <p><b>默认走归档</b>：不带 {@code mode} 时下游执行「引擎侧改名 + 本地停用」，
+     * 不删任何数据。回执里的 {@code message} 原样透传给前端展示，不要在这层改写。
+     *
+     * @param id   知识库 id
+     * @param mode {@code archive}（默认）/ {@code physical}
+     * @return 删除回执
+     */
+    public KbLibraryDeleteResultVO deleteLibrary(Long id, String mode) {
+        String effective = (mode == null || mode.isBlank()) ? "archive" : mode.trim();
+        return kbWebClient.deleteLibrary(id, effective);
+    }
+
+    /**
+     * 查看知识库的引擎引用（Q4 有限暴露 dataset_id）。
+     *
+     * <p>判权由 {@code kb:library:engine-ref:view} 在网关注册表侧完成，审计由 Controller 的
+     * {@code @OperLog} 完成，本层纯透传。
+     *
+     * @param id 知识库 id
+     * @return 引擎引用视图
+     */
+    public KbEngineRefVO getEngineRef(Long id) {
+        return kbWebClient.getEngineRef(id);
     }
 
     /**
@@ -584,11 +611,33 @@ public class KbFacadeService {
                     caps.rerankSupported() != null ? caps.rerankSupported() : false,
                     caps.metadataFilterSupported() != null ? caps.metadataFilterSupported() : false,
                     caps.replaceSupported() != null ? caps.replaceSupported() : false,
-                    caps.hybridSupported() != null ? caps.hybridSupported() : false);
+                    caps.hybridSupported() != null ? caps.hybridSupported() : false,
+                    caps.deleteSupported() != null ? caps.deleteSupported() : false);
         } catch (Exception e) {
             log.warn("取引擎能力失败: {}", e.getMessage());
             return unsupportedCapabilities(engineType);
         }
+    }
+
+    /**
+     * 读取最近一次引擎对账报告（T04）。
+     *
+     * <p>纯透传。下游不可达<b>直接抛</b>——对账报告是运维决策依据，
+     * 把异常降级成「空报告」会让人误以为「引擎与 MIS 完全一致」，比不显示更危险。
+     *
+     * @return 对账报告
+     */
+    public KbEngineReconcileVO engineReconcileReport() {
+        return kbWebClient.engineReconcileReport();
+    }
+
+    /**
+     * 手动触发一次引擎对账（T04）。
+     *
+     * @return 本次对账报告
+     */
+    public KbEngineReconcileVO runEngineReconcile() {
+        return kbWebClient.runEngineReconcile();
     }
 
     /**
@@ -620,11 +669,11 @@ public class KbFacadeService {
      * 前端就会把开关亮出来让人配，配完保存又发现引擎根本不认，属于误导。
      *
      * @param engineType 引擎类型（可能是 "unknown"）
-     * @return 四项能力全 false 的声明
+     * @return 五项能力全 false 的声明（含 deleteSupported）
      */
     private static KbEngineCapabilitiesVO unsupportedCapabilities(String engineType) {
         return new KbEngineCapabilitiesVO(
-                engineType, List.of("UNSUPPORTED"), false, false, false, false);
+                engineType, List.of("UNSUPPORTED"), false, false, false, false, false);
     }
 
     // ------------------------------------------------------------------ 命中测试（Q-04 / WA-07）

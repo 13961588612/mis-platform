@@ -10,8 +10,11 @@ import com.mis.adminbff.dto.kb.KbDocumentVO;
 import com.mis.adminbff.dto.kb.KbEngineCapabilitiesVO;
 import com.mis.adminbff.dto.kb.KbEngineHealthVO;
 import com.mis.adminbff.dto.kb.KbEngineModelPoolVO;
+import com.mis.adminbff.dto.kb.KbEngineReconcileVO;
+import com.mis.adminbff.dto.kb.KbEngineRefVO;
 import com.mis.adminbff.dto.kb.KbHitTestRequest;
 import com.mis.adminbff.dto.kb.KbHitTestResultVO;
+import com.mis.adminbff.dto.kb.KbLibraryDeleteResultVO;
 import com.mis.adminbff.dto.kb.KbLibraryDetailVO;
 import com.mis.adminbff.dto.kb.KbLibraryVO;
 import com.mis.adminbff.dto.kb.KbQaFeedbackVO;
@@ -184,10 +187,39 @@ public class KbController {
                 id, body.name(), body.secrecy(), body.status(), body.settings()));
     }
 
+    /**
+     * 删除知识库（T04：默认<b>归档</b>，不是物理删除）。
+     *
+     * <p>不带 {@code mode} 时下游执行「引擎侧 dataset 改名 + 本地 status=0」，
+     * 引擎数据一条不删——回执 {@code message} 会把这件事写明，前端必须原样展示，
+     * 不要在这层改写成「删除成功」，否则管理员会以为引擎侧空间已经释放。
+     *
+     * @param id   知识库 id
+     * @param mode {@code archive}（默认）/ {@code physical}
+     * @return 删除回执（含引擎同步结果与实际清理范围）
+     */
     @DeleteMapping("/libraries/{id}")
-    public Result<Void> deleteLibrary(@PathVariable Long id) {
-        kbFacadeService.deleteLibrary(id);
-        return Result.ok();
+    @OperLog(module = "知识库", operation = "删除知识库", recordParams = true)
+    public Result<KbLibraryDeleteResultVO> deleteLibrary(
+            @PathVariable Long id,
+            @RequestParam(required = false, defaultValue = "archive") String mode) {
+        return Result.ok(kbFacadeService.deleteLibrary(id, mode));
+    }
+
+    /**
+     * 查看知识库的引擎引用（Q4 有限暴露 dataset_id）。
+     *
+     * <p><b>为什么必须打 {@code @OperLog}：</b>该端点会返回引擎侧 {@code dataset_id}——
+     * 拿到它就能绕过 MIS 直连 RAGFLOW 操作数据，属于跨越架构边界的敏感信息。
+     * 判权由 {@code kb:library:engine-ref:view} 在网关注册表侧完成，这里只负责留痕。
+     *
+     * @param id 知识库 id
+     * @return 引擎引用视图
+     */
+    @GetMapping("/libraries/{id}/engine-ref")
+    @OperLog(module = "知识库", operation = "查看引擎引用")
+    public Result<KbEngineRefVO> getEngineRef(@PathVariable Long id) {
+        return Result.ok(kbFacadeService.getEngineRef(id));
     }
 
     /** 知识库详情聚合（L-06），详情页三 Tab 首屏共用。 */
@@ -560,6 +592,33 @@ public class KbController {
     @GetMapping("/engine/models")
     public Result<KbEngineModelPoolVO> engineModels() {
         return Result.ok(kbFacadeService.listEngineModels());
+    }
+
+    /**
+     * 读取最近一次引擎对账报告（T04）。
+     *
+     * <p>只读缓存，不触发引擎调用，因此<b>不</b>记审计——它读到的信息（库名、同步状态）
+     * 在知识库列表页本就可见，没有额外的信息暴露面。
+     *
+     * @return 对账报告
+     */
+    @GetMapping("/engine/reconcile")
+    public Result<KbEngineReconcileVO> engineReconcileReport() {
+        return Result.ok(kbFacadeService.engineReconcileReport());
+    }
+
+    /**
+     * 手动触发一次引擎对账（T04）。
+     *
+     * <p>会真实打引擎的 list datasets 接口并写 {@code kb_engine_orphan}，属于写操作，
+     * 所以要留痕；判权由 {@code kb:engine:reconcile} 在网关注册表侧完成。
+     *
+     * @return 本次对账报告
+     */
+    @PostMapping("/engine/reconcile")
+    @OperLog(module = "知识库", operation = "触发引擎对账")
+    public Result<KbEngineReconcileVO> runEngineReconcile() {
+        return Result.ok(kbFacadeService.runEngineReconcile());
     }
 
     // ------------------------------------------------------------------ 请求体

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Pencil, Plus, Settings2, Trash2 } from 'lucide-react';
+import { Archive, Pencil, Plus, Settings2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
@@ -18,14 +18,10 @@ import {
   SheetHeader,
   SheetTitle,
 } from '@/components/ui/sheet';
+import { Badge } from '@/components/ui/badge';
 import { EnabledBadge, SecrecyBadge } from '../components/kb-badges';
-import {
-  createLibrary,
-  deleteLibrary,
-  listCategories,
-  listLibraries,
-  updateLibrary,
-} from '../api/kb-api';
+import { KbLibraryDeleteDialog } from './kb-library-delete-dialog';
+import { createLibrary, listCategories, listLibraries, updateLibrary } from '../api/kb-api';
 import {
   CategoryTreeCell,
   flattenCategoryTree,
@@ -33,7 +29,7 @@ import {
 } from '../category/kb-category-tree';
 import { useKbStore } from '../stores/use-kb-store';
 import type { KbCategory, KbLibrary, KbRagSettings } from '../types';
-import { KB_SECRECY_OPTIONS, formatTime } from '../types';
+import { KB_ENGINE_SYNC_STATUS_META, KB_SECRECY_OPTIONS, formatTime } from '../types';
 import { SHEET_FORM_BODY, SHEET_FORM_FIELD, SHEET_FORM_LABEL } from '@/components/common/sheet-form-styles';
 
 /** 标签与控件间距由外层 field 的 space-y-1.5 统一，避免上下半区疏密不一致。 */
@@ -116,6 +112,8 @@ export function KbLibraryPage() {
   const [editing, setEditing] = useState<KbLibrary | null>(null);
   const [form, setForm] = useState<LibraryForm>(EMPTY_FORM);
   const [saving, setSaving] = useState(false);
+  /** 归档 / 删除对话框的目标库；null = 关闭（T05，替代原 window.confirm）。 */
+  const [deleting, setDeleting] = useState<KbLibrary | null>(null);
 
   const navigate = useNavigate();
 
@@ -128,6 +126,7 @@ export function KbLibraryPage() {
       { key: 'docCount', label: '文档数' },
       { key: 'topK', label: 'topK' },
       { key: 'engineType', label: '建库引擎' },
+      { key: 'engineSyncStatus', label: '引擎同步' },
       { key: 'updatedAt', label: '更新时间' },
       { key: '__ops__', label: '操作', locked: true },
     ],
@@ -330,16 +329,15 @@ export function KbLibraryPage() {
     }
   }
 
-  async function onDelete(lib: KbLibrary) {
-    if (!window.confirm(`删除知识库「${lib.name}」？其下文档与索引将一并移除。`)) return;
-    try {
-      await deleteLibrary(lib.id);
-      toast.success('已删除');
-      invalidateLibraries();
-      await loadLibraries(categoryId);
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : '删除失败');
-    }
+  /**
+   * 归档 / 删除完成回调。
+   *
+   * <p>刻意**不**在这里弹 toast：文案由对话框按后端回执渲染（归档 ≠ 删除，
+   * 这层再补一句「已删除」就把回执里那句「未删除引擎数据」盖掉了）。
+   */
+  async function onDeleteDone() {
+    invalidateLibraries();
+    await loadLibraries(categoryId);
   }
 
   return (
@@ -491,13 +489,13 @@ export function KbLibraryPage() {
             <tbody>
               {loading ? (
                 <tr>
-                  <td colSpan={8} className="px-3 py-10 text-center text-muted-foreground">
+                  <td colSpan={9} className="px-3 py-10 text-center text-muted-foreground">
                     加载中…
                   </td>
                 </tr>
               ) : libraries.length === 0 ? (
                 <tr>
-                  <td colSpan={8} className="px-3 py-10 text-center text-muted-foreground">
+                  <td colSpan={9} className="px-3 py-10 text-center text-muted-foreground">
                     暂无可见知识库
                   </td>
                 </tr>
@@ -505,17 +503,28 @@ export function KbLibraryPage() {
                 sortedLibraries.map((lib) => (
                   <tr
                     key={lib.id}
-                    className="border-b border-border/50 bg-table-row last:border-0 even:bg-table-stripe hover:bg-table-hover"
+                    className={cn(
+                      'border-b border-border/50 bg-table-row last:border-0 even:bg-table-stripe hover:bg-table-hover',
+                      // 已归档行整体降饱和：一眼看出「这个库不参与检索了」
+                      lib.archivedAt != null && 'opacity-60',
+                    )}
                   >
                     <td className="px-3 py-2">
-                      <button
-                        type="button"
-                        className="max-w-[18rem] truncate text-left text-primary hover:underline"
-                        title="查看详情"
-                        onClick={() => navigate(`/kb/libraries/${lib.id}`)}
-                      >
-                        {lib.name}
-                      </button>
+                      <div className="flex items-center gap-1.5">
+                        <button
+                          type="button"
+                          className="max-w-[16rem] truncate text-left text-primary hover:underline"
+                          title="查看详情"
+                          onClick={() => navigate(`/kb/libraries/${lib.id}`)}
+                        >
+                          {lib.name}
+                        </button>
+                        {lib.archivedAt != null ? (
+                          <Badge variant="secondary" title={`归档于 ${formatTime(lib.archivedAt)}`}>
+                            已归档
+                          </Badge>
+                        ) : null}
+                      </div>
                     </td>
                     <td className="px-3 py-2">
                       <SecrecyBadge secrecy={lib.secrecy} />
@@ -526,6 +535,22 @@ export function KbLibraryPage() {
                     <td className="px-3 py-2 tabular-nums">{lib.docCount ?? 0}</td>
                     <td className="px-3 py-2 tabular-nums">{lib.settings?.topK ?? '-'}</td>
                     <td className="px-3 py-2 text-xs text-muted-foreground">{lib.engineType ?? '-'}</td>
+                    <td className="px-3 py-2">
+                      {(() => {
+                        // 老后端不返回该字段时按「未对账」展示，不留空白
+                        const meta =
+                          KB_ENGINE_SYNC_STATUS_META[lib.engineSyncStatus ?? 0] ??
+                          KB_ENGINE_SYNC_STATUS_META[0];
+                        const checked = formatTime(lib.engineCheckedAt);
+                        return (
+                          <span
+                            title={`${meta.hint}${checked === '-' ? '' : `（对账于 ${checked}）`}`}
+                          >
+                            <Badge variant={meta.variant}>{meta.label}</Badge>
+                          </span>
+                        );
+                      })()}
+                    </td>
                     <td className="px-3 py-2 text-xs text-muted-foreground">{formatTime(lib.updatedAt)}</td>
                     <td className="px-3 py-2">
                       <div className="flex items-center gap-1">
@@ -547,14 +572,16 @@ export function KbLibraryPage() {
                             编辑
                           </button>
                         </PermissionGate>
+                        {/* Q9：菜单项改叫「归档」——默认动作确实只是归档，
+                            叫「删除」会让人以为引擎侧数据已经清掉。权限码不变。 */}
                         <PermissionGate permission="kb:library:delete">
                           <button
                             type="button"
                             className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[0.8125rem] text-destructive hover:bg-destructive/10"
-                            onClick={() => void onDelete(lib)}
+                            onClick={() => setDeleting(lib)}
                           >
-                            <Trash2 className="h-3 w-3" />
-                            删除
+                            <Archive className="h-3 w-3" />
+                            归档
                           </button>
                         </PermissionGate>
                       </div>
@@ -754,6 +781,15 @@ export function KbLibraryPage() {
           </SheetFooter>
         </SheetContent>
       </Sheet>
+
+      <KbLibraryDeleteDialog
+        library={deleting}
+        capabilities={capabilities}
+        onOpenChange={(next) => {
+          if (!next) setDeleting(null);
+        }}
+        onDone={() => void onDeleteDone()}
+      />
     </div>
   );
 }

@@ -9,6 +9,7 @@ import com.mis.kb.domain.model.DocumentUploadInput;
 import com.mis.kb.domain.model.EngineCapabilities;
 import com.mis.kb.domain.model.EngineDocumentRef;
 import com.mis.kb.domain.model.EngineHealth;
+import com.mis.kb.domain.model.EngineLibraryBrief;
 import com.mis.kb.domain.model.EngineLibraryRef;
 import com.mis.kb.domain.model.EngineModel;
 import com.mis.kb.domain.model.EngineModelPool;
@@ -17,6 +18,7 @@ import com.mis.kb.domain.model.RetrieveQuery;
 import com.mis.kb.domain.repository.KbDocumentRepository;
 import com.mis.kb.domain.repository.KbLibraryRepository;
 import com.mis.kb.engine.dto.RfChunk;
+import com.mis.kb.engine.dto.RfDataset;
 import com.mis.kb.engine.dto.RfModel;
 import com.mis.kb.support.KbJson;
 import org.slf4j.Logger;
@@ -66,9 +68,22 @@ public class RagflowAdapter implements KnowledgeEnginePort {
         return ENGINE_TYPE;
     }
 
+    /**
+     * 在引擎侧创建 dataset（T02：按命名规范加工名字）。
+     *
+     * <p>引擎侧名字 = {@code {一级分类名}-{库名}-{MIS库ID后6位}}，加工完全封在本层，
+     * 业务层传的仍是原始 MIS 库名。<b>MIS 侧 {@code kb_library.name} 不受影响。</b>
+     *
+     * @param cmd 建库命令（已带 {@code libraryId} 与 {@code topCategoryName}）
+     * @return 引擎引用
+     */
     @Override
     public EngineLibraryRef createLibrary(CreateLibraryCmd cmd) {
-        String datasetId = client.createDataset(cmd.name());
+        String datasetName = RagflowDatasetNaming.forCreate(
+                cmd.topCategoryName(), cmd.name(), cmd.libraryId());
+        log.info("RAGFlow 建库：MIS 库名={} → dataset 名={}（libraryId={}）",
+                cmd.name(), datasetName, cmd.libraryId());
+        String datasetId = client.createDataset(datasetName);
         return new EngineLibraryRef(ENGINE_TYPE, datasetId);
     }
 
@@ -80,6 +95,70 @@ public class RagflowAdapter implements KnowledgeEnginePort {
     @Override
     public void deleteLibrary(EngineLibraryRef ref) {
         client.deleteDataset(ref.nativeId());
+    }
+
+    /**
+     * 重命名引擎侧 dataset（T02：归档流程调用）。
+     *
+     * @param ref     知识库引擎引用
+     * @param newName 新名字（调用方已按 {@link RagflowDatasetNaming#forArchive} 加工）
+     */
+    @Override
+    public void renameLibrary(EngineLibraryRef ref, String newName) {
+        if (ref == null || ref.nativeId() == null || ref.nativeId().isBlank()) {
+            log.warn("重命名知识库被跳过：引擎引用为空 newName={}", newName);
+            return;
+        }
+        client.renameDataset(ref.nativeId(), newName);
+        log.info("RAGFlow 已重命名 dataset：{} → {}", ref.nativeId(), newName);
+    }
+
+    /**
+     * 列举引擎侧全部 dataset（T02：对账用）。
+     *
+     * <p>循环翻页直到「返回不足一页」或「触到 {@code reconcile.max-pages} 上限」。
+     * 触顶时记 WARN 并返回<b>已拉到的部分</b>——对账服务据此仍能发现大部分差异，
+     * 比直接抛异常导致整轮对账作废要好。
+     *
+     * @return dataset 摘要列表，恒非 {@code null}
+     */
+    @Override
+    public List<EngineLibraryBrief> listLibraries() {
+        int pageSize = props.getReconcile().effectivePageSize();
+        int maxPages = props.getReconcile().effectiveMaxPages();
+        List<EngineLibraryBrief> result = new ArrayList<>();
+        for (int page = 1; page <= maxPages; page++) {
+            List<RfDataset> batch = client.listDatasets(page, pageSize);
+            for (RfDataset ds : batch) {
+                result.add(new EngineLibraryBrief(
+                        ds.id(),
+                        ds.name(),
+                        ds.documentCount(),
+                        toInstant(ds.updateTime())));
+            }
+            if (batch.size() < pageSize) {
+                return result;
+            }
+            if (page == maxPages) {
+                log.warn("列举引擎知识库触到 max-pages={} 上限（pageSize={}，已拉取 {} 条），"
+                                + "本轮对账结果可能不完整，请调大 mis.kb.engine.reconcile.max-pages",
+                        maxPages, pageSize, result.size());
+            }
+        }
+        return result;
+    }
+
+    /**
+     * RAGFlow 的 {@code update_time} 毫秒时间戳 → {@link Instant}。
+     *
+     * @param epochMillis 毫秒时间戳，允许 {@code null}
+     * @return 对应时刻；入参为 {@code null} 或非正数时返回 {@code null}
+     */
+    private static Instant toInstant(Long epochMillis) {
+        if (epochMillis == null || epochMillis <= 0L) {
+            return null;
+        }
+        return Instant.ofEpochMilli(epochMillis);
     }
 
     @Override
@@ -340,7 +419,13 @@ public class RagflowAdapter implements KnowledgeEnginePort {
      * RAGFlow 本身当然支持重排，但没配全局模型 ID 就等于不可用。若这里恒返 true，
      * 前端会把开关亮着让人去点，点完保存又被后端强制关掉——纯粹的体验事故。
      *
-     * @return 能力声明；{@code hybrid} 恒支持，{@code rerank} 随模型 ID 配置动态变化
+     * <p><b>T02 新增 {@code deleteSupported}</b>：同样是「当前配置下实际可用」口径，
+     * 取自 {@code mis.kb.engine.delete-supported}（默认 false）。当前部署的 RAGFlow 版本
+     * {@code DELETE /datasets/{id}} 返回 405，所以这里恒为 false，前端据此把「物理删除」
+     * 置灰并给出说明；升级后翻配置即可，本方法不用改。
+     *
+     * @return 能力声明；{@code hybrid} 恒支持，{@code rerank} 随模型 ID 配置动态变化，
+     *         {@code delete} 随 {@code delete-supported} 配置变化
      */
     @Override
     public EngineCapabilities capabilities() {
@@ -348,6 +433,7 @@ public class RagflowAdapter implements KnowledgeEnginePort {
         if (!rerankAvailable) {
             log.debug("未配置 mis.kb.engine.rerank-model-id，capabilities 声明 rerankSupported=false");
         }
-        return EngineCapabilities.of(rerankAvailable, true, true, true);
+        boolean deleteAvailable = props != null && props.isDeleteSupported();
+        return EngineCapabilities.of(rerankAvailable, true, true, true, deleteAvailable);
     }
 }

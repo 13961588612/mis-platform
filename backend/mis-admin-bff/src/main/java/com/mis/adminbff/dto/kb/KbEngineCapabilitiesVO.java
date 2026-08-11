@@ -11,12 +11,18 @@ import java.util.List;
  * {@code rerankSupported} 语义改为「<b>当前配置下实际可用</b>」——它会随全局
  * {@code mis.kb.engine.rerank-model-id} 是否配置而变化，不再是引擎的静态能力宣告。
  *
+ * <p><b>引擎删除策略 P0（T04）：</b>新增 {@code deleteSupported}。它<b>不是</b>引擎的静态
+ * 能力宣告，而是 {@code mis.kb.engine.delete-supported} 配置项的直读值（Q5 裁定不做启动
+ * 探测）。当前部署的 RAGFLOW 版本删除接口不可用，该值为 {@code false}，前端据此把
+ * 「物理删除」置灰并只提供归档。
+ *
  * @param engineType              引擎类型 ragflow/noop/mock
  * @param capabilities            能力码值列表
  * @param rerankSupported         当前配置下重排是否可用
  * @param metadataFilterSupported 是否支持元数据过滤
  * @param replaceSupported        是否支持同名文档替换
  * @param hybridSupported         是否支持混合检索（关键字 + 语义）
+ * @param deleteSupported         是否支持在线删除知识库（false 时只能归档）
  */
 public record KbEngineCapabilitiesVO(
         String engineType,
@@ -24,5 +30,6 @@ public record KbEngineCapabilitiesVO(
         Boolean rerankSupported,
         Boolean metadataFilterSupported,
         Boolean replaceSupported,
-        Boolean hybridSupported) {
+        Boolean hybridSupported,
+        Boolean deleteSupported) {
 }
