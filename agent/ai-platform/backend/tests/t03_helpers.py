@@ -106,9 +106,12 @@ class FakeResolver:
         self,
         codes: set[str] | None = None,
         raise_unavailable: bool = False,
+        unavailable_exc: PermissionUnavailable | None = None,
     ) -> None:
         self.codes: set[str] = set(codes or set())
-        self.raise_unavailable = raise_unavailable
+        self.raise_unavailable = raise_unavailable or unavailable_exc is not None
+        #: 自定义不可用异常（用于断言 url / detail 等诊断字段的传递）。
+        self.unavailable_exc: PermissionUnavailable | None = unavailable_exc
         #: 被调用次数 —— 无 misUserId 场景必须恒为 0（绝不拿 userId 去查）。
         self.hits = 0
         #: 每次调用记录 ``(user_id, app_id, raw_jwt)``。
@@ -120,6 +123,8 @@ class FakeResolver:
         """返回预置码集合或抛不可用异常。"""
         self.hits += 1
         self.seen.append((user_id, app_id, raw_jwt))
+        if self.unavailable_exc is not None:
+            raise self.unavailable_exc
         if self.raise_unavailable:
             raise PermissionUnavailable("BFF 不可达", user_id, "ConnectError")
         return set(self.codes)

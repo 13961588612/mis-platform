@@ -6,8 +6,11 @@ TC-18、TC-21、TC-22、TC-36、TC-37。
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
+from src.identity.mis_permission_resolver import PermissionUnavailable
 from src.skills.acl import (
     CODE_ACL_UNAVAILABLE,
     CODE_SKILL_FORBIDDEN,
@@ -130,6 +133,115 @@ async def test_rule2_unavailable_is_not_downgraded_to_forbidden() -> None:
     with pytest.raises(SkillAclDenied) as exc:
         await guard.assert_can_run({"misUserId": "1001"}, "x")
     assert exc.value.code != CODE_SKILL_FORBIDDEN
+
+
+async def test_rule2_unavailable_carries_diagnostics_but_keeps_user_message() -> None:
+    """诊断信息进 ``extra``，面向用户的文案**一字不改**；内网地址**只落日志**。
+
+    本次「所有工具都报权限服务暂不可用」的故障里，用户侧文案无法区分
+    「BFF 少路由(404)」「端口写错(ConnectError)」「密钥不匹配(401)」，
+    排障只能靠猜——因此 cause / reason 必须进 extra。但 upstream（BFF 内网 URL）
+    **不得**进 extra / payload（信息泄露），只能进日志（见下一条回归用例
+    ``test_rule2_unavailable_403_body_must_not_leak_internal_url``）。
+    """
+    resolver = FakeResolver(
+        unavailable_exc=PermissionUnavailable(
+            "权限源返回非 2xx",
+            1001,
+            "HTTP 404",
+            "http://mis-admin-bff:8081/internal/permissions",
+            "Not Found",
+        )
+    )
+    guard = SkillAclGuard(resolver, None, make_settings())
+
+    with pytest.raises(SkillAclDenied) as exc:
+        await guard.assert_can_run({"misUserId": "1001"}, "member.profile")
+
+    assert exc.value.code == CODE_ACL_UNAVAILABLE
+    # 用户可见文案保持稳定（前端可能已按此文案做过兜底提示）
+    assert exc.value.message == "权限服务暂不可用，已按最小权限原则拒绝执行"
+    # 运维可见的非敏感诊断落在 extra 里
+    assert exc.value.extra["cause"] == "HTTP 404"
+    assert exc.value.extra["reason"] == "权限源返回非 2xx"
+    # 关键：内网地址绝不进 extra / payload（信息泄露红线）
+    assert "upstream" not in exc.value.extra
+    assert "mis-admin-bff" not in json.dumps(exc.value.to_payload(), ensure_ascii=False)
+    # 不得把内网地址泄露到用户文案
+    assert "mis-admin-bff" not in exc.value.message
+
+
+async def test_rule2_unavailable_403_body_must_not_leak_internal_url() -> None:
+    """回归（信息泄露红线）：回源 404 / ConnectError 时，403 响应体不得含内网地址。
+
+    复现 QA 报告的现象：模拟回源失败后，拒绝响应的 ``data`` / HTTP body 曾经
+    含 ``"upstream":"http://mis-admin-bff:8081/internal/permissions"``，暴露内网拓扑。
+    本用例断言：无论 ``cause`` 是 HTTP 404 还是 ConnectError，
+    ``SkillAclDenied.to_payload()["data"]`` 与等价的 403 HTTP 响应体都**不含**
+    任何内网 URL / host（mis-admin-bff、端口、127.0.0.1、host.docker.internal 等），
+    且 ``upstream`` 字段本身不存在。fail-closed 语义与用户文案一字不变。
+    """
+    from fastapi import HTTPException, status
+
+    scenarios: list[PermissionUnavailable] = [
+        PermissionUnavailable(
+            "权限源返回非 2xx",
+            1001,
+            "HTTP 404",
+            "http://mis-admin-bff:8081/internal/permissions",
+            "Not Found",
+        ),
+        PermissionUnavailable(
+            "连接失败",
+            1001,
+            "ConnectError",
+            "http://mis-admin-bff:8081/internal/permissions",
+            "name resolution failed",
+        ),
+        PermissionUnavailable(
+            "连接失败",
+            1001,
+            "ConnectError",
+            "http://127.0.0.1:8081/internal/permissions",
+            "connection refused",
+        ),
+    ]
+
+    for scenario in scenarios:
+        resolver = FakeResolver(unavailable_exc=scenario)
+        guard = SkillAclGuard(resolver, None, make_settings())
+
+        with pytest.raises(SkillAclDenied) as exc:
+            await guard.assert_can_run({"misUserId": "1001"}, "member.profile")
+        denied = exc.value
+
+        # 1) 结构化载体里压根不该有 upstream 字段
+        assert "upstream" not in denied.extra, "upstream 不得进入 extra"
+
+        # 2) to_payload() 的 data 不含内网 URL / host
+        payload: dict[str, Any] = denied.to_payload()
+        data: dict[str, Any] = payload["data"]
+        assert "upstream" not in data
+        payload_json: str = json.dumps(payload, ensure_ascii=False)
+        assert "mis-admin-bff" not in payload_json
+        assert "127.0.0.1" not in payload_json
+        assert "host.docker.internal" not in payload_json
+        assert ":8081" not in payload_json
+
+        # 3) 模拟 403 HTTP 响应体（与 src/api/deps._denied_to_http 等价：detail=payload）
+        http = HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=payload)
+        body: str = json.dumps(http.detail, ensure_ascii=False)
+        assert "upstream" not in body
+        assert "mis-admin-bff" not in body
+        assert "127.0.0.1" not in body
+        assert "host.docker.internal" not in body
+        assert ":8081" not in body
+
+        # 4) fail-closed 语义与用户文案一字不变
+        assert denied.code == CODE_ACL_UNAVAILABLE
+        assert denied.message == "权限服务暂不可用，已按最小权限原则拒绝执行"
+        # 5) 非敏感诊断仍可用（cause 在 payload，upstream 仅在日志）
+        assert denied.extra.get("cause") in ("HTTP 404", "ConnectError")
 
 
 # ---------------------------------------------------------------------------

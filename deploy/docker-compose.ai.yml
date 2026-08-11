@@ -169,6 +169,21 @@ services:
       GATEWAY_HOST: ai-platform-gateway
       GATEWAY_PORT: 3100
       CONFIG_BASE_PATH: /app/configs
+      # ===== mis-admin-bff 对接 / T03 fail-closed 权限闸门 =====
+      # 权限码回源地址。⚠ 端口 8081 是 BFF 自身端口；8080 是 mis-gateway，
+      # 且网关只把 /api/v1/** 路由给 BFF，/internal/** 经网关必然 404。
+      # 本栈内没有 mis-admin-bff 容器（Java 服务跑在宿主机），故走 host-gateway。
+      # 若把 BFF 也纳入本 compose，改成 http://mis-admin-bff:8081 即可。
+      MIS_ADMIN_BFF_BASE_URL: ${MIS_ADMIN_BFF_BASE_URL:-http://host.docker.internal:8081}
+      # 必须与 BFF 的 mis.ai-platform.service-token 同值；不一致 → /internal/** 401
+      # → 权限码回源失败 → 所有 skill/MCP 被拒（现象：「权限服务暂不可用」）。
+      AI_PLATFORM_BFF_SHARED_SECRET: ${AI_PLATFORM_BFF_SHARED_SECRET:-change-me-in-prod}
+      MIS_ACL_PERMISSIONS_PATH: ${MIS_ACL_PERMISSIONS_PATH:-/internal/permissions}
+      # 生产必须 true；禁止用 false「绕过」权限闸门（那是权限绕过漏洞，不是修复）。
+      MIS_ACL_ENABLED: "true"
+    extra_hosts:
+      # 让容器内能以 host.docker.internal 访问宿主机上的 mis-admin-bff（Linux 需显式声明）
+      - "host.docker.internal:host-gateway"
     volumes:
       # 开发期热挂载 configs；镜像内已 COPY 一份，卷优先覆盖
       - ../agent/ai-platform/configs:/app/configs:ro

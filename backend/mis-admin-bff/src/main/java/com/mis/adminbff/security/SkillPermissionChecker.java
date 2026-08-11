@@ -124,6 +124,29 @@ public class SkillPermissionChecker {
         }
     }
 
+    /**
+     * 取指定用户的技能权限码集合（供 {@code /internal/permissions} 内部端点复用）。
+     *
+     * <p><b>为什么复用本类而不是 {@code UserPermissionLoader}</b>：后者的缓存键是
+     * {@code tenantId+appId+userId} 三元组，而 ai-platform 的权限闸门只有 userId
+     * （工具执行链路拿不到 tenantId/appId）。本类的 {@code mis:acl:skillperm:{userId}}
+     * 正是为这个场景设计的、且与 Python 侧 {@code MisPermissionResolver.cache_key}
+     * <b>逐字节同名</b>——两语言共享同一份缓存，才不会出现「Java 判有权、Python 判无权」。
+     *
+     * <p>异常语义原样透传，<b>刻意不在这里 catch</b>：
+     * {@code AgentOpsErrorCodes.ACL_UNAVAILABLE}（源不可用）与
+     * {@code SKILL_FORBIDDEN}（用户不存在）必须让调用方看见并各自 fail-closed；
+     * 若在此吞成空集合，Python 侧会把它当成「查到了，该用户没有任何码」并缓存 300s，
+     * 把一次 mis-iam 抖动固化成五分钟的静默拒绝——比直接报错难查得多。
+     *
+     * @param userId MIS userId（非 employeeId）
+     * @return 权限码集合，可能为空集（= 该用户确实没有任何码）
+     * @throws BusinessException 权限源不可用 / 用户不存在
+     */
+    public Set<String> resolvePermissionCodes(Long userId) {
+        return loadPermissions(userId);
+    }
+
     private boolean isSuperadminBypass(LoginUser user) {
         if (superadminBypassRoleCodes.isEmpty() || user == null) {
             return false;
@@ -163,8 +186,27 @@ public class SkillPermissionChecker {
         }
     }
 
+    /**
+     * 读缓存；未命中或缓存不可用一律返回 {@code null}（= 视为未命中，继续回源）。
+     *
+     * <p><b>Redis 故障必须降级为回源，不能让异常逃逸</b>：缓存只是加速层，
+     * 它挂了不等于权限源挂了。若在此直接抛 {@code RedisConnectionFailureException}，
+     * 会一路冒泡到全局处理器落成 {@code HTTP 500 / code=50000}，
+     * ai-platform 侧据此判定「权限源不可用」并 fail-closed 拒绝<b>所有</b>技能执行——
+     * 明明 mis-iam 完全健康，只是 Redis 抖了一下。
+     *
+     * <p>这也是与两处既有约定的对齐：同模块 {@code UserPermissionLoader.readRedis}
+     * 早已「读缓存失败 ⇒ 降级为回源」；Python 侧 TC-13 更是明确断言
+     * 「Redis 挂但 BFF 可达 ⇒ 回源成功、正常放行」。
+     */
     private Set<String> readCache(String key) {
-        String json = redisTemplate.opsForValue().get(key);
+        String json;
+        try {
+            json = redisTemplate.opsForValue().get(key);
+        } catch (Exception ex) {
+            log.warn("读取技能权限缓存失败，降级为回源: key={}", key, ex);
+            return null;
+        }
         if (json == null || json.isBlank()) {
             return null;
         }
@@ -177,11 +219,19 @@ public class SkillPermissionChecker {
         }
     }
 
+    /**
+     * 写缓存；<b>失败只告警，绝不影响本次判定</b>（真值已从权限源取到）。
+     *
+     * <p>同 {@link #readCache}：Redis 写失败若逃逸成 500，会把「缓存挂了」
+     * 误报成「权限源挂了」，让健康的权限链路整体 fail-closed。
+     */
     private void writeCache(String key, Set<String> perms) {
         try {
             redisTemplate.opsForValue().set(key, objectMapper.writeValueAsString(perms), CACHE_TTL);
         } catch (JsonProcessingException ex) {
             log.warn("序列化技能权限缓存失败: key={}", key, ex);
+        } catch (Exception ex) {
+            log.warn("写入技能权限缓存失败，本次判定不受影响: key={}", key, ex);
         }
     }
 

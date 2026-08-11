@@ -259,12 +259,29 @@ class SkillAclGuard:
             )
         except PermissionUnavailable as exc:
             # 规则 2：源不可达 ⇒ 拒绝，禁止 fallback 到允许。
+            # 诊断信息分两份：
+            #   * 进 extra / payload 的（reason / cause）：非敏感，供前端分支与运维告警；
+            #   * upstream（BFF 内网 URL）**只落日志**——绝不可进 extra，否则会经
+            #     ``to_payload()["data"]`` 透传到 403 响应体 / ``ToolResult.metadata``，
+            #     暴露内网拓扑（mis-admin-bff:8081、127.0.0.1、host.docker.internal 等）。
+            #     这是本文件的一条硬不变量：内网地址只进日志，不进任何出向载荷。
+            detail: dict[str, Any] = {"reason": exc.reason}
+            if exc.cause:
+                detail["cause"] = exc.cause
+            logger.error(
+                "ACL 权限源不可用，已 fail-closed 拒绝",
+                reason=exc.reason,
+                cause=exc.cause,
+                upstream=exc.url or None,
+                detail=exc.detail or None,
+                mis_user_id=mis_user_id,
+            )
             raise SkillAclDenied(
                 code=CODE_ACL_UNAVAILABLE,
                 skill_id="",
                 required_permission="",
                 message="权限服务暂不可用，已按最小权限原则拒绝执行",
-                extra={"reason": exc.reason},
+                extra=detail,
             ) from exc
 
         self._store_codes(ctx, codes)

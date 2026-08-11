@@ -241,8 +241,15 @@ class Settings(BaseSettings):
 
     # ===== AI Skill / FormFill 反向信任（决策 3：平台侧委托调用 MIS 引擎）=====
     # mis-admin-bff 的 AI Skill 接口地址（AiProxyController）。
-    MIS_ADMIN_BFF_BASE_URL: str = "http://mis-admin-bff:8080"
+    # ⚠ 端口是 8081 不是 8080：8080 是 mis-gateway，且网关只把 /api/v1/** 路由给 BFF，
+    #   /internal/** 经网关必然 404。这里必须直连 BFF 自身端口
+    #   （backend/mis-admin-bff/src/main/resources/application.yml → server.port: 8081）。
+    #   本默认值只在「BFF 与本服务同处一个 docker network 且服务名为 mis-admin-bff」时可用；
+    #   其余部署形态一律用环境变量显式覆盖成实际可达地址（BFF 跑宿主机时用 http://<宿主机IP>:8081）。
+    MIS_ADMIN_BFF_BASE_URL: str = "http://mis-admin-bff:8081"
     # 平台 ↔ BFF 共享密钥，作为 X-Platform-Token 标识「这是 ai-platform 自身调用」。
+    # ⚠ 必须与 BFF 的 mis.ai-platform.service-token 一致，否则 /internal/** 闸门 401，
+    #   表现为「权限服务暂不可用」——与 BFF 宕机无法区分，务必在部署 env 里配对下发。
     AI_PLATFORM_BFF_SHARED_SECRET: str = ""
     # 上游 MIS RS256 JWT 的回放头名（与 BFF ReverseTrustInterceptor 对齐）。
     MIS_JWT_REPLAY_HEADER: str = "X-Mis-Upstream-Jwt"
@@ -263,7 +270,10 @@ class Settings(BaseSettings):
     # ⚠ 刻意不带 REDIS_KEY_PREFIX（aip:），否则与 Java 侧缓存分裂。
     MIS_ACL_CACHE_KEY_PREFIX: str = "mis:acl:skillperm:"
     # 缓存 TTL（秒）；与 impl-plan.md §6.2 / §8.3 及 Java 侧一致。
-    MIS_ACL_CACHE_TTL: int = 300
+    # ⚠ 必须等于 Java 侧 SkillPermissionChecker.CACHE_TTL（60s）：两语言共享同一
+    #   mis:acl:skillperm:{userId}，TTL 不一致会让缓存寿命取决于「谁先写」，行为不确定。
+    #   取更短的 60s，mis-iam 抖动恢复后能更快自愈。
+    MIS_ACL_CACHE_TTL: int = 60
     # 回源 BFF 的 HTTP 超时（秒）；超时 → PermissionUnavailable → fail-closed 拒绝。
     MIS_ACL_HTTP_TIMEOUT: float = 3.0
     # 回源路径（挂在 MIS_ADMIN_BFF_BASE_URL 之下）。

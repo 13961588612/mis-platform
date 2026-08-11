@@ -23,7 +23,6 @@ import org.springframework.stereotype.Component;
 import org.springframework.web.servlet.HandlerInterceptor;
 
 import java.io.IOException;
-import java.nio.charset.StandardCharsets;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Set;
@@ -96,7 +95,7 @@ public class ReverseTrustInterceptor implements HandlerInterceptor {
             log.warn("反向信任未配置 service-token，拒绝调用 path={}", request.getRequestURI());
             return writeUnauthorized(response, "反向信任服务凭证未配置");
         }
-        if (!constantTimeEquals(platformToken, expectedToken)) {
+        if (!ServiceTrustSupport.constantTimeEquals(platformToken, expectedToken)) {
             log.warn("反向信任服务凭证不匹配 path={}", request.getRequestURI());
             return writeUnauthorized(response, "无效的反向调用平台凭证");
         }
@@ -104,7 +103,7 @@ public class ReverseTrustInterceptor implements HandlerInterceptor {
         // 因子三：校验来源网段（若配置）
         String trustedNetwork = trustConfig.getTrustedNetwork();
         if (trustedNetwork != null && !trustedNetwork.isBlank()
-                && !isInTrustedNetwork(request.getRemoteAddr(), trustedNetwork)) {
+                && !ServiceTrustSupport.isInTrustedNetwork(request.getRemoteAddr(), trustedNetwork)) {
             log.warn("反向调用来源不在信任域 ip={} path={}", request.getRemoteAddr(), request.getRequestURI());
             return writeUnauthorized(response, "调用来源不在信任域");
         }
@@ -233,58 +232,8 @@ public class ReverseTrustInterceptor implements HandlerInterceptor {
     }
 
     // ===== 工具 =====
-
-    /** 常量时间比较，避免共享密钥被时序侧信道攻击。 */
-    private static boolean constantTimeEquals(String a, String b) {
-        if (a == null || b == null) {
-            return false;
-        }
-        byte[] ab = a.getBytes(StandardCharsets.UTF_8);
-        byte[] bb = b.getBytes(StandardCharsets.UTF_8);
-        int diff = ab.length ^ bb.length;
-        int min = Math.min(ab.length, bb.length);
-        for (int i = 0; i < min; i++) {
-            diff |= (ab[i] ^ bb[i]);
-        }
-        return diff == 0;
-    }
-
-    /** IPv4 CIDR 归属判断（仅支持 IPv4；IPv6 / 非法输入返回 false）。 */
-    private static boolean isInTrustedNetwork(String ip, String cidr) {
-        try {
-            String[] parts = cidr.split("/", 2);
-            int maskBits = Integer.parseInt(parts[1].trim());
-            long ipLong = ipToLong(ip);
-            long netLong = ipToLong(parts[0].trim());
-            if (ipLong < 0 || netLong < 0 || maskBits < 0 || maskBits > 32) {
-                return false;
-            }
-            long mask = (maskBits == 0) ? 0L : (0xFFFFFFFFL << (32 - maskBits)) & 0xFFFFFFFFL;
-            return (ipLong & mask) == (netLong & mask);
-        } catch (Exception ex) {
-            log.warn("信任域配置非法 cidr={}: {}", cidr, ex.getMessage());
-            return false;
-        }
-    }
-
-    private static long ipToLong(String ip) {
-        if (ip == null || ip.contains(":")) {
-            return -1; // 仅支持 IPv4
-        }
-        String[] octets = ip.trim().split("\\.");
-        if (octets.length != 4) {
-            return -1;
-        }
-        long result = 0;
-        for (String octet : octets) {
-            int v = Integer.parseInt(octet);
-            if (v < 0 || v > 255) {
-                return -1;
-            }
-            result = (result << 8) | v;
-        }
-        return result & 0xFFFFFFFFL;
-    }
+    // 常量时间比较与 IPv4 CIDR 判断已抽到 ServiceTrustSupport，
+    // 与 InternalServiceTrustInterceptor 共用同一份实现（防两处漂移）。
 
     /** 写回 HTTP 401 + Result 形态 JSON，并终止请求。 */
     private static boolean writeUnauthorized(HttpServletResponse response, String message) {
