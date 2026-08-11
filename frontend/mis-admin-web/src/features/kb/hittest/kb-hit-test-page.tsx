@@ -258,8 +258,8 @@ export function KbHitTestPage() {
 
       {/* ------------------------------------------------------ 调参面板 */}
       <div className="space-y-4 rounded-lg border bg-card p-4">
-        <div className="grid grid-cols-1 gap-3 lg:grid-cols-[minmax(0,1fr)_15rem_15rem_18rem]">
-          <div className="min-w-0">
+        <div className="grid grid-cols-1 gap-3 lg:grid-cols-12">
+          <div className="min-w-0 lg:col-span-6">
             <label className={fieldLabel}>知识库（单选）</label>
             <KbLibraryCombobox
               value={libraryId}
@@ -267,7 +267,7 @@ export function KbHitTestPage() {
               activePath="/kb/hit-test"
             />
           </div>
-          <div className="min-w-0">
+          <div className="min-w-0 lg:col-span-2">
             <label className={fieldLabel}>topK（召回条数）</label>
             <Input
               value={form.topK}
@@ -275,7 +275,7 @@ export function KbHitTestPage() {
               placeholder="留空用库设置"
             />
           </div>
-          <div className="min-w-0">
+          <div className="min-w-0 lg:col-span-2">
             <label className={fieldLabel}>相似度阈值</label>
             <Input
               value={form.threshold}
@@ -283,7 +283,7 @@ export function KbHitTestPage() {
               placeholder="0 ~ 1，留空用库设置"
             />
           </div>
-          <div className="min-w-0">
+          <div className="min-w-0 lg:col-span-2">
             <label className={fieldLabel}>检索方式</label>
             <select
               className={selectClass}
@@ -301,17 +301,16 @@ export function KbHitTestPage() {
               ))}
             </select>
           </div>
+          {isHybrid ? (
+            <div className="rounded-md border border-dashed bg-muted/30 p-3 lg:col-span-6">
+              <label className={fieldLabel}>向量 / 关键字权重</label>
+              <KbWeightSlider
+                value={form.vectorSimilarityWeight}
+                onChange={(v) => setForm((f) => ({ ...f, vectorSimilarityWeight: v }))}
+              />
+            </div>
+          ) : null}
         </div>
-
-        {isHybrid ? (
-          <div className="rounded-md border border-dashed bg-muted/30 p-3 sm:max-w-md">
-            <label className={fieldLabel}>向量 / 关键字权重</label>
-            <KbWeightSlider
-              value={form.vectorSimilarityWeight}
-              onChange={(v) => setForm((f) => ({ ...f, vectorSimilarityWeight: v }))}
-            />
-          </div>
-        ) : null}
 
         <label className="flex items-center gap-2 text-sm">
           <input
