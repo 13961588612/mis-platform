@@ -32,8 +32,10 @@ import type {
   CoordinationSaveResult,
   DispatchTrace,
   McpCallPayload,
+  McpOfflineCleanupResult,
   McpServer,
   McpTool,
+  McpToolPermissions,
   MonitorOverview,
   RouteLog,
   RouteStats,
@@ -449,6 +451,35 @@ export async function discoverMcpTools(name: string): Promise<McpTool[]> {
 export async function callMcpTool(name: string, payload: McpCallPayload): Promise<unknown> {
   const res = await api.post<ApiResult<unknown>>(`/agent-ops/mcp/servers/${seg(name)}/call`, payload);
   return unwrap(res, '调用 MCP 工具失败');
+}
+
+// ------------------------------------------------------------------ MCP 工具授权（方案 B′）
+
+/**
+ * BFF 聚合端点：单个 MCP Server 的工具授权视图。
+ *
+ * <p>三路数据（ai-platform live 工具 × MCP Skill 集合 × IAM 角色翻转）在 BFF 拼好，
+ * 前端一次请求拿齐 {@code {server, tools[], offline_skills[]}}。页面不并发打三个接口。
+ */
+export async function listMcpToolPermissions(server: string): Promise<McpToolPermissions> {
+  const res = await api.get<ApiResult<McpToolPermissions>>('/agent-ops/mcp/tools', {
+    params: cleanParams({ server }),
+  });
+  return unwrap(res, '获取 MCP 工具授权失败');
+}
+
+/**
+ * 清理已下线 MCP 工具（破坏性，调用点必须二次确认）。
+ *
+ * <p>BFF 三步处置：ai-platform 注销 Skill → 删 sys_menu → 回收 sys_role_menu。
+ * 返回 `{skill_id, menu_removed, roles_updated}`。
+ */
+export async function cleanupOfflineMcpSkill(skillId: string): Promise<McpOfflineCleanupResult> {
+  const res = await api.post<ApiResult<McpOfflineCleanupResult>>(
+    '/agent-ops/mcp/tools/cleanup-offline',
+    { skill_id: skillId },
+  );
+  return unwrap(res, '清理下线工具失败');
 }
 
 // ------------------------------------------------------------------ Worker Catalog（§4.3 #43–#44）

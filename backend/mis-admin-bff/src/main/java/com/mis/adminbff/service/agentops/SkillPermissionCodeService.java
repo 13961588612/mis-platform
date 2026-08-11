@@ -113,6 +113,50 @@ public class SkillPermissionCodeService {
     }
 
     /**
+     * 查找技能执行码对应的 {@code sys_menu.id}，<b>不创建</b>。
+     *
+     * <p>与 {@link #ensureCode} 的区别只在「查不到时」：本方法返回 {@code null}，
+     * 绝不补建。供清理已下线 MCP 工具使用 —— 清理时若该码从未被建过菜单，
+     * 应当如实报告「没有菜单可删」，而不是顺手把它建出来再删掉。
+     *
+     * @param skillId 技能 ID
+     * @return 命中菜单 ID；未注册返回 {@code null}
+     */
+    public Long findMenuId(String skillId) {
+        if (skillId == null || skillId.isBlank()) {
+            return null;
+        }
+        String permission = SkillGrantVO.permissionCodeOf(skillId.trim());
+        Long cached = codeToMenuId.get(permission);
+        if (cached != null) {
+            return cached;
+        }
+        Long existing = findMenuIdByPermission(permission);
+        if (existing != null) {
+            codeToMenuId.put(permission, existing);
+        }
+        return existing;
+    }
+
+    /**
+     * 使技能执行码的 {@code permission → menuId} 缓存失效。
+     *
+     * <p>清理已下线 MCP 工具时，若执行码对应的 {@code sys_menu} 被删除，
+     * 必须把缓存里的映射一并清掉 —— 否则该工具将来重新 discover 时
+     * {@link #ensureCode} 会命中这条指向已删菜单的陈旧映射，授权写进
+     * {@code sys_role_menu} 后查无此行、静默失效且不报错。
+     *
+     * @param skillId 技能 ID
+     */
+    public void evictCode(String skillId) {
+        if (skillId == null || skillId.isBlank()) {
+            return;
+        }
+        String permission = SkillGrantVO.permissionCodeOf(skillId.trim());
+        codeToMenuId.remove(permission);
+    }
+
+    /**
      * 批量确保，返回 {@code skillId → menuId}。
      *
      * <p>逐个调用 {@link #ensureCode}，但<b>只拉一次菜单树</b>由缓存承担 ——

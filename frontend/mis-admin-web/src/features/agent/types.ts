@@ -403,6 +403,54 @@ export interface McpCallPayload {
   arguments: Record<string, unknown>;
 }
 
+// ------------------------------------------------------------------ MCP 工具授权（方案 B′）
+
+/**
+ * MCP 工具授权行（BFF `GET /agent-ops/mcp/tools` 聚合产物）。
+ *
+ * <p>{@code skill_id} 由 BFF 按 {@code mcp-{server}-{tool}} 拼接（与 ai-platform
+ * 运行时判别名逐字节一致），前端**只展示、不拼接、不反解**。{@code permission_code}
+ * 恒为 {@code ai:skill:{skill_id}:run}，由后端回传，前端不自己拼。
+ */
+export interface McpToolPermission {
+  /** 工具名（ai-platform live 清单原始名，可含点号如 `profile.query`）。 */
+  name: string;
+  description: string;
+  /** 判别名 `mcp-{server}-{tool}`（保存授权时作为 skill_id 传给 BFF）。 */
+  skill_id: string;
+  permission_code: string;
+  /** 是否已在 ai-platform 注册成 Skill；false 时不可授权（先发现再授权）。 */
+  discovered: boolean;
+  /** 已持有该执行码的角色 ID 列表。 */
+  role_ids: number[];
+}
+
+/** 已下线 MCP 工具（曾 discover 但 live 清单已无，可清理）。 */
+export interface McpOfflineSkill {
+  skill_id: string;
+  /** 展示用工具名（skill_id 去掉 `mcp-{server}-` 前缀后的剩余段）。 */
+  tool: string;
+  permission_code: string;
+  /** 当前仍持有该码的角色 ID 列表（清理时会回收）。 */
+  role_ids: number[];
+}
+
+/** 单个 MCP Server 的工具授权聚合视图。 */
+export interface McpToolPermissions {
+  server: string;
+  tools: McpToolPermission[];
+  offline_skills: McpOfflineSkill[];
+}
+
+/** 清理已下线工具的处置结果。 */
+export interface McpOfflineCleanupResult {
+  skill_id: string;
+  /** sys_menu 行是否被删除（false = 该码从未建过菜单）。 */
+  menu_removed: boolean;
+  /** 被回收角色菜单关联的角色 ID 列表。 */
+  roles_updated: number[];
+}
+
 // ------------------------------------------------------------------ 调度观测
 
 /**

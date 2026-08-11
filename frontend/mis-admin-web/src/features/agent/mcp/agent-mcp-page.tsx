@@ -48,6 +48,7 @@ import {
 import { AgentPageShell } from '../components/agent-page-shell';
 import { AgentConfirmDialog } from '../components/agent-confirm-dialog';
 import { AgentMcpToolsDialog } from './agent-mcp-tools-dialog';
+import { AgentMcpPermissionPanel } from './agent-mcp-permission-panel';
 import {
   connectMcpServer,
   createMcpServer,
@@ -59,6 +60,7 @@ import {
 } from '../api/agent-ops-api';
 import { agentErrorMessage } from '../types';
 import type { McpServer } from '../types';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 
 const selectClass =
   'h-9 w-full rounded-md border border-input bg-card px-[0.7rem] text-sm text-foreground shadow-none';
@@ -433,233 +435,246 @@ export function AgentMcpPage() {
       emptyText="尚未接入任何 MCP Server"
       emptyHint="点击右上角「新增 Server」登记第一个外部工具服务，创建后需手动连接并发现工具。"
     >
-      <div className="flex min-h-0 flex-1 flex-col gap-3">
-        <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-          <StatCard label="Server 总数" value={servers.length} icon={ServerCog} />
-          <StatCard
-            label="探测正常"
-            value={healthLoaded ? healthyCount : '-'}
-            icon={Activity}
-          />
-          <StatCard
-            label="探测异常"
-            value={healthLoaded ? unhealthyCount : '-'}
-            icon={Zap}
-          />
-          <StatCard label="自动连接" value={autoConnectCount} icon={Link2} />
-        </div>
+      <Tabs defaultValue="servers" className="flex min-h-0 flex-1 flex-col">
+        <TabsList className="w-fit">
+          <TabsTrigger value="servers">Server 管理</TabsTrigger>
+          <TabsTrigger value="permissions">工具授权</TabsTrigger>
+        </TabsList>
 
-        <div className="flex gap-2 rounded-md border border-info/30 bg-info/5 p-3 text-xs text-muted-foreground">
-          <Info className="mt-[0.1rem] h-3.5 w-3.5 shrink-0 text-info" />
-          <p className="leading-relaxed">
-            「实时探测」是本次打开页面时的探活结果：探测异常说明链路已断，
-            此时 Agent 调用会超时而非快速失败，建议先「断开」再「连接」以刷新链路；
-            「自动连接」表示该 Server 在注册表中配置为随系统启动自动拉起。
-          </p>
-        </div>
+        <TabsContent value="servers" className="flex min-h-0 flex-1 flex-col">
+          <div className="flex min-h-0 flex-1 flex-col gap-3">
+            <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+              <StatCard label="Server 总数" value={servers.length} icon={ServerCog} />
+              <StatCard
+                label="探测正常"
+                value={healthLoaded ? healthyCount : '-'}
+                icon={Activity}
+              />
+              <StatCard
+                label="探测异常"
+                value={healthLoaded ? unhealthyCount : '-'}
+                icon={Zap}
+              />
+              <StatCard label="自动连接" value={autoConnectCount} icon={Link2} />
+            </div>
 
-        <div className="flex flex-wrap items-end gap-2 rounded-lg border bg-card p-3">
-          <div className="min-w-[14rem] flex-1">
-            <label className="mb-[0.4rem] block text-xs text-muted-foreground">关键字</label>
-            <Input
-              placeholder="搜索 Server 名称 / Endpoint"
-              value={keyword}
-              onChange={(e) => setKeyword(e.target.value)}
-            />
-          </div>
-          <div className="w-44">
-            <label className="mb-[0.4rem] block text-xs text-muted-foreground">探测结果</label>
-            <select
-              className={selectClass}
-              value={probeFilter}
-              onChange={(e) => setProbeFilter(e.target.value as ProbeFilter)}
-            >
-              <option value="all">全部结果</option>
-              <option value="healthy">探测正常</option>
-              <option value="unhealthy">探测异常</option>
-              <option value="unknown">未探测</option>
-            </select>
-          </div>
-          <Button
-            size="sm"
-            variant="ghost"
-            onClick={() => {
-              setKeyword('');
-              setProbeFilter('all');
-            }}
-          >
-            重置
-          </Button>
-          <span className="ml-auto pb-1.5 text-xs text-muted-foreground">
-            共 {filtered.length} / {servers.length} 条
-          </span>
-        </div>
+            <div className="flex gap-2 rounded-md border border-info/30 bg-info/5 p-3 text-xs text-muted-foreground">
+              <Info className="mt-[0.1rem] h-3.5 w-3.5 shrink-0 text-info" />
+              <p className="leading-relaxed">
+                「实时探测」是本次打开页面时的探活结果：探测异常说明链路已断，
+                此时 Agent 调用会超时而非快速失败，建议先「断开」再「连接」以刷新链路；
+                「自动连接」表示该 Server 在注册表中配置为随系统启动自动拉起。
+              </p>
+            </div>
 
-        <div className="relative min-h-0 flex-1 overflow-auto rounded-lg border bg-table-surface">
-          {hasCustom ? (
-            <button
-              type="button"
-              onClick={reset}
-              className="absolute right-3 top-3 z-20 rounded-md bg-card px-2 py-0.5 text-xs text-muted-foreground shadow-sm hover:text-foreground"
-            >
-              重置列宽
-            </button>
-          ) : null}
-          <table
-            className="border-separate border-spacing-0 bg-table-surface text-left text-sm"
-            style={tableStyle}
-          >
-            <thead className="border-b-2 border-foreground/20 bg-table-header text-muted-foreground">
-              <tr>
-                {MCP_COLS.map((c, ci) => {
-                  const active = sortKey === c.key;
-                  return (
-                    <th
-                      key={c.key}
-                      style={{ width: widthOf(c.key) }}
-                      aria-sort={active ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'none'}
-                      className={cn(
-                        'relative overflow-hidden whitespace-nowrap px-0 py-0 font-bold',
-                        ci > 0 && 'border-l border-border/60',
-                        c.locked && 'text-right',
-                      )}
-                    >
-                      {c.locked ? (
-                        <span className="block px-3 py-2">{c.label}</span>
-                      ) : (
-                        <button
-                          type="button"
-                          onClick={() => toggleSort(c.key)}
+            <div className="flex flex-wrap items-end gap-2 rounded-lg border bg-card p-3">
+              <div className="min-w-[14rem] flex-1">
+                <label className="mb-[0.4rem] block text-xs text-muted-foreground">关键字</label>
+                <Input
+                  placeholder="搜索 Server 名称 / Endpoint"
+                  value={keyword}
+                  onChange={(e) => setKeyword(e.target.value)}
+                />
+              </div>
+              <div className="w-44">
+                <label className="mb-[0.4rem] block text-xs text-muted-foreground">探测结果</label>
+                <select
+                  className={selectClass}
+                  value={probeFilter}
+                  onChange={(e) => setProbeFilter(e.target.value as ProbeFilter)}
+                >
+                  <option value="all">全部结果</option>
+                  <option value="healthy">探测正常</option>
+                  <option value="unhealthy">探测异常</option>
+                  <option value="unknown">未探测</option>
+                </select>
+              </div>
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => {
+                  setKeyword('');
+                  setProbeFilter('all');
+                }}
+              >
+                重置
+              </Button>
+              <span className="ml-auto pb-1.5 text-xs text-muted-foreground">
+                共 {filtered.length} / {servers.length} 条
+              </span>
+            </div>
+
+            <div className="relative min-h-0 flex-1 overflow-auto rounded-lg border bg-table-surface">
+              {hasCustom ? (
+                <button
+                  type="button"
+                  onClick={reset}
+                  className="absolute right-3 top-3 z-20 rounded-md bg-card px-2 py-0.5 text-xs text-muted-foreground shadow-sm hover:text-foreground"
+                >
+                  重置列宽
+                </button>
+              ) : null}
+              <table
+                className="border-separate border-spacing-0 bg-table-surface text-left text-sm"
+                style={tableStyle}
+              >
+                <thead className="border-b-2 border-foreground/20 bg-table-header text-muted-foreground">
+                  <tr>
+                    {MCP_COLS.map((c, ci) => {
+                      const active = sortKey === c.key;
+                      return (
+                        <th
+                          key={c.key}
+                          style={{ width: widthOf(c.key) }}
+                          aria-sort={active ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'none'}
                           className={cn(
-                            'flex w-full items-center gap-1 px-3 py-2 pr-5 text-left font-bold',
-                            active
-                              ? 'text-foreground'
-                              : 'text-muted-foreground hover:text-foreground',
+                            'relative overflow-hidden whitespace-nowrap px-0 py-0 font-bold',
+                            ci > 0 && 'border-l border-border/60',
+                            c.locked && 'text-right',
                           )}
                         >
-                          {c.label}
-                          <SortIndicator state={active ? sortDir : 'none'} />
-                        </button>
-                      )}
-                      {!c.locked ? (
-                        <span
-                          role="separator"
-                          aria-label={`调整${c.label}列宽`}
-                          onMouseDown={(e) => startResize(e, c.key)}
-                          className="absolute right-0 top-0 z-10 h-full w-1.5 cursor-col-resize touch-none select-none hover:bg-primary/30"
-                        />
-                      ) : null}
-                    </th>
-                  );
-                })}
-              </tr>
-            </thead>
-            <tbody>
-              {sorted.length === 0 ? (
-                <tr>
-                  <td
-                    colSpan={MCP_COLS.length}
-                    className="px-3 py-10 text-center text-muted-foreground"
-                  >
-                    没有匹配当前筛选条件的 Server
-                  </td>
-                </tr>
-              ) : (
-                sorted.map((server) => {
-                  const probe = health[server.name];
-                  const rowBusy = busy === server.name;
-                  return (
-                    <tr
-                      key={server.name}
-                      className="border-b border-border/50 bg-table-row last:border-0 even:bg-table-stripe hover:bg-table-hover"
-                    >
-                      <td className="px-3 py-2">
-                        <div className="truncate font-medium" title={server.name}>
-                          {server.name}
-                        </div>
-                        <div className="text-xs text-muted-foreground">
-                          {server.auto_connect ? (
-                            <span className="text-success">自动连接</span>
+                          {c.locked ? (
+                            <span className="block px-3 py-2">{c.label}</span>
                           ) : (
-                            <span className="text-muted-foreground">手动连接</span>
-                          )}
-                        </div>
-                      </td>
-                      <td className="truncate px-3 py-2 text-xs text-muted-foreground">
-                        {TRANSPORT_LABEL[server.transport] ?? server.transport}
-                      </td>
-                      <td
-                        className="truncate px-3 py-2 font-mono text-xs text-muted-foreground"
-                        title={server.endpoint}
-                      >
-                        {server.endpoint || '-'}
-                      </td>
-                      <td className="px-3 py-2 text-xs">
-                        {probe === true ? (
-                          <span className="text-success">探测正常</span>
-                        ) : probe === false ? (
-                          <span className="text-destructive">探测异常</span>
-                        ) : (
-                          <span className="text-muted-foreground">未探测</span>
-                        )}
-                      </td>
-                      <td className="px-3 py-2 text-xs text-muted-foreground">
-                        {server.auto_connect ? '自动连接' : '手动连接'}
-                      </td>
-                      <td className="px-3 py-2">
-                        <div className="flex flex-wrap items-center justify-end gap-1">
-                          <button
-                            type="button"
-                            className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[0.8125rem] text-primary hover:bg-primary/10"
-                            onClick={() => openTools(server)}
-                          >
-                            <Wrench className="h-3 w-3" />
-                            工具
-                          </button>
-                          <PermissionGate permission="agent:mcp:manage">
                             <button
                               type="button"
-                              disabled={rowBusy}
-                              className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[0.8125rem] text-primary hover:bg-primary/10 disabled:opacity-50"
-                              onClick={() => void runDiscover(server)}
+                              onClick={() => toggleSort(c.key)}
+                              className={cn(
+                                'flex w-full items-center gap-1 px-3 py-2 pr-5 text-left font-bold',
+                                active
+                                  ? 'text-foreground'
+                                  : 'text-muted-foreground hover:text-foreground',
+                              )}
                             >
-                              <RefreshCw className={cn('h-3 w-3', rowBusy && 'animate-spin')} />
-                              发现工具
+                              {c.label}
+                              <SortIndicator state={active ? sortDir : 'none'} />
                             </button>
-                          </PermissionGate>
-                          <PermissionGate permission="agent:mcp:manage">
-                            {probe === true ? (
-                              <button
-                                type="button"
-                                disabled={rowBusy}
-                                className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[0.8125rem] text-warning hover:bg-warning/10 disabled:opacity-50"
-                                onClick={() => setPending(server)}
-                              >
-                                <Unlink className="h-3 w-3" />
-                                断开
-                              </button>
-                            ) : (
-                              <button
-                                type="button"
-                                disabled={rowBusy}
-                                className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[0.8125rem] text-success hover:bg-success/10 disabled:opacity-50"
-                                onClick={() => void runConnect(server)}
-                              >
-                                <Link2 className="h-3 w-3" />
-                                连接
-                              </button>
-                            )}
-                          </PermissionGate>
-                        </div>
+                          )}
+                          {!c.locked ? (
+                            <span
+                              role="separator"
+                              aria-label={`调整${c.label}列宽`}
+                              onMouseDown={(e) => startResize(e, c.key)}
+                              className="absolute right-0 top-0 z-10 h-full w-1.5 cursor-col-resize touch-none select-none hover:bg-primary/30"
+                            />
+                          ) : null}
+                        </th>
+                      );
+                    })}
+                  </tr>
+                </thead>
+                <tbody>
+                  {sorted.length === 0 ? (
+                    <tr>
+                      <td
+                        colSpan={MCP_COLS.length}
+                        className="px-3 py-10 text-center text-muted-foreground"
+                      >
+                        没有匹配当前筛选条件的 Server
                       </td>
                     </tr>
-                  );
-                })
-              )}
-            </tbody>
-          </table>
-        </div>
-      </div>
+                  ) : (
+                    sorted.map((server) => {
+                      const probe = health[server.name];
+                      const rowBusy = busy === server.name;
+                      return (
+                        <tr
+                          key={server.name}
+                          className="border-b border-border/50 bg-table-row last:border-0 even:bg-table-stripe hover:bg-table-hover"
+                        >
+                          <td className="px-3 py-2">
+                            <div className="truncate font-medium" title={server.name}>
+                              {server.name}
+                            </div>
+                            <div className="text-xs text-muted-foreground">
+                              {server.auto_connect ? (
+                                <span className="text-success">自动连接</span>
+                              ) : (
+                                <span className="text-muted-foreground">手动连接</span>
+                              )}
+                            </div>
+                          </td>
+                          <td className="truncate px-3 py-2 text-xs text-muted-foreground">
+                            {TRANSPORT_LABEL[server.transport] ?? server.transport}
+                          </td>
+                          <td
+                            className="truncate px-3 py-2 font-mono text-xs text-muted-foreground"
+                            title={server.endpoint}
+                          >
+                            {server.endpoint || '-'}
+                          </td>
+                          <td className="px-3 py-2 text-xs">
+                            {probe === true ? (
+                              <span className="text-success">探测正常</span>
+                            ) : probe === false ? (
+                              <span className="text-destructive">探测异常</span>
+                            ) : (
+                              <span className="text-muted-foreground">未探测</span>
+                            )}
+                          </td>
+                          <td className="px-3 py-2 text-xs text-muted-foreground">
+                            {server.auto_connect ? '自动连接' : '手动连接'}
+                          </td>
+                          <td className="px-3 py-2">
+                            <div className="flex flex-wrap items-center justify-end gap-1">
+                              <button
+                                type="button"
+                                className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[0.8125rem] text-primary hover:bg-primary/10"
+                                onClick={() => openTools(server)}
+                              >
+                                <Wrench className="h-3 w-3" />
+                                工具
+                              </button>
+                              <PermissionGate permission="agent:mcp:manage">
+                                <button
+                                  type="button"
+                                  disabled={rowBusy}
+                                  className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[0.8125rem] text-primary hover:bg-primary/10 disabled:opacity-50"
+                                  onClick={() => void runDiscover(server)}
+                                >
+                                  <RefreshCw className={cn('h-3 w-3', rowBusy && 'animate-spin')} />
+                                  发现工具
+                                </button>
+                              </PermissionGate>
+                              <PermissionGate permission="agent:mcp:manage">
+                                {probe === true ? (
+                                  <button
+                                    type="button"
+                                    disabled={rowBusy}
+                                    className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[0.8125rem] text-warning hover:bg-warning/10 disabled:opacity-50"
+                                    onClick={() => setPending(server)}
+                                  >
+                                    <Unlink className="h-3 w-3" />
+                                    断开
+                                  </button>
+                                ) : (
+                                  <button
+                                    type="button"
+                                    disabled={rowBusy}
+                                    className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[0.8125rem] text-success hover:bg-success/10 disabled:opacity-50"
+                                    onClick={() => void runConnect(server)}
+                                  >
+                                    <Link2 className="h-3 w-3" />
+                                    连接
+                                  </button>
+                                )}
+                              </PermissionGate>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </TabsContent>
+
+        <TabsContent value="permissions" className="flex min-h-0 flex-1 flex-col">
+          <AgentMcpPermissionPanel />
+        </TabsContent>
+      </Tabs>
 
       <McpServerFormDialog open={formOpen} onOpenChange={setFormOpen} onSaved={() => void load()} />
 
