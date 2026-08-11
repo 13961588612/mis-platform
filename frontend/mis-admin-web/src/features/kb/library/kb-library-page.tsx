@@ -26,6 +26,11 @@ import {
   listLibraries,
   updateLibrary,
 } from '../api/kb-api';
+import {
+  CategoryTreeCell,
+  flattenCategoryTree,
+  initialExpandedSet,
+} from '../category/kb-category-tree';
 import { useKbStore } from '../stores/use-kb-store';
 import type { KbCategory, KbLibrary, KbRagSettings } from '../types';
 import { KB_SECRECY_OPTIONS, formatTime } from '../types';
@@ -102,6 +107,8 @@ function toSettings(form: LibraryForm, base: KbRagSettings | null): KbRagSetting
  */
 export function KbLibraryPage() {
   const [categories, setCategories] = useState<KbCategory[]>([]);
+  /** 左侧分类树的展开节点集合；首次加载后由 initialExpandedSet 置为「全展开」。 */
+  const [expanded, setExpanded] = useState<Set<number>>(() => new Set<number>());
   const [categoryId, setCategoryId] = useState<number | null>(null);
   const [libraries, setLibraries] = useState<KbLibrary[]>([]);
   const [loading, setLoading] = useState(false);
@@ -146,7 +153,10 @@ export function KbLibraryPage() {
 
   const loadCategories = useCallback(async () => {
     try {
-      setCategories(await listCategories());
+      const list = await listCategories();
+      setCategories(list);
+      // 首次加载时全部展开；后续刷新保留用户已折叠的节点（与分类管理页口径一致）
+      setExpanded((prev) => (prev.size === 0 ? initialExpandedSet(list) : prev));
     } catch (e) {
       toast.error(e instanceof Error ? e.message : '加载分类失败');
     }
@@ -171,6 +181,81 @@ export function KbLibraryPage() {
   useEffect(() => {
     void loadLibraries(categoryId);
   }, [categoryId, loadLibraries]);
+
+  /* 左侧分类树：扁平数组 → 带 depth 的可见行（折叠节点的后代不产出） */
+  const categoryRows = useMemo(
+    () => flattenCategoryTree(categories, expanded),
+    [categories, expanded],
+  );
+  /** 拥有子节点的分类 id 集合——决定该行是否渲染展开/折叠 chevron。 */
+  const branchIds = useMemo(() => {
+    const set = new Set<number>();
+    for (const c of categories) {
+      if (c.parentId != null) set.add(c.parentId);
+    }
+    return set;
+  }, [categories]);
+
+  /** 展开/折叠单个节点；必须返回新的 Set 引用，否则 React 不会重渲染。 */
+  function toggleCategoryNode(id: number): void {
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  /**
+   * 选中分类并确保它在树上可见（沿途祖先全部展开）。
+   *
+   * <p>只用于**程序化**选中（如新建知识库后自动切到目标分类）——目标分类可能藏在
+   * 折叠子树里，直接 setCategoryId 会「右侧列表变了但左侧看不出选了谁」。
+   * 用户手动点击选中的节点本来就可见，无需 reveal。
+   */
+  function selectCategoryAndReveal(id: number): void {
+    setCategoryId(id);
+    setExpanded((prev) => {
+      const byId = new Map(categories.map((c) => [c.id, c] as const));
+      const next = new Set(prev);
+      const seen = new Set<number>([id]);
+      let changed = false;
+      let cur = byId.get(id)?.parentId ?? null;
+      // seen 兼作环保护：脏数据成环时不至于死循环
+      while (cur != null && byId.has(cur) && !seen.has(cur)) {
+        seen.add(cur);
+        if (!next.has(cur)) {
+          next.add(cur);
+          changed = true;
+        }
+        cur = byId.get(cur)?.parentId ?? null;
+      }
+      return changed ? next : prev;
+    });
+  }
+
+  /**
+   * 选中分类被折叠祖先藏起来时，返回「最近的可见祖先」id，否则 null。
+   *
+   * <p>用户折叠父节点后选中行会从树上消失，此时右侧仍在按这个看不见的分类过滤，
+   * 而「全部分类」也不高亮 —— 界面上没有任何线索。标记该祖先来兜底。
+   * 这里不自动展开：用户刚做的折叠动作不应被程序悄悄撤销。
+   */
+  const hiddenSelectionAncestorId = useMemo<number | null>(() => {
+    if (categoryId == null) return null;
+    const visible = new Set(categoryRows.map((r) => r.category.id));
+    if (visible.has(categoryId)) return null;
+    const byId = new Map(categories.map((c) => [c.id, c] as const));
+    if (!byId.has(categoryId)) return null; // 选中的分类已不存在，交给别处处理
+    const seen = new Set<number>([categoryId]);
+    let cur = byId.get(categoryId)?.parentId ?? null;
+    while (cur != null && !seen.has(cur)) {
+      seen.add(cur);
+      if (visible.has(cur)) return cur;
+      cur = byId.get(cur)?.parentId ?? null;
+    }
+    return null;
+  }, [categoryId, categoryRows, categories]);
 
   function openCreate() {
     setEditing(null);
@@ -226,8 +311,9 @@ export function KbLibraryPage() {
           settings: toSettings(form, null),
         });
         // 左侧分类筛选若与新建库不一致，切到目标分类；否则本页列表会「成功但看不见」
+        // reveal：目标分类可能藏在折叠子树里（抽屉下拉是全量扁平的，不受展开态约束）
         if (categoryId !== createdCategoryId) {
-          setCategoryId(createdCategoryId);
+          selectCategoryAndReveal(createdCategoryId);
         }
       }
       toast.success('已保存');
@@ -283,18 +369,68 @@ export function KbLibraryPage() {
           >
             全部分类
           </button>
-          {categories.map((c) => (
-            <button
-              key={c.id}
-              type="button"
-              className={`mb-0.5 w-full truncate rounded-md px-2 py-1.5 text-left text-sm ${
-                categoryId === c.id ? 'bg-primary/10 font-medium text-primary' : 'hover:bg-accent'
-              }`}
-              onClick={() => setCategoryId(c.id)}
+          {categoryRows.map(({ category, depth }) => (
+            <div
+              key={category.id}
+              role="button"
+              tabIndex={0}
+              aria-pressed={categoryId === category.id}
+              title={
+                category.id === hiddenSelectionAncestorId
+                  ? '当前筛选的分类在此折叠子树内，展开可见'
+                  : undefined
+              }
+              className={cn(
+                'mb-0.5 w-full cursor-pointer overflow-hidden rounded-md px-2 py-1.5 text-left text-sm',
+                categoryId === category.id
+                  ? 'bg-primary/10 font-medium text-primary'
+                  : 'hover:bg-accent',
+                category.id === hiddenSelectionAncestorId && 'ring-1 ring-inset ring-primary/40',
+              )}
+              // chevron 是行内的 <button>，点它只切换展开态，不应连带切换筛选分类。
+              // 这里用 closest('button') 而非 e.target !== e.currentTarget：点击的 target
+              // 可能是行内任意后代（名称 span、图标 svg），用 !== 会把「点名称选中」这种
+              // 合法操作也一并挡掉，整行几乎点不动。
+              onClick={(e) => {
+                if ((e.target as HTMLElement).closest('button') != null) return;
+                setCategoryId(category.id);
+              }}
+              // 键盘事件同样会从 chevron 冒泡上来：若不判定来源就 preventDefault，
+              // 会连 <button> 的原生激活（Enter 的 click、Space 的 keyup→click）一起取消，
+              // 导致「焦点在 chevron 按回车 → 不展开却切了筛选」。
+              // 这里可以用 !==（无需与上面对称）：keydown 的 target 恒为当前焦点元素，
+              // 非行容器即子按钮，不存在「点在文字上」这种中间态；且它对以后行内新增的
+              // 任何可交互子元素自动免疫。
+              onKeyDown={(e) => {
+                if (e.target !== e.currentTarget) return;
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault();
+                  setCategoryId(category.id);
+                }
+              }}
             >
-              {c.name}
-              {c.enabled === 0 ? <span className="ml-1 text-xs text-muted-foreground">(停用)</span> : null}
-            </button>
+              <CategoryTreeCell
+                category={category}
+                depth={depth}
+                expanded={expanded.has(category.id)}
+                hasChildren={branchIds.has(category.id)}
+                onToggle={() => toggleCategoryNode(category.id)}
+                manageable={false}
+                // 选中态颜色必须落在最内层：CategoryTreeCell 的名称 span 自带
+                // text-foreground，会盖掉行容器上的 text-primary
+                renderName={(c) => (
+                  <span className={cn(categoryId === c.id && 'font-medium text-primary')}>
+                    {c.name}
+                    {c.enabled === 0 ? (
+                      <span className="ml-1 text-xs text-muted-foreground">(停用)</span>
+                    ) : null}
+                    {c.id === hiddenSelectionAncestorId ? (
+                      <span className="ml-1 text-xs text-primary">· 含当前筛选</span>
+                    ) : null}
+                  </span>
+                )}
+              />
+            </div>
           ))}
         </aside>
 
