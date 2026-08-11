@@ -228,24 +228,40 @@ export function KbLibraryCombobox({
         ? '加载中…'
         : '请选择知识库';
 
+  const triggerTitle = selected
+    ? `${selected.categoryPath} / ${selected.library.name}（${secrecyLabel(selected.library.secrecy)}）#${selected.library.id}`
+    : triggerText;
+
   return (
-    <div ref={rootRef} className={cn('relative', className)} onKeyDown={onKeyDown}>
+    <div ref={rootRef} className={cn('relative w-full', className)} onKeyDown={onKeyDown}>
       <button
         type="button"
         role="combobox"
         aria-expanded={open}
         aria-haspopup="listbox"
+        title={triggerTitle}
         className={cn(
-          'flex h-9 w-full items-center gap-2 rounded-md border border-input bg-card px-[0.7rem] text-left text-sm shadow-none',
+          'flex h-9 w-full min-w-0 items-center gap-2 rounded-md border border-input bg-card px-[0.7rem] text-left text-sm shadow-none',
           'focus:outline-none focus:ring-2 focus:ring-ring/40',
           selected ? 'text-foreground' : 'text-muted-foreground',
         )}
         onClick={() => (open ? setOpen(false) : openPanel())}
       >
-        <span className="min-w-0 flex-1 truncate">{triggerText}</span>
         {selected ? (
-          <span className="shrink-0 truncate text-xs text-muted-foreground">
-            {selected.categoryPath} · #{selected.library.id}
+          <span className="min-w-0 flex-1 truncate">
+            <span className="text-muted-foreground">{selected.categoryPath}</span>
+            <span className="mx-1 text-muted-foreground">/</span>
+            <span className="font-medium text-foreground">{selected.library.name}</span>
+            <span className="text-muted-foreground">
+              （{secrecyLabel(selected.library.secrecy)}）
+            </span>
+          </span>
+        ) : (
+          <span className="min-w-0 flex-1 truncate">{triggerText}</span>
+        )}
+        {selected ? (
+          <span className="shrink-0 font-mono text-xs text-muted-foreground">
+            #{selected.library.id}
           </span>
         ) : null}
         {allowClear && selected ? (
@@ -326,25 +342,26 @@ export function KbLibraryCombobox({
                     )}
                     onMouseEnter={() => setActiveIndex(idx)}
                     onClick={() => pick(o)}
+                    title={`${o.categoryPath} / ${o.library.name}（${secrecyLabel(o.library.secrecy)}）#${o.library.id}`}
                   >
-                    <div className="flex items-baseline gap-1.5">
+                    <div className="flex min-w-0 items-baseline gap-1.5">
                       {/* 同名库：分类路径加粗置前，这是区分两个「制度库」的唯一线索 */}
                       <span
                         className={cn(
-                          'truncate text-xs',
+                          'min-w-0 flex-1 truncate text-xs',
                           o.duplicatedName
                             ? 'font-bold text-foreground'
                             : 'text-muted-foreground',
                         )}
                       >
                         {o.categoryPath}
+                        <span className="mx-1 text-muted-foreground">/</span>
+                        <span className="text-sm font-medium text-foreground">{o.library.name}</span>
+                        <span className="text-muted-foreground">
+                          （{secrecyLabel(o.library.secrecy)}）
+                        </span>
                       </span>
-                      <span className="text-muted-foreground">/</span>
-                      <span className="truncate font-medium">{o.library.name}</span>
-                      <span className="shrink-0 text-xs text-muted-foreground">
-                        （{secrecyLabel(o.library.secrecy)}）
-                      </span>
-                      <span className="ml-auto shrink-0 font-mono text-[0.6875rem] text-muted-foreground">
+                      <span className="shrink-0 font-mono text-[0.6875rem] text-muted-foreground">
                         #{o.library.id}
                       </span>
                     </div>

@@ -196,11 +196,11 @@ export function KbPermissionPage() {
         </AlertDescription>
       </Alert>
 
-      <div className="mb-3 flex flex-wrap items-center gap-2">
-        <span className="text-sm text-muted-foreground">知识库</span>
+      <div className="mb-3 flex items-center gap-2">
+        <span className="shrink-0 text-sm text-muted-foreground">知识库</span>
         {/* Q1：这里必须是可搜索组合框而非原生下拉——两个不同分类下的同名库在
             <select> 里长得一模一样，选错就是把机密库授权给错误的人。 */}
-        <div className="w-96">
+        <div className="min-w-0 flex-1">
           <KbLibraryCombobox
             value={libraryId}
             onChange={(id) => setLibraryId(id)}

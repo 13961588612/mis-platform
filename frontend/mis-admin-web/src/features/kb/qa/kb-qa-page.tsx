@@ -370,10 +370,10 @@ export function KbQaPage() {
 
         {/* 右侧：对话区 */}
         <div className="flex min-w-0 flex-1 flex-col overflow-hidden rounded-lg border bg-card">
-          <div className="flex flex-wrap items-center gap-2 border-b px-3 py-2">
-            <Sparkles className="h-4 w-4 text-primary" />
-            <span className="text-sm font-medium">检索范围</span>
-            <div className="w-64">
+          <div className="flex min-w-0 items-center gap-2 border-b px-3 py-2">
+            <Sparkles className="h-4 w-4 shrink-0 text-primary" />
+            <span className="shrink-0 text-sm font-medium">检索范围</span>
+            <div className="min-w-0 flex-1">
               <KbLibraryCombobox
                 value={libraryId}
                 onChange={(id) => setLibraryId(id)}

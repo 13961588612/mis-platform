@@ -22,16 +22,16 @@ export function KbDocumentPage() {
         breadcrumbs={buildAppBreadcrumbs({ app: 'kb', title: '文档' })}
       />
 
-      <div className="mb-3 flex flex-wrap items-center gap-2">
-        <span className="text-sm text-muted-foreground">知识库</span>
-        <div className="w-72">
+      <div className="mb-3 flex items-center gap-2">
+        <span className="shrink-0 text-sm text-muted-foreground">知识库</span>
+        <div className="min-w-0 flex-1">
           <KbLibraryCombobox
             value={libraryId}
             onChange={(id) => setLibraryId(id)}
             activePath="/kb/documents"
           />
         </div>
-        <span className="text-xs text-muted-foreground">
+        <span className="shrink-0 text-xs text-muted-foreground">
           单文件不超过 {formatSize(50 * 1024 * 1024)}
         </span>
       </div>
