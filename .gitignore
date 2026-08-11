@@ -44,3 +44,9 @@ venv/
 deploy/nacos/runtime/
 deploy/nacos/_last-boot.txt
 deploy/nacos/plugins/
+
+# 运行时日志目录（后台服务持续写入，物理清理需先停服务）
+/backend/logs/
+
+# Windows 保留名误建垃圾文件（0 字节，git 不可见即可）
+/nul
