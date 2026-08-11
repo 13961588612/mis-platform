@@ -159,8 +159,11 @@ public class RagSettingsService {
                 && (settings.scoreThreshold() < 0D || settings.scoreThreshold() > 1D)) {
             throw new KbBusinessException(KbResultCode.KB_RAG_SETTINGS_INVALID);
         }
+        // chunkTokenNum 有效区间 [256, 4096]（与 DocumentChunkConfig.MIN/MAX_TOKEN_NUM 同源，
+        // 设计 §3.2.2「常量唯一事实源」）；下限 256 起，低于 256 切片过碎直接拒绝
         if (settings.chunkTokenNum() != null
-                && (settings.chunkTokenNum() < 16 || settings.chunkTokenNum() > 4096)) {
+                && (settings.chunkTokenNum() < DocumentChunkConfig.MIN_TOKEN_NUM
+                    || settings.chunkTokenNum() > DocumentChunkConfig.MAX_TOKEN_NUM)) {
             throw new KbBusinessException(KbResultCode.KB_RAG_SETTINGS_INVALID);
         }
         if (settings.retrievalMethod() != null && !settings.retrievalMethod().isBlank()

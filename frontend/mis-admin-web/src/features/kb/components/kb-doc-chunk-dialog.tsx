@@ -69,8 +69,8 @@ export function KbDocChunkDialog({
   }, [chunkTokenNum]);
 
   const payloadError = useMemo<string | null>(() => {
-    if (tokenNum != null && (tokenNum < 16 || tokenNum > 4096)) {
-      return '切片长度需在 16 ~ 4096 之间';
+    if (tokenNum != null && (tokenNum < 256 || tokenNum > 4096)) {
+      return '切片长度需在 256 ~ 4096 之间';
     }
     return null;
   }, [tokenNum]);
@@ -148,11 +148,15 @@ export function KbDocChunkDialog({
               <div>
                 <label className={fieldLabel}>切片长度（token）</label>
                 <Input
+                  type="number"
+                  min={256}
+                  max={4096}
                   value={chunkTokenNum}
                   onChange={(e) => setChunkTokenNum(e.target.value)}
                   placeholder="留空继承库级"
                   inputMode="numeric"
                 />
+                <p className="mt-1 text-xs text-muted-foreground">256 ~ 4096</p>
               </div>
               <div>
                 <label className={fieldLabel}>分隔符</label>

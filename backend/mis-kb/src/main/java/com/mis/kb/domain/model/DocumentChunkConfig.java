@@ -21,8 +21,8 @@ public record DocumentChunkConfig(String chunkMethod, Integer chunkTokenNum, Str
     public static final Set<String> VALID_CHUNK_METHODS = Set.of(
             "naive", "qa", "paper", "book", "laws", "presentation", "table", "picture", "one");
 
-    /** token 数允许下界。 */
-    public static final int MIN_TOKEN_NUM = 16;
+    /** token 数允许下界（256 起；低于 256 切片过碎，无检索价值）。 */
+    public static final int MIN_TOKEN_NUM = 256;
     /** token 数允许上界。 */
     public static final int MAX_TOKEN_NUM = 4096;
 
@@ -51,7 +51,7 @@ public record DocumentChunkConfig(String chunkMethod, Integer chunkTokenNum, Str
      * token 数是否合法（可空；null 表示未指定）。
      *
      * @param n token 数
-     * @return null 或落在 [16, 4096] 返回 {@code true}
+     * @return null 或落在 [256, 4096] 返回 {@code true}
      */
     public static boolean isValidTokenNum(Integer n) {
         return n == null || (n >= MIN_TOKEN_NUM && n <= MAX_TOKEN_NUM);

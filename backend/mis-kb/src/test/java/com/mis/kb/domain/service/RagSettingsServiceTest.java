@@ -189,6 +189,35 @@ class RagSettingsServiceTest {
             assertThrows(KbBusinessException.class, () -> service.save(LIBRARY_ID,
                     new RagSettings(null, null, null, null, null, null, 8192, null, null, null, null)));
         }
+
+        @ParameterizedTest(name = "chunkTokenNum={0} → KB_RAG_SETTINGS_INVALID")
+        @ValueSource(ints = {255, 128, 0, -1})
+        @DisplayName("chunkTokenNum 下界 256：低于 256 一律拒绝，且拒绝先于落库")
+        void rejectsTokenNumBelowMin(int tokenNum) {
+            RagSettingsService service = serviceWithRerankModel();
+            RagSettings bad = new RagSettings(null, null, null, null, null,
+                    null, tokenNum, null, null, null, null);
+
+            KbBusinessException ex = assertThrows(KbBusinessException.class,
+                    () -> service.save(LIBRARY_ID, bad));
+            assertEquals(KbResultCode.KB_RAG_SETTINGS_INVALID.getCode(), ex.getCode());
+            verify(libraryRepository, never()).save(any(KbLibrary.class));
+            verify(enginePort, never()).updateLibrarySettings(any(), any());
+        }
+
+        @Test
+        @DisplayName("chunkTokenNum 边界 [256, 4096] 两端恰好合法")
+        void acceptsBoundaryTokenNum() {
+            RagSettingsService service = serviceWithRerankModel();
+
+            RagSettings savedMin = service.save(LIBRARY_ID,
+                    new RagSettings(null, null, null, null, null, null, 256, null, null, null, null));
+            assertEquals(256, savedMin.chunkTokenNum().intValue());
+
+            RagSettings savedMax = service.save(LIBRARY_ID,
+                    new RagSettings(null, null, null, null, null, null, 4096, null, null, null, null));
+            assertEquals(4096, savedMax.chunkTokenNum().intValue());
+        }
     }
 
     // ------------------------------------------------------------ 默认值
