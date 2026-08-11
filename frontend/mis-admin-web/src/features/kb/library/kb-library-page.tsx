@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Archive, Pencil, Plus, Settings2 } from 'lucide-react';
+import { Archive, ArchiveRestore, Pencil, Plus, Settings2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
@@ -21,6 +21,7 @@ import {
 import { Badge } from '@/components/ui/badge';
 import { EnabledBadge, SecrecyBadge } from '../components/kb-badges';
 import { KbLibraryDeleteDialog } from './kb-library-delete-dialog';
+import { KbLibraryUnarchiveDialog } from './kb-library-unarchive-dialog';
 import { createLibrary, listCategories, listLibraries, updateLibrary } from '../api/kb-api';
 import {
   CategoryTreeCell,
@@ -114,6 +115,8 @@ export function KbLibraryPage() {
   const [saving, setSaving] = useState(false);
   /** 归档 / 删除对话框的目标库；null = 关闭（T05，替代原 window.confirm）。 */
   const [deleting, setDeleting] = useState<KbLibrary | null>(null);
+  /** 取消归档对话框的目标库；null = 关闭（P1-T2）。 */
+  const [unarchiving, setUnarchiving] = useState<KbLibrary | null>(null);
 
   const navigate = useNavigate();
 
@@ -573,17 +576,31 @@ export function KbLibraryPage() {
                           </button>
                         </PermissionGate>
                         {/* Q9：菜单项改叫「归档」——默认动作确实只是归档，
-                            叫「删除」会让人以为引擎侧数据已经清掉。权限码不变。 */}
-                        <PermissionGate permission="kb:library:delete">
-                          <button
-                            type="button"
-                            className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[0.8125rem] text-destructive hover:bg-destructive/10"
-                            onClick={() => setDeleting(lib)}
-                          >
-                            <Archive className="h-3 w-3" />
-                            归档
-                          </button>
-                        </PermissionGate>
+                            叫「删除」会让人以为引擎侧数据已经清掉。权限码不变。
+                            P1-T2：已归档行改显「取消归档」，把引擎名与状态一起回滚。 */}
+                        {lib.archivedAt != null ? (
+                          <PermissionGate permission="kb:library:edit">
+                            <button
+                              type="button"
+                              className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[0.8125rem] text-primary hover:bg-primary/10"
+                              onClick={() => setUnarchiving(lib)}
+                            >
+                              <ArchiveRestore className="h-3 w-3" />
+                              取消归档
+                            </button>
+                          </PermissionGate>
+                        ) : (
+                          <PermissionGate permission="kb:library:delete">
+                            <button
+                              type="button"
+                              className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[0.8125rem] text-destructive hover:bg-destructive/10"
+                              onClick={() => setDeleting(lib)}
+                            >
+                              <Archive className="h-3 w-3" />
+                              归档
+                            </button>
+                          </PermissionGate>
+                        )}
                       </div>
                     </td>
                   </tr>
@@ -787,6 +804,14 @@ export function KbLibraryPage() {
         capabilities={capabilities}
         onOpenChange={(next) => {
           if (!next) setDeleting(null);
+        }}
+        onDone={() => void onDeleteDone()}
+      />
+
+      <KbLibraryUnarchiveDialog
+        library={unarchiving}
+        onOpenChange={(next) => {
+          if (!next) setUnarchiving(null);
         }}
         onDone={() => void onDeleteDone()}
       />

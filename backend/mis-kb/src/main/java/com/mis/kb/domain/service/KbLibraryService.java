@@ -177,6 +177,10 @@ public class KbLibraryService {
     @Transactional
     public KbLibraryVO update(Long id, KbLibraryUpdateRequest req) {
         KbLibrary entity = require(id);
+        // 【P1-T2 取消归档回滚】先快照「是否处于归档态」再改本地状态：
+        // 归档判定 = status=0 且 archived_at 非空（见 KbLibrary#isArchived）。
+        // 必须在 setStatus 之前抓，否则下方条件永远不成立。
+        boolean wasArchived = entity.isArchived();
         if (!Secrecy.isValid(req.secrecy())) {
             throw new BusinessException(ResultCode.VALIDATION_ERROR, "密级非法（应为 public/internal/secret/confidential）");
         }
@@ -209,6 +213,35 @@ public class KbLibraryService {
                 saved = libraryRepository.save(saved);
             }
         }
+        // 【P1-T2 取消归档回滚】「停用中且带归档标记 → 请求改回启用」时，把引擎侧 dataset
+        // 改回规范名并清掉归档标记。改名目标是 P0 的 expectedEngineName(lib)（已含本次
+        // name/categoryId 变更）；引擎改名失败不阻断取消归档（本地语义优先，与 P0 archive
+        // 口径一致），仅把 engine_sync_status 写 3，由 P1-T4 重命名端点修复。
+        if (wasArchived
+                && req.status() != null
+                && LibraryStatus.isEnabled(req.status())
+                && saved.getEngineLibraryRef() != null) {
+            String canonical = expectedEngineName(saved);
+            try {
+                enginePort.renameLibrary(
+                        new EngineLibraryRef(saved.getEngineType(), saved.getEngineLibraryRef()), canonical);
+                // 不掩盖上面 settings 同步已记录的失败（syncError!=null 时保持 DRIFT）。
+                if (syncError == null) {
+                    saved.setEngineSyncStatus(EngineSyncStatus.CONSISTENT);
+                }
+                log.info("取消归档：引擎 dataset 已改回规范名 id={} engineRef={} name={}",
+                        saved.getId(), saved.getEngineLibraryRef(), canonical);
+            } catch (Exception e) {
+                syncError = describeError(e);
+                saved.setEngineSyncStatus(EngineSyncStatus.DRIFT_OR_FAILED);
+                log.warn("取消归档：引擎 dataset 改名失败 id={} engineRef={}: {}",
+                        saved.getId(), saved.getEngineLibraryRef(), syncError);
+            }
+            saved.setArchivedAt(null);
+            saved.setEngineCheckedAt(Instant.now());
+            saved = libraryRepository.save(saved);
+        }
+
         KbLibraryVO vo = toVo(saved);
         return syncError == null ? vo : vo.withEngineSyncResult(Boolean.TRUE, "引擎同步失败：" + syncError);
     }

@@ -27,6 +27,11 @@ interface KbLibraryComboboxProps {
   categoryId?: number | null;
   /** 是否允许清空选择 */
   allowClear?: boolean;
+  /**
+   * 可清空且当前未选时，触发器显示的空选文案（替代默认「请选择知识库」）。
+   * 例如问答页传「全部可见知识库」。不传则完全等同 P0 行为。
+   */
+  emptyOptionLabel?: string;
   placeholder?: string;
   className?: string;
   /** 选项加载完成回调（父组件可缓存列表，如渲染「当前操作对象」卡片） */
@@ -82,6 +87,7 @@ export function KbLibraryCombobox({
   onChange,
   categoryId = null,
   allowClear = false,
+  emptyOptionLabel,
   placeholder = '搜索库名 / 分类 / ID',
   className,
   onLoaded,
@@ -216,9 +222,11 @@ export function KbLibraryCombobox({
 
   const triggerText = selected
     ? `${selected.library.name}（${secrecyLabel(selected.library.secrecy)}）`
-    : loading
-      ? '加载中…'
-      : '请选择知识库';
+    : allowClear && emptyOptionLabel
+      ? emptyOptionLabel
+      : loading
+        ? '加载中…'
+        : '请选择知识库';
 
   return (
     <div ref={rootRef} className={cn('relative', className)} onKeyDown={onKeyDown}>

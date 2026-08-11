@@ -13,6 +13,13 @@ import com.mis.adminbff.dto.kb.KbDocumentVO;
 import com.mis.adminbff.dto.kb.KbEngineCapabilitiesVO;
 import com.mis.adminbff.dto.kb.KbEngineHealthVO;
 import com.mis.adminbff.dto.kb.KbEngineModelPoolVO;
+import com.mis.adminbff.dto.kb.KbEngineOrphanResolveRequest;
+import com.mis.adminbff.dto.kb.KbEngineOrphanResolveResultVO;
+import com.mis.adminbff.dto.kb.KbEngineOrphanVO;
+import com.mis.adminbff.dto.kb.KbEngineRenameLogVO;
+import com.mis.adminbff.dto.kb.KbEngineRenameReq;
+import com.mis.adminbff.dto.kb.KbEngineRenameResultVO;
+import com.mis.adminbff.dto.kb.KbEngineRenameRollbackRequest;
 import com.mis.adminbff.dto.kb.KbEngineReconcileVO;
 import com.mis.adminbff.dto.kb.KbEngineRefVO;
 import com.mis.adminbff.dto.kb.KbHitTestRequest;
@@ -108,6 +115,14 @@ public class KbWebClient extends AbstractDownstreamClient {
     private static final ParameterizedTypeReference<Result<KbEngineRefVO>> ENGINE_REF =
             new ParameterizedTypeReference<>() {};
     private static final ParameterizedTypeReference<Result<KbEngineReconcileVO>> ENGINE_RECONCILE =
+            new ParameterizedTypeReference<>() {};
+    private static final ParameterizedTypeReference<Result<List<KbEngineOrphanVO>>> ENGINE_ORPHANS =
+            new ParameterizedTypeReference<>() {};
+    private static final ParameterizedTypeReference<Result<KbEngineOrphanResolveResultVO>> ENGINE_ORPHAN_RESOLVE =
+            new ParameterizedTypeReference<>() {};
+    private static final ParameterizedTypeReference<Result<KbEngineRenameResultVO>> ENGINE_RENAME_RESULT =
+            new ParameterizedTypeReference<>() {};
+    private static final ParameterizedTypeReference<Result<List<KbEngineRenameLogVO>>> ENGINE_RENAME_LOGS =
             new ParameterizedTypeReference<>() {};
     private static final ParameterizedTypeReference<Result<String>> STRING =
             new ParameterizedTypeReference<>() {};
@@ -802,6 +817,106 @@ public class KbWebClient extends AbstractDownstreamClient {
                 .headers(loginContextHeaders())
                 .retrieve()
                 .bodyToMono(ENGINE_RECONCILE));
+    }
+
+    /**
+     * 列出引擎侧游离 dataset（P1-T3）。
+     *
+     * @param engineType 引擎类型；{@code null} 取当前引擎
+     * @param resolved    0=待处理 1=已处置
+     * @return 游离项视图列表
+     */
+    public List<KbEngineOrphanVO> listEngineOrphans(String engineType, int resolved) {
+        StringBuilder uri = new StringBuilder("/internal/v1/kb/engine/orphans?resolved=").append(resolved);
+        if (engineType != null && !engineType.isBlank()) {
+            uri.append("&engineType=").append(engineType);
+        }
+        return block(client().get()
+                .uri(uri.toString())
+                .headers(loginContextHeaders())
+                .retrieve()
+                .bodyToMono(ENGINE_ORPHANS));
+    }
+
+    /**
+     * 处置一个游离 dataset（P1-T3）。
+     *
+     * @param engineType 引擎类型；{@code null} 取当前引擎
+     * @param nativeId   引擎原生 dataset id
+     * @param req        处置请求
+     * @return 处置结果
+     */
+    public KbEngineOrphanResolveResultVO resolveEngineOrphan(
+            String engineType, String nativeId, KbEngineOrphanResolveRequest req) {
+        StringBuilder uri = new StringBuilder("/internal/v1/kb/engine/orphans/")
+                .append(nativeId).append("/resolve");
+        if (engineType != null && !engineType.isBlank()) {
+            uri.append("?engineType=").append(engineType);
+        }
+        return block(client().post()
+                .uri(uri.toString())
+                .headers(loginContextHeaders())
+                .bodyValue(req)
+                .retrieve()
+                .bodyToMono(ENGINE_ORPHAN_RESOLVE));
+    }
+
+    /**
+     * 存量 dataset 批量重命名（P1-T4，dry-run 或执行）。
+     *
+     * @param req 请求（dryRun / confirmToken / limit）
+     * @return 本次结果（含 batchId）
+     */
+    public KbEngineRenameResultVO renameDatasets(KbEngineRenameReq req) {
+        return block(client().post()
+                .uri("/internal/v1/kb/engine/datasets/rename")
+                .headers(loginContextHeaders())
+                .bodyValue(req)
+                .retrieve()
+                .bodyToMono(ENGINE_RENAME_RESULT));
+    }
+
+    /**
+     * 回滚某批次的重命名（P1-T4）。
+     *
+     * @param batchId 原执行批次号
+     * @return 回滚结果
+     */
+    public KbEngineRenameResultVO rollbackRenameDatasets(String batchId) {
+        return block(client().post()
+                .uri("/internal/v1/kb/engine/datasets/rename/rollback")
+                .headers(loginContextHeaders())
+                .bodyValue(new KbEngineRenameRollbackRequest(batchId))
+                .retrieve()
+                .bodyToMono(ENGINE_RENAME_RESULT));
+    }
+
+    /**
+     * 最近的重命名日志（P1-T4）。
+     *
+     * @param limit 返回条数
+     * @return 日志视图列表
+     */
+    public List<KbEngineRenameLogVO> listRenameLogs(int limit) {
+        return block(client().get()
+                .uri("/internal/v1/kb/engine/datasets/rename/logs?limit=" + limit)
+                .headers(loginContextHeaders())
+                .retrieve()
+                .bodyToMono(ENGINE_RENAME_LOGS));
+    }
+
+    /**
+     * 某批次的重命名日志（P1-T4）。
+     *
+     * @param batchId 批次号
+     * @return 该批次日志视图列表
+     */
+    public List<KbEngineRenameLogVO> getRenameLogsByBatch(String batchId) {
+        return block(client().get()
+                .uri("/internal/v1/kb/engine/datasets/rename/logs/" + batchId)
+                .headers(loginContextHeaders())
+                .retrieve()
+                .bodyToMono(ENGINE_RENAME_LOGS));
     }
 
     // ------------------------------------------------------------------ 同义词（S-07 / Wave D）

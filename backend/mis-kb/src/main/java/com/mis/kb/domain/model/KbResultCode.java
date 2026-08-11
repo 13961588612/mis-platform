@@ -56,6 +56,34 @@ public enum KbResultCode {
      */
     KB_ENGINE_DELETE_FAILED(40935, "引擎侧删除失败，本地未做任何变更"),
 
+    /* ---- P1-T3 游离 dataset 处置 ---- */
+    /** 游离 dataset 不存在或已处理（POST /orphans/{nativeId}/resolve）。 */
+    KB_ENGINE_ORPHAN_NOT_FOUND(40936, "游离数据集不存在或已处理"),
+    /**
+     * 目标知识库已绑定引擎 dataset，无法认领该游离项（bind_existing 护栏）。
+     *
+     * <p>提示用户先解绑目标库或换一个未绑定的库来认领。
+     */
+    KB_ENGINE_ORPHAN_TARGET_BOUND(40940, "目标知识库已绑定引擎数据集，无法认领该游离项（请先解绑或选其他库）"),
+    /**
+     * 处置动作非法或参数缺失（ignore 必须填备注且 trim 后 ≥ 5 字）。
+     */
+    KB_ENGINE_ORPHAN_ACTION_INVALID(40941, "处置动作非法或参数缺失（忽略必须填备注）"),
+
+    /* ---- P1-T4 存量 dataset 批量重命名 ---- */
+    /**
+     * 批量重命名需携带确认令牌 RENAME-LEGACY 且 dryRun=false。
+     *
+     * <p>高危操作受控触发：默认 dryRun=true 只出计划不落地；真正执行必须带
+     * {@code confirmToken="RENAME-LEGACY"}。拿不到令牌直接拒绝，避免误触全量改名。
+     */
+    KB_ENGINE_RENAME_CONFIRM_REQUIRED(40942, "批量重命名需携带确认令牌 RENAME-LEGACY 且 dryRun=false"),
+    /**
+     * 回滚批次不存在或无成功记录。
+     */
+    KB_ENGINE_RENAME_BATCH_NOT_FOUND(40943, "回滚批次不存在或无成功记录"),
+
+
     KB_LIBRARY_NOT_FOUND(40410, "知识库不存在"),
     KB_DOC_NOT_FOUND(40411, "文档不存在"),
     KB_CATEGORY_NOT_FOUND(40412, "分类不存在"),

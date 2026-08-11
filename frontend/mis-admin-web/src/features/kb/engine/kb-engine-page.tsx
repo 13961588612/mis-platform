@@ -10,6 +10,8 @@ import { buildAppBreadcrumbs } from '@/components/common/app-breadcrumbs';
 import { PermissionGate } from '@/components/auth/permission-gate';
 import { CapabilityBadge, EngineHealthBadge } from '../components/kb-badges';
 import { getReconcileReport, runReconcile } from '../api/kb-api';
+import { KbEngineOrphanPanel } from './kb-engine-orphan-panel';
+import { KbEngineRenameCard } from './kb-engine-rename-card';
 import { useKbStore } from '../stores/use-kb-store';
 import type { KbEngineReconcileReport } from '../types';
 import { formatTime } from '../types';
@@ -268,6 +270,10 @@ export function KbEnginePage() {
           </>
         )}
       </Card>
+
+      <KbEngineOrphanPanel />
+
+      <KbEngineRenameCard />
     </div>
   );
 }

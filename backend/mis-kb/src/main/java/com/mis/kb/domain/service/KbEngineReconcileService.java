@@ -6,6 +6,7 @@ import com.mis.kb.domain.entity.KbLibrary;
 import com.mis.kb.domain.model.EngineLibraryBrief;
 import com.mis.kb.domain.model.EngineReconcileReport;
 import com.mis.kb.domain.model.EngineSyncStatus;
+import com.mis.kb.domain.model.LibraryStatus;
 import com.mis.kb.domain.repository.KbEngineOrphanRepository;
 import com.mis.kb.domain.repository.KbLibraryRepository;
 import com.mis.kb.engine.KnowledgeEnginePort;
@@ -177,8 +178,13 @@ public class KbEngineReconcileService {
         }
 
         // 剩在 engineSide 里的就是「引擎有 / MIS 无」
-        List<KbEngineOrphan> orphanRows = upsertOrphans(engineType, engineSide.values(), startedAt);
-        List<EngineReconcileReport.Orphan> orphans = orphanRows.stream()
+        upsertOrphans(engineType, engineSide.values(), startedAt);
+        // 【P1-T3 计数口径】报告只展示「待处理」（resolved=0）的游离项：已被人工处置过
+        // （resolved_action 非空）的行即便引擎侧仍可见，也不再进待处理计数与明细；
+        // 本轮自动关闭的历史行（resolved 刚置 1）同样不出现。与 rebuildFromDb 同口径。
+        List<KbEngineOrphan> pendingOrphans = orphanRepository
+                .findByEngineTypeAndResolvedOrderByLastSeenAtDesc(engineType, ORPHAN_UNRESOLVED);
+        List<EngineReconcileReport.Orphan> orphans = pendingOrphans.stream()
                 .limit(MAX_DETAIL_ITEMS)
                 .map(o -> new EngineReconcileReport.Orphan(
                         o.getNativeId(), o.getNativeName(), o.getDocCount(),
@@ -188,7 +194,8 @@ public class KbEngineReconcileService {
         EngineReconcileReport report = EngineReconcileReport.done(
                 startedAt, engineType,
                 new EngineReconcileReport.Counts(
-                        bound.size(), consistent, missing.size(), orphanRows.size(), drift.size()),
+                        bound.size(), consistent, missing.size(), pendingOrphans.size(), drift.size(),
+                        (int) orphanRepository.countByEngineTypeAndResolved(engineType, 1)),
                 missing, orphans, drift);
         latest.set(report);
         return report;
@@ -227,6 +234,13 @@ public class KbEngineReconcileService {
         if (!StringUtils.hasText(actualName)) {
             return false;
         }
+        // 【P1-T2 防御性断言】启用态(status=1)的库不可能带归档标记：归档必须先把 status 置 0。
+        // 出现「启用且 archivedAt 非空」= 数据不一致（如归档改名事务半途失败），属对账要暴露的异常，
+        // 不是正常分支。这里只告警不抛——不阻断整轮对账，但要把脏数据捞到日志里。
+        if (LibraryStatus.isEnabled(lib.getStatus()) && lib.getArchivedAt() != null) {
+            log.warn("对账异常：启用态库却带归档标记 id={} status={} archivedAt={}，期望名校验可能失准",
+                    lib.getId(), lib.getStatus(), lib.getArchivedAt());
+        }
         if (lib.isArchived()) {
             return RagflowDatasetNaming.isArchivedName(actualName);
         }
@@ -263,7 +277,12 @@ public class KbEngineReconcileService {
             row.setNativeName(brief.name());
             row.setDocCount(brief.documentCount());
             row.setLastSeenAt(now);
-            row.setResolved(ORPHAN_UNRESOLVED);
+            // 【P1-T3 修复 P0 坑】已被人工处置过的行（resolved_action 已填）绝不在下一轮被自动复位，
+            // 否则运维刚点完「忽略」，下一分钟又被翻成待处理。只有从未人工处置过
+            // （resolved_action 为 NULL）的行才允许被引擎侧重新可见时复位成待处理。
+            if (row.getResolvedAction() == null) {
+                row.setResolved(ORPHAN_UNRESOLVED);
+            }
             touched.add(row);
         }
         if (!touched.isEmpty()) {
@@ -277,12 +296,17 @@ public class KbEngineReconcileService {
                 .filter(row -> row.getLastSeenAt() == null || row.getLastSeenAt().isBefore(now))
                 .toList();
         if (!stale.isEmpty()) {
-            stale.forEach(row -> {
-                row.setResolved(1);
-                row.setNote("对账时引擎侧已不存在或已被 MIS 重新绑定，自动关闭");
-            });
+            // 同样只动「从未人工处置过」的行：已人工认领/忽略的行即便引擎侧消失也不再次改写，
+            // 保留其 resolved_action 与备注，便于审计追溯。
+            stale.stream()
+                    .filter(row -> row.getResolvedAction() == null)
+                    .forEach(row -> {
+                        row.setResolved(1);
+                        row.setNote("对账时引擎侧已不存在或已被 MIS 重新绑定，自动关闭");
+                    });
             orphanRepository.saveAll(stale);
-            log.info("引擎对账：自动关闭已消失的游离 dataset {} 条", stale.size());
+            long closed = stale.stream().filter(row -> row.getResolvedAction() == null).count();
+            log.info("引擎对账：自动关闭已消失的游离 dataset {} 条", closed);
         }
         return touched;
     }
@@ -334,7 +358,8 @@ public class KbEngineReconcileService {
         return EngineReconcileReport.done(
                 null, engineType,
                 new EngineReconcileReport.Counts(
-                        bound.size(), consistent, missing.size(), orphanRows.size(), drift.size()),
+                        bound.size(), consistent, missing.size(), orphanRows.size(), drift.size(),
+                        (int) orphanRepository.countByEngineTypeAndResolved(engineType, 1)),
                 missing, orphans, drift);
     }
 }

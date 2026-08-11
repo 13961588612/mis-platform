@@ -10,6 +10,13 @@ import com.mis.adminbff.dto.kb.KbDocumentVO;
 import com.mis.adminbff.dto.kb.KbEngineCapabilitiesVO;
 import com.mis.adminbff.dto.kb.KbEngineHealthVO;
 import com.mis.adminbff.dto.kb.KbEngineModelPoolVO;
+import com.mis.adminbff.dto.kb.KbEngineOrphanResolveRequest;
+import com.mis.adminbff.dto.kb.KbEngineOrphanResolveResultVO;
+import com.mis.adminbff.dto.kb.KbEngineOrphanVO;
+import com.mis.adminbff.dto.kb.KbEngineRenameLogVO;
+import com.mis.adminbff.dto.kb.KbEngineRenameReq;
+import com.mis.adminbff.dto.kb.KbEngineRenameResultVO;
+import com.mis.adminbff.dto.kb.KbEngineRenameRollbackRequest;
 import com.mis.adminbff.dto.kb.KbEngineReconcileVO;
 import com.mis.adminbff.dto.kb.KbEngineRefVO;
 import com.mis.adminbff.dto.kb.KbHitTestRequest;
@@ -619,6 +626,95 @@ public class KbController {
     @OperLog(module = "知识库", operation = "触发引擎对账")
     public Result<KbEngineReconcileVO> runEngineReconcile() {
         return Result.ok(kbFacadeService.runEngineReconcile());
+    }
+
+    /**
+     * 列出引擎侧游离 dataset（P1-T3）。
+     *
+     * <p>只读列表，<b>复用</b> P0 的 {@code kb:engine:reconcile} 权限码（与对账同源、风险同级），
+     * 不另开权限码、不记审计（读的还是列表页本就可见的信息）。
+     *
+     * @param engineType 引擎类型；缺省取当前引擎
+     * @param resolved   0=待处理（默认）1=已处置
+     * @return 游离项列表
+     */
+    @GetMapping("/engine/orphans")
+    public Result<List<KbEngineOrphanVO>> listEngineOrphans(
+            @RequestParam(required = false) String engineType,
+            @RequestParam(defaultValue = "0") int resolved) {
+        return Result.ok(kbFacadeService.listEngineOrphans(engineType, resolved));
+    }
+
+    /**
+     * 处置一个游离 dataset（P1-T3）。
+     *
+     * <p>写操作，受 {@code kb:engine:orphan:handle} 权限码保护，需留痕。
+     *
+     * @param engineType 引擎类型；缺省取当前引擎
+     * @param nativeId   引擎原生 dataset id
+     * @param body       处置请求
+     * @return 处置结果（含引擎侧改名是否失败）
+     */
+    @PostMapping("/engine/orphans/{nativeId}/resolve")
+    @OperLog(module = "知识库", operation = "处置游离数据集", recordParams = true)
+    public Result<KbEngineOrphanResolveResultVO> resolveEngineOrphan(
+            @RequestParam(required = false) String engineType,
+            @PathVariable("nativeId") String nativeId,
+            @Valid @RequestBody KbEngineOrphanResolveRequest body) {
+        return Result.ok(kbFacadeService.resolveEngineOrphan(engineType, nativeId, body));
+    }
+
+    /**
+     * 存量 dataset 批量重命名（P1-T4，方案 X：受控端点）。
+     *
+     * <p>高危批量改引擎名，权限码 {@code kb:engine:dataset:rename}，需留痕。
+     * 默认 {@code dryRun=true} 只出计划；执行需 {@code confirmToken="RENAME-LEGACY"}，
+     * 不带令牌由后端拒（mis-kb 侧 {@code KB_ENGINE_RENAME_CONFIRM_REQUIRED}）。
+     *
+     * @param body 请求（dryRun / confirmToken / limit）
+     * @return 本次结果（含 batchId，供回滚定位）
+     */
+    @PostMapping("/engine/datasets/rename")
+    @OperLog(module = "知识库", operation = "存量数据集改名", recordParams = true)
+    public Result<KbEngineRenameResultVO> renameDatasets(@Valid @RequestBody KbEngineRenameReq body) {
+        return Result.ok(kbFacadeService.renameDatasets(body));
+    }
+
+    /**
+     * 回滚某批次的重命名（P1-T4）。
+     *
+     * @param body 请求（batchId）
+     * @return 回滚结果
+     */
+    @PostMapping("/engine/datasets/rename/rollback")
+    @OperLog(module = "知识库", operation = "存量数据集改名回滚", recordParams = true)
+    public Result<KbEngineRenameResultVO> rollbackRenameDatasets(
+            @Valid @RequestBody KbEngineRenameRollbackRequest body) {
+        return Result.ok(kbFacadeService.rollbackRenameDatasets(body.batchId()));
+    }
+
+    /**
+     * 最近的重命名日志（P1-T4）。
+     *
+     * @param limit 返回条数（默认 100）
+     * @return 日志视图列表
+     */
+    @GetMapping("/engine/datasets/rename/logs")
+    public Result<List<KbEngineRenameLogVO>> listRenameLogs(
+            @RequestParam(defaultValue = "100") int limit) {
+        return Result.ok(kbFacadeService.listRenameLogs(limit));
+    }
+
+    /**
+     * 某批次的重命名日志（P1-T4）。
+     *
+     * @param batchId 批次号
+     * @return 该批次日志视图列表
+     */
+    @GetMapping("/engine/datasets/rename/logs/{batchId}")
+    public Result<List<KbEngineRenameLogVO>> getRenameLogsByBatch(
+            @PathVariable("batchId") String batchId) {
+        return Result.ok(kbFacadeService.getRenameLogsByBatch(batchId));
     }
 
     // ------------------------------------------------------------------ 请求体

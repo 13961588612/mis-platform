@@ -554,6 +554,8 @@ export interface KbEngineReconcileCounts {
   orphan: number | null;
   /** 两侧都有但名字对不上。 */
   nameDrift: number | null;
+  /** 已人工处置的游离项数量（P1-T3 新增）。 */
+  resolved: number | null;
 }
 
 /** 「MIS 有、引擎无」明细。 */
@@ -566,12 +568,112 @@ export interface KbEngineMissingItem {
 
 /** 游离 dataset 明细（引擎有、MIS 无）。 */
 export interface KbEngineOrphanItem {
+  id: number | null;
+  engineType: string | null;
   /** 引擎原生 dataset id。 */
   nativeId: string | null;
   nativeName: string | null;
   docCount: number | null;
   firstSeenAt: string | null;
   lastSeenAt: string | null;
+  /** 0=待处理 1=已处置。 */
+  resolved: number | null;
+  /** 处置动作（bind_existing/adopt_new/ignore）；未处置为 null。 */
+  resolvedAction: string | null;
+  resolvedAt: string | null;
+  resolvedNote: string | null;
+  resolvedBy: number | null;
+}
+
+/** 游离 dataset 处置请求（P1-T3）。 */
+export interface KbEngineOrphanResolveRequest {
+  /** 处置动作码：bind_existing | adopt_new | ignore。 */
+  action: string;
+  /** ignore 必填备注（trim 后 ≥ 5 字）；bind/adopt 可附带说明。 */
+  note?: string | null;
+  /** bind_existing 的目标库 ID。 */
+  targetLibraryId?: number | null;
+  /** adopt_new 的新库名。 */
+  name?: string | null;
+  /** adopt_new 的新库分类 ID。 */
+  categoryId?: number | null;
+  /** adopt_new 的新库密级。 */
+  secrecy?: string | null;
+  /** adopt_new 的新库归属人（缺省取当前用户）。 */
+  owner?: number | null;
+}
+
+/** 游离 dataset 处置结果（P1-T3）。 */
+export interface KbEngineOrphanResolveResult {
+  nativeId: string | null;
+  engineType: string | null;
+  action: string | null;
+  /** 处置后关联的 MIS 库 ID（ignore 为 null）。 */
+  libraryId: number | null;
+  /** 引擎侧改名是否失败（失败仍视为处置成功，本地语义优先）。 */
+  engineSyncFailed: boolean | null;
+  message: string | null;
+}
+
+/** 存量 dataset 重命名请求（P1-T4）。 */
+export interface KbEngineRenameReq {
+  /** 仅出计划不落地（默认 true）。 */
+  dryRun?: boolean | null;
+  /** 执行令牌，必须等于 RENAME-LEGACY。 */
+  confirmToken?: string | null;
+  /** 单次处理上限（默认 50，上限 200）。 */
+  limit?: number | null;
+}
+
+/** 存量 dataset 重命名回滚请求（P1-T4）。 */
+export interface KbEngineRenameRollbackReq {
+  batchId: string;
+}
+
+/** 存量 dataset 重命名单项结果（P1-T4）。 */
+export interface KbEngineRenameItem {
+  libraryId: number | null;
+  nativeId: string | null;
+  oldName: string | null;
+  newName: string | null;
+  /** RENAME / SKIP / FAILED。 */
+  action: string | null;
+  /** 0=未执行 1=成功 2=失败。 */
+  status: number | null;
+  error: string | null;
+}
+
+/** 存量 dataset 批量重命名结果（P1-T4）。 */
+export interface KbEngineRenameResult {
+  batchId: string | null;
+  dryRun: boolean | null;
+  total: number | null;
+  renamed: number | null;
+  skipped: number | null;
+  failed: number | null;
+  items: KbEngineRenameItem[] | null;
+  /** 当前引擎不支持引擎侧改名时为 true（noop/mock 护栏）。 */
+  engineSkipped: boolean | null;
+  /** 引擎跳过原因；未跳过为 null。 */
+  skipReason: string | null;
+}
+
+/** 存量 dataset 重命名流水（P1-T4）。 */
+export interface KbEngineRenameLog {
+  id: number | null;
+  batchId: string | null;
+  libraryId: number | null;
+  engineType: string | null;
+  nativeId: string | null;
+  oldName: string | null;
+  newName: string | null;
+  /** RENAME / SKIP / FAILED。 */
+  action: string | null;
+  /** 0=未执行 1=成功 2=失败。 */
+  status: number | null;
+  error: string | null;
+  operatorId: number | null;
+  createdAt: string | null;
 }
 
 /** 名称漂移明细。 */

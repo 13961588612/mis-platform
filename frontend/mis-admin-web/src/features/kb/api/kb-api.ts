@@ -13,8 +13,15 @@ import type {
   KbEngineCapabilities,
   KbEngineHealth,
   KbEngineModelPool,
+  KbEngineOrphanItem,
+  KbEngineOrphanResolveRequest,
+  KbEngineOrphanResolveResult,
   KbEngineReconcileReport,
   KbEngineRef,
+  KbEngineRenameLog,
+  KbEngineRenameReq,
+  KbEngineRenameResult,
+  KbEngineRenameRollbackReq,
   KbFeedbackForm,
   KbHitTestRequest,
   KbHitTestResult,
@@ -605,6 +612,82 @@ export async function getReconcileReport(): Promise<KbEngineReconcileReport> {
 export async function runReconcile(): Promise<KbEngineReconcileReport> {
   const res = await api.post<ApiResult<KbEngineReconcileReport>>('/kb/engine/reconcile');
   return unwrap(res, '触发对账失败');
+}
+
+/**
+ * 列出引擎侧游离 dataset（P1-T3，权限码 `kb:engine:reconcile` 复用只读列表）。
+ *
+ * @param resolved 0=待处理（默认）1=已处置
+ * @param engineType 引擎类型；省略取当前引擎
+ */
+export async function listEngineOrphans(
+  resolved = 0,
+  engineType?: string | null,
+): Promise<KbEngineOrphanItem[]> {
+  const params = new URLSearchParams({ resolved: String(resolved) });
+  if (engineType) params.set('engineType', engineType);
+  const res = await api.get<ApiResult<KbEngineOrphanItem[]>>(
+    `/kb/engine/orphans?${params.toString()}`,
+  );
+  return unwrap(res, '获取游离数据集失败');
+}
+
+/**
+ * 处置一个游离 dataset（P1-T3，权限码 `kb:engine:orphan:handle`）。
+ *
+ * @param nativeId 引擎原生 dataset id
+ * @param body 处置请求（action + 动作相关字段）
+ */
+export async function resolveEngineOrphan(
+  nativeId: string,
+  body: KbEngineOrphanResolveRequest,
+): Promise<KbEngineOrphanResolveResult> {
+  const res = await api.post<ApiResult<KbEngineOrphanResolveResult>>(
+    `/kb/engine/orphans/${encodeURIComponent(nativeId)}/resolve`,
+    body,
+  );
+  return unwrap(res, '处置游离数据集失败');
+}
+
+/**
+ * 存量 dataset 批量重命名（P1-T4，dry-run 或执行）。
+ *
+ * 权限码 `kb:engine:dataset:rename`；执行需 `confirmToken="RENAME-LEGACY"`。
+ *
+ * @param body 请求（dryRun / confirmToken / limit）
+ */
+export async function renameDatasets(body: KbEngineRenameReq): Promise<KbEngineRenameResult> {
+  const res = await api.post<ApiResult<KbEngineRenameResult>>('/kb/engine/datasets/rename', body);
+  return unwrap(res, '存量数据集改名失败');
+}
+
+/**
+ * 回滚某批次的重命名（P1-T4，权限码 `kb:engine:dataset:rename`）。
+ *
+ * @param batchId 原执行批次号
+ */
+export async function rollbackRenameDatasets(batchId: string): Promise<KbEngineRenameResult> {
+  const res = await api.post<ApiResult<KbEngineRenameResult>>(
+    '/kb/engine/datasets/rename/rollback',
+    { batchId } satisfies KbEngineRenameRollbackReq,
+  );
+  return unwrap(res, '回滚失败');
+}
+
+/** 最近的重命名日志（P1-T4）。 */
+export async function listRenameLogs(limit = 100): Promise<KbEngineRenameLog[]> {
+  const res = await api.get<ApiResult<KbEngineRenameLog[]>>(
+    `/kb/engine/datasets/rename/logs?limit=${limit}`,
+  );
+  return unwrap(res, '获取改名日志失败');
+}
+
+/** 某批次的重命名日志（P1-T4）。 */
+export async function getRenameLogsByBatch(batchId: string): Promise<KbEngineRenameLog[]> {
+  const res = await api.get<ApiResult<KbEngineRenameLog[]>>(
+    `/kb/engine/datasets/rename/logs/${encodeURIComponent(batchId)}`,
+  );
+  return unwrap(res, '获取批次日志失败');
 }
 
 // ------------------------------------------------------------------ 命中测试（Q-04 / WA-07）

@@ -43,7 +43,7 @@ public record KbEngineReconcileVO(
     public static KbEngineReconcileVO from(EngineReconcileReport report) {
         if (report == null) {
             return new KbEngineReconcileVO(null, false, null, null,
-                    new Counts(0, 0, 0, 0, 0), List.of(), List.of(), List.of());
+                    new Counts(0, 0, 0, 0, 0, 0), List.of(), List.of(), List.of());
         }
         EngineReconcileReport.Counts c = report.counts();
         return new KbEngineReconcileVO(
@@ -51,7 +51,7 @@ public record KbEngineReconcileVO(
                 report.skipped(),
                 report.skipReason(),
                 report.engineType(),
-                new Counts(c.total(), c.consistent(), c.missingInEngine(), c.orphan(), c.nameDrift()),
+                new Counts(c.total(), c.consistent(), c.missingInEngine(), c.orphan(), c.nameDrift(), c.resolved()),
                 report.missingInEngine().stream()
                         .map(m -> new MissingItem(m.libraryId(), m.name(), m.engineLibraryRef()))
                         .toList(),
@@ -78,7 +78,8 @@ public record KbEngineReconcileVO(
             int consistent,
             int missingInEngine,
             int orphan,
-            int nameDrift) {
+            int nameDrift,
+            int resolved) {
     }
 
     /**

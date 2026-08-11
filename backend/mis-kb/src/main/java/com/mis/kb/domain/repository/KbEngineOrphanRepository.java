@@ -40,4 +40,38 @@ public interface KbEngineOrphanRepository extends JpaRepository<KbEngineOrphan, 
      * @return 数量
      */
     long countByEngineTypeAndResolved(String engineType, Integer resolved);
+
+    /**
+     * 列出某引擎下已处理的游离项（最近处置的排前，P1-T3 已处理页签用）。
+     *
+     * <p>与 {@link #findByEngineTypeAndResolvedOrderByLastSeenAtDesc} 的区别在排序键：
+     * 待处理看「最近还能看到」，已处理看「最近被谁处置」。
+     *
+     * @param engineType 引擎类型
+     * @param resolved   1 = 已处理
+     * @return 游离项列表，恒非 {@code null}
+     */
+    List<KbEngineOrphan> findByEngineTypeAndResolvedOrderByResolvedAtDesc(
+            String engineType, Integer resolved);
+
+    /**
+     * 按处置动作过滤（P1-T3 分类统计 / 定向排查用）。
+     *
+     * @param engineType     引擎类型
+     * @param resolvedAction 处置动作码，见 {@code KbEngineOrphanAction#code()}
+     * @return 游离项列表，恒非 {@code null}
+     */
+    List<KbEngineOrphan> findByEngineTypeAndResolvedActionOrderByLastSeenAtDesc(
+            String engineType, String resolvedAction);
+
+    /**
+     * 统计某引擎下「未经人工处置」的行数。
+     *
+     * <p>P1 修复 P0 的自动复位坑：只有 {@code resolved_action IS NULL} 的行才允许被
+     * 下一轮对账按引擎侧可见性自动改写 {@code resolved}；已人工处置过的行不再复位。
+     *
+     * @param engineType 引擎类型
+     * @return 数量
+     */
+    long countByEngineTypeAndResolvedActionIsNull(String engineType);
 }

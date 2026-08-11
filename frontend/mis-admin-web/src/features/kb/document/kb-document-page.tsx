@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { buildAppBreadcrumbs } from '@/components/common/app-breadcrumbs';
 import { PageHeader } from '@/components/common/page-header';
-import { KbLibraryPicker } from '../components/kb-library-picker';
+import { KbLibraryCombobox } from '../components/kb-library-combobox';
 import { KbDocumentTable } from './kb-document-table';
 import { formatSize } from '../types';
 
@@ -25,9 +25,9 @@ export function KbDocumentPage() {
       <div className="mb-3 flex flex-wrap items-center gap-2">
         <span className="text-sm text-muted-foreground">知识库</span>
         <div className="w-72">
-          <KbLibraryPicker
+          <KbLibraryCombobox
             value={libraryId}
-            onChange={setLibraryId}
+            onChange={(id) => setLibraryId(id)}
             activePath="/kb/documents"
           />
         </div>

@@ -77,17 +77,19 @@ public record EngineReconcileReport(
      * @param missingInEngine MIS 有 / 引擎无
      * @param orphan          引擎有 / MIS 无（{@code kb_engine_orphan} 中 {@code resolved=0} 的行数）
      * @param nameDrift       名称漂移或同步失败
+     * @param resolved        已被人工处置（认领/忽略）的游离项数量（P1-T3 新增）
      */
     public record Counts(
             int total,
             int consistent,
             int missingInEngine,
             int orphan,
-            int nameDrift) {
+            int nameDrift,
+            int resolved) {
 
         /** 全零计数（跳过路径用）。 */
         public static Counts zero() {
-            return new Counts(0, 0, 0, 0, 0);
+            return new Counts(0, 0, 0, 0, 0, 0);
         }
     }
 

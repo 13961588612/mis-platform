@@ -46,12 +46,28 @@ public class KbEngineOrphan {
     @Column(name = "last_seen_at", nullable = false)
     private Instant lastSeenAt;
 
-    /** 0 = 待处理；1 = 已认领 / 已处理（P1 用）。 */
+    /** 0 = 待处理；1 = 已认领 / 已处理（已人工处置）。 */
     @Column(name = "resolved", nullable = false)
     private Integer resolved = 0;
 
     @Column(name = "note", length = 512)
     private String note;
+
+    /** 处置动作：bind_existing=认领到已有库；adopt_new=新建库认领；ignore=标记忽略。NULL=未经人工处置（可被对账自动复位）。 */
+    @Column(name = "resolved_action", length = 16)
+    private String resolvedAction;
+
+    /** 人工处置时刻（T0 加列）。 */
+    @Column(name = "resolved_at")
+    private Instant resolvedAt;
+
+    /** 处置备注；ignore 动作必填且 trim 后 ≥ 5 字。 */
+    @Column(name = "resolved_note", length = 512)
+    private String resolvedNote;
+
+    /** 处置人用户 id（取 X-User-Id 透传头）。 */
+    @Column(name = "resolved_by")
+    private Long resolvedBy;
 
     public Long getId() {
         return id;
@@ -123,5 +139,37 @@ public class KbEngineOrphan {
 
     public void setNote(String note) {
         this.note = note;
+    }
+
+    public String getResolvedAction() {
+        return resolvedAction;
+    }
+
+    public void setResolvedAction(String resolvedAction) {
+        this.resolvedAction = resolvedAction;
+    }
+
+    public Instant getResolvedAt() {
+        return resolvedAt;
+    }
+
+    public void setResolvedAt(Instant resolvedAt) {
+        this.resolvedAt = resolvedAt;
+    }
+
+    public String getResolvedNote() {
+        return resolvedNote;
+    }
+
+    public void setResolvedNote(String resolvedNote) {
+        this.resolvedNote = resolvedNote;
+    }
+
+    public Long getResolvedBy() {
+        return resolvedBy;
+    }
+
+    public void setResolvedBy(Long resolvedBy) {
+        this.resolvedBy = resolvedBy;
     }
 }

@@ -36,13 +36,15 @@ public record KbEngineReconcileVO(
      * @param missingInEngine 引擎缺失
      * @param orphan          游离 dataset
      * @param nameDrift       名称漂移
+     * @param resolved        已被人工处置（认领/忽略）的游离项数量（P1-T3 新增，与 mis-kb 镜像）
      */
     public record Counts(
             Integer total,
             Integer consistent,
             Integer missingInEngine,
             Integer orphan,
-            Integer nameDrift) {
+            Integer nameDrift,
+            Integer resolved) {
     }
 
     /**

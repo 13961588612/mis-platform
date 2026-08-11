@@ -23,7 +23,7 @@ import { MarkdownView } from '@/components/common/markdown-view';
 import { useAiStore } from '@/stores/ai-store';
 import { KbCitationList } from '../components/kb-citation-list';
 import { KbFeedbackFormPanel } from '../components/kb-feedback-form';
-import { KbLibraryPicker } from '../components/kb-library-picker';
+import { KbLibraryCombobox } from '../components/kb-library-combobox';
 import { KbTicketDialog } from '../components/kb-ticket-dialog';
 import { askKbRag, askKbRagStream, getSessionDetail, listMySessions } from '../api/kb-api';
 import type { KbQaCitation, KbQaSession } from '../types';
@@ -374,11 +374,11 @@ export function KbQaPage() {
             <Sparkles className="h-4 w-4 text-primary" />
             <span className="text-sm font-medium">检索范围</span>
             <div className="w-64">
-              <KbLibraryPicker
+              <KbLibraryCombobox
                 value={libraryId}
-                onChange={setLibraryId}
-                allowEmpty
-                emptyLabel="全部可见知识库"
+                onChange={(id) => setLibraryId(id)}
+                allowClear
+                emptyOptionLabel="全部可见知识库"
                 activePath="/kb/qa"
               />
             </div>

@@ -8,7 +8,7 @@ import { PageHeader } from '@/components/common/page-header';
 import { buildAppBreadcrumbs } from '@/components/common/app-breadcrumbs';
 import { PermissionGate } from '@/components/auth/permission-gate';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
-import { KbLibraryPicker } from '../components/kb-library-picker';
+import { KbLibraryCombobox } from '../components/kb-library-combobox';
 import { KbWeightSlider } from '../components/kb-weight-slider';
 import { KbHitTestResultList } from './kb-hit-test-result-list';
 import { KbSynonymStatusBadge, KbSynonymTraceCard } from './kb-synonym-trace-card';
@@ -261,9 +261,9 @@ export function KbHitTestPage() {
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
           <div>
             <label className={fieldLabel}>知识库（单选）</label>
-            <KbLibraryPicker
+            <KbLibraryCombobox
               value={libraryId}
-              onChange={onLibraryChange}
+              onChange={(id) => onLibraryChange(id)}
               activePath="/kb/hit-test"
             />
           </div>

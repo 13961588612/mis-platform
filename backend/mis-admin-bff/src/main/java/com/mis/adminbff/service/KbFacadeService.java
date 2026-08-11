@@ -11,6 +11,12 @@ import com.mis.adminbff.dto.kb.KbDocumentVO;
 import com.mis.adminbff.dto.kb.KbEngineCapabilitiesVO;
 import com.mis.adminbff.dto.kb.KbEngineHealthVO;
 import com.mis.adminbff.dto.kb.KbEngineModelPoolVO;
+import com.mis.adminbff.dto.kb.KbEngineOrphanResolveRequest;
+import com.mis.adminbff.dto.kb.KbEngineOrphanResolveResultVO;
+import com.mis.adminbff.dto.kb.KbEngineOrphanVO;
+import com.mis.adminbff.dto.kb.KbEngineRenameLogVO;
+import com.mis.adminbff.dto.kb.KbEngineRenameReq;
+import com.mis.adminbff.dto.kb.KbEngineRenameResultVO;
 import com.mis.adminbff.dto.kb.KbEngineReconcileVO;
 import com.mis.adminbff.dto.kb.KbEngineRefVO;
 import com.mis.adminbff.dto.kb.KbLibraryDeleteResultVO;
@@ -638,6 +644,70 @@ public class KbFacadeService {
      */
     public KbEngineReconcileVO runEngineReconcile() {
         return kbWebClient.runEngineReconcile();
+    }
+
+    /**
+     * 列出引擎侧游离 dataset（P1-T3）。
+     *
+     * @param engineType 引擎类型；{@code null} 取当前引擎
+     * @param resolved    0=待处理 1=已处置
+     * @return 游离项视图列表
+     */
+    public List<KbEngineOrphanVO> listEngineOrphans(String engineType, int resolved) {
+        return kbWebClient.listEngineOrphans(engineType, resolved);
+    }
+
+    /**
+     * 处置一个游离 dataset（P1-T3）。
+     *
+     * @param engineType 引擎类型；{@code null} 取当前引擎
+     * @param nativeId   引擎原生 dataset id
+     * @param req        处置请求
+     * @return 处置结果
+     */
+    public KbEngineOrphanResolveResultVO resolveEngineOrphan(
+            String engineType, String nativeId, KbEngineOrphanResolveRequest req) {
+        return kbWebClient.resolveEngineOrphan(engineType, nativeId, req);
+    }
+
+    /**
+     * 存量 dataset 批量重命名（P1-T4，dry-run 或执行）。
+     *
+     * @param req 请求（dryRun / confirmToken / limit）
+     * @return 本次结果
+     */
+    public KbEngineRenameResultVO renameDatasets(KbEngineRenameReq req) {
+        return kbWebClient.renameDatasets(req);
+    }
+
+    /**
+     * 回滚某批次的重命名（P1-T4）。
+     *
+     * @param batchId 原执行批次号
+     * @return 回滚结果
+     */
+    public KbEngineRenameResultVO rollbackRenameDatasets(String batchId) {
+        return kbWebClient.rollbackRenameDatasets(batchId);
+    }
+
+    /**
+     * 最近的重命名日志（P1-T4）。
+     *
+     * @param limit 返回条数
+     * @return 日志视图列表
+     */
+    public List<KbEngineRenameLogVO> listRenameLogs(int limit) {
+        return kbWebClient.listRenameLogs(limit);
+    }
+
+    /**
+     * 某批次的重命名日志（P1-T4）。
+     *
+     * @param batchId 批次号
+     * @return 该批次日志视图列表
+     */
+    public List<KbEngineRenameLogVO> getRenameLogsByBatch(String batchId) {
+        return kbWebClient.getRenameLogsByBatch(batchId);
     }
 
     /**
