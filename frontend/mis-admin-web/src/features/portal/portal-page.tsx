@@ -22,7 +22,7 @@ import type { AppItem } from '@/types/api';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import { resolveNavIcon } from '@/lib/nav/icons';
-import { resolveHostLanding } from '@/lib/nav/host-apps';
+import { resolveAppEntry } from '@/lib/nav/host-apps';
 import { APP_GROUP_LABEL } from '@/lib/nav/app-groups';
 import { HeaderToolkit } from '@/components/layout/header-toolkit';
 import {
@@ -107,7 +107,7 @@ export function PortalPage() {
       return;
     }
     if (app.code === 'system' || app.runtime === 'host') {
-      navigate(resolveHostLanding(app.code, app.basePath));
+      navigate(resolveAppEntry(app.code, app.basePath));
     }
   };
 

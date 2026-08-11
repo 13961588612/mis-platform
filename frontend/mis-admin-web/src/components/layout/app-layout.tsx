@@ -43,7 +43,7 @@ import {
 } from '@/lib/nav/system-nav';
 import { KB_NAV } from '@/lib/nav/kb-nav';
 import { AGENT_NAV } from '@/lib/nav/agent-nav';
-import { resolveActiveHostAppCode, resolveHostLanding } from '@/lib/nav/host-apps';
+import { resolveActiveHostAppCode, resolveAppEntry } from '@/lib/nav/host-apps';
 import { APP_GROUP_LABEL } from '@/lib/nav/app-groups';
 import { mergeNavWithFallback, routerMenusToSystemNav } from '@/lib/nav/menus-to-nav';
 import { useTabStore } from '@/stores/tab-store';
@@ -265,7 +265,7 @@ export function AppLayout() {
                             return;
                           }
                           if (item.code === 'system' || item.runtime === 'host') {
-                            navigate(resolveHostLanding(item.code, item.basePath));
+                            navigate(resolveAppEntry(item.code, item.basePath));
                           }
                         }}
                       >

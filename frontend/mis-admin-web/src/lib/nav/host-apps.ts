@@ -4,6 +4,7 @@
  * <p>门户九宫格与顶部应用切换器共用：不同宿主子系统的首页不同，
  * 不能一律跳 `/dashboard`（那是「系统管理」的首页）。
  */
+import { useTabStore } from '@/stores/tab-store';
 
 /** app.code → 落地路由。未登记的宿主应用回退 basePath，再回退 /dashboard。 */
 const HOST_APP_LANDING: Record<string, string> = {
@@ -24,6 +25,15 @@ export function resolveHostLanding(code: string | null | undefined, basePath?: s
   if (code && HOST_APP_LANDING[code]) return HOST_APP_LANDING[code];
   if (basePath && basePath.startsWith('/')) return basePath;
   return '/dashboard';
+}
+
+/**
+ * 进入宿主 APP：优先恢复该 APP 上次激活且仍打开的 tab；否则走 {@link resolveHostLanding}。
+ */
+export function resolveAppEntry(code: string, basePath?: string | null): string {
+  const last = useTabStore.getState().getLastActivePath(code);
+  if (last) return last;
+  return resolveHostLanding(code, basePath);
 }
 
 /**
