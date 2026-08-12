@@ -41,6 +41,12 @@ import java.util.List;
  * @param documentIds            按文档过滤：MIS 文档 id 列表；空 = 不过滤（企业级增强一期新增）
  * @param uploadFrom             按上传时间过滤下界（含）；{@code null} = 不限制（企业级增强一期新增）
  * @param uploadTo               按上传时间过滤上界（含）；{@code null} = 不限制（企业级增强一期新增）
+ * @param enableGraph            本次临时启用图谱增强（Wave B GraphRAG PoC，T03，末位追加）。
+ *                               三态：{@code true} 强制开 / {@code false} 强制关 /
+ *                               {@code null}（缺省）跟随库设置 {@code useKnowledgeGraph}。
+ *                               <b>只影响本次请求</b>，绝不写回库级设置——这是
+ *                               hybrid-only vs hybrid+graph 对照实验用的开关。
+ *                               {@code null} 与「不覆盖」同义（由 {@link #graphOverride()} 裁定）
  */
 public record HitTestRequest(
         @NotNull Long libraryId,
@@ -53,7 +59,8 @@ public record HitTestRequest(
         Boolean disableSynonym,
         List<Long> documentIds,
         Instant uploadFrom,
-        Instant uploadTo) {
+        Instant uploadTo,
+        Boolean enableGraph) {
 
     /**
      * 是否本次禁用同义词扩展。
@@ -65,5 +72,18 @@ public record HitTestRequest(
      */
     public boolean synonymDisabledForThisRun() {
         return Boolean.TRUE.equals(disableSynonym);
+    }
+
+    /**
+     * 本次图谱增强临时开关（Wave B GraphRAG PoC，T03）。
+     *
+     * <p>保留三态语义：{@code true} 强制开 / {@code false} 强制关 / {@code null} 跟随库设置。
+     * 由 {@code KbHitTestService} 应用到库级设置的 {@code useKnowledgeGraph}（只影响本次），
+     * 降级判定仍由 {@code RetrieveQueryResolver} S4.5 统一完成（Resolver 铁律）。
+     *
+     * @return 显式覆盖值；{@code null} = 不覆盖（跟随库设置）
+     */
+    public Boolean graphOverride() {
+        return enableGraph;
     }
 }

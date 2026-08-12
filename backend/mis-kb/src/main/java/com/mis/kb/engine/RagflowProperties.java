@@ -47,6 +47,15 @@ public class RagflowProperties {
      */
     private boolean deleteSupported = false;
 
+    /**
+     * 可开启知识图谱的库数上限（Wave B GraphRAG PoC，U7 裁定进配置）。
+     *
+     * <p>默认 {@code 2}（主规划 §6「至多 2 个关系密集库可开 Graph」）。
+     * {@code useKnowledgeGraph=true} 且当前启用该开关的库数 ≥ 本值 → 拒绝保存/构图
+     * （{@code KB_GRAPH_LIBRARY_LIMIT}）。Nacos 可热调，无需重启。
+     */
+    private int graphMaxLibraries = 2;
+
     /** 引擎对账配置（定时任务 + 手动触发共用）。 */
     private final Reconcile reconcile = new Reconcile();
 
@@ -88,6 +97,23 @@ public class RagflowProperties {
 
     public void setDeleteSupported(boolean deleteSupported) {
         this.deleteSupported = deleteSupported;
+    }
+
+    public int getGraphMaxLibraries() {
+        return graphMaxLibraries;
+    }
+
+    public void setGraphMaxLibraries(int graphMaxLibraries) {
+        this.graphMaxLibraries = graphMaxLibraries;
+    }
+
+    /**
+     * 归一化后的图谱库数上限（防配 0 或负数导致「一库都开不了」）。
+     *
+     * @return 至少为 1 的上限值
+     */
+    public int effectiveGraphMaxLibraries() {
+        return Math.max(graphMaxLibraries, 1);
     }
 
     public Reconcile getReconcile() {

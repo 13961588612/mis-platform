@@ -1,5 +1,7 @@
 package com.mis.kb.domain.service;
 
+import com.mis.common.security.context.LoginUser;
+import com.mis.common.security.context.SecurityContextHolder;
 import com.mis.kb.api.dto.AclSummaryVO;
 import com.mis.kb.api.dto.KbLibraryDetailVO;
 import com.mis.kb.api.dto.KbLibraryVO;
@@ -7,6 +9,7 @@ import com.mis.kb.domain.entity.KbAcl;
 import com.mis.kb.domain.entity.KbLibrary;
 import com.mis.kb.domain.model.DocumentChunkConfig;
 import com.mis.kb.domain.model.EmptyResultStrategy;
+import com.mis.kb.domain.model.EngineCapabilities;
 import com.mis.kb.domain.model.EngineLibraryRef;
 import com.mis.kb.domain.model.KbResultCode;
 import com.mis.kb.domain.model.LibraryStatus;
@@ -56,18 +59,21 @@ public class RagSettingsService {
     private final KbDocumentRepository documentRepository;
     private final KnowledgeEnginePort enginePort;
     private final RagflowProperties engineProperties;
+    private final KbGraphService graphService;
 
     public RagSettingsService(
             KbLibraryRepository libraryRepository,
             KbAclRepository aclRepository,
             KbDocumentRepository documentRepository,
             KnowledgeEnginePort enginePort,
-            RagflowProperties engineProperties) {
+            RagflowProperties engineProperties,
+            KbGraphService graphService) {
         this.libraryRepository = libraryRepository;
         this.aclRepository = aclRepository;
         this.documentRepository = documentRepository;
         this.enginePort = enginePort;
         this.engineProperties = engineProperties;
+        this.graphService = graphService;
     }
 
     /**
@@ -84,7 +90,13 @@ public class RagSettingsService {
     }
 
     /**
-     * 保存 RAG 设置并同步引擎（L-08）。
+     * 保存 RAG 设置并同步引擎（L-08；Wave B 增加图谱开关联动）。
+     *
+     * <p><b>图谱开关联动（U2 裁定：开关 false→true 保存时自动触发一次构图）：</b>
+     * 检测到 {@code useKnowledgeGraph} 从 {@code false}→{@code true} 且
+     * {@code kgBuildStatus != building} 时，保存成功后调用 {@code KbGraphService.build}
+     * 自动排队构图。构图失败<b>不阻断保存</b>（设置已落库，可手动「开始构建」重试）。
+     * 引擎侧构图只排队任务并立即返回，保存响应不会等构图完成（构建过程走 3s 轮询）。
      *
      * @param libraryId 知识库 id
      * @param settings  待保存设置
@@ -93,14 +105,36 @@ public class RagSettingsService {
     @Transactional
     public RagSettings save(Long libraryId, RagSettings settings) {
         KbLibrary lib = require(libraryId);
-        RagSettings effective = enforceRerankAvailability(validate(settings).withDefaults(), libraryId);
+        RagSettings oldEffective = get(libraryId);
+        RagSettings validated = enforceGraphAvailability(
+                enforceRerankAvailability(validate(settings).withDefaults(), libraryId), libraryId);
+        // 服务端维护图谱状态字段：请求里的 kgBuildStatus/kgBuildMessage 一律忽略（仅回显），
+        // 以 DB 里的服务端事实为准（设计 §5.1）——防客户端脏写把状态改成 building/ready。
+        validated = withServerGraphState(validated, oldEffective);
+        // 上限校验（保存与构图共用 KbGraphService.canEnableGraph）：开启图谱且已达上限 → 拒
+        if (Boolean.TRUE.equals(validated.useKnowledgeGraph())) {
+            graphService.canEnableGraph(libraryId);
+        }
+        // false→true 且非 building → 保存后自动触发构图（U2：自动触发一次）
+        boolean autoBuild = !Boolean.TRUE.equals(oldEffective.useKnowledgeGraph())
+                && Boolean.TRUE.equals(validated.useKnowledgeGraph())
+                && !RagSettings.KG_STATUS_BUILDING.equals(oldEffective.kgBuildStatus());
 
-        lib.setRagSettingsJson(KbJson.writeSettings(effective));
+        lib.setRagSettingsJson(KbJson.writeSettings(validated));
         lib.setUpdatedAt(Instant.now());
         KbLibrary saved = libraryRepository.save(lib);
 
-        syncToEngine(saved, effective);
-        return effective;
+        syncToEngine(saved, validated);
+        if (autoBuild) {
+            triggerAutoBuild(libraryId);
+            // 自动触发后重新读取：构图排队成功会回写 kgBuildStatus=building，
+            // 返回给前端的状态必须反映落库事实——否则前端看不到 building，3s 轮询无法启动
+            // （若构图排队失败，这里读到的是 none/failed，前端展示「未构建」+ 手动按钮重试）。
+            RagSettings after = KbJson.readSettings(
+                    libraryRepository.findById(libraryId).orElse(saved).getRagSettingsJson());
+            return after == null ? validated : after.withDefaults();
+        }
+        return validated;
     }
 
     /**
@@ -193,6 +227,20 @@ public class RagSettingsService {
                 throw new KbBusinessException(KbResultCode.KB_RAG_SETTINGS_INVALID);
             }
         }
+        // Wave B GraphRAG PoC（T02）：图谱字段校验（设计 §2.1）。
+        // kgBuildStatus 只接受四态码值（防脏写，非法直接拒——withDefaults 的归一化兜底
+        // 只适用于反序列化旧数据，保存入口必须显式拒非法值）；kgBuildMessage ≤200。
+        // 注意：合法值也只是「不拒」——保存路径随后用服务端事实覆盖请求值（设计 §5.1）。
+        if (settings.kgBuildStatus() != null && !settings.kgBuildStatus().isBlank()
+                && !RagSettings.KG_STATUS_NONE.equals(settings.kgBuildStatus())
+                && !RagSettings.KG_STATUS_BUILDING.equals(settings.kgBuildStatus())
+                && !RagSettings.KG_STATUS_READY.equals(settings.kgBuildStatus())
+                && !RagSettings.KG_STATUS_FAILED.equals(settings.kgBuildStatus())) {
+            throw new KbBusinessException(KbResultCode.KB_RAG_SETTINGS_INVALID);
+        }
+        if (settings.kgBuildMessage() != null && settings.kgBuildMessage().length() > 200) {
+            throw new KbBusinessException(KbResultCode.KB_RAG_SETTINGS_INVALID);
+        }
         return settings;
     }
 
@@ -220,6 +268,8 @@ public class RagSettingsService {
         }
         log.warn("未配置全局重排模型（mis.kb.engine.rerank-model-id 为空），"
                 + "已强制关闭该库的 rerank 开关 libraryId={}", libraryId);
+        // 17 参 canonical 透传图谱三字段（useKnowledgeGraph/kgBuildStatus/kgBuildMessage）——
+        // 绝不能走 14 参旧构造，否则图谱字段被静默置 null（record 末位追加铁律 §10-8）
         return new RagSettings(
                 settings.topK(),
                 settings.scoreThreshold(),
@@ -234,7 +284,110 @@ public class RagSettingsService {
                 settings.rerankModelId(),
                 settings.ocrEnabled(),
                 settings.ocrLanguage(),
-                settings.chunkOverlapTokenNum());
+                settings.chunkOverlapTokenNum(),
+                settings.useKnowledgeGraph(),
+                settings.kgBuildStatus(),
+                settings.kgBuildMessage());
+    }
+
+    /**
+     * 图谱可用性收敛（Wave B GraphRAG PoC，T02；三道防线第二道）。
+     *
+     * <p><b>与 {@link #enforceRerankAvailability} 同款静默强制口径：</b>
+     * {@code useKnowledgeGraph=true} 但 {@code capabilities.graphrag=false} →
+     * 落库强制 {@code false} + WARN（设计 §2.1）。为什么静默强制而非抛错：用户可能只是
+     * 在改别的参数，顺带把历史遗留的开关带上来，整单保存失败属于误伤；前端另有置灰 +
+     * 提示（第一道），构图入口还有 {@code KB_GRAPH_UNSUPPORTED}（第三道），三道口径一致。
+     *
+     * @param settings  已校验并补齐默认值的设置
+     * @param libraryId 知识库 id（仅用于日志定位）
+     * @return 图谱开关已收敛的设置
+     */
+    private RagSettings enforceGraphAvailability(RagSettings settings, Long libraryId) {
+        if (!Boolean.TRUE.equals(settings.useKnowledgeGraph())) {
+            return settings;
+        }
+        if (enginePort.capabilities().supports(EngineCapabilities.CAP_GRAPH)) {
+            return settings;
+        }
+        log.warn("当前引擎不支持知识图谱（capabilities.graphrag=false），"
+                + "已强制关闭该库的 useKnowledgeGraph libraryId={}", libraryId);
+        // 17 参 canonical 保留其余字段（含 kgBuildStatus/kgBuildMessage）
+        return new RagSettings(
+                settings.topK(),
+                settings.scoreThreshold(),
+                settings.rerank(),
+                settings.embeddingModel(),
+                settings.retrievalMethod(),
+                settings.chunkMethod(),
+                settings.chunkTokenNum(),
+                settings.separator(),
+                settings.emptyResultStrategy(),
+                settings.vectorSimilarityWeight(),
+                settings.rerankModelId(),
+                settings.ocrEnabled(),
+                settings.ocrLanguage(),
+                settings.chunkOverlapTokenNum(),
+                Boolean.FALSE,
+                settings.kgBuildStatus(),
+                settings.kgBuildMessage());
+    }
+
+    /**
+     * 以服务端事实覆盖请求里的图谱状态字段（设计 §5.1：前端提交 kgBuildStatus 时忽略或仅回显）。
+     *
+     * <p>{@code kgBuildStatus}/{@code kgBuildMessage} 由 {@code KbGraphService} 维护
+     * （构图触发写 building、状态查询映射 ready/failed 回写），保存请求里的值不可信——
+     * 客户端若把状态改成 building/ready，会绕过状态机制造假状态。故保存时一律
+     * 用 DB 旧值覆盖（{@code null} 兜底 {@code none}）。
+     *
+     * @param settings     本次待保存设置（图谱开关可能已改）
+     * @param serverState  DB 里当前服务端事实（旧设置，已 withDefaults）
+     * @return 图谱状态字段已收敛的设置（17 参 canonical 保留其余字段）
+     */
+    private RagSettings withServerGraphState(RagSettings settings, RagSettings serverState) {
+        return new RagSettings(
+                settings.topK(),
+                settings.scoreThreshold(),
+                settings.rerank(),
+                settings.embeddingModel(),
+                settings.retrievalMethod(),
+                settings.chunkMethod(),
+                settings.chunkTokenNum(),
+                settings.separator(),
+                settings.emptyResultStrategy(),
+                settings.vectorSimilarityWeight(),
+                settings.rerankModelId(),
+                settings.ocrEnabled(),
+                settings.ocrLanguage(),
+                settings.chunkOverlapTokenNum(),
+                settings.useKnowledgeGraph(),
+                serverState.kgBuildStatus() == null
+                        ? RagSettings.KG_STATUS_NONE : serverState.kgBuildStatus(),
+                serverState.kgBuildMessage());
+    }
+
+    /**
+     * 保存后自动触发一次构图（U2 裁定；开关 false→true 且非 building）。
+     *
+     * <p><b>不阻塞保存返回：</b>引擎侧构图只排队任务并立即返回 {@code task_id}，
+     * 故在本请求线程内完成排队是安全的；若引擎不可达/触发失败，捕获后记 WARN——
+     * 设置已落库（kgBuildStatus=none），前端「开始构建」按钮可手动重试（R4 降级路径）。
+     *
+     * @param libraryId 知识库 id
+     */
+    private void triggerAutoBuild(Long libraryId) {
+        Long userId = SecurityContextHolder.getOptional().map(LoginUser::getUserId).orElse(null);
+        if (userId == null) {
+            log.warn("图谱自动触发跳过：无法获取当前用户 libraryId={}（可手动触发）", libraryId);
+            return;
+        }
+        try {
+            graphService.build(libraryId, userId);
+        } catch (Exception e) {
+            log.warn("图谱自动触发失败（设置已保存，可手动重试）libraryId={}: {}",
+                    libraryId, e.getMessage());
+        }
     }
 
     /**

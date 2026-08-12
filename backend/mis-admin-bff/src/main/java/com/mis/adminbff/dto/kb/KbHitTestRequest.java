@@ -35,6 +35,10 @@ import java.util.List;
  * @param documentIds            按文档过滤：MIS 文档 id 列表；空 = 不过滤（企业级增强一期新增）
  * @param uploadFrom             按上传时间过滤下界（含）；{@code null} = 不限制（企业级增强一期新增）
  * @param uploadTo               按上传时间过滤上界（含）；{@code null} = 不限制（企业级增强一期新增）
+ * @param enableGraph            本次临时启用图谱增强（Wave B GraphRAG PoC，T03，末位追加）。
+ *                               三态透传：{@code true}/{@code false} 原样下发，
+ *                               {@code null}（跟随库设置）由 BFF 侧 cleanParams 剔除，
+ *                               mis-kb 收不到该键即走库设置。本层只透传，不解释。
  */
 public record KbHitTestRequest(
         @NotNull Long libraryId,
@@ -47,5 +51,6 @@ public record KbHitTestRequest(
         Boolean disableSynonym,
         List<Long> documentIds,
         Instant uploadFrom,
-        Instant uploadTo) {
+        Instant uploadTo,
+        Boolean enableGraph) {
 }

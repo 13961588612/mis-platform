@@ -20,6 +20,8 @@ import com.mis.adminbff.dto.kb.KbEngineRenameResultVO;
 import com.mis.adminbff.dto.kb.KbEngineRenameRollbackRequest;
 import com.mis.adminbff.dto.kb.KbEngineReconcileVO;
 import com.mis.adminbff.dto.kb.KbEngineRefVO;
+import com.mis.adminbff.dto.kb.KbGraphBuildResultVO;
+import com.mis.adminbff.dto.kb.KbGraphStatusVO;
 import com.mis.adminbff.dto.kb.KbHitTestRequest;
 import com.mis.adminbff.dto.kb.KbHitTestResultVO;
 import com.mis.adminbff.dto.kb.KbLibraryDeleteResultVO;
@@ -88,6 +90,18 @@ public class KbController {
      * {@code sys_menu(id=91052).permission} 的字面量保持一致；用于「设置管理员/移动」功能门控。
      */
     private static final String PERM_CATEGORY_MANAGE = "kb:category:manage";
+
+    /**
+     * 知识库编辑权限码（Wave B GraphRAG PoC，T02；构图 = 写操作）。
+     * 取值必须与既有 {@code sys_menu(id=91044).permission} 字面量保持一致。
+     */
+    private static final String PERM_LIBRARY_EDIT = "kb:library:edit";
+
+    /**
+     * 引擎引用查看权限码（Wave B GraphRAG PoC，T02；状态查询 = 读操作，不挂审计）。
+     * 取值必须与既有 {@code sys_menu(id=91056).permission} 字面量保持一致。
+     */
+    private static final String PERM_LIBRARY_ENGINE_REF_VIEW = "kb:library:engine-ref:view";
 
     private final KbFacadeService kbFacadeService;
     private final UserPermissionLoader userPermissionLoader;
@@ -254,6 +268,42 @@ public class KbController {
             @PathVariable Long id, @RequestBody KbRagSettings settings) {
         return Result.ok(kbFacadeService.updateRagSettings(id, settings,
                 kbFacadeService.loadRagSettingsBefore(id)));
+    }
+
+    /**
+     * 触发图谱构建（Wave B GraphRAG PoC，T02）。
+     *
+     * <p><b>构图 = 修改引擎侧资源，按「写」对待（设计 §2.5 红线）：</b>权限码
+     * {@code kb:library:edit}（V31 注册 91123 → 91044）+ {@code @OperLog} 留痕；
+     * mis-kb 侧 {@code KbGraphService.build} 还有 {@code hasLibraryManage} 管辖双闸门 +
+     * 能力/上限/状态机校验（第二道防线）。
+     *
+     * <p>{@code requirePermission} 是注册表未生效空窗期的兜底判权（与
+     * {@link #requireHitTestPermission()} 同款口径，读 {@link UserPermissionLoader#load}）。
+     *
+     * @param id 知识库 id
+     * @return 构图触发回执
+     */
+    @PostMapping("/libraries/{id}/graph/build")
+    @OperLog(module = "知识库", operation = "触发知识图谱构建", recordParams = true)
+    public Result<KbGraphBuildResultVO> buildGraph(@PathVariable Long id) {
+        requirePermission(PERM_LIBRARY_EDIT);
+        return Result.ok(kbFacadeService.buildGraph(id));
+    }
+
+    /**
+     * 查询图谱构建状态（Wave B GraphRAG PoC，T02；前端 3s 轮询）。
+     *
+     * <p><b>读操作默认不挂审计（U6 裁定）：</b>3s 轮询 × 多管理员 = 审计表噪声；
+     * 权限码 {@code kb:library:engine-ref:view}（V31 注册 91124 → 91056）。
+     *
+     * @param id 知识库 id
+     * @return 状态回执
+     */
+    @GetMapping("/libraries/{id}/graph/build-status")
+    public Result<KbGraphStatusVO> graphBuildStatus(@PathVariable Long id) {
+        requirePermission(PERM_LIBRARY_ENGINE_REF_VIEW);
+        return Result.ok(kbFacadeService.graphBuildStatus(id));
     }
 
     // ------------------------------------------------------------------ 文档
@@ -603,6 +653,27 @@ public class KbController {
         }
         Set<String> permissions = userPermissionLoader.load(user);
         if (permissions == null || !permissions.contains(PERM_CATEGORY_MANAGE)) {
+            throw new BusinessException(ResultCode.FORBIDDEN);
+        }
+    }
+
+    /**
+     * 按权限码兜底判权（Wave B GraphRAG PoC，T02；与 {@link #requireCategoryManagePermission()} 同款口径）。
+     *
+     * <p>主路径是 {@code ApiPermissionInterceptor} + {@code sys_api} 注册表（V31 已登记）；
+     * 本方法只覆盖「注册表尚未生效」的空窗期，读 {@link UserPermissionLoader#load(LoginUser)}
+     * 而非 {@code LoginUser.getPermissions()}（后者在未映射路径下恒为空集，照读会 fail-close 事故）。
+     *
+     * @param permissionCode 权限码（如 {@code kb:library:edit}）
+     * @throws BusinessException 未登录时 {@code UNAUTHORIZED}；缺权限码时 {@code FORBIDDEN}
+     */
+    private void requirePermission(String permissionCode) {
+        LoginUser user = RequestContext.requireLoginUser();
+        if (user.getUserId() == null) {
+            throw new BusinessException(ResultCode.UNAUTHORIZED);
+        }
+        Set<String> permissions = userPermissionLoader.load(user);
+        if (permissions == null || !permissions.contains(permissionCode)) {
             throw new BusinessException(ResultCode.FORBIDDEN);
         }
     }

@@ -98,6 +98,10 @@ function toSettings(form: LibraryForm, base: KbRagSettings | null): KbRagSetting
     ocrEnabled: base?.ocrEnabled ?? null,
     ocrLanguage: base?.ocrLanguage ?? null,
     chunkOverlapTokenNum: base?.chunkOverlapTokenNum ?? null,
+    // 图谱开关（Wave B GraphRAG PoC，T02）：只在详情页维护，此处原样带回——
+    // 否则一次「改个名字」就会把详情页开启的知识图谱悄悄关掉。
+    // kgBuildStatus/kgBuildMessage 由服务端维护，前端不提交（类型上可选）。
+    useKnowledgeGraph: base?.useKnowledgeGraph ?? null,
   };
 }
 

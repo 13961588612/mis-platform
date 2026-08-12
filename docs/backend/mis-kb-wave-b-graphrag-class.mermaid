@@ -1,0 +1,176 @@
+classDiagram
+    direction LR
+
+    class RagSettings {
+        <<record>>
+        +Integer topK
+        +Double scoreThreshold
+        +Boolean rerank
+        +String embeddingModel
+        +String retrievalMethod
+        +String chunkMethod
+        +Integer chunkTokenNum
+        +String separator
+        +String emptyResultStrategy
+        +Double vectorSimilarityWeight
+        +String rerankModelId
+        +Boolean ocrEnabled
+        +String ocrLanguage
+        +Integer chunkOverlapTokenNum
+        +Boolean useKnowledgeGraph  %NEW B: 默认 false%
+        +String kgBuildStatus       %NEW B: none/building/ready/failed%
+        +String kgBuildMessage      %NEW B: 失败摘要≤200%
+        +defaults() RagSettings
+        +withDefaults() RagSettings
+        +kgStatusNone() String
+    }
+
+    class EngineCapabilities {
+        <<record>>
+        +List~String~ capabilities
+        +boolean rerankSupported
+        +boolean metadataFilterSupported
+        +boolean replaceSupported
+        +boolean hybridSupported
+        +boolean deleteSupported
+        +boolean parserOcrSupported
+        +boolean parserOverlapSupported
+        +boolean graphSupported    %NEW B: CAP_GRAPH%
+        +supports(capability) boolean
+    }
+
+    class KbGraphService {
+        <<service>>
+        +build(libraryId, userId) GraphBuildResultVO
+        +refreshStatus(libraryId) String
+        +status(libraryId) KbGraphStatusVO
+        -canEnableGraph(libraryId) void
+        -pollEngineAndWriteBack(lib)
+    }
+
+    class KbGraphStatusVO {
+        <<record>>
+        +String kgBuildStatus
+        +String kgBuildMessage
+        +String graphragTaskId
+        +Instant updatedAt
+    }
+
+    class KnowledgeEnginePort {
+        <<interface>>
+        +createLibrary(cmd) EngineLibraryRef
+        +updateLibrarySettings(ref, settings)
+        +retrieve(query) List~ChunkHit~
+        +capabilities() EngineCapabilities
+        +buildGraph(ref) String        %NEW B default: 不支持%
+        +queryGraphBuildStatus(ref) GraphBuildSnapshot  %NEW B default: none%
+    }
+
+    class GraphBuildSnapshot {
+        <<record>>
+        +String taskId
+        +Double progress
+        +String status    %BUILDING|READY|FAILED%
+        +String progressMsg
+        +Long processDurationMs
+    }
+
+    class RagflowAdapter {
+        +retrieve(query) List~ChunkHit%  %useKnowledgeGraph=true 时走 /datasets/{id}/search%
+        +buildGraph(ref) String
+        +queryGraphBuildStatus(ref) GraphBuildSnapshot
+        +capabilities() EngineCapabilities  %graphSupported=true%
+    }
+
+    class RagflowClient {
+        +updateDatasetSettings(datasetId, settings)  %下发 parser_config.graphrag%
+        +buildGraph(datasetId) String               %POST /datasets/{id}/index?type=graph%
+        +queryGraphBuildStatus(datasetId) JsonNode  %GET /datasets/{id}/index?type=graph%
+        +searchDataset(datasetId, query, docIds) List~RfSearchChunk%  %POST /datasets/{id}/search use_kg%
+        +retrieve(query, datasetIds, documentIds) List~RfChunk%       %现状不动%
+    }
+
+    class RfSearchChunk {
+        <<record>>
+        +String chunkId
+        +String contentWithWeight
+        +String docnmKwd
+        +String docId
+        +String kbId
+        +Double similarity
+        +String text()  %剥离 <weight> 标记%
+    }
+
+    class RetrieveQuery {
+        <<record>>
+        +String question
+        +List~Long~ libraryIds
+        +Integer topK
+        +Double threshold
+        +String retrievalMethod
+        +Double vectorSimilarityWeight
+        +Boolean rerank
+        +String rerankModelId
+        +String emptyResultStrategy
+        +List~Long~ documentIds
+        +Boolean useKnowledgeGraph  %NEW B%
+        +effectiveUseKnowledgeGraph() boolean
+    }
+
+    class RetrieveQueryResolver {
+        +resolveAll(ctx) Resolution
+        %S4.5: graphrag 能力/单库/kgBuildStatus 降级%
+    }
+
+    class KbRetrieveService {
+        +retrieve(userId, tenantId, request) RetrieveHitsVO
+    }
+
+    class KbHitTestService {
+        +run(request, userId) HitTestResultVO
+    }
+
+    class HitTestRequest {
+        <<record>>
+        +Long libraryId
+        +String question
+        +Integer topK
+        +Double threshold
+        +String retrievalMethod
+        +Double vectorSimilarityWeight
+        +Boolean rerank
+        +Boolean disableSynonym
+        +List~Long~ documentIds
+        +Instant uploadFrom
+        +Instant uploadTo
+        +Boolean enableGraph  %NEW B: 本次临时开启/关闭%
+    }
+
+    class RagSettingsService {
+        +save(libraryId, settings) RagSettings  %校验 + enforceGraphAvailability%
+        +detail(libraryId) KbLibraryDetailVO
+    }
+
+    class KbController {
+        +getRagSettings(id)
+        +updateRagSettings(id, body, auditBefore)
+        +buildGraph(id)          %NEW B: POST /libraries/{id}/graph/build%
+        +graphStatus(id)         %NEW B: GET /libraries/{id}/graph/build-status%
+        +hitTest(body)
+    }
+
+    RagSettings "1" --> "1" KbLibrary : rag_settings_json 序列化
+    KbGraphService --> KnowledgeEnginePort : 构图/状态
+    KbGraphService --> RagSettingsService : 回写 kgBuildStatus
+    RagSettingsService --> KnowledgeEnginePort : updateLibrarySettings(含 graphrag 键)
+    KnowledgeEnginePort <|.. RagflowAdapter
+    RagflowAdapter --> RagflowClient
+    RagflowClient --> RfSearchChunk : searchDataset 解析
+    RagflowAdapter --> GraphBuildSnapshot : queryGraphBuildStatus 映射
+    RetrieveQuery "1" --> "1" RagSettings : useKnowledgeGraph 合并
+    RetrieveQueryResolver ..> RetrieveQuery : 产出
+    KbRetrieveService --> RetrieveQueryResolver
+    KbHitTestService --> RetrieveQueryResolver
+    KbRetrieveService --> KnowledgeEnginePort
+    KbHitTestService --> KnowledgeEnginePort
+    KbController --> KbGraphService

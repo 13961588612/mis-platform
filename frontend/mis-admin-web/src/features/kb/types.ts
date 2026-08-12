@@ -102,6 +102,68 @@ export interface KbRagSettings {
    * 引擎能力 `parserOverlapSupported=false` 时置灰 + 提示，不参与下发。
    */
   chunkOverlapTokenNum: number | null;
+  /**
+   * 知识图谱开关（Wave B GraphRAG PoC，末位追加）。
+   *
+   * <p>默认 `false`；引擎能力 `graphSupported=false` 时置灰 + 提示
+   * 「当前引擎版本暂不支持」；开启且已达 `mis.kb.engine.graph-max-libraries`
+   * （默认 2）上限时后端拒绝并回显错误。
+   *
+   * <p>⚠ 构图配置键与检索键语义不同（后端设计 §1.2）：构图配置 =
+   * `parser_config.graphrag.use_graphrag`（建库/更新期下发）；检索增强 =
+   * `/datasets/{id}/search` 请求体 `use_kg`（检索期）。开启后由后端异步构图，
+   * 构建期间检索暂不启用图谱增强（降级 hybrid-only + 回显原因）。
+   */
+  useKnowledgeGraph: boolean | null;
+  /**
+   * 图谱构建状态（Wave B GraphRAG PoC，末位追加）。
+   *
+   * <p>四态：`none` 未构建 / `building` 构建中 / `ready` 已就绪 / `failed` 构建失败。
+   * **服务端维护**（`KbGraphService` 查询引擎 progress 后回写 rag_settings_json），
+   * 前端提交该字段时忽略或仅回显。`building` 态前端每 3s 轮询 build-status。
+   *
+   * <p>可选（`?`）：前端<b>不提交</b>该字段（保存请求体里可缺省），
+   * 仅读取回显；老后端未升级时亦为 undefined。
+   */
+  kgBuildStatus?: string | null;
+  /**
+   * 图谱构建消息摘要（Wave B GraphRAG PoC，末位追加）。
+   *
+   * <p>≤200 字符；失败/构建中原因，`ready` 时清空。`failed` 态徽标 tooltip 展示。
+   * 同 {@code kgBuildStatus}：仅回显，前端不提交，可选。
+   */
+  kgBuildMessage?: string | null;
+}
+
+/**
+ * 图谱构建状态回执（Wave B GraphRAG PoC，T01）。
+ *
+ * <p>与 BFF `KbGraphStatusVO` / mis-kb `KbGraphStatusVO` 镜像。
+ * 前端在 `building` 态每 3s 轮询 `GET /libraries/{id}/graph/build-status`，
+ * 直到 `ready`/`failed`（PoC 不引入后端定时任务，轮询走前端）。
+ */
+export interface KbGraphStatus {
+  /** 四态：none / building / ready / failed。 */
+  kgBuildStatus: string;
+  /** 构建消息摘要（≤200 字符；ready 时清空，failed 时存失败原因）。 */
+  kgBuildMessage: string | null;
+  /** 引擎侧构图任务 id（内部字段，仅排障展示用）。 */
+  graphragTaskId: string | null;
+  /** 最近一次状态刷新（回写）时刻（ISO-8601）。 */
+  updatedAt: string | null;
+}
+
+/**
+ * 构图触发回执（Wave B GraphRAG PoC，T02）。
+ *
+ * <p>与 BFF `KbGraphBuildResultVO` / mis-kb `KbGraphBuildResultVO` 镜像。
+ * `building=true` 表示构图任务已在引擎侧排队；`kgBuildStatus` 回显落库后的状态
+ * （触发成功恒为 `building`）。
+ */
+export interface KbGraphBuildResult {
+  building: boolean;
+  taskId: string | null;
+  kgBuildStatus: string;
 }
 
 /** 知识库分类。 */
@@ -576,6 +638,13 @@ export interface KbEngineCapabilities {
   parserOcrSupported: boolean | null;
   /** 当前引擎是否支持 parser_config overlap 键（企业级增强一期 KE-07，默认 false）。 */
   parserOverlapSupported: boolean | null;
+  /**
+   * 当前引擎是否支持知识图谱增强（Wave B GraphRAG PoC，末位追加）。
+   *
+   * <p>RAGFlow 实例 T00 实测支持（`graphSupported=true`）；为 false 时前端把图谱开关
+   * 置灰 + 提示「当前引擎版本暂不支持」，保存期后端强制关、检索期降级 hybrid-only。
+   */
+  graphSupported: boolean | null;
 }
 
 // --------------------------------------------------------------- 引擎对账（T04）
@@ -956,6 +1025,15 @@ export interface KbHitTestRequest {
   uploadFrom?: string | null;
   /** 按上传时间过滤上界（ISO-8601，含）；缺省 = 不限制（KE-09）。 */
   uploadTo?: string | null;
+  /**
+   * 本次临时启用图谱增强（Wave B GraphRAG PoC，T03，末位追加）。
+   *
+   * <p>三态：`true` 强制开 / `false` 强制关 / `null`（缺省）跟随库设置
+   * `useKnowledgeGraph`。用于 hybrid-only vs hybrid+graph 的 A/B 对照——
+   * 只影响本次测试，绝不写回库设置。能力不支持/多库/图未就绪时由后端
+   * Resolver S4.5 降级并在 `effectiveParams.degradedReasons` 回显原因。
+   */
+  enableGraph?: boolean | null;
 }
 
 /** 命中测试单条命中（与 BFF `KbHitTestHitVO` 镜像）。 */
@@ -986,6 +1064,13 @@ export interface KbEffectiveParams {
   emptyResultStrategy: string | null;
   source: string | null;
   degradedReasons: string[] | null;
+  /**
+   * 本次实际生效的图谱增强开关（Wave B GraphRAG PoC，T03，末位追加）。
+   *
+   * <p>回显「图谱增强 开/关（原因）」用；`true` 表示本次走了
+   * `/datasets/{id}/search` + `use_kg:true`。降级原因在 `degradedReasons` 里。
+   */
+  useKnowledgeGraph?: boolean | null;
 }
 
 /** 命中测试结果（与 BFF `KbHitTestResultVO` 镜像）。 */

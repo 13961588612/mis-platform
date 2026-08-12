@@ -6,6 +6,8 @@ import com.mis.common.core.result.Result;
 import com.mis.common.security.context.LoginUser;
 import com.mis.common.security.context.SecurityContextHolder;
 import com.mis.kb.api.dto.KbEngineRefVO;
+import com.mis.kb.api.dto.KbGraphBuildResultVO;
+import com.mis.kb.api.dto.KbGraphStatusVO;
 import com.mis.kb.api.dto.KbLibraryCreateRequest;
 import com.mis.kb.api.dto.KbLibraryDeleteResultVO;
 import com.mis.kb.api.dto.KbLibraryDetailVO;
@@ -13,6 +15,7 @@ import com.mis.kb.api.dto.KbLibraryUpdateRequest;
 import com.mis.kb.api.dto.KbLibraryVO;
 import com.mis.kb.domain.model.LibraryDeleteMode;
 import com.mis.kb.domain.model.RagSettings;
+import com.mis.kb.domain.service.KbGraphService;
 import com.mis.kb.domain.service.KbLibraryService;
 import com.mis.kb.domain.service.RagSettingsService;
 import jakarta.validation.Valid;
@@ -35,10 +38,15 @@ public class LibraryController {
 
     private final KbLibraryService libraryService;
     private final RagSettingsService ragSettingsService;
+    private final KbGraphService graphService;
 
-    public LibraryController(KbLibraryService libraryService, RagSettingsService ragSettingsService) {
+    public LibraryController(
+            KbLibraryService libraryService,
+            RagSettingsService ragSettingsService,
+            KbGraphService graphService) {
         this.libraryService = libraryService;
         this.ragSettingsService = ragSettingsService;
+        this.graphService = graphService;
     }
 
     @GetMapping
@@ -91,6 +99,35 @@ public class LibraryController {
     public Result<RagSettings> updateEngineSettings(
             @PathVariable Long id, @RequestBody RagSettings settings) {
         return Result.ok(ragSettingsService.save(id, settings));
+    }
+
+    /**
+     * 触发图谱构建（Wave B GraphRAG PoC，T02；手动按钮/重试）。
+     *
+     * <p><b>内部端点不重复判权限码</b>（与仓库既有口径一致）：BFF 侧 {@code kb:library:edit}
+     * 权限码 + {@code @OperLog} 审计收口；本方法内 {@code KbGraphService.build} 仍执行
+     * {@code hasLibraryManage} 管辖双闸门 + 能力/上限/状态机校验（设计 §2.5）。
+     *
+     * @param id 知识库 id
+     * @return 构图触发回执（building/taskId/kgBuildStatus）
+     */
+    @PostMapping("/{id}/graph/build")
+    public Result<KbGraphBuildResultVO> buildGraph(@PathVariable Long id) {
+        return Result.ok(graphService.build(id, currentUserId()));
+    }
+
+    /**
+     * 查询图谱构建状态（Wave B GraphRAG PoC，T02；前端 3s 轮询）。
+     *
+     * <p><b>读操作：</b>BFF 侧 {@code kb:library:engine-ref:view} 权限码收口，
+     * 不挂审计（U6：轮询刷审计表噪声）。每次调用触发引擎刷新 + 有变化才回写。
+     *
+     * @param id 知识库 id
+     * @return 状态回执（kgBuildStatus/kgBuildMessage/graphragTaskId/updatedAt）
+     */
+    @GetMapping("/{id}/graph/build-status")
+    public Result<KbGraphStatusVO> graphBuildStatus(@PathVariable Long id) {
+        return Result.ok(graphService.refreshStatus(id));
     }
 
     @PostMapping

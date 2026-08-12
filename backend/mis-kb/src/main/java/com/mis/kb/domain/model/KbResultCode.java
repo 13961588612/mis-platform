@@ -97,7 +97,26 @@ public enum KbResultCode {
     /** 该节点不在您的管理范围内（节点管辖判定，知识库域一期，T01）。 */
     KB_CATEGORY_NOT_MANAGEABLE(40311, "该节点不在您的管理范围内"),
     /** 移动目标位置不在您的管理范围内（知识库域一期，T01）。 */
-    KB_CATEGORY_MOVE_OUT_OF_SCOPE(40312, "目标位置不在您的管理范围内");
+    KB_CATEGORY_MOVE_OUT_OF_SCOPE(40312, "目标位置不在您的管理范围内"),
+
+    /* ---- Wave B GraphRAG PoC（T02/T03）---- */
+    /**
+     * 当前引擎不支持图谱构建/增强（{@code capabilities.graphrag=false}）。
+     *
+     * <p>构图/开启开关时抛出；亦可携带自定义 message（如「无引擎映射」「无文档」）。
+     */
+    KB_GRAPH_UNSUPPORTED(40950, "当前引擎不支持知识图谱构建/增强"),
+    /**
+     * 已开启图谱的库数达到上限（{@code mis.kb.engine.graph-max-libraries}，默认 2）。
+     *
+     * <p>保存与构图两处共用（{@code KbGraphService.canEnableGraph}）；抛出时 message
+     * 动态携带上限值，前端据此提示「已开启图谱的库数达到上限（N）」。
+     */
+    KB_GRAPH_LIBRARY_LIMIT(40951, "已开启图谱的库数达到上限，请先关闭其他库的图谱开关"),
+    /** 图谱构建中，拒绝重复触发（状态机 building，共享知识 §10-10）。 */
+    KB_GRAPH_BUILD_IN_PROGRESS(40952, "图谱构建中，请等待完成后再试"),
+    /** 图谱未构建完成（降级提示用，实际走 degradedReason 不抛错；设计 §5.3）。 */
+    KB_GRAPH_NOT_READY(40953, "图谱未构建完成");
 
     private final int code;
     private final String message;

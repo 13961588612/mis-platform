@@ -69,7 +69,8 @@ class RetrieveHitsVoContractTest {
                 List.of(new ChunkHitVO(10L, 100L, "片段正文", 0.87D, "员工手册", 12, 3)),
                 "SUGGEST",
                 new EffectiveParamsVO(
-                        10, 0.3D, "hybrid", 0.3D, false, null, "SUGGEST", "LIBRARY", List.of()));
+                        10, 0.3D, "hybrid", 0.3D, false, null, "SUGGEST", "LIBRARY", List.of(),
+                        null));
 
         Set<String> actual = topLevelKeys(mapper.valueToTree(vo));
         assertEquals(ALLOWED_KEYS, actual, RED_LINE);
@@ -115,7 +116,8 @@ class RetrieveHitsVoContractTest {
                 List.of(new ChunkHitVO(10L, 100L, "片段正文", 0.87D, "员工手册", 12, 3)),
                 "SUGGEST",
                 new EffectiveParamsVO(
-                        10, 0.3D, "hybrid", 0.3D, false, null, "SUGGEST", "LIBRARY", List.of()));
+                        10, 0.3D, "hybrid", 0.3D, false, null, "SUGGEST", "LIBRARY", List.of(),
+                        null));
 
         String json = mapper.writeValueAsString(vo);
         for (String forbidden : List.of(

@@ -21,6 +21,10 @@ import java.util.List;
  * @param emptyResultStrategy    生效空结果策略码值
  * @param source                 参数基准来源，见 {@link #SOURCE_LIBRARY} 等常量
  * @param degradedReasons        降级原因列表，永不为 {@code null}
+ * @param useKnowledgeGraph      图谱增强实际生效开关（Wave B GraphRAG PoC，T03，末位追加）。
+ *                               {@code true} = 本次走了 {@code /datasets/{id}/search} + {@code use_kg:true}；
+ *                               被 S4.5 降级时为 {@code false}（原因在 {@code degradedReasons}）。
+ *                               命中测试页据此回显「本次实际生效：图谱增强 开/关（原因）」。
  */
 public record EffectiveRetrieveParams(
         Integer topK,
@@ -31,7 +35,8 @@ public record EffectiveRetrieveParams(
         String rerankModelId,
         String emptyResultStrategy,
         String source,
-        List<String> degradedReasons) {
+        List<String> degradedReasons,
+        Boolean useKnowledgeGraph) {
 
     /** 参数基准来源：单库检索，取该库的库级设置。 */
     public static final String SOURCE_LIBRARY = "LIBRARY";
@@ -41,12 +46,14 @@ public record EffectiveRetrieveParams(
     public static final String SOURCE_REQUEST_OVERRIDE = "REQUEST_OVERRIDE";
 
     /**
-     * 紧凑构造：保证 {@code degradedReasons} 永不为 null 且不可变。
+     * 紧凑构造：保证 {@code degradedReasons} 永不为 null 且不可变；
+     * {@code useKnowledgeGraph} 缺省按 {@code false} 收敛。
      *
      * <p>前端拿到 null 列表就得到处判空，不如在源头收敛。
      */
     public EffectiveRetrieveParams {
         degradedReasons = degradedReasons == null ? List.of() : List.copyOf(degradedReasons);
+        useKnowledgeGraph = useKnowledgeGraph != null && useKnowledgeGraph;
     }
 
     /**

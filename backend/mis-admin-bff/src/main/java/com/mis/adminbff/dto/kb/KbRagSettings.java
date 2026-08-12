@@ -7,6 +7,8 @@ package com.mis.adminbff.dto.kb;
  * kb_settings_model_chunk（R-P0-04）末位追加 {@code rerankModelId}。
  * 企业级增强一期（KE-06/KE-07）末位追加 {@code ocrEnabled} / {@code ocrLanguage} /
  * {@code chunkOverlapTokenNum}（当前引擎不支持，只落库 + 回显 + 提示，不下发）。
+ * Wave B GraphRAG PoC（T01）末位追加 {@code useKnowledgeGraph} / {@code kgBuildStatus} /
+ * {@code kgBuildMessage}（图谱三字段，零 DDL 进 rag_settings_json）。
  * <b>本层不做默认值补齐</b>——默认值只在 mis-kb 一处定义，BFF 再补一遍必然出现两套默认值漂移。
  *
  * @param topK                召回条数
@@ -23,6 +25,9 @@ package com.mis.adminbff.dto.kb;
  * @param ocrEnabled          OCR 开关；能力 parser_ocr=true 前不下发（企业级增强一期新增）
  * @param ocrLanguage         OCR 语言码值 zh/en/zh_en；能力支持前不下发（企业级增强一期新增）
  * @param chunkOverlapTokenNum 分块重叠 token 数（正整数；能力 parser_overlap=true 前不下发）（企业级增强一期新增）
+ * @param useKnowledgeGraph   知识图谱开关；能力 graphrag=true 前不下发（Wave B GraphRAG PoC 新增）
+ * @param kgBuildStatus       图谱构建状态 none|building|ready|failed；服务端维护（Wave B GraphRAG PoC 新增）
+ * @param kgBuildMessage      图谱构建消息摘要（≤200；ready 时清空）（Wave B GraphRAG PoC 新增）
  */
 public record KbRagSettings(
         Integer topK,
@@ -38,5 +43,8 @@ public record KbRagSettings(
         String rerankModelId,
         Boolean ocrEnabled,
         String ocrLanguage,
-        Integer chunkOverlapTokenNum) {
+        Integer chunkOverlapTokenNum,
+        Boolean useKnowledgeGraph,
+        String kgBuildStatus,
+        String kgBuildMessage) {
 }

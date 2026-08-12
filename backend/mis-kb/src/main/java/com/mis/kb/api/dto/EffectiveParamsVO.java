@@ -20,6 +20,10 @@ import java.util.List;
  * @param emptyResultStrategy    生效空结果策略
  * @param source                 参数来源 LIBRARY / GLOBAL_DEFAULT / REQUEST_OVERRIDE
  * @param degradedReasons        降级原因列表；空表示未降级
+ * @param useKnowledgeGraph      图谱增强实际生效开关（Wave B GraphRAG PoC，T03，末位追加）。
+ *                               {@code true} = 本次走了 /datasets/{id}/search + use_kg:true；
+ *                               被 S4.5 降级时为 {@code false}（原因在 {@code degradedReasons}）。
+ *                               命中测试页据此回显「本次实际生效：图谱增强 开/关（原因）」
  */
 public record EffectiveParamsVO(
         Integer topK,
@@ -30,7 +34,8 @@ public record EffectiveParamsVO(
         String rerankModelId,
         String emptyResultStrategy,
         String source,
-        List<String> degradedReasons) {
+        List<String> degradedReasons,
+        Boolean useKnowledgeGraph) {
 
     /**
      * 由领域对象构造视图。
@@ -51,6 +56,7 @@ public record EffectiveParamsVO(
                 params.rerankModelId(),
                 params.emptyResultStrategy(),
                 params.source(),
-                params.degradedReasons());
+                params.degradedReasons(),
+                params.useKnowledgeGraph());
     }
 }

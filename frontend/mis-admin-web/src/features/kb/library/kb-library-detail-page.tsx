@@ -16,10 +16,10 @@ import { useClientSort } from '@/components/common/use-client-sort';
 import { useColumnWidths, type ResizableColumn } from '@/components/common/use-column-widths';
 import { EnabledBadge, SecrecyBadge } from '../components/kb-badges';
 import { KbWeightSlider } from '../components/kb-weight-slider';
-import { getLibraryDetail, updateRagSettings } from '../api/kb-api';
+import { getLibraryDetail, updateRagSettings, buildGraph, graphBuildStatus } from '../api/kb-api';
 import { KbDocumentTable } from '../document/kb-document-table';
 import { useKbStore } from '../stores/use-kb-store';
-import type { KbAclSummary, KbLibraryDetail, KbRagSettings } from '../types';
+import type { KbAclSummary, KbGraphStatus, KbLibraryDetail, KbRagSettings } from '../types';
 import {
   KB_EMPTY_RESULT_STRATEGY_OPTIONS,
   KB_RETRIEVAL_METHOD_OPTIONS,
@@ -67,6 +67,14 @@ interface RagForm {
   ocrLanguage: string;
   /** 分块重叠 token 数（KE-07）；空串 = 引擎默认/0。 */
   chunkOverlapTokenNum: string;
+  /**
+   * 知识图谱开关（Wave B GraphRAG PoC，T02，末位追加）。
+   *
+   * <p>默认 `false`；能力 `graphSupported=false` 时置灰 + 提示。保存时后端做
+   * 能力/上限强制（`KB_GRAPH_LIBRARY_LIMIT`）。false→true 保存后后端自动触发构图，
+   * 返回的设置里 `kgBuildStatus` 会反映 `building`（前端据此开始 3s 轮询）。
+   */
+  useKnowledgeGraph: boolean;
 }
 
 const EMPTY_RAG_FORM: RagForm = {
@@ -84,6 +92,7 @@ const EMPTY_RAG_FORM: RagForm = {
   ocrEnabled: false,
   ocrLanguage: 'zh',
   chunkOverlapTokenNum: '',
+  useKnowledgeGraph: false,
 };
 
 /** 切片相关字段：这几个改了才需要弹重解析引导（WA-10）。 */
@@ -107,6 +116,7 @@ function toForm(s: KbRagSettings | null | undefined): RagForm {
     ocrEnabled: s.ocrEnabled === true,
     ocrLanguage: s.ocrLanguage ?? 'zh',
     chunkOverlapTokenNum: s.chunkOverlapTokenNum == null ? '' : String(s.chunkOverlapTokenNum),
+    useKnowledgeGraph: s.useKnowledgeGraph === true,
   };
 }
 
@@ -146,6 +156,9 @@ function toSettings(f: RagForm): KbRagSettings {
       f.chunkOverlapTokenNum.trim() !== '' && Number.isFinite(Number(f.chunkOverlapTokenNum))
         ? Math.max(0, Math.trunc(Number(f.chunkOverlapTokenNum)))
         : null,
+    // 图谱开关（Wave B GraphRAG PoC，T02）：随保存提交；kgBuildStatus/kgBuildMessage
+    // 由服务端维护，前端不提交（后端忽略或仅回显）
+    useKnowledgeGraph: f.useKnowledgeGraph,
   };
 }
 
@@ -179,6 +192,10 @@ export function KbLibraryDetailPage() {
   const [saving, setSaving] = useState(false);
   /** 保存成功后是否展示重解析引导（WA-10）。 */
   const [showReparseHint, setShowReparseHint] = useState(false);
+  /** 图谱构建状态（Wave B GraphRAG PoC，T02）：轮询刷新 + 手动触发后本地态。 */
+  const [graphStatus, setGraphStatus] = useState<KbGraphStatus | null>(null);
+  /** 图谱构建按钮 in-flight（防止连点重复触发；后端另有 building 状态机拒绝）。 */
+  const [graphTriggering, setGraphTriggering] = useState(false);
 
   /* 授权范围表：列宽 + 排序（当前库 ACL 一次性加载） */
   const DETAIL_ACL_COLS = useMemo<ResizableColumn[]>(
@@ -216,6 +233,28 @@ export function KbLibraryDetailPage() {
   // 置灰 + 提示「暂不生效」，但保存照常成功（只落库，引擎升级后翻转能力即放行下发）。
   const ocrSupported = capabilities?.parserOcrSupported === true;
   const overlapSupported = capabilities?.parserOverlapSupported === true;
+  // Wave B GraphRAG PoC（T02）：图谱能力（fail-safe，未确认即置灰）。RAGFlow 实例
+  // T00 实测支持（graphSupported=true），故开关可开；引擎升级破坏契约时翻转能力即置灰。
+  const graphSupported = capabilities?.graphSupported === true;
+  // 图谱状态：轮询结果优先，否则回退库设置（detail.ragSettings 由后端维护）。
+  // 保存后返回的设置里 kgBuildStatus=building 会驱动下方 3s 轮询自动启动。
+  const kgBuildStatus =
+    graphStatus?.kgBuildStatus ?? detail?.ragSettings?.kgBuildStatus ?? 'none';
+  const kgBuildMessage =
+    graphStatus?.kgBuildMessage ?? detail?.ragSettings?.kgBuildMessage ?? null;
+  const isBuilding = kgBuildStatus === 'building';
+  const graphStatusLabel = useMemo(() => {
+    switch (kgBuildStatus) {
+      case 'building':
+        return '构建中';
+      case 'ready':
+        return '已就绪';
+      case 'failed':
+        return '构建失败';
+      default:
+        return '未构建';
+    }
+  }, [kgBuildStatus]);
   const isHybrid = form.retrievalMethod === 'hybrid';
   // 全局重排模型友好名：池内按 id 反查 name，查不到原样回显 id（不吞）。
   const globalRerankName =
@@ -288,6 +327,69 @@ export function KbLibraryDetailPage() {
       setSaving(false);
     }
   }
+
+  /**
+   * 手动触发图谱构建（Wave B GraphRAG PoC，T02）。
+   *
+   * <p>按钮在 `building` 态禁用（后端状态机同样拒绝重复触发，双保险）；
+   * `none`/`failed` 可点（首次构建/失败重试），`ready` 可点（重新构建）。
+   * 触发成功后把本地状态置 `building`，由下方 3s 轮询接管直到 `ready`/`failed`。
+   */
+  async function onBuildGraph(): Promise<void> {
+    if (libraryId == null) return;
+    setGraphTriggering(true);
+    try {
+      const result = await buildGraph(libraryId);
+      const nextStatus: KbGraphStatus = {
+        kgBuildStatus: result.kgBuildStatus,
+        kgBuildMessage: null,
+        graphragTaskId: result.taskId,
+        updatedAt: null,
+      };
+      setGraphStatus(nextStatus);
+      // 同步库设置里的状态（保证开关区与徽标一致；detail.ragSettings 由后端维护）
+      setDetail((prev) =>
+        prev == null || prev.ragSettings == null
+          ? prev
+          : { ...prev, ragSettings: { ...prev.ragSettings, kgBuildStatus: result.kgBuildStatus } },
+      );
+      toast.success('图谱构建已排队，构建完成后状态自动更新');
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : '触发图谱构建失败');
+    } finally {
+      setGraphTriggering(false);
+    }
+  }
+
+  // building 态每 3s 轮询 build-status，直到 ready/failed（PoC 不引入后端定时任务，
+  // 轮询走前端；R6 漂移防线：轮询失败保留当前状态，下轮再试）。
+  useEffect(() => {
+    if (libraryId == null) return;
+    if (!isBuilding) return;
+    const timer = window.setInterval(() => {
+      graphBuildStatus(libraryId)
+        .then((s) => {
+          setGraphStatus(s);
+          // 同步 detail（保存后 detail.ragSettings 也反映最新状态）
+          setDetail((prev) =>
+            prev == null || prev.ragSettings == null
+              ? prev
+              : {
+                  ...prev,
+                  ragSettings: {
+                    ...prev.ragSettings,
+                    kgBuildStatus: s.kgBuildStatus,
+                    kgBuildMessage: s.kgBuildMessage,
+                  },
+                },
+          );
+        })
+        .catch(() => {
+          // 轮询失败静默，下轮再试；不打断用户操作
+        });
+    }, 3000);
+    return () => window.clearInterval(timer);
+  }, [libraryId, isBuilding]);
 
   if (libraryId == null) {
     return (
@@ -720,6 +822,73 @@ export function KbLibraryDetailPage() {
                     OCR 与分块重叠为解析期参数，改动只影响<strong>此后新上传/重解析</strong>的文档。
                   </p>
                 )}
+              </div>
+
+              {/* Wave B GraphRAG PoC：知识图谱区（T02）。
+                  开关随 RAG 设置保存（false→true 时后端自动触发构图 + 手动按钮重试）；
+                  kgBuildStatus/kgBuildMessage 由服务端维护（查询时引擎刷新回写），
+                  前端在 building 态每 3s 轮询 build-status，直到 ready/failed。 */}
+              <div className="mt-4 rounded-md border border-dashed bg-muted/30 p-3">
+                <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+                  <label className="flex items-center gap-2 text-sm">
+                    <input
+                      type="checkbox"
+                      className="h-4 w-4"
+                      checked={form.useKnowledgeGraph && graphSupported}
+                      disabled={!graphSupported || saving}
+                      onChange={(e) => setForm((f) => ({ ...f, useKnowledgeGraph: e.target.checked }))}
+                    />
+                    启用知识图谱增强
+                  </label>
+                  <span
+                    className={
+                      'inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium ' +
+                      (kgBuildStatus === 'ready'
+                        ? 'bg-emerald-100 text-emerald-700'
+                        : kgBuildStatus === 'building'
+                          ? 'bg-blue-100 text-blue-700'
+                          : kgBuildStatus === 'failed'
+                            ? 'bg-red-100 text-red-700'
+                            : 'bg-muted text-muted-foreground')
+                    }
+                    title={kgBuildStatus === 'failed' && kgBuildMessage ? kgBuildMessage : undefined}
+                  >
+                    {graphStatusLabel}
+                    {isBuilding ? (
+                      <span className="h-3 w-3 animate-spin rounded-full border border-current border-t-transparent" />
+                    ) : null}
+                  </span>
+                  <PermissionGate permission="kb:library:edit">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      disabled={!graphSupported || isBuilding || graphTriggering || saving}
+                      onClick={() => void onBuildGraph()}
+                    >
+                      {kgBuildStatus === 'ready' ? '重新构建' : '开始构建'}
+                    </Button>
+                  </PermissionGate>
+                </div>
+                {!graphSupported ? (
+                  <p className="mt-2 text-xs text-amber-600">
+                    当前引擎版本暂不支持知识图谱增强。
+                  </p>
+                ) : (
+                  <p className="mt-2 text-xs text-muted-foreground">
+                    开启后自动排队构建图谱，构建期间检索暂不启用图谱增强（回落混合检索）。
+                    图谱增强仅<strong>单库</strong>检索生效，多库检索自动回落；最多 2 个库可开启。
+                  </p>
+                )}
+                {kgBuildStatus === 'failed' && kgBuildMessage ? (
+                  <p className="mt-2 text-xs text-red-600">
+                    构建失败原因：{kgBuildMessage}
+                  </p>
+                ) : null}
+                {form.useKnowledgeGraph && !isBuilding && kgBuildStatus !== 'ready' ? (
+                  <p className="mt-2 text-xs text-amber-600">
+                    开关已开启但图谱尚未构建完成，可点击「开始构建」触发/重试。
+                  </p>
+                ) : null}
               </div>
               {/* WA-12：此处原文写的是 Markdown 星号，在 JSX 里不会被渲染成加粗，
                   只会原样显示两个星号。改用 <strong> 才是对的。 */}

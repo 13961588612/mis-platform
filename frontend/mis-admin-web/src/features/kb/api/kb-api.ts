@@ -23,6 +23,8 @@ import type {
   KbEngineRenameResult,
   KbEngineRenameRollbackReq,
   KbFeedbackForm,
+  KbGraphBuildResult,
+  KbGraphStatus,
   KbHitTestRequest,
   KbHitTestResult,
   KbLibrary,
@@ -226,6 +228,23 @@ export async function updateRagSettings(
     settings,
   );
   return unwrap(res, '保存 RAG 设置失败');
+}
+
+/** 触发图谱构建（Wave B GraphRAG PoC，T02；手动按钮/重试）。 */
+export async function buildGraph(id: number): Promise<KbGraphBuildResult> {
+  const res = await api.post<ApiResult<KbGraphBuildResult>>(
+    `/kb/libraries/${id}/graph/build`,
+    {},
+  );
+  return unwrap(res, '触发图谱构建失败');
+}
+
+/** 查询图谱构建状态（Wave B GraphRAG PoC，T02；building 态 3s 轮询）。 */
+export async function graphBuildStatus(id: number): Promise<KbGraphStatus> {
+  const res = await api.get<ApiResult<KbGraphStatus>>(
+    `/kb/libraries/${id}/graph/build-status`,
+  );
+  return unwrap(res, '查询图谱构建状态失败');
 }
 
 // ------------------------------------------------------------------ 文档
@@ -725,6 +744,9 @@ export async function hitTest(req: KbHitTestRequest): Promise<KbHitTestResult> {
       req.documentIds && req.documentIds.length > 0 ? [...req.documentIds] : null,
     uploadFrom: req.uploadFrom && req.uploadFrom.trim() !== '' ? req.uploadFrom : null,
     uploadTo: req.uploadTo && req.uploadTo.trim() !== '' ? req.uploadTo : null,
+    // Wave B（T03）：图谱增强临时开关。三态透传：true/false 原样下发，
+    // null（跟随库设置）由 cleanParams 剔除——后端收不到 enableGraph 键即走库设置。
+    enableGraph: req.enableGraph,
   });
   const res = await api.post<ApiResult<KbHitTestResult>>('/kb/hit-test', body);
   return unwrap(res, '命中测试失败');

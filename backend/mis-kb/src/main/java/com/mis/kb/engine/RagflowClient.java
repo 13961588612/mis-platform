@@ -1,6 +1,7 @@
 package com.mis.kb.engine;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.node.JsonNodeFactory;
 import com.mis.common.core.exception.BusinessException;
 import com.mis.kb.domain.model.DocumentChunkConfig;
 import com.mis.kb.domain.model.DocumentUploadInput;
@@ -13,6 +14,8 @@ import com.mis.kb.engine.dto.RfDocumentPage;
 import com.mis.kb.engine.dto.RfModel;
 import com.mis.kb.engine.dto.RfResponse;
 import com.mis.kb.engine.dto.RfRetrievalData;
+import com.mis.kb.engine.dto.RfSearchChunk;
+import com.mis.kb.engine.dto.RfSearchData;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.core.ParameterizedTypeReference;
@@ -48,6 +51,19 @@ import java.util.Map;
 public class RagflowClient {
 
     private static final Logger log = LoggerFactory.getLogger(RagflowClient.class);
+
+    /**
+     * 构图触发/状态查询的 index type 参数值。
+     *
+     * <p><b>必须是 {@code graph}，禁止写 {@code graphrag}</b>——T00 G2 实测
+     * （{@code ragflow-graphrag-probe-2026-08-11.md}）：传 {@code graphrag} 返回
+     * {@code code:102 Invalid index type}；合法值是 {@code graph}（内部任务类型才是
+     * graphrag）。这是最容易踩的坑，写进共享知识 §10-2。
+     */
+    public static final String INDEX_TYPE_GRAPH = "graph";
+
+    /** 构图 method 值（T00 G1 实测：light/graph 二选一；PoC 用 light 快速构图）。 */
+    private static final String GRAPH_METHOD_LIGHT = "light";
 
     private final RestClient client;
     private final String apiKey;
@@ -163,6 +179,16 @@ public class RagflowClient {
             }
             if (settings.separator() != null && !settings.separator().isBlank()) {
                 parserConfig.put("delimiter", settings.separator());
+            }
+            // Wave B GraphRAG PoC（T02）：开启图谱时下发 parser_config.graphrag。
+            // T00 G1 实测：启用键 = parser_config.graphrag.use_graphrag（布尔）+ method（light/graph），
+            // 不是顶层 use_kg（那是检索期参数，见 searchDataset）。只在开关为真时下发，
+            // 避免用 null/false 覆盖引擎侧既有 graphrag 配置（与「非 null 才下发」同口径）。
+            if (Boolean.TRUE.equals(settings.useKnowledgeGraph())) {
+                Map<String, Object> graphrag = new LinkedHashMap<>();
+                graphrag.put("use_graphrag", true);
+                graphrag.put("method", GRAPH_METHOD_LIGHT);
+                parserConfig.put("graphrag", graphrag);
             }
             if (!parserConfig.isEmpty()) {
                 body.put("parser_config", parserConfig);
@@ -585,6 +611,71 @@ public class RagflowClient {
     }
 
     /**
+     * 触发图谱构建（Wave B GraphRAG PoC，T02）。
+     *
+     * <p><b>T00 G2 实测契约：</b>{@code POST /api/v1/datasets/{id}/index?type=graph}
+     * → {@code {"code":0,"data":{"task_id":"..."}}}。<b>type 值必须是 {@code graph}</b>
+     * （{@link #INDEX_TYPE_GRAPH}），传 {@code graphrag} → code:102 拒绝。
+     * 引擎侧只排队任务并立即返回 {@code task_id}，构图完成在后台进行。
+     * 已有进行中任务（progress ∉ {-1,1}）时引擎会拒绝二次触发（MIS 侧状态机
+     * {@code building} 已先行拦截，双保险）。
+     *
+     * @param datasetId 原生 dataset id
+     * @return 引擎侧构图任务 id
+     */
+    public String buildGraph(String datasetId) {
+        RfResponse<JsonNode> resp = postFor(
+                "/api/v1/datasets/" + datasetId + "/index?type=" + INDEX_TYPE_GRAPH,
+                Map.of(),
+                new ParameterizedTypeReference<>() {});
+        if (resp == null || !resp.ok() || resp.data() == null) {
+            throw new BusinessException(50000,
+                    "RAGFlow 触发图谱构建失败: " + (resp == null ? "无响应" : resp.message()));
+        }
+        String taskId = resp.data().path("task_id").asText(null);
+        if (taskId == null || taskId.isBlank()) {
+            throw new BusinessException(50000, "RAGFlow 触发图谱构建失败: 响应缺少 task_id");
+        }
+        log.info("RAGFlow 图谱构建已排队 datasetId={} taskId={}", datasetId, taskId);
+        return taskId;
+    }
+
+    /**
+     * 查询图谱构建状态（Wave B GraphRAG PoC，T02）。
+     *
+     * <p><b>T00 G3 实测契约：</b>{@code GET /api/v1/datasets/{id}/index?type=graph}
+     * → {@code data} 为 task dict：{@code progress}（<b>1.0=完成 / -1=失败 / 其他=构建中</b>）、
+     * {@code progress_msg}（构建日志）、{@code task_type="graphrag"}、
+     * {@code process_duration}（秒）；<b>无任务时 {@code data}={}</b>（空对象）。
+     *
+     * <p>本方法只承载原生响应，progress → MIS 状态映射由
+     * {@link com.mis.kb.domain.service.KbGraphService} 完成。
+     *
+     * @param datasetId 原生 dataset id
+     * @return task dict（{@code data} 节点）；无任务时为空对象（非 null，调用方判空）
+     */
+    public JsonNode queryGraphBuildStatus(String datasetId) {
+        JsonNode root = client.get()
+                .uri(uriBuilder -> uriBuilder
+                        .path("/api/v1/datasets/" + datasetId + "/index")
+                        .queryParam("type", INDEX_TYPE_GRAPH)
+                        .build())
+                .header("Authorization", bearer())
+                .retrieve()
+                .body(JsonNode.class);
+        if (root == null) {
+            throw new BusinessException(50000, "RAGFlow 查询图谱构建状态失败: 无响应");
+        }
+        int code = root.path("code").asInt(-1);
+        if (code != 0) {
+            throw new BusinessException(50000,
+                    "RAGFlow 查询图谱构建状态失败: code=" + code + " " + root.path("message").asText(""));
+        }
+        JsonNode data = root.path("data");
+        return data == null || data.isNull() || data.isMissingNode() ? JsonNodeFactory.instance.objectNode() : data;
+    }
+
+    /**
      * 检索（检索期参数在此下发，WA-02 / WA-05 / B3 实测校正）。
      *
      * <p><b>B3 实测校正（2026-08-12，远程 10.254.16.6:9380）：</b>
@@ -668,6 +759,71 @@ public class RagflowClient {
                 new ParameterizedTypeReference<>() {});
         if (resp == null || !resp.ok() || resp.data() == null) {
             throw new BusinessException(50000, "RAGFlow 检索失败: " + (resp == null ? "无响应" : resp.message()));
+        }
+        return resp.data().chunksOrEmpty();
+    }
+
+    /**
+     * 单库图谱增强检索（Wave B GraphRAG PoC，T03）。
+     *
+     * <p><b>端点铁律：{@code POST /api/v1/datasets/{id}/search}，绝不走
+     * {@code /api/v1/retrieval}</b>——T00 G5 实测（{@code ragflow-graphrag-probe-2026-08-11.md}）：
+     * v0.26.4 对 {@code /api/v1/retrieval} 顶层未知字段 {@code use_kg} 静默忽略
+     * （pydantic 丢弃，code:0 但无增强），这是最容易踩的「看似成功实则没加图」陷阱。
+     *
+     * <p><b>请求体映射（设计 §2.4 表）：</b>
+     * <table border="1">
+     *   <caption>MIS 参数 → /datasets/{id}/search 字段</caption>
+     *   <tr><th>MIS 参数</th><th>字段</th><th>说明</th></tr>
+     *   <tr><td>question</td><td>{@code question}</td><td>必填</td></tr>
+     *   <tr><td>单库 datasetId</td><td>路径参数</td><td>不走 {@code dataset_ids}（避免多库 embedding 一致性限制）</td></tr>
+     *   <tr><td>effectiveTopK</td><td>{@code size}</td><td>最终返回条数（与 /retrieval 的 page_size 语义一致）</td></tr>
+     *   <tr><td>effectiveThreshold</td><td>{@code similarity_threshold}</td><td>同现状</td></tr>
+     *   <tr><td>vectorSimilarityWeight</td><td>{@code vector_similarity_weight}</td><td>同现状</td></tr>
+     *   <tr><td>retrievalMethod</td><td>{@code keyword}</td><td>同现状映射（hybrid→false）</td></tr>
+     *   <tr><td>rerank</td><td>{@code rerank_mdl}</td><td>与现状 {@code rerank_id} 同值；开关为真且全局模型非空才下发</td></tr>
+     *   <tr><td>useKnowledgeGraph</td><td>{@code use_kg: true}</td><td>图谱增强开关（本方法只被 effectiveUseKnowledgeGraph()==true 分支调用）</td></tr>
+     *   <tr><td>documentIds</td><td>{@code doc_ids}</td><td><b>空 = 不下发键</b>（R5 同款：空 = 全量）；非空下发</td></tr>
+     * </table>
+     *
+     * <p><b>与过滤参数共存（T00 G6 实测）：</b>{@code doc_ids} 与 {@code use_kg} 同请求体
+     * 共存 ✓；传不存在的 doc → code:0 空结果（软过滤，无 /retrieval 的 code:102 硬校验）。
+     *
+     * @param datasetId   原生 dataset id（单库）
+     * @param query       已由 {@code RetrieveQueryResolver} 合并完成的检索参数
+     *                    （{@code effectiveUseKnowledgeGraph()} 已保证为 true）
+     * @param documentIds 引擎原生 document id 列表（文档过滤，KE-08/KE-09）；空 = 不下发键（全量）
+     * @return 原生 chunk 列表（{@link RfSearchChunk}）
+     */
+    public List<RfSearchChunk> searchDataset(String datasetId, RetrieveQuery query, List<String> documentIds) {
+        String method = query.effectiveRetrievalMethod();
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("question", query.question());
+        body.put("use_kg", true);
+        body.put("size", query.effectiveTopK());
+        body.put("similarity_threshold", query.effectiveThreshold());
+        body.put("keyword", mapRetrievalMethodToKeyword(method));
+        body.put("vector_similarity_weight", mapRetrievalMethodToWeight(method, query));
+        if (query.shouldSendRerankId()) {
+            // /datasets/search 的重排字段是 rerank_mdl（与 /retrieval 的 rerank_id 同值）
+            body.put("rerank_mdl", query.rerankModelId());
+        }
+        // G6：doc_ids 与 use_kg 同体；空 = 不下发键（R5：空 = 全量）
+        if (documentIds != null && !documentIds.isEmpty()) {
+            body.put("doc_ids", documentIds);
+        }
+        log.debug("RAGFlow 图谱增强检索 datasetId={} method={} keyword={} weight={} size={} "
+                        + "threshold={} rerankMdl={} docIds={} useKg=true",
+                datasetId, method, body.get("keyword"), body.get("vector_similarity_weight"),
+                body.get("size"), body.get("similarity_threshold"),
+                body.getOrDefault("rerank_mdl", "<未下发>"),
+                body.getOrDefault("doc_ids", "<未下发>"));
+
+        RfResponse<RfSearchData> resp = postFor("/api/v1/datasets/" + datasetId + "/search", body,
+                new ParameterizedTypeReference<>() {});
+        if (resp == null || !resp.ok() || resp.data() == null) {
+            throw new BusinessException(50000,
+                    "RAGFlow 图谱增强检索失败: " + (resp == null ? "无响应" : resp.message()));
         }
         return resp.data().chunksOrEmpty();
     }

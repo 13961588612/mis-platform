@@ -10,6 +10,7 @@ import com.mis.kb.domain.model.EngineHealth;
 import com.mis.kb.domain.model.EngineLibraryBrief;
 import com.mis.kb.domain.model.EngineLibraryRef;
 import com.mis.kb.domain.model.EngineModelPool;
+import com.mis.kb.domain.model.GraphBuildSnapshot;
 import com.mis.kb.domain.model.ParseStatusSnapshot;
 import com.mis.kb.domain.model.RagSettings;
 import com.mis.kb.domain.model.RetrieveQuery;
@@ -131,6 +132,36 @@ public interface KnowledgeEnginePort {
 
     /** 检索，返回统一 {@link ChunkHit}（仅含 MIS 业务 ID）。 */
     List<ChunkHit> retrieve(RetrieveQuery query);
+
+    /**
+     * 触发图谱构建（Wave B GraphRAG PoC，T02）。
+     *
+     * <p><b>默认实现：抛 {@link UnsupportedOperationException}</b>（引擎不支持构图）。
+     * RAGFlow 实现走 {@code POST /api/v1/datasets/{id}/index?type=graph}
+     * （{@code RagflowClient.buildGraph}，type 值必须是 {@code graph}，禁写 {@code graphrag}）。
+     * 引擎侧只排队任务并立即返回 {@code task_id}，构图完成在后台进行（状态走
+     * {@link #queryGraphBuildStatus} 轮询）。
+     *
+     * @param ref 知识库引擎引用（nativeId = dataset id）
+     * @return 引擎侧构图任务 id
+     */
+    default String buildGraph(EngineLibraryRef ref) {
+        throw new UnsupportedOperationException("当前引擎不支持图谱构建");
+    }
+
+    /**
+     * 查询图谱构建状态（Wave B GraphRAG PoC，T02）。
+     *
+     * <p><b>默认实现：返回 NONE 快照</b>（noop/mock 引擎零改动），调用方保留本地状态。
+     * RAGFlow 实现走 {@code GET /api/v1/datasets/{id}/index?type=graph}，映射
+     * {@code progress}（1.0=ready / -1=failed / 其他=building；无任务 → NONE）。
+     *
+     * @param ref 知识库引擎引用（nativeId = dataset id）
+     * @return 构图状态快照；恒非 {@code null}
+     */
+    default GraphBuildSnapshot queryGraphBuildStatus(EngineLibraryRef ref) {
+        return GraphBuildSnapshot.none();
+    }
 
     /** 引擎健康探测。 */
     EngineHealth health();

@@ -1,5 +1,6 @@
 package com.mis.kb.engine;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import com.mis.kb.domain.entity.KbDocument;
 import com.mis.kb.domain.entity.KbLibrary;
 import com.mis.kb.domain.model.ChunkHit;
@@ -13,6 +14,7 @@ import com.mis.kb.domain.model.EngineLibraryBrief;
 import com.mis.kb.domain.model.EngineLibraryRef;
 import com.mis.kb.domain.model.EngineModel;
 import com.mis.kb.domain.model.EngineModelPool;
+import com.mis.kb.domain.model.GraphBuildSnapshot;
 import com.mis.kb.domain.model.ParseStatus;
 import com.mis.kb.domain.model.ParseStatusSnapshot;
 import com.mis.kb.domain.model.RagSettings;
@@ -22,6 +24,7 @@ import com.mis.kb.domain.repository.KbLibraryRepository;
 import com.mis.kb.engine.dto.RfChunk;
 import com.mis.kb.engine.dto.RfDataset;
 import com.mis.kb.engine.dto.RfModel;
+import com.mis.kb.engine.dto.RfSearchChunk;
 import com.mis.kb.support.KbJson;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -92,6 +95,77 @@ public class RagflowAdapter implements KnowledgeEnginePort {
     @Override
     public void updateLibrarySettings(EngineLibraryRef ref, RagSettings settings) {
         client.updateDatasetSettings(ref.nativeId(), settings);
+    }
+
+    /**
+     * 触发图谱构建（Wave B GraphRAG PoC，T02）。
+     *
+     * <p>前置校验（能力/上限/状态机/文档非空）由 {@code KbGraphService.build} 完成，
+     * 本方法只负责翻译 MIS ref → 引擎 datasetId 并转发
+     * {@code POST /datasets/{id}/index?type=graph}（type 值 = {@code graph}，禁写 graphrag）。
+     *
+     * @param ref 知识库引擎引用（nativeId = dataset id）
+     * @return 引擎侧构图任务 id
+     */
+    @Override
+    public String buildGraph(EngineLibraryRef ref) {
+        if (ref == null || ref.nativeId() == null || ref.nativeId().isBlank()) {
+            throw new IllegalArgumentException("构图失败：知识库无引擎映射");
+        }
+        return client.buildGraph(ref.nativeId());
+    }
+
+    /**
+     * 查询图谱构建状态（Wave B GraphRAG PoC，T02）。
+     *
+     * <p>把 RAGFlow task dict 映射为 {@link GraphBuildSnapshot}：
+     * {@code progress==1.0 → READY}；{@code progress<0 → FAILED}；其他数值 → BUILDING；
+     * 无任务/空 data → NONE（调用方保留本地状态）。{@code progress_msg} 摘要与
+     * {@code process_duration} 原样透出，由 {@code KbGraphService} 决定是否落库。
+     *
+     * @param ref 知识库引擎引用（nativeId = dataset id）
+     * @return 构图状态快照；恒非 {@code null}
+     */
+    @Override
+    public GraphBuildSnapshot queryGraphBuildStatus(EngineLibraryRef ref) {
+        if (ref == null || ref.nativeId() == null || ref.nativeId().isBlank()) {
+            return GraphBuildSnapshot.none();
+        }
+        JsonNode data;
+        try {
+            data = client.queryGraphBuildStatus(ref.nativeId());
+        } catch (Exception e) {
+            log.warn("RAGFlow 查询图谱构建状态失败 datasetId={}: {}", ref.nativeId(), e.getMessage());
+            return GraphBuildSnapshot.none();
+        }
+        if (data == null || data.isEmpty()) {
+            return GraphBuildSnapshot.none();
+        }
+        String taskId = data.path("task_id").asText(null);
+        Double progress = data.path("progress").isNumber() ? data.path("progress").asDouble() : null;
+        String progressMsg = data.path("progress_msg").asText(null);
+        Long processDurationMs = data.path("process_duration").isNumber()
+                ? (long) (data.path("process_duration").asDouble() * 1000D) : null;
+        return new GraphBuildSnapshot(taskId, progress, mapGraphProgress(progress), progressMsg, processDurationMs);
+    }
+
+    /**
+     * RAGFlow {@code progress} → {@link GraphBuildSnapshot.Status}（T00 G3 契约）。
+     *
+     * @param progress 引擎进度；{@code null} 按 NONE（无法判定，保留本地）
+     * @return 映射后的状态
+     */
+    private static GraphBuildSnapshot.Status mapGraphProgress(Double progress) {
+        if (progress == null) {
+            return GraphBuildSnapshot.Status.NONE;
+        }
+        if (Double.compare(progress, 1.0D) >= 0) {
+            return GraphBuildSnapshot.Status.READY;
+        }
+        if (progress < 0D) {
+            return GraphBuildSnapshot.Status.FAILED;
+        }
+        return GraphBuildSnapshot.Status.BUILDING;
     }
 
     @Override
@@ -411,6 +485,20 @@ public class RagflowAdapter implements KnowledgeEnginePort {
         // 只下发「本次检索库内 + enabled=1 + 有引擎映射」的文档；解析结果为空 = 不过滤
         // （R5：不下发 document_ids 键，引擎返回全量）。
         List<String> nativeDocIds = resolveDocumentIds(query.documentIds(), libraryRefById);
+
+        // Wave B GraphRAG PoC（T03）：图谱增强分流。
+        // resolver 已保证 effectiveUseKnowledgeGraph()==true 时必然单库（S4.5 多库降级）。
+        // 走 /datasets/{id}/search + use_kg:true（T00 G5 实测：/api/v1/retrieval 静默忽略 use_kg）。
+        if (query.effectiveUseKnowledgeGraph()) {
+            if (datasetIds.size() != 1) {
+                // 理论不可达（resolver 已降级多库）；防御性回落经典检索，绝不静默走错端点
+                log.warn("图谱增强检索遇到多库 datasetIds={}，防御性回落经典检索（resolver 应已降级）",
+                        datasetIds);
+            } else {
+                return retrieveWithGraph(datasetIds.get(0), query, nativeDocIds);
+            }
+        }
+
         List<RfChunk> chunks = client.retrieve(query, datasetIds, nativeDocIds);
         List<ChunkHit> hits = new ArrayList<>();
         for (RfChunk c : chunks) {
@@ -429,6 +517,55 @@ public class RagflowAdapter implements KnowledgeEnginePort {
             // F-04：透传引擎给出的页码/偏移（不可得时为 null，前端降级展示）
             hits.add(new ChunkHit(libId, docId, c.text(), c.score(), c.documentName(),
                     c.charOffset(), c.firstPage()));
+        }
+        return hits;
+    }
+
+    /**
+     * 单库图谱增强检索（Wave B GraphRAG PoC，T03）。
+     *
+     * <p>走 {@code client.searchDataset}（{@code POST /datasets/{id}/search} + {@code use_kg:true}），
+     * 把 {@link RfSearchChunk}（T00 G7 字段契约）映射为统一 {@link ChunkHit}：
+     * <ul>
+     *   <li>{@code chunkText} ← {@code content_with_weight} 剥离 {@code <weight>} 标记（R3）；</li>
+     *   <li>{@code docTitle} ← {@code docnm_kwd}（引擎已给文档名，优先用）；</li>
+     *   <li>{@code documentId} ← {@code doc_id} → repository 反查 MIS {@code KbDocument.id}；</li>
+     *   <li>{@code libraryId} ← {@code kb_id} → 反查 MIS {@code KbLibrary.id}；</li>
+     *   <li>{@code score} ← {@code similarity}；{@code offset/page} 置 null（该响应无此字段）。</li>
+     * </ul>
+     * 反查不到时对应字段为 {@code null}（与经典检索「本地未同步」口径一致，绝不下发原生 id）。
+     *
+     * @param datasetId    引擎原生 dataset id（单库）
+     * @param query        已合并完成的检索参数（{@code effectiveUseKnowledgeGraph()} 已保证 true）
+     * @param nativeDocIds 引擎原生 document id 列表（文档过滤；空 = 全量）
+     * @return 统一 chunk 命中列表；恒非 {@code null}
+     */
+    private List<ChunkHit> retrieveWithGraph(
+            String datasetId, RetrieveQuery query, List<String> nativeDocIds) {
+        List<RfSearchChunk> chunks = client.searchDataset(datasetId, query, nativeDocIds);
+        List<ChunkHit> hits = new ArrayList<>();
+        for (RfSearchChunk c : chunks) {
+            if (c == null) {
+                continue;
+            }
+            KbDocument doc = c.docId() == null || c.docId().isBlank()
+                    ? null
+                    : documentRepository.findByEngineDocumentRef(c.docId()).orElse(null);
+            // B1 双保险：本地 enabled=0 的文档绝不允许进入检索结果（同经典检索口径）
+            if (doc != null && !Integer.valueOf(1).equals(doc.getEnabled())) {
+                log.debug("图谱增强命中本地已停用文档，丢弃 chunk docId={} misDocId={}",
+                        c.docId(), doc.getId());
+                continue;
+            }
+            Long docId = doc != null ? doc.getId() : null;
+            Long libId = null;
+            if (c.kbId() != null && !c.kbId().isBlank()) {
+                libId = libraryRepository.findByEngineLibraryRef(c.kbId())
+                        .map(KbLibrary::getId).orElse(null);
+            }
+            // docTitle 优先用引擎给的文档名（docnm_kwd），反查不到本地文档时仍可展示
+            hits.add(new ChunkHit(libId, docId, c.text(), c.similarity(),
+                    c.docnmKwd(), null, null));
         }
         return hits;
     }
@@ -504,8 +641,17 @@ public class RagflowAdapter implements KnowledgeEnginePort {
      * 前端据此置灰 + 提示「当前引擎版本暂不支持」；同时 {@code RagflowClient} 侧白名单
      * 保证这两个键一律不下发。引擎升级后翻转下方两个 {@code false} 即可放行，代码分支不动。
      *
+     * <p><b>Wave B GraphRAG PoC（T01）新增 {@code graphSupported=true}：</b>
+     * 按 <b>T00 实测</b>（{@code ragflow-graphrag-probe-2026-08-11.md} G1/G2/G5）——
+     * 本实例支持 {@code parser_config.graphrag.use_graphrag} 配置、构图
+     * {@code POST /datasets/{id}/index?type=graph} 与增强检索 {@code use_kg}，
+     * 故声明 {@code true}。语义口径与 {@code rerankSupported} 一致：「当前部署引擎版本下
+     * 实际可用」。若未来引擎升级破坏契约，把下方 {@code graph} 参数翻成 {@code false}
+     * 即可走「前端置灰 + 保存强制关 + 检索期降级」三道防线，代码分支不动（共享知识 §10-1）。
+     *
      * @return 能力声明；{@code hybrid} 恒支持，{@code rerank} 随模型 ID 配置动态变化，
-     *         {@code delete} 随 {@code delete-supported} 配置变化，OCR/overlap 本期恒不支持
+     *         {@code delete} 随 {@code delete-supported} 配置变化，OCR/overlap 本期恒不支持，
+     *         {@code graph} 恒支持（T00 实测）
      */
     @Override
     public EngineCapabilities capabilities() {
@@ -515,6 +661,6 @@ public class RagflowAdapter implements KnowledgeEnginePort {
         }
         boolean deleteAvailable = props != null && props.isDeleteSupported();
         return EngineCapabilities.of(rerankAvailable, true, true, true, deleteAvailable,
-                false, false);
+                false, false, true);
     }
 }

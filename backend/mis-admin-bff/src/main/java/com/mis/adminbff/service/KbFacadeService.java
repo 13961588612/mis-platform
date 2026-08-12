@@ -20,6 +20,8 @@ import com.mis.adminbff.dto.kb.KbEngineRenameReq;
 import com.mis.adminbff.dto.kb.KbEngineRenameResultVO;
 import com.mis.adminbff.dto.kb.KbEngineReconcileVO;
 import com.mis.adminbff.dto.kb.KbEngineRefVO;
+import com.mis.adminbff.dto.kb.KbGraphBuildResultVO;
+import com.mis.adminbff.dto.kb.KbGraphStatusVO;
 import com.mis.adminbff.dto.kb.KbLibraryDeleteResultVO;
 import com.mis.adminbff.dto.kb.KbLibraryDetailVO;
 import com.mis.adminbff.dto.kb.KbLibraryVO;
@@ -292,6 +294,25 @@ public class KbFacadeService {
     @OperLog(module = "知识库", operation = "修改 RAG 设置", recordParams = true)
     public KbRagSettings updateRagSettings(Long libraryId, KbRagSettings settings, KbAuditBefore auditBefore) {
         return kbWebClient.updateRagSettings(libraryId, settings);
+    }
+
+    /**
+     * 触发图谱构建（Wave B GraphRAG PoC，T02；BFF 三层透传）。
+     *
+     * <p>写操作：权限码 {@code kb:library:edit}（KbController 兜底 + 注册表主路径）+ 审计；
+     * mis-kb 侧另有管辖/能力/上限/状态机校验。透传不做任何业务决策。
+     */
+    public KbGraphBuildResultVO buildGraph(Long libraryId) {
+        return kbWebClient.buildGraph(libraryId);
+    }
+
+    /**
+     * 查询图谱构建状态（Wave B GraphRAG PoC，T02；BFF 三层透传）。
+     *
+     * <p>读操作：权限码 {@code kb:library:engine-ref:view}，不挂审计（U6）。透传不做任何业务决策。
+     */
+    public KbGraphStatusVO graphBuildStatus(Long libraryId) {
+        return kbWebClient.graphBuildStatus(libraryId);
     }
 
     // ------------------------------------------------------------------ 文档

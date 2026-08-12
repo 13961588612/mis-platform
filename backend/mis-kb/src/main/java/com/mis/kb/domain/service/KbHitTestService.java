@@ -118,9 +118,16 @@ public class KbHitTestService {
         }
 
         RagSettings stored = KbJson.readSettings(library.getRagSettingsJson());
-        Map<Long, RagSettings> perLibrarySettings = stored == null
-                ? Map.of()
-                : Map.of(libraryId, stored.withDefaults());
+        RagSettings baseSettings = (stored == null ? RagSettings.defaults() : stored.withDefaults());
+        // Wave B（T03）：临时开关 enableGraph（null = 跟随库设置）→ override 图谱开关。
+        // 只影响本次检索的内存值，绝不落库（对照实验语义）；降级判定（能力/单库/
+        // kgBuildStatus）仍由 RetrieveQueryResolver S4.5 统一完成（Resolver 铁律 §10-9）。
+        Boolean graphOverride = request.graphOverride();
+        if (graphOverride != null) {
+            baseSettings = baseSettings.withGraphOverride(graphOverride);
+            log.debug("命中测试图谱开关 override libraryId={} enableGraph={}", libraryId, graphOverride);
+        }
+        Map<Long, RagSettings> perLibrarySettings = Map.of(libraryId, baseSettings);
 
         // Wave D：本次禁用 → 短路不查词典；否则强一致（先校验词表版本）——Q7 的兑现点
         SynonymMode synonymMode = request.synonymDisabledForThisRun()

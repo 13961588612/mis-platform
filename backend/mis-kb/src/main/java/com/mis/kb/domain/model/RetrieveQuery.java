@@ -51,6 +51,10 @@ import java.util.List;
  * @param documentIds            文档过滤：MIS 侧 {@code kb_document.id} 列表
  *                               （KE-08/KE-09，已由服务层按库+enabled=1+时间范围解析收敛）；
  *                               空/null = 不过滤（适配器不下发 {@code document_ids} 键，R5）
+ * @param useKnowledgeGraph      图谱增强开关（Wave B GraphRAG PoC，T03，末位追加）。
+ *                               <b>只能</b>由 {@link RetrieveQueryResolver} S4.5 降级判定后
+ *                               写入；适配器据此分流 {@code /datasets/{id}/search} + {@code use_kg:true}。
+ *                               为 {@code true} 时必然单库（resolver 已降级多库）
  */
 public record RetrieveQuery(
         String question,
@@ -62,7 +66,8 @@ public record RetrieveQuery(
         Boolean rerank,
         String rerankModelId,
         String emptyResultStrategy,
-        List<Long> documentIds) {
+        List<Long> documentIds,
+        Boolean useKnowledgeGraph) {
 
     /** 默认召回条数。 */
     public static final int DEFAULT_TOP_K = 5;
@@ -80,7 +85,28 @@ public record RetrieveQuery(
      * @param threshold 相似度阈值
      */
     public RetrieveQuery(String question, List<Long> libraryIds, Integer topK, Double threshold) {
-        this(question, libraryIds, topK, threshold, null, null, null, null, null, null);
+        this(question, libraryIds, topK, threshold, null, null, null, null, null, null, null);
+    }
+
+    /**
+     * 兼容构造：10 参数旧签名（Wave A 全量，不含图谱开关），图谱字段置 {@code null}。
+     *
+     * <p>保持既有 10 参构造点（测试夹具等）零改动；{@code useKnowledgeGraph} 缺省
+     * 由 {@link #effectiveUseKnowledgeGraph()} 收敛为 {@code false}（关闭图谱增强）。
+     */
+    public RetrieveQuery(
+            String question,
+            List<Long> libraryIds,
+            Integer topK,
+            Double threshold,
+            String retrievalMethod,
+            Double vectorSimilarityWeight,
+            Boolean rerank,
+            String rerankModelId,
+            String emptyResultStrategy,
+            List<Long> documentIds) {
+        this(question, libraryIds, topK, threshold, retrievalMethod, vectorSimilarityWeight,
+                rerank, rerankModelId, emptyResultStrategy, documentIds, null);
     }
 
     /**
@@ -148,6 +174,19 @@ public record RetrieveQuery(
      */
     public boolean shouldSendRerankId() {
         return effectiveRerank() && rerankModelId != null && !rerankModelId.isBlank();
+    }
+
+    /**
+     * 本次检索是否启用图谱增强（Wave B GraphRAG PoC，T03）。
+     *
+     * <p>把 {@code Boolean} 三态收敛成 {@code boolean} 两态的<b>唯一</b>出口。
+     * 为 {@code true} 时适配器必须分流 {@code /datasets/{id}/search} + {@code use_kg:true}，
+     * 绝不走 {@code /api/v1/retrieval}（该端点静默忽略 use_kg，T00 G5 实测陷阱）。
+     *
+     * @return 显式传 {@code true} 才返回 {@code true}
+     */
+    public boolean effectiveUseKnowledgeGraph() {
+        return Boolean.TRUE.equals(useKnowledgeGraph);
     }
 
     private static double clamp(double v) {

@@ -75,6 +75,9 @@ class RagSettingsServiceTest {
     private KbDocumentRepository documentRepository;
     @Mock
     private KnowledgeEnginePort enginePort;
+    /** Wave B（T02）：RagSettingsService 保存路径注入的构图服务（mock，本测试不触发真构图）。 */
+    @Mock
+    private KbGraphService graphService;
 
     private RagflowProperties propsWithRerank;
     private RagflowProperties propsWithoutRerank;
@@ -101,12 +104,12 @@ class RagSettingsServiceTest {
 
     private RagSettingsService serviceWithRerankModel() {
         return new RagSettingsService(libraryRepository, aclRepository,
-                documentRepository, enginePort, propsWithRerank);
+                documentRepository, enginePort, propsWithRerank, graphService);
     }
 
     private RagSettingsService serviceWithoutRerankModel() {
         return new RagSettingsService(libraryRepository, aclRepository,
-                documentRepository, enginePort, propsWithoutRerank);
+                documentRepository, enginePort, propsWithoutRerank, graphService);
     }
 
     /** 只给权重，其余字段留 null 交给 withDefaults 兜底。 */

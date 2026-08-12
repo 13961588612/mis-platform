@@ -37,6 +37,21 @@ package com.mis.kb.domain.model;
  * 引擎升级后翻转 {@link EngineCapabilities} 的 {@code parser_ocr} / {@code parser_overlap}
  * 能力码即放行下发，代码分支不动（设计 §1.4 / §3.2）。
  *
+ * <p><b>Wave B GraphRAG PoC（T01）新增三字段（追加末位，零 DDL）：</b>
+ * {@code useKnowledgeGraph} / {@code kgBuildStatus} / {@code kgBuildMessage}。
+ * <ul>
+ *   <li>{@code useKnowledgeGraph}（默认 {@code false}）：库级图谱开关。引擎映射两处语义不同
+ *       （设计 §1.2 修正）——构图配置键 = {@code parser_config.graphrag.use_graphrag}
+ *       （建库/更新期，{@code RagflowClient.updateDatasetSettings} 下发）；
+ *       检索增强 = {@code /datasets/{id}/search} 请求体 {@code use_kg:true}（检索期）。
+ *       需要 {@code graphrag} 能力 + 数量上限（{@code mis.kb.engine.graph-max-libraries} 默认 2）。</li>
+ *   <li>{@code kgBuildStatus}（默认 {@code none}）：四态 {@code none|building|ready|failed}。
+ *       <b>落库（MIS 唯一事实源）+ 查询时引擎刷新回写</b>（U3 裁定），
+ *       {@code KbGraphService.refreshStatus} 映射引擎 progress 后写回。</li>
+ *   <li>{@code kgBuildMessage}（默认 {@code null}，≤200）：失败/构建中原因摘要；
+ *       {@code ready} 时清空（状态机共享知识 §10-10）。</li>
+ * </ul>
+ *
  * @param topK                   召回条数上限
  * @param scoreThreshold         相似度阈值（0~1）
  * @param rerank                 是否启用重排（模型 ID 来自全局配置 {@code mis.kb.engine.rerank-model-id}）
@@ -51,6 +66,9 @@ package com.mis.kb.domain.model;
  * @param ocrEnabled             OCR 开关；能力 {@code parser_ocr=true} 前**不下发**；企业级增强一期新增
  * @param ocrLanguage            OCR 语言码值 zh/en/zh_en；能力支持前**不下发**；企业级增强一期新增
  * @param chunkOverlapTokenNum   分块重叠 token 数（正整数，null=引擎默认/0）；能力 {@code parser_overlap=true} 前**不下发**；企业级增强一期新增
+ * @param useKnowledgeGraph      知识图谱开关；能力 {@code graphrag=true} 前**不下发**；Wave B GraphRAG PoC 新增
+ * @param kgBuildStatus          图谱构建状态 none|building|ready|failed；落库 + 引擎刷新回写；Wave B GraphRAG PoC 新增
+ * @param kgBuildMessage         图谱构建消息摘要（≤200，ready 时清空）；Wave B GraphRAG PoC 新增
  */
 public record RagSettings(
         Integer topK,
@@ -66,14 +84,18 @@ public record RagSettings(
         String rerankModelId,
         Boolean ocrEnabled,
         String ocrLanguage,
-        Integer chunkOverlapTokenNum) {
+        Integer chunkOverlapTokenNum,
+        Boolean useKnowledgeGraph,
+        String kgBuildStatus,
+        String kgBuildMessage) {
 
     /**
-     * 兼容构造：11 参数旧签名，OCR/overlap 三字段置 {@code null}（未设置）。
+     * 兼容构造：11 参数旧签名，OCR/overlap 三字段与图谱三字段置 {@code null}（未设置）。
      *
      * <p>record 是位置参数，新增字段后既有 11 参构造点（测试夹具、门面组装等）
      * 无法再用旧签名；本构造器保持旧调用点零改动，同时保证「未设置」语义
-     * 由 {@link #withDefaults()} 兜底（ocrEnabled→false、ocrLanguage→zh）。
+     * 由 {@link #withDefaults()} 兜底（ocrEnabled→false、ocrLanguage→zh、
+     * useKnowledgeGraph→false、kgBuildStatus→none）。
      */
     public RagSettings(
             Integer topK,
@@ -89,7 +111,36 @@ public record RagSettings(
             String rerankModelId) {
         this(topK, scoreThreshold, rerank, embeddingModel, retrievalMethod, chunkMethod,
                 chunkTokenNum, separator, emptyResultStrategy, vectorSimilarityWeight,
-                rerankModelId, null, null, null);
+                rerankModelId, null, null, null, null, null, null);
+    }
+
+    /**
+     * 兼容构造：14 参数旧签名（企业级增强一期 canonical），图谱三字段置 {@code null}。
+     *
+     * <p>保持既有 14 参全量构造点（存量代码、测试）零改动；图谱三字段「未设置」语义
+     * 由 {@link #withDefaults()} 兜底。注意：需要<b>透传</b>图谱字段的代码
+     * （如 {@code RagSettingsService.enforceRerankAvailability}、
+     * {@code RetrieveQueryResolver.applyOverride}）请用 17 参 canonical，
+     * 不要走本构造（会把图谱字段静默置 null）。
+     */
+    public RagSettings(
+            Integer topK,
+            Double scoreThreshold,
+            Boolean rerank,
+            String embeddingModel,
+            String retrievalMethod,
+            String chunkMethod,
+            Integer chunkTokenNum,
+            String separator,
+            String emptyResultStrategy,
+            Double vectorSimilarityWeight,
+            String rerankModelId,
+            Boolean ocrEnabled,
+            String ocrLanguage,
+            Integer chunkOverlapTokenNum) {
+        this(topK, scoreThreshold, rerank, embeddingModel, retrievalMethod, chunkMethod,
+                chunkTokenNum, separator, emptyResultStrategy, vectorSimilarityWeight,
+                rerankModelId, ocrEnabled, ocrLanguage, chunkOverlapTokenNum, null, null, null);
     }
 
     /** 默认召回条数。 */
@@ -127,11 +178,23 @@ public record RagSettings(
     /** 检索方式码值：混合检索（关键字 + 语义）。 */
     public static final String METHOD_HYBRID = "hybrid";
 
+    /** 图谱构建状态码值：未构建（默认；可触发构建）。 */
+    public static final String KG_STATUS_NONE = "none";
+    /** 图谱构建状态码值：构建中（拒绝重复触发）。 */
+    public static final String KG_STATUS_BUILDING = "building";
+    /** 图谱构建状态码值：已就绪（kgBuildMessage 清空）。 */
+    public static final String KG_STATUS_READY = "ready";
+    /** 图谱构建状态码值：构建失败（可重试）。 */
+    public static final String KG_STATUS_FAILED = "failed";
+
     /**
      * 全局默认设置（无库级配置、或多库检索回落时使用）。
      *
      * <p>OCR 三字段默认：{@code ocrEnabled=false}、{@code ocrLanguage="zh"}、
      * {@code chunkOverlapTokenNum=null}（null = 引擎默认/0，能力不支持时不下发）。
+     *
+     * <p>图谱三字段默认：{@code useKnowledgeGraph=false}、{@code kgBuildStatus="none"}、
+     * {@code kgBuildMessage=null}。
      *
      * @return 一份关键字段非空的默认设置
      */
@@ -150,6 +213,9 @@ public record RagSettings(
                 null,
                 Boolean.FALSE,
                 DEFAULT_OCR_LANGUAGE,
+                null,
+                Boolean.FALSE,
+                KG_STATUS_NONE,
                 null);
     }
 
@@ -167,6 +233,10 @@ public record RagSettings(
      *
      * <p>{@code ocrEnabled} null → {@code false}；{@code ocrLanguage} 空 → {@code zh}；
      * {@code chunkOverlapTokenNum} 保持 {@code null}（null = 引擎默认/0，不硬编码兜底）。
+     *
+     * <p>{@code useKnowledgeGraph} null → {@code false}；{@code kgBuildStatus} 空/非法 →
+     * {@value #KG_STATUS_NONE}（四态白名单由 {@link #normalizeKgBuildStatus} 归一）；
+     * {@code kgBuildMessage} 保持 {@code null}（null = 无消息，由回写方写入）。
      *
      * @return 补齐默认值后的新实例（本记录不可变，原实例不受影响）
      */
@@ -188,7 +258,29 @@ public record RagSettings(
                 rerankModelId,
                 ocrEnabled != null ? ocrEnabled : Boolean.FALSE,
                 ocrLanguage != null && !ocrLanguage.isBlank() ? ocrLanguage : DEFAULT_OCR_LANGUAGE,
-                chunkOverlapTokenNum);
+                chunkOverlapTokenNum,
+                useKnowledgeGraph != null ? useKnowledgeGraph : Boolean.FALSE,
+                normalizeKgBuildStatus(kgBuildStatus),
+                kgBuildMessage);
+    }
+
+    /**
+     * 仅覆写图谱开关，其余字段原样透传（Wave B GraphRAG PoC，T03）。
+     *
+     * <p>命中测试「临时开启/关闭图谱增强」用（{@code HitTestRequest.enableGraph}）：
+     * 只影响本次检索的内存值，<b>绝不落库</b>。图谱状态（kgBuildStatus/kgBuildMessage）
+     * 保持原值——降级判定由 {@link RetrieveQueryResolver} S4.5 从库设置读取。
+     *
+     * @param useKnowledgeGraph 本次生效的图谱开关
+     * @return 覆写后的新实例（本记录不可变，原实例不受影响）
+     */
+    public RagSettings withGraphOverride(boolean useKnowledgeGraph) {
+        return new RagSettings(
+                topK, scoreThreshold, rerank, embeddingModel, retrievalMethod,
+                chunkMethod, chunkTokenNum, separator, emptyResultStrategy,
+                vectorSimilarityWeight, rerankModelId,
+                ocrEnabled, ocrLanguage, chunkOverlapTokenNum,
+                useKnowledgeGraph, kgBuildStatus, kgBuildMessage);
     }
 
     /**
@@ -256,5 +348,26 @@ public record RagSettings(
             return lower;
         }
         return DEFAULT_RETRIEVAL_METHOD;
+    }
+
+    /**
+     * 归一化图谱构建状态码值（静态工具，供校验层与合并器共用）。
+     *
+     * <p>四态白名单 {@code none}/{@code building}/{@code ready}/{@code failed}；
+     * 非法/空值一律回落 {@value #KG_STATUS_NONE}（防脏写，设计 §2.1 校验）。
+     *
+     * @param status 原始码值，可为 {@code null}
+     * @return 合法码值之一；非法/空值一律回落 {@value #KG_STATUS_NONE}
+     */
+    public static String normalizeKgBuildStatus(String status) {
+        if (status == null || status.isBlank()) {
+            return KG_STATUS_NONE;
+        }
+        String lower = status.trim().toLowerCase();
+        if (KG_STATUS_NONE.equals(lower) || KG_STATUS_BUILDING.equals(lower)
+                || KG_STATUS_READY.equals(lower) || KG_STATUS_FAILED.equals(lower)) {
+            return lower;
+        }
+        return KG_STATUS_NONE;
     }
 }

@@ -277,6 +277,38 @@ public class RetrieveQueryResolver {
             }
         }
 
+        // S4.5（Wave B GraphRAG PoC，T03）：图谱增强三道降级（能力/单库/kgBuildStatus）。
+        // 开关只在「库设置 + 命中测试 override」两级出现——applyOverride 已用 17 参
+        // canonical 透传图谱字段，所以这里从合并后的 base 读取 useKnowledgeGraph 即可
+        // （命中测试的 enableGraph override 在 KbHitTestService 完成，不在此 S2 覆盖）。
+        // 降级只允许发生在这里（Resolver 铁律 §10-9），服务层禁止内联判断。
+        // 检索期强校验 kgBuildStatus==ready（U5）：图未就绪时 use_kg 会被引擎静默忽略，
+        // 不降级会污染金标对比（管理员看不出 hybrid+graph 实际没加图）。
+        boolean useKnowledgeGraph = Boolean.TRUE.equals(base.useKnowledgeGraph());
+        // 多库场景的图谱请求信号修正：S1 基准在多库时回落全局默认（useKnowledgeGraph=false），
+        // 但图谱开关是「库级特性开关」——任一被检索库开启图谱，即视为本次检索<b>请求了</b>
+        // 图谱增强。若不修正，管理员在单库开了图、跨库检索时会被静默忽略且无任何提示，
+        // 违背「绝不静默忽略 + degradedReason 回显」原则；修正后由下方「仅支持单库」闸门
+        // 显式降级并给出可读原因（测试：RetrieveQueryGraphDegradeTest.degradeWhenMultiLibrary）。
+        if (!useKnowledgeGraph && context.scopedLibraryIds().size() > 1) {
+            useKnowledgeGraph = context.perLibrarySettings().values().stream()
+                    .anyMatch(s -> Boolean.TRUE.equals(s.useKnowledgeGraph()));
+        }
+        if (useKnowledgeGraph && !caps.graphSupported()) {
+            useKnowledgeGraph = false;
+            degradedReasons.add("当前引擎不支持知识图谱增强");
+        }
+        if (useKnowledgeGraph && context.scopedLibraryIds().size() > 1) {
+            useKnowledgeGraph = false;
+            degradedReasons.add("图谱增强仅支持单库检索，已回落混合检索");
+        }
+        if (useKnowledgeGraph && !RagSettings.KG_STATUS_READY.equals(base.kgBuildStatus())) {
+            useKnowledgeGraph = false;
+            degradedReasons.add("图谱未构建完成（当前状态："
+                    + RagSettings.normalizeKgBuildStatus(base.kgBuildStatus())
+                    + "），已回落混合检索");
+        }
+
         // S5 兜底
         int topK = clampTopK(base.topK());
         double threshold = clampRatio(base.scoreThreshold(), RagSettings.DEFAULT_SCORE_THRESHOLD);
@@ -312,16 +344,18 @@ public class RetrieveQueryResolver {
                 rerank,
                 effectiveRerankModelId,
                 emptyStrategy,
-                effectiveDocumentIds);
+                effectiveDocumentIds,
+                useKnowledgeGraph);
 
         EffectiveRetrieveParams effective = new EffectiveRetrieveParams(
                 topK, threshold, method, weight, rerank, effectiveRerankModelId,
-                emptyStrategy, source, degradedReasons);
+                emptyStrategy, source, degradedReasons, useKnowledgeGraph);
 
         log.debug("检索参数合并完成 libraryIds={} source={} method={} weight={} topK={} "
-                        + "threshold={} rerank={} emptyStrategy={} degraded={} synonym={}/{}组",
+                        + "threshold={} rerank={} emptyStrategy={} degraded={} graph={} synonym={}/{}组",
                 context.scopedLibraryIds(), source, method, weight, topK,
                 threshold, rerank, emptyStrategy, degradedReasons,
+                useKnowledgeGraph,
                 expansion.status(), expansion.usedGroups());
         if (!degradedReasons.isEmpty()) {
             log.warn("检索参数发生降级 libraryIds={} reasons={}",
@@ -397,6 +431,10 @@ public class RetrieveQueryResolver {
      * @return 覆盖后的新设置
      */
     private RagSettings applyOverride(RagSettings base, ParamOverride ov) {
+        // 17 参 canonical 透传图谱三字段（useKnowledgeGraph/kgBuildStatus/kgBuildMessage）——
+        // 绝不能走 14 参旧构造，否则图谱字段被静默置 null（record 末位追加铁律 §10-8）。
+        // 注意图谱开关属「库设置 + 命中测试 override」两级，不在此 S2 覆盖——由 S4.5
+        // 从库设置合并（{@code useKnowledgeGraph} 的 override 在 KbHitTestService 完成）。
         return new RagSettings(
                 ov.topK() != null ? ov.topK() : base.topK(),
                 ov.threshold() != null ? ov.threshold() : base.scoreThreshold(),
@@ -413,7 +451,10 @@ public class RetrieveQueryResolver {
                 base.rerankModelId(),
                 base.ocrEnabled(),
                 base.ocrLanguage(),
-                base.chunkOverlapTokenNum());
+                base.chunkOverlapTokenNum(),
+                base.useKnowledgeGraph(),
+                base.kgBuildStatus(),
+                base.kgBuildMessage());
     }
 
     /**

@@ -18,6 +18,8 @@ import java.util.List;
  * @param emptyResultStrategy    生效空结果策略
  * @param source                 参数来源
  * @param degradedReasons        降级原因列表
+ * @param useKnowledgeGraph      图谱增强实际生效开关（Wave B GraphRAG PoC，T03，末位追加）。
+ *                               命中测试页回显「本次实际生效：图谱增强 开/关（原因）」用
  */
 public record KbEffectiveParamsVO(
         Integer topK,
@@ -28,5 +30,6 @@ public record KbEffectiveParamsVO(
         String rerankModelId,
         String emptyResultStrategy,
         String source,
-        List<String> degradedReasons) {
+        List<String> degradedReasons,
+        Boolean useKnowledgeGraph) {
 }

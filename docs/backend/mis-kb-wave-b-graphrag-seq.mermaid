@@ -1,0 +1,71 @@
+sequenceDiagram
+    autonumber
+    participant U as 前端(库详情页/命中测试)
+    participant B as BFF KbController/Facade
+    participant K as mis-kb
+    participant G as KbGraphService
+    participant R as RetrieveQueryResolver
+    participant A as RagflowAdapter
+    participant C as RagflowClient
+    participant E as RAGFlow
+
+    Note over U,E: 链路一：开启图谱 + 触发构图（开关打开自动触发一次 + 手动重试）
+
+    U->>B: PUT /libraries/{id}/engine/settings {useKnowledgeGraph:true}
+    B->>K: RagSettingsService.save(id, settings)
+    K->>K: validate + enforceGraphAvailability（≤2 库上限 + capabilities.graphrag）
+    K->>K: 落库 rag_settings_json（useKnowledgeGraph=true, kgBuildStatus=none）
+    K->>C: updateLibrarySettings(datasetId, settings)
+    C->>E: PUT /datasets/{id} {parser_config.graphrag{use_graphrag:true, method:"light"}}
+    E-->>C: code:0
+    K-->>B: 生效设置（useKnowledgeGraph=true, kgBuildStatus=none）
+    B-->>U: 保存成功（前端提示「图谱构建已排队」）
+
+    U->>B: POST /libraries/{id}/graph/build
+    B->>K: KbGraphController.buildGraph(id)
+    K->>K: 判权（kb:library:edit + hasLibraryManage）+ kgBuildStatus 非 building
+    K->>G: build(id)
+    G->>A: buildGraph(ref)
+    A->>C: buildGraph(datasetId)
+    C->>E: POST /datasets/{id}/index?type=graph
+    E-->>C: {"task_id":"..."}
+    G->>K: 回写 kgBuildStatus=building + taskId（落库）
+    K-->>B: GraphBuildResultVO{building, taskId}
+    B-->>U: 构建中徽标
+
+    Note over U,E: 链路二：状态轮询回写（前端 3s 轮询）
+
+    U->>B: GET /libraries/{id}/graph/build-status
+    B->>K: KbGraphController.graphStatus(id)
+    K->>G: refreshStatus(id)
+    G->>A: queryGraphBuildStatus(ref)
+    A->>C: GET /datasets/{id}/index?type=graph
+    C-->>A: {progress: 1.0, progress_msg, task_type:"graphrag"}
+    A-->>G: GraphBuildSnapshot{READY, progress 1.0}
+    G->>K: 回写 kgBuildStatus=ready（progress=-1 → failed + kgBuildMessage）
+    K-->>B: KbGraphStatusVO{ready, taskId, updatedAt}
+    B-->>U: 徽标翻转「图谱已就绪」
+
+    Note over U,E: 链路三：命中测试/问答检索带图谱增强（use_kg）
+
+    U->>B: POST /hit-test {libraryId, question, enableGraph:true, documentIds:[...]}
+    B->>K: KbHitTestService.run(request, userId)
+    K->>K: ACL 校验（KbVisibilityService.hasPermission READ）
+    K->>R: resolveAll(ctx{useKnowledgeGraph:true, documentIds})
+    R->>R: S4.5 降级（capabilities.graphrag / 单库 / kgBuildStatus==ready）
+    R-->>K: RetrieveQuery{useKnowledgeGraph:true, documentIds}
+    K->>A: retrieve(query)
+    alt useKnowledgeGraph=true 且单库且图就绪
+        A->>C: searchDataset(datasetId, query, nativeDocIds)
+        C->>E: POST /datasets/{id}/search {use_kg:true, doc_ids:[...], size, similarity_threshold}
+        E-->>C: chunks[]（KG 结果插入首位）
+        C-->>A: List~RfSearchChunk~（content_with_weight 剥离标记）
+        A-->>K: List~ChunkHit~（映射 docnm_kwd→docTitle）
+    else 多库 / 图未就绪 / 引擎不支持
+        A->>C: retrieve(query)（现状 /api/v1/retrieval，零回归）
+        C->>E: POST /api/v1/retrieval {question, dataset_ids, page_size, ...}
+        E-->>A: chunks[]
+        A-->>K: List~ChunkHit~
+    end
+    K-->>B: HitTestResultVO{hits, effectiveParams(含 useKnowledgeGraph 实际生效 + 降级原因)}
+    B-->>U: 结果列表 + 生效参数回显（graph on/off 对比）

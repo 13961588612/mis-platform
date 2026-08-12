@@ -53,6 +53,12 @@ interface TuneForm {
   uploadFrom: string;
   /** 上传时间范围上界（datetime-local 原始值，KE-09）；空串 = 不限制。 */
   uploadTo: string;
+  /**
+   * 本次图谱增强临时开关（Wave B GraphRAG PoC，T03）。
+   * 三态：true 强制开 / false 强制关 / null 跟随库设置 useKnowledgeGraph。
+   * 用于 hybrid-only vs hybrid+graph 的 A/B 对照，只影响本次测试。
+   */
+  enableGraph: boolean | null;
 }
 
 const EMPTY_TUNE: TuneForm = {
@@ -66,6 +72,7 @@ const EMPTY_TUNE: TuneForm = {
   documentIds: [],
   uploadFrom: '',
   uploadTo: '',
+  enableGraph: null,
 };
 
 /** 一次已完成的测试记录（用于 WA-14 并排对比）。 */
@@ -202,6 +209,9 @@ export function KbHitTestPage() {
   // 文档/时间范围过滤能力：`=== true`（fail-safe，对齐 rerankSupported 口径）。
   // 未确认一律置灰——过滤条件在引擎不支持时会被后端清空，与其让人白勾不如提前挡住。
   const filterSupported = capabilities?.metadataFilterSupported === true;
+  // 图谱增强能力（Wave B GraphRAG PoC，T03）：`=== true`（fail-safe）。能力未确认/
+  // 不支持时置灰——后端 Resolver S4.5 会把图谱开关降级并回显原因，前端提前挡住更友好。
+  const graphSupported = capabilities?.graphSupported === true;
 
   useEffect(() => {
     if (!capabilities) void refreshEngine();
@@ -255,6 +265,8 @@ export function KbHitTestPage() {
           documentIds: [],
           uploadFrom: '',
           uploadTo: '',
+          // 切库后重置为「跟随库设置」（A/B 对照语义：不残留上一个库的临时开关）
+          enableGraph: null,
         }));
       } catch (e) {
         toast.error(e instanceof Error ? e.message : '加载该库 RAG 设置失败');
@@ -298,6 +310,8 @@ export function KbHitTestPage() {
         documentIds: form.documentIds.length > 0 ? [...form.documentIds] : null,
         uploadFrom: toIsoInstant(form.uploadFrom),
         uploadTo: toIsoInstant(form.uploadTo),
+        // Wave B（T03）：图谱增强临时开关三态透传（null 由 cleanParams 剔除 = 跟随库设置）
+        enableGraph: form.enableGraph,
       });
       // 当前结果挤到「上一次」，形成 1 组对比
       setPrevious(current);
@@ -415,6 +429,49 @@ export function KbHitTestPage() {
             </span>
           ) : null}
         </label>
+
+        {/* 图谱增强临时开关（Wave B GraphRAG PoC，T03）：三态 A/B 对照。
+            能力未确认/不支持时整体置灰（fail-safe，`=== true`），与过滤区同款
+            置灰 + amber 提示结构；后端 Resolver S4.5 仍会强校验（能力/单库/
+            kgBuildStatus==ready）并回显降级原因，前端只是提前挡住不可用场景。 */}
+        <div className="space-y-2 rounded-md border border-dashed bg-muted/30 p-3">
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-sm font-medium text-foreground">图谱增强（Wave B）</span>
+            {graphSupported && form.enableGraph !== null ? (
+              <Button
+                type="button"
+                size="sm"
+                variant="ghost"
+                className="h-6 px-2 text-xs"
+                onClick={() => setForm((f) => ({ ...f, enableGraph: null }))}
+              >
+                跟随库设置
+              </Button>
+            ) : null}
+          </div>
+          <p className="text-xs text-muted-foreground">
+            临时开关图谱增强检索（hybrid-only vs hybrid+graph 对照），只影响本次测试，不写回库设置。
+          </p>
+          {!graphSupported ? (
+            <p className="text-xs text-amber-600">当前引擎版本暂不支持知识图谱增强</p>
+          ) : null}
+          <select
+            className={selectClass}
+            disabled={!graphSupported}
+            value={form.enableGraph == null ? 'follow' : form.enableGraph ? 'on' : 'off'}
+            onChange={(e) => {
+              const v = e.target.value;
+              setForm((f) => ({
+                ...f,
+                enableGraph: v === 'follow' ? null : v === 'on',
+              }));
+            }}
+          >
+            <option value="follow">跟随库设置（默认）</option>
+            <option value="on">开启</option>
+            <option value="off">关闭</option>
+          </select>
+        </div>
 
         {/* 检索范围过滤（KE-08/09）：限定文档多选 + 上传时间范围。
             能力未确认/不支持时整体置灰（fail-safe，`=== true`），与 rerank 区同款
@@ -664,6 +721,10 @@ function EffectiveParamsPanel({
         />
         <ParamItem label="重排" value={p?.rerank ? '已启用' : '未启用'} />
         <ParamItem label="重排模型" value={p?.rerankModelId ?? '—'} />
+        <ParamItem
+          label="图谱增强"
+          value={p?.useKnowledgeGraph === true ? '已开启' : '未开启'}
+        />
         <ParamItem
           label="空结果策略"
           value={emptyResultStrategyLabel(result.emptyResultStrategy)}
