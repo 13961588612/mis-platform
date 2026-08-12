@@ -1,4 +1,5 @@
 import type { AdminPageDef } from './types';
+import { fetchApps } from '@/lib/api/platform';
 
 const STATUS_OPTS = [
   { value: 1, label: '启用' },
@@ -851,12 +852,13 @@ export const SYSTEM_PAGE_DEFS: Record<string, AdminPageDef> = {
       { key: 'sort', label: '排序', type: 'number', col: 4 },
       { key: 'status', label: '状态', type: 'switch', col: 6 },
     ],
+    /** 接口失败时的兜底样例；正常走 loader 拉 IAM sys_app（含 kb / agent）。 */
     sample: [
       {
         id: 1,
         code: 'system',
         name: '系统管理',
-        icon: 'layoutDashboard',
+        icon: 'Settings',
         base_path: '/system',
         kind: 'subsystem',
         runtime: 'host',
@@ -868,7 +870,7 @@ export const SYSTEM_PAGE_DEFS: Record<string, AdminPageDef> = {
         id: 2,
         code: 'iam',
         name: '统一身份 IAM',
-        icon: 'shieldCheck',
+        icon: 'Shield',
         base_path: '/iam',
         kind: 'subsystem',
         runtime: 'host',
@@ -880,7 +882,7 @@ export const SYSTEM_PAGE_DEFS: Record<string, AdminPageDef> = {
         id: 3,
         code: 'ops',
         name: '运营中心',
-        icon: 'activity',
+        icon: 'LayoutDashboard',
         base_path: '/ops',
         kind: 'subsystem',
         runtime: 'remote',
@@ -888,7 +890,48 @@ export const SYSTEM_PAGE_DEFS: Record<string, AdminPageDef> = {
         sort: 3,
         status: 1,
       },
+      {
+        id: 91010,
+        code: 'kb',
+        name: '知识库',
+        icon: 'BookOpen',
+        base_path: '/kb',
+        kind: 'subsystem',
+        runtime: 'host',
+        portal_group: 'platform',
+        sort: 10,
+        status: 1,
+      },
+      {
+        id: 92010,
+        code: 'agent',
+        name: '智能体',
+        icon: 'Bot',
+        base_path: '/agent',
+        kind: 'subsystem',
+        runtime: 'host',
+        portal_group: 'platform',
+        sort: 11,
+        status: 1,
+      },
     ],
+    loader: async () => {
+      const apps = await fetchApps();
+      return apps.map((a) => ({
+        id: a.id,
+        code: a.code,
+        name: a.name,
+        icon: a.icon,
+        base_path: a.basePath,
+        kind: a.kind,
+        runtime: a.runtime,
+        portal_group: a.portalGroup,
+        description: a.description,
+        sort: a.sort,
+        status: a.status,
+        enterable: a.enterable,
+      }));
+    },
     decorate: withStatus,
   },
   '/system/config': {

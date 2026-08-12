@@ -1,31 +1,21 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import type { Assignment } from './types';
 import {
-  Activity,
-  AppWindow,
-  Boxes,
   Check,
   ChevronDown,
-  Cog,
   Eye,
   Inbox,
-  Layers,
-  LayoutDashboard,
-  LayoutGrid,
-  type LucideIcon,
   MoreHorizontal,
-  Package,
   Pencil,
   Plus,
   Search,
   SearchX,
-  Settings,
-  ShieldCheck,
   Sparkles,
   Trash2,
 } from 'lucide-react';
 import { ModuleManagePage } from '@/features/system/module/module-manage-page';
 import { cn } from '@/lib/utils';
+import { resolveNavIcon } from '@/lib/nav/icons';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { PageHeader } from '@/components/common/page-header';
@@ -1310,20 +1300,8 @@ function RowMoreMenu({ onDelete }: { onDelete: () => void }) {
 
 /* ---------- Phase B: app 卡片网格视图（view:'cards'） ---------- */
 
-const APP_ICONS: Record<string, LucideIcon> = {
-  layoutDashboard: LayoutDashboard,
-  shieldCheck: ShieldCheck,
-  activity: Activity,
-  boxes: Boxes,
-  package: Package,
-  cog: Cog,
-  settings: Settings,
-  appWindow: AppWindow,
-  layers: Layers,
-};
-
 function AppTileIcon({ name }: { name?: unknown }) {
-  const Cmp = APP_ICONS[String(name ?? '')] ?? LayoutGrid;
+  const Cmp = resolveNavIcon(typeof name === 'string' ? name : null);
   return <Cmp className="h-5 w-5" />;
 }
 
