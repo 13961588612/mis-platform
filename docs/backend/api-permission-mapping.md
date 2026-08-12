@@ -170,6 +170,30 @@ WHERE ur.user_id = ? AND m.app_id = ?
 | WRITE-03 | 91151 | 00900067 | POST | `/api/v1/kb/operations/qa/tickets` | 创建问答工单 | `kb:qa:ask` | 91036 |
 | WRITE-04 | 91152 | 00900068 | PATCH | `/api/v1/kb/operations/qa/tickets/{ticketId}` | 处理问答工单 | `kb:operation:list` | 91037 |
 
+### 3.6 接口模块 V35 补登 10 端点（差集清零，SEC-02 收尾）
+
+> 迁移：`V35__modules_api_registry.sql`（catalog sys_api `91157` + api `91158-91167` / code `00900073-00900083` / sys_menu_api `91257-91266` / sort `92-101`）。
+> **版本号说明**：原设计为 V34，但迁移目录先存在 Wave C 的 `V34__kb_wave_c_raptor.sql`（KB RAPTOR，sys_api 91155-91156 等段位），主理人裁决 Option A：V34 让给 Wave C（先到先得），本专项改 **V35**、段位顺延（catalog 91157 / leaves 91158-91167 / code 00900073-00900083 / menu_api 91257-91266 / sort 92-101）。
+> 权限码全部复用 V8 既有 `system:module:*` 四码，**零新增权限码、零新增菜单行**；一码一菜单挂既有节点（207 页面 / 271 新增 / 272 编辑 / 273 删除）。
+> 端点 `method + path` 与 BFF `ModuleController` 映射逐字一致（`ModuleControllerRegistryCoverageTest` 锁定）。
+> 背景：roles 2 / apps 1 / employees 1 经核验**已登记**（V4/V5），差集误报已纠偏 fixture，V35 **不重复补**（撞 `uk_api_method_path` 会幂等跳过）。
+
+| 编号 | sys_api id | code | 方法 | path_pattern | 功能 | 权限码 | menu_id |
+|---|---|---|---|---|---|---|---|
+| M-01 | 91158 | 00900074 | GET | `/api/v1/modules` | 查询模块列表 | `system:module:list` | 207 |
+| M-02 | 91159 | 00900075 | GET | `/api/v1/modules/{id:[0-9]+}` | 查询模块详情 | `system:module:list` | 207 |
+| M-03 | 91160 | 00900076 | POST | `/api/v1/modules` | 新建模块 | `system:module:add` | 271 |
+| M-04 | 91161 | 00900077 | PUT | `/api/v1/modules/{id:[0-9]+}` | 编辑模块 | `system:module:edit` | 272 |
+| M-05 | 91162 | 00900078 | DELETE | `/api/v1/modules/{id:[0-9]+}` | 删除模块 | `system:module:delete` | 273 |
+| M-06 | 91163 | 00900079 | GET | `/api/v1/modules/{moduleId:[0-9]+}/apis` | 模块 API 树 | `system:module:list` | 207 |
+| M-07 | 91164 | 00900080 | POST | `/api/v1/modules/{moduleId:[0-9]+}/apis` | 新增模块 API | `system:module:add` | 271 |
+| M-08 | 91165 | 00900081 | PUT | `/api/v1/modules/apis/{apiId:[0-9]+}` | 编辑模块 API | `system:module:edit` | 272 |
+| M-09 | 91166 | 00900082 | DELETE | `/api/v1/modules/apis/{apiId:[0-9]+}` | 删除模块 API | `system:module:delete` | 273 |
+| M-10 | 91167 | 00900083 | GET | `/api/v1/modules/{moduleId:[0-9]+}/bindings` | 模块绑定列表 | `system:module:list` | 207 |
+
+> catalog：`91157`「接口模块管理」（type=catalog，module 4，parent 4000，code 00900073）——模块域此前无 sys_api 树根（V8 只建菜单未建 API 树），U-V34-5 裁决新建。
+> 已登记不变量：`GET/PUT /api/v1/roles/{id}/menus`（V2 建 3008/3009，V4 改名 /menus，menu 234 `system:role:assignMenu`）、`GET /api/v1/apps`（V5 9006，menu 90 permission NULL → authOnly）、`GET /api/v1/employees`（V4 1011，menu 201 `system:user:list`）。
+
 ## 4. 仅登录 API
 
 挂在 `permission IS NULL` 的菜单页下，或 `sys_menu_api` 关联且 menu.permission 为空：
@@ -197,6 +221,18 @@ login/captcha/refresh 在 Gateway 白名单，不入库。
 | PUT | `/menus/{menuId}/apis` | system:menu:edit |
 | GET | `/apis/tree` | system:api:query |
 | POST | `/apis` | system:api:edit |
+| GET | `/modules` | system:module:list（V35 登记 91158） |
+| GET | `/modules/{id}` | system:module:list（V35 登记 91159） |
+| POST | `/modules` | system:module:add（V35 登记 91160） |
+| PUT | `/modules/{id}` | system:module:edit（V35 登记 91161） |
+| DELETE | `/modules/{id}` | system:module:delete（V35 登记 91162） |
+| GET | `/modules/{moduleId}/apis` | system:module:list（V35 登记 91163） |
+| POST | `/modules/{moduleId}/apis` | system:module:add（V35 登记 91164，U-V34-2） |
+| PUT | `/modules/apis/{apiId}` | system:module:edit（V35 登记 91165） |
+| DELETE | `/modules/apis/{apiId}` | system:module:delete（V35 登记 91166） |
+| GET | `/modules/{moduleId}/bindings` | system:module:list（V35 登记 91167） |
+
+> modules 行 path 为 `/api/v1/modules...` 的简写；完整登记表见 §3.6。
 
 变更后刷新 Registry；菜单 permission 变更时 evict 用户 Redis。
 

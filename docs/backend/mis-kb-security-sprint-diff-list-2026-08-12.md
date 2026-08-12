@@ -25,13 +25,16 @@
 | kb | 70 | 70（V17~V31 42 去重基线 + V32 28 新登记） | **0** | ✅ 差集清零（SEC-03/04，V32） |
 | ai | 8 | 8（V6 6 + V33 2 authOnly） | **0** | ✅ 已收敛（V33 补 skill/execute\|apply，U1 裁决） |
 | agent-ops | 61 | 58（V19/V20/V28/V29）+ 3 动作变量端点视为已覆盖 | **0** | ✅ 已收敛（动作变量已按拆行登记覆盖） |
-| modules | 10 | 0 | **10** | ⚠️ 待运营评估（二期统一登记） |
-| roles（菜单绑定） | 2 | 0 | **2** | ⚠️ 待运营评估（二期统一登记） |
-| apps | 1 | 0 | **1** | ⚠️ 待运营评估（二期统一登记） |
-| employees | 1 | 0 | **1** | ⚠️ 待运营评估（二期统一登记） |
+| modules | 10 | 0 | **10** | ✅ **V35 已补登**（本期迁移，catalog 91157 + api 91158-91167） |
+| roles（菜单绑定） | 2 | 2（V2 建 3008/3009，V4 改名 /menus） | **0** | ✅ 已登记（盘点工具 fixture 漏 V4 改名，误报已纠偏） |
+| apps | 1 | 1（V5 建 9006） | **0** | ✅ 已登记（盘点工具 fixture 漏 V5，误报已纠偏） |
+| employees | 1 | 1（V4 建 1011） | **0** | ✅ 已登记（盘点工具 fixture 漏 V4，误报已纠偏） |
 | 其余（IAM/ORG/DEPT/MENU/DICT/DASHBOARD/LOG/AUTH） | — | 全量 | 0 | ✅ 已收敛（V2 seed 等） |
 
-> **净结论**：KB 域与 AI 域差集已在 V32/V33 清零；非 KB 未登记共 **17 项**（5 域），全部标注「待运营评估 / 建议补登」，本期**只盘点不改造**（Q4 裁决）。
+> **净结论**：KB 域与 AI 域差集已在 V32/V33 清零；非 KB 未登记 **17 项**经代码/连库核验后：
+> agent-ops 3 项为动作变量拆行登记（已覆盖）；roles 2 项 + apps 1 项 + employees 1 项**实际已登记**
+> （盘点工具 `REGISTERED_FIXTURE` 漏 V4/V5 行导致误报，本次已纠偏 fixture）；modules 10 项**真未登记**，
+> 由 **V35 迁移补登**（见 §5 纠偏说明 + `mis-kb-security-sprint-v34-design-2026-08-12.md`）。差集**真实清零**。
 
 ## 3. KB 域差集（V32 补登 28 端点，SEC-03/04）
 
@@ -77,38 +80,43 @@
 
 > 说明：V21 刻意不做 URL 级权限码（真实判权粒度在 body `skill_id` → `ai:skill:{id}:run`）；authOnly 由 `ApiService.registry()` 以「permission 为空」原生派生（`ApiService.java:38`），零新机制（设计 §1.3 Q3）。
 
-## 5. 非 KB 域未登记端点（17 项，本期只盘点不改造，Q4）
+## 5. 非 KB 域未登记端点（17 项 → 纠偏后 modules 10 项，V35 补登）
 
-> 以下逐项为**可执行清单**——每项均有处置结论；主理人评审通过后 T2 才可开工（Q2 前置硬门槛）。
-> 默认处置：**待运营评估（列二期统一登记）**；fail-closed 推广后这些端点在 test/integration/本地将 403（配置翻转风险 R2，误杀回滚 = Nacos 一处改回 `false`）。
+> **【纠偏说明 · 2026-08-12 V34 专项】** 原盘点把 roles 2 + apps 1 + employees 1 误列为「未登记」，
+> 根因是盘点工具 `BffApiRegistryDiffSurveyTest.REGISTERED_FIXTURE` 漏了 V4/V5 的登记行
+> （roles 仍写 V2 旧路径 `/permissions`、未反映 V4 改名 `/menus`；employees/apps 未收录）。
+> 经架构师读码核验 + 工程师连集成库复核（2026-08-12）：**3008/3009/1011/9006 均已在库**。
+> 处置：**不重复补登**（重复登记会撞 `uk_api_method_path` 被幂等跳过），改为**修正 fixture + 本清单纠偏**；
+> modules 10 项**真未登记**（全仓 grep `/api/v1/modules` 零匹配、连库查询零行），由 **V35 迁移补登**。
+> 详细设计：`docs/backend/mis-kb-security-sprint-v34-design-2026-08-12.md`。
 
 | 方法 | 路径 | Controller 来源 | 域 | 是否已登记 | 影响评估（fail-closed 后） | 建议动作 | 处置结论（主理人） |
 |---|---|---|---|---|---|---|---|
-| GET | `/api/v1/modules` | ModuleController | modules | 否 | 模块列表 403 | 建议补登（管理台基础读） | ⏳ 待运营评估（二期） |
-| GET | `/api/v1/modules/{id}` | ModuleController | modules | 否 | 模块详情 403 | 建议补登 | ⏳ 待运营评估（二期） |
-| POST | `/api/v1/modules` | ModuleController | modules | 否 | 新建模块 403 | 建议补登 | ⏳ 待运营评估（二期） |
-| PUT | `/api/v1/modules/{id}` | ModuleController | modules | 否 | 编辑模块 403 | 建议补登 | ⏳ 待运营评估（二期） |
-| DELETE | `/api/v1/modules/{id}` | ModuleController | modules | 否 | 删除模块 403 | 建议补登 | ⏳ 待运营评估（二期） |
-| GET | `/api/v1/modules/{moduleId}/apis` | ModuleController | modules | 否 | 模块 API 列表 403 | 建议补登 | ⏳ 待运营评估（二期） |
-| POST | `/api/v1/modules/{moduleId}/apis` | ModuleController | modules | 否 | 绑定模块 API 403 | 建议补登 | ⏳ 待运营评估（二期） |
-| PUT | `/api/v1/modules/apis/{apiId}` | ModuleController | modules | 否 | 改模块 API 403 | 建议补登 | ⏳ 待运营评估（二期） |
-| DELETE | `/api/v1/modules/apis/{apiId}` | ModuleController | modules | 否 | 解绑模块 API 403 | 建议补登 | ⏳ 待运营评估（二期） |
-| GET | `/api/v1/modules/{moduleId}/bindings` | ModuleController | modules | 否 | 模块绑定列表 403 | 建议补登 | ⏳ 待运营评估（二期） |
-| GET | `/api/v1/roles/{id}/menus` | RoleController | roles | 否 | 角色-菜单绑定读 403 | 建议补登 | ⏳ 待运营评估（二期） |
-| PUT | `/api/v1/roles/{id}/menus` | RoleController | roles | 否 | 角色-菜单绑定写 403 | 建议补登 | ⏳ 待运营评估（二期） |
-| GET | `/api/v1/apps` | AppController | apps | 否 | 应用列表 403 | 建议补登 | ⏳ 待运营评估（二期） |
-| GET | `/api/v1/employees` | EmployeeController | employees | 否 | 员工列表 403 | 建议补登 | ⏳ 待运营评估（二期） |
+| GET | `/api/v1/modules` | ModuleController | modules | 否（V35 前） | 模块列表 403 | 补登 | ✅ **V35 已补登**（U-V34-1 采纳） |
+| GET | `/api/v1/modules/{id}` | ModuleController | modules | 否（V35 前） | 模块详情 403 | 补登 | ✅ **V35 已补登** |
+| POST | `/api/v1/modules` | ModuleController | modules | 否（V35 前） | 新建模块 403 | 补登 | ✅ **V35 已补登** |
+| PUT | `/api/v1/modules/{id}` | ModuleController | modules | 否（V35 前） | 编辑模块 403 | 补登 | ✅ **V35 已补登** |
+| DELETE | `/api/v1/modules/{id}` | ModuleController | modules | 否（V35 前） | 删除模块 403 | 补登 | ✅ **V35 已补登** |
+| GET | `/api/v1/modules/{moduleId}/apis` | ModuleController | modules | 否（V35 前） | 模块 API 列表 403 | 补登 | ✅ **V35 已补登** |
+| POST | `/api/v1/modules/{moduleId}/apis` | ModuleController | modules | 否（V35 前） | 绑定模块 API 403 | 补登 | ✅ **V35 已补登**（U-V34-2：权限码 `system:module:add`(271)） |
+| PUT | `/api/v1/modules/apis/{apiId}` | ModuleController | modules | 否（V35 前） | 改模块 API 403 | 补登 | ✅ **V35 已补登** |
+| DELETE | `/api/v1/modules/apis/{apiId}` | ModuleController | modules | 否（V35 前） | 解绑模块 API 403 | 补登 | ✅ **V35 已补登** |
+| GET | `/api/v1/modules/{moduleId}/bindings` | ModuleController | modules | 否（V35 前） | 模块绑定列表 403 | 补登 | ✅ **V35 已补登** |
+| GET | `/api/v1/roles/{id}/menus` | RoleController | roles | **已登记**（V2 建 3008，V4 改名 /menus；menu_api 35→menu 234 `system:role:assignMenu`） | — | 纠偏 fixture | ✅ **已登记（差集误报，不重复补）** |
+| PUT | `/api/v1/roles/{id}/menus` | RoleController | roles | **已登记**（V2 建 3009，V4 改名 /menus；menu_api 36→menu 234） | — | 纠偏 fixture | ✅ **已登记（差集误报，不重复补）** |
+| GET | `/api/v1/apps` | AppController | apps | **已登记**（V5 建 9006；menu_api 75→menu 90 permission NULL → authOnly） | — | 纠偏 fixture | ✅ **已登记（差集误报，不重复补）** |
+| GET | `/api/v1/employees` | EmployeeController | employees | **已登记**（V4 建 1011；menu_api 19→menu 201 `system:user:list`） | — | 纠偏 fixture | ✅ **已登记（差集误报，不重复补）** |
 | POST | `/api/v1/agent-ops/agents/{id}/{action}` | AgentOpsController | agent-ops | 否（动作变量；已按拆行登记 start/pause/resume/stop） | 其余动作 403 | 若新增动作需同步登记 | ⏳ 待运营评估（二期，动作扩展时登记） |
 | POST | `/api/v1/agent-ops/channels/wecom/bots/{botId}/{action}` | AgentOpsChannelController | agent-ops | 否（动作变量；已按拆行登记 enable/disable） | 其余动作 403 | 若新增动作需同步登记 | ⏳ 待运营评估（二期，动作扩展时登记） |
 | POST | `/api/v1/agent-ops/mcp/servers/{name}/{action}` | AgentOpsController | agent-ops | 否（动作变量；已按拆行登记 connect/disconnect/discover/call） | 其余动作 403 | 若新增动作需同步登记 | ⏳ 待运营评估（二期，动作扩展时登记） |
 
 > **agent-ops 动作变量说明**：`{action:start|pause|resume|stop}` 是 Controller 单映射多动作，注册表已按动作拆行（V19/V20/V28/V29），运行时 AntPathMatcher 均能命中；盘点工具按「任一候选字面路径已登记即视为覆盖」判定，故上述 3 行实为**已覆盖**，仅当未来新增动作值时才需补登记（R5 口径）。
 
-## 6. 主理人评审记录（留白，评审后回填）
+## 6. 主理人评审记录
 
 | 日期 | 评审人 | 结论 | 影响 |
 |---|---|---|---|
-|  |  |  |  |
+| 2026-08-12 | 主理人 | **U-V34-1 采纳**：认可「roles/apps/employees 4 项已登记不补、改纠偏 fixture + 清单」；**U-V34-2 采纳**：POST `/modules/{moduleId}/apis` 权限码用 `system:module:add`(271)；**U-V34-3 采纳**：集成库 V29~V33 由本专项 T2 一并完整 migrate；**U-V34-4 采纳**：同意修改盘点 fixture；**U-V34-5 采纳**：新建 catalog「接口模块管理」 | 本专项只补 modules 10（**迁移文件实际为 V35**，V34 让给 Wave C RAPTOR，段位顺延 catalog 91157 / leaves 91158-91167——Option A 裁决，详见交付说明 §5）；差集真实清零；盘点工具回归真实基线 |
 
 ## 7. 交叉验证与验收对应
 

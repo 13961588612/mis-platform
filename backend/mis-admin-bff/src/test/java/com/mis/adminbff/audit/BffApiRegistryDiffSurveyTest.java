@@ -69,7 +69,7 @@ import static org.mockito.Mockito.mock;
  *
  * <p>用 Spring {@link RequestMappingHandlerMapping} 注册 mis-admin-bff 全部 19 个
  * Controller（含类级 {@code @RequestMapping} 前缀拼接），运行时导出全量
- * {@code /api/v1/**} 端点；与全仓迁移（V2~V31）写入 {@code sys_api} 的注册表 fixture
+ * {@code /api/v1/**} 端点；与全仓迁移（V2~V35）写入 {@code sys_api} 的注册表 fixture
  * 做差集（method + path 归一化精确匹配）。产出：
  *
  * <ul>
@@ -257,6 +257,18 @@ class BffApiRegistryDiffSurveyTest {
                 "非 KB 未登记端点所属域未在差集清单给出处置结论："
                         + nonKbUnregistered.stream().map(BffApiRegistryDiffSurveyTest::domainOf).distinct()
                         .collect(Collectors.joining(", ")));
+
+        // V35 落地后非 KB 未登记只剩 agent-ops 3 个动作变量端点（{action:start|pause|...} 单映射多动作，
+        // 注册表已按动作拆行登记、运行时 AntPathMatcher 均能命中——差集清单 §5 R5 口径视为「已覆盖」，
+        // 仅未来新增动作值时才需补登记）；modules 10 已 V35 登记、roles/apps/employees 已登记纠偏。
+        assertEquals(Set.of(
+                        "POST /api/v1/agent-ops/agents/{id}/{action}",
+                        "POST /api/v1/agent-ops/channels/wecom/bots/{botId}/{action}",
+                        "POST /api/v1/agent-ops/mcp/servers/{name}/{action}"),
+                nonKbUnregistered,
+                "非 KB 未登记应只剩 agent-ops 动作变量端点（拆行登记已覆盖）；"
+                        + "modules 10 应已 V35 登记、roles/apps/employees 应已登记纠偏："
+                        + nonKbUnregistered);
 
         printSurvey(exported, registered, newKb, newAi, nonKbUnregistered);
     }
@@ -458,10 +470,10 @@ class BffApiRegistryDiffSurveyTest {
         DISPOSITIONS.put("ai", "建议 authOnly：skill/execute|apply 已由 U1 裁决 V33 authOnly 登记；其余 AI 端点 V6 已登记");
         DISPOSITIONS.put("auth", "待运营评估：认证域未登记端点需运维确认网关白名单口径");
         DISPOSITIONS.put("dashboard", "已登记（V2 seed）或待运营评估：仪表盘聚合端点核对后列二期");
-        DISPOSITIONS.put("apps", "待运营评估：应用管理端点列二期统一登记");
-        DISPOSITIONS.put("employees", "待运营评估：员工列表端点列二期统一登记");
-        DISPOSITIONS.put("modules", "待运营评估：模块管理端点（CRUD/apis/bindings）未登记，列二期统一登记");
-        DISPOSITIONS.put("roles", "待运营评估：角色-菜单绑定端点（GET/PUT /roles/{id}/menus）未登记，列二期统一登记");
+        DISPOSITIONS.put("apps", "已登记（V5 sys_api 9006，menu 90 permission NULL → authOnly）：差集误报已纠偏，V35 不重复补");
+        DISPOSITIONS.put("employees", "已登记（V4 sys_api 1011，menu 201 system:user:list）：差集误报已纠偏，V35 不重复补");
+        DISPOSITIONS.put("modules", "V35 已补登：modules 10 端点（catalog 91157 + api 91158-91167）已登记，复用 V8 system:module:* 四码");
+        DISPOSITIONS.put("roles", "已登记（V2 建 3008/3009，V4 改名 /roles/{id}/menus，menu 234 system:role:assignMenu）：差集误报已纠偏，V35 不重复补");
         DISPOSITIONS.put("internal", "豁免：/internal/** 由 InternalServiceTrustInterceptor 管理，不属 ApiPermissionInterceptor 域");
         DISPOSITIONS.put("menus", "已登记（V2 seed authOnly）或待运营评估");
         DISPOSITIONS.put("oper-logs", "已登记（V2 seed）");
@@ -498,8 +510,9 @@ class BffApiRegistryDiffSurveyTest {
             "POST /api/v1/roles",
             "PUT /api/v1/roles/{id}",
             "DELETE /api/v1/roles/{id}",
-            "GET /api/v1/roles/{id}/permissions",
-            "PUT /api/v1/roles/{id}/permissions",
+            // V4 改名：roles 菜单绑定 /permissions → /menus（V2 建 3008/3009，V4 更新 path）
+            "GET /api/v1/roles/{id}/menus",
+            "PUT /api/v1/roles/{id}/menus",
             "GET /api/v1/roles/{id}/data-scope",
             "PUT /api/v1/roles/{id}/data-scope",
             "GET /api/v1/roles/enabled",
@@ -532,6 +545,10 @@ class BffApiRegistryDiffSurveyTest {
             "GET /api/v1/auth/me",
             "GET /api/v1/auth/logout",
             "GET /api/v1/auth/password",
+            // ---- V4：员工列表（sys_api 1011 → menu 201 system:user:list）----
+            "GET /api/v1/employees",
+            // ---- V5：应用列表（sys_api 9006 → menu 90 permission NULL，authOnly）----
+            "GET /api/v1/apps",
             // ---- V6：AI 能力 ----
             "POST /api/v1/ai/summary",
             "POST /api/v1/ai/extract",
@@ -680,6 +697,17 @@ class BffApiRegistryDiffSurveyTest {
             "PATCH /api/v1/kb/operations/qa/tickets/{ticketId}",
             // ---- V33（本期）：AI 反向信任 authOnly ----
             "POST /api/v1/ai/skill/execute",
-            "POST /api/v1/ai/skill/apply"
+            "POST /api/v1/ai/skill/apply",
+            // ---- V35（本期）：modules 10 端点（catalog 91157 + api 91158-91167，复用 system:module:* 四码）----
+            "GET /api/v1/modules",
+            "GET /api/v1/modules/{id}",
+            "POST /api/v1/modules",
+            "PUT /api/v1/modules/{id}",
+            "DELETE /api/v1/modules/{id}",
+            "GET /api/v1/modules/{moduleId}/apis",
+            "POST /api/v1/modules/{moduleId}/apis",
+            "PUT /api/v1/modules/apis/{apiId}",
+            "DELETE /api/v1/modules/apis/{apiId}",
+            "GET /api/v1/modules/{moduleId}/bindings"
     ));
 }

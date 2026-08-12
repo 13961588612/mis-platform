@@ -1,0 +1,34 @@
+sequenceDiagram
+    autonumber
+    participant U as 客户端/前端
+    participant G as mis-gateway
+    participant B as mis-admin-bff
+    participant P as ApiPermissionInterceptor
+    participant R as ApiPermissionRegistry
+    participant M as ModuleController
+
+    Note over U,M: 迁移后 GET /api/v1/modules 判定（V34 登记后）
+    U->>G: GET /api/v1/modules（带 JWT）
+    G->>B: 转发（登录态注入）
+    B->>P: preHandle
+    P->>P: isExempt? /actuator,/error → 否
+    P->>R: registry.match(GET, /api/v1/modules)
+    alt 已登记（V34 91156，permission=system:module:list）
+        P->>P: 取 LoginUser（无 → 40100 未认证）
+        alt 含 system:module:list
+            P-->>M: 放行 → 200
+        else 不含
+            P-->>U: 403 FORBIDDEN(40300 无权限)
+        end
+    else 未登记（不应存在；若 fixture 纠偏漏项）
+        alt denyUnmapped=true
+            P-->>U: 403 FORBIDDEN(40300 接口未授权映射)
+        else denyUnmapped=false
+            P-->>M: 放行（登录即调）
+        end
+    end
+
+    Note over U,M: 部署链路：集成库 V29→V34 完整 migrate + BFF 注册表重载（≤300s）
+    U->>B: mvn -pl mis-migrator flyway:migrate（V29→V34 自动排序）
+    B->>R: 启动加载 / @Scheduled 300s 重载 registry
+    R-->>B: replaceAll(rules) → modules 10 生效

@@ -1,0 +1,66 @@
+classDiagram
+    direction LR
+    class SysApi {
+        +Long id
+        +Long moduleId
+        +Long parentId
+        +String code
+        +String type
+        +String name
+        +String httpMethod
+        +String pathPattern
+        +Integer sort
+        +Integer status
+    }
+    class SysMenuApi {
+        +Long id
+        +Long menuId
+        +Long apiId
+        +Integer sort
+    }
+    class SysMenu {
+        +Long id
+        +Long appId
+        +String permission
+        +Integer type
+        +Integer status
+    }
+    class SysModule {
+        +Long id
+        +String code
+        +String serviceName
+        +Integer status
+    }
+    class V34Migration {
+        +catalog: 91155 接口模块管理
+        +api rows: 91156-91165 modules 10
+        +menu_api rows: 91255-91264
+        +reuse system:module:* codes
+    }
+    class ApiPermissionRegistry {
+        +match(method, path) Optional~Match~
+    }
+    class ModuleController {
+        +list() Result
+        +get(id) Result
+        +create(req) Result
+        +update(id, req) Result
+        +delete(id) Result
+        +apiTree(moduleId) Result
+        +bindings(moduleId) Result
+        +createApi(moduleId, req) Result
+        +updateApi(apiId, req) Result
+        +deleteApi(apiId) Result
+    }
+    class ModuleControllerRegistryCoverageTest {
+        +assertEveryModuleEndpointRegistered() List~String~
+    }
+
+    SysMenuApi "N" --> "1" SysMenu : menuId → id
+    SysMenuApi "N" --> "1" SysApi : apiId → id
+    SysApi "N" --> "1" SysModule : moduleId → id
+    V34Migration ..> SysApi : inserts 10
+    V34Migration ..> SysMenuApi : inserts 10
+    ApiPermissionRegistry ..> SysMenuApi : registry join (api⋈menu_api⋈menu)
+    ModuleController ..> ApiPermissionRegistry : PEP 判定（fail-closed）
+    ModuleControllerRegistryCoverageTest ..> ApiPermissionRegistry : 覆盖断言
