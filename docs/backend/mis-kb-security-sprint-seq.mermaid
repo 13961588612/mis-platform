@@ -1,0 +1,65 @@
+sequenceDiagram
+    autonumber
+    participant U as 客户端/前端
+    participant G as mis-gateway
+    participant B as mis-admin-bff
+    participant R as ReverseTrustInterceptor (仅 skill/execute|apply)
+    participant P as ApiPermissionInterceptor
+    participant S as SecurityContextHolder/LoginUser
+    participant K as mis-kb Controller
+
+    Note over U,K: 链路一：普通请求 fail-closed 判定（READ-01 GET /kb/categories 为例）
+    U->>G: GET /api/v1/kb/categories（带 JWT）
+    G->>B: 转发（登录态注入）
+    B->>R: 非反向端点 → 跳过
+    B->>P: preHandle
+    P->>P: isExempt? /actuator,/error → 否
+    P->>P: registry.match(GET, /api/v1/kb/categories)
+    alt 已登记（V32 后）
+        P->>S: 取 LoginUser（无 → 40100 未认证）
+        P->>P: permissions 含 kb:category:list？
+        alt 含
+            P-->>K: 放行 → 200
+        else 不含
+            P-->>U: 403 FORBIDDEN(40300 无权限)
+        end
+    else 未登记
+        alt denyUnmapped=true（fail-closed）
+            P-->>U: 403 FORBIDDEN(40300 接口未授权映射)
+        else denyUnmapped=false（fail-open 现状 test/integration）
+            P-->>K: 放行（登录即调）
+        end
+    end
+
+    Note over U,K: 链路二：AI 反向信任（Q3 现状 fail-closed 下 403；最小豁免 = authOnly 登记）
+    U->>G: POST /api/v1/ai/skill/execute（X-Platform-Token + 委托 JWT）
+    G->>B: 转发
+    B->>R: HIGHEST_PRECEDENCE 先执行 → 双因子校验 → 写 LoginUser(permissions=ai:*:use)
+    R-->>P: return true → 继续
+    P->>P: registry.match(POST, /api/v1/ai/skill/execute)
+    alt 未登记（现状）且 denyUnmapped=true
+        P-->>U: 403 接口未授权映射（反向信任断裂）
+    else 已登记 authOnly（豁免方案，主理人拍板后 V33）
+        P->>P: 登录态存在 → 放行
+        P-->>K: SkillPermissionChecker.assertCanRun(skill_id) → 技能级 fail-closed
+    end
+
+    Note over U,K: 链路三：SEC-02 差集盘点（运行时导出为主）
+    participant T as BffApiRegistryDiffSurveyTest
+    participant M as RequestMappingHandlerMapping
+    participant DB as sys_api 注册表(45 行基线)
+
+    T->>M: 注册全部 BFF Controller + afterPropertiesSet()
+    M-->>T: 全量 (method, path) 端点（含类级前缀拼接）
+    T->>DB: 读取已登记 45 行（fixture/运行时查询）
+    DB-->>T: 注册表清单
+    T->>T: 差集 = 导出端点 − 注册表
+    T-->>U: 差集清单（KB 28 待登记 + 非 KB 逐项处置结论）
+
+    Note over U,K: 链路四：V32 迁移后注册表刷新（补登先行）
+    participant V as V32 迁移
+    V->>DB: INSERT 28 sys_api + 28 sys_menu_api（幂等）
+    B->>P: 启动/300s 定时 reload 注册表
+    P->>DB: findRegistryRows() 重新加载
+    DB-->>P: 73 行（45 + 28）
+    P-->>U: KB 未登记端点恢复可用（有权限 200 / 无权限 403）

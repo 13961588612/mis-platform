@@ -1,0 +1,73 @@
+classDiagram
+    direction LR
+    class ApiPermissionProperties {
+        +boolean enabled = true
+        +boolean denyUnmapped = true  // SEC-01: false -> true
+        +long refreshIntervalSeconds = 300
+        +isEnabled() boolean
+        +isDenyUnmapped() boolean
+        +setDenyUnmapped(boolean) void
+    }
+    class ApiPermissionInterceptor {
+        +preHandle(request, response, handler) boolean
+        -isExempt(path) boolean
+    }
+    class ApiPermissionRegistry {
+        +match(method, path) Optional~Match~
+        +replaceAll(rules)
+        +size() int
+    }
+    class ApiPermissionRule {
+        +String httpMethod
+        +String pathPattern
+        +String permission
+        +boolean authOnly
+        +Integer moduleStatus
+    }
+    class ApiPermissionRegistryLoader {
+        +reload()
+    }
+    class ApiPermissionConfiguration {
+        +apiPermissionRegistry() ApiPermissionRegistry
+        +apiPermissionInterceptor(...) ApiPermissionInterceptor
+        +apiPermissionWebMvcConfigurer(...) WebMvcConfigurer
+    }
+    class ReverseTrustInterceptor {
+        +preHandle(...) boolean
+    }
+    class SkillPermissionChecker {
+        +assertCanRun(user, skillId)
+    }
+    class BffApiRegistryDiffSurveyTest {
+        +exportAllMappings() Map~RequestMappingInfo, HandlerMethod~
+        +diffAgainstRegistry() List~String~
+    }
+    class KbControllerRegistryCoverageTest {
+        +assertEveryKbEndpointRegistered() List~String~
+    }
+    class ApiPermissionDenyUnmappedTest {
+        +defaultIsFailClosed()
+        +unmappedRejected()
+        +authOnlyPassesWhenLoggedIn()
+    }
+    class V32Migration {
+        +sys_api rows: 91125-91152
+        +sys_menu_api rows: 91225-91252
+        +codes: 00900041-00900068
+    }
+    class SysApiRepository {
+        +findRegistryRows() List~RegistryRow~
+    }
+
+    ApiPermissionInterceptor --> ApiPermissionRegistry : match()
+    ApiPermissionInterceptor --> ApiPermissionProperties : denyUnmapped 判定
+    ApiPermissionRegistry --> ApiPermissionRule : 规则集合
+    ApiPermissionRegistryLoader ..> ApiPermissionRegistry : replaceAll()
+    ApiPermissionConfiguration ..> ApiPermissionInterceptor : 注册 /api/v1/**
+    SysApiRepository ..> ApiPermissionRegistryLoader : 注册表数据源
+    ReverseTrustInterceptor ..> ApiPermissionInterceptor : HIGHEST_PRECEDENCE 先执行
+    ReverseTrustInterceptor ..> SkillPermissionChecker : 技能级 fail-closed(Q3)
+    BffApiRegistryDiffSurveyTest ..> ApiPermissionRegistry : 差集(SEC-02)
+    KbControllerRegistryCoverageTest ..> ApiPermissionRegistry : 覆盖断言(SEC-03/04)
+    ApiPermissionDenyUnmappedTest --> ApiPermissionProperties : 默认值断言(SEC-01)
+    V32Migration ..> SysApiRepository : 28 行登记(数据)

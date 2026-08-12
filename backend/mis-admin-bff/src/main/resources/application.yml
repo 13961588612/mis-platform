@@ -45,7 +45,10 @@ mis:
     default-password: ${MIS_DEFAULT_PASSWORD:Mis@123456}
   api-permission:
     enabled: true
-    deny-unmapped: false
+    # SEC-01：本地对齐 fail-closed（与 test/integration/prod 一致，技术债 11.3 销账）。
+    # 未登记 sys_api 的端点将 403「接口未授权映射」。
+    # 本地开发逃生口：MIS_API_PERMISSION_DENY_UNMAPPED=false 可临时放行未登记端点。
+    deny-unmapped: ${MIS_API_PERMISSION_DENY_UNMAPPED:true}
     refresh-interval-seconds: 300
   ai-platform:
     # 本地默认 127.0.0.1（避免 Windows 上 localhost→::1 而 Agent 仅听 IPv4）；Docker/Nacos 用服务名覆盖（R1）。

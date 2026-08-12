@@ -27,6 +27,7 @@ mis:
     default-password: ${MIS_DEFAULT_PASSWORD:}
   api-permission:
     enabled: true
+    # SEC-01: prod already fail-closed (commit 6db58b0). V32 registers KB 28 endpoints; keep true.
     deny-unmapped: true
     refresh-interval-seconds: 300
   ai-platform:

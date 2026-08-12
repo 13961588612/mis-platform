@@ -27,7 +27,8 @@ mis:
     default-password: ${MIS_DEFAULT_PASSWORD:}
   api-permission:
     enabled: true
-    deny-unmapped: false
+    # SEC-01: fail-closed aligned (tech-debt 11.3). Unregistered /api/v1/** -> 403 "接口未授权映射".
+    deny-unmapped: true
     refresh-interval-seconds: 300
   ai-platform:
     base-url: ${AI_PLATFORM_BASE_URL:http://ai-platform-backend:8000}
