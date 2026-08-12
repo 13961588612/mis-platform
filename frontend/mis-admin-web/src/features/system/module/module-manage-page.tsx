@@ -1,6 +1,6 @@
 import { SHEET_FORM_BODY, SHEET_FORM_FIELD, SHEET_FORM_LABEL } from '@/components/common/sheet-form-styles';
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
-import { Boxes, Folder, Pencil, Plus, Trash2 } from 'lucide-react';
+import { Boxes, ChevronDown, ChevronRight, Folder, Pencil, Plus, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
@@ -43,11 +43,32 @@ const fieldInput =
 
 type ApiRow = TreeTableNode & { node: ModuleApiNode };
 
-function flattenApis(nodes: ModuleApiNode[], depth = 0): ApiRow[] {
+/** 收集「有子节点的分组」id；depth≥1 的域分组默认折叠，根分组保持展开。 */
+function collectCollapsibleCatalogIds(nodes: ModuleApiNode[], depth = 0): number[] {
+  const ids: number[] = [];
+  for (const n of nodes) {
+    if (n.type === 'catalog' && (n.children?.length ?? 0) > 0) {
+      if (depth >= 1) ids.push(Number(n.id));
+      ids.push(...collectCollapsibleCatalogIds(n.children ?? [], depth + 1));
+    } else if ((n.children?.length ?? 0) > 0) {
+      ids.push(...collectCollapsibleCatalogIds(n.children ?? [], depth + 1));
+    }
+  }
+  return ids;
+}
+
+function flattenApis(
+  nodes: ModuleApiNode[],
+  depth = 0,
+  collapsedIds?: Set<number>,
+): ApiRow[] {
   const out: ApiRow[] = [];
   for (const n of nodes) {
     out.push({ id: n.id, depth, node: n });
-    if (n.children?.length) out.push(...flattenApis(n.children, depth + 1));
+    const kids = n.children ?? [];
+    if (kids.length === 0) continue;
+    if (n.type === 'catalog' && collapsedIds?.has(Number(n.id))) continue;
+    out.push(...flattenApis(kids, depth + 1, collapsedIds));
   }
   return out;
 }
@@ -77,6 +98,8 @@ export function ModuleManagePage() {
   const [bindings, setBindings] = useState<ModuleApiBinding[]>([]);
   const [loadingDetail, setLoadingDetail] = useState(false);
   const [activeTab, setActiveTab] = useState<'apis' | 'bindings'>('apis');
+  /** 折叠中的分组 id（域级 catalog 默认折叠，避免 KB/Agent 叶子一次铺开）。 */
+  const [collapsedCatalogIds, setCollapsedCatalogIds] = useState<Set<number>>(() => new Set());
 
   const [moduleDialogOpen, setModuleDialogOpen] = useState(false);
   const [moduleEditing, setModuleEditing] = useState<ModuleItem | null>(null);
@@ -106,7 +129,27 @@ export function ModuleManagePage() {
       .map((f) => ({ value: Number(f.node.id), label: '　'.repeat(f.depth) + f.node.name }));
   }, [apiTree]);
 
-  const apiRows = useMemo(() => flattenApis(apiTree), [apiTree]);
+  const apiRows = useMemo(
+    () => flattenApis(apiTree, 0, collapsedCatalogIds),
+    [apiTree, collapsedCatalogIds],
+  );
+
+  function toggleCatalog(id: number): void {
+    setCollapsedCatalogIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  function expandAllCatalogs(): void {
+    setCollapsedCatalogIds(new Set());
+  }
+
+  function collapseDomainCatalogs(): void {
+    setCollapsedCatalogIds(new Set(collectCollapsibleCatalogIds(apiTree)));
+  }
 
   const loadModules = useCallback(async () => {
     setLoadingModules(true);
@@ -119,24 +162,25 @@ export function ModuleManagePage() {
     }
   }, []);
 
-  const loadDetail = useCallback(
-    async (moduleId: string) => {
-      setLoadingDetail(true);
-      try {
-        const [tree, binds] = await Promise.all([
-          fetchModuleApiTree(moduleId),
-          fetchModuleBindings(moduleId),
-        ]);
-        setApiTree(tree);
-        setBindings(binds);
-      } catch (e) {
-        toast.error(e instanceof Error ? e.message : '加载模块详情失败');
-      } finally {
-        setLoadingDetail(false);
+  const loadDetail = useCallback(async (moduleId: string, resetCollapse = false) => {
+    setLoadingDetail(true);
+    try {
+      const [tree, binds] = await Promise.all([
+        fetchModuleApiTree(moduleId),
+        fetchModuleBindings(moduleId),
+      ]);
+      setApiTree(tree);
+      setBindings(binds);
+      if (resetCollapse) {
+        // 域级分组默认折叠：根目录展开，只看到「分类管理 / 技能池」等文件夹
+        setCollapsedCatalogIds(new Set(collectCollapsibleCatalogIds(tree)));
       }
-    },
-    [],
-  );
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : '加载模块详情失败');
+    } finally {
+      setLoadingDetail(false);
+    }
+  }, []);
 
   useEffect(() => {
     void loadModules();
@@ -144,7 +188,8 @@ export function ModuleManagePage() {
 
   function selectModule(id: string) {
     setSelectedId(id);
-    void loadDetail(id);
+    setActiveTab('apis');
+    void loadDetail(id, true);
   }
 
   // ---- 模块 新增/编辑 ----
@@ -368,12 +413,20 @@ export function ModuleManagePage() {
                   </TabBtn>
                 </div>
                 {activeTab === 'apis' ? (
-                  <PermissionGate permission="system:module:add">
-                    <Button size="sm" variant="outline" disabled={!selected} onClick={() => openCreateApi(0)}>
-                      <Plus className="h-3.5 w-3.5" />
-                      新增接口
+                  <div className="flex items-center gap-1">
+                    <Button size="sm" variant="ghost" onClick={expandAllCatalogs}>
+                      全部展开
                     </Button>
-                  </PermissionGate>
+                    <Button size="sm" variant="ghost" onClick={collapseDomainCatalogs}>
+                      折叠分组
+                    </Button>
+                    <PermissionGate permission="system:module:add">
+                      <Button size="sm" variant="outline" disabled={!selected} onClick={() => openCreateApi(0)}>
+                        <Plus className="h-3.5 w-3.5" />
+                        新增接口
+                      </Button>
+                    </PermissionGate>
+                  </div>
                 ) : null}
               </div>
 
@@ -387,7 +440,26 @@ export function ModuleManagePage() {
                     storageKey="mis-module-api-table-widths"
                     rowIcon={(r) =>
                       r.node.type === 'catalog' ? (
-                        <Folder className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                        <button
+                          type="button"
+                          className="inline-flex items-center gap-0.5 text-muted-foreground hover:text-foreground"
+                          aria-label={collapsedCatalogIds.has(Number(r.node.id)) ? '展开分组' : '折叠分组'}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            if ((r.node.children?.length ?? 0) > 0) toggleCatalog(Number(r.node.id));
+                          }}
+                        >
+                          {(r.node.children?.length ?? 0) > 0 ? (
+                            collapsedCatalogIds.has(Number(r.node.id)) ? (
+                              <ChevronRight className="h-3.5 w-3.5" />
+                            ) : (
+                              <ChevronDown className="h-3.5 w-3.5" />
+                            )
+                          ) : (
+                            <span className="inline-block w-3.5" />
+                          )}
+                          <Folder className="h-3.5 w-3.5 shrink-0" />
+                        </button>
                       ) : (
                         <MethodBadge method={r.node.httpMethod} />
                       )

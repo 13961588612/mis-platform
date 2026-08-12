@@ -29,6 +29,7 @@ export function KbDocumentPage() {
             value={libraryId}
             onChange={(id) => setLibraryId(id)}
             activePath="/kb/documents"
+            scope="manageable"
           />
         </div>
         <span className="shrink-0 text-xs text-muted-foreground">

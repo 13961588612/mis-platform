@@ -77,10 +77,10 @@ class KbControllerRegistryCoverageTest {
             }
         }
 
-        // 数量守恒：72 = 42 既有（去重后，V30 含 3 行与 V24/25 重复被幂等跳过）+ 28 新登记（V32）
-        //           + 2 新登记（V34 RAPTOR）
-        assertEquals(72, expected.size(), "KB 登记表条目数应为 42（去重基线）+ 28（V32）+ 2（V34 RAPTOR）= 72，"
-                + "与 Controller 导出端点数一致（设计 §1.7 与 V30/V34 幂等说明）");
+        // 数量守恒：73 = 42 既有（去重后，V30 含 3 行与 V24/25 重复被幂等跳过）+ 28 新登记（V32）
+        //           + 2 新登记（V34 RAPTOR）+ 1 新登记（KBP-10 存量授权只读清单 inventory）
+        assertEquals(73, expected.size(), "KB 登记表条目数应为 42（去重基线）+ 28（V32）+ 2（V34 RAPTOR）"
+                + " + 1（KBP-10 inventory）= 73，与 Controller 导出端点数一致（设计 §1.7 与 V30/V34 幂等说明）");
 
         exported.forEach(System.out::println);
 
@@ -182,6 +182,8 @@ class KbControllerRegistryCoverageTest {
         map.put("DELETE /api/v1/kb/libraries/{libraryId}/documents/{id}", "kb:document:delete");
         map.put("POST /api/v1/kb/libraries/{libraryId}/acls", "kb:acl:grant");
         map.put("DELETE /api/v1/kb/acls/{id}", "kb:acl:revoke");
+        // ---- KBP-10：存量授权只读清单（GET，跨库全局视角；双闸门：权限码 + mis-kb 全局管理员）----
+        map.put("GET /api/v1/kb/acls/inventory", "kb:acl:revoke");
         // ---- V31：GraphRAG ----
         map.put("POST /api/v1/kb/libraries/{id}/graph/build", "kb:library:edit");
         map.put("GET /api/v1/kb/libraries/{id}/graph/build-status", "kb:library:engine-ref:view");

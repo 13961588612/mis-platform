@@ -135,6 +135,11 @@ class BffApiRegistryDiffSurveyTest {
             "GET /api/v1/kb/libraries/{id}/raptor/build-status"
     );
 
+    /** V37 补登：KBP-10 存量授权只读清单（sys_api 91177 / menu_api 91267 → 菜单 91050 kb:acl:revoke）。 */
+    private static final Set<String> EXPECTED_KB_V37_1 = Set.of(
+            "GET /api/v1/kb/acls/inventory"
+    );
+
     /**
      * V32 之前的 KB 已登记<b>去重后</b> 42 行基线（V17/V18/V24/V25/V26/V27/V30/V31）。
      * <p>PRD §2.2 记「45 行」是按迁移行数（V30 含 3 行与 V24/V25 重复、被幂等守卫跳过）；
@@ -218,12 +223,14 @@ class BffApiRegistryDiffSurveyTest {
                 .filter(e -> !isCovered(e, registered))
                 .collect(Collectors.toCollection(TreeSet::new));
 
-        // ---- 断言 1：KB 域导出端点必须全部已登记（V32 落地后零差集；迁移 fixture 与 Controller 映射逐字对齐）----
+        // ---- 断言 1：KB 域导出端点必须全部已登记（V32 落地后零差集；V37 补登 KBP-10 inventory；
+        //       迁移 fixture 与 Controller 映射逐字对齐）----
         assertEquals(Set.of(), kbUnregistered,
-                "KB 域导出端点存在未登记项——V32 迁移 fixture 未覆盖（Controller 映射与迁移不一致）："
+                "KB 域导出端点存在未登记项——V32/V37 迁移 fixture 未覆盖（Controller 映射与迁移不一致）："
                         + kbUnregistered);
 
-        // ---- 断言 2：V32 净新增登记 == 恰好 28（READ-01~24 + WRITE-01~04，零遗漏零超卖）----
+        // ---- 断言 2：V32 净新增登记 == 恰好 28（READ-01~24 + WRITE-01~04，零遗漏零超卖）；
+        //       叠加 V34 RAPTOR 2 + V37 补登 inventory 1 ----
         Set<String> registeredKb = registered.stream()
                 .filter(e -> e.contains(" /api/v1/kb/"))
                 .collect(Collectors.toCollection(TreeSet::new));
@@ -231,9 +238,11 @@ class BffApiRegistryDiffSurveyTest {
         newKb.removeAll(KB_42_BASELINE);
         Set<String> expectedKbNew = new TreeSet<>(EXPECTED_KB_28);
         expectedKbNew.addAll(EXPECTED_RAPTOR_2);
+        expectedKbNew.addAll(EXPECTED_KB_V37_1);
         assertEquals(expectedKbNew, newKb,
-                "V32+V34 净新增 KB 登记必须恰好等于 READ-01~24 + WRITE-01~04（28）+ RAPTOR 2；"
-                        + "多出 = 超范围登记，缺少 = 补登遗漏（对照设计 §1.7 登记表与 V34 注释）");
+                "V32+V34 净新增 KB 登记必须恰好等于 READ-01~24 + WRITE-01~04（28）+ RAPTOR 2，"
+                        + "V37 补登 inventory 1；"
+                        + "多出 = 超范围登记，缺少 = 补登遗漏（对照设计 §1.7 登记表与 V34 注释、V37 迁移）");
 
         // ---- 断言 3：AI 反向信任端点 2 个已登记（U1 裁决 V33 authOnly）----
         Set<String> aiExported = apiV1.stream()
@@ -671,6 +680,8 @@ class BffApiRegistryDiffSurveyTest {
             "DELETE /api/v1/kb/libraries/{libraryId}/documents/{id}",
             "POST /api/v1/kb/libraries/{libraryId}/acls",
             "DELETE /api/v1/kb/acls/{id}",
+            // ---- V37：KBP-10 存量授权只读清单（补登；sys_api 91177 / menu_api 91267 → 菜单 91050 kb:acl:revoke）----
+            "GET /api/v1/kb/acls/inventory",
             // ---- V31：KB GraphRAG ----
             "POST /api/v1/kb/libraries/{id}/graph/build",
             "GET /api/v1/kb/libraries/{id}/graph/build-status",

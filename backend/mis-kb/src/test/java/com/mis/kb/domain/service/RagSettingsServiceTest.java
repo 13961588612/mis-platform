@@ -36,6 +36,7 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -71,6 +72,8 @@ import static org.mockito.Mockito.when;
 class RagSettingsServiceTest {
 
     private static final long LIBRARY_ID = 100L;
+    /** KBP-06：保存路径新增的 userId 参数（可测性优先，Service 不读线程上下文）。 */
+    private static final long USER_ID = 7L;
 
     @Mock
     private KbLibraryRepository libraryRepository;
@@ -86,6 +89,9 @@ class RagSettingsServiceTest {
     /** Wave C（T02）：RagSettingsService 保存路径注入的 RAPTOR 服务（mock，不触发真建树）。 */
     @Mock
     private KbRaptorService raptorService;
+    /** KBP-06：库级管理判定（mock，默认放行以保持既有用例语义；负分支单独关）。 */
+    @Mock
+    private NodeAdminResolver nodeAdminResolver;
 
     private RagflowProperties propsWithRerank;
     private RagflowProperties propsWithoutRerank;
@@ -108,16 +114,20 @@ class RagSettingsServiceTest {
         when(libraryRepository.findById(LIBRARY_ID)).thenReturn(Optional.of(library));
         when(libraryRepository.save(any(KbLibrary.class)))
                 .thenAnswer(inv -> inv.getArgument(0));
+        // KBP-06：默认放行「可管理」判定——既有用例聚焦参数校验/收敛逻辑，不受管辖分支干扰
+        when(nodeAdminResolver.hasLibraryManage(eq(USER_ID), eq(LIBRARY_ID))).thenReturn(true);
     }
 
     private RagSettingsService serviceWithRerankModel() {
         return new RagSettingsService(libraryRepository, aclRepository,
-                documentRepository, enginePort, propsWithRerank, graphService, raptorService);
+                documentRepository, enginePort, propsWithRerank, graphService, raptorService,
+                nodeAdminResolver);
     }
 
     private RagSettingsService serviceWithoutRerankModel() {
         return new RagSettingsService(libraryRepository, aclRepository,
-                documentRepository, enginePort, propsWithoutRerank, graphService, raptorService);
+                documentRepository, enginePort, propsWithoutRerank, graphService, raptorService,
+                nodeAdminResolver);
     }
 
     /** 只给权重，其余字段留 null 交给 withDefaults 兜底。 */
@@ -148,7 +158,7 @@ class RagSettingsServiceTest {
             RagSettingsService service = serviceWithRerankModel();
 
             KbBusinessException ex = assertThrows(KbBusinessException.class,
-                    () -> service.save(LIBRARY_ID, weightOnly(weight)));
+                    () -> service.save(USER_ID, LIBRARY_ID, weightOnly(weight)));
 
             assertEquals(KbResultCode.KB_RAG_SETTINGS_INVALID.getCode(), ex.getCode());
             // 拒绝必须发生在落库之前：先存后抛同样能让上面的断言变绿，但脏值已进库
@@ -160,7 +170,7 @@ class RagSettingsServiceTest {
         @ValueSource(doubles = {0.0D, 0.3D, 0.7D, 1.0D})
         @DisplayName("边界闭区间 [0,1] 两端均放行（0 与 1 不是越界）")
         void acceptsBoundaryWeights(double weight) {
-            RagSettings saved = serviceWithRerankModel().save(LIBRARY_ID, weightOnly(weight));
+            RagSettings saved = serviceWithRerankModel().save(USER_ID, LIBRARY_ID, weightOnly(weight));
             assertEquals(weight, saved.vectorSimilarityWeight(), 1e-9);
         }
 
@@ -172,7 +182,7 @@ class RagSettingsServiceTest {
                     null, null, null, null, null, null);
 
             KbBusinessException ex = assertThrows(KbBusinessException.class,
-                    () -> service.save(LIBRARY_ID, bad));
+                    () -> service.save(USER_ID, LIBRARY_ID, bad));
             assertEquals(KbResultCode.KB_RAG_SETTINGS_INVALID.getCode(), ex.getCode());
         }
 
@@ -184,7 +194,7 @@ class RagSettingsServiceTest {
                     null, null, null, "general_prompt", null, null);
 
             KbBusinessException ex = assertThrows(KbBusinessException.class,
-                    () -> service.save(LIBRARY_ID, bad));
+                    () -> service.save(USER_ID, LIBRARY_ID, bad));
             assertEquals(KbResultCode.KB_RAG_SETTINGS_INVALID.getCode(), ex.getCode());
         }
 
@@ -193,11 +203,11 @@ class RagSettingsServiceTest {
         void rejectsOtherOutOfRangeFields() {
             RagSettingsService service = serviceWithRerankModel();
 
-            assertThrows(KbBusinessException.class, () -> service.save(LIBRARY_ID,
+            assertThrows(KbBusinessException.class, () -> service.save(USER_ID, LIBRARY_ID,
                     new RagSettings(101, null, null, null, null, null, null, null, null, null, null)));
-            assertThrows(KbBusinessException.class, () -> service.save(LIBRARY_ID,
+            assertThrows(KbBusinessException.class, () -> service.save(USER_ID, LIBRARY_ID,
                     new RagSettings(null, 1.5D, null, null, null, null, null, null, null, null, null)));
-            assertThrows(KbBusinessException.class, () -> service.save(LIBRARY_ID,
+            assertThrows(KbBusinessException.class, () -> service.save(USER_ID, LIBRARY_ID,
                     new RagSettings(null, null, null, null, null, null, 8192, null, null, null, null)));
         }
 
@@ -210,7 +220,7 @@ class RagSettingsServiceTest {
                     null, tokenNum, null, null, null, null);
 
             KbBusinessException ex = assertThrows(KbBusinessException.class,
-                    () -> service.save(LIBRARY_ID, bad));
+                    () -> service.save(USER_ID, LIBRARY_ID, bad));
             assertEquals(KbResultCode.KB_RAG_SETTINGS_INVALID.getCode(), ex.getCode());
             verify(libraryRepository, never()).save(any(KbLibrary.class));
             verify(enginePort, never()).updateLibrarySettings(any(), any());
@@ -221,11 +231,11 @@ class RagSettingsServiceTest {
         void acceptsBoundaryTokenNum() {
             RagSettingsService service = serviceWithRerankModel();
 
-            RagSettings savedMin = service.save(LIBRARY_ID,
+            RagSettings savedMin = service.save(USER_ID, LIBRARY_ID,
                     new RagSettings(null, null, null, null, null, null, 256, null, null, null, null));
             assertEquals(256, savedMin.chunkTokenNum().intValue());
 
-            RagSettings savedMax = service.save(LIBRARY_ID,
+            RagSettings savedMax = service.save(USER_ID, LIBRARY_ID,
                     new RagSettings(null, null, null, null, null, null, 4096, null, null, null, null));
             assertEquals(4096, savedMax.chunkTokenNum().intValue());
         }
@@ -240,7 +250,7 @@ class RagSettingsServiceTest {
         @Test
         @DisplayName("★ WA-01：不传权重 → 落库 DEFAULT_VECTOR_SIMILARITY_WEIGHT(0.3)")
         void weightDefaultsToPointThree() {
-            RagSettings saved = serviceWithRerankModel().save(LIBRARY_ID, weightOnly(null));
+            RagSettings saved = serviceWithRerankModel().save(USER_ID, LIBRARY_ID, weightOnly(null));
 
             assertEquals(RagSettings.DEFAULT_VECTOR_SIMILARITY_WEIGHT,
                     saved.vectorSimilarityWeight(), 1e-9);
@@ -252,7 +262,7 @@ class RagSettingsServiceTest {
         @Test
         @DisplayName("null 设置整体回落 defaults()，不抛异常")
         void nullSettingsFallBackToDefaults() {
-            RagSettings saved = serviceWithRerankModel().save(LIBRARY_ID, null);
+            RagSettings saved = serviceWithRerankModel().save(USER_ID, LIBRARY_ID, null);
 
             assertEquals(RagSettings.DEFAULT_RETRIEVAL_METHOD, saved.retrievalMethod());
             assertEquals(RagSettings.DEFAULT_TOP_K, saved.topK().intValue());
@@ -284,7 +294,7 @@ class RagSettingsServiceTest {
             RagSettings request = new RagSettings(null, null, Boolean.TRUE, null, "hybrid",
                     null, null, null, null, 0.5D, null);
 
-            RagSettings saved = serviceWithoutRerankModel().save(LIBRARY_ID, request);
+            RagSettings saved = serviceWithoutRerankModel().save(USER_ID, LIBRARY_ID, request);
 
             assertFalse(saved.rerank(), "返回值应已收敛为 false");
             assertFalse(persisted().rerank(),
@@ -297,7 +307,7 @@ class RagSettingsServiceTest {
             RagSettings request = new RagSettings(null, null, Boolean.TRUE, null, "hybrid",
                     null, null, null, null, 0.5D, null);
 
-            RagSettings saved = serviceWithRerankModel().save(LIBRARY_ID, request);
+            RagSettings saved = serviceWithRerankModel().save(USER_ID, LIBRARY_ID, request);
 
             assertTrue(saved.rerank());
             assertTrue(persisted().rerank());
@@ -309,7 +319,7 @@ class RagSettingsServiceTest {
             RagSettings request = new RagSettings(null, null, Boolean.TRUE, null, "hybrid",
                     null, null, null, null, 0.5D, "qwen3-rerank@Tongyi-Qianwen@Tongyi-Qianwen");
 
-            RagSettings saved = serviceWithRerankModel().save(LIBRARY_ID, request);
+            RagSettings saved = serviceWithRerankModel().save(USER_ID, LIBRARY_ID, request);
 
             assertTrue(saved.rerank());
             assertEquals("qwen3-rerank@Tongyi-Qianwen@Tongyi-Qianwen", saved.rerankModelId());
@@ -323,7 +333,7 @@ class RagSettingsServiceTest {
             RagSettings request = new RagSettings(null, null, Boolean.TRUE, null, "hybrid",
                     null, null, null, null, 0.5D, "qwen3-rerank@Tongyi-Qianwen@Tongyi-Qianwen");
 
-            RagSettings saved = serviceWithoutRerankModel().save(LIBRARY_ID, request);
+            RagSettings saved = serviceWithoutRerankModel().save(USER_ID, LIBRARY_ID, request);
 
             assertFalse(saved.rerank());
         }
@@ -335,7 +345,7 @@ class RagSettingsServiceTest {
                     null, null, null, null, null, null);
 
             // 不抛异常，且其余字段不受影响
-            RagSettings saved = serviceWithoutRerankModel().save(LIBRARY_ID, request);
+            RagSettings saved = serviceWithoutRerankModel().save(USER_ID, LIBRARY_ID, request);
             assertFalse(saved.rerank());
             assertEquals(RagSettings.DEFAULT_TOP_K, saved.topK().intValue());
         }
@@ -346,7 +356,7 @@ class RagSettingsServiceTest {
             RagSettings request = new RagSettings(20, 0.6D, Boolean.FALSE, null, "hybrid",
                     "naive", 256, null, "TRANSFER", 0.45D, null);
 
-            RagSettings saved = serviceWithoutRerankModel().save(LIBRARY_ID, request);
+            RagSettings saved = serviceWithoutRerankModel().save(USER_ID, LIBRARY_ID, request);
 
             assertFalse(saved.rerank());
             assertEquals(20, saved.topK().intValue());
@@ -368,7 +378,7 @@ class RagSettingsServiceTest {
             RagSettings request = new RagSettings(null, null, null, null, method,
                     null, null, null, null, 0.4D, null);
 
-            RagSettings saved = serviceWithRerankModel().save(LIBRARY_ID, request);
+            RagSettings saved = serviceWithRerankModel().save(USER_ID, LIBRARY_ID, request);
 
             assertEquals(0.4D, saved.vectorSimilarityWeight(), 1e-9,
                     "保存 " + method + " 时权重被改写了——归一化只准发生在 Resolver 检索期");
@@ -382,12 +392,12 @@ class RagSettingsServiceTest {
             RagSettingsService service = serviceWithRerankModel();
 
             // ① 以 hybrid + 0.4 保存
-            service.save(LIBRARY_ID, new RagSettings(null, null, null, null, "hybrid",
+            service.save(USER_ID, LIBRARY_ID, new RagSettings(null, null, null, null, "hybrid",
                     null, null, null, null, 0.4D, null));
             assertEquals(0.4D, persisted().vectorSimilarityWeight(), 1e-9);
 
             // ② 切 vector 再保存（前端无条件提交当前权重值）
-            service.save(LIBRARY_ID, new RagSettings(null, null, null, null, "vector",
+            service.save(USER_ID, LIBRARY_ID, new RagSettings(null, null, null, null, "vector",
                     null, null, null, null, 0.4D, null));
 
             // ③ 重新读取（模拟刷新页面后切回 hybrid）
@@ -409,7 +419,7 @@ class RagSettingsServiceTest {
             doThrow(new IllegalStateException("RAGFlow 503"))
                     .when(enginePort).updateLibrarySettings(any(), any());
 
-            RagSettings saved = serviceWithRerankModel().save(LIBRARY_ID, weightOnly(0.6D));
+            RagSettings saved = serviceWithRerankModel().save(USER_ID, LIBRARY_ID, weightOnly(0.6D));
 
             assertEquals(0.6D, saved.vectorSimilarityWeight(), 1e-9);
             assertEquals(0.6D, persisted().vectorSimilarityWeight(), 1e-9);
@@ -421,7 +431,7 @@ class RagSettingsServiceTest {
         void skipsSyncWhenNoEngineRef() {
             library.setEngineLibraryRef(null);
 
-            serviceWithRerankModel().save(LIBRARY_ID, weightOnly(0.6D));
+            serviceWithRerankModel().save(USER_ID, LIBRARY_ID, weightOnly(0.6D));
 
             verify(enginePort, never()).updateLibrarySettings(any(), any());
         }
@@ -431,7 +441,7 @@ class RagSettingsServiceTest {
         void skipsSyncWhenLibraryDisabled() {
             library.setStatus(0);
 
-            serviceWithRerankModel().save(LIBRARY_ID, weightOnly(0.6D));
+            serviceWithRerankModel().save(USER_ID, LIBRARY_ID, weightOnly(0.6D));
 
             verify(enginePort, never()).updateLibrarySettings(any(), any());
         }
@@ -451,7 +461,7 @@ class RagSettingsServiceTest {
                     false, "zh", -1);
 
             KbBusinessException ex = assertThrows(KbBusinessException.class,
-                    () -> serviceWithRerankModel().save(LIBRARY_ID, bad));
+                    () -> serviceWithRerankModel().save(USER_ID, LIBRARY_ID, bad));
             assertEquals(KbResultCode.KB_RAG_SETTINGS_INVALID.getCode(), ex.getCode());
             verify(libraryRepository, never()).save(any(KbLibrary.class));
             verify(enginePort, never()).updateLibrarySettings(any(), any());
@@ -460,7 +470,7 @@ class RagSettingsServiceTest {
         @Test
         @DisplayName("chunkOverlapTokenNum=0（=不重叠，设计口径）→ 放行")
         void acceptsZeroOverlap() {
-            RagSettings saved = serviceWithRerankModel().save(LIBRARY_ID,
+            RagSettings saved = serviceWithRerankModel().save(USER_ID, LIBRARY_ID,
                     new RagSettings(null, null, null, null, null,
                             null, null, null, null, null, null,
                             false, "zh", 0));
@@ -476,7 +486,7 @@ class RagSettingsServiceTest {
                     true, language, null);
 
             KbBusinessException ex = assertThrows(KbBusinessException.class,
-                    () -> serviceWithRerankModel().save(LIBRARY_ID, bad));
+                    () -> serviceWithRerankModel().save(USER_ID, LIBRARY_ID, bad));
             assertEquals(KbResultCode.KB_RAG_SETTINGS_INVALID.getCode(), ex.getCode());
         }
 
@@ -487,7 +497,7 @@ class RagSettingsServiceTest {
                     null, null, null, null, 0.5D, null,
                     true, "zh_en", 64);
 
-            RagSettings saved = serviceWithRerankModel().save(LIBRARY_ID, request);
+            RagSettings saved = serviceWithRerankModel().save(USER_ID, LIBRARY_ID, request);
 
             assertTrue(saved.ocrEnabled());
             assertEquals("zh_en", saved.ocrLanguage());
@@ -511,7 +521,7 @@ class RagSettingsServiceTest {
                     null, null, null, null, 0.5D, null,
                     true, "en", 32);
 
-            RagSettings saved = serviceWithoutRerankModel().save(LIBRARY_ID, request);
+            RagSettings saved = serviceWithoutRerankModel().save(USER_ID, LIBRARY_ID, request);
 
             assertFalse(saved.rerank(), "无全局模型时 rerank 仍强制关闭");
             assertTrue(saved.ocrEnabled(),
@@ -523,7 +533,7 @@ class RagSettingsServiceTest {
         @Test
         @DisplayName("OCR 字段缺省 → withDefaults 兜底 ocrEnabled=false / ocrLanguage=zh")
         void ocrDefaultsApplied() {
-            RagSettings saved = serviceWithRerankModel().save(LIBRARY_ID, weightOnly(0.5D));
+            RagSettings saved = serviceWithRerankModel().save(USER_ID, LIBRARY_ID, weightOnly(0.5D));
 
             assertFalse(saved.ocrEnabled());
             assertEquals(RagSettings.DEFAULT_OCR_LANGUAGE, saved.ocrLanguage());
@@ -548,7 +558,7 @@ class RagSettingsServiceTest {
                     true, tokenNum, null, null, null, null, null);
 
             KbBusinessException ex = assertThrows(KbBusinessException.class,
-                    () -> serviceWithRerankModel().save(LIBRARY_ID, bad));
+                    () -> serviceWithRerankModel().save(USER_ID, LIBRARY_ID, bad));
             assertEquals(KbResultCode.KB_RAG_SETTINGS_INVALID.getCode(), ex.getCode());
             verify(libraryRepository, never()).save(any(KbLibrary.class));
             verify(enginePort, never()).updateLibrarySettings(any(), any());
@@ -560,14 +570,14 @@ class RagSettingsServiceTest {
             when(enginePort.capabilities()).thenReturn(
                     EngineCapabilities.of(true, true, true, true, true, false, false, false, true));
 
-            RagSettings savedMin = serviceWithRerankModel().save(LIBRARY_ID,
+            RagSettings savedMin = serviceWithRerankModel().save(USER_ID, LIBRARY_ID,
                     new RagSettings(null, null, null, null, null,
                             null, null, null, null, null, null,
                             null, null, null, null, null, null,
                             true, 512, null, null, null, null, null));
             assertEquals(512, savedMin.raptorMaxTokenNum().intValue());
 
-            RagSettings savedMax = serviceWithRerankModel().save(LIBRARY_ID,
+            RagSettings savedMax = serviceWithRerankModel().save(USER_ID, LIBRARY_ID,
                     new RagSettings(null, null, null, null, null,
                             null, null, null, null, null, null,
                             null, null, null, null, null, null,
@@ -585,7 +595,7 @@ class RagSettingsServiceTest {
                     true, null, threshold, null, null, null, null);
 
             KbBusinessException ex = assertThrows(KbBusinessException.class,
-                    () -> serviceWithRerankModel().save(LIBRARY_ID, bad));
+                    () -> serviceWithRerankModel().save(USER_ID, LIBRARY_ID, bad));
             assertEquals(KbResultCode.KB_RAG_SETTINGS_INVALID.getCode(), ex.getCode());
         }
 
@@ -599,7 +609,7 @@ class RagSettingsServiceTest {
                     true, null, null, cluster, null, null, null);
 
             KbBusinessException ex = assertThrows(KbBusinessException.class,
-                    () -> serviceWithRerankModel().save(LIBRARY_ID, bad));
+                    () -> serviceWithRerankModel().save(USER_ID, LIBRARY_ID, bad));
             assertEquals(KbResultCode.KB_RAG_SETTINGS_INVALID.getCode(), ex.getCode());
         }
 
@@ -612,7 +622,7 @@ class RagSettingsServiceTest {
                     true, null, null, null, "x".repeat(RaptorConfig.MAX_PROMPT_LENGTH + 1), null, null);
 
             KbBusinessException ex = assertThrows(KbBusinessException.class,
-                    () -> serviceWithRerankModel().save(LIBRARY_ID, bad));
+                    () -> serviceWithRerankModel().save(USER_ID, LIBRARY_ID, bad));
             assertEquals(KbResultCode.KB_RAG_SETTINGS_INVALID.getCode(), ex.getCode());
         }
 
@@ -625,7 +635,7 @@ class RagSettingsServiceTest {
                     true, null, null, null, null, "paused", null);
 
             KbBusinessException ex = assertThrows(KbBusinessException.class,
-                    () -> serviceWithRerankModel().save(LIBRARY_ID, bad));
+                    () -> serviceWithRerankModel().save(USER_ID, LIBRARY_ID, bad));
             assertEquals(KbResultCode.KB_RAG_SETTINGS_INVALID.getCode(), ex.getCode());
         }
 
@@ -638,7 +648,7 @@ class RagSettingsServiceTest {
                     null, null, null, null, null, null,
                     true, 1024, 0.2D, 32, "custom prompt", null, null);
 
-            RagSettings saved = serviceWithRerankModel().save(LIBRARY_ID, request);
+            RagSettings saved = serviceWithRerankModel().save(USER_ID, LIBRARY_ID, request);
 
             assertFalse(saved.useRaptor(), "返回值应已收敛为 false");
             assertFalse(persisted().useRaptor(), "落库 JSON 必须同为 false——返回 false 但存 true 就是「显示开了实际没开」");
@@ -668,7 +678,7 @@ class RagSettingsServiceTest {
                     null, null, null, true, "ready", "ok",
                     true, 1024, 0.2D, 32, "custom prompt", null, null);
 
-            RagSettings saved = serviceWithRerankModel().save(LIBRARY_ID, request);
+            RagSettings saved = serviceWithRerankModel().save(USER_ID, LIBRARY_ID, request);
 
             assertFalse(saved.useRaptor());
             assertTrue(saved.useKnowledgeGraph(), "RAPTOR 强制关不得吞掉图谱开关（24 参 canonical）");
@@ -689,7 +699,7 @@ class RagSettingsServiceTest {
                     null, null, null, null, null, null,
                     true, 1024, 0.1D, 64, null, "ready", "fake");
 
-            RagSettings saved = serviceWithRerankModel().save(LIBRARY_ID, request);
+            RagSettings saved = serviceWithRerankModel().save(USER_ID, LIBRARY_ID, request);
 
             assertEquals(RagSettings.RAPTOR_STATUS_NONE, saved.raptorBuildStatus(),
                     "保存请求里的状态字段一律忽略，以 DB 服务端事实为准（设计 §5.1）");
@@ -707,7 +717,7 @@ class RagSettingsServiceTest {
                     null, null, null, null, null, null,
                     true, 1024, 0.1D, 64, null, null, null);
 
-            serviceWithRerankModel().save(LIBRARY_ID, request);
+            serviceWithRerankModel().save(USER_ID, LIBRARY_ID, request);
 
             verify(raptorService).build(LIBRARY_ID, 7L);
         }
@@ -728,7 +738,7 @@ class RagSettingsServiceTest {
                     null, null, null, null, null, null,
                     true, 1024, 0.1D, 64, null, null, null);
 
-            serviceWithRerankModel().save(LIBRARY_ID, request);
+            serviceWithRerankModel().save(USER_ID, LIBRARY_ID, request);
 
             verify(raptorService, never()).build(any(), any());
         }
@@ -736,7 +746,7 @@ class RagSettingsServiceTest {
         @Test
         @DisplayName("RAPTOR 七字段缺省 → withDefaults 兜底（useRaptor=false / 1024 / 0.1 / 64 / 官方 prompt / none）")
         void raptorDefaultsApplied() {
-            RagSettings saved = serviceWithRerankModel().save(LIBRARY_ID, weightOnly(0.5D));
+            RagSettings saved = serviceWithRerankModel().save(USER_ID, LIBRARY_ID, weightOnly(0.5D));
 
             assertFalse(saved.useRaptor());
             assertEquals(RaptorConfig.DEFAULT_MAX_TOKEN_NUM, saved.raptorMaxTokenNum().intValue());
@@ -748,7 +758,7 @@ class RagSettingsServiceTest {
         }
     }
 
-    // ------------------------------------------------------------ 不存在的库
+    // ------------------------------------------------------------ 不存在的库 / 越权
 
     @Test
     @DisplayName("库不存在 → KB_LIBRARY_NOT_FOUND，且不落库不同步")
@@ -757,11 +767,37 @@ class RagSettingsServiceTest {
         RagSettingsService service = serviceWithRerankModel();
 
         KbBusinessException ex = assertThrows(KbBusinessException.class,
-                () -> service.save(999L, weightOnly(0.5D)));
+                () -> service.save(USER_ID, 999L, weightOnly(0.5D)));
 
         assertEquals(KbResultCode.KB_LIBRARY_NOT_FOUND.getCode(), ex.getCode());
         verify(libraryRepository, never()).save(any(KbLibrary.class));
         verify(enginePort, never()).updateLibrarySettings(any(), any());
+    }
+
+    @Test
+    @DisplayName("★ KBP-06：库不在管理范围 → 40311，保存被拒在落库之前")
+    void saveRejectedWhenNotManageable() {
+        when(nodeAdminResolver.hasLibraryManage(eq(USER_ID), eq(LIBRARY_ID))).thenReturn(false);
+        RagSettingsService service = serviceWithRerankModel();
+
+        KbBusinessException ex = assertThrows(KbBusinessException.class,
+                () -> service.save(USER_ID, LIBRARY_ID, weightOnly(0.6D)));
+
+        assertEquals(KbResultCode.KB_CATEGORY_NOT_MANAGEABLE.getCode(), ex.getCode());
+        verify(libraryRepository, never()).save(any(KbLibrary.class));
+        verify(enginePort, never()).updateLibrarySettings(any(), any());
+    }
+
+    @Test
+    @DisplayName("★ KBP-06：无管理权时不得触发图谱/RAPTOR 自动构建")
+    void noAutoBuildWhenNotManageable() {
+        when(nodeAdminResolver.hasLibraryManage(eq(USER_ID), eq(LIBRARY_ID))).thenReturn(false);
+
+        assertThrows(KbBusinessException.class,
+                () -> serviceWithRerankModel().save(USER_ID, LIBRARY_ID, weightOnly(0.6D)));
+
+        verify(raptorService, never()).build(any(), any());
+        verify(graphService, never()).build(any(), any());
     }
 
     private static LoginUser loginUser(Long userId) {

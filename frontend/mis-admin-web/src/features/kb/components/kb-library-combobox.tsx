@@ -5,7 +5,7 @@ import { ChevronDown, Loader2, RotateCw, Search, X } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { listCategories, listLibraries } from '../api/kb-api';
 import { useKbStore } from '../stores/use-kb-store';
-import type { KbCategory, KbLibrary } from '../types';
+import type { KbCategory, KbLibrary, KbLibraryScope } from '../types';
 import { secrecyLabel } from '../types';
 
 /** 组合框选项：库 + 预算好的分类路径与搜索索引。 */
@@ -25,6 +25,18 @@ interface KbLibraryComboboxProps {
   onChange: (id: number | null, library: KbLibrary | null) => void;
   /** 可选：仅列出指定分类下的知识库 */
   categoryId?: number | null;
+  /**
+   * 可选：数据面收敛（KBP-06）。
+   *
+   * - {@code manageable}：只列出本人可管理的库（分类管辖 ∪ kb_acl.manage）——
+   *   管理页/文档页/权限页用，避免「看得到但动不了」的库混进操作对象；
+   * - {@code visible}：只列出本人可见的库（问答页用）；
+   * - 缺省：现状全量（零回归）。
+   *
+   * <p>⚠️ tripwire：scope 不是「过滤条」，是<b>服务端数据面收敛</b>——
+   * 缺省传 {@code undefined}，不要传 {@code ''} 或拼出来的非法值。
+   */
+  scope?: KbLibraryScope | null;
   /** 是否允许清空选择 */
   allowClear?: boolean;
   /**
@@ -86,6 +98,7 @@ export function KbLibraryCombobox({
   value,
   onChange,
   categoryId = null,
+  scope = null,
   allowClear = false,
   emptyOptionLabel,
   placeholder = '搜索库名 / 分类 / ID',
@@ -114,7 +127,7 @@ export function KbLibraryCombobox({
     setError(null);
     try {
       const [libraries, categories] = await Promise.all([
-        listLibraries(categoryId),
+        listLibraries(categoryId, scope),
         listCategories(),
       ]);
       const byId = new Map<number, KbCategory>(categories.map((c) => [c.id, c]));
@@ -141,7 +154,7 @@ export function KbLibraryCombobox({
     }
     // onLoaded 由父组件以稳定引用传入；纳入依赖会造成重复请求
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [categoryId]);
+  }, [categoryId, scope]);
 
   useEffect(() => {
     if (!pageActive) return;
@@ -318,7 +331,11 @@ export function KbLibraryCombobox({
             <div className="px-3 py-6 text-center text-sm text-muted-foreground">加载中…</div>
           ) : options.length === 0 ? (
             <div className="px-3 py-6 text-center text-sm text-muted-foreground">
-              还没有知识库，请先到「知识库」页创建
+              {scope === 'manageable'
+                ? '没有可管理的知识库——请联系管理员在「分类 → 管理员」中给您分配管辖范围'
+                : scope === 'visible'
+                  ? '暂无可见知识库'
+                  : '还没有知识库，请先到「知识库」页创建'}
             </div>
           ) : filtered.length === 0 ? (
             <div className="px-3 py-6 text-center text-sm text-muted-foreground">

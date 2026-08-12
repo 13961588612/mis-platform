@@ -31,6 +31,7 @@ import type {
   KbLibraryDeleteMode,
   KbLibraryDeleteResult,
   KbLibraryDetail,
+  KbLibraryScope,
   KbQaCitation,
   KbQaFeedback,
   KbQaSession,
@@ -46,6 +47,7 @@ import type {
   KbSynonymGroup,
   KbSynonymImportCommit,
   KbSynonymImportPrecheck,
+  LegacyAclInventory,
 } from '../types';
 
 /** 统一解包 BFF `ApiResult`：code!=0 抛错（message 透传）。 */
@@ -155,9 +157,19 @@ export interface UpdateLibraryPayload {
   settings?: KbRagSettings | null;
 }
 
-export async function listLibraries(categoryId?: number | null): Promise<KbLibrary[]> {
+/**
+ * 知识库列表（KBP-06：{@code scope} 数据面收敛）。
+ *
+ * @param categoryId 分类过滤；缺省 = 不限制
+ * @param scope      {@code manageable}（本人可管理）/ {@code visible}（本人可见）/
+ *                   缺省（= 现状全量，零回归）。非法值由后端兜底为全量
+ */
+export async function listLibraries(
+  categoryId?: number | null,
+  scope?: KbLibraryScope | null,
+): Promise<KbLibrary[]> {
   const res = await api.get<ApiResult<KbLibrary[]>>('/kb/libraries', {
-    params: categoryId ? { categoryId } : undefined,
+    params: cleanParams({ categoryId, scope }),
   });
   return unwrap(res, '获取知识库失败');
 }
@@ -377,6 +389,27 @@ export async function grantAcl(libraryId: number, body: GrantAclPayload): Promis
 export async function revokeAcl(id: number): Promise<void> {
   const res = await api.delete<ApiResult<null>>(`/kb/acls/${id}`);
   if (res.data.code !== 0) throw new Error(res.data.message || '撤销授权失败');
+}
+
+/**
+ * KBP-10 存量 manage/acl 授权清单（只读运营清理依据，不提供 CSV 导出）。
+ *
+ * <p>权限：BFF {@code kb:acl:revoke} + mis-kb {@code isGlobalAdmin} 双闸门，
+ * 非全局管理员 403。{@code subjectName} 已由 BFF 批量回填，展示直接可用。
+ *
+ * @param libraryId   按库维度过滤；缺省 = 不限制
+ * @param subjectType 按主体类型过滤；缺省 = 不限制
+ * @param subjectId   按主体 id 过滤；缺省 = 不限制
+ */
+export async function listLegacyAclInventory(
+  libraryId?: number | null,
+  subjectType?: string | null,
+  subjectId?: number | null,
+): Promise<LegacyAclInventory[]> {
+  const res = await api.get<ApiResult<LegacyAclInventory[]>>('/kb/acls/inventory', {
+    params: cleanParams({ libraryId, subjectType, subjectId }),
+  });
+  return unwrap(res, '获取存量授权清单失败');
 }
 
 // ------------------------------------------------------------------ 授权主体（I-03）

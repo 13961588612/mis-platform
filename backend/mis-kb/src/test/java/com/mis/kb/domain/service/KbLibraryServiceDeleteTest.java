@@ -70,6 +70,8 @@ class KbLibraryServiceDeleteTest {
 
     private static final long LIBRARY_ID = 1_954_321_987_654_321L;
     private static final long CATEGORY_ID = 700L;
+    /** KBP-06：delete/update 保存路径新增的 userId 参数（可测性优先，Service 不读线程上下文）。 */
+    private static final long USER_ID = 7L;
     private static final String DATASET_ID = "rf-dataset-abc";
 
     @Mock
@@ -84,6 +86,9 @@ class KbLibraryServiceDeleteTest {
     private KnowledgeEnginePort enginePort;
     @Mock
     private NodeAdminResolver nodeAdminResolver;
+    /** KBP-06：list(scope=visible) 分支依赖（mock，本测试不触发可见性解析）。 */
+    @Mock
+    private KbVisibilityService visibilityService;
 
     private RagflowProperties props;
     private KbLibraryService service;
@@ -95,7 +100,7 @@ class KbLibraryServiceDeleteTest {
         props.setType("ragflow");
         props.setDeleteSupported(false);
         service = new KbLibraryService(libraryRepository, documentRepository, aclRepository,
-                categoryRepository, enginePort, props, nodeAdminResolver);
+                categoryRepository, enginePort, props, nodeAdminResolver, visibilityService);
 
         library = new KbLibrary();
         library.setId(LIBRARY_ID);
@@ -117,6 +122,9 @@ class KbLibraryServiceDeleteTest {
         when(libraryRepository.save(any(KbLibrary.class))).thenAnswer(inv -> inv.getArgument(0));
         when(documentRepository.countByLibraryId(anyLong())).thenReturn(7L);
         when(aclRepository.findByLibraryId(anyLong())).thenReturn(List.of(new KbAcl(), new KbAcl()));
+        // KBP-06：默认放行「可管理」判定——既有用例聚焦删除/归档/回执语义，不受管辖分支干扰；
+        // 越权负分支（create/update/delete 非管理 → 40311）在 KbLibraryServiceManageGateTest 单独钉死
+        when(nodeAdminResolver.hasLibraryManage(eq(USER_ID), eq(LIBRARY_ID))).thenReturn(true);
     }
 
     // ------------------------------------------------------------------ physical
@@ -131,7 +139,7 @@ class KbLibraryServiceDeleteTest {
             props.setDeleteSupported(false);
 
             BusinessException ex = assertThrows(BusinessException.class,
-                    () -> service.delete(LIBRARY_ID, LibraryDeleteMode.PHYSICAL));
+                    () -> service.delete(USER_ID, LIBRARY_ID, LibraryDeleteMode.PHYSICAL));
 
             assertEquals(40934, ex.getCode());
             verify(enginePort, never()).deleteLibrary(any());
@@ -149,7 +157,7 @@ class KbLibraryServiceDeleteTest {
                     .when(enginePort).deleteLibrary(any(EngineLibraryRef.class));
 
             BusinessException ex = assertThrows(BusinessException.class,
-                    () -> service.delete(LIBRARY_ID, LibraryDeleteMode.PHYSICAL));
+                    () -> service.delete(USER_ID, LIBRARY_ID, LibraryDeleteMode.PHYSICAL));
 
             assertEquals(40935, ex.getCode());
             assertTrue(ex.getMessage().contains("RAGFlow 502"),
@@ -165,7 +173,7 @@ class KbLibraryServiceDeleteTest {
         void shouldCleanAllThreeTables() {
             props.setDeleteSupported(true);
 
-            KbLibraryDeleteResultVO result = service.delete(LIBRARY_ID, LibraryDeleteMode.PHYSICAL);
+            KbLibraryDeleteResultVO result = service.delete(USER_ID, LIBRARY_ID, LibraryDeleteMode.PHYSICAL);
 
             verify(enginePort).deleteLibrary(any(EngineLibraryRef.class));
             verify(documentRepository).deleteByLibraryId(LIBRARY_ID);
@@ -185,7 +193,7 @@ class KbLibraryServiceDeleteTest {
             props.setDeleteSupported(true);
             library.setEngineLibraryRef(null);
 
-            KbLibraryDeleteResultVO result = service.delete(LIBRARY_ID, LibraryDeleteMode.PHYSICAL);
+            KbLibraryDeleteResultVO result = service.delete(USER_ID, LIBRARY_ID, LibraryDeleteMode.PHYSICAL);
 
             verify(enginePort, never()).deleteLibrary(any());
             verify(libraryRepository).delete(library);
@@ -202,7 +210,7 @@ class KbLibraryServiceDeleteTest {
         @Test
         @DisplayName("成功：status=0 + archived_at 非空 + 引擎收到归档名 rename")
         void shouldArchiveAndRename() {
-            KbLibraryDeleteResultVO result = service.delete(LIBRARY_ID, LibraryDeleteMode.ARCHIVE);
+            KbLibraryDeleteResultVO result = service.delete(USER_ID, LIBRARY_ID, LibraryDeleteMode.ARCHIVE);
 
             ArgumentCaptor<String> nameCaptor = ArgumentCaptor.forClass(String.class);
             verify(enginePort).renameLibrary(any(EngineLibraryRef.class), nameCaptor.capture());
@@ -228,7 +236,7 @@ class KbLibraryServiceDeleteTest {
         @Test
         @DisplayName("归档不清文档、不清授权（Q6）")
         void shouldNotTouchDocumentsOrAcl() {
-            KbLibraryDeleteResultVO result = service.delete(LIBRARY_ID, LibraryDeleteMode.ARCHIVE);
+            KbLibraryDeleteResultVO result = service.delete(USER_ID, LIBRARY_ID, LibraryDeleteMode.ARCHIVE);
 
             verify(documentRepository, never()).deleteByLibraryId(anyLong());
             verify(aclRepository, never()).deleteByLibraryId(anyLong());
@@ -243,7 +251,7 @@ class KbLibraryServiceDeleteTest {
             doThrow(new IllegalStateException("connect timed out"))
                     .when(enginePort).renameLibrary(any(EngineLibraryRef.class), anyString());
 
-            KbLibraryDeleteResultVO result = service.delete(LIBRARY_ID, LibraryDeleteMode.ARCHIVE);
+            KbLibraryDeleteResultVO result = service.delete(USER_ID, LIBRARY_ID, LibraryDeleteMode.ARCHIVE);
 
             assertFalse(result.engineSynced());
             assertEquals("connect timed out", result.engineError());
@@ -263,7 +271,7 @@ class KbLibraryServiceDeleteTest {
         void shouldArchiveUnboundLibrary() {
             library.setEngineLibraryRef(null);
 
-            KbLibraryDeleteResultVO result = service.delete(LIBRARY_ID, LibraryDeleteMode.ARCHIVE);
+            KbLibraryDeleteResultVO result = service.delete(USER_ID, LIBRARY_ID, LibraryDeleteMode.ARCHIVE);
 
             verify(enginePort, never()).renameLibrary(any(), anyString());
             assertTrue(result.engineSynced());
@@ -275,7 +283,7 @@ class KbLibraryServiceDeleteTest {
         @Test
         @DisplayName("MIS 侧 name 绝不改（改了会撞 (name, category_id) 唯一键）")
         void shouldNotRenameLocalLibrary() {
-            service.delete(LIBRARY_ID, LibraryDeleteMode.ARCHIVE);
+            service.delete(USER_ID, LIBRARY_ID, LibraryDeleteMode.ARCHIVE);
 
             assertEquals("报销制度", library.getName());
         }
@@ -283,8 +291,8 @@ class KbLibraryServiceDeleteTest {
         @Test
         @DisplayName("重复归档幂等：第二次下发的名字不产生双前缀")
         void shouldBeIdempotentOnRepeatedArchive() {
-            service.delete(LIBRARY_ID, LibraryDeleteMode.ARCHIVE);
-            service.delete(LIBRARY_ID, LibraryDeleteMode.ARCHIVE);
+            service.delete(USER_ID, LIBRARY_ID, LibraryDeleteMode.ARCHIVE);
+            service.delete(USER_ID, LIBRARY_ID, LibraryDeleteMode.ARCHIVE);
 
             ArgumentCaptor<String> nameCaptor = ArgumentCaptor.forClass(String.class);
             verify(enginePort, times(2)).renameLibrary(any(EngineLibraryRef.class), nameCaptor.capture());
@@ -304,7 +312,7 @@ class KbLibraryServiceDeleteTest {
         @Test
         @DisplayName("mode=null → 默认走归档（破坏性语义变更的落点）")
         void shouldDefaultToArchive() {
-            KbLibraryDeleteResultVO result = service.delete(LIBRARY_ID, null);
+            KbLibraryDeleteResultVO result = service.delete(USER_ID, LIBRARY_ID, null);
 
             assertEquals("archive", result.mode());
             verify(enginePort).renameLibrary(any(EngineLibraryRef.class), anyString());
@@ -331,7 +339,7 @@ class KbLibraryServiceDeleteTest {
             when(libraryRepository.findById(999L)).thenReturn(Optional.empty());
 
             assertThrows(BusinessException.class,
-                    () -> service.delete(999L, LibraryDeleteMode.ARCHIVE));
+                    () -> service.delete(USER_ID, 999L, LibraryDeleteMode.ARCHIVE));
             verifyNoInteractions(enginePort);
         }
     }
@@ -352,7 +360,7 @@ class KbLibraryServiceDeleteTest {
             doThrow(new IllegalStateException("RAGFlow 400 code:101"))
                     .when(enginePort).updateLibrarySettings(any(EngineLibraryRef.class), any());
 
-            KbLibraryVO vo = service.update(LIBRARY_ID,
+            KbLibraryVO vo = service.update(USER_ID, LIBRARY_ID,
                     new KbLibraryUpdateRequest("报销制度", "internal", null, changed));
 
             assertEquals(Boolean.TRUE, vo.engineSyncFailed(), "静默失败正是本次要修的病");
@@ -368,7 +376,7 @@ class KbLibraryServiceDeleteTest {
         void shouldReturnCleanVoOnSuccess() {
             library.setRagSettingsJson("{\"topK\":5}");
 
-            KbLibraryVO vo = service.update(LIBRARY_ID,
+            KbLibraryVO vo = service.update(USER_ID, LIBRARY_ID,
                     new KbLibraryUpdateRequest("报销制度", "internal", null, changed));
 
             assertNull(vo.engineSyncFailed());
@@ -379,12 +387,12 @@ class KbLibraryServiceDeleteTest {
         @Test
         @DisplayName("设置未变时不打引擎（省一次无谓 HTTP，也避免无端刷同步状态）")
         void shouldSkipEngineWhenSettingsUnchanged() {
-            KbLibraryVO first = service.update(LIBRARY_ID,
+            KbLibraryVO first = service.update(USER_ID, LIBRARY_ID,
                     new KbLibraryUpdateRequest("报销制度", "internal", null, changed));
             assertNotNull(first);
 
             // 第二次提交同样的 settings：json 与库里已存的一致 → 不应再调引擎
-            service.update(LIBRARY_ID,
+            service.update(USER_ID, LIBRARY_ID,
                     new KbLibraryUpdateRequest("报销制度", "internal", null, changed));
 
             verify(enginePort, times(1)).updateLibrarySettings(any(EngineLibraryRef.class), any());
@@ -408,7 +416,7 @@ class KbLibraryServiceDeleteTest {
         void shouldRestoreAndRenameOnUnarchive() {
             makeArchived();
 
-            KbLibraryVO vo = service.update(LIBRARY_ID,
+            KbLibraryVO vo = service.update(USER_ID, LIBRARY_ID,
                     new KbLibraryUpdateRequest("报销制度", "internal", LibraryStatus.ENABLED.code(), null));
 
             assertNull(vo.engineSyncFailed(), "改名成功不应带失败回执");
@@ -426,7 +434,7 @@ class KbLibraryServiceDeleteTest {
             doThrow(new IllegalStateException("RAGFlow 500"))
                     .when(enginePort).renameLibrary(any(EngineLibraryRef.class), anyString());
 
-            KbLibraryVO vo = service.update(LIBRARY_ID,
+            KbLibraryVO vo = service.update(USER_ID, LIBRARY_ID,
                     new KbLibraryUpdateRequest("报销制度", "internal", LibraryStatus.ENABLED.code(), null));
 
             assertEquals(Boolean.TRUE, vo.engineSyncFailed(), "改名失败必须回执给前端");
@@ -442,7 +450,7 @@ class KbLibraryServiceDeleteTest {
             library.setStatus(LibraryStatus.DISABLED.code());
             library.setArchivedAt(null);
 
-            service.update(LIBRARY_ID,
+            service.update(USER_ID, LIBRARY_ID,
                     new KbLibraryUpdateRequest("报销制度", "internal", LibraryStatus.ENABLED.code(), null));
 
             verify(enginePort, never()).renameLibrary(any(), any());
@@ -454,7 +462,7 @@ class KbLibraryServiceDeleteTest {
         void shouldNotTouchArchivedWhenStatusUnchanged() {
             makeArchived();
 
-            service.update(LIBRARY_ID,
+            service.update(USER_ID, LIBRARY_ID,
                     new KbLibraryUpdateRequest("报销制度", "secret", null, null));
 
             verify(enginePort, never()).renameLibrary(any(), any());

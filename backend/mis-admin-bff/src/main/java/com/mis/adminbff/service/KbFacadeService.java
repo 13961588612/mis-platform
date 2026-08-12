@@ -39,6 +39,7 @@ import com.mis.adminbff.dto.kb.KbRagSettings;
 import com.mis.adminbff.dto.kb.KbReparseAllResultVO;
 import com.mis.adminbff.dto.kb.KbSubjectVO;
 import com.mis.adminbff.dto.kb.KbVisibilityVO;
+import com.mis.adminbff.dto.kb.LegacyAclInventoryVO;
 import com.mis.adminbff.support.RequestContext;
 import com.mis.common.core.exception.BusinessException;
 import com.mis.common.core.exception.ResultCode;
@@ -190,8 +191,15 @@ public class KbFacadeService {
 
     // ------------------------------------------------------------------ 知识库
 
-    public List<KbLibraryVO> listLibraries(Long categoryId) {
-        return kbWebClient.listLibraries(categoryId);
+    /**
+     * 知识库列表（KBP-06：{@code scope} 透传 mis-kb 数据面收敛）。
+     *
+     * @param categoryId 分类过滤；{@code null} = 不限制
+     * @param scope      {@code manageable} / {@code visible} / {@code null}（= 现状全量）；
+     *                   缺省/空/非法由 mis-kb 兜底为全量（零回归）
+     */
+    public List<KbLibraryVO> listLibraries(Long categoryId, String scope) {
+        return kbWebClient.listLibraries(categoryId, scope);
     }
 
     public KbLibraryVO getLibrary(Long id) {
@@ -462,6 +470,44 @@ public class KbFacadeService {
     @OperLog(module = "知识库", operation = "撤销库权限", recordParams = true)
     public void revokeAcl(Long aclId, KbAuditBefore auditBefore) {
         kbWebClient.revokeAcl(aclId);
+    }
+
+    /**
+     * KBP-10 存量 manage/acl 只读清单（运营清理依据，只读不清理），并回填主体名称。
+     *
+     * <p><b>权限双闸门：</b>BFF 侧 {@code kb:acl:revoke} 权限码（Controller 兜底判权）+
+     * mis-kb 侧 {@code isGlobalAdmin}（非全局管理员 40311）。
+     *
+     * @param libraryId   按库维度过滤；{@code null} = 不限制
+     * @param subjectType 按主体类型过滤；{@code null} = 不限制
+     * @param subjectId   按主体 id 过滤；{@code null} = 不限制
+     * @return 存量授权清单（subjectName 已批量回填；回填失败保持 {@code null}）
+     */
+    public List<LegacyAclInventoryVO> listLegacyAclInventory(
+            Long libraryId, String subjectType, Long subjectId) {
+        List<LegacyAclInventoryVO> rows =
+                kbWebClient.listLegacyAclInventory(libraryId, subjectType, subjectId);
+        if (rows == null || rows.isEmpty()) {
+            return rows != null ? rows : List.of();
+        }
+        Set<KbSubjectProxyService.SubjectKey> keys = new HashSet<>();
+        for (LegacyAclInventoryVO row : rows) {
+            if (row.subjectType() != null && row.subjectId() != null) {
+                keys.add(new KbSubjectProxyService.SubjectKey(row.subjectType(), row.subjectId()));
+            }
+        }
+        Map<String, String> names = subjectProxyService.resolveNames(keys);
+        List<LegacyAclInventoryVO> result = new ArrayList<>(rows.size());
+        for (LegacyAclInventoryVO row : rows) {
+            String name = row.subjectType() == null || row.subjectId() == null
+                    ? null
+                    : names.get(row.subjectType().toLowerCase() + ":" + row.subjectId());
+            result.add(new LegacyAclInventoryVO(
+                    row.id(), row.libraryId(), row.libraryName(), row.categoryId(),
+                    row.subjectType(), row.subjectId(), name, row.action(),
+                    row.createdAt(), row.updatedAt()));
+        }
+        return result;
     }
 
     // ------------------------------------------------------------------ 审计快照采集（企业级增强一期 KE-01 / Q2）

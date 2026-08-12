@@ -374,12 +374,15 @@ export function KbQaPage() {
             <Sparkles className="h-4 w-4 shrink-0 text-primary" />
             <span className="shrink-0 text-sm font-medium">检索范围</span>
             <div className="min-w-0 flex-1">
+              {/* KBP-06：问答页走 scope=visible（服务端按「本人可见」收敛），
+                  空选 = 全部可见知识库（public∧enabled ∪ ACL read − disabled） */}
               <KbLibraryCombobox
                 value={libraryId}
                 onChange={(id) => setLibraryId(id)}
                 allowClear
                 emptyOptionLabel="全部可见知识库"
                 activePath="/kb/qa"
+                scope="visible"
               />
             </div>
             {ragUnavailable ? <Badge variant="warning">RAG 能力当前未启用</Badge> : null}

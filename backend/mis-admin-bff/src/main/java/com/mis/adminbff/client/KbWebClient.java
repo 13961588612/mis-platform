@@ -47,6 +47,7 @@ import com.mis.adminbff.dto.kb.KbSynonymGroupVO;
 import com.mis.adminbff.dto.kb.KbSynonymImportCommitRequest;
 import com.mis.adminbff.dto.kb.KbSynonymImportCommitVO;
 import com.mis.adminbff.dto.kb.KbSynonymImportPrecheckVO;
+import com.mis.adminbff.dto.kb.LegacyAclInventoryVO;
 import com.mis.common.core.exception.BusinessException;
 import com.mis.common.core.exception.ResultCode;
 import com.mis.common.core.result.PageResult;
@@ -99,6 +100,8 @@ public class KbWebClient extends AbstractDownstreamClient {
     private static final ParameterizedTypeReference<Result<List<KbAclVO>>> ACL_LIST =
             new ParameterizedTypeReference<>() {};
     private static final ParameterizedTypeReference<Result<KbAclVO>> ACL =
+            new ParameterizedTypeReference<>() {};
+    private static final ParameterizedTypeReference<Result<List<LegacyAclInventoryVO>>> LEGACY_ACL_INVENTORY =
             new ParameterizedTypeReference<>() {};
     private static final ParameterizedTypeReference<Result<List<KbQaSessionVO>>> QA_SESSION_LIST =
             new ParameterizedTypeReference<>() {};
@@ -360,9 +363,9 @@ public class KbWebClient extends AbstractDownstreamClient {
 
     // ------------------------------------------------------------------ 知识库
 
-    public List<KbLibraryVO> listLibraries(Long categoryId) {
+    public List<KbLibraryVO> listLibraries(Long categoryId, String scope) {
         List<KbLibraryVO> data = block(client().get()
-                .uri(queryUri("/internal/v1/kb/libraries", "categoryId", categoryId))
+                .uri(queryUri("/internal/v1/kb/libraries", "categoryId", categoryId, "scope", scope))
                 .headers(loginContextHeaders())
                 .retrieve()
                 .bodyToMono(LIBRARY_LIST));
@@ -648,6 +651,30 @@ public class KbWebClient extends AbstractDownstreamClient {
                 .headers(loginContextHeaders())
                 .retrieve()
                 .bodyToMono(VOID));
+    }
+
+    /**
+     * KBP-10 存量 manage/acl 授权清单（只读，运营清理依据）。
+     *
+     * <p>实际路径 {@code GET /internal/v1/kb/libraries/acls/inventory}（mis-kb 控制器类级
+     * 前缀 {@code /internal/v1/kb/libraries} + 方法级 {@code /acls/inventory}）；
+     * mis-kb 侧前置 {@code isGlobalAdmin}（非全局管理员 40311），BFF 另有
+     * {@code kb:acl:revoke} 权限码兜底（双闸门）。
+     *
+     * @param libraryId   按库维度过滤；{@code null} = 不限制
+     * @param subjectType 按主体类型过滤；{@code null} = 不限制
+     * @param subjectId   按主体 id 过滤；{@code null} = 不限制
+     * @return 存量授权清单（mis-kb 侧 subjectName 恒为 null，由门面回填）
+     */
+    public List<LegacyAclInventoryVO> listLegacyAclInventory(
+            Long libraryId, String subjectType, Long subjectId) {
+        List<LegacyAclInventoryVO> data = block(client().get()
+                .uri(queryUri("/internal/v1/kb/libraries/acls/inventory",
+                        "libraryId", libraryId, "subjectType", subjectType, "subjectId", subjectId))
+                .headers(loginContextHeaders())
+                .retrieve()
+                .bodyToMono(LEGACY_ACL_INVENTORY));
+        return data != null ? data : List.of();
     }
 
     // ------------------------------------------------------------------ 问答历史 / 反馈

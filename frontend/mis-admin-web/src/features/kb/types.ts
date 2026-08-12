@@ -307,6 +307,15 @@ export type KbEngineSyncStatus = 0 | 1 | 2 | 3;
 /** 知识库删除模式（T04 契约；缺省 `archive`）。 */
 export type KbLibraryDeleteMode = 'archive' | 'physical';
 
+/**
+ * 知识库列表数据面收敛（KBP-06）。
+ *
+ * <p>两端字面量统一：{@code manageable}=本人可管理（分类管辖 ∪ kb_acl.manage）、
+ * {@code visible}=本人可见（public∧enabled ∪ ACL read − disabled）。
+ * 缺省/空/非法值由后端兜底为现状全量（零回归）——前端永远只传这两个字面量。
+ */
+export type KbLibraryScope = 'manageable' | 'visible';
+
 /** 知识库。 */
 export interface KbLibrary {
   id: number;
@@ -462,6 +471,26 @@ export interface KbAclSummary {
   subjectId: number | null;
   subjectName: string | null;
   action: string;
+}
+
+/**
+ * KBP-10 存量 manage/acl 授权清单行（只读运营清理依据，不提供 CSV）。
+ *
+ * <p>⚠️ tripwire：本行来自 `GET /kb/acls/inventory`，是<b>跨库全局视角</b>——
+ * 只有全局管理员（BFF `kb:acl:revoke` + mis-kb `isGlobalAdmin` 双闸门）能看到。
+ * `subjectName` 已由 BFF 回填；回填失败为 null，UI 降级展示 `subjectType + subjectId`。
+ */
+export interface LegacyAclInventory {
+  id: number;
+  libraryId: number | null;
+  libraryName: string | null;
+  categoryId: number | null;
+  subjectType: string;
+  subjectId: number;
+  subjectName: string | null;
+  action: string;
+  createdAt: string | null;
+  updatedAt: string | null;
 }
 
 /** 知识库详情聚合（L-06）。 */

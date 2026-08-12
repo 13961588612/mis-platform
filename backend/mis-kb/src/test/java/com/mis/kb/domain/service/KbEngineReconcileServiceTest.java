@@ -81,6 +81,9 @@ class KbEngineReconcileServiceTest {
     private KbCategoryRepository categoryRepository;
     @Mock
     private NodeAdminResolver nodeAdminResolver;
+    /** KBP-06：KbLibraryService 构造器新增依赖（mock，本测试不触发可见性解析）。 */
+    @Mock
+    private KbVisibilityService visibilityService;
     @Mock
     private KnowledgeEnginePort enginePort;
 
@@ -98,7 +101,7 @@ class KbEngineReconcileServiceTest {
         // 真实 KbLibraryService：期望名计算必须走真命名规范，mock 掉就测不出漂移判定
         KbLibraryService libraryService = new KbLibraryService(
                 libraryRepository, documentRepository, aclRepository, categoryRepository,
-                enginePort, props, nodeAdminResolver);
+                enginePort, props, nodeAdminResolver, visibilityService);
         service = new KbEngineReconcileService(
                 libraryRepository, orphanRepository, libraryService, enginePort, props);
 

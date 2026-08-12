@@ -16,7 +16,7 @@ export const KB_NAV: SystemNavNode[] = [
   { kind: 'leaf', path: '/kb/categories', title: '分类管理', icon: 'FolderTree' },
   { kind: 'leaf', path: '/kb/libraries', title: '知识库', icon: 'Database' },
   { kind: 'leaf', path: '/kb/documents', title: '文档', icon: 'FileText' },
-  { kind: 'leaf', path: '/kb/permissions', title: '权限', icon: 'Lock' },
+  { kind: 'leaf', path: '/kb/permissions', title: '搜索权限', icon: 'Lock' },
   { kind: 'leaf', path: '/kb/qa', title: '智能问答', icon: 'Sparkles' },
   // WA-08：命中测试置于「智能问答」与「问答运营」之间（权限码 kb:hittest:run，V17 seed）
   { kind: 'leaf', path: '/kb/hit-test', title: '命中测试', icon: 'Crosshair' },

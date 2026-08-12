@@ -1,6 +1,7 @@
 package com.mis.kb.domain.service;
 
 import com.mis.kb.api.client.KbSubjectClient;
+import com.mis.kb.domain.entity.KbAcl;
 import com.mis.kb.domain.entity.KbCategory;
 import com.mis.kb.domain.entity.KbCategoryAdmin;
 import com.mis.kb.domain.entity.KbLibrary;
@@ -223,6 +224,46 @@ public class NodeAdminResolver {
     }
 
     /**
+     * 解析用户可管理的全部知识库 id（合成口径与 {@link #hasLibraryManage} 完全一致）。
+     *
+     * <p>{@code { lib | lib.categoryId ∈ resolveManageableCategoryIds(userId) }} ∪
+     * {@code { lib | kb_acl 存在 (user|role|dept, lib, manage) 授权 }}；
+     * 全局管理员短路返回全量库（{@code userId == null} 安全侧收紧返回空集）。
+     *
+     * <p><b>铁律：</b>scope=manageable 的数据面收敛唯一出口，禁止在 Service/Controller
+     * 内联祖先链或直查 {@code kb_category_admin} 绕过本类。
+     */
+    public Set<Long> resolveManageableLibraryIds(Long userId) {
+        if (userId == null) {
+            return Set.of();
+        }
+        if (isGlobalAdmin(userId)) {
+            return libraryRepository.findAll().stream()
+                    .map(KbLibrary::getId)
+                    .collect(java.util.stream.Collectors.toSet());
+        }
+        Set<Long> result = new HashSet<>();
+        // 分支一：管辖分类（含子树）下挂的库
+        Set<Long> manageableCategories = resolveManageableCategoryIds(userId);
+        for (KbLibrary lib : libraryRepository.findAll()) {
+            if (lib.getCategoryId() != null && manageableCategories.contains(lib.getCategoryId())) {
+                result.add(lib.getId());
+            }
+        }
+        // 分支二：kb_acl 补充——user ∪ role ∪ dept 任一 manage 命中（与 hasLibraryManage 同口径）
+        collectManageAclLibraryIds(result, SubjectType.USER.code(), List.of(userId));
+        Set<Long> roleIds = dedupe(subjectClient.fetchUserRoleIds(userId));
+        if (!roleIds.isEmpty()) {
+            collectManageAclLibraryIds(result, SubjectType.ROLE.code(), new ArrayList<>(roleIds));
+        }
+        Set<Long> deptIds = dedupe(subjectClient.fetchUserDeptIds(userId));
+        if (!deptIds.isEmpty()) {
+            collectManageAclLibraryIds(result, SubjectType.DEPT.code(), new ArrayList<>(deptIds));
+        }
+        return result;
+    }
+
+    /**
      * 库级管理合成（Q9）：{@code hasNodeManage(库所属分类) ∨ kb_acl.exists(manage)}。
      *
      * <p>文档写操作双闸门（权限码 + 管辖）统一走这里，禁止内联。
@@ -284,6 +325,20 @@ public class NodeAdminResolver {
     private void collectHitCategoryIds(Set<Long> target, String subjectType, List<Long> subjectIds) {
         for (KbCategoryAdmin admin : adminRepository.findBySubjectTypeAndSubjectIdIn(subjectType, subjectIds)) {
             target.add(admin.getCategoryId());
+        }
+    }
+
+    /**
+     * 收集主体维度 kb_acl.manage 授权的库 id（{@link #resolveManageableLibraryIds} 分支二）。
+     */
+    private void collectManageAclLibraryIds(Set<Long> target, String subjectType, List<Long> subjectIds) {
+        for (Long subjectId : subjectIds) {
+            for (KbAcl acl : aclRepository.findBySubjectTypeAndSubjectIdAndAction(
+                    subjectType, subjectId, AclAction.MANAGE.code())) {
+                if (acl.getLibraryId() != null) {
+                    target.add(acl.getLibraryId());
+                }
+            }
         }
     }
 

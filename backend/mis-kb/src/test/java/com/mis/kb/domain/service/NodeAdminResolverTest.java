@@ -1,6 +1,7 @@
 package com.mis.kb.domain.service;
 
 import com.mis.kb.api.client.KbSubjectClient;
+import com.mis.kb.domain.entity.KbAcl;
 import com.mis.kb.domain.entity.KbCategory;
 import com.mis.kb.domain.entity.KbLibrary;
 import com.mis.kb.domain.repository.KbAclRepository;
@@ -368,6 +369,82 @@ class NodeAdminResolverTest {
         assertFalse(resolver.hasLibraryManage(USER, 404L));
     }
 
+    // ---------------------------------------------------------------- 可管理库解析（KBP-06）
+
+    @Test
+    @DisplayName("resolveManageableLibraryIds：管辖分类（含子树）下挂的库全量命中（分支一）")
+    void manageableLibraryIdsFromManagedCategories() {
+        // 用户直接管节点 2 → 子树 {2,3}；库 99 挂分类 2、库 98 挂分类 3、库 97 挂分类 5（管辖外）
+        when(adminRepository.findBySubjectTypeAndSubjectIdIn(eq("user"), anyList()))
+                .thenReturn(List.of(adminRow(11L, 2L, "user", USER)));
+        when(libraryRepository.findAll()).thenReturn(List.of(
+                library(99L, 2L), library(98L, 3L), library(97L, 5L)));
+
+        Set<Long> ids = resolver.resolveManageableLibraryIds(USER);
+
+        assertEquals(Set.of(99L, 98L), ids,
+                "分支一 = {lib | lib.categoryId ∈ resolveManageableCategoryIds}，分类 5 不在管辖内不得混入");
+    }
+
+    @Test
+    @DisplayName("resolveManageableLibraryIds：kb_acl.manage 授权库并入（分支二 user/role/dept 并集）")
+    void manageableLibraryIdsFromManageAcl() {
+        KbLibrary lib = library(99L, 2L);
+        when(libraryRepository.findById(99L)).thenReturn(Optional.of(lib));
+        // 管辖分类为空，仅靠 kb_acl.manage 补充：user 直授 + role 授 + dept 授 → 并集
+        when(subjectClient.fetchUserRoleIds(USER)).thenReturn(List.of(ROLE));
+        when(subjectClient.fetchUserDeptIds(USER)).thenReturn(List.of(DEPT));
+        when(aclRepository.findBySubjectTypeAndSubjectIdAndAction(
+                eq("user"), eq(USER), eq("manage"))).thenReturn(List.of(aclRow(900L, 99L)));
+        when(aclRepository.findBySubjectTypeAndSubjectIdAndAction(
+                eq("role"), eq(ROLE), eq("manage"))).thenReturn(List.of(aclRow(901L, 98L)));
+        when(aclRepository.findBySubjectTypeAndSubjectIdAndAction(
+                eq("dept"), eq(DEPT), eq("manage"))).thenReturn(List.of(aclRow(902L, 97L)));
+        when(libraryRepository.findAll()).thenReturn(List.of());
+
+        Set<Long> ids = resolver.resolveManageableLibraryIds(USER);
+
+        assertEquals(Set.of(99L, 98L, 97L), ids,
+                "分支二 = user ∪ role ∪ dept 的 kb_acl.manage 授权库（与 hasLibraryManage 同口径）");
+    }
+
+    @Test
+    @DisplayName("resolveManageableLibraryIds：read 授权不算管理（只有 manage 才并入）")
+    void manageableLibraryIdsIgnoreReadAcl() {
+        // 仅 read 授权：不得出现在可管理清单
+        when(aclRepository.findBySubjectTypeAndSubjectIdAndAction(
+                eq("user"), eq(USER), eq("manage"))).thenReturn(List.of());
+        when(libraryRepository.findAll()).thenReturn(List.of(library(99L, 2L)));
+
+        Set<Long> ids = resolver.resolveManageableLibraryIds(USER);
+
+        assertTrue(ids.isEmpty(), "read 授权只代表可读，不能进入可管理清单");
+    }
+
+    @Test
+    @DisplayName("resolveManageableLibraryIds：全局管理员 → 全量库（短路）")
+    void manageableLibraryIdsAllForGlobalAdmin() {
+        when(subjectClient.fetchUserRoleCodes(USER)).thenReturn(List.of("TENANT_ADMIN"));
+        when(libraryRepository.findAll()).thenReturn(List.of(
+                library(99L, 2L), library(98L, 3L), library(97L, 5L)));
+
+        assertEquals(Set.of(99L, 98L, 97L), resolver.resolveManageableLibraryIds(USER));
+    }
+
+    @Test
+    @DisplayName("resolveManageableLibraryIds：userId 为 null → 空集（fail-closed）")
+    void manageableLibraryIdsNullUser() {
+        assertTrue(resolver.resolveManageableLibraryIds(null).isEmpty());
+    }
+
+    @Test
+    @DisplayName("resolveManageableLibraryIds：无管辖无授权 → 空集")
+    void manageableLibraryIdsEmpty() {
+        when(libraryRepository.findAll()).thenReturn(List.of(library(99L, 2L)));
+
+        assertTrue(resolver.resolveManageableLibraryIds(USER).isEmpty());
+    }
+
     // ---------------------------------------------------------------- 断言
 
     @Test
@@ -387,6 +464,16 @@ class NodeAdminResolverTest {
         a.setCategoryId(categoryId);
         a.setSubjectType(subjectType);
         a.setSubjectId(subjectId);
+        return a;
+    }
+
+    private static KbAcl aclRow(long id, long libraryId) {
+        KbAcl a = new KbAcl();
+        a.setId(id);
+        a.setLibraryId(libraryId);
+        a.setSubjectType("user");
+        a.setSubjectId(USER);
+        a.setAction("manage");
         return a;
     }
 

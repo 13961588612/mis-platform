@@ -194,6 +194,20 @@ WHERE ur.user_id = ? AND m.app_id = ?
 > catalog：`91157`「接口模块管理」（type=catalog，module 4，parent 4000，code 00900073）——模块域此前无 sys_api 树根（V8 只建菜单未建 API 树），U-V34-5 裁决新建。
 > 已登记不变量：`GET/PUT /api/v1/roles/{id}/menus`（V2 建 3008/3009，V4 改名 /menus，menu 234 `system:role:assignMenu`）、`GET /api/v1/apps`（V5 9006，menu 90 permission NULL → authOnly）、`GET /api/v1/employees`（V4 1011，menu 201 `system:user:list`）。
 
+### 3.7 KB / Agent 接口树域分组（V36，零鉴权影响）
+
+> 迁移：`V36__kb_agent_api_domain_catalogs.sql`。
+> 此前 KB（91060）与 Agent（92090）均为「单根 catalog + 全部叶子平铺」，管理台难扫。
+> V36 在根下各建 9 个业务域 catalog，按 `path_pattern` 把既有叶子 `UPDATE parent_id` 挂入对应域。
+> **不改 method/path、不改 sys_menu_api、不改权限码**——鉴权 Registry 只读 `type=api` 叶子。
+
+| 模块 | 根 catalog | 域分组（id） |
+|---|---|---|
+| 知识库 `91020` | 91060 知识库工具 | 91168 分类管理 / 91169 知识库 / 91170 文档 / 91171 搜索权限 / 91172 智能问答 / 91173 命中测试 / 91174 问答运营 / 91175 同义词 / 91176 引擎配置 |
+| 智能体 `92020` | 92090 智能体运营 API | 92160 技能池 / 92161 Agent 实例 / 92162 会话与对话 / 92163 MCP / 92164 Worker Catalog / 92165 调度观测 / 92166 企微渠道 / 92167 系统监控 / 92168 审批中心 |
+
+> 号段：KB catalog code `00900073–00900081`（module 91020，与 V35 module4 同号不冲突）；Agent `00920061–00920069`。
+
 ## 4. 仅登录 API
 
 挂在 `permission IS NULL` 的菜单页下，或 `sys_menu_api` 关联且 menu.permission 为空：

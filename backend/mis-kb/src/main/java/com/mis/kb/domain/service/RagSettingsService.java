@@ -62,6 +62,7 @@ public class RagSettingsService {
     private final RagflowProperties engineProperties;
     private final KbGraphService graphService;
     private final KbRaptorService raptorService;
+    private final NodeAdminResolver nodeAdminResolver;
 
     public RagSettingsService(
             KbLibraryRepository libraryRepository,
@@ -70,7 +71,8 @@ public class RagSettingsService {
             KnowledgeEnginePort enginePort,
             RagflowProperties engineProperties,
             KbGraphService graphService,
-            KbRaptorService raptorService) {
+            KbRaptorService raptorService,
+            NodeAdminResolver nodeAdminResolver) {
         this.libraryRepository = libraryRepository;
         this.aclRepository = aclRepository;
         this.documentRepository = documentRepository;
@@ -78,6 +80,7 @@ public class RagSettingsService {
         this.engineProperties = engineProperties;
         this.graphService = graphService;
         this.raptorService = raptorService;
+        this.nodeAdminResolver = nodeAdminResolver;
     }
 
     /**
@@ -107,13 +110,19 @@ public class RagSettingsService {
      * 调用 {@code KbRaptorService.build} 自动排队构建。graph/raptor <b>可并行</b>
      * （T00 P2c 实测），两个自动触发互不干扰。
      *
+     * @param userId    当前用户 id
      * @param libraryId 知识库 id
      * @param settings  待保存设置
      * @return 落库后生效的设置
      */
     @Transactional
-    public RagSettings save(Long libraryId, RagSettings settings) {
+    public RagSettings save(Long userId, Long libraryId, RagSettings settings) {
         KbLibrary lib = require(libraryId);
+        // KBP-06：RAG 设置保存 = 库级写操作，须有管理权（节点管辖 ∨ kb_acl.manage）
+        if (!nodeAdminResolver.hasLibraryManage(userId, libraryId)) {
+            throw new KbBusinessException(KbResultCode.KB_CATEGORY_NOT_MANAGEABLE,
+                    "该知识库不在您的管理范围内");
+        }
         RagSettings oldEffective = get(libraryId);
         // 三道防线第二道（保存强制关）：rerank → graph → raptor 依次收敛；
         // 引擎不支持的能力开关一律静默强制 false（前端置灰是第一道，检索期降级是第三道）

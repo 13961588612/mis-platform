@@ -22,7 +22,7 @@ import { Badge } from '@/components/ui/badge';
 import { EnabledBadge, SecrecyBadge } from '../components/kb-badges';
 import { KbLibraryDeleteDialog } from './kb-library-delete-dialog';
 import { KbLibraryUnarchiveDialog } from './kb-library-unarchive-dialog';
-import { createLibrary, listCategories, listLibraries, updateLibrary } from '../api/kb-api';
+import { createLibrary, listCategories, listLibraries, listManageableCategoryIds, updateLibrary } from '../api/kb-api';
 import {
   CategoryTreeCell,
   flattenCategoryTree,
@@ -126,6 +126,17 @@ export function KbLibraryPage() {
   const [categoryId, setCategoryId] = useState<number | null>(null);
   const [libraries, setLibraries] = useState<KbLibrary[]>([]);
   const [loading, setLoading] = useState(false);
+  /**
+   * KBP-06：管理页库列表默认走「仅我可管理」（主理人 W 决策）——关闭后回落现状全量。
+   *
+   * <p>开启时列表以 {@code scope=manageable} 由服务端收敛（分类管辖 ∪ kb_acl.manage），
+   * 左侧分类树同步约束到管辖分类（含导航祖先），避免「看得到但动不了」的库混进来。
+   */
+  const [onlyManageable, setOnlyManageable] = useState(true);
+  /** 本人可管理的分类 id 集合（onlyManageable 开启时约束左侧分类树；拉取失败回落空集）。 */
+  const [manageableCategoryIds, setManageableCategoryIds] = useState<Set<number>>(
+    () => new Set<number>(),
+  );
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState<KbLibrary | null>(null);
   const [form, setForm] = useState<LibraryForm>(EMPTY_FORM);
@@ -181,14 +192,25 @@ export function KbLibraryPage() {
     }
   }, []);
 
-  const loadLibraries = useCallback(async (cid: number | null) => {
+  const loadLibraries = useCallback(async (cid: number | null, manageable: boolean) => {
     setLoading(true);
     try {
-      setLibraries(await listLibraries(cid));
+      setLibraries(await listLibraries(cid, manageable ? 'manageable' : null));
     } catch (e) {
       toast.error(e instanceof Error ? e.message : '加载知识库失败');
     } finally {
       setLoading(false);
+    }
+  }, []);
+
+  const loadManageableIds = useCallback(async () => {
+    try {
+      const ids = await listManageableCategoryIds();
+      setManageableCategoryIds(new Set(ids));
+    } catch {
+      // 拉不到管辖范围不阻断页面：列表仍按 scope=manageable 由服务端收敛，
+      // 左侧分类树回落「全部分类」（宁可多显示也不误藏可管理库）
+      setManageableCategoryIds(new Set());
     }
   }, []);
 
@@ -198,14 +220,36 @@ export function KbLibraryPage() {
   }, [loadCategories, refreshEngine, capabilities]);
 
   useEffect(() => {
-    void loadLibraries(categoryId);
-  }, [categoryId, loadLibraries]);
+    if (onlyManageable) void loadManageableIds();
+  }, [onlyManageable, loadManageableIds]);
+
+  useEffect(() => {
+    void loadLibraries(categoryId, onlyManageable);
+  }, [categoryId, onlyManageable, loadLibraries]);
 
   /* 左侧分类树：扁平数组 → 带 depth 的可见行（折叠节点的后代不产出） */
-  const categoryRows = useMemo(
-    () => flattenCategoryTree(categories, expanded),
-    [categories, expanded],
-  );
+  const categoryRows = useMemo(() => {
+    const rows = flattenCategoryTree(categories, expanded);
+    if (!onlyManageable) return rows;
+    // 管辖模式：只保留「可管理节点」+「通向可管理节点的祖先」——树保持可导航，
+    // 但不可管理的旁支不出现，避免用户点进去看一个必然空/越权的分类
+    if (manageableCategoryIds.size === 0) return rows;
+    const byId = new Map(categories.map((c) => [c.id, c] as const));
+    return rows.filter(({ category }) => {
+      if (manageableCategoryIds.has(category.id)) return true;
+      // category 是否为某个可管理节点的祖先
+      for (const manageableId of manageableCategoryIds) {
+        let cur: number | null = manageableId;
+        const seen = new Set<number>();
+        while (cur != null && !seen.has(cur)) {
+          seen.add(cur);
+          if (cur === category.id) return true;
+          cur = byId.get(cur)?.parentId ?? null;
+        }
+      }
+      return false;
+    });
+  }, [categories, expanded, onlyManageable, manageableCategoryIds]);
   /** 拥有子节点的分类 id 集合——决定该行是否渲染展开/折叠 chevron。 */
   const branchIds = useMemo(() => {
     const set = new Set<number>();
@@ -224,6 +268,19 @@ export function KbLibraryPage() {
       return next;
     });
   }
+
+  /**
+   * 抽屉「所属分类」下拉的可选分类（KBP-03：只列当前用户管辖的分类，含子树）。
+   *
+   * <p>{@code manageableCategoryIds} 即服务端 {@code resolveManageableCategoryIds}
+   * 返回的「授权节点子树并集」，已含全部后代；非管辖分类不出现、不可选作建库目标。
+   * 管辖未开启 / 管辖范围拉取失败时回落全量（现状行为，服务层 {@code assertNodeManage}
+   * 兜底防越权）。
+   */
+  const manageableCategoryOptions = useMemo(() => {
+    if (!onlyManageable || manageableCategoryIds.size === 0) return categories;
+    return categories.filter((c) => manageableCategoryIds.has(c.id));
+  }, [categories, onlyManageable, manageableCategoryIds]);
 
   /**
    * 选中分类并确保它在树上可见（沿途祖先全部展开）。
@@ -340,7 +397,7 @@ export function KbLibraryPage() {
       invalidateLibraries();
       // 分类未变时 effect 不会重跑，需显式刷新本页列表
       if (editing || categoryId === Number(form.categoryId) || form.categoryId === '') {
-        await loadLibraries(categoryId);
+        await loadLibraries(categoryId, onlyManageable);
       }
     } catch (e) {
       toast.error(e instanceof Error ? e.message : '保存失败');
@@ -357,7 +414,7 @@ export function KbLibraryPage() {
    */
   async function onDeleteDone() {
     invalidateLibraries();
-    await loadLibraries(categoryId);
+    await loadLibraries(categoryId, onlyManageable);
   }
 
   return (
@@ -466,7 +523,34 @@ export function KbLibraryPage() {
           ))}
         </aside>
 
-        <div className="relative min-w-0 flex-1 overflow-auto rounded-lg border bg-table-surface">
+        <div className="flex min-w-0 flex-1 flex-col gap-2">
+          {/* KBP-06：管理页库列表默认「仅我可管理」（服务端 scope=manageable 收敛） */}
+          <div className="flex items-center justify-between gap-3 px-1">
+            <label
+              className="flex cursor-pointer items-center gap-1.5 text-xs text-muted-foreground"
+              title="开启后列表只显示您可管理的知识库（分类管辖 ∪ 库级管理授权），由服务端收敛数据范围"
+            >
+              <input
+                type="checkbox"
+                className="h-3.5 w-3.5"
+                checked={onlyManageable}
+                onChange={(e) => {
+                  const next = e.target.checked;
+                  setOnlyManageable(next);
+                  // 切到管辖模式时，若当前分类不在管辖内，回落「全部分类」，
+                  // 避免右侧列表恒空且看不出原因
+                  if (next && categoryId != null && !manageableCategoryIds.has(categoryId)) {
+                    setCategoryId(null);
+                  }
+                }}
+              />
+              仅看我可管理的
+            </label>
+            <span className="text-xs text-muted-foreground">
+              {onlyManageable ? '数据范围：我可管理的知识库' : '数据范围：全部可见知识库'}
+            </span>
+          </div>
+          <div className="relative min-w-0 flex-1 overflow-auto rounded-lg border bg-table-surface">
           {hasCustom ? (
             <button
               type="button"
@@ -530,7 +614,9 @@ export function KbLibraryPage() {
               ) : libraries.length === 0 ? (
                 <tr>
                   <td colSpan={9} className="px-3 py-10 text-center text-muted-foreground">
-                    暂无可见知识库
+                    {onlyManageable
+                      ? '暂无您可管理的知识库——请联系管理员在「分类 → 管理员」给您分配管辖范围，或授予库级管理权限'
+                      : '暂无可见知识库'}
                   </td>
                 </tr>
               ) : (
@@ -639,6 +725,7 @@ export function KbLibraryPage() {
               )}
             </tbody>
           </table>
+          </div>
         </div>
       </div>
 
@@ -659,12 +746,21 @@ export function KbLibraryPage() {
                     onChange={(e) => setForm((f) => ({ ...f, categoryId: e.target.value }))}
                   >
                     <option value="">请选择</option>
-                    {categories.map((c) => (
+                    {manageableCategoryOptions.map((c) => (
                       <option key={c.id} value={String(c.id)}>
                         {c.name}
                       </option>
                     ))}
                   </select>
+                  {onlyManageable && manageableCategoryOptions.length === 0 ? (
+                    <p className="text-xs text-amber-600">
+                      您暂无可管辖的分类——请联系管理员在「分类 → 管理员」中给您分配管辖范围
+                    </p>
+                  ) : onlyManageable ? (
+                    <p className="text-xs text-muted-foreground">
+                      仅列出您可管辖的分类（含子分类）
+                    </p>
+                  ) : null}
                 </div>
               ) : null}
               <div className={fieldStack}>

@@ -56,8 +56,11 @@ public class LibraryController {
     }
 
     @GetMapping
-    public Result<List<KbLibraryVO>> list(@RequestParam(required = false) Long categoryId) {
-        return Result.ok(libraryService.list(categoryId));
+    public Result<List<KbLibraryVO>> list(
+            @RequestParam(required = false) Long categoryId,
+            @RequestParam(required = false) String scope) {
+        // scope=manageable|visible 数据面收敛；缺省 / 空 / 非法 = 现状全量兼容（见 KbLibraryService.list）
+        return Result.ok(libraryService.list(currentUserId(), categoryId, scope));
     }
 
     @GetMapping("/{id}")
@@ -104,7 +107,7 @@ public class LibraryController {
     @PutMapping("/{id}/engine/settings")
     public Result<RagSettings> updateEngineSettings(
             @PathVariable Long id, @RequestBody RagSettings settings) {
-        return Result.ok(ragSettingsService.save(id, settings));
+        return Result.ok(ragSettingsService.save(currentUserId(), id, settings));
     }
 
     /**
@@ -175,12 +178,12 @@ public class LibraryController {
                 : new KbLibraryCreateRequest(
                         request.categoryId(), request.name(), request.secrecy(),
                         currentUserId(), request.settings());
-        return Result.ok(libraryService.create(effective));
+        return Result.ok(libraryService.create(currentUserId(), effective));
     }
 
     @PutMapping("/{id}")
     public Result<KbLibraryVO> update(@PathVariable Long id, @Valid @RequestBody KbLibraryUpdateRequest request) {
-        return Result.ok(libraryService.update(id, request));
+        return Result.ok(libraryService.update(currentUserId(), id, request));
     }
 
     /**
@@ -206,7 +209,7 @@ public class LibraryController {
             throw new BusinessException(
                     ResultCode.VALIDATION_ERROR, "删除模式非法（应为 archive/physical）：" + mode);
         }
-        return Result.ok(libraryService.delete(id, parsed));
+        return Result.ok(libraryService.delete(currentUserId(), id, parsed));
     }
 
     /**

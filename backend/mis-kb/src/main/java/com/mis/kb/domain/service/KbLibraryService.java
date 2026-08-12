@@ -35,9 +35,12 @@ import org.springframework.util.StringUtils;
 
 import java.time.Instant;
 import java.time.LocalDate;
+import java.util.Comparator;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 
 /** 知识库服务（L-01~08）。 */
 @Service
@@ -60,6 +63,7 @@ public class KbLibraryService {
     private final KnowledgeEnginePort enginePort;
     private final RagflowProperties engineProperties;
     private final NodeAdminResolver nodeAdminResolver;
+    private final KbVisibilityService visibilityService;
 
     public KbLibraryService(
             KbLibraryRepository libraryRepository,
@@ -68,7 +72,8 @@ public class KbLibraryService {
             KbCategoryRepository categoryRepository,
             KnowledgeEnginePort enginePort,
             RagflowProperties engineProperties,
-            NodeAdminResolver nodeAdminResolver) {
+            NodeAdminResolver nodeAdminResolver,
+            KbVisibilityService visibilityService) {
         this.libraryRepository = libraryRepository;
         this.documentRepository = documentRepository;
         this.aclRepository = aclRepository;
@@ -76,6 +81,7 @@ public class KbLibraryService {
         this.enginePort = enginePort;
         this.engineProperties = engineProperties;
         this.nodeAdminResolver = nodeAdminResolver;
+        this.visibilityService = visibilityService;
     }
 
     /**
@@ -88,11 +94,41 @@ public class KbLibraryService {
         return nodeAdminResolver.hasLibraryManage(userId, libraryId);
     }
 
+    /**
+     * 知识库列表（L-01~08；权限模型改造新增 scope 数据面收敛）。
+     *
+     * <p><b>scope 语义（两端字面量统一，缺省 / 空 / 非法 = 现状全量兼容，零回归）：</b>
+     * <ul>
+     *   <li>{@code manageable}：取 {@code nodeAdminResolver.resolveManageableLibraryIds(userId)}
+     *       与全量库的交集（可叠加 {@code categoryId} 再收敛）；{@code userId == null} 返回空集（安全侧收紧）；</li>
+     *   <li>{@code visible}：取 {@code visibilityService.resolveVisibleLibraryIds} 口径交集
+     *       （public∧enabled ∪ ACL read − disabled，与检索可见性完全一致）；</li>
+     *   <li>其余（含不带 scope）：现状行为（{@code categoryId != null ? findByCategoryIdOrderByNameAsc : findAll}）。</li>
+     * </ul>
+     */
     @Transactional(readOnly = true)
-    public List<KbLibraryVO> list(Long categoryId) {
-        List<KbLibrary> entities = categoryId != null
-                ? libraryRepository.findByCategoryIdOrderByNameAsc(categoryId)
-                : libraryRepository.findAll();
+    public List<KbLibraryVO> list(Long userId, Long categoryId, String scope) {
+        List<KbLibrary> entities;
+        if ("manageable".equalsIgnoreCase(scope)) {
+            Set<Long> manageableIds = nodeAdminResolver.resolveManageableLibraryIds(userId);
+            entities = libraryRepository.findAll().stream()
+                    .filter(lib -> manageableIds.contains(lib.getId()))
+                    .filter(lib -> categoryId == null || categoryId.equals(lib.getCategoryId()))
+                    .sorted(Comparator.comparing(KbLibrary::getName))
+                    .toList();
+        } else if ("visible".equalsIgnoreCase(scope)) {
+            // tenantId 为预留参数（P0 单租户），沿用 resolveVisibleLibraryIds 现有语义
+            Set<Long> visibleIds = new HashSet<>(visibilityService.resolveVisibleLibraryIds(userId, null));
+            entities = libraryRepository.findAll().stream()
+                    .filter(lib -> visibleIds.contains(lib.getId()))
+                    .filter(lib -> categoryId == null || categoryId.equals(lib.getCategoryId()))
+                    .sorted(Comparator.comparing(KbLibrary::getName))
+                    .toList();
+        } else {
+            entities = categoryId != null
+                    ? libraryRepository.findByCategoryIdOrderByNameAsc(categoryId)
+                    : libraryRepository.findAll();
+        }
         return entities.stream().map(this::toVo).toList();
     }
 
@@ -131,7 +167,9 @@ public class KbLibraryService {
      * 该 ID 丢弃即可。
      */
     @Transactional
-    public KbLibraryVO create(KbLibraryCreateRequest req) {
+    public KbLibraryVO create(Long userId, KbLibraryCreateRequest req) {
+        // KBP-01：消除「非管辖分类下建库」根因——首行管辖断言（统一走 NodeAdminResolver）
+        nodeAdminResolver.assertNodeManage(userId, req.categoryId());
         if (!Secrecy.isValid(req.secrecy())) {
             throw new BusinessException(ResultCode.VALIDATION_ERROR, "密级非法（应为 public/internal/secret/confidential）");
         }
@@ -175,8 +213,13 @@ public class KbLibraryService {
      * 诱导用户反复重试。
      */
     @Transactional
-    public KbLibraryVO update(Long id, KbLibraryUpdateRequest req) {
+    public KbLibraryVO update(Long userId, Long id, KbLibraryUpdateRequest req) {
         KbLibrary entity = require(id);
+        // KBP-06：库级管理双闸门（节点管辖 ∨ kb_acl.manage），统一走 NodeAdminResolver
+        if (!nodeAdminResolver.hasLibraryManage(userId, id)) {
+            throw new KbBusinessException(KbResultCode.KB_CATEGORY_NOT_MANAGEABLE,
+                    "该知识库不在您的管理范围内");
+        }
         // 【P1-T2 取消归档回滚】先快照「是否处于归档态」再改本地状态：
         // 归档判定 = status=0 且 archived_at 非空（见 KbLibrary#isArchived）。
         // 必须在 setStatus 之前抓，否则下方条件永远不成立。
@@ -255,14 +298,20 @@ public class KbLibraryService {
      *
      * <p>「停用」不在这里——沿用既有 {@code PUT /libraries/{id}} + {@code status=0}。
      *
-     * @param id   知识库 id
-     * @param mode 删除模式；{@code null} 视为归档
+     * @param userId 当前用户 id
+     * @param id     知识库 id
+     * @param mode   删除模式；{@code null} 视为归档
      * @return 回执，如实描述引擎侧与本地各做了什么
      */
     @Transactional
-    public KbLibraryDeleteResultVO delete(Long id, LibraryDeleteMode mode) {
+    public KbLibraryDeleteResultVO delete(Long userId, Long id, LibraryDeleteMode mode) {
         LibraryDeleteMode effective = mode == null ? LibraryDeleteMode.ARCHIVE : mode;
         KbLibrary entity = require(id);
+        // KBP-06：库级管理双闸门（节点管辖 ∨ kb_acl.manage）——归档 / 物理删共用一道闸
+        if (!nodeAdminResolver.hasLibraryManage(userId, id)) {
+            throw new KbBusinessException(KbResultCode.KB_CATEGORY_NOT_MANAGEABLE,
+                    "该知识库不在您的管理范围内");
+        }
         return switch (effective) {
             case ARCHIVE -> archive(entity);
             case PHYSICAL -> physicalDelete(entity);

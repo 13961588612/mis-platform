@@ -37,6 +37,7 @@ import com.mis.adminbff.dto.kb.KbRaptorBuildResultVO;
 import com.mis.adminbff.dto.kb.KbRaptorStatusVO;
 import com.mis.adminbff.dto.kb.KbReparseAllResultVO;
 import com.mis.adminbff.dto.kb.KbSubjectVO;
+import com.mis.adminbff.dto.kb.LegacyAclInventoryVO;
 import com.mis.adminbff.security.UserPermissionLoader;
 import com.mis.adminbff.service.KbFacadeService;
 import com.mis.adminbff.support.RequestContext;
@@ -104,6 +105,13 @@ public class KbController {
      * 取值必须与既有 {@code sys_menu(id=91056).permission} 字面量保持一致。
      */
     private static final String PERM_LIBRARY_ENGINE_REF_VIEW = "kb:library:engine-ref:view";
+
+    /**
+     * ACL 撤销权限码（KBP-10 存量只读清单的 BFF 侧兜底判权）。
+     * 取值必须与 V14 写入 {@code sys_menu(id=91050).permission} 的字面量保持一致；
+     * mis-kb 侧另有 {@code isGlobalAdmin} 二次裁定（双闸门）。
+     */
+    private static final String PERM_ACL_REVOKE = "kb:acl:revoke";
 
     private final KbFacadeService kbFacadeService;
     private final UserPermissionLoader userPermissionLoader;
@@ -194,8 +202,10 @@ public class KbController {
     // ------------------------------------------------------------------ 知识库
 
     @GetMapping("/libraries")
-    public Result<List<KbLibraryVO>> listLibraries(@RequestParam(required = false) Long categoryId) {
-        return Result.ok(kbFacadeService.listLibraries(categoryId));
+    public Result<List<KbLibraryVO>> listLibraries(
+            @RequestParam(required = false) Long categoryId,
+            @RequestParam(required = false) String scope) {
+        return Result.ok(kbFacadeService.listLibraries(categoryId, scope));
     }
 
     @GetMapping("/libraries/{id}")
@@ -437,6 +447,27 @@ public class KbController {
     public Result<Void> revokeAcl(@PathVariable Long id) {
         kbFacadeService.revokeAcl(id, KbAuditBefore.minimal(id));
         return Result.ok();
+    }
+
+    /**
+     * KBP-10 存量 manage/acl 授权清单（运营清理依据，只读不清理）。
+     *
+     * <p><b>权限双闸门：</b>① BFF 侧 {@code kb:acl:revoke} 兜底判权（{@link #requirePermission}，
+     * 与 {@code ApiPermissionInterceptor} + 注册表的主路径互补，覆盖注册表空窗期）；
+     * ② mis-kb 侧 {@code isGlobalAdmin}（非全局管理员 40311，防普通分类管理员看到全平台授权数据）。
+     *
+     * @param libraryId   按库维度过滤；缺省 = 不限制
+     * @param subjectType 按主体类型过滤；缺省 = 不限制
+     * @param subjectId   按主体 id 过滤；缺省 = 不限制
+     * @return 存量 manage/acl 授权清单（subjectName 已由门面回填）
+     */
+    @GetMapping("/acls/inventory")
+    public Result<List<LegacyAclInventoryVO>> listLegacyAclInventory(
+            @RequestParam(required = false) Long libraryId,
+            @RequestParam(required = false) String subjectType,
+            @RequestParam(required = false) Long subjectId) {
+        requirePermission(PERM_ACL_REVOKE);
+        return Result.ok(kbFacadeService.listLegacyAclInventory(libraryId, subjectType, subjectId));
     }
 
     // ------------------------------------------------------------------ 问答历史 / 反馈

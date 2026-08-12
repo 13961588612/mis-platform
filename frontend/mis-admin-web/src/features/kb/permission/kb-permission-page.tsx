@@ -52,6 +52,11 @@ const selectClass =
  * `read|write|admin`，选「读写」「管理」提交必被 mis-kb 拒绝——一个纯前端造出来的死路。
  *
  * <p>I-03：主体不再手填 ID，改用 {@link KbSubjectSelector} 选人 / 选角色 / 选部门树。
+ *
+ * <p><b>KBP-09（权限模型改造）：</b>新增授权<b>仅支持只读（read）</b>——管理权限随
+ * 分类管辖自动获得，不再提供 kb_acl.manage/acl 新增入口；存量 manage/acl 行
+ * 零迁移兼容生效（表内标记「存量」），仍可撤销。页面组合框只列<b>我可管理</b>的库
+ * （{@code scope=manageable}，服务端数据面收敛），保证「能看就能授权」。
  */
 export function KbPermissionPage() {
   const [libraryId, setLibraryId] = useState<number | null>(null);
@@ -164,9 +169,9 @@ export function KbPermissionPage() {
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <PageHeader
-        title="知识库权限"
-        description="按用户 / 角色 / 部门授予知识库访问权；服务端据此裁定检索可见范围。"
-        breadcrumbs={buildAppBreadcrumbs({ app: 'kb', title: '权限' })}
+        title="搜索权限"
+        description="按用户 / 角色 / 部门授予只读（read）权限，控制谁能搜索到该库数据；管理权限随分类管辖自动获得。"
+        breadcrumbs={buildAppBreadcrumbs({ app: 'kb', title: '搜索权限' })}
         actions={
           <div className="flex items-center gap-2">
             <Button
@@ -207,6 +212,7 @@ export function KbPermissionPage() {
             onLoaded={setOptions}
             allowClear
             activePath="/kb/permissions"
+            scope="manageable"
           />
         </div>
       </div>
@@ -319,7 +325,17 @@ export function KbPermissionPage() {
                 >
                   <td className="px-3 py-2">{subjectTypeLabel(acl.subjectType)}</td>
                   <td className="px-3 py-2 font-mono text-xs">{acl.subjectId}</td>
-                  <td className="px-3 py-2">{aclActionLabel(acl.action)}</td>
+                  <td className="px-3 py-2">
+                    <span className="inline-flex items-center gap-1.5">
+                      {aclActionLabel(acl.action)}
+                      {/* KBP-09：存量 manage/acl 零迁移行标记——历史授权兼容生效，但不再提供新增入口 */}
+                      {acl.action === 'manage' || acl.action === 'acl' ? (
+                        <Badge variant="secondary" title="历史存量授权，兼容生效，仅可撤销；新增授权只支持只读">
+                          存量授权（兼容生效）
+                        </Badge>
+                      ) : null}
+                    </span>
+                  </td>
                   <td className="px-3 py-2 text-xs text-muted-foreground">
                     {formatTime(acl.createdAt)}
                   </td>
@@ -362,19 +378,22 @@ export function KbPermissionPage() {
             </div>
             <div className={SHEET_FORM_FIELD}>
               <label className={fieldLabel}>权限 *</label>
+              {/* KBP-09：新增授权仅支持只读（read）——管理权限随分类管辖自动获得，
+                  存量 manage/acl 行仍在列表可见可撤销，但不再提供新增入口 */}
               <select
                 className={selectClass}
                 value={action}
-                onChange={(e) => setAction(e.target.value)}
+                disabled
+                title="权限模型改造后新增授权仅支持只读（read）"
               >
-                {KB_ACL_ACTION_OPTIONS.map((o) => (
+                {KB_ACL_ACTION_OPTIONS.filter((o) => o.value === 'read').map((o) => (
                   <option key={o.value} value={o.value}>
                     {o.label}
                   </option>
                 ))}
               </select>
               <p className="mt-1 text-xs text-muted-foreground">
-                检索可见性仅取决于 read；manage 用于文档与配置的写操作，acl 可再授权他人。
+                管理权限随分类管辖自动获得，新增授权仅支持只读；存量 manage/acl 授权零迁移兼容生效，可在列表中撤销。
               </p>
             </div>
           </div>
