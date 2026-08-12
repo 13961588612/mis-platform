@@ -36,8 +36,9 @@ import static org.mockito.Mockito.mock;
  *
  * <p>覆盖三件事：
  * <ol>
- *   <li>{@code capabilities()} 的 {@code deleteSupported} 严格随配置走，false 时
- *       {@code capabilities} 数组不含 {@code "delete"}（前端物理删除按钮的唯一依据）；</li>
+ *   <li>{@code capabilities()} 的 {@code deleteSupported} 严格随配置走；默认 {@code true}
+ *       （2026-08-12 用户拍板：开箱即物理删），显式置 {@code false} 时 {@code capabilities}
+ *       数组不含 {@code "delete"}（前端物理删除按钮的唯一依据）；</li>
  *   <li>{@code listLibraries()} 的分页终止条件——不足一页即停、触顶 max-pages 即停。
  *       这两条终止条件若写错，对账任务要么少拉数据、要么在引擎侧 dataset 巨多时死循环
  *       把定时线程占死；</li>
@@ -160,10 +161,28 @@ class RagflowAdapterEngineOpsTest {
     class Capabilities {
 
         @Test
-        @DisplayName("delete-supported=false（当前生产默认）→ deleteSupported=false 且数组不含 delete")
-        void shouldReportDeleteUnsupportedByDefault() {
+        @DisplayName("delete-supported 默认 true（2026-08-12 用户拍板：开箱即物理删）→ deleteSupported=true 且数组含 delete")
+        void shouldReportDeleteSupportedByDefault() {
             RagflowProperties props = props();
-            assertFalse(props.isDeleteSupported(), "默认必须是 false，翻默认值等于放开物理删除");
+            assertTrue(props.isDeleteSupported(),
+                    "2026-08-12 用户拍板：默认 true（开箱即物理删），配置键 mis.kb.engine.delete-supported 保留供部署关回 false");
+
+            EngineCapabilities caps = adapter(props).capabilities();
+
+            assertTrue(caps.deleteSupported());
+            assertTrue(caps.capabilities().contains(EngineCapabilities.CAP_DELETE));
+            // 其余能力位不受影响
+            assertTrue(caps.hybridSupported());
+            assertTrue(caps.metadataFilterSupported());
+            assertTrue(caps.replaceSupported());
+            assertFalse(caps.rerankSupported(), "未配 rerank 模型时 rerank 也应为 false");
+        }
+
+        @Test
+        @DisplayName("delete-supported=false（部署关回）→ deleteSupported=false 且数组不含 delete（40934 拦截由 KbLibraryServiceDeleteTest 覆盖）")
+        void shouldReportDeleteUnsupportedWhenDisabled() {
+            RagflowProperties props = props();
+            props.setDeleteSupported(false);
 
             EngineCapabilities caps = adapter(props).capabilities();
 

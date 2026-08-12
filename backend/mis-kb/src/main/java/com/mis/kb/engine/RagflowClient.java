@@ -20,6 +20,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.core.ParameterizedTypeReference;
 import org.springframework.core.io.ByteArrayResource;
+import org.springframework.http.HttpMethod;
 import org.springframework.http.MediaType;
 import org.springframework.http.client.MultipartBodyBuilder;
 import org.springframework.web.client.RestClient;
@@ -245,24 +246,31 @@ public class RagflowClient {
     }
 
     /**
-     * 删除 dataset。
+     * 删除 dataset（官方批量接口，增量 P0 / T01）。
      *
-     * <p><b>DELETE 405 显式失败修复（2026-08-12，实测 10.254.16.6:9380）：</b>
-     * 该实例 {@code DELETE /api/v1/datasets/{id}} 返回 405 MethodNotAllowed——
-     * RAGFlow 这个版本<b>根本不提供</b> dataset 物理删除。旧实现用
-     * {@code toBodilessEntity()} 吞掉错误体，405 被当成「成功」返回，
-     * 删除知识库在引擎侧<b>从未发生</b>却毫无告警（静默假成功）。
+     * <p><b>改用 RAGFlow 官方批量接口（2026-08-12，实测 10.254.16.6:9380）：</b>
+     * {@code DELETE /api/v1/datasets} + JSON body {@code {"ids":[datasetId]}}。
+     * 旧实现走 {@code DELETE /api/v1/datasets/{id}} 单 id 路径，该实例返回
+     * <b>405 MethodNotAllowed</b>——这正是知识库物理删除长期失效的根因（单 id 路径不被支持）。
+     * 现改用官方批量接口，路径不带 {@code /{id}}，datasetId 放进 body 的 {@code ids} 数组。
      *
-     * <p>本方法改为<b>显式失败</b>：非 2xx 一律抛 {@link BusinessException}，
-     * 由调用方（{@code KbLibraryService.delete}）感知并记录 WARN。不做「PUT enabled=0
-     * 停用」冒充删除——停用语义已被 {@link #updateDocumentEnabled} 占用（B1），
-     * 且停用 ≠ 删除（文档/chunks 保留），语义必须区分。
+     * <p><b>幂等重试：</b>若 dataset 已不存在（HTTP 404 / 已被并发删除），视作成功——
+     * 物理删除是「尽力删引擎侧资源」，资源已不在不等于失败，避免重试时把 404 当成硬错误卡死。
+     *
+     * <p><b>显式失败：</b>非 2xx 且非 404（含 405）一律抛 {@link BusinessException}，
+     * 由调用方感知并回滚本地事务（保留历史「静默假成功」的修复）。不做「PUT enabled=0
+     * 停用」冒充删除——停用语义已被 {@link #updateDocumentEnabled} 占用（B1），且停用 ≠ 删除。
      *
      * @param datasetId 原生 dataset id
-     * @throws BusinessException RAGFlow 返回非 2xx（含 405）时抛出，不再静默
+     * @throws BusinessException RAGFlow 返回非 2xx 且非 404 时抛出
      */
     public void deleteDataset(String datasetId) {
-        deleteFor("/api/v1/datasets/" + datasetId, "RAGFlow 删除知识库失败");
+        if (datasetId == null || datasetId.isBlank()) {
+            throw new BusinessException(50000, "RAGFlow 删除知识库失败: datasetId 为空");
+        }
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("ids", List.of(datasetId));
+        deleteWithJsonBody("/api/v1/datasets", body, "RAGFlow 删除知识库失败", 404);
     }
 
     /**
@@ -545,23 +553,37 @@ public class RagflowClient {
     /**
      * 删除文档。
      *
-     * <p><b>DELETE 405 显式失败修复（同 {@link #deleteDataset}）：</b>该实例
-     * {@code DELETE /api/v1/datasets/{id}/documents/{docId}} 返回 405，物理删除
-     * 不可用。旧实现 {@code toBodilessEntity()} 吞错误体 → 静默假成功。现改为
-     * 非 2xx 抛 {@link BusinessException}，由调用方（{@code KbDocumentService.delete}）
-     * 感知并记录 WARN。「停用」请用 {@link #updateDocumentEnabled}（B1 真实启停，
-     * 不删除、可恢复），不要把停用实现成删除。
+     * <p>官方 HTTP API：{@code DELETE /api/v1/datasets/{dataset_id}/documents}，
+     * JSON body {@code {"ids":["docId"]}}。路径式
+     * {@code DELETE .../documents/{docId}} 在本实例返回 <b>405</b>，旧实现还曾
+     * {@code catch} 后继续删本地 → MIS 无文档、RAGFlow 仍在。
+     *
+     * <p>必须带非空 {@code ids} 且 {@code Content-Type: application/json}——部分版本
+     * 无 body / 空 ids 会被当成删库内全部文档。
+     *
+     * <p>「停用」请用 {@link #updateDocumentEnabled}，不要把停用实现成删除。
      *
      * @param datasetId 原生 dataset id
      * @param docId     原生文档 id
-     * @throws BusinessException RAGFlow 返回非 2xx（含 405）时抛出，不再静默
+     * @throws BusinessException 参数非法、HTTP 非 2xx，或 RAGFlow {@code code != 0}
      */
     public void deleteDocument(String datasetId, String docId) {
-        deleteFor("/api/v1/datasets/" + datasetId + "/documents/" + docId, "RAGFlow 删除文档失败");
+        if (datasetId == null || datasetId.isBlank()) {
+            throw new BusinessException(50000, "RAGFlow 删除文档失败: datasetId 为空");
+        }
+        if (docId == null || docId.isBlank()) {
+            throw new BusinessException(50000, "RAGFlow 删除文档失败: docId 为空");
+        }
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("ids", List.of(docId));
+        deleteWithJsonBody(
+                "/api/v1/datasets/" + datasetId + "/documents",
+                body,
+                "RAGFlow 删除文档失败");
     }
 
     /**
-     * DELETE 统一出口：非 2xx（含 405）抛 {@link BusinessException}，不再静默。
+     * DELETE 统一出口（无 body）：非 2xx（含 405）抛 {@link BusinessException}，不再静默。
      *
      * <p>两层防护：
      * <ol>
@@ -589,6 +611,47 @@ public class RagflowClient {
         } catch (RestClientResponseException ex) {
             throw new BusinessException(50000, failurePrefix + ": HTTP "
                     + ex.getStatusCode().value() + " " + ex.getMessage());
+        }
+    }
+
+    /**
+     * DELETE + JSON body（文档删除 / 知识库批量删除等官方形态）。
+     *
+     * <p>HTTP 非 2xx 或业务 {@code code != 0} 均抛 {@link BusinessException}。
+     *
+     * <p><b>幂等语义：</b>{@code extraAcceptedStatuses} 用于删除类接口——落入其中的状态码
+     * （如 404 表示资源已不在）视作删除成功、直接返回，不抛异常，便于重试。
+     *
+     * @param uri                  相对 baseUrl 的删除路径
+     * @param body                 请求体（JSON）
+     * @param failurePrefix        失败消息前缀（区分知识库/文档）
+     * @param extraAcceptedStatuses 视为「成功」的额外 HTTP 状态码（幂等场景）
+     */
+    private void deleteWithJsonBody(String uri, Object body, String failurePrefix, int... extraAcceptedStatuses) {
+        java.util.Set<Integer> accepted = extraAcceptedStatuses.length == 0
+                ? java.util.Set.of() : new java.util.HashSet<>();
+        for (int s : extraAcceptedStatuses) {
+            accepted.add(s);
+        }
+        try {
+            RfResponse<Object> resp = client.method(HttpMethod.DELETE)
+                    .uri(uri)
+                    .header("Authorization", bearer())
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .body(body)
+                    .retrieve()
+                    .body(new ParameterizedTypeReference<>() {});
+            if (resp == null || !resp.ok()) {
+                throw new BusinessException(50000,
+                        failurePrefix + ": " + (resp == null ? "无响应" : resp.message()));
+            }
+        } catch (RestClientResponseException ex) {
+            int status = ex.getStatusCode().value();
+            if (accepted.contains(status)) {
+                log.info("RAGFlow 删除遇 HTTP {}（视为已删除，幂等跳过）: {} body={}", status, uri, body);
+                return;
+            }
+            throw new BusinessException(50000, failurePrefix + ": HTTP " + status + " " + ex.getMessage());
         }
     }
 

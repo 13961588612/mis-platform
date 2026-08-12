@@ -1,0 +1,34 @@
+sequenceDiagram
+    autonumber
+    participant U as 调用方(BFF)
+    participant S as KbLibraryService
+    participant P as KnowledgeEnginePort(RagflowAdapter)
+    participant C as RagflowClient
+    participant E as RAGFlow 引擎
+    participant R as KbLibrary/KbDocument Repository
+
+    U->>S: delete(userId, id, PHYSICAL)  %% @Transactional
+    S->>S: require(id) + 管辖校验
+    S->>S: physicalDelete(entity)
+    alt delete-supported == false  (Q1 默认)
+        S-->>U: 抛 KB_ENGINE_DELETE_UNSUPPORTED(40934)，本地零变更
+    else delete-supported == true
+        S->>P: deleteLibrary(ref)
+        P->>C: deleteDataset(nativeId)
+        Note over C,E: T01 修正后 = DELETE /api/v1/datasets  body={"ids":[nativeId]}
+        C->>E: DELETE /api/v1/datasets  {"ids":[id]}
+        alt 引擎返回 2xx
+            E-->>C: 200 code:0  (dataset 真正删除)
+            C-->>P: ok
+            P-->>S: ok
+            S->>R: documentRepository.deleteByLibraryId(id)  %% 文档→授权→库
+            S->>R: aclRepository.deleteByLibraryId(id)
+            S->>R: libraryRepository.delete(entity)
+            S-->>U: KbLibraryDeleteResultVO(physical, 已彻底删除)
+        else 引擎返回非 2xx（含 405）/ 异常
+            E-->>C: 405/500
+            C-->>C: deleteWithJsonBody 抛 BusinessException  %% 显式失败护栏(不吞错)
+            P-->>S: 抛 KB_ENGINE_DELETE_FAILED(40935)
+            S-->>U: 抛异常 → @Transactional 回滚，本地三表零变更
+        end
+    end

@@ -67,6 +67,16 @@ public class KbLibrary {
     @Column(name = "archived_at")
     private Instant archivedAt;
 
+    /**
+     * 连续被标记 MISSING_IN_ENGINE 的起始时刻（T04 收敛判定用）。
+     *
+     * <p>对端删除后本地残留若长时间（默认 ≥2 个 30min 周期）持续 MISSING，
+     * 由收敛逻辑软删本地库（status=0 + archivedAt=now，可逆）或交人工
+     * {@code cleanup-missing} 端点处置。
+     */
+    @Column(name = "engine_missing_since")
+    private Instant engineMissingSince;
+
     @Column(name = "created_at", nullable = false)
     private Instant createdAt;
 
@@ -167,6 +177,14 @@ public class KbLibrary {
 
     public void setArchivedAt(Instant archivedAt) {
         this.archivedAt = archivedAt;
+    }
+
+    public Instant getEngineMissingSince() {
+        return engineMissingSince;
+    }
+
+    public void setEngineMissingSince(Instant engineMissingSince) {
+        this.engineMissingSince = engineMissingSince;
     }
 
     /**

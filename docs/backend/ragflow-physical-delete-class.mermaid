@@ -1,0 +1,141 @@
+classDiagram
+    %% ===== 引擎客户端层 =====
+    class RagflowClient {
+        -RestClient client
+        -String apiKey
+        +createDataset(name) String
+        +deleteDataset(datasetId) void   %% T01: 改 DELETE /api/v1/datasets + {"ids":[id]}
+        +deleteDocument(dsId, docId) void
+        +listDatasets(page, size) List~RfDataset~
+        +listDocuments(dsId, page, size) List~RfDocument~
+        -deleteFor(uri, prefix) void      %% 无 body，非2xx抛异常
+        -deleteWithJsonBody(uri, body, prefix) void  %% 有 body，非2xx抛异常(显式失败护栏)
+    }
+
+    class RagflowAdapter {
+        +deleteLibrary(ref) void          %% 调 client.deleteDataset
+        +deleteDocument(ref, docRef) void
+        +listLibraries() List~EngineLibraryBrief~
+        +listDocuments(ref) List~EngineDocumentBrief~  %% T03 新增
+    }
+
+    class KnowledgeEnginePort {
+        <<interface>>
+        +deleteLibrary(ref) void
+        +deleteDocument(ref, docRef) void
+        +listLibraries() List~EngineLibraryBrief~
+        +listDocuments(ref) List~EngineDocumentBrief~  %% T03 新增 default
+    }
+
+    %% ===== 领域实体（含 T03/T04 新增字段）=====
+    class KbLibrary {
+        +Long id
+        +String engineLibraryRef
+        +Integer engineSyncStatus   %% 0未知/1一致/2引擎缺失/3漂移
+        +Instant engineCheckedAt
+        +Instant engineMissingSince  %% T04 新增: 首次标记MISSING_IN_ENGINE时刻
+        +isArchived() boolean
+    }
+
+    class KbDocument {
+        +Long id
+        +Long libraryId
+        +String engineDocumentRef
+        +Integer engineSyncStatus    %% T03 新增: 复用EngineSyncStatus枚举
+        +Instant engineCheckedAt     %% T03 新增
+        +Instant engineMissingSince  %% T04 新增
+    }
+
+    class KbEngineOrphan {
+        +Long id
+        +String nativeId
+        +Integer resolved
+        +String resolvedAction
+    }
+
+    class EngineDocumentBrief {
+        <<DTO>>
+        +String id
+        +String name
+    }
+
+    %% ===== 领域服务 =====
+    class KbLibraryService {
+        -RagflowProperties engineProperties
+        +delete(userId, id, mode) KbLibraryDeleteResultVO  %% @Transactional
+        -archive(entity) KbLibraryDeleteResultVO
+        -physicalDelete(entity) KbLibraryDeleteResultVO   %% T02: 保留 delete-supported 闸门
+    }
+
+    class KbDocumentService {
+        +delete(id, userId) void       %% @Transactional, 引擎成功才动本地
+    }
+
+    class KbEngineReconcileService {
+        -RagflowProperties engineProperties
+        +scheduledReconcile() void     %% @Scheduled 30min + ShedLock
+        +reconcile() EngineReconcileReport
+        +reconcileDocuments() void     %% T03 新增: 文档级对账
+        -convergeMissing() void        %% T04 新增: 连续N次MISSING→收敛
+        -upsertOrphans(...) void
+    }
+
+    class KbEngineOrphanService {
+        +list(engineType, resolved) List
+        +resolve(...) KbEngineOrphanResolveResult
+    }
+
+    class EngineConfigController {
+        +runReconcile() Result~VO~          %% T03: 串接文档级对账
+        +reconcileReport() Result~VO~
+        +cleanupMissing() Result~VO~        %% T04 新增: 人工收敛端点
+    }
+
+    %% ===== 仓储 =====
+    class KbLibraryRepository
+    class KbDocumentRepository {
+        +findByLibraryIdOrderByCreatedAtDesc(libraryId) List
+        +findByLibraryIdAndEngineDocumentRefIsNotNull(libraryId) List  %% T03
+        +findByEngineSyncStatusAndEngineMissingSinceBefore(s, inst) List  %% T04
+        +deleteByLibraryId(libraryId) void
+    }
+    class KbEngineOrphanRepository
+
+    class EngineReconcileReport {
+        <<record>>
+        +Counts counts
+        +List~MissingInEngine~ missingInEngine
+        +List~DocumentMissingInEngine~ documentMissingInEngine  %% T03 新增
+    }
+
+    class RagflowProperties {
+        -boolean deleteSupported = false   %% Q1: 保持false, 部署配置放开
+        -Reconcile reconcile
+    }
+    class RagflowProperties.Reconcile {
+        -boolean enabled = true
+        -long intervalMs = 1800000
+        -int missingInEngineThreshold = 2   %% T04 新增
+        -boolean autoCleanMissing = false    %% T04 新增
+    }
+
+    %% ===== 关系 =====
+    RagflowAdapter ..|> KnowledgeEnginePort
+    RagflowAdapter --> RagflowClient
+    KbLibraryService --> KnowledgeEnginePort
+    KbDocumentService --> KnowledgeEnginePort
+    KbEngineReconcileService --> KnowledgeEnginePort
+    KbEngineReconcileService --> KbLibraryRepository
+    KbEngineReconcileService --> KbDocumentRepository
+    KbEngineReconcileService --> KbEngineOrphanRepository
+    KbEngineReconcileService --> EngineReconcileReport
+    KbEngineOrphanService --> KbEngineOrphanRepository
+    KbEngineOrphanService --> KbLibraryRepository
+    EngineConfigController --> KbEngineReconcileService
+    EngineConfigController --> KbEngineOrphanService
+    RagflowAdapter --> KbDocumentRepository
+    RagflowClient ..> EngineDocumentBrief : 返回
+    KbLibrary "1" --> "0..*" KbDocument : libraryId
+    EngineReconcileReport --> KbLibrary : 标记engineSyncStatus
+    EngineReconcileReport --> KbDocument : 标记engineSyncStatus(T03)
+    RagflowProperties <.. KbLibraryService : isDeleteSupported()

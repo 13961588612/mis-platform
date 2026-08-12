@@ -371,8 +371,9 @@ public class KbLibraryService {
      *
      * <p>两道闸门缺一不可：
      * <ol>
-     *   <li>{@code delete-supported=false}（当前部署的 RAGFLOW 版本删除接口不可用）
-     *       直接拒，<b>本地零变更</b>；</li>
+     *   <li>{@code delete-supported=false}（某环境部署的 RAGFLOW 版本删除接口仍不可用、
+     *       由 Nacos 关掉）直接拒，<b>本地零变更</b>；默认 {@code true}（增量 P0-T01 已放开
+     *       官方批量删除接口），业务侧正常走物理删除；</li>
      *   <li>引擎删除抛异常 → 抛 {@code KB_ENGINE_DELETE_FAILED} 让事务回滚。
      *       <b>绝不 catch 后继续</b>——那正是旧版「本地删干净、引擎侧留一堆孤儿 dataset」的成因。</li>
      * </ol>

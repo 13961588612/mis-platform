@@ -11,18 +11,20 @@ import java.util.List;
  * <p>与领域模型 {@link EngineReconcileReport} 一一对应，单独建 VO 是为了让传输契约
  * 独立于领域演进——对账算法以后要加桶，领域模型可以先改，VO 按需跟进。
  *
- * <p><b>权限提醒：</b>本 VO 含 {@code engineLibraryRef} / {@code nativeId} 两类引擎原生 id，
- * 只能经 {@code kb:engine:reconcile} 权限码保护的端点透出，BFF 侧 {@code POST} 还要挂
- * {@code @OperLog}。别把它塞进任何列表接口。
+ * <p><b>权限提醒：</b>本 VO 含 {@code engineLibraryRef} / {@code nativeId} /
+ * {@code engineDocumentRef} 三类引擎原生 id，只能经 {@code kb:engine:reconcile} 权限码保护的
+ * 端点透出，BFF 侧 {@code POST} 还要挂 {@code @OperLog}。别把它塞进任何列表接口。
  *
- * @param lastRunAt       最近一次对账时刻
- * @param skipped         是否跳过（当前引擎不支持对账）
- * @param skipReason      跳过原因
- * @param engineType      引擎类型
- * @param counts          差异计数
- * @param missingInEngine MIS 有 / 引擎无
- * @param orphans         引擎有 / MIS 无
- * @param nameDrift       名称漂移
+ * @param lastRunAt                 最近一次对账时刻
+ * @param skipped                   是否跳过（当前引擎不支持对账）
+ * @param skipReason                跳过原因
+ * @param engineType                引擎类型
+ * @param counts                    差异计数
+ * @param missingInEngine           MIS 有 / 引擎无
+ * @param orphans                   引擎有 / MIS 无
+ * @param nameDrift                 名称漂移
+ * @param documentMissingInEngine   文档级缺失数量（增量 P1 / T03）
+ * @param documentMissingDetails     文档级缺失明细（增量 P1 / T03）
  */
 public record KbEngineReconcileVO(
         Instant lastRunAt,
@@ -32,7 +34,9 @@ public record KbEngineReconcileVO(
         Counts counts,
         List<MissingItem> missingInEngine,
         List<OrphanItem> orphans,
-        List<DriftItem> nameDrift) {
+        List<DriftItem> nameDrift,
+        int documentMissingInEngine,
+        List<DocumentMissingItem> documentMissingDetails) {
 
     /**
      * 由领域报告转换。
@@ -43,7 +47,7 @@ public record KbEngineReconcileVO(
     public static KbEngineReconcileVO from(EngineReconcileReport report) {
         if (report == null) {
             return new KbEngineReconcileVO(null, false, null, null,
-                    new Counts(0, 0, 0, 0, 0, 0), List.of(), List.of(), List.of());
+                    new Counts(0, 0, 0, 0, 0, 0), List.of(), List.of(), List.of(), 0, List.of());
         }
         EngineReconcileReport.Counts c = report.counts();
         return new KbEngineReconcileVO(
@@ -61,6 +65,11 @@ public record KbEngineReconcileVO(
                         .toList(),
                 report.nameDrift().stream()
                         .map(d -> new DriftItem(d.libraryId(), d.name(), d.expectedName(), d.actualName()))
+                        .toList(),
+                report.documentMissingInEngine(),
+                report.documentMissingDetails().stream()
+                        .map(d -> new DocumentMissingItem(d.libraryId(), d.documentId(),
+                                d.name(), d.engineDocumentRef()))
                         .toList());
     }
 
@@ -72,6 +81,7 @@ public record KbEngineReconcileVO(
      * @param missingInEngine 引擎缺失
      * @param orphan          游离 dataset
      * @param nameDrift       名称漂移
+     * @param resolved        已处置游离项
      */
     public record Counts(
             int total,
@@ -118,5 +128,16 @@ public record KbEngineReconcileVO(
      * @param actualName   实际 dataset 名
      */
     public record DriftItem(Long libraryId, String name, String expectedName, String actualName) {
+    }
+
+    /**
+     * 文档级缺失明细项（增量 P1 / T03）。
+     *
+     * @param libraryId         MIS 库 ID
+     * @param documentId         MIS 文档 ID
+     * @param name              MIS 文档名
+     * @param engineDocumentRef 失效的引擎 document id
+     */
+    public record DocumentMissingItem(Long libraryId, Long documentId, String name, String engineDocumentRef) {
     }
 }

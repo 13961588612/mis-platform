@@ -141,7 +141,7 @@ public class KbEngineLegacyRenameService {
                     status = 1;
                     renamed++;
                     // 设计 T4：成功同时回写 lib.engine_sync_status=1（CONSISTENT），
-                    // 不能等下一轮对账（最长 30 分钟）才把刚改成功的库从「漂移」纠正过来。
+                    // 不能等下一轮对账（最长 5 分钟）才把刚改成功的库从「漂移」纠正过来。
                     self.writeSyncStatus(plan.libraryId(), EngineSyncStatus.CONSISTENT, now);
                 } catch (Exception e) {
                     action = KbEngineRenameAction.FAILED.code();

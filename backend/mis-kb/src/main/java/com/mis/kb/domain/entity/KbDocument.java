@@ -71,6 +71,24 @@ public class KbDocument {
     @Column(name = "parse_error")
     private String parseError;
 
+    /**
+     * 引擎同步状态（T04 文档级对账）：码值复用 {@link com.mis.kb.domain.model.EngineSyncStatus}
+     * （0 未知 / 1 一致 / 2 引擎缺失 / 3 名称漂移或同步失败）。
+     *
+     * <p>建文档默认 0；由文档级对账服务比对 {@code kb_document.engine_document_ref} 与
+     * 引擎 {@code listDocuments} 结果后写入。
+     */
+    @Column(name = "engine_sync_status", nullable = false)
+    private Integer engineSyncStatus = 0;
+
+    /** 最近一次与引擎对账的时刻（T04 文档级对账）。 */
+    @Column(name = "engine_checked_at")
+    private Instant engineCheckedAt;
+
+    /** 连续被标记 MISSING_IN_ENGINE 的起始时刻（T04 收敛判定用）。 */
+    @Column(name = "engine_missing_since")
+    private Instant engineMissingSince;
+
     @Column(name = "created_at", nullable = false)
     private Instant createdAt;
 
@@ -187,6 +205,30 @@ public class KbDocument {
 
     public void setParseError(String parseError) {
         this.parseError = parseError;
+    }
+
+    public Integer getEngineSyncStatus() {
+        return engineSyncStatus;
+    }
+
+    public void setEngineSyncStatus(Integer engineSyncStatus) {
+        this.engineSyncStatus = engineSyncStatus;
+    }
+
+    public Instant getEngineCheckedAt() {
+        return engineCheckedAt;
+    }
+
+    public void setEngineCheckedAt(Instant engineCheckedAt) {
+        this.engineCheckedAt = engineCheckedAt;
+    }
+
+    public Instant getEngineMissingSince() {
+        return engineMissingSince;
+    }
+
+    public void setEngineMissingSince(Instant engineMissingSince) {
+        this.engineMissingSince = engineMissingSince;
     }
 
     public Instant getCreatedAt() {

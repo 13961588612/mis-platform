@@ -195,13 +195,18 @@ public class KbDocumentService {
     public void delete(Long id, Long userId) {
         KbDocument entity = require(id);
         requireLibraryManage(entity.getLibraryId(), userId);
+        // 引擎侧删成功才动本地——绝不能 catch 后继续（否则 MIS 已删、RAGFlow 孤儿仍在）
         syncEngineDocument(entity, lib -> {
             try {
                 enginePort.deleteDocument(
                         new EngineLibraryRef(lib.getEngineType(), lib.getEngineLibraryRef()),
                         new EngineDocumentRef(lib.getEngineType(), entity.getEngineDocumentRef()));
             } catch (Exception e) {
-                log.warn("删除引擎文档失败 id={}: {}", entity.getId(), e.getMessage());
+                log.error("引擎侧删除文档失败，本地不做任何变更 id={} engineDocRef={}: {}",
+                        entity.getId(), entity.getEngineDocumentRef(), e.getMessage(), e);
+                throw new KbBusinessException(
+                        KbResultCode.KB_ENGINE_DELETE_FAILED,
+                        KbResultCode.KB_ENGINE_DELETE_FAILED.getMessage() + "：" + e.getMessage());
             }
         });
         documentRepository.delete(entity);

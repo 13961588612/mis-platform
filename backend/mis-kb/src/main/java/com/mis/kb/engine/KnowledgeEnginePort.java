@@ -5,6 +5,7 @@ import com.mis.kb.domain.model.CreateLibraryCmd;
 import com.mis.kb.domain.model.DocumentChunkConfig;
 import com.mis.kb.domain.model.DocumentUploadInput;
 import com.mis.kb.domain.model.EngineCapabilities;
+import com.mis.kb.domain.model.EngineDocumentBrief;
 import com.mis.kb.domain.model.EngineDocumentRef;
 import com.mis.kb.domain.model.EngineHealth;
 import com.mis.kb.domain.model.EngineLibraryBrief;
@@ -71,6 +72,19 @@ public interface KnowledgeEnginePort {
      * @return 引擎侧 dataset 摘要列表，恒非 {@code null}
      */
     default List<EngineLibraryBrief> listLibraries() {
+        return List.of();
+    }
+
+    /**
+     * 列举引擎侧某 dataset 下的全部文档摘要——文档级对账用（增量 P1 / T03）。
+     *
+     * <p><b>默认实现返回空列表</b>，noop/mock 引擎零改动（与 {@link #listLibraries()} 同口径）。
+     * 文档级对账入口同样只在 {@code type == ragflow} 时调用，故默认空列表不会污染本地数据。
+     *
+     * @param ref 知识库引擎引用（nativeId = dataset id）
+     * @return 文档摘要列表，恒非 {@code null}
+     */
+    default List<EngineDocumentBrief> listDocuments(EngineLibraryRef ref) {
         return List.of();
     }
 

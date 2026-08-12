@@ -8,6 +8,7 @@ import com.mis.kb.domain.model.CreateLibraryCmd;
 import com.mis.kb.domain.model.DocumentChunkConfig;
 import com.mis.kb.domain.model.DocumentUploadInput;
 import com.mis.kb.domain.model.EngineCapabilities;
+import com.mis.kb.domain.model.EngineDocumentBrief;
 import com.mis.kb.domain.model.EngineDocumentRef;
 import com.mis.kb.domain.model.EngineHealth;
 import com.mis.kb.domain.model.EngineLibraryBrief;
@@ -24,11 +25,13 @@ import com.mis.kb.domain.repository.KbDocumentRepository;
 import com.mis.kb.domain.repository.KbLibraryRepository;
 import com.mis.kb.engine.dto.RfChunk;
 import com.mis.kb.engine.dto.RfDataset;
+import com.mis.kb.engine.dto.RfDocument;
 import com.mis.kb.engine.dto.RfModel;
 import com.mis.kb.engine.dto.RfSearchChunk;
 import com.mis.kb.support.KbJson;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.util.StringUtils;
 import org.springframework.web.client.RestClient;
 
 import java.time.Instant;
@@ -292,6 +295,47 @@ public class RagflowAdapter implements KnowledgeEnginePort {
                 log.warn("列举引擎知识库触到 max-pages={} 上限（pageSize={}，已拉取 {} 条），"
                                 + "本轮对账结果可能不完整，请调大 mis.kb.engine.reconcile.max-pages",
                         maxPages, pageSize, result.size());
+            }
+        }
+        return result;
+    }
+
+    /**
+     * 列举引擎侧某 dataset 下的全部文档（T03：文档级对账用）。
+     *
+     * <p>循环翻页直到「返回不足一页」或「触到 {@code reconcile.max-pages} 上限」，与
+     * {@link #listLibraries()} 同口径；触顶记 WARN 返回已拉到的部分。单库文档数通常不大，
+     * 此处的分页主要为防御「某库挂了几万文档」的极端情况。
+     *
+     * @param ref 知识库引擎引用（nativeId = dataset id）
+     * @return 文档摘要列表，恒非 {@code null}
+     */
+    @Override
+    public List<EngineDocumentBrief> listDocuments(EngineLibraryRef ref) {
+        if (ref == null || ref.nativeId() == null || ref.nativeId().isBlank()) {
+            return List.of();
+        }
+        int pageSize = props.getReconcile().effectivePageSize();
+        int maxPages = props.getReconcile().effectiveMaxPages();
+        List<EngineDocumentBrief> result = new ArrayList<>();
+        for (int page = 1; page <= maxPages; page++) {
+            List<RfDocument> batch;
+            try {
+                batch = client.listDocuments(ref.nativeId(), page, pageSize);
+            } catch (Exception e) {
+                log.warn("列举引擎文档失败 datasetId={}：{}", ref.nativeId(), e.getMessage());
+                break;
+            }
+            if (batch == null || batch.isEmpty()) {
+                break;
+            }
+            for (RfDocument d : batch) {
+                if (d != null && StringUtils.hasText(d.id())) {
+                    result.add(new EngineDocumentBrief(d.id(), d.name()));
+                }
+            }
+            if (batch.size() < pageSize) {
+                return result;
             }
         }
         return result;

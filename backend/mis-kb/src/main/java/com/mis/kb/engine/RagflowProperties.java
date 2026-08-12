@@ -38,14 +38,16 @@ public class RagflowProperties {
     /**
      * 当前引擎版本是否支持在线删除知识库（dataset）。
      *
-     * <p><b>写死配置，不做启动探测</b>（Q5 裁定）。默认 {@code false}：
-     * 当前部署的 RAGFLOW 版本删除接口不可用，{@code DELETE ?mode=physical} 一律被拒
-     * （{@code KB_ENGINE_DELETE_UNSUPPORTED}），业务侧只能走归档。
-     * 等 RAGFLOW 升级（P2）后把这里翻成 {@code true} 即可放开，代码分支无需改动。
+     * <p><b>写死配置，不做启动探测</b>（Q5 裁定）。默认 {@code true}（删即默认放行）：
+     * 线上 RAGFLOW 已升级到支持官方批量删除接口
+     * {@code DELETE /api/v1/datasets} + {@code {"ids":[...]}}（增量 P0-T01），故默认放开。
+     * 仍保留配置开关——若某环境部署的 RAGFLOW 版本删除接口仍不可用，在 Nacos 把
+     * {@code mis.kb.engine.delete-supported} 翻成 {@code false} 即恢复「物理删除被拒
+     * （40934）、只能归档」的降级行为，代码分支无需改动。
      *
      * <p>该值同时决定 {@code capabilities().deleteSupported} 与能力码 {@code "delete"}。
      */
-    private boolean deleteSupported = false;
+    private boolean deleteSupported = true;
 
     /**
      * 可开启知识图谱的库数上限（Wave B GraphRAG PoC，U7 裁定进配置）。
@@ -174,8 +176,8 @@ public class RagflowProperties {
         /** 定时对账总开关（热调）。 */
         private boolean enabled = true;
 
-        /** 定时对账间隔，毫秒。默认 30 分钟。 */
-        private long intervalMs = 1_800_000L;
+        /** 定时对账间隔，毫秒。默认 5 分钟。 */
+        private long intervalMs = 300_000L;
 
         /** {@code listDatasets} 分页大小。 */
         private int pageSize = 100;
@@ -188,6 +190,12 @@ public class RagflowProperties {
 
         /** ShedLock 最短持锁时长（防同一窗口内多实例连续抢跑）。 */
         private String lockAtLeastFor = "PT30S";
+
+        /** 连续被标记 MISSING_IN_ENGINE 达到此次数（按 {@code interval-ms} 计）后允许收敛清理。默认 2。 */
+        private int missingInEngineThreshold = 2;
+
+        /** 定时对账是否自动收敛清理 MISSING_IN_ENGINE 残留（库软删 + 孤儿文档物理删）。默认 false（仅手动端点清理）。 */
+        private boolean autoCleanMissing = false;
 
         public boolean isEnabled() {
             return enabled;
@@ -235,6 +243,24 @@ public class RagflowProperties {
 
         public void setLockAtLeastFor(String lockAtLeastFor) {
             this.lockAtLeastFor = lockAtLeastFor;
+        }
+
+        /** 连续被标记 MISSING_IN_ENGINE 达到此次数后允许收敛清理。 */
+        public int getMissingInEngineThreshold() {
+            return missingInEngineThreshold;
+        }
+
+        public void setMissingInEngineThreshold(int missingInEngineThreshold) {
+            this.missingInEngineThreshold = missingInEngineThreshold;
+        }
+
+        /** 定时对账是否自动收敛清理 MISSING_IN_ENGINE 残留。 */
+        public boolean isAutoCleanMissing() {
+            return autoCleanMissing;
+        }
+
+        public void setAutoCleanMissing(boolean autoCleanMissing) {
+            this.autoCleanMissing = autoCleanMissing;
         }
 
         /**

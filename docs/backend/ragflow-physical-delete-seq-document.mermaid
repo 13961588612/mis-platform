@@ -1,0 +1,33 @@
+sequenceDiagram
+    autonumber
+    participant U as 调用方(BFF)
+    participant DS as KbDocumentService
+    participant P as KnowledgeEnginePort
+    participant C as RagflowClient
+    participant E as RAGFlow 引擎
+    participant R as KbDocumentRepository
+
+    U->>DS: delete(docId, userId)  %% @Transactional
+    DS->>DS: require + 管辖校验 + syncEngineDocument
+    DS->>P: deleteDocument(ref, docRef)
+    P->>C: deleteDocument(dsId, docId)
+    Note over C,E: DELETE /api/v1/datasets/{ds}/documents  body={"ids":[docId]}  (URL 不变)
+    C->>E: 发请求
+    alt 2xx
+        E-->>C: 文档真正删除
+        DS->>R: documentRepository.delete(entity)  %% 引擎成功才动本地
+    else 非2xx
+        C-->>DS: 抛 BusinessException → DS 抛 KB_ENGINE_DELETE_FAILED → 回滚，本地零变更
+    end
+
+    Note over DS,E: 文档级对账（T03，由 30min 定时/手动端点触发，不在删除链路上）
+    participant RC as KbEngineReconcileService
+    RC->>R: findAll() 取 engineLibraryRef 非空库
+    loop 每个库
+        RC->>P: listDocuments(ref)  %% T03 新增
+        P->>E: GET /api/v1/datasets/{ds}/documents?page=
+        E-->>P: 引擎侧 doc id 集合
+        RC->>R: findByLibraryIdAndEngineDocumentRefIsNotNull(libId)
+        RC->>RC: 比对：本地有 / 引擎无 → 标 MISSING_IN_ENGINE
+        RC->>R: saveAll(标记 engineSyncStatus=2 的文档)
+    end

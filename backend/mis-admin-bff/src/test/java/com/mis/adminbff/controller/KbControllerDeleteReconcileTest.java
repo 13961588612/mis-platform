@@ -107,7 +107,7 @@ class KbControllerDeleteReconcileTest {
         KbEngineReconcileVO expected = new KbEngineReconcileVO(
                 Instant.now(), Boolean.FALSE, null, "ragflow",
                 new KbEngineReconcileVO.Counts(1, 1, 0, 0, 0, 0),
-                List.of(), List.of(), List.of());
+                List.of(), List.of(), List.of(), 0, List.of());
         when(kbFacadeService.engineReconcileReport()).thenReturn(expected);
 
         Result<KbEngineReconcileVO> result = controller.engineReconcileReport();
@@ -122,7 +122,7 @@ class KbControllerDeleteReconcileTest {
         KbEngineReconcileVO expected = new KbEngineReconcileVO(
                 Instant.now(), Boolean.FALSE, null, "ragflow",
                 new KbEngineReconcileVO.Counts(1, 1, 0, 0, 0, 0),
-                List.of(), List.of(), List.of());
+                List.of(), List.of(), List.of(), 0, List.of());
         when(kbFacadeService.runEngineReconcile()).thenReturn(expected);
 
         Result<KbEngineReconcileVO> result = controller.runEngineReconcile();

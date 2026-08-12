@@ -23,6 +23,33 @@ public interface KbDocumentRepository extends JpaRepository<KbDocument, Long> {
     Optional<KbDocument> findByEngineDocumentRef(String engineDocumentRef);
 
     /**
+     * 文档级对账：取某库下「有引擎映射」的文档（无 {@code engine_document_ref} 的本地文档不参与比对）。
+     *
+     * @param libraryId 库 id
+     * @return 有引擎映射的文档列表
+     */
+    List<KbDocument> findByLibraryIdAndEngineDocumentRefIsNotNull(Long libraryId);
+
+    /**
+     * 收敛清理：取「连续被标记 MISSING_IN_ENGINE 且起始时刻早于 before」的文档（孤儿文档，T04 收敛）。
+     *
+     * @param status 引擎同步状态（取 {@code EngineSyncStatus.MISSING_IN_ENGINE}）
+     * @param before 阈值时刻（含）；{@code engine_missing_since <= before} 视为达到收敛条件
+     * @return 命中文档列表
+     */
+    List<KbDocument> findByEngineSyncStatusAndEngineMissingSinceBefore(Integer status, Instant before);
+
+    /**
+     * 物理删除「连续 N 次被标记 MISSING_IN_ENGINE」的孤儿文档（T04 收敛）。
+     *
+     * @param status 引擎同步状态
+     * @param before 阈值时刻（含）
+     * @return 实际删除的行数
+     */
+    @Modifying
+    int deleteByEngineSyncStatusAndEngineMissingSinceBefore(Integer status, Instant before);
+
+    /**
      * 按「库范围 + 启用 + 可选文档 id 集 + 可选上传时间范围」解析启用文档 id 集（KE-08/KE-09）。
      *
      * <p><b>过滤语义（设计 §1.5 / R5）：</b>

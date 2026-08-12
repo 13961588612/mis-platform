@@ -23,17 +23,14 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * {@code RagflowClient.deleteDocument / deleteDataset} 的 DELETE 405 显式失败回归测试。
+ * {@code RagflowClient.deleteDocument / deleteDataset} 的 DELETE 回归测试。
  *
- * <p><b>固化的缺陷（2026-08-12，远程 10.254.16.6:9380 实测）：</b>该 RAGFlow 实例
- * {@code DELETE /api/v1/datasets/{id}}、{@code DELETE /api/v1/datasets/{id}/documents/{docId}}
- * 均返回 <b>405 MethodNotAllowed</b>——这个版本根本不提供物理删除。旧实现用
- * {@code toBodilessEntity()} 吞掉错误体，405 被当成「成功」返回（静默假成功）：
- * 删除库/文档在引擎侧从未发生，却没有任何异常与告警。
+ * <p><b>文档删除口径（2026-08-12）：</b>官方为
+ * {@code DELETE /api/v1/datasets/{id}/documents} + JSON {@code {"ids":[...]}}。
+ * 路径式 {@code .../documents/{docId}} 在本实例 405；旧实现吞错误后又删本地 →
+ * MIS 无文档、RAGFlow 仍在。
  *
- * <p>与 {@code RagflowClientHttpTest} 同构：JDK {@link HttpServer} 起本地假 RAGFlow，
- * 让<b>真实</b> {@link RestClient} 打真实 HTTP 请求。断言 405 时抛
- * {@link BusinessException}（显式失败）而非静默；同时钉住 2xx 正常路径不受影响。
+ * <p>与 {@code RagflowClientHttpTest} 同构：JDK {@link HttpServer} 起本地假 RAGFlow。
  */
 class RagflowDeleteHttpTest {
 
@@ -48,6 +45,7 @@ class RagflowDeleteHttpTest {
     private final AtomicReference<String> lastMethod = new AtomicReference<>();
     private final AtomicReference<String> lastPath = new AtomicReference<>();
     private final AtomicReference<String> lastAuth = new AtomicReference<>();
+    private final AtomicReference<String> lastBody = new AtomicReference<>();
 
     /** 默认 DELETE 一律回 405；个别用例可关掉以验证 2xx 正常路径。 */
     private final AtomicBoolean deleteReturns405 = new AtomicBoolean(true);
@@ -60,6 +58,7 @@ class RagflowDeleteHttpTest {
         lastMethod.set(null);
         lastPath.set(null);
         lastAuth.set(null);
+        lastBody.set(null);
         deleteReturns405.set(true);
 
         server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
@@ -68,6 +67,7 @@ class RagflowDeleteHttpTest {
             lastMethod.set(exchange.getRequestMethod());
             lastPath.set(exchange.getRequestURI().getPath());
             lastAuth.set(exchange.getRequestHeaders().getFirst("Authorization"));
+            lastBody.set(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
 
             boolean isDelete = "DELETE".equals(exchange.getRequestMethod());
             String response = (isDelete && deleteReturns405.get())
@@ -111,8 +111,12 @@ class RagflowDeleteHttpTest {
                     "405 必须显式失败，绝不能再被 toBodilessEntity 吞成假成功");
 
             assertEquals("DELETE", lastMethod.get());
-            assertEquals("/api/v1/datasets/ds-1", lastPath.get());
+            assertEquals("/api/v1/datasets", lastPath.get());
             assertEquals("Bearer " + API_KEY, lastAuth.get());
+            assertTrue(lastBody.get() != null
+                            && lastBody.get().contains("\"ids\"")
+                            && lastBody.get().contains("ds-1"),
+                    () -> "批量删除必须把 datasetId 放进 body 的 ids 数组，实际 body：" + lastBody.get());
             assertTrue(ex.getMessage().contains("删除知识库"),
                     () -> "实际：" + ex.getMessage());
             assertTrue(ex.getMessage().contains("405"),
@@ -129,7 +133,9 @@ class RagflowDeleteHttpTest {
                     "405 必须显式失败，绝不能再被 toBodilessEntity 吞成假成功");
 
             assertEquals("DELETE", lastMethod.get());
-            assertEquals("/api/v1/datasets/ds-1/documents/doc-1", lastPath.get());
+            assertEquals("/api/v1/datasets/ds-1/documents", lastPath.get());
+            assertTrue(lastBody.get() != null && lastBody.get().contains("doc-1"),
+                    () -> "实际 body：" + lastBody.get());
             assertTrue(ex.getMessage().contains("删除文档"),
                     () -> "实际：" + ex.getMessage());
             assertTrue(ex.getMessage().contains("405"),
@@ -137,7 +143,7 @@ class RagflowDeleteHttpTest {
         }
 
         @Test
-        @DisplayName("2xx 正常路径不受影响：deleteDocument 不抛异常，方法/路径/鉴权头正确")
+        @DisplayName("2xx：deleteDocument 走集合 DELETE + ids body，不抛异常")
         void deleteDocument2xxSucceeds() {
             deleteReturns405.set(false);
             RagflowClient client = newClient();
@@ -145,8 +151,12 @@ class RagflowDeleteHttpTest {
             assertDoesNotThrow(() -> client.deleteDocument("ds-1", "doc-1"));
 
             assertEquals("DELETE", lastMethod.get());
-            assertEquals("/api/v1/datasets/ds-1/documents/doc-1", lastPath.get());
+            assertEquals("/api/v1/datasets/ds-1/documents", lastPath.get());
             assertEquals("Bearer " + API_KEY, lastAuth.get());
+            assertTrue(lastBody.get() != null
+                            && lastBody.get().contains("\"ids\"")
+                            && lastBody.get().contains("doc-1"),
+                    () -> "实际 body：" + lastBody.get());
             assertEquals(1, requestCount.get());
         }
 
@@ -159,7 +169,13 @@ class RagflowDeleteHttpTest {
             assertDoesNotThrow(() -> client.deleteDataset("ds-1"));
 
             assertEquals("DELETE", lastMethod.get());
-            assertEquals("/api/v1/datasets/ds-1", lastPath.get());
+            assertEquals("/api/v1/datasets", lastPath.get());
+            assertEquals("Bearer " + API_KEY, lastAuth.get());
+            assertTrue(lastBody.get() != null
+                            && lastBody.get().contains("\"ids\"")
+                            && lastBody.get().contains("ds-1"),
+                    () -> "批量删除必须把 datasetId 放进 body 的 ids 数组，实际 body：" + lastBody.get());
+            assertEquals(1, requestCount.get());
         }
     }
 }

@@ -4,9 +4,11 @@ import com.mis.common.core.result.Result;
 import com.mis.common.security.context.LoginUser;
 import com.mis.common.security.context.SecurityContextHolder;
 import com.mis.kb.api.dto.KbEngineOrphanVO;
+import com.mis.kb.api.dto.KbEngineMissingCleanupVO;
 import com.mis.kb.api.dto.KbEngineReconcileVO;
 import com.mis.kb.api.dto.KbEngineRenameLogVO;
 import com.mis.kb.domain.model.EngineCapabilities;
+import com.mis.kb.domain.model.EngineConvergenceResult;
 import com.mis.kb.domain.model.EngineHealth;
 import com.mis.kb.domain.model.EngineModelPool;
 import com.mis.kb.domain.model.KbEngineOrphanResolveReq;
@@ -104,6 +106,28 @@ public class EngineConfigController {
     @PostMapping("/reconcile")
     public Result<KbEngineReconcileVO> runReconcile() {
         return Result.ok(KbEngineReconcileVO.from(reconcileService.reconcile()));
+    }
+
+    /**
+     * 手动收敛「连续 N 次被标记 MISSING_IN_ENGINE」的本地残留（增量 T04）。
+     *
+     * <p>库走<b>可逆软删</b>（status=0 + archivedAt=now）；孤儿文档直接<b>物理删除</b>行。
+     * 收敛阈值由 {@code mis.kb.engine.reconcile.missing-in-engine-threshold}（默认 2）与
+     * {@code interval-ms} 共同决定。区别于定时任务的 auto-clean-missing 自动模式，本端点是
+     * 显式、人工触发的收敛出口，便于运维在确认引擎侧确实已删后执行。
+     *
+     * <p>判权（{@code kb:engine:reconcile}）与审计在 BFF 侧收口，内部端点不重复判。
+     *
+     * @return 收敛结果（软删库数 / 物理删文档数）
+     */
+    @PostMapping("/cleanup-missing")
+    public Result<KbEngineMissingCleanupVO> cleanupMissing() {
+        EngineConvergenceResult result = reconcileService.cleanupMissing();
+        String note = String.format(
+                "已收敛连续多次被标记 MISSING_IN_ENGINE 的本地残留：软删库 %d 个、物理删除孤儿文档 %d 条。",
+                result.librariesCleaned(), result.documentsCleaned());
+        return Result.ok(new KbEngineMissingCleanupVO(
+                result.librariesCleaned(), result.documentsCleaned(), result.at(), note));
     }
 
     /**

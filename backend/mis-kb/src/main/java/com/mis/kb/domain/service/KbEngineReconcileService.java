@@ -1,12 +1,17 @@
 package com.mis.kb.domain.service;
 
 import com.mis.kb.config.ShedLockConfig;
+import com.mis.kb.domain.entity.KbDocument;
 import com.mis.kb.domain.entity.KbEngineOrphan;
 import com.mis.kb.domain.entity.KbLibrary;
+import com.mis.kb.domain.model.EngineConvergenceResult;
+import com.mis.kb.domain.model.EngineDocumentBrief;
 import com.mis.kb.domain.model.EngineLibraryBrief;
+import com.mis.kb.domain.model.EngineLibraryRef;
 import com.mis.kb.domain.model.EngineReconcileReport;
 import com.mis.kb.domain.model.EngineSyncStatus;
 import com.mis.kb.domain.model.LibraryStatus;
+import com.mis.kb.domain.repository.KbDocumentRepository;
 import com.mis.kb.domain.repository.KbEngineOrphanRepository;
 import com.mis.kb.domain.repository.KbLibraryRepository;
 import com.mis.kb.engine.KnowledgeEnginePort;
@@ -21,11 +26,14 @@ import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
@@ -36,19 +44,34 @@ import java.util.concurrent.atomic.AtomicReference;
  * 建库时引擎调用半途失败，两边就会悄悄劈叉——直到某天用户检索不出东西才被发现。
  * 本服务定期把两边拉平比对，把差异显式记录下来。
  *
- * <p><b>四类判定：</b>
+ * <p><b>两类比对（库级 + 文档级）：</b>
+ * <ul>
+ *   <li><b>库级</b>：比 {@code kb_library.engine_library_ref} 与引擎 dataset（历史已实现）；</li>
+ *   <li><b>文档级（增量 P1 / T03）</b>：比 {@code kb_document.engine_document_ref} 与引擎
+ *       dataset 下的文档清单，把「MIS 有文档 / 引擎无」标记 {@code engine_sync_status=2}。</li>
+ * </ul>
+ *
+ * <p><b>四类库判定 + 文档判定：</b>
  * <table border="1">
  *   <caption>比对结果</caption>
  *   <tr><th>情形</th><th>落库位置</th></tr>
- *   <tr><td>MIS 有 / 引擎无</td><td>{@code kb_library.engine_sync_status=2}</td></tr>
+ *   <tr><td>MIS 有库 / 引擎无</td><td>{@code kb_library.engine_sync_status=2}</td></tr>
  *   <tr><td>引擎有 / MIS 无</td><td>{@code kb_engine_orphan} upsert（无 kb_library 行可落）</td></tr>
- *   <tr><td>名称与期望名不符</td><td>{@code kb_library.engine_sync_status=3}</td></tr>
- *   <tr><td>一致</td><td>{@code kb_library.engine_sync_status=1}</td></tr>
+ *   <tr><td>库名与期望名不符</td><td>{@code kb_library.engine_sync_status=3}</td></tr>
+ *   <tr><td>库一致</td><td>{@code kb_library.engine_sync_status=1}</td></tr>
+ *   <tr><td>MIS 有文档 / 引擎无</td><td>{@code kb_document.engine_sync_status=2}</td></tr>
+ *   <tr><td>文档一致</td><td>{@code kb_document.engine_sync_status=1}</td></tr>
  * </table>
  *
  * <p><b>护栏（勿删）：</b>入口第一行判 {@code type != ragflow} 直接 {@code skipped}。
- * noop/mock 的 {@code listLibraries()} 返回空列表，若放它进比对逻辑，
- * 一次对账就会把全库 {@code engine_sync_status} 刷成 2（引擎缺失），前端满屏红叉。
+ * noop/mock 的 {@code listLibraries()}/{@code listDocuments()} 返回空列表/或 null，
+ * 若放它进比对逻辑，会把全库 {@code engine_sync_status} 刷成 2（引擎缺失），前端满屏红叉。
+ *
+ * <p><b>单边删除收敛（增量 T04）：</b>连续 N 次（按 {@code reconcile.interval-ms} 计，默认 2）
+ * 被标记 {@code MISSING_IN_ENGINE} 的本地残留，经手动端点
+ * {@code POST /internal/v1/kb/engine/cleanup-missing}（{@link #cleanupMissing()}）或可选的
+ * 定时 auto-clean（{@code reconcile.auto-clean-missing}）收敛：库走<b>可逆软删</b>
+ * （status=0 + archivedAt=now，引擎 dataset 已确认不在、无需再调引擎改名），孤儿文档直接物理删行。
  *
  * <p><b>事务口径：</b>刻意<b>不</b>包一个大事务。对账是逐行幂等的状态刷新，跑一次可能要
  * 分页拉几十次引擎 HTTP，把这些 IO 圈进事务会长时间占着数据库连接。改为在内存里算完，
@@ -66,6 +89,7 @@ public class KbEngineReconcileService {
     private static final int MAX_DETAIL_ITEMS = 200;
 
     private final KbLibraryRepository libraryRepository;
+    private final KbDocumentRepository documentRepository;
     private final KbEngineOrphanRepository orphanRepository;
     private final KbLibraryService libraryService;
     private final KnowledgeEnginePort enginePort;
@@ -76,11 +100,13 @@ public class KbEngineReconcileService {
 
     public KbEngineReconcileService(
             KbLibraryRepository libraryRepository,
+            KbDocumentRepository documentRepository,
             KbEngineOrphanRepository orphanRepository,
             KbLibraryService libraryService,
             KnowledgeEnginePort enginePort,
             RagflowProperties engineProperties) {
         this.libraryRepository = libraryRepository;
+        this.documentRepository = documentRepository;
         this.orphanRepository = orphanRepository;
         this.libraryService = libraryService;
         this.enginePort = enginePort;
@@ -96,7 +122,7 @@ public class KbEngineReconcileService {
      * <p>异常一律吞掉只记 error：定时任务抛异常会被 Spring 的调度器吃掉且不再有下文，
      * 这里显式兜住，保证下一个周期照常触发。
      */
-    @Scheduled(fixedDelayString = "${mis.kb.engine.reconcile.interval-ms:1800000}")
+    @Scheduled(fixedDelayString = "${mis.kb.engine.reconcile.interval-ms:300000}")
     @SchedulerLock(
             name = ShedLockConfig.LOCK_ENGINE_RECONCILE,
             lockAtMostFor = "${mis.kb.engine.reconcile.lock-at-most-for:PT10M}",
@@ -109,10 +135,14 @@ public class KbEngineReconcileService {
         try {
             EngineReconcileReport report = reconcile();
             if (!report.skipped()) {
-                log.info("引擎对账完成：总数={} 一致={} 引擎缺失={} 游离={} 名称漂移={}",
+                log.info("引擎对账完成：总数={} 一致={} 引擎缺失={} 游离={} 名称漂移={} 文档缺失={}",
                         report.counts().total(), report.counts().consistent(),
                         report.counts().missingInEngine(), report.counts().orphan(),
-                        report.counts().nameDrift());
+                        report.counts().nameDrift(), report.documentMissingInEngine());
+            }
+            // T04：可选 auto-clean——达阈值的 MISSING_IN_ENGINE 残留自动收敛（默认 false，仅手动端点清理）。
+            if (engineProperties.getReconcile().isAutoCleanMissing()) {
+                applyConvergence(Instant.now());
             }
         } catch (Exception e) {
             log.error("引擎对账执行失败（下一周期将重试）: {}", e.getMessage(), e);
@@ -121,6 +151,9 @@ public class KbEngineReconcileService {
 
     /**
      * 执行一次对账（手动触发端点与定时任务共用）。
+     *
+     * <p>库级比对 + 文档级比对一起跑：文档级对账复用同一批 {@code bound}（已绑定引擎的库），
+     * 避免重复 filter。两份比对的缺失明细分别计入报告。
      *
      * @return 本次对账报告；引擎不支持时返回 {@code skipped=true} 且不写任何库
      */
@@ -155,6 +188,10 @@ public class KbEngineReconcileService {
             lib.setEngineCheckedAt(startedAt);
             if (brief == null) {
                 lib.setEngineSyncStatus(EngineSyncStatus.MISSING_IN_ENGINE);
+                // 首次被标记缺失才记起始时刻；持续缺失期间保持不变（供收敛判定「连续 N 次」）。
+                if (lib.getEngineMissingSince() == null) {
+                    lib.setEngineMissingSince(startedAt);
+                }
                 if (missing.size() < MAX_DETAIL_ITEMS) {
                     missing.add(new EngineReconcileReport.MissingInEngine(
                             lib.getId(), lib.getName(), lib.getEngineLibraryRef()));
@@ -164,9 +201,11 @@ public class KbEngineReconcileService {
             String actualName = brief.name() == null ? "" : brief.name().trim();
             if (nameMatches(lib, actualName)) {
                 lib.setEngineSyncStatus(EngineSyncStatus.CONSISTENT);
+                lib.setEngineMissingSince(null);
                 consistent++;
             } else {
                 lib.setEngineSyncStatus(EngineSyncStatus.DRIFT_OR_FAILED);
+                lib.setEngineMissingSince(null);
                 if (drift.size() < MAX_DETAIL_ITEMS) {
                     drift.add(new EngineReconcileReport.NameDrift(
                             lib.getId(), lib.getName(), expectedName(lib), actualName));
@@ -176,6 +215,10 @@ public class KbEngineReconcileService {
         if (!bound.isEmpty()) {
             libraryRepository.saveAll(bound);
         }
+
+        // 文档级对账（增量 P1 / T03）
+        List<EngineReconcileReport.DocumentMissingItem> docMissingDetails = new ArrayList<>();
+        int docMissingCount = reconcileDocuments(startedAt, bound, docMissingDetails);
 
         // 剩在 engineSide 里的就是「引擎有 / MIS 无」
         upsertOrphans(engineType, engineSide.values(), startedAt);
@@ -196,9 +239,86 @@ public class KbEngineReconcileService {
                 new EngineReconcileReport.Counts(
                         bound.size(), consistent, missing.size(), pendingOrphans.size(), drift.size(),
                         (int) orphanRepository.countByEngineTypeAndResolved(engineType, 1)),
-                missing, orphans, drift);
+                missing, orphans, drift, docMissingCount, List.copyOf(docMissingDetails));
         latest.set(report);
         return report;
+    }
+
+    /**
+     * 文档级对账（增量 P1 / T03）：逐库拉引擎侧文档清单，与 {@code kb_document.engine_document_ref} 比对。
+     *
+     * <p>把「MIS 有文档 / 引擎无」的文档标记 {@code MISSING_IN_ENGINE} 并维护
+     * {@code engine_missing_since}（首次缺失才记，供收敛判定）；引擎侧存在的文档标记
+     * {@code CONSISTENT} 并清空 {@code engine_missing_since}。
+     *
+     * <p>护栏：{@code enginePort.listDocuments} 可能在 noop/mock 引擎返回 {@code null}（默认实现），
+     * 此情况直接跳过该库文档比对，<b>不污染本地文档状态</b>；
+     * {@code findByLibraryIdAndEngineDocumentRefIsNotNull} 返回 {@code null} 同样跳过。
+     *
+     * @param startedAt    本轮对账时刻（统一落 {@code engine_checked_at}）
+     * @param bound        已绑定引擎的知识库列表（与库级对账同一批）
+     * @param docMissingOut 收集 MISSING 明细（受 {@code MAX_DETAIL_ITEMS} 限长）
+     * @return 被标记 {@code MISSING_IN_ENGINE} 的文档数
+     */
+    private int reconcileDocuments(Instant startedAt, List<KbLibrary> bound,
+            List<EngineReconcileReport.DocumentMissingItem> docMissingOut) {
+        if (bound.isEmpty()) {
+            return 0;
+        }
+        int missingCount = 0;
+        for (KbLibrary lib : bound) {
+            String datasetId = lib.getEngineLibraryRef();
+            if (datasetId == null || datasetId.isBlank()) {
+                continue;
+            }
+            List<EngineDocumentBrief> engineDocs;
+            try {
+                engineDocs = enginePort.listDocuments(
+                        new EngineLibraryRef(lib.getEngineType(), datasetId));
+            } catch (Exception e) {
+                log.warn("文档级对账：列举引擎文档失败 datasetId={}，本轮跳过该库文档: {}",
+                        datasetId, e.getMessage());
+                continue;
+            }
+            if (engineDocs == null) {
+                // noop/mock 未实现 listDocuments（默认返回 null）——不污染本地状态
+                continue;
+            }
+            Set<String> engineDocIds = new HashSet<>();
+            for (EngineDocumentBrief d : engineDocs) {
+                if (d != null && StringUtils.hasText(d.id())) {
+                    engineDocIds.add(d.id());
+                }
+            }
+            List<KbDocument> docs = documentRepository.findByLibraryIdAndEngineDocumentRefIsNotNull(lib.getId());
+            if (docs == null || docs.isEmpty()) {
+                continue;
+            }
+            boolean touched = false;
+            for (KbDocument doc : docs) {
+                doc.setEngineCheckedAt(startedAt);
+                String ref = doc.getEngineDocumentRef();
+                if (ref == null || ref.isBlank() || !engineDocIds.contains(ref)) {
+                    doc.setEngineSyncStatus(EngineSyncStatus.MISSING_IN_ENGINE);
+                    if (doc.getEngineMissingSince() == null) {
+                        doc.setEngineMissingSince(startedAt);
+                    }
+                    missingCount++;
+                    if (docMissingOut.size() < MAX_DETAIL_ITEMS) {
+                        docMissingOut.add(new EngineReconcileReport.DocumentMissingItem(
+                                lib.getId(), doc.getId(), doc.getTitle(), ref));
+                    }
+                } else {
+                    doc.setEngineSyncStatus(EngineSyncStatus.CONSISTENT);
+                    doc.setEngineMissingSince(null);
+                }
+                touched = true;
+            }
+            if (touched) {
+                documentRepository.saveAll(docs);
+            }
+        }
+        return missingCount;
     }
 
     /**
@@ -219,6 +339,52 @@ public class KbEngineReconcileService {
                     null, "当前引擎（" + engineProperties.getType() + "）不支持对账");
         }
         return rebuildFromDb();
+    }
+
+    /**
+     * 手动收敛「连续 N 次被标记 MISSING_IN_ENGINE」的本地残留（T04）。
+     *
+     * <p>库走<b>可逆软删</b>（status=0 + archivedAt=now，引擎 dataset 已确认不在、无需再调引擎改名）；
+     * 孤儿文档直接<b>物理删除</b>行。收敛阈值由 {@code reconcile.missing-in-engine-threshold}
+     * （默认 2）与 {@code reconcile.interval-ms} 共同决定：{@code engine_missing_since} 早于
+     * {@code now - 阈值 × interval-ms} 才清理。
+     *
+     * @return 收敛结果（软删库数 / 物理删文档数 / 时刻）
+     */
+    public EngineConvergenceResult cleanupMissing() {
+        return applyConvergence(Instant.now());
+    }
+
+    /**
+     * 收敛实现（手动端点与定时 auto-clean 共用）。
+     *
+     * @param now 判定基准时刻
+     * @return 收敛结果
+     */
+    private EngineConvergenceResult applyConvergence(Instant now) {
+        int threshold = engineProperties.getReconcile().getMissingInEngineThreshold();
+        long intervalMs = engineProperties.getReconcile().getIntervalMs();
+        Instant thresholdAt = now.minus(threshold * intervalMs, ChronoUnit.MILLIS);
+
+        // 库：本地软删（status=0 + archivedAt=now，可逆）。引擎 dataset 已确认不在，无需再调引擎改名。
+        List<KbLibrary> libs = libraryRepository.findByEngineSyncStatusAndEngineMissingSinceBefore(
+                EngineSyncStatus.MISSING_IN_ENGINE, thresholdAt);
+        for (KbLibrary lib : libs) {
+            lib.setStatus(LibraryStatus.DISABLED.code());
+            lib.setArchivedAt(now);
+            lib.setEngineMissingSince(null);
+        }
+        if (!libs.isEmpty()) {
+            libraryRepository.saveAll(libs);
+        }
+
+        // 文档：物理删除孤儿行（MIS 有 / 引擎无，引擎已删）
+        int docs = documentRepository.deleteByEngineSyncStatusAndEngineMissingSinceBefore(
+                EngineSyncStatus.MISSING_IN_ENGINE, thresholdAt);
+
+        log.info("引擎单边删除收敛：软删库 {} 个、物理删除孤儿文档 {} 条（阈值 N={}，intervalMs={}）",
+                libs.size(), docs, threshold, intervalMs);
+        return new EngineConvergenceResult(libs.size(), docs, now);
     }
 
     // ---------------------------------------------------------------- 内部
@@ -315,6 +481,8 @@ public class KbEngineReconcileService {
      * 进程重启后用 DB 现状重算报告。
      *
      * <p>{@code kb_library} 量级是百级，全量拉回内存分桶完全够用，不值得为此加索引与专用查询。
+     * 文档级缺失不调引擎无法实算，故重建路径下 {@code documentMissingInEngine=0}（展示占位，
+     * 真实文档缺失需等下一轮主动对账）。
      */
     private EngineReconcileReport rebuildFromDb() {
         String engineType = enginePort.engineType();
@@ -360,6 +528,6 @@ public class KbEngineReconcileService {
                 new EngineReconcileReport.Counts(
                         bound.size(), consistent, missing.size(), orphanRows.size(), drift.size(),
                         (int) orphanRepository.countByEngineTypeAndResolved(engineType, 1)),
-                missing, orphans, drift);
+                missing, orphans, drift, 0, List.of());
     }
 }

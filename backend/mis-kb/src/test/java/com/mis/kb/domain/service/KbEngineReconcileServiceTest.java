@@ -1,9 +1,13 @@
 package com.mis.kb.domain.service;
 
 import com.mis.kb.domain.entity.KbCategory;
+import com.mis.kb.domain.entity.KbDocument;
 import com.mis.kb.domain.entity.KbEngineOrphan;
 import com.mis.kb.domain.entity.KbLibrary;
+import com.mis.kb.domain.model.EngineConvergenceResult;
+import com.mis.kb.domain.model.EngineDocumentBrief;
 import com.mis.kb.domain.model.EngineLibraryBrief;
+import com.mis.kb.domain.model.EngineLibraryRef;
 import com.mis.kb.domain.model.EngineReconcileReport;
 import com.mis.kb.domain.model.EngineSyncStatus;
 import com.mis.kb.domain.model.KbEngineOrphanAction;
@@ -103,7 +107,7 @@ class KbEngineReconcileServiceTest {
                 libraryRepository, documentRepository, aclRepository, categoryRepository,
                 enginePort, props, nodeAdminResolver, visibilityService);
         service = new KbEngineReconcileService(
-                libraryRepository, orphanRepository, libraryService, enginePort, props);
+                libraryRepository, documentRepository, orphanRepository, libraryService, enginePort, props);
 
         KbCategory category = new KbCategory();
         category.setId(CATEGORY_ID);
@@ -526,6 +530,153 @@ class KbEngineReconcileServiceTest {
 
             assertTrue(report.skipped());
             verify(libraryRepository, never()).findAll();
+        }
+    }
+
+    // ------------------------------------------------------------------ 文档级对账（T03）
+
+    @Nested
+    @DisplayName("文档级对账（增量 P1 / T03）")
+    class DocumentReconcile {
+
+        @Test
+        @DisplayName("引擎缺某文档 → 该文档被标记 MISSING_IN_ENGINE，且明细计入报告")
+        void shouldMarkDocumentMissing() {
+            KbLibrary lib = library(1_000_000_000_000_001L, "报销制度", "ds-ok");
+            when(libraryRepository.findAll()).thenReturn(List.of(lib));
+            when(enginePort.listLibraries())
+                    .thenReturn(List.of(EngineLibraryBrief.of("ds-ok", "财务-报销制度-000001")));
+            // 引擎侧该 dataset 只有一个文档 doc-engine-1（本地文档 doc-gone 在引擎侧已不存在）
+            when(enginePort.listDocuments(any())).thenReturn(List.of(
+                    new EngineDocumentBrief("doc-engine-1", "在引擎的文档")));
+            KbDocument gone = new KbDocument();
+            gone.setId(11L);
+            gone.setLibraryId(lib.getId());
+            gone.setTitle("本地孤儿文档");
+            gone.setEngineDocumentRef("doc-gone");
+            gone.setEngineSyncStatus(EngineSyncStatus.UNKNOWN);
+            when(documentRepository.findByLibraryIdAndEngineDocumentRefIsNotNull(lib.getId()))
+                    .thenReturn(List.of(gone));
+
+            EngineReconcileReport report = service.reconcile();
+
+            assertEquals(1, report.documentMissingInEngine());
+            assertEquals(1, report.documentMissingDetails().size());
+            assertEquals("doc-gone", report.documentMissingDetails().get(0).engineDocumentRef());
+            assertEquals(lib.getId(), report.documentMissingDetails().get(0).libraryId());
+            assertEquals(EngineSyncStatus.MISSING_IN_ENGINE, gone.getEngineSyncStatus());
+            assertNotNull(gone.getEngineMissingSince(), "首次缺失应记录起始时刻");
+            verify(documentRepository).saveAll(any());
+        }
+
+        @Test
+        @DisplayName("引擎侧文档齐全 → 文档标记一致且清空 missing-since")
+        void shouldMarkDocumentConsistent() {
+            KbLibrary lib = library(1_000_000_000_000_001L, "报销制度", "ds-ok");
+            when(libraryRepository.findAll()).thenReturn(List.of(lib));
+            when(enginePort.listLibraries())
+                    .thenReturn(List.of(EngineLibraryBrief.of("ds-ok", "财务-报销制度-000001")));
+            when(enginePort.listDocuments(any())).thenReturn(List.of(
+                    new EngineDocumentBrief("doc-gone", "一致文档")));
+            KbDocument doc = new KbDocument();
+            doc.setId(11L);
+            doc.setLibraryId(lib.getId());
+            doc.setTitle("一致文档");
+            doc.setEngineDocumentRef("doc-gone");
+            doc.setEngineSyncStatus(EngineSyncStatus.MISSING_IN_ENGINE);
+            doc.setEngineMissingSince(Instant.now().minus(10, ChronoUnit.DAYS));
+            when(documentRepository.findByLibraryIdAndEngineDocumentRefIsNotNull(lib.getId()))
+                    .thenReturn(List.of(doc));
+
+            EngineReconcileReport report = service.reconcile();
+
+            assertEquals(0, report.documentMissingInEngine());
+            assertEquals(EngineSyncStatus.CONSISTENT, doc.getEngineSyncStatus());
+            assertNull(doc.getEngineMissingSince(), "一致应清空 missing-since");
+        }
+
+        @Test
+        @DisplayName("listDocuments 返回 null（noop/mock 默认）不污染本地文档状态")
+        void shouldNotBreakWhenListDocumentsNull() {
+            KbLibrary lib = library(1_000_000_000_000_001L, "报销制度", "ds-ok");
+            when(libraryRepository.findAll()).thenReturn(List.of(lib));
+            when(enginePort.listLibraries())
+                    .thenReturn(List.of(EngineLibraryBrief.of("ds-ok", "财务-报销制度-000001")));
+            when(enginePort.listDocuments(any())).thenReturn(null);
+            KbDocument doc = new KbDocument();
+            doc.setId(11L);
+            doc.setLibraryId(lib.getId());
+            doc.setTitle("文档");
+            doc.setEngineDocumentRef("doc-x");
+            when(documentRepository.findByLibraryIdAndEngineDocumentRefIsNotNull(lib.getId()))
+                    .thenReturn(List.of(doc));
+
+            EngineReconcileReport report = service.reconcile();
+
+            assertEquals(0, report.documentMissingInEngine());
+            assertEquals(EngineSyncStatus.UNKNOWN, doc.getEngineSyncStatus(),
+                    "listDocuments 为 null 时不应改写文档同步状态");
+        }
+    }
+
+    // ------------------------------------------------------------------ 单边删除收敛（T04）
+
+    @Nested
+    @DisplayName("MISSING_IN_ENGINE 收敛（增量 T04）")
+    class Convergence {
+
+        @Test
+        @DisplayName("cleanupMissing：达到阈值的库软删、孤儿文档物理删，返回收敛结果")
+        void shouldConvergeMissing() {
+            KbLibrary lib = library(1_000_000_000_000_002L, "差旅制度", "ds-gone");
+            lib.setStatus(LibraryStatus.ENABLED.code());
+            lib.setEngineSyncStatus(EngineSyncStatus.MISSING_IN_ENGINE);
+            // engine_missing_since 早于阈值（N=2 * intervalMs=300000），视为达标
+            lib.setEngineMissingSince(Instant.now().minus(60, ChronoUnit.MINUTES).minus(1, ChronoUnit.SECONDS));
+            when(libraryRepository.findByEngineSyncStatusAndEngineMissingSinceBefore(
+                    eq(EngineSyncStatus.MISSING_IN_ENGINE), any())).thenReturn(List.of(lib));
+
+            KbDocument orphan = new KbDocument();
+            orphan.setId(21L);
+            orphan.setLibraryId(lib.getId());
+            orphan.setEngineDocumentRef("doc-orphan");
+            orphan.setEngineSyncStatus(EngineSyncStatus.MISSING_IN_ENGINE);
+            orphan.setEngineMissingSince(lib.getEngineMissingSince());
+            when(documentRepository.findByEngineSyncStatusAndEngineMissingSinceBefore(
+                    eq(EngineSyncStatus.MISSING_IN_ENGINE), any())).thenReturn(List.of(orphan));
+            when(documentRepository.deleteByEngineSyncStatusAndEngineMissingSinceBefore(
+                    eq(EngineSyncStatus.MISSING_IN_ENGINE), any())).thenReturn(1);
+
+            EngineConvergenceResult result = service.cleanupMissing();
+
+            assertEquals(1, result.librariesCleaned());
+            assertEquals(1, result.documentsCleaned());
+            assertEquals(LibraryStatus.DISABLED.code(), lib.getStatus(), "库应被软删（status=0）");
+            assertNotNull(lib.getArchivedAt(), "库应被置 archivedAt（可逆软删）");
+            verify(libraryRepository).saveAll(any());
+        }
+
+        @Test
+        @DisplayName("cleanupMissing：未达阈值的残留不被收敛")
+        void shouldNotConvergeBeforeThreshold() {
+            KbLibrary lib = library(1_000_000_000_000_002L, "差旅制度", "ds-gone");
+            lib.setStatus(LibraryStatus.ENABLED.code());
+            lib.setEngineSyncStatus(EngineSyncStatus.MISSING_IN_ENGINE);
+            // 刚刚才被标记缺失，远未到阈值
+            lib.setEngineMissingSince(Instant.now());
+            when(libraryRepository.findByEngineSyncStatusAndEngineMissingSinceBefore(
+                    eq(EngineSyncStatus.MISSING_IN_ENGINE), any())).thenReturn(List.of());
+            when(documentRepository.findByEngineSyncStatusAndEngineMissingSinceBefore(
+                    eq(EngineSyncStatus.MISSING_IN_ENGINE), any())).thenReturn(List.of());
+            when(documentRepository.deleteByEngineSyncStatusAndEngineMissingSinceBefore(
+                    eq(EngineSyncStatus.MISSING_IN_ENGINE), any())).thenReturn(0);
+
+            EngineConvergenceResult result = service.cleanupMissing();
+
+            assertEquals(0, result.librariesCleaned());
+            assertEquals(0, result.documentsCleaned());
+            assertEquals(LibraryStatus.ENABLED.code(), lib.getStatus(), "未达阈值不应软删");
+            verify(libraryRepository, never()).saveAll(any());
         }
     }
 }
