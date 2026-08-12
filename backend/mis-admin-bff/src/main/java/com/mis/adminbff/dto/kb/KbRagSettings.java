@@ -9,6 +9,10 @@ package com.mis.adminbff.dto.kb;
  * {@code chunkOverlapTokenNum}（当前引擎不支持，只落库 + 回显 + 提示，不下发）。
  * Wave B GraphRAG PoC（T01）末位追加 {@code useKnowledgeGraph} / {@code kgBuildStatus} /
  * {@code kgBuildMessage}（图谱三字段，零 DDL 进 rag_settings_json）。
+ * Wave C RAPTOR（T01）末位追加 {@code useRaptor} / {@code raptorMaxTokenNum} /
+ * {@code raptorThreshold} / {@code raptorMaxCluster} / {@code raptorPrompt} /
+ * {@code raptorBuildStatus} / {@code raptorBuildMessage}（RAPTOR 七字段，零 DDL 进
+ * rag_settings_json）。
  * <b>本层不做默认值补齐</b>——默认值只在 mis-kb 一处定义，BFF 再补一遍必然出现两套默认值漂移。
  *
  * @param topK                召回条数
@@ -28,6 +32,13 @@ package com.mis.adminbff.dto.kb;
  * @param useKnowledgeGraph   知识图谱开关；能力 graphrag=true 前不下发（Wave B GraphRAG PoC 新增）
  * @param kgBuildStatus       图谱构建状态 none|building|ready|failed；服务端维护（Wave B GraphRAG PoC 新增）
  * @param kgBuildMessage      图谱构建消息摘要（≤200；ready 时清空）（Wave B GraphRAG PoC 新增）
+ * @param useRaptor           RAPTOR 摘要开关；能力 raptor=true 前不下发（Wave C RAPTOR 新增）
+ * @param raptorMaxTokenNum   RAPTOR 摘要 chunk 最大 token 数 [512,2048]，默认 1024（Wave C RAPTOR 新增）
+ * @param raptorThreshold     RAPTOR 聚类相似度阈值 [0,1]，默认 0.1（Wave C RAPTOR 新增）
+ * @param raptorMaxCluster    RAPTOR 最大聚类数 [1,1024]，默认 64（Wave C RAPTOR 新增）
+ * @param raptorPrompt        RAPTOR 递归摘要提示词（≤2000）（Wave C RAPTOR 新增）
+ * @param raptorBuildStatus   RAPTOR 构建状态 none|building|ready|failed；服务端维护（Wave C RAPTOR 新增）
+ * @param raptorBuildMessage  RAPTOR 构建消息摘要（≤200；ready 时清空）（Wave C RAPTOR 新增）
  */
 public record KbRagSettings(
         Integer topK,
@@ -46,5 +57,12 @@ public record KbRagSettings(
         Integer chunkOverlapTokenNum,
         Boolean useKnowledgeGraph,
         String kgBuildStatus,
-        String kgBuildMessage) {
+        String kgBuildMessage,
+        Boolean useRaptor,
+        Integer raptorMaxTokenNum,
+        Double raptorThreshold,
+        Integer raptorMaxCluster,
+        String raptorPrompt,
+        String raptorBuildStatus,
+        String raptorBuildMessage) {
 }

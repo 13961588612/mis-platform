@@ -18,6 +18,7 @@ import com.mis.kb.domain.model.GraphBuildSnapshot;
 import com.mis.kb.domain.model.ParseStatus;
 import com.mis.kb.domain.model.ParseStatusSnapshot;
 import com.mis.kb.domain.model.RagSettings;
+import com.mis.kb.domain.model.RaptorBuildSnapshot;
 import com.mis.kb.domain.model.RetrieveQuery;
 import com.mis.kb.domain.repository.KbDocumentRepository;
 import com.mis.kb.domain.repository.KbLibraryRepository;
@@ -147,6 +148,78 @@ public class RagflowAdapter implements KnowledgeEnginePort {
         Long processDurationMs = data.path("process_duration").isNumber()
                 ? (long) (data.path("process_duration").asDouble() * 1000D) : null;
         return new GraphBuildSnapshot(taskId, progress, mapGraphProgress(progress), progressMsg, processDurationMs);
+    }
+
+    /**
+     * 触发 RAPTOR 摘要构建（Wave C RAPTOR，T02）。
+     *
+     * <p>前置校验（能力/状态机/文档非空）由 {@code KbRaptorService.build} 完成，
+     * 本方法只负责翻译 MIS ref → 引擎 datasetId 并转发
+     * {@code POST /datasets/{id}/index?type=raptor}（type 值 = {@code raptor}）。
+     * graph/raptor 构建<b>不互斥可并行</b>（T00 P2c 实测）。
+     *
+     * @param ref 知识库引擎引用（nativeId = dataset id）
+     * @return 引擎侧 RAPTOR 构建任务 id
+     */
+    @Override
+    public String buildRaptor(EngineLibraryRef ref) {
+        if (ref == null || ref.nativeId() == null || ref.nativeId().isBlank()) {
+            throw new IllegalArgumentException("RAPTOR 构建失败：知识库无引擎映射");
+        }
+        return client.buildRaptor(ref.nativeId());
+    }
+
+    /**
+     * 查询 RAPTOR 构建状态（Wave C RAPTOR，T02）。
+     *
+     * <p>把 RAGFlow task dict 映射为 {@link RaptorBuildSnapshot}：
+     * {@code progress==1.0 → READY}；{@code progress<0 → FAILED}；其他数值 → BUILDING；
+     * 无任务/空 data → NONE（调用方保留本地状态）。{@code progress_msg} 摘要与
+     * {@code process_duration} 原样透出，由 {@code KbRaptorService} 决定是否落库。
+     *
+     * @param ref 知识库引擎引用（nativeId = dataset id）
+     * @return RAPTOR 构建状态快照；恒非 {@code null}
+     */
+    @Override
+    public RaptorBuildSnapshot queryRaptorBuildStatus(EngineLibraryRef ref) {
+        if (ref == null || ref.nativeId() == null || ref.nativeId().isBlank()) {
+            return RaptorBuildSnapshot.none();
+        }
+        JsonNode data;
+        try {
+            data = client.queryRaptorBuildStatus(ref.nativeId());
+        } catch (Exception e) {
+            log.warn("RAGFlow 查询 RAPTOR 构建状态失败 datasetId={}: {}", ref.nativeId(), e.getMessage());
+            return RaptorBuildSnapshot.none();
+        }
+        if (data == null || data.isEmpty()) {
+            return RaptorBuildSnapshot.none();
+        }
+        String taskId = data.path("task_id").asText(null);
+        Double progress = data.path("progress").isNumber() ? data.path("progress").asDouble() : null;
+        String progressMsg = data.path("progress_msg").asText(null);
+        Long processDurationMs = data.path("process_duration").isNumber()
+                ? (long) (data.path("process_duration").asDouble() * 1000D) : null;
+        return new RaptorBuildSnapshot(taskId, progress, mapRaptorProgress(progress), progressMsg, processDurationMs);
+    }
+
+    /**
+     * RAGFlow {@code progress} → {@link RaptorBuildSnapshot.Status}（T00 P2b 契约，与 graph 同构）。
+     *
+     * @param progress 引擎进度；{@code null} 按 NONE（无法判定，保留本地）
+     * @return 映射后的状态
+     */
+    private static RaptorBuildSnapshot.Status mapRaptorProgress(Double progress) {
+        if (progress == null) {
+            return RaptorBuildSnapshot.Status.NONE;
+        }
+        if (Double.compare(progress, 1.0D) >= 0) {
+            return RaptorBuildSnapshot.Status.READY;
+        }
+        if (progress < 0D) {
+            return RaptorBuildSnapshot.Status.FAILED;
+        }
+        return RaptorBuildSnapshot.Status.BUILDING;
     }
 
     /**
@@ -660,7 +733,11 @@ public class RagflowAdapter implements KnowledgeEnginePort {
             log.debug("未配置 mis.kb.engine.rerank-model-id，capabilities 声明 rerankSupported=false");
         }
         boolean deleteAvailable = props != null && props.isDeleteSupported();
+        boolean raptorAvailable = props == null || props.isRaptorEnabled();
+        // 9 参：rerank / metadataFilter / replace / hybrid / delete / parserOcr /
+        // parserOverlap / graph / raptor。raptor 受平台总开关 mis.kb.engine.raptor-enabled
+        // 控制（U4 裁定；默认 true，Nacos 可热调）。
         return EngineCapabilities.of(rerankAvailable, true, true, true, deleteAvailable,
-                false, false, true);
+                false, false, true, raptorAvailable);
     }
 }

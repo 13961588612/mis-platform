@@ -26,6 +26,8 @@ import com.mis.adminbff.dto.kb.KbHitTestRequest;
 import com.mis.adminbff.dto.kb.KbHitTestResultVO;
 import com.mis.adminbff.dto.kb.KbGraphBuildResultVO;
 import com.mis.adminbff.dto.kb.KbGraphStatusVO;
+import com.mis.adminbff.dto.kb.KbRaptorBuildResultVO;
+import com.mis.adminbff.dto.kb.KbRaptorStatusVO;
 import com.mis.adminbff.dto.kb.KbLibraryDeleteResultVO;
 import com.mis.adminbff.dto.kb.KbLibraryDetailVO;
 import com.mis.adminbff.dto.kb.KbLibraryVO;
@@ -151,6 +153,10 @@ public class KbWebClient extends AbstractDownstreamClient {
     private static final ParameterizedTypeReference<Result<KbGraphBuildResultVO>> GRAPH_BUILD_RESULT =
             new ParameterizedTypeReference<>() {};
     private static final ParameterizedTypeReference<Result<KbGraphStatusVO>> GRAPH_STATUS =
+            new ParameterizedTypeReference<>() {};
+    private static final ParameterizedTypeReference<Result<KbRaptorBuildResultVO>> RAPTOR_BUILD_RESULT =
+            new ParameterizedTypeReference<>() {};
+    private static final ParameterizedTypeReference<Result<KbRaptorStatusVO>> RAPTOR_STATUS =
             new ParameterizedTypeReference<>() {};
     private static final ParameterizedTypeReference<Result<List<KbCategoryAdminVO>>> CATEGORY_ADMIN_LIST =
             new ParameterizedTypeReference<>() {};
@@ -473,6 +479,31 @@ public class KbWebClient extends AbstractDownstreamClient {
                 .headers(loginContextHeaders())
                 .retrieve()
                 .bodyToMono(GRAPH_STATUS));
+    }
+
+    /**
+     * 触发 RAPTOR 摘要构建（Wave C RAPTOR，T02）。
+     *
+     * <p>POST /internal/v1/kb/libraries/{id}/raptor/build（mis-kb 内部端点），
+     * BFF 只透传不做任何业务决策。
+     */
+    public KbRaptorBuildResultVO buildRaptor(Long libraryId) {
+        return block(client().post()
+                .uri("/internal/v1/kb/libraries/{id}/raptor/build", libraryId)
+                .headers(loginContextHeaders())
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(Map.of())
+                .retrieve()
+                .bodyToMono(RAPTOR_BUILD_RESULT));
+    }
+
+    /** 查询 RAPTOR 构建状态（Wave C RAPTOR，T02；前端 3s 轮询）。 */
+    public KbRaptorStatusVO raptorBuildStatus(Long libraryId) {
+        return block(client().get()
+                .uri("/internal/v1/kb/libraries/{id}/raptor/build-status", libraryId)
+                .headers(loginContextHeaders())
+                .retrieve()
+                .bodyToMono(RAPTOR_STATUS));
     }
 
     // ------------------------------------------------------------------ 文档

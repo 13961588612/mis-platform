@@ -312,7 +312,7 @@ Flyway **只追加**新版本（如 `V1x__kb_synonym.sql`）。
 
 - 库详情可见 `kgBuildStatus`。
 - 金标：10～20 条多跳/关系型问题；对比 **hybrid-only vs hybrid+graph**；记录时延与资源。
-- **不达标 → 不进 Wave C，不全量打开 Graph。**
+- **不达标 → 不进 Wave C，不全量打开 Graph。**（⚠️ 该门禁仅约束 Wave B 自身是否全量开图，**不再阻塞 Wave C 独立启动**——U2 拍板 2026-08-12，见 §7 门禁修订）
 
 ### 6.4 非目标（二期）
 
@@ -322,8 +322,14 @@ Flyway **只追加**新版本（如 `V1x__kb_synonym.sql`）。
 
 ---
 
-## 7. Wave C — 条件启动（仅 Wave B 达标后）
+## 7. Wave C — 可独立启动（RAPTOR/TOC）
 
+> **门禁修订（U2 拍板 2026-08-12）**：Wave C 不再依赖 Wave B 金标，**可独立启动**。启动门禁：
+> 1. **RAPTOR 自身试点库金标 on/off 对比**：≥60% 金标问题（开 RAPTOR）有新增/更相关证据、时延增量 ≤2×、记录 token/资源消耗；
+> 2. **引擎契约 T00 实测固化**：`parser_config.raptor` 字段白名单与校验范围、`POST /datasets/{id}/index?type=raptor` 触发/状态、检索融合路径，见 [ragflow-raptor-probe-2026-08-12.md](ragflow-raptor-probe-2026-08-12.md)；
+> 3. **与 Graph 共存**：graph/raptor 构建任务实测**不互斥、可并行**（P2c）；同一库 `use_raptor` + `use_graphrag` 可同时为 true（P1c）；排期错峰仅作资源建议（LLM token/显存）。
+>
+> ⚠️ **最高优先级实现契约（T00 P1f）**：切换 `chunk_method` 会把引擎 `parser_config` **重置为该方法的默认模板**（RAPTOR/图谱配置被清空）。`RagflowClient.updateDatasetSettings` 每次 PUT 必须**同时携带 `chunk_method` + 完整 `parser_config`**（含 raptor + graphrag 全字段），否则先前的 RAPTOR 配置静默丢失。
 
 | 能力 | 做法 |
 |------|------|

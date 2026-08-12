@@ -55,7 +55,10 @@ import static org.mockito.Mockito.when;
  *       且 body 只含白名单四键，<b>不得</b>出现 {@code top_k} /
  *       {@code similarity_threshold} / {@code vector_similarity_weight}（pydantic
  *       extra=forbid 会整单拒收 code:101）；</li>
- *   <li><b>B2-②</b> 仅改 topK/scoreThreshold 时（检索期参数）不发远端请求；</li>
+ *   <li><b>B2-②</b> ★ P1f（Wave C）：每次 PUT 恒携带 {@code chunk_method} + 完整
+ *       {@code parser_config}（含 raptor + graphrag 子对象，布尔按 MIS 开关原样下发），
+ *       即使仅改检索期参数或 settings 为 null——否则切过 chunk_method 后 RAPTOR/图谱
+ *       配置会被引擎重置且 MIS 无从感知；</li>
  *   <li><b>B1-①</b> {@code updateDocumentEnabled} 发 PUT + body {@code enabled}
  *       为<b>整数 0/1</b>（布尔会被拒 code:102）；</li>
  *   <li><b>B1-②</b> 适配器 {@code setDocumentEnabled} 走的是 PUT 启停（不是 DELETE 删除），
@@ -224,23 +227,89 @@ class RagflowClientHttpTest {
         }
 
         @Test
-        @DisplayName("仅改 topK/scoreThreshold（检索期参数）→ 不发远端请求")
-        void skipsRequestWhenOnlyRetrievalParamsChanged() {
+        @DisplayName("★ P1f：仅改 topK/scoreThreshold（检索期参数）→ 仍发 PUT，且携带默认 chunk_method + 完整 parser_config")
+        void sendsFullBodyEvenWhenOnlyRetrievalParamsChanged() throws Exception {
             RagSettings onlyTopK = new RagSettings(30, null, null, null, null,
                     null, null, null, null, null, null);
 
             newClient().updateDatasetSettings("ds-1", onlyTopK);
 
-            assertEquals(0, requestCount.get(),
-                    "只有检索期参数变化时不应打 RAGFlow（本实例不接受 dataset 级下发）");
+            assertEquals(1, requestCount.get(),
+                    "P1f：每次 PUT 都必须携带 chunk_method + 完整 parser_config，即使检索期参数单独变更");
+            JsonNode body = mapper.readTree(lastBody.get());
+            assertEquals("naive", body.get("chunk_method").asText(),
+                    "未设置 chunkMethod → 兜底默认 naive（避免引擎沿用上一轮 chunk_method 残留）");
+            assertTrue(body.get("parser_config").has("raptor"),
+                    "raptor 子对象恒下发（P1f）");
+            assertFalse(body.get("parser_config").get("raptor").get("use_raptor").asBoolean(),
+                    "useRaptor=false → use_raptor:false 原样下发");
+            assertTrue(body.get("parser_config").has("graphrag"),
+                    "graphrag 子对象恒下发（P1f）");
+            assertFalse(body.get("parser_config").get("graphrag").get("use_graphrag").asBoolean(),
+                    "useKnowledgeGraph=false → use_graphrag:false 原样下发");
         }
 
         @Test
-        @DisplayName("null 设置 → 不发远端请求（无任何有效字段）")
-        void nullSettingsSkipsRequest() {
+        @DisplayName("★ P1f：null 设置 → 仍发 PUT，且按默认模板下发 chunk_method + 完整 parser_config")
+        void nullSettingsStillSendsFullDefaultBody() throws Exception {
             newClient().updateDatasetSettings("ds-1", null);
 
-            assertEquals(0, requestCount.get());
+            assertEquals(1, requestCount.get(),
+                    "P1f：null 设置也按默认模板下发（use_raptor=false / use_graphrag=false / naive），"
+                            + "不允许空 body 让引擎沿用上一轮残留");
+            JsonNode body = mapper.readTree(lastBody.get());
+            assertEquals("naive", body.get("chunk_method").asText());
+            assertTrue(body.get("parser_config").has("raptor"));
+            assertFalse(body.get("parser_config").get("raptor").get("use_raptor").asBoolean());
+            assertTrue(body.get("parser_config").has("graphrag"));
+            assertFalse(body.get("parser_config").get("graphrag").get("use_graphrag").asBoolean());
+        }
+
+        @Test
+        @DisplayName("★ U6 + P1f：useRaptor=true 全参 → raptor 子对象 5 字段正确下发，且绝不出现 random_seed")
+        void raptorSubObjectSerializedWithoutRandomSeed() throws Exception {
+            RagSettings raptorOn = new RagSettings(
+                    20, 0.6D, Boolean.TRUE, "BAAI/bge-m3", "hybrid", "naive",
+                    512, "###", null, null, null,
+                    null, null, null, null, null, null,
+                    Boolean.TRUE, 1024, 0.2D, 32, "custom prompt", null, null);
+
+            newClient().updateDatasetSettings("ds-1", raptorOn);
+
+            JsonNode body = mapper.readTree(lastBody.get());
+            JsonNode raptor = body.get("parser_config").get("raptor");
+            assertTrue(raptor.get("use_raptor").asBoolean(),
+                    "useRaptor=true → use_raptor:true 原样下发（P1f）");
+            assertEquals(1024, raptor.get("max_token").asInt());
+            assertEquals(0.2, raptor.get("threshold").asDouble(), 0.0001);
+            assertEquals(32, raptor.get("max_cluster").asInt());
+            assertEquals("custom prompt", raptor.get("prompt").asText());
+            assertFalse(raptor.has("random_seed"),
+                    "U6：引擎字段名是 random_seed（写 seed → code:101），MIS 不下发该键走引擎默认");
+            // graphrag 子对象仍恒在（P1c：与 raptor 可共存）
+            assertTrue(body.get("parser_config").has("graphrag"));
+            assertFalse(body.get("parser_config").get("graphrag").get("use_graphrag").asBoolean());
+        }
+
+        @Test
+        @DisplayName("★ P1f：useKnowledgeGraph=true → graphrag 子对象带 method=light，且 raptor 子对象仍恒在")
+        void graphragSubObjectCoexistsWithRaptor() throws Exception {
+            RagSettings graphOn = new RagSettings(
+                    20, 0.6D, Boolean.TRUE, "BAAI/bge-m3", "hybrid", "naive",
+                    512, "###", null, null, null,
+                    null, null, null, Boolean.TRUE, "ready", null,
+                    Boolean.TRUE, 1024, 0.1D, 64, null, null, null);
+
+            newClient().updateDatasetSettings("ds-1", graphOn);
+
+            JsonNode body = mapper.readTree(lastBody.get());
+            JsonNode graphrag = body.get("parser_config").get("graphrag");
+            assertTrue(graphrag.get("use_graphrag").asBoolean());
+            assertEquals("light", graphrag.get("method").asText(),
+                    "Wave B：开启图谱时 method=light（引擎唯一接受的构图方法）");
+            // raptor 子对象同体共存（P1c 实测 raptor + graphrag 可同时 true）
+            assertTrue(body.get("parser_config").has("raptor"));
+            assertTrue(body.get("parser_config").get("raptor").get("use_raptor").asBoolean());
         }
     }
 

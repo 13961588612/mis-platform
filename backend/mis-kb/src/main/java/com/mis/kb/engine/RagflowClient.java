@@ -62,6 +62,16 @@ public class RagflowClient {
      */
     public static final String INDEX_TYPE_GRAPH = "graph";
 
+    /**
+     * RAPTOR 构建触发/状态查询的 index type 参数值（Wave C RAPTOR）。
+     *
+     * <p><b>必须是 {@code raptor}</b>——T00 P2a/P2b 实测
+     * （{@code ragflow-raptor-probe-2026-08-12.md}）：{@code POST/GET .../index?type=raptor}
+     * 与 graph 同构（触发返回 {@code task_id}，状态返回 {@code progress}：
+     * 1.0=完成 / -1=失败 / 其他=构建中）。
+     */
+    public static final String INDEX_TYPE_RAPTOR = "raptor";
+
     /** 构图 method 值（T00 G1 实测：light/graph 二选一；PoC 用 light 快速构图）。 */
     private static final String GRAPH_METHOD_LIGHT = "light";
 
@@ -153,52 +163,80 @@ public class RagflowClient {
      *       参数，已在 {@link #retrieve} 随检索请求下发，不应再出现在建库期 body 里。
      *       旧实现把 {@code topK} / {@code scoreThreshold} 硬塞进来，导致 PUT 全量失败。</li>
      * </ol>
-     * 本方法现只下发本实例接受的四个键：{@code embedding_model} / {@code chunk_method} /
-     * {@code parser_config}（内嵌 {@code chunk_token_num} / {@code delimiter}）。
+     * 本方法只下发本实例接受的键：{@code embedding_model} / {@code chunk_method} /
+     * {@code parser_config}（内嵌 {@code chunk_token_num} / {@code delimiter} /
+     * {@code raptor} / {@code graphrag}）。
      * {@code topK} / {@code scoreThreshold} 仍按原语义保存在本地并由检索期合并器生效。
      *
-     * <p>所有字段均为「非 null 才下发」，避免用 null 覆盖 RAGFlow 侧既有配置。
+     * <p><b>Wave C P1f 关键契约（最高优先级，T00 实测）：</b>引擎在<b>切换
+     * {@code chunk_method}</b> 时会把 {@code parser_config} 重置为该方法的默认模板
+     * （raptor 变回 {@code {"use_raptor": false}}、graphrag 变回 {@code {"use_graphrag": false}}）。
+     * 因此<b>每次 PUT 必须同时携带 {@code chunk_method} + 完整 {@code parser_config}</b>
+     * （含 raptor + graphrag 子对象，布尔值按 MIS 开关原样下发 true/false），否则切过
+     * 切片方式后 RAPTOR/图谱配置会被静默清空且 MIS 无从感知。
+     *
+     * <p><b>RAPTOR 子对象白名单（T00 P1a/P1b/P1g/P1i 实测，11 字段）：</b>MIS 只下发跟踪的
+     * 5 字段：{@code use_raptor}(bool) / {@code max_token}(int, [1,2048] 合法但 MIS 校验
+     * [512,2048]) / {@code threshold}(float, [0,1]) / {@code max_cluster}(int, [1,1024]) /
+     * {@code prompt}(str, ≤2000，占位符不强制)。<b>U6 裁定：不暴露 {@code random_seed}</b>
+     * ——引擎字段名是 {@code random_seed}（写 {@code seed} → code:101，T00 P1i 实测），
+     * MIS 不下发该键，走引擎默认（0）。{@code clustering_method}/{@code scope}/
+     * {@code tree_builder}/{@code auto_disable_for_structured_data}/{@code ext} 不暴露
+     * （走引擎默认值）。未知键一律 code:101 被拒（P1d/P1e 实测），body 只放白名单键。
+     *
+     * <p><b>Wave B GraphRAG（T02）：</b>{@code parser_config.graphrag.use_graphrag}（布尔）
+     * + {@code method}（light/graph）。P1c 实测 raptor + graphrag <b>可共存</b>（同体
+     * code:0，回读双 true）——两个子对象每次都原样下发，互不覆盖。
      *
      * @param datasetId 原生 dataset id
-     * @param settings  库级 RAG 设置
+     * @param settings  库级 RAG 设置（已 withDefaults，chunkMethod/useRaptor/useKnowledgeGraph 恒非空）
      */
     public void updateDatasetSettings(String datasetId, RagSettings settings) {
         Map<String, Object> body = new LinkedHashMap<>();
-        if (settings != null) {
-            // 向量模型独立字段，仅在显式配置时下发
-            if (settings.embeddingModel() != null && !settings.embeddingModel().isBlank()) {
-                body.put("embedding_model", settings.embeddingModel());
-            }
-            // T03：分块方法与分块参数
-            if (settings.chunkMethod() != null && !settings.chunkMethod().isBlank()) {
-                body.put("chunk_method", settings.chunkMethod());
-            }
-            Map<String, Object> parserConfig = new LinkedHashMap<>();
-            if (settings.chunkTokenNum() != null) {
-                parserConfig.put("chunk_token_num", settings.chunkTokenNum());
-            }
-            if (settings.separator() != null && !settings.separator().isBlank()) {
-                parserConfig.put("delimiter", settings.separator());
-            }
-            // Wave B GraphRAG PoC（T02）：开启图谱时下发 parser_config.graphrag。
-            // T00 G1 实测：启用键 = parser_config.graphrag.use_graphrag（布尔）+ method（light/graph），
-            // 不是顶层 use_kg（那是检索期参数，见 searchDataset）。只在开关为真时下发，
-            // 避免用 null/false 覆盖引擎侧既有 graphrag 配置（与「非 null 才下发」同口径）。
-            if (Boolean.TRUE.equals(settings.useKnowledgeGraph())) {
-                Map<String, Object> graphrag = new LinkedHashMap<>();
-                graphrag.put("use_graphrag", true);
-                graphrag.put("method", GRAPH_METHOD_LIGHT);
-                parserConfig.put("graphrag", graphrag);
-            }
-            if (!parserConfig.isEmpty()) {
-                body.put("parser_config", parserConfig);
-            }
+        // P1f：chunk_method + 完整 parser_config 恒下发——settings 为 null 时也按默认模板
+        // 下发（use_raptor=false / use_graphrag=false + 默认 naive），保证每次 PUT 都带全配置，
+        // 否则切过 chunk_method 后 raptor/graphrag 会被重置且 MIS 无从感知
+        if (settings != null && settings.embeddingModel() != null && !settings.embeddingModel().isBlank()) {
+            body.put("embedding_model", settings.embeddingModel());
         }
-        if (body.isEmpty()) {
-            // 无任何有效设置项（如仅 topK/scoreThreshold 被修改），跳过远端调用：
-            // 这两个字段属检索期参数，本实例不接受在 dataset 级下发，留待检索请求携带
-            return;
+        // P1f：chunk_method 恒下发（withDefaults 后非空；空值兜底默认 naive，
+        // 避免 null 被引擎当成「未设置」而走上一轮 chunk_method 的残留）
+        body.put("chunk_method", settings != null && settings.chunkMethod() != null
+                && !settings.chunkMethod().isBlank()
+                ? settings.chunkMethod() : RagSettings.DEFAULT_CHUNK_METHOD);
+        Map<String, Object> parserConfig = new LinkedHashMap<>();
+        if (settings != null && settings.chunkTokenNum() != null) {
+            parserConfig.put("chunk_token_num", settings.chunkTokenNum());
         }
+        if (settings != null && settings.separator() != null && !settings.separator().isBlank()) {
+            parserConfig.put("delimiter", settings.separator());
+        }
+        // P1f：完整 parser_config 恒下发——raptor 子对象（5 字段白名单）
+        Map<String, Object> raptor = new LinkedHashMap<>();
+        raptor.put("use_raptor", settings != null && Boolean.TRUE.equals(settings.useRaptor()));
+        if (settings != null && settings.raptorMaxTokenNum() != null) {
+            raptor.put("max_token", settings.raptorMaxTokenNum());
+        }
+        if (settings != null && settings.raptorThreshold() != null) {
+            raptor.put("threshold", settings.raptorThreshold());
+        }
+        if (settings != null && settings.raptorMaxCluster() != null) {
+            raptor.put("max_cluster", settings.raptorMaxCluster());
+        }
+        if (settings != null && settings.raptorPrompt() != null && !settings.raptorPrompt().isBlank()) {
+            raptor.put("prompt", settings.raptorPrompt());
+        }
+        parserConfig.put("raptor", raptor);
+        // P1f：完整 parser_config 恒下发——graphrag 子对象（布尔按 MIS 开关原样下发，
+        // 防止 chunk_method 切换被重置后无法自愈；P1c 实测与 raptor 可共存）
+        Map<String, Object> graphrag = new LinkedHashMap<>();
+        graphrag.put("use_graphrag",
+                settings != null && Boolean.TRUE.equals(settings.useKnowledgeGraph()));
+        if (settings != null && Boolean.TRUE.equals(settings.useKnowledgeGraph())) {
+            graphrag.put("method", GRAPH_METHOD_LIGHT);
+        }
+        parserConfig.put("graphrag", graphrag);
+        body.put("parser_config", parserConfig);
         RfResponse<RfDataset> resp = putFor("/api/v1/datasets/" + datasetId, body,
                 new ParameterizedTypeReference<>() {});
         if (resp == null || !resp.ok()) {
@@ -670,6 +708,72 @@ public class RagflowClient {
         if (code != 0) {
             throw new BusinessException(50000,
                     "RAGFlow 查询图谱构建状态失败: code=" + code + " " + root.path("message").asText(""));
+        }
+        JsonNode data = root.path("data");
+        return data == null || data.isNull() || data.isMissingNode() ? JsonNodeFactory.instance.objectNode() : data;
+    }
+
+    /**
+     * 触发 RAPTOR 摘要构建（Wave C RAPTOR，T02）。
+     *
+     * <p><b>T00 P2a 实测契约：</b>{@code POST /api/v1/datasets/{id}/index?type=raptor}
+     * → {@code {"code":0,"data":{"task_id":"..."}}}（与 graph 同构）。
+     * 引擎侧只排队任务并立即返回 {@code task_id}，构建完成在后台进行。
+     * graph/raptor <b>不互斥可并行</b>（T00 P2c 实测）；重复触发 raptor →
+     * 引擎幂等跳过（{@code already has raptor RAPTOR chunks, skipping}），
+     * MIS 侧状态机 {@code building} 已先行拦截，双保险。
+     *
+     * @param datasetId 原生 dataset id
+     * @return 引擎侧 RAPTOR 构建任务 id
+     */
+    public String buildRaptor(String datasetId) {
+        RfResponse<JsonNode> resp = postFor(
+                "/api/v1/datasets/" + datasetId + "/index?type=" + INDEX_TYPE_RAPTOR,
+                Map.of(),
+                new ParameterizedTypeReference<>() {});
+        if (resp == null || !resp.ok() || resp.data() == null) {
+            throw new BusinessException(50000,
+                    "RAGFlow 触发 RAPTOR 构建失败: " + (resp == null ? "无响应" : resp.message()));
+        }
+        String taskId = resp.data().path("task_id").asText(null);
+        if (taskId == null || taskId.isBlank()) {
+            throw new BusinessException(50000, "RAGFlow 触发 RAPTOR 构建失败: 响应缺少 task_id");
+        }
+        log.info("RAGFlow RAPTOR 构建已排队 datasetId={} taskId={}", datasetId, taskId);
+        return taskId;
+    }
+
+    /**
+     * 查询 RAPTOR 构建状态（Wave C RAPTOR，T02）。
+     *
+     * <p><b>T00 P2b 实测契约：</b>{@code GET /api/v1/datasets/{id}/index?type=raptor}
+     * → {@code data} 为 task dict：{@code progress}（<b>1.0=完成 / -1=失败 / 其他=构建中</b>）、
+     * {@code progress_msg}（构建日志）、{@code task_type="raptor"}、
+     * {@code process_duration}（秒）；<b>无任务时 {@code data}={}</b>（空对象）——
+     * 与 graph 完全同构。
+     *
+     * <p>本方法只承载原生响应，progress → MIS 状态映射由
+     * {@link com.mis.kb.domain.service.KbRaptorService} 完成。
+     *
+     * @param datasetId 原生 dataset id
+     * @return task dict（{@code data} 节点）；无任务时为空对象（非 null，调用方判空）
+     */
+    public JsonNode queryRaptorBuildStatus(String datasetId) {
+        JsonNode root = client.get()
+                .uri(uriBuilder -> uriBuilder
+                        .path("/api/v1/datasets/" + datasetId + "/index")
+                        .queryParam("type", INDEX_TYPE_RAPTOR)
+                        .build())
+                .header("Authorization", bearer())
+                .retrieve()
+                .body(JsonNode.class);
+        if (root == null) {
+            throw new BusinessException(50000, "RAGFlow 查询 RAPTOR 构建状态失败: 无响应");
+        }
+        int code = root.path("code").asInt(-1);
+        if (code != 0) {
+            throw new BusinessException(50000,
+                    "RAGFlow 查询 RAPTOR 构建状态失败: code=" + code + " " + root.path("message").asText(""));
         }
         JsonNode data = root.path("data");
         return data == null || data.isNull() || data.isMissingNode() ? JsonNodeFactory.instance.objectNode() : data;

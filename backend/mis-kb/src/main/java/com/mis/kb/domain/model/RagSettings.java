@@ -52,6 +52,32 @@ package com.mis.kb.domain.model;
  *       {@code ready} 时清空（状态机共享知识 §10-10）。</li>
  * </ul>
  *
+ * <p><b>Wave C RAPTOR（T01）新增七字段（追加末位，零 DDL）：</b>
+ * {@code useRaptor} / {@code raptorMaxTokenNum} / {@code raptorThreshold} /
+ * {@code raptorMaxCluster} / {@code raptorPrompt} / {@code raptorBuildStatus} /
+ * {@code raptorBuildMessage}。
+ * <ul>
+ *   <li>{@code useRaptor}（默认 {@code false}）：库级 RAPTOR 开关。引擎映射 =
+ *       {@code parser_config.raptor.use_raptor}（建库/更新期下发，{@code RagflowClient}）。
+ *       <b>不设库数上限</b>（U4 裁定：无 {@code KB_RAPTOR_LIBRARY_LIMIT}），仅受平台总开关
+ *       {@code mis.kb.engine.raptor-enabled}（默认 true）+ 能力 {@code raptor} 闸门控制。</li>
+ *   <li>{@code raptorMaxTokenNum}（默认 {@code 1024}）：摘要 chunk 最大 token 数，
+ *       合法区间 {@code [512, 2048]}（T00 P1b 实测：4096 → code:101 被拒；常量见
+ *       {@link RaptorConfig}，语义与 {@code chunkTokenNum} 不同——切片 vs 摘要）。</li>
+ *   <li>{@code raptorThreshold}（默认 {@code 0.1}）：聚类相似度阈值 {@code [0, 1]}（含 0）。</li>
+ *   <li>{@code raptorMaxCluster}（默认 {@code 64}）：最大聚类数 {@code [1, 1024]}。</li>
+ *   <li>{@code raptorPrompt}（默认官方 prompt）：递归摘要提示词，长度 ≤2000；
+ *       引擎<b>不强制</b> {@code {cluster_content}} 占位符（T00 P1g 实测）。</li>
+ *   <li>{@code raptorBuildStatus}（默认 {@code none}）：四态 {@code none|building|ready|failed}，
+ *       与 {@code kgBuildStatus} 同模式：<b>落库（MIS 唯一事实源）+ 查询时引擎刷新回写</b>
+ *       （{@code KbRaptorService.refreshStatus}）。graph/raptor 构建<b>不互斥可并行</b>
+ *       （T00 P2c 实测），两者各自独立状态机。</li>
+ *   <li>{@code raptorBuildMessage}（默认 {@code null}，≤200）：失败/构建中原因摘要；
+ *       {@code ready} 时清空。</li>
+ * </ul>
+ * <b>⚠ U6 裁定：不暴露 {@code random_seed}</b>——引擎字段名是 {@code random_seed}
+ * （写 {@code seed} 会 code:101 被拒，T00 P1i 实测），MIS 不下发该键，走引擎默认（0）。
+ *
  * @param topK                   召回条数上限
  * @param scoreThreshold         相似度阈值（0~1）
  * @param rerank                 是否启用重排（模型 ID 来自全局配置 {@code mis.kb.engine.rerank-model-id}）
@@ -69,6 +95,13 @@ package com.mis.kb.domain.model;
  * @param useKnowledgeGraph      知识图谱开关；能力 {@code graphrag=true} 前**不下发**；Wave B GraphRAG PoC 新增
  * @param kgBuildStatus          图谱构建状态 none|building|ready|failed；落库 + 引擎刷新回写；Wave B GraphRAG PoC 新增
  * @param kgBuildMessage         图谱构建消息摘要（≤200，ready 时清空）；Wave B GraphRAG PoC 新增
+ * @param useRaptor              RAPTOR 摘要开关；能力 {@code raptor=true} 前**不下发**；Wave C RAPTOR 新增
+ * @param raptorMaxTokenNum      RAPTOR 摘要 chunk 最大 token 数 [512,2048]，默认 1024；Wave C RAPTOR 新增
+ * @param raptorThreshold        RAPTOR 聚类相似度阈值 [0,1]，默认 0.1；Wave C RAPTOR 新增
+ * @param raptorMaxCluster       RAPTOR 最大聚类数 [1,1024]，默认 64；Wave C RAPTOR 新增
+ * @param raptorPrompt           RAPTOR 递归摘要提示词（≤2000）；Wave C RAPTOR 新增
+ * @param raptorBuildStatus      RAPTOR 构建状态 none|building|ready|failed；落库 + 引擎刷新回写；Wave C RAPTOR 新增
+ * @param raptorBuildMessage     RAPTOR 构建消息摘要（≤200，ready 时清空）；Wave C RAPTOR 新增
  */
 public record RagSettings(
         Integer topK,
@@ -87,15 +120,24 @@ public record RagSettings(
         Integer chunkOverlapTokenNum,
         Boolean useKnowledgeGraph,
         String kgBuildStatus,
-        String kgBuildMessage) {
+        String kgBuildMessage,
+        Boolean useRaptor,
+        Integer raptorMaxTokenNum,
+        Double raptorThreshold,
+        Integer raptorMaxCluster,
+        String raptorPrompt,
+        String raptorBuildStatus,
+        String raptorBuildMessage) {
 
     /**
-     * 兼容构造：11 参数旧签名，OCR/overlap 三字段与图谱三字段置 {@code null}（未设置）。
+     * 兼容构造：11 参数旧签名，OCR/overlap 三字段、图谱三字段与 RAPTOR 七字段置 {@code null}（未设置）。
      *
      * <p>record 是位置参数，新增字段后既有 11 参构造点（测试夹具、门面组装等）
      * 无法再用旧签名；本构造器保持旧调用点零改动，同时保证「未设置」语义
      * 由 {@link #withDefaults()} 兜底（ocrEnabled→false、ocrLanguage→zh、
-     * useKnowledgeGraph→false、kgBuildStatus→none）。
+     * useKnowledgeGraph→false、kgBuildStatus→none、useRaptor→false、
+     * raptorMaxTokenNum→1024、raptorThreshold→0.1、raptorMaxCluster→64、
+     * raptorBuildStatus→none）。
      */
     public RagSettings(
             Integer topK,
@@ -111,17 +153,18 @@ public record RagSettings(
             String rerankModelId) {
         this(topK, scoreThreshold, rerank, embeddingModel, retrievalMethod, chunkMethod,
                 chunkTokenNum, separator, emptyResultStrategy, vectorSimilarityWeight,
-                rerankModelId, null, null, null, null, null, null);
+                rerankModelId, null, null, null, null, null, null,
+                null, null, null, null, null, null, null);
     }
 
     /**
-     * 兼容构造：14 参数旧签名（企业级增强一期 canonical），图谱三字段置 {@code null}。
+     * 兼容构造：14 参数旧签名（企业级增强一期 canonical），图谱三字段与 RAPTOR 七字段置 {@code null}。
      *
-     * <p>保持既有 14 参全量构造点（存量代码、测试）零改动；图谱三字段「未设置」语义
-     * 由 {@link #withDefaults()} 兜底。注意：需要<b>透传</b>图谱字段的代码
+     * <p>保持既有 14 参全量构造点（存量代码、测试）零改动；「未设置」语义
+     * 由 {@link #withDefaults()} 兜底。注意：需要<b>透传</b>图谱/RAPTOR 字段的代码
      * （如 {@code RagSettingsService.enforceRerankAvailability}、
-     * {@code RetrieveQueryResolver.applyOverride}）请用 17 参 canonical，
-     * 不要走本构造（会把图谱字段静默置 null）。
+     * {@code RetrieveQueryResolver.applyOverride}）请用 24 参 canonical，
+     * 不要走本构造（会把图谱/RAPTOR 字段静默置 null）。
      */
     public RagSettings(
             Integer topK,
@@ -140,7 +183,42 @@ public record RagSettings(
             Integer chunkOverlapTokenNum) {
         this(topK, scoreThreshold, rerank, embeddingModel, retrievalMethod, chunkMethod,
                 chunkTokenNum, separator, emptyResultStrategy, vectorSimilarityWeight,
-                rerankModelId, ocrEnabled, ocrLanguage, chunkOverlapTokenNum, null, null, null);
+                rerankModelId, ocrEnabled, ocrLanguage, chunkOverlapTokenNum, null, null, null,
+                null, null, null, null, null, null, null);
+    }
+
+    /**
+     * 兼容构造：17 参数旧签名（Wave B GraphRAG canonical），RAPTOR 七字段置 {@code null}。
+     *
+     * <p>保持既有 17 参构造点（存量测试夹具等）零改动；RAPTOR 七字段「未设置」语义
+     * 由 {@link #withDefaults()} 兜底。注意：需要<b>透传</b> RAPTOR 字段的代码
+     * （{@code RagSettingsService} 三处 + {@code KbGraphService.writeBackStatus} +
+     * {@code RetrieveQueryResolver.applyOverride}）请用 24 参 canonical，
+     * 不要走本构造（会把 RAPTOR 字段静默置 null——Wave B §10-8 教训同款）。
+     */
+    public RagSettings(
+            Integer topK,
+            Double scoreThreshold,
+            Boolean rerank,
+            String embeddingModel,
+            String retrievalMethod,
+            String chunkMethod,
+            Integer chunkTokenNum,
+            String separator,
+            String emptyResultStrategy,
+            Double vectorSimilarityWeight,
+            String rerankModelId,
+            Boolean ocrEnabled,
+            String ocrLanguage,
+            Integer chunkOverlapTokenNum,
+            Boolean useKnowledgeGraph,
+            String kgBuildStatus,
+            String kgBuildMessage) {
+        this(topK, scoreThreshold, rerank, embeddingModel, retrievalMethod, chunkMethod,
+                chunkTokenNum, separator, emptyResultStrategy, vectorSimilarityWeight,
+                rerankModelId, ocrEnabled, ocrLanguage, chunkOverlapTokenNum,
+                useKnowledgeGraph, kgBuildStatus, kgBuildMessage,
+                null, null, null, null, null, null, null);
     }
 
     /** 默认召回条数。 */
@@ -187,6 +265,15 @@ public record RagSettings(
     /** 图谱构建状态码值：构建失败（可重试）。 */
     public static final String KG_STATUS_FAILED = "failed";
 
+    /** RAPTOR 构建状态码值：未构建（默认；可触发构建）。 */
+    public static final String RAPTOR_STATUS_NONE = "none";
+    /** RAPTOR 构建状态码值：构建中（拒绝重复触发）。 */
+    public static final String RAPTOR_STATUS_BUILDING = "building";
+    /** RAPTOR 构建状态码值：已就绪（raptorBuildMessage 清空）。 */
+    public static final String RAPTOR_STATUS_READY = "ready";
+    /** RAPTOR 构建状态码值：构建失败（可重试）。 */
+    public static final String RAPTOR_STATUS_FAILED = "failed";
+
     /**
      * 全局默认设置（无库级配置、或多库检索回落时使用）。
      *
@@ -195,6 +282,11 @@ public record RagSettings(
      *
      * <p>图谱三字段默认：{@code useKnowledgeGraph=false}、{@code kgBuildStatus="none"}、
      * {@code kgBuildMessage=null}。
+     *
+     * <p>RAPTOR 七字段默认（Wave C）：{@code useRaptor=false}、
+     * {@code raptorMaxTokenNum=1024}、{@code raptorThreshold=0.1}、
+     * {@code raptorMaxCluster=64}、{@code raptorPrompt=官方 prompt}、
+     * {@code raptorBuildStatus="none"}、{@code raptorBuildMessage=null}。
      *
      * @return 一份关键字段非空的默认设置
      */
@@ -216,6 +308,13 @@ public record RagSettings(
                 null,
                 Boolean.FALSE,
                 KG_STATUS_NONE,
+                null,
+                Boolean.FALSE,
+                RaptorConfig.DEFAULT_MAX_TOKEN_NUM,
+                RaptorConfig.DEFAULT_THRESHOLD,
+                RaptorConfig.DEFAULT_MAX_CLUSTER,
+                RaptorConfig.DEFAULT_PROMPT,
+                RAPTOR_STATUS_NONE,
                 null);
     }
 
@@ -237,6 +336,14 @@ public record RagSettings(
      * <p>{@code useKnowledgeGraph} null → {@code false}；{@code kgBuildStatus} 空/非法 →
      * {@value #KG_STATUS_NONE}（四态白名单由 {@link #normalizeKgBuildStatus} 归一）；
      * {@code kgBuildMessage} 保持 {@code null}（null = 无消息，由回写方写入）。
+     *
+     * <p><b>RAPTOR 七字段（Wave C）：</b>{@code useRaptor} null → {@code false}；
+     * {@code raptorMaxTokenNum} null/越界 → {@link RaptorConfig#DEFAULT_MAX_TOKEN_NUM}；
+     * {@code raptorThreshold} null/越界 → {@link RaptorConfig#DEFAULT_THRESHOLD}；
+     * {@code raptorMaxCluster} null/越界 → {@link RaptorConfig#DEFAULT_MAX_CLUSTER}；
+     * {@code raptorPrompt} 空 → {@link RaptorConfig#DEFAULT_PROMPT}；
+     * {@code raptorBuildStatus} 空/非法 → {@value #RAPTOR_STATUS_NONE}；
+     * {@code raptorBuildMessage} 保持 {@code null}（由回写方写入）。
      *
      * @return 补齐默认值后的新实例（本记录不可变，原实例不受影响）
      */
@@ -261,7 +368,14 @@ public record RagSettings(
                 chunkOverlapTokenNum,
                 useKnowledgeGraph != null ? useKnowledgeGraph : Boolean.FALSE,
                 normalizeKgBuildStatus(kgBuildStatus),
-                kgBuildMessage);
+                kgBuildMessage,
+                useRaptor != null ? useRaptor : Boolean.FALSE,
+                normalizeRaptorMaxTokenNum(raptorMaxTokenNum),
+                normalizeRaptorThreshold(raptorThreshold),
+                normalizeRaptorMaxCluster(raptorMaxCluster),
+                normalizeRaptorPrompt(raptorPrompt),
+                normalizeRaptorBuildStatus(raptorBuildStatus),
+                raptorBuildMessage);
     }
 
     /**
@@ -270,6 +384,10 @@ public record RagSettings(
      * <p>命中测试「临时开启/关闭图谱增强」用（{@code HitTestRequest.enableGraph}）：
      * 只影响本次检索的内存值，<b>绝不落库</b>。图谱状态（kgBuildStatus/kgBuildMessage）
      * 保持原值——降级判定由 {@link RetrieveQueryResolver} S4.5 从库设置读取。
+     *
+     * <p><b>24 参 canonical 透传 RAPTOR 七字段</b>（useRaptor/raptorMaxTokenNum/
+     * raptorThreshold/raptorMaxCluster/raptorPrompt/raptorBuildStatus/raptorBuildMessage）——
+     * 绝不能走 17 参旧构造，否则 RAPTOR 字段被静默置 null（record 末位追加铁律 §10-8）。
      *
      * @param useKnowledgeGraph 本次生效的图谱开关
      * @return 覆写后的新实例（本记录不可变，原实例不受影响）
@@ -280,7 +398,33 @@ public record RagSettings(
                 chunkMethod, chunkTokenNum, separator, emptyResultStrategy,
                 vectorSimilarityWeight, rerankModelId,
                 ocrEnabled, ocrLanguage, chunkOverlapTokenNum,
-                useKnowledgeGraph, kgBuildStatus, kgBuildMessage);
+                useKnowledgeGraph, kgBuildStatus, kgBuildMessage,
+                useRaptor, raptorMaxTokenNum, raptorThreshold, raptorMaxCluster,
+                raptorPrompt, raptorBuildStatus, raptorBuildMessage);
+    }
+
+    /**
+     * 仅覆写 RAPTOR 开关，其余字段原样透传（Wave C RAPTOR，T03）。
+     *
+     * <p>命中测试「临时开启/关闭 RAPTOR 增强」用（{@code HitTestRequest.enableRaptor}）：
+     * 只影响本次检索的内存值，<b>绝不落库</b>。RAPTOR 构建状态
+     * （raptorBuildStatus/raptorBuildMessage）保持原值——降级判定由
+     * {@link RetrieveQueryResolver} S4.5 从库设置读取（与 {@link #withGraphOverride} 同款）。
+     *
+     * <p><b>24 参 canonical 透传图谱三字段</b>——绝不能走 17 参旧构造。
+     *
+     * @param useRaptor 本次生效的 RAPTOR 开关
+     * @return 覆写后的新实例（本记录不可变，原实例不受影响）
+     */
+    public RagSettings withRaptorOverride(boolean useRaptor) {
+        return new RagSettings(
+                topK, scoreThreshold, rerank, embeddingModel, retrievalMethod,
+                chunkMethod, chunkTokenNum, separator, emptyResultStrategy,
+                vectorSimilarityWeight, rerankModelId,
+                ocrEnabled, ocrLanguage, chunkOverlapTokenNum,
+                useKnowledgeGraph, kgBuildStatus, kgBuildMessage,
+                useRaptor, raptorMaxTokenNum, raptorThreshold, raptorMaxCluster,
+                raptorPrompt, raptorBuildStatus, raptorBuildMessage);
     }
 
     /**
@@ -369,5 +513,94 @@ public record RagSettings(
             return lower;
         }
         return KG_STATUS_NONE;
+    }
+
+    /**
+     * 归一化 RAPTOR 构建状态码值（静态工具，供校验层与合并器共用）。
+     *
+     * <p>四态白名单 {@code none}/{@code building}/{@code ready}/{@code failed}；
+     * 非法/空值一律回落 {@value #RAPTOR_STATUS_NONE}（防脏写，与
+     * {@link #normalizeKgBuildStatus} 同款口径）。
+     *
+     * @param status 原始码值，可为 {@code null}
+     * @return 合法码值之一；非法/空值一律回落 {@value #RAPTOR_STATUS_NONE}
+     */
+    public static String normalizeRaptorBuildStatus(String status) {
+        if (status == null || status.isBlank()) {
+            return RAPTOR_STATUS_NONE;
+        }
+        String lower = status.trim().toLowerCase();
+        if (RAPTOR_STATUS_NONE.equals(lower) || RAPTOR_STATUS_BUILDING.equals(lower)
+                || RAPTOR_STATUS_READY.equals(lower) || RAPTOR_STATUS_FAILED.equals(lower)) {
+            return lower;
+        }
+        return RAPTOR_STATUS_NONE;
+    }
+
+    /**
+     * 归一化 RAPTOR 摘要 chunk 最大 token 数（静态工具，供校验层与合并器共用）。
+     *
+     * <p>null/越界一律回落 {@link RaptorConfig#DEFAULT_MAX_TOKEN_NUM}（防脏写，
+     * 区间 {@code [512, 2048]} 由 {@link RaptorConfig#isValidMaxTokenNum} 判定）。
+     *
+     * @param n 原始值，可为 {@code null}
+     * @return 合法值之一；null/越界回落默认 1024
+     */
+    public static Integer normalizeRaptorMaxTokenNum(Integer n) {
+        if (n == null) {
+            return RaptorConfig.DEFAULT_MAX_TOKEN_NUM;
+        }
+        if (RaptorConfig.isValidMaxTokenNum(n)) {
+            return n;
+        }
+        return RaptorConfig.DEFAULT_MAX_TOKEN_NUM;
+    }
+
+    /**
+     * 归一化 RAPTOR 聚类相似度阈值（静态工具）。
+     *
+     * @param v 原始值，可为 {@code null}
+     * @return 合法值之一；null/越界回落 {@link RaptorConfig#DEFAULT_THRESHOLD}
+     */
+    public static Double normalizeRaptorThreshold(Double v) {
+        if (v == null) {
+            return RaptorConfig.DEFAULT_THRESHOLD;
+        }
+        if (RaptorConfig.isValidThreshold(v)) {
+            return v;
+        }
+        return RaptorConfig.DEFAULT_THRESHOLD;
+    }
+
+    /**
+     * 归一化 RAPTOR 最大聚类数（静态工具）。
+     *
+     * @param n 原始值，可为 {@code null}
+     * @return 合法值之一；null/越界回落 {@link RaptorConfig#DEFAULT_MAX_CLUSTER}
+     */
+    public static Integer normalizeRaptorMaxCluster(Integer n) {
+        if (n == null) {
+            return RaptorConfig.DEFAULT_MAX_CLUSTER;
+        }
+        if (RaptorConfig.isValidMaxCluster(n)) {
+            return n;
+        }
+        return RaptorConfig.DEFAULT_MAX_CLUSTER;
+    }
+
+    /**
+     * 归一化 RAPTOR 提示词（静态工具）。
+     *
+     * <p>空串回落官方默认 prompt；非空原样保留（引擎不强制 {@code {cluster_content}}
+     * 占位符，T00 P1g 实测，长度 ≤2000 由校验层把关——这里只做空值兜底，不截断）。
+     *
+     * @param prompt 原始提示词，可为 {@code null}
+     * @return 非空原值；空/null 回落 {@link RaptorConfig#DEFAULT_PROMPT}
+     */
+    public static String normalizeRaptorPrompt(String prompt) {
+        if (prompt == null || prompt.isBlank()) {
+            return RaptorConfig.DEFAULT_PROMPT;
+        }
+        return prompt;
     }
 }

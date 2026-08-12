@@ -20,6 +20,10 @@ import java.util.List;
  * {@code parserOverlapSupported}，直读 mis-kb {@code EngineCapabilities} 的对应布尔位。
  * 当前引擎不支持时前端据此置灰 OCR/overlap 控件并提示「暂不生效」。
  *
+ * <p><b>Wave C RAPTOR（T01）：</b>末位追加 {@code raptorSupported}，直读 mis-kb
+ * {@code EngineCapabilities.raptorSupported}（受平台总开关 {@code mis.kb.engine.raptor-enabled}
+ * 控制，默认 true）。当前引擎不支持时前端据此置灰 RAPTOR 开关并提示「暂不生效」。
+ *
  * @param engineType              引擎类型 ragflow/noop/mock
  * @param capabilities            能力码值列表
  * @param rerankSupported         当前配置下重排是否可用
@@ -29,6 +33,8 @@ import java.util.List;
  * @param deleteSupported         是否支持在线删除知识库（false 时只能归档）
  * @param parserOcrSupported      当前引擎是否支持 parser_config OCR 键（企业级增强一期新增）
  * @param parserOverlapSupported  当前引擎是否支持 parser_config overlap 键（企业级增强一期新增）
+ * @param graphSupported          当前引擎是否支持知识图谱构建/增强（Wave B GraphRAG PoC 新增）
+ * @param raptorSupported         当前引擎是否支持 RAPTOR 摘要构建/融合（Wave C RAPTOR 新增）
  */
 public record KbEngineCapabilitiesVO(
         String engineType,
@@ -39,5 +45,7 @@ public record KbEngineCapabilitiesVO(
         Boolean hybridSupported,
         Boolean deleteSupported,
         Boolean parserOcrSupported,
-        Boolean parserOverlapSupported) {
+        Boolean parserOverlapSupported,
+        Boolean graphSupported,
+        Boolean raptorSupported) {
 }

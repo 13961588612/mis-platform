@@ -171,10 +171,19 @@ public class MockAdapter implements KnowledgeEnginePort {
      * {@code true}：mock 引擎没有真实 parser_config 下发，声明支持让 CI 能覆盖 OCR/overlap
      * 参数合并、校验、UI 回显的完整分支（真实 ragflow 本期恒 false 走置灰分支）。
      *
-     * @return 七项能力全开的声明
+     * <p>Wave B GraphRAG PoC 起 {@code graph} 为 {@code true}：mock 引擎支持内存构图/状态
+     * 快照（走 {@code KnowledgeEnginePort} 默认实现返回 NONE），声明支持让 CI 覆盖构图状态机
+     * 与检索降级分支。
+     *
+     * <p>Wave C RAPTOR 起 {@code raptor} 为 {@code true}：mock 引擎的 {@code buildRaptor}/
+     * {@code queryRaptorBuildStatus} 走 {@code KnowledgeEnginePort} 默认实现（抛
+     * UnsupportedOperationException / 返回 NONE），声明支持让 CI 覆盖 RAPTOR 开关、
+     * 保存联动、状态回显的完整分支（真实 ragflow 的构建走 HTTP 实测路径）。
+     *
+     * @return 九项能力全开的声明
      */
     @Override
     public EngineCapabilities capabilities() {
-        return EngineCapabilities.of(true, true, true, true, true, true, true);
+        return EngineCapabilities.of(true, true, true, true, true, true, true, true, true);
     }
 }

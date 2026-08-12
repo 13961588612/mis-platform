@@ -116,7 +116,22 @@ public enum KbResultCode {
     /** 图谱构建中，拒绝重复触发（状态机 building，共享知识 §10-10）。 */
     KB_GRAPH_BUILD_IN_PROGRESS(40952, "图谱构建中，请等待完成后再试"),
     /** 图谱未构建完成（降级提示用，实际走 degradedReason 不抛错；设计 §5.3）。 */
-    KB_GRAPH_NOT_READY(40953, "图谱未构建完成");
+    KB_GRAPH_NOT_READY(40953, "图谱未构建完成"),
+
+    /* ---- Wave C RAPTOR（T02/T03）---- */
+    /**
+     * 当前引擎不支持 RAPTOR 摘要构建/增强（{@code capabilities.raptor=false}）。
+     *
+     * <p>触发构建/开启开关时抛出；亦可携带自定义 message（如「无引擎映射」「无文档」）。
+     * <b>U4 裁定：不设库数上限</b>——只有平台总开关
+     * {@code mis.kb.engine.raptor-enabled}（默认 true）+ 能力 {@code raptor} 闸门，
+     * 不存在 {@code KB_RAPTOR_LIBRARY_LIMIT}。
+     */
+    KB_RAPTOR_UNSUPPORTED(40960, "当前引擎不支持 RAPTOR 摘要构建/增强"),
+    /** RAPTOR 构建中，拒绝重复触发（状态机 building，与图谱同款口径）。 */
+    KB_RAPTOR_BUILD_IN_PROGRESS(40961, "RAPTOR 构建中，请等待完成后再试"),
+    /** RAPTOR 未构建完成（降级提示用，实际走 degradedReason 不抛错；设计 §5.3 同款）。 */
+    KB_RAPTOR_NOT_READY(40962, "RAPTOR 未构建完成");
 
     private final int code;
     private final String message;

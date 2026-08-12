@@ -133,6 +133,62 @@ export interface KbRagSettings {
    * 同 {@code kgBuildStatus}：仅回显，前端不提交，可选。
    */
   kgBuildMessage?: string | null;
+  /**
+   * RAPTOR 摘要开关（Wave C RAPTOR，末位追加）。
+   *
+   * <p>默认 `false`；引擎能力 `raptorSupported=false` 时置灰 + 提示
+   * 「当前引擎版本暂不支持」。**U4 无库数上限**——只有平台总开关
+   * `mis.kb.engine.raptor-enabled`（默认 true）+ 能力 `raptor` 闸门。
+   * 开启后由后端异步建树（`KbRaptorService`），建树完成后引擎在经典检索
+   * `/api/v1/retrieval` 自动融合 RAPTOR 摘要（T00 P3a 实测，MIS 检索期零改动）。
+   * graph/raptor 构建**不互斥可并行**（T00 P2c 实测），两个开关可同时开。
+   */
+  useRaptor: boolean | null;
+  /**
+   * RAPTOR 摘要 chunk 最大 token 数（Wave C RAPTOR，末位追加）。
+   *
+   * <p>合法区间 `[512, 2048]`，默认 `1024`（引擎建库默认 256，MIS 默认值按分析报告
+   * 收口为 1024）。⚠ **严禁 4096**——引擎实测 code:101 拒整单（T00 P1b）。
+   * 与 `chunkTokenNum`（切片粒度）语义不同：本值是「递归摘要节点最大 token 数」。
+   */
+  raptorMaxTokenNum: number | null;
+  /**
+   * RAPTOR 聚类相似度阈值（Wave C RAPTOR，末位追加）。
+   *
+   * <p>合法区间 `[0, 1]`（**含 0**，T00 P1b 实测），默认 `0.1`。
+   */
+  raptorThreshold: number | null;
+  /**
+   * RAPTOR 最大聚类数（Wave C RAPTOR，末位追加）。
+   *
+   * <p>合法区间 `[1, 1024]`，默认 `64`。
+   */
+  raptorMaxCluster: number | null;
+  /**
+   * RAPTOR 递归摘要提示词（Wave C RAPTOR，末位追加）。
+   *
+   * <p>长度 ≤2000；引擎**不强制** `{cluster_content}` 占位符（T00 P1g 实测），
+   * 默认官方 prompt。留空保存时后端回落默认。
+   */
+  raptorPrompt: string | null;
+  /**
+   * RAPTOR 构建状态（Wave C RAPTOR，末位追加）。
+   *
+   * <p>四态：`none` 未构建 / `building` 构建中 / `ready` 已就绪 / `failed` 构建失败。
+   * **服务端维护**（`KbRaptorService` 查询引擎 progress 后回写 rag_settings_json），
+   * 前端提交该字段时忽略或仅回显。`building` 态前端每 3s 轮询 build-status。
+   *
+   * <p>可选（`?`）：前端<b>不提交</b>该字段（保存请求体里可缺省），
+   * 仅读取回显；老后端未升级时亦为 undefined。
+   */
+  raptorBuildStatus?: string | null;
+  /**
+   * RAPTOR 构建消息摘要（Wave C RAPTOR，末位追加）。
+   *
+   * <p>≤200 字符；失败/构建中原因，`ready` 时清空。`failed` 态徽标 tooltip 展示。
+   * 同 {@code raptorBuildStatus}：仅回显，前端不提交，可选。
+   */
+  raptorBuildMessage?: string | null;
 }
 
 /**
@@ -164,6 +220,37 @@ export interface KbGraphBuildResult {
   building: boolean;
   taskId: string | null;
   kgBuildStatus: string;
+}
+
+/**
+ * RAPTOR 构建状态回执（Wave C RAPTOR，T01）。
+ *
+ * <p>与 BFF `KbRaptorStatusVO` / mis-kb `KbRaptorStatusVO` 镜像。
+ * 前端在 `building` 态每 3s 轮询 `GET /libraries/{id}/raptor/build-status`，
+ * 直到 `ready`/`failed`（对齐 Wave B 图谱轮询范式）。
+ */
+export interface KbRaptorStatus {
+  /** 四态：none / building / ready / failed。 */
+  raptorBuildStatus: string;
+  /** 构建消息摘要（≤200 字符；ready 时清空，failed 时存失败原因）。 */
+  raptorBuildMessage: string | null;
+  /** 引擎侧 RAPTOR 构建任务 id（内部字段，仅排障展示用）。 */
+  raptorTaskId: string | null;
+  /** 最近一次状态刷新（回写）时刻（ISO-8601）。 */
+  updatedAt: string | null;
+}
+
+/**
+ * RAPTOR 构建触发回执（Wave C RAPTOR，T02）。
+ *
+ * <p>与 BFF `KbRaptorBuildResultVO` / mis-kb `KbRaptorBuildResultVO` 镜像。
+ * `building=true` 表示构建任务已在引擎侧排队；`raptorBuildStatus` 回显落库后的状态
+ * （触发成功恒为 `building`）。
+ */
+export interface KbRaptorBuildResult {
+  building: boolean;
+  taskId: string | null;
+  raptorBuildStatus: string;
 }
 
 /** 知识库分类。 */
@@ -645,6 +732,14 @@ export interface KbEngineCapabilities {
    * 置灰 + 提示「当前引擎版本暂不支持」，保存期后端强制关、检索期降级 hybrid-only。
    */
   graphSupported: boolean | null;
+  /**
+   * 当前引擎是否支持 RAPTOR 摘要构建/融合（Wave C RAPTOR，末位追加）。
+   *
+   * <p>RAGFlow 实例 T00 实测支持（`raptorSupported=true`，受平台总开关
+   * `mis.kb.engine.raptor-enabled` 控制，默认 true）；为 false 时前端把 RAPTOR 开关
+   * 置灰 + 提示「当前引擎版本暂不支持」，保存期后端强制关、检索期降级基础检索。
+   */
+  raptorSupported: boolean | null;
 }
 
 // --------------------------------------------------------------- 引擎对账（T04）
@@ -1034,6 +1129,18 @@ export interface KbHitTestRequest {
    * Resolver S4.5 降级并在 `effectiveParams.degradedReasons` 回显原因。
    */
   enableGraph?: boolean | null;
+  /**
+   * 本次临时启用 RAPTOR 摘要增强（Wave C RAPTOR，T03，末位追加）。
+   *
+   * <p>三态：`true` 强制开 / `false` 强制关 / `null`（缺省）跟随库设置 `useRaptor`。
+   * 用于「建树 vs 未建树 / 开 vs 关」的 A/B 对照——只影响本次测试，绝不写回库设置。
+   * 能力不支持/未建树时由后端 Resolver S4.6 降级并在 `effectiveParams.degradedReasons`
+   * 回显原因（如「RAPTOR 未构建完成」）。
+   *
+   * <p>⚠ 检索期零回归：引擎建树后经典 `/api/v1/retrieval` 自动融合摘要，
+   * 本开关只影响后端降级判定与回显（「库已建树 / 未建树」），不改检索请求体。
+   */
+  enableRaptor?: boolean | null;
 }
 
 /** 命中测试单条命中（与 BFF `KbHitTestHitVO` 镜像）。 */
@@ -1071,6 +1178,14 @@ export interface KbEffectiveParams {
    * `/datasets/{id}/search` + `use_kg:true`。降级原因在 `degradedReasons` 里。
    */
   useKnowledgeGraph?: boolean | null;
+  /**
+   * 本次实际生效的 RAPTOR 摘要开关（Wave C RAPTOR，T03，末位追加）。
+   *
+   * <p>回显「库已建树 / RAPTOR 未构建完成」用；`true` 表示本次请求了 RAPTOR 增强
+   * （引擎建树后 /retrieval 自动融合，MIS 检索期不改请求体）。降级原因在
+   * `degradedReasons` 里。
+   */
+  useRaptor?: boolean | null;
 }
 
 /** 命中测试结果（与 BFF `KbHitTestResultVO` 镜像）。 */

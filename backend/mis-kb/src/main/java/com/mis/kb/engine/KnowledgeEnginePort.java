@@ -13,6 +13,7 @@ import com.mis.kb.domain.model.EngineModelPool;
 import com.mis.kb.domain.model.GraphBuildSnapshot;
 import com.mis.kb.domain.model.ParseStatusSnapshot;
 import com.mis.kb.domain.model.RagSettings;
+import com.mis.kb.domain.model.RaptorBuildSnapshot;
 import com.mis.kb.domain.model.RetrieveQuery;
 import org.slf4j.LoggerFactory;
 
@@ -161,6 +162,37 @@ public interface KnowledgeEnginePort {
      */
     default GraphBuildSnapshot queryGraphBuildStatus(EngineLibraryRef ref) {
         return GraphBuildSnapshot.none();
+    }
+
+    /**
+     * 触发 RAPTOR 摘要构建（Wave C RAPTOR，T02）。
+     *
+     * <p><b>默认实现：抛 {@link UnsupportedOperationException}</b>（引擎不支持 RAPTOR）。
+     * RAGFlow 实现走 {@code POST /api/v1/datasets/{id}/index?type=raptor}
+     * （{@code RagflowClient.buildRaptor}，type 值必须是 {@code raptor}，T00 P2a 实测）。
+     * 引擎侧只排队任务并立即返回 {@code task_id}，构建完成在后台进行（状态走
+     * {@link #queryRaptorBuildStatus} 轮询）。graph/raptor 构建<b>不互斥可并行</b>
+     * （T00 P2c 实测），两者各自独立状态机。
+     *
+     * @param ref 知识库引擎引用（nativeId = dataset id）
+     * @return 引擎侧 RAPTOR 构建任务 id
+     */
+    default String buildRaptor(EngineLibraryRef ref) {
+        throw new UnsupportedOperationException("当前引擎不支持 RAPTOR 摘要构建");
+    }
+
+    /**
+     * 查询 RAPTOR 构建状态（Wave C RAPTOR，T02）。
+     *
+     * <p><b>默认实现：返回 NONE 快照</b>（noop/mock 引擎零改动），调用方保留本地状态。
+     * RAGFlow 实现走 {@code GET /api/v1/datasets/{id}/index?type=raptor}，映射
+     * {@code progress}（1.0=ready / -1=failed / 其他=building；无任务 → NONE）。
+     *
+     * @param ref 知识库引擎引用（nativeId = dataset id）
+     * @return RAPTOR 构建状态快照；恒非 {@code null}
+     */
+    default RaptorBuildSnapshot queryRaptorBuildStatus(EngineLibraryRef ref) {
+        return RaptorBuildSnapshot.none();
     }
 
     /** 引擎健康探测。 */

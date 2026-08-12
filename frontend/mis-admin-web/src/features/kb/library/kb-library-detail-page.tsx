@@ -16,10 +16,23 @@ import { useClientSort } from '@/components/common/use-client-sort';
 import { useColumnWidths, type ResizableColumn } from '@/components/common/use-column-widths';
 import { EnabledBadge, SecrecyBadge } from '../components/kb-badges';
 import { KbWeightSlider } from '../components/kb-weight-slider';
-import { getLibraryDetail, updateRagSettings, buildGraph, graphBuildStatus } from '../api/kb-api';
+import {
+  getLibraryDetail,
+  updateRagSettings,
+  buildGraph,
+  graphBuildStatus,
+  buildRaptor,
+  raptorBuildStatus,
+} from '../api/kb-api';
 import { KbDocumentTable } from '../document/kb-document-table';
 import { useKbStore } from '../stores/use-kb-store';
-import type { KbAclSummary, KbGraphStatus, KbLibraryDetail, KbRagSettings } from '../types';
+import type {
+  KbAclSummary,
+  KbGraphStatus,
+  KbLibraryDetail,
+  KbRagSettings,
+  KbRaptorStatus,
+} from '../types';
 import {
   KB_EMPTY_RESULT_STRATEGY_OPTIONS,
   KB_RETRIEVAL_METHOD_OPTIONS,
@@ -75,6 +88,22 @@ interface RagForm {
    * 返回的设置里 `kgBuildStatus` 会反映 `building`（前端据此开始 3s 轮询）。
    */
   useKnowledgeGraph: boolean;
+  /**
+   * RAPTOR 摘要开关（Wave C RAPTOR，T02，末位追加）。
+   *
+   * <p>默认 `false`；能力 `raptorSupported=false` 时置灰 + 提示。保存时后端做
+   * 能力强制（U4 无库数上限）。false→true 保存后后端自动触发建树，
+   * 返回的设置里 `raptorBuildStatus` 会反映 `building`（前端据此开始 3s 轮询）。
+   */
+  useRaptor: boolean;
+  /** RAPTOR 摘要 chunk 最大 token 数 [512,2048]（空串 = 继承默认 1024）。 */
+  raptorMaxTokenNum: string;
+  /** RAPTOR 聚类相似度阈值 [0,1]（空串 = 继承默认 0.1）。 */
+  raptorThreshold: string;
+  /** RAPTOR 最大聚类数 [1,1024]（空串 = 继承默认 64）。 */
+  raptorMaxCluster: string;
+  /** RAPTOR 递归摘要提示词（≤2000；留空 = 引擎默认官方 prompt）。 */
+  raptorPrompt: string;
 }
 
 const EMPTY_RAG_FORM: RagForm = {
@@ -93,6 +122,11 @@ const EMPTY_RAG_FORM: RagForm = {
   ocrLanguage: 'zh',
   chunkOverlapTokenNum: '',
   useKnowledgeGraph: false,
+  useRaptor: false,
+  raptorMaxTokenNum: '',
+  raptorThreshold: '',
+  raptorMaxCluster: '',
+  raptorPrompt: '',
 };
 
 /** 切片相关字段：这几个改了才需要弹重解析引导（WA-10）。 */
@@ -117,6 +151,11 @@ function toForm(s: KbRagSettings | null | undefined): RagForm {
     ocrLanguage: s.ocrLanguage ?? 'zh',
     chunkOverlapTokenNum: s.chunkOverlapTokenNum == null ? '' : String(s.chunkOverlapTokenNum),
     useKnowledgeGraph: s.useKnowledgeGraph === true,
+    useRaptor: s.useRaptor === true,
+    raptorMaxTokenNum: s.raptorMaxTokenNum == null ? '' : String(s.raptorMaxTokenNum),
+    raptorThreshold: s.raptorThreshold == null ? '' : String(s.raptorThreshold),
+    raptorMaxCluster: s.raptorMaxCluster == null ? '' : String(s.raptorMaxCluster),
+    raptorPrompt: s.raptorPrompt ?? '',
   };
 }
 
@@ -159,6 +198,23 @@ function toSettings(f: RagForm): KbRagSettings {
     // 图谱开关（Wave B GraphRAG PoC，T02）：随保存提交；kgBuildStatus/kgBuildMessage
     // 由服务端维护，前端不提交（后端忽略或仅回显）
     useKnowledgeGraph: f.useKnowledgeGraph,
+    // RAPTOR（Wave C，T02）：开关随保存提交；raptorBuildStatus/raptorBuildMessage
+    // 由服务端维护，前端不提交。参数空串归 null = 继承引擎默认（range 前端已拦，
+    // 后端 validate() 再兜底）。⚠ U6：不发送 random_seed 键（引擎字段名）。
+    useRaptor: f.useRaptor,
+    raptorMaxTokenNum:
+      f.raptorMaxTokenNum.trim() !== '' && Number.isFinite(Number(f.raptorMaxTokenNum))
+        ? Math.trunc(Number(f.raptorMaxTokenNum))
+        : null,
+    raptorThreshold:
+      f.raptorThreshold.trim() !== '' && Number.isFinite(Number(f.raptorThreshold))
+        ? Number(f.raptorThreshold)
+        : null,
+    raptorMaxCluster:
+      f.raptorMaxCluster.trim() !== '' && Number.isFinite(Number(f.raptorMaxCluster))
+        ? Math.trunc(Number(f.raptorMaxCluster))
+        : null,
+    raptorPrompt: f.raptorPrompt.trim() || null,
   };
 }
 
@@ -255,6 +311,30 @@ export function KbLibraryDetailPage() {
         return '未构建';
     }
   }, [kgBuildStatus]);
+  // Wave C RAPTOR（T02）：构建状态 + 3s 轮询 + 手动触发，与图谱同款范式。
+  // U4 无库数上限：开关只受平台总开关 mis.kb.engine.raptor-enabled + 能力闸门。
+  const raptorSupported = capabilities?.raptorSupported === true;
+  /** RAPTOR 构建状态（轮询结果优先，否则回退库设置；服务端维护）。 */
+  const [raptorStatus, setRaptorStatus] = useState<KbRaptorStatus | null>(null);
+  /** RAPTOR 构建按钮 in-flight（防止连点重复触发；后端另有 building 状态机拒绝）。 */
+  const [raptorTriggering, setRaptorTriggering] = useState(false);
+  const currentRaptorBuildStatus =
+    raptorStatus?.raptorBuildStatus ?? detail?.ragSettings?.raptorBuildStatus ?? 'none';
+  const raptorBuildMessage =
+    raptorStatus?.raptorBuildMessage ?? detail?.ragSettings?.raptorBuildMessage ?? null;
+  const isRaptorBuilding = currentRaptorBuildStatus === 'building';
+  const raptorStatusLabel = useMemo(() => {
+    switch (currentRaptorBuildStatus) {
+      case 'building':
+        return '构建中';
+      case 'ready':
+        return '已就绪';
+      case 'failed':
+        return '构建失败';
+      default:
+        return '未构建';
+    }
+  }, [currentRaptorBuildStatus]);
   const isHybrid = form.retrievalMethod === 'hybrid';
   // 全局重排模型友好名：池内按 id 反查 name，查不到原样回显 id（不吞）。
   const globalRerankName =
@@ -311,6 +391,37 @@ export function KbLibraryDetailPage() {
         return;
       }
     }
+    // Wave C RAPTOR（T02）：参数区间校验（[512,2048]/[0,1]/[1,1024]/≤2000；
+    // 空值 = 继承引擎默认，不拦）。越界直接拦截，与后端 validate() 同口径。
+    const raptorTokenRaw = form.raptorMaxTokenNum.trim();
+    if (raptorTokenRaw !== '') {
+      const raptorToken = Number(raptorTokenRaw);
+      if (!Number.isFinite(raptorToken) || raptorToken < 512 || raptorToken > 2048) {
+        toast.warning('RAPTOR 摘要 token 数需在 512 ~ 2048 之间（留空则继承默认 1024）');
+        return;
+      }
+    }
+    const raptorThresholdRaw = form.raptorThreshold.trim();
+    if (raptorThresholdRaw !== '') {
+      const raptorThreshold = Number(raptorThresholdRaw);
+      if (!Number.isFinite(raptorThreshold) || raptorThreshold < 0 || raptorThreshold > 1) {
+        toast.warning('RAPTOR 聚类阈值需在 0 ~ 1 之间（留空则继承默认 0.1）');
+        return;
+      }
+    }
+    const raptorClusterRaw = form.raptorMaxCluster.trim();
+    if (raptorClusterRaw !== '') {
+      const raptorCluster = Number(raptorClusterRaw);
+      if (!Number.isFinite(raptorCluster) || raptorCluster < 1 || raptorCluster > 1024) {
+        toast.warning('RAPTOR 最大聚类数需在 1 ~ 1024 之间（留空则继承默认 64）');
+        return;
+      }
+    }
+    const raptorPromptRaw = form.raptorPrompt.trim();
+    if (raptorPromptRaw.length > 2000) {
+      toast.warning('RAPTOR 递归摘要提示词长度不能超过 2000 字符');
+      return;
+    }
     const needReparseHint = chunkDirty(form, baseline);
     setSaving(true);
     try {
@@ -361,6 +472,45 @@ export function KbLibraryDetailPage() {
     }
   }
 
+  /**
+   * 手动触发 RAPTOR 建树（Wave C RAPTOR，T02）。
+   *
+   * <p>按钮在 `building` 态禁用（后端状态机同样拒绝重复触发，双保险）；
+   * `none`/`failed` 可点（首次构建/失败重试），`ready` 可点（重新构建）。
+   * 触发成功后把本地状态置 `building`，由下方 3s 轮询接管直到 `ready`/`failed`。
+   */
+  async function onBuildRaptor(): Promise<void> {
+    if (libraryId == null) return;
+    setRaptorTriggering(true);
+    try {
+      const result = await buildRaptor(libraryId);
+      const nextStatus: KbRaptorStatus = {
+        raptorBuildStatus: result.raptorBuildStatus,
+        raptorBuildMessage: null,
+        raptorTaskId: result.taskId,
+        updatedAt: null,
+      };
+      setRaptorStatus(nextStatus);
+      // 同步库设置里的状态（保证开关区与徽标一致；detail.ragSettings 由后端维护）
+      setDetail((prev) =>
+        prev == null || prev.ragSettings == null
+          ? prev
+          : {
+              ...prev,
+              ragSettings: {
+                ...prev.ragSettings,
+                raptorBuildStatus: result.raptorBuildStatus,
+              },
+            },
+      );
+      toast.success('RAPTOR 建树已排队，构建完成后状态自动更新');
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : '触发 RAPTOR 建树失败');
+    } finally {
+      setRaptorTriggering(false);
+    }
+  }
+
   // building 态每 3s 轮询 build-status，直到 ready/failed（PoC 不引入后端定时任务，
   // 轮询走前端；R6 漂移防线：轮询失败保留当前状态，下轮再试）。
   useEffect(() => {
@@ -390,6 +540,36 @@ export function KbLibraryDetailPage() {
     }, 3000);
     return () => window.clearInterval(timer);
   }, [libraryId, isBuilding]);
+
+  // Wave C RAPTOR（T02）：building 态每 3s 轮询 raptor build-status，直到
+  // ready/failed（对齐图谱轮询范式；R6 漂移防线：轮询失败保留当前状态，下轮再试）。
+  useEffect(() => {
+    if (libraryId == null) return;
+    if (!isRaptorBuilding) return;
+    const timer = window.setInterval(() => {
+      raptorBuildStatus(libraryId)
+        .then((s) => {
+          setRaptorStatus(s);
+          // 同步 detail（保存后 detail.ragSettings 也反映最新状态）
+          setDetail((prev) =>
+            prev == null || prev.ragSettings == null
+              ? prev
+              : {
+                  ...prev,
+                  ragSettings: {
+                    ...prev.ragSettings,
+                    raptorBuildStatus: s.raptorBuildStatus,
+                    raptorBuildMessage: s.raptorBuildMessage,
+                  },
+                },
+          );
+        })
+        .catch(() => {
+          // 轮询失败静默，下轮再试；不打断用户操作
+        });
+    }, 3000);
+    return () => window.clearInterval(timer);
+  }, [libraryId, isRaptorBuilding]);
 
   if (libraryId == null) {
     return (
@@ -887,6 +1067,146 @@ export function KbLibraryDetailPage() {
                 {form.useKnowledgeGraph && !isBuilding && kgBuildStatus !== 'ready' ? (
                   <p className="mt-2 text-xs text-amber-600">
                     开关已开启但图谱尚未构建完成，可点击「开始构建」触发/重试。
+                  </p>
+                ) : null}
+              </div>
+
+              {/* Wave C RAPTOR：RAPTOR 摘要区（T02）。
+                  开关随 RAG 设置保存（false→true 时后端自动触发建树 + 手动按钮重试）；
+                  raptorBuildStatus/raptorBuildMessage 由服务端维护（查询时引擎刷新回写），
+                  前端在 building 态每 3s 轮询 build-status，直到 ready/failed。
+                  U4：无库数上限——只有平台总开关 mis.kb.engine.raptor-enabled + 能力闸门。 */}
+              <div className="mt-4 rounded-md border border-dashed bg-muted/30 p-3">
+                <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+                  <label className="flex items-center gap-2 text-sm">
+                    <input
+                      type="checkbox"
+                      className="h-4 w-4"
+                      checked={form.useRaptor && raptorSupported}
+                      disabled={!raptorSupported || saving}
+                      onChange={(e) => setForm((f) => ({ ...f, useRaptor: e.target.checked }))}
+                    />
+                    启用 RAPTOR 摘要增强
+                  </label>
+                  <span
+                    className={
+                      'inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium ' +
+                      (currentRaptorBuildStatus === 'ready'
+                        ? 'bg-emerald-100 text-emerald-700'
+                        : currentRaptorBuildStatus === 'building'
+                          ? 'bg-blue-100 text-blue-700'
+                          : currentRaptorBuildStatus === 'failed'
+                            ? 'bg-red-100 text-red-700'
+                            : 'bg-muted text-muted-foreground')
+                    }
+                    title={
+                      currentRaptorBuildStatus === 'failed' && raptorBuildMessage
+                        ? raptorBuildMessage
+                        : undefined
+                    }
+                  >
+                    {raptorStatusLabel}
+                    {isRaptorBuilding ? (
+                      <span className="h-3 w-3 animate-spin rounded-full border border-current border-t-transparent" />
+                    ) : null}
+                  </span>
+                  <PermissionGate permission="kb:library:edit">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      disabled={!raptorSupported || isRaptorBuilding || raptorTriggering || saving}
+                      onClick={() => void onBuildRaptor()}
+                    >
+                      {currentRaptorBuildStatus === 'ready' ? '重新构建' : '开始构建'}
+                    </Button>
+                  </PermissionGate>
+                </div>
+                {/* RAPTOR 参数仅在开关开启时展开编辑；留空 = 继承引擎默认（T00 实测区间） */}
+                {form.useRaptor ? (
+                  <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                    <div>
+                      <label className="mb-1 block text-xs text-muted-foreground">
+                        摘要 chunk 最大 token 数
+                      </label>
+                      <Input
+                        type="number"
+                        min={512}
+                        max={2048}
+                        value={form.raptorMaxTokenNum}
+                        onChange={(e) =>
+                          setForm((f) => ({ ...f, raptorMaxTokenNum: e.target.value }))
+                        }
+                        placeholder="默认 1024"
+                      />
+                      <p className="mt-1 text-xs text-muted-foreground">范围 512 ~ 2048</p>
+                    </div>
+                    <div>
+                      <label className="mb-1 block text-xs text-muted-foreground">
+                        聚类相似度阈值
+                      </label>
+                      <Input
+                        type="number"
+                        min={0}
+                        max={1}
+                        step={0.05}
+                        value={form.raptorThreshold}
+                        onChange={(e) =>
+                          setForm((f) => ({ ...f, raptorThreshold: e.target.value }))
+                        }
+                        placeholder="默认 0.1"
+                      />
+                      <p className="mt-1 text-xs text-muted-foreground">范围 0 ~ 1</p>
+                    </div>
+                    <div>
+                      <label className="mb-1 block text-xs text-muted-foreground">
+                        最大聚类数
+                      </label>
+                      <Input
+                        type="number"
+                        min={1}
+                        max={1024}
+                        value={form.raptorMaxCluster}
+                        onChange={(e) =>
+                          setForm((f) => ({ ...f, raptorMaxCluster: e.target.value }))
+                        }
+                        placeholder="默认 64"
+                      />
+                      <p className="mt-1 text-xs text-muted-foreground">范围 1 ~ 1024</p>
+                    </div>
+                    <div>
+                      <label className="mb-1 block text-xs text-muted-foreground">
+                        递归摘要提示词
+                      </label>
+                      <Input
+                        value={form.raptorPrompt}
+                        onChange={(e) =>
+                          setForm((f) => ({ ...f, raptorPrompt: e.target.value }))
+                        }
+                        placeholder="留空使用引擎默认提示词"
+                      />
+                      <p className="mt-1 text-xs text-muted-foreground">≤2000 字符</p>
+                    </div>
+                  </div>
+                ) : null}
+                {!raptorSupported ? (
+                  <p className="mt-2 text-xs text-amber-600">
+                    当前引擎版本暂不支持 RAPTOR 摘要增强。
+                  </p>
+                ) : (
+                  <p className="mt-2 text-xs text-muted-foreground">
+                    开启后自动排队构建递归摘要树，构建完成后引擎在经典检索中自动融合摘要
+                    （MIS 检索期零改动）。RAPTOR 与知识图谱构建
+                    <strong>不互斥可并行</strong>，两个开关可同时开；无库数上限。
+                  </p>
+                )}
+                {currentRaptorBuildStatus === 'failed' && raptorBuildMessage ? (
+                  <p className="mt-2 text-xs text-red-600">
+                    构建失败原因：{raptorBuildMessage}
+                  </p>
+                ) : null}
+                {form.useRaptor && !isRaptorBuilding && currentRaptorBuildStatus !== 'ready' ? (
+                  <p className="mt-2 text-xs text-amber-600">
+                    开关已开启但摘要树尚未构建完成，可点击「开始构建」触发/重试。
                   </p>
                 ) : null}
               </div>

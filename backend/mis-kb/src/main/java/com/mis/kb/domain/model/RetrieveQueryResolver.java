@@ -278,8 +278,8 @@ public class RetrieveQueryResolver {
         }
 
         // S4.5（Wave B GraphRAG PoC，T03）：图谱增强三道降级（能力/单库/kgBuildStatus）。
-        // 开关只在「库设置 + 命中测试 override」两级出现——applyOverride 已用 17 参
-        // canonical 透传图谱字段，所以这里从合并后的 base 读取 useKnowledgeGraph 即可
+        // 开关只在「库设置 + 命中测试 override」两级出现——applyOverride 已用 24 参
+        // canonical 透传图谱/RAPTOR 字段，所以这里从合并后的 base 读取 useKnowledgeGraph 即可
         // （命中测试的 enableGraph override 在 KbHitTestService 完成，不在此 S2 覆盖）。
         // 降级只允许发生在这里（Resolver 铁律 §10-9），服务层禁止内联判断。
         // 检索期强校验 kgBuildStatus==ready（U5）：图未就绪时 use_kg 会被引擎静默忽略，
@@ -307,6 +307,48 @@ public class RetrieveQueryResolver {
             degradedReasons.add("图谱未构建完成（当前状态："
                     + RagSettings.normalizeKgBuildStatus(base.kgBuildStatus())
                     + "），已回落混合检索");
+        }
+
+        // S4.6（Wave C RAPTOR，T03）：RAPTOR 摘要两道降级（能力/建树状态）。
+        // 与图谱同款口径：开关只在「库设置 + 命中测试 override」两级出现——applyOverride
+        // 已用 24 参 canonical 透传 RAPTOR 字段，这里从合并后的 base 读取 useRaptor 即可
+        // （命中测试的 enableRaptor override 在 KbHitTestService 完成，不在此 S2 覆盖）。
+        // 降级只允许发生在这里（Resolver 铁律 §10-9），服务层禁止内联判断。
+        // ⚠ 检索期零回归（T00 P3a 实测）：引擎建树后经典 /retrieval 自动融合 RAPTOR 摘要，
+        // MIS 检索期<b>不改请求体</b>（RetrieveQuery 零改动）——useRaptor 只用于回显
+        // 「库已建树 / 已降级」，不进入 RetrieveQuery 字段。
+        // 多库场景同款信号修正：任一被检索库开启 RAPTOR，即视为本次检索请求了 RAPTOR 增强
+        // （引擎 /retrieval 支持多库融合，无图谱那种「仅支持单库」限制，T00 P3c 不适用）。
+        boolean useRaptor = Boolean.TRUE.equals(base.useRaptor());
+        if (!useRaptor && context.scopedLibraryIds().size() > 1) {
+            useRaptor = context.perLibrarySettings().values().stream()
+                    .anyMatch(s -> Boolean.TRUE.equals(s.useRaptor()));
+        }
+        if (useRaptor && !caps.raptorSupported()) {
+            useRaptor = false;
+            degradedReasons.add("当前引擎不支持 RAPTOR 摘要增强");
+        }
+        // 就绪闸门按 per-library 评估（QA 严过关定位：多库信号修正后 base 已回落全局默认，
+        // 直接读 base.raptorBuildStatus() 恒为 none，会把多库增强信号误降级成死代码）：
+        //   单库 → 沿用 base.raptorBuildStatus()==ready（历史语义不变）；
+        //   多库 → 所有 useRaptor=true 的被检索库均 ready 才放行，任一未就绪即降级 false，
+        //          并回显首个未就绪库的状态（绝不静默忽略，对齐「降级原因回显」铁律）。
+        if (useRaptor) {
+            String raptorStatus = base.raptorBuildStatus();
+            if (context.scopedLibraryIds().size() > 1) {
+                raptorStatus = context.perLibrarySettings().values().stream()
+                        .filter(s -> Boolean.TRUE.equals(s.useRaptor()))
+                        .map(RagSettings::raptorBuildStatus)
+                        .filter(s -> !RagSettings.RAPTOR_STATUS_READY.equals(s))
+                        .findFirst()
+                        .orElse(RagSettings.RAPTOR_STATUS_READY);
+            }
+            if (!RagSettings.RAPTOR_STATUS_READY.equals(raptorStatus)) {
+                useRaptor = false;
+                degradedReasons.add("RAPTOR 未构建完成（当前状态："
+                        + RagSettings.normalizeRaptorBuildStatus(raptorStatus)
+                        + "），本次检索不会返回 RAPTOR 摘要");
+            }
         }
 
         // S5 兜底
@@ -349,13 +391,13 @@ public class RetrieveQueryResolver {
 
         EffectiveRetrieveParams effective = new EffectiveRetrieveParams(
                 topK, threshold, method, weight, rerank, effectiveRerankModelId,
-                emptyStrategy, source, degradedReasons, useKnowledgeGraph);
+                emptyStrategy, source, degradedReasons, useKnowledgeGraph, useRaptor);
 
         log.debug("检索参数合并完成 libraryIds={} source={} method={} weight={} topK={} "
-                        + "threshold={} rerank={} emptyStrategy={} degraded={} graph={} synonym={}/{}组",
+                        + "threshold={} rerank={} emptyStrategy={} degraded={} graph={} raptor={} synonym={}/{}组",
                 context.scopedLibraryIds(), source, method, weight, topK,
                 threshold, rerank, emptyStrategy, degradedReasons,
-                useKnowledgeGraph,
+                useKnowledgeGraph, useRaptor,
                 expansion.status(), expansion.usedGroups());
         if (!degradedReasons.isEmpty()) {
             log.warn("检索参数发生降级 libraryIds={} reasons={}",
@@ -431,10 +473,12 @@ public class RetrieveQueryResolver {
      * @return 覆盖后的新设置
      */
     private RagSettings applyOverride(RagSettings base, ParamOverride ov) {
-        // 17 参 canonical 透传图谱三字段（useKnowledgeGraph/kgBuildStatus/kgBuildMessage）——
-        // 绝不能走 14 参旧构造，否则图谱字段被静默置 null（record 末位追加铁律 §10-8）。
-        // 注意图谱开关属「库设置 + 命中测试 override」两级，不在此 S2 覆盖——由 S4.5
-        // 从库设置合并（{@code useKnowledgeGraph} 的 override 在 KbHitTestService 完成）。
+        // 24 参 canonical 透传图谱三字段与 RAPTOR 七字段（useKnowledgeGraph/kgBuildStatus/
+        // kgBuildMessage/useRaptor/raptorMaxTokenNum/raptorThreshold/raptorMaxCluster/
+        // raptorPrompt/raptorBuildStatus/raptorBuildMessage）——绝不能走 14 参旧构造，
+        // 否则图谱/RAPTOR 字段被静默置 null（record 末位追加铁律 §10-8）。
+        // 注意图谱/RAPTOR 开关属「库设置 + 命中测试 override」两级，不在此 S2 覆盖——
+        // 由 S4.5/S4.6 从库设置合并（override 在 KbHitTestService 完成）。
         return new RagSettings(
                 ov.topK() != null ? ov.topK() : base.topK(),
                 ov.threshold() != null ? ov.threshold() : base.scoreThreshold(),
@@ -454,7 +498,14 @@ public class RetrieveQueryResolver {
                 base.chunkOverlapTokenNum(),
                 base.useKnowledgeGraph(),
                 base.kgBuildStatus(),
-                base.kgBuildMessage());
+                base.kgBuildMessage(),
+                base.useRaptor(),
+                base.raptorMaxTokenNum(),
+                base.raptorThreshold(),
+                base.raptorMaxCluster(),
+                base.raptorPrompt(),
+                base.raptorBuildStatus(),
+                base.raptorBuildMessage());
     }
 
     /**

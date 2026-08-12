@@ -56,6 +56,20 @@ public class RagflowProperties {
      */
     private int graphMaxLibraries = 2;
 
+    /**
+     * RAPTOR 平台总开关（Wave C RAPTOR，U4 裁定）。
+     *
+     * <p><b>U4：不设库数上限</b>（不存在 {@code KB_RAPTOR_LIBRARY_LIMIT}），
+     * 只受本开关 + 能力 {@code raptor} 闸门控制。默认 {@code true}；
+     * Nacos 可热调，无需重启。置 {@code false} 时：
+     * <ul>
+     *   <li>{@code capabilities().raptorSupported} 返回 false（前端置灰）；</li>
+     *   <li>保存 RAG 设置时强制 {@code useRaptor=false} 并记 WARN（后端兜底）；</li>
+     *   <li>触发构建抛 {@code KB_RAPTOR_UNSUPPORTED}（最后一道）。</li>
+     * </ul>
+     */
+    private boolean raptorEnabled = true;
+
     /** 引擎对账配置（定时任务 + 手动触发共用）。 */
     private final Reconcile reconcile = new Reconcile();
 
@@ -105,6 +119,14 @@ public class RagflowProperties {
 
     public void setGraphMaxLibraries(int graphMaxLibraries) {
         this.graphMaxLibraries = graphMaxLibraries;
+    }
+
+    public boolean isRaptorEnabled() {
+        return raptorEnabled;
+    }
+
+    public void setRaptorEnabled(boolean raptorEnabled) {
+        this.raptorEnabled = raptorEnabled;
     }
 
     /**

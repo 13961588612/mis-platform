@@ -129,6 +129,12 @@ class BffApiRegistryDiffSurveyTest {
             "POST /api/v1/ai/skill/apply"
     );
 
+    /** V34 净新增 KB 登记（Wave C RAPTOR，sys_api 91155-91156；构建=kb:library:edit、状态=kb:library:engine-ref:view）。 */
+    private static final Set<String> EXPECTED_RAPTOR_2 = Set.of(
+            "POST /api/v1/kb/libraries/{id}/raptor/build",
+            "GET /api/v1/kb/libraries/{id}/raptor/build-status"
+    );
+
     /**
      * V32 之前的 KB 已登记<b>去重后</b> 42 行基线（V17/V18/V24/V25/V26/V27/V30/V31）。
      * <p>PRD §2.2 记「45 行」是按迁移行数（V30 含 3 行与 V24/V25 重复、被幂等守卫跳过）；
@@ -223,9 +229,11 @@ class BffApiRegistryDiffSurveyTest {
                 .collect(Collectors.toCollection(TreeSet::new));
         Set<String> newKb = new TreeSet<>(registeredKb);
         newKb.removeAll(KB_42_BASELINE);
-        assertEquals(EXPECTED_KB_28, newKb,
-                "V32 净新增 KB 登记必须恰好等于 READ-01~24 + WRITE-01~04；"
-                        + "多出 = 超范围登记，缺少 = 补登遗漏（对照设计 §1.7 登记表）");
+        Set<String> expectedKbNew = new TreeSet<>(EXPECTED_KB_28);
+        expectedKbNew.addAll(EXPECTED_RAPTOR_2);
+        assertEquals(expectedKbNew, newKb,
+                "V32+V34 净新增 KB 登记必须恰好等于 READ-01~24 + WRITE-01~04（28）+ RAPTOR 2；"
+                        + "多出 = 超范围登记，缺少 = 补登遗漏（对照设计 §1.7 登记表与 V34 注释）");
 
         // ---- 断言 3：AI 反向信任端点 2 个已登记（U1 裁决 V33 authOnly）----
         Set<String> aiExported = apiV1.stream()
@@ -698,6 +706,9 @@ class BffApiRegistryDiffSurveyTest {
             // ---- V33（本期）：AI 反向信任 authOnly ----
             "POST /api/v1/ai/skill/execute",
             "POST /api/v1/ai/skill/apply",
+            // ---- V34（本期）：KB RAPTOR 2 端点（sys_api 91155-91156；构建=kb:library:edit、状态=kb:library:engine-ref:view）----
+            "POST /api/v1/kb/libraries/{id}/raptor/build",
+            "GET /api/v1/kb/libraries/{id}/raptor/build-status",
             // ---- V35（本期）：modules 10 端点（catalog 91157 + api 91158-91167，复用 system:module:* 四码）----
             "GET /api/v1/modules",
             "GET /api/v1/modules/{id}",

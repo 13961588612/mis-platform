@@ -26,6 +26,10 @@ mis:
       # false ⇒ DELETE ?mode=physical 一律被拒（40934），业务侧只能走归档；
       # 等 RAGFLOW 升级（P2）后翻 true 即可放开，代码分支无需改动。
       delete-supported: ${MIS_KB_ENGINE_DELETE_SUPPORTED:false}
+      # RAPTOR 平台总开关（Wave C，U4 裁定）。默认 true；Nacos 可热调，无需重启。
+      # false ⇒ capabilities.raptorSupported=false → 前端置灰 → 保存强制 useRaptor=false
+      #          → 触发构建抛 KB_RAPTOR_UNSUPPORTED（40960）。无库数上限。
+      raptor-enabled: ${MIS_KB_RAPTOR_ENABLED:true}
       reconcile:
         # 定时对账总开关。刻意不用 @ConditionalOnProperty（那样只能重启生效），
         # 定时方法体第一行读本值直接 return，支持 Nacos 热关。

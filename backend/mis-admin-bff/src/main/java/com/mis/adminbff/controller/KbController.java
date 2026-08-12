@@ -33,6 +33,8 @@ import com.mis.adminbff.dto.kb.KbQaSessionListVO;
 import com.mis.adminbff.dto.kb.KbQaSessionVO;
 import com.mis.adminbff.dto.kb.KbQaTicketVO;
 import com.mis.adminbff.dto.kb.KbRagSettings;
+import com.mis.adminbff.dto.kb.KbRaptorBuildResultVO;
+import com.mis.adminbff.dto.kb.KbRaptorStatusVO;
 import com.mis.adminbff.dto.kb.KbReparseAllResultVO;
 import com.mis.adminbff.dto.kb.KbSubjectVO;
 import com.mis.adminbff.security.UserPermissionLoader;
@@ -304,6 +306,44 @@ public class KbController {
     public Result<KbGraphStatusVO> graphBuildStatus(@PathVariable Long id) {
         requirePermission(PERM_LIBRARY_ENGINE_REF_VIEW);
         return Result.ok(kbFacadeService.graphBuildStatus(id));
+    }
+
+    /**
+     * 触发 RAPTOR 摘要构建（Wave C RAPTOR，T02）。
+     *
+     * <p><b>构建 = 修改引擎侧资源，按「写」对待（设计 §2.5 红线同款）：</b>权限码
+     * {@code kb:library:edit}（V34 注册 91155 → 91044）+ {@code @OperLog} 留痕；
+     * mis-kb 侧 {@code KbRaptorService.build} 还有 {@code hasLibraryManage} 管辖双闸门 +
+     * 能力/状态机校验（第二道防线）。<b>U4：无库数上限</b>——只有平台总开关
+     * {@code mis.kb.engine.raptor-enabled} + 能力 {@code raptor} 闸门。
+     * graph/raptor 构建<b>不互斥可并行</b>（T00 P2c 实测）。
+     *
+     * <p>{@code requirePermission} 是注册表未生效空窗期的兜底判权（与
+     * {@link #requireHitTestPermission()} 同款口径，读 {@link UserPermissionLoader#load}）。
+     *
+     * @param id 知识库 id
+     * @return 构建触发回执
+     */
+    @PostMapping("/libraries/{id}/raptor/build")
+    @OperLog(module = "知识库", operation = "触发 RAPTOR 摘要构建", recordParams = true)
+    public Result<KbRaptorBuildResultVO> buildRaptor(@PathVariable Long id) {
+        requirePermission(PERM_LIBRARY_EDIT);
+        return Result.ok(kbFacadeService.buildRaptor(id));
+    }
+
+    /**
+     * 查询 RAPTOR 构建状态（Wave C RAPTOR，T02；前端 3s 轮询）。
+     *
+     * <p><b>读操作默认不挂审计（U6 裁定）：</b>3s 轮询 × 多管理员 = 审计表噪声；
+     * 权限码 {@code kb:library:engine-ref:view}（V34 注册 91156 → 91056）。
+     *
+     * @param id 知识库 id
+     * @return 状态回执
+     */
+    @GetMapping("/libraries/{id}/raptor/build-status")
+    public Result<KbRaptorStatusVO> raptorBuildStatus(@PathVariable Long id) {
+        requirePermission(PERM_LIBRARY_ENGINE_REF_VIEW);
+        return Result.ok(kbFacadeService.raptorBuildStatus(id));
     }
 
     // ------------------------------------------------------------------ 文档

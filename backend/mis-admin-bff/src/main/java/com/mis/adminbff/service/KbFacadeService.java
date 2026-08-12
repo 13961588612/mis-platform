@@ -22,6 +22,8 @@ import com.mis.adminbff.dto.kb.KbEngineReconcileVO;
 import com.mis.adminbff.dto.kb.KbEngineRefVO;
 import com.mis.adminbff.dto.kb.KbGraphBuildResultVO;
 import com.mis.adminbff.dto.kb.KbGraphStatusVO;
+import com.mis.adminbff.dto.kb.KbRaptorBuildResultVO;
+import com.mis.adminbff.dto.kb.KbRaptorStatusVO;
 import com.mis.adminbff.dto.kb.KbLibraryDeleteResultVO;
 import com.mis.adminbff.dto.kb.KbLibraryDetailVO;
 import com.mis.adminbff.dto.kb.KbLibraryVO;
@@ -313,6 +315,26 @@ public class KbFacadeService {
      */
     public KbGraphStatusVO graphBuildStatus(Long libraryId) {
         return kbWebClient.graphBuildStatus(libraryId);
+    }
+
+    /**
+     * 触发 RAPTOR 摘要构建（Wave C RAPTOR，T02；BFF 三层透传）。
+     *
+     * <p>构建 = 写操作：权限码 {@code kb:library:edit} + {@code @OperLog} 审计在
+     * {@code KbController} 收口；mis-kb 侧 {@code KbRaptorService.build} 另有管辖双闸门 +
+     * 能力/状态机校验。本方法只透传，不做任何业务决策。U4：无库数上限。
+     */
+    public KbRaptorBuildResultVO buildRaptor(Long libraryId) {
+        return kbWebClient.buildRaptor(libraryId);
+    }
+
+    /**
+     * 查询 RAPTOR 构建状态（Wave C RAPTOR，T02；BFF 三层透传）。
+     *
+     * <p>读操作：权限码 {@code kb:library:engine-ref:view}，不挂审计（U6）。透传不做任何业务决策。
+     */
+    public KbRaptorStatusVO raptorBuildStatus(Long libraryId) {
+        return kbWebClient.raptorBuildStatus(libraryId);
     }
 
     // ------------------------------------------------------------------ 文档
@@ -957,7 +979,9 @@ public class KbFacadeService {
                     caps.hybridSupported() != null ? caps.hybridSupported() : false,
                     caps.deleteSupported() != null ? caps.deleteSupported() : false,
                     caps.parserOcrSupported() != null ? caps.parserOcrSupported() : false,
-                    caps.parserOverlapSupported() != null ? caps.parserOverlapSupported() : false);
+                    caps.parserOverlapSupported() != null ? caps.parserOverlapSupported() : false,
+                    caps.graphSupported() != null ? caps.graphSupported() : false,
+                    caps.raptorSupported() != null ? caps.raptorSupported() : false);
         } catch (Exception e) {
             log.warn("取引擎能力失败: {}", e.getMessage());
             return unsupportedCapabilities(engineType);
@@ -1082,7 +1106,8 @@ public class KbFacadeService {
      */
     private static KbEngineCapabilitiesVO unsupportedCapabilities(String engineType) {
         return new KbEngineCapabilitiesVO(
-                engineType, List.of("UNSUPPORTED"), false, false, false, false, false, false, false);
+                engineType, List.of("UNSUPPORTED"), false, false, false, false, false, false, false,
+                false, false);
     }
 
     // ------------------------------------------------------------------ 命中测试（Q-04 / WA-07）

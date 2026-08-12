@@ -197,6 +197,34 @@ class RagflowAdapterEngineOpsTest {
 
             assertEquals(0, listCalls.get());
         }
+
+        @Test
+        @DisplayName("★ Wave C：raptor-enabled 默认 true → raptorSupported=true 且数组含 raptor")
+        void shouldReportRaptorSupportedByDefault() {
+            RagflowProperties props = props();
+            assertTrue(props.isRaptorEnabled(), "平台总开关默认 true（U4）");
+
+            EngineCapabilities caps = adapter(props).capabilities();
+
+            assertTrue(caps.raptorSupported());
+            assertTrue(caps.capabilities().contains(EngineCapabilities.CAP_RAPTOR));
+        }
+
+        @Test
+        @DisplayName("★ Wave C：raptor-enabled=false（全局熔断）→ raptorSupported=false 且数组不含 raptor")
+        void shouldReportRaptorUnsupportedWhenDisabled() {
+            RagflowProperties props = props();
+            props.setRaptorEnabled(false);
+
+            EngineCapabilities caps = adapter(props).capabilities();
+
+            assertFalse(caps.raptorSupported());
+            assertFalse(caps.capabilities().contains(EngineCapabilities.CAP_RAPTOR),
+                    "能力数组必须同步去掉 raptor——前端置灰的唯一依据");
+            // 其余能力位不受影响
+            assertTrue(caps.graphSupported(), "图谱能力与 RAPTOR 独立（T00 P2c 不互斥）");
+            assertTrue(caps.hybridSupported());
+        }
     }
 
     // ------------------------------------------------------------------ 分页

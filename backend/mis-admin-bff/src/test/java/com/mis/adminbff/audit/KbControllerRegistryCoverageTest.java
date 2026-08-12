@@ -77,9 +77,10 @@ class KbControllerRegistryCoverageTest {
             }
         }
 
-        // 数量守恒：70 = 42 既有（去重后，V30 含 3 行与 V24/25 重复被幂等跳过）+ 28 新登记
-        assertEquals(70, expected.size(), "KB 登记表条目数应为 42（去重基线）+ 28（V32）= 70，"
-                + "与 Controller 导出端点数一致（设计 §1.7 与 V30 幂等说明）");
+        // 数量守恒：72 = 42 既有（去重后，V30 含 3 行与 V24/25 重复被幂等跳过）+ 28 新登记（V32）
+        //           + 2 新登记（V34 RAPTOR）
+        assertEquals(72, expected.size(), "KB 登记表条目数应为 42（去重基线）+ 28（V32）+ 2（V34 RAPTOR）= 72，"
+                + "与 Controller 导出端点数一致（设计 §1.7 与 V30/V34 幂等说明）");
 
         exported.forEach(System.out::println);
 
@@ -184,6 +185,9 @@ class KbControllerRegistryCoverageTest {
         // ---- V31：GraphRAG ----
         map.put("POST /api/v1/kb/libraries/{id}/graph/build", "kb:library:edit");
         map.put("GET /api/v1/kb/libraries/{id}/graph/build-status", "kb:library:engine-ref:view");
+        // ---- V34：RAPTOR ----
+        map.put("POST /api/v1/kb/libraries/{id}/raptor/build", "kb:library:edit");
+        map.put("GET /api/v1/kb/libraries/{id}/raptor/build-status", "kb:library:engine-ref:view");
         // ---- V32：28 新登记（READ-01~24 + WRITE-01~04，设计 §1.7）----
         map.put("GET /api/v1/kb/categories", "kb:category:list");
         map.put("GET /api/v1/kb/libraries", "kb:library:list");

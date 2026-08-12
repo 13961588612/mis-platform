@@ -70,7 +70,7 @@ class RetrieveHitsVoContractTest {
                 "SUGGEST",
                 new EffectiveParamsVO(
                         10, 0.3D, "hybrid", 0.3D, false, null, "SUGGEST", "LIBRARY", List.of(),
-                        null));
+                        null, null));
 
         Set<String> actual = topLevelKeys(mapper.valueToTree(vo));
         assertEquals(ALLOWED_KEYS, actual, RED_LINE);
@@ -117,7 +117,7 @@ class RetrieveHitsVoContractTest {
                 "SUGGEST",
                 new EffectiveParamsVO(
                         10, 0.3D, "hybrid", 0.3D, false, null, "SUGGEST", "LIBRARY", List.of(),
-                        null));
+                        null, null));
 
         String json = mapper.writeValueAsString(vo);
         for (String forbidden : List.of(

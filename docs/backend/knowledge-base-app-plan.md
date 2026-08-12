@@ -549,7 +549,7 @@ P0/P1 解决「能用、能管、能问、能评」；**二期**专注检索质�
 | A 质量线 | 混合检索（关键字+语义）打磨、Rerank、切片 UI 齐套、命中测试 Q-04 | 必须交付 |
 | D 同义词 | 平台术语表 S-07；mis-kb 检索前扩展；引擎原生词表仅运维可选 | 可与 A 收尾 / B **并行** |
 | B 结构 PoC | GraphRAG 至多 1～2 库；引擎内图谱，**不上 Neo4j** | 门禁：金标对比 |
-| C 条件启动 | RAPTOR / TOC 等 | 仅 B 达标后 |
+| C 独立启动 | RAPTOR / TOC 等 | 可独立启动（2026-08-12 修订）；门禁 = RAPTOR 自身金标 + 引擎契约 T00 实测；详见 phase2-plan §7 |
 
 P1 流式/工单/门户 enterable 等见 [mis-kb-incremental-design-2026-08-03.md](mis-kb-incremental-design-2026-08-03.md)，不在二期正文重复。
 

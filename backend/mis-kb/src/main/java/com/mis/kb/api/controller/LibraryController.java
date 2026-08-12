@@ -13,10 +13,13 @@ import com.mis.kb.api.dto.KbLibraryDeleteResultVO;
 import com.mis.kb.api.dto.KbLibraryDetailVO;
 import com.mis.kb.api.dto.KbLibraryUpdateRequest;
 import com.mis.kb.api.dto.KbLibraryVO;
+import com.mis.kb.api.dto.KbRaptorBuildResultVO;
+import com.mis.kb.api.dto.KbRaptorStatusVO;
 import com.mis.kb.domain.model.LibraryDeleteMode;
 import com.mis.kb.domain.model.RagSettings;
 import com.mis.kb.domain.service.KbGraphService;
 import com.mis.kb.domain.service.KbLibraryService;
+import com.mis.kb.domain.service.KbRaptorService;
 import com.mis.kb.domain.service.RagSettingsService;
 import jakarta.validation.Valid;
 import org.springframework.web.bind.annotation.DeleteMapping;
@@ -39,14 +42,17 @@ public class LibraryController {
     private final KbLibraryService libraryService;
     private final RagSettingsService ragSettingsService;
     private final KbGraphService graphService;
+    private final KbRaptorService raptorService;
 
     public LibraryController(
             KbLibraryService libraryService,
             RagSettingsService ragSettingsService,
-            KbGraphService graphService) {
+            KbGraphService graphService,
+            KbRaptorService raptorService) {
         this.libraryService = libraryService;
         this.ragSettingsService = ragSettingsService;
         this.graphService = graphService;
+        this.raptorService = raptorService;
     }
 
     @GetMapping
@@ -128,6 +134,37 @@ public class LibraryController {
     @GetMapping("/{id}/graph/build-status")
     public Result<KbGraphStatusVO> graphBuildStatus(@PathVariable Long id) {
         return Result.ok(graphService.refreshStatus(id));
+    }
+
+    /**
+     * 触发 RAPTOR 摘要构建（Wave C RAPTOR，T02；手动按钮/重试）。
+     *
+     * <p><b>内部端点不重复判权限码</b>（与仓库既有口径一致）：BFF 侧 {@code kb:library:edit}
+     * 权限码 + {@code @OperLog} 审计收口；本方法内 {@code KbRaptorService.build} 仍执行
+     * {@code hasLibraryManage} 管辖双闸门 + 能力/状态机校验（设计 §2.5）。
+     * <b>U4：无库数上限</b>——只有平台总开关 {@code mis.kb.engine.raptor-enabled} + 能力
+     * {@code raptor} 闸门。
+     *
+     * @param id 知识库 id
+     * @return 构建触发回执（building/taskId/raptorBuildStatus）
+     */
+    @PostMapping("/{id}/raptor/build")
+    public Result<KbRaptorBuildResultVO> buildRaptor(@PathVariable Long id) {
+        return Result.ok(raptorService.build(id, currentUserId()));
+    }
+
+    /**
+     * 查询 RAPTOR 构建状态（Wave C RAPTOR，T02；前端 3s 轮询）。
+     *
+     * <p><b>读操作：</b>BFF 侧 {@code kb:library:engine-ref:view} 权限码收口，
+     * 不挂审计（U6：轮询刷审计表噪声）。每次调用触发引擎刷新 + 有变化才回写。
+     *
+     * @param id 知识库 id
+     * @return 状态回执（raptorBuildStatus/raptorBuildMessage/raptorTaskId/updatedAt）
+     */
+    @GetMapping("/{id}/raptor/build-status")
+    public Result<KbRaptorStatusVO> raptorBuildStatus(@PathVariable Long id) {
+        return Result.ok(raptorService.refreshStatus(id));
     }
 
     @PostMapping

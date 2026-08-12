@@ -59,6 +59,12 @@ interface TuneForm {
    * 用于 hybrid-only vs hybrid+graph 的 A/B 对照，只影响本次测试。
    */
   enableGraph: boolean | null;
+  /**
+   * 本次 RAPTOR 摘要临时开关（Wave C RAPTOR，T03）。
+   * 三态：true 强制开 / false 强制关 / null 跟随库设置 useRaptor。
+   * 用于「建树 vs 未建树 / 开 vs 关」的 A/B 对照，只影响本次测试。
+   */
+  enableRaptor: boolean | null;
 }
 
 const EMPTY_TUNE: TuneForm = {
@@ -73,6 +79,7 @@ const EMPTY_TUNE: TuneForm = {
   uploadFrom: '',
   uploadTo: '',
   enableGraph: null,
+  enableRaptor: null,
 };
 
 /** 一次已完成的测试记录（用于 WA-14 并排对比）。 */
@@ -212,6 +219,9 @@ export function KbHitTestPage() {
   // 图谱增强能力（Wave B GraphRAG PoC，T03）：`=== true`（fail-safe）。能力未确认/
   // 不支持时置灰——后端 Resolver S4.5 会把图谱开关降级并回显原因，前端提前挡住更友好。
   const graphSupported = capabilities?.graphSupported === true;
+  // RAPTOR 摘要能力（Wave C RAPTOR，T03）：`=== true`（fail-safe）。能力未确认/
+  // 不支持时置灰——后端 Resolver S4.6 会把 RAPTOR 开关降级并回显原因（如未建树）。
+  const raptorSupported = capabilities?.raptorSupported === true;
 
   useEffect(() => {
     if (!capabilities) void refreshEngine();
@@ -267,6 +277,7 @@ export function KbHitTestPage() {
           uploadTo: '',
           // 切库后重置为「跟随库设置」（A/B 对照语义：不残留上一个库的临时开关）
           enableGraph: null,
+          enableRaptor: null,
         }));
       } catch (e) {
         toast.error(e instanceof Error ? e.message : '加载该库 RAG 设置失败');
@@ -312,6 +323,10 @@ export function KbHitTestPage() {
         uploadTo: toIsoInstant(form.uploadTo),
         // Wave B（T03）：图谱增强临时开关三态透传（null 由 cleanParams 剔除 = 跟随库设置）
         enableGraph: form.enableGraph,
+        // Wave C（T03）：RAPTOR 摘要临时开关三态透传（null = 跟随库设置 useRaptor）。
+        // ⚠ 检索期零回归：引擎建树后经典 /retrieval 自动融合摘要，本开关只影响
+        // 后端降级判定与回显，不改检索请求体。
+        enableRaptor: form.enableRaptor,
       });
       // 当前结果挤到「上一次」，形成 1 组对比
       setPrevious(current);
@@ -464,6 +479,51 @@ export function KbHitTestPage() {
               setForm((f) => ({
                 ...f,
                 enableGraph: v === 'follow' ? null : v === 'on',
+              }));
+            }}
+          >
+            <option value="follow">跟随库设置（默认）</option>
+            <option value="on">开启</option>
+            <option value="off">关闭</option>
+          </select>
+        </div>
+
+        {/* RAPTOR 摘要临时开关（Wave C RAPTOR，T03）：三态 A/B 对照。
+            能力未确认/不支持时整体置灰（fail-safe，`=== true`），与图谱区同款
+            置灰 + amber 提示结构；后端 Resolver S4.6 仍会强校验（能力/
+            raptorBuildStatus==ready）并回显降级原因（如「RAPTOR 未构建完成」）。
+            ⚠ 检索期零回归：引擎建树后经典检索自动融合摘要，本开关只影响
+            后端降级判定与回显，不改检索请求体。 */}
+        <div className="space-y-2 rounded-md border border-dashed bg-muted/30 p-3">
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-sm font-medium text-foreground">RAPTOR 摘要（Wave C）</span>
+            {raptorSupported && form.enableRaptor !== null ? (
+              <Button
+                type="button"
+                size="sm"
+                variant="ghost"
+                className="h-6 px-2 text-xs"
+                onClick={() => setForm((f) => ({ ...f, enableRaptor: null }))}
+              >
+                跟随库设置
+              </Button>
+            ) : null}
+          </div>
+          <p className="text-xs text-muted-foreground">
+            临时开关 RAPTOR 摘要增强（开 vs 关 / 建树 vs 未建树对照），只影响本次测试，不写回库设置。
+          </p>
+          {!raptorSupported ? (
+            <p className="text-xs text-amber-600">当前引擎版本暂不支持 RAPTOR 摘要增强</p>
+          ) : null}
+          <select
+            className={selectClass}
+            disabled={!raptorSupported}
+            value={form.enableRaptor == null ? 'follow' : form.enableRaptor ? 'on' : 'off'}
+            onChange={(e) => {
+              const v = e.target.value;
+              setForm((f) => ({
+                ...f,
+                enableRaptor: v === 'follow' ? null : v === 'on',
               }));
             }}
           >
@@ -724,6 +784,10 @@ function EffectiveParamsPanel({
         <ParamItem
           label="图谱增强"
           value={p?.useKnowledgeGraph === true ? '已开启' : '未开启'}
+        />
+        <ParamItem
+          label="RAPTOR 摘要"
+          value={p?.useRaptor === true ? '已开启' : '未开启'}
         />
         <ParamItem
           label="空结果策略"

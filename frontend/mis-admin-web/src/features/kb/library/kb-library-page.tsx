@@ -102,6 +102,14 @@ function toSettings(form: LibraryForm, base: KbRagSettings | null): KbRagSetting
     // 否则一次「改个名字」就会把详情页开启的知识图谱悄悄关掉。
     // kgBuildStatus/kgBuildMessage 由服务端维护，前端不提交（类型上可选）。
     useKnowledgeGraph: base?.useKnowledgeGraph ?? null,
+    // RAPTOR（Wave C，T02）：同样只在详情页维护，此处原样带回——
+    // 否则一次「改个名字」就会把详情页开启的 RAPTOR 建树悄悄关掉。
+    // raptorBuildStatus/raptorBuildMessage 由服务端维护，前端不提交（类型上可选）。
+    useRaptor: base?.useRaptor ?? null,
+    raptorMaxTokenNum: base?.raptorMaxTokenNum ?? null,
+    raptorThreshold: base?.raptorThreshold ?? null,
+    raptorMaxCluster: base?.raptorMaxCluster ?? null,
+    raptorPrompt: base?.raptorPrompt ?? null,
   };
 }
 

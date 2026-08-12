@@ -24,6 +24,11 @@ import java.util.List;
  *                               {@code true} = 本次走了 /datasets/{id}/search + use_kg:true；
  *                               被 S4.5 降级时为 {@code false}（原因在 {@code degradedReasons}）。
  *                               命中测试页据此回显「本次实际生效：图谱增强 开/关（原因）」
+ * @param useRaptor              RAPTOR 摘要实际生效开关（Wave C RAPTOR，T03，末位追加）。
+ *                               {@code true} = 本次请求了 RAPTOR 增强（引擎建树后 /retrieval
+ *                               自动融合，MIS 检索期不改请求体）；被 S4.6 降级时为
+ *                               {@code false}（原因在 {@code degradedReasons}）。
+ *                               命中测试页据此回显「库已建树 / RAPTOR 未构建完成」
  */
 public record EffectiveParamsVO(
         Integer topK,
@@ -35,7 +40,8 @@ public record EffectiveParamsVO(
         String emptyResultStrategy,
         String source,
         List<String> degradedReasons,
-        Boolean useKnowledgeGraph) {
+        Boolean useKnowledgeGraph,
+        Boolean useRaptor) {
 
     /**
      * 由领域对象构造视图。
@@ -57,6 +63,7 @@ public record EffectiveParamsVO(
                 params.emptyResultStrategy(),
                 params.source(),
                 params.degradedReasons(),
-                params.useKnowledgeGraph());
+                params.useKnowledgeGraph(),
+                params.useRaptor());
     }
 }

@@ -1,9 +1,13 @@
 package com.mis.kb.domain.service;
 
+import com.mis.common.security.context.LoginUser;
+import com.mis.common.security.context.SecurityContextHolder;
 import com.mis.kb.domain.entity.KbLibrary;
+import com.mis.kb.domain.model.EngineCapabilities;
 import com.mis.kb.domain.model.KbResultCode;
 import com.mis.kb.domain.model.LibraryStatus;
 import com.mis.kb.domain.model.RagSettings;
+import com.mis.kb.domain.model.RaptorConfig;
 import com.mis.kb.domain.repository.KbAclRepository;
 import com.mis.kb.domain.repository.KbDocumentRepository;
 import com.mis.kb.domain.repository.KbLibraryRepository;
@@ -11,6 +15,7 @@ import com.mis.kb.engine.KnowledgeEnginePort;
 import com.mis.kb.engine.RagflowProperties;
 import com.mis.kb.support.KbBusinessException;
 import com.mis.kb.support.KbJson;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -78,6 +83,9 @@ class RagSettingsServiceTest {
     /** Wave B（T02）：RagSettingsService 保存路径注入的构图服务（mock，本测试不触发真构图）。 */
     @Mock
     private KbGraphService graphService;
+    /** Wave C（T02）：RagSettingsService 保存路径注入的 RAPTOR 服务（mock，不触发真建树）。 */
+    @Mock
+    private KbRaptorService raptorService;
 
     private RagflowProperties propsWithRerank;
     private RagflowProperties propsWithoutRerank;
@@ -104,12 +112,12 @@ class RagSettingsServiceTest {
 
     private RagSettingsService serviceWithRerankModel() {
         return new RagSettingsService(libraryRepository, aclRepository,
-                documentRepository, enginePort, propsWithRerank, graphService);
+                documentRepository, enginePort, propsWithRerank, graphService, raptorService);
     }
 
     private RagSettingsService serviceWithoutRerankModel() {
         return new RagSettingsService(libraryRepository, aclRepository,
-                documentRepository, enginePort, propsWithoutRerank, graphService);
+                documentRepository, enginePort, propsWithoutRerank, graphService, raptorService);
     }
 
     /** 只给权重，其余字段留 null 交给 withDefaults 兜底。 */
@@ -524,6 +532,222 @@ class RagSettingsServiceTest {
         }
     }
 
+    // ------------------------------------------------------------ RAPTOR（Wave C）
+
+    @Nested
+    @DisplayName("RAPTOR 校验与可用性收敛（Wave C RAPTOR，T02/T04）")
+    class Raptor {
+
+        @ParameterizedTest(name = "raptorMaxTokenNum={0} 越界 → KB_RAG_SETTINGS_INVALID")
+        @ValueSource(ints = {511, 2049, 4096, 0, -1})
+        @DisplayName("raptorMaxTokenNum 只认 [512,2048]（T00 P1b：4096 → 引擎 code:101 被拒）")
+        void rejectsOutOfRangeMaxTokenNum(int tokenNum) {
+            RagSettings bad = new RagSettings(null, null, null, null, null,
+                    null, null, null, null, null, null,
+                    null, null, null, null, null, null,
+                    true, tokenNum, null, null, null, null, null);
+
+            KbBusinessException ex = assertThrows(KbBusinessException.class,
+                    () -> serviceWithRerankModel().save(LIBRARY_ID, bad));
+            assertEquals(KbResultCode.KB_RAG_SETTINGS_INVALID.getCode(), ex.getCode());
+            verify(libraryRepository, never()).save(any(KbLibrary.class));
+            verify(enginePort, never()).updateLibrarySettings(any(), any());
+        }
+
+        @Test
+        @DisplayName("raptorMaxTokenNum 边界 [512, 2048] 恰好合法")
+        void acceptsBoundaryMaxTokenNum() {
+            when(enginePort.capabilities()).thenReturn(
+                    EngineCapabilities.of(true, true, true, true, true, false, false, false, true));
+
+            RagSettings savedMin = serviceWithRerankModel().save(LIBRARY_ID,
+                    new RagSettings(null, null, null, null, null,
+                            null, null, null, null, null, null,
+                            null, null, null, null, null, null,
+                            true, 512, null, null, null, null, null));
+            assertEquals(512, savedMin.raptorMaxTokenNum().intValue());
+
+            RagSettings savedMax = serviceWithRerankModel().save(LIBRARY_ID,
+                    new RagSettings(null, null, null, null, null,
+                            null, null, null, null, null, null,
+                            null, null, null, null, null, null,
+                            true, 2048, null, null, null, null, null));
+            assertEquals(2048, savedMax.raptorMaxTokenNum().intValue());
+        }
+
+        @ParameterizedTest(name = "raptorThreshold={0} 越界 → KB_RAG_SETTINGS_INVALID")
+        @ValueSource(doubles = {-0.01D, 1.01D, 2D})
+        @DisplayName("raptorThreshold 只认 [0,1]（含 0，T00 P1b 实测）")
+        void rejectsOutOfRangeThreshold(double threshold) {
+            RagSettings bad = new RagSettings(null, null, null, null, null,
+                    null, null, null, null, null, null,
+                    null, null, null, null, null, null,
+                    true, null, threshold, null, null, null, null);
+
+            KbBusinessException ex = assertThrows(KbBusinessException.class,
+                    () -> serviceWithRerankModel().save(LIBRARY_ID, bad));
+            assertEquals(KbResultCode.KB_RAG_SETTINGS_INVALID.getCode(), ex.getCode());
+        }
+
+        @ParameterizedTest(name = "raptorMaxCluster={0} 越界 → KB_RAG_SETTINGS_INVALID")
+        @ValueSource(ints = {0, -1, 1025})
+        @DisplayName("raptorMaxCluster 只认 [1,1024]")
+        void rejectsOutOfRangeMaxCluster(int cluster) {
+            RagSettings bad = new RagSettings(null, null, null, null, null,
+                    null, null, null, null, null, null,
+                    null, null, null, null, null, null,
+                    true, null, null, cluster, null, null, null);
+
+            KbBusinessException ex = assertThrows(KbBusinessException.class,
+                    () -> serviceWithRerankModel().save(LIBRARY_ID, bad));
+            assertEquals(KbResultCode.KB_RAG_SETTINGS_INVALID.getCode(), ex.getCode());
+        }
+
+        @Test
+        @DisplayName("raptorPrompt 超 2000 字 → KB_RAG_SETTINGS_INVALID（T00 P1g 不强制占位符，只卡长度）")
+        void rejectsPromptTooLong() {
+            RagSettings bad = new RagSettings(null, null, null, null, null,
+                    null, null, null, null, null, null,
+                    null, null, null, null, null, null,
+                    true, null, null, null, "x".repeat(RaptorConfig.MAX_PROMPT_LENGTH + 1), null, null);
+
+            KbBusinessException ex = assertThrows(KbBusinessException.class,
+                    () -> serviceWithRerankModel().save(LIBRARY_ID, bad));
+            assertEquals(KbResultCode.KB_RAG_SETTINGS_INVALID.getCode(), ex.getCode());
+        }
+
+        @Test
+        @DisplayName("raptorBuildStatus 非法码值 → KB_RAG_SETTINGS_INVALID（四态白名单防脏写）")
+        void rejectsIllegalBuildStatus() {
+            RagSettings bad = new RagSettings(null, null, null, null, null,
+                    null, null, null, null, null, null,
+                    null, null, null, null, null, null,
+                    true, null, null, null, null, "paused", null);
+
+            KbBusinessException ex = assertThrows(KbBusinessException.class,
+                    () -> serviceWithRerankModel().save(LIBRARY_ID, bad));
+            assertEquals(KbResultCode.KB_RAG_SETTINGS_INVALID.getCode(), ex.getCode());
+        }
+
+        @Test
+        @DisplayName("★ 三道防线第二道：capabilities.raptor=false → useRaptor 强制落 false，其余 RAPTOR 字段透传")
+        void raptorForcedFalseWithoutCapability() {
+            when(enginePort.capabilities()).thenReturn(EngineCapabilities.unsupported());
+            RagSettings request = new RagSettings(null, null, null, null, null,
+                    null, null, null, null, null, null,
+                    null, null, null, null, null, null,
+                    true, 1024, 0.2D, 32, "custom prompt", null, null);
+
+            RagSettings saved = serviceWithRerankModel().save(LIBRARY_ID, request);
+
+            assertFalse(saved.useRaptor(), "返回值应已收敛为 false");
+            assertFalse(persisted().useRaptor(), "落库 JSON 必须同为 false——返回 false 但存 true 就是「显示开了实际没开」");
+            // 24 参 canonical 透传：开关被强制关掉时参数不被吞
+            assertEquals(1024, saved.raptorMaxTokenNum().intValue());
+            assertEquals(0.2D, saved.raptorThreshold(), 1e-9);
+            assertEquals(32, saved.raptorMaxCluster().intValue());
+            assertEquals("custom prompt", saved.raptorPrompt());
+        }
+
+        @Test
+        @DisplayName("★ R6 教训回归：enforceRaptorAvailability 强制关开关时图谱字段同样透传不被吞")
+        void raptorForcedFalsePreservesGraphFields() {
+            // 能力：graph 支持、raptor 不支持——只有 RAPTOR 开关被强制关，图谱保持原样
+            when(enginePort.capabilities()).thenReturn(
+                    EngineCapabilities.of(true, true, true, true, true, false, false, true, false));
+            // 服务端事实（设计 §5.1）：DB 预置图谱已就绪（ready/ok）——否则 withServerGraphState
+            // 会用 DB 旧值（none）覆盖请求里的状态字段，断言对象就错了层（R6 测的是「强制关 RAPTOR
+            // 时不吞图谱字段」，不是「请求状态能落库」——后者由 serverBuildStatusWinsOverRequest 反向钉死）。
+            library.setRagSettingsJson(KbJson.writeSettings(
+                    new RagSettings(null, null, null, null, null,
+                            null, null, null, null, null, null,
+                            null, null, null, true, "ready", "ok",
+                            true, 1024, 0.2D, 32, "custom prompt", null, null)));
+            RagSettings request = new RagSettings(null, null, null, null, null,
+                    null, null, null, null, null, null,
+                    null, null, null, true, "ready", "ok",
+                    true, 1024, 0.2D, 32, "custom prompt", null, null);
+
+            RagSettings saved = serviceWithRerankModel().save(LIBRARY_ID, request);
+
+            assertFalse(saved.useRaptor());
+            assertTrue(saved.useKnowledgeGraph(), "RAPTOR 强制关不得吞掉图谱开关（24 参 canonical）");
+            assertEquals("ready", saved.kgBuildStatus());
+            assertEquals("ok", saved.kgBuildMessage());
+        }
+
+        @Test
+        @DisplayName("★ 服务端事实优先：请求里伪造 raptorBuildStatus=ready → 落库用 DB 旧值（none）")
+        void serverBuildStatusWinsOverRequest() {
+            // DB 旧值：未构建（none）
+            library.setRagSettingsJson(KbJson.writeSettings(RagSettings.defaults()));
+            when(enginePort.capabilities()).thenReturn(
+                    EngineCapabilities.of(true, true, true, true, true, false, false, false, true));
+            // 请求伪造 ready + 假 message
+            RagSettings request = new RagSettings(null, null, null, null, null,
+                    null, null, null, null, null, null,
+                    null, null, null, null, null, null,
+                    true, 1024, 0.1D, 64, null, "ready", "fake");
+
+            RagSettings saved = serviceWithRerankModel().save(LIBRARY_ID, request);
+
+            assertEquals(RagSettings.RAPTOR_STATUS_NONE, saved.raptorBuildStatus(),
+                    "保存请求里的状态字段一律忽略，以 DB 服务端事实为准（设计 §5.1）");
+            assertEquals(RagSettings.RAPTOR_STATUS_NONE, persisted().raptorBuildStatus());
+        }
+
+        @Test
+        @DisplayName("★ U2 联动：useRaptor false→true → 保存后自动触发一次 RAPTOR 构建")
+        void autoBuildTriggeredOnEnable() {
+            SecurityContextHolder.setLoginUser(loginUser(7L));
+            when(enginePort.capabilities()).thenReturn(
+                    EngineCapabilities.of(true, true, true, true, true, false, false, false, true));
+            RagSettings request = new RagSettings(null, null, null, null, null,
+                    null, null, null, null, null, null,
+                    null, null, null, null, null, null,
+                    true, 1024, 0.1D, 64, null, null, null);
+
+            serviceWithRerankModel().save(LIBRARY_ID, request);
+
+            verify(raptorService).build(LIBRARY_ID, 7L);
+        }
+
+        @Test
+        @DisplayName("已开启（true）再保存 → 不重复自动触发（同 U2 图谱口径）")
+        void noAutoBuildWhenAlreadyEnabled() {
+            SecurityContextHolder.setLoginUser(loginUser(7L));
+            when(enginePort.capabilities()).thenReturn(
+                    EngineCapabilities.of(true, true, true, true, true, false, false, false, true));
+            library.setRagSettingsJson(KbJson.writeSettings(
+                    new RagSettings(null, null, null, null, null,
+                            null, null, null, null, null, null,
+                            null, null, null, null, null, null,
+                            true, 1024, 0.1D, 64, null, RagSettings.RAPTOR_STATUS_READY, null)));
+            RagSettings request = new RagSettings(null, null, null, null, null,
+                    null, null, null, null, null, null,
+                    null, null, null, null, null, null,
+                    true, 1024, 0.1D, 64, null, null, null);
+
+            serviceWithRerankModel().save(LIBRARY_ID, request);
+
+            verify(raptorService, never()).build(any(), any());
+        }
+
+        @Test
+        @DisplayName("RAPTOR 七字段缺省 → withDefaults 兜底（useRaptor=false / 1024 / 0.1 / 64 / 官方 prompt / none）")
+        void raptorDefaultsApplied() {
+            RagSettings saved = serviceWithRerankModel().save(LIBRARY_ID, weightOnly(0.5D));
+
+            assertFalse(saved.useRaptor());
+            assertEquals(RaptorConfig.DEFAULT_MAX_TOKEN_NUM, saved.raptorMaxTokenNum().intValue());
+            assertEquals(RaptorConfig.DEFAULT_THRESHOLD, saved.raptorThreshold(), 1e-9);
+            assertEquals(RaptorConfig.DEFAULT_MAX_CLUSTER, saved.raptorMaxCluster().intValue());
+            assertEquals(RaptorConfig.DEFAULT_PROMPT, saved.raptorPrompt());
+            assertEquals(RagSettings.RAPTOR_STATUS_NONE, saved.raptorBuildStatus());
+            assertTrue(saved.raptorBuildMessage() == null);
+        }
+    }
+
     // ------------------------------------------------------------ 不存在的库
 
     @Test
@@ -538,5 +762,19 @@ class RagSettingsServiceTest {
         assertEquals(KbResultCode.KB_LIBRARY_NOT_FOUND.getCode(), ex.getCode());
         verify(libraryRepository, never()).save(any(KbLibrary.class));
         verify(enginePort, never()).updateLibrarySettings(any(), any());
+    }
+
+    private static LoginUser loginUser(Long userId) {
+        LoginUser user = new LoginUser();
+        user.setUserId(userId);
+        user.setTenantId(1L);
+        user.setAppId(91010L);
+        user.setUsername("tester");
+        return user;
+    }
+
+    @AfterEach
+    void tearDown() {
+        SecurityContextHolder.clear();
     }
 }

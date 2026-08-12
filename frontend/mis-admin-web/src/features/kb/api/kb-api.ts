@@ -38,6 +38,8 @@ import type {
   KbQaSessionListItem,
   KbQaTicket,
   KbRagSettings,
+  KbRaptorBuildResult,
+  KbRaptorStatus,
   KbReparseAllResult,
   KbSubject,
   KbSynonymConfig,
@@ -245,6 +247,23 @@ export async function graphBuildStatus(id: number): Promise<KbGraphStatus> {
     `/kb/libraries/${id}/graph/build-status`,
   );
   return unwrap(res, '查询图谱构建状态失败');
+}
+
+/** 触发 RAPTOR 摘要构建（Wave C RAPTOR，T02；手动按钮/重试，U4 无库数上限）。 */
+export async function buildRaptor(id: number): Promise<KbRaptorBuildResult> {
+  const res = await api.post<ApiResult<KbRaptorBuildResult>>(
+    `/kb/libraries/${id}/raptor/build`,
+    {},
+  );
+  return unwrap(res, '触发 RAPTOR 构建失败');
+}
+
+/** 查询 RAPTOR 构建状态（Wave C RAPTOR，T02；building 态 3s 轮询）。 */
+export async function raptorBuildStatus(id: number): Promise<KbRaptorStatus> {
+  const res = await api.get<ApiResult<KbRaptorStatus>>(
+    `/kb/libraries/${id}/raptor/build-status`,
+  );
+  return unwrap(res, '查询 RAPTOR 构建状态失败');
 }
 
 // ------------------------------------------------------------------ 文档

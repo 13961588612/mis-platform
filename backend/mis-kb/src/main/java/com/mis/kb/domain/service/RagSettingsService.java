@@ -14,6 +14,7 @@ import com.mis.kb.domain.model.EngineLibraryRef;
 import com.mis.kb.domain.model.KbResultCode;
 import com.mis.kb.domain.model.LibraryStatus;
 import com.mis.kb.domain.model.RagSettings;
+import com.mis.kb.domain.model.RaptorConfig;
 import com.mis.kb.domain.repository.KbAclRepository;
 import com.mis.kb.domain.repository.KbDocumentRepository;
 import com.mis.kb.domain.repository.KbLibraryRepository;
@@ -60,6 +61,7 @@ public class RagSettingsService {
     private final KnowledgeEnginePort enginePort;
     private final RagflowProperties engineProperties;
     private final KbGraphService graphService;
+    private final KbRaptorService raptorService;
 
     public RagSettingsService(
             KbLibraryRepository libraryRepository,
@@ -67,13 +69,15 @@ public class RagSettingsService {
             KbDocumentRepository documentRepository,
             KnowledgeEnginePort enginePort,
             RagflowProperties engineProperties,
-            KbGraphService graphService) {
+            KbGraphService graphService,
+            KbRaptorService raptorService) {
         this.libraryRepository = libraryRepository;
         this.aclRepository = aclRepository;
         this.documentRepository = documentRepository;
         this.enginePort = enginePort;
         this.engineProperties = engineProperties;
         this.graphService = graphService;
+        this.raptorService = raptorService;
     }
 
     /**
@@ -90,13 +94,18 @@ public class RagSettingsService {
     }
 
     /**
-     * 保存 RAG 设置并同步引擎（L-08；Wave B 增加图谱开关联动）。
+     * 保存 RAG 设置并同步引擎（L-08；Wave B 增加图谱开关联动；Wave C 增加 RAPTOR 联动）。
      *
      * <p><b>图谱开关联动（U2 裁定：开关 false→true 保存时自动触发一次构图）：</b>
      * 检测到 {@code useKnowledgeGraph} 从 {@code false}→{@code true} 且
      * {@code kgBuildStatus != building} 时，保存成功后调用 {@code KbGraphService.build}
      * 自动排队构图。构图失败<b>不阻断保存</b>（设置已落库，可手动「开始构建」重试）。
      * 引擎侧构图只排队任务并立即返回，保存响应不会等构图完成（构建过程走 3s 轮询）。
+     *
+     * <p><b>RAPTOR 开关联动（U2 同款裁定，Wave C）：</b>检测到 {@code useRaptor} 从
+     * {@code false}→{@code true} 且 {@code raptorBuildStatus != building} 时，保存成功后
+     * 调用 {@code KbRaptorService.build} 自动排队构建。graph/raptor <b>可并行</b>
+     * （T00 P2c 实测），两个自动触发互不干扰。
      *
      * @param libraryId 知识库 id
      * @param settings  待保存设置
@@ -106,10 +115,16 @@ public class RagSettingsService {
     public RagSettings save(Long libraryId, RagSettings settings) {
         KbLibrary lib = require(libraryId);
         RagSettings oldEffective = get(libraryId);
+        // 三道防线第二道（保存强制关）：rerank → graph → raptor 依次收敛；
+        // 引擎不支持的能力开关一律静默强制 false（前端置灰是第一道，检索期降级是第三道）
         RagSettings validated = enforceGraphAvailability(
-                enforceRerankAvailability(validate(settings).withDefaults(), libraryId), libraryId);
-        // 服务端维护图谱状态字段：请求里的 kgBuildStatus/kgBuildMessage 一律忽略（仅回显），
-        // 以 DB 里的服务端事实为准（设计 §5.1）——防客户端脏写把状态改成 building/ready。
+                enforceRaptorAvailability(
+                        enforceRerankAvailability(validate(settings).withDefaults(), libraryId),
+                        libraryId),
+                libraryId);
+        // 服务端维护图谱/RAPTOR 状态字段：请求里的 kgBuildStatus/kgBuildMessage 与
+        // raptorBuildStatus/raptorBuildMessage 一律忽略（仅回显），以 DB 里的服务端事实为准
+        // （设计 §5.1）——防客户端脏写把状态改成 building/ready。
         validated = withServerGraphState(validated, oldEffective);
         // 上限校验（保存与构图共用 KbGraphService.canEnableGraph）：开启图谱且已达上限 → 拒
         if (Boolean.TRUE.equals(validated.useKnowledgeGraph())) {
@@ -119,17 +134,29 @@ public class RagSettingsService {
         boolean autoBuild = !Boolean.TRUE.equals(oldEffective.useKnowledgeGraph())
                 && Boolean.TRUE.equals(validated.useKnowledgeGraph())
                 && !RagSettings.KG_STATUS_BUILDING.equals(oldEffective.kgBuildStatus());
+        // RAPTOR 同款：false→true 且非 building → 保存后自动触发构建（U2；与构图可并行）
+        boolean autoRaptorBuild = !Boolean.TRUE.equals(oldEffective.useRaptor())
+                && Boolean.TRUE.equals(validated.useRaptor())
+                && !RagSettings.RAPTOR_STATUS_BUILDING.equals(oldEffective.raptorBuildStatus());
 
         lib.setRagSettingsJson(KbJson.writeSettings(validated));
         lib.setUpdatedAt(Instant.now());
         KbLibrary saved = libraryRepository.save(lib);
 
         syncToEngine(saved, validated);
+        boolean anyAutoBuild = false;
         if (autoBuild) {
             triggerAutoBuild(libraryId);
-            // 自动触发后重新读取：构图排队成功会回写 kgBuildStatus=building，
+            anyAutoBuild = true;
+        }
+        if (autoRaptorBuild) {
+            triggerRaptorAutoBuild(libraryId);
+            anyAutoBuild = true;
+        }
+        if (anyAutoBuild) {
+            // 自动触发后重新读取：构图/RAPTOR 排队成功会回写 building，
             // 返回给前端的状态必须反映落库事实——否则前端看不到 building，3s 轮询无法启动
-            // （若构图排队失败，这里读到的是 none/failed，前端展示「未构建」+ 手动按钮重试）。
+            // （若触发失败，这里读到的是 none/failed，前端展示「未构建」+ 手动按钮重试）。
             RagSettings after = KbJson.readSettings(
                     libraryRepository.findById(libraryId).orElse(saved).getRagSettingsJson());
             return after == null ? validated : after.withDefaults();
@@ -241,6 +268,38 @@ public class RagSettingsService {
         if (settings.kgBuildMessage() != null && settings.kgBuildMessage().length() > 200) {
             throw new KbBusinessException(KbResultCode.KB_RAG_SETTINGS_INVALID);
         }
+        // Wave C RAPTOR（T02）：RAPTOR 字段校验（设计 §2.0 / T00 P1 实测）。
+        // raptorBuildStatus 只接受四态码值（防脏写，口径同 kgBuildStatus）；raptorBuildMessage ≤200；
+        // raptorMaxTokenNum ∈ [512,2048]（T00 P1b：4096 → 引擎 code:101 被拒，MIS 校验收窄对齐
+        // 用户期望下限 512，常量见 RaptorConfig）；raptorThreshold ∈ [0,1]（含 0，T00 实测）；
+        // raptorMaxCluster ∈ [1,1024]；raptorPrompt ≤2000（引擎不强制 {cluster_content} 占位符，
+        // T00 P1g 实测）。越界一律直接拒（不做静默截断——与 chunkTokenNum 同口径）。
+        if (settings.raptorBuildStatus() != null && !settings.raptorBuildStatus().isBlank()
+                && !RagSettings.RAPTOR_STATUS_NONE.equals(settings.raptorBuildStatus())
+                && !RagSettings.RAPTOR_STATUS_BUILDING.equals(settings.raptorBuildStatus())
+                && !RagSettings.RAPTOR_STATUS_READY.equals(settings.raptorBuildStatus())
+                && !RagSettings.RAPTOR_STATUS_FAILED.equals(settings.raptorBuildStatus())) {
+            throw new KbBusinessException(KbResultCode.KB_RAG_SETTINGS_INVALID);
+        }
+        if (settings.raptorBuildMessage() != null && settings.raptorBuildMessage().length() > 200) {
+            throw new KbBusinessException(KbResultCode.KB_RAG_SETTINGS_INVALID);
+        }
+        if (settings.raptorMaxTokenNum() != null
+                && !RaptorConfig.isValidMaxTokenNum(settings.raptorMaxTokenNum())) {
+            throw new KbBusinessException(KbResultCode.KB_RAG_SETTINGS_INVALID);
+        }
+        if (settings.raptorThreshold() != null
+                && !RaptorConfig.isValidThreshold(settings.raptorThreshold())) {
+            throw new KbBusinessException(KbResultCode.KB_RAG_SETTINGS_INVALID);
+        }
+        if (settings.raptorMaxCluster() != null
+                && !RaptorConfig.isValidMaxCluster(settings.raptorMaxCluster())) {
+            throw new KbBusinessException(KbResultCode.KB_RAG_SETTINGS_INVALID);
+        }
+        if (settings.raptorPrompt() != null
+                && settings.raptorPrompt().length() > RaptorConfig.MAX_PROMPT_LENGTH) {
+            throw new KbBusinessException(KbResultCode.KB_RAG_SETTINGS_INVALID);
+        }
         return settings;
     }
 
@@ -268,8 +327,10 @@ public class RagSettingsService {
         }
         log.warn("未配置全局重排模型（mis.kb.engine.rerank-model-id 为空），"
                 + "已强制关闭该库的 rerank 开关 libraryId={}", libraryId);
-        // 17 参 canonical 透传图谱三字段（useKnowledgeGraph/kgBuildStatus/kgBuildMessage）——
-        // 绝不能走 14 参旧构造，否则图谱字段被静默置 null（record 末位追加铁律 §10-8）
+        // 24 参 canonical 透传图谱三字段与 RAPTOR 七字段（useKnowledgeGraph/kgBuildStatus/
+        // kgBuildMessage/useRaptor/raptorMaxTokenNum/raptorThreshold/raptorMaxCluster/
+        // raptorPrompt/raptorBuildStatus/raptorBuildMessage）——绝不能走 14 参旧构造，
+        // 否则图谱/RAPTOR 字段被静默置 null（record 末位追加铁律 §10-8）
         return new RagSettings(
                 settings.topK(),
                 settings.scoreThreshold(),
@@ -287,7 +348,14 @@ public class RagSettingsService {
                 settings.chunkOverlapTokenNum(),
                 settings.useKnowledgeGraph(),
                 settings.kgBuildStatus(),
-                settings.kgBuildMessage());
+                settings.kgBuildMessage(),
+                settings.useRaptor(),
+                settings.raptorMaxTokenNum(),
+                settings.raptorThreshold(),
+                settings.raptorMaxCluster(),
+                settings.raptorPrompt(),
+                settings.raptorBuildStatus(),
+                settings.raptorBuildMessage());
     }
 
     /**
@@ -312,7 +380,7 @@ public class RagSettingsService {
         }
         log.warn("当前引擎不支持知识图谱（capabilities.graphrag=false），"
                 + "已强制关闭该库的 useKnowledgeGraph libraryId={}", libraryId);
-        // 17 参 canonical 保留其余字段（含 kgBuildStatus/kgBuildMessage）
+        // 24 参 canonical 保留其余字段（含 kgBuildStatus/kgBuildMessage 与 RAPTOR 七字段）
         return new RagSettings(
                 settings.topK(),
                 settings.scoreThreshold(),
@@ -330,20 +398,79 @@ public class RagSettingsService {
                 settings.chunkOverlapTokenNum(),
                 Boolean.FALSE,
                 settings.kgBuildStatus(),
-                settings.kgBuildMessage());
+                settings.kgBuildMessage(),
+                settings.useRaptor(),
+                settings.raptorMaxTokenNum(),
+                settings.raptorThreshold(),
+                settings.raptorMaxCluster(),
+                settings.raptorPrompt(),
+                settings.raptorBuildStatus(),
+                settings.raptorBuildMessage());
     }
 
     /**
-     * 以服务端事实覆盖请求里的图谱状态字段（设计 §5.1：前端提交 kgBuildStatus 时忽略或仅回显）。
+     * RAPTOR 可用性收敛（Wave C RAPTOR，T02；三道防线第二道）。
      *
-     * <p>{@code kgBuildStatus}/{@code kgBuildMessage} 由 {@code KbGraphService} 维护
-     * （构图触发写 building、状态查询映射 ready/failed 回写），保存请求里的值不可信——
+     * <p><b>与 {@link #enforceGraphAvailability} 同款静默强制口径：</b>
+     * {@code useRaptor=true} 但 {@code capabilities.raptor=false} →
+     * 落库强制 {@code false} + WARN（U4：无库数上限，只有能力/平台开关闸门）。
+     * <b>U4 裁定：不设库数上限</b>——不存在 {@code KB_RAPTOR_LIBRARY_LIMIT}，
+     * 这里只判能力 {@code raptor}（平台总开关 {@code mis.kb.engine.raptor-enabled}
+     * 已在适配层折叠进 capabilities）。
+     *
+     * @param settings  已校验并补齐默认值的设置
+     * @param libraryId 知识库 id（仅用于日志定位）
+     * @return RAPTOR 开关已收敛的设置
+     */
+    private RagSettings enforceRaptorAvailability(RagSettings settings, Long libraryId) {
+        if (!Boolean.TRUE.equals(settings.useRaptor())) {
+            return settings;
+        }
+        if (enginePort.capabilities().supports(EngineCapabilities.CAP_RAPTOR)) {
+            return settings;
+        }
+        log.warn("当前引擎不支持 RAPTOR（capabilities.raptor=false），"
+                + "已强制关闭该库的 useRaptor libraryId={}", libraryId);
+        // 24 参 canonical 保留其余字段（含图谱三字段与 RAPTOR 其余六字段）
+        return new RagSettings(
+                settings.topK(),
+                settings.scoreThreshold(),
+                settings.rerank(),
+                settings.embeddingModel(),
+                settings.retrievalMethod(),
+                settings.chunkMethod(),
+                settings.chunkTokenNum(),
+                settings.separator(),
+                settings.emptyResultStrategy(),
+                settings.vectorSimilarityWeight(),
+                settings.rerankModelId(),
+                settings.ocrEnabled(),
+                settings.ocrLanguage(),
+                settings.chunkOverlapTokenNum(),
+                settings.useKnowledgeGraph(),
+                settings.kgBuildStatus(),
+                settings.kgBuildMessage(),
+                Boolean.FALSE,
+                settings.raptorMaxTokenNum(),
+                settings.raptorThreshold(),
+                settings.raptorMaxCluster(),
+                settings.raptorPrompt(),
+                settings.raptorBuildStatus(),
+                settings.raptorBuildMessage());
+    }
+
+    /**
+     * 以服务端事实覆盖请求里的图谱/RAPTOR 状态字段（设计 §5.1：前端提交状态时忽略或仅回显）。
+     *
+     * <p>{@code kgBuildStatus}/{@code kgBuildMessage} 由 {@code KbGraphService} 维护、
+     * {@code raptorBuildStatus}/{@code raptorBuildMessage} 由 {@code KbRaptorService}
+     * 维护（触发写 building、状态查询映射 ready/failed 回写），保存请求里的值不可信——
      * 客户端若把状态改成 building/ready，会绕过状态机制造假状态。故保存时一律
-     * 用 DB 旧值覆盖（{@code null} 兜底 {@code none}）。
+     * 用 DB 旧值覆盖（{@code null} 兜底 {@code none}/{@code RAPTOR_STATUS_NONE}）。
      *
-     * @param settings     本次待保存设置（图谱开关可能已改）
+     * @param settings     本次待保存设置（图谱/RAPTOR 开关可能已改）
      * @param serverState  DB 里当前服务端事实（旧设置，已 withDefaults）
-     * @return 图谱状态字段已收敛的设置（17 参 canonical 保留其余字段）
+     * @return 图谱/RAPTOR 状态字段已收敛的设置（24 参 canonical 保留其余字段）
      */
     private RagSettings withServerGraphState(RagSettings settings, RagSettings serverState) {
         return new RagSettings(
@@ -364,7 +491,15 @@ public class RagSettingsService {
                 settings.useKnowledgeGraph(),
                 serverState.kgBuildStatus() == null
                         ? RagSettings.KG_STATUS_NONE : serverState.kgBuildStatus(),
-                serverState.kgBuildMessage());
+                serverState.kgBuildMessage(),
+                settings.useRaptor(),
+                settings.raptorMaxTokenNum(),
+                settings.raptorThreshold(),
+                settings.raptorMaxCluster(),
+                settings.raptorPrompt(),
+                serverState.raptorBuildStatus() == null
+                        ? RagSettings.RAPTOR_STATUS_NONE : serverState.raptorBuildStatus(),
+                serverState.raptorBuildMessage());
     }
 
     /**
@@ -386,6 +521,31 @@ public class RagSettingsService {
             graphService.build(libraryId, userId);
         } catch (Exception e) {
             log.warn("图谱自动触发失败（设置已保存，可手动重试）libraryId={}: {}",
+                    libraryId, e.getMessage());
+        }
+    }
+
+    /**
+     * 保存后自动触发一次 RAPTOR 构建（U2 同款裁定；开关 false→true 且非 building）。
+     *
+     * <p><b>不阻塞保存返回：</b>引擎侧构建只排队任务并立即返回 {@code task_id}，
+     * 故在本请求线程内完成排队是安全的；若引擎不可达/触发失败，捕获后记 WARN——
+     * 设置已落库（raptorBuildStatus=none），前端「开始构建」按钮可手动重试（R4 降级路径）。
+     * graph/raptor 构建<b>可并行</b>（T00 P2c 实测），与 {@link #triggerAutoBuild}
+     * 互不干扰。
+     *
+     * @param libraryId 知识库 id
+     */
+    private void triggerRaptorAutoBuild(Long libraryId) {
+        Long userId = SecurityContextHolder.getOptional().map(LoginUser::getUserId).orElse(null);
+        if (userId == null) {
+            log.warn("RAPTOR 自动触发跳过：无法获取当前用户 libraryId={}（可手动触发）", libraryId);
+            return;
+        }
+        try {
+            raptorService.build(libraryId, userId);
+        } catch (Exception e) {
+            log.warn("RAPTOR 自动触发失败（设置已保存，可手动重试）libraryId={}: {}",
                     libraryId, e.getMessage());
         }
     }

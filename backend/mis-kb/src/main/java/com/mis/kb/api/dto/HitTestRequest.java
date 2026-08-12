@@ -47,6 +47,14 @@ import java.util.List;
  *                               <b>只影响本次请求</b>，绝不写回库级设置——这是
  *                               hybrid-only vs hybrid+graph 对照实验用的开关。
  *                               {@code null} 与「不覆盖」同义（由 {@link #graphOverride()} 裁定）
+ * @param enableRaptor           本次临时启用 RAPTOR 摘要增强（Wave C RAPTOR，T03，末位追加）。
+ *                               三态：{@code true} 强制开 / {@code false} 强制关 /
+ *                               {@code null}（缺省）跟随库设置 {@code useRaptor}。
+ *                               <b>只影响本次请求</b>，绝不写回库级设置——这是
+ *                               「建树 vs 未建树 / 开 vs 关」对照实验用的开关。
+ *                               {@code null} 与「不覆盖」同义（由 {@link #raptorOverride()} 裁定）。
+ *                               ⚠ 检索期零回归：引擎建树后 /retrieval 自动融合摘要，
+ *                               本开关只影响 S4.6 降级判定与回显，不改检索请求体
  */
 public record HitTestRequest(
         @NotNull Long libraryId,
@@ -60,7 +68,8 @@ public record HitTestRequest(
         List<Long> documentIds,
         Instant uploadFrom,
         Instant uploadTo,
-        Boolean enableGraph) {
+        Boolean enableGraph,
+        Boolean enableRaptor) {
 
     /**
      * 是否本次禁用同义词扩展。
@@ -85,5 +94,18 @@ public record HitTestRequest(
      */
     public Boolean graphOverride() {
         return enableGraph;
+    }
+
+    /**
+     * 本次 RAPTOR 增强临时开关（Wave C RAPTOR，T03）。
+     *
+     * <p>保留三态语义：{@code true} 强制开 / {@code false} 强制关 / {@code null} 跟随库设置。
+     * 由 {@code KbHitTestService} 应用到库级设置的 {@code useRaptor}（只影响本次），
+     * 降级判定仍由 {@code RetrieveQueryResolver} S4.6 统一完成（Resolver 铁律）。
+     *
+     * @return 显式覆盖值；{@code null} = 不覆盖（跟随库设置）
+     */
+    public Boolean raptorOverride() {
+        return enableRaptor;
     }
 }

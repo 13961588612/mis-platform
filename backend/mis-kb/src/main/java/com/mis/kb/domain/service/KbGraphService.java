@@ -210,7 +210,7 @@ public class KbGraphService {
     }
 
     /**
-     * 回写图谱状态到 {@code rag_settings_json}（17 参 canonical 保留其余字段）。
+     * 回写图谱状态到 {@code rag_settings_json}（24 参 canonical 保留其余字段，含 RAPTOR 七字段）。
      *
      * @param lib     知识库实体
      * @param status  四态码值
@@ -235,7 +235,14 @@ public class KbGraphService {
                 current.chunkOverlapTokenNum(),
                 current.useKnowledgeGraph(),
                 status,
-                message);
+                message,
+                current.useRaptor(),
+                current.raptorMaxTokenNum(),
+                current.raptorThreshold(),
+                current.raptorMaxCluster(),
+                current.raptorPrompt(),
+                current.raptorBuildStatus(),
+                current.raptorBuildMessage());
         lib.setRagSettingsJson(KbJson.writeSettings(updated));
         lib.setUpdatedAt(Instant.now());
         libraryRepository.save(lib);

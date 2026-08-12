@@ -39,6 +39,12 @@ import java.util.List;
  *                               三态透传：{@code true}/{@code false} 原样下发，
  *                               {@code null}（跟随库设置）由 BFF 侧 cleanParams 剔除，
  *                               mis-kb 收不到该键即走库设置。本层只透传，不解释。
+ * @param enableRaptor           本次临时启用 RAPTOR 摘要增强（Wave C RAPTOR，T03，末位追加）。
+ *                               三态透传：{@code true}/{@code false} 原样下发，
+ *                               {@code null}（跟随库设置）由 BFF 侧 cleanParams 剔除，
+ *                               mis-kb 收不到该键即走库设置。本层只透传，不解释。
+ *                               ⚠ 检索期零回归：引擎建树后 /retrieval 自动融合摘要，
+ *                               本开关只影响 mis-kb S4.6 降级判定与回显，不改检索请求体。
  */
 public record KbHitTestRequest(
         @NotNull Long libraryId,
@@ -52,5 +58,6 @@ public record KbHitTestRequest(
         List<Long> documentIds,
         Instant uploadFrom,
         Instant uploadTo,
-        Boolean enableGraph) {
+        Boolean enableGraph,
+        Boolean enableRaptor) {
 }

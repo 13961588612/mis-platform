@@ -25,6 +25,13 @@ import java.util.List;
  *                               {@code true} = 本次走了 {@code /datasets/{id}/search} + {@code use_kg:true}；
  *                               被 S4.5 降级时为 {@code false}（原因在 {@code degradedReasons}）。
  *                               命中测试页据此回显「本次实际生效：图谱增强 开/关（原因）」。
+ * @param useRaptor              RAPTOR 摘要实际生效开关（Wave C RAPTOR，T03，末位追加）。
+ *                               {@code true} = 本次请求了 RAPTOR 增强（引擎建树后
+ *                               {@code /retrieval} 自动融合摘要，T00 P3a 实测——MIS 检索期
+ *                               <b>不改请求体</b>，{@link RetrieveQuery} 零改动）；
+ *                               被 S4.6 降级（能力不支持 / 未建树）时为 {@code false}
+ *                               （原因在 {@code degradedReasons}）。
+ *                               命中测试页据此回显「库已建树 / RAPTOR 未构建完成」。
  */
 public record EffectiveRetrieveParams(
         Integer topK,
@@ -36,7 +43,8 @@ public record EffectiveRetrieveParams(
         String emptyResultStrategy,
         String source,
         List<String> degradedReasons,
-        Boolean useKnowledgeGraph) {
+        Boolean useKnowledgeGraph,
+        Boolean useRaptor) {
 
     /** 参数基准来源：单库检索，取该库的库级设置。 */
     public static final String SOURCE_LIBRARY = "LIBRARY";
@@ -47,13 +55,14 @@ public record EffectiveRetrieveParams(
 
     /**
      * 紧凑构造：保证 {@code degradedReasons} 永不为 null 且不可变；
-     * {@code useKnowledgeGraph} 缺省按 {@code false} 收敛。
+     * {@code useKnowledgeGraph}/{@code useRaptor} 缺省按 {@code false} 收敛。
      *
      * <p>前端拿到 null 列表就得到处判空，不如在源头收敛。
      */
     public EffectiveRetrieveParams {
         degradedReasons = degradedReasons == null ? List.of() : List.copyOf(degradedReasons);
         useKnowledgeGraph = useKnowledgeGraph != null && useKnowledgeGraph;
+        useRaptor = useRaptor != null && useRaptor;
     }
 
     /**

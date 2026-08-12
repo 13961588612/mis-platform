@@ -127,6 +127,16 @@ public class KbHitTestService {
             baseSettings = baseSettings.withGraphOverride(graphOverride);
             log.debug("命中测试图谱开关 override libraryId={} enableGraph={}", libraryId, graphOverride);
         }
+        // Wave C（T03）：临时开关 enableRaptor（null = 跟随库设置）→ override RAPTOR 开关。
+        // 只影响本次检索的内存值，绝不落库（对照实验语义）；降级判定（能力/建树状态）
+        // 仍由 RetrieveQueryResolver S4.6 统一完成（Resolver 铁律 §10-9）。
+        // ⚠ 检索期零回归：引擎建树后 /retrieval 自动融合摘要，本 override 只影响 S4.6
+        // 降级判定与回显（「库已建树 / 未建树」），不改检索请求体。
+        Boolean raptorOverride = request.raptorOverride();
+        if (raptorOverride != null) {
+            baseSettings = baseSettings.withRaptorOverride(raptorOverride);
+            log.debug("命中测试 RAPTOR 开关 override libraryId={} enableRaptor={}", libraryId, raptorOverride);
+        }
         Map<Long, RagSettings> perLibrarySettings = Map.of(libraryId, baseSettings);
 
         // Wave D：本次禁用 → 短路不查词典；否则强一致（先校验词表版本）——Q7 的兑现点
