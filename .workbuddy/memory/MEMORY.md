@@ -43,3 +43,11 @@
 - **一键脚本**：`backend/start-bff-standalone.bat`（纯 ASCII，构建+`start /b` 脱离启动；`nopkg` 参数跳构建直接用现有 jar）。BFF 重启/驻留跑它即可。
 - **本 Agent 环境硬限制**：① 后台任务 ~13-15s 被系统 killed → 长生命周期服务须 nohup/start /b 脱离或用户独立终端执行；② Bash/PowerShell 禁调 cmd.exe；③ **.bat 必须纯 ASCII**（UTF-8 中文在 GBK cmd 乱码）；④ 登录接口需 `appCode`（前端固定 'system'）；⑤ 验证码 SVG 可文本解码（可编程登录）；⑥ **PATH 里的 PortableGit（`~/.workbuddy/vendor/PortableGit`）残缺——git-core 缺 `git-remote-https.exe`，`git push` 报 `remote-https is not a git command`**，须用系统完整 Git `"/c/Program Files/Git/cmd/git.exe"`（2.42.0，含 https 助手+凭据缓存）push。
 - **登录链路**（验收用）：GET `/api/v1/auth/captcha`（SVG base64 解码取 4 位码）→ POST `/api/v1/auth/login`（appCode=system + admin/Mis@123456）→ accessToken → 业务接口带 `Authorization: Bearer`。
+
+## KB 权限模型核心事实（2026-08-12 评审固化，改动前必读）
+- **三层两套**：分类管辖 `kb_category_admin`（子树继承已实现：全局管理员短路→祖先链→子树并集，NodeAdminResolver）；库 ACL `kb_acl`(read/manage/acl)；文档**无独立权限随库**。
+- **合成语义已有**：`hasLibraryManage = 节点管辖 ∨ kb_acl.manage`（NodeAdminResolver L230）；文档写/图谱/RAPTOR 均走它。
+- **检索只认 read**：可见库 = public∧enabled ∪ ACL read − disabled（KbVisibilityService）；命中测试强制 READ → 管理权限与搜索范围天然解耦。
+- **⚠️ 关键缺口**：`KbLibraryService.create/update/delete` + `RagSettingsService.save` **服务层不校验数据范围**（仅 BFF 权限码）——任何改造必须先补 `assertNodeManage`/`hasLibraryManage` 并贯通 userId。
+- **三步授权痛点根因**：前端建库分类下拉列全部分类（kb-library-page.tsx L662），建到非管辖分类 → 文档 40311 → 被迫手动授 manage。
+- 改造建议（评审结论，见 `docs/analysis/kb-permission-redesign-review-2026-08-12.md`）：ACL 零迁移「UI 收敛+后端兼容」防权限放大；UI 双口径（管理页=可管理、问答/检索=可见）；接口收敛 `GET /kb/libraries?scope=manageable|visible` 优于前端本地过滤。
