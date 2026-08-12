@@ -7,6 +7,10 @@ server:
 
 mis:
   kb:
+    # IAM: required for TENANT_ADMIN global-admin short-circuit (category manage scope).
+    # Empty => KbSubjectClient returns no roles => every node looks "out of scope".
+    iam:
+      base-url: ${MIS_KB_IAM_BASE_URL:http://127.0.0.1:8102}
     engine:
       # Same docker network as deploy/ragflow: use http://ragflow:80
       type: ${MIS_KB_ENGINE_TYPE:ragflow}

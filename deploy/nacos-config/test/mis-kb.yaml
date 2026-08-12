@@ -9,6 +9,8 @@ server:
 
 mis:
   kb:
+    iam:
+      base-url: ${MIS_KB_IAM_BASE_URL:http://mis-iam:8102}
     engine:
       type: ${MIS_KB_ENGINE_TYPE:noop}
       base-url: ${MIS_KB_ENGINE_BASE_URL:}

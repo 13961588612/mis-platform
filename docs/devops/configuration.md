@@ -51,7 +51,7 @@ Data ID **不带 `.yaml`** 扩展名。
 | **mis-org** | `server.port`、`mis.org.iam-*` 下游地址与 discovery | — |
 | **mis-system** | `server.port` | —（业务配置较少） |
 | **mis-audit** | `server.port` | — |
-| **mis-kb** | `server.port`、`mis.kb.engine.type/base-url/rerank-model-id` | `MIS_KB_ENGINE_API_KEY`（密钥用 env 注入） |
+| **mis-kb** | `server.port`、`mis.kb.iam.base-url`、`mis.kb.engine.type/base-url/rerank-model-id` | `MIS_KB_ENGINE_API_KEY`（密钥用 env 注入）；`MIS_KB_IAM_BASE_URL` 可选覆盖 IAM 地址 |
 | **mis-admin-bff** | `server.port`、下游 `mis.bff.*-base-url` + discovery 开关、`aggregate-timeout-ms`、`api-permission.*`、`mis.ai-platform.*`（非密钥）、`mis.agent-ops.*`（含 `chat-timeout-ms`）、`mis.mcp.servers` | `service-token` / `MIS_JWT_PUBLIC_KEY` / 默认密码等密钥类 |
 
 原则：
@@ -122,7 +122,7 @@ spring.cloud.nacos.discovery.*   # enabled 与 config 同步；server-addr / nam
 | **mis-org** | `port:8103`；DB+JPA；iam discovery=false + localhost |
 | **mis-system** | `port:8105`；DB+JPA |
 | **mis-audit** | `port:8106`；DB+JPA |
-| **mis-kb** | `port:8108`；DB+JPA；`mis.kb.engine.*`（type/base-url/api-key/rerank/reconcile 等，密钥用 `${MIS_KB_*}`） |
+| **mis-kb** | `port:8108`；DB+JPA；`mis.kb.iam.base-url`（查用户角色码，TENANT_ADMIN 管辖短路；未配则分类管理会全部「不在管理范围」）；`mis.kb.engine.*`（type/base-url/api-key/rerank/reconcile 等，密钥用 `${MIS_KB_*}`） |
 | **mis-admin-bff** | `port:8081`；Redis；`mis.bff.*` 下游全套 discovery=false + localhost；`aggregate-timeout-ms`；`api-permission.*`；`ai-platform.*`（含 reverse-trust 的 `${ENV}`）；`agent-ops.*`（含 180s chat-timeout）；`mcp.servers` localhost |
 
 > **没有** 独立的「本地 mis-common 文件」：共享项在 local 模式下由各服务 `application.yml` **各自写齐**（或靠本机 env）；remote 才由 Nacos `mis-common` 统一下发。
