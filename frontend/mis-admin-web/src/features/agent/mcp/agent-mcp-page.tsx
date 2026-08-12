@@ -436,14 +436,14 @@ export function AgentMcpPage() {
       emptyHint="点击右上角「新增 Server」登记第一个外部工具服务，创建后需手动连接并发现工具。"
     >
       <Tabs defaultValue="servers" className="flex min-h-0 flex-1 flex-col">
-        <TabsList className="w-fit">
+        <TabsList className="w-fit shrink-0">
           <TabsTrigger value="servers">Server 管理</TabsTrigger>
           <TabsTrigger value="permissions">工具授权</TabsTrigger>
         </TabsList>
 
-        <TabsContent value="servers" className="flex min-h-0 flex-1 flex-col">
+        <TabsContent value="servers" className="flex min-h-0 flex-1 flex-col overflow-hidden">
           <div className="flex min-h-0 flex-1 flex-col gap-3">
-            <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+            <div className="grid shrink-0 grid-cols-2 gap-3 lg:grid-cols-4">
               <StatCard label="Server 总数" value={servers.length} icon={ServerCog} />
               <StatCard
                 label="探测正常"
@@ -458,7 +458,7 @@ export function AgentMcpPage() {
               <StatCard label="自动连接" value={autoConnectCount} icon={Link2} />
             </div>
 
-            <div className="flex gap-2 rounded-md border border-info/30 bg-info/5 p-3 text-xs text-muted-foreground">
+            <div className="flex shrink-0 gap-2 rounded-md border border-info/30 bg-info/5 p-3 text-xs text-muted-foreground">
               <Info className="mt-[0.1rem] h-3.5 w-3.5 shrink-0 text-info" />
               <p className="leading-relaxed">
                 「实时探测」是本次打开页面时的探活结果：探测异常说明链路已断，
@@ -467,7 +467,7 @@ export function AgentMcpPage() {
               </p>
             </div>
 
-            <div className="flex flex-wrap items-end gap-2 rounded-lg border bg-card p-3">
+            <div className="flex shrink-0 flex-wrap items-end gap-2 rounded-lg border bg-card p-3">
               <div className="min-w-[14rem] flex-1">
                 <label className="mb-[0.4rem] block text-xs text-muted-foreground">关键字</label>
                 <Input
@@ -671,7 +671,7 @@ export function AgentMcpPage() {
           </div>
         </TabsContent>
 
-        <TabsContent value="permissions" className="flex min-h-0 flex-1 flex-col">
+        <TabsContent value="permissions" className="flex min-h-0 flex-1 flex-col overflow-hidden">
           <AgentMcpPermissionPanel />
         </TabsContent>
       </Tabs>

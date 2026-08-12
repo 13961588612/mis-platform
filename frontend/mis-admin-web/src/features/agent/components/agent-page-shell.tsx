@@ -197,7 +197,9 @@ export function AgentPageShell({
         breadcrumbs={buildAppBreadcrumbs({ app: 'agent', title })}
         actions={actions}
       />
-      {content}
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+        {content}
+      </div>
     </div>
   );
 

@@ -43,6 +43,10 @@ const TabsContent = React.forwardRef<
     ref={ref}
     className={cn(
       'mt-2 ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+      // Radix 用 hidden 属性隐藏非激活面板，但 UA 的 display:none 会被消费者传入的
+      // `flex` / `grid` 盖掉，多个 TabsContent 会同时参与父级 flex 布局（典型症状：
+      // 表格只剩一条细缝 + 内部滚动条）。!hidden 保证未激活面板彻底退出布局。
+      'data-[state=inactive]:!hidden',
       className,
     )}
     {...props}

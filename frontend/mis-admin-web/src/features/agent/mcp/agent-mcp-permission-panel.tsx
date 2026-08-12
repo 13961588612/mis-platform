@@ -262,9 +262,9 @@ export function AgentMcpPermissionPanel() {
   const discoverableCount = perms?.tools.filter((t) => !t.discovered).length ?? 0;
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col gap-3">
+    <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-hidden">
       {/* server 选择 + 刷新 + 发现 */}
-      <div className="flex flex-wrap items-end gap-2 rounded-lg border bg-card p-3">
+      <div className="flex shrink-0 flex-wrap items-end gap-2 rounded-lg border bg-card p-3">
         <div className="w-64">
           <label className="mb-[0.4rem] block text-xs text-muted-foreground">MCP Server</label>
           <select
@@ -300,7 +300,7 @@ export function AgentMcpPermissionPanel() {
       </div>
 
       {/* 60s 生效窗口提示（方案 B′ 决策 ①：接受窗口，不做定向失效） */}
-      <div className="flex gap-2 rounded-md border border-info/30 bg-info/5 p-3 text-xs text-muted-foreground">
+      <div className="flex shrink-0 gap-2 rounded-md border border-info/30 bg-info/5 p-3 text-xs text-muted-foreground">
         <Clock className="mt-[0.1rem] h-3.5 w-3.5 shrink-0 text-info" />
         <p className="leading-relaxed">
           授权变更后<span className="font-medium text-foreground">约 1 分钟内生效</span>
@@ -308,7 +308,7 @@ export function AgentMcpPermissionPanel() {
         </p>
       </div>
 
-      {/* 工具表格 */}
+      {/* 工具表格：独占剩余高度，内部滚动 */}
       <div className="relative min-h-0 flex-1 overflow-auto rounded-lg border bg-table-surface">
         {loading ? (
           <div className="flex h-full items-center justify-center py-16 text-sm text-muted-foreground">
@@ -329,7 +329,7 @@ export function AgentMcpPermissionPanel() {
           </div>
         ) : (
           <table className="border-separate border-spacing-0 bg-table-surface text-left text-sm">
-            <thead className="border-b-2 border-foreground/20 bg-table-header text-muted-foreground">
+            <thead className="sticky top-0 z-10 border-b-2 border-foreground/20 bg-table-header text-muted-foreground">
               <tr>
                 <th className="w-12 px-3 py-2">
                   <input
@@ -439,8 +439,8 @@ export function AgentMcpPermissionPanel() {
         )}
       </div>
 
-      {/* 批量授权编辑 */}
-      <div className="rounded-lg border bg-card p-3">
+      {/* 批量授权编辑：底部固定高度上限，不与工具表抢 flex 空间 */}
+      <div className="shrink-0 rounded-lg border bg-card p-3">
         <div className="mb-2 flex items-center justify-between gap-3">
           <p className="text-sm font-medium">
             批量授权
@@ -455,6 +455,7 @@ export function AgentMcpPermissionPanel() {
         <div className="grid min-h-0 grid-cols-1 gap-3 lg:grid-cols-[1fr_auto]">
           <AgentRolePicker
             appCode="system"
+            lockApp
             onAppCodeChange={() => {
               /* MCP 工具执行码恒挂 system App（V21 口径），不允许切换 */
             }}
@@ -474,7 +475,7 @@ export function AgentMcpPermissionPanel() {
 
       {/* 已下线工具（僵尸码清理，破坏性需确认） */}
       {perms && perms.offline_skills.length > 0 ? (
-        <div className="rounded-lg border border-warning/40 bg-warning/5">
+        <div className="max-h-40 shrink-0 overflow-auto rounded-lg border border-warning/40 bg-warning/5">
           <div className="flex items-center gap-2 border-b border-warning/20 px-3 py-2">
             <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-warning" />
             <p className="text-sm font-medium text-foreground">已下线工具（{perms.offline_skills.length}）</p>

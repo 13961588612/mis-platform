@@ -37,6 +37,11 @@ export interface AgentRolePickerProps {
   onSelectedRoleIdsChange: (roleIds: number[]) => void;
   /** 只读模式（无 grant 权限时）。 */
   disabled?: boolean;
+  /**
+   * 锁定目标 App：隐藏 App 切换与跨 App 说明，角色列表改用固定最大高度。
+   * MCP 工具执行码恒挂 system，嵌在底部授权条时避免与工具表抢垂直空间。
+   */
+  lockApp?: boolean;
 }
 
 export function AgentRolePicker({
@@ -45,6 +50,7 @@ export function AgentRolePicker({
   selectedRoleIds,
   onSelectedRoleIdsChange,
   disabled = false,
+  lockApp = false,
 }: AgentRolePickerProps) {
   const [roles, setRoles] = useState<AgentRoleOption[]>([]);
   const [loading, setLoading] = useState(false);
@@ -103,35 +109,44 @@ export function AgentRolePicker({
 
   return (
     <div className="flex min-h-0 flex-col gap-3">
-      <div>
-        <label className="mb-[0.4rem] block text-sm font-medium text-foreground">目标 App</label>
-        <select
-          className={selectClass}
-          value={appCode}
-          disabled={disabled}
-          onChange={(e) => onAppCodeChange(e.target.value as SkillGrant['target_app_code'])}
-        >
-          {APP_OPTIONS.map((o) => (
-            <option key={o.value} value={o.value}>
-              {o.label}
-            </option>
-          ))}
-        </select>
-        <p className="mt-[0.35rem] text-xs text-muted-foreground">{activeAppHint}</p>
-      </div>
-
-      {/* impl-plan §5.4：跨 App 语义必须写在页面上，否则会被当缺陷提报。措辞保持中性。 */}
-      <div className="flex gap-2 rounded-md border border-info/30 bg-info/5 p-3 text-xs text-muted-foreground">
-        <Info className="mt-[0.1rem] h-3.5 w-3.5 shrink-0 text-info" />
-        <p className="leading-relaxed">
-          同一用户在不同 App 下的可用角色相互独立，此为预期设计。
-          权限判定取的是<span className="font-medium text-foreground">当前登录 App</span>
-          下该用户角色所聚合的权限码集合：
-          在 <span className="font-mono">system</span> 下授权的技能，不会自动在
-          <span className="font-mono"> agent</span> 运营台的调试对话中生效，反之亦然。
-          若两处都要能跑，需在两个 App 下各授权一次。
+      {lockApp ? (
+        <p className="text-xs text-muted-foreground">
+          目标 App：<span className="font-mono text-foreground">{appCode}</span>
+          （MCP 工具执行码固定，不可切换）
         </p>
-      </div>
+      ) : (
+        <>
+          <div>
+            <label className="mb-[0.4rem] block text-sm font-medium text-foreground">目标 App</label>
+            <select
+              className={selectClass}
+              value={appCode}
+              disabled={disabled}
+              onChange={(e) => onAppCodeChange(e.target.value as SkillGrant['target_app_code'])}
+            >
+              {APP_OPTIONS.map((o) => (
+                <option key={o.value} value={o.value}>
+                  {o.label}
+                </option>
+              ))}
+            </select>
+            <p className="mt-[0.35rem] text-xs text-muted-foreground">{activeAppHint}</p>
+          </div>
+
+          {/* impl-plan §5.4：跨 App 语义必须写在页面上，否则会被当缺陷提报。措辞保持中性。 */}
+          <div className="flex gap-2 rounded-md border border-info/30 bg-info/5 p-3 text-xs text-muted-foreground">
+            <Info className="mt-[0.1rem] h-3.5 w-3.5 shrink-0 text-info" />
+            <p className="leading-relaxed">
+              同一用户在不同 App 下的可用角色相互独立，此为预期设计。
+              权限判定取的是<span className="font-medium text-foreground">当前登录 App</span>
+              下该用户角色所聚合的权限码集合：
+              在 <span className="font-mono">system</span> 下授权的技能，不会自动在
+              <span className="font-mono"> agent</span> 运营台的调试对话中生效，反之亦然。
+              若两处都要能跑，需在两个 App 下各授权一次。
+            </p>
+          </div>
+        </>
+      )}
 
       <div className="relative">
         <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
@@ -157,7 +172,13 @@ export function AgentRolePicker({
         <span>已选 {selectedRoleIds.length} 个角色</span>
       </div>
 
-      <div className="min-h-[10rem] flex-1 overflow-auto rounded-md border">
+      <div
+        className={
+          lockApp
+            ? 'max-h-40 min-h-[8rem] overflow-auto rounded-md border'
+            : 'min-h-[10rem] flex-1 overflow-auto rounded-md border'
+        }
+      >
         {loading ? (
           <div className="flex h-full items-center justify-center gap-2 py-10 text-sm text-muted-foreground">
             <Loader2 className="h-4 w-4 animate-spin" />
