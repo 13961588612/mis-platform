@@ -18,5 +18,9 @@ public record MenuVO(
         Integer sort,
         Integer visible,
         Integer status,
-        List<MenuVO> children
-) {}
+        List<MenuVO> children,
+        List<MenuApiItem> apiList
+) {
+    /** 菜单关联接口（经 sys_menu_api 绑定），对齐 mis-system MenuVO.MenuApiItem。 */
+    public record MenuApiItem(String apiId, String method, String path) {}
+}

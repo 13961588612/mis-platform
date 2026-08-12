@@ -177,6 +177,15 @@ export interface MenuNode {
 }
 
 export interface MenuApiItem {
+  apiId: string;
+  method: string;
+  path: string;
+}
+
+/** 单个菜单已绑定接口的明细（GET /menus/{menuId}/apis 响应元素） */
+export interface MenuApiBindingItem {
+  apiId: string;
+  name: string;
   method: string;
   path: string;
 }

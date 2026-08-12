@@ -3,6 +3,8 @@ package com.mis.adminbff.service;
 import com.mis.adminbff.client.IamWebClient;
 import com.mis.adminbff.client.SystemWebClient;
 import com.mis.adminbff.client.model.MenuVO;
+import com.mis.adminbff.dto.MenuApiBindingVO;
+import com.mis.adminbff.dto.MenuApiReplaceRequest;
 import com.mis.adminbff.dto.MenuCreateRequest;
 import com.mis.adminbff.dto.MenuUpdateRequest;
 import com.mis.adminbff.dto.RouterNode;
@@ -89,6 +91,18 @@ public class MenuAggregateService {
 
     public void delete(Long id) {
         systemWebClient.deleteMenu(id);
+    }
+
+    /** 查询某菜单已绑定的接口明细（透传 mis-system）。 */
+    public List<MenuApiBindingVO> menuApis(Long menuId) {
+        return systemWebClient.menuApiList(menuId);
+    }
+
+    /** 全量替换某菜单的关联接口（透传 mis-system）。 */
+    public void replaceMenuApis(Long menuId, MenuApiReplaceRequest request) {
+        Map<String, Object> body = new HashMap<>();
+        body.put("apiIds", request.apiIds());
+        systemWebClient.menuApiReplace(menuId, body);
     }
 
     private RouterNode toRouterNode(MenuVO menu) {

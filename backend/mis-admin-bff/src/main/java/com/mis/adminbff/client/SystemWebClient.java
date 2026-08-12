@@ -4,11 +4,13 @@ import com.mis.adminbff.client.model.ApiPermissionRuleDTO;
 import com.mis.adminbff.client.model.MenuVO;
 import com.mis.adminbff.config.BffProperties;
 import com.mis.adminbff.dto.ApiVO;
+import com.mis.adminbff.dto.MenuApiBindingVO;
 import com.mis.adminbff.dto.ModuleApiBindingVO;
 import com.mis.adminbff.dto.ModuleVO;
 import com.mis.common.core.result.Result;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.core.ParameterizedTypeReference;
+import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
 import org.springframework.web.reactive.function.client.WebClient;
 import org.springframework.web.util.UriComponentsBuilder;
@@ -45,6 +47,8 @@ public class SystemWebClient extends AbstractDownstreamClient {
     private static final ParameterizedTypeReference<Result<ApiVO>> API =
             new ParameterizedTypeReference<>() {};
     private static final ParameterizedTypeReference<Result<List<ModuleApiBindingVO>>> BINDING_LIST =
+            new ParameterizedTypeReference<>() {};
+    private static final ParameterizedTypeReference<Result<List<MenuApiBindingVO>>> MENU_API_BINDING_LIST =
             new ParameterizedTypeReference<>() {};
 
     public SystemWebClient(
@@ -151,6 +155,22 @@ public class SystemWebClient extends AbstractDownstreamClient {
         String uri = UriComponentsBuilder.fromPath("/internal/v1/modules/{moduleId}/bindings")
                 .buildAndExpand(moduleId).toUriString();
         return block(client().get().uri(uri).retrieve().bodyToMono(BINDING_LIST));
+    }
+
+    // -----------------------------------------------------------------------
+    // 菜单「关联 API」透传（sys_menu_api 全量替换）
+    // -----------------------------------------------------------------------
+    public List<MenuApiBindingVO> menuApiList(Long menuId) {
+        String uri = UriComponentsBuilder.fromPath("/internal/v1/menus/{menuId}/apis")
+                .buildAndExpand(menuId).toUriString();
+        return block(client().get().uri(uri).retrieve().bodyToMono(MENU_API_BINDING_LIST));
+    }
+
+    public void menuApiReplace(Long menuId, Map<String, Object> body) {
+        String uri = UriComponentsBuilder.fromPath("/internal/v1/menus/{menuId}/apis")
+                .buildAndExpand(menuId).toUriString();
+        blockVoid(client().put().uri(uri).contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(body).retrieve().bodyToMono(VOID));
     }
 
     // -----------------------------------------------------------------------

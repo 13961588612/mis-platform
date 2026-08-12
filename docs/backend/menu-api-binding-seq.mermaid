@@ -1,0 +1,68 @@
+sequenceDiagram
+    autonumber
+    actor U as 管理员
+    participant P as menu-manage-page
+    participant D as menu-api-binding-dialog
+    participant M as lib/api/menus.ts
+    participant MOD as lib/api/modules.ts
+    participant B as BFF MenuController
+    participant A as MenuAggregateService
+    participant W as SystemWebClient
+    participant S as mis-system MenuController
+    participant SV as MenuService
+    participant DB as sys_menu_api/sys_api
+
+    Note over U,DB: 打开绑定弹层（回显）
+    U->>P: 点击「绑定 API」
+    P->>D: 打开弹层(menuId)
+    D->>MOD: fetchModules()
+    MOD-->>D: 模块列表
+    D->>M: fetchMenuApis(menuId)
+    M->>B: GET /api/v1/menus/{menuId}/apis
+    B->>A: menuApis(menuId)
+    A->>W: menuApiList(menuId)
+    W->>S: GET /internal/v1/menus/{menuId}/apis
+    S->>SV: listApis(menuId)
+    SV->>DB: findApiItemsByMenuId(menuId)
+    DB-->>SV: 已绑定明细(apiId/name/method/path)
+    SV-->>S: Result<List<MenuApiBindingItem>>
+    S-->>W: Result.ok(...)
+    W-->>A: List<MenuApiBindingVO>
+    A-->>B: Result<List<MenuApiBindingVO>>
+    B-->>M: Result<List<MenuApiBindingVO>>
+    M-->>D: 已绑定集合(勾选态)
+    D->>MOD: fetchModuleApiTree(选中moduleId)
+    MOD-->>D: 接口树(叶子可勾选)
+
+    Note over U,DB: 保存绑定（全量替换：新增+解绑）
+    U->>D: 勾选接口后点「保存」
+    D->>M: replaceMenuApis(menuId, checkedApiIds)
+    M->>B: PUT /api/v1/menus/{menuId}/apis {apiIds:[...]}
+    B->>A: replaceMenuApis(menuId, request)
+    A->>W: menuApiReplace(menuId, body)
+    W->>S: PUT /internal/v1/menus/{menuId}/apis
+    S->>SV: replaceApis(menuId, request)  [@Transactional]
+    SV->>SV: 校验 menuId.status=1 + apiIds 全部存在
+    SV->>DB: deleteByMenuId(menuId)
+    SV->>DB: saveAll(按 apiIds 顺序 sort=1..n)
+    DB-->>SV: commit
+    SV-->>S: Result.ok()
+    S-->>W: Result.ok()
+    W-->>A: void
+    A-->>B: Result.ok()
+    B-->>M: Result<Void>
+    M-->>D: 成功
+    D-->>P: 关闭弹层 + 重拉菜单树(load())
+
+    Note over U,DB: 单行解绑（快捷操作 = 剩余集合全量替换）
+    U->>P: 点击某行 [✕ 解绑](apiId)
+    P->>M: replaceMenuApis(menuId, 其余apiIds)
+    M->>B: PUT /api/v1/menus/{menuId}/apis {apiIds:[...]}
+    B->>S: PUT /internal/v1/menus/{menuId}/apis
+    S->>SV: replaceApis(menuId, request)
+    SV->>DB: deleteByMenuId + saveAll(剩余)
+    DB-->>SV: commit
+    SV-->>S: Result.ok()
+    S-->>B: Result.ok()
+    B-->>M: Result<Void>
+    M-->>P: 成功 toast + 重拉菜单树(load())

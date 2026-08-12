@@ -6,6 +6,7 @@ import {
   Circle,
   EyeOff,
   Folder,
+  Link2,
   Pencil,
   Plus,
   Search,
@@ -31,9 +32,10 @@ import {
   SheetHeader,
   SheetTitle,
 } from '@/components/ui/sheet';
-import { createMenu, deleteMenu, fetchMenuTree, updateMenu } from '@/lib/api/menus';
+import { createMenu, deleteMenu, fetchMenuTree, replaceMenuApis, updateMenu } from '@/lib/api/menus';
 import { fetchApps } from '@/lib/api/platform';
 import type { AppItem, MenuNode } from '@/types/api';
+import { MenuApiBindingDialog } from './menu-api-binding-dialog';
 
 type LucideIcon = React.ComponentType<{ className?: string }>;
 
@@ -105,6 +107,8 @@ export function MenuManagePage() {
   const [typeFilter, setTypeFilter] = useState<string>('all');
   const [delTarget, setDelTarget] = useState<MenuNode | null>(null);
   const [deleting, setDeleting] = useState(false);
+  const [bindingOpen, setBindingOpen] = useState(false);
+  const [unlinking, setUnlinking] = useState(false);
   const [form, setForm] = useState({
     name: '',
     type: 2,
@@ -125,6 +129,11 @@ export function MenuManagePage() {
     [tree, search, typeFilter],
   );
   const selected = flatAll.find((f) => f.node.id === selectedId)?.node ?? null;
+
+  // 切换节点时关闭绑定弹层，避免弹层绑定到旧菜单
+  useEffect(() => {
+    setBindingOpen(false);
+  }, [selectedId]);
 
   useEffect(() => {
     let alive = true;
@@ -252,6 +261,24 @@ export function MenuManagePage() {
       toast.error(e instanceof Error ? e.message : '删除失败');
     } finally {
       setDeleting(false);
+    }
+  }
+
+  /** 单行解绑：将剩余接口作为全量集合替换（等价于从绑定中移除该接口）。 */
+  async function unlinkApi(apiId: string) {
+    if (!selected || unlinking) return;
+    const remaining = (selected.apiList ?? [])
+      .filter((a) => a.apiId !== apiId)
+      .map((a) => a.apiId);
+    setUnlinking(true);
+    try {
+      await replaceMenuApis(selected.id, remaining);
+      toast.success('已解绑');
+      await load();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : '解绑失败');
+    } finally {
+      setUnlinking(false);
     }
   }
 
@@ -557,13 +584,21 @@ export function MenuManagePage() {
                   <div>
                     <div className="mb-2 flex items-center justify-between">
                       <h3 className="text-sm font-semibold">关联 API（{apis.length}）</h3>
-                      <span className="text-xs text-muted-foreground">经 sys_menu_api 绑定</span>
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs text-muted-foreground">经 sys_menu_api 绑定</span>
+                        <PermissionGate permission="system:menu:edit">
+                          <Button size="sm" variant="outline" onClick={() => setBindingOpen(true)}>
+                            <Link2 className="h-3.5 w-3.5" />
+                            绑定 API
+                          </Button>
+                        </PermissionGate>
+                      </div>
                     </div>
                     {apis.length ? (
                       <div className="space-y-1.5">
-                        {apis.map((a, i) => (
+                        {apis.map((a) => (
                           <div
-                            key={i}
+                            key={a.apiId}
                             className="flex items-center justify-between rounded-md border px-3 py-2 text-sm"
                           >
                             <span className="flex items-center gap-2">
@@ -577,7 +612,17 @@ export function MenuManagePage() {
                               </span>
                               <code className="text-xs">{a.path}</code>
                             </span>
-                            <Unlink className="h-4 w-4 text-muted-foreground" />
+                            <PermissionGate permission="system:menu:edit">
+                              <button
+                                type="button"
+                                title="解绑"
+                                disabled={unlinking}
+                                onClick={() => void unlinkApi(a.apiId)}
+                                className="rounded p-1 text-muted-foreground hover:bg-destructive/10 hover:text-destructive disabled:opacity-50"
+                              >
+                                <Unlink className="h-4 w-4" />
+                              </button>
+                            </PermissionGate>
                           </div>
                         ))}
                       </div>
@@ -721,6 +766,15 @@ export function MenuManagePage() {
             </div>
           </div>
         </div>
+      )}
+      {selected && (
+        <MenuApiBindingDialog
+          open={bindingOpen}
+          onOpenChange={setBindingOpen}
+          menuId={selected.id}
+          menuName={selected.name}
+          onSaved={() => void load()}
+        />
       )}
     </div>
   );

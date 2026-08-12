@@ -1,6 +1,8 @@
 package com.mis.system.controller;
 
 import com.mis.common.core.result.Result;
+import com.mis.system.dto.MenuApiBindingItem;
+import com.mis.system.dto.MenuApiReplaceRequest;
 import com.mis.system.dto.MenuCreateRequest;
 import com.mis.system.dto.MenuUpdateRequest;
 import com.mis.system.dto.MenuVO;
@@ -63,6 +65,18 @@ public class MenuController {
     @DeleteMapping("/{id}")
     public Result<Void> delete(@PathVariable Long id) {
         menuService.delete(id);
+        return Result.ok();
+    }
+
+    @GetMapping("/{menuId}/apis")
+    public Result<List<MenuApiBindingItem>> menuApis(@PathVariable Long menuId) {
+        return Result.ok(menuService.listApis(menuId));
+    }
+
+    @PutMapping("/{menuId}/apis")
+    public Result<Void> replaceMenuApis(@PathVariable Long menuId,
+                                        @Valid @RequestBody MenuApiReplaceRequest request) {
+        menuService.replaceApis(menuId, request);
         return Result.ok();
     }
 }

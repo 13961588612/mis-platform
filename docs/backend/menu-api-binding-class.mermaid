@@ -1,0 +1,145 @@
+classDiagram
+    class MenuVO {
+        +String id
+        +String tenantId
+        +String appId
+        +String parentId
+        +String code
+        +String name
+        +Integer type
+        +String path
+        +String component
+        +String permission
+        +String icon
+        +Integer sort
+        +Integer visible
+        +Integer status
+        +List~MenuVO~ children
+        +List~MenuApiItem~ apiList
+    }
+    class MenuApiItem {
+        +String apiId
+        +String method
+        +String path
+    }
+    class MenuApiBindingItem {
+        +String apiId
+        +String name
+        +String method
+        +String path
+    }
+    class MenuApiReplaceRequest {
+        +List~Long~ apiIds
+    }
+    class SysMenuApi {
+        +Long id
+        +Long menuId
+        +Long apiId
+        +Integer sort
+        +Instant createdAt
+    }
+    class MenuApiRow {
+        <<interface>>
+        +Long getMenuId()
+        +Long getApiId()
+        +String getMethod()
+        +String getPath()
+    }
+    class MenuApiBindingRow {
+        <<interface>>
+        +Long getMenuId()
+        +Long getApiId()
+        +String getName()
+        +String getMethod()
+        +String getPath()
+    }
+    class SysMenuApiRepository {
+        <<interface JpaRepository>>
+        +findBindingsByModuleId(moduleId)
+        +findApisByMenuIds(menuIds)
+        +findApiItemsByMenuId(menuId)
+        +deleteByMenuId(menuId)
+    }
+    class SysApiRepository {
+        <<interface JpaRepository>>
+        +findAllById(ids)
+    }
+    class MenuService {
+        +tree(appId)
+        +router(appId, allowedMenuIds)
+        +permissionCodes(menuIds)
+        +getById(id)
+        +create(request)
+        +update(id, request)
+        +delete(id)
+        +listApis(menuId)
+        +replaceApis(menuId, request)
+        -loadApiMap(menuIds)
+        -requireActive(id)
+    }
+    class MenuController {
+        <<mis-system /internal/v1/menus>>
+        +tree(appId)
+        +router(appId, menuIds)
+        +permissions(menuIds)
+        +get(id)
+        +create(request)
+        +update(id, request)
+        +delete(id)
+        +menuApis(menuId)
+        +replaceMenuApis(menuId, request)
+    }
+    class SystemWebClient {
+        +tree(appId)
+        +getMenu(id)
+        +createMenu(body)
+        +updateMenu(id, body)
+        +deleteMenu(id)
+        +moduleApiTree(moduleId)
+        +moduleBindings(moduleId)
+        +menuApiList(menuId)
+        +menuApiReplace(menuId, body)
+    }
+    class MenuApiBindingVO {
+        +String apiId
+        +String name
+        +String method
+        +String path
+    }
+    class MenuAggregateService {
+        +tree(appId)
+        +get(id)
+        +create(request)
+        +update(id, request)
+        +delete(id)
+        +menuApis(menuId)
+        +replaceMenuApis(menuId, request)
+    }
+    class BffMenuController {
+        <<BFF /api/v1/menus>>
+        +router()
+        +permissions()
+        +tree(appId)
+        +get(id)
+        +create(request)
+        +update(id, request)
+        +delete(id)
+        +menuApis(menuId)
+        +replaceMenuApis(menuId, request)
+    }
+
+    MenuVO *-- MenuApiItem
+    MenuService --> SysMenuApiRepository
+    MenuService --> SysApiRepository
+    MenuService --> MenuVO
+    MenuService --> MenuApiBindingItem
+    MenuService --> MenuApiReplaceRequest
+    MenuController --> MenuService
+    SysMenuApiRepository ..> MenuApiRow : 投影
+    SysMenuApiRepository ..> MenuApiBindingRow : 投影
+    SysMenuApiRepository --> SysMenuApi
+    BffMenuController --> MenuAggregateService
+    MenuAggregateService --> SystemWebClient
+    MenuAggregateService --> MenuApiBindingVO
+    MenuAggregateService --> MenuApiReplaceRequest
+    SystemWebClient --> MenuApiBindingVO

@@ -3,10 +3,16 @@ package com.mis.system.service;
 import com.mis.common.core.exception.BusinessException;
 import com.mis.common.core.exception.ResultCode;
 import com.mis.system.domain.entity.MenuType;
+import com.mis.system.domain.entity.SysApi;
 import com.mis.system.domain.entity.SysMenu;
+import com.mis.system.domain.entity.SysMenuApi;
+import com.mis.system.domain.repository.MenuApiBindingRow;
 import com.mis.system.domain.repository.MenuApiRow;
+import com.mis.system.domain.repository.SysApiRepository;
 import com.mis.system.domain.repository.SysMenuApiRepository;
 import com.mis.system.domain.repository.SysMenuRepository;
+import com.mis.system.dto.MenuApiBindingItem;
+import com.mis.system.dto.MenuApiReplaceRequest;
 import com.mis.system.dto.MenuCreateRequest;
 import com.mis.system.dto.MenuUpdateRequest;
 import com.mis.system.dto.MenuVO;
@@ -31,10 +37,14 @@ public class MenuService {
 
     private final SysMenuRepository menuRepository;
     private final SysMenuApiRepository menuApiRepository;
+    private final SysApiRepository sysApiRepository;
 
-    public MenuService(SysMenuRepository menuRepository, SysMenuApiRepository menuApiRepository) {
+    public MenuService(SysMenuRepository menuRepository,
+                       SysMenuApiRepository menuApiRepository,
+                       SysApiRepository sysApiRepository) {
         this.menuRepository = menuRepository;
         this.menuApiRepository = menuApiRepository;
+        this.sysApiRepository = sysApiRepository;
     }
 
     @Transactional(readOnly = true)
@@ -162,6 +172,65 @@ public class MenuService {
         menuRepository.save(menu);
     }
 
+    /**
+     * 查询单个菜单已绑定的接口明细（绑定弹层回显）。
+     *
+     * @param menuId 菜单 id（必须存在且 status=1，软删菜单不可查询）
+     */
+    @Transactional(readOnly = true)
+    public List<MenuApiBindingItem> listApis(Long menuId) {
+        requireActive(menuId);
+        return menuApiRepository.findApiItemsByMenuId(menuId).stream()
+                .map(MenuService::toBindingItem)
+                .toList();
+    }
+
+    /**
+     * 全量替换某菜单的关联接口：先删除旧绑定，再按请求 apiIds 顺序写入 sort=1..n。
+     *
+     * <p>事务边界在本方法（{@code @Transactional}）：校验 → deleteByMenuId → saveAll
+     * 任一失败整体回滚；空集合等价于清空绑定。</p>
+     *
+     * @param menuId  菜单 id（必须存在且 status=1）
+     * @param request 全量替换请求，apiIds 顺序即 sort 顺序
+     */
+    @Transactional
+    public void replaceApis(Long menuId, MenuApiReplaceRequest request) {
+        requireActive(menuId);
+        List<Long> apiIds = request.apiIds() == null ? List.of() : request.apiIds();
+        List<Long> distinctApiIds = apiIds.stream().distinct().toList();
+        if (!distinctApiIds.isEmpty()) {
+            long found = sysApiRepository.findAllById(distinctApiIds).size();
+            if (found != distinctApiIds.size()) {
+                throw new BusinessException(ResultCode.VALIDATION_ERROR, "存在无效的接口 ID");
+            }
+        }
+        menuApiRepository.deleteByMenuId(menuId);
+        if (distinctApiIds.isEmpty()) {
+            return;
+        }
+        Instant now = Instant.now();
+        List<SysMenuApi> rows = new ArrayList<>(distinctApiIds.size());
+        for (int i = 0; i < distinctApiIds.size(); i++) {
+            SysMenuApi row = new SysMenuApi();
+            row.setId(IdGenerator.nextId());
+            row.setMenuId(menuId);
+            row.setApiId(distinctApiIds.get(i));
+            row.setSort(i + 1);
+            row.setCreatedAt(now);
+            rows.add(row);
+        }
+        menuApiRepository.saveAll(rows);
+    }
+
+    private static MenuApiBindingItem toBindingItem(MenuApiBindingRow row) {
+        return new MenuApiBindingItem(
+                String.valueOf(row.getApiId()),
+                row.getName(),
+                row.getMethod(),
+                row.getPath());
+    }
+
     private String nextChildCode(Long appId, Long parentId) {
         if (parentId == null || parentId == 0L) {
             List<SysMenu> roots = menuRepository.findByAppIdOrderBySortAscCodeAsc(appId).stream()
@@ -183,6 +252,17 @@ public class MenuService {
                 .orElseThrow(() -> new BusinessException(ResultCode.NOT_FOUND, "菜单不存在"));
     }
 
+    /**
+     * 校验菜单存在且处于启用态（status=1）；软删（status=0）菜单视为不可操作。
+     */
+    private SysMenu requireActive(Long id) {
+        SysMenu menu = require(id);
+        if (menu.getStatus() == null || menu.getStatus() != 1) {
+            throw new BusinessException(ResultCode.NOT_FOUND, "菜单不存在或已停用");
+        }
+        return menu;
+    }
+
     private Map<Long, List<MenuVO.MenuApiItem>> loadApiMap(List<Long> menuIds) {
         if (menuIds.isEmpty()) {
             return Map.of();
@@ -190,7 +270,10 @@ public class MenuService {
         Map<Long, List<MenuVO.MenuApiItem>> map = new HashMap<>();
         for (MenuApiRow row : menuApiRepository.findApisByMenuIds(menuIds)) {
             map.computeIfAbsent(row.getMenuId(), k -> new ArrayList<>())
-                    .add(new MenuVO.MenuApiItem(row.getMethod(), row.getPath()));
+                    .add(new MenuVO.MenuApiItem(
+                            String.valueOf(row.getApiId()),
+                            row.getMethod(),
+                            row.getPath()));
         }
         return map;
     }

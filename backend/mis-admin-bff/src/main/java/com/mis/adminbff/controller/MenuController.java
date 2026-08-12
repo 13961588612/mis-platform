@@ -1,6 +1,8 @@
 package com.mis.adminbff.controller;
 
 import com.mis.adminbff.client.model.MenuVO;
+import com.mis.adminbff.dto.MenuApiBindingVO;
+import com.mis.adminbff.dto.MenuApiReplaceRequest;
 import com.mis.adminbff.dto.MenuCreateRequest;
 import com.mis.adminbff.dto.MenuUpdateRequest;
 import com.mis.adminbff.dto.RouterNode;
@@ -62,6 +64,18 @@ public class MenuController {
     @DeleteMapping("/{id}")
     public Result<Void> delete(@PathVariable Long id) {
         menuAggregateService.delete(id);
+        return Result.ok();
+    }
+
+    @GetMapping("/{menuId}/apis")
+    public Result<List<MenuApiBindingVO>> menuApis(@PathVariable Long menuId) {
+        return Result.ok(menuAggregateService.menuApis(menuId));
+    }
+
+    @PutMapping("/{menuId}/apis")
+    public Result<Void> replaceMenuApis(@PathVariable Long menuId,
+                                        @Valid @RequestBody MenuApiReplaceRequest request) {
+        menuAggregateService.replaceMenuApis(menuId, request);
         return Result.ok();
     }
 }
