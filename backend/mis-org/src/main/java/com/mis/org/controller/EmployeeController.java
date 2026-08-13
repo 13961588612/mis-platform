@@ -35,6 +35,15 @@ public class EmployeeController {
         return Result.ok(employeeService.listByDept(tenantId, deptId));
     }
 
+    @GetMapping("/all")
+    public Result<List<EmployeeVO>> listAll(
+            @RequestParam Long tenantId,
+            @RequestParam(required = false) String realName,
+            @RequestParam(required = false) Long deptId,
+            @RequestParam(required = false) Integer status) {
+        return Result.ok(employeeService.listAll(tenantId, realName, deptId, status));
+    }
+
     @GetMapping("/names")
     public Result<Map<Long, String>> names(@RequestParam String ids) {
         List<Long> idList = Arrays.stream(ids.split(","))

@@ -1,18 +1,15 @@
-import type { AdminPageDef } from './types';
+import type { AdminPageDef, Assignment, FieldOption } from './types';
+import { fetchDeptTree } from '@/lib/api/depts';
+import { listOrgs } from '@/lib/api/orgs';
 import { fetchApps } from '@/lib/api/platform';
+import { listEmployees, createEmployee, updateEmployee, deleteEmployee } from '@/lib/api/employees';
+import { listPosts, createPost, updatePost, deletePost, listPostTypes } from '@/lib/api/posts';
+import { listConfigs, createConfig, updateConfig, deleteConfig } from '@/lib/api/configs';
+import type { DeptNode } from '@/types/api';
 
 const STATUS_OPTS = [
   { value: 1, label: '启用' },
   { value: 0, label: '禁用' },
-];
-
-const DATA_SCOPE = [
-  { value: 1, label: '全部数据' },
-  { value: 2, label: '本部门' },
-  { value: 3, label: '本部门及下级' },
-  { value: 4, label: '仅本人' },
-  { value: 5, label: '自定义部门' },
-  { value: 6, label: '本组织' },
 ];
 
 function statusText(status: unknown) {
@@ -26,588 +23,71 @@ function withStatus(row: Record<string, unknown>) {
   return { ...row, statusText: statusText(row.status) };
 }
 
-/** 员工/部门多选共享：部门可选项 */
-const DEPT_OPTS = [
-  { value: '总经理办公室', label: '总经理办公室' },
-  { value: '研发中心', label: '研发中心' },
-  { value: '财务部', label: '财务部' },
-  { value: '市场部', label: '市场部' },
-  { value: '人力资源部', label: '人力资源部' },
-];
+/**
+ * 与「部门管理」页同源的部门可选项：拉取真实 sys_dept 树后扁平化为 {label, value}。
+ * value 携带真实 dept id（提交时用 id 对齐后端）；接口失败或部门为空时回退空数组。
+ */
+export async function loadDeptOptions(): Promise<FieldOption[]> {
+  const orgs = await listOrgs();
+  const orgId = orgs[0]?.id;
+  if (!orgId) return [];
+  const tree = await fetchDeptTree(orgId);
+  const options: FieldOption[] = [];
+  const walk = (nodes: DeptNode[]) => {
+    for (const node of nodes) {
+      options.push({ value: node.id, label: node.name });
+      if (node.children?.length) walk(node.children);
+    }
+  };
+  walk(tree);
+  return options;
+}
 
-/** 员工任职岗位可选项（覆盖样例中出现的所有岗位名） */
-const POST_OPTS = [
-  { value: '总经理', label: '总经理' },
-  { value: '研发总监', label: '研发总监' },
-  { value: '架构师', label: '架构师' },
-  { value: '技术委员会', label: '技术委员会' },
-  { value: '财务经理', label: '财务经理' },
-  { value: '内审委员', label: '内审委员' },
-  { value: '大区总', label: '大区总' },
-  { value: '研发部经理', label: '研发部经理' },
-  { value: '财务主管', label: '财务主管' },
-];
+/** 岗位可选项（真实 sys_post，value=id）；失败/为空回退空数组。 */
+export async function loadPostOptions(): Promise<FieldOption[]> {
+  const posts = await listPosts();
+  return posts
+    .filter((p) => p.status === 1)
+    .map((p) => ({ value: p.id, label: p.name }));
+}
 
-/** 对齐 system-admin-template.html · 当前菜单已挂载的页面 */
+/** 岗位类型可选项（真实 sys_post_type，value=id）；失败/为空回退空数组。 */
+export async function loadPostTypeOptions(): Promise<FieldOption[]> {
+  const types = await listPostTypes();
+  return types.map((t) => ({ value: t.id, label: t.name }));
+}
+
+/** 员工任职行 → 提交结构：{ deptIds(去重、首项主部门), posts(含 postId/isPrimary/startDate) } */
+function employeeAssignmentPayload(
+  values: Record<string, unknown>,
+): { deptIds: number[]; posts: { postId: number; isPrimary: number; startDate: string | null }[] } {
+  const assignments = (Array.isArray(values.assignments) ? values.assignments : []) as Assignment[];
+  const deptIds = [...new Set(assignments.map((a) => String(a.dept).trim()).filter(Boolean))].map(Number);
+  const posts = assignments
+    .filter((a) => String(a.post).trim() !== '')
+    .map((a) => ({
+      postId: Number(a.post),
+      isPrimary: a.isPrimary ? 1 : 0,
+      startDate: a.startDate ? String(a.startDate) : null,
+    }));
+  return { deptIds, posts };
+}
+
+/** 对齐 system-admin-template.html · 当前菜单已挂载且走通用引擎的页面 */
 export const SYSTEM_PAGE_DEFS: Record<string, AdminPageDef> = {
-  '/system/org': {
-    id: 'org',
-    group: '组织架构',
-    title: '组织管理',
-    description: '租户下的业务组织（sys_org），扁平列表、可启停。',
-    filters: [
-      { key: 'name', label: '组织名称', type: 'text', col: 4 },
-      { key: 'status', label: '状态', type: 'select', col: 2, options: STATUS_OPTS },
-    ],
-    columns: [
-      { key: 'code', label: '编码' },
-      { key: 'name', label: '组织名称' },
-      { key: 'sort', label: '排序' },
-      { key: 'statusText', label: '状态', status: true },
-      { key: 'remark', label: '备注' },
-    ],
-    form: [
-      { key: 'code', label: '组织编码', type: 'text', col: 6, required: true },
-      { key: 'name', label: '组织名称', type: 'text', col: 6, required: true },
-      { key: 'sort', label: '排序', type: 'number', col: 6 },
-      { key: 'status', label: '状态', type: 'switch', col: 6 },
-      { key: 'remark', label: '备注', type: 'textarea', col: 12 },
-    ],
-    sample: [
-      { id: 1, code: 'headquarters', name: '总部', sort: 1, status: 1, remark: '默认组织' },
-      { id: 2, code: 'north', name: '北方大区', sort: 2, status: 1, remark: '华北业务' },
-      { id: 3, code: 'south', name: '南方大区', sort: 3, status: 0, remark: '待启用' },
-    ],
-    decorate: withStatus,
-  },
-  '/system/dept': {
-    id: 'dept',
-    group: '组织架构',
-    title: '部门管理',
-    description: '组织内部门树（sys_dept），含部门类别与负责人。',
-    filters: [
-      { key: 'name', label: '部门名称', type: 'text', col: 4 },
-      {
-        key: 'org',
-        label: '所属组织',
-        type: 'select',
-        col: 3,
-        options: [
-          { value: '总部', label: '总部' },
-          { value: '北方大区', label: '北方大区' },
-        ],
-      },
-      { key: 'status', label: '状态', type: 'select', col: 2, options: STATUS_OPTS },
-    ],
-    columns: [
-      { key: 'code', label: '层级编码' },
-      { key: 'name', label: '部门名称' },
-      { key: 'org', label: '所属组织' },
-      { key: 'category', label: '类别' },
-      { key: 'leader', label: '负责人' },
-      { key: 'statusText', label: '状态', status: true },
-    ],
-    form: [
-      {
-        key: 'org',
-        label: '所属组织',
-        type: 'select',
-        col: 6,
-        required: true,
-        options: [
-          { value: '总部', label: '总部' },
-          { value: '北方大区', label: '北方大区' },
-        ],
-      },
-      { key: 'code', label: '层级编码', type: 'text', col: 6, required: true, placeholder: '如 0001 / 00010001' },
-      { key: 'name', label: '部门名称', type: 'text', col: 6, required: true },
-      {
-        key: 'category',
-        label: '部门类别',
-        type: 'select',
-        col: 6,
-        options: [
-          { value: '总部', label: '总部' },
-          { value: '分公司', label: '分公司' },
-          { value: '部门', label: '部门' },
-        ],
-      },
-      { key: 'leader', label: '负责人', type: 'text', col: 6 },
-      { key: 'status', label: '状态', type: 'switch', col: 6 },
-    ],
-    sample: [
-      { id: 1, code: '0001', name: '总经理办公室', org: '总部', category: '总部', leader: '李文博', status: 1 },
-      { id: 2, code: '00010001', name: '研发中心', org: '总部', category: '部门', leader: '王磊', status: 1 },
-      { id: 3, code: '00010002', name: '财务部', org: '总部', category: '部门', leader: '赵敏', status: 1 },
-      { id: 4, code: '0002', name: '华北分公司', org: '北方大区', category: '分公司', leader: '孙强', status: 0 },
-    ],
-    decorate: withStatus,
-  },
-  '/system/user': {
-    id: 'user',
-    group: '权限中心',
-    title: '用户管理',
-    description: 'APP 登录账号（sys_user），每员工每应用一条，关联角色。',
-    filters: [
-      { key: 'username', label: '登录名', type: 'text', col: 4 },
-      {
-        key: 'app',
-        label: '所属应用',
-        type: 'select',
-        col: 3,
-        options: [
-          { value: 'system', label: '系统管理' },
-          { value: 'iam', label: 'IAM' },
-        ],
-      },
-      {
-        key: 'status',
-        label: '状态',
-        type: 'select',
-        col: 2,
-        options: [
-          { value: 1, label: '启用' },
-          { value: 0, label: '禁用' },
-          { value: 2, label: '锁定' },
-        ],
-      },
-    ],
-    columns: [
-      { key: 'username', label: '登录名' },
-      { key: 'employee', label: '关联员工' },
-      { key: 'app', label: '所属应用' },
-      { key: 'roles', label: '角色' },
-      { key: 'statusText', label: '状态', status: true },
-      { key: 'last_login', label: '最近登录' },
-    ],
-    form: [
-      { key: 'username', label: '登录名', type: 'text', col: 6, required: true },
-      {
-        key: 'employee',
-        label: '关联员工',
-        type: 'select',
-        col: 6,
-        required: true,
-        options: [
-          { value: '李文博', label: '李文博' },
-          { value: '王磊', label: '王磊' },
-          { value: '赵敏', label: '赵敏' },
-        ],
-      },
-      {
-        key: 'app',
-        label: '所属应用',
-        type: 'select',
-        col: 6,
-        options: [
-          { value: 'system', label: '系统管理' },
-          { value: 'iam', label: 'IAM' },
-        ],
-      },
-      {
-        key: 'roles',
-        label: '角色',
-        type: 'select',
-        col: 6,
-        options: [
-          { value: 'TENANT_ADMIN', label: '租户管理员' },
-          { value: 'OPERATOR', label: '操作员' },
-        ],
-      },
-      { key: 'status', label: '状态', type: 'switch', col: 6 },
-      { key: 'is_tenant_admin', label: '租户管理员', type: 'switch', col: 6 },
-    ],
-    sample: [
-      {
-        id: 1,
-        username: 'admin',
-        employee: '李文博',
-        app: 'system',
-        roles: 'TENANT_ADMIN',
-        status: 1,
-        is_tenant_admin: 1,
-        last_login: '2026-07-21 09:12',
-      },
-      {
-        id: 2,
-        username: 'wangl',
-        employee: '王磊',
-        app: 'system',
-        roles: 'OPERATOR',
-        status: 1,
-        is_tenant_admin: 0,
-        last_login: '2026-07-20 14:30',
-      },
-      {
-        id: 3,
-        username: 'zhaom',
-        employee: '赵敏',
-        app: 'iam',
-        roles: 'OPERATOR',
-        status: 2,
-        is_tenant_admin: 0,
-        last_login: '2026-07-19 11:05',
-      },
-    ],
-    decorate: withStatus,
-  },
-  '/system/role': {
-    id: 'role',
-    group: '权限中心',
-    title: '角色管理',
-    description: 'APP 级角色（sys_role），分配用户与菜单权限 + 数据范围。',
-    filters: [
-      { key: 'name', label: '角色名称', type: 'text', col: 4 },
-      {
-        key: 'type',
-        label: '类型',
-        type: 'select',
-        col: 3,
-        options: [
-          { value: 1, label: '内置' },
-          { value: 2, label: '自定义' },
-        ],
-      },
-      { key: 'status', label: '状态', type: 'select', col: 2, options: STATUS_OPTS },
-    ],
-    columns: [
-      { key: 'code', label: '编码' },
-      { key: 'name', label: '名称' },
-      { key: 'typeText', label: '类型' },
-      { key: 'dataScopeText', label: '数据范围' },
-      { key: 'userCount', label: '用户数' },
-      { key: 'statusText', label: '状态', status: true },
-    ],
-    form: [
-      { key: 'code', label: '角色编码', type: 'text', col: 6, required: true },
-      { key: 'name', label: '角色名称', type: 'text', col: 6, required: true },
-      {
-        key: 'type',
-        label: '类型',
-        type: 'select',
-        col: 4,
-        options: [
-          { value: 1, label: '内置' },
-          { value: 2, label: '自定义' },
-        ],
-      },
-      { key: 'data_scope', label: '数据范围', type: 'select', col: 4, options: DATA_SCOPE },
-      { key: 'status', label: '状态', type: 'switch', col: 4 },
-      { key: 'remark', label: '备注', type: 'textarea', col: 12 },
-    ],
-    sample: [
-      {
-        id: 1,
-        code: 'TENANT_ADMIN',
-        name: '租户管理员',
-        type: 1,
-        data_scope: 1,
-        status: 1,
-        remark: '内置，全部菜单权限',
-        users: ['admin'],
-      },
-      {
-        id: 2,
-        code: 'OPERATOR',
-        name: '操作员',
-        type: 2,
-        data_scope: 3,
-        status: 1,
-        remark: '日常操作',
-        users: ['wangl', 'zhaom'],
-      },
-    ],
-    decorate: (row) => {
-      const r = withStatus(row);
-      const scope = DATA_SCOPE.find((d) => d.value === r.data_scope);
-      return {
-        ...r,
-        typeText: r.type === 1 ? '内置' : '自定义',
-        dataScopeText: scope?.label ?? '—',
-        userCount: Array.isArray(r.users) ? r.users.length : 0,
-      };
-    },
-  },
-  '/system/menu': {
-    id: 'menu',
-    group: '权限中心',
-    title: '菜单管理',
-    description: '菜单树（sys_menu）：目录 / 菜单 / 按钮，绑定 permission 鉴权。',
-    filters: [
-      { key: 'name', label: '菜单名称', type: 'text', col: 4 },
-      {
-        key: 'type',
-        label: '类型',
-        type: 'select',
-        col: 3,
-        options: [
-          { value: 1, label: '目录' },
-          { value: 2, label: '菜单' },
-          { value: 3, label: '按钮' },
-        ],
-      },
-      { key: 'status', label: '状态', type: 'select', col: 2, options: STATUS_OPTS },
-    ],
-    columns: [
-      { key: 'code', label: '层级编码' },
-      { key: 'name', label: '名称' },
-      { key: 'typeText', label: '类型' },
-      { key: 'path', label: '路由' },
-      { key: 'permission', label: '权限标识' },
-      { key: 'statusText', label: '状态', status: true },
-    ],
-    form: [
-      {
-        key: 'parent_id',
-        label: '父级',
-        type: 'select',
-        col: 6,
-        options: [
-          { value: 0, label: '根节点' },
-          { value: 'm1', label: '系统管理' },
-          { value: 'm1-2', label: '权限管理' },
-        ],
-      },
-      { key: 'code', label: '层级编码', type: 'text', col: 6, required: true, placeholder: '如 00010001' },
-      { key: 'name', label: '名称', type: 'text', col: 6, required: true },
-      {
-        key: 'type',
-        label: '类型',
-        type: 'select',
-        col: 6,
-        options: [
-          { value: 1, label: '目录' },
-          { value: 2, label: '菜单' },
-          { value: 3, label: '按钮' },
-        ],
-      },
-      { key: 'path', label: '路由', type: 'text', col: 6, placeholder: '/system/users' },
-      { key: 'component', label: '组件', type: 'text', col: 6 },
-      { key: 'permission', label: '权限标识', type: 'text', col: 6, placeholder: 'system:user:list' },
-      { key: 'icon', label: '图标', type: 'text', col: 4 },
-      { key: 'sort', label: '排序', type: 'number', col: 4 },
-      { key: 'visible', label: '可见', type: 'switch', col: 4 },
-      { key: 'status', label: '状态', type: 'switch', col: 6 },
-    ],
-    sample: [
-      {
-        id: 1,
-        code: '0001',
-        name: '系统管理',
-        type: 1,
-        path: '',
-        permission: '',
-        icon: 'layoutDashboard',
-        sort: 1,
-        visible: 1,
-        status: 1,
-      },
-      {
-        id: 2,
-        code: '00010001',
-        name: '用户管理',
-        type: 2,
-        path: '/system/user',
-        component: 'UserPage',
-        permission: 'system:user:list',
-        icon: 'users',
-        sort: 1,
-        visible: 1,
-        status: 1,
-      },
-      {
-        id: 3,
-        code: '000100010001',
-        name: '新增用户',
-        type: 3,
-        path: '',
-        component: '',
-        permission: 'system:user:create',
-        icon: '',
-        sort: 1,
-        visible: 1,
-        status: 1,
-      },
-    ],
-    decorate: (row) => {
-      const r = withStatus(row);
-      const typeText = r.type === 1 ? '目录' : r.type === 2 ? '菜单' : '按钮';
-      return { ...r, typeText };
-    },
-  },
-  '/system/dict': {
-    id: 'dict',
-    group: '基础数据',
-    title: '字典管理',
-    description: '字典类型与字典项（sys_dict_type / sys_dict_item）。',
-    filters: [
-      { key: 'name', label: '类型名称', type: 'text', col: 4 },
-      { key: 'status', label: '状态', type: 'select', col: 2, options: STATUS_OPTS },
-    ],
-    columns: [
-      { key: 'code', label: '类型编码' },
-      { key: 'name', label: '类型名称' },
-      { key: 'itemCount', label: '字典项数' },
-      { key: 'statusText', label: '状态', status: true },
-    ],
-    form: [
-      { key: 'code', label: '类型编码', type: 'text', col: 6, required: true },
-      { key: 'name', label: '类型名称', type: 'text', col: 6, required: true },
-      { key: 'status', label: '状态', type: 'switch', col: 6 },
-      {
-        key: 'items',
-        label: '字典项(标签=值, 每行一条)',
-        type: 'textarea',
-        col: 12,
-        placeholder: '男=1\n女=2',
-      },
-    ],
-    sample: [
-      { id: 1, code: 'gender', name: '性别', status: 1, items: '男=1\n女=2' },
-      {
-        id: 2,
-        code: 'data_scope',
-        name: '数据范围',
-        status: 1,
-        items: '全部数据=1\n本部门=2\n本部门及下级=3\n仅本人=4\n自定义部门=5\n本组织=6',
-      },
-    ],
-    decorate: (row) => {
-      const r = withStatus(row);
-      const items = String(r.items ?? '');
-      const itemCount = items
-        .split('\n')
-        .map((s) => s.trim())
-        .filter(Boolean).length;
-      return { ...r, itemCount };
-    },
-  },
-  '/monitor/login-log': {
-    id: 'loginlog',
-    group: '审计',
-    title: '登录日志',
-    description: '登录审计（sys_login_log），只读。',
-    readonly: true,
-    filters: [
-      { key: 'username', label: '用户名', type: 'text', col: 4 },
-      {
-        key: 'status',
-        label: '结果',
-        type: 'select',
-        col: 3,
-        options: [
-          { value: 1, label: '成功' },
-          { value: 0, label: '失败' },
-        ],
-      },
-    ],
-    columns: [
-      { key: 'username', label: '用户名' },
-      { key: 'ip', label: 'IP' },
-      { key: 'statusText', label: '结果', status: true },
-      { key: 'msg', label: '说明' },
-      { key: 'login_at', label: '登录时间' },
-    ],
-    form: [
-      { key: 'username', label: '用户名', type: 'text', col: 6 },
-      { key: 'ip', label: 'IP', type: 'text', col: 6 },
-      { key: 'msg', label: '说明', type: 'text', col: 12 },
-      { key: 'login_at', label: '登录时间', type: 'text', col: 6 },
-    ],
-    sample: [
-      { id: 1, username: 'admin', ip: '10.0.0.5', status: 1, msg: '登录成功', login_at: '2026-07-21 09:12:33' },
-      { id: 2, username: 'zhaom', ip: '10.0.0.9', status: 0, msg: '密码错误', login_at: '2026-07-21 08:55:10' },
-      { id: 3, username: 'wangl', ip: '10.0.0.7', status: 1, msg: '登录成功', login_at: '2026-07-20 14:30:02' },
-    ],
-    decorate: (row) => ({
-      ...row,
-      statusText: row.status === 1 ? '成功' : '失败',
-    }),
-  },
-  '/monitor/oper-log': {
-    id: 'operlog',
-    group: '审计',
-    title: '操作日志',
-    description: '操作审计（sys_oper_log），只读。',
-    readonly: true,
-    filters: [
-      { key: 'module', label: '模块', type: 'text', col: 4 },
-      { key: 'username', label: '操作人', type: 'text', col: 4 },
-    ],
-    columns: [
-      { key: 'username', label: '操作人' },
-      { key: 'module', label: '模块' },
-      { key: 'operation', label: '操作' },
-      { key: 'request_method', label: '方法' },
-      { key: 'response_code', label: '状态码' },
-      { key: 'duration_ms', label: '耗时(ms)' },
-      { key: 'oper_time', label: '时间' },
-    ],
-    form: [
-      { key: 'username', label: '操作人', type: 'text', col: 6 },
-      { key: 'module', label: '模块', type: 'text', col: 6 },
-      { key: 'operation', label: '操作', type: 'text', col: 6 },
-      { key: 'request_method', label: '方法', type: 'text', col: 6 },
-      { key: 'request_uri', label: 'URI', type: 'text', col: 12 },
-      { key: 'response_code', label: '状态码', type: 'text', col: 6 },
-      { key: 'duration_ms', label: '耗时(ms)', type: 'text', col: 6 },
-      { key: 'oper_time', label: '时间', type: 'text', col: 6 },
-    ],
-    sample: [
-      {
-        id: 1,
-        username: 'admin',
-        module: '系统管理',
-        operation: '新增组织',
-        request_method: 'POST',
-        request_uri: '/api/v1/orgs',
-        response_code: 200,
-        duration_ms: 23,
-        oper_time: '2026-07-21 10:02:11',
-      },
-      {
-        id: 2,
-        username: 'admin',
-        module: '系统管理',
-        operation: '修改角色',
-        request_method: 'PUT',
-        request_uri: '/api/v1/roles/2',
-        response_code: 200,
-        duration_ms: 41,
-        oper_time: '2026-07-21 09:48:30',
-      },
-      {
-        id: 3,
-        username: 'wangl',
-        module: '组织管理',
-        operation: '查询部门',
-        request_method: 'GET',
-        request_uri: '/api/v1/depts',
-        response_code: 200,
-        duration_ms: 12,
-        oper_time: '2026-07-20 16:20:05',
-      },
-    ],
-  },
   '/system/employee': {
     id: 'employee',
     group: '组织架构',
     title: '员工管理',
-    description: '租户员工自然人主数据（sys_employee），关联主部门。',
+    description: '租户员工自然人主数据（sys_employee），关联主部门与任职记录。',
     tableDensity: 'compact',
+    /** 部门选项与「部门管理」同源：真实 sys_dept 拉取（value=id；接口失败回退空数组） */
+    deptOptionsLoader: loadDeptOptions,
+    /** 岗位下拉来自真实 sys_post */
+    postOptionsLoader: loadPostOptions,
     filters: [
       { key: 'real_name', label: '姓名', type: 'text', col: 4 },
-      {
-        key: 'dept',
-        label: '主部门',
-        type: 'select',
-        col: 4,
-        options: [
-          { value: '总经理办公室', label: '总经理办公室' },
-          { value: '研发中心', label: '研发中心' },
-          { value: '财务部', label: '财务部' },
-        ],
-      },
+      { key: 'deptId', label: '主部门', type: 'select', col: 4, optionsFrom: 'dept' },
       { key: 'status', label: '状态', type: 'select', col: 2, options: STATUS_OPTS },
     ],
     columns: [
@@ -636,101 +116,87 @@ export const SYSTEM_PAGE_DEFS: Record<string, AdminPageDef> = {
         label: '任职记录（可多部门多岗位，每行可标记主职）',
         type: 'assignments',
         col: 12,
-        deptOptions: DEPT_OPTS,
-        postOptions: POST_OPTS,
+        optionsFrom: 'dept',
       },
       { key: 'email', label: '邮箱', type: 'text', col: 6 },
       { key: 'phone', label: '手机号', type: 'text', col: 6 },
       { key: 'hire_date', label: '入职日期', type: 'text', col: 6 },
       { key: 'status', label: '状态', type: 'switch', col: 6 },
     ],
-    detailExtra: (row) => {
-      const asg = (Array.isArray(row.assignments) ? (row.assignments as { dept: string; post: string; isPrimary?: boolean }[]) : []);
-      const primary = asg.find((a) => a.isPrimary) ?? asg[0];
-      return [
-        { label: '主部门', value: (primary?.dept as string) ?? (row.dept as string) ?? '—' },
-        { label: '主职位', value: (primary?.post as string) ?? (row.title as string) ?? '—' },
-      ];
-    },
-    sample: [
-      {
-        id: 1,
-        employee_no: 'E1001',
-        real_name: '李文博',
-        gender: 1,
-        dept: '总经理办公室',
-        title: '总经理',
-        assignments: [{ dept: '总经理办公室', post: '总经理', startDate: '2020-03-01', isPrimary: true }],
-        email: 'liwb@corp.com',
-        phone: '13800001001',
-        hire_date: '2020-03-01',
-        status: 1,
-      },
-      {
-        id: 2,
-        employee_no: 'E1002',
-        real_name: '王磊',
-        gender: 1,
-        dept: '研发中心',
-        title: '研发总监',
-        assignments: [
-          { dept: '研发中心', post: '研发总监', startDate: '2021-06-15', isPrimary: true },
-          { dept: '研发中心', post: '架构师', startDate: '2021-06-15' },
-          { dept: '市场部', post: '技术委员会', startDate: '2022-01-10' },
-        ],
-        email: 'wl@corp.com',
-        phone: '13800001002',
-        hire_date: '2021-06-15',
-        status: 1,
-      },
-      {
-        id: 3,
-        employee_no: 'E1003',
-        real_name: '赵敏',
-        gender: 2,
-        dept: '财务部',
-        title: '财务经理',
-        assignments: [
-          { dept: '财务部', post: '财务经理', startDate: '2021-09-01', isPrimary: true },
-          { dept: '人力资源部', post: '内审委员', startDate: '2022-03-01' },
-        ],
-        email: 'zm@corp.com',
-        phone: '13800001003',
-        hire_date: '2021-09-01',
-        status: 1,
-      },
-      {
-        id: 4,
-        employee_no: 'E1004',
-        real_name: '孙强',
-        gender: 1,
-        dept: '总经理办公室',
-        title: '大区总',
-        assignments: [
-          { dept: '总经理办公室', post: '大区总', startDate: '2019-11-20', isPrimary: true },
-          { dept: '市场部', post: '大区总', startDate: '2020-05-01' },
-          { dept: '人力资源部', post: '大区总', startDate: '2020-05-01' },
-        ],
-        email: 'sq@corp.com',
-        phone: '13800001004',
-        hire_date: '2019-11-20',
-        status: 0,
-      },
+    detailExtra: (row) => [
+      { label: '主部门', value: (row.dept as string) ?? '—' },
+      { label: '主职位', value: (row.title as string) ?? '—' },
     ],
-    decorate: (row) => {
-      const asg = Array.isArray(row.assignments)
-        ? (row.assignments as { dept: string; post: string; isPrimary?: boolean }[])
-        : [];
-      const primary = asg.find((a) => a.isPrimary) ?? asg[0];
-      return {
-        ...withStatus(row),
-        // 主部门 / 主职位 由「主职」任职行派生（表单不再单独录入，避免重复）
-        dept: primary?.dept ?? (row.dept as string | undefined) ?? '—',
-        title: primary?.post ?? (row.title as string | undefined) ?? '—',
-        genderText: row.gender === 1 ? '男' : row.gender === 2 ? '女' : '—',
-        assignmentCount: asg.length,
-      };
+    loader: async () => {
+      const employees = await listEmployees();
+      return employees.map((e) => {
+        const posts = e.posts ?? [];
+        const primary = posts.find((p) => p.isPrimary === 1) ?? posts[0];
+        return {
+          id: e.id,
+          employee_no: e.employeeNo,
+          real_name: e.realName,
+          gender: e.gender,
+          dept: primary?.deptName ?? null,
+          title: primary?.postName ?? e.title ?? null,
+          genderText: e.gender === 1 ? '男' : e.gender === 2 ? '女' : '—',
+          assignmentCount: posts.length,
+          deptId: e.deptId,
+          status: e.status,
+          email: e.email,
+          phone: e.phone,
+          hire_date: e.hireDate,
+          assignments: posts.map((p) => ({
+            dept: p.deptId,
+            deptLabel: p.deptName,
+            post: p.postId,
+            postLabel: p.postName,
+            startDate: p.startDate,
+            isPrimary: p.isPrimary === 1,
+          })),
+        };
+      });
     },
+    createApi: async (values) => {
+      const { deptIds, posts } = employeeAssignmentPayload(values);
+      if (!deptIds.length) {
+        throw new Error('请至少填写一条任职记录（任职部门必填）');
+      }
+      await createEmployee({
+        deptId: deptIds[0],
+        deptIds,
+        employeeNo: String(values.employee_no ?? ''),
+        realName: String(values.real_name ?? ''),
+        email: values.email ? String(values.email) : undefined,
+        phone: values.phone ? String(values.phone) : undefined,
+        gender: values.gender === '' || values.gender == null ? undefined : Number(values.gender),
+        title: values.title ? String(values.title) : undefined,
+        hireDate: values.hire_date ? String(values.hire_date) : undefined,
+        posts,
+      });
+    },
+    updateApi: async (id, values) => {
+      const { deptIds, posts } = employeeAssignmentPayload(values);
+      const body: Parameters<typeof updateEmployee>[1] = {
+        realName: String(values.real_name ?? ''),
+        email: values.email ? String(values.email) : undefined,
+        phone: values.phone ? String(values.phone) : undefined,
+        gender: values.gender === '' || values.gender == null ? undefined : Number(values.gender),
+        title: values.title ? String(values.title) : undefined,
+        hireDate: values.hire_date ? String(values.hire_date) : undefined,
+        status: values.status === '' || values.status == null ? undefined : Number(values.status),
+      };
+      if (deptIds.length) {
+        body.deptId = deptIds[0];
+        body.deptIds = deptIds;
+      }
+      body.posts = posts;
+      await updateEmployee(id, body);
+    },
+    deleteApi: async (id) => {
+      await deleteEmployee(id);
+    },
+    decorate: withStatus,
   },
   '/system/post': {
     id: 'post',
@@ -738,19 +204,13 @@ export const SYSTEM_PAGE_DEFS: Record<string, AdminPageDef> = {
     title: '岗位管理',
     description: '部门岗位编制（sys_post / sys_post_type），支持兼职多岗。',
     tableDensity: 'compact',
+    /** 部门选项与「部门管理」同源：真实 sys_dept 拉取（value=id；接口失败回退空数组） */
+    deptOptionsLoader: loadDeptOptions,
+    /** 岗位类型下拉来自真实 sys_post_type */
+    postTypeOptionsLoader: loadPostTypeOptions,
     filters: [
       { key: 'name', label: '岗位名称', type: 'text', col: 4 },
-      {
-        key: 'dept',
-        label: '所属部门',
-        type: 'select',
-        col: 4,
-        options: [
-          { value: '总经理办公室', label: '总经理办公室' },
-          { value: '研发中心', label: '研发中心' },
-          { value: '财务部', label: '财务部' },
-        ],
-      },
+      { key: 'deptId', label: '所属部门', type: 'select', col: 4, optionsFrom: 'dept' },
       { key: 'status', label: '状态', type: 'select', col: 2, options: STATUS_OPTS },
     ],
     columns: [
@@ -761,38 +221,47 @@ export const SYSTEM_PAGE_DEFS: Record<string, AdminPageDef> = {
       { key: 'statusText', label: '状态', status: true },
     ],
     form: [
-      {
-        key: 'dept',
-        label: '所属部门',
-        type: 'select',
-        col: 6,
-        required: true,
-        options: [
-          { value: '总经理办公室', label: '总经理办公室' },
-          { value: '研发中心', label: '研发中心' },
-          { value: '财务部', label: '财务部' },
-        ],
-      },
-      {
-        key: 'post_type',
-        label: '岗位类型',
-        type: 'select',
-        col: 6,
-        options: [
-          { value: 'management', label: '管理' },
-          { value: 'tech', label: '技术' },
-          { value: 'finance', label: '财务' },
-        ],
-      },
+      { key: 'deptId', label: '所属部门', type: 'select', col: 6, required: true, optionsFrom: 'dept' },
+      { key: 'postTypeId', label: '岗位类型', type: 'select', col: 6, required: true, optionsFrom: 'post-type' },
       { key: 'code', label: '岗位编码', type: 'text', col: 6, required: true },
       { key: 'name', label: '岗位名称', type: 'text', col: 6, required: true },
       { key: 'status', label: '状态', type: 'switch', col: 6 },
     ],
-    sample: [
-      { id: 1, code: 'GM', name: '总经理', dept: '总经理办公室', post_type: 'management', status: 1 },
-      { id: 2, code: 'RD-L', name: '研发部经理', dept: '研发中心', post_type: 'tech', status: 1 },
-      { id: 3, code: 'FIN-L', name: '财务主管', dept: '财务部', post_type: 'finance', status: 1 },
-    ],
+    loader: async () => {
+      const posts = await listPosts();
+      return posts.map((p) => ({
+        id: p.id,
+        code: p.code,
+        name: p.name,
+        deptId: p.deptId,
+        dept: p.deptName ?? null,
+        postTypeId: p.postTypeId,
+        post_type: p.postTypeName ?? null,
+        sort: p.sort,
+        status: p.status,
+      }));
+    },
+    createApi: async (values) => {
+      await createPost({
+        deptId: Number(values.deptId),
+        postTypeId: Number(values.postTypeId),
+        code: String(values.code ?? ''),
+        name: String(values.name ?? ''),
+        status: values.status === '' || values.status == null ? 1 : Number(values.status),
+      });
+    },
+    updateApi: async (id, values) => {
+      await updatePost(id, {
+        deptId: Number(values.deptId),
+        postTypeId: Number(values.postTypeId),
+        code: String(values.code ?? ''),
+        name: String(values.name ?? ''),
+        status: values.status === '' || values.status == null ? undefined : Number(values.status),
+      });
+    },
+    deleteApi: async (id) => {
+      await deletePost(id);
+    },
     decorate: withStatus,
   },
   '/system/app': {
@@ -852,69 +321,7 @@ export const SYSTEM_PAGE_DEFS: Record<string, AdminPageDef> = {
       { key: 'sort', label: '排序', type: 'number', col: 4 },
       { key: 'status', label: '状态', type: 'switch', col: 6 },
     ],
-    /** 接口失败时的兜底样例；正常走 loader 拉 IAM sys_app（含 kb / agent）。 */
-    sample: [
-      {
-        id: 1,
-        code: 'system',
-        name: '系统管理',
-        icon: 'Settings',
-        base_path: '/system',
-        kind: 'subsystem',
-        runtime: 'host',
-        portal_group: 'governance',
-        sort: 1,
-        status: 1,
-      },
-      {
-        id: 2,
-        code: 'iam',
-        name: '统一身份 IAM',
-        icon: 'Shield',
-        base_path: '/iam',
-        kind: 'subsystem',
-        runtime: 'host',
-        portal_group: 'governance',
-        sort: 2,
-        status: 1,
-      },
-      {
-        id: 3,
-        code: 'ops',
-        name: '运营中心',
-        icon: 'LayoutDashboard',
-        base_path: '/ops',
-        kind: 'subsystem',
-        runtime: 'remote',
-        portal_group: 'operations',
-        sort: 3,
-        status: 1,
-      },
-      {
-        id: 91010,
-        code: 'kb',
-        name: '知识库',
-        icon: 'BookOpen',
-        base_path: '/kb',
-        kind: 'subsystem',
-        runtime: 'host',
-        portal_group: 'platform',
-        sort: 10,
-        status: 1,
-      },
-      {
-        id: 92010,
-        code: 'agent',
-        name: '智能体',
-        icon: 'Bot',
-        base_path: '/agent',
-        kind: 'subsystem',
-        runtime: 'host',
-        portal_group: 'platform',
-        sort: 11,
-        status: 1,
-      },
-    ],
+    /** 正常走 loader 拉 IAM sys_app（含 kb / agent）；接口失败回退空数组 + toast，不留兜底样例 */
     loader: async () => {
       const apps = await fetchApps();
       return apps.map((a) => ({
@@ -938,7 +345,7 @@ export const SYSTEM_PAGE_DEFS: Record<string, AdminPageDef> = {
     id: 'config',
     group: '基础数据',
     title: '系统参数',
-    description: '系统参数键值对（sys_config）。',
+    description: '系统参数键值对（sys_config，全局）。',
     filters: [
       { key: 'config_key', label: '参数键', type: 'text', col: 6 },
       { key: 'remark', label: '备注', type: 'text', col: 4 },
@@ -960,12 +367,30 @@ export const SYSTEM_PAGE_DEFS: Record<string, AdminPageDef> = {
       { key: 'config_value', label: '参数值', type: 'textarea', col: 12, required: true },
       { key: 'remark', label: '备注', type: 'text', col: 12 },
     ],
-    sample: [
-      { id: 1, config_key: 'security.password.min_length', config_value: '8', remark: '密码最小长度' },
-      { id: 2, config_key: 'security.login.max_fail', config_value: '5', remark: '最大失败次数' },
-      { id: 3, config_key: 'security.login.lock_minutes', config_value: '30', remark: '锁定分钟数' },
-      { id: 4, config_key: 'security.token.access_ttl', config_value: '7200', remark: '访问令牌有效期(秒)' },
-      { id: 5, config_key: 'user.default_password', config_value: 'Mis@123456', remark: '默认密码' },
-    ],
+    loader: async () => {
+      const configs = await listConfigs();
+      return configs.map((c) => ({
+        id: c.id,
+        config_key: c.configKey,
+        config_value: c.configValue,
+        remark: c.remark,
+      }));
+    },
+    createApi: async (values) => {
+      await createConfig({
+        configKey: String(values.config_key ?? ''),
+        configValue: String(values.config_value ?? ''),
+        remark: values.remark ? String(values.remark) : undefined,
+      });
+    },
+    updateApi: async (id, values) => {
+      await updateConfig(id, {
+        configValue: String(values.config_value ?? ''),
+        remark: values.remark ? String(values.remark) : undefined,
+      });
+    },
+    deleteApi: async (id) => {
+      await deleteConfig(id);
+    },
   },
 };

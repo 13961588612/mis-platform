@@ -730,6 +730,25 @@ class BffApiRegistryDiffSurveyTest {
             "POST /api/v1/modules/{moduleId}/apis",
             "PUT /api/v1/modules/apis/{apiId}",
             "DELETE /api/v1/modules/apis/{apiId}",
-            "GET /api/v1/modules/{moduleId}/bindings"
+            "GET /api/v1/modules/{moduleId}/bindings",
+            // ---- V39（系统管理三页真实化）：员工写端点 + 岗位 + 岗位类型 + 系统参数 ----
+            // 员工详情/新增/编辑/删除（sys_api 91179-91182；员工列表 V4:1011 已登记不重复）
+            "GET /api/v1/employees/{id}",
+            "POST /api/v1/employees",
+            "PUT /api/v1/employees/{id}",
+            "DELETE /api/v1/employees/{id}",
+            // 岗位列表/详情/新增/编辑/删除 + 岗位类型（sys_api 91183-91188）
+            "GET /api/v1/posts",
+            "GET /api/v1/posts/{id}",
+            "POST /api/v1/posts",
+            "PUT /api/v1/posts/{id}",
+            "DELETE /api/v1/posts/{id}",
+            "GET /api/v1/post-types",
+            // 系统参数列表/详情/新增/编辑/删除（sys_api 91190-91194）
+            "GET /api/v1/configs",
+            "GET /api/v1/configs/{id}",
+            "POST /api/v1/configs",
+            "PUT /api/v1/configs/{id}",
+            "DELETE /api/v1/configs/{id}"
     ));
 }

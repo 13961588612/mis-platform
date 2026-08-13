@@ -3,6 +3,8 @@ package com.mis.adminbff.client;
 import com.mis.adminbff.client.model.DeptVO;
 import com.mis.adminbff.client.model.EmployeeVO;
 import com.mis.adminbff.client.model.OrgVO;
+import com.mis.adminbff.client.model.PostTypeVO;
+import com.mis.adminbff.client.model.PostVO;
 import com.mis.adminbff.config.BffProperties;
 import com.mis.common.core.result.Result;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -32,6 +34,12 @@ public class OrgWebClient extends AbstractDownstreamClient {
     private static final ParameterizedTypeReference<Result<List<EmployeeVO>>> EMP_LIST =
             new ParameterizedTypeReference<>() {};
     private static final ParameterizedTypeReference<Result<EmployeeVO>> EMP =
+            new ParameterizedTypeReference<>() {};
+    private static final ParameterizedTypeReference<Result<List<PostVO>>> POST_LIST =
+            new ParameterizedTypeReference<>() {};
+    private static final ParameterizedTypeReference<Result<PostVO>> POST =
+            new ParameterizedTypeReference<>() {};
+    private static final ParameterizedTypeReference<Result<List<PostTypeVO>>> POST_TYPE_LIST =
             new ParameterizedTypeReference<>() {};
     private static final ParameterizedTypeReference<Result<Void>> VOID =
             new ParameterizedTypeReference<>() {};
@@ -132,6 +140,50 @@ public class OrgWebClient extends AbstractDownstreamClient {
                 .headers(loginContextHeaders())
                 .retrieve()
                 .bodyToMono(EMP_LIST));
+    }
+
+    /** 员工全量列表（含禁用；realName 模糊；deptId/status 可选）。 */
+    public List<EmployeeVO> listAllEmployees(Long tenantId, String realName, Long deptId, Integer status) {
+        return block(client().get()
+                .uri(queryUri("/internal/v1/employees/all",
+                        "tenantId", tenantId, "realName", realName, "deptId", deptId, "status", status))
+                .headers(loginContextHeaders())
+                .retrieve()
+                .bodyToMono(EMP_LIST));
+    }
+
+    // -----------------------------------------------------------------------
+    // 岗位（mis-org /internal/v1/posts* + /internal/v1/post-types）
+    // -----------------------------------------------------------------------
+    public List<PostVO> listPosts(Long tenantId, Long deptId, Long postTypeId, Integer status) {
+        return block(client().get()
+                .uri(queryUri("/internal/v1/posts",
+                        "tenantId", tenantId, "deptId", deptId, "postTypeId", postTypeId, "status", status))
+                .retrieve()
+                .bodyToMono(POST_LIST));
+    }
+
+    public PostVO getPost(Long id) {
+        return block(client().get().uri("/internal/v1/posts/{id}", id).retrieve().bodyToMono(POST));
+    }
+
+    public PostVO createPost(Map<String, Object> body) {
+        return block(post(body, POST, "/internal/v1/posts"));
+    }
+
+    public PostVO updatePost(Long id, Map<String, Object> body) {
+        return block(put(body, POST, "/internal/v1/posts/{id}", id));
+    }
+
+    public void deletePost(Long id) {
+        blockVoid(delete("/internal/v1/posts/{id}", id));
+    }
+
+    public List<PostTypeVO> listPostTypes(Long tenantId) {
+        return block(client().get()
+                .uri(queryUri("/internal/v1/post-types", "tenantId", tenantId))
+                .retrieve()
+                .bodyToMono(POST_TYPE_LIST));
     }
 
     public Map<Long, String> employeeNames(List<Long> ids) {

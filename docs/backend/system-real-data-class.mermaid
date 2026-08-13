@@ -1,0 +1,137 @@
+classDiagram
+    class SysPost {
+        +Long id
+        +Long tenantId
+        +Long deptId
+        +Long postTypeId
+        +String code
+        +String name
+        +Integer sort
+        +Integer status
+        +Integer deleted
+    }
+    class SysPostType {
+        +Long id
+        +Long tenantId
+        +String code
+        +String name
+        +Integer sort
+        +Integer status
+    }
+    class SysConfig {
+        +Long id
+        +String configKey
+        +String configValue
+        +String remark
+    }
+    class SysEmployeePost {
+        +Long id
+        +Long employeeId
+        +Long postId
+        +Integer isPrimary
+        +LocalDate startDate
+        +Integer status
+    }
+    class SysPostTypeRepository {
+        <<interface>>
+        +findByTenantIdAndStatus(Long, Integer) List~SysPostType~
+    }
+    class SysPostRepository {
+        <<interface>>
+        +findByDeptIdAndStatus(Long, Integer) List~SysPost~
+        +existsByDeptId(Long) boolean
+    }
+    class SysConfigRepository {
+        <<interface>>
+        +findAllByOrderByIdAsc() List~SysConfig~
+        +existsByConfigKey(String) boolean
+    }
+    class SysEmployeePostRepository {
+        <<interface>>
+        +countByPostIdAndStatus(Long, Integer) long
+        +findByEmployeeIdAndStatus(Long, Integer) List~SysEmployeePost~
+    }
+    class PostService {
+        +list(Long tenantId, Long deptId, Long postTypeId, Integer status) List~PostVO~
+        +getById(Long) PostVO
+        +create(PostCreateRequest) PostVO
+        +update(Long, PostUpdateRequest) PostVO
+        +delete(Long) void
+        +listTypes(Long tenantId) List~PostTypeVO~
+    }
+    class PostController {
+        +GET /internal/v1/posts
+        +GET /internal/v1/posts/{id}
+        +POST /internal/v1/posts
+        +PUT /internal/v1/posts/{id}
+        +DELETE /internal/v1/posts/{id}
+        +GET /internal/v1/post-types
+    }
+    class ConfigService {
+        +list() List~ConfigVO~
+        +getById(Long) ConfigVO
+        +create(ConfigCreateRequest) ConfigVO
+        +update(Long, ConfigUpdateRequest) ConfigVO
+        +delete(Long) void
+    }
+    class ConfigController {
+        +GET /internal/v1/configs
+        +GET /internal/v1/configs/{id}
+        +POST /internal/v1/configs
+        +PUT /internal/v1/configs/{id}
+        +DELETE /internal/v1/configs/{id}
+    }
+    class EmployeeService {
+        +listAll(Long tenantId, String realName, Long deptId, Integer status) List~EmployeeVO~
+        +create(EmployeeCreateRequest) EmployeeVO
+        +update(Long, EmployeeUpdateRequest) EmployeeVO
+        +delete(Long) void
+    }
+    class EmployeeController {
+        +GET /internal/v1/employees/all
+        +GET /internal/v1/employees/{id}
+        +POST /internal/v1/employees
+        +PUT /internal/v1/employees/{id}
+        +DELETE /internal/v1/employees/{id}
+    }
+    class OrgWebClient {
+        +listAllEmployees(Long, String, Long, Integer) List~EmployeeVO~
+        +listPosts(Long, Long, Long, Integer) List~PostVO~
+        +getPost(Long) PostVO
+        +createPost(Map) PostVO
+        +updatePost(Long, Map) PostVO
+        +deletePost(Long) void
+        +listPostTypes(Long) List~PostTypeVO~
+    }
+    class SystemWebClient {
+        +listConfigs() List~ConfigVO~
+        +getConfig(Long) ConfigVO
+        +createConfig(Map) ConfigVO
+        +updateConfig(Long, Map) ConfigVO
+        +deleteConfig(Long) void
+    }
+    class BffEmployeeController {
+        +GET/POST /api/v1/employees
+        +GET/PUT/DELETE /api/v1/employees/{id}
+    }
+    class BffPostController {
+        +GET/POST /api/v1/posts
+        +GET/PUT/DELETE /api/v1/posts/{id}
+        +GET /api/v1/post-types
+    }
+    class BffConfigController {
+        +GET/POST /api/v1/configs
+        +GET/PUT/DELETE /api/v1/configs/{id}
+    }
+
+    PostController --> PostService
+    PostService --> SysPostRepository
+    PostService --> SysPostTypeRepository
+    PostService --> SysEmployeePostRepository
+    ConfigController --> ConfigService
+    ConfigService --> SysConfigRepository
+    EmployeeController --> EmployeeService
+    EmployeeService --> SysEmployeePostRepository
+    BffEmployeeController --> OrgWebClient
+    BffPostController --> OrgWebClient
+    BffConfigController --> SystemWebClient

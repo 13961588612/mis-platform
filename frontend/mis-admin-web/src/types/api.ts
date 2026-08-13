@@ -283,3 +283,68 @@ export interface ModuleApiBinding {
   httpMethod: string | null;
   pathPattern: string | null;
 }
+
+/** 员工任职岗位明细（mis-org EmployeePostVO：含岗位名/部门名/是否主岗/任职开始时间） */
+export interface EmployeePostItem {
+  postId: string;
+  postName: string | null;
+  deptId: string | null;
+  deptName: string | null;
+  isPrimary: number;
+  status: number;
+  startDate: string | null;
+}
+
+/** 员工（mis-org EmployeeVO：含多部门 deptIds + 多岗位 posts） */
+export interface EmployeeItem {
+  id: string;
+  tenantId: string;
+  deptId: string;
+  deptIds: string[];
+  primaryDeptId: string;
+  posts: EmployeePostItem[];
+  employeeNo: string;
+  realName: string;
+  email: string | null;
+  phone: string | null;
+  gender: number | null;
+  title: string | null;
+  hireDate: string | null;
+  status: number;
+  createdAt: string | null;
+  updatedAt: string | null;
+}
+
+/** 岗位（mis-org PostVO：含 deptName/postTypeName） */
+export interface PostItem {
+  id: string;
+  tenantId: string;
+  deptId: string;
+  deptName: string | null;
+  postTypeId: string;
+  postTypeName: string | null;
+  code: string;
+  name: string;
+  sort: number;
+  status: number;
+}
+
+/** 岗位类型（mis-org PostTypeVO） */
+export interface PostTypeItem {
+  id: string;
+  tenantId: string;
+  code: string;
+  name: string;
+  sort: number;
+  status: number;
+}
+
+/** 系统参数（mis-system ConfigVO，全局无 tenant） */
+export interface ConfigItem {
+  id: string;
+  configKey: string;
+  configValue: string;
+  remark: string | null;
+  createdAt: string | null;
+  updatedAt: string | null;
+}

@@ -1,0 +1,45 @@
+sequenceDiagram
+    autonumber
+    participant FE as 前端 AdminListPage(employee/post/config)
+    participant BFF as mis-admin-bff (Employee/Post/ConfigController)
+    participant WC as OrgWebClient / SystemWebClient
+    participant MS as mis-org / mis-system (Controller→Service→Repo)
+    participant DB as PostgreSQL
+
+    Note over FE,DB: 列表加载（3 页统一）
+    FE->>BFF: GET /api/v1/employees|posts|configs (loader)
+    BFF->>WC: OrgWebClient.listAllEmployees / listPosts / SystemWebClient.listConfigs
+    WC->>MS: GET /internal/v1/employees/all | /internal/v1/posts | /internal/v1/configs
+    MS->>DB: JPA findAll + 筛选
+    DB-->>MS: rows
+    MS-->>WC: Result<List<VO>>
+    WC-->>BFF: List<VO>
+    BFF-->>FE: Result<List<VO>>
+    FE->>FE: decorate → 表格行（含 deptName/postTypeName 展示）
+
+    Note over FE,DB: 保存（新增/编辑）—— def.createApi/updateApi
+    FE->>BFF: POST/PUT /api/v1/employees|posts|configs (+{id})
+    BFF->>WC: OrgWebClient.createEmployee/createPost / SystemWebClient.createConfig
+    WC->>MS: POST/PUT /internal/v1/... (+{id})
+    MS->>MS: 唯一校验（employee_no / post code / config_key）
+    MS->>DB: save / update（员工：级联写 sys_employee_dept / sys_employee_post）
+    DB-->>MS: ok
+    MS-->>WC: Result<VO>
+    WC-->>BFF: VO
+    BFF-->>FE: Result<VO>
+    FE->>FE: reload loader() 刷新列表
+
+    Note over FE,DB: 删除（含岗位引用校验 Q8）
+    FE->>BFF: DELETE /api/v1/employees|posts|configs/{id}
+    BFF->>WC: deleteEmployee / deletePost / deleteConfig
+    WC->>MS: DELETE /internal/v1/...
+    MS->>MS: 岗位删除前 countByPostIdAndStatus>0 → BusinessException
+    alt 岗位被员工任职引用
+        MS-->>FE: Result.fail("岗位已被员工任职引用，禁止删除")
+    else 正常删除
+        MS->>DB: 软删(employee/config) / 物理删(post)
+        DB-->>MS: ok
+        MS-->>BFF: Result.ok()
+        BFF-->>FE: Result.ok()
+        FE->>FE: reload loader() 刷新列表
+    end

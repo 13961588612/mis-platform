@@ -4,10 +4,16 @@ import com.mis.adminbff.client.OrgWebClient;
 import com.mis.adminbff.client.model.DeptVO;
 import com.mis.adminbff.client.model.EmployeeVO;
 import com.mis.adminbff.client.model.OrgVO;
+import com.mis.adminbff.client.model.PostTypeVO;
+import com.mis.adminbff.client.model.PostVO;
 import com.mis.adminbff.dto.DeptCreateRequest;
 import com.mis.adminbff.dto.DeptUpdateRequest;
+import com.mis.adminbff.dto.EmployeeCreateRequest;
+import com.mis.adminbff.dto.EmployeeUpdateRequest;
 import com.mis.adminbff.dto.OrgCreateRequest;
 import com.mis.adminbff.dto.OrgUpdateRequest;
+import com.mis.adminbff.dto.PostCreateRequest;
+import com.mis.adminbff.dto.PostUpdateRequest;
 import com.mis.adminbff.support.RequestContext;
 import org.springframework.stereotype.Service;
 
@@ -93,5 +99,111 @@ public class OrgFacadeService {
 
     public List<EmployeeVO> listEmployees(Long deptId) {
         return orgWebClient.listEmployeesByDept(RequestContext.requireTenantId(), deptId);
+    }
+
+    /** 员工全量列表（含禁用；realName/deptId/status 可选）。 */
+    public List<EmployeeVO> listAllEmployees(String realName, Long deptId, Integer status) {
+        return orgWebClient.listAllEmployees(RequestContext.requireTenantId(), realName, deptId, status);
+    }
+
+    public EmployeeVO getEmployee(Long id) {
+        return orgWebClient.getEmployee(id);
+    }
+
+    public EmployeeVO createEmployee(EmployeeCreateRequest request) {
+        Map<String, Object> body = new HashMap<>();
+        body.put("tenantId", RequestContext.requireTenantId());
+        body.put("deptId", request.deptId());
+        body.put("deptIds", request.deptIds());
+        body.put("employeeNo", request.employeeNo());
+        body.put("realName", request.realName());
+        body.put("email", request.email());
+        body.put("phone", request.phone());
+        body.put("gender", request.gender());
+        body.put("title", request.title());
+        body.put("hireDate", request.hireDate());
+        if (request.posts() != null) {
+            body.put("posts", request.posts().stream()
+                    .map(p -> {
+                        Map<String, Object> post = new HashMap<>();
+                        post.put("postId", p.postId());
+                        post.put("isPrimary", p.isPrimary());
+                        post.put("startDate", p.startDate());
+                        return post;
+                    })
+                    .toList());
+        }
+        return orgWebClient.createEmployee(body);
+    }
+
+    public EmployeeVO updateEmployee(Long id, EmployeeUpdateRequest request) {
+        Map<String, Object> body = new HashMap<>();
+        body.put("realName", request.realName());
+        body.put("email", request.email());
+        body.put("phone", request.phone());
+        body.put("gender", request.gender());
+        body.put("title", request.title());
+        body.put("deptId", request.deptId());
+        body.put("deptIds", request.deptIds());
+        body.put("hireDate", request.hireDate());
+        body.put("status", request.status());
+        if (request.posts() != null) {
+            body.put("posts", request.posts().stream()
+                    .map(p -> {
+                        Map<String, Object> post = new HashMap<>();
+                        post.put("postId", p.postId());
+                        post.put("isPrimary", p.isPrimary());
+                        post.put("startDate", p.startDate());
+                        return post;
+                    })
+                    .toList());
+        }
+        return orgWebClient.updateEmployee(id, body);
+    }
+
+    public void deleteEmployee(Long id) {
+        orgWebClient.deleteEmployee(id);
+    }
+
+    // -----------------------------------------------------------------------
+    // 岗位
+    // -----------------------------------------------------------------------
+    public List<PostVO> listPosts(Long deptId, Long postTypeId, Integer status) {
+        return orgWebClient.listPosts(RequestContext.requireTenantId(), deptId, postTypeId, status);
+    }
+
+    public PostVO getPost(Long id) {
+        return orgWebClient.getPost(id);
+    }
+
+    public PostVO createPost(PostCreateRequest request) {
+        Map<String, Object> body = new HashMap<>();
+        body.put("tenantId", RequestContext.requireTenantId());
+        body.put("deptId", request.deptId());
+        body.put("postTypeId", request.postTypeId());
+        body.put("code", request.code());
+        body.put("name", request.name());
+        body.put("sort", request.sort());
+        body.put("status", request.status());
+        return orgWebClient.createPost(body);
+    }
+
+    public PostVO updatePost(Long id, PostUpdateRequest request) {
+        Map<String, Object> body = new HashMap<>();
+        body.put("deptId", request.deptId());
+        body.put("postTypeId", request.postTypeId());
+        body.put("code", request.code());
+        body.put("name", request.name());
+        body.put("sort", request.sort());
+        body.put("status", request.status());
+        return orgWebClient.updatePost(id, body);
+    }
+
+    public void deletePost(Long id) {
+        orgWebClient.deletePost(id);
+    }
+
+    public List<PostTypeVO> listPostTypes() {
+        return orgWebClient.listPostTypes(RequestContext.requireTenantId());
     }
 }

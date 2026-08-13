@@ -128,6 +128,29 @@ public class EmployeeService {
         };
     }
 
+    /**
+     * 员工全量列表（含禁用员工；realName 模糊；deptId/status 可选）。
+     * 不叠加 DataScope：系统管理页按租户全量展示。
+     */
+    @Transactional(readOnly = true)
+    public List<EmployeeVO> listAll(Long tenantId, String realName, Long deptId, Integer status) {
+        Specification<SysEmployee> spec = (root, query, cb) -> {
+            List<jakarta.persistence.criteria.Predicate> ps = new ArrayList<>();
+            ps.add(cb.equal(root.get("tenantId"), tenantId));
+            if (org.springframework.util.StringUtils.hasText(realName)) {
+                ps.add(cb.like(root.get("realName"), "%" + realName.trim() + "%"));
+            }
+            if (deptId != null) {
+                ps.add(cb.equal(root.get("deptId"), deptId));
+            }
+            if (status != null) {
+                ps.add(cb.equal(root.get("status"), status));
+            }
+            return cb.and(ps.toArray(new jakarta.persistence.criteria.Predicate[0]));
+        };
+        return employeeRepository.findAll(spec).stream().map(this::toVo).toList();
+    }
+
     @Transactional(readOnly = true)
     public Map<Long, String> namesByIds(List<Long> ids) {
         if (ids == null || ids.isEmpty()) {
@@ -261,6 +284,7 @@ public class EmployeeService {
             ep.setPostId(item.postId());
             Integer isPrimary = item.isPrimary() != null ? item.isPrimary() : (i == 0 ? 1 : 0);
             ep.setIsPrimary(isPrimary);
+            ep.setStartDate(item.startDate());
             ep.setStatus(1);
             ep.setCreatedAt(now);
             rows.add(ep);
@@ -292,7 +316,8 @@ public class EmployeeService {
                             p != null ? String.valueOf(p.getDeptId()) : null,
                             p != null ? deptName(p.getDeptId()) : null,
                             ep.getIsPrimary(),
-                            ep.getStatus());
+                            ep.getStatus(),
+                            ep.getStartDate() != null ? ep.getStartDate().toString() : null);
                 })
                 .toList();
         return new EmployeeVO(

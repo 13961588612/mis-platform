@@ -12,6 +12,7 @@ import com.mis.org.domain.repository.SysEmployeeDeptRepository;
 import com.mis.org.domain.repository.SysEmployeePostRepository;
 import com.mis.org.domain.repository.SysEmployeeRepository;
 import com.mis.org.domain.repository.SysPostRepository;
+import com.mis.org.domain.repository.SysPostTypeRepository;
 import com.mis.org.dto.DeptStaffingVO;
 import com.mis.org.dto.EmployeeLiteVO;
 import com.mis.org.dto.PostStaffingVO;
@@ -35,18 +36,21 @@ public class DeptStaffingService {
     private final SysEmployeePostRepository employeePostRepository;
     private final SysEmployeeDeptRepository employeeDeptRepository;
     private final SysEmployeeRepository employeeRepository;
+    private final SysPostTypeRepository postTypeRepository;
 
     public DeptStaffingService(
             SysDeptRepository deptRepository,
             SysPostRepository postRepository,
             SysEmployeePostRepository employeePostRepository,
             SysEmployeeDeptRepository employeeDeptRepository,
-            SysEmployeeRepository employeeRepository) {
+            SysEmployeeRepository employeeRepository,
+            SysPostTypeRepository postTypeRepository) {
         this.deptRepository = deptRepository;
         this.postRepository = postRepository;
         this.employeePostRepository = employeePostRepository;
         this.employeeDeptRepository = employeeDeptRepository;
         this.employeeRepository = employeeRepository;
+        this.postTypeRepository = postTypeRepository;
     }
 
     @Transactional(readOnly = true)
@@ -117,11 +121,8 @@ public class DeptStaffingService {
 
     private String postTypeName(Long postTypeId) {
         if (postTypeId == null) return "未分类";
-        return switch (postTypeId.intValue()) {
-            case 1 -> "管理";
-            case 2 -> "技术";
-            case 3 -> "财务";
-            default -> "其他";
-        };
+        return postTypeRepository.findById(postTypeId)
+                .map(com.mis.org.domain.entity.SysPostType::getName)
+                .orElse("其他");
     }
 }

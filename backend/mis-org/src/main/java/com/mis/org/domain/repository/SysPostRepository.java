@@ -9,5 +9,11 @@ public interface SysPostRepository extends JpaRepository<SysPost, Long> {
 
     List<SysPost> findByDeptIdAndStatus(Long deptId, Integer status);
 
+    List<SysPost> findByTenantId(Long tenantId);
+
     boolean existsByDeptId(Long deptId);
+
+    boolean existsByTenantIdAndCode(Long tenantId, String code);
+
+    boolean existsByTenantIdAndCodeAndIdNot(Long tenantId, String code, Long id);
 }

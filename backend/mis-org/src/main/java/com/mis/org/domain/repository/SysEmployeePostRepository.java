@@ -13,6 +13,8 @@ public interface SysEmployeePostRepository extends JpaRepository<SysEmployeePost
 
     List<SysEmployeePost> findByPostIdAndStatus(Long postId, Integer status);
 
+    long countByPostIdAndStatus(Long postId, Integer status);
+
     void deleteByEmployeeId(Long employeeId);
 
     @Query("""

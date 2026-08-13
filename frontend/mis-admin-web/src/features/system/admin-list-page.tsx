@@ -33,7 +33,7 @@ import {
   SheetHeader,
   SheetTitle,
 } from '@/components/ui/sheet';
-import type { AdminField, AdminPageDef } from './types';
+import type { AdminField, AdminPageDef, FieldOption } from './types';
 import { SYSTEM_PAGE_DEFS } from './page-defs';
 import { AiFeature } from '@/features/ai/components/ai-feature';
 import { AiTextExtract } from '@/features/ai/components/ai-text-extract';
@@ -255,8 +255,10 @@ function AssignmentTable({ list }: { list: Assignment[] }) {
       <tbody>
         {list.map((a, i) => (
           <tr key={i}>
-            <td className="px-3 py-2 font-medium text-foreground">{a.dept || '—'}</td>
-            <td className="border-l border-border/60 px-3 py-2 font-medium text-foreground">{a.post || '—'}</td>
+            <td className="px-3 py-2 font-medium text-foreground">{a.deptLabel || a.dept || '—'}</td>
+            <td className="border-l border-border/60 px-3 py-2 font-medium text-foreground">
+              {a.postLabel || a.post || '—'}
+            </td>
             <td className="border-l border-border/60 px-3 py-2">{a.startDate || '—'}</td>
             <td className="border-l border-border/60 px-3 py-2">
               {a.isPrimary ? (
@@ -437,7 +439,7 @@ function FieldControl({
 }
 
 export function AdminListPage({ def }: { def: AdminPageDef }) {
-  const [rows, setRows] = useState(() => def.sample.map((r) => ({ ...r })));
+  const [rows, setRows] = useState(() => (def.sample ?? []).map((r) => ({ ...r })));
   const [draft, setDraft] = useState<Record<string, unknown>>({});
   const [applied, setApplied] = useState<Record<string, unknown>>({});
   const [page, setPage] = useState(1);
@@ -451,6 +453,12 @@ export function AdminListPage({ def }: { def: AdminPageDef }) {
   const [filterOpen, setFilterOpen] = useState(true);
   // 真实数据加载态（def.loader 提供时触发骨架；否则用 sample，无加载态）
   const [loading, setLoading] = useState(false);
+  // 部门/岗位/岗位类型选项（与「部门管理」等真实数据源同源）：对应 loader 提供时挂载即拉取
+  const [deptOptions, setDeptOptions] = useState<FieldOption[]>([]);
+  const [postOptions, setPostOptions] = useState<FieldOption[]>([]);
+  const [postTypeOptions, setPostTypeOptions] = useState<FieldOption[]>([]);
+  // 数据刷新计数：mutation 成功后 +1 触发 loader 重新拉取
+  const [reloadTick, setReloadTick] = useState(0);
   // 表头排序：三态 无 → 升 → 降 → 无（仅对普通文本/数字列生效，徽标/标签簇/任职数列除外）
   const [sortKey, setSortKey] = useState<string | null>(null);
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
@@ -487,6 +495,12 @@ export function AdminListPage({ def }: { def: AdminPageDef }) {
     `mis-${def.id}-table-widths`,
   );
 
+  const showToast = useCallback((msg: string) => {
+    setToast(msg);
+    window.setTimeout(() => setToast(''), 1800);
+  }, []);
+
+  // 真实数据加载：def.loader 提供时挂载/刷新即拉取；失败回退空数组 + toast（绝不落 sample）
   useEffect(() => {
     if (!def.loader) return;
     let alive = true;
@@ -496,14 +510,117 @@ export function AdminListPage({ def }: { def: AdminPageDef }) {
       .then((data) => {
         if (alive) setRows(data.map((r) => ({ ...r })));
       })
-      .catch(() => {})
+      .catch(() => {
+        if (alive) {
+          setRows([]);
+          showToast('数据加载失败，请稍后重试');
+        }
+      })
       .finally(() => {
         if (alive) setLoading(false);
       });
     return () => {
       alive = false;
     };
-  }, [def]);
+  }, [def, reloadTick, showToast]);
+
+  // 部门选项加载：员工/岗位页的部门下拉与「部门管理」同源；失败/为空回退空数组（显示「—」）
+  useEffect(() => {
+    if (!def.deptOptionsLoader) {
+      setDeptOptions([]);
+      return;
+    }
+    let alive = true;
+    def
+      .deptOptionsLoader()
+      .then((opts) => {
+        if (alive) setDeptOptions(opts);
+      })
+      .catch(() => {
+        if (alive) {
+          setDeptOptions([]);
+          showToast('部门选项加载失败');
+        }
+      });
+    return () => {
+      alive = false;
+    };
+  }, [def, showToast]);
+
+  // 岗位选项加载（真实 sys_post）；失败/为空回退空数组
+  useEffect(() => {
+    if (!def.postOptionsLoader) {
+      setPostOptions([]);
+      return;
+    }
+    let alive = true;
+    def
+      .postOptionsLoader()
+      .then((opts) => {
+        if (alive) setPostOptions(opts);
+      })
+      .catch(() => {
+        if (alive) {
+          setPostOptions([]);
+          showToast('岗位选项加载失败');
+        }
+      });
+    return () => {
+      alive = false;
+    };
+  }, [def, showToast]);
+
+  // 岗位类型选项加载（真实 sys_post_type）；失败/为空回退空数组
+  useEffect(() => {
+    if (!def.postTypeOptionsLoader) {
+      setPostTypeOptions([]);
+      return;
+    }
+    let alive = true;
+    def
+      .postTypeOptionsLoader()
+      .then((opts) => {
+        if (alive) setPostTypeOptions(opts);
+      })
+      .catch(() => {
+        if (alive) {
+          setPostTypeOptions([]);
+          showToast('岗位类型选项加载失败');
+        }
+      });
+    return () => {
+      alive = false;
+    };
+  }, [def, showToast]);
+
+  // optionsFrom 字段的选项由真实数据源注入（select → options；assignments → deptOptions/postOptions）
+  const effectiveFilters = useMemo<AdminField[]>(
+    () =>
+      (def.filters ?? []).map((f) => {
+        if (f.optionsFrom === 'dept') return { ...f, options: deptOptions };
+        if (f.optionsFrom === 'post') return { ...f, options: postOptions };
+        if (f.optionsFrom === 'post-type') return { ...f, options: postTypeOptions };
+        return f;
+      }),
+    [def.filters, deptOptions, postOptions, postTypeOptions],
+  );
+  const effectiveForm = useMemo<AdminField[]>(
+    () =>
+      def.form.map((f) => {
+        if (f.type === 'assignments') {
+          return {
+            ...f,
+            deptOptions: f.optionsFrom === 'dept' ? deptOptions : f.deptOptions,
+            postOptions: def.postOptionsLoader ? postOptions : f.postOptions,
+          };
+        }
+        if (f.optionsFrom === 'dept') return { ...f, options: deptOptions };
+        if (f.optionsFrom === 'post') return { ...f, options: postOptions };
+        if (f.optionsFrom === 'post-type') return { ...f, options: postTypeOptions };
+        return f;
+      }),
+    [def, deptOptions, postOptions, postTypeOptions],
+  );
 
   // AI：辅助录入嵌在表单 Sheet 右侧；问答仍用独立 Sheet
   const [aiAssistOpen, setAiAssistOpen] = useState(false);
@@ -514,7 +631,7 @@ export function AdminListPage({ def }: { def: AdminPageDef }) {
 
   const openCreate = useCallback((opts?: { withAssist?: boolean }) => {
     const seed: Record<string, unknown> = {};
-    for (const f of def.form) {
+    for (const f of effectiveForm) {
       if (f.type === 'switch') seed[f.key] = 1;
       else seed[f.key] = '';
     }
@@ -523,13 +640,13 @@ export function AdminListPage({ def }: { def: AdminPageDef }) {
     setFormValues(seed);
     setAiAssistOpen(!!opts?.withAssist);
     setSheetOpen(true);
-  }, [def.form]);
+  }, [effectiveForm]);
 
-  // 表单回填桥接：桥接 AI 组件与当前表单态（schema 真源 = def.form）
+  // 表单回填桥接：桥接 AI 组件与当前表单态（schema 真源 = effectiveForm，含真实部门选项）
   const bridge = useMemo<FormFillBridge>(
     () => ({
       def,
-      getSchema: () => toFormFieldSchema(def.form),
+      getSchema: () => toFormFieldSchema(effectiveForm),
       getValues: () => formValues,
       applyFields: (partial) => {
         setFormValues((prev) => {
@@ -540,7 +657,7 @@ export function AdminListPage({ def }: { def: AdminPageDef }) {
       },
       openCreate: () => openCreate(),
     }),
-    [def, formValues, openCreate],
+    [def, effectiveForm, formValues, openCreate],
   );
 
   // UC-3 智能录入：打开新增表单，并在右侧展开辅助录入
@@ -597,11 +714,6 @@ export function AdminListPage({ def }: { def: AdminPageDef }) {
   const start = (safePage - 1) * pageSize;
   const pageRows = filtered.slice(start, start + pageSize);
 
-  const showToast = (msg: string) => {
-    setToast(msg);
-    window.setTimeout(() => setToast(''), 1800);
-  };
-
   const openView = (row: Record<string, unknown>) => {
     setSheetMode('view');
     setEditing(row);
@@ -617,8 +729,8 @@ export function AdminListPage({ def }: { def: AdminPageDef }) {
     setSheetOpen(true);
   };
 
-  const saveForm = () => {
-    for (const f of def.form) {
+  const saveForm = async () => {
+    for (const f of effectiveForm) {
       if (!f.required) continue;
       const v = formValues[f.key];
       if (v === '' || v == null) {
@@ -626,27 +738,49 @@ export function AdminListPage({ def }: { def: AdminPageDef }) {
         return;
       }
     }
-    if (sheetMode === 'edit' && editing) {
-      setRows((prev) =>
-        prev.map((r) => (r.id === editing.id ? { ...r, ...formValues, id: editing.id } : r)),
-      );
-      showToast('已保存');
-    } else {
-      const nextId = Math.max(0, ...rows.map((r) => Number(r.id) || 0)) + 1;
-      setRows((prev) => [{ ...formValues, id: nextId }, ...prev]);
-      showToast('已创建');
+    try {
+      if (sheetMode === 'edit' && editing) {
+        if (def.updateApi) {
+          await def.updateApi(String(editing.id), formValues);
+        } else {
+          setRows((prev) =>
+            prev.map((r) => (r.id === editing.id ? { ...r, ...formValues, id: editing.id } : r)),
+          );
+        }
+        showToast('已保存');
+      } else if (def.createApi) {
+        await def.createApi(formValues);
+        showToast('已创建');
+      } else {
+        const nextId = Math.max(0, ...rows.map((r) => Number(r.id) || 0)) + 1;
+        setRows((prev) => [{ ...formValues, id: nextId }, ...prev]);
+        showToast('已创建');
+      }
+      setSheetOpen(false);
+      setReloadTick((t) => t + 1);
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : '保存失败');
     }
-    setSheetOpen(false);
   };
 
-  const removeRow = (row: Record<string, unknown>) => {
+  const removeRow = async (row: Record<string, unknown>) => {
     if (def.id === 'user' && row.is_tenant_admin === 1) {
       showToast('租户管理员不可删除');
       return;
     }
     if (!window.confirm(`确认删除「${String(row.name ?? row.username ?? row.code ?? row.id)}」？`)) return;
-    setRows((prev) => prev.filter((r) => r.id !== row.id));
-    showToast('已删除');
+    try {
+      if (def.deleteApi) {
+        await def.deleteApi(String(row.id));
+        showToast('已删除');
+        setReloadTick((t) => t + 1);
+      } else {
+        setRows((prev) => prev.filter((r) => r.id !== row.id));
+        showToast('已删除');
+      }
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : '删除失败');
+    }
   };
 
   const pagerNums = useMemo(() => {
@@ -698,6 +832,8 @@ export function AdminListPage({ def }: { def: AdminPageDef }) {
           </div>
         }
       />
+
+      {/* 全站已无「无 loader」页面：3 页真实化后警示条随之移除（S2） */}
 
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
         {(def.filters?.length ?? 0) > 0 ? (
@@ -754,7 +890,7 @@ export function AdminListPage({ def }: { def: AdminPageDef }) {
             </div>
             {filterOpen ? (
               <div className="grid grid-cols-1 gap-x-4 gap-y-3 p-3.5 md:grid-cols-12">
-                {def.filters!.map((f) => (
+                {effectiveFilters.map((f) => (
                   <div
                     key={f.key}
                     className={cn(
@@ -1136,7 +1272,7 @@ export function AdminListPage({ def }: { def: AdminPageDef }) {
             <div className="min-h-0 flex-1 overflow-y-auto px-5 py-2">
               <DetailDefList
                 items={[
-                  ...def.form
+                  ...effectiveForm
                     .filter((f) => f.type !== 'multiselect' && f.type !== 'assignments')
                     .map((f) => ({
                       label: f.label,
@@ -1157,7 +1293,7 @@ export function AdminListPage({ def }: { def: AdminPageDef }) {
             /* flex-1 只给滚动容器；grid 用 content-start，避免行被撑开留白 */
             <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
               <div className="grid grid-cols-2 content-start items-start gap-x-4 gap-y-3">
-                {def.form.map((f) => (
+                {effectiveForm.map((f) => (
                   <div
                     key={f.key}
                     className={cn(

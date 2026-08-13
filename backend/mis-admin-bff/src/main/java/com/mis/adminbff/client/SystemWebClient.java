@@ -1,6 +1,7 @@
 package com.mis.adminbff.client;
 
 import com.mis.adminbff.client.model.ApiPermissionRuleDTO;
+import com.mis.adminbff.client.model.ConfigVO;
 import com.mis.adminbff.client.model.MenuVO;
 import com.mis.adminbff.config.BffProperties;
 import com.mis.adminbff.dto.ApiVO;
@@ -49,6 +50,10 @@ public class SystemWebClient extends AbstractDownstreamClient {
     private static final ParameterizedTypeReference<Result<List<ModuleApiBindingVO>>> BINDING_LIST =
             new ParameterizedTypeReference<>() {};
     private static final ParameterizedTypeReference<Result<List<MenuApiBindingVO>>> MENU_API_BINDING_LIST =
+            new ParameterizedTypeReference<>() {};
+    private static final ParameterizedTypeReference<Result<List<ConfigVO>>> CONFIG_LIST =
+            new ParameterizedTypeReference<>() {};
+    private static final ParameterizedTypeReference<Result<ConfigVO>> CONFIG =
             new ParameterizedTypeReference<>() {};
 
     public SystemWebClient(
@@ -224,6 +229,29 @@ public class SystemWebClient extends AbstractDownstreamClient {
 
     public void deleteDictItem(Long id) {
         blockVoid(delete("/internal/v1/dicts/items/{id}", id));
+    }
+
+    // -----------------------------------------------------------------------
+    // 系统参数（mis-system /internal/v1/configs）
+    // -----------------------------------------------------------------------
+    public List<ConfigVO> listConfigs() {
+        return block(client().get().uri("/internal/v1/configs").retrieve().bodyToMono(CONFIG_LIST));
+    }
+
+    public ConfigVO getConfig(Long id) {
+        return block(client().get().uri("/internal/v1/configs/{id}", id).retrieve().bodyToMono(CONFIG));
+    }
+
+    public ConfigVO createConfig(Map<String, Object> body) {
+        return block(post(body, CONFIG, "/internal/v1/configs"));
+    }
+
+    public ConfigVO updateConfig(Long id, Map<String, Object> body) {
+        return block(put(body, CONFIG, "/internal/v1/configs/{id}", id));
+    }
+
+    public void deleteConfig(Long id) {
+        blockVoid(delete("/internal/v1/configs/{id}", id));
     }
 
     public static Map<String, Object> menuCreateBody(
