@@ -401,20 +401,27 @@ public class KbWebClient extends AbstractDownstreamClient {
     }
 
     /**
-     * 删除知识库（T04：透传 {@code mode}，返回回执）。
+     * 删除知识库（T04：透传 {@code mode} 与 {@code force}，返回回执）。
      *
      * <p>下游默认语义是<b>归档</b>而非物理删除，回执 {@code message} 已把这件事写清楚，
      * BFF 原样透传不做加工。
      *
-     * @param id   知识库 id
-     * @param mode {@code archive} / {@code physical}
+     * <p><b>Q1 两段式确认流：</b>{@code force=false}（默认）时若下游检测到引擎侧 dataset
+     * 已不存在，返回提示态回执（{@code engineMissing=true}，本地零变更），由前端警示并要求
+     * 确认后以 {@code force=true} 重调——{@code force} 只对 engineMissing 生效，
+     * 不豁免其它失败语义（mis-kb 侧严格限定）。
+     *
+     * @param id    知识库 id
+     * @param mode  {@code archive} / {@code physical}
+     * @param force 是否跳过引擎直接本地执行（仅对 engineMissing 生效，默认 false）
      * @return 删除回执
      */
-    public KbLibraryDeleteResultVO deleteLibrary(Long id, String mode) {
+    public KbLibraryDeleteResultVO deleteLibrary(Long id, String mode, boolean force) {
         return block(client().method(org.springframework.http.HttpMethod.DELETE)
                 .uri(uriBuilder -> uriBuilder
                         .path("/internal/v1/kb/libraries/{id}")
                         .queryParam("mode", mode)
+                        .queryParam("force", force)
                         .build(id))
                 .headers(loginContextHeaders())
                 .retrieve()

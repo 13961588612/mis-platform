@@ -190,21 +190,30 @@ export async function updateLibrary(id: number, body: UpdateLibraryPayload): Pro
 }
 
 /**
- * 删除知识库（T04：**默认归档，不是物理删除**）。
+ * 删除知识库（T04：**默认归档，不是物理删除**；Q1 两段式确认流加 force）。
  *
- * <p>返回回执而不是 void——`message` / `engineSynced` 必须让用户看见：
+ * <p>返回回执而不是 void——`message` / `engineSynced` / `engineMissing` 必须让用户看见：
  * 归档模式下引擎侧数据一条没删，只是改了名 + 本地停用。调用方**不许**
  * 用自己的「删除成功」文案覆盖 `message`。
  *
- * @param id   知识库 id
- * @param mode `archive`（默认）/ `physical`
+ * <p><b>Q1 `force` 语义（严格限定）：</b>
+ * - `force=false`（默认）：引擎侧 dataset 已不存在时返回**提示态**回执
+ *   （`engineMissing=true`，本地零变更），调用方须警示并要求确认后以 `force=true` 重调；
+ * - `force=true`：仅当 `engineMissing` 时跳过引擎直接本地执行（删除/归档）；
+ *   对其它失败（非 404 引擎错误 / deleteSupported=false）**不豁免**；
+ * - 本地已不存在 + `force=true` → 幂等回执不报错。
+ *
+ * @param id    知识库 id
+ * @param mode  `archive`（默认）/ `physical`
+ * @param force 是否跳过引擎直接本地执行（仅对 engineMissing 生效，默认 false）
  */
 export async function deleteLibrary(
   id: number,
   mode: KbLibraryDeleteMode = 'archive',
+  force = false,
 ): Promise<KbLibraryDeleteResult> {
   const res = await api.delete<ApiResult<KbLibraryDeleteResult>>(`/kb/libraries/${id}`, {
-    params: { mode },
+    params: { mode, force },
   });
   return unwrap(res, '删除知识库失败');
 }
@@ -212,8 +221,9 @@ export async function deleteLibrary(
 /**
  * 查看知识库的引擎引用（含 `dataset_id`）。
  *
- * <p>需 `kb:library:engine-ref:view`；后端每次调用都会记审计，
- * 因此**只在用户展开「删除指引单」时才请求**，不要随详情页预加载。
+ * <p>需 `kb:library:engine-ref:view`；后端每次调用都会记审计。
+ * 知识库详情页基本信息 Tab 预加载本接口展示 RAGFlow Dataset ID
+ * （无权限 403 / 异常时降级显示 `-`，不打断页面）；删除指引单同样复用本接口。
  */
 export async function getEngineRef(id: number): Promise<KbEngineRef> {
   const res = await api.get<ApiResult<KbEngineRef>>(`/kb/libraries/${id}/engine-ref`);

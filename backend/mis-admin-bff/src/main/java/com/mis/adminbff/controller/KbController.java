@@ -228,22 +228,29 @@ public class KbController {
     }
 
     /**
-     * 删除知识库（T04：默认<b>归档</b>，不是物理删除）。
+     * 删除知识库（T04：默认<b>归档</b>，不是物理删除；Q1 两段式确认流加 {@code force}）。
      *
      * <p>不带 {@code mode} 时下游执行「引擎侧 dataset 改名 + 本地 status=0」，
      * 引擎数据一条不删——回执 {@code message} 会把这件事写明，前端必须原样展示，
      * 不要在这层改写成「删除成功」，否则管理员会以为引擎侧空间已经释放。
      *
-     * @param id   知识库 id
-     * @param mode {@code archive}（默认）/ {@code physical}
-     * @return 删除回执（含引擎同步结果与实际清理范围）
+     * <p><b>Q1 {@code force}：</b>{@code force=false}（默认）时若引擎侧 dataset 已不存在，
+     * mis-kb 返回提示态回执（{@code engineMissing=true}，本地零变更），前端警示并要求确认
+     * 后以 {@code force=true} 重调。{@code @OperLog(recordParams=true)} 不变——
+     * {@code force} 作为 {@code @RequestParam} 自动进入审计 {@code request_params}。
+     *
+     * @param id    知识库 id
+     * @param mode  {@code archive}（默认）/ {@code physical}
+     * @param force 是否跳过引擎直接本地执行（仅对 engineMissing 生效，默认 false）
+     * @return 删除回执（含引擎同步结果、实际清理范围与 engineMissing）
      */
     @DeleteMapping("/libraries/{id}")
     @OperLog(module = "知识库", operation = "删除知识库", recordParams = true)
     public Result<KbLibraryDeleteResultVO> deleteLibrary(
             @PathVariable Long id,
-            @RequestParam(required = false, defaultValue = "archive") String mode) {
-        return Result.ok(kbFacadeService.deleteLibrary(id, mode));
+            @RequestParam(required = false, defaultValue = "archive") String mode,
+            @RequestParam(required = false, defaultValue = "false") boolean force) {
+        return Result.ok(kbFacadeService.deleteLibrary(id, mode, force));
     }
 
     /**

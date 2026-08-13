@@ -346,10 +346,17 @@ export interface KbLibrary {
 }
 
 /**
- * 知识库删除回执（T04）。
+ * 知识库删除回执（T04；Q1 两段式确认流扩展）。
  *
  * <p>⚠️ `message` **必须原样展示**：默认模式是「归档」，引擎数据一条没删，
  * 前端自行改写成「删除成功」会让管理员误判存储已释放。
+ *
+ * <p>⚠️ `engineMissing === true` 的语义分三种（Q1）：
+ * - `force=false`（默认）返回**提示态**：引擎侧数据集已不存在（可能已在 RAGFlow 控制台
+ *   手工删除），本地数据**未做任何变更**，需用户确认后以 `force=true` 重调；
+ * - `force=true` 返回**已执行**：跳过引擎直接删除/归档了本地数据；
+ * - 本地已不存在 + `force=true` 返回**幂等回执**：无需重复处理。
+ * 前端必须在 `engineSynced` 之前优先处理 `engineMissing` 警示态。
  */
 export interface KbLibraryDeleteResult {
   mode: string | null;
@@ -365,6 +372,13 @@ export interface KbLibraryDeleteResult {
   aclCleaned: number | null;
   /** 面向用户的结论文案，原样展示。 */
   message: string | null;
+  /**
+   * 引擎侧 dataset 已不存在（Q1，末位追加；包装类型可空，`null` 按未缺失处理）。
+   *
+   * <p>为 `true` 且 `docCleaned === 0 && aclCleaned === 0` 时表示提示态
+   * （本地零变更，需确认后 force 重调）；为 `true` 且已清理则表跳过引擎后已执行。
+   */
+  engineMissing: boolean | null;
 }
 
 /**
@@ -463,6 +477,8 @@ export interface KbAcl {
   action: string;
   createdAt: string | null;
   updatedAt: string | null;
+  /** 主体名称（BFF 回填；缺失/回填失败为 null，UI 降级展示 ID）。 */
+  subjectName: string | null;
 }
 
 /** ACL 摘要（库详情 / 问答详情的可见范围展示；`subjectName` 由 BFF 回填）。 */

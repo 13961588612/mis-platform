@@ -244,6 +244,19 @@ public class RagflowAdapter implements KnowledgeEnginePort {
         return GraphBuildSnapshot.Status.BUILDING;
     }
 
+    /**
+     * 删除引擎侧 dataset（Q1 两段式确认流的引擎侧动作）。
+     *
+     * <p>透传 {@link RagflowClient#deleteDataset}。当引擎侧 dataset 已不存在（HTTP 404，
+     * 运维可能在 RAGFlow 控制台手工删除）时，客户端抛
+     * {@link EngineDatasetMissingException}，本方法<b>原样上抛不拦截</b>——
+     * 由 {@code KbLibraryService} 捕获后进入两段式确认流（force=false 提示态 /
+     * force=true 跳过引擎直接本地执行）。
+     *
+     * @param ref 知识库引擎引用（nativeId = dataset id）
+     * @throws EngineDatasetMissingException 引擎侧 dataset 已不存在（missing 信号，透传）
+     * @throws BusinessException             引擎删除非 404 失败（透传，调用方回滚本地事务）
+     */
     @Override
     public void deleteLibrary(EngineLibraryRef ref) {
         client.deleteDataset(ref.nativeId());
@@ -252,8 +265,14 @@ public class RagflowAdapter implements KnowledgeEnginePort {
     /**
      * 重命名引擎侧 dataset（T02：归档流程调用）。
      *
+     * <p>透传 {@link RagflowClient#renameDataset}。当引擎侧 dataset 已不存在（HTTP 404 或
+     * 业务响应命中缺失文案）时，客户端抛 {@link EngineDatasetMissingException}，
+     * 本方法<b>原样上抛不拦截</b>——由 {@code KbLibraryService} 捕获后进入归档两段式确认流。
+     *
      * @param ref     知识库引擎引用
      * @param newName 新名字（调用方已按 {@link RagflowDatasetNaming#forArchive} 加工）
+     * @throws EngineDatasetMissingException 引擎侧 dataset 已不存在（missing 信号，透传）
+     * @throws BusinessException             引擎改名非 missing 失败（透传，调用方记待对账）
      */
     @Override
     public void renameLibrary(EngineLibraryRef ref, String newName) {

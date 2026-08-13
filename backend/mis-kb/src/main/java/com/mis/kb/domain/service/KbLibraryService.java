@@ -21,6 +21,7 @@ import com.mis.kb.domain.repository.KbAclRepository;
 import com.mis.kb.domain.repository.KbCategoryRepository;
 import com.mis.kb.domain.repository.KbDocumentRepository;
 import com.mis.kb.domain.repository.KbLibraryRepository;
+import com.mis.kb.engine.EngineDatasetMissingException;
 import com.mis.kb.engine.KnowledgeEnginePort;
 import com.mis.kb.engine.RagflowDatasetNaming;
 import com.mis.kb.engine.RagflowProperties;
@@ -290,13 +291,7 @@ public class KbLibraryService {
     }
 
     /**
-     * 删除知识库（T03，三分支中的两支走这里）。
-     *
-     * <p><b>破坏性语义变更：</b>不带 {@code mode} 时默认走 {@link LibraryDeleteMode#ARCHIVE 归档}，
-     * 而不是旧版的「物理删（且吞异常假成功）」。旧行为的危害见
-     * {@link com.mis.kb.api.dto.KbLibraryDeleteResultVO} 类级说明。
-     *
-     * <p>「停用」不在这里——沿用既有 {@code PUT /libraries/{id}} + {@code status=0}。
+     * 删除知识库（3 参重载，兼容既有调用方；等价于 {@code delete(userId, id, mode, false)}）。
      *
      * @param userId 当前用户 id
      * @param id     知识库 id
@@ -305,16 +300,54 @@ public class KbLibraryService {
      */
     @Transactional
     public KbLibraryDeleteResultVO delete(Long userId, Long id, LibraryDeleteMode mode) {
+        return delete(userId, id, mode, false);
+    }
+
+    /**
+     * 删除知识库（4 参，Q1 两段式确认流入口）。
+     *
+     * <p><b>force 语义（严格限定）：</b>
+     * <ul>
+     *   <li>{@code force=false}（默认）+ 引擎侧 missing → 返回<b>提示态</b> VO（HTTP 200），
+     *       <b>不执行任何本地变更</b>（零变更由「不写」保证，提示态分支无 repository 写操作）；</li>
+     *   <li>{@code force=true} + 引擎侧 missing → 跳过引擎直接本地执行：
+     *       物理删三表；归档本地停用 + 归档标记且 {@code engine_sync_status} 置
+     *       {@link EngineSyncStatus#MISSING_IN_ENGINE 2}（<b>不置 3</b>）+ {@code engineCheckedAt=now}；</li>
+     *   <li>{@code force=true} <b>只对 engineMissing 生效</b>：物理删除非 404 失败仍抛
+     *       {@code KB_ENGINE_DELETE_FAILED} 回滚；归档非 missing 改名失败仍 catch 待对账（R6 严格不变）；</li>
+     *   <li>{@code force=true} <b>不豁免</b> {@code deleteSupported=false} 门控（仍抛 40934）；</li>
+     *   <li>force 幂等：本地已不存在（原 {@code require} 抛 {@code KB_LIBRARY_NOT_FOUND}）+
+     *       {@code force=true} → 返回幂等回执（engineMissing=true, docCleaned=0, aclCleaned=0）
+     *       不报错；{@code force=false} 保持抛 not found；</li>
+     *   <li>无 {@code engineLibraryRef} 不触发引擎检测（直接本地执行，不产生 engineMissing）。</li>
+     * </ul>
+     *
+     * @param userId 当前用户 id
+     * @param id     知识库 id
+     * @param mode   删除模式；{@code null} 视为归档
+     * @param force  是否跳过引擎直接本地执行（仅对 engineMissing 生效，见上）
+     * @return 回执，如实描述引擎侧与本地各做了什么
+     */
+    @Transactional
+    public KbLibraryDeleteResultVO delete(Long userId, Long id, LibraryDeleteMode mode, boolean force) {
         LibraryDeleteMode effective = mode == null ? LibraryDeleteMode.ARCHIVE : mode;
-        KbLibrary entity = require(id);
+        // force 幂等：本地已不存在 + force=true → 幂等回执；force=false 保持抛 not found
+        KbLibrary entity = libraryRepository.findById(id).orElse(null);
+        if (entity == null) {
+            if (force) {
+                log.info("删除知识库幂等回执：本地已不存在 id={} mode={} force=true", id, effective);
+                return idempotentMissingResult(effective);
+            }
+            throw new KbBusinessException(KbResultCode.KB_LIBRARY_NOT_FOUND);
+        }
         // KBP-06：库级管理双闸门（节点管辖 ∨ kb_acl.manage）——归档 / 物理删共用一道闸
         if (!nodeAdminResolver.hasLibraryManage(userId, id)) {
             throw new KbBusinessException(KbResultCode.KB_CATEGORY_NOT_MANAGEABLE,
                     "该知识库不在您的管理范围内");
         }
         return switch (effective) {
-            case ARCHIVE -> archive(entity);
-            case PHYSICAL -> physicalDelete(entity);
+            case ARCHIVE -> archive(entity, force);
+            case PHYSICAL -> physicalDelete(entity, force);
         };
     }
 
@@ -325,12 +358,19 @@ public class KbLibraryService {
      * 就让管理员归不了档并不划算。失败时把 {@code engine_sync_status=3} 落库，
      * 由对账服务后续兜底，并在回执里如实说明。
      *
+     * <p><b>Q1 两段式：</b>引擎改名遇 {@link EngineDatasetMissingException}（引擎侧 dataset
+     * 已不存在）时——{@code force=false} 返回提示态（本地零变更）；{@code force=true}
+     * 跳过引擎直接本地归档，且 {@code engine_sync_status} 置
+     * {@link EngineSyncStatus#MISSING_IN_ENGINE 2}（<b>不置 3</b>）+ {@code engineCheckedAt=now}，
+     * 回执 {@code engineMissing=true}。
+     *
      * <p><b>MIS 侧 {@code name} 绝不改</b>：改了会撞 {@code (name, category_id)} 唯一键，
      * 也会让用户在列表里找不到自己刚归档的库。
      */
-    private KbLibraryDeleteResultVO archive(KbLibrary entity) {
+    private KbLibraryDeleteResultVO archive(KbLibrary entity, boolean force) {
         Instant now = Instant.now();
         boolean engineSynced = true;
+        boolean engineMissing = false;
         String engineError = null;
         String archivedName = null;
 
@@ -344,7 +384,21 @@ public class KbLibraryService {
                 entity.setEngineSyncStatus(EngineSyncStatus.CONSISTENT);
                 log.info("知识库归档：引擎侧已改名 id={} engineRef={} newName={}",
                         entity.getId(), entity.getEngineLibraryRef(), targetName);
+            } catch (EngineDatasetMissingException e) {
+                if (!force) {
+                    // 两段式第一段：提示态，本地零变更（不写任何 repository）
+                    log.info("知识库归档：引擎侧数据集已不存在（提示态，本地零变更）id={} engineRef={}",
+                            entity.getId(), entity.getEngineLibraryRef());
+                    return missingPromptResult(LibraryDeleteMode.ARCHIVE);
+                }
+                // force=true：跳过引擎直接本地归档，置 MISSING_IN_ENGINE(2)（不置 3）
+                engineSynced = false;
+                engineMissing = true;
+                entity.setEngineSyncStatus(EngineSyncStatus.MISSING_IN_ENGINE);
+                log.info("知识库归档：引擎侧数据集已不存在，跳过引擎改名直接本地归档 id={} engineRef={}",
+                        entity.getId(), entity.getEngineLibraryRef());
             } catch (Exception e) {
+                // 非 missing 改名失败仍 catch 待对账（R6 严格不变：force 不豁免）
                 engineSynced = false;
                 engineError = describeError(e);
                 entity.setEngineSyncStatus(EngineSyncStatus.DRIFT_OR_FAILED);
@@ -361,9 +415,12 @@ public class KbLibraryService {
         entity.setUpdatedAt(now);
         libraryRepository.save(entity);
 
+        String message = engineMissing
+                ? "已归档（引擎侧数据集已不存在，跳过引擎改名）：本地已停用并标记归档，文档与授权全部保留。"
+                : archiveMessage(engineSynced, engineError, archivedName);
         return new KbLibraryDeleteResultVO(
                 LibraryDeleteMode.ARCHIVE.wire(), engineSynced, engineError, archivedName, 0L, 0L,
-                archiveMessage(engineSynced, engineError, archivedName));
+                message, engineMissing);
     }
 
     /**
@@ -373,25 +430,43 @@ public class KbLibraryService {
      * <ol>
      *   <li>{@code delete-supported=false}（某环境部署的 RAGFLOW 版本删除接口仍不可用、
      *       由 Nacos 关掉）直接拒，<b>本地零变更</b>；默认 {@code true}（增量 P0-T01 已放开
-     *       官方批量删除接口），业务侧正常走物理删除；</li>
+     *       官方批量删除接口），业务侧正常走物理删除；<b>force 不豁免本门控</b>（仍抛 40934）；</li>
      *   <li>引擎删除抛异常 → 抛 {@code KB_ENGINE_DELETE_FAILED} 让事务回滚。
      *       <b>绝不 catch 后继续</b>——那正是旧版「本地删干净、引擎侧留一堆孤儿 dataset」的成因。</li>
      * </ol>
      *
+     * <p><b>Q1 两段式：</b>引擎删除遇 {@link EngineDatasetMissingException}（引擎侧 dataset
+     * 已不存在）时——{@code force=false} 返回提示态（本地零变更）；{@code force=true}
+     * 跳过引擎直接本地删三表，回执 {@code engineMissing=true}。非 missing 删除失败
+     * <b>不因 force 而豁免</b>，仍抛 {@code KB_ENGINE_DELETE_FAILED} 回滚（R6 严格不变）。
+     *
      * <p>清 {@code kb_document} 是 Q6 补的：旧版只清了 {@code kb_acl}，库删掉后
      * {@code kb_document} 里一堆 {@code library_id} 指向不存在的库。
      */
-    private KbLibraryDeleteResultVO physicalDelete(KbLibrary entity) {
+    private KbLibraryDeleteResultVO physicalDelete(KbLibrary entity, boolean force) {
         if (!engineProperties.isDeleteSupported()) {
             log.warn("拒绝物理删除：当前引擎不支持在线删除 id={} engineType={}",
                     entity.getId(), entity.getEngineType());
             throw new KbBusinessException(KbResultCode.KB_ENGINE_DELETE_UNSUPPORTED);
         }
+        boolean engineMissing = false;
         if (entity.getEngineLibraryRef() != null) {
             try {
                 enginePort.deleteLibrary(
                         new EngineLibraryRef(entity.getEngineType(), entity.getEngineLibraryRef()));
+            } catch (EngineDatasetMissingException e) {
+                if (!force) {
+                    // 两段式第一段：提示态，本地零变更（不写任何 repository）
+                    log.info("物理删除：引擎侧数据集已不存在（提示态，本地零变更）id={} engineRef={}",
+                            entity.getId(), entity.getEngineLibraryRef());
+                    return missingPromptResult(LibraryDeleteMode.PHYSICAL);
+                }
+                // force=true：跳过引擎直接本地删除
+                engineMissing = true;
+                log.info("物理删除：引擎侧数据集已不存在，跳过引擎删除直接本地删 id={} engineRef={}",
+                        entity.getId(), entity.getEngineLibraryRef());
             } catch (Exception e) {
+                // 非 missing 删除失败仍抛 KB_ENGINE_DELETE_FAILED 回滚（force 不豁免）
                 String reason = describeError(e);
                 log.error("引擎侧删除失败，本地不做任何变更 id={} engineRef={}: {}",
                         entity.getId(), entity.getEngineLibraryRef(), reason, e);
@@ -407,10 +482,14 @@ public class KbLibraryService {
         aclRepository.deleteByLibraryId(id);
         libraryRepository.delete(entity);
         log.info("知识库已物理删除 id={} 清理文档={} 清理授权={}", id, docCleaned, aclCleaned);
+        String message = engineMissing
+                ? String.format("已彻底删除：引擎侧数据集已不存在（跳过引擎删除），本地清理文档 %d 条、授权 %d 条。",
+                        docCleaned, aclCleaned)
+                : String.format("已彻底删除：引擎侧 dataset 已删除，本地清理文档 %d 条、授权 %d 条。",
+                        docCleaned, aclCleaned);
         return new KbLibraryDeleteResultVO(
                 LibraryDeleteMode.PHYSICAL.wire(), true, null, null, docCleaned, aclCleaned,
-                String.format("已彻底删除：引擎侧 dataset 已删除，本地清理文档 %d 条、授权 %d 条。",
-                        docCleaned, aclCleaned));
+                message, engineMissing);
     }
 
     /**
@@ -469,6 +548,39 @@ public class KbLibraryService {
                 e.getCreatedAt(), e.getUpdatedAt(),
                 e.getEngineSyncStatus(), e.getEngineCheckedAt(), e.getArchivedAt(),
                 null, null);
+    }
+
+    /**
+     * Q1 提示态回执：引擎侧 dataset 已不存在 + {@code force=false}。
+     *
+     * <p><b>本地零变更</b>由「提示态分支不写任何 repository」保证——本方法只构造回执，
+     * 调用方在命中 missing 时立即 return，不触碰 {@code entity} 的任意字段。
+     *
+     * @param mode 删除模式（决定回执 {@code mode} 字段）
+     * @return 提示态回执（engineMissing=true, docCleaned=0, aclCleaned=0）
+     */
+    private static KbLibraryDeleteResultVO missingPromptResult(LibraryDeleteMode mode) {
+        return new KbLibraryDeleteResultVO(
+                mode.wire(), false, null, null, 0L, 0L,
+                "引擎侧数据集已不存在（可能已在 RAGFlow 控制台手工删除）。本地数据未做任何变更，"
+                        + "如需本地删除/归档请确认后重试。",
+                true);
+    }
+
+    /**
+     * Q1 force 幂等回执：本地库已不存在 + {@code force=true}。
+     *
+     * <p>本地已无行可删，引擎侧 missing 与否已无意义——直接返回幂等回执不报错，
+     * 避免两段式确认流中「提示态 → force=true 重调」因并发删除而炸 not found。
+     *
+     * @param mode 删除模式（决定回执 {@code mode} 字段）
+     * @return 幂等回执（engineMissing=true, docCleaned=0, aclCleaned=0）
+     */
+    private static KbLibraryDeleteResultVO idempotentMissingResult(LibraryDeleteMode mode) {
+        return new KbLibraryDeleteResultVO(
+                mode.wire(), false, null, null, 0L, 0L,
+                "引擎侧数据集已不存在（可能已在 RAGFlow 控制台手工删除）。本地数据已不存在，无需重复处理。",
+                true);
     }
 
     /** 归档回执文案：无论成败都必须明说「未删除引擎数据」（§1.10-2）。 */

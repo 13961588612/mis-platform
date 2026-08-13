@@ -241,18 +241,35 @@ public class KbFacadeService {
     }
 
     /**
-     * 删除知识库（T04：{@code mode} 透传 + 回执透传）。
-     *
-     * <p><b>默认走归档</b>：不带 {@code mode} 时下游执行「引擎侧改名 + 本地停用」，
-     * 不删任何数据。回执里的 {@code message} 原样透传给前端展示，不要在这层改写。
+     * 删除知识库（2 参重载，兼容既有调用方；等价于 {@code deleteLibrary(id, mode, false)}）。
      *
      * @param id   知识库 id
      * @param mode {@code archive}（默认）/ {@code physical}
      * @return 删除回执
      */
     public KbLibraryDeleteResultVO deleteLibrary(Long id, String mode) {
+        return deleteLibrary(id, mode, false);
+    }
+
+    /**
+     * 删除知识库（T04：{@code mode} 透传 + 回执透传；Q1 两段式确认流加 {@code force}）。
+     *
+     * <p><b>默认走归档</b>：不带 {@code mode} 时下游执行「引擎侧改名 + 本地停用」，
+     * 不删任何数据。回执里的 {@code message} 原样透传给前端展示，不要在这层改写。
+     *
+     * <p><b>Q1 {@code force}：</b>第一段（force=false）若下游返回 {@code engineMissing=true}
+     * 提示态，本层原样透传，由前端警示并要求确认后以 {@code force=true} 重调。
+     * {@code force} 语义（只对 engineMissing 生效、不豁免其它失败）由 mis-kb 裁定，
+     * 本层只做参数装配与透传。
+     *
+     * @param id    知识库 id
+     * @param mode  {@code archive}（默认）/ {@code physical}
+     * @param force 是否跳过引擎直接本地执行（仅对 engineMissing 生效，默认 false）
+     * @return 删除回执
+     */
+    public KbLibraryDeleteResultVO deleteLibrary(Long id, String mode, boolean force) {
         String effective = (mode == null || mode.isBlank()) ? "archive" : mode.trim();
-        return kbWebClient.deleteLibrary(id, effective);
+        return kbWebClient.deleteLibrary(id, effective, force);
     }
 
     /**
@@ -435,8 +452,23 @@ public class KbFacadeService {
 
     // ------------------------------------------------------------------ ACL
 
+    /**
+     * 列出库授权并批量回填主体名称（搜索权限页主体表用）。
+     *
+     * <p>名称解析失败<b>不阻断</b>整个接口：回填异常一律吞掉并降级返回原始列表，
+     * 条目名称保持 {@code null}，前端降级展示 {@code subjectType + subjectId}。
+     *
+     * @param libraryId 知识库 id
+     * @return ACL 列表（subjectName 已尽力回填；缺失保持 null）
+     */
     public List<KbAclVO> listAcls(Long libraryId) {
-        return kbWebClient.listAcls(libraryId);
+        List<KbAclVO> acls = kbWebClient.listAcls(libraryId);
+        try {
+            return fillAclSubjectNames(acls);
+        } catch (Exception e) {
+            log.warn("回填 ACL 主体名称失败，降级返回原始列表: {}", e.getMessage());
+            return acls != null ? acls : List.of();
+        }
     }
 
     /**
@@ -971,6 +1003,39 @@ public class KbFacadeService {
                     ? null
                     : names.get(acl.subjectType().toLowerCase() + ":" + acl.subjectId());
             result.add(new KbAclSummaryVO(acl.subjectType(), acl.subjectId(), name, acl.action()));
+        }
+        return result;
+    }
+
+    /**
+     * 批量回填 ACL 视图中的主体名称（搜索权限页主体表用）。
+     *
+     * <p>与 {@link #fillSubjectNames(List)} 同构，仅目标类型不同（{@code KbAclVO} 是 8 参
+     * 全量视图，{@code KbAclSummaryVO} 是 4 参摘要，二者不能合并成一个泛型擦除同名方法）。
+     * 名称解析不到/入参缺失时保持 {@code null}，由调用方 {@link #listAcls} 兜底异常降级。
+     *
+     * @param acls 原始 ACL 视图
+     * @return 已回填名称的视图；解析失败的条目保持 {@code null} 名称
+     */
+    private List<KbAclVO> fillAclSubjectNames(List<KbAclVO> acls) {
+        if (acls == null || acls.isEmpty()) {
+            return acls != null ? acls : List.of();
+        }
+        Set<KbSubjectProxyService.SubjectKey> keys = new HashSet<>();
+        for (KbAclVO acl : acls) {
+            if (acl.subjectType() != null && acl.subjectId() != null) {
+                keys.add(new KbSubjectProxyService.SubjectKey(acl.subjectType(), acl.subjectId()));
+            }
+        }
+        Map<String, String> names = subjectProxyService.resolveNames(keys);
+        List<KbAclVO> result = new ArrayList<>(acls.size());
+        for (KbAclVO acl : acls) {
+            String name = acl.subjectType() == null || acl.subjectId() == null
+                    ? null
+                    : names.get(acl.subjectType().toLowerCase() + ":" + acl.subjectId());
+            result.add(new KbAclVO(
+                    acl.id(), acl.libraryId(), acl.subjectType(), acl.subjectId(),
+                    acl.action(), acl.createdAt(), acl.updatedAt(), name));
         }
         return result;
     }

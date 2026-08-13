@@ -29,6 +29,7 @@ import org.springframework.web.client.RestClientResponseException;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 
 /**
@@ -254,15 +255,18 @@ public class RagflowClient {
      * <b>405 MethodNotAllowed</b>——这正是知识库物理删除长期失效的根因（单 id 路径不被支持）。
      * 现改用官方批量接口，路径不带 {@code /{id}}，datasetId 放进 body 的 {@code ids} 数组。
      *
-     * <p><b>幂等重试：</b>若 dataset 已不存在（HTTP 404 / 已被并发删除），视作成功——
-     * 物理删除是「尽力删引擎侧资源」，资源已不在不等于失败，避免重试时把 404 当成硬错误卡死。
+     * <p><b>Q1 missing 判定（2026-08-xx）：</b>原「404 静默幂等」改为「404 →
+     * 抛 {@link EngineDatasetMissingException}」——运维可能已在 RAGFlow 控制台手工删除
+     * 该 dataset，MIS 侧删除/归档时必须识别并提示，而不是把 404 当成「已删成功」静默吞掉。
+     * 调用方（{@code KbLibraryService}）捕获后进入两段式确认流。
      *
      * <p><b>显式失败：</b>非 2xx 且非 404（含 405）一律抛 {@link BusinessException}，
      * 由调用方感知并回滚本地事务（保留历史「静默假成功」的修复）。不做「PUT enabled=0
      * 停用」冒充删除——停用语义已被 {@link #updateDocumentEnabled} 占用（B1），且停用 ≠ 删除。
      *
      * @param datasetId 原生 dataset id
-     * @throws BusinessException RAGFlow 返回非 2xx 且非 404 时抛出
+     * @throws EngineDatasetMissingException 引擎侧 dataset 已不存在（HTTP 404）
+     * @throws BusinessException             RAGFlow 返回非 2xx 且非 404 时抛出
      */
     public void deleteDataset(String datasetId) {
         if (datasetId == null || datasetId.isBlank()) {
@@ -270,7 +274,7 @@ public class RagflowClient {
         }
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("ids", List.of(datasetId));
-        deleteWithJsonBody("/api/v1/datasets", body, "RAGFlow 删除知识库失败", 404);
+        deleteWithJsonBodyDetectMissing("/api/v1/datasets", body, "RAGFlow 删除知识库失败", 404);
     }
 
     /**
@@ -284,9 +288,16 @@ public class RagflowClient {
      * （见 {@link #deleteDataset}），删不掉。改名是这个版本里唯一能在引擎控制台上
      * 一眼看出「这个库已经在 MIS 侧下线了」的手段，数据本身完整保留、可恢复。
      *
+     * <p><b>Q1 missing 判定（2026-08-xx）：</b>引擎侧 dataset 已被手工删除时，改名会得到
+     * HTTP 404 或 {@code code != 0} + 缺失文案（{@code not found / not exist / 不存在 / missing}）。
+     * 这两种形态都抛 {@link EngineDatasetMissingException}，供归档两段式确认流识别——
+     * 否则归档会因「改名失败」误落 {@code engine_sync_status=3} 等待对账，而正确语义是
+     * 「引擎侧已不存在」。
+     *
      * @param datasetId 原生 dataset id
      * @param name      新名字（已由 {@link RagflowDatasetNaming} 清洗并截断）
-     * @throws BusinessException 参数非法或 RAGFlow 返回非 0 code
+     * @throws EngineDatasetMissingException 引擎侧 dataset 已不存在（HTTP 404 / 缺失文案）
+     * @throws BusinessException             参数非法或 RAGFlow 返回非 0 code（非 missing）
      */
     public void renameDataset(String datasetId, String name) {
         if (datasetId == null || datasetId.isBlank()) {
@@ -297,9 +308,30 @@ public class RagflowClient {
         }
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("name", name);
-        RfResponse<RfDataset> resp = putFor("/api/v1/datasets/" + datasetId, body,
-                new ParameterizedTypeReference<>() {});
+        RfResponse<RfDataset> resp;
+        try {
+            resp = putFor("/api/v1/datasets/" + datasetId, body,
+                    new ParameterizedTypeReference<>() {});
+        } catch (RestClientResponseException ex) {
+            int status = ex.getStatusCode().value();
+            if (status == 404) {
+                // 引擎侧 dataset 已不存在（可能在 RAGFlow 控制台被手工删除）→ missing 信号
+                log.info("RAGFlow 重命名遇 HTTP 404（引擎侧数据集已不存在）datasetId={} newName={}",
+                        datasetId, name);
+                throw new EngineDatasetMissingException(
+                        "RAGFlow 重命名知识库失败: HTTP 404 引擎侧数据集不存在");
+            }
+            throw new BusinessException(50000,
+                    "RAGFlow 重命名知识库失败: HTTP " + status + " " + ex.getMessage());
+        }
         if (resp == null || !resp.ok()) {
+            if (resp != null && isDatasetMissingMessage(resp.message())) {
+                // 业务 code != 0 且 message 命中缺失关键字 → missing 信号
+                log.info("RAGFlow 重命名返回缺失文案（引擎侧数据集已不存在）datasetId={} newName={} msg={}",
+                        datasetId, name, resp.message());
+                throw new EngineDatasetMissingException(
+                        "RAGFlow 重命名知识库失败: " + resp.message());
+            }
             throw new BusinessException(50000,
                     "RAGFlow 重命名知识库失败: " + (resp == null ? "无响应" : resp.message()));
         }
@@ -653,6 +685,74 @@ public class RagflowClient {
             }
             throw new BusinessException(50000, failurePrefix + ": HTTP " + status + " " + ex.getMessage());
         }
+    }
+
+    /**
+     * DELETE + JSON body 的「missing 检测」变体（Q1，仅供 {@link #deleteDataset} 使用）。
+     *
+     * <p>与 {@link #deleteWithJsonBody} 的唯一区别：{@code missingStatuses} 中的 HTTP 状态码
+     * （如 404）<b>不再视作「幂等成功」</b>，而是抛 {@link EngineDatasetMissingException}——
+     * 由调用方据此识别「引擎侧 dataset 已不存在」（运维可能已在 RAGFlow 控制台手工删除）。
+     * 业务响应 {@code code != 0} 且 message 命中缺失关键字时同样抛 missing。
+     *
+     * <p><b>deleteDocument 的 404 语义不受影响：</b>文档删除仍走原
+     * {@link #deleteWithJsonBody}（404 = 幂等成功），只有 dataset 删除需要 missing 信号。
+     *
+     * @param uri             相对 baseUrl 的删除路径
+     * @param body            请求体（JSON）
+     * @param failurePrefix   失败消息前缀（区分知识库/文档）
+     * @param missingStatuses 视为「引擎侧缺失」的 HTTP 状态码（如 404）
+     */
+    private void deleteWithJsonBodyDetectMissing(
+            String uri, Object body, String failurePrefix, int... missingStatuses) {
+        java.util.Set<Integer> missing = missingStatuses.length == 0
+                ? java.util.Set.of() : new java.util.HashSet<>();
+        for (int s : missingStatuses) {
+            missing.add(s);
+        }
+        try {
+            RfResponse<Object> resp = client.method(HttpMethod.DELETE)
+                    .uri(uri)
+                    .header("Authorization", bearer())
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .body(body)
+                    .retrieve()
+                    .body(new ParameterizedTypeReference<>() {});
+            if (resp == null || !resp.ok()) {
+                if (resp != null && isDatasetMissingMessage(resp.message())) {
+                    log.info("RAGFlow 删除返回缺失文案（引擎侧数据集已不存在）: {} body={} msg={}",
+                            uri, body, resp.message());
+                    throw new EngineDatasetMissingException(failurePrefix + ": " + resp.message());
+                }
+                throw new BusinessException(50000,
+                        failurePrefix + ": " + (resp == null ? "无响应" : resp.message()));
+            }
+        } catch (RestClientResponseException ex) {
+            int status = ex.getStatusCode().value();
+            if (missing.contains(status)) {
+                log.info("RAGFlow 删除遇 HTTP {}（引擎侧数据集已不存在）: {} body={}", status, uri, body);
+                throw new EngineDatasetMissingException(
+                        failurePrefix + ": HTTP " + status + " 引擎侧数据集不存在");
+            }
+            throw new BusinessException(50000, failurePrefix + ": HTTP " + status + " " + ex.getMessage());
+        }
+    }
+
+    /**
+     * 业务响应 message 是否命中「引擎侧缺失」关键字（Q1 判定口径，不区分大小写）。
+     *
+     * @param message 引擎返回的 message，允许 {@code null}
+     * @return {@code true} 表示命中 {@code not found / not exist / 不存在 / missing}
+     */
+    private static boolean isDatasetMissingMessage(String message) {
+        if (message == null) {
+            return false;
+        }
+        String lower = message.toLowerCase(Locale.ROOT);
+        return lower.contains("not found")
+                || lower.contains("not exist")
+                || lower.contains("不存在")
+                || lower.contains("missing");
     }
 
     /**

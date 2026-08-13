@@ -18,6 +18,7 @@ import { EnabledBadge, SecrecyBadge } from '../components/kb-badges';
 import { KbWeightSlider } from '../components/kb-weight-slider';
 import {
   getLibraryDetail,
+  getEngineRef,
   updateRagSettings,
   buildGraph,
   graphBuildStatus,
@@ -28,6 +29,7 @@ import { KbDocumentTable } from '../document/kb-document-table';
 import { useKbStore } from '../stores/use-kb-store';
 import type {
   KbAclSummary,
+  KbEngineRef,
   KbGraphStatus,
   KbLibraryDetail,
   KbRagSettings,
@@ -35,8 +37,10 @@ import type {
 } from '../types';
 import {
   KB_EMPTY_RESULT_STRATEGY_OPTIONS,
+  KB_ENGINE_SYNC_STATUS_META,
   KB_RETRIEVAL_METHOD_OPTIONS,
   aclActionLabel,
+  engineSyncStatusLabel,
   formatTime,
   parsePathId,
   subjectTypeLabel,
@@ -252,6 +256,12 @@ export function KbLibraryDetailPage() {
   const [graphStatus, setGraphStatus] = useState<KbGraphStatus | null>(null);
   /** 图谱构建按钮 in-flight（防止连点重复触发；后端另有 building 状态机拒绝）。 */
   const [graphTriggering, setGraphTriggering] = useState(false);
+  /**
+   * 引擎引用（Q4 有限暴露 dataset id）。独立于 detail 拉取：`engine-ref` 需额外权限
+   * （`kb:library:engine-ref:view`）+ 每次读审计，无权限 403 / 后端异常时 catch 保持 null，
+   * 基本信息 Tab 降级展示 `-`，不允许未捕获异常打断详情页。
+   */
+  const [engineRef, setEngineRef] = useState<KbEngineRef | null>(null);
 
   /* 授权范围表：列宽 + 排序（当前库 ACL 一次性加载） */
   const DETAIL_ACL_COLS = useMemo<ResizableColumn[]>(
@@ -342,9 +352,16 @@ export function KbLibraryDetailPage() {
 
   const load = useCallback(async (id: number) => {
     setLoading(true);
+    setEngineRef(null);
     try {
-      const d = await getLibraryDetail(id);
+      // 详情与引擎引用（dataset id）并行拉取；engine-ref 无权限 403 / 异常时
+      // 单请求降级为 null，不能因引用查询失败打断整个详情页
+      const [d, ref] = await Promise.all([
+        getLibraryDetail(id),
+        getEngineRef(id).catch(() => null),
+      ]);
       setDetail(d);
+      setEngineRef(ref);
       const next = toForm(d.ragSettings);
       setForm(next);
       setBaseline(next);
@@ -643,6 +660,31 @@ export function KbLibraryDetailPage() {
               <MetaRow
                 label="建库引擎"
                 value={<Badge variant="outline">{meta.engineType ?? '未知'}</Badge>}
+              />
+              <MetaRow
+                label="RAGFlow Dataset ID"
+                value={
+                  <span className="flex min-w-0 items-center gap-2">
+                    <span
+                      className="min-w-0 flex-1 truncate font-mono"
+                      title="引擎侧原生 dataset id，运维据此在引擎控制台定位"
+                    >
+                      {engineRef?.engineLibraryRef ?? '-'}
+                    </span>
+                    {engineRef?.engineSyncStatus != null ? (
+                      <Badge
+                        variant={
+                          KB_ENGINE_SYNC_STATUS_META[engineRef.engineSyncStatus]?.variant ??
+                          'secondary'
+                        }
+                        title={KB_ENGINE_SYNC_STATUS_META[engineRef.engineSyncStatus]?.hint}
+                        className="shrink-0"
+                      >
+                        {engineSyncStatusLabel(engineRef.engineSyncStatus)}
+                      </Badge>
+                    ) : null}
+                  </span>
+                }
               />
               <MetaRow label="创建时间" value={formatTime(meta.createdAt)} />
               <MetaRow label="更新时间" value={formatTime(meta.updatedAt)} />
