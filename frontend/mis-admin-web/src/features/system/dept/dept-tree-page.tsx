@@ -231,6 +231,22 @@ export function DeptTreePage() {
         cell: (row) => <span className="font-mono text-xs text-muted-foreground">{row.node.code ?? '—'}</span>,
       },
       {
+        key: 'linkedOrg',
+        header: '对应组织',
+        cell: (row) => {
+          if (!row.node.linkedOrgId) return <span className="text-muted-foreground">—</span>;
+          const linked = orgs.find((o) => o.id === row.node.linkedOrgId);
+          return (
+            <span className="inline-flex items-center rounded-md bg-muted px-2 py-0.5 text-xs text-foreground/80">
+              {row.node.linkedOrgName || linked?.name || row.node.linkedOrgId}
+              {linked?.code ? (
+                <span className="ml-1 font-mono text-[0.6875rem] text-muted-foreground">{linked.code}</span>
+              ) : null}
+            </span>
+          );
+        },
+      },
+      {
         key: 'sort',
         header: '排序',
         cell: (row) => row.node.sort ?? 0,
@@ -248,7 +264,7 @@ export function DeptTreePage() {
         ),
       },
     ],
-    [],
+    [orgs],
   );
 
   const pierceColumns: TreeTableColumn<PierceRow>[] = useMemo(
@@ -635,16 +651,18 @@ export function DeptTreePage() {
             }}
             rowActions={(row) => (
               <>
-                <PermissionGate permission="system:dept:add">
-                  <button
-                    type="button"
-                    className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[0.8125rem] text-primary hover:bg-primary/10"
-                    onClick={() => openCreate(row.node.id)}
-                  >
-                    <Plus className="h-3 w-3" />
-                    子部门
-                  </button>
-                </PermissionGate>
+                {!row.node.linkedOrgId ? (
+                  <PermissionGate permission="system:dept:add">
+                    <button
+                      type="button"
+                      className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[0.8125rem] text-primary hover:bg-primary/10"
+                      onClick={() => openCreate(row.node.id)}
+                    >
+                      <Plus className="h-3 w-3" />
+                      子部门
+                    </button>
+                  </PermissionGate>
+                ) : null}
                 <PermissionGate permission="system:dept:edit">
                   <button
                     type="button"

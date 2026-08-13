@@ -114,6 +114,9 @@ public class DeptService {
         if (!parent.getTenantId().equals(request.tenantId())) {
             throw new BusinessException(ResultCode.VALIDATION_ERROR, "租户与父部门不一致");
         }
+        if (parent.getLinkedOrgId() != null) {
+            throw new BusinessException(ResultCode.VALIDATION_ERROR, "已关联组织的部门不可再创建子部门");
+        }
 
         validateLinkedOrg(request.tenantId(), request.orgId(), request.linkedOrgId());
 
@@ -260,6 +263,9 @@ public class DeptService {
                 .orElseThrow(() -> new BusinessException(ResultCode.NOT_FOUND, "目标父部门不存在"));
         if (!newParent.getOrgId().equals(dept.getOrgId())) {
             throw new BusinessException(ResultCode.VALIDATION_ERROR, "不能跨组织移动部门");
+        }
+        if (newParent.getLinkedOrgId() != null) {
+            throw new BusinessException(ResultCode.VALIDATION_ERROR, "不能将部门移动到已关联组织的部门下");
         }
 
         List<Long> descendantIds = deptRepository.findDescendantIds(dept.getOrgId(), String.valueOf(dept.getId()));
