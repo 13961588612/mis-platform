@@ -8,12 +8,14 @@
  * 比没有配色更让运营困惑。
  *
  * <p>本组件在 `features/agent` 内部共享，不跨 feature，不触发 `arch/no-cross-feature`。
- * 它**刻意不做**：Markdown 渲染、流式打字机、消息编辑 —— 那些是业务 Copilot
- * （`features/ai`）的职责，运营台只需要"看清楚发生了什么"。
+ * 助手正文走公共 {@link MarkdownView}（与知识库问答同一组件，不 import `features/ai`）；
+ * 用户 / 工具 / 系统消息仍按原文预格式化，便于排障看清原始输入与 tool 轨迹。
+ * 不做流式打字机、消息编辑。
  */
 import type { ReactNode } from 'react';
 import { Bot, Terminal, User, Wrench } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { MarkdownView } from '@/components/common/markdown-view';
 import { formatTime } from '../types';
 import type { MessageRole, SessionMessage } from '../types';
 
@@ -150,11 +152,14 @@ export function AgentMessageStream({
               </span>
             </div>
 
-            {/* whitespace-pre-wrap：保留下游返回的换行与缩进，不做 Markdown 渲染 */}
             {msg.content ? (
-              <p className="whitespace-pre-wrap break-words text-sm leading-relaxed">
-                {msg.content}
-              </p>
+              msg.role === 'assistant' ? (
+                <MarkdownView content={msg.content} />
+              ) : (
+                <p className="whitespace-pre-wrap break-words text-sm leading-relaxed">
+                  {msg.content}
+                </p>
+              )
             ) : (
               <p className="text-sm italic text-muted-foreground">（空消息体）</p>
             )}

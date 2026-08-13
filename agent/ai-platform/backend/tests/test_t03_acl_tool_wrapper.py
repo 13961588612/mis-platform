@@ -127,6 +127,43 @@ async def test_e1_falls_back_to_name_argument() -> None:
     assert result.metadata["acl"]["data"]["skill_id"] == "member.profile"
 
 
+async def test_e1_package_dir_name_maps_to_canonical_skill_id() -> None:
+    """目录名 ``member-profile`` 映射到正式 id 后，按 ``member.profile`` 判权。"""
+    inner = InnerTool(name="skill")
+    registry = FakeRegistry(
+        {"member.profile": "member.profile"},
+        package_aliases={"member-profile": "member.profile"},
+    )
+    wrapper, _ = _wrap(
+        inner, codes={"ai:skill:member.profile:run"}, registry=registry
+    )
+
+    result = await wrapper.execute(
+        AnyArgs(name="member-profile"), make_ctx(_identity())
+    )
+
+    assert result.is_error is False
+    assert inner.calls == 1
+
+
+async def test_e1_unknown_dir_name_does_not_fold_punctuation() -> None:
+    """无注册表映射时，不得把 ``-`` 折叠成 ``.``（防越权）。"""
+    inner = InnerTool(name="skill")
+    wrapper, _ = _wrap(inner, codes={"ai:skill:member.profile:run"})
+
+    result = await wrapper.execute(
+        AnyArgs(name="member-profile"), make_ctx(_identity())
+    )
+
+    assert result.is_error is True
+    assert inner.calls == 0
+    assert result.metadata["acl"]["data"]["skill_id"] == "member-profile"
+    assert (
+        result.metadata["acl"]["data"]["required_permission"]
+        == "ai:skill:member-profile:run"
+    )
+
+
 # ---------------------------------------------------------------------------
 # 身份缺失 fail-closed（S9 决策 4）
 # ---------------------------------------------------------------------------
@@ -355,3 +392,27 @@ async def test_e5_delegate_passes_through_even_without_identity() -> None:
 
     assert inner.calls == 1
     assert result.is_error is False
+
+
+# ---------------------------------------------------------------------------
+# 目录名 → 正式 skill_id（OpenHarness SkillTool vs IAM 执行码）
+# ---------------------------------------------------------------------------
+
+
+def test_registry_resolve_canonical_id_from_package_dir() -> None:
+    """``member-profile`` 目录名唯一映射到 ``member.profile``。"""
+    from src.skills.models import Skill, SkillSource
+    from src.skills.registry import SkillRegistry
+
+    registry = SkillRegistry()
+    registry._skills["member.profile"] = Skill(
+        skill_id="member.profile",
+        name="member.profile",
+        package_name="member-profile",
+        source=SkillSource.PACKAGE,
+    )
+
+    assert registry.resolve_canonical_id("member.profile") == "member.profile"
+    assert registry.resolve_canonical_id("member-profile") == "member.profile"
+    assert registry.resolve_canonical_id("member_profile") == "member_profile"
+    assert registry.resolve_canonical_id("") == ""

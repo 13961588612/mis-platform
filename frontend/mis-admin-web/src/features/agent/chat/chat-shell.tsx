@@ -2,10 +2,8 @@
  * 轻量对话壳（UI#6 本地对话的内层组件）。
  *
  * <p>⚠️ **这是 `features/agent` 自建的对话界面，与 `features/ai` 的业务 Copilot 无关**。
- * `arch/no-cross-feature` 是 **error** 级：本 feature 不得 import `features/ai`，
- * 复用 Copilot 组件会直接构建失败。更重要的是二者定位不同 ——
- * 业务 Copilot 面向终端用户（要 Markdown、要引用卡片、要 Worker 选择器），
- * 运营调试台面向排障（要看清 role、tool 调用与原始报错），刻意保持朴素。
+ * `arch/no-cross-feature` 是 **error** 级：本 feature 不得 import `features/ai`。
+ * 助手 Markdown 走公共 `MarkdownView`；引用卡片 / Worker 选择器仍属业务 Copilot，本页不做。
  *
  * <p>职责边界：本组件**只管渲染与输入交互**，不碰任何 API ——
  * 建会话（#32）/ 发消息（#33）由父组件 `agent-chat-page.tsx` 负责。

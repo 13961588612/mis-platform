@@ -111,6 +111,37 @@ class SkillRegistry:
         """按 ID 返回 Skill，未找到返回 ``None``。"""
         return self._skills.get(skill_id)
 
+    def resolve_canonical_id(self, raw: str) -> str:
+        """把 OpenHarness 目录名解析成授权页使用的正式 ``skill_id``。
+
+        OpenHarness ``SkillTool`` 按文件夹名调用（如 ``member-profile``），
+        而 IAM 执行码按 Front Matter ``skill_id`` 注册（如 ``member.profile``）。
+        二者对不上就会出现「权限页已授权、本地对话仍报缺码」。
+
+        只做**精确**查找，禁止把 ``.`` / ``-`` / ``_`` 互相折叠（防越权）。
+        目录名命中多个 Skill 时保持原文，交给后续 fail-closed。
+
+        Args:
+            raw: 工具入参里的 skill 名（目录名或正式 id）。
+
+        Returns:
+            注册表中的正式 ``skill_id``；无法唯一映射时原样返回。
+        """
+        key: str = (raw or "").strip()
+        if not key:
+            return key
+        direct: Skill | None = self._skills.get(key)
+        if direct is not None:
+            return direct.skill_id
+        matches: list[str] = [
+            skill.skill_id
+            for skill in self._skills.values()
+            if skill.package_name == key
+        ]
+        if len(matches) == 1:
+            return matches[0]
+        return key
+
     async def get_async(self, skill_id: str) -> Skill | None:
         """异步获取 Skill — 先查内存，再查缓存。"""
         skill: Skill | None = self._skills.get(skill_id)

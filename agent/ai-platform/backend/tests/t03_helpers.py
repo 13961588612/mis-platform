@@ -133,8 +133,14 @@ class FakeResolver:
 class FakeRegistry:
     """``SkillRegistry`` 替身：按判别名精确查表（**不做任何名字改写**）。"""
 
-    def __init__(self, mapping: dict[str, str] | None = None) -> None:
+    def __init__(
+        self,
+        mapping: dict[str, str] | None = None,
+        package_aliases: dict[str, str] | None = None,
+    ) -> None:
         self._mapping: dict[str, str] = dict(mapping or {})
+        #: 目录名 → 正式 skill_id（仅测试 E1 包名映射；默认空 = 不映射）。
+        self._package_aliases: dict[str, str] = dict(package_aliases or {})
         #: 记录每次 ``get`` 的入参，用于断言「用的是判别名而非展示名」。
         self.queried: list[str] = []
 
@@ -143,6 +149,13 @@ class FakeRegistry:
         self.queried.append(skill_id)
         found = self._mapping.get(skill_id)
         return SimpleNamespace(skill_id=found) if found else None
+
+    def resolve_canonical_id(self, raw: str) -> str:
+        """精确 id 命中优先，否则按目录名别名映射；都不中则原样返回。"""
+        key = (raw or "").strip()
+        if key in self._mapping:
+            return self._mapping[key]
+        return self._package_aliases.get(key, key)
 
 
 def make_settings(**overrides: Any) -> SimpleNamespace:

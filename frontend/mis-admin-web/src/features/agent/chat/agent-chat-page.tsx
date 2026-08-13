@@ -5,10 +5,8 @@
  * + #29 消息回拉（就绪，**尽力而为**，见下）。
  *
  * <p>⚠️ **这是运营调试台，不是业务 Copilot**。
- * `arch/no-cross-feature` 是 error 级，本页**不 import `features/ai`** 的任何东西，
- * 对话壳由 `./chat-shell.tsx` 自建。二者定位也确实不同：
- * 业务 Copilot 面向终端用户（Markdown、引用卡片、Worker 选择），
- * 这里面向排障（看清 role / tool 调用 / 原始报错），刻意保持朴素。
+ * `arch/no-cross-feature` 是 error 级，本页**不 import `features/ai`**；
+ * 对话壳由 `./chat-shell.tsx` 自建，助手正文用公共 `MarkdownView` 渲染。
  *
  * <p>**会话是懒创建的**：切换 Agent 不建会话，第一次点「发送」才调 #32。
  * 若在下拉里每选一次就建一个会话，「会话管理」页很快会被空会话淹没 ——
