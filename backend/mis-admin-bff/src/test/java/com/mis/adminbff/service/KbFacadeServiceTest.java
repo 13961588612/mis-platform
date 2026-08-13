@@ -118,7 +118,7 @@ class KbFacadeServiceTest {
         KbEngineReconcileVO expected = new KbEngineReconcileVO(
                 Instant.now(), Boolean.FALSE, null, "ragflow",
                 new KbEngineReconcileVO.Counts(1, 1, 0, 0, 0, 0),
-                List.of(), List.of(), List.of(), 0, List.of());
+                List.of(), List.of(), List.of());
         when(kbWebClient.engineReconcileReport()).thenReturn(expected);
 
         KbEngineReconcileVO result = facade.engineReconcileReport();
@@ -133,7 +133,7 @@ class KbFacadeServiceTest {
         KbEngineReconcileVO expected = new KbEngineReconcileVO(
                 Instant.now(), Boolean.FALSE, null, "ragflow",
                 new KbEngineReconcileVO.Counts(1, 1, 0, 0, 0, 0),
-                List.of(), List.of(), List.of(), 0, List.of());
+                List.of(), List.of(), List.of());
         when(kbWebClient.runEngineReconcile()).thenReturn(expected);
 
         KbEngineReconcileVO result = facade.runEngineReconcile();
