@@ -123,7 +123,7 @@ export function HeaderToolkit({
                 ))}
               </ul>
               <div className="border-t px-3 py-2 text-center text-xs text-muted-foreground">
-                演示数据 · 后续接入消息中心
+                通知中心建设中
               </div>
             </div>
           </>
