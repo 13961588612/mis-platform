@@ -14,6 +14,7 @@ from src.agent.mis_rag.qa_pipeline import (
     KbQaRequest,
     QaDelta,
     build_kb_call_context,
+    format_kb_answer_for_chat,
     is_kb_qa_request,
 )
 
@@ -25,5 +26,6 @@ __all__ = [
     "KbQaRequest",
     "QaDelta",
     "build_kb_call_context",
+    "format_kb_answer_for_chat",
     "is_kb_qa_request",
 ]

@@ -115,6 +115,33 @@ def build_kb_call_context(
     return ctx
 
 
+def format_kb_answer_for_chat(answer: QaAnswer) -> str:
+    """把管线产出整理成运营台本地对话可读的 Markdown。
+
+    BFF ``/ai/rag`` 仍返回 JSON 信封；本地对话要把 ``answer`` 当正文，
+    引用列表附在文末，避免运营看到 ``{"answer":...}`` 原文。
+
+    Args:
+        answer: KB 问答管线最终产出。
+
+    Returns:
+        可直接写入助手消息的 Markdown 文本。
+    """
+    text = (answer.answer or "").strip()
+    if not answer.citations:
+        return text
+    lines: list[str] = [text, "", "来源："]
+    for idx, citation in enumerate(answer.citations, start=1):
+        label = (citation.source or "").strip() or f"文档 {citation.document_id or idx}"
+        score = (
+            f"（相关度 {citation.score:.2f}）"
+            if isinstance(citation.score, (int, float))
+            else ""
+        )
+        lines.append(f"{idx}. {label}{score}")
+    return "\n".join(lines)
+
+
 @dataclass
 class KbQaRequest:
     """一次 KB 问答的输入参数（已从 content/metadata 归一）。"""
@@ -298,6 +325,8 @@ class KbQaPipeline:
         req: KbQaRequest,
         ctx: KbCallContext,
         generate: Callable[[str], Awaitable[str]],
+        *,
+        structured: bool = True,
     ) -> QaAnswer:
         """执行完整 KB 问答链路。
 
@@ -305,6 +334,8 @@ class KbQaPipeline:
             req: 归一后的问答请求。
             ctx: 身份与追踪上下文。
             generate: 生成回调，入参为增强后的提示词，返回 LLM 原始文本。
+            structured: ``True``（BFF ``/ai/rag``）要求模型输出 JSON 信封；
+                ``False``（运营台本地对话）直出自然语言，避免把 JSON 原文展示给运营。
 
         Returns:
             :class:`QaAnswer`；检索为空或落库失败时仍返回可用答案（降级不报错）。
@@ -313,10 +344,14 @@ class KbQaPipeline:
             KbClientError: 仅当**检索阶段**彻底失败且无法降级时向上抛出。
         """
         hits = await self._retrieve(req, ctx)
-        prompt = self._build_prompt(req, hits)
+        prompt = self._build_prompt(req, hits, structured=structured)
 
         raw = await generate(prompt)
-        answer_text, selected = self._parse_generation(raw)
+        if structured:
+            answer_text, selected = self._parse_generation(raw)
+        else:
+            answer_text = (raw or "").strip()
+            selected = self._parse_inline_citations(answer_text)
 
         used_hits = self._select_hits(hits.hits, selected)
         session_id, message_id = await self._persist(req, ctx, answer_text, used_hits)

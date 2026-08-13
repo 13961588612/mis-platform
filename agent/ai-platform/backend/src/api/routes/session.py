@@ -23,7 +23,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 
-from fastapi import APIRouter, Depends, Query, status
+from fastapi import APIRouter, Depends, Header, Query, status
 from pydantic import BaseModel, Field
 
 from src.agent.manager import AgentInstance
@@ -38,7 +38,9 @@ from src.api.deps import (
     get_agent_manager_dep,
     get_agent_router_dep,
     get_current_user,
+    get_optional_current_user,
     get_session_manager_dep,
+    get_trace_id,
     resolve_request_mis_user_id,
 )
 from src.api.response import error_response, success
@@ -421,24 +423,110 @@ async def get_messages(
         return error_response(9001, str(exc), status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
+async def _run_session_kb_qa(
+    *,
+    session: Any,
+    instance: AgentInstance,
+    req: SendMessageRequest,
+    current_user: dict[str, Any] | None,
+    authorization: str,
+    tenant_id: str,
+    app_id: str,
+    trace_id: str,
+) -> tuple[str, str | None, list[str]]:
+    """运营台本地对话命中 ``mis-rag`` 时走 KB 检索管线。
+
+    与 BFF ``POST /api/v1/agents/mis-rag/chat`` 共用 :class:`KbQaPipeline`，
+    差异仅在于回复要整理成可读 Markdown（不要 JSON 信封）。
+    """
+    from src.adapters.kb_client import KbClientError
+    from src.agent.mis_rag import (
+        KbQaPipeline,
+        KbQaRequest,
+        build_kb_call_context,
+        format_kb_answer_for_chat,
+    )
+    from src.agent.session import Message
+    from src.config import get_settings
+    from src.runtime.events import AgentEventType
+
+    settings = get_settings()
+    kb_req = KbQaRequest.from_message(
+        req.content,
+        req.metadata,
+        default_top_k=settings.MIS_KB_RETRIEVE_TOP_K,
+    )
+    ctx = build_kb_call_context(
+        current_user,
+        authorization=authorization,
+        trace_id=trace_id,
+        tenant_id=tenant_id,
+        app_id=app_id,
+        metadata=req.metadata,
+    )
+
+    captured_error: str | None = None
+    captured_tool_errors: list[str] = []
+
+    async def _generate(prompt: str) -> str:
+        nonlocal captured_error, captured_tool_errors
+        parts: list[str] = []
+        async for event in instance.process_message(
+            session=session,
+            message=Message(role=req.role, content=prompt, metadata=req.metadata),
+        ):
+            if event.type == AgentEventType.TEXT_DELTA and event.content:
+                parts.append(event.content)
+            elif event.type == AgentEventType.TOOL_RESULT and event.result:
+                err: Any | None = event.result.get("error")
+                if err:
+                    captured_tool_errors.append(f"{event.tool_name}: {err}")
+            elif event.type == AgentEventType.ERROR:
+                captured_error = event.message or "Agent runtime error"
+        return "".join(parts)
+
+    pipeline = KbQaPipeline()
+    try:
+        answer = await pipeline.run(kb_req, ctx, _generate, structured=False)
+    except KbClientError as exc:
+        logger.warning(
+            "KB QA retrieve failed in local chat",
+            agent_id=session.agent_id,
+            error=str(exc),
+            trace_id=trace_id,
+        )
+        return f"知识库检索失败：{exc}", None, []
+    finally:
+        await pipeline.aclose()
+
+    return format_kb_answer_for_chat(answer), captured_error, captured_tool_errors
+
+
 @router.post("/{session_id}/messages")
 async def send_message(
     session_id: str,
     req: SendMessageRequest,
     session_manager: SessionManager = Depends(get_session_manager_dep),
     agent_manager=Depends(get_agent_manager_dep),
+    current_user: dict[str, Any] | None = Depends(get_optional_current_user),
+    authorization: str = Header(default=""),
+    x_tenant_id: str = Header(default="", alias="X-Tenant-Id"),
+    x_app_id: str = Header(default="", alias="X-App-Id"),
+    trace_id: str = Depends(get_trace_id),
 ) -> dict[str, Any]:
     """
     向会话发送消息并获取非流式响应。
 
-    流式响应请使用 WebSocket 端点。
+    目标 Agent 为 ``mis-rag`` 时走知识库检索管线（与 ``/ai/rag`` 同源），
+    否则保持原有通用 Agent 流程。流式响应请使用 WebSocket 端点。
     """
     try:
+        from src.agent.mis_rag import is_kb_qa_request
         from src.agent.session import Message
         from src.runtime.events import AgentEventType
 
         # 获取会话
-        session: dict[str, Any] = await session_manager.get_session(session_id)
+        session = await session_manager.get_session(session_id)
 
         # 添加用户消息
         user_msg: Message = await session_manager.add_message(
@@ -451,24 +539,36 @@ async def send_message(
         # 确保 Agent 已注册并处于 RUNNING（支持启动时未同步的懒加载）
         instance: AgentInstance = await agent_manager.ensure_agent_ready(session.agent_id)
 
-        # 收集 runtime 流式事件
-        response_parts: list[str] = []
-        runtime_error: str | None = None
-        tool_errors: list[str] = []
-        async for event in instance.process_message(
-            session=session,
-            message=Message(role=req.role, content=req.content, metadata=req.metadata),
-        ):
-            if event.type == AgentEventType.TEXT_DELTA and event.content:
-                response_parts.append(event.content)
-            elif event.type == AgentEventType.TOOL_RESULT and event.result:
-                err: Any | None = event.result.get("error")
-                if err:
-                    tool_errors.append(f"{event.tool_name}: {err}")
-            elif event.type == AgentEventType.ERROR:
-                runtime_error: Any = event.message or "Agent runtime error"
+        if is_kb_qa_request(session.agent_id, req.metadata):
+            response_text, runtime_error, tool_errors = await _run_session_kb_qa(
+                session=session,
+                instance=instance,
+                req=req,
+                current_user=current_user,
+                authorization=authorization if isinstance(authorization, str) else "",
+                tenant_id=x_tenant_id if isinstance(x_tenant_id, str) else "",
+                app_id=x_app_id if isinstance(x_app_id, str) else "",
+                trace_id=trace_id if isinstance(trace_id, str) else "",
+            )
+        else:
+            # 收集 runtime 流式事件
+            response_parts: list[str] = []
+            runtime_error: str | None = None
+            tool_errors: list[str] = []
+            async for event in instance.process_message(
+                session=session,
+                message=Message(role=req.role, content=req.content, metadata=req.metadata),
+            ):
+                if event.type == AgentEventType.TEXT_DELTA and event.content:
+                    response_parts.append(event.content)
+                elif event.type == AgentEventType.TOOL_RESULT and event.result:
+                    err: Any | None = event.result.get("error")
+                    if err:
+                        tool_errors.append(f"{event.tool_name}: {err}")
+                elif event.type == AgentEventType.ERROR:
+                    runtime_error = event.message or "Agent runtime error"
 
-        response_text: str = "".join(response_parts)
+            response_text = "".join(response_parts)
 
         # 工具失败已转为 tool.result，不应中断；仅无有效回复时的致命错误返回 500
         if runtime_error and not response_text.strip():
