@@ -22,6 +22,8 @@ import { pageLoginLogs, pageOperLogs } from '@/lib/api/dicts';
 import type { LoginLogItem, OperLogItem } from '@/types/api';
 
 const thPad = 'px-3';
+/** 列表单元格统一：正文 14px / 默认字色 / 无衬线，长文本单行截断。 */
+const tdClass = 'overflow-hidden text-ellipsis whitespace-nowrap px-3 py-2';
 
 const OPER_COLUMNS: ResizableColumn[] = [
   { key: 'operTime', label: '时间' },
@@ -88,7 +90,7 @@ function SortableTh({
   if (col.locked) {
     return (
       <th
-        className="whitespace-nowrap px-0 py-0 text-[13px] font-bold"
+        className="relative overflow-hidden whitespace-nowrap px-0 py-0 text-[13px] font-bold"
         style={{ width: widthOf(col.key) }}
       >
         <button
@@ -111,7 +113,7 @@ function SortableTh({
     <th
       aria-sort={active ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'none'}
       style={{ width: widthOf(col.key) }}
-      className="whitespace-nowrap px-0 py-0 text-[13px] font-bold"
+      className="relative overflow-hidden whitespace-nowrap px-0 py-0 text-[13px] font-bold"
     >
       <button
         type="button"
@@ -282,15 +284,20 @@ export function OperLogListPage() {
                   className="cursor-pointer border-b border-border/50 last:border-0 bg-table-row even:bg-table-stripe hover:bg-table-hover"
                   onClick={() => setDetail(row)}
                 >
-                  <td className="px-3 py-2 text-muted-foreground">{formatTime(row.operTime)}</td>
-                  <td className="px-3 py-2">{row.username ?? '—'}</td>
-                  <td className="px-3 py-2">{row.module ?? '—'}</td>
-                  <td className="px-3 py-2">{row.operation ?? '—'}</td>
-                  <td className="px-3 py-2 font-mono text-xs">
+                  <td className={tdClass}>{formatTime(row.operTime)}</td>
+                  <td className={tdClass}>{row.username ?? '—'}</td>
+                  <td className={tdClass}>{row.module ?? '—'}</td>
+                  <td className={tdClass}>{row.operation ?? '—'}</td>
+                  <td
+                    className={tdClass}
+                    title={`${row.requestMethod ?? ''} ${row.requestUri ?? ''}`.trim()}
+                  >
                     {row.requestMethod} {row.requestUri}
                   </td>
-                  <td className="px-3 py-2">{row.durationMs != null ? `${row.durationMs}ms` : '—'}</td>
-                  <td className="px-3 py-2">{row.responseCode ?? '—'}</td>
+                  <td className={tdClass}>
+                    {row.durationMs != null ? `${row.durationMs}ms` : '—'}
+                  </td>
+                  <td className={tdClass}>{row.responseCode ?? '—'}</td>
                 </tr>
               ))
             )}
@@ -480,13 +487,13 @@ export function LoginLogListPage() {
                   className="cursor-pointer border-b border-border/50 last:border-0 bg-table-row even:bg-table-stripe hover:bg-table-hover"
                   onClick={() => setDetail(row)}
                 >
-                  <td className="px-3 py-2 text-muted-foreground">{formatTime(row.loginAt)}</td>
-                  <td className="px-3 py-2">{row.username}</td>
-                  <td className="px-3 py-2">{row.ip ?? '—'}</td>
-                  <td className="px-3 py-2">
+                  <td className={tdClass}>{formatTime(row.loginAt)}</td>
+                  <td className={tdClass}>{row.username}</td>
+                  <td className={tdClass}>{row.ip ?? '—'}</td>
+                  <td className={tdClass}>
                     <StatusBadge tone={row.status === 1 ? 'success' : 'destructive'} text={row.status === 1 ? '成功' : '失败'} />
                   </td>
-                  <td className="px-3 py-2">{row.msg ?? '—'}</td>
+                  <td className={tdClass}>{row.msg ?? '—'}</td>
                 </tr>
               ))
             )}
