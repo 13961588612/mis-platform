@@ -1,8 +1,10 @@
 package com.mis.kb.engine;
 
 import com.mis.kb.domain.model.ChunkHit;
+import com.mis.kb.domain.model.ChunkQuery;
 import com.mis.kb.domain.model.CreateLibraryCmd;
 import com.mis.kb.domain.model.DocumentChunkConfig;
+import com.mis.kb.domain.model.DocumentChunkPageView;
 import com.mis.kb.domain.model.DocumentUploadInput;
 import com.mis.kb.domain.model.EngineCapabilities;
 import com.mis.kb.domain.model.EngineDocumentBrief;
@@ -143,6 +145,27 @@ public interface KnowledgeEnginePort {
     default Map<String, ParseStatusSnapshot> queryDocumentParseStatuses(
             EngineLibraryRef ref, List<String> nativeDocIds) {
         return Map.of();
+    }
+
+    /**
+     * 分页列举某文档的切片（「查看文档切分效果」）。
+     *
+     * <p><b>默认实现返回空页</b>，noop/mock 引擎零改动（与 {@link #listDocuments()} 同口径）。
+     * RAGFlow 实现走 {@code GET /api/v1/datasets/{id}/documents/{docId}/chunks}
+     * （{@code RagflowClient.listChunks}），在适配层完成 MIS id 翻译与正文清洗。
+     *
+     * <p><b>异常语义：</b>引擎不可达 / RAGFlow 报错时<b>向上抛出</b>（不做静默空页），
+     * 由调用方（{@code KbDocumentService}）捕获后降级为空态 +「引擎暂不可达」提示
+     * （与 {@code syncOpenParseStatuses} 的降级风格一致）；无引擎映射等前置条件不满足
+     * 返回空页。
+     *
+     * @param query 切片查询（MIS libraryId/documentId + 关键字 + 分页）
+     * @return 切片分页视图；恒非 {@code null}
+     */
+    default DocumentChunkPageView listDocumentChunks(ChunkQuery query) {
+        int page = query == null ? 1 : query.page();
+        int pageSize = query == null ? 20 : query.pageSize();
+        return DocumentChunkPageView.empty(page, pageSize);
     }
 
     /** 检索，返回统一 {@link ChunkHit}（仅含 MIS 业务 ID）。 */

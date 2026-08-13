@@ -10,6 +10,7 @@ import com.mis.kb.domain.model.RetrieveQuery;
 import com.mis.kb.engine.dto.RfChunk;
 import com.mis.kb.engine.dto.RfDataset;
 import com.mis.kb.engine.dto.RfDocument;
+import com.mis.kb.engine.dto.RfDocumentChunkPage;
 import com.mis.kb.engine.dto.RfDocumentPage;
 import com.mis.kb.engine.dto.RfModel;
 import com.mis.kb.engine.dto.RfResponse;
@@ -593,6 +594,48 @@ public class RagflowClient {
             return null;
         }
         return resp.data().docs().get(0);
+    }
+
+    /**
+     * 分页查询文档切片（「查看文档切分效果」，官方端点
+     * {@code GET /api/v1/datasets/{dataset_id}/documents/{document_id}/chunks}）。
+     *
+     * <p><b>现网探测结论：</b>page 1-based；{@code keywords} 服务端过滤
+     * （非空时引擎按正文关键字过滤）；响应 {@code data{chunks[], doc, total}}，
+     * {@code total} 为关键字过滤后的总条数。
+     *
+     * @param datasetId 原生 dataset id
+     * @param docId     原生文档 id
+     * @param keywords  正文关键字过滤；{@code null}/空白表示不过滤
+     * @param page      1-based
+     * @param pageSize  每页条数
+     * @return 切片分页数据（chunks 恒非 {@code null}，可能为空列表）
+     * @throws BusinessException 参数非法、HTTP 非 2xx，或 RAGFlow {@code code != 0}
+     */
+    public RfDocumentChunkPage listChunks(
+            String datasetId, String docId, String keywords, int page, int pageSize) {
+        if (datasetId == null || datasetId.isBlank() || docId == null || docId.isBlank()) {
+            throw new BusinessException(50000, "RAGFlow 查询文档切片失败: datasetId/docId 为空");
+        }
+        RfResponse<RfDocumentChunkPage> resp = client.get()
+                .uri(uriBuilder -> {
+                    var builder = uriBuilder
+                            .path("/api/v1/datasets/" + datasetId + "/documents/" + docId + "/chunks")
+                            .queryParam("page", Math.max(page, 1))
+                            .queryParam("page_size", Math.max(pageSize, 1));
+                    if (keywords != null && !keywords.isBlank()) {
+                        builder.queryParam("keywords", keywords);
+                    }
+                    return builder.build();
+                })
+                .header("Authorization", bearer())
+                .retrieve()
+                .body(new ParameterizedTypeReference<>() {});
+        if (resp == null || !resp.ok() || resp.data() == null) {
+            throw new BusinessException(50000,
+                    "RAGFlow 查询文档切片失败: " + (resp == null ? "无响应" : resp.message()));
+        }
+        return resp.data();
     }
 
     /**

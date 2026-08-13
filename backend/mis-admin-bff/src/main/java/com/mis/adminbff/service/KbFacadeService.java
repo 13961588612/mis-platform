@@ -7,6 +7,7 @@ import com.mis.adminbff.dto.kb.KbAuditBefore;
 import com.mis.adminbff.dto.kb.KbCategoryAdminVO;
 import com.mis.adminbff.dto.kb.KbCategoryVO;
 import com.mis.adminbff.dto.kb.KbDashboardVO;
+import com.mis.adminbff.dto.kb.KbDocumentChunksVO;
 import com.mis.adminbff.dto.kb.KbDocumentUploadResponse;
 import com.mis.adminbff.dto.kb.KbDocumentVO;
 import com.mis.adminbff.dto.kb.KbEngineCapabilitiesVO;
@@ -370,6 +371,17 @@ public class KbFacadeService {
 
     public KbDocumentVO getDocument(Long libraryId, Long id) {
         return kbWebClient.getDocument(libraryId, id);
+    }
+
+    /**
+     * 分页列举文档切片（「查看文档切分效果」；三层透传，不做业务决策）。
+     *
+     * <p>读操作：权限码 {@code kb:document:list}（BFF 侧 {@code requirePermission}
+     * 兜底 + 注册表主路径），端点挂 {@code @OperLog} 审计留痕（见 {@code KbController}）。
+     */
+    public KbDocumentChunksVO listDocumentChunks(
+            Long libraryId, Long id, String keywords, int page, int pageSize) {
+        return kbWebClient.listDocumentChunks(libraryId, id, keywords, page, pageSize);
     }
 
     /** 透传文档上传；BFF 侧只做大小/空文件校验，解析交给引擎。可选文件级切片参数。 */

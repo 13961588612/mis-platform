@@ -8,6 +8,7 @@ import com.mis.adminbff.dto.kb.KbAclVO;
 import com.mis.adminbff.dto.kb.KbCategoryAdminVO;
 import com.mis.adminbff.dto.kb.KbCategoryVO;
 import com.mis.adminbff.dto.kb.KbDashboardVO;
+import com.mis.adminbff.dto.kb.KbDocumentChunksVO;
 import com.mis.adminbff.dto.kb.KbDocumentUploadResponse;
 import com.mis.adminbff.dto.kb.KbDocumentVO;
 import com.mis.adminbff.dto.kb.KbEngineCapabilitiesVO;
@@ -92,6 +93,8 @@ public class KbWebClient extends AbstractDownstreamClient {
     private static final ParameterizedTypeReference<Result<List<KbDocumentVO>>> DOCUMENT_LIST =
             new ParameterizedTypeReference<>() {};
     private static final ParameterizedTypeReference<Result<KbDocumentVO>> DOCUMENT =
+            new ParameterizedTypeReference<>() {};
+    private static final ParameterizedTypeReference<Result<KbDocumentChunksVO>> DOCUMENT_CHUNKS =
             new ParameterizedTypeReference<>() {};
     private static final ParameterizedTypeReference<Result<KbDocumentUploadResponse>> UPLOAD =
             new ParameterizedTypeReference<>() {};
@@ -533,6 +536,30 @@ public class KbWebClient extends AbstractDownstreamClient {
                 .headers(loginContextHeaders())
                 .retrieve()
                 .bodyToMono(DOCUMENT));
+    }
+
+    /**
+     * 分页列举文档切片（「查看文档切分效果」；三层透传，不做业务决策）。
+     *
+     * <p>keywords 为空时不携带该查询参数（mis-kb 侧 null 处理）；pageSize 默认 50。
+     */
+    public KbDocumentChunksVO listDocumentChunks(
+            Long libraryId, Long id, String keywords, int page, int pageSize) {
+        String uri = UriComponentsBuilder
+                .fromPath("/internal/v1/kb/libraries/{libraryId}/documents/{id}/chunks")
+                .queryParam("page", Math.max(page, 1))
+                .queryParam("pageSize", Math.max(pageSize, 1))
+                .queryParamIfPresent("keywords",
+                        keywords == null || keywords.isBlank()
+                                ? java.util.Optional.empty()
+                                : java.util.Optional.of(keywords))
+                .buildAndExpand(libraryId, id)
+                .toUriString();
+        return block(client().get()
+                .uri(uri)
+                .headers(loginContextHeaders())
+                .retrieve()
+                .bodyToMono(DOCUMENT_CHUNKS));
     }
 
     /** 透传 multipart 上传（保留原始文件名与内容类型；可选文件级切片参数）。 */

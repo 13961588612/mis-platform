@@ -2,23 +2,32 @@ package com.mis.kb.domain.service;
 
 import com.mis.common.core.exception.BusinessException;
 import com.mis.common.core.exception.ResultCode;
+import com.mis.kb.api.dto.KbDocumentChunkStatsVO;
+import com.mis.kb.api.dto.KbDocumentChunkVO;
+import com.mis.kb.api.dto.KbDocumentChunksVO;
 import com.mis.kb.api.dto.KbDocumentUploadResponse;
 import com.mis.kb.api.dto.KbDocumentVO;
 import com.mis.kb.api.dto.KbReparseAllResult;
 import com.mis.kb.domain.entity.KbDocument;
 import com.mis.kb.domain.entity.KbLibrary;
+import com.mis.kb.domain.model.AclAction;
+import com.mis.kb.domain.model.ChunkQuery;
 import com.mis.kb.domain.model.DocumentChunkConfig;
+import com.mis.kb.domain.model.DocumentChunkPageView;
+import com.mis.kb.domain.model.DocumentChunkView;
 import com.mis.kb.domain.model.DocumentUploadInput;
 import com.mis.kb.domain.model.EngineDocumentRef;
 import com.mis.kb.domain.model.EngineLibraryRef;
 import com.mis.kb.domain.model.KbResultCode;
 import com.mis.kb.domain.model.ParseStatus;
 import com.mis.kb.domain.model.ParseStatusSnapshot;
+import com.mis.kb.domain.model.RagSettings;
 import com.mis.kb.domain.repository.KbDocumentRepository;
 import com.mis.kb.domain.repository.KbLibraryRepository;
 import com.mis.kb.engine.KnowledgeEnginePort;
 import com.mis.kb.support.IdGenerator;
 import com.mis.kb.support.KbBusinessException;
+import com.mis.kb.support.KbJson;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -42,16 +51,19 @@ public class KbDocumentService {
     private final KbLibraryRepository libraryRepository;
     private final KnowledgeEnginePort enginePort;
     private final KbLibraryService libraryService;
+    private final KbVisibilityService visibilityService;
 
     public KbDocumentService(
             KbDocumentRepository documentRepository,
             KbLibraryRepository libraryRepository,
             KnowledgeEnginePort enginePort,
-            KbLibraryService libraryService) {
+            KbLibraryService libraryService,
+            KbVisibilityService visibilityService) {
         this.documentRepository = documentRepository;
         this.libraryRepository = libraryRepository;
         this.enginePort = enginePort;
         this.libraryService = libraryService;
+        this.visibilityService = visibilityService;
     }
 
     /**
@@ -74,6 +86,136 @@ public class KbDocumentService {
             syncOpenParseStatuses(lib, List.of(entity));
         }
         return toVo(entity);
+    }
+
+    /**
+     * 分页列举文档切片（「查看文档切分效果」）。
+     *
+     * <p>双闸门读权限：本方法内 {@link #requireDocumentRead}（ACL 读权限）兜底，
+     * 外层 BFF {@code requirePermission("kb:document:list")} 已拦一道（注册表主路径）。
+     *
+     * <p><b>解析状态预检（空态 VO 语义）：</b>
+     * <ul>
+     *   <li>pending/parsing → 空态 +「文档解析中，暂无切片数据」；</li>
+     *   <li>failed → 空态 +「文档解析失败，暂无切片数据」；</li>
+     *   <li>{@code engineDocumentRef} 为空 → 空态 +「该文档尚未同步到引擎」；</li>
+     *   <li>引擎不可达 / RAGFlow 报错 → catch 降级空态 +「引擎暂不可达」（不抛错，
+     *       与 {@link #syncOpenParseStatuses} 的降级风格一致）。</li>
+     * </ul>
+     *
+     * @param libraryId  知识库 id
+     * @param documentId 文档 id
+     * @param userId     当前用户 id（读权限校验；可为 null → 拒绝）
+     * @param keywords   正文关键字过滤（服务端过滤）；null/空白表示不过滤
+     * @param page       页码（1-based）
+     * @param pageSize   每页条数
+     * @return 切片分页视图（恒非 {@code null}）
+     */
+    public KbDocumentChunksVO listDocumentChunks(
+            Long libraryId, Long documentId, Long userId,
+            String keywords, int page, int pageSize) {
+        requireLibrary(libraryId);
+        requireDocumentRead(libraryId, userId);
+        KbDocument doc = require(documentId);
+        if (doc.getEngineDocumentRef() == null || doc.getEngineDocumentRef().isBlank()) {
+            return emptyChunks("该文档尚未同步到引擎，无法查看切分效果", page, pageSize);
+        }
+        String status = doc.getParseStatus();
+        if (ParseStatus.PENDING.code().equals(status) || ParseStatus.PARSING.code().equals(status)) {
+            return emptyChunks("文档解析中，暂无切片数据", page, pageSize);
+        }
+        if (ParseStatus.FAILED.code().equals(status)) {
+            return emptyChunks("文档解析失败，暂无切片数据", page, pageSize);
+        }
+        DocumentChunkPageView pageView;
+        try {
+            pageView = enginePort.listDocumentChunks(
+                    new ChunkQuery(libraryId, documentId, keywords, page, pageSize));
+        } catch (Exception e) {
+            log.warn("查询文档切片失败 libraryId={} documentId={}: {}",
+                    libraryId, documentId, e.getMessage());
+            return emptyChunks("引擎暂不可达，请稍后重试", page, pageSize);
+        }
+        if (pageView == null) {
+            return emptyChunks(null, page, pageSize);
+        }
+        return toChunksVo(doc, libraryRepository.findById(libraryId).orElse(null), pageView);
+    }
+
+    /**
+     * 引擎切片页 → 响应 VO（全局连续序号 + 当前页字符统计 + 来源判定 + 双口径统计）。
+     */
+    private KbDocumentChunksVO toChunksVo(KbDocument doc, KbLibrary lib, DocumentChunkPageView pageView) {
+        List<KbDocumentChunkVO> chunks = new ArrayList<>();
+        int currentPageCharacterCount = 0;
+        int base = (pageView.page() - 1) * pageView.pageSize();
+        List<DocumentChunkView> views = pageView.chunks() == null ? List.of() : pageView.chunks();
+        for (int i = 0; i < views.size(); i++) {
+            DocumentChunkView v = views.get(i);
+            if (v == null) {
+                continue;
+            }
+            String content = v.content() == null ? "" : v.content();
+            int charCount = content.length();
+            currentPageCharacterCount += charCount;
+            chunks.add(new KbDocumentChunkVO(
+                    base + i + 1L, content, v.pageNo(), charCount, v.importantKeywords()));
+        }
+        KbDocumentChunkStatsVO stats = buildStats(
+                doc, lib, pageView.total(), currentPageCharacterCount,
+                pageView.chunkCount(), pageView.tokenCount());
+        return new KbDocumentChunksVO(
+                stats, chunks, pageView.total(), pageView.page(), pageView.pageSize(), null);
+    }
+
+    /**
+     * 统计条组装：切片配置以 MIS 本地为准（来源判定 FILE_OVERRIDE / LIBRARY）。
+     *
+     * <p>文档级覆盖字段任一非空 → {@code FILE_OVERRIDE}（展示文档级值）；
+     * 否则 {@code LIBRARY}（展示库级有效值，缺失时兜底 {@code RagSettings.withDefaults()}）。
+     *
+     * <p>双口径（设计 §7 共享知识 #3）：{@code chunkCount}（全量，引擎 doc.chunk_count，
+     * 不受关键字过滤影响）与 {@code totalChunks}（过滤后命中数）分别下发；
+     * {@code tokenCount} 为引擎 doc.token_count（可空）；{@code totalCharacterCount}
+     * 为当前页字符合计（非全文档）。
+     */
+    private KbDocumentChunkStatsVO buildStats(
+            KbDocument doc, KbLibrary lib, int total, int totalCharacterCount,
+            Integer chunkCount, Integer tokenCount) {
+        boolean fileOverride = (doc.getChunkMethod() != null && !doc.getChunkMethod().isBlank())
+                || doc.getChunkTokenNum() != null
+                || doc.getSeparator() != null;
+        String source = fileOverride ? "FILE_OVERRIDE" : "LIBRARY";
+        String chunkMethod;
+        Integer chunkTokenNum;
+        String separator;
+        if (fileOverride) {
+            chunkMethod = doc.getChunkMethod();
+            chunkTokenNum = doc.getChunkTokenNum();
+            separator = doc.getSeparator();
+        } else if (lib != null) {
+            RagSettings settings = KbJson.readSettings(lib.getRagSettingsJson());
+            RagSettings effective = settings == null ? RagSettings.defaults() : settings.withDefaults();
+            chunkMethod = effective.chunkMethod();
+            chunkTokenNum = effective.chunkTokenNum();
+            separator = effective.separator();
+        } else {
+            RagSettings effective = RagSettings.defaults();
+            chunkMethod = effective.chunkMethod();
+            chunkTokenNum = effective.chunkTokenNum();
+            separator = effective.separator();
+        }
+        return new KbDocumentChunkStatsVO(
+                total, totalCharacterCount, chunkMethod, chunkTokenNum, separator, source,
+                chunkCount, tokenCount);
+    }
+
+    /** 空态响应（解析中/失败/未同步/引擎不可达等）；双口径与 token 均置 null。 */
+    private static KbDocumentChunksVO emptyChunks(String hint, int page, int pageSize) {
+        KbDocumentChunkStatsVO stats =
+                new KbDocumentChunkStatsVO(0, 0, null, null, null, null, null, null);
+        return new KbDocumentChunksVO(
+                stats, List.of(), 0, Math.max(page, 1), Math.max(pageSize, 1), hint);
     }
 
     /**
@@ -462,6 +604,18 @@ public class KbDocumentService {
     private void requireLibraryManage(Long libraryId, Long userId) {
         if (!libraryService.hasLibraryManage(userId, libraryId)) {
             throw new KbBusinessException(KbResultCode.KB_CATEGORY_NOT_MANAGEABLE);
+        }
+    }
+
+    /**
+     * 文档读操作权限校验（「查看切分效果」双闸门之二：权限码由 BFF 拦截，ACL 读权限在此判定）。
+     *
+     * <p>public 库对 {@code read} 天然放行；私有库需用户/角色/部门任一 ACL 命中；
+     * 不通过抛 {@code KB_NO_READ_PERMISSION(40310)}。
+     */
+    private void requireDocumentRead(Long libraryId, Long userId) {
+        if (!visibilityService.hasPermission(userId, libraryId, AclAction.READ.code())) {
+            throw new KbBusinessException(KbResultCode.KB_NO_READ_PERMISSION);
         }
     }
 

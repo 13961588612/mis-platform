@@ -140,6 +140,16 @@ class BffApiRegistryDiffSurveyTest {
             "GET /api/v1/kb/acls/inventory"
     );
 
+    /** V41 净新增 KB 登记（问答会话软删除；sys_api 91199 / menu_api 91288 → 菜单 91036，复用 kb:qa:ask）。 */
+    private static final Set<String> EXPECTED_KB_V41_1 = Set.of(
+            "DELETE /api/v1/kb/qa/sessions/{sessionId}"
+    );
+
+    /** V42 净新增 KB 登记（文档切分查看；sys_api 91200 / menu_api 91289 → 菜单 91034 kb:document:list）。 */
+    private static final Set<String> EXPECTED_KB_V42_1 = Set.of(
+            "GET /api/v1/kb/libraries/{libraryId}/documents/{id}/chunks"
+    );
+
     /**
      * V32 之前的 KB 已登记<b>去重后</b> 42 行基线（V17/V18/V24/V25/V26/V27/V30/V31）。
      * <p>PRD §2.2 记「45 行」是按迁移行数（V30 含 3 行与 V24/V25 重复、被幂等守卫跳过）；
@@ -230,7 +240,7 @@ class BffApiRegistryDiffSurveyTest {
                         + kbUnregistered);
 
         // ---- 断言 2：V32 净新增登记 == 恰好 28（READ-01~24 + WRITE-01~04，零遗漏零超卖）；
-        //       叠加 V34 RAPTOR 2 + V37 补登 inventory 1 ----
+        //       叠加 V34 RAPTOR 2 + V37 补登 inventory 1 + V41 会话删除 1 + V42 文档切分查看 1 ----
         Set<String> registeredKb = registered.stream()
                 .filter(e -> e.contains(" /api/v1/kb/"))
                 .collect(Collectors.toCollection(TreeSet::new));
@@ -239,10 +249,12 @@ class BffApiRegistryDiffSurveyTest {
         Set<String> expectedKbNew = new TreeSet<>(EXPECTED_KB_28);
         expectedKbNew.addAll(EXPECTED_RAPTOR_2);
         expectedKbNew.addAll(EXPECTED_KB_V37_1);
+        expectedKbNew.addAll(EXPECTED_KB_V41_1);
+        expectedKbNew.addAll(EXPECTED_KB_V42_1);
         assertEquals(expectedKbNew, newKb,
                 "V32+V34 净新增 KB 登记必须恰好等于 READ-01~24 + WRITE-01~04（28）+ RAPTOR 2，"
-                        + "V37 补登 inventory 1；"
-                        + "多出 = 超范围登记，缺少 = 补登遗漏（对照设计 §1.7 登记表与 V34 注释、V37 迁移）");
+                        + "V37 补登 inventory 1，V41 会话删除 1，V42 文档切分查看 1；"
+                        + "多出 = 超范围登记，缺少 = 补登遗漏（对照设计 §1.7 登记表与 V34/V37/V41/V42 注释）");
 
         // ---- 断言 3：AI 反向信任端点 2 个已登记（U1 裁决 V33 authOnly）----
         Set<String> aiExported = apiV1.stream()
@@ -519,6 +531,8 @@ class BffApiRegistryDiffSurveyTest {
             "DELETE /api/v1/orgs/{id}",
             "GET /api/v1/depts/tree",
             "GET /api/v1/depts/{id}",
+            // ---- V40：组织穿透（sys_api 91198 / menu_api → 菜单 206 system:dept:list）----
+            "GET /api/v1/depts/pierce",
             "POST /api/v1/depts",
             "PUT /api/v1/depts/{id}",
             "DELETE /api/v1/depts/{id}",
@@ -697,6 +711,8 @@ class BffApiRegistryDiffSurveyTest {
             "GET /api/v1/kb/qa/sessions/mine",
             "GET /api/v1/kb/qa/sessions/{sessionId}",
             "GET /api/v1/kb/qa/sessions/{sessionId}/feedback",
+            // ---- V41：问答会话软删除（sys_api 91199 / menu_api 91288 → 菜单 91036，复用 kb:qa:ask）----
+            "DELETE /api/v1/kb/qa/sessions/{sessionId}",
             "GET /api/v1/kb/operations/qa/sessions",
             "GET /api/v1/kb/operations/qa/sessions/{sessionId}",
             "GET /api/v1/kb/operations/qa/sessions-all",
@@ -731,6 +747,8 @@ class BffApiRegistryDiffSurveyTest {
             "PUT /api/v1/modules/apis/{apiId}",
             "DELETE /api/v1/modules/apis/{apiId}",
             "GET /api/v1/modules/{moduleId}/bindings",
+            // ---- V42（本期）：KB 文档切分查看（sys_api 91200 / menu_api 91289 → 菜单 91034 kb:document:list）----
+            "GET /api/v1/kb/libraries/{libraryId}/documents/{id}/chunks",
             // ---- V39（系统管理三页真实化）：员工写端点 + 岗位 + 岗位类型 + 系统参数 ----
             // 员工详情/新增/编辑/删除（sys_api 91179-91182；员工列表 V4:1011 已登记不重复）
             "GET /api/v1/employees/{id}",

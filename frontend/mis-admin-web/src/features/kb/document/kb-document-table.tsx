@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { ListRestart, Power, RefreshCw, RotateCw, Settings2, Trash2, Upload } from 'lucide-react';
+import { Eye, ListRestart, Power, RefreshCw, RotateCw, Settings2, Trash2, Upload } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -7,6 +7,7 @@ import { PermissionGate } from '@/components/auth/permission-gate';
 import { EnabledBadge, ParseStatusBadge } from '../components/kb-badges';
 import { KbDocumentUploadDialog } from '../components/kb-document-upload-dialog';
 import { KbDocChunkDialog } from '../components/kb-doc-chunk-dialog';
+import { KbDocChunkViewDrawer } from '../components/kb-doc-chunk-view-drawer';
 import { SortIndicator } from '@/components/common/sort-indicator';
 import { useClientSort } from '@/components/common/use-client-sort';
 import { useColumnWidths, type ResizableColumn } from '@/components/common/use-column-widths';
@@ -100,6 +101,8 @@ export function KbDocumentTable({
   const [uploadOpen, setUploadOpen] = useState(false);
   const [chunkDoc, setChunkDoc] = useState<KbDocument | null>(null);
   const [chunkOpen, setChunkOpen] = useState(false);
+  const [viewDoc, setViewDoc] = useState<KbDocument | null>(null);
+  const [viewOpen, setViewOpen] = useState(false);
   const [reparsingAll, setReparsingAll] = useState(false);
   const [reparsingFailed, setReparsingFailed] = useState(false);
 
@@ -185,6 +188,11 @@ export function KbDocumentTable({
   function openChunkDialog(doc: KbDocument) {
     setChunkDoc(doc);
     setChunkOpen(true);
+  }
+
+  function openChunkView(doc: KbDocument) {
+    setViewDoc(doc);
+    setViewOpen(true);
   }
 
   async function onToggleEnabled(doc: KbDocument) {
@@ -370,6 +378,12 @@ export function KbDocumentTable({
         librarySettings={librarySettings}
         onUpdated={() => void load(libraryId)}
       />
+      <KbDocChunkViewDrawer
+        open={viewOpen}
+        onOpenChange={setViewOpen}
+        libraryId={libraryId}
+        doc={viewDoc}
+      />
 
       <div
         className={
@@ -465,6 +479,17 @@ export function KbDocumentTable({
                   </td>
                   <td className="whitespace-nowrap px-3 py-2">
                     <div className="flex items-center gap-1">
+                      <PermissionGate permission="kb:document:list">
+                        <button
+                          type="button"
+                          className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[0.8125rem] text-primary hover:bg-primary/10"
+                          onClick={() => openChunkView(doc)}
+                          title="查看该文档的切片结果（只读）"
+                        >
+                          <Eye className="h-3 w-3" />
+                          查看切分
+                        </button>
+                      </PermissionGate>
                       <PermissionGate permission="kb:document:edit">
                         <button
                           type="button"

@@ -3,6 +3,7 @@ package com.mis.kb.api.controller;
 import com.mis.common.core.result.Result;
 import com.mis.common.security.context.LoginUser;
 import com.mis.common.security.context.SecurityContextHolder;
+import com.mis.kb.api.dto.KbDocumentChunksVO;
 import com.mis.kb.api.dto.KbDocumentUploadResponse;
 import com.mis.kb.api.dto.KbDocumentVO;
 import com.mis.kb.api.dto.KbReparseAllResult;
@@ -40,6 +41,23 @@ public class DocumentController {
     @GetMapping("/{libraryId}/documents/{id}")
     public Result<KbDocumentVO> get(@PathVariable Long libraryId, @PathVariable Long id) {
         return Result.ok(documentService.get(id));
+    }
+
+    /**
+     * 分页列举文档切片（「查看文档切分效果」）。
+     *
+     * <p>读权限双闸门：BFF 侧 {@code kb:document:list} 权限码拦截 + 本服务内
+     * ACL 读权限校验。pageSize 默认 50，服务端不做硬上限（前端 UI 约束 100）。
+     */
+    @GetMapping("/{libraryId}/documents/{id}/chunks")
+    public Result<KbDocumentChunksVO> listChunks(
+            @PathVariable Long libraryId,
+            @PathVariable Long id,
+            @RequestParam(required = false) String keywords,
+            @RequestParam(defaultValue = "1") int page,
+            @RequestParam(defaultValue = "50") int pageSize) {
+        return Result.ok(documentService.listDocumentChunks(
+                libraryId, id, currentUserId(), keywords, page, pageSize));
     }
 
     @PostMapping("/{libraryId}/documents")

@@ -439,6 +439,51 @@ export interface KbDocumentChunkConfig {
   separator: string | null;
 }
 
+/** 文档切片单项（「查看文档切分效果」卡片）。 */
+export interface KbDocumentChunk {
+  /** 全局连续序号（从 1 开始，跨页连续）。 */
+  seq: number;
+  /** 清洗后纯文本（引擎 HTML/高亮已剥离，前端直接渲染，杜绝 XSS）。 */
+  content: string;
+  /** 切片所在页码；引擎未提供时为 null。 */
+  pageNo: number | null;
+  /** 清洗后正文字符数。 */
+  characterCount: number;
+  /** 重要关键词（引擎 important_keywords 透传）；引擎未提供时为 null。 */
+  importantKeywords: string[] | null;
+}
+
+/** 文档切片统计条（「查看文档切分效果」抽屉顶部）。 */
+export interface KbDocumentChunkStats {
+  /** 关键字过滤后的命中切片数（与响应顶层 total 一致）。 */
+  totalChunks: number;
+  /** 当前页切片清洗后正文合计字符数（标注「本页字符」）。 */
+  totalCharacterCount: number;
+  /** 切片方法（naive/qa/paper/book/laws/presentation/table/picture/one）。 */
+  chunkMethod: string | null;
+  /** 切片 token 数。 */
+  chunkTokenNum: number | null;
+  /** 切片分隔符。 */
+  separator: string | null;
+  /** 来源：FILE_OVERRIDE（文件指定）/ LIBRARY（继承库级）。 */
+  source: 'FILE_OVERRIDE' | 'LIBRARY' | null;
+  /** 文档全量切片数（引擎 doc.chunk_count，不受关键字过滤影响）；可空。 */
+  chunkCount: number | null;
+  /** 文档级总 token 数（引擎 doc.token_count）；可空。 */
+  tokenCount: number | null;
+}
+
+/** 文档切片分页响应（「查看文档切分效果」抽屉）。 */
+export interface KbDocumentChunks {
+  stats: KbDocumentChunkStats;
+  chunks: KbDocumentChunk[];
+  total: number;
+  page: number;
+  pageSize: number;
+  /** 空态提示（解析中/失败/未同步/引擎不可达）；正常态为 null。 */
+  hint: string | null;
+}
+
 /** 文档上传响应。 */
 export interface KbDocumentUploadResult {
   id: number;

@@ -52,6 +52,7 @@ class KbDocumentServiceReparseAllTest {
     private KbLibraryRepository libraryRepository;
     private KnowledgeEnginePort enginePort;
     private KbLibraryService libraryService;
+    private KbVisibilityService visibilityService;
     private KbDocumentService service;
 
     @BeforeEach
@@ -60,7 +61,9 @@ class KbDocumentServiceReparseAllTest {
         libraryRepository = mock(KbLibraryRepository.class);
         enginePort = mock(KnowledgeEnginePort.class);
         libraryService = mock(KbLibraryService.class);
-        service = new KbDocumentService(documentRepository, libraryRepository, enginePort, libraryService);
+        visibilityService = mock(KbVisibilityService.class);
+        service = new KbDocumentService(
+                documentRepository, libraryRepository, enginePort, libraryService, visibilityService);
         when(libraryRepository.findById(LIBRARY_ID))
                 .thenReturn(Optional.of(library()));
         // 知识库域一期：写操作双闸门（权限码 + 管辖），默认放行管辖，专项用例再拒

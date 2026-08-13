@@ -81,8 +81,9 @@ class KbControllerRegistryCoverageTest {
         // 数量守恒：73 = 42 既有（去重后，V30 含 3 行与 V24/25 重复被幂等跳过）+ 28 新登记（V32）
         //           + 2 新登记（V34 RAPTOR）+ 1 新登记（KBP-10 存量授权只读清单 inventory）
         //           + 1 新登记（V41 问答会话删除，复用 kb:qa:ask）
-        assertEquals(74, expected.size(), "KB 登记表条目数应为 42（去重基线）+ 28（V32）+ 2（V34 RAPTOR）"
-                + " + 1（KBP-10 inventory）+ 1（V41 会话删除）= 74，与 Controller 导出端点数一致（设计 §1.7 与 V30/V34 幂等说明）");
+        //           + 1 新登记（V42 文档切分查看，复用 kb:document:list）
+        assertEquals(75, expected.size(), "KB 登记表条目数应为 42（去重基线）+ 28（V32）+ 2（V34 RAPTOR）"
+                + " + 1（KBP-10 inventory）+ 1（V41 会话删除）+ 1（V42 文档切分查看）= 75，与 Controller 导出端点数一致（设计 §1.7 与 V30/V34 幂等说明）");
 
         exported.forEach(System.out::println);
 
@@ -223,6 +224,8 @@ class KbControllerRegistryCoverageTest {
         map.put("POST /api/v1/kb/qa/feedback", "kb:qa:feedback");
         map.put("POST /api/v1/kb/operations/qa/tickets", "kb:qa:ask");
         map.put("PATCH /api/v1/kb/operations/qa/tickets/{ticketId}", "kb:operation:list");
+        // ---- V42：文档切分查看（GET 只读，复用 kb:document:list；BFF 兜底判权 + mis-kb ACL 读权限双闸门）----
+        map.put("GET /api/v1/kb/libraries/{libraryId}/documents/{id}/chunks", "kb:document:list");
         return map;
     }
 

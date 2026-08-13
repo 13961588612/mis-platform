@@ -9,6 +9,7 @@ import type {
   KbDashboard,
   KbDocument,
   KbDocumentChunkConfig,
+  KbDocumentChunks,
   KbDocumentUploadResult,
   KbEngineCapabilities,
   KbEngineHealth,
@@ -298,6 +299,26 @@ export async function listDocuments(libraryId: number): Promise<KbDocument[]> {
 export async function getDocument(libraryId: number, id: number): Promise<KbDocument> {
   const res = await api.get<ApiResult<KbDocument>>(`/kb/libraries/${libraryId}/documents/${id}`);
   return unwrap(res, '获取文档详情失败');
+}
+
+/**
+ * 分页列举文档切片（「查看文档切分效果」）。
+ *
+ * <p>keywords 服务端过滤；page 1-based；pageSize 默认 50、前端 UI 上限 100。
+ * 空态由 `hint` 承载（解析中/失败/未同步到引擎/引擎不可达）。
+ */
+export async function listDocumentChunks(
+  libraryId: number,
+  docId: number,
+  keywords: string,
+  page: number,
+  pageSize = 50,
+): Promise<KbDocumentChunks> {
+  const res = await api.get<ApiResult<KbDocumentChunks>>(
+    `/kb/libraries/${libraryId}/documents/${docId}/chunks`,
+    { params: cleanParams({ keywords, page, pageSize }) },
+  );
+  return unwrap(res, '获取文档切分失败');
 }
 
 /** 上传文档（multipart/form-data；可选文件级切片参数，全空 = 继承库级）。 */

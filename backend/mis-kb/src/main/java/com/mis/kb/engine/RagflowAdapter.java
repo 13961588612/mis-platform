@@ -4,8 +4,11 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.mis.kb.domain.entity.KbDocument;
 import com.mis.kb.domain.entity.KbLibrary;
 import com.mis.kb.domain.model.ChunkHit;
+import com.mis.kb.domain.model.ChunkQuery;
 import com.mis.kb.domain.model.CreateLibraryCmd;
 import com.mis.kb.domain.model.DocumentChunkConfig;
+import com.mis.kb.domain.model.DocumentChunkPageView;
+import com.mis.kb.domain.model.DocumentChunkView;
 import com.mis.kb.domain.model.DocumentUploadInput;
 import com.mis.kb.domain.model.EngineCapabilities;
 import com.mis.kb.domain.model.EngineDocumentBrief;
@@ -26,6 +29,8 @@ import com.mis.kb.domain.repository.KbLibraryRepository;
 import com.mis.kb.engine.dto.RfChunk;
 import com.mis.kb.engine.dto.RfDataset;
 import com.mis.kb.engine.dto.RfDocument;
+import com.mis.kb.engine.dto.RfDocumentChunk;
+import com.mis.kb.engine.dto.RfDocumentChunkPage;
 import com.mis.kb.engine.dto.RfModel;
 import com.mis.kb.engine.dto.RfSearchChunk;
 import com.mis.kb.support.KbJson;
@@ -39,6 +44,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.regex.Pattern;
 
 /**
  * RAGFlow 真实适配器（HTTP 调 RAGFlow）。
@@ -552,6 +558,103 @@ public class RagflowAdapter implements KnowledgeEnginePort {
             }
         }
         return out;
+    }
+
+    /**
+     * 分页列举文档切片（「查看文档切分效果」）。
+     *
+     * <p>MIS libraryId/documentId → 引擎 dataset/doc 原生 id 翻译在本层闭环；
+     * 返回的 {@link DocumentChunkView} 仅携带 MIS documentId 与清洗后纯文本
+     * （引擎原生 chunk id 不下发）。
+     *
+     * <p><b>异常语义：</b>引擎不可达 / RAGFlow 报错（{@link RagflowClient#listChunks}
+     * 抛 {@link com.mis.common.core.exception.BusinessException}）在此<b>向上抛出</b>，
+     * 不做静默空页——由 {@code KbDocumentService} 捕获后降级为空态 +「引擎暂不可达」提示
+     * （与 {@code syncOpenParseStatuses} 的降级风格一致）。仅「库/文档无引擎映射」等
+     * 前置条件不满足时返回空页。
+     *
+     * @param query 切片查询（MIS id + 关键字 + 分页）
+     * @return 切片分页视图；恒非 {@code null}
+     */
+    @Override
+    public DocumentChunkPageView listDocumentChunks(ChunkQuery query) {
+        int page = query == null ? 1 : query.page();
+        int pageSize = query == null ? 20 : query.pageSize();
+        if (query == null || query.libraryId() == null || query.documentId() == null) {
+            return DocumentChunkPageView.empty(page, pageSize);
+        }
+        KbLibrary lib = libraryRepository.findById(query.libraryId()).orElse(null);
+        if (lib == null || !StringUtils.hasText(lib.getEngineLibraryRef())) {
+            return DocumentChunkPageView.empty(page, pageSize);
+        }
+        KbDocument doc = documentRepository.findById(query.documentId()).orElse(null);
+        if (doc == null || !StringUtils.hasText(doc.getEngineDocumentRef())) {
+            return DocumentChunkPageView.empty(page, pageSize);
+        }
+        RfDocumentChunkPage enginePage = client.listChunks(
+                lib.getEngineLibraryRef(), doc.getEngineDocumentRef(),
+                query.keywords(), page, pageSize);
+        List<DocumentChunkView> views = new ArrayList<>();
+        if (enginePage != null && enginePage.chunks() != null) {
+            for (RfDocumentChunk c : enginePage.chunks()) {
+                if (c == null) {
+                    continue;
+                }
+                views.add(new DocumentChunkView(
+                        query.documentId(),
+                        cleanContent(c.content()),
+                        c.pageNo(),
+                        c.importantKeywords() == null
+                                ? List.of() : List.copyOf(c.importantKeywords())));
+            }
+        }
+        int total = enginePage == null || enginePage.total() == null
+                ? views.size() : Math.max(enginePage.total(), 0);
+        Integer chunkCount = enginePage == null || enginePage.doc() == null
+                ? null : enginePage.doc().chunkCount();
+        Integer tokenCount = enginePage == null || enginePage.doc() == null
+                ? null : enginePage.doc().tokenCount();
+        return new DocumentChunkPageView(views, total, page, pageSize, chunkCount, tokenCount);
+    }
+
+    /**
+     * 引擎注入标记正则：{@code <weight ...>}/{@code <sep>}/{@code <em>xxx</em>} 及闭标签。
+     *
+     * <p>在 {@link RfSearchChunk#text()} 的 {@code weight|sep} 基础上扩展 {@code em}——
+     * chunks 端点的正文用 {@code <em>} 包裹命中关键字（现网探测结论），展示前必须剥离，
+     * 否则「正文带尖括号标签」的展示事故会直接复现。
+     */
+    private static final Pattern ENGINE_MARKUP_PATTERN =
+            Pattern.compile("</?(?:weight|sep|em)[^>]*>");
+
+    /** 残留 HTML 标签正则（{@code <table>}/{@code <td>} 等包装，剥离后保留换行）。 */
+    private static final Pattern RESIDUAL_HTML_PATTERN =
+            Pattern.compile("<[^>]+>");
+
+    /**
+     * 清洗 RAGFlow chunk 正文为纯文本（R3 风险防线：杜绝 XSS 与「正文带尖括号」事故）。
+     *
+     * <p>两步剥离：
+     * <ol>
+     *   <li>剥 {@code <weight>}/{@code <sep>}/{@code <em>} 标记（引擎注入的排版/高亮标记）；</li>
+     *   <li>剥残留 HTML 标签 {@code <[^>]+>}（chunks 正文可能被 {@code <table>} 等包装）。
+     *       换行保留——表格单元格、段落结构靠换行保持可读。</li>
+     * </ol>
+     * 归一空白：连续空格/Tab 压为单空格，行首行尾空白去除，连续空行压为至多两个。
+     *
+     * @param raw 引擎原始正文；可为 {@code null}
+     * @return 清洗后纯文本；原值为空时返回空串
+     */
+    static String cleanContent(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return "";
+        }
+        String cleaned = ENGINE_MARKUP_PATTERN.matcher(raw).replaceAll("");
+        cleaned = RESIDUAL_HTML_PATTERN.matcher(cleaned).replaceAll("");
+        cleaned = cleaned.replaceAll("[ \\t\\x0B\\f]+", " ");
+        cleaned = cleaned.replaceAll(" *\\r?\\n *", "\n");
+        cleaned = cleaned.replaceAll("\\n{3,}", "\n\n");
+        return cleaned.trim();
     }
 
     @Override

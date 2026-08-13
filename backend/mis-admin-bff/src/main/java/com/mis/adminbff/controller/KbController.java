@@ -6,6 +6,7 @@ import com.mis.adminbff.dto.kb.KbCategoryAdminCreateRequest;
 import com.mis.adminbff.dto.kb.KbCategoryAdminVO;
 import com.mis.adminbff.dto.kb.KbCategoryVO;
 import com.mis.adminbff.dto.kb.KbDashboardVO;
+import com.mis.adminbff.dto.kb.KbDocumentChunksVO;
 import com.mis.adminbff.dto.kb.KbDocumentUploadResponse;
 import com.mis.adminbff.dto.kb.KbDocumentVO;
 import com.mis.adminbff.dto.kb.KbEngineCapabilitiesVO;
@@ -112,6 +113,13 @@ public class KbController {
      * mis-kb 侧另有 {@code isGlobalAdmin} 二次裁定（双闸门）。
      */
     private static final String PERM_ACL_REVOKE = "kb:acl:revoke";
+
+    /**
+     * 文档列表/详情读取权限码（「查看文档切分效果」）。
+     * 取值必须与 V32 写入 {@code sys_menu(id=91130/91131).permission} 的字面量保持一致；
+     * mis-kb 侧另有 {@code KbVisibilityService.hasPermission} ACL 读权限二次裁定（双闸门）。
+     */
+    private static final String PERM_DOCUMENT_LIST = "kb:document:list";
 
     private final KbFacadeService kbFacadeService;
     private final UserPermissionLoader userPermissionLoader;
@@ -373,6 +381,26 @@ public class KbController {
     @GetMapping("/libraries/{libraryId}/documents/{id}")
     public Result<KbDocumentVO> getDocument(@PathVariable Long libraryId, @PathVariable Long id) {
         return Result.ok(kbFacadeService.getDocument(libraryId, id));
+    }
+
+    /**
+     * 分页列举文档切片（「查看文档切分效果」）。
+     *
+     * <p>权限双闸门：① BFF 侧 {@code kb:document:list} 兜底判权（{@link #requirePermission}，
+     * 注册表未生效空窗期）；② mis-kb 侧 {@code KbVisibilityService.hasPermission} ACL 读权限
+     * 二次裁定。读操作但仍挂 {@code @OperLog} 留痕（切片原文属敏感内容，审计谁在什么时间
+     * 查看了哪个文档的切分结果）。
+     */
+    @GetMapping("/libraries/{libraryId}/documents/{id}/chunks")
+    @OperLog(module = "知识库", operation = "查看文档切分", recordParams = true)
+    public Result<KbDocumentChunksVO> listDocumentChunks(
+            @PathVariable Long libraryId,
+            @PathVariable Long id,
+            @RequestParam(required = false) String keywords,
+            @RequestParam(defaultValue = "1") int page,
+            @RequestParam(defaultValue = "50") int pageSize) {
+        requirePermission(PERM_DOCUMENT_LIST);
+        return Result.ok(kbFacadeService.listDocumentChunks(libraryId, id, keywords, page, pageSize));
     }
 
     @PostMapping("/libraries/{libraryId}/documents")
