@@ -72,6 +72,25 @@ def is_kb_qa_request(agent_id: str, metadata: dict[str, Any] | None) -> bool:
     return str(meta.get("capability", "")).strip().lower() == "rag"
 
 
+def _session_title(question: str, max_len: int = 30) -> str | None:
+    """首问生成会话标题：strip 后超 max_len 取前 max_len + 省略号；空串返回 None。
+
+    Args:
+        question: 用户首问原文。
+        max_len: 截断长度（设计口径 30 字符）。
+
+    Returns:
+        会话标题；空串/纯空白/``None`` 返回 ``None``（由 mis-kb 落库为 NULL，
+        前端兜底展示「会话 #id」）。
+    """
+    text = (question or "").strip()
+    if not text:
+        return None
+    if len(text) > max_len:
+        return text[:max_len] + "…"
+    return text
+
+
 def build_kb_call_context(
     current_user: dict[str, Any] | None,
     *,
@@ -663,7 +682,9 @@ class KbQaPipeline:
         session_verified: bool = req.session_id is None
         try:
             if session_id is None:
-                session_id = await self._kb.create_session(ctx)
+                session_id = await self._kb.create_session(
+                    ctx, title=_session_title(req.question)
+                )
                 session_verified = True
             if session_id is None:
                 return None, None

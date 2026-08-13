@@ -713,6 +713,11 @@ public class KbFacadeService {
         return kbWebClient.getSessionDetail(sessionId);
     }
 
+    /** 删除问答会话（用户侧软删除；纯透传，归属/幂等由 mis-kb 裁定）。 */
+    public void deleteSession(Long sessionId) {
+        kbWebClient.deleteSession(sessionId);
+    }
+
     public KbQaFeedbackVO submitFeedback(
             Long sessionId, Integer accuracy, Integer helpful, Integer offtopic, Integer citeError) {
         Map<String, Object> body = new HashMap<>();

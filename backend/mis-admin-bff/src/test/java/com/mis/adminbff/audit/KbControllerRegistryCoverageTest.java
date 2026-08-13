@@ -49,7 +49,8 @@ class KbControllerRegistryCoverageTest {
     private static final Pattern VAR_REGEX = Pattern.compile("\\{([A-Za-z][A-Za-z0-9]*):[^}]*}");
 
     /**
-     * KB 全量端点 → 权限码（70 条 = V17~V31 既有 42（去重后）+ V32 新登记 28）。
+     * KB 全量端点 → 权限码（71 条 = V17~V31 既有 42（去重后）+ V32 新登记 28
+     * + 1 新登记（V41 问答会话删除，复用 kb:qa:ask，无新增权限码））。
      * 数据来源：V17/V18/V24/V25/V26/V27/V30/V31 迁移注释 + 设计 §1.7 登记表。
      */
     private static final Map<String, String> KB_EXPECTED_PERMISSIONS = buildExpected();
@@ -79,8 +80,9 @@ class KbControllerRegistryCoverageTest {
 
         // 数量守恒：73 = 42 既有（去重后，V30 含 3 行与 V24/25 重复被幂等跳过）+ 28 新登记（V32）
         //           + 2 新登记（V34 RAPTOR）+ 1 新登记（KBP-10 存量授权只读清单 inventory）
-        assertEquals(73, expected.size(), "KB 登记表条目数应为 42（去重基线）+ 28（V32）+ 2（V34 RAPTOR）"
-                + " + 1（KBP-10 inventory）= 73，与 Controller 导出端点数一致（设计 §1.7 与 V30/V34 幂等说明）");
+        //           + 1 新登记（V41 问答会话删除，复用 kb:qa:ask）
+        assertEquals(74, expected.size(), "KB 登记表条目数应为 42（去重基线）+ 28（V32）+ 2（V34 RAPTOR）"
+                + " + 1（KBP-10 inventory）+ 1（V41 会话删除）= 74，与 Controller 导出端点数一致（设计 §1.7 与 V30/V34 幂等说明）");
 
         exported.forEach(System.out::println);
 
@@ -202,6 +204,8 @@ class KbControllerRegistryCoverageTest {
         map.put("GET /api/v1/kb/qa/sessions/mine", "kb:qa:ask");
         map.put("GET /api/v1/kb/qa/sessions/{sessionId}", "kb:qa:ask");
         map.put("GET /api/v1/kb/qa/sessions/{sessionId}/feedback", "kb:qa:ask");
+        // ---- V41：问答会话删除（用户侧软删除；无新增权限码，复用 kb:qa:ask）----
+        map.put("DELETE /api/v1/kb/qa/sessions/{sessionId}", "kb:qa:ask");
         map.put("GET /api/v1/kb/operations/qa/sessions", "kb:operation:list");
         map.put("GET /api/v1/kb/operations/qa/sessions/{sessionId}", "kb:operation:list");
         map.put("GET /api/v1/kb/operations/qa/sessions-all", "kb:operation:list");

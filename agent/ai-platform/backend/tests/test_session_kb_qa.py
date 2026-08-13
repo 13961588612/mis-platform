@@ -10,10 +10,51 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from src.agent.mis_rag.qa_pipeline import format_kb_answer_for_chat
+from src.agent.mis_rag.qa_pipeline import _session_title, format_kb_answer_for_chat
 from src.api.deps import get_agent_manager_dep, get_optional_current_user, get_session_manager_dep
 from src.api.routes.session import router
 from src.models.retrieve import QaAnswer, QaCitation
+
+
+def test_session_title_truncates_long_question() -> None:
+    """首问超 30 字符时取前 30 字符 + 省略号。"""
+    title = _session_title("差" * 40)
+    assert title == "差" * 30 + "…"
+
+
+def test_session_title_keeps_short_question() -> None:
+    """短问题原样作为标题（strip 后）。"""
+    assert _session_title("  年假怎么休  ") == "年假怎么休"
+
+
+def test_session_title_blank_returns_none() -> None:
+    """空串/纯空白/None 返回 None，由 mis-kb 落库为 NULL。"""
+    assert _session_title("") is None
+    assert _session_title("   ") is None
+    assert _session_title(None) is None
+
+
+async def test_persist_passes_title_to_create_session() -> None:
+    """首问落库时 create_session 携带标题参数（非 None 才塞入 payload 由客户端保证）。"""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from src.adapters.kb_client import KbCallContext
+    from src.agent.mis_rag.qa_pipeline import KbQaPipeline, KbQaRequest
+
+    kb = MagicMock()
+    kb.create_session = AsyncMock(return_value=77)
+    kb.append_message = AsyncMock(return_value=88)
+    kb.save_citations = AsyncMock(return_value=0)
+    pipeline = KbQaPipeline(kb_client=kb)
+
+    req = KbQaRequest(question="  差旅住宿标准是多少？  ")
+    ctx = KbCallContext(user_id=1001)
+    session_id, message_id = await pipeline._persist(req, ctx, "答案", [])
+
+    assert session_id == 77
+    assert message_id == 88
+    kb.create_session.assert_awaited_once_with(ctx, title="差旅住宿标准是多少？")
+    kb.append_message.assert_awaited()
 
 
 def test_format_kb_answer_for_chat_appends_sources() -> None:

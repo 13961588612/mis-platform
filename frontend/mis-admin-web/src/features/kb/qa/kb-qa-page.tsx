@@ -5,11 +5,13 @@ import {
   Copy,
   History,
   Loader2,
+  Plus,
   RefreshCw,
   RotateCcw,
   Send,
   Sparkles,
   Square,
+  Trash2,
   TriangleAlert,
 } from 'lucide-react';
 import { toast } from 'sonner';
@@ -20,12 +22,26 @@ import { Badge } from '@/components/ui/badge';
 import { PageHeader } from '@/components/common/page-header';
 import { buildAppBreadcrumbs } from '@/components/common/app-breadcrumbs';
 import { MarkdownView } from '@/components/common/markdown-view';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import { useAiStore } from '@/stores/ai-store';
 import { KbCitationList } from '../components/kb-citation-list';
 import { KbFeedbackFormPanel } from '../components/kb-feedback-form';
 import { KbLibraryCombobox } from '../components/kb-library-combobox';
 import { KbTicketDialog } from '../components/kb-ticket-dialog';
-import { askKbRag, askKbRagStream, getSessionDetail, listMySessions } from '../api/kb-api';
+import {
+  askKbRag,
+  askKbRagStream,
+  deleteSession,
+  getSessionDetail,
+  listMySessions,
+} from '../api/kb-api';
 import type { KbQaCitation, KbQaSession } from '../types';
 import { formatTime } from '../types';
 
@@ -78,6 +94,8 @@ export function KbQaPage() {
   const [activeSessionId, setActiveSessionId] = useState<number | null>(null);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const [ticketTarget, setTicketTarget] = useState<TurnItem | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<KbQaSession | null>(null);
+  const [deleting, setDeleting] = useState(false);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const abortRef = useRef<AbortController | null>(null);
 
@@ -220,6 +238,36 @@ export function KbQaPage() {
     [location.pathname, loadSessions, patchTurn],
   );
 
+  /** 手动新建会话：清空对话区并脱离当前会话，检索范围（libraryId）保留。 */
+  function handleNewSession(): void {
+    setTurns([]);
+    setActiveSessionId(null);
+    setAskError(null);
+  }
+
+  /** 删除会话：软删除成功后从列表移除；若删的是当前会话则一并清空对话区。 */
+  async function confirmDelete(): Promise<void> {
+    const target = deleteTarget;
+    if (!target) return;
+    setDeleting(true);
+    try {
+      await deleteSession(target.id);
+      setSessions((prev) => prev.filter((x) => x.id !== target.id));
+      if (activeSessionId === target.id) {
+        setActiveSessionId(null);
+        setTurns([]);
+        setAskError(null);
+      }
+      setDeleteTarget(null);
+      toast.success('会话已删除');
+    } catch (e) {
+      // 失败：列表不动，仅提示（服务端幂等，重复删除不产生副作用）
+      toast.error(e instanceof Error ? e.message : '删除会话失败');
+    } finally {
+      setDeleting(false);
+    }
+  }
+
   async function onAsk(): Promise<void> {
     const q = question.trim();
     if (!q || asking) return;
@@ -321,15 +369,21 @@ export function KbQaPage() {
         description="基于可见知识库的检索增强问答；回答流式输出并附带引用来源，可提交质量反馈或报告问题。"
         breadcrumbs={buildAppBreadcrumbs({ app: 'kb', title: '智能问答' })}
         actions={
-          <Button
-            size="sm"
-            variant="outline"
-            disabled={historyLoading}
-            onClick={() => void loadSessions()}
-          >
-            <RefreshCw className="h-4 w-4" />
-            刷新历史
-          </Button>
+          <>
+            <Button size="sm" onClick={handleNewSession}>
+              <Plus className="h-4 w-4" />
+              新建会话
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={historyLoading}
+              onClick={() => void loadSessions()}
+            >
+              <RefreshCw className="h-4 w-4" />
+              刷新历史
+            </Button>
+          </>
         }
       />
 
@@ -347,22 +401,37 @@ export function KbQaPage() {
               <p className="p-2 text-sm text-muted-foreground">暂无历史会话</p>
             ) : (
               sessions.map((s) => (
-                <button
+                <div
                   key={s.id}
-                  type="button"
                   className={cn(
-                    'mb-0.5 w-full truncate rounded-md px-2 py-1.5 text-left text-sm',
+                    'group mb-0.5 flex w-full items-center justify-between rounded-md px-2 py-1.5 text-left text-sm',
                     activeSessionId === s.id
                       ? 'bg-primary/10 font-medium text-primary'
                       : 'hover:bg-accent',
                   )}
-                  onClick={() => void onOpenSession(s)}
                 >
-                  会话 #{s.id}
-                  <span className="ml-1 text-xs text-muted-foreground">
-                    {formatTime(s.createdAt)}
-                  </span>
-                </button>
+                  <button
+                    type="button"
+                    className="min-w-0 flex-1 truncate text-left"
+                    onClick={() => void onOpenSession(s)}
+                  >
+                    <span className="block truncate">{s.title ?? `会话 #${s.id}`}</span>
+                    <span className="block truncate text-xs text-muted-foreground">
+                      {formatTime(s.createdAt)}
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    title="删除会话"
+                    className="ml-1 shrink-0 rounded p-1 text-muted-foreground opacity-0 transition-opacity hover:bg-destructive/10 hover:text-destructive focus:opacity-100 group-hover:opacity-100"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setDeleteTarget(s);
+                    }}
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </button>
+                </div>
               ))
             )}
           </div>
@@ -530,6 +599,33 @@ export function KbQaPage() {
         sessionId={ticketTarget?.sessionId ?? null}
         messageId={ticketTarget?.messageId ?? null}
       />
+
+      <Dialog
+        open={deleteTarget != null}
+        onOpenChange={(v) => {
+          if (!v) setDeleteTarget(null);
+        }}
+      >
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>删除会话</DialogTitle>
+            <DialogDescription>
+              确定删除会话「
+              {deleteTarget ? (deleteTarget.title ?? `会话 #${deleteTarget.id}`) : ''}
+              」？删除后将在问答页不再显示。
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" disabled={deleting} onClick={() => setDeleteTarget(null)}>
+              取消
+            </Button>
+            <Button variant="destructive" disabled={deleting} onClick={() => void confirmDelete()}>
+              {deleting ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+              删除
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

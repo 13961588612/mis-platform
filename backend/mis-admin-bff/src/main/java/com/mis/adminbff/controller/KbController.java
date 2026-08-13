@@ -482,6 +482,14 @@ public class KbController {
         return Result.ok(kbFacadeService.getSessionDetail(sessionId));
     }
 
+    /** 删除我的问答会话（用户侧软删除，归属/幂等由 mis-kb 裁定；无额外权限码，沿用 kb:qa:ask）。 */
+    @DeleteMapping("/qa/sessions/{sessionId}")
+    @OperLog(module = "知识库", operation = "删除问答会话", recordParams = true)
+    public Result<Void> deleteSession(@PathVariable Long sessionId) {
+        kbFacadeService.deleteSession(sessionId);
+        return Result.ok();
+    }
+
     @PostMapping("/qa/feedback")
     @OperLog(module = "知识库", operation = "提交问答反馈", recordParams = true)
     public Result<KbQaFeedbackVO> submitFeedback(@Valid @RequestBody FeedbackBody body) {

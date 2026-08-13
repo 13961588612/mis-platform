@@ -9,6 +9,7 @@ import com.mis.kb.api.dto.KbQaSessionVO;
 import com.mis.kb.api.dto.QaFeedbackRequest;
 import com.mis.kb.domain.service.KbQaService;
 import jakarta.validation.Valid;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -44,6 +45,13 @@ public class QaController {
     @GetMapping("/sessions/{sessionId}")
     public Result<KbQaSessionDetailVO> getSessionDetail(@PathVariable Long sessionId) {
         return Result.ok(qaService.getSessionDetail(sessionId, currentUserId()));
+    }
+
+    /** 删除我的问答会话（软删除：仅用户侧不可见，运营侧保留全量；重复删幂等成功）。 */
+    @DeleteMapping("/sessions/{sessionId}")
+    public Result<Void> deleteSession(@PathVariable Long sessionId) {
+        qaService.deleteSession(sessionId, currentUserId());
+        return Result.ok(null);
     }
 
     /** 提交/修改问答反馈（editable_once 语义：最多修改一次）。 */

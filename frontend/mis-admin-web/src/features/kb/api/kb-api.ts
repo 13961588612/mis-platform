@@ -434,6 +434,12 @@ export async function listMySessions(): Promise<KbQaSession[]> {
   return unwrap(res, '获取我的问答历史失败');
 }
 
+/** 删除问答会话（用户侧软删除，服务端幂等；删除后由调用方刷新列表）。 */
+export async function deleteSession(sessionId: number): Promise<void> {
+  const res = await api.delete<ApiResult<null>>(`/kb/qa/sessions/${sessionId}`);
+  if (res.data.code !== 0) throw new Error(res.data.message || '删除会话失败');
+}
+
 /**
  * 会话详情（用户视角）。
  *

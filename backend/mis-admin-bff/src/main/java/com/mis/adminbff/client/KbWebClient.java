@@ -696,6 +696,15 @@ public class KbWebClient extends AbstractDownstreamClient {
                 .bodyToMono(QA_SESSION_DETAIL));
     }
 
+    /** 删除问答会话（用户侧软删除；mis-kb 侧幂等）。 */
+    public void deleteSession(Long sessionId) {
+        block(client().delete()
+                .uri("/internal/v1/kb/qa/sessions/{sessionId}", sessionId)
+                .headers(loginContextHeaders())
+                .retrieve()
+                .bodyToMono(VOID));
+    }
+
     public KbQaFeedbackVO submitFeedback(Map<String, Object> body) {
         return block(client().post()
                 .uri("/internal/v1/kb/qa/feedback")

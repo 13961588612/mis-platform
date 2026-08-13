@@ -507,6 +507,8 @@ export interface KbQaSession {
   userId: number | null;
   appId: number | null;
   createdAt: string | null;
+  /** 会话标题（首问前 30 字符）；null 时 UI 兜底展示「会话 #id」。 */
+  title?: string | null;
 }
 
 /** 问答引用（仅含 MIS 业务 ID，不暴露引擎原生 id）。 */

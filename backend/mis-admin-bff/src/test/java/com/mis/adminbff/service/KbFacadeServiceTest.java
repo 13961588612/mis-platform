@@ -46,6 +46,14 @@ class KbFacadeServiceTest {
     // ---------------------------------------------------- deleteLibrary：默认归档
 
     @Test
+    @DisplayName("deleteSession → 透传 kbWebClient.deleteSession(id)")
+    void deleteSessionPassesThrough() {
+        facade.deleteSession(123L);
+
+        verify(kbWebClient).deleteSession(123L);
+    }
+
+    @Test
     @DisplayName("mode=null → 回落 archive（绝不直接物理删除）")
     void deleteLibrary_nullModeDefaultsToArchive() {
         KbLibraryDeleteResultVO expected = new KbLibraryDeleteResultVO(

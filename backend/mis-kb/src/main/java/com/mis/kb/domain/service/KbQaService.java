@@ -102,10 +102,27 @@ public class KbQaService {
         entity.setId(IdGenerator.nextId());
         entity.setUserId(owner);
         entity.setAppId(req.appId());
+        entity.setTitle(truncateTitle(req.title()));
         entity.setCreatedAt(Instant.now());
         KbQaSession saved = sessionRepository.save(entity);
         log.debug("问答会话已创建 sessionId={} userId={}", saved.getId(), saved.getUserId());
         return saved.getId();
+    }
+
+    /**
+     * 标题截断（VARCHAR(255) 上限防御）。
+     *
+     * <p>mis-rag 侧新建时已按 30 字符截断，此处再做一次 255 上限兜底，
+     * 防止任何上游直接调用本端点时携带超长标题触发 DB 写入失败。
+     */
+    private String truncateTitle(String title) {
+        if (title == null) {
+            return null;
+        }
+        if (title.length() > 255) {
+            return title.substring(0, 255);
+        }
+        return title;
     }
 
     /**
@@ -173,15 +190,38 @@ public class KbQaService {
 
     // ---------------------------------------------------------------- 读取（BFF / 运营）
 
-    /** 我的问答历史（按会话倒序）。 */
+    /** 我的问答历史（按会话倒序，过滤软删除）。 */
     @Transactional(readOnly = true)
     public List<KbQaSessionVO> listMySessions(Long userId) {
         if (userId == null) {
             return List.of();
         }
-        return sessionRepository.findByUserIdOrderByIdDesc(userId).stream()
+        return sessionRepository.findByUserIdAndDeletedAtIsNullOrderByIdDesc(userId).stream()
                 .map(KbQaService::toSessionVo)
                 .toList();
+    }
+
+    /**
+     * 删除问答会话（用户侧软删除）。
+     *
+     * <p><b>软删除语义：</b>仅置 {@code deleted_at} 时间戳，不物理删除任何行；
+     * 运营侧统计/列表/导出保留全量。用户侧 {@link #listMySessions} 不再展示。
+     *
+     * <p><b>幂等：</b>对已软删的会话重复删除同样成功（再次刷新 {@code deleted_at}），
+     * 便于前端「删除后列表刷新 + 重复点击」等场景零副作用。
+     *
+     * @param sessionId    会话 id
+     * @param actingUserId 实际发起用户；为 {@code null} 时跳过归属校验（内部调用）
+     * @throws KbBusinessException 会话不存在（{@code KB_SESSION_NOT_FOUND}）或非本人（统一按不存在处理）
+     */
+    @Transactional
+    public void deleteSession(Long sessionId, Long actingUserId) {
+        KbQaSession session = requireOwnedSession(sessionId, actingUserId);
+        // requireOwnedSession 按 id+userId 查（不按软删过滤），已删会话可重复删；
+        // 此处再置一次时间即幂等成功。
+        session.setDeletedAt(Instant.now());
+        sessionRepository.save(session);
+        log.info("问答会话已软删除 sessionId={} userId={}", sessionId, session.getUserId());
     }
 
     /**
@@ -422,7 +462,7 @@ public class KbQaService {
     }
 
     private static KbQaSessionVO toSessionVo(KbQaSession e) {
-        return new KbQaSessionVO(e.getId(), e.getUserId(), e.getAppId(), e.getCreatedAt());
+        return new KbQaSessionVO(e.getId(), e.getUserId(), e.getAppId(), e.getCreatedAt(), e.getTitle());
     }
 
     /**
