@@ -255,18 +255,28 @@ public class RagflowClient {
      * <b>405 MethodNotAllowed</b>——这正是知识库物理删除长期失效的根因（单 id 路径不被支持）。
      * 现改用官方批量接口，路径不带 {@code /{id}}，datasetId 放进 body 的 {@code ids} 数组。
      *
-     * <p><b>Q1 missing 判定（2026-08-xx）：</b>原「404 静默幂等」改为「404 →
-     * 抛 {@link EngineDatasetMissingException}」——运维可能已在 RAGFlow 控制台手工删除
-     * 该 dataset，MIS 侧删除/归档时必须识别并提示，而不是把 404 当成「已删成功」静默吞掉。
+     * <p><b>Q1 missing 判定（2026-08-xx）：</b>原「404 静默幂等」改为「HTTP 404 或
+     * HTTP 403 + {@code lacks permission} 或缺失文案 → 抛
+     * {@link EngineDatasetMissingException}」——运维可能已在 RAGFlow 控制台手工删除
+     * 该 dataset，MIS 侧删除/归档时必须识别并提示，而不是把 404/403 当成「已删成功」静默吞掉。
      * 调用方（{@code KbLibraryService}）捕获后进入两段式确认流。
      *
-     * <p><b>显式失败：</b>非 2xx 且非 404（含 405）一律抛 {@link BusinessException}，
-     * 由调用方感知并回滚本地事务（保留历史「静默假成功」的修复）。不做「PUT enabled=0
-     * 停用」冒充删除——停用语义已被 {@link #updateDocumentEnabled} 占用（B1），且停用 ≠ 删除。
+     * <p><b>为什么 403+lacks permission 也算 missing（2026-08-xx，用户实测）：</b>
+     * RAGFlow 的批量删除接口 {@code DELETE /api/v1/datasets}（body {@code {"ids":[...]}}）
+     * 对<b>已不存在的 dataset</b> 返回 HTTP 403 + 文案 {@code lacks permission for datasets: 'xxx'}
+     * （权限层先做归属校验：dataset 不存在 → 查不到归属 → 报无权），<b>不是 404</b>。
+     * 若只认 404，403 会落入普通引擎失败分支 → 本地回滚 + 用户看到「引擎侧删除失败」。
+     * 判定口径见 {@link #isForbiddenMissing}（<b>只认 {@code lacks permission}</b>，
+     * 403 + 其它文案不判 missing，保守）。
+     *
+     * <p><b>显式失败：</b>非 2xx 且非 missing（非 404 / 非 403+lacks permission，含 405）
+     * 一律抛 {@link BusinessException}，由调用方感知并回滚本地事务（保留历史「静默假成功」
+     * 的修复）。不做「PUT enabled=0 停用」冒充删除——停用语义已被
+     * {@link #updateDocumentEnabled} 占用（B1），且停用 ≠ 删除。
      *
      * @param datasetId 原生 dataset id
-     * @throws EngineDatasetMissingException 引擎侧 dataset 已不存在（HTTP 404）
-     * @throws BusinessException             RAGFlow 返回非 2xx 且非 404 时抛出
+     * @throws EngineDatasetMissingException 引擎侧 dataset 已不存在（HTTP 404 或 HTTP 403+lacks permission 或缺失文案）
+     * @throws BusinessException             RAGFlow 返回非 2xx 且非 missing（非 404 / 非 403+lacks permission）时抛出
      */
     public void deleteDataset(String datasetId) {
         if (datasetId == null || datasetId.isBlank()) {
@@ -289,15 +299,16 @@ public class RagflowClient {
      * 一眼看出「这个库已经在 MIS 侧下线了」的手段，数据本身完整保留、可恢复。
      *
      * <p><b>Q1 missing 判定（2026-08-xx）：</b>引擎侧 dataset 已被手工删除时，改名会得到
-     * HTTP 404 或 {@code code != 0} + 缺失文案（{@code not found / not exist / 不存在 / missing}）。
-     * 这两种形态都抛 {@link EngineDatasetMissingException}，供归档两段式确认流识别——
-     * 否则归档会因「改名失败」误落 {@code engine_sync_status=3} 等待对账，而正确语义是
-     * 「引擎侧已不存在」。
+     * HTTP 404、HTTP 403 + {@code lacks permission}（判定口径见 {@link #isForbiddenMissing}），
+     * 或 {@code code != 0} + 缺失文案（{@code not found / not exist / 不存在 / missing /
+     * lacks permission}）。这些形态都抛 {@link EngineDatasetMissingException}，供归档两段式
+     * 确认流识别——否则归档会因「改名失败」误落 {@code engine_sync_status=3} 等待对账，
+     * 而正确语义是「引擎侧已不存在」。
      *
      * @param datasetId 原生 dataset id
      * @param name      新名字（已由 {@link RagflowDatasetNaming} 清洗并截断）
-     * @throws EngineDatasetMissingException 引擎侧 dataset 已不存在（HTTP 404 / 缺失文案）
-     * @throws BusinessException             参数非法或 RAGFlow 返回非 0 code（非 missing）
+     * @throws EngineDatasetMissingException 引擎侧 dataset 已不存在（HTTP 404 / HTTP 403+lacks permission / 缺失文案）
+     * @throws BusinessException             参数非法或 RAGFlow 返回非 0 code（非 missing，即非 404 / 非 403+lacks permission）
      */
     public void renameDataset(String datasetId, String name) {
         if (datasetId == null || datasetId.isBlank()) {
@@ -314,12 +325,14 @@ public class RagflowClient {
                     new ParameterizedTypeReference<>() {});
         } catch (RestClientResponseException ex) {
             int status = ex.getStatusCode().value();
-            if (status == 404) {
-                // 引擎侧 dataset 已不存在（可能在 RAGFlow 控制台被手工删除）→ missing 信号
-                log.info("RAGFlow 重命名遇 HTTP 404（引擎侧数据集已不存在）datasetId={} newName={}",
-                        datasetId, name);
+            if (status == 404 || isForbiddenMissing(ex)) {
+                // 引擎侧 dataset 已不存在（可能在 RAGFlow 控制台被手工删除）→ missing 信号。
+                // 404 与「403+lacks permission」都判 missing：RAGFlow 对已删 dataset 的
+                // 批量删除接口返回 403+lacks permission 而非 404（权限层先做归属校验）。
+                log.info("RAGFlow 重命名遇 HTTP {}（引擎侧数据集已不存在）datasetId={} newName={}",
+                        status, datasetId, name);
                 throw new EngineDatasetMissingException(
-                        "RAGFlow 重命名知识库失败: HTTP 404 引擎侧数据集不存在");
+                        "RAGFlow 重命名知识库失败: HTTP " + status + " 引擎侧数据集不存在");
             }
             throw new BusinessException(50000,
                     "RAGFlow 重命名知识库失败: HTTP " + status + " " + ex.getMessage());
@@ -695,13 +708,18 @@ public class RagflowClient {
      * 由调用方据此识别「引擎侧 dataset 已不存在」（运维可能已在 RAGFlow 控制台手工删除）。
      * 业务响应 {@code code != 0} 且 message 命中缺失关键字时同样抛 missing。
      *
+     * <p><b>403+lacks permission 也算 missing（2026-08-xx，用户实测）：</b>RAGFlow 批量
+     * 删除接口对已不存在的 dataset 返回 HTTP 403 + {@code lacks permission}（不是 404），
+     * 判定口径见 {@link #isForbiddenMissing}——<b>只认 {@code lacks permission}</b>，
+     * 403 + 其它文案不判 missing，保持普通失败。
+     *
      * <p><b>deleteDocument 的 404 语义不受影响：</b>文档删除仍走原
      * {@link #deleteWithJsonBody}（404 = 幂等成功），只有 dataset 删除需要 missing 信号。
      *
      * @param uri             相对 baseUrl 的删除路径
      * @param body            请求体（JSON）
      * @param failurePrefix   失败消息前缀（区分知识库/文档）
-     * @param missingStatuses 视为「引擎侧缺失」的 HTTP 状态码（如 404）
+     * @param missingStatuses 视为「引擎侧缺失」的 HTTP 状态码（如 404；403+lacks permission 由 {@link #isForbiddenMissing} 兜底）
      */
     private void deleteWithJsonBodyDetectMissing(
             String uri, Object body, String failurePrefix, int... missingStatuses) {
@@ -729,7 +747,9 @@ public class RagflowClient {
             }
         } catch (RestClientResponseException ex) {
             int status = ex.getStatusCode().value();
-            if (missing.contains(status)) {
+            if (missing.contains(status) || isForbiddenMissing(ex)) {
+                // 404 与「403+lacks permission」都表示引擎侧 dataset 已不存在
+                // （RAGFlow 对已删 dataset 的批量删除返回 403+lacks permission，不是 404）
                 log.info("RAGFlow 删除遇 HTTP {}（引擎侧数据集已不存在）: {} body={}", status, uri, body);
                 throw new EngineDatasetMissingException(
                         failurePrefix + ": HTTP " + status + " 引擎侧数据集不存在");
@@ -742,7 +762,8 @@ public class RagflowClient {
      * 业务响应 message 是否命中「引擎侧缺失」关键字（Q1 判定口径，不区分大小写）。
      *
      * @param message 引擎返回的 message，允许 {@code null}
-     * @return {@code true} 表示命中 {@code not found / not exist / 不存在 / missing}
+     * @return {@code true} 表示命中 {@code not found / not exist / 不存在 / missing /
+     *         lacks permission}
      */
     private static boolean isDatasetMissingMessage(String message) {
         if (message == null) {
@@ -752,7 +773,40 @@ public class RagflowClient {
         return lower.contains("not found")
                 || lower.contains("not exist")
                 || lower.contains("不存在")
-                || lower.contains("missing");
+                || lower.contains("missing")
+                || lower.contains("lacks permission");
+    }
+
+    /**
+     * HTTP 403 + {@code lacks permission} 文案是否应判为「引擎侧 dataset 已不存在」
+     * （Q1 扩展，2026-08-xx 用户实测）。
+     *
+     * <p><b>为什么需要：</b>RAGFlow 的批量删除接口 {@code DELETE /api/v1/datasets}
+     * （body {@code {"ids":[...]}}）对<b>已不存在的 dataset</b> 返回 HTTP 403 + 文案
+     * {@code lacks permission for datasets: 'xxx'}（权限层先做归属校验：dataset 不存在 →
+     * 查不到归属 → 报无权），<b>不是 404</b>。若只认 404，403 会落入普通引擎失败分支 →
+     * 本地回滚 + 用户看到「引擎侧删除失败」。
+     *
+     * <p><b>保守口径：</b>只有「HTTP 403 + 命中 {@code lacks permission}」才判 missing。
+     * 403 + 其它文案（如 {@code Permission denied} / {@code Forbidden}）<b>不判 missing</b>，
+     * 保持普通失败——只有 RAGFlow 对已删 dataset 的这条特定返回才进 missing 流。
+     *
+     * <p><b>响应文本取两个来源任一命中即可：</b>{@link RestClientResponseException#getResponseBodyAsString()}
+     * 取响应体原文更稳；{@code getMessage()} 通常已含响应体（Spring 默认错误处理器
+     * {@code 403 Forbidden: <body>} 形态），两者都查，避免不同版本拼接差异。
+     *
+     * @param ex RestClientResponseException（HTTP 4xx/5xx）
+     * @return {@code true} 表示该 403 实为「引擎侧 dataset 已不存在」
+     */
+    private static boolean isForbiddenMissing(RestClientResponseException ex) {
+        if (ex.getStatusCode().value() != 403) {
+            return false;
+        }
+        String body = ex.getResponseBodyAsString();
+        String message = ex.getMessage();
+        String lowerBody = body == null ? "" : body.toLowerCase(Locale.ROOT);
+        String lowerMessage = message == null ? "" : message.toLowerCase(Locale.ROOT);
+        return lowerBody.contains("lacks permission") || lowerMessage.contains("lacks permission");
     }
 
     /**

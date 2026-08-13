@@ -28,8 +28,13 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  *   <li>{@code deleteDataset}：HTTP 404 → {@link EngineDatasetMissingException}
  *       （原「404 静默幂等」已废弃）；业务 {@code code != 0} + 缺失文案同样判 missing；</li>
  *   <li>{@code renameDataset}：HTTP 404 → missing；业务 {@code code != 0} + message 命中
- *       {@code not found / not exist / 不存在 / missing}（不区分大小写）→ missing；
+ *       {@code not found / not exist / 不存在 / missing / lacks permission}（不区分大小写）→ missing；
  *       否则维持 {@link BusinessException}(50000)；</li>
+ *   <li><b>403+lacks permission 扩展（2026-08-xx 用户实测）</b>：RAGFlow 批量删除接口
+ *       {@code DELETE /api/v1/datasets} 对<b>已不存在的 dataset</b> 返回 HTTP 403 +
+ *       {@code lacks permission for datasets: 'xxx'}（不是 404）——deleteDataset / renameDataset
+ *       遇此形态同样抛 {@link EngineDatasetMissingException}；<b>只认 {@code lacks permission}</b>，
+ *       403 + 其它文案（{@code Forbidden} 等）不判 missing；</li>
  *   <li><b>非 missing 失败绝不误判</b>：405 / 500 / 普通业务错误仍是 BusinessException；</li>
  *   <li><b>deleteDocument 的 404 语义不受 Q1 影响</b>（仍走原 {@code deleteWithJsonBody}）：
  *       HTTP 404 维持原行为抛 {@link BusinessException}(50000)，<b>不</b>因 Q1 变成
@@ -121,6 +126,29 @@ class RagflowClientMissingTest {
             assertThrows(EngineDatasetMissingException.class,
                     () -> client.deleteDataset("ds-1"));
         }
+
+        @Test
+        @DisplayName("HTTP 403 + lacks permission（RAGFlow 对已删 dataset 的真实返回）→ 判 missing")
+        void deleteDataset403LacksPermissionIsMissing() {
+            stub.set(new Stub(403, "{\"code\":100,\"message\":\"lacks permission for datasets: "
+                    + "'66e5a448948a11f1b45c7dc3cecfbcd9'\",\"data\":null}"));
+            RagflowClient client = newClient();
+
+            EngineDatasetMissingException ex = assertThrows(EngineDatasetMissingException.class,
+                    () -> client.deleteDataset("ds-1"));
+            assertTrue(ex.getMessage().contains("删除知识库"));
+            assertTrue(ex.getMessage().contains("403"));
+        }
+
+        @Test
+        @DisplayName("业务 code!=0 + message 命中 lacks permission → 判 missing（双保险）")
+        void deleteDatasetBusinessLacksPermissionMessage() {
+            stub.set(Stub.json(200, "101", "lacks permission for datasets: '66e5a448948a11f1b45c7dc3cecfbcd9'"));
+            RagflowClient client = newClient();
+
+            assertThrows(EngineDatasetMissingException.class,
+                    () -> client.deleteDataset("ds-1"));
+        }
     }
 
     @Nested
@@ -137,6 +165,19 @@ class RagflowClientMissingTest {
                     () -> client.deleteDataset("ds-1"));
             assertEquals(50000, ex.getCode());
             assertTrue(ex.getMessage().contains("405"));
+        }
+
+        @Test
+        @DisplayName("HTTP 403 + 其它文案（Forbidden）→ 仍抛 BusinessException，不误判 missing")
+        void deleteDataset403OtherTextIsNotMissing() {
+            stub.set(new Stub(403, "{\"code\":100,\"message\":\"Forbidden\",\"data\":null}"));
+            RagflowClient client = newClient();
+
+            BusinessException ex = assertThrows(BusinessException.class,
+                    () -> client.deleteDataset("ds-1"));
+            assertEquals(50000, ex.getCode());
+            assertTrue(ex.getMessage().contains("403"));
+            assertTrue(ex.getMessage().contains("Forbidden"));
         }
 
         @Test
@@ -203,6 +244,19 @@ class RagflowClientMissingTest {
             assertThrows(EngineDatasetMissingException.class,
                     () -> client.renameDataset("ds-1", "arch-1"));
         }
+
+        @Test
+        @DisplayName("HTTP 403 + lacks permission（RAGFlow 对已删 dataset 的真实返回）→ 判 missing")
+        void renameDataset403LacksPermissionIsMissing() {
+            stub.set(new Stub(403, "{\"code\":100,\"message\":\"lacks permission for datasets: "
+                    + "'66e5a448948a11f1b45c7dc3cecfbcd9'\",\"data\":null}"));
+            RagflowClient client = newClient();
+
+            EngineDatasetMissingException ex = assertThrows(EngineDatasetMissingException.class,
+                    () -> client.renameDataset("ds-1", "arch-1"));
+            assertTrue(ex.getMessage().contains("重命名"));
+            assertTrue(ex.getMessage().contains("403"));
+        }
     }
 
     @Nested
@@ -219,6 +273,19 @@ class RagflowClientMissingTest {
                     () -> client.renameDataset("ds-1", "arch-1"));
             assertEquals(50000, ex.getCode());
             assertTrue(ex.getMessage().contains("500"));
+        }
+
+        @Test
+        @DisplayName("HTTP 403 + 其它文案（Forbidden）→ 仍抛 BusinessException，不误判 missing")
+        void renameDataset403OtherTextIsNotMissing() {
+            stub.set(new Stub(403, "{\"code\":100,\"message\":\"Forbidden\",\"data\":null}"));
+            RagflowClient client = newClient();
+
+            BusinessException ex = assertThrows(BusinessException.class,
+                    () -> client.renameDataset("ds-1", "arch-1"));
+            assertEquals(50000, ex.getCode());
+            assertTrue(ex.getMessage().contains("403"));
+            assertTrue(ex.getMessage().contains("Forbidden"));
         }
 
         @Test
