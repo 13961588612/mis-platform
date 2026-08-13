@@ -1,0 +1,247 @@
+classDiagram
+    direction LR
+
+    %% ============ 实体（V40 变更） ============
+    class SysOrg {
+        +Long id
+        +Long tenantId
+        +String code
+        +String name
+        +Long parentId  %% V40 新增：上级组织（0=顶级）
+        +Integer sort
+        +Integer status
+        +String remark
+        +Integer deleted
+    }
+
+    class SysDept {
+        +Long id
+        +Long tenantId
+        +Long orgId
+        +Long parentId
+        +String code
+        +String name
+        +Long categoryId
+        +String ancestors
+        +Integer sort
+        +Integer status
+        +Integer isRoot
+        +Long leaderEmployeeId
+        +Long linkedOrgId  %% V40 新增：手工对应组织（穿透锚点，NULL=无）
+        +Integer deleted
+    }
+
+    class SysPostType {
+        +Long id
+        +Long tenantId
+        +String code
+        +String name
+        +Integer sort
+        +Integer status
+    }
+
+    %% ============ 仓储 ============
+    class SysOrgRepository {
+        <<interface>>
+        +findByTenantIdAndStatus(tenantId, status) List~SysOrg~
+        +findByTenantId(tenantId) List~SysOrg~  %% V40 新增：环路 BFS 用
+        +existsByParentId(parentId) boolean      %% V40 新增：删除约束用
+    }
+
+    class SysDeptRepository {
+        <<interface>>
+        +findByOrgIdAndStatus(orgId, status) List~SysDept~
+        +findByOrgId(orgId) List~SysDept~
+        +findByOrgIdAndParentId(orgId, parentId) List~SysDept~
+        +findDescendantIds(orgId, deptIdStr) List~Long~
+        +existsByOrgId(orgId) boolean            %% V40 新增：组织删除约束用
+    }
+
+    class SysPostTypeRepository {
+        <<interface>>
+        +findByTenantIdAndStatus(tenantId, status) List~SysPostType~
+        +findByTenantId(tenantId) List~SysPostType~  %% V40 新增：类型管理全量
+        +findByTenantIdAndId(tenantId, id) Optional~SysPostType~
+    }
+
+    class SysPostRepository {
+        <<interface>>
+        +findByTenantId(tenantId) List~SysPost~
+        +existsByDeptId(deptId) boolean
+        +countByPostTypeId(postTypeId) long  %% V40 新增：类型引用计数
+    }
+
+    %% ============ 服务 ============
+    class OrgService {
+        +listByTenant(tenantId) List~OrgVO~
+        +getById(id) OrgVO
+        +namesByIds(ids) Map~Long, String~
+        +create(OrgCreateRequest) OrgVO
+        +update(id, OrgUpdateRequest) OrgVO
+        +delete(id) void
+        -validateParent(tenantId, orgId, newParentId) void  %% V40：存在/同租户/非自身/非子孙
+        -collectDescendantIds(tenantId, orgId) Set~Long~     %% V40：BFS 环路检测
+    }
+
+    class DeptService {
+        +tree(orgId) List~DeptVO~
+        +pierce(orgId) List~DeptPierceVO~   %% V40：穿透只读 forest
+        +getById(id) DeptVO
+        +subtreeIds(id) List~Long~
+        +create(DeptCreateRequest) DeptVO
+        +update(id, DeptUpdateRequest) DeptVO
+        +delete(id) void
+        -validateLinkedOrg(tenantId, deptOrgId, linkedOrgId) void  %% V40：存在/同租户/非自组织
+        -toPierceVo(dept, parentMap, orgNames) DeptPierceVO
+    }
+
+    class PostService {
+        +list(tenantId, deptId, postTypeId, status) List~PostVO~
+        +listTypes(tenantId) List~PostTypeVO~                    %% V40：全量 + referenceCount
+        +createType(PostTypeCreateRequest) PostTypeVO            %% V40
+        +updateType(id, PostTypeUpdateRequest) PostTypeVO        %% V40
+        +deleteType(id) void                                     %% V40：被引用硬拦截
+    }
+
+    %% ============ 控制器 ============
+    class OrgController {
+        +list(tenantId) Result~List~OrgVO~~
+        +get(id) Result~OrgVO~
+        +create(request) Result~OrgVO~
+        +update(id, request) Result~OrgVO~
+        +delete(id) Result~Void~
+    }
+
+    class DeptController {
+        +tree(orgId) Result~List~DeptVO~~
+        +pierce(orgId) Result~List~DeptPierceVO~~  %% V40：只读 GET
+        +get(id) Result~DeptVO~
+        +create(request) Result~DeptVO~
+        +update(id, request) Result~DeptVO~
+        +delete(id) Result~Void~
+    }
+
+    class PostController {
+        +list(...) Result~List~PostVO~~
+        +listTypes(tenantId, status) Result~List~PostTypeVO~~
+        +createType(request) Result~PostTypeVO~   %% V40
+        +updateType(id, request) Result~PostTypeVO~  %% V40
+        +deleteType(id) Result~Void~              %% V40
+    }
+
+    %% ============ DTO / VO（V40 变更） ============
+    class OrgVO {
+        +String id
+        +String tenantId
+        +String code
+        +String name
+        +String parentId  %% V40 新增
+        +Integer sort
+        +Integer status
+        +String remark
+    }
+
+    class DeptVO {
+        +String id
+        +String orgId
+        +String parentId
+        +String code
+        +String name
+        +Integer isRoot
+        +String linkedOrgId    %% V40 新增
+        +String linkedOrgName  %% V40 新增
+        +List~DeptVO~ children
+    }
+
+    class DeptPierceVO {
+        +String id
+        +String orgId
+        +String orgName       %% 来源组织名（子树根徽标，Q5）
+        +String parentId
+        +String code
+        +String name
+        +Integer sort
+        +Integer status
+        +Integer isRoot
+        +String linkedOrgId    %% 锚点
+        +String linkedOrgName  %% 锚点组织名（下钻按钮）
+        +List~DeptPierceVO~ children
+    }
+
+    class PostTypeVO {
+        +String id
+        +String tenantId
+        +String code
+        +String name
+        +Integer sort
+        +Integer status
+        +Integer referenceCount  %% V40 新增：sys_post 引用数
+    }
+
+    class OrgCreateRequest {
+        +Long tenantId
+        +String code
+        +String name
+        +Long parentId  %% V40 新增（可空）
+        +Integer sort
+        +String remark
+        +Long categoryId
+    }
+
+    class OrgUpdateRequest {
+        +String name
+        +Long parentId  %% V40 新增（0=顶级；null=不变）
+        +Integer sort
+        +Integer status
+        +String remark
+    }
+
+    class DeptCreateRequest {
+        +Long tenantId
+        +Long orgId
+        +Long parentId
+        +String name
+        +Long categoryId
+        +Long linkedOrgId  %% V40 新增（可空）
+        +Integer sort
+        +Long leaderEmployeeId
+    }
+
+    class DeptUpdateRequest {
+        +String name
+        +Long categoryId
+        +Long parentId
+        +Integer sort
+        +Integer status
+        +Long leaderEmployeeId
+        +Long linkedOrgId  %% V40 新增（null=清空）
+    }
+
+    class PostTypeCreateRequest {
+        +Long tenantId
+        +String code
+        +String name
+        +Integer sort
+        +Integer status
+    }
+
+    class PostTypeUpdateRequest {
+        +String name
+        +Integer sort
+        +Integer status
+    }
+
+    %% ============ 关系 ============
+    OrgController --> OrgService
+    DeptController --> DeptService
+    PostController --> PostService
+
+    OrgService --> SysOrgRepository
+    OrgService --> SysDeptRepository
+    DeptService --> SysDeptRepository
+    DeptService --> SysOrgRepository
+    PostService --> SysPostTypeRepository
+    PostService --> SysPostRepository
+
+    SysDept ..> SysOrg : "org_id / linked_org_id 引用"
+    SysPost ..> SysPostType : "post_type_id 引用(计数)"

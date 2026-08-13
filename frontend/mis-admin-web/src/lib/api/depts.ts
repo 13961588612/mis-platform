@@ -1,5 +1,5 @@
 import api from '@/lib/api/client';
-import type { ApiResult, DeptNode } from '@/types/api';
+import type { ApiResult, DeptNode, DeptPierceNode } from '@/types/api';
 
 function unwrap<T>(res: { data: ApiResult<T> }, fallback: string): T {
   if (res.data.code !== 0 || res.data.data === undefined || res.data.data === null) {
@@ -13,11 +13,18 @@ export async function fetchDeptTree(orgId: string | number): Promise<DeptNode[]>
   return unwrap(res, '获取部门树失败');
 }
 
+/** V40 组织穿透：只读 forest（懒加载，每层一次请求）。 */
+export async function fetchDeptPierce(orgId: string | number): Promise<DeptPierceNode[]> {
+  const res = await api.get<ApiResult<DeptPierceNode[]>>('/depts/pierce', { params: { orgId } });
+  return unwrap(res, '获取组织穿透数据失败');
+}
+
 export async function createDept(body: {
   orgId: number;
   parentId: number;
   name: string;
   categoryId: number;
+  linkedOrgId?: number | null;
   sort?: number;
   leaderEmployeeId?: number;
 }): Promise<DeptNode> {
@@ -34,6 +41,7 @@ export async function updateDept(
     status?: number;
     leaderEmployeeId?: number;
     parentId?: number;
+    linkedOrgId?: number | null;
   },
 ): Promise<DeptNode> {
   const res = await api.put<ApiResult<DeptNode>>(`/depts/${id}`, body);

@@ -9,6 +9,8 @@ public record DeptCreateRequest(
         @NotNull Long parentId,
         @NotBlank String name,
         @NotNull Long categoryId,
+        /** V40 新增：手工对应组织（穿透锚点，NULL=无） */
+        Long linkedOrgId,
         Integer sort,
         Long leaderEmployeeId
 ) {}

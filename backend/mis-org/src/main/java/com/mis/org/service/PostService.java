@@ -10,6 +10,8 @@ import com.mis.org.domain.repository.SysEmployeePostRepository;
 import com.mis.org.domain.repository.SysPostRepository;
 import com.mis.org.domain.repository.SysPostTypeRepository;
 import com.mis.org.dto.PostCreateRequest;
+import com.mis.org.dto.PostTypeCreateRequest;
+import com.mis.org.dto.PostTypeUpdateRequest;
 import com.mis.org.dto.PostTypeVO;
 import com.mis.org.dto.PostUpdateRequest;
 import com.mis.org.dto.PostVO;
@@ -19,6 +21,8 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
+import java.util.stream.Collectors;
 
 /**
  * 岗位维护：CRUD + 启停 + 按部门/类型筛选 + 删除引用校验（物理删）。
@@ -117,17 +121,94 @@ public class PostService {
         postRepository.deleteById(id);
     }
 
+    /**
+     * V40 岗位类型全量列表（含禁用）+ 引用计数（referenceCount）。
+     *
+     * @param tenantId 租户
+     * @param status   可选：null=全量；1=仅启用
+     */
     @Transactional(readOnly = true)
-    public List<PostTypeVO> listTypes(Long tenantId) {
-        return postTypeRepository.findByTenantIdAndStatus(tenantId, 1).stream()
-                .map(t -> new PostTypeVO(
-                        String.valueOf(t.getId()),
-                        String.valueOf(t.getTenantId()),
-                        t.getCode(),
-                        t.getName(),
-                        t.getSort(),
-                        t.getStatus()))
+    public List<PostTypeVO> listTypes(Long tenantId, Integer status) {
+        List<SysPostType> types = status == null
+                ? postTypeRepository.findByTenantId(tenantId)
+                : postTypeRepository.findByTenantIdAndStatus(tenantId, status);
+        if (types.isEmpty()) {
+            return List.of();
+        }
+        Map<Long, Long> refCounts = types.stream()
+                .collect(Collectors.toMap(SysPostType::getId, t -> postRepository.countByPostTypeId(t.getId())));
+        return types.stream()
+                .map(t -> toTypeVo(t, refCounts.getOrDefault(t.getId(), 0L)))
                 .toList();
+    }
+
+    /**
+     * V40 新增岗位类型：code 租户内唯一。
+     */
+    @Transactional
+    public PostTypeVO createType(PostTypeCreateRequest request) {
+        postTypeRepository.findByTenantIdAndCode(request.tenantId(), request.code())
+                .ifPresent(t -> {
+                    throw new BusinessException(ResultCode.VALIDATION_ERROR, "岗位类型编码已存在");
+                });
+
+        Instant now = Instant.now();
+        SysPostType type = new SysPostType();
+        type.setId(IdGenerator.nextId());
+        type.setTenantId(request.tenantId());
+        type.setCode(request.code().trim());
+        type.setName(request.name().trim());
+        type.setSort(request.sort() != null ? request.sort() : 0);
+        type.setStatus(request.status() != null ? request.status() : 1);
+        type.setCreatedAt(now);
+        type.setUpdatedAt(now);
+        postTypeRepository.save(type);
+        return toTypeVo(type, 0L);
+    }
+
+    /**
+     * V40 编辑岗位类型：仅 name/sort/status（code 不可编辑，与 org/dict 更新语义一致）。
+     */
+    @Transactional
+    public PostTypeVO updateType(Long id, PostTypeUpdateRequest request) {
+        SysPostType type = postTypeRepository.findById(id)
+                .orElseThrow(() -> new BusinessException(ResultCode.NOT_FOUND, "岗位类型不存在"));
+        type.setName(request.name().trim());
+        if (request.sort() != null) {
+            type.setSort(request.sort());
+        }
+        if (request.status() != null) {
+            type.setStatus(request.status());
+        }
+        type.setUpdatedAt(Instant.now());
+        postTypeRepository.save(type);
+        long refs = postRepository.countByPostTypeId(id);
+        return toTypeVo(type, refs);
+    }
+
+    /**
+     * V40 删除岗位类型：被岗位引用时硬拦截（返回引用数）。
+     */
+    @Transactional
+    public void deleteType(Long id) {
+        SysPostType type = postTypeRepository.findById(id)
+                .orElseThrow(() -> new BusinessException(ResultCode.NOT_FOUND, "岗位类型不存在"));
+        long refs = postRepository.countByPostTypeId(id);
+        if (refs > 0) {
+            throw new BusinessException(409, "岗位类型已被 " + refs + " 个岗位引用，禁止删除");
+        }
+        postTypeRepository.delete(type);
+    }
+
+    private PostTypeVO toTypeVo(SysPostType t, long refCount) {
+        return new PostTypeVO(
+                String.valueOf(t.getId()),
+                String.valueOf(t.getTenantId()),
+                t.getCode(),
+                t.getName(),
+                t.getSort(),
+                t.getStatus(),
+                Math.toIntExact(refCount));
     }
 
     private SysPost requirePost(Long id) {

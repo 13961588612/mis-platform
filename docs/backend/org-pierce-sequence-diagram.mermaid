@@ -1,0 +1,69 @@
+sequenceDiagram
+    autonumber
+    actor Admin as 集团管理员
+
+    %% ============ 链路1：组织穿透下钻（核心） ============
+    rect rgb(238, 244, 255)
+    Note over Admin,PG: 链路1 · 组织穿透（只读下钻）
+    Admin->>DeptTreePage: 开启「组织穿透」视图（选组织 X）
+    DeptTreePage->>BFF DeptController: GET /api/v1/depts/pierce?orgId=X
+    BFF DeptController->>OrgFacadeService: deptPierce(X)
+    OrgFacadeService->>OrgWebClient: deptPierce(orgId=X)
+    OrgWebClient->>mis-org DeptController: GET /internal/v1/depts/pierce?orgId=X
+    mis-org DeptController->>DeptService: pierce(X)
+    DeptService->>SysDeptRepository: findByOrgIdAndStatus(X, 1)
+    SysDeptRepository-->>DeptService: 全部部门
+    DeptService->>SysOrgRepository: findAllById(锚点orgIds) 批量取组织名
+    SysOrgRepository-->>DeptService: orgName map（一次，避免 N+1）
+    DeptService-->>mis-org DeptController: DeptPierceVO[]（forest，节点含 linkedOrgId/linkedOrgName/orgName）
+    mis-org DeptController-->>OrgWebClient: Result{forest}
+    OrgWebClient-->>OrgFacadeService: forest
+    OrgFacadeService-->>BFF DeptController: Result{forest}
+    BFF DeptController-->>DeptTreePage: forest
+    DeptTreePage-->>Admin: 渲染多棵顶级部门树（根徽标=来源组织名，锚点行带「下钻」按钮）
+
+    Admin->>DeptTreePage: 点击某部门「下钻」（linkedOrgId=Y）
+    DeptTreePage->>BFF DeptController: GET /api/v1/depts/pierce?orgId=Y（同一端点，钻取栈 push）
+    Note over BFF DeptController,DeptService: 同上链路返回组织 Y 顶级部门树
+    DeptTreePage-->>Admin: 展示组织 Y 部门树 + 面包屑（总部 → Y）；visited 集合防 A→B→A
+    Note over DeptTreePage: 穿透模式无新增/编辑/删除/子部门按钮，编制不渲染；仅 GET
+    end
+
+    %% ============ 链路2：岗位类型删除拦截 ============
+    rect rgb(255, 245, 240)
+    Note over Admin,PG: 链路2 · 岗位类型删除（被引用硬拦截）
+    Admin->>PostTypeManagePage: 删除类型「管理」
+    PostTypeManagePage->>BFF PostController: DELETE /api/v1/post-types/1
+    BFF PostController->>OrgFacadeService: deletePostType(1)
+    OrgFacadeService->>OrgWebClient: deletePostType(1)
+    OrgWebClient->>mis-org PostController: DELETE /internal/v1/post-types/1
+    mis-org PostController->>PostService: deleteType(1)
+    PostService->>SysPostRepository: countByPostTypeId(1)
+    SysPostRepository-->>PostService: 9（>0）
+    PostService-->>mis-org PostController: BusinessException(409, "岗位类型已被 9 个岗位引用，禁止删除")
+    mis-org PostController-->>OrgWebClient: Result{code!=0, message}
+    OrgWebClient-->>OrgFacadeService: 异常透传
+    OrgFacadeService-->>BFF PostController: 异常透传
+    BFF PostController-->>PostTypeManagePage: code!=0
+    PostTypeManagePage-->>Admin: toast「岗位类型已被 9 个岗位引用，禁止删除」（列表引用数列辅助判断）
+    end
+
+    %% ============ 链路3：组织设上级 + 环路校验 ============
+    rect rgb(240, 255, 240)
+    Note over Admin,PG: 链路3 · 组织管理设置上级（环路防护）
+    Admin->>OrgListPage: 编辑「华东分公司」上级=总部
+    OrgListPage->>BFF OrgController: PUT /api/v1/orgs/{id} {parentId: 总部id}
+    BFF OrgController->>OrgFacadeService: updateOrg(id, {parentId})
+    OrgFacadeService->>OrgWebClient: updateOrg(id, body)
+    OrgWebClient->>mis-org OrgController: PUT /internal/v1/orgs/{id}
+    mis-org OrgController->>OrgService: update(id, request)
+    OrgService->>SysOrgRepository: findByTenantId(tenantId) 取全量组织
+    OrgService->>OrgService: collectDescendantIds(id) BFS 子孙集合
+    OrgService-->>mis-org OrgController: 校验：parent 存在/同租户/非自身/非子孙（命中则拒绝）
+    OrgService->>SysOrgRepository: save(org.setParentId(...))
+    mis-org OrgController-->>OrgWebClient: Result{OrgVO(parentId)}
+    OrgWebClient-->>OrgFacadeService: OrgVO
+    OrgFacadeService-->>BFF OrgController: Result{OrgVO}
+    BFF OrgController-->>OrgListPage: OrgVO
+    OrgListPage-->>Admin: 刷新树形（缩进 + 上级组织列），保存成功
+    end

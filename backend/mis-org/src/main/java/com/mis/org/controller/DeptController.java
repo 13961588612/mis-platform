@@ -2,6 +2,7 @@ package com.mis.org.controller;
 
 import com.mis.common.core.result.Result;
 import com.mis.org.dto.DeptCreateRequest;
+import com.mis.org.dto.DeptPierceVO;
 import com.mis.org.dto.DeptStaffingVO;
 import com.mis.org.dto.DeptUpdateRequest;
 import com.mis.org.dto.DeptVO;
@@ -35,6 +36,12 @@ public class DeptController {
     @GetMapping("/tree")
     public Result<List<DeptVO>> tree(@RequestParam Long orgId) {
         return Result.ok(deptService.tree(orgId));
+    }
+
+    /** V40 组织穿透：只读 GET，返回该组织顶级部门树 forest（懒加载）。 */
+    @GetMapping("/pierce")
+    public Result<List<DeptPierceVO>> pierce(@RequestParam Long orgId) {
+        return Result.ok(deptService.pierce(orgId));
     }
 
     @GetMapping("/{id}/subtree-ids")

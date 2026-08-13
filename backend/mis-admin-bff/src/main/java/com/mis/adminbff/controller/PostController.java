@@ -3,6 +3,8 @@ package com.mis.adminbff.controller;
 import com.mis.adminbff.client.model.PostTypeVO;
 import com.mis.adminbff.client.model.PostVO;
 import com.mis.adminbff.dto.PostCreateRequest;
+import com.mis.adminbff.dto.PostTypeCreateRequest;
+import com.mis.adminbff.dto.PostTypeUpdateRequest;
 import com.mis.adminbff.dto.PostUpdateRequest;
 import com.mis.adminbff.service.OrgFacadeService;
 import com.mis.common.core.result.Result;
@@ -61,8 +63,27 @@ public class PostController {
         return Result.ok();
     }
 
+    /**
+     * 岗位类型列表：status 可选（null=全量含禁用，1=仅启用）；返回含 referenceCount。
+     */
     @GetMapping("/post-types")
-    public Result<List<PostTypeVO>> listTypes() {
-        return Result.ok(orgFacadeService.listPostTypes());
+    public Result<List<PostTypeVO>> listTypes(@RequestParam(required = false) Integer status) {
+        return Result.ok(orgFacadeService.listPostTypes(status));
+    }
+
+    @PostMapping("/post-types")
+    public Result<PostTypeVO> createType(@Valid @RequestBody PostTypeCreateRequest request) {
+        return Result.ok(orgFacadeService.createPostType(request));
+    }
+
+    @PutMapping("/post-types/{id}")
+    public Result<PostTypeVO> updateType(@PathVariable Long id, @Valid @RequestBody PostTypeUpdateRequest request) {
+        return Result.ok(orgFacadeService.updatePostType(id, request));
+    }
+
+    @DeleteMapping("/post-types/{id}")
+    public Result<Void> deleteType(@PathVariable Long id) {
+        orgFacadeService.deletePostType(id);
+        return Result.ok();
     }
 }

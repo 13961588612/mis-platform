@@ -1,6 +1,7 @@
 package com.mis.adminbff.service;
 
 import com.mis.adminbff.client.OrgWebClient;
+import com.mis.adminbff.client.model.DeptPierceVO;
 import com.mis.adminbff.client.model.DeptVO;
 import com.mis.adminbff.client.model.EmployeeVO;
 import com.mis.adminbff.client.model.OrgVO;
@@ -13,6 +14,8 @@ import com.mis.adminbff.dto.EmployeeUpdateRequest;
 import com.mis.adminbff.dto.OrgCreateRequest;
 import com.mis.adminbff.dto.OrgUpdateRequest;
 import com.mis.adminbff.dto.PostCreateRequest;
+import com.mis.adminbff.dto.PostTypeCreateRequest;
+import com.mis.adminbff.dto.PostTypeUpdateRequest;
 import com.mis.adminbff.dto.PostUpdateRequest;
 import com.mis.adminbff.support.RequestContext;
 import org.springframework.stereotype.Service;
@@ -43,6 +46,7 @@ public class OrgFacadeService {
         body.put("tenantId", RequestContext.requireTenantId());
         body.put("code", request.code());
         body.put("name", request.name());
+        body.put("parentId", request.parentId());
         body.put("sort", request.sort());
         body.put("remark", request.remark());
         body.put("categoryId", request.categoryId());
@@ -52,6 +56,7 @@ public class OrgFacadeService {
     public OrgVO updateOrg(Long id, OrgUpdateRequest request) {
         Map<String, Object> body = new HashMap<>();
         body.put("name", request.name());
+        body.put("parentId", request.parentId());
         body.put("sort", request.sort());
         body.put("status", request.status());
         body.put("remark", request.remark());
@@ -66,6 +71,11 @@ public class OrgFacadeService {
         return orgWebClient.deptTree(orgId);
     }
 
+    /** V40 组织穿透：只读 forest（懒加载）。 */
+    public List<DeptPierceVO> deptPierce(Long orgId) {
+        return orgWebClient.deptPierce(orgId);
+    }
+
     public DeptVO getDept(Long id) {
         return orgWebClient.getDept(id);
     }
@@ -77,6 +87,7 @@ public class OrgFacadeService {
         body.put("parentId", request.parentId());
         body.put("name", request.name());
         body.put("categoryId", request.categoryId());
+        body.put("linkedOrgId", request.linkedOrgId());
         body.put("sort", request.sort());
         body.put("leaderEmployeeId", request.leaderEmployeeId());
         return orgWebClient.createDept(body);
@@ -90,6 +101,8 @@ public class OrgFacadeService {
         body.put("sort", request.sort());
         body.put("status", request.status());
         body.put("leaderEmployeeId", request.leaderEmployeeId());
+        // V40 更新语义：PUT 总是下发 linkedOrgId（null=清空）
+        body.put("linkedOrgId", request.linkedOrgId());
         return orgWebClient.updateDept(id, body);
     }
 
@@ -203,7 +216,33 @@ public class OrgFacadeService {
         orgWebClient.deletePost(id);
     }
 
-    public List<PostTypeVO> listPostTypes() {
-        return orgWebClient.listPostTypes(RequestContext.requireTenantId());
+    /** V40 岗位类型全量（含禁用）+ referenceCount；status=1 仅启用。 */
+    public List<PostTypeVO> listPostTypes(Integer status) {
+        return orgWebClient.listPostTypes(RequestContext.requireTenantId(), status);
+    }
+
+    /** V40 新增岗位类型。 */
+    public PostTypeVO createPostType(PostTypeCreateRequest request) {
+        Map<String, Object> body = new HashMap<>();
+        body.put("tenantId", RequestContext.requireTenantId());
+        body.put("code", request.code());
+        body.put("name", request.name());
+        body.put("sort", request.sort());
+        body.put("status", request.status());
+        return orgWebClient.createPostType(body);
+    }
+
+    /** V40 编辑岗位类型（code 不可编辑）。 */
+    public PostTypeVO updatePostType(Long id, PostTypeUpdateRequest request) {
+        Map<String, Object> body = new HashMap<>();
+        body.put("name", request.name());
+        body.put("sort", request.sort());
+        body.put("status", request.status());
+        return orgWebClient.updatePostType(id, body);
+    }
+
+    /** V40 删除岗位类型（被引用硬拦截）。 */
+    public void deletePostType(Long id) {
+        orgWebClient.deletePostType(id);
     }
 }

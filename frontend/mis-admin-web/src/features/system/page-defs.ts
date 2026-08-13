@@ -51,10 +51,12 @@ export async function loadPostOptions(): Promise<FieldOption[]> {
     .map((p) => ({ value: p.id, label: p.name }));
 }
 
-/** 岗位类型可选项（真实 sys_post_type，value=id）；失败/为空回退空数组。 */
+/** 岗位类型可选项（真实 sys_post_type，value=id）；仅启用项（status=1）进下拉；失败/为空回退空数组。 */
 export async function loadPostTypeOptions(): Promise<FieldOption[]> {
   const types = await listPostTypes();
-  return types.map((t) => ({ value: t.id, label: t.name }));
+  return types
+    .filter((t) => t.status === 1)
+    .map((t) => ({ value: t.id, label: t.name }));
 }
 
 /** 员工任职行 → 提交结构：{ deptIds(去重、首项主部门), posts(含 postId/isPrimary/startDate) } */

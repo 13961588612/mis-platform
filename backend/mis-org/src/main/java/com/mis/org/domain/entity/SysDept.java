@@ -49,6 +49,10 @@ public class SysDept {
     @Column(name = "leader_employee_id")
     private Long leaderEmployeeId;
 
+    /** V40 新增：手工对应组织（穿透锚点，NULL=无） */
+    @Column(name = "linked_org_id")
+    private Long linkedOrgId;
+
     @Column(nullable = false)
     private Integer deleted;
 
@@ -88,6 +92,8 @@ public class SysDept {
     public void setIsRoot(Integer isRoot) { this.isRoot = isRoot; }
     public Long getLeaderEmployeeId() { return leaderEmployeeId; }
     public void setLeaderEmployeeId(Long leaderEmployeeId) { this.leaderEmployeeId = leaderEmployeeId; }
+    public Long getLinkedOrgId() { return linkedOrgId; }
+    public void setLinkedOrgId(Long linkedOrgId) { this.linkedOrgId = linkedOrgId; }
     public Integer getDeleted() { return deleted; }
     public void setDeleted(Integer deleted) { this.deleted = deleted; }
     public Long getCreatedBy() { return createdBy; }

@@ -1,5 +1,6 @@
 package com.mis.adminbff.client;
 
+import com.mis.adminbff.client.model.DeptPierceVO;
 import com.mis.adminbff.client.model.DeptVO;
 import com.mis.adminbff.client.model.EmployeeVO;
 import com.mis.adminbff.client.model.OrgVO;
@@ -29,7 +30,11 @@ public class OrgWebClient extends AbstractDownstreamClient {
             new ParameterizedTypeReference<>() {};
     private static final ParameterizedTypeReference<Result<List<DeptVO>>> DEPT_LIST =
             new ParameterizedTypeReference<>() {};
+    private static final ParameterizedTypeReference<Result<List<DeptPierceVO>>> DEPT_PIERCE_LIST =
+            new ParameterizedTypeReference<>() {};
     private static final ParameterizedTypeReference<Result<DeptVO>> DEPT =
+            new ParameterizedTypeReference<>() {};
+    private static final ParameterizedTypeReference<Result<PostTypeVO>> POST_TYPE =
             new ParameterizedTypeReference<>() {};
     private static final ParameterizedTypeReference<Result<List<EmployeeVO>>> EMP_LIST =
             new ParameterizedTypeReference<>() {};
@@ -114,6 +119,14 @@ public class OrgWebClient extends AbstractDownstreamClient {
                 .bodyToMono(DEPT_LIST));
     }
 
+    /** V40 组织穿透：只读 forest（懒加载，每层一次请求）。 */
+    public List<DeptPierceVO> deptPierce(Long orgId) {
+        return block(client().get()
+                .uri(queryUri("/internal/v1/depts/pierce", "orgId", orgId))
+                .retrieve()
+                .bodyToMono(DEPT_PIERCE_LIST));
+    }
+
     public DeptVO getDept(Long id) {
         return block(client().get().uri("/internal/v1/depts/{id}", id).retrieve().bodyToMono(DEPT));
     }
@@ -179,11 +192,27 @@ public class OrgWebClient extends AbstractDownstreamClient {
         blockVoid(delete("/internal/v1/posts/{id}", id));
     }
 
-    public List<PostTypeVO> listPostTypes(Long tenantId) {
+    /** V40 岗位类型列表：status 可选（null=全量含禁用，1=仅启用）。 */
+    public List<PostTypeVO> listPostTypes(Long tenantId, Integer status) {
         return block(client().get()
-                .uri(queryUri("/internal/v1/post-types", "tenantId", tenantId))
+                .uri(queryUri("/internal/v1/post-types", "tenantId", tenantId, "status", status))
                 .retrieve()
                 .bodyToMono(POST_TYPE_LIST));
+    }
+
+    /** V40 新增岗位类型。 */
+    public PostTypeVO createPostType(Map<String, Object> body) {
+        return block(post(body, POST_TYPE, "/internal/v1/post-types"));
+    }
+
+    /** V40 编辑岗位类型。 */
+    public PostTypeVO updatePostType(Long id, Map<String, Object> body) {
+        return block(put(body, POST_TYPE, "/internal/v1/post-types/{id}", id));
+    }
+
+    /** V40 删除岗位类型（被引用硬拦截）。 */
+    public void deletePostType(Long id) {
+        blockVoid(delete("/internal/v1/post-types/{id}", id));
     }
 
     public Map<Long, String> employeeNames(List<Long> ids) {

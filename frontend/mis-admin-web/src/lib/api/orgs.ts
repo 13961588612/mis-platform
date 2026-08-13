@@ -16,6 +16,7 @@ export async function listOrgs(): Promise<OrgItem[]> {
 export async function createOrg(body: {
   code: string;
   name: string;
+  parentId?: number;
   sort?: number;
   remark?: string;
   categoryId?: number;
@@ -26,7 +27,7 @@ export async function createOrg(body: {
 
 export async function updateOrg(
   id: string,
-  body: { name: string; sort?: number; status?: number; remark?: string },
+  body: { name: string; parentId?: number; sort?: number; status?: number; remark?: string },
 ): Promise<OrgItem> {
   const res = await api.put<ApiResult<OrgItem>>(`/orgs/${id}`, body);
   return unwrap(res, '更新组织失败');

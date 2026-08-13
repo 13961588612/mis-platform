@@ -9,8 +9,8 @@ import {
   ConfigPage,
   EmployeePage,
   ModulePage,
-  PostPage,
 } from '@/features/system/admin-list-page';
+import { PostManagePage } from '@/features/system/post/post-manage-page';
 import { UserListPage } from '@/features/system/user/user-list-page';
 import { OrgListPage } from '@/features/system/org/org-list-page';
 import { DeptTreePage } from '@/features/system/dept/dept-tree-page';
@@ -80,7 +80,7 @@ const PAGE_MAP: Record<string, ComponentType> = {
   '/system/org': OrgListPage,
   '/system/dept': DeptTreePage,
   '/system/employee': EmployeePage,
-  '/system/post': PostPage,
+  '/system/post': PostManagePage,
   '/system/app': AppManagePage,
   '/system/module': ModulePage,
   '/system/role': RoleListPage,

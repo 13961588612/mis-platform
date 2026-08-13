@@ -48,7 +48,31 @@ export async function deletePost(id: string): Promise<void> {
   if (res.data.code !== 0) throw new Error(res.data.message || '删除岗位失败');
 }
 
-export async function listPostTypes(): Promise<PostTypeItem[]> {
-  const res = await api.get<ApiResult<PostTypeItem[]>>('/post-types');
+/** 岗位类型全量（含禁用）+ referenceCount；status=1 仅启用（下拉用）。 */
+export async function listPostTypes(status?: number): Promise<PostTypeItem[]> {
+  const res = await api.get<ApiResult<PostTypeItem[]>>('/post-types', { params: { status } });
   return unwrap(res, '获取岗位类型失败');
+}
+
+export async function createPostType(body: {
+  code: string;
+  name: string;
+  sort?: number;
+  status?: number;
+}): Promise<PostTypeItem> {
+  const res = await api.post<ApiResult<PostTypeItem>>('/post-types', body);
+  return unwrap(res, '创建岗位类型失败');
+}
+
+export async function updatePostType(
+  id: string,
+  body: { name: string; sort?: number; status?: number },
+): Promise<PostTypeItem> {
+  const res = await api.put<ApiResult<PostTypeItem>>(`/post-types/${id}`, body);
+  return unwrap(res, '更新岗位类型失败');
+}
+
+export async function deletePostType(id: string): Promise<void> {
+  const res = await api.delete<ApiResult<null>>(`/post-types/${id}`);
+  if (res.data.code !== 0) throw new Error(res.data.message || '删除岗位类型失败');
 }

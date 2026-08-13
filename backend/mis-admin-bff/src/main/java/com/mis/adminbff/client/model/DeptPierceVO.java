@@ -1,24 +1,21 @@
 package com.mis.adminbff.client.model;
 
-import java.time.Instant;
 import java.util.List;
 
-public record DeptVO(
+/**
+ * 组织穿透树节点 VO（BFF 透传 mis-org DeptPierceVO，字段一一对应）。
+ */
+public record DeptPierceVO(
         String id,
-        String tenantId,
         String orgId,
+        String orgName,
         String parentId,
         String code,
         String name,
-        String categoryId,
-        String ancestors,
         Integer sort,
         Integer status,
         Integer isRoot,
-        String leaderEmployeeId,
         String linkedOrgId,
         String linkedOrgName,
-        Instant createdAt,
-        Instant updatedAt,
-        List<DeptVO> children
+        List<DeptPierceVO> children
 ) {}

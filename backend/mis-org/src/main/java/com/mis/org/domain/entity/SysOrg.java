@@ -31,6 +31,10 @@ public class SysOrg {
     @Column(nullable = false)
     private Integer status;
 
+    /** V40 新增：上级组织（0=顶级），组织树 parent_id */
+    @Column(name = "parent_id", nullable = false)
+    private Long parentId;
+
     @Column
     private String remark;
 
@@ -61,6 +65,8 @@ public class SysOrg {
     public void setSort(Integer sort) { this.sort = sort; }
     public Integer getStatus() { return status; }
     public void setStatus(Integer status) { this.status = status; }
+    public Long getParentId() { return parentId; }
+    public void setParentId(Long parentId) { this.parentId = parentId; }
     public String getRemark() { return remark; }
     public void setRemark(String remark) { this.remark = remark; }
     public Integer getDeleted() { return deleted; }

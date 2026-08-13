@@ -438,7 +438,7 @@ function FieldControl({
   );
 }
 
-export function AdminListPage({ def }: { def: AdminPageDef }) {
+export function AdminListPage({ def, headerExtra }: { def: AdminPageDef; headerExtra?: ReactNode }) {
   const [rows, setRows] = useState(() => (def.sample ?? []).map((r) => ({ ...r })));
   const [draft, setDraft] = useState<Record<string, unknown>>({});
   const [applied, setApplied] = useState<Record<string, unknown>>({});
@@ -811,6 +811,7 @@ export function AdminListPage({ def }: { def: AdminPageDef }) {
         })}
         actions={
           <div className="flex items-center gap-2">
+            {headerExtra ? <>{headerExtra}</> : null}
             {hasCustom ? (
               <Button type="button" variant="outline" size="sm" onClick={resetColWidths}>
                 重置列宽

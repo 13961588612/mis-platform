@@ -3,11 +3,13 @@ package com.mis.org.service;
 import com.mis.common.core.exception.BusinessException;
 import com.mis.common.core.exception.ResultCode;
 import com.mis.org.domain.entity.SysDept;
+import com.mis.org.domain.entity.SysOrg;
 import com.mis.org.domain.repository.SysDeptRepository;
 import com.mis.org.domain.repository.SysEmployeeRepository;
 import com.mis.org.domain.repository.SysOrgRepository;
 import com.mis.org.domain.repository.SysPostRepository;
 import com.mis.org.dto.DeptCreateRequest;
+import com.mis.org.dto.DeptPierceVO;
 import com.mis.org.dto.DeptUpdateRequest;
 import com.mis.org.dto.DeptVO;
 import com.mis.org.support.IdGenerator;
@@ -20,10 +22,12 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 /**
  * 组织内部门树：层级 code（ADR-011/013）与 ancestors 维护。
+ * V40 新增：部门手工对应组织（linked_org_id 穿透锚点）+ 组织穿透只读 forest（pierce）。
  */
 @Service
 public class DeptService {
@@ -48,9 +52,30 @@ public class DeptService {
         List<SysDept> all = deptRepository.findByOrgIdAndStatus(orgId, 1);
         Map<Long, List<SysDept>> parentMap = all.stream()
                 .collect(Collectors.groupingBy(SysDept::getParentId));
+        Map<Long, String> orgNames = resolveLinkedOrgNames(all);
         List<SysDept> roots = parentMap.getOrDefault(0L, List.of());
         return roots.stream()
-                .map(d -> toVo(d, parentMap))
+                .map(d -> toVo(d, parentMap, orgNames))
+                .toList();
+    }
+
+    /**
+     * V40 组织穿透：返回该组织顶级部门树 forest（每棵子树根带来源组织名徽标）。
+     * 只读 GET；懒加载（每层一次请求，下钻复用同端点换 orgId）。
+     * 一次取该 org 全部部门 + 一次批量取锚点组织名，避免 N+1。
+     */
+    @Transactional(readOnly = true)
+    public List<DeptPierceVO> pierce(Long orgId) {
+        String orgName = orgRepository.findById(orgId)
+                .map(SysOrg::getName)
+                .orElse(null);
+        List<SysDept> all = deptRepository.findByOrgIdAndStatus(orgId, 1);
+        Map<Long, List<SysDept>> parentMap = all.stream()
+                .collect(Collectors.groupingBy(SysDept::getParentId));
+        Map<Long, String> orgNames = resolveLinkedOrgNames(all);
+        List<SysDept> roots = parentMap.getOrDefault(0L, List.of());
+        return roots.stream()
+                .map(d -> toPierceVo(d, parentMap, orgName, orgNames))
                 .toList();
     }
 
@@ -58,7 +83,7 @@ public class DeptService {
     public DeptVO getById(Long id) {
         SysDept dept = deptRepository.findById(id)
                 .orElseThrow(() -> new BusinessException(ResultCode.NOT_FOUND, "部门不存在"));
-        return toVo(dept, Map.of());
+        return toVo(dept, Map.of(), resolveLinkedOrgNames(List.of(dept)));
     }
 
     /** 本部门及全部子孙 ID（含自身），供 DataScope。 */
@@ -90,6 +115,8 @@ public class DeptService {
             throw new BusinessException(ResultCode.VALIDATION_ERROR, "租户与父部门不一致");
         }
 
+        validateLinkedOrg(request.tenantId(), request.orgId(), request.linkedOrgId());
+
         Instant now = Instant.now();
         SysDept dept = new SysDept();
         dept.setId(IdGenerator.nextId());
@@ -104,17 +131,23 @@ public class DeptService {
         dept.setStatus(1);
         dept.setIsRoot(0);
         dept.setLeaderEmployeeId(request.leaderEmployeeId());
+        dept.setLinkedOrgId(request.linkedOrgId());
         dept.setDeleted(0);
         dept.setCreatedAt(now);
         dept.setUpdatedAt(now);
         deptRepository.save(dept);
-        return toVo(dept, Map.of());
+        return toVo(dept, Map.of(), resolveLinkedOrgNames(List.of(dept)));
     }
 
     @Transactional
     public DeptVO update(Long id, DeptUpdateRequest request) {
         SysDept dept = deptRepository.findById(id)
                 .orElseThrow(() -> new BusinessException(ResultCode.NOT_FOUND, "部门不存在"));
+
+        // V40 更新语义：PUT 总是下发 linkedOrgId（null=清空），先校验再落库
+        validateLinkedOrg(dept.getTenantId(), dept.getOrgId(), request.linkedOrgId());
+        dept.setLinkedOrgId(request.linkedOrgId());
+
         dept.setName(request.name());
         if (request.categoryId() != null) {
             dept.setCategoryId(request.categoryId());
@@ -135,7 +168,7 @@ public class DeptService {
 
         dept.setUpdatedAt(Instant.now());
         deptRepository.save(dept);
-        return toVo(dept, Map.of());
+        return toVo(dept, Map.of(), resolveLinkedOrgNames(List.of(dept)));
     }
 
     @Transactional
@@ -159,6 +192,57 @@ public class DeptService {
         dept.setDeleted(1);
         dept.setUpdatedAt(Instant.now());
         deptRepository.save(dept);
+    }
+
+    /**
+     * V40 锚点校验：linkedOrgId 非空时必须指向存在的组织、同租户、且 ≠ 部门自身 org_id（拒绝自环）。
+     */
+    private void validateLinkedOrg(Long tenantId, Long deptOrgId, Long linkedOrgId) {
+        if (linkedOrgId == null) {
+            return;
+        }
+        if (linkedOrgId.equals(deptOrgId)) {
+            throw new BusinessException(ResultCode.VALIDATION_ERROR, "不能将部门对应到自身所属组织（锚点自环）");
+        }
+        SysOrg linked = orgRepository.findById(linkedOrgId)
+                .orElseThrow(() -> new BusinessException(ResultCode.NOT_FOUND, "对应组织不存在"));
+        if (!tenantId.equals(linked.getTenantId())) {
+            throw new BusinessException(ResultCode.VALIDATION_ERROR, "对应组织不属于该租户");
+        }
+    }
+
+    /** 批量解析锚点组织名（一次 findAllById，避免 N+1）。 */
+    private Map<Long, String> resolveLinkedOrgNames(List<SysDept> depts) {
+        Set<Long> linkedIds = depts.stream()
+                .map(SysDept::getLinkedOrgId)
+                .filter(Objects::nonNull)
+                .collect(Collectors.toSet());
+        if (linkedIds.isEmpty()) {
+            return Map.of();
+        }
+        return orgRepository.findAllById(linkedIds).stream()
+                .collect(Collectors.toMap(SysOrg::getId, SysOrg::getName, (a, b) -> a));
+    }
+
+    private DeptPierceVO toPierceVo(SysDept dept, Map<Long, List<SysDept>> parentMap,
+                                    String orgName, Map<Long, String> orgNames) {
+        List<DeptPierceVO> children = parentMap.getOrDefault(dept.getId(), List.of()).stream()
+                .map(d -> toPierceVo(d, parentMap, orgName, orgNames))
+                .toList();
+        Long linked = dept.getLinkedOrgId();
+        return new DeptPierceVO(
+                String.valueOf(dept.getId()),
+                String.valueOf(dept.getOrgId()),
+                orgName,
+                String.valueOf(dept.getParentId()),
+                dept.getCode(),
+                dept.getName(),
+                dept.getSort(),
+                dept.getStatus(),
+                dept.getIsRoot(),
+                linked != null ? String.valueOf(linked) : null,
+                linked != null ? orgNames.get(linked) : null,
+                children.isEmpty() ? null : children);
     }
 
     private void relocate(SysDept dept, Long newParentId) {
@@ -263,10 +347,11 @@ public class DeptService {
         return buildAncestors(parent);
     }
 
-    private DeptVO toVo(SysDept dept, Map<Long, List<SysDept>> parentMap) {
+    private DeptVO toVo(SysDept dept, Map<Long, List<SysDept>> parentMap, Map<Long, String> orgNames) {
         List<DeptVO> children = parentMap.getOrDefault(dept.getId(), List.of()).stream()
-                .map(d -> toVo(d, parentMap))
+                .map(d -> toVo(d, parentMap, orgNames))
                 .toList();
+        Long linked = dept.getLinkedOrgId();
         return new DeptVO(
                 String.valueOf(dept.getId()),
                 String.valueOf(dept.getTenantId()),
@@ -280,6 +365,8 @@ public class DeptService {
                 dept.getStatus(),
                 dept.getIsRoot(),
                 dept.getLeaderEmployeeId() != null ? String.valueOf(dept.getLeaderEmployeeId()) : null,
+                linked != null ? String.valueOf(linked) : null,
+                linked != null ? orgNames.get(linked) : null,
                 dept.getCreatedAt(),
                 dept.getUpdatedAt(),
                 children.isEmpty() ? null : children);

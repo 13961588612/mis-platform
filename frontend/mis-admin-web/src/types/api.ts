@@ -119,6 +119,7 @@ export interface OrgItem {
   tenantId: string;
   code: string;
   name: string;
+  parentId: string;
   sort: number;
   status: number;
   remark: string | null;
@@ -139,9 +140,27 @@ export interface DeptNode {
   status: number;
   isRoot: number | null;
   leaderEmployeeId: string | null;
+  linkedOrgId: string | null;
+  linkedOrgName: string | null;
   createdAt: string | null;
   updatedAt: string | null;
   children?: DeptNode[] | null;
+}
+
+/** 组织穿透树节点（mis-org DeptPierceVO）：来源组织 + 锚点信息 */
+export interface DeptPierceNode {
+  id: string;
+  orgId: string;
+  orgName: string;
+  parentId: string;
+  code: string;
+  name: string;
+  sort: number;
+  status: number;
+  isRoot: number | null;
+  linkedOrgId: string | null;
+  linkedOrgName: string | null;
+  children?: DeptPierceNode[] | null;
 }
 
 export interface RoleItem {
@@ -337,6 +356,8 @@ export interface PostTypeItem {
   name: string;
   sort: number;
   status: number;
+  /** sys_post 引用数（删除拦截依据） */
+  referenceCount: number;
 }
 
 /** 系统参数（mis-system ConfigVO，全局无 tenant） */

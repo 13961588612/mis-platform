@@ -31,4 +31,7 @@ public interface SysDeptRepository extends JpaRepository<SysDept, Long> {
     List<Long> findDescendantIds(@Param("orgId") Long orgId, @Param("deptIdStr") String deptIdStr);
 
     boolean existsByOrgIdAndParentId(Long orgId, Long parentId);
+
+    /** V40 新增：组织下是否存在部门（组织删除约束用）。 */
+    boolean existsByOrgId(Long orgId);
 }

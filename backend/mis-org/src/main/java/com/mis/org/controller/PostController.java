@@ -2,6 +2,8 @@ package com.mis.org.controller;
 
 import com.mis.common.core.result.Result;
 import com.mis.org.dto.PostCreateRequest;
+import com.mis.org.dto.PostTypeCreateRequest;
+import com.mis.org.dto.PostTypeUpdateRequest;
 import com.mis.org.dto.PostTypeVO;
 import com.mis.org.dto.PostUpdateRequest;
 import com.mis.org.dto.PostVO;
@@ -62,8 +64,29 @@ public class PostController {
         return Result.ok();
     }
 
+    /**
+     * 岗位类型列表：status 可选（null=全量含禁用，1=仅启用）；返回含 referenceCount。
+     */
     @GetMapping("/post-types")
-    public Result<List<PostTypeVO>> listTypes(@RequestParam Long tenantId) {
-        return Result.ok(postService.listTypes(tenantId));
+    public Result<List<PostTypeVO>> listTypes(
+            @RequestParam Long tenantId,
+            @RequestParam(required = false) Integer status) {
+        return Result.ok(postService.listTypes(tenantId, status));
+    }
+
+    @PostMapping("/post-types")
+    public Result<PostTypeVO> createType(@Valid @RequestBody PostTypeCreateRequest request) {
+        return Result.ok(postService.createType(request));
+    }
+
+    @PutMapping("/post-types/{id}")
+    public Result<PostTypeVO> updateType(@PathVariable Long id, @Valid @RequestBody PostTypeUpdateRequest request) {
+        return Result.ok(postService.updateType(id, request));
+    }
+
+    @DeleteMapping("/post-types/{id}")
+    public Result<Void> deleteType(@PathVariable Long id) {
+        postService.deleteType(id);
+        return Result.ok();
     }
 }

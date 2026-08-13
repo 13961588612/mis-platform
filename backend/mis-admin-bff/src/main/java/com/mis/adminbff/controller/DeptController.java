@@ -1,5 +1,6 @@
 package com.mis.adminbff.controller;
 
+import com.mis.adminbff.client.model.DeptPierceVO;
 import com.mis.adminbff.client.model.DeptVO;
 import com.mis.adminbff.dto.DeptCreateRequest;
 import com.mis.adminbff.dto.DeptUpdateRequest;
@@ -31,6 +32,12 @@ public class DeptController {
     @GetMapping("/tree")
     public Result<List<DeptVO>> tree(@RequestParam Long orgId) {
         return Result.ok(orgFacadeService.deptTree(orgId));
+    }
+
+    /** V40 组织穿透：只读 GET（字面量优先于 /{id}，与 /tree 同理）。 */
+    @GetMapping("/pierce")
+    public Result<List<DeptPierceVO>> pierce(@RequestParam Long orgId) {
+        return Result.ok(orgFacadeService.deptPierce(orgId));
     }
 
     @GetMapping("/{id}")
