@@ -27,7 +27,7 @@ import {
   XCircle,
 } from 'lucide-react';
 import { toast } from 'sonner';
-import { cn } from '@/lib/utils';
+import { cn, todayLocalDate } from '@/lib/utils';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
@@ -75,15 +75,29 @@ const FEEDBACK_COLS: ResizableColumn[] = [
 
 const PAGE_SIZE_OPTIONS = [20, 50, 100];
 
-const EMPTY_FILTER = {
-  agentId: '',
-  channel: 'all' as SessionChannel | 'all',
-  rating: '' as '' | AgentFeedbackRating,
-  status: '' as '' | AgentFeedbackStatus,
-  keyword: '',
-  from: '',
-  to: '',
+type FeedbackFilter = {
+  agentId: string;
+  channel: SessionChannel | 'all';
+  rating: '' | AgentFeedbackRating;
+  status: '' | AgentFeedbackStatus;
+  keyword: string;
+  from: string;
+  to: string;
 };
+
+/** 默认筛选：起止日期均为当天（重置时重新取「今天」）。 */
+function defaultFilter(): FeedbackFilter {
+  const today = todayLocalDate();
+  return {
+    agentId: '',
+    channel: 'all',
+    rating: '',
+    status: '',
+    keyword: '',
+    from: today,
+    to: today,
+  };
+}
 
 /** 待确认的标记处理操作。 */
 type ProcessTarget =
@@ -252,8 +266,12 @@ export function AgentFeedbackPage() {
   const [statsError, setStatsError] = useState<string | null>(null);
 
   // ---- 筛选 / 操作 ----
-  const [filter, setFilter] = useState(EMPTY_FILTER);
-  const [applied, setApplied] = useState<AgentFeedbackQuery>({});
+  const [filter, setFilter] = useState(defaultFilter);
+  /** 默认与筛选区一致：起止日期均为当天。 */
+  const [applied, setApplied] = useState<AgentFeedbackQuery>(() => {
+    const today = todayLocalDate();
+    return { from: toIsoUtc(today, false), to: toIsoUtc(today, true) };
+  });
   const [selected, setSelected] = useState<Set<number>>(() => new Set());
   const [processTarget, setProcessTarget] = useState<ProcessTarget | null>(null);
   const [detailId, setDetailId] = useState('');
@@ -339,8 +357,9 @@ export function AgentFeedbackPage() {
   }
 
   function onReset(): void {
-    setFilter(EMPTY_FILTER);
-    setApplied({});
+    setFilter(defaultFilter());
+    const today = todayLocalDate();
+    setApplied({ from: toIsoUtc(today, false), to: toIsoUtc(today, true) });
     setPage(1);
   }
 

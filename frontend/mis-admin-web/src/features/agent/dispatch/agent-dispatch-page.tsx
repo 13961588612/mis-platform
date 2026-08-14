@@ -12,7 +12,7 @@
  */
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Activity, GitBranch, Info, RefreshCw, Route, Target } from 'lucide-react';
-import { cn } from '@/lib/utils';
+import { cn, todayLocalDate } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card, CardContent } from '@/components/ui/card';
@@ -63,21 +63,26 @@ const EMPTY_ROUTE_STATS: RouteStats = {
 /**
  * 调度链路列（对齐 `DispatchTrace` 真实 wire）。
  *
- * <p>key 必须与字段同名（排序走 `row[key]`）：时间是 `created_at`（不是
- * `started_at`）、会话是 `session_id`（不是 `trace_id`）、协调者不在行内
- * （trace 由当前 Agent 发起，无 `coordinator_id` 字段）、深度与 duration_ms
- * 均不存在 —— 真实字段是 `tool` / `intent` / `latency_ms` / `brief_rejected`。
+ * <p>key 必须与字段同名（排序走 `row[key]`）：时间是 `created_at`，会话是
+ * `session_id`；「调度」列用 `coordinator_id` 排序，单元格展示「调度者 → 执行者」。
  */
 const TRACE_COLS: ResizableColumn[] = [
   { key: 'created_at', label: '时间' },
   { key: 'session_id', label: '会话' },
-  { key: 'worker_id', label: '执行者' },
+  { key: 'coordinator_id', label: '调度' },
   { key: 'tool', label: '工具' },
   { key: 'intent', label: '意图' },
   { key: 'latency_ms', label: '耗时' },
   { key: 'status', label: '结果' },
   { key: 'brief_rejected', label: 'Brief 拒绝', locked: true },
 ];
+
+/** 调度链路「谁→谁」展示文案。 */
+function formatDispatchEdge(trace: DispatchTrace): string {
+  const from = (trace.coordinator_id || '').trim() || '-';
+  const to = (trace.worker_id || '').trim() || '-';
+  return `${from} → ${to}`;
+}
 
 /**
  * 本地日期输入（`yyyy-MM-dd`）→ ISO 8601 UTC（impl-plan §10.5「时间」约定）。
@@ -111,14 +116,17 @@ function barWidth(ratio: number): string {
 }
 
 export function AgentDispatchPage() {
-  // ---- 筛选输入态（未提交） ----
-  const [fromDate, setFromDate] = useState('');
-  const [toDate, setToDate] = useState('');
+  // ---- 筛选输入态（未提交）；起止日期默认当天 ----
+  const [fromDate, setFromDate] = useState(todayLocalDate);
+  const [toDate, setToDate] = useState(todayLocalDate);
   const [coordinatorId, setCoordinatorId] = useState('');
   const [kind, setKind] = useState('');
 
-  /** 已提交的查询条件；与输入态分开，避免改一个字符就打一次后端。 */
-  const [applied, setApplied] = useState<DispatchQuery>({});
+  /** 已提交的查询条件；与输入态分开，避免改一个字符就打一次后端。默认当天。 */
+  const [applied, setApplied] = useState<DispatchQuery>(() => {
+    const today = todayLocalDate();
+    return { from: toIsoUtc(today, false), to: toIsoUtc(today, true) };
+  });
 
   // ---- 主视图：#46 路由日志 + #47 命中统计（ready） ----
   const [logs, setLogs] = useState<RouteLog[]>([]);
@@ -209,11 +217,12 @@ export function AgentDispatchPage() {
   }
 
   function onReset(): void {
-    setFromDate('');
-    setToDate('');
+    const today = todayLocalDate();
+    setFromDate(today);
+    setToDate(today);
     setCoordinatorId('');
     setKind('');
-    setApplied({});
+    setApplied({ from: toIsoUtc(today, false), to: toIsoUtc(today, true) });
   }
 
   const getLogSortValue = useCallback(
@@ -633,9 +642,13 @@ export function AgentDispatchPage() {
                       </td>
                       <td
                         className="truncate px-3 py-2 text-xs"
-                        title={trace.worker_id ?? ''}
+                        title={formatDispatchEdge(trace)}
                       >
-                        {trace.worker_id || '-'}
+                        <span className="text-muted-foreground">
+                          {(trace.coordinator_id || '').trim() || '-'}
+                        </span>
+                        <span className="mx-1 text-muted-foreground">→</span>
+                        <span>{(trace.worker_id || '').trim() || '-'}</span>
                       </td>
                       <td
                         className="truncate px-3 py-2 text-xs"

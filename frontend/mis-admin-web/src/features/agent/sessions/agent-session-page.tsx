@@ -20,7 +20,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { ChevronLeft, ChevronRight, Eye, RefreshCw, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
-import { cn } from '@/lib/utils';
+import { cn, todayLocalDate } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { PermissionGate } from '@/components/auth/permission-gate';
@@ -111,8 +111,12 @@ export function AgentSessionPage() {
    *
    * <p>刻意与 `sessionFilter`（输入态）分开：否则在关键字输入框里每敲一个字符
    * 都会打一次后端。用户点「查询」或翻页时才同步过来。
+   * 默认与筛选区一致：起止日期均为当天。
    */
-  const [applied, setApplied] = useState<SessionQuery>({});
+  const [applied, setApplied] = useState<SessionQuery>(() => {
+    const today = todayLocalDate();
+    return { from: toIsoUtc(today, false), to: toIsoUtc(today, true) };
+  });
 
   const load = useCallback(
     async (query: SessionQuery) => {
@@ -165,7 +169,8 @@ export function AgentSessionPage() {
 
   function onReset(): void {
     resetSessionFilter();
-    setApplied({});
+    const today = todayLocalDate();
+    setApplied({ from: toIsoUtc(today, false), to: toIsoUtc(today, true) });
     setPage(1);
   }
 

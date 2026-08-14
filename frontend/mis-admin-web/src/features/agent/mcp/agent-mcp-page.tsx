@@ -4,13 +4,13 @@
  * <p>覆盖 §4.3 的 #34 列表、#35 健康探测、#38 新增 Server、#39 连接、#40 断开、
  * #41 discover；#37 工具清单与 #42 手动调用在 {@link AgentMcpToolsDialog} 内。
  *
- * <p>**T04 收口：`MCPServerConfig` wire 只有八字段**
+ * <p>**T04 收口：`MCPServerConfig` wire 八字段 + 运行时 `connected`**
  * `{name, transport, endpoint, args, env, timeout, auto_connect, description}` ——
  * 前端臆造的 `state / tool_count / enabled / updated_at` 全部删除：
- *   - 「登记状态」列删除：连接态以 **#35 实时探测**为准（本页打开时的探活结果）；
+ *   - 「登记状态」列删除：可达性以 **#35 短连接实时探测**为准；
  *   - 「工具数」「更新时间」列删除；
  *   - 「已禁用」副标题 → `auto_connect`（「自动连接 / 手动连接」）；
- *   - 连接 / 断开按钮改按探测结果决策：探测正常 → 可断开，否则 → 可连接。
+ *   - 连接 / 断开按钮按 `connected` 登记态决策（与探测列解耦）。
  *
  * <p>#35 失败**不阻断**列表：探活是旁路信息，让它把整页拖进 error 态属于因小失大，
  * 失败时探测列统一显示「未探测」。
@@ -461,9 +461,9 @@ export function AgentMcpPage() {
             <div className="flex shrink-0 gap-2 rounded-md border border-info/30 bg-info/5 p-3 text-xs text-muted-foreground">
               <Info className="mt-[0.1rem] h-3.5 w-3.5 shrink-0 text-info" />
               <p className="leading-relaxed">
-                「实时探测」是本次打开页面时的探活结果：探测异常说明链路已断，
-                此时 Agent 调用会超时而非快速失败，建议先「断开」再「连接」以刷新链路；
-                「自动连接」表示该 Server 在注册表中配置为随系统启动自动拉起。
+                「实时探测」每次对 Endpoint 做短连接探活（initialize + tools/list），与是否点过「连接」无关；
+                探测异常说明 MCP Server 不可达或协议不通。「连接 / 断开」只表示是否在平台侧登记该
+                Server；HTTP 传输下工具调用本身也走短连接。「自动连接」表示随系统启动自动登记。
               </p>
             </div>
 
@@ -637,7 +637,7 @@ export function AgentMcpPage() {
                                 </button>
                               </PermissionGate>
                               <PermissionGate permission="agent:mcp:manage">
-                                {probe === true ? (
+                                {server.connected ? (
                                   <button
                                     type="button"
                                     disabled={rowBusy}

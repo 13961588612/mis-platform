@@ -94,7 +94,11 @@ async def list_servers() -> dict[str, Any]:
     """列出所有已注册的 MCP Server。"""
     if _manager is None:
         return _api_response(9001, None, "MCPManager not initialized")
-    servers: list[dict[str, Any]] = [s.model_dump(mode="json") for s in _manager.list_servers()]
+    servers: list[dict[str, Any]] = []
+    for cfg in _manager.list_servers():
+        item: dict[str, Any] = cfg.model_dump(mode="json")
+        item["connected"] = _manager.is_connected(cfg.name)
+        servers.append(item)
     return _api_response(0, servers, "OK")
 
 
@@ -153,7 +157,9 @@ async def get_server(name: str) -> dict[str, Any]:
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"MCP server '{name}' not found",
         )
-    return _api_response(0, config.model_dump(mode="json"), "OK")
+    item: dict[str, Any] = config.model_dump(mode="json")
+    item["connected"] = _manager.is_connected(name)
+    return _api_response(0, item, "OK")
 
 
 @router.post("/{name}/connect", response_model=dict)

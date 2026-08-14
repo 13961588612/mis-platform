@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ChevronLeft, ChevronRight, Download, Eye, RefreshCw, Search, Ticket } from 'lucide-react';
 import { toast } from 'sonner';
-import { cn } from '@/lib/utils';
+import { cn, todayLocalDate } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
@@ -30,14 +30,18 @@ interface FilterForm {
   keyword: string;
 }
 
-const EMPTY_FILTER: FilterForm = {
-  from: '',
-  to: '',
-  libraryId: '',
-  userId: '',
-  sentiment: '',
-  keyword: '',
-};
+/** 默认筛选：起止日期均为当天（重置时重新取「今天」）。 */
+function defaultFilter(): FilterForm {
+  const today = todayLocalDate();
+  return {
+    from: today,
+    to: today,
+    libraryId: '',
+    userId: '',
+    sentiment: '',
+    keyword: '',
+  };
+}
 
 const PAGE_SIZE = 20;
 
@@ -92,7 +96,7 @@ function ticketBadgeVariant(
  * 不要为了「方便」把默认值改成不脱敏。
  */
 export function KbQaRecordTab() {
-  const [filter, setFilter] = useState<FilterForm>(EMPTY_FILTER);
+  const [filter, setFilter] = useState<FilterForm>(defaultFilter);
   const [libraries, setLibraries] = useState<KbLibrary[]>([]);
   const [rows, setRows] = useState<KbQaSessionListItem[]>([]);
   const [total, setTotal] = useState(0);
@@ -167,9 +171,10 @@ export function KbQaRecordTab() {
   }
 
   function onReset() {
-    setFilter(EMPTY_FILTER);
+    const next = defaultFilter();
+    setFilter(next);
     if (page === 1) {
-      void load(1, EMPTY_FILTER);
+      void load(1, next);
     } else {
       setPage(1);
     }

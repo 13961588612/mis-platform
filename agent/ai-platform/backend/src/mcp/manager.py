@@ -68,13 +68,20 @@ class MCPManager:
     # ---- 连接生命周期 ----
 
     async def connect(self, name: str) -> MCPClient:
-        """建立到已注册 MCP Server 的连接。"""
+        """建立到已注册 MCP Server 的连接。
+
+        <p>HTTP/SSE 下会先摘掉旧客户端再重建，避免 FastAPI 跨请求留下的僵尸会话
+        让 ``is_connected`` 恒为 True、后续「连接」早退却探活一直失败。
+        """
         config: MCPServerConfig | None = self._configs.get(name)
         if not config:
             raise MCPClientError(f"MCP server '{name}' is not registered")
 
-        if name in self._clients and self._clients[name].is_connected:
-            return self._clients[name]
+        existing: MCPClient | None = self._clients.get(name)
+        if existing is not None:
+            if existing.is_connected and not existing.uses_ephemeral_io:
+                return existing
+            await self.disconnect(name)
 
         client: MCPClient = MCPClient(
             server_name=config.name,
@@ -84,6 +91,15 @@ class MCPManager:
             env=config.env,
             timeout=config.timeout,
         )
+        # HTTP/SSE 读写已改为短连接；「连接」仅做一次探活登记，便于运营台展示连接态。
+        if client.uses_ephemeral_io:
+            if not await client.health_check():
+                raise MCPClientError(
+                    f"Failed to connect to MCP server {name} at {config.endpoint}: health probe failed"
+                )
+            self._clients[name] = client
+            return client
+
         await client.connect()
         self._clients[name] = client
         return client
@@ -128,15 +144,28 @@ class MCPManager:
         """返回所有已注册的 MCP Server 配置。"""
         return list(self._configs.values())
 
+    def is_connected(self, name: str) -> bool:
+        """运营台「已连接」登记态（与短连接探活结果独立）。"""
+        client: MCPClient | None = self._clients.get(name)
+        return bool(client is not None)
+
     def get_server_config(self, name: str) -> MCPServerConfig | None:
         """返回指定服务器的配置。"""
         return self._configs.get(name)
 
     async def health_check_all(self) -> dict[str, bool]:
-        """对所有已连接 MCP Server 进行健康检测，返回其健康状态。"""
+        """对所有**已注册** MCP Server 做短连接探活（不依赖长连接会话）。"""
         results: dict[str, bool] = {}
-        for name, client in self._clients.items():
-            results[name] = await client.health_check()
+        for name, config in self._configs.items():
+            probe_client: MCPClient = MCPClient(
+                server_name=config.name,
+                transport=config.transport,
+                endpoint=config.endpoint,
+                args=config.args,
+                env=config.env,
+                timeout=config.timeout,
+            )
+            results[name] = await probe_client.health_check()
         return results
 
     # ---- 自动连接 ----

@@ -471,12 +471,11 @@ export interface AgentFeedbackBatchResult {
 // ------------------------------------------------------------------ MCP（UI#8）
 
 /**
- * MCP Server（真实 wire 八字段）。
+ * MCP Server（wire：配置八字段 + 运行时 `connected`）。
  *
  * <p>对齐 ai-platform `MCPServerConfig`：`{name, transport, endpoint, args, env,
- * timeout, auto_connect, description}`。T04 收口删除臆造的
- * `state` / `tool_count` / `enabled` / `updated_at` 四字段；「是否自动连接」用
- * `auto_connect` 表达。
+ * timeout, auto_connect, description}`；列表/详情额外附带 `connected`（是否已在
+ * 管理器中登记连接，与 #35 短连接探活结果独立）。
  */
 export interface McpServer {
   name: string;
@@ -487,6 +486,8 @@ export interface McpServer {
   timeout?: number;
   auto_connect: boolean;
   description?: string;
+  /** 是否已在 ai-platform MCPManager 登记连接（点过「连接」且未断开）。 */
+  connected?: boolean;
 }
 
 export interface McpTool {
@@ -556,13 +557,14 @@ export interface McpOfflineCleanupResult {
  * 单条委派轨迹。
  *
  * <p>对齐 ai-platform `DispatchTraceEntry` + `session_id`/`created_at`
- * （`coordinator/trace.py`）：`{intent, worker_id, tool, status, latency_ms,
- * task_id, brief_rejected, session_id, created_at}`。
- * T04 前声明的 `trace_id / coordinator_id / task_brief / depth / started_at /
- * duration_ms` 全部不存在，已删除。
+ * （`coordinator/trace.py`）：`{intent, coordinator_id, worker_id, tool, status,
+ * latency_ms, task_id, brief_rejected, session_id, created_at}`。
+ * `coordinator_id` 为调度者（父会话 agent_id）；缺失时运营台显示 `-`。
  */
 export interface DispatchTrace {
   intent: string;
+  /** 发起委派的 Coordinator；旧缓冲条目可能为空。 */
+  coordinator_id?: string;
   worker_id: string;
   tool: string;
   status: DispatchTraceStatus;

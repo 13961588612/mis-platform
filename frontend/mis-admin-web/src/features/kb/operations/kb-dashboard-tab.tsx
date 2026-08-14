@@ -13,6 +13,7 @@ import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { StatCard } from '@/components/common/stat-card';
+import { todayLocalDate } from '@/lib/utils';
 import { getDashboard } from '../api/kb-api';
 import type {
   KbDashboard,
@@ -52,8 +53,8 @@ function percent(v: number | null | undefined): string {
  * （表无点赞点踩字段，按 accuracy/helpful 折算综合分）。
  */
 export function KbDashboardTab() {
-  const [from, setFrom] = useState('');
-  const [to, setTo] = useState('');
+  const [from, setFrom] = useState(todayLocalDate);
+  const [to, setTo] = useState(todayLocalDate);
   const [data, setData] = useState<KbDashboard | null>(null);
   const [loading, setLoading] = useState(false);
 
@@ -70,7 +71,8 @@ export function KbDashboardTab() {
   }, []);
 
   useEffect(() => {
-    void load('', '');
+    const today = todayLocalDate();
+    void load(today, today);
   }, [load]);
 
   const trend = data?.trend ?? [];
