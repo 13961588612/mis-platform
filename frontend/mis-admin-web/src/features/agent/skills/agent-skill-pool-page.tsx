@@ -20,6 +20,7 @@ import {
   Pencil,
   Plus,
   RefreshCw,
+  RotateCcw,
   Sparkles,
   Trash2,
 } from 'lucide-react';
@@ -32,7 +33,7 @@ import { StatCard } from '@/components/common/stat-card';
 import { SortIndicator } from '@/components/common/sort-indicator';
 import { useClientSort } from '@/components/common/use-client-sort';
 import { useColumnWidths, type ResizableColumn } from '@/components/common/use-column-widths';
-import { AgentPageShell } from '../components/agent-page-shell';
+import { AgentPageShell, AgentContentState } from '../components/agent-page-shell';
 import { AgentConfirmDialog } from '../components/agent-confirm-dialog';
 import { AgentStatusBadge } from '../components/agent-status-badge';
 import { AgentSkillFormDialog } from './agent-skill-form-dialog';
@@ -253,8 +254,8 @@ export function AgentSkillPoolPage() {
       </Button>
       <PermissionGate permission="agent:skill:reindex">
         <Button size="sm" variant="outline" onClick={() => setPending({ kind: 'reindex' })}>
-          <RefreshCw className="h-4 w-4" />
-          重建索引
+          <RotateCcw className="h-4 w-4" />
+          重建技能索引
         </Button>
       </PermissionGate>
       <PermissionGate permission="agent:skill:manage">
@@ -272,13 +273,11 @@ export function AgentSkillPoolPage() {
       description="可用技能的注册与生命周期管理。"
       permission="agent:skill:list"
       actions={headerActions}
-      loading={loading && skills.length === 0}
-      error={error}
-      onRetry={() => void load()}
-      empty={!loading && !error && skills.length === 0}
-      emptyText="技能池为空"
-      emptyHint="点击右上角「新建技能」注册第一个技能，或先执行「重建索引」从技能目录同步。"
     >
+      {/*
+        不把 empty 交给 AgentPageShell：空池时仍需露出统计卡与页头「重建技能索引」，
+        否则整页被空态吞掉时观感像「没有按钮」。
+      */}
       <div className="flex min-h-0 flex-1 flex-col gap-3">
         <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
           <StatCard label="技能总数" value={stats?.total ?? skills.length} icon={Sparkles} />
@@ -295,7 +294,7 @@ export function AgentSkillPoolPage() {
           <StatCard
             label="最近重建索引"
             value={stats ? formatTime(stats.last_reindex_at) : '-'}
-            icon={RefreshCw}
+            icon={RotateCcw}
           />
         </div>
 
@@ -344,6 +343,15 @@ export function AgentSkillPoolPage() {
             共 {filtered.length} / {skills.length} 条
           </span>
         </div>
+
+        <AgentContentState
+          loading={loading && skills.length === 0}
+          error={error}
+          onRetry={() => void load()}
+          empty={!loading && !error && skills.length === 0}
+          emptyText="技能池为空"
+          emptyHint="可点「重建技能索引」从技能目录同步，或「新建技能」手工注册。"
+        >
 
         <div className="relative min-h-0 flex-1 overflow-auto rounded-lg border bg-table-surface">
           {hasCustom ? (
@@ -494,6 +502,7 @@ export function AgentSkillPoolPage() {
             </tbody>
           </table>
         </div>
+        </AgentContentState>
       </div>
 
       <AgentSkillFormDialog
