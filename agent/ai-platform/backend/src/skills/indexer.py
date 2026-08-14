@@ -9,6 +9,7 @@ Embedding 不可用时快速跳过（探测一次），避免每个 Skill 卡 30
 
 from __future__ import annotations
 
+import uuid
 from typing import Any, TYPE_CHECKING
 
 import httpx
@@ -24,6 +25,12 @@ if TYPE_CHECKING:
     from src.skills.models import Skill
 
 logger = structlog.get_logger(__name__)
+
+# Qdrant point id 仅接受 unsigned int / UUID；skill_id 如 member.profile 不可直接作 id。
+# 用固定命名空间做 uuid5，保证同 skill_id 的 upsert/delete 幂等。
+def skill_point_id(skill_id: str) -> str:
+    """将 skill_id 映射为 Qdrant 合法的确定性 UUID 字符串。"""
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, f"mis:skill:{skill_id}"))
 
 
 class VectorIndexer:
@@ -167,7 +174,7 @@ class VectorIndexer:
         skill.embedding = vector
 
         point: PointStruct = qdrant_models.PointStruct(
-            id=skill.skill_id,
+            id=skill_point_id(skill.skill_id),
             vector=vector,
             payload={
                 "skill_id": skill.skill_id,
@@ -224,7 +231,7 @@ class VectorIndexer:
         await self._qdrant.set_payload(
             collection_name=self._collection_name,
             payload=payload,
-            points=[skill_id],
+            points=[skill_point_id(skill_id)],
         )
 
     async def delete_index(self, skill_id: str) -> None:
@@ -234,7 +241,7 @@ class VectorIndexer:
             await self._qdrant.delete(
                 collection_name=self._collection_name,
                 points_selector=qdrant_models.PointIdsList(
-                    points=[skill_id],
+                    points=[skill_point_id(skill_id)],
                 ),
             )
             logger.info("Skill index deleted", skill_id=skill_id)
