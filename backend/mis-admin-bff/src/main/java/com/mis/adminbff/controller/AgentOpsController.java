@@ -114,6 +114,12 @@ public class AgentOpsController {
         return Result.ok(facade.reindexSkills());
     }
 
+    /** #10 解析 SKILL.md（透传）。 */
+    @PostMapping("/skills/parse")
+    public Result<JsonNode> parseSkill(@RequestBody JsonNode body) {
+        return Result.ok(facade.parseSkill(body));
+    }
+
     // ---------------------------------------------------------------- Agent #13–#26
 
     /** #13 Agent 列表。 */

@@ -180,7 +180,8 @@ class SkillCreateRequest(BaseModel):
     tags: list[str] = Field(default_factory=list)
     parameters: dict[str, Any] = Field(default_factory=dict)
     required_permissions: list[str] = Field(default_factory=list)
-    handler: str
+    # 自建 custom 技能可不填 handler（空串 = 文档型/检索型，仅语义检索与上下文注入，不单独执行）
+    handler: str = ""
     timeout: int = 30
     version: str = "1.0.0"
     priority: float = 1.0

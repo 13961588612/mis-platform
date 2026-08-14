@@ -16,10 +16,14 @@ Skill CRUD API 路由。
 from __future__ import annotations
 from typing import Any
 
+import re
 import uuid
+import yaml
+from pathlib import Path
 
 import structlog
 from fastapi import APIRouter, HTTPException, Query, status
+from pydantic import BaseModel
 
 from src.skills.models import (
     Skill,
@@ -29,10 +33,28 @@ from src.skills.models import (
     SkillStatus,
     SkillUpdateRequest,
 )
+from src.skills.spec_parser import list_package_attachments, parse_front_matter
 
 logger = structlog.get_logger(__name__)
 
 router = APIRouter()
+
+# 与 src.skills.spec_parser._FRONT_MATTER_RE 同形：判断请求体是否真的带 Front Matter 分隔符，
+# 仅当存在分隔符时才严格校验内部 YAML，避免把纯正文误判为解析失败（见 parse_skill）。
+_FRONT_MATTER_RE = re.compile(r"^---\s*\n(.*?)\n---\s*\n", re.DOTALL)
+
+
+class SkillParseRequest(BaseModel):
+    """解析 SKILL.md 请求体（content 为 SKILL.md 全文）。"""
+
+    content: str
+
+
+class SkillParseResponse(BaseModel):
+    """解析 SKILL.md 结果（仅预览，不持久化）。"""
+
+    metadata: dict[str, Any]
+    body: str
 
 # 单例注册表（在应用启动时注入；参见 main.py 中的 lifespan）
 _registry: Any = None
@@ -105,9 +127,36 @@ async def get_skill_stats() -> dict[str, Any]:
     return _api_response(0, _registry.stats(), "OK")
 
 
+@router.post("/parse", response_model=dict)
+async def parse_skill(req: SkillParseRequest) -> dict[str, Any]:
+    """解析 SKILL.md 的 Front Matter 与正文（仅预览，不持久化）。
+
+    - 标准 SKILL.md：返回解析后的 metadata 与正文 body；
+    - 无 ``---`` 分隔符：返回 ``{metadata: {}, body: 原文}``，不报错；
+    - ``---`` 分隔符内 YAML 语法错误：返回 400 + 错误信息（由下游/前端展示）。
+    """
+    # 仅当请求体真的带 Front Matter 分隔符时，才对内部 YAML 做严格校验；
+    # 否则 parse_front_matter 会把整段正文当 body 返回，无需校验。
+    fm_match: Any = _FRONT_MATTER_RE.match(req.content)
+    if fm_match is not None:
+        try:
+            yaml.safe_load(fm_match.group(1))
+        except yaml.YAMLError as exc:
+            return _api_response(400, None, f"SKILL.md Front Matter 解析失败：{exc}")
+
+    try:
+        metadata: Any
+        body: str
+        metadata, body = parse_front_matter(req.content)
+    except Exception as exc:  # pragma: no cover - parse_front_matter 已对异常兜底
+        return _api_response(400, None, f"SKILL.md Front Matter 解析失败：{exc}")
+
+    return _api_response(0, {"metadata": metadata, "body": body}, "OK")
+
+
 @router.get("/{skill_id}", response_model=dict)
 async def get_skill(skill_id: str) -> dict[str, Any]:
-    """按 ID 获取单个 Skill。"""
+    """按 ID 获取单个 Skill（package skill 额外懒加载 SKILL.md 正文与附件）。"""
     if _registry is None:
         return _api_response(9001, None, "SkillRegistry not initialized")
     skill: Skill | None = _registry.get(skill_id)
@@ -116,6 +165,21 @@ async def get_skill(skill_id: str) -> dict[str, Any]:
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Skill '{skill_id}' not found",
         )
+
+    # 渐进式披露阶段二（R8）：仅对 Agent Skills Spec 技能包额外读取 SKILL.md 正文与附件，
+    # 自建 custom 技能无 package_dir，跳过（body 保持 None）。
+    if skill.is_package_skill():
+        skill_md: Path = Path(skill.package_dir) / "SKILL.md"
+        try:
+            raw_text: str = skill_md.read_text(encoding="utf-8")
+        except OSError:
+            raw_text = ""
+        _meta: Any
+        body: str
+        _meta, body = parse_front_matter(raw_text)
+        attachments: dict[str, list[str]] = list_package_attachments(Path(skill.package_dir))
+        skill.load_body(body, attachments)
+
     return _api_response(0, skill.model_dump(mode="json"), "OK")
 
 

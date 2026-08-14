@@ -125,6 +125,12 @@ public class AgentOpsClient extends AgentOpsTransport {
                 "POST " + SKILLS + "/reindex");
     }
 
+    /** 解析 SKILL.md（透传）。body `{content}`，下游回 `{metadata, body}`。 */
+    public JsonNode parseSkill(Object body) {
+        return postJson(builder -> builder.path(SKILLS + "/parse").build(), body,
+                "POST " + SKILLS + "/parse");
+    }
+
     // ==================================================================
     // Agent §4.3 #13–#26
     // ==================================================================

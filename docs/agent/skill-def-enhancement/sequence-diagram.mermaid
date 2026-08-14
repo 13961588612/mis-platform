@@ -1,0 +1,83 @@
+%% ============ ① 粘贴解析流程（前端 → BFF parse → ai-platform parse → 回填） ============
+sequenceDiagram
+    autonumber
+    actor U as 运营
+    participant F as AgentSkillFormDialog(粘贴模式)
+    participant B as BFF /agent-ops/skills/parse
+    participant A as ai-platform POST /api/v1/skills/parse
+    participant P as spec_parser.parse_front_matter
+
+    U->>F: 粘贴 SKILL.md 全文，点击「解析」
+    F->>F: setParsing(true)，禁用按钮
+    F->>B: POST {content}
+    B->>A: POST /api/v1/skills/parse {content}
+    A->>P: parse_front_matter(content)
+    P-->>A: (metadata:dict, body:str)
+    A-->>B: {code:0, data:{metadata, body}}
+    B-->>F: Result<JsonNode>
+    F->>F: 映射 metadata→表单(name/description/category/tags/handler)
+    F->>F: setParsing(false)，切到可编辑表单(回填值)
+    F-->>U: 展示回填后表单，可编辑后提交
+
+    alt 解析失败（下游异常 / 超长，R17）
+        A-->>B: {code:!=0, message}
+        B-->>F: Result<JsonNode> code≠0
+        F->>F: setParsing(false)，setParseError(msg)
+        F-->>U: toast 错误 + 保留粘贴框(重贴入口, R13)
+    else 无 Front Matter（Q2：软提示不报错）
+        P-->>A: ({}, 原样 body)
+        A-->>F: {code:0, data:{metadata:{}, body}}
+        F->>F: metadata 为空 → 展示软提示，body 作为正文预览
+    end
+
+%% ============ ② 自建提交流程（表单 → BFF skills → ai-platform create，handler 可选） ============
+sequenceDiagram
+    autonumber
+    actor U as 运营
+    participant F as AgentSkillFormDialog
+    participant B as BFF POST /agent-ops/skills
+    participant S as SkillUpsertRequest(强类型)
+    participant A as ai-platform POST /api/v1/skills
+    participant R as SkillRegistry
+
+    U->>F: 填写表单（handlers 可选）
+    F->>F: zod 校验 + handler 内联格式校验(R12)
+    U->>F: 点击「保存」
+    F->>B: POST SkillPayload{skill_id?, name, ..., handler?}
+    B->>S: 构造并校验 SkillUpsertRequest
+    S->>A: POST /api/v1/skills（handler 未填则后端默认 ""，R1）
+    A->>R: register(Skill(handler=req.handler or ""))
+    R-->>A: Skill 已注册
+    A-->>B: {code:0, data:Skill}
+    B->>B: ensureCode(skill_id) 懒注册执行码
+    B-->>F: Result<JsonNode>
+    F-->>U: toast 成功，onSaved 刷新列表
+
+%% ============ ③ 详情查看流程（列表点详情 → getSkill → 后端 load_body → 抽屉渲染） ============
+sequenceDiagram
+    autonumber
+    actor U as 运营
+    participant P as AgentSkillPoolPage
+    participant F as AgentSkillDetailDrawer
+    participant B as BFF GET /agent-ops/skills/{id}
+    participant A as ai-platform GET /api/v1/skills/{id}
+    participant R as SkillRegistry
+    participant P2 as spec_parser
+
+    U->>P: 点击某行「详情」
+    P->>F: open(skill_id)
+    F->>B: GET /agent-ops/skills/{id}
+    B->>A: GET /api/v1/skills/{id}
+    A->>R: get(skill_id)
+    R-->>A: Skill（body 初始 null）
+    alt 含 package_dir（R8）
+        A->>P2: parse_front_matter(读 SKILL.md)
+        A->>P2: list_package_attachments(package_dir)
+        A->>A: skill.load_body(body, attachments)
+    else custom 自建（无 package_dir）
+        A-->>F: body=null（不报错）
+    end
+    A-->>B: Skill.model_dump(含 body/scripts/references/assets 或 null)
+    B-->>F: Result<JsonNode(SkillDetail)>
+    F->>F: 渲染 头部/状态徽标/可执行·文档型徽标(R10) + body(R11 空文案) + 附件清单(R7)
+    F-->>U: 展示技能详情抽屉

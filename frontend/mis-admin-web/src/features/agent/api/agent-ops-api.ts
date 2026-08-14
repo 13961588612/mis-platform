@@ -51,6 +51,7 @@ import type {
   SessionQuery,
   Skill,
   SkillGrant,
+  SkillParseResponseFE,
   SkillStats,
   WecomBot,
   WecomBotPayload,
@@ -139,6 +140,11 @@ export interface SkillPayload {
   description: string;
   category?: string;
   tags?: string[];
+  /**
+   * 执行器标识（可选）。空串或不传 = 文档型/检索型技能，仅用于语义检索与上下文注入；
+   * 非空 = 可执行，格式 `mcp:{server}:{tool}` / `builtin:{name}` / `custom:{module}.{func}`。
+   */
+  handler?: string;
 }
 
 /** §4.3 #4 — agent:skill:manage */
@@ -175,6 +181,20 @@ export async function disableSkill(id: string): Promise<void> {
 export async function reindexSkills(): Promise<void> {
   const res = await api.post<ApiResult<void>>('/agent-ops/skills/reindex');
   if (res.data.code !== 0) throw new Error(res.data.message || '重建技能索引失败');
+}
+
+/**
+ * 解析 SKILL.md（§4.3 #10，新增端点）。
+ *
+ * <p>后端 `POST /skills/parse` 仅做预览、不持久化：返回 `{metadata, body}`。
+ * YAML 语法错误时后端回 code=400 + message「SKILL.md Front Matter 解析失败：…」，
+ * 由 `unwrap` 抛出、调用方以 toast 展示。
+ */
+export async function parseSkill(content: string): Promise<SkillParseResponseFE> {
+  const res = await api.post<ApiResult<SkillParseResponseFE>>('/agent-ops/skills/parse', {
+    content,
+  });
+  return unwrap(res, '解析 SKILL.md 失败');
 }
 
 // ------------------------------------------------------------------ 技能权限（§4.3 #10–#12）

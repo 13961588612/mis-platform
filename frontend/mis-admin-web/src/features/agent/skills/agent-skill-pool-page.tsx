@@ -17,6 +17,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   CheckCircle2,
   CirclePause,
+  Eye,
   Pencil,
   Plus,
   RefreshCw,
@@ -37,6 +38,7 @@ import { AgentPageShell, AgentContentState } from '../components/agent-page-shel
 import { AgentConfirmDialog } from '../components/agent-confirm-dialog';
 import { AgentStatusBadge } from '../components/agent-status-badge';
 import { AgentSkillFormDialog } from './agent-skill-form-dialog';
+import { AgentSkillDetailDrawer } from './agent-skill-detail-drawer';
 import {
   deleteSkill,
   disableSkill,
@@ -84,6 +86,8 @@ export function AgentSkillPoolPage() {
   const [formOpen, setFormOpen] = useState(false);
   const [editing, setEditing] = useState<Skill | null>(null);
   const [pending, setPending] = useState<PendingAction | null>(null);
+  const [detailSkillId, setDetailSkillId] = useState<string | null>(null);
+  const [detailOpen, setDetailOpen] = useState(false);
 
   const skillFilter = useAgentStore((s) => s.skillFilter);
   const setSkillFilter = useAgentStore((s) => s.setSkillFilter);
@@ -453,6 +457,19 @@ export function AgentSkillPoolPage() {
                     </td>
                     <td className="px-3 py-2">
                       <div className="flex flex-wrap items-center justify-end gap-1">
+                        <PermissionGate permission="agent:skill:list">
+                          <button
+                            type="button"
+                            className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[0.8125rem] text-primary hover:bg-primary/10"
+                            onClick={() => {
+                              setDetailSkillId(skill.skill_id);
+                              setDetailOpen(true);
+                            }}
+                          >
+                            <Eye className="h-3 w-3" />
+                            详情
+                          </button>
+                        </PermissionGate>
                         <PermissionGate permission="agent:skill:manage">
                           <button
                             type="button"
@@ -510,6 +527,12 @@ export function AgentSkillPoolPage() {
         onOpenChange={setFormOpen}
         skill={editing}
         onSaved={() => void load()}
+      />
+
+      <AgentSkillDetailDrawer
+        skillId={detailSkillId}
+        open={detailOpen}
+        onClose={() => setDetailOpen(false)}
       />
 
       <AgentConfirmDialog

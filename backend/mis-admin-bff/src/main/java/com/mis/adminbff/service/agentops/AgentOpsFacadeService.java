@@ -133,6 +133,11 @@ public class AgentOpsFacadeService {
         return client.reindexSkills();
     }
 
+    /** 解析 SKILL.md（透传）。 */
+    public JsonNode parseSkill(JsonNode body) {
+        return client.parseSkill(body);
+    }
+
     // ==================================================================
     // Agent §4.3 #13–#26
     // ==================================================================

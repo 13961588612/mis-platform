@@ -52,6 +52,34 @@ export interface Skill {
   version?: string;
   tags?: string[];
   updated_at: string;
+  /** 执行器标识：mcp:{server}:{tool} / builtin:{name} / custom:{module}.{func}；空串 = 文档型/检索型。 */
+  handler?: string;
+  /** 来源：custom / mcp / builtin / package（对齐 SkillSource 枚举）。 */
+  source?: string;
+}
+
+/**
+ * 技能详情（列表项 + 详情抽屉扩展字段）。
+ *
+ * <p>对齐 ai-platform `GET /skills/{id}` 在 package skill 下额外返回的
+ * `body / scripts / references / assets`。custom 自建技能这些字段为 `undefined` / `null`。
+ */
+export interface SkillDetail extends Skill {
+  body?: string;
+  scripts?: string[];
+  references?: string[];
+  assets?: string[];
+}
+
+/**
+ * 解析 SKILL.md 的响应（前端只读预览，不持久化）。
+ *
+ * <p>对齐后端 `POST /skills/parse` 的 `SkillParseResponse`：`metadata` 为 Front Matter
+ * 解析出的字典（可能为空），`body` 为 Markdown 正文（无 Front Matter 时为原文）。
+ */
+export interface SkillParseResponseFE {
+  metadata: Record<string, unknown>;
+  body: string;
 }
 
 export interface SkillStats {

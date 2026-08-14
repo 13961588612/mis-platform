@@ -44,6 +44,17 @@ const SKILL_STATUS_MAP: Record<SkillStatus, BadgeSpec> = {
 };
 
 /**
+ * 技能执行形态：可执行（有 handler）/ 文档型（无 handler，仅检索与上下文注入）。
+ *
+ * <p>取值由前端按 `handler` 是否为空推导（`executable` / `document`），
+ * 不直接来自 wire（wire 仅给出 handler 字符串）。
+ */
+const SKILL_KIND_MAP: Record<string, BadgeSpec> = {
+  executable: { label: '可执行', variant: 'success' },
+  document: { label: '文档型', variant: 'secondary' },
+};
+
+/**
  * 审批状态文案表。
  *
  * <p>必须覆盖 `ApprovalStatus` 的**全部 5 档** —— 后端
@@ -92,6 +103,7 @@ export type AgentBadgeKind =
   | 'agentState'
   | 'agentRole'
   | 'skillStatus'
+  | 'skillKind'
   | 'approval'
   | 'wecomHealth'
   | 'dispatchStatus'
@@ -101,6 +113,7 @@ const MAPS: Record<AgentBadgeKind, Record<string, BadgeSpec>> = {
   agentState: AGENT_STATE_MAP,
   agentRole: AGENT_ROLE_MAP,
   skillStatus: SKILL_STATUS_MAP,
+  skillKind: SKILL_KIND_MAP,
   approval: APPROVAL_STATUS_MAP,
   wecomHealth: WECOM_HEALTH_MAP,
   dispatchStatus: DISPATCH_STATUS_MAP,
