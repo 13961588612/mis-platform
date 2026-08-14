@@ -344,8 +344,8 @@ export function AgentMcpPage() {
     if (busy) return;
     setBusy(server.name);
     try {
-      const tools = await discoverMcpTools(server.name);
-      toast.success(`Server「${server.name}」发现 ${tools.length} 个工具`);
+      const result = await discoverMcpTools(server.name);
+      toast.success(`Server「${server.name}」发现 ${result.discovered} 个工具`);
       await load();
     } catch (e) {
       toast.error(agentErrorMessage(e, '发现 MCP 工具失败'));

@@ -21,6 +21,14 @@ export type MessageStatus =
   | "delivered"
   | "error";
 
+/** 助手回答的点赞 / 吐槽。 */
+export type MessageFeedbackRating = "up" | "down";
+
+export interface MessageFeedback {
+  rating: MessageFeedbackRating;
+  comment?: string | null;
+}
+
 /** Chat attachment reference (uploaded via /files/upload). */
 export interface ChatAttachment {
   fileId: string;
@@ -72,6 +80,8 @@ export interface ChatMessage {
     /** 后端下发的纯数据 props（snake_case，渲染前由 A2uiRenderer camelize）。 */
     props: Record<string, unknown>;
   };
+  /** 点赞 / 吐槽；未评价为 undefined。 */
+  feedback?: MessageFeedback;
 }
 
 // ===== Token Usage Summary =====

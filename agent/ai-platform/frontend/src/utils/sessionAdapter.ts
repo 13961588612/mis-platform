@@ -1,6 +1,6 @@
 /** Session API 响应归一化（Backend snake_case → Frontend） */
 
-import type { ChatAttachment, ChatMessage, MessageRole } from "../types/message";
+import type { ChatAttachment, ChatMessage, MessageFeedback, MessageRole } from "../types/message";
 
 export interface RawCreateSessionResponse {
   session_id?: string;
@@ -78,6 +78,17 @@ export function normalizeSessionDetail(raw: RawSessionDetail): SessionDetail {
 
 const KNOWN_ROLES: MessageRole[] = ["user", "assistant", "system", "tool"];
 
+function parseFeedback(meta: Record<string, unknown>): MessageFeedback | undefined {
+  const raw = meta.feedback;
+  if (!raw || typeof raw !== "object") return undefined;
+  const rec = raw as Record<string, unknown>;
+  if (rec.rating !== "up" && rec.rating !== "down") return undefined;
+  return {
+    rating: rec.rating,
+    comment: typeof rec.comment === "string" ? rec.comment : null,
+  };
+}
+
 function asRole(role: string | undefined): MessageRole {
   if (role && (KNOWN_ROLES as string[]).includes(role)) {
     return role as MessageRole;
@@ -127,6 +138,7 @@ export function normalizeSessionMessages(
       toolName,
       toolArgs,
       toolResult,
+      feedback: parseFeedback(meta),
     };
   });
 }

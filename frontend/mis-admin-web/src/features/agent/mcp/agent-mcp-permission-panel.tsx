@@ -232,8 +232,8 @@ export function AgentMcpPermissionPanel() {
     if (!serverName) return;
     setDiscovering(true);
     try {
-      const tools = await discoverMcpTools(serverName);
-      toast.success(`Server「${serverName}」发现 ${tools.length} 个工具，已刷新授权清单`);
+      const result = await discoverMcpTools(serverName);
+      toast.success(`Server「${serverName}」发现 ${result.discovered} 个工具，已刷新授权清单`);
       await loadPermissions(serverName);
     } catch (e) {
       toast.error(agentErrorMessage(e, '发现 MCP 工具失败'));

@@ -81,6 +81,12 @@ const DISPATCH_STATUS_MAP: Record<DispatchTraceStatus, BadgeSpec> = {
   running: { label: '执行中', variant: 'info' },
 };
 
+/** 调度观测：自动路由 vs 协调委派。 */
+const DISPATCH_KIND_MAP: Record<string, BadgeSpec> = {
+  agent_router: { label: '自动路由', variant: 'outline' },
+  coordinator: { label: '协调委派', variant: 'info' },
+};
+
 /** 徽章类别；决定用哪张映射表。 */
 export type AgentBadgeKind =
   | 'agentState'
@@ -88,7 +94,8 @@ export type AgentBadgeKind =
   | 'skillStatus'
   | 'approval'
   | 'wecomHealth'
-  | 'dispatchStatus';
+  | 'dispatchStatus'
+  | 'dispatchKind';
 
 const MAPS: Record<AgentBadgeKind, Record<string, BadgeSpec>> = {
   agentState: AGENT_STATE_MAP,
@@ -97,6 +104,7 @@ const MAPS: Record<AgentBadgeKind, Record<string, BadgeSpec>> = {
   approval: APPROVAL_STATUS_MAP,
   wecomHealth: WECOM_HEALTH_MAP,
   dispatchStatus: DISPATCH_STATUS_MAP,
+  dispatchKind: DISPATCH_KIND_MAP,
 };
 
 export interface AgentStatusBadgeProps {

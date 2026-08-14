@@ -44,6 +44,7 @@ const selectClass =
  */
 const LOG_COLS: ResizableColumn[] = [
   { key: 'timestamp', label: '时间' },
+  { key: 'dispatch_kind', label: '类型' },
   { key: 'session_id', label: '会话' },
   { key: 'matched_agent_id', label: '命中 Agent' },
   { key: 'strategy_used', label: '命中策略', locked: true },
@@ -54,6 +55,7 @@ const EMPTY_ROUTE_STATS: RouteStats = {
   total_routes: 0,
   by_agent: {},
   by_strategy: {},
+  by_kind: {},
   avg_latency_ms: 0,
   avg_confidence: 0,
 };
@@ -113,6 +115,7 @@ export function AgentDispatchPage() {
   const [fromDate, setFromDate] = useState('');
   const [toDate, setToDate] = useState('');
   const [coordinatorId, setCoordinatorId] = useState('');
+  const [kind, setKind] = useState('');
 
   /** 已提交的查询条件；与输入态分开，避免改一个字符就打一次后端。 */
   const [applied, setApplied] = useState<DispatchQuery>({});
@@ -201,6 +204,7 @@ export function AgentDispatchPage() {
       from: toIsoUtc(fromDate, false),
       to: toIsoUtc(toDate, true),
       coordinator_id: coordinatorId || undefined,
+      kind: kind || undefined,
     });
   }
 
@@ -208,6 +212,7 @@ export function AgentDispatchPage() {
     setFromDate('');
     setToDate('');
     setCoordinatorId('');
+    setKind('');
     setApplied({});
   }
 
@@ -302,6 +307,18 @@ export function AgentDispatchPage() {
             <label className="mb-[0.4rem] block text-xs text-muted-foreground">结束日期</label>
             <Input type="date" value={toDate} onChange={(e) => setToDate(e.target.value)} />
           </div>
+          <div className="w-44">
+            <label className="mb-[0.4rem] block text-xs text-muted-foreground">调度类型</label>
+            <select
+              className={selectClass}
+              value={kind}
+              onChange={(e) => setKind(e.target.value)}
+            >
+              <option value="">全部类型</option>
+              <option value="agent_router">自动路由</option>
+              <option value="coordinator">协调委派</option>
+            </select>
+          </div>
           <div className="w-56">
             <label className="mb-[0.4rem] block text-xs text-muted-foreground">协调者</label>
             <select
@@ -331,7 +348,16 @@ export function AgentDispatchPage() {
         <section className="space-y-2">
           <h2 className="text-sm font-medium text-foreground">命中统计</h2>
           <div className="grid grid-cols-2 gap-3 lg:grid-cols-3">
-            <StatCard label="命中总次数" value={statsError ? '-' : totalHits} icon={Target} />
+            <StatCard
+              label="命中总次数"
+              value={statsError ? '-' : totalHits}
+              icon={Target}
+              description={
+                statsError
+                  ? undefined
+                  : `自动路由 ${stats.by_kind.agent_router ?? 0} · 协调委派 ${stats.by_kind.coordinator ?? 0}`
+              }
+            />
             <StatCard
               label="参与 Agent 数"
               value={statsError ? '-' : rankedStats.length}
@@ -354,7 +380,7 @@ export function AgentDispatchPage() {
             onRetry={() => void loadMain(applied)}
             empty={!loading && !statsError && !hasStats}
             emptyText="所选范围内暂无命中统计"
-            emptyHint="放宽时间范围，或确认该时段内确有会话经过路由分发。"
+            emptyHint="与下方调度链路同源：协调者委派 Worker 后会出现。已有链路记录时刷新本页即可。"
           >
             <Card>
               <CardContent className="space-y-2 py-3">
@@ -383,7 +409,7 @@ export function AgentDispatchPage() {
         </section>
 
         {/* ---------------- 路由日志（#46 ready） ---------------- */}
-        <section className="flex min-h-0 flex-col gap-2">
+        <section className="flex shrink-0 flex-col gap-2">
           <h2 className="text-sm font-medium text-foreground">
             路由日志
             <span className="ml-2 text-xs font-normal text-muted-foreground">
@@ -396,9 +422,9 @@ export function AgentDispatchPage() {
             onRetry={() => void loadMain(applied)}
             empty={!loading && !logsError && logs.length === 0}
             emptyText="所选范围内暂无路由日志"
-            emptyHint="放宽时间范围或清空协调者筛选后重试。"
+            emptyHint="与下方调度链路同源。命中 Agent 为 mis-rag、策略为 coordinator_delegate。"
           >
-            <div className="relative max-h-[26rem] overflow-auto rounded-lg border bg-table-surface">
+            <div className="relative max-h-[26rem] min-h-[12rem] overflow-auto rounded-lg border bg-table-surface">
               {logCols.hasCustom ? (
                 <button
                   type="button"
@@ -463,6 +489,12 @@ export function AgentDispatchPage() {
                       <td className="whitespace-nowrap px-3 py-2 text-xs text-muted-foreground">
                         {formatTime(log.timestamp)}
                       </td>
+                      <td className="px-3 py-2">
+                        <AgentStatusBadge
+                          kind="dispatchKind"
+                          value={log.dispatch_kind || 'agent_router'}
+                        />
+                      </td>
                       <td
                         className="truncate px-3 py-2 font-mono text-xs"
                         title={log.session_id ?? ''}
@@ -490,11 +522,14 @@ export function AgentDispatchPage() {
         </section>
 
         {/* ---------------- 调度链路（#45 ready，独立塌陷） ---------------- */}
-        <section className="flex min-h-0 flex-col gap-2">
+        <section className="flex shrink-0 flex-col gap-2">
           <div className="flex flex-wrap items-end gap-2">
-            <h2 className="text-sm font-medium text-foreground">调度链路（Traces）</h2>
+            <h2 className="flex items-center gap-2 text-sm font-medium text-foreground">
+              调度链路（Traces）
+              <AgentStatusBadge kind="dispatchKind" value="coordinator" />
+            </h2>
             <span className="pb-1.5 text-xs text-muted-foreground">
-              最近 {traces.length} 条 · 固定取最新 100 条，不受上方筛选影响
+              仅协调委派明细 · 最近 {traces.length} 条 · 固定取最新 100 条
             </span>
             <Button
               size="sm"
@@ -511,9 +546,9 @@ export function AgentDispatchPage() {
           <div className="flex gap-2 rounded-md border border-info/30 bg-info/5 p-3 text-xs text-muted-foreground">
             <Info className="mt-[0.1rem] h-3.5 w-3.5 shrink-0 text-info" />
             <p className="leading-relaxed">
-              调度链路来自 ai-platform 的 trace 落库，按时间倒序展示最近委派记录；
+              调度链路来自 ai-platform 的最近委派记录（Redis 环形缓冲，重启后仍可查）；
               <span className="font-medium text-foreground">失败不影响</span>
-              上方的路由日志与命中统计。
+              上方的路由日志与命中统计。问完一轮后请点「刷新链路」。
             </p>
           </div>
 
@@ -523,9 +558,9 @@ export function AgentDispatchPage() {
             onRetry={() => void loadTraces()}
             empty={!tracesLoading && !tracesError && traces.length === 0}
             emptyText="暂无调度链路"
-            emptyHint="协调者派发任务后才会产生链路记录。"
+            emptyHint="用 MIS智能对话助手问完后点刷新。对话与观测必须连同一套 Redis（默认都是 Nacos 的 :8000）。"
           >
-            <div className="relative max-h-[26rem] overflow-auto rounded-lg border bg-table-surface">
+            <div className="relative max-h-[26rem] min-h-[12rem] overflow-auto rounded-lg border bg-table-surface">
               {traceCols.hasCustom ? (
                 <button
                   type="button"

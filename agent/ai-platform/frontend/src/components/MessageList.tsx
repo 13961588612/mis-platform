@@ -20,9 +20,12 @@ import { useChatStore } from "../store/chatStore";
 import { A2uiRenderer } from "./a2ui/A2uiRenderer";
 import { AssistantAvatar } from "./AssistantAvatar";
 import { ToolCallTrace, groupMessagesForDisplay } from "./ToolCallTrace";
+import { MessageFeedbackBar } from "./MessageFeedbackBar";
+import { KbSourceDisclosure } from "./KbSourceDisclosure";
 import { getAuthedFileUrl } from "../utils/api";
 import { formatTime } from "../utils/format";
 import { normalizeMarkdownTables } from "../utils/markdownNormalize";
+import { splitKbSources } from "../utils/kbSources";
 import type { ChatAttachment, ChatMessage } from "../types/message";
 
 function MessageAttachments({
@@ -98,14 +101,17 @@ function MessageBubble({ message, currentUserId: _currentUserId }: MessageBubble
   const isUser = message.role === "user";
   const isSystem = message.role === "system";
 
-  const assistantContent = useMemo(
-    () => normalizeMarkdownTables(message.content ?? ""),
-    [message.content],
-  );
+  const { body: assistantBody, sources: kbSources } = useMemo(() => {
+    const split = splitKbSources(message.content ?? "");
+    return {
+      body: normalizeMarkdownTables(split.body),
+      sources: split.sources,
+    };
+  }, [message.content]);
   const isThinking =
     !isUser &&
     message.status === "streaming" &&
-    assistantContent.trim().length === 0;
+    assistantBody.trim().length === 0;
 
   // System messages — centered notification
   if (isSystem) {
@@ -153,10 +159,13 @@ function MessageBubble({ message, currentUserId: _currentUserId }: MessageBubble
               remarkPlugins={[remarkGfm]}
               components={markdownComponents}
             >
-              {assistantContent}
+              {assistantBody}
             </ReactMarkdown>
           </div>
         )}
+        {!isThinking && kbSources.length > 0 ? (
+          <KbSourceDisclosure sources={kbSources} />
+        ) : null}
 
         {/* A2UI 生成式 UI 渲染（DEP-8） */}
         {message.a2ui && (
@@ -171,6 +180,10 @@ function MessageBubble({ message, currentUserId: _currentUserId }: MessageBubble
             {formatTime(message.timestamp)}
           </div>
         )}
+
+        {!isThinking && message.status !== "error" ? (
+          <MessageFeedbackBar message={message} />
+        ) : null}
 
         {/* Error indicator */}
         {message.status === "error" && message.error && (
