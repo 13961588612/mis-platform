@@ -14,6 +14,7 @@ import com.mis.kb.domain.repository.KbQaCitationRepository;
 import com.mis.kb.domain.repository.KbQaFeedbackRepository;
 import com.mis.kb.domain.repository.KbQaMessageRepository;
 import com.mis.kb.domain.repository.KbQaSessionRepository;
+import com.mis.kb.domain.repository.KbQaTicketRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -68,6 +69,8 @@ class KbOperationsServiceStatsTest {
     private KbDocumentRepository documentRepository;
     @Mock
     private KbQaTicketService ticketService;
+    @Mock
+    private KbQaTicketRepository ticketRepository;
 
     private KbOperationsService operationsService;
 
@@ -87,6 +90,7 @@ class KbOperationsServiceStatsTest {
                 feedbackRepository,
                 libraryRepository,
                 documentRepository,
+                ticketRepository,
                 ticketService);
         when(ticketService.countOpen()).thenReturn(4L);
         when(ticketService.countAll()).thenReturn(9L);
@@ -123,10 +127,10 @@ class KbOperationsServiceStatsTest {
         assertEquals(Double.valueOf(2.67D), vo.avgAccuracy());
         assertEquals(Double.valueOf(2.67D), vo.avgHelpful());
 
-        // --- 好评率：好评 1（5.0）/ 差评 2（1.0、2.0）/ 参评 3
+        // --- 好评率：好评 1（5.0）/ 差评 3（1.0、2.0 + s3 综合 5.0 但被标跑题 offtopic=1，也计入差评）/ 参评 3
         assertEquals(3L, vo.ratedCount());
         assertEquals(1L, vo.positiveCount());
-        assertEquals(2L, vo.negativeCount());
+        assertEquals(3L, vo.negativeCount());
         assertEquals(Double.valueOf(0.33D), vo.positiveRate());
         assertEquals(Double.valueOf(2.67D), vo.avgScore());
 
@@ -146,7 +150,7 @@ class KbOperationsServiceStatsTest {
         assertEquals(1L, dims.get(2).count());
         assertEquals("cite_error", dims.get(3).code());
         assertEquals(0L, dims.get(3).count());
-        // 四桶之和 5 ≠ negativeCount 2：多选维度分布的正常形态，不是口径 bug
+        // 四桶之和 5 ≠ negativeCount 3：多选维度分布的正常形态，不是口径 bug
         long dimSum = dims.stream().mapToLong(KbDashboardVO.DimensionCount::count).sum();
         assertEquals(5L, dimSum);
         assertTrue(dimSum != vo.negativeCount());

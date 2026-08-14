@@ -41,7 +41,7 @@ public class KbExportService {
     /** 表头。 */
     private static final String[] HEADERS = {
             "会话ID", "用户", "时间", "提问", "回答摘要",
-            "命中知识库", "引用数", "准确性", "有用性", "工单状态", "备注"
+            "命中知识库", "引用数", "准确性", "有用性", "跑题", "引用错误"
     };
 
     /**
@@ -70,13 +70,13 @@ public class KbExportService {
                     desensitize ? hash(row.userId()) : str(row.userId()),
                     row.createdAt(),
                     row.question(),
-                    row.answerBrief(),
+                    row.answer(),
                     row.libraryIds(),
                     row.citeCount(),
                     row.accuracy(),
                     row.helpful(),
-                    row.ticketStatus(),
-                    row.note()
+                    row.offtopic(),
+                    row.citeError()
             };
             for (int i = 0; i < cells.length; i++) {
                 if (i > 0) {

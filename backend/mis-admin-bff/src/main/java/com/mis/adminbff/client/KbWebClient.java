@@ -863,6 +863,26 @@ public class KbWebClient extends AbstractDownstreamClient {
                 .bodyToMono(TICKET));
     }
 
+    /**
+     * 标记问答反馈已处理/忽略（OP-05）。
+     *
+     * <p>处理人身份经 {@code loginContextHeaders()} 透传，mis-kb 侧以登录上下文头为准
+     * （不信任请求体身份）；状态机 pending → handled/ignored 单向终态由 mis-kb 裁定。
+     *
+     * @param feedbackId 反馈 id
+     * @param body       {@code {status, note}}；status 必填，note 可空
+     * @return 更新后的反馈视图（含处理状态五字段）
+     */
+    public KbQaFeedbackVO processFeedback(Long feedbackId, Map<String, Object> body) {
+        return block(client().patch()
+                .uri("/internal/v1/kb/operations/qa/feedback/{id}/process", feedbackId)
+                .headers(loginContextHeaders())
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(body)
+                .retrieve()
+                .bodyToMono(QA_FEEDBACK));
+    }
+
     /** 某会话下的工单列表。 */
     public List<KbQaTicketVO> listTicketsBySession(Long sessionId) {
         List<KbQaTicketVO> data = block(client().get()

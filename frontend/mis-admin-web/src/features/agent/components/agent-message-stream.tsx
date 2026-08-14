@@ -13,9 +13,10 @@
  * 不做流式打字机、消息编辑。
  */
 import type { ReactNode } from 'react';
-import { Bot, Terminal, User, Wrench } from 'lucide-react';
+import { Bot, Terminal, ThumbsDown, ThumbsUp, User, Wrench } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { MarkdownView } from '@/components/common/markdown-view';
+import { KbChatSourceList, splitKbSources } from '@/components/common/kb-chat-sources';
 import { formatTime } from '../types';
 import type { MessageRole, SessionMessage } from '../types';
 
@@ -55,6 +56,16 @@ const ROLE_SPECS: Record<MessageRole, RoleSpec> = {
     chip: 'bg-muted text-muted-foreground',
   },
 };
+
+function AssistantMarkdown({ content }: { content: string }) {
+  const { body, sources } = splitKbSources(content);
+  return (
+    <>
+      <MarkdownView content={body} />
+      <KbChatSourceList sources={sources} />
+    </>
+  );
+}
 
 const FALLBACK_SPEC: RoleSpec = {
   label: '未知',
@@ -106,6 +117,55 @@ function prettyMeta(meta: Record<string, unknown>): string {
   }
 }
 
+/**
+ * 消息级反馈徽标（CF-02）。
+ *
+ * <p>对 assistant 消息的 ``metadata.feedback``（``{rating, comment?, updated_at?}``）
+ * 做结构化渲染，替代 metadata JSON 裸展开——运营在会话回放里能一眼看到
+ * 「这条回答被点赞/吐槽了、说了什么」。JSON 仍保留在下方 `<details>` 兜底。
+ *
+ * <p>保守探测：`metadata.feedback` 不是对象或 `rating` 非法时静默返回 null，
+ * 绝不让一个脏 metadata 把整条消息渲染搞崩。
+ */
+function FeedbackBadge({ meta }: { meta: Record<string, unknown> | undefined }) {
+  const raw = meta?.feedback;
+  if (!raw || typeof raw !== 'object') return null;
+  const fb = raw as {
+    rating?: unknown;
+    comment?: unknown;
+    status?: unknown;
+    updated_at?: unknown;
+  };
+  const rating = fb.rating === 'up' || fb.rating === 'down' ? fb.rating : null;
+  if (!rating) return null;
+  const up = rating === 'up';
+  const comment =
+    typeof fb.comment === 'string' && fb.comment.trim() ? fb.comment.trim() : '';
+  // 处理状态非消息契约字段；若未来 metadata.feedback 里带了就顺带展示，缺省不显示。
+  const status = typeof fb.status === 'string' && fb.status.trim() ? fb.status.trim() : '';
+  const updated = typeof fb.updated_at === 'string' ? fb.updated_at : '';
+  return (
+    <div className="mt-2 flex flex-wrap items-center gap-2 rounded-md border bg-muted/40 px-2.5 py-1.5 text-xs">
+      <span
+        className={cn(
+          'inline-flex items-center gap-1 rounded-full px-2 py-0.5 font-medium',
+          up ? 'bg-success/10 text-success' : 'bg-destructive/10 text-destructive',
+        )}
+      >
+        {up ? <ThumbsUp className="h-3 w-3" /> : <ThumbsDown className="h-3 w-3" />}
+        {up ? '已点赞' : '已吐槽'}
+      </span>
+      {status ? <span className="text-muted-foreground">状态：{status}</span> : null}
+      {comment ? (
+        <span className="min-w-0 flex-1 break-words text-foreground/90">{comment}</span>
+      ) : null}
+      {updated ? (
+        <span className="ml-auto text-muted-foreground/70">{formatTime(updated)}</span>
+      ) : null}
+    </div>
+  );
+}
+
 export interface AgentMessageStreamProps {
   messages: SessionMessage[];
   /** 空态文案。 */
@@ -154,7 +214,11 @@ export function AgentMessageStream({
 
             {msg.content ? (
               msg.role === 'assistant' ? (
-                <MarkdownView content={msg.content} />
+                <>
+                  <AssistantMarkdown content={msg.content} />
+                  {/* CF-02：assistant 消息的 feedback 结构化徽标（无反馈时渲染 null） */}
+                  <FeedbackBadge meta={msg.metadata} />
+                </>
               ) : (
                 <p className="whitespace-pre-wrap break-words text-sm leading-relaxed">
                   {msg.content}

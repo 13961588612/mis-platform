@@ -24,6 +24,7 @@ import type {
   KbEngineRenameResult,
   KbEngineRenameRollbackReq,
   KbFeedbackForm,
+  KbFeedbackProcessPayload,
   KbGraphBuildResult,
   KbGraphStatus,
   KbHitTestRequest,
@@ -544,6 +545,11 @@ export interface OperationSessionQuery {
   libraryId?: number | null;
   userId?: number | null;
   hasFeedback?: boolean | null;
+  /**
+   * 评价结果筛选（OP-01）：positive 好评 / negative 差评 / null 全部。
+   * 「未评价」由前端映射成 `hasFeedback=false`，不传本字段。
+   */
+  sentiment?: string | null;
   keyword?: string | null;
   page?: number;
   size?: number;
@@ -623,6 +629,23 @@ function triggerDownload(blob: Blob, filename: string): void {
   a.click();
   document.body.removeChild(a);
   URL.revokeObjectURL(url);
+}
+
+/**
+ * 标记问答反馈已处理/忽略（OP-05）。
+ *
+ * <p>处理人取当前登录人（BFF 透传 mis-kb），状态机 pending → handled/ignored
+ * 单向终态、非法流转由后端拒绝；返回更新后的反馈（含处理状态五字段）。
+ */
+export async function markFeedbackProcessed(
+  feedbackId: number,
+  payload: KbFeedbackProcessPayload,
+): Promise<KbQaFeedback> {
+  const res = await api.patch<ApiResult<KbQaFeedback>>(
+    `/kb/operations/qa/feedback/${feedbackId}/process`,
+    payload,
+  );
+  return unwrap(res, '标记反馈失败');
 }
 
 // ------------------------------------------------------------------ 工单（F-10 / A-02c）

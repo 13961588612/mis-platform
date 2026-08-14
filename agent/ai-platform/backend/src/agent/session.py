@@ -27,6 +27,8 @@ from datetime import datetime, timezone
 import redis.asyncio as aioredis
 
 from src.agent.session_store import (
+    FeedbackPage,
+    FeedbackQuery,
     MessagePage,
     SessionListQuery,
     SessionPage,
@@ -170,6 +172,37 @@ class Session:
     def get_messages(self) -> list[dict[str, Any]]:
         """以字典列表形式返回所有消息。"""
         return [msg.to_dict() for msg in self.messages]
+
+    def find_assistant_message(
+        self,
+        message_id: str | None = None,
+        content: str | None = None,
+    ) -> Message | None:
+        """定位一条助手消息，供点赞/吐槽写入 metadata。
+
+        前端流式气泡的 id 与 Redis 里的 ``Message.id`` 不是同一套，
+        所以匹配顺序是：后端 id → 正文精确匹配 → 最近一条助手消息。
+
+        Args:
+            message_id: 后端消息 UUID；H5 实时气泡通常拿不到。
+            content: 助手正文，用于对齐前端那一条气泡。
+
+        Returns:
+            命中的消息；会话里还没有助手回复时返回 ``None``。
+        """
+        if message_id:
+            for msg in self.messages:
+                if msg.role == "assistant" and msg.id == message_id:
+                    return msg
+        needle = (content or "").strip()
+        if needle:
+            for msg in reversed(self.messages):
+                if msg.role == "assistant" and (msg.content or "").strip() == needle:
+                    return msg
+        for msg in reversed(self.messages):
+            if msg.role == "assistant":
+                return msg
+        return None
 
     # ===== FormFill HITL 挂起标记（T05） =====
     # session.state 持久化，随会话 24h TTL；此处额外记录 30min 过期时间，
@@ -547,6 +580,75 @@ class SessionManager:
         await self.save_session(session)
         return msg
 
+    async def set_message_feedback(
+        self,
+        session_id: str,
+        rating: str,
+        comment: str | None = None,
+        message_id: str | None = None,
+        content: str | None = None,
+    ) -> dict[str, Any]:
+        """给一条助手消息写入点赞/吐槽，Redis 权威、PG 尽力同步 metadata。
+
+        Args:
+            session_id: 会话 ID。
+            rating: ``up`` 或 ``down``。
+            comment: 吐槽正文；点赞可空。
+            message_id: 后端消息 UUID（可选）。
+            content: 助手正文，用于对齐前端气泡（可选）。
+
+        Returns:
+            写入后的 ``feedback`` 字典（含 ``message_id``）。
+
+        Raises:
+            SessionNotFoundError: 会话不存在。
+            ValueError: 还没有助手消息可评价。
+        """
+        session: Session = await self.get_session(session_id)
+        target = session.find_assistant_message(message_id=message_id, content=content)
+        if target is None:
+            raise ValueError("还没有可评价的回答")
+        payload: dict[str, Any] = {
+            "rating": rating,
+            "comment": (comment or "").strip() or None,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+        meta = dict(target.metadata or {})
+        meta["feedback"] = payload
+        target.metadata = meta
+        session.updated_at = datetime.now(timezone.utc)
+        await self.save_session(session)
+        try:
+            await self._pg_store.update_message_metadata(target.id, meta)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "Message feedback PG metadata update failed (degraded)",
+                session_id=session_id,
+                message_id=target.id,
+                error=str(exc),
+            )
+        # CF-03：同步 upsert agent_feedback 独立表（运营读侧权威；尽力而为）。
+        # 用户覆盖写（up→down）时按 UNIQUE(session_id, message_id) 更新最新值，
+        # 处理状态保留——与 PRD Q-C1「统计按最新值」一致。
+        try:
+            await self._pg_store.upsert_feedback(
+                session_id=session_id,
+                message_id=target.id,
+                agent_id=session.agent_id,
+                user_id=session.user_id
+                or (str(session.mis_user_id) if session.mis_user_id else None),
+                rating=rating,
+                comment=(comment or "").strip() or None,
+            )
+        except Exception as exc:  # noqa: BLE001 - 双保险：store 内部已兜底，这里再兜一层
+            logger.warning(
+                "Agent feedback table upsert raised unexpectedly (degraded)",
+                session_id=session_id,
+                message_id=target.id,
+                error=str(exc),
+            )
+        return {"message_id": target.id, **payload}
+
     # ==================================================================
     # 运营后台读路径（T04 #27–#31）：一律走 PG，Redis 无分页 / 过滤能力
     # ==================================================================
@@ -671,6 +773,99 @@ class SessionManager:
             soft_deleted=deleted,
         )
         return deleted
+
+    # ==================================================================
+    # 会话反馈运营（CF-01 / CF-03 / CF-05）：全部委托 PG 独立表
+    # ==================================================================
+
+    async def list_feedback(self, query: FeedbackQuery) -> FeedbackPage:
+        """分页查询会话反馈列表（CF-01）。
+
+        Args:
+            query: 过滤 + 分页条件。
+
+        Returns:
+            一页反馈数据（``items`` 已是 wire 形状，含 answer_brief）。
+        """
+        return await self._pg_store.list_feedback(query)
+
+    async def feedback_stats(
+        self,
+        *,
+        agent_id: str | None = None,
+        channel: str | None = None,
+        time_from: datetime | None = None,
+        time_to: datetime | None = None,
+    ) -> dict[str, Any]:
+        """会话反馈统计（CF-05）。
+
+        Args:
+            agent_id: 按 Agent 过滤（可空）。
+            channel: 按渠道过滤（可空）。
+            time_from: 创建时间下界（可空）。
+            time_to: 创建时间上界（可空）。
+
+        Returns:
+            前端 ``AgentFeedbackStats`` 契约的 dict。
+        """
+        return await self._pg_store.feedback_stats(
+            agent_id=agent_id,
+            channel=channel,
+            time_from=time_from,
+            time_to=time_to,
+        )
+
+    async def process_feedback(
+        self,
+        feedback_id: int,
+        status: str,
+        handler_id: str | None,
+        handler_name: str | None,
+        note: str | None,
+    ) -> dict[str, Any]:
+        """把单条反馈标记为 handled / ignored（CF-03，单向终态）。
+
+        Args:
+            feedback_id: 反馈行主键。
+            status: 目标状态（handled / ignored）。
+            handler_id: 操作人 MIS userId（字符串化，可空）。
+            handler_name: 操作人展示名（可空）。
+            note: 处理备注（可空）。
+
+        Returns:
+            更新后的反馈行 wire dict。
+
+        Raises:
+            FeedbackNotFoundError: 反馈不存在。
+            FeedbackStatusIllegalError: 已处于另一个终态不可回退。
+        """
+        return await self._pg_store.mark_feedback_processed(
+            feedback_id, status, handler_id, handler_name, note
+        )
+
+    async def batch_process_feedback(
+        self,
+        feedback_ids: Sequence[int],
+        status: str,
+        handler_id: str | None,
+        handler_name: str | None,
+        note: str | None,
+    ) -> int:
+        """批量把 pending 反馈标记为 handled / ignored（CF-03）。
+
+        Args:
+            feedback_ids: 反馈行主键列表（调用方负责去重与上限校验）。
+            status: 目标状态（handled / ignored）。
+            handler_id: 操作人 MIS userId（字符串化，可空）。
+            handler_name: 操作人展示名（可空）。
+            note: 处理备注（可空）。
+
+        Returns:
+            实际更新的行数。
+        """
+        return await self._pg_store.batch_mark_feedback_processed(
+            feedback_ids, status, handler_id, handler_name, note
+        )
 
     @staticmethod
     def _session_to_wire(session: Session) -> dict[str, Any]:

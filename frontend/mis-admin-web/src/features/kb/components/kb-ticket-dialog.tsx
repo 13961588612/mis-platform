@@ -27,6 +27,10 @@ interface KbTicketDialogProps {
   messageId?: number | null;
   /** 提交成功回调（用于刷新侧栏工单列表）。 */
   onCreated?: (ticket: KbQaTicket) => void;
+  /** 弹窗标题，默认「报告问题」；点赞旁的吐槽入口传「吐槽」。 */
+  title?: string;
+  /** 打开时的初始类型（OP-03 转工单按吐槽维度预填 answer_error/cite_error）；缺省取选项首项。 */
+  initialType?: string | null;
 }
 
 /**
@@ -35,6 +39,9 @@ interface KbTicketDialogProps {
  * <p>提交后进入 A-02c 工单池，由运营在「问题工单」页处理。
  * `messageId` 允许为空——流式问答若落库失败，前端拿不到消息 ID，
  * 此时仍应允许用户报错（会话级），否则最该被反馈的失败场景反而报不了。
+ *
+ * <p>OP-04 运营侧「转工单」复用本弹窗：`initialType` 由调用方按吐槽维度预填，
+ * 用户仍可改选其它类型。
  */
 export function KbTicketDialog({
   open,
@@ -42,18 +49,24 @@ export function KbTicketDialog({
   sessionId,
   messageId = null,
   onCreated,
+  title = '报告问题',
+  initialType = null,
 }: KbTicketDialogProps) {
   const [type, setType] = useState<string>(KB_TICKET_TYPE_OPTIONS[0]?.value ?? 'answer_error');
   const [content, setContent] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
-  // 每次打开重置表单，避免上一次的描述残留
+  // 每次打开重置表单，避免上一次的描述残留；initialType 命中选项才用，否则回落首项
   useEffect(() => {
     if (open) {
-      setType(KB_TICKET_TYPE_OPTIONS[0]?.value ?? 'answer_error');
+      const preset =
+        initialType && KB_TICKET_TYPE_OPTIONS.some((o) => o.value === initialType)
+          ? initialType
+          : (KB_TICKET_TYPE_OPTIONS[0]?.value ?? 'answer_error');
+      setType(preset);
       setContent('');
     }
-  }, [open]);
+  }, [open, initialType]);
 
   async function onSubmit(): Promise<void> {
     if (sessionId == null) {
@@ -82,10 +95,10 @@ export function KbTicketDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>报告问题</DialogTitle>
+          <DialogTitle>{title}</DialogTitle>
           <DialogDescription>
             {sessionId == null
-              ? '当前回答未关联会话，无法建单；请重新提问后再试。'
+              ? '当前回答未关联会话，无法提交；请重新提问后再试。'
               : `关联会话 #${sessionId}${messageId == null ? '' : ` · 消息 #${messageId}`}`}
           </DialogDescription>
         </DialogHeader>
@@ -110,7 +123,7 @@ export function KbTicketDialog({
             <Textarea
               value={content}
               onChange={(e) => setContent(e.target.value)}
-              placeholder="请具体说明哪里不对、期望的正确答案是什么"
+              placeholder="请具体说明哪里不对、期望怎样才对"
               className="min-h-[6rem]"
             />
           </div>

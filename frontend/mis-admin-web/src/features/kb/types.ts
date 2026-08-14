@@ -601,7 +601,11 @@ export interface KbQaMessage {
   citations: KbQaCitation[] | null;
 }
 
-/** 问答反馈（editable_once：首次创建，第二次可改，第三次拒绝）。 */
+/**
+ * 问答反馈（editable_once：首次创建，第二次可改，第三次拒绝）。
+ *
+ * <p>V43 起增反馈处理状态五字段，与 mis-kb `KbQaFeedbackVO` 严格同名。
+ */
 export interface KbQaFeedback {
   id: number;
   sessionId: number;
@@ -609,7 +613,20 @@ export interface KbQaFeedback {
   helpful: number | null;
   offtopic: number | null;
   citeError: number | null;
+  /** 反馈处理状态：pending 待处理 / handled 已处理 / ignored 已忽略。 */
+  feedbackStatus: string | null;
+  /** 处理人 userId（运营侧标记）。 */
+  handlerId: number | null;
+  /** 处理人姓名冗余。 */
+  handlerName: string | null;
+  /** 处理时间（ISO-8601）。 */
+  handledAt: string | null;
+  /** 处理备注。 */
+  handleNote: string | null;
 }
+
+/** 反馈处理状态（KB 与 Agent 共用语义：pending → handled/ignored 单向终态）。 */
+export type KbFeedbackStatus = 'pending' | 'handled' | 'ignored';
 
 /** 会话可见范围快照（A-02a）。 */
 export interface KbVisibility {
@@ -651,6 +668,24 @@ export interface KbQaSessionListItem {
   hasFeedback: boolean | null;
   accuracy: number | null;
   helpful: number | null;
+  /** 跑题评分；未反馈为 null。 */
+  offtopic: number | null;
+  /** 引用错误评分；未反馈为 null。 */
+  citeError: number | null;
+  /** 评价结果：positive 好评 / negative 差评 / null 未反馈或未判定。 */
+  sentiment: string | null;
+  /** 反馈处理状态：pending/handled/ignored；未反馈为 null。 */
+  feedbackStatus: string | null;
+  /** 该会话最新工单状态；无工单为 null。 */
+  ticketStatus: string | null;
+}
+
+/** 反馈处理请求体（OP-05）。 */
+export interface KbFeedbackProcessPayload {
+  /** handled 已处理 / ignored 已忽略；pending → handled/ignored 单向终态。 */
+  status: 'handled' | 'ignored';
+  /** 处理备注；可空。 */
+  note?: string | null;
 }
 
 /** 看板日趋势点（A-02b/d）。 */
@@ -718,11 +753,13 @@ export interface KbDashboard {
   citeErrorCount: number | null;
   openTickets: number | null;
   totalTickets: number | null;
+  /** 待处理反馈数（feedback_status=pending，OP-05）。 */
+  pendingFeedback: number | null;
   /** 参与好评/差评判定的反馈数。 */
   ratedCount: number | null;
   /** 好评数（综合分 >= 4）。 */
   positiveCount: number | null;
-  /** 差评数（综合分 <= 2）。 */
+  /** 差评数（综合分 <= 2 或 offtopic>0 或 citeError>0，与列表 sentiment 筛选同源）。 */
   negativeCount: number | null;
   /** 好评率（0~1，两位小数）；无评分为 null。 */
   positiveRate: number | null;
@@ -1425,6 +1462,62 @@ export function ticketTypeLabel(type: string | null | undefined): string {
 /** 工单关联动作中文名。 */
 export function ticketRelActionLabel(action: string | null | undefined): string {
   return KB_TICKET_REL_ACTION_OPTIONS.find((o) => o.value === action)?.label ?? action ?? '-';
+}
+
+// --------------------------------------------------------------- 反馈运营展示常量（OP-01/OP-02/OP-05）
+
+/**
+ * 评价结果筛选项（OP-01 团队拍板四项：全部/好评/差评/未评价）。
+ *
+ * <p>后端保留 `hasFeedback` 兼容「已评价/未评价」；`sentiment` 只承载
+ * positive/negative 两个业务值（null = 全部）。「未评价」由前端映射成
+ * `hasFeedback=false`，不发 sentiment。
+ */
+export const KB_QA_SENTIMENT_OPTIONS: { value: string; label: string }[] = [
+  { value: '', label: '全部' },
+  { value: 'positive', label: '好评' },
+  { value: 'negative', label: '差评' },
+  { value: 'unrated', label: '未评价' },
+];
+
+/**
+ * 评价结果徽标口径（OP-02）。
+ *
+ * <p>好评 = 绿「好评」；差评 = 红「吐槽」；未反馈/未判定 = 灰「未评价」。
+ * 未知值原样回显，不吞。
+ */
+export const KB_QA_SENTIMENT_META: Record<
+  string,
+  { label: string; variant: 'success' | 'destructive' | 'secondary' }
+> = {
+  positive: { label: '好评', variant: 'success' },
+  negative: { label: '吐槽', variant: 'destructive' },
+};
+
+/** 评价结果中文名（null/空 = 未评价）。 */
+export function qaSentimentLabel(sentiment: string | null | undefined): string {
+  if (!sentiment) return '未评价';
+  return KB_QA_SENTIMENT_META[sentiment]?.label ?? sentiment;
+}
+
+/**
+ * 反馈处理状态徽标口径（OP-02/OP-05）。
+ *
+ * <p>三态：pending 待处理（黄）/ handled 已处理（绿）/ ignored 已忽略（灰）。
+ */
+export const KB_FEEDBACK_STATUS_META: Record<
+  string,
+  { label: string; variant: 'warning' | 'success' | 'secondary' }
+> = {
+  pending: { label: '待处理', variant: 'warning' },
+  handled: { label: '已处理', variant: 'success' },
+  ignored: { label: '已忽略', variant: 'secondary' },
+};
+
+/** 反馈处理状态中文名（未知码值原样回显）。 */
+export function feedbackStatusLabel(status: string | null | undefined): string {
+  if (!status) return '-';
+  return KB_FEEDBACK_STATUS_META[status]?.label ?? status;
 }
 
 /** 空结果策略中文名。 */

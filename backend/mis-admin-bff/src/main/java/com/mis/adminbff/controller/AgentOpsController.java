@@ -237,6 +237,77 @@ public class AgentOpsController {
         return Result.ok(facade.batchDeleteSessions(body));
     }
 
+    // ---------------------------------------------------------------- 会话反馈 CF-01/CF-03/CF-05
+
+    /**
+     * CF-01 会话反馈列表。
+     *
+     * <p>分页 + 过滤条件逐个声明（snake_case 与前端一致），由门面统一装配参数表；
+     * 默认按「吐槽且 comment 非空」优先排序（下游语义）。
+     *
+     * @param rating       反馈方向：up 点赞 / down 吐槽；缺省 = 不限
+     * @param comment_only 仅看带说明的反馈；缺省 = 不限
+     * @param agent_id     按 Agent 过滤
+     * @param channel      按渠道过滤
+     * @param from         起始时间（ISO-8601）
+     * @param to           截止时间（ISO-8601）
+     * @param keyword      关键词（评论 / 回答摘要）
+     * @param status       处理状态：pending / handled / ignored；缺省 = 不限
+     * @param page         页码，从 1 开始
+     * @param page_size    每页条数
+     */
+    @GetMapping("/sessions/feedback")
+    public Result<JsonNode> listFeedback(
+            @RequestParam(required = false) String rating,
+            @RequestParam(required = false) Boolean comment_only,
+            @RequestParam(required = false) String agent_id,
+            @RequestParam(required = false) String channel,
+            @RequestParam(required = false) String from,
+            @RequestParam(required = false) String to,
+            @RequestParam(required = false) String keyword,
+            @RequestParam(required = false) String status,
+            @RequestParam(required = false) Integer page,
+            @RequestParam(required = false) Integer page_size) {
+        return Result.ok(facade.listFeedback(
+                rating, comment_only, agent_id, channel, from, to, keyword, status, page, page_size));
+    }
+
+    /**
+     * CF-05 会话反馈统计。
+     *
+     * <p>基础计数 + 按 agent 维度 + 按日趋势；时间/Agent/渠道过滤由门面装配。
+     */
+    @GetMapping("/sessions/feedback/stats")
+    public Result<JsonNode> feedbackStats(
+            @RequestParam(required = false) String from,
+            @RequestParam(required = false) String to,
+            @RequestParam(required = false) String agent_id,
+            @RequestParam(required = false) String channel) {
+        return Result.ok(facade.feedbackStats(from, to, agent_id, channel));
+    }
+
+    /**
+     * CF-03 标记单条反馈已处理/忽略。
+     *
+     * <p>body {@code {status: handled|ignored, note?}}；操作人从登录上下文头透传下游
+     * （{@code X-User-Id}/{@code X-Username}），状态机 pending → handled/ignored 单向终态由下游裁定。
+     */
+    @PostMapping("/sessions/feedback/{feedbackId}/process")
+    public Result<JsonNode> processFeedback(
+            @PathVariable String feedbackId, @RequestBody JsonNode body) {
+        return Result.ok(facade.processFeedback(feedbackId, body));
+    }
+
+    /**
+     * CF-03 批量标记反馈已处理/忽略。
+     *
+     * <p>body {@code {ids[], status, note?}}，单次上限 200（下游裁定）；操作人透传语义同单条。
+     */
+    @PostMapping("/sessions/feedback/batch-process")
+    public Result<JsonNode> batchProcessFeedback(@RequestBody JsonNode body) {
+        return Result.ok(facade.batchProcessFeedback(body));
+    }
+
     /** #32 新建对话会话（注意路径是 {@code /chat/sessions}，与列表 {@code /sessions} 不同）。 */
     @PostMapping("/chat/sessions")
     public Result<JsonNode> createChatSession(@RequestBody JsonNode body) {

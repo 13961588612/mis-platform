@@ -369,6 +369,105 @@ export interface SessionQuery extends AgentPageQuery {
   to?: string;
 }
 
+// ------------------------------------------------------------------ 会话反馈（CF-01 / CF-03 / CF-05）
+
+/** 反馈处理状态：pending → handled/ignored 单向终态。 */
+export type AgentFeedbackStatus = 'pending' | 'handled' | 'ignored';
+
+/** 反馈评价方向。 */
+export type AgentFeedbackRating = 'up' | 'down';
+
+/**
+ * 会话反馈列表项。
+ *
+ * <p>wire 对齐 ai-platform `AgentFeedbackModel.to_wire()`（`agent_feedback` 表 +
+ * 服务层按 message_id 补 `answer_brief` / 按 session_id 补 `agent_name`/`user_name`）。
+ * `handler_*` 为运营标记处理人；`processed_at` 为处理时间。
+ */
+export interface AgentFeedbackItem {
+  id: number;
+  session_id: string;
+  message_id: string;
+  agent_id: string;
+  agent_name?: string | null;
+  user_id?: string | null;
+  user_name?: string | null;
+  rating: AgentFeedbackRating;
+  comment?: string | null;
+  status: AgentFeedbackStatus;
+  handler_id?: string | null;
+  handler_name?: string | null;
+  note?: string | null;
+  processed_at?: string | null;
+  created_at: string;
+  updated_at: string;
+  /** 被评价回答的截断摘要（≤60 字，由后端按 message_id 填充）。 */
+  answer_brief?: string | null;
+}
+
+/** 会话反馈列表查询条件（字段名与 ai-platform `FeedbackQuery` 一致）。 */
+export interface AgentFeedbackQuery extends AgentPageQuery {
+  rating?: AgentFeedbackRating;
+  /** 只看带说明的吐槽（comment 非空）。 */
+  comment_only?: boolean;
+  agent_id?: string;
+  channel?: SessionChannel;
+  from?: string;
+  to?: string;
+  /** 匹配吐槽说明。 */
+  keyword?: string;
+  status?: AgentFeedbackStatus;
+}
+
+/** 单 Agent 反馈统计（CF-05 by_agent 项）。 */
+export interface AgentFeedbackAgentStat {
+  total: number;
+  up: number;
+  down: number;
+  /** 0–1 之间，total 为 0 时为 0。 */
+  up_rate: number;
+  down_rate: number;
+}
+
+/** 单日反馈趋势（CF-05 by_day 项，键为 `YYYY-MM-DD` UTC 日期）。 */
+export interface AgentFeedbackDayStat {
+  up: number;
+  down: number;
+  /** 带说明的吐槽数（comment 非空）。 */
+  comment: number;
+}
+
+/**
+ * 会话反馈统计（CF-05）。
+ *
+ * <p>**是一个聚合对象，不是数组**——与 `RouteStats` 同款教训：此前把统计声明成
+ * 数组、页面直接 `[...stats]` 展开会 `stats is not iterable` 崩页。
+ */
+export interface AgentFeedbackStats {
+  total: number;
+  up: number;
+  down: number;
+  up_rate: number;
+  down_rate: number;
+  pending: number;
+  by_agent: Record<string, AgentFeedbackAgentStat>;
+  by_day: Record<string, AgentFeedbackDayStat>;
+}
+
+/** 标记处理请求体（单条 / 批量共用）。 */
+export interface AgentFeedbackProcessPayload {
+  status: 'handled' | 'ignored';
+  note?: string;
+}
+
+/** 批量标记处理响应。 */
+export interface AgentFeedbackBatchResult {
+  /** 实际更新的行数（只更新 pending 行）。 */
+  processed: number;
+  /** 去重后的请求条数。 */
+  requested: number;
+}
+
 // ------------------------------------------------------------------ MCP（UI#8）
 
 /**
@@ -503,6 +602,8 @@ export interface RouteLog {
   confidence?: number;
   latency_ms?: number;
   timestamp: string;
+  /** agent_router=自动选 Agent；coordinator=协调者转执行者。 */
+  dispatch_kind?: 'agent_router' | 'coordinator';
 }
 
 /**
@@ -520,6 +621,7 @@ export interface RouteStats {
   total_routes: number;
   by_agent: Record<string, number>;
   by_strategy: Record<string, number>;
+  by_kind: Record<string, number>;
   avg_latency_ms: number;
   avg_confidence: number;
 }
@@ -710,6 +812,29 @@ export function formatTime(iso: string | null | undefined): string {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return iso;
   return d.toLocaleString('zh-CN', { hour12: false });
+}
+
+/** 反馈评价 → 中文标签（列表 / 详情 / 看板共用同一份口径）。 */
+export function feedbackRatingLabel(
+  rating: AgentFeedbackRating | null | undefined,
+): string {
+  return rating === 'up' ? '点赞' : rating === 'down' ? '吐槽' : '未评价';
+}
+
+/** 反馈处理状态 → 徽标规格（变体 + 文案）。 */
+export const FEEDBACK_STATUS_META: Record<
+  AgentFeedbackStatus,
+  { label: string; variant: 'warning' | 'success' | 'secondary' }
+> = {
+  pending: { label: '待处理', variant: 'warning' },
+  handled: { label: '已处理', variant: 'success' },
+  ignored: { label: '已忽略', variant: 'secondary' },
+};
+
+/** 0–1 比率 → 百分比展示串（非法值显示 '-'）。 */
+export function formatRate(rate: number | null | undefined): string {
+  if (typeof rate !== 'number' || Number.isNaN(rate)) return '-';
+  return `${Math.round(rate * 100)}%`;
 }
 
 /**

@@ -11,8 +11,9 @@ import {
   Send,
   Sparkles,
   Square,
+  ThumbsDown,
+  ThumbsUp,
   Trash2,
-  TriangleAlert,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
@@ -31,8 +32,9 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { useAiStore } from '@/stores/ai-store';
+import { DISLIKE_FEEDBACK, LIKE_FEEDBACK, voteFromFeedback } from '../components/kb-answer-vote';
+import type { AnswerVote } from '../components/kb-answer-vote';
 import { KbCitationList } from '../components/kb-citation-list';
-import { KbFeedbackFormPanel } from '../components/kb-feedback-form';
 import { KbLibraryCombobox } from '../components/kb-library-combobox';
 import { KbTicketDialog } from '../components/kb-ticket-dialog';
 import {
@@ -41,6 +43,7 @@ import {
   deleteSession,
   getSessionDetail,
   listMySessions,
+  submitFeedback,
 } from '../api/kb-api';
 import type { KbQaCitation, KbQaSession } from '../types';
 import { formatTime } from '../types';
@@ -74,7 +77,7 @@ function nextTurnKey(): string {
  *
  * <p>链路：前端 → BFF `/api/v1/ai/rag`（stream=true）→ ai-platform(mis-rag) → mis-kb 检索 + 落库。
  * 服务端在**流结束时一次性落库**（非逐 token），所以 `sessionId` / `messageId` 只会在
- * `done` 帧到达后才有值——流中途的「复制」可用，「报告问题」要等落库完成才可用。
+ * `done` 帧到达后才有值——流中途的「复制」可用，「点赞 / 吐槽」要等落库完成才可用。
  *
  * <p>降级：SSE 在**一个字都没吐出来**之前失败时自动回落非流式 `askKbRag` 重试一次。
  * 已吐出部分内容后再断流不重试——重试会让用户看到答案被清空重来，体验比截断更差。
@@ -94,6 +97,9 @@ export function KbQaPage() {
   const [activeSessionId, setActiveSessionId] = useState<number | null>(null);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const [ticketTarget, setTicketTarget] = useState<TurnItem | null>(null);
+  /** 当前会话的点赞/吐槽（反馈按会话落库，各轮回答共享同一票）。 */
+  const [sessionVote, setSessionVote] = useState<AnswerVote | null>(null);
+  const [voting, setVoting] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<KbQaSession | null>(null);
   const [deleting, setDeleting] = useState(false);
   const scrollRef = useRef<HTMLDivElement | null>(null);
@@ -242,6 +248,7 @@ export function KbQaPage() {
   function handleNewSession(): void {
     setTurns([]);
     setActiveSessionId(null);
+    setSessionVote(null);
     setAskError(null);
   }
 
@@ -255,6 +262,7 @@ export function KbQaPage() {
       setSessions((prev) => prev.filter((x) => x.id !== target.id));
       if (activeSessionId === target.id) {
         setActiveSessionId(null);
+        setSessionVote(null);
         setTurns([]);
         setAskError(null);
       }
@@ -317,6 +325,36 @@ export function KbQaPage() {
     abortRef.current?.abort();
   }
 
+  /** 点赞：写入会话级好评。未落库时按钮禁用。 */
+  async function onLike(turn: TurnItem): Promise<void> {
+    if (turn.sessionId == null || voting || sessionVote === 'up') return;
+    setVoting(true);
+    try {
+      await submitFeedback(turn.sessionId, LIKE_FEEDBACK);
+      setSessionVote('up');
+      toast.success('已点赞，感谢反馈');
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : '点赞失败');
+    } finally {
+      setVoting(false);
+    }
+  }
+
+  /** 吐槽工单提交成功后，尽力写入会话级差评（已改过一次则忽略）。 */
+  async function onComplainCreated(turn: TurnItem): Promise<void> {
+    setTicketTarget(null);
+    if (turn.sessionId == null || sessionVote === 'down') {
+      setSessionVote('down');
+      return;
+    }
+    try {
+      await submitFeedback(turn.sessionId, DISLIKE_FEEDBACK);
+    } catch {
+      // 工单已进运营池；评分锁死不阻断吐槽
+    }
+    setSessionVote('down');
+  }
+
   /** 回看历史会话：拉取详情并回填到对话区。 */
   async function onOpenSession(session: KbQaSession): Promise<void> {
     try {
@@ -357,6 +395,7 @@ export function KbQaPage() {
       setTurns(restored);
       setAskError(null);
       setActiveSessionId(session.id);
+      setSessionVote(voteFromFeedback(detail.feedback));
     } catch (e) {
       toast.error(e instanceof Error ? e.message : '加载会话详情失败');
     }
@@ -366,7 +405,7 @@ export function KbQaPage() {
     <div className="flex min-h-0 flex-1 flex-col">
       <PageHeader
         title="知识问答"
-        description="基于可见知识库的检索增强问答；回答流式输出并附带引用来源，可提交质量反馈或报告问题。"
+        description="基于可见知识库的检索增强问答；回答流式输出并附带引用来源，可对回答点赞或吐槽。"
         breadcrumbs={buildAppBreadcrumbs({ app: 'kb', title: '智能问答' })}
         actions={
           <>
@@ -487,7 +526,7 @@ export function KbQaPage() {
                     ) : null}
                     {!turn.streaming ? <KbCitationList citations={turn.citations} /> : null}
 
-                    {/* 回答操作条（F-08 复制/重新生成 · F-10 报告问题） */}
+                    {/* 回答操作条（F-08 复制/重新生成 · 点赞/吐槽） */}
                     {!turn.streaming ? (
                       <div className="mt-2 flex flex-wrap items-center gap-1 border-t border-border/60 pt-2">
                         <Button
@@ -516,17 +555,41 @@ export function KbQaPage() {
                         <Button
                           size="sm"
                           variant="ghost"
-                          className="h-7 px-2 text-xs text-destructive hover:text-destructive"
-                          disabled={turn.sessionId == null}
+                          className={cn(
+                            'h-7 px-2 text-xs',
+                            sessionVote === 'up' && 'text-primary hover:text-primary',
+                          )}
+                          disabled={turn.sessionId == null || voting}
                           title={
-                            turn.sessionId == null
-                              ? '本轮回答未落库，无法建单'
-                              : '对该回答报告问题'
+                            turn.sessionId == null ? '本轮回答未落库，无法点赞' : '觉得这次回答有用'
+                          }
+                          onClick={() => void onLike(turn)}
+                        >
+                          <ThumbsUp
+                            className={cn('h-3 w-3', sessionVote === 'up' && 'fill-primary')}
+                          />
+                          {sessionVote === 'up' ? '已点赞' : '点赞'}
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          className={cn(
+                            'h-7 px-2 text-xs',
+                            sessionVote === 'down' && 'text-destructive hover:text-destructive',
+                          )}
+                          disabled={turn.sessionId == null || voting}
+                          title={
+                            turn.sessionId == null ? '本轮回答未落库，无法吐槽' : '对这次回答吐槽'
                           }
                           onClick={() => setTicketTarget(turn)}
                         >
-                          <TriangleAlert className="h-3 w-3" />
-                          报告问题
+                          <ThumbsDown
+                            className={cn(
+                              'h-3 w-3',
+                              sessionVote === 'down' && 'fill-destructive',
+                            )}
+                          />
+                          {sessionVote === 'down' ? '已吐槽' : '吐槽'}
                         </Button>
                       </div>
                     ) : null}
@@ -536,12 +599,6 @@ export function KbQaPage() {
             )}
             {askError ? <p className="text-sm text-destructive">{askError}</p> : null}
           </div>
-
-          {activeSessionId != null ? (
-            <div className="border-t p-3">
-              <KbFeedbackFormPanel sessionId={activeSessionId} />
-            </div>
-          ) : null}
 
           <div className="border-t px-3 py-3">
             <div className="flex items-end gap-2">
@@ -592,12 +649,16 @@ export function KbQaPage() {
       </div>
 
       <KbTicketDialog
+        title="吐槽"
         open={ticketTarget != null}
         onOpenChange={(v) => {
           if (!v) setTicketTarget(null);
         }}
         sessionId={ticketTarget?.sessionId ?? null}
         messageId={ticketTarget?.messageId ?? null}
+        onCreated={() => {
+          if (ticketTarget) void onComplainCreated(ticketTarget);
+        }}
       />
 
       <Dialog

@@ -35,18 +35,27 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Sequence
 
-from sqlalchemy import Select, delete, func, select, update
+from sqlalchemy import Select, case, delete, func, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.config import Settings, get_settings
 from src.db.session import db_session_context
+from src.models.agent_feedback import (
+    FEEDBACK_RATING_DOWN,
+    FEEDBACK_RATING_UP,
+    FEEDBACK_STATUS_HANDLED,
+    FEEDBACK_STATUS_IGNORED,
+    FEEDBACK_STATUS_PENDING,
+    AgentFeedbackModel,
+)
 from src.models.agent_session import (
     SESSION_STATUS_ACTIVE,
     SESSION_STATUS_CLOSED,
     AgentSessionMessageModel,
     AgentSessionModel,
 )
+from src.utils.exceptions import FeedbackNotFoundError, FeedbackStatusIllegalError
 from src.utils.logging import get_logger
 
 if TYPE_CHECKING:  # pragma: no cover - 仅用于类型标注，避免与 session.py 循环导入
@@ -188,6 +197,53 @@ class MessagePage:
 
     def to_wire(self) -> dict[str, Any]:
         """序列化为前端 ``AgentPage<SessionMessage>`` 契约。"""
+        return {
+            "items": self.items,
+            "total": self.total,
+            "page": self.page,
+            "page_size": self.page_size,
+        }
+
+
+@dataclass
+class FeedbackQuery:
+    """会话反馈列表查询条件（CF-01）。
+
+    字段名与前端 ``AgentFeedbackQuery``（``features/agent/types.ts``）保持一致，
+    路由层可以直接透传，不需要中间改名。
+
+    注意：``agent_feedback`` 表**不存渠道**，``channel`` 过滤需要
+    LEFT JOIN ``agent_session``，由 :meth:`SessionPgStore.list_feedback` /
+    :meth:`SessionPgStore.feedback_stats` 在构造语句时按需 join。
+    """
+
+    page: int = 1
+    page_size: int = 20
+    rating: str | None = None
+    comment_only: bool = False
+    agent_id: str | None = None
+    channel: str | None = None
+    time_from: datetime | None = None
+    time_to: datetime | None = None
+    keyword: str | None = None
+    status: str | None = None
+
+    def offset(self) -> int:
+        """返回 SQL OFFSET 值。"""
+        return max(self.page - 1, 0) * self.page_size
+
+
+@dataclass
+class FeedbackPage:
+    """一页会话反馈数据。"""
+
+    items: list[dict[str, Any]] = field(default_factory=list)
+    total: int = 0
+    page: int = 1
+    page_size: int = 20
+
+    def to_wire(self) -> dict[str, Any]:
+        """序列化为前端 ``AgentPage<AgentFeedbackItem>`` 契约。"""
         return {
             "items": self.items,
             "total": self.total,
@@ -376,6 +432,484 @@ class SessionPgStore:
                 page_size=page_size,
             )
 
+    async def update_message_metadata(
+        self,
+        message_id: str,
+        metadata: dict[str, Any],
+    ) -> bool:
+        """覆盖一条已落库消息的 ``metadata``（点赞/吐槽写入）。
+
+        ``_insert_messages`` 是 ``ON CONFLICT DO NOTHING``，事后改 metadata
+        不会被补写覆盖，必须显式 UPDATE。失败只降级，不抛。
+
+        Args:
+            message_id: 消息主键（与运行时 ``Message.id`` 相同）。
+            metadata: 完整 metadata（调用方负责 merge，本方法整列替换）。
+
+        Returns:
+            是否命中并更新了一行。
+        """
+        if not self.enabled:
+            return False
+        try:
+            async with db_session_context() as db:
+                result = await db.execute(
+                    update(AgentSessionMessageModel)
+                    .where(AgentSessionMessageModel.id == message_id)
+                    .values(metadata_=dict(metadata or {}))
+                )
+                return int(result.rowcount or 0) > 0
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "Update message metadata in PG failed (degraded)",
+                message_id=message_id,
+                error=str(exc),
+            )
+            return False
+
+    # ------------------------------------------------------------------
+    # 会话反馈运营（CF-01 / CF-03 / CF-05）—— ``agent_feedback`` 独立表
+    # ------------------------------------------------------------------
+
+    async def upsert_feedback(
+        self,
+        *,
+        session_id: str,
+        message_id: str,
+        agent_id: str,
+        user_id: str | None,
+        rating: str,
+        comment: str | None,
+    ) -> bool:
+        """把一条反馈写入（或覆盖）``agent_feedback``（幂等 upsert，CF-03）。
+
+        用户对同一消息反复点赞/吐槽时，按 UNIQUE(session_id, message_id) 覆盖写，
+        **保留**既有处理状态（pending/handled/ignored），只更新评价与时间——
+        与 PRD Q-C1「统计按最新值」一致。失败只降级不抛（与 ``update_message_metadata``
+        同款热路径保护）。
+
+        Args:
+            session_id: 归属会话 ID。
+            message_id: 被评价的助手消息 UUID。
+            agent_id: 冗余存储的 Agent ID。
+            user_id: 冗余存储的用户 ID（可空）。
+            rating: ``up`` / ``down``。
+            comment: 吐槽说明；点赞可空。
+
+        Returns:
+            ``True`` 表示已成功落库；``False`` 表示开关关闭或写入失败（已降级）。
+        """
+        if not self.enabled:
+            return False
+        try:
+            async with db_session_context() as db:
+                table = AgentFeedbackModel.__table__
+                stmt = pg_insert(table).values(
+                    session_id=session_id,
+                    message_id=message_id,
+                    agent_id=agent_id or "",
+                    user_id=(user_id or "").strip() or None,
+                    rating=rating,
+                    comment=(comment or "").strip() or None,
+                    status=FEEDBACK_STATUS_PENDING,
+                    created_at=_utcnow(),
+                    updated_at=_utcnow(),
+                )
+                excluded = stmt.excluded
+                stmt = stmt.on_conflict_do_update(
+                    index_elements=[table.c.session_id, table.c.message_id],
+                    set_={
+                        table.c.rating: excluded.rating,
+                        table.c.comment: excluded.comment,
+                        table.c.updated_at: excluded.updated_at,
+                    },
+                )
+                await db.execute(stmt)
+            return True
+        except Exception as exc:  # noqa: BLE001 - 冷备失败必须降级，不能打断热路径
+            logger.warning(
+                "Agent feedback upsert failed (degraded, Redis unaffected)",
+                session_id=session_id,
+                message_id=message_id,
+                error=str(exc),
+            )
+            return False
+
+    async def list_feedback(self, query: FeedbackQuery) -> FeedbackPage:
+        """按条件分页查询会话反馈列表（CF-01，运营读侧权威在 PG）。
+
+        ``channel`` 过滤与 ``agent_name``/``user_name`` 展示字段需要 LEFT JOIN
+        ``agent_session``；``answer_brief`` 按 message_id 批量读
+        ``agent_session_message.content`` 截断填充（≤60 字）。
+
+        **默认排序**：吐槽且带说明的排最前（运营最需要优先跟进），其余按创建时间
+        倒序——与设计 §3.4「默认吐槽+comment 非空优先」一致。
+
+        Args:
+            query: 过滤 + 分页条件。
+
+        Returns:
+            一页反馈数据（``items`` 已是 wire 形状）。
+        """
+        async with db_session_context() as db:
+            conditions: list[Any] = self._build_feedback_conditions(query)
+            need_join: bool = bool(query.channel)
+
+            count_stmt = select(func.count()).select_from(AgentFeedbackModel)
+            if need_join:
+                count_stmt = count_stmt.join(
+                    AgentSessionModel,
+                    AgentSessionModel.session_id == AgentFeedbackModel.session_id,
+                )
+            for cond in conditions:
+                count_stmt = count_stmt.where(cond)
+            total: int = int(await db.scalar(count_stmt) or 0)
+
+            list_stmt: Select[Any] = select(AgentFeedbackModel)
+            if need_join:
+                list_stmt = list_stmt.join(
+                    AgentSessionModel,
+                    AgentSessionModel.session_id == AgentFeedbackModel.session_id,
+                )
+            for cond in conditions:
+                list_stmt = list_stmt.where(cond)
+            list_stmt = (
+                list_stmt.order_by(
+                    case(
+                        (
+                            (AgentFeedbackModel.rating == FEEDBACK_RATING_DOWN)
+                            & AgentFeedbackModel.comment.isnot(None)
+                            & (AgentFeedbackModel.comment != ""),
+                            0,
+                        ),
+                        else_=1,
+                    ).asc(),
+                    AgentFeedbackModel.created_at.desc(),
+                )
+                .offset(query.offset())
+                .limit(query.page_size)
+            )
+            rows: Sequence[AgentFeedbackModel] = (await db.scalars(list_stmt)).all()
+
+            # 批量补 agent_name / user_name（来自 agent_session，feedback 表不冗余这两列）
+            sessions: dict[str, dict[str, Any]] = {}
+            session_ids: list[str] = list({row.session_id for row in rows})
+            if session_ids:
+                session_rows: Sequence[AgentSessionModel] = (
+                    await db.scalars(
+                        select(AgentSessionModel).where(
+                            AgentSessionModel.session_id.in_(session_ids)
+                        )
+                    )
+                ).all()
+                sessions = {row.session_id: row.to_wire() for row in session_rows}
+
+            # 批量读消息正文 → answer_brief（截断 ≤60 字）
+            answer_briefs: dict[str, str] = {}
+            message_ids: list[str] = [
+                row.message_id for row in rows if row.message_id
+            ]
+            if message_ids:
+                message_rows: Sequence[AgentSessionMessageModel] = (
+                    await db.scalars(
+                        select(AgentSessionMessageModel).where(
+                            AgentSessionMessageModel.id.in_(message_ids)
+                        )
+                    )
+                ).all()
+                for msg_row in message_rows:
+                    answer_briefs[msg_row.id] = _truncate_title(
+                        msg_row.content or "", 60
+                    )
+
+            items: list[dict[str, Any]] = []
+            for row in rows:
+                item: dict[str, Any] = row.to_wire(
+                    answer_brief=answer_briefs.get(row.message_id)
+                )
+                session_wire: dict[str, Any] | None = sessions.get(row.session_id)
+                item["agent_name"] = (
+                    session_wire.get("agent_name") if session_wire else None
+                )
+                item["user_name"] = (
+                    session_wire.get("user_name") if session_wire else None
+                )
+                items.append(item)
+
+            return FeedbackPage(
+                items=items,
+                total=total,
+                page=query.page,
+                page_size=query.page_size,
+            )
+
+    async def mark_feedback_processed(
+        self,
+        feedback_id: int,
+        status: str,
+        handler_id: str | None,
+        handler_name: str | None,
+        note: str | None,
+    ) -> dict[str, Any]:
+        """把单条反馈标记为 handled / ignored（CF-03，单向终态）。
+
+        Args:
+            feedback_id: 反馈行主键。
+            status: 目标状态（handled / ignored）。
+            handler_id: 操作人 MIS userId（字符串化，可空）。
+            handler_name: 操作人展示名（可空）。
+            note: 处理备注（可空）。
+
+        Returns:
+            更新后的反馈行 wire dict。
+
+        Raises:
+            FeedbackNotFoundError: 反馈不存在（code 2006）。
+            FeedbackStatusIllegalError: 已处于另一个终态不可回退，或 status 非法。
+        """
+        normalized_status: str = (status or "").strip().lower()
+        if normalized_status not in (FEEDBACK_STATUS_HANDLED, FEEDBACK_STATUS_IGNORED):
+            raise FeedbackStatusIllegalError(
+                "pending", normalized_status or "<empty>"
+            )
+
+        async with db_session_context() as db:
+            row: AgentFeedbackModel | None = await db.scalar(
+                select(AgentFeedbackModel).where(
+                    AgentFeedbackModel.id == feedback_id
+                )
+            )
+            if row is None:
+                raise FeedbackNotFoundError(feedback_id)
+
+            current: str = row.status or FEEDBACK_STATUS_PENDING
+            if current in (FEEDBACK_STATUS_HANDLED, FEEDBACK_STATUS_IGNORED):
+                # 已处于终态：目标相同 → 幂等成功；目标不同 → 不可回退。
+                if current == normalized_status:
+                    return row.to_wire()
+                raise FeedbackStatusIllegalError(current, normalized_status)
+
+            now: datetime = _utcnow()
+            await db.execute(
+                update(AgentFeedbackModel)
+                .where(AgentFeedbackModel.id == feedback_id)
+                .values(
+                    status=normalized_status,
+                    handler_id=handler_id or None,
+                    handler_name=handler_name or None,
+                    note=(note or "").strip() or None,
+                    processed_at=now,
+                    updated_at=now,
+                )
+            )
+            await db.refresh(row)
+            return row.to_wire()
+
+    async def batch_mark_feedback_processed(
+        self,
+        feedback_ids: Sequence[int],
+        status: str,
+        handler_id: str | None,
+        handler_name: str | None,
+        note: str | None,
+    ) -> int:
+        """批量把 pending 反馈标记为 handled / ignored（CF-03）。
+
+        只更新 ``status == pending`` 的行：终态行保持原状（不可回退），
+        不存在的 ID 静默跳过。返回实际更新行数。
+
+        Args:
+            feedback_ids: 反馈行主键列表（调用方负责去重与上限校验）。
+            status: 目标状态（handled / ignored）。
+            handler_id: 操作人 MIS userId（字符串化，可空）。
+            handler_name: 操作人展示名（可空）。
+            note: 处理备注（可空）。
+
+        Returns:
+            实际更新的行数。
+
+        Raises:
+            FeedbackStatusIllegalError: status 非法。
+        """
+        normalized_status: str = (status or "").strip().lower()
+        if normalized_status not in (FEEDBACK_STATUS_HANDLED, FEEDBACK_STATUS_IGNORED):
+            raise FeedbackStatusIllegalError(
+                "pending", normalized_status or "<empty>"
+            )
+        if not feedback_ids:
+            return 0
+
+        unique_ids: list[int] = list(dict.fromkeys(int(i) for i in feedback_ids))
+        now: datetime = _utcnow()
+        async with db_session_context() as db:
+            result = await db.execute(
+                update(AgentFeedbackModel)
+                .where(
+                    AgentFeedbackModel.id.in_(unique_ids),
+                    AgentFeedbackModel.status == FEEDBACK_STATUS_PENDING,
+                )
+                .values(
+                    status=normalized_status,
+                    handler_id=handler_id or None,
+                    handler_name=handler_name or None,
+                    note=(note or "").strip() or None,
+                    processed_at=now,
+                    updated_at=now,
+                )
+            )
+            return int(result.rowcount or 0)
+
+    async def feedback_stats(
+        self,
+        *,
+        agent_id: str | None = None,
+        channel: str | None = None,
+        time_from: datetime | None = None,
+        time_to: datetime | None = None,
+    ) -> dict[str, Any]:
+        """会话反馈统计（CF-05）。
+
+        基础计数（total/up/down/up_rate/down_rate/pending）+ 按 Agent 维度
+        （``by_agent``）+ 按日趋势（``by_day``：up/down/comment 量，UTC 日期）。
+
+        Args:
+            agent_id: 按 Agent 过滤（可空）。
+            channel: 按渠道过滤（可空）。
+            time_from: 创建时间下界（可空）。
+            time_to: 创建时间上界（可空）。
+
+        Returns:
+            前端 ``AgentFeedbackStats`` 契约的 dict。
+        """
+        async with db_session_context() as db:
+            conditions: list[Any] = self._build_feedback_conditions(
+                FeedbackQuery(
+                    agent_id=agent_id,
+                    channel=channel,
+                    time_from=time_from,
+                    time_to=time_to,
+                )
+            )
+            need_join: bool = bool(channel)
+            base = AgentFeedbackModel
+
+            def _apply_join(stmt: Select[Any]) -> Select[Any]:
+                """按需 LEFT JOIN agent_session（仅 channel 过滤时需要）。"""
+                if not need_join:
+                    return stmt
+                return stmt.join(
+                    AgentSessionModel,
+                    AgentSessionModel.session_id == base.session_id,
+                )
+
+            count_stmt = _apply_join(
+                select(
+                    func.count().label("total"),
+                    func.sum(
+                        case((base.rating == FEEDBACK_RATING_UP, 1), else_=0)
+                    ).label("up"),
+                    func.sum(
+                        case((base.rating == FEEDBACK_RATING_DOWN, 1), else_=0)
+                    ).label("down"),
+                    func.sum(
+                        case((base.status == FEEDBACK_STATUS_PENDING, 1), else_=0)
+                    ).label("pending"),
+                ).select_from(base)
+            )
+            for cond in conditions:
+                count_stmt = count_stmt.where(cond)
+            count_row = (await db.execute(count_stmt)).one()
+
+            total: int = int(count_row.total or 0)
+            up: int = int(count_row.up or 0)
+            down: int = int(count_row.down or 0)
+            pending: int = int(count_row.pending or 0)
+
+            # 按 Agent 维度
+            agent_stmt = _apply_join(
+                select(
+                    base.agent_id,
+                    func.count().label("total"),
+                    func.sum(
+                        case((base.rating == FEEDBACK_RATING_UP, 1), else_=0)
+                    ).label("up"),
+                    func.sum(
+                        case((base.rating == FEEDBACK_RATING_DOWN, 1), else_=0)
+                    ).label("down"),
+                )
+            )
+            for cond in conditions:
+                agent_stmt = agent_stmt.where(cond)
+            agent_stmt = agent_stmt.group_by(base.agent_id)
+            agent_rows = (await db.execute(agent_stmt)).all()
+
+            by_agent: dict[str, dict[str, Any]] = {}
+            for agent_row in agent_rows:
+                agent_total: int = int(agent_row.total or 0)
+                agent_up: int = int(agent_row.up or 0)
+                agent_down: int = int(agent_row.down or 0)
+                by_agent[str(agent_row.agent_id or "")] = {
+                    "total": agent_total,
+                    "up": agent_up,
+                    "down": agent_down,
+                    "up_rate": (
+                        round(agent_up / agent_total, 4) if agent_total else 0.0
+                    ),
+                    "down_rate": (
+                        round(agent_down / agent_total, 4) if agent_total else 0.0
+                    ),
+                }
+
+            # 按日趋势（UTC 日期，避免服务器时区造成 8 小时漂移）
+            day_col = func.date(func.timezone("UTC", base.created_at))
+            day_stmt = _apply_join(
+                select(
+                    day_col.label("day"),
+                    func.sum(
+                        case((base.rating == FEEDBACK_RATING_UP, 1), else_=0)
+                    ).label("up"),
+                    func.sum(
+                        case((base.rating == FEEDBACK_RATING_DOWN, 1), else_=0)
+                    ).label("down"),
+                    func.sum(
+                        case(
+                            (
+                                base.comment.isnot(None)
+                                & (base.comment != ""),
+                                1,
+                            ),
+                            else_=0,
+                        )
+                    ).label("comment"),
+                )
+            )
+            for cond in conditions:
+                day_stmt = day_stmt.where(cond)
+            day_stmt = day_stmt.group_by(day_col).order_by(day_col)
+            day_rows = (await db.execute(day_stmt)).all()
+
+            by_day: dict[str, dict[str, int]] = {}
+            for day_row in day_rows:
+                day_text: str = str(day_row.day or "")
+                if not day_text:
+                    continue
+                by_day[day_text] = {
+                    "up": int(day_row.up or 0),
+                    "down": int(day_row.down or 0),
+                    "comment": int(day_row.comment or 0),
+                }
+
+            return {
+                "total": total,
+                "up": up,
+                "down": down,
+                "up_rate": round(up / total, 4) if total else 0.0,
+                "down_rate": round(down / total, 4) if total else 0.0,
+                "pending": pending,
+                "by_agent": by_agent,
+                "by_day": by_day,
+            }
+
     async def soft_delete(self, session_ids: Sequence[str]) -> int:
         """软删除若干会话（置 ``deleted_at``，保留消息用于审计）。
 
@@ -460,6 +994,47 @@ class SessionPgStore:
                 | AgentSessionModel.session_id.ilike(pattern)
                 | AgentSessionModel.user_id.ilike(pattern)
             )
+        return conditions
+
+    def _build_feedback_conditions(self, query: FeedbackQuery) -> list[Any]:
+        """把 :class:`FeedbackQuery` 翻译成 SQLAlchemy 过滤条件列表。
+
+        count / list / stats 复用同一份条件，保证 total 与 items 永远同源。
+        ``channel`` 条件引用 ``agent_session`` 列，调用方在构造语句时须按需
+        LEFT JOIN ``agent_session``（feedback 表不存渠道）。
+        """
+        conditions: list[Any] = []
+        if query.rating:
+            conditions.append(
+                AgentFeedbackModel.rating == query.rating.strip().lower()
+            )
+        if query.comment_only:
+            conditions.append(
+                AgentFeedbackModel.comment.isnot(None)
+                & (AgentFeedbackModel.comment != "")
+            )
+        if query.agent_id:
+            conditions.append(AgentFeedbackModel.agent_id == query.agent_id)
+        if query.channel:
+            stored: tuple[str, ...] = _WIRE_TO_STORED.get(
+                query.channel, (query.channel,)
+            )
+            conditions.append(AgentSessionModel.channel.in_(list(stored)))
+        if query.time_from is not None:
+            conditions.append(
+                AgentFeedbackModel.created_at >= _as_aware(query.time_from)
+            )
+        if query.time_to is not None:
+            conditions.append(
+                AgentFeedbackModel.created_at <= _as_aware(query.time_to)
+            )
+        if query.status:
+            conditions.append(
+                AgentFeedbackModel.status == query.status.strip().lower()
+            )
+        if query.keyword:
+            pattern: str = f"%{query.keyword.strip()}%"
+            conditions.append(AgentFeedbackModel.comment.ilike(pattern))
         return conditions
 
     async def _upsert_session_row(self, db: AsyncSession, session: "Session") -> None:

@@ -369,3 +369,34 @@ class QdrantError(AIPlatformError):
             message: Qdrant 操作失败详情。
         """
         super().__init__(message, code=9003)
+
+
+# ===== 会话反馈运营（CF-01 / CF-03） =====
+
+
+class FeedbackNotFoundError(AIPlatformError):
+    """会话反馈行不存在时抛出。"""
+
+    def __init__(self, feedback_id: int) -> None:
+        """设置错误码 2006 与反馈不存在消息。
+
+        Args:
+            feedback_id: 不存在的反馈行主键。
+        """
+        super().__init__(f"Feedback not found: {feedback_id}", code=2006)
+
+
+class FeedbackStatusIllegalError(AIPlatformError):
+    """反馈处理状态迁移非法（如终态回退 / 非法 status）时抛出。"""
+
+    def __init__(self, current: str, target: str) -> None:
+        """设置错误码 4000 与状态迁移错误消息。
+
+        Args:
+            current: 当前状态。
+            target: 非法目标状态。
+        """
+        super().__init__(
+            f"Feedback status transition illegal: {current} -> {target}",
+            code=4000,
+        )

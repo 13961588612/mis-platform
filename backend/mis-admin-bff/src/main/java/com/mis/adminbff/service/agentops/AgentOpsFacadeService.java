@@ -258,6 +258,92 @@ public class AgentOpsFacadeService {
         return client.batchDeleteSessions(body);
     }
 
+    // ==================================================================
+    // 会话反馈 CF-01 / CF-03 / CF-05
+    // ==================================================================
+
+    /**
+     * CF-01 会话反馈列表（加工：分页归一 + 参数装配）。
+     *
+     * <p>分页兜底与 {@link #listSessions} 同款：page 缺省 1、page_size 缺省 20 且封顶 200。
+     * 其余条件原样装配，null/空串自动剔除（{@link AgentOpsUri#of}）。操作人/身份不在此组装——
+     * 走 {@code AgentOpsTransport} 的登录上下文头透传（X-User-Id / X-Username），
+     * 与既有会话端点保持一致。
+     *
+     * @param rating       反馈方向：up / down；null = 不限
+     * @param commentOnly  仅看带说明的反馈；null = 不限
+     * @param agentId      按 Agent 过滤；null = 不限
+     * @param channel      按渠道过滤；null = 不限
+     * @param from         起始时间（ISO-8601）
+     * @param to           截止时间（ISO-8601）
+     * @param keyword      关键词（评论 / 回答摘要）
+     * @param status       处理状态：pending / handled / ignored；null = 不限
+     * @param page         页码，从 1 开始
+     * @param pageSize     每页条数
+     * @return 下游反馈分页（透传）
+     */
+    public JsonNode listFeedback(
+            String rating, Boolean commentOnly, String agentId, String channel,
+            String from, String to, String keyword, String status,
+            Integer page, Integer pageSize) {
+        Map<String, String> params = AgentOpsUri.of(
+                "rating", rating,
+                "comment_only", commentOnly,
+                "agent_id", agentId,
+                "channel", channel,
+                "from", from,
+                "to", to,
+                "keyword", keyword,
+                "status", status,
+                "page", normalizedPage(page),
+                "page_size", normalizedPageSize(pageSize));
+        return client.listFeedback(params);
+    }
+
+    /**
+     * CF-05 会话反馈统计（加工：参数装配）。
+     *
+     * @param from     起始时间（ISO-8601）
+     * @param to       截止时间（ISO-8601）
+     * @param agentId  按 Agent 过滤；null = 不限
+     * @param channel  按渠道过滤；null = 不限
+     * @return 下游统计（基础计数 + 按 agent + 按日趋势，透传）
+     */
+    public JsonNode feedbackStats(String from, String to, String agentId, String channel) {
+        Map<String, String> params = AgentOpsUri.of(
+                "from", from,
+                "to", to,
+                "agent_id", agentId,
+                "channel", channel);
+        return client.feedbackStats(params);
+    }
+
+    /**
+     * CF-03 标记单条反馈已处理/忽略（透传）。
+     *
+     * <p>操作人身份经 {@code AgentOpsTransport} 的登录上下文头透传下游，不在 body 里注入——
+     * 与 {@code listSessions} 同款口径，禁止信任客户端伪造处理人。
+     *
+     * @param feedbackId 反馈 id
+     * @param body       {@code {status: handled|ignored, note?}}
+     * @return 更新后的反馈行（透传）
+     */
+    public JsonNode processFeedback(String feedbackId, JsonNode body) {
+        return client.processFeedback(feedbackId, body);
+    }
+
+    /**
+     * CF-03 批量标记反馈已处理/忽略（透传）。
+     *
+     * <p>单次上限 200 由下游裁定；操作人透传语义同 {@link #processFeedback}。
+     *
+     * @param body {@code {ids[], status, note?}}
+     * @return 批量处理结果（透传）
+     */
+    public JsonNode batchProcessFeedback(JsonNode body) {
+        return client.batchProcessFeedback(body);
+    }
+
     /**
      * #32 新建对话会话。
      *
@@ -392,5 +478,32 @@ public class AgentOpsFacadeService {
     /** #58 审批通过/驳回（透传，T04 待建）。 */
     public JsonNode decideApproval(String approvalId, JsonNode body) {
         return client.decideApproval(approvalId, body);
+    }
+
+    // ==================================================================
+    // 内部：分页归一（与 SessionQuery 同款兜底，避免反馈列表 page=0 / page_size 越界）
+    // ==================================================================
+
+    /**
+     * 归一页码，恒 ≥ 1。
+     *
+     * @param page 原始页码；{@code null} 或 &lt; 1 时回落 1
+     * @return 归一后的页码
+     */
+    private static int normalizedPage(Integer page) {
+        return (page == null || page < 1) ? 1 : page;
+    }
+
+    /**
+     * 归一每页条数，恒落在 [1, 200]。
+     *
+     * @param pageSize 原始条数；{@code null} 或 &lt; 1 时回落 20，超 200 封顶
+     * @return 归一后的条数
+     */
+    private static int normalizedPageSize(Integer pageSize) {
+        if (pageSize == null || pageSize < 1) {
+            return 20;
+        }
+        return Math.min(pageSize, 200);
     }
 }

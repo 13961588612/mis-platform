@@ -1,21 +1,28 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
-import { Bot, Eye, ScanSearch, Ticket, User, type LucideIcon } from 'lucide-react';
+import { Bot, Check, Eye, ScanSearch, Ticket, User, X, type LucideIcon } from 'lucide-react';
 import { toast } from 'sonner';
 import {
   Dialog,
   DialogContent,
   DialogDescription,
+  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
+import { Button } from '@/components/ui/button';
+import { Textarea } from '@/components/ui/textarea';
 import { Badge } from '@/components/ui/badge';
 import { KbCitationList } from '../components/kb-citation-list';
 import { SecrecyBadge } from '../components/kb-badges';
-import { getOperationSessionDetail, listTicketsBySession } from '../api/kb-api';
-import type { KbQaSessionDetail, KbQaTicket } from '../types';
+import { KbTicketDialog } from '../components/kb-ticket-dialog';
+import { getOperationSessionDetail, listTicketsBySession, markFeedbackProcessed } from '../api/kb-api';
+import type { KbQaFeedback, KbQaSessionDetail, KbQaTicket } from '../types';
 import {
   aclActionLabel,
+  feedbackStatusLabel,
   formatTime,
+  KB_FEEDBACK_STATUS_META,
+  qaSentimentLabel,
   subjectTypeLabel,
   ticketStatusLabel,
   ticketTypeLabel,
@@ -35,6 +42,21 @@ function Row({ label, value }: { label: string; value: ReactNode }) {
 function num(v: number | null | undefined, suffix = ''): string {
   if (v == null || !Number.isFinite(v)) return '-';
   return `${v}${suffix}`;
+}
+
+/** 反馈综合分（accuracy/helpful 非空均值；无可评维度回落 null）。 */
+function compositeScore(fb: KbQaFeedback): number | null {
+  const scores = [fb.accuracy, fb.helpful].filter(
+    (s): s is number => s != null && Number.isFinite(s),
+  );
+  if (scores.length === 0) return null;
+  return scores.reduce((a, b) => a + b, 0) / scores.length;
+}
+
+/** 转工单初始类型（OP-03：引用错误维度 → cite_error，其余 → answer_error）。 */
+function ticketTypeForFeedback(fb: KbQaFeedback): string {
+  if ((fb.citeError ?? 0) > 0) return 'cite_error';
+  return 'answer_error';
 }
 
 /** 小节容器。 */
@@ -82,6 +104,11 @@ export function KbQaSessionDetailDialog({
   const [detail, setDetail] = useState<KbQaSessionDetail | null>(null);
   const [tickets, setTickets] = useState<KbQaTicket[]>([]);
   const [loading, setLoading] = useState(false);
+  const [ticketOpen, setTicketOpen] = useState(false);
+  const [processOpen, setProcessOpen] = useState(false);
+  const [processStatus, setProcessStatus] = useState<'handled' | 'ignored'>('handled');
+  const [processNote, setProcessNote] = useState('');
+  const [processing, setProcessing] = useState(false);
 
   const load = useCallback(async (id: number) => {
     setLoading(true);
@@ -112,11 +139,35 @@ export function KbQaSessionDetailDialog({
     void load(sessionId);
   }, [open, sessionId, load]);
 
+  async function onSubmitProcess(): Promise<void> {
+    if (feedback == null) return;
+    setProcessing(true);
+    try {
+      await markFeedbackProcessed(feedback.id, {
+        status: processStatus,
+        note: processNote.trim() || null,
+      });
+      toast.success(processStatus === 'handled' ? '已标记处理' : '已标记忽略');
+      setProcessOpen(false);
+      setProcessNote('');
+      if (sessionId != null) {
+        void load(sessionId);
+      }
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : '标记失败');
+    } finally {
+      setProcessing(false);
+    }
+  }
+
   const session = detail?.session ?? null;
   const messages = detail?.messages ?? [];
   const visibility = detail?.visibility ?? null;
   const recall = detail?.recallParams ?? null;
   const feedback = detail?.feedback ?? null;
+  // 转工单自动带出的消息 id：取最后一条助手消息（反馈通常挂在最近的回答上）
+  const assistantMessageId =
+    messages.filter((m) => m.role === 'assistant').at(-1)?.id ?? null;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -135,6 +186,96 @@ export function KbQaSessionDetailDialog({
             <p className="py-10 text-center text-sm text-muted-foreground">暂无数据</p>
           ) : (
             <>
+              <Section title="质量反馈" icon={Eye}>
+                {feedback == null ? (
+                  <p className="text-xs text-muted-foreground">（用户未评价）</p>
+                ) : (
+                  <>
+                    <div className="mb-2 flex flex-wrap items-center gap-1.5">
+                      <Badge
+                        variant={
+                          (feedback.offtopic ?? 0) > 0 || (feedback.citeError ?? 0) > 0
+                            ? 'destructive'
+                            : 'success'
+                        }
+                      >
+                        {qaSentimentLabel(
+                          (feedback.offtopic ?? 0) > 0 || (feedback.citeError ?? 0) > 0
+                            ? 'negative'
+                            : 'positive',
+                        )}
+                      </Badge>
+                      <span className="text-xs text-muted-foreground">
+                        综合分 {num(compositeScore(feedback), ' 分')}
+                      </span>
+                      {feedback.feedbackStatus ? (
+                        <Badge
+                          variant={KB_FEEDBACK_STATUS_META[feedback.feedbackStatus]?.variant ?? 'secondary'}
+                        >
+                          {feedbackStatusLabel(feedback.feedbackStatus)}
+                        </Badge>
+                      ) : null}
+                      {tickets.some((t) => t.status === 'open' || t.status === 'processing') ? (
+                        <Badge variant="warning">有关联工单</Badge>
+                      ) : null}
+                    </div>
+                    <div className="grid grid-cols-2 gap-x-6 sm:grid-cols-4">
+                      <Row label="准确性" value={num(feedback.accuracy)} />
+                      <Row label="有用性" value={num(feedback.helpful)} />
+                      <Row label="跑题度" value={num(feedback.offtopic)} />
+                      <Row label="引用错误" value={num(feedback.citeError)} />
+                    </div>
+                    {feedback.feedbackStatus && feedback.feedbackStatus !== 'pending' ? (
+                      <p className="mt-2 text-xs text-muted-foreground">
+                        {feedbackStatusLabel(feedback.feedbackStatus)}
+                        {feedback.handlerName ? ` · ${feedback.handlerName}` : ''}
+                        {feedback.handledAt ? ` · ${formatTime(feedback.handledAt)}` : ''}
+                        {feedback.handleNote ? ` · ${feedback.handleNote}` : ''}
+                      </p>
+                    ) : null}
+                    <div className="mt-3 flex flex-wrap items-center gap-2">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => setTicketOpen(true)}
+                        disabled={feedback.feedbackStatus === 'handled' || feedback.feedbackStatus === 'ignored'}
+                      >
+                        <Ticket className="h-4 w-4" />
+                        转工单
+                      </Button>
+                      {feedback.feedbackStatus === 'pending' || feedback.feedbackStatus == null ? (
+                        <>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => {
+                              setProcessStatus('handled');
+                              setProcessNote('');
+                              setProcessOpen(true);
+                            }}
+                          >
+                            <Check className="h-4 w-4" />
+                            标记已处理
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => {
+                              setProcessStatus('ignored');
+                              setProcessNote('');
+                              setProcessOpen(true);
+                            }}
+                          >
+                            <X className="h-4 w-4" />
+                            标记忽略
+                          </Button>
+                        </>
+                      ) : null}
+                    </div>
+                  </>
+                )}
+              </Section>
+
               <Section title="会话信息" icon={User}>
                 <div className="grid grid-cols-1 gap-x-6 sm:grid-cols-2">
                   <Row label="会话 ID" value={session?.id ?? '-'} />
@@ -231,19 +372,6 @@ export function KbQaSessionDetailDialog({
                 )}
               </Section>
 
-              <Section title="质量反馈" icon={Eye}>
-                {feedback == null ? (
-                  <p className="text-xs text-muted-foreground">（用户未评价）</p>
-                ) : (
-                  <div className="grid grid-cols-2 gap-x-6 sm:grid-cols-4">
-                    <Row label="准确性" value={num(feedback.accuracy)} />
-                    <Row label="有用性" value={num(feedback.helpful)} />
-                    <Row label="跑题度" value={num(feedback.offtopic)} />
-                    <Row label="引用错误" value={num(feedback.citeError)} />
-                  </div>
-                )}
-              </Section>
-
               <Section title={`关联工单（${tickets.length}）`} icon={Ticket}>
                 {tickets.length === 0 ? (
                   <p className="text-xs text-muted-foreground">（无关联工单）</p>
@@ -269,6 +397,54 @@ export function KbQaSessionDetailDialog({
           )}
         </div>
       </DialogContent>
+
+      <KbTicketDialog
+        open={ticketOpen}
+        onOpenChange={setTicketOpen}
+        sessionId={sessionId}
+        messageId={assistantMessageId}
+        title="转工单"
+        initialType={feedback == null ? null : ticketTypeForFeedback(feedback)}
+        onCreated={() => {
+          if (sessionId != null) {
+            void load(sessionId);
+          }
+        }}
+      />
+
+      <Dialog open={processOpen} onOpenChange={setProcessOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>{processStatus === 'handled' ? '标记已处理' : '标记忽略'}</DialogTitle>
+            <DialogDescription>
+              状态机 pending → handled/ignored 单向终态；确认后不可回退。
+            </DialogDescription>
+          </DialogHeader>
+          <div>
+            <label className="mb-[0.4rem] block text-sm font-medium text-foreground">
+              处理备注（可选）
+            </label>
+            <Textarea
+              value={processNote}
+              onChange={(e) => setProcessNote(e.target.value)}
+              placeholder="记录处理结论 / 原因"
+              className="min-h-[5rem]"
+            />
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              disabled={processing}
+              onClick={() => setProcessOpen(false)}
+            >
+              取消
+            </Button>
+            <Button disabled={processing} onClick={() => void onSubmitProcess()}>
+              {processing ? '提交中…' : '确认'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </Dialog>
   );
 }

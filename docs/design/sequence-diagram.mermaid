@@ -1,0 +1,93 @@
+```mermaid
+sequenceDiagram
+    actor O as 运营人员
+    participant F as KB 运营页(问答记录 Tab)
+    participant B as BFF KbController
+    participant K as mis-kb KbOperationsService
+    participant R as KbQaTicketRepository
+    O->>F: 评价结果=差评 + 查询
+    F->>B: GET /operations/qa/sessions?hasFeedback=true&sentiment=negative&page=1
+    B->>K: listSessions(query)
+    K->>K: buildRows: 时间→库→用户→hasFeedback→sentiment 过滤
+    K->>R: findBySessionIdInOrderByIdDesc(sessionIds)
+    K->>K: 填充 sentiment/feedbackStatus/ticketStatus/四维分
+    K-->>B: PageResult<KbQaSessionListVO>
+    B-->>F: 差评会话分页列表（吐槽徽标+四维分+工单状态）
+```
+
+```mermaid
+sequenceDiagram
+    actor O as 运营人员
+    participant F as KB 运营页(列表/详情)
+    participant B as BFF KbController
+    participant K as mis-kb KbQaTicketService
+    O->>F: 差评行点「转工单」（类型预填 answer_error）
+    F->>F: KbTicketDialog（sessionId/messageId 自动带出）
+    O->>F: 填类型/描述/处理信息 → 提交
+    F->>B: POST /operations/qa/tickets {sessionId, messageId, type, content}
+    B->>K: createTicket(req, currentUserId)
+    K->>K: 校验 session 存在 + TicketType 合法 → 落库 open + 时间线
+    K-->>B: KbQaTicketVO (#id, open)
+    B-->>F: 建单成功
+    F->>F: 列表/详情显示「已关联工单 #id [待处理]」
+```
+
+```mermaid
+sequenceDiagram
+    actor O as 运营人员
+    participant F as KB 运营页(详情弹窗)
+    participant B as BFF KbController
+    participant K as mis-kb KbOperationsService
+    O->>F: 反馈区点「标记已处理/忽略」
+    F->>F: 处理弹窗（结果+备注）
+    O->>F: 确认
+    F->>B: PATCH /operations/qa/feedback/{feedbackId}/process {status, note}
+    B->>K: markFeedbackProcessed(feedbackId, status, note, currentUserId)
+    K->>K: 状态合法校验 + 写 feedback_status/handler/note/handled_at
+    K-->>B: KbQaFeedbackVO（feedbackStatus=handled/ignored）
+    B-->>F: 更新反馈区徽标 + 列表刷新
+```
+
+```mermaid
+sequenceDiagram
+    actor O as 运营人员
+    participant F as Agent 会话反馈页(列表)
+    participant B as BFF AgentOpsController
+    participant A as agent SessionPgStore
+    O->>F: 评价结果=吐槽 + 仅看说明 + Agent 过滤
+    F->>B: GET /agent-ops/sessions/feedback?rating=down&comment_only=true&agent_id=mis-copilot
+    B->>A: list_feedback(query)
+    A->>A: agent_feedback 单表过滤 + 按吐槽优先排序 + 分页
+    A-->>B: FeedbackPage {items,total,page,page_size}
+    B-->>F: 反馈列表（rating/comment/回答摘要/agent/处理状态）
+```
+
+```mermaid
+sequenceDiagram
+    actor O as 运营人员
+    participant F as Agent 会话反馈页
+    participant B as BFF AgentOpsController
+    participant A as agent SessionManager
+    O->>F: 行点「标记」/ 勾选批量
+    F->>B: POST /agent-ops/sessions/feedback/{id}/process {status, note}
+    B->>A: process_feedback(feedback_id, status, handler_id, handler_name, note)
+    A->>A: agent_feedback 更新 status/handler/note/processed_at
+    A-->>B: 更新后反馈行
+    B-->>F: 列表/详情徽标更新
+```
+
+```mermaid
+sequenceDiagram
+    actor O as 运营人员
+    participant F as Agent 会话反馈页
+    participant D as AgentSessionDetailDialog
+    participant B as BFF AgentOpsController
+    participant A as agent SessionPgStore
+    O->>F: 反馈行点「查看会话」
+    F->>D: open(sessionId, fallbackSession=行内 session 快照)
+    D->>B: GET /agent-ops/sessions/{id} + GET /agent-ops/sessions/{id}/messages
+    B->>A: get_session + list_messages
+    A-->>B: Session + SessionMessage[]（含 metadata.feedback）
+    B-->>D: 回放消息流
+    D->>D: AgentMessageStream 渲染 👎徽标 + comment + 处理状态
+```

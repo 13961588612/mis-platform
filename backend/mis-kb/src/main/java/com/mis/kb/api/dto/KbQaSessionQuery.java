@@ -12,6 +12,7 @@ import java.time.Instant;
  * @param libraryId   命中知识库 id
  * @param userId      提问用户 id
  * @param hasFeedback 是否已反馈；{@code null} 表示不限
+ * @param sentiment   评价结果筛选：{@code positive} 好评 / {@code negative} 差评 / {@code null} 全部
  * @param keyword     提问内容关键字（大小写不敏感的包含匹配）
  * @param page        页码，从 1 开始
  * @param size        每页条数
@@ -22,6 +23,7 @@ public record KbQaSessionQuery(
         Long libraryId,
         Long userId,
         Boolean hasFeedback,
+        String sentiment,
         String keyword,
         Integer page,
         Integer size) {

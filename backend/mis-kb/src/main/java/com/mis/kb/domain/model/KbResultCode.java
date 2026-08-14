@@ -92,6 +92,8 @@ public enum KbResultCode {
     KB_TICKET_NOT_FOUND(40414, "工单不存在"),
     /** WD-02 同义词术语组不存在。 */
     KB_SYNONYM_GROUP_NOT_FOUND(40415, "术语组不存在"),
+    /** OP-05 反馈处理：目标反馈不存在。 */
+    KB_FEEDBACK_NOT_FOUND(40416, "问答反馈不存在"),
 
     KB_NO_READ_PERMISSION(40310, "无该知识库的读取权限"),
     /** 该节点不在您的管理范围内（节点管辖判定，知识库域一期，T01）。 */
@@ -131,7 +133,9 @@ public enum KbResultCode {
     /** RAPTOR 构建中，拒绝重复触发（状态机 building，与图谱同款口径）。 */
     KB_RAPTOR_BUILD_IN_PROGRESS(40961, "RAPTOR 构建中，请等待完成后再试"),
     /** RAPTOR 未构建完成（降级提示用，实际走 degradedReason 不抛错；设计 §5.3 同款）。 */
-    KB_RAPTOR_NOT_READY(40962, "RAPTOR 未构建完成");
+    KB_RAPTOR_NOT_READY(40962, "RAPTOR 未构建完成"),
+    /** OP-05 反馈处理状态机非法流转（如 handled → pending，单向终态不可回退）。 */
+    KB_FEEDBACK_STATUS_ILLEGAL(40937, "反馈处理状态流转非法");
 
     private final int code;
     private final String message;

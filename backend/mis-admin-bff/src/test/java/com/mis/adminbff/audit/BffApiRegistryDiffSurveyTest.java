@@ -150,6 +150,11 @@ class BffApiRegistryDiffSurveyTest {
             "GET /api/v1/kb/libraries/{libraryId}/documents/{id}/chunks"
     );
 
+    /** V43 净新增 KB 登记（问答反馈处理；sys_api 91201 / menu_api 91290 → 菜单 91037 复用 kb:operation:list）。 */
+    private static final Set<String> EXPECTED_KB_V43_1 = Set.of(
+            "PATCH /api/v1/kb/operations/qa/feedback/{feedbackId}/process"
+    );
+
     /**
      * V32 之前的 KB 已登记<b>去重后</b> 42 行基线（V17/V18/V24/V25/V26/V27/V30/V31）。
      * <p>PRD §2.2 记「45 行」是按迁移行数（V30 含 3 行与 V24/V25 重复、被幂等守卫跳过）；
@@ -251,10 +256,11 @@ class BffApiRegistryDiffSurveyTest {
         expectedKbNew.addAll(EXPECTED_KB_V37_1);
         expectedKbNew.addAll(EXPECTED_KB_V41_1);
         expectedKbNew.addAll(EXPECTED_KB_V42_1);
+        expectedKbNew.addAll(EXPECTED_KB_V43_1);
         assertEquals(expectedKbNew, newKb,
                 "V32+V34 净新增 KB 登记必须恰好等于 READ-01~24 + WRITE-01~04（28）+ RAPTOR 2，"
-                        + "V37 补登 inventory 1，V41 会话删除 1，V42 文档切分查看 1；"
-                        + "多出 = 超范围登记，缺少 = 补登遗漏（对照设计 §1.7 登记表与 V34/V37/V41/V42 注释）");
+                        + "V37 补登 inventory 1，V41 会话删除 1，V42 文档切分查看 1，V43 反馈处理 1；"
+                        + "多出 = 超范围登记，缺少 = 补登遗漏（对照设计 §1.7 登记表与 V34/V37/V41/V42/V43 注释）");
 
         // ---- 断言 3：AI 反向信任端点 2 个已登记（U1 裁决 V33 authOnly）----
         Set<String> aiExported = apiV1.stream()
@@ -631,6 +637,11 @@ class BffApiRegistryDiffSurveyTest {
             "GET /api/v1/agent-ops/sessions",
             "GET /api/v1/agent-ops/sessions/{id}",
             "GET /api/v1/agent-ops/sessions/{id}/messages",
+            // ---- V43：Agent 反馈四端点（sys_api 92169~92172 / code 00920070~00920073）----
+            "GET /api/v1/agent-ops/sessions/feedback",
+            "GET /api/v1/agent-ops/sessions/feedback/stats",
+            "POST /api/v1/agent-ops/sessions/feedback/{feedbackId}/process",
+            "POST /api/v1/agent-ops/sessions/feedback/batch-process",
             "DELETE /api/v1/agent-ops/sessions/{id}",
             "POST /api/v1/agent-ops/sessions/batch-delete",
             "POST /api/v1/agent-ops/chat/sessions",
@@ -749,6 +760,8 @@ class BffApiRegistryDiffSurveyTest {
             "GET /api/v1/modules/{moduleId}/bindings",
             // ---- V42（本期）：KB 文档切分查看（sys_api 91200 / menu_api 91289 → 菜单 91034 kb:document:list）----
             "GET /api/v1/kb/libraries/{libraryId}/documents/{id}/chunks",
+            // ---- V43（本期）：KB 问答反馈处理（sys_api 91201 / menu_api 91290 → 菜单 91037 kb:operation:list）----
+            "PATCH /api/v1/kb/operations/qa/feedback/{feedbackId}/process",
             // ---- V39（系统管理三页真实化）：员工写端点 + 岗位 + 岗位类型 + 系统参数 ----
             // 员工详情/新增/编辑/删除（sys_api 91179-91182；员工列表 V4:1011 已登记不重复）
             "GET /api/v1/employees/{id}",

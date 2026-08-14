@@ -33,9 +33,11 @@ import java.util.List;
  * @param citeErrorCount       引用错误标记数（citeError &gt; 0 的反馈条数）
  * @param openTickets          未关闭工单数
  * @param totalTickets         工单总数
+ * @param pendingFeedback      待处理反馈数（feedback_status='pending' 的反馈条数）
  * @param ratedCount           参与好评/差评判定的反馈数（accuracy 或 helpful 至少一项非空）
  * @param positiveCount        好评数（score &gt;= 4）
- * @param negativeCount        差评数（score &lt;= 2）
+ * @param negativeCount        差评数（综合分 &lt;= 2 或 offtopic&gt;0 或 citeError&gt;0，
+ *                             与运营列表/导出的 sentiment=negative 口径同源）
  * @param positiveRate         好评率（0~1，两位小数）；{@code ratedCount == 0} 时为 {@code null}
  * @param avgScore             综合平均分（0~5，两位小数）；无评分为 {@code null}
  * @param negativeDimensions   差评维度分布（固定四桶，计数可为 0）
@@ -56,6 +58,7 @@ public record KbDashboardVO(
         long citeErrorCount,
         long openTickets,
         long totalTickets,
+        long pendingFeedback,
         long ratedCount,
         long positiveCount,
         long negativeCount,
@@ -145,7 +148,7 @@ public record KbDashboardVO(
     /** 空看板（区间内无数据时返回，避免前端判空分支）。 */
     public static KbDashboardVO empty() {
         return new KbDashboardVO(
-                0L, 0L, 0L, 0.0D, null, null, 0L, 0L, 0L, 0L,
+                0L, 0L, 0L, 0.0D, null, null, 0L, 0L, 0L, 0L, 0L,
                 0L, 0L, 0L, null, null,
                 List.of(), List.of(), List.of(), List.of(), List.of(), List.of());
     }

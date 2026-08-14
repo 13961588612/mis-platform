@@ -777,6 +777,24 @@ public class KbFacadeService {
         return kbWebClient.getFeedback(sessionId);
     }
 
+    /**
+     * 标记问答反馈已处理/忽略（OP-05）。
+     *
+     * <p>处理人取当前登录人（登录上下文头透传 mis-kb），状态机 pending → handled/ignored
+     * 单向终态、非法流转由 mis-kb 拒绝；本层只做参数装配与透传。
+     *
+     * @param feedbackId 反馈 id
+     * @param status     目标状态：handled / ignored
+     * @param note       处理备注；可空
+     * @return 更新后的反馈视图（含处理状态五字段）
+     */
+    public KbQaFeedbackVO markFeedbackProcessed(Long feedbackId, String status, String note) {
+        Map<String, Object> body = new HashMap<>();
+        body.put("status", status);
+        body.put("note", note);
+        return kbWebClient.processFeedback(feedbackId, body);
+    }
+
     // ------------------------------------------------------------------ 运营（只读）
 
     public List<KbQaSessionVO> listAllSessions() {
@@ -795,6 +813,7 @@ public class KbFacadeService {
      * @param libraryId   命中知识库 id
      * @param userId      提问用户 id
      * @param hasFeedback 是否已反馈
+     * @param sentiment   评价筛选：positive 好评 / negative 差评 / null 不限
      * @param keyword     提问关键字
      * @param page        页码
      * @param size        每页条数
@@ -802,13 +821,14 @@ public class KbFacadeService {
      */
     public PageResult<KbQaSessionListVO> listOperationSessions(
             String from, String to, Long libraryId, Long userId,
-            Boolean hasFeedback, String keyword, Integer page, Integer size) {
+            Boolean hasFeedback, String sentiment, String keyword, Integer page, Integer size) {
         Map<String, Object> params = new HashMap<>();
         params.put("from", from);
         params.put("to", to);
         params.put("libraryId", libraryId);
         params.put("userId", userId);
         params.put("hasFeedback", hasFeedback);
+        params.put("sentiment", sentiment);
         params.put("keyword", keyword);
         params.put("page", page);
         params.put("size", size);
@@ -829,7 +849,9 @@ public class KbFacadeService {
             enriched.add(new KbQaSessionListVO(
                     row.id(), row.userId(), names.get(row.userId()), row.appId(), row.createdAt(),
                     row.question(), row.answerBrief(), row.messageCount(), row.citeCount(),
-                    row.libraryIds(), row.hasFeedback(), row.accuracy(), row.helpful()));
+                    row.libraryIds(), row.hasFeedback(), row.accuracy(), row.helpful(),
+                    row.offtopic(), row.citeError(), row.sentiment(), row.feedbackStatus(),
+                    row.ticketStatus()));
         }
         return PageResult.of(result.getPage(), result.getSize(), result.getTotal(), enriched);
     }
@@ -877,19 +899,21 @@ public class KbFacadeService {
      * @param libraryId   命中知识库 id
      * @param userId      提问用户 id
      * @param hasFeedback 是否已反馈
+     * @param sentiment   评价筛选：positive 好评 / negative 差评 / null 不限
      * @param keyword     提问关键字
      * @param desensitize 是否脱敏 userId（默认 true）
      * @return CSV 全文
      */
     public String exportCsv(
             String from, String to, Long libraryId, Long userId,
-            Boolean hasFeedback, String keyword, Boolean desensitize) {
+            Boolean hasFeedback, String sentiment, String keyword, Boolean desensitize) {
         Map<String, Object> params = new HashMap<>();
         params.put("from", from);
         params.put("to", to);
         params.put("libraryId", libraryId);
         params.put("userId", userId);
         params.put("hasFeedback", hasFeedback);
+        params.put("sentiment", sentiment);
         params.put("keyword", keyword);
         List<KbQaExportRow> rows = kbWebClient.exportRows(params);
         return exportService.toCsv(rows, desensitize == null || desensitize);

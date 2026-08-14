@@ -5,6 +5,7 @@
 - GET    /api/v1/sessions/{session_id}    — 获取会话详情
 - DELETE /api/v1/sessions/{session_id}    — 关闭 / 删除会话
 - POST   /api/v1/sessions/{session_id}/messages — 发送消息（非流式）
+- POST   /api/v1/sessions/{session_id}/feedback — 对助手回答点赞 / 吐槽
 - GET    /api/v1/sessions/{session_id}/messages — 获取会话消息
 - POST   /api/v1/sessions/route           — 路由请求（AgentRouter）
 
@@ -30,6 +31,8 @@ from src.agent.manager import AgentInstance
 from src.agent.session import SessionManager
 from src.agent.session_store import (
     WIRE_CHANNELS,
+    FeedbackPage,
+    FeedbackQuery,
     MessagePage,
     SessionListQuery,
     SessionPage,
@@ -44,9 +47,21 @@ from src.api.deps import (
     resolve_request_mis_user_id,
 )
 from src.api.response import error_response, success
+from src.models.agent_feedback import (
+    FEEDBACK_RATING_DOWN,
+    FEEDBACK_RATING_UP,
+    FEEDBACK_STATUS_HANDLED,
+    FEEDBACK_STATUS_IGNORED,
+    FEEDBACK_STATUS_PENDING,
+)
 from src.router.agent_router import AgentRouter
 from src.router.models import RouteResult, UserRequest
-from src.utils.exceptions import AgentNotFoundError, SessionNotFoundError
+from src.utils.exceptions import (
+    AgentNotFoundError,
+    FeedbackNotFoundError,
+    FeedbackStatusIllegalError,
+    SessionNotFoundError,
+)
 from src.utils.logging import get_logger
 
 logger = get_logger("api.routes.session")
@@ -58,6 +73,9 @@ MAX_PAGE_SIZE: int = 200
 
 #: 单次批量删除的会话数上限。
 MAX_BATCH_DELETE: int = 200
+
+#: 单次批量标记的反馈数上限（CF-03，与设计 §3.4 一致）。
+MAX_BATCH_FEEDBACK: int = 200
 
 
 def _parse_iso_datetime(value: str | None, field_name: str) -> datetime | None:
@@ -100,6 +118,27 @@ class BatchDeleteSessionsRequest(BaseModel):
     """
 
     ids: list[str] = Field(default_factory=list, description="待删除的 session_id 列表")
+
+
+class FeedbackProcessRequest(BaseModel):
+    """CF-03 单条反馈标记处理的请求体。
+
+    字段名与前端 ``processAgentFeedback`` 的 ``{ status, note? }`` 一致。
+    """
+
+    status: str = Field(..., description="handled 已处理 / ignored 已忽略")
+    note: str | None = Field(default=None, max_length=500, description="处理备注")
+
+
+class BatchFeedbackProcessRequest(BaseModel):
+    """CF-03 批量反馈标记处理的请求体。
+
+    字段名 ``ids`` 与前端 ``batchProcessAgentFeedback`` 的 ``{ ids, status, note? }`` 一致。
+    """
+
+    ids: list[int] = Field(default_factory=list, description="反馈行主键列表")
+    status: str = Field(..., description="handled 已处理 / ignored 已忽略")
+    note: str | None = Field(default=None, max_length=500, description="处理备注")
 
 
 # ===== 请求/响应模型 =====
@@ -169,6 +208,89 @@ class MessageResponse(BaseModel):
     content: str
     metadata: dict[str, Any] = Field(default_factory=dict)
     timestamp: str
+
+
+class MessageFeedbackRequest(BaseModel):
+    """对助手回答点赞 / 吐槽。
+
+    前端流式气泡的 ``id`` 与后端 ``Message.id`` 不是同一套，所以
+    ``message_id`` 可选；用 ``content`` 对齐那一条回答，都缺则落到最近助手消息。
+    """
+
+    rating: str = Field(..., description="up 点赞 / down 吐槽")
+    comment: str = Field(default="", max_length=500, description="吐槽说明；点赞可空")
+    message_id: str | None = Field(default=None, description="后端消息 UUID")
+    content: str | None = Field(default=None, description="助手正文，用于对齐前端气泡")
+
+
+def _identity_keys(user: dict[str, Any]) -> set[str]:
+    """收集当前登录身份可能出现在 ``session.user_id`` 上的键。
+
+    Copilot H5 建会话用 JWT 的 ``userId``/``sub``，MIS 验签后的
+    ``UserContext.user_id`` 却是 ``employeeId``，两边对不上会让点赞 404。
+    所以把 user_id / employeeId / mis_user_id 都收进来比对。
+    """
+    keys: set[str] = set()
+
+    def add(value: Any) -> None:
+        text = str(value).strip() if value is not None else ""
+        if text and text.lower() not in {"none", "null"}:
+            keys.add(text)
+
+    add(user.get("user_id"))
+    add(user.get("username"))
+    add(user.get("mis_user_id"))
+    profile = user.get("profile") if isinstance(user.get("profile"), dict) else {}
+    for key in ("user_id", "employeeId", "employee_id", "mis_user_id", "sub"):
+        add(profile.get(key))
+    return keys
+
+
+def _session_owned_by(session: Any, user: dict[str, Any]) -> bool:
+    """当前登录用户是否拥有该会话（不匹配按不存在处理，避免泄露）。"""
+    keys = _identity_keys(user)
+    sid = str(getattr(session, "user_id", "") or "").strip()
+    if sid and sid in keys:
+        return True
+    session_mis = getattr(session, "mis_user_id", None)
+    return session_mis is not None and str(session_mis).strip() in keys
+
+
+def _operator_identity(
+    user: dict[str, Any],
+    x_user_id: str,
+    x_username: str,
+) -> tuple[str | None, str | None]:
+    """从透传头 + 登录身份提取运营操作人（``handler_id`` / ``handler_name``，CF-03）。
+
+    BFF 的 ``AgentOpsTransport`` 会注入 ``X-User-Id`` / ``X-Username`` 头，
+    **优先**采用（与设计「操作人从透传头取」一致）；缺失时回落到
+    ``get_current_user`` 的 MIS 身份（``profile.mis_user_id`` / ``username``）。
+
+    Args:
+        user: :func:`get_current_user` 返回的身份字典。
+        x_user_id: ``X-User-Id`` 头原始值（可能为空串）。
+        x_username: ``X-Username`` 头原始值（可能为空串）。
+
+    Returns:
+        ``(handler_id, handler_name)`` 二元组；均可能为 ``None``。
+    """
+    header_id: str = (x_user_id or "").strip()
+    header_name: str = (x_username or "").strip()
+    if header_id:
+        return header_id, header_name or None
+
+    profile = user.get("profile") if isinstance(user.get("profile"), dict) else {}
+    handler_id = profile.get("mis_user_id") or user.get("mis_user_id") or user.get("user_id")
+    handler_name = (
+        user.get("display_name")
+        or user.get("username")
+        or (str(handler_id) if handler_id is not None else None)
+    )
+    return (
+        str(handler_id) if handler_id is not None else None,
+        str(handler_name) if handler_name else None,
+    )
 
 
 # ===== 运营端点（T04 #27 / #31）=====
@@ -288,6 +410,250 @@ async def batch_delete_sessions(
         )
     except Exception as exc:  # noqa: BLE001
         logger.error("Failed to batch delete sessions", error=str(exc))
+        return error_response(9001, str(exc), status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+# ===== 会话反馈运营端点（CF-01 / CF-03 / CF-05）=====
+#
+# 声明顺序有讲究：``GET /feedback`` 字面量必须排在 ``GET /{session_id}`` 之前，
+# 否则 FastAPI 会把 "feedback" 当成路径参数吃掉（与 ``batch-delete`` 同款约束）。
+# 四个端点统一走 PG ``agent_feedback`` 表（运营读侧权威）。
+
+
+@router.get("/feedback")
+async def list_feedback(
+    page: int = Query(default=1, ge=1, description="页码，从 1 开始"),
+    page_size: int = Query(
+        default=20, ge=1, le=MAX_PAGE_SIZE, description="每页条数", alias="page_size"
+    ),
+    rating: str | None = Query(default=None, description="按评价过滤：up / down"),
+    comment_only: bool = Query(
+        default=False, description="只看带说明的吐槽（comment 非空）"
+    ),
+    agent_id: str | None = Query(default=None, description="按 Agent 过滤"),
+    channel: str | None = Query(
+        default=None, description="按渠道过滤：web | wecom | api | unknown"
+    ),
+    time_from: str | None = Query(
+        default=None, alias="from", description="创建时间下界（ISO 8601）"
+    ),
+    time_to: str | None = Query(
+        default=None, alias="to", description="创建时间上界（ISO 8601）"
+    ),
+    keyword: str | None = Query(default=None, description="关键字，匹配吐槽说明"),
+    process_status: str | None = Query(
+        default=None, alias="status", description="按处理状态过滤：pending / handled / ignored"
+    ),
+    session_manager: SessionManager = Depends(get_session_manager_dep),
+    _user: dict[str, Any] = Depends(get_current_user),
+) -> dict[str, Any]:
+    """CF-01 会话反馈列表：分页 + rating/comment_only/agent_id/channel/from/to/keyword/status 过滤。
+
+    默认排序「吐槽且带说明优先，再按创建时间倒序」——运营最需要优先跟进的负面反馈
+    排在最前。``answer_brief`` 由后端按 message_id 截断填充（≤60 字）。
+
+    Returns:
+        ``AgentPage<AgentFeedbackItem>`` 形状：``{items, total, page, page_size}``。
+    """
+    try:
+        parsed_from = _parse_iso_datetime(time_from, "from")
+        parsed_to = _parse_iso_datetime(time_to, "to")
+    except ValueError as exc:
+        return error_response(4000, str(exc), status.HTTP_400_BAD_REQUEST)
+
+    normalized_channel: str | None = None
+    if channel:
+        candidate: str = channel.strip().lower()
+        if candidate and candidate != "all":
+            if candidate not in WIRE_CHANNELS:
+                return error_response(
+                    4000,
+                    f"Unsupported channel: {channel}",
+                    status.HTTP_400_BAD_REQUEST,
+                )
+            normalized_channel = candidate
+
+    normalized_rating: str | None = None
+    if rating:
+        candidate_rating: str = rating.strip().lower()
+        if candidate_rating not in {FEEDBACK_RATING_UP, FEEDBACK_RATING_DOWN}:
+            return error_response(
+                4000,
+                f"Unsupported rating: {rating}",
+                status.HTTP_400_BAD_REQUEST,
+            )
+        normalized_rating = candidate_rating
+
+    normalized_status: str | None = None
+    if process_status:
+        candidate_status: str = process_status.strip().lower()
+        if candidate_status not in {
+            FEEDBACK_STATUS_PENDING,
+            FEEDBACK_STATUS_HANDLED,
+            FEEDBACK_STATUS_IGNORED,
+        }:
+            return error_response(
+                4000,
+                f"Unsupported status: {process_status}",
+                status.HTTP_400_BAD_REQUEST,
+            )
+        normalized_status = candidate_status
+
+    query: FeedbackQuery = FeedbackQuery(
+        page=page,
+        page_size=page_size,
+        rating=normalized_rating,
+        comment_only=comment_only,
+        agent_id=(agent_id or "").strip() or None,
+        channel=normalized_channel,
+        time_from=parsed_from,
+        time_to=parsed_to,
+        keyword=(keyword or "").strip() or None,
+        status=normalized_status,
+    )
+
+    try:
+        result: FeedbackPage = await session_manager.list_feedback(query)
+        return success(data=result.to_wire())
+    except Exception as exc:  # noqa: BLE001
+        logger.error("Failed to list feedback", error=str(exc))
+        return error_response(9001, str(exc), status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@router.get("/feedback/stats")
+async def get_feedback_stats(
+    agent_id: str | None = Query(default=None, description="按 Agent 过滤"),
+    channel: str | None = Query(
+        default=None, description="按渠道过滤：web | wecom | api | unknown"
+    ),
+    time_from: str | None = Query(
+        default=None, alias="from", description="创建时间下界（ISO 8601）"
+    ),
+    time_to: str | None = Query(
+        default=None, alias="to", description="创建时间上界（ISO 8601）"
+    ),
+    session_manager: SessionManager = Depends(get_session_manager_dep),
+    _user: dict[str, Any] = Depends(get_current_user),
+) -> dict[str, Any]:
+    """CF-05 会话反馈统计：基础计数 + 按 Agent + 按日趋势。
+
+    Returns:
+        ``AgentFeedbackStats`` 契约：``{total, up, down, up_rate, down_rate,
+        pending, by_agent, by_day}``。
+    """
+    try:
+        parsed_from = _parse_iso_datetime(time_from, "from")
+        parsed_to = _parse_iso_datetime(time_to, "to")
+    except ValueError as exc:
+        return error_response(4000, str(exc), status.HTTP_400_BAD_REQUEST)
+
+    normalized_channel: str | None = None
+    if channel:
+        candidate: str = channel.strip().lower()
+        if candidate and candidate != "all":
+            if candidate not in WIRE_CHANNELS:
+                return error_response(
+                    4000,
+                    f"Unsupported channel: {channel}",
+                    status.HTTP_400_BAD_REQUEST,
+                )
+            normalized_channel = candidate
+
+    try:
+        data = await session_manager.feedback_stats(
+            agent_id=(agent_id or "").strip() or None,
+            channel=normalized_channel,
+            time_from=parsed_from,
+            time_to=parsed_to,
+        )
+        return success(data=data)
+    except Exception as exc:  # noqa: BLE001
+        logger.error("Failed to get feedback stats", error=str(exc))
+        return error_response(9001, str(exc), status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@router.post("/feedback/{feedback_id}/process")
+async def process_feedback(
+    feedback_id: int,
+    req: FeedbackProcessRequest,
+    session_manager: SessionManager = Depends(get_session_manager_dep),
+    current_user: dict[str, Any] = Depends(get_current_user),
+    x_user_id: str = Header(default="", alias="X-User-Id"),
+    x_username: str = Header(default="", alias="X-Username"),
+) -> dict[str, Any]:
+    """CF-03 单条标记处理：pending → handled / ignored（单向终态）。
+
+    操作人从透传头（``X-User-Id`` / ``X-Username``）取，缺失回落登录身份。
+
+    Returns:
+        更新后的反馈行 wire dict。
+    """
+    handler_id, handler_name = _operator_identity(current_user, x_user_id, x_username)
+    try:
+        data = await session_manager.process_feedback(
+            feedback_id=feedback_id,
+            status=req.status,
+            handler_id=handler_id,
+            handler_name=handler_name,
+            note=req.note,
+        )
+        return success(data=data, message="反馈已处理")
+    except FeedbackNotFoundError as exc:
+        return error_response(exc.code, exc.message, status.HTTP_404_NOT_FOUND)
+    except FeedbackStatusIllegalError as exc:
+        return error_response(exc.code, exc.message, status.HTTP_400_BAD_REQUEST)
+    except Exception as exc:  # noqa: BLE001
+        logger.error(
+            "Failed to process feedback",
+            error=str(exc),
+            feedback_id=feedback_id,
+        )
+        return error_response(9001, str(exc), status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@router.post("/feedback/batch-process")
+async def batch_process_feedback(
+    req: BatchFeedbackProcessRequest,
+    session_manager: SessionManager = Depends(get_session_manager_dep),
+    current_user: dict[str, Any] = Depends(get_current_user),
+    x_user_id: str = Header(default="", alias="X-User-Id"),
+    x_username: str = Header(default="", alias="X-Username"),
+) -> dict[str, Any]:
+    """CF-03 批量标记处理：只更新 status=pending 的行，单次上限 200。
+
+    去重后执行，返回实际更新条数。请求里含终态 / 不存在的 ID **不算错误**——
+    批量标记的语义是「让这些反馈不再待处理」，已经处理过就是达成目标。
+
+    Returns:
+        ``{"processed": <实际更新行数>, "requested": <去重后请求条数>}``。
+    """
+    unique_ids: list[int] = list(dict.fromkeys(int(i) for i in req.ids))
+    if not unique_ids:
+        return error_response(4000, "ids must not be empty", status.HTTP_400_BAD_REQUEST)
+    if len(unique_ids) > MAX_BATCH_FEEDBACK:
+        return error_response(
+            4000,
+            f"Too many ids: {len(unique_ids)} > {MAX_BATCH_FEEDBACK}",
+            status.HTTP_400_BAD_REQUEST,
+        )
+
+    handler_id, handler_name = _operator_identity(current_user, x_user_id, x_username)
+    try:
+        processed: int = await session_manager.batch_process_feedback(
+            feedback_ids=unique_ids,
+            status=req.status,
+            handler_id=handler_id,
+            handler_name=handler_name,
+            note=req.note,
+        )
+        return success(
+            data={"processed": processed, "requested": len(unique_ids)},
+            message="批量处理完成",
+        )
+    except FeedbackStatusIllegalError as exc:
+        return error_response(exc.code, exc.message, status.HTTP_400_BAD_REQUEST)
+    except Exception as exc:  # noqa: BLE001
+        logger.error("Failed to batch process feedback", error=str(exc))
         return error_response(9001, str(exc), status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
@@ -420,6 +786,45 @@ async def get_messages(
         return error_response(exc.code, exc.message, status.HTTP_404_NOT_FOUND)
     except Exception as exc:  # noqa: BLE001
         logger.error("Failed to list messages", error=str(exc), session_id=session_id)
+        return error_response(9001, str(exc), status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@router.post("/{session_id}/feedback")
+async def submit_message_feedback(
+    session_id: str,
+    req: MessageFeedbackRequest,
+    session_manager: SessionManager = Depends(get_session_manager_dep),
+    current_user: dict[str, Any] = Depends(get_current_user),
+) -> dict[str, Any]:
+    """对当前会话的一条助手回答点赞或吐槽。
+
+    写入 ``message.metadata.feedback``，Redis 权威、PG 尽力同步。
+    吐槽必须带说明；点赞可只点一下。
+    """
+    rating = (req.rating or "").strip().lower()
+    if rating not in {"up", "down"}:
+        return error_response(4001, "rating 必须是 up 或 down", status.HTTP_400_BAD_REQUEST)
+    comment = (req.comment or "").strip()
+    if rating == "down" and not comment:
+        return error_response(4001, "吐槽请填写说明", status.HTTP_400_BAD_REQUEST)
+    try:
+        session = await session_manager.get_session(session_id)
+        if not _session_owned_by(session, current_user):
+            return error_response(2005, f"Session not found: {session_id}", status.HTTP_404_NOT_FOUND)
+        data = await session_manager.set_message_feedback(
+            session_id,
+            rating=rating,
+            comment=comment,
+            message_id=(req.message_id or "").strip() or None,
+            content=req.content,
+        )
+        return success(data=data, message="已记录反馈")
+    except SessionNotFoundError as exc:
+        return error_response(exc.code, exc.message, status.HTTP_404_NOT_FOUND)
+    except ValueError as exc:
+        return error_response(4001, str(exc), status.HTTP_400_BAD_REQUEST)
+    except Exception as exc:  # noqa: BLE001
+        logger.error("Failed to submit message feedback", error=str(exc), session_id=session_id)
         return error_response(9001, str(exc), status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 

@@ -146,6 +146,12 @@ export function KbDashboardTab() {
           description={`累计 ${count(data?.totalTickets)} 单`}
         />
         <StatCard
+          label="待处理反馈"
+          value={count(data?.pendingFeedback)}
+          icon={MessageSquare}
+          description="feedback_status=pending"
+        />
+        <StatCard
           label="热门知识库"
           value={topLibraries.length}
           icon={Database}
@@ -173,7 +179,7 @@ export function KbDashboardTab() {
           label="差评数"
           value={count(data?.negativeCount)}
           icon={TriangleAlert}
-          description="综合分 ≤ 2"
+          description="综合分 ≤ 2 或跑题/引用错误"
         />
       </div>
 

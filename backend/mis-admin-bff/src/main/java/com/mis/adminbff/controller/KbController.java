@@ -553,11 +553,12 @@ public class KbController {
             @RequestParam(required = false) Long libraryId,
             @RequestParam(required = false) Long userId,
             @RequestParam(required = false) Boolean hasFeedback,
+            @RequestParam(required = false) String sentiment,
             @RequestParam(required = false) String keyword,
             @RequestParam(required = false) Integer page,
             @RequestParam(required = false) Integer size) {
         return Result.ok(kbFacadeService.listOperationSessions(
-                from, to, libraryId, userId, hasFeedback, keyword, page, size));
+                from, to, libraryId, userId, hasFeedback, sentiment, keyword, page, size));
     }
 
     /** 运营问答详情（A-02a，含可见范围与召回参数）。 */
@@ -601,10 +602,11 @@ public class KbController {
             @RequestParam(required = false) Long libraryId,
             @RequestParam(required = false) Long userId,
             @RequestParam(required = false) Boolean hasFeedback,
+            @RequestParam(required = false) String sentiment,
             @RequestParam(required = false) String keyword,
             @RequestParam(required = false) Boolean desensitize) {
         String csv = kbFacadeService.exportCsv(
-                from, to, libraryId, userId, hasFeedback, keyword, desensitize);
+                from, to, libraryId, userId, hasFeedback, sentiment, keyword, desensitize);
         byte[] bytes = csv.getBytes(StandardCharsets.UTF_8);
         String filename = kbFacadeService.exportFilename();
         String encoded = URLEncoder.encode(filename, StandardCharsets.UTF_8).replace("+", "%20");
@@ -654,6 +656,24 @@ public class KbController {
     @GetMapping("/operations/qa/tickets/by-session/{sessionId}")
     public Result<List<KbQaTicketVO>> listTicketsBySession(@PathVariable Long sessionId) {
         return Result.ok(kbFacadeService.listTicketsBySession(sessionId));
+    }
+
+    /**
+     * 标记问答反馈已处理/忽略（OP-05）。
+     *
+     * <p>处理人取当前登录人（{@code X-User-Id}/{@code X-Username} 透传 mis-kb），
+     * 状态机 pending → handled/ignored 单向终态，非法流转由 mis-kb 拒绝。
+     *
+     * <p>方法名与 {@link KbFacadeService#markFeedbackProcessed} 同名对齐——审计挂点契约
+     * （KbControllerOperLogCoverageTest）要求 Controller 写方法在 KbFacadeService 存在
+     * 同名门面方法且恰有一处 {@code @OperLog}；本方法挂 Controller 侧。
+     */
+    @PatchMapping("/operations/qa/feedback/{feedbackId}/process")
+    @OperLog(module = "知识库", operation = "处理问答反馈", recordParams = true)
+    public Result<KbQaFeedbackVO> markFeedbackProcessed(
+            @PathVariable Long feedbackId, @RequestBody FeedbackProcessBody body) {
+        return Result.ok(kbFacadeService.markFeedbackProcessed(
+                feedbackId, body.status(), body.note()));
     }
 
     // ------------------------------------------------------------------ 授权主体（I-03）
@@ -1005,5 +1025,16 @@ public class KbController {
             String note,
             String relAction,
             Long processorId) {
+    }
+
+    /**
+     * 反馈处理请求体（OP-05）。
+     *
+     * @param status 目标状态：handled 已处理 / ignored 已忽略；pending → handled/ignored 单向终态
+     * @param note   处理备注；可空
+     */
+    public record FeedbackProcessBody(
+            @NotBlank String status,
+            String note) {
     }
 }

@@ -480,6 +480,8 @@ public class KbQaService {
     private static KbQaFeedbackVO toFeedbackVo(KbQaFeedback e) {
         return new KbQaFeedbackVO(
                 e.getId(), e.getSessionId(), e.getAccuracy(), e.getHelpful(),
-                e.getOfftopic(), e.getCiteError());
+                e.getOfftopic(), e.getCiteError(),
+                e.getFeedbackStatus(), e.getHandlerId(), e.getHandlerName(),
+                e.getHandledAt(), e.getHandleNote());
     }
 }

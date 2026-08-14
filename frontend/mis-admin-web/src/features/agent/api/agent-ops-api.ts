@@ -20,6 +20,11 @@ import type { ApiResult } from '@/types/api';
 import type {
   AgentCoordination,
   AgentDetail,
+  AgentFeedbackBatchResult,
+  AgentFeedbackItem,
+  AgentFeedbackProcessPayload,
+  AgentFeedbackQuery,
+  AgentFeedbackStats,
   AgentHealth,
   AgentPage,
   AgentRoleOption,
@@ -375,6 +380,75 @@ export async function batchDeleteSessions(ids: string[]): Promise<void> {
   if (res.data.code !== 0) throw new Error(res.data.message || '批量删除会话失败');
 }
 
+// ------------------------------------------------------------------ 会话反馈（CF-01 / CF-03 / CF-05）
+
+/**
+ * CF-01 — 会话反馈列表（分页 + rating/comment_only/agent_id/channel/from/to/keyword/status 过滤）。
+ *
+ * <p>**下游返回的是分页信封**（ai-platform `FeedbackPage.to_wire()`），不是裸数组——
+ * 页面必须取 `result.items`，不要直接把信封当数组 `.map()`。
+ * 默认排序「吐槽且带说明优先」由下游实现，本函数不排序。
+ */
+export async function listAgentFeedback(
+  query: AgentFeedbackQuery = {},
+): Promise<AgentPage<AgentFeedbackItem>> {
+  const res = await api.get<ApiResult<AgentPage<AgentFeedbackItem>>>(
+    '/agent-ops/sessions/feedback',
+    { params: cleanParams({ ...query }) },
+  );
+  return unwrap(res, '获取会话反馈列表失败');
+}
+
+/**
+ * CF-05 — 会话反馈统计。
+ *
+ * <p>**返回聚合对象，不是数组**——`{total, up, down, up_rate, down_rate, pending,
+ * by_agent, by_day}`。这里把缺省值补齐后再返回，调用方无需再写 `?? {}`。
+ */
+export async function getAgentFeedbackStats(
+  query: Pick<AgentFeedbackQuery, 'agent_id' | 'channel' | 'from' | 'to'> = {},
+): Promise<AgentFeedbackStats> {
+  const res = await api.get<ApiResult<Partial<AgentFeedbackStats>>>(
+    '/agent-ops/sessions/feedback/stats',
+    { params: cleanParams({ ...query }) },
+  );
+  const raw = unwrap(res, '获取会话反馈统计失败');
+  return {
+    total: raw.total ?? 0,
+    up: raw.up ?? 0,
+    down: raw.down ?? 0,
+    up_rate: raw.up_rate ?? 0,
+    down_rate: raw.down_rate ?? 0,
+    pending: raw.pending ?? 0,
+    by_agent: raw.by_agent ?? {},
+    by_day: raw.by_day ?? {},
+  };
+}
+
+/** CF-03 — 单条标记处理（pending → handled/ignored，单向终态）。 */
+export async function processAgentFeedback(
+  id: number,
+  payload: AgentFeedbackProcessPayload,
+): Promise<AgentFeedbackItem> {
+  const res = await api.post<ApiResult<AgentFeedbackItem>>(
+    `/agent-ops/sessions/feedback/${id}/process`,
+    payload,
+  );
+  return unwrap(res, '标记反馈失败');
+}
+
+/** CF-03 — 批量标记处理（只更新 status=pending 的行，单次上限 200）。 */
+export async function batchProcessAgentFeedback(
+  ids: number[],
+  payload: AgentFeedbackProcessPayload,
+): Promise<AgentFeedbackBatchResult> {
+  const res = await api.post<ApiResult<AgentFeedbackBatchResult>>(
+    '/agent-ops/sessions/feedback/batch-process',
+    { ids, ...payload },
+  );
+  return unwrap(res, '批量标记反馈失败');
+}
+
 // ------------------------------------------------------------------ 本地对话（§4.3 #32–#33）
 // 实现已迁至 agent-chat-api.ts（独立 180s 超时客户端）；此处再导出保持旧 import 兼容。
 
@@ -436,10 +510,26 @@ export async function disconnectMcpServer(name: string): Promise<void> {
   if (res.data.code !== 0) throw new Error(res.data.message || '断开 MCP 服务器失败');
 }
 
+export interface McpDiscoverResult {
+  /** 本次注册/刷新的工具数。 */
+  discovered: number;
+  skill_ids: string[];
+}
+
 /** §4.3 #41 — agent:mcp:manage */
-export async function discoverMcpTools(name: string): Promise<McpTool[]> {
-  const res = await api.post<ApiResult<McpTool[]>>(`/agent-ops/mcp/servers/${seg(name)}/discover`);
-  return unwrap(res, '发现 MCP 工具失败');
+export async function discoverMcpTools(name: string): Promise<McpDiscoverResult> {
+  const res = await api.post<ApiResult<McpDiscoverResult | McpTool[]>>(
+    `/agent-ops/mcp/servers/${seg(name)}/discover`,
+  );
+  const wire = unwrap(res, '发现 MCP 工具失败');
+  // ai-platform POST /mcp/{name}/discover 回的是 `{discovered, skill_ids}`，
+  // 不是工具数组（数组在 GET .../tools）。兼容两种形状，避免 toast 出现 undefined。
+  if (Array.isArray(wire)) {
+    return { discovered: wire.length, skill_ids: wire.map((t) => t.name) };
+  }
+  const ids = Array.isArray(wire.skill_ids) ? wire.skill_ids : [];
+  const count = typeof wire.discovered === 'number' ? wire.discovered : ids.length;
+  return { discovered: count, skill_ids: ids };
 }
 
 /**
@@ -519,6 +609,8 @@ export interface DispatchQuery {
   from?: string;
   to?: string;
   coordinator_id?: string;
+  /** agent_router | coordinator；不传=全部。 */
+  kind?: string;
 }
 
 /**
@@ -565,6 +657,7 @@ export async function listRouteStats(query: DispatchQuery = {}): Promise<RouteSt
     total_routes: raw.total_routes ?? 0,
     by_agent: raw.by_agent ?? {},
     by_strategy: raw.by_strategy ?? {},
+    by_kind: raw.by_kind ?? {},
     avg_latency_ms: raw.avg_latency_ms ?? 0,
     avg_confidence: raw.avg_confidence ?? 0,
   };

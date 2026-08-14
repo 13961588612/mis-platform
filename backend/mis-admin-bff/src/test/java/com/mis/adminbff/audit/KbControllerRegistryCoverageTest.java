@@ -49,8 +49,10 @@ class KbControllerRegistryCoverageTest {
     private static final Pattern VAR_REGEX = Pattern.compile("\\{([A-Za-z][A-Za-z0-9]*):[^}]*}");
 
     /**
-     * KB 全量端点 → 权限码（71 条 = V17~V31 既有 42（去重后）+ V32 新登记 28
-     * + 1 新登记（V41 问答会话删除，复用 kb:qa:ask，无新增权限码））。
+     * KB 全量端点 → 权限码（76 条 = V17~V31 既有 42（去重后）+ V32 新登记 28
+     * + 2 新登记（V34 RAPTOR）+ 1 新登记（KBP-10 inventory）+ 1 新登记（V41 问答会话删除，
+     * 复用 kb:qa:ask）+ 1 新登记（V42 文档切分查看，复用 kb:document:list）
+     * + 1 新登记（V43 问答反馈处理，复用 kb:operation:list））。
      * 数据来源：V17/V18/V24/V25/V26/V27/V30/V31 迁移注释 + 设计 §1.7 登记表。
      */
     private static final Map<String, String> KB_EXPECTED_PERMISSIONS = buildExpected();
@@ -78,12 +80,13 @@ class KbControllerRegistryCoverageTest {
             }
         }
 
-        // 数量守恒：73 = 42 既有（去重后，V30 含 3 行与 V24/25 重复被幂等跳过）+ 28 新登记（V32）
+        // 数量守恒：76 = 42 既有（去重后，V30 含 3 行与 V24/25 重复被幂等跳过）+ 28 新登记（V32）
         //           + 2 新登记（V34 RAPTOR）+ 1 新登记（KBP-10 存量授权只读清单 inventory）
         //           + 1 新登记（V41 问答会话删除，复用 kb:qa:ask）
         //           + 1 新登记（V42 文档切分查看，复用 kb:document:list）
-        assertEquals(75, expected.size(), "KB 登记表条目数应为 42（去重基线）+ 28（V32）+ 2（V34 RAPTOR）"
-                + " + 1（KBP-10 inventory）+ 1（V41 会话删除）+ 1（V42 文档切分查看）= 75，与 Controller 导出端点数一致（设计 §1.7 与 V30/V34 幂等说明）");
+        //           + 1 新登记（V43 问答反馈处理，复用 kb:operation:list）
+        assertEquals(76, expected.size(), "KB 登记表条目数应为 42（去重基线）+ 28（V32）+ 2（V34 RAPTOR）"
+                + " + 1（KBP-10 inventory）+ 1（V41 会话删除）+ 1（V42 文档切分查看）+ 1（V43 反馈处理）= 76，与 Controller 导出端点数一致（设计 §1.7 与 V30/V34 幂等说明）");
 
         exported.forEach(System.out::println);
 
@@ -226,6 +229,8 @@ class KbControllerRegistryCoverageTest {
         map.put("PATCH /api/v1/kb/operations/qa/tickets/{ticketId}", "kb:operation:list");
         // ---- V42：文档切分查看（GET 只读，复用 kb:document:list；BFF 兜底判权 + mis-kb ACL 读权限双闸门）----
         map.put("GET /api/v1/kb/libraries/{libraryId}/documents/{id}/chunks", "kb:document:list");
+        // ---- V43：问答反馈处理（PATCH 写；sys_api 91201 / menu_api 91290 → 菜单 91037 kb:operation:list）----
+        map.put("PATCH /api/v1/kb/operations/qa/feedback/{feedbackId}/process", "kb:operation:list");
         return map;
     }
 

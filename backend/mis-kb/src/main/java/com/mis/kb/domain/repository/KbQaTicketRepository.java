@@ -8,6 +8,7 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 import java.time.Instant;
+import java.util.Collection;
 import java.util.List;
 
 /**
@@ -37,6 +38,16 @@ public interface KbQaTicketRepository extends JpaRepository<KbQaTicket, Long> {
 
     /** 按会话查工单（问答详情页展示已提过的工单）。 */
     List<KbQaTicket> findBySessionIdOrderByIdDesc(Long sessionId);
+
+    /**
+     * 批量按会话查工单（运营列表批量取各会话最新工单状态用）。
+     *
+     * <p>结果按 {@code sessionId} + id 倒序排序；调用方自行取每个会话的第一条即最新。
+     *
+     * @param sessionIds 会话 id 集合；空集合返回空列表
+     * @return 匹配的工单列表
+     */
+    List<KbQaTicket> findBySessionIdInOrderByIdDesc(Collection<Long> sessionIds);
 
     /** 统计指定状态的工单数（看板用）。 */
     long countByStatus(String status);

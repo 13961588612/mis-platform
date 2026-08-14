@@ -1,0 +1,158 @@
+```mermaid
+classDiagram
+    direction LR
+
+    %% ===== mis-kb 域 =====
+    class KbQaFeedback {
+        +Long id
+        +Long sessionId
+        +Integer accuracy
+        +Integer helpful
+        +Integer offtopic
+        +Integer citeError
+        +Integer editableOnce
+        +String feedbackStatus
+        +Long handlerId
+        +String handlerName
+        +Instant handledAt
+        +String handleNote
+        +Instant createdAt
+        +Instant updatedAt
+    }
+    class KbQaSessionQuery {
+        +Instant from
+        +Instant to
+        +Long libraryId
+        +Long userId
+        +Boolean hasFeedback
+        +String sentiment
+        +String keyword
+        +Integer page
+        +Integer size
+    }
+    class KbQaSessionListVO {
+        +Long id
+        +Long userId
+        +Long appId
+        +Instant createdAt
+        +String question
+        +String answerBrief
+        +int messageCount
+        +int citeCount
+        +List~Long~ libraryIds
+        +boolean hasFeedback
+        +Integer accuracy
+        +Integer helpful
+        +Integer offtopic
+        +Integer citeError
+        +String sentiment
+        +String feedbackStatus
+        +String ticketStatus
+    }
+    class KbQaFeedbackVO {
+        +Long id
+        +Long sessionId
+        +Integer accuracy
+        +Integer helpful
+        +Integer offtopic
+        +Integer citeError
+        +String feedbackStatus
+        +Long handlerId
+        +String handlerName
+        +Instant handledAt
+        +String handleNote
+    }
+    class KbDashboardVO {
+        +long openTickets
+        +long totalTickets
+        +long pendingFeedback
+        +long positiveCount
+        +long negativeCount
+    }
+    class KbOperationsService {
+        +listSessions(KbQaSessionQuery) PageResult~KbQaSessionListVO~
+        +exportRows(KbQaSessionQuery) List~KbQaExportRow~
+        +stats(Instant, Instant) KbDashboardVO
+        +markFeedbackProcessed(Long, String, String, Long) KbQaFeedbackVO
+        -buildRows(KbQaSessionQuery) List~KbQaSessionListVO~
+    }
+    class OperationsController {
+        +listSessions(from,to,libraryId,userId,hasFeedback,sentiment,keyword,page,size)
+        +export(from,to,libraryId,userId,hasFeedback,sentiment,keyword)
+        +processFeedback(feedbackId, status, note)
+    }
+    class KbQaTicketRepository {
+        +findBySessionIdInOrderByIdDesc(Collection~Long~) List~KbQaTicket~
+    }
+    KbOperationsService --> KbQaSessionQuery
+    KbOperationsService --> KbQaSessionListVO
+    KbOperationsService --> KbQaFeedbackVO
+    KbOperationsService --> KbDashboardVO
+    KbOperationsService --> KbQaTicketRepository
+    OperationsController --> KbOperationsService
+    KbQaFeedback --> KbQaFeedbackVO
+
+    %% ===== BFF 域 =====
+    class KbController {
+        +listOperationSessions(..., sentiment, ...)
+        +exportCsv(..., sentiment, ...)
+        +processFeedback(feedbackId, status, note)
+    }
+    class KbFacadeService {
+        +listOperationSessions(from,to,libraryId,userId,hasFeedback,sentiment,keyword,page,size)
+        +exportCsv(from,to,libraryId,userId,hasFeedback,sentiment,keyword,desensitize)
+        +markFeedbackProcessed(feedbackId, status, note)
+    }
+    class KbWebClient {
+        +listOperationSessions(Map) PageResult~KbQaSessionListVO~
+        +exportRows(Map) List~KbQaExportRow~
+        +processFeedback(Long, Map) KbQaFeedbackVO
+    }
+    class AgentOpsController {
+        +listFeedback(query) Result~JsonNode~
+        +feedbackStats(query) Result~JsonNode~
+        +processFeedback(id, body) Result~JsonNode~
+        +batchProcessFeedback(body) Result~JsonNode~
+    }
+    class AgentOpsClient {
+        +listFeedback(Map) JsonNode
+        +feedbackStats(Map) JsonNode
+        +processFeedback(String, Object) JsonNode
+        +batchProcessFeedback(Object) JsonNode
+    }
+    KbController --> KbFacadeService
+    KbFacadeService --> KbWebClient
+    AgentOpsController --> AgentOpsClient
+
+    %% ===== agent 域 =====
+    class AgentFeedbackModel {
+        +int id
+        +String sessionId
+        +String messageId
+        +String agentId
+        +String userId
+        +String rating
+        +String comment
+        +String status
+        +String handlerId
+        +String handlerName
+        +String note
+        +datetime processedAt
+        +datetime createdAt
+        +datetime updatedAt
+    }
+    class SessionPgStore {
+        +upsert_feedback(session_id, message_id, agent_id, user_id, rating, comment) bool
+        +list_feedback(query) FeedbackPage
+        +mark_feedback_processed(feedback_id, status, handler_id, handler_name, note) bool
+        +batch_mark_feedback_processed(ids, status, handler_id, handler_name, note) int
+        +feedback_stats(query) dict
+    }
+    class SessionManager {
+        +set_message_feedback(session_id, rating, comment, message_id, content) dict
+        +process_feedback(feedback_id, status, handler_id, handler_name, note) dict
+        +batch_process_feedback(ids, status, handler_id, handler_name, note) dict
+    }
+    SessionManager --> SessionPgStore
+    SessionPgStore --> AgentFeedbackModel
+```
