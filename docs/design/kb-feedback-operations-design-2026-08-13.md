@@ -527,6 +527,6 @@ mermaid 图仅作文档注释，不引入任何运行时包
 | 4 | **Agent 反馈「覆盖写」数据口径**：用户点赞改吐槽后，`agent_feedback` 表按 UNIQUE(session_id,message_id) upsert，统计按最新值 | CF-05 看板稳定性 | 维持现状（覆盖写），看板按最新值统计（PRD Q-C1 已确认） |
 | 5 | **Agent PG degraded 时反馈漏读**：反馈只在 Redis 时，`agent_feedback` 表无行，列表/统计漏 | CF-01/CF-05 完整性 | 接受尽力而为（PRD Q-C3），页面标注「可能存在延迟/遗漏」；P1 评估补偿任务 |
 | 6 | **agent 侧是否存在数据初始化**：`agent_feedback` 表上线时历史已有 feedback 是否回填 | 上线首日看板为空 | 不回填（历史反馈不补运营处理状态，仅新反馈进表）；如需要可加一次性回填脚本（P1） |
-| 7 | **process 端点操作人权限**：Agent process 端点是否要求特定权限码（`agent:feedback:view` 还是 `agent:session:list`） | 权限模型 | 菜单 92046 挂新权限码 `agent:feedback:view`；列表只读与标记处理共用该码（P0 不细分），若产品要求细分再加 `agent:feedback:handle` |
+| 7 | **process 端点操作人权限**：Agent process 端点是否要求特定权限码（`agent:feedback:view` 还是 `agent:session:list`） | 权限模型 | ~~菜单 92046 挂新权限码 `agent:feedback:view`；列表只读与标记处理共用该码（P0 不细分），若产品要求细分再加 `agent:feedback:handle`~~ → **已拆分（V45）**：页面/列表/统计=`agent:feedback:view`（92046）；单条/批量处理=`agent:feedback:handle`（按钮 92064，API 92171/92172） |
 | 8 | **KB process 端点挂哪个菜单**：标记处理是运营动作，应挂「问答运营」菜单（91037）还是单独菜单 | V43 sys_menu_api | 挂 91037（复用运营权限），不新增 KB 菜单/权限码 |
 | 9 | **V43 sys_role_permission 授权范围**：新权限码 `agent:feedback:view` 授权给哪些角色 | 上线后谁能看到反馈页 | 默认授权给与 `agent:session:list` 相同的角色集合（V19 先例核对后复制），上线前需产品确认 |

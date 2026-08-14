@@ -11,6 +11,9 @@
  * 倒序」由下游实现，本页不做客户端排序——与「表头排序仅作用于当前页」的会话列表
  * 不同，这里翻页后顺序仍全局一致。
  *
+ * <p>权限拆分（V45）：页面进入 / 列表 / 统计用 `agent:feedback:view`；
+ * 「处理」「批量标记」用独立操作码 `agent:feedback:handle`（按钮菜单 92064）。
+ *
  * <p>**不把 error 交给 `AgentPageShell`**（与会话列表同款决策）：筛选器必须活着，
  * 只有表格/看板区用 `AgentContentState` 承载三态。
  */
@@ -401,7 +404,7 @@ export function AgentFeedbackPage() {
         <RefreshCw className={cn('h-4 w-4', (loading || statsLoading) && 'animate-spin')} />
         刷新
       </Button>
-      <PermissionGate permission="agent:feedback:view">
+      <PermissionGate permission="agent:feedback:handle">
         <Button
           size="sm"
           disabled={selected.size === 0}
@@ -666,7 +669,7 @@ export function AgentFeedbackPage() {
                                 <Eye className="h-3 w-3" />
                                 查看会话
                               </button>
-                              <PermissionGate permission="agent:feedback:view">
+                              <PermissionGate permission="agent:feedback:handle">
                                 {pending ? (
                                   <button
                                     type="button"
