@@ -296,6 +296,49 @@ class QaDelta:
         return {"code": self.code, "message": self.message}
 
 
+async def retrieve_kb_chunks(
+    kb: "KbClient",
+    ctx: "KbCallContext",
+    *,
+    question: str,
+    library_ids: list[int] | None = None,
+    top_k: int = 5,
+    threshold: float | None = None,
+) -> "RetrieveHits":
+    """检索知识库片段：可见库为空时先解析用户可见库再检索（DRY 检索库）。
+
+    T4/TOOL：``kb_retrieve`` 原生工具直接复用本函数，避免重复 resolve-visible →
+    retrieve 逻辑。与 :meth:`KbQaPipeline._retrieve` 行为一致，最终打到 mis-kb
+    RAGFlow 的 ``POST /internal/v1/kb/rag/retrieve``。
+
+    Args:
+        kb: ``KbClient`` 实例（由调用方持有与关闭）。
+        ctx: 身份与追踪上下文；``user_id`` 用于判定可见库范围。
+        question: 用户问题原文（**禁止改写**，由调用方保证）。
+        library_ids: 限定的库 ID；``None``/空表示全部可见库。
+        top_k: 召回条数。
+        threshold: 相关性阈值（0~1）。
+
+    Returns:
+        :class:`RetrieveHits`；无可见库或 NoopAdapter 时为空集合。
+    """
+    resolved: list[int] = list(library_ids or [])
+    if not resolved:
+        visible = await kb.resolve_visible_libraries(ctx)
+        if visible.is_empty():
+            logger.info(
+                "KB retrieve: no visible library for user",
+                user_id=ctx.user_id,
+                trace_id=ctx.trace_id,
+            )
+            return RetrieveHits()
+        resolved = visible.library_ids
+
+    return await kb.retrieve(
+        ctx, question=question, library_ids=resolved, top_k=top_k, threshold=threshold
+    )
+
+
 class KbQaPipeline:
     """KB 问答编排管线。
 
@@ -461,23 +504,15 @@ class KbQaPipeline:
     # ============================================================ 阶段 1：检索
 
     async def _retrieve(self, req: KbQaRequest, ctx: KbCallContext) -> RetrieveHits:
-        """解析可见库并检索；可见库为空时直接返回空命中，不再打检索请求。"""
-        library_ids = list(req.library_ids)
-        if not library_ids:
-            visible = await self._kb.resolve_visible_libraries(ctx)
-            if visible.is_empty():
-                logger.info(
-                    "KB QA: no visible library for user",
-                    user_id=ctx.user_id,
-                    trace_id=ctx.trace_id,
-                )
-                return RetrieveHits()
-            library_ids = visible.library_ids
+        """解析可见库并检索；可见库为空时直接返回空命中，不再打检索请求。
 
-        return await self._kb.retrieve(
+        复用模块级 :func:`retrieve_kb_chunks`（T4/TOOL 同样复用，DRY）。
+        """
+        return await retrieve_kb_chunks(
+            self._kb,
             ctx,
             question=req.question,
-            library_ids=library_ids,
+            library_ids=req.library_ids,
             top_k=req.top_k,
             threshold=req.threshold,
         )

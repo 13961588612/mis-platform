@@ -113,7 +113,15 @@ async def _run_kb_qa(
     app_id: str,
     trace_id: str,
 ) -> tuple[str, str | None, list[str]]:
-    """执行 KB 问答管线（T10），返回可直接作为 ``response`` 的 JSON 文本。
+    """[DEPRECATED @ T4] 不再被端点调用：KB 预检索编排已收敛到 mis-rag 的 kb_retrieve。
+
+    原职责：``visible-libraries → retrieve → 拼 Prompt → 生成 → citations → 落库``，
+    把检索后的片段**预注入** mis-rag 的 prompt。T4 起该编排被移除——mis-rag 改为
+    通过内部 ``kb_retrieve`` 工具自行检索（路径 A 与 Copilot B 路径同一执行体），
+    因此预检索成为双重检索且绕过 B 路径。
+
+    本函数仅作检索库参考保留（避免破坏其他潜在引用），请勿在新流程中使用。
+    返回可直接作为 ``response`` 的 JSON 文本。
 
     链路：``visible-libraries → retrieve → 拼 Prompt → 生成 → citations → 落库``。
     生成步骤复用既有 Agent 运行时（``instance.process_message``），
@@ -183,7 +191,14 @@ async def _stream_kb_qa(
     app_id: str,
     trace_id: str,
 ) -> AsyncIterator[str]:
-    """流式执行 KB 问答管线（F-01），逐帧产出 SSE 文本。
+    """[DEPRECATED @ T4] 不再被端点调用：KB 预检索编排已收敛到 mis-rag 的 kb_retrieve。
+
+    原职责：与 :func:`_run_kb_qa` 共用同一条检索增强链路，差异仅在生成回调为异步
+    生成器、落库在流结束后一次性完成。T4 起由 mis-rag 内部 ``kb_retrieve`` 统一检索，
+    端点直接 ``process_message`` 原始问题并转发 SSE。
+
+    本函数仅作检索库参考保留（避免破坏其他潜在引用），请勿在新流程中使用。
+    流式执行 KB 问答管线（F-01），逐帧产出 SSE 文本。
 
     与 :func:`_run_kb_qa` 共用同一条检索增强链路，差异仅在生成回调为异步生成器、
     落库在流结束后一次性完成（设计 §7-Q1）。
@@ -319,24 +334,21 @@ async def agent_chat(
         )
         instance = await agent_manager.ensure_agent_ready(agent_id)
 
+        # T4：移除 KbQaPipeline 预检索编排。mis-rag 通过内部 kb_retrieve 工具自行
+        # 检索（与 Copilot B 路径同一执行体），故两路统一为把**原始问题**直接交给
+        # mis-rag 的 process_message。is_kb_qa_request 仍作为路由信号保留
+        # （仅选 mis-rag，不再触发预检索）。
         if is_kb_qa_request(agent_id, req.metadata):
-            response_text, runtime_error, tool_errors = await _run_kb_qa(
+            logger.info(
+                "KB QA routed via mis-rag native kb_retrieve (no pre-retrieval)",
                 agent_id=agent_id,
-                req=req,
-                instance=instance,
-                session=session,
-                current_user=current_user,
-                authorization=authorization if isinstance(authorization, str) else "",
-                tenant_id=x_tenant_id if isinstance(x_tenant_id, str) else "",
-                app_id=x_app_id if isinstance(x_app_id, str) else "",
                 trace_id=trace_id,
             )
-        else:
-            response_text, runtime_error, tool_errors = await _collect_agent_response(
-                instance,
-                session,
-                Message(role=req.role, content=req.content, metadata=req.metadata),
-            )
+        response_text, runtime_error, tool_errors = await _collect_agent_response(
+            instance,
+            session,
+            Message(role=req.role, content=req.content, metadata=req.metadata),
+        )
 
         # 保存助手响应，便于后续多轮会话
         await session_manager.add_message(
@@ -424,21 +436,14 @@ async def agent_chat_stream(
             session_id = session.session_id
             instance = await agent_manager.ensure_agent_ready(agent_id)
 
+            # T4：移除 KbQaPipeline 预检索编排，原始问题直接交给 mis-rag 的
+            # process_message（与 Copilot B 路径同一执行体）；mis-rag 自行检索。
             if is_kb_qa_request(agent_id, req.metadata):
-                async for kb_frame in _stream_kb_qa(
+                logger.info(
+                    "KB QA stream routed via mis-rag native kb_retrieve (no pre-retrieval)",
                     agent_id=agent_id,
-                    req=req,
-                    instance=instance,
-                    session=session,
-                    current_user=current_user,
-                    authorization=authorization if isinstance(authorization, str) else "",
-                    tenant_id=x_tenant_id if isinstance(x_tenant_id, str) else "",
-                    app_id=x_app_id if isinstance(x_app_id, str) else "",
                     trace_id=trace_id,
-                ):
-                    yield kb_frame
-                return
-
+                )
             async for event in instance.process_message(
                 session=session,
                 message=Message(role=req.role, content=req.content, metadata=req.metadata),

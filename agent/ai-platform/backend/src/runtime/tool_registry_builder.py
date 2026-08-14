@@ -32,6 +32,7 @@ from src.skills.tools.invoke_agent import (
     DELEGATE_TOOL_NAME,
     InvokeAgentTool,
 )
+from src.skills.tools.kb_retrieve import KbRetrieveTool
 from src.utils.logging import get_logger
 
 logger = get_logger("runtime.tool_registry")
@@ -343,6 +344,11 @@ def create_agent_source_registry(mcp_manager: McpClientManager | None) -> ToolRe
     registry.register(InvokeAgentTool(catalog=catalog))
     if _delegate_alias_enabled():
         registry.register(InvokeAgentTool(tool_name=DELEGATE_TOOL_ALIAS, catalog=catalog))
+
+    # mis-rag 内部知识库检索原生工具（T4/TOOL）：让 mis-rag 自行检索 + 合成，
+    # 统一 A（BFF→mis-rag）与 B（Copilot→mis-rag 子 Agent）两路。仅当 mis-rag
+    # runtime.yaml 的 allowed_tools 显式放行后才对 LLM 可见。
+    registry.register(KbRetrieveTool())
 
     if mcp_manager is None:
         return registry

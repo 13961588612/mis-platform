@@ -3,6 +3,7 @@ runtime:
   version: "1.0.0"
   allowed_tools:
     - skill
+    - kb_retrieve
   params:
     maxSteps: 8
     temperature: 0.3
