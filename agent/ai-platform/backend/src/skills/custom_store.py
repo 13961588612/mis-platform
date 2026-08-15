@@ -13,6 +13,7 @@ custom 技能的正文（SKILL.md body）落盘到
 
 from __future__ import annotations
 
+import shutil
 from typing import Any
 
 import yaml
@@ -73,6 +74,24 @@ def save_custom_skill(skill: Skill) -> None:
 
     (directory / "SKILL.md").write_text(content, encoding="utf-8")
     logger.info("custom skill 正文已落盘", skill_id=skill.skill_id, path=str(directory / "SKILL.md"))
+
+
+def delete_custom_skill(skill_id: str) -> bool:
+    """删除 custom 技能落盘目录（技能池删除时级联，避免重启后幽灵重载）。
+
+    Args:
+        skill_id: 技能 ID。
+
+    Returns:
+        是否实际删除了目录（目录本就不存在时返回 False）。
+    """
+    directory = custom_skill_dir(skill_id)
+    if not directory.is_dir():
+        return False
+
+    shutil.rmtree(directory, ignore_errors=False)
+    logger.info("custom skill 正文已删除", skill_id=skill_id, path=str(directory))
+    return True
 
 
 def read_custom_skill_body(skill_id: str) -> str | None:

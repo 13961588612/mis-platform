@@ -104,6 +104,11 @@ cd backend
 ```powershell
 cd backend
 
+# 编译（默认跳过测试；与 start-dev 服务名对齐）
+.\build-dev.ps1                 # 全部
+.\build-dev.ps1 mis-admin-bff   # 仅 BFF（含上游依赖 -am）
+.\build-dev.ps1 mis-admin-bff -WithTests
+
 # 推荐：脚本启动（会等端口就绪；已在跑则跳过）
 .\start-dev.ps1                 # 全部
 .\start-dev.ps1 mis-admin-bff   # 仅 BFF

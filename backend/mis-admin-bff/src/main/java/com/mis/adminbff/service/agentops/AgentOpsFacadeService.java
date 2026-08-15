@@ -7,6 +7,7 @@ import com.mis.adminbff.client.AgentOpsClient;
 import com.mis.adminbff.client.AgentOpsUri;
 import com.mis.adminbff.dto.agentops.SessionQuery;
 import com.mis.adminbff.dto.agentops.SkillUpsertRequest;
+import com.mis.adminbff.service.KbSubjectProxyService;
 import com.mis.adminbff.support.AgentOpsErrorCodes;
 import com.mis.adminbff.support.RequestContext;
 import com.mis.common.core.exception.BusinessException;
@@ -16,7 +17,9 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
+import java.util.HashSet;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * 智能体运营控制台门面（§4.3 全量透明端点 + 两处 BFF 加工）。
@@ -33,12 +36,18 @@ import java.util.Map;
  *   <li><b>新建技能后懒注册执行码</b>（{@link #createSkill}）：详见
  *       {@code SkillPermissionCodeService} —— 技能一建出来就必须可授权，否则授权页第一次打开
  *       还要等一次补建，体验上像「建完技能点不开授权」。</li>
+ *   <li><b>删除技能后级联收码</b>（{@link #deleteSkill}）：对称回收 {@code sys_menu}
+ *       执行码按钮与角色菜单关联，避免技能池已删、权限页/系统菜单仍残留。</li>
  *   <li><b>监控总览聚合</b>（{@link #monitorOverview}）：#55 在 SQL 里是<b>一条</b>端点，
  *       但真实数据是三个下游只读接口拼出来的。聚合放在 BFF，前端一次请求拿齐，
  *       而不是并发打三个接口再自己拼 —— 并发失败的竞态、部分的 loading 状态都留给后端处理。</li>
  *   <li><b>新建对话会话注入 {@code user_id}</b>（{@link #createChatSession}）：下游
  *       {@code POST /api/v1/sessions} 强制要求 body {@code user_id}；Web 渠道该字段即为
  *       MIS userId。前端只传 {@code agent_id}，由本门面从登录上下文写入，禁止信任客户端伪造。</li>
+ *   <li><b>新建对话会话注入 {@code user_name}</b>（{@link #createChatSession}）：与 {@code user_id}
+ *       同源自登录上下文的 username，写入下游以便会话反馈等运营页展示「姓名」。</li>
+ *   <li><b>反馈列表回填用户姓名</b>（{@link #listFeedback}）：历史会话可能未落 {@code user_name}，
+ *       按 {@code user_id} 批量查 IAM 补齐展示（不写回下游）。</li>
  * </ul>
  *
  * <h2>会话列表的分页兜底在门面里做</h2>
@@ -53,14 +62,20 @@ public class AgentOpsFacadeService {
 
     private final AgentOpsClient client;
     private final SkillPermissionCodeService skillPermissionCodeService;
+    private final AgentOpsGrantService agentOpsGrantService;
+    private final KbSubjectProxyService subjectProxyService;
     private final ObjectMapper objectMapper;
 
     public AgentOpsFacadeService(
             AgentOpsClient client,
             SkillPermissionCodeService skillPermissionCodeService,
+            AgentOpsGrantService agentOpsGrantService,
+            KbSubjectProxyService subjectProxyService,
             ObjectMapper objectMapper) {
         this.client = client;
         this.skillPermissionCodeService = skillPermissionCodeService;
+        this.agentOpsGrantService = agentOpsGrantService;
+        this.subjectProxyService = subjectProxyService;
         this.objectMapper = objectMapper;
     }
 
@@ -113,9 +128,24 @@ public class AgentOpsFacadeService {
         return client.updateSkill(skillId, body);
     }
 
-    /** #6 删除技能（透传）。 */
+    /**
+     * #6 删除技能（加工：先删下游，再级联收执行码与角色授权）。
+     *
+     * <p>顺序与 MCP 下线清理一致：远端 Skill 先删；失败则整体中止，避免「菜单已删、
+     * Skill 还在」。Skill 已删后收码失败只打日志不回滚——技能已不存在，菜单孤儿可
+     * 由下次删除重试或运维清理。
+     */
     public JsonNode deleteSkill(String skillId) {
-        return client.deleteSkill(skillId);
+        JsonNode deleted = client.deleteSkill(skillId);
+        try {
+            Long menuId = skillPermissionCodeService.removeCode(skillId);
+            if (menuId != null) {
+                agentOpsGrantService.revokeMenuFromAllRoles(menuId);
+            }
+        } catch (RuntimeException ex) {
+            log.warn("技能已删除，级联清理执行码失败 skillId={}: {}", skillId, ex.toString());
+        }
+        return deleted;
     }
 
     /** #7 启用技能（透传）。 */
@@ -317,7 +347,86 @@ public class AgentOpsFacadeService {
                 "status", status,
                 "page", normalizedPage(page),
                 "page_size", normalizedPageSize(pageSize));
-        return client.listFeedback(params);
+        JsonNode pageNode = client.listFeedback(params);
+        enrichFeedbackUserNames(pageNode);
+        return pageNode;
+    }
+
+    /**
+     * 反馈列表展示增强：{@code user_name} 为空时按 {@code user_id} 查 IAM 回填。
+     *
+     * <p>历史 Web 会话创建时未落姓名，运营页会只剩编号；补齐仅影响本响应，不写下游。
+     */
+    private void enrichFeedbackUserNames(JsonNode pageNode) {
+        if (pageNode == null || !pageNode.isObject()) {
+            return;
+        }
+        JsonNode items = pageNode.get("items");
+        if (items == null || !items.isArray() || items.isEmpty()) {
+            return;
+        }
+        Set<Long> missingIds = new HashSet<>();
+        for (JsonNode item : items) {
+            if (!(item instanceof ObjectNode row)) {
+                continue;
+            }
+            if (textOrBlank(row, "user_name") != null) {
+                continue;
+            }
+            Long userId = parseLongId(textOrBlank(row, "user_id"));
+            if (userId != null) {
+                missingIds.add(userId);
+            }
+        }
+        if (missingIds.isEmpty()) {
+            return;
+        }
+        Map<Long, String> names;
+        try {
+            names = subjectProxyService.userNames(missingIds);
+        } catch (Exception e) {
+            log.debug("反馈列表回填用户名失败: {}", e.getMessage());
+            return;
+        }
+        if (names == null || names.isEmpty()) {
+            return;
+        }
+        for (JsonNode item : items) {
+            if (!(item instanceof ObjectNode row)) {
+                continue;
+            }
+            if (textOrBlank(row, "user_name") != null) {
+                continue;
+            }
+            Long userId = parseLongId(textOrBlank(row, "user_id"));
+            if (userId == null) {
+                continue;
+            }
+            String name = names.get(userId);
+            if (name != null && !name.isBlank()) {
+                row.put("user_name", name);
+            }
+        }
+    }
+
+    private static String textOrBlank(JsonNode node, String field) {
+        JsonNode v = node.get(field);
+        if (v == null || v.isNull()) {
+            return null;
+        }
+        String text = v.asText();
+        return text != null && !text.isBlank() ? text.trim() : null;
+    }
+
+    private static Long parseLongId(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return null;
+        }
+        try {
+            return Long.parseLong(raw.trim());
+        } catch (NumberFormatException e) {
+            return null;
+        }
     }
 
     /**
@@ -368,7 +477,7 @@ public class AgentOpsFacadeService {
      * #32 新建对话会话。
      *
      * <p>下游 {@code CreateSessionRequest.user_id} 必填；运营台 Web 对话只提交 {@code agent_id}。
-     * 在此用当前登录用户的 MIS {@code userId} 覆盖写入（客户端若带了 {@code user_id} 也不采信），
+     * 在此用当前登录用户的 MIS {@code userId} / {@code username} 覆盖写入（客户端若带了也不采信），
      * 缺省 {@code channel=web}。
      */
     public JsonNode createChatSession(JsonNode body) {
@@ -380,6 +489,10 @@ public class AgentOpsFacadeService {
             throw new BusinessException(ResultCode.UNAUTHORIZED);
         }
         payload.put("user_id", String.valueOf(user.getUserId()));
+        String username = user.getUsername();
+        if (username != null && !username.isBlank()) {
+            payload.put("user_name", username.trim());
+        }
         if (!payload.hasNonNull("channel") || payload.get("channel").asText().isBlank()) {
             payload.put("channel", "web");
         }

@@ -139,6 +139,33 @@ function fallbackSessionOf(item: AgentFeedbackItem): Session {
   };
 }
 
+/** 人员列：编号 + 姓名两行（带标题）；皆空时显示「-」。 */
+function PersonIdNameCell({
+  id,
+  name,
+}: {
+  id?: string | null;
+  name?: string | null;
+}) {
+  const idText = (id ?? '').trim();
+  const nameText = (name ?? '').trim();
+  if (!idText && !nameText) {
+    return <span className="text-xs text-muted-foreground">-</span>;
+  }
+  return (
+    <div className="min-w-0 space-y-0.5 leading-tight">
+      <div className="truncate text-xs" title={idText || undefined}>
+        <span className="text-muted-foreground">编号 </span>
+        <span className="font-mono text-foreground">{idText || '-'}</span>
+      </div>
+      <div className="truncate text-xs" title={nameText || undefined}>
+        <span className="text-muted-foreground">姓名 </span>
+        <span className="text-foreground">{nameText || '-'}</span>
+      </div>
+    </div>
+  );
+}
+
 /**
  * 标记处理弹窗（单条 / 批量共用）。
  *
@@ -654,14 +681,14 @@ export function AgentFeedbackPage() {
                           <td className="truncate px-3 py-2 text-xs">
                             {item.agent_name || item.agent_id}
                           </td>
-                          <td className="truncate px-3 py-2 text-xs text-muted-foreground">
-                            {item.user_name || item.user_id || '-'}
+                          <td className="px-3 py-2">
+                            <PersonIdNameCell id={item.user_id} name={item.user_name} />
                           </td>
                           <td className="px-3 py-2">
                             <Badge variant={statusMeta.variant}>{statusMeta.label}</Badge>
                           </td>
-                          <td className="truncate px-3 py-2 text-xs text-muted-foreground">
-                            {item.handler_name || item.handler_id || '-'}
+                          <td className="px-3 py-2">
+                            <PersonIdNameCell id={item.handler_id} name={item.handler_name} />
                           </td>
                           <td className="px-3 py-2 text-xs text-muted-foreground">
                             {formatTime(item.created_at)}

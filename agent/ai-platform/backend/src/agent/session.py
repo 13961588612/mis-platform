@@ -132,6 +132,7 @@ class Session:
         user_mobile: str = "",
         channel_user_id: str = "",
         mis_user_id: int | None = None,
+        user_name: str = "",
     ) -> None:
         """构造会话对象（尚未持久化）。
 
@@ -146,6 +147,7 @@ class Session:
             mis_user_id: MIS userId（T03 S9 第五键起点）。会话创建点解析一次、
                 全链透传；``None`` 表示解析不出 → 下游 E1–E5 fail-closed 拒绝。
                 **绝不**用 ``user_id`` / ``channel_user_id`` 回退填充。
+            user_name: 用户展示名（运营台 Web 对话由 BFF 注入 username）。
         """
         self.session_id = session_id
         self.agent_id = agent_id
@@ -155,6 +157,7 @@ class Session:
         self.user_mobile = user_mobile
         self.channel_user_id = channel_user_id
         self.mis_user_id: int | None = mis_user_id
+        self.user_name = user_name or ""
         self.messages: list[Message] = []
         self.state: dict[str, Any] = {}
         self.created_at = datetime.now(timezone.utc)
@@ -263,6 +266,7 @@ class Session:
             "user_mobile": self.user_mobile,
             "channel_user_id": self.channel_user_id,
             "mis_user_id": self.mis_user_id,
+            "user_name": self.user_name,
             "messages": self.get_messages(),
             "state": self.state,
             "created_at": self.created_at.isoformat(),
@@ -341,6 +345,7 @@ class SessionManager:
         user_mobile: str = "",
         channel_user_id: str = "",
         mis_user_id: int | None = None,
+        user_name: str = "",
     ) -> Session:
         """
         使用渠道特定的 ID 命名规范创建一个新会话。
@@ -356,6 +361,7 @@ class SessionManager:
             user_mobile: 用户手机号（T03 gap 修复：此前漏传，导致 MCP 身份缺字段）。
             channel_user_id: 渠道侧 userId（同上）。
             mis_user_id: MIS userId（T03 S9 第五键）；由调用方在会话创建点解析。
+            user_name: 用户展示名（运营台 Web 由 BFF 注入）。
 
         Returns:
             已写入 Redis 的新会话。
@@ -372,6 +378,7 @@ class SessionManager:
             user_mobile=user_mobile,
             channel_user_id=channel_user_id,
             mis_user_id=mis_user_id,
+            user_name=user_name,
         )
 
         # 存储到 Redis
@@ -413,6 +420,7 @@ class SessionManager:
         user_mobile: str = "",
         channel_user_id: str = "",
         mis_user_id: int | None = None,
+        user_name: str = "",
     ) -> Session:
         """按给定 session_id 获取会话；不存在则创建（Gateway 稳定会话场景）。
 
@@ -425,6 +433,7 @@ class SessionManager:
             user_mobile: 用户手机号。
             channel_user_id: 渠道侧 userId。
             mis_user_id: MIS userId（T03 S9）；非 ``None`` 时刷新到既有会话。
+            user_name: 用户展示名；非空时刷新到既有会话。
 
         Returns:
             既有或新建的会话。
@@ -444,6 +453,9 @@ class SessionManager:
                 changed = True
             if channel_user_id and session.channel_user_id != channel_user_id:
                 session.channel_user_id = channel_user_id
+                changed = True
+            if user_name and session.user_name != user_name:
+                session.user_name = user_name
                 changed = True
             # T03 S9：mis_user_id 仅在解析出真值时刷新；
             # 解析不出（None）不得把既有值清空，也不得回退 user_id。
@@ -465,6 +477,7 @@ class SessionManager:
             user_mobile=user_mobile,
             channel_user_id=channel_user_id,
             mis_user_id=mis_user_id,
+            user_name=user_name,
         )
         redis: aioredis.Redis = await self._get_redis()
         await redis.setex(
@@ -505,6 +518,7 @@ class SessionManager:
             user_mobile=session_data.get("user_mobile", "") or "",
             channel_user_id=session_data.get("channel_user_id", "") or "",
             mis_user_id=_coerce_mis_user_id(session_data.get("mis_user_id")),
+            user_name=session_data.get("user_name", "") or "",
         )
         session.messages = [
             Message.from_dict(msg) for msg in session_data.get("messages", [])
@@ -908,7 +922,8 @@ class SessionManager:
             "agent_name": None,
             "channel": normalize_channel(session.channel),
             "user_id": session.user_id or None,
-            "user_name": session.user_mobile or None,
+            "user_name": (session.user_name or None)
+            or (session.user_mobile or None),
             "title": title,
             "status": "active",
             "runtime_type": session.runtime_type or None,

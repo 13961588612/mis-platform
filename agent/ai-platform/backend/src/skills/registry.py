@@ -91,6 +91,14 @@ class SkillRegistry:
 
         self._skills.pop(skill_id, None)
 
+        # custom 技能同步删落盘，否则启动 load_custom_skills_from_disk 会幽灵重载
+        try:
+            from src.skills.custom_store import delete_custom_skill
+
+            delete_custom_skill(skill_id)
+        except Exception:
+            logger.exception("Failed to delete custom skill store", skill_id=skill_id)
+
         if self._indexer:
             try:
                 await self._indexer.delete_index(skill_id)
