@@ -138,6 +138,11 @@ public class AgentOpsFacadeService {
         return client.parseSkill(body);
     }
 
+    /** AI 对话创建技能（C 功能，透传，走 chat 超时）。 */
+    public JsonNode builderChat(JsonNode body) {
+        return client.builderChat(body);
+    }
+
     // ==================================================================
     // Agent §4.3 #13–#26
     // ==================================================================
@@ -261,6 +266,16 @@ public class AgentOpsFacadeService {
     /** #31 批量删除（透传，T04 待建）。 */
     public JsonNode batchDeleteSessions(JsonNode body) {
         return client.batchDeleteSessions(body);
+    }
+
+    /** A-5 会话最近一轮各阶段耗时（透传，T01 新增）。 */
+    public JsonNode getSessionTiming(String sessionId) {
+        return client.getSessionTiming(sessionId);
+    }
+
+    /** A-6 批量会话耗时（透传，列表「耗时」列用，T01 新增）。 */
+    public JsonNode batchSessionTiming(JsonNode body) {
+        return client.batchSessionTiming(body);
     }
 
     // ==================================================================

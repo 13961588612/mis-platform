@@ -82,6 +82,68 @@ export interface SkillParseResponseFE {
   body: string;
 }
 
+/**
+ * 「AI 对话创建」Tab(C) 的单条对话消息（前端本地 state 维护，不落库）。
+ *
+ * <p>`role` 沿用 LLM 约定（user/assistant/system）；`status` 为渲染态：
+ * `generating` 生成中 / `generated` 已生成 / `error` 出错；`converged` 由后端
+ * 判定（本轮产出的 SKILL.md 是否已完整，可作为回填信号）。
+ */
+export interface SkillBuilderMessage {
+  id: string;
+  role: 'user' | 'assistant' | 'system';
+  content: string;
+  status: 'generating' | 'generated' | 'error';
+  converged?: boolean;
+}
+
+/**
+ * 「AI 对话创建」请求契约（前端 → BFF → ai-platform `POST /skills/builder/chat`）。
+ *
+ * <p>`messages` 为前端全量维护的多轮上下文（仅 role/content）；`user_input` 为
+ * 本轮新增输入；`converged` 为前端收敛信号（如「定稿」），作后端判定的兜底增强。
+ */
+export interface SkillBuilderChatRequest {
+  messages: Array<{ role: string; content: string }>;
+  user_input: string;
+  converged?: boolean;
+}
+
+/**
+ * 「AI 对话创建」响应契约（ai-platform `BuilderChatResponse` 透传）。
+ *
+ * <p>`reply` 为 AI 文本（内含 ```SKILL.md 代码块）；`status` 为 `generating`/`generated`；
+ * `converged` 由后端依据产出是否含完整 Front Matter + 正文判定。
+ */
+export interface SkillBuilderChatResponse {
+  reply: string;
+  status: 'generating' | 'generated';
+  converged: boolean;
+}
+
+/**
+ * 会话各阶段耗时（A-5 / A-6，对齐后端 `SessionTiming`）。
+ *
+ * <p>`retrieval_ms` 为 `null` 表示 rag 轨迹不可得，前端显示「—」。其余阶段为
+ * 数值（毫秒，可能为 `null` 表示该阶段未发生，如纯生成会话无工具调用）。
+ */
+export interface StageTiming {
+  planning_ms: number | null;
+  retrieval_ms: number | null;
+  tool_call_ms: number | null;
+  generation_ms: number | null;
+  post_process_ms: number | null;
+}
+
+export interface SessionTiming {
+  total_ms: number | null;
+  stages: StageTiming;
+  /** 采样时间（ISO 8601 UTC）。 */
+  sampled_at: string;
+  /** timing schema 版本，结构变更时 +1。 */
+  schema_version: number;
+}
+
 export interface SkillStats {
   total: number;
   active: number;

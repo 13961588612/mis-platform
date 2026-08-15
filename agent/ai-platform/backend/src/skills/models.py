@@ -186,6 +186,8 @@ class SkillCreateRequest(BaseModel):
     version: str = "1.0.0"
     priority: float = 1.0
     requires_approval: bool = False
+    # 自建 custom 技能正文（SKILL.md body，可选）。落盘到文件系统（Q3），不进 DB。
+    body: str | None = None
 
 
 class SkillUpdateRequest(BaseModel):
@@ -203,6 +205,8 @@ class SkillUpdateRequest(BaseModel):
     status: SkillStatus | None = None
     priority: float | None = None
     requires_approval: bool | None = None
+    # 自建 custom 技能正文（SKILL.md body，可选）；缺省表示不改 / 不填。
+    body: str | None = None
 
 
 class SkillListResponse(BaseModel):

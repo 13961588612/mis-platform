@@ -11,16 +11,33 @@
  * <p>#28 与 #29 用 `Promise.allSettled` 并行拉取：**消息拉不到才算失败**，
  * 元信息（标题 / 渠道 / 用户）失败只让头部少几个字段，不该把整个回放拦掉。
  */
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState, type ReactElement } from 'react';
 import { RefreshCw } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 import { AgentContentState } from '../components/agent-page-shell';
 import { AgentMessageStream } from '../components/agent-message-stream';
-import { getSession, listSessionMessages } from '../api/agent-ops-api';
+import { getSession, getSessionTiming, listSessionMessages } from '../api/agent-ops-api';
 import { agentErrorMessage, formatTime } from '../types';
-import type { Session, SessionMessage } from '../types';
+import type { Session, SessionMessage, SessionTiming } from '../types';
+
+/** 毫秒格式化：>=1s 显示秒，否则显示 ms；不可得（null）显示「—」。 */
+function fmtMs(ms: number | null | undefined): string {
+  if (ms === null || ms === undefined) return '—';
+  if (ms >= 1000) return `${(ms / 1000).toFixed(2)}s`;
+  return `${ms}ms`;
+}
+
+/** 单阶段耗时单元格（A-5）。 */
+function TimingCell({ label, ms }: { label: string; ms: number | null }): ReactElement {
+  return (
+    <div className="rounded bg-card px-2 py-1.5">
+      <div className="text-[0.7rem] text-muted-foreground">{label}</div>
+      <div className="font-medium text-foreground">{fmtMs(ms)}</div>
+    </div>
+  );
+}
 
 /** 渠道枚举 → 中文（与列表页共用同一份口径）。 */
 const CHANNEL_LABELS: Record<Session['channel'], string> = {
@@ -47,6 +64,7 @@ export function AgentSessionDetailDialog({
 }: AgentSessionDetailDialogProps) {
   const [session, setSession] = useState<Session | null>(null);
   const [messages, setMessages] = useState<SessionMessage[]>([]);
+  const [timing, setTiming] = useState<SessionTiming | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -55,14 +73,17 @@ export function AgentSessionDetailDialog({
     setLoading(true);
     setError(null);
     try {
-      const [metaResult, msgResult] = await Promise.allSettled([
+      const [metaResult, msgResult, timingResult] = await Promise.allSettled([
         getSession(sessionId),
         listSessionMessages(sessionId),
+        getSessionTiming(sessionId),
       ]);
       // 消息是主体：拿不到才算整体失败
       if (msgResult.status === 'rejected') throw msgResult.reason;
       setMessages(msgResult.value);
       setSession(metaResult.status === 'fulfilled' ? metaResult.value : null);
+      // 耗时为调试态（Redis，TTL 24h）：过期 / 未采样 = null，不影响回放
+      setTiming(timingResult.status === 'fulfilled' ? timingResult.value : null);
     } catch (e) {
       setMessages([]);
       setError(agentErrorMessage(e, '获取会话消息失败'));
@@ -76,6 +97,7 @@ export function AgentSessionDetailDialog({
     if (!open) return;
     setSession(null);
     setMessages([]);
+    setTiming(null);
     void load();
   }, [open, load]);
 
@@ -116,6 +138,27 @@ export function AgentSessionDetailDialog({
         </SheetHeader>
 
         <div className="min-h-0 flex-1 overflow-auto p-4">
+          {timing ? (
+            <div className="mb-3 rounded-md border bg-muted/40 p-3 text-xs">
+              <div className="mb-1.5 flex flex-wrap items-center justify-between gap-2">
+                <span className="font-medium text-foreground">
+                  本轮耗时（端到端 {fmtMs(timing.total_ms)}）
+                </span>
+                <span className="text-muted-foreground">采样：{formatTime(timing.sampled_at)}</span>
+              </div>
+              <div className="grid grid-cols-5 gap-2">
+                <TimingCell label="规划" ms={timing.stages.planning_ms} />
+                <TimingCell label="检索" ms={timing.stages.retrieval_ms} />
+                <TimingCell label="工具" ms={timing.stages.tool_call_ms} />
+                <TimingCell label="生成" ms={timing.stages.generation_ms} />
+                <TimingCell label="后处理" ms={timing.stages.post_process_ms} />
+              </div>
+            </div>
+          ) : (
+            <div className="mb-3 rounded-md border bg-muted/40 p-3 text-xs text-muted-foreground">
+              耗时数据已过期（调试窗口 24h）
+            </div>
+          )}
           <AgentContentState
             loading={loading && messages.length === 0}
             error={error}

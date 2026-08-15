@@ -131,6 +131,18 @@ public class AgentOpsClient extends AgentOpsTransport {
                 "POST " + SKILLS + "/parse");
     }
 
+    /**
+     * AI 对话创建技能（C 功能，透传，走 chat 超时）。
+     *
+     * <p>下游 {@code POST /api/v1/skills/builder/chat} 是一次性 LLM 推理（ephemeral，不落库），
+     * 耗时与 #33 同量级，故用 {@link #postChatJson} 对齐 180s，避免「AI 已生成但 BFF 先超时」。
+     * body `{messages, user_input, converged}`，下游回 `{reply, status, converged}`。
+     */
+    public JsonNode builderChat(Object body) {
+        return postChatJson(builder -> builder.path(SKILLS + "/builder/chat").build(), body,
+                "POST " + SKILLS + "/builder/chat");
+    }
+
     // ==================================================================
     // Agent §4.3 #13–#26
     // ==================================================================
@@ -260,6 +272,18 @@ public class AgentOpsClient extends AgentOpsTransport {
     public JsonNode batchDeleteSessions(Object body) {
         return postJson(builder -> builder.path(SESSIONS + "/batch-delete").build(), body,
                 "POST " + SESSIONS + "/batch-delete");
+    }
+
+    /** A-5 {@code GET /api/v1/sessions/{id}/timing}（T01 新增）。 */
+    public JsonNode getSessionTiming(String sessionId) {
+        return getJson(builder -> builder.path(SESSIONS + "/{id}/timing").build(sessionId),
+                "GET " + SESSIONS + "/{id}/timing");
+    }
+
+    /** A-6 {@code POST /api/v1/sessions/timing/batch}（T01 新增）。 */
+    public JsonNode batchSessionTiming(Object body) {
+        return postJson(builder -> builder.path(SESSIONS + "/timing/batch").build(), body,
+                "POST " + SESSIONS + "/timing/batch");
     }
 
     // ==================================================================

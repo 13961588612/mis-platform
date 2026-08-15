@@ -49,6 +49,7 @@ import type {
   Session,
   SessionMessage,
   SessionQuery,
+  SessionTiming,
   Skill,
   SkillGrant,
   SkillParseResponseFE,
@@ -145,6 +146,11 @@ export interface SkillPayload {
    * 非空 = 可执行，格式 `mcp:{server}:{tool}` / `builtin:{name}` / `custom:{module}.{func}`。
    */
   handler?: string;
+  /**
+   * 技能正文（SKILL.md body，可选）。新建/编辑 custom 技能时与元数据一并下发，
+   * 后端落盘到 `{SKILL_CUSTOM_STORE_DIR}/{skill_id}/SKILL.md`（Q3）。缺省表示不改/不填。
+   */
+  body?: string;
 }
 
 /** §4.3 #4 — agent:skill:manage */
@@ -398,6 +404,23 @@ export async function deleteSession(id: string): Promise<void> {
 export async function batchDeleteSessions(ids: string[]): Promise<void> {
   const res = await api.post<ApiResult<void>>('/agent-ops/sessions/batch-delete', { ids });
   if (res.data.code !== 0) throw new Error(res.data.message || '批量删除会话失败');
+}
+
+/** A-5 — agent:session:timing。单会话最近一轮各阶段耗时（Redis，TTL 24h）。 */
+export async function getSessionTiming(id: string): Promise<SessionTiming | null> {
+  const res = await api.get<ApiResult<SessionTiming | null>>(`/agent-ops/sessions/${seg(id)}/timing`);
+  return unwrap(res, '获取会话耗时失败');
+}
+
+/** A-6 — agent:session:timing。批量会话耗时（列表「耗时」列，pipeline 一次往返）。 */
+export async function batchSessionTiming(
+  ids: string[],
+): Promise<Record<string, SessionTiming | null>> {
+  const res = await api.post<ApiResult<Record<string, SessionTiming | null>>>(
+    '/agent-ops/sessions/timing/batch',
+    { ids },
+  );
+  return unwrap(res, '批量获取会话耗时失败');
 }
 
 // ------------------------------------------------------------------ 会话反馈（CF-01 / CF-03 / CF-05）

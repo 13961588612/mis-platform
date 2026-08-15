@@ -448,6 +448,9 @@ class Settings(BaseSettings):
     SKILLS_SCHEMA_CACHE_TTL: int = 1800
     SKILLS_FREQ_KEY: str = "skill:freq"
     SKILLS_WARMUP_TOP_N: int = 50
+    #: 自建 custom 技能正文落盘目录（Q3：custom 技能完整 SKILL.md 写文件系统，
+    #: 启动重载回注册表；package 技能正文仍走各自 package_dir）。
+    SKILL_CUSTOM_STORE_DIR: str = "data/skills"
 
     # ===== 速率限制 =====
     RATE_LIMIT_PER_USER_PER_MINUTE: int = 30

@@ -1,22 +1,22 @@
 /**
- * 技能创建 / 编辑表单（UI#1 #7，§4.3 #4 建 / #5 改）。
+ * 技能创建 / 编辑表单（UI#1 #7，§4.3 #4 建 / #5 改；本期增强 B-1~B-6/B-8/B-9 + C 功能）。
  *
  * <p>校验用 **zod**（仓库已依赖 `zod@^3`，零新增）。不引 react-hook-form：
  * 本表单字段少且无强联动，用受控 state + 一次性 `safeParse` 更短也更好读。
  *
- * <p>**字段范围严格对齐 `SkillPayload`**（`{ skill_id?, name, description, category?,
- * tags?, handler? }`）—— 这是 §4.3 已定稿的端点签名，不在本期改动范围内。因此：
- *   - `enabled` **不在表单里**：技能启停是 #7 / #8 两个独立端点（幂等、可审计），
- *     混进 PUT 会出现"编辑名称顺带把技能停了"这种不可见副作用；
- *   - `skill_type` 后端 DTO 未定义，提交会被忽略，故不做假输入框。
+ * <p>**字段范围严格对齐 `SkillPayload`**（新增 `body`）—— 这是 §4.3 已定稿的端点签名。
+ * 本期增强（B-1~B-6/B-8/B-9）：
+ *   - 对话框放大为双栏（左：元数据；右：SKILL.md 正文 body），同屏编辑；
+ *   - 右栏正文可编辑并提交（B-8）；
+ *   - 编辑态按详情回填正文，保证与列表项（无 body）一致（B-9）；
+ *   - 「粘贴 SKILL.md」模式解析后同时回填元数据与正文（粘贴解析 / 直填 / 解析后改均可）。
+ *
+ * <p>**C 功能（AI 对话创建 Tab）**：新增第三个 Tab「AI 对话创建」，左栏复用同一套
+ * `SkillFormFields`，右栏为 `SkillBuilderPanel`；回填链路复用粘贴 Tab 的 `parseSkill`
+ * + `applyParsedSkill`，禁止为 C 另写解析（硬约束 C）。
  *
  * <p>`id` 仅新建时可填：它是 `ai:skill:{id}:run` 执行码的组成部分，
  * 改 id 等于让已授权的执行码全部失效，属于删旧建新而非编辑。
- *
- * <p>本期增强（R2/R3/R6/R12/R13）：新增「粘贴 SKILL.md」模式，通过
- * `POST /agent-ops/skills/parse` 解析 Front Matter 并回填字段；新增可选的 `handler`
- * 字段（执行器标识）并做前端格式校验；文档型技能（handler 留空）仅用于语义检索与
- * Agent 上下文注入，不单独执行。
  */
 import { useEffect, useState } from 'react';
 import { z } from 'zod';
@@ -24,7 +24,6 @@ import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
 import { SubmitButton } from '@/components/common/submit-button';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import {
   Dialog,
@@ -35,14 +34,20 @@ import {
 } from '@/components/ui/dialog';
 import {
   createSkill,
+  getSkill,
   parseSkill,
   updateSkill,
   type SkillPayload,
 } from '../api/agent-ops-api';
-import { agentErrorMessage } from '../types';
-import type { Skill } from '../types';
-
-const fieldLabel = 'mb-[0.4rem] block text-sm font-medium text-foreground';
+import { chatSkillBuilder } from '../api/agent-chat-api';
+import { agentErrorMessage, type Skill, type SkillDetail, type SkillBuilderMessage, type SkillBuilderChatResponse } from '../types';
+import { SkillFormFields, fieldLabel } from './skill-form-fields';
+import { SkillBuilderPanel, type StagedResult } from './skill-builder-panel';
+import {
+  applyParsedSkill,
+  diffHighlight,
+  extractSkillMd,
+} from './skill-builder-utils';
 
 /**
  * handler 三类格式：mcp:{server}:{tool} / builtin:{name} / custom:{module}.{func}。
@@ -74,7 +79,7 @@ const skillFormSchema = z.object({
   handler: z.string().max(128, 'handler 不超过 128 字符'),
 });
 
-type SkillFormValues = z.infer<typeof skillFormSchema>;
+export type SkillFormValues = z.infer<typeof skillFormSchema>;
 
 const EMPTY_FORM: SkillFormValues = {
   id: '',
@@ -94,21 +99,6 @@ function parseTags(raw: string): string[] {
   return [...new Set(parts)];
 }
 
-/** 从解析出的 metadata 取字符串值（缺省为空串），兼容非字符串脏数据。 */
-function metaStr(meta: Record<string, unknown>, key: string): string {
-  const v = meta[key];
-  return typeof v === 'string' ? v : '';
-}
-
-/** metadata.tags 可能为字符串数组或字符串，统一摊平成逗号分隔文本。 */
-function metaTags(meta: Record<string, unknown>): string {
-  const v = meta['tags'];
-  if (Array.isArray(v)) {
-    return v.filter((t) => typeof t === 'string').join(', ');
-  }
-  return typeof v === 'string' ? v : '';
-}
-
 export interface AgentSkillFormDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -117,6 +107,9 @@ export interface AgentSkillFormDialogProps {
   /** 保存成功回调（外层据此刷新列表与统计）。 */
   onSaved: () => void;
 }
+
+/** 三态模式：手动填写 / 粘贴 SKILL.md / AI 对话创建。 */
+type SkillFormMode = 'manual' | 'paste' | 'ai';
 
 export function AgentSkillFormDialog({
   open,
@@ -127,13 +120,24 @@ export function AgentSkillFormDialog({
   const [form, setForm] = useState<SkillFormValues>(EMPTY_FORM);
   const [errors, setErrors] = useState<Partial<Record<keyof SkillFormValues, string>>>({});
   const [saving, setSaving] = useState(false);
-  const [mode, setMode] = useState<'manual' | 'paste'>('manual');
+  const [mode, setMode] = useState<SkillFormMode>('manual');
   const [rawContent, setRawContent] = useState('');
   const [parsing, setParsing] = useState(false);
   const [parseError, setParseError] = useState<string | null>(null);
-  /** 解析成功后回填的 SKILL.md 正文（只读预览）。 */
-  const [parsedBody, setParsedBody] = useState<string | null>(null);
+  /** SKILL.md 正文（右栏可编辑，B-8）。 */
+  const [body, setBody] = useState('');
   const isEdit = skill !== null;
+
+  // —— AI 对话创建（C）相关 state（对话框持有：切 Tab 不丢上下文，关闭即清，满足 P2-3）——
+  const [aiMessages, setAiMessages] = useState<SkillBuilderMessage[]>([]);
+  const [aiInput, setAiInput] = useState('');
+  const [aiSending, setAiSending] = useState(false);
+  const [aiError, setAiError] = useState<string | null>(null);
+  const [aiAutoRefill, setAiAutoRefill] = useState(false);
+  /** 解析成功未回填时的暂存预览（P2-2）。 */
+  const [aiStaged, setAiStaged] = useState<StagedResult | null>(null);
+  /** 回填后发生变化的字段键集合（P1-3 高亮）。 */
+  const [highlight, setHighlight] = useState<Set<string>>(new Set());
 
   // 每次打开按当前对象重置，避免上一次编辑的残留串进新建表单
   useEffect(() => {
@@ -144,7 +148,14 @@ export function AgentSkillFormDialog({
     setRawContent('');
     setParsing(false);
     setParseError(null);
-    setParsedBody(null);
+    setBody('');
+    setAiMessages([]);
+    setAiInput('');
+    setAiSending(false);
+    setAiError(null);
+    setAiAutoRefill(false);
+    setAiStaged(null);
+    setHighlight(new Set());
     setForm(
       skill
         ? {
@@ -158,14 +169,29 @@ export function AgentSkillFormDialog({
           }
         : EMPTY_FORM,
     );
+    // B-8/B-9：编辑态按详情回填正文，保证与列表项（无 body）一致
+    if (skill) {
+      getSkill(skill.skill_id)
+        .then((detail) => setBody((detail as SkillDetail).body ?? ''))
+        .catch(() => {
+          /* 正文缺失不阻断编辑 */
+        });
+    }
   }, [open, skill]);
 
   function patch(key: keyof SkillFormValues, value: string): void {
     setForm((f) => ({ ...f, [key]: value }));
     setErrors((e) => (e[key] ? { ...e, [key]: undefined } : e));
+    // 用户手改该字段即视为接受，清除其高亮
+    setHighlight((h) => {
+      if (!h.has(key)) return h;
+      const next = new Set(h);
+      next.delete(key);
+      return next;
+    });
   }
 
-  /** 解析并回填：调用 POST /agent-ops/skills/parse（R2/R3）。 */
+  /** 解析并回填：调用 POST /agent-ops/skills/parse（R2/R3），复用 applyParsedSkill。 */
   async function onParse(): Promise<void> {
     if (rawContent.trim().length === 0) {
       setParseError('请先粘贴 SKILL.md 内容');
@@ -175,16 +201,11 @@ export function AgentSkillFormDialog({
     setParseError(null);
     try {
       const res = await parseSkill(rawContent);
-      const meta = (res.metadata ?? {}) as Record<string, unknown>;
-      setForm((f) => ({
-        ...f,
-        name: metaStr(meta, 'name') || f.name,
-        description: metaStr(meta, 'description') || f.description,
-        category: metaStr(meta, 'category') || f.category,
-        tags: metaTags(meta) || f.tags,
-        handler: metaStr(meta, 'handler') || f.handler,
-      }));
-      setParsedBody(res.body ?? '');
+      const before = form;
+      const result = applyParsedSkill(res.metadata ?? {}, res.body ?? '', before);
+      setForm(result.form);
+      setBody(result.body);
+      setHighlight(diffHighlight(before, result.form));
       setMode('manual');
       toast.success('已解析并回填字段');
     } catch (e) {
@@ -193,6 +214,106 @@ export function AgentSkillFormDialog({
     } finally {
       setParsing(false);
     }
+  }
+
+  /**
+   * C：发送 AI 对话。把本地 messages（含本轮 user）上送，后端 ephemeral 端点返回
+   * AI 文本；随后抽取 ```SKILL.md → 复用 parseSkill → 暂存或自动回填。
+   */
+  async function handleAiSend(): Promise<void> {
+    const text = aiInput.trim();
+    if (!text || aiSending) return;
+
+    const userMsg: SkillBuilderMessage = {
+      id: `u-${Date.now()}`,
+      role: 'user',
+      content: text,
+      status: 'generated',
+    };
+    const assistantMsg: SkillBuilderMessage = {
+      id: `a-${Date.now()}`,
+      role: 'assistant',
+      content: '',
+      status: 'generating',
+    };
+    setAiMessages((prev) => [...prev, userMsg, assistantMsg]);
+    setAiInput('');
+    setAiError(null);
+    setAiStaged(null);
+    setAiSending(true);
+
+    const history = [...aiMessages, userMsg].map((m) => ({ role: m.role, content: m.content }));
+    try {
+      const res: SkillBuilderChatResponse = await chatSkillBuilder({
+        messages: history,
+        user_input: text,
+        converged: false,
+      });
+      setAiMessages((prev) =>
+        prev.map((m) =>
+          m.id === assistantMsg.id
+            ? { ...m, content: res.reply, status: res.status, converged: res.converged }
+            : m,
+        ),
+      );
+      await stageOrRefill(res.reply, res.converged);
+    } catch (e) {
+      setAiMessages((prev) =>
+        prev.map((m) =>
+          m.id === assistantMsg.id
+            ? { ...m, content: agentErrorMessage(e, 'AI 生成失败'), status: 'error' }
+            : m,
+        ),
+      );
+      setAiError(agentErrorMessage(e, 'AI 生成失败'));
+    } finally {
+      setAiSending(false);
+    }
+  }
+
+  /**
+   * C：抽取 + 解析 + 回填/暂存。唯一权威抽取正则见 skill-builder-utils.extractSkillMd；
+   * 解析复用粘贴 Tab 同一函数 parseSkill（硬约束 C：禁止为 C 另写解析）。
+   */
+  async function stageOrRefill(reply: string, converged: boolean): Promise<void> {
+    const skillMd = extractSkillMd(reply) ?? reply;
+    if (!skillMd.trim()) {
+      setAiError('AI 未返回可解析的 SKILL.md，请调整描述后重试。');
+      return;
+    }
+    try {
+      const parsed = await parseSkill(skillMd);
+      const before = form;
+      const result = applyParsedSkill(parsed.metadata ?? {}, parsed.body ?? '', before);
+      if (aiAutoRefill) {
+        setForm(result.form);
+        setBody(result.body);
+        setHighlight(diffHighlight(before, result.form));
+        toast.success('已自动回填字段');
+      } else {
+        setAiStaged({ skillMd, meta: parsed.metadata ?? {}, body: parsed.body ?? '', converged });
+      }
+    } catch (e) {
+      setAiError(agentErrorMessage(e, '解析 SKILL.md 失败'));
+    }
+  }
+
+  /** C：用户点「回填到表单」→ 写回 form + body + 计算高亮。 */
+  function handleAiRefill(): void {
+    if (!aiStaged) return;
+    const before = form;
+    const result = applyParsedSkill(aiStaged.meta, aiStaged.body, before);
+    setForm(result.form);
+    setBody(result.body);
+    setHighlight(diffHighlight(before, result.form));
+    setAiStaged(null);
+    setAiError(null);
+    toast.success('已回填字段');
+  }
+
+  /** C：放弃暂存预览。 */
+  function handleAiDiscard(): void {
+    setAiStaged(null);
   }
 
   async function onSubmit(): Promise<void> {
@@ -227,6 +348,8 @@ export function AgentSkillFormDialog({
       tags: parseTags(values.tags),
       // 与上方 R12 校验保持一致：下发前 trim，避免带首尾空格的 handler 入库
       handler: values.handler?.trim() ?? '',
+      // B-8：正文随元数据一并下发（custom 技能落盘 SKILL.md）
+      body: body || undefined,
     };
 
     setSaving(true);
@@ -246,205 +369,144 @@ export function AgentSkillFormDialog({
     }
   }
 
+  const tabs: Array<{ key: SkillFormMode; label: string }> = [
+    { key: 'manual', label: '手动填写' },
+    { key: 'paste', label: '粘贴 SKILL.md' },
+    { key: 'ai', label: 'AI 对话创建' },
+  ];
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-lg">
+      <DialogContent className="max-w-4xl max-h-[88vh]">
         <DialogHeader>
           <DialogTitle>{isEdit ? '编辑技能' : '新建技能'}</DialogTitle>
         </DialogHeader>
 
-        {/* 模式切换：手动填写 / 粘贴 SKILL.md */}
+        {/* 模式切换：手动填写 / 粘贴 SKILL.md / AI 对话创建 */}
         <div className="flex gap-1 rounded-md border bg-muted/40 p-1 text-sm">
-          <button
-            type="button"
-            onClick={() => setMode('manual')}
-            className={cn(
-              'flex-1 rounded px-3 py-1.5 font-medium',
-              mode === 'manual' ? 'bg-card text-foreground shadow-sm' : 'text-muted-foreground',
-            )}
-          >
-            手动填写
-          </button>
-          <button
-            type="button"
-            onClick={() => setMode('paste')}
-            className={cn(
-              'flex-1 rounded px-3 py-1.5 font-medium',
-              mode === 'paste' ? 'bg-card text-foreground shadow-sm' : 'text-muted-foreground',
-            )}
-          >
-            粘贴 SKILL.md
-          </button>
+          {tabs.map((t) => (
+            <button
+              key={t.key}
+              type="button"
+              onClick={() => setMode(t.key)}
+              className={cn(
+                'flex-1 rounded px-3 py-1.5 font-medium',
+                mode === t.key ? 'bg-card text-foreground shadow-sm' : 'text-muted-foreground',
+              )}
+            >
+              {t.label}
+            </button>
+          ))}
         </div>
 
-        <div className="max-h-[55vh] space-y-3 overflow-auto pr-1">
-          {mode === 'paste' ? (
-            <div className="space-y-3">
-              <div>
-                <label className={fieldLabel} htmlFor="skill-raw">
-                  粘贴 SKILL.md 全文
-                </label>
-                <Textarea
-                  id="skill-raw"
-                  rows={10}
-                  value={rawContent}
-                  placeholder={
-                    '---\nname: 会员积分查询\nhandler: mcp:crm-server:query_points\ndescription: 按会员 ID 查询积分\n---\n\n执行流程…'
-                  }
-                  onChange={(e) => {
-                    setRawContent(e.target.value);
-                    if (parseError) setParseError(null);
-                  }}
-                />
-                {parseError ? (
-                  <p className="mt-1 text-xs text-destructive">{parseError}</p>
-                ) : null}
-              </div>
-              <div className="flex items-center gap-2">
-                <SubmitButton loading={parsing} onClick={() => void onParse()}>
-                  {parsing ? '解析中…' : '解析并回填'}
-                </SubmitButton>
-                <Button variant="ghost" disabled={parsing} onClick={() => setRawContent('')}>
-                  清空
-                </Button>
-              </div>
-              <p className="text-xs text-muted-foreground">
-                支持带 YAML Front Matter 的 SKILL.md；解析成功后将自动切到「手动填写」并回填字段。
-                无 Front Matter 时原样返回正文。解析失败可修改后重新粘贴。
-              </p>
-            </div>
-          ) : (
-            <>
-              <div>
-                <label className={fieldLabel} htmlFor="skill-id">
-                  技能 ID *
-                </label>
-                <Input
-                  id="skill-id"
-                  value={form.id}
-                  disabled={isEdit}
-                  placeholder="member.points-account"
-                  autoComplete="off"
-                  onChange={(e) => patch('id', e.target.value)}
-                />
-                <p className="mt-[0.35rem] text-xs text-muted-foreground">
-                  {isEdit
-                    ? 'ID 关联执行码 ai:skill:{id}:run，创建后不可修改。'
-                    : '将用于生成执行码 ai:skill:{id}:run，仅允许字母、数字、点、下划线与连字符。'}
-                </p>
-                {errors.id ? <p className="mt-1 text-xs text-destructive">{errors.id}</p> : null}
-              </div>
-
-              <div>
-                <label className={fieldLabel} htmlFor="skill-name">
-                  名称 *
-                </label>
-                <Input
-                  id="skill-name"
-                  value={form.name}
-                  onChange={(e) => patch('name', e.target.value)}
-                />
-                {errors.name ? <p className="mt-1 text-xs text-destructive">{errors.name}</p> : null}
-              </div>
-
-              <div>
-                <label className={fieldLabel} htmlFor="skill-desc">
-                  描述 *
-                </label>
-                <Textarea
-                  id="skill-desc"
-                  rows={3}
-                  value={form.description}
-                  placeholder="这个技能在什么场景下被调用、能做什么"
-                  onChange={(e) => patch('description', e.target.value)}
-                />
-                {errors.description ? (
-                  <p className="mt-1 text-xs text-destructive">{errors.description}</p>
-                ) : null}
-              </div>
-
-              <div>
-                <label className={fieldLabel} htmlFor="skill-category">
-                  分类
-                </label>
-                <Input
-                  id="skill-category"
-                  value={form.category}
-                  placeholder="如 member / order / ops"
-                  onChange={(e) => patch('category', e.target.value)}
-                />
-                {errors.category ? (
-                  <p className="mt-1 text-xs text-destructive">{errors.category}</p>
-                ) : null}
-              </div>
-
-              <div>
-                <label className={fieldLabel} htmlFor="skill-tags">
-                  标签
-                </label>
-                <Input
-                  id="skill-tags"
-                  value={form.tags}
-                  placeholder="逗号或空格分隔，如：查询, 只读"
-                  onChange={(e) => patch('tags', e.target.value)}
-                />
-                {errors.tags ? <p className="mt-1 text-xs text-destructive">{errors.tags}</p> : null}
-              </div>
-
-              <div>
-                <label className={fieldLabel} htmlFor="skill-handler">
-                  handler（执行器，可选）
-                </label>
-                <Input
-                  id="skill-handler"
-                  value={form.handler}
-                  placeholder="留空 = 文档型/检索型；或 mcp:{server}:{tool} / builtin:{name} / custom:{module}.{func}"
-                  autoComplete="off"
-                  onChange={(e) => patch('handler', e.target.value)}
-                />
-                {form.handler.trim() === '' ? (
-                  <p className="mt-[0.35rem] text-xs text-muted-foreground">
-                    留空 = 文档型/检索型技能，仅用于语义检索与 Agent 上下文注入，不单独执行。
-                  </p>
-                ) : (
-                  <p className="mt-[0.35rem] text-xs text-muted-foreground">
-                    可执行技能，格式：mcp:{'{server}'}:{'{tool}'} / builtin:{'{name}'} /
-                    custom:{'{module}'}.{'{func}'}。
-                  </p>
-                )}
-                {errors.handler ? (
-                  <p className="mt-1 text-xs text-destructive">{errors.handler}</p>
-                ) : null}
-              </div>
-
-              {parsedBody != null ? (
+        {/* 双栏：左元数据 / 右正文或 AI 面板（B-1~B-6/B-8 同屏；C 右栏为 AI 面板） */}
+        <div className="grid max-h-[60vh] grid-cols-1 gap-4 overflow-auto pr-1 md:grid-cols-2">
+          {/* 左栏：元数据（手动/AI 共用 SkillFormFields；粘贴模式为粘贴区） */}
+          <div className="space-y-3">
+            {mode === 'paste' ? (
+              <div className="space-y-3">
                 <div>
-                  <label className={fieldLabel}>SKILL.md 正文（解析预览，只读）</label>
-                  <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-words rounded-md border bg-muted/40 p-2.5 text-xs text-muted-foreground">
-                    {parsedBody || '（正文为空）'}
-                  </pre>
-                  <button
-                    type="button"
-                    className="mt-1 text-xs text-primary hover:underline"
-                    onClick={() => {
-                      setParsedBody(null);
-                      setMode('paste');
+                  <label className={fieldLabel} htmlFor="skill-raw">
+                    粘贴 SKILL.md 全文
+                  </label>
+                  <Textarea
+                    id="skill-raw"
+                    rows={10}
+                    value={rawContent}
+                    placeholder={
+                      '---\nname: 会员积分查询\nhandler: mcp:crm-server:query_points\ndescription: 按会员 ID 查询积分\n---\n\n执行流程…'
+                    }
+                    onChange={(e) => {
+                      setRawContent(e.target.value);
+                      if (parseError) setParseError(null);
                     }}
-                  >
-                    重新粘贴
-                  </button>
+                  />
+                  {parseError ? (
+                    <p className="mt-1 text-xs text-destructive">{parseError}</p>
+                  ) : null}
                 </div>
-              ) : null}
-
-              {isEdit && skill ? (
-                <p className="rounded-md border bg-muted/40 p-2.5 text-xs text-muted-foreground">
-                  当前状态：{skill.status === 'active' ? '已启用' : '已停用'}。
-                  启停请使用列表中的「启用 / 停用」操作，本表单不改变技能状态。
+                <div className="flex items-center gap-2">
+                  <SubmitButton loading={parsing} onClick={() => void onParse()}>
+                    {parsing ? '解析中…' : '解析并回填'}
+                  </SubmitButton>
+                  <Button variant="ghost" disabled={parsing} onClick={() => setRawContent('')}>
+                    清空
+                  </Button>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  支持带 YAML Front Matter 的 SKILL.md；解析成功后将自动切到「手动填写」并回填字段与正文。
+                  无 Front Matter 时原样返回正文。解析失败可修改后重新粘贴。
                 </p>
-              ) : null}
-            </>
-          )}
+              </div>
+            ) : (
+              <SkillFormFields
+                form={form}
+                errors={errors}
+                highlight={highlight}
+                isEdit={isEdit}
+                onChange={patch}
+              />
+            )}
+          </div>
+
+          {/* 右栏：AI 模式为对话面板；其余为 SKILL.md 正文（B-8 可编辑，同屏） */}
+          <div className="flex flex-col gap-2">
+            {mode === 'ai' ? (
+              <SkillBuilderPanel
+                messages={aiMessages}
+                sending={aiSending}
+                input={aiInput}
+                onInputChange={setAiInput}
+                onSend={() => void handleAiSend()}
+                autoRefill={aiAutoRefill}
+                onToggleAutoRefill={setAiAutoRefill}
+                error={aiError}
+                staged={aiStaged}
+                onRefill={handleAiRefill}
+                onDiscardStaged={handleAiDiscard}
+              />
+            ) : (
+              <>
+                <label className={fieldLabel} htmlFor="skill-body">
+                  SKILL.md 正文（body）
+                </label>
+                <Textarea
+                  id="skill-body"
+                  className="min-h-[18rem] flex-1 font-mono text-xs"
+                  value={body}
+                  placeholder={'在此编写技能的执行说明 / 提示词正文…\n支持 Markdown。'}
+                  onChange={(e) => setBody(e.target.value)}
+                />
+                <p className="text-xs text-muted-foreground">
+                  新建 / 编辑 custom 技能时随元数据一并保存（落盘到
+                  <code className="mx-1 rounded bg-muted px-1">
+                    {'{SKILL_CUSTOM_STORE_DIR}/{skill_id}/SKILL.md'}
+                  </code>
+                  ）。文档型技能（handler 留空）靠正文做语义检索与上下文注入。
+                </p>
+              </>
+            )}
+          </div>
         </div>
+
+        {/* AI 模式下，正文由回填产生，单独置于下方全宽区可编辑（P2-2 预览区之下） */}
+        {mode === 'ai' ? (
+          <div className="space-y-1">
+            <label className={fieldLabel} htmlFor="skill-body-ai">
+              SKILL.md 正文（由 AI 回填，可编辑）
+            </label>
+            <Textarea
+              id="skill-body-ai"
+              className="min-h-[12rem] font-mono text-xs"
+              value={body}
+              placeholder={'AI 回填后在此展示 / 可继续编辑技能的执行说明…'}
+              onChange={(e) => setBody(e.target.value)}
+            />
+            <p className="flex items-center gap-1 text-xs text-muted-foreground">
+              点示例模板快速起手；AI 生成的 SKILL.md 经解析后回填左侧表单与本正文。
+            </p>
+          </div>
+        ) : null}
 
         <DialogFooter>
           <SubmitButton loading={saving} onClick={() => void onSubmit()}>

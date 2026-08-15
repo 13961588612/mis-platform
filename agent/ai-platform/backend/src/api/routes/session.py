@@ -46,7 +46,9 @@ from src.api.deps import (
     get_trace_id,
     resolve_request_mis_user_id,
 )
+from src.agent.session_timing import RedisTimingStore
 from src.api.response import error_response, success
+from src.config import get_settings
 from src.models.agent_feedback import (
     FEEDBACK_RATING_DOWN,
     FEEDBACK_RATING_UP,
@@ -654,6 +656,51 @@ async def batch_process_feedback(
         return error_response(exc.code, exc.message, status.HTTP_400_BAD_REQUEST)
     except Exception as exc:  # noqa: BLE001
         logger.error("Failed to batch process feedback", error=str(exc))
+        return error_response(9001, str(exc), status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+# ===== 会话耗时（A-5 / A-6，T01）=====
+#
+# 只读 Redis 中的调试态耗时（TTL 24h），不经过 PG；过期 / 不存在返回 None，
+# 前端统一显示「已过期 / 暂无」，不影响会话本身的可读性。
+
+
+class BatchSessionTimingRequest(BaseModel):
+    """A-6 批量查询当前页会话耗时的请求体。"""
+
+    ids: list[str] = Field(default_factory=list, description="待查询耗时的 session_id 列表")
+
+
+@router.get("/{session_id}/timing")
+async def get_session_timing(
+    session_id: str,
+    _user: dict[str, Any] = Depends(get_current_user),
+) -> dict[str, Any]:
+    """A-5 获取单会话最近一轮各阶段耗时（Redis，TTL 24h）。
+
+    过期 / 未采样返回 ``data=null``，前端显示「已过期 / 暂无」。
+    """
+    try:
+        store = RedisTimingStore(get_settings())
+        timing = await store.get(session_id)
+        return success(data=timing)
+    except Exception as exc:  # noqa: BLE001
+        logger.error("Failed to get session timing", error=str(exc), session_id=session_id)
+        return error_response(9001, str(exc), status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@router.post("/timing/batch")
+async def batch_session_timing(
+    req: BatchSessionTimingRequest,
+    _user: dict[str, Any] = Depends(get_current_user),
+) -> dict[str, Any]:
+    """A-6 批量获取当前页会话耗时（pipeline 一次往返），用于列表「耗时」列。"""
+    try:
+        store = RedisTimingStore(get_settings())
+        timings = await store.get_many(req.ids)
+        return success(data=timings)
+    except Exception as exc:  # noqa: BLE001
+        logger.error("Failed to batch get session timing", error=str(exc))
         return error_response(9001, str(exc), status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 

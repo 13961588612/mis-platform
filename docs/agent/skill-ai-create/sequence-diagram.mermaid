@@ -1,0 +1,36 @@
+sequenceDiagram
+    actor U as 运营用户
+    participant P as SkillBuilderPanel
+    participant D as AgentSkillFormDialog
+    participant A as agent-chat-api(BFF)
+    participant B as ai-platform /skills/builder/chat
+    participant S as SkillBuilderService
+    participant L as LLMGateway(+LLM)
+    participant PS as /skills/parse(parseSkill)
+    participant CS as /skills(createSkill)
+
+    U->>P: 输入需求并发送
+    P->>P: messages 追加 user 消息(本地 state)
+    P->>A: chatSkillBuilder(messages, user_input)
+    A->>B: POST /skills/builder/chat(BuilderChatRequest)
+    B->>S: SkillBuilderService.build(...)
+    S->>L: chat(LLMRequest = system + messages)
+    L-->>S: LLMResponse.content(含 SKILL.md 代码块)
+    S-->>B: BuilderChatResponse{reply, status, converged}
+    B-->>A: {code,data,message}
+    A-->>P: SkillBuilderChatResponse
+    P->>P: 渲染助手消息(status=generated)
+    Note over P: P1-1 自动回填 或 用户点「回填」
+    P->>P: extractSkillMd(reply) → 抽取 SKILL.md 文本
+    P->>A: parseSkill(skillMdText)  %% 复用粘贴 Tab 同一函数
+    A->>PS: POST /skills/parse
+    PS-->>A: {metadata, body}
+    A-->>P: SkillParseResponse
+    P->>D: applyParsedSkill(metadata, body)
+    D->>D: 写回 form + body + 计算 highlight
+    U->>D: 复核/微调表单
+    U->>D: 点「保存」
+    D->>A: createSkill(payload)  %% 复用, 无新增链路
+    A->>CS: POST /skills(create_skill)
+    CS-->>A: Skill
+    A-->>D: 创建成功 → 关闭对话框

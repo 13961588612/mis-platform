@@ -16,9 +16,12 @@ import org.springframework.http.HttpMethod;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.reactive.function.client.WebClient;
+import org.springframework.web.reactive.function.client.WebClientRequestException;
 import org.springframework.web.util.UriBuilder;
 import reactor.core.publisher.Mono;
+import reactor.util.retry.Retry;
 
+import java.net.ConnectException;
 import java.net.URI;
 import java.time.Duration;
 import java.util.function.Function;
@@ -161,6 +164,13 @@ abstract class AgentOpsTransport extends AbstractDownstreamClient {
                     // 关闭默认错误信号：4xx/5xx 也要拿到原始响应体，交给 interpret 统一判定
                     .onStatus(status -> true, response -> Mono.empty())
                     .toEntity(String.class)
+                    // 池里偶发借到半死连接时 Windows 会报 Connection refused；丢弃后立刻再试一次
+                    .retryWhen(Retry.max(1)
+                            .filter(AgentOpsTransport::isTransientConnectFailure)
+                            .doBeforeRetry(signal -> log.warn(
+                                    "agent-ops 下游连接失败，重试一次: {} — {}",
+                                    downstream,
+                                    rootMessage(signal.failure()))))
                     .block(timeout);
             return interpret(entity, downstream);
         } catch (BusinessException ex) {
@@ -173,6 +183,35 @@ abstract class AgentOpsTransport extends AbstractDownstreamClient {
                     AgentOpsErrorCodes.DOWNSTREAM_UNAVAILABLE,
                     "下游不可达：" + downstream + " — " + rootMessage(ex));
         }
+    }
+
+    /**
+     * 可安全重试的瞬时连接失败：对端进程重启、keep-alive 僵尸连接被拒等。
+     * 业务 4xx/5xx、解码错误不在此列。
+     */
+    private static boolean isTransientConnectFailure(Throwable ex) {
+        Throwable cursor = ex;
+        while (cursor != null) {
+            if (cursor instanceof ConnectException) {
+                return true;
+            }
+            if (cursor instanceof WebClientRequestException
+                    && cursor.getCause() instanceof ConnectException) {
+                return true;
+            }
+            String message = cursor.getMessage();
+            if (message != null) {
+                String m = message.toLowerCase();
+                if (m.contains("connection refused")
+                        || m.contains("connection reset")
+                        || m.contains("broken pipe")
+                        || m.contains("premature close")) {
+                    return true;
+                }
+            }
+            cursor = cursor.getCause();
+        }
+        return false;
     }
 
     private JsonNode interpret(ResponseEntity<String> entity, String downstream) {

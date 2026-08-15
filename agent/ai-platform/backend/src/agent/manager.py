@@ -14,8 +14,10 @@ from src.agent.config import AgentConfig
 from src.agent.lifecycle import InstanceState, LifecycleEvent, LifecycleStateMachine
 from src.agent.runtime_setup import wire_agent_runtime
 from src.agent.session import Message, Session
+from src.agent.session_timing import RedisTimingStore, SessionTimingRecorder
+from src.config import get_settings
 from src.runtime.base import AgentRuntime
-from src.runtime.events import AgentEvent, HealthStatus
+from src.runtime.events import AgentEvent, AgentEventType, HealthStatus
 from src.runtime.factory import create_runtime
 from src.runtime.registry import get_runtime_registry
 from src.utils.exceptions import AgentNotFoundError, AgentNotRunningError
@@ -73,10 +75,17 @@ class AgentInstance:
             raise AgentNotRunningError(self.id)
 
         self.active_sessions += 1
+        # T01：包裹计时器，按 wall-clock 切 5 阶段，run_complete 后写 Redis。
+        # recorder / store 在异常时可能为 None，finally 里已做空值守卫。
+        recorder: SessionTimingRecorder | None = None
+        store: RedisTimingStore | None = None
         try:
             # 构建运行时所需的消息列表
             messages: dict[str, Any] = session.get_messages()
             messages.append(message.to_dict())
+
+            recorder = SessionTimingRecorder(session.session_id)
+            store = RedisTimingStore(get_settings())
 
             # 通过运行时执行
             async for event in self.runtime.run(
@@ -90,9 +99,25 @@ class AgentInstance:
                 # T03 S9 第 2 跳：MIS userId 全链透传（None 时下游 fail-closed）。
                 mis_user_id=session.mis_user_id,
             ):
+                recorder.observe(event)
                 yield event
+            recorder.complete()
+        except Exception:
+            if recorder is not None:
+                recorder.fail()
+            raise
         finally:
             self.active_sessions -= 1
+            # 计时降级：任何异常都静默吞掉，绝不阻断主对话链路。
+            if recorder is not None and store is not None:
+                try:
+                    await store.save(session.session_id, recorder.snapshot())
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning(
+                        "session timing save failed (degraded)",
+                        session_id=session.session_id,
+                        error=str(exc),
+                    )
 
     async def health_check(self) -> HealthStatus:
         """检查此 Agent 实例的健康状态。"""

@@ -8,7 +8,12 @@
 import axios, { type AxiosError, type InternalAxiosRequestConfig } from 'axios';
 import type { ApiResult, TokenResponse } from '@/types/api';
 import { useAuthStore } from '@/stores/auth-store';
-import type { Session, SessionMessage } from '../types';
+import type {
+  Session,
+  SessionMessage,
+  SkillBuilderChatRequest,
+  SkillBuilderChatResponse,
+} from '../types';
 
 /** 与 BFF {@code mis.agent-ops.chat-timeout-ms} 对齐（毫秒）。 */
 export const AGENT_CHAT_TIMEOUT_MS = 180_000;
@@ -88,6 +93,23 @@ function unwrap<T>(res: { data: ApiResult<T> }, fallback: string): T {
 
 function seg(value: string): string {
   return encodeURIComponent(value);
+}
+
+/**
+ * 「AI 对话创建」技能（C 功能）— agent:skill:manage。
+ *
+ * <p>走 180s 客户端（与 {@link sendChatMessage} 同文件）：本质是完整 LLM 推理，
+ * 与下游 BFF `mis.agent-ops.chat-timeout-ms` 对齐，否则浏览器先断。
+ * 后端 `POST /skills/builder/chat` 为 ephemeral 端点（不落库），仅回 AI 文本。
+ */
+export async function chatSkillBuilder(
+  req: SkillBuilderChatRequest,
+): Promise<SkillBuilderChatResponse> {
+  const res = await chatApi.post<ApiResult<SkillBuilderChatResponse>>(
+    '/agent-ops/skills/builder/chat',
+    req,
+  );
+  return unwrap(res, 'AI 生成技能失败');
 }
 
 /** §4.3 #32 — agent:chat:use */

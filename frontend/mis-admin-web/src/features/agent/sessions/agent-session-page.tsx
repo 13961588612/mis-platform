@@ -30,10 +30,16 @@ import { useColumnWidths, type ResizableColumn } from '@/components/common/use-c
 import { AgentPageShell, AgentContentState } from '../components/agent-page-shell';
 import { AgentConfirmDialog } from '../components/agent-confirm-dialog';
 import { AgentSessionDetailDialog } from './agent-session-detail-dialog';
-import { batchDeleteSessions, deleteSession, listAgents, listSessions } from '../api/agent-ops-api';
+import {
+  batchDeleteSessions,
+  batchSessionTiming,
+  deleteSession,
+  listAgents,
+  listSessions,
+} from '../api/agent-ops-api';
 import { useAgentStore } from '../stores/use-agent-store';
 import { agentErrorMessage, formatTime } from '../types';
-import type { AgentSummary, Session, SessionChannel, SessionQuery } from '../types';
+import type { AgentSummary, Session, SessionChannel, SessionQuery, SessionTiming } from '../types';
 
 const selectClass =
   'h-9 w-full rounded-md border border-input bg-card px-[0.7rem] text-sm text-foreground shadow-none';
@@ -46,8 +52,23 @@ const SESSION_COLS: ResizableColumn[] = [
   { key: 'user_name', label: '用户' },
   { key: 'message_count', label: '消息数' },
   { key: 'updated_at', label: '更新时间' },
+  { key: 'timing', label: '耗时', locked: true },
   { key: '__ops__', label: '操作', locked: true },
 ];
+
+/** 毫秒格式化（与详情抽屉一致）：>=1s 显示秒，否则 ms。 */
+function fmtMs(ms: number | null | undefined): string {
+  if (ms === null || ms === undefined) return '—';
+  if (ms >= 1000) return `${(ms / 1000).toFixed(2)}s`;
+  return `${ms}ms`;
+}
+
+/** 列表「耗时」列单元格：null（已过期/无采样）显示统一文案，否则显示端到端耗时。 */
+function formatTimingCell(t: SessionTiming | null | undefined): string {
+  if (t === null) return '已过期/暂无';
+  if (!t) return '—';
+  return fmtMs(t.total_ms);
+}
 
 const CHANNEL_LABELS: Record<SessionChannel, string> = {
   web: '网页',
@@ -88,6 +109,8 @@ export function AgentSessionPage() {
   const [pageSize, setPageSize] = useState(20);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /** 当前页各会话耗时（A-6，Redis 调试态；值 null = 已过期/暂无）。 */
+  const [timings, setTimings] = useState<Record<string, SessionTiming | null>>({});
 
   const [selected, setSelected] = useState<Set<string>>(() => new Set());
   const [pending, setPending] = useState<PendingDelete | null>(null);
@@ -128,6 +151,14 @@ export function AgentSessionPage() {
         setTotal(result.total ?? 0);
         // 翻页后清空跨页选择：批量删除只应作用于用户看得见的这一页
         setSelected(new Set());
+        // A-6：批量拉取当前页耗时（pipeline 一次往返）；失败不影响列表可读性
+        try {
+          setTimings(
+            await batchSessionTiming((result.items ?? []).map((r) => r.session_id)),
+          );
+        } catch {
+          setTimings({});
+        }
       } catch (e) {
         setRows([]);
         setTotal(0);
@@ -447,6 +478,9 @@ export function AgentSessionPage() {
                       </td>
                       <td className="px-3 py-2 text-xs text-muted-foreground">
                         {formatTime(session.updated_at)}
+                      </td>
+                      <td className="px-3 py-2 text-xs text-muted-foreground">
+                        {formatTimingCell(timings[session.session_id])}
                       </td>
                       <td className="px-3 py-2" onClick={(e) => e.stopPropagation()}>
                         <div className="flex flex-wrap items-center justify-end gap-1">

@@ -8,6 +8,7 @@ from src.mcp.discovery import MCPDiscovery
 from src.mcp.loader import load_mcp_servers_from_files
 from src.mcp.manager import MCPManager
 from src.skills.cache import HotSkillCache
+from src.skills.custom_store import load_custom_skills_from_disk
 from src.skills.indexer import VectorIndexer
 from src.skills.loader import load_skills_from_files
 from src.skills.registry import SkillRegistry
@@ -43,6 +44,8 @@ async def initialize_skills_and_mcp() -> dict[str, Any]:
         cache=HotSkillCache(),
     )
     skills_loaded: int = await load_skills_from_files(registry, enabled_only=True)
+    # Q3：启动重载 custom 技能正文（文件系统），保证进程重启后正文不丢。
+    custom_loaded: int = await load_custom_skills_from_disk(registry)
     set_registry(registry)
     _skill_registry = registry
 
@@ -63,6 +66,7 @@ async def initialize_skills_and_mcp() -> dict[str, Any]:
 
     return {
         "skills_loaded": skills_loaded,
+        "custom_skills_loaded": custom_loaded,
         "mcp_servers_loaded": mcp_loaded,
         "mcp_connected": connected,
     }

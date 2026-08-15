@@ -24,9 +24,10 @@ import java.util.Map;
  * <h2>路径必须与 {@code sys_api} 注册表逐字一致</h2>
  * V20 登记了 58 行 {@code sys_api}（92100–92157），判权走
  * {@code ApiPermissionInterceptor} + 注册表（T01 已建，见 impl-plan §7.2）。
- * 本模块配 {@code api-permission.deny-unmapped: false}（未映射即放行），
- * 路径写错不会 404，而是「悄悄不判权」—— 一个不报错的越权口子，比直接报错更危险。
- * 因此每条 {@code @RequestMapping} 的路径与方法都照 SQL 一字未改。
+ * 本模块配 {@code api-permission.deny-unmapped: true}（<b>未映射即拒绝</b>，这是
+ * {@code application.yml} 的实际默认值，不是 false）：路径写错会直接 403，而非「悄悄不判权」。
+ * 因此每条 {@code @RequestMapping} 的路径与方法都照 SQL 一字未改；新增端点
+ * （如 #11 {@code builder/chat}）必须同步在 {@code sys_api} 注册（见 V46），否则上线即 403。
  *
  * <h2>为什么把 50+ 端点塞进一个 Controller</h2>
  * 与 {@code KbSynonymController}「自成一体的子域要独立」相反，这里是<b>同一功能域的
@@ -118,6 +119,17 @@ public class AgentOpsController {
     @PostMapping("/skills/parse")
     public Result<JsonNode> parseSkill(@RequestBody JsonNode body) {
         return Result.ok(facade.parseSkill(body));
+    }
+
+    /**
+     * #11 AI 对话创建技能（C 功能，透传，走 chat 超时）。
+     *
+     * <p>权限码 {@code agent:skill:manage}（与新建/编辑技能同族），由 V46 在
+     * {@code sys_api} 注册表登记；路径必须与注册表逐字一致（见本类文件头）。
+     */
+    @PostMapping("/skills/builder/chat")
+    public Result<JsonNode> builderChat(@RequestBody JsonNode body) {
+        return Result.ok(facade.builderChat(body));
     }
 
     // ---------------------------------------------------------------- Agent #13–#26
@@ -241,6 +253,18 @@ public class AgentOpsController {
     @PostMapping("/sessions/batch-delete")
     public Result<JsonNode> batchDeleteSessions(@RequestBody JsonNode body) {
         return Result.ok(facade.batchDeleteSessions(body));
+    }
+
+    /** A-5 会话最近一轮各阶段耗时（Redis，TTL 24h；过期返回 null）。 */
+    @GetMapping("/sessions/{id}/timing")
+    public Result<JsonNode> getSessionTiming(@PathVariable String id) {
+        return Result.ok(facade.getSessionTiming(id));
+    }
+
+    /** A-6 批量会话耗时（列表「耗时」列，pipeline 一次往返）。 */
+    @PostMapping("/sessions/timing/batch")
+    public Result<JsonNode> batchSessionTiming(@RequestBody JsonNode body) {
+        return Result.ok(facade.batchSessionTiming(body));
     }
 
     // ---------------------------------------------------------------- 会话反馈 CF-01/CF-03/CF-05
