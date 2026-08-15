@@ -82,6 +82,8 @@ class Skill(BaseModel):
     scripts: list[str] = Field(default_factory=list)
     references: list[str] = Field(default_factory=list)
     assets: list[str] = Field(default_factory=list)
+    # B-1.5：references 文件相对路径 → 文件内容（详情接口填充，供前端点击查看）。
+    reference_contents: dict[str, str] = Field(default_factory=dict)
 
     def get_input_schema(self) -> dict[str, Any]:
         """返回规范化后的 MCP inputSchema。"""
@@ -116,10 +118,20 @@ class Skill(BaseModel):
         return self.description
 
     def read_reference_file(self, relative_path: str) -> str | None:
-        """按需读取 references/ 或 scripts/ 下的附件内容。"""
+        """按需读取 references / scripts 下的附件文本内容（UI#1.5 点击查看）。
+
+        仅对落在技能包根目录内的相对路径生效；拒绝绝对路径与 ``..`` 越界，
+        防目录穿越（满足「安全读」要求，即便路径来自受信的附件清单也做兜底校验）。
+        """
         if not self.package_dir:
             return None
-        target: Any = Path(self.package_dir) / relative_path
+        decoded = relative_path.replace("\\", "/")
+        if decoded.startswith("/") or ".." in decoded.split("/"):
+            return None
+        base: Path = Path(self.package_dir).resolve()
+        target: Path = (base / decoded).resolve()
+        if target != base and base not in target.parents:
+            return None
         if not target.is_file():
             return None
         try:

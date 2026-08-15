@@ -232,6 +232,16 @@ async def get_skill(skill_id: str) -> dict[str, Any]:
             if disk_body is not None:
                 skill.load_body(disk_body)
 
+    # B-1.5：references 文件内容一并读出，供前端点击查看（仅 package 技能有 references）。
+    # custom 技能 references 恒为空，循环不进入；package 技能经 read_reference_file 安全读取。
+    reference_contents: dict[str, str] = {}
+    for rel_path in skill.references:
+        content = skill.read_reference_file(rel_path)
+        if content is not None:
+            reference_contents[rel_path] = content
+    if reference_contents:
+        skill.reference_contents = reference_contents
+
     return _api_response(0, skill.model_dump(mode="json"), "OK")
 
 

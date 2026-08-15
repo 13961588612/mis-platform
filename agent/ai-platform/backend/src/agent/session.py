@@ -78,6 +78,7 @@ class Message:
         role: str,
         content: str,
         metadata: dict[str, Any] | None = None,
+        message_id: str | None = None,
     ) -> None:
         """构造一条会话消息。
 
@@ -85,8 +86,10 @@ class Message:
             role: 消息角色（如 ``user``、``assistant``）。
             content: 消息正文。
             metadata: 可选的附加元数据。
+            message_id: 可选的消息 UUID；不传则自动生成。2.1 用于让计时
+                按轮（turn_key=该 id）落库，前端可按 ``message.id`` 逐条映射。
         """
-        self.id: str = str(uuid.uuid4())
+        self.id: str = message_id or str(uuid.uuid4())
         self.role = role
         self.content = content
         self.metadata = metadata or {}
@@ -162,9 +165,18 @@ class Session:
         role: str,
         content: str,
         metadata: dict[str, Any] | None = None,
+        message_id: str | None = None,
     ) -> Message:
-        """向会话中添加一条消息。"""
-        msg: Message = Message(role=role, content=content, metadata=metadata)
+        """向会话中添加一条消息。
+
+        Args:
+            role: 消息角色。
+            content: 消息正文。
+            metadata: 可选元数据。
+            message_id: 可选消息 UUID（2.1：与 process_message 的 turn_key 复用，
+                使计时能按该条 assistant 消息逐条映射）。
+        """
+        msg: Message = Message(role=role, content=content, metadata=metadata, message_id=message_id)
         self.messages.append(msg)
         self.updated_at = datetime.now(timezone.utc)
         return msg
@@ -563,6 +575,7 @@ class SessionManager:
         role: str,
         content: str,
         metadata: dict[str, Any] | None = None,
+        message_id: str | None = None,
     ) -> Message:
         """向现有会话添加一条消息并持久化（Redis + PG 双写）。
 
@@ -571,12 +584,14 @@ class SessionManager:
             role: 消息角色。
             content: 消息正文。
             metadata: 可选元数据。
+            message_id: 可选消息 UUID（2.1：与 process_message 的 turn_key 复用，
+                使计时能按该条 assistant 消息逐条映射）。
 
         Returns:
             新创建的消息对象。
         """
         session: Session = await self.get_session(session_id)
-        msg: Message = session.add_message(role, content, metadata)
+        msg: Message = session.add_message(role, content, metadata, message_id)
         await self.save_session(session)
         return msg
 

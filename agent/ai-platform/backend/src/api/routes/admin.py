@@ -95,6 +95,7 @@ async def get_route_logs(
     user_id: str | None = Query(default=None),
     agent_id: str | None = Query(default=None),
     strategy: str | None = Query(default=None),
+    kind: str | None = Query(default=None),
     limit: int = Query(default=100, ge=1, le=1000),
     offset: int = Query(default=0, ge=0),
     route_logger: RouteLogger = Depends(get_route_logger_dep),
@@ -106,6 +107,7 @@ async def get_route_logs(
             user_id=user_id,
             agent_id=agent_id,
             strategy=strategy,
+            kind=kind,
             limit=limit,
             offset=offset,
         )

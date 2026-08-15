@@ -60,6 +60,7 @@ class AgentInstance:
         self,
         session: Session,
         message: Message,
+        assistant_message_id: str | None = None,
     ) -> AsyncIterator[AgentEvent]:
         """
         处理用户消息并产出 AgentEvent 流。
@@ -67,6 +68,10 @@ class AgentInstance:
         Args:
             session: 当前活跃会话。
             message: 要处理的用户消息。
+            assistant_message_id: 本轮要落库的 assistant 消息 id（由调用方在
+                ``add_message(role="assistant", message_id=...)`` 时复用同一 id）。
+                传入后计时按「轮」维度（turn_key=该 id）存入 Redis，前端可按
+                ``message.id`` 逐条映射；为 ``None`` 时回退为 session 级单键。
 
         Yields:
             来自运行时的 AgentEvent 对象。
@@ -75,7 +80,7 @@ class AgentInstance:
             raise AgentNotRunningError(self.id)
 
         self.active_sessions += 1
-        # T01：包裹计时器，按 wall-clock 切 5 阶段，run_complete 后写 Redis。
+        # T01/2.1：包裹计时器，按 wall-clock 切 5 阶段，run_complete 后按轮写 Redis。
         # recorder / store 在异常时可能为 None，finally 里已做空值守卫。
         recorder: SessionTimingRecorder | None = None
         store: RedisTimingStore | None = None
@@ -84,7 +89,7 @@ class AgentInstance:
             messages: dict[str, Any] = session.get_messages()
             messages.append(message.to_dict())
 
-            recorder = SessionTimingRecorder(session.session_id)
+            recorder = SessionTimingRecorder(session.session_id, assistant_message_id)
             store = RedisTimingStore(get_settings())
 
             # 通过运行时执行
@@ -111,7 +116,11 @@ class AgentInstance:
             # 计时降级：任何异常都静默吞掉，绝不阻断主对话链路。
             if recorder is not None and store is not None:
                 try:
-                    await store.save(session.session_id, recorder.snapshot())
+                    await store.save(
+                        session.session_id,
+                        assistant_message_id or recorder.turn_key,
+                        recorder.snapshot(),
+                    )
                 except Exception as exc:  # noqa: BLE001
                     logger.warning(
                         "session timing save failed (degraded)",

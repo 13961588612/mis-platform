@@ -23,6 +23,8 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
+import uuid
+
 
 from fastapi import APIRouter, Depends, Header, Query, status
 from pydantic import BaseModel, Field
@@ -676,14 +678,25 @@ async def get_session_timing(
     session_id: str,
     _user: dict[str, Any] = Depends(get_current_user),
 ) -> dict[str, Any]:
-    """A-5 获取单会话最近一轮各阶段耗时（Redis，TTL 24h）。
+    """A-5 获取单会话**按轮**的各阶段耗时（per-turn map，Redis，TTL 24h）。
 
-    过期 / 未采样返回 ``data=null``，前端显示「已过期 / 暂无」。
+    返回结构（2.1 改造后）：:
+
+        {
+          "turns": { "<assistant_message_id>": {total_ms, stages, sampled_at, ...}, ... },
+          "last":  "<assistant_message_id>" | null   # 最近一轮的 turn_key（兼容旧调用方）
+        }
+
+    ``turns`` 为空 / 会话不存在返回 ``data=null``，前端显示「已过期 / 暂无」。
     """
     try:
         store = RedisTimingStore(get_settings())
-        timing = await store.get(session_id)
-        return success(data=timing)
+        turns = await store.get(session_id)
+        if not turns:
+            return success(data=None)
+        # last：按 sampled_at 取最近一轮的 turn_key（兼容旧消费方）。
+        last = max(turns.items(), key=lambda kv: str(kv[1].get("sampled_at", "")))[0]
+        return success(data={"turns": turns, "last": last})
     except Exception as exc:  # noqa: BLE001
         logger.error("Failed to get session timing", error=str(exc), session_id=session_id)
         return error_response(9001, str(exc), status.HTTP_500_INTERNAL_SERVER_ERROR)
@@ -694,11 +707,21 @@ async def batch_session_timing(
     req: BatchSessionTimingRequest,
     _user: dict[str, Any] = Depends(get_current_user),
 ) -> dict[str, Any]:
-    """A-6 批量获取当前页会话耗时（pipeline 一次往返），用于列表「耗时」列。"""
+    """A-6 批量获取当前页会话**按轮**耗时（pipeline 一次往返），用于列表「耗时」列。
+
+    返回 ``{session_id: {"turns": {...}, "last": "..."} | null}``。
+    """
     try:
         store = RedisTimingStore(get_settings())
-        timings = await store.get_many(req.ids)
-        return success(data=timings)
+        raw = await store.get_many(req.ids)
+        result: dict[str, Any] = {}
+        for sid, turns in raw.items():
+            if not turns:
+                result[sid] = None
+                continue
+            last = max(turns.items(), key=lambda kv: str(kv[1].get("sampled_at", "")))[0]
+            result[sid] = {"turns": turns, "last": last}
+        return success(data=result)
     except Exception as exc:  # noqa: BLE001
         logger.error("Failed to batch get session timing", error=str(exc))
         return error_response(9001, str(exc), status.HTTP_500_INTERNAL_SERVER_ERROR)
@@ -991,6 +1014,11 @@ async def send_message(
         # 确保 Agent 已注册并处于 RUNNING（支持启动时未同步的懒加载）
         instance: AgentInstance = await agent_manager.ensure_agent_ready(session.agent_id)
 
+        # 2.1：本轮 assistant 消息 id 预先生成，计时按轮（turn_key=该 id）落库，
+        # 落库时复用同一 id，使前端能按 message.id 逐条映射耗时。
+        # 放在 if/else 之前，保证 KB 与非 KB 两条分支都能拿到该 id（否则 KB 分支
+        # 走到下方 add_message(message_id=assistant_id) 时会 NameError）。
+        assistant_id: str = str(uuid.uuid4())
         if is_kb_qa_request(session.agent_id, req.metadata):
             response_text, runtime_error, tool_errors = await _run_session_kb_qa(
                 session=session,
@@ -1010,6 +1038,7 @@ async def send_message(
             async for event in instance.process_message(
                 session=session,
                 message=Message(role=req.role, content=req.content, metadata=req.metadata),
+                assistant_message_id=assistant_id,
             ):
                 if event.type == AgentEventType.TEXT_DELTA and event.content:
                     response_parts.append(event.content)
@@ -1037,11 +1066,12 @@ async def send_message(
                 tool_errors=tool_errors,
             )
 
-        # 保存助手响应
+        # 保存助手响应（复用本轮 assistant id，使计时可按该消息逐条映射）
         await session_manager.add_message(
             session_id=session_id,
             role="assistant",
             content=response_text,
+            message_id=assistant_id,
         )
 
         return success(

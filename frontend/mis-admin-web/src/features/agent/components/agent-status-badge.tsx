@@ -92,10 +92,11 @@ const DISPATCH_STATUS_MAP: Record<DispatchTraceStatus, BadgeSpec> = {
   running: { label: '执行中', variant: 'info' },
 };
 
-/** 调度观测：自动路由 vs 协调委派。 */
+/** 调度观测：自动路由 vs 协调委派 vs 指定路由。 */
 const DISPATCH_KIND_MAP: Record<string, BadgeSpec> = {
   agent_router: { label: '自动路由', variant: 'outline' },
   coordinator: { label: '协调委派', variant: 'info' },
+  specified: { label: '指定路由', variant: 'secondary' },
 };
 
 /** 徽章类别；决定用哪张映射表。 */

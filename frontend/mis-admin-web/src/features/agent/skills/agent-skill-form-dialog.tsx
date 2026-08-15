@@ -18,10 +18,11 @@
  * <p>`id` 仅新建时可填：它是 `ai:skill:{id}:run` 执行码的组成部分，
  * 改 id 等于让已授权的执行码全部失效，属于删旧建新而非编辑。
  */
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState, type ChangeEvent } from 'react';
 import { z } from 'zod';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
+import { Upload } from 'lucide-react';
 import { SubmitButton } from '@/components/common/submit-button';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
@@ -108,8 +109,8 @@ export interface AgentSkillFormDialogProps {
   onSaved: () => void;
 }
 
-/** 三态模式：手动填写 / 粘贴 SKILL.md / AI 对话创建。 */
-type SkillFormMode = 'manual' | 'paste' | 'ai';
+/** 两态模式：手动填写 / AI 对话创建（粘贴 SKILL.md 由「导入文件」按钮替代）。 */
+type SkillFormMode = 'manual' | 'ai';
 
 export function AgentSkillFormDialog({
   open,
@@ -121,9 +122,8 @@ export function AgentSkillFormDialog({
   const [errors, setErrors] = useState<Partial<Record<keyof SkillFormValues, string>>>({});
   const [saving, setSaving] = useState(false);
   const [mode, setMode] = useState<SkillFormMode>('manual');
-  const [rawContent, setRawContent] = useState('');
-  const [parsing, setParsing] = useState(false);
-  const [parseError, setParseError] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [importError, setImportError] = useState<string | null>(null);
   /** SKILL.md 正文（右栏可编辑，B-8）。 */
   const [body, setBody] = useState('');
   const isEdit = skill !== null;
@@ -145,9 +145,6 @@ export function AgentSkillFormDialog({
     setErrors({});
     setSaving(false);
     setMode('manual');
-    setRawContent('');
-    setParsing(false);
-    setParseError(null);
     setBody('');
     setAiMessages([]);
     setAiInput('');
@@ -191,28 +188,23 @@ export function AgentSkillFormDialog({
     });
   }
 
-  /** 解析并回填：调用 POST /agent-ops/skills/parse（R2/R3），复用 applyParsedSkill。 */
-  async function onParse(): Promise<void> {
-    if (rawContent.trim().length === 0) {
-      setParseError('请先粘贴 SKILL.md 内容');
-      return;
-    }
-    setParsing(true);
-    setParseError(null);
+  /** 1.2 导入 SKILL.md 文件：读本地文件 → 复用 parseSkill 解析 → 回填表单与正文（硬约束：禁止另写解析，仍走粘贴 Tab 同一入口）。 */
+  async function handleImportFile(e: ChangeEvent<HTMLInputElement>): Promise<void> {
+    const file = e.target.files?.[0];
+    e.target.value = ''; // 允许重复选同一文件
+    if (!file) return;
+    setImportError(null);
     try {
-      const res = await parseSkill(rawContent);
+      const text = await file.text();
+      const res = await parseSkill(text);
       const before = form;
       const result = applyParsedSkill(res.metadata ?? {}, res.body ?? '', before);
       setForm(result.form);
       setBody(result.body);
       setHighlight(diffHighlight(before, result.form));
-      setMode('manual');
-      toast.success('已解析并回填字段');
-    } catch (e) {
-      // R13：解析失败友好反馈（内联错误，便于「重新粘贴」）
-      setParseError(agentErrorMessage(e, '解析 SKILL.md 失败'));
-    } finally {
-      setParsing(false);
+      toast.success(`已导入并回填：${file.name}`);
+    } catch (err) {
+      setImportError(agentErrorMessage(err, '导入并解析 SKILL.md 失败'));
     }
   }
 
@@ -371,7 +363,6 @@ export function AgentSkillFormDialog({
 
   const tabs: Array<{ key: SkillFormMode; label: string }> = [
     { key: 'manual', label: '手动填写' },
-    { key: 'paste', label: '粘贴 SKILL.md' },
     { key: 'ai', label: 'AI 对话创建' },
   ];
 
@@ -400,45 +391,10 @@ export function AgentSkillFormDialog({
         </div>
 
         {/* 双栏：左元数据 / 右正文或 AI 面板（B-1~B-6/B-8 同屏；C 右栏为 AI 面板） */}
-        <div className="grid max-h-[60vh] grid-cols-1 gap-4 overflow-auto pr-1 md:grid-cols-2">
-          {/* 左栏：元数据（手动/AI 共用 SkillFormFields；粘贴模式为粘贴区） */}
+        <div className="mt-4 grid max-h-[60vh] grid-cols-1 gap-4 overflow-auto pr-1 md:grid-cols-2">
+          {/* 左栏：元数据（手动/AI 共用 SkillFormFields；手动模式额外提供「导入 SKILL.md 文件」按钮替代原粘贴 Tab） */}
           <div className="space-y-3">
-            {mode === 'paste' ? (
-              <div className="space-y-3">
-                <div>
-                  <label className={fieldLabel} htmlFor="skill-raw">
-                    粘贴 SKILL.md 全文
-                  </label>
-                  <Textarea
-                    id="skill-raw"
-                    rows={10}
-                    value={rawContent}
-                    placeholder={
-                      '---\nname: 会员积分查询\nhandler: mcp:crm-server:query_points\ndescription: 按会员 ID 查询积分\n---\n\n执行流程…'
-                    }
-                    onChange={(e) => {
-                      setRawContent(e.target.value);
-                      if (parseError) setParseError(null);
-                    }}
-                  />
-                  {parseError ? (
-                    <p className="mt-1 text-xs text-destructive">{parseError}</p>
-                  ) : null}
-                </div>
-                <div className="flex items-center gap-2">
-                  <SubmitButton loading={parsing} onClick={() => void onParse()}>
-                    {parsing ? '解析中…' : '解析并回填'}
-                  </SubmitButton>
-                  <Button variant="ghost" disabled={parsing} onClick={() => setRawContent('')}>
-                    清空
-                  </Button>
-                </div>
-                <p className="text-xs text-muted-foreground">
-                  支持带 YAML Front Matter 的 SKILL.md；解析成功后将自动切到「手动填写」并回填字段与正文。
-                  无 Front Matter 时原样返回正文。解析失败可修改后重新粘贴。
-                </p>
-              </div>
-            ) : (
+            {mode === 'ai' ? (
               <SkillFormFields
                 form={form}
                 errors={errors}
@@ -446,6 +402,41 @@ export function AgentSkillFormDialog({
                 isEdit={isEdit}
                 onChange={patch}
               />
+            ) : (
+              <>
+                {/* 1.2 导入 SKILL.md 文件，替代被删除的「粘贴 SKILL.md」Tab */}
+                <div className="flex flex-wrap items-center gap-2">
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept=".md,.markdown,.txt"
+                    className="hidden"
+                    onChange={(e) => void handleImportFile(e)}
+                  />
+                  <Button
+                    variant="outline"
+                    type="button"
+                    onClick={() => fileInputRef.current?.click()}
+                  >
+                    <Upload className="mr-1 h-4 w-4" />
+                    导入 SKILL.md 文件
+                  </Button>
+                  {importError ? (
+                    <span className="text-xs text-destructive">{importError}</span>
+                  ) : null}
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  支持带 YAML Front Matter 的 SKILL.md；导入成功后将自动回填字段与正文。
+                  无 Front Matter 时原样作为正文。
+                </p>
+                <SkillFormFields
+                  form={form}
+                  errors={errors}
+                  highlight={highlight}
+                  isEdit={isEdit}
+                  onChange={patch}
+                />
+              </>
             )}
           </div>
 

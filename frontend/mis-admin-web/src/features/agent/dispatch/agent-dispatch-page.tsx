@@ -16,6 +16,7 @@ import { cn, todayLocalDate } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card, CardContent } from '@/components/ui/card';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { StatCard } from '@/components/common/stat-card';
 import { SortIndicator } from '@/components/common/sort-indicator';
 import { useClientSort } from '@/components/common/use-client-sort';
@@ -121,6 +122,8 @@ export function AgentDispatchPage() {
   const [toDate, setToDate] = useState(todayLocalDate);
   const [coordinatorId, setCoordinatorId] = useState('');
   const [kind, setKind] = useState('');
+  /** 路由日志 / 调度链路 两个 Tab 隔离（#4.1）。 */
+  const [view, setView] = useState<'logs' | 'traces'>('logs');
 
   /** 已提交的查询条件；与输入态分开，避免改一个字符就打一次后端。默认当天。 */
   const [applied, setApplied] = useState<DispatchQuery>(() => {
@@ -326,6 +329,7 @@ export function AgentDispatchPage() {
               <option value="">全部类型</option>
               <option value="agent_router">自动路由</option>
               <option value="coordinator">协调委派</option>
+              <option value="specified">指定路由</option>
             </select>
           </div>
           <div className="w-56">
@@ -364,7 +368,7 @@ export function AgentDispatchPage() {
               description={
                 statsError
                   ? undefined
-                  : `自动路由 ${stats.by_kind.agent_router ?? 0} · 协调委派 ${stats.by_kind.coordinator ?? 0}`
+                  : `自动路由 ${stats.by_kind.agent_router ?? 0} · 协调委派 ${stats.by_kind.coordinator ?? 0} · 指定路由 ${stats.by_kind.specified ?? 0}`
               }
             />
             <StatCard
@@ -417,8 +421,15 @@ export function AgentDispatchPage() {
           </AgentContentState>
         </section>
 
-        {/* ---------------- 路由日志（#46 ready） ---------------- */}
-        <section className="flex shrink-0 flex-col gap-2">
+        {/* ---------------- 路由日志 / 调度链路：两个 Tab 隔离（#4.1） ---------------- */}
+        <Tabs value={view} onValueChange={(v) => setView(v as 'logs' | 'traces')} className="flex min-h-0 flex-1 flex-col gap-3">
+          <TabsList className="w-fit">
+            <TabsTrigger value="logs">路由日志</TabsTrigger>
+            <TabsTrigger value="traces">调度链路</TabsTrigger>
+          </TabsList>
+
+          {/* ===== Tab：路由日志（#46 ready） ===== */}
+          <TabsContent value="logs" className="flex min-h-0 flex-1 flex-col gap-2">
           <h2 className="text-sm font-medium text-foreground">
             路由日志
             <span className="ml-2 text-xs font-normal text-muted-foreground">
@@ -528,10 +539,10 @@ export function AgentDispatchPage() {
               </table>
             </div>
           </AgentContentState>
-        </section>
+          </TabsContent>
 
-        {/* ---------------- 调度链路（#45 ready，独立塌陷） ---------------- */}
-        <section className="flex shrink-0 flex-col gap-2">
+          {/* ===== Tab：调度链路（#45 ready，独立塌陷） ===== */}
+          <TabsContent value="traces" className="flex min-h-0 flex-1 flex-col gap-2">
           <div className="flex flex-wrap items-end gap-2">
             <h2 className="flex items-center gap-2 text-sm font-medium text-foreground">
               调度链路（Traces）
@@ -681,7 +692,8 @@ export function AgentDispatchPage() {
               </table>
             </div>
           </AgentContentState>
-        </section>
+          </TabsContent>
+        </Tabs>
 
         <p className="flex items-center gap-1.5 pb-1 text-xs text-muted-foreground">
           <GitBranch className="h-3.5 w-3.5" />

@@ -68,6 +68,8 @@ const FEEDBACK_COLS: ResizableColumn[] = [
   { key: '__sel__', label: '选择' },
   { key: 'rating', label: '评价' },
   { key: 'answer_brief', label: '回答摘要' },
+  { key: 'query_text', label: '提问问题' },
+  { key: 'turn_index', label: '对话编号' },
   { key: 'agent_name', label: 'Agent' },
   { key: 'user_name', label: '用户' },
   { key: 'status', label: '处理状态' },
@@ -640,6 +642,14 @@ export function AgentFeedbackPage() {
                                 说明：{item.comment}
                               </div>
                             ) : null}
+                          </td>
+                          <td className="max-w-[18rem] px-3 py-2">
+                            <div className="truncate text-xs" title={item.query_text || ''}>
+                              {item.query_text || '（无提问）'}
+                            </div>
+                          </td>
+                          <td className="px-3 py-2 text-center text-xs font-mono text-muted-foreground">
+                            {item.turn_index != null ? `#${item.turn_index}` : '-'}
                           </td>
                           <td className="truncate px-3 py-2 text-xs">
                             {item.agent_name || item.agent_id}

@@ -15,6 +15,7 @@ from __future__ import annotations
 from typing import Any, AsyncIterator
 
 import json
+import uuid
 
 from fastapi import APIRouter, Depends, Header, status
 from fastapi.responses import StreamingResponse
@@ -73,6 +74,7 @@ async def _collect_agent_response(
     instance: Any,
     session: Any,
     message: Message,
+    assistant_message_id: str | None = None,
 ) -> tuple[str, str | None, list[str]]:
     """驱动 Agent 处理一条消息，并汇总文本增量 / 运行时错误 / 工具错误。
 
@@ -80,6 +82,9 @@ async def _collect_agent_response(
         instance: 已就绪的 Agent 实例。
         session: 平台会话对象。
         message: 待处理消息。
+        assistant_message_id: 本轮要落库的 assistant 消息 id（2.1：计时按轮
+            turn_key=该 id 落库，落库时复用同一 id，使前端按 message.id 逐条映射）。
+            不传则回退为 session 级单键。
 
     Returns:
         ``(response_text, runtime_error, tool_errors)``。
@@ -88,7 +93,9 @@ async def _collect_agent_response(
     runtime_error: str | None = None
     tool_errors: list[str] = []
 
-    async for event in instance.process_message(session=session, message=message):
+    async for event in instance.process_message(
+        session=session, message=message, assistant_message_id=assistant_message_id
+    ):
         if event.type == AgentEventType.TEXT_DELTA and event.content:
             response_parts.append(event.content)
         elif event.type == AgentEventType.TOOL_RESULT and event.result:
@@ -344,17 +351,22 @@ async def agent_chat(
                 agent_id=agent_id,
                 trace_id=trace_id,
             )
+        # 2.1：本轮 assistant 消息 id 预先生成，计时按轮（turn_key=该 id）落库，
+        # 落库时复用同一 id，使前端能按 message.id 逐条映射耗时。
+        assistant_id: str = str(uuid.uuid4())
         response_text, runtime_error, tool_errors = await _collect_agent_response(
             instance,
             session,
             Message(role=req.role, content=req.content, metadata=req.metadata),
+            assistant_message_id=assistant_id,
         )
 
-        # 保存助手响应，便于后续多轮会话
+        # 保存助手响应（复用本轮 assistant id，使计时可按该消息逐条映射）
         await session_manager.add_message(
             session_id=session.session_id,
             role="assistant",
             content=response_text,
+            message_id=assistant_id,
         )
 
         if runtime_error and not response_text.strip():
@@ -444,9 +456,12 @@ async def agent_chat_stream(
                     agent_id=agent_id,
                     trace_id=trace_id,
                 )
+            # 2.1：本轮 assistant 消息 id 预先生成，计时按轮（turn_key=该 id）落库。
+            assistant_id: str = str(uuid.uuid4())
             async for event in instance.process_message(
                 session=session,
                 message=Message(role=req.role, content=req.content, metadata=req.metadata),
+                assistant_message_id=assistant_id,
             ):
                 if event.type == AgentEventType.TEXT_DELTA and event.content:
                     response_parts.append(event.content)
@@ -464,6 +479,7 @@ async def agent_chat_stream(
                 session_id=session_id,
                 role="assistant",
                 content="".join(response_parts),
+                message_id=assistant_id,
             )
             done_payload: dict[str, Any] = {
                 "traceId": trace_id,

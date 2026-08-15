@@ -49,7 +49,7 @@ import type {
   Session,
   SessionMessage,
   SessionQuery,
-  SessionTiming,
+  SessionTimingPayload,
   Skill,
   SkillGrant,
   SkillParseResponseFE,
@@ -406,17 +406,19 @@ export async function batchDeleteSessions(ids: string[]): Promise<void> {
   if (res.data.code !== 0) throw new Error(res.data.message || '批量删除会话失败');
 }
 
-/** A-5 — agent:session:timing。单会话最近一轮各阶段耗时（Redis，TTL 24h）。 */
-export async function getSessionTiming(id: string): Promise<SessionTiming | null> {
-  const res = await api.get<ApiResult<SessionTiming | null>>(`/agent-ops/sessions/${seg(id)}/timing`);
+/** A-5 — agent:session:timing。单会话**按轮**各阶段耗时（per-turn map，Redis TTL 24h）。 */
+export async function getSessionTiming(id: string): Promise<SessionTimingPayload | null> {
+  const res = await api.get<ApiResult<SessionTimingPayload | null>>(
+    `/agent-ops/sessions/${seg(id)}/timing`,
+  );
   return unwrap(res, '获取会话耗时失败');
 }
 
-/** A-6 — agent:session:timing。批量会话耗时（列表「耗时」列，pipeline 一次往返）。 */
+/** A-6 — agent:session:timing。批量会话**按轮**耗时（列表「耗时」列，pipeline 一次往返）。 */
 export async function batchSessionTiming(
   ids: string[],
-): Promise<Record<string, SessionTiming | null>> {
-  const res = await api.post<ApiResult<Record<string, SessionTiming | null>>>(
+): Promise<Record<string, SessionTimingPayload | null>> {
+  const res = await api.post<ApiResult<Record<string, SessionTimingPayload | null>>>(
     '/agent-ops/sessions/timing/batch',
     { ids },
   );
@@ -652,7 +654,7 @@ export interface DispatchQuery {
   from?: string;
   to?: string;
   coordinator_id?: string;
-  /** agent_router | coordinator；不传=全部。 */
+  /** agent_router | coordinator | specified；不传=全部。 */
   kind?: string;
 }
 

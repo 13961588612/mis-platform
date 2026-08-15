@@ -12,13 +12,13 @@
  * 用户 / 工具 / 系统消息仍按原文预格式化，便于排障看清原始输入与 tool 轨迹。
  * 不做流式打字机、消息编辑。
  */
-import type { ReactNode } from 'react';
+import type { ReactElement, ReactNode } from 'react';
 import { Bot, Terminal, ThumbsDown, ThumbsUp, User, Wrench } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { MarkdownView } from '@/components/common/markdown-view';
 import { KbChatSourceList, splitKbSources } from '@/components/common/kb-chat-sources';
 import { formatTime } from '../types';
-import type { MessageRole, SessionMessage } from '../types';
+import type { MessageRole, SessionMessage, SessionTiming } from '../types';
 
 /** 每种 role 的呈现规格：标签 + 配色 + 图标。 */
 interface RoleSpec {
@@ -168,31 +168,62 @@ function FeedbackBadge({ meta }: { meta: Record<string, unknown> | undefined }) 
 
 export interface AgentMessageStreamProps {
   messages: SessionMessage[];
+  /** 按轮耗时 map（key = assistant 消息 id）。2.1：逐条内联展示，缺失显示「—」。 */
+  timingByMessageId?: Record<string, SessionTiming>;
   /** 空态文案。 */
   emptyText?: string;
   /** 挂在列表末尾的内容（如"正在生成…"指示器）。 */
   footer?: ReactNode;
+  /** 会话回放时展示每条助手消息的对话编号（与反馈列表「对话编号」口径一致：会话内第 N 条助手消息）。 */
+  showTurnIndex?: boolean;
   className?: string;
+}
+
+/** 毫秒 → 可读串（2.1 内联耗时）。null 表示阶段未发生，显示「—」。 */
+function fmtMs(ms: number | null | undefined): string {
+  if (ms === null || ms === undefined) return '—';
+  if (ms < 1000) return `${ms}ms`;
+  return `${(ms / 1000).toFixed(2)}s`;
+}
+
+/** 单阶段耗时单元格（2.1 内联）。 */
+function InlineTimingCell({ label, ms }: { label: string; ms: number | null }): ReactElement {
+  return (
+    <span className="rounded bg-card px-1.5 py-0.5" title={`${label} ${fmtMs(ms)}`}>
+      <span className="text-muted-foreground">{label}</span>
+      <span className="ml-1 font-medium text-foreground">{fmtMs(ms)}</span>
+    </span>
+  );
 }
 
 export function AgentMessageStream({
   messages,
+  timingByMessageId,
   emptyText = '暂无消息',
   footer,
+  showTurnIndex = false,
   className,
 }: AgentMessageStreamProps) {
   if (messages.length === 0 && !footer) {
     return <p className="py-10 text-center text-sm text-muted-foreground">{emptyText}</p>;
   }
 
+  // 会话内助手消息的 1-based 顺序号（对话编号），与反馈列表 turn_index 口径一致。
+  let assistantTurn = 0;
+
   return (
     <div className={cn('flex flex-col gap-2', className)}>
       {messages.map((msg) => {
+        const isAssistant = msg.role === 'assistant';
+        const turnIndex = isAssistant ? (assistantTurn += 1) : undefined;
         const spec = ROLE_SPECS[msg.role] ?? FALLBACK_SPEC;
         const Icon = spec.icon;
         const isTool = msg.role === 'tool';
         const toolName = isTool ? toolNameOf(msg.metadata) : '';
         const argsSummary = isTool ? argsSummaryOf(msg.metadata) : '';
+        // 2.1：assistant 消息按 message.id 在按轮 map 中查本轮耗时。
+        const turn = msg.role === 'assistant' ? timingByMessageId?.[msg.id] : undefined;
+        const turnMissing = msg.role === 'assistant' && !turn;
 
         return (
           <div key={msg.id} className={cn('rounded-lg border p-3', spec.bubble)}>
@@ -210,7 +241,31 @@ export function AgentMessageStream({
               <span className="ml-auto text-[0.7rem] text-muted-foreground">
                 {formatTime(msg.timestamp)}
               </span>
+              {showTurnIndex && isAssistant && turnIndex != null ? (
+                <span className="ml-2 inline-flex items-center gap-1 rounded-md bg-primary/10 px-1.5 py-0.5 text-[0.7rem] font-medium text-primary">
+                  对话 #{turnIndex}
+                </span>
+              ) : null}
             </div>
+
+            {turn ? (
+              <div className="mb-2 flex flex-wrap items-center gap-1.5 rounded-md border bg-muted/40 px-2 py-1 text-[0.7rem]">
+                <span className="text-muted-foreground">本轮耗时</span>
+                <span className="font-medium text-foreground">{fmtMs(turn.total_ms)}</span>
+                <span className="text-border">·</span>
+                <InlineTimingCell label="规划" ms={turn.stages.planning_ms} />
+                <InlineTimingCell label="检索" ms={turn.stages.retrieval_ms} />
+                <InlineTimingCell label="工具" ms={turn.stages.tool_call_ms} />
+                <InlineTimingCell label="生成" ms={turn.stages.generation_ms} />
+                <InlineTimingCell label="后处理" ms={turn.stages.post_process_ms} />
+                <span className="ml-auto text-muted-foreground">
+                  采样 {formatTime(turn.sampled_at)}
+                </span>
+              </div>
+            ) : null}
+            {turnMissing ? (
+              <div className="mb-2 text-[0.7rem] text-muted-foreground">本轮耗时：—</div>
+            ) : null}
 
             {msg.content ? (
               msg.role === 'assistant' ? (

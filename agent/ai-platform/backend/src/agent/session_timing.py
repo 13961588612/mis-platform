@@ -1,13 +1,24 @@
 """会话各阶段耗时埋点（A-2 / A-3 / A-4，T01）。
 
 在 ``AgentInstance.process_message`` 的事件流外层包裹一个计时器，按 wall-clock 把一轮
-对话切分为 5 个阶段，运行完成后把最近一轮的耗时写入 Redis（key 见 ``RedisTimingStore``，
-TTL 24h，仅供调试回放，过期不影响会话本身的持久化内容）。
+对话切分为 5 个阶段，运行完成后把**该轮（按 assistant 消息 id 寻址）**的耗时写入 Redis
+（key 见 ``RedisTimingStore``，TTL 24h，仅供调试回放，过期不影响会话本身的持久化内容）。
 
 设计要点（与现状 T04 双写解耦）：
 - 会话元数据 / 消息已全部落 PG + Redis 双写，本模块**不改**那套；
 - 仅「各步骤执行时间」这类瞬态调试数据存 Redis，TTL 86400；
 - 任何异常都静默降级（warning），绝不阻断主对话链路（见 manager.py 的 finally）。
+
+2.1 改造（按轮存储）：
+- 旧设计把整轮耗时覆盖写进单个 key（``aip:agent:session:{id}:timing``），
+  只能保留「最近一轮」且无法与某条 assistant 消息对应 —— 这正是 2.2「刚写入却显示已过期」
+  的根因（session 级单键无法稳定寻址到具体一轮）。
+- 新设计以 **turn_key（= assistant 消息 id，最稳定且前端可直接映射）** 为维度，
+  把每轮耗时存进 per-session 的 map（``aip:agent:session:{id}:timings``），
+  值为 ``{turn_key: timing}``，并维持一个最多 ``TIMING_RING_SIZE`` 条的环形缓冲
+  （仅保留最近 N 轮，避免长会话无限膨胀）。写入时刷新 TTL 24h。
+- 读取端点返回整个 per-turn map（含兼容字段 ``last`` 指向最近一轮），
+  前端按 ``message.id`` 在 map 中查到对应轮的耗时，逐条内联展示。
 """
 
 from __future__ import annotations
@@ -34,13 +45,15 @@ STAGE_NAMES: tuple[str, ...] = (
     "post_process",
 )
 
-#: Redis 键中间段（与 REDIS_KEY_PREFIX 拼出 ``aip:agent:session:{id}:timing``）。
+#: Redis 键中间段（与 REDIS_KEY_PREFIX 拼出 ``aip:agent:session:{id}:timings``，**注意复数**）。
 TIMING_KEY_PREFIX = "agent:session:"
-TIMING_KEY_SUFFIX = ":timing"
+TIMING_KEY_SUFFIX = ":timings"
 #: 调试数据过期时间（秒）：24h。过期后前端显示「已过期 / 暂无」。
 TIMING_TTL_SECONDS = 86400
 #: 当前 timing schema 版本，结构变更时 +1。
 TIMING_SCHEMA_VERSION = 1
+#: 每个会话最多保留的轮次条数（环形缓冲，仅保留最近 N 轮调试耗时）。
+TIMING_RING_SIZE = 50
 
 
 class StageTiming:
@@ -82,17 +95,20 @@ class SessionTimingRecorder:
 
     用法::
 
-        recorder = SessionTimingRecorder(session_id)
+        recorder = SessionTimingRecorder(session_id, turn_key)
         async for event in stream:
             recorder.observe(event)
             yield event
         recorder.complete()   # 正常结束
         # 或 recorder.fail()  # 异常结束
-        await store.save(session_id, recorder.snapshot())
+        await store.save(session_id, turn_key, recorder.snapshot())
     """
 
-    def __init__(self, session_id: str) -> None:
+    def __init__(self, session_id: str, turn_key: str | None = None) -> None:
         self.session_id = session_id
+        # turn_key：本轮对应的 assistant 消息 id（由调用方在落库前生成并复用）。
+        # 为 None 时回退为 session 级单键，保证未改造的调用方仍能写入（仅无法前端逐条映射）。
+        self.turn_key = turn_key or f"{session_id}:latest"
         self._start = time.monotonic()
         self._first_external: float | None = None
         self._last_external: float | None = None
@@ -203,6 +219,8 @@ class SessionTimingRecorder:
         )
 
         return {
+            # turn_key：本轮对应的 assistant 消息 id，供前端按 message.id 映射。
+            "turn_key": self.turn_key,
             "total_ms": round(total_ms),
             "stages": {
                 "planning_ms": round(planning_ms),
@@ -217,7 +235,11 @@ class SessionTimingRecorder:
 
 
 class RedisTimingStore:
-    """各会话最近一轮耗时的 Redis 存储（key 命名与 TTL 见模块常量）。"""
+    """各会话**按轮（turn_key=assistant 消息 id）**耗时的 Redis 存储（map 结构）。
+
+    key：``{REDIS_KEY_PREFIX}agent:session:{session_id}:timings``
+    value：JSON ``{turn_key: timing_snapshot, ...}``，环形缓冲保留最近 ``TIMING_RING_SIZE`` 轮。
+    """
 
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
@@ -235,24 +257,40 @@ class RedisTimingStore:
             decode_responses=True,
         )
 
-    async def save(self, session_id: str, timing: dict[str, Any]) -> None:
-        """覆盖写最近一轮耗时（每次 run_complete 覆盖）。过期不影响会话可读。"""
+    async def save(self, session_id: str, turn_key: str, timing: dict[str, Any]) -> None:
+        """按轮 upsert 一轮耗时（turn_key 维度），并刷新 TTL / 维持环形缓冲。
+
+        写入路径异常一律静默降级（warning），绝不阻断主对话链路。
+        """
+        if not turn_key:
+            turn_key = f"{session_id}:latest"
         client = self._client()
         try:
-            await client.set(
-                self._key(session_id),
-                json.dumps(timing, ensure_ascii=False),
-                ex=TIMING_TTL_SECONDS,
-            )
+            key = self._key(session_id)
+            # 读取既有 map（无则空 dict），upsert 本轮，再裁剪到环形缓冲上限。
+            raw = await client.get(key)
+            mapping: dict[str, Any] = json.loads(raw) if raw else {}
+            if not isinstance(mapping, dict):
+                mapping = {}
+            mapping[turn_key] = timing
+            # 环形缓冲：超出上限时丢弃最早的轮次（按 sampled_at 升序）。
+            if len(mapping) > TIMING_RING_SIZE:
+                ordered = sorted(
+                    mapping.items(),
+                    key=lambda kv: str(kv[1].get("sampled_at", "")),
+                )
+                mapping = dict(ordered[-TIMING_RING_SIZE:])
+            await client.set(key, json.dumps(mapping, ensure_ascii=False), ex=TIMING_TTL_SECONDS)
         finally:
             await client.close()
 
     async def get(self, session_id: str) -> dict[str, Any] | None:
-        """读取单会话耗时；过期 / 不存在返回 None（前端显示「已过期 / 暂无」）。"""
+        """读取单会话的 per-turn 耗时 map；过期 / 不存在返回 None（前端显示「已过期 / 暂无」）。"""
         client = self._client()
         try:
             raw = await client.get(self._key(session_id))
-            return json.loads(raw) if raw else None
+            data = json.loads(raw) if raw else None
+            return data if isinstance(data, dict) else None
         except json.JSONDecodeError:
             logger.warning("session timing payload corrupt", session_id=session_id)
             return None
@@ -260,7 +298,7 @@ class RedisTimingStore:
             await client.close()
 
     async def get_many(self, session_ids: list[str]) -> dict[str, dict[str, Any] | None]:
-        """批量读取当前页会话耗时（列表列用，pipeline 一次往返）。"""
+        """批量读取当前页会话的 per-turn 耗时 map（列表列用，pipeline 一次往返）。"""
         if not session_ids:
             return {}
         client = self._client()
@@ -275,7 +313,8 @@ class RedisTimingStore:
                     result[sid] = None
                     continue
                 try:
-                    result[sid] = json.loads(raw)
+                    data = json.loads(raw)
+                    result[sid] = data if isinstance(data, dict) else None
                 except json.JSONDecodeError:
                     result[sid] = None
             return result

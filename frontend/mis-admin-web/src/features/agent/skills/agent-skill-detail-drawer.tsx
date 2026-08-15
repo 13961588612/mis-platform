@@ -29,6 +29,13 @@ import {
   CollapsibleTrigger,
 } from '@/components/ui/collapsible';
 import { AgentStatusBadge } from '../components/agent-status-badge';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import { getSkill } from '../api/agent-ops-api';
 import { agentErrorMessage, formatTime } from '../types';
 import type { SkillDetail } from '../types';
@@ -40,15 +47,17 @@ export interface AgentSkillDetailDrawerProps {
   onClose: () => void;
 }
 
-/** 单个附件分类的折叠展示（无则显示「无」）。 */
+/** 单个附件分类的折叠展示（无则显示「无」）。onFileClick 可选：传入则列表项可点击查看内容。 */
 function AttachmentList({
   title,
   icon,
   files,
+  onFileClick,
 }: {
   title: string;
   icon: ReactNode;
   files: string[] | undefined;
+  onFileClick?: (file: string) => void;
 }) {
   const items = files ?? [];
   return (
@@ -66,9 +75,22 @@ function AttachmentList({
         ) : (
           <ul className="space-y-1">
             {items.map((f) => (
-              <li key={f} className="truncate font-mono text-xs text-foreground" title={f}>
-                {f}
-              </li>
+              onFileClick ? (
+                <li key={f}>
+                  <button
+                    type="button"
+                    onClick={() => onFileClick(f)}
+                    className="w-full truncate rounded px-1 py-0.5 text-left font-mono text-xs text-foreground underline-offset-2 hover:bg-muted/60 hover:underline"
+                    title={`查看 ${f}`}
+                  >
+                    {f}
+                  </button>
+                </li>
+              ) : (
+                <li key={f} className="truncate font-mono text-xs text-foreground" title={f}>
+                  {f}
+                </li>
+              )
             ))}
           </ul>
         )}
@@ -92,6 +114,8 @@ function Field({ label, value }: { label: string; value: string }) {
 export function AgentSkillDetailDrawer({ skillId, open, onClose }: AgentSkillDetailDrawerProps) {
   const [detail, setDetail] = useState<SkillDetail | null>(null);
   const [loading, setLoading] = useState(false);
+  /** B-1.5：当前正在查看的参考资料文件（name + 内容，内容来自详情接口的 reference_contents）。 */
+  const [viewRef, setViewRef] = useState<{ name: string; content: string } | null>(null);
 
   useEffect(() => {
     if (!open || !skillId) return;
@@ -117,6 +141,7 @@ export function AgentSkillDetailDrawer({ skillId, open, onClose }: AgentSkillDet
   const kind = detail?.handler && detail.handler.trim() !== '' ? 'executable' : 'document';
 
   return (
+    <>
     <Sheet open={open} onOpenChange={(v) => !v && onClose()}>
       <SheetContent className="flex w-full flex-col sm:max-w-2xl">
         <SheetHeader>
@@ -190,6 +215,12 @@ export function AgentSkillDetailDrawer({ skillId, open, onClose }: AgentSkillDet
                   title="参考资料 references"
                   icon={<FileText className="h-4 w-4" />}
                   files={detail.references}
+                  onFileClick={(f) =>
+                    setViewRef({
+                      name: f,
+                      content: detail.reference_contents?.[f] ?? '（内容不可用）',
+                    })
+                  }
                 />
                 <AttachmentList
                   title="资源 assets"
@@ -202,5 +233,19 @@ export function AgentSkillDetailDrawer({ skillId, open, onClose }: AgentSkillDet
         </div>
       </SheetContent>
     </Sheet>
+
+    {/* B-1.5：参考资料内容预览弹窗（内容来自详情接口的 reference_contents，按相对路径索引） */}
+    <Dialog open={viewRef !== null} onOpenChange={(v) => !v && setViewRef(null)}>
+      <DialogContent className="max-h-[80vh] flex flex-col">
+        <DialogHeader>
+          <DialogTitle className="truncate font-mono text-sm">{viewRef?.name}</DialogTitle>
+          <DialogDescription>参考资料文件内容预览</DialogDescription>
+        </DialogHeader>
+        <pre className="min-h-0 flex-1 overflow-auto whitespace-pre-wrap break-words rounded-md border bg-muted/40 p-3 text-xs text-foreground">
+          {viewRef?.content}
+        </pre>
+      </DialogContent>
+    </Dialog>
+    </>
   );
 }

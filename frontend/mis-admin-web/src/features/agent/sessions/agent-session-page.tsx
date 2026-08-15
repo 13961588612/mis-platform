@@ -39,7 +39,7 @@ import {
 } from '../api/agent-ops-api';
 import { useAgentStore } from '../stores/use-agent-store';
 import { agentErrorMessage, formatTime } from '../types';
-import type { AgentSummary, Session, SessionChannel, SessionQuery, SessionTiming } from '../types';
+import type { AgentSummary, Session, SessionChannel, SessionQuery, SessionTimingPayload } from '../types';
 
 const selectClass =
   'h-9 w-full rounded-md border border-input bg-card px-[0.7rem] text-sm text-foreground shadow-none';
@@ -63,11 +63,15 @@ function fmtMs(ms: number | null | undefined): string {
   return `${ms}ms`;
 }
 
-/** 列表「耗时」列单元格：null（已过期/无采样）显示统一文案，否则显示端到端耗时。 */
-function formatTimingCell(t: SessionTiming | null | undefined): string {
+/** 列表「耗时」列单元格（2.1 按轮）：显示最近一轮（last）的端到端耗时；
+ *  null（已过期/无采样）显示统一文案；无 turns 显示「—」。 */
+function formatTimingCell(t: SessionTimingPayload | null | undefined): string {
   if (t === null) return '已过期/暂无';
-  if (!t) return '—';
-  return fmtMs(t.total_ms);
+  if (!t || !t.turns) return '—';
+  const keys = Object.keys(t.turns);
+  if (keys.length === 0) return '—';
+  const lastKey = t.last ?? keys[keys.length - 1];
+  return fmtMs(t.turns[lastKey]?.total_ms);
 }
 
 const CHANNEL_LABELS: Record<SessionChannel, string> = {
@@ -109,8 +113,8 @@ export function AgentSessionPage() {
   const [pageSize, setPageSize] = useState(20);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  /** 当前页各会话耗时（A-6，Redis 调试态；值 null = 已过期/暂无）。 */
-  const [timings, setTimings] = useState<Record<string, SessionTiming | null>>({});
+  /** 当前页各会话耗时（A-6，Redis 调试态，按轮 map；值 null = 已过期/暂无）。 */
+  const [timings, setTimings] = useState<Record<string, SessionTimingPayload | null>>({});
 
   const [selected, setSelected] = useState<Set<string>>(() => new Set());
   const [pending, setPending] = useState<PendingDelete | null>(null);

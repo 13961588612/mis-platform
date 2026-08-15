@@ -622,6 +622,43 @@ class SessionPgStore:
                         msg_row.content or "", 60
                     )
 
+            # 批量读会话消息 → 计算对话编号(turn_index) 与 提问问题(query_text)。
+            # turn_index：被评价助手消息在所属会话中的 1-based 顺序号，与前端会话回放
+            # 的逐条编号一致（均按 timestamp.asc()+seq.asc() 排序，便于运营对照）。
+            # query_text：该助手消息之前最近的**用户消息**正文截断（≤60 字），
+            # 即触发这条回答的提问，满足运营「按问题定位反馈」的诉求。
+            turn_indexes: dict[str, int] = {}
+            query_texts: dict[str, str] = {}
+            if session_ids:
+                msg_rows_all: Sequence[AgentSessionMessageModel] = (
+                    await db.scalars(
+                        select(AgentSessionMessageModel)
+                        .where(AgentSessionMessageModel.session_id.in_(session_ids))
+                        .order_by(
+                            AgentSessionMessageModel.timestamp.asc(),
+                            AgentSessionMessageModel.seq.asc(),
+                        )
+                    )
+                ).all()
+                per_session: dict[str, list[AgentSessionMessageModel]] = {}
+                for m in msg_rows_all:
+                    per_session.setdefault(m.session_id, []).append(m)
+                for _sid, msgs in per_session.items():
+                    assistant_no: int = 0
+                    for idx, m in enumerate(msgs, start=1):
+                        # turn_index：被评价助手消息在所属会话中按「助手消息」自增的
+                        # 1-based 序号（与前端会话回放逐条编号一致）。非助手消息不写
+                        # turn_indexes（feedback 仅评价助手消息，无所谓）。
+                        if m.role == "assistant":
+                            assistant_no += 1
+                            turn_indexes[m.id] = assistant_no
+                            q = ""
+                            for prev in reversed(msgs[: idx - 1]):
+                                if prev.role == "user":
+                                    q = _truncate_title(prev.content or "", 60)
+                                    break
+                            query_texts[m.id] = q
+
             items: list[dict[str, Any]] = []
             for row in rows:
                 item: dict[str, Any] = row.to_wire(
@@ -634,6 +671,8 @@ class SessionPgStore:
                 item["user_name"] = (
                     session_wire.get("user_name") if session_wire else None
                 )
+                item["turn_index"] = turn_indexes.get(row.message_id)
+                item["query_text"] = query_texts.get(row.message_id)
                 items.append(item)
 
             return FeedbackPage(

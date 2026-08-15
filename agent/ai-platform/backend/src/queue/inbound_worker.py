@@ -9,6 +9,7 @@ from typing import Any
 import asyncio
 import os
 import time
+import uuid
 
 import redis.asyncio as aioredis
 from redis.exceptions import TimeoutError as RedisTimeoutError
@@ -557,12 +558,15 @@ class InboundStreamWorker:
         first_text_ms: int | None = None
         event_count: int = 0
         t_run0: float = time.perf_counter()
+        # 2.1：本轮 assistant 消息 id 预先生成，计时按轮（turn_key=该 id）落库。
+        assistant_id: str = str(uuid.uuid4())
 
         try:
             async with asyncio.timeout(timeout_sec):
                 async for event in instance.process_message(
                     session=session,
                     message=user_msg,
+                    assistant_message_id=assistant_id,
                 ):
                     if first_event_ms is None:
                         first_event_ms = int((time.perf_counter() - t_run0) * 1000)
@@ -641,6 +645,7 @@ class InboundStreamWorker:
                 session_id=session.session_id,
                 role="assistant",
                 content=response_text,
+                message_id=assistant_id,
             )
         elif runtime_error:
             logger.warning(
@@ -840,11 +845,13 @@ class InboundStreamWorker:
         first_text_ms: int | None = None
         event_count: int = 0
         t_run0: float = time.perf_counter()
+        # 2.1：本轮 assistant 消息 id 预先生成，计时按轮（turn_key=该 id）落库。
+        assistant_id: str = str(uuid.uuid4())
 
         try:
             async with asyncio.timeout(timeout_sec):
                 async for event in instance.process_message(
-                    session=session, message=user_msg
+                    session=session, message=user_msg, assistant_message_id=assistant_id
                 ):
                     if first_event_ms is None:
                         first_event_ms = int((time.perf_counter() - t_run0) * 1000)
@@ -889,6 +896,7 @@ class InboundStreamWorker:
                 session_id=session.session_id,
                 role="assistant",
                 content=response_text,
+                message_id=assistant_id,
             )
         elif runtime_error:
             logger.warning(

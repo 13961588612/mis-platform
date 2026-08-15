@@ -69,6 +69,8 @@ export interface SkillDetail extends Skill {
   scripts?: string[];
   references?: string[];
   assets?: string[];
+  /** B-1.5：参考资料文件内容（key = 相对路径，value = 文件正文），由详情接口按 `references` 一并读出。 */
+  reference_contents?: Record<string, string>;
 }
 
 /**
@@ -136,12 +138,33 @@ export interface StageTiming {
 }
 
 export interface SessionTiming {
+  /** 本轮对应的 assistant 消息 id（2.1 按轮存储的 turn_key）。 */
+  turn_key?: string;
   total_ms: number | null;
   stages: StageTiming;
   /** 采样时间（ISO 8601 UTC）。 */
   sampled_at: string;
   /** timing schema 版本，结构变更时 +1。 */
   schema_version: number;
+}
+
+/**
+ * 单会话「按轮」耗时 map（2.1 改造后）。
+ *
+ * <p>key = assistant 消息 id（与 {@link SessionMessage.id} 对齐），value = 该轮
+ * {@link SessionTiming}。前端按 ``message.id`` 在 map 中查到对应轮的耗时，逐条内联展示。
+ */
+export type SessionTimingMap = Record<string, SessionTiming>;
+
+/**
+ * 耗时查询返回包（后端 ``GET /sessions/{id}/timing`` 与 ``POST /sessions/timing/batch``）。
+ *
+ * <p>``turns`` 为按轮 map；``last`` 为最近一轮的 turn_key（兼容旧消费方）。
+ * 会话无调试耗时时整体为 ``null``。
+ */
+export interface SessionTimingPayload {
+  turns: SessionTimingMap;
+  last: string | null;
 }
 
 export interface SkillStats {
@@ -493,6 +516,10 @@ export interface AgentFeedbackItem {
   updated_at: string;
   /** 被评价回答的截断摘要（≤60 字，由后端按 message_id 填充）。 */
   answer_brief?: string | null;
+  /** 触发该回答的提问（被评价助手消息之前最近的用户消息，≤60 字截断）。 */
+  query_text?: string | null;
+  /** 对话编号：被评价助手消息在所属会话中的 1-based 顺序号（非会话编号）。 */
+  turn_index?: number | null;
 }
 
 /** 会话反馈列表查询条件（字段名与 ai-platform `FeedbackQuery` 一致）。 */
@@ -694,8 +721,8 @@ export interface RouteLog {
   confidence?: number;
   latency_ms?: number;
   timestamp: string;
-  /** agent_router=自动选 Agent；coordinator=协调者转执行者。 */
-  dispatch_kind?: 'agent_router' | 'coordinator';
+  /** agent_router=自动选 Agent；coordinator=协调者转执行者；specified=用户直接指定 Agent。 */
+  dispatch_kind?: 'agent_router' | 'coordinator' | 'specified';
 }
 
 /**
