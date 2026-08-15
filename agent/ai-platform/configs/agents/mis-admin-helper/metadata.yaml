@@ -1,0 +1,25 @@
+metadata:
+  name: mis-admin-helper
+  display_name: MIS 技能创建助手（后台操作员）
+  description: >
+    MIS 平台技能创建助手，面向后台操作员：浏览现有技能、合并生成统一的新 SKILL.md，
+    并可联网补全外部专业资料。
+  version: "1.0.0"
+  enabled: true
+  tags:
+    - mis
+    - skill
+    - create_skill
+  capabilities:
+    - create_skill
+
+  # ---------------------------------------------------------------------------
+  # Coordinator–Worker 委派契约（spec.md §4.2 / design-impl.md §6 T04）
+  # 注意：mis-admin-helper 不进入任何 coordinator 的 delegation.worker_ids，
+  # 仅经「新建技能」对话框的 createChatSession(agent_id="mis-admin-helper") 触达。
+  # ---------------------------------------------------------------------------
+  when_to_use: 后台操作员创建/合并生成技能（create_skill），含浏览现有技能与联网补全
+  input_contract:
+    - user_question
+  output_contract: text
+  safety_level: read_only

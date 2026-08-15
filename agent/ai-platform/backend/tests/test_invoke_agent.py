@@ -231,3 +231,43 @@ async def test_invoke_agent_not_found():
 
     assert result.is_error
     assert "不存在" in result.output
+
+
+@pytest.mark.asyncio
+async def test_invoke_rejects_admin_helper_explicit():
+    """T05 硬约束·闸②+闸③（belt-and-suspenders）：即便 mis-admin-helper 被误配进白名单，
+    InvokeAgentTool 也必须显式拒绝，绝不经调度链接触达后台操作员专属 Agent。
+
+    该判定在白名单校验**之前**发生，故这里把 mis-admin-helper 放进白名单以证明
+    显式拒与白名单无关（双保险）。
+    """
+    from src.coordinator.catalog import ADMIN_HELPER_AGENT_IDS
+
+    assert "mis-admin-helper" in ADMIN_HELPER_AGENT_IDS
+    tool = InvokeAgentTool()
+    result = await tool.execute(
+        InvokeAgentInput(agent_id="mis-admin-helper", content="建个技能"),
+        _ctx(),
+    )
+    assert result.is_error
+    assert "不可经调度链接触达" in result.output
+
+
+@pytest.mark.asyncio
+async def test_invoke_rejects_admin_helper_even_within_whitelist():
+    """同上一例，但显式把 mis-admin-helper 塞进白名单，证明显式拒优先于白名单判定。"""
+    tool = InvokeAgentTool()
+    with patch(
+        "src.skills.tools.invoke_agent.get_settings",
+        return_value=MagicMock(
+            INVOKE_AGENT_WHITELIST=["mis-admin-helper", "mis-extract"],
+            INVOKE_AGENT_MAX_DEPTH=1,
+            INVOKE_AGENT_TIMEOUT_SECONDS=30,
+        ),
+    ):
+        result = await tool.execute(
+            InvokeAgentInput(agent_id="mis-admin-helper", content="建个技能"),
+            _ctx(),
+        )
+    assert result.is_error
+    assert "不可经调度链接触达" in result.output

@@ -1,0 +1,27 @@
+metadata:
+  name: mis-user-helper
+  display_name: MIS 抽取/摘要助手（全员）
+  description: >
+    MIS 平台抽取/摘要助手：从文本抽取结构化字段（extract）或对文本做要点摘要（summary）。
+  version: "1.0.0"
+  enabled: true
+  tags:
+    - mis
+    - extract
+    - summary
+  capabilities:
+    - extract
+    - summary
+
+  # ---------------------------------------------------------------------------
+  # Coordinator–Worker 委派契约（spec.md §4.2 / design-impl.md §6 T04）
+  # 沿用旧 mis-extract / mis-summary 契约：summary 为主场景（output_contract: text），
+  # extract 结果仍以 JSON 文本返回（与下游 BFF 一致）。
+  # ---------------------------------------------------------------------------
+  when_to_use: 从文本抽取结构化字段（extract）或对文本做要点摘要（summary），不做检索
+  input_contract:
+    - user_question
+    - attachments_text
+    - page_context_slice
+  output_contract: text
+  safety_level: read_only

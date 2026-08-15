@@ -64,8 +64,10 @@ EXPECTED_ROLES: dict[str, AgentRole] = {
     "crm-assistant": AgentRole.WORKER,
     "mis-extract": AgentRole.WORKER,
     "mis-summary": AgentRole.WORKER,
+    "mis-admin-helper": AgentRole.WORKER,
+    "mis-user-helper": AgentRole.WORKER,
 }
-"""5 个 Agent 的期望调度角色（T04 验收：role 解析正确）。"""
+"""7 个 Agent 的期望调度角色（T04 验收：role 解析正确；1.3/1.4 新增两个 helper）。"""
 
 LAZY_DELEGATION_CORPUS: tuple[str, ...] = (
     "帮我查一下",
@@ -617,7 +619,9 @@ async def test_a6_disabled_worker_disappears_after_refresh(
 
     assert catalog.fallback is False
     assert NEW_WORKER_ID not in catalog.worker_ids()
-    assert catalog.worker_ids() == sorted(DEFAULT_WHITELIST)
+    # 1.3/1.4：mis-admin-helper 作为 ADMIN_HELPER 特例收录，故即便 YAML 关停 NEW_WORKER，
+    # 目录仍含 mis-admin-helper + 白名单内 enabled 的 worker（mis-rag/crm-assistant）。
+    assert set(catalog.worker_ids()) == {"mis-admin-helper", "mis-rag", "crm-assistant"}
     assert NEW_WORKER_ID not in InvokeAgentTool(catalog=catalog).description
 
 
@@ -774,7 +778,7 @@ async def test_too_short_goal_is_rejected_in_strict_mode() -> None:
 
 
 async def test_repo_configs_load_five_agents_without_warning() -> None:
-    """真实 configs 目录可加载 5 个 Agent，且加载过程无告警/报错。"""
+    """真实 configs 目录可加载 7 个 Agent，且加载过程无告警/报错。"""
     configs, logger_spy = await _load_configs(REPO_CONFIGS)
     agent_ids = sorted(config.agent_id for config in configs)
 
@@ -784,7 +788,7 @@ async def test_repo_configs_load_five_agents_without_warning() -> None:
 
 
 async def test_repo_configs_declare_expected_roles() -> None:
-    """5 个 Agent 的 role 解析正确：1 个 Coordinator + 4 个 Worker。"""
+    """7 个 Agent 的 role 解析正确：1 个 Coordinator + 6 个 Worker。"""
     configs, _ = await _load_configs(REPO_CONFIGS)
     roles = {config.agent_id: config.role for config in configs}
 
@@ -793,7 +797,7 @@ async def test_repo_configs_declare_expected_roles() -> None:
 
 
 async def test_worker_metadata_declares_delegation_contract() -> None:
-    """4 个 Worker 的委派契约齐备，且 when_to_use 互不重复。"""
+    """6 个 Worker 的委派契约齐备，且 when_to_use 互不重复。"""
     configs, _ = await _load_configs(REPO_CONFIGS)
     workers = {
         config.agent_id: config.metadata
@@ -801,7 +805,7 @@ async def test_worker_metadata_declares_delegation_contract() -> None:
         if config.role is AgentRole.WORKER
     }
 
-    assert set(workers) == set(DEFAULT_WHITELIST)
+    assert set(workers) == {*DEFAULT_WHITELIST, "mis-admin-helper", "mis-user-helper"}
     hints: list[str] = []
     for agent_id, metadata in workers.items():
         assert metadata is not None, agent_id
@@ -819,14 +823,17 @@ async def test_worker_metadata_declares_delegation_contract() -> None:
 async def test_catalog_from_repo_configs_matches_whitelist(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """由真实配置构建的 Catalog = 白名单 ∩ role=worker，Coordinator 被排除。"""
+    """由真实配置构建的 Catalog = (白名单 ∩ enabled ∩ role=worker) ∪ ADMIN_HELPER，
+    Coordinator 被排除；mis-admin-helper 特例收录但不在白名单。"""
     configs, _ = await _load_configs(REPO_CONFIGS)
     _patch_catalog_sources(monkeypatch, configs, sorted(DEFAULT_WHITELIST))
 
     catalog = build_worker_catalog()
 
     assert catalog.fallback is False
-    assert catalog.worker_ids() == sorted(DEFAULT_WHITELIST)
+    # 1.3/1.4：mis-extract/mis-summary 已 enabled:false → 不出现；mis-admin-helper 特例收录；
+    # 白名单内 enabled 的 worker（mis-rag/crm-assistant）正常出现。
+    assert set(catalog.worker_ids()) == {"mis-admin-helper", "mis-rag", "crm-assistant"}
     assert catalog.coordinators == ["mis-copilot"]
     assert catalog.get("mis-copilot") is None
     assert catalog.get("crm-assistant").is_read_only() is False

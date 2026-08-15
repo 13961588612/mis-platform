@@ -22,7 +22,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field, PrivateAttr, create_model
 
 from src.config import get_settings
-from src.config_manager.file_service import yaml
+from src.config_manager.file_service import agent_dir, yaml
 from src.utils.logging import get_logger
 
 logger = get_logger("coordinator.catalog")
@@ -50,19 +50,30 @@ STATIC_WORKER_HINTS: dict[str, dict[str, Any]] = {
         "output_contract": "text",
         "safety_level": "read_only",
     },
-    "mis-extract": {
-        "display_name": "MIS 字段抽取助手",
-        "when_to_use": "从给定文本中抽取结构化表单字段，不做检索",
-        "capabilities": ["extract"],
-        "input_contract": ["user_question", "attachments_text"],
-        "output_contract": "json",
+    "mis-user-helper": {
+        "display_name": "MIS 抽取/摘要助手（全员）",
+        "when_to_use": "从文本抽取结构化字段（extract）或对文本做要点摘要（summary），不做检索",
+        "capabilities": ["extract", "summary"],
+        "input_contract": ["user_question", "attachments_text", "page_context_slice"],
+        "output_contract": "text",
         "safety_level": "read_only",
     },
-    "mis-summary": {
-        "display_name": "MIS 摘要助手",
-        "when_to_use": "对已给定文本做摘要或审批意见归纳，不做检索",
-        "capabilities": ["summary"],
-        "input_contract": ["user_question", "attachments_text"],
+}
+
+#: 硬约束（R8/Q1）：后台操作员专属 Agent，绝不进 copilot 委派。
+#: 单一事实源（后端）；前端镜像常量见 agent-coordination-page.tsx 的 LOCKED_WORKERS。
+#: 这些 Agent 作为真实 worker 注册（后台操作员经 create_session 直达），故在全局
+#: catalog 中**特例收录**以保证管理台可见；但其不在 INVOKE_AGENT_WHITELIST，
+#: 运行时 L249 恒定拒绝、scoped catalog 亦过滤，四道闸 fail-closed 成立。
+ADMIN_HELPER_AGENT_IDS: frozenset[str] = frozenset({"mis-admin-helper"})
+
+#: ADMIN_HELPER_AGENT_IDS 在静态兜底目录里的契约提示（仅兜底路径用到）。
+_ADMIN_HELPER_STATIC_HINTS: dict[str, dict[str, Any]] = {
+    "mis-admin-helper": {
+        "display_name": "MIS 技能创建助手（后台操作员）",
+        "when_to_use": "后台操作员创建/合并生成技能（create_skill），含浏览现有技能与联网补全",
+        "capabilities": ["create_skill"],
+        "input_contract": ["user_question"],
         "output_contract": "text",
         "safety_level": "read_only",
     },
@@ -393,6 +404,22 @@ def _static_catalog(
             output_contract=str(hint.get("output_contract", "text")),
             safety_level=str(hint.get("safety_level", "read_only")),
         )
+    # 硬约束特例：ADMIN_HELPER_AGENT_IDS 作为真实 worker 收录，保证管理台可见；
+    # 其不在 whitelist，运行时 L249 恒定拒绝、scoped catalog 亦过滤（fail-closed）。
+    for agent_id in sorted(ADMIN_HELPER_AGENT_IDS):
+        if agent_id in workers:
+            continue
+        hint = _ADMIN_HELPER_STATIC_HINTS.get(agent_id, {})
+        workers[agent_id] = WorkerSpec(
+            agent_id=agent_id,
+            display_name=str(hint.get("display_name", agent_id)),
+            when_to_use=str(hint.get("when_to_use", "")),
+            capabilities=list(hint.get("capabilities", [])),
+            input_contract=list(hint.get("input_contract", ["user_question"])),
+            output_contract=str(hint.get("output_contract", "text")),
+            safety_level=str(hint.get("safety_level", "read_only")),
+            enabled=True,
+        )
     return WorkerCatalog(
         workers=workers,
         coordinators=sorted(set(coordinators)) or _forbidden_targets(),
@@ -419,7 +446,9 @@ def build_worker_catalog() -> WorkerCatalog:
         if role == ROLE_COORDINATOR:
             coordinators.append(agent_id)
             continue
-        if agent_id not in whitelist:
+        # 硬约束特例：ADMIN_HELPER_AGENT_IDS 作为真实 worker 收录（管理台可见），
+        # 但其不在 whitelist，运行时 L249 与 scoped catalog 仍将其排除出 copilot（fail-closed）。
+        if agent_id not in whitelist and agent_id not in ADMIN_HELPER_AGENT_IDS:
             skipped.append(agent_id)
             continue
         spec: WorkerSpec = _spec_from_config(config, agent_id)
@@ -486,6 +515,54 @@ def _reset_for_test() -> None:
     """清空单例（仅供单测隔离使用）。"""
     global _catalog
     _catalog = None
+
+
+# ===========================================================================
+# 硬约束（Q1/R8）：Coordinator-Scoped Catalog
+# ===========================================================================
+
+
+def build_scoped_catalog(coordinator_id: str) -> WorkerCatalog:
+    """构建某协调者的「可委派子目录」（白名单 ∩ coordination.worker_ids）。
+
+    用于为该 coordinator 装配 ``agent__invoke`` 工具时注入，使得 LLM 看到的
+    ``agent_id`` 枚举里**只包含该协调者声明可委派**的 worker；``mis-admin-helper``
+    等硬约束 Agent 因不在任何 coordinator 的 ``worker_ids`` 中而恒定缺席。
+
+    Args:
+        coordinator_id: 协调者 Agent ID（其 ``coordination.yaml`` 为声明源）。
+
+    Returns:
+        过滤后的 :class:`WorkerCatalog`；协调者缺失 / 非 coordinator /
+        无 delegation 时返回空 scoped 目录（fail-closed 安全，绝不回退全局目录）。
+    """
+    global_catalog: WorkerCatalog = get_worker_catalog()
+    data: dict[str, Any] = _read_yaml(agent_dir(coordinator_id) / "coordination.yaml")
+    if not isinstance(data, dict) or data.get("role") != ROLE_COORDINATOR:
+        # 非 coordinator 或无配置 → 空 scoped 目录，禁止任何委派。
+        return WorkerCatalog(
+            workers={},
+            coordinators=global_catalog.coordinators,
+            fallback=False,
+        )
+    delegation: dict[str, Any] = data.get("delegation") or {}
+    allowed: set[str] = set(delegation.get("worker_ids") or [])
+    if not allowed:
+        return WorkerCatalog(
+            workers={},
+            coordinators=global_catalog.coordinators,
+            fallback=False,
+        )
+    workers: dict[str, WorkerSpec] = {
+        wid: spec
+        for wid, spec in global_catalog.workers.items()
+        if wid in allowed and not (wid in ADMIN_HELPER_AGENT_IDS)
+    }
+    return WorkerCatalog(
+        workers=workers,
+        coordinators=global_catalog.coordinators,
+        fallback=False,
+    )
 
 
 # ===========================================================================

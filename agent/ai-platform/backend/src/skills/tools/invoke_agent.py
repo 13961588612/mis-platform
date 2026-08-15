@@ -246,6 +246,19 @@ class InvokeAgentTool(BaseTool):
                 output=f"禁止委托调度器自身或其他调度 Agent：{agent_id}",
                 is_error=True,
             )
+
+        # 1.3 硬约束·闸②（belt-and-suspenders）：mis-admin-helper 作为后台操作员专属
+        # Agent，copilot 全链路恒定不可达。即便被误配进白名单 / scoped catalog，
+        # 这里也显式拒绝，绝不委派（与运行时 L249 白名单判定形成双保险）。
+        # 懒导入：常量从 catalog 延迟导入，避免模块被 import 时即触发 catalog
+        # 副作用 / 循环依赖（design §8 T03 懒导入红线）。
+        from src.coordinator.catalog import ADMIN_HELPER_AGENT_IDS
+
+        if agent_id in ADMIN_HELPER_AGENT_IDS:
+            return ToolResult(
+                output=f"目标智能体 {agent_id} 不可经调度链接触达（后台操作员专属，硬约束）",
+                is_error=True,
+            )
         if agent_id not in whitelist:
             allowed = ", ".join(sorted(whitelist))
             return ToolResult(

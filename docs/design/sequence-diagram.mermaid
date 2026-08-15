@@ -1,93 +1,89 @@
-```mermaid
+%% 时序图①：后台操作员 create_skill 合并生成流
 sequenceDiagram
-    actor O as 运营人员
-    participant F as KB 运营页(问答记录 Tab)
-    participant B as BFF KbController
-    participant K as mis-kb KbOperationsService
-    participant R as KbQaTicketRepository
-    O->>F: 评价结果=差评 + 查询
-    F->>B: GET /operations/qa/sessions?hasFeedback=true&sentiment=negative&page=1
-    B->>K: listSessions(query)
-    K->>K: buildRows: 时间→库→用户→hasFeedback→sentiment 过滤
-    K->>R: findBySessionIdInOrderByIdDesc(sessionIds)
-    K->>K: 填充 sentiment/feedbackStatus/ticketStatus/四维分
-    K-->>B: PageResult<KbQaSessionListVO>
-    B-->>F: 差评会话分页列表（吐槽徽标+四维分+工单状态）
-```
+    actor Op as 后台操作员
+    participant Dlg as AgentSkillFormDialog (AI Tab)
+    participant Sel as SkillSelector (内嵌)
+    participant API as agent-chat-api / BFF
+    participant Sess as POST /sessions + /messages
+    participant AH as mis-admin-helper (worker)
+    participant LST as ListSkillsTool
+    participant Reg as SkillRegistry (GET /skills)
+    participant SB as SkillBuilderService (合并)
+    participant SK as POST /skills (create)
 
-```mermaid
-sequenceDiagram
-    actor O as 运营人员
-    participant F as KB 运营页(列表/详情)
-    participant B as BFF KbController
-    participant K as mis-kb KbQaTicketService
-    O->>F: 差评行点「转工单」（类型预填 answer_error）
-    F->>F: KbTicketDialog（sessionId/messageId 自动带出）
-    O->>F: 填类型/描述/处理信息 → 提交
-    F->>B: POST /operations/qa/tickets {sessionId, messageId, type, content}
-    B->>K: createTicket(req, currentUserId)
-    K->>K: 校验 session 存在 + TicketType 合法 → 落库 open + 时间线
-    K-->>B: KbQaTicketVO (#id, open)
-    B-->>F: 建单成功
-    F->>F: 列表/详情显示「已关联工单 #id [待处理]」
-```
+    Op->>Dlg: 打开「新建技能」→ AI 对话创建 Tab
+    Dlg->>API: createChatSession(agent_id="mis-admin-helper")
+    API->>Sess: POST /sessions（权限门 agent:skill:manage）
+    Sess-->>Dlg: session_id
+    Op->>Dlg: 输入"查看现有技能（会员）"
+    Dlg->>API: sendChatMessage(session, "查看现有技能（会员）")
+    Dlg->>API: GET /skills?keyword=会员
+    API->>Reg: list_skills 查询
+    Reg-->>Sel: 技能列表(id,name,desc)
+    Sel-->>Op: 内嵌多选选择器（可搜索/预览 body/多选）
+    Op->>Sel: 勾选 会员积分查询 + 会员等级判定
+    Sel-->>Dlg: 选中技能(id + body 摘要)
+    Op->>Dlg: 点"确认合并生成"
+    Dlg->>API: sendChatMessage(session, "请合并以下技能正文：<bodies>")
+    API->>AH: process_message
+    AH->>LST: list_skills()（可选，LLM 智能合成）
+    LST->>Reg: 读技能注册表
+    Reg-->>LST: 命中技能
+    LST-->>AH: 结构化列表
+    AH->>SB: 提炼公共能力 + 去重 + 联网补全(search)
+    SB-->>AH: 统一 SKILL.md（含 name/description + body）
+    AH-->>Dlg: 回复(收敛 SKILL.md)
+    Dlg->>Dlg: extractSkillMd + parseSkill + staged/autoRefill
+    Op->>Dlg: 点「保存」
+    Dlg->>SK: createSkill(payload) → save_custom_skill 落盘
 
-```mermaid
+%% 时序图②：copilot 内 mis-user-helper 页面感知总结流
 sequenceDiagram
-    actor O as 运营人员
-    participant F as KB 运营页(详情弹窗)
-    participant B as BFF KbController
-    participant K as mis-kb KbOperationsService
-    O->>F: 反馈区点「标记已处理/忽略」
-    F->>F: 处理弹窗（结果+备注）
-    O->>F: 确认
-    F->>B: PATCH /operations/qa/feedback/{feedbackId}/process {status, note}
-    B->>K: markFeedbackProcessed(feedbackId, status, note, currentUserId)
-    K->>K: 状态合法校验 + 写 feedback_status/handler/note/handled_at
-    K-->>B: KbQaFeedbackVO（feedbackStatus=handled/ignored）
-    B-->>F: 更新反馈区徽标 + 列表刷新
-```
+    actor U as 全员用户
+    participant CP as copilot-panel.tsx (H5 iframe)
+    participant H5 as Agent H5 (mis-copilot)
+    participant INV as agent__invoke
+    participant CAT as WorkerCatalog (scoped)
+    participant UH as mis-user-helper (worker)
 
-```mermaid
-sequenceDiagram
-    actor O as 运营人员
-    participant F as Agent 会话反馈页(列表)
-    participant B as BFF AgentOpsController
-    participant A as agent SessionPgStore
-    O->>F: 评价结果=吐槽 + 仅看说明 + Agent 过滤
-    F->>B: GET /agent-ops/sessions/feedback?rating=down&comment_only=true&agent_id=mis-copilot
-    B->>A: list_feedback(query)
-    A->>A: agent_feedback 单表过滤 + 按吐槽优先排序 + 分页
-    A-->>B: FeedbackPage {items,total,page,page_size}
-    B-->>F: 反馈列表（rating/comment/回答摘要/agent/处理状态）
-```
+    U->>CP: 打开 Copilot（业务页 /agent/skills）
+    CP->>H5: postMessage AUTH_TOKEN + PAGE_CONTEXT{route, module}
+    U->>H5: "总结这页"
+    H5->>INV: agent__invoke(agent_id="mis-user-helper", content, page_context)
+    INV->>CAT: build_scoped_catalog("mis-copilot") = 全局 ∩ coordination.worker_ids
+    Note over CAT: worker_ids=[mis-rag,crm-assistant,mis-user-helper]（不含 admin-helper）
+    CAT-->>INV: Literal 枚举（LLM 不可选 mis-admin-helper）
+    INV->>UH: 委派 summary（TaskBrief.page_context 透传）
+    UH-->>INV: 本页要点摘要
+    INV-->>H5: 信封(摘要)
+    H5-->>CP: 渲染摘要
 
-```mermaid
+%% 时序图③：硬约束 fail-closed 校验流（四道闸）
 sequenceDiagram
-    actor O as 运营人员
-    participant F as Agent 会话反馈页
-    participant B as BFF AgentOpsController
-    participant A as agent SessionManager
-    O->>F: 行点「标记」/ 勾选批量
-    F->>B: POST /agent-ops/sessions/feedback/{id}/process {status, note}
-    B->>A: process_feedback(feedback_id, status, handler_id, handler_name, note)
-    A->>A: agent_feedback 更新 status/handler/note/processed_at
-    A-->>B: 更新后反馈行
-    B-->>F: 列表/详情徽标更新
-```
+    participant Cfg as config.py
+    participant Cat as catalog.py
+    participant Coord as coordination.yaml (mis-copilot)
+    participant CS as coordination_service.write_coordination
+    participant Sess as session.py create_session
+    participant Inv as invoke_agent.execute (L249)
+    participant FE as agent-coordination-page.tsx
 
-```mermaid
-sequenceDiagram
-    actor O as 运营人员
-    participant F as Agent 会话反馈页
-    participant D as AgentSessionDetailDialog
-    participant B as BFF AgentOpsController
-    participant A as agent SessionPgStore
-    O->>F: 反馈行点「查看会话」
-    F->>D: open(sessionId, fallbackSession=行内 session 快照)
-    D->>B: GET /agent-ops/sessions/{id} + GET /agent-ops/sessions/{id}/messages
-    B->>A: get_session + list_messages
-    A-->>B: Session + SessionMessage[]（含 metadata.feedback）
-    B-->>D: 回放消息流
-    D->>D: AgentMessageStream 渲染 👎徽标 + comment + 处理状态
-```
+    Note over Cfg: INVOKE_AGENT_WHITELIST=[mis-rag,crm-assistant,mis-user-helper]（无 admin-helper）
+    Cfg->>Cat: resolve_whitelist → build_worker_catalog（全局，admin-helper 不在 whitelist）
+    Note over Cat: ADMIN_HELPER_AGENT_IDS={mis-admin-helper}
+    Cat->>Cat: build_scoped_catalog("mis-copilot") = 全局 ∩ worker_ids
+    Note over Coord: worker_ids=[mis-rag,crm-assistant,mis-user-helper]
+    Coord->>Cat: InvokeAgentTool(catalog=scoped) → LLM 枚举无 admin-helper
+
+    FE->>FE: workerOptions 过滤 + 锁定 mis-admin-helper（禁用 + 红字提示）
+    FE->>CS: saveCoordination(worker_ids 含 mis-admin-helper?)
+    CS->>CS: worker_id ∈ ADMIN_HELPER_AGENT_IDS → 拒绝(ConfigValidationError)
+    Note over CS: 后端提交校验双重保险（闸④）
+
+    FE->>Sess: createChatSession(agent_id="mis-admin-helper")
+    Sess->>Sess: agent_id ∈ ADMIN_HELPER_AGENT_IDS → 校验 agent:skill:manage
+    Note over Sess: 无权限 → 403 fail-closed
+
+    FE->>Inv: agent__invoke(agent_id="mis-admin-helper")（即使误配）
+    Inv->>Cfg: agent_id not in INVOKE_AGENT_WHITELIST
+    Note over Inv: L249 恒定拒绝："目标智能体不在白名单"

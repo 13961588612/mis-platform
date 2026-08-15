@@ -13,8 +13,11 @@
  */
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
-import type { SkillBuilderMessage } from '../types';
-import type { SkillBuilderChatResponse } from '../types';
+import type {
+  SkillBuilderChatResponse,
+  SkillBuilderMessage,
+  SkillBuilderSelection,
+} from '../types';
 import { SkillBuilderMessageList } from './skill-builder-message-list';
 import { SkillBuilderInput } from './skill-builder-input';
 import { SKILL_BUILDER_EMPTY_HINT, SKILL_BUILDER_EXAMPLES } from './skill-builder-guide';
@@ -49,6 +52,17 @@ export interface SkillBuilderPanelProps {
   staged: StagedResult | null;
   onRefill: () => void;
   onDiscardStaged: () => void;
+  // —— T04：内嵌选择器（不离开创建流）——
+  /** 打开技能选择器。 */
+  onOpenSelector: () => void;
+  /** 已选技能（来自选择器）。 */
+  selectedSkills: SkillBuilderSelection[];
+  /** 移除某个已选技能。 */
+  onRemoveSelected: (skill_id: string) => void;
+  /** 用已选技能作为上下文发起生成。 */
+  onGenerateWithSelected: () => void;
+  /** 清空已选技能。 */
+  onClearSelected: () => void;
 }
 
 export function SkillBuilderPanel({
@@ -63,6 +77,11 @@ export function SkillBuilderPanel({
   staged,
   onRefill,
   onDiscardStaged,
+  onOpenSelector,
+  selectedSkills,
+  onRemoveSelected,
+  onGenerateWithSelected,
+  onClearSelected,
 }: SkillBuilderPanelProps) {
   return (
     <div className="flex h-full min-h-[20rem] flex-col gap-3">
@@ -78,6 +97,48 @@ export function SkillBuilderPanel({
           />
           自动回填
         </label>
+      </div>
+
+      {/* T04：内嵌选择器触发 + 已选技能回显（不离开创建流） */}
+      <div className="rounded-md border bg-muted/30 p-2">
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-xs text-muted-foreground">
+            参考现有技能合并生成（数据源 GET /skills）
+          </span>
+          <Button size="sm" variant="outline" onClick={onOpenSelector}>
+            浏览现有技能
+          </Button>
+        </div>
+        {selectedSkills.length > 0 ? (
+          <div className="mt-2 space-y-1.5">
+            <div className="flex flex-wrap gap-1.5">
+              {selectedSkills.map((s) => (
+                <span
+                  key={s.skill_id}
+                  className="inline-flex items-center gap-1 rounded-full bg-primary/10 px-2 py-0.5 text-xs text-primary"
+                >
+                  {s.name}
+                  <button
+                    type="button"
+                    className="text-primary/70 hover:text-primary"
+                    onClick={() => onRemoveSelected(s.skill_id)}
+                    aria-label={`移除 ${s.name}`}
+                  >
+                    ×
+                  </button>
+                </span>
+              ))}
+            </div>
+            <div className="flex items-center gap-2">
+              <Button size="sm" onClick={onGenerateWithSelected} disabled={sending}>
+                用所选技能生成
+              </Button>
+              <Button size="sm" variant="ghost" onClick={onClearSelected} disabled={sending}>
+                清空
+              </Button>
+            </div>
+          </div>
+        ) : null}
       </div>
 
       {/* 消息流 */}

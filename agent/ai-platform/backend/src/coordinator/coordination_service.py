@@ -30,6 +30,7 @@ from src.agent.config import AgentRole
 from src.config_manager.file_service import agent_dir
 from src.config_manager.manager import ConfigManager, get_config_manager
 from src.coordinator.catalog import (
+    ADMIN_HELPER_AGENT_IDS,
     refresh_worker_catalog,
     update_catalog_entry,
 )
@@ -257,6 +258,17 @@ async def write_coordination(
         if agent_id in delegation.worker_ids:
             raise ConfigValidationError(
                 [f"Coordinator {agent_id} must not list itself in worker_ids"]
+            )
+        # 1.3 硬约束·闸④：任何协调者都禁止把后台操作员专属 Agent（mis-admin-helper）
+        # 纳入 worker_ids。即便前端/接口误传，这里也直接拒绝，确保 copilot 全链路
+        # 不可达 mis-admin-helper（与运行时白名单 / scoped catalog 形成第四道闸）。
+        forbidden = sorted(ADMIN_HELPER_AGENT_IDS & set(delegation.worker_ids))
+        if forbidden:
+            raise ConfigValidationError(
+                [
+                    f"{aid} 不允许接入任何协调者（硬约束：后台操作员专属，copilot 全链路不可达）"
+                    for aid in forbidden
+                ]
             )
         req.delegation = delegation
         req.catalog = None

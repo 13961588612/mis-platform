@@ -7,8 +7,9 @@ delegation:
   timeout_seconds: 120
   emit_dispatch_trace: true
   forbid_self_invoke: true
+  # 硬约束（R4/R8）：mis-admin-helper 不进 copilot（后台操作员专属，fail-closed）。
+  # 旧 mis-extract / mis-summary 已灰度下线（enabled:false），由 mis-user-helper 承接。
   worker_ids:
   - crm-assistant
-  - mis-extract
   - mis-rag
-  - mis-summary
+  - mis-user-helper

@@ -1,0 +1,16 @@
+runtime:
+  type: openharness
+  version: "1.0.0"
+  # 仅开放 create_skill 所需工具：skill（技能包）+ list_skills（浏览现有技能）
+  # + search（联网补全外部资料）。禁止 agent__invoke（worker 角色由平台自动剔除）。
+  allowed_tools:
+    - skill
+    - list_skills
+    - search
+  params:
+    maxSteps: 12
+    temperature: 0.4
+    maxTokens: 4096
+  prompts:
+    system: runtime/prompts/system.md
+  middleware: {}

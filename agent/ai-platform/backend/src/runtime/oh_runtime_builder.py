@@ -201,7 +201,7 @@ async def build_native_query_engine(
         allowed_tools=concrete_allowed,
     )
     tool_registry: ToolRegistry = create_platform_tool_registry(
-        mcp_manager, allowed_tools, agent_role
+        mcp_manager, allowed_tools, agent_role, config.agent_id
     )
 
     model: Any = config.model.primary if config.model else "qwen-plus"

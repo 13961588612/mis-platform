@@ -40,6 +40,7 @@ from src.agent.session_store import (
     SessionPage,
 )
 from src.api.deps import (
+    _prepare_acl_context,
     get_agent_manager_dep,
     get_agent_router_dep,
     get_current_user,
@@ -51,6 +52,8 @@ from src.api.deps import (
 from src.agent.session_timing import RedisTimingStore
 from src.api.response import error_response, success
 from src.config import get_settings
+from src.coordinator.catalog import ADMIN_HELPER_AGENT_IDS
+from src.skills.acl import SkillAclDenied, get_skill_acl_guard
 from src.models.agent_feedback import (
     FEEDBACK_RATING_DOWN,
     FEEDBACK_RATING_UP,
@@ -157,6 +160,7 @@ class CreateSessionRequest(BaseModel):
     runtime_type: str = Field(default="openharness")
     user_mobile: str = Field(default="", description="用户手机号（透传至 MCP identity）")
     channel_user_id: str = Field(default="", description="渠道侧 userId（透传至 MCP identity）")
+    user_name: str = Field(default="", description="用户展示名（运营台 Web 由 BFF 注入）")
 
 
 class SendMessageRequest(BaseModel):
@@ -730,11 +734,47 @@ async def batch_session_timing(
 # ===== 端点 =====
 
 
+async def require_admin_helper_access(
+    req: CreateSessionRequest,
+    authorization: str = Header(default=""),
+) -> None:
+    """会话门（硬约束·闸④）：仅当 ``agent_id`` 为后台操作员专属 Agent 时强制鉴权。
+
+    判定策略（与 T03 fail-closed 一致）：
+    - ``req.agent_id`` 不在 ``ADMIN_HELPER_AGENT_IDS``（如 mis-admin-helper）→ 直接放行，
+      对其它 Agent 的建会话行为零影响；
+    - 命中则必须持有有效 token 且具备 ``agent:skill:manage`` 权限码，否则
+      fail-closed 拒绝（无 token → 401；缺码 / 源不可达 → 403）。
+
+    Args:
+        req: 创建会话请求体（含 ``agent_id``）。
+        authorization: 原始 ``Authorization`` 头。
+
+    Raises:
+        HTTPException: 401（无 token）/ 403（无权限 / 权限源不可用）。
+    """
+    if req.agent_id not in ADMIN_HELPER_AGENT_IDS:
+        return
+    # 以下分支需要认证身份：无 token / token 无效 → 401（由 get_current_user 抛出）
+    identity: dict[str, Any] = await get_current_user(authorization=authorization)
+    ctx: dict[str, Any] = await _prepare_acl_context(authorization, identity)
+    guard = get_skill_acl_guard()
+    try:
+        await guard.assert_has_permission(
+            ctx, "agent:skill:manage", skill_id="mis-admin-helper"
+        )
+    except SkillAclDenied as denied:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail=denied.to_payload()
+        )
+
+
 @router.post("", status_code=status.HTTP_201_CREATED)
 async def create_session(
     req: CreateSessionRequest,
     session_manager: SessionManager = Depends(get_session_manager_dep),
     mis_user_id: int | None = Depends(resolve_request_mis_user_id),
+    _admin_helper_gate: None = Depends(require_admin_helper_access),
 ) -> dict[str, Any]:
     """创建带有渠道特定 ID 命名的新聊天会话。
 
@@ -750,6 +790,7 @@ async def create_session(
             user_mobile=req.user_mobile,
             channel_user_id=req.channel_user_id,
             mis_user_id=mis_user_id,
+            user_name=req.user_name,
         )
         return success(
             data={

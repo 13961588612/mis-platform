@@ -1,0 +1,4 @@
+skills:
+  enabled: []
+  custom_skills_dir: skills/custom-skills/
+  overrides_dir: skills/skill-overrides/

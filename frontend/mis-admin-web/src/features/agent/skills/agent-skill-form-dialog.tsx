@@ -11,9 +11,8 @@
  *   - 编辑态按详情回填正文，保证与列表项（无 body）一致（B-9）；
  *   - 「粘贴 SKILL.md」模式解析后同时回填元数据与正文（粘贴解析 / 直填 / 解析后改均可）。
  *
- * <p>**C 功能（AI 对话创建 Tab）**：新增第三个 Tab「AI 对话创建」，左栏复用同一套
- * `SkillFormFields`，右栏为 `SkillBuilderPanel`；回填链路复用粘贴 Tab 的 `parseSkill`
- * + `applyParsedSkill`，禁止为 C 另写解析（硬约束 C）。
+ * <p>**C 功能（AI 对话创建 Tab）**：三栏同屏——左 `SkillFormFields`、中 SKILL.md 正文、
+ * 右 `SkillBuilderPanel`；回填链路复用 `parseSkill` + `applyParsedSkill`，禁止另写解析。
  *
  * <p>`id` 仅新建时可填：它是 `ai:skill:{id}:run` 执行码的组成部分，
  * 改 id 等于让已授权的执行码全部失效，属于删旧建新而非编辑。
@@ -40,10 +39,22 @@ import {
   updateSkill,
   type SkillPayload,
 } from '../api/agent-ops-api';
-import { chatSkillBuilder } from '../api/agent-chat-api';
-import { agentErrorMessage, type Skill, type SkillDetail, type SkillBuilderMessage, type SkillBuilderChatResponse } from '../types';
+import {
+  chatSkillBuilder,
+  createChatSession,
+  sendChatMessage,
+} from '../api/agent-chat-api';
+import {
+  agentErrorMessage,
+  type Skill,
+  type SkillBuilderSelection,
+  type SkillDetail,
+  type SkillBuilderMessage,
+  type SkillBuilderChatResponse,
+} from '../types';
 import { SkillFormFields, fieldLabel } from './skill-form-fields';
 import { SkillBuilderPanel, type StagedResult } from './skill-builder-panel';
+import { SkillBuilderSelector } from './skill-builder-selector';
 import {
   applyParsedSkill,
   diffHighlight,
@@ -138,6 +149,12 @@ export function AgentSkillFormDialog({
   const [aiStaged, setAiStaged] = useState<StagedResult | null>(null);
   /** 回填后发生变化的字段键集合（P1-3 高亮）。 */
   const [highlight, setHighlight] = useState<Set<string>>(new Set());
+  /** T04：mis-admin-helper 真实会话 ID（懒创建，对话框关闭即清）。 */
+  const aiSessionIdRef = useRef<string | null>(null);
+  /** T04：内嵌选择器开关。 */
+  const [selectorOpen, setSelectorOpen] = useState(false);
+  /** T04：已选技能（来自选择器，待注入下一条用户消息）。 */
+  const [aiSelectedSkills, setAiSelectedSkills] = useState<SkillBuilderSelection[]>([]);
 
   // 每次打开按当前对象重置，避免上一次编辑的残留串进新建表单
   useEffect(() => {
@@ -153,6 +170,10 @@ export function AgentSkillFormDialog({
     setAiAutoRefill(false);
     setAiStaged(null);
     setHighlight(new Set());
+    // T04：清理选择器与 mis-admin-helper 会话态
+    setSelectorOpen(false);
+    setAiSelectedSkills([]);
+    aiSessionIdRef.current = null;
     setForm(
       skill
         ? {
@@ -209,13 +230,44 @@ export function AgentSkillFormDialog({
   }
 
   /**
-   * C：发送 AI 对话。把本地 messages（含本轮 user）上送，后端 ephemeral 端点返回
-   * AI 文本；随后抽取 ```SKILL.md → 复用 parseSkill → 暂存或自动回填。
+   * T04：把已选技能拼成"参考上下文"注入下一条用户消息（选择器产物注入）。
+   * 真实正文缺失的技能占位提示，避免误导模型。
    */
-  async function handleAiSend(): Promise<void> {
-    const text = aiInput.trim();
-    if (!text || aiSending) return;
+  function buildSelectedSkillsContext(skills: SkillBuilderSelection[]): string {
+    if (skills.length === 0) return '';
+    const parts = skills.map((s, i) => {
+      const body = s.body?.trim() ? s.body.trim() : '（无可用正文，仅参考名称与用途）';
+      return `## 参考技能 ${i + 1}：${s.name}（${s.skill_id}）\n${body}`;
+    });
+    return `参考以下现有技能合并/对齐生成新 SKILL.md，避免重复定义：\n\n${parts.join('\n\n')}`;
+  }
 
+  /**
+   * T04：经 `mis-admin-helper` 真实会话发送一条消息并取回助手回复文本。
+   * 会话 ID 懒创建并在本对话框生命周期内复用（关闭即清，见 useEffect）。
+   *
+   * <p>权限边界：createChatSession("mis-admin-helper") 落 `agent:skill:manage`
+   * 校验（session.py 的 require_admin_helper_access），无权限会抛错、由主链路 try 捕获后回落 ephemeral。
+   */
+  async function sendViaAdminHelper(text: string): Promise<string> {
+    if (!aiSessionIdRef.current) {
+      const session = await createChatSession('mis-admin-helper');
+      aiSessionIdRef.current = session.session_id;
+    }
+    const reply = await sendChatMessage(aiSessionIdRef.current, text);
+    return reply.content;
+  }
+
+  /**
+   * C：以一条组合后的用户消息发起一轮 AI 生成。
+   *
+   * <p>T04（R11 裁定）主链路 = `mis-admin-helper` 真实会话（createChatSession +
+   * sendChatMessage），助手回复可用运营台会话机制追溯；若真实会话不可用，
+   * 回落 ephemeral `chatSkillBuilder`（设计保留 fallback，不删）。无论哪条链路，
+   * AI 文本都复用 stageOrRefill → 抽取 ```SKILL.md → parseSkill → 暂存/回填。
+   */
+  async function dispatchAiTurn(text: string): Promise<void> {
+    if (aiSending) return;
     const userMsg: SkillBuilderMessage = {
       id: `u-${Date.now()}`,
       role: 'user',
@@ -229,38 +281,55 @@ export function AgentSkillFormDialog({
       status: 'generating',
     };
     setAiMessages((prev) => [...prev, userMsg, assistantMsg]);
-    setAiInput('');
     setAiError(null);
     setAiStaged(null);
     setAiSending(true);
-
-    const history = [...aiMessages, userMsg].map((m) => ({ role: m.role, content: m.content }));
     try {
-      const res: SkillBuilderChatResponse = await chatSkillBuilder({
-        messages: history,
-        user_input: text,
-        converged: false,
-      });
+      const reply = await sendViaAdminHelper(text);
       setAiMessages((prev) =>
-        prev.map((m) =>
-          m.id === assistantMsg.id
-            ? { ...m, content: res.reply, status: res.status, converged: res.converged }
-            : m,
-        ),
+        prev.map((m) => (m.id === assistantMsg.id ? { ...m, content: reply, status: 'generated' } : m)),
       );
-      await stageOrRefill(res.reply, res.converged);
-    } catch (e) {
-      setAiMessages((prev) =>
-        prev.map((m) =>
-          m.id === assistantMsg.id
-            ? { ...m, content: agentErrorMessage(e, 'AI 生成失败'), status: 'error' }
-            : m,
-        ),
-      );
-      setAiError(agentErrorMessage(e, 'AI 生成失败'));
+      await stageOrRefill(reply, false);
+    } catch (primaryErr) {
+      // 兜底：ephemeral 端点（不依赖 mis-admin-helper 会话）
+      try {
+        const history = [...aiMessages, userMsg].map((m) => ({ role: m.role, content: m.content }));
+        const res: SkillBuilderChatResponse = await chatSkillBuilder({
+          messages: history,
+          user_input: text,
+          converged: false,
+        });
+        setAiMessages((prev) =>
+          prev.map((m) =>
+            m.id === assistantMsg.id
+              ? { ...m, content: res.reply, status: res.status, converged: res.converged }
+              : m,
+          ),
+        );
+        await stageOrRefill(res.reply, res.converged);
+      } catch (e) {
+        setAiMessages((prev) =>
+          prev.map((m) =>
+            m.id === assistantMsg.id
+              ? { ...m, content: agentErrorMessage(e, 'AI 生成失败'), status: 'error' }
+              : m,
+          ),
+        );
+        setAiError(agentErrorMessage(primaryErr, 'AI 生成失败（真实会话不可用，兜底也失败）'));
+      }
     } finally {
       setAiSending(false);
     }
+  }
+
+  /** C：发送 AI 对话（把已选技能注入为上下文）。 */
+  async function handleAiSend(): Promise<void> {
+    const text = aiInput.trim();
+    if (!text || aiSending) return;
+    setAiInput('');
+    const ctx = buildSelectedSkillsContext(aiSelectedSkills);
+    const combined = ctx ? `${text}\n\n${ctx}` : text;
+    await dispatchAiTurn(combined);
   }
 
   /**
@@ -306,6 +375,30 @@ export function AgentSkillFormDialog({
   /** C：放弃暂存预览。 */
   function handleAiDiscard(): void {
     setAiStaged(null);
+  }
+
+  // —— T04：内嵌选择器回调（不离开创建流）——
+  /** 选择器确认回写已选技能。 */
+  function handleSkillsSelected(skills: SkillBuilderSelection[]): void {
+    setAiSelectedSkills(skills);
+    setSelectorOpen(false);
+  }
+  /** 移除某个已选技能。 */
+  function handleRemoveSelected(skillId: string): void {
+    setAiSelectedSkills((prev) => prev.filter((s) => s.skill_id !== skillId));
+  }
+  /** 清空已选技能。 */
+  function handleClearSelected(): void {
+    setAiSelectedSkills([]);
+  }
+  /** 用已选技能作为上下文发起生成（注入下一条用户消息，走主链路）。 */
+  async function handleGenerateWithSelected(): Promise<void> {
+    if (aiSelectedSkills.length === 0 || aiSending) return;
+    const ctx = buildSelectedSkillsContext(aiSelectedSkills);
+    const text = aiInput.trim() || '请基于上述参考技能生成一个新的、不重复的 SKILL.md。';
+    const combined = `${text}\n\n${ctx}`;
+    setAiInput('');
+    await dispatchAiTurn(combined);
   }
 
   async function onSubmit(): Promise<void> {
@@ -368,12 +461,14 @@ export function AgentSkillFormDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-4xl max-h-[88vh]">
+      <DialogContent
+        className={cn('max-h-[88vh]', mode === 'ai' ? 'max-w-6xl' : 'max-w-4xl')}
+      >
         <DialogHeader>
           <DialogTitle>{isEdit ? '编辑技能' : '新建技能'}</DialogTitle>
         </DialogHeader>
 
-        {/* 模式切换：手动填写 / 粘贴 SKILL.md / AI 对话创建 */}
+        {/* 模式切换：手动填写 / AI 对话创建 */}
         <div className="flex gap-1 rounded-md border bg-muted/40 p-1 text-sm">
           {tabs.map((t) => (
             <button
@@ -390,9 +485,17 @@ export function AgentSkillFormDialog({
           ))}
         </div>
 
-        {/* 双栏：左元数据 / 右正文或 AI 面板（B-1~B-6/B-8 同屏；C 右栏为 AI 面板） */}
-        <div className="mt-4 grid max-h-[60vh] grid-cols-1 gap-4 overflow-auto pr-1 md:grid-cols-2">
-          {/* 左栏：元数据（手动/AI 共用 SkillFormFields；手动模式额外提供「导入 SKILL.md 文件」按钮替代原粘贴 Tab） */}
+        {/*
+          手动：双栏（左元数据 + 导入 / 右正文）
+          AI：三栏（左元数据 / 中正文 / 右对话）
+        */}
+        <div
+          className={cn(
+            'mt-4 grid max-h-[60vh] grid-cols-1 gap-4 overflow-auto pr-1',
+            mode === 'ai' ? 'lg:grid-cols-3' : 'md:grid-cols-2',
+          )}
+        >
+          {/* 左栏：元数据 */}
           <div className="space-y-3">
             {mode === 'ai' ? (
               <SkillFormFields
@@ -404,7 +507,6 @@ export function AgentSkillFormDialog({
               />
             ) : (
               <>
-                {/* 1.2 导入 SKILL.md 文件，替代被删除的「粘贴 SKILL.md」Tab */}
                 <div className="flex flex-wrap items-center gap-2">
                   <input
                     ref={fileInputRef}
@@ -440,9 +542,48 @@ export function AgentSkillFormDialog({
             )}
           </div>
 
-          {/* 右栏：AI 模式为对话面板；其余为 SKILL.md 正文（B-8 可编辑，同屏） */}
-          <div className="flex flex-col gap-2">
-            {mode === 'ai' ? (
+          {/* 中栏（仅 AI）/ 右栏（手动）：SKILL.md 正文 */}
+          {mode === 'ai' ? (
+            <div className="flex min-h-0 flex-col gap-2">
+              <label className={fieldLabel} htmlFor="skill-body-ai">
+                SKILL.md 正文（由 AI 回填，可编辑）
+              </label>
+              <Textarea
+                id="skill-body-ai"
+                className="min-h-[18rem] flex-1 font-mono text-xs"
+                value={body}
+                placeholder={'AI 回填后在此展示 / 可继续编辑技能的执行说明…'}
+                onChange={(e) => setBody(e.target.value)}
+              />
+              <p className="text-xs text-muted-foreground">
+                点右侧示例模板起手；生成内容经解析后回填左侧字段与本正文。
+              </p>
+            </div>
+          ) : (
+            <div className="flex flex-col gap-2">
+              <label className={fieldLabel} htmlFor="skill-body">
+                SKILL.md 正文（body）
+              </label>
+              <Textarea
+                id="skill-body"
+                className="min-h-[18rem] flex-1 font-mono text-xs"
+                value={body}
+                placeholder={'在此编写技能的执行说明 / 提示词正文…\n支持 Markdown。'}
+                onChange={(e) => setBody(e.target.value)}
+              />
+              <p className="text-xs text-muted-foreground">
+                新建 / 编辑 custom 技能时随元数据一并保存（落盘到
+                <code className="mx-1 rounded bg-muted px-1">
+                  {'{SKILL_CUSTOM_STORE_DIR}/{skill_id}/SKILL.md'}
+                </code>
+                ）。文档型技能（handler 留空）靠正文做语义检索与上下文注入。
+              </p>
+            </div>
+          )}
+
+          {/* 右栏（仅 AI）：对话面板 */}
+          {mode === 'ai' ? (
+            <div className="flex min-h-0 flex-col">
               <SkillBuilderPanel
                 messages={aiMessages}
                 sending={aiSending}
@@ -455,51 +596,17 @@ export function AgentSkillFormDialog({
                 staged={aiStaged}
                 onRefill={handleAiRefill}
                 onDiscardStaged={handleAiDiscard}
+                onOpenSelector={() => setSelectorOpen(true)}
+                selectedSkills={aiSelectedSkills}
+                onRemoveSelected={handleRemoveSelected}
+                onGenerateWithSelected={() => void handleGenerateWithSelected()}
+                onClearSelected={handleClearSelected}
               />
-            ) : (
-              <>
-                <label className={fieldLabel} htmlFor="skill-body">
-                  SKILL.md 正文（body）
-                </label>
-                <Textarea
-                  id="skill-body"
-                  className="min-h-[18rem] flex-1 font-mono text-xs"
-                  value={body}
-                  placeholder={'在此编写技能的执行说明 / 提示词正文…\n支持 Markdown。'}
-                  onChange={(e) => setBody(e.target.value)}
-                />
-                <p className="text-xs text-muted-foreground">
-                  新建 / 编辑 custom 技能时随元数据一并保存（落盘到
-                  <code className="mx-1 rounded bg-muted px-1">
-                    {'{SKILL_CUSTOM_STORE_DIR}/{skill_id}/SKILL.md'}
-                  </code>
-                  ）。文档型技能（handler 留空）靠正文做语义检索与上下文注入。
-                </p>
-              </>
-            )}
-          </div>
+            </div>
+          ) : null}
         </div>
 
-        {/* AI 模式下，正文由回填产生，单独置于下方全宽区可编辑（P2-2 预览区之下） */}
-        {mode === 'ai' ? (
-          <div className="space-y-1">
-            <label className={fieldLabel} htmlFor="skill-body-ai">
-              SKILL.md 正文（由 AI 回填，可编辑）
-            </label>
-            <Textarea
-              id="skill-body-ai"
-              className="min-h-[12rem] font-mono text-xs"
-              value={body}
-              placeholder={'AI 回填后在此展示 / 可继续编辑技能的执行说明…'}
-              onChange={(e) => setBody(e.target.value)}
-            />
-            <p className="flex items-center gap-1 text-xs text-muted-foreground">
-              点示例模板快速起手；AI 生成的 SKILL.md 经解析后回填左侧表单与本正文。
-            </p>
-          </div>
-        ) : null}
-
-        <DialogFooter>
+        <DialogFooter className="justify-center">
           <SubmitButton loading={saving} onClick={() => void onSubmit()}>
             保存
           </SubmitButton>
@@ -507,6 +614,13 @@ export function AgentSkillFormDialog({
             取消
           </Button>
         </DialogFooter>
+
+        {/* T04：内嵌技能选择器（不离开创建流，挂在对话框内作为嵌套 Dialog） */}
+        <SkillBuilderSelector
+          open={selectorOpen}
+          onOpenChange={setSelectorOpen}
+          onConfirm={handleSkillsSelected}
+        />
       </DialogContent>
     </Dialog>
   );

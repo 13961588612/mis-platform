@@ -8,11 +8,13 @@
 import axios, { type AxiosError, type InternalAxiosRequestConfig } from 'axios';
 import type { ApiResult, TokenResponse } from '@/types/api';
 import { useAuthStore } from '@/stores/auth-store';
+import { listSkills } from './agent-ops-api';
 import type {
   Session,
   SessionMessage,
   SkillBuilderChatRequest,
   SkillBuilderChatResponse,
+  SkillSummary,
 } from '../types';
 
 /** 与 BFF {@code mis.agent-ops.chat-timeout-ms} 对齐（毫秒）。 */
@@ -118,6 +120,32 @@ export async function createChatSession(agentId: string): Promise<Session> {
     agent_id: agentId,
   });
   return unwrap(res, '创建对话会话失败');
+}
+
+/**
+ * 内嵌选择器专用封装（T04）：复用 `listSkills` 拉取技能池，映射为精简
+ * {@link SkillSummary}；搜索在客户端按 skill_id/name/description 子串过滤。
+ *
+ * <p>与 `chatSkillBuilder`（ephemeral）无关：选择器数据源是 `GET /skills`，
+ * 不依赖 SSE tool 事件（design §4 / Q3）。
+ */
+export async function listSkillsForBuilder(keyword?: string): Promise<SkillSummary[]> {
+  const all = await listSkills();
+  const kw = (keyword ?? '').trim().toLowerCase();
+  const filtered = kw
+    ? all.filter(
+        (s) =>
+          s.skill_id.toLowerCase().includes(kw) ||
+          s.name.toLowerCase().includes(kw) ||
+          (s.description ?? '').toLowerCase().includes(kw),
+      )
+    : all;
+  return filtered.map((s) => ({
+    skill_id: s.skill_id,
+    name: s.name,
+    description: s.description,
+    category: s.category,
+  }));
 }
 
 /**

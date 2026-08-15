@@ -323,14 +323,45 @@ class Settings(BaseSettings):
     )
 
     # ===== Copilot 调度（agent__invoke）=====
+    # 硬约束（R5/R8）：默认白名单移除已灰度下线的 mis-extract / mis-summary，
+    # 加入承接其能力的 mis-user-helper；**绝不**包含 mis-admin-helper
+    # （后台操作员专属，只经 create_session 直达，copilot 全链路 fail-closed）。
     INVOKE_AGENT_WHITELIST: list[str] = Field(
         default_factory=lambda: [
-            "mis-extract",
-            "mis-summary",
             "mis-rag",
             "crm-assistant",
+            "mis-user-helper",
         ],
-        description="mis-copilot 可委托的目标 Agent 白名单",
+        description="mis-copilot 可委托的目标 Agent 白名单（不含 mis-admin-helper）",
+    )
+
+    # ===== 联网搜索（1.4 search tool）=====
+    # provider ∈ {mock, generic_api, internal_mcp, specified_urls}；
+    # 本期仅实现 mock / generic_api，其余回落 mock（P2 待补）。
+    # mock 保证零依赖联调；generic_api 经 OUTBOUND_PROXY 出站（与 LLM/KB 一致）。
+    SEARCH_PROVIDER: str = Field(
+        default="mock",
+        description="联网搜索 provider：mock | generic_api | internal_mcp | specified_urls",
+    )
+    SEARCH_GENERIC_API_URL: str = Field(
+        default="",
+        description="generic_api provider 的端点；为空时安全降级为无结果",
+    )
+    SEARCH_GENERIC_API_KEY: str = Field(
+        default="",
+        description="generic_api provider 的鉴权密钥（置于 header）",
+    )
+    SEARCH_TOP_K: int = Field(
+        default=5,
+        description="单次搜索返回的命中条数上限",
+    )
+    SEARCH_TIMEOUT_SECONDS: float = Field(
+        default=10.0,
+        description="generic_api provider 单次请求超时（秒）",
+    )
+    SEARCH_SPECIFIED_URLS: list[str] = Field(
+        default_factory=list,
+        description="specified_urls provider 的定向 URL 列表（P2 待实现）",
     )
     INVOKE_AGENT_MAX_DEPTH: int = Field(
         default=1,

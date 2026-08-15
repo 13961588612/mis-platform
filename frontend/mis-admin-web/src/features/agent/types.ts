@@ -59,6 +59,27 @@ export interface Skill {
 }
 
 /**
+ * 选择器用的技能摘要（内嵌选择器数据源，对齐 `GET /skills` 列表项）。
+ *
+ * <p>比 {@link Skill} 精简：仅保留选择器渲染与注入所需的字段。
+ */
+export interface SkillSummary {
+  skill_id: string;
+  name: string;
+  description: string;
+  category?: string;
+}
+
+/**
+ * 选择器确认后的「已选技能」载荷（含正文，供注入下一条用户消息）。
+ */
+export interface SkillBuilderSelection {
+  skill_id: string;
+  name: string;
+  body: string;
+}
+
+/**
  * 技能详情（列表项 + 详情抽屉扩展字段）。
  *
  * <p>对齐 ai-platform `GET /skills/{id}` 在 package skill 下额外返回的

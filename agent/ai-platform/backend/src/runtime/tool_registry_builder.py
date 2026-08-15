@@ -33,6 +33,8 @@ from src.skills.tools.invoke_agent import (
     InvokeAgentTool,
 )
 from src.skills.tools.kb_retrieve import KbRetrieveTool
+from src.skills.tools.list_skills_tool import ListSkillsTool
+from src.skills.tools.search_tool import SearchTool
 from src.utils.logging import get_logger
 
 logger = get_logger("runtime.tool_registry")
@@ -330,8 +332,18 @@ def _delegate_alias_enabled() -> bool:
         return False
 
 
-def create_agent_source_registry(mcp_manager: McpClientManager | None) -> ToolRegistry:
-    """构建 Agent 可用工具源：skill + MCP（跳过 schema 不兼容的工具）。"""
+def create_agent_source_registry(
+    mcp_manager: McpClientManager | None,
+    catalog: Any | None = None,
+) -> ToolRegistry:
+    """构建 Agent 可用工具源：skill + MCP（跳过 schema 不兼容的工具）。
+
+    Args:
+        mcp_manager: 已连接的 MCP 管理器（可能为 ``None``）。
+        catalog: 注入 ``InvokeAgentTool`` 的 WorkerCatalog；``None`` 时回落全局目录。
+            coordinator 可传入 ``build_scoped_catalog(agent_id)`` 收窄 LLM 看到的
+            ``agent_id`` 枚举（1.3 硬约束；详见 ``build_scoped_catalog``）。
+    """
     registry: ToolRegistry = ToolRegistry()
     registry.register(SkillTool())
 
@@ -340,10 +352,18 @@ def create_agent_source_registry(mcp_manager: McpClientManager | None) -> ToolRe
     registry.register(FormFillApplyTool())
     # Copilot 调度：委托专用 Agent（仅 role=coordinator / allowed_tools 放开）
     # Catalog 注入后按 metadata.yaml 动态渲染 description 与 agent_id 枚举。
-    catalog: Any | None = _resolve_worker_catalog()
+    if catalog is None:
+        catalog = _resolve_worker_catalog()
     registry.register(InvokeAgentTool(catalog=catalog))
     if _delegate_alias_enabled():
         registry.register(InvokeAgentTool(tool_name=DELEGATE_TOOL_ALIAS, catalog=catalog))
+
+    # 1.3/1.4 新增工具（仅当对应 agent 的 runtime.allowed_tools 显式放行后才对 LLM 可见）：
+    # - list_skills：技能池浏览（mis-admin-helper create_skill 兜底增强），
+    #   与前端 GET /skills 选择器互不冲突（design §4 / Q3）。
+    # - search：联网搜索（mis-admin-helper 合成时补全外部资料）。
+    registry.register(ListSkillsTool())
+    registry.register(SearchTool())
 
     # mis-rag 内部知识库检索原生工具（T4/TOOL）：让 mis-rag 自行检索 + 合成，
     # 统一 A（BFF→mis-rag）与 B（Copilot→mis-rag 子 Agent）两路。仅当 mis-rag
@@ -567,10 +587,39 @@ def is_tool_allowed(tool_name: str, patterns: list[str]) -> bool:
     return False
 
 
+def _resolve_scoped_catalog(role: Any, agent_id: str | None) -> Any | None:
+    """为 coordinator 构造 scoped WorkerCatalog；非 coordinator 返回 ``None``（取全局目录）。
+
+    Args:
+        role: 调度角色（``coordinator`` / ``worker`` / ``None``）。
+        agent_id: 当前 Agent ID；``None`` 或空串时跳过 scoped 逻辑。
+
+    Returns:
+        注入 ``InvokeAgentTool`` 的 scoped catalog；构造失败或不需要时返回 ``None``
+        （由 ``create_agent_source_registry`` 回落全局目录）。
+    """
+    if normalize_role(role) != "coordinator" or not agent_id:
+        return None
+    try:
+        from src.coordinator.catalog import build_scoped_catalog
+
+        # scoped 为空（无 worker_ids 声明）时返回空 catalog，InvokeAgentTool 自动
+        # 退回静态 schema（fail-closed，绝不回退全局目录暴露 mis-admin-helper）。
+        return build_scoped_catalog(agent_id)
+    except Exception as exc:  # noqa: BLE001 - scoped 失败必须降级为全局目录，不得阻断会话
+        logger.warning(
+            "build_scoped_catalog failed; falling back to global catalog",
+            agent_id=agent_id,
+            error=str(exc),
+        )
+        return None
+
+
 def create_platform_tool_registry(
     mcp_manager: McpClientManager | None,
     allowed_tools: list[str] | None = None,
     role: Any = None,
+    agent_id: str | None = None,
 ) -> ToolRegistry:
     """
     从 OpenHarness 默认工具集按 allowed_tools 过滤，并包装为安全执行。
@@ -581,11 +630,18 @@ def create_platform_tool_registry(
         role: 调度角色（``coordinator`` / ``worker``）；``None`` 时行为与改造前
             完全一致。``worker`` 会在模式过滤之外再做一次委派工具剔除，
             确保 YAML 写了通配符（如 ``*``）也不会越权拿到 ``agent__invoke``。
+        agent_id: 当前 Agent ID。当 ``role==coordinator`` 且非空时，注入
+            ``build_scoped_catalog(agent_id)`` 收窄 ``agent__invoke`` 的
+            ``agent_id`` 枚举（1.3 硬约束·闸③）；scoped 为空时退回静态 schema
+            （fail-closed，绝不回退全局目录）。
     """
     patterns: list[str] = resolve_allowed_tool_patterns(
         allowed_tools or [], mcp_manager, role
     )
-    source: ToolRegistry = create_agent_source_registry(mcp_manager)
+    # 1.3 硬约束·闸③：coordinator 注入 scoped catalog，使 LLM 枚举里不含
+    # mis-admin-helper 等硬约束 Agent（即便 coordination.yaml 误配也会被运行时白名单拒）。
+    scoped_catalog: Any | None = _resolve_scoped_catalog(role, agent_id)
+    source: ToolRegistry = create_agent_source_registry(mcp_manager, catalog=scoped_catalog)
     is_worker: bool = normalize_role(role) == "worker"
 
     # T03 §2.4：每个工具在执行前先过 fail-closed 权限闸门。
