@@ -106,7 +106,7 @@ def _post_stream(settings: Settings) -> str:
     session_mgr.create_session = AsyncMock(return_value=fake_session)
     session_mgr.add_message = AsyncMock()
 
-    async def fake_process_message(session, message):
+    async def fake_process_message(session, message, assistant_message_id=None):
         yield AgentEvent.text_delta("好的")
 
     instance = MagicMock()

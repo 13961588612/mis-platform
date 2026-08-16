@@ -15,6 +15,10 @@ from typing import Any
 _TRUE_LITERALS: frozenset[str] = frozenset({"1", "true", "yes", "on", "y", "t"})
 _FALSE_LITERALS: frozenset[str] = frozenset({"0", "false", "no", "off", "n", "f"})
 
+#: 子阶段细分埋点总开关（P2/T10）。默认开；高频会话可经配置关以降低采集开销。
+SUBSTAGE_INSTRUMENTATION_ENABLED: str = "SUBSTAGE_INSTRUMENTATION_ENABLED"
+SUBSTAGE_INSTRUMENTATION_DEFAULT: bool = True
+
 
 def bool_flag(settings: Any, name: str, default: bool) -> bool:
     """安全读取布尔配置项。
@@ -39,6 +43,21 @@ def bool_flag(settings: Any, name: str, default: bool) -> bool:
         if lowered in _FALSE_LITERALS:
             return False
     return default
+
+
+def substage_instrumentation_enabled(settings: Any) -> bool:
+    """子阶段细分埋点总开关（T10，默认开）。
+
+    采集点（qa_pipeline 打点、recorder 抽取、push_dispatch_trace）首行判此开关，
+    关闭则跳过、对应字段写 ``None``，用于高频会话降级控开销。
+
+    Args:
+        settings: `Settings` 实例（也可能是测试用的 Mock 对象）。
+
+    Returns:
+        开关是否开启；无法解析时回落 :data:`SUBSTAGE_INSTRUMENTATION_DEFAULT`。
+    """
+    return bool_flag(settings, SUBSTAGE_INSTRUMENTATION_ENABLED, SUBSTAGE_INSTRUMENTATION_DEFAULT)
 
 
 def int_flag(

@@ -167,6 +167,47 @@ export interface SessionTiming {
   sampled_at: string;
   /** timing schema 版本，结构变更时 +1。 */
   schema_version: number;
+  /**
+   * 子阶段细分下钻（v2，schema_version >= 2 才有；旧数据 / 未采集为 null）。
+   * 各子段为毫秒整数或 ``null``（不可得，前端显示「—」）。
+   */
+  sub_stages?: SubStages | null;
+}
+
+/**
+ * 平铺的子阶段字典（key 为 snake_case 指标名，value 为毫秒或 null）。
+ * 用于 retrieval / planning / generation / post_process 各段的内部明细。
+ */
+export interface SubStageMap {
+  [key: string]: number | null;
+}
+
+/** 单次工具调用的子阶段明细（tool_call 数组元素）。 */
+export interface ToolCallItem {
+  tool_name: string;
+  /** delegate：委派类（如 agent__invoke）；native：普通工具。 */
+  kind: 'delegate' | 'native';
+  latency_ms: number | null;
+  /** 仅 delegate 类携带：该 worker 内部的 sub_stages（结构同 {@link SubStageMap}）。 */
+  sub_stages?: SubStageMap | null;
+}
+
+/** tool_call 子阶段：按调用分别计时 + 委派往返近似。 */
+export interface ToolCallSubStage {
+  calls: ToolCallItem[];
+  /** 委派往返近似（父→子 网络委派 + 会话创建/初始化开销）。 */
+  delegate_round_trip_ms?: number | null;
+}
+
+/**
+ * 顶层子阶段结构（v2）。每个键对应一个父阶段；缺测为 null。
+ */
+export interface SubStages {
+  planning?: SubStageMap | null;
+  retrieval?: SubStageMap | null;
+  tool_call?: ToolCallSubStage | null;
+  generation?: SubStageMap | null;
+  post_process?: SubStageMap | null;
 }
 
 /**

@@ -17,6 +17,7 @@
 """
 
 from __future__ import annotations
+from time import perf_counter
 from typing import Any, AsyncIterator, Awaitable, Callable
 
 import json
@@ -25,6 +26,8 @@ from dataclasses import dataclass, field
 
 from src.adapters.kb_client import KbCallContext, KbClient, KbClientError
 from src.config import get_settings
+from src.coordinator.flags import substage_instrumentation_enabled
+from src.coordinator.trace import QA_SUB_STAGES_CV
 from src.models.retrieve import ChunkHit, CitationItem, QaAnswer, QaCitation, RetrieveHits
 from src.utils.logging import get_logger
 
@@ -304,6 +307,7 @@ async def retrieve_kb_chunks(
     library_ids: list[int] | None = None,
     top_k: int = 5,
     threshold: float | None = None,
+    acc: dict[str, int] | None = None,
 ) -> "RetrieveHits":
     """检索知识库片段：可见库为空时先解析用户可见库再检索（DRY 检索库）。
 
@@ -318,13 +322,21 @@ async def retrieve_kb_chunks(
         library_ids: 限定的库 ID；``None``/空表示全部可见库。
         top_k: 召回条数。
         threshold: 相关性阈值（0~1）。
+        acc: 子阶段细分计时的共享字典（由 ``QA_SUB_STAGES_CV`` 传入）；``None``
+            表示本调用不参与细分埋点（如 ``kb_retrieve`` 工具直调）。
 
     Returns:
         :class:`RetrieveHits`；无可见库或 NoopAdapter 时为空集合。
     """
     resolved: list[int] = list(library_ids or [])
     if not resolved:
+        t = perf_counter()
         visible = await kb.resolve_visible_libraries(ctx)
+        if acc is not None:
+            # ① 可见库解析：1 次 mis-kb HTTP 往返（仅当未显式指定库时触发）
+            acc["resolve_visible_libraries_ms"] = max(
+                0, int((perf_counter() - t) * 1000)
+            )
         if visible.is_empty():
             logger.info(
                 "KB retrieve: no visible library for user",
@@ -334,9 +346,14 @@ async def retrieve_kb_chunks(
             return RetrieveHits()
         resolved = visible.library_ids
 
-    return await kb.retrieve(
+    t = perf_counter()
+    hits = await kb.retrieve(
         ctx, question=question, library_ids=resolved, top_k=top_k, threshold=threshold
     )
+    if acc is not None:
+        # ② 向量检索：RAGFlow 召回 chunk（1 次 mis-kb HTTP 往返）
+        acc["RAGFlow_retrieve_ms"] = max(0, int((perf_counter() - t) * 1000))
+    return hits
 
 
 class KbQaPipeline:
@@ -376,6 +393,51 @@ class KbQaPipeline:
             if max_context_chars is not None
             else settings.MIS_KB_MAX_CONTEXT_CHARS
         )
+        # 本轮细分数组（4 段 + overhead）；``None`` 表示未开启采集或本调用不需采集。
+        self._sub_stages: dict[str, int] | None = None
+
+    # ---- 子阶段细分埋点（P0-2）----
+    # 4 段口径（PRD §4.2）：resolve_visible_libraries / RAGFlow_retrieve /
+    # worker_generate / persist；overhead 为差值吸收项（_build_prompt CPU 拼接等）。
+
+    def _begin_sub_stages(self) -> dict[str, int] | None:
+        """开启本轮子阶段采集，返回共享字典（或 ``None`` 表示降级不采集）。
+
+        优先复用 ``QA_SUB_STAGES_CV`` 中父任务（``InvokeAgentTool._spawn_worker``）
+        已 set 的共享 dict，使 worker 内部 qa_pipeline 的变异对父任务可见；否则建
+        本地 dict 挂在本实例上（供 BFF 路由 ``mis_capability`` 回读）。
+
+        采集开关 ``SUBSTAGE_INSTRUMENTATION_ENABLED``（默认开）关闭时整体跳过。
+        """
+        if not substage_instrumentation_enabled(get_settings()):
+            self._sub_stages = None
+            return None
+        acc = QA_SUB_STAGES_CV.get()
+        if acc is None:
+            acc = {}
+        self._sub_stages = acc
+        return acc
+
+    def _finalize_sub_stages(self, acc: dict[str, int], t_total: float) -> None:
+        """收口：用整段耗时 - 已知三段求 ``overhead_ms``（差值吸收项）。"""
+        try:
+            total_ms = max(0, int((perf_counter() - t_total) * 1000))
+            known = (
+                "resolve_visible_libraries_ms",
+                "RAGFlow_retrieve_ms",
+                "worker_generate_ms",
+                "persist_ms",
+            )
+            parts = sum(int(acc.get(k, 0) or 0) for k in known)
+            overhead = total_ms - parts
+            acc["overhead_ms"] = max(0, overhead)
+        except Exception:  # noqa: BLE001 - 降级红线：任何异常静默
+            pass
+
+    @property
+    def sub_stages(self) -> dict[str, int] | None:
+        """本轮子阶段细分（4 段 + overhead）；未采集为 ``None``。"""
+        return self._sub_stages
 
     async def aclose(self) -> None:
         """关闭自建的 KB 客户端（外部注入的客户端由调用方负责）。"""
@@ -405,29 +467,49 @@ class KbQaPipeline:
         Raises:
             KbClientError: 仅当**检索阶段**彻底失败且无法降级时向上抛出。
         """
-        hits = await self._retrieve(req, ctx)
-        prompt = self._build_prompt(req, hits, structured=structured)
+        acc = self._begin_sub_stages()
+        t_total = perf_counter()
+        try:
+            hits = await self._retrieve(req, ctx, acc=acc)
+            prompt = self._build_prompt(req, hits, structured=structured)
 
-        raw = await generate(prompt)
-        if structured:
-            answer_text, selected = self._parse_generation(raw)
-        else:
-            answer_text = (raw or "").strip()
-            selected = self._parse_inline_citations(answer_text)
+            # ③ worker_generate：拼 prompt 后调 LLM 生成答案（包裹注入的 generate 回调）
+            if acc is not None:
+                gen_start = perf_counter()
+                raw = await generate(prompt)
+                acc["worker_generate_ms"] = max(0, int((perf_counter() - gen_start) * 1000))
+            else:
+                raw = await generate(prompt)
 
-        used_hits = self._select_hits(hits.hits, selected)
-        session_id, message_id = await self._persist(req, ctx, answer_text, used_hits)
+            if structured:
+                answer_text, selected = self._parse_generation(raw)
+            else:
+                answer_text = (raw or "").strip()
+                selected = self._parse_inline_citations(answer_text)
 
-        citations = [
-            QaCitation.from_hit(hit, message_id=message_id, snippet_limit=self._snippet_limit)
-            for hit in used_hits
-        ]
-        return QaAnswer(
-            answer=answer_text,
-            citations=citations,
-            session_id=session_id,
-            message_id=message_id,
-        )
+            used_hits = self._select_hits(hits.hits, selected)
+
+            # ④ persist：回调 mis-kb 落库（create_session + append_message×2 + save_citations）
+            if acc is not None:
+                persist_start = perf_counter()
+                session_id, message_id = await self._persist(req, ctx, answer_text, used_hits)
+                acc["persist_ms"] = max(0, int((perf_counter() - persist_start) * 1000))
+            else:
+                session_id, message_id = await self._persist(req, ctx, answer_text, used_hits)
+
+            citations = [
+                QaCitation.from_hit(hit, message_id=message_id, snippet_limit=self._snippet_limit)
+                for hit in used_hits
+            ]
+            return QaAnswer(
+                answer=answer_text,
+                citations=citations,
+                session_id=session_id,
+                message_id=message_id,
+            )
+        finally:
+            if acc is not None:
+                self._finalize_sub_stages(acc, t_total)
 
     async def run_stream(
         self,
@@ -458,55 +540,81 @@ class KbQaPipeline:
         Yields:
             :class:`QaDelta`：0..n 帧 ``delta``，随后恰好一帧 ``done`` 或 ``error``。
         """
+        acc = self._begin_sub_stages()
+        t_total = perf_counter()
         try:
-            hits = await self._retrieve(req, ctx)
-        except KbClientError as exc:
-            logger.warning(
-                "KB QA stream retrieve failed",
-                error=str(exc),
+            try:
+                hits = await self._retrieve(req, ctx, acc=acc)
+            except KbClientError as exc:
+                logger.warning(
+                    "KB QA stream retrieve failed",
+                    error=str(exc),
+                    trace_id=ctx.trace_id,
+                )
+                yield QaDelta.error(str(exc))
+                return
+
+            prompt = self._build_prompt(req, hits, structured=False)
+
+            parts: list[str] = []
+            # ③ worker_generate：流式整段前后计时（含首字延迟，PRD §4 Q4 裁定）
+            if acc is not None:
+                gen_start = perf_counter()
+                async for piece in generate_stream(prompt):
+                    if not piece:
+                        continue
+                    parts.append(piece)
+                    yield QaDelta.delta(piece)
+                acc["worker_generate_ms"] = max(0, int((perf_counter() - gen_start) * 1000))
+            else:
+                async for piece in generate_stream(prompt):
+                    if not piece:
+                        continue
+                    parts.append(piece)
+                    yield QaDelta.delta(piece)
+
+            answer_text = "".join(parts).strip()
+            selected = self._parse_inline_citations(answer_text)
+            used_hits = self._select_hits(hits.hits, selected)
+
+            # ④ persist：流结束后一次性落库
+            if acc is not None:
+                persist_start = perf_counter()
+                session_id, message_id = await self._persist(req, ctx, answer_text, used_hits)
+                acc["persist_ms"] = max(0, int((perf_counter() - persist_start) * 1000))
+            else:
+                session_id, message_id = await self._persist(req, ctx, answer_text, used_hits)
+
+            citations = [
+                QaCitation.from_hit(hit, message_id=message_id, snippet_limit=self._snippet_limit)
+                for hit in used_hits
+            ]
+            logger.info(
+                "KB QA stream completed",
+                kb_session_id=session_id,
+                citation_count=len(citations),
+                answer_chars=len(answer_text),
                 trace_id=ctx.trace_id,
             )
-            yield QaDelta.error(str(exc))
-            return
-
-        prompt = self._build_prompt(req, hits, structured=False)
-
-        parts: list[str] = []
-        async for piece in generate_stream(prompt):
-            if not piece:
-                continue
-            parts.append(piece)
-            yield QaDelta.delta(piece)
-
-        answer_text = "".join(parts).strip()
-        selected = self._parse_inline_citations(answer_text)
-        used_hits = self._select_hits(hits.hits, selected)
-
-        session_id, message_id = await self._persist(req, ctx, answer_text, used_hits)
-        citations = [
-            QaCitation.from_hit(hit, message_id=message_id, snippet_limit=self._snippet_limit)
-            for hit in used_hits
-        ]
-        logger.info(
-            "KB QA stream completed",
-            kb_session_id=session_id,
-            citation_count=len(citations),
-            answer_chars=len(answer_text),
-            trace_id=ctx.trace_id,
-        )
-        yield QaDelta.done(
-            session_id=session_id,
-            message_id=message_id,
-            citations=citations,
-            finish_reason=finish_reason,
-        )
+            yield QaDelta.done(
+                session_id=session_id,
+                message_id=message_id,
+                citations=citations,
+                finish_reason=finish_reason,
+            )
+        finally:
+            if acc is not None:
+                self._finalize_sub_stages(acc, t_total)
 
     # ============================================================ 阶段 1：检索
 
-    async def _retrieve(self, req: KbQaRequest, ctx: KbCallContext) -> RetrieveHits:
+    async def _retrieve(
+        self, req: KbQaRequest, ctx: KbCallContext, acc: dict[str, int] | None = None
+    ) -> RetrieveHits:
         """解析可见库并检索；可见库为空时直接返回空命中，不再打检索请求。
 
         复用模块级 :func:`retrieve_kb_chunks`（T4/TOOL 同样复用，DRY）。
+        ``acc`` 非 ``None`` 时由 ``retrieve_kb_chunks`` 顺带回填前两子阶段。
         """
         return await retrieve_kb_chunks(
             self._kb,
@@ -515,6 +623,7 @@ class KbQaPipeline:
             library_ids=req.library_ids,
             top_k=req.top_k,
             threshold=req.threshold,
+            acc=acc,
         )
 
     # ============================================================ 阶段 2：提示词

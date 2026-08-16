@@ -35,7 +35,11 @@ from src.agent.session import Message, SessionManager, get_session_manager
 from src.api.deps import get_current_user, get_trace_id, resolve_mis_user_id_with_db
 from src.api.response import error_response, success
 from src.config import get_settings
-from src.coordinator.trace import dispatch_trace_sse_enabled, take_last_turn_traces
+from src.coordinator.trace import (
+    QA_SUB_STAGES_CV,
+    dispatch_trace_sse_enabled,
+    take_last_turn_traces,
+)
 from src.runtime.events import AgentEventType
 from src.utils.exceptions import AgentNotFoundError
 from src.utils.logging import get_logger
@@ -174,6 +178,11 @@ async def _run_kb_qa(
         answer = await pipeline.run(kb_req, ctx, _generate)
     finally:
         await pipeline.aclose()
+    # T02：若处于 worker 委派上下文（_spawn_worker 已 set QA_SUB_STAGES_CV），
+    # 将本轮细分数组回写到共享 dict，供 DispatchTraceEntry.sub_stages 透传。
+    # BFF 直调路径 CV 未 set，此处为安全 no-op（不污染上下文）。
+    if pipeline.sub_stages is not None and QA_SUB_STAGES_CV.get() is not None:
+        QA_SUB_STAGES_CV.set(pipeline.sub_stages)
 
     logger.info(
         "KB QA completed",
@@ -292,6 +301,9 @@ async def _stream_kb_qa(
             yield _sse_frame(EVENT_DONE, payload)
     finally:
         await pipeline.aclose()
+        # T02：同 _run_kb_qa，仅当处于 worker 委派上下文时才回写（BFF 直调为 no-op）。
+        if pipeline.sub_stages is not None and QA_SUB_STAGES_CV.get() is not None:
+            QA_SUB_STAGES_CV.set(pipeline.sub_stages)
 
 
 async def _save_platform_message(session: Any, content: str) -> None:

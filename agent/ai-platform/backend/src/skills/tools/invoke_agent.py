@@ -39,6 +39,7 @@ from src.coordinator.notification import (
     TaskUsage,
 )
 from src.coordinator.trace import (
+    QA_SUB_STAGES_CV,
     TRACE_STATUS_REJECTED,
     DispatchTraceEntry,
     push_dispatch_trace,
@@ -495,6 +496,7 @@ class InvokeAgentTool(BaseTool):
             intent=intent,
             started_at=started_at,
             is_error=False,
+            sub_stages=run_result.sub_stages,
         )
 
     # ===== 内部编排 helper =====
@@ -652,39 +654,49 @@ class InvokeAgentTool(BaseTool):
             reuse_session_id: 续聊复用的子会话 ID；`None` 表示新建。
 
         Returns:
-            Worker 执行结果。
+            Worker 执行结果（含 worker 内部子阶段细分，若可得）。
         """
-        coro = _run_child_agent(
-            agent_id=agent_id,
-            content=brief.render(),
-            metadata=child_meta,
-            user_id=user_id,
-            channel=channel,
-            user_mobile=user_mobile,
-            channel_user_id=channel_user_id,
-            mis_user_id=mis_user_id,
-            reuse_session_id=reuse_session_id,
-        )
-        if not parent_session_id:
-            return await coro
-
-        from src.coordinator.sessions import (
-            get_worker_session_registry,
-            register_running_task,
-            unregister_running_task,
-        )
-
-        task: asyncio.Task[_WorkerRunResult] = asyncio.ensure_future(coro)
-        register_running_task(parent_session_id, agent_id, task)
+        # T02/T04：跨 asyncio.Task 边界共享 worker 细分计时的 dict 载体。
+        # 父上下文 set 空 dict；ensure_future 拷贝上下文只复制引用，
+        # 子任务（worker 内 qa_pipeline）对其 update 的变异对父任务可见。
+        sub_stages_acc: dict[str, int] = {}
+        cv_token = QA_SUB_STAGES_CV.set(sub_stages_acc)
         try:
-            result = await task
-        finally:
-            unregister_running_task(parent_session_id, agent_id)
-        if result.child_session_id:
-            await get_worker_session_registry().bind(
-                parent_session_id, agent_id, result.child_session_id
+            coro = _run_child_agent(
+                agent_id=agent_id,
+                content=brief.render(),
+                metadata=child_meta,
+                user_id=user_id,
+                channel=channel,
+                user_mobile=user_mobile,
+                channel_user_id=channel_user_id,
+                mis_user_id=mis_user_id,
+                reuse_session_id=reuse_session_id,
             )
-        return result
+            if not parent_session_id:
+                result = await coro
+            else:
+                from src.coordinator.sessions import (
+                    get_worker_session_registry,
+                    register_running_task,
+                    unregister_running_task,
+                )
+
+                task: asyncio.Task[_WorkerRunResult] = asyncio.ensure_future(coro)
+                register_running_task(parent_session_id, agent_id, task)
+                try:
+                    result = await task
+                finally:
+                    unregister_running_task(parent_session_id, agent_id)
+                if result.child_session_id:
+                    await get_worker_session_registry().bind(
+                        parent_session_id, agent_id, result.child_session_id
+                    )
+            # 把共享 dict 中的 worker 细分计时回填到结果（空则 None，不可得）
+            result.sub_stages = sub_stages_acc if sub_stages_acc else None
+            return result
+        finally:
+            QA_SUB_STAGES_CV.reset(cv_token)
 
     async def _record_trace(
         self, parent_session_id: str, entry: DispatchTraceEntry
@@ -707,6 +719,7 @@ class InvokeAgentTool(BaseTool):
         intent: str,
         started_at: float,
         is_error: bool,
+        sub_stages: dict[str, int] | None = None,
     ) -> ToolResult:
         """记录 trace 并渲染最终 ToolResult。
 
@@ -716,6 +729,8 @@ class InvokeAgentTool(BaseTool):
             intent: 意图标签。
             started_at: 计时起点。
             is_error: 是否作为错误结果返回给 LLM。
+            sub_stages: worker 内部子阶段细分（透传进 ``DispatchTraceEntry.sub_stages``）；
+                ``None`` 表示不可得（降级红线：不影响主链路）。
 
         Returns:
             工具结果。
@@ -730,6 +745,7 @@ class InvokeAgentTool(BaseTool):
                 latency_ms=notification.latency_ms or _elapsed_ms(started_at),
                 task_id=notification.task_id,
                 brief_rejected=False,
+                sub_stages=sub_stages,
             ),
         )
         return ToolResult(output=notification.to_tool_output(), is_error=is_error)
@@ -815,9 +831,11 @@ class _WorkerRunResult:
         child_session_id: 子会话 ID（C5 续聊锚点）。
         tokens: Worker 侧 token 总量（取自 DONE 事件，缺失为 0）。
         tool_uses: Worker 侧工具调用次数（TOOL_CALL 计数）。
+        sub_stages: worker 内部子阶段细分（``DispatchTraceEntry.sub_stages`` 透传载体）；
+            ``None`` 表示 worker 未回传（不可得，降级红线：绝不阻断主链路）。
     """
 
-    __slots__ = ("text", "child_session_id", "tokens", "tool_uses")
+    __slots__ = ("text", "child_session_id", "tokens", "tool_uses", "sub_stages")
 
     def __init__(
         self,
@@ -826,11 +844,13 @@ class _WorkerRunResult:
         child_session_id: str = "",
         tokens: int = 0,
         tool_uses: int = 0,
+        sub_stages: dict[str, int] | None = None,
     ) -> None:
         self.text = text
         self.child_session_id = child_session_id
         self.tokens = tokens
         self.tool_uses = tool_uses
+        self.sub_stages = sub_stages
 
 
 async def _run_child_agent(

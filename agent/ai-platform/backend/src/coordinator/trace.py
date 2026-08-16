@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 from collections import deque
+from contextvars import ContextVar
 from datetime import datetime, timezone
 from typing import Any
 
@@ -55,6 +56,12 @@ class DispatchTraceEntry(BaseModel):
     brief_rejected: bool = Field(
         default=False, description="是否因 Brief 校验失败而未真正委派"
     )
+    # ---- 新增（P0-1）：worker 内部子阶段细分的透传载体 ----
+    # 平铺的 {指标名: 毫秒} 字典；不可得为 None（缺省即 None，不写 0）。
+    # rag worker 约定键：resolve_visible_libraries_ms / RAGFlow_retrieve_ms /
+    #                     worker_generate_ms / persist_ms / overhead_ms
+    # 其它 worker（crm/extract/summary，P2）复用同一结构，键名自定。
+    sub_stages: dict[str, int] | None = None
 
 
 _pending: dict[str, list[dict[str, Any]]] = {}
@@ -65,6 +72,18 @@ _lock = asyncio.Lock()
 #: 跨会话聚合最近 N 条委派轨迹，供 ``GET /admin/dispatch-traces`` 只读展示。
 GLOBAL_TRACE_LIMIT: int = 500
 _global_traces: deque[dict[str, Any]] = deque(maxlen=GLOBAL_TRACE_LIMIT)
+
+# ====================================================================
+# 跨 asyncio.Task 边界传递 worker 细分计时的共享字典载体（P0-2）
+#
+# 机制：`InvokeAgentTool._spawn_worker` 在**父上下文** `set` 一个空 dict；
+# `asyncio.ensure_future` 拷贝上下文时只复制引用，dict 对象被父子任务共享，
+# 子任务（worker 内 qa_pipeline）对其 `update` 的变异对父任务可见，
+# `_spawn_worker` 任务结束后读同一 dict 即可取回 worker 内部细分。
+# 比"返回值穿 event 流"更稳，且不改动 events.py / openharness.py。
+QA_SUB_STAGES_CV: ContextVar[dict[str, int] | None] = ContextVar(
+    "qa_sub_stages", default=None
+)
 
 
 # ===== feature flag（三通道开关，统一经 flags 安全读取）=====

@@ -106,7 +106,8 @@ class AgentInstance:
             ):
                 recorder.observe(event)
                 yield event
-            recorder.complete()
+            # 注：成功路径不再在此 complete() 钉死 _end_t；计时窗交由 finally 末
+            # 的 recorder.close() 收口到 post_process 完成之后（Q5 / T05）。
         except Exception:
             if recorder is not None:
                 recorder.fail()
@@ -116,17 +117,30 @@ class AgentInstance:
             # 计时降级：任何异常都静默吞掉，绝不阻断主对话链路。
             if recorder is not None and store is not None:
                 try:
+                    # post_process 三步打点（弱引用，异常静默）：
+                    # db_persist / redis_write 步——本代码库消息落库由 API 路由在
+                    # recorder 窗口外完成，此处仅保留打点接口（实测为空，记 null）；
+                    # timing_save 步——store.save 在窗口内真实可测。
+                    recorder.step_start("db_persist")
+                    recorder.step_end("db_persist")
+                    recorder.step_start("redis_write")
+                    recorder.step_end("redis_write")
+                    recorder.step_start("timing_save")
                     await store.save(
                         session.session_id,
                         assistant_message_id or recorder.turn_key,
                         recorder.snapshot(),
                     )
+                    recorder.step_end("timing_save")
                 except Exception as exc:  # noqa: BLE001
                     logger.warning(
                         "session timing save failed (degraded)",
                         session_id=session.session_id,
                         error=str(exc),
                     )
+                finally:
+                    # 窗口关闭：落定 _end_t（端到端 + post_process 终点）
+                    recorder.close()
 
     async def health_check(self) -> HealthStatus:
         """检查此 Agent 实例的健康状态。"""

@@ -13,12 +13,20 @@
  * 不做流式打字机、消息编辑。
  */
 import type { ReactElement, ReactNode } from 'react';
+import { useState } from 'react';
 import { Bot, Terminal, ThumbsDown, ThumbsUp, User, Wrench } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { MarkdownView } from '@/components/common/markdown-view';
 import { KbChatSourceList, splitKbSources } from '@/components/common/kb-chat-sources';
 import { formatTime } from '../types';
-import type { MessageRole, SessionMessage, SessionTiming } from '../types';
+import type {
+  MessageRole,
+  SessionMessage,
+  SessionTiming,
+  SubStageMap,
+  SubStages,
+  ToolCallSubStage,
+} from '../types';
 
 /** 每种 role 的呈现规格：标签 + 配色 + 图标。 */
 interface RoleSpec {
@@ -186,14 +194,217 @@ function fmtMs(ms: number | null | undefined): string {
   return `${(ms / 1000).toFixed(2)}s`;
 }
 
-/** 单阶段耗时单元格（2.1 内联）。 */
-function InlineTimingCell({ label, ms }: { label: string; ms: number | null }): ReactElement {
+/** 单阶段耗时单元格（2.1 内联）。可点击展开子阶段下钻。 */
+function InlineTimingCell({
+  label,
+  ms,
+  warn,
+  onClick,
+  expanded,
+}: {
+  label: string;
+  ms: number | null;
+  warn?: boolean;
+  onClick?: () => void;
+  expanded?: boolean;
+}): ReactElement {
+  const clickable = Boolean(onClick);
   return (
-    <span className="rounded bg-card px-1.5 py-0.5" title={`${label} ${fmtMs(ms)}`}>
-      <span className="text-muted-foreground">{label}</span>
-      <span className="ml-1 font-medium text-foreground">{fmtMs(ms)}</span>
-    </span>
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={!clickable}
+      title={`${label} ${fmtMs(ms)}${warn ? '（子阶段之和与父阶段偏差>5%）' : ''}`}
+      className={cn(
+        'inline-flex items-center rounded px-1.5 py-0.5 transition-colors',
+        clickable ? 'cursor-pointer hover:bg-muted' : 'cursor-default',
+        warn ? 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900/40 dark:text-yellow-200' : 'bg-card',
+      )}
+    >
+      <span className={warn ? 'font-medium' : 'text-muted-foreground'}>{label}</span>
+      <span className="ml-1 font-medium text-foreground">
+        {fmtMs(ms)}
+        {warn ? ' ⚠' : ''}
+      </span>
+      {clickable ? <span className="ml-0.5 text-[0.6rem] opacity-60">{expanded ? '▾' : '▸'}</span> : null}
+    </button>
   );
+}
+
+/**
+ * 子阶段之和与父阶段聚合值偏差 > 5% 时返回 true（触发父 cell 标黄）。
+ * 各父阶段参与严格求和的子段口径不同，故分类型处理：
+ * - tool_call：Σ calls[].latency_ms 应 = tool_call_ms
+ * - generation：仅 stream_ms 严格 = generation_ms（ttft/tail 为辅助指标，不参与）
+ * - 其余（planning/retrieval/post_process）：求和 map 内全部数值字段
+ */
+function deviationWarn(stageKey: string, sub: unknown, parentMs: number | null): boolean {
+  if (!sub || parentMs == null || parentMs <= 0) return false;
+  let sum: number | null = null;
+  if (stageKey === 'tool_call') {
+    const tcs = sub as ToolCallSubStage;
+    if (!tcs.calls || tcs.calls.length === 0) return false;
+    sum = tcs.calls.reduce(
+      (s, c) => s + (typeof c.latency_ms === 'number' ? c.latency_ms : 0),
+      0,
+    );
+  } else if (stageKey === 'generation') {
+    const g = sub as SubStageMap;
+    const stream = typeof g?.stream_ms === 'number' ? g.stream_ms : null;
+    if (stream == null) return false;
+    sum = stream;
+  } else {
+    const m = sub as SubStageMap;
+    const vals = Object.values(m ?? {}).filter((v): v is number => typeof v === 'number');
+    if (vals.length === 0) return false;
+    sum = vals.reduce((s, v) => s + v, 0);
+  }
+  if (sum == null || sum <= 0) return false;
+  return Math.abs(sum - parentMs) / parentMs > 0.05;
+}
+
+/** 渲染一组子阶段明细行（key → value，null 显示「—」）。 */
+function SubStageRows({ map }: { map: SubStageMap | null | undefined }): ReactElement | null {
+  if (!map) return null;
+  const entries = Object.entries(map).filter(([, v]) => v !== undefined);
+  if (entries.length === 0) return null;
+  return (
+    <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 pl-3 text-[0.65rem] text-muted-foreground">
+      {entries.map(([key, value]) => (
+        <span key={key} className="whitespace-nowrap">
+          <span className="opacity-80">{key.replace(/_ms$/, '')}</span>
+          <span className="ml-1 font-medium text-foreground">{fmtMs(value as number | null)}</span>
+        </span>
+      ))}
+    </div>
+  );
+}
+
+/** 工具调用数组下钻（每次调用：tool_name / kind / latency + 其内部 sub_stages）。 */
+function ToolCallDrill({ tcs }: { tcs: ToolCallSubStage }): ReactElement {
+  return (
+    <div className="mt-1 flex flex-col gap-1 pl-3">
+      {tcs.calls.map((call, idx) => (
+        <div key={`${call.tool_name}-${idx}`} className="text-[0.65rem]">
+          <span className="whitespace-nowrap text-muted-foreground">
+            <span className="font-medium text-foreground">{call.tool_name}</span>
+            <span className="ml-1 rounded bg-muted px-1 py-0.5 text-[0.6rem]">{call.kind}</span>
+            <span className="ml-1 font-medium text-foreground">{fmtMs(call.latency_ms)}</span>
+          </span>
+          {call.sub_stages ? <SubStageRows map={call.sub_stages} /> : null}
+        </div>
+      ))}
+      {typeof tcs.delegate_round_trip_ms === 'number' ? (
+        <div className="whitespace-nowrap text-[0.65rem] text-muted-foreground">
+          <span className="opacity-80">delegate_round_trip</span>
+          <span className="ml-1 font-medium text-foreground">{fmtMs(tcs.delegate_round_trip_ms)}</span>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * 单轮耗时条 + 可折叠子阶段下钻（P1）。顶层 5 阶段保持不变，点击某阶段可展开其
+ * 子阶段明细；并提供「展开全部耗时明细」开关（默认折叠）。
+ */
+function TimingBlock({ turn }: { turn: SessionTiming }): ReactElement {
+  const [expandAll, setExpandAll] = useState(false);
+  const [open, setOpen] = useState<Record<string, boolean>>({});
+
+  const stages = turn.stages;
+  const sub = turn.sub_stages;
+  const hasSub = sub != null;
+
+  const items: {
+    key: keyof NonNullable<SubStages>;
+    label: string;
+    ms: number | null;
+    sub?: unknown;
+  }[] = [
+    { key: 'planning', label: '规划', ms: stages.planning_ms, sub: sub?.planning },
+    { key: 'retrieval', label: '检索', ms: stages.retrieval_ms, sub: sub?.retrieval },
+    { key: 'tool_call', label: '工具', ms: stages.tool_call_ms, sub: sub?.tool_call },
+    { key: 'generation', label: '生成', ms: stages.generation_ms, sub: sub?.generation },
+    { key: 'post_process', label: '后处理', ms: stages.post_process_ms, sub: sub?.post_process },
+  ];
+
+  return (
+    <div className="mb-2 rounded-md border bg-muted/40 px-2 py-1 text-[0.7rem]">
+      <div className="flex flex-wrap items-center gap-1.5">
+        <span className="text-muted-foreground">本轮耗时</span>
+        <span className="font-medium text-foreground">{fmtMs(turn.total_ms)}</span>
+        <span className="text-border">·</span>
+        {items.map((it) => {
+          const hasDrill = it.sub != null;
+          const isOpen = expandAll || open[it.key];
+          return (
+            <InlineTimingCell
+              key={it.key}
+              label={it.label}
+              ms={it.ms}
+              warn={hasDrill ? deviationWarn(it.key, it.sub, it.ms) : false}
+              onClick={hasDrill ? () => setOpen((p) => ({ ...p, [it.key]: !p[it.key] })) : undefined}
+              expanded={isOpen}
+            />
+          );
+        })}
+        {hasSub ? (
+          <button
+            type="button"
+            onClick={() => setExpandAll((v) => !v)}
+            className="ml-auto rounded bg-muted px-1.5 py-0.5 text-[0.65rem] text-muted-foreground hover:bg-border/60"
+            title="展开 / 折叠全部子阶段明细"
+          >
+            {expandAll ? '折叠明细' : '展开明细'}
+          </button>
+        ) : null}
+        {!hasSub ? (
+          <span className="ml-auto text-[0.65rem] text-muted-foreground">
+            采样 {formatTime(turn.sampled_at)}
+          </span>
+        ) : null}
+      </div>
+
+      {hasSub && expandAll
+        ? items.map((it) =>
+            it.sub != null ? (
+              <div key={`${it.key}-drill`} className="mt-1 border-l border-border pl-1">
+                <SubStageDrillForStage stageKey={it.key} sub={it.sub} />
+              </div>
+            ) : null,
+          )
+        : null}
+      {hasSub && !expandAll
+        ? items.map((it) =>
+            open[it.key] && it.sub != null ? (
+              <div key={`${it.key}-drill`} className="mt-1 border-l border-border pl-1">
+                <SubStageDrillForStage stageKey={it.key} sub={it.sub} />
+              </div>
+            ) : null,
+          )
+        : null}
+      {hasSub ? (
+        <div className="mt-1 text-right text-[0.65rem] text-muted-foreground">
+          采样 {formatTime(turn.sampled_at)}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+/** 按父阶段类型渲染对应的子阶段下钻内容。 */
+function SubStageDrillForStage({
+  stageKey,
+  sub,
+}: {
+  stageKey: string;
+  sub: unknown;
+}): ReactElement | null {
+  if (stageKey === 'tool_call') {
+    return <ToolCallDrill tcs={sub as ToolCallSubStage} />;
+  }
+  return <SubStageRows map={sub as SubStageMap | null} />;
 }
 
 export function AgentMessageStream({
@@ -249,19 +460,7 @@ export function AgentMessageStream({
             </div>
 
             {turn ? (
-              <div className="mb-2 flex flex-wrap items-center gap-1.5 rounded-md border bg-muted/40 px-2 py-1 text-[0.7rem]">
-                <span className="text-muted-foreground">本轮耗时</span>
-                <span className="font-medium text-foreground">{fmtMs(turn.total_ms)}</span>
-                <span className="text-border">·</span>
-                <InlineTimingCell label="规划" ms={turn.stages.planning_ms} />
-                <InlineTimingCell label="检索" ms={turn.stages.retrieval_ms} />
-                <InlineTimingCell label="工具" ms={turn.stages.tool_call_ms} />
-                <InlineTimingCell label="生成" ms={turn.stages.generation_ms} />
-                <InlineTimingCell label="后处理" ms={turn.stages.post_process_ms} />
-                <span className="ml-auto text-muted-foreground">
-                  采样 {formatTime(turn.sampled_at)}
-                </span>
-              </div>
+              <TimingBlock turn={turn} />
             ) : null}
             {turnMissing ? (
               <div className="mb-2 text-[0.7rem] text-muted-foreground">本轮耗时：—</div>
