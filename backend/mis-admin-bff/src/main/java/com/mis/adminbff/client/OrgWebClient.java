@@ -1,9 +1,11 @@
 package com.mis.adminbff.client;
 
 import com.mis.adminbff.client.model.DeptPierceVO;
+import com.mis.adminbff.client.model.DeptStaffingVO;
 import com.mis.adminbff.client.model.DeptVO;
 import com.mis.adminbff.client.model.EmployeeVO;
 import com.mis.adminbff.client.model.OrgVO;
+import com.mis.adminbff.client.model.PostTypeTreeNodeVO;
 import com.mis.adminbff.client.model.PostTypeVO;
 import com.mis.adminbff.client.model.PostVO;
 import com.mis.adminbff.config.BffProperties;
@@ -46,9 +48,13 @@ public class OrgWebClient extends AbstractDownstreamClient {
             new ParameterizedTypeReference<>() {};
     private static final ParameterizedTypeReference<Result<List<PostTypeVO>>> POST_TYPE_LIST =
             new ParameterizedTypeReference<>() {};
+    private static final ParameterizedTypeReference<Result<List<PostTypeTreeNodeVO>>> POST_TYPE_TREE_LIST =
+            new ParameterizedTypeReference<>() {};
     private static final ParameterizedTypeReference<Result<Void>> VOID =
             new ParameterizedTypeReference<>() {};
     private static final ParameterizedTypeReference<Result<Map<String, Long>>> COUNT =
+            new ParameterizedTypeReference<>() {};
+    private static final ParameterizedTypeReference<Result<DeptStaffingVO>> DEPT_STAFFING =
             new ParameterizedTypeReference<>() {};
 
     public OrgWebClient(
@@ -168,12 +174,22 @@ public class OrgWebClient extends AbstractDownstreamClient {
     // -----------------------------------------------------------------------
     // 岗位（mis-org /internal/v1/posts* + /internal/v1/post-types）
     // -----------------------------------------------------------------------
-    public List<PostVO> listPosts(Long tenantId, Long deptId, Long postTypeId, Integer status) {
+    public List<PostVO> listPosts(Long tenantId, Long deptId, List<Long> deptIds, Long postTypeId, Integer status, List<Long> orgIds) {
+        String deptIdsParam = (deptIds == null || deptIds.isEmpty()) ? null : deptIds.stream().map(String::valueOf).collect(Collectors.joining(","));
+        String orgIdsParam = (orgIds == null || orgIds.isEmpty()) ? null : orgIds.stream().map(String::valueOf).collect(Collectors.joining(","));
         return block(client().get()
                 .uri(queryUri("/internal/v1/posts",
-                        "tenantId", tenantId, "deptId", deptId, "postTypeId", postTypeId, "status", status))
+                        "tenantId", tenantId, "deptId", deptId, "deptIds", deptIdsParam, "orgIds", orgIdsParam, "postTypeId", postTypeId, "status", status))
                 .retrieve()
                 .bodyToMono(POST_LIST));
+    }
+
+    /** 部门岗位编制：透传内部 mis-org /internal/v1/depts/{id}/staffing（tenantId 注入）。 */
+    public DeptStaffingVO getDeptStaffing(Long id, Long tenantId) {
+        return block(client().get()
+                .uri(queryUri("/internal/v1/depts/" + id + "/staffing", "tenantId", tenantId))
+                .retrieve()
+                .bodyToMono(DEPT_STAFFING));
     }
 
     public PostVO getPost(Long id) {
@@ -198,6 +214,14 @@ public class OrgWebClient extends AbstractDownstreamClient {
                 .uri(queryUri("/internal/v1/post-types", "tenantId", tenantId, "status", status))
                 .retrieve()
                 .bodyToMono(POST_TYPE_LIST));
+    }
+
+    /** V47 岗位类型树：按 parent_id 递归组装（顶层 parentId=0）；status 可选。 */
+    public List<PostTypeTreeNodeVO> listPostTypeTree(Long tenantId, Integer status) {
+        return block(client().get()
+                .uri(queryUri("/internal/v1/post-types/tree", "tenantId", tenantId, "status", status))
+                .retrieve()
+                .bodyToMono(POST_TYPE_TREE_LIST));
     }
 
     /** V40 新增岗位类型。 */

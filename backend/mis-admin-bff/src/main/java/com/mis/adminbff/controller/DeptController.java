@@ -1,6 +1,7 @@
 package com.mis.adminbff.controller;
 
 import com.mis.adminbff.client.model.DeptPierceVO;
+import com.mis.adminbff.client.model.DeptStaffingVO;
 import com.mis.adminbff.client.model.DeptVO;
 import com.mis.adminbff.dto.DeptCreateRequest;
 import com.mis.adminbff.dto.DeptUpdateRequest;
@@ -38,6 +39,15 @@ public class DeptController {
     @GetMapping("/pierce")
     public Result<List<DeptPierceVO>> pierce(@RequestParam Long orgId) {
         return Result.ok(orgFacadeService.deptPierce(orgId));
+    }
+
+    /**
+     * 部门岗位编制：三指标 + 各岗位任职明细 + 部门任职人员。
+     * tenantId 由 BFF 经 RequestContext 注入（前端不传）。
+     */
+    @GetMapping("/{id}/staffing")
+    public Result<DeptStaffingVO> staffing(@PathVariable Long id) {
+        return Result.ok(orgFacadeService.getDeptStaffing(id));
     }
 
     @GetMapping("/{id}")

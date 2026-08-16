@@ -1,0 +1,82 @@
+classDiagram
+  %% 后端实体/VO
+  class SysPostType {
+    +Long id
+    +Long tenantId
+    +String code
+    +String name
+    +Integer sort
+    +Integer status
+    +Long parentId
+    +Integer isLeaf
+    +Instant createdAt
+    +Instant updatedAt
+  }
+  class PostTypeTreeNodeVO {
+    +String id
+    +String code
+    +String name
+    +Integer sort
+    +Integer status
+    +Integer isLeaf
+    +Integer referenceCount
+    +List~PostTypeTreeNodeVO~ children
+  }
+  class PostTypeCreateRequest {
+    +Long tenantId
+    +String code
+    +String name
+    +Integer sort
+    +Integer status
+    +Long parentId
+  }
+  class PostTypeUpdateRequest {
+    +String name
+    +Integer sort
+    +Integer status
+    +Long parentId
+  }
+  class PostService {
+    +listTypeTree(tenantId, status) List~PostTypeTreeNodeVO~
+    +createType(req) PostTypeVO
+    +updateType(id, req) PostTypeVO
+    +deleteType(id) void
+    -refreshLeaf(parentId) void
+  }
+  SysPostType "1" --> "*" SysPostType : parentId 自引用
+  PostService ..> SysPostType
+  PostService ..> PostTypeTreeNodeVO : 构建
+
+  %% 前端组件
+  class DeptTreeSelect {
+    +value
+    +onChange
+    +multiple: boolean
+    +组织选择器(移出Popover)
+    +部门树Popover
+  }
+  class PostTypeTreeSelect {
+    +value
+    +onChange
+    +仅末级可选(isLeaf=1)
+  }
+  class OrgPierceDrawer {
+    +anchorDeptId
+    +fetchDeptPierce + 面包屑钻取
+  }
+  class DeptTreePage {
+    +单树表 + 行内编制面板
+    +穿透下钻按钮 -> OrgPierceDrawer
+  }
+  class PostTypeManagePage {
+    +树表 + 上级类型选择
+  }
+  class AdminListPage {
+    +dept-tree-multi 字段
+    +post-type-tree 字段
+  }
+  DeptTreePage ..> DeptTreeSelect
+  DeptTreePage ..> OrgPierceDrawer
+  PostTypeManagePage ..> PostTypeTreeSelect
+  AdminListPage ..> PostTypeTreeSelect
+  AdminListPage ..> DeptTreeSelect

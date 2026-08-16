@@ -4,6 +4,7 @@ import com.mis.common.core.result.Result;
 import com.mis.org.dto.PostCreateRequest;
 import com.mis.org.dto.PostTypeCreateRequest;
 import com.mis.org.dto.PostTypeUpdateRequest;
+import com.mis.org.dto.PostTypeTreeNodeVO;
 import com.mis.org.dto.PostTypeVO;
 import com.mis.org.dto.PostUpdateRequest;
 import com.mis.org.dto.PostVO;
@@ -38,9 +39,11 @@ public class PostController {
     public Result<List<PostVO>> list(
             @RequestParam Long tenantId,
             @RequestParam(required = false) Long deptId,
+            @RequestParam(required = false) List<Long> deptIds,
+            @RequestParam(required = false) List<Long> orgIds,
             @RequestParam(required = false) Long postTypeId,
             @RequestParam(required = false) Integer status) {
-        return Result.ok(postService.list(tenantId, deptId, postTypeId, status));
+        return Result.ok(postService.list(tenantId, deptId, deptIds, orgIds, postTypeId, status));
     }
 
     @GetMapping("/posts/{id}")
@@ -72,6 +75,14 @@ public class PostController {
             @RequestParam Long tenantId,
             @RequestParam(required = false) Integer status) {
         return Result.ok(postService.listTypes(tenantId, status));
+    }
+
+    /** V47 岗位类型树：按 parent_id 递归组装（顶层 parentId=0）。 */
+    @GetMapping("/post-types/tree")
+    public Result<List<PostTypeTreeNodeVO>> listTypeTree(
+            @RequestParam Long tenantId,
+            @RequestParam(required = false) Integer status) {
+        return Result.ok(postService.listTypeTree(tenantId, status));
     }
 
     @PostMapping("/post-types")

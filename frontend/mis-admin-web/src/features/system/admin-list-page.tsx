@@ -21,6 +21,9 @@ import { Input } from '@/components/ui/input';
 import { PageHeader } from '@/components/common/page-header';
 import { buildAppBreadcrumbs } from '@/components/common/app-breadcrumbs';
 import { DetailDefList } from '@/components/common/detail-def-list';
+import { DeptTreeSelect } from '@/components/common/dept-tree-select';
+import { DeptTreeMulti } from '@/components/common/dept-tree-multi';
+import { PostTypeTreeSelect } from '@/components/common/post-type-tree-select';
 import { StatusBadge } from '@/components/common/list-page-skeleton';
 import { SortIndicator } from '@/components/common/sort-indicator';
 import { useColumnWidths, type ResizableColumn } from '@/components/common/use-column-widths';
@@ -35,6 +38,7 @@ import {
 } from '@/components/ui/sheet';
 import type { AdminField, AdminPageDef, FieldOption } from './types';
 import { SYSTEM_PAGE_DEFS } from './page-defs';
+import { listPosts } from '@/lib/api/posts';
 import { AiFeature } from '@/features/ai/components/ai-feature';
 import { AiTextExtract } from '@/features/ai/components/ai-text-extract';
 import { AiSummary } from '@/features/ai/components/ai-summary';
@@ -111,11 +115,11 @@ function TagCluster({ values, flat = false }: { values: unknown[]; flat?: boolea
 function AssignmentEditor({
   value,
   onChange,
-  deptOptions = [],
   postOptions = [],
 }: {
   value: unknown;
   onChange: (v: unknown) => void;
+  /** 部门选项已改用 DeptTreeSelect（树形单选），此处保留接口以兼容调用方，不再使用 */
   deptOptions?: { label: string; value: string | number }[];
   postOptions?: { label: string; value: string | number }[];
 }) {
@@ -123,6 +127,37 @@ function AssignmentEditor({
   const update = (next: Assignment[]) => onChange(next);
   const setAt = (i: number, patch: Partial<Assignment>) =>
     update(list.map((a, idx) => (idx === i ? { ...a, ...patch } : a)));
+  /** 按行维护的岗位选项：选中部门后联动拉取该部门岗位（EMP-05） */
+  const [rowPostOptions, setRowPostOptions] = useState<Record<number, { label: string; value: string | number }[]>>(
+    {},
+  );
+  /** 部门变更：回填单值 deptId 并联动拉取该部门岗位（EMP-04 + EMP-05） */
+  const handleDeptChange = (i: number, deptId: string) => {
+    const currentPost = list[i]?.post ?? '';
+    if (!deptId) {
+      setAt(i, { dept: '' });
+      setRowPostOptions((prev) => {
+        const next = { ...prev };
+        delete next[i];
+        return next;
+      });
+      return;
+    }
+    listPosts({ deptIds: [Number(deptId)], status: 1 })
+      .then((posts) => {
+        const opts = posts.map((p) => ({ label: p.name, value: p.id }));
+        setRowPostOptions((prev) => ({ ...prev, [i]: opts }));
+        const stillValid = opts.some((o) => String(o.value) === String(currentPost));
+        if (!stillValid) {
+          setAt(i, { dept: deptId, post: '' });
+        } else {
+          setAt(i, { dept: deptId });
+        }
+      })
+      .catch(() => {
+        /* 部门岗位拉取失败：不影响部门选择，回退到全局岗位选项 */
+      });
+  };
   const removeAt = (i: number) => {
     const next = list.filter((_, idx) => idx !== i);
     // 删除后若无主职，默认把首行设为主职
@@ -160,18 +195,10 @@ function AssignmentEditor({
               list.map((a, i) => (
                 <tr key={i} className="border-t border-border/50 last:border-0">
                   <td className="px-2 py-1.5">
-                    <select
-                      className="h-8 w-full rounded-md border border-input bg-card px-2 text-sm"
+                    <DeptTreeSelect
                       value={a.dept ?? ''}
-                      onChange={(e) => setAt(i, { dept: e.target.value })}
-                    >
-                      <option value="">请选择</option>
-                      {deptOptions.map((o) => (
-                        <option key={String(o.value)} value={String(o.value)}>
-                          {o.label}
-                        </option>
-                      ))}
-                    </select>
+                      onChange={(v) => handleDeptChange(i, v == null ? '' : String(v))}
+                    />
                   </td>
                   <td className="px-2 py-1.5">
                     <select
@@ -180,7 +207,7 @@ function AssignmentEditor({
                       onChange={(e) => setAt(i, { post: e.target.value })}
                     >
                       <option value="">请选择</option>
-                      {postOptions.map((o) => (
+                      {(rowPostOptions[i] ?? postOptions).map((o) => (
                         <option key={String(o.value)} value={String(o.value)}>
                           {o.label}
                         </option>
@@ -397,6 +424,46 @@ function FieldControl({
     );
   }
 
+  if (field.type === 'dept-tree') {
+    return (
+      <div className={cn(SHEET_FORM_FIELD, 'min-w-0 self-start')}>
+        {label}
+        <DeptTreeSelect
+          value={value == null ? '' : (value as string | number)}
+          onChange={(v) => onChange(v == null ? '' : v)}
+          placeholder={field.placeholder}
+        />
+      </div>
+    );
+  }
+
+  if (field.type === 'dept-tree-multi') {
+    const current = Array.isArray(value) ? (value as (string | number)[]) : [];
+    return (
+      <div className={cn(SHEET_FORM_FIELD, 'min-w-0 self-start')}>
+        {label}
+        <DeptTreeMulti
+          value={current}
+          onChange={(v) => onChange(v)}
+          placeholder={field.placeholder}
+        />
+      </div>
+    );
+  }
+
+  if (field.type === 'post-type-tree') {
+    return (
+      <div className={cn(SHEET_FORM_FIELD, 'min-w-0 self-start')}>
+        {label}
+        <PostTypeTreeSelect
+          value={value == null ? '' : (value as string | number)}
+          onChange={(v) => onChange(v == null ? '' : v)}
+          placeholder={field.placeholder}
+        />
+      </div>
+    );
+  }
+
   if (field.type === 'assignments') {
     return (
       <AssignmentEditor
@@ -438,6 +505,50 @@ function FieldControl({
   );
 }
 
+/** 筛选栏多选项：chip 选择器（与表单内 multiselect 视觉一致），值以数组形式存于 draft。 */
+function FilterMultiSelect({
+  field,
+  value,
+  onChange,
+}: {
+  field: AdminField;
+  value: unknown;
+  onChange: (v: unknown) => void;
+}) {
+  const current = Array.isArray(value) ? (value as (string | number)[]) : [];
+  const toggle = (v: string | number) => {
+    onChange(current.includes(v) ? current.filter((x) => x !== v) : [...current, v]);
+  };
+  return (
+    <div className="mt-1.5 flex max-h-32 flex-wrap gap-1.5 overflow-auto rounded-md border border-input bg-card p-2">
+      {(field.options ?? []).length === 0 ? (
+        <span className="px-1 py-0.5 text-xs text-muted-foreground">暂无可选项</span>
+      ) : (
+        (field.options ?? []).map((o) => {
+          const on = current.includes(o.value);
+          return (
+            <button
+              key={String(o.value)}
+              type="button"
+              onClick={() => toggle(o.value)}
+              className={cn(
+                'inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-xs font-medium transition',
+                on
+                  ? 'border-primary bg-primary/10 text-primary'
+                  : 'border-input text-muted-foreground hover:border-primary/40 hover:text-foreground',
+              )}
+              aria-pressed={on}
+            >
+              {on ? <Check className="h-3 w-3" /> : null}
+              {o.label}
+            </button>
+          );
+        })
+      )}
+    </div>
+  );
+}
+
 export function AdminListPage({ def, headerExtra }: { def: AdminPageDef; headerExtra?: ReactNode }) {
   const [rows, setRows] = useState(() => (def.sample ?? []).map((r) => ({ ...r })));
   const [draft, setDraft] = useState<Record<string, unknown>>({});
@@ -457,6 +568,7 @@ export function AdminListPage({ def, headerExtra }: { def: AdminPageDef; headerE
   const [deptOptions, setDeptOptions] = useState<FieldOption[]>([]);
   const [postOptions, setPostOptions] = useState<FieldOption[]>([]);
   const [postTypeOptions, setPostTypeOptions] = useState<FieldOption[]>([]);
+  const [orgOptions, setOrgOptions] = useState<FieldOption[]>([]);
   // 数据刷新计数：mutation 成功后 +1 触发 loader 重新拉取
   const [reloadTick, setReloadTick] = useState(0);
   // 表头排序：三态 无 → 升 → 降 → 无（仅对普通文本/数字列生效，徽标/标签簇/任职数列除外）
@@ -500,13 +612,20 @@ export function AdminListPage({ def, headerExtra }: { def: AdminPageDef; headerE
     window.setTimeout(() => setToast(''), 1800);
   }, []);
 
+  // 服务端过滤签名：仅当 serverFilterKeys 对应的筛选值变化时才重新拉取 loader，
+  // 避免纯客户端筛选（name/status）触发无谓的网络请求。
+  const serverFilterSignature = useMemo(
+    () => (def.serverFilterKeys ?? []).map((k) => String(applied[k] ?? '')).join('|'),
+    [applied, def.serverFilterKeys],
+  );
+
   // 真实数据加载：def.loader 提供时挂载/刷新即拉取；失败回退空数组 + toast（绝不落 sample）
   useEffect(() => {
     if (!def.loader) return;
     let alive = true;
     setLoading(true);
     def
-      .loader()
+      .loader(applied)
       .then((data) => {
         if (alive) setRows(data.map((r) => ({ ...r })));
       })
@@ -522,7 +641,7 @@ export function AdminListPage({ def, headerExtra }: { def: AdminPageDef; headerE
     return () => {
       alive = false;
     };
-  }, [def, reloadTick, showToast]);
+  }, [def, reloadTick, showToast, serverFilterSignature]);
 
   // 部门选项加载：员工/岗位页的部门下拉与「部门管理」同源；失败/为空回退空数组（显示「—」）
   useEffect(() => {
@@ -593,6 +712,29 @@ export function AdminListPage({ def, headerExtra }: { def: AdminPageDef; headerE
     };
   }, [def, showToast]);
 
+  // 组织选项加载（真实 sys_org）；失败/为空回退空数组
+  useEffect(() => {
+    if (!def.orgOptionsLoader) {
+      setOrgOptions([]);
+      return;
+    }
+    let alive = true;
+    def
+      .orgOptionsLoader()
+      .then((opts) => {
+        if (alive) setOrgOptions(opts);
+      })
+      .catch(() => {
+        if (alive) {
+          setOrgOptions([]);
+          showToast('组织选项加载失败');
+        }
+      });
+    return () => {
+      alive = false;
+    };
+  }, [def, showToast]);
+
   // optionsFrom 字段的选项由真实数据源注入（select → options；assignments → deptOptions/postOptions）
   const effectiveFilters = useMemo<AdminField[]>(
     () =>
@@ -600,9 +742,10 @@ export function AdminListPage({ def, headerExtra }: { def: AdminPageDef; headerE
         if (f.optionsFrom === 'dept') return { ...f, options: deptOptions };
         if (f.optionsFrom === 'post') return { ...f, options: postOptions };
         if (f.optionsFrom === 'post-type') return { ...f, options: postTypeOptions };
+        if (f.optionsFrom === 'org') return { ...f, options: orgOptions };
         return f;
       }),
-    [def.filters, deptOptions, postOptions, postTypeOptions],
+    [def.filters, deptOptions, postOptions, postTypeOptions, orgOptions],
   );
   const effectiveForm = useMemo<AdminField[]>(
     () =>
@@ -617,9 +760,10 @@ export function AdminListPage({ def, headerExtra }: { def: AdminPageDef; headerE
         if (f.optionsFrom === 'dept') return { ...f, options: deptOptions };
         if (f.optionsFrom === 'post') return { ...f, options: postOptions };
         if (f.optionsFrom === 'post-type') return { ...f, options: postTypeOptions };
+        if (f.optionsFrom === 'org') return { ...f, options: orgOptions };
         return f;
       }),
-    [def, deptOptions, postOptions, postTypeOptions],
+    [def, deptOptions, postOptions, postTypeOptions, orgOptions],
   );
 
   // AI：辅助录入嵌在表单 Sheet 右侧；问答仍用独立 Sheet
@@ -632,7 +776,8 @@ export function AdminListPage({ def, headerExtra }: { def: AdminPageDef; headerE
   const openCreate = useCallback((opts?: { withAssist?: boolean }) => {
     const seed: Record<string, unknown> = {};
     for (const f of effectiveForm) {
-      if (f.type === 'switch') seed[f.key] = 1;
+      if (f.defaultValue !== undefined) seed[f.key] = f.defaultValue;
+      else if (f.type === 'switch') seed[f.key] = 1;
       else seed[f.key] = '';
     }
     setSheetMode('create');
@@ -680,10 +825,16 @@ export function AdminListPage({ def, headerExtra }: { def: AdminPageDef; headerE
       .map((r) => decorate({ ...r }))
       .filter((r) =>
         (def.filters ?? []).every((f) => {
+          // 服务端已过滤的 key（deptIds/orgIds）：跳过客户端二次过滤，避免数组匹配全空
+          if (def.serverFilterKeys?.includes(f.key)) return true;
           const v = applied[f.key];
           if (v === '' || v == null) return true;
           const cell = r[f.key];
           if (f.type === 'select') return String(cell) === String(v);
+          if (f.type === 'multiselect' && Array.isArray(v)) {
+            if (v.length === 0) return true;
+            return v.map(String).includes(String(cell));
+          }
           return String(cell ?? '')
             .toLowerCase()
             .includes(String(v).toLowerCase());
@@ -701,7 +852,7 @@ export function AdminListPage({ def, headerExtra }: { def: AdminPageDef; headerE
       if (!Number.isNaN(na) && !Number.isNaN(nb)) return (na - nb) * dir;
       return String(av).localeCompare(String(bv), 'zh-Hans-CN') * dir;
     });
-  }, [rows, applied, def.filters, decorate, sortKey, sortDir]);
+  }, [rows, applied, def.filters, def.serverFilterKeys, decorate, sortKey, sortDir]);
 
   // 已应用筛选条件计数（收起态提示）
   const filterCount = useMemo(
@@ -922,6 +1073,22 @@ export function AdminListPage({ def, headerExtra }: { def: AdminPageDef; headerE
                           </option>
                         ))}
                       </select>
+                    ) : f.type === 'multiselect' ? (
+                      <FilterMultiSelect
+                        field={f}
+                        value={draft[f.key]}
+                        onChange={(v) => setDraft((prev) => ({ ...prev, [f.key]: v }))}
+                      />
+                    ) : f.type === 'dept-tree-multi' ? (
+                      <DeptTreeMulti
+                        value={
+                          draft[f.key] && Array.isArray(draft[f.key])
+                            ? (draft[f.key] as (string | number)[])
+                            : []
+                        }
+                        onChange={(v) => setDraft((prev) => ({ ...prev, [f.key]: v }))}
+                        placeholder={f.placeholder}
+                      />
                     ) : (
                       <Input
                         className="h-auto min-h-9 px-[0.7rem] py-[0.55rem] text-sm shadow-none"

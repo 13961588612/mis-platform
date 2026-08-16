@@ -1,4 +1,4 @@
-export type FieldType = 'text' | 'number' | 'select' | 'multiselect' | 'assignments' | 'textarea' | 'switch';
+export type FieldType = 'text' | 'number' | 'select' | 'multiselect' | 'assignments' | 'textarea' | 'switch' | 'dept-tree' | 'dept-tree-multi' | 'post-type-tree';
 
 export interface FieldOption {
   label: string;
@@ -25,6 +25,12 @@ export interface AdminField {
   col?: 2 | 3 | 4 | 6 | 12;
   required?: boolean;
   placeholder?: string;
+  /**
+   * 表单新增（create）时的字段默认值。
+   * 不设置时：switch 字段默认 1，其余默认 ''。
+   * 例：isBuiltin 这类「默认关闭」的开关应显式设 defaultValue: 0，避免被通用 openCreate 的 switch=1 默认开启。
+   */
+  defaultValue?: unknown;
   options?: FieldOption[];
   /** multiselect 专用：提示文案（如「首个为默认」） */
   hint?: string;
@@ -34,9 +40,10 @@ export interface AdminField {
    *   select 字段 → 替换 options；assignments 字段 → 替换 deptOptions。
    * - 'post'：真实 sys_post（由 AdminPageDef.postOptionsLoader 提供），select → options。
    * - 'post-type'：真实 sys_post_type（由 AdminPageDef.postTypeOptionsLoader 提供），select → options。
+   * - 'org'：真实 sys_org（由 AdminPageDef.orgOptionsLoader 提供），multiselect/select → options。
    * 加载失败/为空时回退空数组。
    */
-  optionsFrom?: 'dept' | 'post' | 'post-type';
+  optionsFrom?: 'dept' | 'post' | 'post-type' | 'org';
   /** assignments 专用：可选项（部门 / 岗位），用于行内下拉 */
   deptOptions?: FieldOption[];
   postOptions?: FieldOption[];
@@ -64,8 +71,11 @@ export interface AdminPageDef {
   sample?: Record<string, unknown>[];
   /** 派生展示字段 */
   decorate?: (row: Record<string, unknown>) => Record<string, unknown>;
-  /** 真实数据加载（接入 API 时用）；提供时引擎首屏展示骨架并异步加载，否则用 sample */
-  loader?: () => Promise<Record<string, unknown>[]>;
+  /**
+   * 真实数据加载（接入 API 时用）；提供时引擎首屏展示骨架并异步加载，否则用 sample。
+   * 接收当前已应用的筛选条件（filters?），由引擎在查询/服务端过滤条件变化时重新调用（兼容无参 loader）。
+   */
+  loader?: (filters?: Record<string, unknown>) => Promise<Record<string, unknown>[]>;
   /**
    * 部门可选项加载器（与「部门管理」同源，真实 sys_dept，value=id、label=name）。
    * 提供时引擎挂载即拉取，并注入到 optionsFrom:'dept' 的字段；失败/为空回退空数组。
@@ -81,6 +91,16 @@ export interface AdminPageDef {
    * optionsFrom:'post-type' 的字段；失败/为空回退空数组。
    */
   postTypeOptionsLoader?: () => Promise<FieldOption[]>;
+  /**
+   * 组织可选项加载器（真实 sys_org，value=id、label=name）。提供时引擎挂载即拉取，
+   * 并注入到 optionsFrom:'org' 的字段；失败/为空回退空数组。
+   */
+  orgOptionsLoader?: () => Promise<FieldOption[]>;
+  /**
+   * 服务端已过滤的筛选 key：命中时引擎跳过客户端二次过滤（避免数组匹配全空）。
+   * 典型：deptIds / orgIds（由后端 GET /posts 过滤）。
+   */
+  serverFilterKeys?: string[];
   /**
    * 新增回调（真实 CRUD）。提供时 saveForm（create 模式）调 API 成功后 reload；
    * 未提供保持本地行为。抛错时引擎 toast 展示错误信息。

@@ -1,0 +1,434 @@
+# MIS 平台 · 组织人事域增量改造设计文档
+
+> 版本：v1.0（设计评审稿，设计通过后才进入实现）
+> 作者：software-architect（Bob）
+> 日期：2026-08-16
+> 关联前序资产：
+> - `deliverables/software-company/org-position-architecture-2026-08-16.md`
+> - `deliverables/software-company/org-position-prd-2026-08-16.md`
+> - `deliverables/software-company/org-user-employee-architecture-2026-08-16.md`
+
+---
+
+## 0. 代码核查结论（先读代码，不凭记忆）
+
+本设计基于真实代码 grep/Read 核实，关键资产真实形态如下（与"需求叙述"有出入处已标注）：
+
+| 资产 | 真实路径 | 真实形态 |
+|------|----------|----------|
+| 部门管理页（3 Tab） | `frontend/mis-admin-web/src/features/system/dept/dept-tree-page.tsx` | 单页 `DeptTreePage` + 顶部 `segmented`（组织架构/岗位编制/组织穿透）；组织架构= `TreeTable`+CRUD；岗位编制= 扁平部门列表 + `fetchDeptStaffing(id)` 懒加载 `DeptStaffingVO`；穿透= `fetchDeptPierce(orgId)` 钻取栈（只读） |
+| 通用列表引擎 | `frontend/mis-admin-web/src/features/system/admin-list-page.tsx` | `AdminListPage`：支持 `deptOptionsLoader`/`postOptionsLoader`/`postTypeOptionsLoader`/`orgOptionsLoader`；`optionsFrom: 'dept'｜'post'｜'post-type'｜'org'`；字段类型含 `dept-tree`、`select`、`multiselect`、`assignments` |
+| 页面定义 | `frontend/mis-admin-web/src/features/system/page-defs.ts` | `/system/post` 已定义：`filters` 含 `name`(text)、`deptIds`(**multiselect + optionsFrom:'dept' 扁平下拉**)、`orgIds`(**multiselect + optionsFrom:'org' 扁平下拉**)、`status`；`form` 含 `deptId`(dept-tree 单值)、`postTypeId`(select + optionsFrom:'post-type' 扁平下拉) |
+| 树形单选组件 | `frontend/mis-admin-web/src/components/common/dept-tree-select.tsx` | `DeptTreeSelect`：Radix `Popover` 内嵌**原生 `<select>` 选组织** + 部门树；提交单 `deptId` |
+| 树表组件 | `frontend/mis-admin-web/src/components/common/tree-table.tsx` | `TreeTable`（部门树/穿透树复用） |
+| 岗位类型管理页 | `frontend/mis-admin-web/src/features/system/post/post-type-manage-page.tsx` | 已存在独立页 `PostTypeManagePage`：列=编码/名称/排序/状态/引用岗位数；CRUD；变更后 `bumpPostTypeVersion()` 驱动岗位引擎刷新下拉 |
+| 岗位类型版本 store | `frontend/mis-admin-web/src/features/system/post/post-type-version-store.ts` | zustand store，bump 后重挂载下拉 |
+| 后端 实体 | `backend/mis-org/.../domain/entity/SysPostType.java` | **扁平**：仅 `id/tenantId/code/name/sort/status/时间戳`，**无 `parentId`、无 `isLeaf`** |
+| 后端 VO | `backend/mis-org/.../dto/PostTypeVO.java` | 扁平：`id/tenantId/code/name/sort/status/referenceCount` |
+| 后端 Service | `backend/mis-org/.../service/PostService.java` | `listTypes(tenantId,status)` 扁平；`createType`/`updateType`/`deleteType` 不含层级；`referenceCount` 实时统计 |
+| 后端 Controller | `backend/mis-org/.../controller/PostController.java` | 内部端点 `GET /internal/v1/post-types`（扁平，无 tree）；`POST/PUT/DELETE /post-types/*` |
+| BFF | `backend/mis-admin-bff/.../controller/PostController.java`、`service/OrgFacadeService.java`、`client/OrgWebClient.java` | `GET /api/v1/post-types`（扁平）；`orgWebClient.listPostTypes` 透传；`getDeptStaffing` 已透传 `DeptStaffingVO` |
+| 前端 API | `frontend/.../lib/api/posts.ts`、`depts.ts` | `listPostTypes(status?)`、`fetchDeptStaffing(id)`、`fetchDeptPierce(orgId)`；无 post-type tree 接口 |
+| 种子数据 | `backend/mis-migrator/.../db/migration/V39__system_management_real_data.sql` | `sys_post_type` 已有 5 条扁平记录（id 1-5：management/tech/admin/operation 等），`parent_id` 字段**不存在** |
+| UI 组件库 | `frontend/.../components/ui/` | 仅有 `popover.tsx`，**无 Radix `Select`**（关键：修复弹窗 bug 不能简单换成 Radix Select） |
+
+**与需求叙述的主要出入（须向用户澄清/确认）：**
+1. 需求 3.1"所属组织使用下拉列表（而非当前形态）"——**当前 `orgIds` 已是多选下拉列表**，诉求已满足；本次几乎无需改动（见 C.1）。
+2. 需求 3.2"部门下拉树（部门多时当前内联树显示不下）"——当前 `deptIds` 是**扁平多选下拉列表**，并非"内联树"；改造方向=改为"下拉树 Popover"，与叙述意图一致。
+3. 岗位类型**当前即扁平无层级**，需求 #2 是真正的"新增多层化"，需加 `parent_id`+`is_leaf` 与树接口（见 B）。
+
+---
+
+## A. 部门管理「三 Tab 合一」详细设计
+
+### A.1 可行性结论
+**可行。** 三 Tab 的数据已分别具备：组织架构（部门树）、岗位编制（`DeptStaffingVO` 按部门懒加载）、组织穿透（`fetchDeptPierce` 跨组织钻取）。三者共用同一棵部门树为骨架，编制是部门的"展开明细"，穿透是部门的"跨组织下钻动作"。**纯前端改造即可**，后端零改动（无新增 API、无迁移）。代价集中在 `dept-tree-page.tsx` 的视图重构。
+
+### A.2 统一数据模型（一张树表融合三 Tab）
+
+```ts
+// 每行 = 一个部门节点（组织架构骨架）
+interface MergedDeptRow {
+  id: string;            // deptId
+  name: string;
+  code: string | null;
+  linkedOrgId: string | null;   // 穿透锚点
+  linkedOrgName: string | null;
+  sort: number;
+  status: number;
+  depth: number;         // 树层级（TreeTable 渲染缩进）
+  hasChildren: boolean;  // 是否有子部门（组织架构展开）
+  // —— 岗位编制（懒加载，行展开时 fetchDeptStaffing 填充）——
+  staffing?: DeptStaffingVO | null;
+  staffingLoaded: boolean;
+}
+```
+
+- **组织架构** → 树表行 + 子部门展开（沿用现有 `flatten(tree)` + `TreeTable`）。
+- **岗位编制** → 行内"展开"触发 `fetchDeptStaffing(id)`，在行下方渲染内联子面板（复用现有 `DeptStaffingVO` 展示：3 指标 + 岗位任职明细 + 部门任职人员），**关闭即收起、不切换 Tab**。
+- **组织穿透** → 在"有 `linkedOrgId`"的行上提供「穿透下钻」按钮，打开只读 `OrgPierceDrawer`（抽屉），内部复用现有 `fetchDeptPierce` + 面包屑钻取栈逻辑（从 dept-tree-page 抽出为独立组件）。
+
+### A.3 推荐表格列定义（合并后单表）
+
+| 列 | 来源 | 说明 |
+|----|------|------|
+| 部门名称（树列，可展开子部门） | DeptNode | 展开=组织架构子级 |
+| 编码 | DeptNode.code | |
+| 对应组织 | linkedOrgName | 穿透锚点提示 |
+| 岗位数 | DeptStaffingVO.postCount（懒加载） | 展开编制后显示 |
+| 已任职 | DeptStaffingVO.filledCount | |
+| 空缺 | DeptStaffingVO.vacantCount | |
+| 排序 | DeptNode.sort | |
+| 状态 | DeptNode.status | 启用/禁用徽标 |
+| 操作 | — | 子部门 / 编辑 / 删除 / **穿透下钻**（仅 `linkedOrgId` 存在时可用） |
+
+> 列宽、排序、列拖拽、本地存储（`storageKey`）沿用现有 `useColumnWidths` 与 `TreeTable` 能力。
+
+### A.4 交互流程
+1. 顶部组织 `<select>` 选择组织 → 加载该组织部门树（不变）。
+2. 点击某部门行前的展开箭头 → 调 `fetchDeptStaffing(id)`，行下方内联展示该部门岗位编制（3 指标 + 岗位明细 + 任职人）。再次点击收起。
+3. 有 `linkedOrgId` 的部门，操作列出现「穿透下钻」→ 打开 `OrgPierceDrawer`，以该部门为锚点跨组织钻取（只读，防循环面包屑，沿用现有 `pierceLevels` 逻辑）。
+4. 新增子部门/编辑/删除：沿用现有 `Sheet` 表单，逻辑不变。
+
+### A.5 技术代价与风险
+- **FE 中**：`dept-tree-page.tsx` 从"3-view 分支"重构为"单 TreeTable + 展开编制面板 + 穿透 Drawer 组件"。提取 `OrgPierceDrawer` 组件（约 80-120 行）。工作量 ≈ 中。
+- **BE**：无。
+- **风险**：编制懒加载在大数据量部门树下的请求数（现有 `Promise.all` 在"岗位编制"Tab 已用，本次改为"按需行展开"反而更省，仅展开可见行时请求）。
+- **回归面**：部门 CRUD、穿透钻取、编制统计均已有测试/QA 路径，改造后需回归。
+
+### A.6 推荐方案 vs 备选
+- ✅ **推荐方案 A（采用）**：单树表 + 行内可展开编制面板 + 行内"穿透下钻"抽屉。最贴合"合并到一张表"，且穿透能力以更顺手的方式保留。
+- 🅱️ **备选方案 B**：保留单树表，但在顶部加一个轻量"穿透视图"开关，点击后整表数据源切换为 `fetchDeptPierce` forest（仍是"一张表"，只是数据来源切换）。代价：重新引入"切换"心智，与"合一"目标略悖；仅在用户强烈反对抽屉式穿透时采用。
+
+---
+
+## B. 岗位类型多层化设计
+
+### B.1 现状
+`SysPostType` 扁平，无层级字段，无树接口。种子 5 条扁平类型。需求要求：支持多层 + 末级标记 + 选类型时只能选末级。
+
+### B.2 数据模型变更
+
+**新增字段（`sys_post_type`）：**
+| 字段 | 类型 | 默认 | 说明 |
+|------|------|------|------|
+| `parent_id` | BIGINT | 0 | 0=根级 |
+| `is_leaf` | INTEGER | 1 | 1=末级(可被选)，0=非末级(仅作分类) |
+| `level` | INTEGER | 由 parent 推导 | 仅缓存展示用，可选；推荐由 `parent_id` 递归推导，不持久也行 |
+
+> `is_leaf` 由后端**单一真源维护**（见 B.4），前端不选、不传、不推断。
+
+### B.3 Flyway 迁移（**新增**，版本号取下一个未用号，建议 `V47__post_type_hierarchy.sql`）
+```sql
+-- 新增层级字段；历史 5 条扁平类型默认根级末级，无需重分类（见 E.2）
+ALTER TABLE sys_post_type ADD COLUMN parent_id BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE sys_post_type ADD COLUMN is_leaf   INTEGER NOT NULL DEFAULT 1;
+-- 兜底：存量 NULL 归一到 0/1（兼容部分库 ALTER 不回填场景）
+UPDATE sys_post_type SET parent_id = 0 WHERE parent_id IS NULL;
+UPDATE sys_post_type SET is_leaf = 1 WHERE is_leaf IS NULL;
+```
+**历史数据迁移评估：否（无需重分类）。** 现有 5 条类型直接成为"根级末级"节点（`parent_id=0, is_leaf=1`），不破坏任何现有岗位引用（岗位只存 `post_type_id`，仍指向同一叶子）。后续用户可在管理页新建父级"分类"类型并把叶子挂到其下，属可选运营动作，非迁移必须。
+
+### B.4 后端 API 变更（**新增 1 个接口 + 扩展 2 个**）
+
+**新增：树形查询**
+- mis-org：`GET /internal/v1/post-types/tree?tenantId=&status=`
+- BFF：`GET /api/v1/post-types/tree?status=`
+- Service：`PostService.listTypeTree(tenantId, status)` —— 取扁平列表后用 `parent_id` 构建 `List<PostTypeTreeNodeVO>`（`children` 递归）。
+- 返回节点 VO：
+```json
+{
+  "id": "12", "code": "rd", "name": "研发", "sort": 1, "status": 1,
+  "isLeaf": 1, "referenceCount": 3,
+  "children": [ { "id":"13", "name":"前端", "isLeaf":1, ... } ]
+}
+```
+
+**扩展：新建/编辑支持 `parentId`**
+- `PostTypeCreateRequest` 增加 `parentId`（默认 0）；`PostTypeUpdateRequest` 增加 `parentId`（可选）。
+- `createType`：保存后调用 `refreshLeaf(parentId)`（若 `parentId!=0`，置父 `is_leaf=0`）。
+- `updateType`：若 `parentId` 变化，旧父 `refreshLeaf(旧)` + 新父 `refreshLeaf(新)`。
+- `deleteType`：删除后 `refreshLeaf(被删节点.parentId)`；仍保留"被岗位引用拦截"（沿用 `referenceCount`）。
+- `refreshLeaf(pid)`：若 `pid!=0`，`is_leaf = existsByParentId(pid) ? 0 : 1`。
+
+**Repository 新增方法**：`findByParentId(tenantId, parentId)`、`findByTenantIdAndParentIdNot(id)`（编辑时防自环/挂到子孙）。
+
+### B.5 前端下拉树组件（单选 + 仅末级可选）
+
+新增 `frontend/.../components/common/post-type-tree-select.tsx`：
+- 复用 `DeptTreeSelect` 的 Popover 模式，但数据是 `PostTypeTreeNode`（树）。
+- **末级才可点选**：`isLeaf===0` 的节点渲染为"分组标题/不可点"（禁用 `onClick`、灰显），仅 `isLeaf===1` 触发 `onChange(id)` 并关闭。
+- 值回填：用 `listPostTypeTree` 构建 `id→name` 映射展示选中名。
+- 引擎接入：`page-defs.ts` 中 `/system/post` 的 `form.postTypeId` 由 `type:'select', optionsFrom:'post-type'`（扁平）改为 `type:'post-type-tree'`（树、单值、仅末级）。
+- 管理页（`post-type-manage-page.tsx`）：升级为**树表**展示层级（复用 `TreeTable`），新建/编辑 Sheet 增加"上级类型"选择（复用 `PostTypeTreeSelect` 的"选父"模式，禁用自环与子孙）；版本 store 的 `bumpPostTypeVersion` 保留，确保岗位表单下拉刷新。
+
+### B.6 评估
+- BE：实体+迁移+1 接口+2 扩展，约中工作量；`is_leaf` 单一真源，零前端推断负担。
+- FE：1 新组件 + 管理页树化 + 引擎字段类型，约中工作量。
+- 风险：编辑时重挂父级需防"挂到自己的子孙"（Repository 校验），已列。
+
+---
+
+## C. 岗位管理（查询 + 新建表单）改造设计
+
+### C.1 查询条件「所属组织」→ 下拉列表（3.1）
+**核查结论：当前 `orgIds` 过滤已是"多选下拉列表"（`optionsFrom:'org'` → `loadOrgOptions()` 扁平多选），诉求已满足。**
+
+- 本次**默认不改动**。仅在用户偏好切换时调整：
+  - 选项 A（推荐，零改动）：保持多选下拉列表（与后端 `orgIds` 数组契约一致）。
+  - 选项 B：若用户希望"单组织"，改为单选下拉列表（`type:'select', optionsFrom:'org'`）。
+- 见 E.3 待确认。
+
+### C.2 查询条件「部门」→ 下拉树（3.2）
+当前 `deptIds` 为扁平多选下拉（部门多时长列表难用）。改为**下拉树 Popover（多选、并集过滤）**：
+- 引擎 `admin-list-page.tsx`：新增字段类型 `dept-tree-multi`（或给现有 `dept-tree` 加 `multiple` 开关）。值类型 `string[]`，提交 `applied.deptIds`（数组，沿用 `serverFilterKeys` 与 `toParams` 逗号序列化，后端 `deptIds` 并集语义不变）。
+- 组件：扩展 `DeptTreeSelect` 支持 `multiple` 模式（复选 + 选中以 chip 展示 + 保持 Popover 打开），或新建 `DeptTreeSelectMulti`。推荐**给 `DeptTreeSelect` 加 `multiple?: boolean` 属性**，单值模式（新建表单）不变。
+- 过滤渲染：`page-defs.ts` 的 `filters.deptIds` 由 `type:'multiselect', optionsFrom:'dept'` 改为 `type:'dept-tree-multi'`（内部自行拉 `fetchDeptTree(默认org)`）。
+
+### C.3 新建岗位「所属部门」弹窗消失 Bug —— 根因 + 修复
+
+**现象**：先选组织 → 点组织里弹出部门选择组件，弹窗随即消失，无法选部门。
+
+**根因（高置信）**：`DeptTreeSelect`（见 `dept-tree-select.tsx`）把**原生 `<select>` 组织选择器放在 Radix `Popover` 的 `PopoverContent` 内部**。Radix Popover 基于 `DismissableLayer` 监听"focus-outside / pointer-down-outside"；原生 `<select>` 展开后的下拉项是**操作系统级浮层，不在 Popover DOM 内**。用户点击原生 `<select>` 选项时，Radix 将其判定为"Popover 外交互" → 触发关闭（`setOpen(false)`）。同时 `components/ui/` 下**没有 Radix `Select` 组件**可替代，所以不能简单换组件了事。
+
+**修复方案（推荐）**：**将组织选择器移出 Popover**。重构 `DeptTreeSelect`：
+- Popover 之外（组件内、Trigger 旁）渲染一个独立的组织 `<select>`（或胶囊按钮组）；
+- `PopoverContent` 内**只保留部门树**，不含任何原生 `<select>`；
+- 组织切换 → 重新拉取该组织部门树（`fetchDeptTree(orgId)`）→ 更新树；Popover 仅承载部门树，不再因原生 select 而误关。
+- 这样"先选组织 → 再点部门"流程顺畅，弹窗不再消失。
+
+**备选方案**：保持 Popover 内选组织，但把原生 `<select>` 换成**DOM 按钮列表**（组织作为 Popover 内的一列 `<button>`，非原生 select），Radix 能正确追踪 DOM 焦点，不会误关。缺点：布局改动较大。
+
+> 推荐方案改动最小、最稳健，且让组织选择常驻可见，体验更好。
+
+### C.4 新建岗位「岗位类型」→ 下拉树、单选、仅末级可选
+- `page-defs.ts` 的 `form.postTypeId`：`type:'select', optionsFrom:'post-type'` → `type:'post-type-tree'`（详见 B.5）。
+- 引擎 `FieldControl` 增加 `post-type-tree` 分支 → 渲染 `PostTypeTreeSelect`（单选、仅 `isLeaf=1` 可选）。
+- 新建/编辑提交：`createPost`/`updatePost` 仍只传 `postTypeId`（叶子 id），后端契约不变。
+
+---
+
+## D. 任务分解（T-INFRA / T-BE / T-FE / T-VERIFY）
+
+> 依赖顺序：T-INFRA → T-BE → T-FE → T-VERIFY。FE 的类型定义可先 mock，待 BE 接口就绪后联调。
+> **新增 Flyway 迁移：是（V47）** ｜ **新增后端 API：是（GET /post-types/tree ×2 + 扩展 create/update 的 parentId）** ｜ **新增依赖包：无**（复用现有 Radix Popover，无需引入 Select 库）
+
+### T-INFRA（P0，基础设施 / 数据 / 公共组件骨架）
+- **文件**：
+  - `backend/mis-migrator/.../db/migration/V47__post_type_hierarchy.sql`（新增迁移）
+  - `frontend/mis-admin-web/src/types/api.ts`（新增 `PostTypeTreeNode`、`PostTypeTreeVO`、`MergedDeptRow` 等类型）
+  - `frontend/mis-admin-web/src/lib/api/posts.ts`（新增 `listPostTypeTree()`；`PostTypeItem` 增加 `parentId`/`isLeaf`）
+- **依赖**：无
+- **产出**：数据库字段就位；前端类型与 API 客户端就绪（接口桩）。
+
+### T-BE（P0，后端 mis-org + BFF）
+- **文件**：
+  - `backend/mis-org/.../domain/entity/SysPostType.java`（增 `parentId`、`isLeaf` + getter/setter）
+  - `backend/mis-org/.../domain/repository/SysPostTypeRepository.java`（增 `findByParentId`、`existsByParentId`）
+  - `backend/mis-org/.../dto/PostTypeVO.java`（不变）
+  - `backend/mis-org/.../dto/PostTypeTreeNodeVO.java`（新增树节点 record）
+  - `backend/mis-org/.../dto/PostTypeCreateRequest.java` / `PostTypeUpdateRequest.java`（增 `parentId`）
+  - `backend/mis-org/.../service/PostService.java`（增 `listTypeTree`；`createType`/`updateType`/`deleteType` 维护 `is_leaf`；防自环校验）
+  - `backend/mis-org/.../controller/PostController.java`（增 `GET /post-types/tree`）
+  - `backend/mis-admin-bff/.../controller/PostController.java`（增 `GET /api/v1/post-types/tree`）
+  - `backend/mis-admin-bff/.../service/OrgFacadeService.java`（增 `listPostTypeTree`）
+  - `backend/mis-admin-bff/.../client/OrgWebClient.java`（增 `listPostTypeTree` 透传）
+  - `backend/mis-admin-bff/.../client/model/PostTypeTreeNodeVO.java`（新增）
+- **依赖**：T-INFRA
+- **产出**：树接口与层级维护就位。
+
+### T-FE（P0，前端）
+- **文件**：
+  - `frontend/.../components/common/dept-tree-select.tsx`（**修复 C.3 弹窗 bug**：组织选择器移出 Popover + 增加 `multiple` 模式）
+  - `frontend/.../components/common/post-type-tree-select.tsx`（**新增**：单选树、仅末级可选）
+  - `frontend/.../components/common/org-pierce-drawer.tsx`（**新增**：从 dept-tree-page 抽出的穿透抽屉，支撑 A.6 推荐方案）
+  - `frontend/.../features/system/admin-list-page.tsx`（引擎增加 `dept-tree-multi` 与 `post-type-tree` 字段类型分支）
+  - `frontend/.../features/system/page-defs.ts`（post 页：`deptIds`→`dept-tree-multi`；`postTypeId`→`post-type-tree`；3.1 orgIds 保持）
+  - `frontend/.../features/system/dept/dept-tree-page.tsx`（重构为单树表 + 行内编制面板 + 调用 `OrgPierceDrawer`，落实 A.6 推荐方案）
+  - `frontend/.../features/system/post/post-type-manage-page.tsx`（树表展示 + 新建/编辑增加"上级类型"）
+- **依赖**：T-INFRA、T-BE
+- **产出**：三 Tab 合一、岗位类型树、查询/表单改造全可用。
+
+### T-VERIFY（P1，验证）
+- **文件**：QA 用例（沿用 `deliverables/software-company/qa/` 既有回归路径）
+- **活动**：
+  - `npm run typecheck` / `mvn -q compile` 全绿；
+  - 手动回归：部门 CRUD、编制展开、穿透下钻、岗位 CRUD、岗位类型新建父/子/末级、岗位表单选父类型与末级类型、查询条件 orgIds/deptIds 树过滤；
+  - 专项验证 C.3 弹窗 bug 已修复（选组织后弹窗不消失，可正常选部门）。
+- **依赖**：T-BE、T-FE
+
+### 任务依赖图
+```mermaid
+graph TD
+  T1[T-INFRA: 迁移+类型+API桩] --> T2[T-BE: 树接口+层级维护]
+  T1 --> T3[T-FE: 组件+页面改造]
+  T2 --> T3
+  T3 --> T4[T-VERIFY: 类型检查+回归]
+  T2 --> T4
+```
+
+---
+
+## E. 待用户确认项（open questions，附推荐默认值）
+
+| # | 问题 | 推荐默认 | 影响范围 |
+|---|------|----------|----------|
+| E.1 | 三 Tab 合一采用哪种布局？ | **推荐方案 A**：单树表 + 行内可展开编制面板 + 行内"穿透下钻"抽屉（见 A.6） | A 整节 |
+| E.2 | 历史 5 条扁平岗位类型是否需重分类到新建父级？ | **否**：保持为根级末级（`parent_id=0,is_leaf=1`），后续运营按需建父级并重新挂接 | B.3 |
+| E.3 | 「所属组织」过滤单选还是多选？ | **多选下拉列表**（当前已是，与后端 `orgIds` 数组契约一致）；如需单选请告知 | C.1 |
+| E.4 | 合并后组织穿透能力如何保留？ | **行内"下钻"按钮 → 只读穿透抽屉**（推荐 A）；备选：保留独立穿透 Tab | A.6 |
+| E.5 | 岗位类型树下拉是否允许选非末级？ | **仅末级可选**（`is_leaf=1`）；非末级仅作分类，不可作为岗位的类型 | B.5/C.4 |
+| E.6 | 新建岗位"所属部门"弹窗 bug 修复方式？ | **组织选择器移出 Popover**（推荐 C.3）；备选：Popover 内改用 DOM 按钮列表 | C.3 |
+| E.7 | 部门查询下拉树单选还是多选？ | **多选**（与现有 `deptIds` 并集过滤契约一致）；单组织场景如需单选可后加 | C.2 |
+| E.8 | 管理页是否展示"层级/上级"列？ | **是**：树表展示层级，新建/编辑含"上级类型"选择 | B.5 |
+
+---
+
+## 附：类图（Mermaid classDiagram）
+
+```mermaid
+classDiagram
+  %% 后端实体/VO
+  class SysPostType {
+    +Long id
+    +Long tenantId
+    +String code
+    +String name
+    +Integer sort
+    +Integer status
+    +Long parentId
+    +Integer isLeaf
+    +Instant createdAt
+    +Instant updatedAt
+  }
+  class PostTypeTreeNodeVO {
+    +String id
+    +String code
+    +String name
+    +Integer sort
+    +Integer status
+    +Integer isLeaf
+    +Integer referenceCount
+    +List~PostTypeTreeNodeVO~ children
+  }
+  class PostTypeCreateRequest {
+    +Long tenantId
+    +String code
+    +String name
+    +Integer sort
+    +Integer status
+    +Long parentId
+  }
+  class PostTypeUpdateRequest {
+    +String name
+    +Integer sort
+    +Integer status
+    +Long parentId
+  }
+  class PostService {
+    +listTypeTree(tenantId, status) List~PostTypeTreeNodeVO~
+    +createType(req) PostTypeVO
+    +updateType(id, req) PostTypeVO
+    +deleteType(id) void
+    -refreshLeaf(parentId) void
+  }
+  SysPostType "1" --> "*" SysPostType : parentId 自引用
+  PostService ..> SysPostType
+  PostService ..> PostTypeTreeNodeVO : 构建
+
+  %% 前端组件
+  class DeptTreeSelect {
+    +value
+    +onChange
+    +multiple: boolean
+    +组织选择器(移出Popover)
+    +部门树Popover
+  }
+  class PostTypeTreeSelect {
+    +value
+    +onChange
+    +仅末级可选(isLeaf=1)
+  }
+  class OrgPierceDrawer {
+    +anchorDeptId
+    +fetchDeptPierce + 面包屑钻取
+  }
+  class DeptTreePage {
+    +单树表 + 行内编制面板
+    +穿透下钻按钮 -> OrgPierceDrawer
+  }
+  class PostTypeManagePage {
+    +树表 + 上级类型选择
+  }
+  class AdminListPage {
+    +dept-tree-multi 字段
+    +post-type-tree 字段
+  }
+  DeptTreePage ..> DeptTreeSelect
+  DeptTreePage ..> OrgPierceDrawer
+  PostTypeManagePage ..> PostTypeTreeSelect
+  AdminListPage ..> PostTypeTreeSelect
+  AdminListPage ..> DeptTreeSelect
+```
+
+## 附：时序图（Mermaid sequenceDiagram）
+
+### (1) 新建岗位：岗位类型下拉树（仅末级可选）
+```mermaid
+sequenceDiagram
+  actor U as 用户
+  participant F as 岗位表单(AdminListPage)
+  participant PTS as PostTypeTreeSelect
+  participant API as listPostTypeTree
+  participant BE as PostService
+  participant DB as SysPostType
+  U->>F: 点击"岗位类型"字段
+  F->>PTS: 打开 Popover
+  PTS->>API: GET /post-types/tree
+  API->>BE: listTypeTree(tenantId)
+  BE->>DB: 查扁平 + 按 parentId 构建树
+  DB-->>BE: List
+  BE-->>PTS: 树(含 isLeaf)
+  U->>PTS: 点击末级节点(isLeaf=1)
+  PTS->>F: onChange(leafId) 关闭Popover
+  U->>F: 提交新建岗位
+  F->>API: createPost({postTypeId: leafId,...})
+```
+
+### (2) 部门管理：行内展开岗位编制（三 Tab 合一）
+```mermaid
+sequenceDiagram
+  actor U as 用户
+  participant D as DeptTreePage(单树表)
+  participant API as fetchDeptStaffing
+  participant BE as DeptStaffingService
+  participant DB as SysPost/SysEmployeePost
+  U->>D: 点部门行展开箭头
+  D->>API: GET /depts/{id}/staffing
+  API->>BE: staffing(tenantId, deptId)
+  BE->>DB: 查岗位+任职
+  DB-->>BE: 数据
+  BE-->>D: DeptStaffingVO(3指标+岗位明细+任职人)
+  D-->>U: 行下方内联编制面板
+  U->>D: 点"穿透下钻"(linkedOrgId存在)
+  D->>D: 打开 OrgPierceDrawer(fetchDeptPierce + 面包屑)
+```
+
+### (3) 岗位查询：部门下拉树过滤（多选并集）
+```mermaid
+sequenceDiagram
+  actor U as 用户
+  participant F as 岗位查询(AdminListPage)
+  participant DT as DeptTreeSelect(multiple)
+  participant API as listPosts
+  participant BE as PostService
+  U->>F: 点"所属部门"筛选
+  F->>DT: 打开部门树Popover
+  U->>DT: 勾选多个部门节点
+  DT->>F: onChange(string[] deptIds)
+  U->>F: 点"查询"
+  F->>API: GET /posts?deptIds=a,b,c
+  API->>BE: list(tenantId, deptIds)
+  BE-->>F: 岗位列表(并集)
+  F-->>U: 渲染结果
+```

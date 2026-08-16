@@ -52,3 +52,37 @@ export async function deleteDept(id: string): Promise<void> {
   const res = await api.delete<ApiResult<null>>(`/depts/${id}`);
   if (res.data.code !== 0) throw new Error(res.data.message || '删除部门失败');
 }
+
+/** 编制统计中的轻量员工视图（对齐后端 EmployeeLiteVO：id + name）。 */
+export interface EmployeeLiteVO {
+  id: string;
+  name: string;
+  isPrimary?: number | null;
+}
+
+/** 编制统计中的岗位明细（对齐后端 PostStaffingVO：postId/postName/postType/holders/vacant）。 */
+export interface PostStaffingVO {
+  postId: string;
+  postName: string;
+  /** 岗位类型名（后端字段名为 postType） */
+  postType: string;
+  holders: EmployeeLiteVO[];
+  vacant: boolean;
+}
+
+/** 部门岗位编制统计（对齐后端 DeptStaffingVO）。 */
+export interface DeptStaffingVO {
+  deptId: string;
+  deptName: string;
+  postCount: number;
+  filledCount: number;
+  vacantCount: number;
+  posts: PostStaffingVO[];
+  employees: EmployeeLiteVO[];
+}
+
+/** 部门岗位编制：三指标 + 各岗位任职明细 + 部门任职人员（取代前端 mock，接真实后端）。 */
+export async function fetchDeptStaffing(deptId: string | number): Promise<DeptStaffingVO> {
+  const res = await api.get<ApiResult<DeptStaffingVO>>(`/depts/${deptId}/staffing`);
+  return unwrap(res, '获取部门编制失败');
+}

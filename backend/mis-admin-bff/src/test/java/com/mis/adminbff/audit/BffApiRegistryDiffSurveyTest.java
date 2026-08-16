@@ -20,6 +20,7 @@ import com.mis.adminbff.controller.McpPermissionController;
 import com.mis.adminbff.controller.MenuController;
 import com.mis.adminbff.controller.ModuleController;
 import com.mis.adminbff.controller.OrgController;
+import com.mis.adminbff.controller.PostController;
 import com.mis.adminbff.controller.RoleController;
 import com.mis.adminbff.controller.UserController;
 import com.mis.adminbff.security.SkillPermissionChecker;
@@ -336,6 +337,8 @@ class BffApiRegistryDiffSurveyTest {
                 mock(OrgFacadeService.class)));
         context.getBeanFactory().registerSingleton("deptController", new DeptController(
                 mock(OrgFacadeService.class)));
+        context.getBeanFactory().registerSingleton("postController", new PostController(
+                mock(OrgFacadeService.class)));
         context.getBeanFactory().registerSingleton("dashboardController", new DashboardController(
                 mock(DashboardAggregateService.class)));
         context.getBeanFactory().registerSingleton("roleController", new RoleController(
@@ -537,6 +540,8 @@ class BffApiRegistryDiffSurveyTest {
             "DELETE /api/v1/orgs/{id}",
             "GET /api/v1/depts/tree",
             "GET /api/v1/depts/{id}",
+            // ---- V49：部门岗位编制（sys_api 91202 / 挂 catalog 2001 部门查询）----
+            "GET /api/v1/depts/{id}/staffing",
             // ---- V40：组织穿透（sys_api 91198 / menu_api → 菜单 206 system:dept:list）----
             "GET /api/v1/depts/pierce",
             "POST /api/v1/depts",
@@ -617,6 +622,10 @@ class BffApiRegistryDiffSurveyTest {
             "POST /api/v1/agent-ops/skills/{id}/enable",
             "POST /api/v1/agent-ops/skills/{id}/disable",
             "POST /api/v1/agent-ops/skills/reindex",
+            // ---- V50：技能解析（sys_api 92173 / 挂 catalog 92090 智能体运营）----
+            "POST /api/v1/agent-ops/skills/parse",
+            // ---- V51 接管补登：sys_api 92176 / 挂 catalog 92090，权限 agent:skill:manage ----
+            "POST /api/v1/agent-ops/skills/builder/chat",
             "GET /api/v1/agent-ops/skills/{id}/grants",
             "PUT /api/v1/agent-ops/skills/{id}/grants",
             "GET /api/v1/agent-ops/roles",
@@ -637,6 +646,9 @@ class BffApiRegistryDiffSurveyTest {
             "GET /api/v1/agent-ops/sessions",
             "GET /api/v1/agent-ops/sessions/{id}",
             "GET /api/v1/agent-ops/sessions/{id}/messages",
+            // ---- V50：Agent 会话计时与技能解析（sys_api 92174~92175 / code 00920075~00920076）----
+            "GET /api/v1/agent-ops/sessions/{id}/timing",
+            "POST /api/v1/agent-ops/sessions/timing/batch",
             // ---- V43：Agent 反馈四端点（sys_api 92169~92172 / code 00920070~00920073）----
             "GET /api/v1/agent-ops/sessions/feedback",
             "GET /api/v1/agent-ops/sessions/feedback/stats",
@@ -775,6 +787,12 @@ class BffApiRegistryDiffSurveyTest {
             "PUT /api/v1/posts/{id}",
             "DELETE /api/v1/posts/{id}",
             "GET /api/v1/post-types",
+            // ---- V40 已登记（sys_api 91195-91197 / 挂 catalog 91178 员工与岗位）----
+            "POST /api/v1/post-types",
+            "PUT /api/v1/post-types/{id}",
+            "DELETE /api/v1/post-types/{id}",
+            // ---- V49：岗位类型树（sys_api 91203 / 挂 catalog 91178 员工与岗位）----
+            "GET /api/v1/post-types/tree",
             // 系统参数列表/详情/新增/编辑/删除（sys_api 91190-91194）
             "GET /api/v1/configs",
             "GET /api/v1/configs/{id}",

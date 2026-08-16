@@ -17,4 +17,10 @@ public interface SysPostTypeRepository extends JpaRepository<SysPostType, Long> 
 
     /** V40 新增：类型 code 唯一性校验。 */
     Optional<SysPostType> findByTenantIdAndCode(Long tenantId, String code);
+
+    /** V47 多层化：按父级 id 查子类型（构建树 + 防环/refreshLeaf 用）。 */
+    List<SysPostType> findByTenantIdAndParentId(Long tenantId, Long parentId);
+
+    /** V47 多层化：判断某父级下是否还有子类型（refreshLeaf 真源）。 */
+    boolean existsByTenantIdAndParentId(Long tenantId, Long parentId);
 }

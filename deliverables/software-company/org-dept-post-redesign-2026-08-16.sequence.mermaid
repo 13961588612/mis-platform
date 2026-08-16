@@ -1,0 +1,53 @@
+%% (1) 新建岗位：岗位类型下拉树（仅末级可选）
+sequenceDiagram
+  actor U as 用户
+  participant F as 岗位表单(AdminListPage)
+  participant PTS as PostTypeTreeSelect
+  participant API as listPostTypeTree
+  participant BE as PostService
+  participant DB as SysPostType
+  U->>F: 点击"岗位类型"字段
+  F->>PTS: 打开 Popover
+  PTS->>API: GET /post-types/tree
+  API->>BE: listTypeTree(tenantId)
+  BE->>DB: 查扁平 + 按 parentId 构建树
+  DB-->>BE: List
+  BE-->>PTS: 树(含 isLeaf)
+  U->>PTS: 点击末级节点(isLeaf=1)
+  PTS->>F: onChange(leafId) 关闭Popover
+  U->>F: 提交新建岗位
+  F->>API: createPost({postTypeId: leafId,...})
+
+%% (2) 部门管理：行内展开岗位编制（三 Tab 合一）
+sequenceDiagram
+  actor U as 用户
+  participant D as DeptTreePage(单树表)
+  participant API as fetchDeptStaffing
+  participant BE as DeptStaffingService
+  participant DB as SysPost/SysEmployeePost
+  U->>D: 点部门行展开箭头
+  D->>API: GET /depts/{id}/staffing
+  API->>BE: staffing(tenantId, deptId)
+  BE->>DB: 查岗位+任职
+  DB-->>BE: 数据
+  BE-->>D: DeptStaffingVO(3指标+岗位明细+任职人)
+  D-->>U: 行下方内联编制面板
+  U->>D: 点"穿透下钻"(linkedOrgId存在)
+  D->>D: 打开 OrgPierceDrawer(fetchDeptPierce + 面包屑)
+
+%% (3) 岗位查询：部门下拉树过滤（多选并集）
+sequenceDiagram
+  actor U as 用户
+  participant F as 岗位查询(AdminListPage)
+  participant DT as DeptTreeSelect(multiple)
+  participant API as listPosts
+  participant BE as PostService
+  U->>F: 点"所属部门"筛选
+  F->>DT: 打开部门树Popover
+  U->>DT: 勾选多个部门节点
+  DT->>F: onChange(string[] deptIds)
+  U->>F: 点"查询"
+  F->>API: GET /posts?deptIds=a,b,c
+  API->>BE: list(tenantId, deptIds)
+  BE-->>F: 岗位列表(并集)
+  F-->>U: 渲染结果

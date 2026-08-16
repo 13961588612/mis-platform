@@ -1,5 +1,6 @@
 package com.mis.adminbff.controller;
 
+import com.mis.adminbff.client.model.PostTypeTreeNodeVO;
 import com.mis.adminbff.client.model.PostTypeVO;
 import com.mis.adminbff.client.model.PostVO;
 import com.mis.adminbff.dto.PostCreateRequest;
@@ -37,9 +38,11 @@ public class PostController {
     @GetMapping("/posts")
     public Result<List<PostVO>> list(
             @RequestParam(required = false) Long deptId,
+            @RequestParam(required = false) List<Long> deptIds,
+            @RequestParam(required = false) List<Long> orgIds,
             @RequestParam(required = false) Long postTypeId,
             @RequestParam(required = false) Integer status) {
-        return Result.ok(orgFacadeService.listPosts(deptId, postTypeId, status));
+        return Result.ok(orgFacadeService.listPosts(deptId, deptIds, orgIds, postTypeId, status));
     }
 
     @GetMapping("/posts/{id}")
@@ -69,6 +72,12 @@ public class PostController {
     @GetMapping("/post-types")
     public Result<List<PostTypeVO>> listTypes(@RequestParam(required = false) Integer status) {
         return Result.ok(orgFacadeService.listPostTypes(status));
+    }
+
+    /** V47 岗位类型树：按 parent_id 递归组装（顶层 parentId=0）。 */
+    @GetMapping("/post-types/tree")
+    public Result<List<PostTypeTreeNodeVO>> listTypeTree(@RequestParam(required = false) Integer status) {
+        return Result.ok(orgFacadeService.listPostTypeTree(status));
     }
 
     @PostMapping("/post-types")

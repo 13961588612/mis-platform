@@ -111,6 +111,10 @@ export interface UserView {
   status: number;
   isTenantAdmin: number | null;
   roles: RoleBrief[];
+  /** 归属组织 id 列表（多组织，首项主组织）；用于权限 Sheet 正确回填（N7/USR-01/03） */
+  orgIds?: string[];
+  /** 归属部门 id 列表（多部门，首项主部门）；用于权限 Sheet 正确回填（N7/USR-01/03） */
+  deptIds?: string[];
   createdAt: string | null;
 }
 
@@ -329,6 +333,8 @@ export interface EmployeeItem {
   gender: number | null;
   title: string | null;
   hireDate: string | null;
+  /** 是否内置账号：1=内置（手机号必填/唯一校验豁免，EMP-03，Q2 推荐方案）；0/undefined=普通 */
+  isBuiltin?: number;
   status: number;
   createdAt: string | null;
   updatedAt: string | null;
@@ -358,6 +364,27 @@ export interface PostTypeItem {
   status: number;
   /** sys_post 引用数（删除拦截依据） */
   referenceCount: number;
+}
+
+/**
+ * 岗位类型树节点（mis-org PostTypeTreeNodeVO / BFF PostTypeTreeNodeVO 对齐）。
+ *
+ * <p>仅末级节点（isLeaf===1）可被岗位选作类型；非末级仅作分类（选父时使用 allowNonLeaf）。
+ * children 递归。parentId 用于前端展示层级；树已后端构建完成，前端无需再按 parentId 组装。
+ */
+export interface PostTypeTreeNode {
+  id: string;
+  /** 编码（管理树表展示用，后端 VO 已携带） */
+  code?: string;
+  name: string;
+  sort?: number;
+  status?: number;
+  /** sys_post 引用数（删除拦截依据） */
+  referenceCount?: number;
+  parentId: string;
+  /** 1=末级（可选）/ 0=非末级（仅分类） */
+  isLeaf: number;
+  children?: PostTypeTreeNode[];
 }
 
 /** 系统参数（mis-system ConfigVO，全局无 tenant） */

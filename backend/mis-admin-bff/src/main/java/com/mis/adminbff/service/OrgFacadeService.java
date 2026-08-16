@@ -2,9 +2,11 @@ package com.mis.adminbff.service;
 
 import com.mis.adminbff.client.OrgWebClient;
 import com.mis.adminbff.client.model.DeptPierceVO;
+import com.mis.adminbff.client.model.DeptStaffingVO;
 import com.mis.adminbff.client.model.DeptVO;
 import com.mis.adminbff.client.model.EmployeeVO;
 import com.mis.adminbff.client.model.OrgVO;
+import com.mis.adminbff.client.model.PostTypeTreeNodeVO;
 import com.mis.adminbff.client.model.PostTypeVO;
 import com.mis.adminbff.client.model.PostVO;
 import com.mis.adminbff.dto.DeptCreateRequest;
@@ -181,8 +183,13 @@ public class OrgFacadeService {
     // -----------------------------------------------------------------------
     // 岗位
     // -----------------------------------------------------------------------
-    public List<PostVO> listPosts(Long deptId, Long postTypeId, Integer status) {
-        return orgWebClient.listPosts(RequestContext.requireTenantId(), deptId, postTypeId, status);
+    public List<PostVO> listPosts(Long deptId, List<Long> deptIds, List<Long> orgIds, Long postTypeId, Integer status) {
+        return orgWebClient.listPosts(RequestContext.requireTenantId(), deptId, deptIds, postTypeId, status, orgIds);
+    }
+
+    /** 部门岗位编制：透传内部 mis-org /internal/v1/depts/{id}/staffing；tenantId 由 BFF 注入。 */
+    public DeptStaffingVO getDeptStaffing(Long id) {
+        return orgWebClient.getDeptStaffing(id, RequestContext.requireTenantId());
     }
 
     public PostVO getPost(Long id) {
@@ -221,6 +228,11 @@ public class OrgFacadeService {
         return orgWebClient.listPostTypes(RequestContext.requireTenantId(), status);
     }
 
+    /** V47 岗位类型树：按 parent_id 递归组装。 */
+    public List<PostTypeTreeNodeVO> listPostTypeTree(Integer status) {
+        return orgWebClient.listPostTypeTree(RequestContext.requireTenantId(), status);
+    }
+
     /** V40 新增岗位类型。 */
     public PostTypeVO createPostType(PostTypeCreateRequest request) {
         Map<String, Object> body = new HashMap<>();
@@ -229,6 +241,7 @@ public class OrgFacadeService {
         body.put("name", request.name());
         body.put("sort", request.sort());
         body.put("status", request.status());
+        body.put("parentId", request.parentId() != null ? request.parentId() : 0);
         return orgWebClient.createPostType(body);
     }
 
@@ -238,6 +251,9 @@ public class OrgFacadeService {
         body.put("name", request.name());
         body.put("sort", request.sort());
         body.put("status", request.status());
+        if (request.parentId() != null) {
+            body.put("parentId", request.parentId());
+        }
         return orgWebClient.updatePostType(id, body);
     }
 

@@ -29,6 +29,14 @@ public class SysPostType {
     @Column(nullable = false)
     private Integer status;
 
+    /** V47 多层化：父级 id，0=根级（无父）。 */
+    @Column(name = "parent_id", nullable = false)
+    private Long parentId;
+
+    /** V47 多层化：末级标记，1=末级（可被选作岗位类型）/ 0=非末级（仅作分类）。后端单一真源维护。 */
+    @Column(name = "is_leaf", nullable = false)
+    private Integer isLeaf;
+
     @Column(name = "created_at", nullable = false)
     private Instant createdAt;
 
@@ -47,6 +55,10 @@ public class SysPostType {
     public void setSort(Integer sort) { this.sort = sort; }
     public Integer getStatus() { return status; }
     public void setStatus(Integer status) { this.status = status; }
+    public Long getParentId() { return parentId; }
+    public void setParentId(Long parentId) { this.parentId = parentId; }
+    public Integer getIsLeaf() { return isLeaf; }
+    public void setIsLeaf(Integer isLeaf) { this.isLeaf = isLeaf; }
     public Instant getCreatedAt() { return createdAt; }
     public void setCreatedAt(Instant createdAt) { this.createdAt = createdAt; }
     public Instant getUpdatedAt() { return updatedAt; }
