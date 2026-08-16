@@ -20,5 +20,7 @@ public record EmployeeCreateRequest(
         String title,
         LocalDate hireDate,
         /** 任职岗位列表，首项或 isPrimary=1 的为主岗 */
-        List<EmployeePostItem> posts
+        List<EmployeePostItem> posts,
+        /** 是否内置账号：1=内置（手机号必填/唯一校验豁免，EMP-03，Q2 推荐方案）；默认 0 */
+        Integer isBuiltin
 ) {}

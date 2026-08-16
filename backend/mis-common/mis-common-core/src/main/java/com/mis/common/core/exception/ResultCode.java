@@ -68,6 +68,7 @@ public enum ResultCode {
     API_CODE_EXISTS(40914, "接口编码在该模块下已存在"),
     API_GROUP_NOT_EMPTY(40915, "接口分组非空，无法删除"),
     API_BOUND(40916, "接口已被菜单绑定，无法删除"),
+    EMPLOYEE_PHONE_EXISTS(40917, "手机号已存在"),
     INTERNAL_ERROR(50000, "系统错误");
 
     private final int code;

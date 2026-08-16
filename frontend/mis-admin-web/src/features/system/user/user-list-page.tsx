@@ -364,8 +364,9 @@ export function UserListPage() {
   function openPerms(row: UserView) {
     setMode('perms');
     setEditing(row);
-    const orgIds = row.orgId ? [row.orgId] : [];
-    const deptIds = row.deptId ? [row.deptId] : [];
+    // N7 / USR-01/03：优先使用后端返回的多组织/多部门数组，缺失时回退到单值字段，保证正确回填
+    const orgIds = row.orgIds && row.orgIds.length ? row.orgIds : row.orgId ? [row.orgId] : [];
+    const deptIds = row.deptIds && row.deptIds.length ? row.deptIds : row.deptId ? [row.deptId] : [];
     setForm((f) => ({
       ...f,
       orgIds,

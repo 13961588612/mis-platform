@@ -1,0 +1,81 @@
+%% 链路④-1 新增员工：手机号必填+唯一+内置豁免（EMP-01/02/03）
+sequenceDiagram
+    actor HR as 录入员
+    participant FE as 员工表单(page-defs)
+    participant API as employees.ts
+    participant SVC as EmployeeService
+    participant REPO as SysEmployeeRepository
+    participant RC as ResultCode
+    HR->>FE: 填写工号/姓名/手机号/任职
+    FE->>FE: phone 非空校验(required)
+    FE->>API: createEmployee(payload)
+    API->>SVC: create(EmployeeCreateRequest)
+    SVC->>SVC: isBuiltin? 豁免判定(Q2)
+    alt 非内置 且 phone 为空
+        SVC-->>API: BusinessException(VALIDATION_ERROR,"请输入手机号")
+        API-->>FE: throw Error(message)
+        FE-->>HR: toast 冲突提示
+    else 非内置 且 phone 已存在
+        SVC->>REPO: existsByTenantIdAndPhoneAndIdNot(tenant,phone,id)
+        REPO-->>SVC: true
+        SVC-->>API: BusinessException(RC.EMPLOYEE_PHONE_EXISTS,"手机号 X 已存在")
+        API-->>FE: throw Error(message)
+        FE-->>HR: toast 冲突提示
+    else 通过
+        SVC->>REPO: save(SysEmployee+depts+posts)
+        SVC-->>API: EmployeeVO
+        API-->>FE: 成功
+        FE-->>HR: toast 已创建
+    end
+
+%% 链路④-2 任职部门树形单选回填（EMP-04，复用 DeptTreeSelect）
+sequenceDiagram
+    actor HR as 录入员
+    participant AE as AssignmentEditor
+    participant DTS as DeptTreeSelect
+    participant API as fetchDeptTree/listOrgs
+    HR->>AE: 点击「任职部门」
+    AE->>DTS: 渲染(value=当前a.dept)
+    DTS->>API: listOrgs() + fetchDeptTree(orgId)
+    API-->>DTS: 部门树
+    HR->>DTS: 单选一个部门节点
+    DTS->>AE: onChange(singleDeptId)
+    AE->>AE: setAt(i,{dept:deptId}) 并触发 EMP-05 联动
+    AE-->>HR: 部门名回填, 提交单值 deptId
+
+%% 链路④-3 部门→岗位联动（EMP-05）
+sequenceDiagram
+    actor HR as 录入员
+    participant AE as AssignmentEditor
+    participant API as listPosts(/api/v1/posts)
+    participant BFF as mis-admin-bff
+    participant ORG as PostService(mis-org)
+    HR->>AE: 在任职行选中部门(deptId)
+    AE->>API: listPosts({deptIds:[deptId], status:1})
+    API->>BFF: GET /api/v1/posts?deptIds=&status=1
+    BFF->>ORG: GET /internal/v1/posts?deptIds=&tenantId=(网关注入)
+    ORG-->>BFF: List<PostVO>(该部门岗位)
+    BFF-->>API: PostItem[]
+    API-->>AE: 该部门岗位选项
+    AE->>AE: 该行 postOptions=过滤结果; 若 a.post 不在其中则清空
+    AE-->>HR: 岗位下拉仅显示该部门岗位
+
+%% 链路④-4 用户权限设置：部门列表加载（USR-02 / Q1）
+sequenceDiagram
+    actor Admin as 权限管理员
+    participant UP as user-list-page(perms Sheet)
+    participant LP as loadPermsDepts
+    participant API as fetchDeptTree
+    alt Q1=维持现状(推荐)
+        Admin->>UP: 勾选组织 orgIds
+        UP->>LP: loadPermsDepts(orgIds)
+        LP->>API: Promise.all(orgIds.map(fetchDeptTree))
+        API-->>LP: 各部门树
+        LP-->>UP: 聚合扁平部门(按已选组织)
+    else Q1=默认全组织部门
+        Admin->>UP: 打开权限 Sheet
+        UP->>LP: loadPermsDepts(allOrgIds)
+        LP->>API: 全组织部门树
+        LP-->>UP: 全量部门(不依赖先勾组织)
+    end
+    UP-->>Admin: 部门 checkbox 多选列表

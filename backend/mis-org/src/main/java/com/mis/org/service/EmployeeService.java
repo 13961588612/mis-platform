@@ -166,6 +166,15 @@ public class EmployeeService {
                 .ifPresent(e -> {
                     throw new BusinessException(ResultCode.EMPLOYEE_NO_EXISTS);
                 });
+        boolean builtin = request.isBuiltin() != null && request.isBuiltin() == 1;
+        if (!builtin) {
+            if (request.phone() == null || request.phone().isBlank()) {
+                throw new BusinessException(ResultCode.VALIDATION_ERROR, "请输入手机号");
+            }
+            if (employeeRepository.findByTenantIdAndPhone(request.tenantId(), request.phone()).isPresent()) {
+                throw new BusinessException(ResultCode.EMPLOYEE_PHONE_EXISTS, "手机号 " + request.phone() + " 已存在");
+            }
+        }
         Long primaryDeptId = resolvePrimaryDept(request.deptId(), request.deptIds());
         requireDept(request.tenantId(), primaryDeptId);
 
@@ -178,6 +187,7 @@ public class EmployeeService {
         emp.setRealName(request.realName());
         emp.setEmail(request.email());
         emp.setPhone(request.phone());
+        emp.setIsBuiltin(request.isBuiltin() != null ? request.isBuiltin() : 0);
         emp.setGender(request.gender());
         emp.setTitle(request.title());
         emp.setHireDate(request.hireDate());
@@ -197,6 +207,16 @@ public class EmployeeService {
         SysEmployee emp = employeeRepository.findById(id)
                 .orElseThrow(() -> new BusinessException(ResultCode.NOT_FOUND, "员工不存在"));
         emp.setRealName(request.realName());
+        boolean builtin = (emp.getIsBuiltin() != null && emp.getIsBuiltin() == 1)
+                || (request.isBuiltin() != null && request.isBuiltin() == 1);
+        if (request.phone() != null && !request.phone().isBlank() && !builtin) {
+            if (employeeRepository.existsByTenantIdAndPhoneAndIdNot(emp.getTenantId(), request.phone(), emp.getId())) {
+                throw new BusinessException(ResultCode.EMPLOYEE_PHONE_EXISTS, "手机号 " + request.phone() + " 已存在");
+            }
+        }
+        if (request.isBuiltin() != null) {
+            emp.setIsBuiltin(request.isBuiltin());
+        }
         if (request.email() != null) {
             emp.setEmail(request.email());
         }
@@ -335,6 +355,7 @@ public class EmployeeService {
                 emp.getTitle(),
                 emp.getHireDate(),
                 emp.getStatus(),
+                emp.getIsBuiltin(),
                 emp.getCreatedAt(),
                 emp.getUpdatedAt());
     }

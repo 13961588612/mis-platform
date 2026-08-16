@@ -32,6 +32,8 @@ export interface EmployeeCreatePayload {
   title?: string;
   hireDate?: string;
   posts?: EmployeePostPayload[];
+  /** 是否内置账号：1=内置（手机号必填/唯一校验豁免，EMP-03，Q2 推荐方案）；默认 0 */
+  isBuiltin?: number;
 }
 
 export interface EmployeeUpdatePayload {
@@ -45,6 +47,8 @@ export interface EmployeeUpdatePayload {
   posts?: EmployeePostPayload[];
   hireDate?: string;
   status?: number;
+  /** 是否内置账号：1=内置（手机号必填/唯一校验豁免，EMP-03，Q2 推荐方案） */
+  isBuiltin?: number;
 }
 
 export async function listEmployees(query: EmployeeQuery = {}): Promise<EmployeeItem[]> {
