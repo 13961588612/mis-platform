@@ -238,8 +238,8 @@ export const SYSTEM_PAGE_DEFS: Record<string, AdminPageDef> = {
     serverFilterKeys: ['deptIds', 'orgIds'],
     filters: [
       { key: 'name', label: '岗位名称', type: 'text', col: 4 },
-      { key: 'deptIds', label: '所属部门', type: 'dept-tree-multi', col: 4, hint: '可多选部门（后端按并集过滤）' },
-      { key: 'orgIds', label: '所属组织', type: 'multiselect', col: 4, optionsFrom: 'org', hint: '可多选组织（仅精确匹配所选组织）' },
+      { key: 'deptIds', label: '所属部门', type: 'dept-tree-multi', col: 4, hint: '可多选部门（下拉树·默认折叠·支持全选）' },
+      { key: 'orgIds', label: '所属组织', type: 'multiselect', col: 4, optionsFrom: 'org', hint: '可多选组织（下拉·支持全选/清空）' },
       { key: 'status', label: '状态', type: 'select', col: 2, options: STATUS_OPTS },
     ],
     columns: [

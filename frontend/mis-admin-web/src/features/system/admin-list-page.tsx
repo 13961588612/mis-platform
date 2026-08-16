@@ -36,6 +36,7 @@ import {
   SheetHeader,
   SheetTitle,
 } from '@/components/ui/sheet';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import type { AdminField, AdminPageDef, FieldOption } from './types';
 import { SYSTEM_PAGE_DEFS } from './page-defs';
 import { listPosts } from '@/lib/api/posts';
@@ -505,7 +506,7 @@ function FieldControl({
   );
 }
 
-/** 筛选栏多选项：chip 选择器（与表单内 multiselect 视觉一致），值以数组形式存于 draft。 */
+/** 筛选栏多选项：下拉 Popover 多选（值以数组形式存于 draft）。 */
 function FilterMultiSelect({
   field,
   value,
@@ -519,33 +520,87 @@ function FilterMultiSelect({
   const toggle = (v: string | number) => {
     onChange(current.includes(v) ? current.filter((x) => x !== v) : [...current, v]);
   };
+  const options = field.options ?? [];
+  const selectAll = () => onChange(options.map((o) => o.value));
+  const clearAll = () => onChange([]);
+  const idToLabel = (v: string | number) => options.find((o) => o.value === v)?.label ?? String(v);
+
   return (
-    <div className="mt-1.5 flex max-h-32 flex-wrap gap-1.5 overflow-auto rounded-md border border-input bg-card p-2">
-      {(field.options ?? []).length === 0 ? (
-        <span className="px-1 py-0.5 text-xs text-muted-foreground">暂无可选项</span>
-      ) : (
-        (field.options ?? []).map((o) => {
-          const on = current.includes(o.value);
-          return (
-            <button
-              key={String(o.value)}
-              type="button"
-              onClick={() => toggle(o.value)}
-              className={cn(
-                'inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-xs font-medium transition',
-                on
-                  ? 'border-primary bg-primary/10 text-primary'
-                  : 'border-input text-muted-foreground hover:border-primary/40 hover:text-foreground',
-              )}
-              aria-pressed={on}
-            >
-              {on ? <Check className="h-3 w-3" /> : null}
-              {o.label}
-            </button>
-          );
-        })
-      )}
-    </div>
+    <Popover>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          className={cn(fieldInputClass, 'flex items-center justify-between gap-2 text-left')}
+        >
+          {/* 选中项 chip 收在触发器内部，max-h 约束不溢出组件 */}
+          <span className={cn('flex flex-1 flex-wrap gap-1 overflow-auto', current.length === 0 ? 'block' : 'max-h-20')}>
+            {current.length === 0 ? (
+              <span className="text-muted-foreground">请选择（可多选）</span>
+            ) : (
+              current.map((v) => (
+                <span
+                  key={String(v)}
+                  className="inline-flex items-center gap-1 rounded-full border border-primary/40 bg-primary/5 px-2 py-0.5 text-xs font-medium text-primary/80"
+                >
+                  {idToLabel(v)}
+                </span>
+              ))
+            )}
+          </span>
+          <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground" />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent className="w-72" align="start">
+        <div className="mb-2 flex items-center gap-2">
+          <button
+            type="button"
+            onClick={selectAll}
+            className="rounded border border-input px-2.5 py-1 text-xs font-medium text-muted-foreground transition hover:border-primary/40 hover:text-foreground"
+          >
+            全选
+          </button>
+          <button
+            type="button"
+            onClick={clearAll}
+            disabled={current.length === 0}
+            className="rounded border border-input px-2.5 py-1 text-xs font-medium text-muted-foreground transition hover:border-primary/40 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            清空
+          </button>
+        </div>
+        {options.length === 0 ? (
+          <div className="px-2 py-3 text-center text-xs text-muted-foreground">暂无可选项</div>
+        ) : (
+          <div className="max-h-60 overflow-auto rounded-md border border-border/60 p-1">
+            {options.map((o) => {
+              const on = current.includes(o.value);
+              return (
+                <button
+                  key={String(o.value)}
+                  type="button"
+                  onClick={() => toggle(o.value)}
+                  className={cn(
+                    'flex w-full items-center gap-2 rounded px-2 py-1 text-left text-sm transition hover:bg-muted',
+                    on && 'bg-primary/10 font-medium text-primary',
+                  )}
+                  aria-pressed={on}
+                >
+                  <span
+                    className={cn(
+                      'inline-flex h-4 w-4 shrink-0 items-center justify-center rounded border',
+                      on ? 'border-primary bg-primary text-primary-foreground' : 'border-input',
+                    )}
+                  >
+                    {on ? <Check className="h-3 w-3" /> : null}
+                  </span>
+                  <span className="truncate">{o.label}</span>
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </PopoverContent>
+    </Popover>
   );
 }
 
