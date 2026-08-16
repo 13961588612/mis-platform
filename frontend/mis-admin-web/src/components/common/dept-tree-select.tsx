@@ -1,168 +1,332 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
-import { Folder } from 'lucide-react';
+import { Check, ChevronDown, ChevronRight, Folder } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { fetchDeptTree } from '@/lib/api/depts';
 import { listOrgs } from '@/lib/api/orgs';
-import type { DeptNode, OrgItem } from '@/types/api';
+import type { DeptNode } from '@/types/api';
 
 const fieldInputClass =
   'h-auto min-h-9 w-full rounded-md border border-input bg-card px-[0.7rem] py-[0.55rem] text-sm text-foreground shadow-none';
 
-export interface DeptTreeSelectProps {
+const actionBtnClass =
+  'rounded border border-input px-2.5 py-1 text-xs font-medium text-muted-foreground transition hover:border-primary/40 hover:text-foreground';
+
+/** 渲染用树节点：顶层为「组织分组」（不可选），其 children 为真实部门树（可选）。 */
+interface TreeItem {
+  id: string;
+  name: string;
+  selectable: boolean;
+  children?: TreeItem[];
+}
+
+/** 真实部门树 → 渲染用 TreeItem（部门节点均可选）。纯函数，置于模块级避免 hooks 依赖抖动。 */
+function toTreeItems(nodes: DeptNode[]): TreeItem[] {
+  return nodes.map((n) => ({
+    id: String(n.id),
+    name: n.name,
+    selectable: true,
+    children: n.children && n.children.length > 0 ? toTreeItems(n.children) : undefined,
+  }));
+}
+
+/** 递归收集森林中所有可选节点 id（供多选「全选」使用）。 */
+function collectSelectable(items: TreeItem[], acc: string[] = []): string[] {
+  for (const it of items) {
+    if (it.selectable) acc.push(it.id);
+    if (it.children?.length) collectSelectable(it.children, acc);
+  }
+  return acc;
+}
+
+/** 单选形态（默认）：value 为标量，onChange 回传单值；用于表单 deptId（sys_post.dept_id）。 */
+export interface DeptTreeSelectSingleProps {
+  multiple?: false;
   /** 当前选中部门 id（单值）；表单回填时由引擎传入 */
   value?: string | number | null;
-  /** 选中部门时回传单值 deptId（POST-01：提交单值） */
+  /** 选中部门时回传单值 deptId（清空时回传 null） */
   onChange: (value: string | number | null) => void;
   placeholder?: string;
   disabled?: boolean;
 }
 
-/**
- * 部门树形单选（POST-01）。
- *
- * <p><b>根因修复（E.6）</b>：组织选择器<b>移出</b> Radix Popover —— 原生 &lt;select&gt; 展开后的选项
- * 是操作系统级浮层，不在 Popover DOM 内；若置于 {@code PopoverContent} 内，Radix DismissableLayer
- * 会将其判定为「Popover 外交互」而触发关闭（setOpen(false)）。现组织选择器作为 Popover 触发器旁的
- * 独立 DOM，Popover 内只渲染部门树，点组织不再误关弹窗。
- *
- * <p>单选语义保留：选中部门回填单值 deptId（与 sys_post.dept_id 单部门归属一致）。
- * 复用现有 fetchDeptTree / listOrgs，不引入新依赖。
- */
-export function DeptTreeSelect({ value, onChange, placeholder, disabled }: DeptTreeSelectProps) {
-  const [orgs, setOrgs] = useState<OrgItem[]>([]);
-  const [orgId, setOrgId] = useState<string>('');
-  const [tree, setTree] = useState<DeptNode[]>([]);
-  const [open, setOpen] = useState(false);
-  const [selectedName, setSelectedName] = useState('');
+/** 多选形态：value 为数组，onChange 回传数组；用于筛选栏 deptIds（并集语义）。 */
+export interface DeptTreeSelectMultipleProps {
+  multiple: true;
+  /** 当前选中部门 id 数组 */
+  value?: (string | number)[];
+  onChange: (value: (string | number)[]) => void;
+  placeholder?: string;
+  disabled?: boolean;
+}
 
-  // id → name 映射（用于回填展示选中部门名）
+export type DeptTreeSelectProps = DeptTreeSelectSingleProps | DeptTreeSelectMultipleProps;
+
+/**
+ * 部门树形选择器（统一组件，单选 / 多选由 {@code multiple} 控制）。
+ *
+ * <p><b>跨组织聚合森林</b>：挂载时并行拉取【全部有权限组织】的部门树，按组织分组聚合成"森林"
+ * （组织节点仅作展开/折叠的分组头、{@code selectable:false}；部门节点可选）。默认全收缩，
+ * 点击节点箭头才展开下一级。不再依赖单个 orgId，故<b>不带组织下拉框</b>。
+ *
+ * <p><b>单选</b>（{@code multiple} 缺省 = false，表单 deptId 用）：点部门节点即选中该 id 并关闭
+ * Popover，触发器显示选中部门名；无复选框、无全选/清空。
+ *
+ * <p><b>多选</b>（{@code multiple} = true，筛选栏 deptIds 用）：复选框 toggle 增删，Popover 顶部提供
+ * 「全选 / 清空」；触发器内以 chip 展示已选项，<b>单行裁切</b>（不换行、溢出直接隐藏）。
+ *
+ * <p>复用现有 fetchDeptTree / listOrgs，不引入新依赖。
+ */
+export function DeptTreeSelect(props: DeptTreeSelectProps) {
+  const { placeholder, disabled = false } = props;
+  const multiple = props.multiple === true;
+
+  const [forest, setForest] = useState<TreeItem[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [open, setOpen] = useState(false);
+  // 默认空集合 = 全收缩；仅当 expanded 含某节点 id 时才渲染其 children
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+
+  /** 归一化当前选中值：单选视为「0/1 元数组」，多选直接用数组，后续逻辑两模式共用。 */
+  const selected = useMemo<(string | number)[]>(() => {
+    if (multiple) return Array.isArray(props.value) ? (props.value as (string | number)[]) : [];
+    const v = props.value as string | number | null | undefined;
+    return v == null || v === '' ? [] : [v];
+  }, [multiple, props.value]);
+
+  const selectedIds = useMemo(() => new Set(selected.map(String)), [selected]);
+
+  /** 统一出口：单选回传标量（空 → null），多选回传数组。 */
+  const emit = (next: (string | number)[]) => {
+    if (props.multiple === true) {
+      props.onChange(next);
+    } else {
+      props.onChange(next.length > 0 ? next[0] : null);
+    }
+  };
+
+  // id → name 映射（触发器展示选中部门名 / chip 文案）
   const idToName = useMemo(() => {
     const map = new Map<string, string>();
-    const walk = (nodes: DeptNode[]) => {
-      for (const n of nodes) {
-        map.set(String(n.id), n.name);
-        if (n.children?.length) walk(n.children);
+    const walk = (items: TreeItem[]) => {
+      for (const it of items) {
+        map.set(it.id, it.name);
+        if (it.children?.length) walk(it.children);
       }
     };
-    walk(tree);
+    walk(forest);
     return map;
-  }, [tree]);
+  }, [forest]);
 
-  useEffect(() => {
-    if (value == null || value === '') {
-      setSelectedName('');
-      return;
-    }
-    setSelectedName(idToName.get(String(value)) ?? '');
-  }, [value, idToName]);
-
-  // 组织列表仅加载一次；首次加载后默认选中首个组织
+  // 挂载时并行拉取所有有权限组织的部门树，按组织分组合并为森林
   useEffect(() => {
     let alive = true;
+    setLoading(true);
     listOrgs()
       .then((list) => {
         if (!alive) return;
-        setOrgs(list);
-        setOrgId((prev) => (prev || (list[0] ? String(list[0].id) : '')));
+        const tasks = list.map((org) =>
+          fetchDeptTree(org.id)
+            .then((tree) => ({ org, tree }))
+            .catch(() => ({ org, tree: [] as DeptNode[] })),
+        );
+        Promise.all(tasks).then((results) => {
+          if (!alive) return;
+          const nextForest: TreeItem[] = results.map(({ org, tree }) => ({
+            id: `org:${org.id}`,
+            name: org.name,
+            selectable: false,
+            children: toTreeItems(tree),
+          }));
+          setForest(nextForest);
+          setLoading(false);
+        });
       })
       .catch(() => {
-        /* 组织加载失败：选择器为空，不影响其他交互 */
+        if (!alive) return;
+        setForest([]);
+        setLoading(false);
       });
     return () => {
       alive = false;
     };
   }, []);
 
-  useEffect(() => {
-    if (!orgId) return;
-    let alive = true;
-    fetchDeptTree(orgId)
-      .then((t) => {
-        if (alive) setTree(t);
-      })
-      .catch(() => {
-        if (alive) setTree([]);
-      });
-    return () => {
-      alive = false;
-    };
-  }, [orgId]);
-
-  const selectNode = (node: DeptNode) => {
-    onChange(node.id);
-    setSelectedName(node.name);
-    setOpen(false);
+  const toggleExpand = (id: string) => {
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
   };
 
-  const renderNodes = (nodes: DeptNode[], depth: number): ReactNode =>
-    nodes.map((n) => (
-      <div key={n.id}>
-        <button
-          type="button"
-          onClick={() => selectNode(n)}
-          className={cn(
-            'flex w-full items-center gap-1.5 rounded px-2 py-1 text-left text-sm transition hover:bg-muted',
-            String(value) === String(n.id) && 'bg-primary/10 font-medium text-primary',
-            depth > 0 && 'ml-3',
-          )}
-        >
-          <Folder className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-          <span className="truncate">{n.name}</span>
-        </button>
-        {n.children?.length ? renderNodes(n.children, depth + 1) : null}
-      </div>
-    ));
+  /** 点部门节点：单选 → 选中并关弹窗；多选 → 复选框语义增删。 */
+  const handleNodeClick = (node: TreeItem) => {
+    if (disabled) return;
+    if (!multiple) {
+      emit([node.id]);
+      setOpen(false);
+      return;
+    }
+    if (selectedIds.has(node.id)) {
+      emit(selected.filter((v) => String(v) !== node.id));
+    } else {
+      emit([...selected, node.id]);
+    }
+  };
+
+  const selectAll = () => {
+    if (disabled) return;
+    emit(collectSelectable(forest));
+  };
+
+  const clearAll = () => {
+    if (disabled) return;
+    emit([]);
+  };
+
+  const renderNodes = (nodes: TreeItem[], depth: number): ReactNode =>
+    nodes.map((n) => {
+      const hasChildren = !!n.children && n.children.length > 0;
+      const isExpanded = expanded.has(n.id);
+      const checked = n.selectable && selectedIds.has(n.id);
+      return (
+        <div key={n.id}>
+          <div className={cn('flex items-center gap-1 rounded px-2 py-1', depth > 0 && 'ml-3')}>
+            {/* 展开/折叠箭头：有子节点的组织分组或部门父节点都带 */}
+            {hasChildren ? (
+              <button
+                type="button"
+                onClick={() => !disabled && toggleExpand(n.id)}
+                className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded hover:bg-muted"
+                aria-label={isExpanded ? '折叠' : '展开'}
+              >
+                {isExpanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+              </button>
+            ) : (
+              <span className="inline-block h-5 w-5 shrink-0" />
+            )}
+            {n.selectable ? (
+              <button
+                type="button"
+                disabled={disabled}
+                onClick={() => handleNodeClick(n)}
+                className={cn(
+                  'flex flex-1 items-center gap-1.5 rounded px-1.5 py-0.5 text-left text-sm transition hover:bg-muted',
+                  checked && 'bg-primary/10 font-medium text-primary',
+                  disabled && 'cursor-not-allowed opacity-60',
+                )}
+                aria-pressed={checked}
+              >
+                {/* 复选框仅多选形态出现；单选靠高亮表达选中态 */}
+                {multiple ? (
+                  <span
+                    className={cn(
+                      'inline-flex h-4 w-4 shrink-0 items-center justify-center rounded border',
+                      checked ? 'border-primary bg-primary text-primary-foreground' : 'border-input',
+                    )}
+                  >
+                    {checked ? <Check className="h-3 w-3" /> : null}
+                  </span>
+                ) : null}
+                <Folder className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                <span className="truncate">{n.name}</span>
+              </button>
+            ) : (
+              <span className="flex flex-1 items-center gap-1.5 px-1.5 py-0.5 text-sm font-medium text-foreground/90">
+                <Folder className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                <span className="truncate">{n.name}</span>
+              </span>
+            )}
+          </div>
+          {hasChildren && <div>{isExpanded ? renderNodes(n.children as TreeItem[], depth + 1) : null}</div>}
+          {/* 组织分组下无部门时标注 */}
+          {!hasChildren && !n.selectable ? (
+            <div className="ml-9 py-0.5 text-xs text-muted-foreground">无部门</div>
+          ) : null}
+        </div>
+      );
+    });
+
+  const singleName = multiple ? '' : idToName.get(String(selected[0] ?? '')) ?? '';
+  const emptyText = placeholder || (multiple ? '请选择部门（可多选）' : '请选择部门（树形·单选）');
 
   return (
-    <div className="flex items-stretch gap-2">
-      {/* 组织选择器：独立于 Popover（E.6 根因修复），点组织不会误关部门树弹窗 */}
-      <select
-        className="h-auto min-h-9 w-32 shrink-0 rounded-md border border-input bg-card px-2 text-sm"
-        value={orgId}
-        disabled={disabled}
-        onChange={(e) => setOrgId(e.target.value)}
-      >
-        {orgs.length === 0 ? (
-          <option value="">暂无组织</option>
-        ) : (
-          orgs.map((o) => (
-            <option key={o.id} value={o.id}>
-              {o.name}
-            </option>
-          ))
-        )}
-      </select>
-      <Popover open={open} onOpenChange={(o) => !disabled && setOpen(o)}>
-        <PopoverTrigger asChild>
-          <button
-            type="button"
-            disabled={disabled}
-            className={cn(
-              fieldInputClass,
-              'flex flex-1 items-center justify-between text-left',
-              disabled && 'cursor-not-allowed opacity-60',
-            )}
-          >
-            <span className={cn(selectedName ? 'text-foreground' : 'text-muted-foreground')}>
-              {selectedName || placeholder || '请选择部门（树形·单选）'}
+    <Popover open={open} onOpenChange={(o) => !disabled && setOpen(o)}>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          disabled={disabled}
+          className={cn(
+            fieldInputClass,
+            'flex items-center justify-between gap-2 text-left',
+            disabled && 'cursor-not-allowed opacity-60',
+          )}
+        >
+          {multiple ? (
+            /* 已选 chip 单行裁切：不换行、超出直接隐藏（不滚动、不撑高组件） */
+            <span className="flex min-w-0 flex-1 flex-nowrap items-center gap-1 overflow-hidden">
+              {selected.length === 0 ? (
+                <span className="truncate text-muted-foreground">{emptyText}</span>
+              ) : (
+                selected.map((v) => {
+                  const key = String(v);
+                  return (
+                    <span
+                      key={key}
+                      className="inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-full border border-primary/40 bg-primary/5 px-2 py-0.5 text-xs font-medium text-primary/80"
+                    >
+                      {idToName.get(key) ?? key}
+                    </span>
+                  );
+                })
+              )}
             </span>
-            <Folder className="h-4 w-4 shrink-0 text-muted-foreground" />
-          </button>
-        </PopoverTrigger>
-        <PopoverContent className="w-80" align="start">
-          <div className="mb-2 text-xs font-medium text-muted-foreground">
-            选择部门（当前组织：{orgs.find((o) => o.id === orgId)?.name ?? '—'}）
+          ) : (
+            <span
+              className={cn(
+                'min-w-0 flex-1 truncate',
+                singleName ? 'text-foreground' : 'text-muted-foreground',
+              )}
+            >
+              {singleName || emptyText}
+            </span>
+          )}
+          <Folder className="h-4 w-4 shrink-0 text-muted-foreground" />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent className="w-80" align="start">
+        {multiple ? (
+          <div className="mb-2 flex items-center gap-2">
+            <button
+              type="button"
+              onClick={selectAll}
+              disabled={disabled}
+              className={cn(actionBtnClass, disabled && 'cursor-not-allowed opacity-60')}
+            >
+              全选
+            </button>
+            <button
+              type="button"
+              onClick={clearAll}
+              disabled={disabled}
+              className={cn(actionBtnClass, disabled && 'cursor-not-allowed opacity-60')}
+            >
+              清空
+            </button>
           </div>
-          <div className="max-h-64 overflow-auto rounded-md border border-border/60 p-1">
-            {tree.length === 0 ? (
-              <div className="px-2 py-3 text-center text-xs text-muted-foreground">该组织暂无部门</div>
-            ) : (
-              renderNodes(tree, 0)
-            )}
-          </div>
-        </PopoverContent>
-      </Popover>
-    </div>
+        ) : (
+          <div className="mb-2 text-xs font-medium text-muted-foreground">选择部门（单选）</div>
+        )}
+        {loading ? (
+          <div className="px-2 py-3 text-center text-xs text-muted-foreground">加载中…</div>
+        ) : forest.length === 0 ? (
+          <div className="px-2 py-3 text-center text-xs text-muted-foreground">暂无可选部门</div>
+        ) : (
+          <div className="max-h-64 overflow-auto rounded-md border border-border/60 p-1">{renderNodes(forest, 0)}</div>
+        )}
+      </PopoverContent>
+    </Popover>
   );
 }

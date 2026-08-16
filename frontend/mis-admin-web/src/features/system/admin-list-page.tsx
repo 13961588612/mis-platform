@@ -22,7 +22,6 @@ import { PageHeader } from '@/components/common/page-header';
 import { buildAppBreadcrumbs } from '@/components/common/app-breadcrumbs';
 import { DetailDefList } from '@/components/common/detail-def-list';
 import { DeptTreeSelect } from '@/components/common/dept-tree-select';
-import { DeptTreeMulti } from '@/components/common/dept-tree-multi';
 import { PostTypeTreeSelect } from '@/components/common/post-type-tree-select';
 import { StatusBadge } from '@/components/common/list-page-skeleton';
 import { SortIndicator } from '@/components/common/sort-indicator';
@@ -443,7 +442,8 @@ function FieldControl({
     return (
       <div className={cn(SHEET_FORM_FIELD, 'min-w-0 self-start')}>
         {label}
-        <DeptTreeMulti
+        <DeptTreeSelect
+          multiple
           value={current}
           onChange={(v) => onChange(v)}
           placeholder={field.placeholder}
@@ -506,93 +506,133 @@ function FieldControl({
   );
 }
 
-/** 筛选栏多选项：下拉 Popover 多选（值以数组形式存于 draft）。 */
+/**
+ * 筛选栏选项下拉：单选 / 多选由 {@code multiple} 控制（默认多选，兼容 orgIds 现有接线）。
+ *
+ * <p>多选：值以数组形式存于 draft，复选框 toggle + 全选/清空；触发器内 chip <b>单行裁切</b>
+ * （不换行、溢出直接隐藏）。单选：值以标量存于 draft，点选项即选中并关闭 Popover，
+ * 触发器显示选中 label；无全选/清空。可复用于表单单值下拉（如单组织选择）。
+ */
 function FilterMultiSelect({
   field,
   value,
   onChange,
+  multiple = true,
 }: {
   field: AdminField;
   value: unknown;
   onChange: (v: unknown) => void;
+  multiple?: boolean;
 }) {
-  const current = Array.isArray(value) ? (value as (string | number)[]) : [];
-  const toggle = (v: string | number) => {
-    onChange(current.includes(v) ? current.filter((x) => x !== v) : [...current, v]);
-  };
+  const [open, setOpen] = useState(false);
   const options = field.options ?? [];
+  /** 归一化选中值：单选视为「0/1 元数组」，两模式共用后续渲染逻辑 */
+  const current: (string | number)[] = multiple
+    ? Array.isArray(value)
+      ? (value as (string | number)[])
+      : []
+    : value == null || value === ''
+      ? []
+      : [value as string | number];
+  const idToLabel = (v: string | number) => options.find((o) => String(o.value) === String(v))?.label ?? String(v);
+
+  /** 点选项：单选 → 覆盖并关弹窗；多选 → 增删 */
+  const pick = (v: string | number) => {
+    if (!multiple) {
+      onChange(v);
+      setOpen(false);
+      return;
+    }
+    onChange(current.some((x) => String(x) === String(v)) ? current.filter((x) => String(x) !== String(v)) : [...current, v]);
+  };
   const selectAll = () => onChange(options.map((o) => o.value));
   const clearAll = () => onChange([]);
-  const idToLabel = (v: string | number) => options.find((o) => o.value === v)?.label ?? String(v);
+  const emptyText = multiple ? '请选择（可多选）' : '请选择';
 
   return (
-    <Popover>
+    <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
         <button
           type="button"
           className={cn(fieldInputClass, 'flex items-center justify-between gap-2 text-left')}
         >
-          {/* 选中项 chip 收在触发器内部，max-h 约束不溢出组件 */}
-          <span className={cn('flex flex-1 flex-wrap gap-1 overflow-auto', current.length === 0 ? 'block' : 'max-h-20')}>
-            {current.length === 0 ? (
-              <span className="text-muted-foreground">请选择（可多选）</span>
-            ) : (
-              current.map((v) => (
-                <span
-                  key={String(v)}
-                  className="inline-flex items-center gap-1 rounded-full border border-primary/40 bg-primary/5 px-2 py-0.5 text-xs font-medium text-primary/80"
-                >
-                  {idToLabel(v)}
-                </span>
-              ))
-            )}
-          </span>
+          {multiple ? (
+            /* 已选 chip 单行裁切：不换行、超出直接隐藏（不滚动、不撑高组件） */
+            <span className="flex min-w-0 flex-1 flex-nowrap items-center gap-1 overflow-hidden">
+              {current.length === 0 ? (
+                <span className="truncate text-muted-foreground">{emptyText}</span>
+              ) : (
+                current.map((v) => (
+                  <span
+                    key={String(v)}
+                    className="inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-full border border-primary/40 bg-primary/5 px-2 py-0.5 text-xs font-medium text-primary/80"
+                  >
+                    {idToLabel(v)}
+                  </span>
+                ))
+              )}
+            </span>
+          ) : (
+            <span
+              className={cn(
+                'min-w-0 flex-1 truncate',
+                current.length > 0 ? 'text-foreground' : 'text-muted-foreground',
+              )}
+            >
+              {current.length > 0 ? idToLabel(current[0]) : emptyText}
+            </span>
+          )}
           <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground" />
         </button>
       </PopoverTrigger>
       <PopoverContent className="w-72" align="start">
-        <div className="mb-2 flex items-center gap-2">
-          <button
-            type="button"
-            onClick={selectAll}
-            className="rounded border border-input px-2.5 py-1 text-xs font-medium text-muted-foreground transition hover:border-primary/40 hover:text-foreground"
-          >
-            全选
-          </button>
-          <button
-            type="button"
-            onClick={clearAll}
-            disabled={current.length === 0}
-            className="rounded border border-input px-2.5 py-1 text-xs font-medium text-muted-foreground transition hover:border-primary/40 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            清空
-          </button>
-        </div>
+        {multiple ? (
+          <div className="mb-2 flex items-center gap-2">
+            <button
+              type="button"
+              onClick={selectAll}
+              className="rounded border border-input px-2.5 py-1 text-xs font-medium text-muted-foreground transition hover:border-primary/40 hover:text-foreground"
+            >
+              全选
+            </button>
+            <button
+              type="button"
+              onClick={clearAll}
+              disabled={current.length === 0}
+              className="rounded border border-input px-2.5 py-1 text-xs font-medium text-muted-foreground transition hover:border-primary/40 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              清空
+            </button>
+          </div>
+        ) : null}
         {options.length === 0 ? (
           <div className="px-2 py-3 text-center text-xs text-muted-foreground">暂无可选项</div>
         ) : (
           <div className="max-h-60 overflow-auto rounded-md border border-border/60 p-1">
             {options.map((o) => {
-              const on = current.includes(o.value);
+              const on = current.some((x) => String(x) === String(o.value));
               return (
                 <button
                   key={String(o.value)}
                   type="button"
-                  onClick={() => toggle(o.value)}
+                  onClick={() => pick(o.value)}
                   className={cn(
                     'flex w-full items-center gap-2 rounded px-2 py-1 text-left text-sm transition hover:bg-muted',
                     on && 'bg-primary/10 font-medium text-primary',
                   )}
                   aria-pressed={on}
                 >
-                  <span
-                    className={cn(
-                      'inline-flex h-4 w-4 shrink-0 items-center justify-center rounded border',
-                      on ? 'border-primary bg-primary text-primary-foreground' : 'border-input',
-                    )}
-                  >
-                    {on ? <Check className="h-3 w-3" /> : null}
-                  </span>
+                  {/* 复选框仅多选形态出现；单选靠高亮表达选中态 */}
+                  {multiple ? (
+                    <span
+                      className={cn(
+                        'inline-flex h-4 w-4 shrink-0 items-center justify-center rounded border',
+                        on ? 'border-primary bg-primary text-primary-foreground' : 'border-input',
+                      )}
+                    >
+                      {on ? <Check className="h-3 w-3" /> : null}
+                    </span>
+                  ) : null}
                   <span className="truncate">{o.label}</span>
                 </button>
               );
@@ -1135,13 +1175,20 @@ export function AdminListPage({ def, headerExtra }: { def: AdminPageDef; headerE
                         onChange={(v) => setDraft((prev) => ({ ...prev, [f.key]: v }))}
                       />
                     ) : f.type === 'dept-tree-multi' ? (
-                      <DeptTreeMulti
+                      <DeptTreeSelect
+                        multiple
                         value={
                           draft[f.key] && Array.isArray(draft[f.key])
                             ? (draft[f.key] as (string | number)[])
                             : []
                         }
                         onChange={(v) => setDraft((prev) => ({ ...prev, [f.key]: v }))}
+                        placeholder={f.placeholder}
+                      />
+                    ) : f.type === 'dept-tree' ? (
+                      <DeptTreeSelect
+                        value={draft[f.key] == null ? '' : (draft[f.key] as string | number)}
+                        onChange={(v) => setDraft((prev) => ({ ...prev, [f.key]: v == null ? '' : v }))}
                         placeholder={f.placeholder}
                       />
                     ) : (
