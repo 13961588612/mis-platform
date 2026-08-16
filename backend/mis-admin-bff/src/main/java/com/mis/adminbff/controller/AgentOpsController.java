@@ -27,7 +27,7 @@ import java.util.Map;
  * 本模块配 {@code api-permission.deny-unmapped: true}（<b>未映射即拒绝</b>，这是
  * {@code application.yml} 的实际默认值，不是 false）：路径写错会直接 403，而非「悄悄不判权」。
  * 因此每条 {@code @RequestMapping} 的路径与方法都照 SQL 一字未改；新增端点
- * （如 #11 {@code builder/chat}）必须同步在 {@code sys_api} 注册（见 V46），否则上线即 403。
+ * （如 #11 {@code builder/chat}）必须同步在 {@code sys_api} 注册（见 V51），否则上线即 403。
  *
  * <h2>为什么把 50+ 端点塞进一个 Controller</h2>
  * 与 {@code KbSynonymController}「自成一体的子域要独立」相反，这里是<b>同一功能域的
