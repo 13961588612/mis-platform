@@ -31,7 +31,7 @@ import { DeptTypeTreeSelect } from '@/components/common/dept-type-tree-select';
 import {
   buildOrgChain,
   normalizeDeptNodes,
-  normalizePierceForest,
+  normalizePierceForestSkipTopLevel,
   type DeptTreeRow,
 } from './dept-tree-types';
 import { usePierceTree } from './use-pierce-tree';
@@ -98,11 +98,11 @@ export function DeptTreePage({ headerExtra }: { headerExtra?: ReactNode }) {
     () => [
       { key: 'name', label: '部门名称' },
       { key: 'code', label: '编码' },
-      { key: 'establishmentCount', label: '编制数' },
       { key: 'deptTypeName', label: '部门类型' },
       { key: 'isLeaf', label: '是否末级' },
       { key: 'linkedOrg', label: '对应组织' },
       { key: 'postCount', label: '岗位数' },
+      { key: 'establishmentCount', label: '编制数' },
       { key: 'filled', label: '已任职' },
       { key: 'vacant', label: '空缺' },
       { key: 'sort', label: '排序' },
@@ -330,7 +330,7 @@ export function DeptTreePage({ headerExtra }: { headerExtra?: ReactNode }) {
       if (linkedOrgId) {
         const cachedForest = piercedCache[linkedOrgId];
         if (cachedForest) {
-          childRows = normalizePierceForest(cachedForest, buildOrgChain(row.orgChain, linkedOrgId));
+          childRows = normalizePierceForestSkipTopLevel(cachedForest, buildOrgChain(row.orgChain, linkedOrgId));
         } else {
           childRows = [];
           pierceLoading = isPierceLoading(linkedOrgId);
@@ -377,11 +377,8 @@ export function DeptTreePage({ headerExtra }: { headerExtra?: ReactNode }) {
             <td className="overflow-hidden whitespace-nowrap px-3 py-2 align-middle font-mono text-xs">
               {row.code ?? '—'}
             </td>
-            <td className="overflow-hidden whitespace-nowrap px-3 py-2 align-middle text-right tabular-nums">
-              {readOnly ? <span className="text-muted-foreground">—</span> : row.establishmentCount ?? 0}
-            </td>
             <td className="overflow-hidden whitespace-nowrap px-3 py-2 align-middle">
-              {readOnly ? <span className="text-muted-foreground">—</span> : row.deptTypeName ?? '—'}
+              {row.deptTypeName ?? '—'}
             </td>
             <td className="overflow-hidden whitespace-nowrap px-3 py-2 align-middle">
               {readOnly ? (
@@ -409,23 +406,23 @@ export function DeptTreePage({ headerExtra }: { headerExtra?: ReactNode }) {
                 </span>
               )}
             </td>
-            {/* 规则 2.2 / G5：未加载编制时默认 0；穿透只读行无本地编制数据 → 「—」 */}
+            {/* 规则 2.2 / G5：未加载编制时默认 0；穿透只读行亦显 0（需求 2 第②条：穿透只读行岗位数穿透显 0） */}
             <td className="overflow-hidden whitespace-nowrap px-3 py-2 align-middle text-center">
-              {readOnly ? <span className="text-muted-foreground">—</span> : vo ? vo.postCount : 0}
+              {vo ? vo.postCount : 0}
+            </td>
+            {/* T04：只读（穿透）行编制数显 0（establishmentCount 为 null → 0），不再显示「—」 */}
+            <td className="overflow-hidden whitespace-nowrap px-3 py-2 align-middle text-right tabular-nums">
+              {row.establishmentCount ?? 0}
             </td>
             <td className="overflow-hidden whitespace-nowrap px-3 py-2 align-middle text-center">
-              {readOnly ? (
-                <span className="text-muted-foreground">—</span>
-              ) : vo ? (
+              {vo ? (
                 <span className="rounded-md bg-success/10 px-2 py-0.5 text-xs text-success">{vo.filledCount}</span>
               ) : (
                 0
               )}
             </td>
             <td className="overflow-hidden whitespace-nowrap px-3 py-2 align-middle text-center">
-              {readOnly ? (
-                <span className="text-muted-foreground">—</span>
-              ) : vo ? (
+              {vo ? (
                 <span
                   className={cn(
                     'rounded-md px-2 py-0.5 text-xs',
@@ -747,7 +744,7 @@ export function DeptTreePage({ headerExtra }: { headerExtra?: ReactNode }) {
                   ))}
               </select>
               <p className="mt-1 text-xs text-muted-foreground">
-                打标后，穿透浏览到该部门可「下钻」到对应组织的顶级部门树；不可选当前组织自身
+                打标后，穿透浏览到该部门可「下钻」到对应组织的下级部门（不显示对端顶级部门）；不可选当前组织自身
               </p>
             </div>
             <div className={SHEET_FORM_FIELD}>

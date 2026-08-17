@@ -29,7 +29,9 @@ export interface DeptTreeRow {
   linkedOrgId: string | null;
   /** 链接（对应）组织名。 */
   linkedOrgName: string | null;
-  /** 部门类型名（仅本地行有值；穿透 VO 无此字段 → null，渲染「—」）。 */
+  /** 部门类型 id（本地行来自 DeptNode.deptTypeId；穿透行来自 DeptPierceNode.deptTypeId）。 */
+  deptTypeId: string | null;
+  /** 部门类型名（本地行有值；穿透 VO 经 Part1 修复后同样携带，渲染「—」仅当真为 null）。 */
   deptTypeName: string | null;
   /** 编制数（仅本地行有值；穿透行 null → 渲染「—」）。 */
   establishmentCount: number | null;
@@ -92,6 +94,7 @@ export function normalizeDeptNode(node: DeptNode, chain: string[] = []): DeptTre
     status: node.status,
     linkedOrgId: node.linkedOrgId ?? null,
     linkedOrgName: node.linkedOrgName ?? null,
+    deptTypeId: node.deptTypeId ?? null,
     deptTypeName: node.deptTypeName ?? null,
     establishmentCount: node.establishmentCount ?? null,
     isLeaf: node.isLeaf ?? null,
@@ -127,8 +130,9 @@ export function normalizePierceNode(node: DeptPierceNode, chain: string[]): Dept
     status: node.status,
     linkedOrgId: node.linkedOrgId ?? null,
     linkedOrgName: node.linkedOrgName ?? null,
-    // 穿透 VO 无部门类型 / 编制数 / 是否末级字段（D8：不改后端），统一渲染「—」
-    deptTypeName: null,
+    // 穿透 VO 经 Part1 修复后携带部门类型（deptTypeId/deptTypeName），仅真为 null 时渲染「—」
+    deptTypeId: node.deptTypeId ?? null,
+    deptTypeName: node.deptTypeName ?? null,
     establishmentCount: null,
     isLeaf: null,
     sourceOrgName: node.orgName ?? null,
@@ -143,4 +147,28 @@ export function normalizePierceNode(node: DeptPierceNode, chain: string[]): Dept
 /** 穿透 forest → 只读渲染行数组（全深度递归，共享同一祖先组织链）。 */
 export function normalizePierceForest(nodes: DeptPierceNode[], chain: string[]): DeptTreeRow[] {
   return nodes.map((n) => normalizePierceNode(n, chain));
+}
+
+/**
+ * 下钻穿透 forest → 只读渲染行，但压平「对端组织顶级部门」这一层。
+ *
+ * <p>用户诉求：下钻时不显示对应组织的顶级部门（parentId=0 的根部门），直接展示其下级部门。
+ * 仅对传入的 forest 根（即顶级部门）做条件跳过：
+ * <ul>
+ *   <li>顶级部门自身无 linkedOrgId → 不渲染该行，用 {@link normalizePierceForest} 将其 children 提升为直接子行；</li>
+ *   <li>顶级部门自身 linkedOrgId 非空（罕见：根部门还链接更深组织）→ 保留该行，避免丢失继续下钻入口。</li>
+ * </ul>
+ * 第二层及更深层用现有 {@link normalizePierceForest}/{@link normalizePierceNode} 正常保留，不再跳过。
+ */
+export function normalizePierceForestSkipTopLevel(nodes: DeptPierceNode[], chain: string[]): DeptTreeRow[] {
+  const rows: DeptTreeRow[] = [];
+  for (const top of nodes) {
+    if (!top.linkedOrgId) {
+      // 跳过顶级部门行，提升其子部门为下钻入口的直接子行
+      rows.push(...normalizePierceForest(top.children ?? [], buildOrgChain(chain, top.orgId)));
+    } else {
+      rows.push(normalizePierceNode(top, chain));
+    }
+  }
+  return rows;
 }
