@@ -103,7 +103,7 @@ export const SYSTEM_PAGE_DEFS: Record<string, AdminPageDef> = {
     /** 岗位下拉来自真实 sys_post */
     postOptionsLoader: loadPostOptions,
     filters: [
-      { key: 'real_name', label: '姓名', type: 'text', col: 4 },
+      { key: 'real_name', label: '姓名', type: 'text', col: 2 },
       { key: 'deptId', label: '主部门', type: 'select', col: 4, optionsFrom: 'dept' },
       { key: 'status', label: '状态', type: 'select', col: 2, options: STATUS_OPTS },
     ],
