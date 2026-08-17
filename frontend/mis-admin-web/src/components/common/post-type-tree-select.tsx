@@ -189,7 +189,7 @@ export function PostTypeTreeSelect({
         : '请选择岗位类型（树形·仅末级）';
 
   return (
-    <Popover open={open} onOpenChange={(o) => !disabled && setOpen(o)}>
+    <Popover modal open={open} onOpenChange={(o) => !disabled && setOpen(o)}>
       <PopoverTrigger asChild>
         <button
           type="button"
@@ -200,7 +200,7 @@ export function PostTypeTreeSelect({
             disabled && 'cursor-not-allowed opacity-60',
           )}
         >
-          <span className={cn(selectedName ? 'text-foreground' : 'text-muted-foreground')}>
+          <span className={cn('min-w-0 flex-1 truncate', selectedName ? 'text-foreground' : 'text-muted-foreground')}>
             {selectedName || placeholder || defaultPlaceholder}
           </span>
           <Layers className="h-4 w-4 shrink-0 text-muted-foreground" />

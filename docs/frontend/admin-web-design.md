@@ -183,6 +183,8 @@ flowchart TD
 
 定义：`components/common/sheet-form-styles.ts`。参照：`features/kb/library/kb-library-page.tsx`。
 
+**Sheet 内嵌套 Popover（树选择器等）：** 点击 portaled 浮层勿当作 Sheet「外部交互」关闭。`components/ui/sheet.tsx` 已对 `[data-radix-popper-content-wrapper]` 等目标 `preventDefault`；树选择器用 `Popover modal`，浮层 `z-[60]`。管理列表默认表单 Sheet 宽约 `40rem`。
+
 ### 4.3 响应式
 
 | 断点 | 行为 |

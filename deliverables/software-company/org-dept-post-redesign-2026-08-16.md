@@ -19,7 +19,7 @@
 | 部门管理页（3 Tab） | `frontend/mis-admin-web/src/features/system/dept/dept-tree-page.tsx` | 单页 `DeptTreePage` + 顶部 `segmented`（组织架构/岗位编制/组织穿透）；组织架构= `TreeTable`+CRUD；岗位编制= 扁平部门列表 + `fetchDeptStaffing(id)` 懒加载 `DeptStaffingVO`；穿透= `fetchDeptPierce(orgId)` 钻取栈（只读） |
 | 通用列表引擎 | `frontend/mis-admin-web/src/features/system/admin-list-page.tsx` | `AdminListPage`：支持 `deptOptionsLoader`/`postOptionsLoader`/`postTypeOptionsLoader`/`orgOptionsLoader`；`optionsFrom: 'dept'｜'post'｜'post-type'｜'org'`；字段类型含 `dept-tree`、`select`、`multiselect`、`assignments` |
 | 页面定义 | `frontend/mis-admin-web/src/features/system/page-defs.ts` | `/system/post` 已定义：`filters` 含 `name`(text)、`deptIds`(**multiselect + optionsFrom:'dept' 扁平下拉**)、`orgIds`(**multiselect + optionsFrom:'org' 扁平下拉**)、`status`；`form` 含 `deptId`(dept-tree 单值)、`postTypeId`(select + optionsFrom:'post-type' 扁平下拉) |
-| 树形单选组件 | `frontend/mis-admin-web/src/components/common/dept-tree-select.tsx` | `DeptTreeSelect`：Radix `Popover` 内嵌**原生 `<select>` 选组织** + 部门树；提交单 `deptId` |
+| 树形单选组件 | `frontend/mis-admin-web/src/components/common/dept-tree-select.tsx` | `DeptTreeSelect`：跨组织聚合为**顶级部门森林**（无组织分组层）；过滤 `linkedOrgId` 整树；支持单选/多选 |
 | 树表组件 | `frontend/mis-admin-web/src/components/common/tree-table.tsx` | `TreeTable`（部门树/穿透树复用） |
 | 岗位类型管理页 | `frontend/mis-admin-web/src/features/system/post/post-type-manage-page.tsx` | 已存在独立页 `PostTypeManagePage`：列=编码/名称/排序/状态/引用岗位数；CRUD；变更后 `bumpPostTypeVersion()` 驱动岗位引擎刷新下拉 |
 | 岗位类型版本 store | `frontend/mis-admin-web/src/features/system/post/post-type-version-store.ts` | zustand store，bump 后重挂载下拉 |
@@ -166,31 +166,31 @@ UPDATE sys_post_type SET is_leaf = 1 WHERE is_leaf IS NULL;
 - 见 E.3 待确认。
 
 ### C.2 查询条件「部门」→ 下拉树（3.2）
-当前 `deptIds` 为扁平多选下拉（部门多时长列表难用）。改为**下拉树 Popover（多选、并集过滤）**：
-- 引擎 `admin-list-page.tsx`：新增字段类型 `dept-tree-multi`（或给现有 `dept-tree` 加 `multiple` 开关）。值类型 `string[]`，提交 `applied.deptIds`（数组，沿用 `serverFilterKeys` 与 `toParams` 逗号序列化，后端 `deptIds` 并集语义不变）。
-- 组件：扩展 `DeptTreeSelect` 支持 `multiple` 模式（复选 + 选中以 chip 展示 + 保持 Popover 打开），或新建 `DeptTreeSelectMulti`。推荐**给 `DeptTreeSelect` 加 `multiple?: boolean` 属性**，单值模式（新建表单）不变。
-- 过滤渲染：`page-defs.ts` 的 `filters.deptIds` 由 `type:'multiselect', optionsFrom:'dept'` 改为 `type:'dept-tree-multi'`（内部自行拉 `fetchDeptTree(默认org)`）。
 
-### C.3 新建岗位「所属部门」弹窗消失 Bug —— 根因 + 修复
+**已落地（2026-08-17）：** `DeptTreeSelect`（`multiple`）用于筛选 `deptIds`。
 
-**现象**：先选组织 → 点组织里弹出部门选择组件，弹窗随即消失，无法选部门。
+- 跨组织并行 `fetchDeptTree`，合并为**顶级部门**森林（**不以组织作第一层**）。
+- **过滤** `linkedOrgId` 非空的穿透锚点部门及其**整棵子树**（子部门不上提、不可选）。
+- 多选：复选 + 全选/清空；触发器 chip 单行截断。
 
-**根因（高置信）**：`DeptTreeSelect`（见 `dept-tree-select.tsx`）把**原生 `<select>` 组织选择器放在 Radix `Popover` 的 `PopoverContent` 内部**。Radix Popover 基于 `DismissableLayer` 监听"focus-outside / pointer-down-outside"；原生 `<select>` 展开后的下拉项是**操作系统级浮层，不在 Popover DOM 内**。用户点击原生 `<select>` 选项时，Radix 将其判定为"Popover 外交互" → 触发关闭（`setOpen(false)`）。同时 `components/ui/` 下**没有 Radix `Select` 组件**可替代，所以不能简单换组件了事。
+### C.3 新建/编辑 Sheet 内嵌套 Popover 误关 —— 根因 + 修复
 
-**修复方案（推荐）**：**将组织选择器移出 Popover**。重构 `DeptTreeSelect`：
-- Popover 之外（组件内、Trigger 旁）渲染一个独立的组织 `<select>`（或胶囊按钮组）；
-- `PopoverContent` 内**只保留部门树**，不含任何原生 `<select>`；
-- 组织切换 → 重新拉取该组织部门树（`fetchDeptTree(orgId)`）→ 更新树；Popover 仅承载部门树，不再因原生 select 而误关。
-- 这样"先选组织 → 再点部门"流程顺畅，弹窗不再消失。
+**现象（2026-08-17）：** 新建岗位侧栏中点击「所属部门」「岗位类型」，下拉一打开即消失，无法点选。
 
-**备选方案**：保持 Popover 内选组织，但把原生 `<select>` 换成**DOM 按钮列表**（组织作为 Popover 内的一列 `<button>`，非原生 select），Radix 能正确追踪 DOM 焦点，不会误关。缺点：布局改动较大。
+**根因：** 表单在 Radix **Sheet（Dialog）** 内，树选择器为 portaled **Popover**。点击 Popover 内容被 Dialog 判定为 `pointer/interact-outside` → Sheet 关闭/打断，表现为下拉立刻消失。
 
-> 推荐方案改动最小、最稳健，且让组织选择常驻可见，体验更好。
+**修复（已落地）：**
+1. `components/ui/sheet.tsx`：`onPointerDownOutside` / `onFocusOutside` / `onInteractOutside` 若目标落在 `[data-radix-popper-content-wrapper]` 等浮层上则 `preventDefault`。
+2. `DeptTreeSelect` / `PostTypeTreeSelect`：`Popover modal`；触发器文案 `truncate`。
+3. `popover.tsx`：浮层 `z-[60]`，高于 Sheet 内容层便于点击。
+4. 管理列表新建/编辑 Sheet 加宽至约 `40rem`（`admin-list-page`）。
+
+> 历史方案「组织 select 移出 Popover」已过时：当前不再在部门树内展示组织层。
 
 ### C.4 新建岗位「岗位类型」→ 下拉树、单选、仅末级可选
-- `page-defs.ts` 的 `form.postTypeId`：`type:'select', optionsFrom:'post-type'` → `type:'post-type-tree'`（详见 B.5）。
-- 引擎 `FieldControl` 增加 `post-type-tree` 分支 → 渲染 `PostTypeTreeSelect`（单选、仅 `isLeaf=1` 可选）。
-- 新建/编辑提交：`createPost`/`updatePost` 仍只传 `postTypeId`（叶子 id），后端契约不变。
+- `page-defs.ts` 的 `form.postTypeId`：`type:'post-type-tree'` → `PostTypeTreeSelect`（`selectMode='leaf'`）。
+- 嵌套 Sheet 选择交互同 C.3 修复。
+- 提交仍只传叶子 `postTypeId`。
 
 ---
 
@@ -264,7 +264,7 @@ graph TD
 | E.3 | 「所属组织」过滤单选还是多选？ | **多选下拉列表**（当前已是，与后端 `orgIds` 数组契约一致）；如需单选请告知 | C.1 |
 | E.4 | 合并后组织穿透能力如何保留？ | **行内"下钻"按钮 → 只读穿透抽屉**（推荐 A）；备选：保留独立穿透 Tab | A.6 |
 | E.5 | 岗位类型树下拉是否允许选非末级？ | **岗位表单仅末级**；**上级类型选择仅非末级**（`selectMode`） | B.5/C.4 |
-| E.6 | 新建岗位"所属部门"弹窗 bug 修复方式？ | **组织选择器移出 Popover**（推荐 C.3）；备选：Popover 内改用 DOM 按钮列表 | C.3 |
+| E.6 | 新建岗位部门/岗位类型下拉误关？ | **Sheet 忽略 Popover 外部交互**（C.3，2026-08-17） | C.3 |
 | E.7 | 部门查询下拉树单选还是多选？ | **多选**（与现有 `deptIds` 并集过滤契约一致）；单组织场景如需单选可后加 | C.2 |
 | E.8 | 管理页是否展示"层级/上级"列？ | 树表展示层级与**末级**；默认折叠顶级；去掉「上级类型」「引用岗位数」；Sheet 可编辑 isLeaf | B.5 |
 | E.9 | `is_leaf` 推导还是显式？ | **显式可写**（2026-08-17）；取消 `refreshLeaf` | B.2/B.4 |
@@ -330,8 +330,8 @@ classDiagram
     +value
     +onChange
     +multiple: boolean
-    +组织选择器(移出Popover)
-    +部门树Popover
+    +顶级部门森林(无组织层)
+    +过滤 linkedOrgId 整树
   }
   class PostTypeTreeSelect {
     +value

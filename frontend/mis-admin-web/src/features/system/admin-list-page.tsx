@@ -1482,7 +1482,7 @@ export function AdminListPage({ def, headerExtra }: { def: AdminPageDef; headerE
           side="right"
           className={cn(
             'flex w-full flex-col p-0',
-            splitAssist ? 'sm:max-w-4xl' : 'max-w-[32rem] sm:max-w-[32rem]',
+            splitAssist ? 'sm:max-w-4xl' : 'max-w-[40rem] sm:max-w-[40rem]',
           )}
         >
           <SheetHeader className="border-b px-5 py-4">

@@ -8,6 +8,16 @@ const SheetTrigger = DialogPrimitive.Trigger;
 const SheetClose = DialogPrimitive.Close;
 const SheetPortal = DialogPrimitive.Portal;
 
+/** 点到 portaled 浮层（Popover/Select 等）时勿当作 Sheet 外部点击，否则嵌套选择器会立刻关掉。 */
+function isPortaledFloatingTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof Element)) return false;
+  return Boolean(
+    target.closest('[data-radix-popper-content-wrapper]') ||
+      target.closest('[data-radix-select-content]') ||
+      target.closest('[data-radix-menu-content]'),
+  );
+}
+
 const SheetOverlay = React.forwardRef<
   React.ElementRef<typeof DialogPrimitive.Overlay>,
   React.ComponentPropsWithoutRef<typeof DialogPrimitive.Overlay>
@@ -32,7 +42,7 @@ const SheetContent = React.forwardRef<
     /** 关闭时也保留 DOM（如 Copilot iframe 需保持会话状态） */
     forceMount?: true;
   }
->(({ className, children, side = 'right', forceMount, ...props }, ref) => (
+>(({ className, children, side = 'right', forceMount, onPointerDownOutside, onFocusOutside, onInteractOutside, ...props }, ref) => (
   <SheetPortal forceMount={forceMount}>
     <SheetOverlay forceMount={forceMount} />
     <DialogPrimitive.Content
@@ -49,6 +59,18 @@ const SheetContent = React.forwardRef<
           'inset-y-0 left-0 max-w-xs border-r data-[state=closed]:slide-out-to-left data-[state=open]:slide-in-from-left sm:max-w-sm',
         className,
       )}
+      onPointerDownOutside={(e) => {
+        if (isPortaledFloatingTarget(e.target)) e.preventDefault();
+        onPointerDownOutside?.(e);
+      }}
+      onFocusOutside={(e) => {
+        if (isPortaledFloatingTarget(e.target)) e.preventDefault();
+        onFocusOutside?.(e);
+      }}
+      onInteractOutside={(e) => {
+        if (isPortaledFloatingTarget(e.target)) e.preventDefault();
+        onInteractOutside?.(e);
+      }}
       {...props}
     >
       {children}
