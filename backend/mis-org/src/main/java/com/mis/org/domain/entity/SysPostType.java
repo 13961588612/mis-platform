@@ -29,11 +29,14 @@ public class SysPostType {
     @Column(nullable = false)
     private Integer status;
 
-    /** V47 多层化：父级 id，0=根级（无父）。 */
+    /** 父级 id，0=根级（无父）。 */
     @Column(name = "parent_id", nullable = false)
     private Long parentId;
 
-    /** V47 多层化：末级标记，1=末级（可被选作岗位类型）/ 0=非末级（仅作分类）。后端单一真源维护。 */
+    /**
+     * 末级标记（显式可写字段，不按是否有子节点推导）：
+     * 1=末级（可被岗位选用）/ 0=非末级（分类，可挂子类型）。
+     */
     @Column(name = "is_leaf", nullable = false)
     private Integer isLeaf;
 

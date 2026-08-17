@@ -31,7 +31,7 @@ import java.util.stream.Collectors;
 
 /**
  * 岗位维护：CRUD + 启停 + 按部门/类型筛选 + 删除引用校验（物理删）。
- * V47 新增岗位类型多层化：父级树 + 末级标记 + 防自环。
+ * 岗位类型多层化：父级树 + 显式 isLeaf（不按子节点推导）+ 防自环。
  */
 @Service
 public class PostService {
@@ -235,8 +235,8 @@ public class PostService {
     }
 
     /**
-     * V47 新增岗位类型：code 租户内唯一；默认挂根级（parentId=0，由请求指定），自身为末级（isLeaf=1）。
-     * 创建后刷新父节点 isLeaf=0（父不再末级）。
+     * 新增岗位类型：code 租户内唯一；parentId 默认 0；isLeaf 显式写入（默认 1）。
+     * 挂到非根父级时，父必须已是非末级（分类）；不再推导/回写父 isLeaf。
      */
     @Transactional
     public PostTypeVO createType(PostTypeCreateRequest request) {
@@ -244,13 +244,9 @@ public class PostService {
                 .ifPresent(t -> {
                     throw new BusinessException(ResultCode.VALIDATION_ERROR, "岗位类型编码已存在");
                 });
-        if (request.parentId() != null && request.parentId() != 0) {
-            SysPostType parent = postTypeRepository.findById(request.parentId())
-                    .orElseThrow(() -> new BusinessException(ResultCode.NOT_FOUND, "上级岗位类型不存在"));
-            if (!parent.getTenantId().equals(request.tenantId())) {
-                throw new BusinessException(ResultCode.VALIDATION_ERROR, "上级岗位类型不属于该租户");
-            }
-        }
+        Long parentId = request.parentId() != null ? request.parentId() : 0L;
+        requireParentAllowsChildren(request.tenantId(), parentId);
+        int isLeaf = normalizeIsLeaf(request.isLeaf(), 1);
 
         Instant now = Instant.now();
         SysPostType type = new SysPostType();
@@ -260,31 +256,23 @@ public class PostService {
         type.setName(request.name().trim());
         type.setSort(request.sort() != null ? request.sort() : 0);
         type.setStatus(request.status() != null ? request.status() : 1);
-        type.setParentId(request.parentId() != null ? request.parentId() : 0L);
-        type.setIsLeaf(1);
+        type.setParentId(parentId);
+        type.setIsLeaf(isLeaf);
         type.setCreatedAt(now);
         type.setUpdatedAt(now);
         postTypeRepository.save(type);
-
-        // 挂到非根父级时，刷新父 isLeaf=0
-        Long parentId = type.getParentId();
-        if (parentId != null && parentId != 0) {
-            refreshLeaf(parentId);
-        }
         return toTypeVo(type, 0L);
     }
 
     /**
-     * V47 编辑岗位类型：name/sort/status + 可选变更上级（parentId）。
-     * 变更上级时校验不能挂到自身或自身子孙（防环）；新旧父级均刷新 isLeaf。
+     * 编辑岗位类型：name/sort/status + 可选 parentId / isLeaf。
+     * parentId 变更防环，且新父须为非末级；isLeaf 显式写入，附带有子/有引用约束。
      */
     @Transactional
     public PostTypeVO updateType(Long id, PostTypeUpdateRequest request) {
         SysPostType type = postTypeRepository.findById(id)
                 .orElseThrow(() -> new BusinessException(ResultCode.NOT_FOUND, "岗位类型不存在"));
-        Long oldParentId = type.getParentId() != null ? type.getParentId() : 0L;
 
-        boolean parentChanged = false;
         if (request.parentId() != null) {
             Long newParentId = request.parentId();
             if (newParentId.equals(id)) {
@@ -293,10 +281,8 @@ public class PostService {
             if (newParentId != 0 && isDescendant(type.getTenantId(), newParentId, id)) {
                 throw new BusinessException(ResultCode.VALIDATION_ERROR, "不能挂载到自身的下级类型（防循环）");
             }
-            if (!newParentId.equals(oldParentId)) {
-                type.setParentId(newParentId);
-                parentChanged = true;
-            }
+            requireParentAllowsChildren(type.getTenantId(), newParentId);
+            type.setParentId(newParentId);
         }
 
         type.setName(request.name().trim());
@@ -306,56 +292,82 @@ public class PostService {
         if (request.status() != null) {
             type.setStatus(request.status());
         }
+        if (request.isLeaf() != null) {
+            int isLeaf = normalizeIsLeaf(request.isLeaf(), type.getIsLeaf() != null ? type.getIsLeaf() : 1);
+            if (isLeaf == 1) {
+                requireCanMarkAsLeaf(type.getTenantId(), id);
+            } else {
+                requireCanMarkAsNonLeaf(id);
+            }
+            type.setIsLeaf(isLeaf);
+        }
         type.setUpdatedAt(Instant.now());
         postTypeRepository.save(type);
-
-        if (parentChanged) {
-            refreshLeaf(oldParentId);
-            refreshLeaf(type.getParentId());
-        }
 
         long refs = postRepository.countByPostTypeId(id);
         return toTypeVo(type, refs);
     }
 
     /**
-     * V47 删除岗位类型：仅末级（isLeaf=1）可删；被岗位引用时硬拦截。删后刷新旧父 isLeaf。
+     * 删除岗位类型：仅末级（isLeaf=1）可删；有子节点或被岗位引用时硬拦截。不回写父 isLeaf。
      */
     @Transactional
     public void deleteType(Long id) {
         SysPostType type = postTypeRepository.findById(id)
                 .orElseThrow(() -> new BusinessException(ResultCode.NOT_FOUND, "岗位类型不存在"));
-        if (type.getIsLeaf() != null && type.getIsLeaf() == 0) {
-            throw new BusinessException(ResultCode.VALIDATION_ERROR, "非末级类型（含子类型）不可删除，请先删除其子类型");
+        if (type.getIsLeaf() == null || type.getIsLeaf() != 1) {
+            throw new BusinessException(ResultCode.VALIDATION_ERROR, "非末级类型不可删除；请先改为末级，或先处理其子类型");
+        }
+        if (postTypeRepository.existsByTenantIdAndParentId(type.getTenantId(), id)) {
+            throw new BusinessException(ResultCode.VALIDATION_ERROR, "仍存在子类型，不可删除");
         }
         long refs = postRepository.countByPostTypeId(id);
         if (refs > 0) {
             throw new BusinessException(409, "岗位类型已被 " + refs + " 个岗位引用，禁止删除");
         }
-        Long oldParentId = type.getParentId();
         postTypeRepository.delete(type);
-        refreshLeaf(oldParentId);
     }
 
-    /**
-     * V47 刷新父节点末级标记（单一真源）：父下还有子类型 → isLeaf=0；无子 → isLeaf=1。
-     */
-    private void refreshLeaf(Long parentId) {
+    /** 挂子：父为 0 表示根级；非 0 时父必须存在且 isLeaf=0。 */
+    private void requireParentAllowsChildren(Long tenantId, Long parentId) {
         if (parentId == null || parentId == 0) {
             return;
         }
-        SysPostType parent = postTypeRepository.findById(parentId).orElse(null);
-        if (parent == null) {
-            return;
+        SysPostType parent = postTypeRepository.findById(parentId)
+                .orElseThrow(() -> new BusinessException(ResultCode.NOT_FOUND, "上级岗位类型不存在"));
+        if (!parent.getTenantId().equals(tenantId)) {
+            throw new BusinessException(ResultCode.VALIDATION_ERROR, "上级岗位类型不属于该租户");
         }
-        boolean hasChildren = postTypeRepository.existsByTenantIdAndParentId(parent.getTenantId(), parentId);
-        parent.setIsLeaf(hasChildren ? 0 : 1);
-        parent.setUpdatedAt(Instant.now());
-        postTypeRepository.save(parent);
+        if (parent.getIsLeaf() == null || parent.getIsLeaf() != 0) {
+            throw new BusinessException(ResultCode.VALIDATION_ERROR, "仅非末级（分类）类型下可增加子类型");
+        }
+    }
+
+    private int normalizeIsLeaf(Integer isLeaf, int defaultValue) {
+        if (isLeaf == null) {
+            return defaultValue;
+        }
+        if (isLeaf != 0 && isLeaf != 1) {
+            throw new BusinessException(ResultCode.VALIDATION_ERROR, "isLeaf 仅允许 0 或 1");
+        }
+        return isLeaf;
+    }
+
+    private void requireCanMarkAsLeaf(Long tenantId, Long id) {
+        if (postTypeRepository.existsByTenantIdAndParentId(tenantId, id)) {
+            throw new BusinessException(ResultCode.VALIDATION_ERROR, "存在子类型时不可标记为末级，请先删除或移走子类型");
+        }
+    }
+
+    private void requireCanMarkAsNonLeaf(Long id) {
+        long refs = postRepository.countByPostTypeId(id);
+        if (refs > 0) {
+            throw new BusinessException(ResultCode.VALIDATION_ERROR, "已被岗位引用的类型不可改为非末级（分类）");
+        }
     }
 
     /**
-     * V47 判断 candidateParentId 是否为 selfId 的子孙（含直接子），用于 updateType 防环。
+     * 判断 candidateParentId 是否为 selfId 的子孙（含直接子），用于 updateType 防环。
      */
     private boolean isDescendant(Long tenantId, Long candidateParentId, Long selfId) {
         List<SysPostType> all = postTypeRepository.findByTenantId(tenantId);
@@ -385,7 +397,9 @@ public class PostService {
                 t.getName(),
                 t.getSort(),
                 t.getStatus(),
-                Math.toIntExact(refCount));
+                Math.toIntExact(refCount),
+                String.valueOf(t.getParentId() != null ? t.getParentId() : 0L),
+                t.getIsLeaf() != null ? t.getIsLeaf() : 1);
     }
 
     private SysPost requirePost(Long id) {
@@ -405,8 +419,10 @@ public class PostService {
     }
 
     private void requirePostType(Long postTypeId) {
-        if (!postTypeRepository.existsById(postTypeId)) {
-            throw new BusinessException(ResultCode.NOT_FOUND, "岗位类型不存在");
+        SysPostType type = postTypeRepository.findById(postTypeId)
+                .orElseThrow(() -> new BusinessException(ResultCode.NOT_FOUND, "岗位类型不存在"));
+        if (type.getIsLeaf() == null || type.getIsLeaf() != 1) {
+            throw new BusinessException(ResultCode.VALIDATION_ERROR, "岗位只能选用末级类型");
         }
     }
 

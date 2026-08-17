@@ -29,19 +29,20 @@ classDiagram
     +Integer sort
     +Integer status
     +Long parentId
+    +Integer isLeaf
   }
   class PostTypeUpdateRequest {
     +String name
     +Integer sort
     +Integer status
     +Long parentId
+    +Integer isLeaf
   }
   class PostService {
     +listTypeTree(tenantId, status) List~PostTypeTreeNodeVO~
     +createType(req) PostTypeVO
     +updateType(id, req) PostTypeVO
     +deleteType(id) void
-    -refreshLeaf(parentId) void
   }
   SysPostType "1" --> "*" SysPostType : parentId 自引用
   PostService ..> SysPostType
@@ -58,7 +59,7 @@ classDiagram
   class PostTypeTreeSelect {
     +value
     +onChange
-    +仅末级可选(isLeaf=1)
+    +selectMode leaf|non-leaf|any
   }
   class OrgPierceDrawer {
     +anchorDeptId
@@ -69,7 +70,7 @@ classDiagram
     +穿透下钻按钮 -> OrgPierceDrawer
   }
   class PostTypeManagePage {
-    +树表 + 上级类型选择
+    +树表展开收缩 + 显式末级
   }
   class AdminListPage {
     +dept-tree-multi 字段

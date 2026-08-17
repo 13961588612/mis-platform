@@ -10,5 +10,7 @@ public record PostTypeVO(
         String name,
         Integer sort,
         Integer status,
-        Integer referenceCount
+        Integer referenceCount,
+        String parentId,
+        Integer isLeaf
 ) {}

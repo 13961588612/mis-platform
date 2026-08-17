@@ -364,12 +364,16 @@ export interface PostTypeItem {
   status: number;
   /** sys_post 引用数（删除拦截依据） */
   referenceCount: number;
+  parentId?: string;
+  /** 1=末级 / 0=非末级（显式字段） */
+  isLeaf?: number;
 }
 
 /**
  * 岗位类型树节点（mis-org PostTypeTreeNodeVO / BFF PostTypeTreeNodeVO 对齐）。
  *
- * <p>仅末级节点（isLeaf===1）可被岗位选作类型；非末级仅作分类（选父时使用 allowNonLeaf）。
+ * <p>仅末级节点（isLeaf===1）可被岗位选作类型；非末级仅作分类。
+ * isLeaf 为显式字段（创建/更新可写），不按是否有子节点推导。
  * children 递归。parentId 用于前端展示层级；树已后端构建完成，前端无需再按 parentId 组装。
  */
 export interface PostTypeTreeNode {

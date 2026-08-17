@@ -242,6 +242,7 @@ public class OrgFacadeService {
         body.put("sort", request.sort());
         body.put("status", request.status());
         body.put("parentId", request.parentId() != null ? request.parentId() : 0);
+        body.put("isLeaf", request.isLeaf() != null ? request.isLeaf() : 1);
         return orgWebClient.createPostType(body);
     }
 
@@ -253,6 +254,9 @@ public class OrgFacadeService {
         body.put("status", request.status());
         if (request.parentId() != null) {
             body.put("parentId", request.parentId());
+        }
+        if (request.isLeaf() != null) {
+            body.put("isLeaf", request.isLeaf());
         }
         return orgWebClient.updatePostType(id, body);
     }

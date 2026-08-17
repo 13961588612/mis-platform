@@ -12,8 +12,14 @@ export interface PostTypeTreeSelectProps {
   placeholder?: string;
   disabled?: boolean;
   /**
-   * 父级选择模式（E.8 上级类型）：允许选择非末级节点作为父级。
-   * 同时以 excludeId 排除自身及其后代（防环）。岗位表单默认不开启（仅末级可选，E.5）。
+   * 选择范围：
+   * - `leaf`（默认）：仅末级可选（岗位表单）
+   * - `non-leaf`：仅非末级（分类）可选（上级类型）
+   * - `any`：任意节点可选
+   */
+  selectMode?: 'leaf' | 'non-leaf' | 'any';
+  /**
+   * @deprecated 使用 selectMode='any'；保留兼容旧调用。
    */
   allowNonLeaf?: boolean;
   /** 排除的节点 id（自身）：该节点及其后代不可选（用于上级类型选择防环） */
@@ -23,24 +29,23 @@ export interface PostTypeTreeSelectProps {
 /**
  * 岗位类型下拉树（BFF GET /post-types/tree）。
  *
- * <p>默认模式（E.5）：<b>仅末级（isLeaf=1）可点选</b>，非末级节点点击仅展开/收起（不可作为岗位类型）。
- * 父级选择模式（allowNonLeaf）：任意非自身节点均可选（含非末级），用于管理页「上级类型」。
- * 复用 Radix Popover，不新增依赖。
+ * <p>默认仅末级可选；上级类型选择用 {@code selectMode='non-leaf'}。
  */
 export function PostTypeTreeSelect({
   value,
   onChange,
   placeholder,
   disabled,
+  selectMode,
   allowNonLeaf = false,
   excludeId = null,
 }: PostTypeTreeSelectProps) {
+  const mode: 'leaf' | 'non-leaf' | 'any' = selectMode ?? (allowNonLeaf ? 'any' : 'leaf');
   const [tree, setTree] = useState<PostTypeTreeNode[]>([]);
   const [open, setOpen] = useState(false);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [selectedName, setSelectedName] = useState('');
 
-  // 拉取树（默认全量含禁用，便于管理页选择父级；岗位表单调用方可自行过滤）
   useEffect(() => {
     let alive = true;
     listPostTypeTree()
@@ -67,7 +72,6 @@ export function PostTypeTreeSelect({
     return map;
   }, [tree]);
 
-  // 计算排除集合：excludeId 自身 + 其所有后代（用于上级类型选择防环）
   const excludedIds = useMemo(() => {
     const set = new Set<string>();
     if (excludeId == null) return set;
@@ -81,12 +85,10 @@ export function PostTypeTreeSelect({
       }
     };
     walkIndex(tree);
-    // BFS 收集后代
     const queue: PostTypeTreeNode[] = [byId.get(selfKey)].filter(Boolean) as PostTypeTreeNode[];
     while (queue.length) {
       const cur = queue.shift()!;
-      const children = cur.children ?? [];
-      for (const c of children) {
+      for (const c of cur.children ?? []) {
         set.add(c.id);
         queue.push(c);
       }
@@ -95,7 +97,7 @@ export function PostTypeTreeSelect({
   }, [excludeId, tree]);
 
   useEffect(() => {
-    if (value == null || value === '') {
+    if (value == null || value === '' || value === '0') {
       setSelectedName('');
       return;
     }
@@ -117,55 +119,74 @@ export function PostTypeTreeSelect({
     setOpen(false);
   };
 
+  const isSelectable = (n: PostTypeTreeNode) => {
+    if (excludedIds.has(n.id)) return false;
+    if (mode === 'any') return true;
+    if (mode === 'non-leaf') return n.isLeaf === 0;
+    return n.isLeaf === 1;
+  };
+
   const renderNodes = (nodes: PostTypeTreeNode[], depth: number): ReactNode =>
     nodes.map((n) => {
       const isLeaf = n.isLeaf === 1;
-      const selectable = (isLeaf || allowNonLeaf) && !excludedIds.has(n.id);
-      const isOpen = expanded.has(n.id) || (!isLeaf && allowNonLeaf && expanded.has(n.id));
-      const expandable = !isLeaf && !allowNonLeaf; // 默认模式：非末级仅展开；父级模式：非末级也可选，无需展开
+      const selectable = isSelectable(n);
+      const isOpen = expanded.has(n.id);
+      // 非末级始终可展开看树；末级不可展开
+      const canExpand = !isLeaf && (n.children?.length ?? 0) > 0;
       return (
         <div key={n.id}>
-          <button
-            type="button"
-            disabled={!selectable}
-            onClick={() => {
-              if (!selectable) return;
-              if (expandable) {
-                toggleExpand(n.id);
-              } else {
-                selectNode(n);
-              }
-            }}
+          <div
             className={cn(
-              'flex w-full items-center gap-1.5 rounded px-2 py-1 text-left text-sm transition',
-              selectable ? 'hover:bg-muted' : 'cursor-not-allowed opacity-50',
-              String(value) === String(n.id) && 'bg-primary/10 font-medium text-primary',
+              'flex w-full items-center gap-1.5 rounded px-2 py-1 text-left text-sm',
               depth > 0 && 'ml-3',
+              String(value) === String(n.id) && 'bg-primary/10 font-medium text-primary',
             )}
           >
-            {!isLeaf ? (
-              <ChevronRight
-                className={cn('h-3.5 w-3.5 shrink-0 text-muted-foreground transition', isOpen && 'rotate-90')}
-              />
+            {canExpand ? (
+              <button
+                type="button"
+                className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded text-muted-foreground hover:bg-muted"
+                aria-label={isOpen ? '收起' : '展开'}
+                onClick={() => toggleExpand(n.id)}
+              >
+                <ChevronRight className={cn('h-3.5 w-3.5 transition', isOpen && 'rotate-90')} />
+              </button>
             ) : (
-              <span className="inline-block w-3.5 shrink-0" />
+              <span className="inline-block h-5 w-5 shrink-0" />
             )}
-            {isLeaf ? (
-              <Folder className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-            ) : (
-              <Layers className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-            )}
-            <span className="truncate">{n.name}</span>
-            {!isLeaf ? (
-              <span className="ml-auto rounded bg-muted px-1 text-[0.65rem] text-muted-foreground">分类</span>
-            ) : null}
-          </button>
-          {!isLeaf && (isOpen || (allowNonLeaf && !isLeaf)) && n.children?.length ? (
-            <>{renderNodes(n.children, depth + 1)}</>
-          ) : null}
+            <button
+              type="button"
+              disabled={!selectable}
+              onClick={() => selectable && selectNode(n)}
+              className={cn(
+                'flex min-w-0 flex-1 items-center gap-1.5 rounded text-left',
+                selectable ? 'hover:bg-muted' : 'cursor-not-allowed opacity-50',
+              )}
+            >
+              {isLeaf ? (
+                <Folder className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+              ) : (
+                <Layers className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+              )}
+              <span className="truncate">{n.name}</span>
+              {!isLeaf ? (
+                <span className="ml-auto rounded bg-muted px-1 text-[0.65rem] text-muted-foreground">分类</span>
+              ) : (
+                <span className="ml-auto rounded bg-success/10 px-1 text-[0.65rem] text-success">末级</span>
+              )}
+            </button>
+          </div>
+          {!isLeaf && isOpen && n.children?.length ? <>{renderNodes(n.children, depth + 1)}</> : null}
         </div>
       );
     });
+
+  const defaultPlaceholder =
+    mode === 'non-leaf'
+      ? '顶级（无上级）/ 选择分类'
+      : mode === 'any'
+        ? '请选择岗位类型'
+        : '请选择岗位类型（树形·仅末级）';
 
   return (
     <Popover open={open} onOpenChange={(o) => !disabled && setOpen(o)}>
@@ -180,13 +201,26 @@ export function PostTypeTreeSelect({
           )}
         >
           <span className={cn(selectedName ? 'text-foreground' : 'text-muted-foreground')}>
-            {selectedName || placeholder || '请选择岗位类型（树形·仅末级）'}
+            {selectedName || placeholder || defaultPlaceholder}
           </span>
           <Layers className="h-4 w-4 shrink-0 text-muted-foreground" />
         </button>
       </PopoverTrigger>
       <PopoverContent className="w-80" align="start">
         <div className="max-h-72 overflow-auto rounded-md border border-border/60 p-1">
+          {mode === 'non-leaf' ? (
+            <button
+              type="button"
+              className="mb-1 w-full rounded px-2 py-1.5 text-left text-sm text-muted-foreground hover:bg-muted"
+              onClick={() => {
+                onChange('0');
+                setSelectedName('');
+                setOpen(false);
+              }}
+            >
+              顶级（无上级）
+            </button>
+          ) : null}
           {tree.length === 0 ? (
             <div className="px-2 py-3 text-center text-xs text-muted-foreground">暂无岗位类型</div>
           ) : (

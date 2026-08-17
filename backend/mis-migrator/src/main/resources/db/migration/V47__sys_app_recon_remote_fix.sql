@@ -1,0 +1,12 @@
+-- ===========================================================================
+-- V47__sys_app_recon_remote_fix.sql —— 占位（与库中已应用记录对齐）
+-- PostgreSQL 16 | 库名: mis_platform
+--
+-- 说明：本库 flyway_schema_history 已成功应用 version=47
+--   description = "sys app recon remote fix"
+--   script      = V47__sys_app_recon_remote_fix.sql
+-- 原脚本未入库；此处仅保留同名空迁移，避免 “applied migration not resolved”。
+-- 校验和不一致时请执行：mvn -pl mis-migrator flyway:repair
+-- 真实 DDL 变更请走后续版本（勿改本文件业务语义）。
+-- ===========================================================================
+SELECT 1;

@@ -113,59 +113,45 @@ interface MergedDeptRow {
 | 字段 | 类型 | 默认 | 说明 |
 |------|------|------|------|
 | `parent_id` | BIGINT | 0 | 0=根级 |
-| `is_leaf` | INTEGER | 1 | 1=末级(可被选)，0=非末级(仅作分类) |
-| `level` | INTEGER | 由 parent 推导 | 仅缓存展示用，可选；推荐由 `parent_id` 递归推导，不持久也行 |
+| `is_leaf` | SMALLINT/INTEGER | 1 | **显式可写**：1=末级(可被岗位选用)，0=非末级(分类，可挂子类型) |
 
-> `is_leaf` 由后端**单一真源维护**（见 B.4），前端不选、不传、不推断。
+> **决策更正（2026-08-17）：** `is_leaf` 为表字段，由创建/更新请求显式写入，**不再**根据是否有子节点推导，**不再**存在 `refreshLeaf` 回写。  
+> 约束：仅非末级下可挂子；有子时不可改为末级；已被岗位引用时不可改为分类；岗位只能选用末级；删除为**物理删除**，被引用硬拦截。
 
-### B.3 Flyway 迁移（**新增**，版本号取下一个未用号，建议 `V47__post_type_hierarchy.sql`）
+### B.3 Flyway 迁移
+
+实际落地版本：**`V52__post_type_hierarchy.sql`**（库中 V47 已占用为其他脚本，不可复用版本号）。
 ```sql
--- 新增层级字段；历史 5 条扁平类型默认根级末级，无需重分类（见 E.2）
-ALTER TABLE sys_post_type ADD COLUMN parent_id BIGINT NOT NULL DEFAULT 0;
-ALTER TABLE sys_post_type ADD COLUMN is_leaf   INTEGER NOT NULL DEFAULT 1;
--- 兜底：存量 NULL 归一到 0/1（兼容部分库 ALTER 不回填场景）
+ALTER TABLE sys_post_type ADD COLUMN IF NOT EXISTS parent_id BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE sys_post_type ADD COLUMN IF NOT EXISTS is_leaf SMALLINT NOT NULL DEFAULT 1;
 UPDATE sys_post_type SET parent_id = 0 WHERE parent_id IS NULL;
 UPDATE sys_post_type SET is_leaf = 1 WHERE is_leaf IS NULL;
 ```
-**历史数据迁移评估：否（无需重分类）。** 现有 5 条类型直接成为"根级末级"节点（`parent_id=0, is_leaf=1`），不破坏任何现有岗位引用（岗位只存 `post_type_id`，仍指向同一叶子）。后续用户可在管理页新建父级"分类"类型并把叶子挂到其下，属可选运营动作，非迁移必须。
+**历史数据：** 存量扁平类型默认根级末级（`parent_id=0, is_leaf=1`）。建树时需先将父节点显式改为非末级，再挂子类型。
 
-### B.4 后端 API 变更（**新增 1 个接口 + 扩展 2 个**）
+### B.4 后端 API 变更（树接口 + create/update 扩展）
 
-**新增：树形查询**
+**树形查询**
 - mis-org：`GET /internal/v1/post-types/tree?tenantId=&status=`
 - BFF：`GET /api/v1/post-types/tree?status=`
-- Service：`PostService.listTypeTree(tenantId, status)` —— 取扁平列表后用 `parent_id` 构建 `List<PostTypeTreeNodeVO>`（`children` 递归）。
-- 返回节点 VO：
-```json
-{
-  "id": "12", "code": "rd", "name": "研发", "sort": 1, "status": 1,
-  "isLeaf": 1, "referenceCount": 3,
-  "children": [ { "id":"13", "name":"前端", "isLeaf":1, ... } ]
-}
-```
+- Service：`PostService.listTypeTree` —— 按 `parent_id` 组装树；节点含 `isLeaf`（读库字段）。
 
-**扩展：新建/编辑支持 `parentId`**
-- `PostTypeCreateRequest` 增加 `parentId`（默认 0）；`PostTypeUpdateRequest` 增加 `parentId`（可选）。
-- `createType`：保存后调用 `refreshLeaf(parentId)`（若 `parentId!=0`，置父 `is_leaf=0`）。
-- `updateType`：若 `parentId` 变化，旧父 `refreshLeaf(旧)` + 新父 `refreshLeaf(新)`。
-- `deleteType`：删除后 `refreshLeaf(被删节点.parentId)`；仍保留"被岗位引用拦截"（沿用 `referenceCount`）。
-- `refreshLeaf(pid)`：若 `pid!=0`，`is_leaf = existsByParentId(pid) ? 0 : 1`。
+**扩展：新建/编辑支持 `parentId` + `isLeaf`**
+- `PostTypeCreateRequest` / `PostTypeUpdateRequest`：`parentId`、`isLeaf`（创建默认 1；更新 null=不改）。
+- `createType`：写入显式 `isLeaf`；`parentId≠0` 时父必须已是非末级；**不**回写父 `is_leaf`。
+- `updateType`：可改 `parentId`（防环 + 新父须非末级）、可改 `isLeaf`（有子不可改末级；有岗位引用不可改分类）。
+- `deleteType`：**物理删除**；仅末级可删；有子或 `countByPostTypeId>0` 硬拦截；**不**回写父 `is_leaf`。
+- `requirePostType`（岗位 CRUD）：目标类型必须 `isLeaf=1`。
 
-**Repository 新增方法**：`findByParentId(tenantId, parentId)`、`findByTenantIdAndParentIdNot(id)`（编辑时防自环/挂到子孙）。
+### B.5 前端
 
-### B.5 前端下拉树组件（单选 + 仅末级可选）
-
-新增 `frontend/.../components/common/post-type-tree-select.tsx`：
-- 复用 `DeptTreeSelect` 的 Popover 模式，但数据是 `PostTypeTreeNode`（树）。
-- **末级才可点选**：`isLeaf===0` 的节点渲染为"分组标题/不可点"（禁用 `onClick`、灰显），仅 `isLeaf===1` 触发 `onChange(id)` 并关闭。
-- 值回填：用 `listPostTypeTree` 构建 `id→name` 映射展示选中名。
-- 引擎接入：`page-defs.ts` 中 `/system/post` 的 `form.postTypeId` 由 `type:'select', optionsFrom:'post-type'`（扁平）改为 `type:'post-type-tree'`（树、单值、仅末级）。
-- 管理页（`post-type-manage-page.tsx`）：升级为**树表**展示层级（复用 `TreeTable`），新建/编辑 Sheet 增加"上级类型"选择（复用 `PostTypeTreeSelect` 的"选父"模式，禁用自环与子孙）；版本 store 的 `bumpPostTypeVersion` 保留，确保岗位表单下拉刷新。
+- `PostTypeTreeSelect`：`selectMode`=`leaf`（岗位表单）/ `non-leaf`（上级类型）/ `any`。
+- 管理页树表：默认仅顶级 + 展开/收缩；列含「末级」；去掉「上级类型」「引用岗位数」；行内「子类型」仅非末级可见；Sheet 可编辑「是否末级」。
 
 ### B.6 评估
-- BE：实体+迁移+1 接口+2 扩展，约中工作量；`is_leaf` 单一真源，零前端推断负担。
-- FE：1 新组件 + 管理页树化 + 引擎字段类型，约中工作量。
-- 风险：编辑时重挂父级需防"挂到自己的子孙"（Repository 校验），已列。
+- BE：实体+迁移+树接口+create/update 显式 `isLeaf`；删除物理删 + 引用拦截。
+- FE：树选择器 `selectMode` + 管理页树表折叠与末级可编辑。
+- 风险：编辑时重挂父级需防"挂到自己的子孙"（防环校验），已列。
 
 ---
 
@@ -277,10 +263,12 @@ graph TD
 | E.2 | 历史 5 条扁平岗位类型是否需重分类到新建父级？ | **否**：保持为根级末级（`parent_id=0,is_leaf=1`），后续运营按需建父级并重新挂接 | B.3 |
 | E.3 | 「所属组织」过滤单选还是多选？ | **多选下拉列表**（当前已是，与后端 `orgIds` 数组契约一致）；如需单选请告知 | C.1 |
 | E.4 | 合并后组织穿透能力如何保留？ | **行内"下钻"按钮 → 只读穿透抽屉**（推荐 A）；备选：保留独立穿透 Tab | A.6 |
-| E.5 | 岗位类型树下拉是否允许选非末级？ | **仅末级可选**（`is_leaf=1`）；非末级仅作分类，不可作为岗位的类型 | B.5/C.4 |
+| E.5 | 岗位类型树下拉是否允许选非末级？ | **岗位表单仅末级**；**上级类型选择仅非末级**（`selectMode`） | B.5/C.4 |
 | E.6 | 新建岗位"所属部门"弹窗 bug 修复方式？ | **组织选择器移出 Popover**（推荐 C.3）；备选：Popover 内改用 DOM 按钮列表 | C.3 |
 | E.7 | 部门查询下拉树单选还是多选？ | **多选**（与现有 `deptIds` 并集过滤契约一致）；单组织场景如需单选可后加 | C.2 |
-| E.8 | 管理页是否展示"层级/上级"列？ | **是**：树表展示层级，新建/编辑含"上级类型"选择 | B.5 |
+| E.8 | 管理页是否展示"层级/上级"列？ | 树表展示层级与**末级**；默认折叠顶级；去掉「上级类型」「引用岗位数」；Sheet 可编辑 isLeaf | B.5 |
+| E.9 | `is_leaf` 推导还是显式？ | **显式可写**（2026-08-17）；取消 `refreshLeaf` | B.2/B.4 |
+| E.10 | 岗位类型删除语义 | **物理删除**；被岗位引用禁止删除 | B.4 |
 
 ---
 
@@ -318,19 +306,20 @@ classDiagram
     +Integer sort
     +Integer status
     +Long parentId
+    +Integer isLeaf
   }
   class PostTypeUpdateRequest {
     +String name
     +Integer sort
     +Integer status
     +Long parentId
+    +Integer isLeaf
   }
   class PostService {
     +listTypeTree(tenantId, status) List~PostTypeTreeNodeVO~
     +createType(req) PostTypeVO
     +updateType(id, req) PostTypeVO
     +deleteType(id) void
-    -refreshLeaf(parentId) void
   }
   SysPostType "1" --> "*" SysPostType : parentId 自引用
   PostService ..> SysPostType
@@ -347,7 +336,7 @@ classDiagram
   class PostTypeTreeSelect {
     +value
     +onChange
-    +仅末级可选(isLeaf=1)
+    +selectMode leaf|non-leaf|any
   }
   class OrgPierceDrawer {
     +anchorDeptId
@@ -358,7 +347,7 @@ classDiagram
     +穿透下钻按钮 -> OrgPierceDrawer
   }
   class PostTypeManagePage {
-    +树表 + 上级类型选择
+    +树表展开收缩 + 显式末级
   }
   class AdminListPage {
     +dept-tree-multi 字段

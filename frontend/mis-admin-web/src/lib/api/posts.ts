@@ -87,6 +87,8 @@ export async function createPostType(body: {
   status?: number;
   /** 上级类型 id；0 / 不传 = 顶级（根分类） */
   parentId?: number | string | null;
+  /** 1=末级 / 0=非末级（分类）；默认 1 */
+  isLeaf?: number;
 }): Promise<PostTypeItem> {
   const res = await api.post<ApiResult<PostTypeItem>>('/post-types', body);
   return unwrap(res, '创建岗位类型失败');
@@ -94,7 +96,13 @@ export async function createPostType(body: {
 
 export async function updatePostType(
   id: string,
-  body: { name: string; sort?: number; status?: number; parentId?: number | string | null },
+  body: {
+    name: string;
+    sort?: number;
+    status?: number;
+    parentId?: number | string | null;
+    isLeaf?: number;
+  },
 ): Promise<PostTypeItem> {
   const res = await api.put<ApiResult<PostTypeItem>>(`/post-types/${id}`, body);
   return unwrap(res, '更新岗位类型失败');

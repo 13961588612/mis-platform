@@ -237,11 +237,10 @@ export const SYSTEM_PAGE_DEFS: Record<string, AdminPageDef> = {
      */
     serverFilterKeys: ['deptIds', 'orgIds'],
     filters: [
-      { key: 'name', label: '岗位名称', type: 'text', col: 4 },
+      { key: 'name', label: '岗位名称', type: 'text', col: 2 },
       { key: 'deptIds', label: '所属部门', type: 'dept-tree-multi', col: 4, hint: '可多选部门（下拉树·默认折叠·支持全选）' },
       { key: 'orgIds', label: '所属组织', type: 'multiselect', col: 4, optionsFrom: 'org', hint: '可多选组织（下拉·支持全选/清空）' },
-      /** 与「岗位名称」同宽（col:4），避免状态框被压窄 */
-      { key: 'status', label: '状态', type: 'select', col: 4, options: STATUS_OPTS },
+      { key: 'status', label: '状态', type: 'select', col: 2, options: STATUS_OPTS },
     ],
     columns: [
       { key: 'code', label: '岗位编码' },

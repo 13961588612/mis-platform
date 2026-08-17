@@ -10,6 +10,10 @@ public record PostTypeVO(
         String name,
         Integer sort,
         Integer status,
-        /** V40 新增：sys_post 引用数（删除拦截依据；前端下拉用 status=1 过滤） */
-        Integer referenceCount
+        /** sys_post 引用数（删除拦截依据） */
+        Integer referenceCount,
+        /** 父级 id；0=根级 */
+        String parentId,
+        /** 1=末级 / 0=非末级（显式字段） */
+        Integer isLeaf
 ) {}

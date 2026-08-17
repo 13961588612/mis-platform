@@ -186,9 +186,15 @@ erDiagram
 | name | VARCHAR(128) | 显示名 |
 | sort | INT | 默认 0 |
 | status | SMALLINT | 0禁用 1启用 |
+| parent_id | BIGINT | NOT NULL DEFAULT 0 | 0=根级；多层分类父指针 |
+| is_leaf | SMALLINT | NOT NULL DEFAULT 1 | **显式字段**：1=末级（可被岗位选用）/ 0=非末级（分类，可挂子）；不按子节点推导 |
 | created_at / updated_at | TIMESTAMPTZ | |
 
 **索引：** `uk_post_type_tenant_code` UNIQUE (tenant_id, code)
+
+**删除语义：** 物理删除；仅末级可删；存在子类型或被 `sys_post` 引用时禁止删除。
+
+**迁移：** `V52__post_type_hierarchy.sql`（补 `parent_id` / `is_leaf`）。
 
 ### 3.8 sys_post — 部门岗位编制
 
