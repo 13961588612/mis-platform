@@ -247,6 +247,7 @@ export const SYSTEM_PAGE_DEFS: Record<string, AdminPageDef> = {
       { key: 'name', label: '岗位名称' },
       { key: 'dept', label: '所属部门' },
       { key: 'post_type', label: '岗位类型' },
+      { key: 'quota', label: '编制' },
       { key: 'statusText', label: '状态', status: true },
     ],
     form: [
@@ -254,6 +255,7 @@ export const SYSTEM_PAGE_DEFS: Record<string, AdminPageDef> = {
       { key: 'postTypeId', label: '岗位类型', type: 'post-type-tree', col: 6, required: true, placeholder: '请选择岗位类型（树形·仅末级）' },
       { key: 'code', label: '岗位编码', type: 'text', col: 6, required: true },
       { key: 'name', label: '岗位名称', type: 'text', col: 6, required: true },
+      { key: 'quota', label: '编制', type: 'number', col: 6 },
       { key: 'status', label: '状态', type: 'switch', col: 6 },
     ],
     loader: async (filters) => {
@@ -275,6 +277,7 @@ export const SYSTEM_PAGE_DEFS: Record<string, AdminPageDef> = {
         post_type: p.postTypeName ?? null,
         sort: p.sort,
         status: p.status,
+        quota: p.quota ?? 0,
       }));
     },
     createApi: async (values) => {
@@ -284,6 +287,7 @@ export const SYSTEM_PAGE_DEFS: Record<string, AdminPageDef> = {
         code: String(values.code ?? ''),
         name: String(values.name ?? ''),
         status: values.status === '' || values.status == null ? 1 : Number(values.status),
+        quota: values.quota != null && values.quota !== '' ? Number(values.quota) : 0,
       });
     },
     updateApi: async (id, values) => {
@@ -293,6 +297,7 @@ export const SYSTEM_PAGE_DEFS: Record<string, AdminPageDef> = {
         code: String(values.code ?? ''),
         name: String(values.name ?? ''),
         status: values.status === '' || values.status == null ? undefined : Number(values.status),
+        quota: values.quota != null && values.quota !== '' ? Number(values.quota) : 0,
       });
     },
     deleteApi: async (id) => {

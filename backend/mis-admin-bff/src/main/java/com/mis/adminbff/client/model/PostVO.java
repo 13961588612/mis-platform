@@ -13,5 +13,6 @@ public record PostVO(
         String code,
         String name,
         Integer sort,
-        Integer status
+        Integer status,
+        Integer quota
 ) {}

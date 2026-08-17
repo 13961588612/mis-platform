@@ -352,6 +352,8 @@ export interface PostItem {
   name: string;
   sort: number;
   status: number;
+  /** 计划编制人数（业务可选，默认 0） */
+  quota?: number;
 }
 
 /** 岗位类型（mis-org PostTypeVO） */

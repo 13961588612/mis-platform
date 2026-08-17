@@ -128,6 +128,7 @@ public class PostService {
         post.setName(request.name().trim());
         post.setSort(request.sort() != null ? request.sort() : 0);
         post.setStatus(request.status() != null ? request.status() : 1);
+        post.setQuota(request.quota() != null ? request.quota() : 0);
         post.setDeleted(0);
         post.setCreatedAt(now);
         post.setUpdatedAt(now);
@@ -152,6 +153,9 @@ public class PostService {
         }
         if (request.status() != null) {
             post.setStatus(request.status());
+        }
+        if (request.quota() != null) {
+            post.setQuota(request.quota());
         }
         post.setUpdatedAt(Instant.now());
         return toVo(postRepository.save(post));
@@ -441,6 +445,7 @@ public class PostService {
                 p.getCode(),
                 p.getName(),
                 p.getSort(),
-                p.getStatus());
+                p.getStatus(),
+                p.getQuota());
     }
 }

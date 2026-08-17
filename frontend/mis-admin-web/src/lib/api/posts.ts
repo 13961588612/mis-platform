@@ -26,6 +26,8 @@ export interface PostPayload {
   name: string;
   sort?: number;
   status?: number;
+  /** 计划编制人数（业务可选） */
+  quota?: number;
 }
 
 /** 将数组参数逗号序列化；空数组/空值过滤掉，保持与后端契约一致。 */

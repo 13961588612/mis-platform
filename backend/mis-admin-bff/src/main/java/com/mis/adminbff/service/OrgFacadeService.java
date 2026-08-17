@@ -205,6 +205,7 @@ public class OrgFacadeService {
         body.put("name", request.name());
         body.put("sort", request.sort());
         body.put("status", request.status());
+        body.put("quota", request.quota());
         return orgWebClient.createPost(body);
     }
 
@@ -216,6 +217,7 @@ public class OrgFacadeService {
         body.put("name", request.name());
         body.put("sort", request.sort());
         body.put("status", request.status());
+        body.put("quota", request.quota());
         return orgWebClient.updatePost(id, body);
     }
 
