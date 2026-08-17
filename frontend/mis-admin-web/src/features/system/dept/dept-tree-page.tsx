@@ -28,7 +28,13 @@ import {
 } from '@/lib/api/depts';
 import type { DeptNode, OrgItem } from '@/types/api';
 import { DeptTypeTreeSelect } from '@/components/common/dept-type-tree-select';
-import { OrgPierceDrawer } from './org-pierce-drawer';
+import {
+  buildOrgChain,
+  normalizeDeptNodes,
+  normalizePierceForest,
+  type DeptTreeRow,
+} from './dept-tree-types';
+import { usePierceTree } from './use-pierce-tree';
 
 /** 种子数据：部门类别 id=3（部门） */
 const DEFAULT_CATEGORY_ID = 3;
@@ -40,11 +46,12 @@ const fieldInput =
   'h-auto min-h-9 w-full rounded-md border border-input bg-card px-[0.7rem] py-[0.55rem] text-sm';
 
 // 部门树采用递归渲染（renderNodes），不再使用 flatten 全量拍平。
+// D1：本地部门与穿透只读部门统一归一化为 DeptTreeRow 后由同一个 renderNodes 渲染。
 
 export function DeptTreePage({ headerExtra }: { headerExtra?: ReactNode }) {
   const [orgs, setOrgs] = useState<OrgItem[]>([]);
   const [orgId, setOrgId] = useState('');
-  const [tree, setTree] = useState<DeptNode[]>([]);
+  const [treeRows, setTreeRows] = useState<DeptTreeRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState<DeptNode | null>(null);
@@ -59,17 +66,27 @@ export function DeptTreePage({ headerExtra }: { headerExtra?: ReactNode }) {
     establishmentCount: '0',
   });
 
-  // 子部门树展开集合：默认空 = 全部折叠（规则 2.1 / G4）。箭头切换节点在集合中的存在性。
-  const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
   // 任职详情（岗位编制）面板展开集合：由「查看任职详情」按钮切换（规则 2.3 / G6）。
   const [staffingIds, setStaffingIds] = useState<Set<string>>(new Set());
   const [staffingMap, setStaffingMap] = useState<Record<string, DeptStaffingVO>>({});
   const [staffingLoadingId, setStaffingLoadingId] = useState<string | null>(null);
-  // E.1 行内「穿透下钻」打开 OrgPierceDrawer（逻辑已抽到独立组件，只读浏览）
-  const [pierceOpen, setPierceOpen] = useState(false);
-  const [pierceAnchor, setPierceAnchor] = useState<DeptNode | null>(null);
+  /**
+   * inline 穿透状态（D2 / D6 / D9）：
+   * - expandedIds 统一驱动「本地子部门」与「链接组织穿透」的展开/收起；
+   * - piercedCache 按来源组织 id 缓存穿透 forest，每个组织仅请求一次。
+   */
+  const {
+    piercedCache,
+    isPierceLoading,
+    loadPierceOrg,
+    resetPierce,
+    isExpanded,
+    toggleExpand,
+    collapse,
+    resetExpanded,
+  } = usePierceTree();
 
-  // 渲染改为 renderNodes(tree, 0)，无需预拍平 rows。
+  // 渲染改为 renderNodes(treeRows, 0)，无需预拍平 rows。
 
   const orgNameOf = useCallback(
     (id: string) => orgs.find((o) => o.id === id)?.name ?? '',
@@ -103,7 +120,8 @@ export function DeptTreePage({ headerExtra }: { headerExtra?: ReactNode }) {
     if (!id) return;
     setLoading(true);
     try {
-      setTree(await fetchDeptTree(id));
+      // D1：后端 DeptNode[] → 可编辑的 DeptTreeRow[]（readOnly = false）
+      setTreeRows(normalizeDeptNodes(await fetchDeptTree(id)));
     } catch (e) {
       toast.error(e instanceof Error ? e.message : '加载部门失败');
     } finally {
@@ -159,8 +177,9 @@ export function DeptTreePage({ headerExtra }: { headerExtra?: ReactNode }) {
 
   function onOrgChange(id: string) {
     setOrgId(id);
-    // 切换组织：折叠子部门树 + 关闭任职详情面板 + 清空缓存（避免串组织）
-    setExpandedIds(new Set());
+    // 切换组织：折叠子部门树 + 关闭任职详情面板 + 清空穿透/编制缓存（避免串组织）
+    resetExpanded();
+    resetPierce();
     setStaffingIds(new Set());
     setStaffingMap({});
   }
@@ -225,8 +244,9 @@ export function DeptTreePage({ headerExtra }: { headerExtra?: ReactNode }) {
         toast.success('已创建');
       }
       setOpen(false);
-      // 组织内部门树变化，刷新骨架 + 折叠树 + 关闭任职详情 + 清缓存
-      setExpandedIds(new Set());
+      // 组织内部门树变化，刷新骨架 + 折叠树 + 关闭任职详情 + 清穿透/编制缓存
+      resetExpanded();
+      resetPierce();
       setStaffingIds(new Set());
       setStaffingMap({});
       await loadTree(orgId);
@@ -242,11 +262,7 @@ export function DeptTreePage({ headerExtra }: { headerExtra?: ReactNode }) {
     try {
       await deleteDept(node.id);
       toast.success('已删除');
-      setExpandedIds((prev) => {
-        const next = new Set(prev);
-        next.delete(node.id);
-        return next;
-      });
+      collapse(node.id);
       setStaffingIds((prev) => {
         const next = new Set(prev);
         next.delete(node.id);
@@ -258,32 +274,23 @@ export function DeptTreePage({ headerExtra }: { headerExtra?: ReactNode }) {
     }
   }
 
-  /** 行内「穿透下钻」：以当前部门为锚点打开 OrgPierceDrawer（规则 2.4 / G7：由箭头触发）。 */
-  function openPierce(node: DeptNode) {
-    setPierceAnchor(node);
-    setPierceOpen(true);
-  }
-
-  /** 切换子部门树展开/收起（规则 2.1 / G4）。 */
-  const toggleExpand = useCallback((node: DeptNode) => {
-    setExpandedIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(node.id)) next.delete(node.id);
-      else next.add(node.id);
-      return next;
-    });
-  }, []);
-
-  /** 箭头点击（规则 2.4 / G7）：链接组织部门 → 穿透下钻；否则 → 展开/收起本地子部门树。 */
+  /**
+   * 箭头点击（D6 / D2 / D9）：统一 inline 展开/收起。
+   *
+   * <p>链接组织部门（含穿透行中的嵌套链接节点）首次展开时懒加载其组织的穿透 forest；
+   * 防循环校验命中则 toast 拦截且不改变展开态。普通部门直接展开本地 children。
+   */
   const onArrowClick = useCallback(
-    (node: DeptNode) => {
-      if (node.linkedOrgId) {
-        openPierce(node);
-      } else {
-        toggleExpand(node);
+    async (row: DeptTreeRow) => {
+      const targetOrgId = row.linkedOrgId;
+      // 已展开 → 直接收起（无需再次加载）
+      if (targetOrgId && !isExpanded(row.id)) {
+        const ok = await loadPierceOrg(targetOrgId, row.orgChain);
+        if (!ok) return;
       }
+      toggleExpand(row.id);
     },
-    [openPierce, toggleExpand],
+    [isExpanded, loadPierceOrg, toggleExpand],
   );
 
   const orgOptions = useMemo(
@@ -294,23 +301,51 @@ export function DeptTreePage({ headerExtra }: { headerExtra?: ReactNode }) {
   const thPad = 'px-3';
 
   /**
-   * 递归渲染部门树：父节点仅当其 id 在 expandedIds（规则 2.1 / G4，默认空=全折叠）时才渲染其子树。
+   * 递归渲染部门树（D1 统一渲染）：父节点仅当其 id 在 expandedIds（规则 2.1 / G4，默认空=全折叠）时才渲染其子树。
+   *
+   * <p>本地行（`readOnly = false`）保留全部操作；穿透只读行（`readOnly = true`）隐藏全部操作按钮，
+   * 仅渲染 muted「只读」标签（D3），且「部门类型/是否末级/编制数/岗位数/已任职/空缺」统一显示「—」（D8）。
    * 岗位数/任职数/空缺数未加载编制时默认 0（规则 2.2 / G5）。
    */
-  const renderNodes = (nodes: DeptNode[], depth: number): ReactNode[] => {
+  const renderNodes = (rows: DeptTreeRow[], depth: number): ReactNode[] => {
     const elements: ReactNode[] = [];
-    for (const node of nodes) {
-      const isLinked = !!node.linkedOrgId;
-      const expanded = expandedIds.has(node.id);
-      const staffingOpen = staffingIds.has(node.id);
-      const vo = staffingMap[node.id];
-      const staffingLoading = staffingLoadingId === node.id;
-      const children = node.children ?? [];
+    for (const row of rows) {
+      const readOnly = row.readOnly;
+      const localNode = row.node;
+      const linkedOrgId = row.linkedOrgId;
+      const isLinked = !!linkedOrgId;
+      const expanded = isExpanded(row.id);
+      // 任职详情面板仅本地行可用（穿透节点属其它组织，无本地编制数据）
+      const staffingOpen = !readOnly && staffingIds.has(row.rawId);
+      const vo = readOnly ? undefined : staffingMap[row.rawId];
+      const staffingLoading = staffingLoadingId === row.rawId;
+
+      /**
+       * 子级来源（D2 / D4）：
+       * - 链接组织节点 → 取 piercedCache[linkedOrgId] 归一化的只读 forest（未命中缓存则处于加载中）；
+       * - 其余节点 → 取同组织内的本地/嵌套 children，不再发请求。
+       */
+      let childRows: DeptTreeRow[] = row.children;
+      let pierceLoading = false;
+      if (linkedOrgId) {
+        const cachedForest = piercedCache[linkedOrgId];
+        if (cachedForest) {
+          childRows = normalizePierceForest(cachedForest, buildOrgChain(row.orgChain, linkedOrgId));
+        } else {
+          childRows = [];
+          pierceLoading = isPierceLoading(linkedOrgId);
+        }
+      }
+
+      const linkedOrgLabel = linkedOrgId
+        ? row.linkedOrgName || orgNameOf(linkedOrgId) || linkedOrgId
+        : '';
+      const sourceOrgLabel = row.sourceOrgName || orgNameOf(row.orgId) || row.orgId;
 
       elements.push(
-        <Fragment key={node.id}>
+        <Fragment key={row.id}>
           <tr className="border-b border-border/50 bg-table-row even:bg-table-stripe hover:bg-table-hover">
-            {/* 部门名称（树）：箭头=子部门展开 / 链接组织=下钻（规则 2.4 / G7） */}
+            {/* 部门名称（树）：箭头统一 inline 展开——本地子部门 / 链接组织穿透（D6） */}
             <td
               className="overflow-hidden whitespace-nowrap px-3 py-2 align-middle"
               style={{ paddingLeft: 12 + depth * 16 }}
@@ -318,21 +353,21 @@ export function DeptTreePage({ headerExtra }: { headerExtra?: ReactNode }) {
               <span className="inline-flex items-center gap-1.5">
                 <button
                   type="button"
-                  onClick={() => onArrowClick(node)}
+                  onClick={() => void onArrowClick(row)}
                   className="inline-flex h-5 w-5 items-center justify-center rounded text-muted-foreground hover:bg-muted"
-                  aria-label={isLinked ? '穿透下钻' : expanded ? '收起子部门' : '展开子部门'}
-                  aria-expanded={isLinked ? undefined : expanded}
+                  aria-label={
+                    expanded ? '收起下级部门' : isLinked ? '展开对应组织的下级部门' : '展开子部门'
+                  }
+                  aria-expanded={expanded}
                 >
-                  <ChevronRight
-                    className={cn('h-3.5 w-3.5 transition', expanded && !isLinked && 'rotate-90')}
-                  />
+                  <ChevronRight className={cn('h-3.5 w-3.5 transition', expanded && 'rotate-90')} />
                 </button>
                 <Folder className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                <span className="font-medium">{node.name}</span>
+                <span className={cn('font-medium', readOnly && 'text-foreground/80')}>{row.name}</span>
                 {isLinked ? (
                   <span
                     className="ml-1 inline-flex items-center rounded bg-primary/10 px-1.5 py-0.5 text-[0.65rem] font-medium text-primary"
-                    title="已配置对应组织（可穿透下钻）"
+                    title="已配置对应组织（点箭头 inline 展开其下级部门）"
                   >
                     锚点
                   </span>
@@ -340,43 +375,57 @@ export function DeptTreePage({ headerExtra }: { headerExtra?: ReactNode }) {
               </span>
             </td>
             <td className="overflow-hidden whitespace-nowrap px-3 py-2 align-middle font-mono text-xs">
-              {node.code ?? '—'}
+              {row.code ?? '—'}
             </td>
             <td className="overflow-hidden whitespace-nowrap px-3 py-2 align-middle text-right tabular-nums">
-              {node.establishmentCount ?? 0}
+              {readOnly ? <span className="text-muted-foreground">—</span> : row.establishmentCount ?? 0}
             </td>
             <td className="overflow-hidden whitespace-nowrap px-3 py-2 align-middle">
-              {node.deptTypeName ?? '—'}
+              {readOnly ? <span className="text-muted-foreground">—</span> : row.deptTypeName ?? '—'}
             </td>
             <td className="overflow-hidden whitespace-nowrap px-3 py-2 align-middle">
-              {node.isLeaf === 1 ? (
+              {readOnly ? (
+                <span className="text-muted-foreground">—</span>
+              ) : row.isLeaf === 1 ? (
                 <span className="inline-flex items-center rounded-md bg-success/10 px-2 py-0.5 text-xs text-success">末级</span>
               ) : (
                 <span className="inline-flex items-center rounded-md bg-muted px-2 py-0.5 text-xs text-muted-foreground">非末级</span>
               )}
             </td>
+            {/* D7：本地链接部门显示 linkedOrgName；穿透只读行显示来源组织 orgName */}
             <td className="overflow-hidden whitespace-nowrap px-3 py-2 align-middle">
-              {!node.linkedOrgId ? (
+              {readOnly ? (
+                <span
+                  className="inline-flex items-center rounded-md bg-primary/10 px-2 py-0.5 text-xs text-primary"
+                  title="来源组织（穿透只读）"
+                >
+                  {sourceOrgLabel || '—'}
+                </span>
+              ) : !linkedOrgId ? (
                 <span className="text-muted-foreground">—</span>
               ) : (
                 <span className="inline-flex items-center rounded-md bg-muted px-2 py-0.5 text-xs text-foreground/80">
-                  {node.linkedOrgName || orgNameOf(node.linkedOrgId) || node.linkedOrgId}
+                  {linkedOrgLabel}
                 </span>
               )}
             </td>
-            {/* 规则 2.2 / G5：未加载编制时默认 0 */}
+            {/* 规则 2.2 / G5：未加载编制时默认 0；穿透只读行无本地编制数据 → 「—」 */}
             <td className="overflow-hidden whitespace-nowrap px-3 py-2 align-middle text-center">
-              {vo ? vo.postCount : 0}
+              {readOnly ? <span className="text-muted-foreground">—</span> : vo ? vo.postCount : 0}
             </td>
             <td className="overflow-hidden whitespace-nowrap px-3 py-2 align-middle text-center">
-              {vo ? (
+              {readOnly ? (
+                <span className="text-muted-foreground">—</span>
+              ) : vo ? (
                 <span className="rounded-md bg-success/10 px-2 py-0.5 text-xs text-success">{vo.filledCount}</span>
               ) : (
                 0
               )}
             </td>
             <td className="overflow-hidden whitespace-nowrap px-3 py-2 align-middle text-center">
-              {vo ? (
+              {readOnly ? (
+                <span className="text-muted-foreground">—</span>
+              ) : vo ? (
                 <span
                   className={cn(
                     'rounded-md px-2 py-0.5 text-xs',
@@ -389,59 +438,68 @@ export function DeptTreePage({ headerExtra }: { headerExtra?: ReactNode }) {
                 0
               )}
             </td>
-            <td className="overflow-hidden whitespace-nowrap px-3 py-2 align-middle text-center">{node.sort ?? 0}</td>
+            <td className="overflow-hidden whitespace-nowrap px-3 py-2 align-middle text-center">{row.sort ?? 0}</td>
             <td className="overflow-hidden whitespace-nowrap px-3 py-2 align-middle">
               <StatusBadge
-                tone={node.status === 1 ? 'success' : 'destructive'}
-                text={node.status === 1 ? '启用' : '禁用'}
+                tone={row.status === 1 ? 'success' : 'destructive'}
+                text={row.status === 1 ? '启用' : '禁用'}
               />
             </td>
             <td className="px-3 py-2 align-middle">
               <div className="flex items-center justify-end gap-1">
-                {!isLinked ? (
-                  <PermissionGate permission="system:dept:add">
-                    <button
-                      type="button"
-                      className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[0.8125rem] text-primary hover:bg-primary/10"
-                      onClick={() => openCreate(node.id)}
-                    >
-                      <Plus className="h-3 w-3" />
-                      子部门
-                    </button>
-                  </PermissionGate>
-                ) : null}
-                <PermissionGate permission="system:dept:edit">
-                  <button
-                    type="button"
-                    className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[0.8125rem] text-primary hover:bg-primary/10"
-                    onClick={() => openEdit(node)}
-                  >
-                    <Pencil className="h-3 w-3" />
-                    编辑
-                  </button>
-                </PermissionGate>
-                <PermissionGate permission="system:dept:delete">
-                  <button
-                    type="button"
-                    className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[0.8125rem] text-destructive hover:bg-destructive/10"
-                    onClick={() => void onDelete(node)}
-                  >
-                    <Trash2 className="h-3 w-3" />
-                    删除
-                  </button>
-                </PermissionGate>
-                {/* 规则 2.3 / G6：查看任职详情，接管原箭头的编制面板开关 */}
-                <PermissionGate permission="system:dept:view">
-                  <button
-                    type="button"
-                    className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[0.8125rem] text-primary hover:bg-primary/10"
-                    onClick={() => toggleStaffing(node.id)}
-                    title="查看任职详情"
-                  >
-                    <Users className="h-3 w-3" />
-                    查看任职详情
-                  </button>
-                </PermissionGate>
+                {readOnly || !localNode ? (
+                  // D3：穿透只读行隐藏全部操作按钮，仅保留 muted「只读」标签（非交互）
+                  <span className="text-xs text-muted-foreground" title="穿透浏览的下级部门，仅可查看">
+                    只读
+                  </span>
+                ) : (
+                  <>
+                    {!isLinked ? (
+                      <PermissionGate permission="system:dept:add">
+                        <button
+                          type="button"
+                          className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[0.8125rem] text-primary hover:bg-primary/10"
+                          onClick={() => openCreate(row.rawId)}
+                        >
+                          <Plus className="h-3 w-3" />
+                          子部门
+                        </button>
+                      </PermissionGate>
+                    ) : null}
+                    <PermissionGate permission="system:dept:edit">
+                      <button
+                        type="button"
+                        className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[0.8125rem] text-primary hover:bg-primary/10"
+                        onClick={() => openEdit(localNode)}
+                      >
+                        <Pencil className="h-3 w-3" />
+                        编辑
+                      </button>
+                    </PermissionGate>
+                    <PermissionGate permission="system:dept:delete">
+                      <button
+                        type="button"
+                        className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[0.8125rem] text-destructive hover:bg-destructive/10"
+                        onClick={() => void onDelete(localNode)}
+                      >
+                        <Trash2 className="h-3 w-3" />
+                        删除
+                      </button>
+                    </PermissionGate>
+                    {/* 规则 2.3 / G6：查看任职详情，接管原箭头的编制面板开关 */}
+                    <PermissionGate permission="system:dept:view">
+                      <button
+                        type="button"
+                        className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[0.8125rem] text-primary hover:bg-primary/10"
+                        onClick={() => toggleStaffing(row.rawId)}
+                        title="查看任职详情"
+                      >
+                        <Users className="h-3 w-3" />
+                        查看任职详情
+                      </button>
+                    </PermissionGate>
+                  </>
+                )}
               </div>
             </td>
           </tr>
@@ -536,8 +594,34 @@ export function DeptTreePage({ headerExtra }: { headerExtra?: ReactNode }) {
       );
 
       // 规则 2.1 / G4：仅当本节点展开时才递归渲染其子树（默认全折叠）。
-      if (expanded && children.length > 0) {
-        elements.push(...renderNodes(children, depth + 1));
+      if (expanded) {
+        if (pierceLoading) {
+          elements.push(
+            <tr key={`${row.id}::pierce-loading`} className="border-b border-border/50 bg-muted/10">
+              <td
+                colSpan={columns.length}
+                className="px-3 py-2 text-xs text-muted-foreground"
+                style={{ paddingLeft: 12 + (depth + 1) * 16 }}
+              >
+                加载穿透中…
+              </td>
+            </tr>,
+          );
+        } else if (childRows.length > 0) {
+          elements.push(...renderNodes(childRows, depth + 1));
+        } else if (linkedOrgId) {
+          elements.push(
+            <tr key={`${row.id}::pierce-empty`} className="border-b border-border/50 bg-muted/10">
+              <td
+                colSpan={columns.length}
+                className="px-3 py-2 text-xs text-muted-foreground"
+                style={{ paddingLeft: 12 + (depth + 1) * 16 }}
+              >
+                该组织暂无部门数据
+              </td>
+            </tr>,
+          );
+        }
       }
     }
     return elements;
@@ -547,7 +631,7 @@ export function DeptTreePage({ headerExtra }: { headerExtra?: ReactNode }) {
     <div className="flex min-h-0 flex-1 flex-col">
       <PageHeader
         title="部门管理"
-        description="组织内部门树：箭头展开/折叠子部门（默认全折叠）、链接组织箭头自动下钻；「查看任职详情」查看岗位编制。"
+        description="组织内部门树：箭头展开/折叠子部门（默认全折叠）；链接组织的部门点箭头 inline 展开其下级部门（只读）；「查看任职详情」查看岗位编制。"
         breadcrumbs={buildAppBreadcrumbs({
           app: 'system',
           group: '组织架构',
@@ -573,7 +657,7 @@ export function DeptTreePage({ headerExtra }: { headerExtra?: ReactNode }) {
               ))}
             </select>
             <PermissionGate permission="system:dept:add">
-              <Button size="sm" onClick={() => openCreate(tree[0]?.id ?? '0')}>
+              <Button size="sm" onClick={() => openCreate(treeRows[0]?.rawId ?? '0')}>
                 <Plus className="h-4 w-4" />
                 新增部门
               </Button>
@@ -619,14 +703,14 @@ export function DeptTreePage({ headerExtra }: { headerExtra?: ReactNode }) {
                   加载中…
                 </td>
               </tr>
-            ) : tree.length === 0 ? (
+            ) : treeRows.length === 0 ? (
               <tr>
                 <td colSpan={columns.length} className="px-3 py-10 text-center text-muted-foreground">
                   暂无部门数据
                 </td>
               </tr>
             ) : (
-              renderNodes(tree, 0)
+              renderNodes(treeRows, 0)
             )}
           </tbody>
         </table>
@@ -707,8 +791,6 @@ export function DeptTreePage({ headerExtra }: { headerExtra?: ReactNode }) {
           </SheetFooter>
         </SheetContent>
       </Sheet>
-
-      <OrgPierceDrawer anchorDept={pierceAnchor} orgs={orgs} open={pierceOpen} onOpenChange={setPierceOpen} />
     </div>
   );
 }

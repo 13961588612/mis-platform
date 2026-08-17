@@ -1,0 +1,64 @@
+classDiagram
+    class DeptNode {
+        +string id
+        +string orgId
+        +string parentId
+        +string code
+        +string name
+        +number sort
+        +number status
+        +string linkedOrgId
+        +string linkedOrgName
+        +string deptTypeName
+        +number establishmentCount
+        +number isLeaf
+        +DeptNode[] children
+    }
+    class DeptPierceNode {
+        +string id
+        +string orgId
+        +string orgName
+        +string parentId
+        +string code
+        +string name
+        +number sort
+        +number status
+        +string linkedOrgId
+        +string linkedOrgName
+        +DeptPierceNode[] children
+    }
+    class DeptTreeRow {
+        +string id
+        +string code
+        +string name
+        +number sort
+        +number status
+        +string linkedOrgId
+        +string linkedOrgName
+        +string deptTypeName
+        +number establishmentCount
+        +number isLeaf
+        +string sourceOrgName
+        +boolean readOnly
+        +string[] orgChain
+        +DeptTreeRow[] children
+    }
+    class PierceOrgCache {
+        +Record~string,DeptTreeRow[]~ byOrgId
+        +Set~string~ loading
+        +load(orgId, orgChain) void
+    }
+    class DeptTreePage {
+        +Set~string~ expandedIds
+        +Set~string~ staffingIds
+        +DeptTreeRow[] treeRows
+        +onArrowClick(row) void
+        +renderNodes(rows, depth) ReactNode[]
+    }
+    DeptNode "1" *-- "0..*" DeptNode : children
+    DeptPierceNode "1" *-- "0..*" DeptPierceNode : children
+    DeptTreeRow "1" *-- "0..*" DeptTreeRow : children
+    DeptNode ..> DeptTreeRow : normalizeDeptNode(readOnly=false)
+    DeptPierceNode ..> DeptTreeRow : normalizePierce(readOnly=true)
+    DeptTreePage o-- PierceOrgCache : 使用
+    DeptTreePage o-- "0..*" DeptTreeRow : 渲染

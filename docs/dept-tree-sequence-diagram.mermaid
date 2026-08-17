@@ -1,0 +1,40 @@
+sequenceDiagram
+    participant Dev as 开发/CI
+    participant Git as Git 仓库
+    participant FW as Flyway
+    participant DB as PostgreSQL
+    participant BFF as mis-admin-bff
+    participant FE as 前端 PermissionGate
+
+    Dev->>Git: git add + commit V55__dept_types_menu_api_binding.sql
+    Dev->>FW: 部署触发 flyway migrate
+    FW->>DB: 执行 V55（A:9201-9205 / B:224-226 / C:91291-91295 / D:role_id=1 / E:91296-91297）
+    DB-->>FW: 权限码 system:dept-type:add|edit|delete 已登记 + menu_api 绑定
+    Note over BFF: /api/v1/dept-types* 命中 sys_menu_api → 不再 40300
+    FE->>BFF: 加载部门类型页（按钮受 PermissionGate 保护）
+    BFF-->>FE: 200（接口授权映射通过）
+    FE->>FE: 权限命中 → 显示 新增/编辑/删除 按钮
+
+---
+
+sequenceDiagram
+    participant U as 用户
+    participant P as DeptTreePage
+    participant H as usePierceTree(loadPierceOrg)
+    participant API as fetchDeptPierce
+    participant BE as DeptController.pierce
+
+    Note over P: 初始 treeRows = normalizeDeptNode(fetchDeptTree(orgId))
+    U->>P: 点击某「链接部门」箭头
+    P->>P: onArrowClick(row) → toggleExpand(row.id)（统一）
+    alt row.linkedOrgId 存在 且 首次展开 且 非循环
+        P->>H: loadPierceOrg(row.linkedOrgId, row.orgChain)
+        H->>H: 校验 orgId 已在 orgChain? → 是则 toast「已在穿透路径」并中止
+        H->>API: fetchDeptPierce(orgId)
+        API->>BE: GET /depts/pierce?orgId=
+        BE-->>API: DeptPierceNode[]（同 org 全深度 forest）
+        API-->>H: normalizePierce → DeptTreeRow[]（readOnly=true）
+        H-->>P: piercedCache[orgId] 更新（按 orgId 去重）
+    end
+    P->>P: renderNodes 读取 piercedCache[orgId] 作为该节点子级
+    Note over P: readOnly 行：隐藏全部操作按钮；「对应组织」列显示 sourceOrgName(orgName)
