@@ -138,6 +138,25 @@ public class OrgService {
         }
         org.setUpdatedAt(Instant.now());
         orgRepository.save(org);
+
+        // 规则 1.4 / 1.5：组织改名/改状态 → 同步到其顶级（根）部门。
+        // 仅同步 isRoot=1 的根部门，绝不递归子部门，保持「每组织仅一根」语义。
+        deptRepository.findByOrgIdAndIsRoot(id, 1).ifPresent(root -> {
+            boolean dirty = false;
+            if (request.name() != null && !Objects.equals(root.getName(), request.name())) {
+                root.setName(request.name());
+                dirty = true;
+            }
+            if (request.status() != null && !Objects.equals(root.getStatus(), request.status())) {
+                root.setStatus(request.status());
+                dirty = true;
+            }
+            if (dirty) {
+                root.setUpdatedAt(Instant.now());
+                deptRepository.save(root);
+            }
+        });
+
         return toVo(org);
     }
 

@@ -14,6 +14,11 @@ public interface SysDeptRepository extends JpaRepository<SysDept, Long> {
 
     List<SysDept> findByOrgId(Long orgId);
 
+    /**
+     * 按组织 + 是否根部门查询（规则 1.4 / 1.5：取某组织的顶级根部门，做名称/状态同步）。
+     */
+    Optional<SysDept> findByOrgIdAndIsRoot(Long orgId, Integer isRoot);
+
     Optional<SysDept> findByTenantIdAndOrgIdAndCode(Long tenantId, Long orgId, String code);
 
     List<SysDept> findByOrgIdAndParentId(Long orgId, Long parentId);

@@ -151,15 +151,30 @@ public class DeptService {
         validateLinkedOrg(dept.getTenantId(), dept.getOrgId(), request.linkedOrgId());
         dept.setLinkedOrgId(request.linkedOrgId());
 
-        dept.setName(request.name());
-        if (request.categoryId() != null) {
-            dept.setCategoryId(request.categoryId());
-        }
-        if (request.sort() != null) {
-            dept.setSort(request.sort());
-        }
-        if (request.status() != null) {
-            dept.setStatus(request.status());
+        // 规则 1.3：根部门（创建组织时自动生成）的名称/状态由所属组织维护，
+        // 禁止通过部门自身编辑接口修改。仅当请求试图改变根部门的 name/status 时才拦截，
+        // 以免误伤其它字段（如 linkedOrgId）的正常更新；非根部门按原逻辑正常更新。
+        boolean isRoot = dept.getIsRoot() != null && dept.getIsRoot() == 1;
+        if (isRoot) {
+            boolean nameChanged = !Objects.equals(request.name(), dept.getName());
+            boolean statusChanged = request.status() != null
+                    && !Objects.equals(request.status(), dept.getStatus());
+            if (nameChanged || statusChanged) {
+                throw new BusinessException(ResultCode.VALIDATION_ERROR,
+                        "根部门名称/状态由所属组织维护，不可直接修改（请通过修改对应组织调整）");
+            }
+            // 不应用 name/status：根部门字段保持与组织一致，由 OrgService.update 同步。
+        } else {
+            dept.setName(request.name());
+            if (request.categoryId() != null) {
+                dept.setCategoryId(request.categoryId());
+            }
+            if (request.sort() != null) {
+                dept.setSort(request.sort());
+            }
+            if (request.status() != null) {
+                dept.setStatus(request.status());
+            }
         }
         if (request.leaderEmployeeId() != null) {
             dept.setLeaderEmployeeId(request.leaderEmployeeId());
