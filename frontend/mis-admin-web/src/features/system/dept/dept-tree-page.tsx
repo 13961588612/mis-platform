@@ -27,10 +27,13 @@ import {
   type DeptStaffingVO,
 } from '@/lib/api/depts';
 import type { DeptNode, OrgItem } from '@/types/api';
+import { DeptTypeTreeSelect } from '@/components/common/dept-type-tree-select';
 import { OrgPierceDrawer } from './org-pierce-drawer';
 
 /** 种子数据：部门类别 id=3（部门） */
 const DEFAULT_CATEGORY_ID = 3;
+/** V54 种子数据：部门类型 id=1002（默认末级类型） */
+const DEFAULT_DEPT_TYPE_ID = 1002;
 
 const fieldLabel = SHEET_FORM_LABEL;
 const fieldInput =
@@ -38,7 +41,7 @@ const fieldInput =
 
 // 部门树采用递归渲染（renderNodes），不再使用 flatten 全量拍平。
 
-export function DeptTreePage() {
+export function DeptTreePage({ headerExtra }: { headerExtra?: ReactNode }) {
   const [orgs, setOrgs] = useState<OrgItem[]>([]);
   const [orgId, setOrgId] = useState('');
   const [tree, setTree] = useState<DeptNode[]>([]);
@@ -47,7 +50,14 @@ export function DeptTreePage() {
   const [editing, setEditing] = useState<DeptNode | null>(null);
   const [parentId, setParentId] = useState('0');
   const [saving, setSaving] = useState(false);
-  const [form, setForm] = useState({ name: '', sort: '0', status: 1, linkedOrgId: '' });
+  const [form, setForm] = useState({
+    name: '',
+    sort: '0',
+    status: 1,
+    linkedOrgId: '',
+    deptTypeId: String(DEFAULT_DEPT_TYPE_ID),
+    establishmentCount: '0',
+  });
 
   // 子部门树展开集合：默认空 = 全部折叠（规则 2.1 / G4）。箭头切换节点在集合中的存在性。
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
@@ -66,11 +76,14 @@ export function DeptTreePage() {
     [orgs],
   );
 
-  /** E.1 列宽：部门名称(树)/编码/对应组织/岗位数/已任职/空缺/排序/状态/操作（locked） */
+  /** 列宽：部门名称(树)/编码/编制数/部门类型/是否末级/对应组织/岗位数/已任职/空缺/排序/状态/操作（locked） */
   const columns = useMemo<ResizableColumn[]>(
     () => [
       { key: 'name', label: '部门名称' },
       { key: 'code', label: '编码' },
+      { key: 'establishmentCount', label: '编制数' },
+      { key: 'deptTypeName', label: '部门类型' },
+      { key: 'isLeaf', label: '是否末级' },
       { key: 'linkedOrg', label: '对应组织' },
       { key: 'postCount', label: '岗位数' },
       { key: 'filled', label: '已任职' },
@@ -155,7 +168,14 @@ export function DeptTreePage() {
   function openCreate(parent: string) {
     setEditing(null);
     setParentId(parent);
-    setForm({ name: '', sort: '0', status: 1, linkedOrgId: '' });
+    setForm({
+      name: '',
+      sort: '0',
+      status: 1,
+      linkedOrgId: '',
+      deptTypeId: String(DEFAULT_DEPT_TYPE_ID),
+      establishmentCount: '0',
+    });
     setOpen(true);
   }
 
@@ -167,6 +187,8 @@ export function DeptTreePage() {
       sort: String(node.sort ?? 0),
       status: node.status,
       linkedOrgId: node.linkedOrgId ?? '',
+      deptTypeId: node.deptTypeId ?? String(DEFAULT_DEPT_TYPE_ID),
+      establishmentCount: node.establishmentCount != null ? String(node.establishmentCount) : '0',
     });
     setOpen(true);
   }
@@ -185,6 +207,8 @@ export function DeptTreePage() {
           sort: Number(form.sort) || 0,
           status: form.status,
           linkedOrgId,
+          deptTypeId: form.deptTypeId === '' || form.deptTypeId == null ? undefined : Number(form.deptTypeId),
+          establishmentCount: Number(form.establishmentCount) || 0,
         });
         toast.success('已更新');
       } else {
@@ -195,6 +219,8 @@ export function DeptTreePage() {
           categoryId: DEFAULT_CATEGORY_ID,
           sort: Number(form.sort) || 0,
           linkedOrgId,
+          deptTypeId: form.deptTypeId === '' || form.deptTypeId == null ? undefined : Number(form.deptTypeId),
+          establishmentCount: Number(form.establishmentCount) || 0,
         });
         toast.success('已创建');
       }
@@ -315,6 +341,19 @@ export function DeptTreePage() {
             </td>
             <td className="overflow-hidden whitespace-nowrap px-3 py-2 align-middle font-mono text-xs">
               {node.code ?? '—'}
+            </td>
+            <td className="overflow-hidden whitespace-nowrap px-3 py-2 align-middle text-right tabular-nums">
+              {node.establishmentCount ?? 0}
+            </td>
+            <td className="overflow-hidden whitespace-nowrap px-3 py-2 align-middle">
+              {node.deptTypeName ?? '—'}
+            </td>
+            <td className="overflow-hidden whitespace-nowrap px-3 py-2 align-middle">
+              {node.isLeaf === 1 ? (
+                <span className="inline-flex items-center rounded-md bg-success/10 px-2 py-0.5 text-xs text-success">末级</span>
+              ) : (
+                <span className="inline-flex items-center rounded-md bg-muted px-2 py-0.5 text-xs text-muted-foreground">非末级</span>
+              )}
             </td>
             <td className="overflow-hidden whitespace-nowrap px-3 py-2 align-middle">
               {!node.linkedOrgId ? (
@@ -516,6 +555,7 @@ export function DeptTreePage() {
         })}
         actions={
           <div className="flex flex-wrap items-center gap-2">
+            {headerExtra ? <>{headerExtra}</> : null}
             {hasCustom ? (
               <Button type="button" variant="outline" size="sm" onClick={resetColWidths}>
                 重置列宽
@@ -625,6 +665,23 @@ export function DeptTreePage() {
               <p className="mt-1 text-xs text-muted-foreground">
                 打标后，穿透浏览到该部门可「下钻」到对应组织的顶级部门树；不可选当前组织自身
               </p>
+            </div>
+            <div className={SHEET_FORM_FIELD}>
+              <label className={fieldLabel}>部门类型 *</label>
+              <DeptTypeTreeSelect
+                value={form.deptTypeId || ''}
+                onChange={(v) => setForm((f) => ({ ...f, deptTypeId: v == null ? '' : String(v) }))}
+                selectMode="leaf"
+              />
+            </div>
+            <div className={SHEET_FORM_FIELD}>
+              <label className={fieldLabel}>编制数</label>
+              <Input
+                type="number"
+                min={0}
+                value={form.establishmentCount}
+                onChange={(e) => setForm((f) => ({ ...f, establishmentCount: e.target.value }))}
+              />
             </div>
             {editing ? (
               <div className={SHEET_FORM_FIELD}>

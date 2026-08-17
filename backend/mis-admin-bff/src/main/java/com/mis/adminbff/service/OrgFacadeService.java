@@ -3,6 +3,8 @@ package com.mis.adminbff.service;
 import com.mis.adminbff.client.OrgWebClient;
 import com.mis.adminbff.client.model.DeptPierceVO;
 import com.mis.adminbff.client.model.DeptStaffingVO;
+import com.mis.adminbff.client.model.DeptTypeTreeNodeVO;
+import com.mis.adminbff.client.model.DeptTypeVO;
 import com.mis.adminbff.client.model.DeptVO;
 import com.mis.adminbff.client.model.EmployeeVO;
 import com.mis.adminbff.client.model.OrgVO;
@@ -10,6 +12,8 @@ import com.mis.adminbff.client.model.PostTypeTreeNodeVO;
 import com.mis.adminbff.client.model.PostTypeVO;
 import com.mis.adminbff.client.model.PostVO;
 import com.mis.adminbff.dto.DeptCreateRequest;
+import com.mis.adminbff.dto.DeptTypeCreateRequest;
+import com.mis.adminbff.dto.DeptTypeUpdateRequest;
 import com.mis.adminbff.dto.DeptUpdateRequest;
 import com.mis.adminbff.dto.EmployeeCreateRequest;
 import com.mis.adminbff.dto.EmployeeUpdateRequest;
@@ -92,6 +96,9 @@ public class OrgFacadeService {
         body.put("linkedOrgId", request.linkedOrgId());
         body.put("sort", request.sort());
         body.put("leaderEmployeeId", request.leaderEmployeeId());
+        // V54 新增：部门类型 + 编制数
+        body.put("deptTypeId", request.deptTypeId());
+        body.put("establishmentCount", request.establishmentCount());
         return orgWebClient.createDept(body);
     }
 
@@ -105,6 +112,9 @@ public class OrgFacadeService {
         body.put("leaderEmployeeId", request.leaderEmployeeId());
         // V40 更新语义：PUT 总是下发 linkedOrgId（null=清空）
         body.put("linkedOrgId", request.linkedOrgId());
+        // V54 新增：部门类型 + 编制数（NULL=不修改，下游忽略）
+        body.put("deptTypeId", request.deptTypeId());
+        body.put("establishmentCount", request.establishmentCount());
         return orgWebClient.updateDept(id, body);
     }
 
@@ -266,5 +276,51 @@ public class OrgFacadeService {
     /** V40 删除岗位类型（被引用硬拦截）。 */
     public void deletePostType(Long id) {
         orgWebClient.deletePostType(id);
+    }
+
+    // -----------------------------------------------------------------------
+    // 部门类型（V54，透传内部 mis-org /internal/v1/dept-types*）
+    // -----------------------------------------------------------------------
+    /** V54 部门类型全量（含禁用）+ referenceCount；status=1 仅启用。 */
+    public List<DeptTypeVO> listDeptTypes(Integer status) {
+        return orgWebClient.listDeptTypes(RequestContext.requireTenantId(), status);
+    }
+
+    /** V54 部门类型树：按 parent_id 递归组装。 */
+    public List<DeptTypeTreeNodeVO> listDeptTypeTree(Integer status) {
+        return orgWebClient.listDeptTypeTree(RequestContext.requireTenantId(), status);
+    }
+
+    /** V54 新增部门类型。 */
+    public DeptTypeVO createDeptType(DeptTypeCreateRequest request) {
+        Map<String, Object> body = new HashMap<>();
+        body.put("tenantId", RequestContext.requireTenantId());
+        body.put("code", request.code());
+        body.put("name", request.name());
+        body.put("sort", request.sort());
+        body.put("status", request.status());
+        body.put("parentId", request.parentId() != null ? request.parentId() : 0);
+        body.put("isLeaf", request.isLeaf() != null ? request.isLeaf() : 1);
+        return orgWebClient.createDeptType(body);
+    }
+
+    /** V54 编辑部门类型（code 不可编辑）。 */
+    public DeptTypeVO updateDeptType(Long id, DeptTypeUpdateRequest request) {
+        Map<String, Object> body = new HashMap<>();
+        body.put("name", request.name());
+        body.put("sort", request.sort());
+        body.put("status", request.status());
+        if (request.parentId() != null) {
+            body.put("parentId", request.parentId());
+        }
+        if (request.isLeaf() != null) {
+            body.put("isLeaf", request.isLeaf());
+        }
+        return orgWebClient.updateDeptType(id, body);
+    }
+
+    /** V54 删除部门类型（被引用硬拦截）。 */
+    public void deleteDeptType(Long id) {
+        orgWebClient.deleteDeptType(id);
     }
 }

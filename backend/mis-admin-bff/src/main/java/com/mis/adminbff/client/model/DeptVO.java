@@ -18,6 +18,14 @@ public record DeptVO(
         String leaderEmployeeId,
         String linkedOrgId,
         String linkedOrgName,
+        /** V54 新增：部门类型 id（NULL=未设置） */
+        String deptTypeId,
+        /** V54 新增：部门类型名（NULL=未知） */
+        String deptTypeName,
+        /** V54 新增：部门编制数 / headcount 配额（NULL=0） */
+        Integer establishmentCount,
+        /** V54 新增：是否末级（1=末级 / 0=非末级；后端按「有无子部门」计算） */
+        Integer isLeaf,
         Instant createdAt,
         Instant updatedAt,
         List<DeptVO> children

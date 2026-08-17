@@ -13,7 +13,7 @@ import {
 import { PostManagePage } from '@/features/system/post/post-manage-page';
 import { UserListPage } from '@/features/system/user/user-list-page';
 import { OrgListPage } from '@/features/system/org/org-list-page';
-import { DeptTreePage } from '@/features/system/dept/dept-tree-page';
+import { DeptManagePage } from '@/features/system/dept/dept-manage-page';
 import { RoleListPage } from '@/features/system/role/role-list-page';
 import { MenuManagePage } from '@/features/system/menu/menu-manage-page';
 import { DictManagePage } from '@/features/system/dict/dict-manage-page';
@@ -79,7 +79,7 @@ const PAGE_MAP: Record<string, ComponentType> = {
   '/403': ForbiddenPage,
   '/system/user': UserListPage,
   '/system/org': OrgListPage,
-  '/system/dept': DeptTreePage,
+  '/system/dept': DeptManagePage,
   '/system/employee': EmployeePage,
   '/system/post': PostManagePage,
   '/system/app': AppManagePage,

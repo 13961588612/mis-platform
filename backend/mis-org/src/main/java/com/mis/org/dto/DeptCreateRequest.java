@@ -12,5 +12,9 @@ public record DeptCreateRequest(
         /** V40 新增：手工对应组织（穿透锚点，NULL=无） */
         Long linkedOrgId,
         Integer sort,
-        Long leaderEmployeeId
+        Long leaderEmployeeId,
+        /** V54 新增：部门类型 id（应用层必填，逻辑关联 sys_dept_type.id） */
+        @NotNull Long deptTypeId,
+        /** V54 新增：部门编制数 / headcount 配额（NULL=0） */
+        Integer establishmentCount
 ) {}

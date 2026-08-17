@@ -39,4 +39,10 @@ public interface SysDeptRepository extends JpaRepository<SysDept, Long> {
 
     /** V40 新增：组织下是否存在部门（组织删除约束用）。 */
     boolean existsByOrgId(Long orgId);
+
+    /** V54 新增：某部门类型被多少部门引用（类型删除拦截依据）。 */
+    long countByDeptTypeId(Long deptTypeId);
+
+    /** V54 新增：是否存在引用某部门类型的部门。 */
+    boolean existsByDeptTypeId(Long deptTypeId);
 }

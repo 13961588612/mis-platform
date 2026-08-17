@@ -27,6 +27,10 @@ export async function createDept(body: {
   linkedOrgId?: number | null;
   sort?: number;
   leaderEmployeeId?: number;
+  /** V54 部门类型 id（应用层必填） */
+  deptTypeId?: number;
+  /** V54 部门编制数 / headcount 配额（默认 0） */
+  establishmentCount?: number;
 }): Promise<DeptNode> {
   const res = await api.post<ApiResult<DeptNode>>('/depts', body);
   return unwrap(res, '创建部门失败');
@@ -42,6 +46,10 @@ export async function updateDept(
     leaderEmployeeId?: number;
     parentId?: number;
     linkedOrgId?: number | null;
+    /** V54 部门类型 id（NULL=不修改） */
+    deptTypeId?: number;
+    /** V54 部门编制数 / headcount 配额（NULL=不修改） */
+    establishmentCount?: number;
   },
 ): Promise<DeptNode> {
   const res = await api.put<ApiResult<DeptNode>>(`/depts/${id}`, body);

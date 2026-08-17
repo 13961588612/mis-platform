@@ -146,6 +146,14 @@ export interface DeptNode {
   leaderEmployeeId: string | null;
   linkedOrgId: string | null;
   linkedOrgName: string | null;
+  /** V54 部门类型 id（NULL=未设置） */
+  deptTypeId?: string | null;
+  /** V54 部门类型名（由后端解析，NULL=未知） */
+  deptTypeName?: string | null;
+  /** V54 部门编制数 / headcount 配额（NULL=0） */
+  establishmentCount?: number | null;
+  /** V54 是否末级（1=末级 / 0=非末级；后端按「有无子部门」计算） */
+  isLeaf?: number | null;
   createdAt: string | null;
   updatedAt: string | null;
   children?: DeptNode[] | null;
@@ -391,6 +399,43 @@ export interface PostTypeTreeNode {
   /** 1=末级（可选）/ 0=非末级（仅分类） */
   isLeaf: number;
   children?: PostTypeTreeNode[];
+}
+
+/** 部门类型（mis-org DeptTypeVO） */
+export interface DeptTypeItem {
+  id: string;
+  tenantId: string;
+  code: string;
+  name: string;
+  sort: number;
+  status: number;
+  /** sys_dept 引用数（删除拦截依据） */
+  referenceCount: number;
+  parentId?: string;
+  /** 1=末级 / 0=非末级（显式字段） */
+  isLeaf?: number;
+}
+
+/**
+ * 部门类型树节点（mis-org DeptTypeTreeNodeVO / BFF DeptTypeTreeNodeVO 对齐）。
+ *
+ * <p>仅末级节点（isLeaf===1）可被部门选作类型；非末级仅作分类。
+ * isLeaf 为显式字段（创建/更新可写），不按是否有子节点推导。
+ * children 递归。parentId 用于前端展示层级；树已后端构建完成，前端无需再按 parentId 组装。
+ */
+export interface DeptTypeTreeNode {
+  id: string;
+  /** 编码（管理树表展示用，后端 VO 已携带） */
+  code?: string;
+  name: string;
+  sort?: number;
+  status?: number;
+  /** sys_dept 引用数（删除拦截依据） */
+  referenceCount?: number;
+  parentId: string;
+  /** 1=末级（可选）/ 0=非末级（仅分类） */
+  isLeaf: number;
+  children?: DeptTypeTreeNode[];
 }
 
 /** 系统参数（mis-system ConfigVO，全局无 tenant） */

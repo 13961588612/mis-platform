@@ -2,6 +2,8 @@ package com.mis.adminbff.client;
 
 import com.mis.adminbff.client.model.DeptPierceVO;
 import com.mis.adminbff.client.model.DeptStaffingVO;
+import com.mis.adminbff.client.model.DeptTypeTreeNodeVO;
+import com.mis.adminbff.client.model.DeptTypeVO;
 import com.mis.adminbff.client.model.DeptVO;
 import com.mis.adminbff.client.model.EmployeeVO;
 import com.mis.adminbff.client.model.OrgVO;
@@ -49,6 +51,12 @@ public class OrgWebClient extends AbstractDownstreamClient {
     private static final ParameterizedTypeReference<Result<List<PostTypeVO>>> POST_TYPE_LIST =
             new ParameterizedTypeReference<>() {};
     private static final ParameterizedTypeReference<Result<List<PostTypeTreeNodeVO>>> POST_TYPE_TREE_LIST =
+            new ParameterizedTypeReference<>() {};
+    private static final ParameterizedTypeReference<Result<List<DeptTypeVO>>> DEPT_TYPE_LIST =
+            new ParameterizedTypeReference<>() {};
+    private static final ParameterizedTypeReference<Result<List<DeptTypeTreeNodeVO>>> DEPT_TYPE_TREE_LIST =
+            new ParameterizedTypeReference<>() {};
+    private static final ParameterizedTypeReference<Result<DeptTypeVO>> DEPT_TYPE =
             new ParameterizedTypeReference<>() {};
     private static final ParameterizedTypeReference<Result<Void>> VOID =
             new ParameterizedTypeReference<>() {};
@@ -237,6 +245,40 @@ public class OrgWebClient extends AbstractDownstreamClient {
     /** V40 删除岗位类型（被引用硬拦截）。 */
     public void deletePostType(Long id) {
         blockVoid(delete("/internal/v1/post-types/{id}", id));
+    }
+
+    // -----------------------------------------------------------------------
+    // 部门类型（V54，mis-org /internal/v1/dept-types*）
+    // -----------------------------------------------------------------------
+    /** V54 部门类型列表：status 可选（null=全量含禁用，1=仅启用）。 */
+    public List<DeptTypeVO> listDeptTypes(Long tenantId, Integer status) {
+        return block(client().get()
+                .uri(queryUri("/internal/v1/dept-types", "tenantId", tenantId, "status", status))
+                .retrieve()
+                .bodyToMono(DEPT_TYPE_LIST));
+    }
+
+    /** V54 部门类型树：按 parent_id 递归组装（顶层 parentId=0）；status 可选。 */
+    public List<DeptTypeTreeNodeVO> listDeptTypeTree(Long tenantId, Integer status) {
+        return block(client().get()
+                .uri(queryUri("/internal/v1/dept-types/tree", "tenantId", tenantId, "status", status))
+                .retrieve()
+                .bodyToMono(DEPT_TYPE_TREE_LIST));
+    }
+
+    /** V54 新增部门类型。 */
+    public DeptTypeVO createDeptType(Map<String, Object> body) {
+        return block(post(body, DEPT_TYPE, "/internal/v1/dept-types"));
+    }
+
+    /** V54 编辑部门类型。 */
+    public DeptTypeVO updateDeptType(Long id, Map<String, Object> body) {
+        return block(put(body, DEPT_TYPE, "/internal/v1/dept-types/{id}", id));
+    }
+
+    /** V54 删除部门类型（被引用硬拦截）。 */
+    public void deleteDeptType(Long id) {
+        blockVoid(delete("/internal/v1/dept-types/{id}", id));
     }
 
     public Map<Long, String> employeeNames(List<Long> ids) {

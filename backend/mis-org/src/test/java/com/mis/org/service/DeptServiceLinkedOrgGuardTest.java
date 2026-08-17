@@ -4,6 +4,7 @@ import com.mis.common.core.exception.BusinessException;
 import com.mis.org.domain.entity.SysDept;
 import com.mis.org.domain.entity.SysOrg;
 import com.mis.org.domain.repository.SysDeptRepository;
+import com.mis.org.domain.repository.SysDeptTypeRepository;
 import com.mis.org.domain.repository.SysEmployeeRepository;
 import com.mis.org.domain.repository.SysOrgRepository;
 import com.mis.org.domain.repository.SysPostRepository;
@@ -34,6 +35,8 @@ class DeptServiceLinkedOrgGuardTest {
     @Mock
     private SysDeptRepository deptRepository;
     @Mock
+    private SysDeptTypeRepository deptTypeRepository;
+    @Mock
     private SysOrgRepository orgRepository;
     @Mock
     private SysEmployeeRepository employeeRepository;
@@ -44,7 +47,7 @@ class DeptServiceLinkedOrgGuardTest {
 
     @BeforeEach
     void setUp() {
-        deptService = new DeptService(deptRepository, orgRepository, employeeRepository, postRepository);
+        deptService = new DeptService(deptRepository, deptTypeRepository, orgRepository, employeeRepository, postRepository);
     }
 
     private static SysDept dept(Long id, Long orgId, Long tenantId, Long linkedOrgId) {
@@ -66,7 +69,7 @@ class DeptServiceLinkedOrgGuardTest {
         when(orgRepository.findById(orgId)).thenReturn(Optional.of(new SysOrg()));
         when(deptRepository.findById(parentId)).thenReturn(Optional.of(parent));
 
-        DeptCreateRequest request = new DeptCreateRequest(tenantId, orgId, parentId, "子部门", 3L, null, 0, null);
+        DeptCreateRequest request = new DeptCreateRequest(tenantId, orgId, parentId, "子部门", 3L, null, 0, null, 1002L, null);
 
         BusinessException ex = assertThrows(BusinessException.class, () -> deptService.create(request));
         assertTrue(ex.getMessage().contains("已关联组织的部门不可再创建子部门"));
@@ -91,7 +94,7 @@ class DeptServiceLinkedOrgGuardTest {
         when(deptRepository.findById(deptId)).thenReturn(Optional.of(dept));
         when(deptRepository.findById(newParentId)).thenReturn(Optional.of(newParent));
 
-        DeptUpdateRequest request = new DeptUpdateRequest("更名", 3L, newParentId, 0, 1, null, null);
+        DeptUpdateRequest request = new DeptUpdateRequest("更名", 3L, newParentId, 0, 1, null, null, null, null);
 
         BusinessException ex = assertThrows(BusinessException.class, () -> deptService.update(deptId, request));
         assertTrue(ex.getMessage().contains("不能将部门移动到已关联组织的部门下"));

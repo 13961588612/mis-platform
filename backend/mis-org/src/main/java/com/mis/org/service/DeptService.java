@@ -3,8 +3,10 @@ package com.mis.org.service;
 import com.mis.common.core.exception.BusinessException;
 import com.mis.common.core.exception.ResultCode;
 import com.mis.org.domain.entity.SysDept;
+import com.mis.org.domain.entity.SysDeptType;
 import com.mis.org.domain.entity.SysOrg;
 import com.mis.org.domain.repository.SysDeptRepository;
+import com.mis.org.domain.repository.SysDeptTypeRepository;
 import com.mis.org.domain.repository.SysEmployeeRepository;
 import com.mis.org.domain.repository.SysOrgRepository;
 import com.mis.org.domain.repository.SysPostRepository;
@@ -28,20 +30,25 @@ import java.util.stream.Collectors;
 /**
  * 组织内部门树：层级 code（ADR-011/013）与 ancestors 维护。
  * V40 新增：部门手工对应组织（linked_org_id 穿透锚点）+ 组织穿透只读 forest（pierce）。
+ * V54 新增：部门类型（deptTypeId / deptTypeName）+ 部门编制数（establishmentCount）
+ *         + 是否末级（isLeaf，后端按「有无子部门」计算，不按前端 children 推导）。
  */
 @Service
 public class DeptService {
 
     private final SysDeptRepository deptRepository;
+    private final SysDeptTypeRepository deptTypeRepository;
     private final SysOrgRepository orgRepository;
     private final SysEmployeeRepository employeeRepository;
     private final SysPostRepository postRepository;
 
     public DeptService(SysDeptRepository deptRepository,
+                       SysDeptTypeRepository deptTypeRepository,
                        SysOrgRepository orgRepository,
                        SysEmployeeRepository employeeRepository,
                        SysPostRepository postRepository) {
         this.deptRepository = deptRepository;
+        this.deptTypeRepository = deptTypeRepository;
         this.orgRepository = orgRepository;
         this.employeeRepository = employeeRepository;
         this.postRepository = postRepository;
@@ -53,9 +60,10 @@ public class DeptService {
         Map<Long, List<SysDept>> parentMap = all.stream()
                 .collect(Collectors.groupingBy(SysDept::getParentId));
         Map<Long, String> orgNames = resolveLinkedOrgNames(all);
+        Map<Long, String> deptTypeNameMap = buildDeptTypeNameMap(all);
         List<SysDept> roots = parentMap.getOrDefault(0L, List.of());
         return roots.stream()
-                .map(d -> toVo(d, parentMap, orgNames))
+                .map(d -> toVoTree(d, parentMap, orgNames, deptTypeNameMap))
                 .toList();
     }
 
@@ -83,7 +91,11 @@ public class DeptService {
     public DeptVO getById(Long id) {
         SysDept dept = deptRepository.findById(id)
                 .orElseThrow(() -> new BusinessException(ResultCode.NOT_FOUND, "部门不存在"));
-        return toVo(dept, Map.of(), resolveLinkedOrgNames(List.of(dept)));
+        Map<Long, String> orgNames = resolveLinkedOrgNames(List.of(dept));
+        Map<Long, String> deptTypeNameMap = buildDeptTypeNameMap(List.of(dept));
+        // 是否末级：按「有无子部门」计算（后端真源，前端只读）。
+        int isLeaf = deptRepository.existsByOrgIdAndParentId(dept.getOrgId(), dept.getId()) ? 0 : 1;
+        return toVoSingle(dept, orgNames, deptTypeNameMap, isLeaf);
     }
 
     /** 本部门及全部子孙 ID（含自身），供 DataScope。 */
@@ -135,11 +147,15 @@ public class DeptService {
         dept.setIsRoot(0);
         dept.setLeaderEmployeeId(request.leaderEmployeeId());
         dept.setLinkedOrgId(request.linkedOrgId());
+        // V54 新增：部门类型 + 编制数
+        dept.setDeptTypeId(request.deptTypeId());
+        dept.setEstablishmentCount(request.establishmentCount() != null ? request.establishmentCount() : 0);
         dept.setDeleted(0);
         dept.setCreatedAt(now);
         dept.setUpdatedAt(now);
         deptRepository.save(dept);
-        return toVo(dept, Map.of(), resolveLinkedOrgNames(List.of(dept)));
+        int isLeaf = deptRepository.existsByOrgIdAndParentId(dept.getOrgId(), dept.getId()) ? 0 : 1;
+        return toVoSingle(dept, resolveLinkedOrgNames(List.of(dept)), buildDeptTypeNameMap(List.of(dept)), isLeaf);
     }
 
     @Transactional
@@ -179,6 +195,13 @@ public class DeptService {
         if (request.leaderEmployeeId() != null) {
             dept.setLeaderEmployeeId(request.leaderEmployeeId());
         }
+        // V54 新增：部门类型 + 编制数（NULL=不修改）
+        if (request.deptTypeId() != null) {
+            dept.setDeptTypeId(request.deptTypeId());
+        }
+        if (request.establishmentCount() != null) {
+            dept.setEstablishmentCount(request.establishmentCount());
+        }
 
         if (request.parentId() != null && !request.parentId().equals(dept.getParentId())) {
             relocate(dept, request.parentId());
@@ -186,7 +209,8 @@ public class DeptService {
 
         dept.setUpdatedAt(Instant.now());
         deptRepository.save(dept);
-        return toVo(dept, Map.of(), resolveLinkedOrgNames(List.of(dept)));
+        int isLeaf = deptRepository.existsByOrgIdAndParentId(dept.getOrgId(), dept.getId()) ? 0 : 1;
+        return toVoSingle(dept, resolveLinkedOrgNames(List.of(dept)), buildDeptTypeNameMap(List.of(dept)), isLeaf);
     }
 
     @Transactional
@@ -240,6 +264,19 @@ public class DeptService {
         }
         return orgRepository.findAllById(linkedIds).stream()
                 .collect(Collectors.toMap(SysOrg::getId, SysOrg::getName, (a, b) -> a));
+    }
+
+    /** V54 批量解析部门类型名（一次 findAllById，供 deptTypeName 展示）。 */
+    private Map<Long, String> buildDeptTypeNameMap(List<SysDept> depts) {
+        Set<Long> typeIds = depts.stream()
+                .map(SysDept::getDeptTypeId)
+                .filter(Objects::nonNull)
+                .collect(Collectors.toSet());
+        if (typeIds.isEmpty()) {
+            return Map.of();
+        }
+        return deptTypeRepository.findAllById(typeIds).stream()
+                .collect(Collectors.toMap(SysDeptType::getId, SysDeptType::getName, (a, b) -> a));
     }
 
     private DeptPierceVO toPierceVo(SysDept dept, Map<Long, List<SysDept>> parentMap,
@@ -368,11 +405,25 @@ public class DeptService {
         return buildAncestors(parent);
     }
 
-    private DeptVO toVo(SysDept dept, Map<Long, List<SysDept>> parentMap, Map<Long, String> orgNames) {
+    /** 树递归构造：children 由 parentMap 递归展开；isLeaf 按「有无子部门」计算。 */
+    private DeptVO toVoTree(SysDept dept, Map<Long, List<SysDept>> parentMap, Map<Long, String> orgNames,
+                            Map<Long, String> deptTypeNameMap) {
         List<DeptVO> children = parentMap.getOrDefault(dept.getId(), List.of()).stream()
-                .map(d -> toVo(d, parentMap, orgNames))
+                .map(d -> toVoTree(d, parentMap, orgNames, deptTypeNameMap))
                 .toList();
+        int isLeaf = children.isEmpty() ? 1 : 0;
+        return buildVo(dept, orgNames, deptTypeNameMap, isLeaf, children);
+    }
+
+    /** 单节点构造（getById / create / update）：无 children；isLeaf 由调用方显式传入。 */
+    private DeptVO toVoSingle(SysDept dept, Map<Long, String> orgNames, Map<Long, String> deptTypeNameMap, int isLeaf) {
+        return buildVo(dept, orgNames, deptTypeNameMap, isLeaf, List.of());
+    }
+
+    private DeptVO buildVo(SysDept dept, Map<Long, String> orgNames, Map<Long, String> deptTypeNameMap,
+                           int isLeaf, List<DeptVO> children) {
         Long linked = dept.getLinkedOrgId();
+        String deptTypeName = dept.getDeptTypeId() != null ? deptTypeNameMap.get(dept.getDeptTypeId()) : null;
         return new DeptVO(
                 String.valueOf(dept.getId()),
                 String.valueOf(dept.getTenantId()),
@@ -388,6 +439,10 @@ public class DeptService {
                 dept.getLeaderEmployeeId() != null ? String.valueOf(dept.getLeaderEmployeeId()) : null,
                 linked != null ? String.valueOf(linked) : null,
                 linked != null ? orgNames.get(linked) : null,
+                dept.getDeptTypeId() != null ? String.valueOf(dept.getDeptTypeId()) : null,
+                deptTypeName,
+                dept.getEstablishmentCount(),
+                isLeaf,
                 dept.getCreatedAt(),
                 dept.getUpdatedAt(),
                 children.isEmpty() ? null : children);
