@@ -126,9 +126,9 @@ public class OrgFacadeService {
         return orgWebClient.listEmployeesByDept(RequestContext.requireTenantId(), deptId);
     }
 
-    /** 员工全量列表（含禁用；realName/deptId/status 可选）。 */
-    public List<EmployeeVO> listAllEmployees(String realName, Long deptId, Integer status) {
-        return orgWebClient.listAllEmployees(RequestContext.requireTenantId(), realName, deptId, status);
+    /** 员工全量列表（含禁用；realName/deptId/deptIds/orgIds/status 可选）。 */
+    public List<EmployeeVO> listAllEmployees(String realName, Long deptId, Integer status, List<Long> deptIds, List<Long> orgIds) {
+        return orgWebClient.listAllEmployees(RequestContext.requireTenantId(), realName, deptId, status, deptIds, orgIds);
     }
 
     public EmployeeVO getEmployee(Long id) {

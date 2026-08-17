@@ -167,6 +167,10 @@ export interface DeptPierceNode {
   parentId: string;
   code: string;
   name: string;
+  /** V54 部门类型 id（与 DeptNode.deptTypeId 对齐） */
+  deptTypeId?: string | null;
+  /** V54 部门类型名（穿透只读行同样携带，与 tree 对齐） */
+  deptTypeName?: string | null;
   sort: number;
   status: number;
   isRoot: number | null;
@@ -321,6 +325,8 @@ export interface EmployeePostItem {
   postName: string | null;
   deptId: string | null;
   deptName: string | null;
+  /** V54 该任职部门所属组织名（脏数据/未挂载组织时为 null，UI 显示「—」） */
+  orgName?: string | null;
   isPrimary: number;
   status: number;
   startDate: string | null;
@@ -333,6 +339,8 @@ export interface EmployeeItem {
   deptId: string;
   deptIds: string[];
   primaryDeptId: string;
+  /** V54 主部门所属组织名（由 emp.deptId → dept → org 解析；脏数据/未挂载组织时为 null） */
+  orgName?: string | null;
   posts: EmployeePostItem[];
   employeeNo: string;
   realName: string;
@@ -354,6 +362,10 @@ export interface PostItem {
   tenantId: string;
   deptId: string;
   deptName: string | null;
+  /** R7：所属组织 id（与 deptId 对称；脏数据可能为 null） */
+  orgId?: string;
+  /** R7：所属组织名（与 deptName 对称；脏数据/未挂载组织时为 null，UI 显示「—」） */
+  orgName?: string | null;
   postTypeId: string;
   postTypeName: string | null;
   code: string;

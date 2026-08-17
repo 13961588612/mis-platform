@@ -66,11 +66,14 @@ sys_menu（UI 树）                    sys_menu_api              sys_api
 
 | permission | 类型 | 说明 |
 |------------|------|------|
-| system:dept:list | 菜单+API | 部门树（按 orgId） |
+| system:dept:list | 菜单+API | 部门树（按 orgId）；含部门类型树/列表只读 |
 | system:dept:query | API | 部门详情 |
 | system:dept:add | 按钮+API | 新增部门 |
 | system:dept:edit | 按钮+API | 编辑部门 |
 | system:dept:delete | 按钮+API | 删除部门 |
+| system:dept-type:add | 按钮+API | 新增部门类型（V55，菜单 224） |
+| system:dept-type:edit | 按钮+API | 编辑部门类型（V55，菜单 225） |
+| system:dept-type:delete | 按钮+API | 删除部门类型（V55，菜单 226） |
 
 ### 3.5 角色管理
 

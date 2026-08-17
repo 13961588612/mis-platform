@@ -540,13 +540,19 @@ class BffApiRegistryDiffSurveyTest {
             "DELETE /api/v1/orgs/{id}",
             "GET /api/v1/depts/tree",
             "GET /api/v1/depts/{id}",
-            // ---- V49：部门岗位编制（sys_api 91202 / 挂 catalog 2001 部门查询）----
+            // ---- V49：部门岗位编制（sys_api 91202 / 挂 catalog 2001；V55 menu_api → 206）----
             "GET /api/v1/depts/{id}/staffing",
             // ---- V40：组织穿透（sys_api 91198 / menu_api → 菜单 206 system:dept:list）----
             "GET /api/v1/depts/pierce",
             "POST /api/v1/depts",
             "PUT /api/v1/depts/{id}",
             "DELETE /api/v1/depts/{id}",
+            // ---- V54/V55：部门类型（sys_api 9201-9205 / menu_api 91291-91295）----
+            "GET /api/v1/dept-types",
+            "GET /api/v1/dept-types/tree",
+            "POST /api/v1/dept-types",
+            "PUT /api/v1/dept-types/{id:[0-9]+}",
+            "DELETE /api/v1/dept-types/{id:[0-9]+}",
             "GET /api/v1/roles",
             "GET /api/v1/roles/{id}",
             "POST /api/v1/roles",
@@ -791,7 +797,7 @@ class BffApiRegistryDiffSurveyTest {
             "POST /api/v1/post-types",
             "PUT /api/v1/post-types/{id}",
             "DELETE /api/v1/post-types/{id}",
-            // ---- V49：岗位类型树（sys_api 91203 / 挂 catalog 91178 员工与岗位）----
+            // ---- V49：岗位类型树（sys_api 91203；V55 menu_api → 285 system:post:list）----
             "GET /api/v1/post-types/tree",
             // 系统参数列表/详情/新增/编辑/删除（sys_api 91190-91194）
             "GET /api/v1/configs",

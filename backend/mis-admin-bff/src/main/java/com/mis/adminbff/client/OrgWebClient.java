@@ -169,11 +169,15 @@ public class OrgWebClient extends AbstractDownstreamClient {
                 .bodyToMono(EMP_LIST));
     }
 
-    /** 员工全量列表（含禁用；realName 模糊；deptId/status 可选）。 */
-    public List<EmployeeVO> listAllEmployees(Long tenantId, String realName, Long deptId, Integer status) {
+    /** 员工全量列表（含禁用；realName 模糊；deptId/deptIds/orgIds/status 可选）。 */
+    public List<EmployeeVO> listAllEmployees(Long tenantId, String realName, Long deptId, Integer status,
+                                             List<Long> deptIds, List<Long> orgIds) {
+        String deptIdsParam = (deptIds == null || deptIds.isEmpty()) ? null : deptIds.stream().map(String::valueOf).collect(Collectors.joining(","));
+        String orgIdsParam = (orgIds == null || orgIds.isEmpty()) ? null : orgIds.stream().map(String::valueOf).collect(Collectors.joining(","));
         return block(client().get()
                 .uri(queryUri("/internal/v1/employees/all",
-                        "tenantId", tenantId, "realName", realName, "deptId", deptId, "status", status))
+                        "tenantId", tenantId, "realName", realName, "deptId", deptId,
+                        "deptIds", deptIdsParam, "orgIds", orgIdsParam, "status", status))
                 .headers(loginContextHeaders())
                 .retrieve()
                 .bodyToMono(EMP_LIST));

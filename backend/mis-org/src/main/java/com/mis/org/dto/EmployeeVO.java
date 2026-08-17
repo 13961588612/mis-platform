@@ -10,6 +10,8 @@ public record EmployeeVO(
         String deptId,
         List<String> deptIds,
         String primaryDeptId,
+        /** 主部门所属组织名（由 emp.deptId → dept → org 解析；脏数据/未挂载组织时为 null） */
+        String orgName,
         List<EmployeePostVO> posts,
         String employeeNo,
         String realName,

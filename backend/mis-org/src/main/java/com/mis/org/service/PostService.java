@@ -3,10 +3,12 @@ package com.mis.org.service;
 import com.mis.common.core.exception.BusinessException;
 import com.mis.common.core.exception.ResultCode;
 import com.mis.org.domain.entity.SysDept;
+import com.mis.org.domain.entity.SysOrg;
 import com.mis.org.domain.entity.SysPost;
 import com.mis.org.domain.entity.SysPostType;
 import com.mis.org.domain.repository.SysDeptRepository;
 import com.mis.org.domain.repository.SysEmployeePostRepository;
+import com.mis.org.domain.repository.SysOrgRepository;
 import com.mis.org.domain.repository.SysPostRepository;
 import com.mis.org.domain.repository.SysPostTypeRepository;
 import com.mis.org.dto.PostCreateRequest;
@@ -26,6 +28,7 @@ import java.util.Comparator;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.stream.Collectors;
 
@@ -40,16 +43,19 @@ public class PostService {
     private final SysPostTypeRepository postTypeRepository;
     private final SysEmployeePostRepository employeePostRepository;
     private final SysDeptRepository deptRepository;
+    private final SysOrgRepository orgRepository;
 
     public PostService(
             SysPostRepository postRepository,
             SysPostTypeRepository postTypeRepository,
             SysEmployeePostRepository employeePostRepository,
-            SysDeptRepository deptRepository) {
+            SysDeptRepository deptRepository,
+            SysOrgRepository orgRepository) {
         this.postRepository = postRepository;
         this.postTypeRepository = postTypeRepository;
         this.employeePostRepository = employeePostRepository;
         this.deptRepository = deptRepository;
+        this.orgRepository = orgRepository;
     }
 
     /**
@@ -63,6 +69,8 @@ public class PostService {
      *   <li>{@code postTypeId}/{@code status} 沿用既有流过滤；</li>
      *   <li>tenantId 隔离不变。</li>
      * </ul>
+     *
+     * <p>R1：过滤后先<b>批量预取</b> dept / org / postType 到 Map，再映射为 VO，消除逐条 {@code toVo} 的 N+1。
      */
     @Transactional(readOnly = true)
     public List<PostVO> list(Long tenantId, Long deptId, List<Long> deptIds, List<Long> orgIds, Long postTypeId, Integer status) {
@@ -97,12 +105,27 @@ public class PostService {
         }
 
         final Set<Long> filter = effectiveDeptIds;
-        return postRepository.findByTenantId(tenantId).stream()
+        List<SysPost> filtered = postRepository.findByTenantId(tenantId).stream()
                 .filter(p -> filter == null || filter.contains(p.getDeptId()))
                 .filter(p -> postTypeId == null || postTypeId.equals(p.getPostTypeId()))
                 .filter(p -> status == null || status.equals(p.getStatus()))
-                .map(this::toVo)
                 .toList();
+
+        // R1：批量预取 dept / org / postType，消除逐条 toVo 的 N+1 查库。
+        Set<Long> postDeptIds = filtered.stream().map(SysPost::getDeptId).collect(Collectors.toSet());
+        Map<Long, SysDept> deptMap = deptRepository.findAllById(postDeptIds).stream()
+                .collect(Collectors.toMap(SysDept::getId, d -> d, (a, b) -> a));
+        Set<Long> orgIdsSet = deptMap.values().stream()
+                .map(SysDept::getOrgId)
+                .filter(Objects::nonNull)
+                .collect(Collectors.toSet());
+        Map<Long, SysOrg> orgMap = orgRepository.findAllById(orgIdsSet).stream()
+                .collect(Collectors.toMap(SysOrg::getId, o -> o, (a, b) -> a));
+        Set<Long> typeIds = filtered.stream().map(SysPost::getPostTypeId).collect(Collectors.toSet());
+        Map<Long, SysPostType> typeMap = postTypeRepository.findAllById(typeIds).stream()
+                .collect(Collectors.toMap(SysPostType::getId, t -> t, (a, b) -> a));
+
+        return filtered.stream().map(p -> toVo(p, deptMap, orgMap, typeMap)).toList();
     }
 
     @Transactional(readOnly = true)
@@ -430,8 +453,18 @@ public class PostService {
         }
     }
 
+    /**
+     * 单条 toVo（getById / create / update 调用；调用点不动）：逐条补 org 解析。
+     */
     private PostVO toVo(SysPost p) {
-        String deptName = deptRepository.findById(p.getDeptId()).map(SysDept::getName).orElse(null);
+        SysDept dept = deptRepository.findById(p.getDeptId()).orElse(null);
+        String deptName = dept != null ? dept.getName() : null;
+        String orgId = null;
+        String orgName = null;
+        if (dept != null && dept.getOrgId() != null) {
+            orgId = String.valueOf(dept.getOrgId());
+            orgName = orgRepository.findById(dept.getOrgId()).map(SysOrg::getName).orElse(null);
+        }
         String postTypeName = postTypeRepository.findById(p.getPostTypeId())
                 .map(SysPostType::getName)
                 .orElse(null);
@@ -446,6 +479,45 @@ public class PostService {
                 p.getName(),
                 p.getSort(),
                 p.getStatus(),
-                p.getQuota());
+                p.getQuota(),
+                orgId,
+                orgName);
+    }
+
+    /**
+     * 批量预取版 toVo（R1）：从已加载的 deptMap / orgMap / typeMap 取名称，避免逐条查库。
+     *
+     * @param p       岗位
+     * @param deptMap 部门 id → 部门（批量预取）
+     * @param orgMap  组织 id → 组织（批量预取）
+     * @param typeMap 岗位类型 id → 类型（批量预取）
+     */
+    private PostVO toVo(SysPost p, Map<Long, SysDept> deptMap, Map<Long, SysOrg> orgMap, Map<Long, SysPostType> typeMap) {
+        SysDept dept = deptMap.get(p.getDeptId());
+        String deptName = dept != null ? dept.getName() : null;
+        String orgId = null;
+        String orgName = null;
+        if (dept != null && dept.getOrgId() != null) {
+            orgId = String.valueOf(dept.getOrgId());
+            SysOrg org = orgMap.get(dept.getOrgId());
+            // 脏数据：dept.orgId 指向不存在 org 时 orgName 为 null（与计数 0 语义不同，R5）。
+            orgName = org != null ? org.getName() : null;
+        }
+        SysPostType type = typeMap.get(p.getPostTypeId());
+        String postTypeName = type != null ? type.getName() : null;
+        return new PostVO(
+                String.valueOf(p.getId()),
+                String.valueOf(p.getTenantId()),
+                String.valueOf(p.getDeptId()),
+                deptName,
+                String.valueOf(p.getPostTypeId()),
+                postTypeName,
+                p.getCode(),
+                p.getName(),
+                p.getSort(),
+                p.getStatus(),
+                p.getQuota(),
+                orgId,
+                orgName);
     }
 }

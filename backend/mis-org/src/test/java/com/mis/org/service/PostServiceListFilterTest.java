@@ -1,9 +1,12 @@
 package com.mis.org.service;
 
 import com.mis.org.domain.entity.SysDept;
+import com.mis.org.domain.entity.SysOrg;
 import com.mis.org.domain.entity.SysPost;
+import com.mis.org.domain.entity.SysPostType;
 import com.mis.org.domain.repository.SysDeptRepository;
 import com.mis.org.domain.repository.SysEmployeePostRepository;
+import com.mis.org.domain.repository.SysOrgRepository;
 import com.mis.org.domain.repository.SysPostRepository;
 import com.mis.org.domain.repository.SysPostTypeRepository;
 import com.mis.org.dto.PostVO;
@@ -15,10 +18,19 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import java.util.Collection;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -43,6 +55,9 @@ import static org.mockito.Mockito.when;
  *           post 1(dept101) 2(dept102) 3(dept201) 4(dept301)
  *   租户 2：dept 999 → post 9（用于租户隔离断言）
  * </pre>
+ *
+ * <p>R1/R7 回归：list() 现批量预取 dept/org/postType（注册表式 stub 支撑）；
+ * OrgNameEnrichment 覆盖 PostVO.orgId/orgName 的填充与脏数据兜底。
  */
 @ExtendWith(MockitoExtension.class)
 class PostServiceListFilterTest {
@@ -58,12 +73,47 @@ class PostServiceListFilterTest {
     private SysEmployeePostRepository employeePostRepository;
     @Mock
     private SysDeptRepository deptRepository;
+    @Mock
+    private SysOrgRepository orgRepository;
+
+    /** 部门注册表：支撑 list() 批量预取 + 单条 toVo 的 findById（脏数据兜底）。 */
+    private final Map<Long, SysDept> depts = new HashMap<>();
+    /** 岗位类型注册表。 */
+    private final Map<Long, SysPostType> types = new HashMap<>();
+    /** 组织注册表：支撑 orgId → orgName 解析（R7）。 */
+    private final Map<Long, SysOrg> orgs = new HashMap<>();
 
     private PostService postService;
 
     @BeforeEach
     void setUp() {
-        postService = new PostService(postRepository, postTypeRepository, employeePostRepository, deptRepository);
+        postService = new PostService(postRepository, postTypeRepository, employeePostRepository, deptRepository, orgRepository);
+
+        // 通用回退 stub：findAllById / findById 从注册表解析（list 批量预取 + 单条 toVo 共用），
+        // 避免 Mockito 默认对未 stub 的 List 返回 null 导致 NPE。
+        //
+        // QA-FIX：必须用 lenient()。MockitoExtension 默认 STRICT_STUBS，会在每个测试结束时校验
+        // 「本测试是否用到了每一条 stub」——list() 路径只走 findAllById、getById 路径只走 findById，
+        // 两组回退 stub 在对方路径下必然未被调用 → 直接 when(...) 会抛 UnnecessaryStubbingException。
+        // 这是 setUp 级「注册表式回退 stub」的固有属性，用 lenient 声明其可选性才是正确写法。
+        lenient().when(deptRepository.findAllById(any())).thenAnswer(inv -> {
+            Collection<Long> ids = inv.getArgument(0);
+            return ids.stream().map(depts::get).filter(Objects::nonNull).toList();
+        });
+        lenient().when(postTypeRepository.findAllById(any())).thenAnswer(inv -> {
+            Collection<Long> ids = inv.getArgument(0);
+            return ids.stream().map(types::get).filter(Objects::nonNull).toList();
+        });
+        lenient().when(orgRepository.findAllById(any())).thenAnswer(inv -> {
+            Collection<Long> ids = inv.getArgument(0);
+            return ids.stream().map(orgs::get).filter(Objects::nonNull).toList();
+        });
+        lenient().when(deptRepository.findById(anyLong()))
+                .thenAnswer(inv -> Optional.ofNullable(depts.get(inv.getArgument(0))));
+        lenient().when(postTypeRepository.findById(anyLong()))
+                .thenAnswer(inv -> Optional.ofNullable(types.get(inv.getArgument(0))));
+        lenient().when(orgRepository.findById(anyLong()))
+                .thenAnswer(inv -> Optional.ofNullable(orgs.get(inv.getArgument(0))));
     }
 
     // ---------------------------------------------------------------- fixtures
@@ -87,6 +137,14 @@ class PostServiceListFilterTest {
         d.setOrgId(orgId);
         d.setTenantId(TENANT);
         return d;
+    }
+
+    private static SysOrg org(long id, String name) {
+        SysOrg o = new SysOrg();
+        o.setId(id);
+        o.setName(name);
+        o.setTenantId(TENANT);
+        return o;
     }
 
     /** 租户 1 的四个岗位：dept 101 / 102 / 201 / 301，全部 status=1、postType=7。 */
@@ -348,6 +406,75 @@ class PostServiceListFilterTest {
 
             assertTrue(result.isEmpty(),
                     "跨租户部门 id 不应命中本租户候选集，且不得越权返回别租户岗位");
+        }
+    }
+
+    // ---------------------------------------------------------------- R7：org 透传
+
+    @Nested
+    @DisplayName("OrgNameEnrichment：PostVO 携带 orgId / orgName（R1 批量预取 + R7 对称）")
+    class OrgNameEnrichment {
+
+        @Test
+        @DisplayName("getById 单条：dept.orgId 指向存在 org → 返回 orgId + orgName")
+        void getByIdEnrichesOrg() {
+            depts.put(101L, dept(101L, 10L));
+            orgs.put(10L, org(10L, "组织甲"));
+            when(postRepository.findById(1L)).thenReturn(Optional.of(post(1L, 101L, 7L, 1)));
+
+            PostVO vo = postService.getById(1L);
+
+            assertEquals("10", vo.orgId());
+            assertEquals("组织甲", vo.orgName());
+        }
+
+        @Test
+        @DisplayName("list 批量（R1）：每个 PostVO 经预取带 orgId / orgName")
+        void listBatchEnrichesOrg() {
+            givenTenantPosts();
+            depts.put(101L, dept(101L, 10L));
+            depts.put(102L, dept(102L, 10L));
+            depts.put(201L, dept(201L, 20L));
+            depts.put(301L, dept(301L, 30L));
+            orgs.put(10L, org(10L, "组织甲"));
+            orgs.put(20L, org(20L, "组织乙"));
+            orgs.put(30L, org(30L, "组织丙"));
+
+            List<PostVO> result = postService.list(TENANT, null, null, null, null, null);
+
+            assertEquals(4, result.size());
+            PostVO p1 = result.stream().filter(v -> "1".equals(v.id())).findFirst().orElseThrow();
+            assertEquals("10", p1.orgId());
+            assertEquals("组织甲", p1.orgName());
+            PostVO p3 = result.stream().filter(v -> "3".equals(v.id())).findFirst().orElseThrow();
+            assertEquals("20", p3.orgId());
+            assertEquals("组织乙", p3.orgName());
+        }
+
+        @Test
+        @DisplayName("脏数据：dept.orgId 指向不存在的 org → orgName=null（orgId 仍非空）")
+        void dirtyDataOrgMissing() {
+            givenTenantPosts();
+            depts.put(101L, dept(101L, 10L)); // org 10 未注册 → 视为不存在（脏数据）
+
+            List<PostVO> result = postService.list(TENANT, null, null, null, null, null);
+            PostVO p1 = result.stream().filter(v -> "1".equals(v.id())).findFirst().orElseThrow();
+
+            assertEquals("10", p1.orgId());
+            assertNull(p1.orgName(), "dept.orgId 指向不存在 org 时 orgName 应为 null");
+        }
+
+        @Test
+        @DisplayName("脏数据：dept.orgId=null → orgId / orgName 均为 null（与计数 0 语义不同）")
+        void deptWithoutOrg() {
+            givenTenantPosts();
+            depts.put(101L, dept(101L, null)); // orgId 为 null
+
+            List<PostVO> result = postService.list(TENANT, null, null, null, null, null);
+            PostVO p1 = result.stream().filter(v -> "1".equals(v.id())).findFirst().orElseThrow();
+
+            assertNull(p1.orgId());
+            assertNull(p1.orgName());
         }
     }
 }

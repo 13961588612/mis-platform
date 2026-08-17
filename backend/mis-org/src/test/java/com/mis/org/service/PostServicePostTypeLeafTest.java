@@ -4,6 +4,7 @@ import com.mis.common.core.exception.BusinessException;
 import com.mis.org.domain.entity.SysPostType;
 import com.mis.org.domain.repository.SysDeptRepository;
 import com.mis.org.domain.repository.SysEmployeePostRepository;
+import com.mis.org.domain.repository.SysOrgRepository;
 import com.mis.org.domain.repository.SysPostRepository;
 import com.mis.org.domain.repository.SysPostTypeRepository;
 import com.mis.org.dto.PostTypeCreateRequest;
@@ -40,12 +41,15 @@ class PostServicePostTypeLeafTest {
     @Mock private SysPostTypeRepository postTypeRepository;
     @Mock private SysEmployeePostRepository employeePostRepository;
     @Mock private SysDeptRepository deptRepository;
+    /** R7：PostService 构造器新增 orgRepository（本测试不涉及 org 解析，仅补齐依赖）。 */
+    @Mock private SysOrgRepository orgRepository;
 
     private PostService postService;
 
     @BeforeEach
     void setUp() {
-        postService = new PostService(postRepository, postTypeRepository, employeePostRepository, deptRepository);
+        postService = new PostService(
+                postRepository, postTypeRepository, employeePostRepository, deptRepository, orgRepository);
     }
 
     private static SysPostType type(Long id, Long parentId, int isLeaf) {

@@ -2,7 +2,7 @@ import type { AdminPageDef, Assignment, FieldOption } from './types';
 import { fetchDeptTree } from '@/lib/api/depts';
 import { listOrgs } from '@/lib/api/orgs';
 import { fetchApps } from '@/lib/api/platform';
-import { listEmployees, createEmployee, updateEmployee, deleteEmployee } from '@/lib/api/employees';
+import { listEmployees, createEmployee, updateEmployee, deleteEmployee, type EmployeeQuery } from '@/lib/api/employees';
 import { listPosts, createPost, updatePost, deletePost, listPostTypes, type PostQuery } from '@/lib/api/posts';
 import { listConfigs, createConfig, updateConfig, deleteConfig } from '@/lib/api/configs';
 import type { DeptNode } from '@/types/api';
@@ -102,9 +102,17 @@ export const SYSTEM_PAGE_DEFS: Record<string, AdminPageDef> = {
     deptOptionsLoader: loadDeptOptions,
     /** 岗位下拉来自真实 sys_post */
     postOptionsLoader: loadPostOptions,
+    /** 组织下拉来自真实 sys_org（员工管理增强：所属组织筛选，POST-03） */
+    orgOptionsLoader: loadOrgOptions,
+    /**
+     * 服务端已过滤的 key：deptIds / orgIds 由后端 GET /employees/all 过滤（与岗位 POST-02/03 一致），
+     * 引擎跳过客户端二次过滤，避免数组匹配全空；name/status 仍客户端过滤。
+     */
+    serverFilterKeys: ['deptIds', 'orgIds'],
     filters: [
       { key: 'real_name', label: '姓名', type: 'text', col: 2 },
-      { key: 'deptId', label: '主部门', type: 'select', col: 4, optionsFrom: 'dept' },
+      { key: 'deptIds', label: '所属部门', type: 'dept-tree-multi', col: 4, hint: '可多选部门（下拉树·默认折叠·支持全选）' },
+      { key: 'orgIds', label: '所属组织', type: 'multiselect', col: 4, optionsFrom: 'org', hint: '可多选组织（下拉·支持全选/清空）' },
       { key: 'status', label: '状态', type: 'select', col: 2, options: STATUS_OPTS },
     ],
     columns: [
@@ -145,8 +153,17 @@ export const SYSTEM_PAGE_DEFS: Record<string, AdminPageDef> = {
       { label: '主部门', value: (row.dept as string) ?? '—' },
       { label: '主职位', value: (row.title as string) ?? '—' },
     ],
-    loader: async () => {
-      const employees = await listEmployees();
+    loader: async (filters) => {
+      // 组装查询：仅透传服务端过滤键 deptIds/orgIds（逗号序列化，与岗位 listPosts 已验证的 toParams 方式一致）；
+      // real_name/status 由通用引擎客户端二次过滤（原员工页即全量返回、前端筛选）。
+      const query: Record<string, unknown> = {};
+      if (filters?.deptIds && Array.isArray(filters.deptIds) && (filters.deptIds as unknown[]).length > 0) {
+        query.deptIds = (filters.deptIds as (string | number)[]).map(Number).join(',');
+      }
+      if (filters?.orgIds && Array.isArray(filters.orgIds) && (filters.orgIds as unknown[]).length > 0) {
+        query.orgIds = (filters.orgIds as (string | number)[]).map(Number).join(',');
+      }
+      const employees = await listEmployees(query as EmployeeQuery);
       return employees.map((e) => {
         const posts = e.posts ?? [];
         const primary = posts.find((p) => p.isPrimary === 1) ?? posts[0];
@@ -155,7 +172,8 @@ export const SYSTEM_PAGE_DEFS: Record<string, AdminPageDef> = {
           employee_no: e.employeeNo,
           real_name: e.realName,
           gender: e.gender,
-          dept: primary?.deptName ?? null,
+          // 主部门展示「组织-部门」（orgName 缺省时仅显部门名，与现有 ?? '—' 约定一致）
+          dept: primary?.orgName ? `${primary.orgName}-${primary.deptName}` : primary?.deptName ?? null,
           title: primary?.postName ?? e.title ?? null,
           genderText: e.gender === 1 ? '男' : e.gender === 2 ? '女' : '—',
           assignmentCount: posts.length,
@@ -168,6 +186,7 @@ export const SYSTEM_PAGE_DEFS: Record<string, AdminPageDef> = {
           assignments: posts.map((p) => ({
             dept: p.deptId,
             deptLabel: p.deptName,
+            orgName: p.orgName ?? null,
             post: p.postId,
             postLabel: p.postName,
             startDate: p.startDate,
@@ -243,9 +262,10 @@ export const SYSTEM_PAGE_DEFS: Record<string, AdminPageDef> = {
       { key: 'status', label: '状态', type: 'select', col: 2, options: STATUS_OPTS },
     ],
     columns: [
+      { key: 'org', label: '组织' },
+      { key: 'dept', label: '所属部门' },
       { key: 'code', label: '岗位编码' },
       { key: 'name', label: '岗位名称' },
-      { key: 'dept', label: '所属部门' },
       { key: 'post_type', label: '岗位类型' },
       { key: 'quota', label: '编制' },
       { key: 'statusText', label: '状态', status: true },
@@ -271,6 +291,8 @@ export const SYSTEM_PAGE_DEFS: Record<string, AdminPageDef> = {
         id: p.id,
         code: p.code,
         name: p.name,
+        orgId: p.orgId ?? null,
+        org: p.orgName ?? null,
         deptId: p.deptId,
         dept: p.deptName ?? null,
         postTypeId: p.postTypeId,

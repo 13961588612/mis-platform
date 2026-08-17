@@ -11,6 +11,10 @@ function unwrap<T>(res: { data: ApiResult<T> }, fallback: string): T {
 export interface EmployeeQuery {
   realName?: string;
   deptId?: string | number;
+  /** 多部门过滤（员工管理增强）：数组经逗号序列化透传后端 deptIds（与 orgIds 取交集） */
+  deptIds?: (string | number)[];
+  /** 多组织过滤（员工管理增强）：经部门 org_id 反查，与 deptIds 取交集 */
+  orgIds?: (string | number)[];
   status?: number;
 }
 

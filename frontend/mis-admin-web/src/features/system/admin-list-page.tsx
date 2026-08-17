@@ -269,11 +269,14 @@ function AssignmentEditor({
 /** 任职记录只读子表（详情 / 列表展开用）：表头加粗带底色；表体只显示列分隔线（竖线），不显示行间横线 */
 function AssignmentTable({ list }: { list: Assignment[] }) {
   if (!list.length) return <span className="text-muted-foreground">—</span>;
+  // 「组织」列仅当本批任职记录至少一项携带 orgName 时渲染，避免影响其它未增强页面
+  const showOrg = list.some((a) => a.orgName != null);
   return (
     <table className="w-full border-collapse bg-table-surface text-sm">
       <thead className="border-b-2 border-foreground/20 bg-table-header text-left text-sm font-bold text-muted-foreground">
         <tr>
           <th className="px-3 py-2 font-bold">任职部门</th>
+          {showOrg && <th className="border-l border-border/60 px-3 py-2 font-bold">组织</th>}
           <th className="border-l border-border/60 px-3 py-2 font-bold">任职岗位</th>
           <th className="border-l border-border/60 px-3 py-2 font-bold">任职开始时间</th>
           <th className="border-l border-border/60 px-3 py-2 font-bold">主职</th>
@@ -283,6 +286,7 @@ function AssignmentTable({ list }: { list: Assignment[] }) {
         {list.map((a, i) => (
           <tr key={i}>
             <td className="px-3 py-2 font-medium text-foreground">{a.deptLabel || a.dept || '—'}</td>
+            {showOrg && <td className="border-l border-border/60 px-3 py-2 font-medium text-foreground">{a.orgName ?? '—'}</td>}
             <td className="border-l border-border/60 px-3 py-2 font-medium text-foreground">
               {a.postLabel || a.post || '—'}
             </td>
@@ -659,6 +663,8 @@ export function AdminListPage({ def, headerExtra }: { def: AdminPageDef; headerE
   const [filterOpen, setFilterOpen] = useState(true);
   // 真实数据加载态（def.loader 提供时触发骨架；否则用 sample，无加载态）
   const [loading, setLoading] = useState(false);
+  // 保存/删除提交态：提交期间锁定界面，避免异步等待阶段假死
+  const [saving, setSaving] = useState(false);
   // 部门/岗位/岗位类型选项（与「部门管理」等真实数据源同源）：对应 loader 提供时挂载即拉取
   const [deptOptions, setDeptOptions] = useState<FieldOption[]>([]);
   const [postOptions, setPostOptions] = useState<FieldOption[]>([]);
@@ -984,6 +990,7 @@ export function AdminListPage({ def, headerExtra }: { def: AdminPageDef; headerE
         return;
       }
     }
+    setSaving(true);
     try {
       if (sheetMode === 'edit' && editing) {
         if (def.updateApi) {
@@ -1002,10 +1009,13 @@ export function AdminListPage({ def, headerExtra }: { def: AdminPageDef; headerE
         setRows((prev) => [{ ...formValues, id: nextId }, ...prev]);
         showToast('已创建');
       }
-      setSheetOpen(false);
       setReloadTick((t) => t + 1);
     } catch (err) {
       showToast(err instanceof Error ? err.message : '保存失败');
+    } finally {
+      // 不论成功失败都解除 saving 并关闭表单，消除提交/保存期间界面假死
+      setSaving(false);
+      setSheetOpen(false);
     }
   };
 
@@ -1015,6 +1025,7 @@ export function AdminListPage({ def, headerExtra }: { def: AdminPageDef; headerE
       return;
     }
     if (!window.confirm(`确认删除「${String(row.name ?? row.username ?? row.code ?? row.id)}」？`)) return;
+    setSaving(true);
     try {
       if (def.deleteApi) {
         await def.deleteApi(String(row.id));
@@ -1026,6 +1037,9 @@ export function AdminListPage({ def, headerExtra }: { def: AdminPageDef; headerE
       }
     } catch (err) {
       showToast(err instanceof Error ? err.message : '删除失败');
+    } finally {
+      // 不论成功失败都解除 saving，避免删除期间界面假死
+      setSaving(false);
     }
   };
 
@@ -1217,6 +1231,7 @@ export function AdminListPage({ def, headerExtra }: { def: AdminPageDef; headerE
               onEdit={openEdit}
               onDelete={removeRow}
               onCreate={openCreate}
+              saving={saving}
               onClearFilters={() => {
                 setDraft({});
                 setApplied({});
@@ -1403,7 +1418,7 @@ export function AdminListPage({ def, headerExtra }: { def: AdminPageDef; headerE
                                     <Pencil className="h-3 w-3" />
                                     编辑
                                   </button>
-                                  <RowMoreMenu onDelete={() => removeRow(row)} />
+                                  <RowMoreMenu onDelete={() => removeRow(row)} saving={saving} />
                                 </>
                               ) : null}
                             </div>
@@ -1610,7 +1625,7 @@ export function AdminListPage({ def, headerExtra }: { def: AdminPageDef; headerE
                 <Button type="button" variant="outline" className="min-h-9 text-sm font-medium" onClick={() => closeSheet(false)}>
                   取消
                 </Button>
-                <Button type="button" className="min-h-9 text-sm font-medium" onClick={saveForm}>
+                <Button type="button" className="min-h-9 text-sm font-medium" onClick={saveForm} disabled={saving}>
                   {sheetMode === 'edit' ? '保存' : '创建'}
                 </Button>
               </>
@@ -1649,7 +1664,7 @@ export function AdminListPage({ def, headerExtra }: { def: AdminPageDef; headerE
   );
 }
 
-function RowMoreMenu({ onDelete }: { onDelete: () => void }) {
+function RowMoreMenu({ onDelete, saving = false }: { onDelete: () => void; saving?: boolean }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
@@ -1689,7 +1704,8 @@ function RowMoreMenu({ onDelete }: { onDelete: () => void }) {
           <button
             type="button"
             role="menuitem"
-            className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-[0.8125rem] text-destructive hover:bg-destructive/10"
+            disabled={saving}
+            className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-[0.8125rem] text-destructive hover:bg-destructive/10 disabled:pointer-events-none disabled:opacity-50"
             onClick={() => {
               setOpen(false);
               onDelete();
@@ -1723,6 +1739,7 @@ function AppTile({
   onView,
   onEdit,
   onDelete,
+  saving,
 }: {
   row: Record<string, unknown>;
   def: AdminPageDef;
@@ -1730,6 +1747,7 @@ function AppTile({
   onView: (row: Record<string, unknown>) => void;
   onEdit: (row: Record<string, unknown>) => void;
   onDelete: (row: Record<string, unknown>) => void;
+  saving?: boolean;
 }) {
   return (
     <div className="group relative flex flex-col rounded-lg border bg-card p-4 transition hover:border-primary/40 hover:shadow-md">
@@ -1784,7 +1802,7 @@ function AppTile({
               <Pencil className="h-3 w-3" />
               编辑
             </button>
-            <RowMoreMenu onDelete={() => onDelete(row)} />
+            <RowMoreMenu onDelete={() => onDelete(row)} saving={saving} />
           </>
         ) : null}
       </div>
@@ -1803,6 +1821,7 @@ function AppCardGrid({
   onDelete,
   onCreate,
   onClearFilters,
+  saving,
 }: {
   rows: Record<string, unknown>[];
   loading: boolean;
@@ -1814,6 +1833,7 @@ function AppCardGrid({
   onDelete: (row: Record<string, unknown>) => void;
   onCreate: () => void;
   onClearFilters: () => void;
+  saving?: boolean;
 }) {
   return (
     <div className="min-h-0 flex-1 overflow-auto p-4">
@@ -1882,6 +1902,7 @@ function AppCardGrid({
               onView={onView}
               onEdit={onEdit}
               onDelete={onDelete}
+              saving={saving}
             />
           ))}
         </div>

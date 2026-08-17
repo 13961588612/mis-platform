@@ -81,9 +81,11 @@ public class DeptService {
         Map<Long, List<SysDept>> parentMap = all.stream()
                 .collect(Collectors.groupingBy(SysDept::getParentId));
         Map<Long, String> orgNames = resolveLinkedOrgNames(all);
+        // V54 一次性批量解析部门类型名（避免 N+1），穿透只读 forest 每层递归透传
+        Map<Long, String> deptTypeNameMap = buildDeptTypeNameMap(all);
         List<SysDept> roots = parentMap.getOrDefault(0L, List.of());
         return roots.stream()
-                .map(d -> toPierceVo(d, parentMap, orgName, orgNames))
+                .map(d -> toPierceVo(d, parentMap, orgName, orgNames, deptTypeNameMap))
                 .toList();
     }
 
@@ -280,11 +282,15 @@ public class DeptService {
     }
 
     private DeptPierceVO toPierceVo(SysDept dept, Map<Long, List<SysDept>> parentMap,
-                                    String orgName, Map<Long, String> orgNames) {
+                                    String orgName, Map<Long, String> orgNames,
+                                    Map<Long, String> deptTypeNameMap) {
         List<DeptPierceVO> children = parentMap.getOrDefault(dept.getId(), List.of()).stream()
-                .map(d -> toPierceVo(d, parentMap, orgName, orgNames))
+                .map(d -> toPierceVo(d, parentMap, orgName, orgNames, deptTypeNameMap))
                 .toList();
         Long linked = dept.getLinkedOrgId();
+        // V54 部门类型（穿透只读行同样携带，与 tree 对齐）
+        String deptTypeId = dept.getDeptTypeId() != null ? String.valueOf(dept.getDeptTypeId()) : null;
+        String deptTypeName = dept.getDeptTypeId() != null ? deptTypeNameMap.get(dept.getDeptTypeId()) : null;
         return new DeptPierceVO(
                 String.valueOf(dept.getId()),
                 String.valueOf(dept.getOrgId()),
@@ -292,6 +298,8 @@ public class DeptService {
                 String.valueOf(dept.getParentId()),
                 dept.getCode(),
                 dept.getName(),
+                deptTypeId,
+                deptTypeName,
                 dept.getSort(),
                 dept.getStatus(),
                 dept.getIsRoot(),

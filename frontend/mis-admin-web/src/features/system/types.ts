@@ -16,6 +16,8 @@ export interface Assignment {
   deptLabel?: string;
   /** 展示用任职岗位名（loader 附带，避免只读视图显示 id） */
   postLabel?: string;
+  /** 该任职部门所属组织名（员工管理增强：loader 附带；脏数据/未挂载组织时为 null） */
+  orgName?: string | null;
 }
 
 export interface AdminField {

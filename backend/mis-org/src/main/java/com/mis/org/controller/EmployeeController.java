@@ -40,8 +40,10 @@ public class EmployeeController {
             @RequestParam Long tenantId,
             @RequestParam(required = false) String realName,
             @RequestParam(required = false) Long deptId,
+            @RequestParam(required = false) List<Long> deptIds,
+            @RequestParam(required = false) List<Long> orgIds,
             @RequestParam(required = false) Integer status) {
-        return Result.ok(employeeService.listAll(tenantId, realName, deptId, status));
+        return Result.ok(employeeService.listAll(tenantId, realName, deptId, deptIds, orgIds, status));
     }
 
     @GetMapping("/names")
