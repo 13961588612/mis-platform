@@ -154,6 +154,7 @@ async def test_build_prepends_system_prompt_and_appends_user_input() -> None:
     assert msgs[1].content == "帮我建个技能"
     assert msgs[2].content == "请问目标系统是？"
     assert msgs[-1].content == "CRM"
+    assert gateway.calls[0].max_tokens == 8192
 
 
 @pytest.mark.asyncio
@@ -297,6 +298,18 @@ def test_detect_converged_boundaries(label: str, text: str, expected: bool) -> N
 def test_detect_converged_handles_fenced_skill_md() -> None:
     """围栏形态（系统提示词强制的主路径）也必须被识别为收敛。"""
     assert _detect_converged(FENCED_SKILL_MD) is True
+
+
+def test_detect_converged_keeps_inner_json_fence() -> None:
+    """正文含 ```json 示例时，外层围栏仍应判定收敛（与前端 extractSkillMd 对齐）。"""
+    nested = (
+        "```SKILL.md\n"
+        "---\nname: 订单详情\ndescription: 查单\n---\n\n"
+        "## 示例\n```json\n{\"apiName\":\"getOrder\"}\n```\n\n"
+        "## 注意\n只读。\n"
+        "```"
+    )
+    assert _detect_converged(nested) is True
 
 
 def test_detect_converged_accepts_none_safely() -> None:

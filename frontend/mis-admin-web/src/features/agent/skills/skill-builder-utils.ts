@@ -2,7 +2,8 @@
  * 「AI 对话创建」Tab(C) 共享工具。
  *
  * <p>本文件是 C 功能回填链路的**唯一权威实现点**，A/B/C 三 Tab 共用：
- *   - {@link extractSkillMd}：从 AI 文本抽取 ```SKILL.md 代码块（前端唯一正则）；
+ *   - {@link extractSkillMd}：从 AI 文本抽取 ```SKILL.md 代码块（前端唯一入口；
+ *     取最外层围栏，避免正文内 ```json 截断）；
  *   - {@link applyParsedSkill}：把 parseSkill 解析出的 metadata/body 写回表单与正文，
  *     空值不覆盖已有字段（沿用粘贴 Tab 的 onParse 语义）；
  *   - {@link diffHighlight}：回填前后六字段浅比较，差异键供 P1-3 高亮。
@@ -13,14 +14,30 @@
 import type { SkillFormValues } from './agent-skill-form-dialog';
 
 /**
- * 唯一权威正则：抽取任意 info string（```SKILL.md / ```skill.md / ```markdown /
- * ```md / ```skill / ```text / 裸围栏 ``` 等）代码块内容。
- *
- * info string 放宽为「同行任意非换行字符」（`[^\n]*`），一次性覆盖提示词强制的
- * `SKILL.md` 主路径——此前白名单漏了它，导致主路径抽取失败、表单零回填（QA BUG-1）。
- * 仍只有这一处正则，保持「唯一权威」约束不变。
+ * 统计全文 ``` 围栏次数（开/闭都算一次）。
+ * 正文里的 ```json 示例会额外贡献 2 次；外层未闭合时总数为奇数。
  */
-const SKILL_MD_RE = /```[^\n]*\n([\s\S]*?)```/;
+function countFences(src: string): number {
+  let n = 0;
+  let i = 0;
+  while (i < src.length) {
+    const found = src.indexOf('```', i);
+    if (found < 0) break;
+    n += 1;
+    i = found + 3;
+  }
+  return n;
+}
+
+/**
+ * 围栏同行的 info string（``` 与换行之间）。空串 = 闭合围栏或裸 ```。
+ */
+function fenceInfo(src: string, fencePos: number): string {
+  const after = fencePos + 3;
+  const nl = src.indexOf('\n', after);
+  const lineEnd = nl < 0 ? src.length : nl;
+  return src.slice(after, lineEnd).trim();
+}
 
 /**
  * 消息预览用：剥除代码块首行 info string 标签（SKILL.md / markdown / md / skill /
@@ -44,16 +61,29 @@ export function metaTags(meta: Record<string, unknown>): string {
 }
 
 /**
- * 从 AI 回复文本中抽取 SKILL.md 正文。
+ * 从 AI 回复文本中抽取 SKILL.md 正文（本文件唯一抽取入口）。
+ *
+ * <p>取「第一个围栏开」到「最后一个围栏闭」，与后端 `_strip_code_fence`（rfind）
+ * 对齐。非贪婪正则会在正文第一个 ```json 处截断，自动回填只剩半截。
+ * 围栏数为奇数、或最后一个围栏带 info string（如生成被截断、外层未闭合）时，
+ * 取到文末，避免丢掉已生成的后半段。
  *
  * @param text AI 回复全文
  * @returns 代码块内的 SKILL.md 文本（已 trim）；无代码块时返回 `null`
  *   （调用方应整段兜底，把原文当作 SKILL.md 尝试 parseSkill）。
  */
 export function extractSkillMd(text: string): string | null {
-  const match = SKILL_MD_RE.exec(text);
-  if (!match) return null;
-  const inner = (match[1] ?? '').trim();
+  const src = text ?? '';
+  const open = src.indexOf('```');
+  if (open < 0) return null;
+  const nl = src.indexOf('\n', open + 3);
+  if (nl < 0) return null;
+
+  const n = countFences(src);
+  const close = src.lastIndexOf('```');
+  const lastLooksLikeOpener = fenceInfo(src, close).length > 0;
+  const takeToEof = n % 2 === 1 || lastLooksLikeOpener || close <= nl;
+  const inner = (takeToEof ? src.slice(nl + 1) : src.slice(nl + 1, close)).trim();
   return inner.length > 0 ? inner : null;
 }
 

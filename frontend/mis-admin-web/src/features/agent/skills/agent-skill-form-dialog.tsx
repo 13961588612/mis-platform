@@ -53,7 +53,7 @@ import {
   type SkillBuilderChatResponse,
 } from '../types';
 import { SkillFormFields, fieldLabel } from './skill-form-fields';
-import { SkillBuilderPanel, type StagedResult } from './skill-builder-panel';
+import { SkillBuilderPanel } from './skill-builder-panel';
 import { SkillBuilderSelector } from './skill-builder-selector';
 import {
   applyParsedSkill,
@@ -144,9 +144,6 @@ export function AgentSkillFormDialog({
   const [aiInput, setAiInput] = useState('');
   const [aiSending, setAiSending] = useState(false);
   const [aiError, setAiError] = useState<string | null>(null);
-  const [aiAutoRefill, setAiAutoRefill] = useState(false);
-  /** 解析成功未回填时的暂存预览（P2-2）。 */
-  const [aiStaged, setAiStaged] = useState<StagedResult | null>(null);
   /** 回填后发生变化的字段键集合（P1-3 高亮）。 */
   const [highlight, setHighlight] = useState<Set<string>>(new Set());
   /** T04：mis-admin-helper 真实会话 ID（懒创建，对话框关闭即清）。 */
@@ -167,8 +164,6 @@ export function AgentSkillFormDialog({
     setAiInput('');
     setAiSending(false);
     setAiError(null);
-    setAiAutoRefill(false);
-    setAiStaged(null);
     setHighlight(new Set());
     // T04：清理选择器与 mis-admin-helper 会话态
     setSelectorOpen(false);
@@ -264,7 +259,7 @@ export function AgentSkillFormDialog({
    * <p>T04（R11 裁定）主链路 = `mis-admin-helper` 真实会话（createChatSession +
    * sendChatMessage），助手回复可用运营台会话机制追溯；若真实会话不可用，
    * 回落 ephemeral `chatSkillBuilder`（设计保留 fallback，不删）。无论哪条链路，
-   * AI 文本都复用 stageOrRefill → 抽取 ```SKILL.md → parseSkill → 暂存/回填。
+   * AI 文本都复用 stageOrRefill → 抽取 ```SKILL.md → parseSkill → 自动回填。
    */
   async function dispatchAiTurn(text: string): Promise<void> {
     if (aiSending) return;
@@ -282,14 +277,13 @@ export function AgentSkillFormDialog({
     };
     setAiMessages((prev) => [...prev, userMsg, assistantMsg]);
     setAiError(null);
-    setAiStaged(null);
     setAiSending(true);
     try {
       const reply = await sendViaAdminHelper(text);
       setAiMessages((prev) =>
         prev.map((m) => (m.id === assistantMsg.id ? { ...m, content: reply, status: 'generated' } : m)),
       );
-      await stageOrRefill(reply, false);
+      await stageOrRefill(reply);
     } catch (primaryErr) {
       // 兜底：ephemeral 端点（不依赖 mis-admin-helper 会话）
       try {
@@ -306,7 +300,7 @@ export function AgentSkillFormDialog({
               : m,
           ),
         );
-        await stageOrRefill(res.reply, res.converged);
+        await stageOrRefill(res.reply);
       } catch (e) {
         setAiMessages((prev) =>
           prev.map((m) =>
@@ -333,10 +327,10 @@ export function AgentSkillFormDialog({
   }
 
   /**
-   * C：抽取 + 解析 + 回填/暂存。唯一权威抽取正则见 skill-builder-utils.extractSkillMd；
-   * 解析复用粘贴 Tab 同一函数 parseSkill（硬约束 C：禁止为 C 另写解析）。
+   * C：抽取 + 解析 + 自动回填。抽取见 skill-builder-utils.extractSkillMd；
+   * 解析复用粘贴 Tab 同一函数 parseSkill。
    */
-  async function stageOrRefill(reply: string, converged: boolean): Promise<void> {
+  async function stageOrRefill(reply: string): Promise<void> {
     const skillMd = extractSkillMd(reply) ?? reply;
     if (!skillMd.trim()) {
       setAiError('AI 未返回可解析的 SKILL.md，请调整描述后重试。');
@@ -346,35 +340,13 @@ export function AgentSkillFormDialog({
       const parsed = await parseSkill(skillMd);
       const before = form;
       const result = applyParsedSkill(parsed.metadata ?? {}, parsed.body ?? '', before);
-      if (aiAutoRefill) {
-        setForm(result.form);
-        setBody(result.body);
-        setHighlight(diffHighlight(before, result.form));
-        toast.success('已自动回填字段');
-      } else {
-        setAiStaged({ skillMd, meta: parsed.metadata ?? {}, body: parsed.body ?? '', converged });
-      }
+      setForm(result.form);
+      setBody(result.body);
+      setHighlight(diffHighlight(before, result.form));
+      toast.success('已自动回填字段');
     } catch (e) {
       setAiError(agentErrorMessage(e, '解析 SKILL.md 失败'));
     }
-  }
-
-  /** C：用户点「回填到表单」→ 写回 form + body + 计算高亮。 */
-  function handleAiRefill(): void {
-    if (!aiStaged) return;
-    const before = form;
-    const result = applyParsedSkill(aiStaged.meta, aiStaged.body, before);
-    setForm(result.form);
-    setBody(result.body);
-    setHighlight(diffHighlight(before, result.form));
-    setAiStaged(null);
-    setAiError(null);
-    toast.success('已回填字段');
-  }
-
-  /** C：放弃暂存预览。 */
-  function handleAiDiscard(): void {
-    setAiStaged(null);
   }
 
   // —— T04：内嵌选择器回调（不离开创建流）——
@@ -462,14 +434,17 @@ export function AgentSkillFormDialog({
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
-        className={cn('max-h-[88vh]', mode === 'ai' ? 'max-w-6xl' : 'max-w-4xl')}
+        className={cn(
+          'flex flex-col overflow-hidden',
+          mode === 'ai' ? 'h-[88vh] max-h-[88vh] max-w-6xl' : 'max-h-[88vh] max-w-4xl',
+        )}
       >
-        <DialogHeader>
+        <DialogHeader className="shrink-0">
           <DialogTitle>{isEdit ? '编辑技能' : '新建技能'}</DialogTitle>
         </DialogHeader>
 
         {/* 模式切换：手动填写 / AI 对话创建 */}
-        <div className="flex gap-1 rounded-md border bg-muted/40 p-1 text-sm">
+        <div className="flex shrink-0 gap-1 rounded-md border bg-muted/40 p-1 text-sm">
           {tabs.map((t) => (
             <button
               key={t.key}
@@ -491,12 +466,14 @@ export function AgentSkillFormDialog({
         */}
         <div
           className={cn(
-            'mt-4 grid max-h-[60vh] grid-cols-1 gap-4 overflow-auto pr-1',
-            mode === 'ai' ? 'lg:grid-cols-3' : 'md:grid-cols-2',
+            'mt-4 grid min-h-0 grid-cols-1 gap-4',
+            mode === 'ai'
+              ? 'flex-1 overflow-hidden lg:grid-cols-3 lg:grid-rows-1'
+              : 'max-h-[60vh] overflow-auto pr-1 md:grid-cols-2',
           )}
         >
           {/* 左栏：元数据 */}
-          <div className="space-y-3">
+          <div className={cn('space-y-3', mode === 'ai' && 'min-h-0 overflow-y-auto pr-1')}>
             {mode === 'ai' ? (
               <SkillFormFields
                 form={form}
@@ -544,20 +521,19 @@ export function AgentSkillFormDialog({
 
           {/* 中栏（仅 AI）/ 右栏（手动）：SKILL.md 正文 */}
           {mode === 'ai' ? (
-            <div className="flex min-h-0 flex-col gap-2">
-              <label className={fieldLabel} htmlFor="skill-body-ai">
+            <div className="flex h-full min-h-0 flex-col gap-2 overflow-hidden">
+              <label className={cn(fieldLabel, 'shrink-0')} htmlFor="skill-body-ai">
                 SKILL.md 正文（由 AI 回填，可编辑）
               </label>
-              <Textarea
-                id="skill-body-ai"
-                className="min-h-[18rem] flex-1 font-mono text-xs"
-                value={body}
-                placeholder={'AI 回填后在此展示 / 可继续编辑技能的执行说明…'}
-                onChange={(e) => setBody(e.target.value)}
-              />
-              <p className="text-xs text-muted-foreground">
-                点右侧示例模板起手；生成内容经解析后回填左侧字段与本正文。
-              </p>
+              <div className="min-h-0 flex-1">
+                <Textarea
+                  id="skill-body-ai"
+                  className="h-full min-h-0 resize-none overflow-y-auto font-mono text-xs"
+                  value={body}
+                  placeholder={'AI 回填后在此展示 / 可继续编辑技能的执行说明…'}
+                  onChange={(e) => setBody(e.target.value)}
+                />
+              </div>
             </div>
           ) : (
             <div className="flex flex-col gap-2">
@@ -583,19 +559,13 @@ export function AgentSkillFormDialog({
 
           {/* 右栏（仅 AI）：对话面板 */}
           {mode === 'ai' ? (
-            <div className="flex min-h-0 flex-col">
+            <div className="flex h-full min-h-0 flex-col overflow-hidden">
               <SkillBuilderPanel
-                messages={aiMessages}
                 sending={aiSending}
                 input={aiInput}
                 onInputChange={setAiInput}
                 onSend={() => void handleAiSend()}
-                autoRefill={aiAutoRefill}
-                onToggleAutoRefill={setAiAutoRefill}
                 error={aiError}
-                staged={aiStaged}
-                onRefill={handleAiRefill}
-                onDiscardStaged={handleAiDiscard}
                 onOpenSelector={() => setSelectorOpen(true)}
                 selectedSkills={aiSelectedSkills}
                 onRemoveSelected={handleRemoveSelected}
@@ -606,7 +576,7 @@ export function AgentSkillFormDialog({
           ) : null}
         </div>
 
-        <DialogFooter className="justify-center">
+        <DialogFooter className="shrink-0 justify-center">
           <SubmitButton loading={saving} onClick={() => void onSubmit()}>
             保存
           </SubmitButton>

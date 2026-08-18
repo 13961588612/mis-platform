@@ -125,7 +125,9 @@ class SkillBuilderService:
         request = LLMRequest(
             messages=llm_messages,
             temperature=0.4,
-            max_tokens=2048,
+            # 完整 SKILL.md 常含接口示例/多节正文，2048 会在围栏未闭合时被截断，
+            # 前端回填只剩半截。对齐 LLMRequest 默认并留余量。
+            max_tokens=8192,
         )
         response = await gateway.chat(request)
         reply = response.content or ""
