@@ -5,6 +5,7 @@ import com.mis.adminbff.client.model.DeptStaffingVO;
 import com.mis.adminbff.client.model.DeptTypeTreeNodeVO;
 import com.mis.adminbff.client.model.DeptTypeVO;
 import com.mis.adminbff.client.model.DeptVO;
+import com.mis.adminbff.client.model.EmployeePhoneMatchVO;
 import com.mis.adminbff.client.model.EmployeeVO;
 import com.mis.adminbff.client.model.OrgVO;
 import com.mis.adminbff.client.model.PostTypeTreeNodeVO;
@@ -299,6 +300,17 @@ public class OrgWebClient extends AbstractDownstreamClient {
 
     public EmployeeVO getEmployee(Long id) {
         return block(client().get().uri("/internal/v1/employees/{id}", id).retrieve().bodyToMono(EMP));
+    }
+
+    /** 按精确手机号查员工（新建用户时检测是否已存在员工，Req2）。 */
+    public List<EmployeePhoneMatchVO> listEmployeesByPhone(Long tenantId, String phone) {
+        String idsParam = tenantId != null ? String.valueOf(tenantId) : null;
+        List<EmployeePhoneMatchVO> data = block(client().get()
+                .uri(queryUri("/internal/v1/employees/by-phone",
+                        "tenantId", idsParam, "phone", phone))
+                .retrieve()
+                .bodyToMono(new ParameterizedTypeReference<Result<List<EmployeePhoneMatchVO>>>() {}));
+        return data != null ? data : List.of();
     }
 
     public Mono<Result<EmployeeVO>> getEmployeeMono(Long id) {

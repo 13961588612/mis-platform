@@ -2,6 +2,7 @@ package com.mis.org.controller;
 
 import com.mis.common.core.result.Result;
 import com.mis.org.dto.EmployeeCreateRequest;
+import com.mis.org.dto.EmployeePhoneMatchVO;
 import com.mis.org.dto.EmployeeUpdateRequest;
 import com.mis.org.dto.EmployeeVO;
 import com.mis.org.service.EmployeeService;
@@ -39,11 +40,19 @@ public class EmployeeController {
     public Result<List<EmployeeVO>> listAll(
             @RequestParam Long tenantId,
             @RequestParam(required = false) String realName,
+            @RequestParam(required = false) String phone,
             @RequestParam(required = false) Long deptId,
             @RequestParam(required = false) List<Long> deptIds,
             @RequestParam(required = false) List<Long> orgIds,
             @RequestParam(required = false) Integer status) {
-        return Result.ok(employeeService.listAll(tenantId, realName, deptId, deptIds, orgIds, status));
+        return Result.ok(employeeService.listAll(tenantId, realName, phone, deptId, deptIds, orgIds, status));
+    }
+
+    @GetMapping("/by-phone")
+    public Result<List<EmployeePhoneMatchVO>> byPhone(
+            @RequestParam Long tenantId,
+            @RequestParam String phone) {
+        return Result.ok(employeeService.listByPhone(tenantId, phone));
     }
 
     @GetMapping("/names")

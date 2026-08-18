@@ -11,6 +11,7 @@ import com.mis.org.domain.repository.SysEmployeePostRepository;
 import com.mis.org.domain.repository.SysEmployeeRepository;
 import com.mis.org.domain.repository.SysOrgRepository;
 import com.mis.org.domain.repository.SysPostRepository;
+import com.mis.org.client.OrgIamClient;
 import com.mis.org.dto.EmployeePostVO;
 import com.mis.org.dto.EmployeeVO;
 import jakarta.persistence.criteria.CriteriaBuilder;
@@ -91,6 +92,8 @@ class EmployeeServiceListFilterTest {
     private SysOrgRepository orgRepository;
     @Mock
     private DataScopeService dataScopeService;
+    @Mock
+    private OrgIamClient orgIamClient;
 
     /** 部门注册表：支撑 toVo 批量预取 findAllById + findById 回退。 */
     private final Map<Long, SysDept> depts = new HashMap<>();
@@ -121,7 +124,7 @@ class EmployeeServiceListFilterTest {
     void setUp() {
         employeeService = new EmployeeService(
                 employeeRepository, deptRepository, employeeDeptRepository,
-                employeePostRepository, postRepository, orgRepository, dataScopeService);
+                employeePostRepository, postRepository, orgRepository, dataScopeService, orgIamClient);
 
         // 通用回退 stub（lenient）：toVo 批量预取 + 单条解析从注册表取数，避免默认 null 触发 NPE。
         lenient().when(deptRepository.findAllById(anyCollection())).thenAnswer(inv -> {

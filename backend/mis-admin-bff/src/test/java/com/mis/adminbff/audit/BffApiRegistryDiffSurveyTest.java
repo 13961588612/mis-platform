@@ -2,6 +2,7 @@ package com.mis.adminbff.audit;
 
 import com.mis.adminbff.client.AiPlatformClient;
 import com.mis.adminbff.client.IamWebClient;
+import com.mis.adminbff.client.OrgWebClient;
 import com.mis.adminbff.config.AiPlatformProperties;
 import com.mis.adminbff.controller.AgentOpsChannelController;
 import com.mis.adminbff.controller.AgentOpsController;
@@ -352,7 +353,7 @@ class BffApiRegistryDiffSurveyTest {
         context.getBeanFactory().registerSingleton("menuController", new MenuController(
                 mock(MenuAggregateService.class)));
         context.getBeanFactory().registerSingleton("userController", new UserController(
-                mock(UserAggregateService.class)));
+                mock(UserAggregateService.class), mock(OrgWebClient.class)));
         context.getBeanFactory().registerSingleton("appController", new AppController(
                 mock(IamWebClient.class)));
         context.getBeanFactory().registerSingleton("agentOpsChannelController", new AgentOpsChannelController(

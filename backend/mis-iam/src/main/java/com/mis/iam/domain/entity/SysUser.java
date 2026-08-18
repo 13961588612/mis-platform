@@ -22,8 +22,17 @@ public class SysUser {
     @Column(name = "app_id", nullable = false)
     private Long appId;
 
-    @Column(name = "employee_id", nullable = false)
+    /** 绑定的员工 ID；非员工用户为 NULL（支持不绑员工的纯系统账号） */
+    @Column(name = "employee_id")
     private Long employeeId;
+
+    /** 姓名：绑定用户由员工同步写入，非员工用户自有 */
+    @Column(name = "real_name")
+    private String realName;
+
+    /** 手机号：绑定用户由员工同步写入，非员工用户自有；展示时脱敏 */
+    @Column(name = "phone")
+    private String phone;
 
     @Column(nullable = false)
     private String username;
@@ -69,6 +78,10 @@ public class SysUser {
     public void setAppId(Long appId) { this.appId = appId; }
     public Long getEmployeeId() { return employeeId; }
     public void setEmployeeId(Long employeeId) { this.employeeId = employeeId; }
+    public String getRealName() { return realName; }
+    public void setRealName(String realName) { this.realName = realName; }
+    public String getPhone() { return phone; }
+    public void setPhone(String phone) { this.phone = phone; }
     public String getUsername() { return username; }
     public void setUsername(String username) { this.username = username; }
     public String getPasswordHash() { return passwordHash; }

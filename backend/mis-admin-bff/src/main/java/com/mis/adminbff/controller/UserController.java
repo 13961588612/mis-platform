@@ -4,12 +4,16 @@ import com.mis.adminbff.dto.RoleAssignRequest;
 import com.mis.adminbff.dto.StatusUpdateRequest;
 import com.mis.adminbff.dto.UserCreateRequest;
 import com.mis.adminbff.dto.UserUpdateRequest;
+import com.mis.adminbff.client.model.EmployeePhoneMatchVO;
+import com.mis.adminbff.client.OrgWebClient;
 import com.mis.adminbff.dto.UserView;
 import com.mis.adminbff.service.UserAggregateService;
+import com.mis.adminbff.support.RequestContext;
 import com.mis.common.core.result.PageResult;
 import com.mis.common.core.result.Result;
 import com.mis.common.web.audit.OperLog;
 import jakarta.validation.Valid;
+import java.util.List;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -25,19 +29,32 @@ import org.springframework.web.bind.annotation.RestController;
 public class UserController {
 
     private final UserAggregateService userAggregateService;
+    private final OrgWebClient orgWebClient;
 
-    public UserController(UserAggregateService userAggregateService) {
+    public UserController(UserAggregateService userAggregateService, OrgWebClient orgWebClient) {
         this.userAggregateService = userAggregateService;
+        this.orgWebClient = orgWebClient;
     }
 
     @GetMapping
     public Result<PageResult<UserView>> page(
             @RequestParam(required = false) Integer status,
             @RequestParam(required = false) String username,
-            @RequestParam(required = false) Long deptId,
+            @RequestParam(required = false) String realName,
+            @RequestParam(required = false) String phone,
+            @RequestParam(required = false) List<Long> orgIds,
+            @RequestParam(required = false) List<Long> deptIds,
             @RequestParam(defaultValue = "1") int page,
             @RequestParam(defaultValue = "20") int size) {
-        return Result.ok(userAggregateService.page(status, username, deptId, page, size));
+        return Result.ok(userAggregateService.page(status, username, realName, phone, orgIds, deptIds, page, size));
+    }
+
+    /** 按手机查员工（新建用户时检测是否已存在员工，Req2）。 */
+    @GetMapping("/employees/by-phone")
+    public Result<List<EmployeePhoneMatchVO>> employeesByPhone(
+            @RequestParam String phone) {
+        Long tenantId = RequestContext.requireTenantId();
+        return Result.ok(orgWebClient.listEmployeesByPhone(tenantId, phone));
     }
 
     @GetMapping("/{id}")

@@ -118,6 +118,26 @@ export interface UserView {
   createdAt: string | null;
 }
 
+/** 员工任职岗位轻量项（按手机查员工时返回，Req2：展示岗位情况） */
+export interface EmployeePostLite {
+  deptId: string | null;
+  deptName: string | null;
+  orgName: string | null;
+  postId: string | null;
+  postName: string | null;
+  isPrimary: number | null;
+}
+
+/** 按手机查员工轻量返回（新建/编辑用户时提示绑定/手动选择，Req2） */
+export interface EmployeePhoneMatch {
+  id: string;
+  realName: string | null;
+  deptId: string | null;
+  deptName: string | null;
+  orgName: string | null;
+  posts: EmployeePostLite[] | null;
+}
+
 export interface OrgItem {
   id: string;
   tenantId: string;

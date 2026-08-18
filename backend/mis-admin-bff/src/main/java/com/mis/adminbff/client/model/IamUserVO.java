@@ -16,6 +16,9 @@ public record IamUserVO(
         Integer mustChangePassword,
         String realName,
         String deptId,
+        String phone,
+        List<String> orgIds,
+        List<String> deptIds,
         List<IamRoleVO> roles,
         Instant createdAt,
         Instant updatedAt

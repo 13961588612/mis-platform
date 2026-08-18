@@ -10,6 +10,7 @@ import com.mis.iam.dto.UserChangePasswordRequest;
 import com.mis.iam.dto.UserCreateRequest;
 import com.mis.iam.dto.UserResetPasswordRequest;
 import com.mis.iam.dto.UserRoleAssignRequest;
+import com.mis.iam.dto.UserSyncByEmployeeRequest;
 import com.mis.iam.dto.UserStatusUpdateRequest;
 import com.mis.iam.dto.UserUpdateRequest;
 import com.mis.iam.dto.UserVO;
@@ -48,11 +49,22 @@ public class UserController {
             @RequestParam Long appId,
             @RequestParam(required = false) Integer status,
             @RequestParam(required = false) String username,
-            @RequestParam(required = false) Long deptId,
+            @RequestParam(required = false) String realName,
+            @RequestParam(required = false) String phone,
+            @RequestParam(required = false) List<Long> orgIds,
+            @RequestParam(required = false) List<Long> deptIds,
             @RequestParam(defaultValue = "1") int page,
             @RequestParam(defaultValue = "20") int size) {
-        Page<UserVO> result = userService.page(tenantId, appId, status, username, deptId, page, size);
+        Page<UserVO> result = userService.page(
+                tenantId, appId, status, username, realName, phone, orgIds, deptIds, page, size);
         return Result.ok(PageMapper.toPageResult(result));
+    }
+
+    /** mis-org 员工变更后反向同步绑定用户（Req4）。 */
+    @PostMapping("/sync-by-employee")
+    public Result<Void> syncByEmployee(@Valid @RequestBody UserSyncByEmployeeRequest request) {
+        userService.syncByEmployee(request.employeeId(), request.realName(), request.phone(), request.status());
+        return Result.ok();
     }
 
     @GetMapping("/by-username")

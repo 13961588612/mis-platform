@@ -12,6 +12,8 @@ public interface SysUserOrgRepository extends JpaRepository<SysUserOrg, Long> {
 
     List<SysUserOrg> findByUserId(Long userId);
 
+    List<SysUserOrg> findByOrgIdIn(List<Long> orgIds);
+
     @Modifying
     @Query("DELETE FROM SysUserOrg o WHERE o.userId = :userId")
     void deleteByUserId(@Param("userId") Long userId);

@@ -43,11 +43,12 @@ public class UserAggregateService {
         this.properties = properties;
     }
 
-    public PageResult<UserView> page(Integer status, String username, Long deptId, int page, int size) {
+    public PageResult<UserView> page(Integer status, String username, String realName, String phone,
+                                    List<Long> orgIds, List<Long> deptIds, int page, int size) {
         Long tenantId = RequestContext.requireTenantId();
         Long appId = RequestContext.requireAppId();
         PageResult<IamUserVO> iamPage =
-                iamWebClient.pageUsers(tenantId, appId, status, username, deptId, page, size);
+                iamWebClient.pageUsers(tenantId, appId, status, username, realName, phone, orgIds, deptIds, page, size);
         List<IamUserVO> users = iamPage.getList() != null ? iamPage.getList() : List.of();
         List<UserView> views = enrich(users);
         return PageResult.of(iamPage.getPage(), iamPage.getSize(), iamPage.getTotal(), views);
@@ -57,38 +58,37 @@ public class UserAggregateService {
         return enrich(List.of(iamWebClient.getUser(id))).get(0);
     }
 
+    /**
+     * 创建用户（双模式）：
+     * <ul>
+     *   <li>employeeId 提供 → 绑定已有员工（不再新建员工）；组织/部门派生自员工主部门，保证过滤与展示一致</li>
+     *   <li>employeeId 为 null → 非员工用户（纯系统账号），realName/phone/orgIds/deptIds 自行提供，组织/部门可空</li>
+     * </ul>
+     */
     public UserView create(UserCreateRequest request) {
         Long tenantId = RequestContext.requireTenantId();
         Long appId = RequestContext.requireAppId();
-        // 校验部门归属
-        DeptVO dept = orgWebClient.getDept(request.deptId());
-        if (!String.valueOf(tenantId).equals(dept.tenantId())) {
-            throw new BusinessException(ResultCode.VALIDATION_ERROR, "部门不属于当前租户");
-        }
-
-        EmployeeVO employee = orgWebClient.createEmployee(OrgWebClient.employeeCreateBody(
-                tenantId,
-                request.deptId(),
-                request.employeeNo(),
-                request.realName(),
-                request.email(),
-                request.phone()));
-        Long employeeId = Long.valueOf(employee.id());
-        try {
-            String password = StringUtils.hasText(request.password())
-                    ? request.password()
-                    : properties.getDefaultPassword();
-            IamUserVO user = iamWebClient.createUser(IamWebClient.userCreateBody(
-                    tenantId, appId, employeeId, request.username(), password, request.roleIds()));
-            return enrich(List.of(user)).get(0);
-        } catch (RuntimeException ex) {
-            try {
-                orgWebClient.deleteEmployee(employeeId);
-            } catch (Exception ignored) {
-                // 补偿失败仅记录链路；业务异常继续抛出
+        Long employeeId = request.employeeId();
+        List<Long> orgIds = request.orgIds();
+        List<Long> deptIds = request.deptIds();
+        if (employeeId != null) {
+            EmployeeVO emp = orgWebClient.getEmployee(employeeId);
+            if (emp.deptId() != null) {
+                Long primaryDept = Long.valueOf(emp.deptId());
+                deptIds = List.of(primaryDept);
+                DeptVO dept = orgWebClient.getDept(primaryDept);
+                if (dept.orgId() != null) {
+                    orgIds = List.of(Long.valueOf(dept.orgId()));
+                }
             }
-            throw ex;
         }
+        String password = StringUtils.hasText(request.password())
+                ? request.password()
+                : properties.getDefaultPassword();
+        IamUserVO user = iamWebClient.createUser(IamWebClient.userCreateBody(
+                tenantId, appId, employeeId, request.username(), password, request.roleIds(),
+                request.realName(), request.phone(), orgIds, deptIds));
+        return enrich(List.of(user)).get(0);
     }
 
     public UserView update(Long id, UserUpdateRequest request) {
@@ -98,17 +98,61 @@ public class UserAggregateService {
         if (request.status() != null) {
             iamBody.put("status", request.status());
         }
-        IamUserVO updated = iamWebClient.updateUser(id, iamBody);
 
-        if (existing.employeeId() != null
-                && (request.realName() != null || request.email() != null || request.phone() != null)) {
-            EmployeeVO current = orgWebClient.getEmployee(Long.valueOf(existing.employeeId()));
-            Map<String, Object> empBody = new HashMap<>();
-            empBody.put("realName", request.realName() != null ? request.realName() : current.realName());
-            empBody.put("email", request.email() != null ? request.email() : current.email());
-            empBody.put("phone", request.phone() != null ? request.phone() : current.phone());
-            orgWebClient.updateEmployee(Long.valueOf(existing.employeeId()), empBody);
+        Long reqEmp = request.employeeId();
+        Long existingEmp = toLongOrNull(existing.employeeId());
+        boolean empChanged = reqEmp != null ? !reqEmp.equals(existingEmp) : existingEmp != null;
+
+        if (empChanged && reqEmp != null) {
+            // 绑定 / 换绑：组织/部门派生自员工主部门，姓名/手机取自员工（同步，Req2）
+            EmployeeVO emp = orgWebClient.getEmployee(reqEmp);
+            List<Long> orgIds = null;
+            List<Long> deptIds = null;
+            if (emp.deptId() != null) {
+                Long primaryDept = Long.valueOf(emp.deptId());
+                deptIds = List.of(primaryDept);
+                DeptVO dept = orgWebClient.getDept(primaryDept);
+                if (dept != null && dept.orgId() != null) {
+                    orgIds = List.of(Long.valueOf(dept.orgId()));
+                }
+            }
+            iamBody.put("employeeId", reqEmp);
+            if (emp.realName() != null) {
+                iamBody.put("realName", emp.realName());
+            }
+            if (emp.phone() != null) {
+                iamBody.put("phone", emp.phone());
+            }
+            if (orgIds != null) {
+                iamBody.put("orgIds", orgIds);
+            }
+            if (deptIds != null) {
+                iamBody.put("deptIds", deptIds);
+            }
+        } else if (empChanged && reqEmp == null) {
+            // 解绑：仅解除员工关联，保留已同步姓名/手机与组织/部门（Req2）
+            iamBody.put("employeeId", null);
+        } else {
+            // 员工未变更
+            if (existingEmp == null) {
+                // 非员工用户：姓名/手机/组织/部门自行维护
+                if (request.realName() != null) {
+                    iamBody.put("realName", request.realName());
+                }
+                if (request.phone() != null) {
+                    iamBody.put("phone", request.phone());
+                }
+                if (request.orgIds() != null) {
+                    iamBody.put("orgIds", request.orgIds());
+                }
+                if (request.deptIds() != null) {
+                    iamBody.put("deptIds", request.deptIds());
+                }
+            }
+            // 已绑定且未变更：姓名/手机/组织/部门均由员工同步，忽略前端输入（Req4 双保险）
         }
+
+        IamUserVO updated = iamWebClient.updateUser(id, iamBody);
         return enrich(List.of(updated)).get(0);
     }
 
@@ -134,13 +178,14 @@ public class UserAggregateService {
             return List.of();
         }
         Duration timeout = Duration.ofMillis(Math.max(properties.getAggregateTimeoutMs(), 500));
+
+        // 1) 绑定用户 → 解析员工
         List<Long> employeeIds = users.stream()
                 .map(IamUserVO::employeeId)
                 .filter(Objects::nonNull)
                 .map(Long::valueOf)
                 .distinct()
                 .toList();
-
         Map<Long, EmployeeVO> employees = Map.of();
         if (!employeeIds.isEmpty()) {
             List<EmployeeVO> loaded = Flux.fromIterable(employeeIds)
@@ -154,15 +199,19 @@ public class UserAggregateService {
             }
         }
 
-        List<Long> deptIds = employees.values().stream()
-                .map(EmployeeVO::deptId)
+        // 2) 部门 ID：员工主部门 + 非绑定用户自身 deptIds（统一解析组织/部门，保证过滤与展示一致）
+        List<Long> deptIds = new ArrayList<>();
+        employees.values().stream().map(EmployeeVO::deptId).filter(Objects::nonNull).forEach(d -> deptIds.add(Long.valueOf(d)));
+        users.stream()
+                .map(IamUserVO::deptIds)
+                .filter(Objects::nonNull)
+                .flatMap(List::stream)
                 .filter(Objects::nonNull)
                 .map(Long::valueOf)
-                .distinct()
-                .toList();
+                .forEach(deptIds::add);
         Map<Long, DeptVO> depts = Map.of();
         if (!deptIds.isEmpty()) {
-            List<DeptVO> loaded = Flux.fromIterable(deptIds)
+            List<DeptVO> loaded = Flux.fromIterable(deptIds.stream().distinct().toList())
                     .flatMap(id -> orgWebClient.getDeptMono(id)
                             .map(RequestContext::unwrap)
                             .onErrorResume(ex -> Mono.empty()))
@@ -184,28 +233,54 @@ public class UserAggregateService {
         List<UserView> result = new ArrayList<>(users.size());
         for (IamUserVO user : users) {
             EmployeeVO emp = user.employeeId() != null ? employees.get(Long.valueOf(user.employeeId())) : null;
-            DeptVO dept = emp != null && emp.deptId() != null ? depts.get(Long.valueOf(emp.deptId())) : null;
+
+            String resolvedDeptId;
+            if (emp != null && emp.deptId() != null) {
+                resolvedDeptId = emp.deptId();
+            } else if (user.deptIds() != null && !user.deptIds().isEmpty()) {
+                resolvedDeptId = user.deptIds().get(0);
+            } else {
+                resolvedDeptId = null;
+            }
+            DeptVO dept = resolvedDeptId != null ? depts.get(Long.valueOf(resolvedDeptId)) : null;
             String orgId = dept != null ? dept.orgId() : null;
             String orgName = orgId != null ? orgNames.get(Long.valueOf(orgId)) : null;
+            String deptName = dept != null ? dept.name() : null;
+
+            String realName = emp != null ? emp.realName() : user.realName();
+            String phone = emp != null ? DesensitizeUtils.phone(emp.phone()) : DesensitizeUtils.phone(user.phone());
+            String employeeNo = emp != null ? emp.employeeNo() : null;
+
             List<UserView.RoleBrief> roles = mapRoles(user.roles());
             result.add(new UserView(
                     user.id(),
                     user.username(),
-                    emp != null ? emp.realName() : user.realName(),
-                    emp != null ? emp.employeeNo() : null,
+                    realName,
+                    employeeNo,
                     user.employeeId(),
-                    emp != null ? emp.deptId() : user.deptId(),
-                    dept != null ? dept.name() : null,
+                    resolvedDeptId,
+                    deptName,
                     orgId,
                     orgName,
                     emp != null ? DesensitizeUtils.email(emp.email()) : null,
-                    emp != null ? DesensitizeUtils.phone(emp.phone()) : null,
+                    phone,
                     user.status(),
                     user.isTenantAdmin(),
                     roles,
                     user.createdAt()));
         }
         return result;
+    }
+
+    private static Long toLongOrNull(String v) {
+        if (v == null || v.isBlank()) {
+            return null;
+        }
+        try {
+            return Long.valueOf(v);
+        } catch (NumberFormatException e) {
+            return null;
+        }
     }
 
     private static List<UserView.RoleBrief> mapRoles(List<IamRoleVO> roles) {

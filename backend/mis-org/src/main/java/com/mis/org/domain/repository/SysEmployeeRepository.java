@@ -13,6 +13,8 @@ public interface SysEmployeeRepository extends JpaRepository<SysEmployee, Long>,
 
     Optional<SysEmployee> findByTenantIdAndPhone(Long tenantId, String phone);
 
+    List<SysEmployee> findAllByTenantIdAndPhone(Long tenantId, String phone);
+
     boolean existsByTenantIdAndPhoneAndIdNot(Long tenantId, String phone, Long id);
 
     List<SysEmployee> findByTenantIdAndDeptIdAndStatus(Long tenantId, Long deptId, Integer status);

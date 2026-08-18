@@ -35,7 +35,9 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
 import java.time.Instant;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 @Service
 public class UserService {
@@ -80,23 +82,37 @@ public class UserService {
 
     @Transactional(readOnly = true)
     public Page<UserVO> page(
-            Long tenantId, Long appId, Integer status, String username, Long deptId, int page, int size) {
+            Long tenantId, Long appId, Integer status, String username, String realName, String phone,
+            List<Long> orgIds, List<Long> deptIds, int page, int size) {
         int safePage = Math.max(page, 1);
         int safeSize = Math.min(Math.max(size, 1), 100);
         var pageable = PageRequest.of(safePage - 1, safeSize, Sort.by(Sort.Direction.DESC, "createdAt"));
-        String usernameFilter = StringUtils.hasText(username) ? username.trim() : "";
-        boolean hasEmployeeFilter = false;
-        List<Long> employeeIds = List.of(-1L);
-        if (deptId != null) {
-            List<Long> ids = orgEmployeeClient.listEmployeeIdsByDept(tenantId, deptId);
-            if (ids.isEmpty()) {
-                return Page.empty(pageable);
+
+        // 组织/部门维度：解析候选用户 ID 集合（绑定用户与非绑定用户统一走自身 org/dept 关联）
+        // 允许绑定用户也写入 sys_user_org/sys_user_dept（创建/同步时派生），故可统一过滤
+        List<Long> candidateUserIds = null;
+        boolean hasCandidate = (orgIds != null && !orgIds.isEmpty()) || (deptIds != null && !deptIds.isEmpty());
+        if (hasCandidate) {
+            Set<Long> ids = new HashSet<>();
+            if (orgIds != null && !orgIds.isEmpty()) {
+                userOrgRepository.findByOrgIdIn(orgIds).forEach(o -> ids.add(o.getUserId()));
             }
-            hasEmployeeFilter = true;
-            employeeIds = ids;
+            if (deptIds != null && !deptIds.isEmpty()) {
+                userDeptRepository.findByDeptIdIn(deptIds).forEach(d -> ids.add(d.getUserId()));
+            }
+            // 选中了组织/部门但无命中用户 → 返回空页（用 -1 占位，使 IN 不报错）
+            candidateUserIds = ids.isEmpty() ? List.of(-1L) : List.copyOf(ids);
+        } else {
+            candidateUserIds = List.of(-1L);
         }
-        Page<SysUser> result = userRepository.search(
-                tenantId, appId, status, usernameFilter, hasEmployeeFilter, employeeIds, pageable);
+
+        String usernameFilter = StringUtils.hasText(username) ? username.trim() : "";
+        String realNameFilter = StringUtils.hasText(realName) ? realName.trim() : "";
+        String phoneFilter = StringUtils.hasText(phone) ? phone.trim() : "";
+
+        Page<SysUser> result = userRepository.searchV2(
+                tenantId, appId, status, usernameFilter, realNameFilter, phoneFilter,
+                candidateUserIds, hasCandidate, pageable);
         return result.map(this::toVo);
     }
 
@@ -154,19 +170,24 @@ public class UserService {
         if (userRepository.existsByTenantIdAndAppIdAndUsername(request.tenantId(), request.appId(), request.username())) {
             throw new BusinessException(ResultCode.USER_EXISTS);
         }
-        if (userRepository.existsByEmployeeId(request.employeeId())) {
-            throw new BusinessException(ResultCode.EMPLOYEE_ALREADY_BOUND);
+        Long employeeId = request.employeeId();
+        if (employeeId != null) {
+            // 绑员工：校验员工存在且属于该租户；允许多用户绑同一员工（D3）
+            orgEmployeeClient.requireEmployee(request.tenantId(), employeeId);
         }
-        orgEmployeeClient.requireEmployee(request.tenantId(), request.employeeId());
+        // 注意：已移除 existsByEmployeeId 唯一校验，以支持"一个员工多个账号"场景
 
         Instant now = Instant.now();
         SysUser user = new SysUser();
         user.setId(IdGenerator.nextId());
         user.setTenantId(request.tenantId());
         user.setAppId(request.appId());
-        user.setEmployeeId(request.employeeId());
+        user.setEmployeeId(employeeId);
         user.setUsername(request.username());
         user.setPasswordHash(passwordEncoder.encode(request.password()));
+        // 姓名/手机：非员工用户自有；绑员工时由请求提供（与员工同步，便于按姓名/手机检索）
+        user.setRealName(request.realName());
+        user.setPhone(request.phone());
         user.setStatus(1);
         user.setLoginFailCount(0);
         user.setIsTenantAdmin(0);
@@ -180,6 +201,12 @@ public class UserService {
         if (request.roleIds() != null && !request.roleIds().isEmpty()) {
             replaceRoles(user, request.roleIds(), false);
         }
+        if (request.orgIds() != null && !request.orgIds().isEmpty()) {
+            replaceUserOrgs(user, request.orgIds());
+        }
+        if (request.deptIds() != null && !request.deptIds().isEmpty()) {
+            replaceUserDepts(user, request.deptIds());
+        }
         return toVo(user);
     }
 
@@ -190,6 +217,44 @@ public class UserService {
                 && userRepository.existsByTenantIdAndAppIdAndUsername(user.getTenantId(), user.getAppId(), request.username())) {
             throw new BusinessException(ResultCode.USER_EXISTS);
         }
+
+        Long reqEmp = request.employeeId();
+        Long curEmp = user.getEmployeeId();
+        boolean empChanged = reqEmp != null ? !reqEmp.equals(curEmp) : curEmp != null;
+
+        if (empChanged) {
+            if (reqEmp != null) {
+                // 绑定 / 换绑：校验员工存在且属本租户；姓名/手机以员工资料同步（BFF 已解析回传）
+                orgEmployeeClient.requireEmployee(user.getTenantId(), reqEmp);
+                user.setEmployeeId(reqEmp);
+                if (request.realName() != null) {
+                    user.setRealName(request.realName());
+                }
+                if (request.phone() != null) {
+                    user.setPhone(request.phone());
+                }
+            } else {
+                // 解绑：保留已同步的姓名/手机，仅解除员工关联（后续可单独编辑）
+                user.setEmployeeId(null);
+            }
+        }
+
+        // 未变更绑定时，沿用既有规则：已绑定用户禁止反向修改姓名/手机（Req4 双保险）
+        if (!empChanged) {
+            if (user.getEmployeeId() != null) {
+                if (request.realName() != null || request.phone() != null) {
+                    throw new BusinessException(ResultCode.VALIDATION_ERROR, "已绑定员工的用户不可修改姓名/手机号，请在员工模块维护");
+                }
+            } else {
+                if (request.realName() != null) {
+                    user.setRealName(request.realName());
+                }
+                if (request.phone() != null) {
+                    user.setPhone(request.phone());
+                }
+            }
+        }
+
         user.setUsername(request.username());
         if (request.status() != null) {
             applyStatusChange(user, request.status());
@@ -204,6 +269,39 @@ public class UserService {
             replaceUserDepts(user, request.deptIds());
         }
         return toVo(user);
+    }
+
+    /**
+     * 员工变更后反向同步绑定用户（Req4）：
+     * <ul>
+     *   <li>realName/phone 覆盖绑定用户对应字段；</li>
+     *   <li>status=0（员工停用）→ 绑定用户同步停用；</li>
+     *   <li>status=1（员工恢复）→ <b>不</b>自动恢复用户（需手工恢复，见需求）。</li>
+     * </ul>
+     * 调用方（mis-org）在员工保存后触发。
+     */
+    @Transactional
+    public void syncByEmployee(Long employeeId, String realName, String phone, Integer status) {
+        List<SysUser> users = userRepository.findByEmployeeId(employeeId);
+        if (users.isEmpty()) {
+            return;
+        }
+        Instant now = Instant.now();
+        for (SysUser u : users) {
+            if (realName != null) {
+                u.setRealName(realName);
+            }
+            if (phone != null) {
+                u.setPhone(phone);
+            }
+            if (status != null && status == 0) {
+                u.setStatus(0);
+            }
+            u.setUpdatedAt(now);
+        }
+        userRepository.saveAll(users);
+        // 姓名/状态变更可能影响权限缓存，主动失效
+        users.forEach(rbacCacheSupport::onUserPermissionsChanged);
     }
 
     private void replaceUserOrgs(SysUser user, List<Long> orgIds) {
@@ -399,7 +497,7 @@ public class UserService {
                 user.getStatus(),
                 user.getIsTenantAdmin(),
                 user.getMustChangePassword(),
-                null,
+                user.getRealName(),
                 null,
                 roles,
                 orgIds,

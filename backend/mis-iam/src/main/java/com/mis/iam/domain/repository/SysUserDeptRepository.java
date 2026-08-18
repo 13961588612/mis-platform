@@ -12,6 +12,8 @@ public interface SysUserDeptRepository extends JpaRepository<SysUserDept, Long> 
 
     List<SysUserDept> findByUserId(Long userId);
 
+    List<SysUserDept> findByDeptIdIn(List<Long> deptIds);
+
     @Modifying
     @Query("DELETE FROM SysUserDept d WHERE d.userId = :userId")
     void deleteByUserId(@Param("userId") Long userId);

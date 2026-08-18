@@ -90,9 +90,14 @@ public class IamWebClient extends AbstractDownstreamClient {
      * {@code IllegalArgumentException}）。
      */
     public PageResult<IamUserVO> pageUsers(
-            Long tenantId, Long appId, Integer status, String username, Long deptId, int page, int size) {
+            Long tenantId, Long appId, Integer status, String username, String realName, String phone,
+            List<Long> orgIds, List<Long> deptIds, int page, int size) {
         // 与旧实现的 filter(s -> !s.isBlank()) 语义一致：空白用户名视为「没传」
         String keyword = username != null && !username.isBlank() ? username : null;
+        String realNameKeyword = realName != null && !realName.isBlank() ? realName : null;
+        String phoneKeyword = phone != null && !phone.isBlank() ? phone : null;
+        String orgIdsParam = (orgIds == null || orgIds.isEmpty()) ? null : orgIds.stream().map(String::valueOf).collect(java.util.stream.Collectors.joining(","));
+        String deptIdsParam = (deptIds == null || deptIds.isEmpty()) ? null : deptIds.stream().map(String::valueOf).collect(java.util.stream.Collectors.joining(","));
         return block(client().get()
                 .uri(uriBuilder -> {
                     uriBuilder.path("/internal/v1/users")
@@ -104,10 +109,20 @@ public class IamWebClient extends AbstractDownstreamClient {
                     if (keyword != null) {
                         uriBuilder.queryParam("username", "{username}");
                     }
-                    uriBuilder.queryParamIfPresent("deptId", java.util.Optional.ofNullable(deptId));
-                    return keyword != null
-                            ? uriBuilder.build(Map.of("username", keyword))
-                            : uriBuilder.build();
+                    if (realNameKeyword != null) {
+                        uriBuilder.queryParam("realName", "{realName}");
+                    }
+                    if (phoneKeyword != null) {
+                        uriBuilder.queryParam("phone", "{phone}");
+                    }
+                    uriBuilder.queryParamIfPresent("orgIds", java.util.Optional.ofNullable(orgIdsParam));
+                    uriBuilder.queryParamIfPresent("deptIds", java.util.Optional.ofNullable(deptIdsParam));
+                    // 构造一个 Map：仅包含实际使用的占位变量
+                    Map<String, Object> vars = new java.util.HashMap<>();
+                    if (keyword != null) vars.put("username", keyword);
+                    if (realNameKeyword != null) vars.put("realName", realNameKeyword);
+                    if (phoneKeyword != null) vars.put("phone", phoneKeyword);
+                    return vars.isEmpty() ? uriBuilder.build() : uriBuilder.build(vars);
                 })
                 .retrieve()
                 .bodyToMono(USER_PAGE));
@@ -239,14 +254,20 @@ public class IamWebClient extends AbstractDownstreamClient {
     }
 
     public static Map<String, Object> userCreateBody(
-            Long tenantId, Long appId, Long employeeId, String username, String password, List<Long> roleIds) {
+            Long tenantId, Long appId, Long employeeId, String username, String password, List<Long> roleIds,
+            String realName, String phone, List<Long> orgIds, List<Long> deptIds) {
         Map<String, Object> body = new HashMap<>();
         body.put("tenantId", tenantId);
         body.put("appId", appId);
+        // 非员工用户 employeeId 为 null（不创建员工）
         body.put("employeeId", employeeId);
         body.put("username", username);
         body.put("password", password);
-        body.put("roleIds", roleIds);
+        body.put("realName", realName);
+        body.put("phone", phone);
+        body.put("orgIds", orgIds != null ? orgIds : List.of());
+        body.put("deptIds", deptIds != null ? deptIds : List.of());
+        body.put("roleIds", roleIds != null ? roleIds : List.of());
         return body;
     }
 }

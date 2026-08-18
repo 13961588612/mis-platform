@@ -85,6 +85,9 @@ public class KbSubjectProxyService {
                     null,
                     keyword,
                     null,
+                    null,
+                    null,
+                    null,
                     1,
                     USER_SEARCH_SIZE);
             if (page == null || page.getList() == null) {

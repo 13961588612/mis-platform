@@ -18,10 +18,13 @@ import com.mis.org.domain.repository.SysEmployeePostRepository;
 import com.mis.org.domain.repository.SysEmployeeRepository;
 import com.mis.org.domain.repository.SysOrgRepository;
 import com.mis.org.domain.repository.SysPostRepository;
+import com.mis.org.client.OrgIamClient;
 import com.mis.org.dto.EmployeeCreateRequest;
 import com.mis.org.dto.EmployeePostItem;
 import com.mis.org.dto.EmployeePostVO;
 import com.mis.org.dto.EmployeeUpdateRequest;
+import com.mis.org.dto.EmployeePhoneMatchPostVO;
+import com.mis.org.dto.EmployeePhoneMatchVO;
 import com.mis.org.dto.EmployeeVO;
 import com.mis.org.support.IdGenerator;
 import org.springframework.data.jpa.domain.Specification;
@@ -47,6 +50,7 @@ public class EmployeeService {
     private final SysPostRepository postRepository;
     private final SysOrgRepository orgRepository;
     private final DataScopeService dataScopeService;
+    private final OrgIamClient orgIamClient;
 
     public EmployeeService(
             SysEmployeeRepository employeeRepository,
@@ -55,7 +59,8 @@ public class EmployeeService {
             SysEmployeePostRepository employeePostRepository,
             SysPostRepository postRepository,
             SysOrgRepository orgRepository,
-            DataScopeService dataScopeService) {
+            DataScopeService dataScopeService,
+            OrgIamClient orgIamClient) {
         this.employeeRepository = employeeRepository;
         this.deptRepository = deptRepository;
         this.employeeDeptRepository = employeeDeptRepository;
@@ -63,6 +68,7 @@ public class EmployeeService {
         this.postRepository = postRepository;
         this.orgRepository = orgRepository;
         this.dataScopeService = dataScopeService;
+        this.orgIamClient = orgIamClient;
     }
 
     @Transactional(readOnly = true)
@@ -148,6 +154,13 @@ public class EmployeeService {
     @Transactional(readOnly = true)
     public List<EmployeeVO> listAll(Long tenantId, String realName, Long deptId,
                                     List<Long> deptIds, List<Long> orgIds, Integer status) {
+        // 向后兼容旧调用（不按手机号过滤）
+        return listAll(tenantId, realName, null, deptId, deptIds, orgIds, status);
+    }
+
+    @Transactional(readOnly = true)
+    public List<EmployeeVO> listAll(Long tenantId, String realName, String phone, Long deptId,
+                                    List<Long> deptIds, List<Long> orgIds, Integer status) {
         // 组织集合 → 部门集合（经 sys_dept.org_id 反查，POST-03 精确匹配所选组织）
         Set<Long> orgDeptIds = null;
         if (orgIds != null && !orgIds.isEmpty()) {
@@ -185,6 +198,9 @@ public class EmployeeService {
             if (org.springframework.util.StringUtils.hasText(realName)) {
                 ps.add(cb.like(root.get("realName"), "%" + realName.trim() + "%"));
             }
+            if (org.springframework.util.StringUtils.hasText(phone)) {
+                ps.add(cb.equal(root.get("phone"), phone.trim()));
+            }
             if (allowed != null) {
                 ps.add(root.get("deptId").in(allowed));
             }
@@ -203,6 +219,82 @@ public class EmployeeService {
         }
         return employeeRepository.findAllById(ids).stream()
                 .collect(Collectors.toMap(SysEmployee::getId, SysEmployee::getRealName, (a, b) -> a));
+    }
+
+    /**
+     * 按精确手机号查员工（新建用户时检测是否已存在员工，Req2）。
+     * 返回轻量视图（含主部门/组织名），便于前端提示"绑定/手动选择"。
+     */
+    @Transactional(readOnly = true)
+    public List<EmployeePhoneMatchVO> listByPhone(Long tenantId, String phone) {
+        if (!org.springframework.util.StringUtils.hasText(phone)) {
+            return List.of();
+        }
+        List<SysEmployee> emps = employeeRepository.findAllByTenantIdAndPhone(tenantId, phone.trim());
+        return emps.stream().map(this::toPhoneMatchVo).toList();
+    }
+
+    private EmployeePhoneMatchVO toPhoneMatchVo(SysEmployee emp) {
+        String deptId = emp.getDeptId() != null ? String.valueOf(emp.getDeptId()) : null;
+        String deptName = null;
+        String orgName = null;
+        if (emp.getDeptId() != null) {
+            SysDept dept = deptRepository.findById(emp.getDeptId()).orElse(null);
+            if (dept != null) {
+                deptName = dept.getName();
+                if (dept.getOrgId() != null) {
+                    SysOrg org = orgRepository.findById(dept.getOrgId()).orElse(null);
+                    orgName = org != null ? org.getName() : null;
+                }
+            }
+        }
+        List<EmployeePhoneMatchPostVO> posts = toMatchPostVos(emp);
+        return new EmployeePhoneMatchVO(
+                String.valueOf(emp.getId()),
+                emp.getRealName(),
+                deptId,
+                deptName,
+                orgName,
+                posts);
+    }
+
+    /** 解析员工任职岗位（部门/组织/岗位名）用于「按手机查员工」绑定提示（Req2：展示岗位情况）。 */
+    private List<EmployeePhoneMatchPostVO> toMatchPostVos(SysEmployee emp) {
+        List<SysEmployeePost> activePosts = employeePostRepository.findByEmployeeIdAndStatus(emp.getId(), 1);
+        if (activePosts.isEmpty()) {
+            return List.of();
+        }
+        Set<Long> postIds = activePosts.stream().map(SysEmployeePost::getPostId).collect(Collectors.toSet());
+        Map<Long, SysPost> postMap = postRepository.findAllById(postIds).stream()
+                .collect(Collectors.toMap(SysPost::getId, p -> p, (a, b) -> a));
+        Set<Long> involvedDeptIds = new HashSet<>();
+        if (emp.getDeptId() != null) {
+            involvedDeptIds.add(emp.getDeptId());
+        }
+        for (SysEmployeePost ep : activePosts) {
+            SysPost p = postMap.get(ep.getPostId());
+            if (p != null && p.getDeptId() != null) {
+                involvedDeptIds.add(p.getDeptId());
+            }
+        }
+        Map<Long, SysDept> deptMap = deptRepository.findAllById(involvedDeptIds).stream()
+                .collect(Collectors.toMap(SysDept::getId, d -> d, (a, b) -> a));
+        Map<Long, SysOrg> orgMap = orgRepository.findAllById(
+                        deptMap.values().stream().map(SysDept::getOrgId).filter(Objects::nonNull).collect(Collectors.toSet()))
+                .stream().collect(Collectors.toMap(SysOrg::getId, o -> o, (a, b) -> a));
+        return activePosts.stream()
+                .map(ep -> {
+                    SysPost p = postMap.get(ep.getPostId());
+                    Long postDeptId = p != null ? p.getDeptId() : null;
+                    return new EmployeePhoneMatchPostVO(
+                            postDeptId != null ? String.valueOf(postDeptId) : null,
+                            deptNameFromMap(postDeptId, deptMap),
+                            orgNameOf(postDeptId, deptMap, orgMap),
+                            String.valueOf(ep.getPostId()),
+                            p != null ? p.getName() : null,
+                            ep.getIsPrimary());
+                })
+                .toList();
     }
 
     @Transactional
@@ -295,6 +387,11 @@ public class EmployeeService {
 
         emp.setUpdatedAt(now);
         employeeRepository.save(emp);
+
+        // Req4：员工姓名/手机/状态变更 → 反向同步绑定用户（禁用级联、恢复不级联）
+        if (request.realName() != null || request.phone() != null || request.status() != null) {
+            orgIamClient.syncByEmployee(emp.getId(), emp.getRealName(), emp.getPhone(), emp.getStatus());
+        }
         return toVo(emp);
     }
 
