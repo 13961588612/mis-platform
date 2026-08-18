@@ -79,14 +79,20 @@ WHERE ur.user_id = ? AND m.app_id = ?
 | 用户管理(菜单页) | system:user:list | GET /api/v1/users |
 | 用户管理(菜单页) | system:user:list | GET /api/v1/orgs/tree |
 | 新增用户(按钮) | system:user:add | POST /api/v1/users |
+| 新增用户(按钮) | system:user:add | GET /api/v1/users/employees/by-phone |
+| 新增用户(按钮) | system:user:add | GET /api/v1/users/check-employee-binding |
 | 编辑用户(按钮) | system:user:edit | GET /api/v1/users/{id} |
 | 编辑用户(按钮) | system:user:edit | PUT /api/v1/users/{id} |
+| 编辑用户(按钮) | system:user:edit | GET /api/v1/users/employees/by-phone |
+| 编辑用户(按钮) | system:user:edit | GET /api/v1/users/check-employee-binding |
 
 ### 3.3 sys_api 树（元数据，节选）
 
 | code | type | http_method | path_pattern | module |
 |------|------|-------------|--------------|--------|
 | 000100010001 | api | GET | /api/v1/users | mis-iam |
+| 000100010004 | api | GET | /api/v1/users/employees/by-phone | mis-iam（V59） |
+| 000100010005 | api | GET | /api/v1/users/check-employee-binding | mis-iam（V59） |
 | 000100020001 | api | POST | /api/v1/users | mis-iam |
 
 ### 3.4 知识库（mis-kb / mis-admin-bff）

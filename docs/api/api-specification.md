@@ -401,6 +401,22 @@ PUT /users/{id}/roles
 **body：** `{ "roleIds": ["2", "3"] }`  
 权限：`system:user:assignRole`
 
+### 4.9 按手机查员工
+
+```
+GET /users/employees/by-phone?phone=
+```
+
+权限：`system:user:add` 或 `system:user:edit`（V59 登记；新建/编辑用户时匹配员工）
+
+### 4.10 员工绑定预检
+
+```
+GET /users/check-employee-binding?appId=&employeeId=&excludeUserId=
+```
+
+权限：`system:user:add` 或 `system:user:edit`（V59 登记）
+
 ## 5. 组织模块 `/orgs`
 
 | 方法 | 路径 | 权限 | 说明 |

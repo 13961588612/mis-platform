@@ -46,8 +46,8 @@ sys_menu（UI 树）                    sys_menu_api              sys_api
 |------------|------|------|
 | system:user:list | 菜单页 | 用户列表页 + 列表 API |
 | system:user:query | 按钮/菜单 | 详情 API（通常挂在「编辑」按钮 API 组） |
-| system:user:add | 按钮 | 新增 |
-| system:user:edit | 按钮 | 编辑（可多 API） |
+| system:user:add | 按钮 | 新增（含按手机查员工、员工绑定预检，V59） |
+| system:user:edit | 按钮 | 编辑（可多 API；含按手机查员工、员工绑定预检，V59） |
 | system:user:delete | 按钮 | 删除 |
 | system:user:resetPwd | 按钮 | 重置密码 |
 | system:user:assignRole | 按钮 | 分配角色 |

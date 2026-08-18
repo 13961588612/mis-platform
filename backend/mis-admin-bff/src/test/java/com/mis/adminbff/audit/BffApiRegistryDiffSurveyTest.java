@@ -528,6 +528,8 @@ class BffApiRegistryDiffSurveyTest {
             // ---- V2 seed：IAM / ORG / DEPT / ROLE / MENU / DICT / DASHBOARD / LOG / AUTH ----
             "GET /api/v1/users",
             "GET /api/v1/users/{id}",
+            "GET /api/v1/users/employees/by-phone",
+            "GET /api/v1/users/check-employee-binding",
             "POST /api/v1/users",
             "PUT /api/v1/users/{id}",
             "DELETE /api/v1/users/{id}",
