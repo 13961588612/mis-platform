@@ -55,6 +55,7 @@ import {
   updateUserStatus,
 } from '@/lib/api/users';
 import { listEnabledRoles } from '@/lib/api/roles';
+import { getConfigByKey } from '@/lib/api/configs';
 import type { DeptNode, EmployeePhoneMatch, OrgItem, RoleItem, UserView } from '@/types/api';
 
 import { SHEET_FORM_BODY, SHEET_FORM_FIELD, SHEET_FORM_LABEL } from '@/components/common/sheet-form-styles';
@@ -155,6 +156,8 @@ export function UserListPage() {
   const [phoneMatches, setPhoneMatches] = useState<EmployeePhoneMatch[]>([]);
   // 当前已选定（待绑定/已绑定）的员工详情，用于只读展示其组织/部门/岗位
   const [boundEmployee, setBoundEmployee] = useState<EmployeePhoneMatch | null>(null);
+  // 系统参数「用户是否强制绑定员工」（user.force.employee.bind）；开启时创建必须绑定、编辑禁止解绑
+  const [forceBindEmp, setForceBindEmp] = useState(false);
 
   // 权限 Sheet 内「组织 → 部门」按组织分组（Req5 修复：避免多组织树扁平拼接丢失归属）
   const [permsOrgGroups, setPermsOrgGroups] = useState<OrgDeptGroup[]>([]);
@@ -338,6 +341,10 @@ export function UserListPage() {
       roleIds: [],
     });
     setPhoneMatches([]);
+    setForceBindEmp(false);
+    void getConfigByKey('user.force.employee.bind')
+      .then((c) => setForceBindEmp(c?.configValue === 'true'))
+      .catch(() => setForceBindEmp(false));
     setAiAssistOpen(!!opts?.withAssist);
     setSheetOpen(true);
   }
@@ -371,6 +378,10 @@ export function UserListPage() {
           }
         : null,
     );
+    setForceBindEmp(false);
+    void getConfigByKey('user.force.employee.bind')
+      .then((c) => setForceBindEmp(c?.configValue === 'true'))
+      .catch(() => setForceBindEmp(false));
     setAiAssistOpen(false);
     setSheetOpen(true);
   }
@@ -441,7 +452,11 @@ export function UserListPage() {
         setForm((f) => ({ ...f, employeeId: '', employeeName: '' }));
         setPhoneMatches([]);
         setBoundEmployee(null);
-        toast.info(mode === 'create' ? '未匹配到员工，将创建为「非员工用户」' : '未匹配到员工，无法绑定');
+        if (forceBindEmp && mode === 'create') {
+          toast.warning('系统已开启「用户强制绑定员工」，该手机号未匹配到员工，无法创建');
+        } else {
+          toast.info(mode === 'create' ? '未匹配到员工，将创建为「非员工用户」' : '未匹配到员工，无法绑定');
+        }
       } else if (matches.length === 1) {
         const m = matches[0];
         setForm((f) => ({
@@ -485,6 +500,10 @@ export function UserListPage() {
       if (mode === 'create') {
         if (!form.username || !form.realName) {
           toast.warning('请填写用户名、姓名');
+          return;
+        }
+        if (forceBindEmp && !form.employeeId) {
+          toast.warning('系统已开启「用户强制绑定员工」，请先输入手机号并检测匹配到员工');
           return;
         }
         await createUser({
@@ -1053,6 +1072,7 @@ export function UserListPage() {
                                     type="button"
                                     variant="outline"
                                     size="sm"
+                                    disabled={forceBindEmp}
                                     onClick={() => {
                                       setForm((f) => ({ ...f, employeeId: '', employeeName: '' }));
                                       setBoundEmployee(null);
@@ -1060,6 +1080,11 @@ export function UserListPage() {
                                   >
                                     解绑员工
                                   </Button>
+                                  {forceBindEmp ? (
+                                    <p className="mt-1 text-xs text-muted-foreground">
+                                      系统已开启「用户强制绑定员工」，不可解绑
+                                    </p>
+                                  ) : null}
                                 </div>
                                 {boundEmployee ? <EmployeeInfoBlock emp={boundEmployee} /> : null}
                               </div>

@@ -2,6 +2,8 @@ package com.mis.adminbff.service;
 
 import com.mis.adminbff.client.IamWebClient;
 import com.mis.adminbff.client.OrgWebClient;
+import com.mis.adminbff.client.SystemWebClient;
+import com.mis.adminbff.client.model.ConfigVO;
 import com.mis.adminbff.client.model.DeptVO;
 import com.mis.adminbff.client.model.EmployeeVO;
 import com.mis.adminbff.client.model.IamRoleVO;
@@ -36,11 +38,27 @@ public class UserAggregateService {
     private final IamWebClient iamWebClient;
     private final OrgWebClient orgWebClient;
     private final BffProperties properties;
+    private final SystemWebClient systemWebClient;
 
-    public UserAggregateService(IamWebClient iamWebClient, OrgWebClient orgWebClient, BffProperties properties) {
+    public UserAggregateService(IamWebClient iamWebClient, OrgWebClient orgWebClient,
+                                BffProperties properties, SystemWebClient systemWebClient) {
         this.iamWebClient = iamWebClient;
         this.orgWebClient = orgWebClient;
         this.properties = properties;
+        this.systemWebClient = systemWebClient;
+    }
+
+    /** 系统参数键：用户是否强制绑定员工（默认关闭）。 */
+    private static final String FORCE_BIND_KEY = "user.force.employee.bind";
+
+    /** 读取「用户强制绑定员工」开关；配置不可用时降级为关闭，避免阻断正常创建/编辑。 */
+    private boolean isForceEmployeeBind() {
+        try {
+            ConfigVO cfg = systemWebClient.getConfigByKey(FORCE_BIND_KEY);
+            return cfg != null && Boolean.parseBoolean(cfg.configValue());
+        } catch (Exception e) {
+            return false;
+        }
     }
 
     public PageResult<UserView> page(Integer status, String username, String realName, String phone,
@@ -69,6 +87,10 @@ public class UserAggregateService {
         Long tenantId = RequestContext.requireTenantId();
         Long appId = RequestContext.requireAppId();
         Long employeeId = request.employeeId();
+        if (isForceEmployeeBind() && employeeId == null) {
+            throw new BusinessException(ResultCode.VALIDATION_ERROR,
+                    "系统已开启「用户强制绑定员工」，创建用户必须绑定员工");
+        }
         List<Long> orgIds = request.orgIds();
         List<Long> deptIds = request.deptIds();
         if (employeeId != null) {
@@ -102,6 +124,11 @@ public class UserAggregateService {
         Long reqEmp = request.employeeId();
         Long existingEmp = toLongOrNull(existing.employeeId());
         boolean empChanged = reqEmp != null ? !reqEmp.equals(existingEmp) : existingEmp != null;
+
+        if (isForceEmployeeBind() && empChanged && reqEmp == null) {
+            throw new BusinessException(ResultCode.VALIDATION_ERROR,
+                    "系统已开启「用户强制绑定员工」，禁止解绑员工");
+        }
 
         if (empChanged && reqEmp != null) {
             // 绑定 / 换绑：组织/部门派生自员工主部门，姓名/手机取自员工（同步，Req2）

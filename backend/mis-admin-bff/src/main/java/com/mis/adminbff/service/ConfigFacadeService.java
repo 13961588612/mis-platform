@@ -30,6 +30,10 @@ public class ConfigFacadeService {
         return systemWebClient.getConfig(id);
     }
 
+    public ConfigVO getConfigByKey(String key) {
+        return systemWebClient.getConfigByKey(key);
+    }
+
     public ConfigVO createConfig(ConfigCreateRequest request) {
         Map<String, Object> body = new HashMap<>();
         body.put("configKey", request.configKey());

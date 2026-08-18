@@ -37,6 +37,11 @@ public class ConfigController {
         return Result.ok(configService.getById(id));
     }
 
+    @GetMapping("/key/{key}")
+    public Result<ConfigVO> getByKey(@PathVariable String key) {
+        return configService.getOptionalByKey(key).map(Result::ok).orElse(Result.ok(null));
+    }
+
     @PostMapping
     public Result<ConfigVO> create(@Valid @RequestBody ConfigCreateRequest request) {
         return Result.ok(configService.create(request));

@@ -242,6 +242,10 @@ public class SystemWebClient extends AbstractDownstreamClient {
         return block(client().get().uri("/internal/v1/configs/{id}", id).retrieve().bodyToMono(CONFIG));
     }
 
+    public ConfigVO getConfigByKey(String key) {
+        return block(client().get().uri("/internal/v1/configs/key/{key}", key).retrieve().bodyToMono(CONFIG));
+    }
+
     public ConfigVO createConfig(Map<String, Object> body) {
         return block(post(body, CONFIG, "/internal/v1/configs"));
     }

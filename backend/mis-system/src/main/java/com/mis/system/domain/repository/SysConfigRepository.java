@@ -10,4 +10,6 @@ public interface SysConfigRepository extends JpaRepository<SysConfig, Long> {
     List<SysConfig> findAllByOrderByIdAsc();
 
     boolean existsByConfigKey(String configKey);
+
+    Optional<SysConfig> findByConfigKey(String configKey);
 }

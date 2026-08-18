@@ -29,6 +29,12 @@ export async function getConfig(id: string): Promise<ConfigItem> {
   return unwrap(res, '获取系统参数失败');
 }
 
+export async function getConfigByKey(key: string): Promise<ConfigItem | null> {
+  const res = await api.get<ApiResult<ConfigItem>>(`/configs/key/${encodeURIComponent(key)}`);
+  if (res.data.code !== 0) throw new Error(res.data.message || '获取系统参数失败');
+  return res.data.data ?? null;
+}
+
 export async function createConfig(body: ConfigCreatePayload): Promise<ConfigItem> {
   const res = await api.post<ApiResult<ConfigItem>>('/configs', body);
   return unwrap(res, '创建系统参数失败');
