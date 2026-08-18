@@ -631,7 +631,7 @@ class BffApiRegistryDiffSurveyTest {
             "POST /api/v1/agent-ops/skills/{id}/enable",
             "POST /api/v1/agent-ops/skills/{id}/disable",
             "POST /api/v1/agent-ops/skills/reindex",
-            // ---- V50：技能解析（sys_api 92173 / 挂 catalog 92090 智能体运营）----
+            // ---- V50 sys_api 92173 + V61 绑 92051 agent:skill:manage ----
             "POST /api/v1/agent-ops/skills/parse",
             // ---- V51 接管补登：sys_api 92176 / 挂 catalog 92090，权限 agent:skill:manage ----
             "POST /api/v1/agent-ops/skills/builder/chat",
@@ -655,7 +655,7 @@ class BffApiRegistryDiffSurveyTest {
             "GET /api/v1/agent-ops/sessions",
             "GET /api/v1/agent-ops/sessions/{id}",
             "GET /api/v1/agent-ops/sessions/{id}/messages",
-            // ---- V50：Agent 会话计时与技能解析（sys_api 92174~92175 / code 00920075~00920076）----
+            // ---- V50 sys_api 92174~92175 + V61 绑 92033 agent:session:list ----
             "GET /api/v1/agent-ops/sessions/{id}/timing",
             "POST /api/v1/agent-ops/sessions/timing/batch",
             // ---- V43：Agent 反馈四端点（sys_api 92169~92172 / code 00920070~00920073）----

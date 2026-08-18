@@ -114,6 +114,13 @@ sys_menu（UI 树）                    sys_menu_api              sys_api
 | monitor:operlog:list | 菜单+API | 操作日志 |
 | monitor:operlog:query | API | 操作日志详情 |
 
+### 3.9 智能体运营（摘录）
+
+| permission | 类型 | 说明 |
+|------------|------|------|
+| agent:skill:manage | 按钮 | 技能创建/编辑/删除/启停；含解析 SKILL.md（`POST /api/v1/agent-ops/skills/parse`，V50+V61） |
+| agent:session:list | 菜单页 | 会话列表；含单轮/批量耗时（V50+V61） |
+
 ## 4. 菜单树结构（数据库种子）
 
 | id | parent_id | type | name | path | component | permission | icon |

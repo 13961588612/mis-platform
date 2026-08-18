@@ -115,7 +115,10 @@ public class AgentOpsController {
         return Result.ok(facade.reindexSkills());
     }
 
-    /** #10 解析 SKILL.md（透传）。 */
+    /**
+     * #10 解析 SKILL.md（透传）。权限码 {@code agent:skill:manage}：
+     * sys_api 92173（V50）+ sys_menu_api 绑菜单 92051（V61）。
+     */
     @PostMapping("/skills/parse")
     public Result<JsonNode> parseSkill(@RequestBody JsonNode body) {
         return Result.ok(facade.parseSkill(body));
