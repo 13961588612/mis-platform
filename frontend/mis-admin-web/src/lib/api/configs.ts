@@ -35,6 +35,11 @@ export async function getConfigByKey(key: string): Promise<ConfigItem | null> {
   return res.data.data ?? null;
 }
 
+/** 与 Java {@code Boolean.parseBoolean} 对齐：忽略大小写的 true。 */
+export function isConfigEnabled(value?: string | null): boolean {
+  return value != null && value.trim().toLowerCase() === 'true';
+}
+
 export async function createConfig(body: ConfigCreatePayload): Promise<ConfigItem> {
   const res = await api.post<ApiResult<ConfigItem>>('/configs', body);
   return unwrap(res, '创建系统参数失败');

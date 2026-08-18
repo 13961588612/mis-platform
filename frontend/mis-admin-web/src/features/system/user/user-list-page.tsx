@@ -56,7 +56,7 @@ import {
 } from '@/lib/api/users';
 import { ApiError } from '@/lib/api/errors';
 import { listEnabledRoles } from '@/lib/api/roles';
-import { getConfigByKey } from '@/lib/api/configs';
+import { getConfigByKey, isConfigEnabled } from '@/lib/api/configs';
 import type {
   AppItem,
   EmployeeItem,
@@ -171,6 +171,11 @@ export function UserListPage() {
   const [boundEmployee, setBoundEmployee] = useState<EmployeePhoneMatch | null>(null);
   // 系统参数「用户是否强制绑定员工」（user.force.employee.bind）；开启时创建必须绑定、编辑禁止解绑
   const [forceBindEmp, setForceBindEmp] = useState(false);
+  const loadForceBind = useCallback(() => {
+    void getConfigByKey('user.force.employee.bind')
+      .then((c) => setForceBindEmp(isConfigEnabled(c?.configValue)))
+      .catch(() => setForceBindEmp(false));
+  }, []);
   // 强制绑定场景下的员工选择对话框
   const [pickerOpen, setPickerOpen] = useState(false);
   // 字段级错误（T6）：字段名 → 错误文案，绑定到对应输入框的 error/helperText
@@ -309,6 +314,7 @@ export function UserListPage() {
         toast.error(e instanceof Error ? e.message : '加载组织失败');
       }
     })();
+    loadForceBind();
     // eslint-disable-next-line react-hooks/exhaustive-deps -- 仅首屏
   }, []);
 
@@ -336,10 +342,7 @@ export function UserListPage() {
     setPhoneMatches([]);
     setBoundEmployee(null);
     setPickerOpen(false);
-    setForceBindEmp(false);
-    void getConfigByKey('user.force.employee.bind')
-      .then((c) => setForceBindEmp(c?.configValue === 'true'))
-      .catch(() => setForceBindEmp(false));
+    loadForceBind();
     setAiAssistOpen(!!opts?.withAssist);
     setSheetOpen(true);
   }
@@ -376,10 +379,7 @@ export function UserListPage() {
         : null,
     );
     setPickerOpen(false);
-    setForceBindEmp(false);
-    void getConfigByKey('user.force.employee.bind')
-      .then((c) => setForceBindEmp(c?.configValue === 'true'))
-      .catch(() => setForceBindEmp(false));
+    loadForceBind();
     setAiAssistOpen(false);
     setSheetOpen(true);
   }
@@ -399,6 +399,13 @@ export function UserListPage() {
     }));
     setErrors({});
     setSheetOpen(true);
+    // 打开权限面板时刷新角色/组织：角色管理或组织管理新建后能立即出现在面板中
+    void Promise.all([listEnabledRoles(), listOrgs()])
+      .then(([roleList, orgList]) => {
+        setRoles(roleList);
+        setOrgs(orgList);
+      })
+      .catch(() => toast.error('刷新角色/组织列表失败'));
   }
 
   // 详情抽屉：只读展示用户字段 + AI 摘要/问答入口
@@ -509,12 +516,20 @@ export function UserListPage() {
             }))
           : null,
     });
-    toast.success(`已绑定员工「${emp.realName}」`);
+    toast.success(`已载入员工「${emp.realName}」的资料`);
   }
 
   function unbindEmployee() {
     patch({ employeeId: '', employeeName: '' });
     setBoundEmployee(null);
+  }
+
+  function openEmployeePicker() {
+    if (!form.appId) {
+      toast.warning('请先选择所属APP');
+      return;
+    }
+    setPickerOpen(true);
   }
 
   async function onSave() {
@@ -533,7 +548,7 @@ export function UserListPage() {
           return;
         }
         if (isForce && !form.employeeId) {
-          toast.warning('系统已开启「用户强制绑定员工」，请先通过「绑定员工」选择员工');
+          toast.warning('当前系统要求用户必须是员工，请先点击「选择员工」绑定');
           return;
         }
         await createUser({
@@ -964,11 +979,17 @@ export function UserListPage() {
                     />
                   ) : (
                     <>
-                      {isForce && (
-                        <div className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-800">
-                          系统已开启「用户强制绑定员工」：请先选择所属 APP，再通过「绑定员工」选择员工，其手机号 / 姓名 / 邮箱 将自动带入且不可编辑。未绑定员工不可保存。
-                        </div>
-                      )}
+                      {mode === 'create' ? (
+                        isForce ? (
+                          <div className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-800">
+                            当前系统要求用户必须是员工
+                          </div>
+                        ) : (
+                          <div className="rounded-md border border-border bg-muted/40 px-3 py-2 text-xs leading-relaxed text-muted-foreground">
+                            当前配置支持非员工创建账户
+                          </div>
+                        )
+                      ) : null}
 
                       <Field label="所属APP" required error={errors.appId}>
                         <select
@@ -991,6 +1012,28 @@ export function UserListPage() {
                         </select>
                       </Field>
 
+                      {mode === 'create' && isForce ? (
+                        <Field label="员工">
+                          {form.employeeId ? (
+                            <div className="rounded-md border border-primary/30 bg-primary/5 p-3">
+                              <div className="flex items-center justify-between gap-2">
+                                <span className="text-sm font-medium">
+                                  已选择：{form.employeeName || form.realName}
+                                </span>
+                                <Button type="button" variant="outline" size="sm" onClick={openEmployeePicker}>
+                                  重新选择
+                                </Button>
+                              </div>
+                              {boundEmployee ? <EmployeeInfoBlock emp={boundEmployee} /> : null}
+                            </div>
+                          ) : (
+                            <Button type="button" variant="secondary" onClick={openEmployeePicker}>
+                              选择员工
+                            </Button>
+                          )}
+                        </Field>
+                      ) : null}
+
                       <Field label="手机" error={errors.phone}>
                         <Input
                           value={form.phone}
@@ -1000,7 +1043,9 @@ export function UserListPage() {
                           onBlur={() => {
                             if (!isForce) void checkPhone();
                           }}
-                          placeholder={isForce ? '绑定员工后自动带入' : '失焦时检测是否已存在员工'}
+                          placeholder={
+                            isForce ? '选择员工后自动带入' : '失焦时检测是否已存在员工'
+                          }
                         />
                         {!!form.employeeId && !isForce ? (
                           <p className="mt-1 text-xs text-muted-foreground">已绑定员工，手机由员工模块维护，不可修改</p>
@@ -1011,9 +1056,10 @@ export function UserListPage() {
                         <Input
                           value={form.realName}
                           disabled={empFieldsDisabled}
+                          placeholder={isForce ? '选择员工后自动带入' : undefined}
                           onChange={(e) => patch({ realName: e.target.value })}
                         />
-                        {!!form.employeeId ? (
+                        {form.employeeId ? (
                           <p className="mt-1 text-xs text-muted-foreground">已绑定员工，姓名由员工模块维护，不可修改</p>
                         ) : null}
                       </Field>
@@ -1022,6 +1068,7 @@ export function UserListPage() {
                         <Input
                           value={form.email}
                           disabled={empFieldsDisabled}
+                          placeholder={isForce ? '选择员工后自动带入' : undefined}
                           onChange={(e) => patch({ email: e.target.value })}
                         />
                       </Field>
@@ -1045,10 +1092,10 @@ export function UserListPage() {
                         </Field>
                       )}
 
-                      {/* 员工绑定区 */}
-                      {isForce ? (
+                      {/* 员工绑定：强制新建已在所属APP下；此处覆盖强制编辑 / 非强制绑定 */}
+                      {mode === 'create' && isForce ? null : mode === 'edit' && isForce ? (
                         <Field label="员工绑定">
-                          {!!form.employeeId ? (
+                          {form.employeeId ? (
                             <div className="rounded-md border border-primary/30 bg-primary/5 p-3">
                               <div className="flex items-center justify-between gap-2">
                                 <span className="text-sm font-medium">
@@ -1058,7 +1105,7 @@ export function UserListPage() {
                                   type="button"
                                   variant="outline"
                                   size="sm"
-                                  onClick={() => setPickerOpen(true)}
+                                  onClick={openEmployeePicker}
                                 >
                                   重新选择
                                 </Button>
@@ -1066,12 +1113,12 @@ export function UserListPage() {
                               {boundEmployee ? <EmployeeInfoBlock emp={boundEmployee} /> : null}
                             </div>
                           ) : (
-                            <Button type="button" variant="secondary" onClick={() => setPickerOpen(true)}>
-                              绑定员工
+                            <Button type="button" variant="secondary" onClick={openEmployeePicker}>
+                              选择员工
                             </Button>
                           )}
                         </Field>
-                      ) : !!form.employeeId ? (
+                      ) : form.employeeId ? (
                         <Field label="员工绑定">
                           <div className="rounded-md border border-primary/30 bg-primary/5 p-3">
                             <div className="flex items-center justify-between gap-2">
@@ -1082,7 +1129,6 @@ export function UserListPage() {
                                 type="button"
                                 variant="outline"
                                 size="sm"
-                                disabled={isForce}
                                 onClick={() => unbindEmployee()}
                               >
                                 解绑员工

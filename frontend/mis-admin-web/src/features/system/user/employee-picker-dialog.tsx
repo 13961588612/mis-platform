@@ -100,7 +100,6 @@ export function EmployeePickerDialog({
     void listOrgs()
       .then(setOrgs)
       .catch(() => setOrgs([]));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
   async function doSearch(next: PickerFilters = filters) {

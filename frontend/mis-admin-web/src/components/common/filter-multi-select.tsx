@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, type MouseEvent, type PointerEvent } from 'react';
 import { Check, ChevronDown } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
@@ -53,9 +53,20 @@ export function FilterMultiSelect({
   const selectAll = () => onChange(options.map((o) => o.value));
   const clearAll = () => onChange([]);
   const emptyText = multiple ? '请选择（可多选）' : '请选择';
+  /** Dialog/Sheet 的 dismiss 层可能 preventDefault 掉 click；动作放在 pointerdown。键盘仍走 click（detail === 0）。 */
+  const onActionPointerDown =
+    (action: () => void) => (e: PointerEvent<HTMLButtonElement>) => {
+      if (e.button !== 0) return;
+      e.preventDefault();
+      action();
+    };
+  const onActionClick = (action: () => void) => (e: MouseEvent<HTMLButtonElement>) => {
+    if (e.detail !== 0) return;
+    action();
+  };
 
   return (
-    <Popover open={open} onOpenChange={setOpen}>
+    <Popover modal open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
         <button
           type="button"
@@ -94,14 +105,17 @@ export function FilterMultiSelect({
           <div className="mb-2 flex items-center gap-2">
             <button
               type="button"
-              onClick={selectAll}
-              className="rounded border border-input px-2.5 py-1 text-xs font-medium text-muted-foreground transition hover:border-primary/40 hover:text-foreground"
+              onPointerDown={onActionPointerDown(selectAll)}
+              onClick={onActionClick(selectAll)}
+              disabled={options.length === 0}
+              className="rounded border border-input px-2.5 py-1 text-xs font-medium text-muted-foreground transition hover:border-primary/40 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
             >
               全选
             </button>
             <button
               type="button"
-              onClick={clearAll}
+              onPointerDown={onActionPointerDown(clearAll)}
+              onClick={onActionClick(clearAll)}
               disabled={current.length === 0}
               className="rounded border border-input px-2.5 py-1 text-xs font-medium text-muted-foreground transition hover:border-primary/40 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
             >
@@ -119,7 +133,8 @@ export function FilterMultiSelect({
                 <button
                   key={String(o.value)}
                   type="button"
-                  onClick={() => pick(o.value)}
+                  onPointerDown={onActionPointerDown(() => pick(o.value))}
+                  onClick={onActionClick(() => pick(o.value))}
                   className={cn(
                     'flex w-full items-center gap-2 rounded px-2 py-1 text-left text-sm transition hover:bg-muted',
                     on && 'bg-primary/10 font-medium text-primary',
