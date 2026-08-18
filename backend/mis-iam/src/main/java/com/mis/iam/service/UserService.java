@@ -360,8 +360,13 @@ public class UserService {
         users.forEach(rbacCacheSupport::onUserPermissionsChanged);
     }
 
+    /**
+     * 全量覆盖用户组织。delete 的派生 SQL 必须在 flush 时先于 INSERT 落库，
+     * 否则重插既有 (user_id, org_id) 会撞 uk_user_org。
+     */
     private void replaceUserOrgs(SysUser user, List<Long> orgIds) {
         userOrgRepository.deleteByUserId(user.getId());
+        userOrgRepository.flush();
         Instant now = Instant.now();
         for (int i = 0; i < orgIds.size(); i++) {
             SysUserOrg o = new SysUserOrg();
@@ -375,8 +380,13 @@ public class UserService {
         }
     }
 
+    /**
+     * 全量覆盖用户部门。delete 的派生 SQL 必须在 flush 时先于 INSERT 落库，
+     * 否则重插既有 (user_id, dept_id) 会撞 uk_user_dept。
+     */
     private void replaceUserDepts(SysUser user, List<Long> deptIds) {
         userDeptRepository.deleteByUserId(user.getId());
+        userDeptRepository.flush();
         Instant now = Instant.now();
         for (int i = 0; i < deptIds.size(); i++) {
             SysUserDept d = new SysUserDept();
@@ -462,6 +472,7 @@ public class UserService {
         }
 
         userRoleRepository.deleteByUserId(user.getId());
+        userRoleRepository.flush();
         Instant now = Instant.now();
         for (SysRole role : roles) {
             SysUserRole ur = new SysUserRole();
@@ -521,7 +532,7 @@ public class UserService {
                 String.valueOf(user.getId()),
                 String.valueOf(user.getTenantId()),
                 String.valueOf(user.getAppId()),
-                String.valueOf(user.getEmployeeId()),
+                user.getEmployeeId() != null ? String.valueOf(user.getEmployeeId()) : null,
                 user.getUsername(),
                 user.getPasswordHash(),
                 user.getStatus(),
@@ -547,7 +558,7 @@ public class UserService {
                 String.valueOf(user.getId()),
                 String.valueOf(user.getTenantId()),
                 String.valueOf(user.getAppId()),
-                String.valueOf(user.getEmployeeId()),
+                user.getEmployeeId() != null ? String.valueOf(user.getEmployeeId()) : null,
                 user.getUsername(),
                 user.getAvatarUrl(),
                 user.getStatus(),

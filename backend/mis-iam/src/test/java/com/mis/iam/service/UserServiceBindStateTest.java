@@ -20,16 +20,22 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageImpl;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
 import org.springframework.security.crypto.password.PasswordEncoder;
 
 import java.util.List;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.argThat;
@@ -102,10 +108,32 @@ class UserServiceBindStateTest {
 
         UserCreateRequest req = new UserCreateRequest(1L, 10L, null, "bob", "pw", "Bob", "139",
                 List.of(), List.of(), List.of(), null);
-        userService.create(req);
+        UserVO vo = userService.create(req);
 
         verify(orgEmployeeClient, never()).requireEmployee(anyLong(), anyLong());
         verify(userRepository).save(argThat(u -> u.getEmployeeId() == null));
+        // 回归：未绑定员工时 VO 的 employeeId 必须是 JSON null，而非字面量 "null"
+        assertNull(vo.employeeId());
+    }
+
+    // ---------------------------------------------------------------- page 序列化
+    @Test
+    void page_withUnboundUser_employeeIdIsJsonNull() {
+        SysUser unbound = existingUser(10L, null);
+        when(userRepository.searchV3(anyLong(), any(), anyBoolean(), any(), anyString(), anyString(), anyString(),
+                any(), anyBoolean(), any(Pageable.class)))
+                .thenReturn(new PageImpl<>(List.of(unbound), PageRequest.of(0, 20), 1));
+        when(roleRepository.findRolesByUserId(10L)).thenReturn(List.of());
+        when(userOrgRepository.findByUserId(10L)).thenReturn(List.of());
+        when(userDeptRepository.findByUserId(10L)).thenReturn(List.of());
+
+        Page<UserVO> result = userService.page(1L, null, null, null, null, null, null, null, 1, 20);
+
+        assertEquals(1, result.getTotalElements());
+        UserVO vo = result.getContent().get(0);
+        // 回归：非员工用户的分页结果 employeeId 必须为 null，否则 BFF 会 Long::valueOf("null") 抛 500
+        assertNull(vo.employeeId());
+        assertFalse("null".equals(vo.employeeId()));
     }
 
     // ---------------------------------------------------------------- update 三态

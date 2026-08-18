@@ -207,6 +207,21 @@ class UserAggregateServiceBindStateTest {
     }
 
     @Test
+    void update_noChange_boundUser_passesExistingEmployeeId() {
+        when(systemWebClient.getConfigByKey(FORCE_BIND_KEY)).thenReturn(null);
+        when(iamWebClient.getUser(7L)).thenReturn(boundReturn("100"));
+        when(iamWebClient.updateUser(eq(7L), any())).thenReturn(unboundReturn());
+
+        service.update(7L, new UserUpdateRequest("u7", 100L, null, null, null, null, null, null, 10L));
+
+        ArgumentCaptor<Map<String, Object>> body = ArgumentCaptor.forClass(Map.class);
+        verify(iamWebClient).updateUser(eq(7L), body.capture());
+        // 回归：绑定未变更时必须透传现有 employeeId，否则 IAM 会把缺省字段误判为显式解绑
+        assertEquals(100L, ((Number) body.getValue().get("employeeId")).longValue());
+        verify(orgWebClient, never()).getEmployee(anyLong());
+    }
+
+    @Test
     void update_noChange_unbound_passesSelfMaintainedFields() {
         when(systemWebClient.getConfigByKey(FORCE_BIND_KEY)).thenReturn(null);
         when(iamWebClient.getUser(7L)).thenReturn(new IamUserVO("7", "1", "10", null, "u7", null, 1, 0, 1,

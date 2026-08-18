@@ -14,7 +14,12 @@ public interface SysUserOrgRepository extends JpaRepository<SysUserOrg, Long> {
 
     List<SysUserOrg> findByOrgIdIn(List<Long> orgIds);
 
-    @Modifying
+    /**
+     * 全量覆盖用户组织前先物理删除。必须 flush/clear，否则同事务紧接着 INSERT 同一
+     * (user_id, org_id) 会撞 {@code uk_user_org}（Hibernate 的派生 DELETE 在 flush 时
+     * 排在实体 INSERT 之后执行）。
+     */
+    @Modifying(flushAutomatically = true, clearAutomatically = true)
     @Query("DELETE FROM SysUserOrg o WHERE o.userId = :userId")
     void deleteByUserId(@Param("userId") Long userId);
 }

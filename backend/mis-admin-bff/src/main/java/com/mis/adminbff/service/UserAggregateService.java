@@ -180,6 +180,10 @@ public class UserAggregateService {
                 if (request.deptIds() != null) {
                     iamBody.put("deptIds", request.deptIds());
                 }
+            } else {
+                // 已绑定且未变更：显式透传现有 employeeId，避免 IAM 把「未携带」
+                // 误判为显式解绑（Req2 三态中「不变」≠「解绑」）
+                iamBody.put("employeeId", existingEmp);
             }
             // 已绑定且未变更：姓名/手机/组织/部门均由员工同步，忽略前端输入（Req4 双保险）
         }
@@ -226,11 +230,11 @@ public class UserAggregateService {
         }
         Duration timeout = Duration.ofMillis(Math.max(properties.getAggregateTimeoutMs(), 500));
 
-        // 1) 绑定用户 → 解析员工
+        // 1) 绑定用户 → 解析员工（下游字段可能为 "null" 字面量，统一走 null 安全解析，避免 500）
         List<Long> employeeIds = users.stream()
                 .map(IamUserVO::employeeId)
+                .map(UserAggregateService::toLongOrNull)
                 .filter(Objects::nonNull)
-                .map(Long::valueOf)
                 .distinct()
                 .toList();
         Map<Long, EmployeeVO> employees = Map.of();
@@ -248,13 +252,17 @@ public class UserAggregateService {
 
         // 2) 部门 ID：员工主部门 + 非绑定用户自身 deptIds（统一解析组织/部门，保证过滤与展示一致）
         List<Long> deptIds = new ArrayList<>();
-        employees.values().stream().map(EmployeeVO::deptId).filter(Objects::nonNull).forEach(d -> deptIds.add(Long.valueOf(d)));
+        employees.values().stream()
+                .map(EmployeeVO::deptId)
+                .map(UserAggregateService::toLongOrNull)
+                .filter(Objects::nonNull)
+                .forEach(deptIds::add);
         users.stream()
                 .map(IamUserVO::deptIds)
                 .filter(Objects::nonNull)
                 .flatMap(List::stream)
+                .map(UserAggregateService::toLongOrNull)
                 .filter(Objects::nonNull)
-                .map(Long::valueOf)
                 .forEach(deptIds::add);
         Map<Long, DeptVO> depts = Map.of();
         if (!deptIds.isEmpty()) {
@@ -279,7 +287,8 @@ public class UserAggregateService {
 
         List<UserView> result = new ArrayList<>(users.size());
         for (IamUserVO user : users) {
-            EmployeeVO emp = user.employeeId() != null ? employees.get(Long.valueOf(user.employeeId())) : null;
+            Long employeeId = toLongOrNull(user.employeeId());
+            EmployeeVO emp = employeeId != null ? employees.get(employeeId) : null;
 
             String resolvedDeptId;
             if (emp != null && emp.deptId() != null) {
@@ -289,9 +298,11 @@ public class UserAggregateService {
             } else {
                 resolvedDeptId = null;
             }
-            DeptVO dept = resolvedDeptId != null ? depts.get(Long.valueOf(resolvedDeptId)) : null;
+            Long resolvedDeptIdLong = toLongOrNull(resolvedDeptId);
+            DeptVO dept = resolvedDeptIdLong != null ? depts.get(resolvedDeptIdLong) : null;
             String orgId = dept != null ? dept.orgId() : null;
-            String orgName = orgId != null ? orgNames.get(Long.valueOf(orgId)) : null;
+            Long orgIdLong = toLongOrNull(orgId);
+            String orgName = orgIdLong != null ? orgNames.get(orgIdLong) : null;
             String deptName = dept != null ? dept.name() : null;
 
             String realName = emp != null ? emp.realName() : user.realName();
