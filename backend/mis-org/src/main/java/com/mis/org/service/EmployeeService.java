@@ -411,11 +411,15 @@ public class EmployeeService {
         return Objects.requireNonNull(singleDeptId, "主部门不能为空");
     }
 
+    /**
+     * 全量覆盖任职部门。delete + flush 必须先于 INSERT，避免同事务撞 uk_emp_dept。
+     */
     private void saveEmployeeDepts(Long tenantId, Long empId, List<Long> deptIds, Long fallbackDeptId, Instant now) {
         List<Long> ids = (deptIds != null && !deptIds.isEmpty())
                 ? deptIds
                 : (fallbackDeptId != null ? List.of(fallbackDeptId) : List.of());
         employeeDeptRepository.deleteByEmployeeId(empId);
+        employeeDeptRepository.flush();
         List<SysEmployeeDept> rows = new ArrayList<>();
         for (int i = 0; i < ids.size(); i++) {
             SysEmployeeDept ed = new SysEmployeeDept();
@@ -433,9 +437,14 @@ public class EmployeeService {
         }
     }
 
+    /**
+     * 全量覆盖任职岗位。delete + flush 必须先于 INSERT，避免同事务撞 uk_emp_post
+     *（Hibernate 可能把 INSERT 排在派生 DELETE 之前）。
+     */
     private void saveEmployeePosts(Long tenantId, Long empId, List<EmployeePostItem> posts, Instant now) {
         if (posts == null) return;
         employeePostRepository.deleteByEmployeeId(empId);
+        employeePostRepository.flush();
         List<SysEmployeePost> rows = new ArrayList<>();
         for (int i = 0; i < posts.size(); i++) {
             EmployeePostItem item = posts.get(i);
