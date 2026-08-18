@@ -7,6 +7,7 @@ import com.mis.adminbff.dto.UserUpdateRequest;
 import com.mis.adminbff.client.model.EmployeePhoneMatchVO;
 import com.mis.adminbff.client.OrgWebClient;
 import com.mis.adminbff.dto.UserView;
+import com.mis.adminbff.client.model.EmployeeBindingCheck;
 import com.mis.adminbff.service.UserAggregateService;
 import com.mis.adminbff.support.RequestContext;
 import com.mis.common.core.result.PageResult;
@@ -44,9 +45,19 @@ public class UserController {
             @RequestParam(required = false) String phone,
             @RequestParam(required = false) List<Long> orgIds,
             @RequestParam(required = false) List<Long> deptIds,
+            @RequestParam(required = false) List<Long> appIds,
             @RequestParam(defaultValue = "1") int page,
             @RequestParam(defaultValue = "20") int size) {
-        return Result.ok(userAggregateService.page(status, username, realName, phone, orgIds, deptIds, page, size));
+        return Result.ok(userAggregateService.page(status, username, realName, phone, orgIds, deptIds, appIds, page, size));
+    }
+
+    /** 员工绑定预检（D1）：该员工是否已在指定「租户 + APP」内被其他账号绑定。 */
+    @GetMapping("/check-employee-binding")
+    public Result<EmployeeBindingCheck> checkEmployeeBinding(
+            @RequestParam Long appId,
+            @RequestParam Long employeeId,
+            @RequestParam(required = false) Long excludeUserId) {
+        return Result.ok(userAggregateService.checkEmployeeBinding(appId, employeeId, excludeUserId));
     }
 
     /** 按手机查员工（新建用户时检测是否已存在员工，Req2）。 */

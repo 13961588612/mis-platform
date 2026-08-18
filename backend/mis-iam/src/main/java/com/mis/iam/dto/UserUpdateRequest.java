@@ -22,5 +22,9 @@ public record UserUpdateRequest(
         /** 关联组织列表（含主组织），首项为主组织 */
         List<Long> orgIds,
         /** 关联部门列表（含主部门），首项为主部门 */
-        List<Long> deptIds
+        List<Long> deptIds,
+        /** 所属 APP：显式提交（不再取登录态）；与现有 appId 不同且已分配角色时触发守卫（D4） */
+        Long appId,
+        /** 用户级邮箱：非员工用户自行填写；绑员工时由员工邮箱同步回填（Q1 裁决） */
+        String email
 ) {}

@@ -1,6 +1,7 @@
 package com.mis.adminbff.client;
 
 import com.mis.adminbff.client.model.AppVO;
+import com.mis.adminbff.client.model.EmployeeBindingCheck;
 import com.mis.adminbff.client.model.IamRoleVO;
 import com.mis.adminbff.client.model.IamUserVO;
 import com.mis.adminbff.client.model.RoleDataScopeVO;
@@ -36,6 +37,8 @@ public class IamWebClient extends AbstractDownstreamClient {
     private static final ParameterizedTypeReference<Result<UserPermissionsDTO>> USER_PERMISSIONS =
             new ParameterizedTypeReference<>() {};
     private static final ParameterizedTypeReference<Result<RoleDataScopeVO>> ROLE_DATA_SCOPE =
+            new ParameterizedTypeReference<>() {};
+    private static final ParameterizedTypeReference<Result<EmployeeBindingCheck>> EMPLOYEE_BINDING =
             new ParameterizedTypeReference<>() {};
     private static final ParameterizedTypeReference<Result<Map<String, Long>>> COUNT =
             new ParameterizedTypeReference<>() {};
@@ -90,7 +93,7 @@ public class IamWebClient extends AbstractDownstreamClient {
      * {@code IllegalArgumentException}）。
      */
     public PageResult<IamUserVO> pageUsers(
-            Long tenantId, Long appId, Integer status, String username, String realName, String phone,
+            Long tenantId, List<Long> appIds, Integer status, String username, String realName, String phone,
             List<Long> orgIds, List<Long> deptIds, int page, int size) {
         // 与旧实现的 filter(s -> !s.isBlank()) 语义一致：空白用户名视为「没传」
         String keyword = username != null && !username.isBlank() ? username : null;
@@ -98,11 +101,17 @@ public class IamWebClient extends AbstractDownstreamClient {
         String phoneKeyword = phone != null && !phone.isBlank() ? phone : null;
         String orgIdsParam = (orgIds == null || orgIds.isEmpty()) ? null : orgIds.stream().map(String::valueOf).collect(java.util.stream.Collectors.joining(","));
         String deptIdsParam = (deptIds == null || deptIds.isEmpty()) ? null : deptIds.stream().map(String::valueOf).collect(java.util.stream.Collectors.joining(","));
+        // 跨 APP 查询（D2）：appIds 非空 = appId IN 取并集；为空 = 不过滤（查全部 APP）
+        String appIdsParam = (appIds == null || appIds.isEmpty()) ? null : appIds.stream().map(String::valueOf).collect(java.util.stream.Collectors.joining(","));
         return block(client().get()
                 .uri(uriBuilder -> {
                     uriBuilder.path("/internal/v1/users")
-                            .queryParam("tenantId", tenantId)
-                            .queryParam("appId", appId)
+                            .queryParam("tenantId", tenantId);
+                    if (appIdsParam != null) {
+                        // 跨 APP 查询（D2）：appIds 紧跟 tenantId，保持与原 appId 一致的参数顺序，便于下游日志/缓存键对齐
+                        uriBuilder.queryParam("appIds", appIdsParam);
+                    }
+                    uriBuilder
                             .queryParam("page", page)
                             .queryParam("size", size)
                             .queryParamIfPresent("status", java.util.Optional.ofNullable(status));
@@ -126,6 +135,22 @@ public class IamWebClient extends AbstractDownstreamClient {
                 })
                 .retrieve()
                 .bodyToMono(USER_PAGE));
+    }
+
+    /** 员工绑定预检（D1）：该员工是否已在指定「租户 + APP」内被其他账号绑定。 */
+    public EmployeeBindingCheck checkEmployeeBinding(Long tenantId, Long appId, Long employeeId, Long excludeUserId) {
+        return block(client().get()
+                .uri(uriBuilder -> {
+                    uriBuilder.path("/internal/v1/users/check-employee-binding")
+                            .queryParam("tenantId", tenantId)
+                            .queryParam("appId", appId)
+                            .queryParam("employeeId", employeeId)
+                            .queryParamIfPresent("excludeUserId",
+                                    java.util.Optional.ofNullable(excludeUserId == null ? null : String.valueOf(excludeUserId)));
+                    return uriBuilder.build();
+                })
+                .retrieve()
+                .bodyToMono(EMPLOYEE_BINDING));
     }
 
     public IamUserVO getUser(Long id) {
@@ -255,7 +280,7 @@ public class IamWebClient extends AbstractDownstreamClient {
 
     public static Map<String, Object> userCreateBody(
             Long tenantId, Long appId, Long employeeId, String username, String password, List<Long> roleIds,
-            String realName, String phone, List<Long> orgIds, List<Long> deptIds) {
+            String realName, String phone, String email, List<Long> orgIds, List<Long> deptIds) {
         Map<String, Object> body = new HashMap<>();
         body.put("tenantId", tenantId);
         body.put("appId", appId);
@@ -265,6 +290,7 @@ public class IamWebClient extends AbstractDownstreamClient {
         body.put("password", password);
         body.put("realName", realName);
         body.put("phone", phone);
+        body.put("email", email);
         body.put("orgIds", orgIds != null ? orgIds : List.of());
         body.put("deptIds", deptIds != null ? deptIds : List.of());
         body.put("roleIds", roleIds != null ? roleIds : List.of());

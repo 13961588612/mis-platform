@@ -283,6 +283,7 @@ erDiagram
 | employee_id | BIGINT | NOT NULL | 对应员工（部门/组织展示与 DataScope 均经员工 → 任职解析） |
 | username | VARCHAR(64) | NOT NULL | APP 内登录名 |
 | password_hash | VARCHAR(128) | NOT NULL | BCrypt |
+| email | VARCHAR(255) | NULL | 用户级邮箱（独立于员工邮箱；绑员工时回填） |
 | avatar_url | VARCHAR(512) | NULL | |
 | status | SMALLINT | NOT NULL DEFAULT 1 | 0禁用 1启用 2锁定 |
 | last_login_at | TIMESTAMPTZ | NULL | |

@@ -18,7 +18,9 @@ public record UserView(
         Integer status,
         Integer isTenantAdmin,
         List<RoleBrief> roles,
-        Instant createdAt
+        Instant createdAt,
+        /** 所属 APP id（显式归属，D1/D2） */
+        String appId
 ) {
     public record RoleBrief(String id, String name, String code) {}
 }

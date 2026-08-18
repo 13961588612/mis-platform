@@ -72,12 +72,12 @@ class UserAggregateServiceBindStateTest {
 
     private IamUserVO unboundReturn() {
         return new IamUserVO("1", "1", "10", null, "u1", null, 1, 0, 1,
-                null, null, null, List.of(), List.of(), List.of(), null, null);
+                null, null, null, null, List.of(), List.of(), List.of(), null, null);
     }
 
     private IamUserVO boundReturn(String employeeId) {
         return new IamUserVO("7", "1", "10", employeeId, "u7", null, 1, 0, 1,
-                "Name7", null, "135", List.of(), List.of(), List.of(), null, null);
+                "Name7", null, null, "135", List.of(), List.of(), List.of(), null, null);
     }
 
     private EmployeeVO employee(Long id, String deptId) {
@@ -98,7 +98,7 @@ class UserAggregateServiceBindStateTest {
         when(iamWebClient.createUser(any())).thenReturn(unboundReturn());
 
         service.create(new UserCreateRequest("alice", "Alice", 100L, null, "139",
-                List.of(), "pw", List.of(), List.of()));
+                List.of(), "pw", List.of(), List.of(), 10L));
 
         ArgumentCaptor<Map<String, Object>> body = ArgumentCaptor.forClass(Map.class);
         verify(iamWebClient).createUser(body.capture());
@@ -112,7 +112,7 @@ class UserAggregateServiceBindStateTest {
         when(iamWebClient.createUser(any())).thenReturn(unboundReturn());
 
         service.create(new UserCreateRequest("bob", "Bob", null, null, "139",
-                List.of(), "pw", List.of(), List.of()));
+                List.of(), "pw", List.of(), List.of(), 10L));
 
         verify(orgWebClient, never()).getEmployee(anyLong());
         ArgumentCaptor<Map<String, Object>> body = ArgumentCaptor.forClass(Map.class);
@@ -127,7 +127,7 @@ class UserAggregateServiceBindStateTest {
 
         BusinessException ex = assertThrows(BusinessException.class, () ->
                 service.create(new UserCreateRequest("bob", "Bob", null, null, "139",
-                        List.of(), "pw", List.of(), List.of())));
+                        List.of(), "pw", List.of(), List.of(), 10L)));
 
         assertEquals(ResultCode.VALIDATION_ERROR.getCode(), ex.getCode());
         verify(iamWebClient, never()).createUser(any());
@@ -142,7 +142,7 @@ class UserAggregateServiceBindStateTest {
         when(iamWebClient.createUser(any())).thenReturn(unboundReturn());
 
         service.create(new UserCreateRequest("alice", "Alice", 100L, null, "139",
-                List.of(), "pw", List.of(), List.of()));
+                List.of(), "pw", List.of(), List.of(), 10L));
 
         verify(iamWebClient).createUser(any());
     }
@@ -152,12 +152,12 @@ class UserAggregateServiceBindStateTest {
     void update_bindFromUnbound_derivesAndSyncsFromEmployee() {
         // 未绑定现状：employeeId 为 null
         when(iamWebClient.getUser(7L)).thenReturn(new IamUserVO("7", "1", "10", null, "u7", null, 1, 0, 1,
-                "Name7", null, "135", List.of(), List.of(), List.of(), null, null));
+                "Name7", null, null, "135", List.of(), List.of(), List.of(), null, null));
         when(orgWebClient.getEmployee(300L)).thenReturn(employee(300L, "20"));
         when(orgWebClient.getDept(20L)).thenReturn(dept("20", "5"));
         when(iamWebClient.updateUser(eq(7L), any())).thenReturn(unboundReturn());
 
-        service.update(7L, new UserUpdateRequest("u7", 300L, null, null, null, null, null, null));
+        service.update(7L, new UserUpdateRequest("u7", 300L, null, null, null, null, null, null, 10L));
 
         ArgumentCaptor<Map<String, Object>> body = ArgumentCaptor.forClass(Map.class);
         verify(iamWebClient).updateUser(eq(7L), body.capture());
@@ -173,7 +173,7 @@ class UserAggregateServiceBindStateTest {
         when(iamWebClient.getUser(7L)).thenReturn(boundReturn("100"));
         when(iamWebClient.updateUser(eq(7L), any())).thenReturn(unboundReturn());
 
-        service.update(7L, new UserUpdateRequest("u7", null, null, null, null, null, null, null));
+        service.update(7L, new UserUpdateRequest("u7", null, null, null, null, null, null, null, 10L));
 
         ArgumentCaptor<Map<String, Object>> body = ArgumentCaptor.forClass(Map.class);
         verify(iamWebClient).updateUser(eq(7L), body.capture());
@@ -187,7 +187,7 @@ class UserAggregateServiceBindStateTest {
         when(iamWebClient.getUser(7L)).thenReturn(boundReturn("100"));
 
         BusinessException ex = assertThrows(BusinessException.class, () ->
-                service.update(7L, new UserUpdateRequest("u7", null, null, null, null, null, null, null)));
+                service.update(7L, new UserUpdateRequest("u7", null, null, null, null, null, null, null, 10L)));
 
         assertEquals(ResultCode.VALIDATION_ERROR.getCode(), ex.getCode());
         verify(iamWebClient, never()).updateUser(eq(7L), any());
@@ -199,7 +199,7 @@ class UserAggregateServiceBindStateTest {
         when(iamWebClient.getUser(7L)).thenReturn(boundReturn("100"));
         when(iamWebClient.updateUser(eq(7L), any())).thenReturn(unboundReturn());
 
-        service.update(7L, new UserUpdateRequest("u7", null, null, null, null, null, null, null));
+        service.update(7L, new UserUpdateRequest("u7", null, null, null, null, null, null, null, 10L));
 
         ArgumentCaptor<Map<String, Object>> body = ArgumentCaptor.forClass(Map.class);
         verify(iamWebClient).updateUser(eq(7L), body.capture());
@@ -210,11 +210,11 @@ class UserAggregateServiceBindStateTest {
     void update_noChange_unbound_passesSelfMaintainedFields() {
         when(systemWebClient.getConfigByKey(FORCE_BIND_KEY)).thenReturn(null);
         when(iamWebClient.getUser(7L)).thenReturn(new IamUserVO("7", "1", "10", null, "u7", null, 1, 0, 1,
-                "Name7", null, "135", List.of(), List.of(), List.of(), null, null));
+                "Name7", null, null, "135", List.of(), List.of(), List.of(), null, null));
         when(iamWebClient.updateUser(eq(7L), any())).thenReturn(unboundReturn());
 
         service.update(7L, new UserUpdateRequest("u7", null, "NewName", null, "134", null,
-                List.of(11L), List.of(22L)));
+                List.of(11L), List.of(22L), 10L));
 
         ArgumentCaptor<Map<String, Object>> body = ArgumentCaptor.forClass(Map.class);
         verify(iamWebClient).updateUser(eq(7L), body.capture());

@@ -86,7 +86,7 @@ class UserServiceBindStateTest {
         when(userRepository.save(any(SysUser.class))).thenAnswer(inv -> inv.getArgument(0));
 
         UserCreateRequest req = new UserCreateRequest(1L, 10L, 100L, "alice", "pw", "Alice", "139",
-                List.of(), List.of(), List.of());
+                List.of(), List.of(), List.of(), null);
         UserVO vo = userService.create(req);
 
         assertNotNull(vo);
@@ -101,7 +101,7 @@ class UserServiceBindStateTest {
         when(userRepository.save(any(SysUser.class))).thenAnswer(inv -> inv.getArgument(0));
 
         UserCreateRequest req = new UserCreateRequest(1L, 10L, null, "bob", "pw", "Bob", "139",
-                List.of(), List.of(), List.of());
+                List.of(), List.of(), List.of(), null);
         userService.create(req);
 
         verify(orgEmployeeClient, never()).requireEmployee(anyLong(), anyLong());
@@ -116,7 +116,7 @@ class UserServiceBindStateTest {
         doNothing().when(orgEmployeeClient).requireEmployee(anyLong(), anyLong());
         when(userRepository.save(any(SysUser.class))).thenAnswer(inv -> inv.getArgument(0));
 
-        userService.update(5L, new UserUpdateRequest("u5", null, 200L, "SyncedName", "137", null, null));
+        userService.update(5L, new UserUpdateRequest("u5", null, 200L, "SyncedName", "137", null, null, null, null));
 
         assertEquals(200L, u.getEmployeeId());
         assertEquals("SyncedName", u.getRealName());
@@ -131,7 +131,7 @@ class UserServiceBindStateTest {
         doNothing().when(orgEmployeeClient).requireEmployee(anyLong(), anyLong());
         when(userRepository.save(any(SysUser.class))).thenAnswer(inv -> inv.getArgument(0));
 
-        userService.update(6L, new UserUpdateRequest("u6", null, 300L, "X", "136", null, null));
+        userService.update(6L, new UserUpdateRequest("u6", null, 300L, "X", "136", null, null, null, null));
 
         assertEquals(300L, u.getEmployeeId());
         verify(orgEmployeeClient).requireEmployee(1L, 300L);
@@ -146,7 +146,7 @@ class UserServiceBindStateTest {
         when(userRepository.findById(7L)).thenReturn(Optional.of(u));
         when(userRepository.save(any(SysUser.class))).thenAnswer(inv -> inv.getArgument(0));
 
-        userService.update(7L, new UserUpdateRequest("u7", null, null, null, null, null, null));
+        userService.update(7L, new UserUpdateRequest("u7", null, null, null, null, null, null, null, null));
 
         assertNull(u.getEmployeeId());
         assertEquals("KeepName", u.getRealName());
@@ -160,7 +160,7 @@ class UserServiceBindStateTest {
         when(userRepository.findById(8L)).thenReturn(Optional.of(u));
 
         BusinessException ex = assertThrows(BusinessException.class,
-                () -> userService.update(8L, new UserUpdateRequest("u8", null, 100L, "Hack", "000", null, null)));
+                () -> userService.update(8L, new UserUpdateRequest("u8", null, 100L, "Hack", "000", null, null, null, null)));
 
         assertEquals(ResultCode.VALIDATION_ERROR.getCode(), ex.getCode());
         verify(userRepository, never()).save(any());
@@ -172,7 +172,7 @@ class UserServiceBindStateTest {
         when(userRepository.findById(9L)).thenReturn(Optional.of(u));
         when(userRepository.save(any(SysUser.class))).thenAnswer(inv -> inv.getArgument(0));
 
-        userService.update(9L, new UserUpdateRequest("u9", null, null, "NewName", "134", null, null));
+        userService.update(9L, new UserUpdateRequest("u9", null, null, "NewName", "134", null, null, null, null));
 
         assertEquals("NewName", u.getRealName());
         assertEquals("134", u.getPhone());

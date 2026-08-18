@@ -26,5 +26,7 @@ public record UserCreateRequest(
         List<Long> orgIds,
         /** 归属部门（非员工用户可选；绑员工时可由员工主部门派生） */
         List<Long> deptIds,
-        List<Long> roleIds
+        List<Long> roleIds,
+        /** 用户级邮箱：非员工用户自行填写；绑员工时由员工邮箱同步回填（Q1 裁决） */
+        String email
 ) {}

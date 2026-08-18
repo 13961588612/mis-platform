@@ -6,6 +6,7 @@ import com.mis.common.core.result.Result;
 import com.mis.common.jpa.support.PageMapper;
 import com.mis.iam.dto.AuthUserVO;
 import com.mis.iam.dto.DataScopeVO;
+import com.mis.iam.dto.EmployeeBindingCheck;
 import com.mis.iam.dto.UserChangePasswordRequest;
 import com.mis.iam.dto.UserCreateRequest;
 import com.mis.iam.dto.UserResetPasswordRequest;
@@ -46,7 +47,7 @@ public class UserController {
     @GetMapping
     public Result<PageResult<UserVO>> page(
             @RequestParam Long tenantId,
-            @RequestParam Long appId,
+            @RequestParam(required = false) List<Long> appIds,
             @RequestParam(required = false) Integer status,
             @RequestParam(required = false) String username,
             @RequestParam(required = false) String realName,
@@ -56,8 +57,18 @@ public class UserController {
             @RequestParam(defaultValue = "1") int page,
             @RequestParam(defaultValue = "20") int size) {
         Page<UserVO> result = userService.page(
-                tenantId, appId, status, username, realName, phone, orgIds, deptIds, page, size);
+                tenantId, appIds, status, username, realName, phone, orgIds, deptIds, page, size);
         return Result.ok(PageMapper.toPageResult(result));
+    }
+
+    /** 员工绑定预检（D1）：该员工是否已在指定「租户 + APP」内被其他账号绑定。 */
+    @GetMapping("/check-employee-binding")
+    public Result<EmployeeBindingCheck> checkEmployeeBinding(
+            @RequestParam Long tenantId,
+            @RequestParam Long appId,
+            @RequestParam Long employeeId,
+            @RequestParam(required = false) Long excludeUserId) {
+        return Result.ok(userService.checkEmployeeBinding(tenantId, appId, employeeId, excludeUserId));
     }
 
     /** mis-org 员工变更后反向同步绑定用户（Req4）。 */

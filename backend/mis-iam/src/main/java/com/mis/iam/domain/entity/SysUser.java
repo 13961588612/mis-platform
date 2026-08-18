@@ -34,6 +34,10 @@ public class SysUser {
     @Column(name = "phone")
     private String phone;
 
+    /** 用户级邮箱：绑定用户由员工同步写入，非员工用户自有（独立于员工邮箱，见 Q1 裁决） */
+    @Column(name = "email")
+    private String email;
+
     @Column(nullable = false)
     private String username;
 
@@ -82,6 +86,8 @@ public class SysUser {
     public void setRealName(String realName) { this.realName = realName; }
     public String getPhone() { return phone; }
     public void setPhone(String phone) { this.phone = phone; }
+    public String getEmail() { return email; }
+    public void setEmail(String email) { this.email = email; }
     public String getUsername() { return username; }
     public void setUsername(String username) { this.username = username; }
     public String getPasswordHash() { return passwordHash; }

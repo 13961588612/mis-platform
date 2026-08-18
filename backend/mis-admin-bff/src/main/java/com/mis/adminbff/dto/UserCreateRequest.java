@@ -20,5 +20,7 @@ public record UserCreateRequest(
         /** 归属组织（非员工用户可选；绑员工时由 BFF 派生于员工主部门） */
         List<Long> orgIds,
         /** 归属部门（非员工用户可选；绑员工时由 BFF 派生于员工主部门） */
-        List<Long> deptIds
+        List<Long> deptIds,
+        /** 所属 APP：显式提交（不再取登录态上下文） */
+        Long appId
 ) {}

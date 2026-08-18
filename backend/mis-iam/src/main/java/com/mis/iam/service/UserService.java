@@ -18,6 +18,7 @@ import com.mis.iam.domain.repository.SysUserRepository;
 import com.mis.iam.domain.repository.SysUserRoleRepository;
 import com.mis.iam.dto.AuthUserVO;
 import com.mis.iam.dto.DataScopeVO;
+import com.mis.iam.dto.EmployeeBindingCheck;
 import com.mis.iam.dto.RoleVO;
 import com.mis.iam.dto.UserCreateRequest;
 import com.mis.iam.dto.UserResetPasswordRequest;
@@ -82,7 +83,7 @@ public class UserService {
 
     @Transactional(readOnly = true)
     public Page<UserVO> page(
-            Long tenantId, Long appId, Integer status, String username, String realName, String phone,
+            Long tenantId, List<Long> appIds, Integer status, String username, String realName, String phone,
             List<Long> orgIds, List<Long> deptIds, int page, int size) {
         int safePage = Math.max(page, 1);
         int safeSize = Math.min(Math.max(size, 1), 100);
@@ -106,14 +107,34 @@ public class UserService {
             candidateUserIds = List.of(-1L);
         }
 
+        // 跨 APP 查询（D2）：appIds 为空 = 查全部 APP（hasAppFilter=false 跳过过滤）；非空 = appId IN 取并集
+        boolean hasAppFilter = appIds != null && !appIds.isEmpty();
+        List<Long> effectiveAppIds = hasAppFilter ? appIds : List.of(-1L);
+
         String usernameFilter = StringUtils.hasText(username) ? username.trim() : "";
         String realNameFilter = StringUtils.hasText(realName) ? realName.trim() : "";
         String phoneFilter = StringUtils.hasText(phone) ? phone.trim() : "";
 
-        Page<SysUser> result = userRepository.searchV2(
-                tenantId, appId, status, usernameFilter, realNameFilter, phoneFilter,
+        Page<SysUser> result = userRepository.searchV3(
+                tenantId, effectiveAppIds, hasAppFilter, status, usernameFilter, realNameFilter, phoneFilter,
                 candidateUserIds, hasCandidate, pageable);
         return result.map(this::toVo);
+    }
+
+    /**
+     * 员工绑定预检（D1）：该员工是否已在指定「租户 + APP」内被绑定。
+     * <p>编辑时传入 {@code excludeUserId} 排除自身，避免「自己绑自己」误判冲突。</p>
+     */
+    @Transactional(readOnly = true)
+    public EmployeeBindingCheck checkEmployeeBinding(
+            Long tenantId, Long appId, Long employeeId, Long excludeUserId) {
+        if (employeeId == null) {
+            return new EmployeeBindingCheck(false);
+        }
+        boolean exists = excludeUserId != null
+                ? userRepository.existsByTenantIdAndAppIdAndEmployeeIdAndIdNot(tenantId, appId, employeeId, excludeUserId)
+                : userRepository.existsByTenantIdAndAppIdAndEmployeeId(tenantId, appId, employeeId);
+        return new EmployeeBindingCheck(exists);
     }
 
     @Transactional(readOnly = true)
@@ -170,10 +191,19 @@ public class UserService {
         if (userRepository.existsByTenantIdAndAppIdAndUsername(request.tenantId(), request.appId(), request.username())) {
             throw new BusinessException(ResultCode.USER_EXISTS);
         }
+        // 手机号在「租户 + APP」内唯一（D4）：仅手机号非空时校验
+        if (StringUtils.hasText(request.phone())
+                && userRepository.existsByTenantIdAndAppIdAndPhone(request.tenantId(), request.appId(), request.phone())) {
+            throw new BusinessException(ResultCode.USER_PHONE_EXISTS);
+        }
         Long employeeId = request.employeeId();
         if (employeeId != null) {
             // 绑员工：校验员工存在且属于该租户；允许多用户绑同一员工（D3）
             orgEmployeeClient.requireEmployee(request.tenantId(), employeeId);
+            // 每个 APP 内 employeeId 唯一（D1）
+            if (userRepository.existsByTenantIdAndAppIdAndEmployeeId(request.tenantId(), request.appId(), employeeId)) {
+                throw new BusinessException(ResultCode.EMPLOYEE_ALREADY_BOUND);
+            }
         }
         // 注意：已移除 existsByEmployeeId 唯一校验，以支持"一个员工多个账号"场景
 
@@ -188,6 +218,8 @@ public class UserService {
         // 姓名/手机：非员工用户自有；绑员工时由请求提供（与员工同步，便于按姓名/手机检索）
         user.setRealName(request.realName());
         user.setPhone(request.phone());
+        // 用户级邮箱（Q1 裁决）：非员工取请求值；绑员工时由请求携带的 emp.email() 回填
+        user.setEmail(request.email());
         user.setStatus(1);
         user.setLoginFailCount(0);
         user.setIsTenantAdmin(0);
@@ -216,6 +248,20 @@ public class UserService {
         if (!user.getUsername().equals(request.username())
                 && userRepository.existsByTenantIdAndAppIdAndUsername(user.getTenantId(), user.getAppId(), request.username())) {
             throw new BusinessException(ResultCode.USER_EXISTS);
+        }
+        // 手机唯一（D4）：租户+APP 内唯一，排除自身；仅手机号非空且发生变化时校验
+        if (StringUtils.hasText(request.phone())
+                && !request.phone().equals(user.getPhone())
+                && userRepository.existsByTenantIdAndAppIdAndPhoneAndIdNot(
+                        user.getTenantId(), user.getAppId(), request.phone(), id)) {
+            throw new BusinessException(ResultCode.USER_PHONE_EXISTS);
+        }
+
+        // 改 APP 守卫（D4）：已分配任意角色则禁止修改所属 APP（角色按 appId 隔离，改 APP 会让角色失效）
+        Long reqAppId = request.appId();
+        boolean appChanged = reqAppId != null && !reqAppId.equals(user.getAppId());
+        if (appChanged && userRoleRepository.existsByUserId(id)) {
+            throw new BusinessException(ResultCode.VALIDATION_ERROR, "已分配角色，禁止修改所属APP");
         }
 
         Long reqEmp = request.employeeId();
@@ -253,6 +299,16 @@ public class UserService {
                     user.setPhone(request.phone());
                 }
             }
+        }
+
+        // 改 APP（在已分配角色守卫通过后允许，D4）
+        if (appChanged) {
+            user.setAppId(reqAppId);
+        }
+
+        // 用户级邮箱（Q1 裁决）：绑员工时由请求携带的 emp.email() 同步回填；非员工取表单值
+        if (request.email() != null) {
+            user.setEmail(request.email());
         }
 
         user.setUsername(request.username());
@@ -498,6 +554,7 @@ public class UserService {
                 user.getIsTenantAdmin(),
                 user.getMustChangePassword(),
                 user.getRealName(),
+                user.getEmail(),
                 null,
                 roles,
                 orgIds,

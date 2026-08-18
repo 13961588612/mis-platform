@@ -6,6 +6,7 @@ import com.mis.adminbff.client.SystemWebClient;
 import com.mis.adminbff.client.model.ConfigVO;
 import com.mis.adminbff.client.model.DeptVO;
 import com.mis.adminbff.client.model.EmployeeVO;
+import com.mis.adminbff.client.model.EmployeeBindingCheck;
 import com.mis.adminbff.client.model.IamRoleVO;
 import com.mis.adminbff.client.model.IamUserVO;
 import com.mis.adminbff.config.BffProperties;
@@ -62,11 +63,11 @@ public class UserAggregateService {
     }
 
     public PageResult<UserView> page(Integer status, String username, String realName, String phone,
-                                    List<Long> orgIds, List<Long> deptIds, int page, int size) {
+                                    List<Long> orgIds, List<Long> deptIds, List<Long> appIds, int page, int size) {
         Long tenantId = RequestContext.requireTenantId();
-        Long appId = RequestContext.requireAppId();
+        // 跨 APP 查询（D2）：appIds 为空 = 查全部 APP（IAM 端 hasAppFilter=false）；非空 = appId IN 取并集
         PageResult<IamUserVO> iamPage =
-                iamWebClient.pageUsers(tenantId, appId, status, username, realName, phone, orgIds, deptIds, page, size);
+                iamWebClient.pageUsers(tenantId, appIds, status, username, realName, phone, orgIds, deptIds, page, size);
         List<IamUserVO> users = iamPage.getList() != null ? iamPage.getList() : List.of();
         List<UserView> views = enrich(users);
         return PageResult.of(iamPage.getPage(), iamPage.getSize(), iamPage.getTotal(), views);
@@ -85,7 +86,8 @@ public class UserAggregateService {
      */
     public UserView create(UserCreateRequest request) {
         Long tenantId = RequestContext.requireTenantId();
-        Long appId = RequestContext.requireAppId();
+        // 所属 APP 显式取自请求（不再取登录态上下文，D1/D2）
+        Long appId = request.appId();
         Long employeeId = request.employeeId();
         if (isForceEmployeeBind() && employeeId == null) {
             throw new BusinessException(ResultCode.VALIDATION_ERROR,
@@ -93,8 +95,9 @@ public class UserAggregateService {
         }
         List<Long> orgIds = request.orgIds();
         List<Long> deptIds = request.deptIds();
+        EmployeeVO emp = null;
         if (employeeId != null) {
-            EmployeeVO emp = orgWebClient.getEmployee(employeeId);
+            emp = orgWebClient.getEmployee(employeeId);
             if (emp.deptId() != null) {
                 Long primaryDept = Long.valueOf(emp.deptId());
                 deptIds = List.of(primaryDept);
@@ -107,9 +110,11 @@ public class UserAggregateService {
         String password = StringUtils.hasText(request.password())
                 ? request.password()
                 : properties.getDefaultPassword();
+        // 用户级邮箱（Q1 裁决）：绑员工时由员工邮箱同步回填（emp.email），非员工取请求值
+        String email = (employeeId != null && emp != null && emp.email() != null) ? emp.email() : request.email();
         IamUserVO user = iamWebClient.createUser(IamWebClient.userCreateBody(
                 tenantId, appId, employeeId, request.username(), password, request.roleIds(),
-                request.realName(), request.phone(), orgIds, deptIds));
+                request.realName(), request.phone(), email, orgIds, deptIds));
         return enrich(List.of(user)).get(0);
     }
 
@@ -179,6 +184,15 @@ public class UserAggregateService {
             // 已绑定且未变更：姓名/手机/组织/部门均由员工同步，忽略前端输入（Req4 双保险）
         }
 
+        // 所属 APP 显式透传（不再取登录态上下文）；与现有 appId 不同且已分配角色时由 IAM 守卫拦截（D4）
+        if (request.appId() != null) {
+            iamBody.put("appId", request.appId());
+        }
+        // 用户级邮箱透传（Q1 裁决）：绑员工时前端携带 emp.email() 同步值，非员工取表单值
+        if (request.email() != null) {
+            iamBody.put("email", request.email());
+        }
+
         IamUserVO updated = iamWebClient.updateUser(id, iamBody);
         return enrich(List.of(updated)).get(0);
     }
@@ -194,6 +208,12 @@ public class UserAggregateService {
 
     public void delete(Long id) {
         iamWebClient.deleteUser(id, RequestContext.currentUserId());
+    }
+
+    /** 员工绑定预检（D1）：该员工是否已在指定「租户 + APP」内被其他账号绑定（前端选员工即时调用）。 */
+    public EmployeeBindingCheck checkEmployeeBinding(Long appId, Long employeeId, Long excludeUserId) {
+        Long tenantId = RequestContext.requireTenantId();
+        return iamWebClient.checkEmployeeBinding(tenantId, appId, employeeId, excludeUserId);
     }
 
     public void assignRoles(Long id, RoleAssignRequest request) {
@@ -277,6 +297,10 @@ public class UserAggregateService {
             String realName = emp != null ? emp.realName() : user.realName();
             String phone = emp != null ? DesensitizeUtils.phone(emp.phone()) : DesensitizeUtils.phone(user.phone());
             String employeeNo = emp != null ? emp.employeeNo() : null;
+            // 邮箱：优先用户级邮箱（Q1 裁决），未设置时回退到员工邮箱
+            String email = user.email() != null
+                    ? DesensitizeUtils.email(user.email())
+                    : (emp != null ? DesensitizeUtils.email(emp.email()) : null);
 
             List<UserView.RoleBrief> roles = mapRoles(user.roles());
             result.add(new UserView(
@@ -289,12 +313,13 @@ public class UserAggregateService {
                     deptName,
                     orgId,
                     orgName,
-                    emp != null ? DesensitizeUtils.email(emp.email()) : null,
+                    email,
                     phone,
                     user.status(),
                     user.isTenantAdmin(),
                     roles,
-                    user.createdAt()));
+                    user.createdAt(),
+                    user.appId()));
         }
         return result;
     }

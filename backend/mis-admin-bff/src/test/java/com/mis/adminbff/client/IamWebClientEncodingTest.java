@@ -179,7 +179,7 @@ class IamWebClientEncodingTest {
         @DisplayName("「张伟 测试」不抛异常、请求命中假 mis-iam、解码后还原成原文")
         void chineseAndSpacedUsernameSurvives() {
             PageResult<?> page = assertDoesNotThrow(
-                    () -> client.pageUsers(1L, 2L, null, "张伟 测试", null, null, null, null, 1, 10),
+                    () -> client.pageUsers(1L, List.of(2L), null, "张伟 测试", null, null, null, null, 1, 10),
                     "修复前这里抛 IllegalArgumentException: Invalid character '张' for QUERY_PARAM");
 
             assertNotNull(page);
@@ -194,7 +194,7 @@ class IamWebClientEncodingTest {
         @Test
         @DisplayName("纯 ASCII「alpha」保持原样 —— 修复不能把本来正常的路径改坏")
         void plainAsciiUsernameUnchanged() {
-            client.pageUsers(1L, 2L, null, "alpha", null, null, null, null, 1, 10);
+            client.pageUsers(1L, List.of(2L), null, "alpha", null, null, null, null, 1, 10);
 
             assertHitsFakeIam();
             assertNoDoubleEncoding();
@@ -205,18 +205,18 @@ class IamWebClientEncodingTest {
         @Test
         @DisplayName("其余参数（tenantId/appId/page/size）原样送达，顺序与旧实现一致")
         void otherParamsUnaffected() {
-            client.pageUsers(1L, 2L, 1, "张伟", null, null, null, List.of(9L), 3, 20);
+            client.pageUsers(1L, List.of(2L), 1, "张伟", null, null, null, List.of(9L), 3, 20);
 
             assertHitsFakeIam();
             assertNoDoubleEncoding();
             assertEquals("1", rawValueOf("tenantId"));
-            assertEquals("2", rawValueOf("appId"));
+            assertEquals("2", rawValueOf("appIds"));
             assertEquals("3", rawValueOf("page"));
             assertEquals("20", rawValueOf("size"));
             assertEquals("1", rawValueOf("status"));
             assertEquals("9", rawValueOf("deptIds"));
             assertEquals("张伟", decodedValueOf("username"));
-            assertEquals("tenantId=1&appId=2&page=3&size=20&status=1"
+            assertEquals("tenantId=1&appIds=2&page=3&size=20&status=1"
                             + "&username=%E5%BC%A0%E4%BC%9F&deptIds=9",
                     rawQuery.get(),
                     "参数顺序与旧实现保持一致，便于下游日志/缓存键对齐");
@@ -230,7 +230,7 @@ class IamWebClientEncodingTest {
         @Test
         @DisplayName("值里的 & 与 = 被整体编码，不会劈成多个查询参数")
         void reservedCharactersDoNotSplitQuery() {
-            client.pageUsers(1L, 2L, null, "A&B=C", null, null, null, null, 1, 10);
+            client.pageUsers(1L, List.of(2L), null, "A&B=C", null, null, null, null, 1, 10);
 
             assertNoDoubleEncoding();
             Map<String, String> parsed = splitRaw(rawQuery.get());
@@ -244,7 +244,7 @@ class IamWebClientEncodingTest {
         void bracesAreNotTreatedAsUriTemplate() {
             // username 走 {username} 占位 + build(Map) 展开，用户输入里的花括号因此进不了模板层。
             // 若改成把原文直接 queryParam() 进去，这里会抛 IllegalArgumentException（变量值不足）。
-            assertDoesNotThrow(() -> client.pageUsers(1L, 2L, null, "张{伟}", null, null, null, null, 1, 10));
+            assertDoesNotThrow(() -> client.pageUsers(1L, List.of(2L), null, "张{伟}", null, null, null, null, 1, 10));
 
             assertNoDoubleEncoding();
             assertEquals("张{伟}", decodedValueOf("username"));
@@ -253,7 +253,7 @@ class IamWebClientEncodingTest {
         @Test
         @DisplayName("值里已有的百分号被正确转义成 %25，且不会再叠一层")
         void literalPercentIsEscapedOnce() {
-            client.pageUsers(1L, 2L, null, "100%", null, null, null, null, 1, 10);
+            client.pageUsers(1L, List.of(2L), null, "100%", null, null, null, null, 1, 10);
 
             // 这是唯一允许出现 %25 的场景：用户真的输入了 %。
             assertEquals("100%25", rawValueOf("username"));
@@ -269,28 +269,28 @@ class IamWebClientEncodingTest {
         @Test
         @DisplayName("username 为 null 时不出现在查询串里")
         void nullUsernameIsSkipped() {
-            client.pageUsers(1L, 2L, null, null, null, null, null, null, 1, 10);
+            client.pageUsers(1L, List.of(2L), null, null, null, null, null, null, 1, 10);
 
             assertHitsFakeIam();
             assertNull(rawValueOf("username"), () -> "「没传」不能变成「传了空值」：" + rawQuery.get());
-            assertEquals("tenantId=1&appId=2&page=1&size=10", rawQuery.get());
+            assertEquals("tenantId=1&appIds=2&page=1&size=10", rawQuery.get());
         }
 
         @Test
         @DisplayName("username 为纯空格时同样视为「没传」（沿用旧的 isBlank 过滤）")
         void blankUsernameIsSkipped() {
-            client.pageUsers(1L, 2L, null, "   ", null, null, null, null, 1, 10);
+            client.pageUsers(1L, List.of(2L), null, "   ", null, null, null, null, 1, 10);
 
             assertHitsFakeIam();
             assertNull(rawValueOf("username"),
                     () -> "空白用户名应被过滤掉，否则下游会按「用户名等于三个空格」去匹配：" + rawQuery.get());
-            assertEquals("tenantId=1&appId=2&page=1&size=10", rawQuery.get());
+            assertEquals("tenantId=1&appIds=2&page=1&size=10", rawQuery.get());
         }
 
         @Test
         @DisplayName("status/deptId 为 null 时不出现在查询串里")
         void nullOptionalFiltersAreSkipped() {
-            client.pageUsers(1L, 2L, null, "alpha", null, null, null, null, 1, 10);
+            client.pageUsers(1L, List.of(2L), null, "alpha", null, null, null, null, 1, 10);
 
             Map<String, String> parsed = splitRaw(rawQuery.get());
             assertNull(parsed.get("status"));

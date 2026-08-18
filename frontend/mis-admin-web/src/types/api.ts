@@ -110,6 +110,8 @@ export interface UserView {
   phone: string | null;
   status: number;
   isTenantAdmin: number | null;
+  /** 所属 APP id（显式归属，D1/D2） */
+  appId?: string | null;
   roles: RoleBrief[];
   /** 归属组织 id 列表（多组织，首项主组织）；用于权限 Sheet 正确回填（N7/USR-01/03） */
   orgIds?: string[];

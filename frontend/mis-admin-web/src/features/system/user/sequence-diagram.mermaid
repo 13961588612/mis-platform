@@ -1,0 +1,90 @@
+%% (a) 强制模式新建全流程
+sequenceDiagram
+    actor Admin as 平台管理员
+    participant UI as user-list-page
+    participant Picker as EmployeePickerDialog
+    participant API as /api/v1/users
+    participant Agg as UserAggregateService
+    participant IAM as IAM UserService
+    participant Repo as SysUserRepository
+
+    Admin->>UI: 打开新建（读 forceBindEmp=true）
+    Admin->>UI: 选「所属 APP」→ form.appId
+    Admin->>UI: 点「绑定员工」
+    UI->>Picker: open(form.appId)
+    Picker->>API: listEmployees() 列表
+    Admin->>Picker: 选员工 empId
+    Picker->>API: checkEmployeeBinding(appId, empId)
+    API->>Agg: checkEmployeeBinding
+    Agg->>IAM: existsByTenantIdAndAppIdAndEmployeeId
+    IAM->>Repo: exists(...)
+    Repo-->>IAM: false（未绑定）
+    Picker->>UI: 回填手机/姓名/邮箱（灰化字段）
+    Admin->>UI: 填用户名/密码
+    Admin->>UI: 保存
+    UI->>API: createUser({appId,username,password,employeeId,email,phone,realName})
+    API->>Agg: create(req.appId 取代登录态)
+    Agg->>IAM: createUser(body + email)
+    IAM->>Repo: existsByTenantIdAndAppIdAndUsername? (40901)
+    IAM->>Repo: existsByTenantIdAndAppIdAndEmployeeId? (40910)
+    IAM->>Repo: existsByTenantIdAndAppIdAndPhone? (40918)
+    IAM->>Repo: save(写 employeeId + email)
+    IAM-->>UI: 成功 → toast「已创建用户」
+    Note over UI: 失败按 code 挂红字（40901→用户名 / 40918→手机）
+
+%% (b) 编辑改 APP 守卫被拒
+sequenceDiagram
+    actor Admin as 平台管理员
+    participant UI as user-list-page
+    participant API as /api/v1/users
+    participant Agg as UserAggregateService
+    participant IAM as IAM UserService
+    participant RoleRepo as SysUserRoleRepository
+
+    Admin->>UI: 打开编辑（roles>0）
+    Admin->>UI: 改「所属 APP」(newAppId != old)
+    Admin->>UI: 保存
+    UI->>API: updateUser(id, {appId:newAppId})
+    API->>Agg: update(id, req)
+    Agg->>IAM: update
+    IAM->>RoleRepo: existsByUserId(id) = true
+    IAM-->>UI: 抛 VALIDATION_ERROR("已分配角色，禁止修改所属APP")
+    UI->>UI: errors.appId = 提示 + toast
+
+%% (c) 跨 APP 查询
+sequenceDiagram
+    actor Admin as 运维
+    participant UI as user-list-page
+    participant API as /api/v1/users
+    participant Agg as UserAggregateService
+    participant IAM as IAM UserService
+    participant Repo as SysUserRepository
+
+    Admin->>UI: 选「所属 APP」多选 queryAppIds=[A,B]
+    Admin->>UI: 点查询
+    UI->>API: pageUsers({appIds:[A,B]})
+    API->>Agg: page(appIds)
+    Agg->>IAM: pageUsers(tenantId, appIds)
+    IAM->>Repo: searchV3(tenantId, [A,B], hasAppFilter=true, ...)
+    Repo-->>IAM: 分页结果（appId IN）
+    IAM-->>UI: 列表（统一分页）
+
+%% (d) 权限弹窗三 TAB 保存
+sequenceDiagram
+    actor Admin as 平台管理员
+    participant UI as user-list-page
+    participant Tabs as PermissionTabs
+    participant API as /api/v1/users
+    participant Agg as UserAggregateService
+    participant IAM as IAM UserService
+
+    Admin->>UI: 打开权限设置
+    UI->>Tabs: 加载全量组织 / 全量部门 / 全量角色（互不联动）
+    Admin->>Tabs: 勾选 组织/部门/角色
+    Admin->>UI: 保存
+    UI->>API: updateUser(id, {orgIds, deptIds})
+    UI->>API: assignUserRoles(id, roleIds)
+    API->>Agg: update + assignRoles
+    Agg->>IAM: update(replaceUserOrgs/Depts)
+    Agg->>IAM: assignRoles(replaceRoles, 保留 role.appId==user.appId 校验)
+    IAM-->>UI: 成功 → toast「已保存权限」
