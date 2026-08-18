@@ -64,6 +64,7 @@ export interface DeptTreeSelectSingleProps {
   onChange: (value: string | number | null) => void;
   placeholder?: string;
   disabled?: boolean;
+  className?: string;
 }
 
 /** 多选形态：value 为数组，onChange 回传数组；用于筛选栏 deptIds（并集语义）。 */
@@ -74,6 +75,7 @@ export interface DeptTreeSelectMultipleProps {
   onChange: (value: (string | number)[]) => void;
   placeholder?: string;
   disabled?: boolean;
+  className?: string;
 }
 
 export type DeptTreeSelectProps = DeptTreeSelectSingleProps | DeptTreeSelectMultipleProps;
@@ -88,7 +90,7 @@ export type DeptTreeSelectProps = DeptTreeSelectSingleProps | DeptTreeSelectMult
  * <p><b>多选</b>（筛选 deptIds）：复选 + 全选/清空；触发器 chip 单行裁切。
  */
 export function DeptTreeSelect(props: DeptTreeSelectProps) {
-  const { placeholder, disabled = false } = props;
+  const { placeholder, disabled = false, className } = props;
   const multiple = props.multiple === true;
 
   const [forest, setForest] = useState<TreeItem[]>([]);
@@ -253,6 +255,7 @@ export function DeptTreeSelect(props: DeptTreeSelectProps) {
             fieldInputClass,
             'flex items-center justify-between gap-2 text-left',
             disabled && 'cursor-not-allowed opacity-60',
+            className,
           )}
         >
           {multiple ? (

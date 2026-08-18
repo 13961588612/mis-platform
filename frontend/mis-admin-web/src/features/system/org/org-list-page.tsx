@@ -2,6 +2,7 @@ import { SHEET_FORM_BODY, SHEET_FORM_FIELD, SHEET_FORM_LABEL } from '@/component
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { cn } from '@/lib/utils';
 import { ChevronRight, Eye, Pencil, Plus, Trash2 } from 'lucide-react';
+import { HEADER_ACTION_BTN_CLASS, ResetColWidthButton } from '@/components/common/header-action-buttons';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -240,13 +241,9 @@ export function OrgListPage() {
         })}
         actions={
           <div className="flex items-center gap-2">
-            {hasCustom ? (
-              <Button type="button" variant="outline" size="sm" onClick={resetColWidths}>
-                重置列宽
-              </Button>
-            ) : null}
+            {hasCustom ? <ResetColWidthButton onClick={resetColWidths} /> : null}
             <PermissionGate permission="system:org:add">
-              <Button size="sm" onClick={openCreate}>
+              <Button className={HEADER_ACTION_BTN_CLASS} onClick={openCreate}>
                 <Plus className="h-4 w-4" />
                 新增组织
               </Button>

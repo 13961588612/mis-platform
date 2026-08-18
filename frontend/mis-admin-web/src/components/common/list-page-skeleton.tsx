@@ -195,7 +195,7 @@ export function ListPageSkeleton<T extends Record<string, unknown>>({
               <Button
                 type="button"
                 size="sm"
-                variant="outline"
+                variant="secondary"
                 onClick={() => {
                   setDraft({});
                   setApplied({});

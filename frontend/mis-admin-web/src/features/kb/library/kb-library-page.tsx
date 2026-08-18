@@ -32,6 +32,7 @@ import { useKbStore } from '../stores/use-kb-store';
 import type { KbCategory, KbLibrary, KbRagSettings } from '../types';
 import { KB_ENGINE_SYNC_STATUS_META, KB_SECRECY_OPTIONS, formatTime } from '../types';
 import { SHEET_FORM_BODY, SHEET_FORM_FIELD, SHEET_FORM_LABEL } from '@/components/common/sheet-form-styles';
+import { HEADER_ACTION_BTN_CLASS, RESET_COL_WIDTH_OVERLAY_CLASS, ResetColWidthButton } from '@/components/common/header-action-buttons';
 
 /** 标签与控件间距由外层 field 的 space-y-1.5 统一，避免上下半区疏密不一致。 */
 const fieldLabel = SHEET_FORM_LABEL;
@@ -429,8 +430,8 @@ export function KbLibraryPage() {
                 （权限码 monitor:operlog:list，对齐 V2 菜单 302 操作日志页） */}
             <PermissionGate permission="monitor:operlog:list">
               <Button
-                size="sm"
                 variant="outline"
+                className={HEADER_ACTION_BTN_CLASS}
                 onClick={() => navigate('/monitor/oper-log?module=' + encodeURIComponent('知识库'))}
               >
                 <ClipboardList className="h-4 w-4" />
@@ -438,7 +439,7 @@ export function KbLibraryPage() {
               </Button>
             </PermissionGate>
             <PermissionGate permission="kb:library:add">
-              <Button size="sm" onClick={openCreate}>
+              <Button className={HEADER_ACTION_BTN_CLASS} onClick={openCreate}>
                 <Plus className="h-4 w-4" />
                 新增知识库
               </Button>
@@ -552,13 +553,7 @@ export function KbLibraryPage() {
           </div>
           <div className="relative min-w-0 flex-1 overflow-auto rounded-lg border bg-table-surface">
           {hasCustom ? (
-            <button
-              type="button"
-              onClick={reset}
-              className="absolute right-3 top-3 z-20 rounded-md bg-card px-2 py-0.5 text-xs text-muted-foreground shadow-sm hover:text-foreground"
-            >
-              重置列宽
-            </button>
+            <ResetColWidthButton onClick={reset} className={RESET_COL_WIDTH_OVERLAY_CLASS} />
           ) : null}
           <table className="w-full table-fixed border-separate border-spacing-0 bg-table-surface text-left text-sm">
             <thead className="border-b-2 border-foreground/20 bg-table-header text-muted-foreground">

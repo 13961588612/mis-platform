@@ -1,6 +1,7 @@
 import { SHEET_FORM_BODY, SHEET_FORM_FIELD, SHEET_FORM_LABEL } from '@/components/common/sheet-form-styles';
 import { Fragment, ReactNode, useCallback, useEffect, useMemo, useState } from 'react';
 import { ChevronRight, Folder, Pencil, Plus, Trash2, Users } from 'lucide-react';
+import { HEADER_ACTION_BTN_CLASS, ResetColWidthButton } from '@/components/common/header-action-buttons';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
@@ -637,11 +638,6 @@ export function DeptTreePage({ headerExtra }: { headerExtra?: ReactNode }) {
         actions={
           <div className="flex flex-wrap items-center gap-2">
             {headerExtra ? <>{headerExtra}</> : null}
-            {hasCustom ? (
-              <Button type="button" variant="outline" size="sm" onClick={resetColWidths}>
-                重置列宽
-              </Button>
-            ) : null}
             <select
               className={cn(fieldInput, 'w-40')}
               value={orgId}
@@ -654,11 +650,12 @@ export function DeptTreePage({ headerExtra }: { headerExtra?: ReactNode }) {
               ))}
             </select>
             <PermissionGate permission="system:dept:add">
-              <Button size="sm" onClick={() => openCreate(treeRows[0]?.rawId ?? '0')}>
+              <Button className={HEADER_ACTION_BTN_CLASS} onClick={() => openCreate(treeRows[0]?.rawId ?? '0')}>
                 <Plus className="h-4 w-4" />
                 新增部门
               </Button>
             </PermissionGate>
+            {hasCustom ? <ResetColWidthButton onClick={resetColWidths} /> : null}
           </div>
         }
       />

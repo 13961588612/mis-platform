@@ -34,6 +34,7 @@ import { StatCard } from '@/components/common/stat-card';
 import { SortIndicator } from '@/components/common/sort-indicator';
 import { useClientSort } from '@/components/common/use-client-sort';
 import { useColumnWidths, type ResizableColumn } from '@/components/common/use-column-widths';
+import { RESET_COL_WIDTH_OVERLAY_CLASS, ResetColWidthButton } from '@/components/common/header-action-buttons';
 import { AgentPageShell, AgentContentState } from '../components/agent-page-shell';
 import { AgentConfirmDialog } from '../components/agent-confirm-dialog';
 import { AgentStatusBadge } from '../components/agent-status-badge';
@@ -340,7 +341,7 @@ export function AgentSkillPoolPage() {
               ))}
             </select>
           </div>
-          <Button size="sm" variant="ghost" onClick={resetSkillFilter}>
+          <Button size="sm" variant="secondary" onClick={resetSkillFilter}>
             重置
           </Button>
           <span className="ml-auto pb-1.5 text-xs text-muted-foreground">
@@ -359,13 +360,7 @@ export function AgentSkillPoolPage() {
 
         <div className="relative min-h-0 flex-1 overflow-auto rounded-lg border bg-table-surface">
           {hasCustom ? (
-            <button
-              type="button"
-              onClick={reset}
-              className="absolute right-3 top-3 z-20 rounded-md bg-card px-2 py-0.5 text-xs text-muted-foreground shadow-sm hover:text-foreground"
-            >
-              重置列宽
-            </button>
+            <ResetColWidthButton onClick={reset} className={RESET_COL_WIDTH_OVERLAY_CLASS} />
           ) : null}
           <table
             className="border-separate border-spacing-0 bg-table-surface text-left text-sm"

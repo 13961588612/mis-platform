@@ -21,6 +21,7 @@ import { StatCard } from '@/components/common/stat-card';
 import { SortIndicator } from '@/components/common/sort-indicator';
 import { useClientSort } from '@/components/common/use-client-sort';
 import { useColumnWidths, type ResizableColumn } from '@/components/common/use-column-widths';
+import { RESET_COL_WIDTH_OVERLAY_CLASS, ResetColWidthButton } from '@/components/common/header-action-buttons';
 import { AgentPageShell, AgentContentState } from '../components/agent-page-shell';
 import { AgentStatusBadge } from '../components/agent-status-badge';
 import {
@@ -352,7 +353,7 @@ export function AgentDispatchPage() {
           <Button size="sm" onClick={applyFilter}>
             查询
           </Button>
-          <Button size="sm" variant="ghost" onClick={onReset}>
+          <Button size="sm" variant="secondary" onClick={onReset}>
             重置
           </Button>
         </div>
@@ -446,13 +447,7 @@ export function AgentDispatchPage() {
           >
             <div className="relative max-h-[26rem] min-h-[12rem] overflow-auto rounded-lg border bg-table-surface">
               {logCols.hasCustom ? (
-                <button
-                  type="button"
-                  onClick={logCols.reset}
-                  className="absolute right-3 top-3 z-20 rounded-md bg-card px-2 py-0.5 text-xs text-muted-foreground shadow-sm hover:text-foreground"
-                >
-                  重置列宽
-                </button>
+                <ResetColWidthButton onClick={logCols.reset} className={RESET_COL_WIDTH_OVERLAY_CLASS} />
               ) : null}
               <table
                 className="border-separate border-spacing-0 bg-table-surface text-left text-sm"
@@ -582,13 +577,7 @@ export function AgentDispatchPage() {
           >
             <div className="relative max-h-[26rem] min-h-[12rem] overflow-auto rounded-lg border bg-table-surface">
               {traceCols.hasCustom ? (
-                <button
-                  type="button"
-                  onClick={traceCols.reset}
-                  className="absolute right-3 top-3 z-20 rounded-md bg-card px-2 py-0.5 text-xs text-muted-foreground shadow-sm hover:text-foreground"
-                >
-                  重置列宽
-                </button>
+                <ResetColWidthButton onClick={traceCols.reset} className={RESET_COL_WIDTH_OVERLAY_CLASS} />
               ) : null}
               <table
                 className="border-separate border-spacing-0 bg-table-surface text-left text-sm"

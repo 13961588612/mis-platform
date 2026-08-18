@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  Check,
   Eye,
   KeyRound,
   Pencil,
@@ -43,6 +42,8 @@ import {
 import { listOrgs } from '@/lib/api/orgs';
 import { fetchDeptTree } from '@/lib/api/depts';
 import { DeptTreeSelect } from '@/components/common/dept-tree-select';
+import { FilterMultiSelect } from '@/components/common/filter-multi-select';
+import { HEADER_ACTION_BTN_CLASS, ResetColWidthButton } from '@/components/common/header-action-buttons';
 import {
   assignUserRoles,
   createUser,
@@ -61,6 +62,9 @@ import { SHEET_FORM_BODY, SHEET_FORM_FIELD, SHEET_FORM_LABEL } from '@/component
 const fieldLabel = SHEET_FORM_LABEL;
 const fieldInput =
   'h-auto min-h-9 w-full rounded-md border border-input bg-card px-[0.7rem] py-[0.55rem] text-sm text-foreground';
+
+/** 查询栏控件高度：与 Input h-9 对齐，避免 native select / 下拉触发器被 padding 撑高 */
+const filterControlClass = 'h-9 min-h-9 py-0';
 
 // 结果列：用户名 / 姓名 / 组织 / 部门 / 手机 / 状态 / 创建时间（已移除工号，对齐员工管理风格）
 const USER_COLUMNS: ResizableColumn[] = [
@@ -121,7 +125,6 @@ export function UserListPage() {
   const [phone, setPhone] = useState('');
   const [queryOrgIds, setQueryOrgIds] = useState<string[]>([]);
   const [queryDeptIds, setQueryDeptIds] = useState<string[]>([]);
-  const [showOrgDeptFilter, setShowOrgDeptFilter] = useState(false);
   const [status, setStatus] = useState<number | ''>('');
   const [page, setPage] = useState(1);
   const [total, setTotal] = useState(0);
@@ -571,20 +574,16 @@ export function UserListPage() {
             title: '用户管理',
           })}
           actions={
-            <div className="flex gap-2">
-              {hasCustom ? (
-                <Button type="button" variant="outline" size="sm" onClick={resetColWidths}>
-                  重置列宽
-                </Button>
-              ) : null}
+            <div className="flex items-center gap-2">
+              {hasCustom ? <ResetColWidthButton onClick={resetColWidths} /> : null}
               <PermissionGate permission="system:user:add">
-                <Button size="sm" onClick={() => openCreate()}>
+                <Button type="button" className={HEADER_ACTION_BTN_CLASS} onClick={() => openCreate()}>
                   <Plus className="h-4 w-4" />
                   新增用户
                 </Button>
               </PermissionGate>
               <AiFeature feature="text-extract">
-                <Button size="sm" variant="outline" onClick={openSmartImport}>
+                <Button type="button" variant="outline" className={HEADER_ACTION_BTN_CLASS} onClick={openSmartImport}>
                   <Sparkles className="h-4 w-4" />
                   智能录入
                 </Button>
@@ -596,8 +595,8 @@ export function UserListPage() {
         <div className="flex min-h-0 flex-1 flex-col gap-3">
           {/* 查询条件（对齐员工管理：用户名 / 姓名 / 组织 / 部门 / 手机 / 状态） */}
           <div className="rounded-lg border bg-card">
-            <div className="flex flex-wrap items-end gap-2 border-b p-3">
-              <div className="min-w-[10rem] flex-1">
+            <div className="flex flex-wrap items-end gap-2 p-3">
+              <div className="w-32 shrink-0">
                 <label className={fieldLabel}>用户名</label>
                 <Input
                   value={username}
@@ -606,7 +605,7 @@ export function UserListPage() {
                   className="h-9"
                 />
               </div>
-              <div className="min-w-[10rem] flex-1">
+              <div className="w-32 shrink-0">
                 <label className={fieldLabel}>姓名</label>
                 <Input
                   value={realName}
@@ -615,7 +614,27 @@ export function UserListPage() {
                   className="h-9"
                 />
               </div>
-              <div className="min-w-[10rem] flex-1">
+              <div className="min-w-[12rem] flex-[1.4]">
+                <label className={fieldLabel}>组织</label>
+                <FilterMultiSelect
+                  options={orgs.map((o) => ({ label: o.name, value: o.id }))}
+                  value={queryOrgIds}
+                  onChange={(v) =>
+                    setQueryOrgIds(Array.isArray(v) ? (v as (string | number)[]).map(String) : [])
+                  }
+                  triggerClassName={filterControlClass}
+                />
+              </div>
+              <div className="min-w-[12rem] flex-[1.4]">
+                <label className={fieldLabel}>部门</label>
+                <DeptTreeSelect
+                  multiple
+                  value={queryDeptIds.map(Number)}
+                  onChange={(v) => setQueryDeptIds(v.map(String))}
+                  className={filterControlClass}
+                />
+              </div>
+              <div className="w-36 shrink-0">
                 <label className={fieldLabel}>手机号码</label>
                 <Input
                   value={phone}
@@ -627,7 +646,10 @@ export function UserListPage() {
               <div className="w-28">
                 <label className={fieldLabel}>状态</label>
                 <select
-                  className={fieldInput}
+                  className={cn(
+                    'w-full rounded-md border border-input bg-card px-3 text-sm text-foreground',
+                    filterControlClass,
+                  )}
                   value={status === '' ? '' : String(status)}
                   onChange={(e) => setStatus(e.target.value === '' ? '' : Number(e.target.value))}
                 >
@@ -640,13 +662,7 @@ export function UserListPage() {
               <Button
                 size="sm"
                 variant="secondary"
-                onClick={() => setShowOrgDeptFilter((v) => !v)}
-              >
-                组织 / 部门{showOrgDeptFilter ? '▲' : '▼'}
-              </Button>
-              <Button
-                size="sm"
-                variant="secondary"
+                className={HEADER_ACTION_BTN_CLASS}
                 onClick={() => {
                   setPage(1);
                   void loadUsers();
@@ -657,7 +673,8 @@ export function UserListPage() {
               </Button>
               <Button
                 size="sm"
-                variant="ghost"
+                variant="secondary"
+                className={HEADER_ACTION_BTN_CLASS}
                 onClick={() => {
                   setUsername('');
                   setRealName('');
@@ -672,49 +689,6 @@ export function UserListPage() {
                 重置
               </Button>
             </div>
-            {showOrgDeptFilter ? (
-              <div className="grid grid-cols-1 gap-3 p-3 md:grid-cols-2">
-                <div>
-                  <label className={fieldLabel}>组织（可多选，参考员工管理）</label>
-                  <div className="mt-1.5 flex flex-wrap gap-1.5 rounded-md border border-input bg-card p-2">
-                    {orgs.length === 0 ? (
-                      <span className="px-1 py-0.5 text-xs text-muted-foreground">暂无可选项</span>
-                    ) : (
-                      orgs.map((o) => {
-                        const on = queryOrgIds.includes(o.id);
-                        return (
-                          <button
-                            key={o.id}
-                            type="button"
-                            onClick={() =>
-                              setQueryOrgIds((ids) => (on ? ids.filter((x) => x !== o.id) : [...ids, o.id]))
-                            }
-                            className={cn(
-                              'inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-xs font-medium transition',
-                              on
-                                ? 'border-primary bg-primary/10 text-primary'
-                                : 'border-input text-muted-foreground hover:border-primary/40 hover:text-foreground',
-                            )}
-                            aria-pressed={on}
-                          >
-                            {on ? <Check className="h-3 w-3" /> : null}
-                            {o.name}
-                          </button>
-                        );
-                      })
-                    )}
-                  </div>
-                </div>
-                <div>
-                  <label className={fieldLabel}>部门（可多选，树形参考员工管理）</label>
-                  <DeptTreeSelect
-                    multiple
-                    value={queryDeptIds.map(Number)}
-                    onChange={(v) => setQueryDeptIds(v.map(String))}
-                  />
-                </div>
-              </div>
-            ) : null}
           </div>
 
           {/* 结果表 */}

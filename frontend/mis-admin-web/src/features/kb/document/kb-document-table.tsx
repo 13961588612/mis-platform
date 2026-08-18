@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { Eye, ListRestart, Power, RefreshCw, RotateCw, Settings2, Trash2, Upload } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
+import { ResetColWidthButton } from '@/components/common/header-action-buttons';
 import { Badge } from '@/components/ui/badge';
 import { PermissionGate } from '@/components/auth/permission-gate';
 import { EnabledBadge, ParseStatusBadge } from '../components/kb-badges';
@@ -353,11 +354,7 @@ export function KbDocumentTable({
             <RefreshCw className="h-4 w-4" />
             刷新
           </Button>
-          {hasCustom ? (
-            <Button size="sm" variant="ghost" onClick={resetWidths}>
-              重置列宽
-            </Button>
-          ) : null}
+          {hasCustom ? <ResetColWidthButton onClick={resetWidths} /> : null}
           <span className="text-xs text-muted-foreground">
             单文件不超过 {formatSize(50 * 1024 * 1024)}
           </span>

@@ -4,6 +4,7 @@ import { ChevronRight, Folder, Layers, Pencil, Plus, Trash2 } from 'lucide-react
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
+import { HEADER_ACTION_BTN_CLASS } from '@/components/common/header-action-buttons';
 import { Input } from '@/components/ui/input';
 import { PageHeader } from '@/components/common/page-header';
 import { buildAppBreadcrumbs } from '@/components/common/app-breadcrumbs';
@@ -241,7 +242,7 @@ export function DeptTypeManagePage({ headerExtra }: { headerExtra?: ReactNode })
           <div className="flex items-center gap-2">
             {headerExtra ? <>{headerExtra}</> : null}
             <PermissionGate permission="system:dept-type:add">
-              <Button size="sm" onClick={() => openCreate('0')}>
+              <Button className={HEADER_ACTION_BTN_CLASS} onClick={() => openCreate('0')}>
                 <Plus className="h-4 w-4" />
                 新增顶级类型
               </Button>

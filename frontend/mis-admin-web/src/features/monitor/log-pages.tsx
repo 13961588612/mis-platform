@@ -4,6 +4,7 @@ import { Search } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
+import { ResetColWidthButton } from '@/components/common/header-action-buttons';
 import { Input } from '@/components/ui/input';
 import { PageHeader } from '@/components/common/page-header';
 import { buildAppBreadcrumbs } from '@/components/common/app-breadcrumbs';
@@ -215,11 +216,7 @@ export function OperLogListPage() {
           title: '操作日志',
         })}
         actions={
-          hasCustom ? (
-            <Button type="button" variant="outline" size="sm" onClick={resetColWidths}>
-              重置列宽
-            </Button>
-          ) : null
+          hasCustom ? <ResetColWidthButton onClick={resetColWidths} /> : null
         }
       />
       <div className="mb-3 flex flex-wrap gap-2">
@@ -424,11 +421,7 @@ export function LoginLogListPage() {
           title: '登录日志',
         })}
         actions={
-          hasCustom ? (
-            <Button type="button" variant="outline" size="sm" onClick={resetColWidths}>
-              重置列宽
-            </Button>
-          ) : null
+          hasCustom ? <ResetColWidthButton onClick={resetColWidths} /> : null
         }
       />
       <div className="mb-3 flex flex-wrap gap-2">
