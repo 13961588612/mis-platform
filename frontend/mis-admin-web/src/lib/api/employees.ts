@@ -10,12 +10,37 @@ function unwrap<T>(res: { data: ApiResult<T> }, fallback: string): T {
 
 export interface EmployeeQuery {
   realName?: string;
+  /** 手机号精确匹配（透传 GET /employees?phone=） */
+  phone?: string;
   deptId?: string | number;
   /** 多部门过滤（员工管理增强）：数组经逗号序列化透传后端 deptIds（与 orgIds 取交集） */
-  deptIds?: (string | number)[];
+  deptIds?: (string | number)[] | string;
   /** 多组织过滤（员工管理增强）：经部门 org_id 反查，与 deptIds 取交集 */
-  orgIds?: (string | number)[];
+  orgIds?: (string | number)[] | string;
   status?: number;
+}
+
+/** 将数组参数逗号序列化；空数组/空值过滤掉，保持与后端契约一致。 */
+function toParams(query: EmployeeQuery): Record<string, unknown> {
+  const params: Record<string, unknown> = {};
+  if (query.realName?.trim()) params.realName = query.realName.trim();
+  if (query.phone?.trim()) params.phone = query.phone.trim();
+  if (query.deptId !== undefined && query.deptId !== '' && query.deptId != null) {
+    params.deptId = query.deptId;
+  }
+  const deptIds = joinIds(query.deptIds);
+  if (deptIds) params.deptIds = deptIds;
+  const orgIds = joinIds(query.orgIds);
+  if (orgIds) params.orgIds = orgIds;
+  if (query.status !== undefined && query.status != null) params.status = query.status;
+  return params;
+}
+
+function joinIds(ids: EmployeeQuery['deptIds']): string | undefined {
+  if (ids == null || ids === '') return undefined;
+  if (typeof ids === 'string') return ids;
+  if (ids.length === 0) return undefined;
+  return ids.map(Number).join(',');
 }
 
 /** 单个岗位任职项（提交用：postId + isPrimary + startDate） */
@@ -56,7 +81,7 @@ export interface EmployeeUpdatePayload {
 }
 
 export async function listEmployees(query: EmployeeQuery = {}): Promise<EmployeeItem[]> {
-  const res = await api.get<ApiResult<EmployeeItem[]>>('/employees', { params: query });
+  const res = await api.get<ApiResult<EmployeeItem[]>>('/employees', { params: toParams(query) });
   return unwrap(res, '获取员工列表失败');
 }
 

@@ -28,15 +28,16 @@ public class EmployeeController {
         this.orgFacadeService = orgFacadeService;
     }
 
-    /** 全量列表（含禁用；realName/deptId/deptIds/orgIds/status 可选），数据量小全量返回，前端分页/筛选。 */
+    /** 全量列表（含禁用；realName/phone/deptId/deptIds/orgIds/status 可选），数据量小全量返回，前端分页/筛选。 */
     @GetMapping
     public Result<List<EmployeeVO>> list(
             @RequestParam(required = false) String realName,
+            @RequestParam(required = false) String phone,
             @RequestParam(required = false) Long deptId,
             @RequestParam(required = false) List<Long> deptIds,
             @RequestParam(required = false) List<Long> orgIds,
             @RequestParam(required = false) Integer status) {
-        return Result.ok(orgFacadeService.listAllEmployees(realName, deptId, status, deptIds, orgIds));
+        return Result.ok(orgFacadeService.listAllEmployees(realName, phone, deptId, status, deptIds, orgIds));
     }
 
     @GetMapping("/{id}")

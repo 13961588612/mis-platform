@@ -119,6 +119,7 @@ export const SYSTEM_PAGE_DEFS: Record<string, AdminPageDef> = {
       { key: 'employee_no', label: '工号' },
       { key: 'real_name', label: '姓名' },
       { key: 'genderText', label: '性别' },
+      { key: 'phone', label: '手机号码' },
       { key: 'dept', label: '主部门' },
       { key: 'assignmentCount', label: '任职数' },
       { key: 'statusText', label: '状态', status: true },
