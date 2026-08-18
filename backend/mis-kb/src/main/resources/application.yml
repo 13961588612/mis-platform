@@ -5,9 +5,20 @@ spring:
   application:
     name: mis-kb
   datasource:
-    url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:mis_platform}
+    # YAML 须加引号：& 否则会被当成 anchor
+    url: "jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:mis_platform}?tcpKeepAlive=true&ApplicationName=${spring.application.name}&loginTimeout=10"
     username: ${DB_USER:mis}
     password: ${DB_PASSWORD:mis123}
+    hikari:
+      maximum-pool-size: ${DB_POOL_SIZE:5}
+      minimum-idle: ${DB_POOL_MIN_IDLE:1}
+      connection-timeout: 25000
+      idle-timeout: 600000
+      max-lifetime: 1800000
+      leak-detection-threshold: 15000
+      connection-init-sql: "SET application_name = '${spring.application.name}'"
+      # 不设 connection-test-query，走 JDBC Connection.isValid()
+      validation-timeout: 5000
   jpa:
     open-in-view: false
     hibernate:
