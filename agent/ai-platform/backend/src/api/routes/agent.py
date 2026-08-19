@@ -62,7 +62,7 @@ class CreateAgentRequest(BaseModel):
     tags: list[str] = Field(default_factory=list)
     runtime_type: str = Field(default="openharness")
     model_primary: str = Field(default="deepseek-v4-flash")
-    model_fallback: str = Field(default="qwen3.6-plus")
+    model_fallback: str = Field(default="qwen3.7-plus")
     keywords: list[str] = Field(default_factory=list)
     routing_enabled: bool = True
     routing_priority: int = 10

@@ -204,7 +204,7 @@ async def build_native_query_engine(
         mcp_manager, allowed_tools, agent_role, config.agent_id
     )
 
-    model: Any = config.model.primary if config.model else "qwen-plus"
+    model: Any = config.model.primary if config.model else "qwen3.7-plus"
     runtime_params: Any = config.runtime.params if config.runtime else {}
     max_tokens: int = int(runtime_params.get("maxTokens", 4096))
     max_steps: int = int(runtime_params.get("maxSteps", 20))

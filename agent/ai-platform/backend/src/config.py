@@ -231,7 +231,7 @@ class Settings(BaseSettings):
     LLM_GATEWAY_ENABLED: bool = True
     LLM_PRIMARY_PROVIDER: str = "qwen"
     LLM_FALLBACK_PROVIDER: str = "deepseek"
-    LLM_PRIMARY_MODEL: str = "qwen3.6-plus"
+    LLM_PRIMARY_MODEL: str = "qwen3.7-plus"
     LLM_FALLBACK_MODEL: str = "deepseek-v4-flash"
     LLM_REQUEST_TIMEOUT: int = 60
     LLM_MAX_RETRIES: int = 3

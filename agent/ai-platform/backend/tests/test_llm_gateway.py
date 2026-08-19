@@ -75,7 +75,7 @@ class TestProviderSelection:
 
     def test_select_qwen(self, gateway):
         """Model name containing 'qwen' should select qwen provider."""
-        assert gateway._select_provider("qwen3.6-plus") == "qwen"
+        assert gateway._select_provider("qwen3.7-plus") == "qwen"
 
     def test_select_default(self, gateway):
         """Unknown model name should fall back to active provider."""
@@ -129,7 +129,7 @@ class TestFailover:
             side_effect=LLMProviderError("deepseek", "Connection refused")
         )
         qwen_adapter = MagicMock()
-        qwen_adapter.chat = AsyncMock(return_value=_make_response("qwen3.6-plus"))
+        qwen_adapter.chat = AsyncMock(return_value=_make_response("qwen3.7-plus"))
 
         gateway._adapters = {"deepseek": deepseek_adapter, "qwen": qwen_adapter}
 
