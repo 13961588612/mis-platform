@@ -178,7 +178,8 @@ public class KbHitTestService {
                         h.score(),
                         h.docTitle() != null ? h.docTitle() : docTitles.get(h.documentId()),
                         h.offset(),
-                        h.page()))
+                        h.page(),
+                        h.imageId()))
                 .toList();
 
         log.info("命中测试完成 libraryId={} userId={} hits={} elapsedMs={} source={} degraded={} "

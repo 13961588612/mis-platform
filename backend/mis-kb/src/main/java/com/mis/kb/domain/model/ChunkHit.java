@@ -14,6 +14,7 @@ package com.mis.kb.domain.model;
  * @param docTitle   文档标题
  * @param offset     片段在原文中的字符偏移；引擎未提供时为 {@code null}
  * @param page       片段所在页码（从 1 开始）；引擎未提供时为 {@code null}
+ * @param imageId    分片关联图片 id（引擎 {@code image_id}）；无图时为 {@code null}
  */
 public record ChunkHit(
         Long libraryId,
@@ -22,7 +23,8 @@ public record ChunkHit(
         Double score,
         String docTitle,
         Integer offset,
-        Integer page) {
+        Integer page,
+        String imageId) {
 
     /**
      * 兼容旧调用的便捷构造器（无位置信息）。
@@ -31,6 +33,6 @@ public record ChunkHit(
      * 位置字段一律置 {@code null}。
      */
     public ChunkHit(Long libraryId, Long documentId, String chunkText, Double score, String docTitle) {
-        this(libraryId, documentId, chunkText, score, docTitle, null, null);
+        this(libraryId, documentId, chunkText, score, docTitle, null, null, null);
     }
 }

@@ -1,6 +1,7 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { ChevronRight } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { fetchDocumentChunkImage } from '@/features/kb/api/kb-api';
 
 export interface KbChatSource {
   source: string;
@@ -8,6 +9,11 @@ export interface KbChatSource {
   chunk?: string;
   page?: number | null;
   offset?: number | null;
+  libraryId?: number | null;
+  documentId?: number | null;
+  imageId?: string | null;
+  /** 检索/引用序号（对齐 LLM 正文里的 Fig. N） */
+  index?: number | null;
 }
 
 const FENCE_RE = /```kb-sources\s*\n([\s\S]*?)\n```/i;
@@ -47,14 +53,22 @@ function parseFencePayload(raw: string): KbChatSource[] {
       if (!row || typeof row !== 'object') continue;
       const rec = row as Record<string, unknown>;
       const source = String(rec.source ?? rec.title ?? '').trim();
-      if (!source) continue;
+      const imageIdRaw = rec.imageId ?? rec.image_id;
+      const imageId =
+        typeof imageIdRaw === 'string' && imageIdRaw.trim() ? imageIdRaw.trim() : undefined;
+      if (!source && !imageId) continue;
       const chunkRaw = rec.chunk ?? rec.chunkText ?? rec.chunk_text;
+      const figIndex = toFiniteNumber(rec.index);
       sources.push({
-        source,
+        source: source || (imageId ? `配图 ${figIndex ?? sources.length + 1}` : '未知来源'),
         score: toFiniteNumber(rec.score),
         chunk: typeof chunkRaw === 'string' && chunkRaw.trim() ? chunkRaw : undefined,
         page: toFiniteNumber(rec.page),
         offset: toFiniteNumber(rec.offset),
+        libraryId: toFiniteNumber(rec.libraryId ?? rec.library_id),
+        documentId: toFiniteNumber(rec.documentId ?? rec.document_id),
+        imageId,
+        index: figIndex,
       });
     }
     return sources;
@@ -88,6 +102,112 @@ function formatScore(score: number | null | undefined): string | null {
   if (score == null || !Number.isFinite(score)) return null;
   const pct = score > 1 ? score : score * 100;
   return `${pct.toFixed(1)}%`;
+}
+
+/** 经鉴权 API 拉分片截图（Bearer 不能走裸 img src）。 */
+function ChunkImage({
+  libraryId,
+  documentId,
+  imageId,
+  label,
+}: {
+  libraryId: number;
+  documentId: number;
+  imageId: string;
+  label?: string;
+}) {
+  const [src, setSrc] = useState<string | null>(null);
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    let revoked: string | null = null;
+    let cancelled = false;
+    setSrc(null);
+    setFailed(false);
+    void (async () => {
+      try {
+        const url = await fetchDocumentChunkImage(libraryId, documentId, imageId);
+        if (cancelled) {
+          URL.revokeObjectURL(url);
+          return;
+        }
+        revoked = url;
+        setSrc(url);
+      } catch {
+        if (!cancelled) setFailed(true);
+      }
+    })();
+    return () => {
+      cancelled = true;
+      if (revoked) URL.revokeObjectURL(revoked);
+    };
+  }, [libraryId, documentId, imageId]);
+
+  if (failed) {
+    return <p className="text-[11px] text-muted-foreground">分片图片加载失败</p>;
+  }
+  if (!src) {
+    return <p className="text-[11px] text-muted-foreground">图片加载中…</p>;
+  }
+  return (
+    <img
+      src={src}
+      alt={label ?? '分片截图'}
+      className="max-h-64 max-w-full rounded-md border object-contain bg-muted/30"
+      onError={() => setFailed(true)}
+    />
+  );
+}
+
+function hasChunkImage(source: KbChatSource): source is KbChatSource & {
+  libraryId: number;
+  documentId: number;
+  imageId: string;
+} {
+  return (
+    source.libraryId != null &&
+    source.documentId != null &&
+    typeof source.imageId === 'string' &&
+    source.imageId.length > 0
+  );
+}
+
+/**
+ * 引用配图区：对齐 RAGFlow 对话，在正文下方直接展示 Fig. N（不必点进「来源」）。
+ */
+export function KbChatSourceFigures({ sources }: { sources: KbChatSource[] }) {
+  const withImages = sources
+    .map((source) => ({ source, label: source.index ?? null }))
+    .filter(
+      (
+        item,
+      ): item is {
+        source: KbChatSource & { libraryId: number; documentId: number; imageId: string };
+        label: number | null;
+      } => hasChunkImage(item.source),
+    );
+  if (withImages.length === 0) return null;
+
+  return (
+    <div className="mt-3 flex flex-wrap gap-3">
+      {withImages.map(({ source, label }, i) => {
+        const figNo = label ?? i + 1;
+        return (
+        <figure key={`${source.imageId}-${figNo}`} className="max-w-xs shrink-0">
+          <ChunkImage
+            libraryId={source.libraryId}
+            documentId={source.documentId}
+            imageId={source.imageId}
+            label={`Fig. ${figNo}`}
+          />
+          <figcaption className="mt-1 text-center text-[11px] text-muted-foreground">
+            Fig. {figNo}
+          </figcaption>
+        </figure>
+        );
+      })}
+    </div>
+  );
 }
 
 /**
@@ -124,6 +244,11 @@ export function KbChatSourceList({ sources }: { sources: KbChatSource[] }) {
             ]
               .filter(Boolean)
               .join(' · ');
+            const showImage =
+              selected &&
+              source.libraryId != null &&
+              source.documentId != null &&
+              source.imageId;
             return (
               <li key={`${source.source}-${index}`}>
                 <button
@@ -146,6 +271,13 @@ export function KbChatSourceList({ sources }: { sources: KbChatSource[] }) {
                   {selected ? (
                     <div className="mt-1.5 space-y-1 border-t border-border/50 pt-1.5 text-muted-foreground">
                       {loc ? <p className="text-[11px]">{loc}</p> : null}
+                      {showImage ? (
+                        <ChunkImage
+                          libraryId={source.libraryId!}
+                          documentId={source.documentId!}
+                          imageId={source.imageId!}
+                        />
+                      ) : null}
                       <p className="whitespace-pre-wrap break-words leading-relaxed text-foreground/80">
                         {source.chunk?.trim() || '（无片段原文）'}
                       </p>

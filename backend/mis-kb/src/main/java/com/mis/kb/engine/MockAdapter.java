@@ -145,7 +145,8 @@ public class MockAdapter implements KnowledgeEnginePort {
                         0.9 - i * 0.1,
                         "mock-doc-" + libraryId,
                         i * 200,
-                        i + 1));
+                        i + 1,
+                        null));
             }
         }
         return hits;

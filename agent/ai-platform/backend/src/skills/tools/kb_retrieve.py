@@ -189,6 +189,7 @@ class KbRetrieveTool(BaseTool):
                     "chunk_text": hit.chunk_text,
                     "library_id": hit.library_id,
                     "document_id": hit.document_id,
+                    "image_id": hit.image_id,
                 }
                 for idx, hit in enumerate(hits.hits, start=1)
             ],

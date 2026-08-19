@@ -157,7 +157,7 @@ class BffApiRegistryDiffSurveyTest {
             "PATCH /api/v1/kb/operations/qa/feedback/{feedbackId}/process"
     );
 
-    /** V63 净新增 KB 登记（文档切分图片代理；sys_api 91300 / menu_api 91301 → 菜单 91034 kb:document:list）。 */
+    /** V63 净新增 KB 登记（文档切分图片代理；sys_api 91300 / menu_api 91304 → 菜单 91034 kb:document:list；V64 补偿 V59 与 91301 冲突）。 */
     private static final Set<String> EXPECTED_KB_V63_1 = Set.of(
             "GET /api/v1/kb/libraries/{libraryId}/documents/{id}/chunk-images/{imageId}"
     );
@@ -787,7 +787,7 @@ class BffApiRegistryDiffSurveyTest {
             "GET /api/v1/modules/{moduleId}/bindings",
             // ---- V42（本期）：KB 文档切分查看（sys_api 91200 / menu_api 91289 → 菜单 91034 kb:document:list）----
             "GET /api/v1/kb/libraries/{libraryId}/documents/{id}/chunks",
-            // ---- V63：KB 文档切分图片代理（sys_api 91300 / menu_api 91301 → 菜单 91034 kb:document:list）----
+            // ---- V63/V64：KB 文档切分图片代理（sys_api 91300 / menu_api 91304 → 菜单 91034 kb:document:list）----
             "GET /api/v1/kb/libraries/{libraryId}/documents/{id}/chunk-images/{imageId}",
             // ---- V43（本期）：KB 问答反馈处理（sys_api 91201 / menu_api 91290 → 菜单 91037 kb:operation:list）----
             "PATCH /api/v1/kb/operations/qa/feedback/{feedbackId}/process",

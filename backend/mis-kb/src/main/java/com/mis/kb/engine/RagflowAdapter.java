@@ -774,7 +774,7 @@ public class RagflowAdapter implements KnowledgeEnginePort {
             Long libId = doc != null ? doc.getLibraryId() : null;
             // F-04：透传引擎给出的页码/偏移（不可得时为 null，前端降级展示）
             hits.add(new ChunkHit(libId, docId, c.text(), c.score(), c.documentName(),
-                    c.charOffset(), c.firstPage()));
+                    c.charOffset(), c.firstPage(), c.normalizedImageId()));
         }
         return hits;
     }
@@ -823,7 +823,7 @@ public class RagflowAdapter implements KnowledgeEnginePort {
             }
             // docTitle 优先用引擎给的文档名（docnm_kwd），反查不到本地文档时仍可展示
             hits.add(new ChunkHit(libId, docId, c.text(), c.similarity(),
-                    c.docnmKwd(), null, null));
+                    c.docnmKwd(), null, null, null));
         }
         return hits;
     }

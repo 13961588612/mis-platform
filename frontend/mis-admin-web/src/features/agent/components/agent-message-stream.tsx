@@ -17,7 +17,7 @@ import { useState } from 'react';
 import { Bot, Terminal, ThumbsDown, ThumbsUp, User, Wrench } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { MarkdownView } from '@/components/common/markdown-view';
-import { KbChatSourceList, splitKbSources } from '@/components/common/kb-chat-sources';
+import { KbChatSourceFigures, KbChatSourceList, splitKbSources } from '@/components/common/kb-chat-sources';
 import { formatTime } from '../types';
 import type {
   MessageRole,
@@ -70,6 +70,7 @@ function AssistantMarkdown({ content }: { content: string }) {
   return (
     <>
       <MarkdownView content={body} />
+      <KbChatSourceFigures sources={sources} />
       <KbChatSourceList sources={sources} />
     </>
   );

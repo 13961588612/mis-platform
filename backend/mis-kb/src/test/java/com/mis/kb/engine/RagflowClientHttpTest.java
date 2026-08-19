@@ -636,6 +636,28 @@ class RagflowClientHttpTest {
                     RfChunk.class);
             assertEquals(null, ragged.firstPage(), "positions 首行空列表 → null（防御式）");
         }
+
+        @Test
+        @DisplayName("normalizedImageId 从 image_id 解析：有值取 id，空串/缺失返回 null")
+        void normalizedImageIdParsedFromResponse() throws Exception {
+            RfChunk withImage = mapper.readValue(
+                    "{\"document_id\":\"d1\",\"document_keyword\":\"a.pdf\",\"content\":\"t\","
+                            + "\"similarity\":0.9,\"image_id\":\"ds1-abc123\"}",
+                    RfChunk.class);
+            assertEquals("ds1-abc123", withImage.normalizedImageId());
+
+            RfChunk blankImage = mapper.readValue(
+                    "{\"document_id\":\"d1\",\"document_keyword\":\"a.pdf\",\"content\":\"t\","
+                            + "\"similarity\":0.9,\"image_id\":\"  \"}",
+                    RfChunk.class);
+            assertEquals(null, blankImage.normalizedImageId());
+
+            RfChunk noImage = mapper.readValue(
+                    "{\"document_id\":\"d1\",\"document_keyword\":\"a.pdf\",\"content\":\"t\","
+                            + "\"similarity\":0.9}",
+                    RfChunk.class);
+            assertEquals(null, noImage.normalizedImageId());
+        }
     }
 
     @Nested
