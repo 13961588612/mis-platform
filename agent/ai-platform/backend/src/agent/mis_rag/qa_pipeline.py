@@ -143,6 +143,10 @@ def format_kb_answer_for_chat(answer: QaAnswer) -> str:
     BFF ``/ai/rag`` 仍返回 JSON 信封；本地对话要把 ``answer`` 当正文，
     引用列表附在文末，避免运营看到 ``{"answer":...}`` 原文。
 
+    文末使用 ``kb-sources`` JSON 围栏（含 ``chunk`` / ``page`` / ``offset``），
+    与前端 ``splitKbSources`` 约定一致；旧版纯「来源：」编号列表不含片段正文，
+    展开会落到「（无片段原文）」。
+
     Args:
         answer: KB 问答管线最终产出。
 
@@ -152,16 +156,24 @@ def format_kb_answer_for_chat(answer: QaAnswer) -> str:
     text = (answer.answer or "").strip()
     if not answer.citations:
         return text
-    lines: list[str] = [text, "", "来源："]
+
+    sources: list[dict[str, Any]] = []
     for idx, citation in enumerate(answer.citations, start=1):
         label = (citation.source or "").strip() or f"文档 {citation.document_id or idx}"
-        score = (
-            f"（相关度 {citation.score:.2f}）"
-            if isinstance(citation.score, (int, float))
-            else ""
-        )
-        lines.append(f"{idx}. {label}{score}")
-    return "\n".join(lines)
+        chunk = (citation.chunk or citation.chunk_text or "").strip()
+        row: dict[str, Any] = {"source": label}
+        if isinstance(citation.score, (int, float)):
+            row["score"] = float(citation.score)
+        if chunk:
+            row["chunk"] = chunk
+        if citation.page is not None:
+            row["page"] = citation.page
+        if citation.offset is not None:
+            row["offset"] = citation.offset
+        sources.append(row)
+
+    payload = json.dumps(sources, ensure_ascii=False)
+    return f"{text}\n\n```kb-sources\n{payload}\n```"
 
 
 @dataclass

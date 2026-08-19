@@ -58,19 +58,29 @@ async def test_persist_passes_title_to_create_session() -> None:
 
 
 def test_format_kb_answer_for_chat_appends_sources() -> None:
-    """引用列表附在正文后，运营台能直接读。"""
+    """引用以 kb-sources 围栏附在正文后，含片段正文供运营台展开。"""
     answer = QaAnswer(
         answer="根据手册，入职当天领取工牌。",
         citations=[
-            QaCitation(source="员工手册", score=0.91, document_id=12),
-            QaCitation(source="", score=None, document_id=13),
+            QaCitation(
+                source="员工手册",
+                score=0.91,
+                document_id=12,
+                chunk="入职当天到行政前台领取工牌。",
+                page=3,
+            ),
+            QaCitation(source="", score=None, document_id=13, chunk_text="备用片段"),
         ],
     )
     text = format_kb_answer_for_chat(answer)
     assert "入职当天领取工牌" in text
-    assert "1. 员工手册（相关度 0.91）" in text
-    assert "2. 文档 13" in text
-
+    assert "```kb-sources" in text
+    assert "员工手册" in text
+    assert "入职当天到行政前台领取工牌。" in text
+    assert "文档 13" in text
+    assert "备用片段" in text
+    assert '"page": 3' in text
+    assert "来源：" not in text.split("```kb-sources")[0]
 
 def test_format_kb_answer_for_chat_without_citations() -> None:
     """无引用时只回正文。"""
