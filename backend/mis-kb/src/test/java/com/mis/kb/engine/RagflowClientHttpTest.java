@@ -151,6 +151,16 @@ class RagflowClientHttpTest {
         return new RagflowClient(RestClient.builder(), baseUrl, API_KEY);
     }
 
+    /** 打开 toc/imageTable 闸门的客户端（T3：默认关闭，本工厂专测放行路径）。 */
+    private RagflowClient newClientWithParserGates() {
+        RagflowProperties gated = new RagflowProperties();
+        gated.setBaseUrl(baseUrl);
+        gated.setApiKey(API_KEY);
+        gated.setParserTocSupported(true);
+        gated.setParserImageTableContextSupported(true);
+        return new RagflowClient(RestClient.builder(), gated);
+    }
+
     private RagflowAdapter newAdapter(KbLibraryRepository libRepo, KbDocumentRepository docRepo) {
         return new RagflowAdapter(props, RestClient.builder(), libRepo, docRepo);
     }
@@ -263,29 +273,52 @@ class RagflowClientHttpTest {
             assertFalse(body.get("parser_config").get("raptor").get("use_raptor").asBoolean());
             assertTrue(body.get("parser_config").has("graphrag"));
             assertFalse(body.get("parser_config").get("graphrag").get("use_graphrag").asBoolean());
-            // 解析器增量两键也是 P1f 恒下发成员：null 设置按默认模板下发（toc_extraction=true / 256）
-            assertTrue(body.get("parser_config").get("toc_extraction").asBoolean(),
-                    "null 设置 → toc_extraction 按默认 true 下发（P1f 完整 parser_config）");
-            assertEquals(256, body.get("parser_config").get("image_table_context_window").asInt(),
-                    "null 设置 → image_table_context_window 按默认 256 下发（P1f 完整 parser 模板）");
+            // ext 修正：null 设置也按默认模板经 ext 下发 toc/image/overlap
+            JsonNode ext = body.get("parser_config").get("ext");
+            assertTrue(ext.get("toc_extraction").asBoolean(),
+                    "null 设置 → ext.toc_extraction 默认 true");
+            assertEquals(RagSettings.DEFAULT_IMAGE_TABLE_CONTEXT_WINDOW,
+                    ext.get("image_table_context_window").asInt());
+            assertFalse(body.get("parser_config").has("toc_extraction"),
+                    "顶层不得直写 toc_extraction（pydantic 拒收）");
         }
 
         @Test
-        @DisplayName("解析器增量：parser_config 恒带 toc_extraction（默认 true）+ image_table_context_window（默认 256）")
-        void parserConfigCarriesTocExtractionAndImageTableContextWindow() throws Exception {
-            newClient().updateDatasetSettings("ds-1", fullSettings());
+        @DisplayName("ext 修正：pageIndex/imageTable/overlap 经 parser_config.ext 下发，顶层不含这些键")
+        void parserConfigCarriesTocImageOverlapViaExt() throws Exception {
+            RagSettings custom = new RagSettings(
+                    20, 0.6D, Boolean.TRUE, "BAAI/bge-m3", "hybrid", "naive",
+                    512, "###", null, null, null,
+                    null, null, null, null, null, null,
+                    Boolean.TRUE, 1024, 0.1D, 64, null, null, null,
+                    Boolean.FALSE, 512, 15.0D, null, null);
 
-            JsonNode body = mapper.readTree(lastBody.get());
-            JsonNode parserConfig = body.get("parser_config");
-            assertTrue(parserConfig.get("toc_extraction").asBoolean(),
-                    "pageIndex 未显式设置 → toc_extraction 默认 true 原样下发（官方 schema 键）");
-            assertEquals(256, parserConfig.get("image_table_context_window").asInt(),
-                    "imageTableContextWindow 未显式设置 → 默认 256 下发（官方 schema 键）");
+            newClient().updateDatasetSettings("ds-1", custom);
+
+            JsonNode parserConfig = mapper.readTree(lastBody.get()).get("parser_config");
+            assertFalse(parserConfig.has("toc_extraction"),
+                    "顶层不得直写 toc_extraction");
+            assertFalse(parserConfig.has("image_table_context_window"),
+                    "顶层不得直写 image_table_context_window");
+            assertFalse(parserConfig.has("overlapped_percent"),
+                    "顶层不得直写 overlapped_percent");
+            JsonNode ext = parserConfig.get("ext");
+            assertFalse(ext.get("toc_extraction").asBoolean(),
+                    "pageIndex=false → ext.toc_extraction:false");
+            assertEquals(512, ext.get("image_table_context_window").asInt());
+            assertEquals(512, ext.get("image_context_size").asInt(),
+                    "镜像 image_context_size 与 UI saving-button 一致");
+            assertEquals(512, ext.get("table_context_size").asInt());
+            assertEquals(15.0, ext.get("overlapped_percent").asDouble(), 0.001);
+            assertTrue(parserConfig.has("auto_keywords"),
+                    "ext 路径不影响 auto_keywords 恒下发");
+            assertTrue(parserConfig.has("auto_questions"),
+                    "ext 路径不影响 auto_questions 恒下发");
         }
 
         @Test
-        @DisplayName("解析器增量：pageIndex=false / imageTableContextWindow=512 → 原样下发，不做归一改写")
-        void parserConfigCarriesExplicitTocAndContextWindowValues() throws Exception {
+        @DisplayName("legacy：闸门打开的旧工厂仍可用（ext 路径与闸门无关）")
+        void parserConfigCarriesTocAndContextWindowWhenGatesOn() throws Exception {
             RagSettings custom = new RagSettings(
                     20, 0.6D, Boolean.TRUE, "BAAI/bge-m3", "hybrid", "naive",
                     512, "###", null, null, null,
@@ -293,13 +326,14 @@ class RagflowClientHttpTest {
                     Boolean.TRUE, 1024, 0.1D, 64, null, null, null,
                     Boolean.FALSE, 512);
 
-            newClient().updateDatasetSettings("ds-1", custom);
+            newClientWithParserGates().updateDatasetSettings("ds-1", custom);
 
             JsonNode body = mapper.readTree(lastBody.get());
-            assertFalse(body.get("parser_config").get("toc_extraction").asBoolean(),
-                    "pageIndex=false → toc_extraction:false 原样下发");
-            assertEquals(512, body.get("parser_config").get("image_table_context_window").asInt(),
-                    "imageTableContextWindow=512 → 原样下发");
+            JsonNode ext = body.get("parser_config").get("ext");
+            assertFalse(ext.get("toc_extraction").asBoolean(),
+                    "pageIndex=false → ext.toc_extraction:false");
+            assertEquals(512, ext.get("image_table_context_window").asInt(),
+                    "imageTableContextWindow=512 → ext 原样下发");
         }
 
         @Test

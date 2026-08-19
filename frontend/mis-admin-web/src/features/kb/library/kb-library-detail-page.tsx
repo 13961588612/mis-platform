@@ -370,6 +370,10 @@ export function KbLibraryDetailPage() {
   // 置灰 + 提示「暂不生效」，但保存照常成功（只落库，引擎升级后翻转能力即放行下发）。
   const ocrSupported = capabilities?.parserOcrSupported === true;
   const overlapSupported = capabilities?.parserOverlapSupported === true;
+  // T3：toc / imageTable 能力闸门（fail-safe）。本实例 T0 实测不支持 → 默认置灰；
+  // 误开硬下发会拒整单并阻断 auto_keywords/auto_questions 同步。
+  const tocSupported = capabilities?.parserTocSupported === true;
+  const imageTableContextSupported = capabilities?.parserImageTableContextSupported === true;
   // Wave B GraphRAG PoC（T02）：图谱能力（fail-safe，未确认即置灰）。RAGFlow 实例
   // T00 实测支持（graphSupported=true），故开关可开；引擎升级破坏契约时翻转能力即置灰。
   const graphSupported = capabilities?.graphSupported === true;
@@ -1098,11 +1102,8 @@ export function KbLibraryDetailPage() {
                 </div>
               </div>
 
-              {/* 解析器增量（T01）：页码索引/TOC 提取开关 + 图像/表格上下文窗口。
-                  官方 schema 键（toc_extraction / image_table_context_window），随每次
-                  保存 PUT 恒下发——不是「只落库不下发」的 OCR/overlap 类字段。
-                  开关用现有 useKnowledgeGraph 同款 checkbox 风格，数字输入沿用
-                  chunkTokenNum 写法（含 range 提示）。 */}
+              {/* 解析器增量：页码索引（RAGFlow UI 文案 PageIndex，字段 toc_extraction）
+                  + 图像表格上下文窗口。经 parser_config.ext 同步，与 RAGFlow Web 同口径。 */}
               <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
                 <div>
                   <label className="flex items-center gap-2 text-sm">
@@ -1110,14 +1111,20 @@ export function KbLibraryDetailPage() {
                       type="checkbox"
                       className="h-4 w-4"
                       checked={form.pageIndex}
+                      disabled={!tocSupported}
                       onChange={(e) => setForm((f) => ({ ...f, pageIndex: e.target.checked }))}
                     />
                     页码索引（TOC 提取）
                   </label>
                   <p className="mt-1 text-xs text-muted-foreground">
                     提取目录/页码索引辅助召回，默认开启（对应 RAGFlow{' '}
-                    <span className="font-mono">toc_extraction</span>）
+                    <span className="font-mono">parser_config.ext.toc_extraction</span>，UI 称 PageIndex）
                   </p>
+                  {!tocSupported ? (
+                    <p className="mt-1 text-xs text-amber-600">
+                      当前引擎版本暂不支持，参数已保留待引擎升级生效（保存仅落库，暂不生效）。
+                    </p>
+                  ) : null}
                 </div>
                 <div>
                   <label className={fieldLabel}>图像与表格上下文窗口（token）</label>
@@ -1127,6 +1134,7 @@ export function KbLibraryDetailPage() {
                     max={4096}
                     step={1}
                     value={form.imageTableContextWindow}
+                    disabled={!imageTableContextSupported}
                     onChange={(e) =>
                       setForm((f) => ({ ...f, imageTableContextWindow: e.target.value }))
                     }
@@ -1135,6 +1143,11 @@ export function KbLibraryDetailPage() {
                   <p className="mt-1 text-xs text-muted-foreground">
                     范围 1 ~ 4096，图片/表格上下各取 N token 并入切片，留空表示继承默认 256
                   </p>
+                  {!imageTableContextSupported ? (
+                    <p className="mt-1 text-xs text-amber-600">
+                      当前引擎版本暂不支持，参数已保留待引擎升级生效（保存仅落库，暂不生效）。
+                    </p>
+                  ) : null}
                 </div>
               </div>
 
@@ -1142,7 +1155,7 @@ export function KbLibraryDetailPage() {
                   （官方 naive schema 键，随每次 PUT 恒下发）。overlapPercent 当前引擎不支持
                   （parserOverlapSupported=false）→ 置灰 + 「参数已保留待引擎升级生效」提示，
                   值仍可回显、保存照常成功；auto 两键恒可用。pageIndex/imageTableContextWindow
-                  按主理人拍板保持可用不置灰（上一块已实现）。 */}
+                  按能力闸门置灰（上一块）。 */}
               <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
                 <div>
                   <label className={fieldLabel}>重叠百分比（%）</label>

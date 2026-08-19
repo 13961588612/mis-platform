@@ -72,6 +72,23 @@ public class RagflowProperties {
      */
     private boolean raptorEnabled = true;
 
+    /**
+     * 当前引擎是否接受 dataset PUT 的 {@code parser_config.toc_extraction}（页码索引/TOC）。
+     *
+     * <p>T0 实测本实例 code:101（Extra inputs）；默认 {@code false}。为 false 时
+     * {@code RagflowClient.updateDatasetSettings} <b>不下发</b>该键（只落库回显），
+     * 否则夹在 PUT 里会让整单被 pydantic 拒掉，连 {@code auto_keywords} 都进不去。
+     * 引擎升级后翻 {@code mis.kb.engine.parser-toc-supported=true} 即可放行。
+     */
+    private boolean parserTocSupported = false;
+
+    /**
+     * 当前引擎是否接受 dataset PUT 的 {@code parser_config.image_table_context_window}。
+     *
+     * <p>T0 实测本实例 code:101；默认 {@code false}，口径同 {@link #parserTocSupported}。
+     */
+    private boolean parserImageTableContextSupported = false;
+
     /** 引擎对账配置（定时任务 + 手动触发共用）。 */
     private final Reconcile reconcile = new Reconcile();
 
@@ -129,6 +146,22 @@ public class RagflowProperties {
 
     public void setRaptorEnabled(boolean raptorEnabled) {
         this.raptorEnabled = raptorEnabled;
+    }
+
+    public boolean isParserTocSupported() {
+        return parserTocSupported;
+    }
+
+    public void setParserTocSupported(boolean parserTocSupported) {
+        this.parserTocSupported = parserTocSupported;
+    }
+
+    public boolean isParserImageTableContextSupported() {
+        return parserImageTableContextSupported;
+    }
+
+    public void setParserImageTableContextSupported(boolean parserImageTableContextSupported) {
+        this.parserImageTableContextSupported = parserImageTableContextSupported;
     }
 
     /**

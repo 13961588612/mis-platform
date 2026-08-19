@@ -278,39 +278,37 @@ class RagflowUploadAndModelsHttpTest {
 
             JsonNode body = mapper.readTree(requests.get(0).body());
             JsonNode parserConfig = body.get("parser_config");
-            assertEquals(4, parserConfig.size(),
-                    () -> "parser_config 白名单恰为 chunk_token_num/delimiter/auto_keywords/auto_questions，实际："
-                            + parserConfig);
             assertEquals(512, parserConfig.get("chunk_token_num").asInt());
             assertEquals("###", parserConfig.get("delimiter").asText());
-            assertEquals(8, parserConfig.get("auto_keywords").asInt(),
-                    "文件级 autoKeywords=8 → auto_keywords:8 下发（T0-b B2 实测接受）");
-            assertEquals(5, parserConfig.get("auto_questions").asInt(),
-                    "文件级 autoQuestions=5 → auto_questions:5 下发");
+            assertEquals(8, parserConfig.get("auto_keywords").asInt());
+            assertEquals(5, parserConfig.get("auto_questions").asInt());
+            JsonNode ext = parserConfig.get("ext");
+            assertFalse(ext.has("toc_extraction"), "pageIndex=null 时不写 ext.toc_extraction");
+            assertEquals(300, ext.get("image_table_context_window").asInt());
+            assertEquals(300, ext.get("image_context_size").asInt());
+            assertFalse(parserConfig.has("toc_extraction"), "顶层不得直写 toc_extraction");
         }
 
         @Test
-        @DisplayName("T1 契约：文件级 PUT 绝不发送 toc / context / overlap 键（code:102 拒整单，T0-b B3 实测）")
-        void fileLevelNeverSendsTocContextOverlap() throws Exception {
+        @DisplayName("ext 修正：pageIndex/imageTable 非空 → parser_config.ext 下发，顶层不含这些键")
+        void fileLevelSendsTocContextViaExt() throws Exception {
             RagflowClient client = newClient();
 
-            // 即使 MIS 侧 file 字段带了 pageIndex / imageTableContextWindow，
-            // 客户端白名单也必须剔除 toc_extraction / image_table_context_window / overlap
             client.updateDocumentConfig("ds-1", "doc-1",
                     new DocumentChunkConfig("naive", 512, "###",
                             Boolean.FALSE, 512, 0, 0));
 
-            JsonNode body = mapper.readTree(requests.get(0).body());
-            JsonNode parserConfig = body.get("parser_config");
+            JsonNode parserConfig = mapper.readTree(requests.get(0).body()).get("parser_config");
             assertFalse(parserConfig.has("toc_extraction"),
-                    "文件级 PUT 白名单不含 toc_extraction（code:102 拒整单）");
+                    "顶层不得直写 toc_extraction（code:102）");
             assertFalse(parserConfig.has("image_table_context_window"),
-                    "文件级 PUT 白名单不含 image_table_context_window（code:102 拒整单）");
-            assertFalse(parserConfig.has("overlap_percent"), "文件级 PUT 更不得出现 overlap 键");
-            assertFalse(parserConfig.has("overlap"), "引擎候选 overlap 键不得出现");
-            assertEquals(4, parserConfig.size(),
-                    () -> "剔除后白名单恒为 chunk_token_num/delimiter/auto_keywords/auto_questions，实际："
-                            + parserConfig);
+                    "顶层不得直写 image_table_context_window");
+            JsonNode ext = parserConfig.get("ext");
+            assertFalse(ext.get("toc_extraction").asBoolean());
+            assertEquals(512, ext.get("image_table_context_window").asInt());
+            assertEquals(512, ext.get("table_context_size").asInt());
+            assertEquals(0, parserConfig.get("auto_keywords").asInt());
+            assertEquals(0, parserConfig.get("auto_questions").asInt());
         }
     }
 

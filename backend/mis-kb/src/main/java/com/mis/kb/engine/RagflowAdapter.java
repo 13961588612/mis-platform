@@ -495,9 +495,7 @@ public class RagflowAdapter implements KnowledgeEnginePort {
         }
         RagSettings settings = KbJson.readSettings(lib.getRagSettingsJson());
         RagSettings effective = settings == null ? RagSettings.defaults() : settings.withDefaults();
-        // T4：快照携带 4 个解析器设置字段——auto_keywords/auto_questions 属文件级 PUT 白名单，
-        // 「清空文件级覆盖」时下发库级有效值，引擎文档回落到库级；pageIndex / imageTableContextWindow
-        // 不在文件级白名单（T0-b B3 code:102），客户端会过滤不下发，仅作合并/展示快照。
+        // T4：快照携带 4 个解析器设置字段——清空覆盖时下发库级有效值（pageIndex/image 经 ext）。
         return new DocumentChunkConfig(
                 effective.chunkMethod(), effective.chunkTokenNum(), effective.separator(),
                 effective.pageIndex(), effective.imageTableContextWindow(),
@@ -905,9 +903,13 @@ public class RagflowAdapter implements KnowledgeEnginePort {
      * 实际可用」。若未来引擎升级破坏契约，把下方 {@code graph} 参数翻成 {@code false}
      * 即可走「前端置灰 + 保存强制关 + 检索期降级」三道防线，代码分支不动（共享知识 §10-1）。
      *
+     * <p><b>切片参数对齐（T3 → ext 修正）：</b>overlap / toc / imageTable 经
+     * {@code parser_config.ext} 下发（2026-08-19 live probe 实锤），对 RAGFlow 引擎
+     * 恒声明支持；OCR 仍不支持。
+     *
      * @return 能力声明；{@code hybrid} 恒支持，{@code rerank} 随模型 ID 配置动态变化，
-     *         {@code delete} 随 {@code delete-supported} 配置变化，OCR/overlap 本期恒不支持，
-     *         {@code graph} 恒支持（T00 实测）
+     *         {@code delete} 随 {@code delete-supported} 配置变化，OCR 不支持，
+     *         overlap/toc/imageTable 对 RAGFlow 恒支持，{@code graph} 恒支持（T00 实测）
      */
     @Override
     public EngineCapabilities capabilities() {
@@ -917,10 +919,9 @@ public class RagflowAdapter implements KnowledgeEnginePort {
         }
         boolean deleteAvailable = props != null && props.isDeleteSupported();
         boolean raptorAvailable = props == null || props.isRaptorEnabled();
-        // 9 参：rerank / metadataFilter / replace / hybrid / delete / parserOcr /
-        // parserOverlap / graph / raptor。raptor 受平台总开关 mis.kb.engine.raptor-enabled
-        // 控制（U4 裁定；默认 true，Nacos 可热调）。
+        // 11 参：rerank / metadataFilter / replace / hybrid / delete / parserOcr /
+        // parserOverlap / graph / raptor / parserToc / parserImageTable
         return EngineCapabilities.of(rerankAvailable, true, true, true, deleteAvailable,
-                false, false, true, raptorAvailable);
+                false, true, true, raptorAvailable, true, true);
     }
 }

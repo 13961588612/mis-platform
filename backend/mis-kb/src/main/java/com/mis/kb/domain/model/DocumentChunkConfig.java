@@ -12,10 +12,8 @@ import java.util.Set;
  * {@code imageTableContextWindow} / {@code autoKeywords} / {@code autoQuestions}
  * （对应 {@code kb_document} 新增四列，V62）。与库级同名语义一致：
  * <ul>
- *   <li>{@code pageIndex}（布尔）→ 文件级 {@code toc_extraction} 语义——但<b>文件级 PUT
- *       白名单不含 toc/context/overlap 键</b>（T0-b B3 实测 code:102 拒整单），仅持久化 +
- *       回显 + 合并展示，不下发；</li>
- *   <li>{@code imageTableContextWindow}（[1,4096]）同只落库不下发；</li>
+ *   <li>{@code pageIndex}（布尔）→ {@code parser_config.ext.toc_extraction}（非空时下发）；</li>
+ *   <li>{@code imageTableContextWindow}（[1,4096]）→ ext 三键镜像（非空时下发）；</li>
  *   <li>{@code autoKeywords}（0~32）/ {@code autoQuestions}（0~10）→ 文件级 PUT 白名单
  *       {@code auto_keywords} / {@code auto_questions}（T0-b B2 实测接受）。</li>
  * </ul>
@@ -27,8 +25,8 @@ import java.util.Set;
  * @param chunkMethod             切片方法（naive/qa/paper/book/laws/presentation/table/picture/one）
  * @param chunkTokenNum           切片 token 数（正整数）
  * @param separator               切片分隔符（允许纯空白）
- * @param pageIndex               文件级页码索引/TOC 提取开关（null = 继承库级；只落库不下发）
- * @param imageTableContextWindow 文件级图像/表格上下文窗口 token 数（null = 继承库级；只落库不下发）
+ * @param pageIndex               文件级页码索引/TOC 提取开关（null = 继承库级；非空经 ext 下发）
+ * @param imageTableContextWindow 文件级图像/表格上下文窗口 token 数（null = 继承库级；非空经 ext 下发）
  * @param autoKeywords            文件级自动关键字数量（0=关闭，0~32；null = 继承库级）
  * @param autoQuestions           文件级自动问题数量（0=关闭，0~10；null = 继承库级）
  */

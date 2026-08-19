@@ -24,17 +24,23 @@ import java.util.List;
  * {@code EngineCapabilities.raptorSupported}（受平台总开关 {@code mis.kb.engine.raptor-enabled}
  * 控制，默认 true）。当前引擎不支持时前端据此置灰 RAPTOR 开关并提示「暂不生效」。
  *
- * @param engineType              引擎类型 ragflow/noop/mock
- * @param capabilities            能力码值列表
- * @param rerankSupported         当前配置下重排是否可用
- * @param metadataFilterSupported 是否支持元数据过滤
- * @param replaceSupported        是否支持同名文档替换
- * @param hybridSupported         是否支持混合检索（关键字 + 语义）
- * @param deleteSupported         是否支持在线删除知识库（false 时只能归档）
- * @param parserOcrSupported      当前引擎是否支持 parser_config OCR 键（企业级增强一期新增）
- * @param parserOverlapSupported  当前引擎是否支持 parser_config overlap 键（企业级增强一期新增）
- * @param graphSupported          当前引擎是否支持知识图谱构建/增强（Wave B GraphRAG PoC 新增）
- * @param raptorSupported         当前引擎是否支持 RAPTOR 摘要构建/融合（Wave C RAPTOR 新增）
+ * <p><b>切片参数对齐（T3）：</b>末位追加 {@code parserTocSupported} /
+ * {@code parserImageTableContextSupported}（配置闸门，默认 false）。本实例 T0 实测
+ * dataset PUT 拒 toc/image 键；前端据此置灰页码索引/图像表格上下文控件。
+ *
+ * @param engineType                         引擎类型 ragflow/noop/mock
+ * @param capabilities                       能力码值列表
+ * @param rerankSupported                    当前配置下重排是否可用
+ * @param metadataFilterSupported            是否支持元数据过滤
+ * @param replaceSupported                   是否支持同名文档替换
+ * @param hybridSupported                    是否支持混合检索（关键字 + 语义）
+ * @param deleteSupported                    是否支持在线删除知识库（false 时只能归档）
+ * @param parserOcrSupported                 当前引擎是否支持 parser_config OCR 键
+ * @param parserOverlapSupported             当前引擎是否支持 parser_config overlap 键
+ * @param graphSupported                     当前引擎是否支持知识图谱构建/增强
+ * @param raptorSupported                    当前引擎是否支持 RAPTOR 摘要构建/融合
+ * @param parserTocSupported                 当前引擎是否接受 toc_extraction
+ * @param parserImageTableContextSupported   当前引擎是否接受 image_table_context_window
  */
 public record KbEngineCapabilitiesVO(
         String engineType,
@@ -47,5 +53,7 @@ public record KbEngineCapabilitiesVO(
         Boolean parserOcrSupported,
         Boolean parserOverlapSupported,
         Boolean graphSupported,
-        Boolean raptorSupported) {
+        Boolean raptorSupported,
+        Boolean parserTocSupported,
+        Boolean parserImageTableContextSupported) {
 }

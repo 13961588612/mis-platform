@@ -184,6 +184,6 @@ public class MockAdapter implements KnowledgeEnginePort {
      */
     @Override
     public EngineCapabilities capabilities() {
-        return EngineCapabilities.of(true, true, true, true, true, true, true, true, true);
+        return EngineCapabilities.of(true, true, true, true, true, true, true, true, true, true, true);
     }
 }

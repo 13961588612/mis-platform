@@ -953,6 +953,19 @@ export interface KbEngineCapabilities {
    * 置灰 + 提示「当前引擎版本暂不支持」，保存期后端强制关、检索期降级基础检索。
    */
   raptorSupported: boolean | null;
+  /**
+   * 当前引擎是否接受 dataset PUT 的 `toc_extraction`（页码索引/TOC）。
+   *
+   * <p>T0 实测本实例不支持（默认 false）。为 false 时前端置灰页码索引开关并提示
+   * 「参数已保留待引擎升级生效」；保存仍落库。误开硬下发会拒整单并阻断 auto 键同步。
+   */
+  parserTocSupported: boolean | null;
+  /**
+   * 当前引擎是否接受 dataset PUT 的 `image_table_context_window`。
+   *
+   * <p>口径同 `parserTocSupported`（默认 false）。
+   */
+  parserImageTableContextSupported: boolean | null;
 }
 
 // --------------------------------------------------------------- 引擎对账（T04）

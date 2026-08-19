@@ -80,29 +80,37 @@ public class RagflowClient {
 
     private final RestClient client;
     private final String apiKey;
+    /** 可空：测试用三参构造不注入；闸门默认 false（不下发 toc/image 键）。 */
+    private final RagflowProperties props;
 
     /**
      * 构造客户端。
      *
      * @param builder RestClient 构建器（由 Spring 注入，带全局拦截器）
-     * @param props   引擎配置（baseUrl / apiKey）
+     * @param props   引擎配置（baseUrl / apiKey / 解析器键闸门）
      */
     public RagflowClient(RestClient.Builder builder, RagflowProperties props) {
         this(builder,
                 props == null ? "" : props.getBaseUrl(),
-                props == null ? "" : props.getApiKey());
+                props == null ? "" : props.getApiKey(),
+                props);
     }
 
     /**
-     * 构造客户端（显式地址/密钥，供测试使用）。
+     * 构造客户端（显式地址/密钥，供测试使用；解析器键闸门默认关闭）。
      *
      * @param builder RestClient 构建器
      * @param baseUrl RAGFlow 基础地址
      * @param apiKey  RAGFlow API Key
      */
     public RagflowClient(RestClient.Builder builder, String baseUrl, String apiKey) {
+        this(builder, baseUrl, apiKey, null);
+    }
+
+    private RagflowClient(RestClient.Builder builder, String baseUrl, String apiKey, RagflowProperties props) {
         this.client = builder.baseUrl(baseUrl == null ? "" : baseUrl).build();
         this.apiKey = apiKey == null ? "" : apiKey;
+        this.props = props;
     }
 
     private String bearer() {
@@ -168,18 +176,15 @@ public class RagflowClient {
      * </ol>
      * 本方法只下发本实例接受的键：{@code embedding_model} / {@code chunk_method} /
      * {@code parser_config}（内嵌 {@code chunk_token_num} / {@code delimiter} /
-     * {@code raptor} / {@code graphrag} / {@code toc_extraction} /
-     * {@code image_table_context_window}）。
+     * {@code raptor} / {@code graphrag} / {@code ext{toc_extraction,image_*}}）。
      * {@code topK} / {@code scoreThreshold} 仍按原语义保存在本地并由检索期合并器生效。
      *
-     * <p><b>解析器增量（T01）：</b>{@code toc_extraction}（页码索引/TOC 提取，布尔，
-     * 默认 true）与 {@code image_table_context_window}（图像/表格上下文窗口，整数，
-     * 默认 256；图片/表格上下各取 N token 并入 chunk 提升召回）是 RAGFlow 官方
-     * form-schema.ts + 官方文档 0.26.4「Set context window size」的 parser_config 键
-     * （0.23.0+ 版本支持）。与 OCR/overlap 的「只落库不下发」不同，这两个键<b>随每次
-     * PUT 恒下发</b>（用户明确要对应生效）；若目标实例版本旧不支持，PUT 会失败——
-     * 由 {@code RagSettingsService.syncToEngine} 的「本地保存成功 + 记 error + 下次保存
-     * 重试」降级口径兜住，为防失败做成能力开关不下发。
+     * <p><b>解析器增量（T01 → ext 修正）：</b>页码索引（RAGFlow UI 文案 PageIndex，
+     * 字段 {@code toc_extraction}）、图像/表格上下文窗口（{@code image_table_context_window}
+     * + 镜像 {@code image_context_size}/{@code table_context_size}）、重叠百分比
+     * （{@code overlapped_percent}）必须经 {@code parser_config.ext} 下发——顶层直写
+     * 会被 pydantic 拒整单（code:101），与 RAGFlow Web {@code extractParserConfigExt}
+     * 口径一致。
      *
      * <p><b>Wave C P1f 关键契约（最高优先级，T00 实测）：</b>引擎在<b>切换
      * {@code chunk_method}</b> 时会把 {@code parser_config} 重置为该方法的默认模板
@@ -224,21 +229,30 @@ public class RagflowClient {
         if (settings != null && settings.separator() != null && !settings.separator().isBlank()) {
             parserConfig.put("delimiter", settings.separator());
         }
-        // 解析器增量（官方 schema 键，T01）：toc_extraction（页码索引/TOC 提取）与
-        // image_table_context_window（图像/表格上下文窗口）随每次 PUT 恒下发——P1f 完整
-        // parser_config 契约；settings 为 null 或字段未设置时按 MIS 默认模板下发
-        // （toc_extraction=true / 256），避免切过 chunk_method 后被引擎重置且 MIS 无从感知。
-        parserConfig.put("toc_extraction",
+        // 解析器增量 + overlap（T01 → ext 修正，2026-08-19 live probe）：
+        // RAGFlow 公开 REST schema（pydantic extra=forbid）拒收顶层 toc_extraction /
+        // image_table_context_window / overlapped_percent 等（code:101），但 UI 通过
+        // extractParserConfigExt 把这些键放进 parser_config.ext，服务端 deep_merge 后
+        // 持久化到顶层。MIS 必须走同一路径，否则整单被拒且 auto 键也进不去。
+        Map<String, Object> parserExt = new LinkedHashMap<>();
+        parserExt.put("toc_extraction",
                 settings != null && settings.pageIndex() != null
                         ? settings.pageIndex() : RagSettings.DEFAULT_PAGE_INDEX);
-        parserConfig.put("image_table_context_window",
-                settings != null && settings.imageTableContextWindow() != null
-                        ? settings.imageTableContextWindow() : RagSettings.DEFAULT_IMAGE_TABLE_CONTEXT_WINDOW);
+        int imageTableCtx = settings != null && settings.imageTableContextWindow() != null
+                ? settings.imageTableContextWindow()
+                : RagSettings.DEFAULT_IMAGE_TABLE_CONTEXT_WINDOW;
+        parserExt.put("image_table_context_window", imageTableCtx);
+        // 与 RAGFlow saving-button.tsx 一致：UI 一个滑块镜像三键，运行时 naive.py 读
+        // image_context_size / table_context_size。
+        putImageTableContextExt(parserExt, imageTableCtx);
+        parserExt.put("overlapped_percent",
+                settings != null && settings.overlapPercent() != null
+                        ? settings.overlapPercent()
+                        : RagSettings.DEFAULT_OVERLAP_PERCENT);
+        parserConfig.put("ext", parserExt);
         // 切片参数对齐（T1/T2，P1f 契约）：auto_keywords / auto_questions 随每次 PUT 恒下发。
         // 官方 naive schema 键（T0-a 实测库级/文件级均接受 code:0 且持久化）；settings 为 null
         // 或字段未设置时按 MIS 默认模板下发（0 = 关闭），避免切过 chunk_method 后被引擎重置。
-        // overlapPercent 对应 RAGFlow overlap 键全部实测被拒（T0-a code:101），绝不参与下发——
-        // 能力 {@code parser_overlap=true} 翻转后才由适配层新增键（分支不动，见 RagSettings 类级）。
         parserConfig.put("auto_keywords",
                 settings != null && settings.autoKeywords() != null
                         ? settings.autoKeywords() : RagSettings.DEFAULT_AUTO_KEYWORDS);
@@ -511,11 +525,8 @@ public class RagflowClient {
      * <ul>
      *   <li>路径 {@code PUT /api/v1/datasets/{datasetId}/documents/{docId}}；</li>
      *   <li>白名单键：顶层 {@code chunk_method} + {@code parser_config{chunk_token_num, delimiter,
-     *       auto_keywords, auto_questions}}；
-     *       {@code parser_config} 内未知键（含 {@code toc_extraction} /
-     *       {@code image_table_context_window} / overlap 键）→ code:102（严格；T0-b B3 实测），
-     *       故<b>文件级绝不发送</b> toc/context/overlap 键——文档级切片参数与库级 parser_config
-     *       是两套 schema，库级恒下发的键在这里必须剔除；</li>
+     *       auto_keywords, auto_questions}}；页码索引/图像上下文经 {@code parser_config.ext}
+     *       下发（2026-08-19 live probe：顶层直写 code:102，ext code:0）；顶层未知键仍拒整单；</li>
      *   <li>键名是 {@code chunk_token_num}（非 {@code chunk_token_count}）；</li>
      *   <li>PUT 之后<b>不会</b>自动重解析（run 仍 UNSTART），必须由调用方显式
      *       {@link #parseDocuments}（两步式，T00 P5）。</li>
@@ -551,6 +562,17 @@ public class RagflowClient {
         if (config.autoQuestions() != null) {
             parserConfig.put("auto_questions", config.autoQuestions());
         }
+        // pageIndex / imageTableContextWindow：文件级非空时经 ext 下发（与库级同口径）。
+        Map<String, Object> parserExt = new LinkedHashMap<>();
+        if (config.pageIndex() != null) {
+            parserExt.put("toc_extraction", config.pageIndex());
+        }
+        if (config.imageTableContextWindow() != null) {
+            putImageTableContextExt(parserExt, config.imageTableContextWindow());
+        }
+        if (!parserExt.isEmpty()) {
+            parserConfig.put("ext", parserExt);
+        }
         if (!parserConfig.isEmpty()) {
             body.put("parser_config", parserConfig);
         }
@@ -564,6 +586,13 @@ public class RagflowClient {
             throw new BusinessException(50000,
                     "RAGFlow 更新文档配置失败: " + (resp == null ? "无响应" : resp.message()));
         }
+    }
+
+    /** 图像/表格上下文窗口三键镜像（与 RAGFlow saving-button.tsx 一致）。 */
+    private static void putImageTableContextExt(Map<String, Object> ext, int imageTableCtx) {
+        ext.put("image_table_context_window", imageTableCtx);
+        ext.put("image_context_size", imageTableCtx);
+        ext.put("table_context_size", imageTableCtx);
     }
 
     /** 上传文档，返回原生 doc id。 */

@@ -1138,7 +1138,10 @@ public class KbFacadeService {
                     caps.parserOcrSupported() != null ? caps.parserOcrSupported() : false,
                     caps.parserOverlapSupported() != null ? caps.parserOverlapSupported() : false,
                     caps.graphSupported() != null ? caps.graphSupported() : false,
-                    caps.raptorSupported() != null ? caps.raptorSupported() : false);
+                    caps.raptorSupported() != null ? caps.raptorSupported() : false,
+                    caps.parserTocSupported() != null ? caps.parserTocSupported() : false,
+                    caps.parserImageTableContextSupported() != null
+                            ? caps.parserImageTableContextSupported() : false);
         } catch (Exception e) {
             log.warn("取引擎能力失败: {}", e.getMessage());
             return unsupportedCapabilities(engineType);
@@ -1264,7 +1267,7 @@ public class KbFacadeService {
     private static KbEngineCapabilitiesVO unsupportedCapabilities(String engineType) {
         return new KbEngineCapabilitiesVO(
                 engineType, List.of("UNSUPPORTED"), false, false, false, false, false, false, false,
-                false, false);
+                false, false, false, false);
     }
 
     // ------------------------------------------------------------------ 命中测试（Q-04 / WA-07）

@@ -354,8 +354,7 @@ public class KbDocumentService {
             return;
         }
         // T5 快照继承：config 全 null（或全空）→ 经 Resolver 唯一收口解析库级有效值，
-        // 构造 7 参 DocumentChunkConfig 快照下发，绝不透传 null（auto 双键随 PUT 恒下发，
-        // pageIndex / imageTableContextWindow 由客户端按白名单处理）。
+        // 构造 7 参 DocumentChunkConfig 快照下发；pageIndex/image 非空时客户端经 ext 同步。
         DocumentChunkConfig effective = resolveEffectiveChunkConfig(lib, config);
         try {
             enginePort.updateDocumentChunkConfig(

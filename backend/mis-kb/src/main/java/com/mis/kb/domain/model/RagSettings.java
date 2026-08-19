@@ -83,13 +83,15 @@ package com.mis.kb.domain.model;
  * form-schema.ts 与官方文档 0.26.4「Set context window size」的 parser_config 键：
  * <ul>
  *   <li>{@code pageIndex}（默认 {@code true}）→ {@code parser_config.toc_extraction}
- *       （布尔，TOC/目录提取开关）。<b>参与引擎下发</b>（{@code RagflowClient}
- *       {@code updateDatasetSettings} 每次 PUT 恒下发），非「只落库不下发」类字段。</li>
+ *       （布尔，TOC/目录提取开关）。仅当配置闸门
+ *       {@code mis.kb.engine.parser-toc-supported=true} 时下发（T0 实测本实例
+ *       Extra inputs → code:101，默认关闭只落库；误开硬下发会拒整单并阻断 auto 键）。</li>
  *   <li>{@code imageTableContextWindow}（默认 {@code 256}）→
  *       {@code parser_config.image_table_context_window}（整数，图片/表格上下各取
  *       N token 并入 chunk 提升召回；合法区间 {@code [1, 4096]}，越界由
  *       {@link #normalizeImageTableContextWindow} 归一 + 保存期
- *       {@code RagSettingsService.validate()} 拒绝）。同样<b>参与引擎下发</b>。</li>
+ *       {@code RagSettingsService.validate()} 拒绝）。仅当
+ *       {@code parser-image-table-context-supported=true} 时下发。</li>
  * </ul>
  * 与 OCR/overlap 的「只落库不下发」不同：这两个键是官方 schema 键（0.23.0+ 版本支持），
  * 按用户要求直接下发；若目标实例版本旧不支持，PUT 会失败——由 {@code syncToEngine}
