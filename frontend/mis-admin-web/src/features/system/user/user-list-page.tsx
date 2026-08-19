@@ -421,9 +421,10 @@ export function UserListPage() {
   function openPerms(row: UserView) {
     setMode('perms');
     setEditing(row);
-    // N7 / USR-01/03：优先使用后端返回的多组织/多部门数组，缺失时回退到单值字段，保证正确回填
-    const orgIds = row.orgIds && row.orgIds.length ? row.orgIds : row.orgId ? [row.orgId] : [];
-    const deptIds = row.deptIds && row.deptIds.length ? row.deptIds : row.deptId ? [row.deptId] : [];
+    // N7 / USR-01/03：后端已返回 orgIds/deptIds（含空数组=明确无权限）时直接回填；
+    // 仅在字段缺失（旧接口兼容）时回退到单值 orgId/deptId，避免把「已清空」误当成员工主组织。
+    const orgIds = Array.isArray(row.orgIds) ? row.orgIds : row.orgId ? [row.orgId] : [];
+    const deptIds = Array.isArray(row.deptIds) ? row.deptIds : row.deptId ? [row.deptId] : [];
     setForm((f) => ({
       ...f,
       appId: row.appId ?? '',
