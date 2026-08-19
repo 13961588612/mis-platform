@@ -430,17 +430,16 @@ export class StreamConsumer {
           if (!this.running) {
             break;
           }
-          // 每个 stream 对应一个 '>'（仅读新消息）；streams 与 ids 对齐。
-          const readArgs: string[] = [];
-          for (const key of streamKeys) {
-            readArgs.push(key, '>');
-          }
+          // Redis 语法：STREAMS key1 key2 ... id1 id2 ...（先全部 key，再全部 id）
+          // 禁止写成 key1 > key2 > —— 第二个 key 会被当成 stream ID，报
+          // 「ERR Invalid stream ID specified as stream command argument」。
           const result = await this.redis.xreadgroup(
             'GROUP', group, this.consumerName,
             'COUNT', '1',
             'BLOCK', CONSUMER_BLOCK_MS.toString(),
             'STREAMS',
-            ...readArgs,
+            ...streamKeys,
+            ...streamKeys.map(() => '>'),
           );
 
           if (result == null || result.length === 0) {
