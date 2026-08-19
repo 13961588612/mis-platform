@@ -229,6 +229,7 @@ class KbControllerRegistryCoverageTest {
         map.put("PATCH /api/v1/kb/operations/qa/tickets/{ticketId}", "kb:operation:list");
         // ---- V42：文档切分查看（GET 只读，复用 kb:document:list；BFF 兜底判权 + mis-kb ACL 读权限双闸门）----
         map.put("GET /api/v1/kb/libraries/{libraryId}/documents/{id}/chunks", "kb:document:list");
+        map.put("GET /api/v1/kb/libraries/{libraryId}/documents/{id}/chunk-images/{imageId}", "kb:document:list");
         // ---- V43：问答反馈处理（PATCH 写；sys_api 91201 / menu_api 91290 → 菜单 91037 kb:operation:list）----
         map.put("PATCH /api/v1/kb/operations/qa/feedback/{feedbackId}/process", "kb:operation:list");
         return map;

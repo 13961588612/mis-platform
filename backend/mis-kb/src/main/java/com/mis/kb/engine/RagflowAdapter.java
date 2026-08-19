@@ -605,7 +605,8 @@ public class RagflowAdapter implements KnowledgeEnginePort {
                         cleanContent(c.content()),
                         c.pageNo(),
                         c.importantKeywords() == null
-                                ? List.of() : List.copyOf(c.importantKeywords())));
+                                ? List.of() : List.copyOf(c.importantKeywords()),
+                        c.normalizedImageId()));
             }
         }
         int total = enginePage == null || enginePage.total() == null
@@ -615,6 +616,17 @@ public class RagflowAdapter implements KnowledgeEnginePort {
         Integer tokenCount = enginePage == null || enginePage.doc() == null
                 ? null : enginePage.doc().tokenCount();
         return new DocumentChunkPageView(views, total, page, pageSize, chunkCount, tokenCount);
+    }
+
+    /**
+     * 拉取分片版面截图（透传 {@link RagflowClient#getChunkImage}）。
+     *
+     * @param imageId 引擎 {@code image_id}
+     * @return 图片字节
+     */
+    @Override
+    public byte[] fetchChunkImage(String imageId) {
+        return client.getChunkImage(imageId);
     }
 
     /**

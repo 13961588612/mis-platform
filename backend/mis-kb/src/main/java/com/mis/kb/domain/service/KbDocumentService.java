@@ -143,6 +143,45 @@ public class KbDocumentService {
     }
 
     /**
+     * 拉取分片关联的版面截图（「查看切分」卡片配图）。
+     *
+     * <p>权限与 listChunks 同口径（库读 ACL）；{@code imageId} 必须属于本库引擎
+     * dataset（前缀 = {@code engineLibraryRef}-），防止越权读其他库图片。
+     *
+     * @param libraryId  知识库 id
+     * @param documentId 文档 id（用于归属校验）
+     * @param userId     当前用户
+     * @param imageId    引擎 {@code image_id}
+     * @return JPEG 字节
+     */
+    public byte[] getChunkImage(Long libraryId, Long documentId, Long userId, String imageId) {
+        requireLibrary(libraryId);
+        requireDocumentRead(libraryId, userId);
+        KbDocument doc = require(documentId);
+        if (!Objects.equals(doc.getLibraryId(), libraryId)) {
+            throw new KbBusinessException(KbResultCode.KB_DOC_NOT_FOUND);
+        }
+        KbLibrary lib = requireLibrary(libraryId);
+        String datasetId = lib.getEngineLibraryRef();
+        if (datasetId == null || datasetId.isBlank()) {
+            throw new BusinessException(ResultCode.VALIDATION_ERROR, "知识库尚未同步到引擎");
+        }
+        if (imageId == null || imageId.isBlank()) {
+            throw new BusinessException(ResultCode.VALIDATION_ERROR, "imageId 不能为空");
+        }
+        String id = imageId.trim();
+        String expectedPrefix = datasetId + "-";
+        if (!id.startsWith(expectedPrefix) || id.length() <= expectedPrefix.length()) {
+            throw new BusinessException(ResultCode.VALIDATION_ERROR, "imageId 不属于本知识库");
+        }
+        try {
+            return enginePort.fetchChunkImage(id);
+        } catch (UnsupportedOperationException ex) {
+            throw new BusinessException(ResultCode.VALIDATION_ERROR, "当前引擎不支持分片图片");
+        }
+    }
+
+    /**
      * 引擎切片页 → 响应 VO（全局连续序号 + 当前页字符统计 + 来源判定 + 双口径统计）。
      */
     private KbDocumentChunksVO toChunksVo(KbDocument doc, KbLibrary lib, DocumentChunkPageView pageView) {
@@ -159,7 +198,8 @@ public class KbDocumentService {
             int charCount = content.length();
             currentPageCharacterCount += charCount;
             chunks.add(new KbDocumentChunkVO(
-                    base + i + 1L, content, v.pageNo(), charCount, v.importantKeywords()));
+                    base + i + 1L, content, v.pageNo(), charCount, v.importantKeywords(),
+                    v.imageId()));
         }
         KbDocumentChunkStatsVO stats = buildStats(
                 doc, lib, pageView.total(), currentPageCharacterCount,

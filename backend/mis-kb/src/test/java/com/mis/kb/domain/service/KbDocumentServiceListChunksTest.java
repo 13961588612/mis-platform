@@ -92,7 +92,7 @@ class KbDocumentServiceListChunksTest {
     private static DocumentChunkPageView pageView(int page, int pageSize, String... contents) {
         List<DocumentChunkView> chunks = new java.util.ArrayList<>();
         for (int i = 0; i < contents.length; i++) {
-            chunks.add(new DocumentChunkView(DOC_ID, contents[i], i + 1, null));
+            chunks.add(new DocumentChunkView(DOC_ID, contents[i], i + 1, null, null));
         }
         return new DocumentChunkPageView(chunks, contents.length, page, pageSize, null, null);
     }
@@ -161,7 +161,7 @@ class KbDocumentServiceListChunksTest {
         when(documentRepository.findById(DOC_ID))
                 .thenReturn(Optional.of(doc("doc-1", ParseStatus.SUCCESS.code())));
         List<DocumentChunkView> chunks = List.of(
-                new DocumentChunkView(DOC_ID, "第一段", 1, List.of("关键")));
+                new DocumentChunkView(DOC_ID, "第一段", 1, List.of("关键"), null));
         DocumentChunkPageView page = new DocumentChunkPageView(chunks, 1, 1, 50, 12, 3456);
         when(enginePort.listDocumentChunks(any(ChunkQuery.class))).thenReturn(page);
 
@@ -187,8 +187,8 @@ class KbDocumentServiceListChunksTest {
         when(documentRepository.findById(DOC_ID))
                 .thenReturn(Optional.of(doc("doc-1", ParseStatus.SUCCESS.code())));
         List<DocumentChunkView> chunks = List.of(
-                new DocumentChunkView(DOC_ID, "第一段", 1, List.of("关键", "RAGFlow")),
-                new DocumentChunkView(DOC_ID, "第二段", 2, List.of()));
+                new DocumentChunkView(DOC_ID, "第一段", 1, List.of("关键", "RAGFlow"), null),
+                new DocumentChunkView(DOC_ID, "第二段", 2, List.of(), null));
         DocumentChunkPageView page = new DocumentChunkPageView(chunks, 2, 1, 50, null, null);
         when(enginePort.listDocumentChunks(any(ChunkQuery.class))).thenReturn(page);
 

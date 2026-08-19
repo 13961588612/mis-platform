@@ -384,6 +384,11 @@ public class KbFacadeService {
         return kbWebClient.listDocumentChunks(libraryId, id, keywords, page, pageSize);
     }
 
+    /** 拉取分片版面截图（直吐字节）。 */
+    public byte[] getChunkImage(Long libraryId, Long id, String imageId) {
+        return kbWebClient.getChunkImage(libraryId, id, imageId);
+    }
+
     /** 透传文档上传；BFF 侧只做大小/空文件校验，解析交给引擎。可选文件级切片参数。 */
     public KbDocumentUploadResponse uploadDocument(
             Long libraryId, MultipartFile file,

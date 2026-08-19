@@ -562,6 +562,18 @@ public class KbWebClient extends AbstractDownstreamClient {
                 .bodyToMono(DOCUMENT_CHUNKS));
     }
 
+    /**
+     * 拉取分片版面截图（直吐 JPEG 字节；三层透传）。
+     */
+    public byte[] getChunkImage(Long libraryId, Long id, String imageId) {
+        return block(client().get()
+                .uri("/internal/v1/kb/libraries/{libraryId}/documents/{id}/chunk-images/{imageId}",
+                        libraryId, id, imageId)
+                .headers(loginContextHeaders())
+                .retrieve()
+                .bodyToMono(byte[].class));
+    }
+
     /** 透传 multipart 上传（保留原始文件名与内容类型；可选文件级切片参数）。 */
     public KbDocumentUploadResponse uploadDocument(
             Long libraryId, String filename, String contentType, byte[] bytes,

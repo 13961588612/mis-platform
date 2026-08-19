@@ -168,6 +168,19 @@ public interface KnowledgeEnginePort {
         return DocumentChunkPageView.empty(page, pageSize);
     }
 
+    /**
+     * 拉取分片关联的版面截图（引擎 {@code image_id}）。
+     *
+     * <p><b>默认实现：抛 {@link UnsupportedOperationException}</b>。RAGFlow 实现走
+     * {@code GET /v1/document/image/{imageId}}（{@code RagflowClient.getChunkImage}）。
+     *
+     * @param imageId 引擎 {@code image_id}（形如 {@code {datasetId}-{objectId}}）
+     * @return 图片字节；恒非 {@code null}
+     */
+    default byte[] fetchChunkImage(String imageId) {
+        throw new UnsupportedOperationException("当前引擎不支持分片图片");
+    }
+
     /** 检索，返回统一 {@link ChunkHit}（仅含 MIS 业务 ID）。 */
     List<ChunkHit> retrieve(RetrieveQuery query);
 

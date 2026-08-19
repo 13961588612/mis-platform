@@ -639,6 +639,46 @@ public class RagflowClient {
     }
 
     /**
+     * 拉取分片关联的版面截图（RAGFlow {@code GET /v1/document/image/{image_id}}）。
+     *
+     * <p>{@code image_id} 形如 {@code {datasetId}-{objectName}}（恰好一段连字符分隔）。
+     * 该端点在现网 RAGFlow 上 {@code @login_required} 已注释，仍附带 API Key 以兼容
+     * 开启鉴权的部署；响应 Content-Type 一般为 {@code image/JPEG}。
+     *
+     * @param imageId 引擎 {@code image_id}；禁止为空
+     * @return 图片字节；恒非 {@code null}
+     * @throws BusinessException 参数非法、HTTP 非 2xx、或响应体为空
+     */
+    public byte[] getChunkImage(String imageId) {
+        if (imageId == null || imageId.isBlank()) {
+            throw new BusinessException(50000, "RAGFlow 拉取分片图片失败: imageId 为空");
+        }
+        String id = imageId.trim();
+        // RAGFlow get_image：image_id.split("-") 必须恰好两段
+        if (id.indexOf('-') < 0 || id.indexOf('-') != id.lastIndexOf('-')) {
+            throw new BusinessException(50000, "RAGFlow 拉取分片图片失败: imageId 格式非法");
+        }
+        try {
+            byte[] body = client.get()
+                    .uri("/v1/document/image/{imageId}", id)
+                    .header("Authorization", bearer())
+                    .retrieve()
+                    .body(byte[].class);
+            if (body == null || body.length == 0) {
+                throw new BusinessException(50000, "RAGFlow 拉取分片图片失败: 空响应");
+            }
+            return body;
+        } catch (BusinessException ex) {
+            throw ex;
+        } catch (RestClientResponseException ex) {
+            throw new BusinessException(50000,
+                    "RAGFlow 拉取分片图片失败: HTTP " + ex.getStatusCode().value());
+        } catch (Exception ex) {
+            throw new BusinessException(50000, "RAGFlow 拉取分片图片失败: " + ex.getMessage());
+        }
+    }
+
+    /**
      * 删除文档。
      *
      * <p>官方 HTTP API：{@code DELETE /api/v1/datasets/{dataset_id}/documents}，

@@ -4,7 +4,7 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
-import { listDocumentChunks } from '../api/kb-api';
+import { fetchDocumentChunkImage, listDocumentChunks } from '../api/kb-api';
 import type { KbDocument, KbDocumentChunks } from '../types';
 import { chunkMethodLabel } from '../types';
 
@@ -19,6 +19,60 @@ interface Props {
   libraryId: number;
   /** 目标文档；null = 关闭态（不渲染内容）。 */
   doc: KbDocument | null;
+}
+
+/**
+ * 分片配图：经鉴权 API 拉 JPEG，再挂到 Object URL（裸 img src 带不上 Bearer）。
+ */
+function ChunkImage({
+  libraryId,
+  docId,
+  imageId,
+}: {
+  libraryId: number;
+  docId: number;
+  imageId: string;
+}) {
+  const [src, setSrc] = useState<string | null>(null);
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    let revoked: string | null = null;
+    let cancelled = false;
+    setSrc(null);
+    setFailed(false);
+    void (async () => {
+      try {
+        const url = await fetchDocumentChunkImage(libraryId, docId, imageId);
+        if (cancelled) {
+          URL.revokeObjectURL(url);
+          return;
+        }
+        revoked = url;
+        setSrc(url);
+      } catch {
+        if (!cancelled) setFailed(true);
+      }
+    })();
+    return () => {
+      cancelled = true;
+      if (revoked) URL.revokeObjectURL(revoked);
+    };
+  }, [libraryId, docId, imageId]);
+
+  if (failed) {
+    return <p className="mt-2 text-xs text-muted-foreground">分片图片加载失败</p>;
+  }
+  if (!src) {
+    return <p className="mt-2 text-xs text-muted-foreground">图片加载中…</p>;
+  }
+  return (
+    <img
+      src={src}
+      alt="分片截图"
+      className="mt-2 max-h-80 max-w-full rounded-md border object-contain bg-muted/30"
+    />
+  );
 }
 
 /**
@@ -55,6 +109,10 @@ function emptyChunks(hint: string, page: number): KbDocumentChunks {
       source: null,
       chunkCount: null,
       tokenCount: null,
+      pageIndex: null,
+      imageTableContextWindow: null,
+      autoKeywords: null,
+      autoQuestions: null,
     },
     chunks: [],
     total: 0,
@@ -211,6 +269,9 @@ export function KbDocChunkViewDrawer({ open, onOpenChange, libraryId, doc }: Pro
                   <p className="whitespace-pre-wrap break-words text-sm leading-relaxed text-foreground">
                     {highlight(chunk.content, keyword)}
                   </p>
+                  {chunk.imageId && doc ? (
+                    <ChunkImage libraryId={libraryId} docId={doc.id} imageId={chunk.imageId} />
+                  ) : null}
                 </div>
               ))}
             </div>

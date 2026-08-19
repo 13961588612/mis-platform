@@ -11,15 +11,19 @@ import java.util.List;
  * {@code positions} 首元素推导），引擎未提供时为 {@code null}。
  * {@code importantKeywords} 为引擎 {@code important_keywords} 透传（可空，
  * 展示层对空列表兜底为「—」）。
+ * {@code imageId} 为引擎 {@code image_id}（空串归一为 {@code null}）；有值时可经
+ * 代理端点取 JPEG 版面图。
  *
- * @param documentId       MIS 文档 id
- * @param content          清洗后纯文本（恒非 {@code null}，可能为空串）
- * @param pageNo           切片所在页码（从 1 开始）；引擎未提供时为 {@code null}
+ * @param documentId        MIS 文档 id
+ * @param content           清洗后纯文本（恒非 {@code null}，可能为空串）
+ * @param pageNo            切片所在页码（从 1 开始）；引擎未提供时为 {@code null}
  * @param importantKeywords 重要关键词；引擎未提供时为 {@code null}
+ * @param imageId           分片关联图片 id；无图时为 {@code null}
  */
 public record DocumentChunkView(
         Long documentId,
         String content,
         Integer pageNo,
-        List<String> importantKeywords) {
+        List<String> importantKeywords,
+        String imageId) {
 }

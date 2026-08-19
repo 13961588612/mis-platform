@@ -451,6 +451,8 @@ export interface KbDocumentChunk {
   characterCount: number;
   /** 重要关键词（引擎 important_keywords 透传）；引擎未提供时为 null。 */
   importantKeywords: string[] | null;
+  /** 分片关联图片 id（引擎 image_id）；无图时为 null，经代理端点取 JPEG。 */
+  imageId: string | null;
 }
 
 /** 文档切片统计条（「查看文档切分效果」抽屉顶部）。 */

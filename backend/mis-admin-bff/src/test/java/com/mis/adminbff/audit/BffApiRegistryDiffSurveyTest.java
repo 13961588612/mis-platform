@@ -157,6 +157,11 @@ class BffApiRegistryDiffSurveyTest {
             "PATCH /api/v1/kb/operations/qa/feedback/{feedbackId}/process"
     );
 
+    /** V63 净新增 KB 登记（文档切分图片代理；sys_api 91300 / menu_api 91301 → 菜单 91034 kb:document:list）。 */
+    private static final Set<String> EXPECTED_KB_V63_1 = Set.of(
+            "GET /api/v1/kb/libraries/{libraryId}/documents/{id}/chunk-images/{imageId}"
+    );
+
     /**
      * V32 之前的 KB 已登记<b>去重后</b> 42 行基线（V17/V18/V24/V25/V26/V27/V30/V31）。
      * <p>PRD §2.2 记「45 行」是按迁移行数（V30 含 3 行与 V24/V25 重复、被幂等守卫跳过）；
@@ -259,6 +264,7 @@ class BffApiRegistryDiffSurveyTest {
         expectedKbNew.addAll(EXPECTED_KB_V41_1);
         expectedKbNew.addAll(EXPECTED_KB_V42_1);
         expectedKbNew.addAll(EXPECTED_KB_V43_1);
+        expectedKbNew.addAll(EXPECTED_KB_V63_1);
         assertEquals(expectedKbNew, newKb,
                 "V32+V34 净新增 KB 登记必须恰好等于 READ-01~24 + WRITE-01~04（28）+ RAPTOR 2，"
                         + "V37 补登 inventory 1，V41 会话删除 1，V42 文档切分查看 1，V43 反馈处理 1；"
@@ -781,6 +787,8 @@ class BffApiRegistryDiffSurveyTest {
             "GET /api/v1/modules/{moduleId}/bindings",
             // ---- V42（本期）：KB 文档切分查看（sys_api 91200 / menu_api 91289 → 菜单 91034 kb:document:list）----
             "GET /api/v1/kb/libraries/{libraryId}/documents/{id}/chunks",
+            // ---- V63：KB 文档切分图片代理（sys_api 91300 / menu_api 91301 → 菜单 91034 kb:document:list）----
+            "GET /api/v1/kb/libraries/{libraryId}/documents/{id}/chunk-images/{imageId}",
             // ---- V43（本期）：KB 问答反馈处理（sys_api 91201 / menu_api 91290 → 菜单 91037 kb:operation:list）----
             "PATCH /api/v1/kb/operations/qa/feedback/{feedbackId}/process",
             // ---- V39（系统管理三页真实化）：员工写端点 + 岗位 + 岗位类型 + 系统参数 ----

@@ -403,6 +403,27 @@ public class KbController {
         return Result.ok(kbFacadeService.listDocumentChunks(libraryId, id, keywords, page, pageSize));
     }
 
+    /**
+     * 拉取分片版面截图（「查看切分」卡片配图；直吐 JPEG，不包 Result）。
+     *
+     * <p>权限与 listChunks 同口径：{@code kb:document:list}。imageId 为引擎侧
+     * {@code {datasetId}-{objectId}}。
+     */
+    @GetMapping(
+            value = "/libraries/{libraryId}/documents/{id}/chunk-images/{imageId}",
+            produces = MediaType.IMAGE_JPEG_VALUE)
+    public ResponseEntity<byte[]> getChunkImage(
+            @PathVariable Long libraryId,
+            @PathVariable Long id,
+            @PathVariable String imageId) {
+        requirePermission(PERM_DOCUMENT_LIST);
+        byte[] bytes = kbFacadeService.getChunkImage(libraryId, id, imageId);
+        return ResponseEntity.ok()
+                .header(HttpHeaders.CACHE_CONTROL, "private, max-age=3600")
+                .contentType(MediaType.IMAGE_JPEG)
+                .body(bytes);
+    }
+
     @PostMapping("/libraries/{libraryId}/documents")
     @OperLog(module = "知识库", operation = "上传文档", recordParams = true)
     public Result<KbDocumentUploadResponse> uploadDocument(

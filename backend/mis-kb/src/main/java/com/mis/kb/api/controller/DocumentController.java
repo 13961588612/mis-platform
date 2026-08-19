@@ -60,6 +60,25 @@ public class DocumentController {
                 libraryId, id, currentUserId(), keywords, page, pageSize));
     }
 
+    /**
+     * 拉取分片版面截图（「查看切分」卡片配图；直吐 JPEG 字节，不包 Result）。
+     *
+     * <p>权限与 listChunks 同口径（BFF {@code kb:document:list} + 本服务 ACL 读）。
+     * {@code imageId} 形如 {@code {datasetId}-{objectId}}，路径允许字母数字与连字符。
+     */
+    @GetMapping(
+            value = "/{libraryId}/documents/{id}/chunk-images/{imageId}",
+            produces = "image/jpeg")
+    public org.springframework.http.ResponseEntity<byte[]> getChunkImage(
+            @PathVariable Long libraryId,
+            @PathVariable Long id,
+            @PathVariable String imageId) {
+        byte[] bytes = documentService.getChunkImage(libraryId, id, currentUserId(), imageId);
+        return org.springframework.http.ResponseEntity.ok()
+                .header(org.springframework.http.HttpHeaders.CACHE_CONTROL, "private, max-age=3600")
+                .body(bytes);
+    }
+
     @PostMapping("/{libraryId}/documents")
     public Result<KbDocumentUploadResponse> upload(
             @PathVariable Long libraryId,

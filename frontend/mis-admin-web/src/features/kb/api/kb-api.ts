@@ -322,6 +322,23 @@ export async function listDocumentChunks(
   return unwrap(res, '获取文档切分失败');
 }
 
+/**
+ * 拉取分片版面截图（直吐 JPEG 字节；需带鉴权，不能用裸 img src）。
+ *
+ * @returns Object URL（调用方负责 URL.revokeObjectURL）
+ */
+export async function fetchDocumentChunkImage(
+  libraryId: number,
+  docId: number,
+  imageId: string,
+): Promise<string> {
+  const res = await api.get<Blob>(
+    `/kb/libraries/${libraryId}/documents/${docId}/chunk-images/${encodeURIComponent(imageId)}`,
+    { responseType: 'blob' },
+  );
+  return URL.createObjectURL(res.data);
+}
+
 /** 上传文档（multipart/form-data；可选文件级切片参数，全空 = 继承库级）。 */
 export async function uploadDocument(
   libraryId: number,

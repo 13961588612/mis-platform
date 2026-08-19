@@ -40,8 +40,9 @@ class KbFacadeServiceListChunksTest {
     @DisplayName("listDocumentChunks → 原样透传 kbWebClient.listDocumentChunks（含关键字与分页）")
     void listDocumentChunksPassesThrough() {
         KbDocumentChunksVO expected = new KbDocumentChunksVO(
-                new KbDocumentChunkStatsVO(1, 3, "naive", 4096, null, "LIBRARY", 12, 3456),
-                List.of(new KbDocumentChunkVO(1L, "内容", 1, 2, List.of("关键"))),
+                new KbDocumentChunkStatsVO(1, 3, "naive", 4096, null, "LIBRARY", 12, 3456,
+                        null, null, null, null),
+                List.of(new KbDocumentChunkVO(1L, "内容", 1, 2, List.of("关键"), null)),
                 1, 1, 50, null);
         when(kbWebClient.listDocumentChunks(LIB_ID, DOC_ID, "关键", 2, 50))
                 .thenReturn(expected);
