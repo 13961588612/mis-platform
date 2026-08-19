@@ -220,7 +220,7 @@ class KbDocumentServiceListChunksTest {
         // autoQuestions=3），文件级仅覆盖 autoKeywords=8，其余六字段 null
         KbLibrary lib = library();
         RagSettings custom = new RagSettings(null, null, null, null, "hybrid",
-                "naive", 128, null, null, null, null,
+                "naive", 512, null, null, null, null,
                 null, null, null, null, null, null,
                 null, null, null, null, null, null, null,
                 Boolean.FALSE, 768, 15.0D, 4, 3).withDefaults();
@@ -241,7 +241,7 @@ class KbDocumentServiceListChunksTest {
                 "文件级覆盖 autoKeywords=8 必须回显");
         assertEquals("naive", vo.stats().chunkMethod(),
                 "未覆盖字段 chunkMethod 回落库级");
-        assertEquals(Integer.valueOf(128), vo.stats().chunkTokenNum(),
+        assertEquals(Integer.valueOf(512), vo.stats().chunkTokenNum(),
                 "未覆盖字段 chunkTokenNum 回落库级");
         assertEquals(Boolean.FALSE, vo.stats().pageIndex(),
                 "未覆盖字段 pageIndex 回落库级");

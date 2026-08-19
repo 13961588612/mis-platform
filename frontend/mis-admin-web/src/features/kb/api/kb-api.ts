@@ -336,7 +336,16 @@ export async function fetchDocumentChunkImage(
     `/kb/libraries/${libraryId}/documents/${docId}/chunk-images/${encodeURIComponent(imageId)}`,
     { responseType: 'blob' },
   );
-  return URL.createObjectURL(res.data);
+  const rawType = String(res.headers?.['content-type'] ?? 'image/jpeg').split(';')[0]?.trim() ?? 'image/jpeg';
+  if (rawType.includes('json') || rawType.startsWith('text/')) {
+    const text = await res.data.text();
+    throw new Error(text.slice(0, 200) || '分片图片响应格式异常');
+  }
+  const blob = res.data.type ? res.data : new Blob([res.data], { type: rawType });
+  if (blob.size === 0) {
+    throw new Error('分片图片为空');
+  }
+  return URL.createObjectURL(blob);
 }
 
 /** 上传文档（multipart/form-data；可选文件级切片参数，全空 = 继承库级）。 */

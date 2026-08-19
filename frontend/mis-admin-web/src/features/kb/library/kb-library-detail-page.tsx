@@ -232,7 +232,7 @@ function toSettings(f: RagForm): KbRagSettings {
     retrievalMethod: f.retrievalMethod.trim() || null,
     chunkMethod: f.chunkMethod.trim() || null,
     chunkTokenNum:
-      f.chunkTokenNum.trim() !== '' && Number.isFinite(tokenNum) && tokenNum >= 256 && tokenNum <= 4096
+      f.chunkTokenNum.trim() !== '' && Number.isFinite(tokenNum) && tokenNum >= 256 && tokenNum <= 2048
         ? Math.trunc(tokenNum)
         : null,
     // separator 允许是纯空白（如换行符），只在完全为空串时归 null
@@ -467,12 +467,12 @@ export function KbLibraryDetailPage() {
 
   async function onSaveSettings(): Promise<void> {
     if (libraryId == null) return;
-    // chunkTokenNum 范围 [256, 4096]：越界直接拦截（空值 = 继承默认 4096，不拦）
+    // chunkTokenNum 范围 [256, 2048]：越界直接拦截（空值 = 继承默认 2048，不拦）
     const tokenRaw = form.chunkTokenNum.trim();
     if (tokenRaw !== '') {
       const tokenNum = Number(tokenRaw);
-      if (!Number.isFinite(tokenNum) || tokenNum < 256 || tokenNum > 4096) {
-        toast.warning('切片长度需在 256 ~ 4096 之间（留空则继承默认 4096）');
+      if (!Number.isFinite(tokenNum) || tokenNum < 256 || tokenNum > 2048) {
+        toast.warning('切片长度需在 256 ~ 2048 之间（留空则继承默认 2048）');
         return;
       }
     }
@@ -1085,13 +1085,13 @@ export function KbLibraryDetailPage() {
                   <Input
                     type="number"
                     min={256}
-                    max={4096}
+                    max={2048}
                     value={form.chunkTokenNum}
                     onChange={(e) => setForm((f) => ({ ...f, chunkTokenNum: e.target.value }))}
-                    placeholder="默认 4096（留空继承）"
+                    placeholder="默认 2048（留空继承）"
                   />
                   <p className="mt-1 text-xs text-muted-foreground">
-                    范围 256 ~ 4096，留空表示继承默认 4096
+                    范围 256 ~ 2048（RAGFlow 硬上限），留空表示继承默认 2048
                   </p>
                 </div>
                 <div>

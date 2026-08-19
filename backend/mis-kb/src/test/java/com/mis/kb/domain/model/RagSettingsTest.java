@@ -81,6 +81,16 @@ class RagSettingsTest {
     }
 
     @Test
+    @DisplayName("normalizeChunkTokenNum：4096 钳制到 2048，避免 RAGFlow 拒整单 PUT")
+    void legacyChunkTokenNumCappedForEngine() {
+        assertEquals(2048, RagSettings.normalizeChunkTokenNum(4096).intValue());
+        assertEquals(RagSettings.DEFAULT_CHUNK_TOKEN_NUM,
+                RagSettings.defaults().withDefaults().chunkTokenNum().intValue());
+        assertEquals(2048, new RagSettings(null, null, null, null, null,
+                null, 4096, null, null, null, null).withDefaults().chunkTokenNum().intValue());
+    }
+
+    @Test
     @DisplayName("withDefaults()：raptorThreshold 越界（1.5 / -0.1）回落默认 0.1")
     void outOfRangeThresholdFallsBack() {
         RagSettings over = new RagSettings(null, null, null, null, null,

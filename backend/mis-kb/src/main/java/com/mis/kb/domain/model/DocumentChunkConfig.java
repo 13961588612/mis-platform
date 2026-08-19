@@ -45,8 +45,8 @@ public record DocumentChunkConfig(
 
     /** token 数允许下界（256 起；低于 256 切片过碎，无检索价值）。 */
     public static final int MIN_TOKEN_NUM = 256;
-    /** token 数允许上界。 */
-    public static final int MAX_TOKEN_NUM = 4096;
+    /** token 数允许上界（RAGFlow naive schema 实测 ≤2048，4096 会拒整单 PUT）。 */
+    public static final int MAX_TOKEN_NUM = 2048;
 
     /**
      * 兼容构造：3 参数旧签名（V23 三字段），T4 四字段置 {@code null}（继承库级）。

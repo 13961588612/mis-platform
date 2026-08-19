@@ -172,7 +172,7 @@ public interface KnowledgeEnginePort {
      * 拉取分片关联的版面截图（引擎 {@code image_id}）。
      *
      * <p><b>默认实现：抛 {@link UnsupportedOperationException}</b>。RAGFlow 实现走
-     * {@code GET /v1/document/image/{imageId}}（{@code RagflowClient.getChunkImage}）。
+     * {@code GET /api/v1/documents/images/{imageId}}（{@code RagflowClient.getChunkImage}）。
      *
      * @param imageId 引擎 {@code image_id}（形如 {@code {datasetId}-{objectId}}）
      * @return 图片字节；恒非 {@code null}

@@ -410,18 +410,26 @@ public class KbController {
      * {@code {datasetId}-{objectId}}。
      */
     @GetMapping(
-            value = "/libraries/{libraryId}/documents/{id}/chunk-images/{imageId}",
-            produces = MediaType.IMAGE_JPEG_VALUE)
+            value = "/libraries/{libraryId}/documents/{id}/chunk-images/{imageId}")
     public ResponseEntity<byte[]> getChunkImage(
             @PathVariable Long libraryId,
             @PathVariable Long id,
             @PathVariable String imageId) {
         requirePermission(PERM_DOCUMENT_LIST);
         byte[] bytes = kbFacadeService.getChunkImage(libraryId, id, imageId);
+        MediaType mediaType = detectChunkImageMediaType(bytes);
         return ResponseEntity.ok()
                 .header(HttpHeaders.CACHE_CONTROL, "private, max-age=3600")
-                .contentType(MediaType.IMAGE_JPEG)
+                .contentType(mediaType)
                 .body(bytes);
+    }
+
+    private static MediaType detectChunkImageMediaType(byte[] bytes) {
+        if (bytes != null && bytes.length >= 8
+                && bytes[0] == (byte) 0x89 && bytes[1] == 'P' && bytes[2] == 'N' && bytes[3] == 'G') {
+            return MediaType.IMAGE_PNG;
+        }
+        return MediaType.IMAGE_JPEG;
     }
 
     @PostMapping("/libraries/{libraryId}/documents")
@@ -431,9 +439,14 @@ public class KbController {
             @RequestParam("file") MultipartFile file,
             @RequestParam(required = false) String chunkMethod,
             @RequestParam(required = false) Integer chunkTokenNum,
-            @RequestParam(required = false) String separator) {
+            @RequestParam(required = false) String separator,
+            @RequestParam(required = false) Boolean pageIndex,
+            @RequestParam(required = false) Integer imageTableContextWindow,
+            @RequestParam(required = false) Integer autoKeywords,
+            @RequestParam(required = false) Integer autoQuestions) {
         return Result.ok(kbFacadeService.uploadDocument(
-                libraryId, file, chunkMethod, chunkTokenNum, separator));
+                libraryId, file, chunkMethod, chunkTokenNum, separator,
+                pageIndex, imageTableContextWindow, autoKeywords, autoQuestions));
     }
 
     /** 更新文档级切片配置（kb_settings_model_chunk；KE-01 审计快照入参，before=旧切片配置）。 */

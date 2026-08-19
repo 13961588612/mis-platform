@@ -105,8 +105,8 @@ export function KbDocChunkDialog({
   }, [autoQuestions]);
 
   const payloadError = useMemo<string | null>(() => {
-    if (tokenNum != null && (tokenNum < 256 || tokenNum > 4096)) {
-      return '切片长度需在 256 ~ 4096 之间';
+    if (tokenNum != null && (tokenNum < 256 || tokenNum > 2048)) {
+      return '切片长度需在 256 ~ 2048 之间';
     }
     if (imageWindow != null && (imageWindow < 1 || imageWindow > 4096)) {
       return '图像/表格上下文窗口需在 1 ~ 4096 之间';
@@ -222,7 +222,7 @@ export function KbDocChunkDialog({
                 <Input
                   type="number"
                   min={256}
-                  max={4096}
+                  max={2048}
                   value={chunkTokenNum}
                   onChange={(e) => setChunkTokenNum(e.target.value)}
                   placeholder={
@@ -233,7 +233,7 @@ export function KbDocChunkDialog({
                   inputMode="numeric"
                 />
                 <p className="mt-1 text-xs text-muted-foreground">
-                  256 ~ 4096；留空继承库级 {libraryTokenDefault(librarySettings)}
+                  256 ~ 2048；留空继承库级 {libraryTokenDefault(librarySettings)}
                 </p>
               </div>
               <div>
@@ -375,7 +375,7 @@ export function KbDocChunkDialog({
   );
 }
 
-/** 库级当前有效切片 token 数（null 时按引擎默认 4096 标注）。 */
+/** 库级当前有效切片 token 数（null 时按引擎默认 2048 标注）。 */
 function libraryTokenDefault(settings: KbRagSettings | null | undefined): number {
-  return settings?.chunkTokenNum ?? 4096;
+  return settings?.chunkTokenNum ?? 2048;
 }

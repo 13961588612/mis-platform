@@ -124,11 +124,13 @@ public class RagSettingsService {
                     "该知识库不在您的管理范围内");
         }
         RagSettings oldEffective = get(libraryId);
+        // 存量 MIS 默认 chunkTokenNum=4096 会被 RAGFlow 拒整单 PUT，保存前自动钳到 2048
+        RagSettings prepared = migrateLegacyChunkToken(settings);
         // 三道防线第二道（保存强制关）：rerank → graph → raptor 依次收敛；
         // 引擎不支持的能力开关一律静默强制 false（前端置灰是第一道，检索期降级是第三道）
         RagSettings validated = enforceGraphAvailability(
                 enforceRaptorAvailability(
-                        enforceRerankAvailability(validate(settings).withDefaults(), libraryId),
+                        enforceRerankAvailability(validate(prepared).withDefaults(), libraryId),
                         libraryId),
                 libraryId);
         // 服务端维护图谱/RAPTOR 状态字段：请求里的 kgBuildStatus/kgBuildMessage 与
@@ -229,8 +231,7 @@ public class RagSettingsService {
                 && (settings.scoreThreshold() < 0D || settings.scoreThreshold() > 1D)) {
             throw new KbBusinessException(KbResultCode.KB_RAG_SETTINGS_INVALID);
         }
-        // chunkTokenNum 有效区间 [256, 4096]（与 DocumentChunkConfig.MIN/MAX_TOKEN_NUM 同源，
-        // 设计 §3.2.2「常量唯一事实源」）；下限 256 起，低于 256 切片过碎直接拒绝
+        // chunkTokenNum 有效区间 [256, 2048]（RAGFlow 实测 >2048 拒整单 PUT）
         if (settings.chunkTokenNum() != null
                 && (settings.chunkTokenNum() < DocumentChunkConfig.MIN_TOKEN_NUM
                     || settings.chunkTokenNum() > DocumentChunkConfig.MAX_TOKEN_NUM)) {
@@ -632,6 +633,21 @@ public class RagSettingsService {
     private KbLibrary require(Long libraryId) {
         return libraryRepository.findById(libraryId)
                 .orElseThrow(() -> new KbBusinessException(KbResultCode.KB_LIBRARY_NOT_FOUND));
+    }
+
+    /**
+     * 存量 chunkTokenNum=4096（旧 MIS 默认）会在 RAGFlow 触发整单 PUT 失败，
+     * 连带阻断 pageIndex/auto 等 parser 键同步。保存前自动钳到引擎上限 2048。
+     */
+    private static RagSettings migrateLegacyChunkToken(RagSettings settings) {
+        if (settings == null || settings.chunkTokenNum() == null) {
+            return settings;
+        }
+        int n = settings.chunkTokenNum();
+        if (n > DocumentChunkConfig.MAX_TOKEN_NUM && n <= 4096) {
+            return settings.withChunkTokenNum(DocumentChunkConfig.MAX_TOKEN_NUM);
+        }
+        return settings;
     }
 
     private static AclSummaryVO toAclSummary(KbAcl acl) {

@@ -392,7 +392,9 @@ public class KbFacadeService {
     /** 透传文档上传；BFF 侧只做大小/空文件校验，解析交给引擎。可选文件级切片参数。 */
     public KbDocumentUploadResponse uploadDocument(
             Long libraryId, MultipartFile file,
-            String chunkMethod, Integer chunkTokenNum, String separator) {
+            String chunkMethod, Integer chunkTokenNum, String separator,
+            Boolean pageIndex, Integer imageTableContextWindow,
+            Integer autoKeywords, Integer autoQuestions) {
         if (file == null || file.isEmpty()) {
             throw new BusinessException(ResultCode.VALIDATION_ERROR, "上传文件不能为空");
         }
@@ -410,7 +412,8 @@ public class KbFacadeService {
                 ? file.getOriginalFilename()
                 : "upload.bin";
         return kbWebClient.uploadDocument(libraryId, filename, file.getContentType(), bytes,
-                chunkMethod, chunkTokenNum, separator);
+                chunkMethod, chunkTokenNum, separator,
+                pageIndex, imageTableContextWindow, autoKeywords, autoQuestions);
     }
 
     /**

@@ -13,7 +13,7 @@ import java.util.List;
  * 见 {@link com.mis.kb.engine.RagflowAdapter#cleanContent}）；{@code important_keywords}
  * 恒为空数组；{@code positions} 形如 {@code [[1,0,0,0,0]]}，每行首元素即页码
  * （见 {@link #pageNo()}）；{@code image_id} 非空时表示分片关联了版面截图
- * （取图走 {@code GET /v1/document/image/{image_id}}）。
+ * （取图走 {@code GET /api/v1/documents/images/{image_id}}）。
  *
  * @param id                引擎原生 chunk id
  * @param content           正文（含 {@code <em>} 高亮 / 残留 HTML 标签，展示前需清洗）

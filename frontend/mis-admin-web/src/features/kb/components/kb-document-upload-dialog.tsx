@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import type { ChangeEvent } from 'react';
 import { toast } from 'sonner';
 import { Upload } from 'lucide-react';
@@ -13,7 +13,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { uploadDocument } from '../api/kb-api';
-import type { KbDocumentChunkConfig } from '../types';
+import type { KbDocumentChunkConfig, KbRagSettings } from '../types';
 import { KB_CHUNK_METHOD_OPTIONS, formatSize } from '../types';
 
 /** 与 BFF `KbFacadeService` 的 50MB 上限保持一致，前端提前拦截避免无谓上传。 */
@@ -25,18 +25,6 @@ const selectClass =
 
 /**
  * 按扩展名建议默认切片方式（P1-3）。
- *
- * <p>仅作「带出默认值」的便利：用户仍可在弹窗内手动修改，或改回「继承库级（不指定）」。
- * 映射基于 RAGFlow 现有 chunk_method 枚举（见 {@code KB_CHUNK_METHOD_OPTIONS}）：
- * <ul>
- *   <li>纯文本/ Markdown → {@code naive}（通用切块，最稳）；</li>
- *   <li>PDF → {@code paper}（论文/结构化文档专用，按章节/标题切，比 naive 更适合 PDF 版面）；</li>
- *   <li>Word → {@code naive}（docx/doc 无专用方法，naive 通用处理最稳）；</li>
- *   <li>Excel/CSV → {@code table}（表格专用，按表格结构切片）；</li>
- *   <li>PPT → {@code presentation}（演示文稿专用，按幻灯片切）；</li>
- *   <li>图片 → {@code picture}（图片专用，OCR 后整图切块）；</li>
- *   <li>其他/未知 → {@code naive}（通用兜底，不强制）。</li>
- * </ul>
  *
  * @param fileName 上传文件名
  * @return 建议的 chunk_method 码值
@@ -64,10 +52,22 @@ function suggestChunkMethodByFileName(fileName: string): string {
   return EXT_TO_METHOD[ext] ?? 'naive';
 }
 
+/** 库级 RAG 设置 → 上传表单四参数默认值（显式落库，非 null 继承）。 */
+function parserDefaultsFromLibrary(librarySettings?: KbRagSettings | null) {
+  return {
+    pageIndex: librarySettings?.pageIndex !== false,
+    imageTableContextWindow: String(librarySettings?.imageTableContextWindow ?? 256),
+    autoKeywords: String(librarySettings?.autoKeywords ?? 0),
+    autoQuestions: String(librarySettings?.autoQuestions ?? 0),
+  };
+}
+
 export interface KbDocumentUploadDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   libraryId: number;
+  /** 库级 RAG 设置：预填解析器四参数默认值。 */
+  librarySettings?: KbRagSettings | null;
   /** 上传成功后回调（父级刷新列表）。 */
   onUploaded: () => void | Promise<void>;
 }
@@ -75,33 +75,54 @@ export interface KbDocumentUploadDialogProps {
 /**
  * 文档上传弹窗（kb_settings_model_chunk，R-P0-06/07）。
  *
- * <p>逐文件可选「切片方式 / 切片长度 / 分隔符」，三字段全空 = 继承库级
- * （行为与旧版直传完全一致）。上传成功后父级负责刷新列表；
- * 引擎侧解析为异步流程，列表轮询由 {@code KbDocumentTable} 收敛。
+ * <p>可选文件级切片参数 + 解析器四参数（默认带出库级值，可改，提交后写入文档列）。
  */
 export function KbDocumentUploadDialog({
   open,
   onOpenChange,
   libraryId,
+  librarySettings = null,
   onUploaded,
 }: KbDocumentUploadDialogProps) {
   const [file, setFile] = useState<File | null>(null);
   const [chunkMethod, setChunkMethod] = useState('');
   const [chunkTokenNum, setChunkTokenNum] = useState('');
   const [separator, setSeparator] = useState('');
+  const [pageIndex, setPageIndex] = useState(true);
+  const [imageTableContextWindow, setImageTableContextWindow] = useState('256');
+  const [autoKeywords, setAutoKeywords] = useState('0');
+  const [autoQuestions, setAutoQuestions] = useState('0');
   const [uploading, setUploading] = useState(false);
   /** 用户是否手动改过切片方式（P1-3：手动改过后不再按扩展名覆盖预填）。 */
   const [chunkMethodTouched, setChunkMethodTouched] = useState(false);
 
-  // 打开时重置表单，避免上次残留
+  const applyLibraryDefaults = () => {
+    const d = parserDefaultsFromLibrary(librarySettings);
+    setPageIndex(d.pageIndex);
+    setImageTableContextWindow(d.imageTableContextWindow);
+    setAutoKeywords(d.autoKeywords);
+    setAutoQuestions(d.autoQuestions);
+    if (librarySettings?.chunkTokenNum != null) {
+      setChunkTokenNum(String(librarySettings.chunkTokenNum));
+    }
+  };
+
   const reset = () => {
     setFile(null);
     setChunkMethod('');
     setChunkTokenNum('');
     setSeparator('');
+    applyLibraryDefaults();
     setUploading(false);
     setChunkMethodTouched(false);
   };
+
+  useEffect(() => {
+    if (open) {
+      applyLibraryDefaults();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- 仅弹窗打开时刷新库级默认
+  }, [open, librarySettings]);
 
   /** 选择文件：仅当用户尚未手动改过切片方式时，按扩展名预填默认值。 */
   const handleFileChange = (e: ChangeEvent<HTMLInputElement>) => {
@@ -118,15 +139,39 @@ export function KbDocumentUploadDialog({
     return Number.isFinite(n) ? Math.trunc(n) : null;
   }, [chunkTokenNum]);
 
+  const imageWindow = useMemo(() => {
+    const n = Number(imageTableContextWindow);
+    return Number.isFinite(n) ? Math.trunc(n) : null;
+  }, [imageTableContextWindow]);
+
+  const keywords = useMemo(() => {
+    const n = Number(autoKeywords);
+    return Number.isFinite(n) ? Math.trunc(n) : null;
+  }, [autoKeywords]);
+
+  const questions = useMemo(() => {
+    const n = Number(autoQuestions);
+    return Number.isFinite(n) ? Math.trunc(n) : null;
+  }, [autoQuestions]);
+
   const payloadError = useMemo<string | null>(() => {
     if (file != null && file.size > MAX_UPLOAD_BYTES) {
       return `文件超过 ${formatSize(MAX_UPLOAD_BYTES)} 上限`;
     }
-    if (tokenNum != null && (tokenNum < 256 || tokenNum > 4096)) {
-      return '切片长度需在 256 ~ 4096 之间';
+    if (tokenNum != null && (tokenNum < 256 || tokenNum > 2048)) {
+      return '切片长度需在 256 ~ 2048 之间';
+    }
+    if (imageWindow == null || imageWindow < 1 || imageWindow > 4096) {
+      return '图像与表格上下文窗口需在 1 ~ 4096 之间';
+    }
+    if (keywords == null || keywords < 0 || keywords > 32) {
+      return '自动关键字数量需在 0 ~ 32 之间';
+    }
+    if (questions == null || questions < 0 || questions > 10) {
+      return '自动问题数量需在 0 ~ 10 之间';
     }
     return null;
-  }, [file, tokenNum]);
+  }, [file, tokenNum, imageWindow, keywords, questions]);
 
   async function onSubmit(): Promise<void> {
     if (!file) {
@@ -140,14 +185,11 @@ export function KbDocumentUploadDialog({
     const config: KbDocumentChunkConfig = {
       chunkMethod: chunkMethod.trim() || null,
       chunkTokenNum: tokenNum,
-      // separator 允许是纯空白（如换行符），只在完全为空串时归 null
       separator: separator === '' ? null : separator,
-      // T4 扩展四字段：上传弹窗不提供独立控件，一律 null = 继承库级
-      // （引擎侧按 dataset 快照继承；文件级 PUT 白名单不含 toc/context/overlap 键）
-      pageIndex: null,
-      imageTableContextWindow: null,
-      autoKeywords: null,
-      autoQuestions: null,
+      pageIndex,
+      imageTableContextWindow: imageWindow,
+      autoKeywords: keywords,
+      autoQuestions: questions,
     };
     setUploading(true);
     try {
@@ -171,11 +213,11 @@ export function KbDocumentUploadDialog({
         onOpenChange(next);
       }}
     >
-      <DialogContent className="max-w-md">
+      <DialogContent className="max-h-[90vh] max-w-lg overflow-y-auto">
         <DialogHeader>
           <DialogTitle>上传文档</DialogTitle>
           <DialogDescription>
-            可选文件级切片参数；不填则继承知识库级设置（引擎侧沿用 dataset 快照）。
+            解析器参数默认带出知识库级设置，可按文件修改；提交后写入该文档的文件级参数。
           </DialogDescription>
         </DialogHeader>
 
@@ -213,9 +255,6 @@ export function KbDocumentUploadDialog({
                 </option>
               ))}
             </select>
-            <p className="mt-1 text-xs text-muted-foreground">
-              已按文件类型预填推荐方式；可手动修改，或选「继承库级」改回默认。
-            </p>
           </div>
 
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
@@ -224,13 +263,12 @@ export function KbDocumentUploadDialog({
               <Input
                 type="number"
                 min={256}
-                max={4096}
+                max={2048}
                 value={chunkTokenNum}
                 onChange={(e) => setChunkTokenNum(e.target.value)}
-                placeholder="如 512；留空继承库级"
+                placeholder="留空继承库级"
                 inputMode="numeric"
               />
-              <p className="mt-1 text-xs text-muted-foreground">256 ~ 4096</p>
             </div>
             <div>
               <label className={fieldLabel}>分隔符</label>
@@ -241,9 +279,56 @@ export function KbDocumentUploadDialog({
               />
             </div>
           </div>
-          <p className="text-xs text-muted-foreground">
-            任一字段非空即视为「文件指定」；切片参数在上传后由引擎按此配置切片并解析。
-          </p>
+
+          <div className="rounded-md border border-dashed bg-muted/30 p-3 space-y-3">
+            <p className="text-xs font-medium text-muted-foreground">解析器参数（默认库级，提交后落文档级）</p>
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <div className="sm:col-span-2">
+                <label className="flex items-center gap-2 text-sm">
+                  <input
+                    type="checkbox"
+                    className="h-4 w-4"
+                    checked={pageIndex}
+                    onChange={(e) => setPageIndex(e.target.checked)}
+                  />
+                  页码索引（PageIndex / TOC 提取）
+                </label>
+              </div>
+              <div>
+                <label className={fieldLabel}>图像与表格上下文窗口</label>
+                <Input
+                  type="number"
+                  min={1}
+                  max={4096}
+                  value={imageTableContextWindow}
+                  onChange={(e) => setImageTableContextWindow(e.target.value)}
+                  inputMode="numeric"
+                />
+              </div>
+              <div>
+                <label className={fieldLabel}>自动关键字数量</label>
+                <Input
+                  type="number"
+                  min={0}
+                  max={32}
+                  value={autoKeywords}
+                  onChange={(e) => setAutoKeywords(e.target.value)}
+                  inputMode="numeric"
+                />
+              </div>
+              <div>
+                <label className={fieldLabel}>自动问题数量</label>
+                <Input
+                  type="number"
+                  min={0}
+                  max={10}
+                  value={autoQuestions}
+                  onChange={(e) => setAutoQuestions(e.target.value)}
+                  inputMode="numeric"
+                />
+              </div>
+            </div>
+          </div>
         </div>
 
         <DialogFooter>

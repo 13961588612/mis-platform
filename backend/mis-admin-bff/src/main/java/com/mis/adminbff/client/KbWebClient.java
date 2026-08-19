@@ -577,7 +577,9 @@ public class KbWebClient extends AbstractDownstreamClient {
     /** 透传 multipart 上传（保留原始文件名与内容类型；可选文件级切片参数）。 */
     public KbDocumentUploadResponse uploadDocument(
             Long libraryId, String filename, String contentType, byte[] bytes,
-            String chunkMethod, Integer chunkTokenNum, String separator) {
+            String chunkMethod, Integer chunkTokenNum, String separator,
+            Boolean pageIndex, Integer imageTableContextWindow,
+            Integer autoKeywords, Integer autoQuestions) {
         MultipartBodyBuilder builder = new MultipartBodyBuilder();
         ByteArrayResource resource = new ByteArrayResource(bytes) {
             @Override
@@ -598,6 +600,18 @@ public class KbWebClient extends AbstractDownstreamClient {
         }
         if (separator != null) {
             builder.part("separator", separator);
+        }
+        if (pageIndex != null) {
+            builder.part("pageIndex", String.valueOf(pageIndex));
+        }
+        if (imageTableContextWindow != null) {
+            builder.part("imageTableContextWindow", String.valueOf(imageTableContextWindow));
+        }
+        if (autoKeywords != null) {
+            builder.part("autoKeywords", String.valueOf(autoKeywords));
+        }
+        if (autoQuestions != null) {
+            builder.part("autoQuestions", String.valueOf(autoQuestions));
         }
         return block(client().post()
                 .uri("/internal/v1/kb/libraries/{libraryId}/documents", libraryId)

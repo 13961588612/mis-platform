@@ -104,7 +104,11 @@ public class RagflowAdapter implements KnowledgeEnginePort {
 
     @Override
     public void updateLibrarySettings(EngineLibraryRef ref, RagSettings settings) {
-        client.updateDatasetSettings(ref.nativeId(), settings);
+        // 引擎下发前归一化（含 chunkTokenNum 4096→2048 钳制），避免 RAGFlow 拒整单 PUT
+        RagSettings engineSettings = settings == null
+                ? RagSettings.defaults().withDefaults()
+                : settings.withDefaults();
+        client.updateDatasetSettings(ref.nativeId(), engineSettings);
     }
 
     /**

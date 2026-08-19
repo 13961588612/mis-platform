@@ -365,6 +365,7 @@ export function KbDocumentTable({
         open={uploadOpen}
         onOpenChange={setUploadOpen}
         libraryId={libraryId}
+        librarySettings={librarySettings}
         onUploaded={() => void load(libraryId)}
       />
       <KbDocChunkDialog

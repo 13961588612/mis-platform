@@ -71,6 +71,7 @@ function ChunkImage({
       src={src}
       alt="分片截图"
       className="mt-2 max-h-80 max-w-full rounded-md border object-contain bg-muted/30"
+      onError={() => setFailed(true)}
     />
   );
 }

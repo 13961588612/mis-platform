@@ -67,16 +67,26 @@ public class DocumentController {
      * {@code imageId} 形如 {@code {datasetId}-{objectId}}，路径允许字母数字与连字符。
      */
     @GetMapping(
-            value = "/{libraryId}/documents/{id}/chunk-images/{imageId}",
-            produces = "image/jpeg")
+            value = "/{libraryId}/documents/{id}/chunk-images/{imageId}")
     public org.springframework.http.ResponseEntity<byte[]> getChunkImage(
             @PathVariable Long libraryId,
             @PathVariable Long id,
             @PathVariable String imageId) {
         byte[] bytes = documentService.getChunkImage(libraryId, id, currentUserId(), imageId);
+        org.springframework.http.MediaType mediaType = detectChunkImageMediaType(bytes);
         return org.springframework.http.ResponseEntity.ok()
                 .header(org.springframework.http.HttpHeaders.CACHE_CONTROL, "private, max-age=3600")
+                .contentType(mediaType)
                 .body(bytes);
+    }
+
+    /** 按魔数识别 PNG/JPEG；RAGFlow 可能返回 PNG 但旧端点硬标 image/JPEG。 */
+    private static org.springframework.http.MediaType detectChunkImageMediaType(byte[] bytes) {
+        if (bytes != null && bytes.length >= 8
+                && bytes[0] == (byte) 0x89 && bytes[1] == 'P' && bytes[2] == 'N' && bytes[3] == 'G') {
+            return org.springframework.http.MediaType.IMAGE_PNG;
+        }
+        return org.springframework.http.MediaType.IMAGE_JPEG;
     }
 
     @PostMapping("/{libraryId}/documents")

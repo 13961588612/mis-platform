@@ -224,7 +224,7 @@ public class RagflowClient {
                 ? settings.chunkMethod() : RagSettings.DEFAULT_CHUNK_METHOD);
         Map<String, Object> parserConfig = new LinkedHashMap<>();
         if (settings != null && settings.chunkTokenNum() != null) {
-            parserConfig.put("chunk_token_num", settings.chunkTokenNum());
+            parserConfig.put("chunk_token_num", RagSettings.normalizeChunkTokenNum(settings.chunkTokenNum()));
         }
         if (settings != null && settings.separator() != null && !settings.separator().isBlank()) {
             parserConfig.put("delimiter", settings.separator());
@@ -549,7 +549,7 @@ public class RagflowClient {
         }
         Map<String, Object> parserConfig = new LinkedHashMap<>();
         if (config.chunkTokenNum() != null) {
-            parserConfig.put("chunk_token_num", config.chunkTokenNum());
+            parserConfig.put("chunk_token_num", RagSettings.normalizeChunkTokenNum(config.chunkTokenNum()));
         }
         if (config.separator() != null && !config.separator().isBlank()) {
             parserConfig.put("delimiter", config.separator());
@@ -711,11 +711,12 @@ public class RagflowClient {
     }
 
     /**
-     * 拉取分片关联的版面截图（RAGFlow {@code GET /v1/document/image/{image_id}}）。
+     * 拉取分片关联的版面截图（RAGFlow {@code GET /api/v1/documents/images/{image_id}}）。
      *
-     * <p>{@code image_id} 形如 {@code {datasetId}-{objectName}}（恰好一段连字符分隔）。
-     * 该端点在现网 RAGFlow 上 {@code @login_required} 已注释，仍附带 API Key 以兼容
-     * 开启鉴权的部署；响应 Content-Type 一般为 {@code image/JPEG}。
+     * <p>{@code image_id} 形如 {@code {datasetId}-{objectKey}}，仅在<b>第一个</b>
+     * {@code -} 处拆分（objectKey 可含连字符，如 {@code page-5.png}）。
+     * 旧 Flask {@code /v1/document/image/} 用 {@code split("-")} 整串切分，
+     * objectKey 带连字符时会 404——现网 REST 端点已修正。
      *
      * @param imageId 引擎 {@code image_id}；禁止为空
      * @return 图片字节；恒非 {@code null}
@@ -726,13 +727,13 @@ public class RagflowClient {
             throw new BusinessException(50000, "RAGFlow 拉取分片图片失败: imageId 为空");
         }
         String id = imageId.trim();
-        // RAGFlow get_image：image_id.split("-") 必须恰好两段
-        if (id.indexOf('-') < 0 || id.indexOf('-') != id.lastIndexOf('-')) {
+        int firstHyphen = id.indexOf('-');
+        if (firstHyphen <= 0 || firstHyphen >= id.length() - 1) {
             throw new BusinessException(50000, "RAGFlow 拉取分片图片失败: imageId 格式非法");
         }
         try {
             byte[] body = client.get()
-                    .uri("/v1/document/image/{imageId}", id)
+                    .uri("/api/v1/documents/images/{imageId}", id)
                     .header("Authorization", bearer())
                     .retrieve()
                     .body(byte[].class);

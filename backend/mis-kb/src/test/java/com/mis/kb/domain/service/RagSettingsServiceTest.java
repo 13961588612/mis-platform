@@ -227,7 +227,7 @@ class RagSettingsServiceTest {
         }
 
         @Test
-        @DisplayName("chunkTokenNum 边界 [256, 4096] 两端恰好合法")
+        @DisplayName("chunkTokenNum 边界 [256, 2048] 两端恰好合法")
         void acceptsBoundaryTokenNum() {
             RagSettingsService service = serviceWithRerankModel();
 
@@ -236,8 +236,8 @@ class RagSettingsServiceTest {
             assertEquals(256, savedMin.chunkTokenNum().intValue());
 
             RagSettings savedMax = service.save(USER_ID, LIBRARY_ID,
-                    new RagSettings(null, null, null, null, null, null, 4096, null, null, null, null));
-            assertEquals(4096, savedMax.chunkTokenNum().intValue());
+                    new RagSettings(null, null, null, null, null, null, 2048, null, null, null, null));
+            assertEquals(2048, savedMax.chunkTokenNum().intValue());
         }
 
         @ParameterizedTest(name = "overlapPercent={0} → KB_RAG_SETTINGS_INVALID")

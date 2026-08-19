@@ -329,11 +329,12 @@ public record RagSettings(
     /**
      * 默认分块 token 数。
      *
-     * <p>2026-08-11 盘点后由 128 调整为 4096：默认 128（约 60~85 中文字/片）对中文业务知识库
-     * 过小，切片过碎导致上下文割裂；集成库「百货收银」已手动调至系统上限 4096，故默认值对齐现状。
-     * 仅影响未显式设置 chunkTokenNum 的库（withDefaults() 仅在 null 时兜底），存量显式值不受影响。
+     * <p>RAGFlow {@code parser_config.chunk_token_num} 实测硬上限 2048（4096 → 拒整单 PUT，
+     * 连带阻断 pageIndex/auto 等 parser 键同步）。默认对齐引擎上限。
      */
-    public static final int DEFAULT_CHUNK_TOKEN_NUM = 4096;
+    public static final int DEFAULT_CHUNK_TOKEN_NUM = 2048;
+    /** 分块 token 数引擎硬上限（与 {@link DocumentChunkConfig#MAX_TOKEN_NUM} 同源）。 */
+    public static final int MAX_CHUNK_TOKEN_NUM = DocumentChunkConfig.MAX_TOKEN_NUM;
     /** 默认向量相似度权重（WA-01；hybrid 下语义 30% / 关键字 70%）。 */
     public static final double DEFAULT_VECTOR_SIMILARITY_WEIGHT = 0.3D;
 
@@ -500,7 +501,7 @@ public record RagSettings(
                         ? retrievalMethod : DEFAULT_RETRIEVAL_METHOD,
                 chunkMethod != null && !chunkMethod.isBlank()
                         ? chunkMethod : DEFAULT_CHUNK_METHOD,
-                chunkTokenNum != null ? chunkTokenNum : DEFAULT_CHUNK_TOKEN_NUM,
+                normalizeChunkTokenNum(chunkTokenNum),
                 separator,
                 EmptyResultStrategy.normalize(emptyResultStrategy),
                 vectorSimilarityWeight != null
@@ -542,6 +543,27 @@ public record RagSettings(
      * @return 覆写后的新实例（本记录不可变，原实例不受影响）
      */
     public RagSettings withGraphOverride(boolean useKnowledgeGraph) {
+        return new RagSettings(
+                topK, scoreThreshold, rerank, embeddingModel, retrievalMethod,
+                chunkMethod, chunkTokenNum, separator, emptyResultStrategy,
+                vectorSimilarityWeight, rerankModelId,
+                ocrEnabled, ocrLanguage, chunkOverlapTokenNum,
+                useKnowledgeGraph, kgBuildStatus, kgBuildMessage,
+                useRaptor, raptorMaxTokenNum, raptorThreshold, raptorMaxCluster,
+                raptorPrompt, raptorBuildStatus, raptorBuildMessage,
+                pageIndex, imageTableContextWindow,
+                overlapPercent,
+                autoKeywords,
+                autoQuestions);
+    }
+
+    /**
+     * 仅覆写分块 token 数，其余字段原样透传（存量 4096 → 2048 迁移等场景）。
+     *
+     * @param chunkTokenNum 新的分块 token 数
+     * @return 覆写后的新实例
+     */
+    public RagSettings withChunkTokenNum(Integer chunkTokenNum) {
         return new RagSettings(
                 topK, scoreThreshold, rerank, embeddingModel, retrievalMethod,
                 chunkMethod, chunkTokenNum, separator, emptyResultStrategy,
@@ -693,6 +715,28 @@ public record RagSettings(
             return lower;
         }
         return RAPTOR_STATUS_NONE;
+    }
+
+    /**
+     * 归一化分块 token 数（静态工具，供 withDefaults / 引擎下发共用）。
+     *
+     * <p>null → {@link #DEFAULT_CHUNK_TOKEN_NUM}；越界（含历史脏值 4096）钳制到
+     * {@code [256, 2048]}，避免 RAGFlow 拒整单 PUT 导致 parser 四键无法同步。
+     *
+     * @param n 原始值，可为 {@code null}
+     * @return 合法区间内的 token 数
+     */
+    public static Integer normalizeChunkTokenNum(Integer n) {
+        if (n == null) {
+            return DEFAULT_CHUNK_TOKEN_NUM;
+        }
+        if (n < DocumentChunkConfig.MIN_TOKEN_NUM) {
+            return DocumentChunkConfig.MIN_TOKEN_NUM;
+        }
+        if (n > MAX_CHUNK_TOKEN_NUM) {
+            return MAX_CHUNK_TOKEN_NUM;
+        }
+        return n;
     }
 
     /**
