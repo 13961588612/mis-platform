@@ -956,14 +956,14 @@ export interface KbEngineCapabilities {
   /**
    * 当前引擎是否接受 dataset PUT 的 `toc_extraction`（页码索引/TOC）。
    *
-   * <p>T0 实测本实例不支持（默认 false）。为 false 时前端置灰页码索引开关并提示
-   * 「参数已保留待引擎升级生效」；保存仍落库。误开硬下发会拒整单并阻断 auto 键同步。
+   * <p>由 mis-kb 配置闸门 {@code parser-toc-supported} 决定（integration 默认 true）。
+   * 非 true 时前端置灰页码索引开关并提示「参数已保留待引擎升级生效」。
    */
   parserTocSupported: boolean | null;
   /**
    * 当前引擎是否接受 dataset PUT 的 `image_table_context_window`。
    *
-   * <p>口径同 `parserTocSupported`（默认 false）。
+   * <p>口径同 `parserTocSupported`（{@code parser-image-table-context-supported}，默认 true）。
    */
   parserImageTableContextSupported: boolean | null;
 }

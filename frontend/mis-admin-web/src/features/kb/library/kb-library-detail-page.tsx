@@ -454,9 +454,11 @@ export function KbLibraryDetailPage() {
     void load(libraryId);
   }, [libraryId, load]);
 
+  // 每次进入库详情都拉最新能力（与概览/引擎页一致）。若只在 capabilities 为空时拉取，
+  // 后端升级闸门后 Zustand 仍会保留旧的 false/缺字段快照，导致 pageIndex 等长期置灰。
   useEffect(() => {
-    if (!capabilities) void refreshEngine();
-  }, [capabilities, refreshEngine]);
+    void refreshEngine();
+  }, [refreshEngine]);
 
   // kb_settings_model_chunk：模型池下拉数据，打开页即拉一次（60s TTL 内后端不重打引擎）
   useEffect(() => {
