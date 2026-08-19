@@ -3,6 +3,7 @@ package com.mis.kb.domain.service;
 import com.mis.kb.api.dto.KbReparseAllResult;
 import com.mis.kb.domain.entity.KbDocument;
 import com.mis.kb.domain.entity.KbLibrary;
+import com.mis.kb.domain.model.DocumentChunkConfigResolver;
 import com.mis.kb.domain.model.EngineDocumentRef;
 import com.mis.kb.domain.model.EngineLibraryRef;
 import com.mis.kb.domain.model.KbResultCode;
@@ -63,7 +64,8 @@ class KbDocumentServiceReparseAllTest {
         libraryService = mock(KbLibraryService.class);
         visibilityService = mock(KbVisibilityService.class);
         service = new KbDocumentService(
-                documentRepository, libraryRepository, enginePort, libraryService, visibilityService);
+                documentRepository, libraryRepository, enginePort, libraryService, visibilityService,
+                new DocumentChunkConfigResolver());
         when(libraryRepository.findById(LIBRARY_ID))
                 .thenReturn(Optional.of(library()));
         // 知识库域一期：写操作双闸门（权限码 + 管辖），默认放行管辖，专项用例再拒

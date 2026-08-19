@@ -566,7 +566,7 @@ public class KbWebClient extends AbstractDownstreamClient {
      * 拉取分片版面截图（直吐 JPEG 字节；三层透传）。
      */
     public byte[] getChunkImage(Long libraryId, Long id, String imageId) {
-        return block(client().get()
+        return blockBytes(client().get()
                 .uri("/internal/v1/kb/libraries/{libraryId}/documents/{id}/chunk-images/{imageId}",
                         libraryId, id, imageId)
                 .headers(loginContextHeaders())

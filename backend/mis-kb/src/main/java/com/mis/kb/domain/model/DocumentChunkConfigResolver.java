@@ -15,6 +15,10 @@ import org.springframework.stereotype.Component;
  *   <li>文件级字段非空才覆盖对应字段（{@code chunkMethod} 空白视为未指定）；</li>
  *   <li>来源标记：文件级任一字段非空 → {@code FILE_OVERRIDE}，否则 {@code LIBRARY}。</li>
  * </ol>
+ *
+ * <p><b>T4 扩展：</b>四个新字段（pageIndex / imageTableContextWindow / autoKeywords /
+ * autoQuestions）参与同一套 merge（file ?? lib ?? default），来源判定沿用
+ * {@link DocumentChunkConfig#hasAnyOverride()}（已纳入新字段）。
  */
 @Component
 public class DocumentChunkConfigResolver {
@@ -34,9 +38,18 @@ public class DocumentChunkConfigResolver {
                 ? file.chunkTokenNum() : def.chunkTokenNum();
         String sep = (file != null && file.separator() != null)
                 ? file.separator() : def.separator();
+        Boolean pageIndex = (file != null && file.pageIndex() != null)
+                ? file.pageIndex() : def.pageIndex();
+        Integer imageTableContextWindow = (file != null && file.imageTableContextWindow() != null)
+                ? file.imageTableContextWindow() : def.imageTableContextWindow();
+        Integer autoKeywords = (file != null && file.autoKeywords() != null)
+                ? file.autoKeywords() : def.autoKeywords();
+        Integer autoQuestions = (file != null && file.autoQuestions() != null)
+                ? file.autoQuestions() : def.autoQuestions();
         String source = (file != null && file.hasAnyOverride())
                 ? EffectiveChunkConfig.SOURCE_FILE_OVERRIDE
                 : EffectiveChunkConfig.SOURCE_LIBRARY;
-        return new EffectiveChunkConfig(method, token, sep, source);
+        return new EffectiveChunkConfig(
+                method, token, sep, pageIndex, imageTableContextWindow, autoKeywords, autoQuestions, source);
     }
 }

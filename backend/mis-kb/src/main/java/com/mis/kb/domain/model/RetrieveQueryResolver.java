@@ -278,7 +278,7 @@ public class RetrieveQueryResolver {
         }
 
         // S4.5（Wave B GraphRAG PoC，T03）：图谱增强三道降级（能力/单库/kgBuildStatus）。
-        // 开关只在「库设置 + 命中测试 override」两级出现——applyOverride 已用 24 参
+        // 开关只在「库设置 + 命中测试 override」两级出现——applyOverride 已用 26 参
         // canonical 透传图谱/RAPTOR 字段，所以这里从合并后的 base 读取 useKnowledgeGraph 即可
         // （命中测试的 enableGraph override 在 KbHitTestService 完成，不在此 S2 覆盖）。
         // 降级只允许发生在这里（Resolver 铁律 §10-9），服务层禁止内联判断。
@@ -311,7 +311,7 @@ public class RetrieveQueryResolver {
 
         // S4.6（Wave C RAPTOR，T03）：RAPTOR 摘要两道降级（能力/建树状态）。
         // 与图谱同款口径：开关只在「库设置 + 命中测试 override」两级出现——applyOverride
-        // 已用 24 参 canonical 透传 RAPTOR 字段，这里从合并后的 base 读取 useRaptor 即可
+        // 已用 26 参 canonical 透传 RAPTOR 字段，这里从合并后的 base 读取 useRaptor 即可
         // （命中测试的 enableRaptor override 在 KbHitTestService 完成，不在此 S2 覆盖）。
         // 降级只允许发生在这里（Resolver 铁律 §10-9），服务层禁止内联判断。
         // ⚠ 检索期零回归（T00 P3a 实测）：引擎建树后经典 /retrieval 自动融合 RAPTOR 摘要，
@@ -473,7 +473,7 @@ public class RetrieveQueryResolver {
      * @return 覆盖后的新设置
      */
     private RagSettings applyOverride(RagSettings base, ParamOverride ov) {
-        // 24 参 canonical 透传图谱三字段与 RAPTOR 七字段（useKnowledgeGraph/kgBuildStatus/
+        // 26 参 canonical 透传图谱三字段与 RAPTOR 七字段（useKnowledgeGraph/kgBuildStatus/
         // kgBuildMessage/useRaptor/raptorMaxTokenNum/raptorThreshold/raptorMaxCluster/
         // raptorPrompt/raptorBuildStatus/raptorBuildMessage）——绝不能走 14 参旧构造，
         // 否则图谱/RAPTOR 字段被静默置 null（record 末位追加铁律 §10-8）。
@@ -505,7 +505,12 @@ public class RetrieveQueryResolver {
                 base.raptorMaxCluster(),
                 base.raptorPrompt(),
                 base.raptorBuildStatus(),
-                base.raptorBuildMessage());
+                base.raptorBuildMessage(),
+                base.pageIndex(),
+                base.imageTableContextWindow(),
+                base.overlapPercent(),
+                base.autoKeywords(),
+                base.autoQuestions());
     }
 
     /**

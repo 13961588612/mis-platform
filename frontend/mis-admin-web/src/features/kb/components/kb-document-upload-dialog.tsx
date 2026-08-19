@@ -142,6 +142,12 @@ export function KbDocumentUploadDialog({
       chunkTokenNum: tokenNum,
       // separator 允许是纯空白（如换行符），只在完全为空串时归 null
       separator: separator === '' ? null : separator,
+      // T4 扩展四字段：上传弹窗不提供独立控件，一律 null = 继承库级
+      // （引擎侧按 dataset 快照继承；文件级 PUT 白名单不含 toc/context/overlap 键）
+      pageIndex: null,
+      imageTableContextWindow: null,
+      autoKeywords: null,
+      autoQuestions: null,
     };
     setUploading(true);
     try {

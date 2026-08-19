@@ -109,6 +109,27 @@ interface RagForm {
   raptorMaxCluster: string;
   /** RAPTOR 递归摘要提示词（≤2000；留空 = 引擎默认官方 prompt）。 */
   raptorPrompt: string;
+  /**
+   * 页码索引 / TOC 提取开关（解析器增量，末位追加）。
+   *
+   * <p>对应 RAGFlow `parser_config.toc_extraction`，默认开（true）。
+   * 与 OCR/overlap 不同：本开关<b>参与引擎下发</b>（每次 PUT 恒带），非只落库。
+   */
+  pageIndex: boolean;
+  /** 图像与表格上下文窗口 token 数 [1,4096]（空串 = 继承默认 256）。 */
+  imageTableContextWindow: string;
+  /**
+   * 重叠百分比 [0,100]（T1 切片参数对齐，末位追加）。
+   *
+   * <p>空串 = 关闭（0）。当前引擎不支持（`parserOverlapSupported=false`）时置灰 +
+   * 提示「当前引擎版本暂不支持，参数已保留待引擎升级生效」，但值仍可回显、
+   * 保存照常成功（后端只落库不下发）。
+   */
+  overlapPercent: string;
+  /** 自动关键字提取数量 [0,32]（T1；0 = 关闭，空串 = 默认 0）。 */
+  autoKeywords: string;
+  /** 自动问题提取数量 [0,10]（T1；0 = 关闭，空串 = 默认 0）。 */
+  autoQuestions: string;
 }
 
 const EMPTY_RAG_FORM: RagForm = {
@@ -132,10 +153,27 @@ const EMPTY_RAG_FORM: RagForm = {
   raptorThreshold: '',
   raptorMaxCluster: '',
   raptorPrompt: '',
+  pageIndex: true,
+  imageTableContextWindow: '',
+  overlapPercent: '',
+  autoKeywords: '',
+  autoQuestions: '',
 };
 
-/** 切片相关字段：这几个改了才需要弹重解析引导（WA-10）。 */
-const CHUNK_FIELDS = ['chunkMethod', 'chunkTokenNum', 'separator'] as const;
+/** 切片相关字段：这几个改了才需要弹重解析引导（WA-10）。
+ *  解析器增量两键（pageIndex/imageTableContextWindow）同为解析期配置，加入后
+ *  任一变化即触发「重解析引导」，且仅在<b>相对基线确有改动</b>时弹（post-save baseline
+ *  重建），不会「每次保存都弹」。 */
+const CHUNK_FIELDS = [
+  'chunkMethod',
+  'chunkTokenNum',
+  'separator',
+  'pageIndex',
+  'imageTableContextWindow',
+  'overlapPercent',
+  'autoKeywords',
+  'autoQuestions',
+] as const;
 
 /** 后端设置 → 表单。 */
 function toForm(s: KbRagSettings | null | undefined): RagForm {
@@ -161,6 +199,16 @@ function toForm(s: KbRagSettings | null | undefined): RagForm {
     raptorThreshold: s.raptorThreshold == null ? '' : String(s.raptorThreshold),
     raptorMaxCluster: s.raptorMaxCluster == null ? '' : String(s.raptorMaxCluster),
     raptorPrompt: s.raptorPrompt ?? '',
+    // 解析器增量（T01）：pageIndex null/true 都按默认开（后端 withDefaults 兜底 true）；
+    // imageTableContextWindow null → ''（表单留空 = 后端默认 256）
+    pageIndex: s.pageIndex !== false,
+    imageTableContextWindow:
+      s.imageTableContextWindow == null ? '' : String(s.imageTableContextWindow),
+    // 切片参数对齐（T1）：null → ''（表单留空 = 后端默认 0/0/0）；
+    // overlapPercent 支持小数但不建议（0~100，后端只落库不下发）
+    overlapPercent: s.overlapPercent == null ? '' : String(s.overlapPercent),
+    autoKeywords: s.autoKeywords == null ? '' : String(s.autoKeywords),
+    autoQuestions: s.autoQuestions == null ? '' : String(s.autoQuestions),
   };
 }
 
@@ -220,6 +268,28 @@ function toSettings(f: RagForm): KbRagSettings {
         ? Math.trunc(Number(f.raptorMaxCluster))
         : null,
     raptorPrompt: f.raptorPrompt.trim() || null,
+    // 解析器增量（T01）：pageIndex 恒提交布尔（toc_extraction 默认开）；
+    // imageTableContextWindow 空串 → null（引擎默认 256），有值 → 整数（[1,4096] 由
+    // 前端校验 + 后端 validate() 双兜底）
+    pageIndex: f.pageIndex,
+    imageTableContextWindow:
+      f.imageTableContextWindow.trim() !== '' && Number.isFinite(Number(f.imageTableContextWindow))
+        ? Math.trunc(Number(f.imageTableContextWindow))
+        : null,
+    // 切片参数对齐（T1）：overlapPercent 空串 → null（默认 0，只落库不下发）；
+    // autoKeywords/autoQuestions 空串 → null（默认 0，随每次 PUT 恒下发）
+    overlapPercent:
+      f.overlapPercent.trim() !== '' && Number.isFinite(Number(f.overlapPercent))
+        ? Number(f.overlapPercent)
+        : null,
+    autoKeywords:
+      f.autoKeywords.trim() !== '' && Number.isFinite(Number(f.autoKeywords))
+        ? Math.trunc(Number(f.autoKeywords))
+        : null,
+    autoQuestions:
+      f.autoQuestions.trim() !== '' && Number.isFinite(Number(f.autoQuestions))
+        ? Math.trunc(Number(f.autoQuestions))
+        : null,
   };
 }
 
@@ -406,6 +476,51 @@ export function KbLibraryDetailPage() {
       const overlap = Number(overlapRaw);
       if (!Number.isFinite(overlap) || overlap < 0 || !Number.isInteger(overlap)) {
         toast.warning('分块重叠需为非负整数（留空 = 引擎默认/0）');
+        return;
+      }
+    }
+    // 解析器增量（T01）：图像/表格上下文窗口为正整数且 ≤4096（空值 = 继承默认 256）
+    const imgTableWindowRaw = form.imageTableContextWindow.trim();
+    if (imgTableWindowRaw !== '') {
+      const imgTableWindow = Number(imgTableWindowRaw);
+      if (!Number.isFinite(imgTableWindow) || imgTableWindow < 1 || imgTableWindow > 4096) {
+        toast.warning('图像与表格上下文窗口需在 1 ~ 4096 之间（留空则继承默认 256）');
+        return;
+      }
+    }
+    // 切片参数对齐（T1）：overlapPercent ∈ [0,100]；autoKeywords ∈ [0,32]；
+    // autoQuestions ∈ [0,10]——越界直接拦截（0 合法 = 关闭；留空 = 默认 0）。
+    const overlapPercentRaw = form.overlapPercent.trim();
+    if (overlapPercentRaw !== '') {
+      const overlapPercent = Number(overlapPercentRaw);
+      if (!Number.isFinite(overlapPercent) || overlapPercent < 0 || overlapPercent > 100) {
+        toast.warning('重叠百分比需在 0 ~ 100 之间（留空则默认 0 = 关闭）');
+        return;
+      }
+    }
+    const autoKeywordsRaw = form.autoKeywords.trim();
+    if (autoKeywordsRaw !== '') {
+      const autoKeywords = Number(autoKeywordsRaw);
+      if (
+        !Number.isFinite(autoKeywords) ||
+        autoKeywords < 0 ||
+        autoKeywords > 32 ||
+        !Number.isInteger(autoKeywords)
+      ) {
+        toast.warning('自动关键字数量需为 0 ~ 32 的整数（0 = 关闭）');
+        return;
+      }
+    }
+    const autoQuestionsRaw = form.autoQuestions.trim();
+    if (autoQuestionsRaw !== '') {
+      const autoQuestions = Number(autoQuestionsRaw);
+      if (
+        !Number.isFinite(autoQuestions) ||
+        autoQuestions < 0 ||
+        autoQuestions > 10 ||
+        !Number.isInteger(autoQuestions)
+      ) {
+        toast.warning('自动问题数量需为 0 ~ 10 的整数（0 = 关闭）');
         return;
       }
     }
@@ -983,6 +1098,105 @@ export function KbLibraryDetailPage() {
                 </div>
               </div>
 
+              {/* 解析器增量（T01）：页码索引/TOC 提取开关 + 图像/表格上下文窗口。
+                  官方 schema 键（toc_extraction / image_table_context_window），随每次
+                  保存 PUT 恒下发——不是「只落库不下发」的 OCR/overlap 类字段。
+                  开关用现有 useKnowledgeGraph 同款 checkbox 风格，数字输入沿用
+                  chunkTokenNum 写法（含 range 提示）。 */}
+              <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <div>
+                  <label className="flex items-center gap-2 text-sm">
+                    <input
+                      type="checkbox"
+                      className="h-4 w-4"
+                      checked={form.pageIndex}
+                      onChange={(e) => setForm((f) => ({ ...f, pageIndex: e.target.checked }))}
+                    />
+                    页码索引（TOC 提取）
+                  </label>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    提取目录/页码索引辅助召回，默认开启（对应 RAGFlow{' '}
+                    <span className="font-mono">toc_extraction</span>）
+                  </p>
+                </div>
+                <div>
+                  <label className={fieldLabel}>图像与表格上下文窗口（token）</label>
+                  <Input
+                    type="number"
+                    min={1}
+                    max={4096}
+                    step={1}
+                    value={form.imageTableContextWindow}
+                    onChange={(e) =>
+                      setForm((f) => ({ ...f, imageTableContextWindow: e.target.value }))
+                    }
+                    placeholder="默认 256（留空继承）"
+                  />
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    范围 1 ~ 4096，图片/表格上下各取 N token 并入切片，留空表示继承默认 256
+                  </p>
+                </div>
+              </div>
+
+              {/* 切片参数对齐（T1）：overlapPercent（能力门控只落库）+ autoKeywords/autoQuestions
+                  （官方 naive schema 键，随每次 PUT 恒下发）。overlapPercent 当前引擎不支持
+                  （parserOverlapSupported=false）→ 置灰 + 「参数已保留待引擎升级生效」提示，
+                  值仍可回显、保存照常成功；auto 两键恒可用。pageIndex/imageTableContextWindow
+                  按主理人拍板保持可用不置灰（上一块已实现）。 */}
+              <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
+                <div>
+                  <label className={fieldLabel}>重叠百分比（%）</label>
+                  <Input
+                    type="number"
+                    min={0}
+                    max={100}
+                    step={1}
+                    value={form.overlapPercent}
+                    disabled={!overlapSupported}
+                    onChange={(e) => setForm((f) => ({ ...f, overlapPercent: e.target.value }))}
+                    placeholder="默认 0（关闭）"
+                  />
+                  <p className="mt-1 text-xs text-muted-foreground">范围 0 ~ 100</p>
+                  {!overlapSupported ? (
+                    <p className="mt-1 text-xs text-amber-600">
+                      当前引擎版本暂不支持，参数已保留待引擎升级生效（保存仅落库，暂不生效）。
+                    </p>
+                  ) : null}
+                </div>
+                <div>
+                  <label className={fieldLabel}>自动关键字数量</label>
+                  <Input
+                    type="number"
+                    min={0}
+                    max={32}
+                    step={1}
+                    value={form.autoKeywords}
+                    onChange={(e) => setForm((f) => ({ ...f, autoKeywords: e.target.value }))}
+                    placeholder="0 = 关闭"
+                  />
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    范围 0 ~ 32（0 = 关闭，对应 RAGFlow{' '}
+                    <span className="font-mono">auto_keywords</span>）
+                  </p>
+                </div>
+                <div>
+                  <label className={fieldLabel}>自动问题数量</label>
+                  <Input
+                    type="number"
+                    min={0}
+                    max={10}
+                    step={1}
+                    value={form.autoQuestions}
+                    onChange={(e) => setForm((f) => ({ ...f, autoQuestions: e.target.value }))}
+                    placeholder="0 = 关闭"
+                  />
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    范围 0 ~ 10（0 = 关闭，对应 RAGFlow{' '}
+                    <span className="font-mono">auto_questions</span>）
+                  </p>
+                </div>
+              </div>
+
               {/* KE-06/KE-07：OCR 开关 / 语言 / 分块重叠（企业级增强一期）。
                   当前引擎实测不支持（能力 false）→ 控件置灰 + 「暂不生效」提示；
                   值仍可回显、保存照常成功（后端只落库不下发，引擎升级后翻转能力即放行）。 */}
@@ -1250,8 +1464,10 @@ export function KbLibraryDetailPage() {
               {/* WA-12：此处原文写的是 Markdown 星号，在 JSX 里不会被渲染成加粗，
                   只会原样显示两个星号。改用 <strong> 才是对的。 */}
               <p className="mt-2 text-xs text-muted-foreground">
-                切片参数改动只影响<strong>此后新上传</strong>的文档；已入库文档需先<strong>删除、再重新上传</strong>
-                才会按新参数切片（「重新解析」沿用文档上传时的参数，不会应用新分隔符）。
+                切片参数改动只影响<strong>此后新上传</strong>的文档；已入库文档需先
+                <strong>删除、再重新上传</strong>才会按新参数切片（「重新解析」沿用文档上传时
+                的参数，不会应用新分隔符；页码索引 / 表格图像上下文窗口 / 重叠百分比 /
+                自动关键字 / 自动问题同理）。
               </p>
               {chunkDirty(form, baseline) ? (
                 <p className="mt-1 text-xs text-amber-600">
@@ -1286,9 +1502,10 @@ export function KbLibraryDetailPage() {
                 <AlertTitle>切片参数已更新，存量文档需重新上传</AlertTitle>
                 <AlertDescription>
                   <p>
-                    新的切片方法 / 长度 / 分隔符只对<strong>此后新上传</strong>的内容生效。
+                    新的切片方法 / 长度 / 分隔符 / 页码索引 / 图像表格上下文窗口 / 重叠百分比 /
+                    自动关键字 / 自动问题只对<strong>此后新上传</strong>的内容生效。
                     已入库文档请先<strong>删除、再重新上传</strong>，才会按新参数重新切片
-                    （「重新解析」不会应用新分隔符）。
+                    （「重新解析」不会应用新参数）。
                   </p>
                   <Button
                     size="sm"

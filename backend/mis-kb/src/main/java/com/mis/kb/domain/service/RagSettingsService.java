@@ -253,6 +253,31 @@ public class RagSettingsService {
         if (settings.chunkOverlapTokenNum() != null && settings.chunkOverlapTokenNum() < 0) {
             throw new KbBusinessException(KbResultCode.KB_RAG_SETTINGS_INVALID);
         }
+        // 图像/表格上下文窗口（解析器增量，RAGFlow parser_config.image_table_context_window）：
+        // 非 null 时必须是 [1, 4096] 正整数（0/负数/越界直接拒绝，不做静默截断——
+        // 与 chunkTokenNum 同口径；null = 未设置，由 withDefaults 兜底 256）。
+        // pageIndex 是布尔开关，无区间可言，无需额外校验。
+        if (settings.imageTableContextWindow() != null
+                && (settings.imageTableContextWindow() < RagSettings.MIN_IMAGE_TABLE_CONTEXT_WINDOW
+                    || settings.imageTableContextWindow() > RagSettings.MAX_IMAGE_TABLE_CONTEXT_WINDOW)) {
+            throw new KbBusinessException(KbResultCode.KB_RAG_SETTINGS_INVALID);
+        }
+        // 切片参数对齐（T1）：overlapPercent ∈ [0,100]、autoKeywords ≤ 32、autoQuestions ≤ 10。
+        // 越界直接拒绝（不做静默截断）——0 合法且语义为「关闭」；null = 未设置，由
+        // withDefaults() 兜底默认（0 / 0 / 0）。
+        if (settings.overlapPercent() != null
+                && (settings.overlapPercent() < RagSettings.MIN_OVERLAP_PERCENT
+                    || settings.overlapPercent() > RagSettings.MAX_OVERLAP_PERCENT)) {
+            throw new KbBusinessException(KbResultCode.KB_RAG_SETTINGS_INVALID);
+        }
+        if (settings.autoKeywords() != null
+                && settings.autoKeywords() > RagSettings.MAX_AUTO_KEYWORDS) {
+            throw new KbBusinessException(KbResultCode.KB_RAG_SETTINGS_INVALID);
+        }
+        if (settings.autoQuestions() != null
+                && settings.autoQuestions() > RagSettings.MAX_AUTO_QUESTIONS) {
+            throw new KbBusinessException(KbResultCode.KB_RAG_SETTINGS_INVALID);
+        }
         // 语言码值只认产品三档（zh/en/zh_en）：null = 缺省（前端不选时不发）；
         // 非 null 一律 trim+小写后比对，空白串/超集码值同样拒绝（不静默改写）。
         if (settings.ocrLanguage() != null) {
@@ -336,7 +361,7 @@ public class RagSettingsService {
         }
         log.warn("未配置全局重排模型（mis.kb.engine.rerank-model-id 为空），"
                 + "已强制关闭该库的 rerank 开关 libraryId={}", libraryId);
-        // 24 参 canonical 透传图谱三字段与 RAPTOR 七字段（useKnowledgeGraph/kgBuildStatus/
+        // 29 参 canonical 透传图谱三字段、RAPTOR 七字段与切片参数对齐三字段（useKnowledgeGraph/kgBuildStatus/
         // kgBuildMessage/useRaptor/raptorMaxTokenNum/raptorThreshold/raptorMaxCluster/
         // raptorPrompt/raptorBuildStatus/raptorBuildMessage）——绝不能走 14 参旧构造，
         // 否则图谱/RAPTOR 字段被静默置 null（record 末位追加铁律 §10-8）
@@ -364,7 +389,12 @@ public class RagSettingsService {
                 settings.raptorMaxCluster(),
                 settings.raptorPrompt(),
                 settings.raptorBuildStatus(),
-                settings.raptorBuildMessage());
+                settings.raptorBuildMessage(),
+                settings.pageIndex(),
+                settings.imageTableContextWindow(),
+                settings.overlapPercent(),
+                settings.autoKeywords(),
+                settings.autoQuestions());
     }
 
     /**
@@ -389,7 +419,7 @@ public class RagSettingsService {
         }
         log.warn("当前引擎不支持知识图谱（capabilities.graphrag=false），"
                 + "已强制关闭该库的 useKnowledgeGraph libraryId={}", libraryId);
-        // 24 参 canonical 保留其余字段（含 kgBuildStatus/kgBuildMessage 与 RAPTOR 七字段）
+        // 29 参 canonical 保留其余字段（含 kgBuildStatus/kgBuildMessage 与 RAPTOR 七字段、切片参数对齐三字段）
         return new RagSettings(
                 settings.topK(),
                 settings.scoreThreshold(),
@@ -414,7 +444,12 @@ public class RagSettingsService {
                 settings.raptorMaxCluster(),
                 settings.raptorPrompt(),
                 settings.raptorBuildStatus(),
-                settings.raptorBuildMessage());
+                settings.raptorBuildMessage(),
+                settings.pageIndex(),
+                settings.imageTableContextWindow(),
+                settings.overlapPercent(),
+                settings.autoKeywords(),
+                settings.autoQuestions());
     }
 
     /**
@@ -440,7 +475,7 @@ public class RagSettingsService {
         }
         log.warn("当前引擎不支持 RAPTOR（capabilities.raptor=false），"
                 + "已强制关闭该库的 useRaptor libraryId={}", libraryId);
-        // 24 参 canonical 保留其余字段（含图谱三字段与 RAPTOR 其余六字段）
+        // 29 参 canonical 保留其余字段（含图谱三字段与 RAPTOR 其余六字段、切片参数对齐三字段）
         return new RagSettings(
                 settings.topK(),
                 settings.scoreThreshold(),
@@ -465,7 +500,12 @@ public class RagSettingsService {
                 settings.raptorMaxCluster(),
                 settings.raptorPrompt(),
                 settings.raptorBuildStatus(),
-                settings.raptorBuildMessage());
+                settings.raptorBuildMessage(),
+                settings.pageIndex(),
+                settings.imageTableContextWindow(),
+                settings.overlapPercent(),
+                settings.autoKeywords(),
+                settings.autoQuestions());
     }
 
     /**
@@ -479,7 +519,7 @@ public class RagSettingsService {
      *
      * @param settings     本次待保存设置（图谱/RAPTOR 开关可能已改）
      * @param serverState  DB 里当前服务端事实（旧设置，已 withDefaults）
-     * @return 图谱/RAPTOR 状态字段已收敛的设置（24 参 canonical 保留其余字段）
+     * @return 图谱/RAPTOR 状态字段已收敛的设置（29 参 canonical 保留其余字段）
      */
     private RagSettings withServerGraphState(RagSettings settings, RagSettings serverState) {
         return new RagSettings(
@@ -508,7 +548,12 @@ public class RagSettingsService {
                 settings.raptorPrompt(),
                 serverState.raptorBuildStatus() == null
                         ? RagSettings.RAPTOR_STATUS_NONE : serverState.raptorBuildStatus(),
-                serverState.raptorBuildMessage());
+                serverState.raptorBuildMessage(),
+                settings.pageIndex(),
+                settings.imageTableContextWindow(),
+                settings.overlapPercent(),
+                settings.autoKeywords(),
+                settings.autoQuestions());
     }
 
     /**

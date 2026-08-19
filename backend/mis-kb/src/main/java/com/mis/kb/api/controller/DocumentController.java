@@ -85,9 +85,15 @@ public class DocumentController {
             @RequestParam("file") MultipartFile file,
             @RequestParam(required = false) String chunkMethod,
             @RequestParam(required = false) Integer chunkTokenNum,
-            @RequestParam(required = false) String separator) {
+            @RequestParam(required = false) String separator,
+            @RequestParam(required = false) Boolean pageIndex,
+            @RequestParam(required = false) Integer imageTableContextWindow,
+            @RequestParam(required = false) Integer autoKeywords,
+            @RequestParam(required = false) Integer autoQuestions) {
         return Result.ok(documentService.upload(
-                libraryId, file, new DocumentChunkConfig(chunkMethod, chunkTokenNum, separator),
+                libraryId, file,
+                new DocumentChunkConfig(chunkMethod, chunkTokenNum, separator, pageIndex,
+                        imageTableContextWindow, autoKeywords, autoQuestions),
                 currentUserId()));
     }
 

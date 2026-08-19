@@ -14,8 +14,18 @@ package com.mis.adminbff.dto.kb;
  * @param chunkTokenNum       切片 token 数
  * @param separator           切片分隔符
  * @param source              来源：FILE_OVERRIDE / LIBRARY
+ * @param totalChunks         关键字过滤后的命中切片数
+ * @param totalCharacterCount 当前页切片清洗后正文合计字符数
+ * @param chunkMethod         切片方法
+ * @param chunkTokenNum       切片 token 数
+ * @param separator           切片分隔符
+ * @param source              来源：FILE_OVERRIDE / LIBRARY
  * @param chunkCount          文档全量切片数（可空）
  * @param tokenCount          文档级总 token 数（可空）
+ * @param pageIndex               生效页码索引/TOC 提取开关（T4；只展示，文件级不下发）
+ * @param imageTableContextWindow 生效图像/表格上下文窗口 token 数（T4；只展示，文件级不下发）
+ * @param autoKeywords            生效自动关键字数量（T4；0=关闭，0~32）
+ * @param autoQuestions           生效自动问题数量（T4；0=关闭，0~10）
  */
 public record KbDocumentChunkStatsVO(
         int totalChunks,
@@ -25,5 +35,9 @@ public record KbDocumentChunkStatsVO(
         String separator,
         String source,
         Integer chunkCount,
-        Integer tokenCount) {
+        Integer tokenCount,
+        Boolean pageIndex,
+        Integer imageTableContextWindow,
+        Integer autoKeywords,
+        Integer autoQuestions) {
 }

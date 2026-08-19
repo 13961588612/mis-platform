@@ -1,0 +1,73 @@
+sequenceDiagram
+    autonumber
+    participant F as 前端(RagForm)
+    participant S as RagSettingsService
+    participant P as RagflowAdapter(EnginePort)
+    participant C as RagflowClient
+    participant E as RAGFlow(10.254.16.6:9380)
+    participant R as kb_library
+
+    F->>S: save(user, libId, settings26/29参)
+    S->>S: validate() → autoKeywords>32? autoQuestions>10? overlapPercent∉[0,100]? → 拒 KB_RAG_SETTINGS_INVALID
+    S->>S: withDefaults() 兜底(auto*=0/overlap=0)
+    S->>S: enforceRerank/Graph/Raptor 收敛（29参透传）
+    S->>R: kb_library.rag_settings_json = writeSettings
+    S->>P: updateLibrarySettings(ref, validated)
+    P->>C: updateDatasetSettings(datasetId, validated)
+    alt props.parserTocSupported == true （引擎升级后）
+        C->>E: parser_config.toc_extraction = pageIndex
+    else 默认 false（实测不支持）
+        Note over C: 不下发 toc_extraction（只落库回显）
+    end
+    alt props.parserImageTableContextSupported == true
+        C->>E: parser_config.image_table_context_window = imageTableContextWindow
+    else 默认 false
+        Note over C: 不下发 image_table_context_window
+    end
+    Note over C: P1f 完整 parser_config 恒下发：chunk_token_num / delimiter / auto_keywords(或默认0) / auto_questions(或默认0) / raptor / graphrag
+    C->>E: PUT /api/v1/datasets/{id}  body含auto_keywords+auto_questions
+    alt E 返回 code 0
+        E-->>C: ok
+    else E 返回非 0（如未来实例缺 auto 键）
+        C-->>S: 抛 BusinessException → syncToEngine 吞错记 error（本地已保存，下次重试）
+    end
+    Note over F,R: R-P0-03：UI 置灰（parserOverlapSupported=false → overlap 灰）且保存照常成功
+
+    %% ===== 文件上传 → 快照继承 → 文件级覆盖 → 重解析 =====
+    participant D as KbDocumentService
+    participant X as kb_document
+
+    F->>D: upload(libId, file, DocumentChunkConfig[7字段可空])
+    D->>D: validateChunkConfig() → autoKeywords>32/autoQuestions>10/ctxwindow过界拒
+    D->>P: uploadDocument(ref, input)
+    P->>C: uploadDocument(datasetId, input)
+    C->>E: POST /datasets/{ds}/documents (multipart)
+    E-->>C: docId + doc.parser_config（引擎侧上传时快照 dataset 当前 parser_config，含 auto_keywords/auto_questions）
+    Note over C,E: 实测：上传后文档 parser_config 自动继承 dataset 值（含 auto 键）
+    alt 文件级 config 有明细非空
+        P->>C: updateDocumentConfig(ds, docId, config)
+        C->>E: PUT /datasets/{ds}/documents/{docId}
+        Note over C,E: T0-B白名单=chunk_token_num/delimiter/auto_keywords/auto_questions；toc/context/overlap不可放
+        alt 引擎 code 0
+            E-->>C: ok
+        else 失败
+            C-->>P: 抛异常（记 error，文档仍按快照解析）
+        end
+    else 全部 null（继承库级）
+        Note over C,E: 不额外 PUT；引擎按上传快照 = 库级值
+    end
+    C->>E: POST /datasets/{ds}/chunks {"document_ids":[docId]}  (触发解析)
+    D->>X: 保存 kb_document 行（新4列：null=继承库级）
+    Note over F,X: 库级后续变更不跟进存量文档（快照语义）；弹窗用 librarySettings 预填「可修改默认值」
+
+    alt 用户改文件级参数
+        F->>D: updateChunkConfig(docId, config)
+        D->>D: 校验+落库（新4列）
+        D->>C: updateDocumentConfig（白名单键）
+        D->>C: parseDocuments → 重解析
+    else 用户清除文件级
+        F->>D: updateChunkConfig(docId, 全null)
+        D->>X: 新4列置 null（继承库级）
+        D->>C: updateDocumentConfig（全空→不发）
+        D->>C: parseDocuments → 重解析
+    end

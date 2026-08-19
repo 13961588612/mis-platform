@@ -267,6 +267,51 @@ class RagflowUploadAndModelsHttpTest {
             assertEquals("naive", body.get("chunk_method").asText());
             assertFalse(body.has("parser_config"), "parser_config 无有效字段时连键都不该出现");
         }
+
+        @Test
+        @DisplayName("T1 契约：autoKeywords / autoQuestions 非空 → parser_config 白名单含 auto 两键")
+        void autoKeysInWhitelist() throws Exception {
+            RagflowClient client = newClient();
+
+            client.updateDocumentConfig("ds-1", "doc-1",
+                    new DocumentChunkConfig("naive", 512, "###", null, 300, 8, 5));
+
+            JsonNode body = mapper.readTree(requests.get(0).body());
+            JsonNode parserConfig = body.get("parser_config");
+            assertEquals(4, parserConfig.size(),
+                    () -> "parser_config 白名单恰为 chunk_token_num/delimiter/auto_keywords/auto_questions，实际："
+                            + parserConfig);
+            assertEquals(512, parserConfig.get("chunk_token_num").asInt());
+            assertEquals("###", parserConfig.get("delimiter").asText());
+            assertEquals(8, parserConfig.get("auto_keywords").asInt(),
+                    "文件级 autoKeywords=8 → auto_keywords:8 下发（T0-b B2 实测接受）");
+            assertEquals(5, parserConfig.get("auto_questions").asInt(),
+                    "文件级 autoQuestions=5 → auto_questions:5 下发");
+        }
+
+        @Test
+        @DisplayName("T1 契约：文件级 PUT 绝不发送 toc / context / overlap 键（code:102 拒整单，T0-b B3 实测）")
+        void fileLevelNeverSendsTocContextOverlap() throws Exception {
+            RagflowClient client = newClient();
+
+            // 即使 MIS 侧 file 字段带了 pageIndex / imageTableContextWindow，
+            // 客户端白名单也必须剔除 toc_extraction / image_table_context_window / overlap
+            client.updateDocumentConfig("ds-1", "doc-1",
+                    new DocumentChunkConfig("naive", 512, "###",
+                            Boolean.FALSE, 512, 0, 0));
+
+            JsonNode body = mapper.readTree(requests.get(0).body());
+            JsonNode parserConfig = body.get("parser_config");
+            assertFalse(parserConfig.has("toc_extraction"),
+                    "文件级 PUT 白名单不含 toc_extraction（code:102 拒整单）");
+            assertFalse(parserConfig.has("image_table_context_window"),
+                    "文件级 PUT 白名单不含 image_table_context_window（code:102 拒整单）");
+            assertFalse(parserConfig.has("overlap_percent"), "文件级 PUT 更不得出现 overlap 键");
+            assertFalse(parserConfig.has("overlap"), "引擎候选 overlap 键不得出现");
+            assertEquals(4, parserConfig.size(),
+                    () -> "剔除后白名单恒为 chunk_token_num/delimiter/auto_keywords/auto_questions，实际："
+                            + parserConfig);
+        }
     }
 
     @Nested

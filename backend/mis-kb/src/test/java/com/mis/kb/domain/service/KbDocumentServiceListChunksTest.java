@@ -7,6 +7,7 @@ import com.mis.kb.domain.entity.KbLibrary;
 import com.mis.kb.domain.model.AclAction;
 import com.mis.kb.domain.model.ChunkQuery;
 import com.mis.kb.domain.model.DocumentChunkPageView;
+import com.mis.kb.domain.model.DocumentChunkConfigResolver;
 import com.mis.kb.domain.model.DocumentChunkView;
 import com.mis.kb.domain.model.KbResultCode;
 import com.mis.kb.domain.model.ParseStatus;
@@ -60,7 +61,8 @@ class KbDocumentServiceListChunksTest {
         libraryService = mock(KbLibraryService.class);
         visibilityService = mock(KbVisibilityService.class);
         service = new KbDocumentService(
-                documentRepository, libraryRepository, enginePort, libraryService, visibilityService);
+                documentRepository, libraryRepository, enginePort, libraryService, visibilityService,
+                new DocumentChunkConfigResolver());
         when(libraryRepository.findById(LIBRARY_ID)).thenReturn(Optional.of(library()));
         when(visibilityService.hasPermission(USER, LIBRARY_ID, AclAction.READ.code())).thenReturn(true);
     }
@@ -139,6 +141,114 @@ class KbDocumentServiceListChunksTest {
         assertEquals("FILE_OVERRIDE", vo.stats().source());
         assertEquals("qa", vo.stats().chunkMethod());
         assertEquals(512, vo.stats().chunkTokenNum());
+    }
+
+    @Test
+    @DisplayName("T4：文件级四个解析器字段任一非空 → FILE_OVERRIDE，统计条展示文档级值")
+    void fileOverrideWithParserSettingsFields() {
+        KbDocument d = doc("doc-1", ParseStatus.SUCCESS.code());
+        d.setPageIndex(false);
+        d.setImageTableContextWindow(512);
+        d.setAutoKeywords(8);
+        d.setAutoQuestions(5);
+        when(documentRepository.findById(DOC_ID)).thenReturn(Optional.of(d));
+        when(enginePort.listDocumentChunks(any(ChunkQuery.class)))
+                .thenReturn(pageView(1, 50, "内容"));
+
+        KbDocumentChunksVO vo = service.listDocumentChunks(LIBRARY_ID, DOC_ID, USER, null, 1, 50);
+
+        assertEquals("FILE_OVERRIDE", vo.stats().source(),
+                "四个新文件字段任一非空即算文件覆盖（T4 来源判定）");
+        assertEquals(false, vo.stats().pageIndex());
+        assertEquals(Integer.valueOf(512), vo.stats().imageTableContextWindow());
+        assertEquals(Integer.valueOf(8), vo.stats().autoKeywords());
+        assertEquals(Integer.valueOf(5), vo.stats().autoQuestions());
+        assertEquals(RagSettings.DEFAULT_CHUNK_METHOD, vo.stats().chunkMethod(),
+                "未指定的三字段仍走默认（文件覆盖只影响指定字段）");
+    }
+
+    @Test
+    @DisplayName("T4：无文件级覆盖 → LIBRARY + 库级四个新字段生效值（缺失兜底 defaults）")
+    void inheritDisplaysLibraryParserSettings() {
+        when(documentRepository.findById(DOC_ID))
+                .thenReturn(Optional.of(doc("doc-1", ParseStatus.SUCCESS.code())));
+        when(enginePort.listDocumentChunks(any(ChunkQuery.class)))
+                .thenReturn(pageView(1, 50, "内容"));
+
+        KbDocumentChunksVO vo = service.listDocumentChunks(LIBRARY_ID, DOC_ID, USER, null, 1, 50);
+
+        assertEquals("LIBRARY", vo.stats().source());
+        assertEquals(Boolean.TRUE, vo.stats().pageIndex(),
+                "库级 settings 为 null 时兜底 defaults → pageIndex=true");
+        assertEquals(Integer.valueOf(RagSettings.DEFAULT_IMAGE_TABLE_CONTEXT_WINDOW),
+                vo.stats().imageTableContextWindow(), "兜底 256");
+        assertEquals(Integer.valueOf(RagSettings.DEFAULT_AUTO_KEYWORDS),
+                vo.stats().autoKeywords(), "兜底 0");
+        assertEquals(Integer.valueOf(RagSettings.DEFAULT_AUTO_QUESTIONS),
+                vo.stats().autoQuestions(), "兜底 0");
+    }
+
+    @Test
+    @DisplayName("T4：库级 settings 带自定义四新字段 → LIBRARY stats 展示库级生效值")
+    void libraryParserSettingsShownInStats() {
+        KbLibrary lib = library();
+        RagSettings custom = new RagSettings(null, null, null, null, "hybrid",
+                "naive", 128, null, null, null, null,
+                null, null, null, null, null, null,
+                null, null, null, null, null, null, null,
+                Boolean.FALSE, 768, 15.0D, 4, 3).withDefaults();
+        lib.setRagSettingsJson(com.mis.kb.support.KbJson.writeSettings(custom));
+        when(libraryRepository.findById(LIBRARY_ID)).thenReturn(Optional.of(lib));
+        when(documentRepository.findById(DOC_ID))
+                .thenReturn(Optional.of(doc("doc-1", ParseStatus.SUCCESS.code())));
+        when(enginePort.listDocumentChunks(any(ChunkQuery.class)))
+                .thenReturn(pageView(1, 50, "内容"));
+
+        KbDocumentChunksVO vo = service.listDocumentChunks(LIBRARY_ID, DOC_ID, USER, null, 1, 50);
+
+        assertEquals("LIBRARY", vo.stats().source());
+        assertEquals(Boolean.FALSE, vo.stats().pageIndex());
+        assertEquals(Integer.valueOf(768), vo.stats().imageTableContextWindow());
+        assertEquals(Integer.valueOf(4), vo.stats().autoKeywords());
+        assertEquals(Integer.valueOf(3), vo.stats().autoQuestions());
+    }
+
+    @Test
+    @DisplayName("P0 合并语义：文件级部分覆盖（仅 autoKeywords）→ 其余字段回落库级，source=FILE_OVERRIDE")
+    void partialOverrideMergesLibraryFallback() {
+        // 库级带自定义解析器字段（pageIndex=false / imageTableContextWindow=768 /
+        // autoQuestions=3），文件级仅覆盖 autoKeywords=8，其余六字段 null
+        KbLibrary lib = library();
+        RagSettings custom = new RagSettings(null, null, null, null, "hybrid",
+                "naive", 128, null, null, null, null,
+                null, null, null, null, null, null,
+                null, null, null, null, null, null, null,
+                Boolean.FALSE, 768, 15.0D, 4, 3).withDefaults();
+        lib.setRagSettingsJson(com.mis.kb.support.KbJson.writeSettings(custom));
+        when(libraryRepository.findById(LIBRARY_ID)).thenReturn(Optional.of(lib));
+
+        KbDocument d = doc("doc-1", ParseStatus.SUCCESS.code());
+        d.setAutoKeywords(8);
+        when(documentRepository.findById(DOC_ID)).thenReturn(Optional.of(d));
+        when(enginePort.listDocumentChunks(any(ChunkQuery.class)))
+                .thenReturn(pageView(1, 50, "内容"));
+
+        KbDocumentChunksVO vo = service.listDocumentChunks(LIBRARY_ID, DOC_ID, USER, null, 1, 50);
+
+        assertEquals("FILE_OVERRIDE", vo.stats().source(),
+                "文件级任一字段非空即 FILE_OVERRIDE（P0 合并语义）");
+        assertEquals(Integer.valueOf(8), vo.stats().autoKeywords(),
+                "文件级覆盖 autoKeywords=8 必须回显");
+        assertEquals("naive", vo.stats().chunkMethod(),
+                "未覆盖字段 chunkMethod 回落库级");
+        assertEquals(Integer.valueOf(128), vo.stats().chunkTokenNum(),
+                "未覆盖字段 chunkTokenNum 回落库级");
+        assertEquals(Boolean.FALSE, vo.stats().pageIndex(),
+                "未覆盖字段 pageIndex 回落库级");
+        assertEquals(Integer.valueOf(768), vo.stats().imageTableContextWindow(),
+                "未覆盖字段 imageTableContextWindow 回落库级");
+        assertEquals(Integer.valueOf(3), vo.stats().autoQuestions(),
+                "未覆盖字段 autoQuestions 回落库级");
     }
 
     @Test

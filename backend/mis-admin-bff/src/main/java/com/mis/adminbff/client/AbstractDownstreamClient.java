@@ -89,6 +89,24 @@ abstract class AbstractDownstreamClient {
         }
     }
 
+    /** 拉取非 Result 包装的原始字节（如图片代理）。 */
+    protected byte[] blockBytes(Mono<byte[]> mono) {
+        try {
+            byte[] body = mono.block(timeout);
+            if (body == null) {
+                throw new BusinessException(ResultCode.INTERNAL_ERROR, "下游无响应");
+            }
+            return body;
+        } catch (BusinessException ex) {
+            throw ex;
+        } catch (WebClientResponseException ex) {
+            throw new BusinessException(ResultCode.INTERNAL_ERROR,
+                    "下游调用失败: HTTP " + ex.getStatusCode().value());
+        } catch (Exception ex) {
+            throw new BusinessException(ResultCode.INTERNAL_ERROR, "下游调用失败: " + ex.getMessage());
+        }
+    }
+
     protected void blockVoid(Mono<Result<Void>> mono) {
         block(mono);
     }

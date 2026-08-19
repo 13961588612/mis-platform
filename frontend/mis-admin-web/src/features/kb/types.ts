@@ -189,6 +189,47 @@ export interface KbRagSettings {
    * 同 {@code raptorBuildStatus}：仅回显，前端不提交，可选。
    */
   raptorBuildMessage?: string | null;
+  /**
+   * 页码索引 / TOC 提取开关（解析器增量，末位追加）。
+   *
+   * <p>对应 RAGFlow `parser_config.toc_extraction`（官方 schema 键，默认 `true`）。
+   * 与 OCR/overlap 的「只落库不下发」不同：本键<b>随每次 PUT 恒下发</b>（引擎
+   * 0.23.0+ 版本支持；旧版本不支持会导致引擎同步失败，走「本地已保存 + 下次保存重试」
+   * 降级口径）。解析期参数，改动只影响此后新上传/重解析的文档。
+   */
+  pageIndex: boolean | null;
+  /**
+   * 图像与表格上下文窗口（解析器增量，末位追加）。
+   *
+   * <p>对应 RAGFlow `parser_config.image_table_context_window`（官方 schema 键，
+   * 默认 `256`）：图片/表格上下各取 N token 并入 chunk 提升召回。
+   * 合法区间 [1, 4096]，越界后端保存拒绝（不做静默截断）。解析期参数，
+   * 改动只影响此后新上传/重解析的文档。
+   */
+  imageTableContextWindow: number | null;
+  /**
+   * 重叠百分比（T1 切片参数对齐，末位追加）。
+   *
+   * <p>合法区间 `[0, 100]`，默认 `0`（关闭）。当前引擎<b>实测不支持</b>任何 overlap 键
+   * （硬下发即 code:101 拒整单），故<b>只落库 + 回显</b>——引擎能力
+   * `parserOverlapSupported=false` 时置灰 + 提示「当前引擎版本暂不支持，参数已保留待引擎升级生效」，
+   * 保存照常成功；能力翻转后才参与下发（后端分支不动）。
+   */
+  overlapPercent: number | null;
+  /**
+   * 自动关键字提取数量（T1 切片参数对齐，末位追加）。
+   *
+   * <p>官方 naive schema 键（`parser_config.auto_keywords`），合法区间 `[0, 32]`，
+   * `0` = 关闭，默认 `0`。库级/文件级实测均接受 → <b>随每次 PUT 恒下发</b>（P1f 契约）。
+   */
+  autoKeywords: number | null;
+  /**
+   * 自动问题提取数量（T1 切片参数对齐，末位追加）。
+   *
+   * <p>官方 naive schema 键（`parser_config.auto_questions`），合法区间 `[0, 10]`，
+   * `0` = 关闭，默认 `0`。同样<b>随每次 PUT 恒下发</b>。
+   */
+  autoQuestions: number | null;
 }
 
 /**
@@ -426,17 +467,50 @@ export interface KbDocument {
    * <p>来源引擎 `progress_msg`，≤500 字符；成功/重试时后端清空。
    */
   parseError: string | null;
+  /**
+   * 文件级页码索引 / TOC 提取开关（T4，末位追加）；null = 继承库级。
+   *
+   * <p>与库级 `pageIndex` 语义一致（对应 `toc_extraction`），但<b>文件级 PUT 白名单
+   * 不含该键</b>（实测 code:102 拒整单）——只落库 + 回显 + 合并展示，不下发。
+   */
+  pageIndex: boolean | null;
+  /**
+   * 文件级图像/表格上下文窗口 token 数（T4，末位追加）；null = 继承库级。
+   *
+   * <p>合法区间 [1, 4096]（与库级同源）；同 `pageIndex` 只落库不下发。
+   */
+  imageTableContextWindow: number | null;
+  /**
+   * 文件级自动关键字数量（T4，末位追加）；null = 继承库级，0 = 关闭，0~32。
+   *
+   * <p>文件级 PUT 白名单含 `auto_keywords`（实测接受），非空时下发。
+   */
+  autoKeywords: number | null;
+  /**
+   * 文件级自动问题数量（T4，末位追加）；null = 继承库级，0 = 关闭，0~10。
+   *
+   * <p>文件级 PUT 白名单含 `auto_questions`（实测接受），非空时下发。
+   */
+  autoQuestions: number | null;
 }
 
 /**
- * 文件级切片配置（上传/改参请求体；三字段全 null = 继承库级）。
+ * 文件级切片配置（上传/改参请求体；七字段全 null = 继承库级）。
  *
  * <p>「任一字段非空 = 文件指定」，后端据此判定来源徽标（FILE_OVERRIDE / LIBRARY）。
+ *
+ * <p>T4 扩展：`pageIndex` / `imageTableContextWindow` / `autoKeywords` / `autoQuestions`
+ * 与库级同名语义一致（null = 继承库级）。⚠ 文件级 PUT 白名单只含
+ * chunk_token_num/delimiter/auto_keywords/auto_questions——toc/context/overlap 键不下发。
  */
 export interface KbDocumentChunkConfig {
   chunkMethod: string | null;
   chunkTokenNum: number | null;
   separator: string | null;
+  pageIndex: boolean | null;
+  imageTableContextWindow: number | null;
+  autoKeywords: number | null;
+  autoQuestions: number | null;
 }
 
 /** 文档切片单项（「查看文档切分效果」卡片）。 */
@@ -473,6 +547,14 @@ export interface KbDocumentChunkStats {
   chunkCount: number | null;
   /** 文档级总 token 数（引擎 doc.token_count）；可空。 */
   tokenCount: number | null;
+  /** 生效页码索引 / TOC 提取开关（T4；只展示，文件级不下发）。 */
+  pageIndex: boolean | null;
+  /** 生效图像/表格上下文窗口 token 数（T4；只展示，文件级不下发）。 */
+  imageTableContextWindow: number | null;
+  /** 生效自动关键字数量（T4；0=关闭，0~32）。 */
+  autoKeywords: number | null;
+  /** 生效自动问题数量（T4；0=关闭，0~10）。 */
+  autoQuestions: number | null;
 }
 
 /** 文档切片分页响应（「查看文档切分效果」抽屉）。 */

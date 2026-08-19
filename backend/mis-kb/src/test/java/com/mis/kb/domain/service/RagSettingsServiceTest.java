@@ -239,6 +239,113 @@ class RagSettingsServiceTest {
                     new RagSettings(null, null, null, null, null, null, 4096, null, null, null, null));
             assertEquals(4096, savedMax.chunkTokenNum().intValue());
         }
+
+        @ParameterizedTest(name = "overlapPercent={0} → KB_RAG_SETTINGS_INVALID")
+        @ValueSource(doubles = {101.0D, -0.1D, 100.5D})
+        @DisplayName("T1：overlapPercent 越界 [0,100] 即拒绝（不做静默截断）")
+        void rejectsOutOfRangeOverlapPercent(double overlapPercent) {
+            RagSettingsService service = serviceWithRerankModel();
+            RagSettings bad = new RagSettings(null, null, null, null, null,
+                    null, null, null, null, null, null,
+                    null, null, null, null, null, null,
+                    null, null, null, null, null, null, null, null, null,
+                    overlapPercent, null, null);
+
+            KbBusinessException ex = assertThrows(KbBusinessException.class,
+                    () -> service.save(USER_ID, LIBRARY_ID, bad));
+            assertEquals(KbResultCode.KB_RAG_SETTINGS_INVALID.getCode(), ex.getCode());
+            verify(libraryRepository, never()).save(any(KbLibrary.class));
+        }
+
+        @Test
+        @DisplayName("T1：overlapPercent 0 合法（= 关闭），100 合法（边界）")
+        void acceptsBoundaryOverlapPercent() {
+            RagSettingsService service = serviceWithRerankModel();
+
+            RagSettings zero = service.save(USER_ID, LIBRARY_ID,
+                    new RagSettings(null, null, null, null, null,
+                            null, null, null, null, null, null,
+                            null, null, null, null, null, null,
+                            null, null, null, null, null, null, null, null, null,
+                            0.0D, null, null));
+            assertEquals(0.0D, zero.overlapPercent(), 1e-9);
+            assertEquals(0, zero.autoKeywords().intValue(), "overlap=0 保存后 autoKeywords 默认 0");
+            assertEquals(0, zero.autoQuestions().intValue(), "overlap=0 保存后 autoQuestions 默认 0");
+
+            RagSettings max = service.save(USER_ID, LIBRARY_ID,
+                    new RagSettings(null, null, null, null, null,
+                            null, null, null, null, null, null,
+                            null, null, null, null, null, null,
+                            null, null, null, null, null, null, null, null, null,
+                            100.0D, null, null));
+            assertEquals(100.0D, max.overlapPercent(), 1e-9);
+        }
+
+        @Test
+        @DisplayName("T1：autoKeywords 越界（33）→ KB_RAG_SETTINGS_INVALID；32/0 合法")
+        void autoKeywordsBoundary() {
+            RagSettingsService service = serviceWithRerankModel();
+
+            assertThrows(KbBusinessException.class, () -> service.save(USER_ID, LIBRARY_ID,
+                    new RagSettings(null, null, null, null, null,
+                            null, null, null, null, null, null,
+                            null, null, null, null, null, null,
+                            null, null, null, null, null, null, null, null, null,
+                            null, 33, null)));
+            RagSettings max = null;
+            try {
+                max = service.save(USER_ID, LIBRARY_ID,
+                        new RagSettings(null, null, null, null, null,
+                                null, null, null, null, null, null,
+                                null, null, null, null, null, null,
+                                null, null, null, null, null, null, null, null, null,
+                                null, 32, null));
+            } catch (Exception e) {
+                throw new AssertionError("autoKeywords=32 应在合法区间 [0,32] 内放行，实际异常：" + e.getMessage(), e);
+            }
+            assertEquals(32, max.autoKeywords().intValue());
+
+            RagSettings zero = service.save(USER_ID, LIBRARY_ID,
+                    new RagSettings(null, null, null, null, null,
+                            null, null, null, null, null, null,
+                            null, null, null, null, null, null,
+                            null, null, null, null, null, null, null, null, null,
+                            null, 0, null));
+            assertEquals(0, zero.autoKeywords().intValue(), "autoKeywords=0（关闭）合法");
+        }
+
+        @Test
+        @DisplayName("T1：autoQuestions 越界（11）→ KB_RAG_SETTINGS_INVALID；10/0 合法")
+        void autoQuestionsBoundary() {
+            RagSettingsService service = serviceWithRerankModel();
+
+            assertThrows(KbBusinessException.class, () -> service.save(USER_ID, LIBRARY_ID,
+                    new RagSettings(null, null, null, null, null,
+                            null, null, null, null, null, null,
+                            null, null, null, null, null, null,
+                            null, null, null, null, null, null, null, null, null,
+                            null, null, 11)));
+            RagSettings saved = null;
+            try {
+                saved = service.save(USER_ID, LIBRARY_ID,
+                        new RagSettings(null, null, null, null, null,
+                                null, null, null, null, null, null,
+                                null, null, null, null, null, null,
+                                null, null, null, null, null, null, null, null, null,
+                                null, null, 10));
+            } catch (Exception e) {
+                throw new AssertionError("autoQuestions=10 合法，实际异常：" + e.getMessage(), e);
+            }
+            assertEquals(10, saved.autoQuestions().intValue());
+
+            RagSettings zero = service.save(USER_ID, LIBRARY_ID,
+                    new RagSettings(null, null, null, null, null,
+                            null, null, null, null, null, null,
+                            null, null, null, null, null, null,
+                            null, null, null, null, null, null, null, null, null,
+                            null, null, 0));
+            assertEquals(0, zero.autoQuestions().intValue(), "autoQuestions=0（关闭）合法");
+        }
     }
 
     // ------------------------------------------------------------ 默认值
@@ -555,7 +662,7 @@ class RagSettingsServiceTest {
             RagSettings bad = new RagSettings(null, null, null, null, null,
                     null, null, null, null, null, null,
                     null, null, null, null, null, null,
-                    true, tokenNum, null, null, null, null, null);
+                    true, tokenNum, null, null, null, null, null, null, null);
 
             KbBusinessException ex = assertThrows(KbBusinessException.class,
                     () -> serviceWithRerankModel().save(USER_ID, LIBRARY_ID, bad));
@@ -574,14 +681,14 @@ class RagSettingsServiceTest {
                     new RagSettings(null, null, null, null, null,
                             null, null, null, null, null, null,
                             null, null, null, null, null, null,
-                            true, 512, null, null, null, null, null));
+                            true, 512, null, null, null, null, null, null, null));
             assertEquals(512, savedMin.raptorMaxTokenNum().intValue());
 
             RagSettings savedMax = serviceWithRerankModel().save(USER_ID, LIBRARY_ID,
                     new RagSettings(null, null, null, null, null,
                             null, null, null, null, null, null,
                             null, null, null, null, null, null,
-                            true, 2048, null, null, null, null, null));
+                            true, 2048, null, null, null, null, null, null, null));
             assertEquals(2048, savedMax.raptorMaxTokenNum().intValue());
         }
 
@@ -592,7 +699,7 @@ class RagSettingsServiceTest {
             RagSettings bad = new RagSettings(null, null, null, null, null,
                     null, null, null, null, null, null,
                     null, null, null, null, null, null,
-                    true, null, threshold, null, null, null, null);
+                    true, null, threshold, null, null, null, null, null, null);
 
             KbBusinessException ex = assertThrows(KbBusinessException.class,
                     () -> serviceWithRerankModel().save(USER_ID, LIBRARY_ID, bad));
@@ -606,7 +713,7 @@ class RagSettingsServiceTest {
             RagSettings bad = new RagSettings(null, null, null, null, null,
                     null, null, null, null, null, null,
                     null, null, null, null, null, null,
-                    true, null, null, cluster, null, null, null);
+                    true, null, null, cluster, null, null, null, null, null);
 
             KbBusinessException ex = assertThrows(KbBusinessException.class,
                     () -> serviceWithRerankModel().save(USER_ID, LIBRARY_ID, bad));
@@ -619,7 +726,7 @@ class RagSettingsServiceTest {
             RagSettings bad = new RagSettings(null, null, null, null, null,
                     null, null, null, null, null, null,
                     null, null, null, null, null, null,
-                    true, null, null, null, "x".repeat(RaptorConfig.MAX_PROMPT_LENGTH + 1), null, null);
+                    true, null, null, null, "x".repeat(RaptorConfig.MAX_PROMPT_LENGTH + 1), null, null, null, null);
 
             KbBusinessException ex = assertThrows(KbBusinessException.class,
                     () -> serviceWithRerankModel().save(USER_ID, LIBRARY_ID, bad));
@@ -632,7 +739,7 @@ class RagSettingsServiceTest {
             RagSettings bad = new RagSettings(null, null, null, null, null,
                     null, null, null, null, null, null,
                     null, null, null, null, null, null,
-                    true, null, null, null, null, "paused", null);
+                    true, null, null, null, null, "paused", null, null, null);
 
             KbBusinessException ex = assertThrows(KbBusinessException.class,
                     () -> serviceWithRerankModel().save(USER_ID, LIBRARY_ID, bad));
@@ -646,13 +753,13 @@ class RagSettingsServiceTest {
             RagSettings request = new RagSettings(null, null, null, null, null,
                     null, null, null, null, null, null,
                     null, null, null, null, null, null,
-                    true, 1024, 0.2D, 32, "custom prompt", null, null);
+                    true, 1024, 0.2D, 32, "custom prompt", null, null, null, null);
 
             RagSettings saved = serviceWithRerankModel().save(USER_ID, LIBRARY_ID, request);
 
             assertFalse(saved.useRaptor(), "返回值应已收敛为 false");
             assertFalse(persisted().useRaptor(), "落库 JSON 必须同为 false——返回 false 但存 true 就是「显示开了实际没开」");
-            // 24 参 canonical 透传：开关被强制关掉时参数不被吞
+            // 26 参 canonical 透传：开关被强制关掉时参数不被吞
             assertEquals(1024, saved.raptorMaxTokenNum().intValue());
             assertEquals(0.2D, saved.raptorThreshold(), 1e-9);
             assertEquals(32, saved.raptorMaxCluster().intValue());
@@ -672,16 +779,16 @@ class RagSettingsServiceTest {
                     new RagSettings(null, null, null, null, null,
                             null, null, null, null, null, null,
                             null, null, null, true, "ready", "ok",
-                            true, 1024, 0.2D, 32, "custom prompt", null, null)));
+                            true, 1024, 0.2D, 32, "custom prompt", null, null, null, null)));
             RagSettings request = new RagSettings(null, null, null, null, null,
                     null, null, null, null, null, null,
                     null, null, null, true, "ready", "ok",
-                    true, 1024, 0.2D, 32, "custom prompt", null, null);
+                    true, 1024, 0.2D, 32, "custom prompt", null, null, null, null);
 
             RagSettings saved = serviceWithRerankModel().save(USER_ID, LIBRARY_ID, request);
 
             assertFalse(saved.useRaptor());
-            assertTrue(saved.useKnowledgeGraph(), "RAPTOR 强制关不得吞掉图谱开关（24 参 canonical）");
+            assertTrue(saved.useKnowledgeGraph(), "RAPTOR 强制关不得吞掉图谱开关（26 参 canonical）");
             assertEquals("ready", saved.kgBuildStatus());
             assertEquals("ok", saved.kgBuildMessage());
         }
@@ -697,7 +804,7 @@ class RagSettingsServiceTest {
             RagSettings request = new RagSettings(null, null, null, null, null,
                     null, null, null, null, null, null,
                     null, null, null, null, null, null,
-                    true, 1024, 0.1D, 64, null, "ready", "fake");
+                    true, 1024, 0.1D, 64, null, "ready", "fake", null, null);
 
             RagSettings saved = serviceWithRerankModel().save(USER_ID, LIBRARY_ID, request);
 
@@ -715,7 +822,7 @@ class RagSettingsServiceTest {
             RagSettings request = new RagSettings(null, null, null, null, null,
                     null, null, null, null, null, null,
                     null, null, null, null, null, null,
-                    true, 1024, 0.1D, 64, null, null, null);
+                    true, 1024, 0.1D, 64, null, null, null, null, null);
 
             serviceWithRerankModel().save(USER_ID, LIBRARY_ID, request);
 
@@ -732,11 +839,11 @@ class RagSettingsServiceTest {
                     new RagSettings(null, null, null, null, null,
                             null, null, null, null, null, null,
                             null, null, null, null, null, null,
-                            true, 1024, 0.1D, 64, null, RagSettings.RAPTOR_STATUS_READY, null)));
+                            true, 1024, 0.1D, 64, null, RagSettings.RAPTOR_STATUS_READY, null, null, null)));
             RagSettings request = new RagSettings(null, null, null, null, null,
                     null, null, null, null, null, null,
                     null, null, null, null, null, null,
-                    true, 1024, 0.1D, 64, null, null, null);
+                    true, 1024, 0.1D, 64, null, null, null, null, null);
 
             serviceWithRerankModel().save(USER_ID, LIBRARY_ID, request);
 
@@ -755,6 +862,70 @@ class RagSettingsServiceTest {
             assertEquals(RaptorConfig.DEFAULT_PROMPT, saved.raptorPrompt());
             assertEquals(RagSettings.RAPTOR_STATUS_NONE, saved.raptorBuildStatus());
             assertTrue(saved.raptorBuildMessage() == null);
+        }
+    }
+
+    // ------------------------------------------------------------ 解析器增量（pageIndex / imageTableContextWindow）
+
+    @Nested
+    @DisplayName("解析器增量：pageIndex 布尔直存；imageTableContextWindow 校验 [1,4096]")
+    class ParserIncrement {
+
+        @ParameterizedTest(name = "imageTableContextWindow={0} 越界 → KB_RAG_SETTINGS_INVALID")
+        @ValueSource(ints = {0, -1, -100, 4097, 8192})
+        @DisplayName("imageTableContextWindow 只认 [1,4096]（0/负值/越界直接拒，不做静默截断）")
+        void rejectsOutOfRangeImageTableContextWindow(int window) {
+            RagSettings bad = new RagSettings(null, null, null, null, null,
+                    null, null, null, null, null, null,
+                    null, null, null, null, null, null,
+                    null, null, null, null, null, null, null,
+                    null, window);
+
+            KbBusinessException ex = assertThrows(KbBusinessException.class,
+                    () -> serviceWithRerankModel().save(USER_ID, LIBRARY_ID, bad));
+            assertEquals(KbResultCode.KB_RAG_SETTINGS_INVALID.getCode(), ex.getCode());
+            verify(libraryRepository, never()).save(any(KbLibrary.class));
+            verify(enginePort, never()).updateLibrarySettings(any(), any());
+        }
+
+        @ParameterizedTest(name = "imageTableContextWindow={0} → 放行")
+        @ValueSource(ints = {1, 256, 4096})
+        @DisplayName("imageTableContextWindow 边界 [1,4096] 合法且落库回显")
+        void acceptsBoundaryImageTableContextWindow(int window) {
+            RagSettings request = new RagSettings(null, null, null, null, null,
+                    null, null, null, null, null, null,
+                    null, null, null, null, null, null,
+                    null, null, null, null, null, null, null,
+                    Boolean.TRUE, window);
+
+            RagSettings saved = serviceWithRerankModel().save(USER_ID, LIBRARY_ID, request);
+            assertEquals(window, saved.imageTableContextWindow().intValue());
+            assertEquals(window, persisted().imageTableContextWindow().intValue(),
+                    "落库 JSON 必须携带 imageTableContextWindow（下次加载不丢）");
+        }
+
+        @Test
+        @DisplayName("imageTableContextWindow=null → 放行（withDefaults 兜底 256）")
+        void nullImageTableContextWindowDefaultsTo256() {
+            RagSettings saved = serviceWithRerankModel().save(USER_ID, LIBRARY_ID, weightOnly(0.6D));
+
+            assertEquals(RagSettings.DEFAULT_IMAGE_TABLE_CONTEXT_WINDOW,
+                    saved.imageTableContextWindow().intValue());
+            assertTrue(saved.pageIndex(), "pageIndex 缺省 → 默认 true");
+        }
+
+        @Test
+        @DisplayName("pageIndex=false 原样落库（布尔开关无区间校验，不做静默改写）")
+        void pageIndexFalsePersisted() {
+            RagSettings request = new RagSettings(null, null, null, null, null,
+                    null, null, null, null, null, null,
+                    null, null, null, null, null, null,
+                    null, null, null, null, null, null, null,
+                    Boolean.FALSE, null);
+
+            RagSettings saved = serviceWithRerankModel().save(USER_ID, LIBRARY_ID, request);
+            assertFalse(saved.pageIndex(), "pageIndex=false 原样落库");
+            assertFalse(persisted().pageIndex(), "落库 JSON 必须携带 pageIndex=false（下次加载不丢）");
         }
     }
 

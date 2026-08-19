@@ -495,8 +495,13 @@ public class RagflowAdapter implements KnowledgeEnginePort {
         }
         RagSettings settings = KbJson.readSettings(lib.getRagSettingsJson());
         RagSettings effective = settings == null ? RagSettings.defaults() : settings.withDefaults();
+        // T4：快照携带 4 个解析器设置字段——auto_keywords/auto_questions 属文件级 PUT 白名单，
+        // 「清空文件级覆盖」时下发库级有效值，引擎文档回落到库级；pageIndex / imageTableContextWindow
+        // 不在文件级白名单（T0-b B3 code:102），客户端会过滤不下发，仅作合并/展示快照。
         return new DocumentChunkConfig(
-                effective.chunkMethod(), effective.chunkTokenNum(), effective.separator());
+                effective.chunkMethod(), effective.chunkTokenNum(), effective.separator(),
+                effective.pageIndex(), effective.imageTableContextWindow(),
+                effective.autoKeywords(), effective.autoQuestions());
     }
 
     /**

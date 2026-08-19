@@ -111,6 +111,15 @@ function toSettings(form: LibraryForm, base: KbRagSettings | null): KbRagSetting
     raptorThreshold: base?.raptorThreshold ?? null,
     raptorMaxCluster: base?.raptorMaxCluster ?? null,
     raptorPrompt: base?.raptorPrompt ?? null,
+    // 解析器增量（T01）：页码索引/TOC 提取 + 图像表格上下文窗口只在详情页维护，
+    // 此处必须原样带回——否则一次「改个名字」就会把详情页调好的解析器配置悄悄清空。
+    pageIndex: base?.pageIndex ?? null,
+    imageTableContextWindow: base?.imageTableContextWindow ?? null,
+    // 切片参数对齐（T1）：重叠百分比 + 自动关键字/自动问题数量同样只在详情页维护，
+    // 此处原样带回——否则一次「改个名字」就会把详情页调好的切片参数悄悄清空。
+    overlapPercent: base?.overlapPercent ?? null,
+    autoKeywords: base?.autoKeywords ?? null,
+    autoQuestions: base?.autoQuestions ?? null,
   };
 }
 

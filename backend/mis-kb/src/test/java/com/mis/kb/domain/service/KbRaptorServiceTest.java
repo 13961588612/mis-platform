@@ -75,7 +75,7 @@ class KbRaptorServiceTest {
                 RagSettings.DEFAULT_VECTOR_SIMILARITY_WEIGHT, null,
                 Boolean.FALSE, RagSettings.DEFAULT_OCR_LANGUAGE, null,
                 Boolean.FALSE, RagSettings.KG_STATUS_NONE, null,
-                useRaptor, 1024, 0.1D, 64, null, raptorStatus, null);
+                useRaptor, 1024, 0.1D, 64, null, raptorStatus, null, null, null);
         lib.setRagSettingsJson(KbJson.writeSettings(settings));
         return lib;
     }

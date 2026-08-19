@@ -168,8 +168,18 @@ public class RagflowClient {
      * </ol>
      * 本方法只下发本实例接受的键：{@code embedding_model} / {@code chunk_method} /
      * {@code parser_config}（内嵌 {@code chunk_token_num} / {@code delimiter} /
-     * {@code raptor} / {@code graphrag}）。
+     * {@code raptor} / {@code graphrag} / {@code toc_extraction} /
+     * {@code image_table_context_window}）。
      * {@code topK} / {@code scoreThreshold} 仍按原语义保存在本地并由检索期合并器生效。
+     *
+     * <p><b>解析器增量（T01）：</b>{@code toc_extraction}（页码索引/TOC 提取，布尔，
+     * 默认 true）与 {@code image_table_context_window}（图像/表格上下文窗口，整数，
+     * 默认 256；图片/表格上下各取 N token 并入 chunk 提升召回）是 RAGFlow 官方
+     * form-schema.ts + 官方文档 0.26.4「Set context window size」的 parser_config 键
+     * （0.23.0+ 版本支持）。与 OCR/overlap 的「只落库不下发」不同，这两个键<b>随每次
+     * PUT 恒下发</b>（用户明确要对应生效）；若目标实例版本旧不支持，PUT 会失败——
+     * 由 {@code RagSettingsService.syncToEngine} 的「本地保存成功 + 记 error + 下次保存
+     * 重试」降级口径兜住，为防失败做成能力开关不下发。
      *
      * <p><b>Wave C P1f 关键契约（最高优先级，T00 实测）：</b>引擎在<b>切换
      * {@code chunk_method}</b> 时会把 {@code parser_config} 重置为该方法的默认模板
@@ -214,6 +224,27 @@ public class RagflowClient {
         if (settings != null && settings.separator() != null && !settings.separator().isBlank()) {
             parserConfig.put("delimiter", settings.separator());
         }
+        // 解析器增量（官方 schema 键，T01）：toc_extraction（页码索引/TOC 提取）与
+        // image_table_context_window（图像/表格上下文窗口）随每次 PUT 恒下发——P1f 完整
+        // parser_config 契约；settings 为 null 或字段未设置时按 MIS 默认模板下发
+        // （toc_extraction=true / 256），避免切过 chunk_method 后被引擎重置且 MIS 无从感知。
+        parserConfig.put("toc_extraction",
+                settings != null && settings.pageIndex() != null
+                        ? settings.pageIndex() : RagSettings.DEFAULT_PAGE_INDEX);
+        parserConfig.put("image_table_context_window",
+                settings != null && settings.imageTableContextWindow() != null
+                        ? settings.imageTableContextWindow() : RagSettings.DEFAULT_IMAGE_TABLE_CONTEXT_WINDOW);
+        // 切片参数对齐（T1/T2，P1f 契约）：auto_keywords / auto_questions 随每次 PUT 恒下发。
+        // 官方 naive schema 键（T0-a 实测库级/文件级均接受 code:0 且持久化）；settings 为 null
+        // 或字段未设置时按 MIS 默认模板下发（0 = 关闭），避免切过 chunk_method 后被引擎重置。
+        // overlapPercent 对应 RAGFlow overlap 键全部实测被拒（T0-a code:101），绝不参与下发——
+        // 能力 {@code parser_overlap=true} 翻转后才由适配层新增键（分支不动，见 RagSettings 类级）。
+        parserConfig.put("auto_keywords",
+                settings != null && settings.autoKeywords() != null
+                        ? settings.autoKeywords() : RagSettings.DEFAULT_AUTO_KEYWORDS);
+        parserConfig.put("auto_questions",
+                settings != null && settings.autoQuestions() != null
+                        ? settings.autoQuestions() : RagSettings.DEFAULT_AUTO_QUESTIONS);
         // P1f：完整 parser_config 恒下发——raptor 子对象（5 字段白名单）
         Map<String, Object> raptor = new LinkedHashMap<>();
         raptor.put("use_raptor", settings != null && Boolean.TRUE.equals(settings.useRaptor()));
@@ -474,13 +505,17 @@ public class RagflowClient {
     }
 
     /**
-     * 更新文档级切片配置（T04，kb_settings_model_chunk）。
+     * 更新文档级切片配置（T04，kb_settings_model_chunk；T2 扩展 auto 键）。
      *
      * <p><b>T00 P3/P5 实测固化：</b>
      * <ul>
      *   <li>路径 {@code PUT /api/v1/datasets/{datasetId}/documents/{docId}}；</li>
-     *   <li>白名单键：顶层 {@code chunk_method} + {@code parser_config{chunk_token_num, delimiter}}；
-     *       {@code parser_config} 内未知键 → code:102（严格）；顶层多余键被静默忽略，但仍只下发白名单键；</li>
+     *   <li>白名单键：顶层 {@code chunk_method} + {@code parser_config{chunk_token_num, delimiter,
+     *       auto_keywords, auto_questions}}；
+     *       {@code parser_config} 内未知键（含 {@code toc_extraction} /
+     *       {@code image_table_context_window} / overlap 键）→ code:102（严格；T0-b B3 实测），
+     *       故<b>文件级绝不发送</b> toc/context/overlap 键——文档级切片参数与库级 parser_config
+     *       是两套 schema，库级恒下发的键在这里必须剔除；</li>
      *   <li>键名是 {@code chunk_token_num}（非 {@code chunk_token_count}）；</li>
      *   <li>PUT 之后<b>不会</b>自动重解析（run 仍 UNSTART），必须由调用方显式
      *       {@link #parseDocuments}（两步式，T00 P5）。</li>
@@ -507,6 +542,14 @@ public class RagflowClient {
         }
         if (config.separator() != null && !config.separator().isBlank()) {
             parserConfig.put("delimiter", config.separator());
+        }
+        // T2：auto 键进文件级白名单（T0-b B2 实测文档 PUT 接受 code:0 且持久化）。
+        // 只在非空时下发——未指定继承库级快照（引擎上传时已把 dataset parser_config 拷进 document）。
+        if (config.autoKeywords() != null) {
+            parserConfig.put("auto_keywords", config.autoKeywords());
+        }
+        if (config.autoQuestions() != null) {
+            parserConfig.put("auto_questions", config.autoQuestions());
         }
         if (!parserConfig.isEmpty()) {
             body.put("parser_config", parserConfig);

@@ -13,9 +13,11 @@ import com.mis.kb.domain.entity.KbLibrary;
 import com.mis.kb.domain.model.AclAction;
 import com.mis.kb.domain.model.ChunkQuery;
 import com.mis.kb.domain.model.DocumentChunkConfig;
+import com.mis.kb.domain.model.DocumentChunkConfigResolver;
 import com.mis.kb.domain.model.DocumentChunkPageView;
 import com.mis.kb.domain.model.DocumentChunkView;
 import com.mis.kb.domain.model.DocumentUploadInput;
+import com.mis.kb.domain.model.EffectiveChunkConfig;
 import com.mis.kb.domain.model.EngineDocumentRef;
 import com.mis.kb.domain.model.EngineLibraryRef;
 import com.mis.kb.domain.model.KbResultCode;
@@ -52,18 +54,21 @@ public class KbDocumentService {
     private final KnowledgeEnginePort enginePort;
     private final KbLibraryService libraryService;
     private final KbVisibilityService visibilityService;
+    private final DocumentChunkConfigResolver chunkConfigResolver;
 
     public KbDocumentService(
             KbDocumentRepository documentRepository,
             KbLibraryRepository libraryRepository,
             KnowledgeEnginePort enginePort,
             KbLibraryService libraryService,
-            KbVisibilityService visibilityService) {
+            KbVisibilityService visibilityService,
+            DocumentChunkConfigResolver chunkConfigResolver) {
         this.documentRepository = documentRepository;
         this.libraryRepository = libraryRepository;
         this.enginePort = enginePort;
         this.libraryService = libraryService;
         this.visibilityService = visibilityService;
+        this.chunkConfigResolver = chunkConfigResolver;
     }
 
     /**
@@ -211,8 +216,10 @@ public class KbDocumentService {
     /**
      * 统计条组装：切片配置以 MIS 本地为准（来源判定 FILE_OVERRIDE / LIBRARY）。
      *
-     * <p>文档级覆盖字段任一非空 → {@code FILE_OVERRIDE}（展示文档级值）；
-     * 否则 {@code LIBRARY}（展示库级有效值，缺失时兜底 {@code RagSettings.withDefaults()}）。
+     * <p>七字段一律输出<b>生效值</b>，由 {@link DocumentChunkConfigResolver} 唯一收口
+     * （文件级 ?? 库级 ?? 全局默认）：任一文件级字段非空 → {@code FILE_OVERRIDE}，
+     * 未指定字段回落库级生效值/默认；文件级全空 → {@code LIBRARY}，展示库级有效值，
+     * 缺失时兜底 {@code RagSettings.defaults()}。
      *
      * <p>双口径（设计 §7 共享知识 #3）：{@code chunkCount}（全量，引擎 doc.chunk_count，
      * 不受关键字过滤影响）与 {@code totalChunks}（过滤后命中数）分别下发；
@@ -222,38 +229,24 @@ public class KbDocumentService {
     private KbDocumentChunkStatsVO buildStats(
             KbDocument doc, KbLibrary lib, int total, int totalCharacterCount,
             Integer chunkCount, Integer tokenCount) {
-        boolean fileOverride = (doc.getChunkMethod() != null && !doc.getChunkMethod().isBlank())
-                || doc.getChunkTokenNum() != null
-                || doc.getSeparator() != null;
-        String source = fileOverride ? "FILE_OVERRIDE" : "LIBRARY";
-        String chunkMethod;
-        Integer chunkTokenNum;
-        String separator;
-        if (fileOverride) {
-            chunkMethod = doc.getChunkMethod();
-            chunkTokenNum = doc.getChunkTokenNum();
-            separator = doc.getSeparator();
-        } else if (lib != null) {
-            RagSettings settings = KbJson.readSettings(lib.getRagSettingsJson());
-            RagSettings effective = settings == null ? RagSettings.defaults() : settings.withDefaults();
-            chunkMethod = effective.chunkMethod();
-            chunkTokenNum = effective.chunkTokenNum();
-            separator = effective.separator();
-        } else {
-            RagSettings effective = RagSettings.defaults();
-            chunkMethod = effective.chunkMethod();
-            chunkTokenNum = effective.chunkTokenNum();
-            separator = effective.separator();
-        }
+        DocumentChunkConfig fileConfig = new DocumentChunkConfig(
+                doc.getChunkMethod(), doc.getChunkTokenNum(), doc.getSeparator(),
+                doc.getPageIndex(), doc.getImageTableContextWindow(),
+                doc.getAutoKeywords(), doc.getAutoQuestions());
+        RagSettings libSettings = lib == null ? null : KbJson.readSettings(lib.getRagSettingsJson());
+        EffectiveChunkConfig effective = chunkConfigResolver.resolve(fileConfig, libSettings);
         return new KbDocumentChunkStatsVO(
-                total, totalCharacterCount, chunkMethod, chunkTokenNum, separator, source,
-                chunkCount, tokenCount);
+                total, totalCharacterCount, effective.chunkMethod(), effective.chunkTokenNum(),
+                effective.separator(), effective.source(),
+                chunkCount, tokenCount, effective.pageIndex(), effective.imageTableContextWindow(),
+                effective.autoKeywords(), effective.autoQuestions());
     }
 
     /** 空态响应（解析中/失败/未同步/引擎不可达等）；双口径与 token 均置 null。 */
     private static KbDocumentChunksVO emptyChunks(String hint, int page, int pageSize) {
         KbDocumentChunkStatsVO stats =
-                new KbDocumentChunkStatsVO(0, 0, null, null, null, null, null, null);
+                new KbDocumentChunkStatsVO(0, 0, null, null, null, null, null, null,
+                        null, null, null, null);
         return new KbDocumentChunksVO(
                 stats, List.of(), 0, Math.max(page, 1), Math.max(pageSize, 1), hint);
     }
@@ -303,12 +296,23 @@ public class KbDocumentService {
         entity.setChunkMethod(normalizeChunkMethod(chunkConfig == null ? null : chunkConfig.chunkMethod()));
         entity.setChunkTokenNum(chunkConfig == null ? null : chunkConfig.chunkTokenNum());
         entity.setSeparator(chunkConfig == null ? null : chunkConfig.separator());
+        // T4：4 个解析器设置字段（pageIndex / imageTableContextWindow / autoKeywords /
+        // autoQuestions）。全 null = 继承库级（快照语义，T5）——不做列复制，引擎上传时
+        // 已把 dataset parser_config 快照进 document，MIS 列保持 null 即表示「未覆盖」。
+        entity.setPageIndex(chunkConfig == null ? null : chunkConfig.pageIndex());
+        entity.setImageTableContextWindow(
+                chunkConfig == null ? null : chunkConfig.imageTableContextWindow());
+        entity.setAutoKeywords(chunkConfig == null ? null : chunkConfig.autoKeywords());
+        entity.setAutoQuestions(chunkConfig == null ? null : chunkConfig.autoQuestions());
         entity.setCreatedAt(now);
         entity.setUpdatedAt(now);
         KbDocument saved = documentRepository.save(entity);
-        log.info("文档已上传 id={} libraryId={} engineRef={} parseStatus={} chunkMethod={} chunkTokenNum={}",
+        log.info("文档已上传 id={} libraryId={} engineRef={} parseStatus={} chunkMethod={} chunkTokenNum={} "
+                        + "pageIndex={} imageTableContextWindow={} autoKeywords={} autoQuestions={}",
                 saved.getId(), libraryId, ref.nativeId(), parseStatus,
-                entity.getChunkMethod(), entity.getChunkTokenNum());
+                entity.getChunkMethod(), entity.getChunkTokenNum(),
+                entity.getPageIndex(), entity.getImageTableContextWindow(),
+                entity.getAutoKeywords(), entity.getAutoQuestions());
         return new KbDocumentUploadResponse(saved.getId(), saved.getParseStatus());
     }
 
@@ -321,6 +325,9 @@ public class KbDocumentService {
      * <p><b>错误处理：</b>改参是用户主动动作，引擎失败不吞——置 {@code FAILED} 并抛异常
      * （错误处理分野，§7.5-6），前端据此提示「解析期间该文档暂不参与检索」。
      *
+     * <p><b>保存口径（T5 快照）：</b>成功路径仅落库一次（引擎成功后置 {@code PARSING}）；
+     * 引擎失败置 {@code FAILED} 落库后抛异常，由事务回滚兜底。
+     *
      * @param id     文档 id
      * @param config 文件级切片配置；全 null = 清空覆盖
      */
@@ -331,26 +338,36 @@ public class KbDocumentService {
         entity.setChunkMethod(normalizeChunkMethod(config == null ? null : config.chunkMethod()));
         entity.setChunkTokenNum(config == null ? null : config.chunkTokenNum());
         entity.setSeparator(config == null ? null : config.separator());
+        // T4：4 个解析器设置字段。config 全 null = 清空文件级覆盖（列置 null → 继承库级）。
+        entity.setPageIndex(config == null ? null : config.pageIndex());
+        entity.setImageTableContextWindow(
+                config == null ? null : config.imageTableContextWindow());
+        entity.setAutoKeywords(config == null ? null : config.autoKeywords());
+        entity.setAutoQuestions(config == null ? null : config.autoQuestions());
         entity.setUpdatedAt(Instant.now());
-        documentRepository.save(entity);
 
         KbLibrary lib = libraryRepository.findById(entity.getLibraryId()).orElse(null);
         if (lib == null || lib.getEngineLibraryRef() == null || lib.getEngineLibraryRef().isBlank()
                 || entity.getEngineDocumentRef() == null || entity.getEngineDocumentRef().isBlank()) {
+            documentRepository.save(entity);
             log.info("文档无引擎映射，切片配置仅本地生效 id={} libraryId={}", id, entity.getLibraryId());
             return;
         }
+        // T5 快照继承：config 全 null（或全空）→ 经 Resolver 唯一收口解析库级有效值，
+        // 构造 7 参 DocumentChunkConfig 快照下发，绝不透传 null（auto 双键随 PUT 恒下发，
+        // pageIndex / imageTableContextWindow 由客户端按白名单处理）。
+        DocumentChunkConfig effective = resolveEffectiveChunkConfig(lib, config);
         try {
             enginePort.updateDocumentChunkConfig(
                     new EngineLibraryRef(lib.getEngineType(), lib.getEngineLibraryRef()),
                     new EngineDocumentRef(lib.getEngineType(), entity.getEngineDocumentRef()),
-                    config);
+                    effective);
             entity.setParseStatus(ParseStatus.PARSING.code());
             // KE-04 口径：重新触发解析时清空上次失败原因（成功/重试时清空）
             entity.setParseError(null);
             entity.setUpdatedAt(Instant.now());
             documentRepository.save(entity);
-            log.info("文档切片配置已更新并触发重解析 id={} config={}", id, config);
+            log.info("文档切片配置已更新并触发重解析 id={} config={} effective={}", id, config, effective);
         } catch (Exception e) {
             entity.setParseStatus(ParseStatus.FAILED.code());
             entity.setUpdatedAt(Instant.now());
@@ -358,6 +375,25 @@ public class KbDocumentService {
             log.error("文档切片配置更新失败，已置 FAILED id={}: {}", id, e.getMessage(), e);
             throw new KbBusinessException(KbResultCode.KB_DOC_NOT_FOUND, "更新切片配置失败：" + e.getMessage());
         }
+    }
+
+    /**
+     * 计算下发引擎的文档级切片配置（T5 快照语义）。
+     *
+     * <p>文件级有覆盖 → 原样透传（引擎侧白名单/默认补齐由客户端负责）；
+     * 文件级全空（清覆盖）→ 走 {@link DocumentChunkConfigResolver} 唯一收口（文件 ?? 库 ??
+     * 默认）生成库级有效值快照，恒非 {@code null}。
+     *
+     * @param lib    知识库实体（读库级设置），调用方保证非 {@code null}
+     * @param config 用户提交的文件级配置，可为 {@code null}
+     * @return 下发引擎的配置，恒非 {@code null}
+     */
+    private DocumentChunkConfig resolveEffectiveChunkConfig(KbLibrary lib, DocumentChunkConfig config) {
+        if (config != null && config.hasAnyOverride()) {
+            return config;
+        }
+        RagSettings settings = KbJson.readSettings(lib.getRagSettingsJson());
+        return chunkConfigResolver.resolve(null, settings).toDocumentChunkConfig();
     }
 
     @Transactional
@@ -669,7 +705,9 @@ public class KbDocumentService {
                 e.getId(), e.getLibraryId(), e.getTitle(), e.getVersion(), e.getParseStatus(),
                 e.getEnabled(), e.getSize(), e.getFormat(), e.getCreatedAt(), e.getUpdatedAt(),
                 e.getChunkMethod(), e.getChunkTokenNum(), e.getSeparator(),
-                e.getParseProgress(), e.getParseError());
+                e.getParseProgress(), e.getParseError(),
+                e.getPageIndex(), e.getImageTableContextWindow(),
+                e.getAutoKeywords(), e.getAutoQuestions());
     }
 
     private static String deriveFormat(String filename) {
@@ -701,6 +739,24 @@ public class KbDocumentService {
                     "切片 token 数需在 [" + DocumentChunkConfig.MIN_TOKEN_NUM + ", "
                             + DocumentChunkConfig.MAX_TOKEN_NUM + "] 区间");
         }
+        // T4：解析器设置字段校验（常量与 RagSettings 同源；越界直接拒，不做静默截断）。
+        if (!DocumentChunkConfig.isValidImageTableContextWindow(config.imageTableContextWindow())) {
+            throw new BusinessException(
+                    ResultCode.VALIDATION_ERROR,
+                    "图像/表格上下文窗口需在 [" + RagSettings.MIN_IMAGE_TABLE_CONTEXT_WINDOW + ", "
+                            + RagSettings.MAX_IMAGE_TABLE_CONTEXT_WINDOW + "] 区间");
+        }
+        if (!DocumentChunkConfig.isValidAutoKeywords(config.autoKeywords())) {
+            throw new BusinessException(
+                    ResultCode.VALIDATION_ERROR,
+                    "自动关键字数量需在 [0, " + RagSettings.MAX_AUTO_KEYWORDS + "] 区间（0 = 关闭）");
+        }
+        if (!DocumentChunkConfig.isValidAutoQuestions(config.autoQuestions())) {
+            throw new BusinessException(
+                    ResultCode.VALIDATION_ERROR,
+                    "自动问题数量需在 [0, " + RagSettings.MAX_AUTO_QUESTIONS + "] 区间（0 = 关闭）");
+        }
+        // pageIndex 是布尔开关，无区间可言，无需额外校验。
     }
 
     /** 切片方法归一化（小写去空白）；null/空白统一为 null（继承库级）。 */

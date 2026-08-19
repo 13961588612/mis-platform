@@ -350,6 +350,12 @@ export async function uploadDocument(
   if (chunk?.chunkMethod) form.append('chunkMethod', chunk.chunkMethod);
   if (chunk?.chunkTokenNum != null) form.append('chunkTokenNum', String(chunk.chunkTokenNum));
   if (chunk?.separator != null) form.append('separator', chunk.separator);
+  if (chunk?.pageIndex != null) form.append('pageIndex', String(chunk.pageIndex));
+  if (chunk?.imageTableContextWindow != null) {
+    form.append('imageTableContextWindow', String(chunk.imageTableContextWindow));
+  }
+  if (chunk?.autoKeywords != null) form.append('autoKeywords', String(chunk.autoKeywords));
+  if (chunk?.autoQuestions != null) form.append('autoQuestions', String(chunk.autoQuestions));
   const res = await api.post<ApiResult<KbDocumentUploadResult>>(
     `/kb/libraries/${libraryId}/documents`,
     form,
@@ -370,6 +376,10 @@ export async function updateDocumentChunkConfig(
       chunkMethod: config.chunkMethod ?? null,
       chunkTokenNum: config.chunkTokenNum ?? null,
       separator: config.separator ?? null,
+      pageIndex: config.pageIndex ?? null,
+      imageTableContextWindow: config.imageTableContextWindow ?? null,
+      autoKeywords: config.autoKeywords ?? null,
+      autoQuestions: config.autoQuestions ?? null,
     },
   );
   if (res.data.code !== 0) throw new Error(res.data.message || '更新切片配置失败');

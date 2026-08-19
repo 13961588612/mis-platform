@@ -263,6 +263,43 @@ class RagflowClientHttpTest {
             assertFalse(body.get("parser_config").get("raptor").get("use_raptor").asBoolean());
             assertTrue(body.get("parser_config").has("graphrag"));
             assertFalse(body.get("parser_config").get("graphrag").get("use_graphrag").asBoolean());
+            // 解析器增量两键也是 P1f 恒下发成员：null 设置按默认模板下发（toc_extraction=true / 256）
+            assertTrue(body.get("parser_config").get("toc_extraction").asBoolean(),
+                    "null 设置 → toc_extraction 按默认 true 下发（P1f 完整 parser_config）");
+            assertEquals(256, body.get("parser_config").get("image_table_context_window").asInt(),
+                    "null 设置 → image_table_context_window 按默认 256 下发（P1f 完整 parser 模板）");
+        }
+
+        @Test
+        @DisplayName("解析器增量：parser_config 恒带 toc_extraction（默认 true）+ image_table_context_window（默认 256）")
+        void parserConfigCarriesTocExtractionAndImageTableContextWindow() throws Exception {
+            newClient().updateDatasetSettings("ds-1", fullSettings());
+
+            JsonNode body = mapper.readTree(lastBody.get());
+            JsonNode parserConfig = body.get("parser_config");
+            assertTrue(parserConfig.get("toc_extraction").asBoolean(),
+                    "pageIndex 未显式设置 → toc_extraction 默认 true 原样下发（官方 schema 键）");
+            assertEquals(256, parserConfig.get("image_table_context_window").asInt(),
+                    "imageTableContextWindow 未显式设置 → 默认 256 下发（官方 schema 键）");
+        }
+
+        @Test
+        @DisplayName("解析器增量：pageIndex=false / imageTableContextWindow=512 → 原样下发，不做归一改写")
+        void parserConfigCarriesExplicitTocAndContextWindowValues() throws Exception {
+            RagSettings custom = new RagSettings(
+                    20, 0.6D, Boolean.TRUE, "BAAI/bge-m3", "hybrid", "naive",
+                    512, "###", null, null, null,
+                    null, null, null, null, null, null,
+                    Boolean.TRUE, 1024, 0.1D, 64, null, null, null,
+                    Boolean.FALSE, 512);
+
+            newClient().updateDatasetSettings("ds-1", custom);
+
+            JsonNode body = mapper.readTree(lastBody.get());
+            assertFalse(body.get("parser_config").get("toc_extraction").asBoolean(),
+                    "pageIndex=false → toc_extraction:false 原样下发");
+            assertEquals(512, body.get("parser_config").get("image_table_context_window").asInt(),
+                    "imageTableContextWindow=512 → 原样下发");
         }
 
         @Test
@@ -272,7 +309,8 @@ class RagflowClientHttpTest {
                     20, 0.6D, Boolean.TRUE, "BAAI/bge-m3", "hybrid", "naive",
                     512, "###", null, null, null,
                     null, null, null, null, null, null,
-                    Boolean.TRUE, 1024, 0.2D, 32, "custom prompt", null, null);
+                    Boolean.TRUE, 1024, 0.2D, 32, "custom prompt", null, null,
+                    null, null);
 
             newClient().updateDatasetSettings("ds-1", raptorOn);
 
@@ -298,7 +336,8 @@ class RagflowClientHttpTest {
                     20, 0.6D, Boolean.TRUE, "BAAI/bge-m3", "hybrid", "naive",
                     512, "###", null, null, null,
                     null, null, null, Boolean.TRUE, "ready", null,
-                    Boolean.TRUE, 1024, 0.1D, 64, null, null, null);
+                    Boolean.TRUE, 1024, 0.1D, 64, null, null, null,
+                    null, null);
 
             newClient().updateDatasetSettings("ds-1", graphOn);
 
@@ -310,6 +349,79 @@ class RagflowClientHttpTest {
             // raptor 子对象同体共存（P1c 实测 raptor + graphrag 可同时 true）
             assertTrue(body.get("parser_config").has("raptor"));
             assertTrue(body.get("parser_config").get("raptor").get("use_raptor").asBoolean());
+        }
+
+        @Test
+        @DisplayName("T1 契约：auto_keywords / auto_questions 随每次 PUT 恒下发（未设置 → 默认 0 = 关闭）")
+        void parserConfigAlwaysCarriesAutoKeysWithDefaults() throws Exception {
+            RagSettings plain = new RagSettings(30, null, null, null, null,
+                    null, null, null, null, null, null);
+
+            newClient().updateDatasetSettings("ds-1", plain);
+
+            JsonNode parserConfig = mapper.readTree(lastBody.get()).get("parser_config");
+            assertTrue(parserConfig.has("auto_keywords"),
+                    "T1：auto_keywords 必须随每次 PUT 恒下发（P1f 契约）");
+            assertEquals(RagSettings.DEFAULT_AUTO_KEYWORDS, parserConfig.get("auto_keywords").asInt(),
+                    "未显式设置 → 按 MIS 默认 0（关闭）下发");
+            assertTrue(parserConfig.has("auto_questions"),
+                    "T1：auto_questions 必须随每次 PUT 恒下发（P1f 契约）");
+            assertEquals(RagSettings.DEFAULT_AUTO_QUESTIONS, parserConfig.get("auto_questions").asInt(),
+                    "未显式设置 → 按 MIS 默认 0（关闭）下发");
+        }
+
+        @Test
+        @DisplayName("T1 契约：null 设置同样恒下发 auto_keywords / auto_questions（默认 0）")
+        void nullSettingsStillCarriesAutoKeys() throws Exception {
+            newClient().updateDatasetSettings("ds-1", null);
+
+            JsonNode parserConfig = mapper.readTree(lastBody.get()).get("parser_config");
+            assertTrue(parserConfig.has("auto_keywords"));
+            assertEquals(0, parserConfig.get("auto_keywords").asInt());
+            assertTrue(parserConfig.has("auto_questions"));
+            assertEquals(0, parserConfig.get("auto_questions").asInt());
+        }
+
+        @Test
+        @DisplayName("T1 契约：显式设置 autoKeywords / autoQuestions → 原样下发")
+        void explicitAutoKeysSentAsIs() throws Exception {
+            RagSettings custom = new RagSettings(
+                    20, 0.6D, Boolean.TRUE, "BAAI/bge-m3", "hybrid", "naive",
+                    512, "###", null, null, null,
+                    null, null, null, null, null, null,
+                    Boolean.TRUE, 1024, 0.1D, 64, null, null, null,
+                    Boolean.TRUE, 300,
+                    12.5D, 8, 5);
+
+            newClient().updateDatasetSettings("ds-1", custom);
+
+            JsonNode parserConfig = mapper.readTree(lastBody.get()).get("parser_config");
+            assertEquals(8, parserConfig.get("auto_keywords").asInt(),
+                    "autoKeywords=8 → auto_keywords:8 原样下发");
+            assertEquals(5, parserConfig.get("auto_questions").asInt(),
+                    "autoQuestions=5 → auto_questions:5 原样下发");
+        }
+
+        @Test
+        @DisplayName("T1 契约：overlap 键永不参与下发（能力 parser_overlap=false 实测 code:101）")
+        void overlapKeysNeverSent() throws Exception {
+            RagSettings withOverlap = new RagSettings(
+                    20, 0.6D, Boolean.TRUE, "BAAI/bge-m3", "hybrid", "naive",
+                    512, "###", null, null, null,
+                    null, null, null, null, null, null,
+                    Boolean.TRUE, 1024, 0.1D, 64, null, null, null,
+                    Boolean.TRUE, 300,
+                    50.0D, 0, 0);
+
+            newClient().updateDatasetSettings("ds-1", withOverlap);
+
+            JsonNode body = mapper.readTree(lastBody.get());
+            JsonNode parserConfig = body.get("parser_config");
+            assertFalse(parserConfig.has("overlap_percent"),
+                    "overlap_percent 绝不参与下发（T0-a 实测 code:101 拒整单）");
+            assertFalse(parserConfig.has("overlap"),
+                    "引擎候选 overlap 键也不得下发");
+            assertFalse(body.has("overlap_percent"), "顶层更不得出现 overlap 键");
         }
     }
 
