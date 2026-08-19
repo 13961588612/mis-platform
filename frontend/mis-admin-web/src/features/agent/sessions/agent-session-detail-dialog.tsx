@@ -91,7 +91,7 @@ export function AgentSessionDetailDialog({
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent className="flex w-[min(46rem,96vw)] max-w-none flex-col gap-0 p-0">
+      <SheetContent className="flex w-[min(46rem,96vw)] max-w-none flex-col gap-0 overflow-hidden p-0">
         <SheetHeader className="border-b p-4">
           <SheetTitle className="truncate pr-8">
             {shown?.title || '会话详情'}
@@ -128,7 +128,7 @@ export function AgentSessionDetailDialog({
           </div>
         </SheetHeader>
 
-        <div className="min-h-0 flex-1 overflow-auto p-4">
+        <div className="min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto p-4">
           <AgentContentState
             loading={loading && messages.length === 0}
             error={error}
@@ -138,6 +138,7 @@ export function AgentSessionDetailDialog({
             emptyHint="会话可能刚创建，或消息已被清理。"
           >
             <AgentMessageStream
+              className="min-w-0"
               messages={messages}
               timingByMessageId={timing ?? undefined}
               showTurnIndex

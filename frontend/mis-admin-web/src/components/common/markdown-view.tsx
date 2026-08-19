@@ -12,9 +12,11 @@ export function MarkdownView({ content, className }: { content: string; classNam
   return (
     <div
       className={cn(
-        'text-sm leading-relaxed break-words',
+        'min-w-0 max-w-full text-sm leading-relaxed break-words',
         '[&_p]:my-1.5 [&_ul]:my-1.5 [&_ol]:my-1.5 [&_li]:ml-4 [&_li]:list-disc',
-        '[&_pre]:bg-muted [&_pre]:p-2 [&_pre]:rounded [&_code]:text-[0.8rem] [&_a]:text-primary [&_a]:underline',
+        // pre 默认 white-space:pre 不换行，长 JSON/单行会撑破会话详情等窄容器
+        '[&_pre]:max-w-full [&_pre]:overflow-x-auto [&_pre]:whitespace-pre-wrap [&_pre]:break-words',
+        '[&_pre]:bg-muted [&_pre]:p-2 [&_pre]:rounded [&_code]:break-words [&_code]:text-[0.8rem] [&_a]:text-primary [&_a]:underline',
         className,
       )}
     >

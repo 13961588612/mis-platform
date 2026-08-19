@@ -437,7 +437,7 @@ export function AgentMessageStream({
         const turnMissing = msg.role === 'assistant' && !turn;
 
         return (
-          <div key={msg.id} className={cn('rounded-lg border p-3', spec.bubble)}>
+          <div key={msg.id} className={cn('min-w-0 overflow-hidden rounded-lg border p-3', spec.bubble)}>
             <div className="mb-1.5 flex flex-wrap items-center gap-2">
               <span
                 className={cn(
@@ -497,7 +497,7 @@ export function AgentMessageStream({
                 <summary className="cursor-pointer text-[0.7rem] text-muted-foreground hover:text-foreground">
                   查看完整 metadata
                 </summary>
-                <pre className="mt-1 max-h-56 overflow-auto rounded-md border bg-card p-2 font-mono text-[0.7rem] leading-relaxed">
+                <pre className="mt-1 max-h-56 max-w-full overflow-auto whitespace-pre-wrap break-words rounded-md border bg-card p-2 font-mono text-[0.7rem] leading-relaxed">
                   {prettyMeta(msg.metadata)}
                 </pre>
               </details>

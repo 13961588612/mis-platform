@@ -402,7 +402,11 @@ class AgentManager:
                 await self.create_agent(config)
             except AgentAlreadyExistsError:
                 instance: AgentInstance | None = self._instances.get(agent_id)
-                if instance is not None:
+                # 配置未变则跳过 update_config，避免多 Core 周期 resync 反复
+                # initialize / wire 刷屏（Agent runtime wired 等）。
+                if instance is not None and not instance.config.equivalent_for_runtime(
+                    config
+                ):
                     await self.update_config(agent_id, config)
             except Exception as exc:
                 logger.error(

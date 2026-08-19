@@ -311,6 +311,19 @@ class AgentConfig(BaseModel):
             includes=includes,
         )
 
+    def equivalent_for_runtime(self, other: AgentConfig) -> bool:
+        """业务配置是否等价（用于热重载/周期 sync 的幂等判断）。
+
+        忽略 ``created_at`` / ``updated_at`` / ``config_path``：每次加载或缓存替换
+        常会刷新这些字段，但不代表运行时需要重新 ``initialize``。
+        """
+        if self is other:
+            return True
+        exclude: set[str] = {"created_at", "updated_at", "config_path"}
+        return self.model_dump(mode="json", exclude=exclude) == other.model_dump(
+            mode="json", exclude=exclude
+        )
+
     @staticmethod
     def _parse_role(raw: Any) -> AgentRole:
         """解析 `role` 字段，非法值降级为 `worker`（不抛异常）。
