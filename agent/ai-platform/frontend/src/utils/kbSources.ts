@@ -1,8 +1,8 @@
 /**
  * Parse structured knowledge-base citations out of assistant markdown.
  *
- * Backend `format_kb_answer_for_chat` appends a ```kb-sources fence.
- * Older turns used a plain "来源：" numbered list — still accepted.
+ * Backend `format_kb_answer_for_chat` / Copilot mis-rag delegate append a
+ * ```kb-sources fence. Older turns used a plain "来源：" numbered list.
  */
 
 export interface KbChatSource {
@@ -11,6 +11,11 @@ export interface KbChatSource {
   chunk?: string;
   page?: number | null;
   offset?: number | null;
+  libraryId?: number | null;
+  documentId?: number | null;
+  imageId?: string | null;
+  /** Retrieval / citation index (aligns with Fig. N in answer body). */
+  index?: number | null;
 }
 
 const FENCE_RE = /```kb-sources\s*\n([\s\S]*?)\n```/i;
@@ -51,14 +56,22 @@ function parseFencePayload(raw: string): KbChatSource[] {
       if (!row || typeof row !== "object") continue;
       const rec = row as Record<string, unknown>;
       const source = String(rec.source ?? rec.title ?? "").trim();
-      if (!source) continue;
+      const imageIdRaw = rec.imageId ?? rec.image_id;
+      const imageId =
+        typeof imageIdRaw === "string" && imageIdRaw.trim() ? imageIdRaw.trim() : undefined;
+      if (!source && !imageId) continue;
       const chunkRaw = rec.chunk ?? rec.chunkText ?? rec.chunk_text;
+      const figIndex = toFiniteNumber(rec.index);
       sources.push({
-        source,
+        source: source || (imageId ? `配图 ${figIndex ?? sources.length + 1}` : "未知来源"),
         score: toFiniteNumber(rec.score),
         chunk: typeof chunkRaw === "string" && chunkRaw.trim() ? chunkRaw : undefined,
         page: toFiniteNumber(rec.page),
         offset: toFiniteNumber(rec.offset),
+        libraryId: toFiniteNumber(rec.libraryId ?? rec.library_id),
+        documentId: toFiniteNumber(rec.documentId ?? rec.document_id),
+        imageId,
+        index: figIndex,
       });
     }
     return sources;
@@ -89,4 +102,15 @@ function toFiniteNumber(value: unknown): number | null {
     return Number.isFinite(n) ? n : null;
   }
   return null;
+}
+
+export function hasChunkImage(
+  source: KbChatSource,
+): source is KbChatSource & { libraryId: number; documentId: number; imageId: string } {
+  return (
+    source.libraryId != null &&
+    source.documentId != null &&
+    typeof source.imageId === "string" &&
+    source.imageId.length > 0
+  );
 }

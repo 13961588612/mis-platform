@@ -21,12 +21,13 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 from contextvars import ContextVar, Token
 from time import perf_counter
 from typing import Any, Literal
 from uuid import uuid4
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from openharness.tools.base import BaseTool, ToolExecutionContext, ToolResult
 
@@ -153,6 +154,23 @@ class InvokeAgentInput(BaseModel):
         default="spawn",
         description="spawn=新开子会话（默认）；continue=复用已有子会话续聊；stop=停止该 Worker。",
     )
+
+    @field_validator("task_brief", mode="before")
+    @classmethod
+    def _coerce_task_brief(cls, value: Any) -> Any:
+        """LLM 常把 task_brief 序列化为 JSON 字符串；入模前尽力解析为 dict。"""
+        if value is None or isinstance(value, dict):
+            return value
+        if isinstance(value, str):
+            stripped = value.strip()
+            if not stripped:
+                return None
+            try:
+                parsed = json.loads(stripped)
+            except json.JSONDecodeError:
+                return value
+            return parsed if isinstance(parsed, dict) else value
+        return value
 
 
 class InvokeAgentTool(BaseTool):
@@ -928,6 +946,7 @@ async def _run_child_agent(
     runtime_error: str | None = None
     tool_uses: int = 0
     tokens: int = 0
+    kb_retrieve_hits: list[Any] = []
 
     async for event in instance.process_message(
         session=child_session,
@@ -941,6 +960,12 @@ async def _run_child_agent(
             err: Any | None = event.result.get("error")
             if err:
                 tool_errors.append(f"{event.tool_name}: {err}")
+            elif event.tool_name == "kb_retrieve":
+                output = event.result.get("output")
+                if isinstance(output, str) and output.strip():
+                    from src.agent.mis_rag.qa_pipeline import parse_kb_retrieve_tool_output
+
+                    kb_retrieve_hits = parse_kb_retrieve_tool_output(output)
         elif event.type == AgentEventType.ERROR:
             runtime_error = event.message or "Agent runtime error"
         elif event.type == AgentEventType.DONE and event.token_usage is not None:
@@ -976,6 +1001,29 @@ async def _run_child_agent(
             tokens=tokens,
             tool_uses=tool_uses,
         )
+
+    if agent_id == "mis-rag" and kb_retrieve_hits:
+        from src.agent.mis_rag.qa_pipeline import (
+            PENDING_KB_SOURCES_FENCE_KEY,
+            extract_kb_sources_fence,
+            format_mis_rag_delegate_answer,
+        )
+
+        formatted = format_mis_rag_delegate_answer(text, retrieve_hits=kb_retrieve_hits)
+        text = formatted
+        parent_session_id = str(metadata.get("parent_session_id") or "").strip()
+        pending_fence = extract_kb_sources_fence(formatted)
+        if parent_session_id and pending_fence:
+            try:
+                parent_session = await session_manager.get_session(parent_session_id)
+                parent_session.state[PENDING_KB_SOURCES_FENCE_KEY] = pending_fence
+                await session_manager.save_session(parent_session)
+            except Exception as exc:  # noqa: BLE001 - 围栏降级不得阻断委派
+                logger.warning(
+                    "failed to persist pending kb-sources fence",
+                    parent_session_id=parent_session_id,
+                    error=str(exc),
+                )
 
     logger.info(
         "invoke_agent completed",

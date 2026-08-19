@@ -161,7 +161,7 @@ def format_kb_answer_for_chat(answer: QaAnswer) -> str:
     for idx, citation in enumerate(answer.citations, start=1):
         label = (citation.source or "").strip() or f"文档 {citation.document_id or idx}"
         chunk = (citation.chunk or citation.chunk_text or "").strip()
-        row: dict[str, Any] = {"source": label}
+        row: dict[str, Any] = {"source": label, "index": idx}
         if isinstance(citation.score, (int, float)):
             row["score"] = float(citation.score)
         if chunk:
@@ -170,13 +170,161 @@ def format_kb_answer_for_chat(answer: QaAnswer) -> str:
             row["page"] = citation.page
         if citation.offset is not None:
             row["offset"] = citation.offset
+        if citation.library_id is not None:
+            row["libraryId"] = citation.library_id
+        if citation.document_id is not None:
+            row["documentId"] = citation.document_id
+        if citation.image_id:
+            row["imageId"] = citation.image_id
         sources.append(row)
 
     payload = json.dumps(sources, ensure_ascii=False)
     return f"{text}\n\n```kb-sources\n{payload}\n```"
 
 
-@dataclass
+def _kb_source_row(
+    *,
+    idx: int,
+    label: str,
+    chunk: str = "",
+    score: float | None = None,
+    page: int | None = None,
+    offset: int | None = None,
+    library_id: int | None = None,
+    document_id: int | None = None,
+    image_id: str | None = None,
+) -> dict[str, Any]:
+    """构造 kb-sources 围栏中的单条来源记录。"""
+    row: dict[str, Any] = {"source": label, "index": idx}
+    if isinstance(score, (int, float)):
+        row["score"] = float(score)
+    if chunk:
+        row["chunk"] = chunk
+    if page is not None:
+        row["page"] = page
+    if offset is not None:
+        row["offset"] = offset
+    if library_id is not None:
+        row["libraryId"] = library_id
+    if document_id is not None:
+        row["documentId"] = document_id
+    if image_id:
+        row["imageId"] = image_id
+    return row
+
+
+def _append_kb_sources_fence(text: str, sources: list[dict[str, Any]]) -> str:
+    """在正文后附加 ``kb-sources`` JSON 围栏。"""
+    if not sources:
+        return (text or "").strip()
+    payload = json.dumps(sources, ensure_ascii=False)
+    base = (text or "").strip()
+    return f"{base}\n\n```kb-sources\n{payload}\n```"
+
+
+def parse_kb_retrieve_tool_output(output: str) -> list[ChunkHit]:
+    """把 ``kb_retrieve`` 工具 JSON 输出解析为按编号对齐的命中列表。"""
+    try:
+        payload = json.loads((output or "").strip())
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(payload, dict):
+        return []
+    hits_raw = payload.get("hits")
+    if not isinstance(hits_raw, list):
+        return []
+    hits: list[ChunkHit] = []
+    for item in hits_raw:
+        if not isinstance(item, dict):
+            continue
+        hits.append(
+            ChunkHit(
+                library_id=_to_int(item.get("library_id")),
+                document_id=_to_int(item.get("document_id")),
+                chunk_text=str(item.get("chunk_text") or ""),
+                score=item.get("score")
+                if isinstance(item.get("score"), (int, float))
+                else None,
+                doc_title=str(item.get("source") or ""),
+                image_id=str(item.get("image_id") or "").strip() or None,
+            )
+        )
+    return hits
+
+
+def _parse_mis_rag_worker_json(text: str) -> tuple[str, list[int] | None]:
+    """解析 mis-rag Worker 的结构化 JSON 输出。"""
+    stripped = (text or "").strip()
+    if not stripped:
+        return "", None
+    candidate = stripped
+    fence = _FENCE_PATTERN.search(stripped)
+    if fence:
+        candidate = fence.group(1).strip()
+    try:
+        payload = json.loads(candidate)
+    except json.JSONDecodeError:
+        return stripped, None
+    if not isinstance(payload, dict):
+        return stripped, None
+
+    answer = payload.get("answer")
+    answer_text = answer.strip() if isinstance(answer, str) and answer.strip() else stripped
+
+    raw_citations = payload.get("citations")
+    if not isinstance(raw_citations, list):
+        return answer_text, None
+
+    indices: list[int] = []
+    for item in raw_citations:
+        idx = _to_int(item.get("index") if isinstance(item, dict) else item)
+        if idx is not None and idx >= 1 and idx not in indices:
+            indices.append(idx)
+    return answer_text, indices or None
+
+
+def format_mis_rag_delegate_answer(worker_text: str, *, retrieve_hits: list[ChunkHit]) -> str:
+    """把 Copilot 委派 mis-rag 的结果整理成带 ``kb-sources`` 围栏的 Markdown。
+
+    mis-rag Worker 通常输出 ``{"answer":"...","citations":[{"index":1}]}``；
+    引用明细（片段正文 / imageId 等）来自同轮 ``kb_retrieve`` 工具命中。
+    """
+    if not retrieve_hits:
+        return (worker_text or "").strip()
+
+    answer_text, selected = _parse_mis_rag_worker_json(worker_text)
+    hit_indices = selected if selected else list(range(1, len(retrieve_hits) + 1))
+
+    sources: list[dict[str, Any]] = []
+    for idx in hit_indices:
+        if idx < 1 or idx > len(retrieve_hits):
+            continue
+        hit = retrieve_hits[idx - 1]
+        label = hit.source_label()
+        sources.append(
+            _kb_source_row(
+                idx=idx,
+                label=label,
+                chunk=(hit.chunk_text or "").strip(),
+                score=hit.score,
+                page=hit.page,
+                offset=hit.offset,
+                library_id=hit.library_id,
+                document_id=hit.document_id,
+                image_id=hit.image_id,
+            )
+        )
+    return _append_kb_sources_fence(answer_text, sources)
+
+
+def extract_kb_sources_fence(text: str) -> str:
+    """从完整 Markdown 中提取 ``kb-sources`` 围栏（含围栏本身）。"""
+    match = re.search(r"```kb-sources\s*\n[\s\S]*?\n```", text or "", re.IGNORECASE)
+    return match.group(0) if match else ""
+
+
+PENDING_KB_SOURCES_FENCE_KEY = "pending_kb_sources_fence"
+
 class KbQaRequest:
     """一次 KB 问答的输入参数（已从 content/metadata 归一）。"""
 

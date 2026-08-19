@@ -12,10 +12,14 @@ from src.agent.mis_rag.qa_pipeline import (
     EVENT_ERROR,
     KbQaPipeline,
     KbQaRequest,
+    PENDING_KB_SOURCES_FENCE_KEY,
     QaDelta,
     build_kb_call_context,
+    extract_kb_sources_fence,
     format_kb_answer_for_chat,
+    format_mis_rag_delegate_answer,
     is_kb_qa_request,
+    parse_kb_retrieve_tool_output,
 )
 
 __all__ = [
@@ -24,8 +28,12 @@ __all__ = [
     "EVENT_ERROR",
     "KbQaPipeline",
     "KbQaRequest",
+    "PENDING_KB_SOURCES_FENCE_KEY",
     "QaDelta",
     "build_kb_call_context",
+    "extract_kb_sources_fence",
     "format_kb_answer_for_chat",
+    "format_mis_rag_delegate_answer",
     "is_kb_qa_request",
+    "parse_kb_retrieve_tool_output",
 ]

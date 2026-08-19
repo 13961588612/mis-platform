@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { clsx } from "../utils/format";
-import type { KbChatSource } from "../utils/kbSources";
+import { ChunkImage } from "./KbSourceFigures";
+import { hasChunkImage, type KbChatSource } from "../utils/kbSources";
 
 function formatScore(score: number | null | undefined): string | null {
   if (score == null || !Number.isFinite(score)) return null;
@@ -59,6 +60,7 @@ export function KbSourceDisclosure({
             const selected = active === index;
             const score = formatScore(source.score);
             const loc = locator(source);
+            const showImage = selected && hasChunkImage(source);
             return (
               <li key={`${source.source}-${index}`}>
                 <button
@@ -83,6 +85,14 @@ export function KbSourceDisclosure({
                   {selected ? (
                     <div className="mt-1.5 space-y-1 border-t border-surface-light/60 pt-1.5 text-surface-dark/70">
                       {loc ? <p className="text-[11px] text-surface-dark/45">{loc}</p> : null}
+                      {showImage ? (
+                        <ChunkImage
+                          libraryId={source.libraryId}
+                          documentId={source.documentId}
+                          imageId={source.imageId}
+                          label={source.source}
+                        />
+                      ) : null}
                       <p className="whitespace-pre-wrap break-words leading-relaxed">
                         {source.chunk?.trim() || "（无片段原文）"}
                       </p>

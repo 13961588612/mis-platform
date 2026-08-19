@@ -13,8 +13,32 @@ describe("splitKbSources", () => {
     const { body, sources } = splitKbSources(content);
     expect(body).toBe("Pad 退货需开启退货开关。");
     expect(sources).toEqual([
-      { source: "Pad售后手册", score: 0.91, chunk: "退货开关：开启", page: 3, offset: null },
+      {
+        source: "Pad售后手册",
+        score: 0.91,
+        chunk: "退货开关：开启",
+        page: 3,
+        offset: null,
+        libraryId: null,
+        documentId: null,
+        imageId: undefined,
+        index: null,
+      },
     ]);
+  });
+
+  it("parses imageId and libraryId from fence payload", () => {
+    const content = [
+      "答案",
+      "",
+      "```kb-sources",
+      '[{"source":"手册","index":1,"libraryId":2,"documentId":3,"imageId":"img-9"}]',
+      "```",
+    ].join("\n");
+    const { sources } = splitKbSources(content);
+    expect(sources[0]?.imageId).toBe("img-9");
+    expect(sources[0]?.libraryId).toBe(2);
+    expect(sources[0]?.index).toBe(1);
   });
 
   it("parses legacy 来源 numbered list", () => {

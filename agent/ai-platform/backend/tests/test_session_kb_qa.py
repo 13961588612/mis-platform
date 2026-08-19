@@ -10,10 +10,15 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from src.agent.mis_rag.qa_pipeline import _session_title, format_kb_answer_for_chat
+from src.agent.mis_rag.qa_pipeline import (
+    _session_title,
+    format_kb_answer_for_chat,
+    format_mis_rag_delegate_answer,
+    parse_kb_retrieve_tool_output,
+)
+from src.models.retrieve import ChunkHit, QaAnswer, QaCitation
 from src.api.deps import get_agent_manager_dep, get_optional_current_user, get_session_manager_dep
 from src.api.routes.session import router
-from src.models.retrieve import QaAnswer, QaCitation
 
 
 def test_session_title_truncates_long_question() -> None:
@@ -85,6 +90,39 @@ def test_format_kb_answer_for_chat_appends_sources() -> None:
 def test_format_kb_answer_for_chat_without_citations() -> None:
     """无引用时只回正文。"""
     assert format_kb_answer_for_chat(QaAnswer(answer="未命中")) == "未命中"
+
+
+def test_format_mis_rag_delegate_answer_from_kb_retrieve_hits() -> None:
+    """Copilot 委派 mis-rag 时，用 kb_retrieve 命中补全 kb-sources 围栏。"""
+    hits = [
+        ChunkHit(
+            library_id=1,
+            document_id=9,
+            chunk_text="退货开关：开启",
+            score=0.91,
+            doc_title="Pad售后手册",
+            image_id="img-1",
+        )
+    ]
+    worker = '{"answer":"需开启退货开关。","citations":[{"index":1}]}'
+    text = format_mis_rag_delegate_answer(worker, retrieve_hits=hits)
+    assert "需开启退货开关。" in text
+    assert "```kb-sources" in text
+    assert "Pad售后手册" in text
+    assert "退货开关：开启" in text
+    assert '"imageId": "img-1"' in text
+    assert '"libraryId": 1' in text
+
+
+def test_parse_kb_retrieve_tool_output() -> None:
+    raw = (
+        '{"count":1,"hits":[{"index":1,"source":"手册","score":0.5,'
+        '"chunk_text":"片段","library_id":2,"document_id":3,"image_id":"x"}]}'
+    )
+    hits = parse_kb_retrieve_tool_output(raw)
+    assert len(hits) == 1
+    assert hits[0].doc_title == "手册"
+    assert hits[0].image_id == "x"
 
 
 @pytest.fixture

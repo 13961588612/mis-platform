@@ -22,6 +22,7 @@ import { AssistantAvatar } from "./AssistantAvatar";
 import { ToolCallTrace, groupMessagesForDisplay } from "./ToolCallTrace";
 import { MessageFeedbackBar } from "./MessageFeedbackBar";
 import { KbSourceDisclosure } from "./KbSourceDisclosure";
+import { KbSourceFigures } from "./KbSourceFigures";
 import { getAuthedFileUrl } from "../utils/api";
 import { formatTime } from "../utils/format";
 import { normalizeMarkdownTables } from "../utils/markdownNormalize";
@@ -164,7 +165,10 @@ function MessageBubble({ message, currentUserId: _currentUserId }: MessageBubble
           </div>
         )}
         {!isThinking && kbSources.length > 0 ? (
-          <KbSourceDisclosure sources={kbSources} />
+          <>
+            <KbSourceFigures sources={kbSources} />
+            <KbSourceDisclosure sources={kbSources} />
+          </>
         ) : null}
 
         {/* A2UI 生成式 UI 渲染（DEP-8） */}

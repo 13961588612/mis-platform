@@ -160,6 +160,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     except Exception as exc:
         logger.warning("Skills/MCP init deferred", error=str(exc))
 
+    # ===== AgentManager / ConfigManager（Core 租约与 sync 共用）=====
+    from src.agent.manager import get_agent_manager
+    from src.config_manager.manager import get_config_manager
+    from src.llm.gateway import get_llm_gateway
+
+    agent_manager: AgentManager = get_agent_manager()
+    config_manager: ConfigManager = get_config_manager()
+
     # ===== 多 Agent Core 协调（T8 / 决策 1 + 同构问题②）=====
     # 稳定 CoreId + agent 运行时租约 + Agent 注册表心跳。未注入 CoreOwnership 时
     # AgentManager.sync_from_configs 退化为「人人都起」（向后兼容单 Core）。
@@ -192,16 +200,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         logger.info("Core ownership started", core_id=core_id)
     except Exception as exc:
         logger.warning("Core ownership init deferred", error=str(exc))
+        # 避免 CoreOwnership 半初始化导致 inbound worker 订阅 agent 流但从未 claim。
+        core_ownership = None
+        cluster_redis = None
+        core_id = ""
 
     # 同步从已加载配置中同步 Agent 实例（Skills/MCP 必须先就绪）
     try:
-        from src.agent.manager import get_agent_manager
-        from src.config_manager.manager import get_config_manager
-        from src.llm.gateway import get_llm_gateway
-
-        agent_manager: AgentManager = get_agent_manager()
         agent_manager.set_llm_gateway(get_llm_gateway())
-        config_manager: ConfigManager = get_config_manager()
         synced: int = await agent_manager.sync_from_configs(config_manager.list_configs())
         logger.info("Agents synced from configs", count=synced)
     except Exception as exc:
@@ -209,10 +215,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     # 启动 Redis Stream 入站消费者（Gateway → Agent Core）
     try:
-        from src.agent.manager import get_agent_manager
         from src.queue.inbound_worker import start_inbound_stream_worker
 
-        agent_manager: AgentManager = get_agent_manager()
         agent_ids: list[Any] = [inst.id for inst in agent_manager.list_agents()]
         # 多 Core：入站 worker 绑定 Core 身份 + 租约协调器，启用 Redis 分布式
         # session 锁与 agent owner 路由（T9 / 同构问题①）。未绑定则退化为进程内

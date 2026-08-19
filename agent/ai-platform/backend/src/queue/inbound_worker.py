@@ -32,7 +32,7 @@ from src.queue.redis_stream import (
     normalize_stream_fields,
     parse_inbound_fields,
 )
-from src.runtime.events import AgentEventType
+from src.runtime.events import AgentEvent, AgentEventType
 from src.skills.tools.formfill_execute import resume_formfill
 from src.utils.exceptions import AgentNotFoundError, SessionNotFoundError
 from src.utils.logging import get_logger
@@ -815,6 +815,26 @@ class InboundStreamWorker:
                             perf_phase="be_first_event",
                         )
                     event_count += 1
+                    if event.type == AgentEventType.DONE:
+                        pending_fence = session.state.pop("pending_kb_sources_fence", None)
+                        if pending_fence is not None:
+                            await session_manager.save_session(session)
+                        assembled = "".join(response_parts)
+                        if pending_fence and "```kb-sources" not in assembled:
+                            fence_text = (
+                                pending_fence
+                                if pending_fence.startswith("\n")
+                                else f"\n\n{pending_fence}"
+                            )
+                            await producer.publish_agent_event(
+                                session_id=session.session_id,
+                                user_id=inbound.user_id,
+                                channel=session.channel,
+                                agent_id=resolved_agent_id,
+                                trace_id=inbound.trace_id,
+                                event=AgentEvent.text_delta(fence_text),
+                            )
+                            response_parts.append(fence_text)
                     await producer.publish_agent_event(
                         session_id=session.session_id,
                         user_id=inbound.user_id,

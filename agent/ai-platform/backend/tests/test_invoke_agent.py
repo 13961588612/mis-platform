@@ -36,6 +36,20 @@ def test_resolve_whitelist_configured():
     )
 
 
+def test_invoke_input_coerces_task_brief_json_string() -> None:
+    brief_json = (
+        '{"goal":"检索PAD退货设置并给出条款依据","purpose":"直接回复用户",'
+        '"inputs":{"user_question":"PAD退货设置"},"expected_output":"answer+citations"}'
+    )
+    parsed = InvokeAgentInput(
+        agent_id="mis-rag",
+        content="PAD退货设置",
+        task_brief=brief_json,
+    )
+    assert isinstance(parsed.task_brief, dict)
+    assert parsed.task_brief["goal"].startswith("检索PAD")
+
+
 @pytest.mark.asyncio
 async def test_invoke_rejects_empty_agent_id():
     tool = InvokeAgentTool()

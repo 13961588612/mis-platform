@@ -21,6 +21,11 @@ export default defineConfig({
     host: "0.0.0.0",
     port: 3000,
     proxy: {
+      // MIS KB API（分片截图等；需 MIS JWT，嵌入 admin 时由父页注入）
+      "/api/v1/kb": {
+        target: process.env.VITE_MIS_GATEWAY_URL ?? "http://127.0.0.1:8080",
+        changeOrigin: true,
+      },
       // Agent Core REST API（本地 uvicorn 默认 8000；可用 VITE_BACKEND_URL 覆盖）
       "/api/v1": {
         target: process.env.VITE_BACKEND_URL ?? "http://127.0.0.1:8000",
