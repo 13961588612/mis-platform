@@ -805,6 +805,7 @@ class BffApiRegistryDiffSurveyTest {
             // 系统参数列表/详情/新增/编辑/删除（sys_api 91190-91194）
             "GET /api/v1/configs",
             "GET /api/v1/configs/{id}",
+            "GET /api/v1/configs/key/{key}",
             "POST /api/v1/configs",
             "PUT /api/v1/configs/{id}",
             "DELETE /api/v1/configs/{id}"

@@ -1,0 +1,84 @@
+# T11 多 Gateway + 多 Core 横向扩展 E2E 集群拓扑
+#
+# 用途：真实 Redis + 2 Gateway + 2 Agent Core，用于多实例故障转移 E2E
+#       （kill -9 多进程验证 / 租约易主 / 跨语言键一致性）。
+# 本地单测（fakeredis 模拟）不需要本文件，见 backend/tests/e2e/README.md。
+#
+# 前置：
+#   - 各服务目录需提供 Dockerfile（gateway/ 与 backend/），否则把 `build:` 改为
+#     对应的 `image:`（如 `node:20-alpine` / `python:3.11-slim`）。
+#   - redis 用官方镜像；所有服务经 REDIS_HOST=redis 共享同一 Redis 实例（db=2 物理隔离）。
+#
+# 启动：docker compose -f deploy/docker-compose.e2e.yml up -d
+# 验证：E2E_REAL_REDIS=1 REDIS_URL=redis://redis:6379/2 \
+#         python backend/tests/e2e/run_fault_injection.py
+# 停止：docker compose -f deploy/docker-compose.e2e.yml down
+
+services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # ---- 网关 A / B：注入稳定 GATEWAY_ID，避免重启随机 ID 破坏故障转移可定向性 ----
+  gw-a:
+    build: ../gateway
+    environment:
+      GATEWAY_ID: gw-a
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      REDIS_DB: "2"
+      REDIS_KEY_PREFIX: "aip:"
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  gw-b:
+    build: ../gateway
+    environment:
+      GATEWAY_ID: gw-b
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      REDIS_DB: "2"
+      REDIS_KEY_PREFIX: "aip:"
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  # ---- Agent Core 1 / 2：注入稳定 CORE_ID，开启再对齐循环接管崩溃节点 ----
+  core-1:
+    build: ../backend
+    command: ["python", "-m", "src.main"]
+    environment:
+      CORE_ID: core-1
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      REDIS_DB: "2"
+      REDIS_KEY_PREFIX: "aip:"
+      # 再对齐间隔须 < 租约 TTL，使崩溃 Core 的 agent 在租约过期后被新 owner 及时接管
+      # 并重订阅 aip:stream:agent:{agentId}（T9 收口缺口闭环）。
+      AGENT_RESYNC_S: "15"
+      AGENT_LEASE_TTL_S: "30"
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  core-2:
+    build: ../backend
+    command: ["python", "-m", "src.main"]
+    environment:
+      CORE_ID: core-2
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      REDIS_DB: "2"
+      REDIS_KEY_PREFIX: "aip:"
+      AGENT_RESYNC_S: "15"
+      AGENT_LEASE_TTL_S: "30"
+    depends_on:
+      redis:
+        condition: service_healthy

@@ -54,6 +54,8 @@ export interface GatewayServerConfig {
   };
   /** 后端 Agent Core API URL */
   agentCoreApiUrl: string;
+  /** 本 Gateway 稳定 ID（写 aip:session:{sid}:gateway 粘滞映射用，T7） */
+  gatewayId: string;
 }
 
 // ============================================================================
@@ -303,7 +305,7 @@ function registerRoutes(
         ? query.sessionId
         : ChannelResolver.generateSessionId('web');
 
-    h5Adapter.registerWsConnection(clientSessionId, socket);
+    await h5Adapter.registerWsConnection(clientSessionId, socket, _config.gatewayId);
 
     logger.info(
       { sessionId: clientSessionId, userId: user.userId },
@@ -391,7 +393,7 @@ function registerRoutes(
     });
 
     socket.on('close', () => {
-      h5Adapter.unregisterWsConnection(clientSessionId);
+      void h5Adapter.unregisterWsConnection(clientSessionId);
       logger.info({ sessionId: clientSessionId }, 'H5 WebSocket connection closed');
     });
   });
@@ -406,7 +408,7 @@ function registerRoutes(
     }
 
     const sessionId = ChannelResolver.generateSessionId('wecom-h5');
-    wecomH5Adapter.registerConnection(sessionId, socket);
+    await wecomH5Adapter.registerConnection(sessionId, socket, _config.gatewayId);
 
     logger.info(
       { sessionId, userId: user.userId },
@@ -432,7 +434,7 @@ function registerRoutes(
     });
 
     socket.on('close', () => {
-      wecomH5Adapter.unregisterConnection(sessionId);
+      void wecomH5Adapter.unregisterConnection(sessionId);
       logger.info({ sessionId }, 'Wecom H5 WebSocket connection closed');
     });
   });
@@ -522,12 +524,12 @@ function registerRoutes(
       });
     }
 
-    // 注册 SSE 连接
-    h5Adapter.registerSseConnection(query.sessionId, reply);
+    // 注册 SSE 连接（写粘滞映射 aip:session:{sid}:gateway，T7）
+    h5Adapter.registerSseConnection(query.sessionId, reply, _config.gatewayId);
 
     // 设置超时清理
     req.raw.on('close', () => {
-      h5Adapter.unregisterSseConnection(query.sessionId!);
+      void h5Adapter.unregisterSseConnection(query.sessionId!);
       logger.info({ sessionId: query.sessionId }, 'SSE connection closed');
     });
 

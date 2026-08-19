@@ -181,11 +181,16 @@ public class UserAggregateService {
                     iamBody.put("deptIds", request.deptIds());
                 }
             } else {
-                // 已绑定且未变更：显式透传现有 employeeId，避免 IAM 把「未携带」
-                // 误判为显式解绑（Req2 三态中「不变」≠「解绑」）
+                // 已绑定且未变更：透传 employeeId（避免 IAM 误判为解绑）；
+                // 组织/部门是用户的「数据范围权限」，需尊重前端手动设置（与展示派生解耦，见 Req4 澄清）
                 iamBody.put("employeeId", existingEmp);
+                if (request.orgIds() != null) {
+                    iamBody.put("orgIds", request.orgIds());
+                }
+                if (request.deptIds() != null) {
+                    iamBody.put("deptIds", request.deptIds());
+                }
             }
-            // 已绑定且未变更：姓名/手机/组织/部门均由员工同步，忽略前端输入（Req4 双保险）
         }
 
         // 所属 APP 显式透传（不再取登录态上下文）；与现有 appId 不同且已分配角色时由 IAM 守卫拦截（D4）
@@ -314,6 +319,9 @@ public class UserAggregateService {
                     : (emp != null ? DesensitizeUtils.email(emp.email()) : null);
 
             List<UserView.RoleBrief> roles = mapRoles(user.roles());
+            // 权限 Sheet 回填：透传 IAM 用户组织/部门权限（与列表展示用 orgId/deptId 解耦）
+            List<String> permissionOrgIds = sanitizeIdList(user.orgIds());
+            List<String> permissionDeptIds = sanitizeIdList(user.deptIds());
             result.add(new UserView(
                     user.id(),
                     user.username(),
@@ -330,7 +338,9 @@ public class UserAggregateService {
                     user.isTenantAdmin(),
                     roles,
                     user.createdAt(),
-                    user.appId()));
+                    user.appId(),
+                    permissionOrgIds,
+                    permissionDeptIds));
         }
         return result;
     }
@@ -344,6 +354,18 @@ public class UserAggregateService {
         } catch (NumberFormatException e) {
             return null;
         }
+    }
+
+    /** 过滤 null / 空白 / 字面量 "null"，保留可解析为 Long 的 id 字符串。 */
+    private static List<String> sanitizeIdList(List<String> ids) {
+        if (ids == null || ids.isEmpty()) {
+            return List.of();
+        }
+        return ids.stream()
+                .map(UserAggregateService::toLongOrNull)
+                .filter(Objects::nonNull)
+                .map(String::valueOf)
+                .toList();
     }
 
     private static List<UserView.RoleBrief> mapRoles(List<IamRoleVO> roles) {

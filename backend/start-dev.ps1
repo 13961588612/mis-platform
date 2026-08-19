@@ -24,7 +24,11 @@ $LogDir = Join-Path $Root "logs"
 if (-not (Test-Path $LogDir)) { New-Item -ItemType Directory -Path $LogDir -Force | Out-Null }
 
 function Import-DotEnvFile {
-    param([string]$Path)
+    param(
+        [string]$Path,
+        # 为 true 时用文件值覆盖进程内已有同名变量（.env.integration 作为联调画像时应覆盖）
+        [switch]$Override
+    )
     if (-not (Test-Path $Path)) { return $false }
     Get-Content -Path $Path -Encoding UTF8 | ForEach-Object {
         $line = $_.Trim()
@@ -33,25 +37,25 @@ function Import-DotEnvFile {
         if ($i -lt 1) { return }
         $k = $line.Substring(0, $i).Trim()
         $v = $line.Substring($i + 1).Trim()
-        # 不覆盖调用方已显式导出的变量
         $existing = [Environment]::GetEnvironmentVariable($k, 'Process')
-        if ([string]::IsNullOrEmpty($existing)) {
+        if ($Override -or [string]::IsNullOrEmpty($existing)) {
             Set-Item -Path "Env:$k" -Value $v
         }
     }
     return $true
 }
 
-# 远程联调：优先 .env.integration（PG/Redis 已不在本机时必用）
+# 远程联调 / 混合环境：优先 .env.integration（存在则加载并以文件为准覆盖）
 $integrationEnv = Join-Path $RepoRoot '.env.integration'
 $localEnv = Join-Path $RepoRoot '.env'
 $loadedEnv = $null
 if ($Integration -or (Test-Path $integrationEnv)) {
-    if (Import-DotEnvFile -Path $integrationEnv) {
+    if (Import-DotEnvFile -Path $integrationEnv -Override) {
         $loadedEnv = $integrationEnv
     }
 }
 if (-not $loadedEnv) {
+    # .env：不覆盖调用方已显式导出的变量
     if (Import-DotEnvFile -Path $localEnv) {
         $loadedEnv = $localEnv
     }

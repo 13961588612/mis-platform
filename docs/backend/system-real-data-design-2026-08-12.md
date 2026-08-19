@@ -354,6 +354,7 @@ classDiagram
 | GET | `/api/v1/post-types` | `system:post:list`（285） | 岗位类型（下拉） |
 | GET | `/api/v1/configs` | `system:config:list`（293） | 参数列表 |
 | GET | `/api/v1/configs/{id}` | `system:config:list`（293） | 参数详情 |
+| GET | `/api/v1/configs/key/{key}` | `system:config:list`（293）或 `system:user:list`（201） | 按键读取（V60） |
 | POST | `/api/v1/configs` | `system:config:add`（294） | 新增参数 |
 | PUT | `/api/v1/configs/{id}` | `system:config:edit`（295） | 编辑参数 |
 | DELETE | `/api/v1/configs/{id}` | `system:config:delete`（296） | 删除参数 |

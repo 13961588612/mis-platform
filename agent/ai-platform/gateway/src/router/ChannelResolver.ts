@@ -3,10 +3,14 @@
  *
  * 根据请求来源解析渠道类型，生成符合 v1.4.1 命名规范的 session_id。
  *
- * session_id 命名规范：
+ * session_id 命名规范（HTTP / WS 路径解析；阶段 A 多 Gateway 不涉及生成规则变更）：
  * - Web/H5: web-{uuid}
- * - 企业微信 Bot: wecom-bot-{uuid}
  * - 企业微信 H5: wecom-h5-{uuid}
+ * - 企业微信 Bot（HTTP/WS 路径侧）: wecom-bot-{uuid}
+ *
+ * 注：企业微信智能机器人 **WebSocket 长连接** 适配器（WecomBotAdapter）的 session_id
+ * 由自身生成，规则为 ``wecom-bot-{botId}-{chatId|userId}``（含 botId，见 T04 阶段 A 修 N3），
+ * 不走本解析器的生成规则，但渠道前缀 ``wecom-bot-`` 保持一致。
  *
  * @module router/ChannelResolver
  */

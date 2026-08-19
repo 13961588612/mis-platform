@@ -383,17 +383,17 @@ class SessionManager:
 
         # 存储到 Redis
         redis: aioredis.Redis = await self._get_redis()
-        await redis.setex(
+        await redis.set(
             self._session_key(session_id),
-            self._session_ttl,
             json.dumps(session.to_dict()),
+            ex=self._session_ttl,
         )
 
         # 设置 agent 绑定
-        await redis.setex(
+        await redis.set(
             self._agent_binding_key(session_id),
-            self._session_ttl,
             agent_id,
+            ex=self._session_ttl,
         )
 
         # PG 冷备：创建即落库，保证运营后台能立刻看到「进行中」的空会话，
@@ -480,15 +480,15 @@ class SessionManager:
             user_name=user_name,
         )
         redis: aioredis.Redis = await self._get_redis()
-        await redis.setex(
+        await redis.set(
             self._session_key(session_id),
-            self._session_ttl,
             json.dumps(session.to_dict()),
+            ex=self._session_ttl,
         )
-        await redis.setex(
+        await redis.set(
             self._agent_binding_key(session_id),
-            self._session_ttl,
             agent_id,
+            ex=self._session_ttl,
         )
         await self._dual_write(session)
         logger.info(
@@ -540,10 +540,10 @@ class SessionManager:
         """
         redis: aioredis.Redis = await self._get_redis()
         session.updated_at = datetime.now(timezone.utc)
-        await redis.setex(
+        await redis.set(
             self._session_key(session.session_id),
-            self._session_ttl,
             json.dumps(session.to_dict()),
+            ex=self._session_ttl,
         )
         await self._dual_write(session)
 
@@ -555,10 +555,10 @@ class SessionManager:
     async def set_agent_binding(self, session_id: str, agent_id: str) -> None:
         """将会话绑定到一个 agent（用于会话亲和路由）。"""
         redis: aioredis.Redis = await self._get_redis()
-        await redis.setex(
+        await redis.set(
             self._agent_binding_key(session_id),
-            self._session_ttl,
             agent_id,
+            ex=self._session_ttl,
         )
 
     async def close_session(self, session_id: str) -> None:

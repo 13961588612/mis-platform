@@ -4,9 +4,11 @@
 """
 
 from __future__ import annotations
-from typing import Any
+from contextlib import asynccontextmanager
+from typing import Any, AsyncIterator
 
 import asyncio
+import json
 import os
 import time
 import uuid
@@ -16,12 +18,14 @@ from redis.exceptions import TimeoutError as RedisTimeoutError
 
 from src.agent.manager import AgentInstance, AgentManager, get_agent_manager
 from src.agent.session import Message, Session, SessionManager, get_session_manager
+from src.cluster.session_lock import LockAcquireResult, RedisSessionLock
 from src.config import Settings, get_settings
 from src.queue.redis_stream import (
     BLOCK_MS,
     CONSUMER_GROUP,
     DEFAULT_INBOUND_CHANNELS,
     InboundStreamMessage,
+    MAX_STREAM_LENGTH,
     StreamKeys,
     StreamProducer,
     ensure_consumer_group,
@@ -34,6 +38,20 @@ from src.utils.exceptions import AgentNotFoundError, SessionNotFoundError
 from src.utils.logging import get_logger
 
 logger = get_logger("queue.inbound_worker")
+
+
+class _RerouteToOwner(Exception):
+    """首条消息归属的 agent 由其他 Core 持有（租约），需重投到 owning core 的 agent 流。
+
+    抛出后由 ``_handle_message`` 捕获，XADD 到 ``stream:agent:{agent_id}`` 并 ACK
+    原流，交由真正持有运行时的 Core 处理（同构问题①路由，决策 1）。
+    """
+
+    def __init__(self, agent_id: str) -> None:
+        """记录需要重投的目标 agent ID。"""
+        super().__init__(f"reroute to owning core: agent={agent_id}")
+        self.agent_id = agent_id
+
 
 _worker: InboundStreamWorker | None = None
 
@@ -91,9 +109,16 @@ class InboundStreamWorker:
         self._max_concurrency = max(1, self._settings.INBOUND_MAX_CONCURRENCY)
         self._read_count = max(1, self._settings.INBOUND_READ_COUNT)
         self._semaphore = asyncio.Semaphore(self._max_concurrency)
-        self._session_locks: dict[str, asyncio.Lock] = {}
-        self._session_locks_guard = asyncio.Lock()
         self._inflight: set[asyncio.Task[None]] = set()
+        # T9 / 同构问题①：用 Redis 分布式 session 锁替代进程内 asyncio.Lock，
+        # 多 Core 下跨进程同一会话严格串行；Core 崩溃后锁随 TTL 自然释放。
+        self._session_lock: RedisSessionLock | None = None
+        self._core_id: str = ""
+        self._core_ownership: Any = None
+        # T6 / N1：Core 侧崩溃重投循环配置（沿用 agent-core-group 拓扑 + Redis 分布式锁）。
+        self._xclaim_interval_ms = max(1, self._settings.XCLAIM_INTERVAL_MS)
+        self._xclaim_min_idle_ms = max(1, self._settings.XCLAIM_MIN_IDLE_MS)
+        self._reclaim_task: asyncio.Task[None] | None = None
 
     async def _get_redis(self) -> aioredis.Redis:
         """懒创建 Redis 异步客户端；``socket_timeout`` 须大于 XREADGROUP 阻塞时长。
@@ -112,37 +137,83 @@ class InboundStreamWorker:
             )
         return self._redis
 
-    def _resolve_stream_keys(self, agent_ids: list[str]) -> list[str]:
-        """根据 Agent ID 与默认渠道拼接入站 stream 键名列表。
+    def bind_core(
+        self, core_id: str, core_ownership: Any, redis: aioredis.Redis
+    ) -> None:
+        """注入 Core 身份 + 租约协调器，启用 Redis 分布式 session 锁与 agent owner 路由（T9）。
+
+        未注入时退化为单 Core 旧行为：进程内仅由 semaphore 限并发、全量订阅入站流、
+        agent owner 路由跳过（向后兼容单 Core）。
 
         Args:
-            agent_ids: 需订阅的 Agent 实例 ID 列表。
-
-        Returns:
-            去重并排序后的 stream key 列表。
+            core_id: 本 Core 稳定 ID（``get_core_id()``）。
+            core_ownership: ``CoreOwnership`` 实例（读 ``aip:agent:{agentId}:owner``）。
+            redis: 已连接的 ``redis.asyncio.Redis``（与 CoreOwnership 共享，写锁键）。
         """
-        keys: list[str] = []
-        for agent_id in agent_ids:
-            keys.append(StreamKeys.agent_inbound(agent_id))
-        for channel in DEFAULT_INBOUND_CHANNELS:
-            keys.append(StreamKeys.channel_inbound(channel))
-        return sorted(set(keys))
+        self._core_id = core_id
+        self._core_ownership = core_ownership
+        self._session_lock = RedisSessionLock(
+            redis,
+            lock_ttl_s=self._settings.SESSION_LOCK_TTL_S,
+            extend_s=self._settings.SESSION_LOCK_EXTEND_S,
+            core_id=core_id,
+        )
+        # 多 Core 下各实例消费名需唯一（同 group 内区分消费者），避免互相抢消息。
+        self._consumer_name = f"agent-core-{os.getpid()}-{core_id}"
+        logger.info("Inbound worker bound to core", core_id=core_id)
 
-    async def _get_session_lock(self, session_id: str) -> asyncio.Lock:
-        """获取或创建指定 session 的互斥锁，保证同会话消息串行处理。
+    @asynccontextmanager
+    async def _acquire_session_lock(
+        self, session_id: str
+    ) -> AsyncIterator[LockAcquireResult]:
+        """获取指定 session 的串行处理锁（多 Core 走 Redis 分布式锁）。
+
+        单 Core 未绑定 Core 时退化为直接放行（由 semaphore 限并发，旧行为）。
 
         Args:
             session_id: 会话 ID。
 
-        Returns:
-            该 session 专用的 ``asyncio.Lock``。
+        Yields:
+            ``LockAcquireResult``：是否成功持有锁（``locked=False`` 时调用方应放弃）。
         """
-        async with self._session_locks_guard:
-            lock: asyncio.Lock | None = self._session_locks.get(session_id)
-            if lock is None:
-                lock: asyncio.Lock = asyncio.Lock()
-                self._session_locks[session_id] = lock
-            return lock
+        if self._session_lock is not None:
+            async with self._session_lock.acquire(session_id) as result:
+                yield result
+        else:
+            yield LockAcquireResult(True)
+
+    async def _resolve_stream_keys(self, agent_ids: list[str]) -> list[str]:
+        """拼接入站 stream 键名列表（多 Core 下只订阅本 core 拥有的 agent stream）。
+
+        T9 / 同构问题①路由：绑定 Core 后，仅订阅 ``aip:stream:agent:{agentId}`` 中本
+        core 持有租约的 agent，其余 agent 的入站消息由 owning core 消费；渠道入站流
+        （``aip:stream:inbound:{channel}``）所有 Core 共享订阅，再由 agent owner 路由
+        重投到 owning core。
+
+        Args:
+            agent_ids: 候选 Agent 实例 ID 列表。
+
+        Returns:
+            去重并排序后的 stream key 列表。
+        """
+        owned_agent_ids: list[str] = list(agent_ids)
+        if self._core_ownership is not None:
+            # 仅保留本 core 拥有的 agent（其余交给 owning core 消费），避免双活消费。
+            owned_agent_ids = []
+            for agent_id in agent_ids:
+                try:
+                    owner: str | None = await self._core_ownership.current_owner(agent_id)
+                except Exception:
+                    owner = None
+                if owner == self._core_id:
+                    owned_agent_ids.append(agent_id)
+
+        keys: list[str] = []
+        for agent_id in owned_agent_ids:
+            keys.append(StreamKeys.agent_inbound(agent_id))
+        for channel in DEFAULT_INBOUND_CHANNELS:
+            keys.append(StreamKeys.channel_inbound(channel))
+        return sorted(set(keys))
 
     async def start(self, agent_ids: list[str] | None = None) -> None:
         """创建消费者组、启动 XREADGROUP 消费循环。
@@ -155,7 +226,7 @@ class InboundStreamWorker:
 
         manager: AgentManager = get_agent_manager()
         ids: Any = agent_ids or [inst.id for inst in manager.list_agents()]
-        self._stream_keys = self._resolve_stream_keys(ids)
+        self._stream_keys = await self._resolve_stream_keys(ids)
         if not self._stream_keys:
             logger.warning("No inbound streams to consume; waiting for agent sync")
             self._stream_keys = [
@@ -171,6 +242,7 @@ class InboundStreamWorker:
 
         self._running = True
         self._task = asyncio.create_task(self._consume_loop(), name="inbound-stream-worker")
+        self._reclaim_task = asyncio.create_task(self._reclaim_loop(), name="inbound-reclaim-loop")
         logger.info(
             "Inbound stream worker started",
             consumer=self._consumer_name,
@@ -190,13 +262,20 @@ class InboundStreamWorker:
                 pass
             self._task = None
 
+        if self._reclaim_task is not None:
+            self._reclaim_task.cancel()
+            try:
+                await self._reclaim_task
+            except asyncio.CancelledError:
+                pass
+            self._reclaim_task = None
+
         inflight: list[Any] = list(self._inflight)
         for task in inflight:
             task.cancel()
         if inflight:
             await asyncio.gather(*inflight, return_exceptions=True)
         self._inflight.clear()
-        self._session_locks.clear()
 
         if self._redis is not None:
             await self._redis.aclose()
@@ -205,7 +284,7 @@ class InboundStreamWorker:
 
     async def refresh_streams(self, agent_ids: list[str]) -> None:
         """Agent 同步后更新订阅的 stream 列表。"""
-        new_keys: list[str] = self._resolve_stream_keys(agent_ids)
+        new_keys: list[str] = await self._resolve_stream_keys(agent_ids)
         redis: aioredis.Redis = await self._get_redis()
         for stream_key in new_keys:
             if stream_key not in self._stream_keys:
@@ -290,20 +369,173 @@ class InboundStreamWorker:
                 logger.error("Inbound stream consume loop error", error=str(exc))
                 await asyncio.sleep(1)
 
+    async def _reclaim_loop(self) -> None:
+        """周期性 XAUTOCLAIM 重投 PEL 孤儿消息（T6 / N1 闭环，Core 侧）。
+
+        多 Core 下消费者崩溃会在 PEL 滞留孤儿消息；本循环对每个订阅 stream
+        （含 ``agent_events`` 兜底流）做 XAUTOCLAIM，把 idle 超过阈值的消息
+        重投到本消费者重新处理，保证 kill -9 后孤儿消息恰好一次重投（不丢不重）。
+        沿用既有 ``agent-core-group`` 拓扑与 Redis 分布式 session 锁（同会话串行，跨 Core）。
+        """
+        redis: aioredis.Redis = await self._get_redis()
+        while self._running:
+            await asyncio.sleep(self._xclaim_interval_ms / 1000.0)
+            if not self._running:
+                break
+            for stream_key in self._stream_keys:
+                await self._reclaim_stream(redis, stream_key)
+            # 兜底：agent_events 流（若曾被投递）一并重投
+            await self._reclaim_stream(redis, StreamKeys.agent_events())
+
+    async def _reclaim_stream(self, redis: aioredis.Redis, stream_key: str) -> None:
+        """对单个 stream 执行一次 XAUTOCLAIM 重投（Core 侧 N1 闭环）。
+
+        Args:
+            redis: 已连接的 Redis 客户端。
+            stream_key: 目标 stream 键名。
+        """
+        try:
+            # redis-py xautoclaim 返回 (next_cursor, claimed_list, deleted_list)
+            claimed: Any = await redis.xautoclaim(
+                stream_key,
+                CONSUMER_GROUP,
+                self._consumer_name,
+                self._xclaim_min_idle_ms,
+                "0-0",
+                100,
+            )
+        except Exception as exc:  # noqa: BLE001 - 单流重投失败不应中断整轮循环
+            logger.warning(
+                "Inbound reclaim pass failed",
+                stream_key=stream_key,
+                error=str(exc),
+            )
+            return
+        if not claimed or len(claimed) < 2:
+            return
+        messages: list[Any] = claimed[1]
+        if not messages:
+            return
+        for message_id, raw_fields in messages:
+            fields: dict[str, str] = normalize_stream_fields(raw_fields)
+            inbound: InboundStreamMessage = parse_inbound_fields(fields)
+            self._spawn_handler(str(stream_key), str(message_id), inbound)
+
+    async def _check_owned(self, agent_id: str) -> None:
+        """多 Core（T9）：若 agent 由其他 Core 持有，抛 ``_RerouteToOwner`` 重投到 owning core。
+
+        单 Core（未绑定 Core）或 agent_id 为空 / owner 未知时直接放行（本地处理 / 兜底）。
+
+        Args:
+            agent_id: 待处理的 Agent ID。
+
+        Raises:
+            _RerouteToOwner: agent 由其他 Core 持有，需重投。
+        """
+        if self._core_ownership is None or not agent_id:
+            return
+        try:
+            owner: str | None = await self._core_ownership.current_owner(agent_id)
+        except Exception as exc:  # noqa: BLE001 - owner 读失败不阻断，退化为本地处理
+            logger.warning(
+                "Agent owner lookup failed; processing locally",
+                agent_id=agent_id,
+                error=str(exc),
+            )
+            return
+        if owner is not None and owner != self._core_id:
+            raise _RerouteToOwner(agent_id)
+
+    async def _reroute_to_owner(
+        self,
+        agent_id: str,
+        inbound: InboundStreamMessage,
+        redis: aioredis.Redis,
+    ) -> None:
+        """把非本 core 拥有的 agent 首条消息重投到 owning core 的 agent 流（T9 路由）。
+
+        用与 Gateway ``publishInbound`` 完全一致的字段 schema 重建入站字段，XADD 到
+        ``aip:stream:agent:{agentId}``；owning core 订阅该流并消费处理（同构问题①路由，
+        决策 1）。
+
+        Args:
+            agent_id: 目标 agent ID（owning core 持有）。
+            inbound: 原始入站消息（用于重建字段）。
+            redis: 已连接的 Redis 客户端（写重投流）。
+        """
+        fields: dict[str, Any] = {
+            "sessionId": inbound.session_id,
+            "userId": inbound.user_id,
+            "channel": inbound.channel or "h5",
+            "content": inbound.content,
+            "messageType": inbound.message_type,
+            "traceId": inbound.trace_id,
+            "timestamp": inbound.timestamp,
+        }
+        if inbound.user_mobile:
+            fields["userMobile"] = inbound.user_mobile
+        if inbound.channel_user_id:
+            fields["channelUserId"] = inbound.channel_user_id
+        # 显式标注目标 agent，便于 owning core 直接定位（与 stream key 一致）。
+        fields["agentId"] = agent_id
+        if inbound.metadata is not None:
+            fields["metadata"] = json.dumps(inbound.metadata, ensure_ascii=False)
+        if inbound.resume_token:
+            fields["resumeToken"] = inbound.resume_token
+        if inbound.selected_candidate is not None:
+            fields["selectedCandidate"] = json.dumps(
+                inbound.selected_candidate, ensure_ascii=False
+            )
+        if inbound.selection_action:
+            fields["action"] = inbound.selection_action
+        try:
+            await redis.xadd(
+                StreamKeys.agent_inbound(agent_id),
+                fields,
+                maxlen=MAX_STREAM_LENGTH,
+                approximate=True,
+            )
+        except Exception as exc:  # noqa: BLE001 - 重投失败：原流仍不 ACK，交由 XAUTOCLAIM 重投
+            logger.error(
+                "Failed to reroute inbound message to owning core",
+                agent_id=agent_id,
+                session_id=inbound.session_id,
+                error=str(exc),
+            )
+
     async def _handle_message(
         self,
         stream_key: str,
         message_id: str,
         inbound: InboundStreamMessage,
     ) -> None:
-        """有界并发 + 同 session 串行；成功后 ACK。"""
+        """有界并发 + 同 session 串行（Redis 分布式锁）；成功后 ACK；非本 core 拥有的
+        agent 首条消息重投到 owning core（T9 / 同构问题①路由）。"""
         redis: aioredis.Redis = await self._get_redis()
         async with self._semaphore:
-            lock: asyncio.Lock = await self._get_session_lock(inbound.session_id)
-            async with lock:
+            async with self._acquire_session_lock(inbound.session_id) as lock_result:
+                if not lock_result.locked:
+                    # 争锁失败（达到重试上限）：放弃，不 ACK，交由 XAUTOCLAIM 重投
+                    # （不丢不重，消息留在 PEL 由 owning core / 本 core 后续重投）。
+                    logger.debug(
+                        "Session lock not acquired; giving up (will be reclaimed)",
+                        session_id=inbound.session_id,
+                    )
+                    return
                 try:
                     await self._process_inbound(inbound, stream_key)
                     await redis.xack(stream_key, CONSUMER_GROUP, message_id)
+                except _RerouteToOwner as reroute:
+                    # 非本 core 拥有的 agent：重投到 owning core 的 agent 流并 ACK 原流。
+                    await self._reroute_to_owner(reroute.agent_id, inbound, redis)
+                    await redis.xack(stream_key, CONSUMER_GROUP, message_id)
+                    logger.info(
+                        "Inbound message rerouted to owning core",
+                        agent_id=reroute.agent_id,
+                        target_stream=StreamKeys.agent_inbound(reroute.agent_id),
+                        from_stream=stream_key,
+                        session_id=inbound.session_id,
+                    )
                 except asyncio.CancelledError:
                     raise
                 except Exception as exc:
@@ -315,7 +547,7 @@ class InboundStreamWorker:
                         error=str(exc),
                         exc_info=True,
                     )
-                    # 暂不 ACK，留给后续 Phase 3 claim/重试
+                    # 暂不 ACK，留给 XAUTOCLAIM 重投（不丢不重）
 
     async def _process_inbound(
         self,
@@ -493,6 +725,9 @@ class InboundStreamWorker:
         )
 
         resolved_agent_id: Any = agent_id or session.agent_id
+        # T9 / 同构问题①路由：若目标 agent 由其他 Core 持有，重投到 owning core，
+        # 在 running_now 回退（可能改派本 core 其它 agent）之前判定，避免误本地处理。
+        await self._check_owned(resolved_agent_id)
         # 会话已有 agent，但可能未处于 running；纠正为当前可用实例
         running_now: list[Any] = [
             inst
@@ -761,6 +996,9 @@ class InboundStreamWorker:
         await self._persist_upstream_identity(session, inbound)
 
         resolved_agent_id = session.agent_id
+        # T9 / 同构问题①路由：表单填充恢复回调同样需先判定 agent owner，非本 core
+        # 拥有则重投到 owning core 处理。
+        await self._check_owned(resolved_agent_id)
         running_now = [
             inst
             for inst in agent_manager.list_agents()

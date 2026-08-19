@@ -7,7 +7,8 @@ runtime:
   params:
     maxSteps: 8
     temperature: 0.3
-    maxTokens: 2048
+    # 知识库长答（分步骤操作说明）易顶满 2048 → finish_reason=length 句中截断；与 mis-copilot 对齐
+    maxTokens: 4096
   prompts:
     system: runtime/prompts/system.md
   middleware: {}

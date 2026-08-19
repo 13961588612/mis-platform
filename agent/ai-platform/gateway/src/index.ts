@@ -23,16 +23,16 @@ import {
   type GatewayServerConfig,
 } from './server.js';
 import { createBotConfigSourceFromEnv } from './config/botConfigSource.js';
-import { StreamConsumer } from './queue/redisStream.js';
+import { StreamConsumer, StreamProducer } from './queue/redisStream.js';
 import type { InboundMessage } from './queue/redisStream.js';
 import {
   parseBackendAgentEvent,
   toGatewayChannel,
 } from './router/agentEventParser.js';
+import { getGatewayId, BotOwnership } from './cluster/ownership.js';
 
-// agent Redis 键命名空间前缀（与 Agent Core redis-py 端 `aip:` 一致）。
-const REDIS_KEY_PREFIX = process.env['REDIS_KEY_PREFIX'] ?? 'aip:';
-const AGENT_EVENTS_STREAM = `${REDIS_KEY_PREFIX}stream:agent:events`;
+// 阶段 A：出站事件改为 per-owner 持久 stream（aip:stream:gw:{gatewayId}:events），
+// 键名由 redisStream.ts 的 getOutboundStreamKey / getPendingOutboundStreamKey 提供。
 
 /**
  * 读取 MIS JWT 公钥（PEM）。
@@ -114,6 +114,7 @@ function loadConfig(): GatewayServerConfig {
       apiBaseUrl: process.env['WECOM_API_BASE_URL'] ?? 'https://qyapi.weixin.qq.com',
     },
     agentCoreApiUrl: process.env['AGENT_CORE_API_URL'] ?? 'http://backend:8000',
+    gatewayId: getGatewayId(),
   };
 }
 
@@ -233,58 +234,28 @@ async function main(): Promise<void> {
       eventTransformer,
     } = await createServer(redis, config);
 
-    // 启动 HTTP 服务器
-    await startServer(app, { port: config.port, host: config.host });
+    // ===== 阶段 A：稳定 GatewayId + Bot 租约选主（T1 / T2）=====
+    const gatewayId = config.gatewayId;
+    const ownership = new BotOwnership(redis, gatewayId);
 
-    // 启动企业微信多 Bot WebSocket 长连接（从 backend 拉取配置，环境变量兜底）
-    const botConfigSource = createBotConfigSourceFromEnv(config.agentCoreApiUrl);
-    const botConfigs = await botConfigSource.load();
-    botRegistry.register(botConfigs);
-    const startedBots = await botRegistry.startAll(async (inboundMessage: InboundMessage) => {
-      await messageRouter.route(inboundMessage);
-    });
-    logger.info(
-      { registered: botRegistry.size(), started: startedBots },
-      'Wecom Bot adapters startup finished',
-    );
+    // ===== 注入 Redis（写 aip:session:{sid}:gateway 粘滞映射，T7）=====
+    h5Adapter.bindRedis(redis);
+    wecomH5Adapter.bindRedis(redis);
 
-    // 启动热加载轮询（O1f-2）：周期拉取 backend 启用清单，差量 reconcile。
-    // 无 GATEWAY_INTERNAL_TOKEN 时 startPolling 内部直接跳过（保持 fail-closed）；
-    // BOT_CONFIG_POLL_INTERVAL_MS<=0 时不轮询（退回 O1f-1 行为）。
-    const botPollIntervalMs = parseInt(
-      process.env['BOT_CONFIG_POLL_INTERVAL_MS'] ?? '30000',
-      10,
-    );
-    const stopBotPolling = botConfigSource.startPolling(
-      botPollIntervalMs,
-      async (runtimeConfigs) => {
-        if (runtimeConfigs == null) {
-          // 拉取失败 / 无 token：跳过本轮，保持现状（严禁把失败当空清单）。
-          logger.warn('Bot config poll skipped (pull failed)');
-          return;
-        }
-        const reconcileReport = await botRegistry.reconcile(runtimeConfigs);
-        logger.info(
-          {
-            started: reconcileReport.started,
-            restarted: reconcileReport.restarted,
-            metadataUpdated: reconcileReport.metadataUpdated,
-            stopped: reconcileReport.stopped,
-            removed: reconcileReport.removed,
-            errors: reconcileReport.errors,
-          },
-          'Bot config reconciled',
-        );
-      },
-    );
+    // ===== 启动事件流消费者（消费 Core 回程事件，per-owner 出站流，T3 / T5）=====
+    // 仅消费本 Gateway 独占的 aip:stream:gw:{gatewayId}:events（修 K3/N7，杜绝
+    // 「每 gateway 读全量」重复投递）；owner 解析失败的未知事件落入
+    // aip:stream:gw:pending:events，各 Gateway 用自身消费组独立 drain，
+    // 仅真正持有该 bot 的 Gateway 实际投递（其余无对应 adapter ⇒ 自然 no-op）。
+    const XCLAIM_INTERVAL_MS = parseInt(process.env['XCLAIM_INTERVAL_MS'] ?? '5000', 10);
+    const XCLAIM_MIN_IDLE_MS = parseInt(process.env['XCLAIM_MIN_IDLE_MS'] ?? '30000', 10);
 
-    // 启动事件流消费者（消费 Agent Core 返回的事件）— 使用独立 Redis 连接
     const eventConsumer = new StreamConsumer(
       redisConsumer,
-      'gateway-event-group',
-      `gateway-events-${process.pid}`,
+      `gw-${gatewayId}`,
+      `gw-${gatewayId}-${process.pid}`,
     );
-    await eventConsumer.start(AGENT_EVENTS_STREAM, async (message: InboundMessage) => {
+    await eventConsumer.start(StreamProducer.getOutboundStreamKey(gatewayId), async (message: InboundMessage) => {
       try {
         if (message.eventJson == null || message.eventJson.length === 0) {
           return;
@@ -335,6 +306,77 @@ async function main(): Promise<void> {
         );
       }
     });
+    // 兜底消费未知 owner 的 pending 流（详见设计文档）
+    await eventConsumer.attachStream(StreamProducer.getPendingOutboundStreamKey(), `gw-${gatewayId}`);
+    eventConsumer.enableReclaim(XCLAIM_INTERVAL_MS, XCLAIM_MIN_IDLE_MS);
+
+    // 注入租约协调器与 Redis（写 aip:session:{sid}:bot）；接管时 drain 旧 owner 出站流（T2）。
+    botRegistry.bindCluster(
+      ownership,
+      gatewayId,
+      (oldGatewayId: string) =>
+        eventConsumer.drainAndClaim(StreamProducer.getOutboundStreamKey(oldGatewayId), `gw-${oldGatewayId}`),
+    );
+    botRegistry.bindRedis(redis);
+    // 心跳续租持有中的 bot 租约；续租失败（已易主）即停本地 adapter，避免双连（修 K1/N2）。
+    ownership.startHeartbeat(async (lostBotId: string) => {
+      logger.warn({ botId: lostBotId, gatewayId }, 'Lease lost for bot; stopping local adapter');
+      botRegistry.stopBot(lostBotId);
+    });
+
+    // 启动 HTTP 服务器
+    await startServer(app, { port: config.port, host: config.host });
+
+    // 启动企业微信多 Bot WebSocket 长连接（从 backend 拉取配置，环境变量兜底）
+    const botConfigSource = createBotConfigSourceFromEnv(config.agentCoreApiUrl);
+    const botConfigs = await botConfigSource.load();
+    botRegistry.register(botConfigs);
+    // 阶段 A：仅启动本网关 claim 成功的 Bot（得主起、失主停）；租约未注入时退化为全员启动（向后兼容单 Gateway）。
+    const startedBots = await botRegistry.startOwnedBots(
+      async (inboundMessage: InboundMessage) => {
+        await messageRouter.route(inboundMessage);
+      },
+      (botId: string) => ownership.claim(botId),
+    );
+    logger.info(
+      { registered: botRegistry.size(), started: startedBots, gatewayId },
+      'Wecom Bot adapters startup finished',
+    );
+
+    // 启动热加载轮询（O1f-2）：周期拉取 backend 启用清单，差量 reconcile。
+    // 无 GATEWAY_INTERNAL_TOKEN 时 startPolling 内部直接跳过（保持 fail-closed）；
+    // BOT_CONFIG_POLL_INTERVAL_MS<=0 时不轮询（退回 O1f-1 行为）。
+    const botPollIntervalMs = parseInt(
+      process.env['BOT_CONFIG_POLL_INTERVAL_MS'] ?? '30000',
+      10,
+    );
+    const stopBotPolling = botConfigSource.startPolling(
+      botPollIntervalMs,
+      async (runtimeConfigs) => {
+        if (runtimeConfigs == null) {
+          // 拉取失败 / 无 token：跳过本轮，保持现状（严禁把失败当空清单）。
+          logger.warn('Bot config poll skipped (pull failed)');
+          return;
+        }
+        // 阶段 A：热加载 reconcile 同样尊重租约（失主停、得主起），传入 isOwner 判定。
+        const reconcileReport = await botRegistry.reconcile(
+          runtimeConfigs,
+          (botId: string) => ownership.claim(botId),
+        );
+        logger.info(
+          {
+            started: reconcileReport.started,
+            restarted: reconcileReport.restarted,
+            metadataUpdated: reconcileReport.metadataUpdated,
+            stopped: reconcileReport.stopped,
+            removed: reconcileReport.removed,
+            errors: reconcileReport.errors,
+          },
+          'Bot config reconciled',
+        );
+      },
+    );
+
 
     logger.info(
       {
@@ -360,8 +402,12 @@ async function main(): Promise<void> {
       // 停止热加载轮询（先停拉取，避免关停期间再触发 reconcile）
       stopBotPolling();
 
-      // 停止事件消费者
+      // 停止事件消费者（含重投循环）
       eventConsumer.stop();
+
+      // 释放本网关持有的全部 Bot 租约（易主后他网关可接管，避免死锁 / 双连）
+      ownership.stopHeartbeat();
+      await ownership.releaseAll();
 
       // 关闭服务器和适配器
       await shutdownServer(app, {

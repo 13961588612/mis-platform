@@ -222,6 +222,27 @@ class UserAggregateServiceBindStateTest {
     }
 
     @Test
+    void update_noChange_boundUser_forwardsOrgAndDeptIds() {
+        // Bug2 回归：已绑定且未变更的用户，其「组织/部门权限（数据范围）」必须透传至 IAM，
+        // 不再被 BFF「已绑定未变更」分支整体丢弃（修复前此分支只透传 employeeId，orgIds/deptIds 为 null）。
+        when(systemWebClient.getConfigByKey(FORCE_BIND_KEY)).thenReturn(null);
+        when(iamWebClient.getUser(7L)).thenReturn(boundReturn("100"));
+        when(iamWebClient.updateUser(eq(7L), any())).thenReturn(unboundReturn());
+
+        service.update(7L, new UserUpdateRequest("u7", 100L, null, null, null, null,
+                List.of(11L, 12L), List.of(22L), 10L));
+
+        ArgumentCaptor<Map<String, Object>> body = ArgumentCaptor.forClass(Map.class);
+        verify(iamWebClient).updateUser(eq(7L), body.capture());
+        // 防误判解绑的透传仍在
+        assertEquals(100L, ((Number) body.getValue().get("employeeId")).longValue());
+        // 关键回归断言：组织/部门权限已透传（修复前此处为 null → 断言失败）
+        assertEquals(List.of(11L, 12L), body.getValue().get("orgIds"));
+        assertEquals(List.of(22L), body.getValue().get("deptIds"));
+        verify(orgWebClient, never()).getEmployee(anyLong());
+    }
+
+    @Test
     void update_noChange_unbound_passesSelfMaintainedFields() {
         when(systemWebClient.getConfigByKey(FORCE_BIND_KEY)).thenReturn(null);
         when(iamWebClient.getUser(7L)).thenReturn(new IamUserVO("7", "1", "10", null, "u7", null, 1, 0, 1,

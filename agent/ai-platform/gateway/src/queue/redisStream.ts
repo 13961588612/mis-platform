@@ -5,9 +5,18 @@
  * - 生产者：将渠道入站消息写入 Redis Stream
  * - 消费者：消费 Agent Core 返回的 AgentEvent 流
  *
+ * 阶段 A 扩展（T3/T5）：
+ * - `StreamProducer.getOutboundStreamKey(gwId)` / `getPendingOutboundStreamKey()`：
+ *   per-owner 出站 stream 键（`aip:stream:gw:{gwId}:events` / 兜底
+ *   `aip:stream:gw:pending:events`），与 Agent Core 端对称。
+ * - `StreamConsumer`：支持订阅多 stream（接管时 drain 旧 owner 的流），
+ *   新增 `attachStream` / `drainAndClaim` / `reclaimLoop`（周期 XAUTOCLAIM 重投
+ *   PEL 孤儿消息，修 N1），保证 Gateway 崩溃后孤儿事件恰好一次重投。
+ *
  * Stream 命名规范：
  * - 入站消息流：stream:inbound:{channel}
  * - Agent 事件流：stream:agent:{agentId}
+ * - 出站事件流（per-owner）：stream:gw:{gatewayId}:events
  *
  * @module queue/redisStream
  */
@@ -82,6 +91,8 @@ type XReadGroupStream = [string, Array<[string, string[]]>];
 
 const MAX_STREAM_LENGTH = 10000;
 const CONSUMER_BLOCK_MS = 5000;
+/** 单次 XAUTOCLAIM 重投批大小 */
+const RECLAIM_BATCH = 100;
 
 // ============================================================================
 // Stream 生产者
@@ -173,6 +184,25 @@ export class StreamProducer {
   static getAgentStreamKey(agentId: string): string {
     return `${REDIS_KEY_PREFIX}stream:agent:${agentId}`;
   }
+
+  /**
+   * 构造 per-owner 出站事件 Stream 键名（与 Agent Core 端对称）。
+   *
+   * @param gatewayId - 持有该会话 Bot 的 owner Gateway ID
+   * @returns `aip:stream:gw:{gatewayId}:events`
+   */
+  static getOutboundStreamKey(gatewayId: string): string {
+    return `${REDIS_KEY_PREFIX}stream:gw:${gatewayId}:events`;
+  }
+
+  /**
+   * 构造兜底出站事件 Stream 键名（owner 解析失败时使用）。
+   *
+   * @returns `aip:stream:gw:pending:events`
+   */
+  static getPendingOutboundStreamKey(): string {
+    return `${REDIS_KEY_PREFIX}stream:gw:pending:events`;
+  }
 }
 
 // ============================================================================
@@ -222,9 +252,12 @@ export function buildEntitySelectInbound(params: {
 // ============================================================================
 
 /**
- * Redis Stream 消费者
+ * Redis Stream 消费者（支持 per-owner 出站流 + 崩溃重投）。
  *
- * 阻塞式消费 Redis Stream 中的消息，支持消费者组。
+ * 阻塞式消费 Redis Stream 中的消息，支持消费者组；并支持：
+ * - 订阅多 stream（故障转移接管时追加旧 owner 的流，`attachStream`）；
+ * - 周期 XAUTOCLAIM 重投本/接管 stream 的 PEL 孤儿消息（`reclaimLoop`，修 N1）；
+ * - 对指定旧消费组做 XAUTOCLAIM 接管（`drainAndClaim`，故障转移 drain）。
  */
 export class StreamConsumer {
   private readonly redis: Redis;
@@ -232,6 +265,16 @@ export class StreamConsumer {
   private readonly consumerName: string;
   private running = false;
   private currentTimeout: NodeJS.Timeout | undefined;
+  /** 消费回调（reclaim 重投复用同一回调） */
+  private callback: ConsumeCallback | null = null;
+  /** streamKey → 所属消费组（不同 stream 可能属于不同组，如接管旧 owner 流） */
+  private readonly streamGroups = new Map<string, string>();
+  /** 崩溃重投配置：间隔(ms)，<=0 表示关闭 */
+  private reclaimIntervalMs = 0;
+  /** 孤儿消息进入重投的最小 idle(ms) */
+  private minIdleMs = 30000;
+  /** 重投循环是否已启动 */
+  private reclaimStarted = false;
 
   constructor(
     redis: Redis,
@@ -244,33 +287,34 @@ export class StreamConsumer {
   }
 
   /**
-   * 启动消费循环
+   * 启动消费循环。
    *
-   * @param streamKey - Stream 键名
+   * @param streamKey - 主订阅 Stream 键名
    * @param callback - 消费回调
    */
   async start(streamKey: string, callback: ConsumeCallback): Promise<void> {
-    this.running = true;
+    this.callback = callback;
+    this.registerStream(streamKey, this.groupName);
 
-    // 确保消费者组存在
-    await this.ensureConsumerGroup(streamKey);
+    this.running = true;
+    await this.ensureConsumerGroupFor(streamKey, this.groupName);
 
     logger.info(
       { streamKey, groupName: this.groupName, consumerName: this.consumerName },
       'Starting stream consumer',
     );
 
-    // 启动消费循环
-    this.consumeLoop(streamKey, callback).catch((error) => {
+    this.consumeLoop().catch((error) => {
       logger.error(
         { error: error instanceof Error ? error.message : String(error), streamKey },
         'Consumer loop error',
       );
     });
+    this.maybeStartReclaim();
   }
 
   /**
-   * 停止消费
+   * 停止消费（含重投循环，依靠 running 标志自然退出）。
    */
   stop(): void {
     this.running = false;
@@ -282,19 +326,64 @@ export class StreamConsumer {
   }
 
   /**
-   * 确保消费者组存在
+   * 动态追加订阅流（故障转移接管时追加旧 owner 的 stream）。
+   *
+   * @param streamKey - 追加的 Stream 键名
+   * @param groupName - 该 stream 所属消费组（默认本消费者组）
    */
-  private async ensureConsumerGroup(streamKey: string): Promise<void> {
+  async attachStream(streamKey: string, groupName: string = this.groupName): Promise<void> {
+    this.registerStream(streamKey, groupName);
+    await this.ensureConsumerGroupFor(streamKey, groupName);
+    logger.info(
+      { streamKey, groupName, consumerName: this.consumerName },
+      'Attached additional stream to consumer',
+    );
+  }
+
+  /**
+   * 对指定旧消费组做 XAUTOCLAIM 接管（Gateway 故障转移 drain 旧 owner PEL）。
+   *
+   * 将旧 owner 的 stream 追加进订阅，并立即执行一次重投，把旧 owner 崩溃遗留的
+   * PEL 孤儿消息重投到本消费者重新处理；随后 `reclaimLoop` 周期性兜底。
+   *
+   * @param oldStreamKey - 旧 owner 的 Stream 键名（如 `aip:stream:gw:A:events`）
+   * @param oldGroup - 旧 owner 的消费组名（如 `gw-A`）
+   */
+  async drainAndClaim(oldStreamKey: string, oldGroup: string): Promise<void> {
+    await this.attachStream(oldStreamKey, oldGroup);
+    await this.reclaimStream(oldStreamKey, oldGroup);
+    logger.info(
+      { oldStreamKey, oldGroup, consumerName: this.consumerName },
+      'Drained and claimed orphaned PEL from previous owner stream',
+    );
+  }
+
+  /**
+   * 启用崩溃重投循环（N1）。可于 `start` 之后调用。
+   *
+   * @param intervalMs - 重投周期（毫秒）
+   * @param minIdleMs - 孤儿消息最小 idle 阈值（毫秒）
+   */
+  enableReclaim(intervalMs: number, minIdleMs: number): void {
+    this.reclaimIntervalMs = intervalMs;
+    this.minIdleMs = minIdleMs;
+    this.maybeStartReclaim();
+  }
+
+  /**
+   * 确保消费者组存在（指定组名）。
+   */
+  private async ensureConsumerGroupFor(streamKey: string, groupName: string): Promise<void> {
     try {
       await this.redis.xgroup(
         'CREATE',
         streamKey,
-        this.groupName,
+        groupName,
         '$',
         'MKSTREAM',
       );
       logger.info(
-        { streamKey, groupName: this.groupName },
+        { streamKey, groupName },
         'Consumer group created',
       );
     } catch (error) {
@@ -307,47 +396,70 @@ export class StreamConsumer {
   }
 
   /**
-   * 消费循环
+   * 记录 stream → group 订阅关系（去重）。
    */
-  private async consumeLoop(
-    streamKey: string,
-    callback: ConsumeCallback,
-  ): Promise<void> {
+  private registerStream(streamKey: string, groupName: string): void {
+    this.streamGroups.set(streamKey, groupName);
+  }
+
+  /**
+   * 若已 running 且未启动过，启动重投循环。
+   */
+  private maybeStartReclaim(): void {
+    if (this.running && this.reclaimIntervalMs > 0 && !this.reclaimStarted) {
+      this.reclaimStarted = true;
+      void this.reclaimLoop();
+    }
+  }
+
+  /**
+   * 主消费循环：按消费组分批读取各订阅 stream 的新消息。
+   */
+  private async consumeLoop(): Promise<void> {
     while (this.running) {
       try {
-        // 阻塞式读取新消息
-        const result = await this.redis.xreadgroup(
-          'GROUP',
-          this.groupName,
-          this.consumerName,
-          'COUNT', '1',
-          'BLOCK', CONSUMER_BLOCK_MS.toString(),
-          'STREAMS',
-          streamKey,
-          '>',
-        );
-
-        if (result == null || result.length === 0) {
-          continue;
+        // 将订阅的 stream 按消费组归并，逐组发起 XREADGROUP（不同组不能合并读）。
+        const groups = new Map<string, string[]>();
+        for (const [streamKey, group] of this.streamGroups) {
+          const arr = groups.get(group) ?? [];
+          arr.push(streamKey);
+          groups.set(group, arr);
         }
 
-        // ioredis 的多参 xreadgroup 重载无返回类型（unknown），此处显式断言。
-        const streams = result as XReadGroupStream[];
-        for (const [, messages] of streams) {
-          for (const [messageId, fields] of messages) {
-            await this.processMessage(
-              streamKey,
-              messageId,
-              fields,
-              callback,
-            );
+        for (const [group, streamKeys] of groups) {
+          if (!this.running) {
+            break;
+          }
+          // 每个 stream 对应一个 '>'（仅读新消息）；streams 与 ids 对齐。
+          const readArgs: string[] = [];
+          for (const key of streamKeys) {
+            readArgs.push(key, '>');
+          }
+          const result = await this.redis.xreadgroup(
+            'GROUP', group, this.consumerName,
+            'COUNT', '1',
+            'BLOCK', CONSUMER_BLOCK_MS.toString(),
+            'STREAMS',
+            ...readArgs,
+          );
+
+          if (result == null || result.length === 0) {
+            continue;
+          }
+
+          const streams = result as XReadGroupStream[];
+          for (const [streamKey, messages] of streams) {
+            for (const [messageId, fields] of messages) {
+              if (this.callback != null) {
+                await this.processMessage(streamKey, messageId, fields, this.callback);
+              }
+            }
           }
         }
       } catch (error) {
         logger.error(
           {
             error: error instanceof Error ? error.message : String(error),
-            streamKey,
           },
           'Error consuming message',
         );
@@ -360,7 +472,78 @@ export class StreamConsumer {
   }
 
   /**
-   * 处理单条消息
+   * 崩溃重投循环（N1）：周期对订阅的各 stream 做 XAUTOCLAIM，把 PEL 中 idle
+   * 超过阈值的孤儿消息重投到本消费者重新处理（恰好一次语义）。
+   */
+  private async reclaimLoop(): Promise<void> {
+    logger.info(
+      { intervalMs: this.reclaimIntervalMs, minIdleMs: this.minIdleMs, consumerName: this.consumerName },
+      'Stream reclaim loop started',
+    );
+    while (this.running) {
+      await new Promise<void>((resolve) => {
+        this.currentTimeout = setTimeout(resolve, this.reclaimIntervalMs);
+      });
+      if (!this.running) {
+        break;
+      }
+      for (const [streamKey, groupName] of this.streamGroups) {
+        try {
+          await this.reclaimStream(streamKey, groupName);
+        } catch (error) {
+          logger.error(
+            {
+              error: error instanceof Error ? error.message : String(error),
+              streamKey,
+              groupName,
+            },
+            'Stream reclaim pass failed',
+          );
+        }
+      }
+    }
+    logger.info({ consumerName: this.consumerName }, 'Stream reclaim loop stopped');
+  }
+
+  /**
+   * 对单个 stream 执行一次 XAUTOCLAIM 重投。
+   *
+   * @param streamKey - Stream 键名
+   * @param groupName - 消费组名
+   */
+  private async reclaimStream(streamKey: string, groupName: string): Promise<void> {
+    if (this.callback == null) {
+      return;
+    }
+    const result = (await this.redis.xautoclaim(
+      streamKey,
+      groupName,
+      this.consumerName,
+      this.minIdleMs,
+      '0-0',
+      'COUNT',
+      RECLAIM_BATCH,
+    )) as unknown[];
+
+    if (!Array.isArray(result) || result.length < 2) {
+      return;
+    }
+    const claimed = result[1];
+    if (!Array.isArray(claimed)) {
+      return;
+    }
+    for (const entry of claimed) {
+      if (!Array.isArray(entry) || entry.length < 2) {
+        continue;
+      }
+      const messageId = String(entry[0]);
+      const fields = entry[1] as string[];
+      await this.processMessage(streamKey, messageId, fields, this.callback);
+    }
+  }
+
+  /**
+   * 处理单条消息（含正常消费与重投复用）。
    */
   private async processMessage(
     streamKey: string,
@@ -368,6 +551,8 @@ export class StreamConsumer {
     fields: string[],
     callback: ConsumeCallback,
   ): Promise<void> {
+    // 该 stream 所属的消费组（接管旧 owner 流时可能与默认组不同）。
+    const group = this.streamGroups.get(streamKey) ?? this.groupName;
     try {
       // 将字段数组转换为对象
       const fieldObj: Record<string, string> = {};
@@ -405,10 +590,10 @@ export class StreamConsumer {
       await callback(message);
 
       // 确认消息
-      await this.redis.xack(streamKey, this.groupName, messageId);
+      await this.redis.xack(streamKey, group, messageId);
 
       logger.debug(
-        { streamKey, messageId, sessionId: message.sessionId },
+        { streamKey, group, messageId, sessionId: message.sessionId },
         'Message consumed and acknowledged',
       );
     } catch (error) {
@@ -416,11 +601,12 @@ export class StreamConsumer {
         {
           error: error instanceof Error ? error.message : String(error),
           streamKey,
+          group,
           messageId,
         },
         'Error processing message',
       );
-      // 不确认消息，让其在 PEL 中稍后重试
+      // 不确认消息，让其留在 PEL 中稍后由 reclaimLoop 重投。
     }
   }
 }

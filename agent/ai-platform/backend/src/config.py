@@ -160,6 +160,50 @@ class Settings(BaseSettings):
         description="每次 XREADGROUP 最多读取的消息条数",
     )
 
+    # ===== Redis Stream 崩溃重投（T6：N1 闭环）=====
+    # 多 Gateway / 多 Core 下，消费者崩溃会在 PEL 滞留孤儿消息；两侧（Gateway
+    # StreamConsumer + Core InboundStreamWorker）各自周期性 XPENDING/XAUTOCLAIM
+    # 重投，保证 kill -9 后孤儿消息恰好一次重投（不丢不重）。
+    XCLAIM_INTERVAL_MS: int = Field(
+        default=5000,
+        description="XAUTOCLAIM 重投循环周期（毫秒）",
+    )
+    XCLAIM_MIN_IDLE_MS: int = Field(
+        default=30000,
+        description="孤儿消息进入重投的最小 idle 阈值（毫秒）；低于此值不抢投",
+    )
+
+    # ===== Agent Core 多实例（T8/T9：决策 1 + 同构问题①）=====
+    # 多 Agent Core 下，每个 Agent 运行时全局同一时刻仅一个 core 持有（一 agent 一
+    # owner，避免双活）。租约与 bot 同构（手写 SET NX PX + 心跳续租，无外部锁库）。
+    # 入站分区则改用 Redis 分布式 session 锁（替代进程内 asyncio.Lock），使跨 Core
+    # 的同一会话处理严格串行，崩溃后锁 TTL 释放无死锁。
+    CORE_ID: str = Field(
+        default="",
+        description="稳定 Core 实例 ID；优先级 CORE_ID 环境变量 > os.hostname() > 告警随机；k8s StatefulSet 注入 pod 名 core-1",
+    )
+    AGENT_LEASE_TTL_S: int = Field(
+        default=30,
+        description="Agent 运行时租约 TTL（秒）；心跳续租未达则释放易主",
+    )
+    AGENT_HEARTBEAT_S: int = Field(
+        default=10,
+        description="Agent 租约心跳续租间隔（秒）",
+    )
+    SESSION_LOCK_TTL_S: int = Field(
+        default=30,
+        description="Redis 分布式 session 锁 TTL（秒）；处理窗口上限，带看门狗续期",
+    )
+    SESSION_LOCK_EXTEND_S: int = Field(
+        default=10,
+        description="session 锁看门狗续期间隔（秒）",
+    )
+    AGENT_RESYNC_S: int = Field(
+        default=15,
+        description="Agent 租约/订阅周期性再对齐间隔（秒）；须 < 租约 TTL，使崩溃 Core 的 "
+        "agent 在租约过期后被新 owner 及时接管运行并重新订阅 aip:stream:agent:{agentId}",
+    )
+
     # ===== Qdrant =====
     QDRANT_HOST: str = "qdrant"
     QDRANT_PORT: int = 6333

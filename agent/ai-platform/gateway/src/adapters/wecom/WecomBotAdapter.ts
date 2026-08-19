@@ -49,9 +49,12 @@ export class WecomBotAdapter {
   private readonly cardBuilder: WecomBotCardBuilder;
   private readonly capability: WecomBotCapability;
   private readonly sourceName: string;
+  /** 原始配置（阶段 A 需要 config.botId 生成带 botId 的 sessionId） */
+  private readonly config: WecomBotAdapterConfig;
   private readonly pendingBySession = new Map<string, PendingStream>();
 
   constructor(config: WecomBotAdapterConfig) {
+    this.config = config;
     this.wsClient = new WecomBotClient(config);
     this.cardBuilder = new WecomBotCardBuilder(
       config.sourceName,
@@ -201,7 +204,9 @@ export class WecomBotAdapter {
       botMessage.chatType === 'group' && botMessage.chatId != null
         ? botMessage.chatId
         : channelUserId;
-    const sessionId = `wecom-bot-${sessionKey}`;
+    // 阶段 A（T4 / 修 N3）：sessionId 内联 botId，使同用户并发多 Bot 自然隔离，
+    // 且 Core 出站可经 aip:session:{sid}:bot 反查归属精准定向。
+    const sessionId = `wecom-bot-${this.config.botId}-${sessionKey}`;
 
     // 企微回调偶发带手机号字段；没有则为空
     const rawBody =
@@ -311,7 +316,8 @@ export class WecomBotAdapter {
         : undefined;
     const channelUserId = botMessage.from?.userId ?? fromUserId ?? 'unknown';
     const sessionKey = chatId.length > 0 ? chatId : channelUserId;
-    const sessionId = `wecom-bot-${sessionKey}`;
+    // 阶段 A（T4 / 修 N3）：与 receive 保持一致，sessionId 内联 botId。
+    const sessionId = `wecom-bot-${this.config.botId}-${sessionKey}`;
 
     return buildEntitySelectInbound({
       sessionId,

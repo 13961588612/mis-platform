@@ -56,6 +56,7 @@ import {
 } from '@/lib/api/users';
 import { ApiError } from '@/lib/api/errors';
 import { listEnabledRoles } from '@/lib/api/roles';
+import { getEmployee } from '@/lib/api/employees';
 import { getConfigByKey, isConfigEnabled } from '@/lib/api/configs';
 import type {
   AppItem,
@@ -382,6 +383,39 @@ export function UserListPage() {
     loadForceBind();
     setAiAssistOpen(false);
     setSheetOpen(true);
+
+    // Bug1 修复：编辑态下补拉员工详情，补全任职信息卡片的 posts。
+    // 创建态走 onEmployeePicked 时 emp 已含完整 posts；列表行 row 不携带 posts，
+    // 原先编辑态任职岗位永远显示「—」。此处仅补充 posts 等展示字段，不改其它编辑逻辑。
+    // EmployeeInfoBlock 读取 emp.orgName / emp.deptName / emp.posts，其余字段由上方 row 回填。
+    if (row.employeeId) {
+      void getEmployee(row.employeeId)
+        .then((emp) => {
+          setBoundEmployee((prev) =>
+            prev
+              ? {
+                  ...prev,
+                  realName: emp.realName ?? prev.realName,
+                  orgName: emp.orgName ?? prev.orgName,
+                  posts:
+                    emp.posts && emp.posts.length > 0
+                      ? emp.posts.map((p) => ({
+                          postId: p.postId,
+                          postName: p.postName ?? null,
+                          deptId: p.deptId ?? null,
+                          deptName: p.deptName ?? null,
+                          orgName: p.orgName ?? null,
+                          isPrimary: p.isPrimary,
+                        }))
+                      : null,
+                }
+              : prev,
+          );
+        })
+        .catch(() => {
+          toast.warning('员工任职信息加载失败，不影响账号编辑');
+        });
+    }
   }
 
   function openPerms(row: UserView) {

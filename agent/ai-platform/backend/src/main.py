@@ -12,9 +12,11 @@ FastAPI 应用入口。
 from __future__ import annotations
 from typing import Any
 
+import asyncio
 from contextlib import asynccontextmanager
 from collections.abc import AsyncIterator
 
+import redis.asyncio as aioredis
 import structlog
 from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
@@ -48,6 +50,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """
     settings: Settings = get_settings()
     logger: structlog.stdlib.BoundLogger = structlog.get_logger("lifespan")
+
+    # 多 Agent Core 协调态（T8 / 决策 1 + 同构问题②）：未注入时退化为单 Core 旧行为。
+    core_id: str = ""
+    core_ownership: Any = None
+    cluster_redis: Any = None
+    resync_task: Any = None
 
     logger.info(
         "Application starting",
@@ -152,6 +160,39 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     except Exception as exc:
         logger.warning("Skills/MCP init deferred", error=str(exc))
 
+    # ===== 多 Agent Core 协调（T8 / 决策 1 + 同构问题②）=====
+    # 稳定 CoreId + agent 运行时租约 + Agent 注册表心跳。未注入 CoreOwnership 时
+    # AgentManager.sync_from_configs 退化为「人人都起」（向后兼容单 Core）。
+    try:
+        from src.cluster.core_ownership import CoreOwnership, get_core_id
+
+        core_id = get_core_id()
+        cluster_redis = aioredis.from_url(
+            settings.redis_url,
+            max_connections=settings.REDIS_MAX_CONNECTIONS,
+            decode_responses=True,
+            socket_timeout=10,
+            socket_connect_timeout=5,
+        )
+        core_ownership = CoreOwnership(
+            cluster_redis,
+            core_id,
+            lease_ttl_s=settings.AGENT_LEASE_TTL_S,
+            heartbeat_s=settings.AGENT_HEARTBEAT_S,
+        )
+        agent_manager.bind_core(core_id, core_ownership, cluster_redis)
+        # 心跳：续租持有中的 agent 租约；续租失败（已易主）触发 on_lost 停本地运行时。
+        core_ownership.start_heartbeat(
+            on_lost=lambda aid: asyncio.create_task(
+                agent_manager.stop_agent_if_owned(aid)
+            )
+        )
+        # 注册表心跳：周期刷新 aip:agent:registry 本 core 拥有的 agent 条目。
+        agent_manager.start_registry_heartbeat(interval_s=settings.AGENT_HEARTBEAT_S)
+        logger.info("Core ownership started", core_id=core_id)
+    except Exception as exc:
+        logger.warning("Core ownership init deferred", error=str(exc))
+
     # 同步从已加载配置中同步 Agent 实例（Skills/MCP 必须先就绪）
     try:
         from src.agent.manager import get_agent_manager
@@ -173,10 +214,63 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
         agent_manager: AgentManager = get_agent_manager()
         agent_ids: list[Any] = [inst.id for inst in agent_manager.list_agents()]
+        # 多 Core：入站 worker 绑定 Core 身份 + 租约协调器，启用 Redis 分布式
+        # session 锁与 agent owner 路由（T9 / 同构问题①）。未绑定则退化为进程内
+        # 锁 + 全量订阅（向后兼容单 Core）。
+        if core_ownership is not None:
+            try:
+                from src.queue.inbound_worker import get_inbound_stream_worker
+
+                get_inbound_stream_worker().bind_core(
+                    core_id, core_ownership, cluster_redis
+                )
+            except Exception as exc:
+                logger.warning("Inbound worker core binding deferred", error=str(exc))
         await start_inbound_stream_worker(agent_ids)
         logger.info("Inbound stream worker started", agent_streams=agent_ids)
     except Exception as exc:
         logger.warning("Inbound stream worker start deferred", error=str(exc))
+
+    # 多 Core 故障转移再对齐循环（T9 收口 / QA 缺口闭环）：
+    # 周期性重跑 sync_from_configs（重认领崩溃 Core 遗留的 agent 租约并起本地运行时）
+    # + refresh_streams（重新订阅本 core 新拥有的 aip:stream:agent:{agentId}）。
+    # 间隔须 < 租约 TTL，使故障 Core 的 agent 在租约过期后一个窗口内被新 owner 接管并
+    # 及时消费 Gateway 直达 agent 流的消息（否则在接管窗口存在订阅缺口）。单 Core（无
+    # core_ownership）不启用，退化为「启动一次性 sync_from_configs」旧行为。
+    if core_ownership is not None:
+
+        async def _agent_resync_loop() -> None:
+            """周期性再对齐 agent 租约运行权与入站流订阅（多 Core 故障转移兜底）。"""
+            from src.queue.inbound_worker import get_inbound_stream_worker
+
+            while True:
+                try:
+                    await asyncio.sleep(settings.AGENT_RESYNC_S)
+                    # 重认领孤儿租约 + 起本 core 新拥有的 agent 运行时 + 刷注册表。
+                    await agent_manager.sync_from_configs(
+                        config_manager.list_configs()
+                    )
+                    # 重新订阅本 core 拥有的 agent 流（崩溃 Core 易主后及时接管）。
+                    worker: Any = get_inbound_stream_worker()
+                    await worker.refresh_streams(
+                        [inst.id for inst in agent_manager.list_agents()]
+                    )
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:  # noqa: BLE001 - 再对齐失败不得中断循环
+                    logger.warning("Agent resync iteration failed", error=str(exc))
+
+        try:
+            resync_task = asyncio.create_task(
+                _agent_resync_loop(), name="agent-resync-loop"
+            )
+            logger.info(
+                "Agent resync loop started",
+                interval_s=settings.AGENT_RESYNC_S,
+                lease_ttl_s=settings.AGENT_LEASE_TTL_S,
+            )
+        except Exception as exc:
+            logger.warning("Agent resync loop start deferred", error=str(exc))
 
     logger.info("Startup phase complete")
 
@@ -185,12 +279,44 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # --- 关闭阶段 ---
     logger.info("Application shutting down")
 
+    # 先取消 agent 故障转移再对齐循环（T9 收口），避免其在拆除 worker / 释放租约期间
+    # 再触发 sync_from_configs / refresh_streams 产生竞态。
+    try:
+        if resync_task is not None:
+            resync_task.cancel()
+            try:
+                await resync_task
+            except asyncio.CancelledError:
+                pass
+            logger.info("Agent resync loop stopped")
+    except Exception as exc:
+        logger.warning("Agent resync loop shutdown error", error=str(exc))
+
     try:
         from src.queue.inbound_worker import stop_inbound_stream_worker
 
         await stop_inbound_stream_worker()
     except Exception as exc:
         logger.warning("Inbound stream worker shutdown error", error=str(exc))
+
+    # 停止 Agent 注册表心跳 + 释放本 core 持有的 agent 租约 + 停 Core 租约心跳
+    try:
+        from src.agent.manager import get_agent_manager
+
+        get_agent_manager().stop_registry_heartbeat()
+        await get_agent_manager().release_all_leases()
+    except Exception as exc:
+        logger.warning("Agent registry/lease shutdown error", error=str(exc))
+    try:
+        if core_ownership is not None:
+            core_ownership.stop_heartbeat()
+    except Exception as exc:
+        logger.warning("Core ownership shutdown error", error=str(exc))
+    try:
+        if cluster_redis is not None:
+            await cluster_redis.aclose()
+    except Exception:
+        pass
 
     try:
         from src.bootstrap.skills_mcp import shutdown_skills_and_mcp

@@ -1,14 +1,19 @@
 /**
- * BotRegistry.ts — 企微多 Bot 实例注册表（T04 O1f-1 / B4 验收 + O1f-2 热加载）
+ * BotRegistry.ts — 企微多 Bot 实例注册表（T04 O1f-1 / B4 验收 + O1f-2 热加载 + 阶段 A 租约）
  *
  * 把原本「`index.ts` 里写死一个 `WecomBotAdapter`」的单实例结构，换成
  * 「一份配置清单 → N 个 adapter 实例」的注册表，满足 B4 验收：
  * **≥2 个 Bot 并存、可独立停用**。
  *
+ * 阶段 A（T2/N2/K1）扩展：每个 Bot 全局恰好一个 owner Gateway（Redis 租约保证），
+ * 仅 owner 才 `startEntry` 握企微 WS；`reconcile` 尊重租约（失主停、得主起）。
+ * `rememberSessionBot` 除进程内归属外，异步写 Redis `aip:session:{sid}:bot`，
+ * 供 Core 出站精准定向（修 N3）。
+ *
  * 核心职责：
- * - `startAll` / `stopAll`：批量生命周期；单个 Bot 启动失败不影响其他 Bot。
+ * - `startOwnedBots` / `stopAll`：批量生命周期；单个 Bot 启动失败不影响其他 Bot。
  * - `startBot` / `stopBot`：单实例启停（B4「独立停用」）。
- * - `reconcile`：O1f-2 热加载差量收敛（新增 / 重启 / 元数据更新 / 消失 / 幂等）。
+ * - `reconcile`：O1f-2 热加载差量收敛（新增 / 重启 / 元数据更新 / 消失 / 幂等）；并尊重租约。
  * - `health()`：给 backend `#54` 消费的 `{botId: 状态}` 映射。
  * - **回程事件派发**：Agent Core 的 `text.delta` / `error` / `done` 事件只带
  *   `sessionId`，不带 `botId`。注册表在入站时记录 `sessionId → botId` 归属，
@@ -19,9 +24,12 @@
  * @module channels/BotRegistry
  */
 
+import type { Redis } from 'ioredis';
 import { WecomBotAdapter } from '../adapters/wecom/WecomBotAdapter.js';
 import type { BotRuntimeConfig } from '../config/botConfigSource.js';
 import type { InboundMessage } from '../queue/redisStream.js';
+import { sessionBotKey } from '../cluster/ownership.js';
+import type { BotOwnership } from '../cluster/ownership.js';
 import { logger } from '../middleware/logger.js';
 
 // ============================================================================
@@ -33,6 +41,12 @@ export type BotHealth = 'connected' | 'disconnected' | 'unknown';
 
 /** 入站消息回调（通常是 `messageRouter.route`） */
 export type BotInboundHandler = (message: InboundMessage) => void | Promise<void>;
+
+/** 租约判定回调：传入 botId，返回本网关是否已成为 owner（通常由 `ownership.claim` 提供） */
+export type BotIsOwner = (botId: string) => Promise<boolean>;
+
+/** 故障转移接管的「旧 owner」流 drain 钩子（由 index.ts 注入，引用 StreamConsumer） */
+export type DrainOldStreamFn = (oldGatewayId: string) => Promise<void>;
 
 /** 注册表中单个 Bot 的运行时条目 */
 interface BotEntry {
@@ -78,20 +92,62 @@ export interface ReconcileReport {
 
 /**
  * 多 Bot 实例注册表。
+ *
+ * 租约模式（阶段 A）：
+ * - `bindCluster(ownership, gatewayId, drainOldStream?)` 注入租约协调器与接管 drain 钩子；
+ *   未注入时退化为「人人都启」的旧行为（向后兼容单 Gateway）。
+ * - `startOwnedBots` / `reconcile` 仅启动本网关 `claim` 成功的 bot（得主起、失主停）。
  */
 export class BotRegistry {
   private readonly entries = new Map<string, BotEntry>();
-  /** sessionId → botId 归属表（回程事件精确派发用） */
+  /** sessionId → botId 归属表（回程事件精确派发用，进程内） */
   private readonly sessionOwner = new Map<string, string>();
   /** 归属表容量上限，超出后按插入顺序淘汰最旧项，防止长跑内存泄漏 */
   private readonly maxSessionOwners: number;
   private inboundHandler: BotInboundHandler | null = null;
+
+  /** 租约协调器（可选；未注入则租约失活） */
+  private ownership: BotOwnership | null = null;
+  /** 本网关稳定 ID（接管 drain 定位用） */
+  private gatewayId = '';
+  /** 接管时 drain 旧 owner 出站流的钩子 */
+  private drainOldStream: DrainOldStreamFn | null = null;
+  /** 最近一次观察到的「上一任 owner」（接管 drain 定位用） */
+  private readonly observedPrev = new Map<string, string>();
+  /** Redis 客户端（写 `aip:session:{sid}:bot`；可选） */
+  private redis: Redis | null = null;
 
   /**
    * @param maxSessionOwners - sessionId 归属表容量上限（默认 10000）
    */
   constructor(maxSessionOwners = 10000) {
     this.maxSessionOwners = maxSessionOwners;
+  }
+
+  /**
+   * 注入租约协调器与接管 drain 钩子（阶段 A）。
+   *
+   * @param ownership - Bot 租约协调器
+   * @param gatewayId - 本网关稳定 ID
+   * @param drainOldStream - 接管某 bot 时 drain 旧 owner 出站流的钩子（可选）
+   */
+  bindCluster(
+    ownership: BotOwnership,
+    gatewayId: string,
+    drainOldStream?: DrainOldStreamFn,
+  ): void {
+    this.ownership = ownership;
+    this.gatewayId = gatewayId;
+    this.drainOldStream = drainOldStream ?? null;
+  }
+
+  /**
+   * 注入 Redis 客户端（用于写 `aip:session:{sid}:bot`）。
+   *
+   * @param redis - Redis 客户端
+   */
+  bindRedis(redis: Redis): void {
+    this.redis = redis;
   }
 
   // --------------------------------------------------------------------
@@ -127,15 +183,29 @@ export class BotRegistry {
   }
 
   /**
-   * 启动所有 `enabled` 的 Bot。
-   *
-   * 单个 Bot 启动失败只记错误并继续，绝不让一个坏 Bot 拖垮整个 Gateway
-   * （原 `index.ts` 已是这个语义，这里保持一致并推广到多实例）。
+   * 启动所有 `enabled` 的 Bot（向后兼容：未注入租约时等同于旧 `startAll`）。
    *
    * @param onMessage - 入站消息回调
    * @returns 成功启动的 Bot 数量
    */
   async startAll(onMessage: BotInboundHandler): Promise<number> {
+    return this.startOwnedBots(onMessage, async () => true);
+  }
+
+  /**
+   * 仅启动本网关 `claim` 成功的 Bot（修 K1/N2）。
+   *
+   * 单个 Bot 启动失败只记错误并继续，绝不让一个坏 Bot 拖垮整个 Gateway。
+   * 非 owner 的 Bot 确保停掉本地实例，杜绝「人人都连」导致的企微单 WS 冲突。
+   *
+   * @param onMessage - 入站消息回调
+   * @param isOwner - 租约判定（通常由 `ownership.claim` 提供）
+   * @returns 成功启动的 Bot 数量
+   */
+  async startOwnedBots(
+    onMessage: BotInboundHandler,
+    isOwner: BotIsOwner,
+  ): Promise<number> {
     this.inboundHandler = onMessage;
 
     let started = 0;
@@ -144,17 +214,65 @@ export class BotRegistry {
         logger.info({ botId, name: entry.config.name }, 'Skip disabled wecom bot');
         continue;
       }
-      const ok = await this.startEntry(botId, entry);
+      const ok = await this.acquireBot(botId, isOwner);
       if (ok) {
-        started += 1;
+        if (!entry.started) {
+          const s = await this.startEntry(botId, entry);
+          if (s) {
+            started += 1;
+          }
+        } else {
+          started += 1;
+        }
+      } else if (entry.started) {
+        // 非 owner：确保停掉本地实例，避免双连（修 K1/N2）
+        this.stopBot(botId);
       }
     }
 
     logger.info(
       { started, total: this.entries.size },
-      'BotRegistry startAll finished',
+      'BotRegistry startOwnedBots finished',
     );
     return started;
+  }
+
+  /**
+   * 抢注 / 接管某 Bot 的租约，并在「新接管」时触发旧 owner 流 drain。
+   *
+   * @param botId - 目标 Bot ID
+   * @param isOwner - 租约判定
+   * @returns 本网关是否成为/保持 owner
+   */
+  private async acquireBot(botId: string, isOwner: BotIsOwner): Promise<boolean> {
+    // 观察当前 owner；记录「上一任」供接管 drain 定位旧 stream。
+    if (this.ownership != null && this.gatewayId.length > 0) {
+      const cur = await this.ownership.currentOwner(botId);
+      if (cur != null && cur !== this.gatewayId) {
+        this.observedPrev.set(botId, cur);
+      }
+    }
+
+    const ok = await isOwner(botId);
+
+    if (ok && this.ownership != null && this.gatewayId.length > 0) {
+      const prev = this.observedPrev.get(botId);
+      if (prev != null && prev !== this.gatewayId) {
+        await this.ownership.setPrevOwner(botId, prev);
+        this.observedPrev.delete(botId);
+        if (this.drainOldStream != null) {
+          try {
+            await this.drainOldStream(prev);
+          } catch (error) {
+            logger.error(
+              { botId, prev, error: error instanceof Error ? error.message : String(error) },
+              'Failed to drain previous owner outbound stream on takeover',
+            );
+          }
+        }
+      }
+    }
+    return ok;
   }
 
   /**
@@ -215,23 +333,28 @@ export class BotRegistry {
   }
 
   /**
-   * 按期望清单差量收敛（O1f-2 热加载收敛侧）。
+   * 按期望清单差量收敛（O1f-2 热加载收敛侧）+ 尊重租约（失主停、得主起）。
    *
    * `desired` 是轮询到的**启用中** Bot 清单（含明文 secret，严禁写日志）：
-   * - 新增 → 建条目 + `startBot`（失败只记 `lastError` 不阻塞其他 Bot）；
+   * - 新增 → 建条目 + 抢租约 + `startBot`（失败只记 `lastError` 不阻塞）；
    * - 已存在且 `wsUrl`/`secret` 任一变化 → **重启**（新 adapter，保留 sessionOwner）；
    * - 已存在且仅 `name`/`boundAgentId` 变化 → 原地更新配置，**不重启**；
    * - 已存在且配置全等 → no-op（幂等）；
-   * - 清单中消失（停用/删除）→ `stopBot` + drop 会话归属 + 删除条目。
+   * - 清单中消失（停用/删除）→ `stopBot` + drop 会话归属 + 删除条目；
+   * - 非 owner（租约被他网关抢走）→ 停掉本地实例，避免双连。
    *
    * 注册表只保留「需要运行的 Bot」：期望清单之外一律移除（停用与删除动作相同，
    * 都从启用清单消失，无需区分）。调用方保证：`desired` 为空数组 = 收敛到零；
    * **`null`（拉取失败）不得进入本方法**，由调用方跳过本轮。
    *
    * @param desired - 期望运行的启用 Bot 配置数组
+   * @param isOwner - 租约判定（可选；未提供时退化为「人人都启」旧行为）
    * @returns 差量报告
    */
-  async reconcile(desired: BotRuntimeConfig[]): Promise<ReconcileReport> {
+  async reconcile(
+    desired: BotRuntimeConfig[],
+    isOwner?: BotIsOwner,
+  ): Promise<ReconcileReport> {
     const report: ReconcileReport = {
       started: [],
       stopped: [],
@@ -244,49 +367,67 @@ export class BotRegistry {
     const desiredIds = new Set<string>();
     for (const config of desired) {
       desiredIds.add(config.botId);
-      const entry = this.entries.get(config.botId);
+      const botId = config.botId;
+      const entry = this.entries.get(botId);
 
       if (entry == null) {
-        // 新增（enabled）：建条目并启动；启动失败只记 lastError，不阻塞。
+        // 新增（enabled）：建条目；抢租约 + 启动；启动失败只记 lastError，不阻塞。
         const newEntry: BotEntry = {
           config,
           adapter: new WecomBotAdapter(config),
           started: false,
         };
-        this.entries.set(config.botId, newEntry);
-        const ok = await this.startBot(config.botId);
+        this.entries.set(botId, newEntry);
+        const ok = isOwner != null ? await this.acquireBot(botId, isOwner) : true;
         if (ok) {
-          report.started.push(config.botId);
-        } else {
-          report.errors.push({
-            botId: config.botId,
-            reason: newEntry.lastError ?? 'start failed',
-          });
+          if (await this.startEntry(botId, newEntry)) {
+            report.started.push(botId);
+          } else {
+            report.errors.push({
+              botId,
+              reason: newEntry.lastError ?? 'start failed',
+            });
+          }
         }
         continue;
       }
 
-      // 已存在：连接参数变更 → 重启；仅元数据变更 → 原地更新；全等 → no-op。
-      if (this.configsEqual(entry.config, config)) {
-        continue;
-      }
-      if (
-        entry.config.wsUrl !== config.wsUrl ||
-        entry.config.secret !== config.secret
-      ) {
-        const ok = await this.restartEntry(config.botId, entry, config);
-        if (ok) {
-          report.restarted.push(config.botId);
+      // 已存在：连接参数变更 → 重建 adapter（不启动，交由租约门控的启动步骤）；
+      // 仅元数据变更 → 原地更新；全等 → no-op。
+      if (!this.configsEqual(entry.config, config)) {
+        if (
+          entry.config.wsUrl !== config.wsUrl ||
+          entry.config.secret !== config.secret
+        ) {
+          await this.restartEntry(botId, entry, config);
+          report.restarted.push(botId);
         } else {
-          report.errors.push({
-            botId: config.botId,
-            reason: entry.lastError ?? 'restart failed',
-          });
+          entry.config = config;
+          report.metadataUpdated.push(botId);
         }
-        continue;
       }
-      entry.config = config;
-      report.metadataUpdated.push(config.botId);
+
+      // 租约门控：得主起、失主停。
+      const ok = isOwner != null ? await this.acquireBot(botId, isOwner) : true;
+      if (ok) {
+        if (!entry.started) {
+          if (await this.startEntry(botId, entry)) {
+            if (!report.started.includes(botId)) {
+              report.started.push(botId);
+            }
+          } else {
+            report.errors.push({
+              botId,
+              reason: entry.lastError ?? 'start failed',
+            });
+          }
+        }
+      } else if (entry.started) {
+        this.stopBot(botId);
+        if (!report.stopped.includes(botId)) {
+          report.stopped.push(botId);
+        }
+      }
     }
 
     // 清单中消失（停用/删除）：stop + drop 会话归属 + 删除条目。
@@ -305,7 +446,7 @@ export class BotRegistry {
   }
 
   /**
-   * 实际执行单实例启动并包装入站回调（记录 session 归属）。
+   * 实际执行单实例启动并包装入站回调（记录 session 归属 + 写 Redis）。
    *
    * @param botId - 目标 Bot ID
    * @param entry - 注册表条目
@@ -320,7 +461,8 @@ export class BotRegistry {
 
     try {
       await entry.adapter.start(async (message: InboundMessage) => {
-        this.rememberSessionOwner(message.sessionId, botId);
+        // 记录归属：进程内（回程精确派发）+ Redis（跨 gateway 可见，供 Core 出站定向，修 N3）
+        await this.rememberSessionBot(message.sessionId, botId);
         await handler(message);
       });
       entry.started = true;
@@ -343,31 +485,32 @@ export class BotRegistry {
   }
 
   /**
-   * 重启单实例（连接参数变更路径）。
+   * 重建单实例 adapter（连接参数变更路径）。
    *
-   * 关键差异 vs `stopBot`：**保留 sessionOwner 映射**（不调 `dropSessionsOf`），
-   * 回程事件仍能精确投递到新 adapter（新 adapter 无 pending ⇒ no-op，不误广播）。
-   * 进行中的流式回复至多断一条（设计裁定：连接参数变更重启不做 drain）。
+   * 与旧实现差异：本方法**只停 + 重建 adapter**（不立即启动），启动交由
+   * `reconcile` 的租约门控逻辑统一处理，避免与 `acquireBot` 重复 start。
+   * 重建时**保留 sessionOwner 映射**（不调 `dropSessionsOf`），回程事件仍能
+   * 精确投递到新 adapter（新 adapter 无 pending ⇒ no-op，不误广播）。
    *
    * @param botId - 目标 Bot ID
    * @param entry - 注册表条目（原地替换 adapter）
    * @param config - 新配置（含变更后的 wsUrl/secret）
-   * @returns 是否重启成功
    */
   private async restartEntry(
     botId: string,
     entry: BotEntry,
     config: BotRuntimeConfig,
-  ): Promise<boolean> {
-    entry.adapter.stop();
+  ): Promise<void> {
+    if (entry.started) {
+      entry.adapter.stop();
+      entry.started = false;
+    }
     entry.config = config;
     entry.adapter = new WecomBotAdapter(config);
-    entry.started = false;
     logger.info(
       { botId, name: config.name, wsUrl: config.wsUrl },
-      'Wecom bot connection config changed, restarting adapter',
+      'Wecom bot connection config changed, adapter recreated (owner-gated start pending)',
     );
-    return this.startEntry(botId, entry);
   }
 
   /**
@@ -395,12 +538,36 @@ export class BotRegistry {
   // --------------------------------------------------------------------
 
   /**
-   * 记录 sessionId 的归属 Bot（回程事件派发用）。
+   * 记录 sessionId 的归属 Bot（回程事件派发 + Core 出站定向用）。
    *
-   * 同一用户同时对话多个 Bot 时 `sessionId` 可能相同（现网 sessionId 规则是
-   * `wecom-bot-{chatId|userId}`，不含 botId）。这里「后写覆盖」= 最近一次
-   * 请求的 Bot 拿到回程，是正确的行为；即便判错，`dispatch*` 也会在目标
-   * adapter 无 pending 时回退广播，最终不会丢消息。
+   * 进程内归属表 key 已含 botId（见 `WecomBotAdapter.receive`），同一用户同时
+   * 对话多个 Bot 时 sessionId 天然隔离，不存在「后写覆盖」歧义（修 N3）。
+   * 同时异步写 Redis `aip:session:{sid}:bot`，使跨 gateway 可见，供 Core 出站
+   * 按 owner 精准定向。
+   *
+   * @param sessionId - 会话 ID
+   * @param botId - 归属 Bot ID
+   */
+  async rememberSessionBot(sessionId: string, botId: string): Promise<void> {
+    this.rememberSessionOwner(sessionId, botId);
+    if (this.redis != null) {
+      try {
+        await this.redis.set(sessionBotKey(sessionId), botId, 'EX', 86400);
+      } catch (error) {
+        logger.warn(
+          {
+            error: error instanceof Error ? error.message : String(error),
+            sessionId,
+            botId,
+          },
+          'Failed to persist session->bot mapping to Redis',
+        );
+      }
+    }
+  }
+
+  /**
+   * 记录 sessionId 的归属 Bot（进程内，回程事件精确派发用）。
    *
    * @param sessionId - 会话 ID
    * @param botId - 归属 Bot ID

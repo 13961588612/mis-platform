@@ -11,12 +11,14 @@
  */
 
 import { randomUUID } from 'node:crypto';
+import type { Redis } from 'ioredis';
 import type { WebSocket } from '@fastify/websocket';
 import type { AgentEvent, ChannelCapability } from '../../channels/ChannelCapability.js';
 import { WecomH5Capability } from '../../channels/ChannelCapability.js';
 import { WecomJSSDKHelper, type JsSdkSignature } from './WecomJSSDKHelper.js';
 import { WecomAppMessage } from './WecomAppMessage.js';
 import type { InboundMessage } from '../../queue/redisStream.js';
+import { sessionGatewayKey } from '../../cluster/ownership.js';
 import { logger } from '../../middleware/logger.js';
 
 // ============================================================================
@@ -54,6 +56,10 @@ export class WecomH5Adapter {
   private readonly appMessage: WecomAppMessage;
   private readonly capability: WecomH5Capability;
   private readonly connections: ConnectionMap;
+  /** Redis 客户端（写 aip:session:{sid}:gateway；可选，未注入则粘滞映射降级为进程内） */
+  private _redis: Redis | null = null;
+  /** 粘滞映射 TTL（秒）；与 design § key 表一致（3600） */
+  private readonly gatewaySessionTtlSec = 3600;
 
   constructor(config: WecomH5AdapterConfig) {
     this.jsSdkHelper = new WecomJSSDKHelper({
@@ -202,30 +208,99 @@ export class WecomH5Adapter {
   }
 
   /**
-   * 注册 WebSocket 连接
+   * 注入 Redis 客户端（写 aip:session:{sid}:gateway）。
    *
-   * @param sessionId - 会话 ID
-   * @param ws - WebSocket 连接
+   * @param redis - Redis 客户端
    */
-  registerConnection(sessionId: string, ws: WebSocket): void {
+  bindRedis(redis: Redis): void {
+    this._redis = redis;
+  }
+
+  /**
+   * 注册 WebSocket 连接，并写粘滞映射 aip:session:{sid}:gateway（修 N5）。
+   *
+   * @param sessionId - 会话 ID（本端点每次连接生成稳定 sessionId）
+   * @param ws - WebSocket 连接
+   * @param gatewayId - 本 Gateway 稳定 ID（写入映射值，TTL 3600）
+   */
+  async registerConnection(
+    sessionId: string,
+    ws: WebSocket,
+    gatewayId: string,
+  ): Promise<void> {
     this.connections.set(sessionId, ws);
+    await this.persistSessionGateway(sessionId, gatewayId);
     logger.info(
-      { sessionId, totalConnections: this.connections.size },
+      { sessionId, gatewayId, totalConnections: this.connections.size },
       'WebSocket connection registered',
     );
   }
 
   /**
-   * 注销 WebSocket 连接
+   * 注销 WebSocket 连接，并删除粘滞映射。
    *
    * @param sessionId - 会话 ID
    */
-  unregisterConnection(sessionId: string): void {
+  async unregisterConnection(sessionId: string): Promise<void> {
     this.connections.delete(sessionId);
+    await this.clearSessionGateway(sessionId);
     logger.info(
       { sessionId, totalConnections: this.connections.size },
       'WebSocket connection unregistered',
     );
+  }
+
+  /**
+   * 写粘滞映射 aip:session:{sid}:gateway = gatewayId（TTL 3600）。
+   *
+   * Redis 不可用 / 未注入时静默降级（进程内 WS 查找仍可用，仅跨 gateway 粘滞失效）。
+   *
+   * @param sessionId - 会话 ID
+   * @param gatewayId - 本 Gateway 稳定 ID
+   */
+  private async persistSessionGateway(sessionId: string, gatewayId: string): Promise<void> {
+    if (this._redis == null || sessionId.length === 0 || gatewayId.length === 0) {
+      return;
+    }
+    try {
+      await this._redis.set(
+        sessionGatewayKey(sessionId),
+        gatewayId,
+        'EX',
+        this.gatewaySessionTtlSec,
+      );
+    } catch (error) {
+      logger.warn(
+        {
+          error: error instanceof Error ? error.message : String(error),
+          sessionId,
+          gatewayId,
+        },
+        'Failed to persist session->gateway mapping to Redis',
+      );
+    }
+  }
+
+  /**
+   * 删除粘滞映射 aip:session:{sid}:gateway（连接关闭 / 重连换 gateway 时）。
+   *
+   * @param sessionId - 会话 ID
+   */
+  private async clearSessionGateway(sessionId: string): Promise<void> {
+    if (this._redis == null || sessionId.length === 0) {
+      return;
+    }
+    try {
+      await this._redis.del(sessionGatewayKey(sessionId));
+    } catch (error) {
+      logger.warn(
+        {
+          error: error instanceof Error ? error.message : String(error),
+          sessionId,
+        },
+        'Failed to clear session->gateway mapping from Redis',
+      );
+    }
   }
 
   /**
