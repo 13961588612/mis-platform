@@ -174,12 +174,14 @@ function Get-ChildEnvAssignments {
         'AUTH_CAPTCHA_ENABLED',
         'JAVA_TOOL_OPTIONS', 'MAVEN_OPTS'
     )
-    # Windows 默认 GBK：Nacos 中文 YAML 用平台编码 getBytes 再按 UTF-8 解析会失败，
-    # mis-kb 引擎配置被忽略并回退本地 noop。强制子进程 JVM UTF-8。
-    if ([string]::IsNullOrEmpty([Environment]::GetEnvironmentVariable('JAVA_TOOL_OPTIONS', 'Process'))) {
-        Set-Item -Path 'Env:JAVA_TOOL_OPTIONS' -Value '-Dfile.encoding=UTF-8'
-    } elseif ($env:JAVA_TOOL_OPTIONS -notmatch 'file\.encoding') {
-        Set-Item -Path 'Env:JAVA_TOOL_OPTIONS' -Value ($env:JAVA_TOOL_OPTIONS.Trim() + ' -Dfile.encoding=UTF-8')
+    # Windows 默认 GBK：Nacos 中文 YAML / 日志中文会乱码。强制子进程 JVM UTF-8。
+    # stdout/stderr.encoding 需 Java 18+；17 上多余属性无害。
+    $utf8Jvm = '-Dfile.encoding=UTF-8 -Dsun.jnu.encoding=UTF-8 -Dstdout.encoding=UTF-8 -Dstderr.encoding=UTF-8'
+    $jto = [Environment]::GetEnvironmentVariable('JAVA_TOOL_OPTIONS', 'Process')
+    if ([string]::IsNullOrEmpty($jto)) {
+        Set-Item -Path 'Env:JAVA_TOOL_OPTIONS' -Value $utf8Jvm
+    } elseif ($jto -notmatch 'file\.encoding') {
+        Set-Item -Path 'Env:JAVA_TOOL_OPTIONS' -Value ($jto.Trim() + ' ' + $utf8Jvm)
     }
     $lines = @()
     $lines += "`$env:JAVA_HOME = '$($env:JAVA_HOME_17)'"
@@ -239,10 +241,16 @@ try {
         Write-Host "  -> $svc (port $port, 日志: $log)" -ForegroundColor Yellow
 
         $envBlock = Get-ChildEnvAssignments
+        # 勿用 Tee-Object：PS 5.1 会按系统 ANSI(GBK) 解码管道再写文件，UTF-8 中文变乱码。
+        # cmd 重定向保留 JVM 原始 UTF-8 字节；子进程先 chcp 65001 对齐控制台。
         $childCmd = @"
 cd '$Root'
+chcp 65001 | Out-Null
+[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding `$false
+[Console]::InputEncoding = New-Object System.Text.UTF8Encoding `$false
+`$OutputEncoding = [Console]::OutputEncoding
 $envBlock
-& mvn spring-boot:run -pl $svc *>&1 | Tee-Object -FilePath '$log'
+cmd /c "mvn spring-boot:run -pl $svc > `"$log`" 2>&1"
 "@
 
         Start-Process powershell -ArgumentList @('-NoExit', '-Command', $childCmd) -WindowStyle Hidden | Out-Null
