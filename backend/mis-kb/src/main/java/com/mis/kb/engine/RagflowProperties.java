@@ -73,21 +73,19 @@ public class RagflowProperties {
     private boolean raptorEnabled = true;
 
     /**
-     * 当前引擎是否接受 dataset PUT 的 {@code parser_config.toc_extraction}（页码索引/TOC）。
+     * 当前引擎是否声明支持页码索引/TOC（{@code parser_config.ext.toc_extraction}）。
      *
-     * <p>T0 实测本实例 code:101（Extra inputs）；默认 {@code false}。为 false 时
-     * {@code RagflowClient.updateDatasetSettings} <b>不下发</b>该键（只落库回显），
-     * 否则夹在 PUT 里会让整单被 pydantic 拒掉，连 {@code auto_keywords} 都进不去。
-     * 引擎升级后翻 {@code mis.kb.engine.parser-toc-supported=true} 即可放行。
+     * <p>同步经 {@code parser_config.ext} 下发（2026-08-19 实测）；本开关控制
+     * {@code capabilities().parserTocSupported} 与前端置灰，默认 {@code true}（RAGFlow 集成环境）。
      */
-    private boolean parserTocSupported = false;
+    private boolean parserTocSupported = true;
 
     /**
-     * 当前引擎是否接受 dataset PUT 的 {@code parser_config.image_table_context_window}。
+     * 当前引擎是否声明支持图像/表格上下文窗口（ext 三键镜像）。
      *
-     * <p>T0 实测本实例 code:101；默认 {@code false}，口径同 {@link #parserTocSupported}。
+     * <p>口径同 {@link #parserTocSupported}；默认 {@code true}。
      */
-    private boolean parserImageTableContextSupported = false;
+    private boolean parserImageTableContextSupported = true;
 
     /** 引擎对账配置（定时任务 + 手动触发共用）。 */
     private final Reconcile reconcile = new Reconcile();

@@ -904,12 +904,12 @@ public class RagflowAdapter implements KnowledgeEnginePort {
      * 即可走「前端置灰 + 保存强制关 + 检索期降级」三道防线，代码分支不动（共享知识 §10-1）。
      *
      * <p><b>切片参数对齐（T3 → ext 修正）：</b>overlap / toc / imageTable 经
-     * {@code parser_config.ext} 下发（2026-08-19 live probe 实锤），对 RAGFlow 引擎
-     * 恒声明支持；OCR 仍不支持。
+     * {@code parser_config.ext} 下发；能力位由 {@code parser-toc-supported} /
+     * {@code parser-image-table-context-supported} 控制（默认 true）。
      *
      * @return 能力声明；{@code hybrid} 恒支持，{@code rerank} 随模型 ID 配置动态变化，
      *         {@code delete} 随 {@code delete-supported} 配置变化，OCR 不支持，
-     *         overlap/toc/imageTable 对 RAGFlow 恒支持，{@code graph} 恒支持（T00 实测）
+     *         overlap/toc/imageTable 随配置闸门（默认 true），{@code graph} 恒支持（T00 实测）
      */
     @Override
     public EngineCapabilities capabilities() {
@@ -919,9 +919,11 @@ public class RagflowAdapter implements KnowledgeEnginePort {
         }
         boolean deleteAvailable = props != null && props.isDeleteSupported();
         boolean raptorAvailable = props == null || props.isRaptorEnabled();
+        boolean tocAvailable = props == null || props.isParserTocSupported();
+        boolean imageTableAvailable = props == null || props.isParserImageTableContextSupported();
         // 11 参：rerank / metadataFilter / replace / hybrid / delete / parserOcr /
         // parserOverlap / graph / raptor / parserToc / parserImageTable
         return EngineCapabilities.of(rerankAvailable, true, true, true, deleteAvailable,
-                false, true, true, raptorAvailable, true, true);
+                false, true, true, raptorAvailable, tocAvailable, imageTableAvailable);
     }
 }

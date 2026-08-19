@@ -46,11 +46,9 @@ mis:
       # false ⇒ capabilities.raptorSupported=false → 前端置灰 → 保存强制 useRaptor=false
       #          → 触发构建抛 KB_RAPTOR_UNSUPPORTED（40960）。无库数上限。
       raptor-enabled: ${MIS_KB_RAPTOR_ENABLED:true}
-      # 页码索引/TOC（toc_extraction）与图像表格上下文窗口键是否写入 dataset PUT。
-      # T0 实测本实例 Extra inputs → code:101；默认 false（只落库）。引擎升级后翻 true。
-      # ⚠ 若误开，会让整次 PUT 被拒，连带 auto_keywords/auto_questions 也无法同步。
-      parser-toc-supported: ${MIS_KB_ENGINE_PARSER_TOC_SUPPORTED:false}
-      parser-image-table-context-supported: ${MIS_KB_ENGINE_PARSER_IMAGE_TABLE_CONTEXT_SUPPORTED:false}
+      # PageIndex / image-table context: declare supported + frontend enable (sync via parser_config.ext).
+      parser-toc-supported: ${MIS_KB_ENGINE_PARSER_TOC_SUPPORTED:true}
+      parser-image-table-context-supported: ${MIS_KB_ENGINE_PARSER_IMAGE_TABLE_CONTEXT_SUPPORTED:true}
       reconcile:
         # 定时对账总开关。刻意不用 @ConditionalOnProperty（那样只能重启生效），
         # 定时方法体第一行读本值直接 return，支持 Nacos 热关。
