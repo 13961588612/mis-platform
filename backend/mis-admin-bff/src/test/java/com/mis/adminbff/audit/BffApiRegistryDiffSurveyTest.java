@@ -654,8 +654,9 @@ class BffApiRegistryDiffSurveyTest {
             "GET /api/v1/agent-ops/agents/{id}/skills",
             "PUT /api/v1/agent-ops/agents/{id}/skills",
             "GET /api/v1/agent-ops/agents/{id}/config-files",
-            "GET /api/v1/agent-ops/agents/{id}/config-files/content",
-            "PUT /api/v1/agent-ops/agents/{id}/config-files/content",
+            // T04 后读/写为多段路径；sys_api 用 AntPathMatcher `/**`（见 V66）
+            "GET /api/v1/agent-ops/agents/{id}/config-files/**",
+            "PUT /api/v1/agent-ops/agents/{id}/config-files/**",
             "GET /api/v1/agent-ops/agents/{id}/coordination",
             "PUT /api/v1/agent-ops/agents/{id}/coordination",
             "GET /api/v1/agent-ops/sessions",
