@@ -12,7 +12,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
-import { uploadDocument } from '../api/kb-api';
+import { getRagSettings, uploadDocument } from '../api/kb-api';
 import type { KbDocumentChunkConfig, KbRagSettings } from '../types';
 import { KB_CHUNK_METHOD_OPTIONS, formatSize } from '../types';
 
@@ -66,7 +66,12 @@ export interface KbDocumentUploadDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   libraryId: number;
-  /** 库级 RAG 设置：预填解析器四参数默认值。 */
+  /**
+   * 库级 RAG 设置（可选乐观预填）。
+   *
+   * <p>打开弹窗时仍会请求 {@link getRagSettings} 拉最新值，避免文档管理页未传
+   * props、或详情页保存后父级快照过期导致仍显示旧默认值。
+   */
   librarySettings?: KbRagSettings | null;
   /** 上传成功后回调（父级刷新列表）。 */
   onUploaded: () => void | Promise<void>;
@@ -75,7 +80,7 @@ export interface KbDocumentUploadDialogProps {
 /**
  * 文档上传弹窗（kb_settings_model_chunk，R-P0-06/07）。
  *
- * <p>可选文件级切片参数 + 解析器四参数（默认带出库级值，可改，提交后写入文档列）。
+ * <p>可选文件级切片参数 + 解析器四参数（打开时带出当前库级设置，可改，提交后写入文档列）。
  */
 export function KbDocumentUploadDialog({
   open,
@@ -95,16 +100,21 @@ export function KbDocumentUploadDialog({
   const [uploading, setUploading] = useState(false);
   /** 用户是否手动改过切片方式（P1-3：手动改过后不再按扩展名覆盖预填）。 */
   const [chunkMethodTouched, setChunkMethodTouched] = useState(false);
+  /** 最近一次用于预填的库设置（关闭复位 / 拉取失败回退用）。 */
+  const [resolvedSettings, setResolvedSettings] = useState<KbRagSettings | null>(
+    librarySettings,
+  );
 
-  const applyLibraryDefaults = () => {
-    const d = parserDefaultsFromLibrary(librarySettings);
+  const applyLibraryDefaults = (settings?: KbRagSettings | null) => {
+    const source = settings ?? null;
+    setResolvedSettings(source);
+    const d = parserDefaultsFromLibrary(source);
     setPageIndex(d.pageIndex);
     setImageTableContextWindow(d.imageTableContextWindow);
     setAutoKeywords(d.autoKeywords);
     setAutoQuestions(d.autoQuestions);
-    if (librarySettings?.chunkTokenNum != null) {
-      setChunkTokenNum(String(librarySettings.chunkTokenNum));
-    }
+    setChunkTokenNum(source?.chunkTokenNum != null ? String(source.chunkTokenNum) : '');
+    setSeparator(source?.separator ?? '');
   };
 
   const reset = () => {
@@ -112,17 +122,28 @@ export function KbDocumentUploadDialog({
     setChunkMethod('');
     setChunkTokenNum('');
     setSeparator('');
-    applyLibraryDefaults();
+    applyLibraryDefaults(resolvedSettings);
     setUploading(false);
     setChunkMethodTouched(false);
   };
 
+  // 每次打开弹窗：先用父级快照乐观预填，再拉最新库级设置覆盖（文档管理页无 props 也能对齐）。
   useEffect(() => {
-    if (open) {
-      applyLibraryDefaults();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- 仅弹窗打开时刷新库级默认
-  }, [open, librarySettings]);
+    if (!open) return;
+    let cancelled = false;
+    applyLibraryDefaults(librarySettings);
+    void getRagSettings(libraryId)
+      .then((latest) => {
+        if (!cancelled) applyLibraryDefaults(latest);
+      })
+      .catch(() => {
+        // 拉取失败保留 props/硬编码默认，不打断上传；用户仍可手改后提交
+      });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- 仅随打开/换库刷新；settings 由接口回填
+  }, [open, libraryId]);
 
   /** 选择文件：仅当用户尚未手动改过切片方式时，按扩展名预填默认值。 */
   const handleFileChange = (e: ChangeEvent<HTMLInputElement>) => {
@@ -217,7 +238,7 @@ export function KbDocumentUploadDialog({
         <DialogHeader>
           <DialogTitle>上传文档</DialogTitle>
           <DialogDescription>
-            解析器参数默认带出知识库级设置，可按文件修改；提交后写入该文档的文件级参数。
+            打开时自动拉取知识库当前解析器参数作为默认值，可按文件修改；提交后写入该文档的文件级参数。
           </DialogDescription>
         </DialogHeader>
 
