@@ -1,6 +1,8 @@
 ---
 name: member.points-account
 skill_id: member.points-account
+aliases:
+  - member.points
 description: CRM 会员积分账户查询与积分流水检索。当用户需要查询会员积分余额、按会员编号查看积分变动明细、或按时间范围筛选积分流水时触发此 Skill。
 version: "1.0.0"
 category: crm

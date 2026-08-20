@@ -59,6 +59,25 @@ def _parse_status(raw: str) -> SkillStatus:
     return SkillStatus.ACTIVE
 
 
+def _parse_aliases(raw: Any) -> list[str]:
+    """解析 Front Matter ``aliases``：字符串或字符串列表 → 去重后的非空列表。"""
+    if raw is None:
+        return []
+    items: list[Any]
+    if isinstance(raw, str):
+        items = [raw]
+    elif isinstance(raw, (list, tuple)):
+        items = list(raw)
+    else:
+        return []
+    aliases: list[str] = []
+    for item in items:
+        text = str(item).strip() if item is not None else ""
+        if text and text not in aliases:
+            aliases.append(text)
+    return aliases
+
+
 def _metadata_to_skill(
     metadata: dict[str, Any],
     *,
@@ -91,6 +110,7 @@ def _metadata_to_skill(
         mcp_server=metadata.get("mcp_server"),
         package_name=package_name,
         package_dir=package_dir,
+        aliases=_parse_aliases(metadata.get("aliases")),
         body_loaded=False,
     )
 

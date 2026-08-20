@@ -77,6 +77,8 @@ class Skill(BaseModel):
     # Agent Skills Spec 技能包字段
     package_name: str = ""  # 目录名，如 member-profile-by-vip-id
     package_dir: str = ""  # 技能包根目录绝对路径
+    #: Front Matter ``aliases``；判权前经 ``resolve_canonical_id`` 唯一命中时归一到 skill_id
+    aliases: list[str] = Field(default_factory=list)
     body: str | None = None  # SKILL.md 正文，懒加载前为 None
     body_loaded: bool = False
     scripts: list[str] = Field(default_factory=list)

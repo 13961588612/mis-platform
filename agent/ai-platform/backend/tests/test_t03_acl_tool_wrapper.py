@@ -416,3 +416,73 @@ def test_registry_resolve_canonical_id_from_package_dir() -> None:
     assert registry.resolve_canonical_id("member-profile") == "member.profile"
     assert registry.resolve_canonical_id("member_profile") == "member_profile"
     assert registry.resolve_canonical_id("") == ""
+
+
+def test_registry_resolve_canonical_id_from_unique_alias() -> None:
+    """Front Matter aliases 唯一命中时归一到正式 skill_id。"""
+    from src.skills.models import Skill, SkillSource
+    from src.skills.registry import SkillRegistry
+
+    registry = SkillRegistry()
+    registry._skills["member.points-account"] = Skill(
+        skill_id="member.points-account",
+        name="member.points-account",
+        package_name="member-points-account",
+        aliases=["member.points"],
+        source=SkillSource.PACKAGE,
+    )
+
+    assert registry.resolve_canonical_id("member.points") == "member.points-account"
+    assert registry.resolve_canonical_id("member.points-account") == "member.points-account"
+    # 无别名声明的缩写不得启发式折叠
+    assert registry.resolve_canonical_id("member.points.other") == "member.points.other"
+
+
+def test_registry_resolve_canonical_id_ambiguous_alias_stays_raw() -> None:
+    """同一 alias 挂到多个技能时不映射（fail-closed）。"""
+    from src.skills.models import Skill, SkillSource
+    from src.skills.registry import SkillRegistry
+
+    registry = SkillRegistry()
+    registry._skills["a.skill"] = Skill(
+        skill_id="a.skill",
+        name="a",
+        aliases=["short"],
+        source=SkillSource.PACKAGE,
+    )
+    registry._skills["b.skill"] = Skill(
+        skill_id="b.skill",
+        name="b",
+        aliases=["short"],
+        source=SkillSource.PACKAGE,
+    )
+
+    assert registry.resolve_canonical_id("short") == "short"
+
+
+@pytest.mark.asyncio
+async def test_e1_alias_maps_to_canonical_permission_code() -> None:
+    """入参别名归一后按正式 skill_id 拼执行码。"""
+    from src.skills.models import Skill, SkillSource
+    from src.skills.registry import SkillRegistry
+
+    registry = SkillRegistry()
+    registry._skills["member.points-account"] = Skill(
+        skill_id="member.points-account",
+        name="member.points-account",
+        aliases=["member.points"],
+        source=SkillSource.PACKAGE,
+    )
+    inner = InnerTool(name="skill")
+    wrapper, _ = _wrap(
+        inner,
+        codes={"ai:skill:member.points-account:run"},
+        registry=registry,
+    )
+
+    result = await wrapper.execute(
+        AnyArgs(skill_id="member.points"), make_ctx(_identity())
+    )
+
+    assert result.is_error is False
+    assert inner.calls == 1

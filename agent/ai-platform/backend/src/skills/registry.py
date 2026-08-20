@@ -120,17 +120,18 @@ class SkillRegistry:
         return self._skills.get(skill_id)
 
     def resolve_canonical_id(self, raw: str) -> str:
-        """把 OpenHarness 目录名解析成授权页使用的正式 ``skill_id``。
+        """把工具入参名解析成授权页使用的正式 ``skill_id``。
 
-        OpenHarness ``SkillTool`` 按文件夹名调用（如 ``member-profile``），
-        而 IAM 执行码按 Front Matter ``skill_id`` 注册（如 ``member.profile``）。
-        二者对不上就会出现「权限页已授权、本地对话仍报缺码」。
+        解析顺序（均为**精确**匹配，禁止 ``.`` / ``-`` / ``_`` 互相折叠）：
 
-        只做**精确**查找，禁止把 ``.`` / ``-`` / ``_`` 互相折叠（防越权）。
-        目录名命中多个 Skill 时保持原文，交给后续 fail-closed。
+        1. 正式 ``skill_id``
+        2. ``package_name``（OpenHarness 目录名，如 ``member-profile``）且唯一
+        3. Front Matter ``aliases`` 且唯一
+
+        多命中或未命中时保持原文，交给后续 fail-closed。
 
         Args:
-            raw: 工具入参里的 skill 名（目录名或正式 id）。
+            raw: 工具入参里的 skill 名（目录名、别名或正式 id）。
 
         Returns:
             注册表中的正式 ``skill_id``；无法唯一映射时原样返回。
@@ -141,13 +142,20 @@ class SkillRegistry:
         direct: Skill | None = self._skills.get(key)
         if direct is not None:
             return direct.skill_id
-        matches: list[str] = [
+        by_package: list[str] = [
             skill.skill_id
             for skill in self._skills.values()
             if skill.package_name == key
         ]
-        if len(matches) == 1:
-            return matches[0]
+        if len(by_package) == 1:
+            return by_package[0]
+        by_alias: list[str] = [
+            skill.skill_id
+            for skill in self._skills.values()
+            if key in (skill.aliases or [])
+        ]
+        if len(by_alias) == 1:
+            return by_alias[0]
         return key
 
     async def get_async(self, skill_id: str) -> Skill | None:
