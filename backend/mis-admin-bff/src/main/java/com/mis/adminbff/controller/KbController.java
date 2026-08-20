@@ -121,6 +121,12 @@ public class KbController {
      */
     private static final String PERM_DOCUMENT_LIST = "kb:document:list";
 
+    /** 智能问答入口（附属资源并集之一）。 */
+    private static final String PERM_QA_ASK = "kb:qa:ask";
+
+    /** Agent 本地对话入口（附属资源并集之一）。 */
+    private static final String PERM_AGENT_CHAT_USE = "agent:chat:use";
+
     private final KbFacadeService kbFacadeService;
     private final UserPermissionLoader userPermissionLoader;
 
@@ -404,10 +410,11 @@ public class KbController {
     }
 
     /**
-     * 拉取分片版面截图（「查看切分」卡片配图；直吐 JPEG，不包 Result）。
+     * 拉取分片版面截图（文档切分 / 问答引用 / Agent 对话配图；直吐字节，不包 Result）。
      *
-     * <p>权限与 listChunks 同口径：{@code kb:document:list}。imageId 为引擎侧
-     * {@code {datasetId}-{objectId}}。
+     * <p>附属资源权限并集（任一即可）：{@code kb:document:list} ∪ {@code kb:qa:ask}
+     * ∪ {@code agent:chat:use}；与 sys_menu_api 多挂一致。库级 ACL 仍由 mis-kb 裁定。
+     * imageId 为引擎侧 {@code {datasetId}-{objectId}}。
      */
     @GetMapping(
             value = "/libraries/{libraryId}/documents/{id}/chunk-images/{imageId}")
@@ -415,7 +422,7 @@ public class KbController {
             @PathVariable Long libraryId,
             @PathVariable Long id,
             @PathVariable String imageId) {
-        requirePermission(PERM_DOCUMENT_LIST);
+        requireAnyPermission(PERM_DOCUMENT_LIST, PERM_QA_ASK, PERM_AGENT_CHAT_USE);
         byte[] bytes = kbFacadeService.getChunkImage(libraryId, id, imageId);
         MediaType mediaType = detectChunkImageMediaType(bytes);
         return ResponseEntity.ok()
@@ -844,6 +851,27 @@ public class KbController {
         if (permissions == null || !permissions.contains(permissionCode)) {
             throw new BusinessException(ResultCode.FORBIDDEN);
         }
+    }
+
+    /**
+     * 附属资源兜底判权：权限码并集任一命中即可（与 Registry 多 {@code sys_menu_api} 并集一致）。
+     *
+     * @param permissionCodes 入口权限码（非空）
+     */
+    private void requireAnyPermission(String... permissionCodes) {
+        LoginUser user = RequestContext.requireLoginUser();
+        if (user.getUserId() == null) {
+            throw new BusinessException(ResultCode.UNAUTHORIZED);
+        }
+        Set<String> permissions = userPermissionLoader.load(user);
+        if (permissions != null) {
+            for (String code : permissionCodes) {
+                if (code != null && permissions.contains(code)) {
+                    return;
+                }
+            }
+        }
+        throw new BusinessException(ResultCode.FORBIDDEN);
     }
 
     // ------------------------------------------------------------------ 引擎（S-04）

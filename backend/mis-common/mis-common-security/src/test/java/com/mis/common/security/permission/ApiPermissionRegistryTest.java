@@ -35,4 +35,22 @@ class ApiPermissionRegistryTest {
 
         assertTrue(registry.match("POST", "/api/v1/users").isEmpty());
     }
+
+    @Test
+    void chunkImagePathMatchesAndUnionsPermissions() {
+        ApiPermissionRegistry registry = new ApiPermissionRegistry();
+        String pattern = "/api/v1/kb/libraries/{libraryId:[0-9]+}/documents/{id:[0-9]+}/chunk-images/{imageId}";
+        registry.replaceAll(List.of(
+                new ApiPermissionRule("GET", pattern, "kb:document:list", false, 1),
+                new ApiPermissionRule("GET", pattern, "kb:qa:ask", false, 1),
+                new ApiPermissionRule("GET", pattern, "agent:chat:use", false, 1)
+        ));
+
+        String path = "/api/v1/kb/libraries/1787129768241/documents/1787141570258"
+                + "/chunk-images/cf3640e89bab11f1b45c7dc3cecfbcd9-dd11859a72a962e7";
+        Optional<ApiPermissionRegistry.Match> match = registry.match("GET", path);
+        assertTrue(match.isPresent());
+        assertEquals(3, match.get().permissions().size());
+        assertTrue(match.get().permissions().contains("agent:chat:use"));
+    }
 }

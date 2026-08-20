@@ -63,8 +63,8 @@ public class DocumentController {
     /**
      * 拉取分片版面截图（「查看切分」卡片配图；直吐 JPEG 字节，不包 Result）。
      *
-     * <p>权限与 listChunks 同口径（BFF {@code kb:document:list} + 本服务 ACL 读）。
-     * {@code imageId} 形如 {@code {datasetId}-{objectId}}，路径允许字母数字与连字符。
+     * <p>BFF 侧为附属资源权限并集（document:list / qa:ask / agent:chat:use）；
+     * 本服务仍做 ACL 读。{@code imageId} 形如 {@code {datasetId}-{objectId}}。
      */
     @GetMapping(
             value = "/{libraryId}/documents/{id}/chunk-images/{imageId}")

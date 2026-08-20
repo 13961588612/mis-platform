@@ -384,7 +384,7 @@ public class KbFacadeService {
         return kbWebClient.listDocumentChunks(libraryId, id, keywords, page, pageSize);
     }
 
-    /** 拉取分片版面截图（直吐字节）。 */
+    /** 拉取分片版面截图（直吐字节；BFF 附属资源权限并集 + mis-kb ACL）。 */
     public byte[] getChunkImage(Long libraryId, Long id, String imageId) {
         return kbWebClient.getChunkImage(libraryId, id, imageId);
     }

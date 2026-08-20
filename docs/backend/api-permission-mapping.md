@@ -176,6 +176,20 @@ WHERE ur.user_id = ? AND m.app_id = ?
 | WRITE-03 | 91151 | 00900067 | POST | `/api/v1/kb/operations/qa/tickets` | 创建问答工单 | `kb:qa:ask` | 91036 |
 | WRITE-04 | 91152 | 00900068 | PATCH | `/api/v1/kb/operations/qa/tickets/{ticketId}` | 处理问答工单 | `kb:operation:list` | 91037 |
 
+### 3.5.1 附属资源权限并集（V67）
+
+> **规则（可复用，不写死单条 URL）**：答案/会话/管理台中「带出来」的附属内容（如分片配图），
+> **可读门槛 = 能让该内容出现的入口权限的并集（任一即可）**；库级 ACL 仍由 mis-kb 裁定。
+> 实现：同一 `sys_api` 挂多条 `sys_menu_api`；BFF Registry 已对命中规则做 permissions 并集；
+> Controller 兜底用 `requireAnyPermission`，与注册表一致。
+
+| 端点 | path_pattern | 并集权限码 | 菜单 |
+|------|--------------|------------|------|
+| 分片配图 | `GET /api/v1/kb/libraries/{libraryId:[0-9]+}/documents/{id:[0-9]+}/chunk-images/{imageId}` | `kb:document:list` ∪ `kb:qa:ask` ∪ `agent:chat:use` | 91034 / 91036 / 92032 |
+
+> 迁移：`V67__kb_chunk_image_derived_resource_perms.sql`（纠正 path + 兜底 sys_api + menu_api `92180–92182`）。
+> **path 约定**：数字主键用 `{id:[0-9]+}`；单段不透明 token 用 `{imageId}`；多段相对路径用 `/**`（AntPathMatcher；`{var}` 只匹配单段）。
+
 ### 3.6 接口模块 V35 补登 10 端点（差集清零，SEC-02 收尾）
 
 > 迁移：`V35__modules_api_registry.sql`（catalog sys_api `91157` + api `91158-91167` / code `00900073-00900083` / sys_menu_api `91257-91266` / sort `92-101`）。
