@@ -137,6 +137,56 @@ def build_kb_call_context(
     return ctx
 
 
+def enrich_hits_with_document_images(
+    selected_hits: list[ChunkHit],
+    all_hits: list[ChunkHit],
+) -> list[ChunkHit]:
+    """把同文档检索命中上的配图回填到已选引用（解决「有图但配图丢」）。
+
+    RAGFlow 常把 ``image_id`` 挂在示意图/OCR 兄弟分片上，而模型行内角标往往只引用
+    问答正文分片（``image_id`` 为空）。若不回填，``kb-sources`` 无 ``imageId``，
+    前端无法拉图——表现为反复「服务端有图、对话不出图」。
+
+    策略（不写死业务文档）：
+    1. 对已选命中：若缺 ``image_id``，从同 ``(library_id, document_id)`` 兄弟命中借用；
+    2. 其余同文档且未出现过的 ``image_id`` 追加为配图来源行。
+    """
+    if not selected_hits or not all_hits:
+        return list(selected_hits)
+
+    result: list[ChunkHit] = list(selected_hits)
+    seen_images: set[str] = {h.image_id for h in result if h.image_id}
+    selected_docs: set[tuple[int, int]] = {
+        (h.library_id, h.document_id)
+        for h in selected_hits
+        if h.library_id is not None and h.document_id is not None
+    }
+
+    for i, hit in enumerate(result):
+        if hit.image_id or hit.library_id is None or hit.document_id is None:
+            continue
+        key = (hit.library_id, hit.document_id)
+        for sibling in all_hits:
+            if (sibling.library_id, sibling.document_id) != key:
+                continue
+            if sibling.image_id and sibling.image_id not in seen_images:
+                result[i] = hit.model_copy(update={"image_id": sibling.image_id})
+                seen_images.add(sibling.image_id)
+                break
+
+    for sibling in all_hits:
+        if not sibling.image_id or sibling.image_id in seen_images:
+            continue
+        if sibling.library_id is None or sibling.document_id is None:
+            continue
+        if (sibling.library_id, sibling.document_id) not in selected_docs:
+            continue
+        result.append(sibling)
+        seen_images.add(sibling.image_id)
+
+    return result
+
+
 def format_kb_answer_for_chat(answer: QaAnswer) -> str:
     """把管线产出整理成运营台本地对话可读的 Markdown。
 
@@ -295,15 +345,25 @@ def format_mis_rag_delegate_answer(worker_text: str, *, retrieve_hits: list[Chun
     answer_text, selected = _parse_mis_rag_worker_json(worker_text)
     hit_indices = selected if selected else list(range(1, len(retrieve_hits) + 1))
 
-    sources: list[dict[str, Any]] = []
+    selected_hits: list[ChunkHit] = []
     for idx in hit_indices:
         if idx < 1 or idx > len(retrieve_hits):
             continue
-        hit = retrieve_hits[idx - 1]
+        selected_hits.append(retrieve_hits[idx - 1])
+
+    enriched = enrich_hits_with_document_images(selected_hits, retrieve_hits)
+
+    sources: list[dict[str, Any]] = []
+    for display_idx, hit in enumerate(enriched, start=1):
+        # 保留模型引用编号：前缀 selected 段用原始 index；追加配图行顺延
+        if display_idx <= len(selected_hits):
+            raw_idx = hit_indices[display_idx - 1]
+        else:
+            raw_idx = display_idx
         label = hit.source_label()
         sources.append(
             _kb_source_row(
-                idx=idx,
+                idx=raw_idx,
                 label=label,
                 chunk=(hit.chunk_text or "").strip(),
                 score=hit.score,
@@ -649,7 +709,10 @@ class KbQaPipeline:
                 answer_text = (raw or "").strip()
                 selected = self._parse_inline_citations(answer_text)
 
-            used_hits = self._select_hits(hits.hits, selected)
+            used_hits = enrich_hits_with_document_images(
+                self._select_hits(hits.hits, selected),
+                hits.hits,
+            )
 
             # ④ persist：回调 mis-kb 落库（create_session + append_message×2 + save_citations）
             if acc is not None:
@@ -737,7 +800,10 @@ class KbQaPipeline:
 
             answer_text = "".join(parts).strip()
             selected = self._parse_inline_citations(answer_text)
-            used_hits = self._select_hits(hits.hits, selected)
+            used_hits = enrich_hits_with_document_images(
+                self._select_hits(hits.hits, selected),
+                hits.hits,
+            )
 
             # ④ persist：流结束后一次性落库
             if acc is not None:

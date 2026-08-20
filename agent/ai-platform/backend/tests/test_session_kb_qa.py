@@ -114,6 +114,55 @@ def test_format_mis_rag_delegate_answer_from_kb_retrieve_hits() -> None:
     assert '"libraryId": 1' in text
 
 
+def test_enrich_hits_backfills_image_from_sibling_chunk() -> None:
+    """模型只引无图正文分片时，从同文档兄弟分片回填 image_id。"""
+    from src.agent.mis_rag.qa_pipeline import enrich_hits_with_document_images
+
+    text_hit = ChunkHit(
+        library_id=1,
+        document_id=9,
+        chunk_text="银联设备要隐藏退款按钮。【示意图】",
+        score=0.9,
+        doc_title="Pad手册",
+        image_id=None,
+    )
+    figure_hit = ChunkHit(
+        library_id=1,
+        document_id=9,
+        chunk_text="GENERAL FIGURE CONTENT",
+        score=0.8,
+        doc_title="Pad手册",
+        image_id="ds-fig-1",
+    )
+    enriched = enrich_hits_with_document_images([text_hit], [text_hit, figure_hit])
+    assert enriched[0].image_id == "ds-fig-1"
+
+
+def test_format_delegate_answer_enriches_sibling_image() -> None:
+    """委派路径：citations 只点 [1] 无图时，仍输出同文档配图 imageId。"""
+    hits = [
+        ChunkHit(
+            library_id=1,
+            document_id=9,
+            chunk_text="银联设置说明",
+            score=0.9,
+            doc_title="Pad手册",
+            image_id=None,
+        ),
+        ChunkHit(
+            library_id=1,
+            document_id=9,
+            chunk_text="示意图 OCR",
+            score=0.7,
+            doc_title="Pad手册",
+            image_id="ds-fig-9",
+        ),
+    ]
+    worker = '{"answer":"需隐藏退款按钮。","citations":[{"index":1}]}'
+    text = format_mis_rag_delegate_answer(worker, retrieve_hits=hits)
+    assert '"imageId": "ds-fig-9"' in text
+
+
 def test_parse_kb_retrieve_tool_output() -> None:
     raw = (
         '{"count":1,"hits":[{"index":1,"source":"手册","score":0.5,'
