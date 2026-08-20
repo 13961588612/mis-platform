@@ -37,6 +37,9 @@ __pycache__/
 .venv/
 venv/
 
+# OpenHarness 技能视图（目录名=正式 skill_id，运行时物化）
+agent/ai-platform/configs/.runtime/
+
 # Docker volumes（若挂载到仓库内）
 .deploy-data/
 

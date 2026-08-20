@@ -11,7 +11,6 @@ from typing import Annotated, Any
 from openharness.mcp.client import McpClientManager, McpServerNotConnectedError
 from openharness.mcp.types import McpToolInfo
 from openharness.tools.base import BaseTool, ToolExecutionContext, ToolRegistry, ToolResult
-from openharness.tools.skill_tool import SkillTool
 from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, create_model
 
 from src.config import get_settings
@@ -24,6 +23,8 @@ from src.runtime.mcp_identity import (
     reset_mcp_identity,
     set_mcp_identity,
 )
+from src.runtime.platform_skill_tool import PlatformSkillTool
+
 from src.skills.acl import SkillAclGuard
 from src.skills.tools.formfill_apply import FormFillApplyTool
 from src.skills.tools.formfill_execute import FormFillExecuteTool
@@ -335,6 +336,7 @@ def _delegate_alias_enabled() -> bool:
 def create_agent_source_registry(
     mcp_manager: McpClientManager | None,
     catalog: Any | None = None,
+    allowed_skill_ids: list[str] | None = None,
 ) -> ToolRegistry:
     """构建 Agent 可用工具源：skill + MCP（跳过 schema 不兼容的工具）。
 
@@ -343,9 +345,11 @@ def create_agent_source_registry(
         catalog: 注入 ``InvokeAgentTool`` 的 WorkerCatalog；``None`` 时回落全局目录。
             coordinator 可传入 ``build_scoped_catalog(agent_id)`` 收窄 LLM 看到的
             ``agent_id`` 枚举（1.3 硬约束；详见 ``build_scoped_catalog``）。
+        allowed_skill_ids: 本 Agent 启用的正式 skill_id；非空时收窄 ``skill`` 工具
+            入参枚举，避免模型传裸名（如 ``member``）。
     """
     registry: ToolRegistry = ToolRegistry()
-    registry.register(SkillTool())
+    registry.register(PlatformSkillTool(allowed_skill_ids=allowed_skill_ids))
 
     # 平台侧 FormFill 工具（ai-platform × MIS FormFill 引擎 P0）
     registry.register(FormFillExecuteTool())
@@ -620,6 +624,7 @@ def create_platform_tool_registry(
     allowed_tools: list[str] | None = None,
     role: Any = None,
     agent_id: str | None = None,
+    allowed_skill_ids: list[str] | None = None,
 ) -> ToolRegistry:
     """
     从 OpenHarness 默认工具集按 allowed_tools 过滤，并包装为安全执行。
@@ -634,6 +639,7 @@ def create_platform_tool_registry(
             ``build_scoped_catalog(agent_id)`` 收窄 ``agent__invoke`` 的
             ``agent_id`` 枚举（1.3 硬约束·闸③）；scoped 为空时退回静态 schema
             （fail-closed，绝不回退全局目录）。
+        allowed_skill_ids: 本 Agent 启用的正式 skill_id；透传给 ``PlatformSkillTool``。
     """
     patterns: list[str] = resolve_allowed_tool_patterns(
         allowed_tools or [], mcp_manager, role
@@ -641,7 +647,11 @@ def create_platform_tool_registry(
     # 1.3 硬约束·闸③：coordinator 注入 scoped catalog，使 LLM 枚举里不含
     # mis-admin-helper 等硬约束 Agent（即便 coordination.yaml 误配也会被运行时白名单拒）。
     scoped_catalog: Any | None = _resolve_scoped_catalog(role, agent_id)
-    source: ToolRegistry = create_agent_source_registry(mcp_manager, catalog=scoped_catalog)
+    source: ToolRegistry = create_agent_source_registry(
+        mcp_manager,
+        catalog=scoped_catalog,
+        allowed_skill_ids=allowed_skill_ids,
+    )
     is_worker: bool = normalize_role(role) == "worker"
 
     # T03 §2.4：每个工具在执行前先过 fail-closed 权限闸门。

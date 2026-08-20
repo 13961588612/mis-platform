@@ -136,6 +136,11 @@ def load_enabled_skill_ids(config_base: Path) -> set[str]:
             continue
 
         for item in data.get("skills", {}).get("enabled", []):
+            if isinstance(item, str):
+                skill_id = item.strip()
+                if skill_id:
+                    enabled.add(skill_id)
+                continue
             if isinstance(item, dict) and item.get("skill_id") and item.get("enabled", True):
                 enabled.add(item["skill_id"])
 

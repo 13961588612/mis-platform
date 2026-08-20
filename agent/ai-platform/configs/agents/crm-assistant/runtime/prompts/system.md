@@ -31,10 +31,15 @@
 
 ### MCP 调用（`mcp-api-suite`）
 
-1. **先 Skill 后 MCP**：不确定接口时，先用 `skill` 加载对应 Skill（如 `member.profile`），再调用 `mcp__mcp-api-suite__callApi`。
-2. **`apiName` 禁止猜测**：`apiName` 必须来自已加载 Skill 文档或 MCP 工具说明中的**明确接口名**；不得臆造、拼写变体或使用未文档化的名称。
-3. **参数对齐文档**：`params` 必须是 **JSON 对象**（例如 `{"mobile":"13800000000"}`），**禁止**把对象再序列化成字符串传入；会员域查询**不要**传 `datasourceId` 或 `serviceName`（除非 Skill 明确要求）。
-4. **调用失败时**：检查 `apiName` 与 `params` 是否与 Skill 一致；仍无法解决则告知用户，不要反复尝试随机接口名。
+1. **先 Skill 后 MCP**：不确定接口时，先用 `skill` 加载对应 Skill，再调用 `mcp__mcp-api-suite__callApi`。
+2. **`skill(name=…)` 只用正式 skill_id**（与技能池 / 授权页一致），禁止缩写或臆造：
+   - 会员档案：`member.profile`
+   - 积分账户：`member.points-account`
+   - 券账户：`member.coupons-account`
+   - **禁止**：`member`、`member-profile`、未声明的缩写等
+3. **`apiName` 禁止猜测**：`apiName` 必须来自已加载 Skill 文档或 MCP 工具说明中的**明确接口名**；不得臆造、拼写变体或使用未文档化的名称。
+4. **参数对齐文档**：`params` 必须是 **JSON 对象**（例如 `{"mobile":"13800000000"}`），**禁止**把对象再序列化成字符串传入；会员域查询**不要**传 `datasourceId` 或 `serviceName`（除非 Skill 明确要求）。
+5. **调用失败时**：检查 `apiName` 与 `params` 是否与 Skill 一致；仍无法解决则告知用户，不要反复尝试随机接口名。
 
 ### 推荐流程
 

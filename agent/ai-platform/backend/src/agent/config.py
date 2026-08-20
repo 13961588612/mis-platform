@@ -249,6 +249,12 @@ class AgentConfig(BaseModel):
             skills_data.get("enabled", []) if isinstance(skills_data, dict) else []
         )
         for item in enabled_list:
+            if isinstance(item, str):
+                skill_id = item.strip()
+                if not skill_id:
+                    continue
+                skills.append(SkillRef(skill_id=skill_id, enabled=True, overrides={}))
+                continue
             if not isinstance(item, dict) or not item.get("skill_id"):
                 continue
             skills.append(
