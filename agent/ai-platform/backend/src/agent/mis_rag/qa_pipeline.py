@@ -325,6 +325,8 @@ def extract_kb_sources_fence(text: str) -> str:
 
 PENDING_KB_SOURCES_FENCE_KEY = "pending_kb_sources_fence"
 
+
+@dataclass
 class KbQaRequest:
     """一次 KB 问答的输入参数（已从 content/metadata 归一）。"""
 
