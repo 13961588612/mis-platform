@@ -285,6 +285,9 @@ export type AgentState = 'running' | 'paused' | 'stopped' | 'error';
  * `{agent_id, display_name, state, runtime_type, active_sessions, is_active, role}`，
  * **不存在 `enabled_skill_count`**（属 P2 已知债，本期删除）。
  * 「已启用技能」展示统一替换为 `active_sessions`（活跃会话，真实且有运营价值）。
+ *
+ * <p>**运行位标记**（列表 enrichment）：`in_process` / `lease_owner` /
+ * `lease_held_locally` / `core_id` —— 行集合为本地 configs 全量，不再仅本机已 claim 实例。
  */
 export interface AgentSummary {
   agent_id: string;
@@ -296,6 +299,14 @@ export interface AgentSummary {
   /** 当前活跃会话数，替代已删除的臆造字段 `enabled_skill_count`。 */
   active_sessions?: number;
   is_active?: boolean;
+  /** 是否已装入本进程 AgentManager 内存。 */
+  in_process?: boolean;
+  /** Redis 租约持有者 coreId；无租约时为 null。 */
+  lease_owner?: string | null;
+  /** 租约是否由本机 CORE_ID 持有。 */
+  lease_held_locally?: boolean;
+  /** 本机 CORE_ID；未启多 Core 租约时为 null。 */
+  core_id?: string | null;
 }
 
 /**

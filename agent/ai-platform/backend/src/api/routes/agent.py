@@ -87,7 +87,7 @@ class SwitchRuntimeRequest(BaseModel):
 
 
 class AgentSummary(BaseModel):
-    """列表响应中的 Agent 实例摘要。"""
+    """列表响应中的 Agent 配置摘要（含本机运行位 / 租约标记）。"""
 
     agent_id: str
     display_name: str
@@ -99,6 +99,14 @@ class AgentSummary(BaseModel):
         default=AgentRole.WORKER.value,
         description="调度角色：coordinator（可委派）/ worker（不可再委派）",
     )
+    #: 是否已装入本进程 ``AgentManager._instances``。
+    in_process: bool = False
+    #: Redis ``aip:agent:{id}:owner`` 当前持有者 coreId；无键 / 未启租约为 ``None``。
+    lease_owner: str | None = None
+    #: 租约是否由本机 CORE_ID 持有。
+    lease_held_locally: bool = False
+    #: 本机 CORE_ID；未注入多 Core 租约时为 ``None``。
+    core_id: str | None = None
 
 
 class AgentDetail(BaseModel):
@@ -142,6 +150,70 @@ def _resolve_role_value(config: Any) -> str:
             if role.value == normalized:
                 return role.value
     return AgentRole.WORKER.value
+
+
+def _local_core_id(agent_manager: AgentManager) -> str | None:
+    """本机 CORE_ID；未 bind_core 时返回 ``None``。"""
+    raw: Any = getattr(agent_manager, "_core_id", None) or ""
+    text: str = str(raw).strip()
+    return text or None
+
+
+async def _lease_owner_safe(agent_manager: AgentManager, agent_id: str) -> str | None:
+    """读取 Redis 租约 owner；无 ownership / 读失败时返回 ``None``（不拖垮列表）。"""
+    ownership: Any = getattr(agent_manager, "_core_ownership", None)
+    if ownership is None:
+        return None
+    try:
+        owner: Any = await ownership.current_owner(agent_id)
+    except Exception as exc:  # noqa: BLE001 - 列表 enrichment 不得因 Redis 抖动 500
+        logger.debug(
+            "lease owner lookup failed",
+            agent_id=agent_id,
+            error=str(exc),
+        )
+        return None
+    if owner is None:
+        return None
+    text: str = str(owner).strip()
+    return text or None
+
+
+def _summary_from_config(
+    config: AgentConfig,
+    *,
+    instance: Any | None,
+    lease_owner: str | None,
+    core_id: str | None,
+) -> AgentSummary:
+    """把本地配置 + 可选运行时实例拼成列表摘要。"""
+    in_process: bool = instance is not None
+    if in_process:
+        state: str = instance.lifecycle.current_state.value
+        active_sessions: int = int(getattr(instance, "active_sessions", 0) or 0)
+        is_active: bool = bool(instance.lifecycle.is_active())
+    else:
+        state = "stopped"
+        active_sessions = 0
+        is_active = False
+
+    runtime_type: str = "openharness"
+    if config.runtime is not None and getattr(config.runtime, "type", None):
+        runtime_type = str(config.runtime.type)
+
+    return AgentSummary(
+        agent_id=config.agent_id,
+        display_name=config.display_name or config.agent_id,
+        state=state,
+        runtime_type=runtime_type,
+        active_sessions=active_sessions,
+        is_active=is_active,
+        role=_resolve_role_value(config),
+        in_process=in_process,
+        lease_owner=lease_owner,
+        lease_held_locally=bool(lease_owner and core_id and lease_owner == core_id),
+        core_id=core_id,
+    )
 
 
 # ===== 端点 =====
@@ -201,22 +273,34 @@ async def create_agent(
 @router.get("")
 async def list_agents(
     agent_manager: AgentManager = Depends(get_agent_manager_dep),
+    config_manager: ConfigManager = Depends(get_config_manager_dep),
     user: dict[str, Any] = Depends(get_current_user),
 ) -> dict[str, Any]:
-    """列出所有 Agent 实例。"""
-    instances: dict[str, Any] = agent_manager.list_agents()
-    summaries: list[dict[str, Any]] = [
-        AgentSummary(
-            agent_id=inst.id,
-            display_name=inst.config.display_name,
-            state=inst.lifecycle.current_state.value,
-            runtime_type=inst.config.runtime.type,
-            active_sessions=inst.active_sessions,
-            is_active=inst.lifecycle.is_active(),
-            role=_resolve_role_value(inst.config),
-        ).model_dump()
-        for inst in instances
-    ]
+    """列出本地配置目录中的全部 Agent，并标注本机内存 / Redis 租约。
+
+    行集合以 ``ConfigManager.list_configs()`` 为准（磁盘已加载配置），
+    不再仅暴露本进程已 claim 并装入 ``_instances`` 的子集。
+    """
+    del user  # 鉴权由 Depends 完成；列表本身不按用户过滤
+    configs: list[AgentConfig] = sorted(
+        config_manager.list_configs(),
+        key=lambda c: c.agent_id,
+    )
+    instances_by_id: dict[str, Any] = {
+        inst.id: inst for inst in agent_manager.list_agents()
+    }
+    core_id: str | None = _local_core_id(agent_manager)
+
+    summaries: list[dict[str, Any]] = []
+    for config in configs:
+        lease_owner: str | None = await _lease_owner_safe(agent_manager, config.agent_id)
+        summary: AgentSummary = _summary_from_config(
+            config,
+            instance=instances_by_id.get(config.agent_id),
+            lease_owner=lease_owner,
+            core_id=core_id,
+        )
+        summaries.append(summary.model_dump())
     return success(data=summaries)
 
 

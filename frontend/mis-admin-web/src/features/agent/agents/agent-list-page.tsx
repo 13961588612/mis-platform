@@ -4,14 +4,8 @@
  * <p>覆盖 §4.3 #13 列表 / #15–#18 生命周期（start / pause / resume / stop）。
  * 行点击进入 `/agent/agents/:id` 详情（详情内再分 skills / config / coordination 三个子路由）。
  *
- * <p>**为什么用原生 `<table>` + `<select>`**：`components/ui/` 只有 13 个原语，
- * 没有 table / select / checkbox（impl-plan §2.1 零新框架，禁 `shadcn add`）。
- * 列宽拖拽与表头排序复用 `components/common` 的 `useColumnWidths` / `useClientSort`，
- * 与 `features/kb` 及批 2 的技能池页保持同一手感。
- *
- * <p>**启停按钮的露出规则复用 `actionsFor()`**（从 `agent-detail-shell.tsx` 导出）：
- * 不可用的动作**直接不渲染，不置灰** —— 置灰会让运营反复点击并提工单问"为什么点不动"。
- * 与详情头部共用同一张表，避免两处判断分叉。
+ * <p>列表行 = 本地 configs 全量；「运行位」列展示本机内存 / Redis 租约持有者。
+ * 启停仅对 `in_process` 的行露出（未进内存时下游 start/stop 会 404）。
  *
  * <p>导出名 `AgentListPage`；`pages.ts` 用 `as AgentAgentsPage` 桥接回
  * `keep-alive-outlet` 依赖的符号名。
@@ -21,6 +15,7 @@ import { useNavigate } from 'react-router-dom';
 import { Bot, CirclePlay, RefreshCw, Sparkles, TriangleAlert } from 'lucide-react';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { PermissionGate } from '@/components/auth/permission-gate';
@@ -48,6 +43,7 @@ const AGENT_COLS: ResizableColumn[] = [
   { key: 'agent_id', label: 'Agent ID' },
   { key: 'role', label: '角色' },
   { key: 'state', label: '状态' },
+  { key: 'in_process', label: '运行位' },
   { key: 'active_sessions', label: '活跃会话' },
   { key: '__ops__', label: '操作', locked: true },
 ];
@@ -56,6 +52,37 @@ const AGENT_COLS: ResizableColumn[] = [
 interface PendingLifecycle {
   action: LifecycleAction;
   agent: AgentSummary;
+}
+
+/** 运行位徽章：内存加载态 + 租约持有者。 */
+function PresenceBadges({ agent }: { agent: AgentSummary }) {
+  const inProcess = agent.in_process === true;
+  let leaseLabel = '无租约';
+  let leaseVariant: 'success' | 'warning' | 'secondary' = 'secondary';
+  if (agent.lease_held_locally) {
+    leaseLabel = '本机租约';
+    leaseVariant = 'success';
+  } else if (agent.lease_owner) {
+    leaseLabel = `租约: ${agent.lease_owner}`;
+    leaseVariant = 'warning';
+  }
+  return (
+    <div className="flex flex-wrap items-center gap-1">
+      <Badge variant={inProcess ? 'info' : 'outline'} title={inProcess ? '已在本进程内存' : '未装入本进程'}>
+        {inProcess ? '内存' : '未加载'}
+      </Badge>
+      <Badge
+        variant={leaseVariant}
+        title={
+          agent.core_id
+            ? `本机 CORE_ID=${agent.core_id}`
+            : '未启用多 Core 租约（或本机未注入 CORE_ID）'
+        }
+      >
+        {leaseLabel}
+      </Badge>
+    </div>
+  );
 }
 
 export function AgentListPage() {
@@ -136,15 +163,15 @@ export function AgentListPage() {
   return (
     <AgentPageShell
       title="Agent 总览"
-      description="协调者与执行者实例的统一视图。"
+      description="本地配置目录中的全部 Agent；标注本机内存与 Redis 租约持有者。"
       permission="agent:agent:list"
       actions={headerActions}
       loading={loading && agents.length === 0}
       error={error}
       onRetry={() => void load()}
       empty={!loading && !error && agents.length === 0}
-      emptyText="暂无 Agent 实例"
-      emptyHint="Agent 由 ai-platform 侧的配置目录定义，请确认下游服务已启动并完成配置加载。"
+      emptyText="暂无 Agent 配置"
+      emptyHint="显示本地 configs/agents 目录中的全部 Agent；请确认 ai-platform 已启动并完成配置加载。"
     >
       <div className="flex min-h-0 flex-1 flex-col gap-3">
         <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
@@ -274,6 +301,9 @@ export function AgentListPage() {
                     <td className="px-3 py-2">
                       <AgentStatusBadge kind="agentState" value={agent.state} />
                     </td>
+                    <td className="px-3 py-2">
+                      <PresenceBadges agent={agent} />
+                    </td>
                     <td className="px-3 py-2 text-xs text-muted-foreground">
                       {agent.active_sessions ?? 0}
                     </td>
@@ -283,27 +313,29 @@ export function AgentListPage() {
                     */}
                     <td className="px-3 py-2" onClick={(e) => e.stopPropagation()}>
                       <div className="flex flex-wrap items-center justify-end gap-1">
-                        <PermissionGate permission="agent:agent:manage">
-                          {actionsFor(agent.state).map((action) => {
-                            const Icon = action.icon;
-                            return (
-                              <button
-                                key={action.key}
-                                type="button"
-                                className={cn(
-                                  'inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[0.8125rem]',
-                                  action.danger
-                                    ? 'text-destructive hover:bg-destructive/10'
-                                    : 'text-primary hover:bg-primary/10',
-                                )}
-                                onClick={() => setPending({ action, agent })}
-                              >
-                                <Icon className="h-3 w-3" />
-                                {action.label}
-                              </button>
-                            );
-                          })}
-                        </PermissionGate>
+                        {agent.in_process === true ? (
+                          <PermissionGate permission="agent:agent:manage">
+                            {actionsFor(agent.state).map((action) => {
+                              const Icon = action.icon;
+                              return (
+                                <button
+                                  key={action.key}
+                                  type="button"
+                                  className={cn(
+                                    'inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[0.8125rem]',
+                                    action.danger
+                                      ? 'text-destructive hover:bg-destructive/10'
+                                      : 'text-primary hover:bg-primary/10',
+                                  )}
+                                  onClick={() => setPending({ action, agent })}
+                                >
+                                  <Icon className="h-3 w-3" />
+                                  {action.label}
+                                </button>
+                              );
+                            })}
+                          </PermissionGate>
+                        ) : null}
                         <button
                           type="button"
                           className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[0.8125rem] text-muted-foreground hover:bg-accent hover:text-foreground"
