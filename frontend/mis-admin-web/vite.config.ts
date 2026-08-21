@@ -26,6 +26,18 @@ export default defineConfig({
       },
     },
   },
+  // T07'：Vite 多页 admin/embed 双入口
+  // - index.html（管理后台，不静态 import 对话包）
+  // - embed.html（嵌入页，只含对话 + A2UI + 事件桥；外部系统 iframe 只拉 embed 包）
+  // 生产 nginx 需将 /embed/* rewrite 到 /embed.html（URL 保持 /embed/chat）；dev 直达 /embed.html
+  build: {
+    rollupOptions: {
+      input: {
+        main: fileURLToPath(new URL('./index.html', import.meta.url)),
+        embed: fileURLToPath(new URL('./embed.html', import.meta.url)),
+      },
+    },
+  },
   test: {
     environment: 'node',
     include: ['src/**/*.{test,spec}.{ts,tsx}'],
