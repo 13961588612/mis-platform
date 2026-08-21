@@ -14,6 +14,7 @@ import com.mis.adminbff.controller.DashboardController;
 import com.mis.adminbff.controller.DeptController;
 import com.mis.adminbff.controller.DictController;
 import com.mis.adminbff.controller.EmployeeController;
+import com.mis.adminbff.controller.EmbedIdentityController;
 import com.mis.adminbff.controller.InternalPermissionController;
 import com.mis.adminbff.controller.KbController;
 import com.mis.adminbff.controller.KbSynonymController;
@@ -30,6 +31,7 @@ import com.mis.adminbff.service.AiCapabilityTranslator;
 import com.mis.adminbff.service.AiFeatureConfigService;
 import com.mis.adminbff.service.DashboardAggregateService;
 import com.mis.adminbff.service.DictFacadeService;
+import com.mis.adminbff.service.EmbedIdentityService;
 import com.mis.adminbff.service.KbFacadeService;
 import com.mis.adminbff.service.KbSynonymFacadeService;
 import com.mis.adminbff.service.MenuAggregateService;
@@ -304,12 +306,14 @@ class BffApiRegistryDiffSurveyTest {
         // V35 落地后非 KB 未登记只剩 agent-ops 3 个动作变量端点（{action:start|pause|...} 单映射多动作，
         // 注册表已按动作拆行登记、运行时 AntPathMatcher 均能命中——差集清单 §5 R5 口径视为「已覆盖」，
         // 仅未来新增动作值时才需补登记）；modules 10 已 V35 登记、roles/apps/employees 已登记纠偏。
+        // V68：新增 D12 exchange 端点（embed 域），属 PEP 豁免（externalToken 验签），见 DISPOSITIONS["embed"]。
         assertEquals(Set.of(
                         "POST /api/v1/agent-ops/agents/{id}/{action}",
                         "POST /api/v1/agent-ops/channels/wecom/bots/{botId}/{action}",
-                        "POST /api/v1/agent-ops/mcp/servers/{name}/{action}"),
+                        "POST /api/v1/agent-ops/mcp/servers/{name}/{action}",
+                        "POST /api/v1/embed/identity/exchange"),
                 nonKbUnregistered,
-                "非 KB 未登记应只剩 agent-ops 动作变量端点（拆行登记已覆盖）；"
+                "非 KB 未登记应只剩 agent-ops 动作变量端点（拆行登记已覆盖）+ D12 exchange 豁免端点；"
                         + "modules 10 应已 V35 登记、roles/apps/employees 应已登记纠偏："
                         + nonKbUnregistered);
 
@@ -377,6 +381,8 @@ class BffApiRegistryDiffSurveyTest {
                 mock(SkillPermissionChecker.class)));
         context.getBeanFactory().registerSingleton("mcpPermissionController", new McpPermissionController(
                 mock(McpPermissionService.class)));
+        context.getBeanFactory().registerSingleton("embedIdentityController", new EmbedIdentityController(
+                mock(EmbedIdentityService.class)));
     }
 
     /** 导出 (method, path) 归一化集合；同一 method+path 多条条件映射去重。 */
@@ -520,6 +526,9 @@ class BffApiRegistryDiffSurveyTest {
         DISPOSITIONS.put("modules", "V35 已补登：modules 10 端点（catalog 91157 + api 91158-91167）已登记，复用 V8 system:module:* 四码");
         DISPOSITIONS.put("roles", "已登记（V2 建 3008/3009，V4 改名 /roles/{id}/menus，menu 234 system:role:assignMenu）：差集误报已纠偏，V35 不重复补");
         DISPOSITIONS.put("internal", "豁免：/internal/** 由 InternalServiceTrustInterceptor 管理，不属 ApiPermissionInterceptor 域");
+        DISPOSITIONS.put("embed", "豁免：/api/v1/embed/identity/exchange 由外部系统后端直调（无 MIS JWT），"
+                + "以宿主自签 externalToken(HS256) 验签鉴权（D12 R1），刻意不登记 sys_api——"
+                + "登记会因拦截器缺 LoginUser 直接 401，且已在 ApiPermissionConfiguration excludePathPatterns 豁免");
         DISPOSITIONS.put("menus", "已登记（V2 seed authOnly）或待运营评估");
         DISPOSITIONS.put("oper-logs", "已登记（V2 seed）");
         DISPOSITIONS.put("login-logs", "已登记（V2 seed）");

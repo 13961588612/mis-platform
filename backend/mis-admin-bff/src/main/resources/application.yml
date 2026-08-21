@@ -4,6 +4,12 @@ server:
 spring:
   application:
     name: mis-admin-bff
+  datasource:
+    # D12：嵌入身份兑换直读共享平台库（agent_external_host / agent_external_identity）
+    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5432/mis_platform}
+    username: ${SPRING_DATASOURCE_USERNAME:postgres}
+    password: ${SPRING_DATASOURCE_PASSWORD:postgres}
+    driver-class-name: org.postgresql.Driver
   data:
     redis:
       host: ${REDIS_HOST:localhost}
@@ -21,6 +27,22 @@ logging:
     com.mis.adminbff: DEBUG
 
 mis:
+  # D12：嵌入身份兑换端点的 RS256 MIS JWT 签发（与 mis-auth 同签名体系/同密钥对；
+  # 私钥由部署侧挂载 PEM 文件路径注入，未配置则兑换端点 fail-closed 返回 40303）
+  security:
+    jwt:
+      private-key-path: ${MIS_JWT_PRIVATE_KEY_PATH:}
+      access-token-ttl-seconds: ${MIS_JWT_ACCESS_TOKEN_TTL:1800}
+  embed:
+    # 宿主共享密钥（hostId → client_secret 明文，用于 externalToken HS256 验签）
+    client-secrets:
+      # crm-web: ${MIS_EMBED_HOST_CRM_WEB_CLIENT_SECRET:}
+    # phone_hash 加盐（R5 脱敏存储；空 = 不加盐）
+    salt: ${MIS_EMBED_PHONE_HASH_SALT:}
+    # 手机号匹配开关（03 §5.2 phone_match_enabled 默认 true）
+    phone-match-enabled: ${MIS_EMBED_PHONE_MATCH_ENABLED:true}
+    # 兑换限流：同一 hostId 每分钟最大请求数（R6 防撞库）
+    rate-limit-per-minute: ${MIS_EMBED_RATE_LIMIT_PER_MINUTE:60}
   bff:
     iam-discovery-enabled: false
     iam-service-id: mis-iam

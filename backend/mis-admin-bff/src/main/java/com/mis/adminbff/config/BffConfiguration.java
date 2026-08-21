@@ -1,6 +1,7 @@
 package com.mis.adminbff.config;
 
 import io.netty.channel.ChannelOption;
+import com.mis.adminbff.support.embed.EmbedExchangeRateLimiter;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.cloud.client.loadbalancer.LoadBalanced;
@@ -26,7 +27,7 @@ import java.time.Duration;
  * {@link BffProperties} / {@link AiPlatformProperties} 保持同一种登记方式。
  */
 @Configuration
-@EnableConfigurationProperties({BffProperties.class, AiPlatformProperties.class, AgentOpsProperties.class})
+@EnableConfigurationProperties({BffProperties.class, AiPlatformProperties.class, AgentOpsProperties.class, EmbedIdentityProperties.class})
 @EnableScheduling
 public class BffConfiguration {
 
@@ -60,5 +61,16 @@ public class BffConfiguration {
     @Qualifier("loadBalancedWebClientBuilder")
     public WebClient.Builder loadBalancedWebClientBuilder() {
         return WebClient.builder();
+    }
+
+    /**
+     * D12 兑换限流器（进程内固定窗口，R6 防撞库）。
+     *
+     * @param embedProperties 嵌入身份配置（rate-limit-per-minute）
+     * @return 限流器
+     */
+    @Bean
+    public EmbedExchangeRateLimiter embedExchangeRateLimiter(EmbedIdentityProperties embedProperties) {
+        return new EmbedExchangeRateLimiter(embedProperties.getRateLimitPerMinute());
     }
 }

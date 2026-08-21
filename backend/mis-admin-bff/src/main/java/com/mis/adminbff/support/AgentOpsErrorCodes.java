@@ -68,4 +68,45 @@ public final class AgentOpsErrorCodes {
      * <b>源活着但用户就是没这权限</b> ⇒ {@link #SKILL_FORBIDDEN}。
      */
     public static final int ACL_UNAVAILABLE = 40303;
+
+    /**
+     * A2UI 渲染被策略拒绝（对应 HTTP 403）。
+     *
+     * <p>02-task-breakdown.md §4 口径：渲染权限不足的聚合形态
+     * （组件权限不足），响应可携带 {@code missingPermissions} / {@code componentIds}。
+     * 当前 Gateway 侧 P0 走「组件降级占位」而非本错误码，本码预登记供
+     * 策略拒绝场景（P1）与 Java 侧全局异常处理使用。
+     */
+    public static final int A2UI_RENDER_FORBIDDEN = 40304;
+
+    /**
+     * A2UI 事件回传被策略拒绝（对应 HTTP 403，事件级 fail-closed）。
+     *
+     * <p>02-task-breakdown.md §4 口径：事件回传被策略拒绝时返回，
+     * 响应可携带 {@code event} / {@code missingPermissions}。
+     */
+    public static final int A2UI_EVENT_FORBIDDEN = 40305;
+
+    /**
+     * A2UI 协议要素未映射到权限码（对应 HTTP 403，deny-unmapped=true）。
+     *
+     * <p>02-task-breakdown.md §4 口径：协议要素（组件/操作/API 路径）未映射到
+     * 权限码且 {@code deny-unmapped=true} 时返回，响应携带 {@code unmapped}。
+     */
+    public static final int A2UI_POLICY_UNMAPPED = 4004;
+
+    /**
+     * 外部身份令牌无效（D12 兑换端点验签失败）。
+     *
+     * <p>02-task-breakdown.md §4 口径：externalToken 验签失败（签名不符 / 过期 /
+     * hostId 未注册）时返回 40101 EMBED_TOKEN_INVALID。
+     *
+     * <p><b>⚠️ 数值与 {@link com.mis.common.core.exception.ResultCode#TOKEN_EXPIRED}
+     * （40101，Access Token 已过期）撞码</b>：A2UI 文档锁死 wire 协议码
+     * 40101 = EMBED_TOKEN_INVALID，而共享 {@code ResultCode} 已占用 40101。
+     * 两处语义不同且使用场景完全不相交（登录/刷新链路的本地 token 过期 vs
+     * 嵌入兑换端点的外部 token 无效），故在此按文档口径登记同值码。
+     * 若后续需要消除撞码，需由架构侧统一调整 A2UI 协议错误码，本交付不擅改文档口径。
+     */
+    public static final int EMBED_TOKEN_INVALID = 40101;
 }

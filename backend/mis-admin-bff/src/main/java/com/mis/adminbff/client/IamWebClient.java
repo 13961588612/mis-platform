@@ -137,6 +137,26 @@ public class IamWebClient extends AbstractDownstreamClient {
                 .bodyToMono(USER_PAGE));
     }
 
+    /**
+     * 按手机号查「正常状态」账号（D12 手机号匹配，02 §5.3 / 03 §5.2 口径）。
+     *
+     * <p>复用 {@link #pageUsers} 的 {@code status=1}（正常）过滤；mis-iam 侧
+     * {@code SysUser} 带 {@code @SQLRestriction("deleted = 0")}，已自动排除软删除。
+     * 返回同一手机号下全部正常账号，由调用方按「=1 映射 / >1 40301 / =0 40301」判定。
+     *
+     * @param tenantId 租户（必填；D12 宿主注册行配置 {@code tenant_id}）
+     * @param phone    明文手机号（仅内存瞬时使用）
+     * @return 正常状态账号列表（分页第 1 页，最多 100 条）
+     */
+    public List<IamUserVO> findNormalUsersByPhone(Long tenantId, String phone) {
+        if (tenantId == null || phone == null || phone.isBlank()) {
+            return List.of();
+        }
+        PageResult<IamUserVO> page = pageUsers(
+                tenantId, null, 1, null, null, phone, null, null, 1, 100);
+        return page != null && page.getList() != null ? page.getList() : List.of();
+    }
+
     /** 员工绑定预检（D1）：该员工是否已在指定「租户 + APP」内被其他账号绑定。 */
     public EmployeeBindingCheck checkEmployeeBinding(Long tenantId, Long appId, Long employeeId, Long excludeUserId) {
         return block(client().get()
