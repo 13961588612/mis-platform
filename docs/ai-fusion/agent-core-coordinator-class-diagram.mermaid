@@ -1,0 +1,91 @@
+classDiagram
+    class ControlPlane {
+        +bool enabled
+        +async start() None
+        +async shutdown() None
+        +ConfigDistributor distributor
+        +ReplicaSetManager replicas
+        +SessionAffinityService affinity
+        +CoreLifecycle lifecycle
+        +AdminExecutor executor
+    }
+
+    class ConfigDistributor {
+        +Redis redis
+        +ConfigManager config_manager
+        +str core_id
+        +async subscribe() None
+        +async publish_change(agent_id, change_type) None
+        +async on_notify(agent_id, change_type, version) None
+        +async reconcile_on_boot() None
+        -async _reload_local(agent_id, change_type) None
+    }
+
+    class ReplicaSetManager {
+        +Redis redis
+        +str core_id
+        +async desired(agent_id) int
+        +async members(agent_id) list[str]
+        +async compute_target(agent_id, alive_members) list[str]
+        +async join(agent_id, replica_index) None
+        +async leave(agent_id) None
+        +async drain(core_id, agent_id) None
+        +async on_replicas_notify(agent_id, replicas) None
+    }
+
+    class SessionAffinityService {
+        +Redis redis
+        +async get_hint(session_id) str|None
+        +async set_hint(session_id, core_id) None
+        +async is_sticky_to_me(session_id) bool
+        +async invalidate_for_core(core_id) int
+        +async is_core_alive(core_id) bool
+    }
+
+    class CoreLifecycle {
+        +Redis redis
+        +str core_id
+        +async register_meta(version, started_at) None
+        +async detect_dead_cores() list[str]
+        +async on_core_dead(core_id) None
+        +async promote_if_primary_lost(agent_id) None
+    }
+
+    class AdminExecutor {
+        +Redis redis
+        +async run_exclusive(job_type, payload, ttl_s) str
+        +async _acquire_lock(job_id) bool
+        +async _renew_lock(job_id) None
+        +async _release_lock(job_id) None
+        +async _write_audit(record) None
+    }
+
+    class OpsApi {
+        +AdminExecutor executor
+        +ReplicaSetManager replicas
+        +async set_replicas(agent_id, replicas) dict
+        +async reload_agent(agent_id) dict
+        +async list_cores() list[dict]
+        +async list_agent_replicas(agent_id) dict
+        +async drain_core(core_id) dict
+        +async get_metrics() dict
+    }
+
+    class Metrics {
+        +async snapshot() dict
+        +async aggregate() dict
+        +async agent_distribution() list[dict]
+    }
+
+    ControlPlane *-- ConfigDistributor
+    ControlPlane *-- ReplicaSetManager
+    ControlPlane *-- SessionAffinityService
+    ControlPlane *-- CoreLifecycle
+    ControlPlane *-- AdminExecutor
+    OpsApi ..> AdminExecutor : uses
+    OpsApi ..> ReplicaSetManager : uses
+    OpsApi ..> Metrics : reads
+    ReplicaSetManager ..> SessionAffinityService : invalidates on drain
+    ConfigDistributor ..> ConfigManager : reloads via
+    CoreLifecycle ..> ReplicaSetManager : on dead core
+    CoreLifecycle ..> SessionAffinityService : invalidates hints
