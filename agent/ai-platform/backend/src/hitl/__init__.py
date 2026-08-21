@@ -1,7 +1,7 @@
 """HITL（Human-in-the-Loop，人机协同）—— 审批请求生命周期管理。
 
 本包提供：
-- ApprovalStore：内存（可选 Redis 后端）审批存储
+- ApprovalStore：基于 Redis 的审批存储（跨副本共享，故障接管可恢复）
 - ApprovalManager：审批流程编排，含超时处理
 
 审批生命周期：
