@@ -115,6 +115,11 @@ function loadConfig(): GatewayServerConfig {
     },
     agentCoreApiUrl: process.env['AGENT_CORE_API_URL'] ?? 'http://backend:8000',
     gatewayId: getGatewayId(),
+    bff: {
+      internalUrl: process.env['BFF_INTERNAL_URL'] ?? 'http://mis-admin-bff:8080',
+      platformToken: process.env['PLATFORM_TOKEN'] ?? '',
+      timeoutMs: parseInt(process.env['BFF_PERMISSIONS_TIMEOUT_MS'] ?? '3000', 10),
+    },
   };
 }
 

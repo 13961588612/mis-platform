@@ -30,6 +30,10 @@ import { MessageRouter } from './router/MessageRouter.js';
 import { EventTransformer } from './router/EventTransformer.js';
 import { ChannelResolver } from './router/ChannelResolver.js';
 import { getCapabilityRegistry } from './channels/CapabilityRegistry.js';
+import { A2UIRuntime } from './a2ui/A2UIRuntime.js';
+import { SurfacePermissionFilter } from './a2ui/SurfacePermissionFilter.js';
+import { toMiddlewareSchema } from './a2ui/catalog.js';
+import type { A2uiClientAction } from './a2ui/types.js';
 
 // ============================================================================
 // 类型定义
@@ -56,6 +60,15 @@ export interface GatewayServerConfig {
   agentCoreApiUrl: string;
   /** 本 Gateway 稳定 ID（写 aip:session:{sid}:gateway 粘滞映射用，T7） */
   gatewayId: string;
+  /** BFF 配置（A2UI 渲染权限反查） */
+  bff: {
+    /** BFF 内网基址，如 http://mis-admin-bff:8080 */
+    internalUrl: string;
+    /** BFF 反向信任令牌（X-Platform-Token 共享密钥） */
+    platformToken: string;
+    /** BFF 请求超时（毫秒） */
+    timeoutMs: number;
+  };
 }
 
 // ============================================================================
@@ -79,6 +92,7 @@ export async function createServer(
   botRegistry: BotRegistry;
   messageRouter: MessageRouter;
   eventTransformer: EventTransformer;
+  a2uiRuntime: A2UIRuntime;
 }> {
   // 创建 Fastify 实例
   const app = Fastify({
@@ -133,6 +147,19 @@ export async function createServer(
   const messageRouter = new MessageRouter(redis);
   const eventTransformer = new EventTransformer();
 
+  // 创建 A2UI 运行时（A2UI 中间件 + RedisStreamAgent 编排 + 渲染权限过滤）
+  const a2uiRuntime = new A2UIRuntime({
+    redis,
+    schema: toMiddlewareSchema(),
+    permissionFilter: new SurfacePermissionFilter({
+      redis,
+      bffInternalUrl: config.bff.internalUrl,
+      platformToken: config.bff.platformToken,
+      timeoutMs: config.bff.timeoutMs,
+    }),
+    messageRouter,
+  });
+
   // ===== 注册路由 =====
 
   registerRoutes(
@@ -143,6 +170,7 @@ export async function createServer(
     h5Adapter,
     messageRouter,
     eventTransformer,
+    a2uiRuntime,
     config,
   );
 
@@ -158,6 +186,7 @@ export async function createServer(
     h5Adapter,
     messageRouter,
     eventTransformer,
+    a2uiRuntime,
   };
 }
 
@@ -176,6 +205,7 @@ function registerRoutes(
   h5Adapter: H5Adapter,
   messageRouter: MessageRouter,
   _eventTransformer: EventTransformer,
+  a2uiRuntime: A2UIRuntime,
   _config: GatewayServerConfig,
 ): void {
   // ===== 健康检查 =====
@@ -321,6 +351,7 @@ function registerRoutes(
           agentId?: string;
           messageType?: string;
           metadata?: Record<string, unknown>;
+          action?: A2uiClientAction;
           entitySelectResponse?: {
             resumeToken?: string;
             selectedCandidate?: Record<string, unknown>;
@@ -365,7 +396,78 @@ function registerRoutes(
           return;
         }
 
+        // A2UI 用户操作回传（前端 `{ type: 'a2ui_action', action }`）：
+        // 提取 surfaceId/componentId/action → A2UIRuntime.processUserAction →
+        // 新一轮 Agent 执行（结果经事件流回传前端）。
+        // 身份 userId 只取 JWT 验签结果（P4：消息体/工具内 userId 一律不可信）。
+        if (message.type === 'a2ui_action') {
+          const action = message.action;
+          if (action != null && typeof action.surfaceId === 'string' && typeof action.action === 'string') {
+            logger.info(
+              { sessionId: message.sessionId ?? clientSessionId, userId: user.userId, action: action.action },
+              'A2UI action received from frontend',
+            );
+            // 事件流下发与错误提示在 runAgent 内部处理，不阻塞 WS 消息循环。
+            void a2uiRuntime
+              .processUserAction({
+                user,
+                sessionId: message.sessionId ?? clientSessionId,
+                action,
+                h5Adapter,
+              })
+              .catch((error: unknown) => {
+                logger.error(
+                  {
+                    error: error instanceof Error ? error.message : String(error),
+                    sessionId: message.sessionId ?? clientSessionId,
+                    userId: user.userId,
+                  },
+                  'A2UI action processing failed',
+                );
+              });
+          } else {
+            socket.send(
+              JSON.stringify({
+                type: 'a2ui_action_result',
+                ok: false,
+                error: { code: 1001, message: 'invalid a2ui_action: action.surfaceId/action.action required' },
+              }),
+            );
+          }
+          return;
+        }
+
         if (message.type === 'chat' || message.content != null) {
+          // A2UI 启用的对话（显式 opt-in，默认走旧协议通道，双协议兼容）：
+          //   messageType === 'a2ui_chat' 或 metadata.a2ui === true
+          const a2uiOptIn =
+            message.messageType === 'a2ui_chat' || message.metadata?.['a2ui'] === true;
+          if (a2uiOptIn) {
+            logger.info(
+              { sessionId: message.sessionId ?? clientSessionId, userId: user.userId },
+              'A2UI chat message received',
+            );
+            void a2uiRuntime
+              .runChat({
+                content: message.content ?? '',
+                user,
+                sessionId: message.sessionId ?? clientSessionId,
+                h5Adapter,
+                metadata: message.metadata,
+              })
+              .catch((error: unknown) => {
+                logger.error(
+                  {
+                    error: error instanceof Error ? error.message : String(error),
+                    sessionId: message.sessionId ?? clientSessionId,
+                    userId: user.userId,
+                  },
+                  'A2UI chat run failed',
+                );
+              });
+            return;
+          }
+
           const inbound = MessageRouter.createInboundMessage({
             userId: user.userId,
             channel: 'h5',

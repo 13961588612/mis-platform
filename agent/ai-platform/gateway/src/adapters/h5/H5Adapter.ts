@@ -179,6 +179,70 @@ export class H5Adapter {
   }
 
   /**
+   * 发送新协议前端消息（A2UI 链路，直接下发不做 agent_event 封装）。
+   *
+   * A2UIRuntime 将 BaseEvent 转换为前端消息（a2ui_surface / stream / done /
+   * error / custom）后，经本方法原样推送（WS 或 SSE）。旧协议（agent_event
+   * 封装）仍走 {@link send}，双协议并存。
+   *
+   * @param message - 前端消息对象
+   * @param sessionId - 目标会话 ID
+   */
+  async sendRaw(message: Record<string, unknown>, sessionId: string): Promise<void> {
+    const ws = this.wsConnections.get(sessionId);
+    if (ws != null) {
+      this.streamRaw(message, ws);
+      return;
+    }
+
+    const reply = this.sseConnections.get(sessionId);
+    if (reply != null) {
+      this.sendSseRaw(message, reply);
+      return;
+    }
+
+    logger.warn(
+      { sessionId, messageType: message['type'] },
+      'No active connection found for session (sendRaw)',
+    );
+  }
+
+  /**
+   * 通过 WebSocket 原样推送前端消息（不封装 agent_event）。
+   *
+   * @param message - 前端消息对象
+   * @param ws - WebSocket 连接
+   */
+  private streamRaw(message: Record<string, unknown>, ws: WebSocket): void {
+    if (ws.readyState !== ws.OPEN) {
+      logger.warn(
+        { readyState: ws.readyState },
+        'WebSocket not in OPEN state, skipping raw message',
+      );
+      return;
+    }
+    ws.send(JSON.stringify(message));
+    logger.debug(
+      { messageType: message['type'] },
+      'Raw message streamed via WebSocket',
+    );
+  }
+
+  /**
+   * 通过 SSE 原样推送前端消息（不封装 agent_event）。
+   *
+   * @param message - 前端消息对象
+   * @param reply - Fastify Reply 对象
+   */
+  private sendSseRaw(message: Record<string, unknown>, reply: FastifyReply): void {
+    reply.raw.write(`data: ${JSON.stringify(message)}\n\n`);
+    logger.debug(
+      { messageType: message['type'] },
+      'Raw message sent via SSE',
+    );
+  }
+
+  /**
    * 注入 Redis 客户端（写 aip:session:{sid}:gateway）。
    *
    * @param redis - Redis 客户端
