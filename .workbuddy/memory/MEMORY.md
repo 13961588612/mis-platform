@@ -1,53 +1,43 @@
 # MIS 平台项目记忆
 
-## agent/ai-platform 融合部署约定（2026-07-24 锁定）
-- **编排**：`deploy/docker-compose.ai.yml` 叠加层（与 dev/stack 用 `-f` 叠加），并入 qdrant/embedding/outbound-proxy/gateway(TS 3100)/backend(Py 8000)/frontend(H5 静态)；复用主栈 postgres/redis/nacos。
-- **共享基础设施**：PG 共享主实例，新增库 `ai_platform`（角色 `aiplatform`，Alembic 管 schema，与 Flyway 管的 mis_platform 隔离，init 脚本 `deploy/postgres/init/02-create-ai-platform.sql` 幂等）；Redis 共享主实例，**db index 2 + 键前缀 `aip:`**（MIS 维持 db0 + `mis:`）。
-- **边缘入口**：去 agent 独立 nginx；`deploy/nginx/edge.conf` 共享边缘 nginx，反代 `/api`、`/ws` 到 `ai-platform-gateway:3100`（WS Upgrade 透传 + `proxy_buffering off` 保 SSE）；独立入口 `agent.<域>`。
-- **嵌入鉴权**：TS gateway `auth.ts` 双验签——agent 自有 HS256(iss=ai-platform) + MIS RS256(iss=mis-platform, 公钥 `backend/keys/public.pem`)；H5 `useAuth.ts` 监听父域 `postMessage({type:AUTH_TOKEN})` + `?token=` 兜底。
-- **A2UI**：backend 事件流 `ui.render{component,props}`；TS gateway 对 H5 1:1 透传、Bot 降级 template_card；H5 组件注册表真实渲染（禁 dangerouslySetInnerHTML）。
-- **BFF**：`mis.ai-platform.base-url` 迁入 Nacos（`http://ai-platform-backend:8000`），生产 `sse-enabled: true`。
-- ⚠️ 技术债归属（易串）：前端 13 类型错误 / 网关 20 tsc 属 **agent/ai-platform**（H5+TS gateway），**与 `frontend/mis-admin-web` 无关**。
+## 启动与测试（黄金知识）
+- 一键集成栈 `scripts/start-integration-stack.ps1`。主前端 `frontend/mis-admin-web`：`npm run dev`→:5173，proxy `/api`→ mis-gateway:8080（非 BFF 8081），代码用相对 `/api/v1/**`。
+- BFF `mis-admin-bff` :8081，聚合 mis-iam:8102/mis-org:8103/mis-system:8105；本地 `.\mvn.ps1 spring-boot:run -pl mis-admin-bff`。
+- 前端门禁：无 vitest/jest，唯一 `npm run typecheck`（tsc --noEmit strict+noUnusedLocals）；eslint 存量 `arch/no-cross-feature` 11 error 集中在 `features/ai/context/form-fill-bridge.tsx`+`features/system/`。
+- Java 需 JDK17(`D:\software\jdk-17.0.2`)。Maven 直调坏（Git Bash 把 MAVEN_HOME 解析成 Unix 路径→classworlds ClassNotFoundException）。正确启动器：
+  `JH=D:/software/jdk-17.0.2 MV=D:/software/apache-maven-3.9.16; "$JH/bin/java" -classpath "$MV/boot/plexus-classworlds-2.11.0.jar" "-Dmaven.home=$MV" "-Dclassworlds.conf=$MV/bin/m2.conf" "-Dmaven.multiModuleProjectDirectory=D:/code/mis-platform/backend" org.codehaus.plexus.classworlds.launcher.Launcher <args>`
+- Python 测试在 `agent/ai-platform/backend`(pytest)。
+- ⚠️ Maven `-pl X -am test -Dtest=Y` **必追加** `-Dsurefire.failIfNoSpecifiedTests=false`：否则 `-am` 把 `-Dtest` 带到上游模块(如 mis-common-core 无匹配用例)直接 `BUILD FAILURE`("No tests matching pattern")，**根本走不到目标模块**，掩盖真实编译失败/测试 ERROR。`-pl X -am test`(无 -Dtest)全模块跑才能暴露「构造器签名漂移打断整模块 testCompile」类问题。
 
-## 启动与测试（2026-07-25 核实，仍有效）
-- **一键集成栈**：`scripts/start-integration-stack.ps1`。先 `docker compose -f deploy/docker-compose.dev.yml up -d`（PG/Redis/Nacos/MinIO），再跑脚本起微服务。
-- **主 MIS 前端** `frontend/mis-admin-web`：`npm run dev` → vite :5173，proxy 把 `/api` 转 `http://localhost:8080`（**mis-gateway**，非 BFF 8081）；代码用相对 `/api/v1/**`，无 baseURL 变量。
-- **BFF** `mis-admin-bff` 端口 **8081**，聚合 mis-iam:8102 / mis-org:8103 / mis-system:8105；本地 `.\mvn.ps1 spring-boot:run -pl mis-admin-bff`。请求经 mis-gateway 登录后透传 `X-User-Id/X-Tenant-Id/X-App-Id`。
-- **测试约束**：① 主 MIS 前端 **无 vitest/jest**，唯一门禁 `npm run typecheck`（tsc --noEmit，strict+noUnusedLocals）；**存量债在 eslint 侧**（`npx eslint .` 报 `arch/no-cross-feature` 11 error，集中在 `features/ai/context/form-fill-bridge.tsx` 与 `features/system/`，`features/kb/` 零问题；master 另有 `features/kb/operations/kb-qa-record-tab.tsx` TS6133 噪声，非本次引入）。② Java 需 **JDK17**（`D:\software\jdk-17.0.2`）；`mvn` 直调损坏，须 JDK17 直启 classworlds launcher；mis-admin-bff **零 @SpringBootTest**，仅 Mockito 单测。③ Python 测试在 `agent/ai-platform/backend`（pytest）。
-- `deploy/docker-compose.stack.yml` 混合联调稳定栈；AI 融合用 `docker-compose.ai.yml` 叠加。
+## 部署边界（2026-07-24 锁）
+- AI 融合 `deploy/docker-compose.ai.yml` 叠加主栈；共享 PG 库 `ai_platform`(角色 aiplatform,Alembic)、Redis db2 前缀 `aip:`。边缘 nginx `deploy/nginx/edge.conf` 反代 `/api`+`/ws`→ai-platform-gateway:3100。
+- 技术债归属：前端 13 tsc/网关 20 tsc 属 **agent/ai-platform**，与 `frontend/mis-admin-web` 无关。
 
-## 表格吸顶/列宽/间距 全站规范（2026-08-06 收口，高频踩坑）
-- **KeepAlive 布局**：每页被包 `flex min-h-0 flex-1 overflow-auto` 外层（`keep-alive-outlet.tsx`）。内部表格吸顶必须 `min-h-0 flex-1 overflow-auto` 单层滚动；**禁止** `h-full overflow-auto` 嵌套（sticky 参照错乱）。
-- **禁用**：sticky `th` 上 `backdrop-blur`（抖）；`border-collapse` + sticky 表头（Chrome/Safari 失效，用 `border-separate border-spacing-0`）。全局已在 `styles/globals.css` 的 `thead th` 统一加 `position:sticky;top:0;z-index:10` 并关 `backdrop-filter`。
-- **列宽拖拽**走 `components/common/use-column-widths.ts`；**面包屑**由 PageHeader 统一传；**间距**由 app-layout 外层 `p-4 md:p-6` 控制，页面内别再写内层 padding；**sidenav 分组 label** 由 app-layout 按 activeAppCode 传 `sectionLabel`，别硬编码。
+## 前端 UI 规范（高频踩坑）
+- 表格吸顶：`min-h-0 flex-1 overflow-auto` 单层滚动，禁 `h-full overflow-auto` 嵌套；禁 sticky th `backdrop-blur`；用 `border-separate border-spacing-0` 非 `border-collapse`。全局 `thead th` 已 sticky。
+- 列宽拖拽 `components/common/use-column-widths.ts`；间距由 app-layout 外层 `p-4 md:p-6` 控制，页面内勿加内层 padding；sidenav sectionLabel 由 app-layout 传。
+- 风格对齐（已落地）：圆角 4px、表头/标签 13px、列间竖线 `border-l border-border/60`，主色 `#4f46e5` 不动。
 
-## UI 风格对齐（2026-08-06 决策）
-- 按外部发票截图对齐字体/表格：圆角 6→4px（`--radius:0.25rem`）、表头 14→13px、表单标签 14→13px、列表/树表列间竖线 `border-l border-border/60`。
-- 改动集中在 `styles/globals.css` + `components/ui/label.tsx` + `features/system/admin-list-page.tsx` + `components/common/tree-table.tsx`。**主色暂不动**（保留 `#4f46e5`）。门户原型 `mis-portal-prototype.html` 独立 HTML 不读 globals.css，不随变。
+## BFF 启动与网关（2026-08-10 实锤）
+- 网关 `/api/v1/**` 走 Nacos `lb://mis-admin-bff`(ns=integration,group=MIS_GROUP)；BFF 须注册心跳正常否则 503。
+- 启动必须：`MIS_REMOTE=true`+`NACOS_SERVER=10.254.16.6:8848`+`NACOS_NAMESPACE=integration`+`NACOS_CONFIG_GROUP=MIS_GROUP`+DB/REDIS 指向 10.254.16.6+JWT 绝对路径+显式 `SERVER_PORT=8081`（宿主机 `SERVER__PORT=20231` 会覆盖 server.port→启动失败）。
+- BFF 未映射即拒：缺 `sys_api`+`sys_menu_api`+`sys_role_permission` 行→40300（V55 补 dept-types 5 端点映射后 CRUD 恢复）。
+- 一键脚本 `backend/start-bff-standalone.bat`（纯 ASCII）。
+- 环境硬限制：① **沙箱只回收「脱离父命令的孤儿子进程」(~13-15s)**——java 服务/`&` 后台 install/`Start-Process` 起的常驻进程会被 SIGKILL；但 **AI 管理的后台 Bash / Agent 子任务本身存活**(实测后台心跳跑满 157s 不中断)。→ 长服务须放在**单条前台命令**内(start→用→停，显式 `timeout`≤600000ms=10min)或跑在真实宿主机，勿用 `run_in_background`/`Start-Process` 起常驻服务。② 禁调 cmd.exe；③ .bat 纯 ASCII；④ 登录需 appCode=system；⑤ 验证码 SVG 可文本解码；⑥ **PortableGit 残缺 git push 坏**，须系统 Git `"/c/Program Files/Git/cmd/git.exe"`(且 git `-C` 用 `D:/...` 形式，勿用 `/d/...` 偶发解析失败)。
+- 登录链路：GET `/api/v1/auth/captcha`(SVG 解码 4 位)→POST `/api/v1/auth/login`(admin/Mis@123456)→Bearer。
 
-## FormFill × Agent 平台整合（2026-07-30 锁定 P0，2026-07-31 已提交）
-- 反向信任：ai-platform→BFF 用 `X-Platform-Token` + `X-Mis-Upstream-Jwt`(RS256) + 信任域 CIDR；BFF `ReverseTrustInterceptor` 校验。status 枚举小写 `success|hitl_required|manual_required|error`。
-- 提交：`ccf1ec2`(引擎地基) + `cae4a60`(整合层) + `5da8ad1`(O1) + `b03eaf5`(交付报告)。
+## Agent 控制台 + BFF（2026-08-06，务必看）
+- 已交付：T03 fail-closed 闸门(Py `640294a`+`f0754b6`)、T05 前端 12 页(`b619f255`)。
+- `features/agent/types.ts` 已按 ai-platform 真实 wire 对齐（原 6 类 DTO 臆造）；`features/agent` typecheck 0 错。
+- ⚠️ **BFF→ai-platform 401 修复未提交**：`MisJwtCaptureFilter`+`DownstreamAuthContext`+`AgentOpsTransport.agentOpsHeaders()` 已改，回归测试 `AgentOpsTransportAuthHeaderTest`/`MisJwtCaptureFilterTest` 在，未 commit。
+- T04 未交付端点（设计内，联调 501/404）：`/admin/worker-catalog`、`/sessions`、`/admin/channels/wecom/bots`、`/admin/approvals`(⚠️ BFF 路径应 `/push/approvals`)、`/agents/{id}/config-files`。
+- P2 遗留（等 T04）：MonitorOverview 虚构(undefined/undefined)、MCP 四字段恒 0、`enabled_skill_count` 恒 0。
 
-## Agent 控制台前端 + BFF 近期关键事实（2026-08-06，务必看）
-- **已交付**：T03 fail-closed 权限闸门（Python `640294a` + `f0754b6`）、T05 前端 12 页（运维控制台占位→真实页，`b619f255`）。
-- **重大债已修（P0/P1）**：`frontend/mis-admin-web/src/features/agent/types.ts` 原 **6 类 DTO 按设计文档臆造、与 ai-platform 真实 wire 不符**（`Skill` 把分页对象当数组、`AgentSummary.id` 实为 `agent_id`、`RouteStat` 实为聚合对象、`Approval`/`Session`/`SessionMessage` 字段 camelCase 错配、#33 回包结构不同）。已按 ai-platform 源码逐一对齐：`skill_id` / `agent_id` / 聚合 `RouteStats` / `session_id`+`response` / camelCase `Approval`+5 状态 / `metadata`+`timestamp`。proxy_status 崩溃 + 7 高危 + 中危全消，`features/agent` typecheck 0 错。
-- **BFF→ai-platform 401 已修**：`AgentOpsTransport.exchange()` 只透传 `X-User-Id` 等、未转发 MIS JWT → ai-platform `get_current_user` 强制 `Authorization: Bearer` 故 401。新增 `MisJwtCaptureFilter`(入站捕获 JWT 入 ThreadLocal) + `DownstreamAuthContext` + `AgentOpsTransport.agentOpsHeaders()` 补头。`exchange()` 用 `.block()` 同步发请求，servlet 线程 ThreadLocal 可见，修复生效。回归测试 `AgentOpsTransportAuthHeaderTest`/`MisJwtCaptureFilterTest`。**改动均未提交 git**。
-- **T04 尚未交付的端点（设计内、非故障，联调返回 501/404）**：`/api/v1/admin/worker-catalog`、`/api/v1/sessions`、`/api/v1/admin/channels/wecom/bots`、`/api/v1/admin/approvals`（⚠️ BFF 路径写错，应为 `/push/approvals`）、`/api/v1/agents/{id}/config-files`。这些回来前 Agent 控制台部分页为占位/空态属正常。
-- **P2 已知遗留（等 T04 后端定型后统一收）**：① `MonitorOverview` 整块虚构（真实 wire 是 `{proxy,llm,admin}` 三路聚合），`agents_running/agents_total` 不在 wire → 概览页「运行中 / 已登记 Agent」显示 `undefined / undefined`（非崩溃，模板字面量）；② MCP 四字段 `state/tool_count/enabled/updated_at` 恒 0；③ `enabled_skill_count` 恒 0。
-- ⚠️ 主理人角色铁律：走 SOP 时严禁自己下场写码，须 TeamCreate + 派 `software-engineer`/`software-qa-engineer` 等子 Agent（name 与 subagent_type 同传 Agent ID）；BugFix/快速模式可跳过 PRD/架构。
+## KB 权限模型（2026-08-12 评审，改动前必读）
+- 三层两套：分类管辖 `kb_category_admin`(子树继承已实现)+库 ACL `kb_acl`(read/manage/acl)；文档随库无独立权限。
+- `hasLibraryManage = 节点管辖 ∨ kb_acl.manage`（NodeAdminResolver L230）；检索只认 read。
+- ⚠️ 缺口：`KbLibraryService`+`RagSettingsService.save` 服务层不校验数据范围（仅 BFF 码）——改造须先补 `assertNodeManage`/`hasLibraryManage` 贯通 userId。
+- 三步授权痛点：前端建库分类下拉列全部分类→非管辖→文档 40311。建议 UI 收敛+后端 `?scope=manageable|visible`。
 
-## BFF 启动黄金知识（2026-08-10 agent-ops 503 修复实锤，高频踩坑）
-- **网关路由**：mis-gateway 对 `/api/v1/**` 走 **Nacos 服务发现 `lb://mis-admin-bff`**（namespace=integration, group=MIS_GROUP）——BFF 必须注册进该 Nacos 且心跳正常，否则 503（网关日志 `No servers available for service: mis-admin-bff`）。
-- **启动 BFF 必带环境变量**：`MIS_REMOTE=true` + `NACOS_SERVER=10.254.16.6:8848` + `NACOS_NAMESPACE=integration` + `NACOS_CONFIG_GROUP=MIS_GROUP` + DB/REDIS 指向 10.254.16.6 + JWT key 绝对路径；**必须显式置 `SERVER_PORT=8081`/`SERVER__PORT=8081`**（宿主机注入 `SERVER__PORT=20231` 会经宽松绑定覆盖 server.port → 启动失败）。
-- **一键脚本**：`backend/start-bff-standalone.bat`（纯 ASCII，构建+`start /b` 脱离启动；`nopkg` 参数跳构建直接用现有 jar）。BFF 重启/驻留跑它即可。
-- **本 Agent 环境硬限制**：① 后台任务 ~13-15s 被系统 killed → 长生命周期服务须 nohup/start /b 脱离或用户独立终端执行；② Bash/PowerShell 禁调 cmd.exe；③ **.bat 必须纯 ASCII**（UTF-8 中文在 GBK cmd 乱码）；④ 登录接口需 `appCode`（前端固定 'system'）；⑤ 验证码 SVG 可文本解码（可编程登录）；⑥ **PATH 里的 PortableGit（`~/.workbuddy/vendor/PortableGit`）残缺——git-core 缺 `git-remote-https.exe`，`git push` 报 `remote-https is not a git command`**，须用系统完整 Git `"/c/Program Files/Git/cmd/git.exe"`（2.42.0，含 https 助手+凭据缓存）push。
-- **登录链路**（验收用）：GET `/api/v1/auth/captcha`（SVG base64 解码取 4 位码）→ POST `/api/v1/auth/login`（appCode=system + admin/Mis@123456）→ accessToken → 业务接口带 `Authorization: Bearer`。
-
-## KB 权限模型核心事实（2026-08-12 评审固化，改动前必读）
-- **三层两套**：分类管辖 `kb_category_admin`（子树继承已实现：全局管理员短路→祖先链→子树并集，NodeAdminResolver）；库 ACL `kb_acl`(read/manage/acl)；文档**无独立权限随库**。
-- **合成语义已有**：`hasLibraryManage = 节点管辖 ∨ kb_acl.manage`（NodeAdminResolver L230）；文档写/图谱/RAPTOR 均走它。
-- **检索只认 read**：可见库 = public∧enabled ∪ ACL read − disabled（KbVisibilityService）；命中测试强制 READ → 管理权限与搜索范围天然解耦。
-- **⚠️ 关键缺口**：`KbLibraryService.create/update/delete` + `RagSettingsService.save` **服务层不校验数据范围**（仅 BFF 权限码）——任何改造必须先补 `assertNodeManage`/`hasLibraryManage` 并贯通 userId。
-- **三步授权痛点根因**：前端建库分类下拉列全部分类（kb-library-page.tsx L662），建到非管辖分类 → 文档 40311 → 被迫手动授 manage。
-- 改造建议（评审结论，见 `docs/analysis/kb-permission-redesign-review-2026-08-12.md`）：ACL 零迁移「UI 收敛+后端兼容」防权限放大；UI 双口径（管理页=可管理、问答/检索=可见）；接口收敛 `GET /kb/libraries?scope=manageable|visible` 优于前端本地过滤。
+## 主理人角色铁律
+- SOP 完整流程须 TeamCreate + 派 software-engineer/software-qa-engineer 子 Agent（name=subagent_type=Agent ID）；BugFix/快速模式可跳 PRD/架构。
