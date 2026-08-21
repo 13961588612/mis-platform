@@ -53,3 +53,11 @@ deploy/nacos/plugins/
 
 # Windows 保留名误建垃圾文件（0 字节，git 不可见即可）
 /nul
+
+# 本地探测 / QA 临时产物（AI 辅助开发反复生成，不提交）
+**/_e2e*.txt
+**/_full*.txt
+**/_pytest_full.txt
+**/qa_*.txt
+**/_tsc*.txt
+**/_git_info.txt
