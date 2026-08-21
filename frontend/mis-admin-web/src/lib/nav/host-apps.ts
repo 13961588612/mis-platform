@@ -48,6 +48,8 @@ export function resolveActiveHostAppCode(
 ): string {
   if (pathname === '/kb' || pathname.startsWith('/kb/')) return 'kb';
   if (pathname === '/agent' || pathname.startsWith('/agent/')) return 'agent';
+  // T09/T10：存量页迁移路由 /ai/* 归入智能体运营控制台（app.code = 'agent'）
+  if (pathname === '/ai' || pathname.startsWith('/ai/')) return 'agent';
   if (pathname.startsWith('/iframe/')) {
     const code = pathname.slice('/iframe/'.length).split('/')[0];
     if (code) return code;

@@ -1,4 +1,4 @@
-import { type ComponentType } from 'react';
+import { lazy, Suspense, type ComponentType } from 'react';
 import { useLocation } from 'react-router-dom';
 import { cn } from '@/lib/utils';
 import { useTabStore } from '@/stores/tab-store';
@@ -48,6 +48,25 @@ import {
 import { flattenSystemNavLeaves } from '@/lib/nav/system-nav';
 import { flattenKbNavLeaves } from '@/lib/nav/kb-nav';
 import { flattenAgentNavLeaves } from '@/lib/nav/agent-nav';
+
+// ---------------------------------------------------------------------------
+// T09/T10 存量页：路由级懒加载（React.lazy + Suspense，每路由独立 chunk ≤80KB/页）。
+// 页面文件默认导出组件；chunk 首访进入时才拉取。
+// ---------------------------------------------------------------------------
+const LazyQaPage = lazy(() => import('@/features/agent/ai/qa-page'));
+const LazyDataQueryPage = lazy(() => import('@/features/agent/ai/data-query-page'));
+const LazyApprovalCenterPage = lazy(() => import('@/features/agent/ai/approval-center-page'));
+const LazySkillManagePage = lazy(() => import('@/features/agent/ai/skill-manage-page'));
+const LazyMonitorDashboardPage = lazy(() => import('@/features/agent/ai/monitor-dashboard-page'));
+
+/** 懒加载页面的 Suspense 占位（轻量，避免白屏闪烁）。 */
+function LazyPageFallback() {
+  return (
+    <div className="flex min-h-[40vh] items-center justify-center text-sm text-muted-foreground">
+      页面加载中…
+    </div>
+  );
+}
 
 export { registerIframeApps } from '@/lib/nav/iframe-apps';
 
@@ -115,6 +134,12 @@ const PAGE_MAP: Record<string, ComponentType> = {
   '/agent/channels/wecom': AgentWecomPage,
   '/agent/monitor': AgentMonitorPage,
   '/agent/approvals': AgentApprovalsPage,
+  // T09/T10：存量页迁移（ai-platform 后端，懒加载）
+  '/ai/qa': LazyQaPage,
+  '/ai/data-query': LazyDataQueryPage,
+  '/ai/approvals': LazyApprovalCenterPage,
+  '/ai/skills': LazySkillManagePage,
+  '/ai/monitor': LazyMonitorDashboardPage,
 };
 
 export const KEEP_ALIVE_META: Record<string, { title: string; icon?: string }> = Object.fromEntries(
@@ -248,7 +273,10 @@ export function KeepAliveOutlet() {
             )}
             aria-hidden={!isActive}
           >
-            <Comp />
+            {/* Suspense 包裹：懒加载路由（存量页 /ai/*）chunk 拉取时展示占位 */}
+            <Suspense fallback={<LazyPageFallback />}>
+              <Comp />
+            </Suspense>
           </div>
         );
       })}

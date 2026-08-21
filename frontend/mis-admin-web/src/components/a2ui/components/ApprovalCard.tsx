@@ -2,7 +2,8 @@
  * ApprovalCard — A2UI `approval-card` 组件（shadcn 一处实现，T06'）。
  *
  * <p>渲染权限 `approval:view`（registry 声明）；写操作 `approval:decide`（通过/驳回）
- * 经 bff-actions → BFF `/api/v1/approval/decide` 校验；成功后经 Gateway
+ * 经 bff-actions → BFF `/api/v1/push/approvals/{id}/respond` 校验（Obs-1：统一为
+ * 真实后端端点，`{id}` 由 bff-actions 从 payload.approvalId 插值）；成功后经 Gateway
  * `a2ui_action` 通知 Agent 继续。403 时 PermissionErrorBanner 内联常驻（非 toast）。
  */
 

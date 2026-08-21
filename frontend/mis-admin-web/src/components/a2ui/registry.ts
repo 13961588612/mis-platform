@@ -20,6 +20,12 @@ export const A2UI_CATALOG = A2UI_CATALOG_ID;
 
 /**
  * 单前端注册表（与 Gateway SHARED_CATALOG 严格对齐；不一致时 Gateway 权威优先）。
+ *
+ * <p>approval-card 写端点统一为真实后端 `/api/v1/push/approvals/{id}/respond`
+ * （ai-platform push.py，Obs-1 修复——旧 `/api/v1/approval/decide` 为文档时序图口径，
+ * 真实后端不存在，走默认 binding 会 404）。`{id}` 占位符由 bff-actions
+ * `resolveBindingUrl` 从 payload.approvalId 插值；payload.action（approved/rejected）
+ * 映射为后端 decision 字段。
  */
 export const A2UI_REGISTRY: A2uiRegistryEntry[] = [
   {
@@ -27,8 +33,8 @@ export const A2UI_REGISTRY: A2uiRegistryEntry[] = [
     component: ApprovalCard,
     requiredPermission: 'approval:view',
     actionApiMap: {
-      approve: { method: 'POST', path: '/api/v1/approval/decide', permissionCode: 'approval:decide' },
-      reject: { method: 'POST', path: '/api/v1/approval/decide', permissionCode: 'approval:decide' },
+      approve: { method: 'POST', path: '/api/v1/push/approvals/{id}/respond', permissionCode: 'approval:decide' },
+      reject: { method: 'POST', path: '/api/v1/push/approvals/{id}/respond', permissionCode: 'approval:decide' },
     },
     deniedText: '无权限访问此卡片（缺少权限码：approval:view）',
   },

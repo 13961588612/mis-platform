@@ -42,6 +42,12 @@ export const AGENT_NAV: SystemNavNode[] = [
   { kind: 'leaf', path: '/agent/channels/wecom', title: '企微机器人', icon: 'MessagesSquare' },
   { kind: 'leaf', path: '/agent/monitor', title: '系统监控', icon: 'Activity' },
   { kind: 'leaf', path: '/agent/approvals', title: '审批中心', icon: 'ClipboardCheck' },
+  // T09/T10 存量页迁移（ai-platform 后端，/ai/* 路由；未入 sys_menu 种子，静态登记保证侧栏可达）
+  { kind: 'leaf', path: '/ai/qa', title: '知识库问答', icon: 'MessageSquare' },
+  { kind: 'leaf', path: '/ai/data-query', title: '问数', icon: 'Database' },
+  { kind: 'leaf', path: '/ai/approvals', title: '审批中心（AI）', icon: 'ClipboardCheck' },
+  { kind: 'leaf', path: '/ai/skills', title: 'Skill 管理', icon: 'Sparkles' },
+  { kind: 'leaf', path: '/ai/monitor', title: '系统监控（AI）', icon: 'Activity' },
 ];
 
 /** 展平为叶节点列表（AGENT_NAV 当前全为叶节点，保留分支处理以兼容后续扩展）。 */

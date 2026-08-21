@@ -24,7 +24,7 @@ import { logger, registerLoggerMiddleware } from './middleware/logger.js';
 import { registerAuthMiddleware, type AuthConfig, type JwtClaims } from './middleware/auth.js';
 import { registerRateLimitMiddleware } from './middleware/rateLimit.js';
 import { WecomH5Adapter } from './adapters/wecom/WecomH5Adapter.js';
-import { H5Adapter } from './adapters/h5/H5Adapter.js';
+import { H5Adapter, getBoundClientId, getBoundHostId } from './adapters/h5/H5Adapter.js';
 import { BotRegistry } from './channels/BotRegistry.js';
 import { MessageRouter } from './router/MessageRouter.js';
 import { EventTransformer } from './router/EventTransformer.js';
@@ -329,13 +329,23 @@ function registerRoutes(
       return;
     }
 
-    const query = req.query as { sessionId?: string };
+    const query = req.query as { sessionId?: string; hostId?: string; clientId?: string };
     const clientSessionId =
       typeof query.sessionId === 'string' && query.sessionId.length > 0
         ? query.sessionId
         : ChannelResolver.generateSessionId('web');
 
-    await h5Adapter.registerWsConnection(clientSessionId, socket, _config.gatewayId);
+    // R47 多宿主：hostId（端标识，缺省 mis-admin-web）+ clientId（连接端标识，缺省随机）
+    await h5Adapter.registerWsConnection(clientSessionId, socket, _config.gatewayId, {
+      hostId:
+        typeof query.hostId === 'string' && query.hostId.length > 0
+          ? query.hostId
+          : undefined,
+      clientId:
+        typeof query.clientId === 'string' && query.clientId.length > 0
+          ? query.clientId
+          : undefined,
+    });
 
     logger.info(
       { sessionId: clientSessionId, userId: user.userId },
@@ -495,8 +505,25 @@ function registerRoutes(
     });
 
     socket.on('close', () => {
-      void h5Adapter.unregisterWsConnection(clientSessionId);
-      logger.info({ sessionId: clientSessionId }, 'H5 WebSocket connection closed');
+      // BUG-1 修复：close 从连接对象取注册时绑定的 clientId/hostId（buildEndpoint 已解析：
+      // 显式 query.clientId 或随机 UUID），不再依赖 query.clientId——真实前端 ws-client
+      // 不传 clientId 时缺省为 undefined，旧逻辑会误删该 sessionId 全部端点（R47 广播中断）。
+      // 保留 query.clientId/hostId 显式传参兼容（T07' embed 宿主可传；绑定值与之等价）。
+      const closedClientId =
+        getBoundClientId(socket) ??
+        (typeof query.clientId === 'string' && query.clientId.length > 0
+          ? query.clientId
+          : undefined);
+      const closedHostId =
+        getBoundHostId(socket) ??
+        (typeof query.hostId === 'string' && query.hostId.length > 0
+          ? query.hostId
+          : undefined);
+      void h5Adapter.unregisterWsConnection(clientSessionId, closedClientId ?? '', closedHostId);
+      logger.info(
+        { sessionId: clientSessionId, clientId: closedClientId, hostId: closedHostId },
+        'H5 WebSocket connection closed',
+      );
     });
   });
 
@@ -615,7 +642,7 @@ function registerRoutes(
   // ===== 事件流 SSE 端点 =====
 
   app.get('/api/events/stream', async (req: FastifyRequest, reply: FastifyReply) => {
-    const query = req.query as { sessionId?: string };
+    const query = req.query as { sessionId?: string; hostId?: string; clientId?: string };
 
     if (query.sessionId == null) {
       return reply.code(400).send({
@@ -626,13 +653,38 @@ function registerRoutes(
       });
     }
 
-    // 注册 SSE 连接（写粘滞映射 aip:session:{sid}:gateway，T7）
-    h5Adapter.registerSseConnection(query.sessionId, reply, _config.gatewayId);
+    // 注册 SSE 连接（写粘滞映射 aip:session:{sid}:gateway，T7；R47 多宿主 hostId/clientId）
+    h5Adapter.registerSseConnection(query.sessionId, reply, _config.gatewayId, {
+      hostId:
+        typeof query.hostId === 'string' && query.hostId.length > 0
+          ? query.hostId
+          : undefined,
+      clientId:
+        typeof query.clientId === 'string' && query.clientId.length > 0
+          ? query.clientId
+          : undefined,
+    });
 
     // 设置超时清理
     req.raw.on('close', () => {
-      void h5Adapter.unregisterSseConnection(query.sessionId!);
-      logger.info({ sessionId: query.sessionId }, 'SSE connection closed');
+      // BUG-1 修复：SSE close 同样从连接对象（reply）取注册时绑定的 clientId/hostId，
+      // 不再依赖 query.clientId——真实前端 sse-client 不传 clientId，缺省会误删整会话端点。
+      // 保留 query.clientId/hostId 显式传参兼容（T07' embed 宿主可传）。
+      const closedClientId =
+        getBoundClientId(reply) ??
+        (typeof query.clientId === 'string' && query.clientId.length > 0
+          ? query.clientId
+          : undefined);
+      const closedHostId =
+        getBoundHostId(reply) ??
+        (typeof query.hostId === 'string' && query.hostId.length > 0
+          ? query.hostId
+          : undefined);
+      void h5Adapter.unregisterSseConnection(query.sessionId!, closedClientId ?? '', closedHostId);
+      logger.info(
+        { sessionId: query.sessionId, clientId: closedClientId, hostId: closedHostId },
+        'SSE connection closed',
+      );
     });
 
     // 保持连接

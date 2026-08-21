@@ -222,10 +222,10 @@ describe('embed-bridge createEmbedBffAdapter', () => {
     expect(result.error?.permissionDenied).toBe(true);
   });
 
-  it('direct 模式：已知操作绑定解析（approval-card.approve → /api/v1/approval/decide）', async () => {
+  it('direct 模式：已知操作绑定解析（approval-card.approve → /api/v1/push/approvals/{id}/respond）', async () => {
     const binding = (await import('@/components/a2ui/registry')).getActionBinding('approval-card', 'approve');
     expect(binding?.method).toBe('POST');
-    expect(binding?.path).toBe('/api/v1/approval/decide');
+    expect(binding?.path).toBe('/api/v1/push/approvals/{id}/respond');
     expect(binding?.permissionCode).toBe('approval:decide');
     // bff-actions 为动态 import（不静态进 embed chunk）——由构建产物核对
     const adapter = createEmbedBffAdapter('direct');

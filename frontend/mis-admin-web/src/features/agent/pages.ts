@@ -37,3 +37,9 @@ export { AgentWecomPage } from './channels/agent-wecom-page';
 export { AgentMonitorPage } from './monitor/agent-monitor-page';
 export { AgentApprovalsPage } from './approvals/agent-approval-page';
 export { AgentAgentDetailPage } from './agents/agent-detail-route';
+// T09/T10：存量页迁移（ai-platform 后端，/ai/* 路由，懒加载）
+export { QaPage } from './ai/qa-page';
+export { DataQueryPage } from './ai/data-query-page';
+export { ApprovalCenterPage } from './ai/approval-center-page';
+export { SkillManagePage } from './ai/skill-manage-page';
+export { MonitorDashboardPage } from './ai/monitor-dashboard-page';

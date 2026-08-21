@@ -65,6 +65,54 @@ export function toBffActionError(error: unknown): BffActionError {
 }
 
 /**
+ * 解析 actionApiMap 绑定 → 实际请求 URL + 请求体。
+ *
+ * <p>Obs-1 修复：approval-card 写端点统一为 `/api/v1/push/approvals/{id}/respond`
+ * （真实后端 push.py），本方法负责：
+ * - 路径占位符 `{param}` 从 payload 同名键插值（`{id}` / `{approvalId}` 兼容
+ *   payload.approvalId），插值后从请求体剔除——后端以 path 参数为准；
+ * - approval:decide 绑定兼容：payload.action（'approved'|'rejected'，ApprovalCard
+ *   消费方口径）→ 后端 decision 字段。
+ *
+ * 无占位符 / 非 approval:decide 绑定时为恒等变换（如 form-sheet submit、
+ * skill-admin 启停等既有调用不受影响）。
+ *
+ * @param binding - registry 中的 actionApiMap 条目（method/path/permissionCode）
+ * @param payload - 组件传入的写操作 payload
+ * @returns 插值后的 URL 与请求体
+ */
+export function resolveBindingUrl(
+  binding: A2uiActionApiBinding,
+  payload: Record<string, unknown>,
+): { url: string; body: Record<string, unknown> } {
+  const body: Record<string, unknown> = { ...payload };
+  const url = binding.path.replace(/\{([^}]+)\}/g, (match: string, param: string) => {
+    const value =
+      body[param] !== undefined
+        ? body[param]
+        : (param === 'id' || param === 'approvalId') && body['approvalId'] !== undefined
+          ? body['approvalId']
+          : undefined;
+    delete body[param];
+    if (param === 'id' || param === 'approvalId') {
+      delete body['approvalId'];
+    }
+    if (value === undefined || value === null || String(value).length === 0) {
+      return match;
+    }
+    return encodeURIComponent(String(value));
+  });
+  if (binding.permissionCode === 'approval:decide') {
+    const action = body['action'];
+    if (action === 'approved' || action === 'rejected') {
+      body['decision'] = action;
+      delete body['action'];
+    }
+  }
+  return { url, body };
+}
+
+/**
  * 调用一个 BFF 写操作（actionApiMap 绑定）。
  *
  * @param binding - registry 中的 actionApiMap 条目（method/path/permissionCode）
@@ -75,10 +123,11 @@ export async function callBffAction<T = unknown>(
   payload: Record<string, unknown>,
 ): Promise<BffActionResult<T>> {
   try {
+    const { url, body } = resolveBindingUrl(binding, payload);
     const res = await api.request<ApiEnvelope<T>>({
       method: binding.method,
-      url: binding.path,
-      data: payload,
+      url,
+      data: body,
     });
     const envelope = res.data;
     if (envelope.code !== 0) {

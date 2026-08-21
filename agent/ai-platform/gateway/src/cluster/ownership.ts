@@ -59,6 +59,11 @@ export function sessionGatewayKey(sessionId: string): string {
   return `${REDIS_KEY_PREFIX}session:${sessionId}:gateway`;
 }
 
+/** `aip:session:{sid}:a2ui:replay` — 最近 N 条 A2UI surface 操作（R47 多宿主离线重放） */
+export function sessionA2uiReplayKey(sessionId: string): string {
+  return `${REDIS_KEY_PREFIX}session:${sessionId}:a2ui:replay`;
+}
+
 export const REDIS_KEY_PREFIX_VALUE = REDIS_KEY_PREFIX;
 
 // ============================================================================
