@@ -1,6 +1,15 @@
-import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
-import { useLocation } from 'react-router-dom';
-import { ExternalLink, Sparkles } from 'lucide-react';
+/**
+ * 全局 Copilot：可拖动 FAB + 右侧 Sheet（T06' 重写）。
+ *
+ * <p>废弃 iframe 嵌入（CopilotH5Frame），改为**原生 A2UI 渲染**：
+ * - chat-core + A2UI 渲染层整体包入 `@/components/chat/CopilotPanel`，经 React.lazy
+ *   按需加载（Sheet 打开才拉包，01-architecture.md §7.2 策略 1）
+ * - modulepreload 预热（P1）：页面空闲时 prefetch 该 chunk，Sheet 打开秒开
+ * - 会话状态由 chat-core（zustand chat-store）持有，关闭 Sheet 不销毁
+ */
+
+import { lazy, Suspense, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
+import { Sparkles } from 'lucide-react';
 import {
   Sheet,
   SheetContent,
@@ -10,14 +19,6 @@ import {
 } from '@/components/ui/sheet';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
-import { useAuthStore } from '@/stores/auth-store';
-import {
-  buildAiH5ChatUrl,
-  deriveModuleFromPath,
-  getAiH5Origin,
-  type AiH5ChildMessage,
-  type AiH5ParentMessage,
-} from '@/lib/ai-h5';
 
 interface CopilotPanelProps {
   open: boolean;
@@ -158,148 +159,33 @@ function CopilotFab({ onOpen }: { onOpen: () => void }) {
   );
 }
 
-/** H5 首次握手超时（连接拒绝时 iframe 不会触发 onError，只能靠超时） */
-const H5_READY_TIMEOUT_MS = 8000;
+/**
+ * 原生 A2UI Copilot 面板（懒加载 chunk）。
+ * chat-core + A2UI 渲染层 + 4 组件全部在此 chunk（≤120KB 验收口径）。
+ */
+const CopilotPanelLazy = lazy(() => import('@/components/chat/CopilotPanel'));
 
-/** 向 H5 iframe 推送 MIS JWT + 页面上下文（DEP-7 M1） */
-function CopilotH5Frame({ open }: { open: boolean }) {
-  const location = useLocation();
-  const accessToken = useAuthStore((s) => s.accessToken);
-  const iframeRef = useRef<HTMLIFrameElement>(null);
-  const h5ReadyRef = useRef(false);
-  const [frameError, setFrameError] = useState(false);
-  /** 首次打开后再挂载 iframe；关闭 Sheet 不销毁，以保留最近会话 */
-  const [everOpened, setEverOpened] = useState(open);
-  /** 变更 key 强制重建 iframe（首次失败后服务恢复时可重载） */
-  const [iframeKey, setIframeKey] = useState(0);
-  const wasOpenRef = useRef(open);
-  /** 是否已尝试过加载（用于区分「首次打开」与「再次打开需重试」） */
-  const hasAttemptedLoadRef = useRef(false);
-
-  const h5Origin = getAiH5Origin();
-  const chatUrl = buildAiH5ChatUrl(h5Origin);
-
-  const remountIframe = () => {
-    h5ReadyRef.current = false;
-    setFrameError(false);
-    setIframeKey((k) => k + 1);
-  };
-
-  useEffect(() => {
-    if (open) setEverOpened(true);
-  }, [open]);
-
-  // 再次打开且上次未握手成功：强制重载（服务恢复后可自愈）
-  useEffect(() => {
-    const justOpened = open && !wasOpenRef.current;
-    wasOpenRef.current = open;
-    if (!justOpened) return;
-    if (hasAttemptedLoadRef.current && !h5ReadyRef.current) {
-      remountIframe();
-    }
-    hasAttemptedLoadRef.current = true;
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- 仅在 open 边沿处理
-  }, [open]);
-
-  // 打开后超时仍无 AUTH_READY → 显示可重试错误（覆盖「连接被拒绝」）
-  useEffect(() => {
-    if (!open || !everOpened || frameError) return;
-    if (h5ReadyRef.current) return;
-    const timer = window.setTimeout(() => {
-      if (!h5ReadyRef.current) {
-        setFrameError(true);
-      }
-    }, H5_READY_TIMEOUT_MS);
-    return () => window.clearTimeout(timer);
-  }, [open, everOpened, iframeKey, frameError]);
-
-  const postToH5 = (msg: AiH5ParentMessage) => {
-    const win = iframeRef.current?.contentWindow;
-    if (!win) return;
-    win.postMessage(msg, h5Origin);
-  };
-
-  const pushAuthAndContext = () => {
-    if (!accessToken) return;
-    postToH5({ type: 'AUTH_TOKEN', token: accessToken });
-    postToH5({
-      type: 'PAGE_CONTEXT',
-      context: {
-        route: location.pathname,
-        module: deriveModuleFromPath(location.pathname),
-      },
-    });
-  };
-
-  // 监听 H5 AUTH_READY（iframe 常驻后仍需持续监听）
-  useEffect(() => {
-    if (!everOpened) return;
-    const onMessage = (event: MessageEvent) => {
-      if (event.origin !== h5Origin) return;
-      const data = event.data as AiH5ChildMessage | null;
-      if (data?.type !== 'AUTH_READY') return;
-      h5ReadyRef.current = true;
-      setFrameError(false);
-      pushAuthAndContext();
-    };
-    window.addEventListener('message', onMessage);
-    return () => window.removeEventListener('message', onMessage);
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- 仅绑定 origin
-  }, [everOpened, h5Origin, accessToken, location.pathname]);
-
-  // 令牌或路由变化时，若 H5 已就绪则重推（打开时也推一次）
-  useEffect(() => {
-    if (!open || !h5ReadyRef.current) return;
-    pushAuthAndContext();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [accessToken, location.pathname, open]);
-
-  if (!everOpened) return null;
-
+/** Sheet 打开前的加载占位（同步渲染，不触发额外拉包）。 */
+function CopilotPanelFallback() {
   return (
-    <div className={cn('relative min-h-0 flex-1 bg-muted/20', !open && 'hidden')}>
-      {frameError ? (
-        <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center text-sm text-muted-foreground">
-          <p>无法加载 AI 助手页面。</p>
-          <p className="text-xs">
-            请确认 Agent H5 已启动（默认 {h5Origin}），且已配置父域白名单。
-          </p>
-          <div className="flex flex-wrap items-center justify-center gap-2">
-            <Button type="button" size="sm" variant="default" onClick={remountIframe}>
-              重新加载
-            </Button>
-            <a
-              href={chatUrl}
-              target="_blank"
-              rel="noreferrer"
-              className="inline-flex h-8 items-center gap-1.5 rounded-md border px-3 text-xs font-medium hover:bg-accent"
-            >
-              <ExternalLink className="h-3.5 w-3.5" />
-              新窗口打开
-            </a>
-          </div>
-        </div>
-      ) : (
-        <iframe
-          key={iframeKey}
-          ref={iframeRef}
-          title="AI Copilot"
-          src={chatUrl}
-          className="h-full w-full border-0"
-          allow="clipboard-read; clipboard-write"
-          onError={() => setFrameError(true)}
-        />
-      )}
+    <div className="flex h-full min-h-0 flex-1 items-center justify-center text-sm text-muted-foreground">
+      正在加载 AI Copilot…
     </div>
   );
 }
 
 /**
  * 全局 Copilot：可拖动 FAB + 右侧 Sheet。
- * 对话 UI 复用 Agent H5（通路 B），经 postMessage 推送 MIS JWT，避免与 H5 双份实现。
+ * Sheet 打开才加载 CopilotPanel chunk；关闭保留 DOM（会话状态不丢）。
  */
 export function CopilotPanel({ open, onOpenChange }: CopilotPanelProps) {
-  const h5Origin = getAiH5Origin();
+  // modulepreload 预热（P1）：页面空闲时提前拉 chunk，Sheet 打开秒开
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      void import('@/components/chat/CopilotPanel');
+    }, 1500);
+    return () => window.clearTimeout(timer);
+  }, []);
 
   return (
     <>
@@ -314,11 +200,11 @@ export function CopilotPanel({ open, onOpenChange }: CopilotPanelProps) {
               <Sparkles className="h-4 w-4 text-primary" />
               AI Copilot
             </SheetTitle>
-            <SheetDescription>
-              复用 Agent 对话能力（{h5Origin}）· 与页内辅助录入相互独立
-            </SheetDescription>
+            <SheetDescription>原生对话 · A2UI 动态界面 · 直连 Agent 网关</SheetDescription>
           </SheetHeader>
-          <CopilotH5Frame open={open} />
+          <Suspense fallback={<CopilotPanelFallback />}>
+            {open ? <CopilotPanelLazy /> : null}
+          </Suspense>
         </SheetContent>
       </Sheet>
 

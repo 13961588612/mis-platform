@@ -17,6 +17,13 @@ export default defineConfig({
         target: 'http://localhost:8080',
         changeOrigin: true,
       },
+      // chat-core 发送通道（/ws/chat）与接收通道（/api/events/stream）均直连 Gateway；
+      // WS 需 ws:true 才能升级握手（QA 建议 3）
+      '/ws': {
+        target: 'http://localhost:8080',
+        changeOrigin: true,
+        ws: true,
+      },
     },
   },
   test: {

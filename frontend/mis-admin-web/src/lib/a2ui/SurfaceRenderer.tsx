@@ -1,0 +1,82 @@
+/**
+ * SurfaceRenderer — A2UI Surface 渲染器（T06'）。
+ *
+ * <p>02 文档 §6.2：`@a2ui/react@0.9.1` P1 评估替换自研骨架（A2uiSurface + Generic Binder）；
+ * 业务 catalog（4 组件）与权限门控与骨架解耦，换不换不影响组件与权限。
+ * 本轮以自研骨架落地（P1 验证结论：@a2ui/react@0.9.1 peer 兼容 React 18 + zod ^3.23.8，
+ * 可后续切换）。职责：
+ * - 订阅 surface-store，渲染指定 surface（缺省取 activeSurfaceId）
+ * - 组件级权限门控（A2uiPermissionGate，UX 层；Gateway 权威过滤兜底）
+ * - 未知组件安全回退（绝不 dangerouslySetInnerHTML）
+ * - 递归渲染 children（容器组件）
+ */
+
+import { type ReactNode } from 'react';
+import { useSurfaceStore } from './surface-store';
+import { getA2uiRegistryEntry, isKnownA2uiComponent } from '@/components/a2ui/registry';
+import { A2uiPermissionGate } from '@/components/a2ui/A2uiPermissionGate';
+import { useA2ui, A2uiNodeContext } from '@/components/a2ui/a2ui-context';
+import type { A2uiComponentName, A2uiComponentNode } from './types';
+
+export interface SurfaceRendererProps {
+  /** 指定 surfaceId；缺省渲染 activeSurfaceId。 */
+  surfaceId?: string;
+  /** 空态占位（无 surface 时）。 */
+  empty?: ReactNode;
+  className?: string;
+}
+
+/** 渲染单个 A2UI Surface。 */
+export function SurfaceRenderer({ surfaceId, empty, className }: SurfaceRendererProps) {
+  const { activeSurfaceId } = useA2ui();
+  const surfaces = useSurfaceStore((s) => s.surfaces);
+  const targetId = surfaceId ?? activeSurfaceId;
+  const surface = targetId ? surfaces[targetId] : undefined;
+
+  if (!surface) {
+    return empty != null ? <>{empty}</> : null;
+  }
+
+  return (
+    <div className={className}>
+      {surface.components.map((node) => (
+        <SurfaceNode key={node.id} surfaceId={surface.surfaceId} node={node} />
+      ))}
+    </div>
+  );
+}
+
+/** 渲染单个组件节点（含权限门控 + 节点定位注入 + children 递归）。 */
+function SurfaceNode({ node, surfaceId }: { node: A2uiComponentNode; surfaceId: string }) {
+  const entry = getA2uiRegistryEntry(node.component);
+
+  if (!entry || !isKnownA2uiComponent(node.component)) {
+    return (
+      <div className="my-2 rounded-lg border border-dashed border-border/70 bg-muted/30 p-3 text-xs text-muted-foreground">
+        <div className="font-medium">未知 A2UI 组件：{node.component}</div>
+        <pre className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap break-all">
+          {JSON.stringify(node.props ?? {}, null, 2)}
+        </pre>
+      </div>
+    );
+  }
+
+  const Comp = entry.component;
+
+  return (
+    <A2uiNodeContext.Provider key={node.id} value={{ surfaceId, componentId: node.id }}>
+      <A2uiPermissionGate requiredPermission={entry.requiredPermission} deniedText={entry.deniedText}>
+        <Comp component={node.component as A2uiComponentName} props={node.props} />
+      </A2uiPermissionGate>
+      {node.children && node.children.length > 0 ? (
+        <div className="space-y-2">
+          {node.children.map((child) => (
+            <SurfaceNode key={child.id} surfaceId={surfaceId} node={child} />
+          ))}
+        </div>
+      ) : null}
+    </A2uiNodeContext.Provider>
+  );
+}
+
+export default SurfaceRenderer;
