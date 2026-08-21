@@ -61,3 +61,6 @@ deploy/nacos/plugins/
 **/qa_*.txt
 **/_tsc*.txt
 **/_git_info.txt
+**/.qa-*.txt
+# vite/vitest config 预打包临时文件（vite.config.ts.timestamp-*.mjs 等）
+**/*.timestamp-*.mjs
