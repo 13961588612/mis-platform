@@ -44,6 +44,11 @@ class AgentEventType(str, Enum):
 # - 命名语义化、版本无关（如 ``approval-card``、``data-table``、``form-sheet``）
 # - ``props`` 为纯 JSON，前端渲染前做白名单字段校验 + 防注入
 # - 后端只给「描述」，前端决定「怎么画」
+#
+# 口径（docs/ai-fusion/a2ui/02-task-breakdown.md §4）：catalogId = mis-a2ui-catalog-v1，
+# 与 Gateway `a2ui/types.ts` 的 A2UI_CATALOG_ID 逐字一致（协议版本锚点）。
+A2UI_CATALOG_ID: str = "mis-a2ui-catalog-v1"
+
 A2UI_COMPONENTS: frozenset[str] = frozenset(
     {
         "approval-card",  # 审批卡片（纯展示 + 可选操作按钮）

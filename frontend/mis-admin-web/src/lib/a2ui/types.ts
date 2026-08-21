@@ -75,8 +75,16 @@ export interface A2uiSurface {
  * <p>02 文档：A2UI operations 封装在 ACTIVITY_SNAPSHOT 的 `a2ui_operations`
  * 中（`{ version: 'v0.9', <one operation> }`）。前端 MessageProcessor 兼容
  * `{ operations: [...] }` 与单操作 `{ version, ...operation }` 两种承载。
+ *
+ * <p>两种 operation 风格（MessageProcessor.applyOperation 均消费）：
+ * - `op` 风格：`{ op: 'createSurface', ... }`（内部 / 兼容承载）；
+ * - v0.9 风格：`{ version: 'v0.9', createSurface: {...} }`（Gateway
+ *   A2UIMiddleware / EventConverter 实际产出，`deleteSurface` 映射为 removeSurface）。
  */
-export type A2uiOperation =
+export type A2uiOperation = A2uiOpOperation | A2uiV09Operation;
+
+/** `op` 风格 operation：`{ op: 'createSurface', ... }`。 */
+export type A2uiOpOperation =
   | {
       op: 'createSurface';
       surfaceId: string;
@@ -102,6 +110,30 @@ export type A2uiOperation =
   | {
       op: 'removeSurface';
       surfaceId: string;
+    };
+
+/**
+ * A2UI v0.9 协议风格单操作：`{ version: 'v0.9', <one operation> }`。
+ *
+ * operation 键名即操作名；`deleteSurface` 是 A2UI v0.9 协议名，
+ * 前端映射为 op 风格的 `removeSurface`。
+ */
+export type A2uiV09Operation =
+  | {
+      version?: string;
+      createSurface: { surfaceId: string; catalogId?: string };
+    }
+  | {
+      version?: string;
+      updateComponents: { surfaceId: string; components: A2uiComponentNode[] };
+    }
+  | {
+      version?: string;
+      updateDataModel: { surfaceId: string; path?: string; value?: unknown };
+    }
+  | {
+      version?: string;
+      deleteSurface: { surfaceId: string };
     };
 
 // ------------------------------------------------------------------ 用户操作回传

@@ -256,6 +256,111 @@ describe('MessageProcessor', () => {
     });
   });
 
+  describe('F2: v0.9 风格 operations（{version, <one operation>}）', () => {
+    it('createSurface + updateComponents（v0.9 风格）渲染 surface', () => {
+      processA2uiMessage({
+        type: 'a2ui_surface',
+        operations: [
+          {
+            version: 'v0.9',
+            createSurface: { surfaceId: 'sfc-v09', catalogId: 'mis-a2ui-catalog-v1' },
+          },
+          {
+            version: 'v0.9',
+            updateComponents: {
+              surfaceId: 'sfc-v09',
+              components: [
+                { id: 'root', component: 'data-table', props: { title: '订单' } },
+              ],
+            },
+          },
+        ],
+      });
+
+      const surface = useSurfaceStore.getState().surfaces['sfc-v09'];
+      expect(surface).toBeDefined();
+      expect(useSurfaceStore.getState().activeSurfaceId).toBe('sfc-v09');
+      expect(surface.components[0].id).toBe('root');
+      expect(surface.components[0].component).toBe('data-table');
+      expect(surface.components[0].props.title).toBe('订单');
+    });
+
+    it('updateDataModel（v0.9 风格）写入 dataModels', () => {
+      processA2uiMessage({
+        type: 'a2ui_surface',
+        operations: [
+          { version: 'v0.9', createSurface: { surfaceId: 'sfc-v09-dm' } },
+        ],
+      });
+      processA2uiMessage({
+        type: 'a2ui_surface',
+        operations: [
+          { version: 'v0.9', updateDataModel: { surfaceId: 'sfc-v09-dm', path: 'rows.0.name', value: '王五' } },
+        ],
+      });
+
+      const dataModels = useSurfaceStore.getState().surfaces['sfc-v09-dm'].dataModels;
+      expect(Array.isArray(dataModels.rows)).toBe(true);
+      expect(dataModels.rows).toEqual([{ name: '王五' }]);
+    });
+
+    it('deleteSurface（v0.9 协议名）映射为 removeSurface，active 清理不悬空', () => {
+      processA2uiMessage({
+        type: 'a2ui_surface',
+        operations: [
+          { version: 'v0.9', createSurface: { surfaceId: 'sfc-v09-del' } },
+        ],
+      });
+      expect(useSurfaceStore.getState().activeSurfaceId).toBe('sfc-v09-del');
+
+      processA2uiMessage({
+        type: 'a2ui_surface',
+        operations: [
+          { version: 'v0.9', deleteSurface: { surfaceId: 'sfc-v09-del' } },
+        ],
+      });
+
+      const state = useSurfaceStore.getState();
+      expect(state.surfaces['sfc-v09-del']).toBeUndefined();
+      expect(state.activeSurfaceId).toBeNull();
+    });
+
+    it('op 风格与 v0.9 风格混用（v0.9 建 surface + op 风格增量更新）', () => {
+      processA2uiMessage({
+        type: 'a2ui_surface',
+        operations: [
+          { version: 'v0.9', createSurface: { surfaceId: 'sfc-mix-op' } },
+          { version: 'v0.9', updateComponents: { surfaceId: 'sfc-mix-op', components: [{ id: 'c1', component: 'data-table', props: { v: 'a' } }] } },
+        ],
+      });
+      processA2uiMessage({
+        type: 'a2ui_surface',
+        operations: [
+          {
+            op: 'updateComponents',
+            surfaceId: 'sfc-mix-op',
+            components: [{ path: '/components/c1', props: { v: 'b' } }],
+          },
+        ],
+      });
+
+      const surface = useSurfaceStore.getState().surfaces['sfc-mix-op'];
+      expect(surface.components[0].props.v).toBe('b');
+    });
+
+    it('未知 operation（无 op 且无已知键名）静默忽略不抛异常', () => {
+      expect(() =>
+        processA2uiMessage({
+          type: 'a2ui_surface',
+          operations: [
+            { version: 'v0.9', unknownOperation: { surfaceId: 'x' } } as unknown as import('./types').A2uiOperation,
+          ],
+        }),
+      ).not.toThrow();
+      expect(useSurfaceStore.getState().surfaces['x']).toBeUndefined();
+    });
+  });
+
   describe('B3: removeSurface 后 activeSurfaceId 清理', () => {
     it('删除唯一 surface 后 activeSurfaceId 为 null（不悬空）', () => {
       processA2uiMessage({

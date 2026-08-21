@@ -32,7 +32,6 @@ export interface A2uiMessageInput {
  * 返回受影响的 surfaceId（无则 null）。防御式：非法操作忽略，绝不抛异常中断对话流。
  */
 export function processA2uiMessage(message: A2uiMessageInput): string | null {
-  const store = useSurfaceStore.getState();
   const operations: A2uiOperation[] = [];
 
   if (Array.isArray(message.operations)) {
@@ -44,7 +43,11 @@ export function processA2uiMessage(message: A2uiMessageInput): string | null {
 
   let touched: string | null = null;
   for (const operation of operations) {
-    const surfaceId = applyOperation(store, operation);
+    // 每条 operation 重新取最新 store 状态：同一消息可承载多条 operations
+    // （Gateway EventConverter 产出 `[createSurface, updateComponents]` 数组），
+    // 后序 op 依赖前序 op 已写入的 surface，不能用消息开头的一次性快照。
+    const latestStore = useSurfaceStore.getState();
+    const surfaceId = applyOperation(latestStore, operation);
     if (surfaceId != null) touched = surfaceId;
   }
 
@@ -58,48 +61,107 @@ export function processA2uiMessage(message: A2uiMessageInput): string | null {
   return touched;
 }
 
+/** A2UI v0.9 协议 operation 键名（`{ version, <one operation> }` 风格）。 */
+const A2UI_V09_OPERATION_KEYS = [
+  'createSurface',
+  'updateComponents',
+  'updateDataModel',
+  'removeSurface',
+  'deleteSurface',
+] as const;
+
+/**
+ * 解析单条 operation 的操作名与载荷，兼容两种风格：
+ * - `{ op: 'createSurface', surfaceId, ... }`（op 风格）；
+ * - `{ version: 'v0.9', createSurface: {...} }`（v0.9 风格，Gateway 中间件/
+ *   EventConverter 实际产出；deleteSurface 映射为前端 removeSurface）。
+ *
+ * 无法识别（缺 op 且无已知 operation 键名）返回 null → applyOperation 静默忽略，
+ * 防御式处理，绝不抛异常中断对话流。
+ */
+function resolveOperation(
+  operation: A2uiOperation,
+): { name: string; payload: Record<string, unknown> } | null {
+  if (operation == null || typeof operation !== 'object') return null;
+
+  // 风格 1：{ op: 'createSurface', ... }
+  if ('op' in operation) {
+    const opName = operation.op;
+    if (typeof opName !== 'string' || opName.length === 0) return null;
+    return {
+      name: opName,
+      payload: operation as unknown as Record<string, unknown>,
+    };
+  }
+
+  // 风格 2：{ version: 'v0.9', createSurface: {...} } —— 遍历已知 operation 键名
+  const record = operation as unknown as Record<string, unknown>;
+  for (const key of A2UI_V09_OPERATION_KEYS) {
+    const payload = record[key];
+    if (payload != null && typeof payload === 'object' && !Array.isArray(payload)) {
+      return {
+        name: key === 'deleteSurface' ? 'removeSurface' : key,
+        payload: payload as Record<string, unknown>,
+      };
+    }
+  }
+  return null;
+}
+
 /** 应用单个 operation；返回受影响的 surfaceId。 */
 function applyOperation(
   store: ReturnType<typeof useSurfaceStore.getState>,
   operation: A2uiOperation,
 ): string | null {
-  switch (operation.op) {
+  const resolved = resolveOperation(operation);
+  if (resolved == null) return null;
+  const { name, payload } = resolved;
+
+  switch (name) {
     case 'createSurface': {
+      const surfaceId = String(payload.surfaceId ?? '');
+      if (!surfaceId) return null;
       const surface: A2uiSurface = {
-        surfaceId: operation.surfaceId,
-        components: Array.isArray(operation.components) ? operation.components : [],
+        surfaceId,
+        components: Array.isArray(payload.components)
+          ? (payload.components as A2uiComponentNode[])
+          : [],
         dataModels: {},
       };
       store.upsert(surface);
-      return surface.surfaceId;
+      return surfaceId;
     }
 
     case 'updateComponents': {
-      const existing = store.surfaces[operation.surfaceId];
+      const surfaceId = String(payload.surfaceId ?? '');
+      const existing = store.surfaces[surfaceId];
       if (!existing) return null;
       const nextComponents = existing.components.map((node) => ({ ...node, children: node.children ? [...node.children] : undefined }));
-      for (const patch of operation.components) {
+      const patches = Array.isArray(payload.components) ? payload.components : [];
+      for (const patch of patches as ComponentPatch[]) {
         applyComponentPatch(nextComponents, patch);
       }
-      store.update(operation.surfaceId, (surface) => ({
+      store.update(surfaceId, (surface) => ({
         ...surface,
         components: nextComponents,
       }));
-      return operation.surfaceId;
+      return surfaceId;
     }
 
     case 'updateDataModel': {
-      store.update(operation.surfaceId, (surface) => {
+      const surfaceId = String(payload.surfaceId ?? '');
+      store.update(surfaceId, (surface) => {
         const dataModels = { ...surface.dataModels };
-        setByPath(dataModels, operation.path, operation.value);
+        setByPath(dataModels, String(payload.path ?? ''), payload.value);
         return { ...surface, dataModels };
       });
-      return operation.surfaceId;
+      return surfaceId;
     }
 
     case 'removeSurface': {
-      store.remove(operation.surfaceId);
-      return operation.surfaceId;
+      const surfaceId = String(payload.surfaceId ?? '');
+      store.remove(surfaceId);
+      return surfaceId;
     }
 
     default:
@@ -108,14 +170,31 @@ function applyOperation(
 }
 
 interface ComponentPatch {
+  /** 组件实例 id（v0.9 风格 updateComponents：无 path 时按 id 整节点替换/追加）。 */
+  id?: string;
   path?: string;
   component?: string;
   props?: Record<string, unknown>;
   children?: A2uiComponentNode[];
 }
 
-/** 按 path 或 id 更新组件树（路径双向绑定：/components/{id} 或 /components/{index}）。 */
+/**
+ * 按 path 或 id 更新组件树（路径双向绑定：/components/{id} 或 /components/{index}）。
+ *
+ * <p>兼容两种承载：
+ * - op 风格（path 定位增量补丁）：`{ path, component?, props?, children? }`；
+ * - v0.9 风格（id 整节点 upsert）：`{ id, component, props, children? }`——
+ *   存在同 id 则替换整节点，否则追加到根组件列表（A2UI 协议 updateComponents 语义）。
+ */
 function applyComponentPatch(components: A2uiComponentNode[], patch: ComponentPatch): void {
+  // v0.9 风格：组件定义直接带 id（无 path）→ 按 id 整节点替换 / 追加
+  if (patch.path == null || patch.path.length === 0) {
+    if (patch.id != null) {
+      upsertComponentById(components, patch as A2uiComponentNode);
+    }
+    return;
+  }
+
   const target = resolveComponent(components, patch.path);
   if (!target) return;
 
@@ -127,6 +206,16 @@ function applyComponentPatch(components: A2uiComponentNode[], patch: ComponentPa
   }
   if (patch.children != null) {
     target.children = patch.children;
+  }
+}
+
+/** 按 id 整节点替换（存在）或追加到根组件列表（v0.9 updateComponents 语义）。 */
+function upsertComponentById(components: A2uiComponentNode[], node: A2uiComponentNode): void {
+  const index = components.findIndex((c) => c.id === node.id);
+  if (index >= 0) {
+    components[index] = node;
+  } else {
+    components.push(node);
   }
 }
 

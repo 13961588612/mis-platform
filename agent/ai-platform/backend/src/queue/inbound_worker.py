@@ -20,6 +20,8 @@ from src.agent.manager import AgentInstance, AgentManager, get_agent_manager
 from src.agent.session import Message, Session, SessionManager, get_session_manager
 from src.cluster.session_lock import LockAcquireResult, RedisSessionLock
 from src.config import Settings, get_settings
+from src.llm.gateway import get_llm_gateway
+from src.queue.a2ui_outbound import A2uiOutboundPublisher
 from src.queue.redis_stream import (
     BLOCK_MS,
     CONSUMER_GROUP,
@@ -32,6 +34,7 @@ from src.queue.redis_stream import (
     normalize_stream_fields,
     parse_inbound_fields,
 )
+from src.runtime.a2ui_run import A2uiRunLoop
 from src.runtime.events import AgentEvent, AgentEventType
 from src.skills.tools.formfill_execute import resume_formfill
 from src.utils.exceptions import AgentNotFoundError, SessionNotFoundError
@@ -568,6 +571,14 @@ class InboundStreamWorker:
             await self._process_formfill_resume(inbound, stream_key)
             return
 
+        if inbound.message_type == "a2ui_run":
+            # A2UI run（Gateway RedisStreamAgent 下发完整 RunAgentInput）：
+            # 直接驱动 A2UI run 循环并回包到 aip:outbound:{sessionId}（02 §6 时序图）。
+            # 放在空消息检查之前：a2ui_action 续跑等场景 content 可能为空，
+            # 但 RunAgentInput 已携带上下文（forwardedProps / 合成 tool 消息）。
+            await self._process_a2ui_run(inbound, stream_key)
+            return
+
         has_attachments = False
         if inbound.metadata and isinstance(inbound.metadata, dict):
             atts = inbound.metadata.get("attachments")
@@ -984,6 +995,74 @@ class InboundStreamWorker:
             changed = True
         if changed:
             await get_session_manager().save_session(session)
+
+    async def _process_a2ui_run(
+        self, inbound: InboundStreamMessage, stream_key: str
+    ) -> None:
+        """处理 ``a2ui_run`` 入站：解析 RunAgentInput → A2UI run 循环 → 回包。
+
+        Gateway ``RedisStreamAgent`` 将中间件处理后的完整 RunAgentInput 放入
+        ``metadata.a2ui.runAgentInput``；本方法解析后驱动 ``A2uiRunLoop`` 执行
+        LLM 循环（含 ``render_a2ui`` 工具执行），所有 AgentEvent 经
+        ``A2uiOutboundPublisher`` XADD 到 ``aip:outbound:{sessionId}``。
+
+        错误处理（02 §6 / Gateway RedisStreamAgent 契约）：LLM 失败 / 超时 →
+        ``error`` + ``done`` 事件回包，Gateway 靠它们 complete Observable。
+
+        Args:
+            inbound: Gateway 写入的 A2UI run 入站消息。
+            stream_key: 来源 stream 键名（保留参数，供日志 / 路由追踪）。
+        """
+        del stream_key
+        metadata: Any = inbound.metadata
+        run_agent_input: Any = None
+        if isinstance(metadata, dict):
+            a2ui_meta: Any = metadata.get("a2ui")
+            if isinstance(a2ui_meta, dict):
+                run_agent_input = a2ui_meta.get("runAgentInput")
+        if not isinstance(run_agent_input, dict):
+            logger.warning(
+                "a2ui_run 缺少 metadata.a2ui.runAgentInput，无法执行",
+                session_id=inbound.session_id,
+            )
+            return
+
+        redis: aioredis.Redis = await self._get_redis()
+        publisher: A2uiOutboundPublisher = A2uiOutboundPublisher(redis)
+        loop: A2uiRunLoop = A2uiRunLoop(get_llm_gateway(), publisher)
+        timeout_sec: Any = self._settings.AGENT_MESSAGE_TIMEOUT
+        try:
+            async with asyncio.timeout(timeout_sec):
+                await loop.run(
+                    session_id=inbound.session_id,
+                    user_id=inbound.user_id,
+                    trace_id=inbound.trace_id,
+                    agent_id=inbound.agent_id,
+                    run_agent_input=run_agent_input,
+                )
+        except TimeoutError:
+            logger.error(
+                "A2UI run timed out",
+                session_id=inbound.session_id,
+                timeout_sec=timeout_sec,
+            )
+            await publisher.publish_error(
+                inbound.session_id,
+                "A2UI_TIMEOUT",
+                f"处理超时（{timeout_sec}s），请稍后重试",
+            )
+        except Exception as exc:  # noqa: BLE001 - run 失败必须回 error 终止 Gateway 订阅
+            logger.error(
+                "A2UI run failed",
+                session_id=inbound.session_id,
+                error=str(exc),
+                exc_info=True,
+            )
+            await publisher.publish_error(
+                inbound.session_id,
+                "A2UI_RUN_ERROR",
+                str(exc) or "A2UI run failed",
+            )
 
     async def _process_formfill_resume(
         self, inbound: InboundStreamMessage, stream_key: str

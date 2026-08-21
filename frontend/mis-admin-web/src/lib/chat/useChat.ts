@@ -26,10 +26,28 @@ const LAST_SESSION_KEY = 'mis.copilot.lastSession';
 /** 默认 Agent（留空走 Gateway 自动路由 / agent_router）。 */
 const DEFAULT_AGENT_ID = '';
 
+/**
+ * A2UI 对话 opt-in 默认开关。
+ *
+ * mis-admin-web 是新前端（D13 单前端统一），默认走 A2UI 通道
+ * （messageType='a2ui_chat' + metadata.a2ui=true，与 Gateway /ws/chat opt-in
+ * 分支 `messageType === 'a2ui_chat' || metadata.a2ui === true` 对齐）；
+ * 存量 text 通道（Gateway runChat 不触发、走 MessageRouter 旧协议）通过
+ * `a2uiEnabled: false` 保留，用于灰度回退。
+ */
+export const A2UI_CHAT_OPT_IN_DEFAULT = true;
+
+/** WS 入站消息类型常量（与 Gateway server.ts /ws/chat opt-in 分支一致）。 */
+export const MESSAGE_TYPE_A2UI_CHAT = 'a2ui_chat';
+/** 旧文本通道消息类型（Gateway 走 MessageRouter 旧协议）。 */
+export const MESSAGE_TYPE_TEXT = 'text';
+
 export interface UseChatOptions {
   agentId?: string;
   /** 自动建立连接（默认 true；embed 场景由外部控制）。 */
   autoConnect?: boolean;
+  /** 是否启用 A2UI 对话通道（默认取 A2UI_CHAT_OPT_IN_DEFAULT；false 回退旧 text 通道）。 */
+  a2uiEnabled?: boolean;
 }
 
 /**
@@ -39,6 +57,7 @@ export interface UseChatOptions {
 export function useChat(options?: UseChatOptions): UseChatReturn {
   const agentIdOption = options?.agentId ?? DEFAULT_AGENT_ID;
   const autoConnect = options?.autoConnect ?? true;
+  const a2uiEnabled = options?.a2uiEnabled ?? A2UI_CHAT_OPT_IN_DEFAULT;
 
   const token = useAuthStore((s) => s.accessToken);
   const userId = useAuthStore((s) => s.user?.id ?? null);
@@ -313,7 +332,11 @@ export function useChat(options?: UseChatOptions): UseChatReturn {
         userId: userId ?? undefined,
         agentId: store.agentId ?? undefined,
         content: text,
-        messageType: 'text',
+        // A2UI opt-in：新前端默认发 a2ui_chat + metadata.a2ui=true，
+        // 触发 Gateway runChat（A2UI 中间件注入 render_a2ui 工具）；
+        // 旧 text 通道经 a2uiEnabled=false 灰度回退。
+        messageType: a2uiEnabled ? MESSAGE_TYPE_A2UI_CHAT : MESSAGE_TYPE_TEXT,
+        metadata: a2uiEnabled ? { a2ui: true } : undefined,
         timestamp: new Date().toISOString(),
       };
       if (!sendInbound(inbound)) {
@@ -322,7 +345,7 @@ export function useChat(options?: UseChatOptions): UseChatReturn {
         store.setGenerating(false);
       }
     },
-    [sendInbound, userId],
+    [sendInbound, userId, a2uiEnabled],
   );
 
   const respondToApproval = useCallback(
