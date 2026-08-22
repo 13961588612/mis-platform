@@ -32,7 +32,7 @@ copilot 体系存在**两套独立反馈机制**，原 PRD 只覆盖第一套：
 
 ## 2. 现状盘点表（第二套链路，已读代码核实）
 
-> 核实依据：`agent/ai-platform/frontend/src/components/MessageFeedbackBar.tsx`、`frontend/src/types/message.ts`、`backend/src/api/routes/session.py`（POST /{session_id}/feedback + T04 #27–#31）、`backend/src/agent/session.py`（set_message_feedback）、`backend/src/agent/session_store.py`（update_message_metadata）、`frontend/mis-admin-web/src/features/agent/sessions/agent-session-page.tsx` + `agent-session-detail-dialog.tsx` + `agent-message-stream.tsx`。
+> 核实依据：旧 H5 前端 `MessageFeedbackBar.tsx`（T11 已退役删除）、`backend/src/api/routes/session.py`（POST /{session_id}/feedback + T04 #27–#31）、`backend/src/agent/session.py`（set_message_feedback）、`backend/src/agent/session_store.py`（update_message_metadata）、`frontend/mis-admin-web/src/features/agent/sessions/agent-session-page.tsx` + `agent-session-detail-dialog.tsx` + `agent-message-stream.tsx`。
 
 | # | 能力 | 现状说明 | 状态 | 与「问数/会话反馈运营」需求的差距 |
 |---|---|---|---|---|

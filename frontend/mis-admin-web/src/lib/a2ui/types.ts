@@ -157,7 +157,7 @@ export interface A2uiClientAction {
 /**
  * A2UI 组件统一 Props（所有注册组件共享签名）。
  *
- * <p>与 agent/frontend `components/a2ui/types.ts` 对齐，扩展 bff 回调与权限回调：
+ * <p>与 旧版独立前端 `components/a2ui/types.ts` 对齐，扩展 bff 回调与权限回调：
  * - `actions.onApprove/onReject`：审批决定（写操作，走 bff-actions）
  * - `actions.onSubmit`：表单提交（写操作，走 bff-actions）
  * - `actions.onEntitySelect`：实体选择（回传 Agent，经 Gateway dispatchAction，非 BFF 写操作）

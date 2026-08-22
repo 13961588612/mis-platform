@@ -3,7 +3,7 @@
 > 文档角色：本需求的**实现级设计**（Implementation Design），承接 C0 文档族，直接指导工程师编码。
 > 上游：[prd.md](prd.md) · [architecture.md](architecture.md) · [adr.md](adr.md) · [spec.md](spec.md) · [dev.md](dev.md)
 > 版本：v1.0｜状态：待评审 → 可实施
-> 范围：**仅 `agent/ai-platform/backend` Python 后端 + `agent/ai-platform/configs`**。不改 Java BFF（`backend/mis-admin-bff`）、不改 React 前端（`frontend/mis-admin-web`、`agent/ai-platform/frontend`）、不改 Gateway TypeScript。
+> 范围：**仅 `agent/ai-platform/backend` Python 后端 + `agent/ai-platform/configs`**。不改 Java BFF（`backend/mis-admin-bff`）、不改 React 前端（`frontend/mis-admin-web`；旧独立 H5 前端已退役删除）、不改 Gateway TypeScript。
 
 ---
 
@@ -146,7 +146,7 @@ src/skills/tools/invoke_agent.py   ← 改造为"薄编排"：校验 → Brief �
 ### 2.3 明确不改动
 
 - `backend/mis-admin-bff/**`（Java）
-- `frontend/mis-admin-web/**`、`agent/ai-platform/frontend/**`（React）
+- `frontend/mis-admin-web/**`（React；旧独立 H5 前端已退役删除）
 - `agent/ai-platform/gateway/**`（TypeScript）
 - `.venv/.../openharness/**`（第三方）
 

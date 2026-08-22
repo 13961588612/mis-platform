@@ -1,5 +1,5 @@
 /**
- * skill-admin.ts — Skill 管理服务（T10，从 agent/frontend SkillManagePage + types/skill.ts 迁移）。
+ * skill-admin.ts — Skill 管理服务（T10，从 旧版独立前端 SkillManagePage + types/skill.ts 迁移）。
  *
  * <p>后端端点（ai-platform skill.py）：
  * - GET    /api/v1/skills            — 技能列表（分页 + category/status 过滤）

@@ -207,7 +207,7 @@
 
 - 业务用户多 Agent / Worker 选择器  
 - 将 QueryEngine/YAML 运行时搬进 Java `mis-agent`（本期）  
-- 以 ai-platform/frontend 作为产品主验收面  
+- 以旧独立 H5 前端（T11 已退役删除）作为产品主验收面  
 - 无校验任意文件浏览；替代 KB/CRM 主数据管理  
 
 ---

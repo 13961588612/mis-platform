@@ -29,6 +29,9 @@ from __future__ import annotations
 from typing import Any
 
 import json
+from pathlib import Path
+
+from openharness.tools.base import ToolExecutionContext, ToolRegistry
 
 from src.agent.session import SessionManager, get_session_manager
 from src.config import get_settings
@@ -36,6 +39,7 @@ from src.llm.gateway import LLMGateway
 from src.llm.models import LLMMessage, LLMRequest, LLMRole, LLMResponse
 from src.queue.a2ui_outbound import A2uiOutboundPublisher
 from src.runtime.events import A2UI_CATALOG_ID, A2UI_COMPONENTS, AgentEvent, TokenUsage
+from src.runtime.mcp_identity import build_mcp_identity
 from src.utils.exceptions import SessionNotFoundError
 from src.utils.logging import get_logger
 
@@ -312,6 +316,7 @@ class A2uiRunLoop:
         temperature: float = DEFAULT_TEMPERATURE,
         max_tokens: int = DEFAULT_MAX_TOKENS,
         session_manager: SessionManager | None = None,
+        tool_registry: ToolRegistry | None = None,
     ) -> None:
         """初始化 A2UI run 循环。
 
@@ -323,6 +328,8 @@ class A2uiRunLoop:
             temperature: 采样温度。
             max_tokens: 单次补全 token 上限。
             session_manager: 会话管理器（测试可注入替身；缺省全局单例）。
+            tool_registry: 平台工具注册表（skill/mcp 分发，含 ACL 包装）；
+                测试可注入替身；缺省按 Agent 配置懒装配（见 ``_ensure_tool_registry``）。
         """
         self._gateway = gateway
         self._publisher = publisher
@@ -332,6 +339,7 @@ class A2uiRunLoop:
         self._temperature = temperature
         self._max_tokens = max_tokens or DEFAULT_MAX_TOKENS
         self._session_manager = session_manager
+        self._tool_registry = tool_registry
 
     # ------------------------------------------------------------------ 主入口
 
@@ -342,6 +350,7 @@ class A2uiRunLoop:
         user_id: str = "",
         trace_id: str = "",
         agent_id: str | None = None,
+        mis_user_id: int | None = None,
         run_agent_input: dict[str, Any],
     ) -> None:
         """执行一轮 A2UI run 并回包事件流。
@@ -355,11 +364,19 @@ class A2uiRunLoop:
             user_id: 用户 ID（JWT 验签结果，P4 身份来源）。
             trace_id: 分布式追踪 ID。
             agent_id: 会话绑定的 Agent ID（建会话用；缺省取默认 Agent）。
+            mis_user_id: MIS userId（T03 S9 第五键）；skill/mcp 工具 ACL
+                fail-closed 判权的唯一身份来源；``None`` 时工具执行按无身份拒绝。
             run_agent_input: ``metadata.a2ui.runAgentInput``（RunAgentInput dict）。
         """
         messages: list[dict[str, Any]] = run_agent_input.get("messages") or []
         tools: list[Any] = run_agent_input.get("tools") or []
         model: str = str(run_agent_input.get("model") or self._model)
+        # 工具执行身份（P4：只来自 JWT 验签结果 + 上游解析的 misUserId）。
+        identity: dict[str, str] = build_mcp_identity(
+            user_id=user_id,
+            channel="h5",
+            mis_user_id=mis_user_id,
+        )
 
         history: list[LLMMessage] = await self._load_history(
             session_id, user_id=user_id, agent_id=agent_id
@@ -449,7 +466,7 @@ class A2uiRunLoop:
                     session_id, AgentEvent.tool_call(tool_name, args)
                 )
                 result: dict[str, Any] = await self._execute_tool(
-                    tool_name, args, session_id
+                    tool_name, args, session_id, identity=identity, agent_id=agent_id
                 )
                 await self._publisher.publish(
                     session_id, AgentEvent.tool_result(tool_name, result)
@@ -489,34 +506,180 @@ class A2uiRunLoop:
     # ------------------------------------------------------------------ 工具执行
 
     async def _execute_tool(
-        self, tool_name: str, args: dict[str, Any], session_id: str
+        self,
+        tool_name: str,
+        args: dict[str, Any],
+        session_id: str,
+        *,
+        identity: dict[str, str] | None = None,
+        agent_id: str | None = None,
     ) -> dict[str, Any]:
         """执行单个 LLM 工具调用并返回 ``tool.result`` 载荷。
 
-        当前仅内置 ``render_a2ui`` 执行器（A2UI surface 操作）；``skill`` /
-        ``mcp__*`` 等平台工具的分发依赖 OpenHarness 工具注册表（含 ACL fail-closed
-        判权），由存量文本通道承担 —— A2UI 通道暂回显「不支持」并告警（剩余联调
-        依赖：A2UI run 接入 skill 分发）。
+        ``render_a2ui`` 走内置执行器（A2UI surface 操作）；``skill`` /
+        ``mcp__*`` 等平台工具走 OpenHarness 平台工具注册表 —— 复用存量文本通道
+        的装配方式（``create_platform_tool_registry`` + ``AclToolWrapper``
+        fail-closed 判权），按 Agent 配置装配 allowed_tools 白名单后真实执行，
+        结果回 ``tool.result``。权限不足 / 工具不存在 / 入参非法均返回明确 error
+        载荷（``code`` 字段供前端/运维定位），**不中断** LLM 循环。
 
         Args:
             tool_name: 工具名。
             args: 工具入参（已解析 dict）。
             session_id: 会话 ID。
+            identity: 工具执行身份（含 ``misUserId`` 第五键）；缺省空身份（fail-closed）。
+            agent_id: Agent ID（懒装配注册表时使用）。
 
         Returns:
             ``tool.result`` 载荷 dict。
         """
         if tool_name == RENDER_A2UI_TOOL_NAME:
             return await execute_render_a2ui(args, session_id=session_id)
-        logger.warning(
-            "A2UI run 收到未支持的工具调用（skill/mcp 分发由存量文本通道承担）",
-            tool=tool_name,
-            session_id=session_id,
+
+        registry: ToolRegistry | None = await self._ensure_tool_registry(agent_id)
+        tool: Any = registry.get(tool_name) if registry is not None else None
+        if tool is None:
+            logger.warning(
+                "A2UI run 收到未注册的工具调用",
+                tool=tool_name,
+                session_id=session_id,
+                agent_id=agent_id,
+            )
+            return {
+                "ok": False,
+                "code": "TOOL_NOT_FOUND",
+                "error": f"tool not found in a2ui run: {tool_name}",
+            }
+
+        # 经 Pydantic 输入模型校验（与 OpenHarness 执行路径一致；非法入参明确报错）。
+        try:
+            arguments: Any = (
+                tool.input_model(**args) if isinstance(args, dict) else tool.input_model()
+            )
+        except Exception as exc:  # noqa: BLE001 - 入参校验失败回 error 载荷
+            logger.warning(
+                "A2UI run tool arguments invalid",
+                tool=tool_name,
+                session_id=session_id,
+                error=str(exc),
+                exc_type=exc.__class__.__name__,
+            )
+            return {
+                "ok": False,
+                "code": "TOOL_ARGS_INVALID",
+                "error": f"invalid arguments for {tool_name}: {exc}",
+            }
+
+        context: ToolExecutionContext = ToolExecutionContext(
+            cwd=Path(self._settings.CONFIG_BASE_PATH).resolve(),
+            metadata={
+                "session_id": session_id,
+                "identity": identity or build_mcp_identity(),
+            },
         )
-        return {
-            "ok": False,
-            "error": f"tool not supported in a2ui run: {tool_name}",
-        }
+        try:
+            result: Any = await tool.execute(arguments, context)
+        except Exception as exc:  # noqa: BLE001 - 执行失败回 error 载荷，不中断循环
+            logger.warning(
+                "A2UI run tool execution failed",
+                tool=tool_name,
+                session_id=session_id,
+                error=str(exc),
+                exc_type=exc.__class__.__name__,
+            )
+            return {
+                "ok": False,
+                "code": "TOOL_EXEC_ERROR",
+                "error": f"tool execution failed: {tool_name}: {exc}",
+            }
+
+        payload: dict[str, Any] = {"ok": not result.is_error, "output": result.output}
+        if result.is_error:
+            payload["error"] = result.output
+        # ACL 拒绝等结构化 metadata（如 ``{"acl": {...}}``）原样透传，供前端分支。
+        if result.metadata:
+            payload["metadata"] = result.metadata
+        return payload
+
+    async def _ensure_tool_registry(self, agent_id: str | None) -> ToolRegistry | None:
+        """取平台工具注册表；未注入时按 Agent 配置懒装配并缓存。
+
+        复用存量文本通道的装配方式（``create_platform_tool_registry`` +
+        ``AclToolWrapper`` fail-closed 判权）：按 Agent 的 allowed_tools 白名单
+        （含调度角色约束）过滤 skill / MCP / formfill 等工具，每个工具包一层
+        ``AclToolWrapper(SafeToolWrapper(tool), guard, lookup_registry)``。
+        Agent 配置不可用 / MCP 连接失败时降级（无 MCP 工具仍保留 skill 等
+        内置工具），**绝不阻断** A2UI run 主链路。
+
+        Args:
+            agent_id: Agent ID；缺省或不可用时用默认装配（仅 skill 等内置工具）。
+
+        Returns:
+            平台工具注册表；装配失败时返回 ``None``（工具调用按未找到处理）。
+        """
+        if self._tool_registry is not None:
+            return self._tool_registry
+
+        from src.agent.manager import get_agent_manager
+        from src.runtime.oh_runtime_builder import (
+            connect_mcp_manager,
+            enabled_package_skill_ids,
+        )
+        from src.runtime.tool_registry_builder import create_platform_tool_registry
+
+        config: Any = None
+        try:
+            config = get_agent_manager().get_agent(agent_id or "").config
+        except Exception as exc:  # noqa: BLE001 - Agent 不可用降级默认装配
+            logger.warning(
+                "A2UI run agent config unavailable; using default tool registry",
+                agent_id=agent_id,
+                error=str(exc),
+            )
+
+        allowed_skill_ids: list[str] = []
+        allowed_tools: list[str] = []
+        role: Any = None
+        mcp_manager: Any = None
+        if config is not None:
+            allowed_skill_ids = enabled_package_skill_ids(config)
+            role = getattr(config, "role", None)
+            if getattr(config, "runtime", None) is not None:
+                allowed_tools = list(config.runtime.allowed_tools or [])
+            try:
+                mcp_manager = await connect_mcp_manager(config)
+            except Exception as exc:  # noqa: BLE001 - MCP 连接失败降级无 MCP 工具
+                logger.warning(
+                    "A2UI run MCP connect failed; proceeding without MCP tools",
+                    agent_id=agent_id,
+                    error=str(exc),
+                )
+                mcp_manager = None
+
+        try:
+            registry: ToolRegistry = create_platform_tool_registry(
+                mcp_manager,
+                allowed_tools=allowed_tools,
+                role=role,
+                agent_id=agent_id or "",
+                allowed_skill_ids=allowed_skill_ids,
+            )
+        except Exception as exc:  # noqa: BLE001 - 装配失败不阻断主链路
+            logger.error(
+                "A2UI run tool registry assembly failed",
+                agent_id=agent_id,
+                error=str(exc),
+                exc_info=True,
+            )
+            return None
+
+        self._tool_registry = registry
+        logger.info(
+            "A2UI run tool registry ready",
+            agent_id=agent_id,
+            tools=[tool.name for tool in registry.list_tools()],
+        )
+        return registry
 
     # ------------------------------------------------------------------ 会话历史
 

@@ -1,5 +1,5 @@
 /**
- * embed 嵌入上下文 store（T07'，从 agent/frontend `store/embedStore.ts` 迁移扩展）。
+ * embed 嵌入上下文 store（T07'，从 旧版独立前端 `store/embedStore.ts` 迁移扩展）。
  *
  * <p>01-architecture.md §5.2：PAGE_CONTEXT 扩展 hostId / embedMode / contextRef /
  * sessionHint；会话隔离（R47）依赖 hostId。鉴权状态机：

@@ -20,7 +20,7 @@
 
 - 业务多 Agent / Worker 选择器  
 - 将运行时搬进 Java `mis-agent`（本期）  
-- 以 ai-platform/frontend 作为产品主验收面  
+- 以旧独立 H5 前端（T11 已退役删除）作为产品主验收面  
 - 无白名单任意文件浏览；完整 DAG 编排器  
 
 ---

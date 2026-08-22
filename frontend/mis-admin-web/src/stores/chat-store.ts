@@ -1,7 +1,7 @@
 /**
  * chat-store（zustand）— chat-core 会话状态（T06'）。
  *
- * <p>从 agent/frontend `store/chatStore.ts` 迁入 mis-admin-web，裁剪为 T06' 需要的最小
+ * <p>从 旧版独立前端 `store/chatStore.ts` 迁入 mis-admin-web，裁剪为 T06' 需要的最小
  * 状态集：会话 / 消息 / 连接状态 / 生成态 / 错误 / dispatch.trace。A2UI Surface 状态
  * 独立存放于 `lib/a2ui/surface-store.ts`（渲染层自持，避免 chat-store 膨胀）。
  */

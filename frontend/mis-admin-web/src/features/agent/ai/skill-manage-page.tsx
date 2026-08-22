@@ -1,5 +1,5 @@
 /**
- * skill-manage-page.tsx — Skill 管理页（T10，从 agent/frontend SkillManagePage 迁移）。
+ * skill-manage-page.tsx — Skill 管理页（T10，从 旧版独立前端 SkillManagePage 迁移）。
  *
  * <p>功能等价迁移（skill.py 后端端点）+ shadcn 统一：
  * - 统计卡（总/已启用/已停用）+ 分类/状态筛选 + 分页

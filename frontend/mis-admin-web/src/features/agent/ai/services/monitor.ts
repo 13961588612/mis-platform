@@ -1,5 +1,5 @@
 /**
- * monitor.ts — 系统监控看板服务（T10，从 agent/frontend MonitorPage 迁移）。
+ * monitor.ts — 系统监控看板服务（T10，从 旧版独立前端 MonitorPage 迁移）。
  *
  * <p>后端端点（ai-platform admin.py）：
  * - GET /api/v1/admin/health          — 系统健康

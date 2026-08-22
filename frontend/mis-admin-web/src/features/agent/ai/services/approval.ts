@@ -1,5 +1,5 @@
 /**
- * approval.ts — 审批中心服务（T10，从 agent/frontend ApprovalCenterPage + approvalStore 迁移）。
+ * approval.ts — 审批中心服务（T10，从 旧版独立前端 ApprovalCenterPage + approvalStore 迁移）。
  *
  * <p>后端端点（ai-platform push.py）：
  * - GET  /api/v1/push/approvals           — 审批列表（可选 status 过滤）

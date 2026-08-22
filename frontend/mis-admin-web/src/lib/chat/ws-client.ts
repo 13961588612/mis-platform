@@ -21,7 +21,7 @@ export interface WsClientOptions {
 const MAX_RECONNECT_ATTEMPTS = 5;
 const RECONNECT_BASE_DELAY = 1000;
 
-/** 构建 /ws/chat URL（token 经 query，与 agent/frontend utils/api.ts 一致）。 */
+/** 构建 /ws/chat URL（token 经 query，与 旧版独立前端 utils/api.ts 一致）。 */
 export function buildChatWsUrl(sessionId: string, token: string): string {
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
   const params = new URLSearchParams({ sessionId });

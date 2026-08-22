@@ -1,5 +1,5 @@
 /**
- * ai-chat-panel.tsx — A2UI 对话面板（T09，从 agent/frontend ChatPanel + ChatPage 迁移）。
+ * ai-chat-panel.tsx — A2UI 对话面板（T09，从 旧版独立前端 ChatPanel + ChatPage 迁移）。
  *
  * <p>知识库问答 / 问数两页共用的对话壳：
  * - chat-core（useChat，RS256 MIS JWT）直连 Gateway，A2UI opt-in 默认开启

@@ -91,6 +91,19 @@ def _make_mis_settings(issuer: str = "mis-platform") -> Settings:
     return s
 
 
+def _issuance_token_manager() -> TokenManager:
+    """构造 HS256 签发放开的 TokenManager。
+
+    T11（agent/frontend 退役）后 HS256 新签发生产默认下线
+    （``HS256_ISSUANCE_ENABLED=false``）；本 helper 仅为单测验证
+    「HS256 走平台自有分支」机制而放开，不影响生产口径。
+    """
+    s = Settings()
+    s.HS256_ISSUANCE_ENABLED = True
+    with patch("src.identity.token.get_settings", return_value=s):
+        return TokenManager()
+
+
 # ===== 1. MisTokenVerifier =====
 
 
@@ -270,7 +283,7 @@ class TestGetCurrentUserBranching:
 
     @pytest.mark.asyncio
     async def test_hs256_enters_native_branch(self, patched_settings):
-        tm = TokenManager()
+        tm = _issuance_token_manager()
         token_set = tm.create_token_set(
             user_id="u-native", username="nativeuser", roles=["admin"]
         )
@@ -283,7 +296,7 @@ class TestGetCurrentUserBranching:
 
     @pytest.mark.asyncio
     async def test_two_paths_do_not_misclassify(self, patched_settings):
-        tm = TokenManager()
+        tm = _issuance_token_manager()
         native = tm.create_token_set(user_id="u1", username="u1")
         native_result = await get_current_user(authorization=f"Bearer {native.access_token}")
         assert "mis" not in native_result

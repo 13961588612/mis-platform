@@ -20,11 +20,19 @@ from typing import Any
 
 import fakeredis
 import pytest
+from openharness.tools.base import (
+    BaseTool,
+    ToolExecutionContext,
+    ToolRegistry,
+    ToolResult,
+)
+from pydantic import BaseModel
 
 from src.llm.models import LLMResponse
 from src.queue.a2ui_outbound import A2uiOutboundPublisher, a2ui_outbound_key
 from src.queue.inbound_worker import InboundStreamWorker
 from src.queue.redis_stream import InboundStreamMessage
+from src.runtime.acl_tool_wrapper import AclToolWrapper
 from src.runtime.a2ui_run import (
     A2uiRunLoop,
     agui_messages_to_llm,
@@ -32,6 +40,8 @@ from src.runtime.a2ui_run import (
     execute_render_a2ui,
 )
 from src.runtime.events import AgentEvent
+from src.runtime.tool_registry_builder import SafeToolWrapper
+from src.skills.acl import SkillAclDenied
 from src.utils.exceptions import SessionNotFoundError
 
 
@@ -519,6 +529,395 @@ def test_a2ui_run_loop_empty_input_ok(redis):
         events = await _stream_events(redis, "sess-empty")
         assert events[0]["type"] == "text.delta"
         assert events[1]["type"] == "done"
+
+    asyncio.run(run())
+
+
+# ============================================================================
+# 6. skill/mcp 分发接入 A2UI 通道（Task B）
+# ============================================================================
+
+
+class _FakeSkillInput(BaseModel):
+    """skill 工具入参替身（字段名保持 name 兼容 ACL E1）。"""
+
+    name: str = ""
+
+
+class _FakeSkillTool(BaseTool):
+    """返回预设输出的 skill 工具替身（记录调用上下文以便断言）。"""
+
+    name = "skill"
+    description = "fake skill tool"
+    input_model = _FakeSkillInput
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[Any, Any]] = []
+
+    async def execute(
+        self, arguments: BaseModel, context: ToolExecutionContext
+    ) -> ToolResult:
+        self.calls.append((arguments, context))
+        return ToolResult(output=f"executed:{arguments.name}", is_error=False)
+
+
+class _FakeMcpTool(BaseTool):
+    """MCP 工具替身（名称走 mcp__ 前缀，验证白名单分发）。"""
+
+    name = "mcp__member__profile_query"
+    description = "fake mcp tool"
+    input_model = _FakeSkillInput
+
+    async def execute(
+        self, arguments: BaseModel, context: ToolExecutionContext
+    ) -> ToolResult:
+        return ToolResult(output=f"mcp:{arguments.name}", is_error=False)
+
+
+class _DenyGuard:
+    """恒拒绝的 ACL guard 替身：E1 skill_id → 权限码，执行前必抛 SkillAclDenied。"""
+
+    def permission_code(self, skill_id: str) -> str:
+        return f"ai:skill:{skill_id}:run"
+
+    async def assert_has_permission(
+        self,
+        ctx: Any,
+        required_permission: str,
+        *,
+        skill_id: str = "",
+        message: str = "",
+        extra: dict[str, Any] | None = None,
+    ) -> None:
+        raise SkillAclDenied(
+            code="AI_SKILL_FORBIDDEN",
+            skill_id=skill_id or "member.profile",
+            required_permission=required_permission,
+            message=message or f"无权执行技能 {skill_id}",
+            extra=dict(extra or {}),
+        )
+
+
+def _make_loop(redis: Any, *, registry: ToolRegistry) -> A2uiRunLoop:
+    """构造注入工具注册表的 A2uiRunLoop。"""
+    publisher = A2uiOutboundPublisher(redis)
+    return A2uiRunLoop(
+        _FakeGateway([]),
+        publisher,
+        model="test-model",
+        session_manager=_FakeSessionManager(),
+        tool_registry=registry,
+    )
+
+
+def test_a2ui_run_execute_skill_tool_real_dispatch(redis):
+    """skill 工具走注册表真实执行：入参经 Pydantic 校验 + identity 注入上下文。"""
+
+    async def run():
+        tool = _FakeSkillTool()
+        registry = ToolRegistry()
+        registry.register(tool)
+        loop = _make_loop(redis, registry=registry)
+
+        result = await loop._execute_tool(
+            "skill",
+            {"name": "member.profile"},
+            "sess-skill",
+            identity={
+                "userId": "u1",
+                "userMobile": "",
+                "channel": "h5",
+                "channelUserId": "",
+                "misUserId": "10086",
+            },
+            agent_id="agent-x",
+        )
+        assert result["ok"] is True
+        assert result["output"] == "executed:member.profile"
+        # 身份已注入 ToolExecutionContext.metadata（AclToolWrapper 消费第五键）
+        assert len(tool.calls) == 1
+        _args, context = tool.calls[0]
+        assert context.metadata["session_id"] == "sess-skill"
+        assert context.metadata["identity"]["misUserId"] == "10086"
+
+    asyncio.run(run())
+
+
+def test_a2ui_run_execute_mcp_tool_real_dispatch(redis):
+    """mcp__ 工具同样走注册表真实执行（白名单内工具）。"""
+
+    async def run():
+        tool = _FakeMcpTool()
+        registry = ToolRegistry()
+        registry.register(tool)
+        loop = _make_loop(redis, registry=registry)
+
+        result = await loop._execute_tool(
+            "mcp__member__profile_query",
+            {"name": "member.profile"},
+            "sess-mcp",
+            identity={
+                "userId": "u1",
+                "userMobile": "",
+                "channel": "h5",
+                "channelUserId": "",
+                "misUserId": "10086",
+            },
+            agent_id="agent-x",
+        )
+        assert result["ok"] is True
+        assert result["output"] == "mcp:member.profile"
+
+    asyncio.run(run())
+
+
+def test_a2ui_run_execute_acl_denied(redis):
+    """ACL 拒绝（AclToolWrapper fail-closed）→ 明确 error + acl metadata 透传。"""
+
+    async def run():
+        inner = _FakeSkillTool()
+        registry = ToolRegistry()
+        registry.register(AclToolWrapper(SafeToolWrapper(inner), _DenyGuard(), None))
+        loop = _make_loop(redis, registry=registry)
+
+        result = await loop._execute_tool(
+            "skill",
+            {"name": "member.profile"},
+            "sess-acl",
+            identity={
+                "userId": "u1",
+                "userMobile": "",
+                "channel": "h5",
+                "channelUserId": "",
+                "misUserId": "10086",
+            },
+            agent_id="agent-x",
+        )
+        assert result["ok"] is False
+        assert "无权执行技能" in result["error"]
+        assert result["metadata"]["acl"]["code"] == "AI_SKILL_FORBIDDEN"
+        assert result["metadata"]["acl"]["data"]["required_permission"] == (
+            "ai:skill:member.profile:run"
+        )
+        # 被拒调用不进入内层副作用逻辑（内层 execute 不应被调用）
+        assert inner.calls == []
+
+    asyncio.run(run())
+
+
+def test_a2ui_run_execute_unknown_tool(redis):
+    """未注册工具 → TOOL_NOT_FOUND 明确 error（不中断循环）。"""
+
+    async def run():
+        loop = _make_loop(redis, registry=ToolRegistry())
+        result = await loop._execute_tool(
+            "mcp__nope__nope",
+            {},
+            "sess-unknown",
+            identity={
+                "userId": "u1",
+                "userMobile": "",
+                "channel": "h5",
+                "channelUserId": "",
+                "misUserId": "10086",
+            },
+            agent_id="agent-x",
+        )
+        assert result["ok"] is False
+        assert result["code"] == "TOOL_NOT_FOUND"
+        assert "mcp__nope__nope" in result["error"]
+
+    asyncio.run(run())
+
+
+def test_a2ui_run_execute_invalid_args(redis):
+    """入参非法（Pydantic 校验失败）→ TOOL_ARGS_INVALID 明确 error。"""
+
+    async def run():
+        class _StrictInput(BaseModel):
+            name: str
+
+        class _StrictTool(BaseTool):
+            name = "strict_tool"
+            description = "strict"
+            input_model = _StrictInput
+
+            async def execute(
+                self, arguments: BaseModel, context: ToolExecutionContext
+            ) -> ToolResult:
+                return ToolResult(output="ok")
+
+        registry = ToolRegistry()
+        registry.register(_StrictTool())
+        loop = _make_loop(redis, registry=registry)
+        # name 缺失 → Pydantic ValidationError → TOOL_ARGS_INVALID
+        result = await loop._execute_tool("strict_tool", {}, "sess-args")
+        assert result["ok"] is False
+        assert result["code"] == "TOOL_ARGS_INVALID"
+        assert "strict_tool" in result["error"]
+
+    asyncio.run(run())
+
+
+def test_a2ui_run_execute_tool_exception_captured(redis):
+    """工具执行抛异常 → TOOL_EXEC_ERROR 明确 error（不中断循环）。"""
+
+    async def run():
+        class _BoomTool(BaseTool):
+            name = "boom"
+            description = "boom"
+            input_model = _FakeSkillInput
+
+            async def execute(
+                self, arguments: BaseModel, context: ToolExecutionContext
+            ) -> ToolResult:
+                raise RuntimeError("boom inside tool")
+
+        registry = ToolRegistry()
+        registry.register(_BoomTool())
+        loop = _make_loop(redis, registry=registry)
+        result = await loop._execute_tool("boom", {"name": "x"}, "sess-boom")
+        assert result["ok"] is False
+        assert result["code"] == "TOOL_EXEC_ERROR"
+        assert "boom inside tool" in result["error"]
+
+    asyncio.run(run())
+
+
+def test_a2ui_run_loop_end_to_end_skill_tool(redis):
+    """整循环：LLM 先调 skill 工具（真实分发）再输出文本 → tool.call/result/text/done。"""
+
+    async def run():
+        registry = ToolRegistry()
+        registry.register(_FakeSkillTool())
+        gateway = _FakeGateway(
+            [
+                LLMResponse(
+                    content="",
+                    tool_calls=[
+                        {
+                            "id": "tc-skill",
+                            "type": "function",
+                            "function": {
+                                "name": "skill",
+                                "arguments": '{"name":"member.profile"}',
+                            },
+                        }
+                    ],
+                    finish_reason="tool_calls",
+                ),
+                LLMResponse(content="已查询会员资料", finish_reason="stop"),
+            ]
+        )
+        publisher = A2uiOutboundPublisher(redis)
+        loop = A2uiRunLoop(
+            gateway,
+            publisher,
+            model="test-model",
+            session_manager=_FakeSessionManager(),
+            tool_registry=registry,
+        )
+        await loop.run(
+            session_id="sess-e2e-skill",
+            user_id="u1",
+            trace_id="t1",
+            mis_user_id=10086,
+            run_agent_input={
+                "messages": [{"role": "user", "content": "查会员资料"}],
+                "tools": [
+                    {
+                        "name": "render_a2ui",
+                        "description": "render",
+                        "parameters": {"type": "object", "properties": {}},
+                    },
+                    {
+                        "name": "skill",
+                        "description": "skill",
+                        "parameters": {"type": "object", "properties": {}},
+                    },
+                ],
+            },
+        )
+        events = await _stream_events(redis, "sess-e2e-skill")
+        assert [e["type"] for e in events] == [
+            "tool.call",
+            "tool.result",
+            "text.delta",
+            "done",
+        ]
+        assert events[0]["tool_name"] == "skill"
+        assert events[1]["tool_name"] == "skill"
+        assert events[1]["result"]["ok"] is True
+        assert events[1]["result"]["output"] == "executed:member.profile"
+        assert events[2]["content"] == "已查询会员资料"
+
+    asyncio.run(run())
+
+
+def test_a2ui_run_lazy_registry_assembly(monkeypatch, redis):
+    """未注入注册表时按 Agent 配置懒装配（复用 create_platform_tool_registry）。"""
+
+    async def run():
+        import src.agent.manager as am
+        import src.runtime.oh_runtime_builder as orb
+        import src.runtime.tool_registry_builder as trb
+
+        class _FakeConfig:
+            agent_id = "agent-x"
+            role = None
+            runtime = None
+            skills = []
+
+        class _FakeAgentInstance:
+            config = _FakeConfig()
+
+        class _FakeManager:
+            def get_agent(self, agent_id: str) -> Any:
+                return _FakeAgentInstance()
+
+        async def _raise_connect(config: Any) -> Any:
+            raise RuntimeError("mcp unavailable")
+
+        built: dict[str, Any] = {}
+
+        def fake_create(
+            mcp_manager: Any,
+            *,
+            allowed_tools: list[str],
+            role: Any,
+            agent_id: str,
+            allowed_skill_ids: list[str],
+        ) -> ToolRegistry:
+            built["agent_id"] = agent_id
+            built["allowed_skill_ids"] = allowed_skill_ids
+            registry = ToolRegistry()
+            registry.register(_FakeSkillTool())
+            return registry
+
+        monkeypatch.setattr(am, "get_agent_manager", lambda: _FakeManager())
+        monkeypatch.setattr(orb, "connect_mcp_manager", _raise_connect)
+        monkeypatch.setattr(orb, "enabled_package_skill_ids", lambda config: [])
+        monkeypatch.setattr(trb, "create_platform_tool_registry", fake_create)
+
+        loop = _make_loop(redis, registry=None)
+        assert loop._tool_registry is None
+        result = await loop._execute_tool(
+            "skill",
+            {"name": "member.profile"},
+            "sess-lazy",
+            identity={
+                "userId": "u1",
+                "userMobile": "",
+                "channel": "h5",
+                "channelUserId": "",
+                "misUserId": "10086",
+            },
+            agent_id="agent-x",
+        )
+        assert result["ok"] is True
+        assert result["output"] == "executed:member.profile"
+        assert built["agent_id"] == "agent-x"
+        assert loop._tool_registry is not None  # 已缓存
 
     asyncio.run(run())
 

@@ -14,8 +14,35 @@ from src.identity.token import TokenError, TokenManager
 
 @pytest.fixture
 def token_manager():
-    """Return a TokenManager with default test settings."""
-    return TokenManager()
+    """Return a TokenManager with HS256 issuance enabled（T11 退役门禁放开，验证 token 机制本身）。"""
+    from src.config import Settings
+
+    settings = Settings()
+    settings.HS256_ISSUANCE_ENABLED = True
+    with patch("src.identity.token.get_settings", return_value=settings):
+        yield TokenManager()
+
+
+class TestIssuanceRetiredGate:
+    """T11（agent/frontend 退役）：HS256 新签发默认下线，仅验签路径保留。"""
+
+    def test_create_token_set_raises_when_retired(self):
+        """生产默认（HS256_ISSUANCE_ENABLED=false）→ create_token_set 拒绝签发。"""
+        tm = TokenManager()
+        with pytest.raises(TokenError):
+            tm.create_token_set(user_id="u001", username="alice")
+
+    def test_refresh_token_set_raises_when_retired(self):
+        """刷新同样属于新签发，生产默认拒绝。"""
+        tm = TokenManager()
+        with pytest.raises(TokenError):
+            tm.refresh_token_set("not-a-token")
+
+    def test_verify_still_works_when_retired(self, token_manager):
+        """验签路径不受签发门禁影响（存量 in-flight HS256 token 仍可校验）。"""
+        ts = token_manager.create_token_set(user_id="u001", username="alice")
+        payload = token_manager.verify_access_token(ts.access_token)
+        assert payload.user_id == "u001"
 
 
 class TestCreateTokenSet:

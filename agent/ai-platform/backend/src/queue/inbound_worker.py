@@ -1030,6 +1030,10 @@ class InboundStreamWorker:
         redis: aioredis.Redis = await self._get_redis()
         publisher: A2uiOutboundPublisher = A2uiOutboundPublisher(redis)
         loop: A2uiRunLoop = A2uiRunLoop(get_llm_gateway(), publisher)
+        # T03 S9：skill/mcp 工具 ACL fail-closed 判权的唯一身份来源。
+        # 与文本渠道会话创建点同一解析链（档 2 查 users.mis_user_id）；解析不出
+        # → None → 工具执行按无身份拒绝（fail-closed），绝不回退 user_id。
+        mis_user_id: int | None = await _resolve_inbound_mis_user_id(inbound)
         timeout_sec: Any = self._settings.AGENT_MESSAGE_TIMEOUT
         try:
             async with asyncio.timeout(timeout_sec):
@@ -1038,6 +1042,7 @@ class InboundStreamWorker:
                     user_id=inbound.user_id,
                     trace_id=inbound.trace_id,
                     agent_id=inbound.agent_id,
+                    mis_user_id=mis_user_id,
                     run_agent_input=run_agent_input,
                 )
         except TimeoutError:

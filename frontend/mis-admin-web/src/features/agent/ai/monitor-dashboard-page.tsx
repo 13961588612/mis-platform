@@ -1,5 +1,5 @@
 /**
- * monitor-dashboard-page.tsx — 系统监控看板页（T10，从 agent/frontend MonitorPage 迁移）。
+ * monitor-dashboard-page.tsx — 系统监控看板页（T10，从 旧版独立前端 MonitorPage 迁移）。
  *
  * <p>功能等价迁移（admin.py 后端端点，数据口径对齐）+ shadcn 统一：
  * - 系统健康（PostgreSQL / Redis / Qdrant 等）

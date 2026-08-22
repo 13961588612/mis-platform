@@ -129,6 +129,8 @@
 
 ### T11: agent/frontend 退役清理
 
+> 状态：✅ **已执行**（2026-08-22，A2UI 收尾三连第 2 波）——`agent/ai-platform/frontend/` 物理删除、HS256 新签发下线、引用清理、僵尸依赖下线均已落地；下文为任务定义原文（历史记录，`agent/ai-platform/frontend/` 路径仅存于此任务规范，不再有实际引用）。
+
 | 属性 | 值 |
 | --- | --- |
 | **Task ID** | T11 |

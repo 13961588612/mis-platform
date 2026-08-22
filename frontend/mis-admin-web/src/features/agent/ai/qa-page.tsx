@@ -1,5 +1,5 @@
 /**
- * qa-page.tsx — 知识库问答页（T09，从 agent/frontend ChatPage + ChatPanel + kb-sources 迁移）。
+ * qa-page.tsx — 知识库问答页（T09，从 旧版独立前端 ChatPage + ChatPanel + kb-sources 迁移）。
  *
  * <p>逻辑迁移而非新写：useChat 对话 + kb-sources 折叠引用 + 消息反馈；
  * 消费 A2UI entity-select / data-table（经 SurfaceRenderer 渲染）。

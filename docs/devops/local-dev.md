@@ -176,17 +176,12 @@ pnpm dev
 
 默认账号：`admin` / `Mis@123456`（首次登录强制改密）。登录成功后进入 **`/portal`** 应用九宫格，再进 `system` 子系统。
 
-### 6.1 管理台 Copilot（iframe 嵌入 Agent H5）
+### 6.1 管理台 Copilot（A2UI 原生对话面板）
 
-全局 FAB / Sheet **不再自建对话 UI**，而是嵌入 `agent/ai-platform/frontend` 的 `/chat?embed=1`（通路 B）。
+T11 起旧版独立前端应用（Agent H5）已退役删除：管理台 Copilot 不再 iframe 嵌入 Agent H5，
+而是由 mis-admin-web 内置的原生 A2UI 对话面板（`CopilotPanel` + chat-core）直连 Gateway。
 
 ```powershell
-# 终端 A：Agent H5（默认 :3000）
-cd agent/ai-platform/frontend
-# 已提供 .env.development：VITE_PARENT_ORIGINS 含管理台 5174
-pnpm install
-pnpm dev
-
 # 终端 B：TS gateway（:3100），需信任 MIS JWT
 cd agent/ai-platform/gateway
 $env:MIS_JWT_PUBLIC_KEY_PATH = "D:\code\mis-platform\backend\keys\public.pem"

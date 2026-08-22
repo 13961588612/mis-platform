@@ -1,5 +1,5 @@
 /**
- * skill-dispatch.ts — 技能分发服务（T09，从 agent/frontend utils/agentRole.ts 迁移 + 扩展）。
+ * skill-dispatch.ts — 技能分发服务（T09，从 旧版独立前端 utils/agentRole.ts 迁移 + 扩展）。
  *
  * <p>02 文档 §2.1（T09）：`agentRole.ts`（mis-rag / mis-summary / mis-extract /
  * crm-assistant 技能分发）迁入 `src/services/skill-dispatch.ts`。实际源文件只有
@@ -11,7 +11,7 @@
  */
 
 // ============================================================================
-// 角色（对齐 agent/frontend utils/agentRole.ts）
+// 角色（对齐 旧版独立前端 utils/agentRole.ts）
 // ============================================================================
 
 /** 用户可选对话入口的角色值。 */

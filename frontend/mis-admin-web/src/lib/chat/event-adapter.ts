@@ -3,8 +3,13 @@
  *
  * <p>将 SSE/WS 原始载荷归一化为 {@link ChatStreamEvent}，兼容两类协议：
  * 1. 最终协议（02 文档 §4）：`stream` / `a2ui_surface` / `dispatch.trace` / `done` / `error`
- * 2. 旧协议（agent/frontend 存量）：`agent_event` envelope 内嵌 `text.delta` / `tool.call`
+ * 2. 旧协议（旧版独立前端存量）：`agent_event` envelope 内嵌 `text.delta` / `tool.call`
  *    / `tool.result` / `ui.render` / `approval.request` / `dispatch.trace` / `error` / `done`
+ *
+ * <p>dispatch.trace 支持两种 Gateway 下发风格（F3 对齐）：
+ * - `{ type: 'dispatch.trace', trace }`（旧风格 / 直出）
+ * - `{ type: 'custom', eventType: 'dispatch.trace', data }`（EventConverter CUSTOM 分支）
+ * 二者统一归一为内部 `{ type: 'dispatch.trace', trace }` 事件。
  */
 
 import { camelizeKeys } from './camelize';
@@ -38,6 +43,12 @@ export function parseStreamLine(raw: RawStreamLine): ChatStreamEvent | null {
     }
     case 'dispatch.trace': {
       return { type: 'dispatch.trace', trace: adaptTrace(raw.trace) };
+    }
+    case 'custom': {
+      // F3：Gateway EventConverter CUSTOM 分支 → { type:'custom', eventType, data }。
+      // 仅归一 dispatch.trace 自定义事件；其它 custom 事件忽略（绝不中断流）。
+      if (raw.eventType !== 'dispatch.trace') return null;
+      return { type: 'dispatch.trace', trace: adaptTrace(raw.data) };
     }
     case 'done': {
       return { type: 'done', tokenUsage: adaptTokenUsage(raw.token_usage ?? raw.tokenUsage) };

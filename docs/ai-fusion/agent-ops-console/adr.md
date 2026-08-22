@@ -10,7 +10,7 @@
 
 ## 背景
 
-此前 v1.3 将运营 UI 落在 `ai-platform/frontend`，门户仅外链。产品确认改为：**管理界面以 MIS host App 为优先交付面**；**Agent 运行时、YAML、委派、热更新仍留在 ai-platform**（不新建运行时级 `mis-agent`）。
+此前 v1.3 将运营 UI 落在旧独立 H5 前端（原 `ai-platform` 内嵌应用，T11 已退役删除），门户仅外链。产品确认改为：**管理界面以 MIS host App 为优先交付面**；**Agent 运行时、YAML、委派、热更新仍留在 ai-platform**（不新建运行时级 `mis-agent`）。
 
 对标知识库：`features/kb` + `sys_app(kb)` + BFF，引擎/领域服务分立。
 
@@ -27,7 +27,7 @@
 3. **运行时仍留 ai-platform**：AgentManager、ConfigManager、C–W Adapter、Skill 执行、MCP、会话引擎、Gateway 企微；**不**把 QueryEngine/YAML 真相搬进 Java。  
 4. **不新建运行时级 `mis-agent`（本期）**；BFF 聚合运营 API → ai-platform；权限元数据在 mis-system。若未来仅需 Java 台账/订购再另开 ADR。  
 5. **BFF 为管理面唯一对外入口（浏览器）**：`mis-admin-web` → `mis-admin-bff` `/api/v1/agent-ops/**`（或等价前缀）→ ai-platform `/api/v1/**`；浏览器不直连 Python Admin（内网调试除外）。  
-6. **ai-platform/frontend**：降为可选 **调试/嵌入**（如既有 Copilot H5 embed）；**不再作为运营控制台主交付面**；其 `/admin/*` 可保留给研发应急，不计入产品验收主路径。  
+6. **旧独立 H5 前端（T11 已退役删除）**：曾降为可选 **调试/嵌入**（如既有 Copilot H5 embed）；**不再作为运营控制台主交付面**；其 `/admin/*` 可保留给研发应急，不计入产品验收主路径。  
 7. 业务对话与运营调试分离；本地对话在 host App 内提供（`/agent/chat`），标明运营调试。  
 8. 与 Coordinator–Worker 分期对齐；Monitor ≠ Dispatch。  
 9. 界面强制 UI#1–#10（见 [ui.md](ui.md)），路径以 `/agent/**` 为准。  
@@ -84,7 +84,7 @@ mis-system / IAM / migrator          ← sys_app、菜单、sys_role、Skill 执
 | 方案 | 结论 |
 |------|------|
 | A. MIS host App + BFF + ai-platform 运行时 | **是（v1.4 选定）** |
-| B. 仅 ai-platform/frontend 运营台 | **否（已废止为主路径）**；可作研发应急 |
+| B. 仅旧独立 H5 前端运营台（T11 已退役删除） | **否（已废止为主路径）**；可作研发应急 |
 | C. `mis-agent` 管运行时 | **否（本期）** |
 | D. Skill 平行角色、不对接 `sys_role` | **否** |
 

@@ -28,19 +28,33 @@ class TokenError(Exception):
 
 
 class TokenManager:
-    """管理 JWT 创建、验证和刷新。"""
+    """管理 JWT 创建、验证和刷新。
+
+    T11（agent/frontend 退役）后 HS256 **新签发默认下线**：`create_token_set` /
+    `refresh_token_set` 在 ``HS256_ISSUANCE_ENABLED=false`` 时抛 :class:`TokenError`。
+    验签路径（`verify_access_token` / `verify_refresh_token`）保持不变，用于校验
+    存量 in-flight HS256 token；生产主通道为 MIS RS256 + BFF 兑换（T12）。
+    """
 
     def __init__(self) -> None:
         """从应用配置加载 JWT 密钥与过期时间。"""
         self._settings = get_settings()
         self._secret = self._settings.JWT_SECRET_KEY
         self._algorithm = _ALGORITHM
+        self._issuance_enabled = self._settings.HS256_ISSUANCE_ENABLED
         self._access_expire = timedelta(
             minutes=self._settings.JWT_ACCESS_TOKEN_EXPIRE_MINUTES
         )
         self._refresh_expire = timedelta(
             days=self._settings.JWT_REFRESH_TOKEN_EXPIRE_DAYS
         )
+
+    def _assert_issuance_enabled(self) -> None:
+        """HS256 新签发下线门禁（T11）：默认拒绝签发新的平台自有 token。"""
+        if not self._issuance_enabled:
+            raise TokenError(
+                "HS256 token issuance retired (T11): use MIS RS256 login or BFF exchange"
+            )
 
     def create_token_set(
         self,
@@ -52,6 +66,7 @@ class TokenManager:
         agent_id: str | None = None,
     ) -> TokenSet:
         """为用户创建新的 access + refresh token 对。"""
+        self._assert_issuance_enabled()
         now: Any = datetime.now(timezone.utc)
         roles: Any = roles or []
 
@@ -121,6 +136,7 @@ class TokenManager:
 
     def refresh_token_set(self, refresh_token: str) -> TokenSet:
         """从有效的 refresh token 创建新的 TokenSet。"""
+        self._assert_issuance_enabled()
         payload: dict[str, Any] = self.verify_refresh_token(refresh_token)
         # 注意：新的 TokenSet 具有相同的用户信息但新的过期时间
         # 角色和部门不在 refresh token 中；如果需要，

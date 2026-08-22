@@ -1,5 +1,5 @@
 /**
- * approval-center-page.tsx — 审批中心页（T10，从 agent/frontend ApprovalCenterPage 迁移）。
+ * approval-center-page.tsx — 审批中心页（T10，从 旧版独立前端 ApprovalCenterPage 迁移）。
  *
  * <p>功能等价迁移（push.py 后端端点）+ 消费 A2UI `approval-card`：
  * - 统计卡（总/待/已同意/已拒绝/已超时）

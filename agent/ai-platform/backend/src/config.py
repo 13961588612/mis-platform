@@ -262,6 +262,15 @@ class Settings(BaseSettings):
     JWT_ALGORITHM: str = "HS256"
     JWT_ACCESS_TOKEN_EXPIRE_MINUTES: int = 480
     JWT_REFRESH_TOKEN_EXPIRE_DAYS: int = 7
+    # HS256 新签发门禁（T11 agent/frontend 退役）：默认关闭 = 不再签发新的
+    # 平台自有 HS256 token（原 H5/wecom-h5 登录链路已随前端删除）。
+    # 验签（verify_access_token / verify_refresh_token / deps HS256 分支）不受影响，
+    # 仍可校验存量 in-flight token；生产主通道为 MIS RS256 + BFF 兑换（T12）。
+    HS256_ISSUANCE_ENABLED: bool = Field(
+        default=False,
+        description="True=允许平台自有 HS256 签发（仅单测验证 token 机制用）；"
+        "False（默认，T11 退役口径）=签发下线，create/refresh 抛 TokenError。",
+    )
 
     # ===== MIS 身份信任（阶段1：认证对齐）=====
     # MIS 使用 RS256（RSA 公钥）签发 JWT；平台用同一公钥验签。

@@ -1,5 +1,5 @@
 /**
- * EmbedAuthBridge — 外部宿主 iframe 鉴权桥（T07'，从 agent/frontend 迁移扩展）。
+ * EmbedAuthBridge — 外部宿主 iframe 鉴权桥（T07'，从 旧版独立前端 迁移扩展）。
  *
  * <p>协议（01-architecture.md §5.2，继承 + 扩展）：
  * - iframe 加载后发 `AUTH_READY` 通知父页

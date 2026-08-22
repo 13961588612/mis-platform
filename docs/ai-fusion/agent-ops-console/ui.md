@@ -28,7 +28,7 @@
 | 10 | **C–W 调度配置** | `/agent/agents/:id/coordination` + `/agent/catalog` | role、白名单、Catalog 元数据等 |
 
 门户：九宫格可进入；`ENTERABLE_CODES` 含 `agent`。  
-**ai-platform/frontend `/admin` 不作为产品验收主路径。**
+**旧独立 H5 前端 `/admin`（T11 已退役删除）不作为产品验收主路径。**
 
 ---
 

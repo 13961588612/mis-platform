@@ -16,7 +16,7 @@ interface AiCopilotProps {
 }
 
 /**
- * @deprecated 全局 Copilot 已改为 iframe 嵌入 Agent H5（见 CopilotPanel + lib/ai-h5.ts）。
+ * @deprecated 全局 Copilot 已改为 mis-admin-web 内置 A2UI 原生面板（CopilotPanel）。
  * 本组件保留作通路 A SSE 参考实现，管理台壳层不再引用。
  *
  * 历史：流式 POST /api/v1/ai/chat/completions（BFF SSE 透传）。
