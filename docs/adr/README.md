@@ -29,7 +29,7 @@ Architecture Decision Record，记录重要架构决策的**背景、选项、�
 | [ADR-017](ADR-017-sys-api-module-ownership.md) | sys_api 归属模块、去租户/应用、API 多绑定 | 已接受 | 2026-07-28 |
 | [ADR-018](ADR-018-knowledge-base-mis-kb.md) | 知识库 APP、mis-kb、RAGFlow 引擎与测试 Docker 交付 | 已接受 | 2026-08-03 |
 | [ADR-019](ADR-019-wren-query-acl-ai-platform.md) | WrenAI 问数 ACL 归属 ai-platform 的架构一致性裁定 | 已替代（→ ADR-020） | 2026-08-22 |
-| [ADR-020](ADR-020-tqd-query-acl-mis-platform.md) | 问数（mis-tqd）ACL 等配置落 mis_platform、对齐 mis_kb 项目范式（A1 业务改判） | 已接受 | 2026-08-22 |
+| [ADR-020](ADR-020-iqd-query-acl-mis-platform.md) | 问数（mis-iqd）ACL 等配置落 mis_platform、对齐 mis_kb 项目范式（A1 业务改判） | 已接受 | 2026-08-22 |
 
 ## ADR 模板
 

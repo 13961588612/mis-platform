@@ -1,14 +1,14 @@
 # MIS 平台对接 WrenAI 问数 APP — 系统架构设计
 
 > 文档角色：本需求的**架构视图 + 接口契约**（上游 [prd.md](prd.md)，下游 [tasks.md](tasks.md)）。
-> 版本：v1.9｜状态：🔴 已修订（**v1.9 三处重大修订落盘（2026-08-22，主理人记录）**：① **A1 业务改判——落库改道**：表级 ACL 等问数配置**不落 ai_platform，改落 `mis_platform` 库**，对齐 **mis_kb 项目范式**（kb 开头的表在 mis_platform 库），项目名 **`mis-tqd`**（类似 mis_kb）、表前缀 **`tqd_`**（替代 `wren_*`）；ADR-019（原裁定落 ai_platform）**已由 ADR-020 替代**（§8 A1）；② **命名统一**：项目/表/API/权限码/模块全部收敛 `tqd`（`tqd_*` 表、`/api/v1/tqd/**`、权限码 `tqd:*`、前端 `features/agent/tqd`、`backend/mis-tqd` Java 模块），**对接外部 WrenAI 产品的适配层保留 wren**（`wren serve mcp`/`wren profile`/`wren_mcp_host`/`tqd_mcp_client.py` 类内配置键等，命名边界见 §1.5/§3.3）；③ **维度注册表提前一期 + 双维度一期**：`tqd_row_scope_dimension` 从二期 P2 提为**一期必做**、**部门不再特例**，一期同时支持「部门权限 + 门店权限」两个维度（§4.2.2 D.8/D.9）；配套：**Worker 配置消费改「BFF/Java 侧配置读取 API + Worker 本地缓存 + 变更事件/定期刷新 + 缓存不可得 fail-closed 45204」**（§4.2.2 D.7.3）、mis-tqd 模块按 mis_kb 范式落地（§3.2/§3.3）、Flyway 追加 `V71__tqd_schema.sql`、BFF 头注入按维度注册表遍历（`X-Mis-Dept-Scope` + `X-Mis-Stores`）、tasks.md 全量同步（T-W0-01 探针 3e 门店盘点 / T-W2-01 改 Java 侧 / T-W2-02a 双维度 / T-W2-02b 维度遍历注入 / 新增维度注册表子任务）、ADR-019 修订 + ADR-020 新增、两张 mermaid 同步、版本升 v1.9。**v1.8 A1/A5 拍板 + 行级权限放置/扩展设计落盘（2026-08-22，主理人记录）**：A1 当时确认——**表级 ACL 等 `wren_*` 问数配置落 `ai_platform` 库，Python 侧（ai-platform）统一管理，BFF 经 HTTP 读写，不新建 Java 领域服务**（**v1.9 已业务改判**，见上；历史裁定记录见 §8 A1 与 ADR-019）；A5 已确认——**列级隔离本期不做，预留后期方案**（预留位点见 §4.2.2 D.8.2）；新增 **D.7 行级权限数据「如何放置、如何使用」**（三层放置：平台侧 `ai_platform` 库=配置+裁定 / mis-org 侧=授权源头 / 业务库侧=数据载体；使用链路：配置在平台→锚点在头→字典在业务库→注入在 Worker→执行/脱敏/审计）与 **D.8 行级权限维度扩展设计**（`row_scope.type` 扩展点：`org_auto`=dept 维度实例化、`template` 已覆盖任意维度；维度注册表 `tqd_row_scope_dimension` 二期 P2 可选；扩展步骤模板 5 件事 + 门店示例；列级隔离预留位点）；§8 A1/A5 由「⏳ 待确认」改「✅ 业务已确认」；tasks.md T-W2-01 标注 A1 已确认、T-W2-02a 标注 type 扩展点 + 二期 P2 维度注册表、A5 相关标注 masking.py 仍为唯一出口 + 列 ACL 预留位点；**v1.7 A13 拍板 + 配置模型澄清落盘（2026-08-22，主理人记录）**：A13 三答已确认——**① 业务库部门编码与 mis_org 不统一主数据（暂时无关）→ 需要映射；② 业务库与 mis_platform 非同一实例 → 物化表（视图不可行）；③ 多数据源每库一张、集中定义从中心每日同步到各库（物化表 + 中心侧定时批同步）**；§4.2.2 D.6 深化——编码对齐决策 **X（映射内嵌字典表）** 定案（推荐理由/映射来源与维护/配置下拉数据源/T-W2-02a 工作量影响，见 D.6.3）、D.6.4 中心每日同步任务细化（归属 ai-platform 定时作业、每日全量 upsert 幂等、失败告警 + 降级 45204、目标库注册）、新增 **D.6.6 配置面 vs 数据面**（用户疑问「是否需逐库设置权限」的权威回答：权限配置平台统一一处、row_scope 模板化、mis_dept_scope 为同步数据非配置、表按数据源分组仅展示层事实）；§8 A13 由「⏳ 待确认」改「✅ 业务已确认」；tasks.md T-W0-01 探针 3e 更新（库边界已确认、剩余聚焦 DEPTID 编码体系盘点+映射可行性）、T-W2-02a 字典表子项改「物化表 + 中心每日同步」并新增同步任务/映射维护子项与配置界面验收；**v1.6 部门权限字典表方案落盘（2026-08-22，主理人记录）**：2a「直接 JOIN 平台内部 `sys_dept`」修订为「**JOIN/EXISTS 部门权限字典表 `mis_dept_scope`（表/视图）**」——同库/同实例走**视图**（实时零维护）、跨库/跨实例走**物化表+同步**（幂等）、多数据源**每库一张**、部门编码对齐与库边界列为 **A13 待业务/数据确认**（探针 3e 出前置证据）；新增 §4.2.2 D.6 mis_dept_scope 落地设计、§8 A13、tasks.md T-W0-01 探针 3d 实测对象更新为 mis_dept_scope 形态 + 新增 3e（库边界与编码对齐盘点）、T-W2-02a 新增字典表子项、T-W2-02b 黄金用例谓词更新；**v1.5 A12 拍板落盘（2026-08-22，主理人记录）**：A12 已由业务确认——**物化 `dept_path`，`PATH_PREFIX` 为唯一主路径，`CLOSURE_CTE` 不实现**（决策依据见 §8 A12 与 §4.2.2 C「策略表」）；§4.2.2 `resolve_inject_strategy` 策略精简为 **PATH_PREFIX（主）/ ENUM（降级 ≤500）/ FAIL_CLOSED（兜底）**、规模分层用例 11–15 同步更新、新增 **mis-org 物化 dept_path 落地设计小节（§4.2.2 D）**、`X-Mis-Dept-Scope` 头扩为携带锚点 `path`、tasks.md T-W0-01 探针 3b 降级为「仅记录不阻塞」+ 新增 3d（`dept_path LIKE` 实测）、T-W2-02a/b 同步；v1.4 曾修订规模策略（mis-org 部门树规模上万 → 头语义改「锚点 + 范围语义」`X-Mis-Dept-Scope`、新增规模分层策略层、新增待拍板 A12）；v1.3 曾修订 A11 行级数据范围确认本期、新增 §4.2.2 RLS 设计细节、`ScopeResolver.inject_row_scope` 展开、T-W2-02 拆分；v1.2 曾修订 MCP-first / 钉 wren-core 新线 `wren: v0.13.3` · 项目 `0.29.2` 2026-08-18、新增 §4.2.1 权限方案全景）｜日期：2026-08-22｜语言：中文
-> 图表：[class-diagram.mermaid](class-diagram.mermaid)、[sequence-diagram.mermaid](sequence-diagram.mermaid)｜部署速查：[deploy-tqd.md](deploy-tqd.md)
+> 版本：v1.9｜状态：🔴 已修订（**v1.9 三处重大修订落盘（2026-08-22，主理人记录）**：① **A1 业务改判——落库改道**：表级 ACL 等问数配置**不落 ai_platform，改落 `mis_platform` 库**，对齐 **mis_kb 项目范式**（kb 开头的表在 mis_platform 库），项目名 **`mis-iqd`**（类似 mis_kb）、表前缀 **`iqd_`**（替代 `wren_*`）；ADR-019（原裁定落 ai_platform）**已由 ADR-020 替代**（§8 A1）；② **命名统一**：项目/表/API/权限码/模块全部收敛 `iqd`（`iqd_*` 表、`/api/v1/iqd/**`、权限码 `iqd:*`、前端 `features/agent/iqd`、`backend/mis-iqd` Java 模块），**对接外部 WrenAI 产品的适配层保留 wren**（`wren serve mcp`/`wren profile`/`wren_mcp_host`/`iqd_mcp_client.py` 类内配置键等，命名边界见 §1.5/§3.3）；③ **维度注册表提前一期 + 双维度一期**：`iqd_row_scope_dimension` 从二期 P2 提为**一期必做**、**部门不再特例**，一期同时支持「部门权限 + 门店权限」两个维度（§4.2.2 D.8/D.9）；配套：**Worker 配置消费改「BFF/Java 侧配置读取 API + Worker 本地缓存 + 变更事件/定期刷新 + 缓存不可得 fail-closed 45204」**（§4.2.2 D.7.3）、mis-iqd 模块按 mis_kb 范式落地（§3.2/§3.3）、Flyway 追加 `V71__iqd_schema.sql`、BFF 头注入按维度注册表遍历（`X-Mis-Dept-Scope` + `X-Mis-Stores`）、tasks.md 全量同步（T-W0-01 探针 3e 门店盘点 / T-W2-01 改 Java 侧 / T-W2-02a 双维度 / T-W2-02b 维度遍历注入 / 新增维度注册表子任务）、ADR-019 修订 + ADR-020 新增、两张 mermaid 同步、版本升 v1.9。**v1.8 A1/A5 拍板 + 行级权限放置/扩展设计落盘（2026-08-22，主理人记录）**：A1 当时确认——**表级 ACL 等 `wren_*` 问数配置落 `ai_platform` 库，Python 侧（ai-platform）统一管理，BFF 经 HTTP 读写，不新建 Java 领域服务**（**v1.9 已业务改判**，见上；历史裁定记录见 §8 A1 与 ADR-019）；A5 已确认——**列级隔离本期不做，预留后期方案**（预留位点见 §4.2.2 D.8.2）；新增 **D.7 行级权限数据「如何放置、如何使用」**（三层放置：平台侧 `ai_platform` 库=配置+裁定 / mis-org 侧=授权源头 / 业务库侧=数据载体；使用链路：配置在平台→锚点在头→字典在业务库→注入在 Worker→执行/脱敏/审计）与 **D.8 行级权限维度扩展设计**（`row_scope.type` 扩展点：`org_auto`=dept 维度实例化、`template` 已覆盖任意维度；维度注册表 `iqd_row_scope_dimension` 二期 P2 可选；扩展步骤模板 5 件事 + 门店示例；列级隔离预留位点）；§8 A1/A5 由「⏳ 待确认」改「✅ 业务已确认」；tasks.md T-W2-01 标注 A1 已确认、T-W2-02a 标注 type 扩展点 + 二期 P2 维度注册表、A5 相关标注 masking.py 仍为唯一出口 + 列 ACL 预留位点；**v1.7 A13 拍板 + 配置模型澄清落盘（2026-08-22，主理人记录）**：A13 三答已确认——**① 业务库部门编码与 mis_org 不统一主数据（暂时无关）→ 需要映射；② 业务库与 mis_platform 非同一实例 → 物化表（视图不可行）；③ 多数据源每库一张、集中定义从中心每日同步到各库（物化表 + 中心侧定时批同步）**；§4.2.2 D.6 深化——编码对齐决策 **X（映射内嵌字典表）** 定案（推荐理由/映射来源与维护/配置下拉数据源/T-W2-02a 工作量影响，见 D.6.3）、D.6.4 中心每日同步任务细化（归属 ai-platform 定时作业、每日全量 upsert 幂等、失败告警 + 降级 45204、目标库注册）、新增 **D.6.6 配置面 vs 数据面**（用户疑问「是否需逐库设置权限」的权威回答：权限配置平台统一一处、row_scope 模板化、mis_dept_scope 为同步数据非配置、表按数据源分组仅展示层事实）；§8 A13 由「⏳ 待确认」改「✅ 业务已确认」；tasks.md T-W0-01 探针 3e 更新（库边界已确认、剩余聚焦 DEPTID 编码体系盘点+映射可行性）、T-W2-02a 字典表子项改「物化表 + 中心每日同步」并新增同步任务/映射维护子项与配置界面验收；**v1.6 部门权限字典表方案落盘（2026-08-22，主理人记录）**：2a「直接 JOIN 平台内部 `sys_dept`」修订为「**JOIN/EXISTS 部门权限字典表 `mis_dept_scope`（表/视图）**」——同库/同实例走**视图**（实时零维护）、跨库/跨实例走**物化表+同步**（幂等）、多数据源**每库一张**、部门编码对齐与库边界列为 **A13 待业务/数据确认**（探针 3e 出前置证据）；新增 §4.2.2 D.6 mis_dept_scope 落地设计、§8 A13、tasks.md T-W0-01 探针 3d 实测对象更新为 mis_dept_scope 形态 + 新增 3e（库边界与编码对齐盘点）、T-W2-02a 新增字典表子项、T-W2-02b 黄金用例谓词更新；**v1.5 A12 拍板落盘（2026-08-22，主理人记录）**：A12 已由业务确认——**物化 `dept_path`，`PATH_PREFIX` 为唯一主路径，`CLOSURE_CTE` 不实现**（决策依据见 §8 A12 与 §4.2.2 C「策略表」）；§4.2.2 `resolve_inject_strategy` 策略精简为 **PATH_PREFIX（主）/ ENUM（降级 ≤500）/ FAIL_CLOSED（兜底）**、规模分层用例 11–15 同步更新、新增 **mis-org 物化 dept_path 落地设计小节（§4.2.2 D）**、`X-Mis-Dept-Scope` 头扩为携带锚点 `path`、tasks.md T-W0-01 探针 3b 降级为「仅记录不阻塞」+ 新增 3d（`dept_path LIKE` 实测）、T-W2-02a/b 同步；v1.4 曾修订规模策略（mis-org 部门树规模上万 → 头语义改「锚点 + 范围语义」`X-Mis-Dept-Scope`、新增规模分层策略层、新增待拍板 A12）；v1.3 曾修订 A11 行级数据范围确认本期、新增 §4.2.2 RLS 设计细节、`ScopeResolver.inject_row_scope` 展开、T-W2-02 拆分；v1.2 曾修订 MCP-first / 钉 wren-core 新线 `wren: v0.13.3` · 项目 `0.29.2` 2026-08-18、新增 §4.2.1 权限方案全景）｜日期：2026-08-22｜语言：中文
+> 图表：[class-diagram.mermaid](class-diagram.mermaid)、[sequence-diagram.mermaid](sequence-diagram.mermaid)｜部署速查：[deploy-iqd.md](deploy-iqd.md)
 
 ---
 
 ## 0. 一句话架构结论
 
-**WrenAI 自托管为新 `wren` 线（`pip install wrenai` 得 `wren` CLI + wren-core（Rust/Apache DataFusion），以 `wren serve mcp --transport http @127.0.0.1` 在**服务端本机**暴露 MCP server，数据不出域）；平台以 `mis-tqd` Worker **本地持有 MCP client** 接入既有 mis-copilot Coordinator 完成桥接；配置/范围/ACL/样本/知识/审计以 `tqd_*` 表**统一落 `mis_platform` 库**（对齐 mis_kb 范式，Java 侧 `backend/mis-tqd` 模块管理），Worker **不直连库**、经 **BFF/Java 侧配置读取 API（`/internal/v1/tqd/**`）+ 本地缓存 + 变更事件/定期刷新** 消费（缓存不可得 fail-closed `45204`），BFF 对外经 `/api/v1/tqd/**` HTTP 读写（该 REST 仅面向平台自身 `tqd_*` 表，与 WrenAI 无关）；权限沿用双闸门（BFF `tqd:*` 功能码 + Worker 侧表级 ACL 二次裁定 + 结果字段脱敏）；行级范围由**维度注册表 `tqd_row_scope_dimension` 驱动**（一期 dept + store 双维度，§4.2.2 D.8/D.9）；引用与步骤化计划：新线 MCP `get_context`/`list_knowledge` **提供原生引用来源（走原生）**，sqlglot 血缘降级保留；**前端/用户端绝不直连 MCP**（由官方 MCP server 默认绑 127.0.0.1 + 本版本无 bearer-token 鉴权 + 默认只读约束兜底）。**
+**WrenAI 自托管为新 `wren` 线（`pip install wrenai` 得 `wren` CLI + wren-core（Rust/Apache DataFusion），以 `wren serve mcp --transport http @127.0.0.1` 在**服务端本机**暴露 MCP server，数据不出域）；平台以 `mis-iqd` Worker **本地持有 MCP client** 接入既有 mis-copilot Coordinator 完成桥接；配置/范围/ACL/样本/知识/审计以 `iqd_*` 表**统一落 `mis_platform` 库**（对齐 mis_kb 范式，Java 侧 `backend/mis-iqd` 模块管理），Worker **不直连库**、经 **BFF/Java 侧配置读取 API（`/internal/v1/iqd/**`）+ 本地缓存 + 变更事件/定期刷新** 消费（缓存不可得 fail-closed `45204`），BFF 对外经 `/api/v1/iqd/**` HTTP 读写（该 REST 仅面向平台自身 `iqd_*` 表，与 WrenAI 无关）；权限沿用双闸门（BFF `iqd:*` 功能码 + Worker 侧表级 ACL 二次裁定 + 结果字段脱敏）；行级范围由**维度注册表 `iqd_row_scope_dimension` 驱动**（一期 dept + store 双维度，§4.2.2 D.8/D.9）；引用与步骤化计划：新线 MCP `get_context`/`list_knowledge` **提供原生引用来源（走原生）**，sqlglot 血缘降级保留；**前端/用户端绝不直连 MCP**（由官方 MCP server 默认绑 127.0.0.1 + 本版本无 bearer-token 鉴权 + 默认只读约束兜底）。**
 
 ---
 
@@ -18,76 +18,76 @@
 
 | # | 难点 | 对策 | 落点 |
 |---|---|---|---|
-| D1 | WrenAI 新线以 **MCP 工具**（`run_sql`/`dry_run`/`dry_plan`/`query_cube`/`get_context` 等）暴露问数与执行能力，而 MIS 前端期望流式体验 | 桥接层实现 `AskOrchestrator`：经本地 MCP client 调问数/执行工具 → 每产出一阶段即产出一个 `TqdPlanStep` → 经 Coordinator `AgentEvent` → BFF SSE 逐帧下发（MCP 为请求/响应工具调用，不再有 REST `/v1/asks` 异步轮询） | `mis_tqd/orchestrator.py` + `adapters/tqd_mcp_client.py` |
-| D2 | WrenAI 按 project/MDL 隔离语义，**没有「按角色限表」的原生入口**（版本无关） | 平台侧在调用**前**裁定 `allowed_item_keys`，通过两手段收敛：① 新线用 MCP `get_context`/`get_instructions` 做**角色级前置收窄**（注入角色可见的模型/指令上下文）；② 生成 SQL 返回后用 sqlglot 解析血缘做**后置校验**，命中越权表则拒绝返回（fail-closed） | `mis_tqd/scope_resolver.py` + `lineage.py` |
-| D3 | WrenAI 旧版结果**无独立 citation 字段**；新线 `get_context`/`list_knowledge` **暴露原生引用来源** | **优先走原生**：桥接层调 MCP `get_context`/`list_knowledge`/`recall_queries` 取原生引用（表/字段/知识命中）；sqlglot 血缘降级派生保留为兜底（原生缺失或解析失败时回退） | `mis_tqd/lineage.py` |
-| D4 | 后台要看 SQL、前端**绝不能**看 SQL | 同一份 `AskResult` 由 `ResponseProjector` 按 `view=admin\|user` 两口径投影；`view=user` 分支在**服务端**剥离 `sql` / `plan[].sql`，不靠前端隐藏。**前端不直连 MCP 由 WrenAI 官方 MCP server 默认绑 127.0.0.1 + 本版本无 bearer-token 鉴权 + 默认只读约束兜底**——必须由服务端 `mis-tqd` Worker 本地持有 MCP client | `mis_tqd/projector.py` |
-| D5 | 敏感字段脱敏须与 `03-security.md` 一致且**只有一个入口** | `masking.py` 为唯一脱敏出口，规则表 `tqd_mask_rule` 承载 03-security §9.3 四条（手机号/身份证/密码不记录/Token 不记录）+ 可扩展；结果集 columns 匹配后逐行改写并记 `masked_columns` | `mis_tqd/masking.py` |
-| D6 | 密钥不能落前端、不能进库明文 | `tqd_connection` 只存 **profile 名/连接标识**（如 `wren_profile_name`）+ MCP 地址（`127.0.0.1:8080`），**不存任何 WrenAI 凭证**；业务库凭证由 `wren profile` 注入 WrenAI 主机（server-side，不落平台/前端）；UI 回显固定 `******` | `config.py` + `tqd_connection` |
-| D7 | 新增 Worker 不得破坏现有调度 | 严格按 `coordinator-worker/spec.md §9.1` 九项最少交付接入；只改 `configs/agents/mis-tqd/**` + `mis-copilot/coordination.yaml` 的 `worker_ids`，**不改前端 Agent 选择器**（A6 验收） | 配置态 |
+| D1 | WrenAI 新线以 **MCP 工具**（`run_sql`/`dry_run`/`dry_plan`/`query_cube`/`get_context` 等）暴露问数与执行能力，而 MIS 前端期望流式体验 | 桥接层实现 `AskOrchestrator`：经本地 MCP client 调问数/执行工具 → 每产出一阶段即产出一个 `IqdPlanStep` → 经 Coordinator `AgentEvent` → BFF SSE 逐帧下发（MCP 为请求/响应工具调用，不再有 REST `/v1/asks` 异步轮询） | `mis_iqd/orchestrator.py` + `adapters/iqd_mcp_client.py` |
+| D2 | WrenAI 按 project/MDL 隔离语义，**没有「按角色限表」的原生入口**（版本无关） | 平台侧在调用**前**裁定 `allowed_item_keys`，通过两手段收敛：① 新线用 MCP `get_context`/`get_instructions` 做**角色级前置收窄**（注入角色可见的模型/指令上下文）；② 生成 SQL 返回后用 sqlglot 解析血缘做**后置校验**，命中越权表则拒绝返回（fail-closed） | `mis_iqd/scope_resolver.py` + `lineage.py` |
+| D3 | WrenAI 旧版结果**无独立 citation 字段**；新线 `get_context`/`list_knowledge` **暴露原生引用来源** | **优先走原生**：桥接层调 MCP `get_context`/`list_knowledge`/`recall_queries` 取原生引用（表/字段/知识命中）；sqlglot 血缘降级派生保留为兜底（原生缺失或解析失败时回退） | `mis_iqd/lineage.py` |
+| D4 | 后台要看 SQL、前端**绝不能**看 SQL | 同一份 `AskResult` 由 `ResponseProjector` 按 `view=admin\|user` 两口径投影；`view=user` 分支在**服务端**剥离 `sql` / `plan[].sql`，不靠前端隐藏。**前端不直连 MCP 由 WrenAI 官方 MCP server 默认绑 127.0.0.1 + 本版本无 bearer-token 鉴权 + 默认只读约束兜底**——必须由服务端 `mis-iqd` Worker 本地持有 MCP client | `mis_iqd/projector.py` |
+| D5 | 敏感字段脱敏须与 `03-security.md` 一致且**只有一个入口** | `masking.py` 为唯一脱敏出口，规则表 `iqd_mask_rule` 承载 03-security §9.3 四条（手机号/身份证/密码不记录/Token 不记录）+ 可扩展；结果集 columns 匹配后逐行改写并记 `masked_columns` | `mis_iqd/masking.py` |
+| D6 | 密钥不能落前端、不能进库明文 | `iqd_connection` 只存 **profile 名/连接标识**（如 `wren_profile_name`）+ MCP 地址（`127.0.0.1:8080`），**不存任何 WrenAI 凭证**；业务库凭证由 `wren profile` 注入 WrenAI 主机（server-side，不落平台/前端）；UI 回显固定 `******` | `config.py` + `iqd_connection` |
+| D7 | 新增 Worker 不得破坏现有调度 | 严格按 `coordinator-worker/spec.md §9.1` 九项最少交付接入；只改 `configs/agents/mis-iqd/**` + `mis-copilot/coordination.yaml` 的 `worker_ids`，**不改前端 Agent 选择器**（A6 验收） | 配置态 |
 
 ### 1.2 分层技术栈
 
 | 层 | 归属 | 技术栈 | 新增内容 |
 |---|---|---|---|
 | 用户端问数 UI | `frontend/mis-admin-web` | React 18 + MUI + Tailwind + zustand | 扩展 `/ai/data-query`：引用块 + 步骤清单组件 |
-| 后台运营 UI | 同上，`features/agent/tqd/**` | 复用 `agent-page-shell` + `PermissionGate` | 5 个页面 + 5 个组件 |
-| 聚合鉴权 | `backend/mis-admin-bff` | Java 17 + Spring Boot + WebClient（ADR-007） | `/api/v1/tqd/**` 控制器 + `TqdClient`（对外门面，对齐 KB `/api/v1/kb/**`） |
-| **问数配置/ACL 领域（v1.9 新增，对齐 mis-kb）** | **`backend/mis-tqd`** | Java 17 + Spring Boot + Spring Data JPA（ADR-015） | **独立模块**：`tqd_*` 实体（JPA）+ Repository + Service + Controller（`/internal/v1/tqd/**` 配置读取 API + `/api/v1/tqd/**` 管理面，对齐 mis-kb 分层） |
-| 问数领域 / 桥接 | `agent/ai-platform` | Python 3.11 + FastAPI + **mcp**（官方 MCP Python SDK，本地 client）+ **sqlglot** | `mis-tqd` Worker（本地持 MCP client，**不直连库**，经 `TqdConfigClient` 调 Java 侧配置读取 API + 本地缓存消费 `tqd_*` 配置） |
+| 后台运营 UI | 同上，`features/agent/iqd/**` | 复用 `agent-page-shell` + `PermissionGate` | 5 个页面 + 5 个组件 |
+| 聚合鉴权 | `backend/mis-admin-bff` | Java 17 + Spring Boot + WebClient（ADR-007） | `/api/v1/iqd/**` 控制器 + `IqdClient`（对外门面，对齐 KB `/api/v1/kb/**`） |
+| **问数配置/ACL 领域（v1.9 新增，对齐 mis-kb）** | **`backend/mis-iqd`** | Java 17 + Spring Boot + Spring Data JPA（ADR-015） | **独立模块**：`iqd_*` 实体（JPA）+ Repository + Service + Controller（`/internal/v1/iqd/**` 配置读取 API + `/api/v1/iqd/**` 管理面，对齐 mis-kb 分层） |
+| 问数领域 / 桥接 | `agent/ai-platform` | Python 3.11 + FastAPI + **mcp**（官方 MCP Python SDK，本地 client）+ **sqlglot** | `mis-iqd` Worker（本地持 MCP client，**不直连库**，经 `IqdConfigClient` 调 Java 侧配置读取 API + 本地缓存消费 `iqd_*` 配置） |
 | 语义层 / T2SQL | **WrenAI 新线（外部，本机进程）** | `pip install wrenai` → `wren` CLI + wren-core（Rust/Apache DataFusion）+ `wren serve mcp`（HTTP MCP server） | 自托管新 `wren` 线：`wren serve mcp --transport http @127.0.0.1`（wren-ui 是否随包待核实，见 A3） |
-| 权限 | `mis-system` / `mis-iam` | sys_menu / sys_api / sys_menu_api / sys_role_permission + Redis | Flyway `V69__tqd_menu_api_seed.sql` 种子（`tqd:*`，v1.9 由 `wrenai:*` 统一改名） |
+| 权限 | `mis-system` / `mis-iam` | sys_menu / sys_api / sys_menu_api / sys_role_permission + Redis | Flyway `V69__iqd_menu_api_seed.sql` 种子（`iqd:*`，v1.9 由 `wrenai:*` 统一改名） |
 
 ### 1.3 架构模式
 
-- **BFF 聚合 + 领域下沉**（ADR-003 / ADR-005）：Java BFF 只做鉴权、身份 enrichment、SSE 透传、DTO 归一；问数编排与数据范围裁定全在 Python 领域侧；**问数配置/ACL 数据与 CRUD 在 Java 侧 `backend/mis-tqd`（对齐 mis-kb，v1.9）**。
-- **Coordinator–Worker**（`coordinator-worker/spec.md`）：`mis-tqd` 为 `role: worker`，`max_depth=1`，不可再委派。
+- **BFF 聚合 + 领域下沉**（ADR-003 / ADR-005）：Java BFF 只做鉴权、身份 enrichment、SSE 透传、DTO 归一；问数编排与数据范围裁定全在 Python 领域侧；**问数配置/ACL 数据与 CRUD 在 Java 侧 `backend/mis-iqd`（对齐 mis-kb，v1.9）**。
+- **Coordinator–Worker**（`coordinator-worker/spec.md`）：`mis-iqd` 为 `role: worker`，`max_depth=1`，不可再委派。
 - **双闸门**（ADR-008 / ADR-010 + KB 评审 §B.3）：功能权限码控入口，数据范围由领域服务二次裁定。
-- **管理面 / 运行面配置分离（v1.9 修订）**：管理 CRUD 走 BFF `/api/v1/tqd/**` → mis-tqd Java 服务（REST）；问数走 Coordinator 委派 —— 两者共享同一批 `tqd_*` 表（mis_platform 库，Java 侧管理，单一事实源）。Worker **不直连库**，经 **mis-tqd 配置读取 API（`/internal/v1/tqd/**`）+ 本地缓存 + 变更事件/定期刷新** 消费（原「管理面/运行面同库不同入口」修订为「同库不同入口 + Worker API 消费」，见 §4.2.2 D.7.3）。
+- **管理面 / 运行面配置分离（v1.9 修订）**：管理 CRUD 走 BFF `/api/v1/iqd/**` → mis-iqd Java 服务（REST）；问数走 Coordinator 委派 —— 两者共享同一批 `iqd_*` 表（mis_platform 库，Java 侧管理，单一事实源）。Worker **不直连库**，经 **mis-iqd 配置读取 API（`/internal/v1/iqd/**`）+ 本地缓存 + 变更事件/定期刷新** 消费（原「管理面/运行面同库不同入口」修订为「同库不同入口 + Worker API 消费」，见 §4.2.2 D.7.3）。
 
 ### 1.4 对 PRD Q1–Q10 的架构默认建议
 
 | Q | 架构默认建议 | 定性 |
 |---|---|---|
 | **Q1** 部署形态 | **自托管 OSS 新线**：`pip install wrenai`（钉 **`wren: v0.13.3`** / 项目 **`0.29.2`**，2026-08-18），以 `wren serve mcp --transport http --host 127.0.0.1 --port 8080` 在**服务端本机**暴露 MCP server。网络：ai-platform 主机与 WrenAI 进程**同机/同网络**，桥接走 localhost http；WrenAI 与业务库**网络可达**即可（凭证由 `wren profile` 注入，不落前端、不进 ai-platform 库明文）。**不再假设经典 3 服务 Docker 栈为主路径**；wren-ui 若保留供 DBA 建模，需标为待确认 A3（新线建模是 MDL 文件 + `wren context build`，wren-ui 是否仍随包发布待核实）。版本号以 `wren --version` 实测写入 `agent/ai-platform/deploy/wrenai/README.md` | 🔴 已修订（MCP-first / 钉新线 v0.13.3） |
-| **Q2** 桥接形态 | **新增 `mis-tqd` Python Worker** 接入 mis-copilot Coordinator（对齐 crm-assistant）。注册 = `configs/agents/mis-tqd/{agent,metadata,runtime,system,identity}` + `mis-copilot/coordination.yaml` 的 `worker_ids` 追加 + `INVOKE_AGENT_WHITELIST` | 🟢 架构可定 |
-| **Q3** 权限粒度 | 本期 **表级可问 + 行级数据范围（A11 已确认）+ 字段脱敏**。表级 ACL 数据模型见 §4.2（`tqd_table_acl` 双 action：`ask` / `manage`，对齐 `kb_acl` 的 read/manage 两套语义）；行级范围 = `tqd_table_acl.row_scope` 条件注入（§4.2.2）；列级隔离本期不做（✅ A5 已确认 v1.8，预留位点见 §4.2.2 D.10）；`tqd_catalog_item.sensitive_level` 仅服务脱敏，不实现列级引擎 | 🟢 架构可定 |
-| **Q4** 语义模型归属 | **平台侧治理入口 + push 为主（新线）**：DBA/治理在平台清单页编辑业务描述 → 平台导出 MDL 文件并经本地 `wren context build` 推送（替代旧 `/v1/mdl/deploy`）；wren-ui 是否随包待核实（A3）。冲突策略：**平台为准（last-write-wins by mdl_hash）**，pull 仅作快照对账（`tqd_model_snapshot.source=pull` 只读留痕，不覆盖本地 `description`） | 🔴 已修订（新线 MDL 文件 + context build），建模入口待 W0 核实 |
-| **Q5** 引用可得性 | **走原生**：新线 MCP `get_context`/`list_knowledge` **大概率提供原生引用来源**（表/字段/知识命中），桥接层直接消费并归一化为 `TqdCitation[]`；`lineage.py` 的 `merge_native_citations()` / sqlglot 血缘降级派生**保留为兜底**（原生缺失或解析失败时回退），**不改上层契约** | 🔴 已修订（新线原生引用） |
-| **Q6** 后台 UI 归属 | 复用 `agent` host App 新增 `wrenai` 模块（`/agent/tqd/**`），**独立 `tqd:*` 权限命名空间**，不复用 `agent:*` | 🟢 架构可定 |
+| **Q2** 桥接形态 | **新增 `mis-iqd` Python Worker** 接入 mis-copilot Coordinator（对齐 crm-assistant）。注册 = `configs/agents/mis-iqd/{agent,metadata,runtime,system,identity}` + `mis-copilot/coordination.yaml` 的 `worker_ids` 追加 + `INVOKE_AGENT_WHITELIST` | 🟢 架构可定 |
+| **Q3** 权限粒度 | 本期 **表级可问 + 行级数据范围（A11 已确认）+ 字段脱敏**。表级 ACL 数据模型见 §4.2（`iqd_table_acl` 双 action：`ask` / `manage`，对齐 `kb_acl` 的 read/manage 两套语义）；行级范围 = `iqd_table_acl.row_scope` 条件注入（§4.2.2）；列级隔离本期不做（✅ A5 已确认 v1.8，预留位点见 §4.2.2 D.10）；`iqd_catalog_item.sensitive_level` 仅服务脱敏，不实现列级引擎 | 🟢 架构可定 |
+| **Q4** 语义模型归属 | **平台侧治理入口 + push 为主（新线）**：DBA/治理在平台清单页编辑业务描述 → 平台导出 MDL 文件并经本地 `wren context build` 推送（替代旧 `/v1/mdl/deploy`）；wren-ui 是否随包待核实（A3）。冲突策略：**平台为准（last-write-wins by mdl_hash）**，pull 仅作快照对账（`iqd_model_snapshot.source=pull` 只读留痕，不覆盖本地 `description`） | 🔴 已修订（新线 MDL 文件 + context build），建模入口待 W0 核实 |
+| **Q5** 引用可得性 | **走原生**：新线 MCP `get_context`/`list_knowledge` **大概率提供原生引用来源**（表/字段/知识命中），桥接层直接消费并归一化为 `IqdCitation[]`；`lineage.py` 的 `merge_native_citations()` / sqlglot 血缘降级派生**保留为兜底**（原生缺失或解析失败时回退），**不改上层契约** | 🔴 已修订（新线原生引用） |
+| **Q6** 后台 UI 归属 | 复用 `agent` host App 新增 `wrenai` 模块（`/agent/iqd/**`），**独立 `iqd:*` 权限命名空间**，不复用 `agent:*` | 🟢 架构可定 |
 | **Q7** 范围映射 | **单 project + 表集合 scope 隔离**。范围不下推给 WrenAI 做隔离，而是平台侧「前置提示注入 + 后置血缘校验」双保险（见 D2）；`mdl_hash` 仅用于缓存与一致性校验 | 🟢 架构可定 |
-| **Q8** 术语词典 | `tqd_knowledge.source ∈ {local, kb_s07}` + `kb_term_id` 外键式弱关联。一期：本地录入为主，提供「从 S-07 导入」单向同步作业；**不做双向同步** | 🟡 需确认 S-07 是否已有稳定读接口 |
+| **Q8** 术语词典 | `iqd_knowledge.source ∈ {local, kb_s07}` + `kb_term_id` 外键式弱关联。一期：本地录入为主，提供「从 S-07 导入」单向同步作业；**不做双向同步** | 🟡 需确认 S-07 是否已有稳定读接口 |
 | **Q9** 步骤化计划 | 平台侧 `plan_mapper.py` 做 `status → 中文步骤` 映射（含平台自有的 `scope_check` / `masking` 两步），前端只渲染不加工 | 🟢 架构可定 |
-| **Q10** 多数据源 | 一期单 project / 单默认 connector；`tqd_datasource` 表结构已按多行设计，二期开启不改表 | 🟢 架构可定 |
+| **Q10** 多数据源 | 一期单 project / 单默认 connector；`iqd_datasource` 表结构已按多行设计，二期开启不改表 | 🟢 架构可定 |
 
 ### 1.5 数据落库位置决策（附加问题；v1.9 A1 业务改判：落库改道 mis_platform）
 
-> **v1.9 改判记录（2026-08-22，主理人记录，用户原话）**：问数配置表**不落 ai_platform 库，改落 `mis_platform` 库**，对齐 **mis_kb 项目范式**（kb 开头的表在 mis_platform 库）；项目名 **`mis-tqd`**（类似 mis_kb）、表前缀 **`tqd_`**（替代 `wren_*`）。原 v1.8 裁定（落 ai_platform，Python 侧统一管理）见 [ADR-019](../../adr/ADR-019-wren-query-acl-ai-platform.md)（**已替代**）；当前有效决策见 [ADR-020](../../adr/ADR-020-tqd-query-acl-mis-platform.md)。
+> **v1.9 改判记录（2026-08-22，主理人记录，用户原话）**：问数配置表**不落 ai_platform 库，改落 `mis_platform` 库**，对齐 **mis_kb 项目范式**（kb 开头的表在 mis_platform 库）；项目名 **`mis-iqd`**（类似 mis_kb）、表前缀 **`iqd_`**（替代 `wren_*`）。原 v1.8 裁定（落 ai_platform，Python 侧统一管理）见 [ADR-019](../../adr/ADR-019-wren-query-acl-ai-platform.md)（**已替代**）；当前有效决策见 [ADR-020](../../adr/ADR-020-iqd-query-acl-mis-platform.md)。
 
 | 数据类别 | 落库位置 | 理由 |
 |---|---|---|
-| WrenAI 连接配置、数据源、MDL 快照、内容清单、范围策略、**表级 ACL（✅ A1 已改判 v1.9：落 `mis_platform`，Java 侧 `backend/mis-tqd` 模块统一管理，对齐 mis_kb 范式）**、**维度注册表 `tqd_row_scope_dimension`（一期）**、样本、知识、脱敏规则、问数审计 | **`mis_platform` 库（PostgreSQL），表前缀 `tqd_`** | ① 业务拍板：对齐 mis_kb 项目范式（`kb_*` 表在 mis_platform 库，V12__kb_schema.sql 明确），平台配置类数据（权限/连接/审计）统一收口 mis_platform；② 与 `kb_*` 同库并列、互不冲突（`tqd_` = 问数域表前缀，`kb_` = 知识库域表前缀）；③ Java 侧统一管理（JPA 实体 + Service + Flyway），审计口径与平台一致；**④ Worker 不直连库**：Worker 经 **BFF/Java 侧配置读取 API（`/internal/v1/tqd/**`，对齐 kb_client 范式）+ 本地缓存 + 变更事件/定期刷新** 消费（原「同进程零跨服务」优势改由此方案补偿，见 §4.2.2 D.7.3） |
+| WrenAI 连接配置、数据源、MDL 快照、内容清单、范围策略、**表级 ACL（✅ A1 已改判 v1.9：落 `mis_platform`，Java 侧 `backend/mis-iqd` 模块统一管理，对齐 mis_kb 范式）**、**维度注册表 `iqd_row_scope_dimension`（一期）**、样本、知识、脱敏规则、问数审计 | **`mis_platform` 库（PostgreSQL），表前缀 `iqd_`** | ① 业务拍板：对齐 mis_kb 项目范式（`kb_*` 表在 mis_platform 库，V12__kb_schema.sql 明确），平台配置类数据（权限/连接/审计）统一收口 mis_platform；② 与 `kb_*` 同库并列、互不冲突（`iqd_` = 问数域表前缀，`kb_` = 知识库域表前缀）；③ Java 侧统一管理（JPA 实体 + Service + Flyway），审计口径与平台一致；**④ Worker 不直连库**：Worker 经 **BFF/Java 侧配置读取 API（`/internal/v1/iqd/**`，对齐 kb_client 范式）+ 本地缓存 + 变更事件/定期刷新** 消费（原「同进程零跨服务」优势改由此方案补偿，见 §4.2.2 D.7.3） |
 | 用户身份（角色码 / 部门 / 门店 / 组织） | **不落库**，由 BFF 经 `X-Mis-Roles` / `X-Mis-Dept-Scope` / **`X-Mis-Stores`（v1.9 新增，门店维度）** / `X-Mis-Depts` / `X-Mis-Orgs` 头注入（`AiPlatformClient` 已实现 identity enrichment，`api/deps.py` 已解析；**v1.4 主推 `X-Mis-Dept-Scope` 锚点+范围语义**，见 §4.2.2 A.1；**v1.9 起头名/注入按维度注册表驱动**，见 §4.2.2 D.8/D.9） | ACL 主体绑定在 mis_platform，主体**身份**仍来自 IAM 权威源 —— 满足「后端二次裁定」且不复制用户数据 |
-| 功能权限码（`tqd:*`）与菜单 | **`mis_platform` 库**（`sys_menu` / `sys_api` / `sys_menu_api`，Flyway `V69__tqd_menu_api_seed.sql`，v1.9 由 `wrenai:*` 统一改 `tqd:*`） | 权限码是 MIS 权威资产，必须进 BFF 注册表（`sys_api ⋈ sys_menu_api ⋈ sys_menu` INNER JOIN），否则 `deny-unmapped=true` 直接 40300 |
-| 关键配置/授权变更审计 | 双写：mis_platform `tqd_ask_log`（问数行为）+ BFF `@OperLog`（配置/范围/授权变更） | 问数行为量大且含结构化计划，留在领域侧；管理动作按平台既有审计口径进 `sys_oper_log` |
+| 功能权限码（`iqd:*`）与菜单 | **`mis_platform` 库**（`sys_menu` / `sys_api` / `sys_menu_api`，Flyway `V69__iqd_menu_api_seed.sql`，v1.9 由 `wrenai:*` 统一改 `iqd:*`） | 权限码是 MIS 权威资产，必须进 BFF 注册表（`sys_api ⋈ sys_menu_api ⋈ sys_menu` INNER JOIN），否则 `deny-unmapped=true` 直接 40300 |
+| 关键配置/授权变更审计 | 双写：mis_platform `iqd_ask_log`（问数行为）+ BFF `@OperLog`（配置/范围/授权变更） | 问数行为量大且含结构化计划，留在领域侧；管理动作按平台既有审计口径进 `sys_oper_log` |
 
-> **与 mis-rag/KB 范式的对齐说明（v1.9 改判后）**：`mis-kb` 把 ACL 与主数据留在 Java 侧（独立模块 `backend/mis-kb`，`kb_*` 表落 mis_platform），BFF 对外 `/api/v1/kb/**`，Python 侧经 `kb_client.py` 调 `/internal/v1/kb/**` 且**不直连业务库**。本需求 v1.9 起**完全对齐该范式**：新建 `backend/mis-tqd` 独立模块（实体/Service/Controller 分层同 mis-kb），`tqd_*` 表落 mis_platform，BFF 对外 `/api/v1/tqd/**`，Python Worker 经 `TqdConfigClient`（对齐 `kb_client.py`）调 `/internal/v1/tqd/**` 配置读取 API。**权限裁定仍在领域服务层（`scope_resolver.py`）而非 BFF/前端**，双闸门语义不变。此改判已定案（✅ A1 业务改判 2026-08-22，v1.9）并固化于 [ADR-020](../../adr/ADR-020-tqd-query-acl-mis-platform.md)（替代 ADR-019）。
+> **与 mis-rag/KB 范式的对齐说明（v1.9 改判后）**：`mis-kb` 把 ACL 与主数据留在 Java 侧（独立模块 `backend/mis-kb`，`kb_*` 表落 mis_platform），BFF 对外 `/api/v1/kb/**`，Python 侧经 `kb_client.py` 调 `/internal/v1/kb/**` 且**不直连业务库**。本需求 v1.9 起**完全对齐该范式**：新建 `backend/mis-iqd` 独立模块（实体/Service/Controller 分层同 mis-kb），`iqd_*` 表落 mis_platform，BFF 对外 `/api/v1/iqd/**`，Python Worker 经 `IqdConfigClient`（对齐 `kb_client.py`）调 `/internal/v1/iqd/**` 配置读取 API。**权限裁定仍在领域服务层（`scope_resolver.py`）而非 BFF/前端**，双闸门语义不变。此改判已定案（✅ A1 业务改判 2026-08-22，v1.9）并固化于 [ADR-020](../../adr/ADR-020-iqd-query-acl-mis-platform.md)（替代 ADR-019）。
 
 **命名边界（v1.9 强制，防实现混淆）**
 
 ```text
-平台问数业务域 → 一律 tqd：项目 mis-tqd、表 tqd_*、API /api/v1/tqd/**、权限码 tqd:*、
-  前端 features/agent/tqd、Java 模块 backend/mis-tqd、Python 包 agent/mis_tqd、
-  类 TqdAdminService/TqdMcpClient/TqdCli/TqdConfigClient/TqdInternalController、
-  文件 tqd_schema.py / tqd_mcp_client.py / tqd_cli.py / tqd_config_client.py
-  （v1.9：Python 侧不再持有 models/tqd.py ORM 与 routes/tqd.py 管理面路由，见 §3.2）
+平台问数业务域 → 一律 iqd：项目 mis-iqd、表 iqd_*、API /api/v1/iqd/**、权限码 iqd:*、
+  前端 features/agent/iqd、Java 模块 backend/mis-iqd、Python 包 agent/mis_iqd、
+  类 IqdAdminService/IqdMcpClient/IqdCli/IqdConfigClient/IqdInternalController、
+  文件 iqd_schema.py / iqd_mcp_client.py / iqd_cli.py / iqd_config_client.py
+  （v1.9：Python 侧不再持有 models/iqd.py ORM 与 routes/iqd.py 管理面路由，见 §3.2）
 
 对接外部 WrenAI 产品 → 保留 wren（外部系统名，不是平台问数域）：
   WrenAI 品牌、wren CLI、wren-core、wren-ui、命令 wren serve mcp / wren profile /
   wren context build / wren --version、配置键 wren_mcp_host/port/transport/allow_write/
   timeout_seconds、wren_cli_bin、wren_profile_name、wren_language、PyPI 包 wrenai、
-  外部部署目录 deploy/wrenai/、表内外部引用字段 tqd_sql_pair.wren_ref_id /
-  tqd_ask_log.wren_status_trail（WrenAI 侧事实的引用）
+  外部部署目录 deploy/wrenai/、表内外部引用字段 iqd_sql_pair.wren_ref_id /
+  iqd_ask_log.wren_status_trail（WrenAI 侧事实的引用）
 ```
 
 ---
@@ -104,35 +104,35 @@ flowchart TB
 
   subgraph FE["frontend/mis-admin-web"]
     DQ["/ai/data-query<br/>问数页（扩展引用+步骤清单）"]
-    WCFG["/agent/tqd/config"]
-    WCAT["/agent/tqd/catalog"]
-    WSCP["/agent/tqd/scope"]
-    WENH["/agent/tqd/enhance"]
-    WTST["/agent/tqd/test-chat"]
+    WCFG["/agent/iqd/config"]
+    WCAT["/agent/iqd/catalog"]
+    WSCP["/agent/iqd/scope"]
+    WENH["/agent/iqd/enhance"]
+    WTST["/agent/iqd/test-chat"]
   end
 
   subgraph BFF["backend/mis-admin-bff（Java）"]
-    PEP["ApiPermissionInterceptor<br/>L1 功能权限码 tqd:*"]
-    ASKC["TqdAskController<br/>/api/v1/tqd/ask(-stream)"]
-    MGTC["TqdController<br/>/api/v1/tqd/config|catalog|scope|acl|enhance"]
-    WCLI["TqdClient（WebClient）<br/>+ identity enrichment"]
+    PEP["ApiPermissionInterceptor<br/>L1 功能权限码 iqd:*"]
+    ASKC["IqdAskController<br/>/api/v1/iqd/ask(-stream)"]
+    MGTC["IqdController<br/>/api/v1/iqd/config|catalog|scope|acl|enhance"]
+    WCLI["IqdClient（WebClient）<br/>+ identity enrichment"]
   end
 
   subgraph AIP["agent/ai-platform（Python FastAPI）"]
     COORD["mis-copilot<br/>role=coordinator"]
-    WORKER["mis-tqd Worker<br/>role=worker, max_depth=1"]
+    WORKER["mis-iqd Worker<br/>role=worker, max_depth=1"]
     ORCH["AskOrchestrator<br/>提交→轮询→聚合"]
     SCOPE["ScopeResolver<br/>L2 表级 ACL 二次裁定（维度注册表驱动）"]
     LIN["LineageExtractor(sqlglot)<br/>+ CitationBuilder"]
     MASK["MaskingEngine<br/>唯一脱敏出口"]
     PROJ["ResponseProjector<br/>admin/user 双口径"]
-    TCLI["TqdConfigClient<br/>配置读取 API + 本地缓存"]
+    TCLI["IqdConfigClient<br/>配置读取 API + 本地缓存"]
   end
 
-  subgraph JVS["backend/mis-tqd（Java，v1.9 新增）"]
-    MGT["TqdController<br/>/api/v1/tqd/** 管理面 + /internal/v1/tqd/** 配置读取"]
-    SVC["TqdAdminService<br/>实体/Service/Flyway（对齐 mis-kb）"]
-    DB1[("mis_platform 库<br/>tqd_* 表（含 tqd_row_scope_dimension）")]
+  subgraph JVS["backend/mis-iqd（Java，v1.9 新增）"]
+    MGT["IqdController<br/>/api/v1/iqd/** 管理面 + /internal/v1/iqd/** 配置读取"]
+    SVC["IqdAdminService<br/>实体/Service/Flyway（对齐 mis-kb）"]
+    DB1[("mis_platform 库<br/>iqd_* 表（含 iqd_row_scope_dimension）")]
   end
 
   subgraph WAI["WrenAI 新线（本机进程，localhost 仅服务端可达）"]
@@ -150,7 +150,7 @@ flowchart TB
   OPS --> WCFG & WCAT & WSCP & WENH & WTST
   DBA --> WUI
 
-  DQ -->|"POST /api/v1/tqd/ask-stream"| PEP
+  DQ -->|"POST /api/v1/iqd/ask-stream"| PEP
   WCFG & WCAT & WSCP & WENH --> PEP
   WTST -->|"view=admin"| PEP
   PEP --> ASKC & MGTC
@@ -158,7 +158,7 @@ flowchart TB
   ASKC --> WCLI
   MGTC --> WCLI
   WCLI -->|"SSE / REST + X-Mis-Roles"| COORD
-  WCLI -->|"REST（平台 tqd_* 管理面）"| MGT
+  WCLI -->|"REST（平台 iqd_* 管理面）"| MGT
 
   COORD -->|"委派 data-query 意图"| WORKER
   WORKER --> SCOPE --> ORCH
@@ -167,7 +167,7 @@ flowchart TB
   TCLI --> MGT
   MGT --> SVC
   SVC --> DB1
-  SCOPE -.->|"配置读取（TqdConfigClient + 缓存）"| TCLI
+  SCOPE -.->|"配置读取（IqdConfigClient + 缓存）"| TCLI
   LIN -.->|"引用/脱敏规则（缓存）"| TCLI
   PROJ -.->|"审计写（经 API）"| TCLI
 
@@ -182,8 +182,8 @@ flowchart TB
 
 **边界红线（架构层强制）**
 
-1. 前端**没有任何** WrenAI 地址/令牌，也不解析 SQL；`/api/v1/tqd/**` 是唯一出口；MCP server 仅绑 `127.0.0.1`，**前端/用户端不可能触达**。
-2. `wren serve mcp` **默认绑 127.0.0.1、本版本无 bearer-token 鉴权、默认只读**——这是官方层面对「前端不直连 MCP」的兜底约束，因此 MCP client 必须由服务端 `mis-tqd` Worker 本地持有；wren-ui 是否随包、是否对治理人员开放待核实（A3）。
+1. 前端**没有任何** WrenAI 地址/令牌，也不解析 SQL；`/api/v1/iqd/**` 是唯一出口；MCP server 仅绑 `127.0.0.1`，**前端/用户端不可能触达**。
+2. `wren serve mcp` **默认绑 127.0.0.1、本版本无 bearer-token 鉴权、默认只读**——这是官方层面对「前端不直连 MCP」的兜底约束，因此 MCP client 必须由服务端 `mis-iqd` Worker 本地持有；wren-ui 是否随包、是否对治理人员开放待核实（A3）。
 3. `view=user` 的响应在 `ResponseProjector` **服务端**剥离 SQL，BFF 与前端均无二次判断。
 4. Worker **不直连业务库**（只经 MCP 工具拿 SQL/结果文本，血缘解析只解析 SQL 文本，不执行）；执行一律由 wren-core 完成，凭证由 WrenAI profile 注入不在平台落明文。
 
@@ -193,113 +193,113 @@ flowchart TB
 
 ### 3.1 WrenAI 部署栈（新增，Q1 自托管 **新线 `pip install wrenai`**）
 
-> 主路径不再是经典 3 服务 Docker 栈；改为本机 `wren serve mcp` 进程。详细部署速查见 [`deploy-tqd.md`](deploy-tqd.md)。
+> 主路径不再是经典 3 服务 Docker 栈；改为本机 `wren serve mcp` 进程。详细部署速查见 [`deploy-iqd.md`](deploy-iqd.md)。
 
 | 文件 | 说明 |
 |---|---|
-| `agent/ai-platform/deploy/wrenai/README.md` | **钉版本 + 部署速查**：`wren --version` 实测值（**`wren: v0.13.3`** / 项目 **`0.29.2`** 2026-08-18）、`wren serve mcp` 进程模型、安全约束、与 `mis-tqd` Worker 同机部署关系、版本号记录位 |
-| `agent/ai-platform/deploy/wrenai/wren-profile.example.yaml` | `wren profile add` 示例（业务数据源连接、凭证由 profile 注入，**不含真值**；库里 `tqd_connection` 仅存 profile 名/连接标识，不存凭证） |
+| `agent/ai-platform/deploy/wrenai/README.md` | **钉版本 + 部署速查**：`wren --version` 实测值（**`wren: v0.13.3`** / 项目 **`0.29.2`** 2026-08-18）、`wren serve mcp` 进程模型、安全约束、与 `mis-iqd` Worker 同机部署关系、版本号记录位 |
+| `agent/ai-platform/deploy/wrenai/wren-profile.example.yaml` | `wren profile add` 示例（业务数据源连接、凭证由 profile 注入，**不含真值**；库里 `iqd_connection` 仅存 profile 名/连接标识，不存凭证） |
 | `agent/ai-platform/deploy/wrenai/mdl/` | 平台编辑 / MDL 导出目录（`wren context build` 输入；新线建模入口，是否弃用 wren-ui 待核实 A3） |
-| `agent/ai-platform/deploy/sql/tqd_tables.sql` | `tqd_*` 建表 DDL 导出稿（供 DBA 审阅/生产预建；**v1.9 起运行时由 `backend/mis-migrator` Flyway `V71__tqd_schema.sql` 管理，不再依赖 Python `create_all`**） |
+| `agent/ai-platform/deploy/sql/iqd_tables.sql` | `iqd_*` 建表 DDL 导出稿（供 DBA 审阅/生产预建；**v1.9 起运行时由 `backend/mis-migrator` Flyway `V71__iqd_schema.sql` 管理，不再依赖 Python `create_all`**） |
 
-### 3.2 ai-platform（Python；v1.9 修订：**不再持有 `tqd_*` ORM 与管理面路由**，配置消费改 `TqdConfigClient` + 缓存）
+### 3.2 ai-platform（Python；v1.9 修订：**不再持有 `iqd_*` ORM 与管理面路由**，配置消费改 `IqdConfigClient` + 缓存）
 
-> **v1.9 关键变化**：原 v1.8 的 `models/tqd.py`（10 张 ORM）、`api/routes/tqd.py`（管理面 REST）、`TqdAdminService`（CRUD/同步）**全部移除**，改由 Java 侧 `backend/mis-tqd` 承担（§3.6）；Python 侧只保留**问数编排 + 裁定 + 注入 + 脱敏 + 投影**，配置经 `TqdConfigClient`（对齐 `kb_client.py` 范式）调 mis-tqd 配置读取 API + 本地缓存。
-
-| 文件 | 类型 | 说明 |
-|---|---|---|
-| `agent/ai-platform/backend/src/config.py` | 改 | 追加 `TqdMcpSettings` 段：`wren_mcp_host`(127.0.0.1) / `wren_mcp_port`(8080) / `wren_mcp_transport`(http) / `wren_mcp_allow_write`(false) / `wren_mcp_timeout_seconds` / `wren_cli_bin`(wren) / `wren_profile_name` / `wren_language`(zh-CN)；追加 `TqdConfigSettings` 段：`tqd_config_base_url`（mis-tqd 配置读取 API）/ `tqd_cache_ttl_seconds` / `tqd_cache_refresh_jitter`。**不再**需要 `base_url`/`api_key`/`poll_*`（`tqd_connection` 仅存 profile 名/连接标识，凭证由 WrenAI profile 注入不落平台） |
-| `agent/ai-platform/backend/src/models/tqd_schema.py` | 新增 | Pydantic DTO（请求/响应/引用/计划步骤，§4.3）——**仅 DTO，无 ORM** |
-| `agent/ai-platform/backend/src/adapters/tqd_mcp_client.py` | 新增 | **本地 MCP client**（官方 `mcp` SDK，HTTP transport，连 `127.0.0.1:8080`）封装工具调用：`ask`/`run_sql`/`dry_run`/`dry_plan`/`query_cube`（运行时问数/执行）、`get_context`/`list_knowledge`/`recall_queries`（角色级收窄 + 原生引用来源）、`get_mdl`/`list_models`/`describe_model`/`get_instructions`（清单/指令读取）、`health` |
-| `agent/ai-platform/backend/src/adapters/tqd_cli.py` | 新增 | **本地 `wren` CLI 封装**（subprocess）：`profile add` / `context set-profile` / `context build`，负责 MDL 构建/部署与 profile 管理（管理面走 CLI，不走 MCP 写；写入需 `--allow-write` 时由 CLI 承担） |
-| `agent/ai-platform/backend/src/adapters/tqd_config_client.py` | **新增（v1.9）** | **配置读取 API 客户端（对齐 `kb_client.py` 范式）**：调 mis-tqd `/internal/v1/tqd/**` 读取连接/ACL/范围策略/维度注册表/脱敏规则/字典同步状态；**Worker 本地缓存**（启动/连接自检时全量加载 + 变更事件 + 每日定期刷新兜底）；**缓存不可得 → fail-closed `45204`**（见 §4.2.2 D.7.3） |
-| `agent/ai-platform/backend/src/agent/mis_tqd/__init__.py` | 新增 | 包导出 |
-| `agent/ai-platform/backend/src/agent/mis_tqd/orchestrator.py` | 新增 | `AskOrchestrator`：提交 → 退避轮询 → status 变化产出 `TqdPlanStep` → 聚合 `AskResult` |
-| `agent/ai-platform/backend/src/agent/mis_tqd/scope_resolver.py` | 新增 | `ScopeResolver`：`resolve(identity, connection_id) → TqdScopeResolution`；`assert_sql_within_scope(sql, resolution)` 后置 fail-closed；`inject_row_scope(sql, dialect, resolution, identity)` **行级条件后置注入 + 覆盖性校验（v1.9 起按维度注册表遍历多维度，见 §4.2.2 D.8/D.9）**；配置来自 `TqdConfigClient` 缓存 |
-| `agent/ai-platform/backend/src/agent/mis_tqd/lineage.py` | 新增 | `LineageExtractor`（sqlglot）+ `CitationBuilder`（含 `merge_native_citations()` 钩子） |
-| `agent/ai-platform/backend/src/agent/mis_tqd/masking.py` | 新增 | `MaskingEngine` —— **全平台 WrenAI 结果的唯一脱敏出口** |
-| `agent/ai-platform/backend/src/agent/mis_tqd/plan_mapper.py` | 新增 | `PlanMapper`：WrenAI `status` + 平台自有阶段 → 中文步骤 |
-| `agent/ai-platform/backend/src/agent/mis_tqd/projector.py` | 新增 | `ResponseProjector`：`project(result, view)`，`view=user` 剥离 SQL |
-| `agent/ai-platform/backend/src/agent/mis_tqd/tools.py` | 新增 | Worker 工具面：`tqd__ask`（只读）、`tqd__describe_scope`（只读） |
-| `agent/ai-platform/backend/pyproject.toml` | 改 | 追加 `sqlglot`（血缘）+ `mcp`（官方 MCP Python SDK，本地 client，HTTP transport）依赖；移除对 WrenAI REST 的 httpx 直连依赖；**移除 SQLAlchemy ORM 对 `tqd_*` 表的依赖**（配置读取走 `TqdConfigClient`） |
-| `agent/ai-platform/configs/agents/mis-tqd/agent.yaml` | 新增 | `role: worker` + routing keywords（问数/统计/销售额/同比…） |
-| `agent/ai-platform/configs/agents/mis-tqd/metadata.yaml` | 新增 | Catalog 委派契约：`when_to_use` / `capabilities` / `input_contract` / `output_contract=json` / `safety_level=read_only` |
-| `agent/ai-platform/configs/agents/mis-tqd/runtime/runtime.yaml` | 新增 | 运行时（`type: openharness`，`max_steps` 收敛） |
-| `agent/ai-platform/configs/agents/mis-tqd/runtime/prompts/system.md` | 新增 | 系统提示：只用 `tqd__ask`、禁止臆造数据、超范围直答拒绝 |
-| `agent/ai-platform/configs/agents/mis-tqd/system/model.yaml` | 新增 | 模型配置 |
-| `agent/ai-platform/configs/agents/mis-tqd/identity/access-control.yaml` | 新增 | 数据范围与禁止事项声明 |
-| `agent/ai-platform/configs/agents/mis-tqd/memory/personality.md` | 新增 | 人设（严谨、口径优先） |
-| `agent/ai-platform/configs/agents/mis-tqd/eval/golden-questions.yaml` | 新增 | ≥5 条黄金问句（spec §9.1 第 8 项） |
-| `agent/ai-platform/configs/agents/mis-copilot/coordination.yaml` | 改 | `worker_ids` 追加 `mis-tqd` |
-
-### 3.3 mis-admin-bff（Java；v1.9：对下游改调 mis-tqd Java 服务，不再调 ai-platform 管理面）
+> **v1.9 关键变化**：原 v1.8 的 `models/iqd.py`（10 张 ORM）、`api/routes/iqd.py`（管理面 REST）、`IqdAdminService`（CRUD/同步）**全部移除**，改由 Java 侧 `backend/mis-iqd` 承担（§3.6）；Python 侧只保留**问数编排 + 裁定 + 注入 + 脱敏 + 投影**，配置经 `IqdConfigClient`（对齐 `kb_client.py` 范式）调 mis-iqd 配置读取 API + 本地缓存。
 
 | 文件 | 类型 | 说明 |
 |---|---|---|
-| `backend/mis-admin-bff/.../controller/TqdAskController.java` | 新增 | `POST /api/v1/tqd/ask`、`POST /api/v1/tqd/ask-stream`（SSE） |
-| `backend/mis-admin-bff/.../controller/TqdController.java` | 新增 | 配置/清单/范围/样本/知识 CRUD 代理（**转发 mis-tqd**） |
-| `backend/mis-admin-bff/.../controller/TqdAclController.java` | 新增 | 表级 ACL 授权/撤销 + **维度注册表配置**（`tqd:acl:grant|revoke`、`tqd:scope:manage`） |
-| `backend/mis-admin-bff/.../client/TqdClient.java` | 新增 | 继承 `AbstractDownstreamClient`，复用 `loginContextHeaders()` + `X-Mis-Roles/Depts/Stores/Orgs` 注入；SSE 用 `Flux<ServerSentEvent<String>>`；**对下游 mis-tqd 调 `/internal/v1/tqd/**`** |
-| `backend/mis-admin-bff/.../service/tqd/TqdFacadeService.java` | 新增 | 管理面聚合（清单树装配、范围勾选批量提交、**维度下拉数据装配**、DTO 归一） |
-| `backend/mis-admin-bff/.../service/tqd/TqdAskFacadeService.java` | 新增 | 问数编排：`view` 判定（**服务端**按权限码决定，前端传的 view 仅作建议）、SSE 透传、错误降级 |
-| `backend/mis-admin-bff/.../service/tqd/TqdIdentityHeaderService.java` | **新增（v1.9）** | **按维度注册表遍历注入身份头**：读 mis-tqd 维度注册表（缓存）→ 有部门维度授权注 `X-Mis-Dept-Scope`（锚点+path+scope）、有门店维度授权注 `X-Mis-Stores`（可见门店集合/锚点）→ 无该维度授权则不注（见 §4.2.2 D.8.4） |
-| `backend/mis-admin-bff/.../dto/tqd/*.java` | 新增 | 约 16 个 DTO（§4.3 与 Python DTO 同构，字段 **snake_case 原样透传**） |
-| `backend/mis-admin-bff/src/main/resources/application.yml` | 改 | 追加 `mis.tqd.ask-timeout-ms` / `sse-enabled` / `admin-view-permission=tqd:trace:view` / `tqd.config-base-url`（mis-tqd 地址） |
+| `agent/ai-platform/backend/src/config.py` | 改 | 追加 `IqdMcpSettings` 段：`wren_mcp_host`(127.0.0.1) / `wren_mcp_port`(8080) / `wren_mcp_transport`(http) / `wren_mcp_allow_write`(false) / `wren_mcp_timeout_seconds` / `wren_cli_bin`(wren) / `wren_profile_name` / `wren_language`(zh-CN)；追加 `IqdConfigSettings` 段：`iqd_config_base_url`（mis-iqd 配置读取 API）/ `iqd_cache_ttl_seconds` / `iqd_cache_refresh_jitter`。**不再**需要 `base_url`/`api_key`/`poll_*`（`iqd_connection` 仅存 profile 名/连接标识，凭证由 WrenAI profile 注入不落平台） |
+| `agent/ai-platform/backend/src/models/iqd_schema.py` | 新增 | Pydantic DTO（请求/响应/引用/计划步骤，§4.3）——**仅 DTO，无 ORM** |
+| `agent/ai-platform/backend/src/adapters/iqd_mcp_client.py` | 新增 | **本地 MCP client**（官方 `mcp` SDK，HTTP transport，连 `127.0.0.1:8080`）封装工具调用：`ask`/`run_sql`/`dry_run`/`dry_plan`/`query_cube`（运行时问数/执行）、`get_context`/`list_knowledge`/`recall_queries`（角色级收窄 + 原生引用来源）、`get_mdl`/`list_models`/`describe_model`/`get_instructions`（清单/指令读取）、`health` |
+| `agent/ai-platform/backend/src/adapters/iqd_cli.py` | 新增 | **本地 `wren` CLI 封装**（subprocess）：`profile add` / `context set-profile` / `context build`，负责 MDL 构建/部署与 profile 管理（管理面走 CLI，不走 MCP 写；写入需 `--allow-write` 时由 CLI 承担） |
+| `agent/ai-platform/backend/src/adapters/iqd_config_client.py` | **新增（v1.9）** | **配置读取 API 客户端（对齐 `kb_client.py` 范式）**：调 mis-iqd `/internal/v1/iqd/**` 读取连接/ACL/范围策略/维度注册表/脱敏规则/字典同步状态；**Worker 本地缓存**（启动/连接自检时全量加载 + 变更事件 + 每日定期刷新兜底）；**缓存不可得 → fail-closed `45204`**（见 §4.2.2 D.7.3） |
+| `agent/ai-platform/backend/src/agent/mis_iqd/__init__.py` | 新增 | 包导出 |
+| `agent/ai-platform/backend/src/agent/mis_iqd/orchestrator.py` | 新增 | `AskOrchestrator`：提交 → 退避轮询 → status 变化产出 `IqdPlanStep` → 聚合 `AskResult` |
+| `agent/ai-platform/backend/src/agent/mis_iqd/scope_resolver.py` | 新增 | `ScopeResolver`：`resolve(identity, connection_id) → IqdScopeResolution`；`assert_sql_within_scope(sql, resolution)` 后置 fail-closed；`inject_row_scope(sql, dialect, resolution, identity)` **行级条件后置注入 + 覆盖性校验（v1.9 起按维度注册表遍历多维度，见 §4.2.2 D.8/D.9）**；配置来自 `IqdConfigClient` 缓存 |
+| `agent/ai-platform/backend/src/agent/mis_iqd/lineage.py` | 新增 | `LineageExtractor`（sqlglot）+ `CitationBuilder`（含 `merge_native_citations()` 钩子） |
+| `agent/ai-platform/backend/src/agent/mis_iqd/masking.py` | 新增 | `MaskingEngine` —— **全平台 WrenAI 结果的唯一脱敏出口** |
+| `agent/ai-platform/backend/src/agent/mis_iqd/plan_mapper.py` | 新增 | `PlanMapper`：WrenAI `status` + 平台自有阶段 → 中文步骤 |
+| `agent/ai-platform/backend/src/agent/mis_iqd/projector.py` | 新增 | `ResponseProjector`：`project(result, view)`，`view=user` 剥离 SQL |
+| `agent/ai-platform/backend/src/agent/mis_iqd/tools.py` | 新增 | Worker 工具面：`iqd__ask`（只读）、`iqd__describe_scope`（只读） |
+| `agent/ai-platform/backend/pyproject.toml` | 改 | 追加 `sqlglot`（血缘）+ `mcp`（官方 MCP Python SDK，本地 client，HTTP transport）依赖；移除对 WrenAI REST 的 httpx 直连依赖；**移除 SQLAlchemy ORM 对 `iqd_*` 表的依赖**（配置读取走 `IqdConfigClient`） |
+| `agent/ai-platform/configs/agents/mis-iqd/agent.yaml` | 新增 | `role: worker` + routing keywords（问数/统计/销售额/同比…） |
+| `agent/ai-platform/configs/agents/mis-iqd/metadata.yaml` | 新增 | Catalog 委派契约：`when_to_use` / `capabilities` / `input_contract` / `output_contract=json` / `safety_level=read_only` |
+| `agent/ai-platform/configs/agents/mis-iqd/runtime/runtime.yaml` | 新增 | 运行时（`type: openharness`，`max_steps` 收敛） |
+| `agent/ai-platform/configs/agents/mis-iqd/runtime/prompts/system.md` | 新增 | 系统提示：只用 `iqd__ask`、禁止臆造数据、超范围直答拒绝 |
+| `agent/ai-platform/configs/agents/mis-iqd/system/model.yaml` | 新增 | 模型配置 |
+| `agent/ai-platform/configs/agents/mis-iqd/identity/access-control.yaml` | 新增 | 数据范围与禁止事项声明 |
+| `agent/ai-platform/configs/agents/mis-iqd/memory/personality.md` | 新增 | 人设（严谨、口径优先） |
+| `agent/ai-platform/configs/agents/mis-iqd/eval/golden-questions.yaml` | 新增 | ≥5 条黄金问句（spec §9.1 第 8 项） |
+| `agent/ai-platform/configs/agents/mis-copilot/coordination.yaml` | 改 | `worker_ids` 追加 `mis-iqd` |
 
-> **命名裁定（v1.9 修订）**：BFF 对外 `/api/v1/tqd/**`（与权限码命名空间 `tqd:*` 一致，对齐 `/api/v1/kb/**`）；BFF 对下游 mis-tqd 调 `/internal/v1/tqd/**`（Java 服务内部端点，对齐 `/internal/v1/kb/**`）；`TqdClient` 内一次映射。
-
-### 3.4 frontend/mis-admin-web（v1.9：`features/agent/tqd`，文件/组件统一 tqd 前缀）
+### 3.3 mis-admin-bff（Java；v1.9：对下游改调 mis-iqd Java 服务，不再调 ai-platform 管理面）
 
 | 文件 | 类型 | 说明 |
 |---|---|---|
-| `src/features/agent/tqd/tqd-config-page.tsx` | 新增 | UI① 对接配置 + 连通自检 + MDL 同步 |
-| `src/features/agent/tqd/tqd-catalog-page.tsx` | 新增 | UI② 左树（数据源→库→表→字段）+ 右栏语义模型 Tab |
-| `src/features/agent/tqd/tqd-scope-page.tsx` | 新增 | UI③ 范围勾选 + **行级范围配置（选维度下拉 + 绑定列 + 参数来源，v1.9）** |
-| `src/features/agent/tqd/tqd-enhance-page.tsx` | 新增 | UI④ 样本 / 知识 / 业务描述 三 Tab + 「重新同步」 |
-| `src/features/agent/tqd/tqd-test-chat-page.tsx` | 新增 | UI⑤ 联调对话（左对话 / 右 SQL+结果+引用+完整计划） |
-| `src/features/agent/tqd/components/tqd-catalog-tree.tsx` | 新增 | 清单树（虚拟滚动，支持字段级） |
-| `src/features/agent/tqd/components/tqd-scope-table.tsx` | 新增 | 勾选表格（批量选中/反选/脏标记） |
-| `src/features/agent/tqd/components/tqd-acl-dialog.tsx` | 新增 | 表级 ACL 授权弹窗（主体选择器复用 KB 范式）+ **维度选择下拉（来自 `tqd_row_scope_dimension` 种子）** |
-| `src/features/agent/tqd/components/tqd-plan-timeline.tsx` | 新增 | **后台**完整计划时间线（阶段 + 耗时 + SQL 代码块） |
-| `src/features/agent/tqd/components/tqd-sql-block.tsx` | 新增 | SQL 高亮 + 复制（**仅后台页引用**） |
-| `src/features/agent/tqd/api/tqd-api.ts` | 新增 | 全部 `/api/v1/tqd/**` 调用 |
-| `src/features/agent/tqd/types.ts` | 新增 | wire 类型（snake_case，与 Python DTO 逐字段对齐） |
-| `src/features/agent/ai/components/tqd-citation-block.tsx` | 新增 | **用户端**引用来源可展开块（表/字段/知识片段） |
-| `src/features/agent/ai/components/tqd-plan-steps.tsx` | 新增 | **用户端**步骤化清单（无 SQL；组件内不接受 sql prop） |
+| `backend/mis-admin-bff/.../controller/IqdAskController.java` | 新增 | `POST /api/v1/iqd/ask`、`POST /api/v1/iqd/ask-stream`（SSE） |
+| `backend/mis-admin-bff/.../controller/IqdController.java` | 新增 | 配置/清单/范围/样本/知识 CRUD 代理（**转发 mis-iqd**） |
+| `backend/mis-admin-bff/.../controller/IqdAclController.java` | 新增 | 表级 ACL 授权/撤销 + **维度注册表配置**（`iqd:acl:grant|revoke`、`iqd:scope:manage`） |
+| `backend/mis-admin-bff/.../client/IqdClient.java` | 新增 | 继承 `AbstractDownstreamClient`，复用 `loginContextHeaders()` + `X-Mis-Roles/Depts/Stores/Orgs` 注入；SSE 用 `Flux<ServerSentEvent<String>>`；**对下游 mis-iqd 调 `/internal/v1/iqd/**`** |
+| `backend/mis-admin-bff/.../service/iqd/IqdFacadeService.java` | 新增 | 管理面聚合（清单树装配、范围勾选批量提交、**维度下拉数据装配**、DTO 归一） |
+| `backend/mis-admin-bff/.../service/iqd/IqdAskFacadeService.java` | 新增 | 问数编排：`view` 判定（**服务端**按权限码决定，前端传的 view 仅作建议）、SSE 透传、错误降级 |
+| `backend/mis-admin-bff/.../service/iqd/IqdIdentityHeaderService.java` | **新增（v1.9）** | **按维度注册表遍历注入身份头**：读 mis-iqd 维度注册表（缓存）→ 有部门维度授权注 `X-Mis-Dept-Scope`（锚点+path+scope）、有门店维度授权注 `X-Mis-Stores`（可见门店集合/锚点）→ 无该维度授权则不注（见 §4.2.2 D.8.4） |
+| `backend/mis-admin-bff/.../dto/iqd/*.java` | 新增 | 约 16 个 DTO（§4.3 与 Python DTO 同构，字段 **snake_case 原样透传**） |
+| `backend/mis-admin-bff/src/main/resources/application.yml` | 改 | 追加 `mis.iqd.ask-timeout-ms` / `sse-enabled` / `admin-view-permission=iqd:trace:view` / `iqd.config-base-url`（mis-iqd 地址） |
+
+> **命名裁定（v1.9 修订）**：BFF 对外 `/api/v1/iqd/**`（与权限码命名空间 `iqd:*` 一致，对齐 `/api/v1/kb/**`）；BFF 对下游 mis-iqd 调 `/internal/v1/iqd/**`（Java 服务内部端点，对齐 `/internal/v1/kb/**`）；`IqdClient` 内一次映射。
+
+### 3.4 frontend/mis-admin-web（v1.9：`features/agent/iqd`，文件/组件统一 iqd 前缀）
+
+| 文件 | 类型 | 说明 |
+|---|---|---|
+| `src/features/agent/iqd/iqd-config-page.tsx` | 新增 | UI① 对接配置 + 连通自检 + MDL 同步 |
+| `src/features/agent/iqd/iqd-catalog-page.tsx` | 新增 | UI② 左树（数据源→库→表→字段）+ 右栏语义模型 Tab |
+| `src/features/agent/iqd/iqd-scope-page.tsx` | 新增 | UI③ 范围勾选 + **行级范围配置（选维度下拉 + 绑定列 + 参数来源，v1.9）** |
+| `src/features/agent/iqd/iqd-enhance-page.tsx` | 新增 | UI④ 样本 / 知识 / 业务描述 三 Tab + 「重新同步」 |
+| `src/features/agent/iqd/iqd-test-chat-page.tsx` | 新增 | UI⑤ 联调对话（左对话 / 右 SQL+结果+引用+完整计划） |
+| `src/features/agent/iqd/components/iqd-catalog-tree.tsx` | 新增 | 清单树（虚拟滚动，支持字段级） |
+| `src/features/agent/iqd/components/iqd-scope-table.tsx` | 新增 | 勾选表格（批量选中/反选/脏标记） |
+| `src/features/agent/iqd/components/iqd-acl-dialog.tsx` | 新增 | 表级 ACL 授权弹窗（主体选择器复用 KB 范式）+ **维度选择下拉（来自 `iqd_row_scope_dimension` 种子）** |
+| `src/features/agent/iqd/components/iqd-plan-timeline.tsx` | 新增 | **后台**完整计划时间线（阶段 + 耗时 + SQL 代码块） |
+| `src/features/agent/iqd/components/iqd-sql-block.tsx` | 新增 | SQL 高亮 + 复制（**仅后台页引用**） |
+| `src/features/agent/iqd/api/iqd-api.ts` | 新增 | 全部 `/api/v1/iqd/**` 调用 |
+| `src/features/agent/iqd/types.ts` | 新增 | wire 类型（snake_case，与 Python DTO 逐字段对齐） |
+| `src/features/agent/ai/components/iqd-citation-block.tsx` | 新增 | **用户端**引用来源可展开块（表/字段/知识片段） |
+| `src/features/agent/ai/components/iqd-plan-steps.tsx` | 新增 | **用户端**步骤化清单（无 SQL；组件内不接受 sql prop） |
 | `src/features/agent/ai/ai-chat-panel.tsx` | 改 | 消息卡挂载 citation / plan 扩展块（按消息 payload 存在性渲染） |
 | `src/features/agent/ai/data-query-page.tsx` | 改 | 问数建议词与空态文案更新 |
 | `src/features/agent/ai/services/skill-dispatch.ts` | 改 | `DATA_QUERY_SUGGESTIONS` 追加问数示例 |
 | `src/features/agent/pages.ts` | 改 | 桶导出 5 个新页面 |
-| `src/lib/nav/agent-nav.ts` | 改 | **四处同改①** 侧栏追加 `/agent/tqd/*` 5 条 |
+| `src/lib/nav/agent-nav.ts` | 改 | **四处同改①** 侧栏追加 `/agent/iqd/*` 5 条 |
 | `src/components/layout/keep-alive-outlet.tsx` | 改 | **四处同改②** `PAGE_MAP` 追加 5 条精确路径 |
 | `src/app/router.tsx` | 核查 | **四处同改③** `/agent/*` 已整体登记，通常零改动（需核实） |
 | `src/lib/nav/icons.ts` | 改 | 登记新 icon（`Database` / `ListTree` / `ShieldCheck` / `BookOpenCheck` / `FlaskConical`），**漏登记会静默回退成 LayoutDashboard** |
 
-### 3.5 数据库迁移与配置（v1.9：`V69__tqd_menu_api_seed.sql` + 新增 `V71__tqd_schema.sql`）
+### 3.5 数据库迁移与配置（v1.9：`V69__iqd_menu_api_seed.sql` + 新增 `V71__iqd_schema.sql`）
 
 | 文件 | 类型 | 说明 |
 |---|---|---|
-| `backend/mis-migrator/src/main/resources/db/migration/V69__tqd_menu_api_seed.sql` | 新增 | **四处同改④**：`sys_menu`（5 页面 + 按钮）+ `sys_api`（全部 `/api/v1/tqd/**` 端点，权限码 `tqd:*`，v1.9 由 `wrenai:*` 统一改名）+ `sys_menu_api` 绑定。ID 段位建议 `92200–92299`（现存 V19/V50/V51/V61 用到 92031–92176，92200+ 空闲）。幂等：固定 ID + `WHERE NOT EXISTS` |
-| `backend/mis-migrator/src/main/resources/db/migration/V71__tqd_schema.sql` | **新增（v1.9）** | **`tqd_*` 业务表建表（mis_platform 库）**：`tqd_connection` / `tqd_datasource` / `tqd_model_snapshot` / `tqd_catalog_item` / `tqd_scope_policy` / `tqd_table_acl` / **`tqd_row_scope_dimension`（维度注册表，一期）** / `tqd_sql_pair` / `tqd_knowledge` / `tqd_mask_rule` / `tqd_ask_log`（§4.2）+ **维度注册表种子（dept / store 两条，§4.2.2 D.8.1）**；DDL 对齐 mis-kb 表风格（BIGINT 自增 PK + `created_at/updated_at` 时间戳，见 `V12__kb_schema.sql` 同款惯例） |
-| Nacos `ai-platform.yaml` | 改 | `wren.mcp-host`(127.0.0.1) / `wren.mcp-port`(8080) / `wren.mcp-transport`(http) / `wren.mcp-allow-write`(false) / `wren.cli-bin`(wren) / `wren.profile-name` / `wren.language`(zh-CN)；**v1.9 追加** `tqd.config-base-url`（mis-tqd 配置读取 API）/ `tqd.cache-ttl-seconds`。**不含 WrenAI 凭证**（凭证由 `wren profile` 注入在 WrenAI 主机，不进 Nacos/平台库） |
-| Nacos `mis-admin-bff.yaml` | 改 | `mis.tqd.ask-timeout-ms=180000` / `mis.tqd.sse-enabled=true` / `mis.tqd.admin-view-permission=tqd:trace:view` / `mis.tqd.config-base-url`（mis-tqd 地址） |
+| `backend/mis-migrator/src/main/resources/db/migration/V69__iqd_menu_api_seed.sql` | 新增 | **四处同改④**：`sys_menu`（5 页面 + 按钮）+ `sys_api`（全部 `/api/v1/iqd/**` 端点，权限码 `iqd:*`，v1.9 由 `wrenai:*` 统一改名）+ `sys_menu_api` 绑定。ID 段位建议 `92200–92299`（现存 V19/V50/V51/V61 用到 92031–92176，92200+ 空闲）。幂等：固定 ID + `WHERE NOT EXISTS` |
+| `backend/mis-migrator/src/main/resources/db/migration/V71__iqd_schema.sql` | **新增（v1.9）** | **`iqd_*` 业务表建表（mis_platform 库）**：`iqd_connection` / `iqd_datasource` / `iqd_model_snapshot` / `iqd_catalog_item` / `iqd_scope_policy` / `iqd_table_acl` / **`iqd_row_scope_dimension`（维度注册表，一期）** / `iqd_sql_pair` / `iqd_knowledge` / `iqd_mask_rule` / `iqd_ask_log`（§4.2）+ **维度注册表种子（dept / store 两条，§4.2.2 D.8.1）**；DDL 对齐 mis-kb 表风格（BIGINT 自增 PK + `created_at/updated_at` 时间戳，见 `V12__kb_schema.sql` 同款惯例） |
+| Nacos `ai-platform.yaml` | 改 | `wren.mcp-host`(127.0.0.1) / `wren.mcp-port`(8080) / `wren.mcp-transport`(http) / `wren.mcp-allow-write`(false) / `wren.cli-bin`(wren) / `wren.profile-name` / `wren.language`(zh-CN)；**v1.9 追加** `iqd.config-base-url`（mis-iqd 配置读取 API）/ `iqd.cache-ttl-seconds`。**不含 WrenAI 凭证**（凭证由 `wren profile` 注入在 WrenAI 主机，不进 Nacos/平台库） |
+| Nacos `mis-admin-bff.yaml` | 改 | `mis.iqd.ask-timeout-ms=180000` / `mis.iqd.sse-enabled=true` / `mis.iqd.admin-view-permission=iqd:trace:view` / `mis.iqd.config-base-url`（mis-iqd 地址） |
 
-### 3.6 backend/mis-tqd（Java 领域模块，v1.9 新增，对齐 mis-kb 分层）
+### 3.6 backend/mis-iqd（Java 领域模块，v1.9 新增，对齐 mis-kb 分层）
 
-> **模块形态（对齐 `backend/mis-kb` 调研结论）**：`kb_*` 表落 mis_platform 库（`V12__kb_schema.sql` 明确）；mis-kb 为独立模块，结构 = `api/controller` + `api/dto` + `domain/entity`（JPA `@Table`）+ `domain/repository`（Spring Data JPA）+ `domain/service`；Flyway 集中在 `backend/mis-migrator`；BFF 对外 `/api/v1/kb/**`，Python 侧经 `kb_client.py` 调 `/internal/v1/kb/**`。**mis-tqd 完全对齐该形态。**
+> **模块形态（对齐 `backend/mis-kb` 调研结论）**：`kb_*` 表落 mis_platform 库（`V12__kb_schema.sql` 明确）；mis-kb 为独立模块，结构 = `api/controller` + `api/dto` + `domain/entity`（JPA `@Table`）+ `domain/repository`（Spring Data JPA）+ `domain/service`；Flyway 集中在 `backend/mis-migrator`；BFF 对外 `/api/v1/kb/**`，Python 侧经 `kb_client.py` 调 `/internal/v1/kb/**`。**mis-iqd 完全对齐该形态。**
 
 | 文件 | 类型 | 说明 |
 |---|---|---|
-| `backend/mis-tqd/pom.xml` | 新增 | 依赖：`spring-boot-starter-data-jpa` / `web` / `validation`（对齐 mis-kb） |
-| `backend/mis-tqd/src/main/java/com/mis/tqd/domain/entity/TqdConnection.java` 等 11 个实体 | 新增 | JPA 实体：`TqdConnection` / `TqdDatasource` / `TqdModelSnapshot` / `TqdCatalogItem` / `TqdScopePolicy` / `TqdTableAcl` / **`TqdRowScopeDimension`（v1.9）** / `TqdSqlPair` / `TqdKnowledge` / `TqdMaskRule` / `TqdAskLog`（`@Table(name="tqd_*")`） |
-| `backend/mis-tqd/src/main/java/com/mis/tqd/domain/repository/*.java` | 新增 | Spring Data JPA Repository（对齐 `KbAclRepository` 等） |
-| `backend/mis-tqd/src/main/java/com/mis/tqd/domain/service/TqdAdminService.java` | 新增 | 连接/清单/范围/ACL/**维度注册表**/样本/知识 CRUD + 同步作业触发 + 审计写入 |
-| `backend/mis-tqd/src/main/java/com/mis/tqd/domain/service/TqdScopeSyncJobService.java` | **新增（v1.9）** | **中心每日同步**：按维度注册表遍历（dept → `mis_dept_scope` 物化表；store → `mis_store_scope` 物化表）读 mis-org 只读数据 → 逐库全量 upsert 幂等 → 失败告警 + 降级 45204（见 §4.2.2 D.6.4/D.9.4） |
-| `backend/mis-tqd/src/main/java/com/mis/tqd/api/controller/TqdController.java` | 新增 | 管理面 `/api/v1/tqd/**`（配置/清单/范围/ACL/维度/样本/知识/审计） |
-| `backend/mis-tqd/src/main/java/com/mis/tqd/api/controller/TqdInternalController.java` | **新增（v1.9）** | **配置读取 API `/internal/v1/tqd/**`**：`get-connections` / `get-acls` / `get-scope-policies` / `get-dimensions` / `get-mask-rules` / `get-dict-sync-status`——供 Worker `TqdConfigClient` 读取（对齐 `/internal/v1/kb/**`） |
-| `backend/mis-tqd/src/main/resources/application.yml` | 新增 | 数据源指向 mis_platform 库；`spring.jpa.hibernate.ddl-auto=validate`（表由 Flyway 建，对齐 mis-kb） |
+| `backend/mis-iqd/pom.xml` | 新增 | 依赖：`spring-boot-starter-data-jpa` / `web` / `validation`（对齐 mis-kb） |
+| `backend/mis-iqd/src/main/java/com/mis/iqd/domain/entity/IqdConnection.java` 等 11 个实体 | 新增 | JPA 实体：`IqdConnection` / `IqdDatasource` / `IqdModelSnapshot` / `IqdCatalogItem` / `IqdScopePolicy` / `IqdTableAcl` / **`IqdRowScopeDimension`（v1.9）** / `IqdSqlPair` / `IqdKnowledge` / `IqdMaskRule` / `IqdAskLog`（`@Table(name="iqd_*")`） |
+| `backend/mis-iqd/src/main/java/com/mis/iqd/domain/repository/*.java` | 新增 | Spring Data JPA Repository（对齐 `KbAclRepository` 等） |
+| `backend/mis-iqd/src/main/java/com/mis/iqd/domain/service/IqdAdminService.java` | 新增 | 连接/清单/范围/ACL/**维度注册表**/样本/知识 CRUD + 同步作业触发 + 审计写入 |
+| `backend/mis-iqd/src/main/java/com/mis/iqd/domain/service/IqdScopeSyncJobService.java` | **新增（v1.9）** | **中心每日同步**：按维度注册表遍历（dept → `mis_dept_scope` 物化表；store → `mis_store_scope` 物化表）读 mis-org 只读数据 → 逐库全量 upsert 幂等 → 失败告警 + 降级 45204（见 §4.2.2 D.6.4/D.9.4） |
+| `backend/mis-iqd/src/main/java/com/mis/iqd/api/controller/IqdController.java` | 新增 | 管理面 `/api/v1/iqd/**`（配置/清单/范围/ACL/维度/样本/知识/审计） |
+| `backend/mis-iqd/src/main/java/com/mis/iqd/api/controller/IqdInternalController.java` | **新增（v1.9）** | **配置读取 API `/internal/v1/iqd/**`**：`get-connections` / `get-acls` / `get-scope-policies` / `get-dimensions` / `get-mask-rules` / `get-dict-sync-status`——供 Worker `IqdConfigClient` 读取（对齐 `/internal/v1/kb/**`） |
+| `backend/mis-iqd/src/main/resources/application.yml` | 新增 | 数据源指向 mis_platform 库；`spring.jpa.hibernate.ddl-auto=validate`（表由 Flyway 建，对齐 mis-kb） |
 
-> **Worker 配置消费路径（v1.9 关键连锁，见 §4.2.2 D.7.3）**：Worker（Python）**不直连 mis_platform 库**，经 `TqdConfigClient` 调 `TqdInternalController` 配置读取 API → **本地缓存**（启动/连接自检时全量加载 + 变更事件推送 + 每日定期刷新兜底）→ 缓存不可得 fail-closed `45204`；权限裁定仍在 Worker `scope_resolver`（fail-closed 语义不变），只是配置数据源从「同进程读库」改为「API + 缓存」。
+> **Worker 配置消费路径（v1.9 关键连锁，见 §4.2.2 D.7.3）**：Worker（Python）**不直连 mis_platform 库**，经 `IqdConfigClient` 调 `IqdInternalController` 配置读取 API → **本地缓存**（启动/连接自检时全量加载 + 变更事件推送 + 每日定期刷新兜底）→ 缓存不可得 fail-closed `45204`；权限裁定仍在 Worker `scope_resolver`（fail-closed 语义不变），只是配置数据源从「同进程读库」改为「API + 缓存」。
 
 ---
 
@@ -312,22 +312,22 @@ classDiagram
     direction TB
 
     %% ===== 桥接运行面 =====
-    class TqdAskTool {
-        +str name = "tqd__ask"
+    class IqdAskTool {
+        +str name = "iqd__ask"
         +execute(arguments, context) ToolResult
         +is_read_only(arguments) bool
     }
 
     class AskOrchestrator {
-        -TqdMcpClient _client
+        -IqdMcpClient _client
         -PlanMapper _mapper
         +__init__(client, mapper, settings)
-        +ask(req: TqdAskRequest, resolution: TqdScopeResolution) AskResult
+        +ask(req: IqdAskRequest, resolution: IqdScopeResolution) AskResult
         -_ask_via_mcp(req, allowed_tables, context) dict
         -_aggregate(raw) AskResult
     }
 
-    class TqdMcpClient {
+    class IqdMcpClient {
         -mcp.ClientSession _session
         -str _host
         -int _port
@@ -347,7 +347,7 @@ classDiagram
         +health() bool
     }
 
-    class TqdCli {
+    class IqdCli {
         -str _bin
         +profile_add(name, ds_config) None
         +context_set_profile(name) None
@@ -355,29 +355,29 @@ classDiagram
     }
 
     class ScopeResolver {
-        -TqdConfigClient _config          # v1.9：配置来自 API + 本地缓存（不再直连库）
-        +resolve(identity, connection_id) TqdScopeResolution
+        -IqdConfigClient _config          # v1.9：配置来自 API + 本地缓存（不再直连库）
+        +resolve(identity, connection_id) IqdScopeResolution
         +assert_sql_within_scope(sql, dialect, resolution) None
         +inject_row_scope(sql, dialect, resolution, identity) tuple[str, RowScopeInjectOutcome]   # v1.9：按维度注册表遍历多维度（dept+store AND 叠加）
         +resolve_inject_strategy(dimension, resolution, dialect) InjectStrategy   # v1.4 规模分层；v1.5 精简 PATH_PREFIX/ENUM/FAIL_CLOSED；v1.9 按维度注册表 predicate_type 取形态
         -_build_authorized_predicate(rule, identity, dimension, strategy) PredicateNode  # 按维度注册表谓词形态 + expand_predicate 展开
         -_probe_db_capabilities(dialect) DbCapabilities           # has_dept_path / enum_in_limit / has_store_path，连接自检时缓存
         -_dict_map(dimension, connection_id) dict                # v1.9：mis_dept_scope.dept_id→dept_path / mis_store_scope.store_id→store_path（覆盖性校验反查用）
-        -_row_scope_rules(identity, connection_id) dict          # v1.9：来自维度注册表驱动的 tqd_table_acl.row_scope（可多维度）
+        -_row_scope_rules(identity, connection_id) dict          # v1.9：来自维度注册表驱动的 iqd_table_acl.row_scope（可多维度）
         -_global_scope(connection_id) set
         -_subject_acl(identity, connection_id) set
     }
 
-    class TqdConfigClient {
-        -str _base_url                     # mis-tqd /internal/v1/tqd/**
+    class IqdConfigClient {
+        -str _base_url                     # mis-iqd /internal/v1/iqd/**
         -dict _cache
         -int _ttl_seconds
         +load_all(connection_id) None      # 启动/连接自检全量加载
-        +get_connections() list~TqdConnection~
-        +get_acls() list~TqdTableAcl~
-        +get_scope_policies() list~TqdScopePolicy~
-        +get_dimensions() list~TqdRowScopeDimension~
-        +get_mask_rules() list~TqdMaskRule~
+        +get_connections() list~IqdConnection~
+        +get_acls() list~IqdTableAcl~
+        +get_scope_policies() list~IqdScopePolicy~
+        +get_dimensions() list~IqdRowScopeDimension~
+        +get_mask_rules() list~IqdMaskRule~
         +invalidate(keys) None             # 变更事件推送
         +refresh() None                    # 每日定期刷新兜底；缓存不可得 → fail-closed 45204
     }
@@ -388,70 +388,70 @@ classDiagram
 
     class CitationBuilder {
         -AsyncSession _db
-        +build(lineage, knowledge_hits, connection_id) list~TqdCitation~
-        +merge_native_citations(existing, native) list~TqdCitation~
+        +build(lineage, knowledge_hits, connection_id) list~IqdCitation~
+        +merge_native_citations(existing, native) list~IqdCitation~
     }
 
     class MaskingEngine {
-        -list~TqdMaskRule~ _rules
+        -list~IqdMaskRule~ _rules
         +load_rules(connection_id) None
         +apply(columns, rows) MaskingOutcome
-        -_match(column_name, data_type) TqdMaskRule
+        -_match(column_name, data_type) IqdMaskRule
     }
 
     class PlanMapper {
-        +map_status(raw_status) TqdPlanStep
-        +platform_step(code, status, duration_ms) TqdPlanStep
-        +finalize(steps) list~TqdPlanStep~
+        +map_status(raw_status) IqdPlanStep
+        +platform_step(code, status, duration_ms) IqdPlanStep
+        +finalize(steps) list~IqdPlanStep~
     }
 
     class ResponseProjector {
-        +project(result: AskResult, view: ViewMode) TqdAskResponse
-        -_strip_sql(resp) TqdAskResponse
+        +project(result: AskResult, view: ViewMode) IqdAskResponse
+        -_strip_sql(resp) IqdAskResponse
     }
 
-    class TqdAdminService {
-        <<Java backend/mis-tqd 领域服务>>
-        +get_connection() TqdConnection
-        +save_connection(dto) TqdConnection
+    class IqdAdminService {
+        <<Java backend/mis-iqd 领域服务>>
+        +get_connection() IqdConnection
+        +save_connection(dto) IqdConnection
         +test_connection() HealthResult
-        +sync_mdl(direction) TqdModelSnapshot
-        +list_catalog(query) Page~TqdCatalogItem~
-        +update_catalog_description(item_key, description) TqdCatalogItem
+        +sync_mdl(direction) IqdModelSnapshot
+        +list_catalog(query) Page~IqdCatalogItem~
+        +update_catalog_description(item_key, description) IqdCatalogItem
         +save_scope(items) int
-        +grant_acl(dto) TqdTableAcl
+        +grant_acl(dto) IqdTableAcl
         +revoke_acl(id) None
-        +crud_dimension(dto) TqdRowScopeDimension      # v1.9：维度注册表 CRUD（一期种子 dept/store，运营可增）
-        +crud_sql_pair(...) TqdSqlPair
-        +crud_knowledge(...) TqdKnowledge
+        +crud_dimension(dto) IqdRowScopeDimension      # v1.9：维度注册表 CRUD（一期种子 dept/store，运营可增）
+        +crud_sql_pair(...) IqdSqlPair
+        +crud_knowledge(...) IqdKnowledge
         +push_enhancements() SyncReport
-        +write_ask_log(result, identity) TqdAskLog
-        +list_ask_logs(query) Page~TqdAskLog~
+        +write_ask_log(result, identity) IqdAskLog
+        +list_ask_logs(query) Page~IqdAskLog~
     }
 
-    class TqdScopeSyncJobService {
+    class IqdScopeSyncJobService {
         <<Java 中心每日同步，v1.9>>
         +sync_scope_dict_job() SyncReport    # 按维度注册表遍历（dept→mis_dept_scope / store→mis_store_scope，全量 upsert 幂等，见 D.6.4/D.9.4）
-        +set_scope_sync(datasource_id, enabled) TqdDatasource  # v1.9：scope_sync_enabled（维度注册表驱动）
+        +set_scope_sync(datasource_id, enabled) IqdDatasource  # v1.9：scope_sync_enabled（维度注册表驱动）
     }
 
-    class TqdIdentityHeaderService {
+    class IqdIdentityHeaderService {
         <<BFF 头注入，v1.9>>
         +buildHeaders(user, connection_id) dict  # 按维度注册表遍历：dept 授权注 X-Mis-Dept-Scope、store 授权注 X-Mis-Stores、无该维度授权不注（见 D.8.4）
     }
 
-    class TqdInternalController {
-        <<Java /internal/v1/tqd/** 配置读取 API>>
-        +get_connections() list~TqdConnection~
-        +get_acls() list~TqdTableAcl~
-        +get_scope_policies() list~TqdScopePolicy~
-        +get_dimensions() list~TqdRowScopeDimension~
-        +get_mask_rules() list~TqdMaskRule~
+    class IqdInternalController {
+        <<Java /internal/v1/iqd/** 配置读取 API>>
+        +get_connections() list~IqdConnection~
+        +get_acls() list~IqdTableAcl~
+        +get_scope_policies() list~IqdScopePolicy~
+        +get_dimensions() list~IqdRowScopeDimension~
+        +get_mask_rules() list~IqdMaskRule~
         +get_dict_sync_status() list~DictSyncStatus~
     }
 
     %% ===== DTO =====
-    class TqdAskRequest {
+    class IqdAskRequest {
         +str question
         +str session_id
         +str thread_id
@@ -461,31 +461,31 @@ classDiagram
         +list~str~ scope_hint
     }
 
-    class TqdAskResponse {
+    class IqdAskResponse {
         +str query_id
         +str thread_id
         +AskStatus status
         +str answer_summary
         +str sql
         +str sql_dialect
-        +TqdResultSet data
-        +list~TqdCitation~ citations
-        +list~TqdPlanStep~ plan
-        +TqdScopeResolution scope
-        +list~TqdMaskedColumn~ masked_columns
+        +IqdResultSet data
+        +list~IqdCitation~ citations
+        +list~IqdPlanStep~ plan
+        +IqdScopeResolution scope
+        +list~IqdMaskedColumn~ masked_columns
         +int latency_ms
         +str error_code
         +str error_message
     }
 
-    class TqdResultSet {
-        +list~TqdColumn~ columns
+    class IqdResultSet {
+        +list~IqdColumn~ columns
         +list~list~ rows
         +int row_count
         +bool truncated
     }
 
-    class TqdColumn {
+    class IqdColumn {
         +str name
         +str item_key
         +str data_type
@@ -493,7 +493,7 @@ classDiagram
         +bool masked
     }
 
-    class TqdCitation {
+    class IqdCitation {
         +CitationKind kind
         +str item_key
         +str display_name
@@ -502,7 +502,7 @@ classDiagram
         +str source_ref
     }
 
-    class TqdPlanStep {
+    class IqdPlanStep {
         +int seq
         +PlanStepCode code
         +str label
@@ -512,7 +512,7 @@ classDiagram
         +int duration_ms
     }
 
-    class TqdScopeResolution {
+    class IqdScopeResolution {
         +ScopeDecision decision
         +list~str~ allowed_item_keys
         +list~str~ denied_item_keys
@@ -520,7 +520,7 @@ classDiagram
         +str subject_summary
     }
 
-    class TqdMaskedColumn {
+    class IqdMaskedColumn {
         +str column_key
         +str rule
         +int affected_rows
@@ -535,12 +535,12 @@ classDiagram
 
     class MaskingOutcome {
         +list~list~ rows
-        +list~TqdMaskedColumn~ applied
+        +list~IqdMaskedColumn~ applied
     }
 
     %% ===== 行级范围（A11；v1.9 维度注册表驱动） =====
     class RowScopeConfig {
-        +str dimension  "dept | store | …（引用 tqd_row_scope_dimension.dimension_code，v1.9 替代 org_auto/template type）"
+        +str dimension  "dept | store | …（引用 iqd_row_scope_dimension.dimension_code，v1.9 替代 org_auto/template type）"
         +str column
         +str scope  "dept | dept_subtree | org | self | store | store_subtree"
         +str source
@@ -554,8 +554,8 @@ classDiagram
         +str source  "header:X-Mis-Dept-Scope | header:X-Mis-Stores | user.* | ctx.*"
         +str data_type
     }
-    class TqdRowScopeDimension {
-        <<Java entity tqd_row_scope_dimension>>
+    class IqdRowScopeDimension {
+        <<Java entity iqd_row_scope_dimension>>
         +str dimension_code  "PK：dept | store | …（一期种子两条）"
         +str dimension_name
         +str predicate_type  "PATH_PREFIX | ENUM（按维度配置，见 D.8.1）"
@@ -636,7 +636,7 @@ classDiagram
     }
 
     %% ===== ORM 实体 =====
-    class TqdConnection {
+    class IqdConnection {
         +str id
         +str name
         +str base_url
@@ -651,7 +651,7 @@ classDiagram
         +str last_health_msg
         +bool enabled
     }
-    class TqdDatasource {
+    class IqdDatasource {
         +str id
         +str connection_id
         +str connector_type
@@ -662,7 +662,7 @@ classDiagram
         +bool enabled
         +bool scope_sync_enabled   # v1.9：该库是否启用字典同步（维度注册表驱动，dept/store 通用；v1.7 原名 dept_scope_sync_enabled）
     }
-    class TqdModelSnapshot {
+    class IqdModelSnapshot {
         +str id
         +str connection_id
         +str mdl_hash
@@ -673,7 +673,7 @@ classDiagram
         +str synced_by
         +str status
     }
-    class TqdCatalogItem {
+    class IqdCatalogItem {
         +str id
         +str connection_id
         +str kind
@@ -692,7 +692,7 @@ classDiagram
         +str mask_rule
         +datetime last_seen_at
     }
-    class TqdScopePolicy {
+    class IqdScopePolicy {
         +str id
         +str connection_id
         +str subject_type
@@ -703,7 +703,7 @@ classDiagram
         +str remark
         +str created_by
     }
-    class TqdTableAcl {
+    class IqdTableAcl {
         +str id
         +str connection_id
         +str subject_type
@@ -713,7 +713,7 @@ classDiagram
         +RowScopeConfig row_scope
         +str created_by
     }
-    class TqdSqlPair {
+    class IqdSqlPair {
         +str id
         +str connection_id
         +str question
@@ -724,7 +724,7 @@ classDiagram
         +str sync_status
         +datetime synced_at
     }
-    class TqdKnowledge {
+    class IqdKnowledge {
         +str id
         +str connection_id
         +str kind
@@ -737,7 +737,7 @@ classDiagram
         +str wren_ref_id
         +str sync_status
     }
-    class TqdMaskRule {
+    class IqdMaskRule {
         +str id
         +str name
         +str match_type
@@ -747,7 +747,7 @@ classDiagram
         +int priority
         +bool enabled
     }
-    class TqdAskLog {
+    class IqdAskLog {
         +str id
         +str trace_id
         +str session_id
@@ -801,90 +801,90 @@ classDiagram
     }
 
     %% ===== 关系 =====
-    TqdAskTool --> AskOrchestrator : 调用
-    TqdAskTool --> ScopeResolver : 前置裁定
-    TqdAskTool --> ResponseProjector : 投影输出
-    TqdAskTool --> TqdAdminService : 写审计
-    AskOrchestrator --> TqdMcpClient : MCP 工具调用（localhost http）
+    IqdAskTool --> AskOrchestrator : 调用
+    IqdAskTool --> ScopeResolver : 前置裁定
+    IqdAskTool --> ResponseProjector : 投影输出
+    IqdAskTool --> IqdAdminService : 写审计
+    AskOrchestrator --> IqdMcpClient : MCP 工具调用（localhost http）
     AskOrchestrator --> PlanMapper : status→步骤
-    AskOrchestrator ..> TqdAskRequest
+    AskOrchestrator ..> IqdAskRequest
     AskOrchestrator --> LineageExtractor : 解析 SQL
     LineageExtractor --> SqlLineage : 产出
-    ScopeResolver --> TqdScopeResolution : 产出
+    ScopeResolver --> IqdScopeResolution : 产出
     ScopeResolver --> RowScopeInjectOutcome : 产出（行级注入）
     ScopeResolver ..> MisDeptScope : 引用（v1.6 注入 JOIN/EXISTS，业务库本地字典表）
     ScopeResolver ..> SqlLineage : 后置校验
-    ScopeResolver ..> TqdScopePolicy : 读
-    ScopeResolver ..> TqdTableAcl : 读（含 row_scope）
-    CitationBuilder --> TqdCitation : 产出
-    CitationBuilder ..> TqdCatalogItem : 读
-    CitationBuilder ..> TqdKnowledge : 读
+    ScopeResolver ..> IqdScopePolicy : 读
+    ScopeResolver ..> IqdTableAcl : 读（含 row_scope）
+    CitationBuilder --> IqdCitation : 产出
+    CitationBuilder ..> IqdCatalogItem : 读
+    CitationBuilder ..> IqdKnowledge : 读
     AskOrchestrator --> CitationBuilder : 组装引用
     MaskingEngine --> MaskingOutcome : 产出
-    MaskingEngine ..> TqdMaskRule : 读
-    MaskingEngine ..> TqdCatalogItem : 读 sensitive_level
+    MaskingEngine ..> IqdMaskRule : 读
+    MaskingEngine ..> IqdCatalogItem : 读 sensitive_level
     AskOrchestrator --> MaskingEngine : 脱敏
-    PlanMapper --> TqdPlanStep : 产出
-    ResponseProjector --> TqdAskResponse : 产出
+    PlanMapper --> IqdPlanStep : 产出
+    ResponseProjector --> IqdAskResponse : 产出
     ResponseProjector --> ViewMode : 分支
-    TqdAskResponse *-- TqdResultSet
-    TqdAskResponse *-- TqdCitation
-    TqdAskResponse *-- TqdPlanStep
-    TqdAskResponse *-- TqdScopeResolution
-    TqdAskResponse *-- TqdMaskedColumn
-    TqdAskResponse --> AskStatus
-    TqdResultSet *-- TqdColumn
-    TqdCitation --> CitationKind
-    TqdPlanStep --> PlanStepCode
-    TqdPlanStep --> StepStatus
-    TqdScopeResolution --> ScopeDecision
-    TqdAdminService --> TqdMcpClient : 读上下文/清单/引用
-    TqdAdminService --> TqdCli : MDL build/deploy（本地 CLI）
-    TqdAdminService ..> TqdConnection : CRUD
-    TqdAdminService ..> TqdDatasource : CRUD
-    TqdAdminService ..> TqdModelSnapshot : CRUD
-    TqdAdminService ..> TqdCatalogItem : CRUD
-    TqdAdminService ..> TqdScopePolicy : CRUD
-    TqdAdminService ..> TqdTableAcl : CRUD
-    TqdAdminService ..> TqdRowScopeDimension : CRUD（v1.9 维度注册表）
-    TqdAdminService ..> TqdSqlPair : CRUD
-    TqdAdminService ..> TqdKnowledge : CRUD
-    TqdAdminService ..> TqdAskLog : 写/查
-    TqdAdminService ..> TqdInternalController : 对外配置读取 API
-    ScopeResolver --> TqdConfigClient : 配置读取（API + 缓存，v1.9）
-    TqdConfigClient --> TqdInternalController : /internal/v1/tqd/**
-    TqdScopeSyncJobService ..> TqdRowScopeDimension : 遍历维度注册表（v1.9）
-    TqdScopeSyncJobService ..> MisDeptScope : 每日同步写入（v1.9 Java 侧）
-    TqdScopeSyncJobService ..> MisStoreScope : 每日同步写入（v1.9）
-    TqdIdentityHeaderService ..> TqdRowScopeDimension : 读注册表（v1.9 BFF 侧）
-    TqdTableAcl "1" o-- "0..*" TqdRowScopeDimension : row_scope.dimension 引用（v1.9）
-    TqdConnection "1" *-- "0..*" TqdDatasource
-    TqdConnection "1" *-- "0..*" TqdModelSnapshot
-    TqdConnection "1" *-- "0..*" TqdCatalogItem
-    TqdCatalogItem "1" o-- "0..*" TqdScopePolicy : item_key
-    TqdCatalogItem "1" o-- "0..*" TqdTableAcl : item_key
+    IqdAskResponse *-- IqdResultSet
+    IqdAskResponse *-- IqdCitation
+    IqdAskResponse *-- IqdPlanStep
+    IqdAskResponse *-- IqdScopeResolution
+    IqdAskResponse *-- IqdMaskedColumn
+    IqdAskResponse --> AskStatus
+    IqdResultSet *-- IqdColumn
+    IqdCitation --> CitationKind
+    IqdPlanStep --> PlanStepCode
+    IqdPlanStep --> StepStatus
+    IqdScopeResolution --> ScopeDecision
+    IqdAdminService --> IqdMcpClient : 读上下文/清单/引用
+    IqdAdminService --> IqdCli : MDL build/deploy（本地 CLI）
+    IqdAdminService ..> IqdConnection : CRUD
+    IqdAdminService ..> IqdDatasource : CRUD
+    IqdAdminService ..> IqdModelSnapshot : CRUD
+    IqdAdminService ..> IqdCatalogItem : CRUD
+    IqdAdminService ..> IqdScopePolicy : CRUD
+    IqdAdminService ..> IqdTableAcl : CRUD
+    IqdAdminService ..> IqdRowScopeDimension : CRUD（v1.9 维度注册表）
+    IqdAdminService ..> IqdSqlPair : CRUD
+    IqdAdminService ..> IqdKnowledge : CRUD
+    IqdAdminService ..> IqdAskLog : 写/查
+    IqdAdminService ..> IqdInternalController : 对外配置读取 API
+    ScopeResolver --> IqdConfigClient : 配置读取（API + 缓存，v1.9）
+    IqdConfigClient --> IqdInternalController : /internal/v1/iqd/**
+    IqdScopeSyncJobService ..> IqdRowScopeDimension : 遍历维度注册表（v1.9）
+    IqdScopeSyncJobService ..> MisDeptScope : 每日同步写入（v1.9 Java 侧）
+    IqdScopeSyncJobService ..> MisStoreScope : 每日同步写入（v1.9）
+    IqdIdentityHeaderService ..> IqdRowScopeDimension : 读注册表（v1.9 BFF 侧）
+    IqdTableAcl "1" o-- "0..*" IqdRowScopeDimension : row_scope.dimension 引用（v1.9）
+    IqdConnection "1" *-- "0..*" IqdDatasource
+    IqdConnection "1" *-- "0..*" IqdModelSnapshot
+    IqdConnection "1" *-- "0..*" IqdCatalogItem
+    IqdCatalogItem "1" o-- "0..*" IqdScopePolicy : item_key
+    IqdCatalogItem "1" o-- "0..*" IqdTableAcl : item_key
     MisDeptScope --> DeptScopeForm : 载体（v1.7 定案：物化表本期；视图仅未来同实例演进）
     MisDeptScope ..> MisDeptMapping : 映射来源（A13①：业务库编码 ↔ 平台 mis-org 部门 id）
     MisStoreScope --> DeptScopeForm : 载体（v1.9 store 维度；扁平 ENUM 一期不依赖 JOIN）
 ```
 
-### 4.2 表结构（`mis_platform` 库，PostgreSQL；v1.9 A1 改判：由 ai_platform 改落 mis_platform，表前缀 `tqd_`，Java 侧 `backend/mis-tqd` 管理）
+### 4.2 表结构（`mis_platform` 库，PostgreSQL；v1.9 A1 改判：由 ai_platform 改落 mis_platform，表前缀 `iqd_`，Java 侧 `backend/mis-iqd` 管理）
 
-> **v1.9 建表/主键风格修订**：原 v1.8 主键 `varchar(36)` UUID（Python `UUIDPrimaryKeyMixin`）**不再适用**——改由 Java 侧管理后，**对齐 mis-kb 表风格**（`V12__kb_schema.sql` 同款）：`BIGINT 自增 PK` + `created_at/updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()`；JSONB 列保持；Flyway 迁移在 `backend/mis-migrator`（`V71__tqd_schema.sql`），不再依赖 Python `create_all`。
+> **v1.9 建表/主键风格修订**：原 v1.8 主键 `varchar(36)` UUID（Python `UUIDPrimaryKeyMixin`）**不再适用**——改由 Java 侧管理后，**对齐 mis-kb 表风格**（`V12__kb_schema.sql` 同款）：`BIGINT 自增 PK` + `created_at/updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()`；JSONB 列保持；Flyway 迁移在 `backend/mis-migrator`（`V71__iqd_schema.sql`），不再依赖 Python `create_all`。
 
 | # | 表 | 关键列 | 约束 / 索引 | 承载需求 |
 |---|---|---|---|---|
-| 1 | `tqd_connection` | `name, base_url, auth_type(api_key\|bearer\|none), secret_ref, project_id, default_connector, timeout_seconds, language, status(active\|inactive\|error), last_health_at, last_health_msg, enabled` | UK `(name)`；一期业务上仅一条 `enabled=true` | FR-CFG-1/2/4 |
-| 2 | `tqd_datasource` | `connection_id, connector_type, display_name, catalog_name, schema_name, credential_ref, enabled, scope_sync_enabled` | FK→1；UK `(connection_id, display_name)` | FR-CFG-2, Q10（**v1.7**：`dept_scope_sync_enabled` 标记该库是否启用 mis_dept_scope 字典同步——接入新库的一次性注册项，非权限配置，见 D.6.4；**v1.9 改名 `scope_sync_enabled`**：同步作业按维度注册表遍历 dept/store 字典，字段语义通用化） |
-| 3 | `tqd_model_snapshot` | `connection_id, mdl_hash, mdl_json JSONB, source(pull\|push), model_count, synced_at, synced_by, status(ok\|failed), error_message` | FK→1；IDX `(connection_id, synced_at DESC)` | FR-CFG-3, Q4 |
-| 4 | `tqd_catalog_item` | `connection_id, kind(table\|column\|model\|relationship\|metric\|dimension\|view), parent_key, item_key, display_name, data_type, is_primary_key, is_time_dimension, is_email, description, expression, source(db_meta\|mdl), in_scope, sensitive_level(none\|low\|high), mask_rule, last_seen_at` | FK→1；**UK `(connection_id, item_key)`**；IDX `(connection_id, kind)`、`(connection_id, parent_key)`、`(connection_id, in_scope)` | FR-INV-1/2/3, FR-ACC-3 |
-| 5 | `tqd_scope_policy` | `connection_id, subject_type(global\|role\|dept\|user\|store), subject_id, item_key, allow, effective, remark, created_by` | **UK `(connection_id, subject_type, subject_id, item_key)`**；IDX `(connection_id, subject_type, subject_id)` | FR-INV-3/4（v1.9：subject_type 可含 store 门店主体） |
-| 6 | `tqd_table_acl` | `connection_id, subject_type(role\|dept\|user\|store), subject_id, item_key, action(ask\|manage), row_scope JSONB, created_by` | **UK `(connection_id, subject_type, subject_id, item_key, action)`**；CHECK `action IN ('ask','manage')`；IDX `(connection_id, subject_type, subject_id, action)`；`row_scope` NULL=全行可见（向后兼容）；**v1.9：`row_scope` 语义为「维度注册表实例」（可含多维度 AND 叠加，见 §4.2.2 A）** | FR-PERM-2/4, **A11 行级范围** |
-| 7 | `tqd_row_scope_dimension` | **（v1.9 一期新增）** `dimension_code PK, dimension_name, predicate_type(PATH_PREFIX\|ENUM), column_name, header_name, param_whitelist JSONB, dict_table, auto_mode, enabled, sort, created_at, updated_at` | PK `dimension_code`；UK `(header_name)`；IDX `(enabled, sort)`；**一期种子：`dept` + `store` 两条（见 §4.2.2 D.8.1）** | **A11 行级范围维度注册表（v1.9 一期必做）** |
-| 8 | `tqd_sql_pair` | `connection_id, question, sql_text, remark, enabled, wren_ref_id, sync_status(pending\|synced\|failed), synced_at, created_by` | FK→1；IDX `(connection_id, sync_status)` | FR-ACC-1 |
-| 9 | `tqd_knowledge` | `connection_id, kind(term\|metric_definition\|synonym\|instruction), title, content, related_item_keys JSONB, source(local\|kb_s07), kb_term_id, enabled, wren_ref_id, sync_status, synced_at` | FK→1；IDX `(connection_id, kind)`、`(kb_term_id)` | FR-ACC-2/4, Q8 |
-| 10 | `tqd_mask_rule` | `name, match_type(column_name\|regex\|semantic_tag), pattern, rule(phone\|idcard\|email\|amount\|full\|custom), replacement, priority, enabled` | UK `(name)`；IDX `(enabled, priority)` | FR-PERM-3 |
-| 11 | `tqd_ask_log` | `trace_id, session_id, thread_id, query_id, user_id, employee_id, role_codes JSONB, question, resolved_scope JSONB, status, wren_status_trail JSONB, sql_text, sql_dialect, summary, citations JSONB, plan_steps JSONB, row_count, masked_columns JSONB, latency_ms, error_code, error_message, view_mode` | IDX `(user_id, created_at DESC)`、`(trace_id)`、`(status, created_at DESC)` | FR-PERM-5, FR-TEST-3, FR-PLAN-1, NFR-4/7 |
+| 1 | `iqd_connection` | `name, base_url, auth_type(api_key\|bearer\|none), secret_ref, project_id, default_connector, timeout_seconds, language, status(active\|inactive\|error), last_health_at, last_health_msg, enabled` | UK `(name)`；一期业务上仅一条 `enabled=true` | FR-CFG-1/2/4 |
+| 2 | `iqd_datasource` | `connection_id, connector_type, display_name, catalog_name, schema_name, credential_ref, enabled, scope_sync_enabled` | FK→1；UK `(connection_id, display_name)` | FR-CFG-2, Q10（**v1.7**：`dept_scope_sync_enabled` 标记该库是否启用 mis_dept_scope 字典同步——接入新库的一次性注册项，非权限配置，见 D.6.4；**v1.9 改名 `scope_sync_enabled`**：同步作业按维度注册表遍历 dept/store 字典，字段语义通用化） |
+| 3 | `iqd_model_snapshot` | `connection_id, mdl_hash, mdl_json JSONB, source(pull\|push), model_count, synced_at, synced_by, status(ok\|failed), error_message` | FK→1；IDX `(connection_id, synced_at DESC)` | FR-CFG-3, Q4 |
+| 4 | `iqd_catalog_item` | `connection_id, kind(table\|column\|model\|relationship\|metric\|dimension\|view), parent_key, item_key, display_name, data_type, is_primary_key, is_time_dimension, is_email, description, expression, source(db_meta\|mdl), in_scope, sensitive_level(none\|low\|high), mask_rule, last_seen_at` | FK→1；**UK `(connection_id, item_key)`**；IDX `(connection_id, kind)`、`(connection_id, parent_key)`、`(connection_id, in_scope)` | FR-INV-1/2/3, FR-ACC-3 |
+| 5 | `iqd_scope_policy` | `connection_id, subject_type(global\|role\|dept\|user\|store), subject_id, item_key, allow, effective, remark, created_by` | **UK `(connection_id, subject_type, subject_id, item_key)`**；IDX `(connection_id, subject_type, subject_id)` | FR-INV-3/4（v1.9：subject_type 可含 store 门店主体） |
+| 6 | `iqd_table_acl` | `connection_id, subject_type(role\|dept\|user\|store), subject_id, item_key, action(ask\|manage), row_scope JSONB, created_by` | **UK `(connection_id, subject_type, subject_id, item_key, action)`**；CHECK `action IN ('ask','manage')`；IDX `(connection_id, subject_type, subject_id, action)`；`row_scope` NULL=全行可见（向后兼容）；**v1.9：`row_scope` 语义为「维度注册表实例」（可含多维度 AND 叠加，见 §4.2.2 A）** | FR-PERM-2/4, **A11 行级范围** |
+| 7 | `iqd_row_scope_dimension` | **（v1.9 一期新增）** `dimension_code PK, dimension_name, predicate_type(PATH_PREFIX\|ENUM), column_name, header_name, param_whitelist JSONB, dict_table, auto_mode, enabled, sort, created_at, updated_at` | PK `dimension_code`；UK `(header_name)`；IDX `(enabled, sort)`；**一期种子：`dept` + `store` 两条（见 §4.2.2 D.8.1）** | **A11 行级范围维度注册表（v1.9 一期必做）** |
+| 8 | `iqd_sql_pair` | `connection_id, question, sql_text, remark, enabled, wren_ref_id, sync_status(pending\|synced\|failed), synced_at, created_by` | FK→1；IDX `(connection_id, sync_status)` | FR-ACC-1 |
+| 9 | `iqd_knowledge` | `connection_id, kind(term\|metric_definition\|synonym\|instruction), title, content, related_item_keys JSONB, source(local\|kb_s07), kb_term_id, enabled, wren_ref_id, sync_status, synced_at` | FK→1；IDX `(connection_id, kind)`、`(kb_term_id)` | FR-ACC-2/4, Q8 |
+| 10 | `iqd_mask_rule` | `name, match_type(column_name\|regex\|semantic_tag), pattern, rule(phone\|idcard\|email\|amount\|full\|custom), replacement, priority, enabled` | UK `(name)`；IDX `(enabled, priority)` | FR-PERM-3 |
+| 11 | `iqd_ask_log` | `trace_id, session_id, thread_id, query_id, user_id, employee_id, role_codes JSONB, question, resolved_scope JSONB, status, wren_status_trail JSONB, sql_text, sql_dialect, summary, citations JSONB, plan_steps JSONB, row_count, masked_columns JSONB, latency_ms, error_code, error_message, view_mode` | IDX `(user_id, created_at DESC)`、`(trace_id)`、`(status, created_at DESC)` | FR-PERM-5, FR-TEST-3, FR-PLAN-1, NFR-4/7 |
 
 **`item_key` 稳定键规范（跨表 JOIN 的唯一口径，务必统一）**
 
@@ -897,13 +897,13 @@ classDiagram
 **「三层两套」权限模型映射（对齐 KB `kb_category_admin` / `kb_acl`）**
 
 ```text
-第 1 层  tqd_scope_policy (subject_type=global)   ← 治理层：平台整体「哪些表进入问数范围」
-第 2 层  tqd_scope_policy (subject_type=role|dept|user) ← 差异化范围模板（FR-INV-4）
-第 3 层  tqd_table_acl action='ask'               ← 可问/可见语义（类比 kb_acl read）
-         tqd_table_acl action='manage'            ← 管辖/授权语义（类比 kb_acl manage）
+第 1 层  iqd_scope_policy (subject_type=global)   ← 治理层：平台整体「哪些表进入问数范围」
+第 2 层  iqd_scope_policy (subject_type=role|dept|user) ← 差异化范围模板（FR-INV-4）
+第 3 层  iqd_table_acl action='ask'               ← 可问/可见语义（类比 kb_acl read）
+         iqd_table_acl action='manage'            ← 管辖/授权语义（类比 kb_acl manage）
 
 最终可问表集合 = 全局范围 ∩ (主体范围模板 ∪ 主体 ask ACL)
-授权入口资格   = tqd_table_acl action='manage' ∨ 全局管理员角色码（沿用 mis.kb.admin.global-role-codes 同款配置项）
+授权入口资格   = iqd_table_acl action='manage' ∨ 全局管理员角色码（沿用 mis.kb.admin.global-role-codes 同款配置项）
 双口径         = 后台管理页用 manage 口径；用户端问数用 ask 口径
 ```
 
@@ -914,18 +914,18 @@ classDiagram
 | # | 方案 | 机制一句话 | 典型实现 | 优点 | 局限 | 平台现状 | 分期 |
 |---|---|---|---|---|---|---|---|
 | ① | **行级数据范围（RLS / WHERE 注入）** | 不止「能否问这张表」，而是「能问表里哪些行」：角色/部门/用户 → 行条件（tenant_id / dept_id / created_by），执行前注入 SQL 的 WHERE | DB 原生 RLS（PostgreSQL）、视图+安全上下文、中间件 WHERE 注入（生成 SQL 后平台侧改写） | 粒度细、贴近业务（销售只看本部门）；天然防跨部门越权 | 注入改写 SQL 有语法风险（JOIN/子查询/聚合复杂）；语义层生成 SQL 结构不稳定时注入易错；需逐表配条件模板，治理成本高 | **缺失**（mis-org 已有组织数据范围 dept 树/数据权限，可复用为条件来源；问数链路现无行级注入） | **本期（✅ A11 已确认 2026-08-22，详见 §4.2.2）** |
-| ② | **语义层/指标级授权（MDL 裁剪）** | 权限挂在语义模型的 model/metric/dimension 上，只暴露授权模型给 LLM/用户；未授权模型不进上下文、不生成 SQL | WrenAI 按 project/MDL 隔离；平台按角色裁剪 MDL 下发；语义层内置 metric 权限 | 授权点贴近「业务概念」而非物理表，治理体验好；模型级裁剪直接缩小 LLM 上下文 | 粒度粗（模型/指标级，行级仍需另配）；多 project 运维成本；MDL 与表 ACL 需一致性维护 | **部分**：现有「清单+范围勾选」已支持 `item_key` 到 model/metric/dimension 粒度的准入表达（`tqd_scope_policy`），但未做按角色的 MDL 裁剪下发，靠前置提示+后置校验执行 | 本期（维持现状表达）；二期（按角色 MDL 裁剪下发） |
+| ② | **语义层/指标级授权（MDL 裁剪）** | 权限挂在语义模型的 model/metric/dimension 上，只暴露授权模型给 LLM/用户；未授权模型不进上下文、不生成 SQL | WrenAI 按 project/MDL 隔离；平台按角色裁剪 MDL 下发；语义层内置 metric 权限 | 授权点贴近「业务概念」而非物理表，治理体验好；模型级裁剪直接缩小 LLM 上下文 | 粒度粗（模型/指标级，行级仍需另配）；多 project 运维成本；MDL 与表 ACL 需一致性维护 | **部分**：现有「清单+范围勾选」已支持 `item_key` 到 model/metric/dimension 粒度的准入表达（`iqd_scope_policy`），但未做按角色的 MDL 裁剪下发，靠前置提示+后置校验执行 | 本期（维持现状表达）；二期（按角色 MDL 裁剪下发） |
 | ③ | **按角色 DB 代理账户（per-role profile）** | 不同角色映射不同数据库账号，由 DB 原生 grants/RLS 兜底行级+列级；问数链路按请求者角色切换 profile | WrenAI `wren profile` 多 profile；DB 端按角色建账号+grants+RLS policy；网关按 JWT 角色路由 | DB 层强制，天然防 SQL 注入绕行；行级列级一次配齐；审计落在 DB 层 | profile 数量=角色矩阵，管理爆炸；会话/连接池切换成本；与「一期单 profile」假设冲突（Q1/A2） | **缺失**（一期 `wren_profile_name` 单 profile） | **二期** |
 | ④ | **查询防火墙/后置校验（Query Guardrail）** | 对 LLM 生成的 SQL 做统一防线：只读强制、禁 SELECT *、禁危险函数/多语句、行数/超时/代价上限；血缘/表集合后置校验，越权即拒（fail-closed） | sqlglot 解析+白名单校验+LIMIT 注入+超时熔断；平台已有 sqlglot 血缘 fail-closed（D2）属此族 | 兜底能力强，不依赖 LLM 自觉；可统一实施（防注入、防大查询打爆库）；审计友好 | 解析器可能误判方言/复杂 SQL；规则过严伤可用性；是「事后拦截」非「事前授权」，需与前置收窄配合 | **部分**：血缘 fail-closed（D2）已规划；只读由 WrenAI 默认只读兜底；`row_count` 上限已规划；超时熔断已规划 | **本期（收口为统一检查链）** |
-| ⑤ | **动态脱敏（Dynamic Masking）** | 列级脱敏独立于授权维度：授权决定「能否访问该列」，脱敏决定「看到的值是否变形」（138****0000），可按角色分脱敏强度 | `masking.py` 唯一出口 + `tqd_mask_rule` + `sensitive_level`；管理员明文/业务员脱敏 | 轻量，无需拆表/拆视图；满足合规；与表级 ACL 正交叠加 | 脱敏≠权限（列仍在结果中，防「看值」不防「知道存在」）；聚合场景脱敏语义难定；正则匹配有漏网 | **已有**（`masking.py` 唯一出口 + 规则表 + sensitive_level，对齐 03-security §9.3） | 本期（保持） |
+| ⑤ | **动态脱敏（Dynamic Masking）** | 列级脱敏独立于授权维度：授权决定「能否访问该列」，脱敏决定「看到的值是否变形」（138****0000），可按角色分脱敏强度 | `masking.py` 唯一出口 + `iqd_mask_rule` + `sensitive_level`；管理员明文/业务员脱敏 | 轻量，无需拆表/拆视图；满足合规；与表级 ACL 正交叠加 | 脱敏≠权限（列仍在结果中，防「看值」不防「知道存在」）；聚合场景脱敏语义难定；正则匹配有漏网 | **已有**（`masking.py` 唯一出口 + 规则表 + sensitive_level，对齐 03-security §9.3） | 本期（保持） |
 | ⑥ | **检索上下文裁剪（Retrieval-scoped）** | 把授权 schema 收窄到 LLM 的输入上下文：只把「该角色可问的表/模型/知识」喂给检索与生成，未授权对象不出现在 LLM 面前 | `ScopeResolver` 前置裁定 → MCP `get_context(role_scope)` 注入角色可见上下文；`allowed_tables` 传入 `ask` | 从源头防越权（LLM 不知道就生成不了）；顺带提升准确度；成本低 | 是「软约束」——LLM 可能推导/幻觉出未授权表，必须配后置校验；粒度受 MCP 工具参数限制 | **已有（部分）**：`get_context` + `allowed_tables` 前置收窄已规划（D2 手段①） | 本期（保持） |
-| ⑦ | **审计（Audit）** | 记录「谁问了什么、见了什么、结果如何」：问题、角色、命中表/模型、SQL、脱敏后结果摘要、状态，全链路可回查 | `tqd_ask_log`（投影前写全量）+ BFF `@OperLog` 配置/授权变更审计 + `tqd:trace:view` 后台回查 | 合规必需；故障排错；发现异常行为（批量拉取、越权尝试） | 存储成本；日志本身含 SQL 属敏感数据需权限+脱敏；「事后发现」不能替代「事前拦截」 | **已有**（`tqd_ask_log` 10 表之一 + 双写审计） | 本期（保持） |
+| ⑦ | **审计（Audit）** | 记录「谁问了什么、见了什么、结果如何」：问题、角色、命中表/模型、SQL、脱敏后结果摘要、状态，全链路可回查 | `iqd_ask_log`（投影前写全量）+ BFF `@OperLog` 配置/授权变更审计 + `iqd:trace:view` 后台回查 | 合规必需；故障排错；发现异常行为（批量拉取、越权尝试） | 存储成本；日志本身含 SQL 属敏感数据需权限+脱敏；「事后发现」不能替代「事前拦截」 | **已有**（`iqd_ask_log` 10 表之一 + 双写审计） | 本期（保持） |
 | ⑧ | **ABAC / 属性策略** | 不按角色静态枚举，而按主体/资源/环境属性动态评估（user.dept ∈ resource.dept_path、数据分级、时间窗、IP），策略引擎统一裁决 | OPA/CASL 策略引擎；mis-org 组织属性（dept 树、数据权限）+ 数据分级（sensitive_level）作为属性；`ScopeResolver` 升级为策略评估器 | 表达力强（「本部门及其下级 + 密级≤机密」）；组织变更无需重配 ACL；与行级范围天然契合 | 策略引擎引入复杂度与调试成本；规则写错影响面大；每次问数评估有性能成本；过度设计风险 | **缺失**（现为 RBAC 风格 role/dept/user 枚举 + 范围模板） | **不做**（一期「角色/部门范围模板 + mis-org 数据权限」够用；留作二期演进，避免过度设计） |
 
 **推荐「最短可行权限组合」（五件套，本期落地）**
 
 ```text
-表级 ACL（可问表集合） + 行级数据范围（RLS 注入，复用 mis-org） + 列脱敏（masking） + 查询防火墙（血缘 fail-closed + 只读/上限）+ 审计（tqd_ask_log）
+表级 ACL（可问表集合） + 行级数据范围（RLS 注入，复用 mis-org） + 列脱敏（masking） + 查询防火墙（血缘 fail-closed + 只读/上限）+ 审计（iqd_ask_log）
 语义层授权（②）与检索裁剪（⑥）作为「软前置」已内嵌于双闸门（D2 手段①②），不再单列任务
 ```
 
@@ -933,7 +933,7 @@ classDiagram
 
 **行级数据范围（①）——最小实现要点（✅ A11 已确认本期 2026-08-22，完整设计见 §4.2.2；以下为演进要点摘录）**
 
-1. **数据模型**：`tqd_table_acl` 追加 `row_scope`（文本/JSONB 条件模板，如 `{"tenant_id":"{{user.tenant_id}}"}`、`dept_id IN ({{user.dept_ids}})`）。行条件是「可问表」授权的细化（与 `action=ask` 正交），故挂 ACL 而非 `tqd_scope_policy`（后者保留「范围开关」语义）。
+1. **数据模型**：`iqd_table_acl` 追加 `row_scope`（文本/JSONB 条件模板，如 `{"tenant_id":"{{user.tenant_id}}"}`、`dept_id IN ({{user.dept_ids}})`）。行条件是「可问表」授权的细化（与 `action=ask` 正交），故挂 ACL 而非 `iqd_scope_policy`（后者保留「范围开关」语义）。
 2. **条件来源**：复用 mis-org 组织数据范围（dept 树、数据权限）。BFF 注入 **`X-Mis-Dept-Scope`（锚点 + 范围语义，v1.4 主推）** / `X-Mis-Orgs` / `X-Mis-Depts`（小规模兼容）头 → Worker 侧按 `resolve_inject_strategy` 展开身份属性（dept_id / dept_path / org_path / tenant_id）成**参数化/白名单**字面量（禁止字符串拼接进 SQL，防注入）。
 3. **注入时机与方式**：`AskOrchestrator` 在 MCP `run_sql` **之前**对 SQL 做 WHERE 注入：
    - 用 sqlglot 解析 AST，为涉及「带 row_scope 的表」的查询注入 `AND` 条件（无 WHERE 则补 WHERE），注入点精确到表别名。
@@ -945,10 +945,10 @@ classDiagram
 
 ### 4.2.2 行级数据范围（RLS）设计细节（✅ A11 已确认本期，2026-08-22；v1.4 规模策略修订；v1.5 A12 拍板落盘；v1.6 部门权限字典表方案落盘；v1.7 A13 拍板 + 配置模型澄清落盘；v1.8 A1/A5 拍板 + 行级权限放置/扩展设计落盘；v1.9 维度注册表一期 + 双维度 + 落库改道落盘）
 
-> 目标一句话：**「问得到什么表」由表级 ACL 定，「表里哪些行」由行级范围定**。行级范围 = 在「主体 × 表」的可问授权（`tqd_table_acl action=ask`）之上再叠加行条件；WrenAI 无行级概念，行条件必须由平台侧注入 SQL，注入后仍走血缘 → `dry_run` → `run_sql` → 脱敏 → 审计链路。
+> 目标一句话：**「问得到什么表」由表级 ACL 定，「表里哪些行」由行级范围定**。行级范围 = 在「主体 × 表」的可问授权（`iqd_table_acl action=ask`）之上再叠加行条件；WrenAI 无行级概念，行条件必须由平台侧注入 SQL，注入后仍走血缘 → `dry_run` → `run_sql` → 脱敏 → 审计链路。
 > 核心场景：**A 部门的用户不能看 B 部门的销售数据；A 门店的运营不能看 B 门店的数据**（v1.9 双维度：部门 + 门店，复用平台数据权限，BFF 按维度注册表遍历注入可见范围）。
 >
-> ✅ **v1.9 三处重大修订落盘（2026-08-22，业务已确认，主理人记录）**：① **A1 改判——落库改道**：表级 ACL 等 `tqd_*` 问数配置**落 `mis_platform` 库**（对齐 mis_kb 项目范式，Java 侧 `backend/mis-tqd` 管理，ADR-020 替代 ADR-019，见 §1.5/§8 A1）；② **维度注册表提前一期 + 双维度一期**：`tqd_row_scope_dimension` 从二期 P2 提为**一期必做**，`row_scope.type` 由「`org_auto` 特例 + `template` 通用」改为「**维度注册表驱动**」（`row_scope = {"dimension":"dept|store", ...}`，删 org_auto 特例表述），一期同时支持「部门权限 + 门店权限」两个维度（**一表可多维度 AND 叠加**，见 D.8）；③ **Worker 配置消费改道**：Worker 不直连 mis_platform 库，经 **mis-tqd 配置读取 API + 本地缓存 + 变更事件/定期刷新** 消费（fail-closed 45204 不变，见 D.7.3）；BFF 头注入按维度注册表遍历（`X-Mis-Dept-Scope` + `X-Mis-Stores`，见 D.8.4）。
+> ✅ **v1.9 三处重大修订落盘（2026-08-22，业务已确认，主理人记录）**：① **A1 改判——落库改道**：表级 ACL 等 `iqd_*` 问数配置**落 `mis_platform` 库**（对齐 mis_kb 项目范式，Java 侧 `backend/mis-iqd` 管理，ADR-020 替代 ADR-019，见 §1.5/§8 A1）；② **维度注册表提前一期 + 双维度一期**：`iqd_row_scope_dimension` 从二期 P2 提为**一期必做**，`row_scope.type` 由「`org_auto` 特例 + `template` 通用」改为「**维度注册表驱动**」（`row_scope = {"dimension":"dept|store", ...}`，删 org_auto 特例表述），一期同时支持「部门权限 + 门店权限」两个维度（**一表可多维度 AND 叠加**，见 D.8）；③ **Worker 配置消费改道**：Worker 不直连 mis_platform 库，经 **mis-iqd 配置读取 API + 本地缓存 + 变更事件/定期刷新** 消费（fail-closed 45204 不变，见 D.7.3）；BFF 头注入按维度注册表遍历（`X-Mis-Dept-Scope` + `X-Mis-Stores`，见 D.8.4）。
 >
 > ⚠️ **v1.4 规模修订背景（主理人确认：mis-org 部门树规模上万）**：v1.3 的「`X-Mis-Depts` 注入**全量可见部门集合** → 展开为 `column IN (上万ID)`」**不可行**，四重约束：① SQL 语句体积（上万 ID × ~15 字符 ≈ 数百 KB）；② 优化器退化（上万 IN 退全表/哈希）；③ WrenAI wren-core（Rust/DataFusion）parser/plan 对超大 IN 很可能拒绝（未实测，见 W0 探针）；④ **HTTP 请求头大小限制（8KB~64KB），`X-Mis-Depts` 本身装不下上万 ID**。故 v1.4 修订为：**头语义改「锚点 + 范围语义」（新增 `X-Mis-Dept-Scope`，见 B），注入前增加规模分层策略层 `resolve_inject_strategy`（见 C），新增待拍板 A12（物化 `dept_path`，见 §8）**。
 >
@@ -960,9 +960,9 @@ classDiagram
 >
 > ✅ **v1.8 A1/A5 拍板 + 行级权限放置/扩展设计落盘（2026-08-22，业务已确认，主理人记录）**：A1 当时确认——**表级 ACL 等 `wren_*` 问数配置落 `ai_platform` 库（Python 侧统一管理，BFF 经 HTTP 读写，不新建 Java 领域服务）**（**v1.9 已业务改判**，见上）；A5 已确认——**列级隔离本期不做，预留后期方案**。新增 **D.7 行级权限数据「如何放置、如何使用」**（三层放置 + 使用链路，业务提问①的直接回答）与 **D.8 行级权限维度扩展设计**（`row_scope.type` 扩展点 / 维度注册表二期 P2 / 扩展步骤模板 + 门店示例 / 列级隔离预留位点，业务提问②的直接回答），见下。
 
-#### A. 数据模型：`tqd_table_acl.row_scope`（JSONB）
+#### A. 数据模型：`iqd_table_acl.row_scope`（JSONB）
 
-`tqd_table_acl` 追加一列：
+`iqd_table_acl` 追加一列：
 
 | 列 | 类型 | 约束 | 说明 |
 |---|---|---|---|
@@ -970,13 +970,13 @@ classDiagram
 
 **v1.9 语义：维度注册表驱动（替代 v1.8 的 `type` 双模式 `org_auto`/`template`）**
 
-> **改判**：`row_scope` 的 `type` 字段（`org_auto` 特例 + `template` 通用）**废弃**，改为 **`dimension` 引用维度注册表**（`tqd_row_scope_dimension`，一期种子 `dept` + `store`）。`org_auto` 的便利（自动跟随平台数据权限、scope 语义、path 列等）**并入 dept 维度定义**，不再作为特例；`template` 的自由表达式能力由「维度定义 + 参数绑定」覆盖（见下「参数绑定」）。
+> **改判**：`row_scope` 的 `type` 字段（`org_auto` 特例 + `template` 通用）**废弃**，改为 **`dimension` 引用维度注册表**（`iqd_row_scope_dimension`，一期种子 `dept` + `store`）。`org_auto` 的便利（自动跟随平台数据权限、scope 语义、path 列等）**并入 dept 维度定义**，不再作为特例；`template` 的自由表达式能力由「维度定义 + 参数绑定」覆盖（见下「参数绑定」）。
 
 ```jsonc
 // 单个维度实例（row_scope 可含一个或多个维度，多个 = AND 叠加，v1.9 支持）
 {
-  "dimension": "dept",                 // 引用 tqd_row_scope_dimension.dimension_code（dept | store | …）
-  "column": "dept_id",                 // 该表绑定的列（来自 tqd_catalog_item 列元数据下拉；缺省取注册表 column_name）
+  "dimension": "dept",                 // 引用 iqd_row_scope_dimension.dimension_code（dept | store | …）
+  "column": "dept_id",                 // 该表绑定的列（来自 iqd_catalog_item 列元数据下拉；缺省取注册表 column_name）
   "scope": "dept_subtree",             // 维度内范围语义（dept: dept|dept_subtree|org|self；store: store|store_subtree）
   "params": [                          // 参数绑定（运行时值来源白名单由注册表 param_whitelist 约束）
     {"name": "dept_scope", "source": "header:X-Mis-Dept-Scope", "data_type": "json"}
@@ -996,8 +996,8 @@ classDiagram
 
 | 字段 | 取值 | 语义 |
 |---|---|---|
-| `dimension` | `dept` / `store` / …（必须命中 `tqd_row_scope_dimension.dimension_code`） | 维度注册表引用（一期种子两条，见 D.8.1） |
-| `column` | 该表字段（来自 `tqd_catalog_item` 列元数据下拉；缺省取注册表 `column_name`） | 行条件绑定的列 |
+| `dimension` | `dept` / `store` / …（必须命中 `iqd_row_scope_dimension.dimension_code`） | 维度注册表引用（一期种子两条，见 D.8.1） |
+| `column` | 该表字段（来自 `iqd_catalog_item` 列元数据下拉；缺省取注册表 `column_name`） | 行条件绑定的列 |
 | `scope` | 维度相关：`dept` / `dept_subtree` / `org` / `self` / `store` / `store_subtree` | 维度内范围语义（对齐 03-security §6.2 data_scope；store 见 D.9.1） |
 | `params` | 参数绑定数组：`name` + `source` + `data_type` | 运行时值来源；**来源白名单由注册表 `param_whitelist` 约束**（不再每行 scope 自由写） |
 | `enabled` | bool | 软开关（保留配置、临时停用） |
@@ -1011,7 +1011,7 @@ classDiagram
 
 **一张表是否允许多个维度（v1.9 改判：一期支持，AND 叠加）**：**允许**——一期「部门权限 + 门店权限」很可能同表共存（如销售表既有 dept_id 又有 store_id，区域经理按部门、店长按门店），故 `row_scope` 支持**多维度数组，注入时按维度逐一追加 AND 条件**。理由：① 业务明确要求双维度一期（用户拍板）；② 注入算法按维度遍历（每维度独立谓词 + 独立 fail-closed），组合由 AND 收敛，复杂度可控（每维度仍单条件，避免「同维度多条件」的组合爆炸）；③ 覆盖性校验按维度分别判定（某维度注入失败 → 拒绝 45204，不部分放行）。
 
-**编排关系（与表级 ACL）**：先配表级可问（`action=ask`）→ 再配行级（维度实例）；`row_scope=NULL` = 全行可见（向后兼容）；撤销 ACL 时随行删除；保存后经 **mis-tqd 变更事件推送 + Worker 缓存刷新**生效（v1.9：由「无缓存立即生效」改为「变更事件推送，默认 ≤10s 生效；缓存不可得 fail-closed 45204」，见 D.7.3/§7.9 修订）。
+**编排关系（与表级 ACL）**：先配表级可问（`action=ask`）→ 再配行级（维度实例）；`row_scope=NULL` = 全行可见（向后兼容）；撤销 ACL 时随行删除；保存后经 **mis-iqd 变更事件推送 + Worker 缓存刷新**生效（v1.9：由「无缓存立即生效」改为「变更事件推送，默认 ≤10s 生效；缓存不可得 fail-closed 45204」，见 D.7.3/§7.9 修订）。
 
 #### A.1 身份头语义（v1.4：锚点 + 范围语义，替代全量枚举）
 
@@ -1057,21 +1057,21 @@ X-Mis-Stores: ["S001","S002"]                    # 扁平 ENUM（一期默认，
 X-Mis-Stores: [{"id":"S001","path":"/R01/S001/"}]  # 有层级且物化 store_path 时的锚点+path 形态（二期演进，见 D.9.1）
 ```
 
-- **注入方**：BFF `TqdIdentityHeaderService` 按维度注册表遍历——用户有门店数据权限（平台 RBAC `perm_type=store` 扩展 / 一期 `user.store_ids` 最小实现，见 D.9.2）则注入 `X-Mis-Stores`（可见门店集合/锚点），有部门权限则注入 `X-Mis-Dept-Scope`；**无该维度授权则不注入该维度**。
-- **降级语义（v1.9 定案）**：`tqd_table_acl.row_scope` 配置了某维度，但请求**无该维度对应头** → **fail-closed 45204**（该维度无法判定 → 拒绝，不降级为全行可见）；维度未配置 → 不影响（全行可见）。
+- **注入方**：BFF `IqdIdentityHeaderService` 按维度注册表遍历——用户有门店数据权限（平台 RBAC `perm_type=store` 扩展 / 一期 `user.store_ids` 最小实现，见 D.9.2）则注入 `X-Mis-Stores`（可见门店集合/锚点），有部门权限则注入 `X-Mis-Dept-Scope`；**无该维度授权则不注入该维度**。
+- **降级语义（v1.9 定案）**：`iqd_table_acl.row_scope` 配置了某维度，但请求**无该维度对应头** → **fail-closed 45204**（该维度无法判定 → 拒绝，不降级为全行可见）；维度未配置 → 不影响（全行可见）。
 - **空数组语义**：`X-Mis-Stores: []`（BFF 注入空集）= 该维度全量可见（受信 BFF 保证，对齐 `X-Mis-Dept-Scope: []` 语义），不注入该维度谓词。
 
 #### B. 权限设置（后台管理交互；v1.9：行级范围配置改为「选维度 + 绑定列 + 参数来源」）
 
-「问数范围」页（`/agent/tqd/scope`，含 `tqd-acl-dialog.tsx` 行级区块）对某张已授权表设置行级条件的交互：
+「问数范围」页（`/agent/iqd/scope`，含 `iqd-acl-dialog.tsx` 行级区块）对某张已授权表设置行级条件的交互：
 
-1. **入口**：ACL 授权弹窗 / 范围表格行内点「配置行级范围」（仅 `tqd:acl:grant` / `tqd:scope:manage` 可见）。
-2. **选维度（v1.9 替代原「模式选择」）**：维度下拉（数据来自 `tqd_row_scope_dimension` 种子/注册表，一期 = `dept` 部门 / `store` 门店）→ 可**添加多个维度**（同表 AND 叠加）。
-3. **绑定列 + 参数来源**：列下拉（来自 `tqd_catalog_item kind=column`，缺省取注册表 `column_name`）→ 范围语义下拉（dept：本部门 / 本部门及下级 / 本组织 / 仅本人；store：本门店 / 门店及下级）→ 参数来源**只读展示**（由注册表 `param_whitelist` 约束：`X-Mis-Dept-Scope` / `X-Mis-Stores` 等）。
+1. **入口**：ACL 授权弹窗 / 范围表格行内点「配置行级范围」（仅 `iqd:acl:grant` / `iqd:scope:manage` 可见）。
+2. **选维度（v1.9 替代原「模式选择」）**：维度下拉（数据来自 `iqd_row_scope_dimension` 种子/注册表，一期 = `dept` 部门 / `store` 门店）→ 可**添加多个维度**（同表 AND 叠加）。
+3. **绑定列 + 参数来源**：列下拉（来自 `iqd_catalog_item kind=column`，缺省取注册表 `column_name`）→ 范围语义下拉（dept：本部门 / 本部门及下级 / 本组织 / 仅本人；store：本门店 / 门店及下级）→ 参数来源**只读展示**（由注册表 `param_whitelist` 约束：`X-Mis-Dept-Scope` / `X-Mis-Stores` 等）。
 4. **实时校验**：维度存在性 / 列存在性 / 参数来源在白名单内 → 「试算」输入示例参数值 → 生成 WHERE 片段预览。
 5. **生效前预览**：选择「模拟角色」（复用 `simulate_role_code`，A8 边界：仅模拟该角色真实集合，不放大）→ 展示该角色经**各维度**展开后的 WHERE 片段（dept 主路径：`dept_path = '/0/1/A/' OR dept_path LIKE '/0/1/A/%'`；store 扁平：`store_id IN ('S001','S002')`；多维度 AND 拼接），确认后保存。
 6. **平台数据权限 → 问数映射（v1.9 按维度注册表遍历）**：
-   - BFF `TqdIdentityHeaderService` 读维度注册表（缓存）→ 对每个已启用维度：**部门维度**按用户 data_scope（03-security §6.2）解析任职锚点注入 **`X-Mis-Dept-Scope`**（锚点+scope+path，体积 O(锚点数)）；**门店维度**按用户门店数据权限（RBAC `perm_type=store` 扩展，见 D.9.3）解析可见门店注入 **`X-Mis-Stores`**（扁平集合/锚点）；小规模兼容按需回填 `X-Mis-Depts`（≤ 枚举阈值）。模拟角色时按模拟角色重新解析注入（不放大权限）。
+   - BFF `IqdIdentityHeaderService` 读维度注册表（缓存）→ 对每个已启用维度：**部门维度**按用户 data_scope（03-security §6.2）解析任职锚点注入 **`X-Mis-Dept-Scope`**（锚点+scope+path，体积 O(锚点数)）；**门店维度**按用户门店数据权限（RBAC `perm_type=store` 扩展，见 D.9.3）解析可见门店注入 **`X-Mis-Stores`**（扁平集合/锚点）；小规模兼容按需回填 `X-Mis-Depts`（≤ 枚举阈值）。模拟角色时按模拟角色重新解析注入（不放大权限）。
    - Worker 消费：校验角色授权（表级 ACL 已通过）→ 对 `row_scope` 中**每个维度**取对应头 → 经 `resolve_inject_strategy`（见 C）选策略 → 按 `expand_predicate` 展开为行条件（AST 层渲染）→ 多维度 AND 拼接。
    - **无头 / 未登录（头缺失）且表配置了该维度 → fail-closed 45204**（无法判定身份行范围）。
    - **BFF 注入 `[]`（空锚点数组）= 全量可见（无行级限制）**：该语义由受信 BFF 保证（仅配合合法 MIS JWT 生效，对齐 R5），此时授权谓词为「真」、不注入。
@@ -1086,7 +1086,7 @@ get_context（前置：可见表清单 + 每表行条件描述）
   → inject_row_scope（后置 fail-closed：逐表注入 / 覆盖性校验）
   → dry_run 确认
   → run_sql（执行注入后 SQL）
-  → 结果脱敏 → 审计（tqd_ask_log 记最终 SQL + 判定结果）
+  → 结果脱敏 → 审计（iqd_ask_log 记最终 SQL + 判定结果）
 ```
 
 > ⚠️ **关键约束**：绝不允许 WrenAI 直接执行未注入的 SQL 并把结果返回。若 MCP `ask` 内部自带执行，则对「命中 row_scope 表的连接」**禁用其结果**，一律走 dry 生成 → 注入 → run_sql；若 W0 实测 `ask` 无 dry 模式，命中行级表的连接固定走 `dry_plan → inject → dry_run → run_sql`。
@@ -1097,7 +1097,7 @@ get_context（前置：可见表清单 + 每表行条件描述）
 
 ```text
 resolve_inject_strategy(dimension, resolution, dialect) -> InjectStrategy
-  # 输入：dimension（tqd_row_scope_dimension 定义，predicate_type + dict_table + header_name）
+  # 输入：dimension（iqd_row_scope_dimension 定义，predicate_type + dict_table + header_name）
   #      + resolution.visible_scope[dimension]（锚点 + 范围语义，来自 X-Mis-Dept-Scope / X-Mis-Stores）+ 库能力探针结果
   # 输出：PATH_PREFIX | ENUM | FAIL_CLOSED（CLOSURE_CTE 已剔除，见策略表决策记录）
   # v1.9：dept 维度 predicate_type=PATH_PREFIX（主）/ ENUM（降级）；store 维度 predicate_type=ENUM（一期默认，见 D.9.1）
@@ -1136,7 +1136,7 @@ def resolve_inject_strategy(dimension, resolution, dialect):
 ```
 
 - **优先级结论（v1.5）：`PATH_PREFIX（主） > ENUM（降级） > FAIL_CLOSED（兜底）`**——有物化 `dept_path`（正常路径）必走 PATH_PREFIX，与规模无关；异常（未物化 / path 不可用 / 解析失败）且可见集合 ≤500 走 ENUM；其余 FAIL_CLOSED 45204。**CLOSURE_CTE 已剔除，不实现**（决策记录见策略表）。**v1.9 补充：store 维度一期默认 ENUM（扁平），dept 维度沿用 PATH_PREFIX 主路径**——谓词形态由维度注册表 `predicate_type` 声明，`resolve_inject_strategy` 按维度取形态。
-- **探测时机**：连接首次配置/自检时探一次（`probe_db_capabilities`），结果缓存于 `tqd_connection`（不每次问数探测）；W0 先对 wren-core 做 `dept_path LIKE` / 门店 `IN` 谓词实测（见 tasks.md T-W0-01 探针 3d）。
+- **探测时机**：连接首次配置/自检时探一次（`probe_db_capabilities`），结果缓存于 `iqd_connection`（不每次问数探测）；W0 先对 wren-core 做 `dept_path LIKE` / 门店 `IN` 谓词实测（见 tasks.md T-W0-01 探针 3d）。
 - 策略形态随 `RowScopeInjectOutcome` 返回（`strategy` 字段），便于审计与预览。
 
 **后置注入算法（伪代码级）**
@@ -1202,7 +1202,7 @@ def inject_row_scope(sql, dialect, resolution, identity) -> (final_sql, RowScope
 - **用户已有条件含 `NOT IN` / `<>` / 范围比较 / 函数包列 / 多列混合 / OR 跨列等**无法证明**形态 → **保守拒绝 45204**（宁可拒不可漏）。示例：授权 `dept_id IN ('A','A1','A2')`，已有 `dept_id = 'B'` → 拒绝（越权提示，不执行、不返回任何数据）。**v1.9 维度间独立**：dept 维度无法证明 → 整表拒绝；不会因 store 维度已证明而放行。
 - 授权谓词为纯常量（template 模式如 `status = 'closed'`）：AST 规范化后若已有条件已包含该谓词 → 幂等；否则 AND 注入（常量对全员相同，无越权语义）。
 
-**注入后**：`dry_plan` / `dry_run` 确认注入后 SQL 可解析可执行（行数/超时上限仍生效）→ `run_sql` → 结果脱敏（`MaskingEngine`，唯一出口）→ 审计（`tqd_ask_log.sql_text` 记**注入后最终 SQL**；`resolved_scope` JSONB 记 `{"row_scope": {"injected": {table: pred}, "verdict": "allow|deny", "original_sql": "..."}}`，不新增列）。
+**注入后**：`dry_plan` / `dry_run` 确认注入后 SQL 可解析可执行（行数/超时上限仍生效）→ `run_sql` → 结果脱敏（`MaskingEngine`，唯一出口）→ 审计（`iqd_ask_log.sql_text` 记**注入后最终 SQL**；`resolved_scope` JSONB 记 `{"row_scope": {"injected": {table: pred}, "verdict": "allow|deny", "original_sql": "..."}}`，不新增列）。
 
 **边界用例表**（黄金用例：A 角色问 B 部门数据被拒；授权条件以 `dept_id IN ('A','A1','A2')` 的 **ENUM 形态**为例，PATH_PREFIX 形态见规模分层用例 12/13/15）
 
@@ -1349,7 +1349,7 @@ CREATE INDEX idx_mis_dept_scope_mis  ON mis_dept_scope (mis_dept_id); -- 按平�
 CREATE TABLE mis_dept_mapping (             -- 中心侧表（mis_platform 库或 mis-org 侧，v1.9），非业务库表
     mis_dept_id BIGINT       NOT NULL,      -- 平台 mis-org 部门 id
     biz_dept_id VARCHAR(128) NOT NULL,      -- 业务库部门编码（字符串兼容 ODS 字符串编码）
-    datasource  VARCHAR(64)  NOT NULL,      -- 业务数据源标识（tqd_datasource.display_name）
+    datasource  VARCHAR(64)  NOT NULL,      -- 业务数据源标识（iqd_datasource.display_name）
     updated_at  TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
     PRIMARY KEY (mis_dept_id, biz_dept_id, datasource)
 );
@@ -1389,24 +1389,24 @@ WHERE deleted = 0;
 **D.6.4 物化表同步机制（✅ A13 已确认：非同一实例 → 物化表必选；中心侧每日全量 upsert）**
 
 - **载体定案（v1.7）**：物化表必选（视图不可行：业务库与 mis_platform 非同一实例，A13②）。D.6.1 的视图分支保留为「未来收敛」演进选项，**本期全部落地为物化表 + 中心每日同步**。
-- **同步任务归属（中心侧，明确放哪；v1.9 改 Java 侧）**：**v1.9 落定为 mis-tqd Java 侧定时作业**（`TqdScopeSyncJobService.sync_scope_dict_job`，数据管道形态）——mis-tqd 已是连接注册权威（`tqd_connection`/`tqd_datasource`）且管理全部 `tqd_*` 配置表（维度注册表/ACL/审计），同步作业按**维度注册表遍历**（dept/store 字典）读 mis-org / 门店主数据**只读数据** → 逐库 upsert，与 MDL/增强同步同域、运维面最小。**不推荐**放 mis-org 服务内（mis-org 无业务库连接注册、不应承担对外库写入职责）；如组织已有成熟数据管道（DataX/离线 ETL），可复用为载体，mis-tqd 只做触发与对账（v1.8 曾推荐 ai-platform 内定时作业 `TqdAdminService.sync_dept_scope_job`，随 A1 改判迁至 Java 侧，见 ADR-020）。
+- **同步任务归属（中心侧，明确放哪；v1.9 改 Java 侧）**：**v1.9 落定为 mis-iqd Java 侧定时作业**（`IqdScopeSyncJobService.sync_scope_dict_job`，数据管道形态）——mis-iqd 已是连接注册权威（`iqd_connection`/`iqd_datasource`）且管理全部 `iqd_*` 配置表（维度注册表/ACL/审计），同步作业按**维度注册表遍历**（dept/store 字典）读 mis-org / 门店主数据**只读数据** → 逐库 upsert，与 MDL/增强同步同域、运维面最小。**不推荐**放 mis-org 服务内（mis-org 无业务库连接注册、不应承担对外库写入职责）；如组织已有成熟数据管道（DataX/离线 ETL），可复用为载体，mis-iqd 只做触发与对账（v1.8 曾推荐 ai-platform 内定时作业 `IqdAdminService.sync_dept_scope_job`，随 A1 改判迁至 Java 侧，见 ADR-020）。
 - **频率与幂等**：**每日一次全量 upsert**（`INSERT … ON CONFLICT (dept_id) DO UPDATE SET dept_name=…, dept_path=…, mis_dept_id=…, updated_at=NOW()`，PG）；**重跑幂等**（不产生重复行、结果一致，验收标准「物化表同步幂等」）。**可选增量事件补充**：mis-org 部门变更（create/update/relocate/delete）后发事件 → 同步任务增量更新该部门及子孙（path 级联重算），缩短一致性窗口，但**不替代**每日全量兜底。
 - **失败处理（不静默放行）**：失败 → 指数退避重试（如 3 次）→ 仍失败 → **告警**（运维 + 平台管理员）→ 该连接字典表不可用 → 行级降级 **ENUM（≤500）/ FAIL_CLOSED（45204）**（对齐 §4.2.2 C 回退路径）；**绝不静默放行**（宁可不问，不可越权）。
-- **同步配置项（每库）**：`tqd_datasource` 新增 `scope_sync_enabled bool`（v1.9 由 `dept_scope_sync_enabled` 改名，语义通用化）——接入新业务库时在平台注册该库连接 + 启用字典同步（**一次性动作，非权限配置**）；同步作业按启用清单 + 维度注册表遍历执行（dept/store 字典，见 D.9.4）。
+- **同步配置项（每库）**：`iqd_datasource` 新增 `scope_sync_enabled bool`（v1.9 由 `dept_scope_sync_enabled` 改名，语义通用化）——接入新业务库时在平台注册该库连接 + 启用字典同步（**一次性动作，非权限配置**）；同步作业按启用清单 + 维度注册表遍历执行（dept/store 字典，见 D.9.4）。
 - **与平台统一配置的关系**：同步是**数据管道（数据面）**，权限是**配置矩阵（配置面）**，两者解耦——管理员在权限矩阵配置「角色 × 表 × row_scope」，与字典表如何被同步生成无关（详见 D.6.6）。
 - **「灵活生成」语义**：物化表 = 中心同步任务产物（平台侧维护，非手维护）；视图 = 未来同实例时 DBA/迁移脚本一次创建即持续生效（演进选项）。
 
 **D.6.5 多数据源形态与 MDL 关系（✅ A13 已确认：每库一张 + 中心每日同步）**
 
-- **多数据源：每库一张（✅ A13③ 已确认）**：WrenAI 单 project 多 connector 的跨源 JOIN 能力不确定（A9），若平台统一一张表在 `mis_platform` 库，业务库 SQL 里 JOIN 它仍是跨库。**结论：各业务库本地建 `mis_dept_scope` 物化表，注入改写只引用本库表名（默认 schema 内），无跨库**。每库一张的成本：**中心每日同步作业按 `tqd_connection`/`tqd_datasource` 参数化循环执行**（`scope_sync_enabled=true` 的清单，见 D.6.4；v1.9 同步作业归属改为 Java 侧 `TqdScopeSyncJobService`，见 D.7.1/D.9.4）；**集中定义从中心**（mis-org 主数据 + 映射）**每日同步到各库**（A13③，用户确认形态）。
-- **与 MDL 的关系**：`mis_dept_scope` 作为**专门字典表**注册进 WrenAI 项目 MDL 可见集合（`tqd_catalog_item` 有该表条目），**不纳入问数 ACL**（`tqd_scope_policy` 不勾选、`tqd_table_acl` 不给 `ask`）——普通问数 LLM 不会主动 SELECT 它，仅注入改写后的 SQL 引用。**边界语义**：WrenAI 侧只是「可见可引用」，真正的「不可问」由**平台侧 ACL 保证**（无 ask 授权 + 血缘校验 fail-closed 拦截直接问它）；若新线 MDL 支持 `visible=false` 标记（W0 探针核实项）则更干净，但**不依赖**它——平台 ACL 是权威。MDL 描述字段标记「内部字典表，仅行级注入使用，禁止直接问数」，降低 LLM 误用概率。
+- **多数据源：每库一张（✅ A13③ 已确认）**：WrenAI 单 project 多 connector 的跨源 JOIN 能力不确定（A9），若平台统一一张表在 `mis_platform` 库，业务库 SQL 里 JOIN 它仍是跨库。**结论：各业务库本地建 `mis_dept_scope` 物化表，注入改写只引用本库表名（默认 schema 内），无跨库**。每库一张的成本：**中心每日同步作业按 `iqd_connection`/`iqd_datasource` 参数化循环执行**（`scope_sync_enabled=true` 的清单，见 D.6.4；v1.9 同步作业归属改为 Java 侧 `IqdScopeSyncJobService`，见 D.7.1/D.9.4）；**集中定义从中心**（mis-org 主数据 + 映射）**每日同步到各库**（A13③，用户确认形态）。
+- **与 MDL 的关系**：`mis_dept_scope` 作为**专门字典表**注册进 WrenAI 项目 MDL 可见集合（`iqd_catalog_item` 有该表条目），**不纳入问数 ACL**（`iqd_scope_policy` 不勾选、`iqd_table_acl` 不给 `ask`）——普通问数 LLM 不会主动 SELECT 它，仅注入改写后的 SQL 引用。**边界语义**：WrenAI 侧只是「可见可引用」，真正的「不可问」由**平台侧 ACL 保证**（无 ask 授权 + 血缘校验 fail-closed 拦截直接问它）；若新线 MDL 支持 `visible=false` 标记（W0 探针核实项）则更干净，但**不依赖**它——平台 ACL 是权威。MDL 描述字段标记「内部字典表，仅行级注入使用，禁止直接问数」，降低 LLM 误用概率。
 
 **D.6.6 配置面 vs 数据面（v1.7 新增：用户疑问「这样设置部门权限/组织权限界面，是不是就需要选择一个一个库去设置了？」的权威回答）**
 
 > **结论一句话：不需要逐库设置权限。** 权限配置（角色 × 表 × 行级范围）是**平台统一一处**的「配置面」；`mis_dept_scope` 是**同步数据**（物化表，中心每日同步产物）而非配置——两者完全解耦。表清单按数据源分组只是展示层事实，不是「每库一套配置」。
 
 1. **权限配置（角色 × 表 × 行级范围）= 平台统一一处**：
-   - `tqd_table_acl` 是 mis_platform 库**全局一张表**（v1.9：由 ai_platform 改道，见 ADR-020），跨所有数据源统一管理；表标识 `item_key` 自带数据源前缀（`<data_source>.<schema>.<table>`，如 `pg_main.public.orders`，见 §4.2 item_key 规范），天然区分不同库的表，**无需逐库建配置**。
+   - `iqd_table_acl` 是 mis_platform 库**全局一张表**（v1.9：由 ai_platform 改道，见 ADR-020），跨所有数据源统一管理；表标识 `item_key` 自带数据源前缀（`<data_source>.<schema>.<table>`，如 `pg_main.public.orders`，见 §4.2 item_key 规范），天然区分不同库的表，**无需逐库建配置**。
    - 授权矩阵**全局展示**：行为角色、列为表（表按数据源分组），一次勾选即对全局生效；接入新数据源只影响「表清单里多一组分组」，授权矩阵仍是同一处。**不存在「逐库配置权限」。**
 2. **row_scope 模板化**：
    - 「角色 × 表」一格只配**一个/多个维度实例**（v1.9：`row_scope` 按维度注册表声明，单维度或 `dimensions` 数组 AND 叠加，见 D.8.2），**不是逐部门逐库配**。
@@ -1422,35 +1422,35 @@ WHERE deleted = 0;
 
 **D.7 行级权限数据「如何放置、如何使用」（v1.8 新增：业务提问「行级权限相关数据，比如部门、部门权限，如何放置，如何使用？」的直接回答；v1.9 按 A1 改判修订落库位置与消费方式）**
 
-> 结论一句话（v1.9）：**配置在平台 `mis_platform` 库（`tqd_*` 表，Java 侧 `backend/mis-tqd` 管理；`tqd_table_acl.row_scope` 模板按维度注册表声明维度）、锚点在头（BFF 按用户数据权限展开，注入 `X-Mis-Dept-Scope` / `X-Mis-Stores`）、字典在业务库（`mis_dept_scope` / `mis_store_scope` 物化表，中心每日同步产物）、注入在 Worker（`ScopeResolver` 按维度注册表取形态 + fail-closed 45204；配置经 `TqdConfigClient` API + 本地缓存消费，不直连库），最后执行/脱敏/审计。三层各司其职，行级权限数据不存在「一份数据多处维护」。**（v1.9 相比 v1.8 的关键修订：平台侧表由 `ai_platform` 改落 `mis_platform`；Worker 由「同进程读库」改为「配置读取 API + 本地缓存」，详见 D.7.3）**
+> 结论一句话（v1.9）：**配置在平台 `mis_platform` 库（`iqd_*` 表，Java 侧 `backend/mis-iqd` 管理；`iqd_table_acl.row_scope` 模板按维度注册表声明维度）、锚点在头（BFF 按用户数据权限展开，注入 `X-Mis-Dept-Scope` / `X-Mis-Stores`）、字典在业务库（`mis_dept_scope` / `mis_store_scope` 物化表，中心每日同步产物）、注入在 Worker（`ScopeResolver` 按维度注册表取形态 + fail-closed 45204；配置经 `IqdConfigClient` API + 本地缓存消费，不直连库），最后执行/脱敏/审计。三层各司其职，行级权限数据不存在「一份数据多处维护」。**（v1.9 相比 v1.8 的关键修订：平台侧表由 `ai_platform` 改落 `mis_platform`；Worker 由「同进程读库」改为「配置读取 API + 本地缓存」，详见 D.7.3）**
 
 **D.7.1 三层放置（谁持有哪份行级权限数据）**
 
 | 层 | 关键表/数据 | 角色（一句话） | 读写方 |
 |---|---|---|---|
-| **平台侧 `mis_platform` 库（v1.9：由 `ai_platform` 改道，见 ADR-020）** | `tqd_row_scope_dimension`（维度注册表）、`tqd_table_acl`（角色×表×`row_scope` 配置）、`tqd_datasource`（`scope_sync_enabled`）、`tqd_scope_dict_sync`（字典同步状态，见 D.6.4）、`tqd_ask_log`（审计） | **配置 + 裁定底座**：管理员在此配维度实例（row_scope 按维度）；Java 侧 `backend/mis-tqd` 统一管理；Worker **不直连本库**，经配置读取 API + 缓存消费 | 写：BFF 经 `/api/v1/tqd/**` HTTP → `TqdAdminService`；读：Worker（`TqdConfigClient`）调 `TqdInternalController` `/internal/v1/tqd/**`（见 D.7.3） |
+| **平台侧 `mis_platform` 库（v1.9：由 `ai_platform` 改道，见 ADR-020）** | `iqd_row_scope_dimension`（维度注册表）、`iqd_table_acl`（角色×表×`row_scope` 配置）、`iqd_datasource`（`scope_sync_enabled`）、`iqd_scope_dict_sync`（字典同步状态，见 D.6.4）、`iqd_ask_log`（审计） | **配置 + 裁定底座**：管理员在此配维度实例（row_scope 按维度）；Java 侧 `backend/mis-iqd` 统一管理；Worker **不直连本库**，经配置读取 API + 缓存消费 | 写：BFF 经 `/api/v1/iqd/**` HTTP → `IqdAdminService`；读：Worker（`IqdConfigClient`）调 `IqdInternalController` `/internal/v1/iqd/**`（见 D.7.3） |
 | **mis-org 侧** | `sys_dept.dept_path`（A12 物化列）+ 平台 RBAC 数据范围（`data_scope` 2/3/4/5/6 → 角色可见部门集合） | **授权源头**：运行时 BFF 按用户 data_scope 展开任职锚点 → 注入 `X-Mis-Dept-Scope`（锚点 id + path + scope） | 读：BFF（`AiPlatformClient.buildMisEnrichmentHeaders`，从 mis-org 取锚点 `dept_path`，见 D.5）；写：mis-org 自身 `DeptService`（create/relocate 级联维护 dept_path，见 D.2） |
-| **业务库侧** | `mis_dept_scope` 字典表（物化表：`dept_id`=业务库编码 + `mis_dept_id`/`dept_path`=平台，中心每日同步产物，见 D.6.2–D.6.4）；**v1.9 新增 `mis_store_scope`（门店维度字典表/复用门店主数据，见 D.9.3）** | **数据载体**：Worker 注入改写 `EXISTS (SELECT 1 FROM mis_dept_scope d WHERE d.dept_id = t.dept_id AND (d.dept_path = '<p>' OR d.dept_path LIKE '<p>/%'))` 或 store 的 `store_id IN (...)` 时引用 | 写：Java 侧 `TqdScopeSyncJobService` 中心每日同步任务（`sync_scope_dict_job` 全量 upsert 幂等，按维度注册表遍历，见 D.6.4/D.9.4）；读：wren-core 执行注入后 SQL（业务库本地解析，无跨库） |
+| **业务库侧** | `mis_dept_scope` 字典表（物化表：`dept_id`=业务库编码 + `mis_dept_id`/`dept_path`=平台，中心每日同步产物，见 D.6.2–D.6.4）；**v1.9 新增 `mis_store_scope`（门店维度字典表/复用门店主数据，见 D.9.3）** | **数据载体**：Worker 注入改写 `EXISTS (SELECT 1 FROM mis_dept_scope d WHERE d.dept_id = t.dept_id AND (d.dept_path = '<p>' OR d.dept_path LIKE '<p>/%'))` 或 store 的 `store_id IN (...)` 时引用 | 写：Java 侧 `IqdScopeSyncJobService` 中心每日同步任务（`sync_scope_dict_job` 全量 upsert 幂等，按维度注册表遍历，见 D.6.4/D.9.4）；读：wren-core 执行注入后 SQL（业务库本地解析，无跨库） |
 
 **D.7.2 使用链路（数据流）**
 
 ```mermaid
 flowchart LR
-  A["① 配置在平台<br/>mis_platform 库 tqd_* 表<br/>维度注册表 + tqd_table_acl.row_scope<br/>（dept / store 维度实例）"] --> B["② 锚点在头<br/>BFF 按数据权限展开<br/>注入 X-Mis-Dept-Scope / X-Mis-Stores"]
+  A["① 配置在平台<br/>mis_platform 库 iqd_* 表<br/>维度注册表 + iqd_table_acl.row_scope<br/>（dept / store 维度实例）"] --> B["② 锚点在头<br/>BFF 按数据权限展开<br/>注入 X-Mis-Dept-Scope / X-Mis-Stores"]
   B --> C["③ 字典在业务库<br/>mis_dept_scope / mis_store_scope 物化表<br/>（中心每日同步产物）"]
-  C --> D["④ 注入在 Worker<br/>ScopeResolver.inject_row_scope<br/>按维度注册表取形态 + fail-closed 45204<br/>（配置经 TqdConfigClient API + 缓存）"]
-  D --> E["⑤ 执行/脱敏/审计<br/>run_sql → MaskingEngine → tqd_ask_log"]
+  C --> D["④ 注入在 Worker<br/>ScopeResolver.inject_row_scope<br/>按维度注册表取形态 + fail-closed 45204<br/>（配置经 IqdConfigClient API + 缓存）"]
+  D --> E["⑤ 执行/脱敏/审计<br/>run_sql → MaskingEngine → iqd_ask_log"]
 ```
 
 **谁在哪一步读/写什么（让「放置」与「使用」一一对应）**
 
 | 步骤 | 操作方 | 读写的数据 | 落点 |
 |---|---|---|---|
-| ① 配置 | 管理员（`/agent/tqd/scope`）→ BFF → mis-tqd | 写 `tqd_row_scope_dimension` + `tqd_table_acl.row_scope`（角色×表×按维度实例） | mis_platform 库（平台侧，Java 侧 `TqdAdminService` 管理） |
+| ① 配置 | 管理员（`/agent/iqd/scope`）→ BFF → mis-iqd | 写 `iqd_row_scope_dimension` + `iqd_table_acl.row_scope`（角色×表×按维度实例） | mis_platform 库（平台侧，Java 侧 `IqdAdminService` 管理） |
 | ② 锚点展开 | BFF `AiPlatformClient` | 读 mis-org：data_scope + 任职锚点 + `sys_dept.dept_path`；读平台 RBAC 门店授权（v1.9）；写请求头 `X-Mis-Dept-Scope` / `X-Mis-Stores` | mis-org（授权源头）→ 请求头 |
-| ③ 字典同步 | Java 侧定时作业 `TqdScopeSyncJobService.sync_scope_dict_job` | 读 mis-org 部门/path + 门店主数据（按维度注册表遍历）；写 `mis_dept_scope` / `mis_store_scope` 物化表（upsert 幂等） | 业务库（数据载体） |
-| ④ 注入 | Worker `ScopeResolver` | 读配置（`TqdConfigClient` 缓存：维度注册表 + row_scope + 字典同步状态）+ `X-Mis-Dept-Scope` / `X-Mis-Stores`；写注入后 SQL（EXISTS `mis_dept_scope` 谓词 / `store_id IN` / FAIL_CLOSED） | 内存 AST → 最终 SQL |
-| ⑤ 执行/脱敏/审计 | wren-core + `MaskingEngine` + `TqdAdminService` | 执行注入后 SQL；脱敏结果；写 `tqd_ask_log`（最终 SQL + strategy + verdict） | 业务库执行 / mis_platform 审计 |
+| ③ 字典同步 | Java 侧定时作业 `IqdScopeSyncJobService.sync_scope_dict_job` | 读 mis-org 部门/path + 门店主数据（按维度注册表遍历）；写 `mis_dept_scope` / `mis_store_scope` 物化表（upsert 幂等） | 业务库（数据载体） |
+| ④ 注入 | Worker `ScopeResolver` | 读配置（`IqdConfigClient` 缓存：维度注册表 + row_scope + 字典同步状态）+ `X-Mis-Dept-Scope` / `X-Mis-Stores`；写注入后 SQL（EXISTS `mis_dept_scope` 谓词 / `store_id IN` / FAIL_CLOSED） | 内存 AST → 最终 SQL |
+| ⑤ 执行/脱敏/审计 | wren-core + `MaskingEngine` + `IqdAdminService` | 执行注入后 SQL；脱敏结果；写 `iqd_ask_log`（最终 SQL + strategy + verdict） | 业务库执行 / mis_platform 审计 |
 
 **D.7.3 Worker 配置消费路径（v1.9 新增：A1 改判的连锁重设计）**
 
@@ -1459,25 +1459,25 @@ flowchart LR
 **消费链路（四段）**
 
 ```text
-管理员配置 → mis-tqd（Java）落库 mis_platform
-          → 变更事件推送（MIS_EVENT topic: tqd.config.changed，含维度注册表/ACL/字典同步状态增量）
-          → Worker TqdConfigClient 收到事件 → 刷新本地缓存（内存，LRU/TTL 兜底）
+管理员配置 → mis-iqd（Java）落库 mis_platform
+          → 变更事件推送（MIS_EVENT topic: iqd.config.changed，含维度注册表/ACL/字典同步状态增量）
+          → Worker IqdConfigClient 收到事件 → 刷新本地缓存（内存，LRU/TTL 兜底）
           → 缓存不可得（启动未加载 / 事件丢失 / 定期刷新失败）→ fail-closed 45204
 ```
 
-1. **读取 API（`TqdInternalController`）**：`/internal/v1/tqd/configs?type=dimension|acl|datasource|dict_sync|masking`（对齐 `kb_client.py` 调 `/internal/v1/kb/**` 范式）；返回全量或增量（`since_version`）配置 JSON；鉴权：内部服务凭证（与 BFF 同一内部网关）。
-2. **本地缓存（Worker 侧 `TqdConfigClient`）**：
-   - **启动/连接自检时全量加载**：`tqd_connection` 首次配置/自检时拉取一次全量（连接级范围），失败不阻塞连接但置 `config_stale=true`；
-   - **变更事件刷新**：mis-tqd 保存配置成功后发 `tqd.config.changed` 事件 → Worker 收到后按 `type` 拉增量刷新（默认 ≤10s 生效）；
+1. **读取 API（`IqdInternalController`）**：`/internal/v1/iqd/configs?type=dimension|acl|datasource|dict_sync|masking`（对齐 `kb_client.py` 调 `/internal/v1/kb/**` 范式）；返回全量或增量（`since_version`）配置 JSON；鉴权：内部服务凭证（与 BFF 同一内部网关）。
+2. **本地缓存（Worker 侧 `IqdConfigClient`）**：
+   - **启动/连接自检时全量加载**：`iqd_connection` 首次配置/自检时拉取一次全量（连接级范围），失败不阻塞连接但置 `config_stale=true`；
+   - **变更事件刷新**：mis-iqd 保存配置成功后发 `iqd.config.changed` 事件 → Worker 收到后按 `type` 拉增量刷新（默认 ≤10s 生效）；
    - **定期刷新兜底**：每日定时全量刷新（与字典同步同周期），事件丢失/进程重启后兜底；
 3. **fail-closed 语义（不变且更严）**：维度注册表/ACL 缓存不可得或 `config_stale=true` 且刷新失败 → 该连接行级**拒绝 45204**（不静默放行，不会出现「静默越权」）；仅当 BFF 注入维度头为 `[]`（全量可见）时放行。
 4. **与 v1.8 差异小结**：低延迟优势由「启动全量加载 + 事件增量 + 定期兜底」补偿（热路径零网络调用，裁定仍在 Worker 本地）；一致性由「事件推送 ≤10s + 每日兜底」保证；安全面收窄（Worker 不碰平台主库）；实现成本增加一个内部 API + 缓存层（对齐 mis-kb 已成熟的 `kb_client` 范式，成本可控）。
 
 **D.8 维度注册表一期设计（v1.9 重写：原 v1.8「二期可选 P2」改判为一期必做，业务明确「维度注册表提前 + 双维度一期」）**
 
-> 结论一句话：**新增 `tqd_row_scope_dimension` 维度注册表（落 mis_platform 库，Java 侧 `TqdAdminService` 管理），一期内置 `dept` + `store` 两个维度；`row_scope.type`（org_auto/template）废弃，改为 `row_scope = {"dimension": "dept|store", ...}`；一表可配多个维度实例（dept + store 同表共存），注入时多维度谓词 **AND 叠加**；BFF 头注入按维度注册表遍历，维度配置了但无对应头 → fail-closed 45204；`dept` 维度不再作为特例，与其他维度走同一注册表机制。**
+> 结论一句话：**新增 `iqd_row_scope_dimension` 维度注册表（落 mis_platform 库，Java 侧 `IqdAdminService` 管理），一期内置 `dept` + `store` 两个维度；`row_scope.type`（org_auto/template）废弃，改为 `row_scope = {"dimension": "dept|store", ...}`；一表可配多个维度实例（dept + store 同表共存），注入时多维度谓词 **AND 叠加**；BFF 头注入按维度注册表遍历，维度配置了但无对应头 → fail-closed 45204；`dept` 维度不再作为特例，与其他维度走同一注册表机制。**
 
-**D.8.1 维度注册表（`tqd_row_scope_dimension`，落 mis_platform 库）**
+**D.8.1 维度注册表（`iqd_row_scope_dimension`，落 mis_platform 库）**
 
 | 列 | 类型 | 说明 |
 |---|---|---|
@@ -1496,7 +1496,7 @@ flowchart LR
 
 **索引**：`uk_dimension_code`（dimension_code 唯一）；`idx_dimension_enabled`（enabled）。
 
-**种子数据（V71__tqd_schema.sql 或数据初始化）**
+**种子数据（V71__iqd_schema.sql 或数据初始化）**
 
 | dimension_code | dimension_name | predicate_type | column_name | header_name | dict_table | auto_mode | enabled |
 |---|---|---|---|---|---|---|---|
@@ -1506,7 +1506,7 @@ flowchart LR
 **D.8.2 `row_scope` 语义变化（v1.9 改判）**
 
 - **废弃 `row_scope.type`（org_auto/template）**：v1.8 的 `type` 扩展点设计被维度注册表替代。`org_auto` 语义（自动跟随数据权限）由 `auto_mode=true` + `dimension_code` 表达；手动模板语义由 `auto_mode=false` + 模板表达式表达（仍支持，`param_whitelist` 校验）。
-- **新 `row_scope` JSON 形态（`tqd_table_acl.row_scope`）**：
+- **新 `row_scope` JSON 形态（`iqd_table_acl.row_scope`）**：
   - **单维度**：`{"dimension": "dept", "auto_mode": true}`（自动：BFF 按用户数据权限展开注入）或 `{"dimension": "store", "auto_mode": true}`；
   - **手动模板**：`{"dimension": "dept", "auto_mode": false, "expr": "dept_id IN ({dept_ids})", "params": [{"name":"dept_ids","source":"header:X-Mis-Dept-Scope","data_type":"string[]"}]}`；
   - **多维度（一表多维度 AND 叠加，v1.9 明确支持）**：`{"dimensions": [{"dimension":"dept","auto_mode":true}, {"dimension":"store","auto_mode":true}]}`——业务已确认部门 + 门店很可能同表共存（如订单表既要按部门限、又要按门店限），注入时各维度独立谓词，最终 **AND 拼接**（见 C 节算法：`preds` 收集后 `AND(*preds)`）。
@@ -1514,7 +1514,7 @@ flowchart LR
 
 **D.8.3 配置界面（维度下拉）**
 
-- **维度下拉数据源 = `tqd_row_scope_dimension`（enabled=true 且当前连接可用）**，替代 v1.8 的「type 下拉（org_auto/template）」；
+- **维度下拉数据源 = `iqd_row_scope_dimension`（enabled=true 且当前连接可用）**，替代 v1.8 的「type 下拉（org_auto/template）」；
 - 选定维度后展示该维度列（`column_name`）+ 谓词形态（`predicate_type`，只读提示）+ 自动/手动切换（`auto_mode`）；
 - 多维度：界面支持「+ 添加维度实例」（同表可加 dept + store 两个实例），保存为 `row_scope.dimensions` 数组；
 - **BFF 头注入按维度注册表遍历（v1.9）**：`buildMisEnrichmentHeaders` 遍历该连接启用的维度注册表记录——`dept` 维度有部门授权 → 注 `X-Mis-Dept-Scope`（锚点+path+scope）；`store` 维度有门店授权 → 注 `X-Mis-Stores`；**无该维度授权则不注入该头**；`[]` = 该维度全量可见。**降级语义**：维度已配置（该表 row_scope 引用了该维度）但请求无对应头 → fail-closed 45204（见 C 节用例 20）；维度未配置（表未引用）→ 无头正常放行。
@@ -1528,7 +1528,7 @@ flowchart LR
 
 **D.8.5 结论一句话**
 
-> **维度注册表一期必做（`tqd_row_scope_dimension` 落 mis_platform，种子 dept + store）；`row_scope.type` 废弃改按维度声明；一表可多维度 AND 叠加；BFF 头注入按注册表遍历 + fail-closed 45204。加新维度（仓库/区域/客户）= 注册一条维度 + （可选）字典表 + 配置实例，不再需要「加 type 分支」。**
+> **维度注册表一期必做（`iqd_row_scope_dimension` 落 mis_platform，种子 dept + store）；`row_scope.type` 废弃改按维度声明；一表可多维度 AND 叠加；BFF 头注入按注册表遍历 + fail-closed 45204。加新维度（仓库/区域/客户）= 注册一条维度 + （可选）字典表 + 配置实例，不再需要「加 type 分支」。**
 
 **D.9 门店维度实例化（v1.9 新增：一期「部门权限 + 门店权限」双维度中的 store 维度落地）**
 
@@ -1554,13 +1554,13 @@ flowchart LR
 
 **D.9.4 中心每日同步扩展（按维度注册表遍历）**
 
-- **v1.9：`TqdScopeSyncJobService.sync_scope_dict_job` 遍历 `tqd_row_scope_dimension`（enabled=true 且 `dict_table` 非 NULL）**——dept 维同步 `mis_dept_scope`（D.6.4 原有逻辑迁入 Java 侧）；store 维同步 `mis_store_scope`（读 mis-org/RBAC 门店主数据或业务库门店主数据映射）；
-- 同步状态落 `tqd_scope_dict_sync`（每维度一行：`dimension_code`/`last_success_at`/`row_count`/`status`）；同步失败 → 告警 + 该连接行级降级 45204（不静默放行）；
-- 变更事件：同步完成后发 `tqd.config.changed`（type=dict_sync）→ Worker 刷新缓存（见 D.7.3）。
+- **v1.9：`IqdScopeSyncJobService.sync_scope_dict_job` 遍历 `iqd_row_scope_dimension`（enabled=true 且 `dict_table` 非 NULL）**——dept 维同步 `mis_dept_scope`（D.6.4 原有逻辑迁入 Java 侧）；store 维同步 `mis_store_scope`（读 mis-org/RBAC 门店主数据或业务库门店主数据映射）；
+- 同步状态落 `iqd_scope_dict_sync`（每维度一行：`dimension_code`/`last_success_at`/`row_count`/`status`）；同步失败 → 告警 + 该连接行级降级 45204（不静默放行）；
+- 变更事件：同步完成后发 `iqd.config.changed`（type=dict_sync）→ Worker 刷新缓存（见 D.7.3）。
 
 **D.9.5 门店扩展 5 件事清单（未来加维度/演进模板，v1.9 由 D.8 注册表机制承接）**
 
-1. **注册维度**：`tqd_row_scope_dimension` 加一行（dimension_code/predicate_type/column_name/header_name/dict_table/auto_mode）；
+1. **注册维度**：`iqd_row_scope_dimension` 加一行（dimension_code/predicate_type/column_name/header_name/dict_table/auto_mode）；
 2. **BFF 注入对应头**（或用户属性）：按该维度授权展开注入（自动模式）或模板参数（手动模式）；
 3. **业务库字典表 / 复用业务表**：无现成对应列时建 `mis_<dim>_scope` 字典表（中心同步，`dict_table` 登记），有现成主数据表则复用（`dict_table` NULL）；
 4. **层级维度物化 path（可选）**：维度有层级且规模大 → 物化 `<dim>_path` 走 PATH_PREFIX；扁平（≤500）→ ENUM；
@@ -1573,14 +1573,14 @@ flowchart LR
 ### 4.3 DTO 契约（三端同构，wire 一律 snake_case）
 
 ```text
-POST /api/v1/tqd/ask-stream  请求体
+POST /api/v1/iqd/ask-stream  请求体
 {
   "question": "本月各渠道销售额",
   "session_id": "sess-xxx",            // 可选，多轮上下文
   "thread_id": "th-xxx",               // 可选，WrenAI 侧线程（多轮追问）
   "connection_id": null,               // 缺省取 enabled 连接
   "view": "user",                      // 建议值；服务端按权限码最终裁定
-  "simulate_role_code": null,          // 仅后台测试页，需 tqd:test:use
+  "simulate_role_code": null,          // 仅后台测试页，需 iqd:test:use
   "scope_hint": []                     // 可选，后台测试页限定表集合
 }
 
@@ -1605,7 +1605,7 @@ POST /api/v1/tqd/ask-stream  请求体
     "citations": [
       {"kind":"table","item_key":"pg_main.public.orders","display_name":"订单表","description":"记录全渠道成交订单","snippet":null,"source_ref":null},
       {"kind":"column","item_key":"pg_main.public.orders.total_amount","display_name":"订单金额","description":"含税成交额，单位元","snippet":null,"source_ref":null},
-      {"kind":"knowledge","item_key":"know:gmv-definition","display_name":"GMV 口径","description":null,"snippet":"GMV = 成交订单含税金额之和，不扣退款。","source_ref":"tqd_knowledge:uuid"}
+      {"kind":"knowledge","item_key":"know:gmv-definition","display_name":"GMV 口径","description":null,"snippet":"GMV = 成交订单含税金额之和，不扣退款。","source_ref":"iqd_knowledge:uuid"}
     ],
     "plan": [
       {"seq":1,"code":"scope_check","label":"校验可问数据范围","detail":"命中 3 张授权表","sql":null,"status":"done","duration_ms":18},
@@ -1629,39 +1629,39 @@ POST /api/v1/tqd/ask-stream  请求体
 
 ### 4.4 接口清单
 
-**BFF 对外（`/api/v1/tqd/**`）—— 全部需登记 `sys_api` + `sys_menu_api`**
+**BFF 对外（`/api/v1/iqd/**`）—— 全部需登记 `sys_api` + `sys_menu_api`**
 
 | Method | Path | 权限码 | 说明 |
 |---|---|---|---|
-| GET | `/config` | `tqd:config:view` | 取连接配置（密钥恒返回 `******`） |
-| PUT | `/config` | `tqd:config:save` | 保存连接配置 |
-| POST | `/config/test` | `tqd:config:test` | 连通性自检 |
-| POST | `/config/mdl/sync` | `tqd:catalog:sync` | MDL 同步（body `{direction: pull\|push}`） |
-| GET | `/catalog/tree` | `tqd:catalog:view` | 清单树（`?kind=&parent_key=&in_scope=`） |
-| GET | `/catalog/models` | `tqd:catalog:view` | 语义模型清单（`?kind=model\|relationship\|metric\|dimension`） |
-| PUT | `/catalog/{itemKey}/description` | `tqd:enhance:manage` | 编辑业务语义描述（写 MDL description） |
-| GET | `/scope` | `tqd:scope:view` | 范围策略（`?subject_type=&subject_id=`） |
-| PUT | `/scope` | `tqd:scope:manage` | 批量保存勾选（body `{subject_type, subject_id, items:[{item_key, allow}]}`） |
-| GET | `/acl` | `tqd:scope:view` | 表级 ACL 列表 |
-| POST | `/acl` | `tqd:acl:grant` | 授权（`{subject_type, subject_id, item_keys[], action}`） |
-| DELETE | `/acl/{id}` | `tqd:acl:revoke` | 撤销 |
-| GET/POST/PUT/DELETE | `/sql-pairs[/{id}]` | `tqd:enhance:view` / `:manage` | 样本 CRUD |
-| GET/POST/PUT/DELETE | `/knowledge[/{id}]` | `tqd:enhance:view` / `:manage` | 知识/术语 CRUD |
-| POST | `/knowledge/import-s07` | `tqd:enhance:manage` | 从平台术语表 S-07 导入（Q8） |
-| POST | `/enhance/sync` | `tqd:enhance:sync` | 推送样本+知识到 WrenAI |
+| GET | `/config` | `iqd:config:view` | 取连接配置（密钥恒返回 `******`） |
+| PUT | `/config` | `iqd:config:save` | 保存连接配置 |
+| POST | `/config/test` | `iqd:config:test` | 连通性自检 |
+| POST | `/config/mdl/sync` | `iqd:catalog:sync` | MDL 同步（body `{direction: pull\|push}`） |
+| GET | `/catalog/tree` | `iqd:catalog:view` | 清单树（`?kind=&parent_key=&in_scope=`） |
+| GET | `/catalog/models` | `iqd:catalog:view` | 语义模型清单（`?kind=model\|relationship\|metric\|dimension`） |
+| PUT | `/catalog/{itemKey}/description` | `iqd:enhance:manage` | 编辑业务语义描述（写 MDL description） |
+| GET | `/scope` | `iqd:scope:view` | 范围策略（`?subject_type=&subject_id=`） |
+| PUT | `/scope` | `iqd:scope:manage` | 批量保存勾选（body `{subject_type, subject_id, items:[{item_key, allow}]}`） |
+| GET | `/acl` | `iqd:scope:view` | 表级 ACL 列表 |
+| POST | `/acl` | `iqd:acl:grant` | 授权（`{subject_type, subject_id, item_keys[], action}`） |
+| DELETE | `/acl/{id}` | `iqd:acl:revoke` | 撤销 |
+| GET/POST/PUT/DELETE | `/sql-pairs[/{id}]` | `iqd:enhance:view` / `:manage` | 样本 CRUD |
+| GET/POST/PUT/DELETE | `/knowledge[/{id}]` | `iqd:enhance:view` / `:manage` | 知识/术语 CRUD |
+| POST | `/knowledge/import-s07` | `iqd:enhance:manage` | 从平台术语表 S-07 导入（Q8） |
+| POST | `/enhance/sync` | `iqd:enhance:sync` | 推送样本+知识到 WrenAI |
 | POST | `/ask` | `ai:chat:use`（复用） | 非流式问数 |
 | POST | `/ask-stream` | `ai:chat:use`（复用） | **SSE** 流式问数（生产主通道） |
 | POST | `/ask/{queryId}/stop` | `ai:chat:use` | 中止 |
-| GET | `/traces` | `tqd:trace:view` | 问数审计/执行计划列表 |
-| GET | `/traces/{id}` | `tqd:trace:view` | 单条完整计划（含 SQL） |
+| GET | `/traces` | `iqd:trace:view` | 问数审计/执行计划列表 |
+| GET | `/traces/{id}` | `iqd:trace:view` | 单条完整计划（含 SQL） |
 
-**ai-platform 管理面（`/api/v1/tqd/**`，仅 BFF 可达）**：与上表 1:1 对应，去掉 `wrenai` 前缀改 `wren`；鉴权走既有 MIS RS256 + `X-Mis-*` 头，不新增闸门。
+**ai-platform 管理面（`/api/v1/iqd/**`，仅 BFF 可达）**：与上表 1:1 对应，去掉 `wrenai` 前缀改 `wren`；鉴权走既有 MIS RS256 + `X-Mis-*` 头，不新增闸门。
 
-**WrenAI 新线调用面（`tqd_mcp_client.py` 本地 MCP client + `tqd_cli.py` 本地 CLI 封装）**
+**WrenAI 新线调用面（`iqd_mcp_client.py` 本地 MCP client + `iqd_cli.py` 本地 CLI 封装）**
 
-> 桥接层**不再经 REST `/v1/asks` 轮询**。`mis-tqd` Worker 同进程起 MCP client 连本机 `wren serve mcp @127.0.0.1:8080`。**管理面（MDL 构建/部署、profile）走本地 `wren` CLI，不走 MCP 写**。
+> 桥接层**不再经 REST `/v1/asks` 轮询**。`mis-iqd` Worker 同进程起 MCP client 连本机 `wren serve mcp @127.0.0.1:8080`。**管理面（MDL 构建/部署、profile）走本地 `wren` CLI，不走 MCP 写**。
 
-**① 运行时问数与执行（MCP 工具，`TqdMcpClient`）**
+**① 运行时问数与执行（MCP 工具，`IqdMcpClient`）**
 
 | 工具 | 用途 |
 |---|---|
@@ -1671,9 +1671,9 @@ POST /api/v1/tqd/ask-stream  请求体
 | `get_mdl` / `list_models` / `describe_model` | 读取语义模型清单/结构（catalog 同步用） |
 | `health` | 健康检查（MCP server 可达性） |
 
-> 注：写入类工具（`store_query` 等）仅 `wren serve mcp --allow-write` 时可用；本期默认只读，增强物料以平台 `tqd_*` 表为主（v1.9 命名：平台侧 `tqd_sql_pair`/`tqd_knowledge`）、同步策略见 A3/W0 实测。
+> 注：写入类工具（`store_query` 等）仅 `wren serve mcp --allow-write` 时可用；本期默认只读，增强物料以平台 `iqd_*` 表为主（v1.9 命名：平台侧 `iqd_sql_pair`/`iqd_knowledge`）、同步策略见 A3/W0 实测。
 
-**② 管理面：MDL 构建/部署、profile（`tqd_cli.py` 本地 CLI）**
+**② 管理面：MDL 构建/部署、profile（`iqd_cli.py` 本地 CLI）**
 
 | 命令 | 用途 |
 |---|---|
@@ -1681,7 +1681,7 @@ POST /api/v1/tqd/ask-stream  请求体
 | `wren context set-profile <name>` | 设定当前语义上下文所用 profile |
 | `wren context build [--mdl <dir>]` | 构建/部署 MDL（建模同步 push 走此命令，替代旧 `/v1/mdl/deploy`） |
 
-> ⚠️ 具体 MCP 工具名/参数以 `wren serve mcp --transport http` 实测清单为准，版本钉 **`wren: v0.13.3`**（项目 **`0.29.2`**，2026-08-18），写入 `deploy/wrenai/README.md`；`tqd_mcp_client.py` 将工具名抽成**模块常量**，升级只改常量（对齐 `kb_client.py` 范式）。
+> ⚠️ 具体 MCP 工具名/参数以 `wren serve mcp --transport http` 实测清单为准，版本钉 **`wren: v0.13.3`**（项目 **`0.29.2`**，2026-08-18），写入 `deploy/wrenai/README.md`；`iqd_mcp_client.py` 将工具名抽成**模块常量**，升级只改常量（对齐 `kb_client.py` 范式）。
 
 ---
 
@@ -1695,32 +1695,32 @@ sequenceDiagram
     participant U as 普通用户
     participant FE as /ai/data-query
     participant PEP as ApiPermissionInterceptor
-    participant BFF as TqdAskFacadeService
+    participant BFF as IqdAskFacadeService
     participant CO as mis-copilot (Coordinator)
-    participant W as mis-tqd Worker
-    participant CFG as TqdConfigClient（配置缓存，v1.9）
+    participant W as mis-iqd Worker
+    participant CFG as IqdConfigClient（配置缓存，v1.9）
     participant SR as ScopeResolver
     participant OR as AskOrchestrator
     participant AI as wren serve mcp (localhost HTTP)
     participant CORE as wren-core + 业务库
     participant LM as Lineage+Citation+Masking
     participant PJ as ResponseProjector
-    participant DB as mis_platform (tqd_*)
+    participant DB as mis_platform (iqd_*)
 
     U->>FE: 输入「本月各渠道销售额」
-    FE->>PEP: POST /api/v1/tqd/ask-stream (JWT)
+    FE->>PEP: POST /api/v1/iqd/ask-stream (JWT)
     PEP->>PEP: L1 功能权限码 ai:chat:use
     PEP--xFE: 无码 → 40300（链路终止）
     PEP->>BFF: 放行
-    BFF->>BFF: 服务端裁定 view：有 tqd:trace:view → admin，否则强制 user
+    BFF->>BFF: 服务端裁定 view：有 iqd:trace:view → admin，否则强制 user
     BFF->>CO: POST /agents/mis-copilot/chat/stream + X-Mis-Roles/Depts/Orgs
     CO->>CO: 意图识别 → data-query
-    CO->>W: agent__invoke(mis-tqd, TaskBrief) max_depth=1
+    CO->>W: agent__invoke(mis-iqd, TaskBrief) max_depth=1
     W->>SR: resolve(identity, connection_id)
-    SR->>CFG: 读配置缓存 tqd_scope_policy(global) ∩ (主体模板 ∪ tqd_table_acl action=ask)（v1.9：API + 缓存，不直连库）
+    SR->>CFG: 读配置缓存 iqd_scope_policy(global) ∩ (主体模板 ∪ iqd_table_acl action=ask)（v1.9：API + 缓存，不直连库）
     CFG-->>SR: allowed_item_keys
     alt decision = DENY
-        SR-->>W: TqdScopeResolution(deny)
+        SR-->>W: IqdScopeResolution(deny)
         W-->>CO: task_notification(status=FAILED, error_code=45204)
         CO-->>BFF: SSE error 帧（不臆造数据）
         BFF-->>FE: 明确错误「当前角色无可问数据范围」
@@ -1749,17 +1749,17 @@ sequenceDiagram
                     AI->>CORE: wren-core MDL 解析 + 执行
                     CORE-->>AI: 结果集
                     AI-->>OR: {type, sql, summary, result, steps[], chart}
-                    LM->>CFG: 读配置缓存 tqd_catalog_item + tqd_knowledge → citations（v1.9：API + 缓存）
-                LM->>CFG: 读配置缓存 tqd_mask_rule + sensitive_level（v1.9：API + 缓存）
+                    LM->>CFG: 读配置缓存 iqd_catalog_item + iqd_knowledge → citations（v1.9：API + 缓存）
+                LM->>CFG: 读配置缓存 iqd_mask_rule + sensitive_level（v1.9：API + 缓存）
                 LM->>LM: MaskingEngine.apply(columns, rows)
                 LM-->>OR: citations + MaskingOutcome
             end
         end
         OR-->>W: AskResult（含全量 sql / plan / citations）
-        W->>DB: TqdAdminService.write_ask_log（经 mis-tqd 内部 API 写 mis_platform，v1.9）
+        W->>DB: IqdAdminService.write_ask_log（经 mis-iqd 内部 API 写 mis_platform，v1.9）
         W->>PJ: project(result, view=user)
         PJ->>PJ: _strip_sql()：删 sql / sql_dialect / plan[].sql 键
-        PJ-->>W: TqdAskResponse(user 口径)
+        PJ-->>W: IqdAskResponse(user 口径)
         W-->>CO: task_notification(COMPLETED) + dispatch_trace
         CO-->>BFF: SSE 终帧（answer + citations + plan，无 SQL）
         BFF-->>FE: Result 信封
@@ -1771,12 +1771,12 @@ sequenceDiagram
 
 | 约束 | 落点 | 失效表现 |
 |---|---|---|
-| 前端无 WrenAI 直连 | 前端只认 `/api/v1/tqd/**` | 抓包出现 WrenAI 域名即违规 |
+| 前端无 WrenAI 直连 | 前端只认 `/api/v1/iqd/**` | 抓包出现 WrenAI 域名即违规 |
 | 双闸门 | 步骤 3（L1）+ 步骤 10/25（L2 前置+后置） | 只做前置 = 生成 SQL 可能跨越到未授权表 |
 | 行级范围（A11） | `inject_row_scope` 于 dry 生成后、`run_sql` 前；未注入即执行 = 越权数据泄露 | 任一命中 row_scope 的表未注入 / 注入失败 / 覆盖不足 → 45204 且**不执行** |
 | 前端无 SQL | 步骤 30（服务端删键）+ 组件 props 无 sql 字段 | 前端能拿到 `sql` 即违规 |
 | 不臆造数据 | `alt DENY` 与 `type=GENERAL` 两个分支均返回明确语义 | LLM 兜底编造数字 |
-| 审计完整 | 步骤 28 写 `tqd_ask_log`（**投影前**写，留全量） | 投影后写 → 审计里没有 SQL，无法排错 |
+| 审计完整 | 步骤 28 写 `iqd_ask_log`（**投影前**写，留全量） | 投影后写 → 审计里没有 SQL，无法排错 |
 
 ### 5.2 后台联调测试对话（`view=admin`）
 
@@ -1784,19 +1784,19 @@ sequenceDiagram
 sequenceDiagram
     autonumber
     participant OPS as AI 运营
-    participant TP as /agent/tqd/test-chat
+    participant TP as /agent/iqd/test-chat
     participant PEP as ApiPermissionInterceptor
-    participant BFF as TqdAskFacadeService
-    participant W as mis-tqd Worker
+    participant BFF as IqdAskFacadeService
+    participant W as mis-iqd Worker
     participant PJ as ResponseProjector
-    participant DB as tqd_ask_log
+    participant DB as iqd_ask_log
 
     OPS->>TP: 输入问题 + 可选「模拟角色」+ 可选 scope_hint
-    TP->>PEP: POST /api/v1/tqd/ask-stream {view:"admin", simulate_role_code}
-    PEP->>PEP: L1：tqd:test:use
+    TP->>PEP: POST /api/v1/iqd/ask-stream {view:"admin", simulate_role_code}
+    PEP->>PEP: L1：iqd:test:use
     PEP->>BFF: 放行
-    BFF->>BFF: 校验 view=admin 是否被 tqd:trace:view 授权；未授权则降级为 user
-    BFF->>BFF: simulate_role_code 非空 → 校验 tqd:test:use，替换裁定用 role_codes（**不改 JWT 身份**）
+    BFF->>BFF: 校验 view=admin 是否被 iqd:trace:view 授权；未授权则降级为 user
+    BFF->>BFF: simulate_role_code 非空 → 校验 iqd:test:use，替换裁定用 role_codes（**不改 JWT 身份**）
     BFF->>W: 同 5.1 主流程（identity.role_codes 被模拟值覆盖）
     Note over W: ScopeResolver 用模拟角色裁定 → 可验证「不同角色可问表集合不同」（FR-TEST-2）
     W->>PJ: project(result, view=admin)
@@ -1804,13 +1804,13 @@ sequenceDiagram
     BFF-->>TP: SSE 全量
     TP-->>OPS: 左对话 / 右：SQL 代码块 + 结果表格 + 引用明细 + 完整计划时间线
     OPS->>TP: 点「查看历史」
-    TP->>PEP: GET /api/v1/tqd/traces?status=&user_id=
-    PEP->>PEP: L1：tqd:trace:view
-    BFF->>DB: 查 tqd_ask_log
+    TP->>PEP: GET /api/v1/iqd/traces?status=&user_id=
+    PEP->>PEP: L1：iqd:trace:view
+    BFF->>DB: 查 iqd_ask_log
     DB-->>TP: 列表 + 详情（全量计划 + SQL）
 ```
 
-> **模拟角色的安全边界**：`simulate_role_code` 只影响 `ScopeResolver` 的裁定输入，**不**影响 JWT 身份、不影响审计记录的真实 `user_id`。`tqd_ask_log` 需额外记 `simulated_role_code` 以便审计区分（并入 `resolved_scope.subject_summary`）。禁止把它用于放大权限：模拟角色的可问集合必须是「该角色的真实集合」，不是「当前用户 ∪ 该角色」。
+> **模拟角色的安全边界**：`simulate_role_code` 只影响 `ScopeResolver` 的裁定输入，**不**影响 JWT 身份、不影响审计记录的真实 `user_id`。`iqd_ask_log` 需额外记 `simulated_role_code` 以便审计区分（并入 `resolved_scope.subject_summary`）。禁止把它用于放大权限：模拟角色的可问集合必须是「该角色的真实集合」，不是「当前用户 ∪ 该角色」。
 
 ### 5.3 配置保存 + 连通自检 + MDL 同步
 
@@ -1818,25 +1818,25 @@ sequenceDiagram
 sequenceDiagram
     autonumber
     participant ADM as 平台管理员
-    participant CP as /agent/tqd/config
-    participant BFF as TqdFacadeService
-    participant SVC as TqdAdminService
-    participant CLI as TqdCli (本地 wren CLI)
-    participant MC as TqdMcpClient
+    participant CP as /agent/iqd/config
+    participant BFF as IqdFacadeService
+    participant SVC as IqdAdminService
+    participant CLI as IqdCli (本地 wren CLI)
+    participant MC as IqdMcpClient
     participant WM as wren serve mcp / wren-core
-    participant DB as mis_platform (tqd_*)
+    participant DB as mis_platform (iqd_*)
     participant NC as Nacos
 
     ADM->>CP: 填写地址 / 认证方式 / connector / 超时 / 语言
     Note over CP: 密钥输入框：提交非空才更新；GET 恒回 ******
-    CP->>BFF: PUT /api/v1/tqd/config (tqd:config:save)
+    CP->>BFF: PUT /api/v1/iqd/config (iqd:config:save)
     BFF->>SVC: save_connection(dto)
     SVC->>SVC: 仅存 profile 名/连接标识（不存 WrenAI 凭证，凭证由 wren profile 注入主机）
-    SVC->>DB: upsert tqd_connection
+    SVC->>DB: upsert iqd_connection
     SVC-->>CP: 保存成功（status=inactive 待自检）
 
     ADM->>CP: 点「测试连通性」
-    CP->>BFF: POST /api/v1/tqd/config/test (tqd:config:test)
+    CP->>BFF: POST /api/v1/iqd/config/test (iqd:config:test)
     BFF->>SVC: test_connection()
     SVC->>NC: 按 secret_ref 取真值
     SVC->>WC: health()
@@ -1846,24 +1846,24 @@ sequenceDiagram
     SVC-->>CP: 徽标「已连接」
 
     ADM->>CP: 点「同步语义建模」（direction=push）
-    CP->>BFF: POST /api/v1/tqd/config/mdl/sync (tqd:catalog:sync)
+    CP->>BFF: POST /api/v1/iqd/config/mdl/sync (iqd:catalog:sync)
     BFF->>SVC: sync_mdl("push")
-    SVC->>DB: 读 tqd_catalog_item（含本地 description）组装 MDL JSON
+    SVC->>DB: 读 iqd_catalog_item（含本地 description）组装 MDL JSON
     SVC->>CLI: context build(mdl_dir)
     CLI->>WM: 构建/部署 MDL（本地 CLI，替代旧 /v1/mdl/deploy）
     WM-->>CLI: mdl_hash
-    SVC->>DB: insert tqd_model_snapshot(source=push, mdl_hash, status=ok)
+    SVC->>DB: insert iqd_model_snapshot(source=push, mdl_hash, status=ok)
     alt direction=pull（对账）
         SVC->>MC: get_mdl()
         MC->>WM: MCP get_mdl
         WM-->>SVC: mdl_json
-        SVC->>DB: upsert tqd_catalog_item（**不覆盖非空 description**，仅补结构与新对象）
-        SVC->>DB: insert tqd_model_snapshot(source=pull)
+        SVC->>DB: upsert iqd_catalog_item（**不覆盖非空 description**，仅补结构与新对象）
+        SVC->>DB: insert iqd_model_snapshot(source=pull)
     end
     SVC-->>CP: 上次同步时间 + 模型数 + 差异摘要
 ```
 
-**冲突策略（Q4 落地）**：`description` 字段以平台为准（push 时平台值覆盖 WrenAI）；`models/relationships` 结构以 WrenAI/DB 元数据为准（pull 时补入平台）。`tqd_catalog_item.source` 标记来源，UI 上对「pull 新增但未纳入范围」的对象打「待治理」标。
+**冲突策略（Q4 落地）**：`description` 字段以平台为准（push 时平台值覆盖 WrenAI）；`models/relationships` 结构以 WrenAI/DB 元数据为准（pull 时补入平台）。`iqd_catalog_item.source` 标记来源，UI 上对「pull 新增但未纳入范围」的对象打「待治理」标。
 
 ### 5.4 增强物料同步（样本 / 知识）
 
@@ -1871,29 +1871,29 @@ sequenceDiagram
 sequenceDiagram
     autonumber
     participant ADM as 平台管理员
-    participant EP as /agent/tqd/enhance
-    participant SVC as TqdAdminService
-    participant CLI as TqdCli (本地 wren CLI)
-    participant MC as TqdMcpClient
+    participant EP as /agent/iqd/enhance
+    participant SVC as IqdAdminService
+    participant CLI as IqdCli (本地 wren CLI)
+    participant MC as IqdMcpClient
     participant WM as wren serve mcp / wren-core
-    participant DB as mis_platform (tqd_*)
+    participant DB as mis_platform (iqd_*)
     participant S07 as 平台术语表 S-07
 
     ADM->>EP: 新增/编辑 few-shot 样本（问题 + SQL）
-    EP->>SVC: POST /api/v1/tqd/sql-pairs (tqd:enhance:manage)
-    SVC->>DB: insert tqd_sql_pair(sync_status=pending)
+    EP->>SVC: POST /api/v1/iqd/sql-pairs (iqd:enhance:manage)
+    SVC->>DB: insert iqd_sql_pair(sync_status=pending)
     ADM->>EP: 新增知识/术语/口径/同义词
-    EP->>SVC: POST /api/v1/tqd/knowledge
-    SVC->>DB: insert tqd_knowledge(source=local, sync_status=pending)
+    EP->>SVC: POST /api/v1/iqd/knowledge
+    SVC->>DB: insert iqd_knowledge(source=local, sync_status=pending)
     opt 从 S-07 导入（Q8）
         ADM->>EP: 点「从术语表导入」
-        EP->>SVC: POST /api/v1/tqd/knowledge/import-s07
+        EP->>SVC: POST /api/v1/iqd/knowledge/import-s07
         SVC->>S07: 读术语条目
-        SVC->>DB: upsert tqd_knowledge(source=kb_s07, kb_term_id=..)
+        SVC->>DB: upsert iqd_knowledge(source=kb_s07, kb_term_id=..)
         Note over SVC: 单向导入；平台本地编辑后不回写 S-07
     end
     ADM->>EP: 点「重新同步到 WrenAI」
-    EP->>SVC: POST /api/v1/tqd/enhance/sync (tqd:enhance:sync)
+    EP->>SVC: POST /api/v1/iqd/enhance/sync (iqd:enhance:sync)
     SVC->>CLI: context build（写入样本/指令到 MDL，需 --allow-write）
     CLI->>WM: 部署增强物料
     WM-->>CLI: ok
@@ -1911,25 +1911,25 @@ sequenceDiagram
 sequenceDiagram
     autonumber
     participant SEC as 安全管理员
-    participant SP as /agent/tqd/scope
-    participant BFF as TqdAclController
-    participant SVC as TqdAdminService（mis-tqd Java 侧，v1.9）
-    participant DB as mis_platform (tqd_*)
+    participant SP as /agent/iqd/scope
+    participant BFF as IqdAclController
+    participant SVC as IqdAdminService（mis-iqd Java 侧，v1.9）
+    participant DB as mis_platform (iqd_*)
 
     SEC->>SP: 清单勾选「纳入问数范围」（全局口径）
-    SP->>BFF: PUT /api/v1/tqd/scope {subject_type:"global", items:[...]} (tqd:scope:manage)
+    SP->>BFF: PUT /api/v1/iqd/scope {subject_type:"global", items:[...]} (iqd:scope:manage)
     BFF->>SVC: save_scope(items)
-    SVC->>DB: upsert tqd_scope_policy + 同步 tqd_catalog_item.in_scope
+    SVC->>DB: upsert iqd_scope_policy + 同步 iqd_catalog_item.in_scope
     SVC->>DB: 写 sys_oper_log（经 BFF @OperLog）+ 范围变更留痕
     SVC-->>SP: 生效提示「已保存，变更事件推送 → Worker 缓存刷新（默认 ≤10s 生效，v1.9）」
 
     SEC->>SP: 切到「按角色差异化」→ 选角色 → 勾选表 → 授权
-    SP->>BFF: POST /api/v1/tqd/acl {subject_type:"role", subject_id:"SALES_MANAGER", item_keys:[...], action:"ask"} (tqd:acl:grant)
+    SP->>BFF: POST /api/v1/iqd/acl {subject_type:"role", subject_id:"SALES_MANAGER", item_keys:[...], action:"ask"} (iqd:acl:grant)
     BFF->>SVC: grant_acl(dto)
     SVC->>DB: 前置校验：操作者须持 action=manage 或全局管理员角色码
     Note over SVC: 对齐 KB 评审 R6 —— 「谁能 grant」= 能管理该对象的人，非「有码即放行」
-    SVC->>DB: insert tqd_table_acl
-    SVC-->>SP: 授权成功（保存后发 tqd.config.changed → Worker 缓存刷新，默认 ≤10s 生效；缓存不可得 fail-closed 45204，见 D.7.3）
+    SVC->>DB: insert iqd_table_acl
+    SVC-->>SP: 授权成功（保存后发 iqd.config.changed → Worker 缓存刷新，默认 ≤10s 生效；缓存不可得 fail-closed 45204，见 D.7.3）
 ```
 
 ---
@@ -1939,14 +1939,14 @@ sequenceDiagram
 ```mermaid
 sequenceDiagram
     autonumber
-    participant W as mis-tqd Worker
-    participant CFG as TqdConfigClient（配置缓存）
+    participant W as mis-iqd Worker
+    participant CFG as IqdConfigClient（配置缓存）
     participant SR as ScopeResolver
     participant OR as AskOrchestrator
     participant AI as wren serve mcp (localhost HTTP)
     participant CORE as wren-core + 业务库
     participant MASK as MaskingEngine
-    participant DB as mis_platform (tqd_ask_log)
+    participant DB as mis_platform (iqd_ask_log)
 
     W->>CFG: 启动/自检加载 or 变更事件刷新配置（维度注册表 + ACL + 字典同步状态，见 D.7.3）
     CFG-->>W: 缓存（内存）
@@ -1981,19 +1981,19 @@ sequenceDiagram
 
 ---
 
-### 5.7 中心侧字典同步（✅ A13③ 已确认：每日全量 upsert，v1.7；v1.9：Java 侧 `TqdScopeSyncJobService` 按维度注册表遍历 dept/store）
+### 5.7 中心侧字典同步（✅ A13③ 已确认：每日全量 upsert，v1.7；v1.9：Java 侧 `IqdScopeSyncJobService` 按维度注册表遍历 dept/store）
 
 ```mermaid
 sequenceDiagram
     autonumber
     participant SCH as 中心定时调度（每日一次）
-    participant SVC as TqdScopeSyncJobService（mis-tqd Java 侧，v1.9）
-    participant DIM as tqd_row_scope_dimension（维度注册表，v1.9）
+    participant SVC as IqdScopeSyncJobService（mis-iqd Java 侧，v1.9）
+    participant DIM as iqd_row_scope_dimension（维度注册表，v1.9）
     participant ORG as mis-org 只读数据源（部门 + dept_path + 映射来源）/ 门店主数据
     participant MPM as 编码映射（mis_dept_mapping / 门店映射，如无现成对应列）
-    participant DS as tqd_datasource（scope_sync_enabled 清单，v1.9 通用化）
+    participant DS as iqd_datasource（scope_sync_enabled 清单，v1.9 通用化）
     participant BIZ as 业务库1..N mis_dept_scope / mis_store_scope（物化表）
-    participant AL as 告警/审计（tqd_scope_dict_sync 状态 + tqd_ask_log 级联降级）
+    participant AL as 告警/审计（iqd_scope_dict_sync 状态 + iqd_ask_log 级联降级）
 
     SCH->>SVC: 触发 sync_scope_dict_job（每日一次）
     SVC->>DIM: 读维度注册表 enabled=true 且 dict_table 非空（dept / store）
@@ -2009,10 +2009,10 @@ sequenceDiagram
         alt 同步失败（重试后仍失败）
             SVC->>AL: 告警（运维 + 平台管理员）；该维度行级降级 ENUM/FAIL_CLOSED（45204，不静默放行）
         else 成功
-            SVC->>AL: 写 tqd_scope_dict_sync（dimension_code/last_success_at/row_count/status）+ 记录对账
+            SVC->>AL: 写 iqd_scope_dict_sync（dimension_code/last_success_at/row_count/status）+ 记录对账
         end
     end
-    Note over SVC: 同步完成后发 tqd.config.changed（type=dict_sync）→ Worker TqdConfigClient 刷新缓存（D.7.3）
+    Note over SVC: 同步完成后发 iqd.config.changed（type=dict_sync）→ Worker IqdConfigClient 刷新缓存（D.7.3）
     Note over SVC: 可选增量事件补充：mis-org 部门变更事件 → 增量更新该部门及子孙（path 级联），不替代每日全量兜底
     Note over SVC: 与权限配置解耦：同步是数据管道（数据面），授权矩阵是配置（配置面），见 D.6.4/D.6.6/D.9.4
 ```
@@ -2025,17 +2025,17 @@ sequenceDiagram
 sequenceDiagram
     autonumber
     participant ADM as 平台管理员
-    participant CFG as 平台配置（mis_platform 库 tqd_*，mis-tqd Java 侧管理）
-    participant BFF as BFF AiPlatformClient / TqdIdentityHeaderService
+    participant CFG as 平台配置（mis_platform 库 iqd_*，mis-iqd Java 侧管理）
+    participant BFF as BFF AiPlatformClient / IqdIdentityHeaderService
     participant ORG as mis-org（授权源头）
-    participant IC as TqdInternalController（/internal/v1/tqd/**，v1.9）
-    participant W as mis-tqd Worker（ScopeResolver + TqdConfigClient）
+    participant IC as IqdInternalController（/internal/v1/iqd/**，v1.9）
+    participant W as mis-iqd Worker（ScopeResolver + IqdConfigClient）
     participant BIZ as 业务库 mis_dept_scope / mis_store_scope + 业务表
-    participant DB as mis_platform（tqd_ask_log）
+    participant DB as mis_platform（iqd_ask_log）
 
     ADM->>CFG: 配置「角色 × 表 × row_scope 维度实例」（dept / store，可多维度 AND；D.7 步骤①）
-    CFG-->>IC: 保存后发 tqd.config.changed（v1.9 事件推送）
-    IC->>W: 变更事件 → TqdConfigClient 刷新本地缓存（维度注册表 + ACL + 字典同步状态，D.7.3）
+    CFG-->>IC: 保存后发 iqd.config.changed（v1.9 事件推送）
+    IC->>W: 变更事件 → IqdConfigClient 刷新本地缓存（维度注册表 + ACL + 字典同步状态，D.7.3）
     BFF->>ORG: 读用户 data_scope + 任职锚点 + sys_dept.dept_path + user.store_ids（D.7 步骤②，v1.9 双维度）
     ORG-->>BFF: dept 锚点 id+path+scope + store 可见门店集
     BFF->>W: 注入 X-Mis-Dept-Scope（dept 授权）+ X-Mis-Stores（store 授权；按维度注册表遍历，无该维度授权则不注）
@@ -2057,7 +2057,7 @@ sequenceDiagram
 |---|---|---|---|
 | `sqlglot` | `^25.0` | **SQL 解析取表/列血缘**（D2 后置校验 / D3 降级兜底）；纯 Python 无编译依赖，支持 postgres/mysql/bigquery 等方言 | ✅ 新增 |
 | `mcp` | 最新 | **官方 MCP Python SDK**，本地 client 连 `wren serve mcp @127.0.0.1`（替代旧 `httpx` 调 WrenAI REST） | ✅ 新增 |
-| `sqlalchemy[asyncio]` | 现有 | Worker 侧不再管理 `tqd_*` ORM（v1.9：落库改 mis_platform + Java 侧，Worker 经 `TqdConfigClient` API 消费）；保留用于 Worker 其他既有 DB 能力（如本地审计缓存/状态） | 复用 |
+| `sqlalchemy[asyncio]` | 现有 | Worker 侧不再管理 `iqd_*` ORM（v1.9：落库改 mis_platform + Java 侧，Worker 经 `IqdConfigClient` API 消费）；保留用于 Worker 其他既有 DB 能力（如本地审计缓存/状态） | 复用 |
 | `pydantic` | 现有 | DTO | 复用 |
 | `structlog` | 现有 | 日志（脱敏敏感头，对齐 `_SENSITIVE_HEADERS` 范式） | 复用 |
 | `tenacity` | 现有/按需 | 轮询退避与瞬时错误重试（若现有已引入则复用，否则手写退避即可，**不为此单独引包**） | 视现状 |
@@ -2066,7 +2066,7 @@ sequenceDiagram
 
 ### 6.2 Java（`mis-admin-bff`）
 
-**零新增依赖**。`WebClient`（ADR-007）、`Flux<ServerSentEvent<String>>`、Jackson 均已在 `AiPlatformClient` / `AgentOpsClient` 中在用，`TqdClient` 继承 `AbstractDownstreamClient` 即可。
+**零新增依赖**。`WebClient`（ADR-007）、`Flux<ServerSentEvent<String>>`、Jackson 均已在 `AiPlatformClient` / `AgentOpsClient` 中在用，`IqdClient` 继承 `AbstractDownstreamClient` 即可。
 
 ### 6.3 前端（`mis-admin-web`）
 
@@ -2088,23 +2088,23 @@ sequenceDiagram
 ### 7.1 权限码命名
 
 ```text
-命名空间：tqd:*（独立，不复用 agent:*）
-格式：    tqd:{资源}:{动作}
+命名空间：iqd:*（独立，不复用 agent:*）
+格式：    iqd:{资源}:{动作}
 资源：    config | catalog | scope | acl | enhance | test | trace
 动作：    view | save | test | sync | manage | grant | revoke | use
 
 完整清单（14 个）：
-  tqd:config:view     tqd:config:save     tqd:config:test
-  tqd:catalog:view    tqd:catalog:sync
-  tqd:scope:view      tqd:scope:manage
-  tqd:acl:grant       tqd:acl:revoke
-  tqd:enhance:view    tqd:enhance:manage  tqd:enhance:sync
-  tqd:test:use        tqd:trace:view
+  iqd:config:view     iqd:config:save     iqd:config:test
+  iqd:catalog:view    iqd:catalog:sync
+  iqd:scope:view      iqd:scope:manage
+  iqd:acl:grant       iqd:acl:revoke
+  iqd:enhance:view    iqd:enhance:manage  iqd:enhance:sync
+  iqd:test:use        iqd:trace:view
 
 用户端问数：复用既有 ai:chat:use（V6 已种子化，不新增）
 ```
 
-**硬规则**：每个 `/api/v1/tqd/**` 端点都必须在 `V69` 里同时写 `sys_api` **和** `sys_menu_api`。BFF 注册表是 `sys_api ⋈ sys_menu_api ⋈ sys_menu` 的 **INNER JOIN**，只插 `sys_api` 会因 `deny-unmapped=true` 直接返回 `40300「接口未授权映射」`——这正是 V50→V61 修过的坑，不要重犯。
+**硬规则**：每个 `/api/v1/iqd/**` 端点都必须在 `V69` 里同时写 `sys_api` **和** `sys_menu_api`。BFF 注册表是 `sys_api ⋈ sys_menu_api ⋈ sys_menu` 的 **INNER JOIN**，只插 `sys_api` 会因 `deny-unmapped=true` 直接返回 `40300「接口未授权映射」`——这正是 V50→V61 修过的坑，不要重犯。
 
 ### 7.2 错误码（`452xx` 段，需在 `ResultCode` 登记）
 
@@ -2129,8 +2129,8 @@ sequenceDiagram
 event: plan_step     data: {"seq":3,"code":"searching","label":"检索相关语义模型","status":"running"}
 event: delta         data: {"content":"本月三个渠道合计..."}       # 答案增量
 event: citations     data: {"citations":[...]}                     # 一次性下发
-event: result        data: {...TqdAskResponse 完整体（已投影）...}
-event: dispatch_trace data: {"intent":"data-query","worker_id":"mis-tqd",...}
+event: result        data: {...IqdAskResponse 完整体（已投影）...}
+event: dispatch_trace data: {"intent":"data-query","worker_id":"mis-iqd",...}
 event: error         data: {"code":45204,"message":"..."}
 event: done          data: {}
 ```
@@ -2139,27 +2139,27 @@ event: done          data: {}
 1. `plan_step` 可多次下发同一 `seq`（`status` 从 `running`→`done`），前端按 `seq` upsert。
 2. `result` 帧是**唯一权威终态**，前端以它覆盖此前所有增量。
 3. `error` 帧后必须紧跟 `done`，前端据此收起 loading。
-4. BFF 侧 `mis.tqd.sse-enabled=false` 时降级为非流式 `/ask`，前端同一套渲染逻辑（`result` 帧等价于单次响应）。
+4. BFF 侧 `mis.iqd.sse-enabled=false` 时降级为非流式 `/ask`，前端同一套渲染逻辑（`result` 帧等价于单次响应）。
 
 ### 7.4 dispatch_trace 格式
 
 沿用 `coordinator-worker` 既有 `DispatchTraceEntry`，本 Worker 填充值：
 
 ```json
-{"intent":"data-query","worker_id":"mis-tqd","tool":"agent__invoke","status":"COMPLETED","latency_ms":3733,"task_id":"...","brief_rejected":false}
+{"intent":"data-query","worker_id":"mis-iqd","tool":"agent__invoke","status":"COMPLETED","latency_ms":3733,"task_id":"...","brief_rejected":false}
 ```
 
-`intent` 固定 `data-query`；`mis-tqd` 必须出现在 `mis-copilot/coordination.yaml` 的 `worker_ids` 与 `INVOKE_AGENT_WHITELIST`，否则委派被白名单拒绝（spec §11 A7）。
+`intent` 固定 `data-query`；`mis-iqd` 必须出现在 `mis-copilot/coordination.yaml` 的 `worker_ids` 与 `INVOKE_AGENT_WHITELIST`，否则委派被白名单拒绝（spec §11 A7）。
 
 ### 7.5 脱敏统一入口
 
 ```text
-唯一出口：src/agent/mis_tqd/masking.py :: MaskingEngine.apply()
+唯一出口：src/agent/mis_iqd/masking.py :: MaskingEngine.apply()
 
 规则来源（优先级从高到低）：
-  1. tqd_catalog_item.mask_rule（字段级显式指定）
-  2. tqd_catalog_item.sensitive_level = high → 按 data_type 兜底规则
-  3. tqd_mask_rule（按 match_type: column_name → regex → semantic_tag 依次匹配，priority 小者优先）
+  1. iqd_catalog_item.mask_rule（字段级显式指定）
+  2. iqd_catalog_item.sensitive_level = high → 按 data_type 兜底规则
+  3. iqd_mask_rule（按 match_type: column_name → regex → semantic_tag 依次匹配，priority 小者优先）
 
 内置规则（对齐 03-security.md §9.3）：
   phone   138****0000        保留前 3 后 4
@@ -2171,25 +2171,25 @@ event: done          data: {}
 
 调用点约束：
   - 必须在 ResponseProjector 之前调用（脱敏是数据事实，投影是可见性）
-  - tqd_ask_log 记录的是**脱敏后**的 rows 摘要（不落原文），但保留 masked_columns 明细
+  - iqd_ask_log 记录的是**脱敏后**的 rows 摘要（不落原文），但保留 masked_columns 明细
   - 后台 view=admin 同样脱敏 —— 「能看 SQL」≠「能看明文敏感数据」
 ```
 
 ### 7.6 `item_key` 与 wire 命名
 
-- `item_key` 是跨 `tqd_catalog_item` / `tqd_scope_policy` / `tqd_table_acl` / `citations` 的唯一 JOIN 键，格式见 §4.2，**大小写敏感、不做归一化**（PostgreSQL 与 MySQL 大小写语义不同，统一在写入时按数据源原样保存）。
-- wire 一律 **snake_case**（与 `features/agent/types.ts` 现状一致，BFF 原样透传不做 key 转换）。前端 `wrenai/types.ts` 必须逐字段对齐 Python `tqd_schema.py`，**禁止凭设计文档臆造字段**（`types.ts` 头部注释已记录过 `skill_id`/`id` 臆造导致的线上错位）。
+- `item_key` 是跨 `iqd_catalog_item` / `iqd_scope_policy` / `iqd_table_acl` / `citations` 的唯一 JOIN 键，格式见 §4.2，**大小写敏感、不做归一化**（PostgreSQL 与 MySQL 大小写语义不同，统一在写入时按数据源原样保存）。
+- wire 一律 **snake_case**（与 `features/agent/types.ts` 现状一致，BFF 原样透传不做 key 转换）。前端 `wrenai/types.ts` 必须逐字段对齐 Python `iqd_schema.py`，**禁止凭设计文档臆造字段**（`types.ts` 头部注释已记录过 `skill_id`/`id` 臆造导致的线上错位）。
 
 ### 7.7 前端新增页面「四处同改」
 
-新增任一 `/agent/tqd/*` 页面必须同改 4 处，漏一处的表现是「菜单点了没反应」或「页面存在但侧栏不显示」：
+新增任一 `/agent/iqd/*` 页面必须同改 4 处，漏一处的表现是「菜单点了没反应」或「页面存在但侧栏不显示」：
 
 | # | 文件 | 改什么 |
 |---|---|---|
 | ① | `src/lib/nav/agent-nav.ts` | `AGENT_NAV` 追加 leaf（path/title/icon） |
 | ② | `src/components/layout/keep-alive-outlet.tsx` | `PAGE_MAP` 追加精确路径 → 组件 |
 | ③ | `src/app/router.tsx` | `/agent/*` 已整体登记，通常零改动（需核实） |
-| ④ | `V69__tqd_menu_api_seed.sql` | `sys_menu` 种子（标题 + permission 码 + 排序 + icon） |
+| ④ | `V69__iqd_menu_api_seed.sql` | `sys_menu` 种子（标题 + permission 码 + 排序 + icon） |
 
 额外第 ⑤ 处：`src/lib/nav/icons.ts` 的 `ICON_MAP` 必须登记新 icon，否则 `resolveNavIcon` **静默**回退成 `LayoutDashboard`（不报错，很难查）。
 
@@ -2197,21 +2197,21 @@ event: done          data: {}
 
 | # | 项 | 本需求取值 |
 |---|---|---|
-| 1 | 元数据 | `agent_id=mis-tqd`，`display_name=问数助手`，`capabilities=[ask_data, explain_metric, describe_scope]` |
-| 2 | 配置目录 | `configs/agents/mis-tqd/`（agent/metadata/runtime/system/identity/memory） |
+| 1 | 元数据 | `agent_id=mis-iqd`，`display_name=问数助手`，`capabilities=[ask_data, explain_metric, describe_scope]` |
+| 2 | 配置目录 | `configs/agents/mis-iqd/`（agent/metadata/runtime/system/identity/memory） |
 | 3 | 输入契约 | `user_question`（必需）、`page_context_slice`（可选） |
-| 4 | 输出契约 | `json`（`TqdAskResponse`）；错误语义见 §7.2 |
+| 4 | 输出契约 | `json`（`IqdAskResponse`）；错误语义见 §7.2 |
 | 5 | 权限 | 功能码由 BFF 前置；数据范围由 `ScopeResolver` 裁定；**禁止**直连业务库、禁止写操作 |
 | 6 | 安全级别 | `read_only`（无写能力，无需 HITL） |
 | 7 | SLO | 单次问数 P95 ≤ 20s，超时 `wren_timeout_seconds`（默认 60s）；降级文案见 §7.2 |
-| 8 | 评测 | `configs/agents/mis-tqd/eval/golden-questions.yaml` ≥5 条（期望 `worker_id=mis-tqd` + 关键断言：命中表、口径正确、无 SQL 泄漏） |
-| 9 | 白名单 | `mis-copilot/coordination.yaml` `worker_ids` + `INVOKE_AGENT_WHITELIST` 追加 `mis-tqd` |
+| 8 | 评测 | `configs/agents/mis-iqd/eval/golden-questions.yaml` ≥5 条（期望 `worker_id=mis-iqd` + 关键断言：命中表、口径正确、无 SQL 泄漏） |
+| 9 | 白名单 | `mis-copilot/coordination.yaml` `worker_ids` + `INVOKE_AGENT_WHITELIST` 追加 `mis-iqd` |
 
 ### 7.9 其他约定
 
 - **Result 信封**：BFF 对外一律 `{code, data, message}`（`code=0` 成功）。ai-platform 管理面同样返回 MIS `Result` 形状（对齐 `kb_client.py` 的 `code != 0 视为业务失败`）。
 - **结果集上限**：`row_count` 硬上限 **1000 行 / 50 列**（超出置 `truncated=true` 并在 summary 提示），防止大结果打爆 SSE 与前端表格。
-- **多轮上下文**：`thread_id` 由 WrenAI 首轮返回，平台存进 `tqd_ask_log` 并回写会话 state；追问时透传。`thread_id` 与 MIS `session_id` 是 **1:N**（一个会话可切换多个 thread，如换了数据域）。
+- **多轮上下文**：`thread_id` 由 WrenAI 首轮返回，平台存进 `iqd_ask_log` 并回写会话 state；追问时透传。`thread_id` 与 MIS `session_id` 是 **1:N**（一个会话可切换多个 thread，如换了数据域）。
 - **配置缓存（v1.9 修订：由「无缓存」改为「事件推送 + 缓存」）**：v1.8 原约定「范围与 ACL 裁定不加缓存，授权变更即时生效」。**v1.9 因 A1 改判（Worker 不直连 mis_platform 库）改为**：Worker 本地缓存配置（维度注册表/ACL/字典同步状态），**变更事件推送刷新（默认 ≤10s 生效）+ 每日定期全量兜底**；缓存不可得或 `config_stale=true` → **fail-closed 45204**（宁可拒不可漏，不出现「已撤权仍能问」窗口；见 D.7.3）。**若后续出现性能问题，缓存必须带 `subject_id` 维度失效通知，不得用固定 TTL。**
 - **时间**：所有时间戳 ISO 8601 UTC 存储（`TimestampMixin` 已带 `timezone=True`），前端本地化展示。
 
@@ -2221,26 +2221,26 @@ event: done          data: {}
 
 | # | 关联 Q | 事项 | 影响面 | 建议 |
 |---|---|---|---|---|
-| **A1** | Q3 附加 | **表级 ACL 等 `tqd_*` 问数配置落库位置（v1.9 业务改判：落 `mis_platform` 而非 `ai_platform`）**，对齐 mis_kb 范式 | 架构一致性、后续审计口径、Worker 配置消费方式 | **✅ 业务改判（2026-08-22，主理人记录，v1.9）：问数配置表改落 `mis_platform` 库（对齐 mis_kb 范式：kb_* 表在 mis_platform 库，见 V12__kb_schema.sql）**。同步决策：**新建 Java 模块 `backend/mis-tqd` 统一管理 `tqd_*` 表**（entity/repository/service/controller，对齐 mis-kb 分层）；BFF 对外 `/api/v1/tqd/**`（权限码 `tqd:*`）；**Worker 不直连 mis_platform 库**，经 `TqdConfigClient` 调 `TqdInternalController` `/internal/v1/tqd/**` + 本地缓存消费（启动全量 + 事件增量 + 每日兜底；缓存不可得 fail-closed 45204，见 D.7.3）。**v1.8 原裁定**（落 ai_platform、Python 侧管理、Worker 同进程读库）因业务改判作废，作为历史记录保留于 ADR-019（已标记「已替代」）；**ADR-020 固化新决策**（文件 `docs/adr/ADR-020-tqd-query-acl-mis-platform.md` + 更新 `docs/adr/README.md` 索引） |
+| **A1** | Q3 附加 | **表级 ACL 等 `iqd_*` 问数配置落库位置（v1.9 业务改判：落 `mis_platform` 而非 `ai_platform`）**，对齐 mis_kb 范式 | 架构一致性、后续审计口径、Worker 配置消费方式 | **✅ 业务改判（2026-08-22，主理人记录，v1.9）：问数配置表改落 `mis_platform` 库（对齐 mis_kb 范式：kb_* 表在 mis_platform 库，见 V12__kb_schema.sql）**。同步决策：**新建 Java 模块 `backend/mis-iqd` 统一管理 `iqd_*` 表**（entity/repository/service/controller，对齐 mis-kb 分层）；BFF 对外 `/api/v1/iqd/**`（权限码 `iqd:*`）；**Worker 不直连 mis_platform 库**，经 `IqdConfigClient` 调 `IqdInternalController` `/internal/v1/iqd/**` + 本地缓存消费（启动全量 + 事件增量 + 每日兜底；缓存不可得 fail-closed 45204，见 D.7.3）。**v1.8 原裁定**（落 ai_platform、Python 侧管理、Worker 同进程读库）因业务改判作废，作为历史记录保留于 ADR-019（已标记「已替代」）；**ADR-020 固化新决策**（文件 `docs/adr/ADR-020-iqd-query-acl-mis-platform.md` + 更新 `docs/adr/README.md` 索引） |
 | **A2** | Q1 | **部署形态已定新线**：`pip install wrenai` + `wren serve mcp` 进程模型（同主机/同网络，localhost http，凭证 server-side 由 `wren profile` 注入不落前端）。原「wren-engine 独立 Docker 同 VPC 直连」重负载描述作废——改为 **WrenAI 进程与业务库网络可达即可**，不再要求独立 VPC / 独立 Qdrant | 运维成本、数据安全审批 | 运维只需保证 ai-platform 主机与 WrenAI 进程同机/同网络、WrenAI 进程对业务库网络可达；凭证不入平台库、不落前端（profile 注入）。**已修订，待运维确认同机部署资源** |
 | **A3** | Q4 | **谁持有语义建模入口（新线待核实）**：新线建模是 MDL 文件 + `wren context build`，**wren-ui 是否仍随 `pip install wrenai` 发布**待核实；若随包则 DBA 仍可用，若否则建模入口收敛到平台编辑 MDL JSON + `wren context build` | 治理流程、账号安全、建模工具链 | 待 W0 实测确认 wren-ui 是否随包；一期建议：结构建模走 MDL 文件（`deploy/wrenai/mdl/`）+ `wren context build`，业务描述在平台清单页。**需数据治理 + W0 实测拍板** |
-| **A4** | Q5 | **WrenAI 新线版本已钉**：**`wren: v0.13.3`**（项目 **`0.29.2`**，2026-08-18），以 `wren --version` 实测写入 `agent/ai-platform/deploy/wrenai/README.md`；新线引用走原生 `get_context`/`list_knowledge`，不再依赖旧 `/v1/instructions` 端点 | `tqd_mcp_client.py` 工具常量、引用实现路径 | 版本号已钉新线；W0 实测重点验证 MCP 工具面（见 tasks.md T-W0-01）。**已钉版本，剩 W0 工具面实测** |
+| **A4** | Q5 | **WrenAI 新线版本已钉**：**`wren: v0.13.3`**（项目 **`0.29.2`**，2026-08-18），以 `wren --version` 实测写入 `agent/ai-platform/deploy/wrenai/README.md`；新线引用走原生 `get_context`/`list_knowledge`，不再依赖旧 `/v1/instructions` 端点 | `iqd_mcp_client.py` 工具常量、引用实现路径 | 版本号已钉新线；W0 实测重点验证 MCP 工具面（见 tasks.md T-W0-01）。**已钉版本，剩 W0 工具面实测** |
 | **A5** | Q3 | **列级 ACL 明确延后（本期不做，预留后期方案）**：本期仅表级 + 行级 + 字段脱敏。若业务要求「同一张表不同角色看不同列」，脱敏≠权限（脱敏后列仍出现在结果里） | 数据安全合规 | **✅ 业务已确认（2026-08-22，主理人记录，v1.8）：列级隔离本期不做，预留后期方案**——预留位点见 §4.2.2 D.10（`column_acl` 数据位 / 脱敏与列 ACL 分层 / SQL 投影列裁剪注入位点），本期不建不启用；确有需求的敏感表用「拆视图 + 表级 ACL」变通 |
-| **A6** | Q8 | **S-07 平台术语表的读接口是否已就绪**（表名/服务/字段） | `import-s07` 能否落地 | 若未就绪，`tqd_knowledge` 一期纯本地录入，`source=kb_s07` 与 `kb_term_id` 字段保留但不启用。**需确认 S-07 现状** |
+| **A6** | Q8 | **S-07 平台术语表的读接口是否已就绪**（表名/服务/字段） | `import-s07` 能否落地 | 若未就绪，`iqd_knowledge` 一期纯本地录入，`source=kb_s07` 与 `kb_term_id` 字段保留但不启用。**需确认 S-07 现状** |
 | **A7** | §7.2 | **`452xx` 错误码段位是否可用**（现存 `ResultCode` 已用 401xx/403xx/404xx/409xx/500xx） | 错误码冲突 | 建议占用 `452xx`；需核对是否有其他模块已规划该段。**需架构确认** |
 | **A8** | §5.2 | **`simulate_role_code` 是否允许模拟任意角色**（含比自己权限更大的角色） | 越权风险 | 建议：仅允许模拟「当前用户可管理范围内的角色」，或收紧为「仅平台管理员可模拟任意角色」。**需安全拍板** |
-| **A9** | Q10 | 一期单 project 前提下，**多业务库（PG + MySQL 混合）是否需要同时可问** | `tqd_datasource` 是否一期就多行 | 建议一期单 connector；若业务确需跨库联合问数，须评估 WrenAI 单 project 多 connector 的 join 能力（可能不支持跨源 join）。**需业务确认** |
-| **A10** | NFR-3 | 生产 `sse-enabled` 与网关 SSE 缓冲：mis-gateway / Nginx 是否已关闭对 `/api/v1/tqd/ask-stream` 的响应缓冲 | 流式体验（否则会「憋到最后一次性返回」） | 建议在 W1 联调时验证；若网关未支持，先按非流式上线并明确标注。**需运维确认** |
-| **A11** | Q3 附加 / §4.2.1 方案① / §4.2.2 | **行级数据范围（RLS/WHERE 注入）本期进入双闸门**（已确认）：复用 mis-org 组织数据范围做行条件注入（`tqd_table_acl.row_scope` + `ScopeResolver.inject_row_scope`）。WrenAI 侧无行级概念，行条件必须平台侧注入 | `tqd_table_acl` 加 `row_scope` 列、`scope_resolver.py` 注入器（逐表注入 + 覆盖校验 + fail-closed）、范围页行级编辑、BFF `X-Mis-Depts` 扩展为可见部门集合（含子树）、tasks.md T-W2-02a/b | **✅ 业务已确认本期（2026-08-22，主理人记录）**：最小实现 = 受限 WHERE 注入 + fail-closed（宁可拒不可漏），完整设计见 §4.2.2；若 W1 联调覆盖不了复杂 JOIN，降级二期 DB 原生 RLS / per-role profile（方案③）兜底 |
+| **A9** | Q10 | 一期单 project 前提下，**多业务库（PG + MySQL 混合）是否需要同时可问** | `iqd_datasource` 是否一期就多行 | 建议一期单 connector；若业务确需跨库联合问数，须评估 WrenAI 单 project 多 connector 的 join 能力（可能不支持跨源 join）。**需业务确认** |
+| **A10** | NFR-3 | 生产 `sse-enabled` 与网关 SSE 缓冲：mis-gateway / Nginx 是否已关闭对 `/api/v1/iqd/ask-stream` 的响应缓冲 | 流式体验（否则会「憋到最后一次性返回」） | 建议在 W1 联调时验证；若网关未支持，先按非流式上线并明确标注。**需运维确认** |
+| **A11** | Q3 附加 / §4.2.1 方案① / §4.2.2 | **行级数据范围（RLS/WHERE 注入）本期进入双闸门**（已确认）：复用 mis-org 组织数据范围做行条件注入（`iqd_table_acl.row_scope` + `ScopeResolver.inject_row_scope`）。WrenAI 侧无行级概念，行条件必须平台侧注入 | `iqd_table_acl` 加 `row_scope` 列、`scope_resolver.py` 注入器（逐表注入 + 覆盖校验 + fail-closed）、范围页行级编辑、BFF `X-Mis-Depts` 扩展为可见部门集合（含子树）、tasks.md T-W2-02a/b | **✅ 业务已确认本期（2026-08-22，主理人记录）**：最小实现 = 受限 WHERE 注入 + fail-closed（宁可拒不可漏），完整设计见 §4.2.2；若 W1 联调覆盖不了复杂 JOIN，降级二期 DB 原生 RLS / per-role profile（方案③）兜底 |
 | **A12** | Q3 附加 / §4.2.2 v1.4 | **mis-org 部门树是否物化 `dept_path`（或建 closure 表）**——决定路径前缀（策略 1）本期可行性。业务现状：`sys_dept` 已有 `parent_id` 链 + `ancestors`（逗号分隔 ID 链，`buildAncestors`/`rebuildAncestors` 已维护），**无物化 `dept_path` 列、无 closure 表** | 注入策略选择（PATH_PREFIX 是唯一主路径）、mis-org 新增 DDL + 维护逻辑、BFF/Worker 的 path 映射来源 | **✅ 业务已确认（2026-08-22，主理人记录）：物化 `dept_path`，`PATH_PREFIX` 为唯一主路径，`CLOSURE_CTE` 不实现**。决策依据：① mis-org 现无闭包表，新建 + 增删改同步维护成本高于物化 path（`ancestors` 已是同构物化路径，改/增带分隔符 `dept_path` 只改 `buildAncestors`/`rebuildAncestors` 一处维护逻辑 + 新增列即可）；② `CLOSURE_CTE` 依赖 wren-core/DataFusion 对子查询 IN/CTE 的方言支持（未实测、风险高）；③ 物化 path 用标准 LIKE 前缀，与层级深度/规模无关、零方言依赖。主理人澄清口径：闭包表纯理论上可处理任意深度，本决策的正确性在于「成本/方言风险/零依赖」三点权衡，而非闭包表能力不足。落地设计见 §4.2.2 D，迁移见 tasks.md T-W2-02a。**v1.6 增补**：2a 的 JOIN 载体由 `sys_dept` 修订为**部门权限字典表 `mis_dept_scope`**（见 §4.2.2 D.6），`sys_dept` 本身不再进入 WrenAI MDL 可见集合，改为业务库本地 `mis_dept_scope` 注册 |
 | **A13** | Q3 附加 / §4.2.2 v1.6 | **部门编码对齐与字典表形态（2026-08-22 用户提出方案）**——① 业务库 DEPTID 与 mis-org 部门 ID 是否同一套主数据（决定字典表是否需映射层）；② 业务库与 mis_platform 是否同实例（决定视图 / 物化表）；③ 多数据源是否每库一张 | 字典表建法（视图/物化表）、是否需要编码映射、同步任务数量、MDL 注册 | **✅ 业务已确认（2026-08-22，主理人记录）**：三答——**① 业务库部门编码与 mis_org 不统一主数据（暂时无关）→ 需要映射；② 业务库与 mis_platform 非同一实例 → 物化表（视图不可行）；③ 多数据源每库一张，集中定义从中心每日同步到各库（物化表 + 中心侧定时批同步）**。据此定案：**决策 X（映射内嵌字典表）**——`mis_dept_scope.dept_id` 存业务库编码 + `mis_dept_id`/`dept_path` 存平台（同步时中心侧映射），推荐理由/映射来源/配置下拉数据源/对 T-W2-02a 工作量影响见 §4.2.2 D.6.3；同步任务归属 ai-platform 定时作业（每日全量 upsert 幂等、失败告警 + 降级 45204）见 D.6.4；配置面 vs 数据面澄清（**用户疑问「是否需逐库设置权限」→ 不需要**，权限配置平台统一一处）见 D.6.6。落地设计见 §4.2.2 D.6，tasks.md T-W2-02a 已同步 |
 
 ### 最需要先拍板的 5 个（送业务/架构；v1.5：A12 已确认；v1.6：新增 A13；v1.7：A13 已确认；v1.8：A1/A5 已确认；v1.9：A1 业务改判落 mis_platform）
 
-1. **A4 + Q1（已钉新线，转 W0 MCP 工具面实测）：** 版本已钉 **`wren: v0.13.3`**（项目 **`0.29.2`**，2026-08-18）；W0 重点改为验证 `wren serve mcp` 工具面（`get_context`/`recall_queries`/`list_knowledge` 是否暴露原生引用、只读默认 + localhost 无鉴权、MDL `wren context build` 流程、凭证 server-side），据此确定 `tqd_mcp_client.py` 工具常量；**v1.4 新增探针：超大 IN 实测 + 部门树规模与 path 现状盘点；v1.5：方言矩阵探针 3b 降级为「仅记录不阻塞」（CLOSURE_CTE 不实现）、新增探针 3d `dept_path LIKE` 前缀实测（见 tasks.md T-W0-01 验收 3a/3c/3d）**。
+1. **A4 + Q1（已钉新线，转 W0 MCP 工具面实测）：** 版本已钉 **`wren: v0.13.3`**（项目 **`0.29.2`**，2026-08-18）；W0 重点改为验证 `wren serve mcp` 工具面（`get_context`/`recall_queries`/`list_knowledge` 是否暴露原生引用、只读默认 + localhost 无鉴权、MDL `wren context build` 流程、凭证 server-side），据此确定 `iqd_mcp_client.py` 工具常量；**v1.4 新增探针：超大 IN 实测 + 部门树规模与 path 现状盘点；v1.5：方言矩阵探针 3b 降级为「仅记录不阻塞」（CLOSURE_CTE 不实现）、新增探针 3d `dept_path LIKE` 前缀实测（见 tasks.md T-W0-01 验收 3a/3c/3d）**。
 2. **A12（✅ 已确认 2026-08-22，主理人记录）：mis-org 物化 `dept_path`，`PATH_PREFIX` 为唯一主路径，`CLOSURE_CTE` 不实现。** 决策依据与澄清口径见上表 A12 行；落地设计见 §4.2.2 D（列定义/维护/回填/2a vs 2b/头语义）。**剩余执行确认**：mis-org DDL 与 `DeptService` 维护逻辑由 W2（T-W2-02a）实施；**v1.6 修订：字典表改为业务库本地 `mis_dept_scope` 注册进 WrenAI MDL 可见范围，`sys_dept` 不再直接进 WrenAI**；**v1.7（A13 已确认）：`mis_dept_scope` 为物化表 + 中心每日同步 + 映射（`dept_id`=业务库编码 + `mis_dept_id`/`dept_path`=平台，见 D.6）**——探针 3d 实测 mis_dept_scope 物化表形态的 JOIN/EXISTS，探针 3e 聚焦「业务库 DEPTID 编码体系盘点 + 与 mis_org 的映射可行性」。
 3. **A13（✅ 已确认 2026-08-22，主理人记录）：部门编码对齐与字典表形态。** 三答：**① 业务库部门编码与 mis_org 不统一主数据（暂时无关）→ 需要映射；② 业务库与 mis_platform 非同一实例 → 物化表（视图不可行）；③ 多数据源每库一张 + 集中定义从中心每日同步到各库**。据此定案决策 **X（映射内嵌字典表）**（`dept_id`=业务库编码 + `mis_dept_id`/`dept_path`=平台，中心侧映射；推荐理由/映射来源/配置下拉数据源/对 T-W2-02a 工作量影响见 §4.2.2 D.6.3）；同步任务归属 ai-platform 定时作业（每日全量 upsert 幂等、失败告警 + 降级 45204）见 D.6.4；**配置面 vs 数据面澄清：权限配置平台统一一处，不存在逐库配置**（D.6.6）。**剩余执行确认**：T-W0-01 探针 3e 聚焦「业务库 DEPTID 编码体系现状盘点 + 与 mis_org 的映射可行性」，T-W2-02a 落地物化表 + 中心日同步 + 映射维护。
-4. **A1（✅ 已确认 2026-08-22，主理人记录，v1.8；✅ 业务改判 2026-08-22，v1.9）：表级 ACL 落库位置改道 `mis_platform`。** **v1.8 原裁定**：表级 ACL 等 `wren_*` 问数配置落 `ai_platform` 库，Python 侧（ai-platform）统一管理，BFF 经 HTTP 读写，不新建 Java 领域服务——与 mis-rag「ACL 留 Java」范式差异已定案（架构一致性依据见上表 A1 行）；曾建议发 ADR-019 固化该边界。**v1.9 改判（业务要求）**：问数配置表不落 ai_platform 库，**改落 `mis_platform` 库**，对齐 **mis_kb 项目范式**（kb 开头的表在 mis_platform 库）；同步决策：**新建 Java 模块 `backend/mis-tqd` 统一管理 tqd_* 表**、BFF 对外 `/api/v1/tqd/**`、Worker 经 `TqdConfigClient` 调 `/internal/v1/tqd/**` + 本地缓存消费（不直连库，见 D.7.3）；**ADR-019 标记已替代，新增 ADR-020 固化新决策**（见 §9 关联文档）。
+4. **A1（✅ 已确认 2026-08-22，主理人记录，v1.8；✅ 业务改判 2026-08-22，v1.9）：表级 ACL 落库位置改道 `mis_platform`。** **v1.8 原裁定**：表级 ACL 等 `wren_*` 问数配置落 `ai_platform` 库，Python 侧（ai-platform）统一管理，BFF 经 HTTP 读写，不新建 Java 领域服务——与 mis-rag「ACL 留 Java」范式差异已定案（架构一致性依据见上表 A1 行）；曾建议发 ADR-019 固化该边界。**v1.9 改判（业务要求）**：问数配置表不落 ai_platform 库，**改落 `mis_platform` 库**，对齐 **mis_kb 项目范式**（kb 开头的表在 mis_platform 库）；同步决策：**新建 Java 模块 `backend/mis-iqd` 统一管理 iqd_* 表**、BFF 对外 `/api/v1/iqd/**`、Worker 经 `IqdConfigClient` 调 `/internal/v1/iqd/**` + 本地缓存消费（不直连库，见 D.7.3）；**ADR-019 标记已替代，新增 ADR-020 固化新决策**（见 §9 关联文档）。
 5. **A5（✅ 已确认 2026-08-22，主理人记录，v1.8）：列级隔离本期不做、预留后期方案。** 业务已书面接受「脱敏 ≠ 权限」；预留位点见 §4.2.2 D.10（`column_acl` 数据位 / 脱敏与列 ACL 分层 / SQL 投影列裁剪注入位点），本期不建不启用；敏感表用「拆视图 + 表级 ACL」变通。
 
 > **v1.8 必拍板状态收口**：A1/A5 已确认后，**待拍板清单仅剩 A2（运维确认同机部署资源）、A3（wren-ui 随包）、A6（S-07 读接口）、A7（452xx 码段）、A8（模拟角色）、A9（多库）、A10（网关 SSE）**，均为执行期确认项；A4+Q1 转入 W0 MCP 工具面实测。
@@ -2262,6 +2262,6 @@ event: done          data: {}
 | [`../../adr/ADR-008-bff-centralized-api-authz.md`](../../adr/ADR-008-bff-centralized-api-authz.md) · [`ADR-010`](../../adr/ADR-010-api-permission-mapping.md) | 权限拦截与 API 映射 |
 | [`../../adr/ADR-018-knowledge-base-mis-kb.md`](../../adr/ADR-018-knowledge-base-mis-kb.md) | 领域服务边界与 mis_kb 范式（本需求 A1 改判 v1.9 对齐此范式） |
 | [`../../adr/ADR-019-wren-query-acl-ai-platform.md`](../../adr/ADR-019-wren-query-acl-ai-platform.md) | **已落盘（2026-08-22）——v1.9 已标记「已替代」**：问数 ACL 落 ai-platform 边界裁定（历史裁定，v1.8 已接受；v1.9 业务改判落 mis_platform，见 ADR-020） |
-| [`../../adr/ADR-020-tqd-query-acl-mis-platform.md`](../../adr/ADR-020-tqd-query-acl-mis-platform.md) | **已落盘（v1.9 新增，已接受）**——问数配置落 mis_platform 库 + backend/mis-tqd Java 模块 + Worker API 消费（A1 业务改判 2026-08-22；替代 ADR-019） |
+| [`../../adr/ADR-020-iqd-query-acl-mis-platform.md`](../../adr/ADR-020-iqd-query-acl-mis-platform.md) | **已落盘（v1.9 新增，已接受）**——问数配置落 mis_platform 库 + backend/mis-iqd Java 模块 + Worker API 消费（A1 业务改判 2026-08-22；替代 ADR-019） |
 | `agent/ai-platform/backend/src/adapters/kb_client.py` | 外部 HTTP 客户端参考范式（路径常量 / 头透传 / 日志脱敏） |
 | `agent/ai-platform/configs/agents/crm-assistant/**` | Worker 配置参考范式 |

@@ -1,5 +1,5 @@
 %% =====================================================================
-%% WrenAI 问数 APP 时序图合集（architecture.md §5.1–5.8；v1.9：A1 改判——落 mis_platform + Java 侧 backend/mis-tqd + Worker TqdConfigClient API+缓存消费（不直连库，见 D.7.3）；维度注册表一期 + 双维度（dept+store，注入按维度遍历 AND 叠加，见 D.8/D.9）；v1.8：新增 §5.8 行级权限数据流（D.7 三层放置 + 使用链路），A1/A5 拍板已确认（v1.9 已改判，列级隔离预留位点见 D.10）；v1.7：新增 §5.7 中心侧 mis_dept_scope 字典同步（每日全量 upsert，A13③，v1.9 归属 Java 侧 TqdScopeSyncJobService 按维度注册表遍历）；v1.6：2a 注入载体改为 mis_dept_scope 部门权限字典表（物化表 + 中心每日同步 + 编码映射 X，A13 已确认）；v1.5：X-Mis-Dept-Scope 携带锚点 path、策略精简 PATH_PREFIX/ENUM/FAIL_CLOSED）
+%% WrenAI 问数 APP 时序图合集（architecture.md §5.1–5.8；v1.9：A1 改判——落 mis_platform + Java 侧 backend/mis-iqd + Worker IqdConfigClient API+缓存消费（不直连库，见 D.7.3）；维度注册表一期 + 双维度（dept+store，注入按维度遍历 AND 叠加，见 D.8/D.9）；v1.8：新增 §5.8 行级权限数据流（D.7 三层放置 + 使用链路），A1/A5 拍板已确认（v1.9 已改判，列级隔离预留位点见 D.10）；v1.7：新增 §5.7 中心侧 mis_dept_scope 字典同步（每日全量 upsert，A13③，v1.9 归属 Java 侧 IqdScopeSyncJobService 按维度注册表遍历）；v1.6：2a 注入载体改为 mis_dept_scope 部门权限字典表（物化表 + 中心每日同步 + 编码映射 X，A13 已确认）；v1.5：X-Mis-Dept-Scope 携带锚点 path、策略精简 PATH_PREFIX/ENUM/FAIL_CLOSED）
 %% 单文件版，供独立渲染。
 %% =====================================================================
 
@@ -9,35 +9,35 @@ sequenceDiagram
     participant U as 普通用户
     participant FE as /ai/data-query
     participant PEP as ApiPermissionInterceptor
-    participant BFF as TqdAskFacadeService
+    participant BFF as IqdAskFacadeService
     participant CO as mis-copilot (Coordinator)
-    participant W as mis-tqd Worker
-    participant CFG as TqdConfigClient（配置缓存，v1.9）
+    participant W as mis-iqd Worker
+    participant CFG as IqdConfigClient（配置缓存，v1.9）
     participant SR as ScopeResolver
     participant OR as AskOrchestrator
     participant AI as wren serve mcp (localhost HTTP)
     participant CORE as wren-core + 业务库
     participant LM as Lineage+Citation+Masking
     participant PJ as ResponseProjector
-    participant DB as mis_platform (tqd_*)
+    participant DB as mis_platform (iqd_*)
 
     U->>FE: 输入「本月各渠道销售额」
-    FE->>PEP: POST /api/v1/tqd/ask-stream (JWT)
+    FE->>PEP: POST /api/v1/iqd/ask-stream (JWT)
     PEP->>PEP: L1 功能权限码 ai:chat:use
     PEP--xFE: 无码 → 40300（链路终止）
     PEP->>BFF: 放行
-    BFF->>BFF: 服务端裁定 view：有 tqd:trace:view → admin，否则强制 user
+    BFF->>BFF: 服务端裁定 view：有 iqd:trace:view → admin，否则强制 user
     BFF->>CO: POST /agents/mis-copilot/chat/stream + X-Mis-Roles/Dept-Scope/Stores/Depts/Orgs
     Note over BFF: v1.9：X-Mis-Dept-Scope 携带锚点 id+path+scope（v1.5）；X-Mis-Stores 携带可见门店集合（v1.9）；按维度注册表遍历注入，Worker 零查询
     CO->>CO: 意图识别 → data-query
-    CO->>W: agent__invoke(mis-tqd, TaskBrief) max_depth=1
+    CO->>W: agent__invoke(mis-iqd, TaskBrief) max_depth=1
     W->>CFG: 启动/自检已加载 or 变更事件刷新配置（维度注册表 + ACL + 范围 + 脱敏规则 + 字典同步状态，v1.9 D.7.3）
     CFG-->>W: 缓存（内存）
     W->>SR: resolve(identity, connection_id)
-    SR->>CFG: 读配置缓存 tqd_scope_policy(global) ∩ (主体模板 ∪ tqd_table_acl action=ask)（v1.9：API+缓存，不直连库）
+    SR->>CFG: 读配置缓存 iqd_scope_policy(global) ∩ (主体模板 ∪ iqd_table_acl action=ask)（v1.9：API+缓存，不直连库）
     CFG-->>SR: allowed_item_keys
     alt decision = DENY
-        SR-->>W: TqdScopeResolution(deny)
+        SR-->>W: IqdScopeResolution(deny)
         W-->>CO: task_notification(status=FAILED, error_code=45204)
         CO-->>BFF: SSE error 帧（不臆造数据）
         BFF-->>FE: 明确错误「当前角色无可问数据范围」
@@ -66,17 +66,17 @@ sequenceDiagram
                     AI->>CORE: wren-core MDL 解析 + 执行
                     CORE-->>AI: 结果集
                     AI-->>OR: {type, sql, summary, result, steps[], chart}
-                    LM->>CFG: 读配置缓存 tqd_catalog_item + tqd_knowledge → citations（v1.9：API+缓存）
-                LM->>CFG: 读配置缓存 tqd_mask_rule + sensitive_level（v1.9：API+缓存）
+                    LM->>CFG: 读配置缓存 iqd_catalog_item + iqd_knowledge → citations（v1.9：API+缓存）
+                LM->>CFG: 读配置缓存 iqd_mask_rule + sensitive_level（v1.9：API+缓存）
                 LM->>LM: MaskingEngine.apply(columns, rows)
                 LM-->>OR: citations + MaskingOutcome
             end
         end
         OR-->>W: AskResult（含全量 sql / plan / citations）
-        W->>DB: TqdAdminService.write_ask_log（经 mis-tqd 内部 API 写 mis_platform，v1.9）
+        W->>DB: IqdAdminService.write_ask_log（经 mis-iqd 内部 API 写 mis_platform，v1.9）
         W->>PJ: project(result, view=user)
         PJ->>PJ: _strip_sql()：删 sql / sql_dialect / plan[].sql 键
-        PJ-->>W: TqdAskResponse(user 口径)
+        PJ-->>W: IqdAskResponse(user 口径)
         W-->>CO: task_notification(COMPLETED) + dispatch_trace
         CO-->>BFF: SSE 终帧（answer + citations + plan，无 SQL）
         BFF-->>FE: Result 信封
@@ -87,19 +87,19 @@ sequenceDiagram
 sequenceDiagram
     autonumber
     participant OPS as AI 运营
-    participant TP as /agent/tqd/test-chat
+    participant TP as /agent/iqd/test-chat
     participant PEP as ApiPermissionInterceptor
-    participant BFF as TqdAskFacadeService
-    participant W as mis-tqd Worker
+    participant BFF as IqdAskFacadeService
+    participant W as mis-iqd Worker
     participant PJ as ResponseProjector
-    participant DB as tqd_ask_log
+    participant DB as iqd_ask_log
 
     OPS->>TP: 输入问题 + 可选「模拟角色」+ 可选 scope_hint
-    TP->>PEP: POST /api/v1/tqd/ask-stream {view:"admin", simulate_role_code}
-    PEP->>PEP: L1：tqd:test:use
+    TP->>PEP: POST /api/v1/iqd/ask-stream {view:"admin", simulate_role_code}
+    PEP->>PEP: L1：iqd:test:use
     PEP->>BFF: 放行
-    BFF->>BFF: 校验 view=admin 是否被 tqd:trace:view 授权；未授权则降级为 user
-    BFF->>BFF: simulate_role_code 非空 → 校验 tqd:test:use，替换裁定用 role_codes（**不改 JWT 身份**）
+    BFF->>BFF: 校验 view=admin 是否被 iqd:trace:view 授权；未授权则降级为 user
+    BFF->>BFF: simulate_role_code 非空 → 校验 iqd:test:use，替换裁定用 role_codes（**不改 JWT 身份**）
     BFF->>W: 同 5.1 主流程（identity.role_codes 被模拟值覆盖）
     Note over W: ScopeResolver 用模拟角色裁定 → 可验证「不同角色可问表集合不同」（FR-TEST-2）；行级按模拟角色重新注入（维度遍历，不放大权限）
     W->>PJ: project(result, view=admin)
@@ -107,34 +107,34 @@ sequenceDiagram
     BFF-->>TP: SSE 全量
     TP-->>OPS: 左对话 / 右：SQL 代码块 + 结果表格 + 引用明细 + 完整计划时间线
     OPS->>TP: 点「查看历史」
-    TP->>PEP: GET /api/v1/tqd/traces?status=&user_id=
-    PEP->>PEP: L1：tqd:trace:view
-    BFF->>DB: 查 tqd_ask_log
+    TP->>PEP: GET /api/v1/iqd/traces?status=&user_id=
+    PEP->>PEP: L1：iqd:trace:view
+    BFF->>DB: 查 iqd_ask_log
     DB-->>TP: 列表 + 详情（全量计划 + SQL）
 
 %% ---------- 5.3 配置保存 + 连通自检 + MDL 同步 ----------
 sequenceDiagram
     autonumber
     participant ADM as 平台管理员
-    participant CP as /agent/tqd/config
-    participant BFF as TqdFacadeService
-    participant SVC as TqdAdminService（mis-tqd Java 侧，v1.9）
-    participant CLI as TqdCli (本地 wren CLI)
-    participant MC as TqdMcpClient
+    participant CP as /agent/iqd/config
+    participant BFF as IqdFacadeService
+    participant SVC as IqdAdminService（mis-iqd Java 侧，v1.9）
+    participant CLI as IqdCli (本地 wren CLI)
+    participant MC as IqdMcpClient
     participant WM as wren serve mcp / wren-core
-    participant DB as mis_platform (tqd_*)
+    participant DB as mis_platform (iqd_*)
     participant NC as Nacos
 
     ADM->>CP: 填写地址 / 认证方式 / connector / 超时 / 语言
     Note over CP: 密钥输入框：提交非空才更新；GET 恒回 ******
-    CP->>BFF: PUT /api/v1/tqd/config (tqd:config:save)
+    CP->>BFF: PUT /api/v1/iqd/config (iqd:config:save)
     BFF->>SVC: save_connection(dto)
     SVC->>SVC: 密钥不入库 → 仅存 secret_ref="wrenai.api-key"
-    SVC->>DB: upsert tqd_connection
+    SVC->>DB: upsert iqd_connection
     SVC-->>CP: 保存成功（status=inactive 待自检）
 
     ADM->>CP: 点「测试连通性」
-    CP->>BFF: POST /api/v1/tqd/config/test (tqd:config:test)
+    CP->>BFF: POST /api/v1/iqd/config/test (iqd:config:test)
     BFF->>SVC: test_connection()
     SVC->>NC: 按 secret_ref 取真值
     SVC->>WC: health()
@@ -144,19 +144,19 @@ sequenceDiagram
     SVC-->>CP: 徽标「已连接」
 
     ADM->>CP: 点「同步语义建模」（direction=push）
-    CP->>BFF: POST /api/v1/tqd/config/mdl/sync (tqd:catalog:sync)
+    CP->>BFF: POST /api/v1/iqd/config/mdl/sync (iqd:catalog:sync)
     BFF->>SVC: sync_mdl("push")
-    SVC->>DB: 读 tqd_catalog_item（含本地 description）组装 MDL JSON
+    SVC->>DB: 读 iqd_catalog_item（含本地 description）组装 MDL JSON
     SVC->>CLI: context build(mdl_dir)
     CLI->>WM: 构建/部署 MDL（本地 CLI，替代旧 /v1/mdl/deploy）
     WM-->>CLI: mdl_hash
-    SVC->>DB: insert tqd_model_snapshot(source=push, mdl_hash, status=ok)
+    SVC->>DB: insert iqd_model_snapshot(source=push, mdl_hash, status=ok)
     alt direction=pull（对账）
         SVC->>MC: get_mdl()
         MC->>WM: MCP get_mdl
         WM-->>SVC: mdl_json
-        SVC->>DB: upsert tqd_catalog_item（**不覆盖非空 description**，仅补结构与新对象）
-        SVC->>DB: insert tqd_model_snapshot(source=pull)
+        SVC->>DB: upsert iqd_catalog_item（**不覆盖非空 description**，仅补结构与新对象）
+        SVC->>DB: insert iqd_model_snapshot(source=pull)
     end
     SVC-->>CP: 上次同步时间 + 模型数 + 差异摘要
 
@@ -164,29 +164,29 @@ sequenceDiagram
 sequenceDiagram
     autonumber
     participant ADM as 平台管理员
-    participant EP as /agent/tqd/enhance
-    participant SVC as TqdAdminService（mis-tqd Java 侧，v1.9）
-    participant CLI as TqdCli (本地 wren CLI)
-    participant MC as TqdMcpClient
+    participant EP as /agent/iqd/enhance
+    participant SVC as IqdAdminService（mis-iqd Java 侧，v1.9）
+    participant CLI as IqdCli (本地 wren CLI)
+    participant MC as IqdMcpClient
     participant WM as wren serve mcp / wren-core
-    participant DB as mis_platform (tqd_*)
+    participant DB as mis_platform (iqd_*)
     participant S07 as 平台术语表 S-07
 
     ADM->>EP: 新增/编辑 few-shot 样本（问题 + SQL）
-    EP->>SVC: POST /api/v1/tqd/sql-pairs (tqd:enhance:manage)
-    SVC->>DB: insert tqd_sql_pair(sync_status=pending)
+    EP->>SVC: POST /api/v1/iqd/sql-pairs (iqd:enhance:manage)
+    SVC->>DB: insert iqd_sql_pair(sync_status=pending)
     ADM->>EP: 新增知识/术语/口径/同义词
-    EP->>SVC: POST /api/v1/tqd/knowledge
-    SVC->>DB: insert tqd_knowledge(source=local, sync_status=pending)
+    EP->>SVC: POST /api/v1/iqd/knowledge
+    SVC->>DB: insert iqd_knowledge(source=local, sync_status=pending)
     opt 从 S-07 导入（Q8）
         ADM->>EP: 点「从术语表导入」
-        EP->>SVC: POST /api/v1/tqd/knowledge/import-s07
+        EP->>SVC: POST /api/v1/iqd/knowledge/import-s07
         SVC->>S07: 读术语条目
-        SVC->>DB: upsert tqd_knowledge(source=kb_s07, kb_term_id=..)
+        SVC->>DB: upsert iqd_knowledge(source=kb_s07, kb_term_id=..)
         Note over SVC: 单向导入；平台本地编辑后不回写 S-07
     end
     ADM->>EP: 点「重新同步到 WrenAI」
-    EP->>SVC: POST /api/v1/tqd/enhance/sync (tqd:enhance:sync)
+    EP->>SVC: POST /api/v1/iqd/enhance/sync (iqd:enhance:sync)
     SVC->>CLI: context build（写入样本/指令到 MDL，需 --allow-write）
     CLI->>WM: 部署增强物料
     WM-->>CLI: ok
@@ -201,37 +201,37 @@ sequenceDiagram
 sequenceDiagram
     autonumber
     participant SEC as 安全管理员
-    participant SP as /agent/tqd/scope
-    participant BFF as TqdAclController
-    participant SVC as TqdAdminService（mis-tqd Java 侧，v1.9）
-    participant DB as mis_platform (tqd_*)
+    participant SP as /agent/iqd/scope
+    participant BFF as IqdAclController
+    participant SVC as IqdAdminService（mis-iqd Java 侧，v1.9）
+    participant DB as mis_platform (iqd_*)
 
     SEC->>SP: 清单勾选「纳入问数范围」（全局口径）
-    SP->>BFF: PUT /api/v1/tqd/scope {subject_type:"global", items:[...]} (tqd:scope:manage)
+    SP->>BFF: PUT /api/v1/iqd/scope {subject_type:"global", items:[...]} (iqd:scope:manage)
     BFF->>SVC: save_scope(items)
-    SVC->>DB: upsert tqd_scope_policy + 同步 tqd_catalog_item.in_scope
+    SVC->>DB: upsert iqd_scope_policy + 同步 iqd_catalog_item.in_scope
     SVC->>DB: 写 sys_oper_log（经 BFF @OperLog）+ 范围变更留痕
     SVC-->>SP: 生效提示「已保存，变更事件推送 → Worker 缓存刷新（默认 ≤10s 生效，v1.9）」
 
     SEC->>SP: 切到「按角色差异化」→ 选角色 → 勾选表 → 授权
-    SP->>BFF: POST /api/v1/tqd/acl {subject_type:"role", subject_id:"SALES_MANAGER", item_keys:[...], action:"ask"} (tqd:acl:grant)
+    SP->>BFF: POST /api/v1/iqd/acl {subject_type:"role", subject_id:"SALES_MANAGER", item_keys:[...], action:"ask"} (iqd:acl:grant)
     BFF->>SVC: grant_acl(dto)
     SVC->>DB: 前置校验：操作者须持 action=manage 或全局管理员角色码
     Note over SVC: 对齐 KB 评审 R6 —— 「谁能 grant」= 能管理该对象的人，非「有码即放行」
-    SVC->>DB: insert tqd_table_acl
-    SVC-->>SP: 授权成功（保存后发 tqd.config.changed → Worker 缓存刷新，默认 ≤10s 生效；缓存不可得 fail-closed 45204，见 D.7.3）
+    SVC->>DB: insert iqd_table_acl
+    SVC-->>SP: 授权成功（保存后发 iqd.config.changed → Worker 缓存刷新，默认 ≤10s 生效；缓存不可得 fail-closed 45204，见 D.7.3）
 
 %% ---------- 5.6 行级数据范围注入执行链路（A11，命中 row_scope 表时；v1.9：维度遍历 + 配置缓存消费） ----------
 sequenceDiagram
     autonumber
-    participant W as mis-tqd Worker
-    participant CFG as TqdConfigClient（配置缓存，v1.9）
+    participant W as mis-iqd Worker
+    participant CFG as IqdConfigClient（配置缓存，v1.9）
     participant SR as ScopeResolver
     participant OR as AskOrchestrator
     participant AI as wren serve mcp (localhost HTTP)
     participant CORE as wren-core + 业务库
     participant MASK as MaskingEngine
-    participant DB as mis_platform (tqd_ask_log)
+    participant DB as mis_platform (iqd_ask_log)
 
     W->>CFG: 启动/自检加载 or 变更事件刷新配置（维度注册表 + ACL + 字典同步状态，见 D.7.3）
     CFG-->>W: 缓存（内存）
@@ -263,17 +263,17 @@ sequenceDiagram
         end
     end
 
-%% ---------- 5.7 中心侧字典同步（A13③ 已确认：每日全量 upsert，v1.7；v1.9：Java 侧 TqdScopeSyncJobService 按维度注册表遍历 dept/store） ----------
+%% ---------- 5.7 中心侧字典同步（A13③ 已确认：每日全量 upsert，v1.7；v1.9：Java 侧 IqdScopeSyncJobService 按维度注册表遍历 dept/store） ----------
 sequenceDiagram
     autonumber
     participant SCH as 中心定时调度（每日一次）
-    participant SVC as TqdScopeSyncJobService（mis-tqd Java 侧，v1.9）
-    participant DIM as tqd_row_scope_dimension（维度注册表，v1.9）
+    participant SVC as IqdScopeSyncJobService（mis-iqd Java 侧，v1.9）
+    participant DIM as iqd_row_scope_dimension（维度注册表，v1.9）
     participant ORG as mis-org 只读数据源（部门 + dept_path + 映射来源）/ 门店主数据
     participant MPM as 编码映射（mis_dept_mapping / 门店映射，如无现成对应列）
-    participant DS as tqd_datasource（scope_sync_enabled 清单，v1.9 通用化）
+    participant DS as iqd_datasource（scope_sync_enabled 清单，v1.9 通用化）
     participant BIZ as 业务库1..N mis_dept_scope / mis_store_scope（物化表）
-    participant AL as 告警/审计（tqd_scope_dict_sync 状态 + 级联降级）
+    participant AL as 告警/审计（iqd_scope_dict_sync 状态 + 级联降级）
 
     SCH->>SVC: 触发 sync_scope_dict_job（每日一次）
     SVC->>DIM: 读维度注册表 enabled=true 且 dict_table 非空（dept / store）
@@ -289,10 +289,10 @@ sequenceDiagram
         alt 同步失败（重试后仍失败）
             SVC->>AL: 告警（运维 + 平台管理员）；该维度行级降级 ENUM/FAIL_CLOSED（45204，不静默放行）
         else 成功
-            SVC->>AL: 写 tqd_scope_dict_sync（dimension_code/last_success_at/row_count/status）+ 记录对账
+            SVC->>AL: 写 iqd_scope_dict_sync（dimension_code/last_success_at/row_count/status）+ 记录对账
         end
     end
-    Note over SVC: 同步完成后发 tqd.config.changed（type=dict_sync）→ Worker TqdConfigClient 刷新缓存（D.7.3）
+    Note over SVC: 同步完成后发 iqd.config.changed（type=dict_sync）→ Worker IqdConfigClient 刷新缓存（D.7.3）
     Note over SVC: 可选增量事件补充：mis-org 部门变更事件 → 增量更新该部门及子孙（path 级联），不替代每日全量兜底
     Note over SVC: 与权限配置解耦：同步是数据管道（数据面），授权矩阵是配置（配置面），见 D.6.4/D.6.6/D.9.4
 
@@ -300,17 +300,17 @@ sequenceDiagram
 sequenceDiagram
     autonumber
     participant ADM as 平台管理员
-    participant CFG as 平台配置（mis_platform 库 tqd_*，mis-tqd Java 侧管理）
-    participant BFF as BFF AiPlatformClient / TqdIdentityHeaderService
+    participant CFG as 平台配置（mis_platform 库 iqd_*，mis-iqd Java 侧管理）
+    participant BFF as BFF AiPlatformClient / IqdIdentityHeaderService
     participant ORG as mis-org（授权源头）
-    participant IC as TqdInternalController（/internal/v1/tqd/**，v1.9）
-    participant W as mis-tqd Worker（ScopeResolver + TqdConfigClient）
+    participant IC as IqdInternalController（/internal/v1/iqd/**，v1.9）
+    participant W as mis-iqd Worker（ScopeResolver + IqdConfigClient）
     participant BIZ as 业务库 mis_dept_scope / mis_store_scope + 业务表
-    participant DB as mis_platform（tqd_ask_log）
+    participant DB as mis_platform（iqd_ask_log）
 
     ADM->>CFG: 配置「角色 × 表 × row_scope 维度实例」（dept / store，可多维度 AND；D.7 步骤①）
-    CFG-->>IC: 保存后发 tqd.config.changed（v1.9 事件推送）
-    IC->>W: 变更事件 → TqdConfigClient 刷新本地缓存（维度注册表 + ACL + 字典同步状态，D.7.3）
+    CFG-->>IC: 保存后发 iqd.config.changed（v1.9 事件推送）
+    IC->>W: 变更事件 → IqdConfigClient 刷新本地缓存（维度注册表 + ACL + 字典同步状态，D.7.3）
     BFF->>ORG: 读用户 data_scope + 任职锚点 + sys_dept.dept_path + user.store_ids（D.7 步骤②，v1.9 双维度）
     ORG-->>BFF: dept 锚点 id+path+scope + store 可见门店集
     BFF->>W: 注入 X-Mis-Dept-Scope（dept 授权）+ X-Mis-Stores（store 授权；按维度注册表遍历，无该维度授权则不注）

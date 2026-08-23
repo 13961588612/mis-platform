@@ -2,9 +2,9 @@
 
 ## 状态
 
-**已替代** | 原裁定 2026-08-22（A1 业务已确认，主理人记录）→ **由 [ADR-020](ADR-020-tqd-query-acl-mis-platform.md) 替代（2026-08-22 业务改判：落库改道 mis_platform，对齐 mis_kb 项目范式，项目名 mis-tqd、表前缀 tqd_）**
+**已替代** | 原裁定 2026-08-22（A1 业务已确认，主理人记录）→ **由 [ADR-020](ADR-020-iqd-query-acl-mis-platform.md) 替代（2026-08-22 业务改判：落库改道 mis_platform，对齐 mis_kb 项目范式，项目名 mis-iqd、表前缀 iqd_）**
 
-> **⚠️ 修订记录（2026-08-22，主理人记录）**：本 ADR 原裁定「表级 ACL 等 `wren_*` 问数配置落 `ai_platform` 库」**已被业务改判（A1 改判）**——问数配置改落 **`mis_platform` 库**，对齐 **mis_kb 项目范式**（kb 开头的表在 mis_platform 库），项目名 **`mis-tqd`**、表前缀 **`tqd_`**（替代 `wren_*`）。本文档按 ADR 惯例保留为**历史决策记录（状态=已替代）**，正文原样留存便于追溯；**当前有效决策见 [ADR-020](ADR-020-tqd-query-acl-mis-platform.md)**。关联规划文档 `docs/ai-fusion/wrenai/` 已整体修订为 v1.9（architecture.md §8 A1 改判、§4.2.2 D.7/D.8 重写、tasks.md、README.md、两张 mermaid）。
+> **⚠️ 修订记录（2026-08-22，主理人记录）**：本 ADR 原裁定「表级 ACL 等 `wren_*` 问数配置落 `ai_platform` 库」**已被业务改判（A1 改判）**——问数配置改落 **`mis_platform` 库**，对齐 **mis_kb 项目范式**（kb 开头的表在 mis_platform 库），项目名 **`mis-iqd`**、表前缀 **`iqd_`**（替代 `wren_*`）。本文档按 ADR 惯例保留为**历史决策记录（状态=已替代）**，正文原样留存便于追溯；**当前有效决策见 [ADR-020](ADR-020-iqd-query-acl-mis-platform.md)**。关联规划文档 `docs/ai-fusion/wrenai/` 已整体修订为 v1.9（architecture.md §8 A1 改判、§4.2.2 D.7/D.8 重写、tasks.md、README.md、两张 mermaid）。
 
 ## 背景
 
@@ -40,15 +40,15 @@ KB 范式（[ADR-018](ADR-018-knowledge-base-mis-kb.md)）把 ACL 留在 Java �
 - **正面**：问数热路径零跨服务调用（表级 ACL 每次问数都读，Worker 与管理面同进程消费）；最小新增（复用 ai-platform 既有 `Base.metadata.create_all` 建表机制，无 Alembic 负担）；BFF 不持有权限语义，仅透传。
 - **负面**：平台问数权限配置与 Java 侧主数据（`mis-system`）隔离，需经 BFF HTTP 读写——与 KB 范式（ACL 留 Java，ADR-018）不一致。
 
-> **⚠️ 改判后（ADR-020）的后果修正**：历史「负面」项（与 KB 范式不一致）即业务改判的动因——**对齐 mis_kb 项目范式**（kb 表在 mis_platform 库）后，问数配置（tqd_* 表）与 KB 配置（kb_* 表）**同库同范式**，一致性差异消除；「热路径零跨服务」优势改为「BFF/Java 侧配置读取 API + Worker 本地缓存 + 变更事件/定期刷新」方案补偿（详见 ADR-020 与 architecture.md §1.5/§4.2.2 D.7）。
+> **⚠️ 改判后（ADR-020）的后果修正**：历史「负面」项（与 KB 范式不一致）即业务改判的动因——**对齐 mis_kb 项目范式**（kb 表在 mis_platform 库）后，问数配置（iqd_* 表）与 KB 配置（kb_* 表）**同库同范式**，一致性差异消除；「热路径零跨服务」优势改为「BFF/Java 侧配置读取 API + Worker 本地缓存 + 变更事件/定期刷新」方案补偿（详见 ADR-020 与 architecture.md §1.5/§4.2.2 D.7）。
 
 ## 待确认（历史裁定）
 
-- 无（A1 已由业务拍板，2026-08-22）。改判后见 [ADR-020](ADR-020-tqd-query-acl-mis-platform.md)。
+- 无（A1 已由业务拍板，2026-08-22）。改判后见 [ADR-020](ADR-020-iqd-query-acl-mis-platform.md)。
 
 ## 关联
 
-- **当前有效决策**：[ADR-020](ADR-020-tqd-query-acl-mis-platform.md)（问数配置落 mis_platform、项目 mis-tqd、表前缀 tqd_，2026-08-22 替代本 ADR）
+- **当前有效决策**：[ADR-020](ADR-020-iqd-query-acl-mis-platform.md)（问数配置落 mis_platform、项目 mis-iqd、表前缀 iqd_，2026-08-22 替代本 ADR）
 - 完整规划：`docs/ai-fusion/wrenai/architecture.md` §8 A1（改判记录，v1.9）、§4.2.2 D.7/D.8（行级权限数据放置与扩展设计）
-- 任务分解：`docs/ai-fusion/wrenai/tasks.md` T-W2-01（表级 ACL，v1.9 改 mis_platform + tqd_ 表 + Java 侧实现）
+- 任务分解：`docs/ai-fusion/wrenai/tasks.md` T-W2-01（表级 ACL，v1.9 改 mis_platform + iqd_ 表 + Java 侧实现）
 - 对照 ADR：[ADR-018](ADR-018-knowledge-base-mis-kb.md)（知识库 ACL 留 Java；本改判后问数 ACL 同样对齐 Java 侧范式）

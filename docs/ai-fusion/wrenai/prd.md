@@ -4,7 +4,7 @@
 > 上游参考资料：`docs/ai-fusion/coordinator-worker/`（对话调度基座）、`docs/ai-fusion/agent-ops-console/`（智能体运营控制台）、`docs/architecture/03-security.md`（RBAC / 数据范围）、`docs/backend/knowledge-base*.md` 与 `docs/analysis/kb-permission-redesign-review-2026-08-12.md`（KB 三层两套权限模型）、`frontend/mis-admin-web/src/features/agent/`（UI 范式）。  
 > 本目录首页：[README.md](./README.md)（待建）  
 > 版本：v1.0｜状态：🔵 需求草稿待评审｜日期：2026-08-22｜语言：中文
-> **v1.9 命名一致性说明（2026-08-22，架构同步）**：本 PRD 为需求级文档，未锁定实现命名。架构 v1.9 已定——**平台问数业务域统一用 `tqd`**（项目 `mis-tqd`、表前缀 `tqd_*`、API `/api/v1/tqd/**`、权限码 `tqd:*`、模块 `backend/mis-tqd`），**对接外部 WrenAI 产品的适配层保留 `wren`**（`wren serve mcp` / `wren profile` / `wren_mcp_host` / `wren_ref_id` 等外部事实引用）；问数配置**落 `mis_platform` 库**（对齐 mis_kb 范式，Java 侧管理，ADR-020 替代 ADR-019）；行级范围**维度注册表一期 + 部门/门店双维度**。本文档提及的 `wren_client`（传输抽象）与 WrenAI 品牌属保留边界，与实现命名无冲突。
+> **v1.9 命名一致性说明（2026-08-22，架构同步）**：本 PRD 为需求级文档，未锁定实现命名。架构 v1.9 已定——**平台问数业务域统一用 `iqd`**（项目 `mis-iqd`、表前缀 `iqd_*`、API `/api/v1/iqd/**`、权限码 `iqd:*`、模块 `backend/mis-iqd`），**对接外部 WrenAI 产品的适配层保留 `wren`**（`wren serve mcp` / `wren profile` / `wren_mcp_host` / `wren_ref_id` 等外部事实引用）；问数配置**落 `mis_platform` 库**（对齐 mis_kb 范式，Java 侧管理，ADR-020 替代 ADR-019）；行级范围**维度注册表一期 + 部门/门店双维度**。本文档提及的 `wren_client`（传输抽象）与 WrenAI 品牌属保留边界，与实现命名无冲突。
 
 ---
 
@@ -13,9 +13,9 @@
 | 项 | 内容 |
 |---|---|
 | Language | 中文 |
-| Project Name | `tqd_data_query_app` |
+| Project Name | `iqd_data_query_app` |
 | 原始需求复述 | 在 MIS 平台内**自研后台**对接 WrenAI（非直接用 WrenUI），通过平台内一个 **agent** 把用户自然语言问数请求桥接给 WrenAI；后台可配置连接与语义建模同步、查看可对接内容清单并勾选问数范围、配置样本/知识库/语义描述以提升准确度、提供联调测试对话页；前端用户端问数结果需可见引用来源、执行计划分层展示（后台含完整 SQL、前端仅步骤化清单）；权限复用现有 RBAC 与 KB 模型，至少做到「基于角色控制可访问的表」+ 字段脱敏。 |
-| 技术栈（复用既有，不新建运行时） | 前端：`mis-admin-web`（建议复用 `features/agent` 壳与 `PermissionGate` 范式）；用户端对话面复用既有 `/ai/data-query`（DataQueryPage → AiChatPanel）。BFF：`mis-admin-bff`（建议新增 `/api/v1/tqd/**` 或并入 `/api/v1/agent-ops/**`）。AI 桥接：建议走现有 **Coordinator–Worker** 基座（mis-copilot 调度 + 新增 `mis-tqd` Worker）。权限：`mis-system` / `mis-iam`（sys_role / sys_menu / sys_api / sys_role_permission + Redis）+ 领域服务数据范围裁定。外部系统：WrenAI（自托管 OSS 或 Cloud）。 |
+| 技术栈（复用既有，不新建运行时） | 前端：`mis-admin-web`（建议复用 `features/agent` 壳与 `PermissionGate` 范式）；用户端对话面复用既有 `/ai/data-query`（DataQueryPage → AiChatPanel）。BFF：`mis-admin-bff`（建议新增 `/api/v1/iqd/**` 或并入 `/api/v1/agent-ops/**`）。AI 桥接：建议走现有 **Coordinator–Worker** 基座（mis-copilot 调度 + 新增 `mis-iqd` Worker）。权限：`mis-system` / `mis-iam`（sys_role / sys_menu / sys_api / sys_role_permission + Redis）+ 领域服务数据范围裁定。外部系统：WrenAI（自托管 OSS 或 Cloud）。 |
 | 产品选型（默认假设，待确认） | ① 桥接 = Coordinator 委派的新 Worker（对齐 C–W）；② 后台管理 UI 挂载在 `agent` host App 下（或独立 `wrenai` App，见 Q6）；③ 权限复用 RBAC + KB 三层两套数据范围模型；④ 用户端入口 = 现有 `/ai/data-query` 问数页扩展。 |
 | 边界红线 | **前端不直连 WrenAI**；所有问数请求与密钥经平台 BFF/AI 层；WrenAI 仅在服务端可达。权限为「功能权限码（BFF 拦截）+ 数据范围（领域服务二次裁定）」双闸门，禁止仅靠前端隐藏。 |
 
@@ -52,15 +52,15 @@
 flowchart LR
   subgraph FE[前端 mis-admin-web]
     DQ[用户端 问数页 /ai/data-query]
-    OPS[后台 运营配置 /agent/tqd/**]
+    OPS[后台 运营配置 /agent/iqd/**]
   end
   subgraph BFF[mis-admin-bff]
-    WQ[问数编排 /api/v1/tqd/ask]
-    CFG[配置/清单/样本 /api/v1/tqd/**]
+    WQ[问数编排 /api/v1/iqd/ask]
+    CFG[配置/清单/样本 /api/v1/iqd/**]
   end
   subgraph AI[ai-platform 运行时]
     COORD[mis-copilot Coordinator]
-    WREN[mis-tqd Worker 桥接]
+    WREN[mis-iqd Worker 桥接]
   end
   WAI[WrenAI<br/>wren-ai-service + wren-engine]
   DB[(业务数据源 PG/MySQL...)]
@@ -88,7 +88,7 @@ flowchart LR
 | Ask API（异步） | `POST /v1/asks`：body `{ query, mdl_hash?, thread_id?, user_id?, project_id?, language?, returnSqlDialect?, enable_column_pruning?, histories? }` → 返回 `query_id`；`GET /v1/asks/{query_id}/result` 轮询 → `status`（understanding→searching→planning→generating→correcting→finished/failed/stopped）、`type`（GENERAL/TEXT_TO_SQL）、`response[]`（含 `sql`、`summary`、`steps[{sql,summary}]`、`chart`、`view`）、`error` | ① 平台 agent 须实现「提交→轮询→聚合」；② `status` 序列即「执行计划」步骤；③ `sql` 即后台可见 SQL；④ `thread_id` 支撑多轮上下文 |
 | 知识 / 样本检索 | 问数时自动检索 **Documentation/Instruction（业务术语、口径、同义词）** 与 **SQL Pairs（few-shot 示例）** 注入提示 | 需求 #5 的「样本 / 知识库 / 术语词典」可直接复用 WrenAI 的 Documentation + SQL Pairs 机制，或由平台侧注入 |
 | 部署形态 | 自托管（Docker Compose：wren-ui + wren-ai-service + wren-engine）、或 WrenAI Cloud（API Key + projectId） | 决定密钥管理、网络连通（是否同 VPC 直连业务库）、建模 API 形态 —— **关键待确认（Q1）** |
-| Agent 就绪 | MCP-native；WrenAI 可提供 MCP server 将语义层/ask 能力暴露为 MCP tools | **MCP 仅是「桥接层→WrenAI」的传输协议选择（W0 拍板），不是独立分期**：`mis-tqd` Worker 始终保留以承载权限/范围/脱敏/引用裁定；所选版本 MCP server 稳定则 Worker 直连 MCP（流式原生），否则本期 REST 轮询、后续低成本切换（`wren_client` 已抽象传输）。**用户端禁止直连 MCP**（绕过权限双闸门） |
+| Agent 就绪 | MCP-native；WrenAI 可提供 MCP server 将语义层/ask 能力暴露为 MCP tools | **MCP 仅是「桥接层→WrenAI」的传输协议选择（W0 拍板），不是独立分期**：`mis-iqd` Worker 始终保留以承载权限/范围/脱敏/引用裁定；所选版本 MCP server 稳定则 Worker 直连 MCP（流式原生），否则本期 REST 轮询、后续低成本切换（`wren_client` 已抽象传输）。**用户端禁止直连 MCP**（绕过权限双闸门） |
 
 **已知产品风险（写入 Open Questions）：**
 - WrenAI 不同版本对「引用/来源（citations）」的暴露程度不一：旧版 `/v1/asks` 结果无独立 citation 字段，仅含 `sql`/`summary`/`steps`；文档/样本检索命中是否回传待确认（Q5）。前端「引用来源」可能需从生成 SQL 解析表/字段血缘 + 语义模型元数据派生。
@@ -159,7 +159,7 @@ flowchart TD
 | ID | 需求 | 优先级 | 验收要点 |
 |---|---|---|---|
 | FR-BRG-1 | 用户端问数请求经平台 agent 转发 WrenAI，前端不直连 | P0 | 抓包/链路确认前端无 WrenAI 直连；令牌不出服务端 |
-| FR-BRG-2 | 桥接以 Worker 形态接入 Coordinator–Worker 基座（建议 `mis-tqd`），由 mis-copilot 按意图委派 | P0 | 问数意图路由到该 Worker；保留 `dispatch_trace` |
+| FR-BRG-2 | 桥接以 Worker 形态接入 Coordinator–Worker 基座（建议 `mis-iqd`），由 mis-copilot 按意图委派 | P0 | 问数意图路由到该 Worker；保留 `dispatch_trace` |
 | FR-BRG-3 | 支持多轮上下文（透传 WrenAI `thread_id`）与超时/降级（HITL/友好错误，不臆造） | P1 | 连续追问上下文连续；WrenAI 不可达返回明确错误而非编造 |
 
 ### 4.3 可对接内容清单与范围治理（R3）
@@ -223,15 +223,15 @@ sequenceDiagram
   participant FE as 前端 /ai/data-query
   participant BFF as mis-admin-bff
   participant CO as mis-copilot(Coordinator)
-  participant W as mis-tqd Worker
+  participant W as mis-iqd Worker
   participant AI as WrenAI
   participant DB as 业务数据源
 
   U->>FE: 自然语言提问
-  FE->>BFF: POST /api/v1/tqd/ask（带 JWT）
+  FE->>BFF: POST /api/v1/iqd/ask（带 JWT）
   BFF->>BFF: ① 功能权限校验（ApiPermissionInterceptor）
   BFF->>CO: 委派问数意图（含 TaskBrief + 用户权限范围）
-  CO->>W: 委派 mis-tqd（max_depth=1）
+  CO->>W: 委派 mis-iqd（max_depth=1）
   W->>W: ② 数据范围裁定（角色→可问表集合）
   W->>AI: POST /v1/asks（query, project/mdl, thread_id, user_id）
   AI->>DB: 语义解析 + 执行
@@ -273,40 +273,40 @@ flowchart LR
 
 | 分组 | 路径（建议） | 对应需求 | 建议权限码 |
 |---|---|---|---|
-| WrenAI 对接配置 | `/agent/tqd/config` | R1（FR-CFG） | `tqd:config:view` / `:save` |
-| 可对接内容清单 | `/agent/tqd/catalog` | R3（FR-INV） | `tqd:catalog:view` |
-| 问数范围治理 | `/agent/tqd/scope` | R3/R4 | `tqd:scope:manage` |
-| 样本 / 知识 / 语义描述 | `/agent/tqd/enhance` | R5（FR-ACC） | `tqd:enhance:manage` |
-| 联调测试对话 | `/agent/tqd/test-chat` | R6（FR-TEST） | `tqd:test:use` |
-| 执行计划查看（后台全量） | 内嵌于测试对话页 / `/agent/tqd/traces` | R8（FR-PLAN-1） | `tqd:trace:view` |
-| 权限配置 | 复用 `sys_role_permission` + 新增表级 ACL 页 | R4（FR-PERM） | `tqd:acl:grant` |
+| WrenAI 对接配置 | `/agent/iqd/config` | R1（FR-CFG） | `iqd:config:view` / `:save` |
+| 可对接内容清单 | `/agent/iqd/catalog` | R3（FR-INV） | `iqd:catalog:view` |
+| 问数范围治理 | `/agent/iqd/scope` | R3/R4 | `iqd:scope:manage` |
+| 样本 / 知识 / 语义描述 | `/agent/iqd/enhance` | R5（FR-ACC） | `iqd:enhance:manage` |
+| 联调测试对话 | `/agent/iqd/test-chat` | R6（FR-TEST） | `iqd:test:use` |
+| 执行计划查看（后台全量） | 内嵌于测试对话页 / `/agent/iqd/traces` | R8（FR-PLAN-1） | `iqd:trace:view` |
+| 权限配置 | 复用 `sys_role_permission` + 新增表级 ACL 页 | R4（FR-PERM） | `iqd:acl:grant` |
 | 用户端问数 | `/ai/data-query`（扩展引用/计划展示） | R2/R7/R8 | 复用问数入口权限 |
 
 ### 5.2 后台页面线框（要点）
 
-**① 对接配置页 `/agent/tqd/config`**
+**① 对接配置页 `/agent/iqd/config`**
 - 表单：服务地址、认证方式（API Key / Bearer）、密钥（密码框，不回显）、默认 connector 类型下拉（PostgreSQL/MySQL/…）、超时、语言。
-- 操作：保存（经 `PermissionGate tqd:config:save`）、「测试连通性」按钮、状态徽标（已连接/异常）。
+- 操作：保存（经 `PermissionGate iqd:config:save`）、「测试连通性」按钮、状态徽标（已连接/异常）。
 - 语义建模同步区：按钮「从 WrenAI 拉取 MDL」「推送本地建模」，显示上次同步时间。
 
-**② 可对接内容清单页 `/agent/tqd/catalog`**
+**② 可对接内容清单页 `/agent/iqd/catalog`**
 - 左树：数据源 → 库 → 表 → 字段（元数据：类型/主键/是否时间维度/是否邮箱等）。
 - 右栏：WrenAI 侧语义模型 Tab（models / relationships / metrics / dimensions），展示名称、描述、表达式。
 - 顶部筛选：按数据源/是否已纳入范围。
 
-**③ 问数范围治理页 `/agent/tqd/scope`**
+**③ 问数范围治理页 `/agent/iqd/scope`**
 - 清单页每行带「纳入问数范围」勾选框（对应 FR-INV-3）。
 - 支持按角色/用户组套用范围模板（FR-INV-4，P1）。
 - 保存二次确认；空态文案「请先完成对接配置」。
 
-**④ 样本 / 知识 / 语义描述管理页 `/agent/tqd/enhance`**
+**④ 样本 / 知识 / 语义描述管理页 `/agent/iqd/enhance`**
 - 三个子区（Tab）：
   - 样本（few-shot）：问题/SQL 对列表，增删改（FR-ACC-1）。
   - 知识/术语/口径/同义词：条目列表 + 关联语义模型（FR-ACC-2）。
   - 表/字段业务描述：从清单页带入，富文本/描述编辑，写入 MDL description（FR-ACC-3）。
 - 「重新同步到 WrenAI」按钮使增强生效。
 
-**⑤ 联调测试对话页 `/agent/tqd/test-chat`**
+**⑤ 联调测试对话页 `/agent/iqd/test-chat`**
 - 左：对话区（输入框 + 消息流 + 建议示例），角标「运营联调」。
 - 右（结果详情，可展开）：SQL（代码块）、执行结果（表格）、引用来源（表/字段/知识片段）、完整执行计划（阶段时间线 + 原始 SQL + 耗时）。
 - 顶部：范围/角色模拟切换（FR-TEST-2）。
@@ -314,7 +314,7 @@ flowchart LR
 ### 5.3 前端用户端（扩展 `/ai/data-query`）
 
 **⑥ 问数对话页（扩展）**
-- 复用 `AiChatPanel`；问数意图经 Coordinator → mis-tqd。
+- 复用 `AiChatPanel`；问数意图经 Coordinator → mis-iqd。
 - 答案消息卡含：文字答案 + 「引用来源」可展开块 + 「执行计划」步骤化清单（无 SQL）。
 
 **⑦ 引用展示组件**
@@ -346,7 +346,7 @@ flowchart TB
 ### 6.2 功能权限（L1）
 
 - 菜单/按钮/API 经 `sys_menu` + `sys_api` + `sys_role_permission`；BFF `ApiPermissionInterceptor` 统一拦截（ADR-008/010）。
-- 新增权限码命名空间 `tqd:*`（示例见 §5.1），登记进 `sys_menu_api` 与 Flyway 种子，避免 `authOnly` 静默放行。
+- 新增权限码命名空间 `iqd:*`（示例见 §5.1），登记进 `sys_menu_api` 与 Flyway 种子，避免 `authOnly` 静默放行。
 
 ### 6.3 数据范围权限（L2，复用 KB 范式）
 
@@ -403,11 +403,11 @@ flowchart TB
 | # | 项 | 影响 | 建议默认 |
 |---|---|---|---|
 | **Q1** | **WrenAI 部署形态**：自托管 OSS（Docker，wren-engine 直连业务库）vs WrenAI Cloud（API Key + projectId） | 决定连接器/建模 API 形态、密钥管理、网络连通（是否同 VPC）、是否需独立部署栈 | 自托管 OSS（数据不出域），独立 Docker 栈，密钥走 Nacos/配置（对齐 RAGFlow 部署规范） |
-| **Q2** | **桥接 Agent 形态**：复用 mis-copilot Coordinator + 新增 `mis-tqd` Worker（对齐 C–W）vs 独立桥接 Agent | 影响 C–W 白名单/Catalog/权限模型、对话调度一致性 | 新增 `mis-tqd` Worker，由 mis-copilot 按意图委派（对齐 crm-assistant 模式） |
+| **Q2** | **桥接 Agent 形态**：复用 mis-copilot Coordinator + 新增 `mis-iqd` Worker（对齐 C–W）vs 独立桥接 Agent | 影响 C–W 白名单/Catalog/权限模型、对话调度一致性 | 新增 `mis-iqd` Worker，由 mis-copilot 按意图委派（对齐 crm-assistant 模式） |
 | **Q3** | **权限粒度与字段脱敏是否本期做**：下限「表级可问 + 字段脱敏」；列级 ACL 是否纳入 | 工作量与数据安全风险 | 本期做**表级范围 + 字段脱敏**（下限）；列级 ACL 列为 P2/二期 |
 | **Q4** | **语义模型由谁维护 / 同步机制**：平台侧建模后推送 WrenAI，还是平台只读拉取 WrenAI 已建模型 | 责任边界、数据治理流程 | 平台侧建模（数据治理/DBA 拥有入口）→ 推送同步到 WrenAI；运营只读浏览 |
 | **Q5** | **引用来源数据可得性**：WrenAI `/v1/asks` 结果是否暴露 documentation/instruction 检索命中（真 citation） | 前端「引用」实现方式 | 若版本暴露则直接消费；否则由桥接层从生成 SQL 解析表/字段血缘 + 语义模型元数据派生（降级方案） |
-| **Q6** | **后台管理界面归属**：`agent` host App 下新增 `wrenai` 模块 vs 独立 `sys_app=wrenai` | 门户/菜单/权限码命名空间 | 复用 `agent` host App（最小新增），独立 `tqd:*` 权限命名空间 |
+| **Q6** | **后台管理界面归属**：`agent` host App 下新增 `wrenai` 模块 vs 独立 `sys_app=wrenai` | 门户/菜单/权限码命名空间 | 复用 `agent` host App（最小新增），独立 `iqd:*` 权限命名空间 |
 | **Q7** | **「问数范围」与 WrenAI project/MDL 的映射**：单 project 多 MDL 子集 vs 多 project | 范围隔离实现复杂度 | 单 project + MDL/表集合 scope 隔离（一期） |
 | **Q8** | **术语词典/同义词与现有 KB S-07 平台术语表的关系**：复用 vs 独立 | 避免重复建设、保持口径一致 | 复用平台术语表 S-07，问数前扩展；WrenAI Documentation 注入同步 |
 | **Q9** | **步骤化执行计划由谁生成**：直接映射 WrenAI pipeline `status` vs 平台侧二次加工文案 | 前端展示质量 | 平台侧做 status→中文步骤映射 + 必要加工 |
@@ -416,7 +416,7 @@ flowchart TB
 ### 待确认问题 Top 5（送架构师与业务）
 
 1. **Q1 部署形态**：自托管 OSS 还是 Cloud？决定密钥管理、网络连通与建模 API 形态。
-2. **Q2 桥接形态**：走现有 mis-copilot Coordinator + 新 `mis-tqd` Worker，还是独立桥接 Agent？
+2. **Q2 桥接形态**：走现有 mis-copilot Coordinator + 新 `mis-iqd` Worker，还是独立桥接 Agent？
 3. **Q3 权限粒度**：本期是否只做「表级可问 + 字段脱敏」（下限），列级 ACL 是否延后？
 4. **Q4 语义模型归属**：平台侧建模推送 WrenAI，还是只读拉取？谁拥有建模入口？
 5. **Q5 引用可得性**：WrenAI 版本是否暴露文档/样本检索命中（真 citation），否则前端引用需从 SQL 血缘派生。
