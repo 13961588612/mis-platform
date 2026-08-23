@@ -1,0 +1,556 @@
+%% v1.9：① A1 改判——问数配置落 mis_platform 库，Java 侧 backend/mis-tqd 管理（TqdAdminService/TqdInternalController/TqdScopeSyncJobService），Worker 经 TqdConfigClient API+缓存消费（不直连库，见 architecture.md §4.2.2 D.7.3）；② 命名统一——表前缀 tqd_、类名 Tqd*（对接外部 WrenAI 适配层保留 wren：wren serve mcp/wren_ref_id 等）；③ 维度注册表一期必做 + 双维度一期——TqdRowScopeDimension（种子 dept+store），RowScopeConfig 废弃 type 改 dimension/dimensions，一表可多维度 AND 叠加（见 D.8/D.9）；TqdTableAcl 预留 column_acl 字段位（A5 已确认本期不做，见 D.10）
+classDiagram
+    direction TB
+
+    %% ===== 桥接运行面（Python Worker） =====
+    class TqdAskTool {
+        +str name = "tqd__ask"
+        +execute(arguments, context) ToolResult
+        +is_read_only(arguments) bool
+    }
+
+    class AskOrchestrator {
+        -TqdMcpClient _client
+        -PlanMapper _mapper
+        +__init__(client, mapper, settings)
+        +ask(req: TqdAskRequest, resolution: TqdScopeResolution) AskResult
+        -_ask_via_mcp(req, allowed_tables, context) dict
+        -_aggregate(raw) AskResult
+    }
+
+    class TqdMcpClient {
+        -mcp.ClientSession _session
+        -str _host
+        -int _port
+        -bool _allow_write
+        +connect() None
+        +ask(question, context) dict
+        +run_sql(sql, dry) dict
+        +dry_plan(query) dict
+        +query_cube(cube, dims, measures) dict
+        +get_context(role_scope) dict
+        +list_knowledge() list
+        +recall_queries(question) list
+        +get_mdl() dict
+        +list_models() list
+        +describe_model(name) dict
+        +get_instructions() list
+        +health() bool
+    }
+
+    class TqdCli {
+        -str _bin
+        +profile_add(name, ds_config) None
+        +context_set_profile(name) None
+        +context_build(mdl_dir) BuildResult
+    }
+
+    class TqdConfigClient {
+        -str _base_url  "mis-tqd /internal/v1/tqd/**（v1.9，对齐 kb_client 范式）"
+        -dict _cache  "维度注册表 + ACL + 范围 + 脱敏规则 + 字典同步状态（内存）"
+        +load_full(connection_id) None  "启动/自检全量加载"
+        +refresh_by_event(event_type) None  "变更事件 tqd.config.changed 增量刷新"
+        +refresh_daily() None  "每日定期全量兜底"
+        +get_dimensions() list~TqdRowScopeDimension~
+        +get_acls(connection_id) list~TqdTableAcl~
+        +get_mask_rules() list~TqdMaskRule~
+        +get_dict_sync_status() dict
+        +is_stale() bool  "缓存不可得/刷新失败 → fail-closed 45204"
+    }
+
+    class ScopeResolver {
+        -TqdConfigClient _cfg  "v1.9：配置来源 API+缓存（不直连 mis_platform 库）"
+        +resolve(identity, connection_id) TqdScopeResolution
+        +assert_sql_within_scope(sql, dialect, resolution) None
+        +inject_row_scope(sql, dialect, resolution, identity) tuple[str, RowScopeInjectOutcome]  "v1.9：按 rule.dimensions 遍历，多维度 AND 叠加"
+        +resolve_inject_strategy(dimension, resolution, dialect) InjectStrategy  # v1.9 按维度注册表 predicate_type：dept→PATH_PREFIX（主）/store→ENUM（一期默认）；FAIL_CLOSED 兜底
+        -_build_authorized_predicate(dimension, identity, strategy) PredicateNode  # 每维度独立谓词；store 扁平 store_id IN (...)
+        -_probe_db_capabilities(dialect) DbCapabilities           # has_dept_path / has_store_path / enum_in_limit，连接自检时缓存
+        -_dept_path_map() dict                                    # mis_dept_scope.dept_id → dept_path 缓存（覆盖性校验用；v1.6 由 sys_dept 改字典表；v1.7 A13：dept_id=业务库编码 → dept_path=平台 path；store 一期 ENUM 无需反查）
+        -_row_scope_rules(identity, connection_id) dict
+        -_global_scope(connection_id) set
+        -_subject_acl(identity, connection_id) set
+    }
+
+    class LineageExtractor {
+        +extract(sql, dialect) SqlLineage
+    }
+
+    class CitationBuilder {
+        +build(lineage, knowledge_hits, connection_id) list~TqdCitation~
+        +merge_native_citations(existing, native) list~TqdCitation~
+    }
+
+    class MaskingEngine {
+        -list~TqdMaskRule~ _rules
+        +load_rules(connection_id) None
+        +apply(columns, rows) MaskingOutcome
+        -_match(column_name, data_type) TqdMaskRule
+    }
+
+    class PlanMapper {
+        +map_status(raw_status) TqdPlanStep
+        +platform_step(code, status, duration_ms) TqdPlanStep
+        +finalize(steps) list~TqdPlanStep~
+    }
+
+    class ResponseProjector {
+        +project(result: AskResult, view: ViewMode) TqdAskResponse
+        -_strip_sql(resp) TqdAskResponse
+    }
+
+    %% ===== 管理面（Java 侧 backend/mis-tqd，v1.9；对齐 mis-kb 分层） =====
+    class TqdAdminService {
+        +get_connection() TqdConnection
+        +save_connection(dto) TqdConnection
+        +test_connection() HealthResult
+        +sync_mdl(direction) TqdModelSnapshot
+        +list_catalog(query) Page~TqdCatalogItem~
+        +update_catalog_description(item_key, description) TqdCatalogItem
+        +save_scope(items) int
+        +grant_acl(dto) TqdTableAcl
+        +revoke_acl(id) None
+        +crud_dimension(dto) TqdRowScopeDimension  # v1.9：维度注册表 CRUD
+        +crud_sql_pair(...) TqdSqlPair
+        +crud_knowledge(...) TqdKnowledge
+        +push_enhancements() SyncReport
+        +write_ask_log(result, identity) TqdAskLog
+        +list_ask_logs(query) Page~TqdAskLog~
+        +publish_config_changed(type) None  # v1.9：保存后发 tqd.config.changed 事件
+    }
+
+    class TqdInternalController {
+        +get_connections() list~TqdConnection~  # /internal/v1/tqd/get-connections
+        +get_acls(connection_id) list~TqdTableAcl~  # /internal/v1/tqd/get-acls
+        +get_scope_policies(connection_id) list~TqdScopePolicy~
+        +get_dimensions() list~TqdRowScopeDimension~  # /internal/v1/tqd/get-dimensions
+        +get_mask_rules() list~TqdMaskRule~
+        +get_dict_sync_status() dict  # /internal/v1/tqd/get-dict-sync-status
+    }
+
+    class TqdScopeSyncJobService {
+        +sync_scope_dict_job() SyncReport  # v1.9：按维度注册表遍历（dept→mis_dept_scope / store→mis_store_scope），每日全量 upsert 幂等
+        +set_scope_sync(datasource_id, enabled) TqdDatasource  # v1.9：目标库注册/启停字典同步（scope_sync_enabled）
+    }
+
+    class TqdIdentityHeaderService {
+        +buildHeaders(user, connection_id) dict  # v1.9（BFF 侧）：按维度注册表遍历——dept 授权注 X-Mis-Dept-Scope、store 授权注 X-Mis-Stores、无该维度授权不注
+    }
+
+    %% ===== DTO =====
+    class TqdAskRequest {
+        +str question
+        +str session_id
+        +str thread_id
+        +str connection_id
+        +ViewMode view
+        +str simulate_role_code
+        +list~str~ scope_hint
+    }
+
+    class TqdAskResponse {
+        +str query_id
+        +str thread_id
+        +AskStatus status
+        +str answer_summary
+        +str sql
+        +str sql_dialect
+        +TqdResultSet data
+        +list~TqdCitation~ citations
+        +list~TqdPlanStep~ plan
+        +TqdScopeResolution scope
+        +list~TqdMaskedColumn~ masked_columns
+        +int latency_ms
+        +str error_code
+        +str error_message
+    }
+
+    class TqdResultSet {
+        +list~TqdColumn~ columns
+        +list~list~ rows
+        +int row_count
+        +bool truncated
+    }
+
+    class TqdColumn {
+        +str name
+        +str item_key
+        +str data_type
+        +str display_name
+        +bool masked
+    }
+
+    class TqdCitation {
+        +CitationKind kind
+        +str item_key
+        +str display_name
+        +str description
+        +str snippet
+        +str source_ref
+    }
+
+    class TqdPlanStep {
+        +int seq
+        +PlanStepCode code
+        +str label
+        +str detail
+        +str sql
+        +StepStatus status
+        +int duration_ms
+    }
+
+    class TqdScopeResolution {
+        +ScopeDecision decision
+        +list~str~ allowed_item_keys
+        +list~str~ denied_item_keys
+        +str reason
+        +str subject_summary
+    }
+
+    class TqdMaskedColumn {
+        +str column_key
+        +str rule
+        +int affected_rows
+    }
+
+    class SqlLineage {
+        +list~str~ tables
+        +list~str~ columns
+        +bool parse_ok
+        +str parse_error
+    }
+
+    class MaskingOutcome {
+        +list~list~ rows
+        +list~TqdMaskedColumn~ applied
+    }
+
+    %% ===== 行级范围（A11；v1.9 维度注册表驱动） =====
+    class RowScopeConfig {
+        +str dimension  "dept | store | …（引用 tqd_row_scope_dimension.dimension_code，v1.9 替代 org_auto/template type）"
+        +str column  "该表绑定列（缺省取注册表 column_name）"
+        +str scope  "dept | dept_subtree | org | self | store | store_subtree"
+        +bool auto_mode  "true=自动（BFF 按数据权限展开）；false=手动模板"
+        +str expr  "手动模板表达式（auto_mode=false 时）"
+        +list~RowScopeParam~ params
+        +bool enabled
+        +str description
+    }
+    class RowScopeParam {
+        +str name
+        +str source  "header:X-Mis-Dept-Scope | header:X-Mis-Stores | user.* | ctx.*（白名单由注册表 param_whitelist 约束）"
+        +str data_type
+    }
+    class RowScopeInjectOutcome {
+        +ScopeDecision decision
+        +InjectStrategy strategy   # v1.9：按维度取形态（dept PATH_PREFIX / store ENUM / FAIL_CLOSED）
+        +list~str~ dimensions      # v1.9：本次实际注入的维度集合
+        +dict injected_conditions  # {table_key: AND 拼接后的谓词}
+        +str reason
+        +str original_sql
+        +str final_sql
+    }
+    class InjectStrategy {
+        <<enumeration>>
+        PATH_PREFIX
+        ENUM
+        FAIL_CLOSED
+        %% CLOSURE_CTE 已剔除（A12 拍板不实现，v1.5）
+    }
+
+    %% ===== 枚举 =====
+    class ViewMode {
+        <<enumeration>>
+        USER
+        ADMIN
+    }
+    class AskStatus {
+        <<enumeration>>
+        PENDING
+        RUNNING
+        SUCCEEDED
+        FAILED
+        SCOPE_DENIED
+        TIMEOUT
+        UNSUPPORTED
+    }
+    class PlanStepCode {
+        <<enumeration>>
+        SCOPE_CHECK
+        UNDERSTANDING
+        SEARCHING
+        PLANNING
+        GENERATING
+        CORRECTING
+        LINEAGE_CHECK
+        EXECUTING
+        MASKING
+        FINISHED
+    }
+    class CitationKind {
+        <<enumeration>>
+        TABLE
+        COLUMN
+        METRIC
+        DIMENSION
+        KNOWLEDGE
+        SQL_PAIR
+    }
+    class ScopeDecision {
+        <<enumeration>>
+        ALLOW
+        PARTIAL
+        DENY
+    }
+    class StepStatus {
+        <<enumeration>>
+        RUNNING
+        DONE
+        FAILED
+        SKIPPED
+    }
+
+    %% ===== JPA 实体（mis_platform 库，BIGINT 自增 PK，v1.9 由 Python ORM 迁 Java 侧） =====
+    class TqdConnection {
+        +BIGINT id
+        +str name
+        +str base_url
+        +str auth_type
+        +str secret_ref
+        +str project_id
+        +str default_connector
+        +int timeout_seconds
+        +str language
+        +str status
+        +datetime last_health_at
+        +str last_health_msg
+        +bool enabled
+    }
+    class TqdDatasource {
+        +BIGINT id
+        +str connection_id
+        +str connector_type
+        +str display_name
+        +str catalog_name
+        +str schema_name
+        +str credential_ref
+        +bool enabled
+        +bool scope_sync_enabled   # v1.9：由 dept_scope_sync_enabled 改名（维度注册表驱动，dept/store 通用）
+    }
+    class TqdModelSnapshot {
+        +BIGINT id
+        +str connection_id
+        +str mdl_hash
+        +dict mdl_json
+        +str source
+        +int model_count
+        +datetime synced_at
+        +str synced_by
+        +str status
+    }
+    class TqdCatalogItem {
+        +BIGINT id
+        +str connection_id
+        +str kind
+        +str parent_key
+        +str item_key
+        +str display_name
+        +str data_type
+        +bool is_primary_key
+        +bool is_time_dimension
+        +bool is_email
+        +str description
+        +str expression
+        +str source
+        +bool in_scope
+        +str sensitive_level
+        +str mask_rule
+        +datetime last_seen_at
+    }
+    class TqdScopePolicy {
+        +BIGINT id
+        +str connection_id
+        +str subject_type  "global | role | dept | user | store（v1.9 可含门店主体）"
+        +str subject_id
+        +str item_key
+        +bool allow
+        +bool effective
+        +str remark
+        +str created_by
+    }
+    class TqdTableAcl {
+        +BIGINT id
+        +str connection_id
+        +str subject_type  "role | dept | user | store"
+        +str subject_id
+        +str item_key
+        +str action
+        +RowScopeConfig row_scope  "v1.9：维度实例（单维度或 dimensions 数组 AND 叠加）"
+        +str column_acl  "预留（v1.8，A5 已确认本期不做）：列级 ACL 字段位，本期不建不启用，见 D.10"
+        +str created_by
+    }
+    class TqdRowScopeDimension {
+        +str dimension_code  "PK：dept | store（一期种子两条；未来 warehouse | region | customer）"
+        +str dimension_name
+        +str predicate_type  "PATH_PREFIX（dept 主）| ENUM（store 一期默认 / dept 降级）"
+        +str column_name  "dept_id | store_id"
+        +str header_name  "X-Mis-Dept-Scope | X-Mis-Stores"
+        +dict param_whitelist  "JSONB：参数来源白名单"
+        +str dict_table  "mis_dept_scope | mis_store_scope（NULL=复用业务主数据表）"
+        +bool auto_mode
+        +bool enabled
+        +int sort
+        +datetime created_at
+        +datetime updated_at
+    }
+    class TqdSqlPair {
+        +BIGINT id
+        +str connection_id
+        +str question
+        +str sql_text
+        +str remark
+        +bool enabled
+        +str wren_ref_id
+        +str sync_status
+        +datetime synced_at
+    }
+    class TqdKnowledge {
+        +BIGINT id
+        +str connection_id
+        +str kind
+        +str title
+        +str content
+        +list~str~ related_item_keys
+        +str source
+        +str kb_term_id
+        +bool enabled
+        +str wren_ref_id
+        +str sync_status
+    }
+    class TqdMaskRule {
+        +BIGINT id
+        +str name
+        +str match_type
+        +str pattern
+        +str rule
+        +str replacement
+        +int priority
+        +bool enabled
+    }
+    class TqdAskLog {
+        +BIGINT id
+        +str trace_id
+        +str session_id
+        +str thread_id
+        +str query_id
+        +str user_id
+        +str employee_id
+        +list~str~ role_codes
+        +str question
+        +dict resolved_scope  "含 row_scope.verdict / strategy / dimensions / original_sql（v1.9 加 dimensions）"
+        +str status
+        +dict wren_status_trail
+        +str sql_text
+        +str summary
+        +dict citations
+        +dict plan_steps
+        +int row_count
+        +dict masked_columns
+        +int latency_ms
+        +str error_code
+    }
+
+    %% ===== 业务库侧字典表（v1.7 定案：物化表 + 映射；v1.9 store 维度新增 mis_store_scope；非 mis_platform ORM） =====
+    class MisDeptScope {
+        <<materialized_table>>
+        +BIGINT dept_id  "PK（业务库侧部门编码，A13① 非统一主数据）"
+        +BIGINT mis_dept_id  "平台 mis-org 侧部门 id（映射目标，A13①）"
+        +str dept_name
+        +str dept_path  "/0/<rootId>/<…>/<selfId>/（平台 mis-org path）"
+        +TIMESTAMPTZ updated_at
+    }
+    class MisStoreScope {
+        <<materialized_table>>
+        +str store_id  "PK（业务库侧门店编码）"
+        +str mis_store_id  "平台侧门店 id（如统一主数据可复用）"
+        +str store_name
+        +str store_path  "预留（v1.9 一期 NULL；有层级未来走 PATH_PREFIX 演进）"
+        +TIMESTAMPTZ updated_at
+    }
+    class MisDeptMapping {
+        <<mapping_table>>
+        +BIGINT mis_dept_id
+        +str biz_dept_id
+        +str datasource
+        +TIMESTAMPTZ updated_at
+    }
+    class DeptScopeForm {
+        <<enumeration>>
+        MATERIALIZED
+        VIEW  "演进选项：仅未来同实例时启用（v1.7 本期不落地）"
+    }
+
+    %% ===== 关系 =====
+    TqdAskTool --> AskOrchestrator : 调用
+    TqdAskTool --> ScopeResolver : 前置裁定
+    TqdAskTool --> ResponseProjector : 投影输出
+    TqdAskTool --> TqdAdminService : 写审计（经 mis-tqd 内部 API）
+    AskOrchestrator --> TqdMcpClient : MCP 工具调用（localhost http）
+    AskOrchestrator --> PlanMapper : status→步骤
+    AskOrchestrator ..> TqdAskRequest
+    AskOrchestrator --> LineageExtractor : 解析 SQL
+    LineageExtractor --> SqlLineage : 产出
+    ScopeResolver --> TqdConfigClient : 配置读取（API+缓存，v1.9）
+    ScopeResolver --> TqdScopeResolution : 产出
+    ScopeResolver --> RowScopeInjectOutcome : 产出（行级注入）
+    ScopeResolver --> InjectStrategy : 产出（v1.9 按维度取形态）
+    RowScopeConfig ..> TqdRowScopeDimension : 引用维度注册表（v1.9 一期必做，见 D.8.1）
+    ScopeResolver ..> MisDeptScope : 引用（v1.6 注入 JOIN/EXISTS，业务库本地字典表）
+    ScopeResolver ..> MisStoreScope : 引用（v1.9 store 扁平 ENUM 一期不依赖 JOIN，未来 path 演进引用）
+    ScopeResolver ..> SqlLineage : 后置校验
+    ScopeResolver ..> TqdScopePolicy : 读（经 TqdConfigClient 缓存）
+    ScopeResolver ..> TqdTableAcl : 读（含 row_scope，经 TqdConfigClient 缓存）
+    CitationBuilder --> TqdCitation : 产出
+    CitationBuilder ..> TqdCatalogItem : 读
+    CitationBuilder ..> TqdKnowledge : 读
+    AskOrchestrator --> CitationBuilder : 组装引用
+    MaskingEngine --> MaskingOutcome : 产出
+    MaskingEngine ..> TqdMaskRule : 读（经 TqdConfigClient 缓存）
+    MaskingEngine ..> TqdCatalogItem : 读 sensitive_level
+    AskOrchestrator --> MaskingEngine : 脱敏
+    PlanMapper --> TqdPlanStep : 产出
+    ResponseProjector --> TqdAskResponse : 产出
+    ResponseProjector --> ViewMode : 分支
+    TqdAskResponse *-- TqdResultSet
+    TqdAskResponse *-- TqdCitation
+    TqdAskResponse *-- TqdPlanStep
+    TqdAskResponse *-- TqdScopeResolution
+    TqdAskResponse *-- TqdMaskedColumn
+    TqdAskResponse --> AskStatus
+    TqdResultSet *-- TqdColumn
+    TqdCitation --> CitationKind
+    TqdPlanStep --> PlanStepCode
+    TqdPlanStep --> StepStatus
+    TqdScopeResolution --> ScopeDecision
+    TqdConfigClient --> TqdInternalController : /internal/v1/tqd/**（v1.9）
+    TqdAdminService ..> TqdRowScopeDimension : CRUD（v1.9 维度注册表）
+    TqdAdminService ..> TqdConnection : CRUD
+    TqdAdminService ..> TqdDatasource : CRUD
+    TqdAdminService ..> TqdModelSnapshot : CRUD
+    TqdAdminService ..> TqdCatalogItem : CRUD
+    TqdAdminService ..> TqdScopePolicy : CRUD
+    TqdAdminService ..> TqdTableAcl : CRUD
+    TqdAdminService ..> TqdSqlPair : CRUD
+    TqdAdminService ..> TqdKnowledge : CRUD
+    TqdAdminService ..> TqdAskLog : 写/查
+    TqdScopeSyncJobService ..> TqdRowScopeDimension : 遍历（v1.9）
+    TqdScopeSyncJobService ..> MisDeptScope : 每日同步写入（v1.9 Java 侧）
+    TqdScopeSyncJobService ..> MisStoreScope : 每日同步写入（v1.9）
+    TqdIdentityHeaderService ..> TqdRowScopeDimension : 读注册表（v1.9 BFF 侧）
+    TqdConnection "1" *-- "0..*" TqdDatasource
+    TqdConnection "1" *-- "0..*" TqdModelSnapshot
+    TqdConnection "1" *-- "0..*" TqdCatalogItem
+    TqdCatalogItem "1" o-- "0..*" TqdScopePolicy : item_key
+    TqdCatalogItem "1" o-- "0..*" TqdTableAcl : item_key
+    MisDeptScope --> DeptScopeForm : 载体（v1.7 定案：物化表本期；视图仅未来同实例演进）
+    MisDeptScope ..> MisDeptMapping : 映射来源（A13①：业务库编码 ↔ 平台 mis-org 部门 id）
