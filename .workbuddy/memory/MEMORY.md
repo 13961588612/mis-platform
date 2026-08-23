@@ -39,5 +39,11 @@
 - ⚠️ 缺口：`KbLibraryService`+`RagSettingsService.save` 服务层不校验数据范围（仅 BFF 码）——改造须先补 `assertNodeManage`/`hasLibraryManage` 贯通 userId。
 - 三步授权痛点：前端建库分类下拉列全部分类→非管辖→文档 40311。建议 UI 收敛+后端 `?scope=manageable|visible`。
 
+## WrenAI 问数 APP（mis-tqd，2026-08-22 规划 v1.9）
+- **命名**：项目 `mis-tqd`（类似 mis_kb）；表前缀 `tqd_*`（13 张，落 **mis_platform** 库，Java 侧 `backend/mis-tqd` 模块 + Flyway `V71__tqd_schema.sql`）；API `/api/v1/tqd/**`；权限码 `tqd:*`；前端 `features/agent/tqd`；Worker `mis_tqd`（TqdConfigClient 经 `/internal/v1/tqd/**` 消费，**不直连库**，缓存不可得 fail-closed 45204）；**对接外部 WrenAI 保留 wren**（命令/配置键/PyPI wrenai）。
+- **权限双闸门**：BFF `tqd:*` 功能码 + Worker 表级 ACL 二次裁定（fail-closed）+ 字段脱敏（masking.py 唯一出口）；行级范围由**维度注册表 `tqd_row_scope_dimension` 驱动**（一期种子 dept + store 双维度，一表可多维度 AND；dept 走 dept_path 前缀 PATH_PREFIX、store 一期 ENUM≤500）。
+- **决策固化**：ADR-019（落 ai_platform）已替代 → **ADR-020（落 mis_platform，对齐 mis_kb 范式）**；A11 行级本期、A12 物化 dept_path、A13 编码不统一→映射 X + 每库一张 + 中心每日同步。
+- 规划文档：`docs/ai-fusion/wrenai/`（prd/architecture v1.9/tasks v1.9/deploy-tqd/README/两张 mermaid）。
+
 ## 主理人角色铁律
 - SOP 完整流程须 TeamCreate + 派 software-engineer/software-qa-engineer 子 Agent（name=subagent_type=Agent ID）；BugFix/快速模式可跳 PRD/架构。
