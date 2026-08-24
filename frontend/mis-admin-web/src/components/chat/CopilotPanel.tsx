@@ -9,8 +9,8 @@
  * + 输入发送 + 会话管理。chat-core（useChat）与 A2UI 渲染层全量在本 chunk 内。
  */
 
-import { useEffect, useMemo, useState, type KeyboardEvent } from 'react';
-import { Loader2, MessageSquarePlus, SendHorizonal, Sparkles } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState, type DragEvent, type KeyboardEvent } from 'react';
+import { Loader2, MessageSquarePlus, Paperclip, SendHorizonal, Sparkles } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
@@ -18,6 +18,9 @@ import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { MarkdownView } from '@/components/common/markdown-view';
 import { useChat } from '@/lib/chat/useChat';
+import { useAttachmentComposer } from '@/lib/chat/useAttachmentComposer';
+import { AttachmentChips } from '@/components/chat/AttachmentChips';
+import { AttachmentList } from '@/components/chat/AttachmentList';
 import { SurfaceRenderer } from '@/lib/a2ui/SurfaceRenderer';
 import { A2uiProvider } from '@/components/a2ui/A2uiProvider';
 import { A2uiPermissionGate } from '@/components/a2ui/A2uiPermissionGate';
@@ -48,26 +51,60 @@ function A2uiMessageRenderer({ render }: { render: NonNullable<ChatMessage['a2ui
 
 export function CopilotPanel() {
   const chat = useChat();
+  const composer = useAttachmentComposer();
   const [input, setInput] = useState('');
+  const [dragOver, setDragOver] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
-  // 打开面板即确保会话存在（本地生成 + 持久化）
+  // 打开面板即确保会话存在（本地生成 + 持久化 + 自动加载历史）
   useEffect(() => {
     void chat.ensureSession();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const canSend = !chat.isGenerating && input.trim().length > 0 && chat.connectionState !== 'connecting';
+  const canSend =
+    !chat.isGenerating &&
+    !composer.hasUploading &&
+    (input.trim().length > 0 || composer.attachments.length > 0) &&
+    chat.connectionState !== 'connecting';
 
   const handleSend = (): void => {
     if (!canSend) return;
-    chat.sendMessage(input);
+    const ready = composer.attachments.filter((a) => a.status === 'done');
+    chat.sendMessage(input, ready.length > 0 ? ready : undefined);
     setInput('');
+    composer.clear();
   };
 
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>): void => {
     if (e.key !== 'Enter' || e.shiftKey) return;
     e.preventDefault();
     handleSend();
+  };
+
+  // 粘贴图片自动转附件（P0-1.3）
+  const onPaste = (e: React.ClipboardEvent<HTMLTextAreaElement>): void => {
+    const items = e.clipboardData?.items;
+    if (!items) return;
+    const files: File[] = [];
+    for (const item of items) {
+      if (item.kind === 'file' && item.type.startsWith('image/')) {
+        const file = item.getAsFile();
+        if (file) files.push(file);
+      }
+    }
+    if (files.length > 0) {
+      e.preventDefault();
+      void composer.addFiles(files);
+    }
+  };
+
+  // 拖拽覆盖层（P0-1.2）
+  const onDrop = (e: DragEvent<HTMLDivElement>): void => {
+    e.preventDefault();
+    setDragOver(false);
+    const files = Array.from(e.dataTransfer?.files ?? []);
+    if (files.length > 0) void composer.addFiles(files);
   };
 
   const statusBadge = useMemo(() => {
@@ -91,7 +128,25 @@ export function CopilotPanel() {
 
   return (
     <A2uiProvider dispatchAction={chat.dispatchA2uiAction}>
-      <div className="flex h-full min-h-0 flex-col">
+      <div
+        className={cn('relative flex h-full min-h-0 flex-col', dragOver && 'ring-2 ring-primary/60')}
+        onDragOver={(e) => {
+          e.preventDefault();
+          setDragOver(true);
+        }}
+        onDragLeave={(e) => {
+          // 仅当离开容器本身（非子元素）才取消高亮
+          if (e.currentTarget === e.target) setDragOver(false);
+        }}
+        onDrop={onDrop}
+      >
+        {/* 拖拽覆盖层 */}
+        {dragOver ? (
+          <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center rounded-lg border-2 border-dashed border-primary bg-primary/5 text-sm text-primary">
+            释放以添加附件
+          </div>
+        ) : null}
+
         {/* 头部 */}
         <div className="flex shrink-0 items-center gap-2 border-b px-4 py-2.5">
           <Sparkles className="h-4 w-4 text-primary" />
@@ -119,7 +174,22 @@ export function CopilotPanel() {
 
         {/* 消息区：单层滚动，禁内层滚动 */}
         <div className="min-h-0 flex-1 overflow-auto px-3 py-3">
-          {chat.messages.length === 0 && !chat.isGenerating ? (
+          {chat.historyState === 'loading' ? (
+            // 历史加载骨架屏（P0-2.1）
+            <div className="space-y-3">
+              {[0, 1, 2].map((i) => (
+                <div
+                  key={i}
+                  className={cn(
+                    'flex',
+                    i % 2 === 0 ? 'justify-end' : 'justify-start',
+                  )}
+                >
+                  <div className="h-12 w-2/3 animate-pulse rounded-lg bg-muted/60" />
+                </div>
+              ))}
+            </div>
+          ) : chat.messages.length === 0 && !chat.isGenerating ? (
             <div className="flex h-full min-h-[12rem] items-center justify-center">
               <p className="max-w-md text-center text-sm text-muted-foreground">
                 我是 AI Copilot。可以问我业务问题，需要生成表单 / 表格 / 审批卡片时，我会直接在这里渲染可交互界面。
@@ -142,14 +212,49 @@ export function CopilotPanel() {
 
         {/* 输入区 */}
         <div className="shrink-0 border-t px-3 py-3">
+          {/* 待发送附件区（P0-1.4） */}
+          <AttachmentChips
+            attachments={composer.attachments}
+            onRemove={composer.removeAt}
+            onRetry={composer.retryAt}
+            disabled={chat.isGenerating}
+            className="mb-2"
+          />
+          {composer.rejectionHint ? (
+            <p className="mb-2 text-[11px] text-destructive">{composer.rejectionHint}</p>
+          ) : null}
           <div className="flex items-end gap-2">
+            <input
+              ref={fileInputRef}
+              type="file"
+              multiple
+              accept=".png,.jpg,.jpeg,.gif,.webp,.pdf,.doc,.docx,.xlsx,.csv,.txt,.md,image/*,application/pdf"
+              className="hidden"
+              onChange={(e) => {
+                const files = Array.from(e.target.files ?? []);
+                if (files.length > 0) void composer.addFiles(files);
+                e.target.value = '';
+              }}
+            />
+            <Button
+              type="button"
+              size="icon"
+              variant="ghost"
+              className="h-9 w-9 shrink-0"
+              title="添加附件"
+              disabled={!composer.canAddMore || chat.isGenerating}
+              onClick={() => fileInputRef.current?.click()}
+            >
+              <Paperclip className="h-4 w-4" />
+            </Button>
             <Textarea
               rows={2}
               value={input}
               disabled={chat.isGenerating}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={onKeyDown}
-              placeholder="输入消息，Enter 发送，Shift+Enter 换行"
+              onPaste={onPaste}
+              placeholder="输入消息，Enter 发送，Shift+Enter 换行；可拖拽或粘贴图片"
               className="min-h-[3.25rem] flex-1 resize-none"
             />
             <Button
@@ -234,6 +339,12 @@ function ChatBubble({ message }: { message: ChatMessage }) {
         ) : (
           <span className="text-muted-foreground">…</span>
         )}
+        {message.attachments && message.attachments.length > 0 ? (
+          <AttachmentList
+            attachments={message.attachments}
+            className={cn('mt-2', isUser ? 'justify-end' : 'justify-start')}
+          />
+        ) : null}
       </div>
     </div>
   );

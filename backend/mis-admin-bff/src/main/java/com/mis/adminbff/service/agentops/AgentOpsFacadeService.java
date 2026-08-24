@@ -17,6 +17,7 @@ import com.mis.common.security.context.LoginUser;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
+import org.springframework.web.multipart.MultipartFile;
 
 import java.util.HashSet;
 import java.util.Map;
@@ -518,6 +519,20 @@ public class AgentOpsFacadeService {
     /** #33 发送对话消息（透传，走 chat 超时）。 */
     public JsonNode sendChatMessage(String sessionId, JsonNode body) {
         return client.sendChatMessage(sessionId, body);
+    }
+
+    /**
+     * P0-1 附件上传（透传 ai-platform）。
+     *
+     * <p>BFF 零加工：{@code MultipartFile} 原样下发下游；登录上下文头由
+     * {@code AgentOpsTransport} 透传（X-User-Id / X-Username / Authorization），
+     * 不在 body 里注入——与既有会话端点同款口径，禁止信任客户端伪造上传人。
+     *
+     * @param file 待上传文件
+     * @return 下游上传结果（透传）
+     */
+    public JsonNode uploadFile(MultipartFile file) {
+        return client.uploadFile(file);
     }
 
     // ==================================================================

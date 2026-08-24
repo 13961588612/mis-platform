@@ -7,7 +7,14 @@
  */
 
 import { create } from 'zustand';
-import type { ChatConnectionState, ChatMessage, DispatchTraceEntry, MessageStatus, TokenUsage } from '@/lib/chat/types';
+import type {
+  ChatConnectionState,
+  ChatHistoryState,
+  ChatMessage,
+  DispatchTraceEntry,
+  MessageStatus,
+  TokenUsage,
+} from '@/lib/chat/types';
 
 /** 会话创建/恢复状态。 */
 export type ChatSessionState = 'none' | 'creating' | 'ready' | 'error';
@@ -22,6 +29,8 @@ interface ChatState {
   dispatchTrace: DispatchTraceEntry[];
   tokenUsage: TokenUsage;
   sessionState: ChatSessionState;
+  /** 历史加载状态（P0-2：idle / loading / loaded / error）。 */
+  historyState: ChatHistoryState;
 
   setSessionId: (sessionId: string | null) => void;
   setAgentId: (agentId: string | null) => void;
@@ -36,6 +45,7 @@ interface ChatState {
   setError: (error: string | null) => void;
   setDispatchTrace: (entries: DispatchTraceEntry[]) => void;
   addTokenUsage: (usage: TokenUsage) => void;
+  setHistoryState: (state: ChatHistoryState) => void;
   reset: () => void;
 }
 
@@ -51,6 +61,7 @@ export const useChatStore = create<ChatState>((set) => ({
   dispatchTrace: [],
   tokenUsage: { ...INITIAL_TOKEN_USAGE },
   sessionState: 'none',
+  historyState: 'idle',
 
   setSessionId: (sessionId) => set({ sessionId }),
   setAgentId: (agentId) => set({ agentId }),
@@ -99,6 +110,8 @@ export const useChatStore = create<ChatState>((set) => ({
       },
     })),
 
+  setHistoryState: (historyState) => set({ historyState }),
+
   reset: () =>
     set({
       sessionId: null,
@@ -110,6 +123,7 @@ export const useChatStore = create<ChatState>((set) => ({
       dispatchTrace: [],
       tokenUsage: { ...INITIAL_TOKEN_USAGE },
       sessionState: 'none',
+      historyState: 'idle',
     }),
 }));
 

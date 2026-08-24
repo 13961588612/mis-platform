@@ -19,7 +19,7 @@ import { useSurfaceStore } from '@/lib/a2ui/surface-store';
 import { subscribeChatStream, type ChatSseController } from './sse-client';
 import { ChatWsClient } from './ws-client';
 import { processA2uiMessage } from '@/lib/a2ui/MessageProcessor';
-import { generateClientId, type ChatMessage, type ChatStreamEvent, type InboundMessage, type UseChatReturn } from './types';
+import { generateClientId, type Attachment, type ChatMessage, type ChatStreamEvent, type InboundMessage, type SessionMessage, type UseChatReturn } from './types';
 
 /** 会话 id 持久化 key（Copilot 面板最近会话）。 */
 const LAST_SESSION_KEY = 'mis.copilot.lastSession';
@@ -68,6 +68,7 @@ export function useChat(options?: UseChatOptions): UseChatReturn {
   const connectionState = useChatStore((s) => s.connectionState);
   const isGenerating = useChatStore((s) => s.isGenerating);
   const error = useChatStore((s) => s.error);
+  const historyState = useChatStore((s) => s.historyState);
 
   const sseRef = useRef<ChatSseController | null>(null);
   const wsRef = useRef<ChatWsClient | null>(null);
@@ -274,6 +275,8 @@ export function useChat(options?: UseChatOptions): UseChatReturn {
     useChatStore.getState().setSessionId(sid);
     useChatStore.getState().setAgentId(agentIdOption || null);
     useChatStore.getState().setSessionState('ready');
+    // P0-2：会话建立即拉取历史（先发过消息才落库，未落库 404 降级空会话不阻塞）
+    void loadHistory();
     return sid;
   }, [agentIdOption]);
 
@@ -287,6 +290,78 @@ export function useChat(options?: UseChatOptions): UseChatReturn {
     }
   }, []);
 
+  /**
+   * 历史恢复：单条 {@link SessionMessage} → {@link ChatMessage}。
+   *
+   * <p>含附件（metadata.attachments → attachments）+ A2UI 还原（按现有渲染层约定：
+   * 旧协议 ui.render 在 metadata，新协议 A2UI surface 在历史中暂无 surfaceId，
+   * 仅还原可见文本/旧协议卡片；A2UI surface 历史恢复为 P1 评估，见架构文档 §9-3）。
+   *
+   * @param raw 历史原始消息（#29 端点返回）
+   * @return 可直入 chat-store 的 ChatMessage
+   */
+  const mapSessionMessage = useCallback((raw: SessionMessage): ChatMessage => {
+    const metadata = raw.metadata ?? {};
+    const msg: ChatMessage = {
+      id: raw.id,
+      sessionId: raw.session_id,
+      role: raw.role,
+      content: raw.content ?? '',
+      status: 'delivered',
+      timestamp: raw.timestamp,
+    };
+    const attachments = metadata.attachments;
+    if (Array.isArray(attachments) && attachments.length > 0) {
+      msg.attachments = attachments.map((a) => ({
+        fileId: a.fileId,
+        name: a.name,
+        mimeType: a.mimeType,
+        size: a.size,
+        url: a.url,
+        status: 'done' as const,
+      }));
+    }
+    return msg;
+  }, []);
+
+  /**
+   * P0-2 拉取历史并渲染（复用 #29 `GET /api/v1/agent-ops/sessions/{id}/messages`）。
+   *
+   * <p>三态：loading → loaded（setMessages 渲染） / error（404 / 失败降级空会话不阻塞）。
+   * 仅当本地尚无消息（首进会话）时填充，避免重复进入覆盖在聊消息。
+   */
+  const loadHistory = useCallback(async (): Promise<void> => {
+    const sid = sessionIdRef.current;
+    if (!sid) return;
+    const store = useChatStore.getState();
+    if (store.historyState === 'loading') return;
+    store.setHistoryState('loading');
+    try {
+      const res = await fetch(`/api/v1/agent-ops/sessions/${encodeURIComponent(sid)}/messages?page=1&page_size=200`, {
+        headers: {
+          Authorization: tokenRef.current ? `Bearer ${tokenRef.current}` : '',
+        },
+      });
+      if (!res.ok) {
+        // 404（sid 未落库）或任何失败 → 降级空会话，不抛错阻塞主流程
+        store.setHistoryState('error');
+        return;
+      }
+      const payload = (await res.json()) as { code: number; data?: SessionMessage[] };
+      if (payload.code !== 0 || !Array.isArray(payload.data)) {
+        store.setHistoryState('error');
+        return;
+      }
+      const history = payload.data.map(mapSessionMessage);
+      if (history.length > 0) {
+        store.setMessages(history);
+      }
+      store.setHistoryState('loaded');
+    } catch {
+      store.setHistoryState('error');
+    }
+  }, [mapSessionMessage]);
+
   // ------------------------------------------------------------------ 发送
 
   const sendInbound = useCallback((message: InboundMessage): boolean => {
@@ -299,12 +374,18 @@ export function useChat(options?: UseChatOptions): UseChatReturn {
   }, []);
 
   const sendMessage = useCallback(
-    (content: string): void => {
+    (content: string, attachments?: Attachment[]): void => {
       const text = content.trim();
-      if (!text) return;
+      if (!text && (!attachments || attachments.length === 0)) return;
       const sid = sessionIdRef.current;
       if (!sid) return;
       const store = useChatStore.getState();
+
+      // 附件已在 UI 层「先传后引」完成（uploadAttachment 拿回 fileId/url），
+      // 此处仅做本地渲染 + 随文本放入 metadata.attachments 上行。
+      const uploaded: Attachment[] = attachments
+        ? attachments.map((a) => ({ ...a, status: 'done' as const }))
+        : [];
 
       const userMessageId = generateClientId('msg');
       store.addMessage({
@@ -314,6 +395,7 @@ export function useChat(options?: UseChatOptions): UseChatReturn {
         content: text,
         status: 'delivered',
         timestamp: new Date().toISOString(),
+        attachments: uploaded.length > 0 ? uploaded : undefined,
       });
 
       const assistantId = generateClientId('msg');
@@ -331,6 +413,18 @@ export function useChat(options?: UseChatOptions): UseChatReturn {
       store.setDispatchTrace([]);
       store.setError(null);
 
+      // 构造 metadata（含附件引用）；旧 text 通道不携附件，灰度回退不受影响
+      const metadata: InboundMessage['metadata'] = a2uiEnabled ? { a2ui: true } : {};
+      if (uploaded.length > 0) {
+        metadata.attachments = uploaded.map((a) => ({
+          fileId: a.fileId,
+          name: a.name,
+          mimeType: a.mimeType,
+          size: a.size,
+          url: a.url,
+        }));
+      }
+
       const inbound: InboundMessage = {
         type: 'chat',
         sessionId: sid,
@@ -341,7 +435,7 @@ export function useChat(options?: UseChatOptions): UseChatReturn {
         // 触发 Gateway runChat（A2UI 中间件注入 render_a2ui 工具）；
         // 旧 text 通道经 a2uiEnabled=false 灰度回退。
         messageType: a2uiEnabled ? MESSAGE_TYPE_A2UI_CHAT : MESSAGE_TYPE_TEXT,
-        metadata: a2uiEnabled ? { a2ui: true } : undefined,
+        metadata: a2uiEnabled || uploaded.length > 0 ? metadata : undefined,
         timestamp: new Date().toISOString(),
       };
       if (!sendInbound(inbound)) {
@@ -499,11 +593,13 @@ export function useChat(options?: UseChatOptions): UseChatReturn {
     connectionState,
     isGenerating,
     error,
+    historyState,
     sendMessage,
     respondToApproval,
     respondToEntitySelect,
     dispatchA2uiAction,
     ensureSession,
+    loadHistory,
     closeSession,
     reconnect,
   };

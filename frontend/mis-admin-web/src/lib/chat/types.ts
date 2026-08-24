@@ -20,6 +20,30 @@
 /** 消息角色（与 MIS agent-ops 口径一致）。 */
 export type ChatRole = 'user' | 'assistant' | 'system' | 'tool';
 
+/**
+ * 附件（P0-1「先传后引」）。
+ *
+ * <p>前端上传后拿回 {@code fileId/url}，随文本经 WS 上行放入
+ * {@link InboundMessage.metadata.attachments}；历史恢复时由
+ * {@link SessionMessage.metadata.attachments} 映射而来。{@code url} 为
+ * BFF 同源代理路径（见架构文档 §8），禁止直连 ai-platform 内网。
+ * {@code status} 仅本地发送态用，落库 / 历史恢复时恒为 {@code 'done'}。
+ */
+export interface Attachment {
+  /** ai-platform 返回的文件 UUID。 */
+  fileId: string;
+  /** 原始文件名。 */
+  name: string;
+  /** MIME 类型（image/png / application/pdf ...）。 */
+  mimeType: string;
+  /** 字节大小。 */
+  size: number;
+  /** 经 BFF 同源代理的下载路径（如 /api/v1/agent-ops/files/{id}）。 */
+  url: string;
+  /** 本地发送态：uploading 上传中 / done 完成 / error 失败。 */
+  status: 'uploading' | 'done' | 'error';
+}
+
 /** 消息渲染状态。 */
 export type MessageStatus = 'sending' | 'streaming' | 'delivered' | 'error';
 
@@ -50,6 +74,8 @@ export interface ChatMessage {
   };
   /** 关联的 A2UI Surface ID（a2ui_surface 事件渲染的卡片挂在消息上）。 */
   surfaceId?: string;
+  /** 附件（P0-1，仅本地渲染 / 历史恢复展示；WS 上行经 metadata.attachments，向后兼容 optional）。 */
+  attachments?: Attachment[];
 }
 
 // ------------------------------------------------------------------ 流式事件（Gateway → 前端）
@@ -133,7 +159,13 @@ export interface InboundMessage {
   agentId?: string;
   content?: string;
   messageType?: string;
-  metadata?: Record<string, unknown>;
+  metadata?: {
+    /** A2UI opt-in 标记。 */
+    a2ui?: boolean;
+    /** 附件引用（P0-1「先传后引」：上传后拿 fileId 随文本上行；向下兼容，存量 text 通道不携）。 */
+    attachments?: Array<{ fileId: string; name: string; mimeType: string; size: number; url: string }>;
+    [key: string]: unknown;
+  };
   approvalResponse?: {
     approvalId: string;
     decision: ApprovalDecision;
@@ -148,6 +180,31 @@ export interface InboundMessage {
   action?: import('../a2ui/types').A2uiClientAction;
   timestamp: string;
 }
+
+/**
+ * 历史会话消息（P0-2 复用 #29 端点 {@code GET /api/v1/agent-ops/sessions/{id}/messages}）。
+ *
+ * <p>对齐 ai-platform `MessageResponse`：时间字段 {@code timestamp}（非 created_at），
+ * 附加信息在 {@code metadata}（非 meta）。与 `features/agent/types` 的 `SessionMessage`
+ * 同形但自持于 chat-core，避免 Copilot 耦合运营调试台类型定义。历史恢复时由
+ * {@link mapSessionMessage} 映射为 {@link ChatMessage}（含 attachments + A2UI 还原）。
+ */
+export interface SessionMessage {
+  id: string;
+  session_id: string;
+  role: 'user' | 'assistant' | 'system' | 'tool';
+  content: string;
+  timestamp: string;
+  metadata?: {
+    /** 附件引用（与上行 metadata.attachments 同形）。 */
+    attachments?: Array<{ fileId: string; name: string; mimeType: string; size: number; url: string }>;
+    /** 其他历史 metadata 原样透传（A2UI 渲染指令等）。 */
+    [key: string]: unknown;
+  };
+}
+
+/** 历史恢复：单条 SessionMessage → ChatMessage 的映射函数签名。 */
+export type SessionMessageMapper = (raw: SessionMessage) => ChatMessage;
 
 // ------------------------------------------------------------------ 连接状态
 
@@ -166,6 +223,9 @@ export interface SessionHandle {
   agentId?: string;
 }
 
+/** 历史加载状态（P0-2 三态：加载中 / 已加载 / 失败降级空会话）。 */
+export type ChatHistoryState = 'idle' | 'loading' | 'loaded' | 'error';
+
 /** chat-core 暴露给 UI 的接口。 */
 export interface UseChatReturn {
   sessionId: string | null;
@@ -174,7 +234,9 @@ export interface UseChatReturn {
   connectionState: ChatConnectionState;
   isGenerating: boolean;
   error: string | null;
-  sendMessage: (content: string) => void;
+  /** 历史加载状态（P0-2）。 */
+  historyState: ChatHistoryState;
+  sendMessage: (content: string, attachments?: Attachment[]) => void;
   respondToApproval: (approvalId: string, decision: ApprovalDecision, comment?: string) => void;
   respondToEntitySelect: (data: {
     resumeToken: string;
@@ -183,6 +245,8 @@ export interface UseChatReturn {
   }) => void;
   dispatchA2uiAction: (action: import('../a2ui/types').A2uiClientAction) => void;
   ensureSession: () => Promise<string>;
+  /** P0-2 拉取历史并渲染（404 / 失败降级空会话不阻塞）。 */
+  loadHistory: () => Promise<void>;
   closeSession: () => void;
   reconnect: () => void;
 }

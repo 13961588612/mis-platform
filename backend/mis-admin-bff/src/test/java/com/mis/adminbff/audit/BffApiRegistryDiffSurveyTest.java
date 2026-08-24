@@ -683,6 +683,8 @@ class BffApiRegistryDiffSurveyTest {
             "POST /api/v1/agent-ops/sessions/batch-delete",
             "POST /api/v1/agent-ops/chat/sessions",
             "POST /api/v1/agent-ops/chat/sessions/{id}/messages",
+            // ---- P0-1：Copilot 附件上传薄转发（sys_api 同域 agent:chat:use；deny-unmapped=true 必须登记）----
+            "POST /api/v1/agent-ops/files/upload",
             "GET /api/v1/agent-ops/mcp/servers",
             "GET /api/v1/agent-ops/mcp/servers/health",
             "GET /api/v1/agent-ops/mcp/servers/{name}",

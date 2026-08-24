@@ -5,7 +5,10 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.mis.adminbff.config.AgentOpsProperties;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.http.client.MultipartBodyBuilder;
+import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
+import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.reactive.function.client.WebClient;
 
 import java.util.Map;
@@ -51,6 +54,8 @@ public class AgentOpsClient extends AgentOpsTransport {
     private static final String ADMIN = "/api/v1/admin";
     /** HITL 审批与主动推送域（T04 收口：审批端点从 /admin 迁到 /push）。 */
     private static final String PUSH = "/api/v1/push";
+    /** 附件上传域（P0-1 先传后引：ai-platform 已存在 /api/v1/files/upload）。 */
+    private static final String FILES = "/api/v1/files";
 
     public AgentOpsClient(
             @Qualifier("plainWebClientBuilder") WebClient.Builder plainBuilder,
@@ -357,6 +362,26 @@ public class AgentOpsClient extends AgentOpsTransport {
     public JsonNode sendChatMessage(String sessionId, Object body) {
         return postChatJson(builder -> builder.path(SESSIONS + "/{id}/messages").build(sessionId), body,
                 "POST " + SESSIONS + "/{id}/messages");
+    }
+
+    /**
+     * P0-1 附件上传（薄转发 ai-platform {@code POST /api/v1/files/upload}）。
+     *
+     * <p>「先传后引」两段式第一段：BFF 不做存储，仅把 {@code MultipartFile} 转发下游，
+     * 拿回 {@code fileId/url} 交由前端放入消息 {@code metadata.attachments}。下游校验
+     * 白名单 + 大小上限（{@code UPLOAD_MAX_BYTES}）；BFF 仅做透传 + 限定 multipart
+     * 内容类型，避免非文件负载绕过后端。
+     *
+     * @param file 待上传文件（字段名 {@code file}，与 ai-platform 契约一致）
+     * @return 下游上传结果（透传 {@code {fileId,name,mimeType,size,url}}）
+     */
+    public JsonNode uploadFile(MultipartFile file) {
+        MultipartBodyBuilder builder = new MultipartBodyBuilder();
+        builder.part("file", file.getResource());
+        return postMultipart(
+                uriBuilder -> uriBuilder.path(FILES + "/upload").build(),
+                builder.build(),
+                "POST " + FILES + "/upload");
     }
 
     // ==================================================================

@@ -7,6 +7,7 @@ import com.mis.adminbff.dto.iqd.IqdFeedbackRequest;
 import com.mis.adminbff.service.agentops.AgentOpsFacadeService;
 import com.mis.common.core.result.Result;
 import jakarta.validation.Valid;
+import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -15,7 +16,9 @@ import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.RequestPart;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.multipart.MultipartFile;
 
 import java.util.Map;
 
@@ -370,6 +373,23 @@ public class AgentOpsController {
     @PostMapping("/chat/sessions/{id}/messages")
     public Result<JsonNode> sendChatMessage(@PathVariable String id, @RequestBody JsonNode body) {
         return Result.ok(facade.sendChatMessage(id, body));
+    }
+
+    /**
+     * P0-1 附件上传（薄转发 ai-platform {@code /api/v1/files/upload}）。
+     *
+     * <p>「先传后引」两段式第一段：BFF 不做存储，仅把 multipart 透传下游，拿回
+     * {@code fileId/url} 由前端放入消息 {@code metadata.attachments} 再经 WS 上行。
+     * 权限码走注册表 {@code agent:chat:use}（与对话同族），路径必须与
+     * {@code sys_api} 注册表逐字一致（见本类文件头 {@code deny-unmapped:true}），
+     * 新增端点需同步登记，否则上线即 403。
+     *
+     * @param file 待上传文件（字段名 {@code file}）
+     * @return 下游上传结果（透传 {@code {fileId,name,mimeType,size,url}}）
+     */
+    @PostMapping(value = "/files/upload", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public Result<JsonNode> uploadFile(@RequestPart("file") MultipartFile file) {
+        return Result.ok(facade.uploadFile(file));
     }
 
     // ---------------------------------------------------------------- MCP #34–#42
