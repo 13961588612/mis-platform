@@ -1,0 +1,58 @@
+sequenceDiagram
+    actor U as 用户
+    participant P as CopilotPanel/ai-chat-panel
+    participant H as useChat(sendMessage)
+    participant A as attachment-upload
+    participant B as BFF /files/upload
+    participant W as WS /ws/chat
+    participant S as SSE /api/events/stream
+    participant AI as ai-platform
+
+    U->>P: 选/拖/粘贴文件 + 输入文本
+    P->>P: 展示待发送 chip（status=uploading）
+    U->>P: 点击发送
+    P->>H: sendMessage(text, attachments[])
+    H->>A: uploadAttachment(file) 逐个
+    A->>B: POST multipart file
+    B->>AI: 转发 /api/v1/files/upload
+    AI-->>B: {fileId,url,...}
+    B-->>A: Result<JsonNode>
+    A-->>H: Attachment[] (status=done)
+    H->>W: InboundMessage{type:chat, content, metadata:{a2ui:true, attachments:[...]}}
+    W->>AI: 上行（含附件引用）
+    AI-->>S: 流式 TEXT_MESSAGE_CHUNK / ACTIVITY_SNAPSHOT
+    S-->>H: handleEvent('stream'|'a2ui_surface'|'done')
+    H->>H: 追加 assistant 消息内容 / 渲染 A2UI
+    Note over H: 附件随 user 消息已上屏（chip→done）
+
+---
+
+sequenceDiagram
+    actor U as 用户
+    participant P as CopilotPanel/ai-chat-panel
+    participant H as useChat(ensureSession/loadHistory)
+    participant B as BFF #29 /sessions/{id}/messages
+    participant AI as ai-platform
+    participant ST as chat-store
+
+    U->>P: 打开面板 / 进入路由
+    P->>H: useEffect → ensureSession()
+    H->>H: 取 localStorage sid（无则 generateClientId('web')）
+    H->>H: setHistoryState('loading')
+    P->>P: 渲染骨架屏（占位气泡）
+    H->>B: GET /api/v1/agent-ops/sessions/{sid}/messages
+    B->>AI: 转发 GET /api/v1/sessions/{sid}/messages
+    alt 有历史（sid 已落库）
+        AI-->>B: SessionMessage[]
+        B-->>H: Result<JsonNode>
+        H->>H: mapSessionMessage → ChatMessage[]（含 attachments + A2UI 还原）
+        H->>ST: setMessages(ChatMessage[])
+        H->>H: setHistoryState('loaded')
+        P->>P: 渲染 user/assistant 气泡 + A2UI 卡片
+        P->>P: 滚动定位到底部（最近消息）
+    else 无历史 / 404（sid 未落库）
+        AI-->>B: 404 / 空
+        B-->>H: error / empty
+        H->>H: setHistoryState('error') → 降级
+        P->>P: 空会话态（无报错阻塞）
+    end
