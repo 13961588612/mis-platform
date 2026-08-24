@@ -32,6 +32,9 @@ import {
   KbChatSourceList,
   splitKbSources,
 } from '@/components/common/kb-chat-sources';
+import { IqdCitationBlock, splitIqdCitations } from './components/iqd-citation-block';
+import { IqdPlanSteps, splitIqdPlan } from './components/iqd-plan-steps';
+import { IqdFeedbackButtons } from './components/iqd-feedback-buttons';
 import type { A2uiComponentName } from '@/lib/a2ui/types';
 import type { ChatMessage } from '@/lib/chat/types';
 import type { DispatchTraceEntry } from '@/lib/chat/types';
@@ -45,6 +48,8 @@ export interface AiChatPanelProps {
   suggestions?: string[];
   /** 路由激活门控：仅当前路由激活时建立连接（避免 keep-alive 双订阅）。 */
   active: boolean;
+  /** 智能体展示名（「问数」/「知识库问答」）；气泡尾部「由 X 智能体回答」标签的兜底值。 */
+  agentLabel?: string;
 }
 
 /** 旧协议 ui.render 单条渲染（registry 组件 + 权限门控）。 */
@@ -87,7 +92,17 @@ function DispatchTraceHint({ entries }: { entries: DispatchTraceEntry[] }) {
 }
 
 /** 单条消息气泡（user / assistant + kb-sources / tool / a2ui surface）。 */
-function ChatBubble({ message }: { message: ChatMessage }) {
+function ChatBubble({
+  message,
+  sessionId,
+  agentLabel,
+  dispatchTrace,
+}: {
+  message: ChatMessage;
+  sessionId: string | null;
+  agentLabel?: string;
+  dispatchTrace: DispatchTraceEntry[];
+}) {
   if (message.role === 'tool') {
     return (
       <div className="rounded-md border border-border/60 bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
@@ -126,15 +141,36 @@ function ChatBubble({ message }: { message: ChatMessage }) {
   const isUser = message.role === 'user';
 
   // 助手正文：剥 kb-sources 围栏 → 正文 Markdown + 引用配图 + 引用折叠
+  // 问数（iqd）计划/引用围栏在 kb-sources 之后剥（iqd-plan / iqd-citations）
   let body: ReactNode = message.content;
   let figures: ReactNode = null;
   let sourceList: ReactNode = null;
+  let planBlock: ReactNode = null;
+  let citationBlock: ReactNode = null;
+  let totalMs: number | null = null;
   if (!isUser && message.content) {
     const { body: cleanBody, sources } = splitKbSources(message.content);
-    body = <MarkdownView content={cleanBody} />;
+    const { body: bodyNoPlan, plan } = splitIqdPlan(cleanBody);
+    const { body: bodyNoCitations, citations } = splitIqdCitations(bodyNoPlan);
+    body = <MarkdownView content={bodyNoCitations} />;
     figures = <KbChatSourceFigures sources={sources} />;
     sourceList = <KbChatSourceList sources={sources} />;
+    if (plan.length > 0) {
+      // 本轮总耗时 = plan[].duration_ms 求和（数值一致性由 orchestrator 计时保证）
+      totalMs = plan.reduce((acc, s) => acc + (s.duration_ms ?? 0), 0);
+      planBlock = <IqdPlanSteps steps={plan} totalMs={totalMs} />;
+    }
+    if (citations.length > 0) {
+      citationBlock = <IqdCitationBlock citations={citations} />;
+    }
   }
+
+  // 智能体路由归属：message.agentId ?? dispatchTrace.worker_id ?? agentLabel（feedback-enhance §2.4）。
+  const latestWorkerId =
+    dispatchTrace.length > 0 ? dispatchTrace[dispatchTrace.length - 1].worker_id : undefined;
+  const agentDisplay = message.agentId ?? latestWorkerId ?? agentLabel;
+  // 评价按钮仅挂已完成（非 streaming）的助手正文气泡。
+  const showFeedback = !isUser && message.status !== 'streaming';
 
   return (
     <div className={cn('flex', isUser ? 'justify-end' : 'justify-start')}>
@@ -158,6 +194,23 @@ function ChatBubble({ message }: { message: ChatMessage }) {
         )}
         {figures}
         {sourceList}
+        {planBlock}
+        {citationBlock}
+        {!isUser && agentDisplay ? (
+          <div className="mt-2 flex items-center gap-1.5">
+            <Badge variant="secondary" className="gap-1 text-[11px]">
+              <Sparkles className="h-3 w-3 text-primary" />
+              由 {agentDisplay} 智能体回答
+            </Badge>
+          </div>
+        ) : null}
+        {showFeedback ? (
+          <IqdFeedbackButtons
+            sessionId={message.backendSessionId ?? sessionId}
+            backendMessageId={message.backendMessageId}
+            agentLabel={agentDisplay}
+          />
+        ) : null}
       </div>
     </div>
   );
@@ -171,6 +224,7 @@ export function AiChatPanel({
   emptyHint,
   suggestions = [],
   active,
+  agentLabel,
 }: AiChatPanelProps) {
   const location = useLocation();
   const chat = useChat({ autoConnect: active });
@@ -289,7 +343,13 @@ export function AiChatPanel({
           ) : (
             <div className="space-y-3">
               {chat.messages.map((msg) => (
-                <ChatBubble key={msg.id} message={msg} />
+                <ChatBubble
+                  key={msg.id}
+                  message={msg}
+                  sessionId={chat.sessionId}
+                  agentLabel={agentLabel}
+                  dispatchTrace={dispatchTrace}
+                />
               ))}
               {chat.isGenerating ? (
                 <div className="flex items-center gap-2 rounded-lg border bg-card p-3 text-xs text-muted-foreground">

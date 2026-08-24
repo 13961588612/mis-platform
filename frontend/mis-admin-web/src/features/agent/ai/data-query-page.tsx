@@ -13,7 +13,7 @@ import { AiChatPanel } from './ai-chat-panel';
 import { DATA_QUERY_SUGGESTIONS } from './services/skill-dispatch';
 
 /** 问数页路由（keep-alive-outlet PAGE_MAP 精确匹配）。 */
-export const DATA_QUERY_PAGE_PATH = '/ai/data-query';
+export const DATA_QUERY_PAGE_PATH = '/iqd/data-query';
 
 export function DataQueryPage() {
   const location = useLocation();
@@ -29,8 +29,9 @@ export function DataQueryPage() {
       <div className="flex min-h-0 flex-1 flex-col">
         <AiChatPanel
           title="问数"
-          emptyHint="我是问数助手。支持数据汇总、信息抽取、知识库检索与 CRM 查询，结果以表格呈现（可点示例直接提问）。"
+          emptyHint="我是问数助手。用自然语言查询业务数据（支持数据汇总、信息抽取、知识库检索与 CRM 查询），结果以执行计划 + 表格 + 引用呈现（可点示例直接提问）。"
           suggestions={DATA_QUERY_SUGGESTIONS}
+          agentLabel="问数"
           active={active}
         />
       </div>

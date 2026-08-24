@@ -43,6 +43,7 @@ import {
 } from '@/lib/nav/system-nav';
 import { KB_NAV } from '@/lib/nav/kb-nav';
 import { AGENT_NAV } from '@/lib/nav/agent-nav';
+import { IQD_NAV } from '@/lib/nav/iqd-nav';
 import { resolveActiveHostAppCode, resolveAppEntry } from '@/lib/nav/host-apps';
 import { APP_GROUP_LABEL } from '@/lib/nav/app-groups';
 import { mergeNavWithFallback, routerMenusToSystemNav } from '@/lib/nav/menus-to-nav';
@@ -86,9 +87,11 @@ export function AppLayout() {
         ? KB_NAV
         : activeAppCode === 'agent'
           ? AGENT_NAV
-          : activeAppCode === 'system'
-            ? SYSTEM_NAV
-            : null;
+          : activeAppCode === 'iqd'
+            ? IQD_NAV
+            : activeAppCode === 'system'
+              ? SYSTEM_NAV
+              : null;
     const dyn = routerMenusToSystemNav(menus);
     if (!dyn) return fallback ?? SYSTEM_NAV;
     if (fallback) return mergeNavWithFallback(fallback, dyn);
@@ -167,7 +170,16 @@ export function AppLayout() {
     [apps, activeAppCode],
   );
   const activeAppName = currentAppMeta?.name ?? (activeAppCode === 'system' ? '系统管理' : activeAppCode);
-  const AppIcon = resolveNavIcon(currentAppMeta?.icon ?? (activeAppCode === 'agent' ? 'Bot' : activeAppCode === 'kb' ? 'BookOpen' : 'Settings'));
+  const AppIcon = resolveNavIcon(
+    currentAppMeta?.icon ??
+      (activeAppCode === 'agent'
+        ? 'Bot'
+        : activeAppCode === 'kb'
+          ? 'BookOpen'
+          : activeAppCode === 'iqd'
+            ? 'Database'
+            : 'Settings'),
+  );
 
   useEffect(() => setMounted(true), []);
 
@@ -377,7 +389,9 @@ export function AppLayout() {
                     ? '知识管理'
                     : activeAppCode === 'agent'
                       ? '智能体运营'
-                      : undefined
+                      : activeAppCode === 'iqd'
+                        ? '问数'
+                        : undefined
               }
             />
           )}

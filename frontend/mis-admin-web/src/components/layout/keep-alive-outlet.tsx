@@ -48,6 +48,7 @@ import {
 import { flattenSystemNavLeaves } from '@/lib/nav/system-nav';
 import { flattenKbNavLeaves } from '@/lib/nav/kb-nav';
 import { flattenAgentNavLeaves } from '@/lib/nav/agent-nav';
+import { flattenIqdNavLeaves } from '@/lib/nav/iqd-nav';
 
 // ---------------------------------------------------------------------------
 // T09/T10 存量页：路由级懒加载（React.lazy + Suspense，每路由独立 chunk ≤80KB/页）。
@@ -58,6 +59,13 @@ const LazyDataQueryPage = lazy(() => import('@/features/agent/ai/data-query-page
 const LazyApprovalCenterPage = lazy(() => import('@/features/agent/ai/approval-center-page'));
 const LazySkillManagePage = lazy(() => import('@/features/agent/ai/skill-manage-page'));
 const LazyMonitorDashboardPage = lazy(() => import('@/features/agent/ai/monitor-dashboard-page'));
+// W2 问数管理（/iqd/*，懒加载；V77 路由前缀由 /ai/iqd 迁至 /iqd）
+const LazyIqdConfigPage = lazy(() => import('@/features/agent/ai/iqd/iqd-config-page'));
+const LazyIqdCatalogPage = lazy(() => import('@/features/agent/ai/iqd/iqd-catalog-page'));
+const LazyIqdScopePage = lazy(() => import('@/features/agent/ai/iqd/iqd-scope-page'));
+const LazyIqdTestChatPage = lazy(() => import('@/features/agent/ai/iqd/iqd-test-chat-page'));
+const LazyIqdTracePage = lazy(() => import('@/features/agent/ai/iqd/iqd-trace-page'));
+const LazyIqdEnhancePage = lazy(() => import('@/features/agent/ai/iqd/iqd-enhance-page'));
 
 /** 懒加载页面的 Suspense 占位（轻量，避免白屏闪烁）。 */
 function LazyPageFallback() {
@@ -136,17 +144,26 @@ const PAGE_MAP: Record<string, ComponentType> = {
   '/agent/approvals': AgentApprovalsPage,
   // T09/T10：存量页迁移（ai-platform 后端，懒加载）
   '/ai/qa': LazyQaPage,
-  '/ai/data-query': LazyDataQueryPage,
   '/ai/approvals': LazyApprovalCenterPage,
   '/ai/skills': LazySkillManagePage,
   '/ai/monitor': LazyMonitorDashboardPage,
+  // W2：问数管理（V77 独立门户应用 iqd，路由迁 /iqd/*；组件不变）
+  '/iqd/data-query': LazyDataQueryPage,
+  '/iqd/config': LazyIqdConfigPage,
+  '/iqd/catalog': LazyIqdCatalogPage,
+  '/iqd/scope': LazyIqdScopePage,
+  '/iqd/test-chat': LazyIqdTestChatPage,
+  '/iqd/traces': LazyIqdTracePage,
+  '/iqd/enhance': LazyIqdEnhancePage,
 };
 
 export const KEEP_ALIVE_META: Record<string, { title: string; icon?: string }> = Object.fromEntries(
-  [...flattenSystemNavLeaves(), ...flattenKbNavLeaves(), ...flattenAgentNavLeaves()].map((i) => [
-    i.path,
-    { title: i.title, icon: i.icon },
-  ]),
+  [
+    ...flattenSystemNavLeaves(),
+    ...flattenKbNavLeaves(),
+    ...flattenAgentNavLeaves(),
+    ...flattenIqdNavLeaves(),
+  ].map((i) => [i.path, { title: i.title, icon: i.icon }]),
 );
 
 /**

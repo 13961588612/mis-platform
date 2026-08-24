@@ -494,6 +494,31 @@ export async function batchProcessAgentFeedback(
   return unwrap(res, '批量标记反馈失败');
 }
 
+/** 用户端评价提交的结果（下游 ai-platform `set_message_feedback` 返回，BFF 透传）。 */
+export interface SessionFeedbackResult {
+  message_id?: string;
+  rating?: 'up' | 'down';
+  comment?: string | null;
+  updated_at?: string;
+}
+
+/**
+ * 用户端评价提交（点赞/点踩，feedback-enhance §2.2）。
+ *
+ * <p>复用 {@code ai:chat:use}（BFF 透传 ai-platform `agent_feedback`，唯一约束幂等）。
+ * body `{rating, comment?, message_id?}`；down 必须带 comment（前端校验 + 服务端 4001 兜底）。
+ */
+export async function submitSessionFeedback(
+  sessionId: string,
+  payload: { rating: 'up' | 'down'; comment?: string; message_id?: string },
+): Promise<SessionFeedbackResult> {
+  const res = await api.post<ApiResult<SessionFeedbackResult>>(
+    `/agent-ops/sessions/${seg(sessionId)}/feedback`,
+    payload,
+  );
+  return unwrap(res, '提交反馈失败');
+}
+
 // ------------------------------------------------------------------ 本地对话（§4.3 #32–#33）
 // 实现已迁至 agent-chat-api.ts（独立 180s 超时客户端）；此处再导出保持旧 import 兼容。
 

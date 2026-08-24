@@ -29,6 +29,7 @@ export function QaPage() {
         <AiChatPanel
           title="知识库问答"
           emptyHint="我是知识库问答助手。可以问我制度、流程、资料相关的问题，回答会附上引用来源；需要表格 / 表单 / 实体选择时，我会直接渲染可交互界面。"
+          agentLabel="知识库问答"
           active={active}
         />
       </div>

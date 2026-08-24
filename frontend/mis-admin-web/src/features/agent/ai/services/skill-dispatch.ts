@@ -72,6 +72,12 @@ export const DISPATCH_SKILLS: DispatchSkillMeta[] = [
     description: '客户/商机域问答与查询，输出业务数据表。',
     intents: ['客户', '商机', 'CRM', '线索'],
   },
+  {
+    skillId: 'mis-iqd',
+    name: '问数',
+    description: '自然语言转 SQL 查询业务数据，输出执行计划 + 结果表 + 引用。',
+    intents: ['问数', '查询', '销售额', '门店', 'GMV', '订单'],
+  },
 ];
 
 /** 按技能码取声明；未知返回 undefined。 */
@@ -79,10 +85,12 @@ export function getDispatchSkill(skillId: string): DispatchSkillMeta | undefined
   return DISPATCH_SKILLS.find((s) => s.skillId === skillId);
 }
 
-/** 问数页快捷示例（预置提示语）。 */
+/** 问数页快捷示例（预置提示语；含 mis-iqd 自然语言问数示例）。 */
 export const DATA_QUERY_SUGGESTIONS: string[] = [
   '帮我汇总本月各门店销售额',
   '从这段表格里抽取合同关键字段',
   '查询知识库中关于差旅报销的规定',
   '列出最近一周的客户跟进记录',
+  '帮我查一下华东区最近 30 天订单总量',
+  '按渠道统计本月 GMV 并给出明细',
 ];

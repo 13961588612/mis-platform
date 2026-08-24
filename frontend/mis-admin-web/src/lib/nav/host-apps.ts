@@ -13,6 +13,8 @@ const HOST_APP_LANDING: Record<string, string> = {
   // T01：智能体运营控制台。sys_app.base_path 是 '/agent'（V19），但 '/agent' 本身
   // 没有页面（PAGE_MAP 无此键），不显式登记就会落到「页面不存在」。
   agent: '/agent/overview',
+  // V77：问数独立门户应用（sys_app 93010，base_path=/iqd）。旗舰页 /iqd/data-query。
+  iqd: '/iqd/data-query',
 };
 
 /**
@@ -48,6 +50,8 @@ export function resolveActiveHostAppCode(
 ): string {
   if (pathname === '/kb' || pathname.startsWith('/kb/')) return 'kb';
   if (pathname === '/agent' || pathname.startsWith('/agent/')) return 'agent';
+  // V77：问数独立门户应用。/iqd/* 必须**先于** /ai/* 解析，否则会被 agent 规则吞掉。
+  if (pathname === '/iqd' || pathname.startsWith('/iqd/')) return 'iqd';
   // T09/T10：存量页迁移路由 /ai/* 归入智能体运营控制台（app.code = 'agent'）
   if (pathname === '/ai' || pathname.startsWith('/ai/')) return 'agent';
   if (pathname.startsWith('/iframe/')) {

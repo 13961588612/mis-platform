@@ -13,14 +13,23 @@ export default defineConfig({
     host: true, // 同时监听 0.0.0.0 / ::，避免仅 [::1] 时 127.0.0.1 无响应
     port: 5174,
     proxy: {
+      // chat-core：SSE/REST 消息走 AI Platform Gateway（:3100），须写在通用 /api 之前
+      '/api/events': {
+        target: 'http://localhost:3100',
+        changeOrigin: true,
+      },
+      '/api/messages': {
+        target: 'http://localhost:3100',
+        changeOrigin: true,
+      },
+      // 业务 REST → Spring mis-gateway → BFF
       '/api': {
         target: 'http://localhost:8080',
         changeOrigin: true,
       },
-      // chat-core 发送通道（/ws/chat）与接收通道（/api/events/stream）均直连 Gateway；
-      // WS 需 ws:true 才能升级握手（QA 建议 3）
+      // chat-core 发送通道 /ws/chat → AI Gateway；需 ws:true 升级握手
       '/ws': {
-        target: 'http://localhost:8080',
+        target: 'http://localhost:3100',
         changeOrigin: true,
         ws: true,
       },

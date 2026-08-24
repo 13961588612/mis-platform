@@ -19,7 +19,7 @@ import { useSurfaceStore } from '@/lib/a2ui/surface-store';
 import { subscribeChatStream, type ChatSseController } from './sse-client';
 import { ChatWsClient } from './ws-client';
 import { processA2uiMessage } from '@/lib/a2ui/MessageProcessor';
-import { generateClientId, type ChatStreamEvent, type InboundMessage, type UseChatReturn } from './types';
+import { generateClientId, type ChatMessage, type ChatStreamEvent, type InboundMessage, type UseChatReturn } from './types';
 
 /** 会话 id 持久化 key（Copilot 面板最近会话）。 */
 const LAST_SESSION_KEY = 'mis.copilot.lastSession';
@@ -126,7 +126,12 @@ export function useChat(options?: UseChatOptions): UseChatReturn {
       case 'done': {
         const streamingId = streamingMessageIdRef.current;
         if (streamingId) {
-          store.updateMessageStatus(streamingId, 'delivered');
+          const updates: Partial<ChatMessage> = { status: 'delivered' };
+          // 评价锚点（feedback-enhance §2.2 方案 C）：done 帧携带的后端消息 UUID / 平台会话
+          // UUID 写入当前 assistant 消息；缺失时保持 undefined（评价按钮降级禁用，不报错）。
+          if (event.messageId) updates.backendMessageId = event.messageId;
+          if (event.sessionId) updates.backendSessionId = event.sessionId;
+          store.updateMessage(streamingId, updates);
           streamingMessageIdRef.current = null;
         }
         if (event.tokenUsage) store.addTokenUsage(event.tokenUsage);

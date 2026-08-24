@@ -51,7 +51,14 @@ export function parseStreamLine(raw: RawStreamLine): ChatStreamEvent | null {
       return { type: 'dispatch.trace', trace: adaptTrace(raw.data) };
     }
     case 'done': {
-      return { type: 'done', tokenUsage: adaptTokenUsage(raw.token_usage ?? raw.tokenUsage) };
+      return {
+        type: 'done',
+        tokenUsage: adaptTokenUsage(raw.token_usage ?? raw.tokenUsage),
+        // 评价锚点（feedback-enhance §2.2 方案 C）：平台 done 帧透传 messageId（assistant 消息
+        // UUID）与 sessionId（平台会话 UUID）；缺失时保持 undefined（评价按钮降级禁用）。
+        messageId: asString(raw.messageId ?? raw.message_id),
+        sessionId: asString(raw.sessionId ?? raw.session_id),
+      };
     }
     case 'error': {
       return {

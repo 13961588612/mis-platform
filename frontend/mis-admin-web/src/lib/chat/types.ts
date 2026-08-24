@@ -33,6 +33,10 @@ export interface ChatMessage {
   timestamp: string;
   /** 产生该消息的 Agent ID（assistant 消息可选）。 */
   agentId?: string;
+  /** 后端消息 UUID（SSE done 帧 messageId；评价锚点，缺失时评价按钮禁用）。 */
+  backendMessageId?: string;
+  /** 后端平台会话 UUID（SSE done 帧 sessionId；与本地会话 id 不同，评价提交路径参数）。 */
+  backendSessionId?: string;
   /** 工具名（tool 消息）。 */
   toolName?: string;
   /** 工具入参摘要（tool 消息）。 */
@@ -87,7 +91,7 @@ export type ChatStreamEvent =
   | { type: 'stream'; content: string }
   | { type: 'a2ui_surface'; operations: import('../a2ui/types').A2uiOperation[]; surfaceId?: string }
   | { type: 'dispatch.trace'; trace: DispatchTracePayload }
-  | { type: 'done'; tokenUsage?: TokenUsage }
+  | { type: 'done'; tokenUsage?: TokenUsage; messageId?: string; sessionId?: string }
   | { type: 'error'; errorCode?: string; message: string }
   | { type: 'text.delta'; content?: string }
   | { type: 'tool.call'; toolName?: string; args?: Record<string, unknown> }
