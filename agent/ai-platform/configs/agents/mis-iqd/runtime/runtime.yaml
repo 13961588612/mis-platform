@@ -1,0 +1,25 @@
+runtime:
+  type: openharness
+  version: "1.0.0"
+  allowed_tools:
+    - iqd__ask
+    - iqd__describe_scope
+  params:
+    maxSteps: 8
+    temperature: 0.1
+    maxTokens: 4096
+  prompts:
+    system: runtime/prompts/system.md
+  middleware: {}
+
+# 问数管线参数（B2 起 AskOrchestrator 读取同名 Settings 项）。
+# 本节仅作为该 Agent 的期望默认值声明与运维可读文档；
+# 实际生效值以环境变量 WREN_* / IQD_* 为准（见 src/config.py）。
+iqd:
+  # 单次问数超时（秒），对齐 SLO P95 ≤ 20s
+  ask_timeout_seconds: 120
+  # 结果集上限：行数 / 列数，超出置 truncated=true
+  row_limit: 1000
+  column_limit: 50
+  # 行级范围 ENUM 降级阈值（≤500 才走 ENUM，否则 FAIL_CLOSED 45204）
+  enum_limit: 500

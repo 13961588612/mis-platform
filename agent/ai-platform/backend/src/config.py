@@ -53,6 +53,83 @@ class LogLevel(str, Enum):
     FATAL = "FATAL"
 
 
+class IqdMcpSettings(BaseSettings):
+    """本地 WrenAI MCP server 连接配置（v1.9，architecture §3.2 / deploy-iqd.md）。
+
+    对接外部 WrenAI 产品的适配层保留 wren 命名；凭证由 ``wren profile`` server-side
+    注入（不落平台库、不落前端），本段只描述进程与连接形态。
+    """
+
+    model_config = SettingsConfigDict(env_prefix="WREN_", extra="ignore")
+
+    wren_mcp_host: str = Field(
+        default="127.0.0.1",
+        description="wren serve mcp 监听地址（官方默认仅本机）",
+    )
+    wren_mcp_port: int = Field(
+        default=8080,
+        description="wren serve mcp HTTP transport 端口",
+    )
+    wren_mcp_transport: str = Field(
+        default="http",
+        description="MCP 传输方式：http（一期唯一形态）",
+    )
+    wren_mcp_allow_write: bool = Field(
+        default=False,
+        description="是否允许 MCP 写工具（本期默认关闭，只读兜底）",
+    )
+    wren_mcp_timeout_seconds: float = Field(
+        default=60.0,
+        description="单次 MCP 工具调用超时（秒），对齐 SLO P95 ≤ 20s",
+    )
+    wren_cli_bin: str = Field(
+        default="wren",
+        description="本地 wren CLI 可执行文件（profile / context build 管理面）",
+    )
+    wren_profile_name: str = Field(
+        default="",
+        description="业务数据源 profile 名（凭证由 wren profile 注入，非本字段）",
+    )
+    wren_language: str = Field(
+        default="zh-CN",
+        description="WrenAI 生成语言",
+    )
+
+
+class IqdConfigClientSettings(BaseSettings):
+    """mis-iqd 配置读取 API 客户端配置（v1.9，architecture §3.2 / §4.2.2 D.7.3）。
+
+    Worker 不直连 mis_platform 库：配置（连接/ACL/范围/维度注册表/脱敏规则/字典同步
+    状态）经本客户端调 mis-iqd ``/internal/v1/iqd/**`` 读取 + 本地缓存消费
+    （启动全量 + 变更事件 + 每日兜底；缓存不可得 fail-closed 45204）。
+    """
+
+    model_config = SettingsConfigDict(env_prefix="IQD_", extra="ignore")
+
+    internal_api_base_url: str = Field(
+        default="http://mis-iqd:8109",
+        description="mis-iqd 服务基址（内网直连，非经 Gateway）",
+    )
+    timeout_seconds: float = Field(
+        default=10.0,
+        description="单次配置读取请求超时（秒）",
+    )
+    cache_ttl_seconds: int = Field(
+        default=10,
+        description="配置本地缓存 TTL（秒）；默认 10s 满足「变更生效 ≤10s」（D.7.3），"
+        "未订阅 Redis 事件时靠 TTL 回源；另有每日定期刷新兜底",
+    )
+    cache_refresh_jitter: float = Field(
+        default=30.0,
+        description="缓存刷新抖动（秒），避免多实例同时回源",
+    )
+    redis_url: str = Field(
+        default="",
+        description="可选：变更事件订阅用 Redis URL（如 redis://localhost:6379/0）；"
+        "为空则退回 TTL/每日兜底",
+    )
+
+
 class Settings(BaseSettings):
     """
     应用全局设置，从环境变量中加载。
@@ -379,11 +456,13 @@ class Settings(BaseSettings):
     # 硬约束（R5/R8）：默认白名单移除已灰度下线的 mis-extract / mis-summary，
     # 加入承接其能力的 mis-user-helper；**绝不**包含 mis-admin-helper
     # （后台操作员专属，只经 create_session 直达，copilot 全链路 fail-closed）。
+    # v1.9（B1）：追加 mis-iqd（问数 Worker，role=worker、max_depth=1）。
     INVOKE_AGENT_WHITELIST: list[str] = Field(
         default_factory=lambda: [
             "mis-rag",
             "crm-assistant",
             "mis-user-helper",
+            "mis-iqd",
         ],
         description="mis-copilot 可委托的目标 Agent 白名单（不含 mis-admin-helper）",
     )
@@ -462,6 +541,13 @@ class Settings(BaseSettings):
         default=False,
         description="是否允许 mode=\"continue\" 复用已有 Worker 子会话（未命中静默降级 spawn）",
     )
+
+    # ===== 问数（WrenAI 对接，v1.9 / B1）=====
+    # 本地 MCP server 连接 + mis-iqd 配置读取 API 客户端。
+    # ⚠ 仓库无 Nacos ai-platform.yaml（R2）：配置先入 config.py BaseSettings 段，
+    #   部署侧如需 Nacos 下发再补（低优先）。
+    iqd_mcp: IqdMcpSettings = Field(default_factory=IqdMcpSettings)
+    iqd_config: IqdConfigClientSettings = Field(default_factory=IqdConfigClientSettings)
 
     DEV_TEST_ACCOUNTS_ENABLED: bool = Field(
         default=False,

@@ -434,6 +434,82 @@ def test_a2ui_run_loop_tool_then_text(redis):
         assert events[1]["result"]["ok"] is True
         assert events[2]["content"] == "已为你生成表格"
         assert events[3]["type"] == "done"
+        # 评价锚点（feedback-enhance §2.2 方案 C）：done 事件必须携带 message_id/session_id，
+        # 且 message_id 与该条 assistant 消息落库（add_message）的 UUID 一致。
+        assert events[3]["session_id"] == "sess-2"
+        done_message_id = events[3]["message_id"]
+        assert isinstance(done_message_id, str) and done_message_id, (
+            "done 事件应携带 assistant 消息 UUID（message_id）"
+        )
+        assistant_persisted = [
+            m for m in loop._session_manager.persisted if m["role"] == "assistant"
+        ]
+        assert len(assistant_persisted) == 1
+        assert assistant_persisted[0]["message_id"] == done_message_id, (
+            "done.message_id 必须与 agent_session_message 落库 UUID 一致"
+        )
+
+    asyncio.run(run())
+
+
+def test_a2ui_done_without_assistant_text_omits_message_id(redis):
+    """assistant 无正文（仅工具调用）→ done 携带 session_id 但省略 message_id。
+
+    没有可评价的 assistant 消息时，透传 message_id 会产生悬空锚点；此时前端
+    评价按钮按缺失 messageId 降级禁用（feedback-enhance §2.2 方案 C）。
+    """
+
+    async def run():
+        gateway = _FakeGateway(
+            [
+                LLMResponse(
+                    content="",
+                    tool_calls=[
+                        {
+                            "id": "tc-empty",
+                            "type": "function",
+                            "function": {
+                                "name": "render_a2ui",
+                                "arguments": (
+                                    '{"surfaceId":"s1","components":'
+                                    '[{"id":"root","component":"data-table"}]}'
+                                ),
+                            },
+                        }
+                    ],
+                    finish_reason="tool_calls",
+                ),
+                LLMResponse(content="", finish_reason="stop"),
+            ]
+        )
+        publisher = A2uiOutboundPublisher(redis)
+        loop = A2uiRunLoop(
+            gateway,
+            publisher,
+            model="test-model",
+            session_manager=_FakeSessionManager(),
+        )
+        await loop.run(
+            session_id="sess-empty-text",
+            user_id="u1",
+            trace_id="t1",
+            run_agent_input={
+                "messages": [{"role": "user", "content": "只渲染表格"}],
+                "tools": [
+                    {
+                        "name": "render_a2ui",
+                        "description": "render",
+                        "parameters": {"type": "object", "properties": {}},
+                    }
+                ],
+            },
+        )
+
+        events = await _stream_events(redis, "sess-empty-text")
+        done = events[-1]
+        assert done["type"] == "done"
+        assert done["session_id"] == "sess-empty-text"
+        assert "message_id" not in done, "无 assistant 正文时不应透传 message_id"
 
     asyncio.run(run())
 

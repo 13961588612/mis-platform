@@ -66,8 +66,9 @@ EXPECTED_ROLES: dict[str, AgentRole] = {
     "mis-summary": AgentRole.WORKER,
     "mis-admin-helper": AgentRole.WORKER,
     "mis-user-helper": AgentRole.WORKER,
+    "mis-iqd": AgentRole.WORKER,
 }
-"""7 个 Agent 的期望调度角色（T04 验收：role 解析正确；1.3/1.4 新增两个 helper）。"""
+"""8 个 Agent 的期望调度角色（T04 验收：role 解析正确；1.3/1.4 新增两个 helper；v1.9/B1 新增 mis-iqd 问数 Worker）。"""
 
 LAZY_DELEGATION_CORPUS: tuple[str, ...] = (
     "帮我查一下",
@@ -778,7 +779,7 @@ async def test_too_short_goal_is_rejected_in_strict_mode() -> None:
 
 
 async def test_repo_configs_load_five_agents_without_warning() -> None:
-    """真实 configs 目录可加载 7 个 Agent，且加载过程无告警/报错。"""
+    """真实 configs 目录可加载 8 个 Agent，且加载过程无告警/报错。"""
     configs, logger_spy = await _load_configs(REPO_CONFIGS)
     agent_ids = sorted(config.agent_id for config in configs)
 
@@ -788,7 +789,7 @@ async def test_repo_configs_load_five_agents_without_warning() -> None:
 
 
 async def test_repo_configs_declare_expected_roles() -> None:
-    """7 个 Agent 的 role 解析正确：1 个 Coordinator + 6 个 Worker。"""
+    """8 个 Agent 的 role 解析正确：1 个 Coordinator + 7 个 Worker。"""
     configs, _ = await _load_configs(REPO_CONFIGS)
     roles = {config.agent_id: config.role for config in configs}
 
@@ -797,7 +798,7 @@ async def test_repo_configs_declare_expected_roles() -> None:
 
 
 async def test_worker_metadata_declares_delegation_contract() -> None:
-    """6 个 Worker 的委派契约齐备，且 when_to_use 互不重复。"""
+    """7 个 Worker 的委派契约齐备，且 when_to_use 互不重复。"""
     configs, _ = await _load_configs(REPO_CONFIGS)
     workers = {
         config.agent_id: config.metadata
@@ -805,7 +806,7 @@ async def test_worker_metadata_declares_delegation_contract() -> None:
         if config.role is AgentRole.WORKER
     }
 
-    assert set(workers) == {*DEFAULT_WHITELIST, "mis-admin-helper", "mis-user-helper"}
+    assert set(workers) == {*DEFAULT_WHITELIST, "mis-admin-helper", "mis-user-helper", "mis-iqd"}
     hints: list[str] = []
     for agent_id, metadata in workers.items():
         assert metadata is not None, agent_id

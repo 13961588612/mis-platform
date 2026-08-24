@@ -1,0 +1,73 @@
+# =============================================================================
+# mis-iqd — 问数助手（WrenAI 对接）
+# 供 mis-copilot Coordinator 委派（INVOKE_AGENT_WHITELIST 已含 mis-iqd）。
+#
+# 编排链路（v1.9，architecture §1.5 / §3.2 / §4.2.2 D.7.3）：
+#   前端 → BFF /api/v1/iqd/** → mis-copilot Coordinator → mis-iqd Worker
+#        → 本地 MCP client（wren serve mcp @127.0.0.1:8080）
+#        → IqdConfigClient → mis-iqd /internal/v1/iqd/**（配置 API + 本地缓存）
+#        → wren-core 生成/执行 SQL（凭证由 wren profile server-side 注入）
+#
+# 安全红线（fail-closed，宁拒不可漏）：
+#   * 只用 iqd__ask 只读工具；禁止臆造数据、禁止直连业务库、禁止写操作
+#   * 表级 ACL + 行级范围（维度注册表遍历）双闸门；越权/空范围 45204 拒绝
+#   * 结果经 MaskingEngine 唯一脱敏出口；前端绝无 SQL 泄漏（view=user 删键）
+# =============================================================================
+
+agent:
+  name: mis-iqd
+  display_name: 问数助手
+  description: >
+    面向业务数据的自然语言问数助手：理解问题 → 生成 SQL → 校验范围/ACL →
+    执行 → 脱敏 → 返回答案、引用与步骤化计划。命中表与口径由平台治理。
+  version: "1.0.0"
+  tags:
+    - mis
+    - iqd
+    - wrenai
+
+  # Coordinator–Worker 调度角色（spec.md §2.1）：
+  # worker = 单一专长执行者，不可再委派其他 Agent（max_depth=1）。
+  role: worker
+
+  includes:
+    runtime: runtime/runtime.yaml
+    system: system/model.yaml
+
+  routing:
+    enabled: true
+    priority: 20
+    # 问数/统计类意图的触发关键词（与 data-query-page 建议词呼应）
+    keywords:
+      - 问数
+      - 查数
+      - 销售额
+      - 销量
+      - 统计
+      - 汇总
+      - 同比
+      - 环比
+      - 各渠道
+      - 各门店
+      - 各产品
+      - 报表
+      - 指标
+      - 数据
+      - 明细
+
+  memory:
+    static:
+      enabled: true
+      personality: memory/personality.md
+      facts_dir: memory/facts/
+    dynamic:
+      enabled: false
+      collection: agent_memory_index
+      top_k: 5
+      write_back: false
+      ttl_days: 30
+      max_per_user: 200
+
+  push:
+    enabled: false
+    channels: []

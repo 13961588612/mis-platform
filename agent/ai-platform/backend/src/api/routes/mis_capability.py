@@ -435,9 +435,10 @@ async def agent_chat_stream(
 
     事件契约（与 BFF / 前端 ``ai-sse-client.ts`` 一致）：
     - ``event: delta`` → 通用 ``{ traceId, delta }``；KB 分支额外带同值 ``text``
-    - ``event: done``  → 通用 ``{ traceId, finishReason, sessionId }``；
+    - ``event: done``  → 通用 ``{ traceId, finishReason, sessionId, messageId }``；
       KB 分支 ``sessionId`` 为 **mis-kb 业务会话 ID（数值）**，
       平台会话 UUID 另置于 ``platformSessionId``，并附 ``messageId`` / ``citations``
+      （``messageId`` = 本轮 assistant 消息 UUID，供前端评价锚点；设计 feedback-enhance §2.2）
     - ``event: error`` → ``{ traceId, message }``
     """
 
@@ -497,6 +498,9 @@ async def agent_chat_stream(
                 "traceId": trace_id,
                 "finishReason": "stop",
                 "sessionId": session_id,
+                # 评价锚点（feedback-enhance §2.2 方案 C）：透传本轮 assistant 消息 UUID，
+                # 与 sessionId（平台会话 UUID）共同构成 agent_feedback 唯一约束定位键。
+                "messageId": assistant_id,
             }
             # 通道 B（DISPATCH_TRACE_SSE_ENABLED，默认关）：在 done 帧尾部追加
             # dispatchTrace。开关关闭时 payload 与改动前**逐字节一致**，

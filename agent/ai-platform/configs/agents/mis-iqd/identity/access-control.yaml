@@ -1,0 +1,24 @@
+# =============================================================================
+# mis-iqd — 访问控制与数据范围声明
+# =============================================================================
+
+access_control:
+  # 功能码由 BFF 前置（iqd:* 命名空间）；本段仅声明 Worker 侧行为约束。
+  functional_permissions:
+    - iqd:ask:use          # 用户端问数（BFF 前置，无码 40300）
+    - iqd:trace:view       # 后台查看 SQL/完整计划（view=admin 需此码，无码自动降 user）
+    - iqd:acl:grant        # 表级 ACL 授权（后台）
+    - iqd:scope:manage     # 范围/维度注册表管理（后台）
+
+  # 数据范围：行级由维度注册表驱动（B4/B5 注入），Worker 侧 fail-closed 45204。
+  row_scope_dimensions:
+    - dept    # predicate_type=PATH_PREFIX，头 X-Mis-Dept-Scope，字典 mis_dept_scope
+    - store   # predicate_type=ENUM，头 X-Mis-Stores，字典 mis_store_scope
+
+  # 禁止事项（安全红线）
+  forbidden:
+    - 直连业务库（Worker 只经 MCP 工具拿 SQL/结果文本，不建库连接）
+    - 写操作 / 修改数据（safety_level=read_only，无 HITL）
+    - 输出 SQL 给用户端（view=user 经 ResponseProjector 删键）
+    - 返回未授权表 / 越权行级范围的数据（空范围 45204）
+    - 臆造数据 / 编造口径

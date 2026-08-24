@@ -374,6 +374,16 @@ def create_agent_source_registry(
     # runtime.yaml 的 allowed_tools 显式放行后才对 LLM 可见。
     registry.register(KbRetrieveTool())
 
+    # mis-iqd 问数 Worker 原生工具（v1.9/B2）：仅当 mis-iqd runtime.yaml 的
+    # allowed_tools 显式放行（iqd__ask / iqd__describe_scope）后才对 LLM 可见。
+    try:
+        from src.agent.mis_iqd.tools import IqdAskTool, IqdDescribeScopeTool
+
+        registry.register(IqdAskTool())
+        registry.register(IqdDescribeScopeTool())
+    except Exception as exc:  # noqa: BLE001 - 问数工具注册失败不阻断其他工具装配
+        logger.warning("IQD worker tools registration skipped", error=str(exc))
+
     if mcp_manager is None:
         return registry
 

@@ -87,8 +87,13 @@ class AgentEvent(BaseModel):
     - ui.render:        component、props
     - approval.request: skill_id、detail
     - error:            error_code、message
-    - done:             token_usage
+    - done:             token_usage、message_id、session_id
     - dispatch.trace:   trace（Coordinator 委派轨迹，默认不产出）
+
+    ``done`` 的 ``message_id`` / ``session_id`` 为评价锚点（feedback-enhance §2.2
+    方案 C）：分别透传本轮 assistant 消息 UUID 与平台会话 UUID，与
+    ``agent_feedback`` 表 ``UNIQUE(session_id, message_id)`` 唯一约束对齐。
+    均为可选字段，不传时既有事件序列化结果不变（零回归）。
     """
 
     type: AgentEventType
@@ -109,6 +114,11 @@ class AgentEvent(BaseModel):
     # dispatch.trace：本轮 Coordinator 委派轨迹（{"entries": [...]}）。
     # 新增**可选**字段，默认 None → 既有事件的序列化结果不变。
     trace: dict[str, Any] | None = None
+    # done：评价锚点（feedback-enhance §2.2 方案 C）——本轮 assistant 消息 UUID，
+    # 与 session_manager.add_message(message_id=...) 落库的 agent_session_message.id 一致。
+    message_id: str | None = None
+    # done：平台会话 UUID（sessionId），与 message_id 共同构成 agent_feedback 定位键。
+    session_id: str | None = None
 
     @classmethod
     def text_delta(cls, content: str) -> AgentEvent:
@@ -155,9 +165,30 @@ class AgentEvent(BaseModel):
         return cls(type=AgentEventType.ERROR, error_code=error_code, message=message)
 
     @classmethod
-    def done(cls, token_usage: TokenUsage | None = None) -> AgentEvent:
-        """创建一个 done 事件。"""
-        return cls(type=AgentEventType.DONE, token_usage=token_usage)
+    def done(
+        cls,
+        token_usage: TokenUsage | None = None,
+        *,
+        message_id: str | None = None,
+        session_id: str | None = None,
+    ) -> AgentEvent:
+        """创建一个 done 事件。
+
+        Args:
+            token_usage: 本轮 token 用量（可选）。
+            message_id: 本轮 assistant 消息 UUID（评价锚点，可选；不传则
+                done 事件不含 messageId，前端评价按钮降级禁用）。
+            session_id: 平台会话 UUID（评价锚点，可选）。
+
+        Returns:
+            ``done`` 类型的 AgentEvent。
+        """
+        return cls(
+            type=AgentEventType.DONE,
+            token_usage=token_usage,
+            message_id=message_id,
+            session_id=session_id,
+        )
 
     @classmethod
     def dispatch_trace(cls, entries: list[dict[str, Any]]) -> AgentEvent:

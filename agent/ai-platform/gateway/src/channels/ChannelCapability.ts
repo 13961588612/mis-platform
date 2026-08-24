@@ -78,6 +78,15 @@ export interface AgentEvent {
   /** Token 用量（done 使用） */
   tokenUsage?: TokenUsage;
   /**
+   * 评价锚点（done 使用，feedback-enhance §2.2 方案 C）。
+   *
+   * Backend done 事件透传的 assistant 消息 UUID（agent_session_message.id），
+   * 与 sessionId 共同构成 agent_feedback 表唯一约束定位键。
+   */
+  messageId?: string;
+  /** 评价锚点（done 使用）：平台会话 UUID。 */
+  sessionId?: string;
+  /**
    * Coordinator→Worker 委派轨迹（dispatch.trace 使用，通道 C）。
    *
    * 形状固定为 `{ entries: DispatchTraceEntry[] }`，由 Backend 原样透传到 H5，

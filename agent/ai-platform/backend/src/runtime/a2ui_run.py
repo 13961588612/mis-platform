@@ -23,12 +23,17 @@ Gateway ``RedisStreamAgent`` 将 ``A2UIMiddleware`` 处理后的完整 ``RunAgen
 事件回包格式与 Gateway ``EventConverter.ts`` 期望**反向一致**：
 ``text.delta`` / ``tool.call`` / ``tool.result`` / ``error`` / ``done`` 均为
 snake_case AgentEvent JSON，由 ``parseBackendAgentEvent`` 解析（tool_name / error_code 等）。
+``done`` 事件额外携带 ``message_id`` / ``session_id``（评价锚点，feedback-enhance
+§2.2 方案 C）：``message_id`` 与本轮 assistant 消息在 agent_session_message 落库的
+UUID 一致，Gateway ``parseBackendAgentEvent`` → ``EventConverter`` RUN_FINISHED
+透传给前端（缺失时前端评价按钮降级禁用）。
 """
 
 from __future__ import annotations
 from typing import Any
 
 import json
+import uuid
 from pathlib import Path
 
 from openharness.tools.base import ToolExecutionContext, ToolRegistry
@@ -498,10 +503,24 @@ class A2uiRunLoop:
             return
 
         assistant_text: str = "".join(assistant_parts).strip()
+        # 评价锚点（feedback-enhance §2.2 方案 C）：预生成 assistant 消息 UUID，
+        # 落库（_persist_assistant → add_message(message_id=...)）与 done 事件
+        # 透传共用同一 UUID，保证 agent_feedback 评价回放能精确命中该条消息。
+        assistant_message_id: str | None = None
         if assistant_text:
-            await self._persist_assistant(session_id, assistant_text)
+            assistant_message_id = str(uuid.uuid4())
+            await self._persist_assistant(
+                session_id, assistant_text, message_id=assistant_message_id
+            )
 
-        await self._publisher.publish(session_id, AgentEvent.done(total_usage))
+        await self._publisher.publish(
+            session_id,
+            AgentEvent.done(
+                total_usage,
+                message_id=assistant_message_id,
+                session_id=session_id,
+            ),
+        )
 
     # ------------------------------------------------------------------ 工具执行
 
@@ -753,12 +772,28 @@ class A2uiRunLoop:
                 error=str(exc),
             )
 
-    async def _persist_assistant(self, session_id: str, content: str) -> None:
-        """持久化助手文本到会话历史（失败仅告警，不阻断）。"""
+    async def _persist_assistant(
+        self,
+        session_id: str,
+        content: str,
+        *,
+        message_id: str | None = None,
+    ) -> None:
+        """持久化助手文本到会话历史（失败仅告警，不阻断）。
+
+        Args:
+            session_id: 会话 ID。
+            content: 助手正文。
+            message_id: 预生成的 assistant 消息 UUID（评价锚点）；传 None 时由
+                ``add_message`` 内部生成（无锚点场景）。
+        """
         session_manager: SessionManager = self._session_manager or get_session_manager()
         try:
             await session_manager.add_message(
-                session_id=session_id, role="assistant", content=content
+                session_id=session_id,
+                role="assistant",
+                content=content,
+                message_id=message_id,
             )
         except Exception as exc:  # noqa: BLE001 - 持久化失败降级
             logger.warning(

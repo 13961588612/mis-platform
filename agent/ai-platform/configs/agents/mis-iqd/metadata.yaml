@@ -1,0 +1,27 @@
+metadata:
+  name: mis-iqd
+  display_name: 问数助手
+  description: >
+    问数助手：自然语言 → 结构化数据查询（经 WrenAI 语义层）。只读、范围受限、
+    结果脱敏，输出 JSON（answer + citations + plan）。
+  version: "1.0.0"
+  enabled: true
+  tags:
+    - mis
+    - iqd
+  capabilities:
+    - ask_data
+    - explain_metric
+    - describe_scope
+
+  # ---------------------------------------------------------------------------
+  # Coordinator–Worker 委派契约（spec.md §4.2 / design-impl.md §6 T04）
+  # 由 WorkerCatalog 读取并渲染进 agent__invoke 的 description 与 agent_id 枚举。
+  # when_to_use 必须一句话可判定，且与其他 Worker 语义不重叠。
+  # ---------------------------------------------------------------------------
+  when_to_use: 需要查业务数据/做统计汇总时（销售额、销量、同比、各渠道、各门店等）
+  input_contract:
+    - user_question
+    - page_context_slice
+  output_contract: json
+  safety_level: read_only

@@ -30,6 +30,8 @@ dependencies = [
     "APScheduler>=3.10.0",
     "openharness-ai>=0.1.9",
     "psycopg2-binary>=2.9.12",
+    # 问数（mis-iqd）SQL 血缘 / 行级范围注入 AST 解析（v1.9 / B1）
+    "sqlglot>=25.0.0",
 ]
 
 [project.optional-dependencies]

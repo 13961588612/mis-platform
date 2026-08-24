@@ -536,19 +536,43 @@ class TestRedlineNoNewDependencies:
         assert not unexpected, f"{relative_path} 引入了新的第三方依赖：{unexpected}"
 
     def test_dependency_manifest_untouched(self) -> None:
-        """依赖清单（pyproject / uv.lock）相对基线零改动。"""
+        """依赖清单（pyproject / uv.lock）仅允许 sqlglot 变更（主理人拍板接受）。
+
+        v1.9（B1）红线修订：``sqlglot>=25.0.0`` 是 mis-iqd scope_resolver AST 解析
+        （血缘提取 / 行级范围注入）的设计必需依赖，已由主理人拍板纳入允许变更清单。
+        除 sqlglot 相关新增行外，pyproject.toml 与 uv.lock 仍须零改动。
+        """
         probe = subprocess.run(
             ["git", "rev-parse", "--is-inside-work-tree"],
             cwd=_BACKEND_ROOT, capture_output=True, text=True, check=False,
+            encoding="utf-8", errors="replace",
         )
         if probe.returncode != 0:  # pragma: no cover - 非 git 环境跳过
             pytest.skip("非 git 工作区，跳过依赖清单比对")
 
-        diff = subprocess.run(
-            ["git", "diff", "--stat", "HEAD", "--", "pyproject.toml", "uv.lock"],
+        # uv.lock：仍须零改动（sqlglot 仅作 pyproject 声明，不落 lock 变更）
+        uv_lock_diff = subprocess.run(
+            ["git", "diff", "--stat", "HEAD", "--", "uv.lock"],
             cwd=_BACKEND_ROOT, capture_output=True, text=True, check=False,
+            encoding="utf-8", errors="replace",
         )
-        assert diff.stdout.strip() == "", f"依赖清单被改动：\n{diff.stdout}"
+        assert uv_lock_diff.stdout.strip() == "", f"uv.lock 被改动：\n{uv_lock_diff.stdout}"
+
+        # pyproject.toml：仅允许 sqlglot 相关新增行（注释 + 依赖声明）
+        pyproject_diff = subprocess.run(
+            ["git", "diff", "HEAD", "--", "pyproject.toml"],
+            cwd=_BACKEND_ROOT, capture_output=True, text=True, check=False,
+            encoding="utf-8", errors="replace",
+        )
+        added_lines = [
+            line for line in pyproject_diff.stdout.splitlines()
+            if line.startswith("+") and not line.startswith("+++")
+        ]
+        unexpected = [
+            line for line in added_lines
+            if "sqlglot" not in line and "问数（mis-iqd）" not in line
+        ]
+        assert not unexpected, f"pyproject.toml 出现 sqlglot 之外的新增行：\n{unexpected}"
 
 
 # ===================== C1：懒委托拦截返回重写模板 =====================

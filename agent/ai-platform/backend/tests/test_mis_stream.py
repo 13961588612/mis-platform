@@ -160,6 +160,11 @@ class TestMisStreamContract:
 
         done = [f for f in frames if f["event"] == "done"][0]
         assert "finishReason" in done["data"] and "sessionId" in done["data"]
+        # 评价锚点（feedback-enhance §2.2 方案 C）：done 帧必须透传 assistant
+        # 消息 UUID（messageId），与 sessionId 构成 agent_feedback 唯一约束定位键。
+        assert "messageId" in done["data"] and done["data"]["messageId"], (
+            "done 帧应携带 messageId（assistant 消息 UUID）"
+        )
 
     def test_no_auth_returns_401(self, client):
         resp = client.post(

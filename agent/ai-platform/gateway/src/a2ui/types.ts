@@ -89,6 +89,13 @@ export type A2UIStreamMessage = {
 /** 前端 done 消息（RUN_FINISHED 转换产物） */
 export type A2UIDoneMessage = {
   type: 'done';
+  /**
+   * 评价锚点（feedback-enhance §2.2 方案 C）：assistant 消息 UUID
+   * （agent_session_message.id，Backend done 事件原样透传）。
+   */
+  messageId?: string;
+  /** 评价锚点：平台会话 UUID（与 messageId 构成 agent_feedback 定位键）。 */
+  sessionId?: string;
 };
 
 /** 前端 error 消息（RUN_ERROR 转换产物） */

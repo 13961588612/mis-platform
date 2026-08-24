@@ -195,7 +195,23 @@ export class EventConverter {
       }
 
       case EventType.RUN_FINISHED: {
-        const done: A2UIDoneMessage = { type: 'done' };
+        const finished = event as RunFinishedEvent;
+        // 评价锚点（feedback-enhance §2.2 方案 C）：AG-UI RunFinishedEvent 无
+        // messageId/sessionId 标准字段，Backend done 事件经 rawEvent 透传，此处
+        // 读取并附到前端 done 消息；缺失时保持 undefined（前端评价按钮降级禁用）。
+        const raw = (finished.rawEvent ?? {}) as {
+          messageId?: unknown;
+          sessionId?: unknown;
+        };
+        const done: A2UIDoneMessage = {
+          type: 'done',
+          ...(typeof raw.messageId === 'string' && raw.messageId.length > 0
+            ? { messageId: raw.messageId }
+            : {}),
+          ...(typeof raw.sessionId === 'string' && raw.sessionId.length > 0
+            ? { sessionId: raw.sessionId }
+            : {}),
+        };
         return done;
       }
 
@@ -430,11 +446,21 @@ export class EventConverter {
 
   /** done → RUN_FINISHED（触发中间件 flush pending A2UI） */
   private toRunFinished(event: AgentEvent, runId: string, threadId: string): RunFinishedEvent {
-    void event;
+    // 评价锚点透传：AG-UI 协议无 messageId/sessionId 标准字段，经 rawEvent
+    // 携带（zod schema 预留 rawEvent: ZodAny），baseEventToFrontendMessage
+    // RUN_FINISHED 分支读取（feedback-enhance §2.2 方案 C）。
+    const rawEvent: { messageId?: string; sessionId?: string } =
+      event.messageId != null || event.sessionId != null
+        ? {
+            ...(event.messageId != null ? { messageId: event.messageId } : {}),
+            ...(event.sessionId != null ? { sessionId: event.sessionId } : {}),
+          }
+        : {};
     return {
       type: EventType.RUN_FINISHED,
       threadId,
       runId,
+      ...(Object.keys(rawEvent).length > 0 ? { rawEvent } : {}),
     };
   }
 }

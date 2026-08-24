@@ -166,9 +166,10 @@ class TestFlagsSafeRead:
         assert s.INVOKE_AGENT_TIMEOUT_SECONDS == 120
         # 1.3/1.4：白名单移除已灰度的 mis-extract/mis-summary、加入承接其能力的
         # mis-user-helper，与 DEFAULT_WHITELIST（兜底常量，仍保留旧 worker）解耦，
-        # 二者不再要求相等。
+        # 二者不再要求相等。v1.9（B1）：追加 mis-iqd（问数 Worker）。
         assert sorted(s.INVOKE_AGENT_WHITELIST) == [
             "crm-assistant",
+            "mis-iqd",
             "mis-rag",
             "mis-user-helper",
         ]
@@ -288,7 +289,7 @@ class TestErrorTextVerbatim:
         assert result.is_error is True
         assert result.output == (
             "目标智能体不在白名单：evil-agent。"
-            "允许：crm-assistant, mis-rag, mis-user-helper"
+            "允许：crm-assistant, mis-iqd, mis-rag, mis-user-helper"
         ), repr(result.output)
 
     async def test_forbidden_self_text_verbatim(self):
