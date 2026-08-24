@@ -85,6 +85,7 @@ $servicePorts = [ordered]@{
     'mis-system'    = 8105
     'mis-audit'     = 8106
     'mis-kb'        = 8108
+    'mis-iqd'       = 8109
     'mis-admin-bff' = 8081
     'mis-gateway'   = 8080
 }

@@ -70,6 +70,17 @@ public enum ResultCode {
     API_BOUND(40916, "接口已被菜单绑定，无法删除"),
     EMPLOYEE_PHONE_EXISTS(40917, "手机号已存在"),
     USER_PHONE_EXISTS(40918, "该手机号在所属应用内已存在"),
+    // ===== 问数（IQD）错误码段（§7.2，Worker 编排链 fail-closed）=====
+    // 45201-45208 由 ai-platform mis-iqd Worker 抛出，BFF 透传 code/message；
+    // 此处登记以便 BFF 侧统一识别与文档口径一致（Python 侧错误码见 agent/mis_iqd/errors.py）。
+    WRENAI_NOT_CONFIGURED(45201, "WrenAI 未配置"),
+    WRENAI_UNREACHABLE(45202, "WrenAI 不可达"),
+    WRENAI_TIMEOUT(45203, "WrenAI 调用超时"),
+    SCOPE_DENIED(45204, "数据范围校验未通过"),
+    SQL_FAILED(45205, "SQL 执行失败"),
+    QUESTION_UNSUPPORTED(45206, "问题不在支持范围内"),
+    MDL_SYNC_FAILED(45207, "MDL 同步失败"),
+    ENHANCE_SYNC_PARTIAL(45208, "增强同步部分失败"),
     INTERNAL_ERROR(50000, "系统错误");
 
     private final int code;

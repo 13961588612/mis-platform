@@ -144,6 +144,7 @@ public class DeptService {
         dept.setName(request.name());
         dept.setCategoryId(request.categoryId());
         dept.setAncestors(buildAncestors(parent));
+        dept.setDeptPath(buildDeptPath(parent, dept.getId()));
         dept.setSort(request.sort() != null ? request.sort() : 0);
         dept.setStatus(1);
         dept.setIsRoot(0);
@@ -337,6 +338,7 @@ public class DeptService {
         String newCode = generateCode(dept.getOrgId(), newParentId, dept.getId());
         dept.setParentId(newParentId);
         dept.setAncestors(buildAncestors(newParent));
+        dept.setDeptPath(buildDeptPath(newParent, dept.getId()));
         dept.setCode(newCode);
         dept.setIsRoot(0);
 
@@ -353,6 +355,7 @@ public class DeptService {
                 child.setCode(newCode + childCode.substring(oldCode.length()));
             }
             child.setAncestors(rebuildAncestors(child.getParentId()));
+            child.setDeptPath(rebuildDeptPath(child.getParentId(), child.getId()));
             child.setUpdatedAt(now);
         }
         deptRepository.saveAll(descendants);
@@ -413,6 +416,31 @@ public class DeptService {
         return buildAncestors(parent);
     }
 
+    /**
+     * W2（V70/V74）：构造部门路径（如 /0/1/100/）。
+     *
+     * <p>格式与行级范围 PATH_PREFIX 注入一致：父路径 + 自身 id + 尾斜杠；
+     * 根路径起点为组织的根部门（is_root=1），其路径为 {@code /<rootId>/}。
+     * 父节点 dept_path 缺失时按父 id 兜底（迁移回填前的防御）。
+     */
+    private String buildDeptPath(SysDept parent, Long selfId) {
+        String parentPath = parent.getDeptPath();
+        if (parentPath == null || parentPath.isBlank()) {
+            parentPath = "/" + parent.getId() + "/";
+        }
+        return parentPath + selfId + "/";
+    }
+
+    /** W2：按父 id 重建部门路径（移动/级联场景；根路径为 /<selfId>/）。 */
+    private String rebuildDeptPath(Long parentId, Long selfId) {
+        if (parentId == null || parentId == 0L) {
+            return "/" + selfId + "/";
+        }
+        SysDept parent = deptRepository.findById(parentId)
+                .orElseThrow(() -> new BusinessException(ResultCode.NOT_FOUND, "父部门不存在"));
+        return buildDeptPath(parent, selfId);
+    }
+
     /** 树递归构造：children 由 parentMap 递归展开；isLeaf 按「有无子部门」计算。 */
     private DeptVO toVoTree(SysDept dept, Map<Long, List<SysDept>> parentMap, Map<Long, String> orgNames,
                             Map<Long, String> deptTypeNameMap) {
@@ -441,6 +469,7 @@ public class DeptService {
                 dept.getName(),
                 String.valueOf(dept.getCategoryId()),
                 dept.getAncestors(),
+                dept.getDeptPath(),
                 dept.getSort(),
                 dept.getStatus(),
                 dept.getIsRoot(),
