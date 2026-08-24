@@ -67,6 +67,13 @@ const A2UI_ACTIVITY_TYPE = 'a2ui-surface';
 /** A2UI operations 容器键（与中间件 A2UI_OPERATIONS_KEY 一致） */
 const A2UI_OPERATIONS_KEY = 'a2ui_operations';
 
+/** Gateway 侧识别的 A2UI 渲染工具名（与 @ag-ui/a2ui-middleware RENDER_A2UI_TOOL_NAME / Python 常量一致）。
+ * 此处自持常量，避免对 a2ui-middleware 包 exports 的硬依赖（包为 CJS，类型解析路径差异）。 */
+const RENDER_A2UI_TOOL_NAME = 'render_a2ui';
+
+/** render_a2ui tool.call 转换出的 ACTIVITY_SNAPSHOT surfaceId 前缀（与 run 隔离）。 */
+const A2UI_RENDER_SURFACE_PREFIX = 'a2ui';
+
 // ============================================================================
 // 工具函数
 // ============================================================================
@@ -131,8 +138,20 @@ export class EventConverter {
       case 'text.delta':
         return [this.toTextMessageChunk(event, runId)];
       case 'tool.call':
+        // 协议契约补齐：Python 按原始 tool.call(render_a2ui) 下发（非 ACTIVITY_SNAPSHOT）。
+        // Gateway 侧拦截该工具调用，复用 ui.render/approval.request 同款 ACTIVITY_SNAPSHOT
+        // 封装，使 baseEventToFrontendMessage 命中 ACTIVITY_SNAPSHOT 分支生成 a2ui_surface。
+        // 同时保留 TOOL_CALL_START/ARGS/END 三件套（供中间件流式拦截兼容，不破坏现有行为）。
+        if (event.toolName === RENDER_A2UI_TOOL_NAME) {
+          return this.renderA2uiToolCallToEvents(event, runId);
+        }
         return this.toToolCallEvents(event, runId);
       case 'tool.result':
+        // render_a2ui 的 result 为执行回执（{ok, status, surfaceId, ...}），不含界面描述，
+        // 无需生成 surface；但 surfaceId 仍透传给中间件做关联。保持 TOOL_CALL_RESULT 语义。
+        if (event.toolName === RENDER_A2UI_TOOL_NAME) {
+          return [this.toToolCallResult(event, runId)];
+        }
         return [this.toToolCallResult(event, runId)];
       case 'ui.render':
         return [this.uiRenderToActivitySnapshot(event, runId)];
@@ -343,6 +362,85 @@ export class EventConverter {
     };
 
     return [start, args, end];
+  }
+
+  /**
+   * render_a2ui 工具调用 → [TOOL_CALL_START, ACTIVITY_SNAPSHOT, TOOL_CALL_ARGS, TOOL_CALL_END]。
+   *
+   * 设计（方案 A，与架构对齐）：Gateway 侧补齐「tool.call(render_a2ui) → ACTIVITY_SNAPSHOT」
+   * 缺失环节。ACTIVITY_SNAPSHOT 携带 a2ui_operations（[createSurface, updateComponents]），
+   * 经 baseEventToFrontendMessage 命中 ACTIVITY_SNAPSHOT 分支生成 a2ui_surface 下发前端。
+   *
+   * 字段来源（Python execute_render_a2ui 真实 JSON 结构）：
+   * - args.surfaceId：surface 标识（Python 强制必填）；
+   * - args.components：组件数组（每个含 id / component / props / children?）；
+   * - args.data：可选数据模型（映射为 updateDataModel 操作，无则省略）。
+   *
+   * 顺序：ACTIVITY_SNAPSHOT 插在 START 与 ARGS 之间，前端消费顺序为「先建 surface 再流式
+   * 补 args」（与 ui.render/approval.request 的 ACTIVITY_SNAPSHOT 语义一致），中间件仍能
+   * 收到完整的 TOOL_CALL_START/ARGS/END 三件套做工具拦截。
+   *
+   * @param event - render_a2ui 的 tool.call AgentEvent
+   * @param runId - 当前 run 标识
+   * @returns BaseEvent 数组（含 1 个 ACTIVITY_SNAPSHOT）
+   */
+  private renderA2uiToolCallToEvents(event: AgentEvent, runId: string): AGUIEvent[] {
+    const baseEvents = this.toToolCallEvents(event, runId);
+    const snapshot = this.renderA2uiToActivitySnapshot(event, runId);
+    // 在 START 之后、ARGS 之前插入 ACTIVITY_SNAPSHOT（下标 1）。
+    const start = baseEvents[0];
+    const rest = baseEvents.slice(1);
+    return [start, snapshot, ...rest].filter((e): e is AGUIEvent => e != null);
+  }
+
+  /**
+   * 将 render_a2ui 的 tool.call args 组装为 ACTIVITY_SNAPSHOT（带 a2ui_operations）。
+   *
+   * @param event - render_a2ui 的 tool.call AgentEvent
+   * @param runId - 当前 run 标识
+   * @returns ACTIVITY_SNAPSHOT 事件
+   */
+  private renderA2uiToActivitySnapshot(event: AgentEvent, runId: string): ActivitySnapshotEvent {
+    const args = (event.args ?? {}) as Record<string, unknown>;
+    const surfaceId =
+      typeof args['surfaceId'] === 'string' && args['surfaceId'].length > 0
+        ? (args['surfaceId'] as string)
+        : `${A2UI_RENDER_SURFACE_PREFIX}-${runId}`;
+
+    // components：Python 下发的组件数组（已 snake/camel 混合，前端 MessageProcessor 兼容）；
+    // 非数组时降级为空数组（骨架 surface，不渲染组件，防御式不中断流）。
+    const components = Array.isArray(args['components'])
+      ? (args['components'] as Array<Record<string, unknown>>)
+      : [];
+
+    const operations: Array<Record<string, unknown>> = [
+      {
+        version: A2UI_PROTOCOL_VERSION,
+        createSurface: { surfaceId, catalogId: A2UI_CATALOG_ID },
+      },
+      {
+        version: A2UI_PROTOCOL_VERSION,
+        updateComponents: { surfaceId, components },
+      },
+    ];
+
+    // data 可选：映射为 updateDataModel（整树 data 模型，path='' 表示根）。
+    if (args['data'] != null && typeof args['data'] === 'object' && !Array.isArray(args['data'])) {
+      operations.push({
+        version: A2UI_PROTOCOL_VERSION,
+        updateDataModel: { surfaceId, path: '', value: args['data'] },
+      });
+    }
+
+    return {
+      type: EventType.ACTIVITY_SNAPSHOT,
+      messageId: `a2ui-surface-${runId}-render`,
+      activityType: A2UI_ACTIVITY_TYPE,
+      content: {
+        [A2UI_OPERATIONS_KEY]: operations,
+      },
+      replace: true,
+    };
   }
 
   /** tool.result → TOOL_CALL_RESULT（与 tool.call 的 toolCallId 关联） */

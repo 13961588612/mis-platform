@@ -35,6 +35,7 @@ from src.queue.redis_stream import InboundStreamMessage
 from src.runtime.acl_tool_wrapper import AclToolWrapper
 from src.runtime.a2ui_run import (
     A2uiRunLoop,
+    _parse_tool_args,
     agui_messages_to_llm,
     agui_tools_to_openai_tools,
     execute_render_a2ui,
@@ -363,6 +364,62 @@ def test_execute_render_a2ui_invalid():
 
         result3 = await execute_render_a2ui([], session_id="s1")
         assert result3["ok"] is False
+
+    asyncio.run(run())
+
+
+def test_parse_tool_args_unwraps_double_encoded():
+    """provider 偶发双编码 arguments（'\"{...}\"'）→ 仍解出 camelCase surfaceId。
+
+    复现 Bug ②：模型真实输出含 surfaceId（camelCase），但 OpenAI 兼容 provider 把
+    arguments 二次序列化为「外层带引号的 JSON 字符串」，若不解第二层则字段取不到。
+    """
+    # 单编码：标准 JSON 对象字符串
+    single = _parse_tool_args('{"surfaceId":"s1","components":[{"id":"root"}]}')
+    assert single.get("surfaceId") == "s1"
+
+    # 双编码：JSON 字符串再包一层引号
+    double = _parse_tool_args('"{\\"surfaceId\\":\\"s2\\",\\"components\\":[{\\"id\\":\\"root\\"}]}"')
+    assert double.get("surfaceId") == "s2"
+
+    # 已经是 dict：原样返回
+    assert _parse_tool_args({"surfaceId": "s3"}) == {"surfaceId": "s3"}
+
+    # 非法 JSON：降级空 dict（不抛）
+    assert _parse_tool_args("not-json") == {}
+
+
+def test_execute_render_a2ui_handles_double_encoded_surface_id():
+    """双编码 arguments 字符串直接传给 execute_render_a2ui 也能渲染（防御性入口）。
+
+    端到端复现真实日志：模型 tool_calls[0].function.arguments =
+    '{"surfaceId":"store-sales-pad-returns","components":[...root id=root...],"data":{...}}'。
+    """
+
+    async def run():
+        # 直接传 camelCase dict（run() 经 _parse_tool_args 后形态）
+        result = await execute_render_a2ui(
+            {
+                "surfaceId": "store-sales-pad-returns",
+                "components": [
+                    {"id": "root", "type": "container", "children": ["header"]}
+                ],
+                "data": {"sales": [{"store": "A", "amount": 1}]},
+            },
+            session_id="sess-real",
+        )
+        assert result["ok"] is True
+        assert result["surfaceId"] == "store-sales-pad-returns"
+        assert result["componentCount"] == 1
+
+        # 防御：若调用方误传 JSON 字符串（含双编码），仍可解析出 surfaceId
+        double_str = (
+            '{"surfaceId":"store-sales-pad-returns",'
+            '"components":[{"id":"root"}]}'
+        )
+        result2 = await execute_render_a2ui(double_str, session_id="sess-real2")
+        assert result2["ok"] is True
+        assert result2["surfaceId"] == "store-sales-pad-returns"
 
     asyncio.run(run())
 

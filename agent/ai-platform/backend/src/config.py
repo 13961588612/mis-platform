@@ -275,6 +275,12 @@ class Settings(BaseSettings):
         default=10,
         description="session 锁看门狗续期间隔（秒）",
     )
+    SESSION_LOCK_MAX_HOLD_S: int = Field(
+        default=30,
+        description="session 锁累计持有上限（秒）；看门狗续期不超过此窗口，到时停止续期"
+        "使锁随 TTL 自然过期，兜底持有方卡死导致锁永不释放、后续请求无限等待（如 120s）"
+        "的极端场景。须 >= SESSION_LOCK_TTL_S。",
+    )
     AGENT_RESYNC_S: int = Field(
         default=15,
         description="Agent 租约/订阅周期性再对齐间隔（秒）；须 < 租约 TTL，使崩溃 Core 的 "

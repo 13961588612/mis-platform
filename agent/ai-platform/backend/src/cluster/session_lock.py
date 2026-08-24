@@ -80,8 +80,10 @@ class RedisSessionLock:
         *,
         lock_ttl_s: int = 30,
         extend_s: int = 10,
-        retry: int = 5,
-        retry_wait_s: float = 0.2,
+        retry: int = 8,
+        retry_wait_s: float = 0.3,
+        retry_max_wait_s: float = 4.0,
+        max_hold_s: int = 30,
         core_id: str = "?",
     ) -> None:
         """初始化分布式 session 锁。
@@ -90,15 +92,24 @@ class RedisSessionLock:
             redis: 已连接的 ``redis.asyncio.Redis`` 实例。
             lock_ttl_s: 锁 TTL（秒），默认 30（处理窗口，带看门狗续期）。
             extend_s: 看门狗续期间隔（秒），默认 10。
-            retry: 争锁失败重试次数，默认 5。
-            retry_wait_s: 每次重试间隔（秒），默认 0.2。
+            retry: 争锁失败重试次数，默认 8。
+            retry_wait_s: 首次重试退避基数（秒），默认 0.3；后续按指数增长。
+            retry_max_wait_s: 单次重试退避上限（秒），默认 4.0（防止退避失控）。
+            max_hold_s: 锁持有上限（秒），默认 30。看门狗续期**累计不超过此窗口**：
+                到时即停止续期，锁随 TTL 自然过期。用于兜底「持有方卡死 / 崩溃 /
+                长耗时 LLM 调用不返回」导致锁永不释放、后续请求无限等待（如 120s
+                超时）的极端场景——锁最终一定能在 ``max_hold_s + lock_ttl_s`` 内释放，
+                使 XAUTOCLAIM 重投或后续请求在合理时间内拿到锁，而非无限阻塞。
             core_id: 本 Core 稳定 ID（写入 fencing token 便于观测）。
         """
         self._redis = redis
         self._lock_ttl_ms = max(1, lock_ttl_s) * 1000
         self._extend_s = max(1, extend_s)
         self._retry = max(0, retry)
-        self._retry_wait_s = max(0.0, retry_wait_s)
+        self._retry_wait_s = max(0.01, retry_wait_s)
+        self._retry_max_wait_s = max(self._retry_wait_s, retry_max_wait_s)
+        # 持有上限至少覆盖一个 TTL，避免正常多轮 LLM 跑刚起就被强制过期。
+        self._max_hold_s = max(max_hold_s, lock_ttl_s)
         self._core_id = core_id
 
     @asynccontextmanager
@@ -118,12 +129,18 @@ class RedisSessionLock:
         token = f"{self._core_id}:{uuid.uuid4().hex}"
         key = session_lock_key(session_id)
         acquired = False
-        for _ in range(self._retry + 1):
+        backoff = self._retry_wait_s
+        for attempt in range(self._retry + 1):
             ok: Any = await self._redis.set(key, token, nx=True, px=self._lock_ttl_ms)
             if ok:
                 acquired = True
                 break
-            await asyncio.sleep(self._retry_wait_s)
+            # 指数退避：让重试总窗口覆盖锁 TTL（默认 30s），使锁一旦过期（TTL 到期）
+            # 本 Core 能在下一轮立即抢到，无需退回分钟级 XAUTOCLAIM 重投。
+            # 退避上限 retry_max_wait_s 防止单轮等待过长。
+            if attempt < self._retry:
+                await asyncio.sleep(backoff)
+                backoff = min(backoff * 2, self._retry_max_wait_s)
 
         if not acquired:
             logger.debug(
@@ -136,7 +153,7 @@ class RedisSessionLock:
 
         stop = asyncio.Event()
         watchdog: asyncio.Task[None] = asyncio.create_task(
-            self._extend_loop(key, token, stop)
+            self._extend_loop(key, token, stop, max_hold_s=self._max_hold_s)
         )
         try:
             yield LockAcquireResult(True)
@@ -149,14 +166,37 @@ class RedisSessionLock:
                 pass
             await self._release_if_owner(key, token)
 
-    async def _extend_loop(self, key: str, token: str, stop: asyncio.Event) -> None:
-        """看门狗：每 ``extend_s`` 续期一次；续租失败（易主）即停止续期。"""
+    async def _extend_loop(
+        self, key: str, token: str, stop: asyncio.Event, *, max_hold_s: int
+    ) -> None:
+        """看门狗：每 ``extend_s`` 续期一次；续租失败（易主）或达到持有上限即停止。
+
+        Args:
+            key: 锁键。
+            token: 本持有者 fencing token。
+            stop: 退出信号（持有方 ``acquire`` 体结束后置位）。
+            max_hold_s: 累计持有上限（秒）；超出后**主动停止续期**，让锁随 TTL 自然
+                过期，避免卡死的持有方无限续期、阻塞同 session 后续请求。
+        """
+        import time
+
+        start: float = time.monotonic()
         while not stop.is_set():
             try:
                 await asyncio.wait_for(stop.wait(), timeout=self._extend_s)
             except asyncio.TimeoutError:
                 pass
             if stop.is_set():
+                break
+            # 持有上限兜底：超过窗口则停止续期，锁将在下一个 TTL 到期后自动释放。
+            if time.monotonic() - start >= max_hold_s:
+                logger.warning(
+                    "Session lock exceeded max hold window; stopping watchdog "
+                    "(lock will expire by TTL)",
+                    key=key,
+                    core_id=self._core_id,
+                    max_hold_s=max_hold_s,
+                )
                 break
             try:
                 ok: Any = await self._redis.eval(

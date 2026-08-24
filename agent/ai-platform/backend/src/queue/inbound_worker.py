@@ -159,6 +159,7 @@ class InboundStreamWorker:
             redis,
             lock_ttl_s=self._settings.SESSION_LOCK_TTL_S,
             extend_s=self._settings.SESSION_LOCK_EXTEND_S,
+            max_hold_s=self._settings.SESSION_LOCK_MAX_HOLD_S,
             core_id=core_id,
         )
         # 多 Core 下各实例消费名需唯一（同 group 内区分消费者），避免互相抢消息。

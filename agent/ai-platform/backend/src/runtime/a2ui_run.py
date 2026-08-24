@@ -222,22 +222,43 @@ def agui_tools_to_openai_tools(tools: list[Any]) -> list[dict[str, Any]]:
     return result
 
 
+def _try_json_loads(raw: str) -> Any:
+    """尝试 ``json.loads``；失败（非法 JSON）原样返回输入字符串。
+
+    Args:
+        raw: 待解析字符串。
+
+    Returns:
+        解析结果（dict / list / 标量）或原始字符串（解析失败）。
+    """
+    try:
+        return json.loads(raw)
+    except (json.JSONDecodeError, TypeError, ValueError):
+        return raw
+
+
 def _parse_tool_args(raw_args: Any) -> dict[str, Any]:
     """将 LLM 返回的 tool 入参（JSON 字符串或对象）规约为 dict。
 
+    兼容两种常见形态：
+    - 标准 OpenAI function-calling：``arguments`` 为 JSON 对象字符串 → 解析为 dict；
+    - 双编码（部分 OpenAI 兼容 provider 偶发）：``arguments`` 为「再包一层引号的
+      JSON 字符串」（如 ``'"{...}"'``）→ 先解一层得到字符串，再解一层得到 dict。
+
     Args:
-        raw_args: ``function.arguments`` 原始值。
+        raw_args: ``function.arguments`` 原始值（dict / str / 其它）。
 
     Returns:
-        解析后的参数 dict；无法解析时返回空 dict。
+        解析后的参数 dict；无法解析为 dict 时返回空 dict。
     """
     if isinstance(raw_args, dict):
         return raw_args
     if isinstance(raw_args, str):
-        try:
-            parsed: Any = json.loads(raw_args)
-        except (json.JSONDecodeError, TypeError):
-            return {}
+        parsed: Any = _try_json_loads(raw_args)
+        # 双编码兜底：首层解出仍是字符串 → 再解一层（LLM 真实输出 surfaceId 等字段
+        # 可能因 provider 实现被二次序列化，导致字段「明明存在却取不到」）。
+        if isinstance(parsed, str):
+            parsed = _try_json_loads(parsed)
         return parsed if isinstance(parsed, dict) else {}
     return {}
 
@@ -265,8 +286,12 @@ async def execute_render_a2ui(
         执行结果 dict：``{"ok": True, "status": "rendered", ...}`` 或
         ``{"ok": False, "error": "..."}``。
     """
+    if isinstance(args, str):
+        # 防御：个别调用方可能直接传入 JSON 字符串（而非已解析 dict）。
+        args = _parse_tool_args(args)
     if not isinstance(args, dict):
         return {"ok": False, "error": "render_a2ui 入参必须是对象"}
+    # 兼容 camelCase（模型真实输出）与 snake_case；双编码 JSON 已在 _parse_tool_args 解包。
     surface_id: Any = args.get("surfaceId") or args.get("surface_id")
     components: Any = args.get("components")
     if not isinstance(surface_id, str) or not surface_id:

@@ -41,28 +41,65 @@ function main(): void {
     check('text.delta messageId 稳定', chunk.messageId === `msg-${runId}`, chunk.messageId);
   }
 
-  // ---- tool.call → START + ARGS + END ----
+  // ---- tool.call(render_a2ui) → START + ACTIVITY_SNAPSHOT + ARGS + END ----
   {
     const args = { surfaceId: 's1', components: [{ id: 'root', component: 'data-table' }] };
     const events = converter.agentEventToBaseEvent(
       { type: 'tool.call', toolName: 'render_a2ui', args },
       runId,
     );
+    // 修复契约：render_a2ui 的 tool.call 在 START 之后、ARGS 之前插入 ACTIVITY_SNAPSHOT，
+    // 供前端命中 ACTIVITY_SNAPSHOT 分支生成 a2ui_surface；TOOL_CALL 三件套仍保留（中间件兼容）。
     check(
-      'tool.call → START+ARGS+END',
-      events.length === 3 &&
+      'tool.call(render_a2ui) → START+ACTIVITY_SNAPSHOT+ARGS+END',
+      events.length === 4 &&
         events[0]?.type === EventType.TOOL_CALL_START &&
-        events[1]?.type === EventType.TOOL_CALL_ARGS &&
-        events[2]?.type === EventType.TOOL_CALL_END,
+        events[1]?.type === EventType.ACTIVITY_SNAPSHOT &&
+        events[2]?.type === EventType.TOOL_CALL_ARGS &&
+        events[3]?.type === EventType.TOOL_CALL_END,
       JSON.stringify(events.map((e) => e.type)),
     );
     const start = events[0] as { toolCallId?: string; toolCallName?: string };
-    const argsEvent = events[1] as { toolCallId?: string; delta?: string };
+    const argsEvent = events[2] as { toolCallId?: string; delta?: string };
     check('tool.call START toolCallName', start.toolCallName === 'render_a2ui');
     check('tool.call START/ARGS 同 toolCallId', start.toolCallId === argsEvent.toolCallId);
     check(
       'tool.call ARGS delta 为完整 args JSON',
       JSON.parse(argsEvent.delta ?? '{}')['surfaceId'] === 's1',
+    );
+
+    // ACTIVITY_SNAPSHOT 必须携带 a2ui_operations（否则前端丢弃）
+    const snapshot = events[1] as { content?: { a2ui_operations?: unknown[] } };
+    const ops = snapshot.content?.a2ui_operations ?? [];
+    check(
+      'render_a2ui ACTIVITY_SNAPSHOT 带 a2ui_operations',
+      Array.isArray(ops) && ops.length === 2,
+      JSON.stringify(ops),
+    );
+    // 经 baseEventToFrontendMessage 必须生成 a2ui_surface（主 bug 修复验证）
+    const surfaceMsg = converter.baseEventToFrontendMessage(events[1]!);
+    check(
+      'render_a2ui ACTIVITY_SNAPSHOT → a2ui_surface',
+      surfaceMsg?.type === 'a2ui_surface' &&
+        Array.isArray(surfaceMsg['operations']) &&
+        surfaceMsg['operations'].length === 2,
+      JSON.stringify(surfaceMsg),
+    );
+  }
+
+  // ---- tool.call(非 render_a2ui) → START + ARGS + END（保持原行为） ----
+  {
+    const events = converter.agentEventToBaseEvent(
+      { type: 'tool.call', toolName: 'get_weather', args: { city: 'BJ' } },
+      runId,
+    );
+    check(
+      'tool.call(其他工具) → START+ARGS+END',
+      events.length === 3 &&
+        events[0]?.type === EventType.TOOL_CALL_START &&
+        events[1]?.type === EventType.TOOL_CALL_ARGS &&
+        events[2]?.type === EventType.TOOL_CALL_END,
+      JSON.stringify(events.map((e) => e.type)),
     );
   }
 
@@ -197,6 +234,37 @@ function main(): void {
         Array.isArray(surfaceMsg['operations']) &&
         surfaceMsg['operations'].length === 2,
       JSON.stringify(surfaceMsg),
+    );
+
+    // 主 bug 修复：render_a2ui 的 tool.call 经 agentEventToBaseEvent + baseEventToFrontendMessage
+    // 必须产出 a2ui_surface（前端渲染拦截点），operations 含 [createSurface, updateComponents]。
+    const renderEvent = converter.agentEventToBaseEvent(
+      {
+        type: 'tool.call',
+        toolName: 'render_a2ui',
+        args: {
+          surfaceId: 'surf-x',
+          components: [{ id: 'c1', component: 'data-table', props: { rows: [] } }],
+          data: { total: 42 },
+        },
+      },
+      runId,
+    );
+    const renderSnapshot = renderEvent.find((e) => e.type === EventType.ACTIVITY_SNAPSHOT)!;
+    const renderSurfaceMsg = converter.baseEventToFrontendMessage(renderSnapshot);
+    const renderOps = renderSurfaceMsg != null ? renderSurfaceMsg['operations'] : [];
+    const firstOp = renderOps[0] as { createSurface?: { surfaceId?: string } } | undefined;
+    const secondOp = renderOps[1] as { updateComponents?: { surfaceId?: string; components?: unknown[] } } | undefined;
+    const thirdOp = renderOps[2] as { updateDataModel?: { value?: unknown } } | undefined;
+    check(
+      'render_a2ui → a2ui_surface 含 createSurface+updateComponents+updateDataModel',
+      renderSurfaceMsg?.type === 'a2ui_surface' &&
+        renderOps.length === 3 &&
+        firstOp?.createSurface?.surfaceId === 'surf-x' &&
+        secondOp?.updateComponents?.surfaceId === 'surf-x' &&
+        Array.isArray(secondOp?.updateComponents?.components) &&
+        thirdOp?.updateDataModel?.value != null,
+      JSON.stringify(renderOps),
     );
 
     const doneEvent = converter.agentEventToBaseEvent({ type: 'done' }, runId)[0]!;
