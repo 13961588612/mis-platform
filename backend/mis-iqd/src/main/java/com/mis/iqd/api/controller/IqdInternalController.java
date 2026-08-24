@@ -1,0 +1,239 @@
+package com.mis.iqd.api.controller;
+
+import com.mis.common.core.result.Result;
+import com.mis.iqd.api.dto.IqdAclVO;
+import com.mis.iqd.api.dto.IqdAskLogVO;
+import com.mis.iqd.api.dto.IqdCatalogItemVO;
+import com.mis.iqd.api.dto.IqdKnowledgeVO;
+import com.mis.iqd.api.dto.IqdMaskRuleVO;
+import com.mis.iqd.api.dto.IqdScopeDimensionVO;
+import com.mis.iqd.api.dto.IqdScopePolicyVO;
+import com.mis.iqd.api.dto.IqdSqlPairVO;
+import com.mis.iqd.domain.entity.IqdConnection;
+import com.mis.iqd.domain.repository.IqdConnectionRepository;
+import com.mis.iqd.domain.service.IqdAdminService;
+import com.mis.iqd.domain.service.IqdScopeSyncJobService;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.RestController;
+
+import java.time.Instant;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+
+/**
+ * 问数配置读取 API（内部端点，W2 完整实现）。
+ *
+ * <p>路径前缀 {@code /internal/v1/iqd/**}，仅供 Worker {@code IqdConfigClient}
+ * 内网调用（对齐 {@code /internal/v1/kb/**} 范式）。
+ *
+ * <p>W2（B3）端点全部落地：
+ * get-acls / get-scope-policies / get-catalog-in-scope / get-catalog-meta /
+ * get-dimensions / get-mask-rules / get-dict-sync-status / get-change-events。
+ *
+ * <p>W4 新增：get-sql-pairs / get-knowledge（增强物料） / get-ask-logs（审计复核）。
+ */
+@RestController
+@RequestMapping("/internal/v1/iqd")
+public class IqdInternalController {
+
+    private final IqdConnectionRepository connectionRepository;
+    private final IqdAdminService adminService;
+    private final IqdScopeSyncJobService scopeSyncJobService;
+
+    public IqdInternalController(
+            IqdConnectionRepository connectionRepository,
+            IqdAdminService adminService,
+            IqdScopeSyncJobService scopeSyncJobService) {
+        this.connectionRepository = connectionRepository;
+        this.adminService = adminService;
+        this.scopeSyncJobService = scopeSyncJobService;
+    }
+
+    /**
+     * 健康检查：Worker 连通性自检。
+     */
+    @GetMapping("/health")
+    public Result<Map<String, Object>> health() {
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("status", "ok");
+        body.put("service", "mis-iqd");
+        body.put("time", Instant.now().toString());
+        return Result.ok(body);
+    }
+
+    /**
+     * 拉取连接配置清单（启用连接最小视图，不含敏感字段）。
+     */
+    @GetMapping("/get-connections")
+    public Result<List<Map<String, Object>>> getConnections() {
+        List<IqdConnection> connections = connectionRepository.findByEnabledOrderByIdAsc(1);
+        List<Map<String, Object>> items = connections.stream().map(c -> {
+            Map<String, Object> m = new LinkedHashMap<>();
+            m.put("id", c.getId());
+            m.put("name", c.getName());
+            m.put("baseUrl", c.getBaseUrl());
+            m.put("authType", c.getAuthType());
+            m.put("projectId", c.getProjectId());
+            m.put("defaultConnector", c.getDefaultConnector());
+            m.put("timeoutSeconds", c.getTimeoutSeconds());
+            m.put("language", c.getLanguage());
+            m.put("status", c.getStatus());
+            m.put("enabled", c.getEnabled());
+            return m;
+        }).toList();
+        return Result.ok(items);
+    }
+
+    /**
+     * 写问数审计日志（Worker 投影前全量调用）。
+     *
+     * @param payload 审计载荷（snake_case）
+     * @return 落库后的日志行 id
+     */
+    @PostMapping("/write-ask-log")
+    public Result<Map<String, Object>> writeAskLog(@RequestBody Map<String, Object> payload) {
+        Long id = adminService.writeAskLog(payload);
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("id", id);
+        return Result.ok(body);
+    }
+
+    /**
+     * 拉取表级 ACL（W2：全量，含 row_scope）。
+     */
+    @GetMapping("/get-acls")
+    public Result<List<IqdAclVO>> getAcls() {
+        // 取主连接（Worker 单连接场景）；无连接返回空数组
+        Long connectionId = resolvePrimaryConnectionId();
+        if (connectionId == null) {
+            return Result.ok(List.of());
+        }
+        return Result.ok(adminService.listAcls(connectionId));
+    }
+
+    /**
+     * 拉取范围策略（W2：全量，含 global/主体模板）。
+     */
+    @GetMapping("/get-scope-policies")
+    public Result<List<IqdScopePolicyVO>> getScopePolicies() {
+        Long connectionId = resolvePrimaryConnectionId();
+        if (connectionId == null) {
+            return Result.ok(List.of());
+        }
+        return Result.ok(adminService.listScopePolicies(connectionId));
+    }
+
+    /**
+     * 拉取纳入问数范围的清单项（W2：in_scope=1；范围裁定消费）。
+     */
+    @GetMapping("/get-catalog-in-scope")
+    public Result<List<IqdCatalogItemVO>> getCatalogInScope() {
+        Long connectionId = resolvePrimaryConnectionId();
+        if (connectionId == null) {
+            return Result.ok(List.of());
+        }
+        return Result.ok(adminService.listCatalogInScope(connectionId));
+    }
+
+    /**
+     * 拉取清单元数据（W2：item_key/kind/mask_rule/sensitive_level/data_type；脱敏消费）。
+     */
+    @GetMapping("/get-catalog-meta")
+    public Result<List<IqdCatalogItemVO>> getCatalogMeta() {
+        Long connectionId = resolvePrimaryConnectionId();
+        if (connectionId == null) {
+            return Result.ok(List.of());
+        }
+        return Result.ok(adminService.listCatalog(connectionId));
+    }
+
+    /**
+     * 拉取行级范围维度注册表（W2：全量种子 dept/store + 自定义）。
+     */
+    @GetMapping("/get-dimensions")
+    public Result<List<IqdScopeDimensionVO>> getDimensions() {
+        return Result.ok(adminService.listDimensions());
+    }
+
+    /**
+     * 拉取脱敏规则（W2：启用规则，priority 降序）。
+     */
+    @GetMapping("/get-mask-rules")
+    public Result<List<IqdMaskRuleVO>> getMaskRules() {
+        return Result.ok(adminService.listMaskRules());
+    }
+
+    /**
+     * 拉取字典同步状态（W2：mis_dept_scope / mis_store_scope 每维度一行）。
+     */
+    @GetMapping("/get-dict-sync-status")
+    public Result<List<Map<String, Object>>> getDictSyncStatus() {
+        return Result.ok(scopeSyncJobService.listSyncStatus());
+    }
+
+    /**
+     * 拉取变更事件（Worker 增量拉取；since 游标推进）。
+     *
+     * @param sinceSeq 上次消费游标；缺省 0 = 全量。
+     */
+    @GetMapping("/get-change-events")
+    public Result<List<Map<String, Object>>> getChangeEvents(
+            @RequestParam(defaultValue = "0") long sinceSeq) {
+        return Result.ok(adminService.drainChangeEvents(sinceSeq));
+    }
+
+    /**
+     * 拉取样本对（W4：增强物料 few-shot；Worker 经 IqdConfigClient 缓存消费）。
+     */
+    @GetMapping("/get-sql-pairs")
+    public Result<List<IqdSqlPairVO>> getSqlPairs() {
+        Long connectionId = resolvePrimaryConnectionId();
+        if (connectionId == null) {
+            return Result.ok(List.of());
+        }
+        return Result.ok(adminService.listSqlPairs(connectionId));
+    }
+
+    /**
+     * 拉取知识/术语/口径（W4：增强物料 instructions；Worker 经 IqdConfigClient 缓存消费）。
+     */
+    @GetMapping("/get-knowledge")
+    public Result<List<IqdKnowledgeVO>> getKnowledge() {
+        Long connectionId = resolvePrimaryConnectionId();
+        if (connectionId == null) {
+            return Result.ok(List.of());
+        }
+        return Result.ok(adminService.listKnowledge(connectionId, null));
+    }
+
+    /**
+     * 拉取审计日志（W4 复核；Worker 诊断用）。
+     */
+    @GetMapping("/get-ask-logs")
+    public Result<List<IqdAskLogVO>> getAskLogs(
+            @RequestParam(required = false) Integer limit,
+            @RequestParam(required = false) String status,
+            @RequestParam(required = false) Long userId) {
+        return Result.ok(adminService.listAskLogs(limit, status, userId));
+    }
+
+    /** 取主连接 id（优先 name='default' / 第一条 enabled）。 */
+    private Long resolvePrimaryConnectionId() {
+        return connectionRepository.findByName("default")
+                .map(IqdConnection::getId)
+                .orElseGet(() -> {
+                    List<IqdConnection> enabled = connectionRepository.findByEnabledOrderByIdAsc(1);
+                    if (!enabled.isEmpty()) {
+                        return enabled.get(0).getId();
+                    }
+                    return connectionRepository.findAll().stream().findFirst()
+                            .map(IqdConnection::getId)
+                            .orElse(null);
+                });
+    }
+}

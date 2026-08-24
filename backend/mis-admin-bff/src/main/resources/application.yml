@@ -34,9 +34,10 @@ mis:
       private-key-path: ${MIS_JWT_PRIVATE_KEY_PATH:}
       access-token-ttl-seconds: ${MIS_JWT_ACCESS_TOKEN_TTL:1800}
   embed:
-    # 宿主共享密钥（hostId → client_secret 明文，用于 externalToken HS256 验签）
-    client-secrets:
-      # crm-web: ${MIS_EMBED_HOST_CRM_WEB_CLIENT_SECRET:}
+    # 宿主共享密钥（hostId → client_secret 明文，用于 externalToken HS256 验签）。
+    # 仅注释子项时 YAML 会把本键解析成 ""，无法绑定 Map；本地默认空 Map。
+    # 部署示例：crm-web: ${MIS_EMBED_HOST_CRM_WEB_CLIENT_SECRET:}
+    client-secrets: {}
     # phone_hash 加盐（R5 脱敏存储；空 = 不加盐）
     salt: ${MIS_EMBED_PHONE_HASH_SALT:}
     # 手机号匹配开关（03 §5.2 phone_match_enabled 默认 true）
@@ -115,3 +116,21 @@ mis:
       org: http://localhost:8103
       system: http://localhost:8105
       iam: http://localhost:8102
+  iqd:
+    # 问数（IQD）mis-iqd 服务基址（本地默认 127.0.0.1；Docker/Nacos 用服务名覆盖）
+    base-url: ${MIS_IQD_BASE_URL:http://127.0.0.1:8109}
+    timeout-ms: ${MIS_IQD_TIMEOUT_MS:5000}
+    # 问数 SSE 总开关：关闭后 ask-stream 回退非流式缓冲
+    sse-enabled: ${MIS_IQD_SSE_ENABLED:true}
+    # 问数单次请求超时（含 Worker 完整编排链，默认 180s）
+    ask-timeout-ms: ${MIS_IQD_ASK_TIMEOUT_MS:180000}
+    # admin 视图权限码：持有者 ask 时 view=admin（含 SQL），否则 view=user（剥 SQL 键）
+    admin-view-permission: ${MIS_IQD_ADMIN_VIEW_PERMISSION:iqd:trace:view}
+    # 管理面代理功能权限码
+    config-view-permission: ${MIS_IQD_CONFIG_VIEW_PERMISSION:iqd:config:view}
+    config-save-permission: ${MIS_IQD_CONFIG_SAVE_PERMISSION:iqd:config:save}
+    config-test-permission: ${MIS_IQD_CONFIG_TEST_PERMISSION:iqd:config:test}
+    # 问数功能权限码（ask / ask-stream 双闸门之一，无则 40300）
+    ask-permission: ${MIS_IQD_ASK_PERMISSION:ai:chat:use}
+    # Worker 侧 mis-iqd Agent 的 agentId（ai-platform Agent Core 注册名）
+    agent-id: ${MIS_IQD_AGENT_ID:mis-iqd}

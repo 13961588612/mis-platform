@@ -7,6 +7,7 @@ import com.mis.adminbff.client.AgentOpsClient;
 import com.mis.adminbff.client.AgentOpsUri;
 import com.mis.adminbff.dto.agentops.SessionQuery;
 import com.mis.adminbff.dto.agentops.SkillUpsertRequest;
+import com.mis.adminbff.dto.iqd.IqdFeedbackRequest;
 import com.mis.adminbff.service.KbSubjectProxyService;
 import com.mis.adminbff.support.AgentOpsErrorCodes;
 import com.mis.adminbff.support.RequestContext;
@@ -471,6 +472,21 @@ public class AgentOpsFacadeService {
      */
     public JsonNode batchProcessFeedback(JsonNode body) {
         return client.batchProcessFeedback(body);
+    }
+
+    /**
+     * 用户端评价提交（透传，评价写入链的 BFF 入口，feedback-enhance §2.2）。
+     *
+     * <p>透传层零加工：{@code agent_id} 由下游会话自动带出（= mis-iqd）；body 原样下发。
+     * 操作人/身份经 {@code AgentOpsTransport} 登录上下文头透传（X-User-Id / X-Username），
+     * 不在 body 里注入——与既有反馈端点同款口径，禁止信任客户端伪造评价人。
+     *
+     * @param sessionId 平台会话 UUID（SSE done 帧 sessionId）
+     * @param request   {@code {rating, comment?, message_id?, content?}}
+     * @return 下游反馈写入结果（透传）
+     */
+    public JsonNode submitFeedback(String sessionId, IqdFeedbackRequest request) {
+        return client.submitFeedback(sessionId, request);
     }
 
     /**

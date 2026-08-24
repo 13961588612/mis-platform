@@ -1,0 +1,252 @@
+package com.mis.adminbff.controller;
+
+import com.mis.adminbff.dto.iqd.IqdAclSaveRequest;
+import com.mis.adminbff.dto.iqd.IqdAclVO;
+import com.mis.adminbff.dto.iqd.IqdAskLogVO;
+import com.mis.adminbff.dto.iqd.IqdCatalogItemSaveRequest;
+import com.mis.adminbff.dto.iqd.IqdCatalogItemVO;
+import com.mis.adminbff.dto.iqd.IqdKnowledgeSaveRequest;
+import com.mis.adminbff.dto.iqd.IqdKnowledgeVO;
+import com.mis.adminbff.dto.iqd.IqdMaskRuleSaveRequest;
+import com.mis.adminbff.dto.iqd.IqdMaskRuleVO;
+import com.mis.adminbff.dto.iqd.IqdScopeDimensionVO;
+import com.mis.adminbff.dto.iqd.IqdScopePolicySaveRequest;
+import com.mis.adminbff.dto.iqd.IqdScopePolicyVO;
+import com.mis.adminbff.dto.iqd.IqdSqlPairSaveRequest;
+import com.mis.adminbff.dto.iqd.IqdSqlPairVO;
+import com.mis.adminbff.service.iqd.IqdFacadeService;
+import com.mis.common.core.result.Result;
+import jakarta.validation.Valid;
+import org.springframework.web.bind.annotation.DeleteMapping;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.RestController;
+
+import java.util.List;
+import java.util.Map;
+
+/**
+ * 问数管理面代理（W2：清单/范围/ACL/脱敏/维度；W3：审计回查；W4：增强物料；
+ * BFF → mis-iqd {@code /api/v1/iqd/**}）。
+ *
+ * <p>权限码（V73/V74 sys_menu_api 绑定 + 兜底判权）：
+ * <ul>
+ *   <li>catalog 查询/同步 → {@code iqd:catalog:view}</li>
+ *   <li>scope 查看 → {@code iqd:scope:view}；scope 保存/勾选 → {@code iqd:scope:save}</li>
+ *   <li>acl 查看 → {@code iqd:acl:view}；acl 保存/删除 → {@code iqd:acl:save}</li>
+ *   <li>mask 查看 → {@code iqd:mask:view}；mask 保存/删除 → {@code iqd:mask:save}</li>
+ *   <li>dimension 查看 → {@code iqd:dimension:view}；保存/删除 → {@code iqd:dimension:save}</li>
+ *   <li>scope/sync → {@code iqd:scope:sync}</li>
+ *   <li>traces → {@code iqd:trace:view}（W3）</li>
+ *   <li>sql-pairs / knowledge → {@code iqd:enhance:view|save}；enhance/push → {@code iqd:enhance:sync}（W4）</li>
+ * </ul>
+ */
+@RestController
+@RequestMapping("/api/v1/iqd")
+public class IqdAclController {
+
+    private final IqdFacadeService iqdFacadeService;
+
+    public IqdAclController(IqdFacadeService iqdFacadeService) {
+        this.iqdFacadeService = iqdFacadeService;
+    }
+
+    // ================================================================ 清单
+
+    @GetMapping("/catalog")
+    public Result<List<IqdCatalogItemVO>> listCatalog(@RequestParam Long connectionId) {
+        return Result.ok(iqdFacadeService.listCatalog(connectionId));
+    }
+
+    @PostMapping("/catalog/batch")
+    public Result<Map<String, Object>> saveCatalogBatch(
+            @RequestParam Long connectionId,
+            @RequestBody List<IqdCatalogItemSaveRequest> items) {
+        return Result.ok(iqdFacadeService.saveCatalogBatch(connectionId, items));
+    }
+
+    @PostMapping("/catalog/in-scope")
+    public Result<Map<String, Object>> setCatalogInScope(
+            @RequestParam Long connectionId,
+            @RequestParam boolean inScope,
+            @RequestBody List<String> itemKeys) {
+        return Result.ok(iqdFacadeService.setCatalogInScope(connectionId, inScope, itemKeys));
+    }
+
+    // ================================================================ 范围策略
+
+    @GetMapping("/scope/policies")
+    public Result<List<IqdScopePolicyVO>> listScopePolicies(@RequestParam Long connectionId) {
+        return Result.ok(iqdFacadeService.listScopePolicies(connectionId));
+    }
+
+    @PostMapping("/scope/policies")
+    public Result<Map<String, Object>> saveScopePolicies(
+            @RequestParam Long connectionId,
+            @RequestBody List<IqdScopePolicySaveRequest> items) {
+        return Result.ok(iqdFacadeService.saveScopePolicies(connectionId, items));
+    }
+
+    // ================================================================ 表级 ACL
+
+    @GetMapping("/acl")
+    public Result<List<IqdAclVO>> listAcls(@RequestParam Long connectionId) {
+        return Result.ok(iqdFacadeService.listAcls(connectionId));
+    }
+
+    @PostMapping("/acl/batch")
+    public Result<Map<String, Object>> saveAcls(
+            @RequestParam Long connectionId,
+            @RequestBody List<IqdAclSaveRequest> items) {
+        return Result.ok(iqdFacadeService.saveAcls(connectionId, items));
+    }
+
+    @DeleteMapping("/acl/{id}")
+    public Result<Void> deleteAcl(@PathVariable Long id) {
+        iqdFacadeService.deleteAcl(id);
+        return Result.ok();
+    }
+
+    // ================================================================ 脱敏规则
+
+    @GetMapping("/mask/rules")
+    public Result<List<IqdMaskRuleVO>> listMaskRules() {
+        return Result.ok(iqdFacadeService.listMaskRules());
+    }
+
+    @PostMapping("/mask/rules")
+    public Result<IqdMaskRuleVO> saveMaskRule(@Valid @RequestBody IqdMaskRuleSaveRequest dto) {
+        return Result.ok(iqdFacadeService.saveMaskRule(dto));
+    }
+
+    @DeleteMapping("/mask/rules/{id}")
+    public Result<Void> deleteMaskRule(@PathVariable Long id) {
+        iqdFacadeService.deleteMaskRule(id);
+        return Result.ok();
+    }
+
+    // ================================================================ 维度注册表
+
+    @GetMapping("/dimensions")
+    public Result<List<IqdScopeDimensionVO>> listDimensions() {
+        return Result.ok(iqdFacadeService.listDimensions());
+    }
+
+    @PostMapping("/dimensions")
+    public Result<IqdScopeDimensionVO> saveDimension(@RequestBody Map<String, Object> dto) {
+        return Result.ok(iqdFacadeService.saveDimension(dto));
+    }
+
+    @DeleteMapping("/dimensions/{id}")
+    public Result<Void> deleteDimension(@PathVariable Long id) {
+        iqdFacadeService.deleteDimension(id);
+        return Result.ok();
+    }
+
+    // ================================================================ 字典同步
+
+    @PostMapping("/scope/sync/{dimensionCode}")
+    public Result<Map<String, Object>> syncDimension(@PathVariable String dimensionCode) {
+        return Result.ok(iqdFacadeService.syncDimension(dimensionCode));
+    }
+
+    @GetMapping("/scope/dict-sync-status")
+    public Result<List<Map<String, Object>>> listDictSyncStatus() {
+        return Result.ok(iqdFacadeService.listDictSyncStatus());
+    }
+
+    // ================================================================ 审计回查（W3）
+
+    /**
+     * 分页回查问数审计日志（需 iqd:trace:view）。
+     */
+    @GetMapping("/traces")
+    public Result<List<IqdAskLogVO>> listTraces(
+            @RequestParam(required = false) Integer limit,
+            @RequestParam(required = false) String status,
+            @RequestParam(required = false) Long userId) {
+        return Result.ok(iqdFacadeService.listTraces(limit, status, userId));
+    }
+
+    /**
+     * 取单条审计日志详情（需 iqd:trace:view）。
+     */
+    @GetMapping("/traces/{id}")
+    public Result<IqdAskLogVO> getTrace(@PathVariable Long id) {
+        return Result.ok(iqdFacadeService.getTrace(id));
+    }
+
+    // ================================================================ 增强物料（W4）
+
+    /**
+     * 查询连接下样本对（需 iqd:enhance:view）。
+     */
+    @GetMapping("/sql-pairs")
+    public Result<List<IqdSqlPairVO>> listSqlPairs(@RequestParam Long connectionId) {
+        return Result.ok(iqdFacadeService.listSqlPairs(connectionId));
+    }
+
+    /**
+     * 保存样本对（需 iqd:enhance:save）。
+     */
+    @PostMapping("/sql-pairs")
+    public Result<IqdSqlPairVO> saveSqlPair(@Valid @RequestBody IqdSqlPairSaveRequest dto) {
+        return Result.ok(iqdFacadeService.saveSqlPair(dto));
+    }
+
+    /**
+     * 删除样本对（需 iqd:enhance:save）。
+     */
+    @DeleteMapping("/sql-pairs/{id}")
+    public Result<Void> deleteSqlPair(@PathVariable Long id) {
+        iqdFacadeService.deleteSqlPair(id);
+        return Result.ok();
+    }
+
+    /**
+     * 查询连接下知识/术语/口径（需 iqd:enhance:view）。
+     */
+    @GetMapping("/knowledge")
+    public Result<List<IqdKnowledgeVO>> listKnowledge(
+            @RequestParam Long connectionId,
+            @RequestParam(required = false) String kind) {
+        return Result.ok(iqdFacadeService.listKnowledge(connectionId, kind));
+    }
+
+    /**
+     * 保存知识/术语/口径（需 iqd:enhance:save）。
+     */
+    @PostMapping("/knowledge")
+    public Result<IqdKnowledgeVO> saveKnowledge(@Valid @RequestBody IqdKnowledgeSaveRequest dto) {
+        return Result.ok(iqdFacadeService.saveKnowledge(dto));
+    }
+
+    /**
+     * 删除知识/术语/口径（需 iqd:enhance:save）。
+     */
+    @DeleteMapping("/knowledge/{id}")
+    public Result<Void> deleteKnowledge(@PathVariable Long id) {
+        iqdFacadeService.deleteKnowledge(id);
+        return Result.ok();
+    }
+
+    /**
+     * 从 S-07 单向拉入知识（需 iqd:enhance:save）。
+     */
+    @PostMapping("/knowledge/import-s07")
+    public Result<Map<String, Object>> importS07Knowledge(@RequestParam Long connectionId) {
+        return Result.ok(iqdFacadeService.importS07Knowledge(connectionId));
+    }
+
+    /**
+     * 取待推送增强物料（需 iqd:enhance:sync）。
+     */
+    @PostMapping("/enhance/push")
+    public Result<Map<String, Object>> pushEnhancements(@RequestParam Long connectionId) {
+        return Result.ok(iqdFacadeService.pushEnhancements(connectionId));
+    }
+}

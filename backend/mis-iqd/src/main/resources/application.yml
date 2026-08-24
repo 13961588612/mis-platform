@@ -1,0 +1,52 @@
+server:
+  port: 8109
+
+spring:
+  application:
+    name: mis-iqd
+  datasource:
+    # YAML 须加引号：& 否则会被当成 anchor
+    url: "jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:mis_platform}?tcpKeepAlive=true&ApplicationName=${spring.application.name}&loginTimeout=10"
+    username: ${DB_USER:mis}
+    password: ${DB_PASSWORD:mis123}
+    hikari:
+      maximum-pool-size: ${DB_POOL_SIZE:5}
+      minimum-idle: ${DB_POOL_MIN_IDLE:1}
+      connection-timeout: 25000
+      idle-timeout: 600000
+      max-lifetime: 1800000
+      leak-detection-threshold: 15000
+      connection-init-sql: "SET application_name = '${spring.application.name}'"
+      validation-timeout: 5000
+  jpa:
+    open-in-view: false
+    hibernate:
+      # 表由 mis-migrator Flyway V71__iqd_schema.sql 建，此处仅校验实体与表结构一致
+      ddl-auto: validate
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+  data:
+    redis:
+      # B3 变更事件推送（iqd.config.changed pub/sub）；不可达时发布降级，不影响配置写入
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      database: 0
+      timeout: 2000ms
+      connect-timeout: 2000ms
+
+mis:
+  iqd:
+    # BFF/Worker 配置读取客户端基址（B2 起 IqdConfigClient 经 /internal/v1/iqd/** 拉取）。
+    # 本服务自身不直连 WrenAI，仅持有 iqd_* 配置表；Worker 凭据由 wren profile 注入，不进平台库。
+    config-base-url: ${MIS_IQD_CONFIG_BASE_URL:}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+
+logging:
+  level:
+    com.mis.iqd: DEBUG

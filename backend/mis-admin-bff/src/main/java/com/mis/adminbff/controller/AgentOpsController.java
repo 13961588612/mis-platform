@@ -3,6 +3,7 @@ package com.mis.adminbff.controller;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.mis.adminbff.dto.agentops.SessionQuery;
 import com.mis.adminbff.dto.agentops.SkillUpsertRequest;
+import com.mis.adminbff.dto.iqd.IqdFeedbackRequest;
 import com.mis.adminbff.service.agentops.AgentOpsFacadeService;
 import com.mis.common.core.result.Result;
 import jakarta.validation.Valid;
@@ -339,6 +340,24 @@ public class AgentOpsController {
     @PostMapping("/sessions/feedback/batch-process")
     public Result<JsonNode> batchProcessFeedback(@RequestBody JsonNode body) {
         return Result.ok(facade.batchProcessFeedback(body));
+    }
+
+    /**
+     * 用户端评价提交（点赞/点踩，评价写入链 BFF 入口）。
+     *
+     * <p>复用 {@code ai:chat:use}（用户已具备对话能力，不新增权限码；注册表 V76 登记）。
+     * body {@code {rating: up|down, comment?, message_id?, content?}}（IqdFeedbackRequest，
+     * 与 ai-platform MessageFeedbackRequest 同构）；透传下游写入 agent_feedback 表
+     * （唯一约束幂等：重复提交同 message 覆盖写）。
+     *
+     * @param sessionId 平台会话 UUID（SSE done 帧 sessionId）
+     * @param request   评价请求体
+     */
+    @PostMapping("/sessions/{session_id}/feedback")
+    public Result<JsonNode> submitFeedback(
+            @PathVariable("session_id") String sessionId,
+            @Valid @RequestBody IqdFeedbackRequest request) {
+        return Result.ok(facade.submitFeedback(sessionId, request));
     }
 
     /** #32 新建对话会话（注意路径是 {@code /chat/sessions}，与列表 {@code /sessions} 不同）。 */

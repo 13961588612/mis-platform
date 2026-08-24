@@ -27,7 +27,7 @@ import java.time.Duration;
  * {@link BffProperties} / {@link AiPlatformProperties} 保持同一种登记方式。
  */
 @Configuration
-@EnableConfigurationProperties({BffProperties.class, AiPlatformProperties.class, AgentOpsProperties.class, EmbedIdentityProperties.class})
+@EnableConfigurationProperties({BffProperties.class, AiPlatformProperties.class, AgentOpsProperties.class, EmbedIdentityProperties.class, IqdProperties.class})
 @EnableScheduling
 public class BffConfiguration {
 

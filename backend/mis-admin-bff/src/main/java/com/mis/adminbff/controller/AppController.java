@@ -33,8 +33,12 @@ public class AppController {
      *       否则卡片可点但会落到空白页。</li>
      * </ul>
      * 本常量是编译期硬编码，<b>只跑迁移不重新部署 BFF 不会生效</b>。
+     *
+     * <p>V77：问数独立门户应用（{@code iqd}，sys_app 93010）加入白名单，
+     * 否则门户「问数」卡片不可点击（见 iqd-standalone-app-design.md D5）。
+     * 改完本常量后必须重新部署 BFF 才能生效。
      */
-    private static final Set<String> ENTERABLE_CODES = Set.of("system", "kb", "agent");
+    private static final Set<String> ENTERABLE_CODES = Set.of("system", "kb", "agent", "iqd");
 
     private final IamWebClient iamWebClient;
 

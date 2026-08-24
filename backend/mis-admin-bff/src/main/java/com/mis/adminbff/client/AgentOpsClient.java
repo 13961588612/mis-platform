@@ -331,6 +331,23 @@ public class AgentOpsClient extends AgentOpsTransport {
                 "POST " + SESSIONS + "/feedback/batch-process");
     }
 
+    /**
+     * 用户端评价提交（新增写入端点，feedback-enhance §2.2）。
+     *
+     * <p>下游 {@code POST /api/v1/sessions/{session_id}/feedback}（`MessageFeedbackRequest`：
+     * rating up/down 必填、comment ≤500 且 down 必填、message_id/content 可选）；幂等由下游
+     * agent_feedback 唯一约束保证（重复提交覆盖写）。操作人/身份经 {@link AgentOpsTransport}
+     * 登录上下文头透传（X-User-Id / X-Username，对齐既有 `_operator_identity` 约定）。
+     *
+     * @param sessionId 平台会话 UUID（SSE done 帧 sessionId）
+     * @param body      {@code {rating, comment?, message_id?, content?}}
+     * @return 下游反馈写入结果（透传）
+     */
+    public JsonNode submitFeedback(String sessionId, Object body) {
+        return postJson(builder -> builder.path(SESSIONS + "/{id}/feedback").build(sessionId), body,
+                "POST " + SESSIONS + "/{id}/feedback");
+    }
+
     /** #32 {@code POST /api/v1/sessions}（新建对话会话）。 */
     public JsonNode createChatSession(Object body) {
         return postJson(builder -> builder.path(SESSIONS).build(), body, "POST " + SESSIONS);

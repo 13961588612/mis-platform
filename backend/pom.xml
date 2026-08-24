@@ -23,6 +23,7 @@
         <module>mis-admin-bff</module>
         <module>mis-system</module>
         <module>mis-kb</module>
+        <module>mis-iqd</module>
     </modules>
 
     <properties>
