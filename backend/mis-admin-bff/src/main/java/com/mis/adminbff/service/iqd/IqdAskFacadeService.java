@@ -1,5 +1,6 @@
 package com.mis.adminbff.service.iqd;
 
+import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.mis.adminbff.client.AiPlatformClient;
 import com.mis.adminbff.config.IqdProperties;
@@ -51,7 +52,8 @@ public class IqdAskFacadeService {
     private final AiPlatformClient aiPlatformClient;
     private final IqdProperties properties;
     private final UserPermissionLoader userPermissionLoader;
-    private final ObjectMapper objectMapper = new ObjectMapper();
+    private final ObjectMapper objectMapper = new ObjectMapper()
+            .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
 
     public IqdAskFacadeService(
             AiPlatformClient aiPlatformClient,

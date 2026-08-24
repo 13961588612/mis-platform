@@ -5,8 +5,11 @@ import com.mis.adminbff.dto.iqd.IqdAskRequest;
 import com.mis.adminbff.dto.iqd.IqdAskResponse;
 import com.mis.adminbff.service.iqd.IqdAskFacadeService;
 import com.mis.common.core.constant.SecurityConstants;
+import com.mis.common.core.exception.BusinessException;
 import com.mis.common.core.result.Result;
 import jakarta.validation.Valid;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.MediaType;
 import org.springframework.http.codec.ServerSentEvent;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -34,6 +37,8 @@ import reactor.core.publisher.Flux;
 @RequestMapping("/api/v1/iqd")
 public class IqdAskController {
 
+    private static final Logger log = LoggerFactory.getLogger(IqdAskController.class);
+
     private final IqdAskFacadeService iqdAskFacadeService;
     private final IqdProperties properties;
 
@@ -50,7 +55,23 @@ public class IqdAskController {
             @Valid @RequestBody IqdAskRequest req,
             @RequestHeader(value = SecurityConstants.AUTHORIZATION_HEADER, required = false) String authorization,
             @RequestHeader(value = SecurityConstants.HEADER_TRACE_ID, required = false) String traceId) {
-        return Result.ok(iqdAskFacadeService.ask(req, authorization, traceId));
+        try {
+            return Result.ok(iqdAskFacadeService.ask(req, authorization, traceId));
+        } catch (BusinessException ex) {
+            // 业务异常（含下游 INTERNAL_ERROR / 40300 / 45299 等）原样透出，不吞成 50000
+            IqdAskResponse resp = new IqdAskResponse();
+            resp.setStatus("error");
+            resp.setErrorCode(String.valueOf(ex.getCode()));
+            resp.setErrorMessage(ex.getMessage());
+            return Result.ok(resp);
+        } catch (Exception ex) {
+            log.warn("iqd ask failed, traceId={}", traceId, ex);
+            IqdAskResponse resp = new IqdAskResponse();
+            resp.setStatus("error");
+            resp.setErrorCode("50099");
+            resp.setErrorMessage("问数服务暂时不可用: " + ex.getMessage());
+            return Result.ok(resp);
+        }
     }
 
     /**

@@ -1,6 +1,9 @@
 package com.mis.adminbff.dto.iqd;
 
+import com.fasterxml.jackson.annotation.JsonAlias;
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;
+import com.fasterxml.jackson.databind.annotation.JsonDeserialize;
 
 import java.util.List;
 
@@ -11,17 +14,28 @@ import java.util.List;
  * {@code plan[].sql} 与顶层 {@code sql} 在 view=user 时由 Worker 投影剥键，
  * BFF 侧只透传不加工。
  */
+@JsonIgnoreProperties(ignoreUnknown = true)
 public class IqdAskResponse {
 
     private String queryId;
     private String threadId;
     private String agentId;
     private String status;
+    /** Worker/LLM 偶发用 answer；契约字段为 answer_summary。 */
+    @JsonAlias({"answer", "answer_summary"})
     private String answerSummary;
     private String sql;
     private String sqlDialect;
     private IqdResultData data;
     private List<IqdCitation> citations;
+    /**
+     * plan 为 {@code List<IqdPlanStep>}，反序列化器须套到 List 的【每个元素】上，
+     * 故使用 {@code contentUsing}（非 {@code using}）。
+     * {@code using} 会把这个反序列化器套到【整个 List】上，导致二次包裹，
+     * 进而在序列化阶段对 ArrayList 元素调用 IqdPlanStep 的 getter 反射非 IqdPlanStep
+     * 对象而抛出 "object is not an instance of declaring class"。
+     */
+    @JsonDeserialize(contentUsing = IqdPlanStepListDeserializer.class)
     private List<IqdPlanStep> plan;
     private IqdScopeResolutionPayload scope;
     private List<String> maskedColumns;

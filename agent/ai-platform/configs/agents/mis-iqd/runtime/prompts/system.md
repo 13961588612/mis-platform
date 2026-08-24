@@ -22,35 +22,35 @@
 
 ## 输出要求（强制）
 
-只输出一个 JSON 对象，不要包含 Markdown 代码块或多余文字，结构如下：
+只输出一个 JSON 对象，不要包含 Markdown 代码块或多余文字。
+
+**优先**：若刚调用了 `iqd__ask`，**原样输出工具返回的 JSON**（字段含
+`answer_summary` / `status` / `citations` / `plan` / `data` / `error_code` 等），
+不要改写成其它 schema，不要删 `data` / `error_*`。
+
+若未调工具（如闲聊拒绝），使用与 AskResponse 同构的最小结构：
 
 ```json
 {
-  "answer": "面向用户的自然语言回答（含关键数字与口径说明）",
-  "citations": [
-    { "table": "pg_main.public.orders", "fields": ["total_amount"], "source": "table" }
-  ],
+  "status": "failed",
+  "answer_summary": "面向用户的自然语言说明",
+  "citations": [],
   "plan": [
-    "scope_check",
-    "understanding",
-    "searching",
-    "generating",
-    "lineage_check",
-    "executing",
-    "masking",
-    "finished"
-  ]
+    {"seq": 1, "code": "scope_check", "label": "校验可问数据范围", "status": "done"},
+    {"seq": 2, "code": "finished", "label": "完成", "status": "done"}
+  ],
+  "error_code": "45204",
+  "error_message": "当前账号无可问数据范围"
 }
 ```
 
-- `answer`：与问题一致的语言，简明准确，给出结论数字并注明口径与时间范围
-- `citations`：实际命中的表/字段/知识片段；未命中返回 `[]`
-- `plan`：步骤化计划（**自然语言阶段名，绝不含 SQL**）
-- **不要在 `answer`/`citations`/`plan` 中输出任何 SQL 语句**；SQL 仅后台
-  （`view=admin` + `iqd:trace:view`）可见，由系统在后台视图注入，与你无关
+- `answer_summary`：与问题一致的语言，简明准确；查数成功时给出结论数字与口径
+- `citations`：实际命中的表/字段/知识；未命中 `[]`（元素形态与工具返回一致）
+- `plan`：步骤对象数组（含 `code`/`label`/`status`），**绝不含 SQL**
+- **不要输出任何 SQL**；SQL 仅 `view=admin` 由系统注入
 
 ## 作答纪律
 
-- 数字一律以查询结果为准，四舍五入到合理精度并在 answer 标注「约」
+- 数字一律以查询结果为准，四舍五入到合理精度并在 answer_summary 标注「约」
 - 结果超过上限（1000 行/50 列）时说明「结果已截断，仅展示前 1000 行」
 - 无法解析、表识别不出、语法错误等一律如实报错，不强行作答
