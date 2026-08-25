@@ -8,7 +8,15 @@
  * - 会话状态由 chat-core（zustand chat-store）持有，关闭 Sheet 不销毁
  */
 
-import { lazy, Suspense, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
+import {
+  lazy,
+  Suspense,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type PointerEvent as ReactPointerEvent,
+} from 'react';
 import { Sparkles } from 'lucide-react';
 import {
   Sheet,
@@ -29,6 +37,24 @@ const FAB_SIZE = 48;
 const FAB_MARGIN = 16;
 const DRAG_THRESHOLD_PX = 5;
 const FAB_POS_KEY = 'mis.copilot.fab.pos';
+/** 放大模式记忆 key（不阻塞首屏：useState 惰性初始化同步读）。 */
+const EXPANDED_KEY = 'mis.copilot.expanded';
+
+function readExpandedFlag(): boolean {
+  try {
+    return localStorage.getItem(EXPANDED_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
+function writeExpandedFlag(next: boolean): void {
+  try {
+    localStorage.setItem(EXPANDED_KEY, next ? '1' : '0');
+  } catch {
+    /* ignore */
+  }
+}
 
 type FabPos = { x: number; y: number };
 
@@ -179,6 +205,37 @@ function CopilotPanelFallback() {
  * Sheet 打开才加载 CopilotPanel chunk；关闭保留 DOM（会话状态不丢）。
  */
 export function CopilotPanel({ open, onOpenChange }: CopilotPanelProps) {
+  // 放大模式：仅在「当前会话面板打开」时恢复；刷新后 open 恒为 false，
+  // 若仍读 localStorage=1 会出现 expanded&&!open → FAB 与面板双不可见。
+  const [expanded, setExpanded] = useState<boolean>(false);
+
+  const toggleExpanded = useCallback(() => {
+    setExpanded((prev) => {
+      const next = !prev;
+      writeExpandedFlag(next);
+      return next;
+    });
+  }, []);
+
+  // 关闭时同步清掉放大记忆，避免下次刷新藏掉 FAB
+  const handleOpenChange = useCallback(
+    (next: boolean) => {
+      if (!next) {
+        setExpanded(false);
+        writeExpandedFlag(false);
+      }
+      onOpenChange(next);
+    },
+    [onOpenChange],
+  );
+
+  // 打开面板时：若上次以放大态关闭前曾写过 flag，恢复放大；否则普通 Sheet
+  useEffect(() => {
+    if (open) {
+      setExpanded(readExpandedFlag());
+    }
+  }, [open]);
+
   // modulepreload 预热（P1）：页面空闲时提前拉 chunk，Sheet 打开秒开
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -189,26 +246,48 @@ export function CopilotPanel({ open, onOpenChange }: CopilotPanelProps) {
 
   return (
     <>
-      <Sheet open={open} onOpenChange={onOpenChange} modal={false}>
-        <SheetContent
-          side="right"
-          forceMount
-          className="flex h-dvh max-h-dvh w-full max-w-xl flex-col overflow-hidden p-0 sm:max-w-xl"
-        >
-          <SheetHeader className="shrink-0">
-            <SheetTitle className="flex items-center gap-2">
-              <Sparkles className="h-4 w-4 text-primary" />
-              AI Copilot
-            </SheetTitle>
-            <SheetDescription>原生对话 · A2UI 动态界面 · 直连 Agent 网关</SheetDescription>
-          </SheetHeader>
-          <Suspense fallback={<CopilotPanelFallback />}>
-            {open ? <CopilotPanelLazy /> : null}
-          </Suspense>
-        </SheetContent>
-      </Sheet>
+      {/* 普通模式：右侧 Sheet（占满视口高度，内部仅消息区滚动） */}
+      {!expanded ? (
+        <Sheet open={open} onOpenChange={handleOpenChange} modal={false}>
+          <SheetContent
+            side="right"
+            forceMount
+            className="flex h-[100dvh] max-h-[100dvh] w-full max-w-xl flex-col overflow-hidden p-0 sm:max-w-xl"
+          >
+            <SheetHeader className="shrink-0">
+              <SheetTitle className="flex items-center gap-2">
+                <Sparkles className="h-4 w-4 text-primary" />
+                AI Copilot
+              </SheetTitle>
+              <SheetDescription>原生对话 · A2UI 动态界面 · 直连 Agent 网关</SheetDescription>
+            </SheetHeader>
+            {/* flex-1 min-h-0 承接 header 之后的剩余高度，令 CopilotPanel 的 h-full 不溢出外层 */}
+            <div className="flex min-h-0 flex-1 flex-col">
+              <Suspense fallback={<CopilotPanelFallback />}>
+                {open ? (
+                  <CopilotPanelLazy expanded={false} onToggleExpanded={toggleExpanded} />
+                ) : null}
+              </Suspense>
+            </div>
+          </SheetContent>
+        </Sheet>
+      ) : null}
 
-      {!open && <CopilotFab onOpen={() => onOpenChange(true)} />}
+      {/* 放大模式：全屏覆盖层（左侧会话列表 + 右侧聊天，参考豆包布局） */}
+      {expanded && open ? (
+        <div className="fixed inset-0 z-50 flex h-[100dvh] flex-col bg-background">
+          <Suspense fallback={<CopilotPanelFallback />}>
+            <CopilotPanelLazy
+              expanded
+              onToggleExpanded={toggleExpanded}
+              onRequestClose={() => handleOpenChange(false)}
+            />
+          </Suspense>
+        </div>
+      ) : null}
+
+      {/* 关闭态始终显示 FAB（与是否曾放大无关） */}
+      {!open ? <CopilotFab onOpen={() => onOpenChange(true)} /> : null}
     </>
   );
 }

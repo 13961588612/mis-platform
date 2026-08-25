@@ -439,7 +439,7 @@ describe('MessageProcessor', () => {
             ],
           },
         ],
-      });
+      } as any);
 
       const surface = useSurfaceStore.getState().surfaces['sfc-type'];
       expect(surface).toBeDefined();

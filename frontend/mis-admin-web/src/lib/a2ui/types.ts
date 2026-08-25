@@ -9,6 +9,8 @@
  * - 用户操作回传：前端经 WS `{ type: 'a2ui_action', action: A2uiClientAction }` 回传
  */
 
+import type { ReactNode } from 'react';
+
 // ------------------------------------------------------------------ 常量口径
 
 /** 协议版本锚点（与 Gateway A2UIMiddlewareConfig.defaultCatalogId 对齐）。 */
@@ -29,12 +31,22 @@ export const A2UI_ERROR_CODES = {
 
 // ------------------------------------------------------------------ 组件名
 
-/** 受支持的 A2UI 组件名（与 Gateway SHARED_CATALOG 严格一致）。 */
+/**
+ * 受支持的 A2UI 组件名（与 Gateway SHARED_CATALOG 严格一致）。
+ *
+ * <p>扩展基础组件（T06'' 修复「未知 A2UI 组件」）：Gateway 可能下发 AG-UI 风格
+ * 基础节点 `text` / `container` / `button` / `input`，前端需原生渲染而非回退占位。
+ * 业务组件 `approval-card` / `data-table` / `form-sheet` / `entity-select` 保持不变。
+ */
 export type A2uiComponentName =
   | 'approval-card'
   | 'data-table'
   | 'form-sheet'
-  | 'entity-select';
+  | 'entity-select'
+  | 'text'
+  | 'container'
+  | 'button'
+  | 'input';
 
 /** 已知组件名集合。 */
 export const KNOWN_A2UI_COMPONENTS: ReadonlySet<string> = new Set<string>([
@@ -42,6 +54,10 @@ export const KNOWN_A2UI_COMPONENTS: ReadonlySet<string> = new Set<string>([
   'data-table',
   'form-sheet',
   'entity-select',
+  'text',
+  'container',
+  'button',
+  'input',
 ]);
 
 // ------------------------------------------------------------------ Surface Model
@@ -169,6 +185,13 @@ export interface A2uiComponentProps {
   props: Record<string, unknown>;
   /** 前端注入回调。 */
   actions?: A2uiActions;
+  /**
+   * 子节点渲染结果（仅容器类组件消费，如 `container`）。
+   *
+   * <p>由 SurfaceRenderer 递归渲染 `node.children` 后注入，使容器真正包裹子节点；
+   * 叶子组件（如 `approval-card`）忽略此字段，保持原行为。
+   */
+  children?: ReactNode;
 }
 
 /** A2UI 动作回调声明。 */

@@ -244,7 +244,12 @@ export interface UseChatReturn {
     action: EntitySelectAction;
   }) => void;
   dispatchA2uiAction: (action: import('../a2ui/types').A2uiClientAction) => void;
-  ensureSession: () => Promise<string>;
+  /**
+   * 确保存在会话 id（本地生成 + 持久化；Gateway 接受客户端 sessionId）。
+   * 传入 `preferredSessionId` 时直接复用该会话（用于"切换会话"），否则复用
+   * localStorage 记忆或生成本地新会话。
+   */
+  ensureSession: (preferredSessionId?: string) => Promise<string>;
   /** P0-2 拉取历史并渲染（404 / 失败降级空会话不阻塞）。 */
   loadHistory: () => Promise<void>;
   closeSession: () => void;

@@ -316,24 +316,35 @@ export function useChat(options?: UseChatOptions): UseChatReturn {
 
   // ------------------------------------------------------------------ 会话
 
-  /** 确保存在会话 id（本地生成 + 持久化；Gateway 接受客户端 sessionId）。 */
-  const ensureSession = useCallback(async (): Promise<string> => {
+  /**
+   * 确保存在会话 id（本地生成 + 持久化；Gateway 接受客户端 sessionId）。
+   *
+   * @param preferredSessionId 传入时直接复用该会话（"切换会话"场景）；
+   *                           不传则优先复用 localStorage 记忆，否则生成本地新会话。
+   */
+  const ensureSession = useCallback(async (preferredSessionId?: string): Promise<string> => {
     const existing = useChatStore.getState().sessionId;
     if (existing) return existing;
 
     useChatStore.getState().setSessionState('creating');
     let sid: string | null = null;
-    try {
-      sid = localStorage.getItem(LAST_SESSION_KEY);
-    } catch {
-      sid = null;
-    }
-    if (!sid) {
-      sid = generateClientId('web');
+    if (preferredSessionId) {
+      sid = preferredSessionId;
+    } else {
+      try {
+        sid = localStorage.getItem(LAST_SESSION_KEY);
+      } catch {
+        sid = null;
+      }
+      if (!sid) {
+        sid = generateClientId('web');
+      }
     }
     useChatStore.getState().setSessionId(sid);
     useChatStore.getState().setAgentId(agentIdOption || null);
     useChatStore.getState().setSessionState('ready');
+    // 记忆最近会话，便于下次打开续接（切换会话时也及时落盘）
+    persistSession(sid);
     // P0-2：会话建立即拉取历史（先发过消息才落库，未落库 404 降级空会话不阻塞）
     void loadHistory();
     return sid;

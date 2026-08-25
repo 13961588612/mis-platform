@@ -14,6 +14,10 @@ import { ApprovalCard } from './components/ApprovalCard';
 import { DataTable } from './components/DataTable';
 import { FormSheet } from './components/FormSheet';
 import { EntitySelect } from './components/EntitySelect';
+import { A2uiText } from './components/A2uiText';
+import { A2uiContainer } from './components/A2uiContainer';
+import { A2uiButton } from './components/A2uiButton';
+import { A2uiInput } from './components/A2uiInput';
 
 /** 协议版本锚点（与 Gateway A2UIMiddlewareConfig.defaultCatalogId 对齐）。 */
 export const A2UI_CATALOG = A2UI_CATALOG_ID;
@@ -54,6 +58,26 @@ export const A2UI_REGISTRY: A2uiRegistryEntry[] = [
     name: 'entity-select',
     component: EntitySelect,
     // 操作经 Gateway dispatchAction 回传 Agent，非 BFF 写操作
+  },
+  {
+    name: 'text',
+    component: A2uiText,
+    // 基础展示组件，默认可见，无需权限
+  },
+  {
+    name: 'container',
+    component: A2uiContainer,
+    // 基础布局容器，默认可见，无需权限
+  },
+  {
+    name: 'button',
+    component: A2uiButton,
+    // 基础按钮，点击经 Gateway dispatchAction 回传 Agent，非 BFF 写操作
+  },
+  {
+    name: 'input',
+    component: A2uiInput,
+    // 基础输入框，失焦经 Gateway dispatchAction 回传，非 BFF 写操作
   },
 ];
 

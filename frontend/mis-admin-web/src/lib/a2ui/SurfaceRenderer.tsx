@@ -63,18 +63,29 @@ function SurfaceNode({ node, surfaceId }: { node: A2uiComponentNode; surfaceId: 
 
   const Comp = entry.component;
 
+  const childNodes =
+    node.children && node.children.length > 0 ? (
+      <div className="space-y-2">
+        {node.children.map((child) => (
+          <SurfaceNode key={child.id} surfaceId={surfaceId} node={child} />
+        ))}
+      </div>
+    ) : null;
+
+  // 容器类组件（container）将子节点包裹在内层；其余组件保持原行为（子节点作为兄弟块渲染），
+  // 避免容器同时内外重复渲染导致布局错乱。
+  const isContainer = node.component === 'container';
+
   return (
     <A2uiNodeContext.Provider key={node.id} value={{ surfaceId, componentId: node.id }}>
       <A2uiPermissionGate requiredPermission={entry.requiredPermission} deniedText={entry.deniedText}>
-        <Comp component={node.component as A2uiComponentName} props={node.props} />
+        <Comp
+          component={node.component as A2uiComponentName}
+          props={node.props}
+          {...(isContainer ? { children: childNodes } : {})}
+        />
       </A2uiPermissionGate>
-      {node.children && node.children.length > 0 ? (
-        <div className="space-y-2">
-          {node.children.map((child) => (
-            <SurfaceNode key={child.id} surfaceId={surfaceId} node={child} />
-          ))}
-        </div>
-      ) : null}
+      {!isContainer ? childNodes : null}
     </A2uiNodeContext.Provider>
   );
 }
