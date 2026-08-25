@@ -197,6 +197,7 @@ interface ComponentPatch {
  * <p>LLM 常产出 AG-UI 习惯形态 `{ id, type, direction, ... }`（扁平字段），而前端
  * {@link A2uiComponentNode} 要求 `{ id, component, props }`。此处做兼容映射：
  * - `component` 优先，缺省回落 `type`
+ * - 别名：`view`/`Column`/`Row` → `container`，`Text` → `text` 等
  * - 其余非协议字段抬升进 `props`
  * - `children` 递归归一
  */
@@ -206,12 +207,13 @@ function normalizeComponentNode(raw: unknown): A2uiComponentNode | null {
   const id = typeof record.id === 'string' ? record.id : undefined;
   if (!id) return null;
 
-  const componentName =
+  const rawName =
     (typeof record.component === 'string' && record.component.length > 0
       ? record.component
       : undefined) ??
     (typeof record.type === 'string' && record.type.length > 0 ? record.type : undefined);
-  if (!componentName) return null;
+  if (!rawName) return null;
+  const componentName = aliasA2uiComponentName(rawName);
 
   let props: Record<string, unknown> = {};
   if (record.props != null && typeof record.props === 'object' && !Array.isArray(record.props)) {
@@ -239,6 +241,47 @@ function normalizeComponentNode(raw: unknown): A2uiComponentNode | null {
   }
 
   return { id, component: componentName, props, children };
+}
+
+/**
+ * LLM / AG-UI 组件名 → MIS catalog 名。
+ *
+ * <p>模型常输出 `view`（通用布局）而非登记的 `container`，导致「未知 A2UI 组件」。
+ */
+function aliasA2uiComponentName(name: string): string {
+  const key = name.trim();
+  const lower = key.toLowerCase();
+  const aliases: Record<string, string> = {
+    view: 'container',
+    column: 'container',
+    row: 'container',
+    stack: 'container',
+    box: 'container',
+    layout: 'container',
+    divider: 'divider',
+    separator: 'divider',
+    hr: 'divider',
+    text: 'text',
+    label: 'text',
+    markdown: 'text',
+    button: 'button',
+    input: 'input',
+    textfield: 'input',
+    'text-field': 'input',
+    datatable: 'data-table',
+    'data_table': 'data-table',
+    formsheet: 'form-sheet',
+    'form_sheet': 'form-sheet',
+    entityselect: 'entity-select',
+    'entity_select': 'entity-select',
+    approvalcard: 'approval-card',
+    'approval_card': 'approval-card',
+  };
+  if (aliases[lower]) return aliases[lower];
+  // PascalCase → kebab（DataTable → 先 lower 再查；ApprovalCard 等同理）
+  const compact = lower.replace(/[^a-z0-9]/g, '');
+  if (aliases[compact]) return aliases[compact];
+  return key;
 }
 
 /**

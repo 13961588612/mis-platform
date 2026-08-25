@@ -26,6 +26,7 @@
 | 查各模块职责与内容 | **[modules-guide](project/modules-guide.md)** |
 | 知识库 / RAG 引擎 | **[完整规划](backend/knowledge-base-app-plan.md)** · [**二期扩展**](backend/knowledge-base-phase2-plan.md)（含同义词 Wave D） · [设计摘要](backend/knowledge-base.md) · [ADR-018](adr/ADR-018-knowledge-base-mis-kb.md) · [`deploy/ragflow`](../deploy/ragflow/) |
 | 配置 Cursor Agent 角色/规范 | [ai-assisted-dev](project/ai-assisted-dev.md) · [AGENTS.md](../AGENTS.md) |
+| **多窗口 Agent 团队（PM/DEV/QA/OPS）** | **[agents/README](agents/README.md)** · [定稿方案](agents/大型项目cursor方案.md) |
 
 ---
 

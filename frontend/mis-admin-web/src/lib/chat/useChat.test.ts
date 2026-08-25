@@ -7,14 +7,44 @@
  * - loadHistory 404 / 网络异常 → historyState='error'（不抛、不阻塞）
  * - sendMessage(content, attachments) 把附件塞入本地 user 消息（ChatMessage.attachments），
  *   证明附件随消息上行链路在本地侧闭合
+ * - 空 done + messageId：SSE 丢正文时回拉历史，避免误报超时失败
  *
  * 说明：useChat 依赖 chat-store（zustand 全局）与 fetch；本测试 mock fetch，并通过
  * 直接读 store 状态验证行为，不依赖真实 WS/SSE。
  */
-import { describe, expect, it, vi, beforeEach } from 'vitest';
+import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import { renderHook, act, waitFor } from '@testing-library/react';
-import { useChat } from './useChat';
+import { useChat, GENERATE_SAFETY_TIMEOUT_MS } from './useChat';
 import { useChatStore } from '@/stores/chat-store';
+import { useAuthStore } from '@/stores/auth-store';
+
+const sseHarness = vi.hoisted(() => {
+  let onEvent: ((event: { type: string; [k: string]: unknown }) => void) | null = null;
+  return {
+    getOnEvent: () => onEvent,
+    subscribeChatStream: vi.fn(
+      (opts: { onEvent: (event: { type: string; [k: string]: unknown }) => void }) => {
+        onEvent = opts.onEvent;
+        return { abort: vi.fn() };
+      },
+    ),
+  };
+});
+
+vi.mock('./sse-client', () => ({
+  subscribeChatStream: sseHarness.subscribeChatStream,
+  buildChatStreamUrl: (sessionId: string) => `/api/events/stream?sessionId=${sessionId}`,
+}));
+
+vi.mock('./ws-client', () => ({
+  ChatWsClient: vi.fn().mockImplementation(() => ({
+    connect: vi.fn(),
+    close: vi.fn(),
+    isOpen: () => true,
+    send: () => true,
+  })),
+  buildChatWsUrl: () => '/ws/chat',
+}));
 
 const SID = 'web-test-session-1';
 
@@ -22,11 +52,18 @@ function setSession(sid: string) {
   useChatStore.getState().setSessionId(sid);
   useChatStore.getState().setHistoryState('idle');
   useChatStore.getState().clearMessages();
+  useChatStore.getState().setGenerating(false);
+  useChatStore.getState().setError(null);
 }
 
 beforeEach(() => {
-  vi.restoreAllMocks();
+  vi.clearAllMocks();
   setSession(SID);
+  useAuthStore.setState({
+    accessToken: 'test-token',
+    expiresAt: Date.now() + 3_600_000,
+    user: { id: 'u-1', username: 'tester', displayName: 'Tester' } as never,
+  });
 });
 
 describe('loadHistory 三态（P0-2）', () => {
@@ -146,5 +183,188 @@ describe('sendMessage 附件落地（P0-1）', () => {
       result.current.sendMessage('   ', []);
     });
     expect(useChatStore.getState().messages.length).toBe(before);
+  });
+});
+
+describe('新建会话防串历史（P0 / TASK-002）', () => {
+  it('loadHistory await 后 sid 已变则丢弃结果（不 setMessages）', async () => {
+    let resolveFetch: ((v: unknown) => void) | null = null;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        () =>
+          new Promise((resolve) => {
+            resolveFetch = resolve;
+          }),
+      ),
+    );
+
+    const { result } = renderHook(() => useChat());
+    let loadPromise: Promise<void>;
+    act(() => {
+      loadPromise = result.current.loadHistory();
+    });
+    expect(useChatStore.getState().historyState).toBe('loading');
+
+    // 模拟新建：关闭旧会话并 forceNew
+    act(() => {
+      result.current.closeSession();
+    });
+    let newSid: string;
+    await act(async () => {
+      newSid = await result.current.ensureSession(undefined, { forceNew: true });
+    });
+    expect(newSid!).not.toBe(SID);
+    expect(useChatStore.getState().messages).toHaveLength(0);
+
+    // 旧请求晚到
+    await act(async () => {
+      resolveFetch?.({
+        ok: true,
+        json: async () => ({
+          code: 0,
+          data: [
+            {
+              id: 'stale-1',
+              session_id: SID,
+              role: 'user',
+              content: '旧会话历史不应出现',
+              timestamp: '2026-01-01T00:00:00Z',
+              metadata: {},
+            },
+          ],
+        }),
+      });
+      await loadPromise!;
+    });
+
+    expect(useChatStore.getState().sessionId).toBe(newSid!);
+    expect(useChatStore.getState().messages).toHaveLength(0);
+    expect(useChatStore.getState().messages.some((m) => m.content.includes('旧会话'))).toBe(false);
+  });
+
+  it('forceNew 忽略 localStorage 旧 sid，生成新会话且不拉历史', async () => {
+    const fetchMock = vi.fn(async () => ({ ok: true, json: async () => ({ code: 0, data: [] }) }) as never);
+    vi.stubGlobal('fetch', fetchMock);
+    localStorage.setItem('mis.copilot.lastSession', 'web-old-from-storage');
+
+    const { result } = renderHook(() => useChat());
+    act(() => {
+      result.current.closeSession();
+    });
+    let newSid: string;
+    await act(async () => {
+      newSid = await result.current.ensureSession(undefined, { forceNew: true });
+    });
+
+    expect(newSid!).not.toBe('web-old-from-storage');
+    expect(newSid!).not.toBe(SID);
+    expect(useChatStore.getState().messages).toHaveLength(0);
+    expect(localStorage.getItem('mis.copilot.lastSession')).toBe(newSid!);
+    // forceNew 不触发 loadHistory
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('closeSession 重置 historyState 为 idle', () => {
+    useChatStore.getState().setHistoryState('loading');
+    const { result } = renderHook(() => useChat());
+    act(() => {
+      result.current.closeSession();
+    });
+    expect(useChatStore.getState().historyState).toBe('idle');
+    expect(useChatStore.getState().sessionId).toBeNull();
+  });
+});
+
+describe('空 done + messageId / 安全超时回填', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('空 done 带 messageId：解锁并回拉历史正文（不误报失败）', async () => {
+    const historyPayload = {
+      code: 0,
+      data: [
+        {
+          id: 'u1',
+          session_id: SID,
+          role: 'user',
+          content: '银联PAD怎么设置',
+          timestamp: '2026-01-01T00:00:00Z',
+          metadata: {},
+        },
+        {
+          id: 'a1',
+          session_id: SID,
+          role: 'assistant',
+          content: '后端已落库的完整回复',
+          timestamp: '2026-01-01T00:00:01Z',
+          metadata: {},
+        },
+      ],
+    };
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({ ok: true, json: async () => historyPayload }) as never),
+    );
+
+    const { result } = renderHook(() => useChat({ autoConnect: true }));
+    await waitFor(() => expect(sseHarness.getOnEvent()).toBeTruthy());
+
+    act(() => {
+      result.current.sendMessage('银联PAD怎么设置');
+    });
+    expect(useChatStore.getState().isGenerating).toBe(true);
+    const assistant = useChatStore.getState().messages.find((m) => m.role === 'assistant');
+    expect(assistant?.content).toBe('');
+
+    await act(async () => {
+      sseHarness.getOnEvent()?.({
+        type: 'done',
+        messageId: 'a1',
+        sessionId: SID,
+      });
+    });
+
+    await waitFor(() => {
+      expect(useChatStore.getState().isGenerating).toBe(false);
+      expect(useChatStore.getState().messages.some((m) => m.content.includes('后端已落库'))).toBe(
+        true,
+      );
+      expect(useChatStore.getState().error).toBeNull();
+    });
+  });
+
+  it('安全超时：本地已有正文时标 delivered，不报「回复失败」', async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({ ok: true, json: async () => ({ code: 0, data: [] }) }) as never),
+    );
+
+    const { result } = renderHook(() => useChat({ autoConnect: true }));
+    // 刷 effect，挂上 SSE onEvent（假时钟下不用 waitFor）
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(sseHarness.getOnEvent()).toBeTruthy();
+
+    act(() => {
+      result.current.sendMessage('测试');
+    });
+    act(() => {
+      sseHarness.getOnEvent()?.({ type: 'stream', content: '已流出的正文' });
+    });
+    expect(useChatStore.getState().isGenerating).toBe(true);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(GENERATE_SAFETY_TIMEOUT_MS + 50);
+    });
+
+    const assistant = useChatStore.getState().messages.find((m) => m.role === 'assistant');
+    expect(assistant?.status).toBe('delivered');
+    expect(assistant?.content).toContain('已流出的正文');
+    expect(useChatStore.getState().isGenerating).toBe(false);
+    expect(useChatStore.getState().error).toBeNull();
   });
 });

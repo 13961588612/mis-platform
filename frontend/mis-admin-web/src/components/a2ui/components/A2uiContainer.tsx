@@ -27,12 +27,14 @@ export function A2uiContainer({ props, children }: A2uiComponentProps) {
   const justifyContent = str(props.justifyContent, 'flex-start');
   const alignItems = str(props.alignItems, 'stretch');
   const gap = resolveGap(props.gap);
+  const padding = resolveGap(props.padding);
   const className = str(props.className);
   const style: CSSProperties = {
     flexDirection: direction,
     justifyContent,
     alignItems,
     gap,
+    ...(padding !== '0px' ? { padding } : {}),
   };
 
   return (

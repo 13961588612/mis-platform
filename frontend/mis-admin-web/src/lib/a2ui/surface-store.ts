@@ -52,4 +52,31 @@ export const useSurfaceStore = create<SurfaceState>((set) => ({
   clear: () => set({ surfaces: {}, activeSurfaceId: null }),
 }));
 
+/**
+ * 将 live surface 深拷贝为「消息私有」id。
+ *
+ * <p>LLM / 中间件常跨轮复用同一 {@code surfaceId}（如 {@code main}）；若不隔离，
+ * 后一轮 createSurface/update 会覆盖 SurfaceStore 中同一条目，导致历史气泡
+ * 全部改显示最新卡片。done 时调用本函数，把当前 live 快照钉到消息上。
+ *
+ * @returns 私有 surfaceId；live 不存在时回退原 id
+ */
+export function scopeSurfaceToMessage(liveSurfaceId: string, messageId: string): string {
+  const store = useSurfaceStore.getState();
+  const live = store.surfaces[liveSurfaceId];
+  if (!live) return liveSurfaceId;
+  // 已是本消息私有副本则不再套娃
+  if (liveSurfaceId.includes(`__msg__${messageId}`)) return liveSurfaceId;
+  const scopedId = `${liveSurfaceId}__msg__${messageId}`;
+  let cloned: A2uiSurface;
+  try {
+    cloned = JSON.parse(JSON.stringify(live)) as A2uiSurface;
+  } catch {
+    return liveSurfaceId;
+  }
+  cloned.surfaceId = scopedId;
+  store.upsert(cloned);
+  return scopedId;
+}
+
 export default useSurfaceStore;

@@ -77,6 +77,12 @@ export function DataTable({ props }: A2uiComponentProps) {
     initialState: { pagination: { pageSize: 10 } },
   });
 
+  // LLM 常为「确认清单」误插空 data-table（仅有 columns、无 rows），
+  // 会在对话里留下大块「暂无数据」空白；无行时不渲染。
+  if (rows.length === 0) {
+    return null;
+  }
+
   return (
     <div className="my-2 w-full overflow-hidden rounded-lg border bg-card shadow-none">
       {title ? (

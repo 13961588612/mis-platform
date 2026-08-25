@@ -137,19 +137,21 @@ function createRedisConnection(redisUrl: string): Redis {
   const redis = new Redis(redisUrl, {
     maxRetriesPerRequest: 3,
     enableReadyCheck: true,
+    // 永不 return null：否则进程仍存活、WS ping 正常，但业务 Redis 停在 end，
+    // A2UI 路径立刻报「Connection is closed.」（长跑 Gateway 常见坑）。
     retryStrategy: (times: number) => {
+      const delay = Math.min(times * 500, 5000);
       if (times > 10) {
         logger.error(
-          { times },
-          'Redis connection retry limit exceeded',
+          { times, delayMs: delay },
+          'Redis connection still retrying after many attempts',
         );
-        return null;
+      } else {
+        logger.warn(
+          { times, delayMs: delay },
+          'Redis connection retrying',
+        );
       }
-      const delay = Math.min(times * 500, 5000);
-      logger.warn(
-        { times, delayMs: delay },
-        'Redis connection retrying',
-      );
       return delay;
     },
     reconnectOnError: (error: Error) => {
@@ -253,7 +255,8 @@ async function main(): Promise<void> {
     // aip:stream:gw:pending:events，各 Gateway 用自身消费组独立 drain，
     // 仅真正持有该 bot 的 Gateway 实际投递（其余无对应 adapter ⇒ 自然 no-op）。
     const XCLAIM_INTERVAL_MS = parseInt(process.env['XCLAIM_INTERVAL_MS'] ?? '5000', 10);
-    const XCLAIM_MIN_IDLE_MS = parseInt(process.env['XCLAIM_MIN_IDLE_MS'] ?? '30000', 10);
+    // 与 Agent Core 对齐：须大于最长入站处理窗口，避免长任务 PEL 误重投。
+    const XCLAIM_MIN_IDLE_MS = parseInt(process.env['XCLAIM_MIN_IDLE_MS'] ?? '150000', 10);
 
     const eventConsumer = new StreamConsumer(
       redisConsumer,

@@ -18,6 +18,7 @@ import { A2uiText } from './components/A2uiText';
 import { A2uiContainer } from './components/A2uiContainer';
 import { A2uiButton } from './components/A2uiButton';
 import { A2uiInput } from './components/A2uiInput';
+import { A2uiDivider } from './components/A2uiDivider';
 
 /** 协议版本锚点（与 Gateway A2UIMiddlewareConfig.defaultCatalogId 对齐）。 */
 export const A2UI_CATALOG = A2UI_CATALOG_ID;
@@ -78,6 +79,11 @@ export const A2UI_REGISTRY: A2uiRegistryEntry[] = [
     name: 'input',
     component: A2uiInput,
     // 基础输入框，失焦经 Gateway dispatchAction 回传，非 BFF 写操作
+  },
+  {
+    name: 'divider',
+    component: A2uiDivider,
+    // 分隔线，默认可见
   },
 ];
 

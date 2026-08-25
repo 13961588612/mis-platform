@@ -2,7 +2,21 @@
 
 本文件供 Cursor / 其他编码 Agent 快速对齐本仓库约定。详细规则见 `.cursor/rules/`。
 
-## 角色怎么用
+## 多窗口团队模式（推荐大型需求）
+
+用 4 个 Agent 窗口（PM / DEV / QA / OPS）+ 工单目录协作，**不污染业务文档**。
+
+| 入口 | 路径 |
+|------|------|
+| 开窗话术与流程 | [`docs/agents/README.md`](docs/agents/README.md) |
+| 定稿全文 | [`docs/agents/大型项目cursor方案.md`](docs/agents/大型项目cursor方案.md) |
+| 工单字段 | [`docs/agents/TASK-SCHEMA.md`](docs/agents/TASK-SCHEMA.md) |
+| 席位规则（手动启用） | `.cursor/rules/agent-team-{pm,dev,qa,ops}.mdc` |
+| 活跃工单 | `docs/agents/tasks/{inbox,active,blocked}/` |
+
+人对 **PM** 下需求；DEV/QA/OPS 只领工单。全局 `agent-roles-workflow` 仍 alwaysApply 作为底线。
+
+## 角色怎么用（单窗口 / 按任务切换）
 
 | 你要做的事 | 主角色 | 先读 |
 |------------|--------|------|
@@ -16,7 +30,7 @@
 | 部署/配置/CI | DevOps | `docs/devops/`、`deploy/` |
 | 自检 / 审 diff | Reviewer | `.cursor/rules/git-and-review.mdc` |
 
-新功能默认链路：Product →（可选 UX）→ Architect → Backend/Frontend。
+新功能默认链路：Product →（可选 UX）→ Architect → Backend/Frontend。多窗口时映射为 PM 拆单 → DEV → QA（→ OPS）。
 
 ## 工作流程（默认）
 
@@ -29,6 +43,10 @@
 |------|----------|
 | `agent-roles-workflow.mdc` | 始终 |
 | `git-and-review.mdc` | 始终 |
+| `agent-team-pm.mdc` | 多窗口 PM 席手动启用 |
+| `agent-team-dev.mdc` | 多窗口 DEV 席手动启用 |
+| `agent-team-qa.mdc` | 多窗口 QA 席手动启用 |
+| `agent-team-ops.mdc` | 多窗口 OPS 席手动启用 |
 | `coding-java.mdc` | `backend/**/*.java` |
 | `coding-frontend.mdc` | `frontend/**/*.{ts,tsx}` |
 | `coding-python.mdc` | `agent/**/*.py` |
@@ -47,6 +65,7 @@
 ## 关键路径
 
 - 文档中心：`docs/README.md`
+- 多窗口 Agent 团队：`docs/agents/README.md`
 - AI 融合 / 调度基座：`docs/ai-fusion/coordinator-worker/`
 - 智能体运营控制台：`docs/ai-fusion/agent-ops-console/`
 - 代码阅读：`docs/CODE-READING-GUIDE.md`

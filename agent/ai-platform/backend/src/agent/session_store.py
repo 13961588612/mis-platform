@@ -161,6 +161,8 @@ class SessionListQuery:
     time_from: datetime | None = None
     time_to: datetime | None = None
     include_deleted: bool = False
+    """默认隐藏无消息空会话（历史 ensure 落库的「未命名」噪音）。"""
+    min_message_count: int = 1
 
     def offset(self) -> int:
         """返回 SQL OFFSET 值。"""
@@ -1032,6 +1034,10 @@ class SessionPgStore:
                 AgentSessionModel.title.ilike(pattern)
                 | AgentSessionModel.session_id.ilike(pattern)
                 | AgentSessionModel.user_id.ilike(pattern)
+            )
+        if query.min_message_count > 0:
+            conditions.append(
+                AgentSessionModel.message_count >= query.min_message_count
             )
         return conditions
 

@@ -15,7 +15,7 @@
 import { useCallback, useEffect, useRef } from 'react';
 import { useAuthStore } from '@/stores/auth-store';
 import { useChatStore } from '@/stores/chat-store';
-import { useSurfaceStore } from '@/lib/a2ui/surface-store';
+import { useSurfaceStore, scopeSurfaceToMessage } from '@/lib/a2ui/surface-store';
 import { subscribeChatStream, type ChatSseController } from './sse-client';
 import { ChatWsClient } from './ws-client';
 import { processA2uiMessage } from '@/lib/a2ui/MessageProcessor';
@@ -51,6 +51,86 @@ export const MESSAGE_TYPE_A2UI_CHAT = 'a2ui_chat';
 /** 旧文本通道消息类型（Gateway 走 MessageRouter 旧协议）。 */
 export const MESSAGE_TYPE_TEXT = 'text';
 
+/** 历史/流式 content 规约为可渲染字符串（避免对象子节点导致整行崩溃）。 */
+function coerceChatContent(raw: unknown): string {
+  if (raw == null) return '';
+  if (typeof raw === 'string') return raw;
+  if (typeof raw === 'number' || typeof raw === 'boolean') return String(raw);
+  if (Array.isArray(raw)) {
+    return raw
+      .map((part) => {
+        if (typeof part === 'string') return part;
+        if (part && typeof part === 'object' && 'text' in part) {
+          const text = (part as { text?: unknown }).text;
+          return typeof text === 'string' ? text : '';
+        }
+        return '';
+      })
+      .filter(Boolean)
+      .join('\n');
+  }
+  if (typeof raw === 'object' && raw !== null && 'text' in raw) {
+    const text = (raw as { text?: unknown }).text;
+    return typeof text === 'string' ? text : coerceChatContent(text);
+  }
+  try {
+    return JSON.stringify(raw);
+  } catch {
+    return '';
+  }
+}
+
+/** 历史 role 归一化（容错大小写 / 空值）。 */
+function normalizeChatRole(raw: unknown): ChatMessage['role'] {
+  const role = String(raw ?? '')
+    .trim()
+    .toLowerCase();
+  if (role === 'user' || role === 'assistant' || role === 'system' || role === 'tool') {
+    return role;
+  }
+  return 'assistant';
+}
+
+/** 助手气泡是否已有可展示内容（正文 / surface / 旧协议卡片）。 */
+function hasVisibleAssistantPayload(msg: ChatMessage | undefined): boolean {
+  if (!msg) return false;
+  if (msg.content.trim().length > 0) return true;
+  if (msg.surfaceId) return true;
+  if (msg.a2ui) return true;
+  return false;
+}
+
+/**
+ * 将增量挂到「当前流式锚点」或最近一条助手消息，避免 done 后晚到帧再开新气泡。
+ * @returns 目标消息 id
+ */
+function resolveAssistantTargetId(
+  store: ReturnType<typeof useChatStore.getState>,
+  streamingIdRef: { current: string | null },
+  sid: string,
+): string {
+  const streamingId = streamingIdRef.current;
+  if (streamingId && store.messages.some((m) => m.id === streamingId)) {
+    return streamingId;
+  }
+  const lastAssistant = [...store.messages].reverse().find((m) => m.role === 'assistant');
+  if (lastAssistant) {
+    streamingIdRef.current = lastAssistant.id;
+    return lastAssistant.id;
+  }
+  const id = generateClientId('msg');
+  store.addMessage({
+    id,
+    sessionId: sid,
+    role: 'assistant',
+    content: '',
+    status: 'streaming',
+    timestamp: new Date().toISOString(),
+  });
+  streamingIdRef.current = id;
+  return id;
+}
+
 export interface UseChatOptions {
   agentId?: string;
   /** 自动建立连接（默认 true；embed 场景由外部控制）。 */
@@ -83,8 +163,17 @@ export function useChat(options?: UseChatOptions): UseChatReturn {
   const wsRef = useRef<ChatWsClient | null>(null);
   const streamingMessageIdRef = useRef<string | null>(null);
   const generateTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** 同步发送锁：防止 Enter 连击在 isGenerating 置位前重复提交。 */
+  const sendLockRef = useRef(false);
+  /** 历史拉取世代号：切换会话时递增，丢弃过期响应。 */
+  const historyLoadGenRef = useRef(0);
+  /** 上一轮已发出的用户原文（用于短时内同文防重）。 */
+  const lastSentTextRef = useRef<{ text: string; at: number } | null>(null);
   const sessionIdRef = useRef<string | null>(sessionId);
   const tokenRef = useRef<string | null>(token);
+  const handleEventRef = useRef<(event: ChatStreamEvent) => void>(() => undefined);
+  /** loadHistory 晚于 handleEvent 定义；经 ref 供 done/超时回填。 */
+  const loadHistoryRef = useRef<() => Promise<void>>(async () => undefined);
   sessionIdRef.current = sessionId;
   tokenRef.current = token;
 
@@ -96,24 +185,80 @@ export function useChat(options?: UseChatOptions): UseChatReturn {
     }
   }, []);
 
+  /**
+   * 将仍 streaming 的助手气泡收为 delivered，并钉住 surface（若有）。
+   */
+  const finalizeStreamingAssistant = useCallback(
+    (
+      streamingId: string | null,
+      streamingMsg: ChatMessage | undefined,
+      anchors?: { messageId?: string; sessionId?: string },
+    ): void => {
+      const store = useChatStore.getState();
+      if (!streamingId) return;
+      const updates: Partial<ChatMessage> = { status: 'delivered' };
+      if (anchors?.messageId) updates.backendMessageId = anchors.messageId;
+      if (anchors?.sessionId) updates.backendSessionId = anchors.sessionId;
+      if (streamingMsg?.surfaceId) {
+        updates.surfaceId = scopeSurfaceToMessage(streamingMsg.surfaceId, streamingId);
+        useSurfaceStore.getState().setActive(null);
+      }
+      store.updateMessage(streamingId, updates);
+      for (const m of store.messages) {
+        if (m.role === 'assistant' && m.status === 'streaming' && m.id !== streamingId) {
+          store.updateMessageStatus(m.id, 'delivered');
+        }
+      }
+    },
+    [],
+  );
+
   /** 启动/重置生成安全超时（收不到 done/error 时强制解锁输入）。 */
   const armGenerateTimeout = useCallback((): void => {
     clearGenerateTimeout();
     generateTimeoutRef.current = setTimeout(() => {
-      generateTimeoutRef.current = null;
-      const store = useChatStore.getState();
-      if (!store.isGenerating) return;
-      const streamingId = streamingMessageIdRef.current;
-      if (streamingId) {
-        store.updateMessageStatus(streamingId, 'error');
+      void (async () => {
+        generateTimeoutRef.current = null;
+        const store = useChatStore.getState();
+        if (!store.isGenerating) return;
+        const streamingId = streamingMessageIdRef.current;
+        const streamingMsg = streamingId
+          ? store.messages.find((m) => m.id === streamingId)
+          : undefined;
+
+        // 正文/surface 已到但 done 丢失：按成功收尾，避免「有回复却显示失败」。
+        if (hasVisibleAssistantPayload(streamingMsg)) {
+          finalizeStreamingAssistant(streamingId, streamingMsg);
+          streamingMessageIdRef.current = null;
+          store.setGenerating(false);
+          store.setError(null);
+          sendLockRef.current = false;
+          return;
+        }
+
+        // SSE 可能丢了全文 + done，后端却已落库：先解锁再回拉历史。
         streamingMessageIdRef.current = null;
-      }
-      store.setGenerating(false);
-      store.setError(
-        `等待回复超时（${Math.round(GENERATE_SAFETY_TIMEOUT_MS / 1000)}s）。可重新发送，或检查 Agent 网关 / SSE 连接。`,
-      );
+        store.setGenerating(false);
+        sendLockRef.current = false;
+        await loadHistoryRef.current();
+        const after = useChatStore.getState();
+        const lastAssistant = [...after.messages]
+          .reverse()
+          .find((m) => m.role === 'assistant');
+        if (hasVisibleAssistantPayload(lastAssistant)) {
+          after.setError(null);
+          return;
+        }
+
+        if (streamingId && after.messages.some((m) => m.id === streamingId)) {
+          after.updateMessageStatus(streamingId, 'error');
+        }
+        after.setError(
+          `等待回复超时（${Math.round(GENERATE_SAFETY_TIMEOUT_MS / 1000)}s）。可重新发送，或检查 Agent 网关 / SSE 连接。`,
+        );
+      })();
     }, GENERATE_SAFETY_TIMEOUT_MS);
-  }, [clearGenerateTimeout]);
+  }, [clearGenerateTimeout, finalizeStreamingAssistant]);
 
   // ------------------------------------------------------------------ 事件处理
 
@@ -125,52 +270,28 @@ export function useChat(options?: UseChatOptions): UseChatReturn {
     switch (event.type) {
       case 'stream': {
         const delta = event.content ?? '';
-        const streamingId = streamingMessageIdRef.current;
-        if (streamingId) {
-          const existing = store.messages.find((m) => m.id === streamingId);
-          if (existing) {
-            store.updateMessage(streamingId, {
-              content: existing.content + delta,
-              status: 'streaming',
-            });
-          }
-        } else {
-          // 没有占位消息时补一条（部分 Gateway 实现不先发 done 前的占位）
-          const id = generateClientId('msg');
-          store.addMessage({
-            id,
-            sessionId: sid,
-            role: 'assistant',
-            content: delta,
-            status: 'streaming',
-            timestamp: new Date().toISOString(),
-          });
-          streamingMessageIdRef.current = id;
-        }
+        if (!delta) break;
+        // 文本增量到达：恢复 generating，保证「正在思考/流式」态与气泡联动
+        if (!store.isGenerating) store.setGenerating(true);
+        armGenerateTimeout();
+        const targetId = resolveAssistantTargetId(store, streamingMessageIdRef, sid);
+        const existing = store.messages.find((m) => m.id === targetId);
+        store.updateMessage(targetId, {
+          content: (existing?.content ?? '') + delta,
+          status: 'streaming',
+        });
         break;
       }
 
       case 'a2ui_surface': {
-        // 写入 SurfaceStore，并把 surfaceId 挂到当前 assistant 气泡，否则
-        // ChatBubble 不会渲染 SurfaceRenderer（表面「有回包、界面空白」）。
+        // 写入 SurfaceStore，并把 surfaceId 挂到当前 assistant 气泡。
+        // 不在此处解锁输入：正文常在 surface 之后以 stream 继续到达。
+        if (!store.isGenerating) store.setGenerating(true);
+        armGenerateTimeout();
         const surfaceId = processA2uiMessage(event) ?? event.surfaceId;
         if (surfaceId) {
-          const streamingId = streamingMessageIdRef.current;
-          if (streamingId) {
-            store.updateMessage(streamingId, { surfaceId });
-          } else {
-            const id = generateClientId('msg');
-            store.addMessage({
-              id,
-              sessionId: sid,
-              role: 'assistant',
-              content: '',
-              status: 'streaming',
-              timestamp: new Date().toISOString(),
-              surfaceId,
-            });
-            streamingMessageIdRef.current = id;
-          }
+          const targetId = resolveAssistantTargetId(store, streamingMessageIdRef, sid);
+          store.updateMessage(targetId, { surfaceId, status: 'streaming' });
         }
         break;
       }
@@ -182,19 +303,37 @@ export function useChat(options?: UseChatOptions): UseChatReturn {
       }
 
       case 'done': {
-        clearGenerateTimeout();
         const streamingId = streamingMessageIdRef.current;
-        if (streamingId) {
-          const updates: Partial<ChatMessage> = { status: 'delivered' };
-          // 评价锚点（feedback-enhance §2.2 方案 C）：done 帧携带的后端消息 UUID / 平台会话
-          // UUID 写入当前 assistant 消息；缺失时保持 undefined（评价按钮降级禁用，不报错）。
-          if (event.messageId) updates.backendMessageId = event.messageId;
-          if (event.sessionId) updates.backendSessionId = event.sessionId;
-          store.updateMessage(streamingId, updates);
-          streamingMessageIdRef.current = null;
+        const streamingMsg = streamingId
+          ? store.messages.find((m) => m.id === streamingId)
+          : undefined;
+        const visible = hasVisibleAssistantPayload(streamingMsg);
+        // 空 done 且无落库锚点：多为中间态误发或正文尚未到达，继续等。
+        // 若带 messageId，说明 Backend 已落库——常见于 SSE 丢了 text.delta，
+        // 不可再忽略，否则会一直等到安全超时并误报「回复失败」。
+        if (streamingId && streamingMsg && !visible && !event.messageId) {
+          armGenerateTimeout();
+          break;
         }
+        const needHistoryReconcile = Boolean(
+          streamingId && streamingMsg && !visible && event.messageId,
+        );
+        clearGenerateTimeout();
+        finalizeStreamingAssistant(streamingId, streamingMsg, {
+          messageId: event.messageId,
+          sessionId: event.sessionId,
+        });
+        streamingMessageIdRef.current = null;
         if (event.tokenUsage) store.addTokenUsage(event.tokenUsage);
         store.setGenerating(false);
+        sendLockRef.current = false;
+        // 答完后刷新同文防重时钟：避免刚出结果又误触同一句再发一遍
+        if (lastSentTextRef.current) {
+          lastSentTextRef.current = { ...lastSentTextRef.current, at: Date.now() };
+        }
+        if (needHistoryReconcile) {
+          void loadHistoryRef.current();
+        }
         break;
       }
 
@@ -207,22 +346,22 @@ export function useChat(options?: UseChatOptions): UseChatReturn {
         }
         store.setError(`错误 [${event.errorCode ?? 'unknown'}]: ${event.message}`);
         store.setGenerating(false);
+        sendLockRef.current = false;
         break;
       }
 
       // ---- 旧协议兼容 ----
       case 'text.delta': {
         const delta = event.content ?? '';
-        const streamingId = streamingMessageIdRef.current;
-        if (streamingId) {
-          const existing = store.messages.find((m) => m.id === streamingId);
-          if (existing) {
-            store.updateMessage(streamingId, {
-              content: existing.content + delta,
-              status: 'streaming',
-            });
-          }
-        }
+        if (!delta) break;
+        if (!store.isGenerating) store.setGenerating(true);
+        armGenerateTimeout();
+        const targetId = resolveAssistantTargetId(store, streamingMessageIdRef, sid);
+        const existing = store.messages.find((m) => m.id === targetId);
+        store.updateMessage(targetId, {
+          content: (existing?.content ?? '') + delta,
+          status: 'streaming',
+        });
         break;
       }
 
@@ -312,43 +451,17 @@ export function useChat(options?: UseChatOptions): UseChatReturn {
       default:
         break;
     }
-  }, [clearGenerateTimeout]);
+  }, [clearGenerateTimeout, armGenerateTimeout, finalizeStreamingAssistant]);
+
+  handleEventRef.current = handleEvent;
+
+  // 切换会话时重置流锚点与安全超时（连接 effect 不再清这些，避免误重连丢锚）
+  useEffect(() => {
+    streamingMessageIdRef.current = null;
+    clearGenerateTimeout();
+  }, [sessionId, clearGenerateTimeout]);
 
   // ------------------------------------------------------------------ 会话
-
-  /**
-   * 确保存在会话 id（本地生成 + 持久化；Gateway 接受客户端 sessionId）。
-   *
-   * @param preferredSessionId 传入时直接复用该会话（"切换会话"场景）；
-   *                           不传则优先复用 localStorage 记忆，否则生成本地新会话。
-   */
-  const ensureSession = useCallback(async (preferredSessionId?: string): Promise<string> => {
-    const existing = useChatStore.getState().sessionId;
-    if (existing) return existing;
-
-    useChatStore.getState().setSessionState('creating');
-    let sid: string | null = null;
-    if (preferredSessionId) {
-      sid = preferredSessionId;
-    } else {
-      try {
-        sid = localStorage.getItem(LAST_SESSION_KEY);
-      } catch {
-        sid = null;
-      }
-      if (!sid) {
-        sid = generateClientId('web');
-      }
-    }
-    useChatStore.getState().setSessionId(sid);
-    useChatStore.getState().setAgentId(agentIdOption || null);
-    useChatStore.getState().setSessionState('ready');
-    // 记忆最近会话，便于下次打开续接（切换会话时也及时落盘）
-    persistSession(sid);
-    // P0-2：会话建立即拉取历史（先发过消息才落库，未落库 404 降级空会话不阻塞）
-    void loadHistory();
-    return sid;
-  }, [agentIdOption]);
 
   /** 保存最近会话（供下次打开续接）。 */
   const persistSession = useCallback((sid: string | null): void => {
@@ -371,14 +484,25 @@ export function useChat(options?: UseChatOptions): UseChatReturn {
    * @return 可直入 chat-store 的 ChatMessage
    */
   const mapSessionMessage = useCallback((raw: SessionMessage): ChatMessage => {
+    const rawRecord = raw as SessionMessage & {
+      sessionId?: string;
+      text?: unknown;
+      created_at?: string;
+    };
     const metadata = raw.metadata ?? {};
+    const role = normalizeChatRole(raw.role);
+    const id = String(raw.id || generateClientId('hist'));
+    const sessionId = String(raw.session_id || rawRecord.sessionId || '');
     const msg: ChatMessage = {
-      id: raw.id,
-      sessionId: raw.session_id,
-      role: raw.role,
-      content: raw.content ?? '',
+      id,
+      sessionId,
+      role,
+      content: coerceChatContent(raw.content ?? rawRecord.text),
       status: 'delivered',
-      timestamp: raw.timestamp,
+      timestamp: String(raw.timestamp || rawRecord.created_at || ''),
+      // 历史回放：消息主键即后端 UUID，供评价锚点（否则切会话后评价条失效）
+      backendMessageId: role === 'assistant' ? id : undefined,
+      backendSessionId: sessionId || undefined,
     };
     const attachments = metadata.attachments;
     if (Array.isArray(attachments) && attachments.length > 0) {
@@ -391,6 +515,17 @@ export function useChat(options?: UseChatOptions): UseChatReturn {
         status: 'done' as const,
       }));
     }
+    const fb = metadata.feedback;
+    if (fb && typeof fb === 'object' && !Array.isArray(fb)) {
+      const rating = (fb as { rating?: unknown }).rating;
+      if (rating === 'up' || rating === 'down') {
+        const comment = (fb as { comment?: unknown }).comment;
+        msg.feedback = {
+          rating,
+          comment: typeof comment === 'string' ? comment : null,
+        };
+      }
+    }
     return msg;
   }, []);
 
@@ -398,39 +533,126 @@ export function useChat(options?: UseChatOptions): UseChatReturn {
    * P0-2 拉取历史并渲染（复用 #29 `GET /api/v1/agent-ops/sessions/{id}/messages`）。
    *
    * <p>三态：loading → loaded（setMessages 渲染） / error（404 / 失败降级空会话不阻塞）。
-   * 仅当本地尚无消息（首进会话）时填充，避免重复进入覆盖在聊消息。
+   * await 返回后校验发起时的 sid 仍为当前会话，否则丢弃结果（防新建/切换串会话）。
    */
   const loadHistory = useCallback(async (): Promise<void> => {
-    const sid = sessionIdRef.current;
-    if (!sid) return;
+    const requestedSid = sessionIdRef.current ?? useChatStore.getState().sessionId;
+    if (!requestedSid) return;
     const store = useChatStore.getState();
-    if (store.historyState === 'loading') return;
+    // 用世代号打断旧请求：切换会话时不得被「loading 中」挡住新拉取
+    const reqGen = (historyLoadGenRef.current += 1);
     store.setHistoryState('loading');
+    const isStale = (): boolean =>
+      reqGen !== historyLoadGenRef.current ||
+      (sessionIdRef.current ?? useChatStore.getState().sessionId) !== requestedSid;
     try {
-      const res = await fetch(`/api/v1/agent-ops/sessions/${encodeURIComponent(sid)}/messages?page=1&page_size=200`, {
-        headers: {
-          Authorization: tokenRef.current ? `Bearer ${tokenRef.current}` : '',
+      const res = await fetch(
+        `/api/v1/agent-ops/sessions/${encodeURIComponent(requestedSid)}/messages?page=1&page_size=200`,
+        {
+          headers: {
+            Authorization: tokenRef.current ? `Bearer ${tokenRef.current}` : '',
+          },
         },
-      });
+      );
+      if (isStale()) return;
       if (!res.ok) {
         // 404（sid 未落库）或任何失败 → 降级空会话，不抛错阻塞主流程
         store.setHistoryState('error');
         return;
       }
-      const payload = (await res.json()) as { code: number; data?: SessionMessage[] };
-      if (payload.code !== 0 || !Array.isArray(payload.data)) {
+      const payload = (await res.json()) as {
+        code: number;
+        data?: SessionMessage[] | { items?: SessionMessage[] };
+      };
+      if (isStale()) return;
+      const rawList: SessionMessage[] | undefined = Array.isArray(payload.data)
+        ? payload.data
+        : Array.isArray(payload.data?.items)
+          ? payload.data.items
+          : undefined;
+      if (payload.code !== 0 || !rawList) {
         store.setHistoryState('error');
         return;
       }
-      const history = payload.data.map(mapSessionMessage);
-      if (history.length > 0) {
-        store.setMessages(history);
+      const history = rawList.map(mapSessionMessage);
+      if (isStale()) return;
+      // 生成中勿回填：否则会冲掉进行中的空助手气泡并表现为「忽然结束」。
+      if (useChatStore.getState().isGenerating || streamingMessageIdRef.current) {
+        store.setHistoryState('loaded');
+        return;
       }
+      store.setMessages(history);
       store.setHistoryState('loaded');
     } catch {
+      if (isStale()) return;
       store.setHistoryState('error');
     }
   }, [mapSessionMessage]);
+
+  loadHistoryRef.current = loadHistory;
+
+  /**
+   * 确保存在会话 id（本地生成 + 持久化；Gateway 接受客户端 sessionId）。
+   *
+   * @param preferredSessionId 传入时直接复用该会话（"切换会话"场景）；
+   *                           不传则优先复用 localStorage 记忆，否则生成本地新会话。
+   * @param options.forceNew 为 true 时忽略已有 session / localStorage，强制生成新 sid（「新建会话」）。
+   */
+  const ensureSession = useCallback(async (
+    preferredSessionId?: string,
+    options?: { forceNew?: boolean },
+  ): Promise<string> => {
+    const forceNew = options?.forceNew === true;
+    const existing = useChatStore.getState().sessionId;
+
+    // 已在目标会话：若消息为空则补拉历史（避免「切过去但列表空白」）
+    if (!forceNew && existing && (!preferredSessionId || preferredSessionId === existing)) {
+      const st = useChatStore.getState();
+      if (st.messages.length === 0 && st.historyState !== 'loading') {
+        void loadHistory();
+      }
+      return existing;
+    }
+
+    useChatStore.getState().setSessionState('creating');
+    let sid: string | null = null;
+    if (forceNew) {
+      sid = generateClientId('web');
+    } else if (preferredSessionId) {
+      sid = preferredSessionId;
+    } else {
+      try {
+        sid = localStorage.getItem(LAST_SESSION_KEY);
+      } catch {
+        sid = null;
+      }
+      if (!sid) {
+        sid = generateClientId('web');
+      }
+    }
+
+    // 切到其它会话时清掉旧消息 / surface，避免串会话残影
+    if (existing && sid && existing !== sid) {
+      useChatStore.getState().clearMessages();
+      useSurfaceStore.getState().clear();
+    }
+
+    // 同 tick 内同步 ref，避免尚未 re-render 时 loadHistory / send 仍读到旧 sid
+    sessionIdRef.current = sid;
+    useChatStore.getState().setSessionId(sid);
+    useChatStore.getState().setAgentId(agentIdOption || null);
+    useChatStore.getState().setSessionState('ready');
+    // 记忆最近会话，便于下次打开续接（切换会话时也及时落盘）
+    persistSession(sid);
+    if (forceNew) {
+      // 新建空会话：不拉历史，保持消息区为空直至用户发言
+      useChatStore.getState().setHistoryState('idle');
+    } else {
+      // P0-2：续接/切换会话时拉取历史（未落库 404 降级空会话不阻塞）
+      void loadHistory();
+    }
+    return sid;
+  }, [agentIdOption, loadHistory, persistSession]);
 
   // ------------------------------------------------------------------ 发送
 
@@ -443,6 +665,53 @@ export function useChat(options?: UseChatOptions): UseChatReturn {
     return ws.send(message);
   }, []);
 
+  /**
+   * 切换到指定会话（会话列表点击）。
+   *
+   * <p>不经 sessionId=null 中间态（避免 SSE/WS 抖动与历史拉取竞态）；
+   * 清消息 / surface 后强制 loadHistory。同 sid 再点也会重拉。
+   */
+  const switchSession = useCallback(
+    async (nextSessionId: string): Promise<void> => {
+      const nextSid = nextSessionId.trim();
+      if (!nextSid) return;
+
+      const prevSid = sessionIdRef.current;
+      if (prevSid && prevSid !== nextSid) {
+        // 尽力通知 Gateway 关闭旧会话；失败不阻断切换
+        try {
+          sendInbound({
+            type: 'session.close',
+            sessionId: prevSid,
+            timestamp: new Date().toISOString(),
+          });
+        } catch {
+          /* ignore */
+        }
+      }
+
+      clearGenerateTimeout();
+      streamingMessageIdRef.current = null;
+      sendLockRef.current = false;
+      historyLoadGenRef.current += 1;
+
+      useChatStore.getState().clearMessages();
+      useSurfaceStore.getState().clear();
+      useChatStore.getState().setError(null);
+      useChatStore.getState().setDispatchTrace([]);
+      useChatStore.getState().setHistoryState('idle');
+
+      sessionIdRef.current = nextSid;
+      useChatStore.getState().setSessionId(nextSid);
+      useChatStore.getState().setAgentId(agentIdOption || null);
+      useChatStore.getState().setSessionState('ready');
+      persistSession(nextSid);
+
+      await loadHistory();
+    },
+    [agentIdOption, clearGenerateTimeout, loadHistory, persistSession, sendInbound],
+  );
+
   const sendMessage = useCallback(
     (content: string, attachments?: Attachment[]): void => {
       const text = content.trim();
@@ -450,6 +719,14 @@ export function useChat(options?: UseChatOptions): UseChatReturn {
       const sid = sessionIdRef.current;
       if (!sid) return;
       const store = useChatStore.getState();
+
+      // 同步防重：生成中 / 锁未释放 / 短时内同文（含刚答完又误触同题）
+      if (store.isGenerating || sendLockRef.current) return;
+      const now = Date.now();
+      const last = lastSentTextRef.current;
+      if (last && last.text === text && now - last.at < 5_000) return;
+      sendLockRef.current = true;
+      lastSentTextRef.current = { text, at: now };
 
       // 附件已在 UI 层「先传后引」完成（uploadAttachment 拿回 fileId/url），
       // 此处仅做本地渲染 + 随文本放入 metadata.attachments 上行。
@@ -514,6 +791,7 @@ export function useChat(options?: UseChatOptions): UseChatReturn {
         store.updateMessageStatus(assistantId, 'error');
         clearGenerateTimeout();
         store.setGenerating(false);
+        sendLockRef.current = false;
       }
     },
     [sendInbound, userId, a2uiEnabled, armGenerateTimeout, clearGenerateTimeout],
@@ -578,11 +856,11 @@ export function useChat(options?: UseChatOptions): UseChatReturn {
     const activeToken = tokenRef.current;
     if (!autoConnect || !activeSid || !activeToken) return undefined;
 
-    // SSE 接收
+    // SSE 接收（经 ref 转发，避免 handleEvent 身份变化导致重连丢流）
     const sse = subscribeChatStream({
       sessionId: activeSid,
       token: activeToken,
-      onEvent: handleEvent,
+      onEvent: (event) => handleEventRef.current(event),
       onStateChange: (state) => {
         useChatStore.getState().setConnectionState(state === 'closed' ? 'idle' : state);
       },
@@ -604,30 +882,36 @@ export function useChat(options?: UseChatOptions): UseChatReturn {
     wsRef.current = ws;
 
     return () => {
-      clearGenerateTimeout();
+      // 仅拆连接；保留 streamingMessageId / 超时，避免重连瞬间「丢锚」空气泡
       sse.abort();
       ws.close();
       sseRef.current = null;
       wsRef.current = null;
-      streamingMessageIdRef.current = null;
     };
-  }, [autoConnect, sessionId, token, handleEvent, clearGenerateTimeout]);
+  }, [autoConnect, sessionId, token]);
 
   const closeSession = useCallback((): void => {
     const sid = sessionIdRef.current;
     if (sid) {
       sendInbound({ type: 'session.close', sessionId: sid, timestamp: new Date().toISOString() });
     }
+    clearGenerateTimeout();
+    streamingMessageIdRef.current = null;
+    historyLoadGenRef.current += 1;
     persistSession(null);
     useChatStore.getState().clearMessages();
+    // 同 tick 同步 ref，避免后续 ensureSession/loadHistory 仍读旧 sid
+    sessionIdRef.current = null;
     useChatStore.getState().setSessionId(null);
     useChatStore.getState().setSessionState('none');
+    // 重置历史态，避免 in-flight loadHistory 的 loading 挡住新会话拉取，或晚到回填污染
+    useChatStore.getState().setHistoryState('idle');
     useChatStore.getState().setError(null);
     // QA 建议 2：关闭会话时清空 A2UI Surface，避免旧卡片残留
     useSurfaceStore.getState().clear();
     // surface 清理
     useChatStore.getState().setDispatchTrace([]);
-  }, [sendInbound, persistSession]);
+  }, [sendInbound, persistSession, clearGenerateTimeout]);
 
   const reconnect = useCallback((): void => {
     const sid = sessionIdRef.current;
@@ -639,7 +923,7 @@ export function useChat(options?: UseChatOptions): UseChatReturn {
     const sse = subscribeChatStream({
       sessionId: sid,
       token: activeToken,
-      onEvent: handleEvent,
+      onEvent: (event) => handleEventRef.current(event),
       onStateChange: (state) => {
         useChatStore.getState().setConnectionState(state === 'closed' ? 'idle' : state);
       },
@@ -657,7 +941,7 @@ export function useChat(options?: UseChatOptions): UseChatReturn {
     });
     ws.connect();
     wsRef.current = ws;
-  }, [handleEvent]);
+  }, []);
 
   return {
     sessionId,
@@ -673,6 +957,7 @@ export function useChat(options?: UseChatOptions): UseChatReturn {
     dispatchA2uiAction,
     ensureSession,
     loadHistory,
+    switchSession,
     closeSession,
     reconnect,
   };

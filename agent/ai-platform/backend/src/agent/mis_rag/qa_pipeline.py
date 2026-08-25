@@ -383,6 +383,44 @@ def extract_kb_sources_fence(text: str) -> str:
     return match.group(0) if match else ""
 
 
+def kb_sources_text_has_chunk(text: str) -> bool:
+    """正文里是否已有带非空 ``chunk`` / ``chunkText`` 的 kb-sources 条目。
+
+    Coordinator 常先写出瘦身围栏（仅 source/score），导致 pending 权威围栏被
+    「已有 kb-sources」短路跳过，前端展开就落到「（无片段原文）」。
+    """
+    if not text:
+        return False
+    for match in re.finditer(
+        r"```\s*kb-sources\b[^\n]*\r?\n([\s\S]*?)(?:\r?\n)?[ \t]*```",
+        text,
+        flags=re.IGNORECASE,
+    ):
+        raw = (match.group(1) or "").strip()
+        if not raw:
+            continue
+        try:
+            parsed: Any = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(parsed, list):
+            continue
+        for row in parsed:
+            if not isinstance(row, dict):
+                continue
+            chunk = row.get("chunk") or row.get("chunkText") or row.get("chunk_text")
+            if isinstance(chunk, str) and chunk.strip():
+                return True
+    return False
+
+
+def should_append_pending_kb_sources_fence(assembled: str, pending_fence: str | None) -> bool:
+    """是否应把 pending 权威围栏追加到已组装正文（前端以最后一次围栏为准）。"""
+    if not pending_fence or not str(pending_fence).strip():
+        return False
+    return not kb_sources_text_has_chunk(assembled or "")
+
+
 PENDING_KB_SOURCES_FENCE_KEY = "pending_kb_sources_fence"
 
 

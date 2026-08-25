@@ -19,6 +19,7 @@ import { markdownComponents } from "./markdownComponents";
 import { useChatStore } from "../store/chatStore";
 import { A2uiRenderer } from "./a2ui/A2uiRenderer";
 import { AssistantAvatar } from "./AssistantAvatar";
+import { UserAvatar } from "./UserAvatar";
 import { ToolCallTrace, groupMessagesForDisplay } from "./ToolCallTrace";
 import { MessageFeedbackBar } from "./MessageFeedbackBar";
 import { KbSourceDisclosure } from "./KbSourceDisclosure";
@@ -27,6 +28,7 @@ import { getAuthedFileUrl } from "../utils/api";
 import { formatTime } from "../utils/format";
 import { normalizeMarkdownTables } from "../utils/markdownNormalize";
 import { splitKbSources } from "../utils/kbSources";
+import { useAuthStore } from "../store/authStore";
 import type { ChatAttachment, ChatMessage } from "../types/message";
 
 function MessageAttachments({
@@ -95,10 +97,16 @@ function ThinkingIndicator(): JSX.Element {
 interface MessageBubbleProps {
   message: ChatMessage;
   currentUserId: string;
+  /** 用户展示名（头像首字母）。 */
+  userDisplayName?: string | null;
 }
 
 /** Render a single message bubble based on its role (non-tool). */
-function MessageBubble({ message, currentUserId: _currentUserId }: MessageBubbleProps): JSX.Element {
+function MessageBubble({
+  message,
+  currentUserId: _currentUserId,
+  userDisplayName,
+}: MessageBubbleProps): JSX.Element {
   const isUser = message.role === "user";
   const isSystem = message.role === "system";
 
@@ -132,7 +140,7 @@ function MessageBubble({ message, currentUserId: _currentUserId }: MessageBubble
       message.content !== "（附件）" &&
       !(message.attachments?.length && message.content.startsWith("（用户发送了附件）"));
     return (
-      <div className="flex justify-end py-2">
+      <div className="flex items-start justify-end gap-3 py-2">
         <div className="max-w-[75%] rounded-2xl bg-primary-600 px-4 py-2.5 text-sm text-white">
           {showText ? (
             <p className="whitespace-pre-wrap">{message.content}</p>
@@ -144,6 +152,7 @@ function MessageBubble({ message, currentUserId: _currentUserId }: MessageBubble
             {formatTime(message.timestamp)}
           </div>
         </div>
+        <UserAvatar name={userDisplayName} />
       </div>
     );
   }
@@ -214,6 +223,7 @@ interface MessageListProps {
 export function MessageList({ messages, currentUserId }: MessageListProps): JSX.Element {
   const scrollRef = useRef<HTMLDivElement>(null);
   const pendingApprovals = useChatStore((state) => state.pendingApprovals);
+  const username = useAuthStore((s) => s.user?.username ?? null);
 
   // Auto-scroll to bottom on new messages
   useEffect(() => {
@@ -268,7 +278,11 @@ export function MessageList({ messages, currentUserId }: MessageListProps): JSX.
         const message = item.message;
         return (
           <div key={message.id}>
-            <MessageBubble message={message} currentUserId={currentUserId} />
+            <MessageBubble
+              message={message}
+              currentUserId={currentUserId}
+              userDisplayName={username}
+            />
             {message.requiresApproval && message.approvalId && (
               <ApprovalCard
                 approvalId={message.approvalId}

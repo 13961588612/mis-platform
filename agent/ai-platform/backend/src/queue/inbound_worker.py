@@ -59,13 +59,36 @@ class _RerouteToOwner(Exception):
 _worker: InboundStreamWorker | None = None
 
 
+#: Gateway MIS JWT（RS256）验签后写入的渠道：``userId`` = JWT ``sub`` = 真 MIS userId。
+#: 见 gateway ``verifyJwtRs256``（``sub → userId``）；**不是** employeeId。
+_MIS_JWT_INBOUND_CHANNELS: frozenset[str] = frozenset(
+    {"h5", "web", "api", "mis_bff"}
+)
+
+
+def _coerce_positive_int(value: Any) -> int | None:
+    """把候选值规约为正整数；非法 / 非正 → ``None``（fail-closed）。"""
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        parsed = int(str(value).strip())
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed > 0 else None
+
+
 async def _resolve_inbound_mis_user_id(
     inbound: InboundStreamMessage,
 ) -> int | None:
-    """解析入站消息对应的 MIS userId（T03 S9 · 企微渠道档 2）。
+    """解析入站消息对应的 MIS userId（T03 S9）。
 
-    企微渠道的 ``user_id`` / ``channel_user_id`` 是企微 userid 字符串（F28），
-    需查 ``users.mis_user_id`` 换取 MIS 权限主体。
+    解析优先级：
+
+    1. ``metadata.mis_user_id`` / ``metadata.misUserId``（Gateway 显式透传）
+    2. **H5 / web / api / mis_bff**：Gateway 已把 MIS JWT ``sub`` 写入 ``user_id``，
+       正整数即可直取（**不得**再按企微 userid 查库，否则永远解析失败 → CRM 全拒）
+    3. 企微等其它渠道：``user_id`` / ``channel_user_id`` 是企微 userid（F28），
+       查 ``users.mis_user_id``（档 2）
 
     **fail-closed 契约**：未绑定 / DB 不可用 → 返回 ``None``（**不阻断消息处理**，
     但下游 E1–E5 会拒绝执行）。**绝不**把企微 userid 当 MIS userId 回退。
@@ -77,6 +100,19 @@ async def _resolve_inbound_mis_user_id(
         MIS userId 或 ``None``。
     """
     from src.identity.mis_user_id import resolve_mis_user_id_async
+
+    meta: Any = inbound.metadata
+    if isinstance(meta, dict):
+        for key in ("mis_user_id", "misUserId"):
+            direct = _coerce_positive_int(meta.get(key))
+            if direct is not None:
+                return direct
+
+    channel = str(inbound.channel or "").strip().lower()
+    if channel in _MIS_JWT_INBOUND_CHANNELS:
+        from_jwt_sub = _coerce_positive_int(inbound.user_id)
+        if from_jwt_sub is not None:
+            return from_jwt_sub
 
     identity: dict[str, Any] = {
         "user_id": inbound.user_id or "",
@@ -832,10 +868,17 @@ class InboundStreamWorker:
                         if pending_fence is not None:
                             await session_manager.save_session(session)
                         assembled = "".join(response_parts)
-                        if pending_fence and "```kb-sources" not in assembled:
+                        from src.agent.mis_rag.qa_pipeline import (
+                            should_append_pending_kb_sources_fence,
+                        )
+
+                        # 模型瘦身围栏（无 chunk）时仍追加权威 pending；前端取最后一次围栏。
+                        if pending_fence and should_append_pending_kb_sources_fence(
+                            assembled, str(pending_fence)
+                        ):
                             fence_text = (
                                 pending_fence
-                                if pending_fence.startswith("\n")
+                                if str(pending_fence).startswith("\n")
                                 else f"\n\n{pending_fence}"
                             )
                             await producer.publish_agent_event(
@@ -1029,11 +1072,38 @@ class InboundStreamWorker:
             return
 
         redis: aioredis.Redis = await self._get_redis()
+        # 幂等：XAUTOCLAIM 可能在长任务 ACK 前重投同一 a2ui_run。
+        # 用 runId（缺省 metadata.a2ui.runId / trace_id）抢占键；已处理/处理中则跳过并仍由外层 ACK。
+        run_id: str = str(run_agent_input.get("runId") or "").strip()
+        if not run_id and isinstance(metadata, dict):
+            a2ui_meta_for_id: Any = metadata.get("a2ui")
+            if isinstance(a2ui_meta_for_id, dict):
+                run_id = str(a2ui_meta_for_id.get("runId") or "").strip()
+        if not run_id:
+            run_id = str(inbound.trace_id or "").strip()
+        claim_key: str | None = None
+        if run_id:
+            claim_key = f"{self._settings.REDIS_KEY_PREFIX}a2ui:run:{run_id}"
+            timeout_sec_cfg: int = int(self._settings.AGENT_MESSAGE_TIMEOUT)
+            claimed: Any = await redis.set(
+                claim_key,
+                "1",
+                nx=True,
+                ex=timeout_sec_cfg + 120,
+            )
+            if not claimed:
+                logger.info(
+                    "Skip duplicate a2ui_run (already claimed)",
+                    session_id=inbound.session_id,
+                    run_id=run_id,
+                )
+                return
+
         publisher: A2uiOutboundPublisher = A2uiOutboundPublisher(redis)
         loop: A2uiRunLoop = A2uiRunLoop(get_llm_gateway(), publisher)
         # T03 S9：skill/mcp 工具 ACL fail-closed 判权的唯一身份来源。
-        # 与文本渠道会话创建点同一解析链（档 2 查 users.mis_user_id）；解析不出
-        # → None → 工具执行按无身份拒绝（fail-closed），绝不回退 user_id。
+        # H5：Gateway JWT sub → userId / metadata.misUserId；企微：档 2 查库。
+        # 解析不出 → None → 工具执行按无身份拒绝（fail-closed），绝不回退企微 userid。
         mis_user_id: int | None = await _resolve_inbound_mis_user_id(inbound)
         timeout_sec: Any = self._settings.AGENT_MESSAGE_TIMEOUT
         try:
@@ -1069,6 +1139,14 @@ class InboundStreamWorker:
                 "A2UI_RUN_ERROR",
                 str(exc) or "A2UI run failed",
             )
+        finally:
+            # 处理已终结（成功/超时/业务错误）：延长幂等键，避免短窗内重投再跑。
+            # kill -9 中途崩溃时本 finally 不执行，键按短 TTL 过期后可正当重试。
+            if claim_key is not None:
+                try:
+                    await redis.expire(claim_key, 86_400)
+                except Exception:  # noqa: BLE001 - 幂等键续期失败不阻断 ACK
+                    pass
 
     async def _process_formfill_resume(
         self, inbound: InboundStreamMessage, stream_key: str

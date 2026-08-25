@@ -306,9 +306,15 @@ class SessionManager:
     async def _dual_write(self, session: Session) -> None:
         """把会话投影到 PG。失败只降级，不抛异常（热路径保护）。
 
+        无消息的会话不落 PG：WS / ``ensure_session`` 会频繁创建空壳，若立刻投影，
+        运营台「会话管理」会被大量「未命名」空会话刷屏。首条 ``add_message`` →
+        ``save_session`` 时再投影即可。
+
         Args:
             session: 刚写入 Redis 的会话对象。
         """
+        if not session.messages:
+            return
         try:
             await self._pg_store.upsert_session(session)
         except Exception as exc:  # noqa: BLE001 - 双保险：store 内部已兜底，这里再兜一层
@@ -396,8 +402,7 @@ class SessionManager:
             ex=self._session_ttl,
         )
 
-        # PG 冷备：创建即落库，保证运营后台能立刻看到「进行中」的空会话，
-        # 而不是等第一条消息到达才出现。
+        # 空会话不投影 PG（见 ``_dual_write``）；热数据仅在 Redis。
         await self._dual_write(session)
 
         logger.info(

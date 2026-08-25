@@ -58,13 +58,14 @@ llm_gateway:
       timeout: 60
       max_retries: 3
 
-  # 配额控制
+  # 配额控制（QuotaManager 启动时读取；可用环境变量覆盖，见 backend/.env.example）
+  # LLM_QUOTA_PER_USER / LLM_QUOTA_PER_DEPARTMENT / LLM_QUOTA_ALERT_THRESHOLD / LLM_QUOTA_HARD_LIMIT
   cost_control:
     default_quota:
-      per_user: 100000            # 每用户每日 Token 上限
-      per_department: 1000000     # 每部门每日 Token 上限
+      per_user: 10000000            # 每用户每日 Token 上限
+      per_department: 10000000     # 每部门每日 Token 上限
     alert_threshold: 0.8          # 80% 用量告警
-    hard_limit: true              # 超限硬拒绝
+    hard_limit: true              # 超限硬拒绝（false=仅告警仍放行）
 
   # 故障切换
   failover:

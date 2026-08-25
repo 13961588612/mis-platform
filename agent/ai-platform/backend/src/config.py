@@ -246,8 +246,14 @@ class Settings(BaseSettings):
         description="XAUTOCLAIM 重投循环周期（毫秒）",
     )
     XCLAIM_MIN_IDLE_MS: int = Field(
-        default=30000,
-        description="孤儿消息进入重投的最小 idle 阈值（毫秒）；低于此值不抢投",
+        # 必须 > AGENT_MESSAGE_TIMEOUT：入站 ACK 在整段处理结束后才发。
+        # 旧默认 30s 时，A2UI/RAG 常跑 40s+，PEL idle 超阈值会被 XAUTOCLAIM
+        # 重投 → 同 run 再跑一遍、用户消息重复落库（看起来像「自动发了两次」）。
+        default=150_000,
+        description=(
+            "孤儿消息进入重投的最小 idle 阈值（毫秒）；须大于 "
+            "AGENT_MESSAGE_TIMEOUT（秒）×1000，避免长任务处理中被误重投"
+        ),
     )
 
     # ===== Agent Core 多实例（T8/T9：决策 1 + 同构问题①）=====
@@ -631,6 +637,25 @@ class Settings(BaseSettings):
     # ===== 速率限制 =====
     RATE_LIMIT_PER_USER_PER_MINUTE: int = 30
     RATE_LIMIT_PER_DEPARTMENT_PER_MINUTE: int = 200
+
+    # ===== LLM Token 日配额（覆盖 configs/system/system.yaml → llm_gateway.cost_control）=====
+    #: 未设置时读 system.yaml；设了环境变量则优先。
+    LLM_QUOTA_PER_USER: int | None = Field(
+        default=None,
+        description="每用户每日 token 上限；空则用 system.yaml cost_control.default_quota.per_user",
+    )
+    LLM_QUOTA_PER_DEPARTMENT: int | None = Field(
+        default=None,
+        description="每部门每日 token 上限；空则用 system.yaml per_department",
+    )
+    LLM_QUOTA_ALERT_THRESHOLD: float | None = Field(
+        default=None,
+        description="用量告警比例 0~1；空则用 system.yaml alert_threshold",
+    )
+    LLM_QUOTA_HARD_LIMIT: bool | None = Field(
+        default=None,
+        description="超限是否硬拒绝；空则用 system.yaml hard_limit",
+    )
 
     # ===== HITL（人机协同） =====
     HITL_APPROVAL_TIMEOUT_SECONDS: int = 300

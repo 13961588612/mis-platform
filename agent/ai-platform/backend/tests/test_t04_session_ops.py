@@ -174,6 +174,7 @@ def test_list_sessions_wire_shape_and_pagination(
     query = manager.list_sessions.await_args.args[0]
     assert query.page == 1
     assert query.page_size == 20
+    assert query.min_message_count == 1
 
 
 def test_list_sessions_filters_flow_into_query(
@@ -194,6 +195,20 @@ def test_list_sessions_filters_flow_into_query(
     assert query.channel == "wecom"
     assert query.keyword == "报销"
     assert query.user_id == "u9"
+    assert query.min_message_count == 1
+
+
+def test_list_sessions_include_empty_sets_min_message_count_zero(
+    session_client: tuple[TestClient, MagicMock],
+) -> None:
+    client, manager = session_client
+    manager.list_sessions.return_value = SessionPage(items=[], total=0, page=1, page_size=20)
+
+    resp = client.get("/api/v1/sessions?include_empty=true")
+
+    assert resp.status_code == 200
+    query = manager.list_sessions.await_args.args[0]
+    assert query.min_message_count == 0
 
 
 def test_list_sessions_rejects_unsupported_channel(

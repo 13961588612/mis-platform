@@ -46,7 +46,8 @@ export type A2uiComponentName =
   | 'text'
   | 'container'
   | 'button'
-  | 'input';
+  | 'input'
+  | 'divider';
 
 /** 已知组件名集合。 */
 export const KNOWN_A2UI_COMPONENTS: ReadonlySet<string> = new Set<string>([
@@ -58,6 +59,7 @@ export const KNOWN_A2UI_COMPONENTS: ReadonlySet<string> = new Set<string>([
   'container',
   'button',
   'input',
+  'divider',
 ]);
 
 // ------------------------------------------------------------------ Surface Model

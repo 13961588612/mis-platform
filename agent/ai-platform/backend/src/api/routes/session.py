@@ -328,6 +328,10 @@ async def list_sessions(
     time_to: str | None = Query(
         default=None, alias="to", description="创建时间上界（ISO 8601）"
     ),
+    include_empty: bool = Query(
+        default=False,
+        description="为 true 时包含 message_count=0 的空会话；默认隐藏",
+    ),
     session_manager: SessionManager = Depends(get_session_manager_dep),
     _user: dict[str, Any] = Depends(get_current_user),
 ) -> dict[str, Any]:
@@ -335,7 +339,7 @@ async def list_sessions(
 
     数据来自 PostgreSQL ``agent_session``（Redis 无分页与范围查询能力）。
     查询参数名与前端 ``SessionQuery`` 完全一致，其中 ``from`` 是 Python 关键字，
-    故用 ``alias`` 映射到 ``time_from``。
+    故用 ``alias`` 映射到 ``time_from``。默认不返回无消息空会话。
 
     Returns:
         ``AgentPage<Session>`` 形状：``{items, total, page, page_size}``。
@@ -368,6 +372,7 @@ async def list_sessions(
         keyword=(keyword or "").strip() or None,
         time_from=parsed_from,
         time_to=parsed_to,
+        min_message_count=0 if include_empty else 1,
     )
 
     try:

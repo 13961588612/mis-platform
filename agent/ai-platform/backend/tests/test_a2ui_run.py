@@ -28,18 +28,17 @@ from openharness.tools.base import (
 )
 from pydantic import BaseModel
 
-from src.llm.models import LLMResponse
-from src.queue.a2ui_outbound import A2uiOutboundPublisher, a2ui_outbound_key
-from src.queue.inbound_worker import InboundStreamWorker
-from src.queue.redis_stream import InboundStreamMessage
-from src.runtime.acl_tool_wrapper import AclToolWrapper
 from src.runtime.a2ui_run import (
+    A2UI_COORDINATOR_HINT,
     A2uiRunLoop,
     _parse_tool_args,
     agui_messages_to_llm,
     agui_tools_to_openai_tools,
+    ensure_a2ui_system_hint,
+    ensure_coordinator_system_prompt,
     execute_render_a2ui,
 )
+from src.llm.models import LLMMessage, LLMResponse, LLMRole
 from src.runtime.events import AgentEvent
 from src.runtime.tool_registry_builder import SafeToolWrapper
 from src.skills.acl import SkillAclDenied
@@ -68,20 +67,62 @@ class _FakeGateway:
         return self.responses.pop(0)
 
 
+class _FakeSession:
+    """内存会话替身：供 ``_load_history`` / ``_persist_user`` 读取。"""
+
+    def __init__(self) -> None:
+        self.messages: list[Any] = []
+        self.state: dict[str, Any] = {}
+
+    def get_messages(self) -> list[dict[str, Any]]:
+        return [
+            {
+                "role": getattr(m, "role", None),
+                "content": getattr(m, "content", None),
+            }
+            for m in self.messages
+        ]
+
+
+class _FakeMsg:
+    def __init__(self, role: str, content: str) -> None:
+        self.role = role
+        self.content = content
+
+
 class _FakeSessionManager:
-    """不落库的会话管理器替身：无历史、记录持久化调用。"""
+    """不落库的会话管理器替身：无历史、记录持久化调用。
+
+    未写入过的 session 对 ``get_session`` 抛 ``SessionNotFoundError``（与生产
+    一致），以便空输入等路径仍走「无历史」分支。
+    """
 
     def __init__(self) -> None:
         self.persisted: list[dict[str, Any]] = []
+        self._sessions: dict[str, _FakeSession] = {}
 
-    async def get_session(self, session_id: str) -> Any:
-        raise SessionNotFoundError(session_id)
+    async def get_session(self, session_id: str) -> _FakeSession:
+        if session_id not in self._sessions:
+            raise SessionNotFoundError(session_id)
+        return self._sessions[session_id]
 
     async def ensure_session(self, **kwargs: Any) -> Any:
+        sid = str(kwargs.get("session_id") or "")
+        if sid and sid not in self._sessions:
+            self._sessions[sid] = _FakeSession()
+        return self._sessions.get(sid)
+
+    async def save_session(self, session: Any) -> None:
         return None
 
     async def add_message(self, **kwargs: Any) -> Any:
         self.persisted.append(kwargs)
+        sid = str(kwargs.get("session_id") or "")
+        if sid not in self._sessions:
+            self._sessions[sid] = _FakeSession()
+        self._sessions[sid].messages.append(
+            _FakeMsg(str(kwargs.get("role") or ""), str(kwargs.get("content") or ""))
+        )
 
 
 async def _stream_events(redis: Any, session_id: str) -> list[dict[str, Any]]:
@@ -198,6 +239,35 @@ def test_agui_tools_to_openai_tools():
     assert openai_tools[0]["function"]["name"] == "render_a2ui"
     assert openai_tools[0]["function"]["description"].startswith("render")
     assert openai_tools[0]["function"]["parameters"]["properties"]["surfaceId"]["type"] == "string"
+
+
+def test_merge_openai_tools_primary_wins():
+    """primary（render_a2ui）优先；secondary 补齐 agent__invoke。"""
+    from src.runtime.a2ui_run import merge_openai_tools
+
+    primary = [
+        {
+            "type": "function",
+            "function": {"name": "render_a2ui", "description": "a", "parameters": {}},
+        }
+    ]
+    secondary = [
+        {
+            "type": "function",
+            "function": {"name": "render_a2ui", "description": "b", "parameters": {}},
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "agent__invoke",
+                "description": "delegate",
+                "parameters": {},
+            },
+        },
+    ]
+    merged = merge_openai_tools(primary, secondary)
+    assert [t["function"]["name"] for t in merged] == ["render_a2ui", "agent__invoke"]
+    assert merged[0]["function"]["description"] == "a"
 
 
 # ============================================================================
@@ -1137,6 +1207,70 @@ def test_inbound_worker_process_a2ui_run(monkeypatch):
     asyncio.run(run())
 
 
+def test_inbound_worker_process_a2ui_run_skips_duplicate_run_id(monkeypatch):
+    """同一 runId 二次入站（XAUTOCLAIM 重投）应跳过，不重复驱动循环。"""
+
+    async def run():
+        worker = InboundStreamWorker()
+        calls: list[int] = []
+
+        class _FakeLoop:
+            def __init__(self, gateway: Any, publisher: Any) -> None:
+                pass
+
+            async def run(self, **kwargs: Any) -> None:
+                calls.append(1)
+
+        import src.queue.inbound_worker as iw
+
+        monkeypatch.setattr(iw, "A2uiRunLoop", _FakeLoop)
+        fake_redis = fakeredis.aioredis.FakeRedis(decode_responses=True)
+        worker._redis = fake_redis
+
+        inbound = InboundStreamMessage(
+            id="1",
+            session_id="sess-dup",
+            user_id="u1",
+            channel="h5",
+            content="hello",
+            message_type="a2ui_run",
+            trace_id="run-dup-1",
+            timestamp="2026-01-01T00:00:00Z",
+            metadata={
+                "a2ui": {
+                    "runId": "run-dup-1",
+                    "runAgentInput": {
+                        "runId": "run-dup-1",
+                        "messages": [{"role": "user", "content": "hi"}],
+                        "tools": [],
+                    },
+                }
+            },
+        )
+        await worker._process_a2ui_run(inbound, "aip:stream:inbound:h5")
+        await worker._process_a2ui_run(inbound, "aip:stream:inbound:h5")
+        assert calls == [1]
+
+    asyncio.run(run())
+
+
+def test_persist_user_skips_duplicate_trailing_text():
+    """末条已是相同 user 正文时不再二次落库。"""
+
+    async def run():
+        sm = _FakeSessionManager()
+        loop = A2uiRunLoop(_FakeGateway([]), A2uiOutboundPublisher(
+            fakeredis.aioredis.FakeRedis(decode_responses=True)
+        ))
+        loop._session_manager = sm
+        await loop._persist_user("sess-p", "银联PAD退货要设置什么")
+        await loop._persist_user("sess-p", "银联PAD退货要设置什么")
+        user_rows = [m for m in sm.persisted if m.get("role") == "user"]
+        assert len(user_rows) == 1
+
+    asyncio.run(run())
+
+
 def test_inbound_worker_process_a2ui_run_missing_input_no_crash(monkeypatch):
     """metadata.a2ui.runAgentInput 缺失 → 告警返回，不发布任何事件。"""
 
@@ -1161,3 +1295,31 @@ def test_inbound_worker_process_a2ui_run_missing_input_no_crash(monkeypatch):
         assert await fake_redis.xlen(a2ui_outbound_key("sess-4")) == 0
 
     asyncio.run(run())
+
+
+def test_a2ui_hint_does_not_hardcode_worker_routes() -> None:
+    """A2UI hint 不得写死 Worker 路由；委派由 Coordinator system.md 决定。"""
+    assert "crm-assistant" not in A2UI_COORDINATOR_HINT
+    assert "intent=`crm`" not in A2UI_COORDINATOR_HINT
+    assert "intent=`rag`" not in A2UI_COORDINATOR_HINT
+    assert "你在 A2UI 对话通道中" in A2UI_COORDINATOR_HINT
+
+
+def test_ensure_coordinator_system_prompt_injects_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    """注入 Coordinator system.md，且不重复。"""
+    from src.runtime import a2ui_run as mod
+
+    monkeypatch.setattr(
+        mod,
+        "load_agent_system_prompt",
+        lambda _aid: "# MIS 智能对话助手（Copilot）— Coordinator\n意图表…",
+    )
+    base = [LLMMessage(role=LLMRole.USER, content="查会员")]
+    once = ensure_coordinator_system_prompt(base, "mis-copilot")
+    assert once[0].role == LLMRole.SYSTEM
+    assert "Copilot" in (once[0].content or "")
+    twice = ensure_coordinator_system_prompt(once, "mis-copilot")
+    assert sum(1 for m in twice if m.role == LLMRole.SYSTEM) == 1
+
+    hinted = ensure_a2ui_system_hint(once)
+    assert any("你在 A2UI 对话通道中" in (m.content or "") for m in hinted)

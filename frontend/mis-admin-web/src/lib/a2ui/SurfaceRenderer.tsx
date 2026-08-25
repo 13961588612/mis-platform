@@ -26,6 +26,46 @@ export interface SurfaceRendererProps {
   className?: string;
 }
 
+/** 是否为空 data-table（仅有列、无行）——渲染层会藏掉，避免对话里大块空白。 */
+function isEmptyDataTable(node: A2uiComponentNode): boolean {
+  if (node.component !== 'data-table') return false;
+  const rows = node.props?.rows;
+  return !Array.isArray(rows) || rows.length === 0;
+}
+
+/** 取 text 节点可见文案。 */
+function textNodeContent(node: A2uiComponentNode): string {
+  if (node.component !== 'text') return '';
+  const raw =
+    node.props?.content ?? node.props?.text ?? node.props?.label ?? node.props?.value ?? '';
+  return typeof raw === 'string' ? raw.trim() : '';
+}
+
+/**
+ * 空表前方的短标题（如「📌 设置完成确认清单」）一并隐藏，避免表被藏后标题孤零零残留。
+ */
+function isOrphanTableCaption(node: A2uiComponentNode, next: A2uiComponentNode | undefined): boolean {
+  if (!next || !isEmptyDataTable(next)) return false;
+  if (node.component !== 'text') return false;
+  const text = textNodeContent(node);
+  if (!text || text.length > 40) return false;
+  return /清单|确认|checklist|📌|✓|✔/i.test(text) || !text.includes('\n');
+}
+
+/** 过滤空表及其标题 caption；递归处理 children。 */
+function filterSurfaceNodes(nodes: A2uiComponentNode[]): A2uiComponentNode[] {
+  const out: A2uiComponentNode[] = [];
+  for (let i = 0; i < nodes.length; i++) {
+    const node = nodes[i];
+    const next = nodes[i + 1];
+    if (isEmptyDataTable(node)) continue;
+    if (isOrphanTableCaption(node, next)) continue;
+    const children = node.children?.length ? filterSurfaceNodes(node.children) : node.children;
+    out.push(children !== node.children ? { ...node, children } : node);
+  }
+  return out;
+}
+
 /** 渲染单个 A2UI Surface。 */
 export function SurfaceRenderer({ surfaceId, empty, className }: SurfaceRendererProps) {
   const { activeSurfaceId } = useA2ui();
@@ -37,9 +77,14 @@ export function SurfaceRenderer({ surfaceId, empty, className }: SurfaceRenderer
     return empty != null ? <>{empty}</> : null;
   }
 
+  const nodes = filterSurfaceNodes(surface.components);
+  if (nodes.length === 0) {
+    return empty != null ? <>{empty}</> : null;
+  }
+
   return (
     <div className={className}>
-      {surface.components.map((node) => (
+      {nodes.map((node) => (
         <SurfaceNode key={node.id} surfaceId={surface.surfaceId} node={node} />
       ))}
     </div>
@@ -62,11 +107,12 @@ function SurfaceNode({ node, surfaceId }: { node: A2uiComponentNode; surfaceId: 
   }
 
   const Comp = entry.component;
+  const filteredChildren = node.children?.length ? filterSurfaceNodes(node.children) : [];
 
   const childNodes =
-    node.children && node.children.length > 0 ? (
+    filteredChildren.length > 0 ? (
       <div className="space-y-2">
-        {node.children.map((child) => (
+        {filteredChildren.map((child) => (
           <SurfaceNode key={child.id} surfaceId={surfaceId} node={child} />
         ))}
       </div>

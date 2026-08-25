@@ -439,19 +439,52 @@ describe('MessageProcessor', () => {
             ],
           },
         ],
-      } as any);
+      });
 
       const surface = useSurfaceStore.getState().surfaces['sfc-type'];
       expect(surface).toBeDefined();
       expect(surface.components[0]).toMatchObject({
         id: 'root',
-        component: 'Text',
+        component: 'text',
         props: { text: 'hello' },
       });
       expect(surface.components[0].children?.[0]).toMatchObject({
         id: 'c1',
-        component: 'Button',
+        component: 'button',
         props: { label: 'ok' },
+      });
+    });
+
+    it('view 别名为 container（含 direction/gap/padding）', () => {
+      processA2uiMessage({
+        type: 'a2ui_surface',
+        operations: [
+          {
+            op: 'createSurface',
+            surfaceId: 'sfc-view',
+            components: [
+              {
+                id: 'root',
+                type: 'view',
+                direction: 'column',
+                gap: 16,
+                padding: 16,
+                children: [{ id: 't1', type: 'Text', text: 'PAD 退货设置' }],
+              },
+            ],
+          },
+        ],
+      });
+
+      const surface = useSurfaceStore.getState().surfaces['sfc-view'];
+      expect(surface.components[0]).toMatchObject({
+        id: 'root',
+        component: 'container',
+        props: { direction: 'column', gap: 16, padding: 16 },
+      });
+      expect(surface.components[0].children?.[0]).toMatchObject({
+        component: 'text',
+        props: { text: 'PAD 退货设置' },
       });
     });
   });

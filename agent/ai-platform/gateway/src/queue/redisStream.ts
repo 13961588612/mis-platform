@@ -272,7 +272,7 @@ export class StreamConsumer {
   /** 崩溃重投配置：间隔(ms)，<=0 表示关闭 */
   private reclaimIntervalMs = 0;
   /** 孤儿消息进入重投的最小 idle(ms) */
-  private minIdleMs = 30000;
+  private minIdleMs = 150000;
   /** 重投循环是否已启动 */
   private reclaimStarted = false;
 

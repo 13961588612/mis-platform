@@ -184,7 +184,9 @@ export const SHARED_CATALOG: A2UIComponentSpec[] = [
   },
   {
     name: 'data-table',
-    description: '数据表格：只读展示结构化数据（列 + 行），默认可见。',
+    description:
+      '数据表格：只读展示已有的多行结构化数据（必须同时提供非空 columns 与非空 rows）。' +
+      '不要用于步骤说明、确认清单或空壳占位；这类内容请用 text（Markdown）。',
     propsSchema: DATA_TABLE_SCHEMA,
   },
   {

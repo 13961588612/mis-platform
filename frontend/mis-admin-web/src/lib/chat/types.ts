@@ -76,6 +76,11 @@ export interface ChatMessage {
   surfaceId?: string;
   /** 附件（P0-1，仅本地渲染 / 历史恢复展示；WS 上行经 metadata.attachments，向后兼容 optional）。 */
   attachments?: Attachment[];
+  /** 点赞 / 吐槽；未评价为 undefined。 */
+  feedback?: {
+    rating: 'up' | 'down';
+    comment?: string | null;
+  };
 }
 
 // ------------------------------------------------------------------ 流式事件（Gateway → 前端）
@@ -248,10 +253,16 @@ export interface UseChatReturn {
    * 确保存在会话 id（本地生成 + 持久化；Gateway 接受客户端 sessionId）。
    * 传入 `preferredSessionId` 时直接复用该会话（用于"切换会话"），否则复用
    * localStorage 记忆或生成本地新会话。
+   * `options.forceNew=true` 时忽略已有 session 与 localStorage，强制生成新 sid（「新建会话」）。
    */
-  ensureSession: (preferredSessionId?: string) => Promise<string>;
+  ensureSession: (
+    preferredSessionId?: string,
+    options?: { forceNew?: boolean },
+  ) => Promise<string>;
   /** P0-2 拉取历史并渲染（404 / 失败降级空会话不阻塞）。 */
   loadHistory: () => Promise<void>;
+  /** 会话列表切换：不清成 null 中间态，强制重拉历史。 */
+  switchSession: (sessionId: string) => Promise<void>;
   closeSession: () => void;
   reconnect: () => void;
 }

@@ -312,7 +312,7 @@ AGENT_HEARTBEAT_S: int = 10
 SESSION_LOCK_TTL_S: int = 30
 SESSION_LOCK_EXTEND_S: int = 10
 XCLAIM_INTERVAL_MS: int = 5000
-XCLAIM_MIN_IDLE_MS: int = 30000
+XCLAIM_MIN_IDLE_MS: int = 150000  # 须 > AGENT_MESSAGE_TIMEOUT（秒）×1000
 ```
 
 ---
@@ -544,7 +544,7 @@ sequenceDiagram
    - 续租失败 = 已易主 → 触发本地停 bot / 停 agent 运行时（避免双活）。
 6. **Core 入站分区算法常量**：本期采用**分布式锁**方案，不强制 `hash(sessionId)%M` 静态分区；`aip:session:{sid}:core` 仅作 last-core 观测 hint。**Agent owner = 租约**（非哈希），与 bot 同构。
 7. **Redis key 前缀**：全局统一 `aip:`（`REDIS_KEY_PREFIX`），Gateway 与 Core 共用同一 Redis 实例、同名前缀。
-8. **崩溃重投窗口**：`XCLAIM_MIN_IDLE_MS`（默认 30000）控制孤儿消息进入重投的阈值；两侧（gateway/core）一致。
+8. **崩溃重投窗口**：`XCLAIM_MIN_IDLE_MS`（默认 **150000**，须大于 `AGENT_MESSAGE_TIMEOUT`）控制孤儿消息进入重投的阈值；两侧（gateway/core）一致。过短会导致长任务（如 A2UI/RAG）在 ACK 前被误重投、用户消息重复落库。
 
 ---
 

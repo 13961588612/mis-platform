@@ -89,12 +89,13 @@ export const useChatStore = create<ChatState>((set) => ({
       isGenerating: false,
     }),
 
+  // 不强制清 isGenerating：历史回填若与进行中的发送竞态，清生成态会导致
+  // 「正在思考」忽然消失、空气泡（由 loadHistory 调用方在安全时再解锁）。
   setMessages: (messages) =>
     set({
       messages,
       dispatchTrace: [],
       tokenUsage: { ...INITIAL_TOKEN_USAGE },
-      isGenerating: false,
     }),
 
   setGenerating: (isGenerating) => set({ isGenerating }),

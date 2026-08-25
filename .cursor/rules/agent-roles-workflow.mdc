@@ -25,6 +25,8 @@ MIS Platform：React + shadcn 管理后台、Java 17 Spring Cloud 微服务、Py
 
 一次对话只主扮演一个角色。新功能默认：Product →（可选 UX）→ Architect → 实现；纯交互优化可 Product 省略，由 UX → Frontend。
 
+**大型需求多窗口模式**：固定 4 席（PM/DEV/QA/OPS）+ `docs/agents/tasks/**` 工单生命周期。开窗话术与规则见 `docs/agents/README.md`；席位规则 `agent-team-*.mdc` 按窗口手动启用。业务权威仍在 `docs/`，工单不替代 PRD/ADR。
+
 ## 标准工作流
 
 1. **理解**：读相关 `docs/` + 现有代码；不确定先查 ADR/产品决策，不臆造约定。
@@ -47,4 +49,5 @@ MIS Platform：React + shadcn 管理后台、Java 17 Spring Cloud 微服务、Py
 
 - 阅读顺序：`docs/CODE-READING-GUIDE.md`
 - 规范全文：`docs/project/conventions.md`
+- 多窗口 Agent 团队：`docs/agents/README.md`
 - 本地开发：`docs/devops/local-dev.md`

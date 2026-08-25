@@ -16,10 +16,11 @@
  * 5. 收到 done / error 后 complete Observable
  *
  * 订阅时序（消除竞态）：
- * 1. 快照出站流当前 tip（XREVRANGE），得到 lastId；
- * 2. 再写入站消息；
- * 3. XREAD 从 lastId 之后读（仅收本 run 新消息）。
- * 避免「fire-and-forget 订阅 + `$`」时 Python 极速回包早于首次 XREAD 而丢事件。
+ * 1. 校验业务 Redis 可用；
+ * 2. 快照出站流 tip（XREVRANGE）；
+ * 3. 写入站消息；
+ * 4. **独立连接** XREAD（BLOCK）从 tip 之后读。
+ * 避免「业务连接被 BLOCK 占满」与「fire-and-forget + `$` 丢帧」。
  *
  * @module a2ui/RedisStreamAgent
  */
@@ -134,9 +135,15 @@ export class RedisStreamAgent extends AbstractAgent {
         }
       };
 
-      // 1) 快照出站 tip → 2) 写入站 → 3) 从 tip 之后 XREAD（消除 `$` 竞态丢帧）
+      // 出站 XREAD BLOCK 必须用独立连接（与 index.ts redisConsumer 同理），
+      // 避免占满业务连接导致 XADD/路由排队，也避免断线后误用已 end 的连接。
+      let reader: Redis | null = null;
+
+      // 1) 校验业务 Redis → 2) tip 快照 → 3) 写入站 → 4) 独立连接 XREAD
       void (async () => {
         try {
+          await assertRedisReady(this.redis, 'business');
+
           const streamKey = outboundStreamKey(this.sessionId);
           const tip = await this.redis.xrevrange(streamKey, '+', '-', 'COUNT', 1);
           const startAfterId =
@@ -146,7 +153,11 @@ export class RedisStreamAgent extends AbstractAgent {
 
           await this.sendToPython(input);
 
+          reader = this.redis.duplicate();
+          await waitUntilReady(reader, 'a2ui-outbound-reader');
+
           await this.subscribeToOutputStream(
+            reader,
             input.runId,
             onNext,
             onComplete,
@@ -160,14 +171,24 @@ export class RedisStreamAgent extends AbstractAgent {
               error: error instanceof Error ? error.message : String(error),
               sessionId: this.sessionId,
               runId: input.runId,
+              redisStatus: this.redis.status,
             },
             'RedisStreamAgent run failed',
           );
           onError(error instanceof Error ? error : new Error(String(error)));
+        } finally {
+          if (reader != null) {
+            try {
+              reader.disconnect();
+            } catch {
+              // ignore disconnect errors on teardown
+            }
+            reader = null;
+          }
         }
       })();
 
-      // 返回 teardown（Observable 退订时终止订阅循环）
+      // 返回 teardown（Observable 退订时终止订阅循环；finally 会 disconnect reader）
       return teardown;
     });
   }
@@ -192,6 +213,13 @@ export class RedisStreamAgent extends AbstractAgent {
       runAgentInput: input as unknown as Record<string, unknown>,
     };
 
+    // MIS RS256：Gateway 已将 JWT sub → userId（真 MIS userId）。显式写入
+    // misUserId，供 Agent Core 入站解析直取（避免按企微 userid 查库失败）。
+    const misUserId =
+      /^\d+$/.test(this.userId.trim()) && Number(this.userId) > 0
+        ? this.userId.trim()
+        : undefined;
+
     const inbound: InboundMessage = MessageRouter.createInboundMessage({
       userId: this.userId,
       channel: 'h5',
@@ -199,7 +227,10 @@ export class RedisStreamAgent extends AbstractAgent {
       sessionId: this.sessionId,
       traceId: input.runId,
       messageType: A2UI_RUN_MESSAGE_TYPE,
-      metadata: { a2ui: meta },
+      metadata: {
+        a2ui: meta,
+        ...(misUserId != null ? { misUserId } : {}),
+      },
     });
 
     if (this.messageRouter != null) {
@@ -261,6 +292,7 @@ export class RedisStreamAgent extends AbstractAgent {
    * XREAD（非消费者组）：会话私有流，单消费者；从 {@code startAfterId} 之后读，
    * 只收本 run 写入站后的新回包（由调用方先 snapshot tip 再 send inbound）。
    *
+   * @param reader - 专用 Redis 连接（仅本 run 的 BLOCK XREAD，勿复用业务连接）
    * @param runId - 当前 run 标识
    * @param onNext - 单事件回调
    * @param onComplete - done/error 时终止
@@ -269,6 +301,7 @@ export class RedisStreamAgent extends AbstractAgent {
    * @param startAfterId - XREAD 起点（不含该 id）；缺省 `'0-0'`
    */
   private async subscribeToOutputStream(
+    reader: Redis,
     runId: string,
     onNext: (event: AGUIEvent) => void,
     onComplete: () => void,
@@ -282,7 +315,7 @@ export class RedisStreamAgent extends AbstractAgent {
 
     while (!terminated && !isClosed()) {
       try {
-        const result = await this.redis.xread(
+        const result = await reader.xread(
           'COUNT',
           XREAD_COUNT.toString(),
           'BLOCK',
@@ -354,4 +387,50 @@ function fieldsToRecord(fields: string[]): Record<string, string> {
     }
   }
   return record;
+}
+
+/**
+ * 断言 Redis 业务连接可用；长期运行的 Gateway 若重试耗尽会停在 end/close，
+ * 此时 WS ping 仍正常，但 A2UI 一碰 Redis 就会报「Connection is closed.」。
+ */
+async function assertRedisReady(redis: Redis, label: string): Promise<void> {
+  if (redis.status === 'ready') {
+    return;
+  }
+  if (redis.status === 'connecting' || redis.status === 'connect') {
+    await waitUntilReady(redis, label);
+    return;
+  }
+  throw new Error(
+    `Gateway Redis（${label}）不可用（status=${redis.status}）。` +
+      `请重启 AI Gateway 进程；若反复出现，检查 REDIS_URL 与网络。`,
+  );
+}
+
+/** 等待 duplicate()/新建连接进入 ready（超时则抛错）。 */
+async function waitUntilReady(redis: Redis, label: string, timeoutMs = 10_000): Promise<void> {
+  if (redis.status === 'ready') {
+    return;
+  }
+  await new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      cleanup();
+      reject(new Error(`Redis（${label}）就绪超时（status=${redis.status}）`));
+    }, timeoutMs);
+    const onReady = (): void => {
+      cleanup();
+      resolve();
+    };
+    const onError = (error: Error): void => {
+      cleanup();
+      reject(error);
+    };
+    const cleanup = (): void => {
+      clearTimeout(timer);
+      redis.off('ready', onReady);
+      redis.off('error', onError);
+    };
+    redis.once('ready', onReady);
+    redis.once('error', onError);
+  });
 }
