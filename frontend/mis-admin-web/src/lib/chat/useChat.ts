@@ -27,6 +27,15 @@ const LAST_SESSION_KEY = 'mis.copilot.lastSession';
 const DEFAULT_AGENT_ID = '';
 
 /**
+ * 前端生成安全超时（毫秒）。
+ *
+ * <p>Agent Core {@code AGENT_MESSAGE_TIMEOUT} 默认 120s；前端略放宽到 140s，
+ * 避免收不到 done/error（SSE 丢帧 / 粘滞映射丢失）时 {@code isGenerating}
+ * 永久为 true、输入框锁死。超时后强制解锁并提示可重试。
+ */
+export const GENERATE_SAFETY_TIMEOUT_MS = 140_000;
+
+/**
  * A2UI 对话 opt-in 默认开关。
  *
  * mis-admin-web 是新前端（D13 单前端统一），默认走 A2UI 通道
@@ -73,10 +82,38 @@ export function useChat(options?: UseChatOptions): UseChatReturn {
   const sseRef = useRef<ChatSseController | null>(null);
   const wsRef = useRef<ChatWsClient | null>(null);
   const streamingMessageIdRef = useRef<string | null>(null);
+  const generateTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const sessionIdRef = useRef<string | null>(sessionId);
   const tokenRef = useRef<string | null>(token);
   sessionIdRef.current = sessionId;
   tokenRef.current = token;
+
+  /** 清除生成安全超时计时器。 */
+  const clearGenerateTimeout = useCallback((): void => {
+    if (generateTimeoutRef.current != null) {
+      clearTimeout(generateTimeoutRef.current);
+      generateTimeoutRef.current = null;
+    }
+  }, []);
+
+  /** 启动/重置生成安全超时（收不到 done/error 时强制解锁输入）。 */
+  const armGenerateTimeout = useCallback((): void => {
+    clearGenerateTimeout();
+    generateTimeoutRef.current = setTimeout(() => {
+      generateTimeoutRef.current = null;
+      const store = useChatStore.getState();
+      if (!store.isGenerating) return;
+      const streamingId = streamingMessageIdRef.current;
+      if (streamingId) {
+        store.updateMessageStatus(streamingId, 'error');
+        streamingMessageIdRef.current = null;
+      }
+      store.setGenerating(false);
+      store.setError(
+        `等待回复超时（${Math.round(GENERATE_SAFETY_TIMEOUT_MS / 1000)}s）。可重新发送，或检查 Agent 网关 / SSE 连接。`,
+      );
+    }, GENERATE_SAFETY_TIMEOUT_MS);
+  }, [clearGenerateTimeout]);
 
   // ------------------------------------------------------------------ 事件处理
 
@@ -114,7 +151,27 @@ export function useChat(options?: UseChatOptions): UseChatReturn {
       }
 
       case 'a2ui_surface': {
-        processA2uiMessage(event);
+        // 写入 SurfaceStore，并把 surfaceId 挂到当前 assistant 气泡，否则
+        // ChatBubble 不会渲染 SurfaceRenderer（表面「有回包、界面空白」）。
+        const surfaceId = processA2uiMessage(event) ?? event.surfaceId;
+        if (surfaceId) {
+          const streamingId = streamingMessageIdRef.current;
+          if (streamingId) {
+            store.updateMessage(streamingId, { surfaceId });
+          } else {
+            const id = generateClientId('msg');
+            store.addMessage({
+              id,
+              sessionId: sid,
+              role: 'assistant',
+              content: '',
+              status: 'streaming',
+              timestamp: new Date().toISOString(),
+              surfaceId,
+            });
+            streamingMessageIdRef.current = id;
+          }
+        }
         break;
       }
 
@@ -125,6 +182,7 @@ export function useChat(options?: UseChatOptions): UseChatReturn {
       }
 
       case 'done': {
+        clearGenerateTimeout();
         const streamingId = streamingMessageIdRef.current;
         if (streamingId) {
           const updates: Partial<ChatMessage> = { status: 'delivered' };
@@ -141,6 +199,7 @@ export function useChat(options?: UseChatOptions): UseChatReturn {
       }
 
       case 'error': {
+        clearGenerateTimeout();
         const streamingId = streamingMessageIdRef.current;
         if (streamingId) {
           store.updateMessageStatus(streamingId, 'error');
@@ -253,7 +312,7 @@ export function useChat(options?: UseChatOptions): UseChatReturn {
       default:
         break;
     }
-  }, []);
+  }, [clearGenerateTimeout]);
 
   // ------------------------------------------------------------------ 会话
 
@@ -410,6 +469,7 @@ export function useChat(options?: UseChatOptions): UseChatReturn {
       });
       streamingMessageIdRef.current = assistantId;
       store.setGenerating(true);
+      armGenerateTimeout();
       store.setDispatchTrace([]);
       store.setError(null);
 
@@ -441,10 +501,11 @@ export function useChat(options?: UseChatOptions): UseChatReturn {
       if (!sendInbound(inbound)) {
         streamingMessageIdRef.current = null;
         store.updateMessageStatus(assistantId, 'error');
+        clearGenerateTimeout();
         store.setGenerating(false);
       }
     },
-    [sendInbound, userId, a2uiEnabled],
+    [sendInbound, userId, a2uiEnabled, armGenerateTimeout, clearGenerateTimeout],
   );
 
   const respondToApproval = useCallback(
@@ -532,13 +593,14 @@ export function useChat(options?: UseChatOptions): UseChatReturn {
     wsRef.current = ws;
 
     return () => {
+      clearGenerateTimeout();
       sse.abort();
       ws.close();
       sseRef.current = null;
       wsRef.current = null;
       streamingMessageIdRef.current = null;
     };
-  }, [autoConnect, sessionId, token, handleEvent]);
+  }, [autoConnect, sessionId, token, handleEvent, clearGenerateTimeout]);
 
   const closeSession = useCallback((): void => {
     const sid = sessionIdRef.current;

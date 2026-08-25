@@ -420,4 +420,39 @@ describe('MessageProcessor', () => {
       expect(state.activeSurfaceId).toBe('sfc-b');
     });
   });
+
+  describe('LLM type→component 归一化', () => {
+    it('扁平 type/字段抬升为 component + props，并递归 children', () => {
+      processA2uiMessage({
+        type: 'a2ui_surface',
+        operations: [
+          {
+            op: 'createSurface',
+            surfaceId: 'sfc-type',
+            components: [
+              {
+                id: 'root',
+                type: 'Text',
+                text: 'hello',
+                children: [{ id: 'c1', type: 'Button', label: 'ok' }],
+              },
+            ],
+          },
+        ],
+      });
+
+      const surface = useSurfaceStore.getState().surfaces['sfc-type'];
+      expect(surface).toBeDefined();
+      expect(surface.components[0]).toMatchObject({
+        id: 'root',
+        component: 'Text',
+        props: { text: 'hello' },
+      });
+      expect(surface.components[0].children?.[0]).toMatchObject({
+        id: 'c1',
+        component: 'Button',
+        props: { label: 'ok' },
+      });
+    });
+  });
 });

@@ -22,6 +22,7 @@ import { useAttachmentComposer } from '@/lib/chat/useAttachmentComposer';
 import { AttachmentChips } from '@/components/chat/AttachmentChips';
 import { AttachmentList } from '@/components/chat/AttachmentList';
 import { SurfaceRenderer } from '@/lib/a2ui/SurfaceRenderer';
+import { useSurfaceStore } from '@/lib/a2ui/surface-store';
 import { A2uiProvider } from '@/components/a2ui/A2uiProvider';
 import { A2uiPermissionGate } from '@/components/a2ui/A2uiPermissionGate';
 import { getA2uiRegistryEntry, isKnownA2uiComponent } from '@/components/a2ui/registry';
@@ -52,9 +53,15 @@ function A2uiMessageRenderer({ render }: { render: NonNullable<ChatMessage['a2ui
 export function CopilotPanel() {
   const chat = useChat();
   const composer = useAttachmentComposer();
+  const activeSurfaceId = useSurfaceStore((s) => s.activeSurfaceId);
   const [input, setInput] = useState('');
   const [dragOver, setDragOver] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  /** surface 已进 store 但尚未挂到气泡时，用兜底渲染避免「有回包界面空白」。 */
+  const orphanSurface =
+    activeSurfaceId != null &&
+    !chat.messages.some((m) => m.surfaceId === activeSurfaceId);
 
   // 打开面板即确保会话存在（本地生成 + 持久化 + 自动加载历史）
   useEffect(() => {
@@ -200,6 +207,7 @@ export function CopilotPanel() {
               {chat.messages.map((msg) => (
                 <ChatBubble key={msg.id} message={msg} />
               ))}
+              {orphanSurface ? <SurfaceRenderer className="w-full" /> : null}
               {chat.isGenerating ? (
                 <div className="flex items-center gap-2 rounded-lg border bg-card p-3 text-xs text-muted-foreground">
                   <Loader2 className="h-3.5 w-3.5 animate-spin" />

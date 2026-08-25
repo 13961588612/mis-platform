@@ -124,7 +124,9 @@ function applyOperation(
       const surface: A2uiSurface = {
         surfaceId,
         components: Array.isArray(payload.components)
-          ? (payload.components as A2uiComponentNode[])
+          ? (payload.components as unknown[])
+              .map(normalizeComponentNode)
+              .filter((n): n is A2uiComponentNode => n != null)
           : [],
         dataModels: {},
       };
@@ -136,10 +138,21 @@ function applyOperation(
       const surfaceId = String(payload.surfaceId ?? '');
       const existing = store.surfaces[surfaceId];
       if (!existing) return null;
-      const nextComponents = existing.components.map((node) => ({ ...node, children: node.children ? [...node.children] : undefined }));
+      const nextComponents = existing.components.map((node) => ({
+        ...node,
+        children: node.children ? [...node.children] : undefined,
+      }));
       const patches = Array.isArray(payload.components) ? payload.components : [];
-      for (const patch of patches as ComponentPatch[]) {
-        applyComponentPatch(nextComponents, patch);
+      for (const patch of patches as unknown[]) {
+        const normalized = normalizeComponentNode(patch);
+        if (normalized != null) {
+          applyComponentPatch(nextComponents, normalized);
+          continue;
+        }
+        // path 风格增量补丁（无 id/component 整节点）
+        if (patch != null && typeof patch === 'object') {
+          applyComponentPatch(nextComponents, patch as ComponentPatch);
+        }
       }
       store.update(surfaceId, (surface) => ({
         ...surface,
@@ -179,6 +192,56 @@ interface ComponentPatch {
 }
 
 /**
+ * 归一化 LLM / Gateway 组件节点。
+ *
+ * <p>LLM 常产出 AG-UI 习惯形态 `{ id, type, direction, ... }`（扁平字段），而前端
+ * {@link A2uiComponentNode} 要求 `{ id, component, props }`。此处做兼容映射：
+ * - `component` 优先，缺省回落 `type`
+ * - 其余非协议字段抬升进 `props`
+ * - `children` 递归归一
+ */
+function normalizeComponentNode(raw: unknown): A2uiComponentNode | null {
+  if (raw == null || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const record = raw as Record<string, unknown>;
+  const id = typeof record.id === 'string' ? record.id : undefined;
+  if (!id) return null;
+
+  const componentName =
+    (typeof record.component === 'string' && record.component.length > 0
+      ? record.component
+      : undefined) ??
+    (typeof record.type === 'string' && record.type.length > 0 ? record.type : undefined);
+  if (!componentName) return null;
+
+  let props: Record<string, unknown> = {};
+  if (record.props != null && typeof record.props === 'object' && !Array.isArray(record.props)) {
+    props = { ...(record.props as Record<string, unknown>) };
+  } else {
+    for (const [key, value] of Object.entries(record)) {
+      if (
+        key === 'id' ||
+        key === 'component' ||
+        key === 'type' ||
+        key === 'children' ||
+        key === 'props'
+      ) {
+        continue;
+      }
+      props[key] = value;
+    }
+  }
+
+  let children: A2uiComponentNode[] | undefined;
+  if (Array.isArray(record.children)) {
+    children = record.children
+      .map(normalizeComponentNode)
+      .filter((n): n is A2uiComponentNode => n != null);
+  }
+
+  return { id, component: componentName, props, children };
+}
+
+/**
  * 按 path 或 id 更新组件树（路径双向绑定：/components/{id} 或 /components/{index}）。
  *
  * <p>兼容两种承载：
@@ -189,8 +252,13 @@ interface ComponentPatch {
 function applyComponentPatch(components: A2uiComponentNode[], patch: ComponentPatch): void {
   // v0.9 风格：组件定义直接带 id（无 path）→ 按 id 整节点替换 / 追加
   if (patch.path == null || patch.path.length === 0) {
-    if (patch.id != null) {
-      upsertComponentById(components, patch as A2uiComponentNode);
+    if (patch.id != null && patch.component != null) {
+      upsertComponentById(components, {
+        id: patch.id,
+        component: patch.component,
+        props: patch.props ?? {},
+        children: patch.children,
+      });
     }
     return;
   }

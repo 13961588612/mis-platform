@@ -15,8 +15,11 @@
  * 4. 逐事件经 EventConverter 转 BaseEvent 推入 Observable
  * 5. 收到 done / error 后 complete Observable
  *
- * 订阅时序（较 01 §2.1 伪码的修正）：先启动出站订阅（`$` 起点），再写入站消息，
- * 消除「Python 极速回包早于订阅起点」的竞态窗口。
+ * 订阅时序（消除竞态）：
+ * 1. 快照出站流当前 tip（XREVRANGE），得到 lastId；
+ * 2. 再写入站消息；
+ * 3. XREAD 从 lastId 之后读（仅收本 run 新消息）。
+ * 避免「fire-and-forget 订阅 + `$`」时 Python 极速回包早于首次 XREAD 而丢事件。
  *
  * @module a2ui/RedisStreamAgent
  */
@@ -131,27 +134,40 @@ export class RedisStreamAgent extends AbstractAgent {
         }
       };
 
-      // 1) 先启动出站订阅（$ 起点 = 只收此后消息），再写 inbound（消除竞态）。
-      this.subscribeToOutputStream(input.runId, onNext, onComplete, onError, isClosed).catch(
-        (error: unknown) => {
+      // 1) 快照出站 tip → 2) 写入站 → 3) 从 tip 之后 XREAD（消除 `$` 竞态丢帧）
+      void (async () => {
+        try {
+          const streamKey = outboundStreamKey(this.sessionId);
+          const tip = await this.redis.xrevrange(streamKey, '+', '-', 'COUNT', 1);
+          const startAfterId =
+            tip.length > 0 && tip[0] != null && typeof tip[0][0] === 'string'
+              ? tip[0][0]
+              : '0-0';
+
+          await this.sendToPython(input);
+
+          await this.subscribeToOutputStream(
+            input.runId,
+            onNext,
+            onComplete,
+            onError,
+            isClosed,
+            startAfterId,
+          );
+        } catch (error: unknown) {
+          logger.error(
+            {
+              error: error instanceof Error ? error.message : String(error),
+              sessionId: this.sessionId,
+              runId: input.runId,
+            },
+            'RedisStreamAgent run failed',
+          );
           onError(error instanceof Error ? error : new Error(String(error)));
-        },
-      );
+        }
+      })();
 
-      // 2) 写入 Agent Core 入站流
-      void this.sendToPython(input).catch((error: unknown) => {
-        logger.error(
-          {
-            error: error instanceof Error ? error.message : String(error),
-            sessionId: this.sessionId,
-            runId: input.runId,
-          },
-          'RedisStreamAgent failed to send inbound message',
-        );
-        onError(error instanceof Error ? error : new Error(String(error)));
-      });
-
-      // 3) 返回 teardown（Observable 退订时终止订阅循环）
+      // 返回 teardown（Observable 退订时终止订阅循环）
       return teardown;
     });
   }
@@ -242,14 +258,15 @@ export class RedisStreamAgent extends AbstractAgent {
   /**
    * 订阅 `aip:outbound:{sessionId}` 事件流，逐事件转换后回调。
    *
-   * XREAD（非消费者组）：会话私有流，单消费者，`$` 起点仅收新消息；
-   * BLOCK 超时空转续读直到 complete/error/teardown（isClosed）。
+   * XREAD（非消费者组）：会话私有流，单消费者；从 {@code startAfterId} 之后读，
+   * 只收本 run 写入站后的新回包（由调用方先 snapshot tip 再 send inbound）。
    *
    * @param runId - 当前 run 标识
    * @param onNext - 单事件回调
    * @param onComplete - done/error 时终止
    * @param onError - 流读取失败
    * @param isClosed - 外部关闭信号（Observable 退订 / error 后置 true）
+   * @param startAfterId - XREAD 起点（不含该 id）；缺省 `'0-0'`
    */
   private async subscribeToOutputStream(
     runId: string,
@@ -257,10 +274,10 @@ export class RedisStreamAgent extends AbstractAgent {
     onComplete: () => void,
     onError: (error: Error) => void,
     isClosed: () => boolean,
+    startAfterId = '0-0',
   ): Promise<void> {
     const streamKey = outboundStreamKey(this.sessionId);
-    // 订阅起点：$（只收订阅之后的 A2UI run 回包）
-    let lastId = '$';
+    let lastId = startAfterId;
     let terminated = false;
 
     while (!terminated && !isClosed()) {
