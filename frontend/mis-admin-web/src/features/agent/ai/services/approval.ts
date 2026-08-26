@@ -1,14 +1,12 @@
 /**
  * approval.ts — 审批中心服务（T10，从 旧版独立前端 ApprovalCenterPage + approvalStore 迁移）。
  *
- * <p>后端端点（ai-platform push.py）：
- * - GET  /api/v1/push/approvals           — 审批列表（可选 status 过滤）
- * - GET  /api/v1/push/approvals/stats      — 审批统计
- * - POST /api/v1/push/approvals/{id}/respond — 审批决策（写操作）
+ * <p>经 BFF 已登记端点（deny-unmapped fail-closed；勿直打 `/api/v1/push/approvals*`）：
+ * - GET  /api/v1/agent-ops/approvals
+ * - POST /api/v1/agent-ops/approvals/{id}/decision
  *
- * <p>写操作（respond）**必须走 bff-actions**（02 文档 §3.2「写操作不绕过 BFF」）：
- * actionApiMap 绑定 → BFF REST 调用，由 ApiPermissionInterceptor 校验
- * `approval:decide`；403 结构化错误由 PermissionErrorBanner 内联常驻。
+ * <p>写操作经 bff-actions → BFF，校验 `agent:approval:handle`。
+ * 统计无独立 BFF 登记端点，由列表结果客户端汇总。
  */
 
 import api from '@/lib/api/client';
@@ -17,7 +15,7 @@ import { callBffAction } from '@/components/a2ui/bff-actions';
 import type { A2uiActionApiBinding, BffActionResult } from '@/lib/a2ui/types';
 
 // ============================================================================
-// 类型（后端 snake_case → 前端 camelCase，口径见 02 文档 §4）
+// 类型（后端 camelCase wire / snake_case 兼容）
 // ============================================================================
 
 /** 审批状态生命周期。 */
@@ -78,57 +76,73 @@ function toApprovalRecord(item: Record<string, unknown>): ApprovalRecord {
   };
 }
 
+function summarizeStats(rows: ApprovalRecord[]): ApprovalStats {
+  const stats: ApprovalStats = {
+    total: rows.length,
+    pending: 0,
+    approved: 0,
+    rejected: 0,
+    timeout: 0,
+  };
+  for (const row of rows) {
+    if (row.status === 'pending') stats.pending += 1;
+    else if (row.status === 'approved') stats.approved += 1;
+    else if (row.status === 'rejected') stats.rejected += 1;
+    else if (row.status === 'timeout' || row.status === 'expired') stats.timeout += 1;
+  }
+  return stats;
+}
+
 // ============================================================================
 // API
 // ============================================================================
 
 /** 获取审批列表（可选状态过滤；后端返回数组）。 */
 export async function listApprovals(status?: ApprovalStatus): Promise<ApprovalRecord[]> {
-  const query = status ? `?status=${status}` : '';
-  const res = await api.get<ApiResult<unknown[]>>(`/push/approvals${query}`);
+  const res = await api.get<ApiResult<unknown>>('/agent-ops/approvals', {
+    params: status ? { status } : undefined,
+  });
   if (res.data.code !== 0) {
     throw new Error(res.data.message || '获取审批列表失败');
   }
-  const rows = res.data.data;
-  if (!Array.isArray(rows)) return [];
+  const data = res.data.data;
+  const rows = Array.isArray(data)
+    ? data
+    : data && typeof data === 'object' && Array.isArray((data as { items?: unknown }).items)
+      ? ((data as { items: unknown[] }).items)
+      : [];
   return rows.map((row) => toApprovalRecord((row ?? {}) as Record<string, unknown>));
 }
 
-/** 获取审批统计（失败返回全零，不阻塞 UI）。 */
+/**
+ * 获取审批统计。
+ *
+ * <p>BFF 未登记 `/push/approvals/stats`（deny-unmapped 会 40300），改为拉全量列表后汇总。
+ */
 export async function fetchApprovalStats(): Promise<ApprovalStats> {
   try {
-    const res = await api.get<ApiResult<Record<string, number>>>(`/push/approvals/stats`);
-    const data = res.data.data ?? {};
-    return {
-      total: data.total ?? 0,
-      pending: data.pending ?? 0,
-      approved: data.approved ?? 0,
-      rejected: data.rejected ?? 0,
-      timeout: data.timeout ?? 0,
-    };
+    const rows = await listApprovals();
+    return summarizeStats(rows);
   } catch {
     return { total: 0, pending: 0, approved: 0, rejected: 0, timeout: 0 };
   }
 }
 
 /**
- * 审批决策绑定（bff-actions 消费）：BFF 写操作端点 + 权限码。
- * 每次按审批 id 构造（路径含动态 id）。
+ * 审批决策绑定（bff-actions）：挂已登记的 agent-ops decision 端点。
  */
 export function respondApprovalBinding(approvalId: string): A2uiActionApiBinding {
   return {
     method: 'POST',
-    path: `/api/v1/push/approvals/${encodeURIComponent(approvalId)}/respond`,
-    permissionCode: 'approval:decide',
+    path: `/api/v1/agent-ops/approvals/${encodeURIComponent(approvalId)}/decision`,
+    permissionCode: 'agent:approval:handle',
   };
 }
 
 /**
- * 提交审批决策（写操作 → bff-actions → BFF，403 结构化错误）。
+ * 提交审批决策（写操作 → bff-actions → BFF）。
  *
- * @param approvalId - 审批 ID
- * @param decision - approved / rejected
- * @param comment - 可选备注
+ * <p>BFF 契约为 `{approved, comment}`，再转下游 `{decision, comment}`。
  */
 export async function respondApproval(
   approvalId: string,
@@ -136,7 +150,7 @@ export async function respondApproval(
   comment = '',
 ): Promise<BffActionResult<unknown>> {
   return callBffAction(respondApprovalBinding(approvalId), {
-    decision,
+    approved: decision === 'approved',
     comment,
   });
 }

@@ -20,9 +20,7 @@ import { PageHeader } from '@/components/common/page-header';
 import { buildAppBreadcrumbs } from '@/components/common/app-breadcrumbs';
 import {
   fetchConfigs,
-  fetchHealth,
-  fetchLlmStatus,
-  fetchProxyStatus,
+  fetchOverviewCards,
   fetchRouteStats,
   fetchTokenUsage,
   type ConfigSummary,
@@ -77,6 +75,7 @@ export function MonitorDashboardPage() {
   const [proxyStatus, setProxyStatus] = useState<ProxyStatus | null>(null);
   const [configs, setConfigs] = useState<ConfigSummary[]>([]);
   const [isLoading, setIsLoading] = useState(false);
+  const [hasFetched, setHasFetched] = useState(false);
   const [lastUpdated, setLastUpdated] = useState('');
   const [error, setError] = useState<string | null>(null);
 
@@ -84,27 +83,29 @@ export function MonitorDashboardPage() {
     setIsLoading(true);
     setError(null);
     const results = await Promise.allSettled([
-      fetchHealth(),
+      fetchOverviewCards(),
       fetchRouteStats(),
-      fetchLlmStatus(),
       fetchTokenUsage(),
-      fetchProxyStatus(),
       fetchConfigs(),
     ]);
-    if (results[0].status === 'fulfilled') setHealth(results[0].value);
+    if (results[0].status === 'fulfilled') {
+      setHealth(results[0].value.health);
+      setLlmStatus(results[0].value.llmStatus);
+      setProxyStatus(results[0].value.proxyStatus);
+    }
     if (results[1].status === 'fulfilled') setRouteStats(results[1].value);
-    if (results[2].status === 'fulfilled') setLlmStatus(results[2].value);
-    if (results[3].status === 'fulfilled') setTokenUsage(results[3].value);
-    if (results[4].status === 'fulfilled') setProxyStatus(results[4].value);
-    if (results[5].status === 'fulfilled') setConfigs(results[5].value ?? []);
+    if (results[2].status === 'fulfilled') setTokenUsage(results[2].value);
+    if (results[3].status === 'fulfilled') setConfigs(results[3].value ?? []);
     const failed = results.find((r) => r.status === 'rejected');
     if (failed && failed.status === 'rejected') {
       setError(failed.reason instanceof Error ? failed.reason.message : '部分指标获取失败');
     }
     setLastUpdated(new Date().toISOString());
+    setHasFetched(true);
     setIsLoading(false);
   }, []);
 
+  const emptyHint = hasFetched ? '暂无数据' : '加载中…';
   useEffect(() => {
     void fetchAll();
     const interval = setInterval(() => void fetchAll(), REFRESH_INTERVAL_MS);
@@ -173,7 +174,7 @@ export function MonitorDashboardPage() {
               })}
             </div>
           ) : (
-            <p className="text-sm text-muted-foreground">加载中…</p>
+            <p className="text-sm text-muted-foreground">{emptyHint}</p>
           )}
         </div>
 
@@ -218,7 +219,7 @@ export function MonitorDashboardPage() {
               </div>
             </div>
           ) : (
-            <p className="text-sm text-muted-foreground">加载中…</p>
+            <p className="text-sm text-muted-foreground">{emptyHint}</p>
           )}
         </div>
 
@@ -261,7 +262,7 @@ export function MonitorDashboardPage() {
               ) : null}
             </div>
           ) : (
-            <p className="text-sm text-muted-foreground">加载中…</p>
+            <p className="text-sm text-muted-foreground">{emptyHint}</p>
           )}
         </div>
       </div>
@@ -287,7 +288,9 @@ export function MonitorDashboardPage() {
               </div>
             </div>
           ) : (
-            <p className="text-sm text-muted-foreground">加载中…</p>
+            <p className="text-sm text-muted-foreground">
+              {hasFetched ? '暂无数据（端点未登记）' : '加载中…'}
+            </p>
           )}
         </div>
 
@@ -324,7 +327,7 @@ export function MonitorDashboardPage() {
               ) : null}
             </div>
           ) : (
-            <p className="text-sm text-muted-foreground">加载中…</p>
+            <p className="text-sm text-muted-foreground">{emptyHint}</p>
           )}
         </div>
       </div>

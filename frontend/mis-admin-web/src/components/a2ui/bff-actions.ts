@@ -75,7 +75,7 @@ export function toBffActionError(error: unknown): BffActionError {
  *   消费方口径）→ 后端 decision 字段。
  *
  * 无占位符 / 非 approval:decide 绑定时为恒等变换（如 form-sheet submit、
- * skill-admin 启停等既有调用不受影响）。
+ * agent-ops 技能启停等既有调用不受影响）。
  *
  * @param binding - registry 中的 actionApiMap 条目（method/path/permissionCode）
  * @param payload - 组件传入的写操作 payload

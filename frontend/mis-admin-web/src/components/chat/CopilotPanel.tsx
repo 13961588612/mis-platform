@@ -708,7 +708,8 @@ function ChatBubble({
     return (
       <div className="flex items-start gap-3 py-1">
         <AssistantAvatar className="mt-0.5 h-8 w-8" />
-        <div className="w-full max-w-[85%]">
+        {/* A2UI 宽表/详情卡需要占满气泡可用宽度，避免再被 85% 二次挤压 */}
+        <div className="min-w-0 w-full max-w-full">
           <A2uiMessageRenderer render={message.a2ui} />
         </div>
       </div>
@@ -738,7 +739,9 @@ function ChatBubble({
   const bubble = (
     <div
       className={cn(
-        'max-w-[85%] rounded-2xl px-3.5 py-2.5 text-sm',
+        'rounded-2xl px-3.5 py-2.5 text-sm',
+        // 含 A2UI/Surface 时占满行宽，避免 data-table 在 85% 气泡内被压扁
+        isUser || !hasSurface ? 'max-w-[85%]' : 'min-w-0 w-full max-w-full',
         isUser
           ? 'bg-primary text-primary-foreground'
           : 'border bg-card text-foreground shadow-sm',

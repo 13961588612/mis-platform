@@ -38,6 +38,7 @@ from src.agent.session_store import (
 from src.config import get_settings
 from src.utils.exceptions import SessionNotFoundError
 from src.utils.logging import get_logger
+from src.utils.redis_reconnect import aclose_redis_quietly, is_broken_redis_connection
 
 logger = get_logger("agent.session")
 
@@ -331,8 +332,34 @@ class SessionManager:
                 self._settings.redis_url,
                 max_connections=self._settings.REDIS_MAX_CONNECTIONS,
                 decode_responses=True,
+                health_check_interval=30,
+                socket_keepalive=True,
+                retry_on_timeout=True,
             )
         return self._redis
+
+    async def _reset_redis(self) -> None:
+        """丢弃可能已死的 Redis 客户端。"""
+        client = self._redis
+        self._redis = None
+        await aclose_redis_quietly(client)
+
+    async def _redis_op(self, op_name: str, *args: Any, **kwargs: Any) -> Any:
+        """执行 Redis 命令；遇死连接则重建后重试一次。"""
+        redis = await self._get_redis()
+        try:
+            return await getattr(redis, op_name)(*args, **kwargs)
+        except Exception as exc:
+            if not is_broken_redis_connection(exc):
+                raise
+            logger.warning(
+                "SessionManager Redis connection broken; reconnecting",
+                op=op_name,
+                error=str(exc),
+            )
+            await self._reset_redis()
+            redis = await self._get_redis()
+            return await getattr(redis, op_name)(*args, **kwargs)
 
     def _session_key(self, session_id: str) -> str:
         """会话数据的 Redis key。"""
@@ -388,15 +415,16 @@ class SessionManager:
         )
 
         # 存储到 Redis
-        redis: aioredis.Redis = await self._get_redis()
-        await redis.set(
+        await self._redis_op(
+            "set",
             self._session_key(session_id),
             json.dumps(session.to_dict()),
             ex=self._session_ttl,
         )
 
         # 设置 agent 绑定
-        await redis.set(
+        await self._redis_op(
+            "set",
             self._agent_binding_key(session_id),
             agent_id,
             ex=self._session_ttl,
@@ -484,13 +512,14 @@ class SessionManager:
             mis_user_id=mis_user_id,
             user_name=user_name,
         )
-        redis: aioredis.Redis = await self._get_redis()
-        await redis.set(
+        await self._redis_op(
+            "set",
             self._session_key(session_id),
             json.dumps(session.to_dict()),
             ex=self._session_ttl,
         )
-        await redis.set(
+        await self._redis_op(
+            "set",
             self._agent_binding_key(session_id),
             agent_id,
             ex=self._session_ttl,
@@ -507,8 +536,7 @@ class SessionManager:
 
     async def get_session(self, session_id: str) -> Session:
         """按 ID 从 Redis 中获取会话。"""
-        redis: aioredis.Redis = await self._get_redis()
-        data: str | None = await redis.get(self._session_key(session_id))
+        data: str | None = await self._redis_op("get", self._session_key(session_id))
 
         if data is None:
             raise SessionNotFoundError(session_id)
@@ -543,9 +571,9 @@ class SessionManager:
         Args:
             session: 待持久化的会话对象。
         """
-        redis: aioredis.Redis = await self._get_redis()
         session.updated_at = datetime.now(timezone.utc)
-        await redis.set(
+        await self._redis_op(
+            "set",
             self._session_key(session.session_id),
             json.dumps(session.to_dict()),
             ex=self._session_ttl,
@@ -554,13 +582,12 @@ class SessionManager:
 
     async def get_agent_binding(self, session_id: str) -> str | None:
         """获取会话绑定的 agent ID（用于会话亲和路由）。"""
-        redis: aioredis.Redis = await self._get_redis()
-        return await redis.get(self._agent_binding_key(session_id))
+        return await self._redis_op("get", self._agent_binding_key(session_id))
 
     async def set_agent_binding(self, session_id: str, agent_id: str) -> None:
         """将会话绑定到一个 agent（用于会话亲和路由）。"""
-        redis: aioredis.Redis = await self._get_redis()
-        await redis.set(
+        await self._redis_op(
+            "set",
             self._agent_binding_key(session_id),
             agent_id,
             ex=self._session_ttl,
@@ -575,9 +602,8 @@ class SessionManager:
         Args:
             session_id: 会话 ID。
         """
-        redis: aioredis.Redis = await self._get_redis()
-        await redis.delete(self._session_key(session_id))
-        await redis.delete(self._agent_binding_key(session_id))
+        await self._redis_op("delete", self._session_key(session_id))
+        await self._redis_op("delete", self._agent_binding_key(session_id))
         try:
             await self._pg_store.mark_closed(session_id)
         except Exception as exc:  # noqa: BLE001 - 关闭失败不应让接口报错
@@ -795,10 +821,9 @@ class SessionManager:
         if not session_ids:
             return 0
 
-        redis: aioredis.Redis = await self._get_redis()
         for session_id in session_ids:
-            await redis.delete(self._session_key(session_id))
-            await redis.delete(self._agent_binding_key(session_id))
+            await self._redis_op("delete", self._session_key(session_id))
+            await self._redis_op("delete", self._agent_binding_key(session_id))
 
         deleted: int = await self._pg_store.soft_delete(list(session_ids))
         logger.info(

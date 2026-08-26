@@ -1,22 +1,23 @@
 /**
- * monitor.ts — 系统监控看板服务（T10，从 旧版独立前端 MonitorPage 迁移）。
+ * monitor.ts — 系统监控看板服务（T10）。
  *
- * <p>后端端点（ai-platform admin.py）：
- * - GET /api/v1/admin/health          — 系统健康
- * - GET /api/v1/admin/route-stats     — 路由统计
- * - GET /api/v1/admin/llm/status      — LLM 网关状态
- * - GET /api/v1/admin/llm/token-usage — Token 用量摘要
- * - GET /api/v1/admin/proxy/status    — 出口代理状态
- * - GET /api/v1/admin/configs         — Agent 配置概览
+ * <p>经 BFF 已登记端点（deny-unmapped fail-closed；勿直打 `/api/v1/admin/*`）：
+ * - GET /api/v1/agent-ops/monitor/overview   — 健康 / LLM / 代理聚合
+ * - GET /api/v1/agent-ops/dispatch/route-stats — 路由统计
+ * - GET /api/v1/agent-ops/agents             — Agent 列表（作配置概览）
  *
- * <p>所有接口只读；失败由页面 Promise.allSettled 逐项降级，不阻塞看板其余卡片。
+ * <p>Token 用量无独立登记端点，看板该项返回 null（页面展示「暂无数据」）。
  */
 
-import api from '@/lib/api/client';
-import type { ApiResult } from '@/types/api';
+import {
+  getMonitorOverview,
+  listAgents,
+  listRouteStats,
+} from '../../api/agent-ops-api';
+import type { MonitorOverview, MonitorProxyNode } from '../../types';
 
 // ============================================================================
-// 类型（snake_case → camelCase）
+// 看板视图类型（camelCase，供 MonitorDashboardPage 消费）
 // ============================================================================
 
 /** 系统健康检查结果。 */
@@ -25,7 +26,7 @@ export interface HealthData {
   checks: Record<string, string>;
 }
 
-/** 路由统计。 */
+/** 路由统计（看板口径）。 */
 export interface RouteStats {
   totalRequests: number;
   successfulRoutes: number;
@@ -70,65 +71,143 @@ export interface ConfigSummary {
 }
 
 // ============================================================================
-// 数据映射（后端 snake_case，字段可能缺失 → 前端 camelCase 兜底）
+// 映射
 // ============================================================================
 
-function camelize<T = unknown>(obj: unknown): T {
-  if (obj === null || obj === undefined) return obj as T;
-  if (Array.isArray(obj)) {
-    return obj.map((item) => camelize(item)) as unknown as T;
-  }
-  if (typeof obj === 'object') {
-    const out: Record<string, unknown> = {};
-    for (const [key, value] of Object.entries(obj as Record<string, unknown>)) {
-      const camelKey = key.replace(/_([a-z])/g, (_, letter: string) => letter.toUpperCase());
-      out[camelKey] = camelize(value);
+function mapHealth(overview: MonitorOverview): HealthData {
+  const admin = overview.admin;
+  const llmOk = Boolean(admin?.llm_gateway?.initialized);
+  const proxyTotal = Number(admin?.proxy_nodes ?? 0);
+  const proxyHealthy = Number(admin?.healthy_proxy_nodes ?? 0);
+  const proxyOk = proxyTotal === 0 || proxyHealthy > 0;
+  return {
+    status: llmOk && proxyOk ? 'ok' : 'degraded',
+    checks: {
+      llm_gateway: llmOk ? 'ok' : 'error',
+      proxy: proxyOk ? 'ok' : 'error',
+    },
+  };
+}
+
+function mapLlm(overview: MonitorOverview): LlmStatus {
+  const failover = overview.llm?.failover;
+  const providers = overview.llm?.providers ?? {};
+  let totalRequests = 0;
+  let errorCount = 0;
+  for (const provider of Object.values(providers)) {
+    for (const key of provider.key_stats ?? []) {
+      totalRequests += Number(key.total_calls ?? 0);
+      errorCount += Number(key.error_count ?? 0);
     }
-    return out as T;
   }
-  return obj as T;
+  return {
+    primaryProvider: failover?.primary ?? '—',
+    fallbackProvider: failover?.fallback ?? '—',
+    currentProvider: failover?.active_provider ?? failover?.primary ?? '—',
+    failoverActive: Boolean(failover?.is_failover_active),
+    totalRequests,
+    errorCount,
+  };
+}
+
+function mapProxy(overview: MonitorOverview): ProxyStatus {
+  const nodes: MonitorProxyNode[] = Array.isArray(overview.proxy)
+    ? overview.proxy
+    : Array.isArray(overview.llm?.proxy_pool)
+      ? overview.llm.proxy_pool
+      : [];
+  const healthyNodes = nodes.filter((n) => n.is_healthy).length;
+  return {
+    enabled: nodes.length > 0,
+    totalNodes: nodes.length || Number(overview.admin?.proxy_nodes ?? 0),
+    healthyNodes: nodes.length
+      ? healthyNodes
+      : Number(overview.admin?.healthy_proxy_nodes ?? 0),
+    nodes: nodes.map((n) => ({
+      host: n.host,
+      port: n.port,
+      healthy: Boolean(n.is_healthy),
+    })),
+  };
 }
 
 // ============================================================================
-// API（全部只读；调用方用 Promise.allSettled 容错）
+// API
 // ============================================================================
 
-async function getData<T>(path: string, fallback: T): Promise<T> {
+/** 一次 overview 拉齐健康 / LLM / 代理（避免三连请求）。 */
+export async function fetchOverviewCards(): Promise<{
+  health: HealthData | null;
+  llmStatus: LlmStatus | null;
+  proxyStatus: ProxyStatus | null;
+}> {
   try {
-    const res = await api.get<ApiResult<unknown>>(path);
-    if (res.data.code !== 0) return fallback;
-    return camelize<T>(res.data.data ?? fallback);
+    const overview = await getMonitorOverview();
+    return {
+      health: mapHealth(overview),
+      llmStatus: mapLlm(overview),
+      proxyStatus: mapProxy(overview),
+    };
   } catch {
-    return fallback;
+    return { health: null, llmStatus: null, proxyStatus: null };
   }
 }
 
-/** 系统健康。 */
-export function fetchHealth(): Promise<HealthData | null> {
-  return getData<HealthData | null>('/admin/health', null);
+/** 系统健康（来自 monitor/overview.admin）。 */
+export async function fetchHealth(): Promise<HealthData | null> {
+  const cards = await fetchOverviewCards();
+  return cards.health;
 }
 
 /** 路由统计。 */
-export function fetchRouteStats(): Promise<RouteStats | null> {
-  return getData<RouteStats | null>('/admin/route-stats', null);
+export async function fetchRouteStats(): Promise<RouteStats | null> {
+  try {
+    const stats = await listRouteStats();
+    const total = Number(stats.total_routes ?? 0);
+    return {
+      totalRequests: total,
+      // wire 无成功/失败拆分；看板用总量近似成功、失败记 0
+      successfulRoutes: total,
+      failedRoutes: 0,
+      byAgent: stats.by_agent ?? {},
+    };
+  } catch {
+    return null;
+  }
 }
 
-/** LLM 网关状态。 */
-export function fetchLlmStatus(): Promise<LlmStatus | null> {
-  return getData<LlmStatus | null>('/admin/llm/status', null);
+/** LLM 网关状态（来自 monitor/overview.llm）。 */
+export async function fetchLlmStatus(): Promise<LlmStatus | null> {
+  const cards = await fetchOverviewCards();
+  return cards.llmStatus;
 }
 
-/** Token 用量摘要。 */
-export function fetchTokenUsage(): Promise<TokenUsageSummary | null> {
-  return getData<TokenUsageSummary | null>('/admin/llm/token-usage', null);
+/**
+ * Token 用量摘要。
+ *
+ * <p>BFF 未登记 `/admin/llm/token-usage`，返回 null（页面展示「暂无数据」）。
+ */
+export async function fetchTokenUsage(): Promise<TokenUsageSummary | null> {
+  return null;
 }
 
-/** 出口代理状态。 */
-export function fetchProxyStatus(): Promise<ProxyStatus | null> {
-  return getData<ProxyStatus | null>('/admin/proxy/status', null);
+/** 出口代理状态（来自 monitor/overview.proxy）。 */
+export async function fetchProxyStatus(): Promise<ProxyStatus | null> {
+  const cards = await fetchOverviewCards();
+  return cards.proxyStatus;
 }
 
 /** Agent 配置概览。 */
-export function fetchConfigs(): Promise<ConfigSummary[]> {
-  return getData<ConfigSummary[]>('/admin/configs', []);
+export async function fetchConfigs(): Promise<ConfigSummary[]> {
+  try {
+    const agents = await listAgents();
+    return agents.map((a) => ({
+      agentId: a.agent_id,
+      displayName: a.display_name || a.agent_id,
+      state: a.state || 'unknown',
+      isActive: Boolean(a.is_active ?? a.state === 'running'),
+    }));
+  } catch {
+    return [];
+  }
 }

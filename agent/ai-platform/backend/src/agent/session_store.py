@@ -64,24 +64,29 @@ if TYPE_CHECKING:  # pragma: no cover - 仅用于类型标注，避免与 sessio
 logger = get_logger("agent.session_store")
 
 #: 允许出现在 wire 上的渠道值，与前端 ``SessionChannel`` 联合类型一一对应。
-#: 运行时内部渠道（``wecom_bot`` / ``wecom_h5``）会被归一到 ``wecom``。
+#: 运行时内部渠道（``wecom_bot`` / ``wecom_h5`` / Gateway ``h5``）会被归一。
 WIRE_CHANNELS: frozenset[str] = frozenset({"web", "wecom", "api", "unknown"})
 
 #: 运行时渠道 → 前端 wire 渠道 的归一映射。
+#: Gateway Redis 入站用 ``h5`` / ``wecom-h5`` / ``wecom-bot``（见 redis_stream.GATEWAY_CHANNEL_MAP）；
+#: 未映射时会落成 ``unknown``，运营台「渠道」列显示「未知」。
 _CHANNEL_TO_WIRE: dict[str, str] = {
     "web": "web",
+    "h5": "web",
     "wecom": "wecom",
     "wecom_bot": "wecom",
+    "wecom-bot": "wecom",
     "wecom_h5": "wecom",
+    "wecom-h5": "wecom",
     "api": "api",
     "openapi": "api",
 }
 
 #: wire 渠道 → 运行时渠道集合。列表页按 ``wecom`` 过滤时要同时命中
-#: ``wecom`` / ``wecom_bot`` / ``wecom_h5``（历史数据可能存的是运行时值）。
+#: 历史运行时值与 Gateway 渠道名。
 _WIRE_TO_STORED: dict[str, tuple[str, ...]] = {
-    "web": ("web",),
-    "wecom": ("wecom", "wecom_bot", "wecom_h5"),
+    "web": ("web", "h5"),
+    "wecom": ("wecom", "wecom_bot", "wecom_h5", "wecom-bot", "wecom-h5"),
     "api": ("api", "openapi"),
     "unknown": ("unknown", ""),
 }
@@ -91,7 +96,8 @@ def normalize_channel(channel: str | None) -> str:
     """把运行时渠道值归一为前端认识的 ``SessionChannel``。
 
     前端 ``CHANNEL_LABELS`` 只认 ``web | wecom | api | unknown`` 四个值，
-    传 ``wecom_bot`` 过去会渲染成空白。归一放在写入侧做，读侧就不用再兜底。
+    传 ``wecom_bot`` / ``h5`` 过去会渲染成空白或「未知」。归一放在写入侧做，
+    读侧对历史 ``unknown`` + ``metadata.raw_channel`` 再兜底一次。
 
     Args:
         channel: 运行时渠道值，可能为 ``None``。
@@ -102,6 +108,48 @@ def normalize_channel(channel: str | None) -> str:
     if not channel:
         return "unknown"
     return _CHANNEL_TO_WIRE.get(channel.strip().lower(), "unknown")
+
+
+def resolve_wire_channel(
+    channel: str | None,
+    metadata: dict[str, Any] | None = None,
+) -> str:
+    """解析列表/详情对外展示的渠道（含历史错误数据修复）。
+
+    优先 ``normalize_channel(channel)``；若结果仍为 ``unknown``，尝试
+    ``metadata.raw_channel``（双写时对未映射运行时渠道的留档）。
+
+    Args:
+        channel: PG ``agent_session.channel`` 或运行时 channel。
+        metadata: PG ``metadata`` JSON（可含 ``raw_channel``）。
+
+    Returns:
+        wire 渠道值。
+    """
+    wire = normalize_channel(channel)
+    if wire != "unknown":
+        return wire
+    if isinstance(metadata, dict):
+        raw = metadata.get("raw_channel")
+        if isinstance(raw, str) and raw.strip():
+            recovered = normalize_channel(raw)
+            if recovered != "unknown":
+                return recovered
+    return "unknown"
+
+def session_row_to_wire(row: "AgentSessionModel") -> dict[str, Any]:
+    """``AgentSessionModel`` → 前端 Session dict，并修复历史渠道 ``unknown``。
+
+    Args:
+        row: PG 会话行。
+
+    Returns:
+        wire 字典（``channel`` 已尽量归一为 web/wecom/api）。
+    """
+    wire = row.to_wire()
+    meta = row.metadata_ if isinstance(getattr(row, "metadata_", None), dict) else {}
+    wire["channel"] = resolve_wire_channel(getattr(row, "channel", None), meta)
+    return wire
 
 
 def _utcnow() -> datetime:
@@ -354,7 +402,7 @@ class SessionPgStore:
                     AgentSessionModel.deleted_at.is_(None),
                 )
             )
-            return row.to_wire() if row is not None else None
+            return session_row_to_wire(row) if row is not None else None
 
     async def list_sessions(self, query: SessionListQuery) -> SessionPage:
         """按条件分页查询会话列表。
@@ -384,7 +432,7 @@ class SessionPgStore:
             rows: Sequence[AgentSessionModel] = (await db.scalars(list_stmt)).all()
 
             return SessionPage(
-                items=[row.to_wire() for row in rows],
+                items=[session_row_to_wire(row) for row in rows],
                 total=total,
                 page=query.page,
                 page_size=query.page_size,
@@ -604,7 +652,7 @@ class SessionPgStore:
                         )
                     )
                 ).all()
-                sessions = {row.session_id: row.to_wire() for row in session_rows}
+                sessions = {row.session_id: session_row_to_wire(row) for row in session_rows}
 
             # 批量读消息正文 → answer_brief（截断 ≤60 字）
             answer_briefs: dict[str, str] = {}

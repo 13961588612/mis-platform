@@ -3,6 +3,7 @@
 > 文档角色：本需求的**架构视图 + 接口契约**（上游 [prd.md](prd.md)，下游 [tasks.md](tasks.md)）。
 > 版本：v1.9｜状态：🔴 已修订（**v1.9 三处重大修订落盘（2026-08-22，主理人记录）**：① **A1 业务改判——落库改道**：表级 ACL 等问数配置**不落 ai_platform，改落 `mis_platform` 库**，对齐 **mis_kb 项目范式**（kb 开头的表在 mis_platform 库），项目名 **`mis-iqd`**（类似 mis_kb）、表前缀 **`iqd_`**（替代 `wren_*`）；ADR-019（原裁定落 ai_platform）**已由 ADR-020 替代**（§8 A1）；② **命名统一**：项目/表/API/权限码/模块全部收敛 `iqd`（`iqd_*` 表、`/api/v1/iqd/**`、权限码 `iqd:*`、前端 `features/agent/iqd`、`backend/mis-iqd` Java 模块），**对接外部 WrenAI 产品的适配层保留 wren**（`wren serve mcp`/`wren profile`/`wren_mcp_host`/`iqd_mcp_client.py` 类内配置键等，命名边界见 §1.5/§3.3）；③ **维度注册表提前一期 + 双维度一期**：`iqd_row_scope_dimension` 从二期 P2 提为**一期必做**、**部门不再特例**，一期同时支持「部门权限 + 门店权限」两个维度（§4.2.2 D.8/D.9）；配套：**Worker 配置消费改「BFF/Java 侧配置读取 API + Worker 本地缓存 + 变更事件/定期刷新 + 缓存不可得 fail-closed 45204」**（§4.2.2 D.7.3）、mis-iqd 模块按 mis_kb 范式落地（§3.2/§3.3）、Flyway 追加 `V71__iqd_schema.sql`、BFF 头注入按维度注册表遍历（`X-Mis-Dept-Scope` + `X-Mis-Stores`）、tasks.md 全量同步（T-W0-01 探针 3e 门店盘点 / T-W2-01 改 Java 侧 / T-W2-02a 双维度 / T-W2-02b 维度遍历注入 / 新增维度注册表子任务）、ADR-019 修订 + ADR-020 新增、两张 mermaid 同步、版本升 v1.9。**v1.8 A1/A5 拍板 + 行级权限放置/扩展设计落盘（2026-08-22，主理人记录）**：A1 当时确认——**表级 ACL 等 `wren_*` 问数配置落 `ai_platform` 库，Python 侧（ai-platform）统一管理，BFF 经 HTTP 读写，不新建 Java 领域服务**（**v1.9 已业务改判**，见上；历史裁定记录见 §8 A1 与 ADR-019）；A5 已确认——**列级隔离本期不做，预留后期方案**（预留位点见 §4.2.2 D.8.2）；新增 **D.7 行级权限数据「如何放置、如何使用」**（三层放置：平台侧 `ai_platform` 库=配置+裁定 / mis-org 侧=授权源头 / 业务库侧=数据载体；使用链路：配置在平台→锚点在头→字典在业务库→注入在 Worker→执行/脱敏/审计）与 **D.8 行级权限维度扩展设计**（`row_scope.type` 扩展点：`org_auto`=dept 维度实例化、`template` 已覆盖任意维度；维度注册表 `iqd_row_scope_dimension` 二期 P2 可选；扩展步骤模板 5 件事 + 门店示例；列级隔离预留位点）；§8 A1/A5 由「⏳ 待确认」改「✅ 业务已确认」；tasks.md T-W2-01 标注 A1 已确认、T-W2-02a 标注 type 扩展点 + 二期 P2 维度注册表、A5 相关标注 masking.py 仍为唯一出口 + 列 ACL 预留位点；**v1.7 A13 拍板 + 配置模型澄清落盘（2026-08-22，主理人记录）**：A13 三答已确认——**① 业务库部门编码与 mis_org 不统一主数据（暂时无关）→ 需要映射；② 业务库与 mis_platform 非同一实例 → 物化表（视图不可行）；③ 多数据源每库一张、集中定义从中心每日同步到各库（物化表 + 中心侧定时批同步）**；§4.2.2 D.6 深化——编码对齐决策 **X（映射内嵌字典表）** 定案（推荐理由/映射来源与维护/配置下拉数据源/T-W2-02a 工作量影响，见 D.6.3）、D.6.4 中心每日同步任务细化（归属 ai-platform 定时作业、每日全量 upsert 幂等、失败告警 + 降级 45204、目标库注册）、新增 **D.6.6 配置面 vs 数据面**（用户疑问「是否需逐库设置权限」的权威回答：权限配置平台统一一处、row_scope 模板化、mis_dept_scope 为同步数据非配置、表按数据源分组仅展示层事实）；§8 A13 由「⏳ 待确认」改「✅ 业务已确认」；tasks.md T-W0-01 探针 3e 更新（库边界已确认、剩余聚焦 DEPTID 编码体系盘点+映射可行性）、T-W2-02a 字典表子项改「物化表 + 中心每日同步」并新增同步任务/映射维护子项与配置界面验收；**v1.6 部门权限字典表方案落盘（2026-08-22，主理人记录）**：2a「直接 JOIN 平台内部 `sys_dept`」修订为「**JOIN/EXISTS 部门权限字典表 `mis_dept_scope`（表/视图）**」——同库/同实例走**视图**（实时零维护）、跨库/跨实例走**物化表+同步**（幂等）、多数据源**每库一张**、部门编码对齐与库边界列为 **A13 待业务/数据确认**（探针 3e 出前置证据）；新增 §4.2.2 D.6 mis_dept_scope 落地设计、§8 A13、tasks.md T-W0-01 探针 3d 实测对象更新为 mis_dept_scope 形态 + 新增 3e（库边界与编码对齐盘点）、T-W2-02a 新增字典表子项、T-W2-02b 黄金用例谓词更新；**v1.5 A12 拍板落盘（2026-08-22，主理人记录）**：A12 已由业务确认——**物化 `dept_path`，`PATH_PREFIX` 为唯一主路径，`CLOSURE_CTE` 不实现**（决策依据见 §8 A12 与 §4.2.2 C「策略表」）；§4.2.2 `resolve_inject_strategy` 策略精简为 **PATH_PREFIX（主）/ ENUM（降级 ≤500）/ FAIL_CLOSED（兜底）**、规模分层用例 11–15 同步更新、新增 **mis-org 物化 dept_path 落地设计小节（§4.2.2 D）**、`X-Mis-Dept-Scope` 头扩为携带锚点 `path`、tasks.md T-W0-01 探针 3b 降级为「仅记录不阻塞」+ 新增 3d（`dept_path LIKE` 实测）、T-W2-02a/b 同步；v1.4 曾修订规模策略（mis-org 部门树规模上万 → 头语义改「锚点 + 范围语义」`X-Mis-Dept-Scope`、新增规模分层策略层、新增待拍板 A12）；v1.3 曾修订 A11 行级数据范围确认本期、新增 §4.2.2 RLS 设计细节、`ScopeResolver.inject_row_scope` 展开、T-W2-02 拆分；v1.2 曾修订 MCP-first / 钉 wren-core 新线 `wren: v0.13.3` · 项目 `0.29.2` 2026-08-18、新增 §4.2.1 权限方案全景）｜日期：2026-08-22｜语言：中文
 > 图表：[class-diagram.mermaid](class-diagram.mermaid)、[sequence-diagram.mermaid](sequence-diagram.mermaid)｜部署速查：[deploy-iqd.md](deploy-iqd.md)
+> **v1.10 样本对方言转化 + 试运行增量修订（2026-08-22，架构师高见远记录）**：在 enhance 页「样本对」Tab 新增「选 DB 类型 + 写原生 SQL + 转化(wrensql) + 试运行 + 保存」能力；`IqdSqlPair` 增 `source_dialect`/`native_sql`/`wren_sql`（`sql_text` 改名 `wren_sql`）；新增 `POST /sql-pairs/translate`（后端 sqlglot 翻译）、`POST /sql-pairs/trial`（经 MCP `dry_run`/`run_sql` 在 WrenAI 引擎侧执行）；设计见 §4.2.3，待拍板见 A14，W0 探针新增 3f（目标方言确认）。
 
 ---
 
@@ -255,7 +256,7 @@ flowchart TB
 | `src/features/agent/iqd/iqd-config-page.tsx` | 新增 | UI① 对接配置 + 连通自检 + MDL 同步 |
 | `src/features/agent/iqd/iqd-catalog-page.tsx` | 新增 | UI② 左树（数据源→库→表→字段）+ 右栏语义模型 Tab |
 | `src/features/agent/iqd/iqd-scope-page.tsx` | 新增 | UI③ 范围勾选 + **行级范围配置（选维度下拉 + 绑定列 + 参数来源，v1.9）** |
-| `src/features/agent/iqd/iqd-enhance-page.tsx` | 新增 | UI④ 样本 / 知识 / 业务描述 三 Tab + 「重新同步」 |
+| `src/features/agent/iqd/iqd-enhance-page.tsx` | 新增 | UI④ 样本 / 知识 / 业务描述 三 Tab + 「重新同步」；**样本对子区（§4.2.3）：DB 类型下拉（oracle/mysql/postgres/clickhouse）→ 原生 SQL 文本框 →「转化」按钮（调 `POST /sql-pairs/translate`，后端 sqlglot 翻译）→ 可编辑转化结果（wrensql）文本框 →「试运行」按钮（调 `POST /sql-pairs/trial`，经 MCP `dry_run`/`run_sql` 在 WrenAI 引擎侧执行）→ 结果区 →「保存」按钮** |
 | `src/features/agent/iqd/iqd-test-chat-page.tsx` | 新增 | UI⑤ 联调对话（左对话 / 右 SQL+结果+引用+完整计划） |
 | `src/features/agent/iqd/components/iqd-catalog-tree.tsx` | 新增 | 清单树（虚拟滚动，支持字段级） |
 | `src/features/agent/iqd/components/iqd-scope-table.tsx` | 新增 | 勾选表格（批量选中/反选/脏标记） |
@@ -717,7 +718,9 @@ classDiagram
         +str id
         +str connection_id
         +str question
-        +str sql_text
+        +str source_dialect  "枚举 oracle/mysql/postgres/clickhouse（用户所选关系库类型，v1.10）"
+        +str native_sql  "用户手写的原生 SQL（源方言，保留以便再编辑/再翻译，v1.10）"
+        +str wren_sql  "转化后、可编辑、最终入库并推 WrenAI 的方言（= 原 sql_text，注入为 sql_pairs，v1.10）"
         +str remark
         +bool enabled
         +str wren_ref_id
@@ -881,7 +884,7 @@ classDiagram
 | 5 | `iqd_scope_policy` | `connection_id, subject_type(global\|role\|dept\|user\|store), subject_id, item_key, allow, effective, remark, created_by` | **UK `(connection_id, subject_type, subject_id, item_key)`**；IDX `(connection_id, subject_type, subject_id)` | FR-INV-3/4（v1.9：subject_type 可含 store 门店主体） |
 | 6 | `iqd_table_acl` | `connection_id, subject_type(role\|dept\|user\|store), subject_id, item_key, action(ask\|manage), row_scope JSONB, created_by` | **UK `(connection_id, subject_type, subject_id, item_key, action)`**；CHECK `action IN ('ask','manage')`；IDX `(connection_id, subject_type, subject_id, action)`；`row_scope` NULL=全行可见（向后兼容）；**v1.9：`row_scope` 语义为「维度注册表实例」（可含多维度 AND 叠加，见 §4.2.2 A）** | FR-PERM-2/4, **A11 行级范围** |
 | 7 | `iqd_row_scope_dimension` | **（v1.9 一期新增）** `dimension_code PK, dimension_name, predicate_type(PATH_PREFIX\|ENUM), column_name, header_name, param_whitelist JSONB, dict_table, auto_mode, enabled, sort, created_at, updated_at` | PK `dimension_code`；UK `(header_name)`；IDX `(enabled, sort)`；**一期种子：`dept` + `store` 两条（见 §4.2.2 D.8.1）** | **A11 行级范围维度注册表（v1.9 一期必做）** |
-| 8 | `iqd_sql_pair` | `connection_id, question, sql_text, remark, enabled, wren_ref_id, sync_status(pending\|synced\|failed), synced_at, created_by` | FK→1；IDX `(connection_id, sync_status)` | FR-ACC-1 |
+| 8 | `iqd_sql_pair` | `connection_id, question, source_dialect(枚举 oracle/mysql/postgres/clickhouse), native_sql, wren_sql(=原 sql_text，转化后可编辑、最终入库推 WrenAI 的方言), remark, enabled, wren_ref_id, sync_status(pending\|synced\|failed), synced_at, created_by` | FK→1；IDX `(connection_id, sync_status)` | FR-ACC-1（**v1.10 增量**：新增 `source_dialect`/`native_sql`，`sql_text` 改名为 `wren_sql`，入库推 WrenAI 的是 `wren_sql` 而非 `native_sql`） |
 | 9 | `iqd_knowledge` | `connection_id, kind(term\|metric_definition\|synonym\|instruction), title, content, related_item_keys JSONB, source(local\|kb_s07), kb_term_id, enabled, wren_ref_id, sync_status, synced_at` | FK→1；IDX `(connection_id, kind)`、`(kb_term_id)` | FR-ACC-2/4, Q8 |
 | 10 | `iqd_mask_rule` | `name, match_type(column_name\|regex\|semantic_tag), pattern, rule(phone\|idcard\|email\|amount\|full\|custom), replacement, priority, enabled` | UK `(name)`；IDX `(enabled, priority)` | FR-PERM-3 |
 | 11 | `iqd_ask_log` | `trace_id, session_id, thread_id, query_id, user_id, employee_id, role_codes JSONB, question, resolved_scope JSONB, status, wren_status_trail JSONB, sql_text, sql_dialect, summary, citations JSONB, plan_steps JSONB, row_count, masked_columns JSONB, latency_ms, error_code, error_message, view_mode` | IDX `(user_id, created_at DESC)`、`(trace_id)`、`(status, created_at DESC)` | FR-PERM-5, FR-TEST-3, FR-PLAN-1, NFR-4/7 |
@@ -1570,6 +1573,84 @@ flowchart LR
 
 **D.10 与 A5 的关系（列级隔离预留扩展位——A5「预留后期方案」的落点；v1.9 节号顺延，内容不变）**
 
+#### 4.2.3 样本对方言转化 + 试运行设计（增量修订：DB 类型选择 + 原生 SQL 转化 wrensql + 试运行；v1.10）
+
+> 来源：用户原始诉求——问数「脱敏与维度」页 →「样本对」Tab：存入的样本语句必须是 WrenAI 能消费的方言（用户称 **wrensql**），因为 few-shot 样本是作为 `sql_pairs` **直接注入 WrenAI 提示**的。故本增量把「直接写 WrenSQL」改为「选关系库类型 + 写原生 SQL + 服务端翻译成 wrensql + 试运行验证 + 保存」。
+
+**① 样本对子区表单字段与交互流（enhance 页 `iqd-enhance-page.tsx` 样本 Tab）**
+
+```
+┌─ 样本对（few-shot）编辑区 ─────────────────────────────────────────────┐
+│ 关系数据库类型：[ Oracle ▼ | MySQL | PostgreSQL | ClickHouse ]   ← source_dialect │
+│ 原生 SQL（源方言）：                                                    │
+│   ┌─────────────────────────────────────────────────────────────┐   │
+│   │ <textarea> SELECT ... FROM ... WHERE ... </textarea>         │   │
+│   └─────────────────────────────────────────────────────────────┘   │
+│  [ 转化 ]  ← POST /sql-pairs/translate {db_type, native_sql}          │
+│ 转化结果（wrensql，可编辑）：                                ← wren_sql │
+│   ┌─────────────────────────────────────────────────────────────┐   │
+│   │ <textarea editable> ... </textarea>   （初始=翻译结果，可手改） │   │
+│   └─────────────────────────────────────────────────────────────┘   │
+│  [ 试运行 ] ← POST /sql-pairs/trial {wren_sql}                        │
+│ 结果区：列 / 行 / 错误 / 耗时                                          │
+│   ┌─────────────────────────────────────────────────────────────┐   │
+│   │ columns: [...]  rows: [[...]]  error: null  duration_ms: 123  │   │
+│   └─────────────────────────────────────────────────────────────┘   │
+│  [ 保存 ]  ← POST /sql-pairs {question, source_dialect, native_sql,   │
+│                              wren_sql(=最终编辑后的转化结果)}           │
+└────────────────────────────────────────────────────────────────────┘
+```
+
+**② 关键约束（对齐 NFR-1 红线 + A14 待拍板）**
+
+- **翻译在服务端做**：`POST /sql-pairs/translate` 由 `mis-iqd` Worker 用 **sqlglot** 把源方言（`source_dialect`）翻到 WrenAI 方言（`wren_sql`）；**前端不直连 WrenAI**，仅调 BFF `/api/v1/iqd/**`（对齐 NFR-1 红线）。目标方言（duckdb/trino 系候选）待 **W0 探针 3f** 实测确认（A14①）。
+- **试运行在 WrenAI 引擎侧执行**：`POST /sql-pairs/trial` 经 MCP `dry_run`/`run_sql` 在 wren-core / wren-engine 侧执行**转化后的 `wren_sql`**，验证「转化后的 wrensql 能在 WrenAI 跑通」；**不是源业务库**（源业务库可能不在 WrenAI 可见范围，且样本验证目的仅是方言可执行性）。**试运行默认纯方言执行验证，不带 `scope_resolver` 行级范围注入**（范围由正式 `ask` 时裁定，A14②）。
+- **入库用于 WrenAI 的是 `wren_sql`**：保存时 `native_sql` + `source_dialect` 一并保留（便于后续重新编辑/再翻译），但 `POST /enhance/sync` 推送 `sql_pairs` 用的是 `wren_sql`（= 原 `sql_text` 字段改名）。
+- **翻译失败/不支持语法兜底**：后端返回 `warnings`（非空）+ `wren_sql`（尽力翻译或空），前端提示「翻译存在警告，请检查或直接在 wrensql 框手写/手改」；用户可在 wrensql 框直接手写原生 wrensql 后保存（A14③）。
+
+**③ 数据模型增量（见类图 `IqdSqlPair` 与 §4.2 表 8）**
+
+- `source_dialect`：枚举 `oracle`/`mysql`/`postgres`/`clickhouse`（用户所选关系库类型）。
+- `native_sql`：用户手写的原生 SQL（源方言），保留以便再编辑/再翻译。
+- `wren_sql`：转化后、可编辑、最终入库并推 WrenAI 的方言（原 `sql_text` 改名）。
+
+**④ 新增 API（见 §4.4 接口清单）**
+
+- `POST /sql-pairs/translate`：body `{db_type, native_sql}` → `{wren_sql, warnings}`（后端 sqlglot 源→目标方言翻译）。
+- `POST /sql-pairs/trial`：body `{wren_sql}` → `{columns, rows, error, duration_ms}`（经 MCP `dry_run`/`run_sql` 在 WrenAI 引擎侧执行）。
+
+**⑤ 调用流（样本对子区：转化 → 试运行 → 保存 → 同步）**
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant ADM as 平台管理员
+    participant EP as /agent/iqd/enhance（样本对子区）
+    participant BFF as IqdController（BFF）
+    participant WK as mis-iqd Worker（sqlglot + IqdMcpClient）
+    participant WM as wren serve mcp / wren-core
+    participant DB as mis_platform (iqd_sql_pair)
+
+    ADM->>EP: 选 DB 类型 + 输入原生 SQL
+    ADM->>EP: 点「转化」
+    EP->>BFF: POST /api/v1/iqd/sql-pairs/translate {db_type, native_sql} (iqd:enhance:manage)
+    BFF->>WK: translate_sql_pair(db_type, native_sql)
+    WK->>WK: sqlglot 源方言 → WrenAI 方言（目标方言见 W0 探针 3f）
+    WK-->>BFF: {wren_sql, warnings}
+    BFF-->>EP: 可编辑转化结果（wrensql）+ 警告
+    ADM->>EP: （可手改 wrensql）点「试运行」
+    EP->>BFF: POST /api/v1/iqd/sql-pairs/trial {wren_sql} (iqd:enhance:manage)
+    BFF->>WK: trial_sql_pair(wren_sql)
+    WK->>WM: MCP dry_run / run_sql（在 WrenAI 引擎侧执行转化后 SQL）
+    WM-->>WK: {columns, rows, error, duration_ms}
+    WK-->>BFF: 试行结果
+    BFF-->>EP: 结果区（列/行/错误/耗时）
+    ADM->>EP: 点「保存」
+    EP->>BFF: POST /api/v1/iqd/sql-pairs {question, source_dialect, native_sql, wren_sql}
+    BFF->>DB: insert iqd_sql_pair(wren_sql=sync_status=pending)
+    Note over EP,DB: 后续「重新同步到 WrenAI」→ POST /enhance/sync 把 wren_sql 作为 sql_pairs 推到 WrenAI（见 §5.4）
+```
+
 ### 4.3 DTO 契约（三端同构，wire 一律 snake_case）
 
 ```text
@@ -1645,7 +1726,9 @@ POST /api/v1/iqd/ask-stream  请求体
 | GET | `/acl` | `iqd:scope:view` | 表级 ACL 列表 |
 | POST | `/acl` | `iqd:acl:grant` | 授权（`{subject_type, subject_id, item_keys[], action}`） |
 | DELETE | `/acl/{id}` | `iqd:acl:revoke` | 撤销 |
-| GET/POST/PUT/DELETE | `/sql-pairs[/{id}]` | `iqd:enhance:view` / `:manage` | 样本 CRUD |
+| GET/POST/PUT/DELETE | `/sql-pairs[/{id}]` | `iqd:enhance:view` / `:manage` | 样本 CRUD（**v1.10：样本体新增 `source_dialect`/`native_sql`/`wren_sql`**） |
+| POST | `/sql-pairs/translate` | `iqd:enhance:manage` | 方言翻译：body `{db_type, native_sql}` → `{wren_sql, warnings}`；**后端 `mis-iqd` Worker 经 sqlglot 把源方言翻到 WrenAI 方言（见 §4.2.3，目标方言待 W0 探针 3f 确认）** |
+| POST | `/sql-pairs/trial` | `iqd:enhance:manage` | 试运行：body `{wren_sql}` → `{columns, rows, error, duration_ms}`；**经 MCP `dry_run`/`run_sql` 在 WrenAI 引擎侧执行转化后 wrensql（验证「转化后的 wrensql 能在 WrenAI 跑通」，非源业务库）** |
 | GET/POST/PUT/DELETE | `/knowledge[/{id}]` | `iqd:enhance:view` / `:manage` | 知识/术语 CRUD |
 | POST | `/knowledge/import-s07` | `iqd:enhance:manage` | 从平台术语表 S-07 导入（Q8） |
 | POST | `/enhance/sync` | `iqd:enhance:sync` | 推送样本+知识到 WrenAI |
@@ -2234,6 +2317,7 @@ event: done          data: {}
 | **A11** | Q3 附加 / §4.2.1 方案① / §4.2.2 | **行级数据范围（RLS/WHERE 注入）本期进入双闸门**（已确认）：复用 mis-org 组织数据范围做行条件注入（`iqd_table_acl.row_scope` + `ScopeResolver.inject_row_scope`）。WrenAI 侧无行级概念，行条件必须平台侧注入 | `iqd_table_acl` 加 `row_scope` 列、`scope_resolver.py` 注入器（逐表注入 + 覆盖校验 + fail-closed）、范围页行级编辑、BFF `X-Mis-Depts` 扩展为可见部门集合（含子树）、tasks.md T-W2-02a/b | **✅ 业务已确认本期（2026-08-22，主理人记录）**：最小实现 = 受限 WHERE 注入 + fail-closed（宁可拒不可漏），完整设计见 §4.2.2；若 W1 联调覆盖不了复杂 JOIN，降级二期 DB 原生 RLS / per-role profile（方案③）兜底 |
 | **A12** | Q3 附加 / §4.2.2 v1.4 | **mis-org 部门树是否物化 `dept_path`（或建 closure 表）**——决定路径前缀（策略 1）本期可行性。业务现状：`sys_dept` 已有 `parent_id` 链 + `ancestors`（逗号分隔 ID 链，`buildAncestors`/`rebuildAncestors` 已维护），**无物化 `dept_path` 列、无 closure 表** | 注入策略选择（PATH_PREFIX 是唯一主路径）、mis-org 新增 DDL + 维护逻辑、BFF/Worker 的 path 映射来源 | **✅ 业务已确认（2026-08-22，主理人记录）：物化 `dept_path`，`PATH_PREFIX` 为唯一主路径，`CLOSURE_CTE` 不实现**。决策依据：① mis-org 现无闭包表，新建 + 增删改同步维护成本高于物化 path（`ancestors` 已是同构物化路径，改/增带分隔符 `dept_path` 只改 `buildAncestors`/`rebuildAncestors` 一处维护逻辑 + 新增列即可）；② `CLOSURE_CTE` 依赖 wren-core/DataFusion 对子查询 IN/CTE 的方言支持（未实测、风险高）；③ 物化 path 用标准 LIKE 前缀，与层级深度/规模无关、零方言依赖。主理人澄清口径：闭包表纯理论上可处理任意深度，本决策的正确性在于「成本/方言风险/零依赖」三点权衡，而非闭包表能力不足。落地设计见 §4.2.2 D，迁移见 tasks.md T-W2-02a。**v1.6 增补**：2a 的 JOIN 载体由 `sys_dept` 修订为**部门权限字典表 `mis_dept_scope`**（见 §4.2.2 D.6），`sys_dept` 本身不再进入 WrenAI MDL 可见集合，改为业务库本地 `mis_dept_scope` 注册 |
 | **A13** | Q3 附加 / §4.2.2 v1.6 | **部门编码对齐与字典表形态（2026-08-22 用户提出方案）**——① 业务库 DEPTID 与 mis-org 部门 ID 是否同一套主数据（决定字典表是否需映射层）；② 业务库与 mis_platform 是否同实例（决定视图 / 物化表）；③ 多数据源是否每库一张 | 字典表建法（视图/物化表）、是否需要编码映射、同步任务数量、MDL 注册 | **✅ 业务已确认（2026-08-22，主理人记录）**：三答——**① 业务库部门编码与 mis_org 不统一主数据（暂时无关）→ 需要映射；② 业务库与 mis_platform 非同一实例 → 物化表（视图不可行）；③ 多数据源每库一张，集中定义从中心每日同步到各库（物化表 + 中心侧定时批同步）**。据此定案：**决策 X（映射内嵌字典表）**——`mis_dept_scope.dept_id` 存业务库编码 + `mis_dept_id`/`dept_path` 存平台（同步时中心侧映射），推荐理由/映射来源/配置下拉数据源/对 T-W2-02a 工作量影响见 §4.2.2 D.6.3；同步任务归属 ai-platform 定时作业（每日全量 upsert 幂等、失败告警 + 降级 45204）见 D.6.4；配置面 vs 数据面澄清（**用户疑问「是否需逐库设置权限」→ 不需要**，权限配置平台统一一处）见 D.6.6。落地设计见 §4.2.2 D.6，tasks.md T-W2-02a 已同步 |
+| **A14** | Q4 附加 / §4.2.3 | **样本对（few-shot）方言转化 + 试运行 待拍板**：① 目标方言待定——WrenAI（wren-engine / Apache DataFusion 系）实际接受的 SQL 方言是哪个（用户称 wrensql），sqlglot 最接近映射候选为 duckdb/trino 系，须在 **W0 探针 3f** 实测确认；② 试运行是否带行级范围约束（经 `scope_resolver` 注入后再 `dry_run`）还是纯方言执行验证；③ 翻译失败 / 不支持语法的兜底 | `IqdSqlPair` 数据模型（`source_dialect`/`native_sql`/`wren_sql`）、`POST /sql-pairs/translate`、`POST /sql-pairs/trial`、enhance 页样本对子区 | **① 目标方言 = W0 探针 3f 实测确认（sqlglot 最优「源→目标」映射，尤其 Oracle 专有语法 `CONNECT BY`/`DECODE`/`NVL`/`ROWNUM`/`(+)` 外连接 → DataFusion 系需实测校准）；② 建议试运行纯方言执行验证（不带 scope_resolver），范围由正式 ask 时裁定——待安全/架构拍板；③ 兜底策略已定：后端返回 `warnings` + 用户可在 wrensql 框手写/手改后保存** |
 
 ### 最需要先拍板的 5 个（送业务/架构；v1.5：A12 已确认；v1.6：新增 A13；v1.7：A13 已确认；v1.8：A1/A5 已确认；v1.9：A1 业务改判落 mis_platform）
 

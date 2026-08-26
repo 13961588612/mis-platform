@@ -83,3 +83,47 @@ async def test_soft_limit_does_not_raise(monkeypatch: pytest.MonkeyPatch) -> Non
 
     monkeypatch.setattr(qm, "_get_redis", _redis)
     assert await qm.check_quota("1", "", estimated_tokens=10) is True
+
+
+@pytest.mark.asyncio
+async def test_quota_check_reconnects_on_dead_transport(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Redis transport 死后，QuotaManager 应重建连接并重试成功。"""
+    limits = QuotaLimits(
+        per_user=10_000,
+        per_department=100_000,
+        alert_threshold=0.8,
+        hard_limit=True,
+        source="test",
+    )
+    qm = QuotaManager(limits=limits)
+
+    class _Dead:
+        async def get(self, key: str) -> str:
+            raise TypeError("'NoneType' object is not callable")
+
+    class _Alive:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def get(self, key: str) -> str:
+            self.calls += 1
+            return "0"
+
+    clients: list[object] = [_Dead(), _Alive()]
+    idx = {"i": 0}
+
+    async def _get() -> object:
+        client = clients[min(idx["i"], len(clients) - 1)]
+        idx["i"] += 1
+        return client
+
+    async def _reset() -> None:
+        return None
+
+    monkeypatch.setattr(qm, "_get_redis", _get)
+    monkeypatch.setattr(qm, "_reset_redis", _reset)
+    assert await qm.check_quota("u1", "", estimated_tokens=10) is True
+    assert isinstance(clients[1], _Alive)
+    assert clients[1].calls == 1

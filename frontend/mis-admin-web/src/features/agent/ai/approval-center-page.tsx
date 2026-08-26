@@ -5,7 +5,7 @@
  * - 统计卡（总/待/已同意/已拒绝/已超时）
  * - 列表 + 状态筛选 + 行内审批（写操作经 bff-actions → BFF，403 内联 PermissionErrorBanner）
  * - 详情弹窗消费 `approval-card`（嵌套 A2uiProvider 自定义 executeBffAction 路由到
- *   `/api/v1/push/approvals/{id}/respond`，与迁移端点一致）
+ *   `/api/v1/agent-ops/approvals/{id}/decision`）
  *
  * <p>UI 规范：表格吸顶单层滚动、圆角 4px、表头 13px、无内层 padding。
  */

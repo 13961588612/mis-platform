@@ -40,13 +40,9 @@ export const AGENT_NAV: SystemNavNode[] = [
   { kind: 'leaf', path: '/agent/mcp', title: 'MCP 管理', icon: 'Plug' },
   // ui.md §2.4 渠道与运维（V19: 92040–92042）
   { kind: 'leaf', path: '/agent/channels/wecom', title: '企微机器人', icon: 'MessagesSquare' },
-  // T11 导航去重（QA 观察-2）：/agent/monitor（系统监控）与 /agent/approvals（审批中心）
-  // 由 V19__agent_ops_seed.sql sys_menu 种子提供（运营台），静态清单不再重复登记，
-  // 避免与下方 /ai/* 迁移页（用户侧审批/监控）双轨并存；页面本身仍可达（URL / 服务器菜单）。
-  // T09/T10 存量页迁移（ai-platform 后端，/ai/* 路由；未入 sys_menu 种子，静态登记保证侧栏可达）
-  { kind: 'leaf', path: '/ai/qa', title: '知识库问答', icon: 'MessageSquare' },
+  // T11：/agent/monitor、/agent/approvals 由 V19 sys_menu 种子提供，此处不重复登记。
+  // T10 用户侧迁移页（审批中心 / 系统监控；知识库问答与 Skill 管理已下线，改用 KB 门户与技能池）
   { kind: 'leaf', path: '/ai/approvals', title: '审批中心', icon: 'ClipboardCheck' },
-  { kind: 'leaf', path: '/ai/skills', title: 'Skill 管理', icon: 'Sparkles' },
   { kind: 'leaf', path: '/ai/monitor', title: '系统监控', icon: 'Activity' },
   // W2 问数管理已迁至独立门户应用 iqd（V77）：/ai/iqd/* → /iqd/*，对应 IQD_NAV，
   // 不再由 AGENT_NAV 承载（避免与 agent 的 /ai/* 命名空间混淆）。

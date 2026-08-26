@@ -24,6 +24,7 @@ from src.config import Settings, get_settings
 from src.llm.models import QuotaInfo
 from src.utils.exceptions import QuotaExceededError
 from src.utils.logging import get_logger
+from src.utils.redis_reconnect import aclose_redis_quietly, is_broken_redis_connection
 
 logger = get_logger("llm.quota_manager")
 
@@ -201,8 +202,34 @@ class QuotaManager:
                 self._settings.redis_url,
                 max_connections=self._settings.REDIS_MAX_CONNECTIONS,
                 decode_responses=True,
+                health_check_interval=30,
+                socket_keepalive=True,
+                retry_on_timeout=True,
             )
         return self._redis
+
+    async def _reset_redis(self) -> None:
+        """丢弃可能已死的 Redis 客户端，下次 ``_get_redis`` 重建。"""
+        client = self._redis
+        self._redis = None
+        await aclose_redis_quietly(client)
+
+    async def _redis_op(self, op_name: str, *args: Any, **kwargs: Any) -> Any:
+        """执行一次 Redis 命令；遇死连接则重建后重试一次。"""
+        redis = await self._get_redis()
+        try:
+            return await getattr(redis, op_name)(*args, **kwargs)
+        except Exception as exc:
+            if not is_broken_redis_connection(exc):
+                raise
+            logger.warning(
+                "QuotaManager Redis connection broken; reconnecting",
+                op=op_name,
+                error=str(exc),
+            )
+            await self._reset_redis()
+            redis = await self._get_redis()
+            return await getattr(redis, op_name)(*args, **kwargs)
 
     def _date_suffix(self) -> str:
         """获取 Redis key 的今日日期后缀（YYYYMMDD）。"""
@@ -239,10 +266,8 @@ class QuotaManager:
         if not user_id:
             return True
 
-        redis: aioredis.Redis = await self._get_redis()
-
         # 检查用户配额
-        user_used: int = int(await redis.get(self._user_key(user_id)) or 0)
+        user_used: int = int(await self._redis_op("get", self._user_key(user_id)) or 0)
         if user_used + estimated_tokens > self._default_user_limit:
             msg = (
                 f"User {user_id} daily token quota exceeded "
@@ -261,7 +286,7 @@ class QuotaManager:
 
         # 检查部门配额
         if dept:
-            dept_used: int = int(await redis.get(self._dept_key(dept)) or 0)
+            dept_used: int = int(await self._redis_op("get", self._dept_key(dept)) or 0)
             if dept_used + estimated_tokens > self._default_dept_limit:
                 msg = (
                     f"Department {dept} daily token quota exceeded "
@@ -294,22 +319,21 @@ class QuotaManager:
         if not user_id or tokens <= 0:
             return
 
-        redis: aioredis.Redis = await self._get_redis()
         ttl_seconds: int = 25 * 3600  # 25 小时
 
         # 更新用户配额
         user_key: str = self._user_key(user_id)
-        await redis.incrby(user_key, tokens)
-        await redis.expire(user_key, ttl_seconds)
+        await self._redis_op("incrby", user_key, tokens)
+        await self._redis_op("expire", user_key, ttl_seconds)
 
         # 更新部门配额
         if dept:
             dept_key: str = self._dept_key(dept)
-            await redis.incrby(dept_key, tokens)
-            await redis.expire(dept_key, ttl_seconds)
+            await self._redis_op("incrby", dept_key, tokens)
+            await self._redis_op("expire", dept_key, ttl_seconds)
 
         # 检查告警阈值
-        user_used: int = int(await redis.get(user_key) or 0)
+        user_used: int = int(await self._redis_op("get", user_key) or 0)
         if user_used >= int(self._default_user_limit * self._alert_threshold):
             logger.warning(
                 "User quota alert threshold reached",
@@ -325,8 +349,7 @@ class QuotaManager:
         dept: str = "",
     ) -> QuotaInfo:
         """获取用户当前的配额信息。"""
-        redis: aioredis.Redis = await self._get_redis()
-        user_used: int = int(await redis.get(self._user_key(user_id)) or 0)
+        user_used: int = int(await self._redis_op("get", self._user_key(user_id)) or 0)
         return QuotaInfo(
             user_id=user_id,
             department=dept,
@@ -337,8 +360,7 @@ class QuotaManager:
 
     async def reset_quota(self, user_id: str) -> None:
         """重置用户的每日配额（管理员覆盖）。"""
-        redis: aioredis.Redis = await self._get_redis()
-        await redis.delete(self._user_key(user_id))
+        await self._redis_op("delete", self._user_key(user_id))
         logger.info("User quota reset", user_id=user_id)
 
 

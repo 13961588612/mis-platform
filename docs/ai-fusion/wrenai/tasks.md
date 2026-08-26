@@ -29,7 +29,7 @@ graph TD
 
 ---
 
-## W0 — 待确认拍板（规划/评审，无代码；v1.8：A1/A5 已确认；v1.9：A1 业务改判落 mis_platform，剩余 A2/A3/A6/A7/A8/A9/A10 执行期确认 + W0 实测）
+## W0 — 待确认拍板（规划/评审，无代码；v1.8：A1/A5 已确认；v1.9：A1 业务改判落 mis_platform，剩余 A2/A3/A6/A7/A8/A9/A10 执行期确认 + W0 实测；v1.10 新增探针 3f：样本对方言目标方言确认）
 
 ### T-W0-01 架构与业务待确认项拍板（MCP-first 已定）
 
@@ -51,6 +51,7 @@ graph TD
   3c. **（v1.4 探针③，保留）部门树规模与 path 现状盘点**：运维/业务确认 mis-org 实际部门树规模（万级？十万级？）、`sys_dept` 新增物化 `dept_path` 列的实施窗口（✅ A12 已确认物化，v1.5；含 V70 迁移回填与 `DeptService` 维护逻辑改造点复核：create/relocate/根创建）、业务库各表条件列现状（dept_id / 是否已冗余 path），结论支持 T-W2-02a 落地排期；
   3d. **（v1.5 探针④，v1.6 修订实测对象为 `mis_dept_scope` 形态）`dept_path LIKE` 前缀实测**：向 wren-core / 业务库注入 `col = '<path>' OR col LIKE '<path>/%'` 谓词（含 2a 的 `EXISTS (SELECT 1 FROM mis_dept_scope d WHERE d.dept_id = t.dept_id AND (d.dept_path = '<p>' OR d.dept_path LIKE '<p>/%'))` JOIN 形态——**v1.6 由「JOIN `sys_dept`」改为字典表形态**），实测可解析、可执行、性能与索引命中（`mis_dept_scope.dept_path` btree 前缀 LIKE）；**结论决定 PATH_PREFIX 注入改写形态与 `mis_dept_scope` 字典表是否需注册进 WrenAI MDL 可见范围**（若 JOIN 不可行 → 该表降级 ENUM/FAIL_CLOSED，见 architecture.md §4.2.2 C/D.6）。
   3e. **（v1.6 探针⑤，v1.7 更新：库边界已确认，聚焦编码盘点与映射可行性；v1.9 新增门店维度盘点）库边界与编码对齐盘点 + 门店维度现状**：~~① **业务库与 mis_platform 是否同一数据库实例**（同实例可走视图；跨实例必须物化表+同步）——现状：**未知**，需运维/DBA 确认~~ —— **✅ 已确认（A13②，2026-08-22）：非同一实例 → 物化表必选（视图不可行）**；② **业务库 DEPTID 与 mis-org 部门 ID（`sys_dept.id`）是否同一套主数据**——**✅ 已确认（A13①）：不统一主数据（暂时无关）→ 需要映射（决策 X：`mis_dept_scope.dept_id` 存业务库编码 + `mis_dept_id`/`dept_path` 存平台，中心侧映射）**；③ 多业务库清单与各库是否需独立字典表——**✅ 已确认（A13③）：每库一张 + 中心每日同步**。**v1.7 剩余探针聚焦**：**业务库 DEPTID 编码体系现状盘点**（dept_id 数值/字符串？是否 ODS dept_code？各库是否一致？）**+ 与 mis_org 的映射可行性**（业务库是否已有 `dept_code ↔ mis_dept_id` 现成对应列→零维护；无则确认 `mis_dept_mapping` 映射表维护路径与数据管理员），结论决定 T-W2-02a 映射维护子项是否需要 UI（见 architecture.md §4.2.2 D.6.3/D.6.4）。**v1.9 新增 3e-门店维度盘点（支撑 T-W2-02a store 维度实例化，见 architecture.md §4.2.2 D.9）**：① 业务库**是否有门店主数据表**（如 `dim_store`/`t_store`，权威性/字段 `store_id` 编码类型）；② **门店是否有层级**（区域/加盟/直营维度，决定一期扁平 ENUM ≤500 是否成立，>500 且无层级 → FAIL_CLOSED 需业务治理授权粒度，有层级 → 评估 store_path 演进）；③ **门店编码与平台是否需映射**（`store_id`=业务库编码 + `mis_store_id`=平台，或复用业务库主数据编码零映射）；④ 用户-门店授权现状（平台 RBAC 是否已有门店数据权限，或需 `user.store_ids` 最小实现），结论决定 T-W2-02a store 维度行权来源与字典表形态（`mis_store_scope` vs 复用主数据表）。
+  3f. **（v1.10 新增，样本对方言转化探针）WrenAI 目标 SQL 方言确认**：向 wren-core / `wren serve mcp` 实测确认 WrenAI（wren-engine / Apache DataFusion 系）实际接受并正确执行的 SQL 方言（用户称 wrensql，sqlglot 最接近映射候选 duckdb/trino 系），并据此**标定 sqlglot 最优「源方言 → 目标方言」映射**（含 oracle/mysql/postgres/clickhouse 四源各自最优 target）；重点实测 **Oracle 专有语法（如 `(+)` 外连接、`DECODE`/`NVL`、层级查询 `CONNECT BY`、`ROWNUM`、子查询 factoring `WITH`）翻译到 DataFusion 系的质量与边界**，写入实测报告；结论决定 `POST /sql-pairs/translate` 的翻译实现与告警策略（见 architecture.md §4.2.3 / A14）。
 
 ---
 
@@ -247,7 +248,15 @@ graph TD
   - `frontend/mis-admin-web/src/features/agent/iqd/wrenai-enhance-page.tsx`（新增，三 Tab + 重新同步）
   - `frontend/mis-admin-web/src/features/agent/ai/components/wren-citation-block.tsx`、`wren-plan-steps.tsx`（扩：引用展开、步骤化清单无 SQL）
   - `frontend/mis-admin-web/src/features/agent/iqd/api/wrenai-api.ts`、`types.ts`（扩：enhance 类型）
-  - `V69__iqd_menu_api_seed.sql`（扩：enhance 菜单与 `iqd:enhance:*` 码）
+  - `V69__iqd_menu_api_seed.sql`（扩：enhance 菜单与 `iqd:enhance:*` 码；v1.10 追加 `iqd:enhance:manage` 已覆盖 translate/trial）
+  - `backend/mis-iqd/src/main/java/com/mis/iqd/domain/entity/IqdSqlPair.java`（扩，v1.10：加 `source_dialect`/`native_sql`/`wren_sql` 字段，原 `sql_text` 改名 `wren_sql`）
+  - `backend/mis-iqd/src/main/java/com/mis/iqd/domain/service/IqdAdminService.java`（扩，v1.10：样本体增字段持久化 + 翻译/试运行代理接口 `translate_sql_pair`/`trial_sql_pair` 调 Worker）
+  - `backend/mis-admin-bff/.../controller/IqdController.java`（扩，v1.10：新增 `/sql-pairs/translate`、`/sql-pairs/trial` 端点）
+  - `backend/mis-admin-bff/.../dto/wrenai/*.java`（扩，v1.10：translate/trial DTO，snake_case）
+  - `agent/ai-platform/backend/src/agent/mis_iqd/service.py`（扩，v1.10：`translate_sql_pair(db_type, native_sql)→{wren_sql, warnings}` 调 sqlglot、`trial_sql_pair(wren_sql)→{columns, rows, error, duration_ms}` 经 `IqdMcpClient.dry_run/run_sql`）
+  - `agent/ai-platform/backend/src/agent/mis_iqd/sql_translate.py`（新增，v1.10：sqlglot 源方言→WrenAI 方言翻译函数 + 告警/兜底，目标方言见 W0 探针 3f）
+  - `frontend/mis-admin-web/src/features/agent/iqd/wrenai-enhance-page.tsx`（扩，v1.10：样本对子区 DB 类型下拉/原生 SQL/转化/可编辑转化结果/试运行/保存交互）
+  - `frontend/mis-admin-web/src/features/agent/iqd/api/wrenai-api.ts`、`types.ts`（扩，v1.10：translate/trial 类型）
 - **依赖**：T-W2-01（范围/ACL/脱敏基础就绪）、T-W3-01（审计/计划接口就绪）
 - **验收标准**：
   1. 样本（few-shot）与知识/术语/口径/同义词在 `/agent/iqd/enhance` CRUD 后，`POST /enhance/sync` 推到 WrenAI（`sql_pairs`/`instructions`），`wren_ref_id` 回填，失败项保持 pending 且有明细（FR-ACC-1/2）；
@@ -257,6 +266,7 @@ graph TD
   5. 前端步骤化计划为自然语言清单（scope_check→understanding→searching→generating→lineage_check→executing→masking→finished），**不含 SQL**（FR-PLAN-2/3，G6）；
   6. 字段脱敏全链路：命中规则字段展示 `138****0000` 等，日志/审计不落明文（FR-PERM-3、G7）；
   7. 黄金用例 G6/G7/G8 通过（引用可见、前端无 SQL、脱敏生效）。
+  8. **（v1.10 新增，样本对方言转化 + 试运行）** 在样本对子区选 Oracle/MySQL/PostgreSQL/ClickHouse → 输入原生 SQL → 点「转化」调 `POST /sql-pairs/translate` 得到**可编辑的 wrensql**（服务端 sqlglot 翻译，前端不直连 WrenAI，对齐 NFR-1）→ 点「试运行」调 `POST /sql-pairs/trial` 经 MCP `dry_run`/`run_sql` 在 WrenAI 引擎侧执行并返回列/行/错误/耗时 → 点「保存」入库（`wren_sql`）；保存后 `POST /enhance/sync` 把 `wren_sql` 作为 `sql_pairs` 推到 WrenAI（FR-ACC-1 / §4.2.3）；`native_sql`+`source_dialect` 保留以便再编辑/再翻译；翻译失败有 `warnings` 时前端提示可在 wrensql 框手写/手改。
 
 ---
 
@@ -271,7 +281,7 @@ graph TD
 | W2 | T-W2-02a | 行级数据范围·数据模型 + 范围设置页（✅ A11；**v1.9：维度注册表一期必做——`iqd_row_scope_dimension` 建表 + 种子 dept/store（Java 侧 `IqdAdminService.crud_dimension`），`row_scope.type` 废弃改维度实例（单维度/多维度 AND 叠加），配置界面维度下拉，BFF 头注入按维度注册表遍历（`X-Mis-Dept-Scope` + `X-Mis-Stores`），store 维度实例化（ENUM 扁平 + `user.store_ids` 行权 + `mis_store_scope`/复用主数据 + 同步按维度注册表遍历）**；**v1.4：BFF `X-Mis-Dept-Scope` 锚点+范围语义头**；**v1.5：A12 已确认——mis-org `dept_path` 物化必做（列+维护级联+V70 回填迁移），头携带锚点 path**；**v1.6：新增 `mis_dept_scope` 部门权限字典表**；**v1.7：A13 已确认——物化表必选 + 中心每日同步（Java 侧 `IqdScopeSyncJobService` 全量 upsert 幂等，v1.9）+ 编码映射 X + 目标库注册（scope_sync_enabled）+ 配置界面四项验收**） | 三端代码 + mis-iqd 模块 + mis-org DDL（V70）+ 业务库 DDL（物化表）+ 中心同步任务 + 映射维护 |
 | W2 | T-W2-02b | 行级数据范围·维度遍历注入/校验算法 + 测试（✅ A11；**v1.9：按维度注册表取形态（dept PATH_PREFIX / store ENUM 一期默认），多维度 AND 叠加，覆盖性校验按维度分别判定，配置来源 `IqdConfigClient` 缓存；新增用例 16–20（store 越权/双维度 AND/维度头缺失 fail-closed）**；**v1.4：`resolve_inject_strategy` 规模分层**；**v1.5：精简为 PATH_PREFIX（主）/ ENUM（降级）/ FAIL_CLOSED，CLOSURE_CTE 不实现**；**v1.6：2a 谓词载体由 `sys_dept` 改为 `mis_dept_scope`**；**v1.8：A5 列级隔离本期不做——masking 仍为唯一出口 + 列 ACL 预留位点（architecture.md §4.2.2 D.10）**） | 三端代码 |
 | W3 | T-W3-01 | 测试对话+完整计划+审计 | 三端代码 |
-| W4 | T-W4-01 | 增强物料+引用+步骤+脱敏收口 | 三端代码 |
+| W4 | T-W4-01 | 增强物料+引用+步骤+脱敏收口+**样本对方言转化/试运行（v1.10）** | 三端代码 |
 
 > 执行顺序建议：T-W0-01 → T-W1-01 → T-W1-02 →（并行可选 T-W2-01、T-W3-01）→ T-W4-01；行级范围串行：T-W2-01 → T-W2-02a → T-W2-02b。W2 与 W3 互不依赖可并行，但都须等 W1 全线完成。
 > **v1.5 前置拍板已落盘：A12（物化 `dept_path`）✅ 业务已确认（2026-08-22，主理人记录）**——PATH_PREFIX 为唯一主路径（必做），CLOSURE_CTE 不实现；T-W2-02a 物化 dept_path 必做（V70 迁移 + `DeptService` 维护级联 + 头携带锚点 path），T-W2-02b 策略单测为 PATH_PREFIX/ENUM/FAIL_CLOSED；详见 architecture.md §4.2.2 C/D 与 §8 A12。
