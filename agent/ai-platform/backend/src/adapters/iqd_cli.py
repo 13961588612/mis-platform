@@ -109,6 +109,24 @@ class IqdCli:
             args.extend(["--instructions", json.dumps(instructions, ensure_ascii=False)])
         return await self._run(args)
 
+    async def memory_index(self) -> dict[str, Any]:
+        """下发记忆索引（``wren memory index``）。
+
+        将本次 context build 产出的语义记忆（样本对 / 指令）写入 WrenAI 记忆索引，
+        使其对问数生效。属于闭环 build+index 的关键第二步。
+
+        Returns:
+            CLI 调用结果字典（含 ``command`` / ``exit_code`` / ``stdout`` / ``stderr``）。
+
+        Raises:
+            IqdCliError: 二进制缺失或命令非零退出（含部署版本未提供 ``memory index`` 子命令）。
+
+        Note:
+            调用方需对 ``IqdCliError`` 做容错（Q6）：CLI 缺失/失败不得中断 build 回填，
+            仅单独标记 ``index_status=failed``。
+        """
+        return await self._run(["memory", "index"])
+
     # ================================================================ 内部
 
     async def _run(self, args: list[str]) -> dict[str, Any]:

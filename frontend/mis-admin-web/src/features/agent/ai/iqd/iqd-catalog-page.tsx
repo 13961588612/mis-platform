@@ -6,7 +6,7 @@
  * （权限码 iqd:catalog:view / iqd:scope:save）。
  */
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
 import { RefreshCw, Save, ShieldCheck } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
@@ -28,10 +28,25 @@ const KIND_LABEL: Record<string, string> = {
   column: '字段',
   model: '模型',
   relationship: '关系',
+  cube: '立方体',
+  measure: '度量',
   metric: '指标',
   dimension: '维度',
   view: '视图',
 };
+
+/** 清单按类型分组的展示顺序（cube/measure 为 P0-3 补全新增）。 */
+const KIND_ORDER: string[] = [
+  'table',
+  'model',
+  'column',
+  'relationship',
+  'cube',
+  'measure',
+  'metric',
+  'dimension',
+  'view',
+];
 
 export const IQD_CATALOG_PAGE_PATH = '/iqd/catalog';
 
@@ -78,6 +93,23 @@ export function IqdCatalogPage() {
         (it.display_name ?? '').toLowerCase().includes(kw),
     );
   }, [items, keyword]);
+
+  // 按类型分组（树形分组；cube/measure 等新增类型自然落入分组头）。保留 KIND_ORDER 顺序。
+  const grouped = useMemo(() => {
+    const map = new Map<string, typeof items>();
+    for (const it of filtered) {
+      const arr = map.get(it.kind) ?? [];
+      arr.push(it);
+      map.set(it.kind, arr);
+    }
+    return [...map.keys()]
+      .sort((a, b) => {
+        const ia = KIND_ORDER.indexOf(a);
+        const ib = KIND_ORDER.indexOf(b);
+        return (ia === -1 ? 999 : ia) - (ib === -1 ? 999 : ib);
+      })
+      .map((kind) => ({ kind, rows: map.get(kind) ?? [] }));
+  }, [filtered]);
 
   const toggleSelect = useCallback((itemKey: string) => {
     setSelected((prev) => {
@@ -241,7 +273,17 @@ export function IqdCatalogPage() {
                 </td>
               </tr>
             ) : (
-              filtered.map((it) => (
+              grouped.map((g) => (
+                <Fragment key={g.kind}>
+                  <tr>
+                    <td
+                      colSpan={7}
+                      className="border-b border-border/50 bg-muted/40 px-3 py-1.5 text-xs font-semibold text-muted-foreground"
+                    >
+                      {KIND_LABEL[g.kind] ?? g.kind}（{g.rows.length}）
+                    </td>
+                  </tr>
+                  {g.rows.map((it) => (
                 <tr
                   key={it.item_key}
                   className="border-b border-border/50 bg-table-row last:border-0 even:bg-table-stripe hover:bg-table-hover"
@@ -283,6 +325,8 @@ export function IqdCatalogPage() {
                     )}
                   </td>
                 </tr>
+                  ))}
+                </Fragment>
               ))
             )}
           </tbody>

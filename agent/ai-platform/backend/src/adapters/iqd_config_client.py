@@ -47,6 +47,9 @@ GET_SQL_PAIRS_PATH = "/internal/v1/iqd/get-sql-pairs"
 GET_KNOWLEDGE_PATH = "/internal/v1/iqd/get-knowledge"
 GET_ASK_LOGS_PATH = "/internal/v1/iqd/get-ask-logs"
 WRITE_ASK_LOG_PATH = "/internal/v1/iqd/write-ask-log"
+# —— 闭环补全（P0-3 / P1-1）：增强同步回填 + 作业上报 ——
+BACKFILL_PATH = "/internal/v1/iqd/enhance/backfill"
+SYNC_JOB_PATH = "/internal/v1/iqd/enhance/sync-job"
 
 #: 配置缓存桶名（与 IqdConfigClient 分桶缓存一一对应）
 CACHE_BUCKET_CONNECTIONS = "connections"
@@ -250,6 +253,49 @@ class IqdConfigClient:
         data = await self._request("POST", WRITE_ASK_LOG_PATH, ctx, payload=payload)
         logger.info("IQD ask log written", trace_id=ctx.trace_id)
         return data if isinstance(data, dict) else {"id": data}
+
+    # ================================================================ 闭环补全：回填 + 作业上报
+
+    async def backfill_enhancement_sync(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """回填增强同步（wren_ref_id + pending 物料 id；经 mis-iqd 内部 API）。
+
+        ai-platform 在「拉取待下发物料」时已持有 pending 物料 id，build 完成后直接组装
+        回填报文（与 :meth:`write_ask_log` 同一内部 API 范式），无需把 ref 映射上抛 BFF。
+
+        Args:
+            payload: ``{connection_id, wren_ref_id, sql_pair_ids, knowledge_ids, synced_at}``。
+
+        Returns:
+            mis-iqd 返回的 data（通常含受影响行数 ``{"updated": N}``）。
+
+        Raises:
+            IqdConfigClientError: 网络失败或 mis-iqd 返回 ``code != 0``。
+        """
+        ctx = IqdCallContext()
+        data = await self._request("POST", BACKFILL_PATH, ctx, payload=payload)
+        logger.info("IQD enhancement backfill sent", trace_id=ctx.trace_id)
+        return data if isinstance(data, dict) else {}
+
+    async def report_sync_job(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """上报同步作业（build/index 状态 + 回填计数；经 mis-iqd 内部 API）。
+
+        ai-platform 每完成一次整库 rebuild（context build + memory index）即上报作业，
+        由 mis-iqd 写入 ``iqd_sync_job``（按连接覆盖写），驱动前端 SyncStatusBar。
+
+        Args:
+            payload: ``{connection_id, build_status, build_mdl_hash, index_status,
+                      build_error, index_error, synced_sql_pair_count, synced_knowledge_count}``。
+
+        Returns:
+            mis-iqd 返回的 data（通常含作业 ``{"id": ...}``）。
+
+        Raises:
+            IqdConfigClientError: 网络失败或 mis-iqd 返回 ``code != 0``。
+        """
+        ctx = IqdCallContext()
+        data = await self._request("POST", SYNC_JOB_PATH, ctx, payload=payload)
+        logger.info("IQD sync job reported", trace_id=ctx.trace_id)
+        return data if isinstance(data, dict) else {}
 
     # ================================================================ 配置拉取扩展
 

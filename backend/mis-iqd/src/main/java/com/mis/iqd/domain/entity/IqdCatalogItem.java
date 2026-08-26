@@ -72,6 +72,11 @@ public class IqdCatalogItem {
     @Column(name = "mask_rule")
     private String maskRule;
 
+    /** 二期前向：平台是否可内建/改此 catalog 项（一期恒 false，仅占位）。 */
+    @JdbcTypeCode(SqlTypes.SMALLINT)
+    @Column(name = "editable", nullable = false)
+    private Integer editable = 0;
+
     @Column(name = "last_seen_at")
     private Instant lastSeenAt;
 
@@ -207,6 +212,14 @@ public class IqdCatalogItem {
 
     public void setMaskRule(String maskRule) {
         this.maskRule = maskRule;
+    }
+
+    public Integer getEditable() {
+        return editable;
+    }
+
+    public void setEditable(Integer editable) {
+        this.editable = editable;
     }
 
     public Instant getLastSeenAt() {

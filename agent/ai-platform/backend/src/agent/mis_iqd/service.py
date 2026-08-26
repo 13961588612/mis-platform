@@ -19,8 +19,13 @@ W4 扩展：:meth:`list_sql_pairs` / :meth:`list_knowledge`（增强物料缓存
 
 from __future__ import annotations
 
+import json
+import re
 import time
+from datetime import datetime, timezone
 from typing import Any
+
+from pydantic import BaseModel, Field
 
 from src.adapters.iqd_mcp_client import IqdMcpClient
 from src.agent.mis_iqd.errors import IqdError
@@ -31,10 +36,37 @@ from src.agent.mis_iqd.sql_translate import (
 from src.agent.mis_iqd.orchestrator import AskOrchestrator, AskResult
 from src.agent.mis_iqd.projector import ResponseProjector
 from src.agent.mis_iqd.scope_resolver import AskIdentity, ScopeResolver
+from src.config import get_settings
 from src.models.iqd_schema import AskRequest, VIEW_USER
 from src.utils.logging import get_logger
 
 logger = get_logger("agent.mis_iqd.service")
+
+
+class SyncResult(BaseModel):
+    """增强同步作业结果（闭环 build+index+回填 的统一返回）。
+
+    Attributes:
+        connection_id: 问数连接 id。
+        coalesced: 本次触发是否合并进在进行的 build（wait=false 合并窗口内为 True）。
+        build_status: pending | running | success | failed（context build 阶段）。
+        index_status: pending | running | success | failed | skipped（memory index 阶段）。
+        build_mdl_hash: context build 返回的 mdl_hash（解析失败回退 ``wqd-*``）。
+        synced_sql_pair_count: 本次回填成功的样本对数。
+        synced_knowledge_count: 本次回填成功的知识条数。
+        build_error: build 失败原因（成功为 None）。
+        index_error: memory index 失败原因（成功/跳过为 None）。
+    """
+
+    connection_id: int | None = None
+    coalesced: bool = False
+    build_status: str = "pending"
+    index_status: str = "pending"
+    build_mdl_hash: str | None = None
+    synced_sql_pair_count: int = 0
+    synced_knowledge_count: int = 0
+    build_error: str | None = None
+    index_error: str | None = None
 
 
 class IqdAskService:
@@ -256,6 +288,190 @@ class IqdAskService:
             "knowledge_count": len(pending_knowledge),
             "message": "待推送物料已就绪（Worker 经 context build 同步并回填 wren_ref_id）",
         }
+
+    # ================================================================ 闭环补全（P0-3 / P1-1 / P1-2）
+
+    async def trigger_build_index(
+        self, connection_id: int | None = None, wait: bool = True
+    ) -> SyncResult:
+        """编排整库 rebuild：拉待下发物料 → context build → memory index → 回填 + 报作业。
+
+        这是问数闭环补全的核心编排（架构 §1.2 链路 B）。build 成功后统一把
+        ``wren_ref_id``（= 本次 mdl_hash）回填给本批 pending 物料；memory index
+        失败（Q6：CLI 缺失/不可用）**不阻断** build 回填，仅单独标记 ``index_status=failed``。
+
+        Args:
+            connection_id: 问数连接 id（缺省解析主连接）。
+            wait: 是否阻塞至完成（True=手动/重试；False=自动接受即返回）。
+
+        Returns:
+            :class:`SyncResult`（build/index 状态 + mdl_hash + 回填计数）。
+        """
+        from src.adapters.iqd_cli import IqdCli, IqdCliError
+        from src.adapters.iqd_config_client import IqdConfigClient, IqdConfigClientError
+
+        settings = get_settings()
+        cli = IqdCli()
+        client = self._get_config_client()
+
+        cid = connection_id or await self._resolve_primary_connection_id(client)
+        if cid is None:
+            return SyncResult(
+                connection_id=None,
+                coalesced=False,
+                build_status="failed",
+                build_error="no primary connection",
+            )
+
+        # ① 拉待下发物料（pending + enabled）
+        try:
+            sql_pairs = await client.get_sql_pairs(cid)
+            knowledge = await client.get_knowledge(cid)
+        except IqdConfigClientError as exc:
+            return SyncResult(
+                connection_id=cid,
+                coalesced=False,
+                build_status="failed",
+                build_error=f"拉取待下发物料失败: {exc}",
+            )
+        pending_pairs = [
+            p for p in sql_pairs
+            if p.get("sync_status") == "pending" and p.get("enabled", True) is not False
+        ]
+        pending_knowledge = [
+            k for k in knowledge
+            if k.get("sync_status") == "pending" and k.get("enabled", True) is not False
+        ]
+
+        sql_pair_args = [
+            {"question": p.get("question"), "sql": p.get("wren_sql") or p.get("sql_text")}
+            for p in pending_pairs
+        ]
+        instruction_args = [
+            {"title": k.get("title"), "content": k.get("content") or ""}
+            for k in pending_knowledge
+        ]
+
+        # ② context build（整库 rebuild，返回 mdl_hash）
+        build_status = "success"
+        build_error: str | None = None
+        mdl_hash: str | None = None
+        try:
+            build_result = await cli.context_build(
+                sql_pairs=sql_pair_args,
+                instructions=instruction_args,
+                allow_write=True,
+            )
+            mdl_hash = self._parse_mdl_hash(build_result.get("stdout", ""))
+        except IqdCliError as exc:
+            build_status = "failed"
+            build_error = str(exc)
+
+        # ③ memory index（容错：缺失/失败不阻断 build；单独记 index 状态）
+        index_status = "skipped"
+        index_error: str | None = None
+        if build_status == "success" and settings.iqd_mcp.memory_index_enabled:
+            try:
+                await cli.memory_index()
+                index_status = "success"
+            except IqdCliError as exc:
+                index_status = "failed"
+                index_error = str(exc)
+                logger.warning("IQD memory index failed (non-blocking)", error=str(exc))
+
+        # ④ 回填（wren_ref_id 统一填本次 mdl_hash，覆盖本批 pending 物料）
+        backfill_ok = False
+        if build_status == "success" and mdl_hash:
+            try:
+                await client.backfill_enhancement_sync({
+                    "connection_id": cid,
+                    "wren_ref_id": mdl_hash,
+                    "sql_pair_ids": [p.get("id") for p in pending_pairs if p.get("id") is not None],
+                    "knowledge_ids": [k.get("id") for k in pending_knowledge if k.get("id") is not None],
+                    "synced_at": datetime.now(timezone.utc).isoformat(),
+                })
+                backfill_ok = True
+            except IqdConfigClientError as exc:
+                build_status = "failed"
+                build_error = f"回填失败: {exc}"
+
+        # ⑤ 报作业（失败仅告警，不阻断返回）
+        synced_pairs = len(pending_pairs) if backfill_ok else 0
+        synced_knowledge = len(pending_knowledge) if backfill_ok else 0
+        try:
+            await client.report_sync_job({
+                "connection_id": cid,
+                "build_status": build_status,
+                "build_mdl_hash": mdl_hash,
+                "index_status": index_status,
+                "build_error": build_error,
+                "index_error": index_error,
+                "synced_sql_pair_count": synced_pairs,
+                "synced_knowledge_count": synced_knowledge,
+            })
+        except IqdConfigClientError as exc:
+            logger.warning("IQD report sync job failed", connection_id=cid, error=str(exc))
+
+        return SyncResult(
+            connection_id=cid,
+            coalesced=False,
+            build_status=build_status,
+            index_status=index_status,
+            build_mdl_hash=mdl_hash,
+            synced_sql_pair_count=synced_pairs,
+            synced_knowledge_count=synced_knowledge,
+            build_error=build_error,
+            index_error=index_error,
+        )
+
+    @staticmethod
+    def _parse_mdl_hash(stdout: str) -> str | None:
+        """从 context build 的 stdout 提取 mdl_hash。
+
+        优先 JSON 解析（``mdl_hash`` / ``hash`` / ``deployment_id``），失败回退带
+        前缀正则提取；均失败则用回退值 ``wqd-{yyyyMMddHHmmss}-{uuid}``。解析失败不得
+        中断回填（返回回退值）。
+        """
+        if stdout and stdout.strip():
+            try:
+                data = json.loads(stdout)
+                if isinstance(data, dict):
+                    for key in ("mdl_hash", "hash", "deployment_id", "mdlHash", "deploymentId"):
+                        val = data.get(key)
+                        if isinstance(val, str) and val.strip():
+                            return val.strip()
+            except (ValueError, AttributeError):
+                match = re.search(
+                    r"(?:mdl_hash|hash|deployment_id)['\"]?\s*[:=]\s*['\"]?([A-Za-z0-9_\-]+)",
+                    stdout,
+                )
+                if match:
+                    return match.group(1)
+        return IqdAskService._fallback_mdl_hash()
+
+    @staticmethod
+    def _fallback_mdl_hash() -> str:
+        """mdl_hash 解析失败时的回退值（格式 ``wqd-{yyyyMMddHHmmss}-{uuid8}``）。"""
+        from uuid import uuid4
+
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
+        return f"wqd-{stamp}-{uuid4().hex[:8]}"
+
+    async def _resolve_primary_connection_id(self, client: Any) -> int | None:
+        """解析主连接 id（name='default' 或首条 enabled）。"""
+        try:
+            connections = await client.get_connections()
+        except Exception as exc:  # noqa: BLE001 - 解析失败降级为无连接
+            logger.warning("IQD resolve primary connection failed", error=str(exc))
+            return None
+        if connections:
+            cid = connections[0].get("id")
+            if isinstance(cid, (int, str)):
+                try:
+                    return int(cid)
+                except (TypeError, ValueError):
+                    return None
+        return None
 
     # ================================================================ v1.10 方言转化 + 试运行
 

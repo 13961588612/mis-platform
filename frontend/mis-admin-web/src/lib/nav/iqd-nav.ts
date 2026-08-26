@@ -34,6 +34,7 @@ export const IQD_NAV: SystemNavNode[] = [
   { kind: 'leaf', path: '/iqd/test-chat', title: 'IQD 测试问数', icon: 'Crosshair' },
   { kind: 'leaf', path: '/iqd/traces', title: 'IQD 问数审计', icon: 'History' },
   { kind: 'leaf', path: '/iqd/enhance', title: 'IQD 脱敏与维度', icon: 'Sparkles' },
+  { kind: 'leaf', path: '/iqd/instruction', title: 'IQD 指令下发', icon: 'Sparkles' },
 ];
 
 /** 展平为叶节点列表（IQD_NAV 当前全为叶节点，保留分支处理以兼容后续扩展）。 */

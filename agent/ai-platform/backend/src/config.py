@@ -94,6 +94,14 @@ class IqdMcpSettings(BaseSettings):
         default="zh-CN",
         description="WrenAI 生成语言",
     )
+    build_timeout_seconds: float = Field(
+        default=120.0,
+        description="单次 context build + memory index 整库重建超时（秒）；超时→同步标记 failed 保留 pending 可重试",
+    )
+    memory_index_enabled: bool = Field(
+        default=True,
+        description="是否启用 `wren memory index` 下发记忆索引（闭环 build+index 关键步；部署侧需 wren CLI 支持）",
+    )
 
 
 class IqdConfigClientSettings(BaseSettings):
@@ -127,6 +135,10 @@ class IqdConfigClientSettings(BaseSettings):
         default="",
         description="可选：变更事件订阅用 Redis URL（如 redis://localhost:6379/0）；"
         "为空则退回 TTL/每日兜底",
+    )
+    sync_coalesce_window_sec: float = Field(
+        default=3.0,
+        description="每连接增强同步合并窗口（秒）；窗口内多次保存合并为一次 build+index（P1-2 幂等/可重试）",
     )
 
 

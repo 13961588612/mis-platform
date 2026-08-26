@@ -19,7 +19,8 @@ from typing import Any
 from fastapi import APIRouter, Depends, Header, status
 from pydantic import BaseModel, Field
 
-from src.agent.mis_iqd.service import IqdAskService
+from src.agent.mis_iqd.service import IqdAskService, SyncResult
+from src.agent.mis_iqd.sync_coordinator import SyncCoordinator
 from src.api.deps import get_current_user, get_trace_id
 from src.api.response import error_response, success
 from src.utils.logging import get_logger
@@ -40,6 +41,23 @@ class TrialRequest(BaseModel):
     """样本对试运行请求体。"""
 
     wren_sql: str = Field(..., description="转化后的 WrenAI 方言 SQL（可经前端手改）")
+
+
+class EnhanceSyncRequest(BaseModel):
+    """增强物料同步请求体（闭环触发；BFF → ai-platform）。
+
+    Attributes:
+        connection_id: 问数连接 id（缺省解析主连接 name='default'/首条 enabled）。
+        wait: ``False``=保存后自动触发（接受即返回 ``{accepted,coalesced}``）；
+            ``True``=立即同步/重试按钮（阻塞至 build+index 完成，返回完整 ``SyncResult``）。
+    """
+
+    connection_id: int | None = Field(
+        default=None, description="问数连接 id（缺省解析主连接）"
+    )
+    wait: bool = Field(
+        default=False, description="false=自动触发接受即返回; true=立即同步/重试阻塞完成"
+    )
 
 
 @router.post("/sql-pairs/translate")
@@ -78,6 +96,40 @@ async def trial_sql_pair(
         return success(data=result, message="ok", trace_id=trace_id)
     except Exception as exc:  # noqa: BLE001
         logger.error("IQD trial_sql_pair failed", error=str(exc))
+        return error_response(
+            code=9000,
+            message=str(exc),
+            http_status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            trace_id=trace_id,
+        )
+
+
+@router.post("/enhance/sync")
+async def enhance_sync(
+    req: EnhanceSyncRequest,
+    current_user: dict[str, Any] = Depends(get_current_user),
+    trace_id: str = Depends(get_trace_id),
+    authorization: str = Header(default=""),
+) -> dict[str, Any]:
+    """增强物料同步（闭环 P0-3 / P1-1 / P1-2）。
+
+    经 :class:`SyncCoordinator` 合并窗口触发 ``IqdAskService.trigger_build_index``：
+    拉待下发物料 → ``context build`` → ``memory index`` → 经 ``IqdConfigClient`` 回填 +
+    报作业（写回 mis-iqd 内部端点）。
+
+    - ``wait=false``：接受即返回 ``{accepted, coalesced}``（保存后自动触发，前端列表刷新 + 状态条转「同步中」）。
+    - ``wait=true``：阻塞至 build+index 完成，返回完整 ``SyncResult``（立即同步/重试按钮）。
+    """
+    try:
+        coordinator = SyncCoordinator()
+        result: SyncResult = await coordinator.trigger(req.connection_id, req.wait)
+        return success(
+            data=result.model_dump(),
+            message="accepted" if not req.wait else "ok",
+            trace_id=trace_id,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.error("IQD enhance_sync failed", error=str(exc))
         return error_response(
             code=9000,
             message=str(exc),

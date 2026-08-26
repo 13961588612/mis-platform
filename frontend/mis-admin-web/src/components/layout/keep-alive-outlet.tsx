@@ -54,10 +54,8 @@ import { flattenIqdNavLeaves } from '@/lib/nav/iqd-nav';
 // T09/T10 存量页：路由级懒加载（React.lazy + Suspense，每路由独立 chunk ≤80KB/页）。
 // 页面文件默认导出组件；chunk 首访进入时才拉取。
 // ---------------------------------------------------------------------------
-const LazyQaPage = lazy(() => import('@/features/agent/ai/qa-page'));
 const LazyDataQueryPage = lazy(() => import('@/features/agent/ai/data-query-page'));
 const LazyApprovalCenterPage = lazy(() => import('@/features/agent/ai/approval-center-page'));
-const LazySkillManagePage = lazy(() => import('@/features/agent/ai/skill-manage-page'));
 const LazyMonitorDashboardPage = lazy(() => import('@/features/agent/ai/monitor-dashboard-page'));
 // W2 问数管理（/iqd/*，懒加载；V77 路由前缀由 /ai/iqd 迁至 /iqd）
 const LazyIqdConfigPage = lazy(() => import('@/features/agent/ai/iqd/iqd-config-page'));
@@ -66,6 +64,7 @@ const LazyIqdScopePage = lazy(() => import('@/features/agent/ai/iqd/iqd-scope-pa
 const LazyIqdTestChatPage = lazy(() => import('@/features/agent/ai/iqd/iqd-test-chat-page'));
 const LazyIqdTracePage = lazy(() => import('@/features/agent/ai/iqd/iqd-trace-page'));
 const LazyIqdEnhancePage = lazy(() => import('@/features/agent/ai/iqd/iqd-enhance-page'));
+const LazyIqdInstructionPage = lazy(() => import('@/features/agent/ai/iqd/iqd-instruction-page'));
 
 /** 懒加载页面的 Suspense 占位（轻量，避免白屏闪烁）。 */
 function LazyPageFallback() {
@@ -142,10 +141,8 @@ const PAGE_MAP: Record<string, ComponentType> = {
   '/agent/channels/wecom': AgentWecomPage,
   '/agent/monitor': AgentMonitorPage,
   '/agent/approvals': AgentApprovalsPage,
-  // T09/T10：存量页迁移（ai-platform 后端，懒加载）
-  '/ai/qa': LazyQaPage,
+  // T10：存量页迁移（审批中心 / 系统监控；知识库问答与 Skill 管理已下线）
   '/ai/approvals': LazyApprovalCenterPage,
-  '/ai/skills': LazySkillManagePage,
   '/ai/monitor': LazyMonitorDashboardPage,
   // W2：问数管理（V77 独立门户应用 iqd，路由迁 /iqd/*；组件不变）
   '/iqd/data-query': LazyDataQueryPage,
@@ -155,6 +152,7 @@ const PAGE_MAP: Record<string, ComponentType> = {
   '/iqd/test-chat': LazyIqdTestChatPage,
   '/iqd/traces': LazyIqdTracePage,
   '/iqd/enhance': LazyIqdEnhancePage,
+  '/iqd/instruction': LazyIqdInstructionPage,
 };
 
 export const KEEP_ALIVE_META: Record<string, { title: string; icon?: string }> = Object.fromEntries(

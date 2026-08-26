@@ -63,6 +63,24 @@ public class IqdProperties {
     /** Worker 侧 mis-iqd Agent 的 agentId（ai-platform Agent Core 注册名）。 */
     private String agentId = "mis-iqd";
 
+    /**
+     * 增强同步触发端点（BFF → ai-platform，默认 /api/v1/iqd/enhance/sync）。
+     * wait=false 接受即返回；wait=true 阻塞至 build+index 完成。
+     */
+    private String enhanceSyncEndpoint = "/api/v1/iqd/enhance/sync";
+
+    /**
+     * 增强同步状态查询端点（BFF → mis-iqd，默认 /api/v1/iqd/enhance/sync-status）。
+     * 由 IqdSyncJob 最新作业驱动前端 SyncStatusBar。
+     */
+    private String enhanceStatusEndpoint = "/api/v1/iqd/enhance/sync-status";
+
+    /**
+     * 二类前向：MDL 写回开关（一期恒 false）。开启后平台内改 catalog 才回写 WrenAI；
+     * 一期 catalog 读取仍走单向 syncCatalogFromMdl，此开关仅占位。
+     */
+    private boolean mdlWritebackEnabled = false;
+
     public String getBaseUrl() {
         return baseUrl;
     }
@@ -253,5 +271,29 @@ public class IqdProperties {
 
     public void setAgentId(String agentId) {
         this.agentId = agentId;
+    }
+
+    public String getEnhanceSyncEndpoint() {
+        return enhanceSyncEndpoint;
+    }
+
+    public void setEnhanceSyncEndpoint(String enhanceSyncEndpoint) {
+        this.enhanceSyncEndpoint = enhanceSyncEndpoint;
+    }
+
+    public String getEnhanceStatusEndpoint() {
+        return enhanceStatusEndpoint;
+    }
+
+    public void setEnhanceStatusEndpoint(String enhanceStatusEndpoint) {
+        this.enhanceStatusEndpoint = enhanceStatusEndpoint;
+    }
+
+    public boolean isMdlWritebackEnabled() {
+        return mdlWritebackEnabled;
+    }
+
+    public void setMdlWritebackEnabled(boolean mdlWritebackEnabled) {
+        this.mdlWritebackEnabled = mdlWritebackEnabled;
     }
 }

@@ -20,6 +20,7 @@ import com.mis.iqd.api.dto.IqdScopePolicySaveRequest;
 import com.mis.iqd.api.dto.IqdScopePolicyVO;
 import com.mis.iqd.api.dto.IqdSqlPairSaveRequest;
 import com.mis.iqd.api.dto.IqdSqlPairVO;
+import com.mis.iqd.api.dto.IqdSyncJobVO;
 import com.mis.iqd.domain.entity.IqdAskLog;
 import com.mis.iqd.domain.entity.IqdCatalogItem;
 import com.mis.iqd.domain.entity.IqdConnection;
@@ -28,6 +29,7 @@ import com.mis.iqd.domain.entity.IqdMaskRule;
 import com.mis.iqd.domain.entity.IqdRowScopeDimension;
 import com.mis.iqd.domain.entity.IqdScopePolicy;
 import com.mis.iqd.domain.entity.IqdSqlPair;
+import com.mis.iqd.domain.entity.IqdSyncJob;
 import com.mis.iqd.domain.entity.IqdTableAcl;
 import com.mis.iqd.domain.repository.IqdAskLogRepository;
 import com.mis.iqd.domain.repository.IqdCatalogItemRepository;
@@ -37,6 +39,7 @@ import com.mis.iqd.domain.repository.IqdMaskRuleRepository;
 import com.mis.iqd.domain.repository.IqdRowScopeDimensionRepository;
 import com.mis.iqd.domain.repository.IqdScopePolicyRepository;
 import com.mis.iqd.domain.repository.IqdSqlPairRepository;
+import com.mis.iqd.domain.repository.IqdSyncJobRepository;
 import com.mis.iqd.domain.repository.IqdTableAclRepository;
 import com.mis.iqd.support.IdGenerator;
 import org.slf4j.Logger;
@@ -90,6 +93,7 @@ public class IqdAdminService {
     private final IqdRowScopeDimensionRepository dimensionRepository;
     private final IqdSqlPairRepository sqlPairRepository;
     private final IqdKnowledgeRepository knowledgeRepository;
+    private final IqdSyncJobRepository syncJobRepository;
     private final IqdChangeEventPublisher changeEventPublisher;
     private final ObjectMapper objectMapper;
 
@@ -103,6 +107,7 @@ public class IqdAdminService {
             IqdRowScopeDimensionRepository dimensionRepository,
             IqdSqlPairRepository sqlPairRepository,
             IqdKnowledgeRepository knowledgeRepository,
+            IqdSyncJobRepository syncJobRepository,
             IqdChangeEventPublisher changeEventPublisher,
             ObjectMapper objectMapper) {
         this.connectionRepository = connectionRepository;
@@ -114,6 +119,7 @@ public class IqdAdminService {
         this.dimensionRepository = dimensionRepository;
         this.sqlPairRepository = sqlPairRepository;
         this.knowledgeRepository = knowledgeRepository;
+        this.syncJobRepository = syncJobRepository;
         this.changeEventPublisher = changeEventPublisher;
         this.objectMapper = objectMapper;
     }
@@ -370,6 +376,66 @@ public class IqdAdminService {
                         "relationship", null, "mdl:relationship:" + relName,
                         relName, null, null, null, null,
                         str(rel.get("description")), str(rel.get("expression")), "mdl",
+                        null, null, null));
+            }
+            // cubes + measures[].name/description/expression（对齐 §八待明确事项 6）
+            List<Map<String, Object>> cubes = asList(mdl.get("cubes"));
+            for (Map<String, Object> cube : cubes) {
+                String cubeName = str(cube.get("name"));
+                if (cubeName == null || cubeName.isBlank()) {
+                    continue;
+                }
+                String cubeKey = "mdl:cube:" + cubeName;
+                items.add(new IqdCatalogItemSaveRequest(
+                        "cube", null, cubeKey, cubeName, null, null, null, null,
+                        str(cube.get("description")), str(cube.get("expression")), "mdl",
+                        null, null, null));
+                List<Map<String, Object>> measures = asList(cube.get("measures"));
+                for (Map<String, Object> measure : measures) {
+                    String measureName = str(measure.get("name"));
+                    if (measureName == null || measureName.isBlank()) {
+                        continue;
+                    }
+                    items.add(new IqdCatalogItemSaveRequest(
+                            "measure", cubeKey, cubeKey + "." + measureName, measureName, null, null, null, null,
+                            str(measure.get("description")), str(measure.get("expression")), "mdl",
+                            null, null, null));
+                }
+            }
+            // metrics
+            List<Map<String, Object>> metrics = asList(mdl.get("metrics"));
+            for (Map<String, Object> metric : metrics) {
+                String metricName = str(metric.get("name"));
+                if (metricName == null || metricName.isBlank()) {
+                    continue;
+                }
+                items.add(new IqdCatalogItemSaveRequest(
+                        "metric", null, "mdl:metric:" + metricName, metricName, null, null, null, null,
+                        str(metric.get("description")), str(metric.get("expression")), "mdl",
+                        null, null, null));
+            }
+            // dimensions
+            List<Map<String, Object>> dimensions = asList(mdl.get("dimensions"));
+            for (Map<String, Object> dim : dimensions) {
+                String dimName = str(dim.get("name"));
+                if (dimName == null || dimName.isBlank()) {
+                    continue;
+                }
+                items.add(new IqdCatalogItemSaveRequest(
+                        "dimension", null, "mdl:dimension:" + dimName, dimName, null, null, null, null,
+                        str(dim.get("description")), str(dim.get("expression")), "mdl",
+                        null, null, null));
+            }
+            // views
+            List<Map<String, Object>> views = asList(mdl.get("views"));
+            for (Map<String, Object> view : views) {
+                String viewName = str(view.get("name"));
+                if (viewName == null || viewName.isBlank()) {
+                    continue;
+                }
+                items.add(new IqdCatalogItemSaveRequest(
+                        "view", null, "mdl:view:" + viewName, viewName, null, null, null, null,
+                        str(view.get("description")), str(view.get("expression")), "mdl",
                         null, null, null));
             }
         } catch (Exception exc) {
@@ -1037,6 +1103,147 @@ public class IqdAdminService {
         return result;
     }
 
+    // ================================================================ 闭环补全（P0-3 / P1-1 / P1-2）
+
+    /**
+     * 回填增强物料：把本批 pending 物料的 {@code wren_ref_id}（= 本次 context build 的
+     * mdl_hash）统一回填，并将 {@code sync_status} 置为 {@code synced} / {@code synced_at}。
+     *
+     * <p>由 ai-platform 经 {@code IqdConfigClient} 回调内部端点
+     * {@code /internal/v1/iqd/enhance/backfill} 触达（对齐 write_ask_log 范式）。
+     *
+     * @param connectionId 连接 id
+     * @param wrenRefId    context build 返回的 mdl_hash（或回退值 {@code wqd-*}）
+     * @param sqlPairIds   本批 sql_pair 主键（可空）
+     * @param knowledgeIds 本批 knowledge 主键（可空）
+     * @param syncedAt     回填时间（ISO instant）
+     * @return 实际回填行数
+     */
+    @Transactional
+    public int backfillEnhancementSync(Long connectionId, String wrenRefId,
+            List<Long> sqlPairIds, List<Long> knowledgeIds, Instant syncedAt) {
+        if (connectionId == null || syncedAt == null) {
+            return 0;
+        }
+        ensureConnection(connectionId);
+        String ref = defaultString(wrenRefId, "");
+        Instant at = syncedAt;
+        int count = 0;
+
+        List<Long> pairIds = sqlPairIds == null ? List.of() : sqlPairIds;
+        if (!pairIds.isEmpty()) {
+            for (IqdSqlPair p : sqlPairRepository.findAllById(pairIds)) {
+                if (!connectionId.equals(p.getConnectionId())) {
+                    continue;
+                }
+                p.setWrenRefId(ref);
+                p.setSyncStatus("synced");
+                p.setSyncedAt(at);
+                p.setUpdatedAt(Instant.now());
+                sqlPairRepository.save(p);
+                count++;
+            }
+        }
+
+        List<Long> knowIds = knowledgeIds == null ? List.of() : knowledgeIds;
+        if (!knowIds.isEmpty()) {
+            for (IqdKnowledge k : knowledgeRepository.findAllById(knowIds)) {
+                if (!connectionId.equals(k.getConnectionId())) {
+                    continue;
+                }
+                k.setWrenRefId(ref);
+                k.setSyncStatus("synced");
+                k.setSyncedAt(at);
+                k.setUpdatedAt(Instant.now());
+                knowledgeRepository.save(k);
+                count++;
+            }
+        }
+
+        if (count > 0) {
+            changeEventPublisher.publish("iqd.enhancement.synced",
+                    "connection=" + connectionId + " count=" + count);
+        }
+        log.info("IQD enhancement backfill connectionId={} wrenRefId={} pairs={} knowledge={} synced={}",
+                connectionId, ref, pairIds.size(), knowIds.size(), count);
+        return count;
+    }
+
+    /**
+     * 上报同步作业（ai-platform 经 {@code IqdConfigClient} 回调
+     * {@code /internal/v1/iqd/enhance/sync-job}）。
+     *
+     * <p>按连接覆盖写（一期每连接仅最新一条）：存在则更新，否则新建。
+     * build/index 进入终态（success/failed）时分别打 build_at/index_at。
+     *
+     * @param payload snake_case 作业载荷（connection_id / build_status / build_mdl_hash /
+     *                index_status / build_error / index_error / synced_sql_pair_count /
+     *                synced_knowledge_count）
+     * @return 落库后的作业视图
+     */
+    @Transactional
+    public IqdSyncJobVO reportSyncJob(Map<String, Object> payload) {
+        Long connectionId = toLong(payload.get("connection_id"));
+        if (connectionId == null) {
+            throw new BusinessException(ResultCode.VALIDATION_ERROR, "connection_id 不能为空");
+        }
+        ensureConnection(connectionId);
+        Instant now = Instant.now();
+        IqdSyncJob job = syncJobRepository.findTopByConnectionIdOrderByIdDesc(connectionId)
+                .orElseGet(() -> {
+                    IqdSyncJob j = new IqdSyncJob();
+                    j.setId(IdGenerator.nextId());
+                    j.setConnectionId(connectionId);
+                    j.setCreatedAt(now);
+                    return j;
+                });
+        job.setBuildStatus(defaultString(str(payload.get("build_status")), job.getBuildStatus()));
+        String mdlHash = str(payload.get("build_mdl_hash"));
+        if (mdlHash != null) {
+            job.setBuildMdlHash(mdlHash);
+        }
+        job.setIndexStatus(defaultString(str(payload.get("index_status")), job.getIndexStatus()));
+        if (isTerminalStatus(job.getBuildStatus())) {
+            job.setBuildAt(now);
+        }
+        if (isTerminalStatus(job.getIndexStatus())) {
+            job.setIndexAt(now);
+        }
+        Integer syncedPairs = toInt(payload.get("synced_sql_pair_count"));
+        if (syncedPairs != null) {
+            job.setSyncedSqlPairCount(syncedPairs);
+        }
+        Integer syncedKnow = toInt(payload.get("synced_knowledge_count"));
+        if (syncedKnow != null) {
+            job.setSyncedKnowledgeCount(syncedKnow);
+        }
+        job.setBuildError(str(payload.get("build_error")));
+        job.setIndexError(str(payload.get("index_error")));
+        job.setUpdatedAt(now);
+        syncJobRepository.save(job);
+        log.info("IQD sync job reported connectionId={} buildStatus={} indexStatus={} mdlHash={}",
+                connectionId, job.getBuildStatus(), job.getIndexStatus(), job.getBuildMdlHash());
+        return toSyncJobVO(job);
+    }
+
+    /**
+     * 取连接最近一次同步作业（GET /api/v1/iqd/enhance/sync-status；无则 null）。
+     */
+    @Transactional(readOnly = true)
+    public IqdSyncJobVO getLatestSyncJob(Long connectionId) {
+        ensureConnection(connectionId);
+        return syncJobRepository.findTopByConnectionIdOrderByIdDesc(connectionId)
+                .map(this::toSyncJobVO)
+                .orElse(null);
+    }
+
+    /**
+     * 终态判定：build/index 进入 success/failed 即视为完成（可打时间戳）。
+     */
+    private static boolean isTerminalStatus(String status) {
+        return "success".equals(status) || "failed".equals(status);
+    }
+
     // ================================================================ 内部
 
     private void ensureConnection(Long connectionId) {
@@ -1302,6 +1509,23 @@ public class IqdAdminService {
         vo.setSyncStatus(entity.getSyncStatus());
         vo.setSyncedAt(entity.getSyncedAt());
         vo.setCreatedAt(entity.getCreatedAt());
+        vo.setUpdatedAt(entity.getUpdatedAt());
+        return vo;
+    }
+
+    private IqdSyncJobVO toSyncJobVO(IqdSyncJob entity) {
+        IqdSyncJobVO vo = new IqdSyncJobVO();
+        vo.setId(entity.getId());
+        vo.setConnectionId(entity.getConnectionId());
+        vo.setBuildStatus(entity.getBuildStatus());
+        vo.setBuildMdlHash(entity.getBuildMdlHash());
+        vo.setIndexStatus(entity.getIndexStatus());
+        vo.setBuildAt(entity.getBuildAt());
+        vo.setIndexAt(entity.getIndexAt());
+        vo.setSyncedSqlPairCount(entity.getSyncedSqlPairCount());
+        vo.setSyncedKnowledgeCount(entity.getSyncedKnowledgeCount());
+        vo.setBuildError(entity.getBuildError());
+        vo.setIndexError(entity.getIndexError());
         vo.setUpdatedAt(entity.getUpdatedAt());
         return vo;
     }

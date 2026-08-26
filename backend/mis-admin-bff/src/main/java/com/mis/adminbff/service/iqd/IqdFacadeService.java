@@ -1,5 +1,6 @@
 package com.mis.adminbff.service.iqd;
 
+import com.mis.adminbff.client.AiPlatformClient;
 import com.mis.adminbff.client.IqdClient;
 import com.mis.adminbff.config.IqdProperties;
 import com.mis.adminbff.dto.iqd.IqdAclSaveRequest;
@@ -24,6 +25,8 @@ import com.mis.adminbff.support.RequestContext;
 import com.mis.common.core.exception.BusinessException;
 import com.mis.common.core.exception.ResultCode;
 import com.mis.common.security.context.LoginUser;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
@@ -42,17 +45,22 @@ import java.util.Set;
 @Service
 public class IqdFacadeService {
 
+    private static final Logger log = LoggerFactory.getLogger(IqdFacadeService.class);
+
     private final IqdClient iqdClient;
     private final IqdProperties properties;
     private final UserPermissionLoader userPermissionLoader;
+    private final AiPlatformClient aiPlatformClient;
 
     public IqdFacadeService(
             IqdClient iqdClient,
             IqdProperties properties,
-            UserPermissionLoader userPermissionLoader) {
+            UserPermissionLoader userPermissionLoader,
+            AiPlatformClient aiPlatformClient) {
         this.iqdClient = iqdClient;
         this.properties = properties;
         this.userPermissionLoader = userPermissionLoader;
+        this.aiPlatformClient = aiPlatformClient;
     }
 
     // ================================================================ 连接配置
@@ -240,11 +248,13 @@ public class IqdFacadeService {
     }
 
     /**
-     * 保存样本对（需 iqd:enhance:save）。
+     * 保存样本对（需 iqd:enhance:save）；保存后自动触发增强同步（best-effort）。
      */
-    public IqdSqlPairVO saveSqlPair(IqdSqlPairSaveRequest dto) {
+    public IqdSqlPairVO saveSqlPair(IqdSqlPairSaveRequest dto, String authorization, String traceId) {
         requirePermission(properties.getEnhanceSavePermission());
-        return iqdClient.saveSqlPair(dto);
+        IqdSqlPairVO saved = iqdClient.saveSqlPair(dto);
+        triggerSyncBestEffort(dto.connectionId(), authorization, traceId);
+        return saved;
     }
 
     /**
@@ -264,11 +274,13 @@ public class IqdFacadeService {
     }
 
     /**
-     * 保存知识/术语/口径（需 iqd:enhance:save）。
+     * 保存知识/术语/口径（需 iqd:enhance:save）；保存后自动触发增强同步（best-effort）。
      */
-    public IqdKnowledgeVO saveKnowledge(IqdKnowledgeSaveRequest dto) {
+    public IqdKnowledgeVO saveKnowledge(IqdKnowledgeSaveRequest dto, String authorization, String traceId) {
         requirePermission(properties.getEnhanceSavePermission());
-        return iqdClient.saveKnowledge(dto);
+        IqdKnowledgeVO saved = iqdClient.saveKnowledge(dto);
+        triggerSyncBestEffort(dto.connectionId(), authorization, traceId);
+        return saved;
     }
 
     /**
@@ -293,6 +305,47 @@ public class IqdFacadeService {
     public Map<String, Object> pushEnhancements(Long connectionId) {
         requirePermission(properties.getEnhanceSyncPermission());
         return iqdClient.pushEnhancements(connectionId);
+    }
+
+    /**
+     * 触发增强同步（需 iqd:enhance:sync）：调 ai-platform Worker 经 SyncCoordinator
+     * 合并窗口异步执行 context build + memory index + 回填。
+     *
+     * @param connectionId 问数连接 id
+     * @param wait         是否阻塞至完成（手动/重试=true；自动=false）
+     * @param authorization BFF 收到的原始 MIS JWT（透传平台 RS256）
+     * @param traceId      全链路追踪 ID
+     * @return 平台响应 data（SyncResult：build/index 状态 + mdl_hash + 回填计数）
+     */
+    public Map<String, Object> syncEnhancements(Long connectionId, Boolean wait, String authorization, String traceId) {
+        requirePermission(properties.getEnhanceSyncPermission());
+        return aiPlatformClient.syncEnhancements(connectionId, wait, authorization, traceId);
+    }
+
+    /**
+     * 回查最近一次增强同步作业（需 iqd:enhance:view；P0-4 状态条）。
+     */
+    public Map<String, Object> getEnhancementSyncStatus(Long connectionId) {
+        requirePermission(properties.getEnhanceViewPermission());
+        return iqdClient.getEnhancementSyncStatus(connectionId);
+    }
+
+    /**
+     * 保存后自动触发增强同步（best-effort，wait=false 接受即返回）。
+     *
+     * <p>失败仅告警，绝不阻断保存主流程（运维可手动重试 /enhance/sync）。无授权头或连接
+     * 缺失时不触发（避免无意义调用）。
+     */
+    private void triggerSyncBestEffort(Long connectionId, String authorization, String traceId) {
+        if (connectionId == null || authorization == null || authorization.isBlank()) {
+            return;
+        }
+        try {
+            aiPlatformClient.syncEnhancements(connectionId, Boolean.FALSE, authorization, traceId);
+        } catch (Exception exc) {
+            log.warn("IQD auto sync after save skipped connectionId={} error={}",
+                    connectionId, exc.getMessage());
+        }
     }
 
     /** 兜底判权：注册表未生效空窗期（与 KB {@code requirePermission} 同款口径）。 */

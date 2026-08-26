@@ -9,6 +9,7 @@ import com.mis.iqd.api.dto.IqdMaskRuleVO;
 import com.mis.iqd.api.dto.IqdScopeDimensionVO;
 import com.mis.iqd.api.dto.IqdScopePolicyVO;
 import com.mis.iqd.api.dto.IqdSqlPairVO;
+import com.mis.iqd.api.dto.IqdSyncJobVO;
 import com.mis.iqd.domain.entity.IqdConnection;
 import com.mis.iqd.domain.repository.IqdConnectionRepository;
 import com.mis.iqd.domain.service.IqdAdminService;
@@ -21,6 +22,10 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.time.Instant;
+import java.time.LocalDateTime;
+import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -222,6 +227,32 @@ public class IqdInternalController {
         return Result.ok(adminService.listAskLogs(limit, status, userId));
     }
 
+    /**
+     * 回填增强物料（ai-platform 经 IqdConfigClient 回调；覆盖本批 pending 物料的
+     * wren_ref_id / sync_status='synced' / synced_at）。
+     */
+    @PostMapping("/enhance/backfill")
+    public Result<Map<String, Object>> backfillEnhancementSync(
+            @RequestBody Map<String, Object> payload) {
+        Long connectionId = toLong(payload.get("connection_id"));
+        List<Long> sqlPairIds = toLongList(payload.get("sql_pair_ids"));
+        List<Long> knowledgeIds = toLongList(payload.get("knowledge_ids"));
+        Instant syncedAt = parseInstant(payload.get("synced_at"));
+        int count = adminService.backfillEnhancementSync(
+                connectionId, str(payload.get("wren_ref_id")), sqlPairIds, knowledgeIds, syncedAt);
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("synced_count", count);
+        return Result.ok(body);
+    }
+
+    /**
+     * 上报同步作业（ai-platform 经 IqdConfigClient 回调；每连接覆盖写）。
+     */
+    @PostMapping("/enhance/sync-job")
+    public Result<IqdSyncJobVO> reportSyncJob(@RequestBody Map<String, Object> payload) {
+        return Result.ok(adminService.reportSyncJob(payload));
+    }
+
     /** 取主连接 id（优先 name='default' / 第一条 enabled）。 */
     private Long resolvePrimaryConnectionId() {
         return connectionRepository.findByName("default")
@@ -235,5 +266,69 @@ public class IqdInternalController {
                             .map(IqdConnection::getId)
                             .orElse(null);
                 });
+    }
+
+    /** wire 数值 → Long（null/布尔 → null）。 */
+    private static Long toLong(Object value) {
+        if (value == null || value instanceof Boolean) {
+            return null;
+        }
+        try {
+            if (value instanceof Number n) {
+                return n.longValue();
+            }
+            return Long.parseLong(String.valueOf(value).trim());
+        } catch (NumberFormatException exc) {
+            return null;
+        }
+    }
+
+    /** wire 数组 → Long 列表（跳过非数值）。 */
+    private static List<Long> toLongList(Object value) {
+        if (value instanceof List<?> list) {
+            List<Long> out = new ArrayList<>();
+            for (Object o : list) {
+                Long l = toLong(o);
+                if (l != null) {
+                    out.add(l);
+                }
+            }
+            return out;
+        }
+        return List.of();
+    }
+
+    /** wire 字符串 → snake_case 原值（null → null）。 */
+    private static String str(Object value) {
+        if (value == null) {
+            return null;
+        }
+        return value instanceof String s ? s : String.valueOf(value);
+    }
+
+    /** wire 时间 → Instant（ISO-8601 / instant / local；解析失败回退 now）。 */
+    private static Instant parseInstant(Object value) {
+        if (value == null) {
+            return Instant.now();
+        }
+        String s = value instanceof String str ? str : String.valueOf(value);
+        if (s.isBlank()) {
+            return Instant.now();
+        }
+        try {
+            return OffsetDateTime.parse(s).toInstant();
+        } catch (Exception ignore) {
+            // fall through
+        }
+        try {
+            return Instant.parse(s);
+        } catch (Exception ignore) {
+            // fall through
+        }
+        try {
+            return LocalDateTime.parse(s).atOffset(ZoneOffset.UTC).toInstant();
+        } catch (Exception ignore) {
+            return Instant.now();
+        }
     }
 }

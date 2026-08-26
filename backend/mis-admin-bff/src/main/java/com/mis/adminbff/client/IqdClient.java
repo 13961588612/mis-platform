@@ -458,6 +458,21 @@ public class IqdClient extends AbstractDownstreamClient {
                 .bodyToMono(MAP_RESULT));
     }
 
+    /**
+     * 回查最近一次增强同步作业（需 iqd:enhance:view；P0-4 状态条）。
+     *
+     * @return mis-iqd 返回的作业数据（无作业则 data=null）
+     */
+    public Map<String, Object> getEnhancementSyncStatus(Long connectionId) {
+        return block(client().get()
+                .uri(uriBuilder -> uriBuilder.path("/api/v1/iqd/enhance/sync-status")
+                        .queryParam("connectionId", connectionId)
+                        .build())
+                .headers(loginContextHeaders())
+                .retrieve()
+                .bodyToMono(MAP_RESULT));
+    }
+
     // ------------------------------------------------------------------ 内部面
 
     /**

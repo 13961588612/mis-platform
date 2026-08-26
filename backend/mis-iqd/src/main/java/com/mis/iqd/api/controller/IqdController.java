@@ -17,6 +17,7 @@ import com.mis.iqd.api.dto.IqdScopePolicySaveRequest;
 import com.mis.iqd.api.dto.IqdScopePolicyVO;
 import com.mis.iqd.api.dto.IqdSqlPairSaveRequest;
 import com.mis.iqd.api.dto.IqdSqlPairVO;
+import com.mis.iqd.api.dto.IqdSyncJobVO;
 import com.mis.iqd.domain.service.IqdAdminService;
 import com.mis.iqd.domain.service.IqdScopeSyncJobService;
 import jakarta.validation.Valid;
@@ -372,5 +373,28 @@ public class IqdController {
     @PostMapping("/enhance/push")
     public Result<Map<String, Object>> pushEnhancements(@RequestParam Long connectionId) {
         return Result.ok(adminService.pushEnhancements(connectionId));
+    }
+
+    // ================================================================ 闭环补全（P0-4 / 二期前向）
+
+    /**
+     * 回查最近一次增强同步作业（P0-4：前端 SyncStatusBar 渲染 build/index 进度与回填计数）。
+     *
+     * <p>无作业记录时返回 data=null（前端展示「尚未同步」）。
+     */
+    @GetMapping("/enhance/sync-status")
+    public Result<IqdSyncJobVO> getEnhanceSyncStatus(@RequestParam Long connectionId) {
+        return Result.ok(adminService.getLatestSyncJob(connectionId));
+    }
+
+    /**
+     * 二期前向占位：平台内建/修改 catalog 节点（write-back 到 MDL）。
+     *
+     * <p>一期 iqd_catalog_item.editable 恒 false，未实现写回，返回 501。预留路由与开关位，
+     * 待二期 mdlWritebackEnabled=true 时再落地。
+     */
+    @PutMapping("/catalog/node")
+    public Result<Void> updateCatalogNode() {
+        return Result.fail(501, "catalog 节点写回尚未实现（二期前向占位）");
     }
 }

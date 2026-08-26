@@ -37,11 +37,9 @@ export { AgentWecomPage } from './channels/agent-wecom-page';
 export { AgentMonitorPage } from './monitor/agent-monitor-page';
 export { AgentApprovalsPage } from './approvals/agent-approval-page';
 export { AgentAgentDetailPage } from './agents/agent-detail-route';
-// T09/T10：存量页迁移（ai-platform 后端，/ai/* 路由，懒加载）
-export { QaPage } from './ai/qa-page';
+// T10：存量页迁移（/ai/*；知识库问答与 Skill 管理已下线）
 export { DataQueryPage } from './ai/data-query-page';
 export { ApprovalCenterPage } from './ai/approval-center-page';
-export { SkillManagePage } from './ai/skill-manage-page';
 export { MonitorDashboardPage } from './ai/monitor-dashboard-page';
 // W2：问数管理（/ai/iqd/* 路由，懒加载；keep-alive-outlet 用默认导出 lazy import）
 export { IqdConfigPage } from './ai/iqd/iqd-config-page';
@@ -50,3 +48,4 @@ export { IqdScopePage } from './ai/iqd/iqd-scope-page';
 export { IqdTestChatPage } from './ai/iqd/iqd-test-chat-page';
 export { IqdTracePage } from './ai/iqd/iqd-trace-page';
 export { IqdEnhancePage } from './ai/iqd/iqd-enhance-page';
+export { IqdInstructionPage } from './ai/iqd/iqd-instruction-page';

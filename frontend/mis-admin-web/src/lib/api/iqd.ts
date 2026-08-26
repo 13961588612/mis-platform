@@ -262,6 +262,7 @@ export interface IqdKnowledge {
 }
 
 export interface IqdKnowledgeSavePayload {
+  id?: number;
   connection_id?: number;
   kind: string;
   title: string;
@@ -576,4 +577,53 @@ export async function pushIqdEnhancements(connectionId: number): Promise<Record<
     { params: { connectionId } },
   );
   return unwrap(res, '获取待推送增强物料失败');
+}
+
+// ================================================================ 闭环补全（P0-2 / P0-4）
+
+/** 增强同步作业状态（GET /iqd/enhance/sync-status；snake_case wire，对齐 IqdSyncJobVO）。 */
+export interface IqdSyncStatus {
+  id?: number;
+  connection_id?: number;
+  build_status?: string;
+  build_mdl_hash?: string | null;
+  index_status?: string;
+  build_at?: string | null;
+  index_at?: string | null;
+  synced_sql_pair_count?: number;
+  synced_knowledge_count?: number;
+  build_error?: string | null;
+  index_error?: string | null;
+  updated_at?: string | null;
+}
+
+/**
+ * 触发增强同步（闭环补全 P0-2）：调 BFF /api/v1/iqd/enhance/sync → ai-platform Worker
+ * 经 SyncCoordinator 合并窗口异步执行 context build + memory index + 回填。
+ * 默认 wait=false（接受即返回）。
+ */
+export async function syncIqdEnhancements(
+  connectionId: number,
+  wait = false,
+): Promise<Record<string, unknown>> {
+  const res = await api.post<ApiResult<Record<string, unknown>>>(
+    '/iqd/enhance/sync',
+    undefined,
+    { params: { connectionId, wait } },
+  );
+  return unwrap(res, '触发增强同步失败');
+}
+
+/**
+ * 回查最近一次增强同步作业（P0-4 状态条）。无作业记录时后端返回 data=null，
+ * 此处归一化为 null（前端展示「尚未同步」）。
+ */
+export async function getIqdEnhancementSyncStatus(
+  connectionId: number,
+): Promise<IqdSyncStatus | null> {
+  const res = await api.get<ApiResult<IqdSyncStatus | null>>('/iqd/enhance/sync-status', {
+    params: { connectionId },
+  });
+  if (res.data.code !== 0) throw new Error(res.data.message || '获取同步状态失败');
+  return res.data.data ?? null;
 }

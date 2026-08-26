@@ -210,6 +210,33 @@ public class AiPlatformClient extends AbstractDownstreamClient {
                 .bodyToMono(MAP_RESULT_TYPE));
     }
 
+    /**
+     * 触发增强同步（闭环补全 P0-2/P0-3）：调平台 Worker {@code /api/v1/iqd/enhance/sync}。
+     *
+     * <p>默认 wait=false（接受即返回，平台经 SyncCoordinator 合并窗口异步执行
+     * context build + memory index + 回填）。wait=true 用于手动/重试的阻塞场景。
+     *
+     * @param connectionId 问数连接 id
+     * @param wait         是否阻塞至完成
+     * @param authorization BFF 收到的原始 MIS JWT（透传给平台 RS256 校验）
+     * @param traceId      全链路追踪 ID（X-Trace-Id，透传给平台）
+     * @return 平台响应 data（SyncResult：build/index 状态 + mdl_hash + 回填计数）
+     */
+    public Map<String, Object> syncEnhancements(
+            Long connectionId, Boolean wait, String authorization, String traceId) {
+        Consumer<HttpHeaders> headers = buildHeaders(authorization, traceId);
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("connection_id", connectionId);
+        body.put("wait", wait == null ? Boolean.FALSE : wait);
+        return block(client().post()
+                .uri("/api/v1/iqd/enhance/sync")
+                .headers(headers)
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(body)
+                .retrieve()
+                .bodyToMono(MAP_RESULT_TYPE));
+    }
+
     /** 组合转发头：复用基类 loginContextHeaders() + Authorization + X-Trace-Id + MIS 身份 enrichment 头。 */
     private Consumer<HttpHeaders> buildHeaders(String authorization, String traceId) {
         return headers -> {

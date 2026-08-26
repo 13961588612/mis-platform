@@ -199,11 +199,13 @@ public class IqdAclController {
     }
 
     /**
-     * 保存样本对（需 iqd:enhance:save）。
+     * 保存样本对（需 iqd:enhance:save）；保存后自动触发增强同步（best-effort）。
      */
     @PostMapping("/sql-pairs")
-    public Result<IqdSqlPairVO> saveSqlPair(@Valid @RequestBody IqdSqlPairSaveRequest dto) {
-        return Result.ok(iqdFacadeService.saveSqlPair(dto));
+    public Result<IqdSqlPairVO> saveSqlPair(@Valid @RequestBody IqdSqlPairSaveRequest dto,
+            @RequestHeader(value = SecurityConstants.AUTHORIZATION_HEADER, required = false) String authorization,
+            @RequestHeader(value = SecurityConstants.HEADER_TRACE_ID, required = false) String traceId) {
+        return Result.ok(iqdFacadeService.saveSqlPair(dto, authorization, traceId));
     }
 
     /**
@@ -226,11 +228,13 @@ public class IqdAclController {
     }
 
     /**
-     * 保存知识/术语/口径（需 iqd:enhance:save）。
+     * 保存知识/术语/口径（需 iqd:enhance:save）；保存后自动触发增强同步（best-effort）。
      */
     @PostMapping("/knowledge")
-    public Result<IqdKnowledgeVO> saveKnowledge(@Valid @RequestBody IqdKnowledgeSaveRequest dto) {
-        return Result.ok(iqdFacadeService.saveKnowledge(dto));
+    public Result<IqdKnowledgeVO> saveKnowledge(@Valid @RequestBody IqdKnowledgeSaveRequest dto,
+            @RequestHeader(value = SecurityConstants.AUTHORIZATION_HEADER, required = false) String authorization,
+            @RequestHeader(value = SecurityConstants.HEADER_TRACE_ID, required = false) String traceId) {
+        return Result.ok(iqdFacadeService.saveKnowledge(dto, authorization, traceId));
     }
 
     /**
@@ -256,6 +260,41 @@ public class IqdAclController {
     @PostMapping("/enhance/push")
     public Result<Map<String, Object>> pushEnhancements(@RequestParam Long connectionId) {
         return Result.ok(iqdFacadeService.pushEnhancements(connectionId));
+    }
+
+    // ================================================================ 闭环补全（P0-2 / P0-4）
+
+    /**
+     * 触发增强同步（需 iqd:enhance:sync）：调 ai-platform Worker 经 SyncCoordinator
+     * 合并窗口异步执行 context build + memory index + 回填。默认 wait=false（接受即返回）。
+     */
+    @PostMapping("/enhance/sync")
+    public Result<Map<String, Object>> syncEnhancements(
+            @RequestParam Long connectionId,
+            @RequestParam(required = false, defaultValue = "false") boolean wait,
+            @RequestHeader(value = SecurityConstants.AUTHORIZATION_HEADER, required = false) String authorization,
+            @RequestHeader(value = SecurityConstants.HEADER_TRACE_ID, required = false) String traceId) {
+        try {
+            return Result.ok(iqdFacadeService.syncEnhancements(connectionId, wait, authorization, traceId));
+        } catch (BusinessException ex) {
+            return Result.fail(ex.getCode(), ex.getMessage());
+        } catch (Exception ex) {
+            return Result.fail(ResultCode.INTERNAL_ERROR.getCode(), "增强同步触发失败: " + ex.getMessage());
+        }
+    }
+
+    /**
+     * 回查最近一次增强同步作业（需 iqd:enhance:view；P0-4 状态条）。
+     */
+    @GetMapping("/enhance/sync-status")
+    public Result<Map<String, Object>> getEnhancementSyncStatus(@RequestParam Long connectionId) {
+        try {
+            return Result.ok(iqdFacadeService.getEnhancementSyncStatus(connectionId));
+        } catch (BusinessException ex) {
+            return Result.fail(ex.getCode(), ex.getMessage());
+        } catch (Exception ex) {
+            return Result.fail(ResultCode.INTERNAL_ERROR.getCode(), "同步状态查询失败: " + ex.getMessage());
+        }
     }
 
     // ================================================================ 方言转化 + 试运行（v1.10）

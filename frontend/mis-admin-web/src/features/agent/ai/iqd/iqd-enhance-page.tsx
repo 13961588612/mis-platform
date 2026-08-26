@@ -27,6 +27,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import {
   deleteIqdDimension,
   deleteIqdKnowledge,
+  getIqdConfig,
   deleteIqdMaskRule,
   deleteIqdSqlPair,
   importIqdKnowledgeS07,
@@ -50,6 +51,7 @@ import {
   type IqdSqlPair,
   type IqdTrialResult,
 } from '@/lib/api/iqd';
+import { SyncStatusBar } from './components/SyncStatusBar';
 
 type Tab = 'mask' | 'dimension' | 'sync' | 'sqlpair' | 'knowledge';
 
@@ -148,6 +150,13 @@ export function IqdEnhancePage() {
       setMaskRules(m);
       setDimensions(d);
       setSyncStatus(s);
+      // 取主连接 id（供同步状态条使用；连接未配置时状态条显示「尚未同步」）
+      try {
+        const cfg = await getIqdConfig();
+        setConnectionId(cfg.id ?? null);
+      } catch {
+        setConnectionId(null);
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : '加载失败');
     } finally {
@@ -438,6 +447,8 @@ export function IqdEnhancePage() {
           </Button>
         }
       />
+
+      <SyncStatusBar connectionId={connectionId} />
 
       <div className="mb-3 flex gap-1 border-b">
         {tabs.map((t) => (
