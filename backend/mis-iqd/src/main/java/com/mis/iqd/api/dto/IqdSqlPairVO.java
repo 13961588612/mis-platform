@@ -7,6 +7,9 @@ import java.time.Instant;
 /**
  * 问数样本对响应 VO（GET /api/v1/iqd/sql-pairs；snake_case wire）。
  *
+ * <p>v1.10（§4.2.3）：原 {@code sql_text} 改名为 {@code wren_sql}；新增
+ * {@code source_dialect} / {@code native_sql}。
+ *
  * <p>{@code wren_ref_id} 为同步进 WrenAI 后回填的外部引用 id；
  * {@code sync_status} 为 pending | synced | failed。
  */
@@ -15,7 +18,9 @@ public class IqdSqlPairVO {
     private Long id;
     private Long connectionId;
     private String question;
-    private String sqlText;
+    private String sourceDialect;
+    private String nativeSql;
+    private String wrenSql;
     private String remark;
     private Boolean enabled;
     private String wrenRefId;
@@ -50,13 +55,31 @@ public class IqdSqlPairVO {
         this.question = question;
     }
 
-    @JsonProperty("sql_text")
-    public String getSqlText() {
-        return sqlText;
+    @JsonProperty("source_dialect")
+    public String getSourceDialect() {
+        return sourceDialect;
     }
 
-    public void setSqlText(String sqlText) {
-        this.sqlText = sqlText;
+    public void setSourceDialect(String sourceDialect) {
+        this.sourceDialect = sourceDialect;
+    }
+
+    @JsonProperty("native_sql")
+    public String getNativeSql() {
+        return nativeSql;
+    }
+
+    public void setNativeSql(String nativeSql) {
+        this.nativeSql = nativeSql;
+    }
+
+    @JsonProperty("wren_sql")
+    public String getWrenSql() {
+        return wrenSql;
+    }
+
+    public void setWrenSql(String wrenSql) {
+        this.wrenSql = wrenSql;
     }
 
     public String getRemark() {

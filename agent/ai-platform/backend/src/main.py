@@ -482,6 +482,7 @@ def create_app() -> FastAPI:
     from src.api.routes.auth import router as auth_router
     from src.api.routes.channels import router as channels_router
     from src.api.routes.files import router as files_router
+    from src.api.routes.iqd_enhance import router as iqd_enhance_router
     from src.api.routes.mcp import router as mcp_router
     from src.api.routes.mis_capability import router as mis_capability_router
     from src.api.routes.push import router as push_router
@@ -501,6 +502,8 @@ def create_app() -> FastAPI:
     app.include_router(push_router, prefix="/api/v1")
     # 阶段1 认证对齐：受 MIS RS256 保护的业务能力端点（供 BFF 适配层调用）
     app.include_router(mis_capability_router, prefix="/api/v1")
+    # v1.10 样本对方言转化 + 试运行（BFF → AiPlatformClient → 本路由 → MisIqdService）
+    app.include_router(iqd_enhance_router, prefix="/api/v1")
 
     # ===== 统一 API 响应格式 =====
     # 所有 API 响应遵循：{ code, data, message, traceId }

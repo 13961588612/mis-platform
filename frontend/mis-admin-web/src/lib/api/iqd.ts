@@ -200,12 +200,14 @@ export interface IqdAskLog {
   created_at?: string | null;
 }
 
-/** 问数样本对（W4 /sql-pairs）。 */
+/** 问数样本对（W4 /sql-pairs；v1.10 增 source_dialect / native_sql / wren_sql）。 */
 export interface IqdSqlPair {
   id?: number;
   connection_id?: number;
   question: string;
-  sql_text: string;
+  source_dialect?: string | null;
+  native_sql?: string | null;
+  wren_sql: string;
   remark?: string | null;
   enabled?: boolean;
   wren_ref_id?: string | null;
@@ -217,11 +219,28 @@ export interface IqdSqlPair {
 }
 
 export interface IqdSqlPairSavePayload {
+  id?: number | null;
   connection_id?: number;
   question: string;
-  sql_text: string;
+  source_dialect?: string;
+  native_sql?: string;
+  wren_sql: string;
   remark?: string | null;
   enabled?: boolean;
+}
+
+/** v1.10 样本对方言转化结果（POST /sql-pairs/translate）。 */
+export interface IqdTranslateResult {
+  wren_sql: string;
+  warnings: string[];
+}
+
+/** v1.10 样本对试运行结果（POST /sql-pairs/trial）。 */
+export interface IqdTrialResult {
+  columns: unknown[];
+  rows: unknown[][];
+  error: string | null;
+  duration_ms: number;
 }
 
 /** 问数知识/术语/口径（W4 /knowledge）。 */
@@ -494,6 +513,27 @@ export async function saveIqdSqlPair(body: IqdSqlPairSavePayload): Promise<IqdSq
 export async function deleteIqdSqlPair(id: number): Promise<void> {
   const res = await api.delete<ApiResult<null>>(`/iqd/sql-pairs/${id}`);
   if (res.data.code !== 0) throw new Error(res.data.message || '删除样本对失败');
+}
+
+/**
+ * 样本对方言转化（v1.10 / §4.2.3）：调 BFF /api/v1/iqd/sql-pairs/translate。
+ * 服务端用 sqlglot 把源方言翻到 WrenAI 方言；前端不直连 WrenAI（NFR-1）。
+ */
+export async function translateSqlPair(body: {
+  db_type: string;
+  native_sql: string;
+}): Promise<IqdTranslateResult> {
+  const res = await api.post<ApiResult<IqdTranslateResult>>('/iqd/sql-pairs/translate', body);
+  return unwrap(res, '样本对翻译失败');
+}
+
+/**
+ * 样本对试运行（v1.10 / §4.2.3）：调 BFF /api/v1/iqd/sql-pairs/trial。
+ * 服务端经 MCP run_sql 在 WrenAI 引擎侧执行转化后的 wren_sql。
+ */
+export async function trialSqlPair(body: { wren_sql: string }): Promise<IqdTrialResult> {
+  const res = await api.post<ApiResult<IqdTrialResult>>('/iqd/sql-pairs/trial', body);
+  return unwrap(res, '样本对试运行失败');
 }
 
 // ================================================================ 知识/术语（W4）

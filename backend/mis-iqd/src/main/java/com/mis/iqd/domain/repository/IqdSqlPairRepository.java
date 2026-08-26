@@ -16,6 +16,6 @@ public interface IqdSqlPairRepository extends JpaRepository<IqdSqlPair, Long> {
 
     List<IqdSqlPair> findByConnectionIdOrderByIdDesc(Long connectionId);
 
-    Optional<IqdSqlPair> findByConnectionIdAndQuestionAndSqlText(
-            Long connectionId, String question, String sqlText);
+    Optional<IqdSqlPair> findByConnectionIdAndQuestionAndWrenSql(
+            Long connectionId, String question, String wrenSql);
 }

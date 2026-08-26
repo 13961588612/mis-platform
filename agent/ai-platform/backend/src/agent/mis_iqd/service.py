@@ -19,10 +19,15 @@ W4 扩展：:meth:`list_sql_pairs` / :meth:`list_knowledge`（增强物料缓存
 
 from __future__ import annotations
 
+import time
 from typing import Any
 
 from src.adapters.iqd_mcp_client import IqdMcpClient
 from src.agent.mis_iqd.errors import IqdError
+from src.agent.mis_iqd.sql_translate import (
+    WREN_TARGET_DIALECT,
+    translate_sql_pair as sql_translate_translate,
+)
 from src.agent.mis_iqd.orchestrator import AskOrchestrator, AskResult
 from src.agent.mis_iqd.projector import ResponseProjector
 from src.agent.mis_iqd.scope_resolver import AskIdentity, ScopeResolver
@@ -251,3 +256,62 @@ class IqdAskService:
             "knowledge_count": len(pending_knowledge),
             "message": "待推送物料已就绪（Worker 经 context build 同步并回填 wren_ref_id）",
         }
+
+    # ================================================================ v1.10 方言转化 + 试运行
+
+    async def translate_sql_pair(self, db_type: str, native_sql: str) -> dict[str, Any]:
+        """样本对方言转化（v1.10 / §4.2.3）。
+
+        用 :mod:`src.agent.mis_iqd.sql_translate` 把源方言翻到 WrenAI 方言
+        （目标方言见 :data:`WREN_TARGET_DIALECT`，待 W0 探针 3f 校准）。
+
+        Args:
+            db_type: 用户所选关系库类型（oracle / mysql / postgres / clickhouse）。
+            native_sql: 用户手写的原生 SQL（源方言）。
+
+        Returns:
+            ``{"wren_sql": str, "warnings": list[str]}``（翻译失败不抛异常，见 A14③）。
+        """
+        return sql_translate_translate(db_type, native_sql)
+
+    async def trial_sql_pair(self, wren_sql: str) -> dict[str, Any]:
+        """样本对试运行（v1.10 / §4.2.3）。
+
+        经 :class:`IqdMcpClient` 在 WrenAI 引擎侧执行转化后的 ``wren_sql``，
+        验证「转化后的 wrensql 能在 WrenAI 跑通」（非源业务库，A14②）。
+
+        归一为 ``{"columns": [...], "rows": [[...]], "error": null|str,
+        "duration_ms": int}``；异常时 ``error`` 填信息、``columns``/``rows`` 空。
+
+        Args:
+            wren_sql: 转化后的 WrenAI 方言 SQL（可经前端手改）。
+
+        Returns:
+            试运行结果字典（异常不抛 500，error 字段承载）。
+        """
+        client = IqdMcpClient()
+        start = time.perf_counter()
+        try:
+            result = await client.run_sql(wren_sql, dialect=WREN_TARGET_DIALECT)
+            measured_ms = int((time.perf_counter() - start) * 1000)
+            columns = result.get("columns") or []
+            rows = result.get("rows") or []
+            error = result.get("error") or None
+            # 优先用引擎返回的执行耗时；缺省用本地测得耗时
+            engine_ms = result.get("execution_time_ms")
+            duration_ms = int(engine_ms) if engine_ms is not None else measured_ms
+            return {
+                "columns": columns,
+                "rows": rows,
+                "error": error,
+                "duration_ms": duration_ms,
+            }
+        except Exception as exc:  # noqa: BLE001 - 试运行失败返回 error，不抛 500
+            duration_ms = int((time.perf_counter() - start) * 1000)
+            logger.warning("IQD trial_sql_pair failed", error=str(exc))
+            return {
+                "columns": [],
+                "rows": [],
+                "error": str(exc),
+                "duration_ms": duration_ms,
+            }

@@ -22,5 +22,5 @@ public record IqdKnowledgeSaveRequest(
         @JsonProperty("related_item_keys") String relatedItemKeys,
         String source,
         @JsonProperty("kb_term_id") String kbTermId,
-        Integer enabled) {
+        Boolean enabled) {
 }

@@ -858,7 +858,10 @@ public class IqdAdminService {
     }
 
     /**
-     * 保存样本对（W4；幂等：同连接+同 question+同 sql_text 命中则更新）。
+     * 保存样本对（W4；v1.10 增 source_dialect / native_sql / wren_sql 字段持久化）。
+     *
+     * <p>幂等 upsert：dto.id 非空时按 id 更新（不存在抛 NOT_FOUND；连接不匹配抛
+     * VALIDATION_ERROR）；dto.id 为空时按 连接+question+wren_sql 命中则更新、否则新建。
      */
     @Transactional
     public IqdSqlPairVO saveSqlPair(IqdSqlPairSaveRequest dto) {
@@ -868,13 +871,22 @@ public class IqdAdminService {
         }
         ensureConnection(connectionId);
         String question = dto.question() == null ? "" : dto.question().trim();
-        String sqlText = dto.sqlText() == null ? "" : dto.sqlText().trim();
-        if (question.isEmpty() || sqlText.isEmpty()) {
-            throw new BusinessException(ResultCode.VALIDATION_ERROR, "question 与 sql_text 不能为空");
+        String wrenSql = dto.wrenSql() == null ? "" : dto.wrenSql().trim();
+        if (question.isEmpty() || wrenSql.isEmpty()) {
+            throw new BusinessException(ResultCode.VALIDATION_ERROR, "question 与 wren_sql 不能为空");
         }
-        IqdSqlPair pair = sqlPairRepository
-                .findByConnectionIdAndQuestionAndSqlText(connectionId, question, sqlText)
-                .orElseGet(IqdSqlPair::new);
+        IqdSqlPair pair;
+        if (dto.id() != null) {
+            pair = sqlPairRepository.findById(dto.id())
+                    .orElseThrow(() -> new BusinessException(ResultCode.NOT_FOUND, "样本对不存在: " + dto.id()));
+            if (connectionId != null && !connectionId.equals(pair.getConnectionId())) {
+                throw new BusinessException(ResultCode.VALIDATION_ERROR, "样本对所属连接不匹配: " + dto.id());
+            }
+        } else {
+            pair = sqlPairRepository
+                    .findByConnectionIdAndQuestionAndWrenSql(connectionId, question, wrenSql)
+                    .orElseGet(IqdSqlPair::new);
+        }
         boolean isNew = pair.getId() == null;
         if (isNew) {
             pair.setId(IdGenerator.nextId());
@@ -883,9 +895,11 @@ public class IqdAdminService {
             pair.setCreatedAt(Instant.now());
         }
         pair.setQuestion(question);
-        pair.setSqlText(sqlText);
+        pair.setSourceDialect(dto.sourceDialect() == null ? null : dto.sourceDialect().trim());
+        pair.setNativeSql(dto.nativeSql() == null ? null : dto.nativeSql());
+        pair.setWrenSql(wrenSql);
         pair.setRemark(dto.remark());
-        pair.setEnabled(dto.enabled() == null ? 1 : (dto.enabled() != 0 ? 1 : 0));
+        pair.setEnabled(dto.enabled() == null || dto.enabled() ? 1 : 0);
         pair.setUpdatedAt(Instant.now());
         sqlPairRepository.save(pair);
         if (isNew) {
@@ -956,7 +970,7 @@ public class IqdAdminService {
         if (dto.kbTermId() != null && !dto.kbTermId().isBlank()) {
             knowledge.setKbTermId(dto.kbTermId());
         }
-        knowledge.setEnabled(dto.enabled() == null ? 1 : (dto.enabled() != 0 ? 1 : 0));
+        knowledge.setEnabled(dto.enabled() == null || dto.enabled() ? 1 : 0);
         knowledge.setUpdatedAt(Instant.now());
         knowledgeRepository.save(knowledge);
         if (isNew) {
@@ -1259,7 +1273,9 @@ public class IqdAdminService {
         vo.setId(entity.getId());
         vo.setConnectionId(entity.getConnectionId());
         vo.setQuestion(entity.getQuestion());
-        vo.setSqlText(entity.getSqlText());
+        vo.setSourceDialect(entity.getSourceDialect());
+        vo.setNativeSql(entity.getNativeSql());
+        vo.setWrenSql(entity.getWrenSql());
         vo.setRemark(entity.getRemark());
         vo.setEnabled(entity.getEnabled() != null && entity.getEnabled() == 1);
         vo.setWrenRefId(entity.getWrenRefId());

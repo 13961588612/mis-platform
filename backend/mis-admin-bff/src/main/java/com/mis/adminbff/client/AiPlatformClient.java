@@ -52,6 +52,10 @@ public class AiPlatformClient extends AbstractDownstreamClient {
     private static final ParameterizedTypeReference<Result<AiPlatformChatData>> CHAT_TYPE =
             new ParameterizedTypeReference<>() {};
 
+    /** 通用 Map 结果类型（translate / trial 等返回 {@code Map<String,Object>} 的端点）。 */
+    private static final ParameterizedTypeReference<Result<Map<String, Object>>> MAP_RESULT_TYPE =
+            new ParameterizedTypeReference<>() {};
+
     /** X-Mis-* 头名（与平台 docs/identity-enrichment-task-list.md §4 约定一致）。 */
     private static final String HEADER_MIS_DEPTS = "X-Mis-Depts";
     private static final String HEADER_MIS_ORGS = "X-Mis-Orgs";
@@ -154,6 +158,56 @@ public class AiPlatformClient extends AbstractDownstreamClient {
                 .retrieve()
                 .bodyToMono(new ParameterizedTypeReference<Map<String, Object>>() {})
                 .block(Duration.ofSeconds(3));
+    }
+
+    /**
+     * 样本对方言转化（v1.10 / §4.2.3）：调平台 Worker {@code /iqd/sql-pairs/translate}。
+     *
+     * <p>平台用 sqlglot 把源方言（Oracle/MySQL/PostgreSQL/ClickHouse）翻到 WrenAI 方言，
+     * 返回 {@code {wren_sql, warnings}}。前端不直连 WrenAI（对齐 NFR-1 红线）。
+     *
+     * @param body         请求体 {@code {db_type, native_sql}}
+     * @param authorization BFF 收到的原始 MIS JWT（透传给平台）
+     * @param traceId      全链路追踪 ID（X-Trace-Id，透传给平台）
+     * @return 平台响应 data：{@code {wren_sql, warnings}}
+     */
+    public Map<String, Object> translateSqlPair(
+            Map<String, Object> body,
+            String authorization,
+            String traceId) {
+        Consumer<HttpHeaders> headers = buildHeaders(authorization, traceId);
+        return block(client().post()
+                .uri("/api/v1/iqd/sql-pairs/translate")
+                .headers(headers)
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(body)
+                .retrieve()
+                .bodyToMono(MAP_RESULT_TYPE));
+    }
+
+    /**
+     * 样本对试运行（v1.10 / §4.2.3）：调平台 Worker {@code /iqd/sql-pairs/trial}。
+     *
+     * <p>平台经 MCP {@code run_sql} 在 WrenAI 引擎侧执行转化后的 {@code wren_sql}，
+     * 返回 {@code {columns, rows, error, duration_ms}}。
+     *
+     * @param body         请求体 {@code {wren_sql}}
+     * @param authorization BFF 收到的原始 MIS JWT（透传给平台）
+     * @param traceId      全链路追踪 ID（X-Trace-Id，透传给平台）
+     * @return 平台响应 data：{@code {columns, rows, error, duration_ms}}
+     */
+    public Map<String, Object> trialSqlPair(
+            Map<String, Object> body,
+            String authorization,
+            String traceId) {
+        Consumer<HttpHeaders> headers = buildHeaders(authorization, traceId);
+        return block(client().post()
+                .uri("/api/v1/iqd/sql-pairs/trial")
+                .headers(headers)
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(body)
+                .retrieve()
+                .bodyToMono(MAP_RESULT_TYPE));
     }
 
     /** 组合转发头：复用基类 loginContextHeaders() + Authorization + X-Trace-Id + MIS 身份 enrichment 头。 */

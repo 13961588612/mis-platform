@@ -12,9 +12,13 @@ import com.mis.adminbff.dto.iqd.IqdMaskRuleVO;
 import com.mis.adminbff.dto.iqd.IqdScopeDimensionVO;
 import com.mis.adminbff.dto.iqd.IqdScopePolicySaveRequest;
 import com.mis.adminbff.dto.iqd.IqdScopePolicyVO;
+import com.mis.adminbff.client.AiPlatformClient;
 import com.mis.adminbff.dto.iqd.IqdSqlPairSaveRequest;
 import com.mis.adminbff.dto.iqd.IqdSqlPairVO;
 import com.mis.adminbff.service.iqd.IqdFacadeService;
+import com.mis.common.core.constant.SecurityConstants;
+import com.mis.common.core.exception.BusinessException;
+import com.mis.common.core.exception.ResultCode;
 import com.mis.common.core.result.Result;
 import jakarta.validation.Valid;
 import org.springframework.web.bind.annotation.DeleteMapping;
@@ -22,6 +26,7 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
@@ -43,6 +48,7 @@ import java.util.Map;
  *   <li>scope/sync → {@code iqd:scope:sync}</li>
  *   <li>traces → {@code iqd:trace:view}（W3）</li>
  *   <li>sql-pairs / knowledge → {@code iqd:enhance:view|save}；enhance/push → {@code iqd:enhance:sync}（W4）</li>
+ *   <li>sql-pairs/translate / sql-pairs/trial → {@code iqd:enhance:manage}（v1.10，调 Worker）</li>
  * </ul>
  */
 @RestController
@@ -50,9 +56,11 @@ import java.util.Map;
 public class IqdAclController {
 
     private final IqdFacadeService iqdFacadeService;
+    private final AiPlatformClient aiPlatformClient;
 
-    public IqdAclController(IqdFacadeService iqdFacadeService) {
+    public IqdAclController(IqdFacadeService iqdFacadeService, AiPlatformClient aiPlatformClient) {
         this.iqdFacadeService = iqdFacadeService;
+        this.aiPlatformClient = aiPlatformClient;
     }
 
     // ================================================================ 清单
@@ -248,5 +256,49 @@ public class IqdAclController {
     @PostMapping("/enhance/push")
     public Result<Map<String, Object>> pushEnhancements(@RequestParam Long connectionId) {
         return Result.ok(iqdFacadeService.pushEnhancements(connectionId));
+    }
+
+    // ================================================================ 方言转化 + 试运行（v1.10）
+
+    /**
+     * 样本对方言转化（v1.10 / §4.2.3；需 iqd:enhance:manage）。
+     *
+     * <p>组装 {@code {db_type, native_sql}} 经 AiPlatformClient 调 Worker
+     * {@code /iqd/sql-pairs/translate}，返回 {@code {wren_sql, warnings}}。
+     * 前端不直连 WrenAI（对齐 NFR-1 红线）。
+     */
+    @PostMapping("/sql-pairs/translate")
+    public Result<Map<String, Object>> translateSqlPair(
+            @RequestBody Map<String, Object> body,
+            @RequestHeader(value = SecurityConstants.AUTHORIZATION_HEADER, required = false) String authorization,
+            @RequestHeader(value = SecurityConstants.HEADER_TRACE_ID, required = false) String traceId) {
+        try {
+            return Result.ok(aiPlatformClient.translateSqlPair(body, authorization, traceId));
+        } catch (BusinessException ex) {
+            return Result.fail(ex.getCode(), ex.getMessage());
+        } catch (Exception ex) {
+            return Result.fail(ResultCode.INTERNAL_ERROR.getCode(), "样本对翻译失败: " + ex.getMessage());
+        }
+    }
+
+    /**
+     * 样本对试运行（v1.10 / §4.2.3；需 iqd:enhance:manage）。
+     *
+     * <p>组装 {@code {wren_sql}} 经 AiPlatformClient 调 Worker
+     * {@code /iqd/sql-pairs/trial}，返回 {@code {columns, rows, error, duration_ms}}
+     * （经 MCP run_sql 在 WrenAI 引擎侧执行转化后的 wren_sql）。
+     */
+    @PostMapping("/sql-pairs/trial")
+    public Result<Map<String, Object>> trialSqlPair(
+            @RequestBody Map<String, Object> body,
+            @RequestHeader(value = SecurityConstants.AUTHORIZATION_HEADER, required = false) String authorization,
+            @RequestHeader(value = SecurityConstants.HEADER_TRACE_ID, required = false) String traceId) {
+        try {
+            return Result.ok(aiPlatformClient.trialSqlPair(body, authorization, traceId));
+        } catch (BusinessException ex) {
+            return Result.fail(ex.getCode(), ex.getMessage());
+        } catch (Exception ex) {
+            return Result.fail(ResultCode.INTERNAL_ERROR.getCode(), "样本对试运行失败: " + ex.getMessage());
+        }
     }
 }

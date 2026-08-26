@@ -13,7 +13,7 @@
  * iqd:enhance:view|save|sync）。
  */
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Plus, RefreshCw, Save, Send, Trash2, Upload } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
@@ -22,6 +22,8 @@ import { Textarea } from '@/components/ui/textarea';
 import { PageHeader } from '@/components/common/page-header';
 import { buildAppBreadcrumbs } from '@/components/common/app-breadcrumbs';
 import { Badge } from '@/components/ui/badge';
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import {
   deleteIqdDimension,
   deleteIqdKnowledge,
@@ -39,11 +41,14 @@ import {
   saveIqdMaskRule,
   saveIqdSqlPair,
   syncIqdDimension,
+  translateSqlPair,
+  trialSqlPair,
   type IqdDictSyncStatus,
   type IqdKnowledge,
   type IqdMaskRule,
   type IqdScopeDimension,
   type IqdSqlPair,
+  type IqdTrialResult,
 } from '@/lib/api/iqd';
 
 type Tab = 'mask' | 'dimension' | 'sync' | 'sqlpair' | 'knowledge';
@@ -84,6 +89,13 @@ const SYNC_LABEL: Record<string, string> = {
   failed: '失败',
 };
 
+const DIALECT_LABEL: Record<string, string> = {
+  oracle: 'Oracle',
+  mysql: 'MySQL',
+  postgres: 'PostgreSQL',
+  clickhouse: 'ClickHouse',
+};
+
 export function IqdEnhancePage() {
   const [tab, setTab] = useState<Tab>('mask');
   const [maskRules, setMaskRules] = useState<IqdMaskRule[]>([]);
@@ -110,10 +122,11 @@ export function IqdEnhancePage() {
   const [dimHeader, setDimHeader] = useState('');
   const [dimDictTable, setDimDictTable] = useState('');
 
-  // 样本对草稿（W4）
-  const [pairQuestion, setPairQuestion] = useState('');
-  const [pairSql, setPairSql] = useState('');
-  const [pairRemark, setPairRemark] = useState('');
+  // 样本对查询条件与弹窗状态（W4 / v1.10 方言转化 + 试运行）
+  const [pairKeyword, setPairKeyword] = useState('');
+  const [pairDialectFilter, setPairDialectFilter] = useState('all');
+  const [pairDialogOpen, setPairDialogOpen] = useState(false);
+  const [pairEditing, setPairEditing] = useState<IqdSqlPair | null>(null);
 
   // 知识草稿（W4）
   const [kbKind, setKbKind] = useState('term');
@@ -293,35 +306,34 @@ export function IqdEnhancePage() {
     [load],
   );
 
-  // ================= W4 样本对 / 知识 =================
+  // ================= W4 样本对（Dialog 驱动）/ 知识 =================
 
-  const savePair = useCallback(async () => {
-    if (!pairQuestion.trim() || !pairSql.trim()) {
-      setError('问题与 SQL 不能为空');
-      return;
-    }
-    const cid = await ensureConnection();
-    if (cid == null) return;
-    setSaving(true);
-    setError(null);
-    try {
-      await saveIqdSqlPair({
-        connection_id: cid,
-        question: pairQuestion.trim(),
-        sql_text: pairSql.trim(),
-        remark: pairRemark.trim() || null,
-        enabled: true,
-      });
-      setPairQuestion('');
-      setPairSql('');
-      setPairRemark('');
-      await loadEnhance();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : '保存样本对失败');
-    } finally {
-      setSaving(false);
-    }
-  }, [ensureConnection, loadEnhance, pairQuestion, pairRemark, pairSql]);
+  // 样本对编辑弹窗：新增/编辑共用；转化、试运行、保存均由弹窗内部完成。
+  const openPairDialog = useCallback((row: IqdSqlPair | null) => {
+    setPairEditing(row);
+    setPairDialogOpen(true);
+  }, []);
+
+  const closePairDialog = useCallback(() => {
+    setPairDialogOpen(false);
+    setPairEditing(null);
+  }, []);
+
+  const handlePairSaved = useCallback(async () => {
+    await loadEnhance();
+    setPairDialogOpen(false);
+    setPairEditing(null);
+  }, [loadEnhance]);
+
+  // 客户端过滤：按问题关键词（模糊）+ 方言
+  const filteredPairs = useMemo(() => {
+    const kw = pairKeyword.trim().toLowerCase();
+    return sqlPairs.filter((p) => {
+      const matchKw = kw === '' || (p.question ?? '').toLowerCase().includes(kw);
+      const matchDialect = pairDialectFilter === 'all' || (p.source_dialect ?? '') === pairDialectFilter;
+      return matchKw && matchDialect;
+    });
+  }, [pairDialectFilter, pairKeyword, sqlPairs]);
 
   const removePair = useCallback(
     async (id: number | undefined) => {
@@ -719,54 +731,58 @@ export function IqdEnhancePage() {
         {/* ================= 样本对（W4）================= */}
         {tab === 'sqlpair' ? (
           <div className="space-y-3">
-            <div className="rounded-lg border bg-card p-3">
-              <div className="mb-2 text-sm font-medium">新增样本对（few-shot）</div>
-              <div className="grid grid-cols-1 gap-2">
-                <Input
-                  placeholder="问题（如：本月各渠道销售额？）"
-                  value={pairQuestion}
-                  onChange={(e) => setPairQuestion(e.target.value)}
-                />
-                <Textarea
-                  placeholder="标准 SQL（可含参数占位）"
-                  value={pairSql}
-                  onChange={(e) => setPairSql(e.target.value)}
-                  rows={3}
-                />
-                <div className="flex items-center gap-2">
-                  <Input
-                    placeholder="备注（可空）"
-                    value={pairRemark}
-                    onChange={(e) => setPairRemark(e.target.value)}
-                  />
-                  <Button size="sm" onClick={() => void savePair()} disabled={saving}>
-                    <Save className="h-4 w-4" />
-                    保存
-                  </Button>
-                </div>
-              </div>
+            {/* 查询条件 */}
+            <div className="flex flex-wrap items-center gap-2 rounded-lg border bg-card p-3">
+              <Input
+                className="h-9 w-full sm:w-64"
+                placeholder="按问题关键词过滤"
+                value={pairKeyword}
+                onChange={(e) => setPairKeyword(e.target.value)}
+              />
+              <select
+                className="h-9 rounded-md border border-input bg-card px-2.5 text-sm"
+                value={pairDialectFilter}
+                onChange={(e) => setPairDialectFilter(e.target.value)}
+                aria-label="方言筛选"
+              >
+                <option value="all">全部方言</option>
+                <option value="oracle">Oracle</option>
+                <option value="mysql">MySQL</option>
+                <option value="postgres">PostgreSQL</option>
+                <option value="clickhouse">ClickHouse</option>
+              </select>
+              <Button size="sm" onClick={() => openPairDialog(null)} disabled={saving}>
+                <Plus className="h-4 w-4" />
+                新增
+              </Button>
+              <Button size="sm" variant="outline" onClick={() => void loadEnhance()} disabled={loading}>
+                <RefreshCw className={cn('h-4 w-4', loading && 'animate-spin')} />
+                刷新
+              </Button>
             </div>
 
+            {/* 查询结果 */}
             <div className="rounded-lg border bg-card">
               <table className="w-full border-separate border-spacing-0 bg-table-surface text-left text-sm">
                 <thead className="border-b-2 border-foreground/20 bg-table-header text-muted-foreground">
                   <tr>
                     <th className="px-3 py-2 font-bold">问题</th>
+                    <th className="px-3 py-2 font-bold">方言</th>
                     <th className="px-3 py-2 font-bold">SQL</th>
                     <th className="px-3 py-2 font-bold">状态</th>
                     <th className="px-3 py-2 font-bold">Wren ref</th>
-                    <th className="w-14 px-3 py-2" />
+                    <th className="w-[7rem] px-3 py-2" />
                   </tr>
                 </thead>
                 <tbody>
-                  {sqlPairs.length === 0 ? (
+                  {filteredPairs.length === 0 ? (
                     <tr>
-                      <td colSpan={5} className="px-3 py-8 text-center text-muted-foreground">
+                      <td colSpan={6} className="px-3 py-8 text-center text-muted-foreground">
                         暂无样本对
                       </td>
                     </tr>
                   ) : (
-                    sqlPairs.map((p) => (
+                    filteredPairs.map((p) => (
                       <tr
                         key={p.id}
                         className="border-b border-border/50 bg-table-row last:border-0 even:bg-table-stripe"
@@ -774,8 +790,11 @@ export function IqdEnhancePage() {
                         <td className="max-w-[14rem] truncate px-3 py-2 text-xs" title={p.question}>
                           {p.question}
                         </td>
-                        <td className="max-w-[24rem] truncate px-3 py-2 font-mono text-xs" title={p.sql_text}>
-                          {p.sql_text}
+                        <td className="px-3 py-2 text-xs">
+                          {DIALECT_LABEL[p.source_dialect ?? ''] ?? p.source_dialect}
+                        </td>
+                        <td className="max-w-[24rem] truncate px-3 py-2 font-mono text-xs" title={p.wren_sql}>
+                          {p.wren_sql}
                         </td>
                         <td className="px-3 py-2 text-xs">
                           <Badge
@@ -792,15 +811,25 @@ export function IqdEnhancePage() {
                         </td>
                         <td className="px-3 py-2 font-mono text-xs">{p.wren_ref_id ?? '—'}</td>
                         <td className="px-3 py-2">
-                          <Button
-                            size="icon"
-                            variant="ghost"
-                            className="h-8 w-8 text-muted-foreground hover:text-destructive"
-                            onClick={() => void removePair(p.id)}
-                            title="删除"
-                          >
-                            <Trash2 className="h-4 w-4" />
-                          </Button>
+                          <div className="flex items-center gap-1">
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="h-8"
+                              onClick={() => openPairDialog(p)}
+                            >
+                              编辑
+                            </Button>
+                            <Button
+                              size="icon"
+                              variant="ghost"
+                              className="h-8 w-8 text-muted-foreground hover:text-destructive"
+                              onClick={() => void removePair(p.id)}
+                              title="删除"
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </Button>
+                          </div>
                         </td>
                       </tr>
                     ))
@@ -808,6 +837,14 @@ export function IqdEnhancePage() {
                 </tbody>
               </table>
             </div>
+
+            <IqdSqlPairDialog
+              open={pairDialogOpen}
+              initial={pairEditing}
+              onClose={closePairDialog}
+              onSaved={handlePairSaved}
+              ensureConnection={ensureConnection}
+            />
           </div>
         ) : null}
 
@@ -816,11 +853,12 @@ export function IqdEnhancePage() {
           <div className="space-y-3">
             <div className="rounded-lg border bg-card p-3">
               <div className="mb-2 text-sm font-medium">新增知识/术语/口径</div>
-              <div className="grid grid-cols-1 gap-2 md:grid-cols-3">
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
                 <select
-                  className="h-9 rounded-md border border-input bg-card px-[0.7rem] text-sm"
+                  className="h-9 w-full shrink-0 rounded-md border border-input bg-card px-2.5 text-sm sm:w-[7.5rem]"
                   value={kbKind}
                   onChange={(e) => setKbKind(e.target.value)}
+                  aria-label="知识类型"
                 >
                   {Object.entries(KNOWLEDGE_KIND_LABEL).map(([v, l]) => (
                     <option key={v} value={v}>
@@ -829,11 +867,17 @@ export function IqdEnhancePage() {
                   ))}
                 </select>
                 <Input
+                  className="min-w-0 flex-1"
                   placeholder="标题/术语"
                   value={kbTitle}
                   onChange={(e) => setKbTitle(e.target.value)}
                 />
-                <Button size="sm" onClick={() => void saveKnowledgeItem()} disabled={saving}>
+                <Button
+                  size="sm"
+                  className="h-9 shrink-0 px-3"
+                  onClick={() => void saveKnowledgeItem()}
+                  disabled={saving}
+                >
                   <Save className="h-4 w-4" />
                   保存
                 </Button>
@@ -848,17 +892,17 @@ export function IqdEnhancePage() {
               </div>
             </div>
 
-            <div className="flex gap-2">
-              <Button size="sm" variant="outline" onClick={() => void importS07()}>
-                <Upload className="h-4 w-4" />
+            <div className="flex flex-wrap items-center gap-2">
+              <Button size="sm" variant="outline" className="h-8" onClick={() => void importS07()}>
+                <Upload className="h-3.5 w-3.5" />
                 S-07 术语导入
               </Button>
-              <Button size="sm" variant="outline" onClick={() => void pushEnhance()}>
-                <Send className="h-4 w-4" />
-                增强推送（context build）
+              <Button size="sm" variant="outline" className="h-8" onClick={() => void pushEnhance()}>
+                <Send className="h-3.5 w-3.5" />
+                增强推送
               </Button>
-              <Button size="sm" variant="outline" onClick={() => void loadEnhance()}>
-                <RefreshCw className="h-4 w-4" />
+              <Button size="sm" variant="outline" className="h-8" onClick={() => void loadEnhance()}>
+                <RefreshCw className="h-3.5 w-3.5" />
                 刷新
               </Button>
             </div>
@@ -932,6 +976,255 @@ export function IqdEnhancePage() {
         ) : null}
       </div>
     </div>
+  );
+}
+
+// ================= 样本对编辑弹窗（新增 / 编辑 / 转化 / 试运行）=================
+
+interface IqdSqlPairDialogProps {
+  open: boolean;
+  initial: IqdSqlPair | null;
+  onClose: () => void;
+  onSaved: () => void;
+  ensureConnection: () => Promise<number | null>;
+}
+
+function IqdSqlPairDialog({
+  open,
+  initial,
+  onClose,
+  onSaved,
+  ensureConnection,
+}: IqdSqlPairDialogProps) {
+  const [question, setQuestion] = useState('');
+  const [sourceDialect, setSourceDialect] = useState('oracle');
+  const [nativeSql, setNativeSql] = useState('');
+  const [wrenSql, setWrenSql] = useState('');
+  const [warnings, setWarnings] = useState<string[]>([]);
+  const [trialResult, setTrialResult] = useState<IqdTrialResult | null>(null);
+  const [remark, setRemark] = useState('');
+  const [translating, setTranslating] = useState(false);
+  const [trialing, setTrialing] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // 打开时按 initial 预填（编辑为行数据，新增为 null）
+  useEffect(() => {
+    if (!open) return;
+    setQuestion(initial?.question ?? '');
+    setSourceDialect(initial?.source_dialect ?? 'oracle');
+    setNativeSql(initial?.native_sql ?? '');
+    setWrenSql(initial?.wren_sql ?? '');
+    setWarnings([]);
+    setTrialResult(null);
+    setRemark(initial?.remark ?? '');
+    setError(null);
+  }, [open, initial]);
+
+  // v1.10 方言转化：调 BFF 翻译回填可编辑 wren_sql
+  const translate = useCallback(async () => {
+    if (!nativeSql.trim()) {
+      setError('请先输入原生 SQL');
+      return;
+    }
+    setTranslating(true);
+    setError(null);
+    setWarnings([]);
+    try {
+      const res = await translateSqlPair({ db_type: sourceDialect, native_sql: nativeSql });
+      setWrenSql(res.wren_sql || '');
+      setWarnings(res.warnings || []);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : '样本对翻译失败');
+    } finally {
+      setTranslating(false);
+    }
+  }, [nativeSql, sourceDialect]);
+
+  // v1.10 试运行：调 BFF 在 WrenAI 引擎侧执行转化后的 wren_sql
+  const trial = useCallback(async () => {
+    if (!wrenSql.trim()) {
+      setError('请先转化或手填 wren_sql');
+      return;
+    }
+    setTrialing(true);
+    setError(null);
+    try {
+      const res = await trialSqlPair({ wren_sql: wrenSql });
+      setTrialResult(res);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : '样本对试运行失败');
+    } finally {
+      setTrialing(false);
+    }
+  }, [wrenSql]);
+
+  const save = useCallback(async () => {
+    if (!question.trim() || !nativeSql.trim() || !wrenSql.trim()) {
+      setError('问题、原生 SQL 与转化后 wren_sql 均不能为空');
+      return;
+    }
+    const cid = await ensureConnection();
+    if (cid == null) return;
+    setSaving(true);
+    setError(null);
+    try {
+      await saveIqdSqlPair({
+        id: initial?.id ?? null,
+        connection_id: cid,
+        question: question.trim(),
+        source_dialect: sourceDialect,
+        native_sql: nativeSql,
+        wren_sql: wrenSql.trim(),
+        remark: remark.trim() || null,
+        enabled: true,
+      });
+      onSaved();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : '保存样本对失败');
+    } finally {
+      setSaving(false);
+    }
+  }, [ensureConnection, initial, onSaved, question, remark, sourceDialect, nativeSql, wrenSql]);
+
+  return (
+    <Dialog
+      open={open}
+      onOpenChange={(value) => {
+        if (!value) onClose();
+      }}
+    >
+      <DialogContent className="max-h-[85vh] overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle>{initial?.id != null ? '编辑样本对' : '新增样本对'}</DialogTitle>
+        </DialogHeader>
+
+        <div className="flex flex-col gap-3">
+          <div className="flex flex-col gap-1">
+            <span className="text-xs text-muted-foreground">问题</span>
+            <Input
+              placeholder="问题（如：本月各渠道销售额？）"
+              value={question}
+              onChange={(e) => setQuestion(e.target.value)}
+            />
+          </div>
+
+          <div className="flex flex-col gap-1">
+            <span className="text-xs text-muted-foreground">关系库类型</span>
+            <Select value={sourceDialect} onValueChange={setSourceDialect}>
+              <SelectTrigger>
+                <SelectValue placeholder="选择关系库类型" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="oracle">Oracle</SelectItem>
+                <SelectItem value="mysql">MySQL</SelectItem>
+                <SelectItem value="postgres">PostgreSQL</SelectItem>
+                <SelectItem value="clickhouse">ClickHouse</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+
+          <div className="flex flex-col gap-1">
+            <span className="text-xs text-muted-foreground">原生 SQL</span>
+            <Textarea
+              placeholder="原生 SQL（源方言，如 Oracle/MySQL 写法）"
+              value={nativeSql}
+              onChange={(e) => setNativeSql(e.target.value)}
+              rows={3}
+            />
+            <div className="flex items-center gap-2">
+              <Button
+                size="sm"
+                variant="secondary"
+                onClick={() => void translate()}
+                disabled={translating || !nativeSql.trim()}
+              >
+                <Send className="h-4 w-4" />
+                {translating ? '转化中…' : '转化'}
+              </Button>
+              {warnings.length > 0 ? (
+                <span className="text-xs text-amber-600">
+                  翻译存在 {warnings.length} 条告警，请检查或手改 wren_sql
+                </span>
+              ) : null}
+            </div>
+            {warnings.length > 0 ? (
+              <ul className="list-disc space-y-1 rounded-md bg-amber-50 px-3 py-2 text-xs text-amber-700">
+                {warnings.map((w, i) => (
+                  <li key={i}>{w}</li>
+                ))}
+              </ul>
+            ) : null}
+          </div>
+
+          <div className="flex flex-col gap-1">
+            <span className="text-xs text-muted-foreground">转化结果（wren_sql，可编辑）</span>
+            <Textarea
+              placeholder="点「转化」后回填，或直接手写 WrenAI 方言 SQL"
+              value={wrenSql}
+              onChange={(e) => setWrenSql(e.target.value)}
+              rows={3}
+            />
+            <Button
+              size="sm"
+              variant="secondary"
+              className="w-fit"
+              onClick={() => void trial()}
+              disabled={trialing || !wrenSql.trim()}
+            >
+              <Send className="h-4 w-4" />
+              {trialing ? '试运行中…' : '试运行'}
+            </Button>
+            {trialResult ? (
+              <div className="rounded-md border border-border bg-card p-2 text-xs">
+                {trialResult.error ? (
+                  <div className="mb-1 text-destructive">执行错误：{trialResult.error}</div>
+                ) : (
+                  <div className="mb-1 text-emerald-600">执行成功</div>
+                )}
+                <div className="text-muted-foreground">
+                  列：{(trialResult.columns || []).length} ｜ 行：
+                  {(trialResult.rows || []).length} ｜ 耗时：{trialResult.duration_ms} ms
+                </div>
+                {trialResult.columns && trialResult.columns.length > 0 ? (
+                  <div className="mt-1 font-mono">
+                    [{trialResult.columns
+                      .map((c) =>
+                        typeof c === 'object' && c !== null
+                          ? String((c as { name?: string }).name ?? JSON.stringify(c))
+                          : String(c),
+                      )
+                      .join(', ')}
+                    ]
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+          </div>
+
+          <div className="flex flex-col gap-1">
+            <span className="text-xs text-muted-foreground">备注</span>
+            <Input placeholder="备注（可空）" value={remark} onChange={(e) => setRemark(e.target.value)} />
+          </div>
+
+          {error ? (
+            <div className="rounded-md border border-destructive/30 bg-destructive/5 p-2 text-xs text-destructive">
+              {error}
+            </div>
+          ) : null}
+        </div>
+
+        <DialogFooter>
+          <Button size="sm" variant="outline" onClick={onClose} disabled={saving}>
+            取消
+          </Button>
+          <Button size="sm" onClick={() => void save()} disabled={saving}>
+            <Save className="h-4 w-4" />
+            保存
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 

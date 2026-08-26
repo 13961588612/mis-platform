@@ -12,6 +12,10 @@ import java.time.Instant;
 /**
  * 问数样本对（iqd_sql_pair）——few-shot 问题↔SQL 样本，W4 同步进 WrenAI
  * {@code sql_pairs}（{@code wren_ref_id} 回填外部引用 id）。
+ *
+ * <p>v1.10（§4.2.3）：原 {@code sql_text} 改名为 {@code wren_sql}（WrenAI 方言，
+ * 入库并推 WrenAI）；新增 {@code source_dialect}（用户所选关系库类型）与
+ * {@code native_sql}（用户手写的原生 SQL，保留以便再编辑/再翻译）。
  */
 @Entity
 @Table(name = "iqd_sql_pair")
@@ -26,8 +30,17 @@ public class IqdSqlPair {
     @Column(nullable = false)
     private String question;
 
-    @Column(name = "sql_text", nullable = false)
-    private String sqlText;
+    /** 转化后、可编辑、最终入库并推 WrenAI 的方言 SQL（原 sql_text 改名，v1.10）。 */
+    @Column(name = "wren_sql", nullable = false)
+    private String wrenSql;
+
+    /** 用户所选关系库类型：oracle | mysql | postgres | clickhouse（v1.10）。 */
+    @Column(name = "source_dialect")
+    private String sourceDialect;
+
+    /** 用户手写的原生 SQL（源方言）；保留以便再编辑/再翻译（v1.10）。 */
+    @Column(name = "native_sql", columnDefinition = "text")
+    private String nativeSql;
 
     @Column
     private String remark;
@@ -78,12 +91,28 @@ public class IqdSqlPair {
         this.question = question;
     }
 
-    public String getSqlText() {
-        return sqlText;
+    public String getWrenSql() {
+        return wrenSql;
     }
 
-    public void setSqlText(String sqlText) {
-        this.sqlText = sqlText;
+    public void setWrenSql(String wrenSql) {
+        this.wrenSql = wrenSql;
+    }
+
+    public String getSourceDialect() {
+        return sourceDialect;
+    }
+
+    public void setSourceDialect(String sourceDialect) {
+        this.sourceDialect = sourceDialect;
+    }
+
+    public String getNativeSql() {
+        return nativeSql;
+    }
+
+    public void setNativeSql(String nativeSql) {
+        this.nativeSql = nativeSql;
     }
 
     public String getRemark() {
