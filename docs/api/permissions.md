@@ -46,8 +46,8 @@ sys_menu（UI 树）                    sys_menu_api              sys_api
 |------------|------|------|
 | system:user:list | 菜单页 | 用户列表页 + 列表 API |
 | system:user:query | 按钮/菜单 | 详情 API（通常挂在「编辑」按钮 API 组） |
-| system:user:add | 按钮 | 新增 |
-| system:user:edit | 按钮 | 编辑（可多 API） |
+| system:user:add | 按钮 | 新增（含按手机查员工、员工绑定预检，V59） |
+| system:user:edit | 按钮 | 编辑（可多 API；含按手机查员工、员工绑定预检，V59） |
 | system:user:delete | 按钮 | 删除 |
 | system:user:resetPwd | 按钮 | 重置密码 |
 | system:user:assignRole | 按钮 | 分配角色 |
@@ -66,11 +66,14 @@ sys_menu（UI 树）                    sys_menu_api              sys_api
 
 | permission | 类型 | 说明 |
 |------------|------|------|
-| system:dept:list | 菜单+API | 部门树（按 orgId） |
+| system:dept:list | 菜单+API | 部门树（按 orgId）；含部门类型树/列表只读 |
 | system:dept:query | API | 部门详情 |
 | system:dept:add | 按钮+API | 新增部门 |
 | system:dept:edit | 按钮+API | 编辑部门 |
 | system:dept:delete | 按钮+API | 删除部门 |
+| system:dept-type:add | 按钮+API | 新增部门类型（V55，菜单 224） |
+| system:dept-type:edit | 按钮+API | 编辑部门类型（V55，菜单 225） |
+| system:dept-type:delete | 按钮+API | 删除部门类型（V55，菜单 226） |
 
 ### 3.5 角色管理
 
@@ -110,6 +113,13 @@ sys_menu（UI 树）                    sys_menu_api              sys_api
 | monitor:loginlog:list | 菜单+API | 登录日志 |
 | monitor:operlog:list | 菜单+API | 操作日志 |
 | monitor:operlog:query | API | 操作日志详情 |
+
+### 3.9 智能体运营（摘录）
+
+| permission | 类型 | 说明 |
+|------------|------|------|
+| agent:skill:manage | 按钮 | 技能创建/编辑/删除/启停；含解析 SKILL.md（`POST /api/v1/agent-ops/skills/parse`，V50+V61） |
+| agent:session:list | 菜单页 | 会话列表；含单轮/批量耗时（V50+V61） |
 
 ## 4. 菜单树结构（数据库种子）
 

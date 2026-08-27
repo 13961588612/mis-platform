@@ -164,7 +164,16 @@ class TestFlagsSafeRead:
         assert s.TASK_NOTIFICATION_MODE == "text_with_header"
         assert s.INVOKE_AGENT_MAX_DEPTH == 1
         assert s.INVOKE_AGENT_TIMEOUT_SECONDS == 120
-        assert sorted(s.INVOKE_AGENT_WHITELIST) == sorted(DEFAULT_WHITELIST)
+        # 1.3/1.4：白名单移除已灰度的 mis-extract/mis-summary、加入承接其能力的
+        # mis-user-helper，与 DEFAULT_WHITELIST（兜底常量，仍保留旧 worker）解耦，
+        # 二者不再要求相等。
+        assert sorted(s.INVOKE_AGENT_WHITELIST) == [
+            "crm-assistant",
+            "mis-rag",
+            "mis-user-helper",
+        ]
+        # 硬约束（R5/R8）：后台操作员专属 Agent 绝不进委派白名单
+        assert "mis-admin-helper" not in s.INVOKE_AGENT_WHITELIST
 
     def test_real_settings_values_are_honoured_not_swallowed(self):
         """反向用例：真实值必须被读到，不能被 flags 一律吞成 default。"""
@@ -279,7 +288,7 @@ class TestErrorTextVerbatim:
         assert result.is_error is True
         assert result.output == (
             "目标智能体不在白名单：evil-agent。"
-            "允许：crm-assistant, mis-extract, mis-rag, mis-summary"
+            "允许：crm-assistant, mis-rag, mis-user-helper"
         ), repr(result.output)
 
     async def test_forbidden_self_text_verbatim(self):

@@ -91,6 +91,14 @@ class SkillRegistry:
 
         self._skills.pop(skill_id, None)
 
+        # custom 技能同步删落盘，否则启动 load_custom_skills_from_disk 会幽灵重载
+        try:
+            from src.skills.custom_store import delete_custom_skill
+
+            delete_custom_skill(skill_id)
+        except Exception:
+            logger.exception("Failed to delete custom skill store", skill_id=skill_id)
+
         if self._indexer:
             try:
                 await self._indexer.delete_index(skill_id)
@@ -110,6 +118,45 @@ class SkillRegistry:
     def get(self, skill_id: str) -> Skill | None:
         """按 ID 返回 Skill，未找到返回 ``None``。"""
         return self._skills.get(skill_id)
+
+    def resolve_canonical_id(self, raw: str) -> str:
+        """把工具入参名解析成授权页使用的正式 ``skill_id``。
+
+        解析顺序（均为**精确**匹配，禁止 ``.`` / ``-`` / ``_`` 互相折叠）：
+
+        1. 正式 ``skill_id``
+        2. ``package_name``（OpenHarness 目录名，如 ``member-profile``）且唯一
+        3. Front Matter ``aliases`` 且唯一
+
+        多命中或未命中时保持原文，交给后续 fail-closed。
+
+        Args:
+            raw: 工具入参里的 skill 名（目录名、别名或正式 id）。
+
+        Returns:
+            注册表中的正式 ``skill_id``；无法唯一映射时原样返回。
+        """
+        key: str = (raw or "").strip()
+        if not key:
+            return key
+        direct: Skill | None = self._skills.get(key)
+        if direct is not None:
+            return direct.skill_id
+        by_package: list[str] = [
+            skill.skill_id
+            for skill in self._skills.values()
+            if skill.package_name == key
+        ]
+        if len(by_package) == 1:
+            return by_package[0]
+        by_alias: list[str] = [
+            skill.skill_id
+            for skill in self._skills.values()
+            if key in (skill.aliases or [])
+        ]
+        if len(by_alias) == 1:
+            return by_alias[0]
+        return key
 
     async def get_async(self, skill_id: str) -> Skill | None:
         """异步获取 Skill — 先查内存，再查缓存。"""

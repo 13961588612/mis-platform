@@ -5,9 +5,20 @@ spring:
   application:
     name: mis-kb
   datasource:
-    url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:mis_platform}
+    # YAML 须加引号：& 否则会被当成 anchor
+    url: "jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:mis_platform}?tcpKeepAlive=true&ApplicationName=${spring.application.name}&loginTimeout=10"
     username: ${DB_USER:mis}
     password: ${DB_PASSWORD:mis123}
+    hikari:
+      maximum-pool-size: ${DB_POOL_SIZE:5}
+      minimum-idle: ${DB_POOL_MIN_IDLE:1}
+      connection-timeout: 25000
+      idle-timeout: 600000
+      max-lifetime: 1800000
+      leak-detection-threshold: 15000
+      connection-init-sql: "SET application_name = '${spring.application.name}'"
+      # 不设 connection-test-query，走 JDBC Connection.isValid()
+      validation-timeout: 5000
   jpa:
     open-in-view: false
     hibernate:
@@ -35,6 +46,9 @@ mis:
       # false ⇒ capabilities.raptorSupported=false → 前端置灰 → 保存强制 useRaptor=false
       #          → 触发构建抛 KB_RAPTOR_UNSUPPORTED（40960）。无库数上限。
       raptor-enabled: ${MIS_KB_RAPTOR_ENABLED:true}
+      # PageIndex / image-table context: declare supported + frontend enable (sync via parser_config.ext).
+      parser-toc-supported: ${MIS_KB_ENGINE_PARSER_TOC_SUPPORTED:true}
+      parser-image-table-context-supported: ${MIS_KB_ENGINE_PARSER_IMAGE_TABLE_CONTEXT_SUPPORTED:true}
       reconcile:
         # 定时对账总开关。刻意不用 @ConditionalOnProperty（那样只能重启生效），
         # 定时方法体第一行读本值直接 return，支持 Nacos 热关。

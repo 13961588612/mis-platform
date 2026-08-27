@@ -13,5 +13,6 @@ public record PostCreateRequest(
         @NotBlank String code,
         @NotBlank String name,
         Integer sort,
-        Integer status
+        Integer status,
+        Integer quota
 ) {}

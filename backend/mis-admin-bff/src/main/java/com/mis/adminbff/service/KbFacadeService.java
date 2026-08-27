@@ -7,6 +7,7 @@ import com.mis.adminbff.dto.kb.KbAuditBefore;
 import com.mis.adminbff.dto.kb.KbCategoryAdminVO;
 import com.mis.adminbff.dto.kb.KbCategoryVO;
 import com.mis.adminbff.dto.kb.KbDashboardVO;
+import com.mis.adminbff.dto.kb.KbDocumentChunksVO;
 import com.mis.adminbff.dto.kb.KbDocumentUploadResponse;
 import com.mis.adminbff.dto.kb.KbDocumentVO;
 import com.mis.adminbff.dto.kb.KbEngineCapabilitiesVO;
@@ -241,18 +242,35 @@ public class KbFacadeService {
     }
 
     /**
-     * 删除知识库（T04：{@code mode} 透传 + 回执透传）。
-     *
-     * <p><b>默认走归档</b>：不带 {@code mode} 时下游执行「引擎侧改名 + 本地停用」，
-     * 不删任何数据。回执里的 {@code message} 原样透传给前端展示，不要在这层改写。
+     * 删除知识库（2 参重载，兼容既有调用方；等价于 {@code deleteLibrary(id, mode, false)}）。
      *
      * @param id   知识库 id
      * @param mode {@code archive}（默认）/ {@code physical}
      * @return 删除回执
      */
     public KbLibraryDeleteResultVO deleteLibrary(Long id, String mode) {
+        return deleteLibrary(id, mode, false);
+    }
+
+    /**
+     * 删除知识库（T04：{@code mode} 透传 + 回执透传；Q1 两段式确认流加 {@code force}）。
+     *
+     * <p><b>默认走归档</b>：不带 {@code mode} 时下游执行「引擎侧改名 + 本地停用」，
+     * 不删任何数据。回执里的 {@code message} 原样透传给前端展示，不要在这层改写。
+     *
+     * <p><b>Q1 {@code force}：</b>第一段（force=false）若下游返回 {@code engineMissing=true}
+     * 提示态，本层原样透传，由前端警示并要求确认后以 {@code force=true} 重调。
+     * {@code force} 语义（只对 engineMissing 生效、不豁免其它失败）由 mis-kb 裁定，
+     * 本层只做参数装配与透传。
+     *
+     * @param id    知识库 id
+     * @param mode  {@code archive}（默认）/ {@code physical}
+     * @param force 是否跳过引擎直接本地执行（仅对 engineMissing 生效，默认 false）
+     * @return 删除回执
+     */
+    public KbLibraryDeleteResultVO deleteLibrary(Long id, String mode, boolean force) {
         String effective = (mode == null || mode.isBlank()) ? "archive" : mode.trim();
-        return kbWebClient.deleteLibrary(id, effective);
+        return kbWebClient.deleteLibrary(id, effective, force);
     }
 
     /**
@@ -355,10 +373,28 @@ public class KbFacadeService {
         return kbWebClient.getDocument(libraryId, id);
     }
 
+    /**
+     * 分页列举文档切片（「查看文档切分效果」；三层透传，不做业务决策）。
+     *
+     * <p>读操作：权限码 {@code kb:document:list}（BFF 侧 {@code requirePermission}
+     * 兜底 + 注册表主路径），端点挂 {@code @OperLog} 审计留痕（见 {@code KbController}）。
+     */
+    public KbDocumentChunksVO listDocumentChunks(
+            Long libraryId, Long id, String keywords, int page, int pageSize) {
+        return kbWebClient.listDocumentChunks(libraryId, id, keywords, page, pageSize);
+    }
+
+    /** 拉取分片版面截图（直吐字节；BFF 附属资源权限并集 + mis-kb ACL）。 */
+    public byte[] getChunkImage(Long libraryId, Long id, String imageId) {
+        return kbWebClient.getChunkImage(libraryId, id, imageId);
+    }
+
     /** 透传文档上传；BFF 侧只做大小/空文件校验，解析交给引擎。可选文件级切片参数。 */
     public KbDocumentUploadResponse uploadDocument(
             Long libraryId, MultipartFile file,
-            String chunkMethod, Integer chunkTokenNum, String separator) {
+            String chunkMethod, Integer chunkTokenNum, String separator,
+            Boolean pageIndex, Integer imageTableContextWindow,
+            Integer autoKeywords, Integer autoQuestions) {
         if (file == null || file.isEmpty()) {
             throw new BusinessException(ResultCode.VALIDATION_ERROR, "上传文件不能为空");
         }
@@ -376,7 +412,8 @@ public class KbFacadeService {
                 ? file.getOriginalFilename()
                 : "upload.bin";
         return kbWebClient.uploadDocument(libraryId, filename, file.getContentType(), bytes,
-                chunkMethod, chunkTokenNum, separator);
+                chunkMethod, chunkTokenNum, separator,
+                pageIndex, imageTableContextWindow, autoKeywords, autoQuestions);
     }
 
     /**
@@ -435,8 +472,23 @@ public class KbFacadeService {
 
     // ------------------------------------------------------------------ ACL
 
+    /**
+     * 列出库授权并批量回填主体名称（搜索权限页主体表用）。
+     *
+     * <p>名称解析失败<b>不阻断</b>整个接口：回填异常一律吞掉并降级返回原始列表，
+     * 条目名称保持 {@code null}，前端降级展示 {@code subjectType + subjectId}。
+     *
+     * @param libraryId 知识库 id
+     * @return ACL 列表（subjectName 已尽力回填；缺失保持 null）
+     */
     public List<KbAclVO> listAcls(Long libraryId) {
-        return kbWebClient.listAcls(libraryId);
+        List<KbAclVO> acls = kbWebClient.listAcls(libraryId);
+        try {
+            return fillAclSubjectNames(acls);
+        } catch (Exception e) {
+            log.warn("回填 ACL 主体名称失败，降级返回原始列表: {}", e.getMessage());
+            return acls != null ? acls : List.of();
+        }
     }
 
     /**
@@ -713,6 +765,11 @@ public class KbFacadeService {
         return kbWebClient.getSessionDetail(sessionId);
     }
 
+    /** 删除问答会话（用户侧软删除；纯透传，归属/幂等由 mis-kb 裁定）。 */
+    public void deleteSession(Long sessionId) {
+        kbWebClient.deleteSession(sessionId);
+    }
+
     public KbQaFeedbackVO submitFeedback(
             Long sessionId, Integer accuracy, Integer helpful, Integer offtopic, Integer citeError) {
         Map<String, Object> body = new HashMap<>();
@@ -726,6 +783,24 @@ public class KbFacadeService {
 
     public KbQaFeedbackVO getFeedback(Long sessionId) {
         return kbWebClient.getFeedback(sessionId);
+    }
+
+    /**
+     * 标记问答反馈已处理/忽略（OP-05）。
+     *
+     * <p>处理人取当前登录人（登录上下文头透传 mis-kb），状态机 pending → handled/ignored
+     * 单向终态、非法流转由 mis-kb 拒绝；本层只做参数装配与透传。
+     *
+     * @param feedbackId 反馈 id
+     * @param status     目标状态：handled / ignored
+     * @param note       处理备注；可空
+     * @return 更新后的反馈视图（含处理状态五字段）
+     */
+    public KbQaFeedbackVO markFeedbackProcessed(Long feedbackId, String status, String note) {
+        Map<String, Object> body = new HashMap<>();
+        body.put("status", status);
+        body.put("note", note);
+        return kbWebClient.processFeedback(feedbackId, body);
     }
 
     // ------------------------------------------------------------------ 运营（只读）
@@ -746,6 +821,7 @@ public class KbFacadeService {
      * @param libraryId   命中知识库 id
      * @param userId      提问用户 id
      * @param hasFeedback 是否已反馈
+     * @param sentiment   评价筛选：positive 好评 / negative 差评 / null 不限
      * @param keyword     提问关键字
      * @param page        页码
      * @param size        每页条数
@@ -753,13 +829,14 @@ public class KbFacadeService {
      */
     public PageResult<KbQaSessionListVO> listOperationSessions(
             String from, String to, Long libraryId, Long userId,
-            Boolean hasFeedback, String keyword, Integer page, Integer size) {
+            Boolean hasFeedback, String sentiment, String keyword, Integer page, Integer size) {
         Map<String, Object> params = new HashMap<>();
         params.put("from", from);
         params.put("to", to);
         params.put("libraryId", libraryId);
         params.put("userId", userId);
         params.put("hasFeedback", hasFeedback);
+        params.put("sentiment", sentiment);
         params.put("keyword", keyword);
         params.put("page", page);
         params.put("size", size);
@@ -780,7 +857,9 @@ public class KbFacadeService {
             enriched.add(new KbQaSessionListVO(
                     row.id(), row.userId(), names.get(row.userId()), row.appId(), row.createdAt(),
                     row.question(), row.answerBrief(), row.messageCount(), row.citeCount(),
-                    row.libraryIds(), row.hasFeedback(), row.accuracy(), row.helpful()));
+                    row.libraryIds(), row.hasFeedback(), row.accuracy(), row.helpful(),
+                    row.offtopic(), row.citeError(), row.sentiment(), row.feedbackStatus(),
+                    row.ticketStatus()));
         }
         return PageResult.of(result.getPage(), result.getSize(), result.getTotal(), enriched);
     }
@@ -828,19 +907,21 @@ public class KbFacadeService {
      * @param libraryId   命中知识库 id
      * @param userId      提问用户 id
      * @param hasFeedback 是否已反馈
+     * @param sentiment   评价筛选：positive 好评 / negative 差评 / null 不限
      * @param keyword     提问关键字
      * @param desensitize 是否脱敏 userId（默认 true）
      * @return CSV 全文
      */
     public String exportCsv(
             String from, String to, Long libraryId, Long userId,
-            Boolean hasFeedback, String keyword, Boolean desensitize) {
+            Boolean hasFeedback, String sentiment, String keyword, Boolean desensitize) {
         Map<String, Object> params = new HashMap<>();
         params.put("from", from);
         params.put("to", to);
         params.put("libraryId", libraryId);
         params.put("userId", userId);
         params.put("hasFeedback", hasFeedback);
+        params.put("sentiment", sentiment);
         params.put("keyword", keyword);
         List<KbQaExportRow> rows = kbWebClient.exportRows(params);
         return exportService.toCsv(rows, desensitize == null || desensitize);
@@ -970,6 +1051,39 @@ public class KbFacadeService {
         return result;
     }
 
+    /**
+     * 批量回填 ACL 视图中的主体名称（搜索权限页主体表用）。
+     *
+     * <p>与 {@link #fillSubjectNames(List)} 同构，仅目标类型不同（{@code KbAclVO} 是 8 参
+     * 全量视图，{@code KbAclSummaryVO} 是 4 参摘要，二者不能合并成一个泛型擦除同名方法）。
+     * 名称解析不到/入参缺失时保持 {@code null}，由调用方 {@link #listAcls} 兜底异常降级。
+     *
+     * @param acls 原始 ACL 视图
+     * @return 已回填名称的视图；解析失败的条目保持 {@code null} 名称
+     */
+    private List<KbAclVO> fillAclSubjectNames(List<KbAclVO> acls) {
+        if (acls == null || acls.isEmpty()) {
+            return acls != null ? acls : List.of();
+        }
+        Set<KbSubjectProxyService.SubjectKey> keys = new HashSet<>();
+        for (KbAclVO acl : acls) {
+            if (acl.subjectType() != null && acl.subjectId() != null) {
+                keys.add(new KbSubjectProxyService.SubjectKey(acl.subjectType(), acl.subjectId()));
+            }
+        }
+        Map<String, String> names = subjectProxyService.resolveNames(keys);
+        List<KbAclVO> result = new ArrayList<>(acls.size());
+        for (KbAclVO acl : acls) {
+            String name = acl.subjectType() == null || acl.subjectId() == null
+                    ? null
+                    : names.get(acl.subjectType().toLowerCase() + ":" + acl.subjectId());
+            result.add(new KbAclVO(
+                    acl.id(), acl.libraryId(), acl.subjectType(), acl.subjectId(),
+                    acl.action(), acl.createdAt(), acl.updatedAt(), name));
+        }
+        return result;
+    }
+
     // ------------------------------------------------------------------ 引擎（S-04）
 
     /**
@@ -1027,7 +1141,10 @@ public class KbFacadeService {
                     caps.parserOcrSupported() != null ? caps.parserOcrSupported() : false,
                     caps.parserOverlapSupported() != null ? caps.parserOverlapSupported() : false,
                     caps.graphSupported() != null ? caps.graphSupported() : false,
-                    caps.raptorSupported() != null ? caps.raptorSupported() : false);
+                    caps.raptorSupported() != null ? caps.raptorSupported() : false,
+                    caps.parserTocSupported() != null ? caps.parserTocSupported() : false,
+                    caps.parserImageTableContextSupported() != null
+                            ? caps.parserImageTableContextSupported() : false);
         } catch (Exception e) {
             log.warn("取引擎能力失败: {}", e.getMessage());
             return unsupportedCapabilities(engineType);
@@ -1153,7 +1270,7 @@ public class KbFacadeService {
     private static KbEngineCapabilitiesVO unsupportedCapabilities(String engineType) {
         return new KbEngineCapabilitiesVO(
                 engineType, List.of("UNSUPPORTED"), false, false, false, false, false, false, false,
-                false, false);
+                false, false, false, false);
     }
 
     // ------------------------------------------------------------------ 命中测试（Q-04 / WA-07）

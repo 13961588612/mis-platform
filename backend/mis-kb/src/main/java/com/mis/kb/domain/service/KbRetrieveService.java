@@ -145,7 +145,7 @@ public class KbRetrieveService {
                         h.libraryId(), h.documentId(), h.chunkText(), h.score(),
                         // 引擎已给出标题时优先用引擎值，否则回落本地文档标题
                         h.docTitle() != null ? h.docTitle() : docTitles.get(h.documentId()),
-                        h.offset(), h.page()))
+                        h.offset(), h.page(), h.imageId()))
                 .toList();
         return new RetrieveHitsVO(
                 vos,

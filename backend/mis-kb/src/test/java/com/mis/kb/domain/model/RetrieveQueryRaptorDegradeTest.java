@@ -62,7 +62,8 @@ class RetrieveQueryRaptorDegradeTest {
                 base.ocrEnabled(), base.ocrLanguage(), base.chunkOverlapTokenNum(),
                 base.useKnowledgeGraph(), base.kgBuildStatus(), base.kgBuildMessage(),
                 useRaptor, base.raptorMaxTokenNum(), base.raptorThreshold(),
-                base.raptorMaxCluster(), base.raptorPrompt(), raptorStatus, null);
+                base.raptorMaxCluster(), base.raptorPrompt(), raptorStatus, null,
+                null, null);
     }
 
     private static RetrieveQueryResolver.RetrieveContext context(

@@ -15,7 +15,11 @@ public record IamUserVO(
         Integer isTenantAdmin,
         Integer mustChangePassword,
         String realName,
+        String email,
         String deptId,
+        String phone,
+        List<String> orgIds,
+        List<String> deptIds,
         List<IamRoleVO> roles,
         Instant createdAt,
         Instant updatedAt

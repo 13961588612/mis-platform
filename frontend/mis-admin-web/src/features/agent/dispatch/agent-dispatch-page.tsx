@@ -12,14 +12,16 @@
  */
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Activity, GitBranch, Info, RefreshCw, Route, Target } from 'lucide-react';
-import { cn } from '@/lib/utils';
+import { cn, todayLocalDate } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card, CardContent } from '@/components/ui/card';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { StatCard } from '@/components/common/stat-card';
 import { SortIndicator } from '@/components/common/sort-indicator';
 import { useClientSort } from '@/components/common/use-client-sort';
 import { useColumnWidths, type ResizableColumn } from '@/components/common/use-column-widths';
+import { RESET_COL_WIDTH_OVERLAY_CLASS, ResetColWidthButton } from '@/components/common/header-action-buttons';
 import { AgentPageShell, AgentContentState } from '../components/agent-page-shell';
 import { AgentStatusBadge } from '../components/agent-status-badge';
 import {
@@ -44,6 +46,7 @@ const selectClass =
  */
 const LOG_COLS: ResizableColumn[] = [
   { key: 'timestamp', label: '时间' },
+  { key: 'dispatch_kind', label: '类型' },
   { key: 'session_id', label: '会话' },
   { key: 'matched_agent_id', label: '命中 Agent' },
   { key: 'strategy_used', label: '命中策略', locked: true },
@@ -54,6 +57,7 @@ const EMPTY_ROUTE_STATS: RouteStats = {
   total_routes: 0,
   by_agent: {},
   by_strategy: {},
+  by_kind: {},
   avg_latency_ms: 0,
   avg_confidence: 0,
 };
@@ -61,21 +65,26 @@ const EMPTY_ROUTE_STATS: RouteStats = {
 /**
  * 调度链路列（对齐 `DispatchTrace` 真实 wire）。
  *
- * <p>key 必须与字段同名（排序走 `row[key]`）：时间是 `created_at`（不是
- * `started_at`）、会话是 `session_id`（不是 `trace_id`）、协调者不在行内
- * （trace 由当前 Agent 发起，无 `coordinator_id` 字段）、深度与 duration_ms
- * 均不存在 —— 真实字段是 `tool` / `intent` / `latency_ms` / `brief_rejected`。
+ * <p>key 必须与字段同名（排序走 `row[key]`）：时间是 `created_at`，会话是
+ * `session_id`；「调度」列用 `coordinator_id` 排序，单元格展示「调度者 → 执行者」。
  */
 const TRACE_COLS: ResizableColumn[] = [
   { key: 'created_at', label: '时间' },
   { key: 'session_id', label: '会话' },
-  { key: 'worker_id', label: '执行者' },
+  { key: 'coordinator_id', label: '调度' },
   { key: 'tool', label: '工具' },
   { key: 'intent', label: '意图' },
   { key: 'latency_ms', label: '耗时' },
   { key: 'status', label: '结果' },
   { key: 'brief_rejected', label: 'Brief 拒绝', locked: true },
 ];
+
+/** 调度链路「谁→谁」展示文案。 */
+function formatDispatchEdge(trace: DispatchTrace): string {
+  const from = (trace.coordinator_id || '').trim() || '-';
+  const to = (trace.worker_id || '').trim() || '-';
+  return `${from} → ${to}`;
+}
 
 /**
  * 本地日期输入（`yyyy-MM-dd`）→ ISO 8601 UTC（impl-plan §10.5「时间」约定）。
@@ -109,13 +118,19 @@ function barWidth(ratio: number): string {
 }
 
 export function AgentDispatchPage() {
-  // ---- 筛选输入态（未提交） ----
-  const [fromDate, setFromDate] = useState('');
-  const [toDate, setToDate] = useState('');
+  // ---- 筛选输入态（未提交）；起止日期默认当天 ----
+  const [fromDate, setFromDate] = useState(todayLocalDate);
+  const [toDate, setToDate] = useState(todayLocalDate);
   const [coordinatorId, setCoordinatorId] = useState('');
+  const [kind, setKind] = useState('');
+  /** 路由日志 / 调度链路 两个 Tab 隔离（#4.1）。 */
+  const [view, setView] = useState<'logs' | 'traces'>('logs');
 
-  /** 已提交的查询条件；与输入态分开，避免改一个字符就打一次后端。 */
-  const [applied, setApplied] = useState<DispatchQuery>({});
+  /** 已提交的查询条件；与输入态分开，避免改一个字符就打一次后端。默认当天。 */
+  const [applied, setApplied] = useState<DispatchQuery>(() => {
+    const today = todayLocalDate();
+    return { from: toIsoUtc(today, false), to: toIsoUtc(today, true) };
+  });
 
   // ---- 主视图：#46 路由日志 + #47 命中统计（ready） ----
   const [logs, setLogs] = useState<RouteLog[]>([]);
@@ -201,14 +216,17 @@ export function AgentDispatchPage() {
       from: toIsoUtc(fromDate, false),
       to: toIsoUtc(toDate, true),
       coordinator_id: coordinatorId || undefined,
+      kind: kind || undefined,
     });
   }
 
   function onReset(): void {
-    setFromDate('');
-    setToDate('');
+    const today = todayLocalDate();
+    setFromDate(today);
+    setToDate(today);
     setCoordinatorId('');
-    setApplied({});
+    setKind('');
+    setApplied({ from: toIsoUtc(today, false), to: toIsoUtc(today, true) });
   }
 
   const getLogSortValue = useCallback(
@@ -302,6 +320,19 @@ export function AgentDispatchPage() {
             <label className="mb-[0.4rem] block text-xs text-muted-foreground">结束日期</label>
             <Input type="date" value={toDate} onChange={(e) => setToDate(e.target.value)} />
           </div>
+          <div className="w-44">
+            <label className="mb-[0.4rem] block text-xs text-muted-foreground">调度类型</label>
+            <select
+              className={selectClass}
+              value={kind}
+              onChange={(e) => setKind(e.target.value)}
+            >
+              <option value="">全部类型</option>
+              <option value="agent_router">自动路由</option>
+              <option value="coordinator">协调委派</option>
+              <option value="specified">指定路由</option>
+            </select>
+          </div>
           <div className="w-56">
             <label className="mb-[0.4rem] block text-xs text-muted-foreground">协调者</label>
             <select
@@ -322,7 +353,7 @@ export function AgentDispatchPage() {
           <Button size="sm" onClick={applyFilter}>
             查询
           </Button>
-          <Button size="sm" variant="ghost" onClick={onReset}>
+          <Button size="sm" variant="secondary" onClick={onReset}>
             重置
           </Button>
         </div>
@@ -331,7 +362,16 @@ export function AgentDispatchPage() {
         <section className="space-y-2">
           <h2 className="text-sm font-medium text-foreground">命中统计</h2>
           <div className="grid grid-cols-2 gap-3 lg:grid-cols-3">
-            <StatCard label="命中总次数" value={statsError ? '-' : totalHits} icon={Target} />
+            <StatCard
+              label="命中总次数"
+              value={statsError ? '-' : totalHits}
+              icon={Target}
+              description={
+                statsError
+                  ? undefined
+                  : `自动路由 ${stats.by_kind.agent_router ?? 0} · 协调委派 ${stats.by_kind.coordinator ?? 0} · 指定路由 ${stats.by_kind.specified ?? 0}`
+              }
+            />
             <StatCard
               label="参与 Agent 数"
               value={statsError ? '-' : rankedStats.length}
@@ -354,7 +394,7 @@ export function AgentDispatchPage() {
             onRetry={() => void loadMain(applied)}
             empty={!loading && !statsError && !hasStats}
             emptyText="所选范围内暂无命中统计"
-            emptyHint="放宽时间范围，或确认该时段内确有会话经过路由分发。"
+            emptyHint="与下方调度链路同源：协调者委派 Worker 后会出现。已有链路记录时刷新本页即可。"
           >
             <Card>
               <CardContent className="space-y-2 py-3">
@@ -382,8 +422,15 @@ export function AgentDispatchPage() {
           </AgentContentState>
         </section>
 
-        {/* ---------------- 路由日志（#46 ready） ---------------- */}
-        <section className="flex min-h-0 flex-col gap-2">
+        {/* ---------------- 路由日志 / 调度链路：两个 Tab 隔离（#4.1） ---------------- */}
+        <Tabs value={view} onValueChange={(v) => setView(v as 'logs' | 'traces')} className="flex min-h-0 flex-1 flex-col gap-3">
+          <TabsList className="w-fit">
+            <TabsTrigger value="logs">路由日志</TabsTrigger>
+            <TabsTrigger value="traces">调度链路</TabsTrigger>
+          </TabsList>
+
+          {/* ===== Tab：路由日志（#46 ready） ===== */}
+          <TabsContent value="logs" className="flex min-h-0 flex-1 flex-col gap-2">
           <h2 className="text-sm font-medium text-foreground">
             路由日志
             <span className="ml-2 text-xs font-normal text-muted-foreground">
@@ -396,17 +443,11 @@ export function AgentDispatchPage() {
             onRetry={() => void loadMain(applied)}
             empty={!loading && !logsError && logs.length === 0}
             emptyText="所选范围内暂无路由日志"
-            emptyHint="放宽时间范围或清空协调者筛选后重试。"
+            emptyHint="与下方调度链路同源。命中 Agent 为 mis-rag、策略为 coordinator_delegate。"
           >
-            <div className="relative max-h-[26rem] overflow-auto rounded-lg border bg-table-surface">
+            <div className="relative max-h-[26rem] min-h-[12rem] overflow-auto rounded-lg border bg-table-surface">
               {logCols.hasCustom ? (
-                <button
-                  type="button"
-                  onClick={logCols.reset}
-                  className="absolute right-3 top-3 z-20 rounded-md bg-card px-2 py-0.5 text-xs text-muted-foreground shadow-sm hover:text-foreground"
-                >
-                  重置列宽
-                </button>
+                <ResetColWidthButton onClick={logCols.reset} className={RESET_COL_WIDTH_OVERLAY_CLASS} />
               ) : null}
               <table
                 className="border-separate border-spacing-0 bg-table-surface text-left text-sm"
@@ -463,6 +504,12 @@ export function AgentDispatchPage() {
                       <td className="whitespace-nowrap px-3 py-2 text-xs text-muted-foreground">
                         {formatTime(log.timestamp)}
                       </td>
+                      <td className="px-3 py-2">
+                        <AgentStatusBadge
+                          kind="dispatchKind"
+                          value={log.dispatch_kind || 'agent_router'}
+                        />
+                      </td>
                       <td
                         className="truncate px-3 py-2 font-mono text-xs"
                         title={log.session_id ?? ''}
@@ -487,14 +534,17 @@ export function AgentDispatchPage() {
               </table>
             </div>
           </AgentContentState>
-        </section>
+          </TabsContent>
 
-        {/* ---------------- 调度链路（#45 ready，独立塌陷） ---------------- */}
-        <section className="flex min-h-0 flex-col gap-2">
+          {/* ===== Tab：调度链路（#45 ready，独立塌陷） ===== */}
+          <TabsContent value="traces" className="flex min-h-0 flex-1 flex-col gap-2">
           <div className="flex flex-wrap items-end gap-2">
-            <h2 className="text-sm font-medium text-foreground">调度链路（Traces）</h2>
+            <h2 className="flex items-center gap-2 text-sm font-medium text-foreground">
+              调度链路（Traces）
+              <AgentStatusBadge kind="dispatchKind" value="coordinator" />
+            </h2>
             <span className="pb-1.5 text-xs text-muted-foreground">
-              最近 {traces.length} 条 · 固定取最新 100 条，不受上方筛选影响
+              仅协调委派明细 · 最近 {traces.length} 条 · 固定取最新 100 条
             </span>
             <Button
               size="sm"
@@ -511,9 +561,9 @@ export function AgentDispatchPage() {
           <div className="flex gap-2 rounded-md border border-info/30 bg-info/5 p-3 text-xs text-muted-foreground">
             <Info className="mt-[0.1rem] h-3.5 w-3.5 shrink-0 text-info" />
             <p className="leading-relaxed">
-              调度链路来自 ai-platform 的 trace 落库，按时间倒序展示最近委派记录；
+              调度链路来自 ai-platform 的最近委派记录（Redis 环形缓冲，重启后仍可查）；
               <span className="font-medium text-foreground">失败不影响</span>
-              上方的路由日志与命中统计。
+              上方的路由日志与命中统计。问完一轮后请点「刷新链路」。
             </p>
           </div>
 
@@ -523,17 +573,11 @@ export function AgentDispatchPage() {
             onRetry={() => void loadTraces()}
             empty={!tracesLoading && !tracesError && traces.length === 0}
             emptyText="暂无调度链路"
-            emptyHint="协调者派发任务后才会产生链路记录。"
+            emptyHint="用 MIS智能对话助手问完后点刷新。对话与观测必须连同一套 Redis（默认都是 Nacos 的 :8000）。"
           >
-            <div className="relative max-h-[26rem] overflow-auto rounded-lg border bg-table-surface">
+            <div className="relative max-h-[26rem] min-h-[12rem] overflow-auto rounded-lg border bg-table-surface">
               {traceCols.hasCustom ? (
-                <button
-                  type="button"
-                  onClick={traceCols.reset}
-                  className="absolute right-3 top-3 z-20 rounded-md bg-card px-2 py-0.5 text-xs text-muted-foreground shadow-sm hover:text-foreground"
-                >
-                  重置列宽
-                </button>
+                <ResetColWidthButton onClick={traceCols.reset} className={RESET_COL_WIDTH_OVERLAY_CLASS} />
               ) : null}
               <table
                 className="border-separate border-spacing-0 bg-table-surface text-left text-sm"
@@ -598,9 +642,13 @@ export function AgentDispatchPage() {
                       </td>
                       <td
                         className="truncate px-3 py-2 text-xs"
-                        title={trace.worker_id ?? ''}
+                        title={formatDispatchEdge(trace)}
                       >
-                        {trace.worker_id || '-'}
+                        <span className="text-muted-foreground">
+                          {(trace.coordinator_id || '').trim() || '-'}
+                        </span>
+                        <span className="mx-1 text-muted-foreground">→</span>
+                        <span>{(trace.worker_id || '').trim() || '-'}</span>
                       </td>
                       <td
                         className="truncate px-3 py-2 text-xs"
@@ -633,7 +681,8 @@ export function AgentDispatchPage() {
               </table>
             </div>
           </AgentContentState>
-        </section>
+          </TabsContent>
+        </Tabs>
 
         <p className="flex items-center gap-1.5 pb-1 text-xs text-muted-foreground">
           <GitBranch className="h-3.5 w-3.5" />

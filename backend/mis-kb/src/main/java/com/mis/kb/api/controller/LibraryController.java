@@ -187,29 +187,42 @@ public class LibraryController {
     }
 
     /**
-     * 删除知识库（T03，语义按 {@code mode} 分两支）。
+     * 删除知识库（T03，语义按 {@code mode} 分两支；Q1 两段式确认流加 {@code force}）。
      *
      * <p><b>破坏性语义变更：</b>不带 {@code mode} 时走<b>归档</b>（引擎侧改名保留数据 +
      * 本地停用），而不是旧版的「物理删且吞异常假成功」。回执 {@code message} 会明说
      * 「已归档，未删除引擎数据」，前端必须原样展示。
      *
+     * <p><b>Q1 {@code force} 语义（严格限定，见 {@code KbLibraryService.delete(4 参)}）：</b>
+     * <ul>
+     *   <li>{@code force=false}（默认）：引擎侧 dataset 已不存在（missing）时返回提示态 VO
+     *       （HTTP 200，本地零变更），前端警示并要求确认后以 {@code force=true} 重调；</li>
+     *   <li>{@code force=true}：仅当 engineMissing 时跳过引擎直接本地执行；
+     *       对其它失败（非 404 引擎错误 / 归档改名失败 / deleteSupported=false）<b>不豁免</b>；</li>
+     *   <li>本地已不存在 + {@code force=true} → 幂等回执不报错。</li>
+     * </ul>
+     * force 作为 {@code @RequestParam} 自动进入 BFF 侧 {@code @OperLog} 审计的
+     * {@code request_params}，零审计基础设施改动。
+     *
      * <p>非法 {@code mode} <b>直接拒</b>而不是静默回落归档——用户把 {@code physical}
      * 拼成 {@code physicial} 时若静默归档，他会以为数据已经删干净了。
      *
-     * @param id   知识库 id
-     * @param mode {@code archive}（默认）或 {@code physical}
+     * @param id    知识库 id
+     * @param mode  {@code archive}（默认）或 {@code physical}
+     * @param force 是否跳过引擎直接本地执行（仅对 engineMissing 生效，默认 false）
      * @return 删除回执
      */
     @DeleteMapping("/{id}")
     public Result<KbLibraryDeleteResultVO> delete(
             @PathVariable Long id,
-            @RequestParam(required = false, defaultValue = "archive") String mode) {
+            @RequestParam(required = false, defaultValue = "archive") String mode,
+            @RequestParam(required = false, defaultValue = "false") boolean force) {
         LibraryDeleteMode parsed = LibraryDeleteMode.parse(mode);
         if (parsed == null) {
             throw new BusinessException(
                     ResultCode.VALIDATION_ERROR, "删除模式非法（应为 archive/physical）：" + mode);
         }
-        return Result.ok(libraryService.delete(currentUserId(), id, parsed));
+        return Result.ok(libraryService.delete(currentUserId(), id, parsed, force));
     }
 
     /**

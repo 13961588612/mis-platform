@@ -2,8 +2,11 @@ package com.mis.adminbff.service;
 
 import com.mis.adminbff.client.IamWebClient;
 import com.mis.adminbff.client.OrgWebClient;
+import com.mis.adminbff.client.SystemWebClient;
+import com.mis.adminbff.client.model.ConfigVO;
 import com.mis.adminbff.client.model.DeptVO;
 import com.mis.adminbff.client.model.EmployeeVO;
+import com.mis.adminbff.client.model.EmployeeBindingCheck;
 import com.mis.adminbff.client.model.IamRoleVO;
 import com.mis.adminbff.client.model.IamUserVO;
 import com.mis.adminbff.config.BffProperties;
@@ -36,18 +39,35 @@ public class UserAggregateService {
     private final IamWebClient iamWebClient;
     private final OrgWebClient orgWebClient;
     private final BffProperties properties;
+    private final SystemWebClient systemWebClient;
 
-    public UserAggregateService(IamWebClient iamWebClient, OrgWebClient orgWebClient, BffProperties properties) {
+    public UserAggregateService(IamWebClient iamWebClient, OrgWebClient orgWebClient,
+                                BffProperties properties, SystemWebClient systemWebClient) {
         this.iamWebClient = iamWebClient;
         this.orgWebClient = orgWebClient;
         this.properties = properties;
+        this.systemWebClient = systemWebClient;
     }
 
-    public PageResult<UserView> page(Integer status, String username, Long deptId, int page, int size) {
+    /** 系统参数键：用户是否强制绑定员工（默认关闭）。 */
+    private static final String FORCE_BIND_KEY = "user.force.employee.bind";
+
+    /** 读取「用户强制绑定员工」开关；配置不可用时降级为关闭，避免阻断正常创建/编辑。 */
+    private boolean isForceEmployeeBind() {
+        try {
+            ConfigVO cfg = systemWebClient.getConfigByKey(FORCE_BIND_KEY);
+            return cfg != null && Boolean.parseBoolean(cfg.configValue());
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    public PageResult<UserView> page(Integer status, String username, String realName, String phone,
+                                    List<Long> orgIds, List<Long> deptIds, List<Long> appIds, int page, int size) {
         Long tenantId = RequestContext.requireTenantId();
-        Long appId = RequestContext.requireAppId();
+        // 跨 APP 查询（D2）：appIds 为空 = 查全部 APP（IAM 端 hasAppFilter=false）；非空 = appId IN 取并集
         PageResult<IamUserVO> iamPage =
-                iamWebClient.pageUsers(tenantId, appId, status, username, deptId, page, size);
+                iamWebClient.pageUsers(tenantId, appIds, status, username, realName, phone, orgIds, deptIds, page, size);
         List<IamUserVO> users = iamPage.getList() != null ? iamPage.getList() : List.of();
         List<UserView> views = enrich(users);
         return PageResult.of(iamPage.getPage(), iamPage.getSize(), iamPage.getTotal(), views);
@@ -57,38 +77,45 @@ public class UserAggregateService {
         return enrich(List.of(iamWebClient.getUser(id))).get(0);
     }
 
+    /**
+     * 创建用户（双模式）：
+     * <ul>
+     *   <li>employeeId 提供 → 绑定已有员工（不再新建员工）；组织/部门派生自员工主部门，保证过滤与展示一致</li>
+     *   <li>employeeId 为 null → 非员工用户（纯系统账号），realName/phone/orgIds/deptIds 自行提供，组织/部门可空</li>
+     * </ul>
+     */
     public UserView create(UserCreateRequest request) {
         Long tenantId = RequestContext.requireTenantId();
-        Long appId = RequestContext.requireAppId();
-        // 校验部门归属
-        DeptVO dept = orgWebClient.getDept(request.deptId());
-        if (!String.valueOf(tenantId).equals(dept.tenantId())) {
-            throw new BusinessException(ResultCode.VALIDATION_ERROR, "部门不属于当前租户");
+        // 所属 APP 显式取自请求（不再取登录态上下文，D1/D2）
+        Long appId = request.appId();
+        Long employeeId = request.employeeId();
+        if (isForceEmployeeBind() && employeeId == null) {
+            throw new BusinessException(ResultCode.VALIDATION_ERROR,
+                    "系统已开启「用户强制绑定员工」，创建用户必须绑定员工");
         }
-
-        EmployeeVO employee = orgWebClient.createEmployee(OrgWebClient.employeeCreateBody(
-                tenantId,
-                request.deptId(),
-                request.employeeNo(),
-                request.realName(),
-                request.email(),
-                request.phone()));
-        Long employeeId = Long.valueOf(employee.id());
-        try {
-            String password = StringUtils.hasText(request.password())
-                    ? request.password()
-                    : properties.getDefaultPassword();
-            IamUserVO user = iamWebClient.createUser(IamWebClient.userCreateBody(
-                    tenantId, appId, employeeId, request.username(), password, request.roleIds()));
-            return enrich(List.of(user)).get(0);
-        } catch (RuntimeException ex) {
-            try {
-                orgWebClient.deleteEmployee(employeeId);
-            } catch (Exception ignored) {
-                // 补偿失败仅记录链路；业务异常继续抛出
+        List<Long> orgIds = request.orgIds();
+        List<Long> deptIds = request.deptIds();
+        EmployeeVO emp = null;
+        if (employeeId != null) {
+            emp = orgWebClient.getEmployee(employeeId);
+            if (emp.deptId() != null) {
+                Long primaryDept = Long.valueOf(emp.deptId());
+                deptIds = List.of(primaryDept);
+                DeptVO dept = orgWebClient.getDept(primaryDept);
+                if (dept.orgId() != null) {
+                    orgIds = List.of(Long.valueOf(dept.orgId()));
+                }
             }
-            throw ex;
         }
+        String password = StringUtils.hasText(request.password())
+                ? request.password()
+                : properties.getDefaultPassword();
+        // 用户级邮箱（Q1 裁决）：绑员工时由员工邮箱同步回填（emp.email），非员工取请求值
+        String email = (employeeId != null && emp != null && emp.email() != null) ? emp.email() : request.email();
+        IamUserVO user = iamWebClient.createUser(IamWebClient.userCreateBody(
+                tenantId, appId, employeeId, request.username(), password, request.roleIds(),
+                request.realName(), request.phone(), email, orgIds, deptIds));
+        return enrich(List.of(user)).get(0);
     }
 
     public UserView update(Long id, UserUpdateRequest request) {
@@ -98,17 +125,84 @@ public class UserAggregateService {
         if (request.status() != null) {
             iamBody.put("status", request.status());
         }
-        IamUserVO updated = iamWebClient.updateUser(id, iamBody);
 
-        if (existing.employeeId() != null
-                && (request.realName() != null || request.email() != null || request.phone() != null)) {
-            EmployeeVO current = orgWebClient.getEmployee(Long.valueOf(existing.employeeId()));
-            Map<String, Object> empBody = new HashMap<>();
-            empBody.put("realName", request.realName() != null ? request.realName() : current.realName());
-            empBody.put("email", request.email() != null ? request.email() : current.email());
-            empBody.put("phone", request.phone() != null ? request.phone() : current.phone());
-            orgWebClient.updateEmployee(Long.valueOf(existing.employeeId()), empBody);
+        Long reqEmp = request.employeeId();
+        Long existingEmp = toLongOrNull(existing.employeeId());
+        boolean empChanged = reqEmp != null ? !reqEmp.equals(existingEmp) : existingEmp != null;
+
+        if (isForceEmployeeBind() && empChanged && reqEmp == null) {
+            throw new BusinessException(ResultCode.VALIDATION_ERROR,
+                    "系统已开启「用户强制绑定员工」，禁止解绑员工");
         }
+
+        if (empChanged && reqEmp != null) {
+            // 绑定 / 换绑：组织/部门派生自员工主部门，姓名/手机取自员工（同步，Req2）
+            EmployeeVO emp = orgWebClient.getEmployee(reqEmp);
+            List<Long> orgIds = null;
+            List<Long> deptIds = null;
+            if (emp.deptId() != null) {
+                Long primaryDept = Long.valueOf(emp.deptId());
+                deptIds = List.of(primaryDept);
+                DeptVO dept = orgWebClient.getDept(primaryDept);
+                if (dept != null && dept.orgId() != null) {
+                    orgIds = List.of(Long.valueOf(dept.orgId()));
+                }
+            }
+            iamBody.put("employeeId", reqEmp);
+            if (emp.realName() != null) {
+                iamBody.put("realName", emp.realName());
+            }
+            if (emp.phone() != null) {
+                iamBody.put("phone", emp.phone());
+            }
+            if (orgIds != null) {
+                iamBody.put("orgIds", orgIds);
+            }
+            if (deptIds != null) {
+                iamBody.put("deptIds", deptIds);
+            }
+        } else if (empChanged && reqEmp == null) {
+            // 解绑：仅解除员工关联，保留已同步姓名/手机与组织/部门（Req2）
+            iamBody.put("employeeId", null);
+        } else {
+            // 员工未变更
+            if (existingEmp == null) {
+                // 非员工用户：姓名/手机/组织/部门自行维护
+                if (request.realName() != null) {
+                    iamBody.put("realName", request.realName());
+                }
+                if (request.phone() != null) {
+                    iamBody.put("phone", request.phone());
+                }
+                if (request.orgIds() != null) {
+                    iamBody.put("orgIds", request.orgIds());
+                }
+                if (request.deptIds() != null) {
+                    iamBody.put("deptIds", request.deptIds());
+                }
+            } else {
+                // 已绑定且未变更：透传 employeeId（避免 IAM 误判为解绑）；
+                // 组织/部门是用户的「数据范围权限」，需尊重前端手动设置（与展示派生解耦，见 Req4 澄清）
+                iamBody.put("employeeId", existingEmp);
+                if (request.orgIds() != null) {
+                    iamBody.put("orgIds", request.orgIds());
+                }
+                if (request.deptIds() != null) {
+                    iamBody.put("deptIds", request.deptIds());
+                }
+            }
+        }
+
+        // 所属 APP 显式透传（不再取登录态上下文）；与现有 appId 不同且已分配角色时由 IAM 守卫拦截（D4）
+        if (request.appId() != null) {
+            iamBody.put("appId", request.appId());
+        }
+        // 用户级邮箱透传（Q1 裁决）：绑员工时前端携带 emp.email() 同步值，非员工取表单值
+        if (request.email() != null) {
+            iamBody.put("email", request.email());
+        }
+
+        IamUserVO updated = iamWebClient.updateUser(id, iamBody);
         return enrich(List.of(updated)).get(0);
     }
 
@@ -125,6 +219,12 @@ public class UserAggregateService {
         iamWebClient.deleteUser(id, RequestContext.currentUserId());
     }
 
+    /** 员工绑定预检（D1）：该员工是否已在指定「租户 + APP」内被其他账号绑定（前端选员工即时调用）。 */
+    public EmployeeBindingCheck checkEmployeeBinding(Long appId, Long employeeId, Long excludeUserId) {
+        Long tenantId = RequestContext.requireTenantId();
+        return iamWebClient.checkEmployeeBinding(tenantId, appId, employeeId, excludeUserId);
+    }
+
     public void assignRoles(Long id, RoleAssignRequest request) {
         iamWebClient.assignRoles(id, request.roleIds());
     }
@@ -134,13 +234,14 @@ public class UserAggregateService {
             return List.of();
         }
         Duration timeout = Duration.ofMillis(Math.max(properties.getAggregateTimeoutMs(), 500));
+
+        // 1) 绑定用户 → 解析员工（下游字段可能为 "null" 字面量，统一走 null 安全解析，避免 500）
         List<Long> employeeIds = users.stream()
                 .map(IamUserVO::employeeId)
+                .map(UserAggregateService::toLongOrNull)
                 .filter(Objects::nonNull)
-                .map(Long::valueOf)
                 .distinct()
                 .toList();
-
         Map<Long, EmployeeVO> employees = Map.of();
         if (!employeeIds.isEmpty()) {
             List<EmployeeVO> loaded = Flux.fromIterable(employeeIds)
@@ -154,15 +255,23 @@ public class UserAggregateService {
             }
         }
 
-        List<Long> deptIds = employees.values().stream()
+        // 2) 部门 ID：员工主部门 + 非绑定用户自身 deptIds（统一解析组织/部门，保证过滤与展示一致）
+        List<Long> deptIds = new ArrayList<>();
+        employees.values().stream()
                 .map(EmployeeVO::deptId)
+                .map(UserAggregateService::toLongOrNull)
                 .filter(Objects::nonNull)
-                .map(Long::valueOf)
-                .distinct()
-                .toList();
+                .forEach(deptIds::add);
+        users.stream()
+                .map(IamUserVO::deptIds)
+                .filter(Objects::nonNull)
+                .flatMap(List::stream)
+                .map(UserAggregateService::toLongOrNull)
+                .filter(Objects::nonNull)
+                .forEach(deptIds::add);
         Map<Long, DeptVO> depts = Map.of();
         if (!deptIds.isEmpty()) {
-            List<DeptVO> loaded = Flux.fromIterable(deptIds)
+            List<DeptVO> loaded = Flux.fromIterable(deptIds.stream().distinct().toList())
                     .flatMap(id -> orgWebClient.getDeptMono(id)
                             .map(RequestContext::unwrap)
                             .onErrorResume(ex -> Mono.empty()))
@@ -183,29 +292,80 @@ public class UserAggregateService {
 
         List<UserView> result = new ArrayList<>(users.size());
         for (IamUserVO user : users) {
-            EmployeeVO emp = user.employeeId() != null ? employees.get(Long.valueOf(user.employeeId())) : null;
-            DeptVO dept = emp != null && emp.deptId() != null ? depts.get(Long.valueOf(emp.deptId())) : null;
+            Long employeeId = toLongOrNull(user.employeeId());
+            EmployeeVO emp = employeeId != null ? employees.get(employeeId) : null;
+
+            String resolvedDeptId;
+            if (emp != null && emp.deptId() != null) {
+                resolvedDeptId = emp.deptId();
+            } else if (user.deptIds() != null && !user.deptIds().isEmpty()) {
+                resolvedDeptId = user.deptIds().get(0);
+            } else {
+                resolvedDeptId = null;
+            }
+            Long resolvedDeptIdLong = toLongOrNull(resolvedDeptId);
+            DeptVO dept = resolvedDeptIdLong != null ? depts.get(resolvedDeptIdLong) : null;
             String orgId = dept != null ? dept.orgId() : null;
-            String orgName = orgId != null ? orgNames.get(Long.valueOf(orgId)) : null;
+            Long orgIdLong = toLongOrNull(orgId);
+            String orgName = orgIdLong != null ? orgNames.get(orgIdLong) : null;
+            String deptName = dept != null ? dept.name() : null;
+
+            String realName = emp != null ? emp.realName() : user.realName();
+            String phone = emp != null ? DesensitizeUtils.phone(emp.phone()) : DesensitizeUtils.phone(user.phone());
+            String employeeNo = emp != null ? emp.employeeNo() : null;
+            // 邮箱：优先用户级邮箱（Q1 裁决），未设置时回退到员工邮箱
+            String email = user.email() != null
+                    ? DesensitizeUtils.email(user.email())
+                    : (emp != null ? DesensitizeUtils.email(emp.email()) : null);
+
             List<UserView.RoleBrief> roles = mapRoles(user.roles());
+            // 权限 Sheet 回填：透传 IAM 用户组织/部门权限（与列表展示用 orgId/deptId 解耦）
+            List<String> permissionOrgIds = sanitizeIdList(user.orgIds());
+            List<String> permissionDeptIds = sanitizeIdList(user.deptIds());
             result.add(new UserView(
                     user.id(),
                     user.username(),
-                    emp != null ? emp.realName() : user.realName(),
-                    emp != null ? emp.employeeNo() : null,
+                    realName,
+                    employeeNo,
                     user.employeeId(),
-                    emp != null ? emp.deptId() : user.deptId(),
-                    dept != null ? dept.name() : null,
+                    resolvedDeptId,
+                    deptName,
                     orgId,
                     orgName,
-                    emp != null ? DesensitizeUtils.email(emp.email()) : null,
-                    emp != null ? DesensitizeUtils.phone(emp.phone()) : null,
+                    email,
+                    phone,
                     user.status(),
                     user.isTenantAdmin(),
                     roles,
-                    user.createdAt()));
+                    user.createdAt(),
+                    user.appId(),
+                    permissionOrgIds,
+                    permissionDeptIds));
         }
         return result;
+    }
+
+    private static Long toLongOrNull(String v) {
+        if (v == null || v.isBlank()) {
+            return null;
+        }
+        try {
+            return Long.valueOf(v);
+        } catch (NumberFormatException e) {
+            return null;
+        }
+    }
+
+    /** 过滤 null / 空白 / 字面量 "null"，保留可解析为 Long 的 id 字符串。 */
+    private static List<String> sanitizeIdList(List<String> ids) {
+        if (ids == null || ids.isEmpty()) {
+            return List.of();
+        }
+        return ids.stream()
+                .map(UserAggregateService::toLongOrNull)
+                .filter(Objects::nonNull)
+                .map(String::valueOf)
+                .toList();
     }
 
     private static List<UserView.RoleBrief> mapRoles(List<IamRoleVO> roles) {

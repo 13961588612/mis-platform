@@ -52,6 +52,9 @@ class RouteLog(BaseModel):
     confidence: float = 0.0
     latency_ms: int = 0
     timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    # 派生路由类型：coordinator_delegate→coordinator；user_specified→specified；其余→agent_router。
+    # 由 query_logs 按 strategy_used 推导，便于前端按「类型」列 / 筛选区分。
+    dispatch_kind: str | None = None
 
 
 class RouteLogFilter(BaseModel):
@@ -65,6 +68,8 @@ class RouteLogFilter(BaseModel):
     end_time: datetime | None = None
     limit: int = 100
     offset: int = 0
+    # 路由类型过滤：agent_router | coordinator | specified；不传=全部。
+    kind: str | None = None
 
 
 class RouteStats(BaseModel):
@@ -73,6 +78,8 @@ class RouteStats(BaseModel):
     total_routes: int = 0
     by_agent: dict[str, int] = Field(default_factory=dict)
     by_strategy: dict[str, int] = Field(default_factory=dict)
+    # 派生路由类型计数：coordinator / specified / agent_router（由 strategy_used 推导）。
+    by_kind: dict[str, int] = Field(default_factory=dict)
     avg_latency_ms: float = 0.0
     avg_confidence: float = 0.0
 

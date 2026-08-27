@@ -125,6 +125,24 @@ public class AgentOpsClient extends AgentOpsTransport {
                 "POST " + SKILLS + "/reindex");
     }
 
+    /** 解析 SKILL.md（透传）。body `{content}`，下游回 `{metadata, body}`。 */
+    public JsonNode parseSkill(Object body) {
+        return postJson(builder -> builder.path(SKILLS + "/parse").build(), body,
+                "POST " + SKILLS + "/parse");
+    }
+
+    /**
+     * AI 对话创建技能（C 功能，透传，走 chat 超时）。
+     *
+     * <p>下游 {@code POST /api/v1/skills/builder/chat} 是一次性 LLM 推理（ephemeral，不落库），
+     * 耗时与 #33 同量级，故用 {@link #postChatJson} 对齐 180s，避免「AI 已生成但 BFF 先超时」。
+     * body `{messages, user_input, converged}`，下游回 `{reply, status, converged}`。
+     */
+    public JsonNode builderChat(Object body) {
+        return postChatJson(builder -> builder.path(SKILLS + "/builder/chat").build(), body,
+                "POST " + SKILLS + "/builder/chat");
+    }
+
     // ==================================================================
     // Agent §4.3 #13–#26
     // ==================================================================
@@ -254,6 +272,63 @@ public class AgentOpsClient extends AgentOpsTransport {
     public JsonNode batchDeleteSessions(Object body) {
         return postJson(builder -> builder.path(SESSIONS + "/batch-delete").build(), body,
                 "POST " + SESSIONS + "/batch-delete");
+    }
+
+    /** A-5 {@code GET /api/v1/sessions/{id}/timing}（T01 新增）。 */
+    public JsonNode getSessionTiming(String sessionId) {
+        return getJson(builder -> builder.path(SESSIONS + "/{id}/timing").build(sessionId),
+                "GET " + SESSIONS + "/{id}/timing");
+    }
+
+    /** A-6 {@code POST /api/v1/sessions/timing/batch}（T01 新增）。 */
+    public JsonNode batchSessionTiming(Object body) {
+        return postJson(builder -> builder.path(SESSIONS + "/timing/batch").build(), body,
+                "POST " + SESSIONS + "/timing/batch");
+    }
+
+    // ==================================================================
+    // 会话反馈 CF-01 / CF-03 / CF-05
+    // ==================================================================
+
+    /**
+     * CF-01 {@code GET /api/v1/sessions/feedback}。
+     *
+     * <p>分页 + rating/comment_only/agent_id/channel/from/to/keyword/status 过滤；
+     * 下游默认按「吐槽且 comment 非空」优先排序。操作人/身份走登录上下文头透传。
+     */
+    public JsonNode listFeedback(Map<String, String> query) {
+        return getJson(builder -> AgentOpsUri.query(builder.path(SESSIONS + "/feedback"), query).build(),
+                "GET " + SESSIONS + "/feedback");
+    }
+
+    /**
+     * CF-05 {@code GET /api/v1/sessions/feedback/stats}。
+     *
+     * <p>基础计数 + 按 agent 维度 + 按日趋势；from/to/agent_id/channel 过滤由门面装配。
+     */
+    public JsonNode feedbackStats(Map<String, String> query) {
+        return getJson(builder -> AgentOpsUri.query(builder.path(SESSIONS + "/feedback/stats"), query).build(),
+                "GET " + SESSIONS + "/feedback/stats");
+    }
+
+    /**
+     * CF-03 {@code POST /api/v1/sessions/feedback/{id}/process}。
+     *
+     * <p>body {@code {status: handled|ignored, note?}}；操作人经登录上下文头透传下游。
+     */
+    public JsonNode processFeedback(String feedbackId, Object body) {
+        return postJson(builder -> builder.path(SESSIONS + "/feedback/{id}/process").build(feedbackId), body,
+                "POST " + SESSIONS + "/feedback/{id}/process");
+    }
+
+    /**
+     * CF-03 {@code POST /api/v1/sessions/feedback/batch-process}。
+     *
+     * <p>body {@code {ids[], status, note?}}；单次上限 200 由下游裁定。
+     */
+    public JsonNode batchProcessFeedback(Object body) {
+        return postJson(builder -> builder.path(SESSIONS + "/feedback/batch-process").build(), body,
+                "POST " + SESSIONS + "/feedback/batch-process");
     }
 
     /** #32 {@code POST /api/v1/sessions}（新建对话会话）。 */

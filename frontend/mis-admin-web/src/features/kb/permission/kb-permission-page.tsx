@@ -11,6 +11,7 @@ import { useClientSort } from '@/components/common/use-client-sort';
 import { useColumnWidths, type ResizableColumn } from '@/components/common/use-column-widths';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { SHEET_FORM_BODY, SHEET_FORM_FIELD, SHEET_FORM_LABEL } from '@/components/common/sheet-form-styles';
+import { HEADER_ACTION_BTN_CLASS, RESET_COL_WIDTH_OVERLAY_CLASS, ResetColWidthButton } from '@/components/common/header-action-buttons';
 import {
   Sheet,
   SheetContent,
@@ -75,6 +76,7 @@ export function KbPermissionPage() {
     () => [
       { key: 'subjectType', label: '主体类型' },
       { key: 'subjectId', label: '主体 ID' },
+      { key: 'subjectName', label: '主体名称' },
       { key: 'action', label: '权限' },
       { key: 'createdAt', label: '授权时间' },
       { key: '__ops__', label: '操作', locked: true },
@@ -150,9 +152,13 @@ export function KbPermissionPage() {
   }
 
   async function onRevoke(acl: KbAcl) {
+    // 有名称时名称优先、ID 兜底，撤销前一眼能认出「撤的是谁」
+    const subjectDesc = acl.subjectName
+      ? `${acl.subjectName}（#${acl.subjectId}）`
+      : `#${acl.subjectId}`;
     if (
       !window.confirm(
-        `撤销 ${subjectTypeLabel(acl.subjectType)} #${acl.subjectId} 的「${aclActionLabel(acl.action)}」授权？`,
+        `撤销 ${subjectTypeLabel(acl.subjectType)} ${subjectDesc} 的「${aclActionLabel(acl.action)}」授权？`,
       )
     ) {
       return;
@@ -175,8 +181,8 @@ export function KbPermissionPage() {
         actions={
           <div className="flex items-center gap-2">
             <Button
-              size="sm"
               variant="outline"
+              className={HEADER_ACTION_BTN_CLASS}
               disabled={loading || libraryId == null}
               onClick={() => void load(libraryId)}
             >
@@ -184,7 +190,7 @@ export function KbPermissionPage() {
               刷新
             </Button>
             <PermissionGate permission="kb:acl:grant">
-              <Button size="sm" onClick={openCreate}>
+              <Button className={HEADER_ACTION_BTN_CLASS} onClick={openCreate}>
                 <Plus className="h-4 w-4" />
                 新增授权
               </Button>
@@ -246,13 +252,7 @@ export function KbPermissionPage() {
 
       <div className="relative min-h-0 flex-1 overflow-auto rounded-lg border bg-table-surface">
         {hasCustom ? (
-          <button
-            type="button"
-            onClick={reset}
-            className="absolute right-3 top-3 z-20 rounded-md bg-card px-2 py-0.5 text-xs text-muted-foreground shadow-sm hover:text-foreground"
-          >
-            重置列宽
-          </button>
+          <ResetColWidthButton onClick={reset} className={RESET_COL_WIDTH_OVERLAY_CLASS} />
         ) : null}
         <table className="w-full table-fixed border-separate border-spacing-0 bg-table-surface text-left text-sm">
           <thead className="border-b-2 border-foreground/20 bg-table-header text-muted-foreground">
@@ -301,19 +301,19 @@ export function KbPermissionPage() {
           <tbody>
             {libraryId == null ? (
               <tr>
-                <td colSpan={5} className="px-3 py-10 text-center text-muted-foreground">
+                <td colSpan={6} className="px-3 py-10 text-center text-muted-foreground">
                   请先选择知识库
                 </td>
               </tr>
             ) : loading ? (
               <tr>
-                <td colSpan={5} className="px-3 py-10 text-center text-muted-foreground">
+                <td colSpan={6} className="px-3 py-10 text-center text-muted-foreground">
                   加载中…
                 </td>
               </tr>
             ) : acls.length === 0 ? (
               <tr>
-                <td colSpan={5} className="px-3 py-10 text-center text-muted-foreground">
+                <td colSpan={6} className="px-3 py-10 text-center text-muted-foreground">
                   暂无授权（若知识库密级为「公开」且启用，则默认全员可见）
                 </td>
               </tr>
@@ -325,6 +325,7 @@ export function KbPermissionPage() {
                 >
                   <td className="px-3 py-2">{subjectTypeLabel(acl.subjectType)}</td>
                   <td className="px-3 py-2 font-mono text-xs">{acl.subjectId}</td>
+                  <td className="px-3 py-2">{acl.subjectName ?? '-'}</td>
                   <td className="px-3 py-2">
                     <span className="inline-flex items-center gap-1.5">
                       {aclActionLabel(acl.action)}

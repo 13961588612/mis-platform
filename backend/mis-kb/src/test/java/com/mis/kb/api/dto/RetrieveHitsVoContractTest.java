@@ -66,7 +66,7 @@ class RetrieveHitsVoContractTest {
     @DisplayName("★ RetrieveHitsVO 序列化后的键集合必须恒等于 {hits, emptyResultStrategy, effectiveParams}")
     void jsonKeysAreExactlyThree() throws Exception {
         RetrieveHitsVO vo = new RetrieveHitsVO(
-                List.of(new ChunkHitVO(10L, 100L, "片段正文", 0.87D, "员工手册", 12, 3)),
+                List.of(new ChunkHitVO(10L, 100L, "片段正文", 0.87D, "员工手册", 12, 3, null)),
                 "SUGGEST",
                 new EffectiveParamsVO(
                         10, 0.3D, "hybrid", 0.3D, false, null, "SUGGEST", "LIBRARY", List.of(),
@@ -113,7 +113,7 @@ class RetrieveHitsVoContractTest {
     @DisplayName("序列化后的 JSON 文本中不得出现扩展痕迹关键字")
     void serializedTextHasNoExpansionTrace() throws Exception {
         RetrieveHitsVO vo = new RetrieveHitsVO(
-                List.of(new ChunkHitVO(10L, 100L, "片段正文", 0.87D, "员工手册", 12, 3)),
+                List.of(new ChunkHitVO(10L, 100L, "片段正文", 0.87D, "员工手册", 12, 3, null)),
                 "SUGGEST",
                 new EffectiveParamsVO(
                         10, 0.3D, "hybrid", 0.3D, false, null, "SUGGEST", "LIBRARY", List.of(),

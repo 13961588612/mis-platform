@@ -267,6 +267,49 @@ class RagflowUploadAndModelsHttpTest {
             assertEquals("naive", body.get("chunk_method").asText());
             assertFalse(body.has("parser_config"), "parser_config 无有效字段时连键都不该出现");
         }
+
+        @Test
+        @DisplayName("T1 契约：autoKeywords / autoQuestions 非空 → parser_config 白名单含 auto 两键")
+        void autoKeysInWhitelist() throws Exception {
+            RagflowClient client = newClient();
+
+            client.updateDocumentConfig("ds-1", "doc-1",
+                    new DocumentChunkConfig("naive", 512, "###", null, 300, 8, 5));
+
+            JsonNode body = mapper.readTree(requests.get(0).body());
+            JsonNode parserConfig = body.get("parser_config");
+            assertEquals(512, parserConfig.get("chunk_token_num").asInt());
+            assertEquals("###", parserConfig.get("delimiter").asText());
+            assertEquals(8, parserConfig.get("auto_keywords").asInt());
+            assertEquals(5, parserConfig.get("auto_questions").asInt());
+            JsonNode ext = parserConfig.get("ext");
+            assertFalse(ext.has("toc_extraction"), "pageIndex=null 时不写 ext.toc_extraction");
+            assertEquals(300, ext.get("image_table_context_window").asInt());
+            assertEquals(300, ext.get("image_context_size").asInt());
+            assertFalse(parserConfig.has("toc_extraction"), "顶层不得直写 toc_extraction");
+        }
+
+        @Test
+        @DisplayName("ext 修正：pageIndex/imageTable 非空 → parser_config.ext 下发，顶层不含这些键")
+        void fileLevelSendsTocContextViaExt() throws Exception {
+            RagflowClient client = newClient();
+
+            client.updateDocumentConfig("ds-1", "doc-1",
+                    new DocumentChunkConfig("naive", 512, "###",
+                            Boolean.FALSE, 512, 0, 0));
+
+            JsonNode parserConfig = mapper.readTree(requests.get(0).body()).get("parser_config");
+            assertFalse(parserConfig.has("toc_extraction"),
+                    "顶层不得直写 toc_extraction（code:102）");
+            assertFalse(parserConfig.has("image_table_context_window"),
+                    "顶层不得直写 image_table_context_window");
+            JsonNode ext = parserConfig.get("ext");
+            assertFalse(ext.get("toc_extraction").asBoolean());
+            assertEquals(512, ext.get("image_table_context_window").asInt());
+            assertEquals(512, ext.get("table_context_size").asInt());
+            assertEquals(0, parserConfig.get("auto_keywords").asInt());
+            assertEquals(0, parserConfig.get("auto_questions").asInt());
+        }
     }
 
     @Nested

@@ -42,6 +42,16 @@ _CONFIGS_DIR: Path = (
 # ===== 测试替身 =====
 
 
+def _config(agent_id: str, role: Any) -> MagicMock:
+    """构造 ConfigManager.list_configs() 用的最小配置替身。"""
+    config = MagicMock()
+    config.agent_id = agent_id
+    config.display_name = f"{agent_id} 显示名"
+    config.runtime.type = "openharness"
+    config.role = role
+    return config
+
+
 def _instance(agent_id: str, role: Any) -> MagicMock:
     """构造一个 `/agents` 列表项所需的最小 agent 实例替身。
 
@@ -52,10 +62,7 @@ def _instance(agent_id: str, role: Any) -> MagicMock:
     Returns:
         `MagicMock` 形态的 agent instance。
     """
-    config = MagicMock()
-    config.display_name = f"{agent_id} 显示名"
-    config.runtime.type = "openharness"
-    config.role = role
+    config = _config(agent_id, role)
 
     instance = MagicMock()
     instance.id = agent_id
@@ -77,7 +84,21 @@ def _agent_manager(instances: list[MagicMock]) -> MagicMock:
     """
     manager = MagicMock()
     manager.list_agents.return_value = instances
+    manager._core_id = ""
+    manager._core_ownership = None
     return manager
+
+
+def _config_manager(configs: list[MagicMock]) -> MagicMock:
+    """构造返回给定配置列表的 ConfigManager 替身。"""
+    manager = MagicMock()
+    manager.list_configs.return_value = configs
+    return manager
+
+
+def _configs_from_instances(instances: list[MagicMock]) -> list[MagicMock]:
+    """实例列表 → 配置列表（角色投影旧用例：配置全集 = 实例全集）。"""
+    return [inst.config for inst in instances]
 
 
 # ===== AgentSummary 契约 =====
@@ -138,6 +159,7 @@ async def test_list_agents_projects_role_for_all_agents() -> None:
 
     response: dict[str, Any] = await list_agents(
         agent_manager=_agent_manager(instances),
+        config_manager=_config_manager(_configs_from_instances(instances)),
         user={"user_id": "u001"},
     )
 
@@ -149,10 +171,10 @@ async def test_list_agents_projects_role_for_all_agents() -> None:
 @pytest.mark.asyncio
 async def test_list_agents_marks_mis_copilot_as_coordinator() -> None:
     """唯一 Coordinator（mis-copilot）必须被标记为 coordinator。"""
+    instances = [_instance("mis-copilot", AgentRole.COORDINATOR)]
     response: dict[str, Any] = await list_agents(
-        agent_manager=_agent_manager(
-            [_instance("mis-copilot", AgentRole.COORDINATOR)]
-        ),
+        agent_manager=_agent_manager(instances),
+        config_manager=_config_manager(_configs_from_instances(instances)),
         user={"user_id": "u001"},
     )
     assert response["data"][0]["role"] == "coordinator"
@@ -164,8 +186,10 @@ async def test_list_agents_marks_mis_copilot_as_coordinator() -> None:
 )
 async def test_list_agents_marks_workers_as_worker(agent_id: str) -> None:
     """4 个 Worker 必须被标记为 worker（前端据此过滤掉）。"""
+    instances = [_instance(agent_id, AgentRole.WORKER)]
     response: dict[str, Any] = await list_agents(
-        agent_manager=_agent_manager([_instance(agent_id, AgentRole.WORKER)]),
+        agent_manager=_agent_manager(instances),
+        config_manager=_config_manager(_configs_from_instances(instances)),
         user={"user_id": "u001"},
     )
     assert response["data"][0]["role"] == "worker"
@@ -173,11 +197,11 @@ async def test_list_agents_marks_workers_as_worker(agent_id: str) -> None:
 
 @pytest.mark.asyncio
 async def test_list_agents_keeps_legacy_fields() -> None:
-    """新增 role 不得挤掉既有字段（前端 normalizeAgentList 依赖）。"""
+    """新增字段不得挤掉既有字段（前端 normalizeAgentList 依赖）。"""
+    instances = [_instance("mis-copilot", AgentRole.COORDINATOR)]
     response: dict[str, Any] = await list_agents(
-        agent_manager=_agent_manager(
-            [_instance("mis-copilot", AgentRole.COORDINATOR)]
-        ),
+        agent_manager=_agent_manager(instances),
+        config_manager=_config_manager(_configs_from_instances(instances)),
         user={"user_id": "u001"},
     )
     item: dict[str, Any] = response["data"][0]
@@ -189,16 +213,23 @@ async def test_list_agents_keeps_legacy_fields() -> None:
         "active_sessions",
         "is_active",
         "role",
+        "in_process",
+        "lease_owner",
+        "lease_held_locally",
+        "core_id",
     }
 
 
 @pytest.mark.asyncio
 async def test_list_agents_degrades_unknown_role_to_worker() -> None:
     """role 缺失 / 非法时回落 worker，接口不抛异常。"""
+    instances = [
+        _instance("legacy-agent", None),
+        _instance("weird-agent", "captain"),
+    ]
     response: dict[str, Any] = await list_agents(
-        agent_manager=_agent_manager(
-            [_instance("legacy-agent", None), _instance("weird-agent", "captain")]
-        ),
+        agent_manager=_agent_manager(instances),
+        config_manager=_config_manager(_configs_from_instances(instances)),
         user={"user_id": "u001"},
     )
     assert [item["role"] for item in response["data"]] == ["worker", "worker"]

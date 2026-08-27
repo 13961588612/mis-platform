@@ -1,6 +1,7 @@
 import { useMemo, useRef } from 'react';
 import type { ReactNode } from 'react';
 import { cn } from '@/lib/utils';
+import { ResetColWidthButton } from '@/components/common/header-action-buttons';
 import { useColumnWidths, type ResizableColumn } from '@/components/common/use-column-widths';
 
 /** 树表行必须携带的字段：稳定 id 与层级深度 */
@@ -83,13 +84,7 @@ export function TreeTable<T extends TreeTableNode>({
   return (
     <div className={cn('relative', className)}>
       {resizable && hasCustom ? (
-        <button
-          type="button"
-          onClick={reset}
-          className="absolute -top-8 right-0 z-20 rounded-md px-2 py-0.5 text-xs text-muted-foreground hover:bg-muted hover:text-foreground"
-        >
-          重置列宽
-        </button>
+        <ResetColWidthButton onClick={reset} className="absolute -top-10 right-0 z-20" />
       ) : null}
       <table className={cn('w-full border-separate border-spacing-0 bg-table-surface text-sm', resizable && 'table-fixed')}>
       <thead className="border-b-2 border-foreground/20 text-left text-sm font-bold text-muted-foreground">

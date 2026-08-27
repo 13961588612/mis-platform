@@ -2,8 +2,8 @@ import type { AdminPageDef, Assignment, FieldOption } from './types';
 import { fetchDeptTree } from '@/lib/api/depts';
 import { listOrgs } from '@/lib/api/orgs';
 import { fetchApps } from '@/lib/api/platform';
-import { listEmployees, createEmployee, updateEmployee, deleteEmployee } from '@/lib/api/employees';
-import { listPosts, createPost, updatePost, deletePost, listPostTypes } from '@/lib/api/posts';
+import { listEmployees, createEmployee, updateEmployee, deleteEmployee, type EmployeeQuery } from '@/lib/api/employees';
+import { listPosts, createPost, updatePost, deletePost, listPostTypes, type PostQuery } from '@/lib/api/posts';
 import { listConfigs, createConfig, updateConfig, deleteConfig } from '@/lib/api/configs';
 import type { DeptNode } from '@/types/api';
 
@@ -24,23 +24,38 @@ function withStatus(row: Record<string, unknown>) {
 }
 
 /**
- * 与「部门管理」页同源的部门可选项：拉取真实 sys_dept 树后扁平化为 {label, value}。
- * value 携带真实 dept id（提交时用 id 对齐后端）；接口失败或部门为空时回退空数组。
+ * 与「部门管理」页同源的部门可选项：聚合【全组织】真实 sys_dept 树后扁平化为 {label, value}，
+ * 支持跨组织多选组合（POST-02）。value 携带真实 dept id（提交时用 id 对齐后端）；
+ * 单组织失败不阻断其他组织；接口整体失败或部门为空时回退空数组。
  */
 export async function loadDeptOptions(): Promise<FieldOption[]> {
   const orgs = await listOrgs();
-  const orgId = orgs[0]?.id;
-  if (!orgId) return [];
-  const tree = await fetchDeptTree(orgId);
   const options: FieldOption[] = [];
-  const walk = (nodes: DeptNode[]) => {
-    for (const node of nodes) {
-      options.push({ value: node.id, label: node.name });
-      if (node.children?.length) walk(node.children);
+  for (const org of orgs) {
+    try {
+      const tree = await fetchDeptTree(org.id);
+      const walk = (nodes: DeptNode[]) => {
+        for (const node of nodes) {
+          options.push({ value: node.id, label: node.name });
+          if (node.children?.length) walk(node.children);
+        }
+      };
+      walk(tree);
+    } catch {
+      // 单组织部门树加载失败：跳过，不影响其他组织
     }
-  };
-  walk(tree);
+  }
   return options;
+}
+
+/** 组织可选项（真实 sys_org，value=id、label=name），供「组织」多选筛选（POST-03）。 */
+export async function loadOrgOptions(): Promise<FieldOption[]> {
+  try {
+    const orgs = await listOrgs();
+    return orgs.map((o) => ({ value: o.id, label: o.name }));
+  } catch {
+    return [];
+  }
 }
 
 /** 岗位可选项（真实 sys_post，value=id）；失败/为空回退空数组。 */
@@ -51,10 +66,12 @@ export async function loadPostOptions(): Promise<FieldOption[]> {
     .map((p) => ({ value: p.id, label: p.name }));
 }
 
-/** 岗位类型可选项（真实 sys_post_type，value=id）；失败/为空回退空数组。 */
+/** 岗位类型可选项（真实 sys_post_type，value=id）；仅启用项（status=1）进下拉；失败/为空回退空数组。 */
 export async function loadPostTypeOptions(): Promise<FieldOption[]> {
   const types = await listPostTypes();
-  return types.map((t) => ({ value: t.id, label: t.name }));
+  return types
+    .filter((t) => t.status === 1)
+    .map((t) => ({ value: t.id, label: t.name }));
 }
 
 /** 员工任职行 → 提交结构：{ deptIds(去重、首项主部门), posts(含 postId/isPrimary/startDate) } */
@@ -85,15 +102,24 @@ export const SYSTEM_PAGE_DEFS: Record<string, AdminPageDef> = {
     deptOptionsLoader: loadDeptOptions,
     /** 岗位下拉来自真实 sys_post */
     postOptionsLoader: loadPostOptions,
+    /** 组织下拉来自真实 sys_org（员工管理增强：所属组织筛选，POST-03） */
+    orgOptionsLoader: loadOrgOptions,
+    /**
+     * 服务端已过滤的 key：deptIds / orgIds 由后端 GET /employees/all 过滤（与岗位 POST-02/03 一致），
+     * 引擎跳过客户端二次过滤，避免数组匹配全空；name/status 仍客户端过滤。
+     */
+    serverFilterKeys: ['deptIds', 'orgIds'],
     filters: [
-      { key: 'real_name', label: '姓名', type: 'text', col: 4 },
-      { key: 'deptId', label: '主部门', type: 'select', col: 4, optionsFrom: 'dept' },
+      { key: 'real_name', label: '姓名', type: 'text', col: 2 },
+      { key: 'deptIds', label: '所属部门', type: 'dept-tree-multi', col: 4, hint: '可多选部门（下拉树·默认折叠·支持全选）' },
+      { key: 'orgIds', label: '所属组织', type: 'multiselect', col: 4, optionsFrom: 'org', hint: '可多选组织（下拉·支持全选/清空）' },
       { key: 'status', label: '状态', type: 'select', col: 2, options: STATUS_OPTS },
     ],
     columns: [
       { key: 'employee_no', label: '工号' },
       { key: 'real_name', label: '姓名' },
       { key: 'genderText', label: '性别' },
+      { key: 'phone', label: '手机号码' },
       { key: 'dept', label: '主部门' },
       { key: 'assignmentCount', label: '任职数' },
       { key: 'statusText', label: '状态', status: true },
@@ -119,7 +145,8 @@ export const SYSTEM_PAGE_DEFS: Record<string, AdminPageDef> = {
         optionsFrom: 'dept',
       },
       { key: 'email', label: '邮箱', type: 'text', col: 6 },
-      { key: 'phone', label: '手机号', type: 'text', col: 6 },
+      { key: 'phone', label: '手机号', type: 'text', col: 6, required: true },
+      { key: 'isBuiltin', label: '内置账号', type: 'switch', defaultValue: 0 },
       { key: 'hire_date', label: '入职日期', type: 'text', col: 6 },
       { key: 'status', label: '状态', type: 'switch', col: 6 },
     ],
@@ -127,8 +154,17 @@ export const SYSTEM_PAGE_DEFS: Record<string, AdminPageDef> = {
       { label: '主部门', value: (row.dept as string) ?? '—' },
       { label: '主职位', value: (row.title as string) ?? '—' },
     ],
-    loader: async () => {
-      const employees = await listEmployees();
+    loader: async (filters) => {
+      // 组装查询：仅透传服务端过滤键 deptIds/orgIds（逗号序列化，与岗位 listPosts 已验证的 toParams 方式一致）；
+      // real_name/status 由通用引擎客户端二次过滤（原员工页即全量返回、前端筛选）。
+      const query: Record<string, unknown> = {};
+      if (filters?.deptIds && Array.isArray(filters.deptIds) && (filters.deptIds as unknown[]).length > 0) {
+        query.deptIds = (filters.deptIds as (string | number)[]).map(Number).join(',');
+      }
+      if (filters?.orgIds && Array.isArray(filters.orgIds) && (filters.orgIds as unknown[]).length > 0) {
+        query.orgIds = (filters.orgIds as (string | number)[]).map(Number).join(',');
+      }
+      const employees = await listEmployees(query as EmployeeQuery);
       return employees.map((e) => {
         const posts = e.posts ?? [];
         const primary = posts.find((p) => p.isPrimary === 1) ?? posts[0];
@@ -137,7 +173,8 @@ export const SYSTEM_PAGE_DEFS: Record<string, AdminPageDef> = {
           employee_no: e.employeeNo,
           real_name: e.realName,
           gender: e.gender,
-          dept: primary?.deptName ?? null,
+          // 主部门展示「组织-部门」（orgName 缺省时仅显部门名，与现有 ?? '—' 约定一致）
+          dept: primary?.orgName ? `${primary.orgName}-${primary.deptName}` : primary?.deptName ?? null,
           title: primary?.postName ?? e.title ?? null,
           genderText: e.gender === 1 ? '男' : e.gender === 2 ? '女' : '—',
           assignmentCount: posts.length,
@@ -146,9 +183,11 @@ export const SYSTEM_PAGE_DEFS: Record<string, AdminPageDef> = {
           email: e.email,
           phone: e.phone,
           hire_date: e.hireDate,
+          isBuiltin: e.isBuiltin,
           assignments: posts.map((p) => ({
             dept: p.deptId,
             deptLabel: p.deptName,
+            orgName: p.orgName ?? null,
             post: p.postId,
             postLabel: p.postName,
             startDate: p.startDate,
@@ -173,6 +212,7 @@ export const SYSTEM_PAGE_DEFS: Record<string, AdminPageDef> = {
         title: values.title ? String(values.title) : undefined,
         hireDate: values.hire_date ? String(values.hire_date) : undefined,
         posts,
+        isBuiltin: Number(values.isBuiltin) || 0,
       });
     },
     updateApi: async (id, values) => {
@@ -191,6 +231,7 @@ export const SYSTEM_PAGE_DEFS: Record<string, AdminPageDef> = {
         body.deptIds = deptIds;
       }
       body.posts = posts;
+      body.isBuiltin = Number(values.isBuiltin) || 0;
       await updateEmployee(id, body);
     },
     deleteApi: async (id) => {
@@ -204,41 +245,62 @@ export const SYSTEM_PAGE_DEFS: Record<string, AdminPageDef> = {
     title: '岗位管理',
     description: '部门岗位编制（sys_post / sys_post_type），支持兼职多岗。',
     tableDensity: 'compact',
-    /** 部门选项与「部门管理」同源：真实 sys_dept 拉取（value=id；接口失败回退空数组） */
+    /** 部门选项与「部门管理」同源：聚合全组织真实 sys_dept 拉取（value=id；接口失败回退空数组） */
     deptOptionsLoader: loadDeptOptions,
     /** 岗位类型下拉来自真实 sys_post_type */
     postTypeOptionsLoader: loadPostTypeOptions,
+    /** 组织下拉来自真实 sys_org（POST-03） */
+    orgOptionsLoader: loadOrgOptions,
+    /**
+     * 服务端已过滤的 key：deptIds / orgIds 由后端 GET /posts 过滤（POST-02/03），
+     * 引擎跳过客户端二次过滤，避免数组匹配全空；name/status 仍客户端过滤。
+     */
+    serverFilterKeys: ['deptIds', 'orgIds'],
     filters: [
-      { key: 'name', label: '岗位名称', type: 'text', col: 4 },
-      { key: 'deptId', label: '所属部门', type: 'select', col: 4, optionsFrom: 'dept' },
+      { key: 'name', label: '岗位名称', type: 'text', col: 2 },
+      { key: 'deptIds', label: '所属部门', type: 'dept-tree-multi', col: 4, hint: '可多选部门（下拉树·默认折叠·支持全选）' },
+      { key: 'orgIds', label: '所属组织', type: 'multiselect', col: 4, optionsFrom: 'org', hint: '可多选组织（下拉·支持全选/清空）' },
       { key: 'status', label: '状态', type: 'select', col: 2, options: STATUS_OPTS },
     ],
     columns: [
+      { key: 'org', label: '组织' },
+      { key: 'dept', label: '所属部门' },
       { key: 'code', label: '岗位编码' },
       { key: 'name', label: '岗位名称' },
-      { key: 'dept', label: '所属部门' },
       { key: 'post_type', label: '岗位类型' },
+      { key: 'quota', label: '编制' },
       { key: 'statusText', label: '状态', status: true },
     ],
     form: [
-      { key: 'deptId', label: '所属部门', type: 'select', col: 6, required: true, optionsFrom: 'dept' },
-      { key: 'postTypeId', label: '岗位类型', type: 'select', col: 6, required: true, optionsFrom: 'post-type' },
+      { key: 'deptId', label: '所属部门', type: 'dept-tree', col: 6, required: true, placeholder: '请选择部门（树形·单选）' },
+      { key: 'postTypeId', label: '岗位类型', type: 'post-type-tree', col: 6, required: true, placeholder: '请选择岗位类型（树形·仅末级）' },
       { key: 'code', label: '岗位编码', type: 'text', col: 6, required: true },
       { key: 'name', label: '岗位名称', type: 'text', col: 6, required: true },
+      { key: 'quota', label: '编制', type: 'number', col: 6 },
       { key: 'status', label: '状态', type: 'switch', col: 6 },
     ],
-    loader: async () => {
-      const posts = await listPosts();
+    loader: async (filters) => {
+      const query: PostQuery = {};
+      if (filters?.deptIds && Array.isArray(filters.deptIds) && (filters.deptIds as unknown[]).length > 0) {
+        query.deptIds = filters.deptIds as (string | number)[];
+      }
+      if (filters?.orgIds && Array.isArray(filters.orgIds) && (filters.orgIds as unknown[]).length > 0) {
+        query.orgIds = filters.orgIds as (string | number)[];
+      }
+      const posts = await listPosts(query);
       return posts.map((p) => ({
         id: p.id,
         code: p.code,
         name: p.name,
+        orgId: p.orgId ?? null,
+        org: p.orgName ?? null,
         deptId: p.deptId,
         dept: p.deptName ?? null,
         postTypeId: p.postTypeId,
         post_type: p.postTypeName ?? null,
         sort: p.sort,
         status: p.status,
+        quota: p.quota ?? 0,
       }));
     },
     createApi: async (values) => {
@@ -248,6 +310,7 @@ export const SYSTEM_PAGE_DEFS: Record<string, AdminPageDef> = {
         code: String(values.code ?? ''),
         name: String(values.name ?? ''),
         status: values.status === '' || values.status == null ? 1 : Number(values.status),
+        quota: values.quota != null && values.quota !== '' ? Number(values.quota) : 0,
       });
     },
     updateApi: async (id, values) => {
@@ -257,6 +320,7 @@ export const SYSTEM_PAGE_DEFS: Record<string, AdminPageDef> = {
         code: String(values.code ?? ''),
         name: String(values.name ?? ''),
         status: values.status === '' || values.status == null ? undefined : Number(values.status),
+        quota: values.quota != null && values.quota !== '' ? Number(values.quota) : 0,
       });
     },
     deleteApi: async (id) => {

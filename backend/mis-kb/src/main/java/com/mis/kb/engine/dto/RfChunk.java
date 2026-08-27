@@ -30,6 +30,7 @@ import java.util.List;
  * @param text         片段正文（实测来自 {@code content}）
  * @param score        综合相似度（实测来自 {@code similarity}）
  * @param positions    位置数组，元素形如 {@code [page, x0, x1, top, bottom]}
+ * @param imageId      分片关联图片 id（空串 = 无图）；形如 {@code {datasetId}-{objectId}}
  */
 @JsonIgnoreProperties(ignoreUnknown = true)
 public record RfChunk(
@@ -37,11 +38,12 @@ public record RfChunk(
         @JsonProperty("document_keyword") String documentName,
         @JsonProperty("content") String text,
         @JsonProperty("similarity") Double score,
-        @JsonProperty("positions") List<List<Integer>> positions) {
+        @JsonProperty("positions") List<List<Integer>> positions,
+        @JsonProperty("image_id") String imageId) {
 
     /** 兼容仅有基础四字段的构造（单测/Mock 使用）。 */
     public RfChunk(String documentId, String documentName, String text, Double score) {
-        this(documentId, documentName, text, score, null);
+        this(documentId, documentName, text, score, null, null);
     }
 
     /**
@@ -71,5 +73,13 @@ public record RfChunk(
      */
     public Integer charOffset() {
         return null;
+    }
+
+    /** 空串 / 空白 {@code image_id} 归一为 {@code null}。 */
+    public String normalizedImageId() {
+        if (imageId == null || imageId.isBlank()) {
+            return null;
+        }
+        return imageId.trim();
     }
 }

@@ -1,0 +1,57 @@
+sequenceDiagram
+    participant Copilot as Copilot(父 agent)
+    participant Tool as InvokeAgentTool
+    participant Run as _run_child_agent / _spawn_worker
+    participant Rag as mis-rag agent → qa_pipeline
+    participant CV as QA_SUB_STAGES_CV(共享dict)
+    participant OHR as OpenHarnessRuntime(父)
+    participant Rec as SessionTimingRecorder(父)
+
+    Copilot->>Tool: agent__invoke 触发 execute()
+    Tool->>Run: _spawn_worker()
+    Run->>CV: set({})  // 父上下文放共享空 dict
+    Run->>Run: asyncio.ensure_future(_run_child_agent)
+    Run->>Rag: instance.process_message (子任务)
+    Rag->>Rag: qa_pipeline.run(generate)
+    Rag->>Rag: perf_counter 自测 4 段
+    Rag->>CV: acc.update({resolve,RAGFlow,worker_gen,persist,overhead})
+    Rag-->>Run: 子任务结束，返回 _WorkerRunResult
+    Run->>CV: 读取同一 dict（引用共享，变异可见）
+    Run-->>Tool: _WorkerRunResult(sub_stages=acc)
+    Tool->>Tool: _finish() 构造 DispatchTraceEntry(sub_stages=acc)
+    Tool->>Tool: push_dispatch_trace(copilot_session_id, entry)
+    Tool-->>Copilot: ToolResult（工具返回）
+    Copilot->>OHR: 引擎结束 → drain_dispatch_traces()
+    OHR->>OHR: dispatch_items = [entry.model_dump()]  # 含 sub_stages
+    OHR-->>Rec: yield AgentEvent.dispatch_trace(dispatch_items)
+    Rec->>Rec: observe(DISPATCH_TRACE)
+    Rec->>Rec: 抽取 intent=rag → _rag_sub_stages
+    Rec->>Rec: 抽取 delegate 调用 → 挂 calls[].sub_stages
+    Note over Rec: snapshot().sub_stages.retrieval / tool_call.calls[]
+
+---
+
+sequenceDiagram
+    participant Mgr as manager.process_message
+    participant Rec as SessionTimingRecorder
+    participant DB as PG/Redis 落库
+    participant Store as RedisTimingStore
+
+    Mgr->>Rec: SessionTimingRecorder(session_id, turn_key)
+    loop 事件流
+        Mgr->>Rec: observe(event)
+    end
+    Rec->>Rec: observe(DONE) → 置 _ended（不再钉死 _end_t）
+    Note over Rec: 既有的 try 末尾 recorder.complete() 改为仅兜底
+    Mgr->>Mgr: finally:
+    Mgr->>Rec: step_start("db_persist")
+    Mgr->>DB: save_session / append_message（PG + Redis 主写）
+    Mgr->>Rec: step_end("db_persist")
+    Mgr->>Rec: step_start("redis_write")
+    Mgr->>DB: 消息/状态 Redis 写
+    Mgr->>Rec: step_end("redis_write")
+    Mgr->>Rec: step_start("timing_save")
+    Mgr->>Store: store.save(session_id, turn_key, snapshot)
+    Mgr->>Rec: step_end("timing_save")
+    Mgr->>Rec: close()  # 落定 _end_t = 当前时刻（窗口关闭）
+    Note over Rec: _end_t 现覆盖至落库完成 →\npost_process_ms = db+redis+timing_save\n且 total_ms 亦含落库（端到端更准）

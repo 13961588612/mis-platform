@@ -364,7 +364,7 @@ configs/skills/packages/crm/member-profile/
 | Embedding | 文本向量化（bge-small-zh-v1.5） | `http://embedding:8001` |
 | MCP 网关 | 业务系统 API 代理 | `http://localhost:3333/mcp` |
 | DeepSeek API | 主 LLM（deepseek-v4-flash） | `https://api.deepseek.com/v1` |
-| 通义千问 API | 备用 LLM（qwen3.6-plus） | `https://dashscope.aliyuncs.com/compatible-mode/v1` |
+| 通义千问 API | 备用 LLM（qwen3.7-plus） | `https://dashscope.aliyuncs.com/compatible-mode/v1` |
 
 ---
 

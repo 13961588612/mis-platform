@@ -77,11 +77,15 @@ class Skill(BaseModel):
     # Agent Skills Spec 技能包字段
     package_name: str = ""  # 目录名，如 member-profile-by-vip-id
     package_dir: str = ""  # 技能包根目录绝对路径
+    #: Front Matter ``aliases``；判权前经 ``resolve_canonical_id`` 唯一命中时归一到 skill_id
+    aliases: list[str] = Field(default_factory=list)
     body: str | None = None  # SKILL.md 正文，懒加载前为 None
     body_loaded: bool = False
     scripts: list[str] = Field(default_factory=list)
     references: list[str] = Field(default_factory=list)
     assets: list[str] = Field(default_factory=list)
+    # B-1.5：references 文件相对路径 → 文件内容（详情接口填充，供前端点击查看）。
+    reference_contents: dict[str, str] = Field(default_factory=dict)
 
     def get_input_schema(self) -> dict[str, Any]:
         """返回规范化后的 MCP inputSchema。"""
@@ -116,10 +120,20 @@ class Skill(BaseModel):
         return self.description
 
     def read_reference_file(self, relative_path: str) -> str | None:
-        """按需读取 references/ 或 scripts/ 下的附件内容。"""
+        """按需读取 references / scripts 下的附件文本内容（UI#1.5 点击查看）。
+
+        仅对落在技能包根目录内的相对路径生效；拒绝绝对路径与 ``..`` 越界，
+        防目录穿越（满足「安全读」要求，即便路径来自受信的附件清单也做兜底校验）。
+        """
         if not self.package_dir:
             return None
-        target: Any = Path(self.package_dir) / relative_path
+        decoded = relative_path.replace("\\", "/")
+        if decoded.startswith("/") or ".." in decoded.split("/"):
+            return None
+        base: Path = Path(self.package_dir).resolve()
+        target: Path = (base / decoded).resolve()
+        if target != base and base not in target.parents:
+            return None
         if not target.is_file():
             return None
         try:
@@ -180,11 +194,14 @@ class SkillCreateRequest(BaseModel):
     tags: list[str] = Field(default_factory=list)
     parameters: dict[str, Any] = Field(default_factory=dict)
     required_permissions: list[str] = Field(default_factory=list)
-    handler: str
+    # 自建 custom 技能可不填 handler（空串 = 文档型/检索型，仅语义检索与上下文注入，不单独执行）
+    handler: str = ""
     timeout: int = 30
     version: str = "1.0.0"
     priority: float = 1.0
     requires_approval: bool = False
+    # 自建 custom 技能正文（SKILL.md body，可选）。落盘到文件系统（Q3），不进 DB。
+    body: str | None = None
 
 
 class SkillUpdateRequest(BaseModel):
@@ -202,6 +219,8 @@ class SkillUpdateRequest(BaseModel):
     status: SkillStatus | None = None
     priority: float | None = None
     requires_approval: bool | None = None
+    # 自建 custom 技能正文（SKILL.md body，可选）；缺省表示不改 / 不填。
+    body: str | None = None
 
 
 class SkillListResponse(BaseModel):

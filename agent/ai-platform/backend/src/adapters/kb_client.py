@@ -194,6 +194,7 @@ class KbClient:
         *,
         user_id: int | None = None,
         app_id: int | None = None,
+        title: str | None = None,
     ) -> int | None:
         """创建问答会话。
 
@@ -201,6 +202,7 @@ class KbClient:
             ctx: 身份与追踪上下文。
             user_id: 会话归属用户；缺省取 ``ctx.user_id``。
             app_id: 会话归属应用；缺省取 ``ctx.app_id``。
+            title: 会话标题（首问前 30 字符）；``None`` 不携带，由 mis-kb 落库为 NULL。
 
         Returns:
             新建会话 ID；``user_id`` 缺失导致无法落库时返回 ``None``。
@@ -216,6 +218,8 @@ class KbClient:
             "userId": effective_user,
             "appId": app_id if app_id is not None else ctx.app_id,
         }
+        if title is not None:
+            payload["title"] = title
         data = await self._request("POST", QA_SESSIONS_PATH, ctx, payload=payload)
         session_id = self._pick_int(data, "sessionId")
         logger.info("KB session created", session_id=session_id, trace_id=ctx.trace_id)

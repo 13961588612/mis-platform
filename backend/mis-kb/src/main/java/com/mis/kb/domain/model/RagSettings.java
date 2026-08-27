@@ -78,6 +78,40 @@ package com.mis.kb.domain.model;
  * <b>⚠ U6 裁定：不暴露 {@code random_seed}</b>——引擎字段名是 {@code random_seed}
  * （写 {@code seed} 会 code:101 被拒，T00 P1i 实测），MIS 不下发该键，走引擎默认（0）。
  *
+ * <p><b>RAGFlow 解析器增量（T01）新增两字段（追加末位，零 DDL）：</b>
+ * {@code pageIndex} / {@code imageTableContextWindow}。对应 RAGFlow 官方
+ * form-schema.ts 与官方文档 0.26.4「Set context window size」的 parser_config 键：
+ * <ul>
+ *   <li>{@code pageIndex}（默认 {@code true}）→ {@code parser_config.toc_extraction}
+ *       （布尔，TOC/目录提取开关）。仅当配置闸门
+ *       {@code mis.kb.engine.parser-toc-supported=true} 时下发（T0 实测本实例
+ *       Extra inputs → code:101，默认关闭只落库；误开硬下发会拒整单并阻断 auto 键）。</li>
+ *   <li>{@code imageTableContextWindow}（默认 {@code 256}）→
+ *       {@code parser_config.image_table_context_window}（整数，图片/表格上下各取
+ *       N token 并入 chunk 提升召回；合法区间 {@code [1, 4096]}，越界由
+ *       {@link #normalizeImageTableContextWindow} 归一 + 保存期
+ *       {@code RagSettingsService.validate()} 拒绝）。仅当
+ *       {@code parser-image-table-context-supported=true} 时下发。</li>
+ * </ul>
+ * 与 OCR/overlap 的「只落库不下发」不同：这两个键是官方 schema 键（0.23.0+ 版本支持），
+ * 按用户要求直接下发；若目标实例版本旧不支持，PUT 会失败——由 {@code syncToEngine}
+ * 的「本地保存成功 + 记 error + 下次保存重试」降级口径兜住（类级 Javadoc），
+ * <b>不</b>为防失败做成能力开关不下发。
+ *
+ * <p><b>RAGFlow 切片设置参数对齐（T1）新增三字段（追加末位，零 DDL）：</b>
+ * {@code overlapPercent} / {@code autoKeywords} / {@code autoQuestions}。
+ * <ul>
+ *   <li>{@code overlapPercent}（Double，[0,100]，默认 0）：重叠百分比。当前实例实测
+ *       <b>不支持任何 overlap 键</b>（T0-a：五个候选键全部 code:101），故走「只落库 +
+ *       回显 + 提示」能力降级（与 OCR 同款）——<b>绝不参与下发</b>；引擎升级后翻转
+ *       {@link EngineCapabilities} 的 {@code parser_overlap} 能力码即放行，代码分支不动。</li>
+ *   <li>{@code autoKeywords}（Integer，0=关闭，合法 0~32，默认 0）：自动关键字提取数量。
+ *       官方 naive schema 键（{@code parser_config.auto_keywords}），库级/文件级实测均接受
+ *       → <b>随每次 PUT 恒下发</b>（P1f 契约，T1）。</li>
+ *   <li>{@code autoQuestions}（Integer，0=关闭，合法 0~10，默认 0）：自动问题提取数量。
+ *       官方 naive schema 键（{@code parser_config.auto_questions}），同样恒下发。</li>
+ * </ul>
+ *
  * @param topK                   召回条数上限
  * @param scoreThreshold         相似度阈值（0~1）
  * @param rerank                 是否启用重排（模型 ID 来自全局配置 {@code mis.kb.engine.rerank-model-id}）
@@ -102,6 +136,11 @@ package com.mis.kb.domain.model;
  * @param raptorPrompt           RAPTOR 递归摘要提示词（≤2000）；Wave C RAPTOR 新增
  * @param raptorBuildStatus      RAPTOR 构建状态 none|building|ready|failed；落库 + 引擎刷新回写；Wave C RAPTOR 新增
  * @param raptorBuildMessage     RAPTOR 构建消息摘要（≤200，ready 时清空）；Wave C RAPTOR 新增
+ * @param pageIndex              页码索引/TOC 提取开关（默认 true）；下发 {@code parser_config.toc_extraction}；解析器增量新增
+ * @param imageTableContextWindow 图像/表格上下文窗口 token 数 [1,4096]，默认 256；下发 {@code parser_config.image_table_context_window}；解析器增量新增
+ * @param overlapPercent          重叠百分比 [0,100]，默认 0；能力 {@code parser_overlap=true} 前**不下发**；T1 切片参数对齐新增
+ * @param autoKeywords            自动关键字提取数量（0=关闭，0~32，默认 0）；下发 {@code parser_config.auto_keywords}；T1 切片参数对齐新增
+ * @param autoQuestions           自动问题提取数量（0=关闭，0~10，默认 0）；下发 {@code parser_config.auto_questions}；T1 切片参数对齐新增
  */
 public record RagSettings(
         Integer topK,
@@ -127,17 +166,24 @@ public record RagSettings(
         Integer raptorMaxCluster,
         String raptorPrompt,
         String raptorBuildStatus,
-        String raptorBuildMessage) {
+        String raptorBuildMessage,
+        Boolean pageIndex,
+        Integer imageTableContextWindow,
+        Double overlapPercent,
+        Integer autoKeywords,
+        Integer autoQuestions) {
 
     /**
-     * 兼容构造：11 参数旧签名，OCR/overlap 三字段、图谱三字段与 RAPTOR 七字段置 {@code null}（未设置）。
+     * 兼容构造：11 参数旧签名，OCR/overlap 三字段、图谱三字段、RAPTOR 七字段、
+     * 解析器增量两字段（pageIndex/imageTableContextWindow）与切片参数对齐三字段
+     * （overlapPercent/autoKeywords/autoQuestions）置 {@code null}（未设置）。
      *
      * <p>record 是位置参数，新增字段后既有 11 参构造点（测试夹具、门面组装等）
      * 无法再用旧签名；本构造器保持旧调用点零改动，同时保证「未设置」语义
      * 由 {@link #withDefaults()} 兜底（ocrEnabled→false、ocrLanguage→zh、
      * useKnowledgeGraph→false、kgBuildStatus→none、useRaptor→false、
      * raptorMaxTokenNum→1024、raptorThreshold→0.1、raptorMaxCluster→64、
-     * raptorBuildStatus→none）。
+     * raptorBuildStatus→none、pageIndex→true、imageTableContextWindow→256）。
      */
     public RagSettings(
             Integer topK,
@@ -154,16 +200,17 @@ public record RagSettings(
         this(topK, scoreThreshold, rerank, embeddingModel, retrievalMethod, chunkMethod,
                 chunkTokenNum, separator, emptyResultStrategy, vectorSimilarityWeight,
                 rerankModelId, null, null, null, null, null, null,
-                null, null, null, null, null, null, null);
+                null, null, null, null, null, null, null, null, null, null, null, null);
     }
 
     /**
-     * 兼容构造：14 参数旧签名（企业级增强一期 canonical），图谱三字段与 RAPTOR 七字段置 {@code null}。
+     * 兼容构造：14 参数旧签名（企业级增强一期 canonical），图谱三字段、RAPTOR 七字段、
+     * 解析器增量两字段与切片参数对齐三字段置 {@code null}。
      *
      * <p>保持既有 14 参全量构造点（存量代码、测试）零改动；「未设置」语义
      * 由 {@link #withDefaults()} 兜底。注意：需要<b>透传</b>图谱/RAPTOR 字段的代码
      * （如 {@code RagSettingsService.enforceRerankAvailability}、
-     * {@code RetrieveQueryResolver.applyOverride}）请用 24 参 canonical，
+     * {@code RetrieveQueryResolver.applyOverride}）请用 26 参 canonical，
      * 不要走本构造（会把图谱/RAPTOR 字段静默置 null）。
      */
     public RagSettings(
@@ -184,17 +231,18 @@ public record RagSettings(
         this(topK, scoreThreshold, rerank, embeddingModel, retrievalMethod, chunkMethod,
                 chunkTokenNum, separator, emptyResultStrategy, vectorSimilarityWeight,
                 rerankModelId, ocrEnabled, ocrLanguage, chunkOverlapTokenNum, null, null, null,
-                null, null, null, null, null, null, null);
+                null, null, null, null, null, null, null, null, null, null, null, null);
     }
 
     /**
-     * 兼容构造：17 参数旧签名（Wave B GraphRAG canonical），RAPTOR 七字段置 {@code null}。
+     * 兼容构造：17 参数旧签名（Wave B GraphRAG canonical），RAPTOR 七字段、
+     * 解析器增量两字段与切片参数对齐三字段置 {@code null}。
      *
      * <p>保持既有 17 参构造点（存量测试夹具等）零改动；RAPTOR 七字段「未设置」语义
      * 由 {@link #withDefaults()} 兜底。注意：需要<b>透传</b> RAPTOR 字段的代码
      * （{@code RagSettingsService} 三处 + {@code KbGraphService.writeBackStatus} +
-     * {@code RetrieveQueryResolver.applyOverride}）请用 24 参 canonical，
-     * 不要走本构造（会把 RAPTOR 字段静默置 null——Wave B §10-8 教训同款）。
+     * {@code RetrieveQueryResolver.applyOverride}）请用 26 参 canonical，
+     * 不要走本构造（会把 RAPTOR 字段静默置 null——Wave B §8 教训同款）。
      */
     public RagSettings(
             Integer topK,
@@ -218,7 +266,56 @@ public record RagSettings(
                 chunkTokenNum, separator, emptyResultStrategy, vectorSimilarityWeight,
                 rerankModelId, ocrEnabled, ocrLanguage, chunkOverlapTokenNum,
                 useKnowledgeGraph, kgBuildStatus, kgBuildMessage,
-                null, null, null, null, null, null, null);
+                null, null, null, null, null, null, null, null, null, null, null, null);
+    }
+
+    /**
+     * 兼容构造：26 参数旧签名（解析器增量两字段 canonical，即 T1 之前最后一个
+     * 全量签名），切片参数对齐三字段（overlapPercent/autoKeywords/autoQuestions）
+     * 置 {@code null}（未设置）。
+     *
+     * <p>保持既有 26 参构造点（存量测试夹具、历史调用点等）零改动；三字段「未设置」
+     * 语义由 {@link #withDefaults()} 兜底（overlapPercent→0.0、autoKeywords→0、
+     * autoQuestions→0）。注意：需要<b>透传</b>三字段的代码（{@code RagSettingsService}
+     * 四处 canonical + {@code KbGraphService.writeBackStatus} +
+     * {@code KbRaptorService.writeBackStatus} + {@code RetrieveQueryResolver.applyOverride}）
+     * 请用 29 参 canonical，不要走本构造（会把三字段静默置 null——§8-1 末位追加铁律）。
+     */
+    public RagSettings(
+            Integer topK,
+            Double scoreThreshold,
+            Boolean rerank,
+            String embeddingModel,
+            String retrievalMethod,
+            String chunkMethod,
+            Integer chunkTokenNum,
+            String separator,
+            String emptyResultStrategy,
+            Double vectorSimilarityWeight,
+            String rerankModelId,
+            Boolean ocrEnabled,
+            String ocrLanguage,
+            Integer chunkOverlapTokenNum,
+            Boolean useKnowledgeGraph,
+            String kgBuildStatus,
+            String kgBuildMessage,
+            Boolean useRaptor,
+            Integer raptorMaxTokenNum,
+            Double raptorThreshold,
+            Integer raptorMaxCluster,
+            String raptorPrompt,
+            String raptorBuildStatus,
+            String raptorBuildMessage,
+            Boolean pageIndex,
+            Integer imageTableContextWindow) {
+        this(topK, scoreThreshold, rerank, embeddingModel, retrievalMethod, chunkMethod,
+                chunkTokenNum, separator, emptyResultStrategy, vectorSimilarityWeight,
+                rerankModelId, ocrEnabled, ocrLanguage, chunkOverlapTokenNum,
+                useKnowledgeGraph, kgBuildStatus, kgBuildMessage,
+                useRaptor, raptorMaxTokenNum, raptorThreshold, raptorMaxCluster,
+                raptorPrompt, raptorBuildStatus, raptorBuildMessage,
+                pageIndex, imageTableContextWindow,
+                null, null, null);
     }
 
     /** 默认召回条数。 */
@@ -232,11 +329,12 @@ public record RagSettings(
     /**
      * 默认分块 token 数。
      *
-     * <p>2026-08-11 盘点后由 128 调整为 4096：默认 128（约 60~85 中文字/片）对中文业务知识库
-     * 过小，切片过碎导致上下文割裂；集成库「百货收银」已手动调至系统上限 4096，故默认值对齐现状。
-     * 仅影响未显式设置 chunkTokenNum 的库（withDefaults() 仅在 null 时兜底），存量显式值不受影响。
+     * <p>RAGFlow {@code parser_config.chunk_token_num} 实测硬上限 2048（4096 → 拒整单 PUT，
+     * 连带阻断 pageIndex/auto 等 parser 键同步）。默认对齐引擎上限。
      */
-    public static final int DEFAULT_CHUNK_TOKEN_NUM = 4096;
+    public static final int DEFAULT_CHUNK_TOKEN_NUM = 2048;
+    /** 分块 token 数引擎硬上限（与 {@link DocumentChunkConfig#MAX_TOKEN_NUM} 同源）。 */
+    public static final int MAX_CHUNK_TOKEN_NUM = DocumentChunkConfig.MAX_TOKEN_NUM;
     /** 默认向量相似度权重（WA-01；hybrid 下语义 30% / 关键字 70%）。 */
     public static final double DEFAULT_VECTOR_SIMILARITY_WEIGHT = 0.3D;
 
@@ -274,6 +372,30 @@ public record RagSettings(
     /** RAPTOR 构建状态码值：构建失败（可重试）。 */
     public static final String RAPTOR_STATUS_FAILED = "failed";
 
+    /** 默认页码索引/TOC 提取开关（解析器增量；下发 {@code parser_config.toc_extraction}）。 */
+    public static final boolean DEFAULT_PAGE_INDEX = true;
+    /** 默认图像/表格上下文窗口 token 数（解析器增量；下发 {@code parser_config.image_table_context_window}）。 */
+    public static final int DEFAULT_IMAGE_TABLE_CONTEXT_WINDOW = 256;
+    /** 图像/表格上下文窗口下界（含）。 */
+    public static final int MIN_IMAGE_TABLE_CONTEXT_WINDOW = 1;
+    /** 图像/表格上下文窗口上界（含）。 */
+    public static final int MAX_IMAGE_TABLE_CONTEXT_WINDOW = 4096;
+
+    /** 默认重叠百分比（T1 新增；[0,100]，默认 0 = 关闭；能力 {@code parser_overlap=true} 前只落库不下发）。 */
+    public static final double DEFAULT_OVERLAP_PERCENT = 0.0D;
+    /** 重叠百分比下界（含）。 */
+    public static final double MIN_OVERLAP_PERCENT = 0.0D;
+    /** 重叠百分比上界（含）。 */
+    public static final double MAX_OVERLAP_PERCENT = 100.0D;
+    /** 默认自动关键字数量（T1 新增；0 = 关闭，合法 0~32）。 */
+    public static final int DEFAULT_AUTO_KEYWORDS = 0;
+    /** 自动关键字数量上界（含）。 */
+    public static final int MAX_AUTO_KEYWORDS = 32;
+    /** 默认自动问题数量（T1 新增；0 = 关闭，合法 0~10）。 */
+    public static final int DEFAULT_AUTO_QUESTIONS = 0;
+    /** 自动问题数量上界（含）。 */
+    public static final int MAX_AUTO_QUESTIONS = 10;
+
     /**
      * 全局默认设置（无库级配置、或多库检索回落时使用）。
      *
@@ -287,6 +409,13 @@ public record RagSettings(
      * {@code raptorMaxTokenNum=1024}、{@code raptorThreshold=0.1}、
      * {@code raptorMaxCluster=64}、{@code raptorPrompt=官方 prompt}、
      * {@code raptorBuildStatus="none"}、{@code raptorBuildMessage=null}。
+     *
+     * <p>解析器增量两字段默认：{@code pageIndex=true}、
+     * {@code imageTableContextWindow=256}（官方 schema 键，每次 PUT 恒下发）。
+     *
+     * <p>切片参数对齐三字段默认（T1）：{@code overlapPercent=0.0}（能力不支持时
+     * 只落库不下发）、{@code autoKeywords=0}（0=关闭）、{@code autoQuestions=0}（0=关闭；
+     * 两个 auto 键每次 PUT 恒下发）。
      *
      * @return 一份关键字段非空的默认设置
      */
@@ -315,7 +444,12 @@ public record RagSettings(
                 RaptorConfig.DEFAULT_MAX_CLUSTER,
                 RaptorConfig.DEFAULT_PROMPT,
                 RAPTOR_STATUS_NONE,
-                null);
+                null,
+                DEFAULT_PAGE_INDEX,
+                DEFAULT_IMAGE_TABLE_CONTEXT_WINDOW,
+                DEFAULT_OVERLAP_PERCENT,
+                DEFAULT_AUTO_KEYWORDS,
+                DEFAULT_AUTO_QUESTIONS);
     }
 
     /**
@@ -345,6 +479,16 @@ public record RagSettings(
      * {@code raptorBuildStatus} 空/非法 → {@value #RAPTOR_STATUS_NONE}；
      * {@code raptorBuildMessage} 保持 {@code null}（由回写方写入）。
      *
+     * <p><b>解析器增量两字段：</b>{@code pageIndex} null → {@code true}
+     * （{@value #DEFAULT_PAGE_INDEX}）；{@code imageTableContextWindow} null/越界 →
+     * {@value #DEFAULT_IMAGE_TABLE_CONTEXT_WINDOW}（{@link #normalizeImageTableContextWindow}）。
+     *
+     * <p><b>切片参数对齐三字段（T1）：</b>{@code overlapPercent} null/越界 →
+     * {@value #DEFAULT_OVERLAP_PERCENT}（{@link #normalizeOverlapPercent}）；
+     * {@code autoKeywords} null/越界 → {@value #DEFAULT_AUTO_KEYWORDS}
+     * （{@link #normalizeAutoKeywords}）；{@code autoQuestions} null/越界 →
+     * {@value #DEFAULT_AUTO_QUESTIONS}（{@link #normalizeAutoQuestions}）。
+     *
      * @return 补齐默认值后的新实例（本记录不可变，原实例不受影响）
      */
     public RagSettings withDefaults() {
@@ -357,7 +501,7 @@ public record RagSettings(
                         ? retrievalMethod : DEFAULT_RETRIEVAL_METHOD,
                 chunkMethod != null && !chunkMethod.isBlank()
                         ? chunkMethod : DEFAULT_CHUNK_METHOD,
-                chunkTokenNum != null ? chunkTokenNum : DEFAULT_CHUNK_TOKEN_NUM,
+                normalizeChunkTokenNum(chunkTokenNum),
                 separator,
                 EmptyResultStrategy.normalize(emptyResultStrategy),
                 vectorSimilarityWeight != null
@@ -375,7 +519,12 @@ public record RagSettings(
                 normalizeRaptorMaxCluster(raptorMaxCluster),
                 normalizeRaptorPrompt(raptorPrompt),
                 normalizeRaptorBuildStatus(raptorBuildStatus),
-                raptorBuildMessage);
+                raptorBuildMessage,
+                pageIndex != null ? pageIndex : DEFAULT_PAGE_INDEX,
+                normalizeImageTableContextWindow(imageTableContextWindow),
+                normalizeOverlapPercent(overlapPercent),
+                normalizeAutoKeywords(autoKeywords),
+                normalizeAutoQuestions(autoQuestions));
     }
 
     /**
@@ -385,8 +534,9 @@ public record RagSettings(
      * 只影响本次检索的内存值，<b>绝不落库</b>。图谱状态（kgBuildStatus/kgBuildMessage）
      * 保持原值——降级判定由 {@link RetrieveQueryResolver} S4.5 从库设置读取。
      *
-     * <p><b>24 参 canonical 透传 RAPTOR 七字段</b>（useRaptor/raptorMaxTokenNum/
-     * raptorThreshold/raptorMaxCluster/raptorPrompt/raptorBuildStatus/raptorBuildMessage）——
+     * <p><b>26 参 canonical 透传 RAPTOR 七字段</b>（useRaptor/raptorMaxTokenNum/
+     * raptorThreshold/raptorMaxCluster/raptorPrompt/raptorBuildStatus/raptorBuildMessage）
+     * 与解析器增量两字段（pageIndex/imageTableContextWindow）——
      * 绝不能走 17 参旧构造，否则 RAPTOR 字段被静默置 null（record 末位追加铁律 §10-8）。
      *
      * @param useKnowledgeGraph 本次生效的图谱开关
@@ -400,7 +550,32 @@ public record RagSettings(
                 ocrEnabled, ocrLanguage, chunkOverlapTokenNum,
                 useKnowledgeGraph, kgBuildStatus, kgBuildMessage,
                 useRaptor, raptorMaxTokenNum, raptorThreshold, raptorMaxCluster,
-                raptorPrompt, raptorBuildStatus, raptorBuildMessage);
+                raptorPrompt, raptorBuildStatus, raptorBuildMessage,
+                pageIndex, imageTableContextWindow,
+                overlapPercent,
+                autoKeywords,
+                autoQuestions);
+    }
+
+    /**
+     * 仅覆写分块 token 数，其余字段原样透传（存量 4096 → 2048 迁移等场景）。
+     *
+     * @param chunkTokenNum 新的分块 token 数
+     * @return 覆写后的新实例
+     */
+    public RagSettings withChunkTokenNum(Integer chunkTokenNum) {
+        return new RagSettings(
+                topK, scoreThreshold, rerank, embeddingModel, retrievalMethod,
+                chunkMethod, chunkTokenNum, separator, emptyResultStrategy,
+                vectorSimilarityWeight, rerankModelId,
+                ocrEnabled, ocrLanguage, chunkOverlapTokenNum,
+                useKnowledgeGraph, kgBuildStatus, kgBuildMessage,
+                useRaptor, raptorMaxTokenNum, raptorThreshold, raptorMaxCluster,
+                raptorPrompt, raptorBuildStatus, raptorBuildMessage,
+                pageIndex, imageTableContextWindow,
+                overlapPercent,
+                autoKeywords,
+                autoQuestions);
     }
 
     /**
@@ -411,7 +586,8 @@ public record RagSettings(
      * （raptorBuildStatus/raptorBuildMessage）保持原值——降级判定由
      * {@link RetrieveQueryResolver} S4.5 从库设置读取（与 {@link #withGraphOverride} 同款）。
      *
-     * <p><b>24 参 canonical 透传图谱三字段</b>——绝不能走 17 参旧构造。
+     * <p><b>26 参 canonical 透传图谱三字段</b>与解析器增量两字段
+     * （pageIndex/imageTableContextWindow）——绝不能走 17 参旧构造。
      *
      * @param useRaptor 本次生效的 RAPTOR 开关
      * @return 覆写后的新实例（本记录不可变，原实例不受影响）
@@ -424,7 +600,11 @@ public record RagSettings(
                 ocrEnabled, ocrLanguage, chunkOverlapTokenNum,
                 useKnowledgeGraph, kgBuildStatus, kgBuildMessage,
                 useRaptor, raptorMaxTokenNum, raptorThreshold, raptorMaxCluster,
-                raptorPrompt, raptorBuildStatus, raptorBuildMessage);
+                raptorPrompt, raptorBuildStatus, raptorBuildMessage,
+                pageIndex, imageTableContextWindow,
+                overlapPercent,
+                autoKeywords,
+                autoQuestions);
     }
 
     /**
@@ -538,6 +718,28 @@ public record RagSettings(
     }
 
     /**
+     * 归一化分块 token 数（静态工具，供 withDefaults / 引擎下发共用）。
+     *
+     * <p>null → {@link #DEFAULT_CHUNK_TOKEN_NUM}；越界（含历史脏值 4096）钳制到
+     * {@code [256, 2048]}，避免 RAGFlow 拒整单 PUT 导致 parser 四键无法同步。
+     *
+     * @param n 原始值，可为 {@code null}
+     * @return 合法区间内的 token 数
+     */
+    public static Integer normalizeChunkTokenNum(Integer n) {
+        if (n == null) {
+            return DEFAULT_CHUNK_TOKEN_NUM;
+        }
+        if (n < DocumentChunkConfig.MIN_TOKEN_NUM) {
+            return DocumentChunkConfig.MIN_TOKEN_NUM;
+        }
+        if (n > MAX_CHUNK_TOKEN_NUM) {
+            return MAX_CHUNK_TOKEN_NUM;
+        }
+        return n;
+    }
+
+    /**
      * 归一化 RAPTOR 摘要 chunk 最大 token 数（静态工具，供校验层与合并器共用）。
      *
      * <p>null/越界一律回落 {@link RaptorConfig#DEFAULT_MAX_TOKEN_NUM}（防脏写，
@@ -589,6 +791,28 @@ public record RagSettings(
     }
 
     /**
+     * 归一化图像/表格上下文窗口 token 数（静态工具，供合并器与校验层共用）。
+     *
+     * <p>null/越界一律回落 {@value #DEFAULT_IMAGE_TABLE_CONTEXT_WINDOW}
+     * （区间 {@code [1, 4096]}，与 {@link #MIN_IMAGE_TABLE_CONTEXT_WINDOW} /
+     * {@link #MAX_IMAGE_TABLE_CONTEXT_WINDOW} 同源）。防脏写：老 JSON 无字段、
+     * 或临时非法值读库时不会把脏值带进下游（保存入口另有
+     * {@code RagSettingsService.validate()} 显式拒绝越界）。
+     *
+     * @param n 原始值，可为 {@code null}
+     * @return 合法值之一；null/越界回落默认 256
+     */
+    public static Integer normalizeImageTableContextWindow(Integer n) {
+        if (n == null) {
+            return DEFAULT_IMAGE_TABLE_CONTEXT_WINDOW;
+        }
+        if (n >= MIN_IMAGE_TABLE_CONTEXT_WINDOW && n <= MAX_IMAGE_TABLE_CONTEXT_WINDOW) {
+            return n;
+        }
+        return DEFAULT_IMAGE_TABLE_CONTEXT_WINDOW;
+    }
+
+    /**
      * 归一化 RAPTOR 提示词（静态工具）。
      *
      * <p>空串回落官方默认 prompt；非空原样保留（引擎不强制 {@code {cluster_content}}
@@ -602,5 +826,38 @@ public record RagSettings(
             return RaptorConfig.DEFAULT_PROMPT;
         }
         return prompt;
+    }
+
+    /** 归一化重叠百分比（T1 新增；null/越界回落默认值，不做静默截断）。 */
+    public static Double normalizeOverlapPercent(Double value) {
+        if (value == null) {
+            return DEFAULT_OVERLAP_PERCENT;
+        }
+        if (value >= MIN_OVERLAP_PERCENT && value <= MAX_OVERLAP_PERCENT) {
+            return value;
+        }
+        return DEFAULT_OVERLAP_PERCENT;
+    }
+
+    /** 归一化自动关键字数量（T1 新增；null/越界回落默认）。 */
+    public static Integer normalizeAutoKeywords(Integer value) {
+        if (value == null) {
+            return DEFAULT_AUTO_KEYWORDS;
+        }
+        if (value >= 0 && value <= MAX_AUTO_KEYWORDS) {
+            return value;
+        }
+        return DEFAULT_AUTO_KEYWORDS;
+    }
+
+    /** 归一化自动问题数量（T1 新增；null/越界回落默认）。 */
+    public static Integer normalizeAutoQuestions(Integer value) {
+        if (value == null) {
+            return DEFAULT_AUTO_QUESTIONS;
+        }
+        if (value >= 0 && value <= MAX_AUTO_QUESTIONS) {
+            return value;
+        }
+        return DEFAULT_AUTO_QUESTIONS;
     }
 }

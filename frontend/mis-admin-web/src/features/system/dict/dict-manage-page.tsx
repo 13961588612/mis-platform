@@ -1,6 +1,7 @@
 import { SHEET_FORM_BODY, SHEET_FORM_FIELD, SHEET_FORM_LABEL } from '@/components/common/sheet-form-styles';
 import { useCallback, useEffect, useState } from 'react';
 import { Pencil, Plus, Trash2 } from 'lucide-react';
+import { HEADER_ACTION_BTN_CLASS, ResetColWidthButton } from '@/components/common/header-action-buttons';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
@@ -224,20 +225,16 @@ export function DictManagePage() {
           title: '字典管理',
         })}
         actions={
-          <div className="flex gap-2">
-            {hasCustom ? (
-              <Button type="button" variant="outline" size="sm" onClick={resetColWidths}>
-                重置列宽
-              </Button>
-            ) : null}
+          <div className="flex items-center gap-2">
+            {hasCustom ? <ResetColWidthButton onClick={resetColWidths} /> : null}
             <PermissionGate permission="system:dict:add">
-              <Button size="sm" variant="outline" onClick={openTypeCreate}>
+              <Button variant="outline" className={HEADER_ACTION_BTN_CLASS} onClick={openTypeCreate}>
                 <Plus className="h-4 w-4" />
                 类型
               </Button>
             </PermissionGate>
             <PermissionGate permission="system:dict:add">
-              <Button size="sm" onClick={openItemCreate}>
+              <Button className={HEADER_ACTION_BTN_CLASS} onClick={openItemCreate}>
                 <Plus className="h-4 w-4" />
                 字典项
               </Button>

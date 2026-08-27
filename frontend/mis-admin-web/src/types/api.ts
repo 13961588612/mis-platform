@@ -112,8 +112,34 @@ export interface UserView {
   phone: string | null;
   status: number;
   isTenantAdmin: number | null;
+  /** 所属 APP id（显式归属，D1/D2） */
+  appId?: string | null;
   roles: RoleBrief[];
+  /** 归属组织 id 列表（多组织，首项主组织）；用于权限 Sheet 正确回填（N7/USR-01/03） */
+  orgIds?: string[];
+  /** 归属部门 id 列表（多部门，首项主部门）；用于权限 Sheet 正确回填（N7/USR-01/03） */
+  deptIds?: string[];
   createdAt: string | null;
+}
+
+/** 员工任职岗位轻量项（按手机查员工时返回，Req2：展示岗位情况） */
+export interface EmployeePostLite {
+  deptId: string | null;
+  deptName: string | null;
+  orgName: string | null;
+  postId: string | null;
+  postName: string | null;
+  isPrimary: number | null;
+}
+
+/** 按手机查员工轻量返回（新建/编辑用户时提示绑定/手动选择，Req2） */
+export interface EmployeePhoneMatch {
+  id: string;
+  realName: string | null;
+  deptId: string | null;
+  deptName: string | null;
+  orgName: string | null;
+  posts: EmployeePostLite[] | null;
 }
 
 export interface OrgItem {
@@ -121,6 +147,7 @@ export interface OrgItem {
   tenantId: string;
   code: string;
   name: string;
+  parentId: string;
   sort: number;
   status: number;
   remark: string | null;
@@ -141,9 +168,39 @@ export interface DeptNode {
   status: number;
   isRoot: number | null;
   leaderEmployeeId: string | null;
+  linkedOrgId: string | null;
+  linkedOrgName: string | null;
+  /** V54 部门类型 id（NULL=未设置） */
+  deptTypeId?: string | null;
+  /** V54 部门类型名（由后端解析，NULL=未知） */
+  deptTypeName?: string | null;
+  /** V54 部门编制数 / headcount 配额（NULL=0） */
+  establishmentCount?: number | null;
+  /** V54 是否末级（1=末级 / 0=非末级；后端按「有无子部门」计算） */
+  isLeaf?: number | null;
   createdAt: string | null;
   updatedAt: string | null;
   children?: DeptNode[] | null;
+}
+
+/** 组织穿透树节点（mis-org DeptPierceVO）：来源组织 + 锚点信息 */
+export interface DeptPierceNode {
+  id: string;
+  orgId: string;
+  orgName: string;
+  parentId: string;
+  code: string;
+  name: string;
+  /** V54 部门类型 id（与 DeptNode.deptTypeId 对齐） */
+  deptTypeId?: string | null;
+  /** V54 部门类型名（穿透只读行同样携带，与 tree 对齐） */
+  deptTypeName?: string | null;
+  sort: number;
+  status: number;
+  isRoot: number | null;
+  linkedOrgId: string | null;
+  linkedOrgName: string | null;
+  children?: DeptPierceNode[] | null;
 }
 
 export interface RoleItem {
@@ -292,6 +349,8 @@ export interface EmployeePostItem {
   postName: string | null;
   deptId: string | null;
   deptName: string | null;
+  /** V54 该任职部门所属组织名（脏数据/未挂载组织时为 null，UI 显示「—」） */
+  orgName?: string | null;
   isPrimary: number;
   status: number;
   startDate: string | null;
@@ -304,6 +363,8 @@ export interface EmployeeItem {
   deptId: string;
   deptIds: string[];
   primaryDeptId: string;
+  /** V54 主部门所属组织名（由 emp.deptId → dept → org 解析；脏数据/未挂载组织时为 null） */
+  orgName?: string | null;
   posts: EmployeePostItem[];
   employeeNo: string;
   realName: string;
@@ -312,6 +373,8 @@ export interface EmployeeItem {
   gender: number | null;
   title: string | null;
   hireDate: string | null;
+  /** 是否内置账号：1=内置（手机号必填/唯一校验豁免，EMP-03，Q2 推荐方案）；0/undefined=普通 */
+  isBuiltin?: number;
   status: number;
   createdAt: string | null;
   updatedAt: string | null;
@@ -323,12 +386,18 @@ export interface PostItem {
   tenantId: string;
   deptId: string;
   deptName: string | null;
+  /** R7：所属组织 id（与 deptId 对称；脏数据可能为 null） */
+  orgId?: string;
+  /** R7：所属组织名（与 deptName 对称；脏数据/未挂载组织时为 null，UI 显示「—」） */
+  orgName?: string | null;
   postTypeId: string;
   postTypeName: string | null;
   code: string;
   name: string;
   sort: number;
   status: number;
+  /** 计划编制人数（业务可选，默认 0） */
+  quota?: number;
 }
 
 /** 岗位类型（mis-org PostTypeVO） */
@@ -339,6 +408,70 @@ export interface PostTypeItem {
   name: string;
   sort: number;
   status: number;
+  /** sys_post 引用数（删除拦截依据） */
+  referenceCount: number;
+  parentId?: string;
+  /** 1=末级 / 0=非末级（显式字段） */
+  isLeaf?: number;
+}
+
+/**
+ * 岗位类型树节点（mis-org PostTypeTreeNodeVO / BFF PostTypeTreeNodeVO 对齐）。
+ *
+ * <p>仅末级节点（isLeaf===1）可被岗位选作类型；非末级仅作分类。
+ * isLeaf 为显式字段（创建/更新可写），不按是否有子节点推导。
+ * children 递归。parentId 用于前端展示层级；树已后端构建完成，前端无需再按 parentId 组装。
+ */
+export interface PostTypeTreeNode {
+  id: string;
+  /** 编码（管理树表展示用，后端 VO 已携带） */
+  code?: string;
+  name: string;
+  sort?: number;
+  status?: number;
+  /** sys_post 引用数（删除拦截依据） */
+  referenceCount?: number;
+  parentId: string;
+  /** 1=末级（可选）/ 0=非末级（仅分类） */
+  isLeaf: number;
+  children?: PostTypeTreeNode[];
+}
+
+/** 部门类型（mis-org DeptTypeVO） */
+export interface DeptTypeItem {
+  id: string;
+  tenantId: string;
+  code: string;
+  name: string;
+  sort: number;
+  status: number;
+  /** sys_dept 引用数（删除拦截依据） */
+  referenceCount: number;
+  parentId?: string;
+  /** 1=末级 / 0=非末级（显式字段） */
+  isLeaf?: number;
+}
+
+/**
+ * 部门类型树节点（mis-org DeptTypeTreeNodeVO / BFF DeptTypeTreeNodeVO 对齐）。
+ *
+ * <p>仅末级节点（isLeaf===1）可被部门选作类型；非末级仅作分类。
+ * isLeaf 为显式字段（创建/更新可写），不按是否有子节点推导。
+ * children 递归。parentId 用于前端展示层级；树已后端构建完成，前端无需再按 parentId 组装。
+ */
+export interface DeptTypeTreeNode {
+  id: string;
+  /** 编码（管理树表展示用，后端 VO 已携带） */
+  code?: string;
+  name: string;
+  sort?: number;
+  status?: number;
+  /** sys_dept 引用数（删除拦截依据） */
+  referenceCount?: number;
+  parentId: string;
+  /** 1=末级（可选）/ 0=非末级（仅分类） */
+  isLeaf: number;
+  children?: DeptTypeTreeNode[];
 }
 
 /** 系统参数（mis-system ConfigVO，全局无 tenant） */

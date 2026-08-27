@@ -93,6 +93,18 @@ class RouteLogger:
                 stmt: Any = stmt.where(RouteLogModel.matched_agent_id == filter_obj.agent_id)
             if filter_obj.strategy:
                 stmt: Any = stmt.where(RouteLogModel.strategy_used == filter_obj.strategy)
+            # 4.2：按派生类型过滤。RouteLog 表无 dispatch_kind 列，按 strategy_used 反推：
+            #   coordinator → coordinator_delegate；specified → user_specified；
+            #   agent_router → 既非协调委派也非指定路由（其余自动选 Agent 策略）。
+            kind: str | None = filter_obj.kind
+            if kind == "coordinator":
+                stmt = stmt.where(RouteLogModel.strategy_used == "coordinator_delegate")
+            elif kind == "specified":
+                stmt = stmt.where(RouteLogModel.strategy_used == "user_specified")
+            elif kind == "agent_router":
+                stmt = stmt.where(
+                    RouteLogModel.strategy_used.notin_(["coordinator_delegate", "user_specified"])
+                )
             if filter_obj.start_time:
                 stmt: Any = stmt.where(RouteLogModel.timestamp >= filter_obj.start_time)
             if filter_obj.end_time:
@@ -113,9 +125,24 @@ class RouteLogger:
                 confidence=row.confidence,
                 latency_ms=row.latency_ms,
                 timestamp=row.timestamp,
+                dispatch_kind=self._derive_dispatch_kind(row.strategy_used),
             )
             for row in rows
         ]
+
+
+    def _derive_dispatch_kind(self, strategy_used: str | None) -> str:
+        """按路由策略推导前端「类型」列的取值。
+
+        - ``coordinator_delegate``（协调者委派 Worker）→ ``coordinator``
+        - ``user_specified``（用户直接指定 Agent）→ ``specified``
+        - 其余（自动选 Agent 的各种策略）→ ``agent_router``
+        """
+        if strategy_used == "coordinator_delegate":
+            return "coordinator"
+        if strategy_used == "user_specified":
+            return "specified"
+        return "agent_router"
 
     async def get_stats(
         self,
@@ -147,12 +174,15 @@ class RouteLogger:
 
         by_agent: dict[str, int] = {}
         by_strategy: dict[str, int] = {}
+        by_kind: dict[str, int] = {}
         total_latency: float = 0.0
         total_confidence: float = 0.0
 
         for row in rows:
             by_agent[row.matched_agent_id] = by_agent.get(row.matched_agent_id, 0) + 1
             by_strategy[row.strategy_used] = by_strategy.get(row.strategy_used, 0) + 1
+            kind = self._derive_dispatch_kind(row.strategy_used)
+            by_kind[kind] = by_kind.get(kind, 0) + 1
             total_latency += row.latency_ms
             total_confidence += row.confidence
 
@@ -161,6 +191,7 @@ class RouteLogger:
             total_routes=count,
             by_agent=by_agent,
             by_strategy=by_strategy,
+            by_kind=by_kind,
             avg_latency_ms=round(total_latency / count, 2),
             avg_confidence=round(total_confidence / count, 4),
         )

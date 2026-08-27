@@ -52,7 +52,7 @@ llm_gateway:
       api_keys:
         - { ref: "secret://qwen-key-1" }
       endpoint: "https://dashscope.aliyuncs.com/api/v1"
-      models: ["qwen3.6-plus"]
+      models: ["qwen3.7-plus"]
       proxy: "http://outbound-proxy:3128"
       key_rotation: "round-robin"
       timeout: 60

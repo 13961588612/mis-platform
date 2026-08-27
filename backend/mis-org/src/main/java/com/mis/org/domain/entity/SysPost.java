@@ -37,6 +37,9 @@ public class SysPost {
     @Column(nullable = false)
     private Integer status;
 
+    @Column(name = "quota", nullable = true)
+    private Integer quota;
+
     @Column(nullable = false)
     private Integer deleted;
 
@@ -62,6 +65,8 @@ public class SysPost {
     public void setSort(Integer sort) { this.sort = sort; }
     public Integer getStatus() { return status; }
     public void setStatus(Integer status) { this.status = status; }
+    public Integer getQuota() { return quota; }
+    public void setQuota(Integer quota) { this.quota = quota; }
     public Integer getDeleted() { return deleted; }
     public void setDeleted(Integer deleted) { this.deleted = deleted; }
     public Instant getCreatedAt() { return createdAt; }

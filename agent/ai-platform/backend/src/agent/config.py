@@ -54,7 +54,7 @@ class RuntimeConfig(BaseModel):
 class ModelConfig(BaseModel):
     """Agent 的 LLM 模型配置。"""
 
-    primary: str = Field(default="qwen-plus", description="主模型")
+    primary: str = Field(default="qwen3.7-plus", description="主模型")
     fallback: str = Field(default="deepseek-v4-flash", description="回退模型")
     strategy: str = Field(default="default-primary", description="模型选择策略")
     gateway: str = Field(default="llm-gateway", description="LLM gateway 引用")
@@ -209,7 +209,7 @@ class AgentConfig(BaseModel):
         # Parse model section
         model_data: dict[str, Any] = agent_section.get("model", data.get("model", {}))
         model: ModelConfig = ModelConfig(
-            primary=model_data.get("primary", "qwen-plus"),
+            primary=model_data.get("primary", "qwen3.7-plus"),
             fallback=model_data.get("fallback", "deepseek-v4-flash"),
             strategy=model_data.get("strategy", "default-primary"),
             gateway=model_data.get("gateway", "llm-gateway"),
@@ -249,6 +249,12 @@ class AgentConfig(BaseModel):
             skills_data.get("enabled", []) if isinstance(skills_data, dict) else []
         )
         for item in enabled_list:
+            if isinstance(item, str):
+                skill_id = item.strip()
+                if not skill_id:
+                    continue
+                skills.append(SkillRef(skill_id=skill_id, enabled=True, overrides={}))
+                continue
             if not isinstance(item, dict) or not item.get("skill_id"):
                 continue
             skills.append(
@@ -309,6 +315,19 @@ class AgentConfig(BaseModel):
             routing=routing,
             memory=memory,
             includes=includes,
+        )
+
+    def equivalent_for_runtime(self, other: AgentConfig) -> bool:
+        """业务配置是否等价（用于热重载/周期 sync 的幂等判断）。
+
+        忽略 ``created_at`` / ``updated_at`` / ``config_path``：每次加载或缓存替换
+        常会刷新这些字段，但不代表运行时需要重新 ``initialize``。
+        """
+        if self is other:
+            return True
+        exclude: set[str] = {"created_at", "updated_at", "config_path"}
+        return self.model_dump(mode="json", exclude=exclude) == other.model_dump(
+            mode="json", exclude=exclude
         )
 
     @staticmethod

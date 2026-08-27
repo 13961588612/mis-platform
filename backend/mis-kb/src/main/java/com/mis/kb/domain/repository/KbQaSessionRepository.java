@@ -10,6 +10,15 @@ public interface KbQaSessionRepository extends JpaRepository<KbQaSession, Long> 
 
     List<KbQaSession> findByUserIdOrderByIdDesc(Long userId);
 
+    /**
+     * 用户侧会话列表（倒序），过滤软删除。
+     *
+     * <p><b>只用于用户侧</b>（BFF {@code /qa/sessions/mine}）；运营侧统计/列表/导出
+     * 继续走 {@link #findByCreatedAtBetweenOrderByIdDesc} / {@link #countByCreatedAtBetween}，
+     * 保留全量（含已软删）数据。
+     */
+    List<KbQaSession> findByUserIdAndDeletedAtIsNullOrderByIdDesc(Long userId);
+
     boolean existsByIdAndUserId(Long id, Long userId);
 
     /**

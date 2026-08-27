@@ -211,7 +211,7 @@ export function AgentConfigPage({ agentId }: AgentConfigPageProps) {
         </p>
       </div>
 
-      <div className="grid min-h-0 flex-1 gap-3 lg:grid-cols-[minmax(0,22rem)_minmax(0,1fr)]">
+      <div className="grid min-h-0 flex-1 gap-3 lg:grid-cols-[minmax(0,28rem)_minmax(0,1fr)]">
         {/* ---------------- 左：文件树（#22 已就绪，扁平 → 现场建树） ---------------- */}
         <div className="flex min-h-0 flex-col rounded-lg border bg-card">
           <div className="flex flex-wrap items-center gap-2 border-b p-3">

@@ -14,6 +14,7 @@ import org.springframework.util.StringUtils;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.Optional;
 
 /**
  * 系统参数维护：CRUD + config_key 唯一校验（DB 已有 uk_config_key）。
@@ -36,6 +37,11 @@ public class ConfigService {
     @Transactional(readOnly = true)
     public ConfigVO getById(Long id) {
         return toVo(requireConfig(id));
+    }
+
+    @Transactional(readOnly = true)
+    public Optional<ConfigVO> getOptionalByKey(String configKey) {
+        return configRepository.findByConfigKey(configKey).map(this::toVo);
     }
 
     @Transactional

@@ -1,0 +1,86 @@
+classDiagram
+    class SkillFormValues {
+        +string id
+        +string name
+        +string description
+        +string category
+        +string tags
+        +string handler
+    }
+    class SkillBuilderMessage {
+        +string role
+        +string content
+        +string status
+    }
+    class SkillBuilderChatRequest {
+        +SkillBuilderMessage[] messages
+        +string user_input
+        +boolean converged
+    }
+    class SkillBuilderChatResponse {
+        +string reply
+        +string status
+        +boolean converged
+    }
+    class BuilderChatRequest {
+        +list messages
+        +string user_input
+        +bool converged
+    }
+    class BuilderChatResponse {
+        +str reply
+        +str status
+        +bool converged
+    }
+    class SkillBuilderService {
+        +build(messages, user_input, converged) BuilderChatResponse
+    }
+    class SkillBuilderPrompt {
+        +SYSTEM_PROMPT: str
+        +render(messages) str
+    }
+    class LLMGateway {
+        +chat(request) LLMResponse
+    }
+    class LLMResponse {
+        +str content
+    }
+    class SkillBuilderUtils {
+        +extractSkillMd(text) string|null
+        +applyParsedSkill(meta, body)
+        +diffHighlight(before, after) Set~string~
+    }
+    class SkillBuilderPanel {
+        +messages: SkillBuilderMessage[]
+        +onSend(input)
+        +onRefill()
+    }
+    class SkillFormFields {
+        +form: SkillFormValues
+        +onChange(key, value)
+    }
+    class AgentSkillFormDialog {
+        +mode: 'manual'|'paste'|'ai'
+        +form: SkillFormValues
+        +body: string
+        +highlight: Set~string~
+    }
+    class AgentOpsApi {
+        +chatSkillBuilder(req) Promise~SkillBuilderChatResponse~
+        +parseSkill(content) Promise~SkillParseResponse~
+        +createSkill(payload) Promise~Skill~
+    }
+
+    AgentSkillFormDialog "1" *-- "1" SkillFormFields : 复用同一套表单(A/B/C)
+    AgentSkillFormDialog "1" *-- "1" SkillBuilderPanel : Tab C 右栏
+    AgentSkillFormDialog ..> SkillBuilderUtils : applyParsedSkill / 高亮
+    SkillBuilderPanel ..> AgentOpsApi : chatSkillBuilder
+    SkillBuilderPanel ..> SkillBuilderUtils : extractSkillMd
+    SkillBuilderPanel ..> AgentOpsApi : parseSkill(复用粘贴Tab)
+    AgentOpsApi ..> BuilderChatRequest : 经 BFF 透传
+    BuilderChatRequest ..> SkillBuilderService : 路由调用
+    SkillBuilderService ..> SkillBuilderPrompt : 组装 system
+    SkillBuilderService ..> LLMGateway : chat()
+    LLMGateway ..> LLMResponse
+    SkillBuilderService ..> BuilderChatResponse
+    AgentOpsApi ..> createSkill : 提交(复用, 无新增)

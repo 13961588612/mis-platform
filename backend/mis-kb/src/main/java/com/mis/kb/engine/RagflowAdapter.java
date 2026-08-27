@@ -4,8 +4,11 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.mis.kb.domain.entity.KbDocument;
 import com.mis.kb.domain.entity.KbLibrary;
 import com.mis.kb.domain.model.ChunkHit;
+import com.mis.kb.domain.model.ChunkQuery;
 import com.mis.kb.domain.model.CreateLibraryCmd;
 import com.mis.kb.domain.model.DocumentChunkConfig;
+import com.mis.kb.domain.model.DocumentChunkPageView;
+import com.mis.kb.domain.model.DocumentChunkView;
 import com.mis.kb.domain.model.DocumentUploadInput;
 import com.mis.kb.domain.model.EngineCapabilities;
 import com.mis.kb.domain.model.EngineDocumentBrief;
@@ -26,6 +29,8 @@ import com.mis.kb.domain.repository.KbLibraryRepository;
 import com.mis.kb.engine.dto.RfChunk;
 import com.mis.kb.engine.dto.RfDataset;
 import com.mis.kb.engine.dto.RfDocument;
+import com.mis.kb.engine.dto.RfDocumentChunk;
+import com.mis.kb.engine.dto.RfDocumentChunkPage;
 import com.mis.kb.engine.dto.RfModel;
 import com.mis.kb.engine.dto.RfSearchChunk;
 import com.mis.kb.support.KbJson;
@@ -39,6 +44,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.regex.Pattern;
 
 /**
  * RAGFlow 真实适配器（HTTP 调 RAGFlow）。
@@ -98,7 +104,11 @@ public class RagflowAdapter implements KnowledgeEnginePort {
 
     @Override
     public void updateLibrarySettings(EngineLibraryRef ref, RagSettings settings) {
-        client.updateDatasetSettings(ref.nativeId(), settings);
+        // 引擎下发前归一化（含 chunkTokenNum 4096→2048 钳制），避免 RAGFlow 拒整单 PUT
+        RagSettings engineSettings = settings == null
+                ? RagSettings.defaults().withDefaults()
+                : settings.withDefaults();
+        client.updateDatasetSettings(ref.nativeId(), engineSettings);
     }
 
     /**
@@ -244,6 +254,19 @@ public class RagflowAdapter implements KnowledgeEnginePort {
         return GraphBuildSnapshot.Status.BUILDING;
     }
 
+    /**
+     * 删除引擎侧 dataset（Q1 两段式确认流的引擎侧动作）。
+     *
+     * <p>透传 {@link RagflowClient#deleteDataset}。当引擎侧 dataset 已不存在（HTTP 404，
+     * 运维可能在 RAGFlow 控制台手工删除）时，客户端抛
+     * {@link EngineDatasetMissingException}，本方法<b>原样上抛不拦截</b>——
+     * 由 {@code KbLibraryService} 捕获后进入两段式确认流（force=false 提示态 /
+     * force=true 跳过引擎直接本地执行）。
+     *
+     * @param ref 知识库引擎引用（nativeId = dataset id）
+     * @throws EngineDatasetMissingException 引擎侧 dataset 已不存在（missing 信号，透传）
+     * @throws BusinessException             引擎删除非 404 失败（透传，调用方回滚本地事务）
+     */
     @Override
     public void deleteLibrary(EngineLibraryRef ref) {
         client.deleteDataset(ref.nativeId());
@@ -252,8 +275,14 @@ public class RagflowAdapter implements KnowledgeEnginePort {
     /**
      * 重命名引擎侧 dataset（T02：归档流程调用）。
      *
+     * <p>透传 {@link RagflowClient#renameDataset}。当引擎侧 dataset 已不存在（HTTP 404 或
+     * 业务响应命中缺失文案）时，客户端抛 {@link EngineDatasetMissingException}，
+     * 本方法<b>原样上抛不拦截</b>——由 {@code KbLibraryService} 捕获后进入归档两段式确认流。
+     *
      * @param ref     知识库引擎引用
      * @param newName 新名字（调用方已按 {@link RagflowDatasetNaming#forArchive} 加工）
+     * @throws EngineDatasetMissingException 引擎侧 dataset 已不存在（missing 信号，透传）
+     * @throws BusinessException             引擎改名非 missing 失败（透传，调用方记待对账）
      */
     @Override
     public void renameLibrary(EngineLibraryRef ref, String newName) {
@@ -470,8 +499,11 @@ public class RagflowAdapter implements KnowledgeEnginePort {
         }
         RagSettings settings = KbJson.readSettings(lib.getRagSettingsJson());
         RagSettings effective = settings == null ? RagSettings.defaults() : settings.withDefaults();
+        // T4：快照携带 4 个解析器设置字段——清空覆盖时下发库级有效值（pageIndex/image 经 ext）。
         return new DocumentChunkConfig(
-                effective.chunkMethod(), effective.chunkTokenNum(), effective.separator());
+                effective.chunkMethod(), effective.chunkTokenNum(), effective.separator(),
+                effective.pageIndex(), effective.imageTableContextWindow(),
+                effective.autoKeywords(), effective.autoQuestions());
     }
 
     /**
@@ -533,6 +565,115 @@ public class RagflowAdapter implements KnowledgeEnginePort {
             }
         }
         return out;
+    }
+
+    /**
+     * 分页列举文档切片（「查看文档切分效果」）。
+     *
+     * <p>MIS libraryId/documentId → 引擎 dataset/doc 原生 id 翻译在本层闭环；
+     * 返回的 {@link DocumentChunkView} 仅携带 MIS documentId 与清洗后纯文本
+     * （引擎原生 chunk id 不下发）。
+     *
+     * <p><b>异常语义：</b>引擎不可达 / RAGFlow 报错（{@link RagflowClient#listChunks}
+     * 抛 {@link com.mis.common.core.exception.BusinessException}）在此<b>向上抛出</b>，
+     * 不做静默空页——由 {@code KbDocumentService} 捕获后降级为空态 +「引擎暂不可达」提示
+     * （与 {@code syncOpenParseStatuses} 的降级风格一致）。仅「库/文档无引擎映射」等
+     * 前置条件不满足时返回空页。
+     *
+     * @param query 切片查询（MIS id + 关键字 + 分页）
+     * @return 切片分页视图；恒非 {@code null}
+     */
+    @Override
+    public DocumentChunkPageView listDocumentChunks(ChunkQuery query) {
+        int page = query == null ? 1 : query.page();
+        int pageSize = query == null ? 20 : query.pageSize();
+        if (query == null || query.libraryId() == null || query.documentId() == null) {
+            return DocumentChunkPageView.empty(page, pageSize);
+        }
+        KbLibrary lib = libraryRepository.findById(query.libraryId()).orElse(null);
+        if (lib == null || !StringUtils.hasText(lib.getEngineLibraryRef())) {
+            return DocumentChunkPageView.empty(page, pageSize);
+        }
+        KbDocument doc = documentRepository.findById(query.documentId()).orElse(null);
+        if (doc == null || !StringUtils.hasText(doc.getEngineDocumentRef())) {
+            return DocumentChunkPageView.empty(page, pageSize);
+        }
+        RfDocumentChunkPage enginePage = client.listChunks(
+                lib.getEngineLibraryRef(), doc.getEngineDocumentRef(),
+                query.keywords(), page, pageSize);
+        List<DocumentChunkView> views = new ArrayList<>();
+        if (enginePage != null && enginePage.chunks() != null) {
+            for (RfDocumentChunk c : enginePage.chunks()) {
+                if (c == null) {
+                    continue;
+                }
+                views.add(new DocumentChunkView(
+                        query.documentId(),
+                        cleanContent(c.content()),
+                        c.pageNo(),
+                        c.importantKeywords() == null
+                                ? List.of() : List.copyOf(c.importantKeywords()),
+                        c.normalizedImageId()));
+            }
+        }
+        int total = enginePage == null || enginePage.total() == null
+                ? views.size() : Math.max(enginePage.total(), 0);
+        Integer chunkCount = enginePage == null || enginePage.doc() == null
+                ? null : enginePage.doc().chunkCount();
+        Integer tokenCount = enginePage == null || enginePage.doc() == null
+                ? null : enginePage.doc().tokenCount();
+        return new DocumentChunkPageView(views, total, page, pageSize, chunkCount, tokenCount);
+    }
+
+    /**
+     * 拉取分片版面截图（透传 {@link RagflowClient#getChunkImage}）。
+     *
+     * @param imageId 引擎 {@code image_id}
+     * @return 图片字节
+     */
+    @Override
+    public byte[] fetchChunkImage(String imageId) {
+        return client.getChunkImage(imageId);
+    }
+
+    /**
+     * 引擎注入标记正则：{@code <weight ...>}/{@code <sep>}/{@code <em>xxx</em>} 及闭标签。
+     *
+     * <p>在 {@link RfSearchChunk#text()} 的 {@code weight|sep} 基础上扩展 {@code em}——
+     * chunks 端点的正文用 {@code <em>} 包裹命中关键字（现网探测结论），展示前必须剥离，
+     * 否则「正文带尖括号标签」的展示事故会直接复现。
+     */
+    private static final Pattern ENGINE_MARKUP_PATTERN =
+            Pattern.compile("</?(?:weight|sep|em)[^>]*>");
+
+    /** 残留 HTML 标签正则（{@code <table>}/{@code <td>} 等包装，剥离后保留换行）。 */
+    private static final Pattern RESIDUAL_HTML_PATTERN =
+            Pattern.compile("<[^>]+>");
+
+    /**
+     * 清洗 RAGFlow chunk 正文为纯文本（R3 风险防线：杜绝 XSS 与「正文带尖括号」事故）。
+     *
+     * <p>两步剥离：
+     * <ol>
+     *   <li>剥 {@code <weight>}/{@code <sep>}/{@code <em>} 标记（引擎注入的排版/高亮标记）；</li>
+     *   <li>剥残留 HTML 标签 {@code <[^>]+>}（chunks 正文可能被 {@code <table>} 等包装）。
+     *       换行保留——表格单元格、段落结构靠换行保持可读。</li>
+     * </ol>
+     * 归一空白：连续空格/Tab 压为单空格，行首行尾空白去除，连续空行压为至多两个。
+     *
+     * @param raw 引擎原始正文；可为 {@code null}
+     * @return 清洗后纯文本；原值为空时返回空串
+     */
+    static String cleanContent(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return "";
+        }
+        String cleaned = ENGINE_MARKUP_PATTERN.matcher(raw).replaceAll("");
+        cleaned = RESIDUAL_HTML_PATTERN.matcher(cleaned).replaceAll("");
+        cleaned = cleaned.replaceAll("[ \\t\\x0B\\f]+", " ");
+        cleaned = cleaned.replaceAll(" *\\r?\\n *", "\n");
+        cleaned = cleaned.replaceAll("\\n{3,}", "\n\n");
+        return cleaned.trim();
     }
 
     @Override
@@ -633,7 +774,7 @@ public class RagflowAdapter implements KnowledgeEnginePort {
             Long libId = doc != null ? doc.getLibraryId() : null;
             // F-04：透传引擎给出的页码/偏移（不可得时为 null，前端降级展示）
             hits.add(new ChunkHit(libId, docId, c.text(), c.score(), c.documentName(),
-                    c.charOffset(), c.firstPage()));
+                    c.charOffset(), c.firstPage(), c.normalizedImageId()));
         }
         return hits;
     }
@@ -682,7 +823,7 @@ public class RagflowAdapter implements KnowledgeEnginePort {
             }
             // docTitle 优先用引擎给的文档名（docnm_kwd），反查不到本地文档时仍可展示
             hits.add(new ChunkHit(libId, docId, c.text(), c.similarity(),
-                    c.docnmKwd(), null, null));
+                    c.docnmKwd(), null, null, null));
         }
         return hits;
     }
@@ -766,9 +907,13 @@ public class RagflowAdapter implements KnowledgeEnginePort {
      * 实际可用」。若未来引擎升级破坏契约，把下方 {@code graph} 参数翻成 {@code false}
      * 即可走「前端置灰 + 保存强制关 + 检索期降级」三道防线，代码分支不动（共享知识 §10-1）。
      *
+     * <p><b>切片参数对齐（T3 → ext 修正）：</b>overlap / toc / imageTable 经
+     * {@code parser_config.ext} 下发；能力位由 {@code parser-toc-supported} /
+     * {@code parser-image-table-context-supported} 控制（默认 true）。
+     *
      * @return 能力声明；{@code hybrid} 恒支持，{@code rerank} 随模型 ID 配置动态变化，
-     *         {@code delete} 随 {@code delete-supported} 配置变化，OCR/overlap 本期恒不支持，
-     *         {@code graph} 恒支持（T00 实测）
+     *         {@code delete} 随 {@code delete-supported} 配置变化，OCR 不支持，
+     *         overlap/toc/imageTable 随配置闸门（默认 true），{@code graph} 恒支持（T00 实测）
      */
     @Override
     public EngineCapabilities capabilities() {
@@ -778,10 +923,11 @@ public class RagflowAdapter implements KnowledgeEnginePort {
         }
         boolean deleteAvailable = props != null && props.isDeleteSupported();
         boolean raptorAvailable = props == null || props.isRaptorEnabled();
-        // 9 参：rerank / metadataFilter / replace / hybrid / delete / parserOcr /
-        // parserOverlap / graph / raptor。raptor 受平台总开关 mis.kb.engine.raptor-enabled
-        // 控制（U4 裁定；默认 true，Nacos 可热调）。
+        boolean tocAvailable = props == null || props.isParserTocSupported();
+        boolean imageTableAvailable = props == null || props.isParserImageTableContextSupported();
+        // 11 参：rerank / metadataFilter / replace / hybrid / delete / parserOcr /
+        // parserOverlap / graph / raptor / parserToc / parserImageTable
         return EngineCapabilities.of(rerankAvailable, true, true, true, deleteAvailable,
-                false, false, true, raptorAvailable);
+                false, true, true, raptorAvailable, tocAvailable, imageTableAvailable);
     }
 }

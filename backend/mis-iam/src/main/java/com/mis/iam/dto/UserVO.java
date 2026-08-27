@@ -14,6 +14,7 @@ public record UserVO(
         Integer isTenantAdmin,
         Integer mustChangePassword,
         String realName,
+        String email,
         String deptId,
         List<RoleVO> roles,
         List<String> orgIds,

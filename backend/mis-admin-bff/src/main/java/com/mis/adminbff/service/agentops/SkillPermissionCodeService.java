@@ -39,6 +39,10 @@ import java.util.concurrent.ConcurrentHashMap;
  * </ul>
  * 只做后者会让新建后的第一次授权多等一次；只做前者则完全兜不住历史技能。
  *
+ * <h2>删除时必须级联收码</h2>
+ * {@link #removeCode} 与 {@link #ensureCode} 成对：技能池删除后若不收走
+ * {@code sys_menu} 按钮，「技能权限 / 系统菜单」会残留孤儿执行码。
+ *
  * <h2>失败必须显式报错（fail-closed）</h2>
  * 补建失败时抛 {@link AgentOpsErrorCodes#SKILL_CODE_UNAVAILABLE}，绝不静默跳过。
  * 静默跳过的后果是授权页显示"保存成功"，但那个码根本不存在，
@@ -136,6 +140,31 @@ public class SkillPermissionCodeService {
             codeToMenuId.put(permission, existing);
         }
         return existing;
+    }
+
+    /**
+     * 删除技能执行码对应的 {@code sys_menu}（软删）并失效本地缓存。
+     *
+     * <p>与 {@link #ensureCode} 对称：技能从池中删除后必须收走执行码，
+     * 否则「技能权限 / 系统菜单」里会残留「执行技能：xxx」按钮。
+     * 仅删启用态菜单；从未建过码则返回 {@code null}（幂等）。
+     *
+     * @param skillId 技能 ID
+     * @return 被删除的菜单 ID；无菜单可删时返回 {@code null}
+     */
+    public Long removeCode(String skillId) {
+        if (skillId == null || skillId.isBlank()) {
+            return null;
+        }
+        Long menuId = findMenuId(skillId);
+        if (menuId == null) {
+            evictCode(skillId);
+            return null;
+        }
+        systemWebClient.deleteMenu(menuId);
+        evictCode(skillId);
+        log.info("已删除技能执行码菜单: skillId={} menuId={}", skillId.trim(), menuId);
+        return menuId;
     }
 
     /**
@@ -245,7 +274,8 @@ public class SkillPermissionCodeService {
             if (node == null) {
                 continue;
             }
-            if (permission.equals(node.permission())) {
+            // 软删（status=0）菜单仍会出现在 tree 全量结果里，不能再当作有效执行码
+            if (permission.equals(node.permission()) && isActiveMenu(node)) {
                 Long id = parseId(node.id());
                 if (id != null) {
                     return id;
@@ -257,6 +287,12 @@ public class SkillPermissionCodeService {
             }
         }
         return null;
+    }
+
+    /** {@code status == null} 视为历史数据默认启用；仅 {@code 0} 视为软删。 */
+    private static boolean isActiveMenu(MenuVO node) {
+        Integer status = node.status();
+        return status == null || status == 1;
     }
 
     /**

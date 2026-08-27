@@ -26,6 +26,7 @@ import {
   LogIn,
   Menu,
   MessageSquare,
+  MessageSquareWarning,
   MessagesSquare,
   Network,
   Plug,
@@ -71,10 +72,11 @@ const ICON_MAP: Record<string, LucideIcon> = {
   Crosshair,
   // Wave D：同义词管理（Languages，V18 seed）
   Languages,
-  // 智能体运营控制台（V19__agent_ops_seed.sql 的 sys_menu.icon 取值 + V21 的 ShieldCheck）
+  // 智能体运营控制台（V19__agent_ops_seed.sql 的 sys_menu.icon 取值 + V21 的 ShieldCheck + V43 的 MessageSquareWarning）
   // 缺登记不会报错，只会静默回退成 LayoutDashboard —— 侧栏 12 个菜单图标全一样。
   Bot,
   MessageSquare,
+  MessageSquareWarning,
   History,
   Boxes,
   Route,

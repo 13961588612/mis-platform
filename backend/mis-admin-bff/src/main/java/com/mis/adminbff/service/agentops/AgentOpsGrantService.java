@@ -151,6 +151,42 @@ public class AgentOpsGrantService {
     }
 
     /**
+     * 从 system App 下所有启用角色中回收指定菜单（技能删除级联用）。
+     *
+     * <p>与 {@link #updateGrants} 同一 read-modify-write 纪律：只改持有该 menuId 的角色，
+     * 写回时保留其余菜单权限。
+     *
+     * @param menuId 被删的执行码菜单 ID；{@code null} 时直接返回
+     * @return 实际改写过的角色 ID 列表
+     */
+    public List<Long> revokeMenuFromAllRoles(Long menuId) {
+        List<Long> updated = new ArrayList<>();
+        if (menuId == null) {
+            return updated;
+        }
+        Long tenantId = RequestContext.requireTenantId();
+        long appId = resolveSystemAppId(tenantId);
+
+        for (IamRoleVO role : iamWebClient.listEnabledRoles(tenantId, appId)) {
+            Long roleId = parseId(role.id());
+            if (roleId == null) {
+                continue;
+            }
+            List<Long> current = iamWebClient.listRoleMenus(roleId);
+            if (!current.contains(menuId)) {
+                continue;
+            }
+            List<Long> next = new ArrayList<>(current);
+            next.remove(menuId);
+            iamWebClient.assignRoleMenus(roleId, next);
+            updated.add(roleId);
+            log.info("技能删除级联：回收角色菜单 roleId={} menuId={} (菜单数 {} → {})",
+                    roleId, menuId, current.size(), next.size());
+        }
+        return updated;
+    }
+
+    /**
      * §4.3 #12 授权选择器的角色列表。
      *
      * @return system App 下的启用角色

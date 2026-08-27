@@ -1,0 +1,46 @@
+# =============================================================================
+# mis-admin-helper — MIS 技能创建助手（后台操作员）
+#
+# 受众：后台操作员（agent:skill:manage 权限持有者）。
+# 能力：create_skill（浏览现有技能 + 合并生成新 SKILL.md + 联网补全）。
+#
+# 硬约束（设计 §9 / R8）：本 Agent 默认不配入 copilot 委派白名单，
+# 仅经「新建技能」对话框的 mis-admin-helper 会话（createChatSession）触达。
+# 即便被误配入 coordination.worker_ids，invoke_agent.py L249 白名单与
+# coordination_service.write_coordination 双重拒绝（fail-closed）。
+# =============================================================================
+
+agent:
+  name: mis-admin-helper
+  display_name: MIS 技能创建助手（后台操作员）
+  description: >
+    面向后台操作员的技能创建助手：浏览现有技能、合并生成统一的新 SKILL.md，
+    并在合成时联网补全外部专业资料。输出严格遵循 Anthropic skill-creator 规范。
+  version: "1.0.0"
+  tags:
+    - mis
+    - skill
+    - create_skill
+
+  # Coordinator–Worker 调度角色：worker（单一专长执行者，不可再委派）。
+  role: worker
+
+  includes:
+    runtime: runtime/runtime.yaml
+    system: system/model.yaml
+
+  routing:
+    enabled: false
+    priority: 10
+    keywords: []
+
+  # create_skill 为对话驱动、短会话，无需持久记忆。
+  memory:
+    static:
+      enabled: false
+    dynamic:
+      enabled: false
+
+  push:
+    enabled: false
+    channels: []

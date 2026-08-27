@@ -14,6 +14,11 @@ public interface SysDeptRepository extends JpaRepository<SysDept, Long> {
 
     List<SysDept> findByOrgId(Long orgId);
 
+    /**
+     * 按组织 + 是否根部门查询（规则 1.4 / 1.5：取某组织的顶级根部门，做名称/状态同步）。
+     */
+    Optional<SysDept> findByOrgIdAndIsRoot(Long orgId, Integer isRoot);
+
     Optional<SysDept> findByTenantIdAndOrgIdAndCode(Long tenantId, Long orgId, String code);
 
     List<SysDept> findByOrgIdAndParentId(Long orgId, Long parentId);
@@ -31,4 +36,13 @@ public interface SysDeptRepository extends JpaRepository<SysDept, Long> {
     List<Long> findDescendantIds(@Param("orgId") Long orgId, @Param("deptIdStr") String deptIdStr);
 
     boolean existsByOrgIdAndParentId(Long orgId, Long parentId);
+
+    /** V40 新增：组织下是否存在部门（组织删除约束用）。 */
+    boolean existsByOrgId(Long orgId);
+
+    /** V54 新增：某部门类型被多少部门引用（类型删除拦截依据）。 */
+    long countByDeptTypeId(Long deptTypeId);
+
+    /** V54 新增：是否存在引用某部门类型的部门。 */
+    boolean existsByDeptTypeId(Long deptTypeId);
 }

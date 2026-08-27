@@ -185,6 +185,7 @@ class KbLibraryServiceDeleteTest {
             assertNull(result.engineError());
             assertEquals(7L, result.docCleaned(), "Q6：悬空文档必须被清并如实回报条数");
             assertEquals(2L, result.aclCleaned());
+            assertFalse(result.engineMissing(), "引擎存在且删除成功 → engineMissing 必须为 false");
         }
 
         @Test
@@ -198,6 +199,7 @@ class KbLibraryServiceDeleteTest {
             verify(enginePort, never()).deleteLibrary(any());
             verify(libraryRepository).delete(library);
             assertTrue(result.engineSynced());
+            assertFalse(result.engineMissing(), "未绑定引擎不触发检测 → engineMissing 必须为 false");
         }
     }
 
@@ -231,6 +233,7 @@ class KbLibraryServiceDeleteTest {
             assertNotNull(result.archivedName());
             assertTrue(result.message().contains("未删除引擎数据"),
                     "§1.10-2：破坏性语义变更必须在回执里说清楚");
+            assertFalse(result.engineMissing(), "引擎 rename 成功 → engineMissing 必须为 false");
         }
 
         @Test
@@ -243,6 +246,7 @@ class KbLibraryServiceDeleteTest {
             verify(libraryRepository, never()).delete(any());
             assertEquals(0L, result.docCleaned());
             assertEquals(0L, result.aclCleaned());
+            assertFalse(result.engineMissing());
         }
 
         @Test
@@ -257,6 +261,7 @@ class KbLibraryServiceDeleteTest {
             assertEquals("connect timed out", result.engineError());
             assertNull(result.archivedName(), "改名没成，就不该谎报归档名");
             assertTrue(result.message().contains("待对账"));
+            assertFalse(result.engineMissing(), "改名失败（非 missing）→ engineMissing 必须为 false");
             // 本地归档照做
             assertEquals(LibraryStatus.DISABLED.code(), library.getStatus());
             assertNotNull(library.getArchivedAt());
@@ -278,6 +283,7 @@ class KbLibraryServiceDeleteTest {
             assertEquals(LibraryStatus.DISABLED.code(), library.getStatus());
             assertNotNull(library.getArchivedAt());
             assertTrue(result.message().contains("未删除引擎数据"));
+            assertFalse(result.engineMissing(), "未绑定引擎不触发检测 → engineMissing 必须为 false");
         }
 
         @Test
@@ -318,6 +324,7 @@ class KbLibraryServiceDeleteTest {
             verify(enginePort).renameLibrary(any(EngineLibraryRef.class), anyString());
             verify(enginePort, never()).deleteLibrary(any());
             verify(libraryRepository, never()).delete(any());
+            assertFalse(result.engineMissing(), "默认归档（非 missing）→ engineMissing 必须为 false");
         }
 
         @Test

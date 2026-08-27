@@ -8,6 +8,16 @@ const DialogTrigger = DialogPrimitive.Trigger;
 const DialogClose = DialogPrimitive.Close;
 const DialogPortal = DialogPrimitive.Portal;
 
+/** 点到 portaled 浮层（Popover/Select 等）时勿当作 Dialog 外部点击，否则嵌套选择器会立刻关掉或吞掉 click。 */
+function isPortaledFloatingTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof Element)) return false;
+  return Boolean(
+    target.closest('[data-radix-popper-content-wrapper]') ||
+      target.closest('[data-radix-select-content]') ||
+      target.closest('[data-radix-menu-content]'),
+  );
+}
+
 const DialogOverlay = React.forwardRef<
   React.ElementRef<typeof DialogPrimitive.Overlay>,
   React.ComponentPropsWithoutRef<typeof DialogPrimitive.Overlay>
@@ -26,7 +36,7 @@ DialogOverlay.displayName = DialogPrimitive.Overlay.displayName;
 const DialogContent = React.forwardRef<
   React.ElementRef<typeof DialogPrimitive.Content>,
   React.ComponentPropsWithoutRef<typeof DialogPrimitive.Content>
->(({ className, children, ...props }, ref) => (
+>(({ className, children, onPointerDownOutside, onFocusOutside, onInteractOutside, ...props }, ref) => (
   <DialogPortal>
     <DialogOverlay />
     <DialogPrimitive.Content
@@ -36,6 +46,18 @@ const DialogContent = React.forwardRef<
         className,
       )}
       {...props}
+      onPointerDownOutside={(e) => {
+        if (isPortaledFloatingTarget(e.target)) e.preventDefault();
+        onPointerDownOutside?.(e);
+      }}
+      onFocusOutside={(e) => {
+        if (isPortaledFloatingTarget(e.target)) e.preventDefault();
+        onFocusOutside?.(e);
+      }}
+      onInteractOutside={(e) => {
+        if (isPortaledFloatingTarget(e.target)) e.preventDefault();
+        onInteractOutside?.(e);
+      }}
     >
       {children}
       <DialogPrimitive.Close className="absolute right-3 top-3 rounded-md p-1 text-muted-foreground hover:bg-accent hover:text-foreground">

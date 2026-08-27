@@ -97,7 +97,7 @@ class LLMGateway:
         if provider == "deepseek":
             return "deepseek-v4-flash"
         if provider == "qwen":
-            return "qwen-plus"
+            return "qwen3.7-plus"
         return primary
 
     def _remap_request_for_provider(
@@ -116,7 +116,7 @@ class LLMGateway:
         根据模型名称选择 LLM provider。
 
         Args:
-            model: 模型名称（例如 "deepseek-v4-flash"、"qwen3.6-plus"）。
+            model: 模型名称（例如 "deepseek-v4-flash"、"qwen3.7-plus"）。
 
         Returns:
             Provider 名称（"deepseek" 或 "qwen"）。

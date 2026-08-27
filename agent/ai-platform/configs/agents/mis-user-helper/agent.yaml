@@ -1,0 +1,44 @@
+# =============================================================================
+# mis-user-helper — MIS 抽取/摘要助手（全员）
+#
+# 受众：全员（agent:chat:use 等既有权限）。
+# 能力：extract（从文本抽取结构化字段）+ summary（对文本做摘要）。
+# 由旧 mis-extract / mis-summary 迁来（R3 灰度下线后承接其能力）。
+#
+# 可进 copilot：mis-copilot/coordination.yaml 的 delegation.worker_ids 含本 Agent
+# （声明式接入，唯一来源）。copilot 经 TaskBrief.page_context 透传当前页上下文
+# （route / module），实现"总结这页"。
+# =============================================================================
+
+agent:
+  name: mis-user-helper
+  display_name: MIS 抽取/摘要助手（全员）
+  description: >
+    MIS 平台抽取/摘要助手：从文本抽取结构化字段（extract）或对文本做要点摘要（summary）。
+  version: "1.0.0"
+  tags:
+    - mis
+    - extract
+    - summary
+
+  # Coordinator–Worker 调度角色：worker（单一专长执行者，不可再委派）。
+  role: worker
+
+  includes:
+    runtime: runtime/runtime.yaml
+    system: system/model.yaml
+
+  routing:
+    enabled: false
+    priority: 10
+    keywords: []
+
+  memory:
+    static:
+      enabled: false
+    dynamic:
+      enabled: false
+
+  push:
+    enabled: false
+    channels: []

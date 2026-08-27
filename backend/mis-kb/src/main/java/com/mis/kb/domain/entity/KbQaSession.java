@@ -26,6 +26,14 @@ public class KbQaSession {
     @Column(name = "created_at", nullable = false)
     private Instant createdAt;
 
+    /** 会话标题：新建时取首问前 30 字符（mis-rag 侧截断）；null 时前端兜底展示「会话 #id」。 */
+    @Column(name = "title")
+    private String title;
+
+    /** 软删除时间戳；非 null 表示已删除（用户侧不可见，运营侧保留全量）。 */
+    @Column(name = "deleted_at")
+    private Instant deletedAt;
+
     public Long getId() {
         return id;
     }
@@ -56,5 +64,21 @@ public class KbQaSession {
 
     public void setCreatedAt(Instant createdAt) {
         this.createdAt = createdAt;
+    }
+
+    public String getTitle() {
+        return title;
+    }
+
+    public void setTitle(String title) {
+        this.title = title;
+    }
+
+    public Instant getDeletedAt() {
+        return deletedAt;
+    }
+
+    public void setDeletedAt(Instant deletedAt) {
+        this.deletedAt = deletedAt;
     }
 }

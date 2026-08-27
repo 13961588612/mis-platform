@@ -189,6 +189,47 @@ export interface KbRagSettings {
    * 同 {@code raptorBuildStatus}：仅回显，前端不提交，可选。
    */
   raptorBuildMessage?: string | null;
+  /**
+   * 页码索引 / TOC 提取开关（解析器增量，末位追加）。
+   *
+   * <p>对应 RAGFlow `parser_config.toc_extraction`（官方 schema 键，默认 `true`）。
+   * 与 OCR/overlap 的「只落库不下发」不同：本键<b>随每次 PUT 恒下发</b>（引擎
+   * 0.23.0+ 版本支持；旧版本不支持会导致引擎同步失败，走「本地已保存 + 下次保存重试」
+   * 降级口径）。解析期参数，改动只影响此后新上传/重解析的文档。
+   */
+  pageIndex: boolean | null;
+  /**
+   * 图像与表格上下文窗口（解析器增量，末位追加）。
+   *
+   * <p>对应 RAGFlow `parser_config.image_table_context_window`（官方 schema 键，
+   * 默认 `256`）：图片/表格上下各取 N token 并入 chunk 提升召回。
+   * 合法区间 [1, 4096]，越界后端保存拒绝（不做静默截断）。解析期参数，
+   * 改动只影响此后新上传/重解析的文档。
+   */
+  imageTableContextWindow: number | null;
+  /**
+   * 重叠百分比（T1 切片参数对齐，末位追加）。
+   *
+   * <p>合法区间 `[0, 100]`，默认 `0`（关闭）。当前引擎<b>实测不支持</b>任何 overlap 键
+   * （硬下发即 code:101 拒整单），故<b>只落库 + 回显</b>——引擎能力
+   * `parserOverlapSupported=false` 时置灰 + 提示「当前引擎版本暂不支持，参数已保留待引擎升级生效」，
+   * 保存照常成功；能力翻转后才参与下发（后端分支不动）。
+   */
+  overlapPercent: number | null;
+  /**
+   * 自动关键字提取数量（T1 切片参数对齐，末位追加）。
+   *
+   * <p>官方 naive schema 键（`parser_config.auto_keywords`），合法区间 `[0, 32]`，
+   * `0` = 关闭，默认 `0`。库级/文件级实测均接受 → <b>随每次 PUT 恒下发</b>（P1f 契约）。
+   */
+  autoKeywords: number | null;
+  /**
+   * 自动问题提取数量（T1 切片参数对齐，末位追加）。
+   *
+   * <p>官方 naive schema 键（`parser_config.auto_questions`），合法区间 `[0, 10]`，
+   * `0` = 关闭，默认 `0`。同样<b>随每次 PUT 恒下发</b>。
+   */
+  autoQuestions: number | null;
 }
 
 /**
@@ -346,10 +387,17 @@ export interface KbLibrary {
 }
 
 /**
- * 知识库删除回执（T04）。
+ * 知识库删除回执（T04；Q1 两段式确认流扩展）。
  *
  * <p>⚠️ `message` **必须原样展示**：默认模式是「归档」，引擎数据一条没删，
  * 前端自行改写成「删除成功」会让管理员误判存储已释放。
+ *
+ * <p>⚠️ `engineMissing === true` 的语义分三种（Q1）：
+ * - `force=false`（默认）返回**提示态**：引擎侧数据集已不存在（可能已在 RAGFlow 控制台
+ *   手工删除），本地数据**未做任何变更**，需用户确认后以 `force=true` 重调；
+ * - `force=true` 返回**已执行**：跳过引擎直接删除/归档了本地数据；
+ * - 本地已不存在 + `force=true` 返回**幂等回执**：无需重复处理。
+ * 前端必须在 `engineSynced` 之前优先处理 `engineMissing` 警示态。
  */
 export interface KbLibraryDeleteResult {
   mode: string | null;
@@ -365,6 +413,13 @@ export interface KbLibraryDeleteResult {
   aclCleaned: number | null;
   /** 面向用户的结论文案，原样展示。 */
   message: string | null;
+  /**
+   * 引擎侧 dataset 已不存在（Q1，末位追加；包装类型可空，`null` 按未缺失处理）。
+   *
+   * <p>为 `true` 且 `docCleaned === 0 && aclCleaned === 0` 时表示提示态
+   * （本地零变更，需确认后 force 重调）；为 `true` 且已清理则表跳过引擎后已执行。
+   */
+  engineMissing: boolean | null;
 }
 
 /**
@@ -412,17 +467,105 @@ export interface KbDocument {
    * <p>来源引擎 `progress_msg`，≤500 字符；成功/重试时后端清空。
    */
   parseError: string | null;
+  /**
+   * 文件级页码索引 / TOC 提取开关（T4，末位追加）；null = 继承库级。
+   *
+   * <p>与库级 `pageIndex` 语义一致（对应 `toc_extraction`），但<b>文件级 PUT 白名单
+   * 不含该键</b>（实测 code:102 拒整单）——只落库 + 回显 + 合并展示，不下发。
+   */
+  pageIndex: boolean | null;
+  /**
+   * 文件级图像/表格上下文窗口 token 数（T4，末位追加）；null = 继承库级。
+   *
+   * <p>合法区间 [1, 4096]（与库级同源）；同 `pageIndex` 只落库不下发。
+   */
+  imageTableContextWindow: number | null;
+  /**
+   * 文件级自动关键字数量（T4，末位追加）；null = 继承库级，0 = 关闭，0~32。
+   *
+   * <p>文件级 PUT 白名单含 `auto_keywords`（实测接受），非空时下发。
+   */
+  autoKeywords: number | null;
+  /**
+   * 文件级自动问题数量（T4，末位追加）；null = 继承库级，0 = 关闭，0~10。
+   *
+   * <p>文件级 PUT 白名单含 `auto_questions`（实测接受），非空时下发。
+   */
+  autoQuestions: number | null;
 }
 
 /**
- * 文件级切片配置（上传/改参请求体；三字段全 null = 继承库级）。
+ * 文件级切片配置（上传/改参请求体；七字段全 null = 继承库级）。
  *
  * <p>「任一字段非空 = 文件指定」，后端据此判定来源徽标（FILE_OVERRIDE / LIBRARY）。
+ *
+ * <p>T4 扩展：`pageIndex` / `imageTableContextWindow` / `autoKeywords` / `autoQuestions`
+ * 与库级同名语义一致（null = 继承库级）。⚠ 文件级 PUT 白名单只含
+ * chunk_token_num/delimiter/auto_keywords/auto_questions——toc/context/overlap 键不下发。
  */
 export interface KbDocumentChunkConfig {
   chunkMethod: string | null;
   chunkTokenNum: number | null;
   separator: string | null;
+  pageIndex: boolean | null;
+  imageTableContextWindow: number | null;
+  autoKeywords: number | null;
+  autoQuestions: number | null;
+}
+
+/** 文档切片单项（「查看文档切分效果」卡片）。 */
+export interface KbDocumentChunk {
+  /** 全局连续序号（从 1 开始，跨页连续）。 */
+  seq: number;
+  /** 清洗后纯文本（引擎 HTML/高亮已剥离，前端直接渲染，杜绝 XSS）。 */
+  content: string;
+  /** 切片所在页码；引擎未提供时为 null。 */
+  pageNo: number | null;
+  /** 清洗后正文字符数。 */
+  characterCount: number;
+  /** 重要关键词（引擎 important_keywords 透传）；引擎未提供时为 null。 */
+  importantKeywords: string[] | null;
+  /** 分片关联图片 id（引擎 image_id）；无图时为 null，经代理端点取 JPEG。 */
+  imageId: string | null;
+}
+
+/** 文档切片统计条（「查看文档切分效果」抽屉顶部）。 */
+export interface KbDocumentChunkStats {
+  /** 关键字过滤后的命中切片数（与响应顶层 total 一致）。 */
+  totalChunks: number;
+  /** 当前页切片清洗后正文合计字符数（标注「本页字符」）。 */
+  totalCharacterCount: number;
+  /** 切片方法（naive/qa/paper/book/laws/presentation/table/picture/one）。 */
+  chunkMethod: string | null;
+  /** 切片 token 数。 */
+  chunkTokenNum: number | null;
+  /** 切片分隔符。 */
+  separator: string | null;
+  /** 来源：FILE_OVERRIDE（文件指定）/ LIBRARY（继承库级）。 */
+  source: 'FILE_OVERRIDE' | 'LIBRARY' | null;
+  /** 文档全量切片数（引擎 doc.chunk_count，不受关键字过滤影响）；可空。 */
+  chunkCount: number | null;
+  /** 文档级总 token 数（引擎 doc.token_count）；可空。 */
+  tokenCount: number | null;
+  /** 生效页码索引 / TOC 提取开关（T4；只展示，文件级不下发）。 */
+  pageIndex: boolean | null;
+  /** 生效图像/表格上下文窗口 token 数（T4；只展示，文件级不下发）。 */
+  imageTableContextWindow: number | null;
+  /** 生效自动关键字数量（T4；0=关闭，0~32）。 */
+  autoKeywords: number | null;
+  /** 生效自动问题数量（T4；0=关闭，0~10）。 */
+  autoQuestions: number | null;
+}
+
+/** 文档切片分页响应（「查看文档切分效果」抽屉）。 */
+export interface KbDocumentChunks {
+  stats: KbDocumentChunkStats;
+  chunks: KbDocumentChunk[];
+  total: number;
+  page: number;
+  pageSize: number;
+  /** 空态提示（解析中/失败/未同步/引擎不可达）；正常态为 null。 */
+  hint: string | null;
 }
 
 /** 文档上传响应。 */
@@ -463,6 +606,8 @@ export interface KbAcl {
   action: string;
   createdAt: string | null;
   updatedAt: string | null;
+  /** 主体名称（BFF 回填；缺失/回填失败为 null，UI 降级展示 ID）。 */
+  subjectName: string | null;
 }
 
 /** ACL 摘要（库详情 / 问答详情的可见范围展示；`subjectName` 由 BFF 回填）。 */
@@ -507,6 +652,8 @@ export interface KbQaSession {
   userId: number | null;
   appId: number | null;
   createdAt: string | null;
+  /** 会话标题（首问前 30 字符）；null 时 UI 兜底展示「会话 #id」。 */
+  title?: string | null;
 }
 
 /** 问答引用（仅含 MIS 业务 ID，不暴露引擎原生 id）。 */
@@ -538,7 +685,11 @@ export interface KbQaMessage {
   citations: KbQaCitation[] | null;
 }
 
-/** 问答反馈（editable_once：首次创建，第二次可改，第三次拒绝）。 */
+/**
+ * 问答反馈（editable_once：首次创建，第二次可改，第三次拒绝）。
+ *
+ * <p>V43 起增反馈处理状态五字段，与 mis-kb `KbQaFeedbackVO` 严格同名。
+ */
 export interface KbQaFeedback {
   id: number;
   sessionId: number;
@@ -546,7 +697,20 @@ export interface KbQaFeedback {
   helpful: number | null;
   offtopic: number | null;
   citeError: number | null;
+  /** 反馈处理状态：pending 待处理 / handled 已处理 / ignored 已忽略。 */
+  feedbackStatus: string | null;
+  /** 处理人 userId（运营侧标记）。 */
+  handlerId: number | null;
+  /** 处理人姓名冗余。 */
+  handlerName: string | null;
+  /** 处理时间（ISO-8601）。 */
+  handledAt: string | null;
+  /** 处理备注。 */
+  handleNote: string | null;
 }
+
+/** 反馈处理状态（KB 与 Agent 共用语义：pending → handled/ignored 单向终态）。 */
+export type KbFeedbackStatus = 'pending' | 'handled' | 'ignored';
 
 /** 会话可见范围快照（A-02a）。 */
 export interface KbVisibility {
@@ -588,6 +752,24 @@ export interface KbQaSessionListItem {
   hasFeedback: boolean | null;
   accuracy: number | null;
   helpful: number | null;
+  /** 跑题评分；未反馈为 null。 */
+  offtopic: number | null;
+  /** 引用错误评分；未反馈为 null。 */
+  citeError: number | null;
+  /** 评价结果：positive 好评 / negative 差评 / null 未反馈或未判定。 */
+  sentiment: string | null;
+  /** 反馈处理状态：pending/handled/ignored；未反馈为 null。 */
+  feedbackStatus: string | null;
+  /** 该会话最新工单状态；无工单为 null。 */
+  ticketStatus: string | null;
+}
+
+/** 反馈处理请求体（OP-05）。 */
+export interface KbFeedbackProcessPayload {
+  /** handled 已处理 / ignored 已忽略；pending → handled/ignored 单向终态。 */
+  status: 'handled' | 'ignored';
+  /** 处理备注；可空。 */
+  note?: string | null;
 }
 
 /** 看板日趋势点（A-02b/d）。 */
@@ -655,11 +837,13 @@ export interface KbDashboard {
   citeErrorCount: number | null;
   openTickets: number | null;
   totalTickets: number | null;
+  /** 待处理反馈数（feedback_status=pending，OP-05）。 */
+  pendingFeedback: number | null;
   /** 参与好评/差评判定的反馈数。 */
   ratedCount: number | null;
   /** 好评数（综合分 >= 4）。 */
   positiveCount: number | null;
-  /** 差评数（综合分 <= 2）。 */
+  /** 差评数（综合分 <= 2 或 offtopic>0 或 citeError>0，与列表 sentiment 筛选同源）。 */
   negativeCount: number | null;
   /** 好评率（0~1，两位小数）；无评分为 null。 */
   positiveRate: number | null;
@@ -769,6 +953,19 @@ export interface KbEngineCapabilities {
    * 置灰 + 提示「当前引擎版本暂不支持」，保存期后端强制关、检索期降级基础检索。
    */
   raptorSupported: boolean | null;
+  /**
+   * 当前引擎是否接受 dataset PUT 的 `toc_extraction`（页码索引/TOC）。
+   *
+   * <p>由 mis-kb 配置闸门 {@code parser-toc-supported} 决定（integration 默认 true）。
+   * 非 true 时前端置灰页码索引开关并提示「参数已保留待引擎升级生效」。
+   */
+  parserTocSupported: boolean | null;
+  /**
+   * 当前引擎是否接受 dataset PUT 的 `image_table_context_window`。
+   *
+   * <p>口径同 `parserTocSupported`（{@code parser-image-table-context-supported}，默认 true）。
+   */
+  parserImageTableContextSupported: boolean | null;
 }
 
 // --------------------------------------------------------------- 引擎对账（T04）
@@ -1362,6 +1559,62 @@ export function ticketTypeLabel(type: string | null | undefined): string {
 /** 工单关联动作中文名。 */
 export function ticketRelActionLabel(action: string | null | undefined): string {
   return KB_TICKET_REL_ACTION_OPTIONS.find((o) => o.value === action)?.label ?? action ?? '-';
+}
+
+// --------------------------------------------------------------- 反馈运营展示常量（OP-01/OP-02/OP-05）
+
+/**
+ * 评价结果筛选项（OP-01 团队拍板四项：全部/好评/差评/未评价）。
+ *
+ * <p>后端保留 `hasFeedback` 兼容「已评价/未评价」；`sentiment` 只承载
+ * positive/negative 两个业务值（null = 全部）。「未评价」由前端映射成
+ * `hasFeedback=false`，不发 sentiment。
+ */
+export const KB_QA_SENTIMENT_OPTIONS: { value: string; label: string }[] = [
+  { value: '', label: '全部' },
+  { value: 'positive', label: '好评' },
+  { value: 'negative', label: '差评' },
+  { value: 'unrated', label: '未评价' },
+];
+
+/**
+ * 评价结果徽标口径（OP-02）。
+ *
+ * <p>好评 = 绿「好评」；差评 = 红「吐槽」；未反馈/未判定 = 灰「未评价」。
+ * 未知值原样回显，不吞。
+ */
+export const KB_QA_SENTIMENT_META: Record<
+  string,
+  { label: string; variant: 'success' | 'destructive' | 'secondary' }
+> = {
+  positive: { label: '好评', variant: 'success' },
+  negative: { label: '吐槽', variant: 'destructive' },
+};
+
+/** 评价结果中文名（null/空 = 未评价）。 */
+export function qaSentimentLabel(sentiment: string | null | undefined): string {
+  if (!sentiment) return '未评价';
+  return KB_QA_SENTIMENT_META[sentiment]?.label ?? sentiment;
+}
+
+/**
+ * 反馈处理状态徽标口径（OP-02/OP-05）。
+ *
+ * <p>三态：pending 待处理（黄）/ handled 已处理（绿）/ ignored 已忽略（灰）。
+ */
+export const KB_FEEDBACK_STATUS_META: Record<
+  string,
+  { label: string; variant: 'warning' | 'success' | 'secondary' }
+> = {
+  pending: { label: '待处理', variant: 'warning' },
+  handled: { label: '已处理', variant: 'success' },
+  ignored: { label: '已忽略', variant: 'secondary' },
+};
+
+/** 反馈处理状态中文名（未知码值原样回显）。 */
+export function feedbackStatusLabel(status: string | null | undefined): string {
+  if (!status) return '-';
+  return KB_FEEDBACK_STATUS_META[status]?.label ?? status;
 }
 
 /** 空结果策略中文名。 */

@@ -1,12 +1,14 @@
 import { useCallback, useEffect, useState } from 'react';
-import { ListRestart, Power, RefreshCw, RotateCw, Settings2, Trash2, Upload } from 'lucide-react';
+import { Eye, ListRestart, Power, RefreshCw, RotateCw, Settings2, Trash2, Upload } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
+import { ResetColWidthButton } from '@/components/common/header-action-buttons';
 import { Badge } from '@/components/ui/badge';
 import { PermissionGate } from '@/components/auth/permission-gate';
 import { EnabledBadge, ParseStatusBadge } from '../components/kb-badges';
 import { KbDocumentUploadDialog } from '../components/kb-document-upload-dialog';
 import { KbDocChunkDialog } from '../components/kb-doc-chunk-dialog';
+import { KbDocChunkViewDrawer } from '../components/kb-doc-chunk-view-drawer';
 import { SortIndicator } from '@/components/common/sort-indicator';
 import { useClientSort } from '@/components/common/use-client-sort';
 import { useColumnWidths, type ResizableColumn } from '@/components/common/use-column-widths';
@@ -100,6 +102,8 @@ export function KbDocumentTable({
   const [uploadOpen, setUploadOpen] = useState(false);
   const [chunkDoc, setChunkDoc] = useState<KbDocument | null>(null);
   const [chunkOpen, setChunkOpen] = useState(false);
+  const [viewDoc, setViewDoc] = useState<KbDocument | null>(null);
+  const [viewOpen, setViewOpen] = useState(false);
   const [reparsingAll, setReparsingAll] = useState(false);
   const [reparsingFailed, setReparsingFailed] = useState(false);
 
@@ -185,6 +189,11 @@ export function KbDocumentTable({
   function openChunkDialog(doc: KbDocument) {
     setChunkDoc(doc);
     setChunkOpen(true);
+  }
+
+  function openChunkView(doc: KbDocument) {
+    setViewDoc(doc);
+    setViewOpen(true);
   }
 
   async function onToggleEnabled(doc: KbDocument) {
@@ -345,11 +354,7 @@ export function KbDocumentTable({
             <RefreshCw className="h-4 w-4" />
             刷新
           </Button>
-          {hasCustom ? (
-            <Button size="sm" variant="ghost" onClick={resetWidths}>
-              重置列宽
-            </Button>
-          ) : null}
+          {hasCustom ? <ResetColWidthButton onClick={resetWidths} /> : null}
           <span className="text-xs text-muted-foreground">
             单文件不超过 {formatSize(50 * 1024 * 1024)}
           </span>
@@ -360,6 +365,7 @@ export function KbDocumentTable({
         open={uploadOpen}
         onOpenChange={setUploadOpen}
         libraryId={libraryId}
+        librarySettings={librarySettings}
         onUploaded={() => void load(libraryId)}
       />
       <KbDocChunkDialog
@@ -369,6 +375,12 @@ export function KbDocumentTable({
         doc={chunkDoc}
         librarySettings={librarySettings}
         onUpdated={() => void load(libraryId)}
+      />
+      <KbDocChunkViewDrawer
+        open={viewOpen}
+        onOpenChange={setViewOpen}
+        libraryId={libraryId}
+        doc={viewDoc}
       />
 
       <div
@@ -465,6 +477,17 @@ export function KbDocumentTable({
                   </td>
                   <td className="whitespace-nowrap px-3 py-2">
                     <div className="flex items-center gap-1">
+                      <PermissionGate permission="kb:document:list">
+                        <button
+                          type="button"
+                          className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[0.8125rem] text-primary hover:bg-primary/10"
+                          onClick={() => openChunkView(doc)}
+                          title="查看该文档的切片结果（只读）"
+                        >
+                          <Eye className="h-3 w-3" />
+                          查看切分
+                        </button>
+                      </PermissionGate>
                       <PermissionGate permission="kb:document:edit">
                         <button
                           type="button"

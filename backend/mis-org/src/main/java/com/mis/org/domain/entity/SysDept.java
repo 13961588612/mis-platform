@@ -49,6 +49,18 @@ public class SysDept {
     @Column(name = "leader_employee_id")
     private Long leaderEmployeeId;
 
+    /** V40 新增：手工对应组织（穿透锚点，NULL=无） */
+    @Column(name = "linked_org_id")
+    private Long linkedOrgId;
+
+    /** 部门类型 id（逻辑关联 sys_dept_type.id；NULL=未设置，应用层必填） */
+    @Column(name = "dept_type_id")
+    private Long deptTypeId;
+
+    /** 部门编制数 / headcount 配额（NULL=未设置，默认 0） */
+    @Column(name = "establishment_count")
+    private Integer establishmentCount;
+
     @Column(nullable = false)
     private Integer deleted;
 
@@ -88,6 +100,12 @@ public class SysDept {
     public void setIsRoot(Integer isRoot) { this.isRoot = isRoot; }
     public Long getLeaderEmployeeId() { return leaderEmployeeId; }
     public void setLeaderEmployeeId(Long leaderEmployeeId) { this.leaderEmployeeId = leaderEmployeeId; }
+    public Long getLinkedOrgId() { return linkedOrgId; }
+    public void setLinkedOrgId(Long linkedOrgId) { this.linkedOrgId = linkedOrgId; }
+    public Long getDeptTypeId() { return deptTypeId; }
+    public void setDeptTypeId(Long deptTypeId) { this.deptTypeId = deptTypeId; }
+    public Integer getEstablishmentCount() { return establishmentCount; }
+    public void setEstablishmentCount(Integer establishmentCount) { this.establishmentCount = establishmentCount; }
     public Integer getDeleted() { return deleted; }
     public void setDeleted(Integer deleted) { this.deleted = deleted; }
     public Long getCreatedBy() { return createdBy; }

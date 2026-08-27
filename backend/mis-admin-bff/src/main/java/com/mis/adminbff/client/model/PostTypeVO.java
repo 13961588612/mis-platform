@@ -9,5 +9,8 @@ public record PostTypeVO(
         String code,
         String name,
         Integer sort,
-        Integer status
+        Integer status,
+        Integer referenceCount,
+        String parentId,
+        Integer isLeaf
 ) {}

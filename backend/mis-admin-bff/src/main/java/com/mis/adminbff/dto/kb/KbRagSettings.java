@@ -13,6 +13,12 @@ package com.mis.adminbff.dto.kb;
  * {@code raptorThreshold} / {@code raptorMaxCluster} / {@code raptorPrompt} /
  * {@code raptorBuildStatus} / {@code raptorBuildMessage}（RAPTOR 七字段，零 DDL 进
  * rag_settings_json）。
+ * 解析器增量（T01）末位追加 {@code pageIndex} / {@code imageTableContextWindow}——
+ * 对应 RAGFlow parser_config 官方键 {@code toc_extraction}（布尔，默认 true）与
+ * {@code image_table_context_window}（整数，默认 256），随每次 PUT 恒下发。
+ * RAG 切片参数对齐（T1）末位追加 {@code overlapPercent} / {@code autoKeywords} /
+ * {@code autoQuestions}——overlap 当前引擎不支持（只落库不下发，能力翻转后才放行）；
+ * 两个 auto 键为官方 naive schema 键，随每次 PUT 恒下发。
  * <b>本层不做默认值补齐</b>——默认值只在 mis-kb 一处定义，BFF 再补一遍必然出现两套默认值漂移。
  *
  * @param topK                召回条数
@@ -39,6 +45,11 @@ package com.mis.adminbff.dto.kb;
  * @param raptorPrompt        RAPTOR 递归摘要提示词（≤2000）（Wave C RAPTOR 新增）
  * @param raptorBuildStatus   RAPTOR 构建状态 none|building|ready|failed；服务端维护（Wave C RAPTOR 新增）
  * @param raptorBuildMessage  RAPTOR 构建消息摘要（≤200；ready 时清空）（Wave C RAPTOR 新增）
+ * @param pageIndex           页码索引/TOC 提取开关（默认 true）；下发 parser_config.toc_extraction（解析器增量新增）
+ * @param imageTableContextWindow 图像/表格上下文窗口 token 数 [1,4096]，默认 256；下发 parser_config.image_table_context_window（解析器增量新增）
+ * @param overlapPercent      重叠百分比 [0,100]，默认 0；能力 parser_overlap=true 前不下发（T1 切片参数对齐新增）
+ * @param autoKeywords        自动关键字提取数量（0=关闭，0~32，默认 0）；下发 parser_config.auto_keywords（T1 切片参数对齐新增）
+ * @param autoQuestions       自动问题提取数量（0=关闭，0~10，默认 0）；下发 parser_config.auto_questions（T1 切片参数对齐新增）
  */
 public record KbRagSettings(
         Integer topK,
@@ -64,5 +75,10 @@ public record KbRagSettings(
         Integer raptorMaxCluster,
         String raptorPrompt,
         String raptorBuildStatus,
-        String raptorBuildMessage) {
+        String raptorBuildMessage,
+        Boolean pageIndex,
+        Integer imageTableContextWindow,
+        Double overlapPercent,
+        Integer autoKeywords,
+        Integer autoQuestions) {
 }

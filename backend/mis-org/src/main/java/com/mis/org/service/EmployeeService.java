@@ -10,16 +10,21 @@ import com.mis.org.domain.entity.SysDept;
 import com.mis.org.domain.entity.SysEmployee;
 import com.mis.org.domain.entity.SysEmployeeDept;
 import com.mis.org.domain.entity.SysEmployeePost;
+import com.mis.org.domain.entity.SysOrg;
 import com.mis.org.domain.entity.SysPost;
 import com.mis.org.domain.repository.SysDeptRepository;
 import com.mis.org.domain.repository.SysEmployeeDeptRepository;
 import com.mis.org.domain.repository.SysEmployeePostRepository;
 import com.mis.org.domain.repository.SysEmployeeRepository;
+import com.mis.org.domain.repository.SysOrgRepository;
 import com.mis.org.domain.repository.SysPostRepository;
+import com.mis.org.client.OrgIamClient;
 import com.mis.org.dto.EmployeeCreateRequest;
 import com.mis.org.dto.EmployeePostItem;
 import com.mis.org.dto.EmployeePostVO;
 import com.mis.org.dto.EmployeeUpdateRequest;
+import com.mis.org.dto.EmployeePhoneMatchPostVO;
+import com.mis.org.dto.EmployeePhoneMatchVO;
 import com.mis.org.dto.EmployeeVO;
 import com.mis.org.support.IdGenerator;
 import org.springframework.data.jpa.domain.Specification;
@@ -43,7 +48,9 @@ public class EmployeeService {
     private final SysEmployeeDeptRepository employeeDeptRepository;
     private final SysEmployeePostRepository employeePostRepository;
     private final SysPostRepository postRepository;
+    private final SysOrgRepository orgRepository;
     private final DataScopeService dataScopeService;
+    private final OrgIamClient orgIamClient;
 
     public EmployeeService(
             SysEmployeeRepository employeeRepository,
@@ -51,13 +58,17 @@ public class EmployeeService {
             SysEmployeeDeptRepository employeeDeptRepository,
             SysEmployeePostRepository employeePostRepository,
             SysPostRepository postRepository,
-            DataScopeService dataScopeService) {
+            SysOrgRepository orgRepository,
+            DataScopeService dataScopeService,
+            OrgIamClient orgIamClient) {
         this.employeeRepository = employeeRepository;
         this.deptRepository = deptRepository;
         this.employeeDeptRepository = employeeDeptRepository;
         this.employeePostRepository = employeePostRepository;
         this.postRepository = postRepository;
+        this.orgRepository = orgRepository;
         this.dataScopeService = dataScopeService;
+        this.orgIamClient = orgIamClient;
     }
 
     @Transactional(readOnly = true)
@@ -129,19 +140,69 @@ public class EmployeeService {
     }
 
     /**
-     * 员工全量列表（含禁用员工；realName 模糊；deptId/status 可选）。
+     * 员工全量列表（含禁用员工；realName 模糊；deptId/deptIds/orgIds/status 可选）。
      * 不叠加 DataScope：系统管理页按租户全量展示。
+     *
+     * <p>部门过滤语义：
+     * <ul>
+     *   <li>单值 {@code deptId} 视为 {@code deptIds=[deptId]}（保留兼容）；</li>
+     *   <li>{@code orgIds} 经 {@code deptRepository.findByOrgId} 反查部门集合（并集）；</li>
+     *   <li>{@code deptIds} 与组织反查部门集合默认取<b>交集</b>（与岗位 POST-04 一致）；</li>
+     *   <li>两者都空 → 不过滤部门。</li>
+     * </ul>
      */
     @Transactional(readOnly = true)
-    public List<EmployeeVO> listAll(Long tenantId, String realName, Long deptId, Integer status) {
+    public List<EmployeeVO> listAll(Long tenantId, String realName, Long deptId,
+                                    List<Long> deptIds, List<Long> orgIds, Integer status) {
+        // 向后兼容旧调用（不按手机号过滤）
+        return listAll(tenantId, realName, null, deptId, deptIds, orgIds, status);
+    }
+
+    @Transactional(readOnly = true)
+    public List<EmployeeVO> listAll(Long tenantId, String realName, String phone, Long deptId,
+                                    List<Long> deptIds, List<Long> orgIds, Integer status) {
+        // 组织集合 → 部门集合（经 sys_dept.org_id 反查，POST-03 精确匹配所选组织）
+        Set<Long> orgDeptIds = null;
+        if (orgIds != null && !orgIds.isEmpty()) {
+            orgDeptIds = orgIds.stream()
+                    .flatMap(orgId -> deptRepository.findByOrgId(orgId).stream())
+                    .map(SysDept::getId)
+                    .collect(Collectors.toSet());
+        }
+        // 直接部门集合：兼容单值 deptId + 多值 deptIds（并集）
+        Set<Long> directDeptIds = null;
+        if (deptIds != null && !deptIds.isEmpty()) {
+            directDeptIds = new HashSet<>(deptIds);
+            if (deptId != null) {
+                directDeptIds.add(deptId);
+            }
+        } else if (deptId != null) {
+            directDeptIds = Set.of(deptId);
+        }
+        // 默认交集：组织反查部门 ∩ 直接部门
+        final Set<Long> allowedDeptIds;
+        if (orgDeptIds != null && directDeptIds != null) {
+            allowedDeptIds = orgDeptIds.stream().filter(directDeptIds::contains).collect(Collectors.toSet());
+        } else if (orgDeptIds != null) {
+            allowedDeptIds = orgDeptIds;
+        } else if (directDeptIds != null) {
+            allowedDeptIds = directDeptIds;
+        } else {
+            allowedDeptIds = null;
+        }
+
+        final Set<Long> allowed = allowedDeptIds;
         Specification<SysEmployee> spec = (root, query, cb) -> {
             List<jakarta.persistence.criteria.Predicate> ps = new ArrayList<>();
             ps.add(cb.equal(root.get("tenantId"), tenantId));
             if (org.springframework.util.StringUtils.hasText(realName)) {
                 ps.add(cb.like(root.get("realName"), "%" + realName.trim() + "%"));
             }
-            if (deptId != null) {
-                ps.add(cb.equal(root.get("deptId"), deptId));
+            if (org.springframework.util.StringUtils.hasText(phone)) {
+                ps.add(cb.equal(root.get("phone"), phone.trim()));
+            }
+            if (allowed != null) {
+                ps.add(root.get("deptId").in(allowed));
             }
             if (status != null) {
                 ps.add(cb.equal(root.get("status"), status));
@@ -160,12 +221,97 @@ public class EmployeeService {
                 .collect(Collectors.toMap(SysEmployee::getId, SysEmployee::getRealName, (a, b) -> a));
     }
 
+    /**
+     * 按精确手机号查员工（新建用户时检测是否已存在员工，Req2）。
+     * 返回轻量视图（含主部门/组织名），便于前端提示"绑定/手动选择"。
+     */
+    @Transactional(readOnly = true)
+    public List<EmployeePhoneMatchVO> listByPhone(Long tenantId, String phone) {
+        if (!org.springframework.util.StringUtils.hasText(phone)) {
+            return List.of();
+        }
+        List<SysEmployee> emps = employeeRepository.findAllByTenantIdAndPhone(tenantId, phone.trim());
+        return emps.stream().map(this::toPhoneMatchVo).toList();
+    }
+
+    private EmployeePhoneMatchVO toPhoneMatchVo(SysEmployee emp) {
+        String deptId = emp.getDeptId() != null ? String.valueOf(emp.getDeptId()) : null;
+        String deptName = null;
+        String orgName = null;
+        if (emp.getDeptId() != null) {
+            SysDept dept = deptRepository.findById(emp.getDeptId()).orElse(null);
+            if (dept != null) {
+                deptName = dept.getName();
+                if (dept.getOrgId() != null) {
+                    SysOrg org = orgRepository.findById(dept.getOrgId()).orElse(null);
+                    orgName = org != null ? org.getName() : null;
+                }
+            }
+        }
+        List<EmployeePhoneMatchPostVO> posts = toMatchPostVos(emp);
+        return new EmployeePhoneMatchVO(
+                String.valueOf(emp.getId()),
+                emp.getRealName(),
+                deptId,
+                deptName,
+                orgName,
+                posts);
+    }
+
+    /** 解析员工任职岗位（部门/组织/岗位名）用于「按手机查员工」绑定提示（Req2：展示岗位情况）。 */
+    private List<EmployeePhoneMatchPostVO> toMatchPostVos(SysEmployee emp) {
+        List<SysEmployeePost> activePosts = employeePostRepository.findByEmployeeIdAndStatus(emp.getId(), 1);
+        if (activePosts.isEmpty()) {
+            return List.of();
+        }
+        Set<Long> postIds = activePosts.stream().map(SysEmployeePost::getPostId).collect(Collectors.toSet());
+        Map<Long, SysPost> postMap = postRepository.findAllById(postIds).stream()
+                .collect(Collectors.toMap(SysPost::getId, p -> p, (a, b) -> a));
+        Set<Long> involvedDeptIds = new HashSet<>();
+        if (emp.getDeptId() != null) {
+            involvedDeptIds.add(emp.getDeptId());
+        }
+        for (SysEmployeePost ep : activePosts) {
+            SysPost p = postMap.get(ep.getPostId());
+            if (p != null && p.getDeptId() != null) {
+                involvedDeptIds.add(p.getDeptId());
+            }
+        }
+        Map<Long, SysDept> deptMap = deptRepository.findAllById(involvedDeptIds).stream()
+                .collect(Collectors.toMap(SysDept::getId, d -> d, (a, b) -> a));
+        Map<Long, SysOrg> orgMap = orgRepository.findAllById(
+                        deptMap.values().stream().map(SysDept::getOrgId).filter(Objects::nonNull).collect(Collectors.toSet()))
+                .stream().collect(Collectors.toMap(SysOrg::getId, o -> o, (a, b) -> a));
+        return activePosts.stream()
+                .map(ep -> {
+                    SysPost p = postMap.get(ep.getPostId());
+                    Long postDeptId = p != null ? p.getDeptId() : null;
+                    return new EmployeePhoneMatchPostVO(
+                            postDeptId != null ? String.valueOf(postDeptId) : null,
+                            deptNameFromMap(postDeptId, deptMap),
+                            orgNameOf(postDeptId, deptMap, orgMap),
+                            String.valueOf(ep.getPostId()),
+                            p != null ? p.getName() : null,
+                            ep.getIsPrimary());
+                })
+                .toList();
+    }
+
     @Transactional
     public EmployeeVO create(EmployeeCreateRequest request) {
         employeeRepository.findByTenantIdAndEmployeeNo(request.tenantId(), request.employeeNo())
                 .ifPresent(e -> {
                     throw new BusinessException(ResultCode.EMPLOYEE_NO_EXISTS);
                 });
+        boolean builtin = request.isBuiltin() != null && request.isBuiltin() == 1;
+        if (!builtin) {
+            if (request.phone() == null || request.phone().isBlank()) {
+                throw new BusinessException(ResultCode.VALIDATION_ERROR, "请输入手机号");
+            }
+            if (employeeRepository.findByTenantIdAndPhone(request.tenantId(), request.phone()).isPresent()) {
+                throw new BusinessException(ResultCode.EMPLOYEE_PHONE_EXISTS, "手机号 " + request.phone() + " 已存在");
+            }
+        }
         Long primaryDeptId = resolvePrimaryDept(request.deptId(), request.deptIds());
         requireDept(request.tenantId(), primaryDeptId);
 
@@ -178,6 +324,7 @@ public class EmployeeService {
         emp.setRealName(request.realName());
         emp.setEmail(request.email());
         emp.setPhone(request.phone());
+        emp.setIsBuiltin(request.isBuiltin() != null ? request.isBuiltin() : 0);
         emp.setGender(request.gender());
         emp.setTitle(request.title());
         emp.setHireDate(request.hireDate());
@@ -197,6 +344,16 @@ public class EmployeeService {
         SysEmployee emp = employeeRepository.findById(id)
                 .orElseThrow(() -> new BusinessException(ResultCode.NOT_FOUND, "员工不存在"));
         emp.setRealName(request.realName());
+        boolean builtin = (emp.getIsBuiltin() != null && emp.getIsBuiltin() == 1)
+                || (request.isBuiltin() != null && request.isBuiltin() == 1);
+        if (request.phone() != null && !request.phone().isBlank() && !builtin) {
+            if (employeeRepository.existsByTenantIdAndPhoneAndIdNot(emp.getTenantId(), request.phone(), emp.getId())) {
+                throw new BusinessException(ResultCode.EMPLOYEE_PHONE_EXISTS, "手机号 " + request.phone() + " 已存在");
+            }
+        }
+        if (request.isBuiltin() != null) {
+            emp.setIsBuiltin(request.isBuiltin());
+        }
         if (request.email() != null) {
             emp.setEmail(request.email());
         }
@@ -230,6 +387,11 @@ public class EmployeeService {
 
         emp.setUpdatedAt(now);
         employeeRepository.save(emp);
+
+        // Req4：员工姓名/手机/状态变更 → 反向同步绑定用户（禁用级联、恢复不级联）
+        if (request.realName() != null || request.phone() != null || request.status() != null) {
+            orgIamClient.syncByEmployee(emp.getId(), emp.getRealName(), emp.getPhone(), emp.getStatus());
+        }
         return toVo(emp);
     }
 
@@ -249,11 +411,15 @@ public class EmployeeService {
         return Objects.requireNonNull(singleDeptId, "主部门不能为空");
     }
 
+    /**
+     * 全量覆盖任职部门。delete + flush 必须先于 INSERT，避免同事务撞 uk_emp_dept。
+     */
     private void saveEmployeeDepts(Long tenantId, Long empId, List<Long> deptIds, Long fallbackDeptId, Instant now) {
         List<Long> ids = (deptIds != null && !deptIds.isEmpty())
                 ? deptIds
                 : (fallbackDeptId != null ? List.of(fallbackDeptId) : List.of());
         employeeDeptRepository.deleteByEmployeeId(empId);
+        employeeDeptRepository.flush();
         List<SysEmployeeDept> rows = new ArrayList<>();
         for (int i = 0; i < ids.size(); i++) {
             SysEmployeeDept ed = new SysEmployeeDept();
@@ -271,9 +437,14 @@ public class EmployeeService {
         }
     }
 
+    /**
+     * 全量覆盖任职岗位。delete + flush 必须先于 INSERT，避免同事务撞 uk_emp_post
+     *（Hibernate 可能把 INSERT 排在派生 DELETE 之前）。
+     */
     private void saveEmployeePosts(Long tenantId, Long empId, List<EmployeePostItem> posts, Instant now) {
         if (posts == null) return;
         employeePostRepository.deleteByEmployeeId(empId);
+        employeePostRepository.flush();
         List<SysEmployeePost> rows = new ArrayList<>();
         for (int i = 0; i < posts.size(); i++) {
             EmployeePostItem item = posts.get(i);
@@ -307,14 +478,40 @@ public class EmployeeService {
 
     private EmployeeVO toVo(SysEmployee emp) {
         List<Long> deptIds = employeeDeptRepository.findActiveDeptIds(emp.getId());
-        List<EmployeePostVO> postVos = employeePostRepository.findByEmployeeIdAndStatus(emp.getId(), 1).stream()
+        List<SysEmployeePost> activePosts = employeePostRepository.findByEmployeeIdAndStatus(emp.getId(), 1);
+        // R1：一次性收集全部涉及部门（主部门 + 各任职部门），批量预取 dept / org，消除 N+1
+        Set<Long> postIds = activePosts.stream().map(SysEmployeePost::getPostId).collect(Collectors.toSet());
+        Map<Long, SysPost> postMap = postRepository.findAllById(postIds).stream()
+                .collect(Collectors.toMap(SysPost::getId, p -> p, (a, b) -> a));
+        Set<Long> involvedDeptIds = new HashSet<>();
+        if (emp.getDeptId() != null) {
+            involvedDeptIds.add(emp.getDeptId());
+        }
+        for (SysEmployeePost ep : activePosts) {
+            SysPost p = postMap.get(ep.getPostId());
+            if (p != null && p.getDeptId() != null) {
+                involvedDeptIds.add(p.getDeptId());
+            }
+        }
+        Map<Long, SysDept> deptMap = deptRepository.findAllById(involvedDeptIds).stream()
+                .collect(Collectors.toMap(SysDept::getId, d -> d, (a, b) -> a));
+        Set<Long> orgIdsSet = deptMap.values().stream()
+                .map(SysDept::getOrgId)
+                .filter(Objects::nonNull)
+                .collect(Collectors.toSet());
+        Map<Long, SysOrg> orgMap = orgRepository.findAllById(orgIdsSet).stream()
+                .collect(Collectors.toMap(SysOrg::getId, o -> o, (a, b) -> a));
+
+        List<EmployeePostVO> postVos = activePosts.stream()
                 .map(ep -> {
-                    SysPost p = postRepository.findById(ep.getPostId()).orElse(null);
+                    SysPost p = postMap.get(ep.getPostId());
+                    Long postDeptId = p != null ? p.getDeptId() : null;
                     return new EmployeePostVO(
                             String.valueOf(ep.getPostId()),
                             p != null ? p.getName() : null,
-                            p != null ? String.valueOf(p.getDeptId()) : null,
-                            p != null ? deptName(p.getDeptId()) : null,
+                            postDeptId != null ? String.valueOf(postDeptId) : null,
+                            deptNameFromMap(postDeptId, deptMap),
+                            orgNameOf(postDeptId, deptMap, orgMap),
                             ep.getIsPrimary(),
                             ep.getStatus(),
                             ep.getStartDate() != null ? ep.getStartDate().toString() : null);
@@ -326,6 +523,7 @@ public class EmployeeService {
                 String.valueOf(emp.getDeptId()),
                 deptIds.stream().map(String::valueOf).toList(),
                 String.valueOf(emp.getDeptId()),
+                orgNameOf(emp.getDeptId(), deptMap, orgMap),
                 postVos,
                 emp.getEmployeeNo(),
                 emp.getRealName(),
@@ -335,11 +533,24 @@ public class EmployeeService {
                 emp.getTitle(),
                 emp.getHireDate(),
                 emp.getStatus(),
+                emp.getIsBuiltin(),
                 emp.getCreatedAt(),
                 emp.getUpdatedAt());
     }
 
-    private String deptName(Long deptId) {
-        return deptRepository.findById(deptId).map(SysDept::getName).orElse(null);
+    /** 经批量 deptMap 取部门名（避免逐条查库）。 */
+    private String deptNameFromMap(Long deptId, Map<Long, SysDept> deptMap) {
+        if (deptId == null) return null;
+        SysDept dept = deptMap.get(deptId);
+        return dept != null ? dept.getName() : null;
+    }
+
+    /** 经 deptMap → orgMap 解析部门所属组织名；脏数据（dept.orgId 为 null 或 org 不在 orgMap）→ null。 */
+    private String orgNameOf(Long deptId, Map<Long, SysDept> deptMap, Map<Long, SysOrg> orgMap) {
+        if (deptId == null) return null;
+        SysDept dept = deptMap.get(deptId);
+        if (dept == null || dept.getOrgId() == null) return null;
+        SysOrg org = orgMap.get(dept.getOrgId());
+        return org != null ? org.getName() : null;
     }
 }

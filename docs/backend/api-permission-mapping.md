@@ -79,14 +79,20 @@ WHERE ur.user_id = ? AND m.app_id = ?
 | 用户管理(菜单页) | system:user:list | GET /api/v1/users |
 | 用户管理(菜单页) | system:user:list | GET /api/v1/orgs/tree |
 | 新增用户(按钮) | system:user:add | POST /api/v1/users |
+| 新增用户(按钮) | system:user:add | GET /api/v1/users/employees/by-phone |
+| 新增用户(按钮) | system:user:add | GET /api/v1/users/check-employee-binding |
 | 编辑用户(按钮) | system:user:edit | GET /api/v1/users/{id} |
 | 编辑用户(按钮) | system:user:edit | PUT /api/v1/users/{id} |
+| 编辑用户(按钮) | system:user:edit | GET /api/v1/users/employees/by-phone |
+| 编辑用户(按钮) | system:user:edit | GET /api/v1/users/check-employee-binding |
 
 ### 3.3 sys_api 树（元数据，节选）
 
 | code | type | http_method | path_pattern | module |
 |------|------|-------------|--------------|--------|
 | 000100010001 | api | GET | /api/v1/users | mis-iam |
+| 000100010004 | api | GET | /api/v1/users/employees/by-phone | mis-iam（V59） |
+| 000100010005 | api | GET | /api/v1/users/check-employee-binding | mis-iam（V59） |
 | 000100020001 | api | POST | /api/v1/users | mis-iam |
 
 ### 3.4 知识库（mis-kb / mis-admin-bff）
@@ -169,6 +175,20 @@ WHERE ur.user_id = ? AND m.app_id = ?
 | WRITE-02 | 91150 | 00900066 | POST | `/api/v1/kb/qa/feedback` | 提交问答反馈 | `kb:qa:feedback` | 91051 |
 | WRITE-03 | 91151 | 00900067 | POST | `/api/v1/kb/operations/qa/tickets` | 创建问答工单 | `kb:qa:ask` | 91036 |
 | WRITE-04 | 91152 | 00900068 | PATCH | `/api/v1/kb/operations/qa/tickets/{ticketId}` | 处理问答工单 | `kb:operation:list` | 91037 |
+
+### 3.5.1 附属资源权限并集（V67）
+
+> **规则（可复用，不写死单条 URL）**：答案/会话/管理台中「带出来」的附属内容（如分片配图），
+> **可读门槛 = 能让该内容出现的入口权限的并集（任一即可）**；库级 ACL 仍由 mis-kb 裁定。
+> 实现：同一 `sys_api` 挂多条 `sys_menu_api`；BFF Registry 已对命中规则做 permissions 并集；
+> Controller 兜底用 `requireAnyPermission`，与注册表一致。
+
+| 端点 | path_pattern | 并集权限码 | 菜单 |
+|------|--------------|------------|------|
+| 分片配图 | `GET /api/v1/kb/libraries/{libraryId:[0-9]+}/documents/{id:[0-9]+}/chunk-images/{imageId}` | `kb:document:list` ∪ `kb:qa:ask` ∪ `agent:chat:use` | 91034 / 91036 / 92032 |
+
+> 迁移：`V67__kb_chunk_image_derived_resource_perms.sql`（纠正 path + 兜底 sys_api + menu_api `92180–92182`）。
+> **path 约定**：数字主键用 `{id:[0-9]+}`；单段不透明 token 用 `{imageId}`；多段相对路径用 `/**`（AntPathMatcher；`{var}` 只匹配单段）。
 
 ### 3.6 接口模块 V35 补登 10 端点（差集清零，SEC-02 收尾）
 

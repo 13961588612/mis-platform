@@ -21,7 +21,7 @@ configs/system/
 
 ### llm-gateway.yaml
 LLM 网关层配置，包括：
-- **Providers**：DeepSeek（主力，deepseek-v4-flash）+ Qwen（备选，qwen3.6-plus）
+- **Providers**：DeepSeek（主力，deepseek-v4-flash）+ Qwen（备选，qwen3.7-plus）
 - **API Key 池**：多 Key 轮转（round-robin），支持 Key 用量追踪与自动禁用
 - **配额控制**：按用户/部门 Token 配额，超限限流与告警
 - **出站代理**：所有 LLM API 请求通过内网出站代理访问外部 API

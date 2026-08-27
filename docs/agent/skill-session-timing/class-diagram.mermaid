@@ -1,0 +1,68 @@
+classDiagram
+    class SessionTimingRecorder {
+        +session_id: str
+        +observe(event: AgentEvent): void
+        +finalize(): TimingSnapshot
+    }
+    class RedisTimingStore {
+        +KEY_PREFIX: str
+        +TTL: int = 86400
+        +save(session_id, snap): void
+        +load(session_id): TimingSnapshot|null
+        +batch_load(ids): dict
+    }
+    class AgentInstance {
+        +process_message(session, message) AsyncIterator~AgentEvent~
+    }
+    class AgentEvent {
+        +type: AgentEventType
+        +content: str
+        +tool_name: str
+        +trace: dict
+    }
+    class SkillRegistry {
+        +register(skill): void
+    }
+    class CustomSkillStore {
+        +write_skill_md(skill, body): void
+        +read_body(skill_id): str|null
+        +load_from_disk(registry): int
+    }
+    class Skill {
+        +skill_id: str
+        +body: str|null
+    }
+    class SkillCreateRequest {
+        +body: str|null
+    }
+    class SkillUpdateRequest {
+        +body: str|null
+    }
+    class AgentSkillFormDialog {
+        +mode: manual|paste
+        +body: string
+        +onParse(): void
+        +onSubmit(): void
+    }
+    class AgentSessionDetailDialog {
+        +timing: SessionTiming|null
+    }
+    class AgentSessionPage {
+        +timingMap: Record~str,SessionTiming|null~
+    }
+    class SessionTiming {
+        +total_ms: number
+        +stages: StageTiming
+    }
+
+    AgentInstance ..> SessionTimingRecorder : wraps stream
+    SessionTimingRecorder ..> RedisTimingStore : save/load
+    SessionTimingRecorder ..> AgentEvent : observe
+    AgentInstance ..> AgentEvent : yields
+    SkillCreateRequest --|> Skill
+    SkillUpdateRequest ..> Skill : patch
+    SkillRegistry o-- Skill
+    CustomSkillStore ..> Skill : persist body
+    AgentSkillFormDialog ..> SkillCreateRequest : submits body
+    AgentSessionDetailDialog ..> SessionTiming : displays
+    AgentSessionPage ..> SessionTiming : batch column

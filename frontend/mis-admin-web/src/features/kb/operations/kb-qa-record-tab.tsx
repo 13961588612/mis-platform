@@ -1,18 +1,20 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { ChevronLeft, ChevronRight, Download, Eye, RefreshCw, Search } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Download, Eye, RefreshCw, Search, Ticket } from 'lucide-react';
 import { toast } from 'sonner';
-import { cn } from '@/lib/utils';
+import { cn, todayLocalDate } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { SortIndicator } from '@/components/common/sort-indicator';
 import { useClientSort } from '@/components/common/use-client-sort';
 import { useColumnWidths, type ResizableColumn } from '@/components/common/use-column-widths';
+import { RESET_COL_WIDTH_OVERLAY_CLASS, ResetColWidthButton } from '@/components/common/header-action-buttons';
 import { exportOperationsCsv, listLibraries, listOperationSessions } from '../api/kb-api';
 import type { OperationSessionQuery } from '../api/kb-api';
 import type { KbLibrary, KbQaSessionListItem } from '../types';
-import { formatTime } from '../types';
+import { feedbackStatusLabel, formatTime, KB_FEEDBACK_STATUS_META, ticketStatusLabel } from '../types';
 import { KbQaSessionDetailDialog } from './kb-qa-session-detail-dialog';
+import { KbTicketDialog } from '../components/kb-ticket-dialog';
 
 const selectClass =
   'h-9 w-full rounded-md border border-input bg-card px-[0.7rem] text-sm text-foreground shadow-none';
@@ -24,18 +26,23 @@ interface FilterForm {
   to: string;
   libraryId: string;
   userId: string;
-  hasFeedback: string;
+  /** 评价结果：'' 全部 / positive 好评 / negative 差评 / unrated 未评价。 */
+  sentiment: string;
   keyword: string;
 }
 
-const EMPTY_FILTER: FilterForm = {
-  from: '',
-  to: '',
-  libraryId: '',
-  userId: '',
-  hasFeedback: '',
-  keyword: '',
-};
+/** 默认筛选：起止日期均为当天（重置时重新取「今天」）。 */
+function defaultFilter(): FilterForm {
+  const today = todayLocalDate();
+  return {
+    from: today,
+    to: today,
+    libraryId: '',
+    userId: '',
+    sentiment: '',
+    keyword: '',
+  };
+}
 
 const PAGE_SIZE = 20;
 
@@ -43,12 +50,17 @@ const PAGE_SIZE = 20;
 function toQuery(f: FilterForm): Omit<OperationSessionQuery, 'page' | 'size'> {
   const libraryId = Number(f.libraryId);
   const userId = Number(f.userId);
+  // 「未评价」映射成 hasFeedback=false；好评/差评映射成 hasFeedback=true + sentiment
+  const hasFeedback = f.sentiment === '' ? null : f.sentiment !== 'unrated';
+  const sentiment =
+    f.sentiment === 'positive' || f.sentiment === 'negative' ? f.sentiment : null;
   return {
     from: f.from || null,
     to: f.to || null,
     libraryId: Number.isFinite(libraryId) && libraryId > 0 ? libraryId : null,
     userId: Number.isFinite(userId) && userId > 0 ? userId : null,
-    hasFeedback: f.hasFeedback === '' ? null : f.hasFeedback === '1',
+    hasFeedback,
+    sentiment,
     keyword: f.keyword.trim() || null,
   };
 }
@@ -56,6 +68,22 @@ function toQuery(f: FilterForm): Omit<OperationSessionQuery, 'page' | 'size'> {
 /** 评分展示：null 回落 `-`。 */
 function score(v: number | null | undefined): string {
   return v == null || !Number.isFinite(v) ? '-' : String(v);
+}
+
+/** 工单状态徽标变体（OP-02）。 */
+function ticketBadgeVariant(
+  status: string | null | undefined,
+): 'warning' | 'info' | 'success' | 'secondary' {
+  switch (status) {
+    case 'open':
+      return 'warning';
+    case 'processing':
+      return 'info';
+    case 'resolved':
+      return 'success';
+    default:
+      return 'secondary';
+  }
 }
 
 /**
@@ -69,7 +97,7 @@ function score(v: number | null | undefined): string {
  * 不要为了「方便」把默认值改成不脱敏。
  */
 export function KbQaRecordTab() {
-  const [filter, setFilter] = useState<FilterForm>(EMPTY_FILTER);
+  const [filter, setFilter] = useState<FilterForm>(defaultFilter);
   const [libraries, setLibraries] = useState<KbLibrary[]>([]);
   const [rows, setRows] = useState<KbQaSessionListItem[]>([]);
   const [total, setTotal] = useState(0);
@@ -79,6 +107,8 @@ export function KbQaRecordTab() {
   const [desensitize, setDesensitize] = useState(true);
   const [detailId, setDetailId] = useState<number | null>(null);
   const [detailOpen, setDetailOpen] = useState(false);
+  const [ticketSessionId, setTicketSessionId] = useState<number | null>(null);
+  const [ticketOpen, setTicketOpen] = useState(false);
 
   /* 列宽 + 当前页客户端排序（服务端分页，排序仅作用于本页） */
   const QA_COLS = useMemo<ResizableColumn[]>(
@@ -142,9 +172,10 @@ export function KbQaRecordTab() {
   }
 
   function onReset() {
-    setFilter(EMPTY_FILTER);
+    const next = defaultFilter();
+    setFilter(next);
     if (page === 1) {
-      void load(1, EMPTY_FILTER);
+      void load(1, next);
     } else {
       setPage(1);
     }
@@ -167,12 +198,17 @@ export function KbQaRecordTab() {
     setDetailOpen(true);
   }
 
+  function openTicket(id: number) {
+    setTicketSessionId(id);
+    setTicketOpen(true);
+  }
+
   const maxPage = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-hidden">
       <div className="shrink-0 rounded-lg border bg-card p-3">
-        <div className="grid grid-cols-2 gap-3 lg:grid-cols-6">
+        <div className="grid grid-cols-2 gap-3 lg:grid-cols-7">
           <div>
             <label className={fieldLabel}>起始日期</label>
             <Input
@@ -213,15 +249,16 @@ export function KbQaRecordTab() {
             />
           </div>
           <div>
-            <label className={fieldLabel}>反馈</label>
+            <label className={fieldLabel}>评价结果</label>
             <select
               className={selectClass}
-              value={filter.hasFeedback}
-              onChange={(e) => setFilter((f) => ({ ...f, hasFeedback: e.target.value }))}
+              value={filter.sentiment}
+              onChange={(e) => setFilter((f) => ({ ...f, sentiment: e.target.value }))}
             >
               <option value="">全部</option>
-              <option value="1">已评价</option>
-              <option value="0">未评价</option>
+              <option value="positive">好评</option>
+              <option value="negative">差评</option>
+              <option value="unrated">未评价</option>
             </select>
           </div>
           <div>
@@ -242,7 +279,7 @@ export function KbQaRecordTab() {
             <Search className="h-4 w-4" />
             查询
           </Button>
-          <Button size="sm" variant="outline" disabled={loading} onClick={onReset}>
+          <Button size="sm" variant="secondary" disabled={loading} onClick={onReset}>
             <RefreshCw className="h-4 w-4" />
             重置
           </Button>
@@ -271,13 +308,7 @@ export function KbQaRecordTab() {
 
       <div className="relative min-h-0 flex-1 overflow-auto rounded-lg border bg-table-surface">
         {hasCustom ? (
-          <button
-            type="button"
-            onClick={reset}
-            className="absolute right-3 top-3 z-20 rounded-md bg-card px-2 py-0.5 text-xs text-muted-foreground shadow-sm hover:text-foreground"
-          >
-            重置列宽
-          </button>
+          <ResetColWidthButton onClick={reset} className={RESET_COL_WIDTH_OVERLAY_CLASS} />
         ) : null}
         <table
           className="border-separate border-spacing-0 bg-table-surface text-left text-sm"
@@ -361,9 +392,30 @@ export function KbQaRecordTab() {
                   <td className="px-3 py-2 tabular-nums">{r.citeCount ?? 0}</td>
                   <td className="px-3 py-2">
                     {r.hasFeedback ? (
-                      <Badge variant="success">
-                        准确 {score(r.accuracy)} / 有用 {score(r.helpful)}
-                      </Badge>
+                      <div className="flex flex-wrap items-center gap-1">
+                        {r.sentiment === 'positive' ? (
+                          <Badge variant="success">好评</Badge>
+                        ) : (
+                          <Badge variant="destructive">吐槽</Badge>
+                        )}
+                        <span className="text-xs text-muted-foreground">
+                          准确 {score(r.accuracy)} · 有用 {score(r.helpful)}
+                          {r.offtopic != null && r.offtopic > 0 ? ` · 跑题 ${score(r.offtopic)}` : ''}
+                          {r.citeError != null && r.citeError > 0
+                            ? ` · 引用 ${score(r.citeError)}`
+                            : ''}
+                        </span>
+                        {r.ticketStatus ? (
+                          <Badge variant={ticketBadgeVariant(r.ticketStatus)}>
+                            {ticketStatusLabel(r.ticketStatus)}
+                          </Badge>
+                        ) : null}
+                        {r.feedbackStatus ? (
+                          <Badge variant={KB_FEEDBACK_STATUS_META[r.feedbackStatus]?.variant ?? 'secondary'}>
+                            {feedbackStatusLabel(r.feedbackStatus)}
+                          </Badge>
+                        ) : null}
+                      </div>
                     ) : (
                       <Badge variant="secondary">未评价</Badge>
                     )}
@@ -372,14 +424,26 @@ export function KbQaRecordTab() {
                     {formatTime(r.createdAt)}
                   </td>
                   <td className="px-3 py-2">
-                    <button
-                      type="button"
-                      className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[0.8125rem] text-primary hover:bg-primary/10"
-                      onClick={() => openDetail(r.id)}
-                    >
-                      <Eye className="h-3 w-3" />
-                      详情
-                    </button>
+                    <div className="flex items-center justify-end gap-1">
+                      <button
+                        type="button"
+                        className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[0.8125rem] text-primary hover:bg-primary/10"
+                        onClick={() => openDetail(r.id)}
+                      >
+                        <Eye className="h-3 w-3" />
+                        详情
+                      </button>
+                      {r.sentiment === 'negative' ? (
+                        <button
+                          type="button"
+                          className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[0.8125rem] text-destructive hover:bg-destructive/10"
+                          onClick={() => openTicket(r.id)}
+                        >
+                          <Ticket className="h-3 w-3" />
+                          转工单
+                        </button>
+                      ) : null}
+                    </div>
                   </td>
                 </tr>
               ))
@@ -418,6 +482,12 @@ export function KbQaRecordTab() {
         sessionId={detailId}
         open={detailOpen}
         onOpenChange={setDetailOpen}
+      />
+      <KbTicketDialog
+        open={ticketOpen}
+        onOpenChange={setTicketOpen}
+        sessionId={ticketSessionId}
+        title="转工单"
       />
     </div>
   );

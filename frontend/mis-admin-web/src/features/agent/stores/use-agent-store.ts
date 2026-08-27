@@ -9,6 +9,7 @@
  * "打开页面看到的是上周的筛选结果"这种误导，运营场景下宁可每次重置。
  */
 import { create } from 'zustand';
+import { todayLocalDate } from '@/lib/utils';
 import type { AgentState, SessionChannel, SkillStatus } from '../types';
 
 /** 会话列表筛选条件（对应 UI#4 的筛选区）。 */
@@ -27,13 +28,17 @@ export interface SkillFilter {
   category: string;
 }
 
-const EMPTY_SESSION_FILTER: SessionFilter = {
-  agentId: '',
-  channel: 'all',
-  keyword: '',
-  from: '',
-  to: '',
-};
+/** 默认筛选：起止日期均为当天（重置时重新取「今天」，避免跨日仍停在旧日期）。 */
+function defaultSessionFilter(): SessionFilter {
+  const today = todayLocalDate();
+  return {
+    agentId: '',
+    channel: 'all',
+    keyword: '',
+    from: today,
+    to: today,
+  };
+}
 
 const EMPTY_SKILL_FILTER: SkillFilter = {
   keyword: '',
@@ -74,7 +79,7 @@ const MIN_POLLING_INTERVAL_MS = 5_000;
 export const useAgentStore = create<AgentStoreState>((set) => ({
   selectedAgentId: '',
   agentStateFilter: 'all',
-  sessionFilter: EMPTY_SESSION_FILTER,
+  sessionFilter: defaultSessionFilter(),
   skillFilter: EMPTY_SKILL_FILTER,
   pollingEnabled: false,
   pollingIntervalMs: 15_000,
@@ -83,7 +88,7 @@ export const useAgentStore = create<AgentStoreState>((set) => ({
   setAgentStateFilter: (state) => set({ agentStateFilter: state }),
   setSessionFilter: (patch) =>
     set((s) => ({ sessionFilter: { ...s.sessionFilter, ...patch } })),
-  resetSessionFilter: () => set({ sessionFilter: EMPTY_SESSION_FILTER }),
+  resetSessionFilter: () => set({ sessionFilter: defaultSessionFilter() }),
   setSkillFilter: (patch) => set((s) => ({ skillFilter: { ...s.skillFilter, ...patch } })),
   resetSkillFilter: () => set({ skillFilter: EMPTY_SKILL_FILTER }),
   setPollingEnabled: (enabled) => set({ pollingEnabled: enabled }),

@@ -106,10 +106,10 @@ export function AgentMcpToolsDialog({
     if (!serverName) return;
     setDiscovering(true);
     try {
-      const found = await discoverMcpTools(serverName);
-      setTools(found);
+      const result = await discoverMcpTools(serverName);
+      await load();
       setError(null);
-      toast.success(`已发现 ${found.length} 个工具`);
+      toast.success(`已发现 ${result.discovered} 个工具`);
       onDiscovered?.();
     } catch (e) {
       toast.error(agentErrorMessage(e, '发现 MCP 工具失败'));

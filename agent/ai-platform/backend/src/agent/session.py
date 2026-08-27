@@ -27,6 +27,8 @@ from datetime import datetime, timezone
 import redis.asyncio as aioredis
 
 from src.agent.session_store import (
+    FeedbackPage,
+    FeedbackQuery,
     MessagePage,
     SessionListQuery,
     SessionPage,
@@ -76,6 +78,7 @@ class Message:
         role: str,
         content: str,
         metadata: dict[str, Any] | None = None,
+        message_id: str | None = None,
     ) -> None:
         """构造一条会话消息。
 
@@ -83,8 +86,10 @@ class Message:
             role: 消息角色（如 ``user``、``assistant``）。
             content: 消息正文。
             metadata: 可选的附加元数据。
+            message_id: 可选的消息 UUID；不传则自动生成。2.1 用于让计时
+                按轮（turn_key=该 id）落库，前端可按 ``message.id`` 逐条映射。
         """
-        self.id: str = str(uuid.uuid4())
+        self.id: str = message_id or str(uuid.uuid4())
         self.role = role
         self.content = content
         self.metadata = metadata or {}
@@ -127,6 +132,7 @@ class Session:
         user_mobile: str = "",
         channel_user_id: str = "",
         mis_user_id: int | None = None,
+        user_name: str = "",
     ) -> None:
         """构造会话对象（尚未持久化）。
 
@@ -141,6 +147,7 @@ class Session:
             mis_user_id: MIS userId（T03 S9 第五键起点）。会话创建点解析一次、
                 全链透传；``None`` 表示解析不出 → 下游 E1–E5 fail-closed 拒绝。
                 **绝不**用 ``user_id`` / ``channel_user_id`` 回退填充。
+            user_name: 用户展示名（运营台 Web 对话由 BFF 注入 username）。
         """
         self.session_id = session_id
         self.agent_id = agent_id
@@ -150,6 +157,7 @@ class Session:
         self.user_mobile = user_mobile
         self.channel_user_id = channel_user_id
         self.mis_user_id: int | None = mis_user_id
+        self.user_name = user_name or ""
         self.messages: list[Message] = []
         self.state: dict[str, Any] = {}
         self.created_at = datetime.now(timezone.utc)
@@ -160,9 +168,18 @@ class Session:
         role: str,
         content: str,
         metadata: dict[str, Any] | None = None,
+        message_id: str | None = None,
     ) -> Message:
-        """向会话中添加一条消息。"""
-        msg: Message = Message(role=role, content=content, metadata=metadata)
+        """向会话中添加一条消息。
+
+        Args:
+            role: 消息角色。
+            content: 消息正文。
+            metadata: 可选元数据。
+            message_id: 可选消息 UUID（2.1：与 process_message 的 turn_key 复用，
+                使计时能按该条 assistant 消息逐条映射）。
+        """
+        msg: Message = Message(role=role, content=content, metadata=metadata, message_id=message_id)
         self.messages.append(msg)
         self.updated_at = datetime.now(timezone.utc)
         return msg
@@ -170,6 +187,37 @@ class Session:
     def get_messages(self) -> list[dict[str, Any]]:
         """以字典列表形式返回所有消息。"""
         return [msg.to_dict() for msg in self.messages]
+
+    def find_assistant_message(
+        self,
+        message_id: str | None = None,
+        content: str | None = None,
+    ) -> Message | None:
+        """定位一条助手消息，供点赞/吐槽写入 metadata。
+
+        前端流式气泡的 id 与 Redis 里的 ``Message.id`` 不是同一套，
+        所以匹配顺序是：后端 id → 正文精确匹配 → 最近一条助手消息。
+
+        Args:
+            message_id: 后端消息 UUID；H5 实时气泡通常拿不到。
+            content: 助手正文，用于对齐前端那一条气泡。
+
+        Returns:
+            命中的消息；会话里还没有助手回复时返回 ``None``。
+        """
+        if message_id:
+            for msg in self.messages:
+                if msg.role == "assistant" and msg.id == message_id:
+                    return msg
+        needle = (content or "").strip()
+        if needle:
+            for msg in reversed(self.messages):
+                if msg.role == "assistant" and (msg.content or "").strip() == needle:
+                    return msg
+        for msg in reversed(self.messages):
+            if msg.role == "assistant":
+                return msg
+        return None
 
     # ===== FormFill HITL 挂起标记（T05） =====
     # session.state 持久化，随会话 24h TTL；此处额外记录 30min 过期时间，
@@ -218,6 +266,7 @@ class Session:
             "user_mobile": self.user_mobile,
             "channel_user_id": self.channel_user_id,
             "mis_user_id": self.mis_user_id,
+            "user_name": self.user_name,
             "messages": self.get_messages(),
             "state": self.state,
             "created_at": self.created_at.isoformat(),
@@ -296,6 +345,7 @@ class SessionManager:
         user_mobile: str = "",
         channel_user_id: str = "",
         mis_user_id: int | None = None,
+        user_name: str = "",
     ) -> Session:
         """
         使用渠道特定的 ID 命名规范创建一个新会话。
@@ -311,6 +361,7 @@ class SessionManager:
             user_mobile: 用户手机号（T03 gap 修复：此前漏传，导致 MCP 身份缺字段）。
             channel_user_id: 渠道侧 userId（同上）。
             mis_user_id: MIS userId（T03 S9 第五键）；由调用方在会话创建点解析。
+            user_name: 用户展示名（运营台 Web 由 BFF 注入）。
 
         Returns:
             已写入 Redis 的新会话。
@@ -327,21 +378,22 @@ class SessionManager:
             user_mobile=user_mobile,
             channel_user_id=channel_user_id,
             mis_user_id=mis_user_id,
+            user_name=user_name,
         )
 
         # 存储到 Redis
         redis: aioredis.Redis = await self._get_redis()
-        await redis.setex(
+        await redis.set(
             self._session_key(session_id),
-            self._session_ttl,
             json.dumps(session.to_dict()),
+            ex=self._session_ttl,
         )
 
         # 设置 agent 绑定
-        await redis.setex(
+        await redis.set(
             self._agent_binding_key(session_id),
-            self._session_ttl,
             agent_id,
+            ex=self._session_ttl,
         )
 
         # PG 冷备：创建即落库，保证运营后台能立刻看到「进行中」的空会话，
@@ -368,6 +420,7 @@ class SessionManager:
         user_mobile: str = "",
         channel_user_id: str = "",
         mis_user_id: int | None = None,
+        user_name: str = "",
     ) -> Session:
         """按给定 session_id 获取会话；不存在则创建（Gateway 稳定会话场景）。
 
@@ -380,6 +433,7 @@ class SessionManager:
             user_mobile: 用户手机号。
             channel_user_id: 渠道侧 userId。
             mis_user_id: MIS userId（T03 S9）；非 ``None`` 时刷新到既有会话。
+            user_name: 用户展示名；非空时刷新到既有会话。
 
         Returns:
             既有或新建的会话。
@@ -399,6 +453,9 @@ class SessionManager:
                 changed = True
             if channel_user_id and session.channel_user_id != channel_user_id:
                 session.channel_user_id = channel_user_id
+                changed = True
+            if user_name and session.user_name != user_name:
+                session.user_name = user_name
                 changed = True
             # T03 S9：mis_user_id 仅在解析出真值时刷新；
             # 解析不出（None）不得把既有值清空，也不得回退 user_id。
@@ -420,17 +477,18 @@ class SessionManager:
             user_mobile=user_mobile,
             channel_user_id=channel_user_id,
             mis_user_id=mis_user_id,
+            user_name=user_name,
         )
         redis: aioredis.Redis = await self._get_redis()
-        await redis.setex(
+        await redis.set(
             self._session_key(session_id),
-            self._session_ttl,
             json.dumps(session.to_dict()),
+            ex=self._session_ttl,
         )
-        await redis.setex(
+        await redis.set(
             self._agent_binding_key(session_id),
-            self._session_ttl,
             agent_id,
+            ex=self._session_ttl,
         )
         await self._dual_write(session)
         logger.info(
@@ -460,6 +518,7 @@ class SessionManager:
             user_mobile=session_data.get("user_mobile", "") or "",
             channel_user_id=session_data.get("channel_user_id", "") or "",
             mis_user_id=_coerce_mis_user_id(session_data.get("mis_user_id")),
+            user_name=session_data.get("user_name", "") or "",
         )
         session.messages = [
             Message.from_dict(msg) for msg in session_data.get("messages", [])
@@ -481,10 +540,10 @@ class SessionManager:
         """
         redis: aioredis.Redis = await self._get_redis()
         session.updated_at = datetime.now(timezone.utc)
-        await redis.setex(
+        await redis.set(
             self._session_key(session.session_id),
-            self._session_ttl,
             json.dumps(session.to_dict()),
+            ex=self._session_ttl,
         )
         await self._dual_write(session)
 
@@ -496,10 +555,10 @@ class SessionManager:
     async def set_agent_binding(self, session_id: str, agent_id: str) -> None:
         """将会话绑定到一个 agent（用于会话亲和路由）。"""
         redis: aioredis.Redis = await self._get_redis()
-        await redis.setex(
+        await redis.set(
             self._agent_binding_key(session_id),
-            self._session_ttl,
             agent_id,
+            ex=self._session_ttl,
         )
 
     async def close_session(self, session_id: str) -> None:
@@ -530,6 +589,7 @@ class SessionManager:
         role: str,
         content: str,
         metadata: dict[str, Any] | None = None,
+        message_id: str | None = None,
     ) -> Message:
         """向现有会话添加一条消息并持久化（Redis + PG 双写）。
 
@@ -538,14 +598,85 @@ class SessionManager:
             role: 消息角色。
             content: 消息正文。
             metadata: 可选元数据。
+            message_id: 可选消息 UUID（2.1：与 process_message 的 turn_key 复用，
+                使计时能按该条 assistant 消息逐条映射）。
 
         Returns:
             新创建的消息对象。
         """
         session: Session = await self.get_session(session_id)
-        msg: Message = session.add_message(role, content, metadata)
+        msg: Message = session.add_message(role, content, metadata, message_id)
         await self.save_session(session)
         return msg
+
+    async def set_message_feedback(
+        self,
+        session_id: str,
+        rating: str,
+        comment: str | None = None,
+        message_id: str | None = None,
+        content: str | None = None,
+    ) -> dict[str, Any]:
+        """给一条助手消息写入点赞/吐槽，Redis 权威、PG 尽力同步 metadata。
+
+        Args:
+            session_id: 会话 ID。
+            rating: ``up`` 或 ``down``。
+            comment: 吐槽正文；点赞可空。
+            message_id: 后端消息 UUID（可选）。
+            content: 助手正文，用于对齐前端气泡（可选）。
+
+        Returns:
+            写入后的 ``feedback`` 字典（含 ``message_id``）。
+
+        Raises:
+            SessionNotFoundError: 会话不存在。
+            ValueError: 还没有助手消息可评价。
+        """
+        session: Session = await self.get_session(session_id)
+        target = session.find_assistant_message(message_id=message_id, content=content)
+        if target is None:
+            raise ValueError("还没有可评价的回答")
+        payload: dict[str, Any] = {
+            "rating": rating,
+            "comment": (comment or "").strip() or None,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+        meta = dict(target.metadata or {})
+        meta["feedback"] = payload
+        target.metadata = meta
+        session.updated_at = datetime.now(timezone.utc)
+        await self.save_session(session)
+        try:
+            await self._pg_store.update_message_metadata(target.id, meta)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "Message feedback PG metadata update failed (degraded)",
+                session_id=session_id,
+                message_id=target.id,
+                error=str(exc),
+            )
+        # CF-03：同步 upsert agent_feedback 独立表（运营读侧权威；尽力而为）。
+        # 用户覆盖写（up→down）时按 UNIQUE(session_id, message_id) 更新最新值，
+        # 处理状态保留——与 PRD Q-C1「统计按最新值」一致。
+        try:
+            await self._pg_store.upsert_feedback(
+                session_id=session_id,
+                message_id=target.id,
+                agent_id=session.agent_id,
+                user_id=session.user_id
+                or (str(session.mis_user_id) if session.mis_user_id else None),
+                rating=rating,
+                comment=(comment or "").strip() or None,
+            )
+        except Exception as exc:  # noqa: BLE001 - 双保险：store 内部已兜底，这里再兜一层
+            logger.warning(
+                "Agent feedback table upsert raised unexpectedly (degraded)",
+                session_id=session_id,
+                message_id=target.id,
+                error=str(exc),
+            )
+        return {"message_id": target.id, **payload}
 
     # ==================================================================
     # 运营后台读路径（T04 #27–#31）：一律走 PG，Redis 无分页 / 过滤能力
@@ -672,6 +803,99 @@ class SessionManager:
         )
         return deleted
 
+    # ==================================================================
+    # 会话反馈运营（CF-01 / CF-03 / CF-05）：全部委托 PG 独立表
+    # ==================================================================
+
+    async def list_feedback(self, query: FeedbackQuery) -> FeedbackPage:
+        """分页查询会话反馈列表（CF-01）。
+
+        Args:
+            query: 过滤 + 分页条件。
+
+        Returns:
+            一页反馈数据（``items`` 已是 wire 形状，含 answer_brief）。
+        """
+        return await self._pg_store.list_feedback(query)
+
+    async def feedback_stats(
+        self,
+        *,
+        agent_id: str | None = None,
+        channel: str | None = None,
+        time_from: datetime | None = None,
+        time_to: datetime | None = None,
+    ) -> dict[str, Any]:
+        """会话反馈统计（CF-05）。
+
+        Args:
+            agent_id: 按 Agent 过滤（可空）。
+            channel: 按渠道过滤（可空）。
+            time_from: 创建时间下界（可空）。
+            time_to: 创建时间上界（可空）。
+
+        Returns:
+            前端 ``AgentFeedbackStats`` 契约的 dict。
+        """
+        return await self._pg_store.feedback_stats(
+            agent_id=agent_id,
+            channel=channel,
+            time_from=time_from,
+            time_to=time_to,
+        )
+
+    async def process_feedback(
+        self,
+        feedback_id: int,
+        status: str,
+        handler_id: str | None,
+        handler_name: str | None,
+        note: str | None,
+    ) -> dict[str, Any]:
+        """把单条反馈标记为 handled / ignored（CF-03，单向终态）。
+
+        Args:
+            feedback_id: 反馈行主键。
+            status: 目标状态（handled / ignored）。
+            handler_id: 操作人 MIS userId（字符串化，可空）。
+            handler_name: 操作人展示名（可空）。
+            note: 处理备注（可空）。
+
+        Returns:
+            更新后的反馈行 wire dict。
+
+        Raises:
+            FeedbackNotFoundError: 反馈不存在。
+            FeedbackStatusIllegalError: 已处于另一个终态不可回退。
+        """
+        return await self._pg_store.mark_feedback_processed(
+            feedback_id, status, handler_id, handler_name, note
+        )
+
+    async def batch_process_feedback(
+        self,
+        feedback_ids: Sequence[int],
+        status: str,
+        handler_id: str | None,
+        handler_name: str | None,
+        note: str | None,
+    ) -> int:
+        """批量把 pending 反馈标记为 handled / ignored（CF-03）。
+
+        Args:
+            feedback_ids: 反馈行主键列表（调用方负责去重与上限校验）。
+            status: 目标状态（handled / ignored）。
+            handler_id: 操作人 MIS userId（字符串化，可空）。
+            handler_name: 操作人展示名（可空）。
+            note: 处理备注（可空）。
+
+        Returns:
+            实际更新的行数。
+        """
+        return await self._pg_store.batch_mark_feedback_processed(
+            feedback_ids, status, handler_id, handler_name, note
+        )
+
     @staticmethod
     def _session_to_wire(session: Session) -> dict[str, Any]:
         """把 Redis 里的运行时会话拼成前端 ``Session`` 契约（兜底路径用）。
@@ -698,7 +922,8 @@ class SessionManager:
             "agent_name": None,
             "channel": normalize_channel(session.channel),
             "user_id": session.user_id or None,
-            "user_name": session.user_mobile or None,
+            "user_name": (session.user_name or None)
+            or (session.user_mobile or None),
             "title": title,
             "status": "active",
             "runtime_type": session.runtime_type or None,

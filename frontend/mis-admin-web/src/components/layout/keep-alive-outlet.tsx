@@ -17,11 +17,11 @@ import {
   ConfigPage,
   EmployeePage,
   ModulePage,
-  PostPage,
 } from '@/features/system/admin-list-page';
+import { PostManagePage } from '@/features/system/post/post-manage-page';
 import { UserListPage } from '@/features/system/user/user-list-page';
 import { OrgListPage } from '@/features/system/org/org-list-page';
-import { DeptTreePage } from '@/features/system/dept/dept-tree-page';
+import { DeptManagePage } from '@/features/system/dept/dept-manage-page';
 import { RoleListPage } from '@/features/system/role/role-list-page';
 import { MenuManagePage } from '@/features/system/menu/menu-manage-page';
 import { DictManagePage } from '@/features/system/dict/dict-manage-page';
@@ -44,6 +44,7 @@ import {
   AgentCatalogPage,
   AgentChatPage,
   AgentDispatchPage,
+  AgentFeedbackPage,
   AgentMcpPage,
   AgentMonitorPage,
   AgentOverviewPage,
@@ -116,9 +117,9 @@ const PAGE_MAP: Record<string, ComponentType> = {
   '/403': ForbiddenPage,
   '/system/user': UserListPage,
   '/system/org': OrgListPage,
-  '/system/dept': DeptTreePage,
+  '/system/dept': DeptManagePage,
   '/system/employee': EmployeePage,
-  '/system/post': PostPage,
+  '/system/post': PostManagePage,
   '/system/app': AppManagePage,
   '/system/module': ModulePage,
   '/system/role': RoleListPage,
@@ -142,6 +143,7 @@ const PAGE_MAP: Record<string, ComponentType> = {
   '/agent/overview': AgentOverviewPage,
   '/agent/chat': AgentChatPage,
   '/agent/sessions': AgentSessionsPage,
+  '/agent/feedback': AgentFeedbackPage,
   '/agent/agents': AgentAgentsPage,
   '/agent/catalog': AgentCatalogPage,
   '/agent/dispatch': AgentDispatchPage,

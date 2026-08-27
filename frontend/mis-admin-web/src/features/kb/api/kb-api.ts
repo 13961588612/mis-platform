@@ -9,6 +9,7 @@ import type {
   KbDashboard,
   KbDocument,
   KbDocumentChunkConfig,
+  KbDocumentChunks,
   KbDocumentUploadResult,
   KbEngineCapabilities,
   KbEngineHealth,
@@ -23,6 +24,7 @@ import type {
   KbEngineRenameResult,
   KbEngineRenameRollbackReq,
   KbFeedbackForm,
+  KbFeedbackProcessPayload,
   KbGraphBuildResult,
   KbGraphStatus,
   KbHitTestRequest,
@@ -190,21 +192,30 @@ export async function updateLibrary(id: number, body: UpdateLibraryPayload): Pro
 }
 
 /**
- * 删除知识库（T04：**默认归档，不是物理删除**）。
+ * 删除知识库（T04：**默认归档，不是物理删除**；Q1 两段式确认流加 force）。
  *
- * <p>返回回执而不是 void——`message` / `engineSynced` 必须让用户看见：
+ * <p>返回回执而不是 void——`message` / `engineSynced` / `engineMissing` 必须让用户看见：
  * 归档模式下引擎侧数据一条没删，只是改了名 + 本地停用。调用方**不许**
  * 用自己的「删除成功」文案覆盖 `message`。
  *
- * @param id   知识库 id
- * @param mode `archive`（默认）/ `physical`
+ * <p><b>Q1 `force` 语义（严格限定）：</b>
+ * - `force=false`（默认）：引擎侧 dataset 已不存在时返回**提示态**回执
+ *   （`engineMissing=true`，本地零变更），调用方须警示并要求确认后以 `force=true` 重调；
+ * - `force=true`：仅当 `engineMissing` 时跳过引擎直接本地执行（删除/归档）；
+ *   对其它失败（非 404 引擎错误 / deleteSupported=false）**不豁免**；
+ * - 本地已不存在 + `force=true` → 幂等回执不报错。
+ *
+ * @param id    知识库 id
+ * @param mode  `archive`（默认）/ `physical`
+ * @param force 是否跳过引擎直接本地执行（仅对 engineMissing 生效，默认 false）
  */
 export async function deleteLibrary(
   id: number,
   mode: KbLibraryDeleteMode = 'archive',
+  force = false,
 ): Promise<KbLibraryDeleteResult> {
   const res = await api.delete<ApiResult<KbLibraryDeleteResult>>(`/kb/libraries/${id}`, {
-    params: { mode },
+    params: { mode, force },
   });
   return unwrap(res, '删除知识库失败');
 }
@@ -212,8 +223,9 @@ export async function deleteLibrary(
 /**
  * 查看知识库的引擎引用（含 `dataset_id`）。
  *
- * <p>需 `kb:library:engine-ref:view`；后端每次调用都会记审计，
- * 因此**只在用户展开「删除指引单」时才请求**，不要随详情页预加载。
+ * <p>需 `kb:library:engine-ref:view`；后端每次调用都会记审计。
+ * 知识库详情页基本信息 Tab 预加载本接口展示 RAGFlow Dataset ID
+ * （无权限 403 / 异常时降级显示 `-`，不打断页面）；删除指引单同样复用本接口。
  */
 export async function getEngineRef(id: number): Promise<KbEngineRef> {
   const res = await api.get<ApiResult<KbEngineRef>>(`/kb/libraries/${id}/engine-ref`);
@@ -290,6 +302,52 @@ export async function getDocument(libraryId: number, id: number): Promise<KbDocu
   return unwrap(res, '获取文档详情失败');
 }
 
+/**
+ * 分页列举文档切片（「查看文档切分效果」）。
+ *
+ * <p>keywords 服务端过滤；page 1-based；pageSize 默认 50、前端 UI 上限 100。
+ * 空态由 `hint` 承载（解析中/失败/未同步到引擎/引擎不可达）。
+ */
+export async function listDocumentChunks(
+  libraryId: number,
+  docId: number,
+  keywords: string,
+  page: number,
+  pageSize = 50,
+): Promise<KbDocumentChunks> {
+  const res = await api.get<ApiResult<KbDocumentChunks>>(
+    `/kb/libraries/${libraryId}/documents/${docId}/chunks`,
+    { params: cleanParams({ keywords, page, pageSize }) },
+  );
+  return unwrap(res, '获取文档切分失败');
+}
+
+/**
+ * 拉取分片版面截图（直吐 JPEG 字节；需带鉴权，不能用裸 img src）。
+ *
+ * @returns Object URL（调用方负责 URL.revokeObjectURL）
+ */
+export async function fetchDocumentChunkImage(
+  libraryId: number,
+  docId: number,
+  imageId: string,
+): Promise<string> {
+  const res = await api.get<Blob>(
+    `/kb/libraries/${libraryId}/documents/${docId}/chunk-images/${encodeURIComponent(imageId)}`,
+    { responseType: 'blob' },
+  );
+  const rawType = String(res.headers?.['content-type'] ?? 'image/jpeg').split(';')[0]?.trim() ?? 'image/jpeg';
+  if (rawType.includes('json') || rawType.startsWith('text/')) {
+    const text = await res.data.text();
+    throw new Error(text.slice(0, 200) || '分片图片响应格式异常');
+  }
+  const blob = res.data.type ? res.data : new Blob([res.data], { type: rawType });
+  if (blob.size === 0) {
+    throw new Error('分片图片为空');
+  }
+  return URL.createObjectURL(blob);
+}
+
 /** 上传文档（multipart/form-data；可选文件级切片参数，全空 = 继承库级）。 */
 export async function uploadDocument(
   libraryId: number,
@@ -301,6 +359,12 @@ export async function uploadDocument(
   if (chunk?.chunkMethod) form.append('chunkMethod', chunk.chunkMethod);
   if (chunk?.chunkTokenNum != null) form.append('chunkTokenNum', String(chunk.chunkTokenNum));
   if (chunk?.separator != null) form.append('separator', chunk.separator);
+  if (chunk?.pageIndex != null) form.append('pageIndex', String(chunk.pageIndex));
+  if (chunk?.imageTableContextWindow != null) {
+    form.append('imageTableContextWindow', String(chunk.imageTableContextWindow));
+  }
+  if (chunk?.autoKeywords != null) form.append('autoKeywords', String(chunk.autoKeywords));
+  if (chunk?.autoQuestions != null) form.append('autoQuestions', String(chunk.autoQuestions));
   const res = await api.post<ApiResult<KbDocumentUploadResult>>(
     `/kb/libraries/${libraryId}/documents`,
     form,
@@ -321,6 +385,10 @@ export async function updateDocumentChunkConfig(
       chunkMethod: config.chunkMethod ?? null,
       chunkTokenNum: config.chunkTokenNum ?? null,
       separator: config.separator ?? null,
+      pageIndex: config.pageIndex ?? null,
+      imageTableContextWindow: config.imageTableContextWindow ?? null,
+      autoKeywords: config.autoKeywords ?? null,
+      autoQuestions: config.autoQuestions ?? null,
     },
   );
   if (res.data.code !== 0) throw new Error(res.data.message || '更新切片配置失败');
@@ -434,6 +502,12 @@ export async function listMySessions(): Promise<KbQaSession[]> {
   return unwrap(res, '获取我的问答历史失败');
 }
 
+/** 删除问答会话（用户侧软删除，服务端幂等；删除后由调用方刷新列表）。 */
+export async function deleteSession(sessionId: number): Promise<void> {
+  const res = await api.delete<ApiResult<null>>(`/kb/qa/sessions/${sessionId}`);
+  if (res.data.code !== 0) throw new Error(res.data.message || '删除会话失败');
+}
+
 /**
  * 会话详情（用户视角）。
  *
@@ -507,6 +581,11 @@ export interface OperationSessionQuery {
   libraryId?: number | null;
   userId?: number | null;
   hasFeedback?: boolean | null;
+  /**
+   * 评价结果筛选（OP-01）：positive 好评 / negative 差评 / null 全部。
+   * 「未评价」由前端映射成 `hasFeedback=false`，不传本字段。
+   */
+  sentiment?: string | null;
   keyword?: string | null;
   page?: number;
   size?: number;
@@ -586,6 +665,23 @@ function triggerDownload(blob: Blob, filename: string): void {
   a.click();
   document.body.removeChild(a);
   URL.revokeObjectURL(url);
+}
+
+/**
+ * 标记问答反馈已处理/忽略（OP-05）。
+ *
+ * <p>处理人取当前登录人（BFF 透传 mis-kb），状态机 pending → handled/ignored
+ * 单向终态、非法流转由后端拒绝；返回更新后的反馈（含处理状态五字段）。
+ */
+export async function markFeedbackProcessed(
+  feedbackId: number,
+  payload: KbFeedbackProcessPayload,
+): Promise<KbQaFeedback> {
+  const res = await api.patch<ApiResult<KbQaFeedback>>(
+    `/kb/operations/qa/feedback/${feedbackId}/process`,
+    payload,
+  );
+  return unwrap(res, '标记反馈失败');
 }
 
 // ------------------------------------------------------------------ 工单（F-10 / A-02c）

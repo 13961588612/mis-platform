@@ -2,6 +2,7 @@ package com.mis.adminbff.audit;
 
 import com.mis.adminbff.client.AiPlatformClient;
 import com.mis.adminbff.client.IamWebClient;
+import com.mis.adminbff.client.OrgWebClient;
 import com.mis.adminbff.config.AiPlatformProperties;
 import com.mis.adminbff.controller.AgentOpsChannelController;
 import com.mis.adminbff.controller.AgentOpsController;
@@ -20,6 +21,7 @@ import com.mis.adminbff.controller.McpPermissionController;
 import com.mis.adminbff.controller.MenuController;
 import com.mis.adminbff.controller.ModuleController;
 import com.mis.adminbff.controller.OrgController;
+import com.mis.adminbff.controller.PostController;
 import com.mis.adminbff.controller.RoleController;
 import com.mis.adminbff.controller.UserController;
 import com.mis.adminbff.security.SkillPermissionChecker;
@@ -140,6 +142,26 @@ class BffApiRegistryDiffSurveyTest {
             "GET /api/v1/kb/acls/inventory"
     );
 
+    /** V41 净新增 KB 登记（问答会话软删除；sys_api 91199 / menu_api 91288 → 菜单 91036，复用 kb:qa:ask）。 */
+    private static final Set<String> EXPECTED_KB_V41_1 = Set.of(
+            "DELETE /api/v1/kb/qa/sessions/{sessionId}"
+    );
+
+    /** V42 净新增 KB 登记（文档切分查看；sys_api 91200 / menu_api 91289 → 菜单 91034 kb:document:list）。 */
+    private static final Set<String> EXPECTED_KB_V42_1 = Set.of(
+            "GET /api/v1/kb/libraries/{libraryId}/documents/{id}/chunks"
+    );
+
+    /** V43 净新增 KB 登记（问答反馈处理；sys_api 91201 / menu_api 91290 → 菜单 91037 复用 kb:operation:list）。 */
+    private static final Set<String> EXPECTED_KB_V43_1 = Set.of(
+            "PATCH /api/v1/kb/operations/qa/feedback/{feedbackId}/process"
+    );
+
+    /** V63 净新增 KB 登记（文档切分图片代理；sys_api 91300 / menu_api 91304 → 菜单 91034 kb:document:list；V64 补偿 V59 与 91301 冲突）。 */
+    private static final Set<String> EXPECTED_KB_V63_1 = Set.of(
+            "GET /api/v1/kb/libraries/{libraryId}/documents/{id}/chunk-images/{imageId}"
+    );
+
     /**
      * V32 之前的 KB 已登记<b>去重后</b> 42 行基线（V17/V18/V24/V25/V26/V27/V30/V31）。
      * <p>PRD §2.2 记「45 行」是按迁移行数（V30 含 3 行与 V24/V25 重复、被幂等守卫跳过）；
@@ -230,7 +252,7 @@ class BffApiRegistryDiffSurveyTest {
                         + kbUnregistered);
 
         // ---- 断言 2：V32 净新增登记 == 恰好 28（READ-01~24 + WRITE-01~04，零遗漏零超卖）；
-        //       叠加 V34 RAPTOR 2 + V37 补登 inventory 1 ----
+        //       叠加 V34 RAPTOR 2 + V37 补登 inventory 1 + V41 会话删除 1 + V42 文档切分查看 1 ----
         Set<String> registeredKb = registered.stream()
                 .filter(e -> e.contains(" /api/v1/kb/"))
                 .collect(Collectors.toCollection(TreeSet::new));
@@ -239,10 +261,14 @@ class BffApiRegistryDiffSurveyTest {
         Set<String> expectedKbNew = new TreeSet<>(EXPECTED_KB_28);
         expectedKbNew.addAll(EXPECTED_RAPTOR_2);
         expectedKbNew.addAll(EXPECTED_KB_V37_1);
+        expectedKbNew.addAll(EXPECTED_KB_V41_1);
+        expectedKbNew.addAll(EXPECTED_KB_V42_1);
+        expectedKbNew.addAll(EXPECTED_KB_V43_1);
+        expectedKbNew.addAll(EXPECTED_KB_V63_1);
         assertEquals(expectedKbNew, newKb,
                 "V32+V34 净新增 KB 登记必须恰好等于 READ-01~24 + WRITE-01~04（28）+ RAPTOR 2，"
-                        + "V37 补登 inventory 1；"
-                        + "多出 = 超范围登记，缺少 = 补登遗漏（对照设计 §1.7 登记表与 V34 注释、V37 迁移）");
+                        + "V37 补登 inventory 1，V41 会话删除 1，V42 文档切分查看 1，V43 反馈处理 1；"
+                        + "多出 = 超范围登记，缺少 = 补登遗漏（对照设计 §1.7 登记表与 V34/V37/V41/V42/V43 注释）");
 
         // ---- 断言 3：AI 反向信任端点 2 个已登记（U1 裁决 V33 authOnly）----
         Set<String> aiExported = apiV1.stream()
@@ -318,6 +344,8 @@ class BffApiRegistryDiffSurveyTest {
                 mock(OrgFacadeService.class)));
         context.getBeanFactory().registerSingleton("deptController", new DeptController(
                 mock(OrgFacadeService.class)));
+        context.getBeanFactory().registerSingleton("postController", new PostController(
+                mock(OrgFacadeService.class)));
         context.getBeanFactory().registerSingleton("dashboardController", new DashboardController(
                 mock(DashboardAggregateService.class)));
         context.getBeanFactory().registerSingleton("roleController", new RoleController(
@@ -331,7 +359,7 @@ class BffApiRegistryDiffSurveyTest {
         context.getBeanFactory().registerSingleton("menuController", new MenuController(
                 mock(MenuAggregateService.class)));
         context.getBeanFactory().registerSingleton("userController", new UserController(
-                mock(UserAggregateService.class)));
+                mock(UserAggregateService.class), mock(OrgWebClient.class)));
         context.getBeanFactory().registerSingleton("appController", new AppController(
                 mock(IamWebClient.class)));
         context.getBeanFactory().registerSingleton("agentOpsChannelController", new AgentOpsChannelController(
@@ -506,6 +534,8 @@ class BffApiRegistryDiffSurveyTest {
             // ---- V2 seed：IAM / ORG / DEPT / ROLE / MENU / DICT / DASHBOARD / LOG / AUTH ----
             "GET /api/v1/users",
             "GET /api/v1/users/{id}",
+            "GET /api/v1/users/employees/by-phone",
+            "GET /api/v1/users/check-employee-binding",
             "POST /api/v1/users",
             "PUT /api/v1/users/{id}",
             "DELETE /api/v1/users/{id}",
@@ -519,9 +549,19 @@ class BffApiRegistryDiffSurveyTest {
             "DELETE /api/v1/orgs/{id}",
             "GET /api/v1/depts/tree",
             "GET /api/v1/depts/{id}",
+            // ---- V49：部门岗位编制（sys_api 91202 / 挂 catalog 2001；V55 menu_api → 206）----
+            "GET /api/v1/depts/{id}/staffing",
+            // ---- V40：组织穿透（sys_api 91198 / menu_api → 菜单 206 system:dept:list）----
+            "GET /api/v1/depts/pierce",
             "POST /api/v1/depts",
             "PUT /api/v1/depts/{id}",
             "DELETE /api/v1/depts/{id}",
+            // ---- V54/V55：部门类型（sys_api 9201-9205 / menu_api 91291-91295）----
+            "GET /api/v1/dept-types",
+            "GET /api/v1/dept-types/tree",
+            "POST /api/v1/dept-types",
+            "PUT /api/v1/dept-types/{id:[0-9]+}",
+            "DELETE /api/v1/dept-types/{id:[0-9]+}",
             "GET /api/v1/roles",
             "GET /api/v1/roles/{id}",
             "POST /api/v1/roles",
@@ -597,6 +637,10 @@ class BffApiRegistryDiffSurveyTest {
             "POST /api/v1/agent-ops/skills/{id}/enable",
             "POST /api/v1/agent-ops/skills/{id}/disable",
             "POST /api/v1/agent-ops/skills/reindex",
+            // ---- V50 sys_api 92173 + V61 绑 92051 agent:skill:manage ----
+            "POST /api/v1/agent-ops/skills/parse",
+            // ---- V51 接管补登：sys_api 92176 / 挂 catalog 92090，权限 agent:skill:manage ----
+            "POST /api/v1/agent-ops/skills/builder/chat",
             "GET /api/v1/agent-ops/skills/{id}/grants",
             "PUT /api/v1/agent-ops/skills/{id}/grants",
             "GET /api/v1/agent-ops/roles",
@@ -610,13 +654,22 @@ class BffApiRegistryDiffSurveyTest {
             "GET /api/v1/agent-ops/agents/{id}/skills",
             "PUT /api/v1/agent-ops/agents/{id}/skills",
             "GET /api/v1/agent-ops/agents/{id}/config-files",
-            "GET /api/v1/agent-ops/agents/{id}/config-files/content",
-            "PUT /api/v1/agent-ops/agents/{id}/config-files/content",
+            // T04 后读/写为多段路径；sys_api 用 AntPathMatcher `/**`（见 V66）
+            "GET /api/v1/agent-ops/agents/{id}/config-files/**",
+            "PUT /api/v1/agent-ops/agents/{id}/config-files/**",
             "GET /api/v1/agent-ops/agents/{id}/coordination",
             "PUT /api/v1/agent-ops/agents/{id}/coordination",
             "GET /api/v1/agent-ops/sessions",
             "GET /api/v1/agent-ops/sessions/{id}",
             "GET /api/v1/agent-ops/sessions/{id}/messages",
+            // ---- V50 sys_api 92174~92175 + V61 绑 92033 agent:session:list ----
+            "GET /api/v1/agent-ops/sessions/{id}/timing",
+            "POST /api/v1/agent-ops/sessions/timing/batch",
+            // ---- V43：Agent 反馈四端点（sys_api 92169~92172 / code 00920070~00920073）----
+            "GET /api/v1/agent-ops/sessions/feedback",
+            "GET /api/v1/agent-ops/sessions/feedback/stats",
+            "POST /api/v1/agent-ops/sessions/feedback/{feedbackId}/process",
+            "POST /api/v1/agent-ops/sessions/feedback/batch-process",
             "DELETE /api/v1/agent-ops/sessions/{id}",
             "POST /api/v1/agent-ops/sessions/batch-delete",
             "POST /api/v1/agent-ops/chat/sessions",
@@ -697,6 +750,8 @@ class BffApiRegistryDiffSurveyTest {
             "GET /api/v1/kb/qa/sessions/mine",
             "GET /api/v1/kb/qa/sessions/{sessionId}",
             "GET /api/v1/kb/qa/sessions/{sessionId}/feedback",
+            // ---- V41：问答会话软删除（sys_api 91199 / menu_api 91288 → 菜单 91036，复用 kb:qa:ask）----
+            "DELETE /api/v1/kb/qa/sessions/{sessionId}",
             "GET /api/v1/kb/operations/qa/sessions",
             "GET /api/v1/kb/operations/qa/sessions/{sessionId}",
             "GET /api/v1/kb/operations/qa/sessions-all",
@@ -731,6 +786,12 @@ class BffApiRegistryDiffSurveyTest {
             "PUT /api/v1/modules/apis/{apiId}",
             "DELETE /api/v1/modules/apis/{apiId}",
             "GET /api/v1/modules/{moduleId}/bindings",
+            // ---- V42（本期）：KB 文档切分查看（sys_api 91200 / menu_api 91289 → 菜单 91034 kb:document:list）----
+            "GET /api/v1/kb/libraries/{libraryId}/documents/{id}/chunks",
+            // ---- V63/V64：KB 文档切分图片代理（sys_api 91300 / menu_api 91304 → 菜单 91034 kb:document:list）----
+            "GET /api/v1/kb/libraries/{libraryId}/documents/{id}/chunk-images/{imageId}",
+            // ---- V43（本期）：KB 问答反馈处理（sys_api 91201 / menu_api 91290 → 菜单 91037 kb:operation:list）----
+            "PATCH /api/v1/kb/operations/qa/feedback/{feedbackId}/process",
             // ---- V39（系统管理三页真实化）：员工写端点 + 岗位 + 岗位类型 + 系统参数 ----
             // 员工详情/新增/编辑/删除（sys_api 91179-91182；员工列表 V4:1011 已登记不重复）
             "GET /api/v1/employees/{id}",
@@ -744,9 +805,16 @@ class BffApiRegistryDiffSurveyTest {
             "PUT /api/v1/posts/{id}",
             "DELETE /api/v1/posts/{id}",
             "GET /api/v1/post-types",
+            // ---- V40 已登记（sys_api 91195-91197 / 挂 catalog 91178 员工与岗位）----
+            "POST /api/v1/post-types",
+            "PUT /api/v1/post-types/{id}",
+            "DELETE /api/v1/post-types/{id}",
+            // ---- V49：岗位类型树（sys_api 91203；V55 menu_api → 285 system:post:list）----
+            "GET /api/v1/post-types/tree",
             // 系统参数列表/详情/新增/编辑/删除（sys_api 91190-91194）
             "GET /api/v1/configs",
             "GET /api/v1/configs/{id}",
+            "GET /api/v1/configs/key/{key}",
             "POST /api/v1/configs",
             "PUT /api/v1/configs/{id}",
             "DELETE /api/v1/configs/{id}"

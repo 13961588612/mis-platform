@@ -7,6 +7,7 @@ public record OrgVO(
         String tenantId,
         String code,
         String name,
+        String parentId,
         Integer sort,
         Integer status,
         String remark,

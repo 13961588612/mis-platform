@@ -1,0 +1,107 @@
+classDiagram
+    class SysEmployee {
+        +Long id
+        +Long tenantId
+        +Long deptId
+        +String employeeNo
+        +String realName
+        +String email
+        +String phone
+        +Integer gender
+        +String title
+        +LocalDate hireDate
+        +Integer status
+        +Integer isBuiltin   %% 新增(B3)
+    }
+    class SysEmployeeDept {
+        +Long employeeId
+        +Long deptId
+        +Integer isPrimary
+    }
+    class SysEmployeePost {
+        +Long employeeId
+        +Long postId
+        +Integer isPrimary
+        +LocalDate startDate
+    }
+    class SysPost {
+        +Long id
+        +Long tenantId
+        +Long deptId   %% 单值归属
+        +String name
+    }
+    class EmployeeCreateRequest {
+        +Long tenantId
+        +Long deptId
+        +List~Long~ deptIds
+        +String employeeNo
+        +String realName
+        +String email
+        +String phone
+        +List~EmployeePostItem~ posts
+        +Integer isBuiltin   %% 新增(B5)
+    }
+    class EmployeeUpdateRequest {
+        +String realName
+        +String phone
+        +Long deptId
+        +List~Long~ deptIds
+        +List~EmployeePostItem~ posts
+        +Integer isBuiltin   %% 新增(B6)
+    }
+    class EmployeePostItem {
+        +Long postId
+        +Integer isPrimary
+        +LocalDate startDate
+    }
+    class EmployeeVO {
+        +String phone
+        +Integer isBuiltin   %% 新增(B7)
+        +List~EmployeePostVO~ posts
+    }
+    class EmployeeService {
+        +create(EmployeeCreateRequest)
+        +update(Long, EmployeeUpdateRequest)
+    }
+    class SysEmployeeRepository {
+        +findByTenantIdAndEmployeeNo()
+        +findByTenantIdAndPhone()          %% 新增(B4)
+        +existsByTenantIdAndPhoneAndIdNot() %% 新增(B4)
+    }
+    class UserUpdateRequest {
+        +List~Long~ orgIds
+        +List~Long~ deptIds
+    }
+    class UserService {
+        +update(Long, UserUpdateRequest)
+    }
+    class AssignmentEditor {
+        +value: Assignment[]
+        +onChange(v)
+        +handleDeptChange(i, deptId)
+    }
+    class DeptTreeSelect {
+        +value
+        +onChange(deptId)
+    }
+    class Assignment {
+        +dept: string
+        +post: string
+        +startDate: string
+        +isPrimary: boolean
+        +deptLabel: string
+        +postLabel: string
+    }
+
+    SysEmployee "1" *-- "0..*" SysEmployeeDept : employee_id
+    SysEmployee "1" *-- "0..*" SysEmployeePost : employee_id
+    SysPost "1" <-- "0..*" SysEmployeePost : post_id
+    SysEmployeePost ..> EmployeePostItem : 映射
+    EmployeeCreateRequest ..> EmployeePostItem
+    EmployeeUpdateRequest ..> EmployeePostItem
+    EmployeeService ..> SysEmployeeRepository
+    EmployeeService ..> SysEmployee
+    EmployeeService ..> EmployeeVO : 返回
+    UserService ..> UserUpdateRequest
+    AssignmentEditor ..> DeptTreeSelect : 复用 EMP-04
+    AssignmentEditor ..> Assignment : 编辑行

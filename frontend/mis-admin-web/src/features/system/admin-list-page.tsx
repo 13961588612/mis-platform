@@ -21,6 +21,10 @@ import { Input } from '@/components/ui/input';
 import { PageHeader } from '@/components/common/page-header';
 import { buildAppBreadcrumbs } from '@/components/common/app-breadcrumbs';
 import { DetailDefList } from '@/components/common/detail-def-list';
+import { DeptTreeSelect } from '@/components/common/dept-tree-select';
+import { FilterMultiSelect } from '@/components/common/filter-multi-select';
+import { HEADER_ACTION_BTN_CLASS, ResetColWidthButton } from '@/components/common/header-action-buttons';
+import { PostTypeTreeSelect } from '@/components/common/post-type-tree-select';
 import { StatusBadge } from '@/components/common/list-page-skeleton';
 import { SortIndicator } from '@/components/common/sort-indicator';
 import { useColumnWidths, type ResizableColumn } from '@/components/common/use-column-widths';
@@ -35,6 +39,7 @@ import {
 } from '@/components/ui/sheet';
 import type { AdminField, AdminPageDef, FieldOption } from './types';
 import { SYSTEM_PAGE_DEFS } from './page-defs';
+import { listPosts } from '@/lib/api/posts';
 import { AiFeature } from '@/features/ai/components/ai-feature';
 import { AiTextExtract } from '@/features/ai/components/ai-text-extract';
 import { AiSummary } from '@/features/ai/components/ai-summary';
@@ -111,11 +116,11 @@ function TagCluster({ values, flat = false }: { values: unknown[]; flat?: boolea
 function AssignmentEditor({
   value,
   onChange,
-  deptOptions = [],
   postOptions = [],
 }: {
   value: unknown;
   onChange: (v: unknown) => void;
+  /** 部门选项已改用 DeptTreeSelect（树形单选），此处保留接口以兼容调用方，不再使用 */
   deptOptions?: { label: string; value: string | number }[];
   postOptions?: { label: string; value: string | number }[];
 }) {
@@ -123,6 +128,37 @@ function AssignmentEditor({
   const update = (next: Assignment[]) => onChange(next);
   const setAt = (i: number, patch: Partial<Assignment>) =>
     update(list.map((a, idx) => (idx === i ? { ...a, ...patch } : a)));
+  /** 按行维护的岗位选项：选中部门后联动拉取该部门岗位（EMP-05） */
+  const [rowPostOptions, setRowPostOptions] = useState<Record<number, { label: string; value: string | number }[]>>(
+    {},
+  );
+  /** 部门变更：回填单值 deptId 并联动拉取该部门岗位（EMP-04 + EMP-05） */
+  const handleDeptChange = (i: number, deptId: string) => {
+    const currentPost = list[i]?.post ?? '';
+    if (!deptId) {
+      setAt(i, { dept: '' });
+      setRowPostOptions((prev) => {
+        const next = { ...prev };
+        delete next[i];
+        return next;
+      });
+      return;
+    }
+    listPosts({ deptIds: [Number(deptId)], status: 1 })
+      .then((posts) => {
+        const opts = posts.map((p) => ({ label: p.name, value: p.id }));
+        setRowPostOptions((prev) => ({ ...prev, [i]: opts }));
+        const stillValid = opts.some((o) => String(o.value) === String(currentPost));
+        if (!stillValid) {
+          setAt(i, { dept: deptId, post: '' });
+        } else {
+          setAt(i, { dept: deptId });
+        }
+      })
+      .catch(() => {
+        /* 部门岗位拉取失败：不影响部门选择，回退到全局岗位选项 */
+      });
+  };
   const removeAt = (i: number) => {
     const next = list.filter((_, idx) => idx !== i);
     // 删除后若无主职，默认把首行设为主职
@@ -160,18 +196,10 @@ function AssignmentEditor({
               list.map((a, i) => (
                 <tr key={i} className="border-t border-border/50 last:border-0">
                   <td className="px-2 py-1.5">
-                    <select
-                      className="h-8 w-full rounded-md border border-input bg-card px-2 text-sm"
+                    <DeptTreeSelect
                       value={a.dept ?? ''}
-                      onChange={(e) => setAt(i, { dept: e.target.value })}
-                    >
-                      <option value="">请选择</option>
-                      {deptOptions.map((o) => (
-                        <option key={String(o.value)} value={String(o.value)}>
-                          {o.label}
-                        </option>
-                      ))}
-                    </select>
+                      onChange={(v) => handleDeptChange(i, v == null ? '' : String(v))}
+                    />
                   </td>
                   <td className="px-2 py-1.5">
                     <select
@@ -180,7 +208,7 @@ function AssignmentEditor({
                       onChange={(e) => setAt(i, { post: e.target.value })}
                     >
                       <option value="">请选择</option>
-                      {postOptions.map((o) => (
+                      {(rowPostOptions[i] ?? postOptions).map((o) => (
                         <option key={String(o.value)} value={String(o.value)}>
                           {o.label}
                         </option>
@@ -242,11 +270,14 @@ function AssignmentEditor({
 /** 任职记录只读子表（详情 / 列表展开用）：表头加粗带底色；表体只显示列分隔线（竖线），不显示行间横线 */
 function AssignmentTable({ list }: { list: Assignment[] }) {
   if (!list.length) return <span className="text-muted-foreground">—</span>;
+  // 「组织」列仅当本批任职记录至少一项携带 orgName 时渲染，避免影响其它未增强页面
+  const showOrg = list.some((a) => a.orgName != null);
   return (
     <table className="w-full border-collapse bg-table-surface text-sm">
       <thead className="border-b-2 border-foreground/20 bg-table-header text-left text-sm font-bold text-muted-foreground">
         <tr>
           <th className="px-3 py-2 font-bold">任职部门</th>
+          {showOrg && <th className="border-l border-border/60 px-3 py-2 font-bold">组织</th>}
           <th className="border-l border-border/60 px-3 py-2 font-bold">任职岗位</th>
           <th className="border-l border-border/60 px-3 py-2 font-bold">任职开始时间</th>
           <th className="border-l border-border/60 px-3 py-2 font-bold">主职</th>
@@ -256,6 +287,7 @@ function AssignmentTable({ list }: { list: Assignment[] }) {
         {list.map((a, i) => (
           <tr key={i}>
             <td className="px-3 py-2 font-medium text-foreground">{a.deptLabel || a.dept || '—'}</td>
+            {showOrg && <td className="border-l border-border/60 px-3 py-2 font-medium text-foreground">{a.orgName ?? '—'}</td>}
             <td className="border-l border-border/60 px-3 py-2 font-medium text-foreground">
               {a.postLabel || a.post || '—'}
             </td>
@@ -397,6 +429,47 @@ function FieldControl({
     );
   }
 
+  if (field.type === 'dept-tree') {
+    return (
+      <div className={cn(SHEET_FORM_FIELD, 'min-w-0 self-start')}>
+        {label}
+        <DeptTreeSelect
+          value={value == null ? '' : (value as string | number)}
+          onChange={(v) => onChange(v == null ? '' : v)}
+          placeholder={field.placeholder}
+        />
+      </div>
+    );
+  }
+
+  if (field.type === 'dept-tree-multi') {
+    const current = Array.isArray(value) ? (value as (string | number)[]) : [];
+    return (
+      <div className={cn(SHEET_FORM_FIELD, 'min-w-0 self-start')}>
+        {label}
+        <DeptTreeSelect
+          multiple
+          value={current}
+          onChange={(v) => onChange(v)}
+          placeholder={field.placeholder}
+        />
+      </div>
+    );
+  }
+
+  if (field.type === 'post-type-tree') {
+    return (
+      <div className={cn(SHEET_FORM_FIELD, 'min-w-0 self-start')}>
+        {label}
+        <PostTypeTreeSelect
+          value={value == null ? '' : (value as string | number)}
+          onChange={(v) => onChange(v == null ? '' : v)}
+          placeholder={field.placeholder}
+        />
+      </div>
+    );
+  }
+
   if (field.type === 'assignments') {
     return (
       <AssignmentEditor
@@ -438,7 +511,7 @@ function FieldControl({
   );
 }
 
-export function AdminListPage({ def }: { def: AdminPageDef }) {
+export function AdminListPage({ def, headerExtra }: { def: AdminPageDef; headerExtra?: ReactNode }) {
   const [rows, setRows] = useState(() => (def.sample ?? []).map((r) => ({ ...r })));
   const [draft, setDraft] = useState<Record<string, unknown>>({});
   const [applied, setApplied] = useState<Record<string, unknown>>({});
@@ -453,10 +526,13 @@ export function AdminListPage({ def }: { def: AdminPageDef }) {
   const [filterOpen, setFilterOpen] = useState(true);
   // 真实数据加载态（def.loader 提供时触发骨架；否则用 sample，无加载态）
   const [loading, setLoading] = useState(false);
+  // 保存/删除提交态：提交期间锁定界面，避免异步等待阶段假死
+  const [saving, setSaving] = useState(false);
   // 部门/岗位/岗位类型选项（与「部门管理」等真实数据源同源）：对应 loader 提供时挂载即拉取
   const [deptOptions, setDeptOptions] = useState<FieldOption[]>([]);
   const [postOptions, setPostOptions] = useState<FieldOption[]>([]);
   const [postTypeOptions, setPostTypeOptions] = useState<FieldOption[]>([]);
+  const [orgOptions, setOrgOptions] = useState<FieldOption[]>([]);
   // 数据刷新计数：mutation 成功后 +1 触发 loader 重新拉取
   const [reloadTick, setReloadTick] = useState(0);
   // 表头排序：三态 无 → 升 → 降 → 无（仅对普通文本/数字列生效，徽标/标签簇/任职数列除外）
@@ -500,13 +576,20 @@ export function AdminListPage({ def }: { def: AdminPageDef }) {
     window.setTimeout(() => setToast(''), 1800);
   }, []);
 
+  // 服务端过滤签名：仅当 serverFilterKeys 对应的筛选值变化时才重新拉取 loader，
+  // 避免纯客户端筛选（name/status）触发无谓的网络请求。
+  const serverFilterSignature = useMemo(
+    () => (def.serverFilterKeys ?? []).map((k) => String(applied[k] ?? '')).join('|'),
+    [applied, def.serverFilterKeys],
+  );
+
   // 真实数据加载：def.loader 提供时挂载/刷新即拉取；失败回退空数组 + toast（绝不落 sample）
   useEffect(() => {
     if (!def.loader) return;
     let alive = true;
     setLoading(true);
     def
-      .loader()
+      .loader(applied)
       .then((data) => {
         if (alive) setRows(data.map((r) => ({ ...r })));
       })
@@ -522,7 +605,7 @@ export function AdminListPage({ def }: { def: AdminPageDef }) {
     return () => {
       alive = false;
     };
-  }, [def, reloadTick, showToast]);
+  }, [def, reloadTick, showToast, serverFilterSignature]);
 
   // 部门选项加载：员工/岗位页的部门下拉与「部门管理」同源；失败/为空回退空数组（显示「—」）
   useEffect(() => {
@@ -593,6 +676,29 @@ export function AdminListPage({ def }: { def: AdminPageDef }) {
     };
   }, [def, showToast]);
 
+  // 组织选项加载（真实 sys_org）；失败/为空回退空数组
+  useEffect(() => {
+    if (!def.orgOptionsLoader) {
+      setOrgOptions([]);
+      return;
+    }
+    let alive = true;
+    def
+      .orgOptionsLoader()
+      .then((opts) => {
+        if (alive) setOrgOptions(opts);
+      })
+      .catch(() => {
+        if (alive) {
+          setOrgOptions([]);
+          showToast('组织选项加载失败');
+        }
+      });
+    return () => {
+      alive = false;
+    };
+  }, [def, showToast]);
+
   // optionsFrom 字段的选项由真实数据源注入（select → options；assignments → deptOptions/postOptions）
   const effectiveFilters = useMemo<AdminField[]>(
     () =>
@@ -600,9 +706,10 @@ export function AdminListPage({ def }: { def: AdminPageDef }) {
         if (f.optionsFrom === 'dept') return { ...f, options: deptOptions };
         if (f.optionsFrom === 'post') return { ...f, options: postOptions };
         if (f.optionsFrom === 'post-type') return { ...f, options: postTypeOptions };
+        if (f.optionsFrom === 'org') return { ...f, options: orgOptions };
         return f;
       }),
-    [def.filters, deptOptions, postOptions, postTypeOptions],
+    [def.filters, deptOptions, postOptions, postTypeOptions, orgOptions],
   );
   const effectiveForm = useMemo<AdminField[]>(
     () =>
@@ -617,9 +724,10 @@ export function AdminListPage({ def }: { def: AdminPageDef }) {
         if (f.optionsFrom === 'dept') return { ...f, options: deptOptions };
         if (f.optionsFrom === 'post') return { ...f, options: postOptions };
         if (f.optionsFrom === 'post-type') return { ...f, options: postTypeOptions };
+        if (f.optionsFrom === 'org') return { ...f, options: orgOptions };
         return f;
       }),
-    [def, deptOptions, postOptions, postTypeOptions],
+    [def, deptOptions, postOptions, postTypeOptions, orgOptions],
   );
 
   // AI：辅助录入嵌在表单 Sheet 右侧；问答仍用独立 Sheet
@@ -632,7 +740,8 @@ export function AdminListPage({ def }: { def: AdminPageDef }) {
   const openCreate = useCallback((opts?: { withAssist?: boolean }) => {
     const seed: Record<string, unknown> = {};
     for (const f of effectiveForm) {
-      if (f.type === 'switch') seed[f.key] = 1;
+      if (f.defaultValue !== undefined) seed[f.key] = f.defaultValue;
+      else if (f.type === 'switch') seed[f.key] = 1;
       else seed[f.key] = '';
     }
     setSheetMode('create');
@@ -680,10 +789,16 @@ export function AdminListPage({ def }: { def: AdminPageDef }) {
       .map((r) => decorate({ ...r }))
       .filter((r) =>
         (def.filters ?? []).every((f) => {
+          // 服务端已过滤的 key（deptIds/orgIds）：跳过客户端二次过滤，避免数组匹配全空
+          if (def.serverFilterKeys?.includes(f.key)) return true;
           const v = applied[f.key];
           if (v === '' || v == null) return true;
           const cell = r[f.key];
           if (f.type === 'select') return String(cell) === String(v);
+          if (f.type === 'multiselect' && Array.isArray(v)) {
+            if (v.length === 0) return true;
+            return v.map(String).includes(String(cell));
+          }
           return String(cell ?? '')
             .toLowerCase()
             .includes(String(v).toLowerCase());
@@ -701,7 +816,7 @@ export function AdminListPage({ def }: { def: AdminPageDef }) {
       if (!Number.isNaN(na) && !Number.isNaN(nb)) return (na - nb) * dir;
       return String(av).localeCompare(String(bv), 'zh-Hans-CN') * dir;
     });
-  }, [rows, applied, def.filters, decorate, sortKey, sortDir]);
+  }, [rows, applied, def.filters, def.serverFilterKeys, decorate, sortKey, sortDir]);
 
   // 已应用筛选条件计数（收起态提示）
   const filterCount = useMemo(
@@ -738,6 +853,7 @@ export function AdminListPage({ def }: { def: AdminPageDef }) {
         return;
       }
     }
+    setSaving(true);
     try {
       if (sheetMode === 'edit' && editing) {
         if (def.updateApi) {
@@ -756,10 +872,13 @@ export function AdminListPage({ def }: { def: AdminPageDef }) {
         setRows((prev) => [{ ...formValues, id: nextId }, ...prev]);
         showToast('已创建');
       }
-      setSheetOpen(false);
       setReloadTick((t) => t + 1);
     } catch (err) {
       showToast(err instanceof Error ? err.message : '保存失败');
+    } finally {
+      // 不论成功失败都解除 saving 并关闭表单，消除提交/保存期间界面假死
+      setSaving(false);
+      setSheetOpen(false);
     }
   };
 
@@ -769,6 +888,7 @@ export function AdminListPage({ def }: { def: AdminPageDef }) {
       return;
     }
     if (!window.confirm(`确认删除「${String(row.name ?? row.username ?? row.code ?? row.id)}」？`)) return;
+    setSaving(true);
     try {
       if (def.deleteApi) {
         await def.deleteApi(String(row.id));
@@ -780,6 +900,9 @@ export function AdminListPage({ def }: { def: AdminPageDef }) {
       }
     } catch (err) {
       showToast(err instanceof Error ? err.message : '删除失败');
+    } finally {
+      // 不论成功失败都解除 saving，避免删除期间界面假死
+      setSaving(false);
     }
   };
 
@@ -811,19 +934,16 @@ export function AdminListPage({ def }: { def: AdminPageDef }) {
         })}
         actions={
           <div className="flex items-center gap-2">
-            {hasCustom ? (
-              <Button type="button" variant="outline" size="sm" onClick={resetColWidths}>
-                重置列宽
-              </Button>
-            ) : null}
+            {headerExtra ? <>{headerExtra}</> : null}
+            {hasCustom ? <ResetColWidthButton onClick={resetColWidths} /> : null}
             {def.readonly ? null : (
               <>
-                <Button type="button" size="sm" onClick={() => openCreate()}>
+                <Button type="button" className={HEADER_ACTION_BTN_CLASS} onClick={() => openCreate()}>
                   <Plus className="h-4 w-4" />
                   新建
                 </Button>
                 <AiFeature feature="text-extract">
-                  <Button type="button" variant="outline" size="sm" onClick={openSmartImport}>
+                  <Button type="button" variant="outline" className={HEADER_ACTION_BTN_CLASS} onClick={openSmartImport}>
                     <Sparkles className="h-4 w-4" /> 智能录入
                   </Button>
                 </AiFeature>
@@ -865,7 +985,7 @@ export function AdminListPage({ def }: { def: AdminPageDef }) {
                 </Button>
                 <Button
                   type="button"
-                  variant="outline"
+                  variant="secondary"
                   size="sm"
                   onClick={() => {
                     setDraft({});
@@ -921,6 +1041,29 @@ export function AdminListPage({ def }: { def: AdminPageDef }) {
                           </option>
                         ))}
                       </select>
+                    ) : f.type === 'multiselect' ? (
+                      <FilterMultiSelect
+                        options={f.options ?? []}
+                        value={draft[f.key]}
+                        onChange={(v) => setDraft((prev) => ({ ...prev, [f.key]: v }))}
+                      />
+                    ) : f.type === 'dept-tree-multi' ? (
+                      <DeptTreeSelect
+                        multiple
+                        value={
+                          draft[f.key] && Array.isArray(draft[f.key])
+                            ? (draft[f.key] as (string | number)[])
+                            : []
+                        }
+                        onChange={(v) => setDraft((prev) => ({ ...prev, [f.key]: v }))}
+                        placeholder={f.placeholder}
+                      />
+                    ) : f.type === 'dept-tree' ? (
+                      <DeptTreeSelect
+                        value={draft[f.key] == null ? '' : (draft[f.key] as string | number)}
+                        onChange={(v) => setDraft((prev) => ({ ...prev, [f.key]: v == null ? '' : v }))}
+                        placeholder={f.placeholder}
+                      />
                     ) : (
                       <Input
                         className="h-auto min-h-9 px-[0.7rem] py-[0.55rem] text-sm shadow-none"
@@ -947,6 +1090,7 @@ export function AdminListPage({ def }: { def: AdminPageDef }) {
               onEdit={openEdit}
               onDelete={removeRow}
               onCreate={openCreate}
+              saving={saving}
               onClearFilters={() => {
                 setDraft({});
                 setApplied({});
@@ -1133,7 +1277,7 @@ export function AdminListPage({ def }: { def: AdminPageDef }) {
                                     <Pencil className="h-3 w-3" />
                                     编辑
                                   </button>
-                                  <RowMoreMenu onDelete={() => removeRow(row)} />
+                                  <RowMoreMenu onDelete={() => removeRow(row)} saving={saving} />
                                 </>
                               ) : null}
                             </div>
@@ -1212,7 +1356,7 @@ export function AdminListPage({ def }: { def: AdminPageDef }) {
           side="right"
           className={cn(
             'flex w-full flex-col p-0',
-            splitAssist ? 'sm:max-w-4xl' : 'max-w-[32rem] sm:max-w-[32rem]',
+            splitAssist ? 'sm:max-w-4xl' : 'max-w-[40rem] sm:max-w-[40rem]',
           )}
         >
           <SheetHeader className="border-b px-5 py-4">
@@ -1340,7 +1484,7 @@ export function AdminListPage({ def }: { def: AdminPageDef }) {
                 <Button type="button" variant="outline" className="min-h-9 text-sm font-medium" onClick={() => closeSheet(false)}>
                   取消
                 </Button>
-                <Button type="button" className="min-h-9 text-sm font-medium" onClick={saveForm}>
+                <Button type="button" className="min-h-9 text-sm font-medium" onClick={saveForm} disabled={saving}>
                   {sheetMode === 'edit' ? '保存' : '创建'}
                 </Button>
               </>
@@ -1379,7 +1523,7 @@ export function AdminListPage({ def }: { def: AdminPageDef }) {
   );
 }
 
-function RowMoreMenu({ onDelete }: { onDelete: () => void }) {
+function RowMoreMenu({ onDelete, saving = false }: { onDelete: () => void; saving?: boolean }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
@@ -1419,7 +1563,8 @@ function RowMoreMenu({ onDelete }: { onDelete: () => void }) {
           <button
             type="button"
             role="menuitem"
-            className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-[0.8125rem] text-destructive hover:bg-destructive/10"
+            disabled={saving}
+            className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-[0.8125rem] text-destructive hover:bg-destructive/10 disabled:pointer-events-none disabled:opacity-50"
             onClick={() => {
               setOpen(false);
               onDelete();
@@ -1453,6 +1598,7 @@ function AppTile({
   onView,
   onEdit,
   onDelete,
+  saving,
 }: {
   row: Record<string, unknown>;
   def: AdminPageDef;
@@ -1460,6 +1606,7 @@ function AppTile({
   onView: (row: Record<string, unknown>) => void;
   onEdit: (row: Record<string, unknown>) => void;
   onDelete: (row: Record<string, unknown>) => void;
+  saving?: boolean;
 }) {
   return (
     <div className="group relative flex flex-col rounded-lg border bg-card p-4 transition hover:border-primary/40 hover:shadow-md">
@@ -1514,7 +1661,7 @@ function AppTile({
               <Pencil className="h-3 w-3" />
               编辑
             </button>
-            <RowMoreMenu onDelete={() => onDelete(row)} />
+            <RowMoreMenu onDelete={() => onDelete(row)} saving={saving} />
           </>
         ) : null}
       </div>
@@ -1533,6 +1680,7 @@ function AppCardGrid({
   onDelete,
   onCreate,
   onClearFilters,
+  saving,
 }: {
   rows: Record<string, unknown>[];
   loading: boolean;
@@ -1544,6 +1692,7 @@ function AppCardGrid({
   onDelete: (row: Record<string, unknown>) => void;
   onCreate: () => void;
   onClearFilters: () => void;
+  saving?: boolean;
 }) {
   return (
     <div className="min-h-0 flex-1 overflow-auto p-4">
@@ -1612,6 +1761,7 @@ function AppCardGrid({
               onView={onView}
               onEdit={onEdit}
               onDelete={onDelete}
+              saving={saving}
             />
           ))}
         </div>

@@ -1,0 +1,200 @@
+classDiagram
+    %% ===== 数据层（mis-org）=====
+    class SysDeptType {
+        +Long id
+        +Long tenantId
+        +String code
+        +String name
+        +Integer sort
+        +Integer status
+        +Long parentId
+        +Integer isLeaf
+        +Instant createdAt
+        +Instant updatedAt
+    }
+    class SysDept {
+        +Long id
+        +Long tenantId
+        +Long orgId
+        +Long parentId
+        +String code
+        +String name
+        +Long categoryId
+        +String ancestors
+        +Integer sort
+        +Integer status
+        +Integer isRoot
+        +Long leaderEmployeeId
+        +Long linkedOrgId
+        +Long deptTypeId  «NEW»
+        +Integer establishmentCount  «NEW»
+        +Integer deleted
+        +Instant createdAt
+        +Instant updatedAt
+    }
+    class SysDeptTypeRepository {
+        +findByTenantIdAndStatus()
+        +findByTenantId()
+        +findByTenantIdAndCode()
+        +findByTenantIdAndParentId()
+        +existsByTenantIdAndParentId()
+    }
+    class SysDeptRepository {
+        +findByOrgIdAndStatus()
+        +existsByOrgIdAndParentId()
+        +countByDeptTypeId(Long)  «NEW»
+        +existsByDeptTypeId(Long)  «NEW»
+    }
+    SysDeptTypeRepository ..|> JpaRepository
+    SysDeptRepository ..|> JpaRepository
+
+    %% ===== DTO（mis-org）=====
+    class DeptTypeVO {
+        +String id
+        +String tenantId
+        +String code
+        +String name
+        +Integer sort
+        +Integer status
+        +Integer referenceCount
+        +String parentId
+        +Integer isLeaf
+    }
+    class DeptTypeTreeNodeVO {
+        +String id
+        +String code
+        +String name
+        +Integer sort
+        +Integer status
+        +Integer isLeaf
+        +Integer referenceCount
+        +String parentId
+        +List~DeptTypeTreeNodeVO~ children
+    }
+    class DeptTypeCreateRequest {
+        +Long tenantId
+        +String code
+        +String name
+        +Integer sort
+        +Integer status
+        +Long parentId
+        +Integer isLeaf
+    }
+    class DeptTypeUpdateRequest {
+        +String name
+        +Integer sort
+        +Integer status
+        +Long parentId
+        +Integer isLeaf
+    }
+    class DeptVO {
+        +String id
+        +String tenantId
+        +String orgId
+        +String parentId
+        +String code
+        +String name
+        +String categoryId
+        +String ancestors
+        +Integer sort
+        +Integer status
+        +Integer isRoot
+        +String leaderEmployeeId
+        +String linkedOrgId
+        +String linkedOrgName
+        +String deptTypeId  «NEW»
+        +String deptTypeName  «NEW»
+        +Integer establishmentCount  «NEW»
+        +Integer isLeaf  «NEW»
+        +Instant createdAt
+        +Instant updatedAt
+        +List~DeptVO~ children
+    }
+
+    %% ===== Service / Controller（mis-org）=====
+    class DeptTypeService {
+        +listTypes(tenantId, status) List~DeptTypeVO~
+        +listTypeTree(tenantId, status) List~DeptTypeTreeNodeVO~
+        +createType(req) DeptTypeVO
+        +updateType(id, req) DeptTypeVO
+        +deleteType(id) void
+        -buildTypeTree()
+        -toTypeVo()
+    }
+    class DeptService {
+        +tree(orgId) List~DeptVO~
+        +pierce(orgId) List~DeptPierceVO~
+        +create(req) DeptVO
+        +update(id, req) DeptVO
+        -toVo(dept, parentMap, orgNames, deptTypeNameMap) DeptVO
+    }
+    class DeptController {
+        +GET /internal/v1/depts/tree
+        +GET /internal/v1/depts/{id}
+        +POST /internal/v1/depts
+        +PUT /internal/v1/depts/{id}
+        +DELETE /internal/v1/depts/{id}
+        +GET /internal/v1/dept-types
+        +GET /internal/v1/dept-types/tree
+        +POST /internal/v1/dept-types
+        +PUT /internal/v1/dept-types/{id}
+        +DELETE /internal/v1/dept-types/{id}
+    }
+    DeptTypeService --> SysDeptTypeRepository
+    DeptTypeService --> SysDeptRepository
+    DeptService --> SysDeptRepository
+    DeptService --> SysDeptTypeRepository
+    DeptController --> DeptService
+    DeptController --> DeptTypeService
+
+    %% ===== BFF 透传 =====
+    class BffDeptController {
+        +GET /api/v1/depts/tree
+        +POST /api/v1/depts
+        +PUT /api/v1/depts/{id}
+        +GET /api/v1/dept-types
+        +GET /api/v1/dept-types/tree
+        +POST /api/v1/dept-types
+        +PUT /api/v1/dept-types/{id}
+        +DELETE /api/v1/dept-types/{id}
+    }
+    class OrgFacadeService {
+        +deptTree(orgId)
+        +createDept(req)
+        +updateDept(id, req)
+        +listDeptTypes(status)
+        +listDeptTypeTree(status)
+        +createDeptType(req)
+        +updateDeptType(id, req)
+        +deleteDeptType(id)
+    }
+    class OrgWebClient {
+        +deptTree(orgId)
+        +createDept(body)
+        +listDeptTypes(...)
+        +listDeptTypeTree(...)
+        +createDeptType(body)
+    }
+    BffDeptController --> OrgFacadeService
+    OrgFacadeService --> OrgWebClient
+
+    %% ===== 前端 =====
+    class DeptTypeManagePage {
+        +listDeptTypeTree()
+        +createDeptType()
+        +updateDeptType()
+        +deleteDeptType()
+    }
+    class DeptTypeTreeSelect {
+        +listDeptTypeTree()
+    }
+    class DeptTypeApi {
+        +listDeptTypes()
+        +listDeptTypeTree()
+        +createDeptType()
+        +updateDeptType()
+        +deleteDeptType()
+    }
+    DeptTypeManagePage --> DeptTypeApi
+    DeptTypeManagePage --> DeptTypeTreeSelect
+    DeptTypeTreeSelect --> DeptTypeApi

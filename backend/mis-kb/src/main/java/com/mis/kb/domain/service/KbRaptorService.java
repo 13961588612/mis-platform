@@ -187,7 +187,7 @@ public class KbRaptorService {
     }
 
     /**
-     * 回写 RAPTOR 状态到 {@code rag_settings_json}（24 参 canonical 保留其余字段，含图谱三字段）。
+     * 回写 RAPTOR 状态到 {@code rag_settings_json}（26 参 canonical 保留其余字段，含图谱三字段）。
      *
      * @param lib     知识库实体
      * @param status  四态码值
@@ -219,7 +219,12 @@ public class KbRaptorService {
                 current.raptorMaxCluster(),
                 current.raptorPrompt(),
                 status,
-                message);
+                message,
+                current.pageIndex(),
+                current.imageTableContextWindow(),
+                current.overlapPercent(),
+                current.autoKeywords(),
+                current.autoQuestions());
         lib.setRagSettingsJson(KbJson.writeSettings(updated));
         lib.setUpdatedAt(Instant.now());
         libraryRepository.save(lib);

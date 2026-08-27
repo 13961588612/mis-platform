@@ -28,6 +28,8 @@ export const AGENT_NAV: SystemNavNode[] = [
   { kind: 'leaf', path: '/agent/overview', title: '概览', icon: 'LayoutDashboard' },
   { kind: 'leaf', path: '/agent/chat', title: '本地对话', icon: 'MessageSquare' },
   { kind: 'leaf', path: '/agent/sessions', title: '会话管理', icon: 'History' },
+  // 会话反馈（V43: 92046，icon MessageSquareWarning 已登记到 lib/nav/icons.ts）
+  { kind: 'leaf', path: '/agent/feedback', title: '会话反馈', icon: 'MessageSquareWarning' },
   // ui.md §2.2 智能体与调度（V19: 92034–92036）
   { kind: 'leaf', path: '/agent/agents', title: 'Agent 总览', icon: 'Bot' },
   { kind: 'leaf', path: '/agent/catalog', title: 'Worker Catalog', icon: 'Boxes' },

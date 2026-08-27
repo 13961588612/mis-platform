@@ -81,9 +81,12 @@ public class KbSubjectProxyService {
         try {
             PageResult<IamUserVO> page = iamWebClient.pageUsers(
                     RequestContext.requireTenantId(),
-                    RequestContext.requireAppId(),
+                    List.of(RequestContext.requireAppId()),
                     null,
                     keyword,
+                    null,
+                    null,
+                    null,
                     null,
                     1,
                     USER_SEARCH_SIZE);

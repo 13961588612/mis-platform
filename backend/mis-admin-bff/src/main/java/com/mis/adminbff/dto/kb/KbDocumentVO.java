@@ -10,6 +10,10 @@ import java.time.Instant;
  *
  * <p>企业级增强一期（KE-03/KE-04）末位追加 {@code parseProgress} / {@code parseError}，
  * 与 mis-kb {@code KbDocumentVO} 对齐；由 Jackson 反序列化透传。
+ *
+ * <p>T4 末位追加 {@code pageIndex} / {@code imageTableContextWindow} / {@code autoKeywords} /
+ * {@code autoQuestions}（文件级解析器设置，null = 继承库级；只落库不下发），
+ * 同样由 Jackson 反序列化透传。
  */
 public record KbDocumentVO(
         Long id,
@@ -26,5 +30,9 @@ public record KbDocumentVO(
         Integer chunkTokenNum,
         String separator,
         Integer parseProgress,
-        String parseError) {
+        String parseError,
+        Boolean pageIndex,
+        Integer imageTableContextWindow,
+        Integer autoKeywords,
+        Integer autoQuestions) {
 }

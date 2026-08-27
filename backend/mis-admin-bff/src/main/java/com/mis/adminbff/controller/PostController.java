@@ -1,8 +1,11 @@
 package com.mis.adminbff.controller;
 
+import com.mis.adminbff.client.model.PostTypeTreeNodeVO;
 import com.mis.adminbff.client.model.PostTypeVO;
 import com.mis.adminbff.client.model.PostVO;
 import com.mis.adminbff.dto.PostCreateRequest;
+import com.mis.adminbff.dto.PostTypeCreateRequest;
+import com.mis.adminbff.dto.PostTypeUpdateRequest;
 import com.mis.adminbff.dto.PostUpdateRequest;
 import com.mis.adminbff.service.OrgFacadeService;
 import com.mis.common.core.result.Result;
@@ -35,9 +38,11 @@ public class PostController {
     @GetMapping("/posts")
     public Result<List<PostVO>> list(
             @RequestParam(required = false) Long deptId,
+            @RequestParam(required = false) List<Long> deptIds,
+            @RequestParam(required = false) List<Long> orgIds,
             @RequestParam(required = false) Long postTypeId,
             @RequestParam(required = false) Integer status) {
-        return Result.ok(orgFacadeService.listPosts(deptId, postTypeId, status));
+        return Result.ok(orgFacadeService.listPosts(deptId, deptIds, orgIds, postTypeId, status));
     }
 
     @GetMapping("/posts/{id}")
@@ -61,8 +66,33 @@ public class PostController {
         return Result.ok();
     }
 
+    /**
+     * 岗位类型列表：status 可选（null=全量含禁用，1=仅启用）；返回含 referenceCount。
+     */
     @GetMapping("/post-types")
-    public Result<List<PostTypeVO>> listTypes() {
-        return Result.ok(orgFacadeService.listPostTypes());
+    public Result<List<PostTypeVO>> listTypes(@RequestParam(required = false) Integer status) {
+        return Result.ok(orgFacadeService.listPostTypes(status));
+    }
+
+    /** V47 岗位类型树：按 parent_id 递归组装（顶层 parentId=0）。 */
+    @GetMapping("/post-types/tree")
+    public Result<List<PostTypeTreeNodeVO>> listTypeTree(@RequestParam(required = false) Integer status) {
+        return Result.ok(orgFacadeService.listPostTypeTree(status));
+    }
+
+    @PostMapping("/post-types")
+    public Result<PostTypeVO> createType(@Valid @RequestBody PostTypeCreateRequest request) {
+        return Result.ok(orgFacadeService.createPostType(request));
+    }
+
+    @PutMapping("/post-types/{id}")
+    public Result<PostTypeVO> updateType(@PathVariable Long id, @Valid @RequestBody PostTypeUpdateRequest request) {
+        return Result.ok(orgFacadeService.updatePostType(id, request));
+    }
+
+    @DeleteMapping("/post-types/{id}")
+    public Result<Void> deleteType(@PathVariable Long id) {
+        orgFacadeService.deletePostType(id);
+        return Result.ok();
     }
 }

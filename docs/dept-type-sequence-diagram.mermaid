@@ -1,0 +1,61 @@
+sequenceDiagram
+    autonumber
+    participant FE as 部门树页(DeptTreePage)
+    participant API as depts / dept-types API
+    participant BFF as BFF DeptController
+    participant FAC as OrgFacadeService
+    participant WC as OrgWebClient
+    participant ORG as mis-org DeptController
+    participant DS as DeptService
+    participant DTR as SysDeptRepository
+    participant DTT as SysDeptTypeRepository
+
+    Note over FE,DTT: 场景A：部门树加载（编制数 / 部门类型 / 是否末级）
+    FE->>API: fetchDeptTree(orgId)
+    API->>BFF: GET /api/v1/depts/tree?orgId
+    BFF->>FAC: deptTree(orgId)
+    FAC->>WC: deptTree(orgId)
+    WC->>ORG: GET /internal/v1/depts/tree?orgId
+    ORG->>DS: tree(orgId)
+    DS->>DTR: findByOrgIdAndStatus(orgId, 1)
+    DTR-->>DS: List~SysDept~
+    DS->>DTT: findAllById(distinct deptTypeIds)
+    DTT-->>DS: List~SysDeptType~ 用于 deptTypeNameMap
+    DS-->>ORG: List~DeptVO~ (含 deptTypeId/deptTypeName/establishmentCount/isLeaf)
+    ORG-->>WC: Result~List~DeptVO~~
+    WC-->>FAC: List~DeptVO~(BFF 模型)
+    FAC-->>BFF: List~DeptVO~(BFF 模型)
+    BFF-->>API: Result~List~DeptVO~~
+    API-->>FE: DeptNode[] (树表渲染三列)
+
+    Note over FE,DTT: 场景B：创建部门类型（用户或种子等效）
+    FE->>API: createDeptType({code,name,parentId,isLeaf,...})
+    API->>BFF: POST /api/v1/dept-types
+    BFF->>FAC: createDeptType(req)
+    FAC->>WC: createDeptType(body)
+    WC->>ORG: POST /internal/v1/dept-types
+    ORG->>DS: createType(req)
+    DS->>DTT: findByTenantIdAndCode / save
+    DTT-->>DS: SysDeptType
+    DS-->>ORG: DeptTypeVO
+    ORG-->>WC: Result~DeptTypeVO~
+    WC-->>FAC: DeptTypeVO(BFF 模型)
+    FAC-->>BFF: DeptTypeVO(BFF 模型)
+    BFF-->>API: Result~DeptTypeVO~
+    API-->>FE: DeptTypeTreeNode
+
+    Note over FE,DTT: 场景C：新建部门（携带部门类型 + 编制数）
+    FE->>API: createDept({orgId,parentId,name,categoryId,deptTypeId,establishmentCount,...})
+    API->>BFF: POST /api/v1/depts
+    BFF->>FAC: createDept(req)  // body 含 deptTypeId / establishmentCount
+    FAC->>WC: createDept(body)
+    WC->>ORG: POST /internal/v1/depts
+    ORG->>DS: create(req)
+    DS->>DTR: save(dept 含 deptTypeId / establishmentCount)
+    DTR-->>DS: SysDept
+    DS-->>ORG: DeptVO
+    ORG-->>WC: Result~DeptVO~
+    WC-->>FAC: DeptVO(BFF 模型)
+    FAC-->>BFF: DeptVO(BFF 模型)
+    BFF-->>API: Result~DeptVO~
+    API-->>FE: DeptNode

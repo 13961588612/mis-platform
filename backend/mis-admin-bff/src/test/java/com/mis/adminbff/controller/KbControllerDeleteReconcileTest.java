@@ -57,31 +57,46 @@ class KbControllerDeleteReconcileTest {
     // ---------------------------------------------------- DELETE /libraries/{id}?mode=
 
     @Test
-    @DisplayName("DELETE ?mode=archive → 原样委托 facade.deleteLibrary(id, archive)，回执不得改写")
+    @DisplayName("DELETE ?mode=archive → 原样委托 facade.deleteLibrary(id, archive, force=false)，回执不得改写")
     void deleteLibrary_archiveDelegatesToFacade() {
         KbLibraryDeleteResultVO expected = new KbLibraryDeleteResultVO(
                 "archive", Boolean.TRUE, null, "arch-20260811-100", 0L, 0L,
-                "已归档，未删除引擎数据");
-        when(kbFacadeService.deleteLibrary(LIB_ID, "archive")).thenReturn(expected);
+                "已归档，未删除引擎数据", false);
+        when(kbFacadeService.deleteLibrary(LIB_ID, "archive", false)).thenReturn(expected);
 
-        Result<KbLibraryDeleteResultVO> result = controller.deleteLibrary(LIB_ID, "archive");
+        Result<KbLibraryDeleteResultVO> result = controller.deleteLibrary(LIB_ID, "archive", false);
 
         assertNotNull(result);
         assertSame(expected, result.getData(), "回执应原样透传，BFF 不得改写 message");
-        verify(kbFacadeService).deleteLibrary(LIB_ID, "archive");
+        verify(kbFacadeService).deleteLibrary(LIB_ID, "archive", false);
     }
 
     @Test
-    @DisplayName("DELETE ?mode=physical → 原样委托 facade.deleteLibrary(id, physical)")
+    @DisplayName("DELETE ?mode=physical → 原样委托 facade.deleteLibrary(id, physical, force=false)")
     void deleteLibrary_physicalDelegatesToFacade() {
         KbLibraryDeleteResultVO expected = new KbLibraryDeleteResultVO(
-                "physical", Boolean.TRUE, null, null, 3L, 2L, "已物理删除");
-        when(kbFacadeService.deleteLibrary(LIB_ID, "physical")).thenReturn(expected);
+                "physical", Boolean.TRUE, null, null, 3L, 2L, "已物理删除", false);
+        when(kbFacadeService.deleteLibrary(LIB_ID, "physical", false)).thenReturn(expected);
 
-        Result<KbLibraryDeleteResultVO> result = controller.deleteLibrary(LIB_ID, "physical");
+        Result<KbLibraryDeleteResultVO> result = controller.deleteLibrary(LIB_ID, "physical", false);
 
         assertSame(expected, result.getData());
-        verify(kbFacadeService).deleteLibrary(LIB_ID, "physical");
+        verify(kbFacadeService).deleteLibrary(LIB_ID, "physical", false);
+    }
+
+    @Test
+    @DisplayName("DELETE ?mode=archive&force=true → force 原样透传 facade（Q1 两段式第二段）")
+    void deleteLibrary_forceTrueDelegatesToFacade() {
+        KbLibraryDeleteResultVO expected = new KbLibraryDeleteResultVO(
+                "archive", Boolean.FALSE, null, null, 0L, 0L,
+                "已归档（引擎侧数据集已不存在，跳过引擎改名）：本地已停用并标记归档，文档与授权全部保留。",
+                true);
+        when(kbFacadeService.deleteLibrary(LIB_ID, "archive", true)).thenReturn(expected);
+
+        Result<KbLibraryDeleteResultVO> result = controller.deleteLibrary(LIB_ID, "archive", true);
+
+        assertSame(expected, result.getData(), "engineMissing=true 提示态/强制回执应原样透传");
+        verify(kbFacadeService).deleteLibrary(LIB_ID, "archive", true);
     }
 
     // ---------------------------------------------------- GET /libraries/{id}/engine-ref

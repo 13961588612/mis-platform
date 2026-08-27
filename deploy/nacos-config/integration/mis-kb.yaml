@@ -20,3 +20,5 @@ mis:
       # Platform-wide rerank model id (library keeps only on/off). Empty = disable rerank.
       # Fully-qualified name@instance@provider required by RAGFlow (bare name -> code:100).
       rerank-model-id: ${MIS_KB_RERANK_MODEL_ID:qwen3-rerank@Tongyi-Qianwen@Tongyi-Qianwen}
+      parser-toc-supported: ${MIS_KB_ENGINE_PARSER_TOC_SUPPORTED:true}
+      parser-image-table-context-supported: ${MIS_KB_ENGINE_PARSER_IMAGE_TABLE_CONTEXT_SUPPORTED:true}

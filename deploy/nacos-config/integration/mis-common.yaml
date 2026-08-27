@@ -2,9 +2,21 @@
 
 spring:
   datasource:
-    url: jdbc:postgresql://${DB_HOST:10.254.16.6}:${DB_PORT:5432}/${DB_NAME:mis_platform}
+    # YAML 须加引号：& 否则会被当成 anchor；ApplicationName 按各服务 spring.application.name 展开
+    url: "jdbc:postgresql://${DB_HOST:10.254.16.6}:${DB_PORT:5432}/${DB_NAME:mis_platform}?tcpKeepAlive=true&ApplicationName=${spring.application.name}&loginTimeout=10"
     username: ${DB_USER:mis}
     password: ${DB_PASSWORD:mis123}
+    # 联调共享库：单服务池上限 5，避免本机多实例 + 远端容器叠加占满 PG
+    hikari:
+      maximum-pool-size: ${DB_POOL_SIZE:5}
+      minimum-idle: ${DB_POOL_MIN_IDLE:1}
+      connection-timeout: 25000
+      idle-timeout: 600000
+      max-lifetime: 1800000
+      leak-detection-threshold: 15000
+      connection-init-sql: "SET application_name = '${spring.application.name}'"
+      # 不设 connection-test-query，走 JDBC Connection.isValid()
+      validation-timeout: 5000
   data:
     redis:
       host: ${REDIS_HOST:10.254.16.6}

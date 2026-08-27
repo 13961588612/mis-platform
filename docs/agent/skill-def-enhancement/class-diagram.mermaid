@@ -1,0 +1,113 @@
+classDiagram
+    %% ===================== 后端 ai-platform (Python / FastAPI) =====================
+    class SkillCreateRequest {
+        +str skill_id
+        +str name
+        +str description = ""
+        +str category
+        +list~str~ tags
+        +dict parameters
+        +list~str~ required_permissions
+        +str handler = ""   %% R1: 由必填改为可选(默认 "")
+        +int timeout = 30
+        +str version = "1.0.0"
+        +float priority = 1.0
+        +bool requires_approval = false
+    }
+
+    class SkillParseRequest {
+        +str content   %% 粘贴的 SKILL.md 全文
+    }
+
+    class SkillParseResponse {
+        +dict metadata   %% Front Matter 解析结果(name/description/category/tags/handler...)
+        +str body        %% Markdown 正文
+    }
+
+    class Skill {
+        +str skill_id
+        +str name
+        +str handler = ""
+        +str package_dir = ""
+        +str body = null
+        +bool body_loaded = false
+        +list~str~ scripts
+        +list~str~ references
+        +list~str~ assets
+        +str source = "custom"
+        +is_package_skill() bool
+        +load_body(body, attachments) None
+    }
+
+    class spec_parser {
+        +parse_front_matter(content) tuple~dict,str~
+        +list_package_attachments(dir) dict
+    }
+
+    SkillCreateRequest ..> Skill : 构造(skill_id/handler/...)
+    SkillParseRequest ..> SkillParseResponse : produces
+    spec_parser ..> SkillParseResponse : 提供 metadata+body
+    spec_parser ..> Skill : load_body 填充脚本/附件
+
+    %% ===================== BFF mis-admin-bff (Java / Spring) =====================
+    class AgentOpsController {
+        +parseSkill(JsonNode body) Result~JsonNode~
+    }
+    class AgentOpsFacadeService {
+        +parseSkill(JsonNode body) JsonNode
+    }
+    class AgentOpsClient {
+        +parseSkill(Object body) JsonNode
+    }
+    AgentOpsController --> AgentOpsFacadeService : 调用
+    AgentOpsFacadeService --> AgentOpsClient : 调用
+    AgentOpsClient ..> SkillParseResponse : 透传下游 JSON
+
+    %% ===================== 前端 mis-admin-web (React / TS) =====================
+    class SkillPayload {
+        +skill_id? str
+        +name str
+        +description str
+        +category? str
+        +tags? str[]
+        +handler? str   %% R2: 新增可选字段
+    }
+
+    class Skill {
+        +skill_id str
+        +name str
+        +status SkillStatus
+        +category? str
+        +version? str
+        +tags? str[]
+        +updated_at str
+        +handler? str   %% R9: 详情/列表消费
+        +source? str   %% R9
+    }
+
+    class SkillDetail {
+        +body? str|null
+        +scripts? str[]
+        +references? str[]
+        +assets? str[]
+        +source? str
+        +handler? str
+    }
+
+    class SkillParseResponseFE {
+        +metadata Record~string,unknown~
+        +body string
+    }
+
+    class AgentSkillFormState {
+        +mode 'manual'|'paste'
+        +rawContent string
+        +parsing boolean
+        +parseError string|null
+        +form FormValues
+    }
+
+    Skill <|-- SkillDetail : extends(R9)
+    SkillPayload ..> Skill : create/update 入参
+    SkillDetail ..> AgentSkillFormState : 解析回填来源
+    SkillParseResponseFE ..> AgentSkillFormState : 回填 name/desc/.../handler

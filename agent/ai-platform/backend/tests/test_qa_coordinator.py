@@ -366,7 +366,7 @@ class TestRedlineDefaultsAndSseFrame:
         session_mgr.create_session = AsyncMock(return_value=child)
         session_mgr.add_message = AsyncMock()
 
-        async def _process(session: Any, message: Any) -> Any:
+        async def _process(session: Any, message: Any, assistant_message_id=None) -> Any:
             yield AgentEvent.text_delta("你好")
 
         instance = MagicMock()

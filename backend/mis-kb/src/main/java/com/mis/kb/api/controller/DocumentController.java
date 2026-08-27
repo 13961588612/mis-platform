@@ -3,6 +3,7 @@ package com.mis.kb.api.controller;
 import com.mis.common.core.result.Result;
 import com.mis.common.security.context.LoginUser;
 import com.mis.common.security.context.SecurityContextHolder;
+import com.mis.kb.api.dto.KbDocumentChunksVO;
 import com.mis.kb.api.dto.KbDocumentUploadResponse;
 import com.mis.kb.api.dto.KbDocumentVO;
 import com.mis.kb.api.dto.KbReparseAllResult;
@@ -42,15 +43,67 @@ public class DocumentController {
         return Result.ok(documentService.get(id));
     }
 
+    /**
+     * 分页列举文档切片（「查看文档切分效果」）。
+     *
+     * <p>读权限双闸门：BFF 侧 {@code kb:document:list} 权限码拦截 + 本服务内
+     * ACL 读权限校验。pageSize 默认 50，服务端不做硬上限（前端 UI 约束 100）。
+     */
+    @GetMapping("/{libraryId}/documents/{id}/chunks")
+    public Result<KbDocumentChunksVO> listChunks(
+            @PathVariable Long libraryId,
+            @PathVariable Long id,
+            @RequestParam(required = false) String keywords,
+            @RequestParam(defaultValue = "1") int page,
+            @RequestParam(defaultValue = "50") int pageSize) {
+        return Result.ok(documentService.listDocumentChunks(
+                libraryId, id, currentUserId(), keywords, page, pageSize));
+    }
+
+    /**
+     * 拉取分片版面截图（「查看切分」卡片配图；直吐 JPEG 字节，不包 Result）。
+     *
+     * <p>BFF 侧为附属资源权限并集（document:list / qa:ask / agent:chat:use）；
+     * 本服务仍做 ACL 读。{@code imageId} 形如 {@code {datasetId}-{objectId}}。
+     */
+    @GetMapping(
+            value = "/{libraryId}/documents/{id}/chunk-images/{imageId}")
+    public org.springframework.http.ResponseEntity<byte[]> getChunkImage(
+            @PathVariable Long libraryId,
+            @PathVariable Long id,
+            @PathVariable String imageId) {
+        byte[] bytes = documentService.getChunkImage(libraryId, id, currentUserId(), imageId);
+        org.springframework.http.MediaType mediaType = detectChunkImageMediaType(bytes);
+        return org.springframework.http.ResponseEntity.ok()
+                .header(org.springframework.http.HttpHeaders.CACHE_CONTROL, "private, max-age=3600")
+                .contentType(mediaType)
+                .body(bytes);
+    }
+
+    /** 按魔数识别 PNG/JPEG；RAGFlow 可能返回 PNG 但旧端点硬标 image/JPEG。 */
+    private static org.springframework.http.MediaType detectChunkImageMediaType(byte[] bytes) {
+        if (bytes != null && bytes.length >= 8
+                && bytes[0] == (byte) 0x89 && bytes[1] == 'P' && bytes[2] == 'N' && bytes[3] == 'G') {
+            return org.springframework.http.MediaType.IMAGE_PNG;
+        }
+        return org.springframework.http.MediaType.IMAGE_JPEG;
+    }
+
     @PostMapping("/{libraryId}/documents")
     public Result<KbDocumentUploadResponse> upload(
             @PathVariable Long libraryId,
             @RequestParam("file") MultipartFile file,
             @RequestParam(required = false) String chunkMethod,
             @RequestParam(required = false) Integer chunkTokenNum,
-            @RequestParam(required = false) String separator) {
+            @RequestParam(required = false) String separator,
+            @RequestParam(required = false) Boolean pageIndex,
+            @RequestParam(required = false) Integer imageTableContextWindow,
+            @RequestParam(required = false) Integer autoKeywords,
+            @RequestParam(required = false) Integer autoQuestions) {
         return Result.ok(documentService.upload(
-                libraryId, file, new DocumentChunkConfig(chunkMethod, chunkTokenNum, separator),
+                libraryId, file,
+                new DocumentChunkConfig(chunkMethod, chunkTokenNum, separator, pageIndex,
+                        imageTableContextWindow, autoKeywords, autoQuestions),
                 currentUserId()));
     }
 

@@ -35,6 +35,10 @@ public class SysEmployee {
     @Column
     private String phone;
 
+    /** 是否内置账号：1=内置（手机号必填/唯一校验豁免，EMP-03，Q2 推荐方案）；0=普通 */
+    @Column(name = "is_builtin")
+    private Integer isBuiltin;
+
     @Column
     private Integer gender;
 
@@ -70,6 +74,8 @@ public class SysEmployee {
     public void setEmail(String email) { this.email = email; }
     public String getPhone() { return phone; }
     public void setPhone(String phone) { this.phone = phone; }
+    public Integer getIsBuiltin() { return isBuiltin; }
+    public void setIsBuiltin(Integer isBuiltin) { this.isBuiltin = isBuiltin; }
     public Integer getGender() { return gender; }
     public void setGender(Integer gender) { this.gender = gender; }
     public String getTitle() { return title; }

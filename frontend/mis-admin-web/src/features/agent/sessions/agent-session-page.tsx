@@ -20,20 +20,27 @@
 import { useCallback, useEffect, useState } from 'react';
 import { ChevronLeft, ChevronRight, Eye, RefreshCw, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
-import { cn } from '@/lib/utils';
+import { cn, todayLocalDate } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { PermissionGate } from '@/components/auth/permission-gate';
 import { SortIndicator } from '@/components/common/sort-indicator';
 import { useClientSort } from '@/components/common/use-client-sort';
 import { useColumnWidths, type ResizableColumn } from '@/components/common/use-column-widths';
+import { RESET_COL_WIDTH_OVERLAY_CLASS, ResetColWidthButton } from '@/components/common/header-action-buttons';
 import { AgentPageShell, AgentContentState } from '../components/agent-page-shell';
 import { AgentConfirmDialog } from '../components/agent-confirm-dialog';
 import { AgentSessionDetailDialog } from './agent-session-detail-dialog';
-import { batchDeleteSessions, deleteSession, listAgents, listSessions } from '../api/agent-ops-api';
+import {
+  batchDeleteSessions,
+  batchSessionTiming,
+  deleteSession,
+  listAgents,
+  listSessions,
+} from '../api/agent-ops-api';
 import { useAgentStore } from '../stores/use-agent-store';
 import { agentErrorMessage, formatTime } from '../types';
-import type { AgentSummary, Session, SessionChannel, SessionQuery } from '../types';
+import type { AgentSummary, Session, SessionChannel, SessionQuery, SessionTimingPayload } from '../types';
 
 const selectClass =
   'h-9 w-full rounded-md border border-input bg-card px-[0.7rem] text-sm text-foreground shadow-none';
@@ -46,8 +53,27 @@ const SESSION_COLS: ResizableColumn[] = [
   { key: 'user_name', label: '用户' },
   { key: 'message_count', label: '消息数' },
   { key: 'updated_at', label: '更新时间' },
+  { key: 'timing', label: '耗时', locked: true },
   { key: '__ops__', label: '操作', locked: true },
 ];
+
+/** 毫秒格式化（与详情抽屉一致）：>=1s 显示秒，否则 ms。 */
+function fmtMs(ms: number | null | undefined): string {
+  if (ms === null || ms === undefined) return '—';
+  if (ms >= 1000) return `${(ms / 1000).toFixed(2)}s`;
+  return `${ms}ms`;
+}
+
+/** 列表「耗时」列单元格（2.1 按轮）：显示最近一轮（last）的端到端耗时；
+ *  null（已过期/无采样）显示统一文案；无 turns 显示「—」。 */
+function formatTimingCell(t: SessionTimingPayload | null | undefined): string {
+  if (t === null) return '已过期/暂无';
+  if (!t || !t.turns) return '—';
+  const keys = Object.keys(t.turns);
+  if (keys.length === 0) return '—';
+  const lastKey = t.last ?? keys[keys.length - 1];
+  return fmtMs(t.turns[lastKey]?.total_ms);
+}
 
 const CHANNEL_LABELS: Record<SessionChannel, string> = {
   web: '网页',
@@ -88,6 +114,8 @@ export function AgentSessionPage() {
   const [pageSize, setPageSize] = useState(20);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /** 当前页各会话耗时（A-6，Redis 调试态，按轮 map；值 null = 已过期/暂无）。 */
+  const [timings, setTimings] = useState<Record<string, SessionTimingPayload | null>>({});
 
   const [selected, setSelected] = useState<Set<string>>(() => new Set());
   const [pending, setPending] = useState<PendingDelete | null>(null);
@@ -111,8 +139,12 @@ export function AgentSessionPage() {
    *
    * <p>刻意与 `sessionFilter`（输入态）分开：否则在关键字输入框里每敲一个字符
    * 都会打一次后端。用户点「查询」或翻页时才同步过来。
+   * 默认与筛选区一致：起止日期均为当天。
    */
-  const [applied, setApplied] = useState<SessionQuery>({});
+  const [applied, setApplied] = useState<SessionQuery>(() => {
+    const today = todayLocalDate();
+    return { from: toIsoUtc(today, false), to: toIsoUtc(today, true) };
+  });
 
   const load = useCallback(
     async (query: SessionQuery) => {
@@ -124,6 +156,14 @@ export function AgentSessionPage() {
         setTotal(result.total ?? 0);
         // 翻页后清空跨页选择：批量删除只应作用于用户看得见的这一页
         setSelected(new Set());
+        // A-6：批量拉取当前页耗时（pipeline 一次往返）；失败不影响列表可读性
+        try {
+          setTimings(
+            await batchSessionTiming((result.items ?? []).map((r) => r.session_id)),
+          );
+        } catch {
+          setTimings({});
+        }
       } catch (e) {
         setRows([]);
         setTotal(0);
@@ -165,7 +205,8 @@ export function AgentSessionPage() {
 
   function onReset(): void {
     resetSessionFilter();
-    setApplied({});
+    const today = todayLocalDate();
+    setApplied({ from: toIsoUtc(today, false), to: toIsoUtc(today, true) });
     setPage(1);
   }
 
@@ -310,7 +351,7 @@ export function AgentSessionPage() {
           <Button size="sm" onClick={applyFilter}>
             查询
           </Button>
-          <Button size="sm" variant="ghost" onClick={onReset}>
+          <Button size="sm" variant="secondary" onClick={onReset}>
             重置
           </Button>
         </div>
@@ -327,13 +368,7 @@ export function AgentSessionPage() {
           >
             <div className="relative min-h-0 flex-1 overflow-auto rounded-lg border bg-table-surface">
               {hasCustom ? (
-                <button
-                  type="button"
-                  onClick={reset}
-                  className="absolute right-3 top-3 z-20 rounded-md bg-card px-2 py-0.5 text-xs text-muted-foreground shadow-sm hover:text-foreground"
-                >
-                  重置列宽
-                </button>
+                <ResetColWidthButton onClick={reset} className={RESET_COL_WIDTH_OVERLAY_CLASS} />
               ) : null}
               <table
                 className="border-separate border-spacing-0 bg-table-surface text-left text-sm"
@@ -442,6 +477,9 @@ export function AgentSessionPage() {
                       </td>
                       <td className="px-3 py-2 text-xs text-muted-foreground">
                         {formatTime(session.updated_at)}
+                      </td>
+                      <td className="px-3 py-2 text-xs text-muted-foreground">
+                        {formatTimingCell(timings[session.session_id])}
                       </td>
                       <td className="px-3 py-2" onClick={(e) => e.stopPropagation()}>
                         <div className="flex flex-wrap items-center justify-end gap-1">

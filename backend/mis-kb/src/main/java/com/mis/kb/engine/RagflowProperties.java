@@ -72,6 +72,21 @@ public class RagflowProperties {
      */
     private boolean raptorEnabled = true;
 
+    /**
+     * 当前引擎是否声明支持页码索引/TOC（{@code parser_config.ext.toc_extraction}）。
+     *
+     * <p>同步经 {@code parser_config.ext} 下发（2026-08-19 实测）；本开关控制
+     * {@code capabilities().parserTocSupported} 与前端置灰，默认 {@code true}（RAGFlow 集成环境）。
+     */
+    private boolean parserTocSupported = true;
+
+    /**
+     * 当前引擎是否声明支持图像/表格上下文窗口（ext 三键镜像）。
+     *
+     * <p>口径同 {@link #parserTocSupported}；默认 {@code true}。
+     */
+    private boolean parserImageTableContextSupported = true;
+
     /** 引擎对账配置（定时任务 + 手动触发共用）。 */
     private final Reconcile reconcile = new Reconcile();
 
@@ -129,6 +144,22 @@ public class RagflowProperties {
 
     public void setRaptorEnabled(boolean raptorEnabled) {
         this.raptorEnabled = raptorEnabled;
+    }
+
+    public boolean isParserTocSupported() {
+        return parserTocSupported;
+    }
+
+    public void setParserTocSupported(boolean parserTocSupported) {
+        this.parserTocSupported = parserTocSupported;
+    }
+
+    public boolean isParserImageTableContextSupported() {
+        return parserImageTableContextSupported;
+    }
+
+    public void setParserImageTableContextSupported(boolean parserImageTableContextSupported) {
+        this.parserImageTableContextSupported = parserImageTableContextSupported;
     }
 
     /**

@@ -1,0 +1,74 @@
+%% 4.1 对话计时：AgentEvent 流 → recorder → Redis timing key
+sequenceDiagram
+    participant U as 用户
+    participant API as session.py send_message
+    participant AM as AgentInstance.process_message
+    participant RT as OpenHarnessRuntime.run
+    participant R as SessionTimingRecorder
+    participant RD as Redis
+
+    U->>API: POST /sessions/{id}/messages
+    API->>AM: process_message(session, msg)
+    AM->>R: 创建 recorder(session_id)
+    AM->>RT: run(messages, ...)
+    RT-->>AM: AgentEvent(text.delta / tool.call / tool.result / dispatch.trace / done)
+    AM->>R: observe(event) 逐事件时间戳
+    AM-->>U: yield event (流式/非流式)
+    RT-->>AM: done
+    AM->>R: finalize() 切 5 阶段
+    R->>RD: SET aip:agent:session:{id}:timing (EX 86400)
+    R-->>AM: 完成（Redis 故障仅告警降级）
+
+%% 4.2 会话详情看耗时：前端 → BFF → ai-platform → Redis → 抽屉条形
+sequenceDiagram
+    participant F as 前端详情抽屉
+    participant BFF as AgentOpsController
+    participant BE as ai-platform session.py
+    participant RD as Redis
+
+    F->>BFF: GET /agent-ops/sessions/{id}/timing
+    BFF->>BE: GET /api/v1/sessions/{id}/timing
+    BE->>RD: GET aip:agent:session:{id}:timing
+    alt 命中且未过期
+        RD-->>BE: timing JSON
+        BE-->>BFF: {timing}
+        BFF-->>F: SessionTiming
+        F->>F: 渲染各阶段条形 + 占比
+    else 过期/不存在
+        RD-->>BE: nil
+        BE-->>BFF: null
+        BFF-->>F: null → 显示"暂无耗时采样"
+    end
+
+%% 4.3 列表耗时列：前端 → BFF → 批量 Redis pipeline
+sequenceDiagram
+    participant F as 前端列表页
+    participant BFF as AgentOpsController
+    participant BE as ai-platform session.py
+    participant RD as Redis
+
+    F->>BFF: POST /agent-ops/sessions/timing/batch {session_ids:[本页id]}
+    BFF->>BE: POST /api/v1/sessions/timing/batch
+    BE->>RD: pipeline GET aip:agent:session:{id}:timing ×N
+    RD-->>BE: [json|nil]
+    BE-->>BFF: {id: timing|null}
+    BFF-->>F: Record<id, SessionTiming|null>
+    F->>F: 列显示 total_ms 或"已过期"
+
+%% 4.4 技能创建/编辑双栏提交：表单 → BFF skills → ai-platform → registry 落盘 SKILL.md
+sequenceDiagram
+    participant F as 前端技能表单
+    participant BFF as AgentOpsController
+    participant BE as ai-platform skill.py
+    participant REG as SkillRegistry
+    participant DS as custom_store(磁盘)
+    participant RD as Redis
+
+    F->>BFF: POST|PUT /agent-ops/skills (含 body)
+    BFF->>BE: POST|PUT /api/v1/skills
+    BE->>DS: write_custom_skill_md(skill, body) → data/skills/{id}/SKILL.md
+    BE->>REG: register(skill) (skill.body 已填)
+    REG->>RD: Qdrant 索引 + 缓存
+    BE-->>BFF: Skill(含 body)
+    BFF-->>F: SkillDetail(body?)
+    Note over F: 解析回填：POST /agent-ops/skills/parse → 回填左右两栏（右栏可编辑）

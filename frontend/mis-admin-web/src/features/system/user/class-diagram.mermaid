@@ -1,0 +1,142 @@
+classDiagram
+    %% ===== mis-iam 数据/服务层 =====
+    class SysUserRepository {
+        <<interface>>
+        +existsByTenantIdAndAppIdAndUsername(...) bool
+        +existsByTenantIdAndAppIdAndPhone(tenantId, appId, phone) bool
+        +existsByTenantIdAndAppIdAndPhoneAndIdNot(tenantId, appId, phone, id) bool
+        +existsByTenantIdAndAppIdAndEmployeeId(tenantId, appId, employeeId) bool
+        +searchV3(tenantId, appIds, hasAppFilter, status, username, realName, phone, candidateUserIds, hasCandidate, pageable) Page~SysUser~
+    }
+    class SysUserRoleRepository {
+        <<interface>>
+        +findByUserId(userId) List~SysUserRole~
+        +existsByUserId(userId) bool
+    }
+    class UserService {
+        +page(tenantId, appIds, status, username, realName, phone, orgIds, deptIds, page, size) Page~UserVO~
+        +create(UserCreateRequest) UserVO
+        +update(id, UserUpdateRequest) UserVO
+        -guardAppChangeIfRoleAssigned(user, newAppId)
+        -checkPhoneUnique(tenantId, appId, phone, id)
+    }
+    class UserCreateRequest {
+        +Long tenantId
+        +Long appId
+        +Long employeeId
+        +String username
+        +String password
+        +String realName
+        +String phone
+        +String email
+        +List~Long~ orgIds
+        +List~Long~ deptIds
+        +List~Long~ roleIds
+    }
+    class UserUpdateRequest {
+        +Long appId
+        +String username
+        +Long employeeId
+        +String realName
+        +String phone
+        +String email
+        +Integer status
+        +List~Long~ orgIds
+        +List~Long~ deptIds
+    }
+    class UserVO {
+        +String id
+        +String tenantId
+        +String appId
+        +String employeeId
+        +String username
+        +String realName
+        +String email
+        +String phone
+        +List~String~ orgIds
+        +List~String~ deptIds
+        +List~RoleVO~ roles
+    }
+    UserService ..> SysUserRepository : uses
+    UserService ..> SysUserRoleRepository : uses
+    UserService ..> UserCreateRequest : consumes
+    UserService ..> UserUpdateRequest : consumes
+    UserService ..> UserVO : produces
+
+    %% ===== mis-admin-bff 聚合层 =====
+    class UserAggregateService {
+        +page(..., appIds, ...) PageResult~UserView~
+        +create(BFF_UserCreateRequest) UserView
+        +update(id, BFF_UserUpdateRequest) UserView
+        -isForceEmployeeBind() bool
+    }
+    class BFF_UserCreateRequest {
+        +String username
+        +String realName
+        +Long employeeId
+        +String email
+        +String phone
+        +Long appId
+        +List~Long~ roleIds
+        +String password
+        +List~Long~ orgIds
+        +List~Long~ deptIds
+    }
+    class BFF_UserUpdateRequest {
+        +String username
+        +Long employeeId
+        +String realName
+        +String email
+        +String phone
+        +Long appId
+        +Integer status
+        +List~Long~ orgIds
+        +List~Long~ deptIds
+    }
+    class UserView {
+        +String id
+        +String username
+        +String realName
+        +String employeeId
+        +String email
+        +String phone
+        +String appId
+        +List~RoleBrief~ roles
+        +List~String~ orgIds
+        +List~String~ deptIds
+    }
+    UserAggregateService ..> BFF_UserCreateRequest : consumes
+    UserAggregateService ..> BFF_UserUpdateRequest : consumes
+    UserAggregateService ..> UserView : produces
+
+    %% ===== 前端结构 =====
+    class UserFormState {
+        +string appId
+        +string username
+        +string realName
+        +string phone
+        +string email
+        +string password
+        +string employeeId
+        +string[] orgIds
+        +string[] deptIds
+        +string[] roleIds
+    }
+    class FieldErrors {
+        +username string
+        +phone string
+        +appId string
+    }
+    class EmployeePickerDialog {
+        +open(appId) void
+        +onSelect(employeeId) void
+    }
+    class PermissionTabs {
+        +OrgTab
+        +DeptTab
+        +RoleTab
+    }
+    class ApiError {
+        +int code
+        +string message
+    }

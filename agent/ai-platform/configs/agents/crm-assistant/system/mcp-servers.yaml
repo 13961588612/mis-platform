@@ -8,7 +8,7 @@
 mcp_servers:
   - name: mcp-api-suite
     transport: streamable_http
-    endpoint: "http://localhost:3333/mcp"
+    endpoint: "http://127.0.0.1:3333/mcp"
     enabled: true
     description: mcp-api-suite
     timeout: 30

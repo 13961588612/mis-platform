@@ -29,6 +29,17 @@ export async function getConfig(id: string): Promise<ConfigItem> {
   return unwrap(res, '获取系统参数失败');
 }
 
+export async function getConfigByKey(key: string): Promise<ConfigItem | null> {
+  const res = await api.get<ApiResult<ConfigItem>>(`/configs/key/${encodeURIComponent(key)}`);
+  if (res.data.code !== 0) throw new Error(res.data.message || '获取系统参数失败');
+  return res.data.data ?? null;
+}
+
+/** 与 Java {@code Boolean.parseBoolean} 对齐：忽略大小写的 true。 */
+export function isConfigEnabled(value?: string | null): boolean {
+  return value != null && value.trim().toLowerCase() === 'true';
+}
+
 export async function createConfig(body: ConfigCreatePayload): Promise<ConfigItem> {
   const res = await api.post<ApiResult<ConfigItem>>('/configs', body);
   return unwrap(res, '创建系统参数失败');

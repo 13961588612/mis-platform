@@ -111,9 +111,19 @@ class MCPClient:
         return self._server_name
 
     @property
+    def transport(self) -> MCPTransportType:
+        """当前传输协议。"""
+        return self._transport
+
+    @property
     def is_connected(self) -> bool:
         """当前是否已建立可用的 MCP 会话。"""
         return self._connected and self._session is not None
+
+    @property
+    def uses_ephemeral_io(self) -> bool:
+        """HTTP/SSE 在 FastAPI 下不宜跨请求复用长连接，读写一律短连接。"""
+        return self._transport in (MCPTransportType.HTTP, MCPTransportType.SSE)
 
     async def connect(self) -> None:
         """建立到 MCP Server 的连接。"""
@@ -184,44 +194,107 @@ class MCPClient:
         return await stack.enter_async_context(ClientSession(read, write))
 
     async def disconnect(self) -> None:
-        """关闭到 MCP Server 的连接。"""
+        """关闭到 MCP Server 的连接。
+
+        <p>Streamable HTTP / SSE 的 transport 常在「连接请求」的 asyncio task 里
+        进入 cancel scope；跨 FastAPI 请求再 ``aclose`` 可能抛
+        ``Attempted to exit cancel scope in a different task``。此处吞掉关闭异常，
+        确保管理器能摘掉僵尸客户端。
+        """
         self._connected = False
         self._session = None
         self._tools_cache = None
-        if self._exit_stack is not None:
-            await self._exit_stack.aclose()
-            self._exit_stack = None
+        stack = self._exit_stack
+        self._exit_stack = None
+        if stack is not None:
+            try:
+                await stack.aclose()
+            except Exception as exc:  # noqa: BLE001 — 跨 task 关闭是预期噪声
+                logger.debug(
+                    "MCP client disconnect cleanup ignored",
+                    server=self._server_name,
+                    error=str(exc),
+                )
         logger.info("MCP client disconnected", server=self._server_name)
 
     async def list_tools(self) -> list[dict[str, Any]]:
         """返回 MCP Server 暴露的工具列表。"""
+        if self.uses_ephemeral_io:
+            return await self._list_tools_ephemeral()
+
         if not self._session:
             raise MCPClientError(f"Not connected to {self._server_name}")
 
         if self._tools_cache is not None:
             return self._tools_cache
 
-        result: dict[str, Any] = await self._session.list_tools()
+        result: Any = await self._session.list_tools()
         tools: list[Any] = [_tool_to_dict(tool) for tool in result.tools]
         self._tools_cache = tools
         return tools
+
+    async def _list_tools_ephemeral(self) -> list[dict[str, Any]]:
+        """短连接 ``initialize`` + ``tools/list``，用完即关。"""
+        try:
+            async with contextlib.AsyncExitStack() as stack:
+                session: ClientSession = await self._open_session(stack)
+                await session.initialize()
+                result: Any = await session.list_tools()
+                return [_tool_to_dict(tool) for tool in result.tools]
+        except MCPClientError:
+            raise
+        except Exception as exc:
+            raise MCPClientError(
+                f"Failed to list tools on {self._server_name} at {self._endpoint}: {exc}"
+            ) from exc
 
     async def call_tool(
         self, tool_name: str, arguments: dict[str, Any]
     ) -> dict[str, Any]:
         """在 MCP Server 上调用一个工具。"""
+        if self.uses_ephemeral_io:
+            return await self._call_tool_ephemeral(tool_name, arguments or {})
+
         if not self._session:
             raise MCPClientError(f"Not connected to {self._server_name}")
 
-        result: dict[str, Any] = await self._session.call_tool(tool_name, arguments or {})
+        result: Any = await self._session.call_tool(tool_name, arguments or {})
         return _call_result_to_dict(result)
 
-    async def health_check(self) -> bool:
-        """返回 MCP Server 会话是否活跃。"""
-        if not self.is_connected or self._session is None:
-            return False
+    async def _call_tool_ephemeral(
+        self, tool_name: str, arguments: dict[str, Any]
+    ) -> dict[str, Any]:
+        """短连接 ``initialize`` + ``tools/call``，用完即关。"""
         try:
-            await self._session.list_tools()
-            return True
-        except Exception:
+            async with contextlib.AsyncExitStack() as stack:
+                session: ClientSession = await self._open_session(stack)
+                await session.initialize()
+                result: Any = await session.call_tool(tool_name, arguments)
+                return _call_result_to_dict(result)
+        except MCPClientError:
+            raise
+        except Exception as exc:
+            raise MCPClientError(
+                f"Failed to call tool {tool_name} on {self._server_name}: {exc}"
+            ) from exc
+
+    async def health_check(self) -> bool:
+        """短连接探活：``initialize`` + ``tools/list``，不依赖长连接会话。
+
+        <p>运营台「实时探测」走此路径。即使从未点过「连接」、或长连接已成僵尸，
+        只要 Endpoint 上的 MCP Server 可达且协议正常，即返回 ``True``。
+        """
+        try:
+            async with contextlib.AsyncExitStack() as stack:
+                session: ClientSession = await self._open_session(stack)
+                await session.initialize()
+                await session.list_tools()
+                return True
+        except Exception as exc:  # noqa: BLE001 — 探活失败只反映为 False
+            logger.debug(
+                "MCP health probe failed",
+                server=self._server_name,
+                endpoint=self._endpoint,
+                error=str(exc),
+            )
             return False

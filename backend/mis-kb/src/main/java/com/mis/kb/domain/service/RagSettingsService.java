@@ -124,11 +124,13 @@ public class RagSettingsService {
                     "该知识库不在您的管理范围内");
         }
         RagSettings oldEffective = get(libraryId);
+        // 存量 MIS 默认 chunkTokenNum=4096 会被 RAGFlow 拒整单 PUT，保存前自动钳到 2048
+        RagSettings prepared = migrateLegacyChunkToken(settings);
         // 三道防线第二道（保存强制关）：rerank → graph → raptor 依次收敛；
         // 引擎不支持的能力开关一律静默强制 false（前端置灰是第一道，检索期降级是第三道）
         RagSettings validated = enforceGraphAvailability(
                 enforceRaptorAvailability(
-                        enforceRerankAvailability(validate(settings).withDefaults(), libraryId),
+                        enforceRerankAvailability(validate(prepared).withDefaults(), libraryId),
                         libraryId),
                 libraryId);
         // 服务端维护图谱/RAPTOR 状态字段：请求里的 kgBuildStatus/kgBuildMessage 与
@@ -229,8 +231,7 @@ public class RagSettingsService {
                 && (settings.scoreThreshold() < 0D || settings.scoreThreshold() > 1D)) {
             throw new KbBusinessException(KbResultCode.KB_RAG_SETTINGS_INVALID);
         }
-        // chunkTokenNum 有效区间 [256, 4096]（与 DocumentChunkConfig.MIN/MAX_TOKEN_NUM 同源，
-        // 设计 §3.2.2「常量唯一事实源」）；下限 256 起，低于 256 切片过碎直接拒绝
+        // chunkTokenNum 有效区间 [256, 2048]（RAGFlow 实测 >2048 拒整单 PUT）
         if (settings.chunkTokenNum() != null
                 && (settings.chunkTokenNum() < DocumentChunkConfig.MIN_TOKEN_NUM
                     || settings.chunkTokenNum() > DocumentChunkConfig.MAX_TOKEN_NUM)) {
@@ -251,6 +252,31 @@ public class RagSettingsService {
         // KE-06/KE-07：OCR/overlap 校验（只校验不改写）。当前引擎不支持时仍允许保存
         // （落库 + 回显 + 提示，设计 §1.4 降级路径），但非法取值直接拒绝。
         if (settings.chunkOverlapTokenNum() != null && settings.chunkOverlapTokenNum() < 0) {
+            throw new KbBusinessException(KbResultCode.KB_RAG_SETTINGS_INVALID);
+        }
+        // 图像/表格上下文窗口（解析器增量，RAGFlow parser_config.image_table_context_window）：
+        // 非 null 时必须是 [1, 4096] 正整数（0/负数/越界直接拒绝，不做静默截断——
+        // 与 chunkTokenNum 同口径；null = 未设置，由 withDefaults 兜底 256）。
+        // pageIndex 是布尔开关，无区间可言，无需额外校验。
+        if (settings.imageTableContextWindow() != null
+                && (settings.imageTableContextWindow() < RagSettings.MIN_IMAGE_TABLE_CONTEXT_WINDOW
+                    || settings.imageTableContextWindow() > RagSettings.MAX_IMAGE_TABLE_CONTEXT_WINDOW)) {
+            throw new KbBusinessException(KbResultCode.KB_RAG_SETTINGS_INVALID);
+        }
+        // 切片参数对齐（T1）：overlapPercent ∈ [0,100]、autoKeywords ≤ 32、autoQuestions ≤ 10。
+        // 越界直接拒绝（不做静默截断）——0 合法且语义为「关闭」；null = 未设置，由
+        // withDefaults() 兜底默认（0 / 0 / 0）。
+        if (settings.overlapPercent() != null
+                && (settings.overlapPercent() < RagSettings.MIN_OVERLAP_PERCENT
+                    || settings.overlapPercent() > RagSettings.MAX_OVERLAP_PERCENT)) {
+            throw new KbBusinessException(KbResultCode.KB_RAG_SETTINGS_INVALID);
+        }
+        if (settings.autoKeywords() != null
+                && settings.autoKeywords() > RagSettings.MAX_AUTO_KEYWORDS) {
+            throw new KbBusinessException(KbResultCode.KB_RAG_SETTINGS_INVALID);
+        }
+        if (settings.autoQuestions() != null
+                && settings.autoQuestions() > RagSettings.MAX_AUTO_QUESTIONS) {
             throw new KbBusinessException(KbResultCode.KB_RAG_SETTINGS_INVALID);
         }
         // 语言码值只认产品三档（zh/en/zh_en）：null = 缺省（前端不选时不发）；
@@ -336,7 +362,7 @@ public class RagSettingsService {
         }
         log.warn("未配置全局重排模型（mis.kb.engine.rerank-model-id 为空），"
                 + "已强制关闭该库的 rerank 开关 libraryId={}", libraryId);
-        // 24 参 canonical 透传图谱三字段与 RAPTOR 七字段（useKnowledgeGraph/kgBuildStatus/
+        // 29 参 canonical 透传图谱三字段、RAPTOR 七字段与切片参数对齐三字段（useKnowledgeGraph/kgBuildStatus/
         // kgBuildMessage/useRaptor/raptorMaxTokenNum/raptorThreshold/raptorMaxCluster/
         // raptorPrompt/raptorBuildStatus/raptorBuildMessage）——绝不能走 14 参旧构造，
         // 否则图谱/RAPTOR 字段被静默置 null（record 末位追加铁律 §10-8）
@@ -364,7 +390,12 @@ public class RagSettingsService {
                 settings.raptorMaxCluster(),
                 settings.raptorPrompt(),
                 settings.raptorBuildStatus(),
-                settings.raptorBuildMessage());
+                settings.raptorBuildMessage(),
+                settings.pageIndex(),
+                settings.imageTableContextWindow(),
+                settings.overlapPercent(),
+                settings.autoKeywords(),
+                settings.autoQuestions());
     }
 
     /**
@@ -389,7 +420,7 @@ public class RagSettingsService {
         }
         log.warn("当前引擎不支持知识图谱（capabilities.graphrag=false），"
                 + "已强制关闭该库的 useKnowledgeGraph libraryId={}", libraryId);
-        // 24 参 canonical 保留其余字段（含 kgBuildStatus/kgBuildMessage 与 RAPTOR 七字段）
+        // 29 参 canonical 保留其余字段（含 kgBuildStatus/kgBuildMessage 与 RAPTOR 七字段、切片参数对齐三字段）
         return new RagSettings(
                 settings.topK(),
                 settings.scoreThreshold(),
@@ -414,7 +445,12 @@ public class RagSettingsService {
                 settings.raptorMaxCluster(),
                 settings.raptorPrompt(),
                 settings.raptorBuildStatus(),
-                settings.raptorBuildMessage());
+                settings.raptorBuildMessage(),
+                settings.pageIndex(),
+                settings.imageTableContextWindow(),
+                settings.overlapPercent(),
+                settings.autoKeywords(),
+                settings.autoQuestions());
     }
 
     /**
@@ -440,7 +476,7 @@ public class RagSettingsService {
         }
         log.warn("当前引擎不支持 RAPTOR（capabilities.raptor=false），"
                 + "已强制关闭该库的 useRaptor libraryId={}", libraryId);
-        // 24 参 canonical 保留其余字段（含图谱三字段与 RAPTOR 其余六字段）
+        // 29 参 canonical 保留其余字段（含图谱三字段与 RAPTOR 其余六字段、切片参数对齐三字段）
         return new RagSettings(
                 settings.topK(),
                 settings.scoreThreshold(),
@@ -465,7 +501,12 @@ public class RagSettingsService {
                 settings.raptorMaxCluster(),
                 settings.raptorPrompt(),
                 settings.raptorBuildStatus(),
-                settings.raptorBuildMessage());
+                settings.raptorBuildMessage(),
+                settings.pageIndex(),
+                settings.imageTableContextWindow(),
+                settings.overlapPercent(),
+                settings.autoKeywords(),
+                settings.autoQuestions());
     }
 
     /**
@@ -479,7 +520,7 @@ public class RagSettingsService {
      *
      * @param settings     本次待保存设置（图谱/RAPTOR 开关可能已改）
      * @param serverState  DB 里当前服务端事实（旧设置，已 withDefaults）
-     * @return 图谱/RAPTOR 状态字段已收敛的设置（24 参 canonical 保留其余字段）
+     * @return 图谱/RAPTOR 状态字段已收敛的设置（29 参 canonical 保留其余字段）
      */
     private RagSettings withServerGraphState(RagSettings settings, RagSettings serverState) {
         return new RagSettings(
@@ -508,7 +549,12 @@ public class RagSettingsService {
                 settings.raptorPrompt(),
                 serverState.raptorBuildStatus() == null
                         ? RagSettings.RAPTOR_STATUS_NONE : serverState.raptorBuildStatus(),
-                serverState.raptorBuildMessage());
+                serverState.raptorBuildMessage(),
+                settings.pageIndex(),
+                settings.imageTableContextWindow(),
+                settings.overlapPercent(),
+                settings.autoKeywords(),
+                settings.autoQuestions());
     }
 
     /**
@@ -587,6 +633,21 @@ public class RagSettingsService {
     private KbLibrary require(Long libraryId) {
         return libraryRepository.findById(libraryId)
                 .orElseThrow(() -> new KbBusinessException(KbResultCode.KB_LIBRARY_NOT_FOUND));
+    }
+
+    /**
+     * 存量 chunkTokenNum=4096（旧 MIS 默认）会在 RAGFlow 触发整单 PUT 失败，
+     * 连带阻断 pageIndex/auto 等 parser 键同步。保存前自动钳到引擎上限 2048。
+     */
+    private static RagSettings migrateLegacyChunkToken(RagSettings settings) {
+        if (settings == null || settings.chunkTokenNum() == null) {
+            return settings;
+        }
+        int n = settings.chunkTokenNum();
+        if (n > DocumentChunkConfig.MAX_TOKEN_NUM && n <= 4096) {
+            return settings.withChunkTokenNum(DocumentChunkConfig.MAX_TOKEN_NUM);
+        }
+        return settings;
     }
 
     private static AclSummaryVO toAclSummary(KbAcl acl) {

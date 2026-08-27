@@ -1,0 +1,147 @@
+classDiagram
+  %% ============ Gateway 层 (TypeScript) ============
+  class BotOwnership {
+    +redis: Redis
+    +gatewayId: string
+    +claim(botId): Promise~bool~
+    +renew(botId): Promise~bool~
+    +release(botId): Promise~void~
+    +currentOwner(botId): Promise~string|null~
+    +prevOwner(botId): Promise~string|null~
+    +startHeartbeat(onLost): void
+    +stopHeartbeat(): void
+  }
+  class GatewayApp {
+    +gatewayId: string
+    +ownership: BotOwnership
+    +main(): Promise~void~
+  }
+  class BotRegistry {
+    -entries: Map~string,BotEntry~
+    -sessionOwner: Map~string,string~
+    +startOwnedBots(onMessage, isOwner): Promise~int~
+    +reconcile(desired, isOwner): Promise~ReconcileReport~
+    +rememberSessionBot(sessionId, botId): Promise~void~
+    +dispatchTextDelta(sessionId, delta): Promise~void~
+    +dispatchError(sessionId, msg): Promise~void~
+    +dispatchDone(sessionId): Promise~void~
+  }
+  class WecomBotAdapter {
+    -pendingBySession: Map~string,PendingStream~
+    +config: WecomBotAdapterConfig
+    +start(onMessage): Promise~void~
+    +receive(botMessage, t0): InboundMessage
+    +onAgentTextDelta(sessionId, delta): Promise~void~
+  }
+  class H5Adapter {
+    -wsConnections: Map~string,WebSocket~
+    +registerWsConnection(sessionId, ws, gatewayId): Promise~void~
+    +send(event, sessionId): Promise~void~
+  }
+  class WecomH5Adapter {
+    -connections: Map~string,WebSocket~
+    +registerConnection(sessionId, ws, gatewayId): Promise~void~
+    +send(event, sessionId): Promise~void~
+  }
+  class StreamConsumer {
+    -groupName: string
+    -consumerName: string
+    +start(streamKey, cb): Promise~void~
+    +attachStream(streamKey): Promise~void~
+    +drainAndClaim(oldStreamKey, oldGroup): Promise~void~
+    -reclaimLoop(intervalMs): Promise~void~
+  }
+  class StreamProducer {
+    +produce(streamKey, msg): Promise~string~
+    +getInboundStreamKey(channel): string
+    +getAgentStreamKey(agentId): string
+    +getOutboundStreamKey(gatewayId): string
+  }
+  class MessageRouter {
+    +route(msg): Promise~RouteResult~
+    +bindSessionToAgent(sessionId, agentId): Promise~void~
+  }
+
+  GatewayApp "1" *-- "1" BotOwnership : 持有
+  GatewayApp "1" *-- "1" BotRegistry : 持有
+  BotRegistry "1" o-- "0..*" WecomBotAdapter : 管理
+  StreamConsumer ..> StreamProducer : 同 stream 读写
+  WecomBotAdapter ..> MessageRouter : onMessage
+  H5Adapter ..> MessageRouter : onMessage
+  WecomH5Adapter ..> MessageRouter : onMessage
+
+  %% ============ Agent Core 层 (Python) ============
+  class CoreOwnership {
+    +redis: Redis
+    +core_id: str
+    +claim(agent_id): bool
+    +renew(agent_id): bool
+    +release(agent_id): void
+    +current_owner(agent_id): str|None
+    +start_heartbeat(on_lost): void
+  }
+  class RedisSessionLock {
+    +lock_ttl_s: int
+    +acquire(session_id): AsyncContextManager
+  }
+  class InboundStreamWorker {
+    -_semaphore: Semaphore
+    -_session_lock: RedisSessionLock
+    +start(agent_ids): void
+    +_handle_message(stream, id, inbound): void
+    -_ensure_agent_local_or_reroute(agent_id, ...): bool
+    -_reclaim_loop(interval_ms): void
+  }
+  class PyStreamProducer {
+    +publish_agent_event(session_id, ..., target_gw: str|None): str
+    +get_outbound_stream_key(gateway_id): str
+  }
+  class AgentManager {
+    -_instances: dict~str,AgentInstance~
+    +list_agents(): list
+    +sync_from_configs(configs): int
+    +register_in_registry(agent_id, core_id): void
+    +heartbeat_registry(): void
+  }
+  class SessionManager {
+    +get_session(session_id): Session
+    +save_session(session): void
+    +ensure_session(...): Session
+  }
+  class AgentRegistry {
+    <<Redis Hash>>
+    aip:agent:registry
+  }
+
+  CoreOwnership ..> InboundStreamWorker : 路由判定
+  InboundStreamWorker "1" *-- "1" RedisSessionLock : 替代进程内锁
+  InboundStreamWorker ..> PyStreamProducer : 重投/发布
+  InboundStreamWorker ..> AgentManager : list/ensure
+  InboundStreamWorker ..> SessionManager : 状态来自 Redis
+  AgentManager ..> AgentRegistry : 读写注册表
+
+  %% ============ Redis 真相源 ============
+  class Redis {
+    <<store>>
+    aip:bot:{botId}:owner
+    aip:bot:{botId}:prev_owner
+    aip:gateways:members
+    aip:stream:gw:{gatewayId}:events
+    aip:stream:gw:pending:events
+    aip:session:{sid}:bot
+    aip:session:{sid}:gateway
+    aip:session:{sid}:agent_binding
+    aip:agent:{agentId}:owner
+    aip:agent:registry
+    aip:cores:members
+    aip:session:{sid}:lock
+    aip:stream:agent:{agentId}
+    aip:stream:inbound:{channel}
+  }
+
+  BotOwnership ..> Redis : 租约
+  CoreOwnership ..> Redis : 租约
+  RedisSessionLock ..> Redis : 锁
+  StreamConsumer ..> Redis : 消费/重投
+  PyStreamProducer ..> Redis : 出站分流
+  SessionManager ..> Redis : 会话状态

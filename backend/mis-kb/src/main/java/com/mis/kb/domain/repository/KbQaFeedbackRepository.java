@@ -45,4 +45,7 @@ public interface KbQaFeedbackRepository extends JpaRepository<KbQaFeedback, Long
      * @return 反馈列表
      */
     List<KbQaFeedback> findBySessionIdIn(List<Long> sessionIds);
+
+    /** 统计指定处理状态的反馈数（看板「待处理反馈」计数用）。 */
+    long countByFeedbackStatus(String feedbackStatus);
 }

@@ -18,9 +18,9 @@ import { Button } from '@/components/ui/button';
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 import { AgentContentState } from '../components/agent-page-shell';
 import { AgentMessageStream } from '../components/agent-message-stream';
-import { getSession, listSessionMessages } from '../api/agent-ops-api';
+import { getSession, getSessionTiming, listSessionMessages } from '../api/agent-ops-api';
 import { agentErrorMessage, formatTime } from '../types';
-import type { Session, SessionMessage } from '../types';
+import type { Session, SessionMessage, SessionTimingMap } from '../types';
 
 /** 渠道枚举 → 中文（与列表页共用同一份口径）。 */
 const CHANNEL_LABELS: Record<Session['channel'], string> = {
@@ -47,6 +47,7 @@ export function AgentSessionDetailDialog({
 }: AgentSessionDetailDialogProps) {
   const [session, setSession] = useState<Session | null>(null);
   const [messages, setMessages] = useState<SessionMessage[]>([]);
+  const [timing, setTiming] = useState<SessionTimingMap | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -55,14 +56,18 @@ export function AgentSessionDetailDialog({
     setLoading(true);
     setError(null);
     try {
-      const [metaResult, msgResult] = await Promise.allSettled([
+      const [metaResult, msgResult, timingResult] = await Promise.allSettled([
         getSession(sessionId),
         listSessionMessages(sessionId),
+        getSessionTiming(sessionId),
       ]);
       // 消息是主体：拿不到才算整体失败
       if (msgResult.status === 'rejected') throw msgResult.reason;
       setMessages(msgResult.value);
       setSession(metaResult.status === 'fulfilled' ? metaResult.value : null);
+      // 耗时为调试态（Redis，TTL 24h）：过期 / 未采样 = null，不影响回放。
+      // 2.1：返回的是按轮 map，前端按 message.id 逐条内联展示。
+      setTiming(timingResult.status === 'fulfilled' ? timingResult.value?.turns ?? null : null);
     } catch (e) {
       setMessages([]);
       setError(agentErrorMessage(e, '获取会话消息失败'));
@@ -76,14 +81,17 @@ export function AgentSessionDetailDialog({
     if (!open) return;
     setSession(null);
     setMessages([]);
+    setTiming(null);
     void load();
   }, [open, load]);
 
   const shown = session ?? fallbackSession;
+  // 是否有任意一轮耗时可用（用于头部提示）
+  const hasTiming = timing != null && Object.keys(timing).length > 0;
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent className="flex w-[min(46rem,96vw)] max-w-none flex-col gap-0 p-0">
+      <SheetContent className="flex w-[min(46rem,96vw)] max-w-none flex-col gap-0 overflow-hidden p-0">
         <SheetHeader className="border-b p-4">
           <SheetTitle className="truncate pr-8">
             {shown?.title || '会话详情'}
@@ -102,6 +110,11 @@ export function AgentSessionDetailDialog({
               </>
             ) : null}
             <span>共 {messages.length} 条消息</span>
+            {hasTiming ? (
+              <span className="text-success">按轮耗时已加载</span>
+            ) : (
+              <span>耗时已过期（调试窗口 24h）</span>
+            )}
             <Button
               size="sm"
               variant="ghost"
@@ -115,7 +128,7 @@ export function AgentSessionDetailDialog({
           </div>
         </SheetHeader>
 
-        <div className="min-h-0 flex-1 overflow-auto p-4">
+        <div className="min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto p-4">
           <AgentContentState
             loading={loading && messages.length === 0}
             error={error}
@@ -124,7 +137,12 @@ export function AgentSessionDetailDialog({
             emptyText="该会话没有消息"
             emptyHint="会话可能刚创建，或消息已被清理。"
           >
-            <AgentMessageStream messages={messages} />
+            <AgentMessageStream
+              className="min-w-0"
+              messages={messages}
+              timingByMessageId={timing ?? undefined}
+              showTurnIndex
+            />
           </AgentContentState>
         </div>
       </SheetContent>

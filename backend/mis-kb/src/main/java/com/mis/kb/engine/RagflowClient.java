@@ -10,6 +10,7 @@ import com.mis.kb.domain.model.RetrieveQuery;
 import com.mis.kb.engine.dto.RfChunk;
 import com.mis.kb.engine.dto.RfDataset;
 import com.mis.kb.engine.dto.RfDocument;
+import com.mis.kb.engine.dto.RfDocumentChunkPage;
 import com.mis.kb.engine.dto.RfDocumentPage;
 import com.mis.kb.engine.dto.RfModel;
 import com.mis.kb.engine.dto.RfResponse;
@@ -29,6 +30,7 @@ import org.springframework.web.client.RestClientResponseException;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 
 /**
@@ -78,29 +80,37 @@ public class RagflowClient {
 
     private final RestClient client;
     private final String apiKey;
+    /** 可空：测试用三参构造不注入；闸门默认 false（不下发 toc/image 键）。 */
+    private final RagflowProperties props;
 
     /**
      * 构造客户端。
      *
      * @param builder RestClient 构建器（由 Spring 注入，带全局拦截器）
-     * @param props   引擎配置（baseUrl / apiKey）
+     * @param props   引擎配置（baseUrl / apiKey / 解析器键闸门）
      */
     public RagflowClient(RestClient.Builder builder, RagflowProperties props) {
         this(builder,
                 props == null ? "" : props.getBaseUrl(),
-                props == null ? "" : props.getApiKey());
+                props == null ? "" : props.getApiKey(),
+                props);
     }
 
     /**
-     * 构造客户端（显式地址/密钥，供测试使用）。
+     * 构造客户端（显式地址/密钥，供测试使用；解析器键闸门默认关闭）。
      *
      * @param builder RestClient 构建器
      * @param baseUrl RAGFlow 基础地址
      * @param apiKey  RAGFlow API Key
      */
     public RagflowClient(RestClient.Builder builder, String baseUrl, String apiKey) {
+        this(builder, baseUrl, apiKey, null);
+    }
+
+    private RagflowClient(RestClient.Builder builder, String baseUrl, String apiKey, RagflowProperties props) {
         this.client = builder.baseUrl(baseUrl == null ? "" : baseUrl).build();
         this.apiKey = apiKey == null ? "" : apiKey;
+        this.props = props;
     }
 
     private String bearer() {
@@ -166,8 +176,15 @@ public class RagflowClient {
      * </ol>
      * 本方法只下发本实例接受的键：{@code embedding_model} / {@code chunk_method} /
      * {@code parser_config}（内嵌 {@code chunk_token_num} / {@code delimiter} /
-     * {@code raptor} / {@code graphrag}）。
+     * {@code raptor} / {@code graphrag} / {@code ext{toc_extraction,image_*}}）。
      * {@code topK} / {@code scoreThreshold} 仍按原语义保存在本地并由检索期合并器生效。
+     *
+     * <p><b>解析器增量（T01 → ext 修正）：</b>页码索引（RAGFlow UI 文案 PageIndex，
+     * 字段 {@code toc_extraction}）、图像/表格上下文窗口（{@code image_table_context_window}
+     * + 镜像 {@code image_context_size}/{@code table_context_size}）、重叠百分比
+     * （{@code overlapped_percent}）必须经 {@code parser_config.ext} 下发——顶层直写
+     * 会被 pydantic 拒整单（code:101），与 RAGFlow Web {@code extractParserConfigExt}
+     * 口径一致。
      *
      * <p><b>Wave C P1f 关键契约（最高优先级，T00 实测）：</b>引擎在<b>切换
      * {@code chunk_method}</b> 时会把 {@code parser_config} 重置为该方法的默认模板
@@ -207,11 +224,41 @@ public class RagflowClient {
                 ? settings.chunkMethod() : RagSettings.DEFAULT_CHUNK_METHOD);
         Map<String, Object> parserConfig = new LinkedHashMap<>();
         if (settings != null && settings.chunkTokenNum() != null) {
-            parserConfig.put("chunk_token_num", settings.chunkTokenNum());
+            parserConfig.put("chunk_token_num", RagSettings.normalizeChunkTokenNum(settings.chunkTokenNum()));
         }
         if (settings != null && settings.separator() != null && !settings.separator().isBlank()) {
             parserConfig.put("delimiter", settings.separator());
         }
+        // 解析器增量 + overlap（T01 → ext 修正，2026-08-19 live probe）：
+        // RAGFlow 公开 REST schema（pydantic extra=forbid）拒收顶层 toc_extraction /
+        // image_table_context_window / overlapped_percent 等（code:101），但 UI 通过
+        // extractParserConfigExt 把这些键放进 parser_config.ext，服务端 deep_merge 后
+        // 持久化到顶层。MIS 必须走同一路径，否则整单被拒且 auto 键也进不去。
+        Map<String, Object> parserExt = new LinkedHashMap<>();
+        parserExt.put("toc_extraction",
+                settings != null && settings.pageIndex() != null
+                        ? settings.pageIndex() : RagSettings.DEFAULT_PAGE_INDEX);
+        int imageTableCtx = settings != null && settings.imageTableContextWindow() != null
+                ? settings.imageTableContextWindow()
+                : RagSettings.DEFAULT_IMAGE_TABLE_CONTEXT_WINDOW;
+        parserExt.put("image_table_context_window", imageTableCtx);
+        // 与 RAGFlow saving-button.tsx 一致：UI 一个滑块镜像三键，运行时 naive.py 读
+        // image_context_size / table_context_size。
+        putImageTableContextExt(parserExt, imageTableCtx);
+        parserExt.put("overlapped_percent",
+                settings != null && settings.overlapPercent() != null
+                        ? settings.overlapPercent()
+                        : RagSettings.DEFAULT_OVERLAP_PERCENT);
+        parserConfig.put("ext", parserExt);
+        // 切片参数对齐（T1/T2，P1f 契约）：auto_keywords / auto_questions 随每次 PUT 恒下发。
+        // 官方 naive schema 键（T0-a 实测库级/文件级均接受 code:0 且持久化）；settings 为 null
+        // 或字段未设置时按 MIS 默认模板下发（0 = 关闭），避免切过 chunk_method 后被引擎重置。
+        parserConfig.put("auto_keywords",
+                settings != null && settings.autoKeywords() != null
+                        ? settings.autoKeywords() : RagSettings.DEFAULT_AUTO_KEYWORDS);
+        parserConfig.put("auto_questions",
+                settings != null && settings.autoQuestions() != null
+                        ? settings.autoQuestions() : RagSettings.DEFAULT_AUTO_QUESTIONS);
         // P1f：完整 parser_config 恒下发——raptor 子对象（5 字段白名单）
         Map<String, Object> raptor = new LinkedHashMap<>();
         raptor.put("use_raptor", settings != null && Boolean.TRUE.equals(settings.useRaptor()));
@@ -254,15 +301,28 @@ public class RagflowClient {
      * <b>405 MethodNotAllowed</b>——这正是知识库物理删除长期失效的根因（单 id 路径不被支持）。
      * 现改用官方批量接口，路径不带 {@code /{id}}，datasetId 放进 body 的 {@code ids} 数组。
      *
-     * <p><b>幂等重试：</b>若 dataset 已不存在（HTTP 404 / 已被并发删除），视作成功——
-     * 物理删除是「尽力删引擎侧资源」，资源已不在不等于失败，避免重试时把 404 当成硬错误卡死。
+     * <p><b>Q1 missing 判定（2026-08-xx）：</b>原「404 静默幂等」改为「HTTP 404 或
+     * HTTP 403 + {@code lacks permission} 或缺失文案 → 抛
+     * {@link EngineDatasetMissingException}」——运维可能已在 RAGFlow 控制台手工删除
+     * 该 dataset，MIS 侧删除/归档时必须识别并提示，而不是把 404/403 当成「已删成功」静默吞掉。
+     * 调用方（{@code KbLibraryService}）捕获后进入两段式确认流。
      *
-     * <p><b>显式失败：</b>非 2xx 且非 404（含 405）一律抛 {@link BusinessException}，
-     * 由调用方感知并回滚本地事务（保留历史「静默假成功」的修复）。不做「PUT enabled=0
-     * 停用」冒充删除——停用语义已被 {@link #updateDocumentEnabled} 占用（B1），且停用 ≠ 删除。
+     * <p><b>为什么 403+lacks permission 也算 missing（2026-08-xx，用户实测）：</b>
+     * RAGFlow 的批量删除接口 {@code DELETE /api/v1/datasets}（body {@code {"ids":[...]}}）
+     * 对<b>已不存在的 dataset</b> 返回 HTTP 403 + 文案 {@code lacks permission for datasets: 'xxx'}
+     * （权限层先做归属校验：dataset 不存在 → 查不到归属 → 报无权），<b>不是 404</b>。
+     * 若只认 404，403 会落入普通引擎失败分支 → 本地回滚 + 用户看到「引擎侧删除失败」。
+     * 判定口径见 {@link #isForbiddenMissing}（<b>只认 {@code lacks permission}</b>，
+     * 403 + 其它文案不判 missing，保守）。
+     *
+     * <p><b>显式失败：</b>非 2xx 且非 missing（非 404 / 非 403+lacks permission，含 405）
+     * 一律抛 {@link BusinessException}，由调用方感知并回滚本地事务（保留历史「静默假成功」
+     * 的修复）。不做「PUT enabled=0 停用」冒充删除——停用语义已被
+     * {@link #updateDocumentEnabled} 占用（B1），且停用 ≠ 删除。
      *
      * @param datasetId 原生 dataset id
-     * @throws BusinessException RAGFlow 返回非 2xx 且非 404 时抛出
+     * @throws EngineDatasetMissingException 引擎侧 dataset 已不存在（HTTP 404 或 HTTP 403+lacks permission 或缺失文案）
+     * @throws BusinessException             RAGFlow 返回非 2xx 且非 missing（非 404 / 非 403+lacks permission）时抛出
      */
     public void deleteDataset(String datasetId) {
         if (datasetId == null || datasetId.isBlank()) {
@@ -270,7 +330,7 @@ public class RagflowClient {
         }
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("ids", List.of(datasetId));
-        deleteWithJsonBody("/api/v1/datasets", body, "RAGFlow 删除知识库失败", 404);
+        deleteWithJsonBodyDetectMissing("/api/v1/datasets", body, "RAGFlow 删除知识库失败", 404);
     }
 
     /**
@@ -284,9 +344,17 @@ public class RagflowClient {
      * （见 {@link #deleteDataset}），删不掉。改名是这个版本里唯一能在引擎控制台上
      * 一眼看出「这个库已经在 MIS 侧下线了」的手段，数据本身完整保留、可恢复。
      *
+     * <p><b>Q1 missing 判定（2026-08-xx）：</b>引擎侧 dataset 已被手工删除时，改名会得到
+     * HTTP 404、HTTP 403 + {@code lacks permission}（判定口径见 {@link #isForbiddenMissing}），
+     * 或 {@code code != 0} + 缺失文案（{@code not found / not exist / 不存在 / missing /
+     * lacks permission}）。这些形态都抛 {@link EngineDatasetMissingException}，供归档两段式
+     * 确认流识别——否则归档会因「改名失败」误落 {@code engine_sync_status=3} 等待对账，
+     * 而正确语义是「引擎侧已不存在」。
+     *
      * @param datasetId 原生 dataset id
      * @param name      新名字（已由 {@link RagflowDatasetNaming} 清洗并截断）
-     * @throws BusinessException 参数非法或 RAGFlow 返回非 0 code
+     * @throws EngineDatasetMissingException 引擎侧 dataset 已不存在（HTTP 404 / HTTP 403+lacks permission / 缺失文案）
+     * @throws BusinessException             参数非法或 RAGFlow 返回非 0 code（非 missing，即非 404 / 非 403+lacks permission）
      */
     public void renameDataset(String datasetId, String name) {
         if (datasetId == null || datasetId.isBlank()) {
@@ -297,9 +365,32 @@ public class RagflowClient {
         }
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("name", name);
-        RfResponse<RfDataset> resp = putFor("/api/v1/datasets/" + datasetId, body,
-                new ParameterizedTypeReference<>() {});
+        RfResponse<RfDataset> resp;
+        try {
+            resp = putFor("/api/v1/datasets/" + datasetId, body,
+                    new ParameterizedTypeReference<>() {});
+        } catch (RestClientResponseException ex) {
+            int status = ex.getStatusCode().value();
+            if (status == 404 || isForbiddenMissing(ex)) {
+                // 引擎侧 dataset 已不存在（可能在 RAGFlow 控制台被手工删除）→ missing 信号。
+                // 404 与「403+lacks permission」都判 missing：RAGFlow 对已删 dataset 的
+                // 批量删除接口返回 403+lacks permission 而非 404（权限层先做归属校验）。
+                log.info("RAGFlow 重命名遇 HTTP {}（引擎侧数据集已不存在）datasetId={} newName={}",
+                        status, datasetId, name);
+                throw new EngineDatasetMissingException(
+                        "RAGFlow 重命名知识库失败: HTTP " + status + " 引擎侧数据集不存在");
+            }
+            throw new BusinessException(50000,
+                    "RAGFlow 重命名知识库失败: HTTP " + status + " " + ex.getMessage());
+        }
         if (resp == null || !resp.ok()) {
+            if (resp != null && isDatasetMissingMessage(resp.message())) {
+                // 业务 code != 0 且 message 命中缺失关键字 → missing 信号
+                log.info("RAGFlow 重命名返回缺失文案（引擎侧数据集已不存在）datasetId={} newName={} msg={}",
+                        datasetId, name, resp.message());
+                throw new EngineDatasetMissingException(
+                        "RAGFlow 重命名知识库失败: " + resp.message());
+            }
             throw new BusinessException(50000,
                     "RAGFlow 重命名知识库失败: " + (resp == null ? "无响应" : resp.message()));
         }
@@ -428,13 +519,14 @@ public class RagflowClient {
     }
 
     /**
-     * 更新文档级切片配置（T04，kb_settings_model_chunk）。
+     * 更新文档级切片配置（T04，kb_settings_model_chunk；T2 扩展 auto 键）。
      *
      * <p><b>T00 P3/P5 实测固化：</b>
      * <ul>
      *   <li>路径 {@code PUT /api/v1/datasets/{datasetId}/documents/{docId}}；</li>
-     *   <li>白名单键：顶层 {@code chunk_method} + {@code parser_config{chunk_token_num, delimiter}}；
-     *       {@code parser_config} 内未知键 → code:102（严格）；顶层多余键被静默忽略，但仍只下发白名单键；</li>
+     *   <li>白名单键：顶层 {@code chunk_method} + {@code parser_config{chunk_token_num, delimiter,
+     *       auto_keywords, auto_questions}}；页码索引/图像上下文经 {@code parser_config.ext}
+     *       下发（2026-08-19 live probe：顶层直写 code:102，ext code:0）；顶层未知键仍拒整单；</li>
      *   <li>键名是 {@code chunk_token_num}（非 {@code chunk_token_count}）；</li>
      *   <li>PUT 之后<b>不会</b>自动重解析（run 仍 UNSTART），必须由调用方显式
      *       {@link #parseDocuments}（两步式，T00 P5）。</li>
@@ -457,10 +549,29 @@ public class RagflowClient {
         }
         Map<String, Object> parserConfig = new LinkedHashMap<>();
         if (config.chunkTokenNum() != null) {
-            parserConfig.put("chunk_token_num", config.chunkTokenNum());
+            parserConfig.put("chunk_token_num", RagSettings.normalizeChunkTokenNum(config.chunkTokenNum()));
         }
         if (config.separator() != null && !config.separator().isBlank()) {
             parserConfig.put("delimiter", config.separator());
+        }
+        // T2：auto 键进文件级白名单（T0-b B2 实测文档 PUT 接受 code:0 且持久化）。
+        // 只在非空时下发——未指定继承库级快照（引擎上传时已把 dataset parser_config 拷进 document）。
+        if (config.autoKeywords() != null) {
+            parserConfig.put("auto_keywords", config.autoKeywords());
+        }
+        if (config.autoQuestions() != null) {
+            parserConfig.put("auto_questions", config.autoQuestions());
+        }
+        // pageIndex / imageTableContextWindow：文件级非空时经 ext 下发（与库级同口径）。
+        Map<String, Object> parserExt = new LinkedHashMap<>();
+        if (config.pageIndex() != null) {
+            parserExt.put("toc_extraction", config.pageIndex());
+        }
+        if (config.imageTableContextWindow() != null) {
+            putImageTableContextExt(parserExt, config.imageTableContextWindow());
+        }
+        if (!parserExt.isEmpty()) {
+            parserConfig.put("ext", parserExt);
         }
         if (!parserConfig.isEmpty()) {
             body.put("parser_config", parserConfig);
@@ -475,6 +586,13 @@ public class RagflowClient {
             throw new BusinessException(50000,
                     "RAGFlow 更新文档配置失败: " + (resp == null ? "无响应" : resp.message()));
         }
+    }
+
+    /** 图像/表格上下文窗口三键镜像（与 RAGFlow saving-button.tsx 一致）。 */
+    private static void putImageTableContextExt(Map<String, Object> ext, int imageTableCtx) {
+        ext.put("image_table_context_window", imageTableCtx);
+        ext.put("image_context_size", imageTableCtx);
+        ext.put("table_context_size", imageTableCtx);
     }
 
     /** 上传文档，返回原生 doc id。 */
@@ -548,6 +666,89 @@ public class RagflowClient {
             return null;
         }
         return resp.data().docs().get(0);
+    }
+
+    /**
+     * 分页查询文档切片（「查看文档切分效果」，官方端点
+     * {@code GET /api/v1/datasets/{dataset_id}/documents/{document_id}/chunks}）。
+     *
+     * <p><b>现网探测结论：</b>page 1-based；{@code keywords} 服务端过滤
+     * （非空时引擎按正文关键字过滤）；响应 {@code data{chunks[], doc, total}}，
+     * {@code total} 为关键字过滤后的总条数。
+     *
+     * @param datasetId 原生 dataset id
+     * @param docId     原生文档 id
+     * @param keywords  正文关键字过滤；{@code null}/空白表示不过滤
+     * @param page      1-based
+     * @param pageSize  每页条数
+     * @return 切片分页数据（chunks 恒非 {@code null}，可能为空列表）
+     * @throws BusinessException 参数非法、HTTP 非 2xx，或 RAGFlow {@code code != 0}
+     */
+    public RfDocumentChunkPage listChunks(
+            String datasetId, String docId, String keywords, int page, int pageSize) {
+        if (datasetId == null || datasetId.isBlank() || docId == null || docId.isBlank()) {
+            throw new BusinessException(50000, "RAGFlow 查询文档切片失败: datasetId/docId 为空");
+        }
+        RfResponse<RfDocumentChunkPage> resp = client.get()
+                .uri(uriBuilder -> {
+                    var builder = uriBuilder
+                            .path("/api/v1/datasets/" + datasetId + "/documents/" + docId + "/chunks")
+                            .queryParam("page", Math.max(page, 1))
+                            .queryParam("page_size", Math.max(pageSize, 1));
+                    if (keywords != null && !keywords.isBlank()) {
+                        builder.queryParam("keywords", keywords);
+                    }
+                    return builder.build();
+                })
+                .header("Authorization", bearer())
+                .retrieve()
+                .body(new ParameterizedTypeReference<>() {});
+        if (resp == null || !resp.ok() || resp.data() == null) {
+            throw new BusinessException(50000,
+                    "RAGFlow 查询文档切片失败: " + (resp == null ? "无响应" : resp.message()));
+        }
+        return resp.data();
+    }
+
+    /**
+     * 拉取分片关联的版面截图（RAGFlow {@code GET /api/v1/documents/images/{image_id}}）。
+     *
+     * <p>{@code image_id} 形如 {@code {datasetId}-{objectKey}}，仅在<b>第一个</b>
+     * {@code -} 处拆分（objectKey 可含连字符，如 {@code page-5.png}）。
+     * 旧 Flask {@code /v1/document/image/} 用 {@code split("-")} 整串切分，
+     * objectKey 带连字符时会 404——现网 REST 端点已修正。
+     *
+     * @param imageId 引擎 {@code image_id}；禁止为空
+     * @return 图片字节；恒非 {@code null}
+     * @throws BusinessException 参数非法、HTTP 非 2xx、或响应体为空
+     */
+    public byte[] getChunkImage(String imageId) {
+        if (imageId == null || imageId.isBlank()) {
+            throw new BusinessException(50000, "RAGFlow 拉取分片图片失败: imageId 为空");
+        }
+        String id = imageId.trim();
+        int firstHyphen = id.indexOf('-');
+        if (firstHyphen <= 0 || firstHyphen >= id.length() - 1) {
+            throw new BusinessException(50000, "RAGFlow 拉取分片图片失败: imageId 格式非法");
+        }
+        try {
+            byte[] body = client.get()
+                    .uri("/api/v1/documents/images/{imageId}", id)
+                    .header("Authorization", bearer())
+                    .retrieve()
+                    .body(byte[].class);
+            if (body == null || body.length == 0) {
+                throw new BusinessException(50000, "RAGFlow 拉取分片图片失败: 空响应");
+            }
+            return body;
+        } catch (BusinessException ex) {
+            throw ex;
+        } catch (RestClientResponseException ex) {
+            throw new BusinessException(50000,
+                    "RAGFlow 拉取分片图片失败: HTTP " + ex.getStatusCode().value());
+        } catch (Exception ex) {
+            throw new BusinessException(50000, "RAGFlow 拉取分片图片失败: " + ex.getMessage());
+        }
     }
 
     /**
@@ -653,6 +854,115 @@ public class RagflowClient {
             }
             throw new BusinessException(50000, failurePrefix + ": HTTP " + status + " " + ex.getMessage());
         }
+    }
+
+    /**
+     * DELETE + JSON body 的「missing 检测」变体（Q1，仅供 {@link #deleteDataset} 使用）。
+     *
+     * <p>与 {@link #deleteWithJsonBody} 的唯一区别：{@code missingStatuses} 中的 HTTP 状态码
+     * （如 404）<b>不再视作「幂等成功」</b>，而是抛 {@link EngineDatasetMissingException}——
+     * 由调用方据此识别「引擎侧 dataset 已不存在」（运维可能已在 RAGFlow 控制台手工删除）。
+     * 业务响应 {@code code != 0} 且 message 命中缺失关键字时同样抛 missing。
+     *
+     * <p><b>403+lacks permission 也算 missing（2026-08-xx，用户实测）：</b>RAGFlow 批量
+     * 删除接口对已不存在的 dataset 返回 HTTP 403 + {@code lacks permission}（不是 404），
+     * 判定口径见 {@link #isForbiddenMissing}——<b>只认 {@code lacks permission}</b>，
+     * 403 + 其它文案不判 missing，保持普通失败。
+     *
+     * <p><b>deleteDocument 的 404 语义不受影响：</b>文档删除仍走原
+     * {@link #deleteWithJsonBody}（404 = 幂等成功），只有 dataset 删除需要 missing 信号。
+     *
+     * @param uri             相对 baseUrl 的删除路径
+     * @param body            请求体（JSON）
+     * @param failurePrefix   失败消息前缀（区分知识库/文档）
+     * @param missingStatuses 视为「引擎侧缺失」的 HTTP 状态码（如 404；403+lacks permission 由 {@link #isForbiddenMissing} 兜底）
+     */
+    private void deleteWithJsonBodyDetectMissing(
+            String uri, Object body, String failurePrefix, int... missingStatuses) {
+        java.util.Set<Integer> missing = missingStatuses.length == 0
+                ? java.util.Set.of() : new java.util.HashSet<>();
+        for (int s : missingStatuses) {
+            missing.add(s);
+        }
+        try {
+            RfResponse<Object> resp = client.method(HttpMethod.DELETE)
+                    .uri(uri)
+                    .header("Authorization", bearer())
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .body(body)
+                    .retrieve()
+                    .body(new ParameterizedTypeReference<>() {});
+            if (resp == null || !resp.ok()) {
+                if (resp != null && isDatasetMissingMessage(resp.message())) {
+                    log.info("RAGFlow 删除返回缺失文案（引擎侧数据集已不存在）: {} body={} msg={}",
+                            uri, body, resp.message());
+                    throw new EngineDatasetMissingException(failurePrefix + ": " + resp.message());
+                }
+                throw new BusinessException(50000,
+                        failurePrefix + ": " + (resp == null ? "无响应" : resp.message()));
+            }
+        } catch (RestClientResponseException ex) {
+            int status = ex.getStatusCode().value();
+            if (missing.contains(status) || isForbiddenMissing(ex)) {
+                // 404 与「403+lacks permission」都表示引擎侧 dataset 已不存在
+                // （RAGFlow 对已删 dataset 的批量删除返回 403+lacks permission，不是 404）
+                log.info("RAGFlow 删除遇 HTTP {}（引擎侧数据集已不存在）: {} body={}", status, uri, body);
+                throw new EngineDatasetMissingException(
+                        failurePrefix + ": HTTP " + status + " 引擎侧数据集不存在");
+            }
+            throw new BusinessException(50000, failurePrefix + ": HTTP " + status + " " + ex.getMessage());
+        }
+    }
+
+    /**
+     * 业务响应 message 是否命中「引擎侧缺失」关键字（Q1 判定口径，不区分大小写）。
+     *
+     * @param message 引擎返回的 message，允许 {@code null}
+     * @return {@code true} 表示命中 {@code not found / not exist / 不存在 / missing /
+     *         lacks permission}
+     */
+    private static boolean isDatasetMissingMessage(String message) {
+        if (message == null) {
+            return false;
+        }
+        String lower = message.toLowerCase(Locale.ROOT);
+        return lower.contains("not found")
+                || lower.contains("not exist")
+                || lower.contains("不存在")
+                || lower.contains("missing")
+                || lower.contains("lacks permission");
+    }
+
+    /**
+     * HTTP 403 + {@code lacks permission} 文案是否应判为「引擎侧 dataset 已不存在」
+     * （Q1 扩展，2026-08-xx 用户实测）。
+     *
+     * <p><b>为什么需要：</b>RAGFlow 的批量删除接口 {@code DELETE /api/v1/datasets}
+     * （body {@code {"ids":[...]}}）对<b>已不存在的 dataset</b> 返回 HTTP 403 + 文案
+     * {@code lacks permission for datasets: 'xxx'}（权限层先做归属校验：dataset 不存在 →
+     * 查不到归属 → 报无权），<b>不是 404</b>。若只认 404，403 会落入普通引擎失败分支 →
+     * 本地回滚 + 用户看到「引擎侧删除失败」。
+     *
+     * <p><b>保守口径：</b>只有「HTTP 403 + 命中 {@code lacks permission}」才判 missing。
+     * 403 + 其它文案（如 {@code Permission denied} / {@code Forbidden}）<b>不判 missing</b>，
+     * 保持普通失败——只有 RAGFlow 对已删 dataset 的这条特定返回才进 missing 流。
+     *
+     * <p><b>响应文本取两个来源任一命中即可：</b>{@link RestClientResponseException#getResponseBodyAsString()}
+     * 取响应体原文更稳；{@code getMessage()} 通常已含响应体（Spring 默认错误处理器
+     * {@code 403 Forbidden: <body>} 形态），两者都查，避免不同版本拼接差异。
+     *
+     * @param ex RestClientResponseException（HTTP 4xx/5xx）
+     * @return {@code true} 表示该 403 实为「引擎侧 dataset 已不存在」
+     */
+    private static boolean isForbiddenMissing(RestClientResponseException ex) {
+        if (ex.getStatusCode().value() != 403) {
+            return false;
+        }
+        String body = ex.getResponseBodyAsString();
+        String message = ex.getMessage();
+        String lowerBody = body == null ? "" : body.toLowerCase(Locale.ROOT);
+        String lowerMessage = message == null ? "" : message.toLowerCase(Locale.ROOT);
+        return lowerBody.contains("lacks permission") || lowerMessage.contains("lacks permission");
     }
 
     /**

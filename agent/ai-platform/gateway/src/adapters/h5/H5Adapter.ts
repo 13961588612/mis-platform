@@ -12,11 +12,13 @@
  */
 
 import { randomUUID } from 'node:crypto';
+import type { Redis } from 'ioredis';
 import type { WebSocket } from '@fastify/websocket';
 import type { FastifyReply } from 'fastify';
 import type { AgentEvent, ChannelCapability } from '../../channels/ChannelCapability.js';
 import { H5Capability } from '../../channels/ChannelCapability.js';
 import type { InboundMessage } from '../../queue/redisStream.js';
+import { sessionGatewayKey } from '../../cluster/ownership.js';
 import { logger } from '../../middleware/logger.js';
 
 // ============================================================================
@@ -45,6 +47,10 @@ export class H5Adapter {
   private readonly capability: H5Capability;
   private readonly wsConnections: ConnectionMap;
   private readonly sseConnections: SseConnectionMap;
+  /** Redis 客户端（写 aip:session:{sid}:gateway；可选，未注入则粘滞映射降级为进程内） */
+  private _redis: Redis | null = null;
+  /** 粘滞映射 TTL（秒）；与 design § key 表一致（3600） */
+  private readonly gatewaySessionTtlSec = 3600;
 
   constructor() {
     this.capability = new H5Capability();
@@ -173,26 +179,45 @@ export class H5Adapter {
   }
 
   /**
-   * 注册 WebSocket 连接
+   * 注入 Redis 客户端（写 aip:session:{sid}:gateway）。
    *
-   * @param sessionId - 会话 ID
-   * @param ws - WebSocket 连接
+   * @param redis - Redis 客户端
    */
-  registerWsConnection(sessionId: string, ws: WebSocket): void {
+  bindRedis(redis: Redis): void {
+    this._redis = redis;
+  }
+
+  /**
+   * 注册 WebSocket 连接，并写粘滞映射 aip:session:{sid}:gateway（修 N5）。
+   *
+   * 客户端持久化 sessionId 并回传；连接建立即记录「该会话 WS 落在哪个 gateway」，
+   * 供 Core 出站按 session→gateway 精准定向（重连换 gateway 时覆盖写）。
+   *
+   * @param sessionId - 会话 ID（客户端回传的稳定 sessionId）
+   * @param ws - WebSocket 连接
+   * @param gatewayId - 本 Gateway 稳定 ID（写入映射值，TTL 3600）
+   */
+  async registerWsConnection(
+    sessionId: string,
+    ws: WebSocket,
+    gatewayId: string,
+  ): Promise<void> {
     this.wsConnections.set(sessionId, ws);
+    await this.persistSessionGateway(sessionId, gatewayId);
     logger.info(
-      { sessionId, totalWsConnections: this.wsConnections.size },
+      { sessionId, gatewayId, totalWsConnections: this.wsConnections.size },
       'WebSocket connection registered',
     );
   }
 
   /**
-   * 注销 WebSocket 连接
+   * 注销 WebSocket 连接，并删除粘滞映射。
    *
    * @param sessionId - 会话 ID
    */
-  unregisterWsConnection(sessionId: string): void {
+  async unregisterWsConnection(sessionId: string): Promise<void> {
     this.wsConnections.delete(sessionId);
+    await this.clearSessionGateway(sessionId);
     logger.info(
       { sessionId, totalWsConnections: this.wsConnections.size },
       'WebSocket connection unregistered',
@@ -200,12 +225,17 @@ export class H5Adapter {
   }
 
   /**
-   * 注册 SSE 连接
+   * 注册 SSE 连接，并写粘滞映射 aip:session:{sid}:gateway（H5 SSE 同属粘滞范畴）。
    *
    * @param sessionId - 会话 ID
    * @param reply - Fastify Reply 对象
+   * @param gatewayId - 本 Gateway 稳定 ID（可选，未提供则不写映射）
    */
-  registerSseConnection(sessionId: string, reply: FastifyReply): void {
+  async registerSseConnection(
+    sessionId: string,
+    reply: FastifyReply,
+    gatewayId?: string,
+  ): Promise<void> {
     // 设置 SSE 响应头
     reply.raw.writeHead(200, {
       'Content-Type': 'text/event-stream',
@@ -215,27 +245,84 @@ export class H5Adapter {
     });
 
     this.sseConnections.set(sessionId, reply);
+    if (gatewayId != null && gatewayId.length > 0) {
+      await this.persistSessionGateway(sessionId, gatewayId);
+    }
     logger.info(
-      { sessionId, totalSseConnections: this.sseConnections.size },
+      { sessionId, gatewayId, totalSseConnections: this.sseConnections.size },
       'SSE connection registered',
     );
   }
 
   /**
-   * 注销 SSE 连接
+   * 注销 SSE 连接，并删除粘滞映射。
    *
    * @param sessionId - 会话 ID
    */
-  unregisterSseConnection(sessionId: string): void {
+  async unregisterSseConnection(sessionId: string): Promise<void> {
     const reply = this.sseConnections.get(sessionId);
     if (reply != null) {
       reply.raw.end();
     }
     this.sseConnections.delete(sessionId);
+    await this.clearSessionGateway(sessionId);
     logger.info(
       { sessionId, totalSseConnections: this.sseConnections.size },
       'SSE connection unregistered',
     );
+  }
+
+  /**
+   * 写粘滞映射 aip:session:{sid}:gateway = gatewayId（TTL 3600）。
+   *
+   * Redis 不可用 / 未注入时静默降级（进程内 WS 查找仍可用，仅跨 gateway 粘滞失效）。
+   *
+   * @param sessionId - 会话 ID
+   * @param gatewayId - 本 Gateway 稳定 ID
+   */
+  private async persistSessionGateway(sessionId: string, gatewayId: string): Promise<void> {
+    if (this._redis == null || sessionId.length === 0 || gatewayId.length === 0) {
+      return;
+    }
+    try {
+      await this._redis.set(
+        sessionGatewayKey(sessionId),
+        gatewayId,
+        'EX',
+        this.gatewaySessionTtlSec,
+      );
+    } catch (error) {
+      logger.warn(
+        {
+          error: error instanceof Error ? error.message : String(error),
+          sessionId,
+          gatewayId,
+        },
+        'Failed to persist session->gateway mapping to Redis',
+      );
+    }
+  }
+
+  /**
+   * 删除粘滞映射 aip:session:{sid}:gateway（连接关闭 / 重连换 gateway 时）。
+   *
+   * @param sessionId - 会话 ID
+   */
+  private async clearSessionGateway(sessionId: string): Promise<void> {
+    if (this._redis == null || sessionId.length === 0) {
+      return;
+    }
+    try {
+      await this._redis.del(sessionGatewayKey(sessionId));
+    } catch (error) {
+      logger.warn(
+        {
+          error: error instanceof Error ? error.message : String(error),
+          sessionId,
+        },
+        'Failed to clear session->gateway mapping from Redis',
+      );
+    }
   }
 
   /**

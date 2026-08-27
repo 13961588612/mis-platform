@@ -9,6 +9,9 @@ import java.time.Instant;
 
 /**
  * 问答反馈（kb_qa_feedback）。由前端 → BFF → mis-kb 落库；{@code editable_once=1} 时仅可修改一次。
+ *
+ * <p>反馈处理状态（V43 起，运营侧轻量闭环）：{@code feedbackStatus} 取
+ * {@code pending/handled/ignored}，单向终态；处理人/时间/备注由运营侧标记时回填。
  */
 @Entity
 @Table(name = "kb_qa_feedback")
@@ -34,6 +37,21 @@ public class KbQaFeedback {
 
     @Column(name = "editable_once", nullable = false)
     private Integer editableOnce = 1;
+
+    @Column(name = "feedback_status", nullable = false)
+    private String feedbackStatus = "pending";
+
+    @Column(name = "handler_id")
+    private Long handlerId;
+
+    @Column(name = "handler_name")
+    private String handlerName;
+
+    @Column(name = "handled_at")
+    private Instant handledAt;
+
+    @Column(name = "handle_note")
+    private String handleNote;
 
     @Column(name = "created_at", nullable = false)
     private Instant createdAt;
@@ -95,6 +113,46 @@ public class KbQaFeedback {
 
     public void setEditableOnce(Integer editableOnce) {
         this.editableOnce = editableOnce;
+    }
+
+    public String getFeedbackStatus() {
+        return feedbackStatus;
+    }
+
+    public void setFeedbackStatus(String feedbackStatus) {
+        this.feedbackStatus = feedbackStatus;
+    }
+
+    public Long getHandlerId() {
+        return handlerId;
+    }
+
+    public void setHandlerId(Long handlerId) {
+        this.handlerId = handlerId;
+    }
+
+    public String getHandlerName() {
+        return handlerName;
+    }
+
+    public void setHandlerName(String handlerName) {
+        this.handlerName = handlerName;
+    }
+
+    public Instant getHandledAt() {
+        return handledAt;
+    }
+
+    public void setHandledAt(Instant handledAt) {
+        this.handledAt = handledAt;
+    }
+
+    public String getHandleNote() {
+        return handleNote;
+    }
+
+    public void setHandleNote(String handleNote) {
+        this.handleNote = handleNote;
     }
 
     public Instant getCreatedAt() {

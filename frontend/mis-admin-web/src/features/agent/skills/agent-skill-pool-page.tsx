@@ -17,9 +17,11 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   CheckCircle2,
   CirclePause,
+  Eye,
   Pencil,
   Plus,
   RefreshCw,
+  RotateCcw,
   Sparkles,
   Trash2,
 } from 'lucide-react';
@@ -32,10 +34,12 @@ import { StatCard } from '@/components/common/stat-card';
 import { SortIndicator } from '@/components/common/sort-indicator';
 import { useClientSort } from '@/components/common/use-client-sort';
 import { useColumnWidths, type ResizableColumn } from '@/components/common/use-column-widths';
-import { AgentPageShell } from '../components/agent-page-shell';
+import { RESET_COL_WIDTH_OVERLAY_CLASS, ResetColWidthButton } from '@/components/common/header-action-buttons';
+import { AgentPageShell, AgentContentState } from '../components/agent-page-shell';
 import { AgentConfirmDialog } from '../components/agent-confirm-dialog';
 import { AgentStatusBadge } from '../components/agent-status-badge';
 import { AgentSkillFormDialog } from './agent-skill-form-dialog';
+import { AgentSkillDetailDrawer } from './agent-skill-detail-drawer';
 import {
   deleteSkill,
   disableSkill,
@@ -83,6 +87,8 @@ export function AgentSkillPoolPage() {
   const [formOpen, setFormOpen] = useState(false);
   const [editing, setEditing] = useState<Skill | null>(null);
   const [pending, setPending] = useState<PendingAction | null>(null);
+  const [detailSkillId, setDetailSkillId] = useState<string | null>(null);
+  const [detailOpen, setDetailOpen] = useState(false);
 
   const skillFilter = useAgentStore((s) => s.skillFilter);
   const setSkillFilter = useAgentStore((s) => s.setSkillFilter);
@@ -253,8 +259,8 @@ export function AgentSkillPoolPage() {
       </Button>
       <PermissionGate permission="agent:skill:reindex">
         <Button size="sm" variant="outline" onClick={() => setPending({ kind: 'reindex' })}>
-          <RefreshCw className="h-4 w-4" />
-          重建索引
+          <RotateCcw className="h-4 w-4" />
+          重建技能索引
         </Button>
       </PermissionGate>
       <PermissionGate permission="agent:skill:manage">
@@ -272,13 +278,11 @@ export function AgentSkillPoolPage() {
       description="可用技能的注册与生命周期管理。"
       permission="agent:skill:list"
       actions={headerActions}
-      loading={loading && skills.length === 0}
-      error={error}
-      onRetry={() => void load()}
-      empty={!loading && !error && skills.length === 0}
-      emptyText="技能池为空"
-      emptyHint="点击右上角「新建技能」注册第一个技能，或先执行「重建索引」从技能目录同步。"
     >
+      {/*
+        不把 empty 交给 AgentPageShell：空池时仍需露出统计卡与页头「重建技能索引」，
+        否则整页被空态吞掉时观感像「没有按钮」。
+      */}
       <div className="flex min-h-0 flex-1 flex-col gap-3">
         <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
           <StatCard label="技能总数" value={stats?.total ?? skills.length} icon={Sparkles} />
@@ -295,7 +299,7 @@ export function AgentSkillPoolPage() {
           <StatCard
             label="最近重建索引"
             value={stats ? formatTime(stats.last_reindex_at) : '-'}
-            icon={RefreshCw}
+            icon={RotateCcw}
           />
         </div>
 
@@ -337,7 +341,7 @@ export function AgentSkillPoolPage() {
               ))}
             </select>
           </div>
-          <Button size="sm" variant="ghost" onClick={resetSkillFilter}>
+          <Button size="sm" variant="secondary" onClick={resetSkillFilter}>
             重置
           </Button>
           <span className="ml-auto pb-1.5 text-xs text-muted-foreground">
@@ -345,15 +349,18 @@ export function AgentSkillPoolPage() {
           </span>
         </div>
 
+        <AgentContentState
+          loading={loading && skills.length === 0}
+          error={error}
+          onRetry={() => void load()}
+          empty={!loading && !error && skills.length === 0}
+          emptyText="技能池为空"
+          emptyHint="可点「重建技能索引」从技能目录同步，或「新建技能」手工注册。"
+        >
+
         <div className="relative min-h-0 flex-1 overflow-auto rounded-lg border bg-table-surface">
           {hasCustom ? (
-            <button
-              type="button"
-              onClick={reset}
-              className="absolute right-3 top-3 z-20 rounded-md bg-card px-2 py-0.5 text-xs text-muted-foreground shadow-sm hover:text-foreground"
-            >
-              重置列宽
-            </button>
+            <ResetColWidthButton onClick={reset} className={RESET_COL_WIDTH_OVERLAY_CLASS} />
           ) : null}
           <table
             className="border-separate border-spacing-0 bg-table-surface text-left text-sm"
@@ -445,6 +452,19 @@ export function AgentSkillPoolPage() {
                     </td>
                     <td className="px-3 py-2">
                       <div className="flex flex-wrap items-center justify-end gap-1">
+                        <PermissionGate permission="agent:skill:list">
+                          <button
+                            type="button"
+                            className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[0.8125rem] text-primary hover:bg-primary/10"
+                            onClick={() => {
+                              setDetailSkillId(skill.skill_id);
+                              setDetailOpen(true);
+                            }}
+                          >
+                            <Eye className="h-3 w-3" />
+                            详情
+                          </button>
+                        </PermissionGate>
                         <PermissionGate permission="agent:skill:manage">
                           <button
                             type="button"
@@ -494,6 +514,7 @@ export function AgentSkillPoolPage() {
             </tbody>
           </table>
         </div>
+        </AgentContentState>
       </div>
 
       <AgentSkillFormDialog
@@ -501,6 +522,12 @@ export function AgentSkillPoolPage() {
         onOpenChange={setFormOpen}
         skill={editing}
         onSaved={() => void load()}
+      />
+
+      <AgentSkillDetailDrawer
+        skillId={detailSkillId}
+        open={detailOpen}
+        onClose={() => setDetailOpen(false)}
       />
 
       <AgentConfirmDialog

@@ -309,7 +309,7 @@ class OpenHarnessRuntime(AgentRuntime):
         self._temperature = 0.7
         self._max_tokens = 4096
         self._system_prompt = ""
-        self._model = "qwen-plus"
+        self._model = "qwen3.7-plus"
         self._native_mcp_manager: McpClientManager | None = None
         self._initialized = False
 

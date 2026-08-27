@@ -1,0 +1,92 @@
+%% ===== 入站：企微/H5 → 正确 gateway → inbound stream → 正确 Core 分区 =====
+sequenceDiagram
+  participant U as 企微用户 / H5 客户端
+  participant OG as Owner Gateway(握 Bot WS 或 H5 WS)
+  participant R as Redis
+  participant IC as Inbound Core(agent owner)
+  participant S as Session(Redis)
+
+  U->>OG: 消息(WS)
+  OG->>OG: wecom-bot: sessionId=wecom-bot-{botId}-{chatId|userId}<br/>h5: 用客户端持久化 sessionId
+  OG->>OG: rememberSessionBot(sessionId, botId) 写本地+Redis
+  OG->>OG: SET aip:session:{sid}:bot = botId (wecom-bot)
+  OG->>R: XADD stream:inbound:{ch} 或 stream:agent:{agentId}
+  R->>IC: XREADGROUP agent-core-group '>'
+  IC->>IC: 取 Redis 分布式锁 aip:session:{sid}:lock
+  IC->>S: get_session(sessionId)  ← 状态来自 Redis
+  IC->>S: 写会话/消息 save_session
+  IC->>R: SET aip:session:{sid}:agent_binding
+  Note over IC: 见出站时序
+
+%% ===== 出站：Core 按 owner 查 bot→gw → XADD per-owner stream → 仅 owner gateway 消费 =====
+sequenceDiagram
+  participant IC as Inbound Core
+  participant R as Redis
+  participant OG as Owner Gateway(握 Bot/H5 WS)
+  participant U as 用户
+
+  IC->>R: GET aip:session:{sid}:bot  → botId
+  IC->>R: GET aip:bot:{botId}:owner   → ownerGwId
+  alt owner 已知
+    IC->>R: XADD aip:stream:gw:{ownerGwId}:events
+  else owner 未知
+    IC->>R: XADD aip:stream:gw:pending:events (兜底+告警)
+  end
+  R->>OG: XREADGROUP gw-{ownerGwId} '>'
+  OG->>OG: dispatchTextDelta/Error/Done 命中本地 pendingBySession / H5 连接
+  OG->>U: 推送(企微 WS / H5 WS)
+  OG->>R: XACK (成功)
+  Note over OG,R: 崩溃则 PEL 由 XAUTOCLAIM 重投(同网关或接管者)，不丢
+
+%% ===== 故障转移 Gateway：租约过期 → 他 gateway 接管 bot + drain 旧 stream + XAUTOCLAIM =====
+sequenceDiagram
+  participant A as Gateway A(死)
+  participant R as Redis
+  participant B as Gateway B(存活)
+  participant W as 企微 WS
+
+  Note over A: 进程崩溃 / 网络断
+  R->>R: aip:bot:{botId}:owner TTL 过期(~30s)
+  B->>R: SET NX aip:bot:{botId}:owner = B (抢租约)
+  B->>R: 记录 aip:bot:{botId}:prev_owner = A
+  B->>R: 读 aip:session:* 找该 bot 的会话, 重建本地 sessionOwner
+  B->>W: 建立 Bot WS (等 A 旧 TCP 释放后成功, 带退避)
+  B->>R: drainAndClaim(aip:stream:gw:A:events, gw-A)  XAUTOCLAIM 重投 A 遗留 PEL
+  B->>W: 续推丢失的回复
+  Note over B: 此后新事件 XADD 到 aip:stream:gw:B:events
+
+%% ===== 故障转移 Agent Core：某 Core 死 → 入站分区 rehash / 分布式锁释放 → 他 Core 接管 =====
+sequenceDiagram
+  participant C1 as Core-1(死)
+  participant R as Redis
+  participant C2 as Core-2(存活)
+  participant S as Session(Redis)
+  participant OG as Owner Gateway
+
+  Note over C1: 进程崩溃
+  R->>R: aip:agent:{agentId}:owner TTL 过期(~30s)
+  R->>R: aip:session:{sid}:lock TTL 过期(自动释放, 无死锁)
+  C2->>R: SET NX aip:agent:{agentId}:owner = C2 (抢租约)
+  C2->>C2: ensure_agent_ready(agentId) 在本进程起运行时
+  C2->>R: 订阅 stream:agent:{agentId}; drainAndClaim 旧 PEL
+  R->>C2: XAUTOCLAIM 重投 C1 遗留消息
+  C2->>S: get_session(sessionId)  ← 会话状态从 Redis 恢复(非进程内存)
+  C2->>S: 续跑并 save_session
+  C2->>OG: 发布事件 → aip:stream:gw:{ownerGw}:events (走出站时序)
+  Note over C2: 故障转移窗口 ~10-30s 内该 agent 会话短暂不可服务(接受)
+
+%% ===== 崩溃重投 N1：gateway 与 core 两侧 XAUTOCLAIM =====
+sequenceDiagram
+  participant P as Producer(Core/Gateway)
+  participant R as Redis(stream + PEL)
+  participant C as Consumer(崩溃前)
+  participant C2 as Consumer(接管/重启)
+
+  P->>R: XADD 事件
+  R->>C: XREADGROUP '>' 投递, 进入 PEL(未 ACK)
+  Note over C: kill -9 (在途事件滞留 PEL)
+  C2->>R: XPENDING stream group  → 发现 idle>min_idle 的消息
+  C2->>R: XAUTOCLAIM stream group C2 min_idle_ms
+  R->>C2: 重投孤儿消息(恰好一次语义, 仍带 PEL)
+  C2->>C2: 处理 + XACK
+  Note over R: 不在 PEL 重复累加; 重投窗口由 XCLAIM_MIN_IDLE_MS 控制

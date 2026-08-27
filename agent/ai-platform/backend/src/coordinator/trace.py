@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 from collections import deque
+from contextvars import ContextVar
 from datetime import datetime, timezone
 from typing import Any
 
@@ -43,6 +44,8 @@ class DispatchTraceEntry(BaseModel):
         default="unknown",
         description="rag/crm/extract/summary/formfill/chitchat/unknown",
     )
+    #: 发起委派的 Coordinator（父会话绑定的 agent_id）；运营台展示「谁→谁」。
+    coordinator_id: str = ""
     worker_id: str = ""
     tool: str = Field(
         default="agent__invoke", description="实际使用的委派工具名（双名过渡可为 agent）"
@@ -53,6 +56,12 @@ class DispatchTraceEntry(BaseModel):
     brief_rejected: bool = Field(
         default=False, description="是否因 Brief 校验失败而未真正委派"
     )
+    # ---- 新增（P0-1）：worker 内部子阶段细分的透传载体 ----
+    # 平铺的 {指标名: 毫秒} 字典；不可得为 None（缺省即 None，不写 0）。
+    # rag worker 约定键：resolve_visible_libraries_ms / RAGFlow_retrieve_ms /
+    #                     worker_generate_ms / persist_ms / overhead_ms
+    # 其它 worker（crm/extract/summary，P2）复用同一结构，键名自定。
+    sub_stages: dict[str, int] | None = None
 
 
 _pending: dict[str, list[dict[str, Any]]] = {}
@@ -63,6 +72,18 @@ _lock = asyncio.Lock()
 #: 跨会话聚合最近 N 条委派轨迹，供 ``GET /admin/dispatch-traces`` 只读展示。
 GLOBAL_TRACE_LIMIT: int = 500
 _global_traces: deque[dict[str, Any]] = deque(maxlen=GLOBAL_TRACE_LIMIT)
+
+# ====================================================================
+# 跨 asyncio.Task 边界传递 worker 细分计时的共享字典载体（P0-2）
+#
+# 机制：`InvokeAgentTool._spawn_worker` 在**父上下文** `set` 一个空 dict；
+# `asyncio.ensure_future` 拷贝上下文时只复制引用，dict 对象被父子任务共享，
+# 子任务（worker 内 qa_pipeline）对其 `update` 的变异对父任务可见，
+# `_spawn_worker` 任务结束后读同一 dict 即可取回 worker 内部细分。
+# 比"返回值穿 event 流"更稳，且不改动 events.py / openharness.py。
+QA_SUB_STAGES_CV: ContextVar[dict[str, int] | None] = ContextVar(
+    "qa_sub_stages", default=None
+)
 
 
 # ===== feature flag（三通道开关，统一经 flags 安全读取）=====
@@ -111,12 +132,20 @@ async def push_dispatch_trace(session_id: str, entry: DispatchTraceEntry) -> Non
     if not session_id:
         logger.debug("dispatch trace dropped (no session)", worker_id=entry.worker_id)
         return
+
+    payload: dict[str, Any] = entry.model_dump()
+    # 调度者未显式传入时，从父会话绑定的 agent_id 补齐（运营台「谁→谁」）。
+    if not (payload.get("coordinator_id") or "").strip():
+        coordinator_id = await _resolve_coordinator_id(session_id)
+        if coordinator_id:
+            payload["coordinator_id"] = coordinator_id
+
     async with _lock:
-        _pending.setdefault(session_id, []).append(entry.model_dump())
+        _pending.setdefault(session_id, []).append(payload)
         # 同时写入全局只读环形缓冲（带会话归属与时间戳）
         _global_traces.append(
             {
-                **entry.model_dump(),
+                **payload,
                 "session_id": session_id,
                 "created_at": datetime.now(timezone.utc).isoformat(),
             }
@@ -124,12 +153,31 @@ async def push_dispatch_trace(session_id: str, entry: DispatchTraceEntry) -> Non
     logger.info(
         "dispatch trace pushed",
         session_id=session_id,
+        coordinator_id=payload.get("coordinator_id") or "",
         worker_id=entry.worker_id,
         intent=entry.intent,
         status=entry.status,
         latency_ms=entry.latency_ms,
         task_id=entry.task_id,
     )
+
+
+async def _resolve_coordinator_id(session_id: str) -> str:
+    """从父会话读取调度者 agent_id；会话缺失时返回空串（不阻断主链路）。"""
+    try:
+        from src.agent.session import get_session_manager
+
+        parent = await get_session_manager().get_session(session_id)
+    except Exception as exc:  # noqa: BLE001 — 可观测性不得影响主链路
+        logger.debug(
+            "dispatch trace coordinator resolve skipped",
+            session_id=session_id,
+            error=str(exc),
+        )
+        return ""
+    if parent is None:
+        return ""
+    return str(getattr(parent, "agent_id", "") or "").strip()
 
 
 async def drain_dispatch_traces(session_id: str) -> list[dict[str, Any]]:

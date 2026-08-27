@@ -15,6 +15,7 @@ from __future__ import annotations
 from typing import Any, AsyncIterator
 
 import json
+import uuid
 
 from fastapi import APIRouter, Depends, Header, status
 from fastapi.responses import StreamingResponse
@@ -34,7 +35,11 @@ from src.agent.session import Message, SessionManager, get_session_manager
 from src.api.deps import get_current_user, get_trace_id, resolve_mis_user_id_with_db
 from src.api.response import error_response, success
 from src.config import get_settings
-from src.coordinator.trace import dispatch_trace_sse_enabled, take_last_turn_traces
+from src.coordinator.trace import (
+    QA_SUB_STAGES_CV,
+    dispatch_trace_sse_enabled,
+    take_last_turn_traces,
+)
 from src.runtime.events import AgentEventType
 from src.utils.exceptions import AgentNotFoundError
 from src.utils.logging import get_logger
@@ -73,6 +78,7 @@ async def _collect_agent_response(
     instance: Any,
     session: Any,
     message: Message,
+    assistant_message_id: str | None = None,
 ) -> tuple[str, str | None, list[str]]:
     """驱动 Agent 处理一条消息，并汇总文本增量 / 运行时错误 / 工具错误。
 
@@ -80,6 +86,9 @@ async def _collect_agent_response(
         instance: 已就绪的 Agent 实例。
         session: 平台会话对象。
         message: 待处理消息。
+        assistant_message_id: 本轮要落库的 assistant 消息 id（2.1：计时按轮
+            turn_key=该 id 落库，落库时复用同一 id，使前端按 message.id 逐条映射）。
+            不传则回退为 session 级单键。
 
     Returns:
         ``(response_text, runtime_error, tool_errors)``。
@@ -88,7 +97,9 @@ async def _collect_agent_response(
     runtime_error: str | None = None
     tool_errors: list[str] = []
 
-    async for event in instance.process_message(session=session, message=message):
+    async for event in instance.process_message(
+        session=session, message=message, assistant_message_id=assistant_message_id
+    ):
         if event.type == AgentEventType.TEXT_DELTA and event.content:
             response_parts.append(event.content)
         elif event.type == AgentEventType.TOOL_RESULT and event.result:
@@ -113,7 +124,15 @@ async def _run_kb_qa(
     app_id: str,
     trace_id: str,
 ) -> tuple[str, str | None, list[str]]:
-    """执行 KB 问答管线（T10），返回可直接作为 ``response`` 的 JSON 文本。
+    """[DEPRECATED @ T4] 不再被端点调用：KB 预检索编排已收敛到 mis-rag 的 kb_retrieve。
+
+    原职责：``visible-libraries → retrieve → 拼 Prompt → 生成 → citations → 落库``，
+    把检索后的片段**预注入** mis-rag 的 prompt。T4 起该编排被移除——mis-rag 改为
+    通过内部 ``kb_retrieve`` 工具自行检索（路径 A 与 Copilot B 路径同一执行体），
+    因此预检索成为双重检索且绕过 B 路径。
+
+    本函数仅作检索库参考保留（避免破坏其他潜在引用），请勿在新流程中使用。
+    返回可直接作为 ``response`` 的 JSON 文本。
 
     链路：``visible-libraries → retrieve → 拼 Prompt → 生成 → citations → 落库``。
     生成步骤复用既有 Agent 运行时（``instance.process_message``），
@@ -159,6 +178,11 @@ async def _run_kb_qa(
         answer = await pipeline.run(kb_req, ctx, _generate)
     finally:
         await pipeline.aclose()
+    # T02：若处于 worker 委派上下文（_spawn_worker 已 set QA_SUB_STAGES_CV），
+    # 将本轮细分数组回写到共享 dict，供 DispatchTraceEntry.sub_stages 透传。
+    # BFF 直调路径 CV 未 set，此处为安全 no-op（不污染上下文）。
+    if pipeline.sub_stages is not None and QA_SUB_STAGES_CV.get() is not None:
+        QA_SUB_STAGES_CV.set(pipeline.sub_stages)
 
     logger.info(
         "KB QA completed",
@@ -183,7 +207,14 @@ async def _stream_kb_qa(
     app_id: str,
     trace_id: str,
 ) -> AsyncIterator[str]:
-    """流式执行 KB 问答管线（F-01），逐帧产出 SSE 文本。
+    """[DEPRECATED @ T4] 不再被端点调用：KB 预检索编排已收敛到 mis-rag 的 kb_retrieve。
+
+    原职责：与 :func:`_run_kb_qa` 共用同一条检索增强链路，差异仅在生成回调为异步
+    生成器、落库在流结束后一次性完成。T4 起由 mis-rag 内部 ``kb_retrieve`` 统一检索，
+    端点直接 ``process_message`` 原始问题并转发 SSE。
+
+    本函数仅作检索库参考保留（避免破坏其他潜在引用），请勿在新流程中使用。
+    流式执行 KB 问答管线（F-01），逐帧产出 SSE 文本。
 
     与 :func:`_run_kb_qa` 共用同一条检索增强链路，差异仅在生成回调为异步生成器、
     落库在流结束后一次性完成（设计 §7-Q1）。
@@ -270,6 +301,9 @@ async def _stream_kb_qa(
             yield _sse_frame(EVENT_DONE, payload)
     finally:
         await pipeline.aclose()
+        # T02：同 _run_kb_qa，仅当处于 worker 委派上下文时才回写（BFF 直调为 no-op）。
+        if pipeline.sub_stages is not None and QA_SUB_STAGES_CV.get() is not None:
+            QA_SUB_STAGES_CV.set(pipeline.sub_stages)
 
 
 async def _save_platform_message(session: Any, content: str) -> None:
@@ -319,30 +353,32 @@ async def agent_chat(
         )
         instance = await agent_manager.ensure_agent_ready(agent_id)
 
+        # T4：移除 KbQaPipeline 预检索编排。mis-rag 通过内部 kb_retrieve 工具自行
+        # 检索（与 Copilot B 路径同一执行体），故两路统一为把**原始问题**直接交给
+        # mis-rag 的 process_message。is_kb_qa_request 仍作为路由信号保留
+        # （仅选 mis-rag，不再触发预检索）。
         if is_kb_qa_request(agent_id, req.metadata):
-            response_text, runtime_error, tool_errors = await _run_kb_qa(
+            logger.info(
+                "KB QA routed via mis-rag native kb_retrieve (no pre-retrieval)",
                 agent_id=agent_id,
-                req=req,
-                instance=instance,
-                session=session,
-                current_user=current_user,
-                authorization=authorization if isinstance(authorization, str) else "",
-                tenant_id=x_tenant_id if isinstance(x_tenant_id, str) else "",
-                app_id=x_app_id if isinstance(x_app_id, str) else "",
                 trace_id=trace_id,
             )
-        else:
-            response_text, runtime_error, tool_errors = await _collect_agent_response(
-                instance,
-                session,
-                Message(role=req.role, content=req.content, metadata=req.metadata),
-            )
+        # 2.1：本轮 assistant 消息 id 预先生成，计时按轮（turn_key=该 id）落库，
+        # 落库时复用同一 id，使前端能按 message.id 逐条映射耗时。
+        assistant_id: str = str(uuid.uuid4())
+        response_text, runtime_error, tool_errors = await _collect_agent_response(
+            instance,
+            session,
+            Message(role=req.role, content=req.content, metadata=req.metadata),
+            assistant_message_id=assistant_id,
+        )
 
-        # 保存助手响应，便于后续多轮会话
+        # 保存助手响应（复用本轮 assistant id，使计时可按该消息逐条映射）
         await session_manager.add_message(
             session_id=session.session_id,
             role="assistant",
             content=response_text,
+            message_id=assistant_id,
         )
 
         if runtime_error and not response_text.strip():
@@ -424,24 +460,20 @@ async def agent_chat_stream(
             session_id = session.session_id
             instance = await agent_manager.ensure_agent_ready(agent_id)
 
+            # T4：移除 KbQaPipeline 预检索编排，原始问题直接交给 mis-rag 的
+            # process_message（与 Copilot B 路径同一执行体）；mis-rag 自行检索。
             if is_kb_qa_request(agent_id, req.metadata):
-                async for kb_frame in _stream_kb_qa(
+                logger.info(
+                    "KB QA stream routed via mis-rag native kb_retrieve (no pre-retrieval)",
                     agent_id=agent_id,
-                    req=req,
-                    instance=instance,
-                    session=session,
-                    current_user=current_user,
-                    authorization=authorization if isinstance(authorization, str) else "",
-                    tenant_id=x_tenant_id if isinstance(x_tenant_id, str) else "",
-                    app_id=x_app_id if isinstance(x_app_id, str) else "",
                     trace_id=trace_id,
-                ):
-                    yield kb_frame
-                return
-
+                )
+            # 2.1：本轮 assistant 消息 id 预先生成，计时按轮（turn_key=该 id）落库。
+            assistant_id: str = str(uuid.uuid4())
             async for event in instance.process_message(
                 session=session,
                 message=Message(role=req.role, content=req.content, metadata=req.metadata),
+                assistant_message_id=assistant_id,
             ):
                 if event.type == AgentEventType.TEXT_DELTA and event.content:
                     response_parts.append(event.content)
@@ -459,6 +491,7 @@ async def agent_chat_stream(
                 session_id=session_id,
                 role="assistant",
                 content="".join(response_parts),
+                message_id=assistant_id,
             )
             done_payload: dict[str, Any] = {
                 "traceId": trace_id,

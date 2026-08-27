@@ -18,5 +18,7 @@ public record EmployeeUpdateRequest(
         /** 任职岗位列表 */
         List<EmployeePostItem> posts,
         LocalDate hireDate,
-        Integer status
+        Integer status,
+        /** 是否内置账号：1=内置（手机号必填/唯一校验豁免，EMP-03，Q2 推荐方案） */
+        Integer isBuiltin
 ) {}

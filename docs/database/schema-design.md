@@ -186,9 +186,15 @@ erDiagram
 | name | VARCHAR(128) | 显示名 |
 | sort | INT | 默认 0 |
 | status | SMALLINT | 0禁用 1启用 |
+| parent_id | BIGINT | NOT NULL DEFAULT 0 | 0=根级；多层分类父指针 |
+| is_leaf | SMALLINT | NOT NULL DEFAULT 1 | **显式字段**：1=末级（可被岗位选用）/ 0=非末级（分类，可挂子）；不按子节点推导 |
 | created_at / updated_at | TIMESTAMPTZ | |
 
 **索引：** `uk_post_type_tenant_code` UNIQUE (tenant_id, code)
+
+**删除语义：** 物理删除；仅末级可删；存在子类型或被 `sys_post` 引用时禁止删除。
+
+**迁移：** `V52__post_type_hierarchy.sql`（补 `parent_id` / `is_leaf`）。
 
 ### 3.8 sys_post — 部门岗位编制
 
@@ -277,6 +283,7 @@ erDiagram
 | employee_id | BIGINT | NOT NULL | 对应员工（部门/组织展示与 DataScope 均经员工 → 任职解析） |
 | username | VARCHAR(64) | NOT NULL | APP 内登录名 |
 | password_hash | VARCHAR(128) | NOT NULL | BCrypt |
+| email | VARCHAR(255) | NULL | 用户级邮箱（独立于员工邮箱；绑员工时回填） |
 | avatar_url | VARCHAR(512) | NULL | |
 | status | SMALLINT | NOT NULL DEFAULT 1 | 0禁用 1启用 2锁定 |
 | last_login_at | TIMESTAMPTZ | NULL | |

@@ -113,4 +113,67 @@ class DocumentChunkConfigResolverTest {
             assertEquals(EffectiveChunkConfig.SOURCE_LIBRARY, r.source());
         }
     }
+
+    @Nested
+    @DisplayName("T4：解析器设置四个新字段参与两级合并")
+    class ParserSettingsOverride {
+
+        private EffectiveChunkConfig resolve4(DocumentChunkConfig file) {
+            // 库级带 4 新字段默认（pageIndex=true / 256 / autoKeywords=3 / autoQuestions=2）
+            RagSettings lib = new RagSettings(null, null, null, null, "hybrid",
+                    "naive", 128, null, null, null, null,
+                    null, null, null, null, null, null,
+                    null, null, null, null, null, null, null,
+                    Boolean.TRUE, 256, 0.0D, 3, 2).withDefaults();
+            return resolver.resolve(file, lib);
+        }
+
+        @Test
+        @DisplayName("文件级 pageIndex=false 覆盖库级 true；未指定字段继承库级")
+        void pageIndexOverride() {
+            EffectiveChunkConfig r = resolve4(
+                    new DocumentChunkConfig(null, null, null, Boolean.FALSE, null, null, null));
+
+            assertEquals(false, r.pageIndex());
+            assertEquals(256, r.imageTableContextWindow().intValue(), "未指定 field 继承库级 256");
+            assertEquals(3, r.autoKeywords().intValue(), "未指定 autoKeywords 继承库级 3");
+            assertEquals(2, r.autoQuestions().intValue(), "未指定 autoQuestions 继承库级 2");
+            assertEquals(EffectiveChunkConfig.SOURCE_FILE_OVERRIDE, r.source());
+        }
+
+        @Test
+        @DisplayName("文件级 imageTableContextWindow=512 覆盖库级 256")
+        void imageWindowOverride() {
+            EffectiveChunkConfig r = resolve4(
+                    new DocumentChunkConfig(null, null, null, null, 512, null, null));
+
+            assertEquals(512, r.imageTableContextWindow().intValue());
+            assertEquals(true, r.pageIndex(), "未指定 pageIndex 继承库级 true");
+            assertEquals(EffectiveChunkConfig.SOURCE_FILE_OVERRIDE, r.source());
+        }
+
+        @Test
+        @DisplayName("文件级 autoKeywords / autoQuestions 覆盖库级")
+        void autoKeysOverride() {
+            EffectiveChunkConfig r = resolve4(
+                    new DocumentChunkConfig(null, null, null, null, null, 8, 5));
+
+            assertEquals(8, r.autoKeywords().intValue());
+            assertEquals(5, r.autoQuestions().intValue());
+            assertEquals(256, r.imageTableContextWindow().intValue(), "未指定字段继承库级");
+            assertEquals(EffectiveChunkConfig.SOURCE_FILE_OVERRIDE, r.source());
+        }
+
+        @Test
+        @DisplayName("全部 null → 四新字段继承库级，source=LIBRARY")
+        void allNullInheritsParserSettings() {
+            EffectiveChunkConfig r = resolve4(new DocumentChunkConfig(null, null, null));
+
+            assertEquals(true, r.pageIndex());
+            assertEquals(256, r.imageTableContextWindow().intValue());
+            assertEquals(3, r.autoKeywords().intValue());
+            assertEquals(2, r.autoQuestions().intValue());
+            assertEquals(EffectiveChunkConfig.SOURCE_LIBRARY, r.source());
+        }
+    }
 }

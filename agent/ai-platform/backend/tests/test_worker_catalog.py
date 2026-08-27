@@ -25,6 +25,7 @@ from pydantic import ValidationError
 from src.agent.config import AgentConfig, AgentMetadata, AgentRole
 from src.coordinator import catalog as catalog_module
 from src.coordinator.catalog import (
+    ADMIN_HELPER_AGENT_IDS,
     WorkerCatalog,
     WorkerSpec,
     build_worker_catalog,
@@ -247,7 +248,9 @@ def test_build_catalog_falls_back_to_default_whitelist(
     catalog = build_worker_catalog()
 
     assert catalog.fallback is True
-    assert set(catalog.worker_ids()) == set(DEFAULT_WHITELIST)
+    # 1.3/1.4：静态兜底目录与全局目录都特例收录 ADMIN_HELPER_AGENT_IDS（mis-admin-helper）
+    # 作为真实 worker（管理台可见），但其不在 INVOKE_AGENT_WHITELIST，运行时恒定拒绝。
+    assert set(catalog.worker_ids()) == set(DEFAULT_WHITELIST) | set(ADMIN_HELPER_AGENT_IDS)
     assert catalog.coordinators == ["mis-copilot"]
     assert catalog.get("mis-rag") is not None
     assert catalog.get("mis-rag").when_to_use  # 静态文案非空
@@ -274,7 +277,9 @@ def test_build_catalog_survives_config_manager_failure(
     catalog = build_worker_catalog()
 
     assert catalog.fallback is True
-    assert set(catalog.worker_ids()) == set(DEFAULT_WHITELIST)
+    # 1.3/1.4：静态兜底目录与全局目录都特例收录 ADMIN_HELPER_AGENT_IDS（mis-admin-helper）
+    # 作为真实 worker（管理台可见），但其不在 INVOKE_AGENT_WHITELIST，运行时恒定拒绝。
+    assert set(catalog.worker_ids()) == set(DEFAULT_WHITELIST) | set(ADMIN_HELPER_AGENT_IDS)
 
 
 def test_build_catalog_ignores_mock_like_whitelist(
@@ -288,7 +293,9 @@ def test_build_catalog_ignores_mock_like_whitelist(
 
     catalog = build_worker_catalog()
 
-    assert set(catalog.worker_ids()) == set(DEFAULT_WHITELIST)
+    # 1.3/1.4：静态兜底目录与全局目录都特例收录 ADMIN_HELPER_AGENT_IDS（mis-admin-helper）
+    # 作为真实 worker（管理台可见），但其不在 INVOKE_AGENT_WHITELIST，运行时恒定拒绝。
+    assert set(catalog.worker_ids()) == set(DEFAULT_WHITELIST) | set(ADMIN_HELPER_AGENT_IDS)
 
 
 def test_singleton_and_refresh(monkeypatch: pytest.MonkeyPatch) -> None:

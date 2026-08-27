@@ -63,6 +63,22 @@ public class KbDocument {
     @Column(name = "separator")
     private String separator;
 
+    /** 文件级页码索引/TOC 提取开关（V62；null = 继承库级；只落库不下发）。 */
+    @Column(name = "page_index")
+    private Boolean pageIndex;
+
+    /** 文件级图像/表格上下文窗口 token 数（V62；null = 继承库级；只落库不下发）。 */
+    @Column(name = "image_table_context_window")
+    private Integer imageTableContextWindow;
+
+    /** 文件级自动关键字数量（V62；null = 继承库级；0 = 关闭）。 */
+    @Column(name = "auto_keywords")
+    private Integer autoKeywords;
+
+    /** 文件级自动问题数量（V62；null = 继承库级；0 = 关闭）。 */
+    @Column(name = "auto_questions")
+    private Integer autoQuestions;
+
     /** 解析进度百分比 0~100（V30；null=未解析/未知）。 */
     @Column(name = "parse_progress")
     private Integer parseProgress;
@@ -189,6 +205,38 @@ public class KbDocument {
 
     public void setSeparator(String separator) {
         this.separator = separator;
+    }
+
+    public Boolean getPageIndex() {
+        return pageIndex;
+    }
+
+    public void setPageIndex(Boolean pageIndex) {
+        this.pageIndex = pageIndex;
+    }
+
+    public Integer getImageTableContextWindow() {
+        return imageTableContextWindow;
+    }
+
+    public void setImageTableContextWindow(Integer imageTableContextWindow) {
+        this.imageTableContextWindow = imageTableContextWindow;
+    }
+
+    public Integer getAutoKeywords() {
+        return autoKeywords;
+    }
+
+    public void setAutoKeywords(Integer autoKeywords) {
+        this.autoKeywords = autoKeywords;
+    }
+
+    public Integer getAutoQuestions() {
+        return autoQuestions;
+    }
+
+    public void setAutoQuestions(Integer autoQuestions) {
+        this.autoQuestions = autoQuestions;
     }
 
     public Integer getParseProgress() {

@@ -12,5 +12,6 @@ public record ChunkHitVO(
         Double score,
         String docTitle,
         Integer offset,
-        Integer page) {
+        Integer page,
+        String imageId) {
 }

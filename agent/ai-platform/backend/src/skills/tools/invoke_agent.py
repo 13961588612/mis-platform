@@ -21,12 +21,13 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 from contextvars import ContextVar, Token
 from time import perf_counter
 from typing import Any, Literal
 from uuid import uuid4
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from openharness.tools.base import BaseTool, ToolExecutionContext, ToolResult
 
@@ -39,6 +40,7 @@ from src.coordinator.notification import (
     TaskUsage,
 )
 from src.coordinator.trace import (
+    QA_SUB_STAGES_CV,
     TRACE_STATUS_REJECTED,
     DispatchTraceEntry,
     push_dispatch_trace,
@@ -153,6 +155,23 @@ class InvokeAgentInput(BaseModel):
         description="spawn=新开子会话（默认）；continue=复用已有子会话续聊；stop=停止该 Worker。",
     )
 
+    @field_validator("task_brief", mode="before")
+    @classmethod
+    def _coerce_task_brief(cls, value: Any) -> Any:
+        """LLM 常把 task_brief 序列化为 JSON 字符串；入模前尽力解析为 dict。"""
+        if value is None or isinstance(value, dict):
+            return value
+        if isinstance(value, str):
+            stripped = value.strip()
+            if not stripped:
+                return None
+            try:
+                parsed = json.loads(stripped)
+            except json.JSONDecodeError:
+                return value
+            return parsed if isinstance(parsed, dict) else value
+        return value
+
 
 class InvokeAgentTool(BaseTool):
     """将当前对话任务委托给白名单内的专用智能体，并返回其文本结果。"""
@@ -244,6 +263,19 @@ class InvokeAgentTool(BaseTool):
         if self._is_forbidden_target(agent_id):
             return ToolResult(
                 output=f"禁止委托调度器自身或其他调度 Agent：{agent_id}",
+                is_error=True,
+            )
+
+        # 1.3 硬约束·闸②（belt-and-suspenders）：mis-admin-helper 作为后台操作员专属
+        # Agent，copilot 全链路恒定不可达。即便被误配进白名单 / scoped catalog，
+        # 这里也显式拒绝，绝不委派（与运行时 L249 白名单判定形成双保险）。
+        # 懒导入：常量从 catalog 延迟导入，避免模块被 import 时即触发 catalog
+        # 副作用 / 循环依赖（design §8 T03 懒导入红线）。
+        from src.coordinator.catalog import ADMIN_HELPER_AGENT_IDS
+
+        if agent_id in ADMIN_HELPER_AGENT_IDS:
+            return ToolResult(
+                output=f"目标智能体 {agent_id} 不可经调度链接触达（后台操作员专属，硬约束）",
                 is_error=True,
             )
         if agent_id not in whitelist:
@@ -482,6 +514,7 @@ class InvokeAgentTool(BaseTool):
             intent=intent,
             started_at=started_at,
             is_error=False,
+            sub_stages=run_result.sub_stages,
         )
 
     # ===== 内部编排 helper =====
@@ -639,39 +672,49 @@ class InvokeAgentTool(BaseTool):
             reuse_session_id: 续聊复用的子会话 ID；`None` 表示新建。
 
         Returns:
-            Worker 执行结果。
+            Worker 执行结果（含 worker 内部子阶段细分，若可得）。
         """
-        coro = _run_child_agent(
-            agent_id=agent_id,
-            content=brief.render(),
-            metadata=child_meta,
-            user_id=user_id,
-            channel=channel,
-            user_mobile=user_mobile,
-            channel_user_id=channel_user_id,
-            mis_user_id=mis_user_id,
-            reuse_session_id=reuse_session_id,
-        )
-        if not parent_session_id:
-            return await coro
-
-        from src.coordinator.sessions import (
-            get_worker_session_registry,
-            register_running_task,
-            unregister_running_task,
-        )
-
-        task: asyncio.Task[_WorkerRunResult] = asyncio.ensure_future(coro)
-        register_running_task(parent_session_id, agent_id, task)
+        # T02/T04：跨 asyncio.Task 边界共享 worker 细分计时的 dict 载体。
+        # 父上下文 set 空 dict；ensure_future 拷贝上下文只复制引用，
+        # 子任务（worker 内 qa_pipeline）对其 update 的变异对父任务可见。
+        sub_stages_acc: dict[str, int] = {}
+        cv_token = QA_SUB_STAGES_CV.set(sub_stages_acc)
         try:
-            result = await task
-        finally:
-            unregister_running_task(parent_session_id, agent_id)
-        if result.child_session_id:
-            await get_worker_session_registry().bind(
-                parent_session_id, agent_id, result.child_session_id
+            coro = _run_child_agent(
+                agent_id=agent_id,
+                content=brief.render(),
+                metadata=child_meta,
+                user_id=user_id,
+                channel=channel,
+                user_mobile=user_mobile,
+                channel_user_id=channel_user_id,
+                mis_user_id=mis_user_id,
+                reuse_session_id=reuse_session_id,
             )
-        return result
+            if not parent_session_id:
+                result = await coro
+            else:
+                from src.coordinator.sessions import (
+                    get_worker_session_registry,
+                    register_running_task,
+                    unregister_running_task,
+                )
+
+                task: asyncio.Task[_WorkerRunResult] = asyncio.ensure_future(coro)
+                register_running_task(parent_session_id, agent_id, task)
+                try:
+                    result = await task
+                finally:
+                    unregister_running_task(parent_session_id, agent_id)
+                if result.child_session_id:
+                    await get_worker_session_registry().bind(
+                        parent_session_id, agent_id, result.child_session_id
+                    )
+            # 把共享 dict 中的 worker 细分计时回填到结果（空则 None，不可得）
+            result.sub_stages = sub_stages_acc if sub_stages_acc else None
+            return result
+        finally:
+            QA_SUB_STAGES_CV.reset(cv_token)
 
     async def _record_trace(
         self, parent_session_id: str, entry: DispatchTraceEntry
@@ -694,6 +737,7 @@ class InvokeAgentTool(BaseTool):
         intent: str,
         started_at: float,
         is_error: bool,
+        sub_stages: dict[str, int] | None = None,
     ) -> ToolResult:
         """记录 trace 并渲染最终 ToolResult。
 
@@ -703,6 +747,8 @@ class InvokeAgentTool(BaseTool):
             intent: 意图标签。
             started_at: 计时起点。
             is_error: 是否作为错误结果返回给 LLM。
+            sub_stages: worker 内部子阶段细分（透传进 ``DispatchTraceEntry.sub_stages``）；
+                ``None`` 表示不可得（降级红线：不影响主链路）。
 
         Returns:
             工具结果。
@@ -717,6 +763,7 @@ class InvokeAgentTool(BaseTool):
                 latency_ms=notification.latency_ms or _elapsed_ms(started_at),
                 task_id=notification.task_id,
                 brief_rejected=False,
+                sub_stages=sub_stages,
             ),
         )
         return ToolResult(output=notification.to_tool_output(), is_error=is_error)
@@ -802,9 +849,11 @@ class _WorkerRunResult:
         child_session_id: 子会话 ID（C5 续聊锚点）。
         tokens: Worker 侧 token 总量（取自 DONE 事件，缺失为 0）。
         tool_uses: Worker 侧工具调用次数（TOOL_CALL 计数）。
+        sub_stages: worker 内部子阶段细分（``DispatchTraceEntry.sub_stages`` 透传载体）；
+            ``None`` 表示 worker 未回传（不可得，降级红线：绝不阻断主链路）。
     """
 
-    __slots__ = ("text", "child_session_id", "tokens", "tool_uses")
+    __slots__ = ("text", "child_session_id", "tokens", "tool_uses", "sub_stages")
 
     def __init__(
         self,
@@ -813,11 +862,13 @@ class _WorkerRunResult:
         child_session_id: str = "",
         tokens: int = 0,
         tool_uses: int = 0,
+        sub_stages: dict[str, int] | None = None,
     ) -> None:
         self.text = text
         self.child_session_id = child_session_id
         self.tokens = tokens
         self.tool_uses = tool_uses
+        self.sub_stages = sub_stages
 
 
 async def _run_child_agent(
@@ -895,6 +946,7 @@ async def _run_child_agent(
     runtime_error: str | None = None
     tool_uses: int = 0
     tokens: int = 0
+    kb_retrieve_hits: list[Any] = []
 
     async for event in instance.process_message(
         session=child_session,
@@ -908,6 +960,12 @@ async def _run_child_agent(
             err: Any | None = event.result.get("error")
             if err:
                 tool_errors.append(f"{event.tool_name}: {err}")
+            elif event.tool_name == "kb_retrieve":
+                output = event.result.get("output")
+                if isinstance(output, str) and output.strip():
+                    from src.agent.mis_rag.qa_pipeline import parse_kb_retrieve_tool_output
+
+                    kb_retrieve_hits = parse_kb_retrieve_tool_output(output)
         elif event.type == AgentEventType.ERROR:
             runtime_error = event.message or "Agent runtime error"
         elif event.type == AgentEventType.DONE and event.token_usage is not None:
@@ -943,6 +1001,29 @@ async def _run_child_agent(
             tokens=tokens,
             tool_uses=tool_uses,
         )
+
+    if agent_id == "mis-rag" and kb_retrieve_hits:
+        from src.agent.mis_rag.qa_pipeline import (
+            PENDING_KB_SOURCES_FENCE_KEY,
+            extract_kb_sources_fence,
+            format_mis_rag_delegate_answer,
+        )
+
+        formatted = format_mis_rag_delegate_answer(text, retrieve_hits=kb_retrieve_hits)
+        text = formatted
+        parent_session_id = str(metadata.get("parent_session_id") or "").strip()
+        pending_fence = extract_kb_sources_fence(formatted)
+        if parent_session_id and pending_fence:
+            try:
+                parent_session = await session_manager.get_session(parent_session_id)
+                parent_session.state[PENDING_KB_SOURCES_FENCE_KEY] = pending_fence
+                await session_manager.save_session(parent_session)
+            except Exception as exc:  # noqa: BLE001 - 围栏降级不得阻断委派
+                logger.warning(
+                    "failed to persist pending kb-sources fence",
+                    parent_session_id=parent_session_id,
+                    error=str(exc),
+                )
 
     logger.info(
         "invoke_agent completed",

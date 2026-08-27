@@ -194,15 +194,26 @@ export function useChat(sessionId: string | null): UseChatReturn {
 
       switch (event.type) {
         case "text.delta": {
-          // Accumulate text delta into the streaming message
+          const delta = event.content ?? "";
           const streamingId = streamingMessageIdRef.current;
           if (streamingId) {
             const messages = useChatStore.getState().messages;
             const existing = messages.find((m) => m.id === streamingId);
             if (existing) {
               updateMessage(streamingId, {
-                content: existing.content + (event.content ?? ""),
+                content: existing.content + delta,
                 status: "streaming",
+              });
+            }
+          } else if (delta.includes("kb-sources")) {
+            // Backend may append kb-sources fence immediately before done.
+            const messages = useChatStore.getState().messages;
+            const lastAssistant = [...messages]
+              .reverse()
+              .find((m) => m.role === "assistant");
+            if (lastAssistant && !lastAssistant.content.includes("```kb-sources")) {
+              updateMessage(lastAssistant.id, {
+                content: lastAssistant.content + delta,
               });
             }
           }

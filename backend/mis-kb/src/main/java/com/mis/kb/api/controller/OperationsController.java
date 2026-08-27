@@ -2,6 +2,8 @@ package com.mis.kb.api.controller;
 
 import com.mis.common.core.result.PageResult;
 import com.mis.common.core.result.Result;
+import com.mis.common.security.context.LoginUser;
+import com.mis.common.security.context.SecurityContextHolder;
 import com.mis.kb.api.dto.KbDashboardVO;
 import com.mis.kb.api.dto.KbQaExportRow;
 import com.mis.kb.api.dto.KbQaFeedbackVO;
@@ -12,7 +14,9 @@ import com.mis.kb.api.dto.KbQaSessionVO;
 import com.mis.kb.domain.service.KbOperationsService;
 import com.mis.kb.domain.service.KbQaService;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
@@ -23,6 +27,7 @@ import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
 import java.util.List;
+import java.util.Map;
 
 /**
  * 运营只读端点（A-02a/b/d/e）。
@@ -57,6 +62,7 @@ public class OperationsController {
      * @param libraryId   命中知识库 id；可空
      * @param userId      提问用户 id；可空
      * @param hasFeedback 是否已反馈；可空表示不限
+     * @param sentiment   评价结果：positive 好评 / negative 差评；可空表示不限
      * @param keyword     提问内容关键字；可空
      * @param page        页码，从 1 开始
      * @param size        每页条数
@@ -69,12 +75,13 @@ public class OperationsController {
             @RequestParam(required = false) Long libraryId,
             @RequestParam(required = false) Long userId,
             @RequestParam(required = false) Boolean hasFeedback,
+            @RequestParam(required = false) String sentiment,
             @RequestParam(required = false) String keyword,
             @RequestParam(required = false) Integer page,
             @RequestParam(required = false) Integer size) {
         KbQaSessionQuery query = new KbQaSessionQuery(
                 parseInstant(from, false), parseInstant(to, true), libraryId, userId,
-                hasFeedback, keyword, page, size);
+                hasFeedback, sentiment, keyword, page, size);
         return Result.ok(operationsService.listSessions(query));
     }
 
@@ -120,6 +127,7 @@ public class OperationsController {
      * @param to        结束时间；可空
      * @param libraryId 命中知识库 id；可空
      * @param userId    提问用户 id；可空
+     * @param sentiment 评价结果：positive 好评 / negative 差评；可空表示不限
      * @param keyword   提问关键字；可空
      * @return 导出行列表
      */
@@ -130,11 +138,32 @@ public class OperationsController {
             @RequestParam(required = false) Long libraryId,
             @RequestParam(required = false) Long userId,
             @RequestParam(required = false) Boolean hasFeedback,
+            @RequestParam(required = false) String sentiment,
             @RequestParam(required = false) String keyword) {
         KbQaSessionQuery query = new KbQaSessionQuery(
                 parseInstant(from, false), parseInstant(to, true), libraryId, userId,
-                hasFeedback, keyword, null, null);
+                hasFeedback, sentiment, keyword, null, null);
         return Result.ok(operationsService.exportRows(query));
+    }
+
+    /**
+     * 运营：标记问答反馈已处理/忽略（OP-05）。
+     *
+     * <p>处理人取当前登录人（{@code X-User-Id}/{@code X-Username} 透传头），
+     * 状态机 pending → handled/ignored 单向终态；非法流转由服务层抛错。
+     *
+     * @param feedbackId 反馈 id
+     * @param body       处理请求体：{@code status}（handled/ignored，必填）、{@code note}（可空）
+     * @return 更新后的反馈视图
+     */
+    @PatchMapping("/qa/feedback/{feedbackId}/process")
+    public Result<KbQaFeedbackVO> processFeedback(
+            @PathVariable Long feedbackId,
+            @RequestBody Map<String, String> body) {
+        String status = body == null ? null : body.get("status");
+        String note = body == null ? null : body.get("note");
+        return Result.ok(operationsService.markFeedbackProcessed(
+                feedbackId, status, note, currentUserId()));
     }
 
     // ---------------------------------------------------------------- P0 既有端点（保持兼容）
@@ -198,5 +227,9 @@ public class OperationsController {
         } catch (DateTimeParseException ignored) {
             return null;
         }
+    }
+
+    private Long currentUserId() {
+        return SecurityContextHolder.getOptional().map(LoginUser::getUserId).orElse(null);
     }
 }

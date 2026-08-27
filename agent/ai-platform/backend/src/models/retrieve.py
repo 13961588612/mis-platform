@@ -66,6 +66,7 @@ class ChunkHit(BaseModel):
     doc_title: str = Field(default="", description="文档标题，用于展示来源名")
     offset: int | None = Field(default=None, description="片段在原文中的字符偏移（F-04，可空）")
     page: int | None = Field(default=None, description="片段所在页码，1 起（F-04，可空）")
+    image_id: str | None = Field(default=None, description="分片关联图片 id（引擎 image_id，可空）")
 
     @classmethod
     def from_api(cls, raw: dict[str, Any] | None) -> ChunkHit:
@@ -90,6 +91,7 @@ class ChunkHit(BaseModel):
             doc_title=_as_str(raw.get("docTitle")),
             offset=_as_int(raw.get("offset")),
             page=_as_int(raw.get("page")),
+            image_id=_as_str(raw.get("imageId")) or None,
         )
 
     def source_label(self) -> str:
@@ -155,6 +157,7 @@ class CitationItem(BaseModel):
     offset: int | None = Field(default=None, description="片段字符偏移（F-04，可空）")
     page: int | None = Field(default=None, description="片段页码（F-04，可空）")
     source: str = Field(default="", description="来源名（文档标题，F-04）")
+    image_id: str | None = Field(default=None, description="分片关联图片 id（引擎 image_id，可空）")
 
     @classmethod
     def from_hit(cls, hit: ChunkHit) -> CitationItem:
@@ -167,6 +170,7 @@ class CitationItem(BaseModel):
             offset=hit.offset,
             page=hit.page,
             source=hit.source_label(),
+            image_id=hit.image_id,
         )
 
     def to_api(self) -> dict[str, Any]:
@@ -208,6 +212,7 @@ class QaCitation(BaseModel):
     message_id: int | None = Field(default=None, description="所属助手消息 ID")
     offset: int | None = Field(default=None, description="片段字符偏移（F-04，可空）")
     page: int | None = Field(default=None, description="片段页码（F-04，可空）")
+    image_id: str | None = Field(default=None, description="分片关联图片 id（引擎 image_id，可空）")
 
     @classmethod
     def from_hit(
@@ -239,6 +244,7 @@ class QaCitation(BaseModel):
             message_id=message_id,
             offset=hit.offset,
             page=hit.page,
+            image_id=hit.image_id,
         )
 
     def to_api(self) -> dict[str, Any]:
@@ -254,6 +260,7 @@ class QaCitation(BaseModel):
             "messageId": self.message_id,
             "offset": self.offset,
             "page": self.page,
+            "imageId": self.image_id,
         }
 
 

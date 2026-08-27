@@ -167,6 +167,50 @@ async def test_push_then_drain_roundtrip() -> None:
 
 
 @pytest.mark.asyncio
+async def test_push_enriches_coordinator_id_from_parent_session() -> None:
+    """未显式传 coordinator_id 时，从父会话 agent_id 补齐。"""
+    parent = MagicMock()
+    parent.agent_id = "mis-copilot"
+    session_manager = MagicMock()
+    session_manager.get_session = AsyncMock(return_value=parent)
+
+    with patch(
+        "src.agent.session.get_session_manager", return_value=session_manager
+    ):
+        await push_dispatch_trace(
+            "parent-sess",
+            DispatchTraceEntry(intent="rag", worker_id="mis-rag", task_id="t1"),
+        )
+
+    items = await drain_dispatch_traces("parent-sess")
+    assert len(items) == 1
+    assert items[0]["coordinator_id"] == "mis-copilot"
+    assert items[0]["worker_id"] == "mis-rag"
+    session_manager.get_session.assert_awaited_once_with("parent-sess")
+
+
+@pytest.mark.asyncio
+async def test_push_keeps_explicit_coordinator_id() -> None:
+    """调用方已填 coordinator_id 时不覆盖。"""
+    with patch(
+        "src.coordinator.trace._resolve_coordinator_id",
+        new=AsyncMock(return_value="should-not-use"),
+    ) as resolve:
+        await push_dispatch_trace(
+            "s1",
+            DispatchTraceEntry(
+                coordinator_id="explicit-coord",
+                worker_id="mis-rag",
+                task_id="t1",
+            ),
+        )
+        resolve.assert_not_awaited()
+
+    items = await drain_dispatch_traces("s1")
+    assert items[0]["coordinator_id"] == "explicit-coord"
+
+
+@pytest.mark.asyncio
 async def test_push_without_session_is_dropped() -> None:
     """无宿主会话时静默丢弃，不抛异常。"""
     await push_dispatch_trace("", DispatchTraceEntry(worker_id="mis-rag"))

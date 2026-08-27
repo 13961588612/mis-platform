@@ -74,6 +74,18 @@ const SECURITY_OPTIONS: Array<{ value: SecurityLevel; label: string }> = [
   { value: 'needs_hitl', label: '需人工审批（HITL）— 写操作前必须有人确认' },
 ];
 
+/**
+ * T05 硬约束护栏（前端镜像常量，与后端 `catalog.ADMIN_HELPER_AGENT_IDS` 严格对齐）：
+ * 后台操作员专属智能体**不允许接入任何协调者**（copilot 全链路不可达）。
+ *
+ * <p>此处仅做**前端可见性护栏**（让运营在 UI 上无法勾选），真正的 fail-closed 由后端四道闸
+ * （coordination.yaml 声明 / INVOKE_AGENT_WHITELIST / build_scoped_catalog / write_coordination 校验
+ * + session 权限门 + invoke_agent 显式拒）兜底；前端不信任单点，后端不依赖前端。
+ *
+ * <p>若后端 `ADMIN_HELPER_AGENT_IDS` 增减，这里必须同步，否则会出现"后端拒、前端能勾"的漂移。
+ */
+const LOCKED_WORKERS: readonly string[] = ['mis-admin-helper'];
+
 /** 文本域（按行展开成数组）与数值（字符串受控）的中间态。 */
 interface FormState {
   role: AgentRole;
@@ -186,7 +198,8 @@ function buildPayload(agentId: string, form: FormState): AgentCoordination {
         timeout_seconds: toNumber(form.delegation_timeout_seconds, 60),
         emit_dispatch_trace: form.emit_dispatch_trace,
         forbid_self_invoke: form.forbid_self_invoke,
-        worker_ids: form.worker_ids,
+        // T05 防御：即便 form.worker_ids 历史残留锁定项（后端此前已拒），也强制剥离
+        worker_ids: form.worker_ids.filter((id) => !LOCKED_WORKERS.includes(id)),
       },
       catalog: null,
     };
@@ -256,10 +269,29 @@ export function AgentCoordinationPage({ agentId }: AgentCoordinationPageProps) {
     void loadCandidates();
   }, [loadCandidates]);
 
-  /** 可选 worker：role=worker 且排除自己（§4.5 校验 3 禁自环）。 */
+  /** 可选 worker：role=worker、排除自己（§4.5 校验 3 禁自环）、且排除锁定项（T05 硬约束）。 */
   const workerOptions = useMemo(
-    () => candidates.filter((a) => a.role === 'worker' && a.agent_id !== agentId),
+    () =>
+      candidates.filter(
+        (a) =>
+          a.role === 'worker' &&
+          a.agent_id !== agentId &&
+          !LOCKED_WORKERS.includes(a.agent_id),
+      ),
     [candidates, agentId],
+  );
+
+  /**
+   * T05：锁定项（后台操作员专属，硬约束不可接入任何协调者）。
+   * 即便后端候选里没有它，也强制展示一条禁用条目，避免运营误以为"可加"而走提交被拒。
+   */
+  const lockedWorkerRows = useMemo(
+    () =>
+      LOCKED_WORKERS.map((id) => {
+        const found = candidates.find((a) => a.agent_id === id);
+        return { agent_id: id, display_name: found?.display_name ?? id };
+      }),
+    [candidates],
   );
 
   const roleChanged = serverRole !== null && serverRole !== form.role;
@@ -630,7 +662,7 @@ export function AgentCoordinationPage({ agentId }: AgentCoordinationPageProps) {
                   </span>
                 </div>
                 <div className="max-h-56 overflow-auto rounded-md border">
-                  {workerOptions.length === 0 ? (
+                  {workerOptions.length === 0 && lockedWorkerRows.length === 0 ? (
                     <p className="py-8 text-center text-xs text-muted-foreground">
                       当前没有可选的执行者。请先把目标 Agent 的调度角色设为「执行者」。
                     </p>
@@ -652,9 +684,39 @@ export function AgentCoordinationPage({ agentId }: AgentCoordinationPageProps) {
                           </label>
                         </li>
                       ))}
+                      {lockedWorkerRows.map((w) => (
+                        <li key={w.agent_id} className="bg-destructive/5">
+                          <div className="flex items-center gap-2 px-3 py-2 text-sm">
+                            <input
+                              type="checkbox"
+                              className="h-3.5 w-3.5 cursor-not-allowed accent-destructive"
+                              disabled
+                              checked={false}
+                              readOnly
+                            />
+                            <span className="min-w-0 flex-1 truncate text-foreground">
+                              {w.display_name}
+                            </span>
+                            <span className="shrink-0 font-mono text-xs text-muted-foreground">
+                              {w.agent_id}
+                            </span>
+                            <span className="shrink-0 text-xs font-medium text-destructive">
+                              后台操作员专属 · 不可接入
+                            </span>
+                          </div>
+                        </li>
+                      ))}
                     </ul>
                   )}
                 </div>
+                {/* T05：硬约束提示，明确告知运营「后台操作员专属」不可被任何协调者委派 */}
+                {lockedWorkerRows.length > 0 ? (
+                  <p className="mt-1 flex items-start gap-1 text-xs text-destructive">
+                    <TriangleAlert className="mt-[0.1rem] h-3 w-3 shrink-0" />
+                    以下智能体为后台操作员专属，按设计硬约束禁止接入任何协调者（copilot
+                    全链路不可达）；即使强行提交，后端四道闸也会拒绝。本条仅为前端护栏，真实拒绝以后端为准。
+                  </p>
+                ) : null}
                 {/* 已选但不在候选里的 id：多半是对方角色被改了，必须显式暴露 */}
                 {form.worker_ids.filter((id) => !workerOptions.some((w) => w.agent_id === id))
                   .length > 0 ? (

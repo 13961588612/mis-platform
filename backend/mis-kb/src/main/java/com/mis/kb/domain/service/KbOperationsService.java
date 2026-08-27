@@ -1,8 +1,11 @@
 package com.mis.kb.domain.service;
 
 import com.mis.common.core.result.PageResult;
+import com.mis.common.security.context.LoginUser;
+import com.mis.common.security.context.SecurityContextHolder;
 import com.mis.kb.api.dto.KbDashboardVO;
 import com.mis.kb.api.dto.KbQaExportRow;
+import com.mis.kb.api.dto.KbQaFeedbackVO;
 import com.mis.kb.api.dto.KbQaSessionListVO;
 import com.mis.kb.api.dto.KbQaSessionQuery;
 import com.mis.kb.domain.entity.KbDocument;
@@ -11,6 +14,7 @@ import com.mis.kb.domain.entity.KbQaCitation;
 import com.mis.kb.domain.entity.KbQaFeedback;
 import com.mis.kb.domain.entity.KbQaMessage;
 import com.mis.kb.domain.entity.KbQaSession;
+import com.mis.kb.domain.entity.KbQaTicket;
 import com.mis.kb.domain.model.KbResultCode;
 import com.mis.kb.domain.model.QaRole;
 import com.mis.kb.domain.repository.KbDocumentRepository;
@@ -19,6 +23,7 @@ import com.mis.kb.domain.repository.KbQaCitationRepository;
 import com.mis.kb.domain.repository.KbQaFeedbackRepository;
 import com.mis.kb.domain.repository.KbQaMessageRepository;
 import com.mis.kb.domain.repository.KbQaSessionRepository;
+import com.mis.kb.domain.repository.KbQaTicketRepository;
 import com.mis.kb.support.KbBusinessException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -95,6 +100,7 @@ public class KbOperationsService {
     private final KbQaFeedbackRepository feedbackRepository;
     private final KbLibraryRepository libraryRepository;
     private final KbDocumentRepository documentRepository;
+    private final KbQaTicketRepository ticketRepository;
     private final KbQaTicketService ticketService;
 
     public KbOperationsService(
@@ -104,6 +110,7 @@ public class KbOperationsService {
             KbQaFeedbackRepository feedbackRepository,
             KbLibraryRepository libraryRepository,
             KbDocumentRepository documentRepository,
+            KbQaTicketRepository ticketRepository,
             KbQaTicketService ticketService) {
         this.sessionRepository = sessionRepository;
         this.messageRepository = messageRepository;
@@ -111,6 +118,7 @@ public class KbOperationsService {
         this.feedbackRepository = feedbackRepository;
         this.libraryRepository = libraryRepository;
         this.documentRepository = documentRepository;
+        this.ticketRepository = ticketRepository;
         this.ticketService = ticketService;
     }
 
@@ -125,7 +133,7 @@ public class KbOperationsService {
     @Transactional(readOnly = true)
     public PageResult<KbQaSessionListVO> listSessions(KbQaSessionQuery query) {
         KbQaSessionQuery q = query == null
-                ? new KbQaSessionQuery(null, null, null, null, null, null, null, null)
+                ? new KbQaSessionQuery(null, null, null, null, null, null, null, null, null)
                 : query;
         List<KbQaSessionListVO> all = buildRows(q);
         int page = q.effectivePage();
@@ -148,7 +156,7 @@ public class KbOperationsService {
     @Transactional(readOnly = true)
     public List<KbQaExportRow> exportRows(KbQaSessionQuery query) {
         KbQaSessionQuery q = query == null
-                ? new KbQaSessionQuery(null, null, null, null, null, null, null, null)
+                ? new KbQaSessionQuery(null, null, null, null, null, null, null, null, null)
                 : query;
         List<KbQaSessionListVO> rows = buildRows(q);
         if (rows.size() > EXPORT_MAX_ROWS) {
@@ -167,10 +175,71 @@ public class KbOperationsService {
                     row.citeCount(),
                     row.accuracy(),
                     row.helpful(),
-                    null,
-                    null));
+                    row.offtopic(),
+                    row.citeError()));
         }
         return result;
+    }
+
+    // ---------------------------------------------------------------- OP-05 反馈处理
+
+    /**
+     * 标记问答反馈已处理/忽略（OP-05 轻量闭环）。
+     *
+     * <p><b>状态机（共享知识 §7-3）：</b>{@code pending → handled} / {@code pending → ignored}，
+     * 单向终态，{@code handled/ignored} 不可回退（P0 不提供重开）。非法流转抛
+     * {@link KbResultCode#KB_FEEDBACK_STATUS_ILLEGAL}。
+     *
+     * <p><b>处理人：</b>{@code handlerId} 取当前登录人（BFF 经 {@code X-User-Id} 透传），
+     * {@code handlerName} 从 {@link SecurityContextHolder} 的 {@code X-Username} 头解析
+     * （BFF {@code loginContextHeaders()} 已透传），避免运营页再查一次 subject。
+     *
+     * @param feedbackId 反馈 id
+     * @param status     目标状态：handled / ignored
+     * @param note       处理备注；可空
+     * @param handlerId  当前操作人 userId；可空（无安全上下文的内部调用）
+     * @return 更新后的反馈视图
+     */
+    @Transactional
+    public KbQaFeedbackVO markFeedbackProcessed(
+            Long feedbackId, String status, String note, Long handlerId) {
+        KbQaFeedback entity = feedbackRepository.findById(feedbackId)
+                .orElseThrow(() -> new KbBusinessException(KbResultCode.KB_FEEDBACK_NOT_FOUND));
+
+        String target = status == null ? null : status.trim().toLowerCase();
+        if (!"handled".equals(target) && !"ignored".equals(target)) {
+            throw new com.mis.common.core.exception.BusinessException(
+                    com.mis.common.core.exception.ResultCode.VALIDATION_ERROR,
+                    "反馈处理状态非法（应为 handled/ignored）");
+        }
+        String current = entity.getFeedbackStatus() == null ? "pending" : entity.getFeedbackStatus();
+        if (!"pending".equals(current)) {
+            // 终态不可回退；重复标记同一终态视为幂等成功（返回当前值），其余一律拒绝
+            if (!target.equals(current)) {
+                log.warn("反馈状态机非法流转 feedbackId={} from={} to={}",
+                        feedbackId, current, target);
+                throw new KbBusinessException(KbResultCode.KB_FEEDBACK_STATUS_ILLEGAL);
+            }
+            return toFeedbackVo(entity);
+        }
+
+        Instant now = Instant.now();
+        entity.setFeedbackStatus(target);
+        entity.setHandlerId(handlerId);
+        entity.setHandlerName(currentUsername());
+        entity.setHandledAt(now);
+        entity.setHandleNote(note);
+        entity.setUpdatedAt(now);
+        KbQaFeedback saved = feedbackRepository.save(entity);
+        log.info("问答反馈已处理 feedbackId={} status={} handler={}", feedbackId, target, handlerId);
+        return toFeedbackVo(saved);
+    }
+
+    /** 取当前登录人 username（BFF {@code X-Username} 透传头解析）；无上下文返回 {@code null}。 */
+    private static String currentUsername() {
+        return SecurityContextHolder.getOptional()
+                .map(LoginUser::getUsername)
+                .orElse(null);
     }
 
     // ---------------------------------------------------------------- A-02d 看板
@@ -201,11 +270,12 @@ public class KbOperationsService {
         List<KbQaSession> sessions = sessionRepository.findByCreatedAtBetweenOrderByIdDesc(start, end);
         long openTickets = ticketService.countOpen();
         long totalTickets = ticketService.countAll();
+        long pendingFeedback = feedbackRepository.countByFeedbackStatus("pending");
 
         if (sessions.isEmpty()) {
             return new KbDashboardVO(
                     0L, 0L, 0L, 0.0D, null, null, 0L, 0L,
-                    openTickets, totalTickets,
+                    openTickets, totalTickets, pendingFeedback,
                     0L, 0L, 0L, null, null,
                     emptyDimensions(), List.of(), List.of(), List.of(), List.of(), List.of());
         }
@@ -235,27 +305,23 @@ public class KbOperationsService {
                 .map(KbQaFeedback::getHelpful).filter(Objects::nonNull).toList());
 
         // --- 好评率与综合均分（按会话维度，一会话至多一条反馈）
+        // 口径唯一来源 sentimentOf()：差评 = 综合分≤2 或显式问题标记（与筛选/列表完全同源）
         Map<Long, Double> scoreBySession = new HashMap<>();
         Set<Long> negativeSessionIds = new HashSet<>();
         long positiveCount = 0L;
-        long negativeCount = 0L;
         for (KbQaFeedback f : feedbacks) {
             Double score = compositeScore(f);
             if (score != null) {
                 scoreBySession.put(f.getSessionId(), score);
                 if (score >= POSITIVE_SCORE_MIN) {
                     positiveCount++;
-                } else if (score <= NEGATIVE_SCORE_MAX) {
-                    negativeCount++;
-                    negativeSessionIds.add(f.getSessionId());
                 }
             }
-            // 显式的问题标记（跑题/引用错误）即使评分不低，也算「有质量投诉」，纳入高频差评问统计
-            if ((f.getOfftopic() != null && f.getOfftopic() > 0)
-                    || (f.getCiteError() != null && f.getCiteError() > 0)) {
+            if ("negative".equals(sentimentOf(f))) {
                 negativeSessionIds.add(f.getSessionId());
             }
         }
+        long negativeCount = negativeSessionIds.size();
         long ratedCount = scoreBySession.size();
         Double positiveRate = ratedCount == 0 ? null : round2((double) positiveCount / ratedCount);
         Double avgScore = averageOf(scoreBySession.values());
@@ -401,6 +467,7 @@ public class KbOperationsService {
                 citeErrorCount,
                 openTickets,
                 totalTickets,
+                pendingFeedback,
                 ratedCount,
                 positiveCount,
                 negativeCount,
@@ -450,6 +517,11 @@ public class KbOperationsService {
         for (KbQaFeedback f : feedbackRepository.findBySessionIdIn(sessionIds)) {
             feedbackBySession.put(f.getSessionId(), f);
         }
+        // 批量取各会话最新工单状态（同会话多工单时 id 最大者即最新；结果按 id 倒序，首次出现即最新）
+        Map<Long, String> ticketStatusBySession = new HashMap<>();
+        for (KbQaTicket t : ticketRepository.findBySessionIdInOrderByIdDesc(sessionIds)) {
+            ticketStatusBySession.putIfAbsent(t.getSessionId(), t.getStatus());
+        }
 
         String keyword = q.keyword() == null || q.keyword().isBlank()
                 ? null : q.keyword().trim().toLowerCase();
@@ -481,6 +553,14 @@ public class KbOperationsService {
             if (q.hasFeedback() != null && q.hasFeedback() != hasFeedback) {
                 continue;
             }
+            // 评价结果筛选（OP-01）：好评/差评口径与看板 negativeSessionIds 完全同源，
+            // 见 {@link #sentimentOf}——禁止在别处再写一份口径。
+            if (q.sentiment() != null && !q.sentiment().isBlank()) {
+                String sentiment = sentimentOf(fb);
+                if (!q.sentiment().equals(sentiment)) {
+                    continue;
+                }
+            }
             if (keyword != null && (question == null || !question.toLowerCase().contains(keyword))) {
                 continue;
             }
@@ -497,7 +577,12 @@ public class KbOperationsService {
                     new ArrayList<>(libraryIds),
                     hasFeedback,
                     fb == null ? null : fb.getAccuracy(),
-                    fb == null ? null : fb.getHelpful()));
+                    fb == null ? null : fb.getHelpful(),
+                    fb == null ? null : fb.getOfftopic(),
+                    fb == null ? null : fb.getCiteError(),
+                    sentimentOf(fb),
+                    fb == null ? null : fb.getFeedbackStatus(),
+                    ticketStatusBySession.get(s.getId())));
         }
         return rows;
     }
@@ -608,6 +693,41 @@ public class KbOperationsService {
             n++;
         }
         return (double) sum / n;
+    }
+
+    /**
+     * 评价结果判定（OP-01/OP-02/OP-05 三处口径唯一来源）。
+     *
+     * <p>好评 = 综合分 ≥ {@link #POSITIVE_SCORE_MIN}；差评 = 综合分 ≤ {@link #NEGATIVE_SCORE_MAX}
+     * <b>或</b> offtopic &gt; 0 <b>或</b> citeError &gt; 0——与 {@link #stats} 的
+     * {@code negativeSessionIds} 完全一致（显式问题标记即使评分不低也算差评）。
+     * 无反馈返回 {@code null}；有反馈但既不算好评也不算差评（综合分 2~4 且无显式标记）返回 {@code null}。
+     *
+     * @return positive / negative / null
+     */
+    private static String sentimentOf(KbQaFeedback f) {
+        if (f == null) {
+            return null;
+        }
+        Double score = compositeScore(f);
+        boolean negative = (score != null && score <= NEGATIVE_SCORE_MAX)
+                || (f.getOfftopic() != null && f.getOfftopic() > 0)
+                || (f.getCiteError() != null && f.getCiteError() > 0);
+        if (negative) {
+            return "negative";
+        }
+        return (score != null && score >= POSITIVE_SCORE_MIN) ? "positive" : null;
+    }
+
+    /**
+     * 反馈实体 → 视图（含处理状态五字段，与 {@code KbQaService.toFeedbackVo} 同构）。
+     */
+    private static KbQaFeedbackVO toFeedbackVo(KbQaFeedback e) {
+        return new KbQaFeedbackVO(
+                e.getId(), e.getSessionId(), e.getAccuracy(), e.getHelpful(),
+                e.getOfftopic(), e.getCiteError(),
+                e.getFeedbackStatus(), e.getHandlerId(), e.getHandlerName(),
+                e.getHandledAt(), e.getHandleNote());
     }
 
     /**

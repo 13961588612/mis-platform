@@ -8,7 +8,14 @@
 import axios, { type AxiosError, type InternalAxiosRequestConfig } from 'axios';
 import type { ApiResult, TokenResponse } from '@/types/api';
 import { useAuthStore } from '@/stores/auth-store';
-import type { Session, SessionMessage } from '../types';
+import { listSkills } from './agent-ops-api';
+import type {
+  Session,
+  SessionMessage,
+  SkillBuilderChatRequest,
+  SkillBuilderChatResponse,
+  SkillSummary,
+} from '../types';
 
 /** 与 BFF {@code mis.agent-ops.chat-timeout-ms} 对齐（毫秒）。 */
 export const AGENT_CHAT_TIMEOUT_MS = 180_000;
@@ -90,12 +97,55 @@ function seg(value: string): string {
   return encodeURIComponent(value);
 }
 
+/**
+ * 「AI 对话创建」技能（C 功能）— agent:skill:manage。
+ *
+ * <p>走 180s 客户端（与 {@link sendChatMessage} 同文件）：本质是完整 LLM 推理，
+ * 与下游 BFF `mis.agent-ops.chat-timeout-ms` 对齐，否则浏览器先断。
+ * 后端 `POST /skills/builder/chat` 为 ephemeral 端点（不落库），仅回 AI 文本。
+ */
+export async function chatSkillBuilder(
+  req: SkillBuilderChatRequest,
+): Promise<SkillBuilderChatResponse> {
+  const res = await chatApi.post<ApiResult<SkillBuilderChatResponse>>(
+    '/agent-ops/skills/builder/chat',
+    req,
+  );
+  return unwrap(res, 'AI 生成技能失败');
+}
+
 /** §4.3 #32 — agent:chat:use */
 export async function createChatSession(agentId: string): Promise<Session> {
   const res = await chatApi.post<ApiResult<Session>>('/agent-ops/chat/sessions', {
     agent_id: agentId,
   });
   return unwrap(res, '创建对话会话失败');
+}
+
+/**
+ * 内嵌选择器专用封装（T04）：复用 `listSkills` 拉取技能池，映射为精简
+ * {@link SkillSummary}；搜索在客户端按 skill_id/name/description 子串过滤。
+ *
+ * <p>与 `chatSkillBuilder`（ephemeral）无关：选择器数据源是 `GET /skills`，
+ * 不依赖 SSE tool 事件（design §4 / Q3）。
+ */
+export async function listSkillsForBuilder(keyword?: string): Promise<SkillSummary[]> {
+  const all = await listSkills();
+  const kw = (keyword ?? '').trim().toLowerCase();
+  const filtered = kw
+    ? all.filter(
+        (s) =>
+          s.skill_id.toLowerCase().includes(kw) ||
+          s.name.toLowerCase().includes(kw) ||
+          (s.description ?? '').toLowerCase().includes(kw),
+      )
+    : all;
+  return filtered.map((s) => ({
+    skill_id: s.skill_id,
+    name: s.name,
+    description: s.description,
+    category: s.category,
+  }));
 }
 
 /**

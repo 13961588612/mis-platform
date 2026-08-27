@@ -6,6 +6,7 @@ import com.mis.adminbff.dto.kb.KbCategoryAdminCreateRequest;
 import com.mis.adminbff.dto.kb.KbCategoryAdminVO;
 import com.mis.adminbff.dto.kb.KbCategoryVO;
 import com.mis.adminbff.dto.kb.KbDashboardVO;
+import com.mis.adminbff.dto.kb.KbDocumentChunksVO;
 import com.mis.adminbff.dto.kb.KbDocumentUploadResponse;
 import com.mis.adminbff.dto.kb.KbDocumentVO;
 import com.mis.adminbff.dto.kb.KbEngineCapabilitiesVO;
@@ -112,6 +113,19 @@ public class KbController {
      * mis-kb 侧另有 {@code isGlobalAdmin} 二次裁定（双闸门）。
      */
     private static final String PERM_ACL_REVOKE = "kb:acl:revoke";
+
+    /**
+     * 文档列表/详情读取权限码（「查看文档切分效果」）。
+     * 取值必须与 V32 写入 {@code sys_menu(id=91130/91131).permission} 的字面量保持一致；
+     * mis-kb 侧另有 {@code KbVisibilityService.hasPermission} ACL 读权限二次裁定（双闸门）。
+     */
+    private static final String PERM_DOCUMENT_LIST = "kb:document:list";
+
+    /** 智能问答入口（附属资源并集之一）。 */
+    private static final String PERM_QA_ASK = "kb:qa:ask";
+
+    /** Agent 本地对话入口（附属资源并集之一）。 */
+    private static final String PERM_AGENT_CHAT_USE = "agent:chat:use";
 
     private final KbFacadeService kbFacadeService;
     private final UserPermissionLoader userPermissionLoader;
@@ -228,22 +242,29 @@ public class KbController {
     }
 
     /**
-     * 删除知识库（T04：默认<b>归档</b>，不是物理删除）。
+     * 删除知识库（T04：默认<b>归档</b>，不是物理删除；Q1 两段式确认流加 {@code force}）。
      *
      * <p>不带 {@code mode} 时下游执行「引擎侧 dataset 改名 + 本地 status=0」，
      * 引擎数据一条不删——回执 {@code message} 会把这件事写明，前端必须原样展示，
      * 不要在这层改写成「删除成功」，否则管理员会以为引擎侧空间已经释放。
      *
-     * @param id   知识库 id
-     * @param mode {@code archive}（默认）/ {@code physical}
-     * @return 删除回执（含引擎同步结果与实际清理范围）
+     * <p><b>Q1 {@code force}：</b>{@code force=false}（默认）时若引擎侧 dataset 已不存在，
+     * mis-kb 返回提示态回执（{@code engineMissing=true}，本地零变更），前端警示并要求确认
+     * 后以 {@code force=true} 重调。{@code @OperLog(recordParams=true)} 不变——
+     * {@code force} 作为 {@code @RequestParam} 自动进入审计 {@code request_params}。
+     *
+     * @param id    知识库 id
+     * @param mode  {@code archive}（默认）/ {@code physical}
+     * @param force 是否跳过引擎直接本地执行（仅对 engineMissing 生效，默认 false）
+     * @return 删除回执（含引擎同步结果、实际清理范围与 engineMissing）
      */
     @DeleteMapping("/libraries/{id}")
     @OperLog(module = "知识库", operation = "删除知识库", recordParams = true)
     public Result<KbLibraryDeleteResultVO> deleteLibrary(
             @PathVariable Long id,
-            @RequestParam(required = false, defaultValue = "archive") String mode) {
-        return Result.ok(kbFacadeService.deleteLibrary(id, mode));
+            @RequestParam(required = false, defaultValue = "archive") String mode,
+            @RequestParam(required = false, defaultValue = "false") boolean force) {
+        return Result.ok(kbFacadeService.deleteLibrary(id, mode, force));
     }
 
     /**
@@ -368,6 +389,56 @@ public class KbController {
         return Result.ok(kbFacadeService.getDocument(libraryId, id));
     }
 
+    /**
+     * 分页列举文档切片（「查看文档切分效果」）。
+     *
+     * <p>权限双闸门：① BFF 侧 {@code kb:document:list} 兜底判权（{@link #requirePermission}，
+     * 注册表未生效空窗期）；② mis-kb 侧 {@code KbVisibilityService.hasPermission} ACL 读权限
+     * 二次裁定。读操作但仍挂 {@code @OperLog} 留痕（切片原文属敏感内容，审计谁在什么时间
+     * 查看了哪个文档的切分结果）。
+     */
+    @GetMapping("/libraries/{libraryId}/documents/{id}/chunks")
+    @OperLog(module = "知识库", operation = "查看文档切分", recordParams = true)
+    public Result<KbDocumentChunksVO> listDocumentChunks(
+            @PathVariable Long libraryId,
+            @PathVariable Long id,
+            @RequestParam(required = false) String keywords,
+            @RequestParam(defaultValue = "1") int page,
+            @RequestParam(defaultValue = "50") int pageSize) {
+        requirePermission(PERM_DOCUMENT_LIST);
+        return Result.ok(kbFacadeService.listDocumentChunks(libraryId, id, keywords, page, pageSize));
+    }
+
+    /**
+     * 拉取分片版面截图（文档切分 / 问答引用 / Agent 对话配图；直吐字节，不包 Result）。
+     *
+     * <p>附属资源权限并集（任一即可）：{@code kb:document:list} ∪ {@code kb:qa:ask}
+     * ∪ {@code agent:chat:use}；与 sys_menu_api 多挂一致。库级 ACL 仍由 mis-kb 裁定。
+     * imageId 为引擎侧 {@code {datasetId}-{objectId}}。
+     */
+    @GetMapping(
+            value = "/libraries/{libraryId}/documents/{id}/chunk-images/{imageId}")
+    public ResponseEntity<byte[]> getChunkImage(
+            @PathVariable Long libraryId,
+            @PathVariable Long id,
+            @PathVariable String imageId) {
+        requireAnyPermission(PERM_DOCUMENT_LIST, PERM_QA_ASK, PERM_AGENT_CHAT_USE);
+        byte[] bytes = kbFacadeService.getChunkImage(libraryId, id, imageId);
+        MediaType mediaType = detectChunkImageMediaType(bytes);
+        return ResponseEntity.ok()
+                .header(HttpHeaders.CACHE_CONTROL, "private, max-age=3600")
+                .contentType(mediaType)
+                .body(bytes);
+    }
+
+    private static MediaType detectChunkImageMediaType(byte[] bytes) {
+        if (bytes != null && bytes.length >= 8
+                && bytes[0] == (byte) 0x89 && bytes[1] == 'P' && bytes[2] == 'N' && bytes[3] == 'G') {
+            return MediaType.IMAGE_PNG;
+        }
+        return MediaType.IMAGE_JPEG;
+    }
+
     @PostMapping("/libraries/{libraryId}/documents")
     @OperLog(module = "知识库", operation = "上传文档", recordParams = true)
     public Result<KbDocumentUploadResponse> uploadDocument(
@@ -375,9 +446,14 @@ public class KbController {
             @RequestParam("file") MultipartFile file,
             @RequestParam(required = false) String chunkMethod,
             @RequestParam(required = false) Integer chunkTokenNum,
-            @RequestParam(required = false) String separator) {
+            @RequestParam(required = false) String separator,
+            @RequestParam(required = false) Boolean pageIndex,
+            @RequestParam(required = false) Integer imageTableContextWindow,
+            @RequestParam(required = false) Integer autoKeywords,
+            @RequestParam(required = false) Integer autoQuestions) {
         return Result.ok(kbFacadeService.uploadDocument(
-                libraryId, file, chunkMethod, chunkTokenNum, separator));
+                libraryId, file, chunkMethod, chunkTokenNum, separator,
+                pageIndex, imageTableContextWindow, autoKeywords, autoQuestions));
     }
 
     /** 更新文档级切片配置（kb_settings_model_chunk；KE-01 审计快照入参，before=旧切片配置）。 */
@@ -482,6 +558,14 @@ public class KbController {
         return Result.ok(kbFacadeService.getSessionDetail(sessionId));
     }
 
+    /** 删除我的问答会话（用户侧软删除，归属/幂等由 mis-kb 裁定；无额外权限码，沿用 kb:qa:ask）。 */
+    @DeleteMapping("/qa/sessions/{sessionId}")
+    @OperLog(module = "知识库", operation = "删除问答会话", recordParams = true)
+    public Result<Void> deleteSession(@PathVariable Long sessionId) {
+        kbFacadeService.deleteSession(sessionId);
+        return Result.ok();
+    }
+
     @PostMapping("/qa/feedback")
     @OperLog(module = "知识库", operation = "提交问答反馈", recordParams = true)
     public Result<KbQaFeedbackVO> submitFeedback(@Valid @RequestBody FeedbackBody body) {
@@ -510,11 +594,12 @@ public class KbController {
             @RequestParam(required = false) Long libraryId,
             @RequestParam(required = false) Long userId,
             @RequestParam(required = false) Boolean hasFeedback,
+            @RequestParam(required = false) String sentiment,
             @RequestParam(required = false) String keyword,
             @RequestParam(required = false) Integer page,
             @RequestParam(required = false) Integer size) {
         return Result.ok(kbFacadeService.listOperationSessions(
-                from, to, libraryId, userId, hasFeedback, keyword, page, size));
+                from, to, libraryId, userId, hasFeedback, sentiment, keyword, page, size));
     }
 
     /** 运营问答详情（A-02a，含可见范围与召回参数）。 */
@@ -558,10 +643,11 @@ public class KbController {
             @RequestParam(required = false) Long libraryId,
             @RequestParam(required = false) Long userId,
             @RequestParam(required = false) Boolean hasFeedback,
+            @RequestParam(required = false) String sentiment,
             @RequestParam(required = false) String keyword,
             @RequestParam(required = false) Boolean desensitize) {
         String csv = kbFacadeService.exportCsv(
-                from, to, libraryId, userId, hasFeedback, keyword, desensitize);
+                from, to, libraryId, userId, hasFeedback, sentiment, keyword, desensitize);
         byte[] bytes = csv.getBytes(StandardCharsets.UTF_8);
         String filename = kbFacadeService.exportFilename();
         String encoded = URLEncoder.encode(filename, StandardCharsets.UTF_8).replace("+", "%20");
@@ -611,6 +697,24 @@ public class KbController {
     @GetMapping("/operations/qa/tickets/by-session/{sessionId}")
     public Result<List<KbQaTicketVO>> listTicketsBySession(@PathVariable Long sessionId) {
         return Result.ok(kbFacadeService.listTicketsBySession(sessionId));
+    }
+
+    /**
+     * 标记问答反馈已处理/忽略（OP-05）。
+     *
+     * <p>处理人取当前登录人（{@code X-User-Id}/{@code X-Username} 透传 mis-kb），
+     * 状态机 pending → handled/ignored 单向终态，非法流转由 mis-kb 拒绝。
+     *
+     * <p>方法名与 {@link KbFacadeService#markFeedbackProcessed} 同名对齐——审计挂点契约
+     * （KbControllerOperLogCoverageTest）要求 Controller 写方法在 KbFacadeService 存在
+     * 同名门面方法且恰有一处 {@code @OperLog}；本方法挂 Controller 侧。
+     */
+    @PatchMapping("/operations/qa/feedback/{feedbackId}/process")
+    @OperLog(module = "知识库", operation = "处理问答反馈", recordParams = true)
+    public Result<KbQaFeedbackVO> markFeedbackProcessed(
+            @PathVariable Long feedbackId, @RequestBody FeedbackProcessBody body) {
+        return Result.ok(kbFacadeService.markFeedbackProcessed(
+                feedbackId, body.status(), body.note()));
     }
 
     // ------------------------------------------------------------------ 授权主体（I-03）
@@ -747,6 +851,27 @@ public class KbController {
         if (permissions == null || !permissions.contains(permissionCode)) {
             throw new BusinessException(ResultCode.FORBIDDEN);
         }
+    }
+
+    /**
+     * 附属资源兜底判权：权限码并集任一命中即可（与 Registry 多 {@code sys_menu_api} 并集一致）。
+     *
+     * @param permissionCodes 入口权限码（非空）
+     */
+    private void requireAnyPermission(String... permissionCodes) {
+        LoginUser user = RequestContext.requireLoginUser();
+        if (user.getUserId() == null) {
+            throw new BusinessException(ResultCode.UNAUTHORIZED);
+        }
+        Set<String> permissions = userPermissionLoader.load(user);
+        if (permissions != null) {
+            for (String code : permissionCodes) {
+                if (code != null && permissions.contains(code)) {
+                    return;
+                }
+            }
+        }
+        throw new BusinessException(ResultCode.FORBIDDEN);
     }
 
     // ------------------------------------------------------------------ 引擎（S-04）
@@ -962,5 +1087,16 @@ public class KbController {
             String note,
             String relAction,
             Long processorId) {
+    }
+
+    /**
+     * 反馈处理请求体（OP-05）。
+     *
+     * @param status 目标状态：handled 已处理 / ignored 已忽略；pending → handled/ignored 单向终态
+     * @param note   处理备注；可空
+     */
+    public record FeedbackProcessBody(
+            @NotBlank String status,
+            String note) {
     }
 }

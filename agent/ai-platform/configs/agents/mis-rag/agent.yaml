@@ -40,21 +40,10 @@ agent:
     priority: 10
     keywords: []
 
-  # KB 检索步骤（T10）：由 qa_pipeline 在生成前置阶段执行。
-  # 依赖 src/adapters/kb_client.py（KbClient），透传用户 JWT 调 mis-kb 内部端点。
-  kb_retrieval:
-    enabled: true
-    client: kb_client
-    # 检索范围：请求未指定 libraryIds 时先解析用户全部可见库
-    resolve_visible_first: true
-    # 会话/消息/引用落库回调（ACL + 审计留在 Java 侧）
-    persist:
-      enabled: true
-      session: true
-      message: true
-      citation: true
-      # feedback 由前端 → BFF → mis-kb 落库，不在本链路
-      feedback: false
+  # KB 检索步骤（T10→T4）：不再由 qa_pipeline 在生成前置阶段预检索，
+  # 改为 mis-rag 内部 kb_retrieve 原生工具自行检索（路径 A 与 Copilot B 路径统一）。
+  # 检索逻辑复用 src/agent/mis_rag/qa_pipeline.retrieve_kb_chunks（DRY），
+  # 依赖 src/adapters/kb_client.py（KbClient）调 mis-kb 内部端点。
 
   memory:
     static:

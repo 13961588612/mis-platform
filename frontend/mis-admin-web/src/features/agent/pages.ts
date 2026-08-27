@@ -12,6 +12,7 @@
  * | 导出符号（对外，勿改） | 实现文件 | 文件内导出名 |
  * |---|---|---|
  * | `AgentSessionsPage`  | `sessions/agent-session-page.tsx`        | `AgentSessionPage`（单数） |
+ * | `AgentFeedbackPage`  | `sessions/agent-feedback-page.tsx`      | `AgentFeedbackPage` |
  * | `AgentAgentsPage`    | `agents/agent-list-page.tsx`             | `AgentListPage` |
  * | `AgentSkillsPage`    | `skills/agent-skill-pool-page.tsx`       | `AgentSkillPoolPage` |
  * | 其余 10 个           | 同名文件挪进子目录                        | 与对外符号同名 |
@@ -25,6 +26,7 @@
 export { AgentOverviewPage } from './overview/agent-overview-page';
 export { AgentChatPage } from './chat/agent-chat-page';
 export { AgentSessionPage as AgentSessionsPage } from './sessions/agent-session-page';
+export { AgentFeedbackPage } from './sessions/agent-feedback-page';
 export { AgentListPage as AgentAgentsPage } from './agents/agent-list-page';
 export { AgentCatalogPage } from './catalog/agent-catalog-page';
 export { AgentDispatchPage } from './dispatch/agent-dispatch-page';

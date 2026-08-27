@@ -1,0 +1,98 @@
+classDiagram
+    class WorkerCatalog {
+        +dict workers
+        +list coordinators
+        +bool fallback
+        +worker_ids() list~str~
+        +get(agent_id) WorkerSpec
+        +is_coordinator(agent_id) bool
+        +render_tool_description(base) str
+        +build_input_model(static) type
+    }
+    class WorkerSpec {
+        +str agent_id
+        +str display_name
+        +str when_to_use
+        +list capabilities
+        +list input_contract
+        +str output_contract
+        +str safety_level
+        +bool enabled
+    }
+    class AgentCoordination {
+        +str agent_id
+        +str role
+        +bool routing_enabled
+        +CoordinationDelegation delegation
+        +CoordinationCatalog catalog
+    }
+    class CoordinationDelegation {
+        +bool spawn_tools_enabled
+        +bool enforce_task_brief
+        +int max_depth
+        +int timeout_seconds
+        +bool emit_dispatch_trace
+        +bool forbid_self_invoke
+        +list worker_ids
+    }
+    class InvokeAgentTool {
+        +name = "agent__invoke"
+        +execute(arguments, context) ToolResult
+        -_is_forbidden_target(agent_id) bool
+    }
+    class ListSkillsTool {
+        +name = "list_skills"
+        +execute(arguments, context) ToolResult
+    }
+    class SearchTool {
+        +name = "search"
+        +execute(arguments, context) ToolResult
+    }
+    class SearchProvider {
+        <<interface>>
+        +search(query, top_k, opts) list~SearchHit~
+    }
+    class GenericApiSearchProvider
+    class MockSearchProvider
+    class SearchHit {
+        +str title
+        +str url
+        +str snippet
+        +str source
+    }
+    class SkillBuilderService {
+        +build(messages, user_input, converged) BuilderChatResponse
+        +_detect_converged(skill_md) bool
+    }
+    class Settings {
+        +list INVOKE_AGENT_WHITELIST
+        +str SEARCH_PROVIDER
+        +str SEARCH_GENERIC_API_URL
+        +str SEARCH_GENERIC_API_KEY
+        +int SEARCH_TOP_K
+        +float SEARCH_TIMEOUT_SECONDS
+        +list SEARCH_SPECIFIED_URLS
+    }
+    class SearchConfig {
+        +provider: str
+        +generic_api_url: str
+        +generic_api_key: str
+        +top_k: int
+        +timeout_seconds: float
+        +specified_urls: list~str~
+    }
+
+    WorkerCatalog "1" *-- "many" WorkerSpec : workers
+    AgentCoordination "1" *-- "1" CoordinationDelegation : delegation
+    InvokeAgentTool ..> WorkerCatalog : uses (scoped)
+    SearchTool ..> SearchProvider : delegates
+    SearchProvider <|.. GenericApiSearchProvider
+    SearchProvider <|.. MockSearchProvider
+    GenericApiSearchProvider ..> SearchHit : returns
+    MockSearchProvider ..> SearchHit : returns
+    Settings ..> InvokeAgentTool : INVOKE_AGENT_WHITELIST
+    Settings ..> SearchConfig : maps
+    SearchConfig ..> SearchProvider : selects
+    ListSkillsTool ..> SkillBuilderService : reads registry
+    note for InvokeAgentTool "L249: agent_id not in whitelist -> 恒定拒绝 (fail-closed)"
+    note for CoordinationDelegation "mis-copilot.worker_ids 不含 mis-admin-helper"

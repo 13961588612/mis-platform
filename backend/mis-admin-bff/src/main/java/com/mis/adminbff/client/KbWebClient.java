@@ -8,6 +8,7 @@ import com.mis.adminbff.dto.kb.KbAclVO;
 import com.mis.adminbff.dto.kb.KbCategoryAdminVO;
 import com.mis.adminbff.dto.kb.KbCategoryVO;
 import com.mis.adminbff.dto.kb.KbDashboardVO;
+import com.mis.adminbff.dto.kb.KbDocumentChunksVO;
 import com.mis.adminbff.dto.kb.KbDocumentUploadResponse;
 import com.mis.adminbff.dto.kb.KbDocumentVO;
 import com.mis.adminbff.dto.kb.KbEngineCapabilitiesVO;
@@ -92,6 +93,8 @@ public class KbWebClient extends AbstractDownstreamClient {
     private static final ParameterizedTypeReference<Result<List<KbDocumentVO>>> DOCUMENT_LIST =
             new ParameterizedTypeReference<>() {};
     private static final ParameterizedTypeReference<Result<KbDocumentVO>> DOCUMENT =
+            new ParameterizedTypeReference<>() {};
+    private static final ParameterizedTypeReference<Result<KbDocumentChunksVO>> DOCUMENT_CHUNKS =
             new ParameterizedTypeReference<>() {};
     private static final ParameterizedTypeReference<Result<KbDocumentUploadResponse>> UPLOAD =
             new ParameterizedTypeReference<>() {};
@@ -401,20 +404,27 @@ public class KbWebClient extends AbstractDownstreamClient {
     }
 
     /**
-     * 删除知识库（T04：透传 {@code mode}，返回回执）。
+     * 删除知识库（T04：透传 {@code mode} 与 {@code force}，返回回执）。
      *
      * <p>下游默认语义是<b>归档</b>而非物理删除，回执 {@code message} 已把这件事写清楚，
      * BFF 原样透传不做加工。
      *
-     * @param id   知识库 id
-     * @param mode {@code archive} / {@code physical}
+     * <p><b>Q1 两段式确认流：</b>{@code force=false}（默认）时若下游检测到引擎侧 dataset
+     * 已不存在，返回提示态回执（{@code engineMissing=true}，本地零变更），由前端警示并要求
+     * 确认后以 {@code force=true} 重调——{@code force} 只对 engineMissing 生效，
+     * 不豁免其它失败语义（mis-kb 侧严格限定）。
+     *
+     * @param id    知识库 id
+     * @param mode  {@code archive} / {@code physical}
+     * @param force 是否跳过引擎直接本地执行（仅对 engineMissing 生效，默认 false）
      * @return 删除回执
      */
-    public KbLibraryDeleteResultVO deleteLibrary(Long id, String mode) {
+    public KbLibraryDeleteResultVO deleteLibrary(Long id, String mode, boolean force) {
         return block(client().method(org.springframework.http.HttpMethod.DELETE)
                 .uri(uriBuilder -> uriBuilder
                         .path("/internal/v1/kb/libraries/{id}")
                         .queryParam("mode", mode)
+                        .queryParam("force", force)
                         .build(id))
                 .headers(loginContextHeaders())
                 .retrieve()
@@ -528,10 +538,48 @@ public class KbWebClient extends AbstractDownstreamClient {
                 .bodyToMono(DOCUMENT));
     }
 
+    /**
+     * 分页列举文档切片（「查看文档切分效果」；三层透传，不做业务决策）。
+     *
+     * <p>keywords 为空时不携带该查询参数（mis-kb 侧 null 处理）；pageSize 默认 50。
+     */
+    public KbDocumentChunksVO listDocumentChunks(
+            Long libraryId, Long id, String keywords, int page, int pageSize) {
+        String uri = UriComponentsBuilder
+                .fromPath("/internal/v1/kb/libraries/{libraryId}/documents/{id}/chunks")
+                .queryParam("page", Math.max(page, 1))
+                .queryParam("pageSize", Math.max(pageSize, 1))
+                .queryParamIfPresent("keywords",
+                        keywords == null || keywords.isBlank()
+                                ? java.util.Optional.empty()
+                                : java.util.Optional.of(keywords))
+                .buildAndExpand(libraryId, id)
+                .toUriString();
+        return block(client().get()
+                .uri(uri)
+                .headers(loginContextHeaders())
+                .retrieve()
+                .bodyToMono(DOCUMENT_CHUNKS));
+    }
+
+    /**
+     * 拉取分片版面截图（直吐 JPEG 字节；三层透传）。
+     */
+    public byte[] getChunkImage(Long libraryId, Long id, String imageId) {
+        return blockBytes(client().get()
+                .uri("/internal/v1/kb/libraries/{libraryId}/documents/{id}/chunk-images/{imageId}",
+                        libraryId, id, imageId)
+                .headers(loginContextHeaders())
+                .retrieve()
+                .bodyToMono(byte[].class));
+    }
+
     /** 透传 multipart 上传（保留原始文件名与内容类型；可选文件级切片参数）。 */
     public KbDocumentUploadResponse uploadDocument(
             Long libraryId, String filename, String contentType, byte[] bytes,
-            String chunkMethod, Integer chunkTokenNum, String separator) {
+            String chunkMethod, Integer chunkTokenNum, String separator,
+            Boolean pageIndex, Integer imageTableContextWindow,
+            Integer autoKeywords, Integer autoQuestions) {
         MultipartBodyBuilder builder = new MultipartBodyBuilder();
         ByteArrayResource resource = new ByteArrayResource(bytes) {
             @Override
@@ -552,6 +600,18 @@ public class KbWebClient extends AbstractDownstreamClient {
         }
         if (separator != null) {
             builder.part("separator", separator);
+        }
+        if (pageIndex != null) {
+            builder.part("pageIndex", String.valueOf(pageIndex));
+        }
+        if (imageTableContextWindow != null) {
+            builder.part("imageTableContextWindow", String.valueOf(imageTableContextWindow));
+        }
+        if (autoKeywords != null) {
+            builder.part("autoKeywords", String.valueOf(autoKeywords));
+        }
+        if (autoQuestions != null) {
+            builder.part("autoQuestions", String.valueOf(autoQuestions));
         }
         return block(client().post()
                 .uri("/internal/v1/kb/libraries/{libraryId}/documents", libraryId)
@@ -696,6 +756,15 @@ public class KbWebClient extends AbstractDownstreamClient {
                 .bodyToMono(QA_SESSION_DETAIL));
     }
 
+    /** 删除问答会话（用户侧软删除；mis-kb 侧幂等）。 */
+    public void deleteSession(Long sessionId) {
+        block(client().delete()
+                .uri("/internal/v1/kb/qa/sessions/{sessionId}", sessionId)
+                .headers(loginContextHeaders())
+                .retrieve()
+                .bodyToMono(VOID));
+    }
+
     public KbQaFeedbackVO submitFeedback(Map<String, Object> body) {
         return block(client().post()
                 .uri("/internal/v1/kb/qa/feedback")
@@ -818,6 +887,26 @@ public class KbWebClient extends AbstractDownstreamClient {
                 .bodyValue(body)
                 .retrieve()
                 .bodyToMono(TICKET));
+    }
+
+    /**
+     * 标记问答反馈已处理/忽略（OP-05）。
+     *
+     * <p>处理人身份经 {@code loginContextHeaders()} 透传，mis-kb 侧以登录上下文头为准
+     * （不信任请求体身份）；状态机 pending → handled/ignored 单向终态由 mis-kb 裁定。
+     *
+     * @param feedbackId 反馈 id
+     * @param body       {@code {status, note}}；status 必填，note 可空
+     * @return 更新后的反馈视图（含处理状态五字段）
+     */
+    public KbQaFeedbackVO processFeedback(Long feedbackId, Map<String, Object> body) {
+        return block(client().patch()
+                .uri("/internal/v1/kb/operations/qa/feedback/{id}/process", feedbackId)
+                .headers(loginContextHeaders())
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(body)
+                .retrieve()
+                .bodyToMono(QA_FEEDBACK));
     }
 
     /** 某会话下的工单列表。 */

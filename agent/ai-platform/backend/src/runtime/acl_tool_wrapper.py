@@ -12,6 +12,7 @@
 路径   工具                            skill_id 来源
 ===== ============================== ================================================
 E1     ``SkillTool``（name=``skill``）  ``args.skill_id`` → 回落 ``args.name``
+                                          （目录名经注册表映射为正式 skill_id）
 E2     ``PlatformMcpToolAdapter``      ``self._tool_info``（**原始未净化名**）三档解析
 E3     ``FormFillExecuteTool``         ``args.skill_id``
 E4     ``FormFillApplyTool``           ``args.skill_id``
@@ -95,6 +96,36 @@ def _non_empty_str(value: Any) -> str:
         return ""
     text: str = str(value).strip()
     return "" if text.lower() == "none" else text
+
+
+def _canonical_skill_id(registry: Any, raw: str) -> str:
+    """把 SkillTool 入参名映射成 IAM 执行码使用的正式 skill_id。
+
+    OpenHarness 按目录名调用（``member-profile``），授权页按
+    ``skill_id`` 发码（``member.profile``）。无注册表或无法唯一映射时
+    原样返回 —— **绝不**把 ``.`` / ``-`` / ``_`` 互相改写。
+
+    Args:
+        registry: ``SkillRegistry`` 或测试替身；可为 ``None``。
+        raw: 工具入参中的 skill 名。
+
+    Returns:
+        正式 ``skill_id``；无法映射时等于 ``raw``。
+    """
+    key: str = (raw or "").strip()
+    if not key or registry is None:
+        return key
+    resolve: Any = getattr(registry, "resolve_canonical_id", None)
+    if callable(resolve):
+        mapped: Any = resolve(key)
+        if isinstance(mapped, str) and mapped.strip():
+            return mapped.strip()
+    found: Any = registry.get(key) if hasattr(registry, "get") else None
+    if found is not None:
+        sid: Any = getattr(found, "skill_id", None)
+        if isinstance(sid, str) and sid.strip():
+            return sid.strip()
+    return key
 
 
 class AclToolWrapper(BaseTool):
@@ -278,12 +309,13 @@ class AclToolWrapper(BaseTool):
                 skill_id = _non_empty_str(getattr(arguments, "name", None))
 
         if skill_id:
-            required: str = self._guard.permission_code(skill_id)
+            canonical: str = _canonical_skill_id(self._registry, skill_id)
+            required: str = self._guard.permission_code(canonical)
             return [
                 _AclRequirement(
                     permission=required,
-                    skill_id=skill_id,
-                    message=f"无权执行技能 {skill_id}，需权限码 {required}",
+                    skill_id=canonical,
+                    message=f"无权执行技能 {canonical}，需权限码 {required}",
                 )
             ]
 

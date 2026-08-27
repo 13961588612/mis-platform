@@ -1,0 +1,160 @@
+classDiagram
+    %% ===== 领域模型：RagSettings 29 参 =====
+    class RagSettings {
+        <<record>>
+        +Integer topK
+        +Double scoreThreshold
+        +Boolean rerank
+        +String embeddingModel
+        +String retrievalMethod
+        +String chunkMethod
+        +Integer chunkTokenNum
+        +String separator
+        +String emptyResultStrategy
+        +Double vectorSimilarityWeight
+        +String rerankModelId
+        +Boolean ocrEnabled
+        +String ocrLanguage
+        +Integer chunkOverlapTokenNum
+        +Boolean useKnowledgeGraph
+        +String kgBuildStatus
+        +String kgBuildMessage
+        +Boolean useRaptor
+        +Integer raptorMaxTokenNum
+        +Double raptorThreshold
+        +Integer raptorMaxCluster
+        +String raptorPrompt
+        +String raptorBuildStatus
+        +String raptorBuildMessage
+        +Boolean pageIndex
+        +Integer imageTableContextWindow
+        +Double overlapPercent         %% T1 末位追加 (3)
+        +Integer autoKeywords          %% T1 [0,32] 默认 0
+        +Integer autoQuestions         %% T1 [0,10] 默认 0
+        +defaults() RagSettings
+        +withDefaults() RagSettings
+        +withGraphOverride(b) RagSettings
+        +withRaptorOverride(b) RagSettings
+        +normalizeOverlapPercent(Double) Double
+        +normalizeAutoKeywords(Integer) Integer
+        +normalizeAutoQuestions(Integer) Integer
+    }
+    note for RagSettings "record 位置参数：新字段必须末位追加(铁律)；兼容构造11/14/17补 null"
+
+    class RagSettingsService {
+        +get(libraryId) RagSettings
+        +save(userId, libraryId, settings) RagSettings
+        -validate(settings) RagSettings       %% 新增3处越界拒(不做截断)
+        -enforceRerankAvailability(s,lib) RagSettings  %% 29参透传
+        -enforceGraphAvailability(s,lib) RagSettings    %% 29参透传
+        -enforceRaptorAvailability(s,lib) RagSettings   %% 29参透传
+        -withServerGraphState(s,server) RagSettings     %% 29参透传
+        -syncToEngine(lib, settings) void
+    }
+
+    %% ===== 引擎客户端 =====
+    class RagflowProperties {
+        -String type
+        -String baseUrl
+        -String apiKey
+        -boolean deleteSupported
+        -boolean raptorEnabled
+        -boolean parserTocSupported = false        %% T2/T3 新增(实测证据)
+        -boolean parserImageTableContextSupported = false %% T2/T3 新增
+        +isParserTocSupported() boolean
+        +isParserImageTableContextSupported() boolean
+    }
+    class RagflowClient {
+        +updateDatasetSettings(datasetId, RagSettings) void  %% T2: auto恒下发; toc/context按props; overlap永不下发
+        +updateDocumentConfig(dsId, docId, DocumentChunkConfig) void %% T2: 文件级白名单 chunk_token_num+delimiter+auto_*
+        +uploadDocument(dsId, input) String
+        +deleteDataset(dsId) void
+        -putFor(...) RfResponse
+    }
+    class RagflowAdapter {
+        +capabilities() EngineCapabilities        %% T3: parserToc/imageTable read props
+        +updateDocumentChunkConfig(ref, docRef, config) void
+        +updateLibrarySettings(ref, RagSettings) void
+    }
+
+    %% ===== 能力声明 =====
+    class EngineCapabilities {
+        <<record>>
+        +List~String~ capabilities
+        +boolean rerankSupported
+        +boolean metadataFilterSupported
+        +boolean replaceSupported
+        +boolean hybridSupported
+        +boolean deleteSupported
+        +boolean parserOcrSupported
+        +boolean parserOverlapSupported   %% overlap 键（T0 不支持→只落库）
+        +boolean graphSupported
+        +boolean raptorSupported
+        +boolean parserTocSupported        %% T3 新增：toc_extraction 键（默认 false 实测证据）
+        +boolean parserImageTableContextSupported %% T3 新增
+        +supports(String) boolean
+    }
+
+    %% ===== 文件级 =====
+    class DocumentChunkConfig {
+        <<record>>
+        +String chunkMethod
+        +Integer chunkTokenNum
+        +String separator
+        +Boolean pageIndex                 %% T4
+        +Integer imageTableContextWindow   %% T4
+        +Integer autoKeywords              %% T4
+        +Integer autoQuestions             %% T4
+        +hasAnyOverride() boolean
+        +isValidAutoKeywords() boolean
+        +isValidAutoQuestions() boolean
+    }
+    class EffectiveChunkConfig {
+        +String chunkMethod
+        +Integer chunkTokenNum
+        +String separator
+        +Boolean pageIndex
+        +Integer imageTableContextWindow
+        +Integer autoKeywords
+        +Integer autoQuestions
+        +String source   %% FILE_OVERRIDE/LIBRARY
+    }
+    class DocumentChunkConfigResolver {
+        +resolve(file, library) EffectiveChunkConfig  %% file ?? lib ?? defaults
+    }
+    class KbDocument {
+        +Long id
+        +Long libraryId
+        +String title
+        +String engineDocumentRef
+        +String chunkMethod
+        +Integer chunkTokenNum
+        +String separator
+        +Boolean pageIndex                %% V62 新列
+        +Integer imageTableContextWindow  %% V62 新列
+        +Integer autoKeywords             %% V62 新列
+        +Integer autoQuestions            %% V62 新列
+        +String parseStatus
+        +Integer parseProgress
+        +String parseError
+    }
+    class KbDocumentService {
+        +upload(libId, file, DocumentChunkConfig, userId) Response
+        +updateChunkConfig(id, DocumentChunkConfig) void  %% 新字段校验+持久化+下发白名单
+        -validateChunkConfig(config) void
+    }
+
+    %% ===== 关系 =====
+    RagflowAdapter ..|> KnowledgeEnginePort
+    RagflowAdapter --> RagflowClient
+    RagflowAdapter --> RagflowProperties
+    RagSettingsService --> RagflowProperties
+    RagflowClient --> RagflowProperties : 读 props 闸门
+    RagSettingsService --> RagSettings
+    RagSettingsService --> KbLibrary
+    RagSettingsService --> RagflowClient
+    KbDocumentService --> DocumentChunkConfigResolver
+    DocumentChunkConfigResolver --> EffectiveChunkConfig
+    KbDocumentService --> RagflowClient
+    KbDocument "1" --> "1" DocumentChunkConfig : 领域映射
+    RagflowAdapter ..> EngineCapabilities : (经 adapter 暴露)

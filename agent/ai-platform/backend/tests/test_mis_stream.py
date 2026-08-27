@@ -110,7 +110,7 @@ class TestMisStreamContract:
         mock_session_mgr.create_session = AsyncMock(return_value=fake_session)
         mock_session_mgr.add_message = AsyncMock()
 
-        async def fake_process_message(session, message):
+        async def fake_process_message(session, message, assistant_message_id=None):
             for chunk in ["你好", "，", "我是", "MIS Copilot"]:
                 yield AgentEvent.text_delta(chunk)
 

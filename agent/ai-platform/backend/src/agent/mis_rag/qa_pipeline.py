@@ -17,6 +17,7 @@
 """
 
 from __future__ import annotations
+from time import perf_counter
 from typing import Any, AsyncIterator, Awaitable, Callable
 
 import json
@@ -25,6 +26,8 @@ from dataclasses import dataclass, field
 
 from src.adapters.kb_client import KbCallContext, KbClient, KbClientError
 from src.config import get_settings
+from src.coordinator.flags import substage_instrumentation_enabled
+from src.coordinator.trace import QA_SUB_STAGES_CV
 from src.models.retrieve import ChunkHit, CitationItem, QaAnswer, QaCitation, RetrieveHits
 from src.utils.logging import get_logger
 
@@ -72,6 +75,25 @@ def is_kb_qa_request(agent_id: str, metadata: dict[str, Any] | None) -> bool:
     return str(meta.get("capability", "")).strip().lower() == "rag"
 
 
+def _session_title(question: str, max_len: int = 30) -> str | None:
+    """首问生成会话标题：strip 后超 max_len 取前 max_len + 省略号；空串返回 None。
+
+    Args:
+        question: 用户首问原文。
+        max_len: 截断长度（设计口径 30 字符）。
+
+    Returns:
+        会话标题；空串/纯空白/``None`` 返回 ``None``（由 mis-kb 落库为 NULL，
+        前端兜底展示「会话 #id」）。
+    """
+    text = (question or "").strip()
+    if not text:
+        return None
+    if len(text) > max_len:
+        return text[:max_len] + "…"
+    return text
+
+
 def build_kb_call_context(
     current_user: dict[str, Any] | None,
     *,
@@ -113,6 +135,255 @@ def build_kb_call_context(
     if username:
         ctx.extra_headers["X-Username"] = str(username)
     return ctx
+
+
+def enrich_hits_with_document_images(
+    selected_hits: list[ChunkHit],
+    all_hits: list[ChunkHit],
+) -> list[ChunkHit]:
+    """把同文档检索命中上的配图回填到已选引用（解决「有图但配图丢」）。
+
+    RAGFlow 常把 ``image_id`` 挂在示意图/OCR 兄弟分片上，而模型行内角标往往只引用
+    问答正文分片（``image_id`` 为空）。若不回填，``kb-sources`` 无 ``imageId``，
+    前端无法拉图——表现为反复「服务端有图、对话不出图」。
+
+    策略（不写死业务文档）：
+    1. 对已选命中：若缺 ``image_id``，从同 ``(library_id, document_id)`` 兄弟命中借用；
+    2. 其余同文档且未出现过的 ``image_id`` 追加为配图来源行。
+    """
+    if not selected_hits or not all_hits:
+        return list(selected_hits)
+
+    result: list[ChunkHit] = list(selected_hits)
+    seen_images: set[str] = {h.image_id for h in result if h.image_id}
+    selected_docs: set[tuple[int, int]] = {
+        (h.library_id, h.document_id)
+        for h in selected_hits
+        if h.library_id is not None and h.document_id is not None
+    }
+
+    for i, hit in enumerate(result):
+        if hit.image_id or hit.library_id is None or hit.document_id is None:
+            continue
+        key = (hit.library_id, hit.document_id)
+        for sibling in all_hits:
+            if (sibling.library_id, sibling.document_id) != key:
+                continue
+            if sibling.image_id and sibling.image_id not in seen_images:
+                result[i] = hit.model_copy(update={"image_id": sibling.image_id})
+                seen_images.add(sibling.image_id)
+                break
+
+    for sibling in all_hits:
+        if not sibling.image_id or sibling.image_id in seen_images:
+            continue
+        if sibling.library_id is None or sibling.document_id is None:
+            continue
+        if (sibling.library_id, sibling.document_id) not in selected_docs:
+            continue
+        result.append(sibling)
+        seen_images.add(sibling.image_id)
+
+    return result
+
+
+def format_kb_answer_for_chat(answer: QaAnswer) -> str:
+    """把管线产出整理成运营台本地对话可读的 Markdown。
+
+    BFF ``/ai/rag`` 仍返回 JSON 信封；本地对话要把 ``answer`` 当正文，
+    引用列表附在文末，避免运营看到 ``{"answer":...}`` 原文。
+
+    文末使用 ``kb-sources`` JSON 围栏（含 ``chunk`` / ``page`` / ``offset``），
+    与前端 ``splitKbSources`` 约定一致；旧版纯「来源：」编号列表不含片段正文，
+    展开会落到「（无片段原文）」。
+
+    Args:
+        answer: KB 问答管线最终产出。
+
+    Returns:
+        可直接写入助手消息的 Markdown 文本。
+    """
+    text = (answer.answer or "").strip()
+    if not answer.citations:
+        return text
+
+    sources: list[dict[str, Any]] = []
+    for idx, citation in enumerate(answer.citations, start=1):
+        label = (citation.source or "").strip() or f"文档 {citation.document_id or idx}"
+        chunk = (citation.chunk or citation.chunk_text or "").strip()
+        row: dict[str, Any] = {"source": label, "index": idx}
+        if isinstance(citation.score, (int, float)):
+            row["score"] = float(citation.score)
+        if chunk:
+            row["chunk"] = chunk
+        if citation.page is not None:
+            row["page"] = citation.page
+        if citation.offset is not None:
+            row["offset"] = citation.offset
+        if citation.library_id is not None:
+            row["libraryId"] = citation.library_id
+        if citation.document_id is not None:
+            row["documentId"] = citation.document_id
+        if citation.image_id:
+            row["imageId"] = citation.image_id
+        sources.append(row)
+
+    payload = json.dumps(sources, ensure_ascii=False)
+    return f"{text}\n\n```kb-sources\n{payload}\n```"
+
+
+def _kb_source_row(
+    *,
+    idx: int,
+    label: str,
+    chunk: str = "",
+    score: float | None = None,
+    page: int | None = None,
+    offset: int | None = None,
+    library_id: int | None = None,
+    document_id: int | None = None,
+    image_id: str | None = None,
+) -> dict[str, Any]:
+    """构造 kb-sources 围栏中的单条来源记录。"""
+    row: dict[str, Any] = {"source": label, "index": idx}
+    if isinstance(score, (int, float)):
+        row["score"] = float(score)
+    if chunk:
+        row["chunk"] = chunk
+    if page is not None:
+        row["page"] = page
+    if offset is not None:
+        row["offset"] = offset
+    if library_id is not None:
+        row["libraryId"] = library_id
+    if document_id is not None:
+        row["documentId"] = document_id
+    if image_id:
+        row["imageId"] = image_id
+    return row
+
+
+def _append_kb_sources_fence(text: str, sources: list[dict[str, Any]]) -> str:
+    """在正文后附加 ``kb-sources`` JSON 围栏。"""
+    if not sources:
+        return (text or "").strip()
+    payload = json.dumps(sources, ensure_ascii=False)
+    base = (text or "").strip()
+    return f"{base}\n\n```kb-sources\n{payload}\n```"
+
+
+def parse_kb_retrieve_tool_output(output: str) -> list[ChunkHit]:
+    """把 ``kb_retrieve`` 工具 JSON 输出解析为按编号对齐的命中列表。"""
+    try:
+        payload = json.loads((output or "").strip())
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(payload, dict):
+        return []
+    hits_raw = payload.get("hits")
+    if not isinstance(hits_raw, list):
+        return []
+    hits: list[ChunkHit] = []
+    for item in hits_raw:
+        if not isinstance(item, dict):
+            continue
+        hits.append(
+            ChunkHit(
+                library_id=_to_int(item.get("library_id")),
+                document_id=_to_int(item.get("document_id")),
+                chunk_text=str(item.get("chunk_text") or ""),
+                score=item.get("score")
+                if isinstance(item.get("score"), (int, float))
+                else None,
+                doc_title=str(item.get("source") or ""),
+                image_id=str(item.get("image_id") or "").strip() or None,
+            )
+        )
+    return hits
+
+
+def _parse_mis_rag_worker_json(text: str) -> tuple[str, list[int] | None]:
+    """解析 mis-rag Worker 的结构化 JSON 输出。"""
+    stripped = (text or "").strip()
+    if not stripped:
+        return "", None
+    candidate = stripped
+    fence = _FENCE_PATTERN.search(stripped)
+    if fence:
+        candidate = fence.group(1).strip()
+    try:
+        payload = json.loads(candidate)
+    except json.JSONDecodeError:
+        return stripped, None
+    if not isinstance(payload, dict):
+        return stripped, None
+
+    answer = payload.get("answer")
+    answer_text = answer.strip() if isinstance(answer, str) and answer.strip() else stripped
+
+    raw_citations = payload.get("citations")
+    if not isinstance(raw_citations, list):
+        return answer_text, None
+
+    indices: list[int] = []
+    for item in raw_citations:
+        idx = _to_int(item.get("index") if isinstance(item, dict) else item)
+        if idx is not None and idx >= 1 and idx not in indices:
+            indices.append(idx)
+    return answer_text, indices or None
+
+
+def format_mis_rag_delegate_answer(worker_text: str, *, retrieve_hits: list[ChunkHit]) -> str:
+    """把 Copilot 委派 mis-rag 的结果整理成带 ``kb-sources`` 围栏的 Markdown。
+
+    mis-rag Worker 通常输出 ``{"answer":"...","citations":[{"index":1}]}``；
+    引用明细（片段正文 / imageId 等）来自同轮 ``kb_retrieve`` 工具命中。
+    """
+    if not retrieve_hits:
+        return (worker_text or "").strip()
+
+    answer_text, selected = _parse_mis_rag_worker_json(worker_text)
+    hit_indices = selected if selected else list(range(1, len(retrieve_hits) + 1))
+
+    selected_hits: list[ChunkHit] = []
+    for idx in hit_indices:
+        if idx < 1 or idx > len(retrieve_hits):
+            continue
+        selected_hits.append(retrieve_hits[idx - 1])
+
+    enriched = enrich_hits_with_document_images(selected_hits, retrieve_hits)
+
+    sources: list[dict[str, Any]] = []
+    for display_idx, hit in enumerate(enriched, start=1):
+        # 保留模型引用编号：前缀 selected 段用原始 index；追加配图行顺延
+        if display_idx <= len(selected_hits):
+            raw_idx = hit_indices[display_idx - 1]
+        else:
+            raw_idx = display_idx
+        label = hit.source_label()
+        sources.append(
+            _kb_source_row(
+                idx=raw_idx,
+                label=label,
+                chunk=(hit.chunk_text or "").strip(),
+                score=hit.score,
+                page=hit.page,
+                offset=hit.offset,
+                library_id=hit.library_id,
+                document_id=hit.document_id,
+                image_id=hit.image_id,
+            )
+        )
+    return _append_kb_sources_fence(answer_text, sources)
+
+
+def extract_kb_sources_fence(text: str) -> str:
+    """从完整 Markdown 中提取 ``kb-sources`` 围栏（含围栏本身）。"""
+    match = re.search(r"```kb-sources\s*\n[\s\S]*?\n```", text or "", re.IGNORECASE)
+    return match.group(0) if match else ""
+
+
+PENDING_KB_SOURCES_FENCE_KEY = "pending_kb_sources_fence"
 
 
 @dataclass
@@ -250,6 +521,63 @@ class QaDelta:
         return {"code": self.code, "message": self.message}
 
 
+async def retrieve_kb_chunks(
+    kb: "KbClient",
+    ctx: "KbCallContext",
+    *,
+    question: str,
+    library_ids: list[int] | None = None,
+    top_k: int = 5,
+    threshold: float | None = None,
+    acc: dict[str, int] | None = None,
+) -> "RetrieveHits":
+    """检索知识库片段：可见库为空时先解析用户可见库再检索（DRY 检索库）。
+
+    T4/TOOL：``kb_retrieve`` 原生工具直接复用本函数，避免重复 resolve-visible →
+    retrieve 逻辑。与 :meth:`KbQaPipeline._retrieve` 行为一致，最终打到 mis-kb
+    RAGFlow 的 ``POST /internal/v1/kb/rag/retrieve``。
+
+    Args:
+        kb: ``KbClient`` 实例（由调用方持有与关闭）。
+        ctx: 身份与追踪上下文；``user_id`` 用于判定可见库范围。
+        question: 用户问题原文（**禁止改写**，由调用方保证）。
+        library_ids: 限定的库 ID；``None``/空表示全部可见库。
+        top_k: 召回条数。
+        threshold: 相关性阈值（0~1）。
+        acc: 子阶段细分计时的共享字典（由 ``QA_SUB_STAGES_CV`` 传入）；``None``
+            表示本调用不参与细分埋点（如 ``kb_retrieve`` 工具直调）。
+
+    Returns:
+        :class:`RetrieveHits`；无可见库或 NoopAdapter 时为空集合。
+    """
+    resolved: list[int] = list(library_ids or [])
+    if not resolved:
+        t = perf_counter()
+        visible = await kb.resolve_visible_libraries(ctx)
+        if acc is not None:
+            # ① 可见库解析：1 次 mis-kb HTTP 往返（仅当未显式指定库时触发）
+            acc["resolve_visible_libraries_ms"] = max(
+                0, int((perf_counter() - t) * 1000)
+            )
+        if visible.is_empty():
+            logger.info(
+                "KB retrieve: no visible library for user",
+                user_id=ctx.user_id,
+                trace_id=ctx.trace_id,
+            )
+            return RetrieveHits()
+        resolved = visible.library_ids
+
+    t = perf_counter()
+    hits = await kb.retrieve(
+        ctx, question=question, library_ids=resolved, top_k=top_k, threshold=threshold
+    )
+    if acc is not None:
+        # ② 向量检索：RAGFlow 召回 chunk（1 次 mis-kb HTTP 往返）
+        acc["RAGFlow_retrieve_ms"] = max(0, int((perf_counter() - t) * 1000))
+    return hits
+
+
 class KbQaPipeline:
     """KB 问答编排管线。
 
@@ -287,6 +615,51 @@ class KbQaPipeline:
             if max_context_chars is not None
             else settings.MIS_KB_MAX_CONTEXT_CHARS
         )
+        # 本轮细分数组（4 段 + overhead）；``None`` 表示未开启采集或本调用不需采集。
+        self._sub_stages: dict[str, int] | None = None
+
+    # ---- 子阶段细分埋点（P0-2）----
+    # 4 段口径（PRD §4.2）：resolve_visible_libraries / RAGFlow_retrieve /
+    # worker_generate / persist；overhead 为差值吸收项（_build_prompt CPU 拼接等）。
+
+    def _begin_sub_stages(self) -> dict[str, int] | None:
+        """开启本轮子阶段采集，返回共享字典（或 ``None`` 表示降级不采集）。
+
+        优先复用 ``QA_SUB_STAGES_CV`` 中父任务（``InvokeAgentTool._spawn_worker``）
+        已 set 的共享 dict，使 worker 内部 qa_pipeline 的变异对父任务可见；否则建
+        本地 dict 挂在本实例上（供 BFF 路由 ``mis_capability`` 回读）。
+
+        采集开关 ``SUBSTAGE_INSTRUMENTATION_ENABLED``（默认开）关闭时整体跳过。
+        """
+        if not substage_instrumentation_enabled(get_settings()):
+            self._sub_stages = None
+            return None
+        acc = QA_SUB_STAGES_CV.get()
+        if acc is None:
+            acc = {}
+        self._sub_stages = acc
+        return acc
+
+    def _finalize_sub_stages(self, acc: dict[str, int], t_total: float) -> None:
+        """收口：用整段耗时 - 已知三段求 ``overhead_ms``（差值吸收项）。"""
+        try:
+            total_ms = max(0, int((perf_counter() - t_total) * 1000))
+            known = (
+                "resolve_visible_libraries_ms",
+                "RAGFlow_retrieve_ms",
+                "worker_generate_ms",
+                "persist_ms",
+            )
+            parts = sum(int(acc.get(k, 0) or 0) for k in known)
+            overhead = total_ms - parts
+            acc["overhead_ms"] = max(0, overhead)
+        except Exception:  # noqa: BLE001 - 降级红线：任何异常静默
+            pass
+
+    @property
+    def sub_stages(self) -> dict[str, int] | None:
+        """本轮子阶段细分（4 段 + overhead）；未采集为 ``None``。"""
+        return self._sub_stages
 
     async def aclose(self) -> None:
         """关闭自建的 KB 客户端（外部注入的客户端由调用方负责）。"""
@@ -298,6 +671,8 @@ class KbQaPipeline:
         req: KbQaRequest,
         ctx: KbCallContext,
         generate: Callable[[str], Awaitable[str]],
+        *,
+        structured: bool = True,
     ) -> QaAnswer:
         """执行完整 KB 问答链路。
 
@@ -305,6 +680,8 @@ class KbQaPipeline:
             req: 归一后的问答请求。
             ctx: 身份与追踪上下文。
             generate: 生成回调，入参为增强后的提示词，返回 LLM 原始文本。
+            structured: ``True``（BFF ``/ai/rag``）要求模型输出 JSON 信封；
+                ``False``（运营台本地对话）直出自然语言，避免把 JSON 原文展示给运营。
 
         Returns:
             :class:`QaAnswer`；检索为空或落库失败时仍返回可用答案（降级不报错）。
@@ -312,25 +689,52 @@ class KbQaPipeline:
         Raises:
             KbClientError: 仅当**检索阶段**彻底失败且无法降级时向上抛出。
         """
-        hits = await self._retrieve(req, ctx)
-        prompt = self._build_prompt(req, hits)
+        acc = self._begin_sub_stages()
+        t_total = perf_counter()
+        try:
+            hits = await self._retrieve(req, ctx, acc=acc)
+            prompt = self._build_prompt(req, hits, structured=structured)
 
-        raw = await generate(prompt)
-        answer_text, selected = self._parse_generation(raw)
+            # ③ worker_generate：拼 prompt 后调 LLM 生成答案（包裹注入的 generate 回调）
+            if acc is not None:
+                gen_start = perf_counter()
+                raw = await generate(prompt)
+                acc["worker_generate_ms"] = max(0, int((perf_counter() - gen_start) * 1000))
+            else:
+                raw = await generate(prompt)
 
-        used_hits = self._select_hits(hits.hits, selected)
-        session_id, message_id = await self._persist(req, ctx, answer_text, used_hits)
+            if structured:
+                answer_text, selected = self._parse_generation(raw)
+            else:
+                answer_text = (raw or "").strip()
+                selected = self._parse_inline_citations(answer_text)
 
-        citations = [
-            QaCitation.from_hit(hit, message_id=message_id, snippet_limit=self._snippet_limit)
-            for hit in used_hits
-        ]
-        return QaAnswer(
-            answer=answer_text,
-            citations=citations,
-            session_id=session_id,
-            message_id=message_id,
-        )
+            used_hits = enrich_hits_with_document_images(
+                self._select_hits(hits.hits, selected),
+                hits.hits,
+            )
+
+            # ④ persist：回调 mis-kb 落库（create_session + append_message×2 + save_citations）
+            if acc is not None:
+                persist_start = perf_counter()
+                session_id, message_id = await self._persist(req, ctx, answer_text, used_hits)
+                acc["persist_ms"] = max(0, int((perf_counter() - persist_start) * 1000))
+            else:
+                session_id, message_id = await self._persist(req, ctx, answer_text, used_hits)
+
+            citations = [
+                QaCitation.from_hit(hit, message_id=message_id, snippet_limit=self._snippet_limit)
+                for hit in used_hits
+            ]
+            return QaAnswer(
+                answer=answer_text,
+                citations=citations,
+                session_id=session_id,
+                message_id=message_id,
+            )
+        finally:
+            if acc is not None:
+                self._finalize_sub_stages(acc, t_total)
 
     async def run_stream(
         self,
@@ -361,71 +765,93 @@ class KbQaPipeline:
         Yields:
             :class:`QaDelta`：0..n 帧 ``delta``，随后恰好一帧 ``done`` 或 ``error``。
         """
+        acc = self._begin_sub_stages()
+        t_total = perf_counter()
         try:
-            hits = await self._retrieve(req, ctx)
-        except KbClientError as exc:
-            logger.warning(
-                "KB QA stream retrieve failed",
-                error=str(exc),
+            try:
+                hits = await self._retrieve(req, ctx, acc=acc)
+            except KbClientError as exc:
+                logger.warning(
+                    "KB QA stream retrieve failed",
+                    error=str(exc),
+                    trace_id=ctx.trace_id,
+                )
+                yield QaDelta.error(str(exc))
+                return
+
+            prompt = self._build_prompt(req, hits, structured=False)
+
+            parts: list[str] = []
+            # ③ worker_generate：流式整段前后计时（含首字延迟，PRD §4 Q4 裁定）
+            if acc is not None:
+                gen_start = perf_counter()
+                async for piece in generate_stream(prompt):
+                    if not piece:
+                        continue
+                    parts.append(piece)
+                    yield QaDelta.delta(piece)
+                acc["worker_generate_ms"] = max(0, int((perf_counter() - gen_start) * 1000))
+            else:
+                async for piece in generate_stream(prompt):
+                    if not piece:
+                        continue
+                    parts.append(piece)
+                    yield QaDelta.delta(piece)
+
+            answer_text = "".join(parts).strip()
+            selected = self._parse_inline_citations(answer_text)
+            used_hits = enrich_hits_with_document_images(
+                self._select_hits(hits.hits, selected),
+                hits.hits,
+            )
+
+            # ④ persist：流结束后一次性落库
+            if acc is not None:
+                persist_start = perf_counter()
+                session_id, message_id = await self._persist(req, ctx, answer_text, used_hits)
+                acc["persist_ms"] = max(0, int((perf_counter() - persist_start) * 1000))
+            else:
+                session_id, message_id = await self._persist(req, ctx, answer_text, used_hits)
+
+            citations = [
+                QaCitation.from_hit(hit, message_id=message_id, snippet_limit=self._snippet_limit)
+                for hit in used_hits
+            ]
+            logger.info(
+                "KB QA stream completed",
+                kb_session_id=session_id,
+                citation_count=len(citations),
+                answer_chars=len(answer_text),
                 trace_id=ctx.trace_id,
             )
-            yield QaDelta.error(str(exc))
-            return
-
-        prompt = self._build_prompt(req, hits, structured=False)
-
-        parts: list[str] = []
-        async for piece in generate_stream(prompt):
-            if not piece:
-                continue
-            parts.append(piece)
-            yield QaDelta.delta(piece)
-
-        answer_text = "".join(parts).strip()
-        selected = self._parse_inline_citations(answer_text)
-        used_hits = self._select_hits(hits.hits, selected)
-
-        session_id, message_id = await self._persist(req, ctx, answer_text, used_hits)
-        citations = [
-            QaCitation.from_hit(hit, message_id=message_id, snippet_limit=self._snippet_limit)
-            for hit in used_hits
-        ]
-        logger.info(
-            "KB QA stream completed",
-            kb_session_id=session_id,
-            citation_count=len(citations),
-            answer_chars=len(answer_text),
-            trace_id=ctx.trace_id,
-        )
-        yield QaDelta.done(
-            session_id=session_id,
-            message_id=message_id,
-            citations=citations,
-            finish_reason=finish_reason,
-        )
+            yield QaDelta.done(
+                session_id=session_id,
+                message_id=message_id,
+                citations=citations,
+                finish_reason=finish_reason,
+            )
+        finally:
+            if acc is not None:
+                self._finalize_sub_stages(acc, t_total)
 
     # ============================================================ 阶段 1：检索
 
-    async def _retrieve(self, req: KbQaRequest, ctx: KbCallContext) -> RetrieveHits:
-        """解析可见库并检索；可见库为空时直接返回空命中，不再打检索请求。"""
-        library_ids = list(req.library_ids)
-        if not library_ids:
-            visible = await self._kb.resolve_visible_libraries(ctx)
-            if visible.is_empty():
-                logger.info(
-                    "KB QA: no visible library for user",
-                    user_id=ctx.user_id,
-                    trace_id=ctx.trace_id,
-                )
-                return RetrieveHits()
-            library_ids = visible.library_ids
+    async def _retrieve(
+        self, req: KbQaRequest, ctx: KbCallContext, acc: dict[str, int] | None = None
+    ) -> RetrieveHits:
+        """解析可见库并检索；可见库为空时直接返回空命中，不再打检索请求。
 
-        return await self._kb.retrieve(
+        复用模块级 :func:`retrieve_kb_chunks`（T4/TOOL 同样复用，DRY）。
+        ``acc`` 非 ``None`` 时由 ``retrieve_kb_chunks`` 顺带回填前两子阶段。
+        """
+        return await retrieve_kb_chunks(
+            self._kb,
             ctx,
             question=req.question,
-            library_ids=library_ids,
+            library_ids=req.library_ids,
             top_k=req.top_k,
             threshold=req.threshold,
+            acc=acc,
         )
 
     # ============================================================ 阶段 2：提示词
@@ -628,7 +1054,9 @@ class KbQaPipeline:
         session_verified: bool = req.session_id is None
         try:
             if session_id is None:
-                session_id = await self._kb.create_session(ctx)
+                session_id = await self._kb.create_session(
+                    ctx, title=_session_title(req.question)
+                )
                 session_verified = True
             if session_id is None:
                 return None, None

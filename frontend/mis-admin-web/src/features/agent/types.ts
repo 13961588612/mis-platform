@@ -52,6 +52,181 @@ export interface Skill {
   version?: string;
   tags?: string[];
   updated_at: string;
+  /** 执行器标识：mcp:{server}:{tool} / builtin:{name} / custom:{module}.{func}；空串 = 文档型/检索型。 */
+  handler?: string;
+  /** 来源：custom / mcp / builtin / package（对齐 SkillSource 枚举）。 */
+  source?: string;
+}
+
+/**
+ * 选择器用的技能摘要（内嵌选择器数据源，对齐 `GET /skills` 列表项）。
+ *
+ * <p>比 {@link Skill} 精简：仅保留选择器渲染与注入所需的字段。
+ */
+export interface SkillSummary {
+  skill_id: string;
+  name: string;
+  description: string;
+  category?: string;
+}
+
+/**
+ * 选择器确认后的「已选技能」载荷（含正文，供注入下一条用户消息）。
+ */
+export interface SkillBuilderSelection {
+  skill_id: string;
+  name: string;
+  body: string;
+}
+
+/**
+ * 技能详情（列表项 + 详情抽屉扩展字段）。
+ *
+ * <p>对齐 ai-platform `GET /skills/{id}` 在 package skill 下额外返回的
+ * `body / scripts / references / assets`。custom 自建技能这些字段为 `undefined` / `null`。
+ */
+export interface SkillDetail extends Skill {
+  body?: string;
+  scripts?: string[];
+  references?: string[];
+  assets?: string[];
+  /** B-1.5：参考资料文件内容（key = 相对路径，value = 文件正文），由详情接口按 `references` 一并读出。 */
+  reference_contents?: Record<string, string>;
+}
+
+/**
+ * 解析 SKILL.md 的响应（前端只读预览，不持久化）。
+ *
+ * <p>对齐后端 `POST /skills/parse` 的 `SkillParseResponse`：`metadata` 为 Front Matter
+ * 解析出的字典（可能为空），`body` 为 Markdown 正文（无 Front Matter 时为原文）。
+ */
+export interface SkillParseResponseFE {
+  metadata: Record<string, unknown>;
+  body: string;
+}
+
+/**
+ * 「AI 对话创建」Tab(C) 的单条对话消息（前端本地 state 维护，不落库）。
+ *
+ * <p>`role` 沿用 LLM 约定（user/assistant/system）；`status` 为渲染态：
+ * `generating` 生成中 / `generated` 已生成 / `error` 出错；`converged` 由后端
+ * 判定（本轮产出的 SKILL.md 是否已完整，可作为回填信号）。
+ */
+export interface SkillBuilderMessage {
+  id: string;
+  role: 'user' | 'assistant' | 'system';
+  content: string;
+  status: 'generating' | 'generated' | 'error';
+  converged?: boolean;
+}
+
+/**
+ * 「AI 对话创建」请求契约（前端 → BFF → ai-platform `POST /skills/builder/chat`）。
+ *
+ * <p>`messages` 为前端全量维护的多轮上下文（仅 role/content）；`user_input` 为
+ * 本轮新增输入；`converged` 为前端收敛信号（如「定稿」），作后端判定的兜底增强。
+ */
+export interface SkillBuilderChatRequest {
+  messages: Array<{ role: string; content: string }>;
+  user_input: string;
+  converged?: boolean;
+}
+
+/**
+ * 「AI 对话创建」响应契约（ai-platform `BuilderChatResponse` 透传）。
+ *
+ * <p>`reply` 为 AI 文本（内含 ```SKILL.md 代码块）；`status` 为 `generating`/`generated`；
+ * `converged` 由后端依据产出是否含完整 Front Matter + 正文判定。
+ */
+export interface SkillBuilderChatResponse {
+  reply: string;
+  status: 'generating' | 'generated';
+  converged: boolean;
+}
+
+/**
+ * 会话各阶段耗时（A-5 / A-6，对齐后端 `SessionTiming`）。
+ *
+ * <p>`retrieval_ms` 为 `null` 表示 rag 轨迹不可得，前端显示「—」。其余阶段为
+ * 数值（毫秒，可能为 `null` 表示该阶段未发生，如纯生成会话无工具调用）。
+ */
+export interface StageTiming {
+  planning_ms: number | null;
+  retrieval_ms: number | null;
+  tool_call_ms: number | null;
+  generation_ms: number | null;
+  post_process_ms: number | null;
+}
+
+export interface SessionTiming {
+  /** 本轮对应的 assistant 消息 id（2.1 按轮存储的 turn_key）。 */
+  turn_key?: string;
+  total_ms: number | null;
+  stages: StageTiming;
+  /** 采样时间（ISO 8601 UTC）。 */
+  sampled_at: string;
+  /** timing schema 版本，结构变更时 +1。 */
+  schema_version: number;
+  /**
+   * 子阶段细分下钻（v2，schema_version >= 2 才有；旧数据 / 未采集为 null）。
+   * 各子段为毫秒整数或 ``null``（不可得，前端显示「—」）。
+   */
+  sub_stages?: SubStages | null;
+}
+
+/**
+ * 平铺的子阶段字典（key 为 snake_case 指标名，value 为毫秒或 null）。
+ * 用于 retrieval / planning / generation / post_process 各段的内部明细。
+ */
+export interface SubStageMap {
+  [key: string]: number | null;
+}
+
+/** 单次工具调用的子阶段明细（tool_call 数组元素）。 */
+export interface ToolCallItem {
+  tool_name: string;
+  /** delegate：委派类（如 agent__invoke）；native：普通工具。 */
+  kind: 'delegate' | 'native';
+  latency_ms: number | null;
+  /** 仅 delegate 类携带：该 worker 内部的 sub_stages（结构同 {@link SubStageMap}）。 */
+  sub_stages?: SubStageMap | null;
+}
+
+/** tool_call 子阶段：按调用分别计时 + 委派往返近似。 */
+export interface ToolCallSubStage {
+  calls: ToolCallItem[];
+  /** 委派往返近似（父→子 网络委派 + 会话创建/初始化开销）。 */
+  delegate_round_trip_ms?: number | null;
+}
+
+/**
+ * 顶层子阶段结构（v2）。每个键对应一个父阶段；缺测为 null。
+ */
+export interface SubStages {
+  planning?: SubStageMap | null;
+  retrieval?: SubStageMap | null;
+  tool_call?: ToolCallSubStage | null;
+  generation?: SubStageMap | null;
+  post_process?: SubStageMap | null;
+}
+
+/**
+ * 单会话「按轮」耗时 map（2.1 改造后）。
+ *
+ * <p>key = assistant 消息 id（与 {@link SessionMessage.id} 对齐），value = 该轮
+ * {@link SessionTiming}。前端按 ``message.id`` 在 map 中查到对应轮的耗时，逐条内联展示。
+ */
+export type SessionTimingMap = Record<string, SessionTiming>;
+
+/**
+ * 耗时查询返回包（后端 ``GET /sessions/{id}/timing`` 与 ``POST /sessions/timing/batch``）。
+ *
+ * <p>``turns`` 为按轮 map；``last`` 为最近一轮的 turn_key（兼容旧消费方）。
+ * 会话无调试耗时时整体为 ``null``。
+ */
+export interface SessionTimingPayload {
+  turns: SessionTimingMap;
+  last: string | null;
 }
 
 export interface SkillStats {
@@ -110,6 +285,9 @@ export type AgentState = 'running' | 'paused' | 'stopped' | 'error';
  * `{agent_id, display_name, state, runtime_type, active_sessions, is_active, role}`，
  * **不存在 `enabled_skill_count`**（属 P2 已知债，本期删除）。
  * 「已启用技能」展示统一替换为 `active_sessions`（活跃会话，真实且有运营价值）。
+ *
+ * <p>**运行位标记**（列表 enrichment）：`in_process` / `lease_owner` /
+ * `lease_held_locally` / `core_id` —— 行集合为本地 configs 全量，不再仅本机已 claim 实例。
  */
 export interface AgentSummary {
   agent_id: string;
@@ -121,6 +299,14 @@ export interface AgentSummary {
   /** 当前活跃会话数，替代已删除的臆造字段 `enabled_skill_count`。 */
   active_sessions?: number;
   is_active?: boolean;
+  /** 是否已装入本进程 AgentManager 内存。 */
+  in_process?: boolean;
+  /** Redis 租约持有者 coreId；无租约时为 null。 */
+  lease_owner?: string | null;
+  /** 租约是否由本机 CORE_ID 持有。 */
+  lease_held_locally?: boolean;
+  /** 本机 CORE_ID；未启多 Core 租约时为 null。 */
+  core_id?: string | null;
 }
 
 /**
@@ -369,15 +555,117 @@ export interface SessionQuery extends AgentPageQuery {
   to?: string;
 }
 
+// ------------------------------------------------------------------ 会话反馈（CF-01 / CF-03 / CF-05）
+
+/** 反馈处理状态：pending → handled/ignored 单向终态。 */
+export type AgentFeedbackStatus = 'pending' | 'handled' | 'ignored';
+
+/** 反馈评价方向。 */
+export type AgentFeedbackRating = 'up' | 'down';
+
+/**
+ * 会话反馈列表项。
+ *
+ * <p>wire 对齐 ai-platform `AgentFeedbackModel.to_wire()`（`agent_feedback` 表 +
+ * 服务层按 message_id 补 `answer_brief` / 按 session_id 补 `agent_name`/`user_name`）。
+ * `handler_*` 为运营标记处理人；`processed_at` 为处理时间。
+ */
+export interface AgentFeedbackItem {
+  id: number;
+  session_id: string;
+  message_id: string;
+  agent_id: string;
+  agent_name?: string | null;
+  user_id?: string | null;
+  user_name?: string | null;
+  rating: AgentFeedbackRating;
+  comment?: string | null;
+  status: AgentFeedbackStatus;
+  handler_id?: string | null;
+  handler_name?: string | null;
+  note?: string | null;
+  processed_at?: string | null;
+  created_at: string;
+  updated_at: string;
+  /** 被评价回答的截断摘要（≤60 字，由后端按 message_id 填充）。 */
+  answer_brief?: string | null;
+  /** 触发该回答的提问（被评价助手消息之前最近的用户消息，≤60 字截断）。 */
+  query_text?: string | null;
+  /** 对话编号：被评价助手消息在所属会话中的 1-based 顺序号（非会话编号）。 */
+  turn_index?: number | null;
+}
+
+/** 会话反馈列表查询条件（字段名与 ai-platform `FeedbackQuery` 一致）。 */
+export interface AgentFeedbackQuery extends AgentPageQuery {
+  rating?: AgentFeedbackRating;
+  /** 只看带说明的吐槽（comment 非空）。 */
+  comment_only?: boolean;
+  agent_id?: string;
+  channel?: SessionChannel;
+  from?: string;
+  to?: string;
+  /** 匹配吐槽说明。 */
+  keyword?: string;
+  status?: AgentFeedbackStatus;
+}
+
+/** 单 Agent 反馈统计（CF-05 by_agent 项）。 */
+export interface AgentFeedbackAgentStat {
+  total: number;
+  up: number;
+  down: number;
+  /** 0–1 之间，total 为 0 时为 0。 */
+  up_rate: number;
+  down_rate: number;
+}
+
+/** 单日反馈趋势（CF-05 by_day 项，键为 `YYYY-MM-DD` UTC 日期）。 */
+export interface AgentFeedbackDayStat {
+  up: number;
+  down: number;
+  /** 带说明的吐槽数（comment 非空）。 */
+  comment: number;
+}
+
+/**
+ * 会话反馈统计（CF-05）。
+ *
+ * <p>**是一个聚合对象，不是数组**——与 `RouteStats` 同款教训：此前把统计声明成
+ * 数组、页面直接 `[...stats]` 展开会 `stats is not iterable` 崩页。
+ */
+export interface AgentFeedbackStats {
+  total: number;
+  up: number;
+  down: number;
+  up_rate: number;
+  down_rate: number;
+  pending: number;
+  by_agent: Record<string, AgentFeedbackAgentStat>;
+  by_day: Record<string, AgentFeedbackDayStat>;
+}
+
+/** 标记处理请求体（单条 / 批量共用）。 */
+export interface AgentFeedbackProcessPayload {
+  status: 'handled' | 'ignored';
+  note?: string;
+}
+
+/** 批量标记处理响应。 */
+export interface AgentFeedbackBatchResult {
+  /** 实际更新的行数（只更新 pending 行）。 */
+  processed: number;
+  /** 去重后的请求条数。 */
+  requested: number;
+}
+
 // ------------------------------------------------------------------ MCP（UI#8）
 
 /**
- * MCP Server（真实 wire 八字段）。
+ * MCP Server（wire：配置八字段 + 运行时 `connected`）。
  *
  * <p>对齐 ai-platform `MCPServerConfig`：`{name, transport, endpoint, args, env,
- * timeout, auto_connect, description}`。T04 收口删除臆造的
- * `state` / `tool_count` / `enabled` / `updated_at` 四字段；「是否自动连接」用
- * `auto_connect` 表达。
+ * timeout, auto_connect, description}`；列表/详情额外附带 `connected`（是否已在
+ * 管理器中登记连接，与 #35 短连接探活结果独立）。
  */
 export interface McpServer {
   name: string;
@@ -388,6 +676,8 @@ export interface McpServer {
   timeout?: number;
   auto_connect: boolean;
   description?: string;
+  /** 是否已在 ai-platform MCPManager 登记连接（点过「连接」且未断开）。 */
+  connected?: boolean;
 }
 
 export interface McpTool {
@@ -457,13 +747,14 @@ export interface McpOfflineCleanupResult {
  * 单条委派轨迹。
  *
  * <p>对齐 ai-platform `DispatchTraceEntry` + `session_id`/`created_at`
- * （`coordinator/trace.py`）：`{intent, worker_id, tool, status, latency_ms,
- * task_id, brief_rejected, session_id, created_at}`。
- * T04 前声明的 `trace_id / coordinator_id / task_brief / depth / started_at /
- * duration_ms` 全部不存在，已删除。
+ * （`coordinator/trace.py`）：`{intent, coordinator_id, worker_id, tool, status,
+ * latency_ms, task_id, brief_rejected, session_id, created_at}`。
+ * `coordinator_id` 为调度者（父会话 agent_id）；缺失时运营台显示 `-`。
  */
 export interface DispatchTrace {
   intent: string;
+  /** 发起委派的 Coordinator；旧缓冲条目可能为空。 */
+  coordinator_id?: string;
   worker_id: string;
   tool: string;
   status: DispatchTraceStatus;
@@ -503,6 +794,8 @@ export interface RouteLog {
   confidence?: number;
   latency_ms?: number;
   timestamp: string;
+  /** agent_router=自动选 Agent；coordinator=协调者转执行者；specified=用户直接指定 Agent。 */
+  dispatch_kind?: 'agent_router' | 'coordinator' | 'specified';
 }
 
 /**
@@ -520,6 +813,7 @@ export interface RouteStats {
   total_routes: number;
   by_agent: Record<string, number>;
   by_strategy: Record<string, number>;
+  by_kind: Record<string, number>;
   avg_latency_ms: number;
   avg_confidence: number;
 }
@@ -710,6 +1004,29 @@ export function formatTime(iso: string | null | undefined): string {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return iso;
   return d.toLocaleString('zh-CN', { hour12: false });
+}
+
+/** 反馈评价 → 中文标签（列表 / 详情 / 看板共用同一份口径）。 */
+export function feedbackRatingLabel(
+  rating: AgentFeedbackRating | null | undefined,
+): string {
+  return rating === 'up' ? '点赞' : rating === 'down' ? '吐槽' : '未评价';
+}
+
+/** 反馈处理状态 → 徽标规格（变体 + 文案）。 */
+export const FEEDBACK_STATUS_META: Record<
+  AgentFeedbackStatus,
+  { label: string; variant: 'warning' | 'success' | 'secondary' }
+> = {
+  pending: { label: '待处理', variant: 'warning' },
+  handled: { label: '已处理', variant: 'success' },
+  ignored: { label: '已忽略', variant: 'secondary' },
+};
+
+/** 0–1 比率 → 百分比展示串（非法值显示 '-'）。 */
+export function formatRate(rate: number | null | undefined): string {
+  if (typeof rate !== 'number' || Number.isNaN(rate)) return '-';
+  return `${Math.round(rate * 100)}%`;
 }
 
 /**

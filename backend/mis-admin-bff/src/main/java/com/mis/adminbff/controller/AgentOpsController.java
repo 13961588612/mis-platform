@@ -24,9 +24,10 @@ import java.util.Map;
  * <h2>路径必须与 {@code sys_api} 注册表逐字一致</h2>
  * V20 登记了 58 行 {@code sys_api}（92100–92157），判权走
  * {@code ApiPermissionInterceptor} + 注册表（T01 已建，见 impl-plan §7.2）。
- * 本模块配 {@code api-permission.deny-unmapped: false}（未映射即放行），
- * 路径写错不会 404，而是「悄悄不判权」—— 一个不报错的越权口子，比直接报错更危险。
- * 因此每条 {@code @RequestMapping} 的路径与方法都照 SQL 一字未改。
+ * 本模块配 {@code api-permission.deny-unmapped: true}（<b>未映射即拒绝</b>，这是
+ * {@code application.yml} 的实际默认值，不是 false）：路径写错会直接 403，而非「悄悄不判权」。
+ * 因此每条 {@code @RequestMapping} 的路径与方法都照 SQL 一字未改；新增端点
+ * （如 #11 {@code builder/chat}）必须同步在 {@code sys_api} 注册（见 V51），否则上线即 403。
  *
  * <h2>为什么把 50+ 端点塞进一个 Controller</h2>
  * 与 {@code KbSynonymController}「自成一体的子域要独立」相反，这里是<b>同一功能域的
@@ -112,6 +113,26 @@ public class AgentOpsController {
     @PostMapping("/skills/reindex")
     public Result<JsonNode> reindexSkills() {
         return Result.ok(facade.reindexSkills());
+    }
+
+    /**
+     * #10 解析 SKILL.md（透传）。权限码 {@code agent:skill:manage}：
+     * sys_api 92173（V50）+ sys_menu_api 绑菜单 92051（V61）。
+     */
+    @PostMapping("/skills/parse")
+    public Result<JsonNode> parseSkill(@RequestBody JsonNode body) {
+        return Result.ok(facade.parseSkill(body));
+    }
+
+    /**
+     * #11 AI 对话创建技能（C 功能，透传，走 chat 超时）。
+     *
+     * <p>权限码 {@code agent:skill:manage}（与新建/编辑技能同族），由 V46 在
+     * {@code sys_api} 注册表登记；路径必须与注册表逐字一致（见本类文件头）。
+     */
+    @PostMapping("/skills/builder/chat")
+    public Result<JsonNode> builderChat(@RequestBody JsonNode body) {
+        return Result.ok(facade.builderChat(body));
     }
 
     // ---------------------------------------------------------------- Agent #13–#26
@@ -235,6 +256,89 @@ public class AgentOpsController {
     @PostMapping("/sessions/batch-delete")
     public Result<JsonNode> batchDeleteSessions(@RequestBody JsonNode body) {
         return Result.ok(facade.batchDeleteSessions(body));
+    }
+
+    /** A-5 会话最近一轮各阶段耗时（Redis，TTL 24h；过期返回 null）。 */
+    @GetMapping("/sessions/{id}/timing")
+    public Result<JsonNode> getSessionTiming(@PathVariable String id) {
+        return Result.ok(facade.getSessionTiming(id));
+    }
+
+    /** A-6 批量会话耗时（列表「耗时」列，pipeline 一次往返）。 */
+    @PostMapping("/sessions/timing/batch")
+    public Result<JsonNode> batchSessionTiming(@RequestBody JsonNode body) {
+        return Result.ok(facade.batchSessionTiming(body));
+    }
+
+    // ---------------------------------------------------------------- 会话反馈 CF-01/CF-03/CF-05
+
+    /**
+     * CF-01 会话反馈列表。
+     *
+     * <p>分页 + 过滤条件逐个声明（snake_case 与前端一致），由门面统一装配参数表；
+     * 默认按「吐槽且 comment 非空」优先排序（下游语义）。
+     *
+     * @param rating       反馈方向：up 点赞 / down 吐槽；缺省 = 不限
+     * @param comment_only 仅看带说明的反馈；缺省 = 不限
+     * @param agent_id     按 Agent 过滤
+     * @param channel      按渠道过滤
+     * @param from         起始时间（ISO-8601）
+     * @param to           截止时间（ISO-8601）
+     * @param keyword      关键词（评论 / 回答摘要）
+     * @param status       处理状态：pending / handled / ignored；缺省 = 不限
+     * @param page         页码，从 1 开始
+     * @param page_size    每页条数
+     */
+    @GetMapping("/sessions/feedback")
+    public Result<JsonNode> listFeedback(
+            @RequestParam(required = false) String rating,
+            @RequestParam(required = false) Boolean comment_only,
+            @RequestParam(required = false) String agent_id,
+            @RequestParam(required = false) String channel,
+            @RequestParam(required = false) String from,
+            @RequestParam(required = false) String to,
+            @RequestParam(required = false) String keyword,
+            @RequestParam(required = false) String status,
+            @RequestParam(required = false) Integer page,
+            @RequestParam(required = false) Integer page_size) {
+        return Result.ok(facade.listFeedback(
+                rating, comment_only, agent_id, channel, from, to, keyword, status, page, page_size));
+    }
+
+    /**
+     * CF-05 会话反馈统计。
+     *
+     * <p>基础计数 + 按 agent 维度 + 按日趋势；时间/Agent/渠道过滤由门面装配。
+     */
+    @GetMapping("/sessions/feedback/stats")
+    public Result<JsonNode> feedbackStats(
+            @RequestParam(required = false) String from,
+            @RequestParam(required = false) String to,
+            @RequestParam(required = false) String agent_id,
+            @RequestParam(required = false) String channel) {
+        return Result.ok(facade.feedbackStats(from, to, agent_id, channel));
+    }
+
+    /**
+     * CF-03 标记单条反馈已处理/忽略。
+     *
+     * <p>body {@code {status: handled|ignored, note?}}；操作人从登录上下文头透传下游
+     * （{@code X-User-Id}/{@code X-Username}），状态机 pending → handled/ignored 单向终态由下游裁定。
+     */
+    @PostMapping("/sessions/feedback/{feedbackId}/process")
+    public Result<JsonNode> processFeedback(
+            @PathVariable String feedbackId, @RequestBody JsonNode body) {
+        return Result.ok(facade.processFeedback(feedbackId, body));
+    }
+
+    /**
+     * CF-03 批量标记反馈已处理/忽略。
+     *
+     * <p>body {@code {ids[], status, note?}}，单次上限 200（下游裁定）；操作人透传语义同单条。
+     */
+    @PostMapping("/sessions/feedback/batch-process")
+    public Result<JsonNode> batchProcessFeedback(@RequestBody JsonNode body) {
+        return Result.ok(facade.batchProcessFeedback(body));
     }
 
     /** #32 新建对话会话（注意路径是 {@code /chat/sessions}，与列表 {@code /sessions} 不同）。 */

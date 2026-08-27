@@ -1,0 +1,77 @@
+classDiagram
+    class DispatchTraceEntry {
+        +str intent
+        +str coordinator_id
+        +str worker_id
+        +str tool
+        +str status
+        +int latency_ms
+        +str task_id
+        +bool brief_rejected
+        +dict~str,int~|None sub_stages
+    }
+
+    class SessionTimingRecorder {
+        -float _start
+        -float _first_external
+        -float _first_text
+        -float _first_tool_call_t
+        -float _first_token_t
+        -float _last_text
+        -list _tool_call_stack
+        -float _tool_call_ms
+        -float _retrieval_ms
+        -dict _rag_sub_stages
+        -list _tool_calls
+        -dict _post_steps
+        -float _end_t
+        +observe(event)
+        +step_start(name)
+        +step_end(name)
+        +close()
+        +complete()
+        +fail()
+        +snapshot() dict
+    }
+
+    class RedisTimingStore {
+        +save(session_id, turn_key, timing)
+        +get(session_id)
+        +get_many(ids)
+    }
+
+    class KbQaPipeline {
+        +run(req, ctx, generate, structured) QaAnswer
+        +run_stream(req, ctx, generate_stream) AsyncIterator
+        -_retrieve(req, ctx) RetrieveHits
+        -_build_prompt(req, hits) str
+        -_persist(req, ctx, text, hits) tuple
+    }
+
+    class InvokeAgentTool {
+        +execute(arguments, context) ToolResult
+        -_spawn_worker(...) _WorkerRunResult
+        -_finish(...) ToolResult
+    }
+
+    class _WorkerRunResult {
+        +str text
+        +str child_session_id
+        +int tokens
+        +int tool_uses
+        +dict~str,int~|None sub_stages
+    }
+
+    class ContextVar {
+        <<external>>
+        QA_SUB_STAGES_CV
+    }
+
+    SessionTimingRecorder ..> DispatchTraceEntry : 解析 entries[].sub_stages
+    InvokeAgentTool ..> DispatchTraceEntry : 构造时填 sub_stages
+    InvokeAgentTool ..> _WorkerRunResult : 产出(含 sub_stages)
+    _WorkerRunResult ..> DispatchTraceEntry : sub_stages 透传
+    KbQaPipeline ..> ContextVar : 写 QA_SUB_STAGES_CV
+    InvokeAgentTool ..> ContextVar : _spawn_worker set / read
+    SessionTimingRecorder ..> RedisTimingStore : snapshot 落库
+    note for SessionTimingRecorder "TIMING_SCHEMA_VERSION=2\n新增 sub_stages 顶层结构"
