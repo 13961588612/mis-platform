@@ -22,10 +22,14 @@ from src.adapters.wren_mcp_registry import (
     PortExhaustedError,
     WrenMcpProcessManager,
     _parse_port_range,
+    get_agent_registry,
     get_process_manager,
+    reset_agent_registry,
     reset_process_manager,
 )
 from src.adapters.iqd_mcp_client import IqdMcpClient, IqdMcpClientError
+from src.config import get_settings
+from src.agent.mis_iqd.orchestrator import AskOrchestrator
 
 
 class _FakeProc:
@@ -285,3 +289,120 @@ async def test_concurrency_allocation_unique_ports(tmp_projects_root: Path) -> N
         await mgr.release_port(p)
     reused = await mgr.allocate_port("again")
     assert reused in allowed
+
+
+# ================================================================ 跨机器注册表远程优先路由（v0.2 fix #2 回归）
+
+@pytest.fixture
+def agent_registry():
+    """干净的跨机器部署注册表单例（避免跨测试污染）。"""
+    reset_agent_registry()
+    yield get_agent_registry()
+    reset_agent_registry()
+
+
+def _register_running(
+    registry, conn_id: str, mcp_endpoint: str = "http://10.20.30.40:19091/mcp/connA"
+) -> None:
+    """登记一个 RUNNING 的跨机器部署（wren 机 agent 数据面可达）。"""
+    registry.register(
+        conn_id,
+        wren_host="10.20.30.40",
+        control_endpoint="http://10.20.30.40:19090",
+        mcp_endpoint=mcp_endpoint,
+        agent_handle="lease-test",
+        status=McpStatus.RUNNING,
+        secret_ref="vault://iqd/db/connA",
+        project_home="/var/lib/mis-iqd/wren-projects/connA",
+    )
+
+
+@pytest.mark.asyncio
+async def test_for_connection_remote_routing_priority(
+    agent_registry, monkeypatch
+) -> None:
+    """v0.2 fix #2 回归：for_connection 优先读跨机器注册表 RUNNING 部署，经 agent 数据面
+    ``/mcp/{conn_id}`` 路由（带 bearer），绝不静默落默认 127.0.0.1:8080 或降级 mock。
+
+    这是原「远程路由 GAP」的核心修复点：此前 for_connection 在远程模式下会静默降级为
+    mock 导致永远问不到 wren 机；现必须按 connId 路由到远程 agent ingress。
+    """
+    reset_process_manager()  # 确保无本地端点干扰，纯验证远程优先分支
+    _register_running(agent_registry, "connA")
+    monkeypatch.setattr(
+        get_settings().iqd_mcp, "wren_agent_token", "test-bearer", raising=False
+    )
+
+    # 不传 registry → 走 get_agent_registry() 远程优先路径
+    client = IqdMcpClient.for_connection("connA")
+    # 必须路由到远程 wren 机 agent ingress，而非默认 host/port
+    assert client._host == "10.20.30.40"
+    assert client._port == 19091
+    assert client._path == "/mcp/connA"  # 按 connId 路由到本机 wren 进程
+    assert client._token == "test-bearer"  # 数据面 bearer 鉴权（决策 ②）
+    assert client._mock is False  # 关键：不得静默降级 mock
+
+
+@pytest.mark.asyncio
+async def test_for_connection_remote_stopped_falls_through_and_raises(
+    agent_registry,
+) -> None:
+    """远程注册表条目非 RUNNING（如 stopped）且无本地端点时，for_connection 显式抛错，
+    不静默降级 mock、也不串到其它连接（REQ-P0-3）。"""
+    reset_process_manager()
+    agent_registry.register(
+        "connB",
+        wren_host="10.20.30.40",
+        control_endpoint="http://10.20.30.40:19090",
+        mcp_endpoint="http://10.20.30.40:19091/mcp/connB",
+        agent_handle="lease-b",
+        status=McpStatus.STOPPED,
+        secret_ref="vault://iqd/db/connB",
+    )
+    with pytest.raises(IqdMcpClientError):
+        IqdMcpClient.for_connection("connB")
+
+
+@pytest.mark.asyncio
+async def test_for_connection_remote_missing_endpoint_falls_through_and_raises(
+    agent_registry,
+) -> None:
+    """远程注册表 RUNNING 但 mcp_endpoint 为空 → 无法构造远程 client → 落本地（无）→ 抛错，
+    不静默降级 mock（边界：部署已登记但数据面端点未回传）。"""
+    reset_process_manager()
+    agent_registry.register(
+        "connC",
+        wren_host="10.20.30.40",
+        control_endpoint="http://10.20.30.40:19090",
+        mcp_endpoint="",  # 空端点
+        agent_handle="lease-c",
+        status=McpStatus.RUNNING,
+        secret_ref="vault://iqd/db/connC",
+    )
+    with pytest.raises(IqdMcpClientError):
+        IqdMcpClient.for_connection("connC")
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_uses_remote_client_when_registry_running(
+    agent_registry, monkeypatch
+) -> None:
+    """编排器 _get_mcp_client 在跨机器注册表 RUNNING 时应返回远程 agent 数据面 client
+    （host/path/bearer 均来自注册表），而非默认单连接 8080 或 mock。
+
+    串联 fix #1（按 connId 隔离）与 fix #2（远程优先）：同一 orchestrator 实例对不同
+    连接应分别路由到各自远程/本地端点，不得串台。
+    """
+    reset_process_manager()
+    _register_running(agent_registry, "connA")
+    monkeypatch.setattr(
+        get_settings().iqd_mcp, "wren_agent_token", "test-bearer", raising=False
+    )
+    orch = AskOrchestrator()
+    client = orch._get_mcp_client("connA")
+    assert client._mock is False
+    assert client._host == "10.20.30.40"
+    assert client._port == 19091
+    assert client._path == "/mcp/connA"
+    # 缓存隔离：再次取同一连接应命中缓存且为同一对象（不得串到别的连接）
+    assert orch._get_mcp_client("connA") is client
