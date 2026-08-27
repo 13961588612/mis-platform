@@ -298,9 +298,9 @@ export function IqdCatalogPage() {
   return (
     <div className="flex h-full min-h-0 flex-col">
       <PageHeader
-        title="问数清单"
+        title="语义模型"
         description="管理 WrenAI 语义模型清单，勾选纳入问数范围（治理层）。"
-        breadcrumbs={buildAppBreadcrumbs({ app: 'agent', title: '问数清单' })}
+        breadcrumbs={buildAppBreadcrumbs({ app: 'agent', title: '语义模型' })}
         actions={
           <Button size="sm" variant="outline" onClick={() => void load()} disabled={loading}>
             <RefreshCw className={cn('h-4 w-4', loading && 'animate-spin')} />

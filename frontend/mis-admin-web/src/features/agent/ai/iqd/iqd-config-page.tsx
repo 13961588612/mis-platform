@@ -63,6 +63,7 @@ export function IqdConfigPage() {
         timeout_seconds: config.timeout_seconds ?? 60,
         language: config.language || 'zh-CN',
         enabled: config.enabled ?? true,
+        mdl_writeback_enabled: config.mdl_writeback_enabled ?? false,
       });
       setConfig(saved);
       setTestResult(null);
@@ -200,6 +201,17 @@ export function IqdConfigPage() {
                 onChange={(e) => setField('enabled', e.target.checked)}
               />
               <span className="text-xs text-muted-foreground">启用该连接</span>
+            </div>
+            <div className="flex items-center gap-2 md:col-span-2">
+              <input
+                type="checkbox"
+                className="h-4 w-4"
+                checked={Boolean(config?.mdl_writeback_enabled)}
+                onChange={(e) => setField('mdl_writeback_enabled', e.target.checked)}
+              />
+              <span className="text-xs text-muted-foreground">
+                允许平台编辑语义模型并写回 WrenAI（MDL 写回）
+              </span>
             </div>
           </div>
         </div>

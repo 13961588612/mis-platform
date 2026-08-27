@@ -20,9 +20,6 @@ public interface IqdConnectionRepository extends JpaRepository<IqdConnection, Lo
     /** 一期业务上仅一条 enabled=true：取启用连接清单（供 IqdConfigClient 全量拉取）。 */
     List<IqdConnection> findByEnabledOrderByIdAsc(Integer enabled);
 
-    /** 取主连接（按连接 id；一期业务上即唯一启用连接）。 */
-    Optional<IqdConnection> findPrimary(Long connectionId);
-
     /** 推进连接级已写回版本与 mdl_hash（build 成功回调）。 */
     @Modifying
     @Query("UPDATE IqdConnection c SET c.builtEditRevision = :rev, c.builtMdlHash = :hash "

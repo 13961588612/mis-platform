@@ -82,7 +82,6 @@ const KNOWLEDGE_KIND_LABEL: Record<string, string> = {
   term: '术语',
   metric_definition: '口径定义',
   synonym: '同义词',
-  instruction: '指令',
 };
 
 const SYNC_LABEL: Record<string, string> = {

@@ -246,7 +246,7 @@ export function IqdScopePage() {
 
       {connectionId == null ? (
         <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground">
-          尚未配置问数连接，请先到「问数清单」页保存连接。
+          尚未配置问数连接，请先到「语义模型」页保存连接。
         </div>
       ) : (
         <div className="flex min-h-0 flex-1 flex-col gap-4">

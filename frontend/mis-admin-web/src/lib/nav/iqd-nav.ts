@@ -28,13 +28,13 @@ export const IQD_NAV: SystemNavNode[] = [
   // 旗舰页置顶（V77: 93040，path=/iqd/data-query，permission=ai:chat:use）
   { kind: 'leaf', path: '/iqd/data-query', title: '问数', icon: 'Database' },
   // W2 问数管理（V73__iqd_w2_menu_api_seed.sql 的 sys_menu 种子：9250x 可见页，path=/iqd/*）
-  { kind: 'leaf', path: '/iqd/config', title: 'IQD 连接配置', icon: 'Settings' },
-  { kind: 'leaf', path: '/iqd/catalog', title: 'IQD 清单', icon: 'Database' },
-  { kind: 'leaf', path: '/iqd/scope', title: 'IQD 范围与权限', icon: 'ShieldCheck' },
-  { kind: 'leaf', path: '/iqd/test-chat', title: 'IQD 测试问数', icon: 'Crosshair' },
-  { kind: 'leaf', path: '/iqd/traces', title: 'IQD 问数审计', icon: 'History' },
-  { kind: 'leaf', path: '/iqd/enhance', title: 'IQD 脱敏与维度', icon: 'Sparkles' },
-  { kind: 'leaf', path: '/iqd/instruction', title: 'IQD 指令下发', icon: 'Sparkles' },
+  { kind: 'leaf', path: '/iqd/config', title: '连接配置', icon: 'Settings' },
+  { kind: 'leaf', path: '/iqd/catalog', title: '语义模型', icon: 'Database' },
+  { kind: 'leaf', path: '/iqd/scope', title: '范围与权限', icon: 'ShieldCheck' },
+  { kind: 'leaf', path: '/iqd/test-chat', title: '测试问数', icon: 'Crosshair' },
+  { kind: 'leaf', path: '/iqd/traces', title: '问数审计', icon: 'History' },
+  { kind: 'leaf', path: '/iqd/enhance', title: '脱敏与维度', icon: 'Sparkles' },
+  { kind: 'leaf', path: '/iqd/instruction', title: '指令下发', icon: 'Sparkles' },
 ];
 
 /** 展平为叶节点列表（IQD_NAV 当前全为叶节点，保留分支处理以兼容后续扩展）。 */

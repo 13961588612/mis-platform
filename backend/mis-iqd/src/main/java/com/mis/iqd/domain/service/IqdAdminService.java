@@ -186,6 +186,8 @@ public class IqdAdminService {
             entity.setLanguage(dto.getLanguage());
         }
         entity.setEnabled(Boolean.TRUE.equals(dto.getEnabled()) ? 1 : 0);
+        // 灰度闸门：写回 MDL 需显式开启（U7/Q4）；null 视为 false
+        entity.setMdlWritebackEnabled(Boolean.TRUE.equals(dto.getMdlWritebackEnabled()));
         // 保存后置为 inactive，待测试连通性
         entity.setStatus("inactive");
         entity.setUpdatedAt(Instant.now());
@@ -343,7 +345,7 @@ public class IqdAdminService {
         }
         ensureConnection(connectionId);
         // G7：以本次 WrenAI 同步原始 MDL 作为后续「平台编辑 → 派生完整 MDL」基线快照
-        connectionRepository.findPrimary(connectionId).ifPresent(c -> {
+        connectionRepository.findById(connectionId).ifPresent(c -> {
             c.setMdlRaw(mdlJson);
             c.setStaleDrift(false);
             c.setUpdatedAt(Instant.now());
@@ -1267,7 +1269,7 @@ public class IqdAdminService {
     @Transactional
     public Map<String, Object> updateCatalogNode(Long connectionId, String itemKey, String kind,
             Map<String, Object> patch, Long baseRevision, String idempotencyKey) {
-        IqdConnection conn = connectionRepository.findPrimary(connectionId)
+        IqdConnection conn = connectionRepository.findById(connectionId)
                 .orElseThrow(() -> new BusinessException(ResultCode.NOT_FOUND,
                         "问数连接不存在: " + connectionId));
         // ① 闸门：仅开启写回的连接允许真正 bump（U7/Q4 按连接灰度）
@@ -1406,7 +1408,7 @@ public class IqdAdminService {
     @Transactional
     public int backfillCatalogSync(Long connectionId, String mdlHash, Long builtRevision) {
         int stamped = catalogItemRepository.stampCatalogSync(connectionId, mdlHash, builtRevision);
-        connectionRepository.findPrimary(connectionId).ifPresent(c -> {
+        connectionRepository.findById(connectionId).ifPresent(c -> {
             c.setBuiltEditRevision(builtRevision);
             c.setBuiltMdlHash(mdlHash);
             c.setStaleDrift(false);
@@ -1425,7 +1427,7 @@ public class IqdAdminService {
      */
     @Transactional(readOnly = true)
     public Map<String, Object> getCatalogSyncStatus(Long connectionId) {
-        IqdConnection conn = connectionRepository.findPrimary(connectionId)
+        IqdConnection conn = connectionRepository.findById(connectionId)
                 .orElseThrow(() -> new BusinessException(ResultCode.NOT_FOUND,
                         "问数连接不存在: " + connectionId));
         IqdSyncJob latest = syncJobRepository.findTopByConnectionIdOrderByIdDesc(connectionId).orElse(null);
@@ -1482,7 +1484,7 @@ public class IqdAdminService {
      */
     @Transactional(readOnly = true)
     public boolean checkExternalDrift(Long connectionId) {
-        IqdConnection conn = connectionRepository.findPrimary(connectionId)
+        IqdConnection conn = connectionRepository.findById(connectionId)
                 .orElseThrow(() -> new BusinessException(ResultCode.NOT_FOUND,
                         "问数连接不存在: " + connectionId));
         long cur = conn.getCurrentEditRevision() == null ? 0L : conn.getCurrentEditRevision();
@@ -1504,7 +1506,7 @@ public class IqdAdminService {
      */
     @Transactional(readOnly = true)
     public Map<String, Object> getCatalogFull(Long connectionId) {
-        IqdConnection conn = connectionRepository.findPrimary(connectionId)
+        IqdConnection conn = connectionRepository.findById(connectionId)
                 .orElseThrow(() -> new BusinessException(ResultCode.NOT_FOUND,
                         "问数连接不存在: " + connectionId));
         List<Map<String, Object>> edited = new ArrayList<>();

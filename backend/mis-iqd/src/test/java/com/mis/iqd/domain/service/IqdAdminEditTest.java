@@ -109,7 +109,7 @@ class IqdAdminEditTest {
     @Test
     void updateCatalogNode_success_bumpsRevision_and_returnsEditStatus() {
         IqdConnection conn = primaryConn();
-        when(connectionRepository.findPrimary(CONN_ID)).thenReturn(Optional.of(conn));
+        when(connectionRepository.findById(CONN_ID)).thenReturn(Optional.of(conn));
         when(editIdempotencyRepository.findByConnectionIdAndIdempotencyKey(CONN_ID, "key-1"))
                 .thenReturn(Optional.empty());
         IqdCatalogItem it = item("mdl:model:orders", "model", "订单", null);
@@ -140,7 +140,7 @@ class IqdAdminEditTest {
     @Test
     void updateCatalogNode_baseRevisionMismatch_throws409_withCurrentRevision() {
         IqdConnection conn = primaryConn(); // current=12
-        when(connectionRepository.findPrimary(CONN_ID)).thenReturn(Optional.of(conn));
+        when(connectionRepository.findById(CONN_ID)).thenReturn(Optional.of(conn));
         when(editIdempotencyRepository.findByConnectionIdAndIdempotencyKey(CONN_ID, "key-2"))
                 .thenReturn(Optional.empty());
 
@@ -160,7 +160,7 @@ class IqdAdminEditTest {
     @Test
     void updateCatalogNode_renameReferencedNode_throws422_withDependents() {
         IqdConnection conn = primaryConn(); // current=12, mdlWritebackEnabled=true
-        when(connectionRepository.findPrimary(CONN_ID)).thenReturn(Optional.of(conn));
+        when(connectionRepository.findById(CONN_ID)).thenReturn(Optional.of(conn));
         when(editIdempotencyRepository.findByConnectionIdAndIdempotencyKey(CONN_ID, "key-3"))
                 .thenReturn(Optional.empty());
         IqdCatalogItem it = item("mdl:model:orders", "model", "orders", null);
@@ -214,7 +214,7 @@ class IqdAdminEditTest {
     void backfillCatalogSync_stampsUpToBuiltRevision_and_advancesConnection() {
         IqdConnection conn = primaryConn();
         when(catalogItemRepository.stampCatalogSync(eq(CONN_ID), eq("hash_abc"), eq(13L))).thenReturn(5);
-        when(connectionRepository.findPrimary(CONN_ID)).thenReturn(Optional.of(conn));
+        when(connectionRepository.findById(CONN_ID)).thenReturn(Optional.of(conn));
         when(connectionRepository.save(any(IqdConnection.class))).thenAnswer(inv -> inv.getArgument(0));
 
         int stamped = service.backfillCatalogSync(CONN_ID, "hash_abc", 13L);
@@ -231,7 +231,7 @@ class IqdAdminEditTest {
     void getCatalogSyncStatus_derives_EDITED_UNSYNCED_when_ahead() {
         IqdConnection conn = primaryConn(); // current=12, built=12
         conn.setCurrentEditRevision(13L);   // current > built
-        when(connectionRepository.findPrimary(CONN_ID)).thenReturn(Optional.of(conn));
+        when(connectionRepository.findById(CONN_ID)).thenReturn(Optional.of(conn));
         IqdSyncJob job = new IqdSyncJob();
         job.setBuildStatus("success");
         when(syncJobRepository.findTopByConnectionIdOrderByIdDesc(CONN_ID)).thenReturn(Optional.of(job));
@@ -247,7 +247,7 @@ class IqdAdminEditTest {
     void getCatalogSyncStatus_derives_STALE_DRIFT_when_flagged() {
         IqdConnection conn = primaryConn();
         conn.setStaleDrift(true);
-        when(connectionRepository.findPrimary(CONN_ID)).thenReturn(Optional.of(conn));
+        when(connectionRepository.findById(CONN_ID)).thenReturn(Optional.of(conn));
         when(syncJobRepository.findTopByConnectionIdOrderByIdDesc(CONN_ID)).thenReturn(Optional.empty());
 
         Map<String, Object> status = service.getCatalogSyncStatus(CONN_ID);
@@ -262,19 +262,19 @@ class IqdAdminEditTest {
     void checkExternalDrift_true_when_stale_or_ahead() {
         IqdConnection stale = primaryConn();
         stale.setStaleDrift(true);
-        when(connectionRepository.findPrimary(CONN_ID)).thenReturn(Optional.of(stale));
+        when(connectionRepository.findById(CONN_ID)).thenReturn(Optional.of(stale));
         assertTrue(service.checkExternalDrift(CONN_ID));
 
         IqdConnection ahead = primaryConn();
         ahead.setCurrentEditRevision(5L);
         ahead.setBuiltEditRevision(3L);
-        when(connectionRepository.findPrimary(CONN_ID)).thenReturn(Optional.of(ahead));
+        when(connectionRepository.findById(CONN_ID)).thenReturn(Optional.of(ahead));
         assertTrue(service.checkExternalDrift(CONN_ID));
 
         IqdConnection synced = primaryConn();
         synced.setCurrentEditRevision(3L);
         synced.setBuiltEditRevision(3L);
-        when(connectionRepository.findPrimary(CONN_ID)).thenReturn(Optional.of(synced));
+        when(connectionRepository.findById(CONN_ID)).thenReturn(Optional.of(synced));
         assertFalse(service.checkExternalDrift(CONN_ID));
     }
 
@@ -298,7 +298,7 @@ class IqdAdminEditTest {
         IqdConnection conn = primaryConn();
         conn.setCurrentEditRevision(13L);
         conn.setMdlRaw("{\"models\":[{\"name\":\"orders\",\"source\":\"db.public.orders\"}]}");
-        when(connectionRepository.findPrimary(CONN_ID)).thenReturn(Optional.of(conn));
+        when(connectionRepository.findById(CONN_ID)).thenReturn(Optional.of(conn));
         when(catalogItemRepository.findEditedItems(CONN_ID)).thenReturn(List.of());
 
         Map<String, Object> body = service.getCatalogFull(CONN_ID);

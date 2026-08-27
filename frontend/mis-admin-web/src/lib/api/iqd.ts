@@ -46,6 +46,8 @@ export interface IqdConnectionSavePayload {
   timeout_seconds?: number;
   language?: string;
   enabled?: boolean;
+  /** 同步保存：是否允许平台写回 MDL（U7/Q4）。 */
+  mdl_writeback_enabled?: boolean;
 }
 
 export interface IqdConnectionTest {

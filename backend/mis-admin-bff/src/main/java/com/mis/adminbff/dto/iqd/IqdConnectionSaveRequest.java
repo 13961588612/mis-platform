@@ -33,6 +33,9 @@ public class IqdConnectionSaveRequest {
 
     private Boolean enabled = true;
 
+    /** 是否允许平台写回 MDL（U7/Q4）；缺省按 false 处理。 */
+    private Boolean mdlWritebackEnabled;
+
     public String getName() {
         return name;
     }
@@ -105,6 +108,14 @@ public class IqdConnectionSaveRequest {
         this.enabled = enabled;
     }
 
+    public Boolean getMdlWritebackEnabled() {
+        return mdlWritebackEnabled;
+    }
+
+    public void setMdlWritebackEnabled(Boolean mdlWritebackEnabled) {
+        this.mdlWritebackEnabled = mdlWritebackEnabled;
+    }
+
     @JsonProperty("base_url")
     public String baseUrlWire() {
         return baseUrl;
@@ -128,5 +139,10 @@ public class IqdConnectionSaveRequest {
     @JsonProperty("timeout_seconds")
     public Integer timeoutSecondsWire() {
         return timeoutSeconds;
+    }
+
+    @JsonProperty("mdl_writeback_enabled")
+    public Boolean mdlWritebackEnabledWire() {
+        return mdlWritebackEnabled;
     }
 }
