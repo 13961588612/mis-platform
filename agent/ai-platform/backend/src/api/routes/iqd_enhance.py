@@ -58,6 +58,10 @@ class EnhanceSyncRequest(BaseModel):
     wait: bool = Field(
         default=False, description="false=自动触发接受即返回; true=立即同步/重试阻塞完成"
     )
+    scope: str = Field(
+        default="materials",
+        description="构建范围 materials(一期物料) | model(二期模型写回)",
+    )
 
 
 @router.post("/sql-pairs/translate")
@@ -122,7 +126,7 @@ async def enhance_sync(
     """
     try:
         coordinator = SyncCoordinator()
-        result: SyncResult = await coordinator.trigger(req.connection_id, req.wait)
+        result: SyncResult = await coordinator.trigger(req.connection_id, req.wait, req.scope)
         return success(
             data=result.model_dump(),
             message="accepted" if not req.wait else "ok",
@@ -130,6 +134,56 @@ async def enhance_sync(
         )
     except Exception as exc:  # noqa: BLE001
         logger.error("IQD enhance_sync failed", error=str(exc))
+        return error_response(
+            code=9000,
+            message=str(exc),
+            http_status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            trace_id=trace_id,
+        )
+
+
+@router.post("/enhance/reconcile")
+async def enhance_reconcile(
+    req: EnhanceSyncRequest,
+    current_user: dict[str, Any] = Depends(get_current_user),
+    trace_id: str = Depends(get_trace_id),
+    authorization: str = Header(default=""),
+) -> dict[str, Any]:
+    """对账清扫（S3 / 周期或手动）：比对 WrenAI 当前 mdl_hash 与 built_mdl_hash，漂移则重建模。
+
+    先经 :class:`IqdCli.get_current_mdl_hash` 取 WrenAI 当前部署 hash，与
+    mis-iqd 记录的 ``built_mdl_hash`` 比对：不一致 ⇒ 置 ``stale_drift=true``；
+    随后按 ``model`` 范围触发重建（重新派生完整 MDL 并部署），使平台基线重新收敛为权威。
+
+    - 比对失败（WrenAI 不可达返回 None）→ 不判定漂移，仍尝试按 model 重建（恢复兜底）。
+    - 重建走与 ``/enhance/sync(scope=model)`` 相同的 :class:`SyncCoordinator` 窗口。
+    """
+    from src.adapters.iqd_cli import IqdCli
+    from src.adapters.iqd_config_client import IqdConfigClient
+
+    try:
+        client = IqdConfigClient()
+        status = await client.get_catalog_sync_status(req.connection_id)
+        built_hash = status.get("mdl_hash") if isinstance(status, dict) else None
+        current = await IqdCli().get_current_mdl_hash()
+        # 漂移判定：能取到双方 hash 且不一致 ⇒ 标记 stale_drift
+        if current is not None and built_hash is not None and current != built_hash:
+            await client.set_stale_drift(status.get("connection_id") or req.connection_id, True)
+            logger.info(
+                "IQD external drift detected",
+                built=built_hash,
+                current=current,
+            )
+        # 按 model 范围触发重建（收敛平台基线为权威）
+        coordinator = SyncCoordinator()
+        result: SyncResult = await coordinator.trigger(req.connection_id, req.wait, "model")
+        return success(
+            data=result.model_dump(),
+            message="reconcile accepted" if not req.wait else "ok",
+            trace_id=trace_id,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.error("IQD enhance_reconcile failed", error=str(exc))
         return error_response(
             code=9000,
             message=str(exc),

@@ -55,6 +55,14 @@ public class IqdSyncJob {
     @Column(name = "index_error", columnDefinition = "text")
     private String indexError;
 
+    /** 本次 build 对应连接 revision（G7：model 写回回填用）。 */
+    @Column(name = "edit_revision")
+    private Long editRevision;
+
+    /** 本次同步来源：materials（一期物料）/ model（二期模型写回）。 */
+    @Column(name = "edit_source")
+    private String editSource;
+
     @Column(name = "created_at", nullable = false)
     private Instant createdAt;
 
@@ -147,6 +155,22 @@ public class IqdSyncJob {
 
     public void setIndexError(String indexError) {
         this.indexError = indexError;
+    }
+
+    public Long getEditRevision() {
+        return editRevision;
+    }
+
+    public void setEditRevision(Long editRevision) {
+        this.editRevision = editRevision;
+    }
+
+    public String getEditSource() {
+        return editSource;
+    }
+
+    public void setEditSource(String editSource) {
+        this.editSource = editSource;
     }
 
     public Instant getCreatedAt() {

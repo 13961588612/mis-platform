@@ -77,6 +77,14 @@ public class IqdCatalogItem {
     @Column(name = "editable", nullable = false)
     private Integer editable = 0;
 
+    /** 该节点最后被平台编辑所属 revision；NULL=从未编辑（沿用 WrenAI 镜像）。 */
+    @Column(name = "edit_revision")
+    private Long editRevision;
+
+    /** 该节点被编入的 mdl_hash（批量回填盖章）；NULL=未同步。 */
+    @Column(name = "wren_ref_id")
+    private String wrenRefId;
+
     @Column(name = "last_seen_at")
     private Instant lastSeenAt;
 
@@ -220,6 +228,22 @@ public class IqdCatalogItem {
 
     public void setEditable(Integer editable) {
         this.editable = editable;
+    }
+
+    public Long getEditRevision() {
+        return editRevision;
+    }
+
+    public void setEditRevision(Long editRevision) {
+        this.editRevision = editRevision;
+    }
+
+    public String getWrenRefId() {
+        return wrenRefId;
+    }
+
+    public void setWrenRefId(String wrenRefId) {
+        this.wrenRefId = wrenRefId;
     }
 
     public Instant getLastSeenAt() {

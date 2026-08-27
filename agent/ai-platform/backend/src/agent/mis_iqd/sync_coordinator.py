@@ -63,12 +63,15 @@ class SyncCoordinator:
                     return None
         return None
 
-    async def trigger(self, connection_id: int | None, wait: bool) -> SyncResult:
+    async def trigger(
+        self, connection_id: int | None, wait: bool, scope: str = "materials"
+    ) -> SyncResult:
         """触发一次增强同步。
 
         Args:
             connection_id: 问数连接 id（``None`` 解析主连接）。
             wait: ``True``=立即执行并返回完整结果；``False``=合并窗口后异步执行，立即返回 accepted。
+            scope: 构建范围 ``materials``（一期物料）/ ``model``（二期模型写回）。
 
         Returns:
             ``SyncResult``（wait=true 为完整结果；wait=false 为 accepted 占位，coalesced 标记是否合并）。
@@ -90,16 +93,16 @@ class SyncCoordinator:
                 return SyncResult(connection_id=cid, coalesced=True, build_status="pending")
             if wait:
                 # 立即同步/重试：阻塞至 build+index 完成
-                return await self._run(cid)
+                return await self._run(cid, scope)
             # 自动触发：启动 debounce 窗口，窗口内累计触发合并为一次 build
-            self._tasks[cid] = asyncio.create_task(self._debounced_run(cid))
+            self._tasks[cid] = asyncio.create_task(self._debounced_run(cid, scope))
             return SyncResult(connection_id=cid, coalesced=False, build_status="pending")
 
-    async def _debounced_run(self, connection_id: int) -> SyncResult:
+    async def _debounced_run(self, connection_id: int, scope: str = "materials") -> SyncResult:
         """窗口等待后执行一次 build+index，完成后清理 in-flight 任务。"""
         try:
             await asyncio.sleep(self._window)
-            return await self._run(connection_id)
+            return await self._run(connection_id, scope)
         except Exception as exc:  # noqa: BLE001 - 异常归一为 failed 结果
             logger.error("IQD debounced sync failed", connection_id=connection_id, error=str(exc))
             return SyncResult(
@@ -111,7 +114,7 @@ class SyncCoordinator:
         finally:
             self._tasks.pop(connection_id, None)
 
-    async def _run(self, connection_id: int) -> SyncResult:
+    async def _run(self, connection_id: int, scope: str = "materials") -> SyncResult:
         """执行一次完整 build+index+回填。"""
         service = IqdAskService()
-        return await service.trigger_build_index(connection_id, wait=True)
+        return await service.trigger_build_index(connection_id, wait=True, scope=scope)

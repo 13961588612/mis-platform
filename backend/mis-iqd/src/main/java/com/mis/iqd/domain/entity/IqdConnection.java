@@ -59,6 +59,31 @@ public class IqdConnection {
     @Column(nullable = false)
     private Integer enabled = 1;
 
+    /** 平台当前编辑版本（单调递增，从 0 起）。每次编辑成功 +1。 */
+    @Column(name = "current_edit_revision", nullable = false)
+    private Long currentEditRevision = 0L;
+
+    /** 已写回 WrenAI 的版本（build 成功回调推进）。 */
+    @Column(name = "built_edit_revision", nullable = false)
+    private Long builtEditRevision = 0L;
+
+    /** 按连接灰度闸门：开启后平台内改 catalog 才回写 WrenAI（U7/Q4）。 */
+    @Column(name = "mdl_writeback_enabled", nullable = false)
+    private Boolean mdlWritebackEnabled = false;
+
+    /** 最近一次成功写回的 mdl_hash（WrenAI 部署产物标识）。 */
+    @Column(name = "built_mdl_hash")
+    private String builtMdlHash;
+
+    /** 【G7】基线完整 MDL（最近一次 WrenAI 同步快照，context build --mdl 输入）。 */
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(name = "mdl_raw", columnDefinition = "jsonb")
+    private String mdlRaw;
+
+    /** 【S3】外部漂移标记：WrenAI 当前 mdl_hash 与 built_mdl_hash 不一致。 */
+    @Column(name = "stale_drift", nullable = false)
+    private Boolean staleDrift = false;
+
     @Column(name = "created_at", nullable = false)
     private Instant createdAt;
 
@@ -167,6 +192,54 @@ public class IqdConnection {
 
     public void setEnabled(Integer enabled) {
         this.enabled = enabled;
+    }
+
+    public Long getCurrentEditRevision() {
+        return currentEditRevision;
+    }
+
+    public void setCurrentEditRevision(Long currentEditRevision) {
+        this.currentEditRevision = currentEditRevision;
+    }
+
+    public Long getBuiltEditRevision() {
+        return builtEditRevision;
+    }
+
+    public void setBuiltEditRevision(Long builtEditRevision) {
+        this.builtEditRevision = builtEditRevision;
+    }
+
+    public Boolean getMdlWritebackEnabled() {
+        return mdlWritebackEnabled;
+    }
+
+    public void setMdlWritebackEnabled(Boolean mdlWritebackEnabled) {
+        this.mdlWritebackEnabled = mdlWritebackEnabled;
+    }
+
+    public String getBuiltMdlHash() {
+        return builtMdlHash;
+    }
+
+    public void setBuiltMdlHash(String builtMdlHash) {
+        this.builtMdlHash = builtMdlHash;
+    }
+
+    public String getMdlRaw() {
+        return mdlRaw;
+    }
+
+    public void setMdlRaw(String mdlRaw) {
+        this.mdlRaw = mdlRaw;
+    }
+
+    public Boolean getStaleDrift() {
+        return staleDrift;
+    }
+
+    public void setStaleDrift(Boolean staleDrift) {
+        this.staleDrift = staleDrift;
     }
 
     public Instant getCreatedAt() {

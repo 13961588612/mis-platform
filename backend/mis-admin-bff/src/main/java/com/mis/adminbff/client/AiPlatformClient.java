@@ -223,13 +223,39 @@ public class AiPlatformClient extends AbstractDownstreamClient {
      * @return 平台响应 data（SyncResult：build/index 状态 + mdl_hash + 回填计数）
      */
     public Map<String, Object> syncEnhancements(
-            Long connectionId, Boolean wait, String authorization, String traceId) {
+            Long connectionId, Boolean wait, String scope, String authorization, String traceId) {
         Consumer<HttpHeaders> headers = buildHeaders(authorization, traceId);
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("connection_id", connectionId);
         body.put("wait", wait == null ? Boolean.FALSE : wait);
+        body.put("scope", scope == null || scope.isBlank() ? "materials" : scope);
         return block(client().post()
                 .uri("/api/v1/iqd/enhance/sync")
+                .headers(headers)
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(body)
+                .retrieve()
+                .bodyToMono(MAP_RESULT_TYPE));
+    }
+
+    /**
+     * 触发对账清扫（二期 S3 / 周期或手动）：调平台 Worker {@code /api/v1/iqd/enhance/reconcile}。
+     *
+     * <p>平台比对 WrenAI 当前 mdl_hash 与 built_mdl_hash，漂移则置 stale_drift 并重按
+     * model 范围重建（使平台基线重新收敛为权威）。BFF 定时清扫任务（无用户上下文）调用本方法，
+     * 透传头留空（平台侧按服务身份 / 内部放行处理）。
+     *
+     * @param connectionId 问数连接 id
+     * @return 平台响应 data（{@code {triggered}} 等）
+     */
+    public Map<String, Object> reconcile(Long connectionId) {
+        Consumer<HttpHeaders> headers = buildHeaders(null, null);
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("connection_id", connectionId);
+        body.put("wait", Boolean.FALSE);
+        body.put("scope", "model");
+        return block(client().post()
+                .uri("/api/v1/iqd/enhance/reconcile")
                 .headers(headers)
                 .contentType(MediaType.APPLICATION_JSON)
                 .bodyValue(body)

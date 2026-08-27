@@ -7,21 +7,34 @@
  */
 
 import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
-import { RefreshCw, Save, ShieldCheck } from 'lucide-react';
+import { Pencil, RefreshCw, RotateCcw, Save, ShieldCheck } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { Textarea } from '@/components/ui/textarea';
 import { PageHeader } from '@/components/common/page-header';
 import { buildAppBreadcrumbs } from '@/components/common/app-breadcrumbs';
 import { Badge } from '@/components/ui/badge';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import {
   getIqdConfig,
   listIqdCatalog,
   saveIqdConfig,
   setIqdCatalogInScope,
+  updateIqdCatalogNode,
+  getIqdCatalogSyncStatus,
   type IqdCatalogItem,
   type IqdConnectionConfig,
+  type IqdDependents,
 } from '@/lib/api/iqd';
+import { CatalogSyncStatusBar } from './components/CatalogSyncStatusBar';
 
 const KIND_LABEL: Record<string, string> = {
   table: '表',
@@ -167,6 +180,121 @@ export function IqdCatalogPage() {
   const inScopeCount = useMemo(() => items.filter((it) => it.in_scope).length, [items]);
   const selectedCount = selected.size;
 
+  // ===================== 二期：语义模型编辑（P0-1~P0-12）=====================
+  /** 支持 expression 编辑的 catalog 类型（其余类型仅展示 display_name / description）。 */
+  const EXPRESSION_KINDS = useMemo(
+    () => new Set(['model', 'view', 'relationship', 'cube', 'measure', 'metric', 'dimension']),
+    [],
+  );
+  /** 仅 mdl_writeback_enabled && editable 的节点允许编辑（Q4 闸门 + 一期 editable）。 */
+  const canEditItem = useCallback(
+    (it: IqdCatalogItem) => Boolean(config?.mdl_writeback_enabled) && Boolean(it.editable),
+    [config],
+  );
+
+  const [editing, setEditing] = useState<IqdCatalogItem | null>(null);
+  const [editForm, setEditForm] = useState<{ display_name: string; description: string; expression: string }>({
+    display_name: '',
+    description: '',
+    expression: '',
+  });
+  const [editBaseRevision, setEditBaseRevision] = useState<number>(0);
+  const [editError, setEditError] = useState<string | null>(null);
+  const [editSaving, setEditSaving] = useState(false);
+  /** 422 引用阻断：直接引用方列表（禁用确认）。 */
+  const [editDependents, setEditDependents] = useState<IqdDependents | null>(null);
+  /** 409 乐观并发冲突：被服务端告知的当前版本（引导重读）。 */
+  const [editConflictRevision, setEditConflictRevision] = useState<number | null>(null);
+
+  const openEdit = useCallback(
+    async (it: IqdCatalogItem) => {
+      if (connectionId == null || !canEditItem(it)) return;
+      setEditing(it);
+      setEditForm({
+        display_name: it.display_name ?? '',
+        description: it.description ?? '',
+        expression: it.expression ?? '',
+      });
+      setEditError(null);
+      setEditDependents(null);
+      setEditConflictRevision(null);
+      // base_revision = 连接当前 current_edit_revision（mis-iqd 与之比对乐观并发）
+      try {
+        const status = await getIqdCatalogSyncStatus(connectionId);
+        setEditBaseRevision(status?.current_edit_revision ?? 0);
+      } catch {
+        setEditBaseRevision(0);
+      }
+    },
+    [connectionId, canEditItem],
+  );
+
+  const rereadVersion = useCallback(async () => {
+    if (connectionId == null) return;
+    try {
+      const status = await getIqdCatalogSyncStatus(connectionId);
+      setEditBaseRevision(status?.current_edit_revision ?? 0);
+      setEditConflictRevision(null);
+      setEditError(null);
+    } catch {
+      /* 忽略：重读失败不影响用户继续编辑 */
+    }
+  }, [connectionId]);
+
+  const submitEdit = useCallback(async () => {
+    if (editing == null || connectionId == null) return;
+    setEditSaving(true);
+    setEditError(null);
+    const payload = {
+      item_key: editing.item_key,
+      kind: editing.kind,
+      patch: {
+        display_name: editForm.display_name || null,
+        description: editForm.description || null,
+        expression: editForm.expression || null,
+      },
+      base_revision: editBaseRevision,
+      idempotency_key: crypto.randomUUID(),
+    };
+    try {
+      await updateIqdCatalogNode(connectionId, payload);
+      // 乐观 UI：本地即时反映编辑结果（display_name/description/expression + source=platform_edit）
+      const nextSource = 'platform_edit';
+      setItems((prev) =>
+        prev.map((x) =>
+          x.item_key === editing.item_key
+            ? {
+                ...x,
+                display_name: editForm.display_name || null,
+                description: editForm.description || null,
+                expression: editForm.expression || null,
+                source: nextSource,
+              }
+            : x,
+        ),
+      );
+      setEditing(null);
+    } catch (e) {
+      const err = e as Error & {
+        code?: number;
+        data?: { current_edit_revision?: number; dependents?: IqdDependents };
+      };
+      if (err.code === 40900) {
+        // 乐观并发冲突：服务端返回最新版本，引导「重读版本」后重试（U2）
+        setEditConflictRevision(err.data?.current_edit_revision ?? null);
+        setEditError(`版本已变更（当前 ${err.data?.current_edit_revision ?? '?'}），请点「重读版本」后重试`);
+      } else if (err.code === 42200) {
+        // 引用阻断：列出直接引用方并禁用确认（P1-1 / U1）
+        setEditDependents(err.data?.dependents ?? []);
+        setEditError('该节点被直接引用，禁止改名/删除');
+      } else {
+        setEditError(err.message || '编辑 catalog 节点失败');
+      }
+    } finally {
+      setEditSaving(false);
+    }
+  }, [editing, connectionId, editForm, editBaseRevision]);
+
   return (
     <div className="flex h-full min-h-0 flex-col">
       <PageHeader
@@ -202,6 +330,9 @@ export function IqdCatalogPage() {
           保存连接
         </Button>
       </div>
+
+      {/* 二期：模型编辑同步状态条（5000ms 轮询；STALE_DRIFT 横幅 + 重新导入） */}
+      <CatalogSyncStatusBar connectionId={connectionId} />
 
       {error ? (
         <div className="mb-3 rounded-md border border-destructive/30 bg-destructive/5 p-3 text-xs text-destructive">
@@ -303,7 +434,20 @@ export function IqdCatalogPage() {
                     {it.item_key}
                   </td>
                   <td className="truncate px-3 py-2" title={it.display_name ?? ''}>
-                    {it.display_name || '—'}
+                    <div className="flex items-center gap-2">
+                      <span className="truncate">{it.display_name || '—'}</span>
+                      {canEditItem(it) ? (
+                        <Button
+                          size="icon"
+                          variant="ghost"
+                          className="h-6 w-6 shrink-0"
+                          onClick={() => void openEdit(it)}
+                          title="编辑语义模型节点"
+                        >
+                          <Pencil className="h-3.5 w-3.5" />
+                        </Button>
+                      ) : null}
+                    </div>
                   </td>
                   <td className="px-3 py-2 text-xs">
                     {it.sensitive_level === 'high' ? (
@@ -332,6 +476,95 @@ export function IqdCatalogPage() {
           </tbody>
         </table>
       </div>
+
+      {/* 二期：语义模型编辑弹窗（P0-1~P0-12） */}
+      <Dialog open={editing != null} onOpenChange={(o) => { if (!o) setEditing(null); }}>
+        <DialogContent className="max-w-xl">
+          <DialogHeader>
+            <DialogTitle>编辑语义模型节点</DialogTitle>
+            <DialogDescription className="font-mono text-xs">
+              {editing?.item_key}
+              {editing ? ` · ${KIND_LABEL[editing.kind] ?? editing.kind}` : ''}
+            </DialogDescription>
+          </DialogHeader>
+
+          {editing ? (
+            <div className="flex flex-col gap-4">
+              <div className="flex flex-col gap-1.5">
+                <label className="text-xs text-muted-foreground">展示名（display_name）</label>
+                <Input
+                  value={editForm.display_name}
+                  onChange={(e) => setEditForm((f) => ({ ...f, display_name: e.target.value }))}
+                  placeholder="展示名"
+                />
+              </div>
+              <div className="flex flex-col gap-1.5">
+                <label className="text-xs text-muted-foreground">描述（description）</label>
+                <Textarea
+                  value={editForm.description}
+                  onChange={(e) => setEditForm((f) => ({ ...f, description: e.target.value }))}
+                  placeholder="描述"
+                  rows={3}
+                />
+              </div>
+              {EXPRESSION_KINDS.has(editing.kind) ? (
+                <div className="flex flex-col gap-1.5">
+                  <label className="text-xs text-muted-foreground">表达式（expression）</label>
+                  <Textarea
+                    value={editForm.expression}
+                    onChange={(e) => setEditForm((f) => ({ ...f, expression: e.target.value }))}
+                    placeholder="表达式"
+                    rows={3}
+                    className="font-mono text-xs"
+                  />
+                </div>
+              ) : null}
+
+              {editError ? (
+                <div className="rounded-md border border-destructive/30 bg-destructive/5 p-2.5 text-xs text-destructive">
+                  {editError}
+                  {editConflictRevision != null ? (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="ml-2"
+                      onClick={() => void rereadVersion()}
+                    >
+                      <RotateCcw className="h-3.5 w-3.5" />
+                      重读版本
+                    </Button>
+                  ) : null}
+                </div>
+              ) : null}
+
+              {editDependents && editDependents.length > 0 ? (
+                <div className="rounded-md border border-warning/40 bg-warning/5 p-2.5 text-xs text-warning">
+                  <div className="mb-1 font-semibold">直接引用方（禁止改名/删除）：</div>
+                  <ul className="ml-4 list-disc">
+                    {editDependents.map((d) => (
+                      <li key={d.item_key} className="font-mono">
+                        {d.item_key} <span className="text-muted-foreground">({d.kind})</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setEditing(null)} disabled={editSaving}>
+              取消
+            </Button>
+            <Button
+              onClick={() => void submitEdit()}
+              disabled={editSaving || (editDependents != null && editDependents.length > 0)}
+            >
+              {editSaving ? '保存中…' : '保存编辑'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

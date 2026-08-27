@@ -24,6 +24,7 @@ import com.mis.iqd.api.dto.IqdSyncJobVO;
 import com.mis.iqd.domain.entity.IqdAskLog;
 import com.mis.iqd.domain.entity.IqdCatalogItem;
 import com.mis.iqd.domain.entity.IqdConnection;
+import com.mis.iqd.domain.entity.IqdEditIdempotency;
 import com.mis.iqd.domain.entity.IqdKnowledge;
 import com.mis.iqd.domain.entity.IqdMaskRule;
 import com.mis.iqd.domain.entity.IqdRowScopeDimension;
@@ -40,6 +41,7 @@ import com.mis.iqd.domain.repository.IqdRowScopeDimensionRepository;
 import com.mis.iqd.domain.repository.IqdScopePolicyRepository;
 import com.mis.iqd.domain.repository.IqdSqlPairRepository;
 import com.mis.iqd.domain.repository.IqdSyncJobRepository;
+import com.mis.iqd.domain.repository.IqdEditIdempotencyRepository;
 import com.mis.iqd.domain.repository.IqdTableAclRepository;
 import com.mis.iqd.support.IdGenerator;
 import org.slf4j.Logger;
@@ -94,6 +96,7 @@ public class IqdAdminService {
     private final IqdSqlPairRepository sqlPairRepository;
     private final IqdKnowledgeRepository knowledgeRepository;
     private final IqdSyncJobRepository syncJobRepository;
+    private final IqdEditIdempotencyRepository editIdempotencyRepository;
     private final IqdChangeEventPublisher changeEventPublisher;
     private final ObjectMapper objectMapper;
 
@@ -108,6 +111,7 @@ public class IqdAdminService {
             IqdSqlPairRepository sqlPairRepository,
             IqdKnowledgeRepository knowledgeRepository,
             IqdSyncJobRepository syncJobRepository,
+            IqdEditIdempotencyRepository editIdempotencyRepository,
             IqdChangeEventPublisher changeEventPublisher,
             ObjectMapper objectMapper) {
         this.connectionRepository = connectionRepository;
@@ -120,6 +124,7 @@ public class IqdAdminService {
         this.sqlPairRepository = sqlPairRepository;
         this.knowledgeRepository = knowledgeRepository;
         this.syncJobRepository = syncJobRepository;
+        this.editIdempotencyRepository = editIdempotencyRepository;
         this.changeEventPublisher = changeEventPublisher;
         this.objectMapper = objectMapper;
     }
@@ -337,6 +342,16 @@ public class IqdAdminService {
             return 0;
         }
         ensureConnection(connectionId);
+        // G7：以本次 WrenAI 同步原始 MDL 作为后续「平台编辑 → 派生完整 MDL」基线快照
+        connectionRepository.findPrimary(connectionId).ifPresent(c -> {
+            c.setMdlRaw(mdlJson);
+            c.setStaleDrift(false);
+            c.setUpdatedAt(Instant.now());
+            connectionRepository.save(c);
+        });
+        // Q2 重导入 = 新基线：清空历史 edit_revision / wren_ref_id（回归 WrenAI 镜像）
+        catalogItemRepository.resetEditRevision(connectionId);
+
         List<IqdCatalogItemSaveRequest> items = new ArrayList<>();
         String ds = defaultString(datasource, "pg_main");
         String sch = defaultString(schema, "public");
@@ -1237,6 +1252,291 @@ public class IqdAdminService {
                 .orElse(null);
     }
 
+    // ================================================================ 二期：语义模型编辑（P0-1~P0-12）
+
+    /**
+     * 编辑 catalog 节点（写回 MDL 前置：乐观并发 + 幂等 + 引用校验）。
+     *
+     * <p>流程：① 仅 {@code mdl_writeback_enabled=true} 连接允许写回；② 同
+     * {@code idempotency_key} 命中即返回首次结果且不二次 bump；③ {@code base_revision}
+     * 与连接当前版本不符 → 409；④ 改 display_name（即改名）且被直接引用 → 422；⑤ 否则
+     * bump {@code current_edit_revision}、置 {@code edit_revision} 与 {@code source=platform_edit}。
+     *
+     * @return {@code {edit_revision, edit_status, wren_ref_id}}
+     */
+    @Transactional
+    public Map<String, Object> updateCatalogNode(Long connectionId, String itemKey, String kind,
+            Map<String, Object> patch, Long baseRevision, String idempotencyKey) {
+        IqdConnection conn = connectionRepository.findPrimary(connectionId)
+                .orElseThrow(() -> new BusinessException(ResultCode.NOT_FOUND,
+                        "问数连接不存在: " + connectionId));
+        // ① 闸门：仅开启写回的连接允许真正 bump（U7/Q4 按连接灰度）
+        if (!Boolean.TRUE.equals(conn.getMdlWritebackEnabled())) {
+            throw new BusinessException(40300, "该连接未开启 MDL 写回（mdl_writeback_enabled=false）", null);
+        }
+        // ② 幂等去重：同 key 命中返回首次结果，不二次 bump（P0-12）
+        if (idempotencyKey != null && !idempotencyKey.isBlank()) {
+            Optional<IqdEditIdempotency> prev = editIdempotencyRepository
+                    .findByConnectionIdAndIdempotencyKey(connectionId, idempotencyKey);
+            if (prev.isPresent()) {
+                Map<String, Object> r = new LinkedHashMap<>();
+                r.put("edit_revision", prev.get().getEditRevision());
+                r.put("edit_status", "EDITED_UNSYNCED");
+                r.put("wren_ref_id", null);
+                return r;
+            }
+        }
+        long current = conn.getCurrentEditRevision() == null ? 0L : conn.getCurrentEditRevision();
+        // ③ 乐观并发：base_revision 不符即冲突（U2）
+        if (baseRevision != null && !baseRevision.equals(current)) {
+            Map<String, Object> data = new LinkedHashMap<>();
+            data.put("current_edit_revision", current);
+            throw new BusinessException(40900, "并发编辑冲突：当前版本已变更", data);
+        }
+        // 定位被编辑节点
+        IqdCatalogItem item = catalogItemRepository.findByConnectionIdAndItemKey(connectionId, itemKey)
+                .orElseThrow(() -> new BusinessException(ResultCode.NOT_FOUND, "catalog 节点不存在: " + itemKey));
+        // ④ 改名（改 display_name）被直接引用 → 422（U1/Q3 仅直接引用方，不递归）
+        if (patch != null && patch.containsKey("display_name")) {
+            Object nextName = patch.get("display_name");
+            boolean renamed = nextName != null && !String.valueOf(nextName).equals(item.getDisplayName());
+            if (renamed) {
+                List<Map<String, Object>> deps = validateCatalogRefs(connectionId, itemKey, "RENAME");
+                if (!deps.isEmpty()) {
+                    Map<String, Object> data = new LinkedHashMap<>();
+                    data.put("dependents", deps);
+                    throw new BusinessException(42200, "该节点被引用，禁止改名", data);
+                }
+            }
+        }
+        // ⑤ bump 连接级版本并应用 patch
+        long next = current + 1;
+        conn.setCurrentEditRevision(next);
+        connectionRepository.save(conn);
+
+        if (patch != null) {
+            if (patch.containsKey("display_name") && patch.get("display_name") != null) {
+                item.setDisplayName(str(patch.get("display_name")));
+            }
+            if (patch.containsKey("description")) {
+                item.setDescription(str(patch.get("description")));
+            }
+            if (patch.containsKey("expression")) {
+                item.setExpression(str(patch.get("expression")));
+            }
+        }
+        item.setSource("platform_edit");
+        item.setEditRevision(next);
+        item.setUpdatedAt(Instant.now());
+        catalogItemRepository.save(item);
+
+        // 记录幂等键（供重提交去重）
+        if (idempotencyKey != null && !idempotencyKey.isBlank()) {
+            editIdempotencyRepository.save(new IqdEditIdempotency(connectionId, idempotencyKey, next));
+        }
+
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("edit_revision", next);
+        result.put("edit_status", "EDITED_UNSYNCED");
+        result.put("wren_ref_id", null);
+        return result;
+    }
+
+    /**
+     * 校验 catalog 节点的直接引用方（不递归展开）。
+     *
+     * <p>扫描：① 同连接下 expression 含本 item_key 的 catalog 项（cube/relationship/
+     * metric/dimension/view 等）；② 引用本 key 的 sql_pair（wren_sql/native_sql）；
+     * ③ 关联本 key 的 knowledge（related_item_keys）。op∈{EDIT,DELETE,RENAME}。
+     *
+     * @return 直接引用方列表（{@code item_key, kind}），最多 50 条
+     */
+    @Transactional(readOnly = true)
+    public List<Map<String, Object>> validateCatalogRefs(Long connectionId, String itemKey, String op) {
+        ensureConnection(connectionId);
+        List<Map<String, Object>> deps = new ArrayList<>();
+        String needle = itemKey == null ? "" : itemKey;
+        if (!needle.isEmpty()) {
+            // ① catalog 项 expression 引用
+            for (IqdCatalogItem it : catalogItemRepository.findByConnectionId(connectionId)) {
+                String expr = it.getExpression();
+                if (expr != null && expr.contains(needle)) {
+                    Map<String, Object> d = new LinkedHashMap<>();
+                    d.put("item_key", it.getItemKey());
+                    d.put("kind", it.getKind());
+                    deps.add(d);
+                }
+            }
+            // ② sql_pair 引用
+            for (IqdSqlPair p : sqlPairRepository.findByConnectionIdOrderByIdDesc(connectionId)) {
+                String sql = (p.getWrenSql() == null ? "" : p.getWrenSql())
+                        + " " + (p.getNativeSql() == null ? "" : p.getNativeSql());
+                if (sql.contains(needle)) {
+                    Map<String, Object> d = new LinkedHashMap<>();
+                    d.put("item_key", "sql_pair:" + p.getId());
+                    d.put("kind", "sql_pair");
+                    deps.add(d);
+                }
+            }
+            // ③ knowledge 引用
+            for (IqdKnowledge k : knowledgeRepository.findByConnectionIdOrderByIdDesc(connectionId)) {
+                String rk = k.getRelatedItemKeys();
+                if (rk != null && rk.contains(needle)) {
+                    Map<String, Object> d = new LinkedHashMap<>();
+                    d.put("item_key", "knowledge:" + k.getId());
+                    d.put("kind", "knowledge");
+                    deps.add(d);
+                }
+            }
+        }
+        // 截断至 50 条（仅留直接引用方，不递归）
+        if (deps.size() > 50) {
+            deps = deps.subList(0, 50);
+        }
+        return deps;
+    }
+
+    /**
+     * 按 revision 批量回填盖章（P0-8 / U8 断点续盖）：把本次 build 纳入的已编辑节点
+     * （{@code edit_revision ≤ built 且未盖此 hash}）置 {@code wren_ref_id}，并推进连接级
+     * {@code built_edit_revision / built_mdl_hash / stale_drift=false}（收敛）。
+     *
+     * @return 实际盖章节点数
+     */
+    @Transactional
+    public int backfillCatalogSync(Long connectionId, String mdlHash, Long builtRevision) {
+        int stamped = catalogItemRepository.stampCatalogSync(connectionId, mdlHash, builtRevision);
+        connectionRepository.findPrimary(connectionId).ifPresent(c -> {
+            c.setBuiltEditRevision(builtRevision);
+            c.setBuiltMdlHash(mdlHash);
+            c.setStaleDrift(false);
+            connectionRepository.save(c);
+        });
+        return stamped;
+    }
+
+    /**
+     * 取连接级编辑同步状态（前端 CatalogSyncStatusBar 渲染）。
+     *
+     * <p>返回 8 字段：connection_id / current_edit_revision / built_edit_revision /
+     * edit_status / build_status / index_status / mdl_hash / stale_drift。
+     * edit_status 派生（不落库）：STALE_DRIFT / EDITED_UNSYNCED / SYNCING /
+     * SYNC_FAILED / SYNCED。
+     */
+    @Transactional(readOnly = true)
+    public Map<String, Object> getCatalogSyncStatus(Long connectionId) {
+        IqdConnection conn = connectionRepository.findPrimary(connectionId)
+                .orElseThrow(() -> new BusinessException(ResultCode.NOT_FOUND,
+                        "问数连接不存在: " + connectionId));
+        IqdSyncJob latest = syncJobRepository.findTopByConnectionIdOrderByIdDesc(connectionId).orElse(null);
+        long cur = conn.getCurrentEditRevision() == null ? 0L : conn.getCurrentEditRevision();
+        long built = conn.getBuiltEditRevision() == null ? 0L : conn.getBuiltEditRevision();
+
+        String editStatus;
+        if (Boolean.TRUE.equals(conn.getStaleDrift())) {
+            editStatus = "STALE_DRIFT";
+        } else if (cur > built) {
+            editStatus = "EDITED_UNSYNCED";
+        } else if (latest != null && "failed".equals(latest.getBuildStatus())) {
+            editStatus = "SYNC_FAILED";
+        } else if (latest != null && "running".equals(latest.getBuildStatus())) {
+            editStatus = "SYNCING";
+        } else {
+            editStatus = "SYNCED";
+        }
+
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("connection_id", conn.getId());
+        m.put("current_edit_revision", cur);
+        m.put("built_edit_revision", built);
+        m.put("edit_status", editStatus);
+        m.put("build_status", latest == null ? null : latest.getBuildStatus());
+        m.put("index_status", latest == null ? null : latest.getIndexStatus());
+        m.put("mdl_hash", conn.getBuiltMdlHash());
+        m.put("stale_drift", Boolean.TRUE.equals(conn.getStaleDrift()));
+        return m;
+    }
+
+    /**
+     * 触发对账（重新导入收敛）：清空外部漂移标记，交由编排层（BFF / ai-platform）按
+     * model 范围重建并回写（S3 / Q2）。
+     *
+     * @return {@code {triggered:true}}
+     */
+    @Transactional
+    public Map<String, Object> reconcileCatalog(Long connectionId) {
+        ensureConnection(connectionId);
+        connectionRepository.setStaleDrift(connectionId, false);
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("triggered", true);
+        return m;
+    }
+
+    /**
+     * 外部漂移探测：平台期望 MDL 与 WrenAI 实际部署是否背离。
+     *
+     * <p>mis-iqd 不直接调 WrenAI；漂移精确判定由 ai-platform
+     * {@code IqdCli.get_current_mdl_hash} 比对 {@code built_mdl_hash} 完成，命中后回调
+     * {@code /enhance/drift}。本方法提供「是否需要重新对账」的粗判定
+     * （stale_drift 标记 或 存在未同步编辑），供内部探测与诊断。
+     */
+    @Transactional(readOnly = true)
+    public boolean checkExternalDrift(Long connectionId) {
+        IqdConnection conn = connectionRepository.findPrimary(connectionId)
+                .orElseThrow(() -> new BusinessException(ResultCode.NOT_FOUND,
+                        "问数连接不存在: " + connectionId));
+        long cur = conn.getCurrentEditRevision() == null ? 0L : conn.getCurrentEditRevision();
+        long built = conn.getBuiltEditRevision() == null ? 0L : conn.getBuiltEditRevision();
+        return Boolean.TRUE.equals(conn.getStaleDrift()) || cur > built;
+    }
+
+    /**
+     * 取连接完整 MDL 快照 + 已编辑节点（供 ai-platform G7 派生完整 MDL）。
+     *
+     * <p>返回 {@code {connection_id, mdl_raw, edited_items[], current_edit_revision,
+     * built_edit_revision}}：mdl_raw 为最近一次 WrenAI 同步基线快照（JSON 字符串）；
+     * edited_items 为 {@code edit_revision} 非空的平台编辑节点（{@code item_key, kind,
+     * display_name, description, expression}）；current_edit_revision / built_edit_revision
+     * 为连接级编辑版本（设计 §九.1 / §7.2），build 成功回填时 ai-platform 取
+     * current_edit_revision 作为 {@code edit_revision} 传入 backfillCatalogSync（WHERE
+     * {@code edit_revision <= :built} 命中已编辑节点，推进 SYNCED 状态机）。mdl_raw 为空时
+     * 调用方降级为「仅从 edited_items 重建」。
+     */
+    @Transactional(readOnly = true)
+    public Map<String, Object> getCatalogFull(Long connectionId) {
+        IqdConnection conn = connectionRepository.findPrimary(connectionId)
+                .orElseThrow(() -> new BusinessException(ResultCode.NOT_FOUND,
+                        "问数连接不存在: " + connectionId));
+        List<Map<String, Object>> edited = new ArrayList<>();
+        for (IqdCatalogItem it : catalogItemRepository.findEditedItems(connectionId)) {
+            Map<String, Object> m = new LinkedHashMap<>();
+            m.put("item_key", it.getItemKey());
+            m.put("kind", it.getKind());
+            m.put("display_name", it.getDisplayName());
+            m.put("description", it.getDescription());
+            m.put("expression", it.getExpression());
+            edited.add(m);
+        }
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("connection_id", conn.getId());
+        body.put("mdl_raw", conn.getMdlRaw());
+        body.put("edited_items", edited);
+        // 连接级编辑版本：与 getCatalogSyncStatus（T03）契约命名一致，供 ai-platform
+        // trigger_model_build 取 current_edit_revision 回填断点续盖（见设计 §九.1 / §7.2）。
+        body.put("current_edit_revision", conn.getCurrentEditRevision());
+        body.put("built_edit_revision", conn.getBuiltEditRevision());
+        return body;
+    }
+
+    /**
+     * 置外部漂移标记（S3：ai-platform 漂移检测命中回调）。
+     */
+    @Transactional
+    public void setStaleDrift(Long connectionId, boolean drift) {
+        ensureConnection(connectionId);
+        connectionRepository.setStaleDrift(connectionId, drift);
+    }
+
     /**
      * 终态判定：build/index 进入 success/failed 即视为完成（可打时间戳）。
      */
@@ -1283,6 +1583,8 @@ public class IqdAdminService {
         vo.setLastHealthAt(entity.getLastHealthAt());
         vo.setLastHealthMsg(entity.getLastHealthMsg());
         vo.setEnabled(entity.getEnabled() != null && entity.getEnabled() == 1);
+        vo.setMdlWritebackEnabled(entity.getMdlWritebackEnabled() != null
+                && entity.getMdlWritebackEnabled());
         return vo;
     }
 
@@ -1304,6 +1606,7 @@ public class IqdAdminService {
         vo.setInScope(entity.getInScope() != null && entity.getInScope() == 1);
         vo.setSensitiveLevel(entity.getSensitiveLevel());
         vo.setMaskRule(entity.getMaskRule());
+        vo.setEditable(entity.getEditable() != null && entity.getEditable() == 1);
         return vo;
     }
 

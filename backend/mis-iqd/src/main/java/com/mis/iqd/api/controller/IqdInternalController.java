@@ -246,11 +246,52 @@ public class IqdInternalController {
     }
 
     /**
+     * 上报意见见 reportSyncJob；此处为路径占位避免歧义。
+     */
+
+    /**
      * 上报同步作业（ai-platform 经 IqdConfigClient 回调；每连接覆盖写）。
      */
     @PostMapping("/enhance/sync-job")
     public Result<IqdSyncJobVO> reportSyncJob(@RequestBody Map<String, Object> payload) {
         return Result.ok(adminService.reportSyncJob(payload));
+    }
+
+    /**
+     * 取连接完整 MDL 快照 + 已编辑节点（ai-platform {@code get_catalog_full}，
+     * 供 G7 以 mdl_raw 为基线派生完整 MDL）。
+     */
+    @GetMapping("/get-catalog-full")
+    public Result<Map<String, Object>> getCatalogFull(@RequestParam Long connectionId) {
+        Map<String, Object> body = adminService.getCatalogFull(connectionId);
+        return Result.ok(body);
+    }
+
+    /**
+     * 批量回填 catalog 编辑盖章（ai-platform build 成功后回调，P0-8 断点续盖）。
+     */
+    @PostMapping("/enhance/catalog-backfill")
+    public Result<Map<String, Object>> catalogBackfill(@RequestBody Map<String, Object> payload) {
+        Long connectionId = toLong(payload.get("connection_id"));
+        String mdlHash = str(payload.get("mdl_hash"));
+        Long editRevision = toLong(payload.get("edit_revision"));
+        int stamped = adminService.backfillCatalogSync(connectionId, mdlHash, editRevision);
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("stamped_count", stamped);
+        return Result.ok(body);
+    }
+
+    /**
+     * 外部漂移标记（ai-platform 漂移检测命中回调；drift=true 阻断后续 build，false 收敛）。
+     */
+    @PostMapping("/enhance/drift")
+    public Result<Map<String, Object>> setDrift(@RequestBody Map<String, Object> payload) {
+        Long connectionId = toLong(payload.get("connection_id"));
+        boolean drift = Boolean.TRUE.equals(payload.get("drift"));
+        adminService.setStaleDrift(connectionId, drift);
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("ok", true);
+        return Result.ok(body);
     }
 
     /** 取主连接 id（优先 name='default' / 第一条 enabled）。 */

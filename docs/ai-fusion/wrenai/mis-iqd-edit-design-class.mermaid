@@ -1,0 +1,173 @@
+classDiagram
+    %% ============================================================
+    %% mis-iqd 二期「语义模型编辑能力」设计类图（增量）
+    %% 相对评审 mis-iqd-edit-class.mermaid 的增量：
+    %%  - IqdConnection/IqdCatalogItem/IqdSyncJob 加字段
+    %%  - 新增 IqdEditIdempotency（P0-12 幂等）
+    %%  - IqdAdminService 新增/改写方法
+    %%  - IqdController 三端点；IqdInternalController 新增 get-catalog-full / catalog-backfill / drift
+    %%  - BFF 新增 IqdReconcileJobService；IqdFacadeService/IqdClient 增方法
+    %%  - ai-platform 新增 build_mdl_from_catalog / trigger_model_build / get_catalog_full / backfill_catalog_sync / get_current_mdl_hash
+    %%  - 前端新增 CatalogSyncStatusBar
+    %% <<new>> = 本期新增实体/类；<<modify>> = 一期存在、本期扩展
+    %% ============================================================
+
+    class IqdConnection {
+        +Long id
+        +String name
+        +Integer currentEditRevision   %% <<modify>> 平台当前编辑版本
+        +Integer builtEditRevision     %% <<modify>> 已写回 WrenAI 版本
+        +Boolean mdlWritebackEnabled   %% <<modify>> 灰度闸门(U7)
+        +String builtMdlHash           %% <<modify>> 最近成功写回 hash
+        +String mdlRaw                 %% <<new>> 基线完整 MDL(JSONB, G7)
+        +Boolean staleDrift            %% <<new>> 外部漂移标记(S3)
+    }
+
+    class IqdCatalogItem {
+        +Long id
+        +Long connectionId
+        +String kind
+        +String itemKey
+        +String displayName
+        +String expression
+        +String source                 %% db_meta | mdl | platform_edit(<<modify>>)
+        +Integer editable
+        +Long editRevision             %% <<new>> 该节点最后编辑所属 revision
+        +String wrenRefId              %% <<new>> 被编入的 mdl_hash
+    }
+
+    class IqdSyncJob {
+        +Long id
+        +Long connectionId
+        +String buildStatus
+        +String buildMdlHash
+        +String indexStatus
+        +Integer editRevision          %% <<new>> 本次 build 对应 revision
+        +String editSource             %% <<new>> materials | model
+        +String buildError
+        +String indexError
+    }
+
+    class IqdEditIdempotency {
+        <<new>>
+        +Long connectionId
+        +String idempotencyKey
+        +Long editRevision
+        +Instant createdAt
+    }
+
+    class IqdAdminService {
+        +updateCatalogNode(conn, itemKey, kind, patch, baseRevision, idempotencyKey) Map   %% <<modify>> 落地 501
+        +validateCatalogRefs(conn, itemKey, op) List~Map~                                 %% S4/S5/S8 预校验(直接引用)
+        +backfillCatalogSync(conn, mdlHash, builtRevision) int                             %% <<modify>> 批量 UPDATE 盖章
+        +getCatalogSyncStatus(conn) Map                                                    %% 派生 edit_status
+        +reconcileCatalog(conn) void                                                        %% S9 对账
+        +checkExternalDrift(conn) boolean                                                   %% S3 漂移
+        +backfillEnhancementSync(...) int        %% 一期复用(物料)
+        +reportSyncJob(...) IqdSyncJobVO         %% 一期复用
+        +syncCatalogFromMdl(...) int             %% 一期复用(增强:存 mdl_raw+重置 edit_revision)
+    }
+
+    class IqdController {
+        +PUT /api/v1/iqd/catalog/node          %% 501 -> 200
+        +GET /api/v1/iqd/catalog/sync-status
+        +POST /api/v1/iqd/catalog/reconcile
+    }
+
+    class IqdInternalController {
+        +GET /internal/v1/iqd/get-catalog-full     %% <<new>> {mdl_raw, edited_items}
+        +POST /internal/v1/iqd/enhance/catalog-backfill  %% <<new>> 批量盖章
+        +POST /internal/v1/iqd/enhance/drift        %% <<new>> 置 stale_drift
+        +POST /internal/v1/iqd/enhance/backfill     %% 一期复用
+        +POST /internal/v1/iqd/enhance/sync-job     %% 一期复用
+    }
+
+    class IqdFacadeService {
+        +updateCatalogNode(dto, auth, traceId) Map   %% iqd:catalog:edit + 409 处理
+        +getCatalogSyncStatus(conn) Map
+        +reconcileCatalog(conn) Map
+        +triggerSyncBestEffort(...) void            %% 一期复用(scope=model)
+        +syncEnhancements(...) Map                   %% 一期复用
+    }
+
+    class IqdClient {
+        +updateCatalogNode(conn, body) Map          %% <<new>>
+        +getCatalogSyncStatus(conn) Map             %% <<new>>
+        +reconcileCatalog(conn) Map                 %% <<new>>
+        +setStaleDrift(conn, bool) void             %% <<new>>
+    }
+
+    class IqdAclController {
+        +PUT /api/v1/iqd/catalog/node               %% <<new>> iqd:catalog:edit
+        +GET /api/v1/iqd/catalog/sync-status        %% <<new>>
+        +POST /api/v1/iqd/catalog/reconcile          %% <<new>>
+    }
+
+    class IqdReconcileJobService {
+        <<new>>
+        +scanDivergedConnections() void              %% S9 周期对账(@Scheduled)
+    }
+
+    class AiPlatformClient {
+        +syncEnhancements(conn, wait, scope, auth, traceId) Map   %% scope 参数(<<modify>>)
+        +reconcile(conn) Map                                  %% <<new>>
+    }
+
+    class SyncCoordinator {
+        +trigger(conn, wait, scope) SyncResult        %% scope 派发(<<modify>>)
+    }
+
+    class IqdAskService {
+        +trigger_model_build(conn, wait) SyncResult   %% <<new>> G7 入口
+        +build_mdl_from_catalog(conn) tuple            %% <<new>> 派生完整 MDL
+        +trigger_build_index(conn, wait, scope) SyncResult  %% 一期复用(扩 scope)
+        +_parse_mdl_hash(stdout) str                   %% 一期复用
+    }
+
+    class IqdCli {
+        +context_build(mdl_dir, sql_pairs, instructions, allow_write) dict  %% 二期传 mdl_dir(复用)
+        +memory_index() dict                                                  %% 一期复用
+        +get_current_mdl_hash() str|null                                     %% <<new>> S3 漂移
+    }
+
+    class IqdConfigClient {
+        +get_catalog_full(conn) dict                  %% <<new>>
+        +backfill_catalog_sync(payload) dict          %% <<new>>
+        +get_catalog_sync_status(conn) dict           %% <<new>>
+        +set_stale_drift(conn, bool) dict             %% <<new>>
+        +backfill_enhancement_sync(payload) dict       %% 一期复用
+        +report_sync_job(payload) dict                %% 一期复用
+    }
+
+    class IqdCatalogPage {
+        +openEditModal(item)
+        +submitEdit(baseRevision, idempotencyKey)
+        +showDependents(itemKey)   %% S4/S5/S8 依赖提示
+    }
+
+    class CatalogSyncStatusBar {
+        <<new>>
+        +pollCatalogSyncStatus() void
+        +renderEditStatus(editStatus) void   %% 5 态 + STALE_DRIFT 横幅
+    }
+
+    %% ===================== 关系 =====================
+    IqdConnection "1" --> "0..*" IqdCatalogItem : contains
+    IqdConnection "1" --> "0..1" IqdSyncJob : latest job
+    IqdConnection "1" --> "0..*" IqdEditIdempotency : idempotency
+    IqdAdminService ..> IqdConnection : reads/writes revision+mdlRaw+drift
+    IqdAdminService ..> IqdCatalogItem : CRUD + stamp
+    IqdAdminService ..> IqdSyncJob : report
+    IqdAdminService ..> IqdEditIdempotency : dedup
+    IqdController ..> IqdAdminService : updateCatalogNode / status / reconcile
+    IqdInternalController ..> IqdAdminService : callbacks
+    IqdFacadeService ..> IqdClient : calls
+    IqdFacadeService ..> AiPlatformClient : trigger sync(model)
+    IqdAclController ..> IqdFacadeService : routes
+    IqdFacadeService ..> IqdReconcileJobService : schedules
+    IqdReconcileJobService ..> AiPlatformClient : reconcile
+    SyncCoordinator ..> IqdAskService : trigger_model_build / trigger_build_index
+    IqdAskService ..> IqdConfigClient : get_catalog_full / backfill / status / drift
+    IqdAskService ..> IqdCli : context_build / memory_index / get_current_mdl_hash
+    IqdConfigClient ..> IqdInternalController : HTTP callbacks
+    IqdCatalogPage ..> CatalogSyncStatusBar : embeds

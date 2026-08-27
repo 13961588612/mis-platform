@@ -292,7 +292,7 @@ class IqdAskService:
     # ================================================================ 闭环补全（P0-3 / P1-1 / P1-2）
 
     async def trigger_build_index(
-        self, connection_id: int | None = None, wait: bool = True
+        self, connection_id: int | None = None, wait: bool = True, scope: str = "materials"
     ) -> SyncResult:
         """编排整库 rebuild：拉待下发物料 → context build → memory index → 回填 + 报作业。
 
@@ -303,10 +303,14 @@ class IqdAskService:
         Args:
             connection_id: 问数连接 id（缺省解析主连接）。
             wait: 是否阻塞至完成（True=手动/重试；False=自动接受即返回）。
+            scope: 构建范围 ``materials``（一期物料）/ ``model``（二期模型写回）；
+                ``model`` 走 :meth:`build_mdl_from_catalog` 以 mdl_raw 基线派生完整 MDL。
 
         Returns:
             :class:`SyncResult`（build/index 状态 + mdl_hash + 回填计数）。
         """
+        if scope == "model":
+            return await self.trigger_model_build(connection_id, wait)
         from src.adapters.iqd_cli import IqdCli, IqdCliError
         from src.adapters.iqd_config_client import IqdConfigClient, IqdConfigClientError
 
@@ -456,6 +460,351 @@ class IqdAskService:
 
         stamp = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
         return f"wqd-{stamp}-{uuid4().hex[:8]}"
+
+    # ================================================================ 二期：模型写回（G7）
+
+    async def trigger_model_build(
+        self, connection_id: int | None = None, wait: bool = True
+    ) -> SyncResult:
+        """编排「模型写回」rebuild：以平台 catalog 派生完整 MDL 并部署（G7 核心）。
+
+        与一期 :meth:`trigger_build_index` 的区别：本方法先从 mis-iqd 取
+        ``{mdl_raw, edited_items}``，以基线 mdl_raw 派生产出完整 MDL（按 item_key→
+        MDL 节点映射 patch 编辑字段），写出临时目录 ``manifest.json``，再
+        ``context_build(mdl_dir=tmp, ...)`` 一次部署「模型 + 物料」。
+
+        Args:
+            connection_id: 问数连接 id（缺省解析主连接）。
+            wait: 是否阻塞至完成。
+
+        Returns:
+            :class:`SyncResult`（build/index 状态 + mdl_hash + 回填计数；
+            edit_source 固定 ``model``）。
+        """
+        from src.adapters.iqd_cli import IqdCli, IqdCliError
+        from src.adapters.iqd_config_client import IqdConfigClient, IqdConfigClientError
+
+        settings = get_settings()
+        cli = IqdCli()
+        client = self._get_config_client()
+
+        cid = connection_id or await self._resolve_primary_connection_id(client)
+        if cid is None:
+            return SyncResult(
+                connection_id=None,
+                coalesced=False,
+                build_status="failed",
+                build_error="no primary connection",
+            )
+
+        # ① 取基线 mdl_raw + 已编辑节点
+        try:
+            full = await client.get_catalog_full(cid)
+        except IqdConfigClientError as exc:
+            return SyncResult(
+                connection_id=cid,
+                coalesced=False,
+                build_status="failed",
+                build_error=f"拉取 catalog 全量失败: {exc}",
+            )
+        mdl_raw = full.get("mdl_raw")
+        edited_items = full.get("edited_items") or []
+
+        # ② 派生完整 MDL 并写出临时目录
+        try:
+            mdl_dir, _payload = self.build_mdl_from_catalog(cid, mdl_raw, edited_items)
+        except Exception as exc:  # noqa: BLE001 - 派生失败归一为 build 失败
+            logger.error("IQD build_mdl_from_catalog failed", connection_id=cid, error=str(exc))
+            await self._report_model_job(
+                client, cid, "failed", None, str(exc), None, 0, 0
+            )
+            return SyncResult(
+                connection_id=cid,
+                coalesced=False,
+                build_status="failed",
+                build_error=f"派生完整 MDL 失败: {exc}",
+            )
+
+        # ③ context build（部署「模型 + 物料」）
+        build_status = "success"
+        build_error: str | None = None
+        mdl_hash: str | None = None
+        try:
+            build_result = await cli.context_build(
+                mdl_dir=mdl_dir,
+                sql_pairs=[],  # 物料已并入 mdl_dir/manifest，不再单列
+                instructions=[],
+                allow_write=True,
+            )
+            mdl_hash = self._parse_mdl_hash(build_result.get("stdout", ""))
+        except IqdCliError as exc:
+            build_status = "failed"
+            build_error = str(exc)
+
+        # ④ memory index（容错：失败不阻断 build；单独标记 failed）
+        index_status = "skipped"
+        index_error: str | None = None
+        if build_status == "success" and settings.iqd_mcp.memory_index_enabled:
+            try:
+                await cli.memory_index()
+                index_status = "success"
+            except IqdCliError as exc:
+                index_status = "failed"
+                index_error = str(exc)
+                logger.warning("IQD model memory index failed (non-blocking)", error=str(exc))
+
+        synced_pairs = 0
+        synced_knowledge = 0
+        stamped = 0
+        if build_status == "success" and mdl_hash:
+            # ⑤ 批量回填编辑盖章（P0-8 断点续盖）+ 推进 built 版本
+            try:
+                edit_revision = await self._current_edit_revision(full, client)
+                backfill = await client.backfill_catalog_sync({
+                    "connection_id": cid,
+                    "mdl_hash": mdl_hash,
+                    "edit_revision": edit_revision,
+                })
+                stamped = int(backfill.get("stamped_count", 0)) if isinstance(backfill, dict) else 0
+            except (IqdConfigClientError, ValueError) as exc:
+                build_status = "failed"
+                build_error = f"编辑盖章回填失败: {exc}"
+            # ⑥ 报作业（edit_source=model）
+            await self._report_model_job(
+                client, cid, build_status, mdl_hash, build_error,
+                index_error, stamped, 0,
+            )
+        else:
+            await self._report_model_job(
+                client, cid, build_status, mdl_hash, build_error, index_error, 0, 0
+            )
+
+        return SyncResult(
+            connection_id=cid,
+            coalesced=False,
+            build_status=build_status,
+            index_status=index_status,
+            build_mdl_hash=mdl_hash,
+            synced_sql_pair_count=stamped,
+            synced_knowledge_count=0,
+            build_error=build_error,
+            index_error=index_error,
+        )
+
+    async def _current_edit_revision(self, full: dict[str, Any], client: Any) -> int:
+        """取 catalog 全量快照中的当前编辑版本（fail-closed，不默认 0）。
+
+        ``get_catalog_full`` 修复后已在顶层携带 ``current_edit_revision``（设计 §九.1）；
+        优先取之。若缺失（旧版 mis-iqd），回退到 ``get_catalog_sync_status`` 取真实连接级
+        ``current_edit_revision``（T03 sync-status 契约）。两者皆缺则抛明确异常，拒绝以 0
+        回填——否则 backfillCatalogSync 的 ``edit_revision <= 0`` 命中不到任何已编辑节点
+        （实际 edit_revision >= 1），stamped_count 恒为 0、built_edit_revision 被重置为 0、
+        current > built 永久成立、同步状态机永不收敛 SYNCED（违反 PRD G-B / G6）。
+        """
+        if isinstance(full, dict) and full.get("current_edit_revision") is not None:
+            try:
+                return int(full["current_edit_revision"])
+            except (TypeError, ValueError):
+                logger.warning(
+                    "IQD current_edit_revision 不可解析，回退 sync_status",
+                    value=full.get("current_edit_revision"),
+                )
+        # 旧版 Java（getCatalogFull 未带该字段）的兜底：取真实连接级版本。
+        try:
+            status = await client.get_catalog_sync_status()
+            if isinstance(status, dict) and status.get("current_edit_revision") is not None:
+                try:
+                    return int(status["current_edit_revision"])
+                except (TypeError, ValueError):
+                    pass
+        except Exception as exc:  # noqa: BLE001 - 回退失败归一，下面抛明确异常
+            logger.error("IQD get_catalog_sync_status 回退失败", error=str(exc))
+        raise ValueError(
+            "无法获取 current_edit_revision（get_catalog_full 与 get_catalog_sync_status 均无该字段），"
+            "拒绝以 0 回填（将导致 stampCatalogSync 命中不到已编辑节点，违反 PRD G-B/G6）"
+        )
+
+    def build_mdl_from_catalog(
+        self, connection_id: int, mdl_raw: str | None, edited_items: list[dict[str, Any]]
+    ) -> tuple[str, dict[str, Any]]:
+        """以 mdl_raw 基线 + edited_items patch 派生完整 MDL，写出临时目录 manifest.json。
+
+        G7 数据流：``mdl = deepcopy(mdl_raw)`` → 按 ``item_key→MDL 节点`` 映射 patch
+        编辑字段（display_name→name / description / expression）→ 写临时目录
+        ``manifest.json``（顶层 models/relationships/cubes/views/metrics/dimensions）→
+        返回 ``(mdl_dir, payload)`` 供 ``context_build(mdl_dir=tmp)`` 部署。
+
+        Args:
+            connection_id: 连接 id（仅用于日志/目录命名）。
+            mdl_raw: 基线完整 MDL（JSON 字符串）；为 ``None`` 时降级为「仅 edited_items
+                重建」（结构缺失将致 build 失败，fail-closed）。
+            edited_items: 平台已编辑节点（``item_key/kind/display_name/description/
+                expression``）。
+
+        Returns:
+            ``(mdl_dir, payload)``：mdl_dir 为写入 manifest.json 的临时目录。
+
+        Raises:
+            ValueError: mdl_raw 为空且 edited_items 为空（无可用 MDL 来源）。
+        """
+        import os
+        import tempfile
+
+        if not mdl_raw or not mdl_raw.strip():
+            # 降级：无基线，尝试仅从 edited_items 重建（结构大概率残缺 → build 失败提示先同步）
+            if not edited_items:
+                raise ValueError("mdl_raw 为空且无 edited_items，无法派生完整 MDL（请先做一次 MDL 同步）")
+            mdl: dict[str, Any] = {
+                "models": [], "relationships": [], "cubes": [],
+                "views": [], "metrics": [], "dimensions": [],
+            }
+            logger.warning(
+                "IQD build_mdl_from_catalog degraded: no mdl_raw baseline",
+                connection_id=connection_id,
+            )
+        else:
+            try:
+                mdl = json.loads(mdl_raw)
+                if not isinstance(mdl, dict):
+                    mdl = {}
+            except (ValueError, AttributeError) as exc:
+                raise ValueError(f"mdl_raw 解析失败: {exc}") from exc
+            # 归一顶层容器
+            for k in ("models", "relationships", "cubes", "views", "metrics", "dimensions"):
+                mdl.setdefault(k, [])
+
+        # ② patch 编辑字段（item_key → MDL 节点定位）
+        for it in edited_items:
+            key = it.get("item_key") or ""
+            kind = it.get("kind") or ""
+            self._patch_mdl_node(mdl, key, kind, it)
+
+        # ③ 写临时目录 manifest.json
+        tmp_dir = tempfile.mkdtemp(prefix=f"iqd_mdl_{connection_id}_")
+        manifest_path = os.path.join(tmp_dir, "manifest.json")
+        with open(manifest_path, "w", encoding="utf-8") as fh:
+            json.dump(mdl, fh, ensure_ascii=False, indent=2)
+
+        payload: dict[str, Any] = {
+            "connection_id": connection_id,
+            "mdl_dir": tmp_dir,
+            "edited_count": len(edited_items),
+        }
+        logger.info(
+            "IQD build_mdl_from_catalog wrote manifest",
+            connection_id=connection_id,
+            mdl_dir=tmp_dir,
+            edited_count=len(edited_items),
+        )
+        return tmp_dir, payload
+
+    @staticmethod
+    def _patch_mdl_node(mdl: dict[str, Any], item_key: str, kind: str, it: dict[str, Any]) -> None:
+        """按 item_key→MDL 节点映射，把编辑字段（display_name/description/expression）套用到节点。
+
+        映射规则（设计 §七 G7）：
+        - ``mdl:model:<name>``            → models[] where name==<name>
+        - ``<ds>.<schema>.<table>.<col>`` → models[name==<table>].columns[] where name==<col>
+        - ``mdl:relationship:<name>``      → relationships[] where name==<name>
+        - ``mdl:cube:<name>``             → cubes[] where name==<name>
+        - ``<cubeKey>.<measure>``         → cubes[name==<cube>].measures[] where name==<measure>
+        - ``mdl:metric:<name>``           → metrics[] where name==<name>
+        - ``mdl:dimension:<name>``        → dimensions[] where name==<name>
+        - ``mdl:view:<name>``             → views[] where name==<name>
+        """
+        def _set(node: dict[str, Any]) -> None:
+            if it.get("display_name") is not None:
+                node["name"] = it["display_name"]
+            if it.get("description") is not None:
+                node["description"] = it["description"]
+            if it.get("expression") is not None:
+                node["expression"] = it["expression"]
+
+        if item_key.startswith("mdl:model:"):
+            name = item_key[len("mdl:model:"):]
+            for node in mdl.get("models", []):
+                if node.get("name") == name:
+                    _set(node)
+                    return
+        elif item_key.startswith("mdl:relationship:"):
+            name = item_key[len("mdl:relationship:"):]
+            for node in mdl.get("relationships", []):
+                if node.get("name") == name:
+                    _set(node)
+                    return
+        elif item_key.startswith("mdl:cube:"):
+            name = item_key[len("mdl:cube:"):]
+            for node in mdl.get("cubes", []):
+                if node.get("name") == name:
+                    _set(node)
+                    return
+        elif item_key.startswith("mdl:metric:"):
+            name = item_key[len("mdl:metric:"):]
+            for node in mdl.get("metrics", []):
+                if node.get("name") == name:
+                    _set(node)
+                    return
+        elif item_key.startswith("mdl:dimension:"):
+            name = item_key[len("mdl:dimension:"):]
+            for node in mdl.get("dimensions", []):
+                if node.get("name") == name:
+                    _set(node)
+                    return
+        elif item_key.startswith("mdl:view:"):
+            name = item_key[len("mdl:view:"):]
+            for node in mdl.get("views", []):
+                if node.get("name") == name:
+                    _set(node)
+                    return
+        elif item_key.startswith("mdl:column:") or "." in item_key:
+            # <ds>.<schema>.<table>.<col> → models[name==<table>].columns[] where name==<col>
+            parts = item_key.split(".")
+            if len(parts) >= 4:
+                table = parts[2]
+                col = parts[3]
+                for model in mdl.get("models", []):
+                    if model.get("name") == table:
+                        for column in model.get("columns", []):
+                            if column.get("name") == col:
+                                _set(column)
+                                return
+        # <cubeKey>.<measure> 形态（cubeKey=mdl:cube:<cube>）
+        if item_key.startswith("mdl:cube:") and "." in item_key[len("mdl:cube:"):]:
+            cube_part = item_key[len("mdl:cube:"):]
+            cube_name, measure_name = cube_part.split(".", 1)
+            for cube in mdl.get("cubes", []):
+                if cube.get("name") == cube_name:
+                    for measure in cube.get("measures", []):
+                        if measure.get("name") == measure_name:
+                            _set(measure)
+                            return
+
+    async def _report_model_job(
+        self,
+        client: Any,
+        connection_id: int,
+        build_status: str,
+        mdl_hash: str | None,
+        build_error: str | None,
+        index_error: str | None,
+        stamped: int,
+        synced_knowledge: int,
+    ) -> None:
+        """上报模型写回作业（edit_source=model）。"""
+        try:
+            await client.report_sync_job({
+                "connection_id": connection_id,
+                "build_status": build_status,
+                "build_mdl_hash": mdl_hash,
+                "index_status": "skipped" if index_error is None else "failed",
+                "build_error": build_error,
+                "index_error": index_error,
+                "synced_sql_pair_count": stamped,
+                "synced_knowledge_count": synced_knowledge,
+                "edit_source": "model",
+            })
+        except Exception as exc:  # noqa: BLE001 - 报作业失败仅告警
+            logger.warning("IQD model sync job report failed", connection_id=connection_id, error=str(exc))
 
     async def _resolve_primary_connection_id(self, client: Any) -> int | None:
         """解析主连接 id（name='default' 或首条 enabled）。"""

@@ -388,13 +388,62 @@ public class IqdController {
     }
 
     /**
-     * 二期前向占位：平台内建/修改 catalog 节点（write-back 到 MDL）。
+     * 编辑 catalog 节点（写回 MDL 前置）。
      *
-     * <p>一期 iqd_catalog_item.editable 恒 false，未实现写回，返回 501。预留路由与开关位，
-     * 待二期 mdlWritebackEnabled=true 时再落地。
+     * <p>二期落地：乐观并发（base_revision 不符 409）、幂等（idempotency_key）、
+     * 引用校验（改名被引用 422）。成功返回 {@code {edit_revision, edit_status, wren_ref_id}}。
      */
     @PutMapping("/catalog/node")
-    public Result<Void> updateCatalogNode() {
-        return Result.fail(501, "catalog 节点写回尚未实现（二期前向占位）");
+    public Result<Map<String, Object>> updateCatalogNode(
+            @RequestParam Long connectionId,
+            @RequestBody Map<String, Object> body) {
+        String itemKey = str(body.get("item_key"));
+        String kind = str(body.get("kind"));
+        @SuppressWarnings("unchecked")
+        Map<String, Object> patch = (Map<String, Object>) body.get("patch");
+        Long baseRevision = toLong(body.get("base_revision"));
+        String idempotencyKey = str(body.get("idempotency_key"));
+        Map<String, Object> result = adminService.updateCatalogNode(
+                connectionId, itemKey, kind, patch, baseRevision, idempotencyKey);
+        return Result.ok(result);
+    }
+
+    /**
+     * 取连接级编辑同步状态（前端 CatalogSyncStatusBar 轮询）。
+     */
+    @GetMapping("/catalog/sync-status")
+    public Result<Map<String, Object>> getCatalogSyncStatus(@RequestParam Long connectionId) {
+        return Result.ok(adminService.getCatalogSyncStatus(connectionId));
+    }
+
+    /**
+     * 触发对账（重新导入收敛外部漂移）。
+     */
+    @PostMapping("/catalog/reconcile")
+    public Result<Map<String, Object>> reconcileCatalog(@RequestParam Long connectionId) {
+        return Result.ok(adminService.reconcileCatalog(connectionId));
+    }
+
+    // ===================== helpers =====================
+
+    private static String str(Object value) {
+        if (value == null) {
+            return null;
+        }
+        return value instanceof String s ? s : String.valueOf(value);
+    }
+
+    private static Long toLong(Object value) {
+        if (value == null || value instanceof Boolean) {
+            return null;
+        }
+        if (value instanceof Number n) {
+            return n.longValue();
+        }
+        try {
+            return Long.parseLong(String.valueOf(value).trim());
+        } catch (NumberFormatException exc) {
+            return null;
+        }
     }
 }

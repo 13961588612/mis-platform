@@ -27,6 +27,8 @@ public class IqdConnectionVO {
     private Instant lastHealthAt;
     private String lastHealthMsg;
     private Boolean enabled;
+    /** 按连接灰度闸门：是否允许平台写回 MDL（二期 P0-1~P0-12，U7/Q4）。 */
+    private Boolean mdlWritebackEnabled;
 
     public Long getId() {
         return id;
@@ -132,6 +134,14 @@ public class IqdConnectionVO {
         this.enabled = enabled;
     }
 
+    public Boolean getMdlWritebackEnabled() {
+        return mdlWritebackEnabled;
+    }
+
+    public void setMdlWritebackEnabled(Boolean mdlWritebackEnabled) {
+        this.mdlWritebackEnabled = mdlWritebackEnabled;
+    }
+
     @JsonProperty("base_url")
     public String baseUrlWire() {
         return baseUrl;
@@ -165,6 +175,11 @@ public class IqdConnectionVO {
     @JsonProperty("last_health_msg")
     public String lastHealthMsgWire() {
         return lastHealthMsg;
+    }
+
+    @JsonProperty("mdl_writeback_enabled")
+    public Boolean mdlWritebackEnabledWire() {
+        return mdlWritebackEnabled;
     }
 
     /** 兼容旧调用方的 camelCase 视图（非 wire 主形态，仅内部用）。 */

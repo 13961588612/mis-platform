@@ -23,6 +23,8 @@ public class IqdCatalogItemVO {
     private Boolean inScope;
     private String sensitiveLevel;
     private String maskRule;
+    /** 平台是否可内建/改此 catalog 项（二期：editable=1 且连接开启写回方可编辑）。 */
+    private Boolean editable;
 
     public Long getId() {
         return id;
@@ -150,6 +152,15 @@ public class IqdCatalogItemVO {
 
     public void setMaskRule(String maskRule) {
         this.maskRule = maskRule;
+    }
+
+    @JsonProperty("editable")
+    public Boolean getEditable() {
+        return editable;
+    }
+
+    public void setEditable(Boolean editable) {
+        this.editable = editable;
     }
 
     @JsonProperty("parent_key")

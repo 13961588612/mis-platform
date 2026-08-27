@@ -127,6 +127,51 @@ class IqdCli:
         """
         return await self._run(["memory", "index"])
 
+    async def get_current_mdl_hash(self) -> str | None:
+        """取 WrenAI 当前部署的 mdl_hash（S3 漂移检测）。
+
+        包裹 ``wren get mdl``（或读取部署产物）并解析 mdl_hash；WrenAI 不可达 /
+        子命令缺失 / 解析失败时**返回 ``None``**（不抛，降级为「不判定漂移」）。
+
+        Returns:
+            当前 mdl_hash 字符串；不可达或解析失败返回 ``None``。
+
+        Note:
+            调用方（漂移检测）需将 ``None`` 视为「无法判定」并跳过漂移标记，避免误伤。
+        """
+        try:
+            result = await self._run(["get", "mdl"])
+        except IqdCliError as exc:
+            logger.warning("IQD get current mdl_hash failed (degraded to None)", error=str(exc))
+            return None
+        stdout = result.get("stdout", "") if isinstance(result, dict) else ""
+        return self._parse_mdl_hash(stdout) if stdout else None
+
+    @staticmethod
+    def _parse_mdl_hash(stdout: str) -> str | None:
+        """从 wren get mdl 的 stdout 提取 mdl_hash（与 service 解析口径一致）。
+
+        优先 JSON 解析（``mdl_hash`` / ``hash`` / ``deployment_id``），失败回退带前缀
+        正则提取；均失败返回 ``None``（不可判定，交由调用方降级）。
+        """
+        if not stdout or not stdout.strip():
+            return None
+        try:
+            data = json.loads(stdout)
+            if isinstance(data, dict):
+                for key in ("mdl_hash", "hash", "deployment_id", "mdlHash", "deploymentId"):
+                    val = data.get(key)
+                    if isinstance(val, str) and val.strip():
+                        return val.strip()
+        except (ValueError, AttributeError):
+            match = re.search(
+                r"(?:mdl_hash|hash|deployment_id)['\"]?\s*[:=]\s*['\"]?([A-Za-z0-9_\-]+)",
+                stdout,
+            )
+            if match:
+                return match.group(1)
+        return None
+
     # ================================================================ 内部
 
     async def _run(self, args: list[str]) -> dict[str, Any]:

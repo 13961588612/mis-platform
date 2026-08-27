@@ -60,6 +60,9 @@ public class IqdProperties {
     private String enhanceSavePermission = "iqd:enhance:save";
     private String enhanceSyncPermission = "iqd:enhance:sync";
 
+    /** 二期 catalog 编辑（写回 MDL）功能权限码（PUT /catalog/node 等）。 */
+    private String catalogEditPermission = "iqd:catalog:edit";
+
     /** Worker 侧 mis-iqd Agent 的 agentId（ai-platform Agent Core 注册名）。 */
     private String agentId = "mis-iqd";
 
@@ -263,6 +266,14 @@ public class IqdProperties {
 
     public void setEnhanceSyncPermission(String enhanceSyncPermission) {
         this.enhanceSyncPermission = enhanceSyncPermission;
+    }
+
+    public String getCatalogEditPermission() {
+        return catalogEditPermission;
+    }
+
+    public void setCatalogEditPermission(String catalogEditPermission) {
+        this.catalogEditPermission = catalogEditPermission;
     }
 
     public String getAgentId() {

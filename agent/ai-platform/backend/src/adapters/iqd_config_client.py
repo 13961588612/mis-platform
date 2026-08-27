@@ -50,6 +50,11 @@ WRITE_ASK_LOG_PATH = "/internal/v1/iqd/write-ask-log"
 # —— 闭环补全（P0-3 / P1-1）：增强同步回填 + 作业上报 ——
 BACKFILL_PATH = "/internal/v1/iqd/enhance/backfill"
 SYNC_JOB_PATH = "/internal/v1/iqd/enhance/sync-job"
+# —— 二期语义模型编辑（G7 / S3）：catalog 全量快照 + 编辑回填 + 漂移标记 ——
+GET_CATALOG_FULL_PATH = "/internal/v1/iqd/get-catalog-full"
+CATALOG_BACKFILL_PATH = "/internal/v1/iqd/enhance/catalog-backfill"
+CATALOG_SYNC_STATUS_PATH = "/internal/v1/iqd/catalog/sync-status"
+SET_DRIFT_PATH = "/internal/v1/iqd/enhance/drift"
 
 #: 配置缓存桶名（与 IqdConfigClient 分桶缓存一一对应）
 CACHE_BUCKET_CONNECTIONS = "connections"
@@ -296,6 +301,126 @@ class IqdConfigClient:
         data = await self._request("POST", SYNC_JOB_PATH, ctx, payload=payload)
         logger.info("IQD sync job reported", trace_id=ctx.trace_id)
         return data if isinstance(data, dict) else {}
+
+    # ================================================================ 二期：catalog 编辑写回（G7 / S3）
+
+    async def get_catalog_full(
+        self, connection_id: int | None = None, ctx: IqdCallContext | None = None
+    ) -> dict[str, Any]:
+        """取连接完整 MDL 快照 + 已编辑节点（G7：以 mdl_raw 为基线派生完整 MDL）。
+
+        Args:
+            connection_id: 问数连接 id（缺省解析主连接）。
+            ctx: 身份与追踪上下文。
+
+        Returns:
+            ``{connection_id, mdl_raw, edited_items[], current_edit_revision,
+            built_edit_revision}``（mdl_raw 为基线 JSON 字符串；current_edit_revision /
+            built_edit_revision 为连接级编辑版本，由 mis-iqd ``getCatalogFull`` 原样透传，
+            key 命名与 sync-status 契约一致，供 trigger_model_build 取 current_edit_revision
+            回填断点续盖）。
+
+        Raises:
+            IqdConfigClientError: 网络失败或 mis-iqd 返回 ``code != 0``。
+        """
+        ctx = ctx or IqdCallContext()
+        cid = connection_id or await self._resolve_primary_connection_id(ctx)
+        if cid is None:
+            raise IqdConfigClientError("no primary connection")
+        data = await self._request(
+            "GET", GET_CATALOG_FULL_PATH, ctx, params={"connection_id": cid}
+        )
+        # 原样透传 mis-iqd 响应（含 current_edit_revision / built_edit_revision）。
+        return data if isinstance(data, dict) else {}
+
+    async def backfill_catalog_sync(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """批量回填 catalog 编辑盖章（P0-8 / U8 断点续盖）。
+
+        ai-platform 在 ``build_mdl_from_catalog`` build 成功后组装报文体，把本次纳入的
+        已编辑节点（``edit_revision ≤ built``）统一置 ``wren_ref_id``，并推进连接级
+        ``built_edit_revision``。
+
+        Args:
+            payload: ``{connection_id, mdl_hash, edit_revision}``。
+
+        Returns:
+            mis-iqd 返回的 data（通常含 ``{"stamped_count": N}``）。
+
+        Raises:
+            IqdConfigClientError: 网络失败或 mis-iqd 返回 ``code != 0``。
+        """
+        ctx = IqdCallContext()
+        data = await self._request("POST", CATALOG_BACKFILL_PATH, ctx, payload=payload)
+        logger.info("IQD catalog backfill sent", trace_id=ctx.trace_id)
+        return data if isinstance(data, dict) else {}
+
+    async def get_catalog_sync_status(
+        self, connection_id: int | None = None, ctx: IqdCallContext | None = None
+    ) -> dict[str, Any]:
+        """取连接级编辑同步状态（前端 CatalogSyncStatusBar 轮询）。
+
+        Args:
+            connection_id: 问数连接 id（缺省解析主连接）。
+            ctx: 身份与追踪上下文。
+
+        Returns:
+            ``{connection_id, current_edit_revision, built_edit_revision, edit_status,
+            build_status, index_status, mdl_hash, stale_drift}``。
+
+        Raises:
+            IqdConfigClientError: 网络失败或 mis-iqd 返回 ``code != 0``。
+        """
+        ctx = ctx or IqdCallContext()
+        cid = connection_id or await self._resolve_primary_connection_id(ctx)
+        if cid is None:
+            raise IqdConfigClientError("no primary connection")
+        data = await self._request(
+            "GET", CATALOG_SYNC_STATUS_PATH, ctx, params={"connection_id": cid}
+        )
+        return data if isinstance(data, dict) else {}
+
+    async def set_stale_drift(
+        self, connection_id: int, drift: bool, ctx: IqdCallContext | None = None
+    ) -> dict[str, Any]:
+        """置外部漂移标记（S3：ai-platform 漂移检测命中回调）。
+
+        Args:
+            connection_id: 问数连接 id。
+            drift: ``True``=检测到 WrenAI 当前 mdl_hash 与 built_mdl_hash 不一致；
+                ``False``=收敛清零。
+            ctx: 身份与追踪上下文。
+
+        Returns:
+            mis-iqd 返回的 data（``{"ok": true}``）。
+
+        Raises:
+            IqdConfigClientError: 网络失败或 mis-iqd 返回 ``code != 0``。
+        """
+        ctx = ctx or IqdCallContext()
+        data = await self._request(
+            "POST",
+            SET_DRIFT_PATH,
+            ctx,
+            payload={"connection_id": connection_id, "drift": drift},
+        )
+        logger.info("IQD stale drift set", connection_id=connection_id, drift=drift)
+        return data if isinstance(data, dict) else {}
+
+    async def _resolve_primary_connection_id(self, ctx: IqdCallContext) -> int | None:
+        """解析主连接 id（name='default' 或首条 enabled）。"""
+        try:
+            connections = await self.get_connections(ctx)
+        except Exception as exc:  # noqa: BLE001 - 解析失败降级为无连接
+            logger.warning("IQD resolve primary connection failed", error=str(exc))
+            return None
+        if connections:
+            cid = connections[0].get("id")
+            if isinstance(cid, (int, str)):
+                try:
+                    return int(cid)
+                except (TypeError, ValueError):
+                    return None
+        return None
 
     # ================================================================ 配置拉取扩展
 

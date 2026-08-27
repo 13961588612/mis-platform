@@ -1,0 +1,71 @@
+sequenceDiagram
+    autonumber
+    participant U as 前端(IqdCatalogPage)
+    participant B as BFF(IqdFacadeService/IqdClient)
+    participant M as mis-iqd(IqdAdminService)
+    participant A as ai-platform(SyncCoordinator/IqdAskService)
+    participant C as IqdConfigClient
+    participant W as WrenAI CLI(IqdCli)
+    participant DB as mis-iqd 内部 API
+
+    %% ===== 主线 A：平台编辑 → 写回 WrenAI → 回填 =====
+    Note over U,DB: 主线 A — 编辑写回（复用一期闭环，平台先落库、异步写回）
+    U->>B: PUT /iqd/catalog/node {item_key, kind, patch, base_revision, idempotency_key}
+    B->>B: 权限闸 iqd:catalog:edit
+    B->>M: updateCatalogNode(...)
+    M->>M: validateCatalogRefs (S4/S5/S8 预校验, fail-closed)
+    alt base_revision 不符（并发编辑 S6）
+        M-->>B: 409 Conflict(当前 edit_revision)
+        B-->>U: 友好冲突提示，请重读后重试
+    else 通过
+        M->>M: 乐观并发 OK → bump edit_revision → @Transactional 落库
+        M-->>B: {edit_revision, edit_status=EDITED_UNSYNCED}
+        B-->>U: 返回新 edit_revision（乐观 UI 更新）
+        B->>A: triggerSyncBestEffort → POST /iqd/enhance/sync(scope=model, wait=false)
+        A->>A: SyncCoordinator 合并窗口(3s) 内首触发
+        A->>A: IqdAskService.trigger_model_build
+        A->>C: get_catalog_full(connectionId)
+        C->>DB: GET /internal/v1/iqd/get-catalog-full
+        DB-->>C: 完整 MDL 源(tables/relations/cubes/views + 物料)
+        A->>A: build_mdl_from_catalog → 组装 mdl.json
+        A->>W: context_build(mdl_dir=..., allow_write=true)
+        W-->>A: {stdout} → _parse_mdl_hash → mdl_hash
+        alt build 成功
+            A->>W: memory_index()  %% S2: 失败仅标 failed，不阻断
+            A->>C: backfill_catalog_sync({connection_id, mdl_hash, edit_revision})
+            C->>DB: POST /internal/v1/iqd/enhance/catalog-backfill
+            DB->>DB: 批量 UPDATE catalog SET wren_ref_id WHERE edit_revision<=:built AND wren_ref_id<>:hash
+            A->>C: report_sync_job({edit_revision, build_status, index_status})
+            C->>DB: POST /internal/v1/iqd/enhance/sync-job
+            DB->>DB: iqd_sync_job 覆盖写 + built_edit_revision=edit_revision
+        else build 失败(S1)
+            A->>C: report_sync_job({build_status=failed, build_error})
+            C->>DB: POST /enhance/sync-job
+            Note over U: 前端轮询见 edit_status=SYNC_FAILED（红标, 可重试）
+        end
+    end
+
+    U->>B: GET /iqd/catalog/sync-status (轮询)
+    B->>M: getCatalogSyncStatus(connectionId)
+    M-->>B: {current_edit_revision, built_edit_revision, build_status, edit_status}
+    B-->>U: 渲染 SYNCED / EDITED_UNSYNCED / SYNCING / SYNC_FAILED / STALE_DRIFT
+
+    %% ===== 分支 B：S9 网络分区后的对账清扫 =====
+    Note over U,DB: 分支 B — 对账清扫（S9：ai-platform 不可达导致永久偏离）
+    loop IqdReconcileJobService 周期扫描
+        B->>M: scanDivergedConnections()
+        M->>M: current_edit_revision > built_edit_revision ?
+        alt 存在偏离连接
+            B->>A: POST /iqd/enhance/sync(scope=model, wait=false) 重触发
+            Note over A: 走主线 A 的写回流程（幂等）
+        end
+    end
+
+    %% ===== S3 外部漂移检测 =====
+    Note over U,DB: S3 — 外部直改 WrenAI 检测 → STALE_DRIFT（阻断重建, 需重新导入）
+    B->>M: reconcileCatalog(connectionId) 或 周期 GET mdl 比对
+    M->>M: built_mdl_hash vs WrenAI 当前 mdl_hash
+    alt 不一致
+        M-->>B: edit_status=STALE_DRIFT
+        B-->>U: 横幅「检测到外部变更，请重新导入」→ 触发 syncCatalogFromMdl 生成待审草稿
+    end

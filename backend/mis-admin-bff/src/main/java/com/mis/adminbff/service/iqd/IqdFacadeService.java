@@ -319,7 +319,7 @@ public class IqdFacadeService {
      */
     public Map<String, Object> syncEnhancements(Long connectionId, Boolean wait, String authorization, String traceId) {
         requirePermission(properties.getEnhanceSyncPermission());
-        return aiPlatformClient.syncEnhancements(connectionId, wait, authorization, traceId);
+        return aiPlatformClient.syncEnhancements(connectionId, wait, "materials", authorization, traceId);
     }
 
     /**
@@ -330,6 +330,64 @@ public class IqdFacadeService {
         return iqdClient.getEnhancementSyncStatus(connectionId);
     }
 
+    // ================================================================ 二期：语义模型编辑（P0-1~P0-12）
+
+    /**
+     * 编辑 catalog 节点（写回 MDL 前置；需 iqd:catalog:edit）。
+     *
+     * <p>① 权限闸门；② 调 mis-iqd {@code updateCatalogNode}（乐观并发 409 / 幂等 /
+     * 引用校验 422 由平台返回，BFF 原样透传业务码与 data）；③ 成功后 best-effort 触发
+     * model 范围同步（重新派生完整 MDL 并写回 WrenAI）。
+     *
+     * @param dto     请求体 {connection_id, item_key, kind, patch, base_revision, idempotency_key}
+     * @param authorization BFF 收到的原始 MIS JWT（透传给平台 RS256）
+     * @param traceId 全链路追踪 ID
+     * @return mis-iqd 返回 {edit_revision, edit_status, wren_ref_id}
+     */
+    public Map<String, Object> updateCatalogNode(
+            Map<String, Object> dto, String authorization, String traceId) {
+        requirePermission(properties.getCatalogEditPermission());
+        Long connectionId = toLong(dto.get("connection_id"));
+        Map<String, Object> result = iqdClient.updateCatalogNode(connectionId, dto);
+        // 编辑成功后自动触发 model 范围同步（best-effort，接受即返回，不阻断写回主流程）
+        triggerSyncBestEffort(connectionId, authorization, traceId, "model");
+        return result;
+    }
+
+    /**
+     * 取连接级编辑同步状态（需 iqd:catalog:edit；前端 CatalogSyncStatusBar 轮询）。
+     */
+    public Map<String, Object> getCatalogSyncStatus(Long connectionId) {
+        requirePermission(properties.getCatalogEditPermission());
+        return iqdClient.getCatalogSyncStatus(connectionId);
+    }
+
+    /**
+     * 触发对账（需 iqd:catalog:edit）：清空外部漂移标记并 best-effort 触发 model 重建。
+     */
+    public Map<String, Object> reconcileCatalog(Long connectionId) {
+        requirePermission(properties.getCatalogEditPermission());
+        Map<String, Object> result = iqdClient.reconcileCatalog(connectionId);
+        // 重新按 model 范围派发构建（best-effort，无用户上下文也可触发）
+        triggerSyncBestEffort(connectionId, null, null, "model");
+        return result;
+    }
+
+    /** wire 数值 → Long（null/布尔 → null）。 */
+    private static Long toLong(Object value) {
+        if (value == null || value instanceof Boolean) {
+            return null;
+        }
+        if (value instanceof Number n) {
+            return n.longValue();
+        }
+        try {
+            return Long.parseLong(String.valueOf(value).trim());
+        } catch (NumberFormatException exc) {
+            return null;
+        }
+    }
+
     /**
      * 保存后自动触发增强同步（best-effort，wait=false 接受即返回）。
      *
@@ -337,14 +395,24 @@ public class IqdFacadeService {
      * 缺失时不触发（避免无意义调用）。
      */
     private void triggerSyncBestEffort(Long connectionId, String authorization, String traceId) {
+        triggerSyncBestEffort(connectionId, authorization, traceId, "materials");
+    }
+
+    /**
+     * 保存后自动触发增强同步（best-effort，wait=false 接受即返回）。
+     *
+     * @param scope 构建范围：materials(一期物料) | model(二期模型写回)
+     */
+    private void triggerSyncBestEffort(
+            Long connectionId, String authorization, String traceId, String scope) {
         if (connectionId == null || authorization == null || authorization.isBlank()) {
             return;
         }
         try {
-            aiPlatformClient.syncEnhancements(connectionId, Boolean.FALSE, authorization, traceId);
+            aiPlatformClient.syncEnhancements(connectionId, Boolean.FALSE, scope, authorization, traceId);
         } catch (Exception exc) {
-            log.warn("IQD auto sync after save skipped connectionId={} error={}",
-                    connectionId, exc.getMessage());
+            log.warn("IQD auto sync after save skipped connectionId={} scope={} error={}",
+                    connectionId, scope, exc.getMessage());
         }
     }
 

@@ -32,6 +32,8 @@ export interface IqdConnectionConfig {
   last_health_at?: string | null;
   last_health_msg?: string | null;
   enabled?: boolean;
+  /** 按连接灰度闸门：是否允许平台写回 MDL（二期 P0-1~P0-12，U7/Q4）。 */
+  mdl_writeback_enabled?: boolean;
 }
 
 export interface IqdConnectionSavePayload {
@@ -70,6 +72,8 @@ export interface IqdCatalogItem {
   in_scope?: boolean;
   sensitive_level?: string;
   mask_rule?: string | null;
+  /** 平台是否可编辑此 catalog 项（二期：editable && 连接 mdl_writeback_enabled 方可编辑）。 */
+  editable?: boolean;
 }
 
 export interface IqdCatalogItemSavePayload {
@@ -597,6 +601,51 @@ export interface IqdSyncStatus {
   updated_at?: string | null;
 }
 
+// ================================================================ 二期：语义模型编辑（P0-1~P0-12）
+
+/** catalog 编辑态枚举（与 mis-iqd getCatalogSyncStatus 派生值一致）。 */
+export type IqdCatalogEditStatus =
+  | 'EDITED_UNSYNCED'
+  | 'SYNCING'
+  | 'SYNCED'
+  | 'SYNC_FAILED'
+  | 'STALE_DRIFT';
+
+/** catalog 节点编辑请求体（PUT /iqd/catalog/node）。 */
+export interface IqdEditNodePayload {
+  item_key: string;
+  kind: string;
+  patch: {
+    display_name?: string | null;
+    description?: string | null;
+    expression?: string | null;
+  };
+  base_revision: number;
+  idempotency_key: string;
+}
+
+/** catalog 编辑同步状态（GET /iqd/catalog/sync-status；对齐 mis-iqd getCatalogSyncStatus）。 */
+export interface IqdCatalogSyncStatus {
+  connection_id?: number;
+  current_edit_revision?: number;
+  built_edit_revision?: number;
+  edit_status?: IqdCatalogEditStatus | string;
+  build_status?: string;
+  index_status?: string;
+  mdl_hash?: string | null;
+  stale_drift?: boolean;
+}
+
+/** 直接引用方（后端 422 引用阻断依据）。 */
+export type IqdDependents = Array<{ item_key: string; kind: string }>;
+
+/** catalog 节点编辑返回（PUT /iqd/catalog/node 成功）。 */
+export interface IqdEditNodeResult {
+  edit_revision: number;
+  edit_status: string;
+  wren_ref_id: string | null;
+}
+
 /**
  * 触发增强同步（闭环补全 P0-2）：调 BFF /api/v1/iqd/enhance/sync → ai-platform Worker
  * 经 SyncCoordinator 合并窗口异步执行 context build + memory index + 回填。
@@ -626,4 +675,62 @@ export async function getIqdEnhancementSyncStatus(
   });
   if (res.data.code !== 0) throw new Error(res.data.message || '获取同步状态失败');
   return res.data.data ?? null;
+}
+
+// ================================================================ 二期：语义模型编辑（P0-1~P0-12）
+
+/**
+ * 编辑 catalog 节点（写回 MDL 前置）：调 BFF PUT /api/v1/iqd/catalog/node。
+ *
+ * <p>乐观并发冲突（40900，data.current_edit_revision）与引用阻断（42200，
+ * data.dependents）由 BFF 透传业务码；本方法把 code / data 挂在 Error 上便于
+ * 前端提示「版本已变更，点重读」或列出直接引用方并禁用确认。
+ */
+export async function updateIqdCatalogNode(
+  connectionId: number,
+  payload: IqdEditNodePayload,
+): Promise<IqdEditNodeResult> {
+  const res = await api.put<ApiResult<IqdEditNodeResult>>(
+    '/iqd/catalog/node',
+    payload,
+    { params: { connectionId } },
+  );
+  if (res.data.code !== 0) {
+    const err = new Error(res.data.message || '编辑 catalog 节点失败') as Error & {
+      code?: number;
+      data?: unknown;
+    };
+    err.code = res.data.code;
+    err.data = res.data.data;
+    throw err;
+  }
+  return res.data.data as IqdEditNodeResult;
+}
+
+/**
+ * 取连接级编辑同步状态（GET /iqd/catalog/sync-status），前端 CatalogSyncStatusBar 轮询。
+ * 无记录时后端返回 data=null，归一化为 null。
+ */
+export async function getIqdCatalogSyncStatus(
+  connectionId: number,
+): Promise<IqdCatalogSyncStatus | null> {
+  const res = await api.get<ApiResult<IqdCatalogSyncStatus | null>>('/iqd/catalog/sync-status', {
+    params: { connectionId },
+  });
+  if (res.data.code !== 0) throw new Error(res.data.message || '获取编辑同步状态失败');
+  return res.data.data ?? null;
+}
+
+/**
+ * 触发对账（POST /iqd/catalog/reconcile）：清空外部漂移并重按 model 范围重建。
+ */
+export async function reconcileIqdCatalog(
+  connectionId: number,
+): Promise<{ triggered: boolean }> {
+  const res = await api.post<ApiResult<{ triggered: boolean }>>(
+    '/iqd/catalog/reconcile',
+    undefined,
+    { params: { connectionId } },
+  );
+  return unwrap(res, '触发对账失败');
 }

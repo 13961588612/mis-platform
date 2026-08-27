@@ -22,8 +22,15 @@ import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.core.ParameterizedTypeReference;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.mis.common.core.exception.BusinessException;
+import com.mis.common.core.exception.ResultCode;
+import com.mis.common.core.result.Result;
 import org.springframework.web.reactive.function.client.WebClient;
+import org.springframework.web.reactive.function.client.WebClientResponseException;
 
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Consumer;
@@ -80,6 +87,7 @@ public class IqdClient extends AbstractDownstreamClient {
             new ParameterizedTypeReference<>() {};
 
     private final IqdProperties properties;
+    private final ObjectMapper objectMapper = new ObjectMapper();
 
     public IqdClient(
             @Qualifier("plainWebClientBuilder") WebClient.Builder plainBuilder,
@@ -471,6 +479,114 @@ public class IqdClient extends AbstractDownstreamClient {
                 .headers(loginContextHeaders())
                 .retrieve()
                 .bodyToMono(MAP_RESULT));
+    }
+
+    // ------------------------------------------------------------------ 二期：语义模型编辑（P0-1~P0-12）
+
+    /**
+     * 编辑 catalog 节点（写回 MDL 前置）。
+     *
+     * <p>mis-iqd 侧可能返回业务冲突（40900 乐观并发 / 42200 引用阻断），其响应体为
+     * {@code Result{code, message, data}}。WebClient 默认对 4xx 抛
+     * {@link WebClientResponseException}，此处捕获并还原为 {@link BusinessException}
+     * （保留原始 code 与 data），使 BFF 能把 {@code current_edit_revision} 等明细
+     * 透传给前端，而非降级成 500。
+     *
+     * @param connectionId 问数连接 id（query 参数）
+     * @param body         请求体 {item_key, kind, patch, base_revision, idempotency_key}
+     * @return mis-iqd 返回 {edit_revision, edit_status, wren_ref_id}
+     */
+    public Map<String, Object> updateCatalogNode(Long connectionId, Map<String, Object> body) {
+        try {
+            Result<Map<String, Object>> res = client().put()
+                    .uri(uriBuilder -> uriBuilder.path("/api/v1/iqd/catalog/node")
+                            .queryParam("connectionId", connectionId)
+                            .build())
+                    .headers(loginContextHeaders())
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .bodyValue(body)
+                    .retrieve()
+                    .bodyToMono(MAP_RESULT)
+                    .block(timeout());
+            return res != null ? res.getData() : null;
+        } catch (WebClientResponseException ex) {
+            throw extractDownstreamError(ex);
+        } catch (BusinessException ex) {
+            throw ex;
+        } catch (Exception ex) {
+            throw new BusinessException(ResultCode.INTERNAL_ERROR, "下游调用失败: " + ex.getMessage());
+        }
+    }
+
+    /**
+     * 取连接级编辑同步状态（前端 CatalogSyncStatusBar 轮询）。
+     */
+    public Map<String, Object> getCatalogSyncStatus(Long connectionId) {
+        return block(client().get()
+                .uri(uriBuilder -> uriBuilder.path("/api/v1/iqd/catalog/sync-status")
+                        .queryParam("connectionId", connectionId)
+                        .build())
+                .headers(loginContextHeaders())
+                .retrieve()
+                .bodyToMono(MAP_RESULT));
+    }
+
+    /**
+     * 触发对账（清空外部漂移标记，交由编排层按 model 范围重建）。
+     */
+    public Map<String, Object> reconcileCatalog(Long connectionId) {
+        return block(client().post()
+                .uri(uriBuilder -> uriBuilder.path("/api/v1/iqd/catalog/reconcile")
+                        .queryParam("connectionId", connectionId)
+                        .build())
+                .headers(loginContextHeaders())
+                .retrieve()
+                .bodyToMono(MAP_RESULT));
+    }
+
+    /**
+     * 置外部漂移标记（S3：ai-platform 漂移检测命中回调）。
+     */
+    public Map<String, Object> setStaleDrift(Long connectionId, boolean drift) {
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("connection_id", connectionId);
+        body.put("drift", drift);
+        return block(client().post()
+                .uri("/internal/v1/iqd/enhance/drift")
+                .headers(loginContextHeaders())
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(body)
+                .retrieve()
+                .bodyToMono(MAP_RESULT));
+    }
+
+    /**
+     * 列出全部问数连接（供定时对账清扫判定偏离连接；内部面 get-connections）。
+     */
+    public List<Map<String, Object>> getConnections() {
+        return block(client().get()
+                .uri("/internal/v1/iqd/get-connections")
+                .headers(loginContextHeaders())
+                .retrieve()
+                .bodyToMono(MAP_LIST_RESULT));
+    }
+
+    /** 从 WebClient 4xx 响应体还原业务异常（保留 code 与 data）。 */
+    private BusinessException extractDownstreamError(WebClientResponseException ex) {
+        try {
+            Map<String, Object> parsed = objectMapper.readValue(
+                    ex.getResponseBodyAsString(), new TypeReference<Map<String, Object>>() {});
+            Object codeObj = parsed.get("code");
+            int code = codeObj instanceof Number
+                    ? ((Number) codeObj).intValue() : ResultCode.INTERNAL_ERROR.getCode();
+            String message = parsed.get("message") == null
+                    ? ex.getMessage() : String.valueOf(parsed.get("message"));
+            Object data = parsed.get("data");
+            return new BusinessException(code, message, data);
+        } catch (Exception ignore) {
+            return new BusinessException(ResultCode.INTERNAL_ERROR,
+                    "下游调用失败: HTTP " + ex.getStatusCode().value());
+        }
     }
 
     // ------------------------------------------------------------------ 内部面

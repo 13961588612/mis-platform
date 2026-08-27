@@ -25,6 +25,7 @@ import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -294,6 +295,60 @@ public class IqdAclController {
             return Result.fail(ex.getCode(), ex.getMessage());
         } catch (Exception ex) {
             return Result.fail(ResultCode.INTERNAL_ERROR.getCode(), "同步状态查询失败: " + ex.getMessage());
+        }
+    }
+
+    // ================================================================ 二期：语义模型编辑（P0-1~P0-12）
+
+    /**
+     * 编辑 catalog 节点（写回 MDL 前置；需 iqd:catalog:edit）。
+     *
+     * <p>乐观并发冲突（mis-iqd 40900）原样透传业务码与 {@code current_edit_revision}（data），
+     * 前端据此提示「版本已变更，点重读」；引用阻断（42200）同理透传 dependents。不裸透为 500。
+     */
+    @PutMapping("/catalog/node")
+    public Result<Map<String, Object>> updateCatalogNode(
+            @RequestBody Map<String, Object> body,
+            @RequestHeader(value = SecurityConstants.AUTHORIZATION_HEADER, required = false) String authorization,
+            @RequestHeader(value = SecurityConstants.HEADER_TRACE_ID, required = false) String traceId) {
+        try {
+            return Result.ok(iqdFacadeService.updateCatalogNode(body, authorization, traceId));
+        } catch (BusinessException ex) {
+            Result<Map<String, Object>> r = new Result<>();
+            r.setCode(ex.getCode());
+            r.setMessage(ex.getMessage());
+            r.setData(ex.getData() instanceof Map ? (Map<String, Object>) ex.getData() : null);
+            return r;
+        } catch (Exception ex) {
+            return Result.fail(ResultCode.INTERNAL_ERROR.getCode(), "catalog 节点编辑失败: " + ex.getMessage());
+        }
+    }
+
+    /**
+     * 取连接级编辑同步状态（需 iqd:catalog:edit；前端 CatalogSyncStatusBar 轮询）。
+     */
+    @GetMapping("/catalog/sync-status")
+    public Result<Map<String, Object>> getCatalogSyncStatus(@RequestParam Long connectionId) {
+        try {
+            return Result.ok(iqdFacadeService.getCatalogSyncStatus(connectionId));
+        } catch (BusinessException ex) {
+            return Result.fail(ex.getCode(), ex.getMessage());
+        } catch (Exception ex) {
+            return Result.fail(ResultCode.INTERNAL_ERROR.getCode(), "同步状态查询失败: " + ex.getMessage());
+        }
+    }
+
+    /**
+     * 触发对账（需 iqd:catalog:edit）：清空外部漂移并重按 model 重建。
+     */
+    @PostMapping("/catalog/reconcile")
+    public Result<Map<String, Object>> reconcileCatalog(@RequestParam Long connectionId) {
+        try {
+            return Result.ok(iqdFacadeService.reconcileCatalog(connectionId));
+        } catch (BusinessException ex) {
+            return Result.fail(ex.getCode(), ex.getMessage());
+        } catch (Exception ex) {
+            return Result.fail(ResultCode.INTERNAL_ERROR.getCode(), "对账触发失败: " + ex.getMessage());
         }
     }
 

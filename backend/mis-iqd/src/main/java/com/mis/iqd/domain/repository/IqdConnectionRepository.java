@@ -2,6 +2,9 @@ package com.mis.iqd.domain.repository;
 
 import com.mis.iqd.domain.entity.IqdConnection;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 
 import java.util.List;
 import java.util.Optional;
@@ -16,4 +19,20 @@ public interface IqdConnectionRepository extends JpaRepository<IqdConnection, Lo
 
     /** 一期业务上仅一条 enabled=true：取启用连接清单（供 IqdConfigClient 全量拉取）。 */
     List<IqdConnection> findByEnabledOrderByIdAsc(Integer enabled);
+
+    /** 取主连接（按连接 id；一期业务上即唯一启用连接）。 */
+    Optional<IqdConnection> findPrimary(Long connectionId);
+
+    /** 推进连接级已写回版本与 mdl_hash（build 成功回调）。 */
+    @Modifying
+    @Query("UPDATE IqdConnection c SET c.builtEditRevision = :rev, c.builtMdlHash = :hash "
+            + "WHERE c.id = :conn")
+    int stampBuiltRevision(@Param("conn") Long connectionId,
+                           @Param("rev") Long revision,
+                           @Param("hash") String mdlHash);
+
+    /** 置外部漂移标记（S3 漂移检测命中 / 重新导入收敛清零）。 */
+    @Modifying
+    @Query("UPDATE IqdConnection c SET c.staleDrift = :drift WHERE c.id = :conn")
+    int setStaleDrift(@Param("conn") Long connectionId, @Param("drift") boolean drift);
 }
