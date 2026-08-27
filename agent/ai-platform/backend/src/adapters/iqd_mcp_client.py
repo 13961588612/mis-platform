@@ -342,6 +342,49 @@ class IqdMcpClient:
 
         raise IqdMcpClientError(f"wren MCP 工具返回无法解析: {tool_name}")
 
+    # ================================================================ 方案 A 多连接路由
+
+    @classmethod
+    def for_connection(
+        cls,
+        connection_id: int | str,
+        registry: Any = None,
+        *,
+        mock: bool | None = None,
+    ) -> "IqdMcpClient":
+        """按 connection_id 取该连接专属 MCP 端点构造 client（方案 A 多连接路由）。
+
+        进程管理器为进程内单例（:func:`get_process_manager`），本方法据连接 id 取
+        该连接专属 ``wren serve mcp`` 端点（host/port）。若端点未就绪（连接未启动 /
+        已停止 / 已崩溃未重启），**显式抛错**，绝不静默落到默认单连接 8080 端点
+        （REQ-P0-3：多连接间不得串台）。问数链路（orchestrator）捕获该错误后降级
+        mock（REQ-P0-1）。
+
+        Args:
+            connection_id: 问数连接 id（任意可比较标识，内部统一转 str）。
+            registry: 进程管理器（缺省取单例）；可注入便于测试。
+            mock: 强制 mock 模式（仅测试 / 离线验证）。
+
+        Returns:
+            :class:`IqdMcpClient`（host/port 绑定该连接专属端点）。
+
+        Raises:
+            IqdMcpClientError: 连接端点未就绪（须先经 MCP 管理器 /iqd/mcp/start 拉起）。
+        """
+        if mock is True:
+            return cls(mock=True)
+        from src.adapters.wren_mcp_registry import WrenMcpProcessManager
+
+        mgr: WrenMcpProcessManager = registry or get_process_manager()
+        endpoint = mgr.get_endpoint(connection_id)
+        if endpoint is None:
+            raise IqdMcpClientError(
+                f"连接 {connection_id} 的 MCP 端点未就绪（未启动/已停止/已崩溃未重启）；"
+                "请先经 MCP 管理器 /iqd/mcp/start 拉起该连接进程"
+            )
+        logger.info("IQD MCP client for connection", connection_id=connection_id, port=endpoint.port)
+        return cls(host=endpoint.host, port=endpoint.port)
+
     # ================================================================ Mock 数据
 
     def _mock_plan(self, question: str, allowed_tables: list[str] | None) -> dict[str, Any]:

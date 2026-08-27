@@ -327,6 +327,9 @@ class IqdAskService:
                 build_error="no primary connection",
             )
 
+        # 方案 A 多连接：build/index 落到本连接专属 wren project 目录（project_dir）
+        project_home = self._project_home(cid)
+
         # ① 拉待下发物料（pending + enabled）
         try:
             sql_pairs = await client.get_sql_pairs(cid)
@@ -365,6 +368,7 @@ class IqdAskService:
                 sql_pairs=sql_pair_args,
                 instructions=instruction_args,
                 allow_write=True,
+                project_dir=project_home,
             )
             mdl_hash = self._parse_mdl_hash(build_result.get("stdout", ""))
         except IqdCliError as exc:
@@ -376,7 +380,7 @@ class IqdAskService:
         index_error: str | None = None
         if build_status == "success" and settings.iqd_mcp.memory_index_enabled:
             try:
-                await cli.memory_index()
+                await cli.memory_index(project_dir=project_home)
                 index_status = "success"
             except IqdCliError as exc:
                 index_status = "failed"
@@ -427,6 +431,275 @@ class IqdAskService:
             build_error=build_error,
             index_error=index_error,
         )
+
+    # ================================================================ 运维自愈三按钮（自愈闭环，同构 trigger_build_index）
+
+    async def trigger_force_rebuild(
+        self, connection_id: int | None = None, wait: bool = True
+    ) -> SyncResult:
+        """强制重建（自愈三按钮之一）：拉物料 → context build(force=True) → memory index → 回填 + 报作业。
+
+        与 :meth:`trigger_build_index` 同构，仅 build 阶段传 ``force=True``（附加
+        ``self_heal_force_build_args`` 配置项）；其余容错/回填/报作业完全一致。上报
+        ``action="force_rebuild"`` 以区分动作来源（审计 REQ-7）。
+
+        Args:
+            connection_id: 问数连接 id（缺省解析主连接）。
+            wait: 是否阻塞至完成（自愈为运维主动触发，默认 True）。
+
+        Returns:
+            :class:`SyncResult`。
+        """
+        from src.adapters.iqd_cli import IqdCli, IqdCliError
+        from src.adapters.iqd_config_client import IqdConfigClient, IqdConfigClientError
+
+        settings = get_settings()
+        cli = IqdCli()
+        client = self._get_config_client()
+
+        cid = connection_id or await self._resolve_primary_connection_id(client)
+        if cid is None:
+            result = SyncResult(
+                connection_id=None, coalesced=False,
+                build_status="failed", build_error="no primary connection",
+            )
+            await self._report_selfheal_job(client, None, "force_rebuild", result)
+            return result
+
+        # 方案 A 多连接：build/index 落到本连接专属 wren project 目录（project_dir）
+        project_home = self._project_home(cid)
+
+        # ① 拉待下发物料（pending + enabled）
+        try:
+            sql_pairs = await client.get_sql_pairs(cid)
+            knowledge = await client.get_knowledge(cid)
+        except IqdConfigClientError as exc:
+            result = SyncResult(
+                connection_id=cid, coalesced=False,
+                build_status="failed", build_error=f"拉取待下发物料失败: {exc}",
+            )
+            await self._report_selfheal_job(client, cid, "force_rebuild", result)
+            return result
+        pending_pairs = [
+            p for p in sql_pairs
+            if p.get("sync_status") == "pending" and p.get("enabled", True) is not False
+        ]
+        pending_knowledge = [
+            k for k in knowledge
+            if k.get("sync_status") == "pending" and k.get("enabled", True) is not False
+        ]
+        sql_pair_args = [
+            {"question": p.get("question"), "sql": p.get("wren_sql") or p.get("sql_text")}
+            for p in pending_pairs
+        ]
+        instruction_args = [
+            {"title": k.get("title"), "content": k.get("content") or ""}
+            for k in pending_knowledge
+        ]
+
+        # ② context build（强制重建：仅 build 阶段传 force=True）
+        build_status = "success"
+        build_error: str | None = None
+        mdl_hash: str | None = None
+        try:
+            build_result = await cli.context_build(
+                sql_pairs=sql_pair_args,
+                instructions=instruction_args,
+                allow_write=True,
+                force=True,
+                project_dir=project_home,
+            )
+            mdl_hash = self._parse_mdl_hash(build_result.get("stdout", ""))
+        except IqdCliError as exc:
+            build_status = "failed"
+            build_error = str(exc)
+
+        # ③ memory index（容错：缺失/失败不阻断 build；单独记 index 状态）
+        index_status = "skipped"
+        index_error: str | None = None
+        if build_status == "success" and settings.iqd_mcp.memory_index_enabled:
+            try:
+                await cli.memory_index(project_dir=project_home)
+                index_status = "success"
+            except IqdCliError as exc:
+                index_status = "failed"
+                index_error = str(exc)
+                logger.warning("IQD force-rebuild memory index failed (non-blocking)", error=str(exc))
+
+        # ④ 回填（wren_ref_id 统一填本次 mdl_hash）
+        backfill_ok = False
+        if build_status == "success" and mdl_hash:
+            try:
+                await client.backfill_enhancement_sync({
+                    "connection_id": cid,
+                    "wren_ref_id": mdl_hash,
+                    "sql_pair_ids": [p.get("id") for p in pending_pairs if p.get("id") is not None],
+                    "knowledge_ids": [k.get("id") for k in pending_knowledge if k.get("id") is not None],
+                    "synced_at": datetime.now(timezone.utc).isoformat(),
+                })
+                backfill_ok = True
+            except IqdConfigClientError as exc:
+                build_status = "failed"
+                build_error = f"回填失败: {exc}"
+
+        synced_pairs = len(pending_pairs) if backfill_ok else 0
+        synced_knowledge = len(pending_knowledge) if backfill_ok else 0
+        result = SyncResult(
+            connection_id=cid, coalesced=False,
+            build_status=build_status, index_status=index_status,
+            build_mdl_hash=mdl_hash,
+            synced_sql_pair_count=synced_pairs, synced_knowledge_count=synced_knowledge,
+            build_error=build_error, index_error=index_error,
+        )
+        await self._report_selfheal_job(client, cid, "force_rebuild", result)
+        return result
+
+    async def trigger_reindex(
+        self, connection_id: int | None = None, wait: bool = True
+    ) -> SyncResult:
+        """重新索引（自愈三按钮之一）：串联 ``memory reset`` + ``memory index``。
+
+        重置 WrenAI 记忆索引后重新下发；``build_status`` 反映 reset 结果，``index_status``
+        反映 index 结果（任一失败单独标记，不相互阻断）。上报 ``action="reindex"``。
+
+        Args:
+            connection_id: 问数连接 id（缺省解析主连接）。
+            wait: 是否阻塞至完成（自愈默认 True）。
+
+        Returns:
+            :class:`SyncResult`（build_status=reset 结果，index_status=index 结果）。
+        """
+        from src.adapters.iqd_cli import IqdCli, IqdCliError
+        from src.adapters.iqd_config_client import IqdConfigClient
+
+        cli = IqdCli()
+        client = self._get_config_client()
+
+        cid = connection_id or await self._resolve_primary_connection_id(client)
+        if cid is None:
+            result = SyncResult(
+                connection_id=None, coalesced=False,
+                build_status="failed", build_error="no primary connection",
+            )
+            await self._report_selfheal_job(client, None, "reindex", result)
+            return result
+
+        # 方案 A 多连接：build/index 落到本连接专属 wren project 目录（project_dir）
+        project_home = self._project_home(cid)
+
+        # ① memory reset（重新索引前置）
+        build_status = "success"
+        build_error: str | None = None
+        try:
+            await cli.memory_reset(project_dir=project_home)
+        except IqdCliError as exc:
+            build_status = "failed"
+            build_error = str(exc)
+            logger.warning("IQD memory reset failed", connection_id=cid, error=str(exc))
+
+        # ② memory index（reset 成功后下发索引；失败单独标 failed）
+        index_status = "skipped"
+        index_error: str | None = None
+        if build_status == "success":
+            try:
+                await cli.memory_index(project_dir=project_home)
+                index_status = "success"
+            except IqdCliError as exc:
+                index_status = "failed"
+                index_error = str(exc)
+                logger.warning("IQD reindex memory index failed", connection_id=cid, error=str(exc))
+
+        result = SyncResult(
+            connection_id=cid, coalesced=False,
+            build_status=build_status, index_status=index_status,
+            build_mdl_hash=None,
+            synced_sql_pair_count=0, synced_knowledge_count=0,
+            build_error=build_error, index_error=index_error,
+        )
+        await self._report_selfheal_job(client, cid, "reindex", result)
+        return result
+
+    async def trigger_validate(
+        self, connection_id: int | None = None, wait: bool = True
+    ) -> SyncResult:
+        """模型校验（自愈三按钮之一）：``context validate`` 校验当前语义上下文。
+
+        ``build_status`` 反映校验结果（success/failed），``build_error`` 携带人可读摘要
+        （REQ-8）。校验为只读动作，不改写模型；上报 ``action="validate"``。
+
+        Args:
+            connection_id: 问数连接 id（缺省解析主连接）。
+            wait: 是否阻塞至完成（自愈默认 True）。
+
+        Returns:
+            :class:`SyncResult`（build_status=校验结果，build_error=人可读摘要）。
+        """
+        from src.adapters.iqd_cli import IqdCli
+
+        cli = IqdCli()
+        client = self._get_config_client()
+
+        cid = connection_id or await self._resolve_primary_connection_id(client)
+        if cid is None:
+            result = SyncResult(
+                connection_id=None, coalesced=False,
+                build_status="failed", build_error="no primary connection",
+            )
+            await self._report_selfheal_job(client, None, "validate", result)
+            return result
+
+        # 方案 A 多连接：校验落到本连接专属 wren project 目录（project_dir）
+        project_home = self._project_home(cid)
+
+        try:
+            validate = await cli.context_validate(project_dir=project_home)
+        except Exception as exc:  # noqa: BLE001 - 校验调用异常归一为 failed
+            logger.error("IQD context validate call failed", connection_id=cid, error=str(exc))
+            result = SyncResult(
+                connection_id=cid, coalesced=False,
+                build_status="failed", build_error=f"校验调用异常: {exc}",
+            )
+            await self._report_selfheal_job(client, cid, "validate", result)
+            return result
+
+        ok = bool(validate.get("ok"))
+        summary = validate.get("summary") or ""
+        result = SyncResult(
+            connection_id=cid, coalesced=False,
+            build_status="success" if ok else "failed",
+            index_status="skipped",
+            build_mdl_hash=None,
+            synced_sql_pair_count=0, synced_knowledge_count=0,
+            build_error=None if ok else summary,
+        )
+        await self._report_selfheal_job(client, cid, "validate", result)
+        return result
+
+    async def _report_selfheal_job(
+        self, client: Any, connection_id: int | None, action: str, result: SyncResult
+    ) -> None:
+        """上报自愈作业（复用 report_sync_job，注入 action 区分动作来源）。
+
+        Args:
+            client: IqdConfigClient 实例。
+            connection_id: 问数连接 id（可能为 None，仅告警场景）。
+            action: 动作名（force_rebuild / reindex / validate）。
+            result: 本次 SyncResult。
+        """
+        try:
+            await client.report_sync_job({
+                "connection_id": connection_id,
+                "action": action,
+                "build_status": result.build_status,
+                "build_mdl_hash": result.build_mdl_hash,
+                "index_status": result.index_status,
+                "build_error": result.build_error,
+                "index_error": result.index_error,
+                "synced_sql_pair_count": result.synced_sql_pair_count,
+                "synced_knowledge_count": result.synced_knowledge_count,
+            })
+        except Exception as exc:  # noqa: BLE001 - 报作业失败仅告警，不阻断返回
+            logger.warning("IQD self-heal job report failed", action=action, error=str(exc))
 
     @staticmethod
     def _parse_mdl_hash(stdout: str) -> str | None:
@@ -497,6 +770,9 @@ class IqdAskService:
                 build_error="no primary connection",
             )
 
+        # 方案 A 多连接：build/index 落到本连接专属 wren project 目录（project_dir）
+        project_home = self._project_home(cid)
+
         # ① 取基线 mdl_raw + 已编辑节点
         try:
             full = await client.get_catalog_full(cid)
@@ -535,6 +811,7 @@ class IqdAskService:
                 sql_pairs=[],  # 物料已并入 mdl_dir/manifest，不再单列
                 instructions=[],
                 allow_write=True,
+                project_dir=project_home,
             )
             mdl_hash = self._parse_mdl_hash(build_result.get("stdout", ""))
         except IqdCliError as exc:
@@ -546,7 +823,7 @@ class IqdAskService:
         index_error: str | None = None
         if build_status == "success" and settings.iqd_mcp.memory_index_enabled:
             try:
-                await cli.memory_index()
+                await cli.memory_index(project_dir=project_home)
                 index_status = "success"
             except IqdCliError as exc:
                 index_status = "failed"
@@ -821,6 +1098,17 @@ class IqdAskService:
                 except (TypeError, ValueError):
                     return None
         return None
+
+    @staticmethod
+    def _project_home(connection_id: int) -> str:
+        """派生连接专属 wren project 目录（方案 A 多连接，build/index 落盘到该目录）。
+
+        与 :meth:`IqdMcpLifecycleService.project_home_of` 同义，确保 build/index 产物
+        与「每连接一进程」的 project 目录严格对齐（设计 §3.2），避免多连接互相串扰。
+        """
+        from src.agent.mis_iqd.mcp_lifecycle import IqdMcpLifecycleService
+
+        return IqdMcpLifecycleService.project_home_of(connection_id)
 
     # ================================================================ v1.10 方言转化 + 试运行
 

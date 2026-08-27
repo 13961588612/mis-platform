@@ -64,11 +64,40 @@ class IqdMcpSettings(BaseSettings):
 
     wren_mcp_host: str = Field(
         default="127.0.0.1",
-        description="wren serve mcp 监听地址（官方默认仅本机）",
+        description="wren serve mcp 监听地址（官方默认仅本机）；单连接回退端点",
     )
     wren_mcp_port: int = Field(
         default=8080,
-        description="wren serve mcp HTTP transport 端口",
+        description="单连接回退 MCP HTTP transport 端口（方案 A 下每连接独立端口，见 wren_mcp_port_range）",
+    )
+    # ===== 方案 A：多连接每进程独立端口 + 独立 project 目录 =====
+    wren_mcp_default_host: str = Field(
+        default="127.0.0.1",
+        description="每连接 wren serve mcp 监听地址（官方硬约束：仅本机、无 bearer-token）",
+    )
+    wren_mcp_port_range: str = Field(
+        default="18080-18180",
+        description="多连接 MCP 端口段（含端点，逗号分隔可多段）；进程管理器按连接分配并回收复用",
+    )
+    wren_projects_root: str = Field(
+        default="/var/lib/mis-iqd/wren-projects",
+        description="多连接 wren project 根目录；每连接 project_home = {wren_projects_root}/{connId}",
+    )
+    wren_mcp_health_interval_seconds: float = Field(
+        default=30.0,
+        description="后台健康检查循环间隔（秒）；失败计数达阈值置 unhealthy 并触发崩溃重启",
+    )
+    wren_mcp_health_failure_threshold: int = Field(
+        default=3,
+        description="健康连续失败次数阈值（达到后置 unhealthy 并重启进程）",
+    )
+    wren_mcp_start_timeout_seconds: float = Field(
+        default=30.0,
+        description="单进程拉起后等待 ready（target/mdl.json 可读 + HTTP health）的超时（秒）",
+    )
+    wren_mcp_dir_retention_days: int = Field(
+        default=7,
+        description="连接禁用/删除后 project 目录保留天数（保留期便于回溯/审计），到期定时清理",
     )
     wren_mcp_transport: str = Field(
         default="http",
@@ -101,6 +130,21 @@ class IqdMcpSettings(BaseSettings):
     memory_index_enabled: bool = Field(
         default=True,
         description="是否启用 `wren memory index` 下发记忆索引（闭环 build+index 关键步；部署侧需 wren CLI 支持）",
+    )
+
+    # ------------------------------------------------------------------ 运维自愈三按钮（Q5：可选 flag 仅来自配置，方法体不得硬编码）
+    self_heal_force_build_args: list[str] = Field(
+        default_factory=list,
+        description="运维自愈 force-rebuild 时附加给 `wren context build` 的可选 flag（如 ['--force']）；"
+        "W0 真机实测后由运维在 Nacos 回填，默认空（退化普通增量 build）",
+    )
+    self_heal_memory_reset_args: list[str] = Field(
+        default_factory=list,
+        description="运维自愈 re-index 时附加给 `wren memory reset` 的可选参数；W0 实测后回填，默认空",
+    )
+    self_heal_context_validate_args: list[str] = Field(
+        default_factory=list,
+        description="运维自愈 validate 时附加给 `wren context validate` 的可选参数；W0 实测后回填，默认空",
     )
 
 

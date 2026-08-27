@@ -23,7 +23,7 @@ from time import perf_counter
 from typing import Any
 from uuid import uuid4
 
-from src.adapters.iqd_mcp_client import IqdMcpClient
+from src.adapters.iqd_mcp_client import IqdMcpClient, IqdMcpClientError
 from src.agent.mis_iqd.errors import (
     QuestionUnsupportedError,
     ScopeDeniedError,
@@ -131,7 +131,7 @@ class AskOrchestrator:
         steps: list[PlanStep] = self._plan_mapper.build_empty()
         self._plan_mapper.mark_done(steps, "scope_check", detail=self._scope_detail(resolution))
 
-        mcp = self._get_mcp_client()
+        mcp = self._get_mcp_client(resolution.connection_id)
         plan = self._plan_mapper
 
         # ===== understanding + searching（get_context）=====
@@ -402,10 +402,32 @@ class AskOrchestrator:
 
     # ================================================================ 依赖
 
-    def _get_mcp_client(self) -> IqdMcpClient:
-        """懒加载 MCP 客户端。"""
+    def _get_mcp_client(self, connection_id: int | str | None = None) -> IqdMcpClient:
+        """按 connection_id 取该连接专属 MCP client（方案 A 多连接路由）。
+
+        无 connection_id 时退化为单连接默认端点（向后兼容）；有 connection_id 但
+        该连接 MCP 未就绪（未启动/已停止/崩溃未重启）时**降级 mock**（REQ-P0-1），
+        绝不静默落到默认单连接 8080 端点（REQ-P0-3：避免跨连接串台）。
+
+        Args:
+            connection_id: 问数连接 id（来自前置范围裁定结果）。
+
+        Returns:
+            :class:`IqdMcpClient`（绑定该连接专属端点，或降级 mock）。
+        """
         if self._mcp_client is None:
-            self._mcp_client = IqdMcpClient()
+            if connection_id is not None:
+                try:
+                    self._mcp_client = IqdMcpClient.for_connection(connection_id)
+                except IqdMcpClientError as exc:
+                    logger.warning(
+                        "IQD MCP 端点未就绪，问数降级 mock",
+                        connection_id=connection_id,
+                        error=str(exc),
+                    )
+                    self._mcp_client = IqdMcpClient(mock=True)
+            else:
+                self._mcp_client = IqdMcpClient()
         return self._mcp_client
 
     def _get_scope_resolver(self) -> ScopeResolver:

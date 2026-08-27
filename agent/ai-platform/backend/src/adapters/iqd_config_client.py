@@ -22,6 +22,7 @@ get-dict-sync-status 的增量拉取与变更事件订阅。
 
 from __future__ import annotations
 
+import json
 import time as _time
 from dataclasses import dataclass, field
 from typing import Any
@@ -55,6 +56,10 @@ GET_CATALOG_FULL_PATH = "/internal/v1/iqd/get-catalog-full"
 CATALOG_BACKFILL_PATH = "/internal/v1/iqd/enhance/catalog-backfill"
 CATALOG_SYNC_STATUS_PATH = "/internal/v1/iqd/catalog/sync-status"
 SET_DRIFT_PATH = "/internal/v1/iqd/enhance/drift"
+# —— 方案 A 多连接：MCP 进程状态回写（可观测 REQ-P1-2）——
+REPORT_MCP_STATUS_PATH = "/internal/v1/iqd/mcp-status"
+# —— 方案 A 多连接：取连接 secret_ref（D6 凭证解析前置；内部端点仅回引用不回明文）——
+GET_CONNECTION_CREDENTIALS_PATH = "/internal/v1/iqd/connection-credentials"
 
 #: 配置缓存桶名（与 IqdConfigClient 分桶缓存一一对应）
 CACHE_BUCKET_CONNECTIONS = "connections"
@@ -405,6 +410,141 @@ class IqdConfigClient:
         )
         logger.info("IQD stale drift set", connection_id=connection_id, drift=drift)
         return data if isinstance(data, dict) else {}
+
+    async def report_mcp_status(
+        self,
+        connection_id: int,
+        mcp_status: str,
+        mcp_port: int | None,
+        ctx: IqdCallContext | None = None,
+    ) -> dict[str, Any]:
+        """回写连接级 WrenAI MCP 进程状态（方案 A 多连接可观测，REQ-P1-2）。
+
+        ai-platform Worker 进程管理器（WrenMcpProcessManager）在启停/健康自检后回调，
+        使 mis-iqd ``iqd_connection.mcp_status`` / ``mcp_port`` 与内存注册表一致，
+        供前端轮询展示，无需登机 ``ps``。
+
+        Args:
+            connection_id: 问数连接 id。
+            mcp_status: 进程状态（running/stopped/starting/crashed/unhealthy）。
+            mcp_port: 进程监听端口（未启动为 None）。
+            ctx: 身份与追踪上下文。
+
+        Returns:
+            mis-iqd 返回的 data（``{"ok": true}``）。
+
+        Raises:
+            IqdConfigClientError: 网络失败或 mis-iqd 返回 ``code != 0``。
+        """
+        ctx = ctx or IqdCallContext()
+        data = await self._request(
+            "POST",
+            REPORT_MCP_STATUS_PATH,
+            ctx,
+            payload={
+                "connection_id": connection_id,
+                "mcp_status": mcp_status,
+                "mcp_port": mcp_port,
+            },
+        )
+        logger.info(
+            "IQD mcp status reported",
+            connection_id=connection_id,
+            mcp_status=mcp_status,
+            mcp_port=mcp_port,
+        )
+        return data if isinstance(data, dict) else {}
+
+    async def get_connection(
+        self, connection_id: int, ctx: IqdCallContext | None = None
+    ) -> dict[str, Any] | None:
+        """取单连接配置视图（方案 A 多连接生命周期用）。
+
+        Args:
+            connection_id: 问数连接 id。
+            ctx: 身份与追踪上下文。
+
+        Returns:
+            连接配置字典（含 name/enabled/defaultConnector/mcp_status/mcp_port 等）；
+            未找到返回 ``None``。
+        """
+        ctx = ctx or IqdCallContext()
+        items = await self._request(
+            "GET", GET_CONNECTIONS_PATH, ctx, params={"connection_id": connection_id}
+        )
+        if isinstance(items, list):
+            for it in items:
+                if isinstance(it, dict) and str(it.get("id")) == str(connection_id):
+                    return it
+        return None
+
+    async def get_connection_env(
+        self, connection_id: int, ctx: IqdCallContext | None = None
+    ) -> dict[str, str]:
+        """解析连接凭证为 wren 启动期 env 映射（D6 铁律：仅 env、不落盘）。
+
+        解析链路：mis-iqd 内部端点取 ``secret_ref`` → ai-platform
+        :class:`CredentialVault.resolve_by_ref` 解密明文 → 映射 wren env
+        占位名（postgres 标准 ``WREN_PG_*`` + 整份凭证 JSON 透传）。
+
+        Args:
+            connection_id: 问数连接 id。
+            ctx: 身份与追踪上下文。
+
+        Returns:
+            env 名 → 明文值 的字典（已剔除 ``None``/空值）。
+
+        Raises:
+            IqdConfigClientError: mis-iqd 调用失败 / secretRef 缺失 / 凭证不可解析。
+        """
+        ctx = ctx or IqdCallContext()
+        cred_body = await self._request(
+            "GET", GET_CONNECTION_CREDENTIALS_PATH, ctx, params={"connection_id": connection_id}
+        )
+        secret_ref: str | None = None
+        if isinstance(cred_body, dict):
+            secret_ref = cred_body.get("secret_ref") or cred_body.get("secretRef")
+        if not secret_ref:
+            raise IqdConfigClientError(
+                f"连接 {connection_id} 无 secret_ref（mis-iqd 未返回引用）"
+            )
+
+        from src.identity.credential_vault import CredentialVault
+
+        cred = await CredentialVault().resolve_by_ref(secret_ref)
+        if not cred:
+            raise IqdConfigClientError(
+                f"连接 {connection_id} 凭证不可解析（secret_ref={secret_ref} 无匹配明文）"
+            )
+        return self._map_credential_to_env(cred)
+
+    @staticmethod
+    def _map_credential_to_env(cred: dict[str, Any]) -> dict[str, str]:
+        """把凭证明文字典映射为 wren 启动期 env（postgres 标准占位名 + 整份透传）。
+
+        实际 env 名须与运维经 ``wren profile add`` 写入的 profile 模板 ``${ENV:...}``
+        占位保持一致；此处缺省 postgres 一套 + ``WREN_IQD_CREDENTIAL_JSON`` 整份透传
+        （自定义模板可经该键读取任意字段）。凭证明文**绝不写入日志/磁盘**。
+        """
+        env: dict[str, str] = {}
+        host = cred.get("host") or cred.get("hostname")
+        port = cred.get("port")
+        user = cred.get("user") or cred.get("username")
+        password = cred.get("password") or cred.get("pwd")
+        database = cred.get("database") or cred.get("db") or cred.get("dbname")
+        if host is not None:
+            env["WREN_PG_HOST"] = str(host)
+        if port is not None:
+            env["WREN_PG_PORT"] = str(port)
+        if user is not None:
+            env["WREN_PG_USER"] = str(user)
+        if password is not None:
+            env["WREN_PG_PASSWORD"] = str(password)
+        if database is not None:
+            env["WREN_PG_DB"] = str(database)
+        env["WREN_IQD_CREDENTIAL_JSON"] = json.dumps(cred, ensure_ascii=False)
+        # 剔除空值，避免注入空 env 变量
+        return {k: v for k, v in env.items() if v != ""}
 
     async def _resolve_primary_connection_id(self, ctx: IqdCallContext) -> int | None:
         """解析主连接 id（name='default' 或首条 enabled）。"""

@@ -1,0 +1,331 @@
+"""mis-iqd 运维自愈三按钮（T05）单元测试 + 路由集成测试（Q5 / REQ-7 / REQ-8）。
+
+不依赖活体 WrenAI / 常驻服务，wren CLI 经 ``IqdCli._run`` mock 隔离：
+
+1. **Q5 硬约束（参数隔离）**：``IqdCli`` 三原子（`context_build(force)` / `memory_reset`
+   / `context_validate`）的可选 flag **仅**来自 `IqdMcpSettings.self_heal_*_args` 配置，
+   方法体不得硬编码。用例断言：配置空时 `context_build(force=True)` 的 args 为
+   `["context","build","--allow-write"]`（**无** `--force`）；配置 `["--force"]` 时含
+   `--force`；`force=False` 时即使配置有 `--force` 也不附加。
+2. **三 service 方法**：`trigger_force_rebuild` / `trigger_reindex` / `trigger_validate`
+   经 mock cli 跑通返回 `SyncResult`，且 `_report_selfheal_job` 写入 payload 含正确
+   `action`（force_rebuild / reindex / validate），状态机收敛正确。
+3. **`context_validate` 摘要解析（REQ-8）**：JSON（errors/message）与纯文本两种形态。
+4. **路由端到端**：`POST /api/v1/iqd/self-heal/{force-rebuild,re-index,validate}`
+   → service → 状态回写（report_sync_job action），复用既有 mock iqd_cli._run 范式。
+"""
+
+from __future__ import annotations
+
+from contextlib import contextmanager
+from unittest.mock import AsyncMock, patch
+
+import pytest
+
+from src.adapters.iqd_cli import IqdCli, IqdCliError
+from src.agent.mis_iqd.service import IqdAskService, SyncResult
+from src.config import Settings
+
+
+# ================================================================ Q5 参数隔离（IqdCli 三原子）
+
+@contextmanager
+def _with_iqd_mcp_settings(**overrides: list[str]):
+    """monkeypatch ``iqd_cli.get_settings``，注入指定 self_heal_*_args 配置（Q5 隔离验证）。"""
+    s = Settings()
+    for key, val in overrides.items():
+        setattr(s.iqd_mcp, key, val)
+    with patch("src.adapters.iqd_cli.get_settings", return_value=s):
+        yield
+
+
+def _capture_args(cli: IqdCli) -> list[str]:
+    """取出最后一次 ``_run`` 调用传入的子命令参数列表。"""
+    return cli._run.call_args.args[0]
+
+
+@pytest.mark.asyncio
+async def test_context_build_force_true_with_config_injects_force_flag():
+    """配置 self_heal_force_build_args=['--force'] 时，force=True 调用 args 含 --force。"""
+    with _with_iqd_mcp_settings(self_heal_force_build_args=["--force"]):
+        cli = IqdCli()
+        cli._run = AsyncMock(return_value={"stdout": "", "stderr": "", "exit_code": 0})
+        await cli.context_build(force=True)
+        args = _capture_args(cli)
+    assert args[:3] == ["context", "build", "--allow-write"]
+    assert "--force" in args, "Q5 失败：--force 应来自配置而非硬编码"
+
+
+@pytest.mark.asyncio
+async def test_context_build_force_true_empty_config_has_no_hardcoded_flag():
+    """Q5 硬约束：配置为空时 force=True 的 args 恰好为 ["context","build","--allow-write"]，无 --force。"""
+    with _with_iqd_mcp_settings(self_heal_force_build_args=[]):
+        cli = IqdCli()
+        cli._run = AsyncMock(return_value={"stdout": "", "stderr": "", "exit_code": 0})
+        await cli.context_build(force=True)
+        args = _capture_args(cli)
+    assert args == ["context", "build", "--allow-write"], f"Q5 失败：不应硬编码 --force，实际 {args}"
+    assert "--force" not in args
+
+
+@pytest.mark.asyncio
+async def test_context_build_force_false_never_appends_force_flag():
+    """即使配置有 --force，force=False 也不附加（flag 仅 force=True 时生效）。"""
+    with _with_iqd_mcp_settings(self_heal_force_build_args=["--force"]):
+        cli = IqdCli()
+        cli._run = AsyncMock(return_value={"stdout": "", "stderr": "", "exit_code": 0})
+        await cli.context_build(force=False)
+        args = _capture_args(cli)
+    assert args == ["context", "build", "--allow-write"]
+    assert "--force" not in args
+
+
+@pytest.mark.asyncio
+async def test_memory_reset_args_come_from_config():
+    """memory reset 可选参数来自配置：空 → ["memory","reset"]；["--all"] → 含 --all。"""
+    with _with_iqd_mcp_settings(self_heal_memory_reset_args=[]):
+        cli = IqdCli()
+        cli._run = AsyncMock(return_value={"stdout": "", "stderr": "", "exit_code": 0})
+        await cli.memory_reset()
+        assert _capture_args(cli) == ["memory", "reset"]
+
+    with _with_iqd_mcp_settings(self_heal_memory_reset_args=["--all"]):
+        cli = IqdCli()
+        cli._run = AsyncMock(return_value={"stdout": "", "stderr": "", "exit_code": 0})
+        await cli.memory_reset()
+        args = _capture_args(cli)
+    assert args[:2] == ["memory", "reset"]
+    assert "--all" in args
+
+
+@pytest.mark.asyncio
+async def test_context_validate_args_come_from_config():
+    """context validate 可选参数来自配置：空 → ["context","validate"]；["--verbose"] → 含 --verbose。"""
+    with _with_iqd_mcp_settings(self_heal_context_validate_args=[]):
+        cli = IqdCli()
+        cli._run = AsyncMock(return_value={"stdout": "{}", "stderr": "", "exit_code": 0})
+        await cli.context_validate()
+        assert _capture_args(cli) == ["context", "validate"]
+
+    with _with_iqd_mcp_settings(self_heal_context_validate_args=["--verbose"]):
+        cli = IqdCli()
+        cli._run = AsyncMock(return_value={"stdout": "{}", "stderr": "", "exit_code": 0})
+        await cli.context_validate()
+        args = _capture_args(cli)
+    assert args[:2] == ["context", "validate"]
+    assert "--verbose" in args
+
+
+# ================================================================ REQ-8 摘要解析
+
+def test_parse_validate_summary_json_errors():
+    assert IqdCli._parse_validate_summary('{"errors":[{"message":"列 a 不存在"}]}', "") == "列 a 不存在"
+
+
+def test_parse_validate_summary_json_message():
+    assert IqdCli._parse_validate_summary('{"message":"整体校验失败"}', "") == "整体校验失败"
+
+
+def test_parse_validate_summary_json_errors_list_of_str():
+    assert IqdCli._parse_validate_summary('{"errors":["a 缺失", "b 缺失"]}', "") == "a 缺失; b 缺失"
+
+
+def test_parse_validate_summary_plain_text_error_line():
+    assert (
+        IqdCli._parse_validate_summary("some context\nError: model drift detected", "")
+        == "Error: model drift detected"
+    )
+
+
+def test_parse_validate_summary_plain_text_first_line():
+    assert IqdCli._parse_validate_summary("first line info\nsecond line", "") == "first line info"
+
+
+def test_parse_validate_summary_empty():
+    assert IqdCli._parse_validate_summary("", "") == ""
+
+
+@pytest.mark.asyncio
+async def test_context_validate_success_returns_ok_summary_empty():
+    """成功（stdout 为空、无 error 关键词）：ok=True、summary 为空、raw 为空串。"""
+    with _with_iqd_mcp_settings(self_heal_context_validate_args=[]):
+        cli = IqdCli()
+        cli._run = AsyncMock(return_value={"stdout": "", "stderr": ""})
+        out = await cli.context_validate()
+    assert out == {"ok": True, "summary": "", "raw": ""}
+
+
+@pytest.mark.asyncio
+async def test_context_validate_raises_returns_failed_with_summary():
+    with _with_iqd_mcp_settings(self_heal_context_validate_args=[]):
+        cli = IqdCli()
+        cli._run = AsyncMock(side_effect=IqdCliError("wren CLI 失败 exit=1: error: bad model"))
+        out = await cli.context_validate()
+    assert out["ok"] is False
+    assert "bad model" in out["summary"]
+    assert "wren CLI 失败" in out["raw"]
+
+
+# ================================================================ 三 service 方法 + action 回写
+
+def _patch_selfheal_clients(cli_return: dict | None = None, validate_return: dict | None = None):
+    """patch IqdCli / IqdConfigClient（与 test_iqd_close_loop 同范式），返回 (cli, client, mocks)。"""
+    cli_return = cli_return or {"stdout": '{"mdl_hash":"mdl_xyz"}'}
+    validate_return = validate_return or {"ok": True, "summary": "", "raw": "ok"}
+    MockCli = patch("src.adapters.iqd_cli.IqdCli").start()
+    MockClient = patch("src.adapters.iqd_config_client.IqdConfigClient").start()
+    cli = MockCli.return_value
+    cli.context_build = AsyncMock(return_value=cli_return)
+    cli.memory_reset = AsyncMock(return_value={"exit_code": 0})
+    cli.memory_index = AsyncMock(return_value={"exit_code": 0})
+    cli.context_validate = AsyncMock(return_value=validate_return)
+    client = MockClient.return_value
+    client.get_sql_pairs = AsyncMock(return_value=[])
+    client.get_knowledge = AsyncMock(return_value=[])
+    client.backfill_enhancement_sync = AsyncMock(return_value={"synced_count": 0})
+    client.report_sync_job = AsyncMock(return_value={"id": 1})
+    return cli, client, (MockCli, MockClient)
+
+
+@pytest.mark.asyncio
+async def test_trigger_force_rebuild_runs_build_and_reports_action():
+    """强制重建：context build(force) + memory index，状态成功，report action=force_rebuild。"""
+    service = IqdAskService()
+    cli, client, mocks = _patch_selfheal_clients()
+    try:
+        result = await service.trigger_force_rebuild(connection_id=1, wait=True)
+    finally:
+        for m in mocks:
+            m.stop()
+
+    assert result.build_status == "success"
+    assert result.build_mdl_hash == "mdl_xyz"
+    assert result.index_status == "success"
+    assert cli.context_build.call_args.kwargs.get("force") is True
+    report = client.report_sync_job.call_args.args[0]
+    assert report["action"] == "force_rebuild"
+    assert report["build_status"] == "success"
+
+
+@pytest.mark.asyncio
+async def test_trigger_reindex_resets_then_indexes_and_reports_action():
+    """重新索引：memory reset + memory index，状态成功，report action=reindex。"""
+    service = IqdAskService()
+    cli, client, mocks = _patch_selfheal_clients()
+    try:
+        result = await service.trigger_reindex(connection_id=1, wait=True)
+    finally:
+        for m in mocks:
+            m.stop()
+
+    assert cli.memory_reset.call_count == 1
+    assert cli.memory_index.call_count == 1
+    assert result.build_status == "success"
+    assert result.index_status == "success"
+    report = client.report_sync_job.call_args.args[0]
+    assert report["action"] == "reindex"
+
+
+@pytest.mark.asyncio
+async def test_trigger_validate_ok_reports_action():
+    """模型校验成功：build_status=success，report action=validate。"""
+    service = IqdAskService()
+    cli, client, mocks = _patch_selfheal_clients(validate_return={"ok": True, "summary": "", "raw": "ok"})
+    try:
+        result = await service.trigger_validate(connection_id=1, wait=True)
+    finally:
+        for m in mocks:
+            m.stop()
+
+    assert result.build_status == "success"
+    assert result.index_status == "skipped"
+    assert result.build_error is None
+    report = client.report_sync_job.call_args.args[0]
+    assert report["action"] == "validate"
+
+
+@pytest.mark.asyncio
+async def test_trigger_validate_failed_reports_summary_as_build_error():
+    """模型校验失败：build_status=failed，build_error=人可读摘要（REQ-8），report action=validate。"""
+    service = IqdAskService()
+    cli, client, mocks = _patch_selfheal_clients(
+        validate_return={"ok": False, "summary": "列 a 不存在", "raw": "err"}
+    )
+    try:
+        result = await service.trigger_validate(connection_id=1, wait=True)
+    finally:
+        for m in mocks:
+            m.stop()
+
+    assert result.build_status == "failed"
+    assert result.build_error == "列 a 不存在"
+    report = client.report_sync_job.call_args.args[0]
+    assert report["action"] == "validate"
+    assert report["build_status"] == "failed"
+
+
+# ================================================================ 路由端到端（service → 状态回写）
+
+def _route_test_case(action: str, cli_return: dict, validate_return: dict | None = None):
+    """驱动真实路由，验证端到端返回 + report_sync_job action 回写。"""
+    from fastapi.testclient import TestClient
+
+    from src.api.deps import get_current_user, get_trace_id
+    from src.main import app
+
+    with patch("src.adapters.iqd_cli.IqdCli") as MockCli, patch(
+        "src.adapters.iqd_config_client.IqdConfigClient"
+    ) as MockClient:
+        cli = MockCli.return_value
+        cli.context_build = AsyncMock(return_value=cli_return)
+        cli.memory_reset = AsyncMock(return_value={"exit_code": 0})
+        cli.memory_index = AsyncMock(return_value={"exit_code": 0})
+        cli.context_validate = AsyncMock(
+            return_value=validate_return or {"ok": True, "summary": "", "raw": "ok"}
+        )
+        client = MockClient.return_value
+        client.get_sql_pairs = AsyncMock(return_value=[])
+        client.get_knowledge = AsyncMock(return_value=[])
+        client.backfill_enhancement_sync = AsyncMock(return_value={"synced_count": 0})
+        client.report_sync_job = AsyncMock(return_value={"id": 1})
+
+        app.dependency_overrides[get_current_user] = lambda: {"user_id": "u1"}
+        app.dependency_overrides[get_trace_id] = lambda: "t-route"
+        try:
+            tc = TestClient(app)
+            resp = tc.post(
+                f"/api/v1/iqd/self-heal/{action}",
+                json={"connection_id": 1, "wait": True},
+            )
+        finally:
+            app.dependency_overrides.clear()
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["code"] == 0, body
+    return body, client.report_sync_job.call_args.args[0]
+
+
+def test_route_force_rebuild_end_to_end():
+    body, report = _route_test_case(
+        "force-rebuild", cli_return={"stdout": '{"mdl_hash":"mdl_route"}', "stderr": ""}
+    )
+    assert body["data"]["build_status"] == "success"
+    assert body["data"]["build_mdl_hash"] == "mdl_route"
+    assert report["action"] == "force_rebuild"
+
+
+def test_route_re_index_end_to_end():
+    body, report = _route_test_case("re-index", cli_return={"stdout": "{}", "stderr": ""})
+    assert body["data"]["build_status"] == "success"
+    assert report["action"] == "reindex"
+
+
+def test_route_validate_end_to_end():
+    body, report = _route_test_case(
+        "validate",
+        cli_return={"stdout": "{}", "stderr": ""},
+        validate_return={"ok": True, "summary": "", "raw": "ok"},
+    )
+    assert body["data"]["build_status"] == "success"
+    assert report["action"] == "validate"

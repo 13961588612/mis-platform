@@ -278,10 +278,37 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     logger.info("Startup phase complete")
 
+    # ===== 方案 A 多连接：WrenAI MCP 进程引导（T4/T5）=====
+    # 批量拉起所有启用连接的 MCP 进程 + 启动后台健康监督循环（崩溃重启 + 状态回写）。
+    # 单连接启动失败（如 MDL 未构建）不阻断 Worker 主进程；best-effort。
+    mcp_stop_event: Any = None
+    mcp_health_task: Any = None
+    try:
+        from src.agent.mis_iqd.bootstrap import (
+            bulk_start_enabled_iqd_mcp,
+            start_iqd_mcp_supervisor,
+        )
+
+        await bulk_start_enabled_iqd_mcp()
+        mcp_stop_event, mcp_health_task = await start_iqd_mcp_supervisor()
+        logger.info("IQD MCP bootstrap complete")
+    except Exception as exc:
+        logger.warning("IQD MCP bootstrap deferred", error=str(exc))
+
     yield
 
     # --- 关闭阶段 ---
     logger.info("Application shutting down")
+
+    # ===== 方案 A 多连接：WrenAI MCP 进程优雅关闭（T4/T5）=====
+    # 先停健康监督循环（避免关闭期再触发重启），再 stop_all 回收端口 + 回写 stopped。
+    try:
+        from src.agent.mis_iqd.bootstrap import shutdown_iqd_mcp
+
+        await shutdown_iqd_mcp(mcp_stop_event, mcp_health_task)
+        logger.info("IQD MCP shutdown complete")
+    except Exception as exc:
+        logger.warning("IQD MCP shutdown error", error=str(exc))
 
     # 先取消 agent 故障转移再对齐循环（T9 收口），避免其在拆除 worker / 释放租约期间
     # 再触发 sync_from_configs / refresh_streams 产生竞态。
@@ -483,6 +510,8 @@ def create_app() -> FastAPI:
     from src.api.routes.channels import router as channels_router
     from src.api.routes.files import router as files_router
     from src.api.routes.iqd_enhance import router as iqd_enhance_router
+    from src.api.routes.iqd_selfheal import router as iqd_selfheal_router
+    from src.api.routes.iqd_mcp_manager import router as iqd_mcp_manager_router
     from src.api.routes.mcp import router as mcp_router
     from src.api.routes.mis_capability import router as mis_capability_router
     from src.api.routes.push import router as push_router
@@ -504,6 +533,10 @@ def create_app() -> FastAPI:
     app.include_router(mis_capability_router, prefix="/api/v1")
     # v1.10 样本对方言转化 + 试运行（BFF → AiPlatformClient → 本路由 → MisIqdService）
     app.include_router(iqd_enhance_router, prefix="/api/v1")
+    # 运维自愈三按钮（BFF → AiPlatformClient → 本路由 → IqdAskService）
+    app.include_router(iqd_selfheal_router, prefix="/api/v1")
+    # 方案 A 多连接：WrenAI MCP 连接级生命周期管理（BFF → AiPlatformClient → 本路由）
+    app.include_router(iqd_mcp_manager_router, prefix="/api/v1")
 
     # ===== 统一 API 响应格式 =====
     # 所有 API 响应遵循：{ code, data, message, traceId }
