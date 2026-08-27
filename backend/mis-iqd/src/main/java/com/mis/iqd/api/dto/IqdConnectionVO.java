@@ -1,5 +1,6 @@
 package com.mis.iqd.api.dto;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonProperty;
 
 import java.time.Instant;
@@ -170,6 +171,7 @@ public class IqdConnectionVO {
         this.mcpPort = mcpPort;
     }
 
+    @JsonIgnore
     public String getMcpHost() {
         return mcpHost;
     }
@@ -178,6 +180,7 @@ public class IqdConnectionVO {
         this.mcpHost = mcpHost;
     }
 
+    @JsonIgnore
     public String getAgentHandle() {
         return agentHandle;
     }
