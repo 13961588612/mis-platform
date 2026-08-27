@@ -1,8 +1,16 @@
-import { type ComponentType } from 'react';
+import { useEffect, type ComponentType } from 'react';
 import { useLocation } from 'react-router-dom';
+import microApp from '@micro-zoe/micro-app';
 import { cn } from '@/lib/utils';
 import { useTabStore } from '@/stores/tab-store';
+import { useAuthStore } from '@/stores/auth-store';
 import { getIframeApp, useIframeRegistryVersion } from '@/lib/nav/iframe-apps';
+import {
+  getRemoteApp,
+  normalizeRemotePath,
+  remoteCodeFromPath,
+  useRemoteRegistryVersion,
+} from '@/lib/nav/remote-apps';
 import { DashboardPage } from '@/features/dashboard/dashboard-page';
 import {
   AppManagePage,
@@ -66,9 +74,39 @@ function IframePage({ basePath, title }: { basePath: string; title: string }) {
   return (
     <iframe
       src={basePath}
-      className="h-full w-full border-0"
+      className="flex-1 min-h-0 w-full border-0"
       title={title}
       sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
+    />
+  );
+}
+
+/**
+ * micro-app 远程子应用：壳内融合渲染（独立运行时，与 React 组件不同生命周期）。
+ * baseroute 下发为子应用 __MICRO_APP_BASE_ROUTE__；keep-alive 由 micro-app 内置保活。
+ * 令牌：子应用启动经 getData/addDataListener 接收 setData 下发的 AUTH_TOKEN。
+ */
+function RemotePage({ code }: { code: string }) {
+  const meta = getRemoteApp(code);
+  const token = useAuthStore((s) => s.accessToken);
+  const user = useAuthStore((s) => s.user);
+  const permissions = useAuthStore((s) => s.permissions);
+  useEffect(() => {
+    if (token) {
+      // 会话数据整体下发：token + 用户信息 + 权限码（阶段 2：子应用免调 /auth/me 即可展示身份/判权限）
+      microApp.setData(code, { type: 'AUTH_TOKEN', token, user, permissions });
+    }
+  }, [code, token, user, permissions]);
+  if (!meta) return null;
+  return (
+    <micro-app
+      name={code}
+      url={meta.entry}
+      baseroute={`/remote/${code}`}
+      router-mode="native"
+      keep-alive
+      iframe
+      className="flex-1 min-h-0 block w-full"
     />
   );
 }
@@ -195,21 +233,46 @@ export function resolveDynamicPageMeta(path: string): { title: string; icon: str
   return rule ? { title: rule.title, icon: rule.icon } : null;
 }
 
-/** 按已打开 Tab 缓存页面实例；切 Tab 仅显隐，关闭 Tab 才卸载。host/iframe 统一在此渲染。 */
+/** 按已打开 Tab 缓存页面实例；切 Tab 仅显隐，关闭 Tab 才卸载。host/iframe/remote 统一在此渲染。 */
 export function KeepAliveOutlet() {
   const location = useLocation();
   const tabs = useTabStore((s) => s.tabs);
-  // 订阅注册表，避免 registerIframeApps 后不重渲染
+  // 订阅注册表，避免 register 后不重渲染
   useIframeRegistryVersion();
+  useRemoteRegistryVersion();
 
-  const paths = new Set(tabs.map((t) => t.path));
-  paths.add(location.pathname);
-  const active = location.pathname;
+  /**
+   * 壳子侧栏 remote 菜单导航同步。
+   *
+   * <p>micro-app native 模式下，壳子用 react-router pushState 改 URL 不触发 popstate，
+   * micro-app 感知不到 URL 变化 → iframe 内子应用不跳转（菜单点过去内容不变）。
+   * 这里在 remote 子路径变化时主动调用 microApp.router.replace 驱动子应用路由。
+   *
+   * <p>path 必须传包含 baseroute 的完整路径（如 /remote/recon/datasources）：
+   * micro-app 以 proxyWindow.location.href 为 base 解析，传相对子路径会丢掉 baseroute 前缀。
+   */
+  useEffect(() => {
+    const code = remoteCodeFromPath(location.pathname);
+    if (!code) return;
+    microApp.router
+      .replace({ name: code, path: location.pathname })
+      .catch(() => {
+        /* 子应用尚未渲染完成（首次挂载/资源加载中）时 replace 会 reject，忽略即可 */
+      });
+  }, [location.pathname]);
+
+  // remote 子路径归一为应用根路径：一个 remote 应用 = 一个 Tab = 一个 <micro-app> 实例
+  const active = normalizeRemotePath(location.pathname);
+  const paths = new Set(tabs.map((t) => normalizeRemotePath(t.path)));
+  paths.add(active);
 
   const activeIframeCode = active.startsWith('/iframe/') ? active.slice('/iframe/'.length) : null;
   const activeIframe = activeIframeCode ? getIframeApp(activeIframeCode) : null;
-  const activeHostMissing = !activeIframeCode && !resolvePageComponent(active);
+  const activeRemoteCode = remoteCodeFromPath(active);
+  const activeRemote = activeRemoteCode ? getRemoteApp(activeRemoteCode) : null;
+  const activeHostMissing = !activeIframeCode && !activeRemoteCode && !resolvePageComponent(active);
   const activeIframeMissing = Boolean(activeIframeCode) && !activeIframe;
+  const activeRemoteMissing = Boolean(activeRemoteCode) && !activeRemote;
 
   return (
     <div className="relative h-full min-h-0 w-full flex-1 overflow-hidden">
@@ -217,6 +280,7 @@ export function KeepAliveOutlet() {
         const isActive = path === active;
         const iframeCode = path.startsWith('/iframe/') ? path.slice('/iframe/'.length) : null;
         const iframeMeta = iframeCode ? getIframeApp(iframeCode) : null;
+        const remoteCode = remoteCodeFromPath(path);
 
         if (iframeCode) {
           if (!iframeMeta) return null;
@@ -230,6 +294,22 @@ export function KeepAliveOutlet() {
               aria-hidden={!isActive}
             >
               <IframePage basePath={iframeMeta.basePath} title={iframeMeta.title} />
+            </div>
+          );
+        }
+
+        if (remoteCode) {
+          if (!getRemoteApp(remoteCode)) return null;
+          return (
+            <div
+              key={path}
+              className={cn(
+                'absolute inset-0 flex flex-col',
+                isActive ? 'z-10' : 'pointer-events-none invisible z-0',
+              )}
+              aria-hidden={!isActive}
+            >
+              <RemotePage code={remoteCode} />
             </div>
           );
         }
@@ -252,6 +332,11 @@ export function KeepAliveOutlet() {
       })}
 
       {activeIframeMissing ? (
+        <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground">
+          正在加载远程应用…
+        </div>
+      ) : null}
+      {activeRemoteMissing ? (
         <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground">
           正在加载远程应用…
         </div>

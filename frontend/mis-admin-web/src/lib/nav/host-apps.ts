@@ -52,6 +52,11 @@ export function resolveActiveHostAppCode(
     const code = pathname.slice('/iframe/'.length).split('/')[0];
     if (code) return code;
   }
+  // micro-app 远程子应用（runtime='remote'）：/remote/recon/connections → recon
+  if (pathname.startsWith('/remote/')) {
+    const code = pathname.slice('/remote/'.length).split('/')[0];
+    if (code) return code;
+  }
   if (loginAppCode) return loginAppCode;
   return 'system';
 }

@@ -46,6 +46,13 @@ import { AGENT_NAV } from '@/lib/nav/agent-nav';
 import { resolveActiveHostAppCode, resolveAppEntry } from '@/lib/nav/host-apps';
 import { APP_GROUP_LABEL } from '@/lib/nav/app-groups';
 import { mergeNavWithFallback, routerMenusToSystemNav } from '@/lib/nav/menus-to-nav';
+import {
+  getRemoteApp,
+  normalizeRemotePath,
+  registerRemoteApps,
+  remoteCodeFromPath,
+} from '@/lib/nav/remote-apps';
+import { RECON_NAV } from '@/lib/nav/recon-nav';
 import { useTabStore } from '@/stores/tab-store';
 
 /** 原型 .btn.btn-ghost：text-sm / font-medium / gap-2 / 无描边 */
@@ -88,7 +95,9 @@ export function AppLayout() {
           ? AGENT_NAV
           : activeAppCode === 'system'
             ? SYSTEM_NAV
-            : null;
+            : activeAppCode === 'recon'
+              ? RECON_NAV
+              : null;
     const dyn = routerMenusToSystemNav(menus);
     if (!dyn) return fallback ?? SYSTEM_NAV;
     if (fallback) return mergeNavWithFallback(fallback, dyn);
@@ -106,6 +115,8 @@ export function AppLayout() {
   const iframeCode = location.pathname.startsWith('/iframe/') ? location.pathname.slice('/iframe/'.length) : null;
   const iframeApp = iframeCode ? apps.find((a) => a.code === iframeCode) : null;
   const iframeReg = iframeCode ? getIframeApp(iframeCode) : null;
+  const remoteCode = remoteCodeFromPath(location.pathname);
+  const remoteMeta = remoteCode ? getRemoteApp(remoteCode) : null;
   // 明细页（如 /kb/libraries/12）不在侧栏清单里，navItem 会前缀命中列表页导致标题重名，
   // 因此动态元信息必须排在 navItem 之前。
   const dynamicMeta = useMemo(() => resolveDynamicPageMeta(location.pathname), [location.pathname]);
@@ -113,7 +124,9 @@ export function AppLayout() {
     iframeApp?.name ??
     iframeReg?.title ??
     dynamicMeta?.title ??
+    // remote 子路径优先取侧栏页名（navItem），根路径回退应用名
     navItem?.title ??
+    remoteMeta?.title ??
     KEEP_ALIVE_META[location.pathname]?.title ??
     '概览';
   const pageIcon =
@@ -121,6 +134,7 @@ export function AppLayout() {
     iframeReg?.icon ??
     dynamicMeta?.icon ??
     navItem?.icon ??
+    remoteMeta?.icon ??
     KEEP_ALIVE_META[location.pathname]?.icon ??
     'LayoutDashboard';
   const isIframeApp = Boolean(iframeCode);
@@ -141,7 +155,8 @@ export function AppLayout() {
   }, [setCopilotOpen]);
 
   useEffect(() => {
-    const path = location.pathname;
+    // remote 子路径归一为应用根路径：一个 remote 应用只占一个 Tab（对应单个 <micro-app> 实例）
+    const path = normalizeRemotePath(location.pathname);
     if (path === '/portal' || path === '/login' || path === '/change-password' || path === '/403') return;
     openTab({
       path,
@@ -176,6 +191,7 @@ export function AppLayout() {
       .then((data) => {
         setApps(data);
         registerIframeApps(data);
+        registerRemoteApps(data);
       })
       .catch(() => setApps([]));
   }, []);
@@ -262,6 +278,10 @@ export function AppLayout() {
                           if (!item.enterable) return;
                           if (item.runtime === 'iframe' && item.basePath) {
                             navigate(`/iframe/${item.code}`);
+                            return;
+                          }
+                          if (item.runtime === 'remote') {
+                            navigate(`/remote/${item.code}`);
                             return;
                           }
                           if (item.code === 'system' || item.runtime === 'host') {
@@ -377,7 +397,9 @@ export function AppLayout() {
                     ? '知识管理'
                     : activeAppCode === 'agent'
                       ? '智能体运营'
-                      : undefined
+                      : activeAppCode === 'recon'
+                        ? '对账平台'
+                        : undefined
               }
             />
           )}

@@ -51,9 +51,12 @@ public class AppController {
     }
 
     private AppView toView(AppVO app) {
-        boolean enterable = ENTERABLE_CODES.contains(app.code())
-                && "host".equalsIgnoreCase(app.runtime() != null ? app.runtime() : "host")
-                && (app.status() == null || app.status() == 1);
+        // 可进入性：remote / iframe 子应用由壳子容器（/remote/:code、iframe 页面）承载，天然可进；
+        // host 应用仍走白名单（本仓已实现路由才可进）。
+        String runtime = app.runtime() != null ? app.runtime() : "host";
+        boolean enterable = (app.status() == null || app.status() == 1) && (
+                "remote".equalsIgnoreCase(runtime) || "iframe".equalsIgnoreCase(runtime)
+                        || ("host".equalsIgnoreCase(runtime) && ENTERABLE_CODES.contains(app.code())));
         return new AppView(
                 app.id(),
                 app.tenantId(),

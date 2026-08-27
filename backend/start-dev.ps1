@@ -57,8 +57,9 @@ if (-not $loadedEnv) {
     }
 }
 
-$env:JWT_PRIVATE_KEY_PATH = "D:\code\mis-platform\backend\keys\private.pem"
-$env:JWT_PUBLIC_KEY_PATH  = "D:\code\mis-platform\backend\keys\public.pem"
+# 用仓库根动态拼接，避免硬编码 D:\code\mis-platform（实际可能在 D:\work\... 等其它路径）
+$env:JWT_PRIVATE_KEY_PATH = Join-Path $RepoRoot 'backend\keys\private.pem'
+$env:JWT_PUBLIC_KEY_PATH  = Join-Path $RepoRoot 'backend\keys\public.pem'
 # 仅在仍未配置时回落本机；已从 .env.integration 读到远程地址则不要改回 127.0.0.1
 if (-not $env:REDIS_HOST) { $env:REDIS_HOST = '127.0.0.1' }
 if (-not $env:DB_HOST) { $env:DB_HOST = 'localhost' }

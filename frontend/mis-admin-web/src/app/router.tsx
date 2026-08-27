@@ -58,6 +58,7 @@ export function AppRouter() {
               <Route path="/kb/*" element={null} />
               <Route path="/agent/*" element={null} />
               <Route path="/iframe/:code" element={null} />
+              <Route path="/remote/:code/*" element={null} />
               <Route path="/403" element={null} />
             </Route>
           </Route>

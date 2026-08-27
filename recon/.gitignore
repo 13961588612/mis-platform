@@ -1,0 +1,53 @@
+# IDE
+.idea/
+*.iml
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Env & secrets
+.env
+.env.integration
+backend/config/jdk.properties
+*.pem
+keys/
+
+# Java / Maven
+target/
+*.class
+*.jar
+*.war
+*.log
+hs_err_pid*
+
+# Node / Frontend（后续前端模块）
+node_modules/
+dist/
+.pnpm-store/
+# TS 增量编译产物（tsc --build 生成，可再生，不入库）
+*.tsbuildinfo
+
+# Python（后续 agent 模块）
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Docker volumes（若挂载到仓库内）
+.deploy-data/
+
+# Nacos 本机解压目录与下载包（scripts/start-nacos-native.ps1）
+deploy/nacos/runtime/
+deploy/nacos/_last-boot.txt
+deploy/nacos/plugins/
+
+# 运行时日志目录（后台服务持续写入，物理清理需先停服务）
+/backend/logs/
+/logs/
+
+# Windows 保留名误建垃圾文件（0 字节，git 不可见即可）
+/nul

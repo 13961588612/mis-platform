@@ -1,0 +1,25 @@
+# 复制自 deploy/nacos-config/bootstrap-template.yml，仅改 spring.application.name
+# 职责：应用名 + 是否连 Nacos + Nacos 地址/命名空间/Group；不写业务配置
+spring:
+  application:
+    name: recon-service
+  cloud:
+    nacos:
+      config:
+        enabled: ${MIS_REMOTE:true}
+        server-addr: ${NACOS_SERVER:10.254.16.6:8848}
+        namespace: ${NACOS_NAMESPACE:dev}
+        group: ${NACOS_CONFIG_GROUP:MIS_GROUP}
+        file-extension: yaml
+        shared-configs:
+          - data-id: mis-common
+            group: ${NACOS_CONFIG_GROUP:MIS_GROUP}
+            refresh: true
+        extension-configs:
+          - data-id: ${spring.application.name}
+            group: ${NACOS_CONFIG_GROUP:MIS_GROUP}
+            refresh: true
+      discovery:
+        enabled: ${MIS_REMOTE:true}
+        server-addr: ${NACOS_SERVER:10.254.16.6:8848}
+        namespace: ${NACOS_NAMESPACE:dev}

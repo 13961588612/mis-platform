@@ -106,6 +106,10 @@ export function PortalPage() {
       navigate(`/iframe/${app.code}`);
       return;
     }
+    if (app.runtime === 'remote') {
+      navigate(`/remote/${app.code}`);
+      return;
+    }
     if (app.code === 'system' || app.runtime === 'host') {
       navigate(resolveAppEntry(app.code, app.basePath));
     }

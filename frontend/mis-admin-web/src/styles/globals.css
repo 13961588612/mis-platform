@@ -139,6 +139,22 @@
     line-height: 1.6;
   }
 
+  /* micro-app 远程子应用渲染宿主滚动兜底：
+     <micro-app> 元素默认高度 auto（随子应用内容撑开），<micro-app-body>
+     的 height:100% 因此跟着内容变化，子应用内部 html/body/#root 的
+     height:100% 链失去固定参照——内容超高时既无法在子应用内滚动，
+     又被壳层 overflow-hidden 裁掉底部（实测：内容增则两容器同步增高，永无溢出）。
+     这里把 <micro-app> 固定为壳子布局给定高度（flex 撑满主区），
+     并让 <micro-app-body> 自身可纵向滚动，保证任何子应用页面的溢出都可滚到底。 */
+  micro-app {
+    height: 100%;
+    min-height: 0;
+  }
+  micro-app micro-app-body {
+    height: 100%;
+    overflow-y: auto;
+  }
+
   /* 各页表格表头：统一加粗 + 增加垂直高度（覆盖行内 py，保证与数据区明显分层） */
   /* 字号对齐参考风格：14px → 13px */
   /* 表头吸顶：sticky 必须作用在 th 上（thead/tr 不支持 sticky）；

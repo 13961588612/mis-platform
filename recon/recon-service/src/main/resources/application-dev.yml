@@ -1,0 +1,25 @@
+# 激活：SPRING_PROFILES_ACTIVE=dev 或 --spring.profiles.active=dev
+# 注意：与 MIS 配置方案 B（只保留 bootstrap+application）存在差异，见 T01-spec §7-4
+spring:
+  datasource:
+    hikari:
+      maximum-pool-size: 5
+      minimum-idle: 1
+  jpa:
+    show-sql: true
+    properties:
+      hibernate:
+        format_sql: true
+  quartz:
+    properties:
+      org.quartz.threadPool.threadCount: 3
+
+logging:
+  level:
+    com.mis.recon: DEBUG
+    org.hibernate.SQL: DEBUG
+
+management:
+  endpoint:
+    health:
+      show-details: always

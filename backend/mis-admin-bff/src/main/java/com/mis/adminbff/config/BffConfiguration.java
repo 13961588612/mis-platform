@@ -20,7 +20,12 @@ import org.springframework.web.reactive.function.client.WebClient;
  * {@link BffProperties} / {@link AiPlatformProperties} 保持同一种登记方式。
  */
 @Configuration
-@EnableConfigurationProperties({BffProperties.class, AiPlatformProperties.class, AgentOpsProperties.class})
+@EnableConfigurationProperties({
+        BffProperties.class,
+        AiPlatformProperties.class,
+        AgentOpsProperties.class,
+        ReconProperties.class
+})
 @EnableScheduling
 public class BffConfiguration {
 
