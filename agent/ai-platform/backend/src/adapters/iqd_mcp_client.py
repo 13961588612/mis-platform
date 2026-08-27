@@ -21,6 +21,7 @@ import json
 import time
 import uuid
 
+from src.adapters.wren_mcp_registry import WrenMcpProcessManager, get_process_manager
 from src.config import get_settings
 from src.utils.logging import get_logger
 
@@ -373,7 +374,6 @@ class IqdMcpClient:
         """
         if mock is True:
             return cls(mock=True)
-        from src.adapters.wren_mcp_registry import WrenMcpProcessManager
 
         mgr: WrenMcpProcessManager = registry or get_process_manager()
         endpoint = mgr.get_endpoint(connection_id)

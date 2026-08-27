@@ -237,7 +237,14 @@ class WrenMcpProcessManager:
         """
         cid = str(conn_id)
         async with self._lock:
-            if cid in self._entries and self._entries[cid].status == McpStatus.RUNNING:
+            # 早返回守卫：仅当「RUNNING 且进程存活」才跳过（保留已运行连接不重拉优化）；
+            # RUNNING 但 proc 已死（如 restart 先 terminate 置 proc=None）须继续重拉，
+            # 否则 restart 会短路成空操作、问数打到死端口（Bug B）。
+            if (
+                cid in self._entries
+                and self._entries[cid].status == McpStatus.RUNNING
+                and self._entries[cid].proc is not None
+            ):
                 entry = self._entries[cid]
                 logger.info("IQD MCP already running", conn_id=cid, port=entry.port)
                 return McpEndpoint(host=entry.host, port=entry.port)
