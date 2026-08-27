@@ -96,6 +96,9 @@ class AskOrchestrator:
     ) -> None:
         """初始化编排器（全部依赖可注入）。"""
         self._mcp_client: IqdMcpClient | None = mcp_client
+        # 方案 A 多连接：按 connection_id 缓存专属 client（避免跨连接串台，REQ-P0-3）。
+        # 单连接默认端点走 ``_mcp_client``，专属端点走本字典。
+        self._mcp_clients: dict[int | str, IqdMcpClient] = {}
         self._scope_resolver: ScopeResolver | None = scope_resolver
         self._lineage: LineageExtractor = lineage or LineageExtractor()
         self._plan_mapper: PlanMapper = plan_mapper or PlanMapper()
@@ -405,9 +408,13 @@ class AskOrchestrator:
     def _get_mcp_client(self, connection_id: int | str | None = None) -> IqdMcpClient:
         """按 connection_id 取该连接专属 MCP client（方案 A 多连接路由）。
 
-        无 connection_id 时退化为单连接默认端点（向后兼容）；有 connection_id 但
-        该连接 MCP 未就绪（未启动/已停止/崩溃未重启）时**降级 mock**（REQ-P0-1），
-        绝不静默落到默认单连接 8080 端点（REQ-P0-3：避免跨连接串台）。
+        优先级：
+        1. 构造时显式注入的 ``mcp_client``（golden path mock 测试 / 单连接场景）直接复用；
+        2. 无 ``connection_id`` → 退化单连接默认端点（向后兼容）；
+        3. 有 ``connection_id`` → 经 :meth:`IqdMcpClient.for_connection` 取专属端点，
+           并缓存于 ``_mcp_clients``（同一 orchestrator 实例多次问数命中缓存、按连接隔离，
+           杜绝跨连接串台，REQ-P0-3）。端点未就绪（未启动/已停止/崩溃未重启）时**降级 mock**
+           （REQ-P0-1），绝不静默落到默认单连接 8080 端点。
 
         Args:
             connection_id: 问数连接 id（来自前置范围裁定结果）。
@@ -415,20 +422,28 @@ class AskOrchestrator:
         Returns:
             :class:`IqdMcpClient`（绑定该连接专属端点，或降级 mock）。
         """
-        if self._mcp_client is None:
-            if connection_id is not None:
-                try:
-                    self._mcp_client = IqdMcpClient.for_connection(connection_id)
-                except IqdMcpClientError as exc:
-                    logger.warning(
-                        "IQD MCP 端点未就绪，问数降级 mock",
-                        connection_id=connection_id,
-                        error=str(exc),
-                    )
-                    self._mcp_client = IqdMcpClient(mock=True)
-            else:
-                self._mcp_client = IqdMcpClient()
-        return self._mcp_client
+        # 1. 显式注入的 client 优先（注入即单连接/测试用途）
+        if self._mcp_client is not None:
+            return self._mcp_client
+        # 2. 无 connection_id：单连接默认端点（向后兼容）
+        if connection_id is None:
+            self._mcp_client = IqdMcpClient()
+            return self._mcp_client
+        # 3. 按 connection_id 取专属端点，per-connection 缓存（REQ-P0-3）
+        cached: IqdMcpClient | None = self._mcp_clients.get(connection_id)
+        if cached is not None:
+            return cached
+        try:
+            client = IqdMcpClient.for_connection(connection_id)
+        except IqdMcpClientError as exc:
+            logger.warning(
+                "IQD MCP 端点未就绪，问数降级 mock",
+                connection_id=connection_id,
+                error=str(exc),
+            )
+            client = IqdMcpClient(mock=True)
+        self._mcp_clients[connection_id] = client
+        return client
 
     def _get_scope_resolver(self) -> ScopeResolver:
         """懒加载范围裁定器。"""

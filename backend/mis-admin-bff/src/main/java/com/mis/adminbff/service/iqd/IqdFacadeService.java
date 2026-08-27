@@ -393,6 +393,25 @@ public class IqdFacadeService {
     }
 
     /**
+     * 启用/创建连接项目（用户自助「启用/创建项目」按钮；需 iqd:mcp:manage）。
+     *
+     * <p>业务主路径：admin 保存连接（含凭证）后点击「启用/创建项目」→ 调 ai-platform
+     * {@code /api/v1/iqd/mcp/ensure}。平台据 {@code WREN_AGENT_ENDPOINT} 是否配置分流：
+     * 远程模式经 WrenMcpAgentClient.ensure 推凭证 + 拉起 wren 机进程（v0.2 跨机器落地，
+     * 决策 ①⑧），本地模式退回既有 Plan A 子进程模型。无论哪条路径，平台均回写
+     * mis-iqd {@code mcp_host} / {@code agent_handle} / {@code mcp_status}（可观测 + 前端定位）。
+     *
+     * @param connectionId 问数连接 id
+     * @param authorization BFF 收到的原始 MIS JWT（透传平台 RS256 校验）
+     * @param traceId      全链路追踪 ID
+     * @return 平台响应 data（{connection_id, mcp_status, mcp_host, agent_handle, remote}）
+     */
+    public Map<String, Object> enableProject(Long connectionId, String authorization, String traceId) {
+        requirePermission(properties.getMcpManagerPermission());
+        return aiPlatformClient.mcpEnsure(connectionId, authorization, traceId);
+    }
+
+    /**
      * 回查最近一次增强同步作业（需 iqd:enhance:view；P0-4 状态条）。
      */
     public Map<String, Object> getEnhancementSyncStatus(Long connectionId) {

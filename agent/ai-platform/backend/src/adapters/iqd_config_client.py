@@ -58,6 +58,8 @@ CATALOG_SYNC_STATUS_PATH = "/internal/v1/iqd/catalog/sync-status"
 SET_DRIFT_PATH = "/internal/v1/iqd/enhance/drift"
 # —— 方案 A 多连接：MCP 进程状态回写（可观测 REQ-P1-2）——
 REPORT_MCP_STATUS_PATH = "/internal/v1/iqd/mcp-status"
+# —— 方案 A 跨机器落地 v0.2：MCP 部署句柄回写（mcp_host/agent_handle/mcp_status）——
+REPORT_MCP_DEPLOY_PATH = "/internal/v1/iqd/mcp-deploy"
 # —— 方案 A 多连接：取连接 secret_ref（D6 凭证解析前置；内部端点仅回引用不回明文）——
 GET_CONNECTION_CREDENTIALS_PATH = "/internal/v1/iqd/connection-credentials"
 
@@ -452,6 +454,55 @@ class IqdConfigClient:
             connection_id=connection_id,
             mcp_status=mcp_status,
             mcp_port=mcp_port,
+        )
+        return data if isinstance(data, dict) else {}
+
+    async def report_mcp_deployment(
+        self,
+        connection_id: int,
+        mcp_host: str,
+        agent_handle: str,
+        mcp_status: str,
+        ctx: IqdCallContext | None = None,
+    ) -> dict[str, Any]:
+        """回写连接级 WrenAI MCP 跨机器部署句柄（方案 A 跨机器落地 v0.2）。
+
+        ai-platform Worker 经 :class:`WrenMcpAgentClient`.``ensure`` 拉起 wren 机部署后
+        回调，把数据面 ``mcp_host`` / ``agent_handle`` / ``mcp_status`` 写回 mis-iqd
+        ``iqd_connection``，供前端/可观测定位跨机器部署位置。仅存引用，不存凭证明文
+        （决策 ③ S1）。
+
+        Args:
+            connection_id: 问数连接 id。
+            mcp_host: agent 数据面可达 host（ai-platform 侧视角，如 http://10.x:9101）。
+            agent_handle: WrenMcpAgent 部署句柄（control 通道路由定位）。
+            mcp_status: MCP 进程状态（running/stopped/starting/crashed/unhealthy）。
+            ctx: 身份与追踪上下文。
+
+        Returns:
+            mis-iqd 返回的 data（``{"ok": true}``）。
+
+        Raises:
+            IqdConfigClientError: 网络失败或 mis-iqd 返回 ``code != 0``。
+        """
+        ctx = ctx or IqdCallContext()
+        data = await self._request(
+            "POST",
+            REPORT_MCP_DEPLOY_PATH,
+            ctx,
+            payload={
+                "connection_id": connection_id,
+                "mcp_host": mcp_host or "",
+                "agent_handle": agent_handle or "",
+                "mcp_status": mcp_status or "running",
+            },
+        )
+        logger.info(
+            "IQD mcp deployment reported",
+            connection_id=connection_id,
+            mcp_host=mcp_host,
+            agent_handle=agent_handle,
+            mcp_status=mcp_status,
         )
         return data if isinstance(data, dict) else {}
 

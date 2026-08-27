@@ -98,6 +98,22 @@ public class IqdConnection {
     @Column(name = "mcp_port")
     private Integer mcpPort;
 
+    /**
+     * 【方案A·跨机器落地 v0.2】WrenAI MCP 数据面可达 host（ai-platform 侧视角）。
+     * 由 ai-platform Worker 经 WrenMcpAgentClient.ensure 回写（agent 数据面
+     * mcp_endpoint），供前端/可观测定位跨机器部署位置。仅存引用，绝不存凭证明文。
+     */
+    @Column(name = "mcp_host")
+    private String mcpHost;
+
+    /**
+     * 【方案A·跨机器落地 v0.2】WrenMcpAgent 部署句柄（agent_handle）。
+     * 由 ai-platform Worker 经控制通道回写；用于后续 stop/restart/heartbeat 路由定位
+     * wren 机上的具体部署。仅存引用，不存凭证（决策 ③ S1：wren 机不接 Vault）。
+     */
+    @Column(name = "agent_handle")
+    private String agentHandle;
+
     @Column(name = "created_at", nullable = false)
     private Instant createdAt;
 
@@ -270,6 +286,22 @@ public class IqdConnection {
 
     public void setMcpPort(Integer mcpPort) {
         this.mcpPort = mcpPort;
+    }
+
+    public String getMcpHost() {
+        return mcpHost;
+    }
+
+    public void setMcpHost(String mcpHost) {
+        this.mcpHost = mcpHost;
+    }
+
+    public String getAgentHandle() {
+        return agentHandle;
+    }
+
+    public void setAgentHandle(String agentHandle) {
+        this.agentHandle = agentHandle;
     }
 
     public Instant getCreatedAt() {

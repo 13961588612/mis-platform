@@ -28,7 +28,16 @@ from typing import Any
 
 from src.adapters.iqd_cli import IqdCli
 from src.adapters.iqd_config_client import IqdConfigClient
-from src.adapters.wren_mcp_registry import McpStatus, get_process_manager
+from src.adapters.wren_mcp_agent_client import (
+    WrenMcpAgentClient,
+    WrenMcpAgentClientError,
+    WrenMcpAgentEnsureResult,
+)
+from src.adapters.wren_mcp_registry import (
+    McpStatus,
+    get_agent_registry,
+    get_process_manager,
+)
 from src.config import get_settings
 from src.utils.logging import get_logger
 
@@ -174,6 +183,127 @@ class IqdMcpLifecycleService:
             "host": endpoint.host,
             "port": endpoint.port,
         }
+
+    # ================================================================ 声明式 ensure（跨机器优先）
+
+    async def ensure_connection(self, connection_id: int, *, wait: bool = True) -> dict[str, Any]:
+        """声明式 ensure：远程 wren 机部署优先，本地 Plan A 子进程兜底。
+
+        跨机器部署（v0.2，决策 ①⑧）：wren 机常驻 :class:`WrenMcpAgent`，本方法经
+        :class:`~src.adapters.wren_mcp_agent_client.WrenMcpAgentClient`.``ensure``
+        推凭证 + 拉起 wren 机进程，回传数据面 ``mcp_endpoint`` / ``agent_handle``，
+        登记到跨机器注册表并回写 mis-iqd ``mcp_host`` / ``agent_handle`` / ``mcp_status``。
+
+        未配置 ``WREN_AGENT_ENDPOINT`` 时（测试/单机）退回本地 Plan A 子进程模型
+        （:meth:`start_connection`），保持既有结构不变（测试可继续 pin 本地启动器）。
+
+        Args:
+            connection_id: 问数连接 id。
+            wait: 保留参数（启动为异步，无需阻塞等待）。
+
+        Returns:
+            ``{"connection_id", "mcp_status", "mcp_host", "agent_handle", "remote"}``。
+
+        Raises:
+            IqdMcpLifecycleError: 连接不存在 / 未启用 / MDL 未就绪 / 凭证不可得 / 远程部署失败。
+        """
+        client = IqdConfigClient()
+        conn = await client.get_connection(connection_id)
+        if conn is None:
+            raise IqdMcpLifecycleError(f"连接 {connection_id} 不存在")
+        if not conn.get("enabled", True):
+            raise IqdMcpLifecycleError(f"连接 {connection_id} 未启用，拒绝启动 MCP")
+
+        # 远程优先：wren 机常驻 WrenMcpAgent（决策 ①⑧，单 wren 机 ⑧）
+        agent_client = WrenMcpAgentClient()
+        if agent_client.enabled:
+            return await self._ensure_remote(connection_id, conn, agent_client)
+
+        # 本地 Plan A 子进程模型（缺省路径，测试/单机）
+        return await self.start_connection(connection_id, wait=wait)
+
+    async def _ensure_remote(
+        self,
+        connection_id: int,
+        conn: dict[str, Any],
+        agent_client: WrenMcpAgentClient,
+    ) -> dict[str, Any]:
+        """远程 ensure：经 WrenMcpAgent.ensure 推凭证 + 拉起 wren 机进程（S1）。
+
+        - project 目录骨架（不含凭证明文）；
+        - 就绪门禁（target/mdl.json 已编译）；
+        - 解析凭证 env（D6）→ 经控制面一次性推送（bearer+内网，去 mTLS ②⑥）；
+        - agent 注入 wren 子进程 env（不落盘，S1）→ 回传数据面 mcp_endpoint/agent_handle；
+        - 登记跨机器注册表 + 回写 mis-iqd mcp_host/agent_handle/mcp_status。
+        """
+        project_home = self.project_home_of(connection_id)
+        # ① 确保 project 目录骨架（不含凭证明文）
+        IqdCli().ensure_project(connection_id, project_home)
+        # ② 就绪门禁：target/mdl.json 必须已编译（build 完成）
+        mdl_path = os.path.join(project_home, "target", "mdl.json")
+        if not os.path.exists(mdl_path):
+            raise IqdMcpLifecycleError(
+                f"连接 {connection_id} 的 MDL 尚未构建（{mdl_path} 缺失）；"
+                "请先执行语义模型同步 / 自愈 force-rebuild 再启动 MCP"
+            )
+        # ③ 解析凭证 env（D6：仅 env 注入，不落盘）
+        env = await self._credential_resolver.resolve_env(connection_id, conn)
+        secret_ref = conn.get("secret_ref") or conn.get("secretRef") or ""
+        try:
+            result = await agent_client.ensure(
+                connection_id,
+                project_home=project_home,
+                credential=env or None,
+                desired_state="running",
+                name=conn.get("name") or f"iqd-conn-{connection_id}",
+                secret_ref=secret_ref,
+            )
+        except WrenMcpAgentClientError as exc:
+            raise IqdMcpLifecycleError(
+                f"连接 {connection_id} 远程 wren 部署失败：{exc}"
+            ) from exc
+
+        # ④ 登记到跨机器部署注册表（供 orchestrator 按 connId 路由到数据面反向代理）
+        get_agent_registry().register(
+            connection_id,
+            wren_host=result.wren_host or "",
+            control_endpoint=result.control_endpoint,
+            mcp_endpoint=result.mcp_endpoint,
+            agent_handle=result.agent_handle,
+            status=result.status,
+            secret_ref=secret_ref,
+            desired_state="running",
+            project_home=result.project_home or project_home,
+        )
+        # ⑤ 回写 mis-iqd mcp_host/agent_handle/mcp_status（可观测 + 前端定位）
+        await self._report_deployment(connection_id, result)
+        logger.info(
+            "IQD MCP remote deployment ensured",
+            connection_id=connection_id,
+            agent_handle=result.agent_handle,
+            mcp_endpoint=result.mcp_endpoint,
+            status=result.status,
+        )
+        return {
+            "connection_id": connection_id,
+            "mcp_status": result.status,
+            "mcp_host": result.mcp_endpoint,
+            "agent_handle": result.agent_handle,
+            "remote": True,
+        }
+
+    async def _report_deployment(
+        self, connection_id: int, result: WrenMcpAgentEnsureResult
+    ) -> None:
+        """回写跨机器部署句柄到 mis-iqd（best-effort，失败仅告警）。"""
+        try:
+            await IqdConfigClient().report_mcp_deployment(
+                int(connection_id), result.mcp_endpoint, result.agent_handle, result.status
+            )
+        except Exception as exc:  # noqa: BLE001 - 回写失败不得阻断 ensure
+            logger.warning(
+                "IQD MCP deployment report failed", connection_id=connection_id, error=str(exc)
+            )
 
     # ================================================================ 停止
 

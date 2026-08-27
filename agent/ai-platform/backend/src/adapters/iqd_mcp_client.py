@@ -21,7 +21,12 @@ import json
 import time
 import uuid
 
-from src.adapters.wren_mcp_registry import WrenMcpProcessManager, get_process_manager
+from src.adapters.wren_mcp_registry import (
+    McpStatus,
+    WrenMcpProcessManager,
+    get_agent_registry,
+    get_process_manager,
+)
 from src.config import get_settings
 from src.utils.logging import get_logger
 
@@ -84,6 +89,8 @@ class IqdMcpClient:
         timeout: float | None = None,
         allow_write: bool | None = None,
         mock: bool | None = None,
+        token: str | None = None,
+        path: str | None = None,
     ) -> None:
         """初始化客户端。
 
@@ -93,6 +100,10 @@ class IqdMcpClient:
             timeout: 单次工具调用超时秒数（缺省取 ``WREN_MCP_TIMEOUT_SECONDS``）。
             allow_write: 是否放行写工具（缺省取 ``WREN_MCP_ALLOW_WRITE``）。
             mock: 强制离线 mock 模式；``None`` 时自动探测（无连接可回退 mock）。
+            token: 数据面 bearer token（跨机器部署经 agent 反向代理鉴权；
+                本地 Plan A 为空，wren serve mcp 无 bearer）。
+            path: MCP HTTP transport 挂载路径（缺省 ``/mcp``；跨机器远程模式为
+                ``/mcp/{connection_id}``，由代理按 connId 路由到本机 wren 进程）。
         """
         settings = get_settings()
         wren = settings.iqd_mcp
@@ -103,6 +114,8 @@ class IqdMcpClient:
             allow_write if allow_write is not None else wren.wren_mcp_allow_write
         )
         self._mock: bool = bool(mock)
+        self._token: str = token or ""
+        self._path: str = path or "/mcp"
         self._mcp_client: Any = None
         self._connected: bool = False
 
@@ -296,9 +309,12 @@ class IqdMcpClient:
             from mcp import ClientSession, StdioServerParameters  # noqa: F401 - 类型标注
             from mcp.client.http import http_client
 
-            url = f"http://{self._host}:{self._port}/mcp"
+            url = f"http://{self._host}:{self._port}{self._path}"
+            # 数据面鉴权：跨机器部署经 agent 反向代理需 bearer（决策 ②，去 mTLS）；
+            # 本地 Plan A 无 token 则不带（wren serve mcp 仅本机、无 bearer）。
+            headers = {"Authorization": f"Bearer {self._token}"} if self._token else None
             # HTTP transport：streamable http 客户端
-            ctx = http_client(url)
+            ctx = http_client(url, headers=headers)
             self._mcp_client = await ctx.__aenter__()
             self._connected = True
             return self._mcp_client
@@ -307,6 +323,7 @@ class IqdMcpClient:
                 "wren MCP connect failed; degrade to mock",
                 host=self._host,
                 port=self._port,
+                path=self._path,
                 error=str(exc),
             )
             self._mock = True
@@ -355,35 +372,79 @@ class IqdMcpClient:
     ) -> "IqdMcpClient":
         """按 connection_id 取该连接专属 MCP 端点构造 client（方案 A 多连接路由）。
 
-        进程管理器为进程内单例（:func:`get_process_manager`），本方法据连接 id 取
-        该连接专属 ``wren serve mcp`` 端点（host/port）。若端点未就绪（连接未启动 /
-        已停止 / 已崩溃未重启），**显式抛错**，绝不静默落到默认单连接 8080 端点
-        （REQ-P0-3：多连接间不得串台）。问数链路（orchestrator）捕获该错误后降级
-        mock（REQ-P0-1）。
+        优先级：
+        1. 跨机器部署句柄（:func:`get_agent_registry` 命中 RUNNING 远程部署）：
+           经 WrenMcpAgent 数据面反向代理访问本机 wren 进程，数据面带 bearer（决策 ②），
+           路径按 connId 路由（``/mcp/{conn_id}``）；host/port 取注册表 ``mcp_endpoint``
+           （ai-platform 可达地址，决策 ①⑧）。
+        2. 本地 Plan A 子进程模型：进程管理器单例持有该连接专属 ``wren serve mcp``
+           端点（host/port）。
+
+        两端点均未就绪（连接未启动/已停止/已崩溃未重拉）时**显式抛错**，绝不静默落到
+        默认单连接 8080 端点（REQ-P0-3：多连接间不得串台）。问数链路（orchestrator）
+        捕获该错误后降级 mock（REQ-P0-1）。
 
         Args:
             connection_id: 问数连接 id（任意可比较标识，内部统一转 str）。
-            registry: 进程管理器（缺省取单例）；可注入便于测试。
+            registry: 进程管理器（缺省取单例）；可注入便于测试（仅本地模式生效）。
             mock: 强制 mock 模式（仅测试 / 离线验证）。
 
         Returns:
-            :class:`IqdMcpClient`（host/port 绑定该连接专属端点）。
+            :class:`IqdMcpClient`（host/port 绑定该连接专属端点，或远程代理端点）。
 
         Raises:
-            IqdMcpClientError: 连接端点未就绪（须先经 MCP 管理器 /iqd/mcp/start 拉起）。
+            IqdMcpClientError: 连接端点未就绪（须先经 ensure/start 拉起该连接进程）。
         """
         if mock is True:
             return cls(mock=True)
 
+        # ① 跨机器部署：命中 RUNNING 远程部署句柄 → 经 agent 数据面反向代理访问。
+        #    远程模式下 wren 进程在 wren 机，本地进程管理器无端点（不依赖 endpoint）。
+        dep = get_agent_registry().get(connection_id)
+        if dep is not None and dep.status == McpStatus.RUNNING and dep.mcp_endpoint:
+            host, port = _parse_endpoint_host_port(dep.mcp_endpoint)
+            settings = get_settings()
+            token = settings.iqd_mcp.wren_agent_token or ""
+            logger.info(
+                "IQD MCP client for connection (remote)",
+                connection_id=connection_id,
+                host=host,
+                port=port,
+                mcp_endpoint=dep.mcp_endpoint,
+            )
+            return cls(host=host, port=port, token=token, path=f"/mcp/{connection_id}")
+
+        # ② 本地 Plan A 子进程模型：进程管理器单例持有专属端点。
         mgr: WrenMcpProcessManager = registry or get_process_manager()
         endpoint = mgr.get_endpoint(connection_id)
         if endpoint is None:
             raise IqdMcpClientError(
                 f"连接 {connection_id} 的 MCP 端点未就绪（未启动/已停止/已崩溃未重启）；"
-                "请先经 MCP 管理器 /iqd/mcp/start 拉起该连接进程"
+                "请先经 MCP 管理器 /iqd/mcp/ensure 或 /iqd/mcp/start 拉起该连接进程"
             )
-        logger.info("IQD MCP client for connection", connection_id=connection_id, port=endpoint.port)
-        return cls(host=endpoint.host, port=endpoint.port)
+        logger.info(
+            "IQD MCP client for connection (local)",
+            connection_id=connection_id,
+            port=endpoint.port,
+        )
+        return cls(host=endpoint.host, port=endpoint.port, token="", path=None)
+
+
+def _parse_endpoint_host_port(endpoint: str) -> tuple[str, int]:
+    """从 ``http://host:port`` 或 ``host:port`` 解析 (host, port)。
+
+    用于跨机器部署数据面 ``mcp_endpoint`` 落地到 :class:`IqdMcpClient` 的
+    host/port（决策 ①⑧：ai-platform 经 agent 反向代理访问 wren 机进程）。
+
+    Returns:
+        ``(host, port)``；缺省 host=127.0.0.1、port=9101（数据面默认端口）。
+    """
+    from urllib.parse import urlparse
+
+    parsed = urlparse(endpoint if "://" in endpoint else f"http://{endpoint}")
+    host = parsed.hostname or "127.0.0.1"
+    port = parsed.port or 9101
+    return host, port
 
     # ================================================================ Mock 数据
 

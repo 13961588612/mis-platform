@@ -36,6 +36,12 @@ public class IqdConnectionVO {
     /** 【方案A·多连接】WrenAI MCP 进程监听端口。 */
     private Integer mcpPort;
 
+    /** 【方案A·跨机器落地 v0.2】WrenAI MCP 数据面可达 host（ai-platform 侧视角）。 */
+    private String mcpHost;
+
+    /** 【方案A·跨机器落地 v0.2】WrenMcpAgent 部署句柄（agent_handle）。 */
+    private String agentHandle;
+
     public Long getId() {
         return id;
     }
@@ -162,6 +168,22 @@ public class IqdConnectionVO {
 
     public void setMcpPort(Integer mcpPort) {
         this.mcpPort = mcpPort;
+    }
+
+    public String getMcpHost() {
+        return mcpHost;
+    }
+
+    public void setMcpHost(String mcpHost) {
+        this.mcpHost = mcpHost;
+    }
+
+    public String getAgentHandle() {
+        return agentHandle;
+    }
+
+    public void setAgentHandle(String agentHandle) {
+        this.agentHandle = agentHandle;
     }
 
     @JsonProperty("base_url")

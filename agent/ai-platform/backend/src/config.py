@@ -123,6 +123,41 @@ class IqdMcpSettings(BaseSettings):
         default="zh-CN",
         description="WrenAI 生成语言",
     )
+
+    # ===== 跨机器部署（v0.2·方案 A 落地）：wren 机常驻 WrenMcpAgent =====
+    # 鉴权：bearer-token + 内网网络隔离（决策 ②⑥：去 mTLS，无双向证书）。
+    # 仅当 wren_agent_endpoint 非空时启用跨机器管控；为空走本地 Plan A 子进程模型。
+    wren_agent_endpoint: str = Field(
+        default="",
+        description="WrenMcpAgent 控制面基址（内网直连，如 http://wren-mcp-agent:9100）；"
+        "空=本地 Plan A 模式",
+    )
+    wren_agent_control_port: int = Field(
+        default=9100,
+        description="WrenMcpAgent 控制面监听端口（agent 侧 systemd/Docker 配置用）",
+    )
+    wren_agent_mcp_port: int = Field(
+        default=9101,
+        description="WrenMcpAgent 数据面 MCP 反向代理监听端口（按 connId 路由到本机 127.0.0.1）",
+    )
+    wren_agent_token: str = Field(
+        default="",
+        description="控制面/数据面共享 bearer token（内网隔离 + 该 token 二选一兜底；"
+        "wren 机不接 Vault，S1 明文经此通道推送后注入 wren 进程 env）",
+    )
+    # 下列仅在 wren 机 agent 侧生效（端口段 + project 根目录现已落到 wren 机）：
+    wren_agent_wren_port_range: str = Field(
+        default="18080-18180",
+        description="wren 机端口段（agent 按连接分配并回收，对应 wren_mcp_port_range 现移 wren 机）",
+    )
+    wren_agent_projects_root: str = Field(
+        default="/var/lib/mis-iqd/wren-projects",
+        description="wren 机 project 根目录（每连接 project_home = {root}/{connId}）",
+    )
+    wren_agent_mcp_host: str = Field(
+        default="",
+        description="数据面可达 host（ai-platform 侧视角）；空=取 wren_agent_endpoint 主机名",
+    )
     build_timeout_seconds: float = Field(
         default=120.0,
         description="单次 context build + memory index 整库重建超时（秒）；超时→同步标记 failed 保留 pending 可重试",

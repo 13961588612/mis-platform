@@ -397,6 +397,31 @@ public class AiPlatformClient extends AbstractDownstreamClient {
                 .bodyToMono(MCP_LIST_TYPE));
     }
 
+    /**
+     * 方案 A 跨机器落地 v0.2：启用/创建连接项目（用户自助「启用/创建项目」按钮）。
+     *
+     * <p>调平台 Worker {@code /api/v1/iqd/mcp/ensure}。平台据 {@code WREN_AGENT_ENDPOINT}
+     * 是否配置分流：远程模式经 WrenMcpAgentClient.ensure 推凭证 + 拉起 wren 机进程，
+     * 本地模式退回既有 Plan A 子进程模型。body {@code {connection_id}}。
+     *
+     * @param connectionId 问数连接 id
+     * @param authorization BFF 收到的原始 MIS JWT（透传平台 RS256 校验）
+     * @param traceId      全链路追踪 ID
+     * @return 平台响应 data（{connection_id, mcp_status, mcp_host, agent_handle, remote}）
+     */
+    public Map<String, Object> mcpEnsure(Long connectionId, String authorization, String traceId) {
+        Consumer<HttpHeaders> headers = buildHeaders(authorization, traceId);
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("connection_id", connectionId);
+        return block(client().post()
+                .uri("/api/v1/iqd/mcp/ensure")
+                .headers(headers)
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(body)
+                .retrieve()
+                .bodyToMono(MAP_RESULT_TYPE));
+    }
+
     /** 组合转发头：复用基类 loginContextHeaders() + Authorization + X-Trace-Id + MIS 身份 enrichment 头。 */
     private Consumer<HttpHeaders> buildHeaders(String authorization, String traceId) {
         return headers -> {

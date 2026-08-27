@@ -40,4 +40,13 @@ public interface IqdConnectionRepository extends JpaRepository<IqdConnection, Lo
     int setMcpStatus(@Param("conn") Long connectionId,
                      @Param("status") String mcpStatus,
                      @Param("port") Integer mcpPort);
+
+    /** 回写连接级 MCP 跨机器部署句柄（方案 A 跨机器落地 v0.2：mcp_host/agent_handle/mcp_status）。 */
+    @Modifying
+    @Query("UPDATE IqdConnection c SET c.mcpHost = :host, c.agentHandle = :handle, "
+            + "c.mcpStatus = :status WHERE c.id = :conn")
+    int setMcpDeployment(@Param("conn") Long connectionId,
+                         @Param("host") String mcpHost,
+                         @Param("handle") String agentHandle,
+                         @Param("status") String mcpStatus);
 }

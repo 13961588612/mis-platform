@@ -19,7 +19,9 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
-from src.adapters.wren_mcp_registry import get_process_manager
+from src.adapters.wren_mcp_agent_client import WrenMcpAgentClient
+from src.adapters.wren_mcp_registry import get_agent_registry, get_process_manager
+from src.config import get_settings
 from src.utils.logging import get_logger
 
 logger = get_logger("agent.mis_iqd.bootstrap")
@@ -76,7 +78,13 @@ async def bulk_start_enabled_iqd_mcp() -> int:
         if cid_int is None:
             continue
         try:
-            await IqdMcpLifecycleService().start_connection(cid_int, wait=False)
+            # 远程优先：WREN_AGENT_ENDPOINT 已配置时经 WrenMcpAgentClient.ensure 批量拉起
+            # wren 机部署（v0.2 跨机器落地）；否则退回本地 Plan A 子进程模型（测试/单机路径）。
+            service = IqdMcpLifecycleService()
+            if WrenMcpAgentClient().enabled:
+                await service.ensure_connection(cid_int, wait=False)
+            else:
+                await service.start_connection(cid_int, wait=False)
             started += 1
         except Exception as exc:  # noqa: BLE001 - 单连接失败不阻断其它
             logger.warning(
@@ -106,6 +114,73 @@ async def start_iqd_mcp_supervisor(
     )
     logger.info("IQD MCP supervisor started")
     return stop_event, task
+
+
+async def start_iqd_mcp_reconciler(
+    *, stop_event: asyncio.Event | None = None
+) -> tuple[asyncio.Event, asyncio.Task[Any]]:
+    """启动后台跨机器部署 reconcile 循环（仅远程模式生效；决策 ①⑧）。
+
+    ai-platform 侧对每条远程部署周期性调用 :meth:`WrenMcpAgentClient.status` 取健康快照，
+    更新本地跨机器注册表状态并回写 mis-iqd ``mcp_status``（可观测 + 前端定位）。wren 机
+    侧崩溃自愈由 agent 自身负责（决策 ①），本循环只做状态对账（不重拉进程）。
+
+    Args:
+        stop_event: 外部停止信号（``set()`` 后退出循环）；缺省内部新建。
+
+    Returns:
+        ``(stop_event, task)``：关闭时置 ``stop_event`` 并对 ``task`` 取消。
+    """
+    if stop_event is None:
+        stop_event = asyncio.Event()
+    task = asyncio.create_task(
+        _run_reconcile_loop(stop_event=stop_event), name="iqd-mcp-reconciler"
+    )
+    logger.info("IQD MCP reconciler started")
+    return stop_event, task
+
+
+async def _run_reconcile_loop(stop_event: asyncio.Event) -> None:
+    """远程部署 reconcile 循环主逻辑。"""
+    interval = float(get_settings().iqd_mcp.wren_mcp_health_interval_seconds)
+    while True:
+        if stop_event.is_set():
+            break
+        try:
+            await _reconcile_once()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("IQD MCP reconcile iteration error", error=str(exc))
+        try:
+            await asyncio.sleep(interval)
+        except asyncio.CancelledError:
+            break
+
+
+async def _reconcile_once() -> None:
+    """单次 reconcile：遍历远程部署，刷新状态 + 回写 mis-iqd（单连接失败仅告警）。"""
+    registry = get_agent_registry()
+    deployments = registry.list()
+    if not deployments:
+        return
+    agent_client = WrenMcpAgentClient()
+    if not agent_client.enabled:
+        return
+    from src.adapters.iqd_config_client import IqdConfigClient
+
+    for dep in deployments:
+        conn_id = dep.get("conn_id")
+        if conn_id is None:
+            continue
+        try:
+            status = await agent_client.status(conn_id)
+            registry.set_status(conn_id, status.status, health_msg=status.last_health_msg)
+            await IqdConfigClient().report_mcp_deployment(
+                int(conn_id), status.mcp_endpoint, status.agent_handle, status.status
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "IQD MCP reconcile connection failed", connection_id=conn_id, error=str(exc)
+            )
 
 
 async def shutdown_iqd_mcp(

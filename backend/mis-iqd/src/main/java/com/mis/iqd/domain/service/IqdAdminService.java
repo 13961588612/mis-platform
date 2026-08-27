@@ -1561,6 +1561,25 @@ public class IqdAdminService {
     }
 
     /**
+     * 回写连接级 WrenAI MCP 跨机器部署句柄（方案 A 跨机器落地 v0.2）。
+     *
+     * <p>由 ai-platform Worker 在经 {@code WrenMcpAgentClient.ensure} 拉起 wren 机部署后回调，
+     * 把数据面 {@code mcp_host} / {@code agent_handle} / {@code mcp_status} 写回
+     * iqd_connection，供前端/可观测定位跨机器部署位置。仅存引用，不存凭证明文
+     * （决策 ③ S1：wren 机不接 Vault，凭证仅经控制面一次性推送注入子进程 env）。
+     *
+     * @param connectionId 问数连接 id
+     * @param mcpHost      agent 数据面可达 host（ai-platform 侧视角，如 http://10.x:9101）
+     * @param agentHandle  WrenMcpAgent 部署句柄（control 通道路由定位）
+     * @param mcpStatus    MCP 进程状态（running/stopped/starting/crashed/unhealthy）
+     */
+    @Transactional
+    public void reportMcpDeployment(Long connectionId, String mcpHost, String agentHandle, String mcpStatus) {
+        ensureConnection(connectionId);
+        connectionRepository.setMcpDeployment(connectionId, mcpHost, agentHandle, mcpStatus);
+    }
+
+    /**
      * 取连接凭证引用（方案 A 多连接 D6 凭证解析前置）。
      *
      * <p><b>仅回 {@code secret_ref}（opaque vault 引用），绝不回明文/密码</b>。ai-platform

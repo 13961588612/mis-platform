@@ -2,7 +2,7 @@
 
 > 文档角色：mis-iqd × WrenAI 真机联调与日常运维手册，把手动 CLI 步骤固化成可照做流程。
 > 状态：🔶 草案（W0 实测前部分项标注「待真机核实」）｜日期：2026-08-28｜语言：中文
-> 关联：`deploy-iqd.md`（规划速查）、`architecture.md §2 D6 / §4.4`、`TASK-20260826-001`（版本钉位歧义）、`mis-iqd-selfheal-prd.md`（任务2 三按钮）。
+> 关联：`deploy-iqd.md`（规划速查）、`architecture.md §2 D6 / §4.4`、`TASK-20260826-001`（版本钉位歧义）、`mis-iqd-selfheal-prd.md`（任务2 三按钮）、`mis-iqd-mcp-multiconn-design.md`（方案 A 多连接架构，已落地）、`mis-iqd-mcp-multiconn-prd.md`（增量 PRD）。
 > 安全基线：MCP 仅绑 127.0.0.1、本版无 bearer-token、默认只读、凭证 server-side（D6）。前端/用户端绝不直连 MCP。
 
 ## 0. 角色与边界速览
@@ -14,7 +14,7 @@
 | 漂移检测 | `get mdl` 哈希比对（`iqd_cli.get_current_mdl_hash`） | — |
 | 问数执行 | MCP：`dry_plan` / `dry_run` / `run_sql` / `get_context`（`orchestrator.py` + `iqd_mcp_client.py`） | — |
 | 安装/升级 | — | `pip install wrenai` |
-| MCP 进程 | — | `wren serve mcp` 启动/守护 |
+| MCP 进程（多连接） | 进程管理器 `WrenMcpProcessManager` 按连接拉起/停止/崩溃重启/端口分配（方案 A，端口段 `18080-18180`） | W0 单库手动验证：`wren serve mcp`（详见 §2.1/§2.2） |
 | LLM/embedding | — | WrenAI 自身配置面 |
 | 业务库接入 | — | `profile add` + `context set-profile`（真实凭证，D6） |
 
@@ -81,8 +81,9 @@ wren serve mcp --help
 ## 2. 启动 MCP server
 
 > ⚠️ **前置（必读，否则必报 `no wren project found`）**：`wren serve mcp` **必须在含 `wren_project.yml` 的 wren project 目录内运行**（或通过 `WREN_PROJECT_HOME` / `--project` 指向）。它不是"裸起一个全局服务"，而是一个**进程绑定单一 project（单一业务库）**。启动前必须完成下面的 bootstrap。
+> 📌 **生产环境 vs W0 手动**：方案 A 已落地——生产由平台 `WrenMcpProcessManager` **按每个 IQD 连接自动拉起独立 `wren serve mcp` 进程**（project 目录 `{wren_projects_root}/{connId}`、端口从 `wren_mcp_port_range=18080-18180` 分配、崩溃自动重启）。下面 §2.1/§2.2 仅用于 **W0 真机单库手动验证**，请勿当作生产部署步骤。
 
-### 2.1 首次 bootstrap（每个业务库/project 一次）
+### 2.1 W0 手动 bootstrap（单库验证用；生产由平台按连接自动）
 
 ```bash
 # 1) 建并进入项目目录（持久化，建议按业务库命名，勿用 /tmp）
@@ -111,7 +112,7 @@ wren context set-profile demo
 wren memory index
 ```
 
-### 2.2 启动 MCP server
+### 2.2 W0 手动启动（单库验证；生产由进程管理器自动拉起）
 
 ```bash
 # 方式 A：在 project 目录内直接起（推荐，cwd 自动发现 wren_project.yml）
@@ -129,19 +130,28 @@ WREN_PROJECT_HOME=~/wren-projects/demo wren serve mcp --transport http --host 12
 
 > 🔴 **安全硬约束（官方明确）**：本版 `wren serve mcp --transport http` **默认绑 127.0.0.1 且不含 bearer-token 鉴权**——必须 `keep it local`，**禁止 `--host 0.0.0.0` 暴露到公网/其它网卡**。mis-iqd Worker 本就经 `127.0.0.1:8080` 本机持有 MCP client，无需 0.0.0.0。
 
-- **端口/守护**：须与 `mis-admin-bff` 的 Nacos `ai-platform.yaml` 中 `wren.mcp-host=127.0.0.1` / `wren.mcp-port=8080` 一致。守护建议 `systemd` / `supervisor` / `nohup`，确保与 mis-iqd Worker 同机/同网络常驻。
+- **端口/守护（W0 手动）**：手动起时用固定端口（如 8080）即可。生产由进程管理器自动从 `wren_mcp_port_range` 分配，无需手工指定。
 - **安全**：默认 127.0.0.1 不可对终端用户开放；本版无 bearer-token，必须由 mis-iqd Worker 服务端本机持有 MCP client（见 `architecture.md §2 D4`）。
-- 平台侧配置键（Nacos `ai-platform.yaml`，**不含凭证**）：`wren.mcp-host` / `wren.mcp-port` / `wren.mcp-transport(http)` / `wren.mcp-allow-write(false)` / `wren.cli-bin(wren)` / `wren.profile-name` / `wren.language(zh-CN)`。
+- **平台侧配置键（Nacos `ai-platform.yaml`，不含凭证）**：
+  - `wren.cli-bin`：wren 可执行绝对路径（如 `/root/wren-venv/bin/wren`，见 §1 上线必看）
+  - `wren.mcp-port-range`：**`18080-18180`**（方案 A 每连接进程端口段，自动分配/回收）
+  - `wren.projects-root`：**`/var/lib/mis-iqd/wren-projects`**（每连接 `project_home = {root}/{connId}`）
+  - `wren.mcp-host` / `wren.mcp-port`：单连接**回退**端口（未启用多连接进程管理时使用，默认 127.0.0.1:8080）
+  - `wren.mcp-transport(http)` / `wren.mcp-allow-write(false)` / `wren.profile-name` / `wren.language(zh-CN)`
 
-### 2.3 ⚠️ 单 project 进程约束 & mis-iqd 多连接架构 gap（关键发现，待架构复核）
+### 2.3 ✅ 方案 A 已落地：每连接一个 wren serve mcp 进程 + 进程管理器（原"多连接架构 gap"已解决）
 
-- **事实**：`wren serve mcp` 一个进程 = 一个 wren project = **一个业务库连接**（编译后的 MDL + 单一活跃 profile，server 启动时即绑定，运行期不切换）。HTTP 端点只服务这单一 project。
-- **冲突**：当前 `mis-iqd` 设计为**多 IQD 连接（多业务库）共用单一 MCP 端点**（`iqd_mcp_client.py` 连 Nacos `wren.mcp-host:mcp-port` 单端口，调 dry_plan/dry_run/run_sql/get_context）。单一 MCP 进程无法同时服务多库——**多连接集成方案存在 gap**。
-- **候选解法（待架构师高见远评估，不在此拍板）**：
-  - **A. 每连接一个 MCP server 进程**（独立端口），Worker 按连接号路由到对应端点（需扩展 `iqd_mcp_client` 支持按连接选端点 + 守护多进程）。
-  - **B. 问数改走 CLI**：Worker 在每个连接的 project 目录执行 `wren dry-run` / `wren run-sql`（与管理面 `iqd_cli` 一致），去掉持久 MCP server 依赖。
-  - **C. 单 project 多 profile 切换**：MCP server 启动即绑定 profile，运行期切换不可行——**排除**。
-- **W0 实测建议**：先用**单 project（一个 demo 业务库）**点亮 MCP server，验证问数链路闭环；多连接集成方案正式走架构复核后再调整 `mis-iqd` 集成设计。
+- **事实（未变）**：`wren serve mcp` 一个进程 = 一个 wren project = 一个业务库连接（编译后 MDL + 单一活跃 profile，server 启动即绑定，运行期不切换）。HTTP 端点只服务单一 project。
+- **方案 A 决策（已拍板 + 已实现，见 `mis-iqd-mcp-multiconn-design.md`）**：每 IQD 连接由平台 `WrenMcpProcessManager` **自动拉起独立 `wren serve mcp` 进程**，绑定该连接 project 目录、分配独立端口；查询面 `iqd_mcp_client` 改为 **按 `connId` 路由**到对应 `host:port`。纯方案 B（问数走 CLI）已否决（缺 `dry_plan` 自然语言入口与 `get_context` 等价物）；方案 C（运行期切 profile）官方已排除。
+- **关键参数（Nacos `ai-platform.yaml`，见 §2.2 配置键）**：
+  - `wren.projects-root` = `/var/lib/mis-iqd/wren-projects`；每连接 `project_home = {root}/{connId}`
+  - `wren.mcp-port-range` = `18080-18180`（端口自动分配/回收，避开 8080 单点）
+  - `wren.cli-bin` = wren 可执行绝对路径（如 `/root/wren-venv/bin/wren`）
+- **生命周期（进程管理器负责）**：Worker 启动批量拉起 `enabled` 连接 MCP 进程 + 后台健康循环；连接 `disabled`/`deleted` → SIGTERM → 回收端口 → **保留 project 目录 7 天** → 到期清理（凭证 `${ENV}` 本就不落明文，无泄漏）；崩溃由健康循环自动重启。
+- **就绪门禁**：`target/mdl.json` 存在（即 `context build` 完成）才允许该连接 MCP 进程启动/重启，避免问数打到未就绪 project。
+- **凭证注入（D6）**：`wren profile add` 凭证经 `${ENV}` 占位，`wren serve mcp` 启动期注入进程环境变量（`WREN_*`），明文不落盘；mis-iqd 仅存 `secret_ref`，由 ai-platform `CredentialVault` 解析后注入。
+- **运维入口（后台界面 / 连接详情页）**：每连接「MCP 运行态」卡展示状态徽标 + 端口 + 最近健康时间，提供启停/重启按钮（带二次确认）；运维自愈三按钮（force-rebuild / re-index / validate）已移入**连接详情页内、按 connId 触发**（见 §6）。
+- **W0 实测建议**：先用**单 project（一个 demo 库）**手动点亮（§2.1/§2.2）验证问数链路闭环；多连接进程管理由平台自动，无需手工起多进程。多连接生命周期验证项见 §8。
 
 ## 3. LLM / embedding 配置
 
@@ -150,6 +160,8 @@ WREN_PROJECT_HOME=~/wren-projects/demo wren serve mcp --transport http --host 12
 - 配置位置与字段名待 W0 实测确认（见 §8 清单），不要凭记忆写。
 
 ## 4. 新增业务库 bootstrap（须人工，含真实凭证）
+
+> 📌 **方案 A 下 project 目录由平台管理**：每连接 `project_home = {wren_projects_root}/{connId}`（即 `/var/lib/mis-iqd/wren-projects/{connId}`），不再用 `~/wren-projects/demo`。bootstrap 注入真实凭证（`wren profile add`）后，`context build` 完成即触发平台**按该连接拉起独立 MCP 进程**（就绪门禁：build 未就绪不拉起）。
 
 > D6 铁律：`iqd_connection` 仅存 **profile 名/连接标识** + MCP 地址，**不存任何 WrenAI/业务库凭证**；凭证由 `wren profile` 注入 WrenAI 主机（server-side）。故 bootstrap 必须人工执行，平台无法代敲。
 
@@ -174,12 +186,12 @@ wren context build
 - **二期模型写回**：`service.py::trigger_model_build`（model 范围）→ 以 `mdl_raw`+`edited_items` 派生完整 MDL → `context_build(mdl_dir=tmp)` → `memory_index` → `report_sync_job`（edit_source=model）。
   - 代码：`service.py` L466
 - **漂移检测**：`iqd_cli.get_current_mdl_hash`（包裹 `wren get mdl`）解析 mdl_hash，不可达/解析失败降级为不判定（不误伤）。代码：`iqd_cli.py` L130。
-- **问数执行**：`orchestrator.py` + `iqd_mcp_client.py`（MCP 只读：`dry_plan` / `dry_run` / `run_sql` / `get_context`）。
+- **问数执行**：`orchestrator.py` + `iqd_mcp_client.py`（MCP 只读：`dry_plan` / `dry_run` / `run_sql` / `get_context`）。**方案 A 下 `orchestrator._get_mcp_client` 按 `connection_id` 路由到该连接专属端点**（每连接独立 MCP 进程，多连接隔离）；MCP 进程在 `context build` 完成后才由平台拉起/重启（就绪门禁）。
 - 失败容错：memory index 失败不阻断 build 回填，仅单独标 `index_status=failed`（Q6）。
 
 ## 6. 运维自愈三动作（按钮 / CLI 兜底）
 
-> 任务2「三按钮」上线后优先点按钮；上线前或按钮不可用时走 CLI 兜底。**命令参数（`--force` / `memory reset` / `context validate`）以 W0 实测为准，标注「待真机核实」**。
+> 任务2「三按钮」现已改为 **per-connection（连接详情页内按 connId 触发）**：上线后优先点按钮；上线前或按钮不可用时走 CLI 兜底。**命令参数（`--force` / `memory reset` / `context validate`）以 W0 实测为准，标注「待真机核实」**。
 
 | 动作 | 按钮（任务2 上线后） | CLI 兜底（人工） |
 |---|---|---|
@@ -199,6 +211,7 @@ wren context build
   - Worker 日志关键词：`wren CLI call` / `wren CLI failed`（含 exit_code、stderr 前 500 字）；`IqdCliError` 记 `build_error` / `index_error`。
   - sync-job 状态表：`build_status` / `index_status` / `build_error` / `index_error` / `build_mdl_hash`。
   - MCP 不可达：orchestrator 降级 mock（`health` 返回 mock），问数链路降级而非裸崩。
+  - 单连接 MCP 进程崩溃：进程管理器后台健康循环**自动重启**；也可在连接详情页点「重启」手动触发（Bug B 已修复：RUNNING 但进程已死会真正重拉，不再空操作）。
   - 凭证问题：检查 `wren profile` 注入（D6），平台侧 `iqd_connection` 只有 profile 名。
   - 版本钉位不匹配：见 `TASK-20260826-001`，勿混装 0.29.2。
 
@@ -215,4 +228,7 @@ wren context build
 - [ ] `wren memory reset` 子命令存在性与行为实测（重新索引按钮依赖）
 - [ ] `wren context validate` 子命令存在性与输出实测（模型校验按钮依赖）
 - [ ] LLM / embedding 配置具体位置与必填项确认（§3）
-- [ ] 三动作经平台端点（任务2 上线后）跑通 + sync-job 状态机收敛
+- [ ] 三动作经平台端点 **per-connection**（任务2 上线后，连接详情页内按 connId 触发）跑通 + sync-job 状态机收敛
+- [ ] 多连接 MCP 进程：每连接独立 `wren serve mcp` 进程 + 端口从 `18080-18180` 自动分配；崩溃自动重启；端口段耗尽显式报错；连接 `disabled` 时 SIGTERM + 回收端口 + project 目录保留 7 天
+- [ ] 问数路由：`orchestrator._get_mcp_client` 按 `connection_id` 取到正确连接端点（多连接隔离验证）
+- [ ] 凭证链端到端：mis-iqd 仅回 `secret_ref` → ai-platform `CredentialVault` 解析 → 注入 `wren serve mcp` 进程 env（`WREN_*`），验证明文不落盘

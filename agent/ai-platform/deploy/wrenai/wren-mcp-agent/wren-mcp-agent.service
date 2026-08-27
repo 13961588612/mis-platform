@@ -1,0 +1,32 @@
+# WrenMcpAgent systemd 单元（wren 机，Linux + 持久卷，决策 ④）
+# 安装：
+#   sudo cp wren-mcp-agent.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now wren-mcp-agent
+[Unit]
+Description=WrenMcpAgent (mis-iqd 多连接 WrenAI MCP 跨机器 supervisor)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=wrenagent
+Group=wrenagent
+WorkingDirectory=/opt/wren-mcp-agent
+ExecStart=/opt/wren-mcp-agent/.venv/bin/python agent.py
+# 鉴权：bearer-token + 内网隔离（决策 ②⑥：去 mTLS，无双向证书）
+# token 须与 ai-platform 侧 WREN_AGENT_TOKEN 一致；防火墙仅放行 ai-platform 源 IP（决策 ⑤）
+Environment=WREN_AGENT_TOKEN=__CHANGE_ME__
+Environment=WREN_AGENT_CONTROL_PORT=9100
+Environment=WREN_AGENT_MCP_PORT=9101
+Environment=WREN_AGENT_BIND_HOST=0.0.0.0
+Environment=WREN_AGENT_PROJECTS_ROOT=/var/lib/mis-iqd/wren-projects
+Environment=WREN_AGENT_WREN_PORT_RANGE=18080-18180
+Environment=WREN_AGENT_MAX_CONNECTIONS=10
+Restart=always
+RestartSec=5
+# 凭证临时文件即用即删（S1）；umask 保证临时 env 文件 0600
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

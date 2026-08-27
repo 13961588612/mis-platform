@@ -329,6 +329,24 @@ public class IqdInternalController {
         return Result.ok(body);
     }
 
+    /**
+     * 回写连接级 WrenAI MCP 跨机器部署句柄（方案 A 跨机器落地 v0.2）。
+     *
+     * <p>由 ai-platform Worker 经 {@code WrenMcpAgentClient.ensure} 拉起部署后回调。仅回写
+     * {@code mcp_host} / {@code agent_handle} / {@code mcp_status}，不影响其它连接字段。
+     */
+    @PostMapping("/mcp-deploy")
+    public Result<Map<String, Object>> reportMcpDeployment(@RequestBody Map<String, Object> payload) {
+        Long connectionId = toLong(payload.get("connection_id"));
+        String mcpHost = str(payload.get("mcp_host"));
+        String agentHandle = str(payload.get("agent_handle"));
+        String mcpStatus = str(payload.get("mcp_status"));
+        adminService.reportMcpDeployment(connectionId, mcpHost, agentHandle, mcpStatus);
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("ok", true);
+        return Result.ok(body);
+    }
+
     /** 取主连接 id（优先 name='default' / 第一条 enabled）。 */
     private Long resolvePrimaryConnectionId() {
         return connectionRepository.findByName("default")

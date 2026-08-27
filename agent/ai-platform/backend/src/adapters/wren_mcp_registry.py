@@ -56,7 +56,7 @@ class McpEndpoint:
 
 @dataclass
 class McpProcessEntry:
-    """单连接 MCP 进程注册表条目。"""
+    """单连接 MCP 进程注册表条目（本地 Plan A 子进程模型）。"""
 
     conn_id: str
     host: str
@@ -71,6 +71,124 @@ class McpProcessEntry:
     started_at: float = 0.0
     last_health_at: float = 0.0
     failure_count: int = 0
+    # ---- 跨机器部署（v0.2）：本连接走远程 WrenMcpAgent 时记录的部署句柄 ----
+    remote: bool = False
+    agent_handle: str = ""
+    mcp_endpoint: str = ""  # 数据面反向代理地址（agent 侧，ai-platform 可达）
+
+
+@dataclass
+class WrenMcpDeployment:
+    """跨机器部署注册表条目（方案 A 落地版，设计 §6 v1 schema）。
+
+    ai-platform 控制面对 wren 机 WrenMcpAgent 的部署快照：仅持有引用
+    （wren_host / control_endpoint / mcp_endpoint / agent_handle），**绝不**存
+    凭证明文。凭证经控制面一次性推送后由 agent 注入 wren 子进程 env（不落盘，S1）。
+    """
+
+    conn_id: str
+    wren_host: str
+    control_endpoint: str
+    mcp_endpoint: str
+    agent_handle: str
+    status: str
+    secret_ref: str = ""
+    desired_state: str = "running"  # running | stopped
+    project_home: str = ""
+    last_health_at: float = 0.0
+    last_health_msg: str = ""
+
+
+class WrenMcpAgentRegistry:
+    """跨机器部署注册表（进程内单例，对应 wren_mcp_registry §6）。
+
+    记录每个连接经 WrenMcpAgentClient.ensure 返回的部署句柄，供 orchestrator
+    按 connection_id 路由到远程数据面（MCP 反向代理）。本地 Plan A 子进程模型
+    不写入本注册表（二者互斥，由 ``WREN_AGENT_ENDPOINT`` 是否配置决定）。
+    """
+
+    def __init__(self) -> None:
+        self._entries: dict[str, WrenMcpDeployment] = {}
+
+    def register(
+        self,
+        conn_id: int | str,
+        *,
+        wren_host: str,
+        control_endpoint: str,
+        mcp_endpoint: str,
+        agent_handle: str,
+        status: str,
+        secret_ref: str = "",
+        desired_state: str = "running",
+        project_home: str = "",
+    ) -> WrenMcpDeployment:
+        """登记/覆盖单连接部署句柄。"""
+        dep = WrenMcpDeployment(
+            conn_id=str(conn_id),
+            wren_host=wren_host,
+            control_endpoint=control_endpoint,
+            mcp_endpoint=mcp_endpoint,
+            agent_handle=agent_handle,
+            status=status,
+            secret_ref=secret_ref,
+            desired_state=desired_state,
+            project_home=project_home,
+        )
+        self._entries[str(conn_id)] = dep
+        logger.info("IQD wren agent deployment registered", conn_id=str(conn_id), status=status)
+        return dep
+
+    def get(self, conn_id: int | str) -> WrenMcpDeployment | None:
+        """取单连接部署句柄。"""
+        return self._entries.get(str(conn_id))
+
+    def list(self) -> list[dict[str, Any]]:
+        """列出全部部署句柄（可观测）。"""
+        return [vars(d) for d in self._entries.values()]
+
+    def set_status(
+        self, conn_id: int | str, status: str, *, health_msg: str = ""
+    ) -> None:
+        """更新部署状态（后台 reconcile/heartbeat 回写）。"""
+        dep = self._entries.get(str(conn_id))
+        if dep is None:
+            return
+        dep.status = status
+        if health_msg:
+            dep.last_health_msg = health_msg
+        dep.last_health_at = __import__("time").time()
+
+    def set_health(self, conn_id: int | str, *, health_msg: str = "") -> None:
+        """打健康时间戳（不更改业务状态）。"""
+        dep = self._entries.get(str(conn_id))
+        if dep is None:
+            return
+        dep.last_health_at = __import__("time").time()
+        if health_msg:
+            dep.last_health_msg = health_msg
+
+    def remove(self, conn_id: int | str) -> None:
+        """移除部署句柄（连接停止）。"""
+        self._entries.pop(str(conn_id), None)
+
+
+_agent_registry: WrenMcpAgentRegistry | None = None
+
+
+def get_agent_registry() -> WrenMcpAgentRegistry:
+    """返回跨机器部署注册表单例。"""
+    global _agent_registry
+    if _agent_registry is None:
+        _agent_registry = WrenMcpAgentRegistry()
+    return _agent_registry
+
+
+def reset_agent_registry() -> None:
+    """重置跨机器部署注册表（测试用）。"""
+    global _agent_registry
+    _agent_registry = None
+
 
 
 class PortExhaustedError(RuntimeError):
@@ -100,6 +218,27 @@ def _parse_port_range(port_range: str) -> list[int]:
         else:
             ports.add(int(seg))
     return sorted(ports)
+
+
+def _split_endpoint(endpoint: str) -> tuple[str, int]:
+    """从 ``http://host:port`` 或 ``host:port`` 解析 (host, port)。
+
+    Returns:
+        ``(host, port)``；无法解析时返回 ``("", 0)``。
+    """
+    raw = endpoint.strip()
+    if raw.startswith("http://"):
+        raw = raw[len("http://"):]
+    elif raw.startswith("https://"):
+        raw = raw[len("https://"):]
+    raw = raw.split("/", 1)[0]
+    if ":" in raw:
+        host, _, port_s = raw.rpartition(":")
+        try:
+            return host or "127.0.0.1", int(port_s)
+        except ValueError:
+            return "", 0
+    return "", 0
 
 
 class WrenMcpProcessManager:
@@ -369,11 +508,21 @@ class WrenMcpProcessManager:
             ``McpEndpoint``（仅当进程 RUNNING/STARTING 且端口已分配）；
             连接不存在或已停止返回 ``None``（调用方据 REQ-P0-3 返回明确错误，
             **不静默落到默认 8080 端点**）。
+
+        跨机器部署（v0.2）：本地条目缺失时回退查询跨机器部署注册表
+        （:func:`get_agent_registry`），命中 RUNNING 远程部署即返回其数据面端点，
+        保证 orchestrator 在远程模式下仍能按 connId 路由到 agent 反向代理。
         """
         entry = self._entries.get(str(conn_id))
-        if entry is None or entry.status in (McpStatus.STOPPED, McpStatus.CRASHED):
-            return None
-        return McpEndpoint(host=entry.host, port=entry.port)
+        if entry is not None and entry.status not in (McpStatus.STOPPED, McpStatus.CRASHED):
+            return McpEndpoint(host=entry.host, port=entry.port)
+        # 回退：远程部署（本地 Plan A 未运行时）
+        dep = get_agent_registry().get(conn_id)
+        if dep is not None and dep.status == McpStatus.RUNNING and dep.mcp_endpoint:
+            host, port = _split_endpoint(dep.mcp_endpoint)
+            if host:
+                return McpEndpoint(host=host, port=port)
+        return None
 
     def is_running(self, conn_id: int | str) -> bool:
         """连接 MCP 进程是否处于 RUNNING。"""

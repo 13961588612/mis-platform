@@ -60,6 +60,31 @@ async def start_mcp(
         )
 
 
+@router.post("/ensure")
+async def ensure_mcp(
+    req: McpStartRequest,
+    current_user: dict[str, Any] = Depends(get_current_user),
+    trace_id: str = Depends(get_trace_id),
+    authorization: str = Header(default=""),
+) -> dict[str, Any]:
+    """声明式 ensure（跨机器部署优先，本地 Plan A 兜底）。
+
+    远程模式（WREN_AGENT_ENDPOINT 已配置）经 WrenMcpAgentClient.ensure 推凭证 +
+    拉起 wren 机进程，回写 mis-iqd mcp_host/agent_handle/mcp_status；本地模式退回
+    既有本地子进程模型。业务按钮「启用/创建项目」走本端点。
+    """
+    try:
+        service = IqdMcpLifecycleService()
+        result = await service.ensure_connection(req.connection_id, wait=req.wait)
+        return success(data=result, message="ok", trace_id=trace_id)
+    except Exception as exc:  # noqa: BLE001
+        logger.error("IQD MCP ensure failed", connection_id=req.connection_id, error=str(exc))
+        return error_response(
+            code=9000, message=str(exc),
+            http_status=status.HTTP_500_INTERNAL_SERVER_ERROR, trace_id=trace_id,
+        )
+
+
 @router.post("/stop")
 async def stop_mcp(
     req: McpStartRequest,

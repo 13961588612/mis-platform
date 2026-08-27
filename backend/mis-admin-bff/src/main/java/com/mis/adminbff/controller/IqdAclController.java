@@ -465,6 +465,27 @@ public class IqdAclController {
     }
 
     /**
+     * 启用/创建连接项目（用户自助「启用/创建项目」按钮；需 iqd:mcp:manage）。
+     *
+     * <p>admin 保存连接（含凭证）后点击本端点，调 ai-platform 声明式 ensure：远程模式
+     * 经 WrenMcpAgentClient.ensure 推凭证 + 拉起 wren 机进程，本地模式退回 Plan A 子进程
+     * 模型。平台回写 mis-iqd mcp_host/agent_handle/mcp_status（可观测 + 前端定位）。
+     */
+    @PostMapping("/mcp/enable")
+    public Result<Map<String, Object>> enableProject(
+            @RequestParam Long connectionId,
+            @RequestHeader(value = SecurityConstants.AUTHORIZATION_HEADER, required = false) String authorization,
+            @RequestHeader(value = SecurityConstants.HEADER_TRACE_ID, required = false) String traceId) {
+        try {
+            return Result.ok(iqdFacadeService.enableProject(connectionId, authorization, traceId));
+        } catch (BusinessException ex) {
+            return Result.fail(ex.getCode(), ex.getMessage());
+        } catch (Exception ex) {
+            return Result.fail(ResultCode.INTERNAL_ERROR.getCode(), "启用问数项目失败: " + ex.getMessage());
+        }
+    }
+
+    /**
      * 取连接级 MCP 进程状态（需 iqd:mcp:manage）。
      */
     @GetMapping("/mcp/status")

@@ -21,6 +21,7 @@ from src.adapters.wren_mcp_registry import (
     McpStatus,
     PortExhaustedError,
     WrenMcpProcessManager,
+    _parse_port_range,
     get_process_manager,
     reset_process_manager,
 )
@@ -217,3 +218,70 @@ async def test_stop_marks_dir_retained(
     await manager.start("1", home, launcher=_mock_launcher)
     await manager.stop("1", retain_dir=True)
     assert (Path(home) / ".iqd-retained").exists()
+
+
+# ================================================================ 端口段边界（方案 A 多段/单端口）
+
+@pytest.mark.asyncio
+async def test_parse_port_range_single_port() -> None:
+    """单端口字符串 '18080' 解析为 [18080]（边界：一段仅一个端口）。"""
+    assert _parse_port_range("18080") == [18080]
+
+
+@pytest.mark.asyncio
+async def test_parse_port_range_multi_segment() -> None:
+    """多段逗号分隔 '18080-18081,19000-19001' 解析为升序去重列表。"""
+    assert _parse_port_range("18080-18081,19000-19001") == [18080, 18081, 19000, 19001]
+
+
+@pytest.mark.asyncio
+async def test_parse_port_range_reverse_raises() -> None:
+    """起>止的非法段（'18180-18080'）必须显式抛 ValueError。"""
+    with pytest.raises(ValueError):
+        _parse_port_range("18180-18080")
+
+
+@pytest.mark.asyncio
+async def test_parse_port_range_default_range_size() -> None:
+    """默认端口段 '18080-18180' 含 101 个端口（含端点，边界计数）。"""
+    mgr = WrenMcpProcessManager()  # 取默认配置段
+    ports = mgr.parse_port_range()
+    assert len(ports) == 101
+    assert ports[0] == 18080
+    assert ports[-1] == 18180
+
+
+@pytest.mark.asyncio
+async def test_port_segment_boundary_exact_count(manager: WrenMcpProcessManager) -> None:
+    """18080-18083 端口段恰含 4 个端口，分配满且互不越界。"""
+    ports = manager.parse_port_range()
+    assert ports == [18080, 18081, 18082, 18083]
+    for _ in range(4):
+        await manager.allocate_port("x")
+    with pytest.raises(PortExhaustedError):
+        await manager.allocate_port("overflow")
+
+
+@pytest.mark.asyncio
+async def test_concurrency_allocation_unique_ports(tmp_projects_root: Path) -> None:
+    """并发 allocate_port（asyncio.Lock 临界区）不产生重复端口，且全部落在段内。
+
+    多连接方案下同一 Worker 可能并发拉起多个连接，端口分配必须无竞态。
+    """
+    reset_process_manager()
+    mgr = WrenMcpProcessManager(
+        host="127.0.0.1",
+        port_range="18080-18200",
+        projects_root=str(tmp_projects_root / "w"),
+        status_reporter=lambda *a: None,
+    )
+    conns = [str(i) for i in range(20)]
+    ports = await asyncio.gather(*[mgr.allocate_port(c) for c in conns])
+    assert len(set(ports)) == len(ports)  # 无重复 = 无竞态分配
+    allowed = set(mgr.parse_port_range())
+    assert all(p in allowed for p in ports)
+    # 释放后再次分配仍落在段内且不越界
+    for p in ports:
+        await mgr.release_port(p)
+    reused = await mgr.allocate_port("again")
+    assert reused in allowed

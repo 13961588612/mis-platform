@@ -788,3 +788,34 @@ export async function selfHealValidate(connectionId: number): Promise<IqdSelfHea
   );
   return unwrap(res, '模型校验失败');
 }
+
+// ================================================================ 启用/创建项目（跨机器落地 v0.2）
+
+/** 启用/创建项目返回（对齐 ensure_connection 数据视图）。 */
+export interface IqdEnableProjectResult {
+  connection_id?: number;
+  mcp_status?: string;
+  /** agent 数据面可达 host（远程模式）；本地模式为 127.0.0.1:port */
+  mcp_host?: string;
+  /** WrenMcpAgent 部署句柄（远程模式）；本地模式为空 */
+  agent_handle?: string;
+  /** true=远程跨机器部署；false=本地 Plan A 子进程 */
+  remote?: boolean;
+}
+
+/**
+ * 启用/创建问数项目（POST /iqd/mcp/enable → ai-platform 声明式 ensure）。
+ *
+ * 业务主路径：admin 保存连接（含凭证）后点击「启用/创建项目」，平台据 WREN_AGENT_ENDPOINT
+ * 是否配置分流：远程模式经 WrenMcpAgentClient.ensure 推凭证 + 拉起 wren 机进程（v0.2 跨机器
+ * 落地，决策 ①⑧），本地模式退回既有 Plan A 子进程模型。平台回写 mis-iqd
+ * mcp_host/agent_handle/mcp_status（可观测 + 前端定位）。
+ */
+export async function enableProject(connectionId: number): Promise<IqdEnableProjectResult> {
+  const res = await api.post<ApiResult<IqdEnableProjectResult>>(
+    '/iqd/mcp/enable',
+    undefined,
+    { params: { connectionId } },
+  );
+  return unwrap(res, '启用问数项目失败');
+}

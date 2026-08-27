@@ -283,14 +283,19 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # 单连接启动失败（如 MDL 未构建）不阻断 Worker 主进程；best-effort。
     mcp_stop_event: Any = None
     mcp_health_task: Any = None
+    reconcile_stop_event: Any = None
+    reconcile_task: Any = None
     try:
         from src.agent.mis_iqd.bootstrap import (
             bulk_start_enabled_iqd_mcp,
+            start_iqd_mcp_reconciler,
             start_iqd_mcp_supervisor,
         )
 
         await bulk_start_enabled_iqd_mcp()
         mcp_stop_event, mcp_health_task = await start_iqd_mcp_supervisor()
+        # 跨机器部署 reconcile 循环（仅远程模式生效）：对账 agent 部署状态并回写 mis-iqd
+        reconcile_stop_event, reconcile_task = await start_iqd_mcp_reconciler()
         logger.info("IQD MCP bootstrap complete")
     except Exception as exc:
         logger.warning("IQD MCP bootstrap deferred", error=str(exc))
@@ -306,6 +311,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         from src.agent.mis_iqd.bootstrap import shutdown_iqd_mcp
 
         await shutdown_iqd_mcp(mcp_stop_event, mcp_health_task)
+        # 停止跨机器部署 reconcile 循环（置 stop_event + 取消任务）
+        await shutdown_iqd_mcp(reconcile_stop_event, reconcile_task)
         logger.info("IQD MCP shutdown complete")
     except Exception as exc:
         logger.warning("IQD MCP shutdown error", error=str(exc))

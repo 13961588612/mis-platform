@@ -18,6 +18,7 @@ import {
   getIqdConfig,
   saveIqdConfig,
   testIqdConfig,
+  enableProject,
   type IqdConnectionConfig,
   type IqdConnectionTest,
 } from '@/lib/api/iqd';
@@ -31,6 +32,7 @@ export function IqdConfigPage() {
   const [testing, setTesting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [testResult, setTestResult] = useState<IqdConnectionTest | null>(null);
+  const [enabling, setEnabling] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -87,6 +89,20 @@ export function IqdConfigPage() {
     }
   }, []);
 
+  const enable = useCallback(async () => {
+    if (!config?.id) return;
+    setEnabling(true);
+    setError(null);
+    try {
+      await enableProject(config.id);
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : '启用问数项目失败');
+    } finally {
+      setEnabling(false);
+    }
+  }, [config, load]);
+
   const field = (key: keyof IqdConnectionConfig): string | number => {
     const v = config?.[key];
     // 布尔/空值统一回退为空串，避免 boolean 误入 Input/select value（TS2322）
@@ -113,6 +129,9 @@ export function IqdConfigPage() {
             <Button size="sm" onClick={() => void save()} disabled={saving || !config}>
               <Save className="h-4 w-4" />
               保存
+            </Button>
+            <Button size="sm" variant="outline" onClick={() => void enable()} disabled={enabling || !config?.id}>
+              {enabling ? '启用中…' : '启用/创建项目'}
             </Button>
           </div>
         }
