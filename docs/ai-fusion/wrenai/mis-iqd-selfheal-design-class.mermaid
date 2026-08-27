@@ -1,0 +1,121 @@
+classDiagram
+    direction LR
+
+    %% ===================== ai-platform（Python Worker，PRD 所称「mis-iqd Worker」）=====================
+    class IqdCli {
+        +context_build(mdl_dir, sql_pairs, instructions, allow_write, force) dict
+        +memory_index() dict
+        +memory_reset() dict
+        +context_validate() dict
+        +get_current_mdl_hash() str|None
+        -_force_build_args: list~str~
+        -_memory_reset_args: list~str~
+        -_context_validate_args: list~str~
+        +_run(args) dict
+        +_parse_validate_summary(stdout, stderr) str
+    }
+    class IqdAskService {
+        +trigger_force_rebuild(connection_id, wait) SyncResult
+        +trigger_reindex(connection_id, wait) SyncResult
+        +trigger_validate(connection_id, wait) SyncResult
+        +trigger_build_index(connection_id, wait, scope) SyncResult
+        -_report_selfheal_job(client, connection_id, action, result) void
+    }
+    class SyncResult {
+        +connection_id: int
+        +build_status: str
+        +index_status: str
+        +build_mdl_hash: str
+        +build_error: str
+        +index_error: str
+    }
+    class IqdConfigClient {
+        +report_sync_job(payload) void
+        +get_catalog_sync_status(conn) dict
+    }
+    class IqdSelfHealRouter {
+        +POST /iqd/self-heal/force-rebuild
+        +POST /iqd/self-heal/re-index
+        +POST /iqd/self-heal/validate
+    }
+    class IqdMcpSettings {
+        +wren_cli_bin: str
+        +self_heal_force_build_args: list~str~
+        +self_heal_memory_reset_args: list~str~
+        +self_heal_context_validate_args: list~str~
+    }
+
+    IqdSelfHealRouter ..> IqdAskService : 调用
+    IqdAskService ..> IqdCli : 串联原子
+    IqdAskService ..> IqdConfigClient : 上报/查询
+    IqdCli ..> IqdMcpSettings : 读取参数(Q5 隔离)
+    IqdAskService ..> SyncResult : 返回
+
+    %% ===================== BFF（Java）=====================
+    class IqdAclController {
+        +POST /api/v1/iqd/self-heal/force-rebuild
+        +POST /api/v1/iqd/self-heal/re-index
+        +POST /api/v1/iqd/self-heal/validate
+    }
+    class IqdFacadeService {
+        +selfHeal(action, connectionId, auth, traceId) Map
+        -requirePermission(code) void
+    }
+    class IqdClient {
+        +selfHealForceRebuild(conn) Map
+        +selfHealReindex(conn) Map
+        +selfHealValidate(conn) Map
+    }
+    class AiPlatformClient {
+        +selfHeal(action, connectionId, auth, traceId) Map
+    }
+    class IqdProperties {
+        +selfHealPermission: str = "iqd:selfheal:exec"
+    }
+    IqdAclController ..> IqdFacadeService : 调用
+    IqdFacadeService ..> IqdClient : 调用
+    IqdFacadeService ..> IqdProperties : 权限码闸门
+    IqdClient ..> AiPlatformClient : 转发
+    IqdFacadeService ..> IqdClient : 状态查询(复用)
+
+    %% ===================== mis-iqd（Java 配置/状态服务）=====================
+    class IqdInternalController {
+        +POST /internal/v1/iqd/enhance/sync-job
+    }
+    class IqdAdminService {
+        +reportSyncJob(payload) IqdSyncJobVO
+        +getCatalogSyncStatus(conn) Map
+    }
+    class IqdSyncJob {
+        +connectionId: Long
+        +build_status: str
+        +index_status: str
+        +build_mdl_hash: str
+        +action: str
+    }
+    class IqdSyncJobVO {
+        +action: str
+    }
+    IqdInternalController ..> IqdAdminService : 上报
+    IqdAdminService ..> IqdSyncJob : 覆盖写
+    IqdAdminService ..> IqdSyncJobVO : 映射
+
+    %% ===================== 前端 =====================
+    class SelfHealPanel {
+        +onForceRebuild() void
+        +onReindex() void
+        +onValidate() void
+        -confirmOpen: bool
+        -actionState: Map
+        -gateBlocked: bool
+    }
+    class IqdApi {
+        +selfHealForceRebuild(conn) Promise~IqdSelfHealResult~
+        +selfHealReindex(conn) Promise~IqdSelfHealResult~
+        +selfHealValidate(conn) Promise~IqdSelfHealResult~
+    }
+    class CatalogSyncStatusBar {
+        +poll 5000ms 复用
+    }
+    SelfHealPanel ..> IqdApi : 调用
+    SelfHealPanel ..> CatalogSyncStatusBar : 同页复用

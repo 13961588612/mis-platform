@@ -35,6 +35,7 @@ import {
   type IqdDependents,
 } from '@/lib/api/iqd';
 import { CatalogSyncStatusBar } from './components/CatalogSyncStatusBar';
+import { SelfHealPanel } from './components/SelfHealPanel';
 
 const KIND_LABEL: Record<string, string> = {
   table: '表',
@@ -333,6 +334,9 @@ export function IqdCatalogPage() {
 
       {/* 二期：模型编辑同步状态条（5000ms 轮询；STALE_DRIFT 横幅 + 重新导入） */}
       <CatalogSyncStatusBar connectionId={connectionId} />
+
+      {/* 运维自愈三按钮（强制重建 + 二次确认 / 重新索引 / 模型校验；gate + 失败横幅，复用 5000ms 轮询） */}
+      <SelfHealPanel connectionId={connectionId} />
 
       {error ? (
         <div className="mb-3 rounded-md border border-destructive/30 bg-destructive/5 p-3 text-xs text-destructive">

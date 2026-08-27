@@ -134,3 +134,5 @@ mis:
     ask-permission: ${MIS_IQD_ASK_PERMISSION:ai:chat:use}
     # Worker 侧 mis-iqd Agent 的 agentId（ai-platform Agent Core 注册名）
     agent-id: ${MIS_IQD_AGENT_ID:mis-iqd}
+    # MDL 写回平台默认开关（连接级 mdl_writeback_enabled 仍可在配置页单独关闭）
+    mdl-writeback-enabled: ${MIS_IQD_MDL_WRITEBACK_ENABLED:true}

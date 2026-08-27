@@ -59,3 +59,5 @@ mis:
       org: http://127.0.0.1:8103
       system: http://127.0.0.1:8105
       iam: http://127.0.0.1:8102
+  iqd:
+    mdl-writeback-enabled: true

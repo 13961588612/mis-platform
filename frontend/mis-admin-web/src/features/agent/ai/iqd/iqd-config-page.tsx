@@ -63,7 +63,7 @@ export function IqdConfigPage() {
         timeout_seconds: config.timeout_seconds ?? 60,
         language: config.language || 'zh-CN',
         enabled: config.enabled ?? true,
-        mdl_writeback_enabled: config.mdl_writeback_enabled ?? false,
+        mdl_writeback_enabled: config.mdl_writeback_enabled ?? true,
       });
       setConfig(saved);
       setTestResult(null);

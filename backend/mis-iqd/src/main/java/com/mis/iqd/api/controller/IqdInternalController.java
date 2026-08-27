@@ -89,6 +89,8 @@ public class IqdInternalController {
             m.put("language", c.getLanguage());
             m.put("status", c.getStatus());
             m.put("enabled", c.getEnabled());
+            m.put("mcp_status", c.getMcpStatus());
+            m.put("mcp_port", c.getMcpPort());
             return m;
         }).toList();
         return Result.ok(items);
@@ -289,6 +291,39 @@ public class IqdInternalController {
         Long connectionId = toLong(payload.get("connection_id"));
         boolean drift = Boolean.TRUE.equals(payload.get("drift"));
         adminService.setStaleDrift(connectionId, drift);
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("ok", true);
+        return Result.ok(body);
+    }
+
+    /**
+     * 取连接凭证引用（方案 A 多连接 D6 凭证解析前置）。
+     *
+     * <p>仅回 {@code secret_ref}（opaque vault 引用），绝不回明文/密码；ai-platform 经此
+     * 引用调本地 CredentialVault 解密并注入 wren serve mcp 进程 env（不落盘）。注意与
+     * {@code /get-connections} 区分：后者为安全视图，secret 恒回 {@code ******}，本端点为
+     * 内部进程管理器专用，仅回引用。
+     *
+     * @param connectionId 问数连接 id
+     * @return {@code {connection_id, secret_ref}}
+     */
+    @GetMapping("/connection-credentials")
+    public Result<Map<String, Object>> getConnectionCredentials(@RequestParam Long connectionId) {
+        return Result.ok(adminService.getConnectionSecretRef(connectionId));
+    }
+
+    /**
+     * 回写连接级 WrenAI MCP 进程状态（方案 A 多连接可观测，REQ-P1-2）。
+     *
+     * <p>由 ai-platform Worker 进程管理器在启停/健康自检后回调。仅回写
+     * {@code mcp_status} / {@code mcp_port}，不影响其它连接字段。
+     */
+    @PostMapping("/mcp-status")
+    public Result<Map<String, Object>> reportMcpStatus(@RequestBody Map<String, Object> payload) {
+        Long connectionId = toLong(payload.get("connection_id"));
+        String mcpStatus = str(payload.get("mcp_status"));
+        Integer mcpPort = toLong(payload.get("mcp_port")) == null ? null : toLong(payload.get("mcp_port")).intValue();
+        adminService.reportMcpStatus(connectionId, mcpStatus, mcpPort);
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("ok", true);
         return Result.ok(body);

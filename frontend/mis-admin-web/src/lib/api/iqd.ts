@@ -736,3 +736,55 @@ export async function reconcileIqdCatalog(
   );
   return unwrap(res, '触发对账失败');
 }
+
+// ================================================================ 运维自愈三按钮
+
+/** 运维自愈动作枚举（与后端 action 取值一致）。 */
+export type IqdSelfHealAction = 'force_rebuild' | 'reindex' | 'validate';
+
+/** 运维自愈动作返回（复用 SyncResult 关键字段；snake_case wire，对齐 IqdSyncJobVO / SyncResult）。 */
+export interface IqdSelfHealResult {
+  connection_id?: number;
+  build_status?: string;
+  index_status?: string;
+  build_mdl_hash?: string | null;
+  build_error?: string | null;
+  index_error?: string | null;
+}
+
+/**
+ * 运维自愈-强制重建（POST /iqd/self-heal/force-rebuild → ai-platform context build(force) + memory index）。
+ * 默认 wait=true（阻塞至完整 SyncResult 返回）。
+ */
+export async function selfHealForceRebuild(connectionId: number): Promise<IqdSelfHealResult> {
+  const res = await api.post<ApiResult<IqdSelfHealResult>>(
+    '/iqd/self-heal/force-rebuild',
+    undefined,
+    { params: { connectionId, wait: true } },
+  );
+  return unwrap(res, '强制重建失败');
+}
+
+/**
+ * 运维自愈-重新索引（POST /iqd/self-heal/re-index → ai-platform memory reset + memory index）。
+ */
+export async function selfHealReindex(connectionId: number): Promise<IqdSelfHealResult> {
+  const res = await api.post<ApiResult<IqdSelfHealResult>>(
+    '/iqd/self-heal/re-index',
+    undefined,
+    { params: { connectionId, wait: true } },
+  );
+  return unwrap(res, '重新索引失败');
+}
+
+/**
+ * 运维自愈-模型校验（POST /iqd/self-heal/validate → ai-platform context validate；build_error 含人可读摘要）。
+ */
+export async function selfHealValidate(connectionId: number): Promise<IqdSelfHealResult> {
+  const res = await api.post<ApiResult<IqdSelfHealResult>>(
+    '/iqd/self-heal/validate',
+    undefined,
+    { params: { connectionId, wait: true } },
+  );
+  return unwrap(res, '模型校验失败');
+}

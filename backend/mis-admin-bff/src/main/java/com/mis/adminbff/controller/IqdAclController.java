@@ -352,6 +352,151 @@ public class IqdAclController {
         }
     }
 
+    // ================================================================ 运维自愈三按钮（需 iqd:selfheal:exec）
+
+    /**
+     * 运维自愈-强制重建（action=force-rebuild）：调 ai-platform 经 context build(force) + memory index。
+     */
+    @PostMapping("/self-heal/force-rebuild")
+    public Result<Map<String, Object>> selfHealForceRebuild(
+            @RequestParam Long connectionId,
+            @RequestHeader(value = SecurityConstants.AUTHORIZATION_HEADER, required = false) String authorization,
+            @RequestHeader(value = SecurityConstants.HEADER_TRACE_ID, required = false) String traceId) {
+        try {
+            return Result.ok(iqdFacadeService.selfHeal("force-rebuild", connectionId, authorization, traceId));
+        } catch (BusinessException ex) {
+            return Result.fail(ex.getCode(), ex.getMessage());
+        } catch (Exception ex) {
+            return Result.fail(ResultCode.INTERNAL_ERROR.getCode(), "强制重建触发失败: " + ex.getMessage());
+        }
+    }
+
+    /**
+     * 运维自愈-重新索引（action=re-index）：调 ai-platform 经 memory reset + memory index。
+     */
+    @PostMapping("/self-heal/re-index")
+    public Result<Map<String, Object>> selfHealReindex(
+            @RequestParam Long connectionId,
+            @RequestHeader(value = SecurityConstants.AUTHORIZATION_HEADER, required = false) String authorization,
+            @RequestHeader(value = SecurityConstants.HEADER_TRACE_ID, required = false) String traceId) {
+        try {
+            return Result.ok(iqdFacadeService.selfHeal("re-index", connectionId, authorization, traceId));
+        } catch (BusinessException ex) {
+            return Result.fail(ex.getCode(), ex.getMessage());
+        } catch (Exception ex) {
+            return Result.fail(ResultCode.INTERNAL_ERROR.getCode(), "重新索引触发失败: " + ex.getMessage());
+        }
+    }
+
+    /**
+     * 运维自愈-模型校验（action=validate）：调 ai-platform 经 context validate。
+     */
+    @PostMapping("/self-heal/validate")
+    public Result<Map<String, Object>> selfHealValidate(
+            @RequestParam Long connectionId,
+            @RequestHeader(value = SecurityConstants.AUTHORIZATION_HEADER, required = false) String authorization,
+            @RequestHeader(value = SecurityConstants.HEADER_TRACE_ID, required = false) String traceId) {
+        try {
+            return Result.ok(iqdFacadeService.selfHeal("validate", connectionId, authorization, traceId));
+        } catch (BusinessException ex) {
+            return Result.fail(ex.getCode(), ex.getMessage());
+        } catch (Exception ex) {
+            return Result.fail(ResultCode.INTERNAL_ERROR.getCode(), "模型校验触发失败: " + ex.getMessage());
+        }
+    }
+
+    // ================================================================ 方案 A 多连接：MCP 进程管理（需 iqd:mcp:manage）
+
+    /**
+     * MCP 启动（action=start）：调 ai-platform 经就绪门禁 + 凭证 env 注入拉起本连接进程。
+     */
+    @PostMapping("/mcp/start")
+    public Result<Map<String, Object>> mcpStart(
+            @RequestParam Long connectionId,
+            @RequestParam(required = false, defaultValue = "true") boolean wait,
+            @RequestParam(required = false, defaultValue = "true") boolean retainDir,
+            @RequestHeader(value = SecurityConstants.AUTHORIZATION_HEADER, required = false) String authorization,
+            @RequestHeader(value = SecurityConstants.HEADER_TRACE_ID, required = false) String traceId) {
+        try {
+            return Result.ok(iqdFacadeService.mcpManage("start", connectionId, wait, retainDir, authorization, traceId));
+        } catch (BusinessException ex) {
+            return Result.fail(ex.getCode(), ex.getMessage());
+        } catch (Exception ex) {
+            return Result.fail(ResultCode.INTERNAL_ERROR.getCode(), "MCP 启动失败: " + ex.getMessage());
+        }
+    }
+
+    /**
+     * MCP 停止（action=stop）：调 ai-platform 停止本连接进程并回收端口（默认保留目录）。
+     */
+    @PostMapping("/mcp/stop")
+    public Result<Map<String, Object>> mcpStop(
+            @RequestParam Long connectionId,
+            @RequestParam(required = false, defaultValue = "true") boolean wait,
+            @RequestParam(required = false, defaultValue = "true") boolean retainDir,
+            @RequestHeader(value = SecurityConstants.AUTHORIZATION_HEADER, required = false) String authorization,
+            @RequestHeader(value = SecurityConstants.HEADER_TRACE_ID, required = false) String traceId) {
+        try {
+            return Result.ok(iqdFacadeService.mcpManage("stop", connectionId, wait, retainDir, authorization, traceId));
+        } catch (BusinessException ex) {
+            return Result.fail(ex.getCode(), ex.getMessage());
+        } catch (Exception ex) {
+            return Result.fail(ResultCode.INTERNAL_ERROR.getCode(), "MCP 停止失败: " + ex.getMessage());
+        }
+    }
+
+    /**
+     * MCP 重启（action=restart）：调 ai-platform 复用端口并重新注入凭证 env。
+     */
+    @PostMapping("/mcp/restart")
+    public Result<Map<String, Object>> mcpRestart(
+            @RequestParam Long connectionId,
+            @RequestParam(required = false, defaultValue = "true") boolean wait,
+            @RequestParam(required = false, defaultValue = "true") boolean retainDir,
+            @RequestHeader(value = SecurityConstants.AUTHORIZATION_HEADER, required = false) String authorization,
+            @RequestHeader(value = SecurityConstants.HEADER_TRACE_ID, required = false) String traceId) {
+        try {
+            return Result.ok(iqdFacadeService.mcpManage("restart", connectionId, wait, retainDir, authorization, traceId));
+        } catch (BusinessException ex) {
+            return Result.fail(ex.getCode(), ex.getMessage());
+        } catch (Exception ex) {
+            return Result.fail(ResultCode.INTERNAL_ERROR.getCode(), "MCP 重启失败: " + ex.getMessage());
+        }
+    }
+
+    /**
+     * 取连接级 MCP 进程状态（需 iqd:mcp:manage）。
+     */
+    @GetMapping("/mcp/status")
+    public Result<Map<String, Object>> mcpStatus(
+            @RequestParam Long connectionId,
+            @RequestHeader(value = SecurityConstants.AUTHORIZATION_HEADER, required = false) String authorization,
+            @RequestHeader(value = SecurityConstants.HEADER_TRACE_ID, required = false) String traceId) {
+        try {
+            return Result.ok(iqdFacadeService.mcpStatus(connectionId, authorization, traceId));
+        } catch (BusinessException ex) {
+            return Result.fail(ex.getCode(), ex.getMessage());
+        } catch (Exception ex) {
+            return Result.fail(ResultCode.INTERNAL_ERROR.getCode(), "MCP 状态查询失败: " + ex.getMessage());
+        }
+    }
+
+    /**
+     * 列出全部连接 MCP 进程状态（需 iqd:mcp:manage）。
+     */
+    @GetMapping("/mcp/list")
+    public Result<List<Map<String, Object>>> mcpList(
+            @RequestHeader(value = SecurityConstants.AUTHORIZATION_HEADER, required = false) String authorization,
+            @RequestHeader(value = SecurityConstants.HEADER_TRACE_ID, required = false) String traceId) {
+        try {
+            return Result.ok(iqdFacadeService.mcpList(authorization, traceId));
+        } catch (BusinessException ex) {
+            return Result.fail(ex.getCode(), ex.getMessage());
+        } catch (Exception ex) {
+            return Result.fail(ResultCode.INTERNAL_ERROR.getCode(), "MCP 列表查询失败: " + ex.getMessage());
+        }
+    }
+
     // ================================================================ 方言转化 + 试运行（v1.10）
 
     /**

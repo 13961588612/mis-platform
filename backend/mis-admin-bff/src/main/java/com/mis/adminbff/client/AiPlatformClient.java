@@ -56,6 +56,10 @@ public class AiPlatformClient extends AbstractDownstreamClient {
     private static final ParameterizedTypeReference<Result<Map<String, Object>>> MAP_RESULT_TYPE =
             new ParameterizedTypeReference<>() {};
 
+    /** 方案 A 多连接：MCP 进程列表结果类型（/iqd/mcp/list 返回 {@code list[dict]}）。 */
+    private static final ParameterizedTypeReference<Result<List<Map<String, Object>>>> MCP_LIST_TYPE =
+            new ParameterizedTypeReference<>() {};
+
     /** X-Mis-* 头名（与平台 docs/identity-enrichment-task-list.md §4 约定一致）。 */
     private static final String HEADER_MIS_DEPTS = "X-Mis-Depts";
     private static final String HEADER_MIS_ORGS = "X-Mis-Orgs";
@@ -261,6 +265,136 @@ public class AiPlatformClient extends AbstractDownstreamClient {
                 .bodyValue(body)
                 .retrieve()
                 .bodyToMono(MAP_RESULT_TYPE));
+    }
+
+    /**
+     * 触发运维自愈动作（需 iqd:selfheal:exec）：调平台 Worker
+     * {@code /api/v1/iqd/self-heal/{action}}。
+     *
+     * <p>action ∈ {force-rebuild, re-index, validate}；默认 wait=true（阻塞至完整
+     * SyncResult 返回），与编辑写回的 best-effort（wait=false）区分。body
+     * {@code {connection_id, wait:true}}。
+     *
+     * @param action       自愈动作（force-rebuild / re-index / validate）
+     * @param connectionId 问数连接 id
+     * @param authorization BFF 收到的原始 MIS JWT（透传给平台 RS256 校验）
+     * @param traceId      全链路追踪 ID（X-Trace-Id，透传给平台）
+     * @return 平台响应 data（SyncResult：build/index 状态 + mdl_hash + 回填计数）
+     */
+    public Map<String, Object> selfHeal(
+            String action, Long connectionId, String authorization, String traceId) {
+        Consumer<HttpHeaders> headers = buildHeaders(authorization, traceId);
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("connection_id", connectionId);
+        body.put("wait", Boolean.TRUE);
+        return block(client().post()
+                .uri("/api/v1/iqd/self-heal/{action}", action)
+                .headers(headers)
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(body)
+                .retrieve()
+                .bodyToMono(MAP_RESULT_TYPE));
+    }
+
+    /** 运维自愈-强制重建（action=force-rebuild）。 */
+    public Map<String, Object> selfHealForceRebuild(Long connectionId, String authorization, String traceId) {
+        return selfHeal("force-rebuild", connectionId, authorization, traceId);
+    }
+
+    /** 运维自愈-重新索引（action=re-index）。 */
+    public Map<String, Object> selfHealReindex(Long connectionId, String authorization, String traceId) {
+        return selfHeal("re-index", connectionId, authorization, traceId);
+    }
+
+    /** 运维自愈-模型校验（action=validate）。 */
+    public Map<String, Object> selfHealValidate(Long connectionId, String authorization, String traceId) {
+        return selfHeal("validate", connectionId, authorization, traceId);
+    }
+
+    /**
+     * 方案 A 多连接：触发某连接 WrenAI MCP 进程管理动作（需 iqd:mcp:manage）。
+     *
+     * <p>action ∈ {start, stop, restart}；调平台 Worker {@code /api/v1/iqd/mcp/{action}}。
+     * 平台执行就绪门禁（mdl.json 已编译）+ 凭证 env 注入（D6）+ 进程启停/重启，
+     * body {@code {connection_id, wait, retain_dir}}。
+     *
+     * @param action       管理动作（start / stop / restart）
+     * @param connectionId 问数连接 id
+     * @param wait         是否阻塞至完成（保留参数，启动为异步；默认 true 兼容语义）
+     * @param retainDir    stop 时是否保留 project 目录（默认 true，7 天到期清理）
+     * @param authorization BFF 收到的原始 MIS JWT（透传平台 RS256 校验）
+     * @param traceId      全链路追踪 ID（X-Trace-Id，透传给平台）
+     * @return 平台响应 data（{connection_id, mcp_status, host, port}）
+     */
+    public Map<String, Object> mcpManage(
+            String action, Long connectionId, Boolean wait, Boolean retainDir,
+            String authorization, String traceId) {
+        Consumer<HttpHeaders> headers = buildHeaders(authorization, traceId);
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("connection_id", connectionId);
+        body.put("wait", wait == null ? Boolean.TRUE : wait);
+        body.put("retain_dir", retainDir == null ? Boolean.TRUE : retainDir);
+        return block(client().post()
+                .uri("/api/v1/iqd/mcp/{action}", action)
+                .headers(headers)
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(body)
+                .retrieve()
+                .bodyToMono(MAP_RESULT_TYPE));
+    }
+
+    /** 方案 A 多连接：MCP 启动（action=start）。 */
+    public Map<String, Object> mcpStart(
+            Long connectionId, Boolean wait, Boolean retainDir,
+            String authorization, String traceId) {
+        return mcpManage("start", connectionId, wait, retainDir, authorization, traceId);
+    }
+
+    /** 方案 A 多连接：MCP 停止（action=stop）。 */
+    public Map<String, Object> mcpStop(
+            Long connectionId, Boolean wait, Boolean retainDir,
+            String authorization, String traceId) {
+        return mcpManage("stop", connectionId, wait, retainDir, authorization, traceId);
+    }
+
+    /** 方案 A 多连接：MCP 重启（action=restart）。 */
+    public Map<String, Object> mcpRestart(
+            Long connectionId, Boolean wait, Boolean retainDir,
+            String authorization, String traceId) {
+        return mcpManage("restart", connectionId, wait, retainDir, authorization, traceId);
+    }
+
+    /**
+     * 取连接级 MCP 进程状态（需 iqd:mcp:manage）：调平台 Worker
+     * {@code /api/v1/iqd/mcp/status?connection_id=}。
+     *
+     * @param connectionId 问数连接 id
+     * @return 平台响应 data（单连接状态 dict）
+     */
+    public Map<String, Object> mcpStatus(Long connectionId, String authorization, String traceId) {
+        Consumer<HttpHeaders> headers = buildHeaders(authorization, traceId);
+        return block(client().get()
+                .uri(uriBuilder -> uriBuilder.path("/api/v1/iqd/mcp/status")
+                        .queryParam("connection_id", connectionId)
+                        .build())
+                .headers(headers)
+                .retrieve()
+                .bodyToMono(MAP_RESULT_TYPE));
+    }
+
+    /**
+     * 列出全部连接 MCP 进程状态（需 iqd:mcp:manage）：调平台 Worker
+     * {@code /api/v1/iqd/mcp/list}。
+     *
+     * @return 平台响应 data（list[dict]）
+     */
+    public List<Map<String, Object>> mcpList(String authorization, String traceId) {
+        Consumer<HttpHeaders> headers = buildHeaders(authorization, traceId);
+        return block(client().get()
+                .uri("/api/v1/iqd/mcp/list")
+                .headers(headers)
+                .retrieve()
+                .bodyToMono(MCP_LIST_TYPE));
     }
 
     /** 组合转发头：复用基类 loginContextHeaders() + Authorization + X-Trace-Id + MIS 身份 enrichment 头。 */

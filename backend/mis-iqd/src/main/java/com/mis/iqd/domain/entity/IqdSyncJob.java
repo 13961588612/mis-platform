@@ -63,6 +63,10 @@ public class IqdSyncJob {
     @Column(name = "edit_source")
     private String editSource;
 
+    /** 本次同步动作：force_rebuild（自愈强制重建）/ reindex（自愈重新索引）/ validate（自愈模型校验）/ materials / model。可为 null（兼容历史作业）。 */
+    @Column(name = "action")
+    private String action;
+
     @Column(name = "created_at", nullable = false)
     private Instant createdAt;
 
@@ -171,6 +175,14 @@ public class IqdSyncJob {
 
     public void setEditSource(String editSource) {
         this.editSource = editSource;
+    }
+
+    public String getAction() {
+        return action;
+    }
+
+    public void setAction(String action) {
+        this.action = action;
     }
 
     public Instant getCreatedAt() {

@@ -32,4 +32,12 @@ public interface IqdConnectionRepository extends JpaRepository<IqdConnection, Lo
     @Modifying
     @Query("UPDATE IqdConnection c SET c.staleDrift = :drift WHERE c.id = :conn")
     int setStaleDrift(@Param("conn") Long connectionId, @Param("drift") boolean drift);
+
+    /** 回写连接级 MCP 进程状态与端口（方案 A 多连接可观测，REQ-P1-2）。 */
+    @Modifying
+    @Query("UPDATE IqdConnection c SET c.mcpStatus = :status, c.mcpPort = :port "
+            + "WHERE c.id = :conn")
+    int setMcpStatus(@Param("conn") Long connectionId,
+                     @Param("status") String mcpStatus,
+                     @Param("port") Integer mcpPort);
 }

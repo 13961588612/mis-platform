@@ -63,6 +63,12 @@ public class IqdProperties {
     /** 二期 catalog 编辑（写回 MDL）功能权限码（PUT /catalog/node 等）。 */
     private String catalogEditPermission = "iqd:catalog:edit";
 
+    /** 运维自愈三按钮功能权限码（POST /api/v1/iqd/self-heal/*）。 */
+    private String selfHealPermission = "iqd:selfheal:exec";
+
+    /** 方案 A 多连接：WrenAI MCP 进程管理功能权限码（POST/GET /api/v1/iqd/mcp/*）。 */
+    private String mcpManagerPermission = "iqd:mcp:manage";
+
     /** Worker 侧 mis-iqd Agent 的 agentId（ai-platform Agent Core 注册名）。 */
     private String agentId = "mis-iqd";
 
@@ -79,10 +85,9 @@ public class IqdProperties {
     private String enhanceStatusEndpoint = "/api/v1/iqd/enhance/sync-status";
 
     /**
-     * 二类前向：MDL 写回开关（一期恒 false）。开启后平台内改 catalog 才回写 WrenAI；
-     * 一期 catalog 读取仍走单向 syncCatalogFromMdl，此开关仅占位。
+     * 二类前向：MDL 写回平台默认开关。开启后允许连接配置开启写回并按连接粒度生效。
      */
-    private boolean mdlWritebackEnabled = false;
+    private boolean mdlWritebackEnabled = true;
 
     public String getBaseUrl() {
         return baseUrl;
@@ -274,6 +279,22 @@ public class IqdProperties {
 
     public void setCatalogEditPermission(String catalogEditPermission) {
         this.catalogEditPermission = catalogEditPermission;
+    }
+
+    public String getSelfHealPermission() {
+        return selfHealPermission;
+    }
+
+    public void setSelfHealPermission(String selfHealPermission) {
+        this.selfHealPermission = selfHealPermission;
+    }
+
+    public String getMcpManagerPermission() {
+        return mcpManagerPermission;
+    }
+
+    public void setMcpManagerPermission(String mcpManagerPermission) {
+        this.mcpManagerPermission = mcpManagerPermission;
     }
 
     public String getAgentId() {

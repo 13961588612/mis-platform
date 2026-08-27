@@ -323,6 +323,76 @@ public class IqdFacadeService {
     }
 
     /**
+     * 触发运维自愈动作（需 iqd:selfheal:exec）：按 action 分发到 ai-platform 对应端点。
+     *
+     * <p>action ∈ {force-rebuild, re-index, validate}；wait 固定 true（阻塞至完整
+     * SyncResult 返回，与编辑写回 best-effort 区分）。权限闸门与兜底判权同其它 IQD 端点。
+     *
+     * @param action       自愈动作（force-rebuild / re-index / validate）
+     * @param connectionId 问数连接 id
+     * @param authorization BFF 收到的原始 MIS JWT（透传平台 RS256）
+     * @param traceId      全链路追踪 ID
+     * @return 平台响应 data（SyncResult：build/index 状态 + mdl_hash + 回填计数）
+     */
+    public Map<String, Object> selfHeal(
+            String action, Long connectionId, String authorization, String traceId) {
+        requirePermission(properties.getSelfHealPermission());
+        return switch (action) {
+            case "force-rebuild" -> aiPlatformClient.selfHealForceRebuild(connectionId, authorization, traceId);
+            case "re-index" -> aiPlatformClient.selfHealReindex(connectionId, authorization, traceId);
+            case "validate" -> aiPlatformClient.selfHealValidate(connectionId, authorization, traceId);
+            default -> throw new BusinessException(ResultCode.VALIDATION_ERROR, "未知自愈动作: " + action);
+        };
+    }
+
+    /**
+     * 方案 A 多连接：MCP 进程管理（需 iqd:mcp:manage）：按 action 分发到 ai-platform。
+     *
+     * <p>action ∈ {start, stop, restart}；平台执行就绪门禁 + 凭证 env 注入 + 进程
+     * 启停/重启，并回写 mis-iqd {@code mcp_status} / {@code mcp_port}（可观测 REQ-P1-2）。
+     *
+     * @param action       管理动作（start / stop / restart）
+     * @param connectionId 问数连接 id
+     * @param wait         是否阻塞至完成（保留参数，启动异步）
+     * @param retainDir    stop 时是否保留 project 目录
+     * @param authorization BFF 收到的原始 MIS JWT（透传平台 RS256）
+     * @param traceId      全链路追踪 ID
+     * @return 平台响应 data（{connection_id, mcp_status, host, port}）
+     */
+    public Map<String, Object> mcpManage(
+            String action, Long connectionId, Boolean wait, Boolean retainDir,
+            String authorization, String traceId) {
+        requirePermission(properties.getMcpManagerPermission());
+        return switch (action) {
+            case "start" -> aiPlatformClient.mcpStart(connectionId, wait, retainDir, authorization, traceId);
+            case "stop" -> aiPlatformClient.mcpStop(connectionId, wait, retainDir, authorization, traceId);
+            case "restart" -> aiPlatformClient.mcpRestart(connectionId, wait, retainDir, authorization, traceId);
+            default -> throw new BusinessException(ResultCode.VALIDATION_ERROR, "未知 MCP 管理动作: " + action);
+        };
+    }
+
+    /**
+     * 取连接级 MCP 进程状态（需 iqd:mcp:manage）。
+     *
+     * @param connectionId 问数连接 id
+     * @return 平台响应 data（单连接状态 dict）
+     */
+    public Map<String, Object> mcpStatus(Long connectionId, String authorization, String traceId) {
+        requirePermission(properties.getMcpManagerPermission());
+        return aiPlatformClient.mcpStatus(connectionId, authorization, traceId);
+    }
+
+    /**
+     * 列出全部连接 MCP 进程状态（需 iqd:mcp:manage）。
+     *
+     * @return 平台响应 data（list[dict]）
+     */
+    public List<Map<String, Object>> mcpList(String authorization, String traceId) {
+        requirePermission(properties.getMcpManagerPermission());
+        return aiPlatformClient.mcpList(authorization, traceId);
+    }
+
+    /**
      * 回查最近一次增强同步作业（需 iqd:enhance:view；P0-4 状态条）。
      */
     public Map<String, Object> getEnhancementSyncStatus(Long connectionId) {

@@ -30,6 +30,12 @@ public class IqdConnectionVO {
     /** 按连接灰度闸门：是否允许平台写回 MDL（二期 P0-1~P0-12，U7/Q4）。 */
     private Boolean mdlWritebackEnabled;
 
+    /** 【方案A·多连接】WrenAI MCP 进程状态（running/stopped/starting/crashed/unhealthy）。 */
+    private String mcpStatus;
+
+    /** 【方案A·多连接】WrenAI MCP 进程监听端口。 */
+    private Integer mcpPort;
+
     public Long getId() {
         return id;
     }
@@ -142,6 +148,22 @@ public class IqdConnectionVO {
         this.mdlWritebackEnabled = mdlWritebackEnabled;
     }
 
+    public String getMcpStatus() {
+        return mcpStatus;
+    }
+
+    public void setMcpStatus(String mcpStatus) {
+        this.mcpStatus = mcpStatus;
+    }
+
+    public Integer getMcpPort() {
+        return mcpPort;
+    }
+
+    public void setMcpPort(Integer mcpPort) {
+        this.mcpPort = mcpPort;
+    }
+
     @JsonProperty("base_url")
     public String baseUrlWire() {
         return baseUrl;
@@ -180,6 +202,16 @@ public class IqdConnectionVO {
     @JsonProperty("mdl_writeback_enabled")
     public Boolean mdlWritebackEnabledWire() {
         return mdlWritebackEnabled;
+    }
+
+    @JsonProperty("mcp_status")
+    public String mcpStatusWire() {
+        return mcpStatus;
+    }
+
+    @JsonProperty("mcp_port")
+    public Integer mcpPortWire() {
+        return mcpPort;
     }
 
     /** 兼容旧调用方的 camelCase 视图（非 wire 主形态，仅内部用）。 */

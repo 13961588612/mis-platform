@@ -143,6 +143,7 @@ public class IqdAdminService {
             empty.setName("");
             empty.setEnabled(false);
             empty.setStatus("inactive");
+            empty.setMdlWritebackEnabled(true);
             return empty;
         }
         return toVO(existing.get());
@@ -186,8 +187,9 @@ public class IqdAdminService {
             entity.setLanguage(dto.getLanguage());
         }
         entity.setEnabled(Boolean.TRUE.equals(dto.getEnabled()) ? 1 : 0);
-        // 灰度闸门：写回 MDL 需显式开启（U7/Q4）；null 视为 false
-        entity.setMdlWritebackEnabled(Boolean.TRUE.equals(dto.getMdlWritebackEnabled()));
+        // 灰度闸门：写回 MDL 默认开启（U7/Q4）；仅显式 false 时关闭
+        entity.setMdlWritebackEnabled(
+                dto.getMdlWritebackEnabled() == null || Boolean.TRUE.equals(dto.getMdlWritebackEnabled()));
         // 保存后置为 inactive，待测试连通性
         entity.setStatus("inactive");
         entity.setUpdatedAt(Instant.now());
@@ -1236,6 +1238,8 @@ public class IqdAdminService {
         }
         job.setBuildError(str(payload.get("build_error")));
         job.setIndexError(str(payload.get("index_error")));
+        // 自愈动作（force_rebuild / reindex / validate）；缺省保持 null 兼容历史 materials/model 作业
+        job.setAction(str(payload.get("action")));
         job.setUpdatedAt(now);
         syncJobRepository.save(job);
         log.info("IQD sync job reported connectionId={} buildStatus={} indexStatus={} mdlHash={}",
@@ -1540,6 +1544,43 @@ public class IqdAdminService {
     }
 
     /**
+     * 回写连接级 WrenAI MCP 进程状态（方案 A 多连接可观测，REQ-P1-2）。
+     *
+     * <p>由 ai-platform Worker 进程管理器（WrenMcpProcessManager）在启停/健康自检后
+     * 经内部端点回调。仅回写进程管理器掌握的 {@code mcp_status} / {@code mcp_port}，
+     * 不影响其它连接字段。
+     *
+     * @param connectionId 问数连接 id
+     * @param mcpStatus    MCP 进程状态（running/stopped/starting/crashed/unhealthy）
+     * @param mcpPort      MCP 进程监听端口（进程未启动可为 null）
+     */
+    @Transactional
+    public void reportMcpStatus(Long connectionId, String mcpStatus, Integer mcpPort) {
+        ensureConnection(connectionId);
+        connectionRepository.setMcpStatus(connectionId, mcpStatus, mcpPort);
+    }
+
+    /**
+     * 取连接凭证引用（方案 A 多连接 D6 凭证解析前置）。
+     *
+     * <p><b>仅回 {@code secret_ref}（opaque vault 引用），绝不回明文/密码</b>。ai-platform
+     * 经此引用调本地 {@code CredentialVault} 解密后注入 wren serve mcp 进程 env（不落盘），
+     * 与 mis-iqd 不持有业务库凭证的铁律一致（见 IqdConnection 类注释）。
+     *
+     * @param connectionId 问数连接 id
+     * @return {@code {connection_id, secret_ref}}（secret_ref 缺失时为 null）
+     */
+    public Map<String, Object> getConnectionSecretRef(Long connectionId) {
+        IqdConnection conn = connectionRepository.findById(connectionId)
+                .orElseThrow(() -> new BusinessException(
+                        ResultCode.NOT_FOUND, "问数连接不存在: " + connectionId));
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("connection_id", conn.getId());
+        m.put("secret_ref", conn.getSecretRef());
+        return m;
+    }
+
+    /**
      * 终态判定：build/index 进入 success/failed 即视为完成（可打时间戳）。
      */
     private static boolean isTerminalStatus(String status) {
@@ -1587,6 +1628,8 @@ public class IqdAdminService {
         vo.setEnabled(entity.getEnabled() != null && entity.getEnabled() == 1);
         vo.setMdlWritebackEnabled(entity.getMdlWritebackEnabled() != null
                 && entity.getMdlWritebackEnabled());
+        vo.setMcpStatus(entity.getMcpStatus());
+        vo.setMcpPort(entity.getMcpPort());
         return vo;
     }
 
@@ -1831,6 +1874,7 @@ public class IqdAdminService {
         vo.setSyncedKnowledgeCount(entity.getSyncedKnowledgeCount());
         vo.setBuildError(entity.getBuildError());
         vo.setIndexError(entity.getIndexError());
+        vo.setAction(entity.getAction());
         vo.setUpdatedAt(entity.getUpdatedAt());
         return vo;
     }

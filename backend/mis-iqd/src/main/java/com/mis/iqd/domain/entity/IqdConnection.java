@@ -67,9 +67,9 @@ public class IqdConnection {
     @Column(name = "built_edit_revision", nullable = false)
     private Long builtEditRevision = 0L;
 
-    /** 按连接灰度闸门：开启后平台内改 catalog 才回写 WrenAI（U7/Q4）。 */
+    /** 按连接灰度闸门：开启后平台内改 catalog 才回写 WrenAI（U7/Q4）。默认 true。 */
     @Column(name = "mdl_writeback_enabled", nullable = false)
-    private Boolean mdlWritebackEnabled = false;
+    private Boolean mdlWritebackEnabled = true;
 
     /** 最近一次成功写回的 mdl_hash（WrenAI 部署产物标识）。 */
     @Column(name = "built_mdl_hash")
@@ -83,6 +83,20 @@ public class IqdConnection {
     /** 【S3】外部漂移标记：WrenAI 当前 mdl_hash 与 built_mdl_hash 不一致。 */
     @Column(name = "stale_drift", nullable = false)
     private Boolean staleDrift = false;
+
+    /**
+     * 【方案A·多连接】WrenAI MCP 进程状态（running/stopped/starting/crashed/unhealthy）。
+     * 由 ai-platform Worker 进程管理器（WrenMcpProcessManager）回写，供可观测（REQ-P1-2）。
+     */
+    @Column(name = "mcp_status")
+    private String mcpStatus;
+
+    /**
+     * 【方案A·多连接】WrenAI MCP 进程监听端口。
+     * 进程管理器从 {@code wren_mcp_port_range} 按连接分配并回收，回写此列供前端轮询展示。
+     */
+    @Column(name = "mcp_port")
+    private Integer mcpPort;
 
     @Column(name = "created_at", nullable = false)
     private Instant createdAt;
@@ -240,6 +254,22 @@ public class IqdConnection {
 
     public void setStaleDrift(Boolean staleDrift) {
         this.staleDrift = staleDrift;
+    }
+
+    public String getMcpStatus() {
+        return mcpStatus;
+    }
+
+    public void setMcpStatus(String mcpStatus) {
+        this.mcpStatus = mcpStatus;
+    }
+
+    public Integer getMcpPort() {
+        return mcpPort;
+    }
+
+    public void setMcpPort(Integer mcpPort) {
+        this.mcpPort = mcpPort;
     }
 
     public Instant getCreatedAt() {

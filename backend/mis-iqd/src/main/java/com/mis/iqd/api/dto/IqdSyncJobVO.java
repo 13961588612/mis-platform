@@ -24,6 +24,9 @@ public class IqdSyncJobVO {
     private String indexError;
     private Instant updatedAt;
 
+    /** 本次同步动作：force_rebuild / reindex / validate / materials / model（可为 null，兼容历史作业）。 */
+    private String action;
+
     public Long getId() {
         return id;
     }
@@ -129,5 +132,14 @@ public class IqdSyncJobVO {
 
     public void setUpdatedAt(Instant updatedAt) {
         this.updatedAt = updatedAt;
+    }
+
+    @JsonProperty("action")
+    public String getAction() {
+        return action;
+    }
+
+    public void setAction(String action) {
+        this.action = action;
     }
 }

@@ -1,0 +1,55 @@
+sequenceDiagram
+    autonumber
+    actor 运维 as 运维人员
+    participant FE as 前端 SelfHealPanel
+    participant API as lib/api/iqd.ts
+    participant BFF as IqdAclController→IqdFacadeService
+    participant APC as AiPlatformClient
+    participant WR as ai-platform IqdSelfHealRouter
+    participant SVC as IqdAskService
+    participant CLI as IqdCli
+    participant W as WrenAI CLI
+    participant CFG as IqdConfigClient
+    participant MI as mis-iqd IqdInternalController
+    participant JOB as iqd_sync_job
+
+    Note over 运维,FE: 点「强制重建」→ 二次确认弹窗(Q2) → 确认
+    运维->>FE: 点击 强制重建(确认)
+    FE->>FE: gate 检查(无进行中 / SYNCING / stale_drift)
+    FE->>API: selfHealForceRebuild(connectionId)
+    API->>BFF: POST /api/v1/iqd/self-heal/force-rebuild
+    BFF->>BFF: requirePermission(iqd:selfheal:exec)
+    BFF->>APC: selfHeal("force-rebuild", conn, auth, traceId)
+    APC->>WR: POST /api/v1/iqd/self-heal/force-rebuild {connection_id, wait:true}
+    WR->>SVC: trigger_force_rebuild(conn, wait=true)
+    SVC->>CLI: context_build(force=True, ...)
+    CLI->>W: wren context build <force_build_args>
+    W-->>CLI: stdout(mdl_hash) / stderr
+    CLI-->>SVC: result
+    SVC->>CLI: memory_index()
+    CLI->>W: wren memory index
+    W-->>CLI: result
+    SVC->>CFG: report_sync_job({action:"force_rebuild", build_status, build_mdl_hash, index_status, ...})
+    CFG->>MI: POST /internal/v1/iqd/enhance/sync-job
+    MI->>JOB: upsert(覆盖写, 含 action 列)
+    SVC-->>WR: SyncResult(build_status, mdl_hash, error?)
+    WR-->>APC: 200 {code:0, data: SyncResult}
+    APC-->>BFF: data
+    BFF-->>API: data
+    API-->>FE: IqdSelfHealResult
+    FE->>FE: 更新按钮态 / 失败横幅(REQ-7) / mdl_hash
+
+    Note over FE,JOB: 状态回报 → 前端 5000ms 轮询(复用 CatalogSyncStatusBar)
+    loop 每 5000ms
+        FE->>API: getIqdCatalogSyncStatus(connectionId)
+        API->>BFF: GET /api/v1/iqd/catalog/sync-status
+        BFF->>MI: getCatalogSyncStatus(conn)
+        MI->>JOB: findTopByConnectionIdOrderByIdDesc
+        JOB-->>MI: 最新作业(build_status/index_status/mdl_hash/action)
+        MI-->>BFF: {edit_status, build_status, mdl_hash, ...}
+        BFF-->>API: data
+        API-->>FE: IqdCatalogSyncStatus
+        FE->>FE: 渲染 5 态徽标 + mdl_hash
+    end
+
+    Note over 运维,W: 重新索引 / 模型校验 同类路径(分别调 re-index / validate 端点，串联 memory_reset / context_validate)
