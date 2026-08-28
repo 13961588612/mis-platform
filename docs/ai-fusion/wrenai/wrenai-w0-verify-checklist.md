@@ -1,6 +1,6 @@
 # WrenAI 跨机器部署（方案 A v0.2）W0 真机验证清单
 
-> 文档角色：W0 真机逐项执行表，配合 `wrenai-ops-runbook.md`（§8 已指向本文件）与 `mis-iqd-mcp-deploy-incremental.md`（v0.2 设计）使用。
+> 文档角色：W0 真机逐项执行表，配合 `wrenai-ops-runbook.md`（**第二部分 §2.2 W0-B**）与 `mis-iqd-mcp-deploy-incremental.md`（v0.2 设计）使用。
 > 状态：🔶 W0 待测（逐项勾选）｜日期：2026-08-28｜语言：中文
 > 设计终态：ai-platform（管控面）↔ wren 机（数据面 `WrenMcpAgent` + `wren serve mcp`）**跨机器**；bearer-token + 内网网络隔离，已免 mTLS。
 > 占位说明：命令中的 `<AI_PLATFORM_HOST>` / `<WREN_HOST>` / `<WREN_AGENT_TOKEN>` / `<CONN_ID>` / `<CONN_ID_A|B>` 请按真机替换；ai-platform 源 IP 即 `<AI_PLATFORM_HOST>` 出口 IP。
@@ -13,8 +13,8 @@
 - [ ] wren 机：`WrenMcpAgent` 已部署并 `systemctl enable --now wren-mcp-agent`（见 `wren-mcp-agent-deploy.md` §2）；`journalctl -u wren-mcp-agent` 无致命报错。
 - [ ] 防火墙：仅放行 **ai-platform 源 IP ↔ wren 机 9100/9101**（见 `wren-mcp-agent-deploy.md` §2.4）。
 - [ ] ai-platform：`WREN_AGENT_ENDPOINT` 已配（非空，指向 wren 机控制面基址），`WREN_AGENT_TOKEN` 与 wren 机一致；路由判定 `WrenMcpAgentClient.enabled == true`。
-- [ ] mis-iqd：已先起跑并执行 **Flyway V85**（`iqd_connection` 已加 `mcp_host` / `agent_handle` 两列）——顺序约束见 runbook §2.3.7。
-- [ ] 管理后台：连接表单可填凭证（提交走 secretRef）；「启用 / 创建项目」按钮已接线（见 runbook §2.3.5）。
+- [ ] mis-iqd：已先起跑并执行 **Flyway V85**（`iqd_connection` 已加 `mcp_host` / `agent_handle` 两列）——顺序约束见 runbook **§3.7**。
+- [ ] 管理后台：连接表单可填凭证（提交走 secretRef）；「启用 / 创建项目」按钮已接线（见 runbook **§3.5**）。
 
 ---
 
@@ -49,11 +49,11 @@
   - 步骤④ `mcp_status=running`、`mcp_host`=wren 机地址、`agent_handle` 非空。
 - **通过标准**：③④均返回 running 且 `mcp_host`/`agent_handle` 有值；全程**未**人工 SSH 登 wren 机。
 - **失败排查**：
-  - `ensure` 返回 401/403 → `WREN_AGENT_TOKEN` 两端不一致 / 防火墙未放行 ai-platform 源 IP（runbook §2.3.3）。
-  - `ensure` 超时/不可达 → `systemctl status wren-mcp-agent`；查 wren 机 iptables；确认 `WREN_AGENT_ENDPOINT` 正确。
+  - `ensure` 返回 401/403 → `WREN_AGENT_TOKEN` 两端不一致 / 防火墙未放行 ai-platform 源 IP（runbook **§1.3** / **§3.2**）。
+  - `ensure` 超时/不可达 → `systemctl status wren-mcp-agent`；`firewall-cmd --list-rich-rules`；确认 `WREN_AGENT_ENDPOINT` 正确。
   - `mcp_status=crashed` → 查 wren 机 `journalctl -u wren-mcp-agent`（凭证 env / wren CLI 报错）。
   - `mcp_host` 空 → 仍走本地 PlanA（未配 `WREN_AGENT_ENDPOINT`）→ 配置后重新 enable。
-  - 回写失败 → 检查 V85 是否已执行（mis-iqd 先起跑，runbook §2.3.7）。
+  - 回写失败 → 检查 V85 是否已执行（mis-iqd 先起跑，runbook **§3.7**）。
 
 ---
 
@@ -85,7 +85,7 @@
   - `wren serve mcp` 能联真实业务库（问数不报认证失败）。
 - **通过标准**：磁盘三处（wren project / agent 日志 / 平台侧）均无明文；wren 进程 env 有凭证且功能可用；wren 机**不接 Vault**（凭证未写 Vault，仅经通道一次性下发）。
 - **失败排查**：
-  - ③ env 无凭证 → agent 未注入；查 ai-platform `CredentialVault` 是否解析到 secretRef；确认 `WREN_PG_*` 占位与 profile 模板一致（runbook §2.3.4）。
+  - ③ env 无凭证 → agent 未注入；查 ai-platform `CredentialVault` 是否解析到 secretRef；确认 `WREN_PG_*` 占位与 profile 模板一致（runbook **§3.6**）。
   - 问数连库失败 → 占位名/格式不匹配；核对 profile 模板与业务库驱动（postgres/mysql/...）。
   - 磁盘出现明文 → 临时文件未删；查 agent `_build_env` 的 `chmod 600` + `os.remove` 逻辑。
 
@@ -117,7 +117,7 @@
 - **通过标准**：A/B 问数各自只命中对应路径与对应 wren 进程，**无串台**；`orchestrator` 按 `connection_id` 取到正确 ingress。
 - **失败排查**：
   - 串台 → 检查 agent 路由 `conn_id` 解析与注册表 `wren_host`/`mcp_endpoint`；确认 orchestrator `for_connection` 缓存按 connId 隔离（修复跨连接串台）。
-  - 问数报双路不可达 → 先 `ensure`/启用该连接（runbook §2.3.5 / §7）。
+  - 问数报双路不可达 → 先 `ensure`/启用该连接（runbook **§3.5** / **§3.10**）。
 
 ---
 
@@ -148,7 +148,7 @@
 - **通过标准**：分配唯一、回收及时、超段报错、无端口冲突。
 - **失败排查**：
   - 端口冲突 → 查 agent reconcile 端口分配逻辑；确认 `WREN_AGENT_WREN_PORT_RANGE` 配置。
-  - 不回收 → 确认 `disabled`/`deleted` 触发 agent `stop` + 端口回收（runbook §2.3.6）。
+  - 不回收 → 确认 `disabled`/`deleted` 触发 agent `stop` + 端口回收（runbook **§3.2** / W0-4）。
 
 ---
 
@@ -184,7 +184,7 @@
 - **通过标准**：崩溃→自动重启成功；手动重启按钮可用；问数链路不中断。
 - **失败排查**：
   - 不自动重启 → 查 agent reconcile 循环 / systemd `Restart=always`；`journalctl -u wren-mcp-agent`。
-  - 重启后凭证失效 → agent 重启时重注凭证（S1，runbook §2.3.4）；确认凭证经管控通道重新下发。
+  - 重启后凭证失效 → agent 重启时重注凭证（S1，runbook **§3.6**）；确认凭证经管控通道重新下发。
 
 ---
 
@@ -242,15 +242,15 @@
     http://<WREN_HOST>:9100/internal/v1/wren-mcp/health"
 
   # ③ 核对 wren 机防火墙规则（仅 ai-platform 源 IP ACCEPT，其余 DROP）
-  ssh <WREN_HOST> "sudo iptables -S INPUT | grep -E '9100|9101'"
+  ssh <WREN_HOST> "sudo firewall-cmd --zone=public --list-rich-rules | grep -E '9100|9101'"
   ```
 - **预期结果**：
   - ①非 ai-platform 源返回非 2xx（连接被拒/超时）。
   - ②ai-platform 源返回 `200`。
-  - ③iptables 仅 `<AI_PLATFORM_HOST>` 源 IP 对 9100/9101 ACCEPT，其余 DROP。
+  - ③firewalld rich-rule 仅 `<AI_PLATFORM_HOST>` 源 IP 对 9100/9101 accept，其余 drop。
 - **通过标准**：跨机通道仅 ai-platform 源 IP 可达；未授权源不可达（纵深防御 = bearer + 内网隔离，已免 mTLS）。
 - **失败排查**：
-  - ①可达 → 防火墙源 IP 未收敛；收紧 iptables 仅放行 ai-platform 出口 IP（runbook §2.3.3）。
+  - ①可达 → 防火墙源 IP 未收敛；收紧 firewalld 仅放行 ai-platform 出口 IP（runbook **§1.3**）。
   - ②不可达 → ai-platform 源 IP 未加入白名单；确认出口 IP。
 
 ---
@@ -314,7 +314,7 @@
   - ④平台侧日志/库无凭证明文。
 - **通过标准**：V85 已执行、数据正确回流、`mcp_host`/`agent_handle` 入库且 API 不暴露、无明文泄漏。
 - **失败排查**：
-  - ①②回写失败/列为空 → mis-iqd 未先起跑 V85（顺序约束，runbook §2.3.7）；确认 `IqdAdminService.reportMcpDeployment` / `IqdInternalController.POST /internal/v1/iqd/mcp-deploy` 已接线。
+  - ①②回写失败/列为空 → mis-iqd 未先起跑 V85（顺序约束，runbook **§3.7**）；确认 `IqdAdminService.reportMcpDeployment` / `IqdInternalController.POST /internal/v1/iqd/mcp-deploy` 已接线。
   - ③仍暴露 → 确认 `IqdConnectionVO` 的 `mcpHost`/`agentHandle` getter 加 `@JsonIgnore`。
 
 ---

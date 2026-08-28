@@ -84,15 +84,34 @@ sudo systemctl status wren-mcp-agent
 - `User=wrenagent`、`UMask=0077`、`Restart=always`（崩溃自愈由 agent 进程 + systemd 双层兜底）。
 - `Environment=WREN_AGENT_TOKEN=...` 直接注入（不落仓库、不入镜像层明文日志）。
 
-### 2.4 防火墙（仅放行 ai-platform 源 IP，决策 ⑤）
+### 2.4 防火墙（firewalld，仅放行 ai-platform 源 IP，决策 ⑤）
+
+> 完整端口矩阵与验证见 **`wrenai-ops-runbook.md` §1.3（firewalld）与 §3.2（Agent 部署）**。wren 机使用 **firewalld**（RHEL/Rocky/Alma 系）。
 
 ```bash
-# 例：ai-platform 出口 IP = 10.20.0.10
-sudo iptables -A INPUT -p tcp --dport 9100 -s 10.20.0.10 -j ACCEPT
-sudo iptables -A INPUT -p tcp --dport 9101 -s 10.20.0.10 -j ACCEPT
-sudo iptables -A INPUT -p tcp --dport 9100 -j DROP
-sudo iptables -A INPUT -p tcp --dport 9101 -j DROP
-# wren 进程本地端口段仅本机：无需对外开（127.0.0.1 绑定）
+# 前置
+sudo dnf install -y firewalld && sudo systemctl enable --now firewalld
+
+# 推荐：仓库脚本（wren 机 root）
+export AI_PLATFORM_SOURCE_IP=10.20.0.10   # ai-platform 内网/出口 IP
+sudo -E bash /opt/wren-mcp-agent/scripts/open-wren-firewall.sh
+# 脚本源：agent/ai-platform/deploy/wrenai/scripts/open-wren-firewall.sh
+```
+
+**手动 firewalld**（与脚本等价）：
+
+```bash
+SRC=10.20.0.10   # ai-platform 出口 IP
+sudo firewall-cmd --permanent --zone=public \
+  --add-rich-rule="rule family=\"ipv4\" source address=\"${SRC}\" port port=\"9100\" protocol=\"tcp\" accept"
+sudo firewall-cmd --permanent --zone=public \
+  --add-rich-rule="rule family=\"ipv4\" source address=\"${SRC}\" port port=\"9101\" protocol=\"tcp\" accept"
+sudo firewall-cmd --permanent --zone=public \
+  --add-rich-rule='rule family="ipv4" port port="9100" protocol="tcp" drop'
+sudo firewall-cmd --permanent --zone=public \
+  --add-rich-rule='rule family="ipv4" port port="9101" protocol="tcp" drop'
+sudo firewall-cmd --reload
+# wren 进程本地端口段 18080-18180 仅 127.0.0.1：无需 firewalld 对外开
 ```
 
 ---
@@ -191,7 +210,7 @@ SELECT id, mcp_status, mcp_port, mcp_host, agent_handle FROM iqd_connection;
 | 现象 | 可能原因 | 处置 |
 |------|----------|------|
 | `ensure` 返回 401/403 | `WREN_AGENT_TOKEN` 两端不一致 / 内网 IP 未放行 | 对齐 token；检查防火墙源 IP（决策 ⑤） |
-| `ensure` 超时 / 不可达 | wren 机 agent 未起 / 端口被防火墙 DROP | `systemctl status wren-mcp-agent`；查 iptables |
+| `ensure` 超时 / 不可达 | wren 机 agent 未起 / 端口被防火墙 DROP | `systemctl status wren-mcp-agent`；`firewall-cmd --list-rich-rules` |
 | `MDL 尚未构建` | `target/mdl.json` 缺失（未执行语义模型同步/自愈 build） | 先执行同步/自愈 force-rebuild，再 enable |
 | 问数打到死端口 / 串台 | 远程部署未就绪却问数 | orchestrator 自动降级 mock（REQ-P0-1）；先 ensure 该连接 |
 | `mcp_status=crashed` | wren 进程崩溃 | agent 自愈重启（决策 ①）；若持续，查 wren CLI / 凭证 env |
