@@ -59,6 +59,7 @@ export function AppRouter() {
               <Route path="/agent/*" element={null} />
               {/* V77：问数独立门户应用 /iqd/*（保留 /ai/* 容纳其余存量页） */}
               <Route path="/iqd/*" element={null} />
+              <Route path="/finance/*" element={null} />
               {/* T09/T10：存量页迁移（ai-platform 后端，懒加载页面由 KeepAliveOutlet 渲染） */}
               <Route path="/ai/*" element={null} />
               <Route path="/iframe/:code" element={null} />

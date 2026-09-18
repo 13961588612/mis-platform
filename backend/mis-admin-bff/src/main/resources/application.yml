@@ -66,6 +66,30 @@ mis:
     # 文档上传走 multipart 透传，比普通聚合慢，单独放宽超时
     aggregate-timeout-ms: 3000
     default-password: ${MIS_DEFAULT_PASSWORD:Mis@123456}
+    # 老 SMP 共享：鉴权头 + auth-service 令牌兑换（多下游复用，ADR-021）
+    smp:
+      exchange-timeout-ms: ${SMP_TOKEN_EXCHANGE_TIMEOUT_MS:5000}
+      auth:
+        header-name: ${SMP_AUTH_HEADER:HC-SMP-Authorization}
+        header-prefix: ""
+      token-exchange:
+        enabled: ${SMP_TOKEN_EXCHANGE_ENABLED:true}
+        token-url: ${SMP_TOKEN_URL:}
+        client-id: ${SMP_CLIENT_ID:mis-admin-bff}
+        client-secret: ${SMP_CLIENT_SECRET:}
+        audience: ${SMP_TOKEN_AUDIENCE:}
+        token-json-path: "$.data.token"
+        fail-closed: true
+        cache:
+          enabled: true
+          key-prefix: "bff:smp-token:user:"
+          skew-seconds: 60
+    # bip-bank-receipt 下游专用
+    bank-receipt:
+      base-url: ${BANK_RECEIPT_BASE_URL:http://127.0.0.1:11119/bip-bank-receipt}
+      connect-timeout-ms: ${BANK_RECEIPT_CONNECT_TIMEOUT_MS:3000}
+      read-timeout-ms: ${BANK_RECEIPT_READ_TIMEOUT_MS:60000}
+      audience: bip-bank-receipt
   api-permission:
     enabled: true
     # SEC-01：本地对齐 fail-closed（与 test/integration/prod 一致，技术债 11.3 销账）。

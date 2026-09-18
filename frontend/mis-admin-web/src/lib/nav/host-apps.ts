@@ -15,6 +15,8 @@ const HOST_APP_LANDING: Record<string, string> = {
   agent: '/agent/overview',
   // V77：问数独立门户应用（sys_app 93010，base_path=/iqd）。旗舰页 /iqd/data-query。
   iqd: '/iqd/data-query',
+  // V86：财务辅助 · POS 对账落地页
+  finance: '/finance/bank-account/pos-account/terminals',
 };
 
 /**
@@ -52,6 +54,8 @@ export function resolveActiveHostAppCode(
   if (pathname === '/agent' || pathname.startsWith('/agent/')) return 'agent';
   // V77：问数独立门户应用。/iqd/* 必须**先于** /ai/* 解析，否则会被 agent 规则吞掉。
   if (pathname === '/iqd' || pathname.startsWith('/iqd/')) return 'iqd';
+  // V86：财务辅助
+  if (pathname === '/finance' || pathname.startsWith('/finance/')) return 'finance';
   // T09/T10：存量页迁移路由 /ai/* 归入智能体运营控制台（app.code = 'agent'）
   if (pathname === '/ai' || pathname.startsWith('/ai/')) return 'agent';
   if (pathname.startsWith('/iframe/')) {

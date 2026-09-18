@@ -38,7 +38,7 @@ public class AppController {
      * 否则门户「问数」卡片不可点击（见 iqd-standalone-app-design.md D5）。
      * 改完本常量后必须重新部署 BFF 才能生效。
      */
-    private static final Set<String> ENTERABLE_CODES = Set.of("system", "kb", "agent", "iqd");
+    private static final Set<String> ENTERABLE_CODES = Set.of("system", "kb", "agent", "iqd", "finance");
 
     private final IamWebClient iamWebClient;
 

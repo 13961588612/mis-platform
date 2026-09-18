@@ -29,7 +29,8 @@ wren 机常驻 supervisor（方案 A 跨机器落地版，v0.2）。单台 wren 
 ```bash
 python -m venv .venv && . .venv/bin/activate
 pip install -r requirements.txt
-cp .env.example .env   # 填写 WREN_AGENT_TOKEN（与 ai-platform 一致）
+cp .env.example .env   # TOKEN / PUBLIC_HOST / WREN_CLI_BIN；chmod 600
+# unit 通过 EnvironmentFile=-/opt/wren-mcp-agent/.env 加载（须在 Environment= 之后）
 sudo cp wren-mcp-agent.service /etc/systemd/system/
 sudo systemctl daemon-reload && sudo systemctl enable --now wren-mcp-agent
 ```

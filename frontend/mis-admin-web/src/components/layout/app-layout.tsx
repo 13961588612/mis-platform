@@ -44,6 +44,7 @@ import {
 import { KB_NAV } from '@/lib/nav/kb-nav';
 import { AGENT_NAV } from '@/lib/nav/agent-nav';
 import { IQD_NAV } from '@/lib/nav/iqd-nav';
+import { FINANCE_NAV } from '@/lib/nav/finance-nav';
 import { resolveActiveHostAppCode, resolveAppEntry } from '@/lib/nav/host-apps';
 import { APP_GROUP_LABEL } from '@/lib/nav/app-groups';
 import { mergeNavWithFallback, routerMenusToSystemNav } from '@/lib/nav/menus-to-nav';
@@ -89,9 +90,11 @@ export function AppLayout() {
           ? AGENT_NAV
           : activeAppCode === 'iqd'
             ? IQD_NAV
-            : activeAppCode === 'system'
-              ? SYSTEM_NAV
-              : null;
+            : activeAppCode === 'finance'
+              ? FINANCE_NAV
+              : activeAppCode === 'system'
+                ? SYSTEM_NAV
+                : null;
     const dyn = routerMenusToSystemNav(menus);
     if (!dyn) return fallback ?? SYSTEM_NAV;
     if (fallback) return mergeNavWithFallback(fallback, dyn);
@@ -391,7 +394,9 @@ export function AppLayout() {
                       ? '智能体运营'
                       : activeAppCode === 'iqd'
                         ? '问数'
-                        : undefined
+                        : activeAppCode === 'finance'
+                          ? '财务辅助 · 银行账目'
+                          : undefined
               }
             />
           )}

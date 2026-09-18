@@ -19,6 +19,7 @@ import {
   History,
   Home,
   KeyRound,
+  Landmark,
   Languages,
   LayoutDashboard,
   ListTree,
@@ -28,15 +29,20 @@ import {
   MessageSquare,
   MessageSquareWarning,
   MessagesSquare,
+  Monitor,
   Network,
   Plug,
   Route,
+  Scale,
   Settings,
   Shield,
   ShieldCheck,
   Sparkles,
+  Store,
+  Tags,
   UserCog,
   Users,
+  Wallet,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 
@@ -84,6 +90,13 @@ const ICON_MAP: Record<string, LucideIcon> = {
   MessagesSquare,
   ClipboardCheck,
   ShieldCheck,
+  // V86：财务辅助 / POS 对账
+  Wallet,
+  Landmark,
+  Monitor,
+  Store,
+  Scale,
+  Tags,
 };
 
 export function resolveNavIcon(name?: string | null): LucideIcon {

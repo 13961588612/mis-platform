@@ -145,11 +145,31 @@ mis-iqd Orchestrator 调用链：`get_context` → `dry_plan(question)` → `dry
 |------|------|------|----------|
 | `~/.wren/profiles.yml` | **0600** | 数据源连接 profile（`${POSTGRES_PASSWORD}` 等占位） | `wren profile add` |
 | `~/.wren/config.yml` | 644 | CLI 偏好（如 `default_project`） | `wren context set-profile` / 手工 |
-| `~/.wren/config.json` | 644 | 安全策略（`strict_mode` / `denied_functions`） | 手工（可选） |
-| `~/.wren/.env` | 600 推荐 | **全局密钥 fallback**（LLM API Key、embedding 相关 env） | 手工 |
+| `~/.wren/config.json` | 644 | 安全策略（`strict_mode` / `denied_functions`） | 手工（可选，见 §1.4.5） |
+| `~/.wren/.env` | 600 推荐 | **仅 Day-1 手工 CLI 的 env 兜底**（见下方密钥策略） | 手工 |
 | `~/.wren/connection_info.json` | — | 旧版连接 fallback | 旧 CLI 遗留 |
 
+**密钥 / embedding 写哪里（二选一，勿双写）：**
+
+| 场景 | 写哪里 |
+|------|--------|
+| **生产 / 已装 WrenMcpAgent** | **只写 systemd** `Environment=`（子进程继承）；**不必**再写 `~/.wren/.env` 里的 `DEEPSEEK_API_KEY` |
+| **Day-1 仅手工 `wren` CLI**（尚未起 Agent） | 写当前用户 `~/.wren/.env` |
+
+Day-1 初始化目录（在 wren 机执行）：
+
+```bash
+mkdir -p ~/.wren && chmod 700 ~/.wren
+# profiles.yml / config.yml 留给 wren CLI；可选安全策略见 §1.4.5
+sudo mkdir -p /var/lib/mis-iqd/wren-projects/demo /var/lib/wren/huggingface
+```
+
 #### 每连接 project（`{WREN_AGENT_PROJECTS_ROOT}/{connId}/`）
+
+> **统一根**：正式与 W0-A 均用 `/var/lib/mis-iqd/wren-projects/`（可用 `WREN_AGENT_PROJECTS_ROOT` / `WREN_PROJECTS_ROOT` 覆盖）。  
+> - W0-A 手工测：`.../demo`（目录名 `demo`，非平台 connId）  
+> - 平台联调：`.../{iqd_connection.id}`（数字）  
+> 勿再使用 `~/wren-projects/`。
 
 | 路径 | 提交 Git? | 用途 |
 |------|-----------|------|
@@ -161,7 +181,7 @@ mis-iqd Orchestrator 调用链：`get_context` → `dry_plan(question)` → `dry
 
 **`${VAR}` 解析顺序**（profile 与 env 注入共用）：`os.environ` → `$CWD/.env` → `{project}/.env` → `~/.wren/.env`。
 
-跨机器时，WrenMcpAgent 拉起 `wren serve mcp` 子进程会 **继承 agent 的 `os.environ`** 并合并 S1 下发的 DB 凭证（临时 `.env` 即用即删），因此 LLM/embedding 相关 env 应写在 **agent systemd** 或 **`~/.wren/.env`**。
+跨机器时，WrenMcpAgent 拉起的 `wren serve mcp` **继承 systemd 注入的 `Environment=`**（推荐）。`~/.wren/.env` 只服务本机手工 CLI。
 
 ---
 
@@ -194,23 +214,35 @@ wren 0.13.3 的 embedding **默认本地 sentence-transformers**（`wrenai[memor
 
 #### 推荐：中文 embedding（与平台 bge-small-zh 对齐）
 
-写入 `~/.wren/.env`（wren 用户或 root，权限 600）：
+与 DeepSeek 相同：**有 Agent 写 systemd；仅 Day-1 CLI 写 `~/.wren/.env`（勿双写）。**
+
+```ini
+# wren-mcp-agent.service（推荐，与 DEEPSEEK 同段）
+Environment=WREN_EMBEDDING_MODEL=BAAI/bge-small-zh-v1.5
+Environment=HF_HOME=/var/lib/wren/huggingface
+Environment=WREN_MEMORY_BACKEND=lancedb
+```
+
+Day-1 手工 CLI：
 
 ```bash
-# ~/.wren/.env — embedding（非 LLM）
+cat >> ~/.wren/.env <<'EOF'
 WREN_EMBEDDING_MODEL=BAAI/bge-small-zh-v1.5
 HF_HOME=/var/lib/wren/huggingface
 WREN_MEMORY_BACKEND=lancedb
+EOF
+chmod 600 ~/.wren/.env
 ```
 
 #### 索引命令（每个 project 执行）
 
 ```bash
-export WREN_PROJECT_HOME=/var/lib/mis-iqd/wren-projects/<connId>
+# W0-A：用 demo；平台联调：换成真实 connId（数字）
+export WREN_PROJECT_HOME=/var/lib/mis-iqd/wren-projects/demo
 # 或 cd 到 project 根目录
 
 wren context build
-wren memory index                    # 建 schema + knowledge/sql 语义索引
+wren memory index                    # 建 schema + instruction/sql 语义索引
 wren memory fetch -q "本月销售额"     # 验证召回（大 schema 走 embedding）
 wren memory recall -q "各渠道销售"    # 验证 NL→SQL 样本召回
 ```
@@ -234,22 +266,31 @@ wren memory recall -q "各渠道销售"    # 验证 NL→SQL 样本召回
 
 #### Step 1：写入 wren 机密钥
 
-```bash
-sudo -u wrenagent tee /home/wrenagent/.wren/.env <<'EOF'
-DEEPSEEK_API_KEY=sk-xxxxxxxxxxxxxxxx
-EOF
-sudo chmod 600 /home/wrenagent/.wren/.env
-```
+> **生产只写 systemd，不必再写 `~/.wren/.env`。**  
+> Day-1 尚未装 Agent、只跑手工 `wren` 时，才用下面的 `.env` 分支。
 
-或写入 WrenMcpAgent systemd（子进程继承，**推荐生产**）：
+**推荐（WrenMcpAgent / 生产）** — 子进程继承：
 
 ```ini
-# /etc/systemd/system/wren-mcp-agent.service 片段
+# /etc/systemd/system/wren-mcp-agent.service
 [Service]
 Environment=DEEPSEEK_API_KEY=sk-xxxxxxxxxxxxxxxx
 # 若 wren/LiteLLM 读 OpenAI 兼容变量（W0 核实后按需开启）：
 Environment=OPENAI_API_BASE=https://api.deepseek.com/v1
 Environment=OPENAI_API_KEY=sk-xxxxxxxxxxxxxxxx
+# embedding 一并写在此处（见 §1.4.3），勿与 ~/.wren/.env 双写
+```
+
+改完后：`sudo systemctl daemon-reload && sudo systemctl restart wren-mcp-agent`
+
+**仅 Day-1 手工 CLI（无 Agent）**：
+
+```bash
+mkdir -p ~/.wren && chmod 700 ~/.wren
+cat > ~/.wren/.env <<'EOF'
+DEEPSEEK_API_KEY=sk-xxxxxxxxxxxxxxxx
+EOF
+chmod 600 ~/.wren/.env
 ```
 
 #### Step 2：验证 DeepSeek 连通
@@ -272,7 +313,7 @@ curl -s https://api.deepseek.com/chat/completions \
 平台问数依赖 MCP 工具 **`dry_plan` 接收自然语言 `question`**（见 `IqdMcpClient.dry_plan`）。在 wren 机启动 MCP 后探测：
 
 ```bash
-cd /var/lib/mis-iqd/wren-projects/<connId>
+cd /var/lib/mis-iqd/wren-projects/demo
 wren serve mcp --transport http --host 127.0.0.1 --port 18080 &
 # 用 MCP 客户端或 ai-platform 调 dry_plan(question=...) / 列出 tools 签名
 ```
@@ -287,7 +328,7 @@ wren serve mcp --transport http --host 127.0.0.1 --port 18080 &
 
 #### 语言偏好（与平台一致）
 
-Orchestrator 传 `language=zh-CN`（Nacos `wren.language` / `WREN_LANGUAGE`）。wren 机无需单独配置文件，由 MCP 工具参数带入。
+Orchestrator 传 `language=zh-CN`（ai-platform `WREN_LANGUAGE`，默认 zh-CN）。wren 机无需单独配置文件，由 MCP 工具参数带入。
 
 ---
 
@@ -347,11 +388,11 @@ MCP 新线 embedding 见 §1.4.3（本地 `WREN_EMBEDDING_MODEL`），LLM 见 §
 ### 1.4.7 第一部分 LLM/embedding 检查清单
 
 - [ ] `pip install 'wrenai[memory,mcp,...]'` 已完成
-- [ ] `~/.wren/.env` 已写 `DEEPSEEK_API_KEY`（600 权限）
+- [ ] **生产**：systemd 已注入 `DEEPSEEK_API_KEY` + embedding env；**或 Day-1 CLI**：`~/.wren/.env`（600）二选一
 - [ ] `WREN_EMBEDDING_MODEL` 已设（中文推荐 `BAAI/bge-small-zh-v1.5`）
 - [ ] `HF_HOME` 持久目录可写，首次 `wren memory index` 成功
 - [ ] DeepSeek curl 探活 `deepseek-v4-pro` 返回 200
-- [ ] WrenMcpAgent systemd 已注入 LLM env（第三部分联调前）
+- [ ] WrenMcpAgent systemd 已注入 LLM/embedding env（第三部分联调前）
 - [ ] W0：`dry_plan(question=…)` 真机返回 SQL（§2.1.3）
 - [ ] 磁盘无经典栈 `~/.wrenai/config.yaml` 混装
 
@@ -362,7 +403,7 @@ MCP 新线 embedding 见 §1.4.3（本地 `WREN_EMBEDDING_MODEL`），LLM 见 §
 - [ ] `wren serve mcp --help` 正常
 - [ ] firewalld 已安装并 running（联调前再执行放行脚本）
 - [ ] 持久目录预留：`/var/lib/mis-iqd/wren-projects`、`/var/lib/wren/huggingface`（embedding 缓存）
-- [ ] wren CLI 绝对路径已记录（如 `/root/wren-venv/bin/wren`），供 Nacos `wren.cli-bin` 使用
+- [ ] wren CLI 绝对路径已记录（如 `/root/wren-venv/bin/wren`），供 ai-platform `WREN_CLI_BIN` / wren 机 `WREN_AGENT_WREN_CLI_BIN` 使用
 - [ ] §1.4 LLM/embedding 检查清单全部勾选
 
 ---
@@ -379,7 +420,8 @@ MCP 新线 embedding 见 §1.4.3（本地 `WREN_EMBEDDING_MODEL`），LLM 见 §
 ### 2.1.1 bootstrap
 
 ```bash
-mkdir -p ~/wren-projects/demo && cd ~/wren-projects/demo
+sudo mkdir -p /var/lib/mis-iqd/wren-projects/demo
+cd /var/lib/mis-iqd/wren-projects/demo
 wren context init
 # 编辑 wren_project.yml + models/（可先最小占位）
 wren context validate
@@ -392,9 +434,9 @@ wren memory index
 ### 2.1.2 手工启动 MCP（仅本机 127.0.0.1）
 
 ```bash
-cd ~/wren-projects/demo
+cd /var/lib/mis-iqd/wren-projects/demo
 wren serve mcp --transport http --host 127.0.0.1 --port 8080
-# 或：WREN_PROJECT_HOME=~/wren-projects/demo wren serve mcp --transport http --host 127.0.0.1 --port 8080
+# 或：WREN_PROJECT_HOME=/var/lib/mis-iqd/wren-projects/demo wren serve mcp --transport http --host 127.0.0.1 --port 8080
 ```
 
 > 🔴 **禁止** `--host 0.0.0.0`；MCP 无 bearer 鉴权，必须 keep-local。
@@ -500,26 +542,25 @@ curl -s -X POST http://localhost:5174/api/v1/iqd/ask \
 ### 3.2.1 部署（wren 机）
 
 ```bash
-# 1. 用户与目录
-sudo useradd -r -s /sbin/nologin wrenagent || true
+# 1. 目录（不单独建 wrenagent；systemd 默认以 root 运行，见 unit 注释）
 sudo mkdir -p /opt/wren-mcp-agent /var/lib/mis-iqd/wren-projects
 
 # 2. 拷贝部署物（从仓库）
 sudo cp -r agent/ai-platform/deploy/wrenai/wren-mcp-agent/* /opt/wren-mcp-agent/
-sudo chown -R wrenagent:wrenagent /opt/wren-mcp-agent /var/lib/mis-iqd
 
 # 3. Python 依赖
 cd /opt/wren-mcp-agent
-sudo -u wrenagent python3.11 -m venv .venv
-sudo -u wrenagent .venv/bin/pip install -r requirements.txt
+sudo python3.11 -m venv .venv
+sudo .venv/bin/pip install -r requirements.txt
 
-# 4. 配置（见 §3.4 wren 机 .env）
-sudo -u wrenagent cp .env.example .env
-# 编辑 WREN_AGENT_TOKEN、WREN_AGENT_PUBLIC_HOST 等
+# 4. 配置（systemd EnvironmentFile 加载；见 §3.4）
+sudo cp .env.example .env
+# 编辑 WREN_AGENT_TOKEN、WREN_AGENT_PUBLIC_HOST、WREN_AGENT_WREN_CLI_BIN 等
+sudo chmod 600 .env
 
-# 5. systemd
+# 5. systemd（unit 含 EnvironmentFile=-/opt/wren-mcp-agent/.env）
 sudo cp wren-mcp-agent.service /etc/systemd/system/
-# 编辑 Environment=WREN_AGENT_TOKEN=... 等
+# 若改用普通部署账号：编辑 unit 的 User=/Group=，并 chown 目录与 ~/.wren
 sudo systemctl daemon-reload
 sudo systemctl enable --now wren-mcp-agent
 sudo systemctl status wren-mcp-agent
@@ -552,8 +593,8 @@ curl -sf -H "Authorization: Bearer ${WREN_AGENT_TOKEN}" \
 |------|------|
 | 跨机器生产 | `WREN_AGENT_ENDPOINT=http://<wren-ip>:9100`（非空） |
 | 本地调试 | `WREN_AGENT_ENDPOINT=`（空或不设） |
-| 本地 MCP | `WREN_MCP_HOST=127.0.0.1`，`WREN_MCP_PORT=8080` |
-| wren 路径 | `WREN_CLI_BIN=/path/to/wren` 或 Nacos `wren.cli-bin` |
+| 本地 MCP | `WREN_MCP_HOST=127.0.0.1`；多连接用 `WREN_MCP_PORT_RANGE`；单连接回退可用 `WREN_MCP_PORT`（建议 `18080`，避开本机 gateway `:8080`） |
+| wren 路径 | `WREN_CLI_BIN=/path/to/wren`（写在 `backend/.env`） |
 | project 根 | `WREN_PROJECTS_ROOT=./data/wren-projects`（本机路径） |
 
 **本地最小 `.env`（ai-platform `backend/.env` 片段）**：
@@ -561,7 +602,7 @@ curl -sf -H "Authorization: Bearer ${WREN_AGENT_TOKEN}" \
 ```bash
 WREN_CLI_BIN=/root/wren-venv/bin/wren
 WREN_MCP_HOST=127.0.0.1
-WREN_MCP_PORT=8080
+WREN_MCP_PORT=18080
 WREN_MCP_PORT_RANGE=18080-18180
 WREN_PROJECTS_ROOT=/var/lib/mis-iqd/wren-projects
 # WREN_AGENT_ENDPOINT=          # 留空 = Plan A
@@ -594,47 +635,40 @@ WREN_PROJECTS_ROOT=/var/lib/mis-iqd/wren-projects
 | `WREN_AGENT_WREN_PORT_RANGE` | | 18080-18180 | 本机 wren 进程端口段 |
 | `WREN_AGENT_PROJECTS_ROOT` | | /var/lib/mis-iqd/wren-projects | project 持久卷 |
 | `WREN_AGENT_MAX_CONNECTIONS` | | 10 | 单 wren 机连接上限 |
-| `WREN_AGENT_WREN_CLI_BIN` | | wren | wren 可执行文件 |
+| `WREN_AGENT_WREN_CLI_BIN` | ✅ | `/root/wren-venv/bin/wren` | wren **绝对路径**（勿只写 `wren`） |
 
 示例：[`agent/ai-platform/deploy/wrenai/wren-mcp-agent/.env.example`](../../../agent/ai-platform/deploy/wrenai/wren-mcp-agent/.env.example)
 
-### 3.4.2 ai-platform — `IqdMcpSettings`（环境变量前缀 `WREN_`）
+### 3.4.2 ai-platform — `IqdMcpSettings`（**环境变量 / `backend/.env`，不使用 Nacos**）
 
-> 代码：`agent/ai-platform/backend/src/config.py` → `IqdMcpSettings`  
-> Nacos：可写入 `ai-platform.yaml`（键名用 kebab-case，如 `wren.cli-bin`）
+> 代码：`agent/ai-platform/backend/src/config.py` → `IqdMcpSettings`（`env_prefix=WREN_`）  
+> **配置入口**：`agent/ai-platform/backend/.env` 或进程/容器环境变量。  
+> ai-platform 是 Python 服务，**不读** `deploy/nacos-config/*/ai-platform.yaml`（仓库亦无此文件）。Nacos 仅用于 Java 服务（如 §3.4.3 BFF）。
 
-| 环境变量 / Nacos 键 | 跨机器 | 本地 Plan A | 说明 |
-|---------------------|--------|-------------|------|
+| 环境变量 | 跨机器 | 本地 Plan A | 说明 |
+|----------|--------|-------------|------|
 | `WREN_AGENT_ENDPOINT` | ✅ 必填 | **留空** | 如 `http://10.20.0.20:9100` |
 | `WREN_AGENT_TOKEN` | ✅ | 可选 | bearer，与 wren 机一致 |
-| `WREN_CLI_BIN` / `wren.cli-bin` | ✅ | ✅ | wren 绝对路径 |
-| `WREN_MCP_PORT_RANGE` / `wren.mcp-port-range` | | ✅ | 本地端口段 |
-| `WREN_PROJECTS_ROOT` / `wren.projects-root` | | ✅ | 本地 project 根 |
-| `WREN_MCP_HOST` / `wren.mcp-host` | | ✅ | 默认 127.0.0.1 |
-| `WREN_MCP_PORT` / `wren.mcp-port` | | ✅ | 默认 8080 |
-| `WREN_MCP_TRANSPORT` | | | http |
-| `WREN_MCP_ALLOW_WRITE` | | | false |
+| `WREN_CLI_BIN` | ✅ | ✅ | wren 绝对路径（跨机器时管理面/本地兜底仍可能用到） |
+| `WREN_MCP_PORT_RANGE` | | ✅ | 本地多连接端口段，默认 `18080-18180` |
+| `WREN_PROJECTS_ROOT` | | ✅ | 本地 project 根 |
+| `WREN_MCP_HOST` | | ✅ | 默认 `127.0.0.1` |
+| `WREN_MCP_PORT` | | ✅ | 单连接回退端口；同机有 gateway 时建议 `18080`（勿与 gateway `:8080` 冲突） |
+| `WREN_MCP_TRANSPORT` | | | `http` |
+| `WREN_MCP_ALLOW_WRITE` | | | `false` |
 | `WREN_BUILD_TIMEOUT_SECONDS` | | | context build 超时 |
-| `WREN_MEMORY_INDEX_ENABLED` | | | true |
+| `WREN_MEMORY_INDEX_ENABLED` | | | `true` |
 | `WREN_SELF_HEAL_FORCE_BUILD_ARGS` | | | 如 `["--force"]`，W0 实测后填 |
 
-**Nacos 示例片段**（`deploy/nacos-config/{integration,test,prod}/ai-platform.yaml`，按环境增补）：
+**跨机器示例**（写入 `agent/ai-platform/backend/.env`）：
 
-```yaml
-wren:
-  cli-bin: /root/wren-venv/bin/wren
-  mcp-port-range: "18080-18180"
-  projects-root: /var/lib/mis-iqd/wren-projects
-  mcp-host: 127.0.0.1
-  mcp-port: 8080
-  mcp-allow-write: false
-  language: zh-CN
-# 跨机器（生产 wren 机分离时追加，或通过环境变量注入）
-# wren-agent-endpoint: http://10.20.0.20:9100
-# wren-agent-token: ${WREN_AGENT_TOKEN}
+```bash
+WREN_AGENT_ENDPOINT=http://10.20.0.20:9100
+WREN_AGENT_TOKEN=<与 wren 机 WREN_AGENT_TOKEN 一致>
+WREN_CLI_BIN=/root/wren-venv/bin/wren
 ```
 
-> 注：当前仓库 `deploy/nacos-config/*/mis-admin-bff.yaml` 已有 `mis.iqd.*`；**ai-platform 的 wren 段需按上表在对应环境 Nacos 或容器 env 中配置**。
+**本地 Plan A 示例**见 §3.3。改完后重启 ai-platform Worker 生效。
 
 ### 3.4.3 BFF — `mis.iqd.*`（`mis-admin-bff`）
 

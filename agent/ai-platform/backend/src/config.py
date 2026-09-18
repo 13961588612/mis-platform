@@ -13,8 +13,16 @@ from enum import Enum
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import BeforeValidator, Field, field_validator
+from pydantic import AliasChoices, BeforeValidator, Field, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
+
+
+def _wren_env(*names: str) -> AliasChoices:
+    """``IqdMcpSettings`` 字段多以 ``wren_`` 开头，配合 ``env_prefix=WREN_`` 会变成
+    ``WREN_WREN_*``。用短别名（如 ``AGENT_ENDPOINT`` → ``WREN_AGENT_ENDPOINT``）
+    对齐运维文档；同时保留 ``WREN_WREN_*`` 兼容已手写的双前缀。
+    """
+    return AliasChoices(*names)
 
 
 def _parse_str_list(v: Any) -> list[str]:
@@ -60,68 +68,95 @@ class IqdMcpSettings(BaseSettings):
     注入（不落平台库、不落前端），本段只描述进程与连接形态。
     """
 
-    model_config = SettingsConfigDict(env_prefix="WREN_", extra="ignore")
+    model_config = SettingsConfigDict(
+        env_prefix="WREN_",
+        extra="ignore",
+        populate_by_name=True,
+    )
 
     wren_mcp_host: str = Field(
         default="127.0.0.1",
         description="wren serve mcp 监听地址（官方默认仅本机）；单连接回退端点",
+        validation_alias=_wren_env("MCP_HOST", "WREN_MCP_HOST"),
     )
     wren_mcp_port: int = Field(
         default=8080,
         description="单连接回退 MCP HTTP transport 端口（方案 A 下每连接独立端口，见 wren_mcp_port_range）",
+        validation_alias=_wren_env("MCP_PORT", "WREN_MCP_PORT"),
     )
     # ===== 方案 A：多连接每进程独立端口 + 独立 project 目录 =====
     wren_mcp_default_host: str = Field(
         default="127.0.0.1",
         description="每连接 wren serve mcp 监听地址（官方硬约束：仅本机、无 bearer-token）",
+        validation_alias=_wren_env("MCP_DEFAULT_HOST", "WREN_MCP_DEFAULT_HOST"),
     )
     wren_mcp_port_range: str = Field(
         default="18080-18180",
         description="多连接 MCP 端口段（含端点，逗号分隔可多段）；进程管理器按连接分配并回收复用",
+        validation_alias=_wren_env("MCP_PORT_RANGE", "WREN_MCP_PORT_RANGE"),
     )
     wren_projects_root: str = Field(
         default="/var/lib/mis-iqd/wren-projects",
         description="多连接 wren project 根目录；每连接 project_home = {wren_projects_root}/{connId}",
+        validation_alias=_wren_env("PROJECTS_ROOT", "WREN_PROJECTS_ROOT"),
     )
     wren_mcp_health_interval_seconds: float = Field(
         default=30.0,
         description="后台健康检查循环间隔（秒）；失败计数达阈值置 unhealthy 并触发崩溃重启",
+        validation_alias=_wren_env(
+            "MCP_HEALTH_INTERVAL_SECONDS", "WREN_MCP_HEALTH_INTERVAL_SECONDS"
+        ),
     )
     wren_mcp_health_failure_threshold: int = Field(
         default=3,
         description="健康连续失败次数阈值（达到后置 unhealthy 并重启进程）",
+        validation_alias=_wren_env(
+            "MCP_HEALTH_FAILURE_THRESHOLD", "WREN_MCP_HEALTH_FAILURE_THRESHOLD"
+        ),
     )
     wren_mcp_start_timeout_seconds: float = Field(
         default=30.0,
         description="单进程拉起后等待 ready（target/mdl.json 可读 + HTTP health）的超时（秒）",
+        validation_alias=_wren_env(
+            "MCP_START_TIMEOUT_SECONDS", "WREN_MCP_START_TIMEOUT_SECONDS"
+        ),
     )
     wren_mcp_dir_retention_days: int = Field(
         default=7,
         description="连接禁用/删除后 project 目录保留天数（保留期便于回溯/审计），到期定时清理",
+        validation_alias=_wren_env(
+            "MCP_DIR_RETENTION_DAYS", "WREN_MCP_DIR_RETENTION_DAYS"
+        ),
     )
     wren_mcp_transport: str = Field(
         default="http",
         description="MCP 传输方式：http（一期唯一形态）",
+        validation_alias=_wren_env("MCP_TRANSPORT", "WREN_MCP_TRANSPORT"),
     )
     wren_mcp_allow_write: bool = Field(
         default=False,
         description="是否允许 MCP 写工具（本期默认关闭，只读兜底）",
+        validation_alias=_wren_env("MCP_ALLOW_WRITE", "WREN_MCP_ALLOW_WRITE"),
     )
     wren_mcp_timeout_seconds: float = Field(
         default=60.0,
         description="单次 MCP 工具调用超时（秒），对齐 SLO P95 ≤ 20s",
+        validation_alias=_wren_env("MCP_TIMEOUT_SECONDS", "WREN_MCP_TIMEOUT_SECONDS"),
     )
     wren_cli_bin: str = Field(
         default="wren",
         description="本地 wren CLI 可执行文件（profile / context build 管理面）",
+        validation_alias=_wren_env("CLI_BIN", "WREN_CLI_BIN"),
     )
     wren_profile_name: str = Field(
         default="",
         description="业务数据源 profile 名（凭证由 wren profile 注入，非本字段）",
+        validation_alias=_wren_env("PROFILE_NAME", "WREN_PROFILE_NAME"),
     )
     wren_language: str = Field(
         default="zh-CN",
         description="WrenAI 生成语言",
+        validation_alias=_wren_env("LANGUAGE", "WREN_LANGUAGE"),
     )
 
     # ===== 跨机器部署（v0.2·方案 A 落地）：wren 机常驻 WrenMcpAgent =====
@@ -131,32 +166,43 @@ class IqdMcpSettings(BaseSettings):
         default="",
         description="WrenMcpAgent 控制面基址（内网直连，如 http://wren-mcp-agent:9100）；"
         "空=本地 Plan A 模式",
+        validation_alias=_wren_env("AGENT_ENDPOINT", "WREN_AGENT_ENDPOINT"),
     )
     wren_agent_control_port: int = Field(
         default=9100,
         description="WrenMcpAgent 控制面监听端口（agent 侧 systemd/Docker 配置用）",
+        validation_alias=_wren_env("AGENT_CONTROL_PORT", "WREN_AGENT_CONTROL_PORT"),
     )
     wren_agent_mcp_port: int = Field(
         default=9101,
         description="WrenMcpAgent 数据面 MCP 反向代理监听端口（按 connId 路由到本机 127.0.0.1）",
+        validation_alias=_wren_env("AGENT_MCP_PORT", "WREN_AGENT_MCP_PORT"),
     )
     wren_agent_token: str = Field(
         default="",
         description="控制面/数据面共享 bearer token（内网隔离 + 该 token 二选一兜底；"
         "wren 机不接 Vault，S1 明文经此通道推送后注入 wren 进程 env）",
+        validation_alias=_wren_env("AGENT_TOKEN", "WREN_AGENT_TOKEN"),
     )
     # 下列仅在 wren 机 agent 侧生效（端口段 + project 根目录现已落到 wren 机）：
     wren_agent_wren_port_range: str = Field(
         default="18080-18180",
         description="wren 机端口段（agent 按连接分配并回收，对应 wren_mcp_port_range 现移 wren 机）",
+        validation_alias=_wren_env(
+            "AGENT_WREN_PORT_RANGE", "WREN_AGENT_WREN_PORT_RANGE"
+        ),
     )
     wren_agent_projects_root: str = Field(
         default="/var/lib/mis-iqd/wren-projects",
         description="wren 机 project 根目录（每连接 project_home = {root}/{connId}）",
+        validation_alias=_wren_env(
+            "AGENT_PROJECTS_ROOT", "WREN_AGENT_PROJECTS_ROOT"
+        ),
     )
     wren_agent_mcp_host: str = Field(
         default="",
         description="数据面可达 host（ai-platform 侧视角）；空=取 wren_agent_endpoint 主机名",
+        validation_alias=_wren_env("AGENT_MCP_HOST", "WREN_AGENT_MCP_HOST"),
     )
     build_timeout_seconds: float = Field(
         default=120.0,
@@ -171,7 +217,7 @@ class IqdMcpSettings(BaseSettings):
     self_heal_force_build_args: list[str] = Field(
         default_factory=list,
         description="运维自愈 force-rebuild 时附加给 `wren context build` 的可选 flag（如 ['--force']）；"
-        "W0 真机实测后由运维在 Nacos 回填，默认空（退化普通增量 build）",
+        "W0 真机实测后由运维在 backend/.env 回填，默认空（退化普通增量 build）",
     )
     self_heal_memory_reset_args: list[str] = Field(
         default_factory=list,
@@ -647,8 +693,7 @@ class Settings(BaseSettings):
 
     # ===== 问数（WrenAI 对接，v1.9 / B1）=====
     # 本地 MCP server 连接 + mis-iqd 配置读取 API 客户端。
-    # ⚠ 仓库无 Nacos ai-platform.yaml（R2）：配置先入 config.py BaseSettings 段，
-    #   部署侧如需 Nacos 下发再补（低优先）。
+    # 配置入口：进程环境变量 / backend/.env（BaseSettings）；ai-platform 不读 Nacos。
     iqd_mcp: IqdMcpSettings = Field(default_factory=IqdMcpSettings)
     iqd_config: IqdConfigClientSettings = Field(default_factory=IqdConfigClientSettings)
 

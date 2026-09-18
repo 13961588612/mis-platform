@@ -48,13 +48,21 @@
 | SonarQube | Phase 1 **不接入** |
 | 本地开发 | **Docker Compose 基础设施 + IDE 直跑** 应用服务（双模式） |
 
-## 5. 待定
+## 5. 财务辅助 / 遗留对接（2026-09-09）
+
+| 项 | 决策 |
+|----|------|
+| POS 对账迁入 | React 重写进 host；路径 `/finance/bank-account/pos-account/*`；菜单：财务辅助→银行账目→POS对账（ADR-021） |
+| 下游 | 仍调 `bip-bank-receipt`；浏览器不直连旧网关；BFF 反代 + `sys_api` 鉴权 |
+| 老令牌 | BFF 经共享 `SmpTokenExchangeService`（`mis.bff.smp`）兑令牌；头默认 `HC-SMP-Authorization`；令牌不下发浏览器 |
+
+## 6. 待定
 
 | 项 | 状态 |
 |----|------|
 | 团队分工 | 待定 |
 
-## 6. Schema 状态
+## 7. Schema 状态
 
 **SQL 已生成并持续追加** — `docs/db/migrations/`：
 

@@ -45,10 +45,15 @@ import {
   AgentSkillsPermissionsPage,
   AgentWecomPage,
 } from '@/features/agent/pages';
+import { TerminalsPage } from '@/features/finance/bank-account/pos-account/terminals-page';
+import { SktPage } from '@/features/finance/bank-account/pos-account/skt-page';
+import { ReconcilePage } from '@/features/finance/bank-account/pos-account/reconcile-page';
+import { MarksPage } from '@/features/finance/bank-account/pos-account/marks-page';
 import { flattenSystemNavLeaves } from '@/lib/nav/system-nav';
 import { flattenKbNavLeaves } from '@/lib/nav/kb-nav';
 import { flattenAgentNavLeaves } from '@/lib/nav/agent-nav';
 import { flattenIqdNavLeaves } from '@/lib/nav/iqd-nav';
+import { flattenFinanceNavLeaves } from '@/lib/nav/finance-nav';
 
 // ---------------------------------------------------------------------------
 // T09/T10 存量页：路由级懒加载（React.lazy + Suspense，每路由独立 chunk ≤80KB/页）。
@@ -153,6 +158,11 @@ const PAGE_MAP: Record<string, ComponentType> = {
   '/iqd/traces': LazyIqdTracePage,
   '/iqd/enhance': LazyIqdEnhancePage,
   '/iqd/instruction': LazyIqdInstructionPage,
+  // V86：财务辅助 · POS 对账
+  '/finance/bank-account/pos-account/terminals': TerminalsPage,
+  '/finance/bank-account/pos-account/skt': SktPage,
+  '/finance/bank-account/pos-account/reconcile': ReconcilePage,
+  '/finance/bank-account/pos-account/marks': MarksPage,
 };
 
 export const KEEP_ALIVE_META: Record<string, { title: string; icon?: string }> = Object.fromEntries(
@@ -161,6 +171,7 @@ export const KEEP_ALIVE_META: Record<string, { title: string; icon?: string }> =
     ...flattenKbNavLeaves(),
     ...flattenAgentNavLeaves(),
     ...flattenIqdNavLeaves(),
+    ...flattenFinanceNavLeaves(),
   ].map((i) => [i.path, { title: i.title, icon: i.icon }]),
 );
 

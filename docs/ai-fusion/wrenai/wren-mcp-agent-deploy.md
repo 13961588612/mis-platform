@@ -43,16 +43,24 @@ admin 浏览器
 ### 2.1 放置部署物
 
 ```bash
-# 在 wren 机
+# 在 wren 机（不单独建 wrenagent；systemd 默认以 root 运行）
 sudo mkdir -p /opt/wren-mcp-agent /var/lib/mis-iqd/wren-projects
 sudo cp -r deploy/wrenai/wren-mcp-agent/* /opt/wren-mcp-agent/
-sudo chown -R wrenagent:wrenagent /opt/wren-mcp-agent /var/lib/mis-iqd
 cd /opt/wren-mcp-agent
-python3 -m venv .venv && . .venv/bin/activate
-pip install -r requirements.txt
+sudo python3 -m venv .venv
+sudo .venv/bin/pip install -r requirements.txt
 ```
 
-### 2.2 环境变量（`.env` 或 systemd Environment）
+### 2.2 环境变量（主路径：`.env` + systemd `EnvironmentFile`）
+
+单元通过 `EnvironmentFile=-/opt/wren-mcp-agent/.env` 加载配置（**须写在** `Environment=` **之后**，同名键以 `.env` 为准）。安装时：
+
+```bash
+cd /opt/wren-mcp-agent
+sudo cp .env.example .env
+sudo chmod 600 .env
+# 编辑 TOKEN / PUBLIC_HOST / WREN_CLI_BIN 等
+```
 
 最小配置（见 `deploy/wrenai/wren-mcp-agent/.env.example`）：
 
@@ -63,12 +71,13 @@ pip install -r requirements.txt
 | `WREN_AGENT_MCP_PORT` | 数据面反向代理端口 | 9101 |
 | `WREN_AGENT_BIND_HOST` | 监听地址（数据面须被 ai-platform 内网直达） | 0.0.0.0 |
 | `WREN_AGENT_PUBLIC_HOST` | **ai-platform 可达地址**（回执 `control_endpoint`/`mcp_endpoint` 用此地址；跨机器数据面可达性，决策 ①⑧）。wren 机多网卡/容器化时**必须**显式设为 ai-platform 可路由到的 IP 或服务名；缺省取 `WREN_AGENT_BIND_HOST`（=0.0.0.0，不可达，须覆盖） | 空（缺省取 `WREN_AGENT_BIND_HOST`） |
+| `WREN_AGENT_WREN_CLI_BIN` | wren CLI **绝对路径**（systemd PATH 通常不含 `~/wren-venv/bin`） | `/root/wren-venv/bin/wren`（见 `.env.example`） |
 | `WREN_AGENT_WREN_PORT_RANGE` | 本机端口段（按连接分配/回收） | 18080-18180 |
 | `WREN_AGENT_PROJECTS_ROOT` | wren project 根目录 | /var/lib/mis-iqd/wren-projects |
 | `WREN_AGENT_MAX_CONNECTIONS` | 并发连接上限（决策 ⑦ ≤10） | 10 |
 
-> **安全**：`WREN_AGENT_TOKEN` 必须非空且高强度；systemd 单元 `UMask=0077` 保证只有
-> `wrenagent` 用户可读（见 `wren-mcp-agent.service`）。
+> **安全**：`WREN_AGENT_TOKEN` 必须非空且高强度；systemd 单元 `UMask=0077` 收紧
+> 临时文件权限（见 `wren-mcp-agent.service`）。`.env` 建议 `chmod 600`。
 
 ### 2.3 注册 systemd 单元
 
@@ -81,8 +90,8 @@ sudo systemctl status wren-mcp-agent
 
 单元要点（`wren-mcp-agent.service`）：
 
-- `User=wrenagent`、`UMask=0077`、`Restart=always`（崩溃自愈由 agent 进程 + systemd 双层兜底）。
-- `Environment=WREN_AGENT_TOKEN=...` 直接注入（不落仓库、不入镜像层明文日志）。
+- 默认**不设** `User=`（以 root 跑）；可选改为普通部署账号（须与目录 / `~/.wren` 属主一致）。`UMask=0077`、`Restart=always`（崩溃自愈由 agent 进程 + systemd 双层兜底）。
+- 主配置：`EnvironmentFile=-/opt/wren-mcp-agent/.env`；单元内 `Environment=` 仅作缺省兜底。
 
 ### 2.4 防火墙（firewalld，仅放行 ai-platform 源 IP，决策 ⑤）
 

@@ -11,6 +11,7 @@
 
 ## 部署边界（2026-07-24 锁）
 - AI 融合 `deploy/docker-compose.ai.yml` 叠加主栈；共享 PG 库 `ai_platform`(角色 aiplatform,Alembic)、Redis db2 前缀 `aip:`。边缘 nginx `deploy/nginx/edge.conf` 反代 `/api`+`/ws`→ai-platform-gateway:3100。
+- ⚠️ alembic 迁移连接串由 `src/config.py` 的 `POSTGRES_HOST`(`pydantic` 自动读同名 env，默认 `"postgres"`)经 `env.py`→`settings.postgres_dsn_sync` 提供，**不读 `alembic.ini` 的 url**；**宿主机跑须 `$env:POSTGRES_HOST=10.254.16.6`**（`postgres` 主机名仅 Docker 内网可达，真实 PG 在 `10.254.16.6:5432`，role aiplatform，库 ai_platform）再 `alembic upgrade head`。
 - 技术债归属：前端 13 tsc/网关 20 tsc 属 **agent/ai-platform**，与 `frontend/mis-admin-web` 无关。
 
 ## 前端 UI 规范（高频踩坑）
