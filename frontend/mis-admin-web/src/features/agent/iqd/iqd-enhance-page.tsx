@@ -6,11 +6,17 @@
  *   <li>脱敏规则（iqd_mask_rule CRUD，W2）</li>
  *   <li>行级维度注册表（iqd_row_scope_dimension CRUD，W2）</li>
  *   <li>字典同步（mis_dept_scope / mis_store_scope 手动触发 + 状态，W2）</li>
- *   <li>样本对（iqd_sql_pair CRUD，W4 few-shot）</li>
- *   <li>知识/术语（iqd_knowledge CRUD + S-07 导入 + 增强推送，W4）</li>
+ *   <li>样本对（iqd_sql_pair CRUD，W4 few-shot；**T04e MR-08：SQL 框升级 CodeMirror 6**）</li>
+ *   <li>知识/术语（iqd_knowledge CRUD + S-07 导入 + 增强推送，W4；**T04e MR-09：增「关联对象」列**）</li>
  * </ul>
- * 数据源为 BFF 代理（权限码 iqd:mask:* / iqd:dimension:* / iqd:scope:sync /
- * iqd:enhance:view|save|sync）。
+ *
+ * <h2>权限码（核实自 `sys_api ⋈ sys_menu_api ⋈ sys_menu` seed，非文档猜测）</h2>
+ * `iqd:mask:view|save`（V73:92568-92570）、`iqd:dimension:view|save`（V73:92571-92573）、
+ * `iqd:scope:view|sync`（V73:92574/92575）、`iqd:enhance:view|save|sync`（V74:92578-92585）、
+ * **`iqd:enhance:manage`（V78:92586/92587 —— `sql-pairs/translate` + `/trial`；常被文档漏写）**。
+ *
+ * <p><b>T04e A-04</b>：**仅替换 SQL 文本框为 CodeMirror 6**，**不动** v1.10 的
+ * 「DB 类型下拉 → 转化 → 试运行 → 保存」交互。
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
@@ -52,6 +58,15 @@ import {
   type IqdTrialResult,
 } from '@/lib/api/iqd';
 import { SyncStatusBar } from './components/SyncStatusBar';
+import { SqlEditor } from './components/enhance/SqlEditor';
+import {
+  S07_IMPORT_READY,
+  canTriggerS07Import,
+  classifyS07Import,
+  s07ButtonTitle,
+  type S07ImportOutcome,
+} from './components/enhance/enhanceUtils';
+import { summarizeRelatedItemKeys } from './components/shared/relatedItemKeys';
 
 type Tab = 'mask' | 'dimension' | 'sync' | 'sqlpair' | 'knowledge';
 
@@ -133,6 +148,10 @@ export function IqdEnhancePage() {
   const [kbKind, setKbKind] = useState('term');
   const [kbTitle, setKbTitle] = useState('');
   const [kbContent, setKbContent] = useState('');
+
+  // S-07 导入（T04e ③：能力位点 + 结果状态化；A6 未就绪 → 按钮置灰）
+  const [s07Importing, setS07Importing] = useState(false);
+  const [s07Outcome, setS07Outcome] = useState<S07ImportOutcome | null>(null);
 
   // 主连接 id（增强物料均挂主连接）
   const [connectionId, setConnectionId] = useState<number | null>(null);
@@ -402,12 +421,18 @@ export function IqdEnhancePage() {
     const cid = await ensureConnection();
     if (cid == null) return;
     setError(null);
+    setS07Importing(true);
     try {
       const result = await importIqdKnowledgeS07(cid);
-      setError(`S-07 导入完成：${String(result.message ?? '')}`);
+      // 状态化：**不把「未就绪空导入」显示成成功**（后端骨架会回 message 含「未就绪」）
+      setS07Outcome(classifyS07Import(result, null));
       await loadEnhance();
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'S-07 导入失败');
+      setS07Outcome(
+        classifyS07Import(null, e instanceof Error ? e.message : 'S-07 导入失败'),
+      );
+    } finally {
+      setS07Importing(false);
     }
   }, [ensureConnection, loadEnhance]);
 
@@ -903,10 +928,23 @@ export function IqdEnhancePage() {
             </div>
 
             <div className="flex flex-wrap items-center gap-2">
-              <Button size="sm" variant="outline" className="h-8" onClick={() => void importS07()}>
+              {/* S-07 术语导入（T04e ③）：A6 未就绪 → 置灰 + tooltip（**诚实显示不可用**，不假装可用） */}
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-8"
+                onClick={() => void importS07()}
+                disabled={!canTriggerS07Import(S07_IMPORT_READY, s07Importing)}
+                title={s07ButtonTitle(S07_IMPORT_READY)}
+              >
                 <Upload className="h-3.5 w-3.5" />
                 S-07 术语导入
               </Button>
+              {!S07_IMPORT_READY ? (
+                <span className="text-[11px] text-muted-foreground">
+                  S-07 未就绪（架构 A6 待确认）：当前仅支持本地录入
+                </span>
+              ) : null}
               <Button size="sm" variant="outline" className="h-8" onClick={() => void pushEnhance()}>
                 <Send className="h-3.5 w-3.5" />
                 增强推送
@@ -917,6 +955,21 @@ export function IqdEnhancePage() {
               </Button>
             </div>
 
+            {s07Outcome && s07Outcome.label ? (
+              <p
+                className={cn(
+                  'text-[12px]',
+                  s07Outcome.state === 'failed'
+                    ? 'text-destructive'
+                    : s07Outcome.state === 'imported'
+                      ? 'text-success'
+                      : 'text-muted-foreground',
+                )}
+              >
+                {s07Outcome.label}
+              </p>
+            ) : null}
+
             <div className="rounded-lg border bg-card">
               <table className="w-full border-separate border-spacing-0 bg-table-surface text-left text-sm">
                 <thead className="border-b-2 border-foreground/20 bg-table-header text-muted-foreground">
@@ -924,6 +977,7 @@ export function IqdEnhancePage() {
                     <th className="px-3 py-2 font-bold">类型</th>
                     <th className="px-3 py-2 font-bold">标题</th>
                     <th className="px-3 py-2 font-bold">内容</th>
+                    <th className="px-3 py-2 font-bold">关联对象</th>
                     <th className="px-3 py-2 font-bold">来源</th>
                     <th className="px-3 py-2 font-bold">状态</th>
                     <th className="w-14 px-3 py-2" />
@@ -932,12 +986,14 @@ export function IqdEnhancePage() {
                 <tbody>
                   {knowledge.length === 0 ? (
                     <tr>
-                      <td colSpan={6} className="px-3 py-8 text-center text-muted-foreground">
+                      <td colSpan={7} className="px-3 py-8 text-center text-muted-foreground">
                         暂无知识条目
                       </td>
                     </tr>
                   ) : (
-                    knowledge.map((k) => (
+                    knowledge.map((k) => {
+                      const related = summarizeRelatedItemKeys(k.related_item_keys);
+                      return (
                       <tr
                         key={k.id}
                         className="border-b border-border/50 bg-table-row last:border-0 even:bg-table-stripe"
@@ -950,6 +1006,14 @@ export function IqdEnhancePage() {
                         </td>
                         <td className="max-w-[24rem] truncate px-3 py-2 text-xs text-muted-foreground" title={k.content ?? ''}>
                           {k.content ?? '—'}
+                        </td>
+                        {/* 关联对象（T04e ②/MR-09）：wire 为 JSON 字符串数组；空 = 全连接通用 */}
+                        <td className="px-3 py-2 text-xs" title={related.keys.join('、')}>
+                          {related.isGlobal ? (
+                            <span className="text-muted-foreground">全连接通用</span>
+                          ) : (
+                            <span className="font-mono">{related.count} 项</span>
+                          )}
                         </td>
                         <td className="px-3 py-2 font-mono text-xs">{k.source ?? 'local'}</td>
                         <td className="px-3 py-2 text-xs">
@@ -977,7 +1041,8 @@ export function IqdEnhancePage() {
                           </Button>
                         </td>
                       </tr>
-                    ))
+                      );
+                    })
                   )}
                 </tbody>
               </table>
@@ -1136,11 +1201,12 @@ function IqdSqlPairDialog({
 
           <div className="flex flex-col gap-1">
             <span className="text-xs text-muted-foreground">原生 SQL</span>
-            <Textarea
-              placeholder="原生 SQL（源方言，如 Oracle/MySQL 写法）"
+            {/* T04e MR-08：SQL 框升级 CodeMirror 6（懒加载 + 高亮；不可用时自动降级 Textarea） */}
+            <SqlEditor
               value={nativeSql}
-              onChange={(e) => setNativeSql(e.target.value)}
-              rows={3}
+              onChange={(next) => setNativeSql(next)}
+              placeholder="原生 SQL（源方言，如 Oracle/MySQL 写法）"
+              height={120}
             />
             <div className="flex items-center gap-2">
               <Button
@@ -1169,11 +1235,12 @@ function IqdSqlPairDialog({
 
           <div className="flex flex-col gap-1">
             <span className="text-xs text-muted-foreground">转化结果（wren_sql，可编辑）</span>
-            <Textarea
-              placeholder="点「转化」后回填，或直接手写 WrenAI 方言 SQL"
+            {/* T04e MR-08：同上，CodeMirror 6（不可用时自动降级 Textarea） */}
+            <SqlEditor
               value={wrenSql}
-              onChange={(e) => setWrenSql(e.target.value)}
-              rows={3}
+              onChange={(next) => setWrenSql(next)}
+              placeholder="点「转化」后回填，或直接手写 WrenAI 方言 SQL"
+              height={120}
             />
             <Button
               size="sm"

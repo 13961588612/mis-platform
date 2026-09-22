@@ -23,6 +23,8 @@
  * </ul>
  */
 import type { IqdCatalogItem, IqdKnowledge, IqdSyncStatus } from '@/lib/api/iqd';
+// T04e：`related_item_keys` 编解码已下沉共享模块（enhance 页知识 Tab 亦消费）。
+import { parseRelatedItemKeys, serializeRelatedItemKeys } from '../shared/relatedItemKeys';
 
 /** 指令页权限码（唯一来源，勿在组件里硬编码字符串）。 */
 export const INSTRUCTION_PERMISSIONS = {
@@ -136,43 +138,10 @@ export function insertItemKey(
 /**
  * 解析 `related_item_keys`（wire 上是 **JSON 字符串**；容错 list / null）。
  *
- * <p>非法 JSON / 非数组 → `[]`（fail-safe：视作「无关联」= 全连接通用，宁可多下发不误裁，
- * 与后端 `parseRelatedItemKeys` 同口径）。
+ * <p><b>T04e：实现已下沉到共享模块 {@link ../shared/relatedItemKeys}（enhance 页知识 Tab 亦消费）；
+ * 此处仅**再导出**以保持既有导入路径与单测不变（零回归）。</b>
  */
-export function parseRelatedItemKeys(raw: unknown): string[] {
-  if (raw == null) {
-    return [];
-  }
-  if (Array.isArray(raw)) {
-    // 兜底：万一上游回传已解析的数组
-    return raw.map((x) => String(x).trim()).filter((x) => x !== '');
-  }
-  if (typeof raw !== 'string') {
-    return [];
-  }
-  const text = raw.trim();
-  if (text === '') {
-    return [];
-  }
-  try {
-    const parsed: unknown = JSON.parse(text);
-    if (!Array.isArray(parsed)) {
-      return [];
-    }
-    return parsed.map((x) => String(x).trim()).filter((x) => x !== '');
-  } catch {
-    return [];
-  }
-}
-
-/** 序列化 `related_item_keys` 为 wire（空 → `null`；否则去重后的 JSON 字符串数组）。 */
-export function serializeRelatedItemKeys(keys: string[]): string | null {
-  const cleaned = Array.from(new Set(keys.map((k) => k.trim()).filter((k) => k !== '')));
-  if (cleaned.length === 0) {
-    return null;
-  }
-  return JSON.stringify(cleaned);
-}
+export { parseRelatedItemKeys, serializeRelatedItemKeys };
 
 /** 下发估算结果（**前端估算**，见 {@link estimatePush}）。 */
 export interface PushEstimate {

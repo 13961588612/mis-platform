@@ -137,6 +137,35 @@ def crop_knowledge_by_context(
     return out
 
 
+def is_enabled(item: dict[str, Any] | None) -> bool:
+    """条目是否启用（容错 bool / int / str 形态；T04e 加固）。
+
+    既有过滤写法是 ``item.get("enabled", True) is not False``，存在**脆弱点**：Python 里
+    ``0 is False == False``，故 **int ``0`` 会被判为「启用」** —— 任何回传 int 0 的路径
+    （DB 直读 / 新内部接口）都会让**停用条目仍被下发**（静默漏过滤）。``IqdKnowledgeVO.enabled``
+    是 ``Boolean``（真实链路当前正确），但该写法不应依赖「wire 恰好是 bool」。
+
+    统一为**值语义**：
+    - ``False`` / ``0`` / ``"0"`` / ``"false"`` / ``"no"`` / ``"off"``（大小写 / 空白容错）→ 停用；
+    - 缺省（键不存在）或显式 ``None`` → 启用（与既有 ``.get(..., True)`` 语义一致）；
+    - 其余 → ``bool(value)``。
+
+    Args:
+        item: 条目 dict（知识 / 样本对）；``None`` → 视为停用。
+
+    Returns:
+        True = 启用（可下发）。
+    """
+    if not isinstance(item, dict):
+        return False
+    value = item.get("enabled", True)
+    if value is None:
+        return True
+    if isinstance(value, str):
+        return value.strip().lower() not in ("0", "false", "no", "off")
+    return bool(value)
+
+
 class IqdAskService:
     """问数服务门面。
 
@@ -362,7 +391,7 @@ class IqdAskService:
         pending_pairs = [p for p in sql_pairs if p.get("sync_status") == "pending"]
         pending_knowledge = [
             k for k in knowledge
-            if k.get("sync_status") == "pending" and k.get("enabled", True) is not False
+            if k.get("sync_status") == "pending" and is_enabled(k)
         ]
         cropped_knowledge = crop_knowledge_by_context(pending_knowledge, context_item_keys)
         return {
@@ -429,11 +458,11 @@ class IqdAskService:
             )
         pending_pairs = [
             p for p in sql_pairs
-            if p.get("sync_status") == "pending" and p.get("enabled", True) is not False
+            if p.get("sync_status") == "pending" and is_enabled(p)
         ]
         pending_knowledge = [
             k for k in knowledge
-            if k.get("sync_status") == "pending" and k.get("enabled", True) is not False
+            if k.get("sync_status") == "pending" and is_enabled(k)
         ]
 
         sql_pair_args = [
@@ -568,11 +597,11 @@ class IqdAskService:
             return result
         pending_pairs = [
             p for p in sql_pairs
-            if p.get("sync_status") == "pending" and p.get("enabled", True) is not False
+            if p.get("sync_status") == "pending" and is_enabled(p)
         ]
         pending_knowledge = [
             k for k in knowledge
-            if k.get("sync_status") == "pending" and k.get("enabled", True) is not False
+            if k.get("sync_status") == "pending" and is_enabled(k)
         ]
         sql_pair_args = [
             {"question": p.get("question"), "sql": p.get("wren_sql") or p.get("sql_text")}

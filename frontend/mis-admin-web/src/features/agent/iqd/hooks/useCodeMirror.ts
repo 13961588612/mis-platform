@@ -217,11 +217,13 @@ export function useCodeMirror(options: UseCodeMirrorOptions): UseCodeMirrorResul
             view.keymap.of([...mods.commands.defaultKeymap, ...mods.commands.historyKeymap]),
           );
         }
-        if (mods.sql && fields && fields.length > 0) {
-          // 传字符串数组即可（sql() 的 schema 接受 readonly string[]，无需引用 Completion 类型）
+        if (mods.sql) {
+          // T04e：SQL 语言**不再要求 fields**（此前 `fields.length > 0` 才挂 sql()，导致
+          // 「无 schema 的场景（样本对 SQL 框）拿不到高亮，且 degraded 仍为 false」的静默降级）。
+          // fields 仅用于 schema 补全；无 fields 时仍有关键字/字面量高亮。
           extensions.push(
             mods.sql.sql({
-              schema: fields,
+              ...(fields && fields.length > 0 ? { schema: fields } : {}),
               ...(defaultTable ? { defaultTable } : {}),
               upperCaseKeywords: true,
             }),

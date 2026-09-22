@@ -21,6 +21,7 @@ import pytest
 from src.agent.mis_iqd.service import (
     IqdAskService,
     crop_knowledge_by_context,
+    is_enabled,
     parse_related_item_keys,
 )
 
@@ -56,6 +57,36 @@ def test_parse_related_item_keys_garbage_is_empty_failsafe():
     assert parse_related_item_keys('{"a":1}') == set()
     assert parse_related_item_keys(123) == set()
     assert parse_related_item_keys('"just-a-string"') == set()
+
+
+# ================================================================ is_enabled（T04e 加固）
+
+def test_is_enabled_boundaries():
+    """★ 值语义边界：`0` / `"false"` 等必须判为**停用**（既有 `is not False` 会把 int 0 判为启用）。"""
+    # 启用
+    assert is_enabled({"enabled": True}) is True
+    assert is_enabled({"enabled": 1}) is True
+    assert is_enabled({"enabled": 2}) is True
+    assert is_enabled({"enabled": "1"}) is True
+    assert is_enabled({"enabled": " TRUE "}) is True
+    assert is_enabled({}) is True            # 缺省 → 启用
+    assert is_enabled({"enabled": None}) is True
+    # 停用
+    assert is_enabled({"enabled": False}) is False
+    assert is_enabled({"enabled": 0}) is False        # ★ 既有写法在此**误判为启用**
+    assert is_enabled({"enabled": "0"}) is False
+    assert is_enabled({"enabled": "false"}) is False
+    assert is_enabled({"enabled": "no"}) is False
+    assert is_enabled({"enabled": "OFF"}) is False
+    # 非 dict
+    assert is_enabled(None) is False
+
+
+def test_is_enabled_matches_legacy_for_bool_wire():
+    """回归：wire 为 bool 时（VO 现网形态）结论与既有 `is not False` 完全一致。"""
+    for value, expected in ((True, True), (False, False)):
+        legacy = value is not False
+        assert is_enabled({"enabled": value}) is legacy is expected
 
 
 # ================================================================ crop_knowledge_by_context
@@ -99,12 +130,14 @@ def test_crop_context_with_blank_keys_is_treated_as_no_context():
 
 @pytest.mark.asyncio
 async def test_push_enhancements_crops_by_context_and_reports_counts():
-    """提供上下文 → 裁剪 + 计数（knowledge_count=裁剪后, total=裁剪前, cropped=True）。"""
+    """提供上下文 → 裁剪 + 计数；且 `enabled:0`(int) 与 `sync_status≠pending` 均被排除。"""
     service = IqdAskService()
     knowledge = [
         {"id": 1, "sync_status": "pending", "title": "global", "related_item_keys": None},
         {"id": 2, "sync_status": "pending", "title": "hit", "related_item_keys": '["mdl:model:orders"]'},
         {"id": 3, "sync_status": "pending", "title": "miss", "related_item_keys": '["mdl:cube:revenue"]'},
+        {"id": 4, "sync_status": "pending", "enabled": 0, "title": "disabled-int0", "related_item_keys": None},
+        {"id": 6, "sync_status": "pending", "enabled": 1, "title": "enabled-int1", "related_item_keys": None},
         {"id": 5, "sync_status": "synced", "title": "synced", "related_item_keys": None},
     ]
     sql_pairs = [
@@ -119,20 +152,22 @@ async def test_push_enhancements_crops_by_context_and_reports_counts():
         result = await service.push_enhancements(1, context_item_keys=["mdl:model:orders"])
 
     assert result["sql_pair_count"] == 1
-    assert [k["id"] for k in result["knowledge"]] == [1, 2]   # global + hit
-    assert result["knowledge_count"] == 2                     # 裁剪后
-    assert result["knowledge_total_count"] == 3               # 裁剪前（pending：1/2/3）
+    # enabled:0（int, id4）与 synced（id5）被排除；global(id1) + hit(id2) + enabled:1(id6)
+    assert [k["id"] for k in result["knowledge"]] == [1, 2, 6]
+    assert result["knowledge_count"] == 3                     # 裁剪后
+    assert result["knowledge_total_count"] == 4               # 裁剪前（pending 且 enabled：1/2/3/6）
     assert result["cropped"] is True
 
 
 @pytest.mark.asyncio
-async def test_push_enhancements_without_context_keeps_all_pending():
-    """无上下文 → 不裁剪（保持既有行为：pending 全量）。"""
+async def test_push_enhancements_without_context_keeps_all_pending_enabled():
+    """无上下文 → 不裁剪（pending 且 enabled 全量；int 0 仍被排除）。"""
     service = IqdAskService()
     knowledge = [
         {"id": 1, "sync_status": "pending", "title": "global", "related_item_keys": None},
         {"id": 2, "sync_status": "pending", "title": "hit", "related_item_keys": '["mdl:model:orders"]'},
         {"id": 3, "sync_status": "pending", "title": "miss", "related_item_keys": '["mdl:cube:revenue"]'},
+        {"id": 4, "sync_status": "pending", "enabled": False, "title": "off-bool", "related_item_keys": None},
     ]
 
     with patch("src.adapters.iqd_config_client.IqdConfigClient") as MockClient:
@@ -148,19 +183,13 @@ async def test_push_enhancements_without_context_keeps_all_pending():
 
 
 @pytest.mark.asyncio
-async def test_push_enhancements_only_pending_entries():
-    """既有语义守卫：sync_status ≠ pending 的条目不进待推送集。
-
-    注：**未**断言 `enabled=0`（int）被排除。既有过滤用 `value is not False`，对 int `0`
-    会判为启用；但 mis-iqd `IqdKnowledgeVO.enabled` 是 **Boolean**，wire 上恒为
-    `true`/`false`，故真实链路上语义正确 —— 属**潜在脆弱点**（任何回传 int 0 的新路径都会
-    静默漏过滤），非 T04d ② 范围，已在批次报告「偏离与发现」中单列。
-    """
+async def test_push_enhancements_gates_on_enabled_and_pending():
+    """★ T04e 加固守卫：`enabled:0`(int) 与 `sync_status≠pending` 都不进待推送集。"""
     service = IqdAskService()
     knowledge = [
-        {"id": 1, "sync_status": "pending", "title": "pending", "related_item_keys": None},
-        {"id": 2, "sync_status": "failed", "title": "failed", "related_item_keys": None},
-        {"id": 3, "sync_status": "synced", "title": "synced", "related_item_keys": None},
+        {"id": 1, "sync_status": "pending", "enabled": 0, "title": "int0", "related_item_keys": None},
+        {"id": 2, "sync_status": "failed", "enabled": 1, "title": "failed", "related_item_keys": None},
+        {"id": 3, "sync_status": "pending", "enabled": 1, "title": "ok", "related_item_keys": None},
     ]
 
     with patch("src.adapters.iqd_config_client.IqdConfigClient") as MockClient:
@@ -169,5 +198,5 @@ async def test_push_enhancements_only_pending_entries():
         client.get_knowledge = AsyncMock(return_value=knowledge)
         result = await service.push_enhancements(1, context_item_keys=["mdl:model:orders"])
 
-    assert [k["id"] for k in result["knowledge"]] == [1]
+    assert [k["id"] for k in result["knowledge"]] == [3]
     assert result["knowledge_total_count"] == 1
