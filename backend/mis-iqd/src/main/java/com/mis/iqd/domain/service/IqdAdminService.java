@@ -1145,6 +1145,11 @@ public class IqdAdminService {
 
     /**
      * 保存知识/术语/口径（W4；按连接+kind+title 幂等 upsert）。
+     *
+     * <p>T04d（PRD §5.2 e 点）：`related_item_keys` 为**应用层校验**的关联清单 —— 其 JSON 数组内的
+     * 每个 `item_key` 必须存在于**本连接 catalog**，否则 `42200`（引用不存在的清单对象）。
+     * 空 / 缺省 = 不关联（全连接通用），不校验。列已存在（V71:218 `related_item_keys JSONB`），
+     * **不新增列/迁移**。
      */
     @Transactional
     public IqdKnowledgeVO saveKnowledge(IqdKnowledgeSaveRequest dto) {
@@ -1158,6 +1163,8 @@ public class IqdAdminService {
         if (kind.isEmpty() || title.isEmpty()) {
             throw new BusinessException(ResultCode.VALIDATION_ERROR, "kind 与 title 不能为空");
         }
+        // T04d：关联对象必须真实存在于本连接 catalog（下拉即校验的权威侧）
+        validateRelatedItemKeys(connectionId, dto.relatedItemKeys());
         IqdKnowledge knowledge = knowledgeRepository
                 .findByConnectionIdAndKindAndTitle(connectionId, kind, title)
                 .orElseGet(IqdKnowledge::new);
@@ -1186,6 +1193,62 @@ public class IqdAdminService {
             changeEventPublisher.publish("iqd.enhancement.changed", "knowledge=" + knowledge.getId());
         }
         return toKnowledgeVO(knowledge);
+    }
+
+    /**
+     * 校验 {@code related_item_keys}（T04d / PRD §5.2 e 点）。
+     *
+     * <p>入参是 wire 上的 **JSON 字符串数组**（如 {@code ["mdl:model:orders","mdl:cube:revenue"]}）。
+     * 规则：
+     * <ul>
+     *   <li>空 / 缺省 / 空数组 → **不校验**（= 全连接通用，保持既有行为）；</li>
+     *   <li>JSON 非法 → `42200`（`data.field=related_item_keys`）；</li>
+     *   <li>数组中任一非空 `item_key` 不在本连接 catalog → `42200`（`data.missing` 列出缺失项）。</li>
+     * </ul>
+     * 放在 upsert **之前**：非法请求零副作用；失败即打回，不让脏关联落库（否则下发时
+     * 该条目会被实际裁剪掉，却查不出原因 —— 静默失效）。
+     *
+     * @param connectionId      连接 id（已 ensureConnection）
+     * @param relatedItemKeysJson 关联清单 JSON 字符串（可空）
+     */
+    private void validateRelatedItemKeys(Long connectionId, String relatedItemKeysJson) {
+        if (relatedItemKeysJson == null || relatedItemKeysJson.isBlank()) {
+            return;
+        }
+        List<String> keys;
+        try {
+            keys = objectMapper.readValue(relatedItemKeysJson, new TypeReference<>() {});
+        } catch (Exception exc) {
+            Map<String, Object> data = new LinkedHashMap<>();
+            data.put("field", "related_item_keys");
+            throw new BusinessException(42200, "related_item_keys 不是合法的 JSON 字符串数组", data);
+        }
+        if (keys == null) {
+            return;
+        }
+        List<String> requested = keys.stream()
+                .filter(Objects::nonNull)
+                .map(String::trim)
+                .filter(k -> !k.isEmpty())
+                .distinct()
+                .toList();
+        if (requested.isEmpty()) {
+            return;
+        }
+        Set<String> existing = catalogItemRepository.findByConnectionId(connectionId).stream()
+                .map(IqdCatalogItem::getItemKey)
+                .filter(Objects::nonNull)
+                .collect(Collectors.toSet());
+        List<String> missing = requested.stream()
+                .filter(k -> !existing.contains(k))
+                .toList();
+        if (!missing.isEmpty()) {
+            Map<String, Object> data = new LinkedHashMap<>();
+            data.put("field", "related_item_keys");
+            data.put("connection_id", connectionId);
+            data.put("missing", missing);
+            throw new BusinessException(42200, "related_item_keys 引用了不存在的清单对象", data);
+        }
     }
 
     /**

@@ -6,6 +6,7 @@ import com.mis.common.core.exception.ResultCode;
 import com.mis.iqd.domain.entity.IqdCatalogItem;
 import com.mis.iqd.domain.entity.IqdConnection;
 import com.mis.iqd.domain.entity.IqdEditIdempotency;
+import com.mis.iqd.domain.entity.IqdKnowledge;
 import com.mis.iqd.domain.entity.IqdSyncJob;
 import com.mis.iqd.domain.repository.IqdCatalogItemRepository;
 import com.mis.iqd.domain.repository.IqdConnectionRepository;
@@ -472,5 +473,91 @@ class IqdAdminEditTest {
 
         assertEquals("high", it.getSensitiveLevel());
         assertEquals("phone", it.getMaskRule());
+    }
+
+    // ------------------------------------------------------------ T04d PRD §5.2 e：related_item_keys 应用层校验
+
+    private static com.mis.iqd.api.dto.IqdKnowledgeSaveRequest knowledgeReq(String relatedJson) {
+        return new com.mis.iqd.api.dto.IqdKnowledgeSaveRequest(
+                CONN_ID, "instruction", "仅允许脱敏手机号", "内容", relatedJson, "local", null, true);
+    }
+
+    /** 关联对象不存在 → 42200（data.field=related_item_keys + data.missing），且零副作用（不落库）。 */
+    @Test
+    void saveKnowledge_rejectsUnknownRelatedItemKeys_with422_andNoSideEffect() throws Exception {
+        when(connectionRepository.existsById(CONN_ID)).thenReturn(true);
+        when(catalogItemRepository.findByConnectionId(CONN_ID))
+                .thenReturn(List.of(item("mdl:model:orders", "model", "订单", null)));
+        when(objectMapper.readValue(eq("[\"mdl:model:ghost\"]"), any(com.fasterxml.jackson.core.type.TypeReference.class)))
+                .thenReturn(List.of("mdl:model:ghost"));
+
+        BusinessException ex = assertThrows(BusinessException.class, () ->
+                service.saveKnowledge(knowledgeReq("[\"mdl:model:ghost\"]")));
+
+        assertEquals(42200, ex.getCode());
+        @SuppressWarnings("unchecked")
+        Map<String, Object> data = (Map<String, Object>) ex.getData();
+        assertNotNull(data);
+        assertEquals("related_item_keys", data.get("field"));
+        @SuppressWarnings("unchecked")
+        List<String> missing = (List<String>) data.get("missing");
+        assertNotNull(missing);
+        assertEquals(List.of("mdl:model:ghost"), missing);
+        // 校验前置 → 不得落库
+        verify(knowledgeRepository, never()).save(any(IqdKnowledge.class));
+    }
+
+    /** 关联对象真实存在 → 正常落库（related_item_keys 原样持久化）。 */
+    @Test
+    void saveKnowledge_acceptsExistingRelatedItemKeys_andPersists() throws Exception {
+        when(connectionRepository.existsById(CONN_ID)).thenReturn(true);
+        when(catalogItemRepository.findByConnectionId(CONN_ID))
+                .thenReturn(List.of(item("mdl:model:orders", "model", "订单", null)));
+        when(objectMapper.readValue(eq("[\"mdl:model:orders\"]"), any(com.fasterxml.jackson.core.type.TypeReference.class)))
+                .thenReturn(List.of("mdl:model:orders"));
+        when(knowledgeRepository.findByConnectionIdAndKindAndTitle(CONN_ID, "instruction", "仅允许脱敏手机号"))
+                .thenReturn(Optional.empty());
+        when(knowledgeRepository.save(any(IqdKnowledge.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        var vo = service.saveKnowledge(knowledgeReq("[\"mdl:model:orders\"]"));
+
+        assertNotNull(vo);
+        ArgumentCaptor<IqdKnowledge> captor = ArgumentCaptor.forClass(IqdKnowledge.class);
+        verify(knowledgeRepository, times(1)).save(captor.capture());
+        assertEquals("[\"mdl:model:orders\"]", captor.getValue().getRelatedItemKeys());
+        assertEquals("pending", captor.getValue().getSyncStatus());
+    }
+
+    /** 非法 JSON → 42200（不静默放行为「无关联」）。 */
+    @Test
+    void saveKnowledge_rejectsMalformedRelatedItemKeys_with422() throws Exception {
+        when(connectionRepository.existsById(CONN_ID)).thenReturn(true);
+        when(objectMapper.readValue(eq("not-json"), any(com.fasterxml.jackson.core.type.TypeReference.class)))
+                .thenThrow(new IllegalArgumentException("bad json"));
+
+        BusinessException ex = assertThrows(BusinessException.class, () ->
+                service.saveKnowledge(knowledgeReq("not-json")));
+
+        assertEquals(42200, ex.getCode());
+        @SuppressWarnings("unchecked")
+        Map<String, Object> data = (Map<String, Object>) ex.getData();
+        assertEquals("related_item_keys", data.get("field"));
+        verify(knowledgeRepository, never()).save(any(IqdKnowledge.class));
+    }
+
+    /** 空 / 缺省关联 → 不校验、照常落库（= 全连接通用，保持现状行为）。 */
+    @Test
+    void saveKnowledge_withoutRelatedKeys_skipsValidation_andPersists() {
+        when(connectionRepository.existsById(CONN_ID)).thenReturn(true);
+        when(knowledgeRepository.findByConnectionIdAndKindAndTitle(CONN_ID, "instruction", "仅允许脱敏手机号"))
+                .thenReturn(Optional.empty());
+        when(knowledgeRepository.save(any(IqdKnowledge.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        var vo = service.saveKnowledge(knowledgeReq(null));
+
+        assertNotNull(vo);
+        // 不校验 → 不查 catalog（findByConnectionId 未被调用）
+        verify(catalogItemRepository, never()).findByConnectionId(any(Long.class));
+        verify(knowledgeRepository, times(1)).save(any(IqdKnowledge.class));
     }
 }

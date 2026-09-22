@@ -69,6 +69,74 @@ class SyncResult(BaseModel):
     index_error: str | None = None
 
 
+def parse_related_item_keys(raw: Any) -> set[str]:
+    """解析某条知识/术语条目的 ``related_item_keys`` 为 item_key 集合（T04d，容错）。
+
+    兼容三种来源形态：
+    - ``None`` / 空串 → 空集合（= 无关联 / 全连接通用）；
+    - JSON 字符串（Java ``iqd_knowledge.related_item_keys`` 是 jsonb 列，经 wire 回传为
+      JSON 文本，如 ``'["mdl:model:orders","mdl:cube:revenue"]'``）；
+    - 已是 ``list`` / ``tuple`` / ``set``（部分内部接口直接回传解析后的结构）。
+
+    非法 JSON / 非集合类型 → 空集合。这是**刻意的 fail-safe 方向**：视作「无关联」→
+    *不裁剪*，宁可多下发一条指令，也不因脏数据把条目静默丢掉（与 masking.py 的
+    fail-closed 方向相反 —— 那里失效代价是「泄露敏感数据」，这里只是「少条指令」）。
+
+    Args:
+        raw: 原始的 ``related_item_keys`` 值（任意类型）。
+
+    Returns:
+        去空白后的 item_key 集合（可能为空）。
+    """
+    if raw is None:
+        return set()
+    if isinstance(raw, (list, tuple, set)):
+        return {str(x).strip() for x in raw if x is not None and str(x).strip()}
+    if isinstance(raw, str):
+        text = raw.strip()
+        if not text:
+            return set()
+        try:
+            parsed = json.loads(text)
+        except (ValueError, TypeError):
+            return set()
+        if isinstance(parsed, (list, tuple, set)):
+            return {str(x).strip() for x in parsed if x is not None and str(x).strip()}
+    return set()
+
+
+def crop_knowledge_by_context(
+    knowledge: list[dict[str, Any]],
+    context_item_keys: list[str] | None,
+) -> list[dict[str, Any]]:
+    """按 ``related_item_keys`` 裁剪知识条目（T04d / PRD §5.2 e 点）。
+
+    裁剪语义（下发到 WrenAI 的 instructions）：
+    - **无 related_item_keys**（空 / 缺省）→ 全连接通用，**恒保留**（绝不误裁通用条目）；
+    - **有 related_item_keys** → 有作用域，仅当其与 ``context_item_keys`` **有交集**时保留；
+    - ``context_item_keys`` 缺省 / 为空 → **不裁剪**，原样返回（整库 build / 登记场景，
+      保持既有行为，向后兼容）。
+
+    Args:
+        knowledge: 待推送知识条目（dict，含 ``related_item_keys``）。
+        context_item_keys: 当前上下文的 item_key 列表（model / cube；由问数请求携带）。
+
+    Returns:
+        裁剪后的**新**列表（不修改入参）。
+    """
+    if not context_item_keys:
+        return list(knowledge)
+    context = {str(k).strip() for k in context_item_keys if k is not None and str(k).strip()}
+    if not context:
+        return list(knowledge)
+    out: list[dict[str, Any]] = []
+    for item in knowledge:
+        scoped = parse_related_item_keys(item.get("related_item_keys"))
+        if not scoped or (scoped & context):
+            out.append(item)
+    return out
+
+
 class IqdAskService:
     """问数服务门面。
 
@@ -262,15 +330,30 @@ class IqdAskService:
         client = self._get_config_client()
         return await client.get_knowledge(connection_id)
 
-    async def push_enhancements(self, connection_id: int | None = None) -> dict[str, Any]:
-        """取待推送增强物料并登记（W4：pending 清单；真实 push 由 CLI context build 执行）。
+    async def push_enhancements(
+        self,
+        connection_id: int | None = None,
+        context_item_keys: list[str] | None = None,
+    ) -> dict[str, Any]:
+        """取待推送增强物料并登记（W4；**T04d 起按 related_item_keys 裁剪**）。
 
         Args:
             connection_id: 问数连接 id（缺省由 mis-iqd 主连接兜底）。
+            context_item_keys: **当前上下文** 的 item_key 集合（由问数请求携带的
+                model / cube 决定）。提供时按各条 ``related_item_keys`` 裁剪 ``knowledge``
+                （= 下发的 instructions）；缺省 / 为空 = 不裁剪（整库 build / 登记场景，
+                保持既有行为，向后兼容）。
 
         Returns:
-            ``{"sql_pairs": [...], "knowledge": [...], "sql_pair_count": N,
-            "knowledge_count": N, "message": ...}``。
+            ``{"sql_pairs", "knowledge", "sql_pair_count", "knowledge_count",
+            "knowledge_total_count", "cropped", "message"}``。
+
+            - ``knowledge``：裁剪后的待下发知识（将注入 WrenAI 的 instructions）；
+            - ``knowledge_total_count``：裁剪前总数（可观测「裁掉了多少」）；
+            - ``cropped``：本次是否应用了上下文裁剪。
+
+        <p>无 ``related_item_keys`` 的条目 = 全连接通用，**恒保留**（不误裁）。
+        fail-closed（异常上抛）与「不写库」的既有语义保持不变。
         """
         client = self._get_config_client()
         # 经内部 API 拉取 pending 物料；mis-iqd /enhance/push 返回同构结果
@@ -281,11 +364,14 @@ class IqdAskService:
             k for k in knowledge
             if k.get("sync_status") == "pending" and k.get("enabled", True) is not False
         ]
+        cropped_knowledge = crop_knowledge_by_context(pending_knowledge, context_item_keys)
         return {
             "sql_pairs": pending_pairs,
-            "knowledge": pending_knowledge,
+            "knowledge": cropped_knowledge,
             "sql_pair_count": len(pending_pairs),
-            "knowledge_count": len(pending_knowledge),
+            "knowledge_count": len(cropped_knowledge),
+            "knowledge_total_count": len(pending_knowledge),
+            "cropped": bool(context_item_keys),
             "message": "待推送物料已就绪（Worker 经 context build 同步并回填 wren_ref_id）",
         }
 
