@@ -957,13 +957,21 @@ class IqdAskService:
 
         # ② 物化建模台**新建**节点（基线里没有的 cube/measure/dimension/relationship/计算列）
         #    必须早于 _patch_mdl_node：patch 按「name 定位已有节点」，而物化才负责「新增」。
-        self._materialize_missing_nodes(mdl, edited_items)
+        #    T03e：``landed`` 收集「成功落入派生 MDL 的 edited_items 下标」，供 ③.1 计算未匹配清单。
+        landed: set[int] = set()
+        self._materialize_missing_nodes(mdl, edited_items, landed)
 
-        # ③ patch 编辑字段（item_key → MDL 节点定位）
-        for it in edited_items:
+        # ③ patch 编辑字段（item_key → MDL 节点定位）；patch 命中即为「已落入」。
+        for idx, it in enumerate(edited_items):
             key = it.get("item_key") or ""
             kind = it.get("kind") or ""
-            self._patch_mdl_node(mdl, key, kind, it)
+            if self._patch_mdl_node(mdl, key, kind, it):
+                landed.add(idx)
+
+        # ③.1 T03e（可见性补丁）：收集「已编辑但未能落入 MDL」的节点并发结构化告警。
+        #     **不改「跳过」决策**，只把此前的完全静默转为可见痕迹（尤其 kind=model）。
+        unmatched = self._collect_unmatched_edits(edited_items, landed)
+        self._log_unmatched_edits(connection_id, unmatched)
 
         # ④ 写临时目录 manifest.json
         tmp_dir = tempfile.mkdtemp(prefix=f"iqd_mdl_{connection_id}_")
@@ -975,17 +983,22 @@ class IqdAskService:
             "connection_id": connection_id,
             "mdl_dir": tmp_dir,
             "edited_count": len(edited_items),
+            # T03e：随 payload 附带未匹配清单（纯 additive，不改既有接口契约），
+            # 供未来 sync 状态 / 前端「N 项编辑未生效」消费（本轮不接前端）。
+            "unmatched_edit_count": len(unmatched),
+            "unmatched_edits": unmatched,
         }
         logger.info(
             "IQD build_mdl_from_catalog wrote manifest",
             connection_id=connection_id,
             mdl_dir=tmp_dir,
             edited_count=len(edited_items),
+            unmatched_edit_count=len(unmatched),
         )
         return tmp_dir, payload
 
     @staticmethod
-    def _patch_mdl_node(mdl: dict[str, Any], item_key: str, kind: str, it: dict[str, Any]) -> None:
+    def _patch_mdl_node(mdl: dict[str, Any], item_key: str, kind: str, it: dict[str, Any]) -> bool:
         """按 item_key→MDL 节点映射，把编辑字段（display_name/description/expression）套用到节点。
 
         映射规则（设计 §七 G7）：
@@ -997,6 +1010,11 @@ class IqdAskService:
         - ``mdl:metric:<name>``           → metrics[] where name==<name>
         - ``mdl:dimension:<name>``        → dimensions[] where name==<name>
         - ``mdl:view:<name>``             → views[] where name==<name>
+
+        Returns:
+            ``True`` 表示定位到目标节点并套用了编辑字段（该 item 已落入 MDL）；
+            ``False`` 表示未找到对应节点（该 item 未被 patch —— 可能是「未物化的新建节点」，
+            如全新建 model；由 :meth:`_collect_unmatched_edits` 汇总为可见告警）。
         """
         def _set(node: dict[str, Any]) -> None:
             if it.get("display_name") is not None:
@@ -1011,37 +1029,37 @@ class IqdAskService:
             for node in mdl.get("models", []):
                 if node.get("name") == name:
                     _set(node)
-                    return
+                    return True
         elif item_key.startswith("mdl:relationship:"):
             name = item_key[len("mdl:relationship:"):]
             for node in mdl.get("relationships", []):
                 if node.get("name") == name:
                     _set(node)
-                    return
+                    return True
         elif item_key.startswith("mdl:cube:"):
             name = item_key[len("mdl:cube:"):]
             for node in mdl.get("cubes", []):
                 if node.get("name") == name:
                     _set(node)
-                    return
+                    return True
         elif item_key.startswith("mdl:metric:"):
             name = item_key[len("mdl:metric:"):]
             for node in mdl.get("metrics", []):
                 if node.get("name") == name:
                     _set(node)
-                    return
+                    return True
         elif item_key.startswith("mdl:dimension:"):
             name = item_key[len("mdl:dimension:"):]
             for node in mdl.get("dimensions", []):
                 if node.get("name") == name:
                     _set(node)
-                    return
+                    return True
         elif item_key.startswith("mdl:view:"):
             name = item_key[len("mdl:view:"):]
             for node in mdl.get("views", []):
                 if node.get("name") == name:
                     _set(node)
-                    return
+                    return True
         elif item_key.startswith("mdl:column:") or "." in item_key:
             # <ds>.<schema>.<table>.<col> → models[name==<table>].columns[] where name==<col>
             parts = item_key.split(".")
@@ -1053,7 +1071,7 @@ class IqdAskService:
                         for column in model.get("columns", []):
                             if column.get("name") == col:
                                 _set(column)
-                                return
+                                return True
         # <cubeKey>.<measure> 形态（cubeKey=mdl:cube:<cube>）
         if item_key.startswith("mdl:cube:") and "." in item_key[len("mdl:cube:"):]:
             cube_part = item_key[len("mdl:cube:"):]
@@ -1063,7 +1081,80 @@ class IqdAskService:
                     for measure in cube.get("measures", []):
                         if measure.get("name") == measure_name:
                             _set(measure)
-                            return
+                            return True
+        return False
+
+    # ================================================================ T03e：未匹配编辑可见化
+
+    @staticmethod
+    def _collect_unmatched_edits(
+        edited_items: list[dict[str, Any]], landed: set[int]
+    ) -> list[dict[str, Any]]:
+        """收集「已编辑（``edit_revision`` 非空）但未能落入派生 MDL」的节点（T03e）。
+
+        入参 ``edited_items`` 源自 mis-iqd ``getCatalogFull`` → ``findEditedItems``，
+        **其本身即 ``edit_revision IS NOT NULL`` 的平台编辑节点**（契约见
+        ``IqdAdminService#getCatalogFull`` 的 javadoc：edited_items = edit_revision 非空的
+        平台编辑节点），故此处只需比对「是否落入 MDL」即可得到「被编辑却静默丢弃」的清单。
+
+        未落入（下标不在 ``landed`` 中）的典型成因：
+        - ``kind=model``：全新建 model 走 from-table 路径 —— **刻意不物化**（真实 MDL model
+          schema 未经 W0 实测校准，盲写可能产出非法 MDL 致 ``wren context build`` 整体失败，
+          比「该模型缺失」更糟）。本清单把它暴露出来，留待 W0 探针校准后再物化。
+        - ``kind=relationship``：非信封（历史 MDL 同步来源的裸 condition）无法还原 models。
+        - ``measure``/``dimension``：宿主 cube 缺失（如该 cube 为全新建但未成功物化）。
+        - 计算列 / 物理列：宿主 model 缺失（如宿主为全新建 model，同 ``kind=model``）。
+        - ``metric``/``dimension``/``view``：基线中不存在且无物化能力的新建节点。
+
+        Args:
+            edited_items: 平台已编辑节点列表。
+            landed: 成功落入派生 MDL 的 ``edited_items`` 下标集合。
+
+        Returns:
+            结构化未匹配清单，每项含 ``item_key`` / ``kind`` / ``parent_key`` / ``display_name``。
+        """
+        unmatched: list[dict[str, Any]] = []
+        for idx, it in enumerate(edited_items):
+            if idx in landed:
+                continue
+            if not isinstance(it, dict):
+                continue
+            unmatched.append(
+                {
+                    "item_key": it.get("item_key") or "",
+                    "kind": it.get("kind") or "",
+                    "parent_key": it.get("parent_key"),
+                    "display_name": it.get("display_name"),
+                }
+            )
+        return unmatched
+
+    @staticmethod
+    def _log_unmatched_edits(connection_id: int, unmatched: list[dict[str, Any]]) -> None:
+        """对「已编辑但未能落入 MDL」的节点发出**可见 WARNING**（T03e 可见性补丁）。
+
+        此前该情形**完全静默**：运维/开发看到「建了模型、状态也 SYNCED，但问数查不到」时
+        无从定位。本方法**不改「跳过」决策**，仅把静默丢弃转为结构化告警（含
+        ``item_key`` / ``kind`` / ``connection_id`` 及按 kind 的分组计数）。
+
+        Args:
+            connection_id: 问数连接 id。
+            unmatched: :meth:`_collect_unmatched_edits` 产出的未匹配清单（为空则不记录）。
+        """
+        if not unmatched:
+            return
+        by_kind: dict[str, int] = {}
+        for item in unmatched:
+            kind = str(item.get("kind") or "")
+            by_kind[kind] = by_kind.get(kind, 0) + 1
+        logger.warning(
+            "IQD build_mdl_from_catalog: edited nodes NOT materialized into MDL",
+            connection_id=connection_id,
+            unmatched_count=len(unmatched),
+            unmatched_by_kind=by_kind,
+            unmatched_model_count=by_kind.get("model", 0),
+            unmatched_items=unmatched,
+        )
 
     # ================================================================ T03：新建节点物化（R-3）
 
@@ -1099,7 +1190,10 @@ class IqdAskService:
         return parsed if isinstance(parsed, dict) else None
 
     def _materialize_missing_nodes(
-        self, mdl: dict[str, Any], edited_items: list[dict[str, Any]]
+        self,
+        mdl: dict[str, Any],
+        edited_items: list[dict[str, Any]],
+        landed: set[int] | None = None,
     ) -> None:
         """把建模台**新建**、但 ``mdl_raw`` 基线中不存在的节点物化进派生 MDL（T03 / R-3 补丁）。
 
@@ -1112,12 +1206,19 @@ class IqdAskService:
         本方法按 item_key 映射把缺失节点**新增**进派生 MDL，幂等（同名/同键已存在即跳过），
         且不破坏既有节点结构（models/relationships/cubes 的原有数组元素原样保留）。
 
+        T03e：新增 ``landed`` 出参，把「本方法已确保其存在于 MDL 的 ``edited_items`` 下标」
+        （含**新建**与**基线已有**两种情况）回传，供 :meth:`_collect_unmatched_edits`
+        计算「已编辑但未落入 MDL」的清单。仅收集，**不改变任何物化/跳过决策**。
+
         Args:
             mdl: 派生中的 MDL dict（**原地修改**；顶层容器已归一）。
             edited_items: 平台已编辑节点（``item_key/kind/parent_key/display_name/data_type/
                 expression/model_ref``；T03 起 ``IqdAdminService.getCatalogFull`` 会带上
                 后四项）。
+            landed: 可选出参集合，收集已落入 MDL 的 ``edited_items`` 下标（原地更新）。
         """
+        if landed is None:
+            landed = set()
         if not edited_items:
             return
 
@@ -1135,12 +1236,16 @@ class IqdAskService:
         }
 
         # ① cube 容器（先建，供 measure/dimension 挂靠）
-        for it in edited_items:
+        for idx, it in enumerate(edited_items):
             if (it.get("kind") or "") != "cube":
                 continue
             tail = self._item_key_tail(it.get("item_key"))
             name = (it.get("display_name") or "").strip() or tail
-            if not name or name in cube_by_name or (tail and tail in cube_by_name):
+            if not name:
+                continue
+            if name in cube_by_name or (tail and tail in cube_by_name):
+                # 基线已有 → 视为已落入（后续 _patch_mdl_node 负责改名）
+                landed.add(idx)
                 continue
             cube: dict[str, Any] = {"name": name, "measures": [], "dimensions": []}
             model_name = self._model_name_of(it.get("model_ref"))
@@ -1148,9 +1253,10 @@ class IqdAskService:
                 cube["baseObject"] = model_name
             cubes.append(cube)
             cube_by_name[name] = cube
+            landed.add(idx)
 
         # ② measure / dimension 子节点（按 parent_key=mdl:cube:<cube> 挂靠）
-        for it in edited_items:
+        for idx, it in enumerate(edited_items):
             kind = it.get("kind") or ""
             if kind not in ("measure", "dimension"):
                 continue
@@ -1166,6 +1272,8 @@ class IqdAskService:
                 children = []
                 cube[bucket] = children
             if any(isinstance(c, dict) and c.get("name") == name for c in children):
+                # 已存在 → 视为已落入
+                landed.add(idx)
                 continue
             child: dict[str, Any] = {"name": name}
             if it.get("expression") is not None:
@@ -1173,13 +1281,18 @@ class IqdAskService:
             if kind == "measure" and it.get("data_type"):
                 child["format"] = it["data_type"]
             children.append(child)
+            landed.add(idx)
 
         # ③ relationship（解信封 JSON 取 models/joinType/condition）
-        for it in edited_items:
+        for idx, it in enumerate(edited_items):
             if (it.get("kind") or "") != "relationship":
                 continue
             name = (it.get("display_name") or "").strip() or self._item_key_tail(it.get("item_key"))
-            if not name or name in rel_by_name:
+            if not name:
+                continue
+            if name in rel_by_name:
+                # 基线已有 → 视为已落入（后续 _patch_mdl_node 负责改名）
+                landed.add(idx)
                 continue
             payload = self._parse_relationship_payload(it.get("expression"))
             if payload is None:
@@ -1195,9 +1308,10 @@ class IqdAskService:
                 relationship["condition"] = payload["condition"]
             relationships.append(relationship)
             rel_by_name[name] = relationship
+            landed.add(idx)
 
         # ④ 计算列（item_key=calc:<model>.<col>，parent_key=mdl:model:<name>）
-        for it in edited_items:
+        for idx, it in enumerate(edited_items):
             item_key = it.get("item_key") or ""
             if not item_key.startswith("calc:"):
                 continue
@@ -1212,8 +1326,10 @@ class IqdAskService:
                 columns = []
                 model["columns"] = columns
             if any(isinstance(c, dict) and c.get("name") == name for c in columns):
+                landed.add(idx)
                 continue
             columns.append({"name": name, "expression": it.get("expression")})
+            landed.add(idx)
 
     async def _report_model_job(
         self,

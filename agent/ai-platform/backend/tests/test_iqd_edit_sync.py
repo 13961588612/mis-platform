@@ -289,6 +289,150 @@ def test_build_mdl_from_catalog_patches_existing_cube_without_duplicating():
     assert mdl["cubes"][0]["measures"][0]["name"] == "total"
 
 
+# ================================================================ T03e：「静默丢弃」→ 可见告警
+
+
+def test_build_mdl_from_catalog_flags_new_model_as_unmatched_with_warning():
+    """T03e：全新建 model（from-table 路径、基线无对应）**刻意不物化**，但必须被收集进
+    未匹配清单并发出结构化 WARNING —— 把此前的「完全静默」变为可定位痕迹。
+
+    ``edited_items`` 源自 ``getCatalogFull`` → ``findEditedItems``，本身即
+    ``edit_revision IS NOT NULL`` 的平台编辑节点，故「未落入 MDL」即「被编辑却静默丢弃」。
+    """
+    edited = [
+        {
+            "item_key": "mdl:model:customers",
+            "kind": "model",
+            "parent_key": None,
+            "display_name": "customers",
+            "data_type": None,
+            "description": None,
+            "expression": None,
+            "model_ref": None,
+        }
+    ]
+    with patch("src.agent.mis_iqd.service.logger") as mock_logger:
+        mdl_dir, payload = IqdAskService().build_mdl_from_catalog(
+            7, json.dumps(BASELINE_MDL), edited
+        )
+    mdl = _read_manifest(mdl_dir)
+
+    # 决策不变：新建 model 仍**不**被物化（真实 MDL model schema 未校准，留待 W0 探针）
+    assert "customers" not in [m["name"] for m in mdl["models"]]
+
+    # ① 被收集进未匹配清单（随 payload 回传）
+    assert payload["unmatched_edit_count"] == 1
+    assert payload["unmatched_edits"] == [
+        {
+            "item_key": "mdl:model:customers",
+            "kind": "model",
+            "parent_key": None,
+            "display_name": "customers",
+        }
+    ]
+
+    # ② 产生可见 WARNING（带 connection_id / kind / item_key）
+    assert mock_logger.warning.call_count == 1
+    _, kwargs = mock_logger.warning.call_args
+    assert kwargs["connection_id"] == 7
+    assert kwargs["unmatched_count"] == 1
+    assert kwargs["unmatched_model_count"] == 1
+    assert kwargs["unmatched_by_kind"] == {"model": 1}
+    assert kwargs["unmatched_items"][0]["item_key"] == "mdl:model:customers"
+    assert kwargs["unmatched_items"][0]["kind"] == "model"
+
+
+def test_build_mdl_from_catalog_unmatched_list_excludes_landed_items():
+    """只有「未落入」的节点才进未匹配清单：已成功物化的新建 cube 不得被误报。"""
+    edited = [
+        {
+            "item_key": "mdl:cube:margin",
+            "kind": "cube",
+            "parent_key": "mdl:model:orders",
+            "display_name": "margin",
+            "data_type": None,
+            "description": None,
+            "expression": None,
+            "model_ref": "mdl:model:orders",
+        },
+        {
+            "item_key": "mdl:model:customers",
+            "kind": "model",
+            "parent_key": None,
+            "display_name": "customers",
+            "data_type": None,
+            "description": None,
+            "expression": None,
+            "model_ref": None,
+        },
+    ]
+    mdl_dir, payload = IqdAskService().build_mdl_from_catalog(
+        1, json.dumps(BASELINE_MDL), edited
+    )
+    mdl = _read_manifest(mdl_dir)
+
+    assert "margin" in [c["name"] for c in mdl["cubes"]], "新建 cube 仍应被物化"
+    assert payload["unmatched_edit_count"] == 1
+    assert {u["kind"] for u in payload["unmatched_edits"]} == {"model"}, (
+        "已物化的 cube 不得进未匹配清单"
+    )
+    assert payload["unmatched_edits"][0]["item_key"] == "mdl:model:customers"
+
+
+def test_build_mdl_from_catalog_no_warning_when_all_edits_landed():
+    """全部编辑均已落入 MDL → 不发告警（避免噪声 / 不改变既有成功路径行为）。"""
+    edited = [
+        {
+            "item_key": "mdl:cube:revenue",
+            "kind": "cube",
+            "parent_key": "mdl:model:orders",
+            "display_name": "营收(新)",
+            "description": None,
+            "expression": None,
+            "model_ref": "mdl:model:orders",
+        }
+    ]
+    with patch("src.agent.mis_iqd.service.logger") as mock_logger:
+        mdl_dir, payload = IqdAskService().build_mdl_from_catalog(
+            1, json.dumps(BASELINE_MDL), edited
+        )
+    mdl = _read_manifest(mdl_dir)
+
+    assert mdl["cubes"][0]["name"] == "营收(新)", "既有成功路径行为不变"
+    assert payload["unmatched_edits"] == []
+    assert payload["unmatched_edit_count"] == 0
+    assert mock_logger.warning.call_count == 0
+
+
+def test_build_mdl_from_catalog_flags_relationship_without_envelope():
+    """同类静默跳过点（非信封 relationship 无法还原 models）现同样可见 —— 收集不抛异常。"""
+    edited = [
+        {
+            "item_key": "mdl:relationship:legacy",
+            "kind": "relationship",
+            "parent_key": None,
+            "display_name": "legacy",
+            "data_type": None,
+            "description": None,
+            "expression": "orders.uid = users.id",
+            "model_ref": None,
+        }
+    ]
+    with patch("src.agent.mis_iqd.service.logger") as mock_logger:
+        mdl_dir, payload = IqdAskService().build_mdl_from_catalog(
+            2, json.dumps(BASELINE_MDL), edited
+        )
+    mdl = _read_manifest(mdl_dir)
+
+    # 决策不变：仍不物化（不写非法 relationship），且不抛异常中断整个 build
+    assert "legacy" not in [r["name"] for r in mdl["relationships"]]
+    # 但可见
+    assert payload["unmatched_edit_count"] == 1
+    assert payload["unmatched_edits"][0]["kind"] == "relationship"
+    assert mock_logger.warning.call_count == 1
+    assert mock_logger.warning.call_args.kwargs["connection_id"] == 2
+
+
 # ================================================================ P0-7 trigger_model_build 回填 revision
 
 FULL_WITH_REVISION = {
