@@ -18,7 +18,7 @@ import java.util.Map;
  * （{@code loginContextHeaders()}，供 mis-iqd 侧 DataScope / 操作人校验），
  * 与既有 {@code IqdClient} 同口径。
  *
- * <h2>方法集（15）</h2>
+ * <h2>方法集（16）</h2>
  * <ul>
  *   <li><b>T02a</b>：{@code createConnection} / {@code listConnections} /
  *       {@code testConnection} / {@code createModelFromTable} / {@code validateExpression} /
@@ -29,6 +29,7 @@ import java.util.Map;
  *       {@code autoLayout}（**按设计不实现** → 抛 {@code UnsupportedOperationException}
  *       → BFF 控制器转 HTTP 501，见方法注释与 A-02）</li>
  *   <li><b>T04a</b>：{@code upsertCube}（更新既有 Cube，与 {@code createCube} 并列）</li>
+ *   <li><b>T06</b>：{@code updateConnection}（按 id 局部更新连接）</li>
  * </ul>
  *
  * <h2>错误透传（关键）</h2>
@@ -92,6 +93,26 @@ public class IqdModelingClient extends AbstractDownstreamClient {
         return block(client().post()
                 .uri("/api/v1/iqd/connections/{id}/test", connectionId)
                 .headers(loginContextHeaders())
+                .retrieve()
+                .bodyToMono(MAP_RESULT));
+    }
+
+    /**
+     * 按 id 精确更新一条既有连接（**局部更新**；T06）。{@code PUT /api/v1/iqd/connections/{id}}。
+     *
+     * <p>{@code putJson} 不接受路径变量 ⇒ <b>内联</b>
+     * {@code .uri("/api/v1/iqd/connections/{id}", id)}，与 {@link #testConnection} 写法对齐。
+     *
+     * <p>下游业务失败（<b>40900</b> 改名撞 {@code uk_iqd_connection_name} / <b>42200</b>
+     * 连接不存在或参数非法）经 {@link AbstractDownstreamClient#block} 抛
+     * {@code BusinessException(code, data)}，由 BFF 控制器透传前端（code/data 原样，不降级 50000）。
+     */
+    public Map<String, Object> updateConnection(Long id, Map<String, Object> body) {
+        return block(client().put()
+                .uri("/api/v1/iqd/connections/{id}", id)
+                .headers(loginContextHeaders())
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(body == null ? Map.of() : body)
                 .retrieve()
                 .bodyToMono(MAP_RESULT));
     }

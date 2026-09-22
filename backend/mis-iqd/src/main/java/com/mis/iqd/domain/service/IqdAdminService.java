@@ -10,6 +10,7 @@ import com.mis.iqd.api.dto.IqdAskLogVO;
 import com.mis.iqd.api.dto.IqdCatalogItemSaveRequest;
 import com.mis.iqd.api.dto.IqdCatalogItemVO;
 import com.mis.iqd.api.dto.IqdConnectionSaveRequest;
+import com.mis.iqd.api.dto.IqdConnectionUpdateRequest;
 import com.mis.iqd.api.dto.IqdConnectionVO;
 import com.mis.iqd.api.dto.IqdKnowledgeSaveRequest;
 import com.mis.iqd.api.dto.IqdKnowledgeVO;
@@ -86,6 +87,15 @@ public class IqdAdminService {
 
     private static final Logger log = LoggerFactory.getLogger(IqdAdminService.class);
     private static final String SECRET_PLACEHOLDER = "******";
+
+    /**
+     * 主连接标识（§14.5.1 A）：{@code name = 'default'} 即主连接。
+     *
+     * <p>单点常量 —— {@link #findPrimaryConnection()}（选择）与
+     * {@link #updateConnection(Long, IqdConnectionUpdateRequest)}（改名迁移日志）共用，
+     * 避免字面量 {@code "default"} 在多处漂移。
+     */
+    private static final String PRIMARY_CONNECTION_NAME = "default";
 
     private final IqdConnectionRepository connectionRepository;
     private final IqdAskLogRepository askLogRepository;
@@ -289,6 +299,146 @@ public class IqdAdminService {
         changeEventPublisher.publish("iqd.config.changed", "connection=" + entity.getId());
         log.info("IQD connection created id={} name={}", entity.getId(), entity.getName());
         return toVO(entity);
+    }
+
+    /**
+     * 按 id 精确更新一条既有连接（**局部更新**；v1.11 T06 / system-design §14.1）。
+     *
+     * <p>与 {@link #saveConnection}（主连接 upsert：目标不存在则**新建**）的区别：本方法定位方式为
+     * <b>显式路径 id</b>，目标不存在时<b>直接 42200 报错</b>（不隐式建）。
+     *
+     * <h2>有序校验链</h2>
+     * <ol>
+     *   <li>{@code id == null} → <b>42200</b>；</li>
+     *   <li>{@code findById(id)} 不存在 → <b>42200</b>（对齐建模台节点族
+     *       {@code IqdCatalogNodeService} 的「问数连接不存在」口径；<b>不用</b> 40400 —— 见 §14.1
+     *       与 {@code testConnection(Long)} 已知不一致的裁决）；</li>
+     *   <li>改名唯一：{@code newName} 非空、与原值不同、且 {@code existsByName(newName)} →
+     *       <b>40900 + data.name</b>（复用 {@link #createConnection} 的「先查后报」范式，
+     *       避免数据库抛 {@code uk_iqd_connection_name} 唯一约束异常被降级成 50000）；</li>
+     *   <li>{@code timeout_seconds <= 0} → <b>42200</b>（失败零副作用，先于任何写入）；</li>
+     *   <li>{@link #applyConnectionFields}（局部更新：{@code null} = 保留原值；{@code secret_ref}
+     *       走占位符/空白 → 保留）；</li>
+     *   <li>主连接迁移日志（§14.5.1 A）：改名使 {@code name} <b>离开</b>或<b>占用</b>
+     *       {@code 'default'} 时打结构化日志 —— <b>不做任何跨行写</b>；</li>
+     *   <li>{@code enabled} 只写<b>本行</b>（可多条同时 {@code true} 并存，§14.5）—— 无联动、无自动停用；</li>
+     *   <li>{@code save} → {@code publish("iqd.config.changed")}；</li>
+     *   <li><b>不 bump</b> {@code current_edit_revision}（连接配置不改模型，避免触发多余重建）。</li>
+     * </ol>
+     *
+     * <p><b>并发</b>：无行版本 = last-write-wins（§14.4 —— 放开多条后无跨行不变量，故无串行化对象）。
+     *
+     * @param id  连接 id
+     * @param dto 局部更新请求（字段全 {@code null} 默认）
+     * @return 更新后的连接视图（**与 {@code GET /connections} 的元素逐字段同形**，
+     *         服务层复用 {@link #toVO(IqdConnection)} ⇒ 前端可直接替换列表项）
+     */
+    @Transactional
+    public IqdConnectionVO updateConnection(Long id, IqdConnectionUpdateRequest dto) {
+        if (id == null) {
+            throw new BusinessException(42200, "connectionId 不能为空", null);
+        }
+        IqdConnectionUpdateRequest req = dto == null ? new IqdConnectionUpdateRequest() : dto;
+        IqdConnection entity = connectionRepository.findById(id)
+                .orElseThrow(() -> new BusinessException(42200, "问数连接不存在: " + id, null));
+
+        String originalName = entity.getName();
+
+        // 3. 改名唯一校验（先查后报；同值改名跳过，避免误报 40900）
+        if (req.getName() != null && !req.getName().isBlank()) {
+            String newName = req.getName().trim();
+            if (!newName.equals(originalName) && connectionRepository.existsByName(newName)) {
+                Map<String, Object> data = new LinkedHashMap<>();
+                data.put("name", newName);
+                throw new BusinessException(40900, "连接名称已存在: " + newName, data);
+            }
+        }
+
+        // 4. timeout 预校验（> 0）：先于任何写入 ⇒ 失败零副作用
+        if (req.getTimeoutSeconds() != null && req.getTimeoutSeconds() <= 0) {
+            Map<String, Object> data = new LinkedHashMap<>();
+            data.put("field", "timeout_seconds");
+            throw new BusinessException(42200, "超时秒数必须大于 0", data);
+        }
+
+        // 5. 局部更新：null = 保留原值
+        applyConnectionFields(entity, req);
+
+        // 6. 主连接迁移日志（name='default' 是主连接标识，§14.5.1 A）—— 只观测、不改其它行
+        String newName = entity.getName();
+        boolean leftPrimary = PRIMARY_CONNECTION_NAME.equals(originalName)
+                && !PRIMARY_CONNECTION_NAME.equals(newName);
+        boolean claimedPrimary = !PRIMARY_CONNECTION_NAME.equals(originalName)
+                && PRIMARY_CONNECTION_NAME.equals(newName);
+        if (leftPrimary) {
+            log.info("primary migrated by rename: id={} old=default new={}", entity.getId(), newName);
+        } else if (claimedPrimary) {
+            log.info("primary claimed by rename: id={}", entity.getId());
+        }
+
+        entity.setUpdatedAt(Instant.now());
+        // 7. 只写本行（无跨行联动、无悲观锁；enabled 可多条并存）
+        connectionRepository.save(entity);
+        // 8. 变更事件（Worker 缓存刷新 ≤10s）
+        changeEventPublisher.publish("iqd.config.changed", "connection=" + entity.getId());
+        log.info("IQD connection updated id={} name={}", entity.getId(), entity.getName());
+        // 9/10. 不 bump current_edit_revision；响应复用 toVO（同形）
+        return toVO(entity);
+    }
+
+    /**
+     * 抽取连接字段写入块（局部更新语义）—— 供 {@link #updateConnection} 使用。
+     *
+     * <p>与 {@code saveConnection} / {@code createConnection} 的写入块**刻意分开**：
+     * 后两者基于 {@link IqdConnectionSaveRequest}（带默认值，全量语义），本方法基于
+     * {@link IqdConnectionUpdateRequest}（全 {@code null} 默认，局部语义），两者 DTO 与语义均不同，
+     * 硬合并会让「未提交即保留」退化。故本方法**只被 {@code updateConnection} 调用**
+     * （§14.10 第 6 项：为压缩回归风险，不改既有两条已验证写路径）。
+     *
+     * <p>规则（§14.1）：
+     * <ul>
+     *   <li>{@code name}：非空非空白 → 写 {@code trim} 值；否则保留原名；</li>
+     *   <li>{@code base_url} / {@code project_id} / {@code default_connector}：{@code null} 保留，非空覆盖；</li>
+     *   <li>{@code auth_type}：{@code null}/空白 = 缺省（保留）；否则覆盖；</li>
+     *   <li>{@code language}：{@code null}/空白 = 缺省（保留）；否则覆盖；</li>
+     *   <li>{@code timeout_seconds}：{@code null} 保留；非空覆盖（&gt; 0 已在调用方预校验）；</li>
+     *   <li>{@code secret_ref}：{@code null} / 占位符 {@code ******} / 空白 → <b>保留</b>；
+     *       非空非占位 → 写 {@code trim} 值（与 create 逐字一致）；</li>
+     *   <li>{@code enabled}：{@code null} 保留；非空覆盖（只改本行，不联动其它）。</li>
+     * </ul>
+     *
+     * @param entity 目标连接实体（就地更新）
+     * @param dto    局部更新请求
+     */
+    private void applyConnectionFields(IqdConnection entity, IqdConnectionUpdateRequest dto) {
+        if (dto.getName() != null && !dto.getName().isBlank()) {
+            entity.setName(dto.getName().trim());
+        }
+        if (dto.getBaseUrl() != null) {
+            entity.setBaseUrl(dto.getBaseUrl());
+        }
+        if (dto.getAuthType() != null && !dto.getAuthType().isBlank()) {
+            entity.setAuthType(dto.getAuthType());
+        }
+        // 密钥提交非空且非占位符才更新（******/null/空白 保留原值）
+        if (dto.getSecretRef() != null && !dto.getSecretRef().isBlank() && !dto.isSecretPlaceholder()) {
+            entity.setSecretRef(dto.getSecretRef().trim());
+        }
+        if (dto.getProjectId() != null) {
+            entity.setProjectId(dto.getProjectId());
+        }
+        if (dto.getDefaultConnector() != null) {
+            entity.setDefaultConnector(dto.getDefaultConnector());
+        }
+        if (dto.getTimeoutSeconds() != null) {
+            entity.setTimeoutSeconds(dto.getTimeoutSeconds());
+        }
+        if (dto.getLanguage() != null && !dto.getLanguage().isBlank()) {
+            entity.setLanguage(dto.getLanguage());
+        }
+        if (dto.getEnabled() != null) {
+            entity.setEnabled(Boolean.TRUE.equals(dto.getEnabled()) ? 1 : 0);
+        }
     }
 
     /**
@@ -1842,10 +1992,19 @@ public class IqdAdminService {
     }
 
     /**
-     * 取主连接：优先 name='default'，否则取第一条 enabled=1；都没有则任意第一条。
+     * 取主连接：优先 {@code name='default'}（§14.5.1 A —— 主连接显式标识），
+     * 否则取 id 最小的 {@code enabled=1}（确定性回退），都没有则任意第一条（兜底）。
+     *
+     * <p><b>权威真值源（单一选主口径，§14.5.1 B/D）</b>：本方法是全后端「主连接」判定的
+     * 唯一权威实现 —— {@code GET /config}（{@link #getConnection()}）与内部面
+     * {@code IqdInternalController.getConnections()} 的 {@code is_primary} 计算字段
+     * **均由此处派生**，确保两侧落点恒等、无漂移。
+     *
+     * <p>可见性由 {@code private} 提升为 {@code public}，**仅为内部面跨类复用**
+     * （{@code IqdInternalController} 计算 {@code is_primary}），**判定行为一字未改**。
      */
-    private Optional<IqdConnection> findPrimaryConnection() {
-        Optional<IqdConnection> byDefault = connectionRepository.findByName("default");
+    public Optional<IqdConnection> findPrimaryConnection() {
+        Optional<IqdConnection> byDefault = connectionRepository.findByName(PRIMARY_CONNECTION_NAME);
         if (byDefault.isPresent()) {
             return byDefault;
         }

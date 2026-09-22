@@ -22,10 +22,11 @@ import java.util.Map;
 /**
  * 可视化建模台代理（BFF，v1.11 MR-S1~S4）。路径前缀 {@code /api/v1/iqd/**}。
  *
- * <h2>端点组成（19 = 15 建模台 + 4 表发现）</h2>
+ * <h2>端点组成（20 = 16 建模台 + 4 表发现）</h2>
  * <ul>
- *   <li><b>15 建模台端点</b>（转发 mis-iqd {@code /api/v1/iqd/**}，经 {@link IqdModelingClient}）：
+ *   <li><b>16 建模台端点</b>（转发 mis-iqd {@code /api/v1/iqd/**}，经 {@link IqdModelingClient}）：
  *       {@code POST /connections}、{@code GET /connections}、{@code POST /connections/{id}/test}、
+ *       {@code PUT  /connections/{id}}（T06 按 id 局部更新连接）、
  *       {@code POST /catalog/model}、{@code POST /catalog/model/from-table}、
  *       {@code POST /catalog/relationship}、{@code POST /catalog/cube}、
  *       {@code PUT  /catalog/cube}（T04a 更新既有 Cube）、
@@ -112,6 +113,25 @@ public class IqdModelingController {
     public ResponseEntity<Result<Map<String, Object>>> testConnection(
             @PathVariable Long connectionId) {
         return forward(() -> modelingClient.testConnection(connectionId));
+    }
+
+    /**
+     * 按 id 精确更新一条既有连接（**局部更新**；T06）。{@code PUT /connections/{connectionId}}。
+     *
+     * <p>复用 {@link #forward(DownstreamCall)}：成功 → HTTP 200 + data；下游业务失败
+     * （<b>40900</b> 改名撞唯一约束 / <b>42200</b> 连接不存在或参数非法）→ **HTTP 200 +
+     * {@code body.code} + {@code data}** 原样透传前端（不降级 50000）。
+     *
+     * <p>权限：BFF 侧由注册表（V92 登记 sys_api 92800 → menu 92632，权限码
+     * {@code iqd:modeling:edit}）裁定，本控制器**不写** {@code @PreAuthorize}（与
+     * {@link #createConnection} 同口径）；下游 mis-iqd 再按 {@code iqd:modeling:edit} 兜底（双闸）。
+     * 注意与同卡片的 {@code iqd:mcp:manage} 是**两个码**，勿混淆。
+     */
+    @PutMapping("/connections/{connectionId}")
+    public ResponseEntity<Result<Map<String, Object>>> updateConnection(
+            @PathVariable Long connectionId,
+            @RequestBody Map<String, Object> body) {
+        return forward(() -> modelingClient.updateConnection(connectionId, body));
     }
 
     /**

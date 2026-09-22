@@ -4,6 +4,7 @@ import com.mis.common.core.exception.BusinessException;
 import com.mis.common.core.result.Result;
 import com.mis.common.web.trace.TraceContext;
 import com.mis.iqd.api.dto.IqdConnectionSaveRequest;
+import com.mis.iqd.api.dto.IqdConnectionUpdateRequest;
 import com.mis.iqd.api.dto.IqdConnectionVO;
 import com.mis.iqd.api.dto.IqdDependents;
 import com.mis.iqd.api.dto.IqdModelingCreateResponse;
@@ -30,11 +31,12 @@ import java.util.Map;
 /**
  * 可视化建模台管理面（v1.11 MR-S2 / MR-S1；路径前缀 {@code /api/v1/iqd/**}）。
  *
- * <h2>端点状态总览（15 个）</h2>
+ * <h2>端点状态总览（16 个）</h2>
  * <table border="1">
  *   <caption>实现状态</caption>
  *   <tr><th>端点</th><th>状态</th><th>服务方法</th></tr>
  *   <tr><td>{@code POST /connections}</td><td>T02a 已实现</td><td>{@link IqdAdminService#createConnection}</td></tr>
+ *   <tr><td>{@code PUT  /connections/{id}}</td><td><b>T06 已实现</b></td><td>{@link IqdAdminService#updateConnection}</td></tr>
  *   <tr><td>{@code GET  /connections}</td><td>T02a 已实现</td><td>{@link IqdAdminService#listConnections}</td></tr>
  *   <tr><td>{@code POST /connections/{id}/test}</td><td>T02a 已实现</td><td>{@link IqdAdminService#testConnection(Long)}</td></tr>
  *   <tr><td>{@code POST /catalog/model/from-table}</td><td>T02a 已实现</td><td>{@link IqdCatalogNodeService#createModelFromTable}</td></tr>
@@ -109,6 +111,34 @@ public class IqdModelingController {
     @PreAuthorize("hasAuthority('iqd:modeling:edit')")
     public Result<IqdConnectionVO> createConnection(@RequestBody Map<String, Object> body) {
         return Result.ok(adminService.createConnection(toConnectionDto(body)));
+    }
+
+    /**
+     * 按 id 精确更新一条既有连接（**局部更新**；T06）。{@code PUT /api/v1/iqd/connections/{connectionId}}。
+     *
+     * <p>权限码与 {@link #createConnection}（{@code POST /connections}）**同码**
+     * {@code iqd:modeling:edit} —— 同属「建模台编辑连接配置」；<b>不可</b>照抄同卡片上
+     * {@code ConnectionWizard} 的 {@code iqd:mcp:manage}（进程操作），否则前端放行、后端 40300。
+     *
+     * <p>入参 wire 用 {@code Map}（与 {@code POST /connections} 同口径避开
+     * {@code base_url}/camel 双 Jackson 路径），但取键用 <b>{@code containsKey}</b> 判定「是否提交」
+     * （见 {@link #toConnectionUpdateDto}），未提交的键保持 {@code null} ⇒ 服务层「null = 保留原值」。
+     *
+     * <p>⚠️ <b>不重复映射</b> {@code GET /catalog/sync-status}（已由 {@link IqdController} 提供）——
+     * 重复映射会让 Spring 启动因 <b>Ambiguous mapping</b> 失败。
+     *
+     * @param connectionId 连接 id（路径变量）
+     * @param body         局部更新字段（缺省字段保留原值）：{@code {name?, base_url?, auth_type?,
+     *                     secret_ref?, project_id?, default_connector?, timeout_seconds?, language?,
+     *                     enabled?}}；{@code secret_ref} 留空/{@code ******} = 保留原值
+     * @return 更新后的连接视图（与 {@code GET /connections} 元素逐字段同形；凭证恒 {@code ******}）
+     */
+    @PutMapping("/connections/{connectionId}")
+    @PreAuthorize("hasAuthority('iqd:modeling:edit')")
+    public Result<IqdConnectionVO> updateConnection(
+            @PathVariable Long connectionId,
+            @RequestBody Map<String, Object> body) {
+        return Result.ok(adminService.updateConnection(connectionId, toConnectionUpdateDto(body)));
     }
 
     /**
@@ -416,6 +446,59 @@ public class IqdModelingController {
             dto.setMdlWritebackEnabled(toBoolean(writeback));
         }
         return dto;
+    }
+
+    /**
+     * wire Map → {@link IqdConnectionUpdateRequest}（**局部更新**：仅填充显式提交的键，缺省即 {@code null}）。
+     *
+     * <p>与 {@link #toConnectionDto}（create：snake/camel 兜底 + DTO 默认值）的关键区别：本方法用
+     * {@link #hasAny} 判定「是否提交」，<b>未提交的键保持 {@code null}</b> ⇒ 服务层
+     * {@code IqdAdminService#applyConnectionFields} 按「{@code null} = 保留原值」处理
+     * （这是 §14.1「局部更新」裁决的落点：新 DTO 无 Java 默认值，故「只改个名」不会顺带重置超时/认证）。
+     *
+     * <p>同时支持 snake_case 与 camelCase 双写法（提交了任一即视为已提交）。
+     */
+    private static IqdConnectionUpdateRequest toConnectionUpdateDto(Map<String, Object> body) {
+        Map<String, Object> b = body == null ? Map.of() : body;
+        IqdConnectionUpdateRequest dto = new IqdConnectionUpdateRequest();
+        if (hasAny(b, "name")) {
+            dto.setName(str(first(b, "name")));
+        }
+        if (hasAny(b, "base_url", "baseUrl")) {
+            dto.setBaseUrl(str(first(b, "base_url", "baseUrl")));
+        }
+        if (hasAny(b, "auth_type", "authType")) {
+            dto.setAuthType(str(first(b, "auth_type", "authType")));
+        }
+        if (hasAny(b, "secret_ref", "secretRef")) {
+            dto.setSecretRef(str(first(b, "secret_ref", "secretRef")));
+        }
+        if (hasAny(b, "project_id", "projectId")) {
+            dto.setProjectId(str(first(b, "project_id", "projectId")));
+        }
+        if (hasAny(b, "default_connector", "defaultConnector")) {
+            dto.setDefaultConnector(str(first(b, "default_connector", "defaultConnector")));
+        }
+        if (hasAny(b, "timeout_seconds", "timeoutSeconds")) {
+            dto.setTimeoutSeconds(toInt(first(b, "timeout_seconds", "timeoutSeconds")));
+        }
+        if (hasAny(b, "language")) {
+            dto.setLanguage(str(first(b, "language")));
+        }
+        if (hasAny(b, "enabled")) {
+            dto.setEnabled(toBoolean(first(b, "enabled")));
+        }
+        return dto;
+    }
+
+    /** 是否提交了任一候选键（局部更新的「已提交」判定；对 null 值同样视为已提交）。 */
+    private static boolean hasAny(Map<String, Object> body, String... keys) {
+        for (String k : keys) {
+            if (body.containsKey(k)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /** 取第一个非 null 键值（支持 snake/camel 双写法）。 */
