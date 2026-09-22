@@ -3,7 +3,7 @@
 ## 启动与测试（黄金知识）
 - 一键集成栈 `scripts/start-integration-stack.ps1`。主前端 `frontend/mis-admin-web`：`npm run dev`→:5173，proxy `/api`→ mis-gateway:8080（非 BFF 8081），代码用相对 `/api/v1/**`。
 - BFF `mis-admin-bff` :8081，聚合 mis-iam:8102/mis-org:8103/mis-system:8105；本地 `.\mvn.ps1 spring-boot:run -pl mis-admin-bff`。
-- 前端门禁：无 vitest/jest，唯一 `npm run typecheck`（tsc --noEmit strict+noUnusedLocals）；eslint 存量 `arch/no-cross-feature` 11 error 集中在 `features/ai/context/form-fill-bridge.tsx`+`features/system/`。
+- 前端门禁：**vitest 已配置**（`npm run test` = `vitest run`，`vitest ^2.1.0` 在 HEAD 即存在——2026-09-22 实测修正，旧记录「无 vitest/jest」有误）；typecheck `npm run typecheck`（tsc --noEmit strict+noUnusedLocals）；eslint 存量 `arch/no-cross-feature` 11 error 集中在 `features/ai/context/form-fill-bridge.tsx`+`features/system/`。
 - Java 需 JDK17(`D:\software\jdk-17.0.2`)。Maven 直调坏（Git Bash 把 MAVEN_HOME 解析成 Unix 路径→classworlds ClassNotFoundException）。正确启动器：
   `JH=D:/software/jdk-17.0.2 MV=D:/software/apache-maven-3.9.16; "$JH/bin/java" -classpath "$MV/boot/plexus-classworlds-2.11.0.jar" "-Dmaven.home=$MV" "-Dclassworlds.conf=$MV/bin/m2.conf" "-Dmaven.multiModuleProjectDirectory=D:/code/mis-platform/backend" org.codehaus.plexus.classworlds.launcher.Launcher <args>`
 - Python 测试在 `agent/ai-platform/backend`(pytest)。
@@ -44,7 +44,19 @@
 - **命名**：项目 `mis-iqd`（类似 mis_kb）；表前缀 `iqd_*`（13 张，落 **mis_platform** 库，Java 侧 `backend/mis-iqd` 模块 + Flyway `V71__iqd_schema.sql`）；API `/api/v1/iqd/**`；权限码 `iqd:*`；前端 `features/agent/iqd`；Worker `mis_iqd`（IqdConfigClient 经 `/internal/v1/iqd/**` 消费，**不直连库**，缓存不可得 fail-closed 45204）；**对接外部 WrenAI 保留 wren**（命令/配置键/PyPI wrenai）。
 - **权限双闸门**：BFF `iqd:*` 功能码 + Worker 表级 ACL 二次裁定（fail-closed）+ 字段脱敏（masking.py 唯一出口）；行级范围由**维度注册表 `iqd_row_scope_dimension` 驱动**（一期种子 dept + store 双维度，一表可多维度 AND；dept 走 dept_path 前缀 PATH_PREFIX、store 一期 ENUM≤500）。
 - **决策固化**：ADR-019（落 ai_platform）已替代 → **ADR-020（落 mis_platform，对齐 mis_kb 范式）**；A11 行级本期、A12 物化 dept_path、A13 编码不统一→映射 X + 每库一张 + 中心每日同步。
-- 规划文档：`docs/ai-fusion/wrenai/`（prd/architecture v1.9/tasks v1.9/deploy-iqd/README/两张 mermaid）。
+- 规划文档：`docs/ai-fusion/wrenai/`（prd / architecture / tasks / deploy-iqd / README / 多张 mermaid）。
+
+## 建模台增量 v1.11（2026-09-22 拍板，architecture.md 已合订）
+- **定位**：wren-ui 级前端可视化建模台 = 「编辑体验的前端升级」，**不新增写路径**。平台自建页面（**非 iframe 嵌 wren-ui**；A3「wren-ui 是否随包」仅影响 DBA 兜底）。三栏（模型树 + 拖拽 ER 画布 + 属性面板）+ 5 步向导。
+- **核心不变量**：一切编辑仍落 `iqd_catalog_item`（真值）→ 派生 MDL（视图）→ `wren context build` → memory index → MCP 就绪门禁。**catalog 是真值，MDL 是派生产物，单向**。
+- **Q1–Q8 裁决**：Q1 编辑权威闭环（不直写 MDL）/ Q2 迁 `features/agent/ai/iqd`→`features/agent/iqd` / Q3 `@xyflow/react@^12.3.0` / Q4 CodeMirror 6 / Q5 TanStack Query 服务端态 + zustand 仅 UI 态（画布派生不持第二份真值）/ Q6 独立 `iqd_model_layout` JSONB（不动 V71）/ Q7 ≤200 节点 60fps / Q8 multiconn T1 硬前置 + 单连接降级。
+- **规模**：5 任务（T01–T05）/ 3 阶段 M1–M3 / **46 人日 ≈ 9.2 周**；§10 章节在 `architecture.md` line 2362–2482（子节 10.1–10.9）。
+- 5 份增量文档：`mis-iqd-modeling-{prd,system-design,tasks}.md` + `mis-iqd-modeling-{class,sequence}.mermaid`。
+
+### ⚠️ 文档版本号体系（踩坑，务必遵守）
+- **architecture.md 存在双 v1.10 历史**：line 6 的 **v1.10 =「样本对方言转化 + 试运行增量」（2026-08-22）**，已被 6 文档 / 40+ 处引用（tasks.md / 前端 `lib/api/iqd.ts` + `iqd-enhance-page.tsx` / Java `IqdAdminService` + `IqdSqlPair`），**不可改号**；2026-09-22 建模台因此定为 **v1.11（基线 v1.10）**。
+- **判别口诀**：涉样本（`sql_pairs` / `source_dialect` / `native_sql` / `wren_sql` / translate / trial / sqlglot）→ v1.10；涉建模台（画布 / Q1–Q8 / 46 人日 / @xyflow）→ v1.11。
+- **章节号**：architecture.md 章节为 §0–§9（无 §10），建模台章节编 **§10**（位于 §9 关联文档之后）。**派工引用既有文档章节号前必须先 grep 核实，勿凭记忆**（本次 brief 误写 §11/§3.3/§10/§12 四处，均由架构师纠偏）。
 
 ## 主理人角色铁律
 - SOP 完整流程须 TeamCreate + 派 software-engineer/software-qa-engineer 子 Agent（name=subagent_type=Agent ID）；BugFix/快速模式可跳 PRD/架构。
