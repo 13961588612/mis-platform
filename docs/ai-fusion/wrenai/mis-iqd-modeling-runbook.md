@@ -32,7 +32,7 @@
 | 域服务 | `backend/mis-iqd` | 28 文件 | 重新构建部署 |
 | BFF | `backend/mis-admin-bff` | 8 文件 | 重新构建部署 |
 | AI 平台 | `agent/ai-platform/backend` | 7 文件（`iqd_config_client.py` / `discovery_service.py` / `service.py` / `iqd_discovery.py` / `main.py` + 2 测试） | 重新部署 |
-| 前端 | `frontend/mis-admin-web` | 95 文件 + `package.json`/`pnpm-lock.yaml`（7 新依赖：`@xyflow/react`、CodeMirror 6 ×5、`@dagrejs/dagre`） | **`pnpm install`**（⚠️ 不是 `npm install`）+ `npm run build` + 部署 |
+| 前端 | `frontend/mis-admin-web` | 95 文件 + `package.json`/`pnpm-lock.yaml`（7 新依赖：`@xyflow/react`、CodeMirror 6 ×5、`@dagrejs/dagre`） | **依赖安装必须 `pnpm install`**（⚠️ 不是 `npm install`：本仓 pnpm 布局会报 `Cannot read properties of null`）；构建/测试 `npm run build` / `npm run typecheck` / `npm run test` 走 package.json scripts，可正常用 → 再部署 |
 | **`wren-mcp-agent`** | `agent/ai-platform/deploy/wrenai/wren-mcp-agent/` | **零改动** | **不更新**；仅确认已部署 |
 
 **`wren-mcp-agent` 结论：本次【不需要更新】。**
@@ -143,6 +143,41 @@ curl -s "<AI_PLATFORM_HOST>/api/v1/iqd/connections" -H "Authorization: Bearer <M
 | 连接**名称空** / 入参非法 | **42200** | 向导步骤 1 必填项（HTTP 422） |
 | MCP 不可达 / profile 未注入 | **50201**（HTTP 502） | 核对 (a) profile 与 wren-mcp-agent 9100/9101 可达性；见 §7 |
 | 未开写回 | **40300** | 该连接未启用写回（按连接灰度） |
+
+#### (f) 环境变量与外部依赖
+
+> 建连接 / 问数除「**profile + agent 可达**」外，另有三类**外部依赖**需前置就绪；缺失**不会在向导阶段报错**，而会在 **build / memory index / 问数** 段暴露。与 verify-checklist §1 对应。
+
+**① ai-platform 侧 env（**跨机联调必须**）**
+
+| env | 说明 |
+|---|---|
+| `WREN_AGENT_ENDPOINT` | wren 机控制面基址，如 `http://<WREN_HOST>:9100`。**非空 = 启用跨机器部署**（为空则退回本地 Plan A 子进程）。依据 `agent/ai-platform/backend/src/adapters/wren_mcp_agent_client.py:65`（「控制面基址取 `WREN_AGENT_ENDPOINT`」）。 |
+| `WREN_AGENT_TOKEN` | bearer，须与 wren 机 `WREN_AGENT_TOKEN` **一致**。 |
+
+> ⚠️ 两 env 未配 → 跨机场景 `mcp_host` 恒空（走了本地 Plan A）。路由判定 `WrenMcpAgentClient.enabled == (WREN_AGENT_ENDPOINT 非空)`。
+
+**② WrenAI 侧 LLM / embedding（memory index / 问数强依赖）**
+
+- `DEEPSEEK_API_KEY`（或所配 LLM provider 的 key）须在 **wren 进程 env** 可见。
+- embedding 模型须**离线可用**：内网无外网时需预下载 `WREN_EMBEDDING_MODEL`（默认 `paraphrase-multilingual-MiniLM-L12-v2`，中文推荐 `BAAI/bge-small-zh-v1.5`）。
+- **依赖链：build → memory index → 问数**——任一缺失 → 流水线 **「记忆索引」段**失败、问数无召回。详见 `wrenai-ops-runbook.md §1.4.3 / §1.4.4`。
+
+**③ 业务库网络可达**
+
+- profile 的 `--host` 业务 PG 必须**从 wren 机可连**（防火墙 / 端口放行）——这是 profile 生效（进而 `mcp_status=ready`）的前提。
+- 连不通 → 注入 profile 后仍会 **50201**。
+
+```bash
+# —— wren 机：LLM / embedding / 安全策略 / 网络 一次核验 ——
+systemctl show wren --property=Environment 2>/dev/null | grep -Ei 'DEEPSEEK|EMBEDDING' || true
+cat ~/.wren/config.json 2>/dev/null | grep -Ei 'strict_mode|denied_functions' || echo '(默认 strict_mode=false / denied_functions=[])'
+nc -vz <BIZ_PG_HOST> 5432
+# —— ai-platform 机：agent 通道 env ——
+systemctl show ai-platform --property=Environment 2>/dev/null | grep -Ei 'WREN_AGENT_(ENDPOINT|TOKEN)' || true
+```
+
+> **`~/.wren/config.json` 安全策略**：`strict_mode`（`true` 时查询表须在 MDL 中声明）/ `denied_functions`（禁用的危险 SQL 函数）——**影响问数安全边界**，联调前建议确认；默认 `strict_mode=false`、`denied_functions=[]`。详见 `wrenai-ops-runbook.md §1.4.5`。
 
 ---
 

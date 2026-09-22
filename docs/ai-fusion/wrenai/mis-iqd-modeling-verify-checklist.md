@@ -39,11 +39,26 @@
 ## 1. 全局前置条件（真机，全部项共用）
 
 - [ ] **WrenAI** 可用：`wren --version` = 0.13.3；`wren serve mcp` 在 PATH；每连接的 wren project 目录（`/var/lib/mis-iqd/wren-projects/<connId>`）就绪（见 runbook §1.5）。
+- [ ] **WrenAI 侧 LLM / embedding 配置**（**memory index 与问数强依赖**）：`DEEPSEEK_API_KEY`（或所配 LLM provider 的 key）须在 **wren 进程 env** 可见；embedding 模型须**离线可用**（内网无外网时需预下载 `WREN_EMBEDDING_MODEL`，默认 `paraphrase-multilingual-MiniLM-L12-v2`，中文推荐 `BAAI/bge-small-zh-v1.5`）。**依赖链：build → memory index → 问数**——任一缺失，发布流水线会在 **「记忆索引」段**失败，问数无召回。
+  ```bash
+  # 在 wren 机：profile debug 不展示 LLM key，需查 systemd 单元或进程 environ
+  systemctl show wren --property=Environment 2>/dev/null | grep -Ei 'DEEPSEEK|EMBEDDING' \
+    || grep -aE 'DEEPSEEK_API_KEY|WREN_EMBEDDING_MODEL' \
+         "/proc/$(pgrep -f 'wren serve' | head -1)/environ" | tr '\0' '\n'
+  ```
+  > 失败征兆：流水线「记忆索引」段红 / `iqd_connection.index_status` 异常 / 首次 `wren memory index` 拉模型超时（内网无外网）。详见 `wrenai-ops-runbook.md §1.4.3 / §1.4.4`。
 - [ ] **业务库**：待建模的连接指向一个**真正含数据**的业务 PG（非 `mis_platform`）。sample schema 建议 `public`，含 `orders` / `customers` / `stores` 三表（M-G1 最少 3 张）。
+- [ ] **业务库从 wren 机网络可达**（profile 能否生效的前提）：profile 的 `--host` 业务 PG 必须**从 wren 机可连**（防火墙 / 端口放行，含业务 PG 端口）。**在 wren 机**验证：
+  ```bash
+  # <BIZ_PG_HOST> 同下方 DBA profile 命令；凭证同 profile 的 ${ENV:IQD_DB_PASSWORD}
+  nc -vz <BIZ_PG_HOST> 5432
+  PGPASSWORD="$IQD_DB_PASSWORD" psql -h <BIZ_PG_HOST> -U <db_user> -d <biz_db> -c '\dt public.*'
+  ```
+  > 连不通 → profile 注入后仍会 **50201**（MCP / 连接不可达）；核对「wren 机源侧 → 业务 PG」的防火墙放行（与 §1 末 `wren-mcp-agent` 项的放行思路一致）。
 - [ ] **mis_platform 库**：Flyway 已跑到 **V91**（`V87~V91` 建模台增量已落；**V91 修 F-1**：`sql-pairs/translate` 端点 PK 冲突 → **必须执行**，否则该端点仍 40300；`SELECT max(version) FROM flyway_schema_history`）。
 - [ ] **后端**：mis-iqd / mis-admin-bff / ai-platform（含 `agent/mis_iqd` Worker）均已起；`MIS_API_PERMISSION_DENY_UNMAPPED=true`（默认，见 `application.yml:98`）。
 - [ ] **登录态**：`<MIS_JWT>` 属于 **role_id=1**（内置租户管理员，V87~V90 已授予 `iqd:modeling:view/edit/publish` + `iqd:mcp:manage`）。
-- [ ] **前端**：`npm run build` 产物已部署，访问 `/iqd/modeling` 侧栏可见「可视化建模台」（Workflow 图标）。
+- [ ] **前端**：**依赖安装必须 `pnpm install`**（本仓 `node_modules` 为 pnpm 布局 + `pnpm-lock.yaml`，`npm install` 会报 `Cannot read properties of null`）；构建走 `npm run build`（`npm run typecheck` / `npm run test` 同为 package.json scripts，可正常用）→ 产物已部署，访问 `/iqd/modeling` 侧栏可见「可视化建模台」（Workflow 图标）。
 - [ ] **DBA 侧：数据源 profile 注册**（**在 wren 机执行**；**凭证只落主机**，平台既不代敲也不经手明文——架构红线）。命令形态：
   ```bash
   # ① 注册业务库 profile（凭证经 ${ENV} 占位；明文只进主机 ~/.wren/.env 或 systemd Environment=）
@@ -58,6 +73,19 @@
   grep -i password ~/.wren/profiles.yml     # 期望看到 ${ENV:IQD_DB_PASSWORD}，无明文
   ```
   产出 `<profile_name>` 供向导（§3.1 步骤 2，认证方式 `none` = profile 注入）关联。归属与边界见 runbook §1.5。
+- [ ] **「一期仅一条 `enabled=true`」业务约定**（**业务约定，非 DB 硬约束**）：`iqd_connection` 一期业务上**仅一条启用**。
+  - **依据**：`architecture.md:882`（`iqd_connection` 行备注「UK `(name)`；**一期业务上仅一条 `enabled=true`**」）；实体注释 `IqdConnection.java:16` 与仓储 `IqdConnectionRepository.java:20` 同述。**DB 层实际只有** `CONSTRAINT uk_iqd_connection_name UNIQUE (name)`（`V71__iqd_schema.sql:28`）——**`enabled` 无唯一约束**。
+  - **联调影响**：首次接入时若库里**已有** `enabled=true` 的连接，新建启用可能出现**「两条启用」的非法态**（接口不报错，但语义违规）。
+  - **正确做法**：**先把既有连接置 `false`，再启用新连接**——走既有问数配置页（`PUT /api/v1/iqd/config`，单条 upsert，`IqdAdminService.saveConnection` 按 dto 写 `enabled`）。⚠️ **无** `PUT /iqd/connections/{id}`（多连接接口只有 `POST/GET /connections`、`POST /connections/{id}/test`）。
+  ```bash
+  # ① 查当前启用态（真机 PG）
+  PGPASSWORD=<pw> psql -h <PG> -U <user> -d mis_platform -c \
+   "SELECT id,name,enabled FROM iqd_connection WHERE enabled=1 ORDER BY id;"
+  # ② 若有旧启用连接：先置 false（upsert 主连接），再走向导启用新连接
+  curl -s -X PUT "<AI_PLATFORM_HOST>/api/v1/iqd/config" \
+    -H "Authorization: Bearer <MIS_JWT>" -H "Content-Type: application/json" \
+    -d '{"name":"<旧连接名>","enabled":false}'
+  ```
 - [ ] **`wren-mcp-agent` 已部署运行**（控制面 **9100** / 数据面 **9101** 可达；V89 新增的 6 条 MCP 启停端点**依赖本 Agent**，未部署则 `/mcp/enable` 会失败）：
   ```bash
   # wren 机本机
@@ -66,6 +94,22 @@
   # ai-platform 机（跨机；需放行 ai-platform 源 IP → 9100/9101）
   curl -sf -H "Authorization: Bearer ${WREN_AGENT_TOKEN}" "http://<WREN_HOST>:9100/internal/v1/wren-mcp/health"
   ```
+- [ ] **ai-platform 的两个环境变量**（**跨机联调必须配**）：`WREN_AGENT_ENDPOINT`（形如 `http://<WREN_HOST>:9100`）与 `WREN_AGENT_TOKEN`（须与 wren 机一致）。
+  - **依据**：`agent/ai-platform/backend/src/adapters/wren_mcp_agent_client.py:65` —— **「控制面基址取 `WREN_AGENT_ENDPOINT`」**；**`WREN_AGENT_ENDPOINT` 非空 = 启用跨机器部署**（为空退回本地 Plan A 子进程），路由判定 `WrenMcpAgentClient.enabled == (WREN_AGENT_ENDPOINT 非空)`。
+  - ⚠️ 上文只校验了 9100/9101 **可达**；**这两个 env 未配则跨机场景 `mcp_host` 恒空**（实际走了本地 Plan A）。
+  ```bash
+  # 在 ai-platform 机确认两 env 已注入
+  systemctl show ai-platform --property=Environment 2>/dev/null | grep -Ei 'WREN_AGENT_(ENDPOINT|TOKEN)' \
+    || grep -aE 'WREN_AGENT_(ENDPOINT|TOKEN)' \
+         "/proc/$(pgrep -f 'uvicorn|ai-platform' | head -1)/environ" | tr '\0' '\n'
+  ```
+- [ ] **`~/.wren/config.json` 安全策略**（可简短）：确认 `strict_mode` / `denied_functions` 等默认值——**影响问数安全边界**。
+  ```bash
+  # 在 wren 机
+  cat ~/.wren/config.json 2>/dev/null | grep -Ei 'strict_mode|denied_functions' \
+    || echo '（无自定义：用默认 strict_mode=false / denied_functions=[]）'
+  ```
+  > 默认 `strict_mode=false`（`true` 时查询表须在 MDL 中声明）、`denied_functions=[]`（禁用的危险 SQL 函数）。联调前建议按安全基线确认。详见 `wrenai-ops-runbook.md §1.4.5`。
 
 ---
 
@@ -212,6 +256,7 @@
          -H "Authorization: Bearer <MIS_JWT>"
        ```
      - 校验：**每连接 MCP 状态卡应显示 `mcp_status=ready`**（`GET /api/v1/iqd/connections` 核对）。
+     - ⚠️ **注意（防「两条 `enabled=true`」）**：`iqd_connection` **业务上仅一条启用**（依据 `architecture.md:882`；⚠️ `enabled` **无 DB 唯一约束**，故不是硬约束）。若库里**已有旧启用连接**，**须先将其置 `false` 再建/启用新连接**，否则产生「两条启用」非法态（接口不报错、语义违规）。作废旧连接走既有问数配置页（`PUT /api/v1/iqd/config`，单条 upsert）；**无** `PUT /iqd/connections/{id}`。查当前启用态与置 false 的命令见 §1「一期仅一条 `enabled=true`」项。
   3. `/iqd/modeling` → 左树「表发现导入」→ 选 schema → 勾 3 张表 → 导入。
   4. `curl` 校连接与发现：`GET <AI_PLATFORM_HOST>/api/v1/iqd/discovery/schemas?connectionId=<CONN_ID>`（应 200，非 40300/502）。
   5. 双击一张表（或左树「生成模型」）→ 生成 1 个 model → 画布出现节点卡。
