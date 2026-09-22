@@ -8,6 +8,10 @@
   `JH=D:/software/jdk-17.0.2 MV=D:/software/apache-maven-3.9.16; "$JH/bin/java" -classpath "$MV/boot/plexus-classworlds-2.11.0.jar" "-Dmaven.home=$MV" "-Dclassworlds.conf=$MV/bin/m2.conf" "-Dmaven.multiModuleProjectDirectory=D:/code/mis-platform/backend" org.codehaus.plexus.classworlds.launcher.Launcher <args>`
 - Python 测试在 `agent/ai-platform/backend`(pytest)。
 - ⚠️ Maven `-pl X -am test -Dtest=Y` **必追加** `-Dsurefire.failIfNoSpecifiedTests=false`：否则 `-am` 把 `-Dtest` 带到上游模块(如 mis-common-core 无匹配用例)直接 `BUILD FAILURE`("No tests matching pattern")，**根本走不到目标模块**，掩盖真实编译失败/测试 ERROR。`-pl X -am test`(无 -Dtest)全模块跑才能暴露「构造器签名漂移打断整模块 testCompile」类问题。
+- ⚠️ **前端依赖必须用 `pnpm add`，`npm install` 必崩**（2026-09-22 实测）：本仓 `node_modules` 是 pnpm 布局，`npm` 的 `@npmcli/arborist` 处理 `node_modules/.pnpm/...` 会报 `Cannot read properties of null (reading 'matches')`。施工单/文档里写 `npm install` 是错的。
+- ⚠️ **本沙箱下 Java surefire 的 forked JVM 会被杀** → 单测加 `-Dsurefire.forkCount=0`（进程内执行）绕过。**仅本机绕行，勿进 CI 配置**。前端 vitest 偶发「空日志失败」，重跑即过（非代码问题）。
+- ⚠️ **git 提交陷阱**：仓库里若有 `git mv` 过（重命名会自动暂存进索引），`git commit` 会**带上这些已暂存的 rename**，污染分组提交。**提交前先看 `git diff --cached --name-only`**。需要重新分组时用 `git reset --soft HEAD~1`（不动工作区）+ `git restore --staged <path>`。分组只能按**路径不重叠**切（docs / backend+agent / frontend 可行；按「任务批次」切不可行——文件是先建后改，签出中间态要重建历史）。git 用系统版 `"/c/Program Files/Git/cmd/git.exe"`（PortableGit 的 push 是坏的）。
+- ℹ️ `.workbuddy/` 在 `.gitignore` 中，但 `memory/MEMORY.md` 已被跟踪（历史提交过），故仍可提交。
 
 ## 部署边界（2026-07-24 锁）
 - AI 融合 `deploy/docker-compose.ai.yml` 叠加主栈；共享 PG 库 `ai_platform`(角色 aiplatform,Alembic)、Redis db2 前缀 `aip:`。边缘 nginx `deploy/nginx/edge.conf` 反代 `/api`+`/ws`→ai-platform-gateway:3100。
