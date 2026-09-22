@@ -1,0 +1,214 @@
+classDiagram
+    direction TB
+
+    %% ========== 前端 zustand UI 态 ==========
+    class ModelingStore {
+      +string connectionId
+      +string selectedItemKey | null
+      +Set~string~ selectedNodeIds
+      +Viewport viewport
+      +DrawerState drawer: 'closed' | 'model' | 'cube' | 'calculatedColumn'
+      +Map~string,ItemDraft~ dirtyDrafts
+      +boolean isPublishing
+      +string wizardStep | null
+      +string[] wizardHistory
+      +setSelected(key) (ke: string) void
+      +openDrawer(kind, key) (k: DrawerKind, ke: string) void
+      +closeDrawer() void
+      +markDirty(itemKey, draft) void
+      +clearDirty(itemKey) void
+      +pushWizardStep(step) void
+      +popWizardStep() string | null
+      +reset() void
+    }
+
+    class ItemDraft {
+      +string itemKey
+      +string kind
+      +Map baseValues
+      +Map draftValues
+      +string baseRevision
+      +string idempotencyKey
+      +isDirty() boolean
+      +toPayload() Map
+    }
+
+    %% ========== 前端 TanStack Query keys ==========
+    class IqdQueryKeys {
+      +catalogs(connectionId) QueryKey
+      +catalogNode(connectionId, itemKey) QueryKey
+      +syncStatus(connectionId) QueryKey
+      +dependencies(connectionId, itemKey) QueryKey
+      +modelLayout(connectionId) QueryKey
+      +discoverySchemas(connectionId) QueryKey
+      +discoveryTables(connectionId, schema, page) QueryKey
+      +discoveryColumns(connectionId, schema, table) QueryKey
+      +connections() QueryKey
+      +validateExpression(connectionId, modelKey, expr) QueryKey
+    }
+
+    %% ========== 前端 wire 类型（建模台增量）============
+    class CreateModelFromTableRequest {
+      +string connectionId
+      +SourceTable sourceTable
+      +string modelItemKey
+      +string baseRevision
+      +string idempotencyKey
+      +string | null refSql
+    }
+    class CreateRelationshipRequest {
+      +string connectionId
+      +string itemKey
+      +JoinType joinType: inner|left|right|full
+      +Cardinality cardinality: 1:1|1:N|N:1|N:N
+      +string condition
+      +string sourceModel
+      +string targetModel
+      +string baseRevision
+      +string idempotencyKey
+    }
+    class CreateCubeRequest {
+      +string connectionId
+      +string itemKey
+      +string displayName
+      +string modelRef
+      +Measure[] measures
+      +Dimension[] dimensions
+      +string baseRevision
+      +string idempotencyKey
+    }
+    class CreateCalculatedColumnRequest {
+      +string connectionId
+      +string modelItemKey
+      +string columnName
+      +string expression
+      +string baseRevision
+      +string idempotencyKey
+    }
+    class Measure {
+      +string name
+      +string expression
+      +string | null format
+    }
+    class Dimension {
+      +string name
+      +string refModelField
+    }
+
+    %% ========== 后端 DTO ==========
+    class IqdModelingCreateResponse {
+      +string editRevision
+      +string editStatus: EDITED_UNSYNCED|SYNCING|SYNCED|SYNC_FAILED|STALE_DRIFT
+      +string | null wrenRefId
+    }
+    class IqdCatalogSyncStatus {
+      +string connectionId
+      +string currentEditRevision
+      +string builtEditRevision
+      +string buildStatus
+      +string indexStatus
+      +string editStatus
+      +string mdlHash
+      +string | null buildError
+      +string | null indexError
+      +boolean staleDrift
+      +string | null action
+    }
+    class IqdModelLayoutDTO {
+      +string connectionId
+      +LayoutNode[] nodes
+      +LayoutEdge[] edges
+      +Viewport viewport
+      +int autoLayoutVersion
+      +int version
+    }
+    class LayoutNode {
+      +string itemKey
+      +float x
+      +float y
+      +float width
+      +float height
+      +boolean collapsed
+    }
+    class LayoutEdge {
+      +string id
+      +string source
+      +string target
+      +string | null sourceHandle
+      +string | null targetHandle
+    }
+    class IqdDependents {
+      +Dependent[] dependents
+      +int total
+    }
+    class Dependent {
+      +string itemKey
+      +string kind: model|column|relationship|cube|measure|dimension|view|sql_pair|knowledge
+    }
+
+    %% ========== 后端 Java Service（增量）============
+    class IqdCatalogNodeService {
+      -IqdConnectionRepository connRepo
+      -IqdCatalogItemRepository catalogRepo
+      -IqdEditIdempotencyRepository idempRepo
+      -ValidateCatalogRefsService validateRefs
+      +createModelFromTable(req) IqdModelingCreateResponse
+      +createModel(req) IqdModelingCreateResponse
+      +createRelationship(req) IqdModelingCreateResponse
+      +createCube(req) IqdModelingCreateResponse
+      +createCalculatedColumn(req) IqdModelingCreateResponse
+      +validateExpression(connId, modelKey, expr) ValidateExprResult
+      +listDependents(connId, itemKey) IqdDependents
+    }
+    class IqdModelLayoutService {
+      -IqdModelLayoutRepository layoutRepo
+      +get(connectionId) IqdModelLayoutDTO
+      +save(connectionId, dto, baseVersion) IqdModelLayoutDTO
+      +autoLayout(connectionId, algo) IqdModelLayoutDTO
+    }
+    class ValidateCatalogRefsService {
+      -IqdCatalogItemRepository repo
+      +validate(connId, itemKey, op) List~Dependent~
+      +validateExpression(connId, modelKey, expr) List~string~
+    }
+
+    %% ========== ai-platform Worker（增量端口族）============
+    class IqdDiscoveryService {
+      -IqdCli cli
+      +listSchemas(connectionId) List~string~
+      +listTables(connectionId, schema, page) PagedTables
+      +listColumns(connectionId, schema, table) List~ColumnMeta~
+      +importTables(req) ImportResult
+    }
+    class IqdCli {
+      +contextBuild(mdlDir, scope, force) BuildResult
+      +memoryIndex() IndexResult
+      +memoryReset() ResetResult
+      +contextValidate() ValidateResult
+      +getCurrentMdlHash() string | null
+      +listModels(connectionId) List~ModelSummary~  <<新>>
+      +describeModel(connectionId, schema, table) ModelDetail  <<新>>
+    }
+    class BuildMdlFromCatalog {
+      -IqdConfigClient configClient
+      -IqdCli cli
+      +build(connectionId, editedItems) tuple~string, dict~
+    }
+
+    %% ========== 关系 ==========
+    ModelingStore "1" *-- "*" ItemDraft : dirtyDrafts
+    IqdCatalogNodeService ..> ValidateCatalogRefsService : 委托校验
+    IqdCatalogNodeService ..> IqdModelingCreateResponse : 返回
+    IqdCatalogNodeService ..> CreateModelFromTableRequest : 入参
+    IqdCatalogNodeService ..> CreateRelationshipRequest : 入参
+    IqdCatalogNodeService ..> CreateCubeRequest : 入参
+    IqdCatalogNodeService ..> CreateCalculatedColumnRequest : 入参
+    CreateCubeRequest "1" *-- "*" Measure
+    CreateCubeRequest "1" *-- "*" Dimension
+    IqdModelLayoutService ..> IqdModelLayoutDTO
+    IqdModelLayoutDTO "1" *-- "*" LayoutNode
+    IqdModelLayoutDTO "1" *-- "*" LayoutEdge
+    ValidateCatalogRefsService ..> Dependent : 返回
+    IqdDiscoveryService ..> IqdCli : 委托
+    BuildMdlFromCatalog ..> IqdConfigClient : get_catalog_full
+    BuildMdlFromCatalog ..> IqdCli : context_build

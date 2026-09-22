@@ -1,0 +1,254 @@
+%% ============================================================================
+%% mis-iqd 前端可视化建模台 — 核心流程时序图（4 个流程）
+%% 来源：mis-iqd-modeling-system-design.md §6
+%% ============================================================================
+
+%% ----------------------------------------------------------------------------
+%% 流程 1：表发现导入闭环（MR-02）
+%% ----------------------------------------------------------------------------
+sequenceDiagram
+    autonumber
+    actor DBA as 语义建模者
+    participant WIZ as TableImportWizard
+    participant FE as FE (TanStack Query)
+    participant BFF as IqdModelingController (BFF)
+    participant AIP as IqdDiscoveryService (ai-platform)
+    participant WCLI as iqd_cli.py → wren CLI
+    participant MIS as IqdCatalogNodeService (mis-iqd)
+    participant COORD as SyncCoordinator
+    participant BLD as build_mdl_from_catalog
+    participant WREN as wren serve mcp
+
+    DBA->>WIZ: 进入「表发现导入」向导
+    WIZ->>FE: useQuery(['iqd','discovery','schemas',connId])
+    FE->>BFF: GET /iqd/discovery/schemas?connectionId=1
+    BFF->>AIP: GET /internal/v1/iqd/discovery/schemas?connectionId=1
+    AIP->>WCLI: wren list-models --connection <id>
+    WCLI-->>AIP: [schemas]
+    AIP-->>BFF: {schemas: ["public","sales",...]}
+    BFF-->>FE: 200
+    FE-->>WIZ: schemas
+
+    DBA->>WIZ: 选 schema → 表清单
+    WIZ->>FE: useQuery(['iqd','discovery','tables',connId,schema,page])
+    FE->>BFF: GET /iqd/discovery/tables
+    BFF->>AIP: GET /internal/v1/iqd/discovery/tables
+    AIP->>WCLI: wren list-models --connection <id> --schema <s>
+    WCLI-->>AIP: [tables]
+    AIP-->>BFF: paged
+    BFF-->>FE: paged
+    FE-->>WIZ: tables
+
+    DBA->>WIZ: 勾选 N 张表 → 进入列预览
+    WIZ->>FE: useQuery(['iqd','discovery','columns',connId,s,t]) ×N
+    FE->>BFF: GET /iqd/discovery/columns
+    BFF->>AIP: GET /internal/v1/iqd/discovery/columns
+    AIP->>WCLI: wren describe-model --schema <s> --table <t>
+    WCLI-->>AIP: [columns + 主键推断]
+    AIP-->>FE: columns
+    FE-->>WIZ: 列预览（高 PK 推断列）
+
+    DBA->>WIZ: 确认导入（mode=create_or_skip）
+    WIZ->>FE: useMutation → POST /iqd/discovery/import
+    FE->>BFF: POST {connectionId, tables:[...], mode, in_scope:false}
+    BFF->>AIP: POST /internal/v1/iqd/discovery/import
+    AIP->>AIP: 查 iqd_catalog_item（connectionId, item_key 已存在?）
+    alt 已存在 + mode=create_or_skip
+        AIP-->>FE: {skipped:[...]}
+    else 未存在 / 允许覆盖
+        AIP->>MIS: POST /internal/v1/iqd/catalog/model/from-table × N
+        MIS->>MIS: 落 iqd_catalog_item（kind=table/model/column, source=modeling）
+        MIS->>MIS: bump current_edit_revision
+        MIS-->>AIP: {edit_revision, edit_status: EDITED_UNSYNCED}
+    end
+    AIP-->>FE: {imported, skipped}
+    FE->>FE: invalidateQueries(['iqd','catalog',connId])
+    FE-->>WIZ: 导入完成，触发一次整连接 build
+
+    par 异步整连接 build（沿用既有）
+        MIS->>COORD: publishChangeEvent → SyncCoordinator 合并窗口
+        COORD->>BLD: trigger_model_build(connectionId)
+        BLD->>MIS: GET /get-catalog-full
+        MIS-->>BLD: {mdl_raw, edited_items, current_edit_revision}
+        BLD->>BLD: write manifest.json
+        BLD->>WCLI: wren context build --mdl <dir>
+        WCLI->>WREN: 重建 MDL + index
+        BLD->>MIS: POST /enhance/catalog-backfill
+        MIS-->>BLD: {stamped_count: N}
+    and 前端发布流水线轮询
+        FE->>BFF: GET /iqd/catalog/sync-status
+        BFF->>MIS: 既有
+        MIS-->>FE: {current_edit_revision, edit_status: SYNCING|SYNCED|...}
+    end
+
+    FE-->>WIZ: 跳转到建模台主页，画布可见新 table/model 节点
+
+%% ----------------------------------------------------------------------------
+%% 流程 2：画布连线建关系 → build 写回（MR-05）
+%% ----------------------------------------------------------------------------
+sequenceDiagram
+    autonumber
+    actor DBA as 语义建模者
+    participant CAN as ModelCanvas (@xyflow/react)
+    participant STORE as ModelingStore (zustand)
+    participant FE as FE (TanStack Mutation)
+    participant BFF as IqdModelingController
+    participant MIS as IqdCatalogNodeService
+    participant VCR as ValidateCatalogRefsService
+    participant COORD as SyncCoordinator
+    participant BLD as build_mdl_from_catalog
+    participant WREN as wren serve mcp
+
+    DBA->>CAN: 从 orders 节点锚点拖拽到 customers 节点
+    CAN->>STORE: pushWizardStep('relationship-create') + 预填 source/target
+    CAN-->>DBA: 弹 RelationshipDialog
+
+    DBA->>CAN: 选 join=INNER, cardinality=1:N, condition=orders.customer_id=customers.id
+    CAN->>FE: useMutation → POST /iqd/catalog/relationship
+    FE->>BFF: POST {connectionId, item_key, patch:{...}, base_revision, idempotency_key}
+    BFF->>MIS: createRelationship(req)
+
+    MIS->>MIS: 幂等键查重 iqd_edit_idempotency
+    MIS->>MIS: base_revision 乐观并发（不符 → 409）
+    MIS->>VCR: validate(connId, itemKey, op='CREATE')
+    VCR-->>MIS: {valid:true} | {valid:false, dependents:[...]}
+    alt 引用校验失败
+        MIS-->>FE: 422 + dependents 列表
+        FE-->>CAN: 阻断弹窗
+    else 校验通过
+        MIS->>MIS: @Transactional 落 iqd_catalog_item (kind=relationship, source='modeling')
+        MIS->>MIS: bump current_edit_revision
+        MIS->>MIS: write iqd_edit_idempotency
+        MIS->>MIS: publishChangeEvent
+        MIS-->>FE: 200 {edit_revision, edit_status: EDITED_UNSYNCED}
+    end
+
+    FE->>STORE: clearDirty('mdl:relationship:orders_customers')
+    FE->>FE: invalidateQueries(['iqd','catalog',connId])
+    FE-->>CAN: 关系边立即出现在画布（乐观 UI）
+    CAN->>CAN: invalidateQueries 完成后 reconcile 节点位置
+
+    par 异步 build
+        MIS->>COORD: trigger_model_build
+        COORD->>BLD: build_mdl_from_catalog
+        BLD->>BLD: 合并 mdl_raw + edited_items（含新关系）
+        BLD->>BLD: wren context build
+        BLD->>MIS: backfill_catalog_sync → built_edit_revision
+    and 发布流水线轮询
+        FE->>BFF: GET /iqd/catalog/sync-status
+        BFF-->>FE: {edit_status: SYNCING → SYNCED}
+    end
+
+    DBA->>CAN: 跳转到 /iqd/test-chat 验证
+    CAN-->>DBA: 「上月各客户订单数」命中 customers-orders join
+
+%% ----------------------------------------------------------------------------
+%% 流程 3：Cube 编辑 → 派生 → 写回（MR-06）
+%% ----------------------------------------------------------------------------
+sequenceDiagram
+    autonumber
+    actor DBA as 语义建模者
+    participant DRAW as CubeEditor
+    participant FE as FE
+    participant BFF as IqdModelingController
+    participant MIS as IqdCatalogNodeService
+    participant VCR as ValidateCatalogRefsService
+    participant COORD as SyncCoordinator
+    participant BLD as build_mdl_from_catalog
+    participant WREN as wren serve mcp
+
+    DBA->>DRAW: 进入 Cube 编辑器 → 新建 cube "revenue"
+    DRAW->>DRAW: 编辑 measures[{name:"total", expression:"SUM(amount)"}], dimensions[{name:"store_id", ref:"orders.store_id"}]
+    DRAW->>FE: 提交前 validateExpression
+    FE->>BFF: GET /iqd/catalog/validate-expression?modelRef=orders&expr=SUM(amount)
+    BFF->>MIS: validateExpression
+    MIS->>VCR: validate modelRef 列存在性
+    VCR-->>MIS: {valid:true}
+    MIS-->>FE: {valid:true}
+    FE-->>DRAW: 通过
+
+    DBA->>DRAW: 提交保存
+    DRAW->>FE: useMutation → POST /iqd/catalog/cube
+    FE->>BFF: POST {connectionId, item_key, patch:{...}, base_revision, idempotency_key}
+    BFF->>MIS: createCube(req)
+    MIS->>MIS: 幂等键 + 乐观并发
+    MIS->>VCR: validate (model_ref + measures expressions)
+    alt 校验失败（模型字段不存在/被引用阻断）
+        MIS-->>FE: 422 + dependents
+    else 通过
+        MIS->>MIS: 落 cube + measures + dimensions 子节点（kind=cube/measure/dimension, source=modeling）
+        MIS->>MIS: bump edit_revision + publishChangeEvent
+        MIS-->>FE: {edit_revision, edit_status: EDITED_UNSYNCED}
+    end
+
+    par 异步 build（Cube→MDL 派生确认）
+        BLD->>MIS: get_catalog_full → mdl_raw + edited_items (含 cube)
+        BLD->>BLD: locate 'mdl:cube:revenue' → cubes[]
+        BLD->>BLD: patch cube.name + cube.measures[] + cube.dimensions[]
+        BLD->>WREN: wren context build --mdl <dir>
+        WREN->>WREN: 编译 mdl.json + index
+        BLD->>MIS: backfill_catalog_sync → wren_ref_id 回填
+    and 发布流水线
+        FE->>BFF: GET /iqd/catalog/sync-status
+        BFF-->>FE: SYNCING → SYNCED
+    end
+
+    DBA->>DRAW: 跳到 test-chat 验证
+    DBA-->>DRAW: 「上月客单价」命中 cube query_cube 通道
+
+%% ----------------------------------------------------------------------------
+%% 流程 4：漂移详情 → 重新导入（MR-11）
+%% ----------------------------------------------------------------------------
+sequenceDiagram
+    autonumber
+    participant FE as PublishPipelineBar (轮询)
+    participant BFF as IqdModelingController
+    participant MIS as IqdConnection (mis-iqd)
+    participant RECON as IqdReconcileJobService (BFF 定时)
+    participant AIP as IqdCli (ai-platform)
+    participant WREN as wren serve mcp
+
+    Note over RECON: 每 60s 扫一遍 current>built 或 stale_drift
+
+    RECON->>AIP: getCurrentMdlHash(connectionId)
+    AIP->>WREN: wren context show / wren get mdl
+    WREN-->>AIP: current_mdl_hash
+    AIP-->>RECON: hash
+
+    RECON->>MIS: iqd_connection.built_mdl_hash
+    MIS-->>RECON: hash
+
+    alt 不一致
+        RECON->>MIS: POST /internal/v1/iqd/enhance/drift {drift:true}
+        MIS->>MIS: iqd_connection.stale_drift = true
+        MIS-->>RECON: ok
+    end
+
+    FE->>BFF: GET /iqd/catalog/sync-status
+    BFF->>MIS: 读 iqd_sync_job + iqd_connection
+    MIS-->>BFF: {edit_status: STALE_DRIFT, stale_drift:true, ...}
+    BFF-->>FE: STALE_DRIFT
+    FE->>FE: PublishPipelineBar 标橙阻断 + 展开 DriftDetailPanel
+
+    actor DBA as 语义建模者
+    DBA->>FE: 点「重新导入」（二/四期 P1-3 入口）
+    FE->>BFF: POST /iqd/catalog/sync-from-mdl?connectionId=…  （沿用既有 syncCatalogFromMdl）
+    BFF->>MIS: syncCatalogFromMdl
+    MIS->>MIS: @Transactional 拉 WrenAI 当前 MDL → 写 iqd_catalog_item (source=mdl)
+    MIS->>MIS: 落 iqd_connection.mdl_raw (JSONB)
+    MIS->>MIS: resetEditRevision(connId)
+    MIS->>MIS: stale_drift = false
+    MIS-->>BFF: {conflicts:[...], added:[...]}
+
+    alt 有冲突（平台与 WrenAI 同字段不同值）
+        BFF-->>FE: 草稿比对合并界面（沿用二/四期 P1-3）
+        DBA->>FE: 人工逐项选择保留哪边
+        FE->>BFF: POST /iqd/catalog/resolve-conflicts {decisions:[...]}
+        BFF->>MIS: 应用决策 + 触发 build
+    else 无冲突
+        BFF-->>FE: 自动收敛
+    end
+
+    FE->>BFF: 再次 GET /iqd/catalog/sync-status
+    BFF-->>FE: SYNCED
+    FE-->>DBA: 漂移横幅消失，可继续编辑

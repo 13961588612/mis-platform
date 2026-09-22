@@ -1,7 +1,7 @@
 # MIS 平台对接 WrenAI 问数 APP — 系统架构设计
 
 > 文档角色：本需求的**架构视图 + 接口契约**（上游 [prd.md](prd.md)，下游 [tasks.md](tasks.md)）。
-> 版本：v1.9｜状态：🔴 已修订（**v1.9 三处重大修订落盘（2026-08-22，主理人记录）**：① **A1 业务改判——落库改道**：表级 ACL 等问数配置**不落 ai_platform，改落 `mis_platform` 库**，对齐 **mis_kb 项目范式**（kb 开头的表在 mis_platform 库），项目名 **`mis-iqd`**（类似 mis_kb）、表前缀 **`iqd_`**（替代 `wren_*`）；ADR-019（原裁定落 ai_platform）**已由 ADR-020 替代**（§8 A1）；② **命名统一**：项目/表/API/权限码/模块全部收敛 `iqd`（`iqd_*` 表、`/api/v1/iqd/**`、权限码 `iqd:*`、前端 `features/agent/iqd`、`backend/mis-iqd` Java 模块），**对接外部 WrenAI 产品的适配层保留 wren**（`wren serve mcp`/`wren profile`/`wren_mcp_host`/`iqd_mcp_client.py` 类内配置键等，命名边界见 §1.5/§3.3）；③ **维度注册表提前一期 + 双维度一期**：`iqd_row_scope_dimension` 从二期 P2 提为**一期必做**、**部门不再特例**，一期同时支持「部门权限 + 门店权限」两个维度（§4.2.2 D.8/D.9）；配套：**Worker 配置消费改「BFF/Java 侧配置读取 API + Worker 本地缓存 + 变更事件/定期刷新 + 缓存不可得 fail-closed 45204」**（§4.2.2 D.7.3）、mis-iqd 模块按 mis_kb 范式落地（§3.2/§3.3）、Flyway 追加 `V71__iqd_schema.sql`、BFF 头注入按维度注册表遍历（`X-Mis-Dept-Scope` + `X-Mis-Stores`）、tasks.md 全量同步（T-W0-01 探针 3e 门店盘点 / T-W2-01 改 Java 侧 / T-W2-02a 双维度 / T-W2-02b 维度遍历注入 / 新增维度注册表子任务）、ADR-019 修订 + ADR-020 新增、两张 mermaid 同步、版本升 v1.9。**v1.8 A1/A5 拍板 + 行级权限放置/扩展设计落盘（2026-08-22，主理人记录）**：A1 当时确认——**表级 ACL 等 `wren_*` 问数配置落 `ai_platform` 库，Python 侧（ai-platform）统一管理，BFF 经 HTTP 读写，不新建 Java 领域服务**（**v1.9 已业务改判**，见上；历史裁定记录见 §8 A1 与 ADR-019）；A5 已确认——**列级隔离本期不做，预留后期方案**（预留位点见 §4.2.2 D.8.2）；新增 **D.7 行级权限数据「如何放置、如何使用」**（三层放置：平台侧 `ai_platform` 库=配置+裁定 / mis-org 侧=授权源头 / 业务库侧=数据载体；使用链路：配置在平台→锚点在头→字典在业务库→注入在 Worker→执行/脱敏/审计）与 **D.8 行级权限维度扩展设计**（`row_scope.type` 扩展点：`org_auto`=dept 维度实例化、`template` 已覆盖任意维度；维度注册表 `iqd_row_scope_dimension` 二期 P2 可选；扩展步骤模板 5 件事 + 门店示例；列级隔离预留位点）；§8 A1/A5 由「⏳ 待确认」改「✅ 业务已确认」；tasks.md T-W2-01 标注 A1 已确认、T-W2-02a 标注 type 扩展点 + 二期 P2 维度注册表、A5 相关标注 masking.py 仍为唯一出口 + 列 ACL 预留位点；**v1.7 A13 拍板 + 配置模型澄清落盘（2026-08-22，主理人记录）**：A13 三答已确认——**① 业务库部门编码与 mis_org 不统一主数据（暂时无关）→ 需要映射；② 业务库与 mis_platform 非同一实例 → 物化表（视图不可行）；③ 多数据源每库一张、集中定义从中心每日同步到各库（物化表 + 中心侧定时批同步）**；§4.2.2 D.6 深化——编码对齐决策 **X（映射内嵌字典表）** 定案（推荐理由/映射来源与维护/配置下拉数据源/T-W2-02a 工作量影响，见 D.6.3）、D.6.4 中心每日同步任务细化（归属 ai-platform 定时作业、每日全量 upsert 幂等、失败告警 + 降级 45204、目标库注册）、新增 **D.6.6 配置面 vs 数据面**（用户疑问「是否需逐库设置权限」的权威回答：权限配置平台统一一处、row_scope 模板化、mis_dept_scope 为同步数据非配置、表按数据源分组仅展示层事实）；§8 A13 由「⏳ 待确认」改「✅ 业务已确认」；tasks.md T-W0-01 探针 3e 更新（库边界已确认、剩余聚焦 DEPTID 编码体系盘点+映射可行性）、T-W2-02a 字典表子项改「物化表 + 中心每日同步」并新增同步任务/映射维护子项与配置界面验收；**v1.6 部门权限字典表方案落盘（2026-08-22，主理人记录）**：2a「直接 JOIN 平台内部 `sys_dept`」修订为「**JOIN/EXISTS 部门权限字典表 `mis_dept_scope`（表/视图）**」——同库/同实例走**视图**（实时零维护）、跨库/跨实例走**物化表+同步**（幂等）、多数据源**每库一张**、部门编码对齐与库边界列为 **A13 待业务/数据确认**（探针 3e 出前置证据）；新增 §4.2.2 D.6 mis_dept_scope 落地设计、§8 A13、tasks.md T-W0-01 探针 3d 实测对象更新为 mis_dept_scope 形态 + 新增 3e（库边界与编码对齐盘点）、T-W2-02a 新增字典表子项、T-W2-02b 黄金用例谓词更新；**v1.5 A12 拍板落盘（2026-08-22，主理人记录）**：A12 已由业务确认——**物化 `dept_path`，`PATH_PREFIX` 为唯一主路径，`CLOSURE_CTE` 不实现**（决策依据见 §8 A12 与 §4.2.2 C「策略表」）；§4.2.2 `resolve_inject_strategy` 策略精简为 **PATH_PREFIX（主）/ ENUM（降级 ≤500）/ FAIL_CLOSED（兜底）**、规模分层用例 11–15 同步更新、新增 **mis-org 物化 dept_path 落地设计小节（§4.2.2 D）**、`X-Mis-Dept-Scope` 头扩为携带锚点 `path`、tasks.md T-W0-01 探针 3b 降级为「仅记录不阻塞」+ 新增 3d（`dept_path LIKE` 实测）、T-W2-02a/b 同步；v1.4 曾修订规模策略（mis-org 部门树规模上万 → 头语义改「锚点 + 范围语义」`X-Mis-Dept-Scope`、新增规模分层策略层、新增待拍板 A12）；v1.3 曾修订 A11 行级数据范围确认本期、新增 §4.2.2 RLS 设计细节、`ScopeResolver.inject_row_scope` 展开、T-W2-02 拆分；v1.2 曾修订 MCP-first / 钉 wren-core 新线 `wren: v0.13.3` · 项目 `0.29.2` 2026-08-18、新增 §4.2.1 权限方案全景）｜日期：2026-08-22｜语言：中文
+> 版本：v1.11（基线 v1.10）｜状态：🔴 已修订（**v1.11 可视化建模台增量回写落盘（2026-09-22，主理人记录）**：把已拍板的「mis-iqd 前端可视化建模台」增量（PRD + 系统设计 + 任务分解 + 两张 mermaid）合订进本主架构文档，**architecture.md 自此为唯一权威基线**（不再「增量文档悬挂」）——详见 **§10 增量 v1.11 — 可视化建模台**；**v1.9 三处重大修订落盘（2026-08-22，主理人记录）**：① **A1 业务改判——落库改道**：表级 ACL 等问数配置**不落 ai_platform，改落 `mis_platform` 库**，对齐 **mis_kb 项目范式**（kb 开头的表在 mis_platform 库），项目名 **`mis-iqd`**（类似 mis_kb）、表前缀 **`iqd_`**（替代 `wren_*`）；ADR-019（原裁定落 ai_platform）**已由 ADR-020 替代**（§8 A1）；② **命名统一**：项目/表/API/权限码/模块全部收敛 `iqd`（`iqd_*` 表、`/api/v1/iqd/**`、权限码 `iqd:*`、前端 `features/agent/iqd`、`backend/mis-iqd` Java 模块），**对接外部 WrenAI 产品的适配层保留 wren**（`wren serve mcp`/`wren profile`/`wren_mcp_host`/`iqd_mcp_client.py` 类内配置键等，命名边界见 §1.5/§3.3）；③ **维度注册表提前一期 + 双维度一期**：`iqd_row_scope_dimension` 从二期 P2 提为**一期必做**、**部门不再特例**，一期同时支持「部门权限 + 门店权限」两个维度（§4.2.2 D.8/D.9）；配套：**Worker 配置消费改「BFF/Java 侧配置读取 API + Worker 本地缓存 + 变更事件/定期刷新 + 缓存不可得 fail-closed 45204」**（§4.2.2 D.7.3）、mis-iqd 模块按 mis_kb 范式落地（§3.2/§3.3）、Flyway 追加 `V71__iqd_schema.sql`、BFF 头注入按维度注册表遍历（`X-Mis-Dept-Scope` + `X-Mis-Stores`）、tasks.md 全量同步（T-W0-01 探针 3e 门店盘点 / T-W2-01 改 Java 侧 / T-W2-02a 双维度 / T-W2-02b 维度遍历注入 / 新增维度注册表子任务）、ADR-019 修订 + ADR-020 新增、两张 mermaid 同步、版本升 v1.9。**v1.8 A1/A5 拍板 + 行级权限放置/扩展设计落盘（2026-08-22，主理人记录）**：A1 当时确认——**表级 ACL 等 `wren_*` 问数配置落 `ai_platform` 库，Python 侧（ai-platform）统一管理，BFF 经 HTTP 读写，不新建 Java 领域服务**（**v1.9 已业务改判**，见上；历史裁定记录见 §8 A1 与 ADR-019）；A5 已确认——**列级隔离本期不做，预留后期方案**（预留位点见 §4.2.2 D.8.2）；新增 **D.7 行级权限数据「如何放置、如何使用」**（三层放置：平台侧 `ai_platform` 库=配置+裁定 / mis-org 侧=授权源头 / 业务库侧=数据载体；使用链路：配置在平台→锚点在头→字典在业务库→注入在 Worker→执行/脱敏/审计）与 **D.8 行级权限维度扩展设计**（`row_scope.type` 扩展点：`org_auto`=dept 维度实例化、`template` 已覆盖任意维度；维度注册表 `iqd_row_scope_dimension` 二期 P2 可选；扩展步骤模板 5 件事 + 门店示例；列级隔离预留位点）；§8 A1/A5 由「⏳ 待确认」改「✅ 业务已确认」；tasks.md T-W2-01 标注 A1 已确认、T-W2-02a 标注 type 扩展点 + 二期 P2 维度注册表、A5 相关标注 masking.py 仍为唯一出口 + 列 ACL 预留位点；**v1.7 A13 拍板 + 配置模型澄清落盘（2026-08-22，主理人记录）**：A13 三答已确认——**① 业务库部门编码与 mis_org 不统一主数据（暂时无关）→ 需要映射；② 业务库与 mis_platform 非同一实例 → 物化表（视图不可行）；③ 多数据源每库一张、集中定义从中心每日同步到各库（物化表 + 中心侧定时批同步）**；§4.2.2 D.6 深化——编码对齐决策 **X（映射内嵌字典表）** 定案（推荐理由/映射来源与维护/配置下拉数据源/T-W2-02a 工作量影响，见 D.6.3）、D.6.4 中心每日同步任务细化（归属 ai-platform 定时作业、每日全量 upsert 幂等、失败告警 + 降级 45204、目标库注册）、新增 **D.6.6 配置面 vs 数据面**（用户疑问「是否需逐库设置权限」的权威回答：权限配置平台统一一处、row_scope 模板化、mis_dept_scope 为同步数据非配置、表按数据源分组仅展示层事实）；§8 A13 由「⏳ 待确认」改「✅ 业务已确认」；tasks.md T-W0-01 探针 3e 更新（库边界已确认、剩余聚焦 DEPTID 编码体系盘点+映射可行性）、T-W2-02a 字典表子项改「物化表 + 中心每日同步」并新增同步任务/映射维护子项与配置界面验收；**v1.6 部门权限字典表方案落盘（2026-08-22，主理人记录）**：2a「直接 JOIN 平台内部 `sys_dept`」修订为「**JOIN/EXISTS 部门权限字典表 `mis_dept_scope`（表/视图）**」——同库/同实例走**视图**（实时零维护）、跨库/跨实例走**物化表+同步**（幂等）、多数据源**每库一张**、部门编码对齐与库边界列为 **A13 待业务/数据确认**（探针 3e 出前置证据）；新增 §4.2.2 D.6 mis_dept_scope 落地设计、§8 A13、tasks.md T-W0-01 探针 3d 实测对象更新为 mis_dept_scope 形态 + 新增 3e（库边界与编码对齐盘点）、T-W2-02a 新增字典表子项、T-W2-02b 黄金用例谓词更新；**v1.5 A12 拍板落盘（2026-08-22，主理人记录）**：A12 已由业务确认——**物化 `dept_path`，`PATH_PREFIX` 为唯一主路径，`CLOSURE_CTE` 不实现**（决策依据见 §8 A12 与 §4.2.2 C「策略表」）；§4.2.2 `resolve_inject_strategy` 策略精简为 **PATH_PREFIX（主）/ ENUM（降级 ≤500）/ FAIL_CLOSED（兜底）**、规模分层用例 11–15 同步更新、新增 **mis-org 物化 dept_path 落地设计小节（§4.2.2 D）**、`X-Mis-Dept-Scope` 头扩为携带锚点 `path`、tasks.md T-W0-01 探针 3b 降级为「仅记录不阻塞」+ 新增 3d（`dept_path LIKE` 实测）、T-W2-02a/b 同步；v1.4 曾修订规模策略（mis-org 部门树规模上万 → 头语义改「锚点 + 范围语义」`X-Mis-Dept-Scope`、新增规模分层策略层、新增待拍板 A12）；v1.3 曾修订 A11 行级数据范围确认本期、新增 §4.2.2 RLS 设计细节、`ScopeResolver.inject_row_scope` 展开、T-W2-02 拆分；v1.2 曾修订 MCP-first / 钉 wren-core 新线 `wren: v0.13.3` · 项目 `0.29.2` 2026-08-18、新增 §4.2.1 权限方案全景）｜日期：2026-08-22｜语言：中文
 > 图表：[class-diagram.mermaid](class-diagram.mermaid)、[sequence-diagram.mermaid](sequence-diagram.mermaid)｜部署速查：[deploy-iqd.md](deploy-iqd.md)
 > **v1.10 样本对方言转化 + 试运行增量修订（2026-08-22，架构师高见远记录）**：在 enhance 页「样本对」Tab 新增「选 DB 类型 + 写原生 SQL + 转化(wrensql) + 试运行 + 保存」能力；`IqdSqlPair` 增 `source_dialect`/`native_sql`/`wren_sql`（`sql_text` 改名 `wren_sql`）；新增 `POST /sql-pairs/translate`（后端 sqlglot 翻译）、`POST /sql-pairs/trial`（经 MCP `dry_run`/`run_sql` 在 WrenAI 引擎侧执行）；设计见 §4.2.3，待拍板见 A14，W0 探针新增 3f（目标方言确认）。
 
@@ -10,6 +10,8 @@
 ## 0. 一句话架构结论
 
 **WrenAI 自托管为新 `wren` 线（`pip install wrenai` 得 `wren` CLI + wren-core（Rust/Apache DataFusion），以 `wren serve mcp --transport http @127.0.0.1` 在**服务端本机**暴露 MCP server，数据不出域）；平台以 `mis-iqd` Worker **本地持有 MCP client** 接入既有 mis-copilot Coordinator 完成桥接；配置/范围/ACL/样本/知识/审计以 `iqd_*` 表**统一落 `mis_platform` 库**（对齐 mis_kb 范式，Java 侧 `backend/mis-iqd` 模块管理），Worker **不直连库**、经 **BFF/Java 侧配置读取 API（`/internal/v1/iqd/**`）+ 本地缓存 + 变更事件/定期刷新** 消费（缓存不可得 fail-closed `45204`），BFF 对外经 `/api/v1/iqd/**` HTTP 读写（该 REST 仅面向平台自身 `iqd_*` 表，与 WrenAI 无关）；权限沿用双闸门（BFF `iqd:*` 功能码 + Worker 侧表级 ACL 二次裁定 + 结果字段脱敏）；行级范围由**维度注册表 `iqd_row_scope_dimension` 驱动**（一期 dept + store 双维度，§4.2.2 D.8/D.9）；引用与步骤化计划：新线 MCP `get_context`/`list_knowledge` **提供原生引用来源（走原生）**，sqlglot 血缘降级保留；**前端/用户端绝不直连 MCP**（由官方 MCP server 默认绑 127.0.0.1 + 本版本无 bearer-token 鉴权 + 默认只读约束兜底）。**
+
+**（v1.11 增量）可视化建模台一句话结论**：定位为「**编辑体验的前端升级**」——平台自建可视化页面（**非 iframe 嵌 wren-ui**，A3「wren-ui 是否随包」仅影响 DBA 兜底），一切建模编辑仍走**既有编辑权威闭环**（`iqd_catalog_item` → 派生 MDL → `wren context build` → memory index → MCP 就绪门禁），**不新增写路径、不破坏 catalog 单一真值源**；画布 / 编辑器 / 布局分别以 `@xyflow/react` / CodeMirror 6 / 独立 `iqd_model_layout`（JSONB，不动 V71）落地。详见 **§10**。
 
 ---
 
@@ -2349,3 +2351,132 @@ event: done          data: {}
 | [`../../adr/ADR-020-iqd-query-acl-mis-platform.md`](../../adr/ADR-020-iqd-query-acl-mis-platform.md) | **已落盘（v1.9 新增，已接受）**——问数配置落 mis_platform 库 + backend/mis-iqd Java 模块 + Worker API 消费（A1 业务改判 2026-08-22；替代 ADR-019） |
 | `agent/ai-platform/backend/src/adapters/kb_client.py` | 外部 HTTP 客户端参考范式（路径常量 / 头透传 / 日志脱敏） |
 | `agent/ai-platform/configs/agents/crm-assistant/**` | Worker 配置参考范式 |
+| [`mis-iqd-modeling-prd.md`](mis-iqd-modeling-prd.md) | **v1.11 建模台增量**：14+4 项需求池（MR-01~MR-14 / MR-S1~S4）、UI 描述、分期、待确认 |
+| [`mis-iqd-modeling-system-design.md`](mis-iqd-modeling-system-design.md) | **v1.11 建模台增量**：Q1–Q8 裁决、文件树、端点契约、数据结构/流程、共享知识 |
+| [`mis-iqd-modeling-tasks.md`](mis-iqd-modeling-tasks.md) | **v1.11 建模台增量**：5 任务（M1/M2/M3，46 人日）、关键路径、风险与回退 |
+| [`mis-iqd-modeling-class.mermaid`](mis-iqd-modeling-class.mermaid) | **v1.11 建模台增量**：类图单文件版 |
+| [`mis-iqd-modeling-sequence.mermaid`](mis-iqd-modeling-sequence.mermaid) | **v1.11 建模台增量**：时序图单文件版 |
+
+---
+
+## 10. 增量 v1.11 — 可视化建模台（2026-09-22 拍板）
+
+> 本节为**回写索引 + 关键决策固化**：把已拍板的建模台增量（PRD / 系统设计 / 任务分解 / 两张 mermaid）合订进本主架构文档。**细节一律引用增量文档，不在此重复展开**；增量文档与本节冲突时，以本节固化的决议 + 增量文档为准。**不变量一律沿用 v1.9，不重做。**
+
+### 10.1 一句话定位
+
+建模台是「**编辑体验的前端升级**」，**不破既有编辑权威闭环**。提供 WrenUI 级可视化体验，但为**平台自建页面**（不是 iframe 嵌 wren-ui）；A3「wren-ui 是否随包」仅影响 DBA 兜底入口，不进平台能力。
+
+### 10.2 拍板决策 Q1–Q8（2026-09-22 主理人拍板）
+
+| # | 决策 | 决定 | 一句话理由 |
+|---|---|---|---|
+| **Q1** | MDL 写入通道 | **甲 编辑权威闭环**（建模台不直写 MDL） | catalog 是真值、MDL 是派生视图；复用已落地的「落库→build→index→就绪门禁」闭环，不新增写路径 |
+| **Q2** | 前端目录迁移 | **是**：`features/agent/ai/iqd` → `features/agent/iqd`（随 M1 一次性 `git mv`） | 对齐 v1.9 §3.4 命名边界，避免永久性目录债务 |
+| **Q3** | 画布库 | `@xyflow/react@^12.3.0` | MIT、React 18 兼容、节点自定义渲染贴合现有体系、bundle 可接受 |
+| **Q4** | SQL/表达式编辑器 | CodeMirror 6（`@codemirror/lang-sql` + state + view） | 包体友好、SQL 高亮/补全够用；重编辑器（monaco）后续按需评估 |
+| **Q5** | 跨页状态 | TanStack Query 服务端态 + **zustand 仅 UI 态** | catalog 单一缓存源；画布 nodes/edges 由 catalog 派生（selector），不持第二份真值 |
+| **Q6** | 布局持久化 | 独立 `iqd_model_layout` JSONB（连接级） | 不动 V71 表结构、不参与 MDL 派生、自动布局可随时覆盖重建 |
+| **Q7** | 画布规模 | ≤200 节点 60fps / >200 无关系表折叠 / >500 分区画布（P2） | 给出可测的量化验收口径 + 超限降级策略 |
+| **Q8** | 与 multiconn 排期耦合 | multiconn T1 = **硬前置**；M1 可降级为单连接形态 | per-connection 是前提，但降级后画布/建模不阻塞 |
+
+### 10.3 不变量（沿用 v1.9，不重做）
+
+| # | 不变量 | 出处 |
+|---|---|---|
+| 1 | **命名边界**：平台域 `iqd` / 外部 WrenAI 适配层保留 `wren` | §1.5、§3.3 |
+| 2 | **编辑权威闭环**：一切编辑落 `iqd_catalog_item` → 派生 MDL → `wren context build` → memory index → MCP 就绪门禁 | §3.2、§5.3 |
+| 3 | **权限五件套**：L1 功能码 `iqd:*` + 表级 ACL 二次裁定（fail-closed 45204）+ 行级维度（注册表 dept+store 双维度 AND）+ 脱敏（`masking.py` 唯一出口）+ 审计 | §4.2、§7.1 |
+| 4 | **ADR-020**（替代 ADR-019）：落库 `mis_platform` + `backend/mis-iqd` Java 侧 + Worker 经 `IqdConfigClient` API+缓存消费 | §1.5、§9 |
+| 5 | **维度注册表 + 双维度**（dept + store）：`iqd_row_scope_dimension` 驱动，头注入按维度遍历 | §4.2.2 D.8/D.9 |
+
+### 10.4 5 任务分布
+
+| 阶段 | 任务 | 工作量 |
+|---|---|---|
+| **M1** | T01 项目基础设施（迁目录 + 骨架 + V8y 权限种子） | 5 人日 |
+| **M1** | T02 基础闭环（连接向导 + 表发现 + 画布只读 + 建模型） | 12 人日 |
+| **M2** | T03 建模全量（关系 + Cube + 计算列 + 发布流水线） | 14 人日 |
+| **M3** | T04 治理增强（指令/样本/知识 + 漂移 + scope + 脱敏） | 11 人日 |
+| **M3** | T05 集成验收（6 黄金用例 E2E + 性能压测） | 4 人日 |
+| **合计** | — | **46 人日 ≈ 9.2 周** |
+
+> 任务详表见 [`mis-iqd-modeling-tasks.md`](mis-iqd-modeling-tasks.md) §1/§2；关键路径与依赖图见该文档 §0/§3。
+
+### 10.5 服务端增量（a–e 五点）
+
+| 点 | 增量 | 端点类型 |
+|---|---|---|
+| **a** | 表发现通道（按连接列 schema/表/列，凭证 server-side） | 新增 Python 端点 `GET /internal/v1/iqd/discovery/schemas\|tables\|columns` + `POST .../import`（BFF 转发） |
+| **b** | Cube→MDL 派生确认（`build_mdl_from_catalog` 是否含 cubes/measures/dimensions） | 实测确认；缺则最小补丁（无新端点） |
+| **c** | 新建节点端点族（model from-table/blank、relationship、cube、计算列 + 引用校验） | 新增 `POST /api/v1/iqd/catalog/{model\|relationship\|cube\|calculated-column}` + `GET .../validate-expression`（mis-iqd Java 侧） |
+| **d** | layout 存储（连接级 JSONB 快照） | 新增表 `iqd_model_layout` + `GET/PUT /api/v1/iqd/modeling/layout/{connectionId}` + `POST .../auto-layout` |
+| **e** | 指令/知识「关联对象」裁剪（`content.related_item_keys`） | 复用 + 增强 `iqd_knowledge`（无新表；下发时按关联裁剪） |
+
+> 全契约（入参/出参/错误码/Service 方法）见 [`mis-iqd-modeling-system-design.md`](mis-iqd-modeling-system-design.md) §4.1–§4.5。
+
+### 10.6 14 项能力 + 4 支撑项
+
+| ID | 能力 | ID | 能力 |
+|---|---|---|---|
+| **MR-01** | 数据源/Profile（连接向导 + MCP 运行态卡） | **MR-09** | 知识/术语（字段侧栏直编 + 关联对象） |
+| **MR-02** | 物理表发现/导入（表发现向导 + 批量导入） | **MR-10** | MDL 构建/发布（发布流水线可视化 + 自愈集成） |
+| **MR-03** | 语义模型（模型创建/编辑） | **MR-11** | 漂移对账（STALE_DRIFT 详情面板） |
+| **MR-04** | 字段语义（计算列编辑器） | **MR-12** | 问数范围/ACL（行级维度展示补齐） |
+| **MR-05** | 关系（可视化编辑，画布连线即关系） | **MR-13** | 脱敏规则（字段级直编） |
+| **MR-06** | 指标/Cube（measure/dimension 编辑器） | **MR-14** | 可视化 ER/拖拽建模（核心画布） |
+| **MR-07** | 业务规则/Instructions（表达式录入 + 生效范围） | **MR-S1** | 建模台框架与导航（路由 `/iqd/modeling` + 三栏布局） |
+| **MR-08** | NL→SQL 样本对（建模台入口 + SQL 编辑器升级） | **MR-S2** | 新建节点端点族 + 编辑权威闭环复用（P0 后端） |
+| — | — | **MR-S3** | 权限码与种子（`iqd:modeling:view\|edit\|publish`） |
+| — | — | **MR-S4** | 画布布局持久化 |
+
+> 需求全文（描述/验收要点/涉及文件/依赖）见 [`mis-iqd-modeling-prd.md`](mis-iqd-modeling-prd.md) §4.1（14 项）+ §4.2（4 支撑项）。
+
+### 10.7 关键风险
+
+| ID | 风险 |
+|---|---|
+| **R-1** | multiconn T1（多连接 + MCP 状态落库）延期 → M1 降级为单连接建模 |
+| **R-2** | multiconn §6（per-connection 自愈）延期 → T04 per-connection 自愈降级 |
+| **R-3** | `build_mdl_from_catalog` 发现 cubes/measures/dimensions 派生不完整 → 最小补丁 |
+| **R-4** | `@xyflow/react` 与既有 Vite/React 版本冲突 → 钉版本 / 回退 `^12.2.0` |
+| **R-5** | CodeMirror 6 与 Vite 5 动态 import 失败 → 改静态 import |
+| **R-6** | 性能预算不达标（200 节点 < 55fps / build > 10s）→ 缩规模上限 + 优化 |
+| **R-7** | 命名边界与既有代码路径冲突（import 错误）→ git mv 后 grep + `tsc --noEmit` + lint |
+| **R-8** | 多连接下「表发现」向导状态跨连接串扰 → zustand 按 connId 隔离 |
+| **R-9** | 「重新导入」比对合并界面未完全就绪 → 沿用 `syncCatalogFromMdl`，仅做入口跳转 |
+| **R-10** | multiconn 端口段用尽（18080–18180）→ 扩容端口段 |
+
+> 风险全表 + 回退方案见 [`mis-iqd-modeling-tasks.md`](mis-iqd-modeling-tasks.md) §5（风险总览 + R-1/R-2/R-3/R-6/R-7 回退细节）。
+
+### 10.8 文档索引
+
+| 文档 | 内容 |
+|---|---|
+| [`mis-iqd-modeling-prd.md`](mis-iqd-modeling-prd.md) | 增量 PRD（定位/范围/14+4 需求池/UI 描述/分期/待确认） |
+| [`mis-iqd-modeling-system-design.md`](mis-iqd-modeling-system-design.md) | 增量系统设计（Q1–Q8 裁决/文件树/端点契约/数据结构/流程/依赖/共享知识） |
+| [`mis-iqd-modeling-tasks.md`](mis-iqd-modeling-tasks.md) | 任务分解（5 任务/关键路径/风险与回退/不变项） |
+| [`mis-iqd-modeling-class.mermaid`](mis-iqd-modeling-class.mermaid) | 建模台类图单文件版 |
+| [`mis-iqd-modeling-sequence.mermaid`](mis-iqd-modeling-sequence.mermaid) | 建模台时序图单文件版 |
+
+### 10.9 待明确事项（A-01~A-15）
+
+| # | 待明确事项（标题） |
+|---|---|
+| **A-01** | 脱敏直编是否复用既有 `mask-rules` API（不新增建模台端口） |
+| **A-02** | 自动布局 dagre 跑前端还是后端 |
+| **A-03** | 「重新导入」（MR-11）入口归属 |
+| **A-04** | 样本对 SQL 编辑器改造是否影响 v1.10 已落地交互 |
+| **A-05** | 「视图模型」（`mdl:view:*`）是否本期可视化编辑 |
+| **A-06** | 指令「关联对象」新建列 vs 复用 `content` JSON 内嵌 |
+| **A-07** | 「自动布局」按钮是否首次进入自动触发 |
+| **A-08** | 属性面板字段列表默认折叠列数 N |
+| **A-09** | Cube 节点角标是否可点击进入编辑器 |
+| **A-10** | 计算列 expression 校验：同步 vs 异步 |
+| **A-11** | 画布布局归属 `iqd:modeling:edit` 还是 `:publish` 权限 |
+| **A-12** | 表发现空连接态是否引导去连接向导 |
+| **A-13** | 画布 dagre 默认方向（LR/TB） |
+| **A-14** | 多连接下 wizard 状态是否按 connId 隔离 |
+| **A-15** | 三栏可拖拽调宽是否本期实现 |
+
+> 逐条影响 + 建议默认 + 拍板人见 [`mis-iqd-modeling-system-design.md`](mis-iqd-modeling-system-design.md) §9。
