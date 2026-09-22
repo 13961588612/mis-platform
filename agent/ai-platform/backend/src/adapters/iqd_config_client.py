@@ -95,6 +95,55 @@ EVENT_BUCKET_MAP: dict[str, str] = {
 _SENSITIVE_HEADERS = {"Authorization"}
 
 
+# ===== 主连接选取（单一真值源，§14.5.1 C/D）=====
+
+
+def _coerce_connection_id(value: Any) -> int | None:
+    """把 wire 连接 id（int / 数字字符串）规整为 ``int``；非法返回 ``None``。
+
+    ⚠️ ``bool`` 是 ``int`` 的子类，显式排除以避免 ``True → 1`` 这类误判。
+    """
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, str)):
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None
+    return None
+
+
+def select_primary_connection_id(
+    connections: list[dict[str, Any]] | None,
+) -> int | None:
+    """从 ``get-connections`` 结果中选取主连接 id（**单一真值源**）。
+
+    主连接判定由 mis-iqd 内部面**权威计算**并以 ``is_primary`` 计算字段回传（口径 =
+    Java ``IqdAdminService.findPrimaryConnection()``：``name='default'`` 优先 → 最小 id
+    ``enabled`` → 首行，见设计 §14.5.1 A/B/D）。本函数**仅消费该字段**，**不本地复现
+    选主规则** ⇒ 从根上消除历史上「只取 ``connections[0]``、无视 ``name='default'``」
+    与 Java 漂移的 3 份拷贝（§14.5.1 C）。
+
+    向后兼容：旧版 mis-iqd 响应无 ``is_primary`` 字段时，退回「列表首条」——列表按
+    ``id`` 升序返回 ⇒ 等价第②级「最小 id enabled」，与历史行为一致。
+
+    Args:
+        connections: ``get-connections`` 返回的连接视图列表（可为 ``None`` / 空）。
+
+    Returns:
+        主连接 id；无可用连接时返回 ``None``。
+    """
+    if not connections:
+        return None
+    for conn in connections:
+        if isinstance(conn, dict) and conn.get("is_primary") is True:
+            return _coerce_connection_id(conn.get("id"))
+    first = connections[0]
+    if isinstance(first, dict):
+        return _coerce_connection_id(first.get("id"))
+    return None
+
+
 class IqdConfigClientError(RuntimeError):
     """mis-iqd 配置读取 API 调用异常（网络失败、非 JSON、业务 code != 0）。"""
 
@@ -206,6 +255,23 @@ class IqdConfigClient:
         items = data if isinstance(data, list) else []
         logger.info("IQD configs pulled", count=len(items), trace_id=ctx.trace_id)
         return items
+
+    async def get_connections(self, ctx: IqdCallContext | None = None) -> list[dict[str, Any]]:
+        """拉取连接配置清单（启用连接最小视图，含 ``is_primary`` 计算字段）。
+
+        与 :meth:`get_configs` 同源（同一 ``/internal/v1/iqd/get-connections`` 端点）；
+        独立命名以贴合领域术语「连接清单」。**修正历史悬空调用**：主连接解析曾调用
+        ``get_connections`` 但该名称从未定义（``AttributeError`` 被降级 ``except`` 吞掉
+        ⇒ 主连接解析恒返回 ``None``），本补丁补齐，使 :meth:`resolve_primary_connection_id`
+        真正可用。
+
+        Args:
+            ctx: 身份与追踪上下文。
+
+        Returns:
+            连接最小视图列表（每行含 ``is_primary`` 计算字段）。
+        """
+        return await self.get_configs(ctx)
 
     async def load_configs(self, ctx: IqdCallContext | None = None) -> list[dict[str, Any]]:
         """拉取并写入本地缓存（缓存骨架，TTL 由配置驱动）。
@@ -334,7 +400,7 @@ class IqdConfigClient:
             IqdConfigClientError: 网络失败或 mis-iqd 返回 ``code != 0``。
         """
         ctx = ctx or IqdCallContext()
-        cid = connection_id or await self._resolve_primary_connection_id(ctx)
+        cid = connection_id or await self.resolve_primary_connection_id(ctx)
         if cid is None:
             raise IqdConfigClientError("no primary connection")
         data = await self._request(
@@ -409,7 +475,7 @@ class IqdConfigClient:
             IqdConfigClientError: 网络失败或 mis-iqd 返回 ``code != 0``。
         """
         ctx = ctx or IqdCallContext()
-        cid = connection_id or await self._resolve_primary_connection_id(ctx)
+        cid = connection_id or await self.resolve_primary_connection_id(ctx)
         if cid is None:
             raise IqdConfigClientError("no primary connection")
         data = await self._request(
@@ -628,21 +694,33 @@ class IqdConfigClient:
         # 剔除空值，避免注入空 env 变量
         return {k: v for k, v in env.items() if v != ""}
 
-    async def _resolve_primary_connection_id(self, ctx: IqdCallContext) -> int | None:
-        """解析主连接 id（name='default' 或首条 enabled）。"""
+    async def resolve_primary_connection_id(self, ctx: IqdCallContext | None = None) -> int | None:
+        """解析主连接 id（消费 ``get-connections`` 的 ``is_primary`` = **单一真值源**）。
+
+        口径由 mis-iqd 内部面**权威确定**（``IqdAdminService.findPrimaryConnection()``：
+        ``name='default'`` 优先 → 最小 id ``enabled`` → 首行）；Worker 侧**不再本地复现
+        选主规则**，仅消费该（由权威口径派生的）``is_primary`` 字段 ⇒ 与 Java 侧口径消除
+        漂移（设计 §14.5.1 B/C/D）。
+
+        ⚠️ 更正历史 docstring（原自陈「``name='default'`` 或首条 enabled」，但实现只取
+        ``connections[0].id`` = 最小 id enabled，**无视 ``name='default'``**，多条 enabled
+        并存时与 Java 漂移）。
+
+        失败降级：拉取异常 → ``warning`` + 返回 ``None``（语义不变）。
+
+        Args:
+            ctx: 身份与追踪上下文（可为空）。
+
+        Returns:
+            主连接 id；无可用连接 / 拉取失败时返回 ``None``。
+        """
+        ctx = ctx or IqdCallContext()
         try:
             connections = await self.get_connections(ctx)
         except Exception as exc:  # noqa: BLE001 - 解析失败降级为无连接
             logger.warning("IQD resolve primary connection failed", error=str(exc))
             return None
-        if connections:
-            cid = connections[0].get("id")
-            if isinstance(cid, (int, str)):
-                try:
-                    return int(cid)
-                except (TypeError, ValueError):
-                    return None
-        return None
+        return select_primary_connection_id(connections)
 
     # ================================================================ 配置拉取扩展
 

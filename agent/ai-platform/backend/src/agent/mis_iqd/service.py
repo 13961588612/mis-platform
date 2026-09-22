@@ -1474,20 +1474,20 @@ class IqdAskService:
             logger.warning("IQD model sync job report failed", connection_id=connection_id, error=str(exc))
 
     async def _resolve_primary_connection_id(self, client: Any) -> int | None:
-        """解析主连接 id（name='default' 或首条 enabled）。"""
-        try:
-            connections = await client.get_connections()
-        except Exception as exc:  # noqa: BLE001 - 解析失败降级为无连接
-            logger.warning("IQD resolve primary connection failed", error=str(exc))
-            return None
-        if connections:
-            cid = connections[0].get("id")
-            if isinstance(cid, (int, str)):
-                try:
-                    return int(cid)
-                except (TypeError, ValueError):
-                    return None
-        return None
+        """解析主连接 id（**委托** :meth:`IqdConfigClient.resolve_primary_connection_id`）。
+
+        ⚠️ 更正历史 docstring：原实现只取 ``client.get_connections()[0].id``（= 最小 id
+        enabled），**无视 ``name='default'``**，多条 ``enabled=true`` 并存时会与 Java 侧
+        漂移（设计 §14.5.1 C）。现**统一委托**客户端方法（消费 ``is_primary`` 单一真值源，
+        与 Java ``findPrimaryConnection()`` 同源），不再本地复现选主规则。
+
+        Args:
+            client: :class:`IqdConfigClient` 实例（构造函数注入或懒加载）。
+
+        Returns:
+            主连接 id；无可用连接 / 拉取失败时返回 ``None``。
+        """
+        return await client.resolve_primary_connection_id()
 
     @staticmethod
     def _project_home(connection_id: int) -> str:

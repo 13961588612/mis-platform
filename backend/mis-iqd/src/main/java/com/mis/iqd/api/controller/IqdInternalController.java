@@ -76,10 +76,24 @@ public class IqdInternalController {
 
     /**
      * 拉取连接配置清单（启用连接最小视图，不含敏感字段）。
+     *
+     * <p>每行**追加**计算字段 {@code is_primary}（布尔）：标识该连接是否为主连接。
+     * 判定**复用** {@link IqdAdminService#findPrimaryConnection()}（**权威单一选主口径**
+     * —— {@code name='default'} 优先 → 最小 id {@code enabled} → 首行，见 §14.5.1 A/B/D），
+     * 即「本行 {@code id} == {@code findPrimaryConnection().id}」。
+     * {@code is_primary} **不落库、不新增迁移、不改既有键**（追加在末尾，向后兼容）。
+     *
+     * <p>用途：① 让隐式选主**可观测**；② 作为 ai-platform Python 侧
+     * {@code IqdConfigClient.resolve_primary_connection_id} 的**单一真值源** —— 消除历史
+     * 3 份「只取 {@code connections[0]}、无视 {@code name='default'}」的漂移拷贝（§14.5.1 C）。
      */
     @GetMapping("/get-connections")
     public Result<List<Map<String, Object>>> getConnections() {
         List<IqdConnection> connections = connectionRepository.findByEnabledOrderByIdAsc(1);
+        // 主连接 id 由权威选主方法派生（与 GET /config 同源）——避免第 4 份判定拷贝。
+        Long primaryConnectionId = adminService.findPrimaryConnection()
+                .map(IqdConnection::getId)
+                .orElse(null);
         List<Map<String, Object>> items = connections.stream().map(c -> {
             Map<String, Object> m = new LinkedHashMap<>();
             m.put("id", c.getId());
@@ -94,6 +108,8 @@ public class IqdInternalController {
             m.put("enabled", c.getEnabled());
             m.put("mcp_status", c.getMcpStatus());
             m.put("mcp_port", c.getMcpPort());
+            // 追加计算字段（末尾，不改既有键，向后兼容）：本行是否为主连接
+            m.put("is_primary", c.getId() != null && c.getId().equals(primaryConnectionId));
             return m;
         }).toList();
         return Result.ok(items);
@@ -388,8 +404,24 @@ public class IqdInternalController {
                 options));
     }
 
-    /** 取主连接 id（优先 name='default' / 第一条 enabled）。 */
-    private Long resolvePrimaryConnectionId() {        return connectionRepository.findByName("default")
+    /**
+     * 取主连接 id（W2 全量拉取面 / 无连接上下文的**服务间兜底**）。
+     *
+     * <p><b>契约（§14.5.1 B，行为一字不改）</b>：三级**确定**回退，与
+     * {@link IqdAdminService#findPrimaryConnection()} **同构** ——
+     * <ol>
+     *   <li>① {@code name='default'}（**主连接显式标识**；**不筛 {@code enabled}**）；</li>
+     *   <li>② 否则 **id 最小**的 {@code enabled=1}（{@code OrderByIdAsc}，确定性回退）；</li>
+     *   <li>③ 否则任意首行（{@code findAll().findFirst()}）；表空 ⇒ {@code null}。</li>
+     * </ol>
+     *
+     * <p>调用方（6 处内部读面，grep 核实）：{@code get-acls} / {@code get-scope-policies} /
+     * {@code get-catalog-in-scope} / {@code get-catalog-meta} / {@code get-sql-pairs} /
+     * {@code get-knowledge}。**本次仅补契约注释，行为不变**（放开多条 {@code enabled} 后仍
+     * 确定：① 优先 ⇒ 不受 {@code enabled} 条数影响）。
+     */
+    private Long resolvePrimaryConnectionId() {
+        return connectionRepository.findByName("default")
                 .map(IqdConnection::getId)
                 .orElseGet(() -> {
                     List<IqdConnection> enabled = connectionRepository.findByEnabledOrderByIdAsc(1);

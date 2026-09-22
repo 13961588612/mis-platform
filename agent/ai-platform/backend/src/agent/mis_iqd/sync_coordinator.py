@@ -45,23 +45,20 @@ class SyncCoordinator:
         return self._locks.setdefault(connection_id, asyncio.Lock())
 
     async def _resolve_primary_connection_id(self) -> int | None:
-        """解析主连接 id（name='default' 或首条 enabled）。"""
+        """解析主连接 id（**委托** :meth:`IqdConfigClient.resolve_primary_connection_id`）。
+
+        ⚠️ 更正历史 docstring：原实现只取 ``get_connections()[0].id``（= 最小 id enabled），
+        **无视 ``name='default'``**，多条 ``enabled=true`` 并存时会与 Java 侧漂移
+        （设计 §14.5.1 C）。现**统一委托**客户端方法（消费 ``is_primary`` 单一真值源，
+        与 Java ``findPrimaryConnection()`` 同源），不再本地复现选主规则。
+        """
         from src.adapters.iqd_config_client import IqdConfigClient
 
         client = IqdConfigClient()
         try:
-            connections = await client.get_connections()
-        except Exception as exc:  # noqa: BLE001 - 解析失败降级为无连接
-            logger.warning("IQD resolve primary connection failed", error=str(exc))
-            return None
-        if connections:
-            cid = connections[0].get("id")
-            if isinstance(cid, (int, str)):
-                try:
-                    return int(cid)
-                except (TypeError, ValueError):
-                    return None
-        return None
+            return await client.resolve_primary_connection_id()
+        finally:
+            await client.aclose()
 
     async def trigger(
         self, connection_id: int | None, wait: bool, scope: str = "materials"
