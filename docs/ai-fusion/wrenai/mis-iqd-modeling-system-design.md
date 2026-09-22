@@ -1208,3 +1208,348 @@ calc:<model>.<column_name>        calculated column 节点（新增，二/四期
 
 - **`architecture.md` 已升 v1.12（基线 v1.11）**，建模台实施回写见其 **§11**；ID 段位正式约定见其 **§7.10**。
 - **v1.10（样本增量）与 v1.11（建模台规划增量）历史编号含义未被改动**；`V76`/`V78`/`V81`/`V87`–`V91` 迁移文件**一字未改**（修复一律新迁移追加）。
+
+---
+
+## 14. 增量补丁 —— 按 id 更新连接端点 `PUT /api/v1/iqd/connections/{id}`（2026-09-22 追加）
+
+> **性质**：**增量补丁**，不改既有章节。仅新增「按 id 更新连接」能力，补齐建模台多连接下的写入缺口。
+> **事实基线（已 grep 核实）**：BFF 连接端点仅 3 个（`IqdModelingController:92 / :105 / :111` = `POST/GET /connections` + `POST /connections/{id}/test`）；`IqdAdminService` 独缺 `updateConnection(Long, dto)`（现有 `getConnection:140` / `saveConnection:160` / `testConnection:210` / `listConnections:229` / `createConnection:252` / `testConnection(Long):306`）；前端 `api/iqd-modeling.ts` **无任何 update**。
+> **缺口**：唯一写通道 `PUT /api/v1/iqd/config`（`IqdController:49`）是**「单条主连接 upsert」**（一期形态），面对「已有连接 N 条 + per-connection MCP 状态卡」时，「停用 / 编辑**指定**连接」**无精确指向**。
+
+### 14.1 端点契约
+
+```
+PUT /api/v1/iqd/connections/{id}
+权限码：iqd:modeling:edit（裁决依据见 §14.3）
+语义  ：按 id 精确更新一条既有连接（**局部更新**：缺省/null = 保留原值）
+```
+
+**请求体**（wire snake_case；沿用 `CreateConnectionRequest` 字段集）
+
+```jsonc
+{
+  "name": "销售库-生产",          // 可选；提交非空 → 改名（唯一校验，见下）
+  "base_url": "http://10.0.0.5:3000",
+  "auth_type": "basic",           // none | basic | token
+  "secret_ref": "",               // 留空 / "******" = 保留原值（与 create 一致）
+  "project_id": "sales",
+  "default_connector": "postgres",
+  "timeout_seconds": 90,
+  "language": "zh-CN",
+  "enabled": true                 // 可用性开关；可多条同时为 true（§14.5）
+}
+```
+
+| 字段 | 缺省 / `null` | 提交值 | 备注 |
+|---|---|---|---|
+| `name` | **保留原名** | 改名 | ⚠️ 改名唯一性：`orig.equals(new)` → 跳过校验；否则 `existsByName(new)` → **`40900`**（对齐 `uk_iqd_connection_name`；先查后报，避免数据库约束异常被降级成 `50000`） |
+| `base_url` / `project_id` / `default_connector` / `language` | 保留原值 | 覆盖 | |
+| `auth_type` | 保留原值 | 覆盖 | 空串视为缺省 |
+| `timeout_seconds` | 保留原值 | 覆盖 | 须 > 0，否则 `42200` |
+| `secret_ref` | 保留原值 | 覆盖 | **与 create 逐字一致**：`== null` 或 `isSecretPlaceholder()`（`"******"`）或空白 → 不改；非空非占位 → 写入 |
+| `enabled` | **保留原值** | 覆盖 | **只改本行，不联动其它连接**（多条可并存，§14.5） |
+
+> **⚠️ 局部更新的"清楚"**：本端点 uniform 采用「缺省/null = 保留原值」，**不提供"清空字段"**（如把 `base_url` 置空）。理由：wire 上无法区分「未提交」与「显式置空」；引入哨兵值会让契约变脆。若业务确需清空，另开「显式 null 语义」讨论（见 §14.10）。
+
+**响应体**：`IqdConnectionVO`，**与 `GET /connections` 的元素形态逐字段一致**（服务层复用同一个 `toVO(entity)`）。
+⇒ **前端可直接用返回值替换列表项**（最佳性质）；但若发生 `enabled` 切换，仍须失效整个列表（§14.7）。
+
+**错误码**（沿用既有语义）
+
+| 码 | 触发 | 既有出处 |
+|---|---|---|
+| `40900` | 改名撞 `uk_iqd_connection_name` | 同 `createConnection:252` 同名冲突 |
+| `42200` | `id` 为空 / `timeout_seconds <= 0` / **连接不存在** | **建模台节点族约定**：`IqdCatalogNodeService` 对「问数连接不存在」用 `42200`（`:215`）；`upsertCube` 对「cube 不存在」用 `42200` |
+| `40300` | 无 `iqd:modeling:edit`（BFF 注册表未映射 / mis-iqd `@PreAuthorize` 拒） | 既有 |
+| `40901` | **不采用**（幂等键，见 §14.4） | — |
+
+> ⚠️ **已知不一致（照实记录）**：`IqdAdminService.testConnection(Long)` 对「连接不存在」抛 `ResultCode.NOT_FOUND` = **`40400`**（`ResultCode.java:52`），而本端点用 `42200`。**裁决：本端点取 `42200`**（与建模台节点族一致、与本文档 §3.3 契约族一致）；**本期不回头收敛 `testConnection` 的 `40400`**（避免动既有行为、避免前端两处处理漂移）。QA 需**同时**覆盖两个码（§14.8）。
+
+### 14.2 与既有 `PUT /api/v1/iqd/config` 的边界（**裁决：并存，本期不收敛**）
+
+| 维度 | `PUT /api/v1/iqd/config`（既有，一期） | `PUT /api/v1/iqd/connections/{id}`（本次新增） |
+|---|---|---|
+| 定位方式 | **隐式**：`findPrimaryConnection()`（`name="default"` → 首个 enabled → 首行） | **显式**：路径 `id` |
+| 目标不存在时 | **新建**（`orElseGet(IqdConnection::new)`，upsert 语义） | **`42200` 报错**（不隐式建） |
+| 改名冲突 | **不校验**（直接写，可能撞唯一约束） | **`40900` 先查后报** |
+| `enabled` 语义 | 单条主连接（隐式，upsert） | **按 id 精确改本行、不联动其它**（多条可并存，§14.5）；两路径主连接口径共用 `name='default'`（§14.5.1 A） |
+| 权限码 | `iqd:config:save`（menu **92502** / api **92552**，V72） | `iqd:modeling:edit`（menu **92632**，V87） |
+| 前端消费者 | `iqd-config-page.tsx`（一期配置页，`/iqd/config`） | `ConnectionWizard.tsx`（建模台多连接） |
+
+**裁决 = 并存**：
+1. **不能删 `/config`**：`iqd:config:save` 已被 `iqd-config-page` 使用（`iqd-config-page.tsx:132` 的"保存"按钮），且 `GET /config` / `POST /config/test` 的语义（主连接视图 / 主连接自检）**仍然成立**，没有替代品。
+2. **语义正交**：「主连接 upsert」与「按 id 精确更新」服务不同场景；强行合并会让 `config` 页丧失「首次配置即建连接」能力。
+3. **共存期风险（已知）**：两条写路径可改同一条连接 → `last-write-wins`（与 §14.4 同一风险，同一缓解）。
+4. **收敛路径（本期不执行，仅存档）**：待 `ConnectionWizard` 全面取代 `iqd-config-page` 的连接编辑职责后 →（a）`config` 页"保存"改调 `PUT /connections/{primaryId}`；（b）`PUT /config` 标 `deprecated`（保留 ≥1 个版本）；（c）`GET /config` + `POST /config/test` **长期保留**（只读/自检语义无替代）。**迁移不要求本期做。**
+
+### 14.3 权限码裁决：`iqd:modeling:edit`（**已 grep 核实真码**）
+
+| 候选 | 实测登记 | 本端点裁决 |
+|---|---|---|
+| `iqd:modeling:edit` | menu **92632**（V87 `type=3` 权限按钮）；`POST /connections` 92601 绑 92632 | ✅ **采用** |
+| `iqd:config:save` | menu **92502** → api **92552**（`PUT /api/v1/iqd/config`，V72） | ❌ 仅属 `/config` 一期通道 |
+| `iqd:modeling:view` | menu **92631** | ❌ 读语义 |
+| `iqd:mcp:manage` | menu **92656**（V89，6 条 `/mcp/**`） | ❌ 进程操作，非配置编辑 |
+
+**理由**：① 与 `POST /connections`（建连接）同码 —— 同属"建模台编辑连接配置"；② 前端 `ConnectionWizard` 已有 `iqd:mcp:manage` 闸门（`:234`），新增闸门若用另一个码会在同一卡片上出现两个码，**照抄 MCP 那行的码即会错配**（→ 前端放行、后端 40300），故必须显式区分并在注释中写明。
+
+### 14.4 并发控制裁决：**① 无行版本（last-write-wins）**（2026-09-22 修订：`enabled` 单事务块随单条约定一并摘除）
+
+**核实结论（关键）**：`iqd_connection` **没有**"连接配置行版本"列。它**有** `current_edit_revision` / `built_edit_revision`（`V80:13-19`），但那是**模型 / catalog 编辑版本**（由 catalog 节点写路径 bump、驱动 MDL 重建）—— **不是**连接配置的并发基线。
+
+| 方案 | 裁决 | 理由 |
+|---|---|---|
+| ③ 加版本列 | ❌ | 需新迁移 `ALTER TABLE` + 回填 + **三条写路径**（`saveConnection`/`createConnection`/`updateConnection`）全部维护；为**低频人工管理操作**付高成本，YAGNI |
+| ② 幂等键 | ❌ | `iqd_edit_idempotency` 的键值语义绑定 `edit_revision`（catalog 节点写）；连接配置无该语义，硬套会让该表语义混叠 |
+| **① 无并发控制** | ✅ **采用** | ① 连接配置是**低频人工管理**（非多人协作编辑），last-write-wins 的坏窗口极窄（两名管理员同时改同一连接同一字段）；② **复用 `current_edit_revision` 是错的**——改名/停用不改变模型，却被当成"模型变了"→ 活跃建模期产生**假 `40900`** 且可能触发**多余重建**；③ 原「唯一必须保证的不变量是 `enabled` 单条」**已随 §14.5 修订作废**——放开多条后**无跨行不变量**，故**不需要任何串行化**，`last-write-wins` 即全部规则。
+
+**`enabled` 临界区 —— 2026-09-22 摘除**：原设计为"至多一条 `enabled=true`"做串行化（悲观锁：锁 `enabled=1` 行 + 目标行），以避免"两个并发启用各自停用对方、最后两条都 enabled"的交错。**该不变量已作废**（§14.5）⇒ **悲观锁一并摘除**（§14.7 T06 第 4 步同步删除），与 `last-write-wins` 一致；多连接并发改**同一行**仍归 last-write-wins，故障窗口极窄（理由同表内 ①）。
+
+### 14.5 多连接并存语义（**2026-09-22 修订：原「一期仅一条 `enabled=true`」约定作废**）
+
+> **修订事由**：用户已拍板 —— **放开多条连接并存（真正的多连接）**。
+> **处置**：原 v0 稿 §14.5「启用 A 时自动停用其它 / 服务层强制至多一条 `enabled=true`」**整块摘除**，其背后的「主连接」语义问题改由 **§14.5.1** 显式承接。
+
+**新语义（一句话）**：`enabled` = **连接可用性开关**（该连接是否纳入问数），**可多条同时为 `true`**。
+
+| 项 | 裁决 |
+|---|---|
+| `enabled` 含义 | **连接可用性开关**，与"唯一性/主连接"**解耦** |
+| 数量约束 | **无**。`0` / `1` / `N` 条 `enabled=true` 均合法 |
+| DB 层 | **无约束变更**（`enabled` 无唯一约束，`V71`）⇒ **零迁移** |
+| 服务层 | **不做任何跨行强制**；`updateConnection` 只写**目标行**，不联动其它连接 |
+| 并发 | 跨行不变量消失 ⇒ 原「`enabled` 临界区悲观锁」**一并摘除**（§14.4 已同步修订） |
+| 前端 | 「启用」不再有"连带停用其它"副作用 ⇒ 确认文案改为**明示无副作用**（§14.7） |
+
+**摘除依据（原 v0 稿的两条论据均已不成立）**
+
+1. 原论据①「不保证则 `findPrimaryConnection()` 退化」→ **证伪**：现行实现三级回退（`findByName("default")` → `findByEnabledOrderByIdAsc(1)` → `findFirst()`），第②级**带 `OrderByIdAsc`，本就确定**——不存在原述的"静默随机化"。
+2. 原论据②「`findByEnabled(1)` 是既有消费方」→ **grep 核实有误**：`IqdConnectionRepository.findByEnabled(Integer)`（`:18`）**全仓零引用（死代码）**；真实消费方用的是 `findByEnabledOrderByIdAsc(1)`（3 处，**均为有序**）。⇒ 原稿把"有序"误记为"无序"，结论方向因此反转。
+
+#### 14.5.1 主连接语义显式化（**本次修订核心**）
+
+**问题**：放开多条后 `enabled` 不再是唯一性标识 ⇒ **"主连接是谁"必须由另一个显式口径确定**，否则 `GET /config`、`resolvePrimaryConnectionId()`、Python 侧解析三者的落点会各自漂移。
+
+**A. 主连接如何确定 —— 裁决：`name = 'default'` 即主连接（零迁移、零改代码）**
+
+沿用现行 `IqdAdminService.findPrimaryConnection()`（`:1847`）的三级确定回退，**不引入 `is_primary` 列**：
+
+| 级 | 条件 | 性质 |
+|---|---|---|
+| ① | `name = 'default'` 存在 | **主连接显式标识**（本裁决固定的唯一"约定"级） |
+| ② | 否则 **id 最小**的 `enabled=true` | 确定性回退（`OrderByIdAsc`；已 grep 核实当前为 `enabled.get(0)`） |
+| ③ | 否则任意首行 | 兜底（表空 ⇒ 无主连接，`GET /config` 回空视图） |
+
+**为什么不引入 `is_primary` 列（成本 > 收益，YAGNI）**
+
+| 维度 | 评估 |
+|---|---|
+| 迁移成本 | 需新迁移（`ALTER TABLE` 加列 + 部分唯一索引 `WHERE is_primary` + **存量回填**）——**本期只批了 `V92`**，即须再开 `V93` |
+| 代码成本 | **三条写路径**（`saveConnection` / `createConnection` / `updateConnection`）全部维护"至多一条"不变量 ⇒ 正是 §14.4 已判定"为低频人工操作付高成本"的那类改动 |
+| 收益 | 仅"允许多个非 `default` 主连接"（**一期无此需求**：无"切换主连接"UI，无消费方需要 `default` 以外的主连接） |
+| 结论 | ❌ **不引入** |
+
+> **`name='default'` 为什么够**：`uk_iqd_connection_name UNIQUE (name)`（`V71:28`）⇒ **`name='default'` 至多一条**，与 `is_primary` 的部分唯一索引**等价**。"主连接唯一"这一必要性质**已由既有约束免费提供**，无需新列。
+
+**已知代价（照实记录，不粉饰）**：`name` 是**用户可改的显示字段**，而本补丁端点**支持改名** ⇒ 改名会**连带迁移主连接**：
+
+| 场景 | 后果 | 处置 |
+|---|---|---|
+| 主连接被改名（离开 `default`） | 主连接**回退到第②级**（id 最小 enabled）——确定，但用户可能无感 | **结构化日志** `primary migrated by rename: id=… old=default new=…`（T06，成本≈0） |
+| 某连接改名为 `default` | **成为主连接**（`uk` 保证不与既有冲突） | 结构化日志 `primary claimed by rename: id=…`（同上） |
+| 全库可能长期**没有** `name='default'`（系统从不自动创建该行） | 实际主连接多为**第②级**（id 最小 enabled） | **可观测化**：`get-connections` 增**计算字段** `is_primary`（见 C），让隐式选主**可见** |
+
+> ⇒ 一期**不投入"主连接管理"功能**，只兑现 **「可确定 + 可观测」**：口径确定（`name='default'` + 有序回退）、结果可见（`is_primary` 标记 + 迁移日志）。
+
+**B. `resolvePrimaryConnectionId()` 的去留 —— 裁决：保留（本期不收敛），但钉死契约**
+
+| 项 | 内容 |
+|---|---|
+| 位置 | `IqdInternalController:391`（`private`） |
+| 逻辑 | 与 `findPrimaryConnection()` **同构**（① `name='default'` → ② 最小 id enabled → ③ 首行） |
+| 调用方（**grep 核实，6 处，全在内部面**） | `get-acls:122` / `get-scope-policies:134` / `get-catalog-in-scope:146` / `get-catalog-meta:158` / `get-sql-pairs:205` / `get-knowledge:217` |
+| 场景性质 | Worker **W2 全量拉取面**（无 UI 上下文）；代码注释自陈「**Worker 单连接场景**」 |
+| **去留裁决** | ✅ **保留**：① 放开多条后仍**确定**（① `name='default'` 优先 ⇒ 不受 enabled 条数影响）；② 无回归理由；③ **必须补契约注释**（现注释未写明"有序"与"三级"） |
+| **为何不收敛为显式 id** | 收敛 = 这 6 个端点加 `connectionId` 参数 + Worker 遍历全部 enabled 连接逐条拉取 + 缓存按连接分桶改造 ⇒ 属**"多连接全量收敛"独立工程（二期）**，非本补丁范围 |
+
+**⚠️ C. 隐藏坑（本次新增发现，上游事实清单未覆盖）：Python 侧「主连接」口径与 Java 不一致**
+
+| 侧 | 实现 | 口径 |
+|---|---|---|
+| Java | `IqdAdminService.findPrimaryConnection:1847` / `IqdInternalController.resolvePrimaryConnectionId:391` | ① **`name='default'` 优先** → ② 最小 id enabled → ③ 首行 |
+| Python | `IqdConfigClient._resolve_primary_connection_id`（`adapters/iqd_config_client.py:631`）、`IqdSyncCoordinator`（`agent/mis_iqd/sync_coordinator.py:47`）、`service.py:1476` —— **3 处同构拷贝** | **只取 `get_connections()` 的 `connections[0].id`** = 最小 id enabled ⇒ **完全无视 `name='default'`** |
+
+- **单条 enabled 时**：两者必然同值 ⇒ 坑被掩盖（**这正是"一期单条约定"下从未暴露的原因**）。
+- **多条 enabled 并存时**：只要 `default` 不是 id 最小的 enabled 连接 ⇒ **Java 选 `default`、Python 选最小 id** ⇒ **问数侧与配置侧指向不同连接**（静默、无报错）。
+- **裁决**：**必须对齐**（→ 拆 **T08**）。推荐做法 = Python **不再本地选主**，直接消费 `get-connections` 新增的 **`is_primary` 计算字段**（单一真值源，**消除 3 份拷贝**）；备选 = 3 处各加「先找 `name=='default'`」一行（成本更低，但保留 3 份拷贝）。
+- **范围**：Python 3 文件 + 单测；**不改** Java 业务逻辑（仅内部面加 `is_primary` 输出）。
+
+**D. `get-connections` 是否需改 —— 裁决：结构不改，加 1 个计算字段 `is_primary`**
+
+- 事实成立：该端点**已返回 `List`**（`findByEnabledOrderByIdAsc(1)`）⇒ **结构上本就支持多条**，放开后**无需改结构**。
+- **补 `is_primary`**（布尔，**计算字段，不落库、不新增迁移**）：由 `resolvePrimaryConnectionId()` 结果与该行 `id` 比对得出 ⇒ ① 让隐式选主**可观测**；② 作为 **Python 消除 3 份选主拷贝的单一真值源**（C）。
+- 命名 `is_primary`（snake_case，与该端点既有 `mcp_status`/`mcp_port` 一致）；**追加在既有键之后，不改既有键**（向后兼容）。
+- **`GET /config`（`IqdAdminService.getConnection()`）不改**：它本就读 `findPrimaryConnection()` ⇒ 天然确定。
+
+**E. 问数侧如何选连接 —— 边界裁决**
+
+| 路径 | 选连接方式 | 依据（grep 核实） |
+|---|---|---|
+| 建模台前端（catalog / ACL / scope / sql-pair / knowledge / self-heal / discovery） | **显式 `connectionId`**（**现状已如此**） | `frontend/mis-admin-web/src/lib/api/iqd.ts` 方法均带 `connectionId`（`:372/380/402/421/516/676/711/778/833` …） |
+| `connection-credentials`（MCP 凭证解析） | **显式 `connectionId`** | `IqdInternalController:314`（方案 A 多连接 D6） |
+| `mcp-status` / `mcp-deploy` | **显式 `connection_id`** | `IqdInternalController:326/343` |
+| Worker W2 全量拉取（6 端点）+ Python 兜底 | **隐式主连接**（保留） | 无 UI 上下文；一期未参数化（B） |
+| 一期遗留配置页 `/iqd/config`（`GET`/`PUT`/`POST test`） | **隐式主连接** | 一期"单连接 upsert"形态，本期不收敛（§14.2） |
+
+> **边界规则（一句话）**：**凡调用方持有 `connectionId`（UI 选择器 / 已参数化）⇒ 一律显式传**；**仅"无连接上下文的服务间兜底"允许隐式主连接**，且其口径必须与 `name='default'` 一致（B/C）。
+> **方向**：随各面逐步参数化，**隐式主连接的使用面只减不增**；一期以「**显式优先 + 隐式确定**」并存。
+
+### 14.6 迁移 `V92` 规格
+
+**文件**：`backend/mis-migrator/src/main/resources/db/migration/V92__iqd_connection_update_seed.sql`
+**前置**：最新为 `V91`（`V87`–`V91` 一字不动；`V92` 追加）。
+
+| 项 | 值 | 依据 |
+|---|---|---|
+| `sys_api.id` | **92800** | `928xx` 段**全量 grep 核实空闲**（已用至 `92704`） |
+| `sys_api.module_id` / `parent_id` | `92020` / `92550` | 同 `V87`/`V90`/`V91`（`问数 API` 根节点） |
+| `sys_api.code` | **`00960045`** | module 92020 下续号（`V90`=`00960044`）；对齐 `uk_api_module_code` |
+| `sys_api.http_method` / `path_pattern` | **`PUT`** / **`/api/v1/iqd/connections/{id}`** | `{id}` 为 `AntPathMatcher` 模板变量（`ApiPermissionRegistry:57` 用 `pathMatcher.match`）；既有先例 `POST /api/v1/iqd/connections/{id}/test`（`V87:95`） |
+| `sys_api.name` / `sort` | `建模台-更新连接` / `45` | 同族命名 |
+| `sys_menu_api.id` / `menu_id` / `api_id` | **92801** / **92632** / **92800** | 挂 `iqd:modeling:edit`（与 `POST /connections` 92616 同菜单） |
+| `sys_menu` / `sys_role_permission` | **不新增** | 92632 已由 `V87` 建并授予 `role_id=1` |
+
+**`{id}` 匹配边界（重要）**：`AntPathMatcher` 的 `{id}` 只匹配**恰好一段** ⇒ `PUT /api/v1/iqd/connections/{id}` **不会**吞掉 `/{id}/test`（后者 method=POST 且多一段），也**不会**匹配无 id 的 `PUT /api/v1/iqd/connections`（→ 仍未映射 → `40300`，符合预期）。
+
+**守卫写法**（对齐 `V90`/`V91` 三重去重 + 逐条 `EXISTS`，各自对齐**真实唯一约束**）：
+
+```sql
+-- 1. sys_api（三重去重：① id ② (module_id, code)  →uk_api_module_code ③ (method,path) →uk_api_method_path）
+INSERT INTO sys_api (id, module_id, parent_id, code, type, name, http_method, path_pattern, sort, status, created_at, updated_at)
+SELECT v.* FROM (VALUES
+    (92800, 92020, 92550, '00960045', 'api'::sys_api_node_type, '建模台-更新连接', 'PUT', '/api/v1/iqd/connections/{id}', 45, 1, NOW(), NOW())
+) AS v(id, module_id, parent_id, code, type, name, http_method, path_pattern, sort, status, created_at, updated_at)
+WHERE NOT EXISTS (SELECT 1 FROM sys_api WHERE id = v.id)
+  AND NOT EXISTS (SELECT 1 FROM sys_api a WHERE a.module_id = 92020 AND a.code = v.code)
+  AND NOT EXISTS (SELECT 1 FROM sys_api a
+                  WHERE a.type='api' AND a.status=1 AND a.http_method=v.http_method AND a.path_pattern=v.path_pattern)
+  AND EXISTS (SELECT 1 FROM sys_api WHERE id = 92550);   -- 父节点存在
+
+-- 2. sys_menu_api（一对一去重：id + (menu_id, api_id) →uk_menu_api_pair）
+INSERT INTO sys_menu_api (id, menu_id, api_id, sort, created_at)
+SELECT v.* FROM (VALUES
+    (92801, 92632, 92800, 1, NOW())                       -- PUT /connections/{id} → iqd:modeling:edit
+) AS v(id, menu_id, api_id, sort, created_at)
+WHERE NOT EXISTS (SELECT 1 FROM sys_menu_api WHERE id = v.id)
+  AND NOT EXISTS (SELECT 1 FROM sys_menu_api ma WHERE ma.menu_id = v.menu_id AND ma.api_id = v.api_id)
+  AND EXISTS (SELECT 1 FROM sys_menu m WHERE m.id = v.menu_id AND m.status = 1)
+  AND EXISTS (SELECT 1 FROM sys_api  a WHERE a.id = v.api_id);
+```
+
+- **刻意不加 `EXISTS(sys_module 92020)` 守卫**：沿用 **`V91` 结论** —— 模块缺失时让 `fk_api_module` **报错中止（fail-loud）**，优于静默跳过（静默跳过正是 `F-1` 的病根，见 `architecture.md §7.10`）。
+- **迁移后自检（注释形式，对齐 `V90`）**：① 端点+绑定（期望 1 行，`permission='iqd:modeling:edit'`）；② 同路径不同方法并存（`POST 92601` + `PUT 92800`）；③ 前序段计数不变（`92601-92612` / `92640-92644` / `92650-92655` / `92700` / `92703`）；④ 全库 `(method,path)` 无重复。
+
+### 14.7 前后端改动清单（**文件级**）
+
+**后端 mis-iqd**
+
+| 文件 | 动作 | 说明 |
+|---|---|---|
+| `IqdAdminService.java` | **新增** `updateConnection(Long id, IqdConnectionUpdateRequest dto)`（`@Transactional`） | 校验链：`id` 非空 → 存在性（`42200`）→ 改名唯一（`40900`）→ 写字段（`null` = 保留原值）→ **主连接迁移日志**（改名触碰/占用 `default` 时打结构化日志，§14.5.1 A）→ `save` → `publish("iqd.config.changed")`；**`toVO` 复用**（响应同形）；**不 bump `current_edit_revision`**；**无跨行联动、无悲观锁**（2026-09-22 修订：§14.4/§14.5） |
+| `IqdAdminService.java` | **新增私有** `applyConnectionFields(IqdConnection, dto)` | 抽取字段写入块（该块已在 `saveConnection`/`createConnection` 各存在一份 → 第 3 份即漂移风险） |
+| `IqdAdminService.java` | **可选重构**：`saveConnection` / `createConnection` 改调 `applyConnectionFields` | 消除 3 份拷贝；**须 `mvn -pl backend/mis-iqd test` 69 passed 不回退**；风险低但触及既有已验证方法，可独立步提交 |
+| `IqdModelingController.java`（mis-iqd） | **新增** `@PutMapping("/connections/{connectionId}")` + `@PreAuthorize("hasAuthority('iqd:modeling:edit')")` | 复用 `Result.ok(...)`；`toConnectionDto` 需**局部更新**版本（见下） |
+| `IqdConnectionUpdateRequest.java`（**新 DTO**） | **新增** | **裁决：新 DTO**，字段**全 `null` 默认、无 `@NotBlank`/`@NotNull`**。**理由**：现有 `IqdConnectionSaveRequest` 带 Java 默认值（`authType="none"` / `timeoutSeconds=60` / `language="zh-CN"` / `enabled=true`）—— 若复用它做局部更新，**未提交字段会被默认值静默覆盖**（改名即重置超时/认证方式）。新 DTO + 控制器按 `containsKey` 填充 ⇒ `null = 保留原值`。既有 create DTO **一字不动**（无回归风险） |
+
+**BFF**
+
+| 文件 | 动作 |
+|---|---|
+| `IqdModelingClient.java` | **新增** `updateConnection(Long id, Map<String,Object> body)` → `PUT /api/v1/iqd/connections/{id}`（`putJson` 不接受路径变量 → 内联 `.uri("/api/v1/iqd/connections/{id}", id)`，对齐 `testConnection` 的写法） |
+| `IqdModelingController.java`（BFF） | **新增** `@PutMapping("/connections/{connectionId}")` → `forward(() -> modelingClient.updateConnection(id, body))`（复用 `forward` 的 **HTTP 200 + `body.code`** 透传，`40900`/`42200` 明细原样给前端） |
+
+**前端**
+
+| 文件 | 动作 |
+|---|---|
+| `types/modeling.ts` | **新增** `export type UpdateConnectionRequest = Partial<CreateConnectionRequest>`（`mdl_writeback_enabled` 本期**不在范围**——归 `PUT /config`/config 页） |
+| `api/iqd-modeling.ts` | **新增** `updateConnection(id, body): Promise<Connection>` → `api.put('/iqd/connections/${id}', body)` + `unwrap`（复用 `IqdModelingApiError` 的 `code`/`data`） |
+| `queries/iqd-keys.ts` | **不新增**（复用既有 `connections()`） |
+| `components/wizard/ConnectionWizard.tsx` | **改**：`McpStatusCard` 增「编辑」「停用/启用」按钮；**二次确认**复用 `WizardShellConfirm`（`:629`，与 MCP 停用同款）；「编辑」以 **edit 模式**复用向导表单（新增 `mode: 'create' \| 'edit'` + `editingConnection?: Connection`，提交边界由 `createConnection` 切到 `updateConnection(id, draft)`）；**成功后失效 `iqdKeys.connections()`**（2026-09-22 修订：已**无**跨行副作用，单条替换亦正确；仍推荐整体失效——改名/启停会改变列表可见性与排序，整体失效最省心） |
+
+**内部面 + Python（**T08 — 2026-09-22 新增**，主连接语义对齐；详见 §14.5.1 B/C/D）**
+
+| 文件 | 动作 | 说明 |
+|---|---|---|
+| `IqdInternalController.java`（mis-iqd） | **改** `getConnections()`（`:80`）：每行**追加** `is_primary`（计算字段） | 由 `resolvePrimaryConnectionId()` 结果与该行 `id` 比对得出；**不落库、不新增迁移**、**不改既有键**（向后兼容） |
+| `IqdInternalController.java`（mis-iqd） | **改** `resolvePrimaryConnectionId()`（`:391`）**注释** | 钉死契约：三级（① `name='default'` → ② **最小 id** enabled → ③ 首行）；**行为不变** |
+| `adapters/iqd_config_client.py` | **改** `_resolve_primary_connection_id()`（`:631`） | **消费 `is_primary`**（推荐，单一真值源）或退化为「先找 `name=='default'`」；**消除与 Java 的口径漂移**（C） |
+| `agent/mis_iqd/sync_coordinator.py` | **改** `_resolve_primary_connection_id()`（`:47`） | 同上（**3 处拷贝必须同改**，否则漂移照旧） |
+| `agent/mis_iqd/service.py` | **改** `_resolve_primary_connection_id()`（`:1476`） | 同上 |
+| `tests/.../test_iqd_*.py` | **新增/改** 用例 | 覆盖：两条 enabled 且 `default` 非最小 id 时，Python 选主 == Java 选主 |
+
+**UI 落点裁决 = `ConnectionWizard` 步骤 1 的 `McpStatusCard`**（不改 `iqd-config-page`）
+1. **缺口就在此组件**（用户描述的场景即"连接列表 + per-connection MCP 卡"）—— 就地修复，用户心智一致。
+2. **同范式扩展**：`McpStatusCard` 已是"per-connection 操作卡"（启/停/重启 + `WizardShellConfirm` 二次确认），加"编辑/停用"是扩展而非新造。
+3. `iqd-config-page` 是**一期单连接 upsert 页**（`iqd:config:save`），且只订阅**单条主连接**（`GET /config`）——放它承载"按 id 操作"会引入**第二套连接列表真值**（违反 Q5「单一缓存源」）。
+4. **不**在建模台主页加连接管理入口：主页连接选择器是"切换上下文"，管理入口应**收敛于 `ConnectionWizard` 一处**。
+
+**交互铁律（对齐既有范式）**：
+- **「停用」= 破坏性操作 ⇒ 必须二次确认**（复用 `WizardShellConfirm`，与 MCP `stop` 同款 `variant="destructive"`）。
+- **「启用」也二次确认**：文案写明「启用后该连接**纳入问数**，**不影响其它连接**」（**2026-09-22 修订**：§14.5 已摘除"自动停用其它"，**文案不得再写该句**）。
+- **权限闸门用 `iqd:modeling:edit`**，与同卡的 `iqd:mcp:manage` **并存但不同码** —— 代码注释必须写明，防止后续照抄出错配。
+
+### 14.8 验收要点（给 QA）
+
+| # | 用例 | 期望 |
+|---|---|---|
+| 1 | **正常更新**：`PUT /connections/{id}` 改 `base_url`/`timeout_seconds` | `200`；响应与 `GET /connections` 该项**逐字段一致**；`updated_at` 刷新；`iqd.config.changed` 已发 |
+| 2 | **改名唯一冲突**：把 A 改成 B 已用的 `name` | `40900` + `data.name`；**库中 A 名未变**（先查后报，无约束异常、无 `50000`） |
+| 3 | **改名同值**：把 A 改成 A 自身 | 成功（跳过唯一校验，不误报 `40900`） |
+| 4 | **连接不存在**：`id=999999` | `42200`（**注意**：`POST /connections/{id}/test` 对同况回 **`40400`** —— 两者不一致是**已知裁决**，见 §14.1） |
+| 5 | **凭证留空保留原值**：`secret_ref: ""` / `"******"` / 缺省 | 原 `secret_ref` **不变**；`GET /connections` 恒回 `******`（**永不回显明文**） |
+| 6 | **凭证更新**：提交非空非占位值 | 落库更新（只验证"写入"路径，不凭空值明文断言） |
+| 7 | **多条 `enabled=true` 并存**（**2026-09-22 改**，原「单条约定」用例作废）：A 已 `enabled=true`，把 B 也置 `true` | B=`true` 且 **A 仍为 `true`**（**无联动、无自动停用、无 `deactivated` 日志**）；`GET /connections` 返回 **A、B 两条**（§14.5 修订） |
+| 8 | **`enabled=false`** | 只置自身 `false`；**不影响任何其它连接**（允许"零 enabled"） |
+| 9 | **权限码不匹配**：用仅 `iqd:modeling:view`（无 `edit`）的账号调用 | **`40300`**（BFF 注册表或 mis-iqd `@PreAuthorize` 拒）；**不得**出现"前端放行、后端 40300"（V92 迁移后前端闸门亦为 `edit`） |
+| 10 | **未登记路径回归**：`PUT /api/v1/iqd/connections`（无 id） | `40300`（未映射；`{id}` 不吞无 id 路径） |
+| 11 | **局部更新不污染**：只提交 `{"name":"X2"}` | 其余字段（`base_url`/`auth_type`/`timeout_seconds`/`language`/`enabled`）**全部保持原值**（验证「新 DTO 无默认值」这一裁决） |
+| 12 | **迁移幂等**：`V92` 重复执行 | `sys_api` 1 行 / `sys_menu_api` 1 行，不重复插；前序段计数不变 |
+| 13 | **既有路径不受影响**：`POST /connections`、`GET /connections`、`POST /connections/{id}/test`、`PUT /config` | 全部行为不变（回归） |
+
+**多连接 / 主连接语义新增用例（**2026-09-22 必覆盖**，§14.5.1）**
+
+| # | 用例 | 期望 |
+|---|---|---|
+| 14 | **主连接确定性**：库中同时存在 `name='default'`（**id 较大**）与另一条 `enabled=true`（**id 较小**） | `GET /config` **恒返回 `name='default'` 那条**（第①级，**与 id 顺序无关**）—— 直接证伪原稿"静默随机"结论 |
+| 15 | **`GET /connections` 返回全部启用项** | 返回**全部** `enabled=true` 的连接（≥2 条），**不因多条而截断 / 报错 / 只回一条** |
+| 16 | **停用主连接后的落点（精确版）** | ⚠️ 第①级 `findByName("default")` **不筛 `enabled`** ⇒ 若 `default` 行**存在**，停用后 `GET /config` **仍返回它**（`enabled=false`）；**第②/③级回退仅在 `default` 行不存在时发生** ⇒ 本用例须分两段：<br>（a）**无 `default` 行**：停用 id 最小的 enabled ⇒ 落**第②级 = 下一个最小 id enabled**；再全停 ⇒ 落**第③级 = 任意首行**；表空 ⇒ **空视图**（`enabled=false` 占位）<br>（b）**有 `default` 行**：停用它 ⇒ **仍返回 `default` 行**（不得跳到 ②） |
+| 17 | **`get-connections` 内部面在两条 enabled 下**（T08） | 返回**两条**；且**恰有一条** `is_primary=true`；其 `id` == `GET /config` 的 `id`（**两侧口径一致**） |
+| 18 | **Python 选主对齐**（T08，原实现会失败） | 当 `default` **不是**最小 id enabled 时，Python 3 处 `_resolve_primary_connection_id` 与 Java `findPrimaryConnection()` 返回**同一 id**；`pytest -k iqd` 110 passed 不回退 |
+
+### 14.9 任务分解（详见 [`mis-iqd-modeling-tasks.md`](mis-iqd-modeling-tasks.md) §8）
+
+| ID | 任务 | 依赖 | 人日 |
+|---|---|---|---|
+| **T06** | 后端 + BFF + 迁移 `V92`（`updateConnection` 服务/控制器/**新 DTO** + BFF 透传 + 端点登记 + 主连接迁移日志） | 无 | **2.0** |
+| **T07** | 前端 UI（`api`/`types` + `ConnectionWizard` 编辑/停用 + 二次确认）+ 验收 | T06（契约已冻结；**联调**需 T06 就绪） | **2.0** |
+| **T08**（**2026-09-22 新增**） | **主连接语义对齐**：`get-connections` 加 `is_primary` + `resolvePrimaryConnectionId` 契约注释 + **Python 3 处选主对齐**（§14.5.1 B/C/D） | 无（与 T06 独立） | **1.0** |
+
+**合计 ≈ 5.0 人日**（原 4.0 ⇒ **+1.0**，全部来自新增 T08；T06/T07 净持平 —— T06 摘掉 `enabled` 强制块但加了迁移日志，T07 去掉"连带停用"断言但新增 edit 模式）。
+
+### 14.10 待明确 / 假设（Anything UNCLEAR）
+
+| # | 项 | 假设 / 影响 |
+|---|---|---|
+| 1 | ~~「仅一条 `enabled=true`」是否仍是有效约束~~ **→ 已裁决，本项关闭（2026-09-22）** | **用户拍板：放开多条并存（真正的多连接）**。原约定**作废**；§14.5 强制停用块**已摘除**，其背后的主连接语义由 **§14.5.1** 显式承接（=`name='default'`） |
+| 2 | **「清空字段」不支持** | `null`/缺省 = 保留原值（§14.1）；若业务需"把 `base_url` 置空"，需引入哨兵或 full-replace 语义 |
+| 3 | **`42200` vs `40400` 不一致** | 本端点用 `42200`（§14.1）；`testConnection(Long)` 仍为 `40400`；**本期不收敛** |
+| 4 | **`mdl_writeback_enabled` 不在本期** | 该字段仅 `Connection` 读模型 + `PUT /config` 有；本端点不纳入（避免与 config 页双重写） |
+| 5 | **迁移后真机验证** | `V92` 与 `{id}` 路径匹配（AntPathMatcher）在**真机** `deny-unmapped=true` 下验证 `200`（非 `40300`）；若异常按 `architecture.md §7.10` 排查 |
+| 6 | **`applyConnectionFields` 重构范围** | 可选（§14.7）；若为压缩风险可不改既有两方法，仅新方法自带写入块（接受第 3 份拷贝） |
+| 7 | **主连接是否改用 `is_primary` 列** | 裁决 = **不引入**（§14.5.1 A）：`name='default'` + `uk_iqd_connection_name` 已保证唯一性。**若二期需要"切换主连接"UI** → 届时评估 `V93` 迁移（部分唯一索引 + 回填） |
+| 8 | **改名会连带迁移主连接** | 已知代价（§14.5.1 A）：本期**不改 rename 语义**（不加保留字/禁止项），仅**打结构化日志**。若业务要求"主连接不受改名影响" → 需回到第 7 项（引入 `is_primary`） |
+| 9 | **原 `enabled` 悲观锁已摘除** | §14.4/§14.7 同步删除（不变量消失 ⇒ 无串行化对象）。**若真机压测发现同连接并发更新交错写入** → 可对**目标行**补 `@Lock(PESSIMISTIC_WRITE)`（成本≈1 行），**不改变** last-write-wins 裁决 |
+| 10 | **`get-connections` 追加 `is_primary` 的兼容性** | 纯**追加键**、不改既有键 ⇒ 既有消费方（BFF `IqdClient.getConnections()` / Python `IqdConfigClient.get_connections()`）**无需改动即可兼容**；仅 T08 主动消费它做选主 |
+| 11 | **Python 3 处选主拷贝是否收敛为 1 处** | 推荐做法是 Python 改消费 `is_primary`（消除 3 份拷贝）；若为压缩风险亦可只在 3 处各加「先找 `name=='default'`」。**两者都满足"与 Java 一致"，但都必须在 T08 内同批改**（只改 1~2 处 = 漂移照旧） |

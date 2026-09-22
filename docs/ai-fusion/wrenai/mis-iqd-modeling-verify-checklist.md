@@ -73,10 +73,16 @@
   grep -i password ~/.wren/profiles.yml     # 期望看到 ${ENV:IQD_DB_PASSWORD}，无明文
   ```
   产出 `<profile_name>` 供向导（§3.1 步骤 2，认证方式 `none` = profile 注入）关联。归属与边界见 runbook §1.5。
-- [ ] **「一期仅一条 `enabled=true`」业务约定**（**业务约定，非 DB 硬约束**）：`iqd_connection` 一期业务上**仅一条启用**。
-  - **依据**：`architecture.md:882`（`iqd_connection` 行备注「UK `(name)`；**一期业务上仅一条 `enabled=true`**」）；实体注释 `IqdConnection.java:16` 与仓储 `IqdConnectionRepository.java:20` 同述。**DB 层实际只有** `CONSTRAINT uk_iqd_connection_name UNIQUE (name)`（`V71__iqd_schema.sql:28`）——**`enabled` 无唯一约束**。
-  - **联调影响**：首次接入时若库里**已有** `enabled=true` 的连接，新建启用可能出现**「两条启用」的非法态**（接口不报错，但语义违规）。
-  - **正确做法**：**先把既有连接置 `false`，再启用新连接**——走既有问数配置页（`PUT /api/v1/iqd/config`，单条 upsert，`IqdAdminService.saveConnection` 按 dto 写 `enabled`）。⚠️ **无** `PUT /iqd/connections/{id}`（多连接接口只有 `POST/GET /connections`、`POST /connections/{id}/test`）。
+- [ ] ⛔ **【已作废】「一期仅一条 `enabled=true`」业务约定** —— **2026-09-22 修订：该约定作废，本节不得再作为验收依据。**
+  - **作废依据**：用户已拍板 **放开多条连接并存（真正的多连接）** ⇒ **多条 `enabled=true` 合法**。书面订正见 `architecture.md:882`（`iqd_connection` 行）；语义与「主连接」口径见 `mis-iqd-modeling-system-design.md §14.5 / §14.5.1`。
+  - **替代口径**：**不再需要"先把旧的置 false 再启用新的"**；多条同时启用为合法态。主连接 = **`name='default'`**（否则 id 最小的 enabled）。
+  - === 以下为**作废前的历史原文**（保留痕迹，勿据此执行）===
+  - [ ] ~~**「一期仅一条 `enabled=true`」业务约定**（**业务约定，非 DB 硬约束**）：`iqd_connection` 一期业务上**仅一条启用**。~~
+    - **依据**：`architecture.md:882`（`iqd_connection` 行备注「UK `(name)`；**一期业务上仅一条 `enabled=true`**」）；实体注释 `IqdConnection.java:16` 与仓储 `IqdConnectionRepository.java:20` 同述。**DB 层实际只有** `CONSTRAINT uk_iqd_connection_name UNIQUE (name)`（`V71__iqd_schema.sql:28`）——**`enabled` 无唯一约束**。
+    - **联调影响**：首次接入时若库里**已有** `enabled=true` 的连接，新建启用可能出现**「两条启用」的非法态**（接口不报错，但语义违规）。
+    - ~~**正确做法**：**先把既有连接置 `false`，再启用新连接**——走既有问数配置页（`PUT /api/v1/iqd/config`，单条 upsert，`IqdAdminService.saveConnection` 按 dto 写 `enabled`）。⚠️ **无** `PUT /iqd/connections/{id}`（多连接接口只有 `POST/GET /connections`、`POST /connections/{id}/test`）。~~
+  - === 历史原文结束 ===
+  - **注**：上述「⚠️ 无 `PUT /iqd/connections/{id}`」一句也被补丁取代 —— 该端点**本期新增**（`mis-iqd-modeling-system-design.md §14.1`，迁移 `V92`），"停用/编辑指定连接"不再需要走 `/config`。
   ```bash
   # ① 查当前启用态（真机 PG）
   PGPASSWORD=<pw> psql -h <PG> -U <user> -d mis_platform -c \
@@ -256,7 +262,9 @@
          -H "Authorization: Bearer <MIS_JWT>"
        ```
      - 校验：**每连接 MCP 状态卡应显示 `mcp_status=ready`**（`GET /api/v1/iqd/connections` 核对）。
-     - ⚠️ **注意（防「两条 `enabled=true`」）**：`iqd_connection` **业务上仅一条启用**（依据 `architecture.md:882`；⚠️ `enabled` **无 DB 唯一约束**，故不是硬约束）。若库里**已有旧启用连接**，**须先将其置 `false` 再建/启用新连接**，否则产生「两条启用」非法态（接口不报错、语义违规）。作废旧连接走既有问数配置页（`PUT /api/v1/iqd/config`，单条 upsert）；**无** `PUT /iqd/connections/{id}`。查当前启用态与置 false 的命令见 §1「一期仅一条 `enabled=true`」项。
+     - ✅ **注意（2026-09-22 修订：原"防两条 `enabled=true`"警告已作废）**：`iqd_connection` **可多条 `enabled=true` 并存**（原「业务上仅一条启用」约定**作废**，见 `architecture.md:882` 与 `mis-iqd-modeling-system-design.md §14.5`）。⇒ **无需**"先把旧的置 `false` 再启用新连接"；多条同时启用为**合法态**，不产生"非法态"。
+       - ~~⚠️ **注意（防「两条 `enabled=true`」）**：`iqd_connection` **业务上仅一条启用**（依据 `architecture.md:882`；⚠️ `enabled` **无 DB 唯一约束**，故不是硬约束）。若库里**已有旧启用连接**，**须先将其置 `false` 再建/启用新连接**，否则产生「两条启用」非法态（接口不报错、语义违规）。作废旧连接走既有问数配置页（`PUT /api/v1/iqd/config`，单条 upsert）；**无** `PUT /iqd/connections/{id}`。~~（**以上为作废前历史原文，保留痕迹**）
+       - **新口径**：主连接 = **`name='default'`**（否则 id 最小的 enabled），见 §14.5.1；**指定连接的停用/编辑**走**本期新增**的 `PUT /api/v1/iqd/connections/{id}`（§14.1 / 迁移 `V92`）。
   3. `/iqd/modeling` → 左树「表发现导入」→ 选 schema → 勾 3 张表 → 导入。
   4. `curl` 校连接与发现：`GET <AI_PLATFORM_HOST>/api/v1/iqd/discovery/schemas?connectionId=<CONN_ID>`（应 200，非 40300/502）。
   5. 双击一张表（或左树「生成模型」）→ 生成 1 个 model → 画布出现节点卡。
