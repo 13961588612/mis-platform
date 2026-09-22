@@ -46,6 +46,18 @@ export const iqdKeys = {
   modelLayout: (connectionId: string | number | null) =>
     ['iqd', 'modeling', 'layout', connectionId] as const,
 
+  // ---------------------------------------------------------------- MCP（进程运行态，T03d 发布流水线用）
+
+  /**
+   * 单连接 MCP 进程状态（`GET /api/v1/iqd/mcp/status?connectionId=`）。
+   *
+   * <p>为什么单独一个 key：MCP 就绪度**不在** `sync-status` 的返回里
+   * （`IqdCatalogSyncStatus` 无该字段），发布流水线的第 ④ 段只能走这个专用端点。
+   * 权限码是 `iqd:mcp:manage`（V89 绑定的 6 条 MCP 路径之一）。
+   */
+  mcpStatus: (connectionId: string | number | null) =>
+    ['iqd', 'mcp', 'status', connectionId] as const,
+
   // ---------------------------------------------------------------- discovery（表发现，a 点）
 
   /** schema 列表。 */

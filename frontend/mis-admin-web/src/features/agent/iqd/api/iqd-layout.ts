@@ -7,8 +7,11 @@
  * <p>权限码：`GET` → `iqd:modeling:view`；`PUT` / `auto-layout` → `iqd:modeling:edit`
  * （A-11：拖拽坐标即写库，归 `edit` 而非 `publish`）。
  *
- * <p><b>T01 全为 stub</b>：函数体 `Promise.reject(new Error('T03 实现'))`
- * （布局持久化与自动布局在 T03 = M2 建模全量落地）。
+ * <p><b>⚠️ 本文件已作废（T03b 标注，勿再使用）</b>：这里的三个函数是 T01 的 `Promise.reject`
+ * 占位，**全仓无调用方**。布局的真实实现（含 `base_version` 乐观并发与错误码分流）
+ * 在 `api/iqd-modeling.ts` 的 {@code getModelLayout} / {@code saveModelLayout} /
+ * {@code autoLayout}（T03a 后端落地后，由画布 `useModelLayout` 消费）。
+ * 保留文件只为避免「删掉后有人又重新发明一份 stub」；改动布局请改 `iqd-modeling.ts`。
  */
 import type { IqdModelLayoutDTO, LayoutAlgorithm, LayoutDirection } from '../types/modeling';
 

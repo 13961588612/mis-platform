@@ -70,6 +70,14 @@ export interface IqdCatalogItem {
   is_email?: boolean;
   description?: string | null;
   expression?: string | null;
+  /**
+   * Cube 所属模型 item_key（如 `mdl:model:orders`）；仅 `kind=cube` 使用。
+   *
+   * <p>T03a 起由 `POST /iqd/catalog/cube` 写入 `iqd_catalog_item.model_ref`（V89 列）
+   * 并随本 VO 回传 —— 画布挂 cube 用这个**精确键**，不要再从 `expression` 里猜模型名。
+   * 历史（MDL 同步来源）为 null，需回退启发式。
+   */
+  model_ref?: string | null;
   source?: string;
   in_scope?: boolean;
   sensitive_level?: string;

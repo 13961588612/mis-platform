@@ -222,7 +222,15 @@ export interface CreateModelRequest {
     is_email?: Record<string, boolean>;
     ref_sql?: string | null;
   };
-  base_revision: number;
+  /**
+   * 乐观并发基线。
+   *
+   * <p>**可选**：T03a `IqdCatalogNodeService.createModel` 仅在**非 null** 时才比对
+   * （不符 → 40900 + `current_edit_revision`）。调用方拿不到「连接当前编辑版本」
+   * （如 `GET /catalog/sync-status` 尚未返回）时应**省略**，而不是填 0 ——
+   * 填 0 在 revision ≥ 1 的连接上必然 40900；省略则退化为「不校验」。
+   */
+  base_revision?: number;
   idempotency_key: string;
 }
 
@@ -238,7 +246,8 @@ export interface CreateRelationshipRequest {
     source_model: string;
     target_model: string;
   };
-  base_revision: number;
+  /** 同 {@link CreateModelRequest.base_revision}：可选，省略 = 服务端不校验。 */
+  base_revision?: number;
   idempotency_key: string;
 }
 
@@ -266,7 +275,8 @@ export interface CreateCubeRequest {
     measures: Measure[];
     dimensions: Dimension[];
   };
-  base_revision: number;
+  /** 同 {@link CreateModelRequest.base_revision}：可选，省略 = 服务端不校验。 */
+  base_revision?: number;
   idempotency_key: string;
 }
 

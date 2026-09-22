@@ -21,23 +21,47 @@
  *       （见 `ModelNodeCard`）。已建模的表不单独成节点，避免与 model 节点重复。</li>
  *   <li><b>cube 不单独成节点</b>（避免节点爆炸）：以「指标」角标挂在所属 model 上；
  *       cube→model 的归属目前**只能是启发式**（见 {@link attachMeasures} 注释）。</li>
- *   <li><b>edge</b>：`kind=relationship`（item_key `mdl:relationship:<name>`，
- *       `expression` 存 join 条件，见 `IqdMdlParser`）→ 解析 `a.x = b.y` 的左右限定名，
- *       映射到 model 节点；条件无法解析时不画边（宁缺勿错，避免拉出错误的 ER 关系）。</li>
+ *   <li><b>edge</b>：`kind=relationship`（item_key `mdl:relationship:<name>`）→ 解析出
+ *       参与的两个模型 + join 语义，映射到 model 节点。**两种落库形态都要认**
+ *       （见 {@link parseRelationship}）：① T03 建模台新建 = `expression` 里是 JSON 信封
+ *       `{join_type,cardinality,condition,source_model,target_model}`；
+ *       ② MDL 同步来源 = `expression`/`description` 直接就是裸条件
+ *       `orders.customer_id = customers.id`（`IqdMdlParser` 的既有形态）。
+ *       条件无法解析时**不画边**（宁缺勿错，避免拉出错误的 ER 关系）。</li>
  * </ol>
  *
  * <p>所有「启发式/暂缺」都写了显式注释，便于 T02b-2 / T03 收敛。
  */
-
 import { useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import type { Edge, Node } from '@xyflow/react';
 import { listIqdCatalog, type IqdCatalogItem } from '@/lib/api/iqd';
+// **type-only import**：本文件被纯函数单测直接 import，必须**零 `@xyflow/react` 运行时依赖**
+// （否则 node 环境单测要连带加载 @xyflow/react 的全部传递依赖）。故 ① 此处只取类型；
+// ② 边类型常量与 marker 简写在本文件里用**字符串**定义（见下方常量注释）。
+import type { RelationEdgeData } from '../components/modeling/RelationEdge';
 import { iqdKeys } from '../queries/iqd-keys';
 
 /** 画布节点类型（与 `ModelNodeCard` 注册的 nodeTypes key 一致）。 */
 export const MODEL_NODE_TYPE = 'iqdModel';
 export const TABLE_NODE_TYPE = 'iqdTable';
+
+/**
+ * 关系边类型（ReactFlow `edgeTypes` 的 key；派生边与画布注册表共用此常量）。
+ *
+ * <p>定义在 hooks 层而不是 `RelationEdge.tsx`：让本文件（纯派生逻辑）不被绑上组件的
+ * 运行时依赖（`RelationEdge` 会 import `@xyflow/react`）。
+ */
+export const RELATION_EDGE_TYPE = 'iqdRelation';
+
+/**
+ * 箭头 marker 简写（ReactFlow 内建 marker：`'arrow'` / `'arrowclosed'`）。
+ *
+ * <p>用字符串而不是 `MarkerType.ArrowClosed` 枚举：同上，避免本文件引入
+ * `@xyflow/react` 运行时依赖。边对象**必须显式声明 marker**，否则自定义边拿不到
+ * marker URL（`EdgeProps.markerEnd` 恒 undefined）→ 箭头画不出来。
+ */
+export const RELATION_MARKER = 'arrowclosed';
 
 /** 模型卡宽（像素）；高度由卡片按可见字段数自适应，仅供布局估算。 */
 export const MODEL_NODE_WIDTH = 260;
@@ -67,7 +91,8 @@ export interface CatalogNodeData extends Record<string, unknown> {
 /** `useCatalogNodes` 返回值。 */
 export interface UseCatalogNodesResult {
   nodes: Node<CatalogNodeData>[];
-  edges: Edge[];
+  /** 关系边（自定义类型 `iqdRelation`，携带 join 语义供 RelationEdge / 弹窗消费）。 */
+  edges: Array<Edge<RelationEdgeData>>;
   /** 原始 catalog（右栏 PropertyPanel / 后续树组件复用同一份缓存数据）。 */
   catalog: IqdCatalogItem[];
   isLoading: boolean;
@@ -107,22 +132,27 @@ function resolveTableKey(items: IqdCatalogItem[], model: IqdCatalogItem): string
 }
 
 /**
- * cube → model 归属（**启发式，T03 需替换为持久化关联**）。
+ * cube → model 归属。
  *
- * <p>T02a 落库时 cube 尚未记录 `model_ref`（`iqd_catalog_item` 无该列，§4.3 的
- * `patch.model_ref` 只在请求体里，落库进 `expression`）。这里退化为「expression /
- * display_name 里出现模型名」才挂——**宁可漏挂也不乱挂**（乱挂会误导建模者）。
- * T03 落地 cube 创建后，应改为读 `model_ref` 关联。
+ * <p>**优先用 `model_ref`**（T03a 起后端 `iqd_catalog_item.model_ref` 由 `POST /catalog/cube`
+ * 写入，并已通过 `GET /catalog` 的 VO 回传）：这是**精确键**，不再依赖名字巧合。
+ *
+ * <p>回退启发式（`expression` / `display_name` 里出现模型名）只服务**历史数据**
+ * ——MDL 同步来源的 cube 没有 `model_ref`（V89 可空、无回填），其归属暂由
+ * `expression`/`baseObject` 兜底。**宁可漏挂也不乱挂**（乱挂会误导建模者）。
  */
 function attachMeasures(model: IqdCatalogItem, cubes: IqdCatalogItem[]): string[] {
   const modelName = lower(model.display_name) || lower(lastSegment(model.item_key));
-  if (!modelName) {
-    return [];
-  }
   const names: string[] = [];
   for (const cube of cubes) {
-    const haystack = `${lower(cube.expression)} ${lower(cube.display_name)} ${lower(cube.item_key)}`;
-    if (haystack.includes(modelName)) {
+    const ref = lower(cube.model_ref);
+    const matched = ref
+      ? ref === lower(model.item_key)
+      : Boolean(modelName) &&
+        `${lower(cube.expression)} ${lower(cube.display_name)} ${lower(cube.item_key)}`.includes(
+          modelName,
+        );
+    if (matched) {
       names.push(cube.display_name ?? lastSegment(cube.item_key));
     }
   }
@@ -166,7 +196,100 @@ export function parseJoinModels(condition: string | null | undefined): Array<[st
   return pairs;
 }
 
-/** 网格坐标（确定性：同一 catalog 每次得到同一布局，避免画布「跳」。T03 由 layout 数据源替换）。 */
+/**
+ * 关系条目 → join 语义（**两种落库形态都认**）。
+ *
+ * <p>形态 ①（T03 建模台新建，权威）：`expression` 是 JSON 信封
+ * `{join_type,cardinality,condition,source_model,target_model}` —— 这些字段在
+ * `iqd_catalog_item` 里没有专属列，故由 T03a 的 `createRelationship` 打包进 `expression`。
+ * 此时**必须优先解信封**：直接把整串 JSON 丢给 {@link parseJoinModels} 会因为
+ * 左侧限定名被 JSON 前缀污染（`{"join_type":…"orders.customer_id`）而**匹配不到模型
+ * → 关系边静默消失**（本项目最容易漏的一处跨批集成点）。
+ *
+ * <p>形态 ②（MDL 同步来源，历史）：`expression`/`description` 就是裸条件
+ * `orders.customer_id = customers.id` → 走 {@link parseJoinModels}。
+ */
+export interface ParsedRelationship {
+  /** join 类型（形态 ② 为 null，由边组件回退 `INNER`）。 */
+  joinType: string | null;
+  /** 基数（形态 ② 为 null，由边组件回退 `1:N`）。 */
+  cardinality: string | null;
+  /** 完整 join 条件（用于 hover 提示与弹窗回填）。 */
+  condition: string | null;
+  /** 参与模型对（`1:1` 形态下通常一对；AND 复合条件可能多对）。 */
+  pairs: Array<[string, string]>;
+}
+
+/** 关系信封 JSON 的字段（与 T03a `IqdCatalogItemService.relationshipEnvelope` 逐字对应）。 */
+interface RelationshipEnvelope {
+  join_type?: string;
+  cardinality?: string;
+  condition?: string;
+  source_model?: string;
+  target_model?: string;
+}
+
+/** 语义键末段（`mdl:model:orders` → `orders`；`orders` → `orders`）。 */
+function semanticTail(value: string | null | undefined): string {
+  const key = (value ?? '').trim();
+  if (key === '') {
+    return '';
+  }
+  const colon = key.lastIndexOf(':');
+  return colon >= 0 && colon < key.length - 1 ? key.slice(colon + 1) : key;
+}
+
+/** 尝试把 `expression` 解为关系信封（失败 / 非对象 → null）。 */
+function parseEnvelope(raw: string | null | undefined): RelationshipEnvelope | null {
+  const text = (raw ?? '').trim();
+  if (!text.startsWith('{')) {
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(text) as unknown;
+    return parsed && typeof parsed === 'object' ? (parsed as RelationshipEnvelope) : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 解析一条 relationship 条目（见 {@link ParsedRelationship}）。
+ *
+ * @param relationship catalog 里的 `kind=relationship` 条目
+ * @returns join 语义 + 参与模型对（无法解析出模型对时 `pairs` 为空 → 调用方不画边）
+ */
+export function parseRelationship(relationship: IqdCatalogItem): ParsedRelationship {
+  const envelope = parseEnvelope(relationship.expression);
+  if (envelope && typeof envelope.condition === 'string') {
+    const condition = envelope.condition;
+    const source = semanticTail(envelope.source_model);
+    const target = semanticTail(envelope.target_model);
+    // 信封里的 source/target 是权威（精确键），condition 仅兜底补充额外的 AND 对
+    const pairs: Array<[string, string]> = [];
+    if (source && target) {
+      pairs.push([source, target]);
+    } else {
+      pairs.push(...parseJoinModels(condition));
+    }
+    return {
+      joinType: envelope.join_type ?? null,
+      cardinality: envelope.cardinality ?? null,
+      condition,
+      pairs,
+    };
+  }
+
+  const condition = relationship.expression ?? relationship.description ?? null;
+  return {
+    joinType: null,
+    cardinality: null,
+    condition,
+    pairs: parseJoinModels(condition),
+  };
+}
+
+/** 网格坐标（确定性：同一 catalog 每次得到同一布局，避免画布「跳」；坐标持久化后由 layout 覆盖）。 */
 function gridPosition(index: number): { x: number; y: number } {
   const col = index % GRID_COLUMNS;
   const row = Math.floor(index / GRID_COLUMNS);
@@ -197,7 +320,7 @@ export function useCatalogNodes(connectionId: number | null): UseCatalogNodesRes
 
   const { nodes, edges } = useMemo(() => {
     if (catalog.length === 0) {
-      return { nodes: [] as Node<CatalogNodeData>[], edges: [] as Edge[] };
+      return { nodes: [] as Node<CatalogNodeData>[], edges: [] as Array<Edge<RelationEdgeData>> };
     }
 
     const models = catalog.filter((it) => it.kind === 'model');
@@ -277,11 +400,11 @@ export function useCatalogNodes(connectionId: number | null): UseCatalogNodesRes
         });
       });
 
-    // ---- edge（关系：解析 join 条件里的左右模型名；解析不出不画） ----
-    const derivedEdges: Edge[] = [];
+    // ---- edge（关系：解 join 语义 + 映射模型名 → 节点；解析不出不画） ----
+    const derivedEdges: Array<Edge<RelationEdgeData>> = [];
     for (const rel of relationships) {
-      const pairs = parseJoinModels(rel.expression ?? rel.description);
-      for (const [leftName, rightName] of pairs) {
+      const parsed = parseRelationship(rel);
+      for (const [leftName, rightName] of parsed.pairs) {
         const source = modelIndex.get(lower(leftName));
         const target = modelIndex.get(lower(rightName));
         if (!source || !target) {
@@ -291,10 +414,18 @@ export function useCatalogNodes(connectionId: number | null): UseCatalogNodesRes
           id: `${rel.item_key}:${source}->${target}`,
           source,
           target,
+          type: RELATION_EDGE_TYPE,
+          data: {
+            relationshipKey: rel.item_key,
+            joinType: parsed.joinType ?? undefined,
+            cardinality: parsed.cardinality ?? undefined,
+            condition: parsed.condition,
+          },
+          // 两个 marker 都挂上：由 RelationEdge 按 cardinality 决定画哪端
+          // （自定义边拿不到未在边对象上声明的 marker —— 见 RELATION_MARKER 注释）
+          markerStart: RELATION_MARKER,
+          markerEnd: RELATION_MARKER,
           label: rel.display_name ?? lastSegment(rel.item_key),
-          animated: false,
-          // 关系边样式交默认（T02b-2 可加 cardinality 标注）
-          type: 'smoothstep',
         });
       }
     }

@@ -15,14 +15,22 @@
  * <h2>导入入口</h2>
  * 顶部「表发现导入」按钮 → 回调父组件打开 `TableImportWizard`（本组件不自持向导状态，
  * 保持单一职责：树只负责展示与选择）。
+ *
+ * <h2>Cube 入口（T03c）</h2>
+ * ① 顶部「新建 Cube」→ 回调父组件打开 `CubeEditor`（**默认挂靠当前选中的模型** —— 先点模型
+ * 再点新建，是最顺的操作路径；未选模型时默认空，由用户在弹窗里选）；
+ * ② 双击「指标（Cube）」分组里的条目 → 打开该 Cube 的详情（T03c 为只读，见 `CubeEditor` 模块头）。
+ * 树自身仍**不持有**编辑器状态（与「表发现导入」同一模式：只发意图，状态归父页面）。
  */
 import { useMemo, useState } from 'react';
 import { Database, GitBranch, Layers, Search, Table2, Upload } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
+import { PermissionGate } from '@/components/auth/permission-gate';
 import { cn } from '@/lib/utils';
 import type { IqdCatalogItem } from '@/lib/api/iqd';
+import { IQD_MODELING_PERMISSIONS } from '../shared/usePermission';
 import { useCatalogNodes } from '../../hooks/useCatalogNodes';
 import { useModelingStore } from '../../store/modeling-store';
 
@@ -46,14 +54,28 @@ export interface ModelTreeProps {
   connectionId: number | null;
   /** 「表发现导入」入口回调（父组件打开 TableImportWizard）。 */
   onOpenImport: () => void;
+  /**
+   * 「新建 Cube / 查看 Cube」入口回调（父组件打开 `CubeEditor`）。
+   *
+   * <p>`cube = null` 表示新建；传值时表示查看该 Cube。不传 → 不渲染 Cube 入口（保持向后兼容）。
+   */
+  onOpenCube?: (cube: IqdCatalogItem | null, defaultModelKey: string | null) => void;
 }
 
 /** 左栏模型树。 */
-export function ModelTree({ connectionId, onOpenImport }: ModelTreeProps) {
+export function ModelTree({ connectionId, onOpenImport, onOpenCube }: ModelTreeProps) {
   const [keyword, setKeyword] = useState('');
   const { catalog, isLoading, error } = useCatalogNodes(connectionId);
   const selectedItemKey = useModelingStore((state) => state.selectedItemKey);
   const setSelected = useModelingStore((state) => state.setSelected);
+
+  /** 模型总数（**未按搜索词过滤**：按钮可用性不该被搜索框影响）。 */
+  const modelCount = useMemo(
+    () => catalog.filter((item) => item.kind === 'model').length,
+    [catalog],
+  );
+  /** 新建 Cube 的默认挂靠模型：树里选中的是模型就用它，否则空（由用户在弹窗里选）。 */
+  const defaultModelKey = selectedItemKey?.startsWith('mdl:model:') ? selectedItemKey : null;
 
   const grouped = useMemo(() => {
     const needle = keyword.trim().toLowerCase();
@@ -108,6 +130,28 @@ export function ModelTree({ connectionId, onOpenImport }: ModelTreeProps) {
           <Upload className="h-4 w-4" />
           表发现导入
         </Button>
+        {onOpenCube && (
+          /* 入口按 `iqd:modeling:edit` 闸门（与页面「新建连接」同口径）：
+             `POST /catalog/cube` 是 edit 级权限，前端不先拦会变成「点得进去、保存才 40300」。
+             双击既有 Cube 查看**不**闸门（那是 view 级，且 T03c 里是只读）。 */
+          <PermissionGate permission={IQD_MODELING_PERMISSIONS.edit}>
+            <Button
+              size="sm"
+              variant="outline"
+              className="w-full"
+              disabled={modelCount === 0}
+              title={
+                modelCount === 0
+                  ? '先导入物理表并生成至少一个模型，再建 Cube'
+                  : '新建 Cube（默认挂靠左树选中的模型）'
+              }
+              onClick={() => onOpenCube(null, defaultModelKey)}
+            >
+              <Database className="h-4 w-4" />
+              新建 Cube
+            </Button>
+          </PermissionGate>
+        )}
       </div>
 
       {/* 树体：单层滚动 */}
@@ -140,6 +184,8 @@ export function ModelTree({ connectionId, onOpenImport }: ModelTreeProps) {
                   item={item}
                   active={selectedItemKey === item.item_key}
                   onSelect={() => setSelected(item.item_key)}
+                  // 双击 Cube → 打开详情（T03c：只读，见 CubeEditor 模块头）
+                  onOpen={group.kind === 'cube' && onOpenCube ? () => onOpenCube(item, null) : undefined}
                 />
               ))}
             </div>
@@ -155,21 +201,25 @@ function TreeLeaf({
   item,
   active,
   onSelect,
+  onOpen,
 }: {
   item: IqdCatalogItem;
   active: boolean;
   onSelect: () => void;
+  /** 双击行为（当前仅 Cube 用：打开详情）。不传 → 只支持单击选中。 */
+  onOpen?: () => void;
 }) {
   const label = item.display_name ?? item.item_key;
   return (
     <button
       type="button"
       onClick={onSelect}
+      onDoubleClick={onOpen}
       className={cn(
         'flex w-full items-center gap-1.5 rounded px-2 py-1 text-left text-[13px]',
         active ? 'bg-primary/10 text-primary' : 'hover:bg-accent/60',
       )}
-      title={item.item_key}
+      title={onOpen ? `${item.item_key}（双击查看详情）` : item.item_key}
     >
       <span className="truncate">{label}</span>
       {item.in_scope && (

@@ -1,0 +1,6 @@
+9:[31m     → expected [ 'ok', 'ok', 'ok', 'active' ] to deeply equal [ 'ok', 'ok', 'ok', 'ok' ][39m
+11:[31m     → expected true to be false // Object.is equality[39m
+21:[31m[1m[7m FAIL [27m[22m[39m src/features/agent/iqd/components/modeling/PublishPipelineBar.test.ts[2m > [22mresolvePipeline（四段状态机）[2m > [22m★ 全绿：编辑已同步 + 构建成功 + 索引成功 + MCP running，且版本已追平
+22:[31m[1mAssertionError[22m: expected [ 'ok', 'ok', 'ok', 'active' ] to deeply equal [ 'ok', 'ok', 'ok', 'ok' ][39m
+45:[31m[1m[7m FAIL [27m[22m[39m src/features/agent/iqd/components/modeling/PublishPipelineBar.test.ts[2m > [22mresolvePipeline（四段状态机）[2m > [22m★ 漂移（fail-closed）：edit 段 blocked，drift=true，且不算 busy
+46:[31m[1mAssertionError[22m: expected true to be false // Object.is equality[39m

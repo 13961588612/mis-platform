@@ -31,7 +31,11 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { IQD_MODELING_PERMISSIONS, useIqdModelingPermission } from './components/shared/usePermission';
 import { PermissionGate } from '@/components/auth/permission-gate';
+import type { IqdCatalogItem } from '@/lib/api/iqd';
 import { ModelCanvas } from './components/modeling/ModelCanvas';
+import { CubeEditor } from './components/modeling/CubeEditor';
+import { AutoLayoutButton } from './components/modeling/AutoLayoutButton';
+import { PublishPipelineBar } from './components/modeling/PublishPipelineBar';
 import { ModelTree } from './components/modeling/ModelTree';
 import { PropertyPanel } from './components/modeling/PropertyPanel';
 import { ConnectionWizard } from './components/wizard/ConnectionWizard';
@@ -112,7 +116,7 @@ function ResizeHandle({
 /** 建模台主页。 */
 export function IqdModelingPage() {
   const queryClient = useQueryClient();
-  const { canView } = useIqdModelingPermission();
+  const { canView, canEdit } = useIqdModelingPermission();
   const connectionId = useModelingStore((state) => state.connectionId);
   const setConnectionId = useModelingStore((state) => state.setConnectionId);
 
@@ -123,6 +127,17 @@ export function IqdModelingPage() {
   /** 向导开关（向导组件自持步骤状态，页面只持 open）——T02b-3 打通入口。 */
   const [connectionWizardOpen, setConnectionWizardOpen] = useState(false);
   const [importWizardOpen, setImportWizardOpen] = useState(false);
+  /**
+   * Cube 编辑器开关（T03c）。
+   *
+   * <p>编辑器状态归**页面**而不是树/画布：与两个向导同一模式（树只发意图），
+   * 且 `CubeEditor` 里用的是 Radix Dialog（portal 到 body），放哪层渲染视觉一致。
+   * `cube=null` → 新建；`defaultModelKey` 来自树里选中的模型。
+   */
+  const [cubeEditor, setCubeEditor] = useState<{
+    cube: IqdCatalogItem | null;
+    defaultModelKey: string | null;
+  } | null>(null);
   const panesRef = useRef<HTMLDivElement | null>(null);
 
   /** 连接清单（与连接向导共用同一 queryKey → 向导保存后失效一次即可全站同步）。 */
@@ -179,6 +194,8 @@ export function IqdModelingPage() {
                 {activeConnection.mcp_status ? ` · ${activeConnection.mcp_status}` : ''}
               </Badge>
             )}
+            {/* 一键整理画布（T03d）：dagre 在浏览器算，落库复用 PUT layout */}
+            <AutoLayoutButton connectionId={activeId} canEdit={canEdit} />
             <PermissionGate permission={IQD_MODELING_PERMISSIONS.edit}>
               <Button size="sm" variant="outline" onClick={() => setConnectionWizardOpen(true)}>
                 <Plus className="h-4 w-4" />
@@ -210,7 +227,10 @@ export function IqdModelingPage() {
       )}
 
       {canView && !noConnection && (
-        <div ref={panesRef} className="flex min-h-0 flex-1">
+        <>
+          {/* 发布流水线（T03d）：编辑落库 → MDL build → memory index → MCP 就绪 */}
+          <PublishPipelineBar connectionId={activeId} />
+          <div ref={panesRef} className="flex min-h-0 flex-1">
           {/* ---------- 左：模型树（T02b-2 实现） ---------- */}
           {!leftCollapsed && (
             <aside
@@ -230,10 +250,11 @@ export function IqdModelingPage() {
                   <PanelLeftClose className="h-4 w-4" />
                 </Button>
               </div>
-              {/* ModelTree：连接 → 模型/物理表/指标/关系 分组 + 搜索 + 表发现导入入口 */}
+              {/* ModelTree：连接 → 模型/物理表/指标/关系 分组 + 搜索 + 表发现导入 + 新建 Cube（T03c） */}
               <ModelTree
                 connectionId={activeId}
                 onOpenImport={() => setImportWizardOpen(true)}
+                onOpenCube={(cube, defaultModelKey) => setCubeEditor({ cube, defaultModelKey })}
               />
             </aside>
           )}
@@ -288,7 +309,8 @@ export function IqdModelingPage() {
               <PropertyPanel connectionId={activeId} />
             </aside>
           )}
-        </div>
+          </div>
+        </>
       )}
 
       {/* ---------------- 向导（Dialog 式，T02b-3 打通入口） ---------------- */}
@@ -309,6 +331,18 @@ export function IqdModelingPage() {
           // Q5 单源：失效 catalog 缓存 → 画布/左树/右栏同时刷新
           void queryClient.invalidateQueries({ queryKey: iqdKeys.catalogs(activeId) });
         }}
+      />
+      {/* Cube 编辑器（T03c）：新建（全功能）/ 查看既有（只读，见 CubeEditor 模块头） */}
+      <CubeEditor
+        open={cubeEditor != null}
+        onOpenChange={(next) => {
+          if (!next) {
+            setCubeEditor(null);
+          }
+        }}
+        connectionId={activeId}
+        cube={cubeEditor?.cube ?? null}
+        defaultModelKey={cubeEditor?.defaultModelKey ?? null}
       />
     </div>
   );

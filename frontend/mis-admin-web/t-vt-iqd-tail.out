@@ -1,0 +1,20 @@
+
+[1m[7m[36m RUN [39m[27m[22m [36mv2.1.9 [39m[90mD:/code/mis-platform/frontend/mis-admin-web[39m
+
+ [32m✓[39m src/features/agent/iqd/components/modeling/cubeUtils.test.ts [2m([22m[2m26 tests[22m[2m)[22m[90m 36[2mms[22m[39m
+ [32m✓[39m src/features/agent/iqd/hooks/useModelLayout.test.ts [2m([22m[2m14 tests[22m[2m)[22m[90m 13[2mms[22m[39m
+ [32m✓[39m src/features/agent/iqd/store/modeling-store.test.ts [2m([22m[2m12 tests[22m[2m)[22m[90m 11[2mms[22m[39m
+ [32m✓[39m src/features/agent/iqd/components/modeling/PublishPipelineBar.test.ts [2m([22m[2m19 tests[22m[2m)[22m[90m 15[2mms[22m[39m
+ [32m✓[39m src/features/agent/iqd/components/modeling/relationUtils.test.ts [2m([22m[2m17 tests[22m[2m)[22m[90m 13[2mms[22m[39m
+ [32m✓[39m src/features/agent/iqd/hooks/useCatalogNodes.test.ts [2m([22m[2m13 tests[22m[2m)[22m[90m 10[2mms[22m[39m
+ [32m✓[39m src/features/agent/iqd/components/modeling/AutoLayoutButton.test.ts [2m([22m[2m11 tests[22m[2m)[22m[90m 34[2mms[22m[39m
+ [32m✓[39m src/features/agent/iqd/hooks/useDirtyState.test.ts [2m([22m[2m9 tests[22m[2m)[22m[90m 19[2mms[22m[39m
+ [32m✓[39m src/features/agent/iqd/components/SelfHealPanel.test.tsx [2m([22m[2m7 tests[22m[2m)[22m[33m 789[2mms[22m[39m
+ [32m✓[39m src/features/agent/iqd/nav-registration.test.ts [2m([22m[2m8 tests[22m[2m)[22m[90m 6[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m10 passed[39m[22m[90m (10)[39m
+[2m      Tests [22m [1m[32m136 passed[39m[22m[90m (136)[39m
+[2m   Start at [22m 14:59:21
+[2m   Duration [22m 11.98s[2m (transform 5.16s, setup 0ms, collect 14.18s, tests 946ms, environment 3.14s, prepare 3.39s)[22m
+
+IQD_EXIT=0

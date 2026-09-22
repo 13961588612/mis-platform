@@ -54,6 +54,8 @@ export interface ModelingActions {
   markDirty: (itemKey: string, draft: ItemDraft) => void;
   /** 清除脏标记。 */
   clearDirty: (itemKey: string) => void;
+  /** 清空全部脏草稿（切换连接 / 发布完成后统一清理）。 */
+  clearAllDirty: () => void;
   /** 推入向导步骤（历史栈追加）。 */
   pushWizardStep: (step: string) => void;
   /** 弹出向导步骤，返回弹出项（栈空返回 null）。 */
@@ -129,6 +131,14 @@ export const useModelingStore = create<ModelingState>()((set, get) => ({
       return { dirtyDrafts: next };
     }),
 
+  clearAllDirty: () =>
+    set((state) => {
+      if (state.dirtyDrafts.size === 0) {
+        return { dirtyDrafts: state.dirtyDrafts };
+      }
+      return { dirtyDrafts: new Map<string, ItemDraft>() };
+    }),
+
   pushWizardStep: (step) =>
     set((state) => {
       const history =
@@ -172,4 +182,14 @@ export const useModelingStore = create<ModelingState>()((set, get) => ({
 /** 便捷 selector：当前是否处于脏状态（存在未提交草稿）。 */
 export function selectHasDirtyDrafts(state: ModelingState): boolean {
   return state.dirtyDrafts.size > 0;
+}
+
+/** 便捷 selector：某个节点是否有未提交草稿（抽屉/顶栏按节点判脏）。 */
+export function selectIsDirty(state: ModelingState, itemKey: string): boolean {
+  return state.dirtyDrafts.has(itemKey);
+}
+
+/** 便捷 selector：脏草稿对应的 item_key 列表（发布前拦截提示用，保插入序）。 */
+export function selectDirtyItemKeys(state: ModelingState): string[] {
+  return Array.from(state.dirtyDrafts.keys());
 }

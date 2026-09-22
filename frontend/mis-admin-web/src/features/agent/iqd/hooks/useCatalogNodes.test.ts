@@ -13,7 +13,7 @@
  * <p>只测纯函数（不挂 React / 不挂 Query），故沿用项目既有 vitest node 环境即可。
  */
 import { describe, expect, it } from 'vitest';
-import { parseJoinModels } from './useCatalogNodes';
+import { parseJoinModels, parseRelationship } from './useCatalogNodes';
 
 describe('parseJoinModels（关系条件 → 参与模型对）', () => {
   it('单条件：orders.customer_id = customers.id → [orders, customers]', () => {
@@ -60,5 +60,83 @@ describe('parseJoinModels（关系条件 → 参与模型对）', () => {
     expect(parseJoinModels('public.orders.customer_id = public.customers.id')).toEqual([
       ['orders', 'customers'],
     ]);
+  });
+});
+
+/**
+ * T03b 回归守卫：关系条目 → join 语义（**两种落库形态**）。
+ *
+ * <p>这里钉住的是本批最容易漏的**跨批集成点**：T03a 把新建关系的五个语义字段
+ * （join_type/cardinality/condition/source_model/target_model）打包成 JSON **信封**
+ * 写进 `expression`。若派生侧仍按「裸条件」解析，左操作数会变成
+ * `{"join_type":…"orders.customer_id` → 匹配不到任何模型 → **关系边静默消失**
+ * （不报错，只是画布上关系没了）。
+ */
+describe('parseRelationship（关系条目 → join 语义；两种落库形态）', () => {
+  it('★ 形态①：T03a 信封 JSON —— 从 source/target_model 精确取模型对（不能走裸条件解析）', () => {
+    const parsed = parseRelationship({
+      item_key: 'mdl:relationship:orders_customers',
+      kind: 'relationship',
+      display_name: 'orders_customers',
+      expression: JSON.stringify({
+        join_type: 'inner',
+        cardinality: '1:N',
+        condition: 'orders.customer_id = customers.id',
+        source_model: 'mdl:model:orders',
+        target_model: 'mdl:model:customers',
+      }),
+    });
+
+    expect(parsed.joinType).toBe('inner');
+    expect(parsed.cardinality).toBe('1:N');
+    expect(parsed.condition).toBe('orders.customer_id = customers.id');
+    expect(parsed.pairs).toEqual([['orders', 'customers']]);
+  });
+
+  it('形态①：信封缺 source/target 时回退条件解析（保证仍能画边）', () => {
+    const parsed = parseRelationship({
+      item_key: 'mdl:relationship:r',
+      kind: 'relationship',
+      expression: JSON.stringify({ join_type: 'left', condition: 'orders.customer_id = customers.id' }),
+    });
+
+    expect(parsed.joinType).toBe('left');
+    expect(parsed.cardinality).toBeNull();
+    expect(parsed.pairs).toEqual([['orders', 'customers']]);
+  });
+
+  it('形态②：MDL 同步来源的裸条件（无 joinType/cardinality → 交给边组件回退默认值）', () => {
+    const parsed = parseRelationship({
+      item_key: 'mdl:relationship:legacy',
+      kind: 'relationship',
+      display_name: 'legacy',
+      expression: 'orders.uid = users.id',
+    });
+
+    expect(parsed.joinType).toBeNull();
+    expect(parsed.cardinality).toBeNull();
+    expect(parsed.pairs).toEqual([['orders', 'users']]);
+  });
+
+  it('形态②：expression 为空时看 description（IqdMdlParser 把 condition 同时写入两列）', () => {
+    const parsed = parseRelationship({
+      item_key: 'mdl:relationship:legacy2',
+      kind: 'relationship',
+      expression: null,
+      description: 'orders.uid = users.id',
+    });
+
+    expect(parsed.pairs).toEqual([['orders', 'users']]);
+  });
+
+  it('起手是 `{` 但 JSON 非法 → 不抛异常，退化为「解析不出模型对」（不画边）', () => {
+    const parsed = parseRelationship({
+      item_key: 'mdl:relationship:broken',
+      kind: 'relationship',
+      expression: '{not-valid-json',
+    });
+
+    expect(parsed.pairs).toEqual([]);
+    expect(parsed.condition).toBe('{not-valid-json');
   });
 });

@@ -1,43 +1,87 @@
 /**
- * ModelCanvas.tsx — ER 画布（v1.11 MR-S2 / A-15）。
+ * ModelCanvas.tsx — ER 画布（v1.11 MR-S2 / MR-05 / MR-S4；T03b 放开编辑）。
  *
  * <h2>构成</h2>
- * `@xyflow/react@^12`（T01 已装）的 `<ReactFlow>` + `<Background>` + `<MiniMap>` + `<Controls>`；
- * 节点类型注册两态：`iqdModel` / `iqdTable`（同一 `ModelNodeCard` 组件，按 `data.kind` 变形）。
+ * `@xyflow/react@^12` 的 `<ReactFlow>` + `<Background>` + `<MiniMap>` + `<Controls>`；
+ * 节点类型 `iqdModel` / `iqdTable`（同一 `ModelNodeCard`，按 `data.kind` 变形）；
+ * 边类型 `iqdRelation`（{@link RelationEdge}：基数编码 + 条件 hover）。
  *
  * <h2>性能（A-15：200 节点虚拟化）</h2>
- * `onlyRenderVisibleElements` 打开——只渲染视口内节点，200 节点下拖拽/缩放保持流畅。
+ * `onlyRenderVisibleElements` 打开——只渲染视口内节点。
  *
- * <h2>数据来源（Q5）</h2>
- * nodes/edges 全部由 {@link useCatalogNodes} 从 TanStack Query 的 catalog 缓存**派生**；
- * 本组件**不持有节点 state**（不复制真值）。
+ * <h2>数据来源与「谁是真值」（Q5）</h2>
+ * <ul>
+ *   <li><b>catalog 语义</b>（有哪些节点/字段/关系）= TanStack Query 缓存 → `useCatalogNodes` 派生；</li>
+ *   <li><b>坐标</b>= `iqd_model_layout`（服务端视图数据）→ {@link useModelLayout} 读一次 + 防抖写回；</li>
+ *   <li><b>交互态</b>（拖拽中的位置、选中、量出的尺寸）= ReactFlow 受控模式的**组件本地 state**
+ *       （`useNodesState` 的等价手写实现）。</li>
+ * </ul>
+ * 三者合并规则见 `mergeDerivedNodes`（**本地既有坐标优先于服务端**，否则 catalog 轮询
+ * 会把刚拖完还没保存完的节点弹回原位）。**画布不往 zustand 里存 nodes/edges**（Q5 红线）。
  *
- * <h2>只读 vs 编辑（本批边界）</h2>
- * 本批画布**恒为只读**（`nodesDraggable=false` / `nodesConnectable=false`）：拖拽后的坐标需要
- * 持久化到 `iqd_model_layout`（A-02/Q6），而该服务端能力属 **T03**；若现在放开拖拽，
- * 任何一次 catalog 刷新（5000ms 轮询/失效重取）都会把节点位置**弹回网格**，属明显 bug。
- * 故此处只把 `canEdit`（`iqd:modeling:edit`）**接好并用于只读提示**，T03 落地 layout PUT 后
- * 只需把两个 `nodesDraggable/nodesConnectable` 改为 `canEdit` 并接 `onNodesChange` 即可。
+ * <h2>编辑能力（T03b 本批）</h2>
+ * <ul>
+ *   <li>`nodesDraggable` / `nodesConnectable` = `canEdit`（`iqd:modeling:edit`）；</li>
+ *   <li>拖拽结束 → 600ms 防抖 PUT 布局（{@link useModelLayout.persist}）；
+ *       视口变化（缩放/平移结束）同样落库；**首存 version 0 → 1**；</li>
+ *   <li>连线（节点右 Handle → 目标节点）→ 打开 `RelationshipDialog`（预填两端，默认 INNER 1:N）；</li>
+ *   <li>点关系边 → 同弹窗的**查看态**（见下方「为什么点边不是编辑」）；</li>
+ *   <li>`base_version` 冲突（40900）→ 顶部橙色条 + 「重载布局」按钮，且**暂停自动保存**。</li>
+ * </ul>
+ *
+ * <h2>为什么「点边」是查看而不是编辑（偏离说明）</h2>
+ * T03a 的 `POST /catalog/relationship` 是 **create-only 且双幂等**：同 `item_key` 已存在时
+ * 直接返回首次结果、**不应用新字段**。若把「查看弹窗」做成可编辑并保存，会出现
+ * 「提示保存成功、实际没改」的静默缺陷。修改既有关系应走 `PUT /catalog/node`
+ * （T03a 报告「给 T03b 的接口备注 6」），其 UI 属 T03c。故本批点边只做**只读查看**
+ * （仍满足 MR-05「点击进关系弹窗」，且不撒谎）。`TODO(后续批次)`：接 `PUT /catalog/node`
+ * 后把 `RelationshipDialog` 的 `mode` 扩出 `edit`。
  *
  * <h2>多连接隔离（A-14）</h2>
- * `<ReactFlow key={connectionId}>`：切连接即重挂载，视口/选中/内部状态一并清空，
- * 不会把 A 连接的画布残留带到 B 连接。
+ * `<ReactFlow key={connectionId}>`：切连接即重挂载，视口/选中/内部状态一并清空。
+ *
+ * <h2>刻意不做</h2>
+ * 本批**不调** `POST /modeling/layout/{id}/auto-layout`：该端点在 T03a 按 A-02 裁决
+ * 恒返回 **HTTP 501**（服务端不做 dagre），自动布局按钮（前端算 dagre + PUT）属 T03c。
  */
-import { useMemo } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import {
+  applyEdgeChanges,
+  applyNodeChanges,
   Background,
   BackgroundVariant,
   Controls,
   MiniMap,
   ReactFlow,
   ReactFlowProvider,
+  useReactFlow,
+  type Connection,
+  type Edge,
+  type EdgeChange,
+  type EdgeTypes,
+  type Node,
+  type NodeChange,
   type NodeTypes,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
+import { Loader2, RotateCcw } from 'lucide-react';
+import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
+import type { IqdCatalogItem } from '@/lib/api/iqd';
 import { useIqdModelingPermission } from '../../components/shared/usePermission';
-import { MODEL_NODE_TYPE, TABLE_NODE_TYPE, useCatalogNodes } from '../../hooks/useCatalogNodes';
+import { useSyncStatus } from '../../components/shared/useSyncStatus';
+import {
+  MODEL_NODE_TYPE,
+  TABLE_NODE_TYPE,
+  useCatalogNodes,
+  type CatalogNodeData,
+} from '../../hooks/useCatalogNodes';
+import { useModelLayout, mergeDerivedNodes } from '../../hooks/useModelLayout';
+import { iqdKeys } from '../../queries/iqd-keys';
 import { ModelNodeCard } from './ModelNodeCard';
+import { RelationEdge, RELATION_EDGE_TYPE } from './RelationEdge';
+import { RelationshipDialog, type RelationEndpoint } from './RelationshipDialog';
 
 /** 节点类型注册表（模块级常量：避免每次 render 新建对象导致 ReactFlow 全量重挂）。 */
 const NODE_TYPES = {
@@ -45,24 +89,158 @@ const NODE_TYPES = {
   [TABLE_NODE_TYPE]: ModelNodeCard,
 } as unknown as NodeTypes;
 
+/** 边类型注册表。 */
+const EDGE_TYPES = {
+  [RELATION_EDGE_TYPE]: RelationEdge,
+} as unknown as EdgeTypes;
+
+/** 关系边的 data 形状（与 `RelationEdgeData` 一致，此处只需读到 key）。 */
+interface CanvasEdgeData extends Record<string, unknown> {
+  relationshipKey?: string;
+}
+
 /** `ModelCanvas` Props。 */
 export interface ModelCanvasProps {
   /** 当前连接 id；null → 空态（由父组件引导去连接向导）。 */
   connectionId: number | null;
 }
 
-/** ER 画布。 */
+/** 画布内部（在 `ReactFlowProvider` 之内，可用 `useReactFlow`）。 */
 function ModelCanvasInner({ connectionId }: ModelCanvasProps) {
-  const { nodes, edges, isLoading, error } = useCatalogNodes(connectionId);
+  const { nodes: derivedNodes, edges: derivedEdges, catalog, isLoading, error } = useCatalogNodes(connectionId);
   const { canEdit } = useIqdModelingPermission();
+  const queryClient = useQueryClient();
+  const { setViewport: applyReactFlowViewport } = useReactFlow();
+  const sync = useSyncStatus(connectionId);
 
-  const isEmpty = !isLoading && !error && nodes.length === 0;
+  const layout = useModelLayout({ connectionId, enabled: canEdit });
+
+  /** ReactFlow 受控节点/边（交互态本地持有；语义仍来自 catalog 派生）。 */
+  const [nodes, setNodes] = useState<Array<Node<CatalogNodeData>>>([]);
+  const [edges, setEdges] = useState<Array<Edge<CanvasEdgeData>>>([]);
+  const viewportRef = useRef<{ x: number; y: number; zoom: number }>({ x: 0, y: 0, zoom: 1 });
+
+  /** 关系弹窗状态：create = 拖拽连线；view = 点击既有边。 */
+  const [dialog, setDialog] = useState<{
+    mode: 'create' | 'view';
+    source: RelationEndpoint | null;
+    target: RelationEndpoint | null;
+    existing: IqdCatalogItem | null;
+  } | null>(null);
+
+  const isEmpty = !isLoading && !error && derivedNodes.length === 0;
   const viewKey = useMemo(() => `conn-${connectionId ?? 'none'}`, [connectionId]);
+
+  // ---------------------------------------------------------------- catalog 派生 → 本地节点（合并）
+  useEffect(() => {
+    setNodes((prev) => mergeDerivedNodes(derivedNodes, prev, layout.positions));
+  }, [derivedNodes, layout.positions]);
+
+  useEffect(() => {
+    setEdges((prev) => mergeEdges(derivedEdges, prev));
+  }, [derivedEdges]);
+
+  /**
+   * 首次拿到已持久化视口时套用一次（之后交给 ReactFlow 自己管，避免与用户缩放打架）。
+   *
+   * <p>`appliedViewportRef` 记录「本连接已套用过的 layout 版本」：只在**从未套用**或
+   * **reload 拿到新版本**时套用，其它时候不干预用户视口。
+   */
+  const appliedViewportRef = useRef<string>('');
+  useEffect(() => {
+    if (connectionId == null || layout.isLoading) {
+      return;
+    }
+    const stamp = `${connectionId}:${layout.version}`;
+    if (appliedViewportRef.current === stamp) {
+      return;
+    }
+    appliedViewportRef.current = stamp;
+    const { viewport } = layout;
+    if (viewport) {
+      applyReactFlowViewport(viewport);
+      viewportRef.current = viewport;
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [connectionId, layout.isLoading, layout.version, applyReactFlowViewport]);
+
+  // ---------------------------------------------------------------- 交互
+  const onNodesChange = useCallback((changes: Array<NodeChange<Node<CatalogNodeData>>>) => {
+    setNodes((prev) => applyNodeChanges(changes, prev));
+  }, []);
+
+  /**
+   * 边变更：**过滤掉 `remove`**。
+   *
+   * <p>RELATION 的删除要落 catalog（并在后端做引用阻断），属 T03c 的删除路径；
+   * 若这里默默把边从画布移除，用户会以为「关系删了」，刷新后又回来 —— 比不支持删除更糟。
+   */
+  const onEdgesChange = useCallback((changes: Array<EdgeChange<Edge<CanvasEdgeData>>>) => {
+    const kept = changes.filter((change) => change.type !== 'remove');
+    if (kept.length === 0) {
+      return;
+    }
+    setEdges((prev) => applyEdgeChanges(kept, prev));
+  }, []);
+
+  /** 拖拽结束 → 防抖写回坐标。 */
+  const onNodeDragStop = useCallback(() => {
+    layout.persist(nodes, edges, viewportRef.current);
+  }, [layout, nodes, edges]);
+
+  /** 缩放/平移结束 → 落视口（与节点共用同一防抖窗口）。 */
+  const onMoveEnd = useCallback(
+    (_event: unknown, viewport: { x: number; y: number; zoom: number }) => {
+      viewportRef.current = viewport;
+      layout.persist(nodes, edges, viewport);
+    },
+    [layout, nodes, edges],
+  );
+
+  /** 连线创建关系：**不开临时边**（真假值只认 catalog；保存成功后失效缓存自动出现）。 */
+  const onConnect = useCallback(
+    (connection: Connection) => {
+      if (!canEdit || connection.source == null || connection.target == null) {
+        return;
+      }
+      const source = endpointOf(nodes, connection.source);
+      const target = endpointOf(nodes, connection.target);
+      if (!source || !target || source.itemKey === target.itemKey) {
+        return; // 自连接无意义（后端也不允许源=目标）
+      }
+      setDialog({ mode: 'create', source, target, existing: null });
+    },
+    [canEdit, nodes],
+  );
+
+  /** 点击关系边 → 查看态弹窗。 */
+  const onEdgeClick = useCallback(
+    (_event: unknown, edge: Edge) => {
+      const { relationshipKey } = (edge.data ?? {}) as CanvasEdgeData;
+      const existing = relationshipKey
+        ? catalog.find((item) => item.item_key === relationshipKey) ?? null
+        : null;
+      const source = endpointOf(nodes, edge.source);
+      const target = endpointOf(nodes, edge.target);
+      setDialog({ mode: 'view', source, target, existing });
+    },
+    [catalog, nodes],
+  );
+
+  const closeDialog = useCallback(() => setDialog(null), []);
+
+  const handleSaved = useCallback(() => {
+    setDialog(null);
+    // 关系落库后失效 catalog 缓存 → 画布重新派生（新的关系边出现）
+    void queryClient.invalidateQueries({ queryKey: iqdKeys.catalogs(connectionId) });
+  }, [queryClient, connectionId]);
+
+  const baseRevision = sync.status?.current_edit_revision ?? null;
 
   return (
     <div className="relative min-h-0 flex-1 border-x border-border/60">
-      {/* 只读提示（无 edit 权限 / 本批未开放拖拽） */}
-      <div className="pointer-events-none absolute left-2 top-2 z-10 flex items-center gap-2">
+      {/* 左上角状态区：权限 / 保存 / 冲突 */}
+      <div className="pointer-events-none absolute left-2 top-2 z-10 flex max-w-[calc(100%-1rem)] flex-wrap items-center gap-2">
         {!canEdit && (
           <span className="rounded border border-border/60 bg-background/90 px-1.5 py-0.5 text-[12px] text-muted-foreground">
             只读：无 iqd:modeling:edit 权限
@@ -70,10 +248,45 @@ function ModelCanvasInner({ connectionId }: ModelCanvasProps) {
         )}
         {canEdit && (
           <span className="rounded border border-border/60 bg-background/90 px-1.5 py-0.5 text-[12px] text-muted-foreground">
-            编辑能力（拖拽/连线）将于 T03 随布局持久化开放
+            可拖拽节点 · 从右侧圆点拖到目标节点即可建关系
+          </span>
+        )}
+        {layout.saving && (
+          <span className="flex items-center gap-1 rounded border border-border/60 bg-background/90 px-1.5 py-0.5 text-[12px] text-muted-foreground">
+            <Loader2 className="h-3 w-3 animate-spin" />
+            保存布局…
+          </span>
+        )}
+        {layout.saveError && (
+          <span className="rounded border border-destructive/40 bg-background/90 px-1.5 py-0.5 text-[12px] text-destructive">
+            布局保存失败：{layout.saveError}
+          </span>
+        )}
+        {layout.loadError && (
+          <span className="rounded border border-border/60 bg-background/90 px-1.5 py-0.5 text-[12px] text-muted-foreground">
+            布局加载失败（已用网格排布）：{layout.loadError}
           </span>
         )}
       </div>
+
+      {/* 乐观并发冲突：暂停自动保存 + 显式重载（拖拽不会丢，但不会写回） */}
+      {layout.conflict && (
+        <div className="absolute inset-x-2 top-10 z-10 flex items-center justify-between gap-3 rounded border border-amber-500/50 bg-amber-50/95 px-2 py-1.5 text-[12px] text-amber-900">
+          <span>
+            布局已被他人修改（服务端版本 {layout.conflict.currentVersion}）。本地拖拽已暂停保存，
+            请重载后重排，或忽略此提示继续本地查看。
+          </span>
+          <Button
+            size="sm"
+            variant="outline"
+            className="h-6 shrink-0 gap-1 px-2 text-[12px]"
+            onClick={() => void layout.reload()}
+          >
+            <RotateCcw className="h-3 w-3" />
+            重载布局
+          </Button>
+        </div>
+      )}
 
       {isLoading && (
         <div className="flex h-full items-center justify-center text-[13px] text-muted-foreground">
@@ -96,19 +309,26 @@ function ModelCanvasInner({ connectionId }: ModelCanvasProps) {
         </div>
       )}
 
-      {!isLoading && !error && nodes.length > 0 && (
+      {!isLoading && !error && derivedNodes.length > 0 && (
         <ReactFlow
           key={viewKey}
           nodes={nodes}
           edges={edges}
           nodeTypes={NODE_TYPES}
+          edgeTypes={EDGE_TYPES}
           onlyRenderVisibleElements
-          // 本批恒只读（见模块头「只读 vs 编辑」）；T03 改为 canEdit 并接 onNodesChange
-          nodesDraggable={false}
-          nodesConnectable={false}
-          edgesFocusable={false}
+          nodesDraggable={canEdit}
+          nodesConnectable={canEdit}
+          edgesFocusable={canEdit}
           elementsSelectable
-          fitView
+          onNodesChange={onNodesChange}
+          onEdgesChange={onEdgesChange}
+          onNodeDragStop={canEdit ? onNodeDragStop : undefined}
+          onMoveEnd={canEdit ? onMoveEnd : undefined}
+          onConnect={onConnect}
+          onEdgeClick={onEdgeClick}
+          // 无持久化布局时用 fitView 铺满；已有布局则用服务端视口（见 appliedViewportRef 效果）
+          fitView={layout.positions.size === 0}
           minZoom={0.2}
           maxZoom={2}
           proOptions={{ hideAttribution: true }}
@@ -119,16 +339,61 @@ function ModelCanvasInner({ connectionId }: ModelCanvasProps) {
           <Controls showInteractive={false} />
         </ReactFlow>
       )}
+
+      <RelationshipDialog
+        open={dialog != null}
+        mode={dialog?.mode ?? 'create'}
+        onOpenChange={(open) => {
+          if (!open) {
+            closeDialog();
+          }
+        }}
+        connectionId={connectionId}
+        source={dialog?.source ?? null}
+        target={dialog?.target ?? null}
+        existing={dialog?.existing ?? null}
+        baseRevision={baseRevision}
+        onSaved={handleSaved}
+      />
     </div>
   );
 }
 
+/** 节点 id → 关系端点（`model:<item_key>` → itemKey + 显示名 + 字段名）。 */
+function endpointOf(
+  nodes: Array<Node<CatalogNodeData>>,
+  nodeId: string | null | undefined,
+): RelationEndpoint | null {
+  if (!nodeId) {
+    return null;
+  }
+  const node = nodes.find((item) => item.id === nodeId);
+  if (!node) {
+    return null;
+  }
+  return {
+    itemKey: node.data.itemKey,
+    displayName: node.data.displayName,
+    fields: (node.data.columns ?? [])
+      .map((column) => column.display_name ?? column.item_key)
+      .filter((name): name is string => Boolean(name)),
+  };
+}
+
 /**
- * 画布出口：包一层 {@link ReactFlowProvider}。
- *
- * <p>理由：`ReactFlow` 的 `useReactFlow()`（T03 自动布局 / fitView 复位）必须在 Provider 内调用；
- * 现在就把 Provider 立在画布边界，T03 无需再改父组件结构。
+ * 合并边：派生边为准，保留本地选中态（`remove` 已在 `onEdgesChange` 过滤）。
  */
+function mergeEdges(
+  derived: Array<Edge<CanvasEdgeData>>,
+  previous: Array<Edge<CanvasEdgeData>>,
+): Array<Edge<CanvasEdgeData>> {
+  const prevById = new Map(previous.map((edge) => [edge.id, edge]));
+  return derived.map((edge) => {
+    const prev = prevById.get(edge.id);
+    return prev ? { ...edge, selected: prev.selected } : edge;
+  });
+}
+
 export function ModelCanvas(props: ModelCanvasProps) {
   return (
     <ReactFlowProvider>
