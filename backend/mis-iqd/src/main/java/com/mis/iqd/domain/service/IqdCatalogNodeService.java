@@ -55,6 +55,8 @@ import java.util.regex.Pattern;
  *   <li><b>T03</b>：{@link #createModel}（空白模型）、{@link #createRelationship}、
  *       {@link #createCube}（含 measures/dimensions 子节点 + {@code model_ref} 落库）、
  *       {@link #createCalculatedColumn}</li>
+ *   <li><b>T04a</b>：{@link #upsertCube}（更新既有 Cube：自身字段 + measures/dimensions
+ *       子节点增删改 + 孤儿清理）—— 补齐 T03c 暴露的「既有 Cube 改不了」缺口</li>
  * </ul>
  * 四个 {@code createXxx} 共用同一前置链：连接存在 + 写回闸门（40300）→ 幂等键查重
  * （命中返回首次结果）→ 语义幂等（同 item_key 已存在）→ {@code base_revision} 乐观并发
@@ -823,6 +825,182 @@ public class IqdCatalogNodeService {
         return created(next, null);
     }
 
+    // ------------------------------------------------------------------ upsertCube（T04a 实现）
+
+    /**
+     * 更新既有 Cube（自身字段 + measures/dimensions 子节点增删改 + 孤儿清理）。
+     * v1.11 §3.3 {@code PUT /api/v1/iqd/catalog/cube}（与 {@link #createCube} 的
+     * {@code POST /catalog/cube} 并列，语义为「更新既有」）。
+     *
+     * <h2>为什么单开一个端点（T03c 验证的缺口）</h2>
+     * 三条既有路径都无法「编辑既有 Cube」：
+     * <ol>
+     *   <li>{@code POST /catalog/cube} 是 <b>create-only + 双幂等</b>：同 key 返回首次结果、
+     *       <b>不应用新字段</b>；若拿它当「可编辑」用，表现为「提示保存成功但实际没改」的静默缺陷；</li>
+     *   <li>{@code PUT /catalog/node} 只能改<b>单节点自身字段</b>，动不了 measure/dimension 子节点；</li>
+     *   <li>{@code POST /catalog/batch} 是「MDL/物料镜像」语义、<b>不写 {@code edit_revision}</b>；
+     *       派生用 {@code findEditedItems}（{@code edit_revision IS NOT NULL}）取编辑节点，
+     *       用它改子节点会让 Cube <b>永远进不了 build</b>（比不支持编辑更糟）。</li>
+     * </ol>
+     *
+     * <h2>patch = 全量替换语义（PUT）</h2>
+     * {@code measures / dimensions} 传<b>完整目标集合</b>：服务端按 {@code item_key} 与之求差 ——
+     * 传入的 upsert、本次未出现（且既存）的子节点 <b>删除</b>（孤儿清理，见
+     * {@link #pruneOrphanChildren}）。缺省/空列表 = 清空该类子节点（符合 PUT 语义）。
+     *
+     * <h2>校验链</h2>
+     * 写回闸门（40300）→ 幂等键命中（返回首次结果，不 bump）→ cube 存在性（42200）→
+     * {@code base_revision} 乐观并发（40900）→ {@code model_ref} 归一（patch 优先、缺省沿用既有列值；
+     * 仍缺失 → 42200，见下）→ {@code model_ref} 指向模型存在（42200）→
+     * measure/dimension 引用字段存在性（42201 + {@code data.errors}）。
+     *
+     * <p><b>T04a 加固</b>：cube 的 {@code model_ref} 缺失时，派生侧
+     * {@code _materialize_missing_nodes} 会创建一个<b>没有 {@code baseObject} 的 cube</b>
+     * （静默降级，可能产出非法 cube）。故创建（{@link #createCube}）与更新（本方法）
+     * <b>均强制要求 {@code model_ref}</b>，缺失即 42200 打回，从写入侧关闭该缺口。
+     *
+     * <p>{@code in_scope} 恒 0：与 T03a 确立的口径一致 —— 新建/更新的语义对象
+     * <b>不自动纳入问数范围</b>（PRD §6.3「导入 ≠ 可问」）。
+     *
+     * @param connectionId   问数连接 id
+     * @param itemKey        Cube 稳定键（§8.6 {@code mdl:cube:<name>}）
+     * @param patch          {@code {display_name?, model_ref?, measures:[{name,expression,format?}], dimensions:[{name,ref_model_field}]}}
+     * @param baseRevision   乐观并发基线（null = 不校验）
+     * @param idempotencyKey 幂等键（§8.4；同 key 重放返回首次结果，见 §8.4「每次提交用新 uuid」）
+     * @return {@code {edit_revision, edit_status, wren_ref_id}}
+     */
+    @PreAuthorize("hasAuthority('iqd:modeling:edit')")
+    @Transactional
+    public IqdModelingCreateResponse upsertCube(
+            Long connectionId,
+            String itemKey,
+            Map<String, Object> patch,
+            Long baseRevision,
+            String idempotencyKey) {
+
+        // ---------- 0. 参数校验（42200） ----------
+        if (itemKey == null || itemKey.isBlank() || !itemKey.startsWith(CUBE_ITEM_PREFIX)) {
+            throw new BusinessException(42200, "item_key 必须形如 mdl:cube:<name>", null);
+        }
+        if (patch == null) {
+            throw new BusinessException(42200, "patch 不能为空", null);
+        }
+        String effectiveKey = itemKey.trim();
+
+        // ---------- 连接存在 + 写回闸门（40300） ----------
+        IqdConnection conn = requireWritableConnection(connectionId);
+
+        // ---------- 1. 幂等键命中 → 返回首次结果，不 bump ----------
+        //    PUT 语义下同 key 重放 = 同一逻辑请求的断线重试（§8.4：每次**新**提交用新 uuid）。
+        Optional<IqdEditIdempotency> prev = findIdempotent(connectionId, idempotencyKey);
+        if (prev.isPresent()) {
+            log.info("IQD upsertCube idempotent hit by key connectionId={} key={}", connectionId, idempotencyKey);
+            return created(prev.get().getEditRevision(), null);
+        }
+
+        // ---------- 2. cube 必须已存在（本端点是「更新既有」，非 create） ----------
+        IqdCatalogItem existingCube = catalogItemRepository
+                .findByConnectionIdAndItemKey(connectionId, effectiveKey).orElse(null);
+        if (existingCube == null || !"cube".equals(existingCube.getKind())) {
+            Map<String, Object> data = new LinkedHashMap<>();
+            data.put("field", "item_key");
+            data.put("item_key", effectiveKey);
+            throw new BusinessException(42200, "被更新的 cube 不存在: " + effectiveKey, data);
+        }
+
+        // ---------- 3. 乐观并发（40900 + current_edit_revision） ----------
+        long current = currentRevision(conn);
+        checkBaseRevision(conn, baseRevision, current);
+
+        // ---------- 4. model_ref：patch 优先；缺省沿用既有列值；仍缺失 → 42200（T04a 加固） ----------
+        String modelRef = normalizeModelRef(str(patch.get("model_ref")));
+        if (modelRef == null) {
+            modelRef = existingCube.getModelRef();
+        }
+        if (modelRef == null) {
+            throw new BusinessException(42200, "model_ref 不能为空（cube 必须挂靠一个模型）", null);
+        }
+        requireModel(connectionId, modelRef, "model_ref");
+
+        // ---------- 5. measures/dimensions 引用字段存在性（保存前阻断 → 42201） ----------
+        List<Map<String, Object>> measures = asMapList(patch.get("measures"));
+        List<Map<String, Object>> dimensions = asMapList(patch.get("dimensions"));
+        Set<String> allowed = collectModelFields(connectionId, modelRef);
+        List<String> errors = new ArrayList<>();
+        for (Map<String, Object> measure : measures) {
+            String name = str(measure.get("name"));
+            String expr = str(measure.get("expression"));
+            if (name == null || name.isBlank() || expr == null || expr.isBlank()) {
+                throw new BusinessException(42200, "measures[].name / measures[].expression 不能为空", null);
+            }
+            for (String token : scanUnknownIdentifiers(expr, allowed)) {
+                errors.add("measure " + name + " 引用不存在字段: " + token);
+            }
+        }
+        for (Map<String, Object> dimension : dimensions) {
+            String name = str(dimension.get("name"));
+            String refField = str(dimension.get("ref_model_field"));
+            if (name == null || name.isBlank() || refField == null || refField.isBlank()) {
+                throw new BusinessException(42200, "dimensions[].name / dimensions[].ref_model_field 不能为空", null);
+            }
+            if (!matchesAny(allowed, refField.toLowerCase(LOWER))) {
+                errors.add("dimension " + name + " 引用不存在字段: " + refField);
+            }
+        }
+        if (!errors.isEmpty()) {
+            Map<String, Object> data = new LinkedHashMap<>();
+            data.put("errors", errors);
+            data.put("model_ref", modelRef);
+            throw new BusinessException(42201, "cube 引用了不存在的字段", data);
+        }
+
+        long next = current + 1;
+        Instant now = Instant.now();
+        String cubeName = nodeName(effectiveKey);
+        String existingDisplay = (existingCube.getDisplayName() != null && !existingCube.getDisplayName().isBlank())
+                ? existingCube.getDisplayName() : cubeName;
+        String displayName = patchText(patch, "display_name", existingDisplay);
+
+        // ---------- 6. 更新 cube 自身（display_name / model_ref；expression 保持 NULL —— 二义列不写） ----------
+        upsertNode(connectionId, effectiveKey, "cube", modelRef, displayName, null, null,
+                null, null, null, null, modelRef, 0, next, now);
+
+        // ---------- 7. 子节点 upsert（in_scope=0 与 T03a 同口径；item_key 与 createCube 对齐） ----------
+        Set<String> incomingKeys = new LinkedHashSet<>();
+        for (Map<String, Object> measure : measures) {
+            String name = str(measure.get("name")).trim();
+            String measureKey = MEASURE_ITEM_PREFIX + cubeName + "." + name;
+            incomingKeys.add(measureKey);
+            upsertNode(connectionId, measureKey, "measure", effectiveKey, name,
+                    str(measure.get("format")), str(measure.get("expression")),
+                    null, null, null, null, null, 0, next, now);
+        }
+        for (Map<String, Object> dimension : dimensions) {
+            String name = str(dimension.get("name")).trim();
+            String dimensionKey = DIMENSION_ITEM_PREFIX + cubeName + "." + name;
+            incomingKeys.add(dimensionKey);
+            upsertNode(connectionId, dimensionKey, "dimension", effectiveKey, name,
+                    null, str(dimension.get("ref_model_field")),
+                    null, null, null, null, null, 0, next, now);
+        }
+
+        // ---------- 8. 孤儿清理：本次未出现的既有 measure/dimension 子节点删除 ----------
+        int pruned = pruneOrphanChildren(connectionId, effectiveKey, incomingKeys);
+
+        // ---------- 9. bump current_edit_revision（必须，否则进不了 build） ----------
+        bumpRevision(conn, next, now);
+
+        // ---------- 10. 写 iqd_edit_idempotency（40901 竞态） ----------
+        recordIdempotency(connectionId, idempotencyKey, next, current);
+
+        // ---------- 11. 发 iqd.catalog.changed ----------
+        changeEventPublisher.publish("iqd.catalog.changed", "cube=" + effectiveKey + ";model=" + modelRef);
+
+        log.info("IQD upsertCube updated connectionId={} itemKey={} modelRef={} measures={} dimensions={} pruned={} revision={}",
+                connectionId, effectiveKey, modelRef, measures.size(), dimensions.size(), pruned, next);
+        return created(next, existingCube.getWrenRefId());
+    }
+
     // ------------------------------------------------------------------ createCalculatedColumn（T03 实现）
 
     /**
@@ -1371,6 +1549,50 @@ public class IqdCatalogNodeService {
         entity.setLastSeenAt(now);
         entity.setUpdatedAt(now);
         catalogItemRepository.save(entity);
+    }
+
+    /**
+     * 孤儿清理：删除本 cube 下「本次 patch 未出现」的既有 measure/dimension 子节点（T04a）。
+     *
+     * <p><b>选物理删除（非软删除）的理由</b>：
+     * <ol>
+     *   <li>measure/dimension 是<b>叶子节点</b>，无任何节点反向引用它们
+     *       （{@code validateCatalogRefs} 只扫 expression / model_ref，不含子节点键），
+     *       物理删除无悬挂引用；</li>
+     *   <li>{@code iqd_catalog_item} <b>无软删除列</b>，引入需改表结构（超出 T04a 范围）；</li>
+     *   <li><b>关键失效</b>：派生用 {@code findEditedItems}（{@code edit_revision IS NOT NULL}）
+     *       取编辑节点，软删除若保留 {@code edit_revision}，被删子节点仍会被物化进 MDL
+     *       → 删除<b>静默不生效</b>（比不支持删除更糟）；若不保留则须显式置 NULL，
+     *       语义上等同「从未编辑」，反而更绕。故物理删除最干净 —— 行消失即天然排除在
+     *       {@code findEditedItems} 之外。</li>
+     * </ol>
+     *
+     * <p><b>可回滚</b>：全程在调用方 {@code @Transactional} 内，任一失败整体回滚。
+     * <b>可见痕迹</b>：每条删除打 WARN 结构化日志（含 {@code item_key} / {@code cube} /
+     * {@code connection_id} / {@code kind}），便于事后追溯「我的 measure 怎么没了」。
+     *
+     * @param connectionId 问数连接 id
+     * @param cubeItemKey  Cube 稳定键（子节点的 {@code parent_key}）
+     * @param incomingKeys 本次 patch 出现的子节点 item_key 集合（保留集）
+     * @return 被删除的子节点数
+     */
+    private int pruneOrphanChildren(Long connectionId, String cubeItemKey, Set<String> incomingKeys) {
+        int pruned = 0;
+        for (IqdCatalogItem child : catalogItemRepository
+                .findByConnectionIdAndParentKey(connectionId, cubeItemKey)) {
+            String kind = child.getKind();
+            if (!"measure".equals(kind) && !"dimension".equals(kind)) {
+                continue;
+            }
+            if (incomingKeys.contains(child.getItemKey())) {
+                continue;
+            }
+            catalogItemRepository.delete(child);
+            pruned++;
+            log.warn("IQD cube child pruned (orphan cleanup) connectionId={} cube={} item_key={} kind={}",
+                    connectionId, cubeItemKey, child.getItemKey(), kind);
+        }
+        return pruned;
     }
 
     /** 既有模型的列映射（item_key → 源列名），供幂等分支回放首次结果。 */

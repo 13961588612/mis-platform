@@ -29,6 +29,7 @@ import java.util.Optional;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
@@ -708,6 +709,237 @@ class IqdCatalogNodeServiceTest {
         assertEquals(40300, ex.getCode());
     }
 
+    // ============================================================ T04a upsertCube（更新既有 Cube）
+
+    /**
+     * 正常更新：cube 自身字段（display_name / model_ref）+ 子节点增删改齐全。
+     *
+     * <p>既有：measure {@code total} + dimension {@code store_id}；
+     * patch：度量 {@code total}（改表达式）+ 新增度量 {@code cnt}；{@code dimensions=[]}
+     * （→ 本端点 PUT 全量替换语义 ⇒ 既有 {@code store_id} 被孤儿清理）。
+     */
+    @Test
+    void upsertCube_happyPath_updatesSelf_upsertsChildren_prunesOrphans_bumpsRevision() {
+        IqdConnection c = conn(12L);
+        when(connectionRepository.findById(CONN_ID)).thenReturn(Optional.of(c));
+        when(idempotencyRepository.findByConnectionIdAndIdempotencyKey(eq(CONN_ID), anyString()))
+                .thenReturn(Optional.empty());
+        stubNoExistingNodes();
+        stubOrderModelWithFields();
+        stubExistingCubeWithChildren();
+
+        Map<String, Object> measureTotal = new LinkedHashMap<>();
+        measureTotal.put("name", "total");
+        measureTotal.put("expression", "SUM(amount) * 1.1");
+        measureTotal.put("format", "¥#,##0.00");
+        Map<String, Object> measureCnt = new LinkedHashMap<>();
+        measureCnt.put("name", "cnt");
+        measureCnt.put("expression", "COUNT(amount)");
+        Map<String, Object> patch = new LinkedHashMap<>();
+        patch.put("display_name", "营收(更新)");
+        patch.put("model_ref", "mdl:model:orders");
+        patch.put("measures", List.of(measureTotal, measureCnt));
+        patch.put("dimensions", List.of());
+
+        IqdModelingCreateResponse result = service.upsertCube(
+                CONN_ID, "mdl:cube:revenue", patch, 12L, "1:cube:update:u");
+
+        // ① edit_revision 确实被 bump
+        assertEquals(13L, result.getEditRevision());
+        assertEquals("EDITED_UNSYNCED", result.getEditStatus());
+        assertEquals(13L, c.getCurrentEditRevision());
+        verify(connectionRepository).save(c);
+
+        // ② cube 自身字段被更新 + 两个 measure upsert（共 3 次 save）
+        ArgumentCaptor<IqdCatalogItem> captor = ArgumentCaptor.forClass(IqdCatalogItem.class);
+        verify(catalogItemRepository, times(3)).save(captor.capture());
+        List<IqdCatalogItem> saved = captor.getAllValues();
+
+        IqdCatalogItem cube = saved.stream()
+                .filter(i -> "cube".equals(i.getKind()) && "mdl:cube:revenue".equals(i.getItemKey()))
+                .findFirst().orElseThrow();
+        assertEquals("营收(更新)", cube.getDisplayName());
+        assertEquals("mdl:model:orders", cube.getModelRef(), "★ model_ref 保持/更新为所属模型");
+        assertEquals(13L, cube.getEditRevision());
+        assertEquals(0, cube.getInScope().intValue(), "语义对象不自动纳入问数范围");
+        assertNull(cube.getExpression(), "cube 的 expression 是二义列，保持 NULL");
+
+        assertEquals(2, saved.stream().filter(i -> "measure".equals(i.getKind())).count(),
+                "total（更新）+ cnt（新增）");
+        assertTrue(saved.stream().anyMatch(i -> "measure".equals(i.getKind())
+                        && "SUM(amount) * 1.1".equals(i.getExpression())),
+                "既有 measure total 的表达式被更新");
+        assertTrue(saved.stream().anyMatch(i -> "measure".equals(i.getKind())
+                        && "mdl:measure:revenue.cnt".equals(i.getItemKey())),
+                "新增 measure cnt 落库");
+
+        // ③ 孤儿清理：本次未出现的既有 dimension store_id 被物理删除
+        ArgumentCaptor<IqdCatalogItem> delCaptor = ArgumentCaptor.forClass(IqdCatalogItem.class);
+        verify(catalogItemRepository, times(1)).delete(delCaptor.capture());
+        assertEquals("mdl:dimension:revenue.store_id", delCaptor.getValue().getItemKey());
+
+        // ④ 幂等键落库 + 变更事件
+        verify(idempotencyRepository).save(any(IqdEditIdempotency.class));
+        verify(changeEventPublisher).publish(eq("iqd.catalog.changed"), anyString());
+    }
+
+    /** 孤儿清理：仅删本次未出现的子节点；本次仍出现的既有子节点不得被删。 */
+    @Test
+    void upsertCube_keepsResubmittedChildren_andPrunesOnlyMissingOnes() {
+        IqdConnection c = conn(12L);
+        when(connectionRepository.findById(CONN_ID)).thenReturn(Optional.of(c));
+        when(idempotencyRepository.findByConnectionIdAndIdempotencyKey(eq(CONN_ID), anyString()))
+                .thenReturn(Optional.empty());
+        stubNoExistingNodes();
+        stubOrderModelWithFields();
+        stubExistingCubeWithChildren();
+
+        // 既有 total（measure）/ store_id（dimension）两个都在 patch 里 → 无孤儿
+        Map<String, Object> measureTotal = new LinkedHashMap<>();
+        measureTotal.put("name", "total");
+        measureTotal.put("expression", "SUM(amount)");
+        Map<String, Object> dimension = new LinkedHashMap<>();
+        dimension.put("name", "store_id");
+        dimension.put("ref_model_field", "orders.store_id");
+        Map<String, Object> patch = new LinkedHashMap<>();
+        patch.put("model_ref", "mdl:model:orders");
+        patch.put("measures", List.of(measureTotal));
+        patch.put("dimensions", List.of(dimension));
+
+        service.upsertCube(CONN_ID, "mdl:cube:revenue", patch, 12L, "k");
+
+        verify(catalogItemRepository, never()).delete(any(IqdCatalogItem.class));
+    }
+
+    @Test
+    void upsertCube_staleBaseRevision_throws40900_withCurrentRevision() {
+        when(connectionRepository.findById(CONN_ID)).thenReturn(Optional.of(conn(12L)));
+        when(idempotencyRepository.findByConnectionIdAndIdempotencyKey(eq(CONN_ID), anyString()))
+                .thenReturn(Optional.empty());
+        stubNoExistingNodes();
+        stubOrderModelWithFields();
+        stubExistingCubeWithChildren();
+
+        BusinessException ex = org.junit.jupiter.api.Assertions.assertThrows(BusinessException.class,
+                () -> service.upsertCube(CONN_ID, "mdl:cube:revenue",
+                        Map.of("model_ref", "mdl:model:orders"), 11L, "k"));
+
+        assertEquals(40900, ex.getCode());
+        @SuppressWarnings("unchecked")
+        Map<String, Object> data = (Map<String, Object>) ex.getData();
+        assertEquals(12L, data.get("current_edit_revision"));
+    }
+
+    @Test
+    void upsertCube_duplicateIdempotencyKeyConcurrently_throws40901() {
+        when(connectionRepository.findById(CONN_ID)).thenReturn(Optional.of(conn(12L)));
+        when(idempotencyRepository.findByConnectionIdAndIdempotencyKey(eq(CONN_ID), anyString()))
+                .thenReturn(Optional.empty());
+        stubNoExistingNodes();
+        stubOrderModelWithFields();
+        stubExistingCubeWithChildren();
+        // 竞态：查重为空，但落库撞 iqd_edit_idempotency 主键 (connection_id, idempotency_key)
+        when(idempotencyRepository.save(any(IqdEditIdempotency.class)))
+                .thenThrow(new DataIntegrityViolationException("duplicate key"));
+
+        BusinessException ex = org.junit.jupiter.api.Assertions.assertThrows(BusinessException.class,
+                () -> service.upsertCube(CONN_ID, "mdl:cube:revenue",
+                        Map.of("model_ref", "mdl:model:orders"), 12L, "key-race"));
+
+        assertEquals(40901, ex.getCode());
+        @SuppressWarnings("unchecked")
+        Map<String, Object> data = (Map<String, Object>) ex.getData();
+        assertEquals("key-race", data.get("idempotency_key"));
+    }
+
+    @Test
+    void upsertCube_missingCube_throws42200() {
+        when(connectionRepository.findById(CONN_ID)).thenReturn(Optional.of(conn(12L)));
+        when(idempotencyRepository.findByConnectionIdAndIdempotencyKey(eq(CONN_ID), anyString()))
+                .thenReturn(Optional.empty());
+        stubNoExistingNodes();
+
+        BusinessException ex = org.junit.jupiter.api.Assertions.assertThrows(BusinessException.class,
+                () -> service.upsertCube(CONN_ID, "mdl:cube:ghost",
+                        Map.of("model_ref", "mdl:model:orders"), 12L, "k"));
+
+        assertEquals(42200, ex.getCode());
+        @SuppressWarnings("unchecked")
+        Map<String, Object> data = (Map<String, Object>) ex.getData();
+        assertEquals("mdl:cube:ghost", data.get("item_key"));
+    }
+
+    @Test
+    void upsertCube_modelRefTargetMissing_throws42200() {
+        when(connectionRepository.findById(CONN_ID)).thenReturn(Optional.of(conn(12L)));
+        when(idempotencyRepository.findByConnectionIdAndIdempotencyKey(eq(CONN_ID), anyString()))
+                .thenReturn(Optional.empty());
+        stubNoExistingNodes();
+        stubOrderModelWithFields();
+        stubExistingCubeWithChildren();
+
+        BusinessException ex = org.junit.jupiter.api.Assertions.assertThrows(BusinessException.class,
+                () -> service.upsertCube(CONN_ID, "mdl:cube:revenue",
+                        Map.of("model_ref", "mdl:model:ghost"), 12L, "k"));
+
+        assertEquals(42200, ex.getCode());
+        @SuppressWarnings("unchecked")
+        Map<String, Object> data = (Map<String, Object>) ex.getData();
+        assertEquals("model_ref", data.get("field"));
+        assertEquals("mdl:model:ghost", data.get("model_item_key"));
+    }
+
+    @Test
+    void upsertCube_measureExpressionReferencesUnknownField_throws42201() {
+        when(connectionRepository.findById(CONN_ID)).thenReturn(Optional.of(conn(12L)));
+        when(idempotencyRepository.findByConnectionIdAndIdempotencyKey(eq(CONN_ID), anyString()))
+                .thenReturn(Optional.empty());
+        stubNoExistingNodes();
+        stubOrderModelWithFields();
+        stubExistingCubeWithChildren();
+
+        Map<String, Object> bad = new LinkedHashMap<>();
+        bad.put("name", "bad");
+        bad.put("expression", "SUM(ghost_amount)");
+        Map<String, Object> patch = new LinkedHashMap<>();
+        patch.put("model_ref", "mdl:model:orders");
+        patch.put("measures", List.of(bad));
+
+        BusinessException ex = org.junit.jupiter.api.Assertions.assertThrows(BusinessException.class,
+                () -> service.upsertCube(CONN_ID, "mdl:cube:revenue", patch, 12L, "k"));
+
+        assertEquals(42201, ex.getCode());
+        @SuppressWarnings("unchecked")
+        Map<String, Object> data = (Map<String, Object>) ex.getData();
+        assertTrue(String.valueOf(data.get("errors")).contains("ghost_amount"));
+        assertEquals("mdl:model:orders", data.get("model_ref"));
+    }
+
+    /**
+     * T04a 加固契约守卫：既有 cube 的 {@code model_ref} 为 NULL 且 patch 未补时，
+     * **必须 42200 打回**（否则派生侧 {@code _materialize_missing_nodes} 会产出无
+     * {@code baseObject} 的非法 cube —— 静默降级）。
+     */
+    @Test
+    void upsertCube_existingCubeWithoutModelRef_andPatchOmitsIt_throws42200() {
+        when(connectionRepository.findById(CONN_ID)).thenReturn(Optional.of(conn(12L)));
+        when(idempotencyRepository.findByConnectionIdAndIdempotencyKey(eq(CONN_ID), anyString()))
+                .thenReturn(Optional.empty());
+        stubNoExistingNodes();
+        stubOrderModelWithFields();
+        // 既有 cube 存在，但 model_ref = NULL
+        IqdCatalogItem cube = catalogNode("mdl:cube:revenue", "cube", "revenue", null);
+        when(catalogItemRepository.findByConnectionIdAndItemKey(CONN_ID, "mdl:cube:revenue"))
+                .thenReturn(Optional.of(cube));
+
+        BusinessException ex = org.junit.jupiter.api.Assertions.assertThrows(BusinessException.class,
+                () -> service.upsertCube(CONN_ID, "mdl:cube:revenue",
+                        Map.of("display_name", "营收"), 12L, "k"));
+
+        assertEquals(42200, ex.getCode());
+        assertTrue(ex.getMessage().contains("model_ref"));
+    }
+
     // ------------------------------------------------------------ 测试装配辅助（T03）
 
     /** 覆盖既有「空库」桩（先 generic 后 specific，specific 生效）。 */
@@ -733,6 +965,31 @@ class IqdCatalogNodeServiceTest {
         items.add(catalogNode("pg_main.public.orders.store_id", "column", "store_id", "pg_main.public.orders"));
         items.add(catalogNode("pg_main.public.orders.customer_id", "column", "customer_id", "pg_main.public.orders"));
         return items;
+    }
+
+    /**
+     * 桩：既有 cube {@code mdl:cube:revenue}（{@code model_ref=mdl:model:orders}）+ 两个子节点
+     * （measure {@code total} / dimension {@code store_id}）。
+     *
+     * <p>覆盖 {@link #stubNoExistingNodes()} 对 cube / 子节点键的 generic 空桩
+     * （Mockito：后定义的更具体桩生效）。
+     */
+    private void stubExistingCubeWithChildren() {
+        IqdCatalogItem cube = catalogNode("mdl:cube:revenue", "cube", "revenue", "mdl:model:orders");
+        cube.setModelRef("mdl:model:orders");
+        cube.setEditRevision(5L);
+        when(catalogItemRepository.findByConnectionIdAndItemKey(CONN_ID, "mdl:cube:revenue"))
+                .thenReturn(Optional.of(cube));
+
+        IqdCatalogItem total = catalogNode("mdl:measure:revenue.total", "measure", "total", "mdl:cube:revenue");
+        when(catalogItemRepository.findByConnectionIdAndItemKey(CONN_ID, "mdl:measure:revenue.total"))
+                .thenReturn(Optional.of(total));
+
+        List<IqdCatalogItem> children = new ArrayList<>();
+        children.add(total);
+        children.add(catalogNode("mdl:dimension:revenue.store_id", "dimension", "store_id", "mdl:cube:revenue"));
+        when(catalogItemRepository.findByConnectionIdAndParentKey(CONN_ID, "mdl:cube:revenue"))
+                .thenReturn(children);
     }
 
     private List<IqdCatalogItem> orderAndCustomerFields() {

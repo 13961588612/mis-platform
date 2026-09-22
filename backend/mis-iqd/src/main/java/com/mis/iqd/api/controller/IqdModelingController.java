@@ -30,7 +30,7 @@ import java.util.Map;
 /**
  * 可视化建模台管理面（v1.11 MR-S2 / MR-S1；路径前缀 {@code /api/v1/iqd/**}）。
  *
- * <h2>端点状态总览（14 个）</h2>
+ * <h2>端点状态总览（15 个）</h2>
  * <table border="1">
  *   <caption>实现状态</caption>
  *   <tr><th>端点</th><th>状态</th><th>服务方法</th></tr>
@@ -43,6 +43,7 @@ import java.util.Map;
  *   <tr><td>{@code POST /catalog/model}</td><td><b>T03 已实现</b></td><td>{@link IqdCatalogNodeService#createModel}</td></tr>
  *   <tr><td>{@code POST /catalog/relationship}</td><td><b>T03 已实现</b></td><td>{@link IqdCatalogNodeService#createRelationship}</td></tr>
  *   <tr><td>{@code POST /catalog/cube}</td><td><b>T03 已实现</b></td><td>{@link IqdCatalogNodeService#createCube}</td></tr>
+ *   <tr><td>{@code PUT  /catalog/cube}</td><td><b>T04a 已实现</b></td><td>{@link IqdCatalogNodeService#upsertCube}</td></tr>
  *   <tr><td>{@code POST /catalog/calculated-column}</td><td><b>T03 已实现</b></td><td>{@link IqdCatalogNodeService#createCalculatedColumn}</td></tr>
  *   <tr><td>{@code GET  /dependencies}</td><td><b>T03 已实现</b></td><td>{@link IqdCatalogNodeService#listDependents}</td></tr>
  *   <tr><td>{@code GET  /modeling/layout/{connectionId}}</td><td><b>T03 已实现</b></td><td>{@link IqdModelLayoutService#get}</td></tr>
@@ -241,6 +242,30 @@ public class IqdModelingController {
     @PreAuthorize("hasAuthority('iqd:modeling:edit')")
     public Result<IqdModelingCreateResponse> createCube(@RequestBody Map<String, Object> body) {
         return Result.ok(catalogNodeService.createCube(
+                toLong(body.get("connection_id")),
+                str(body.get("item_key")),
+                asMap(body.get("patch")),
+                toLong(body.get("base_revision")),
+                str(body.get("idempotency_key"))));
+    }
+
+    /**
+     * 更新既有 Cube（自身字段 + measures/dimensions 子节点增删改 + 孤儿清理；T04a 实现）。
+     * {@code PUT /api/v1/iqd/catalog/cube}。
+     *
+     * <p>与 {@link #createCube} 并列：POST 是「新建」，PUT 是「更新既有」（补齐 T03c
+     * 暴露的「既有 Cube 改不了」缺口）。{@code patch.measures / dimensions} 为<b>全量替换</b>
+     * 语义：本次未出现的既有子节点会被清理（物理删除，见服务层
+     * {@link IqdCatalogNodeService#upsertCube}）。
+     *
+     * @param body {@code {connection_id, item_key, patch:{display_name?,model_ref?,measures[],dimensions[]},
+     *             base_revision, idempotency_key}}
+     * @return {@code {edit_revision, edit_status, wren_ref_id}}
+     */
+    @PutMapping("/catalog/cube")
+    @PreAuthorize("hasAuthority('iqd:modeling:edit')")
+    public Result<IqdModelingCreateResponse> upsertCube(@RequestBody Map<String, Object> body) {
+        return Result.ok(catalogNodeService.upsertCube(
                 toLong(body.get("connection_id")),
                 str(body.get("item_key")),
                 asMap(body.get("patch")),

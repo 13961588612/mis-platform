@@ -22,12 +22,13 @@ import java.util.Map;
 /**
  * 可视化建模台代理（BFF，v1.11 MR-S1~S4）。路径前缀 {@code /api/v1/iqd/**}。
  *
- * <h2>端点组成（18 = 14 建模台 + 4 表发现）</h2>
+ * <h2>端点组成（19 = 15 建模台 + 4 表发现）</h2>
  * <ul>
- *   <li><b>14 建模台端点</b>（转发 mis-iqd {@code /api/v1/iqd/**}，经 {@link IqdModelingClient}）：
+ *   <li><b>15 建模台端点</b>（转发 mis-iqd {@code /api/v1/iqd/**}，经 {@link IqdModelingClient}）：
  *       {@code POST /connections}、{@code GET /connections}、{@code POST /connections/{id}/test}、
  *       {@code POST /catalog/model}、{@code POST /catalog/model/from-table}、
  *       {@code POST /catalog/relationship}、{@code POST /catalog/cube}、
+ *       {@code PUT  /catalog/cube}（T04a 更新既有 Cube）、
  *       {@code POST /catalog/calculated-column}、{@code GET /catalog/validate-expression}、
  *       {@code GET /catalog/sync-status}（{@link IqdAclController} 提供，本类不重复映射）、
  *       {@code GET /dependencies}、{@code GET /modeling/layout/{connectionId}}、
@@ -149,6 +150,19 @@ public class IqdModelingController {
     public ResponseEntity<Result<Map<String, Object>>> createCube(
             @RequestBody Map<String, Object> body) {
         return forward(() -> modelingClient.createCube(body));
+    }
+
+    /**
+     * 更新既有 Cube（自身字段 + measures/dimensions 子节点增删改 + 孤儿清理）。
+     * {@code PUT /catalog/cube}（T04a）。
+     *
+     * <p>与 {@code POST /catalog/cube} 并列：POST 新建、PUT 更新既有。
+     * {@code patch.measures / dimensions} 为全量替换语义（本次未出现的既有子节点被清理）。
+     */
+    @PutMapping("/catalog/cube")
+    public ResponseEntity<Result<Map<String, Object>>> upsertCube(
+            @RequestBody Map<String, Object> body) {
+        return forward(() -> modelingClient.upsertCube(body));
     }
 
     /** 新建计算列。{@code POST /catalog/calculated-column}。 */

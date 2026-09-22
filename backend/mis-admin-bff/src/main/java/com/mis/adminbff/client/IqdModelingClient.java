@@ -18,7 +18,7 @@ import java.util.Map;
  * （{@code loginContextHeaders()}，供 mis-iqd 侧 DataScope / 操作人校验），
  * 与既有 {@code IqdClient} 同口径。
  *
- * <h2>方法集（14）</h2>
+ * <h2>方法集（15）</h2>
  * <ul>
  *   <li><b>T02a</b>：{@code createConnection} / {@code listConnections} /
  *       {@code testConnection} / {@code createModelFromTable} / {@code validateExpression} /
@@ -28,6 +28,7 @@ import java.util.Map;
  *       {@code getModelLayout} / {@code saveModelLayout} /
  *       {@code autoLayout}（**按设计不实现** → 抛 {@code UnsupportedOperationException}
  *       → BFF 控制器转 HTTP 501，见方法注释与 A-02）</li>
+ *   <li><b>T04a</b>：{@code upsertCube}（更新既有 Cube，与 {@code createCube} 并列）</li>
  * </ul>
  *
  * <h2>错误透传（关键）</h2>
@@ -149,6 +150,20 @@ public class IqdModelingClient extends AbstractDownstreamClient {
         return postJson("/api/v1/iqd/catalog/cube", body);
     }
 
+    /**
+     * 更新既有 Cube（自身字段 + measures/dimensions 子节点增删改 + 孤儿清理）。
+     * {@code PUT /api/v1/iqd/catalog/cube}（T04a）。
+     *
+     * <p>与 {@link #createCube}（POST）并列：POST 新建、PUT 更新既有。
+     * {@code patch.measures / dimensions} 为全量替换语义（本次未出现的既有子节点被清理）。
+     * 下游失败（40900 乐观并发 / 40901 幂等键 / 42200 不存在 / 42201 引用字段缺失）
+     * 经 {@link AbstractDownstreamClient#block} 抛 {@code BusinessException(code, data)}，
+     * 由 BFF 控制器透传给前端。
+     */
+    public Map<String, Object> upsertCube(Map<String, Object> body) {
+        return putJson("/api/v1/iqd/catalog/cube", body);
+    }
+
     /** 新建计算列。{@code POST /api/v1/iqd/catalog/calculated-column}。 */
     public Map<String, Object> createCalculatedColumn(Map<String, Object> body) {
         return postJson("/api/v1/iqd/catalog/calculated-column", body);
@@ -219,6 +234,17 @@ public class IqdModelingClient extends AbstractDownstreamClient {
     /** 统一带 JSON body 的 POST（BFF → mis-iqd，透传登录上下文）。 */
     private Map<String, Object> postJson(String path, Map<String, Object> body) {
         return block(client().post()
+                .uri(path)
+                .headers(loginContextHeaders())
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(body == null ? Map.of() : body)
+                .retrieve()
+                .bodyToMono(MAP_RESULT));
+    }
+
+    /** 统一带 JSON body 的 PUT（BFF → mis-iqd，透传登录上下文）。 */
+    private Map<String, Object> putJson(String path, Map<String, Object> body) {
+        return block(client().put()
                 .uri(path)
                 .headers(loginContextHeaders())
                 .contentType(MediaType.APPLICATION_JSON)
