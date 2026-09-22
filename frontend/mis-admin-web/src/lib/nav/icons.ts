@@ -7,6 +7,7 @@ import {
   Boxes,
   Building2,
   Cable,
+  Calculator,
   ClipboardCheck,
   ClipboardList,
   Cpu,
@@ -15,12 +16,14 @@ import {
   FileText,
   FolderTree,
   GitBranch,
+  GitBranchPlus,
   Globe,
   History,
   Home,
   KeyRound,
   Landmark,
   Languages,
+  Layers,
   LayoutDashboard,
   ListTree,
   Lock,
@@ -43,6 +46,7 @@ import {
   UserCog,
   Users,
   Wallet,
+  Workflow,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 
@@ -97,6 +101,12 @@ const ICON_MAP: Record<string, LucideIcon> = {
   Store,
   Scale,
   Tags,
+  // v1.11 可视化建模台（V87__iqd_modeling_seed.sql 的 sys_menu.icon 取值 + 建模台组件入口）
+  // 漏登记不会报错，只会静默回退成 LayoutDashboard —— 侧栏「可视化建模台」图标会与首页一致。
+  Workflow,
+  GitBranchPlus,
+  Calculator,
+  Layers,
 };
 
 export function resolveNavIcon(name?: string | null): LucideIcon {

@@ -1,5 +1,5 @@
 /**
- * iqd-scope-page.tsx — 问数范围与表级 ACL（W2，路径 /ai/iqd/scope）。
+ * iqd-scope-page.tsx — 问数范围与表级 ACL（W2，路径 /iqd/scope）。
  *
  * <p>双闸门配置面：范围策略（iqd_scope_policy，治理层 global/role/dept/user/store）
  * + 表级 ACL（iqd_table_acl，授权层 ask/manage + row_scope 行级条件）。

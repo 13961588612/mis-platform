@@ -1,5 +1,5 @@
 /**
- * iqd-trace-page.tsx — 问数审计回查（W3，路径 /ai/iqd/traces）。
+ * iqd-trace-page.tsx — 问数审计回查（W3，路径 /iqd/traces）。
  *
  * <p>运营/QA 联调审计：分页回查 iqd_ask_log（用户/问题/状态/耗时/命中表），
  * 点开单条查看完整计划时间线 + SQL 代码块 + 引用明细（需 iqd:trace:view；

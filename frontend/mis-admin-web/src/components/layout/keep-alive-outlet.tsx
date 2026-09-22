@@ -63,13 +63,16 @@ const LazyDataQueryPage = lazy(() => import('@/features/agent/ai/data-query-page
 const LazyApprovalCenterPage = lazy(() => import('@/features/agent/ai/approval-center-page'));
 const LazyMonitorDashboardPage = lazy(() => import('@/features/agent/ai/monitor-dashboard-page'));
 // W2 问数管理（/iqd/*，懒加载；V77 路由前缀由 /ai/iqd 迁至 /iqd）
-const LazyIqdConfigPage = lazy(() => import('@/features/agent/ai/iqd/iqd-config-page'));
-const LazyIqdCatalogPage = lazy(() => import('@/features/agent/ai/iqd/iqd-catalog-page'));
-const LazyIqdScopePage = lazy(() => import('@/features/agent/ai/iqd/iqd-scope-page'));
-const LazyIqdTestChatPage = lazy(() => import('@/features/agent/ai/iqd/iqd-test-chat-page'));
-const LazyIqdTracePage = lazy(() => import('@/features/agent/ai/iqd/iqd-trace-page'));
-const LazyIqdEnhancePage = lazy(() => import('@/features/agent/ai/iqd/iqd-enhance-page'));
-const LazyIqdInstructionPage = lazy(() => import('@/features/agent/ai/iqd/iqd-instruction-page'));
+// v1.11（Q2=是）：问数域目录由 features/agent/ai/iqd 迁移至 features/agent/iqd（命名边界对齐）
+const LazyIqdConfigPage = lazy(() => import('@/features/agent/iqd/iqd-config-page'));
+const LazyIqdCatalogPage = lazy(() => import('@/features/agent/iqd/iqd-catalog-page'));
+const LazyIqdScopePage = lazy(() => import('@/features/agent/iqd/iqd-scope-page'));
+const LazyIqdTestChatPage = lazy(() => import('@/features/agent/iqd/iqd-test-chat-page'));
+const LazyIqdTracePage = lazy(() => import('@/features/agent/iqd/iqd-trace-page'));
+const LazyIqdEnhancePage = lazy(() => import('@/features/agent/iqd/iqd-enhance-page'));
+const LazyIqdInstructionPage = lazy(() => import('@/features/agent/iqd/iqd-instruction-page'));
+// v1.11 建模台主页（MR-S1，T01 仅页面壳；三栏与画布在 T02 补全）
+const LazyIqdModelingPage = lazy(() => import('@/features/agent/iqd/iqd-modeling-page'));
 
 /** 懒加载页面的 Suspense 占位（轻量，避免白屏闪烁）。 */
 function LazyPageFallback() {
@@ -158,6 +161,8 @@ const PAGE_MAP: Record<string, ComponentType> = {
   '/iqd/traces': LazyIqdTracePage,
   '/iqd/enhance': LazyIqdEnhancePage,
   '/iqd/instruction': LazyIqdInstructionPage,
+  // v1.11 建模台主页（V87 sys_menu 92600 / IQD_NAV 同步登记）
+  '/iqd/modeling': LazyIqdModelingPage,
   // V86：财务辅助 · POS 对账
   '/finance/bank-account/pos-account/terminals': TerminalsPage,
   '/finance/bank-account/pos-account/skt': SktPage,

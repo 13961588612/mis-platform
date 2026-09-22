@@ -1,5 +1,5 @@
 /**
- * iqd-catalog-page.tsx — 问数清单管理（W2，路径 /ai/iqd/catalog）。
+ * iqd-catalog-page.tsx — 问数清单管理（W2，路径 /iqd/catalog）。
  *
  * <p>覆盖 mis-iqd 清单（iqd_catalog_item）：连接配置 → 清单树（model/column/
  * relationship）→ 纳入问数范围勾选。数据源为 BFF 代理 `/api/v1/iqd/catalog**`
@@ -7,7 +7,7 @@
  */
 
 import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
-import { Pencil, RefreshCw, RotateCcw, Save, ShieldCheck } from 'lucide-react';
+import { Pencil, RefreshCw, RotateCcw, Save, ShieldCheck, Sparkles } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -36,6 +36,8 @@ import {
 } from '@/lib/api/iqd';
 import { CatalogSyncStatusBar } from './components/CatalogSyncStatusBar';
 import { SelfHealPanel } from './components/SelfHealPanel';
+import { useCatalogNodes } from './hooks/useCatalogNodes';
+import { createModelFromTable, errorCode, errorData } from './api/iqd-modeling';
 
 const KIND_LABEL: Record<string, string> = {
   table: '表',
@@ -72,6 +74,8 @@ export function IqdCatalogPage() {
   const [keyword, setKeyword] = useState('');
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [saving, setSaving] = useState(false);
+  /** T02b-4：MR-S2「从物理表生成模型」对话框开关。 */
+  const [fromTableOpen, setFromTableOpen] = useState(false);
 
   const connectionId = useMemo(() => config?.id ?? null, [config]);
 
@@ -303,10 +307,22 @@ export function IqdCatalogPage() {
         description="管理 WrenAI 语义模型清单，勾选纳入问数范围（治理层）。"
         breadcrumbs={buildAppBreadcrumbs({ app: 'agent', title: '语义模型' })}
         actions={
-          <Button size="sm" variant="outline" onClick={() => void load()} disabled={loading}>
-            <RefreshCw className={cn('h-4 w-4', loading && 'animate-spin')} />
-            刷新
-          </Button>
+          <div className="flex items-center gap-2">
+            {/* T02b-4 / MR-S2：从物理表生成模型（M-G1 路径；入口见本文件末尾 FromTableModelDialog） */}
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => setFromTableOpen(true)}
+              disabled={!config?.id}
+            >
+              <Sparkles className="h-4 w-4" />
+              从物理表生成模型
+            </Button>
+            <Button size="sm" variant="outline" onClick={() => void load()} disabled={loading}>
+              <RefreshCw className={cn('h-4 w-4', loading && 'animate-spin')} />
+              刷新
+            </Button>
+          </div>
         }
       />
 
@@ -569,7 +585,213 @@ export function IqdCatalogPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* T02b-4 / MR-S2：从物理表生成模型（入口在上方 actions） */}
+      <FromTableModelDialog
+        open={fromTableOpen}
+        onOpenChange={setFromTableOpen}
+        connectionId={config?.id ?? null}
+        onCreated={() => void load()}
+      />
     </div>
+  );
+}
+
+/**
+ * FromTableModelDialog — 「从物理表生成模型」（MR-S2 / M-G1 核心路径，T02b-4）。
+ *
+ * <h2>数据来源（Q5 单源）</h2>
+ * 用 {@link useCatalogNodes} 取**同一份 catalog 缓存**（与建模台画布/左树同一 cache entry），
+ * 过滤出「`kind=table` 且尚无同名 model」的候选表 —— 已建模的表不再列出，避免重复建模。
+ *
+ * <h2>列从哪来（前端不传 `columns`）</h2>
+ * 只提交 `{schema, name}`：T02a 的 `createModelFromTable` 有**三级回退**（请求携带 columns →
+ * catalog 既有 table/column 行 → `mdl_raw` 经 `IqdMdlParser`）。本入口依赖**回退②**——
+ * 故通常需该表结构已在 catalog 里（即先跑过一次 MDL 同步）。若三级全落空，服务端返回
+ * **42200**，此处给可行动的提示（先去建模台「表发现导入」同步该表）。
+ *
+ * <h2>错误码（均已按 T02a 实证处理）</h2>
+ * <ul>
+ *   <li><b>40900</b>：`base_revision` 不符 → 读 `data.current_edit_revision` 提示「版本已变更，先刷新」；</li>
+ *   <li><b>40901</b>：同幂等键并发提交 → 提示稍后重试；</li>
+ *   <li><b>42200</b>：源表不存在 / 无可导入字段 → 提示先去同步表结构。</li>
+ * </ul>
+ *
+ * <h2>治理边界</h2>
+ * **刻意不传 `in_scope`**（PRD §6.3「导入 ≠ 可问」，服务端默认 false）；
+ * 生成后引导用户到 `/iqd/scope` 自行决定是否纳入问数范围。
+ *
+ * <h2>幂等</h2>
+ * 提交确定性幂等键 `fromtable:{connId}:{schema}.{name}`（同表重复点击 → 命中同一 key，
+ * 不二次 bump；即使不带 key，T02a 的**语义幂等**也会兜住）。
+ */
+function FromTableModelDialog({
+  open,
+  onOpenChange,
+  connectionId,
+  onCreated,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  connectionId: number | null;
+  onCreated?: () => void;
+}) {
+  const [submitting, setSubmitting] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [conflictRevision, setConflictRevision] = useState<number | null>(null);
+  const [createdKeys, setCreatedKeys] = useState<string[]>([]);
+
+  const { catalog, isLoading, error: catalogError } = useCatalogNodes(open ? connectionId : null);
+
+  /** 候选：kind=table 且没有同名 model。 */
+  const candidates = useMemo(() => {
+    const modeled = new Set(
+      catalog
+        .filter((item) => item.kind === 'model')
+        .map((item) => (item.display_name ?? item.item_key).toLowerCase()),
+    );
+    return catalog
+      .filter(
+        (item) =>
+          item.kind === 'table' &&
+          !modeled.has((item.display_name ?? item.item_key).toLowerCase()),
+      )
+      .sort((a, b) => (a.display_name ?? a.item_key).localeCompare(b.display_name ?? b.item_key));
+  }, [catalog]);
+
+  const submit = async (item: IqdCatalogItem) => {
+    if (connectionId == null) {
+      return;
+    }
+    // item_key 形如 {datasource}.{schema}.{table} → 取末两段
+    const segments = item.item_key.split('.');
+    const name = segments[segments.length - 1] ?? item.item_key;
+    const schema = segments.length >= 2 ? segments[segments.length - 2] : 'public';
+    setSubmitting(item.item_key);
+    setError(null);
+    setConflictRevision(null);
+    try {
+      const result = await createModelFromTable({
+        connection_id: connectionId,
+        source_table: { schema, name },
+        // 确定性幂等键（§3.3：{connId}+{sha1(source_table)} 的等价人读形态）
+        idempotency_key: `fromtable:${connectionId}:${schema}.${name}`,
+        // 注意：刻意不传 in_scope（PRD §6.3 导入 ≠ 可问）
+      });
+      const key = String(result?.item_key ?? `mdl:model:${name}`);
+      setCreatedKeys((prev) => (prev.includes(key) ? prev : [...prev, key]));
+      onCreated?.();
+    } catch (err) {
+      const code = errorCode(err);
+      const data = errorData(err);
+      if (code === 40900) {
+        const current = Number(data?.current_edit_revision ?? 0);
+        setConflictRevision(Number.isFinite(current) ? current : 0);
+      } else if (code === 40901) {
+        setError('该表正在被另一个请求导入（幂等键并发），请稍后重试。');
+      } else if (code === 42200) {
+        setError(
+          `源表不存在或无可导入字段：${schema}.${name}。` +
+            '请先在建模台「表发现导入」同步该表结构（或让 DBA 确认 profile 注入），再回来生成模型。',
+        );
+      } else {
+        setError(err instanceof Error ? err.message : String(err));
+      }
+    } finally {
+      setSubmitting(null);
+    }
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-2xl">
+        <DialogHeader>
+          <DialogTitle className="text-[14px]">从物理表生成模型</DialogTitle>
+          <DialogDescription className="text-[12px]">
+            选择一张尚未建模的物理表，平台将据此生成 <code>kind=model</code> 节点与字段子节点
+            （一次事务，随后异步触发 build）。
+          </DialogDescription>
+        </DialogHeader>
+
+        {/* 错误 / 冲突 */}
+        {error && (
+          <div className="rounded border border-destructive/40 bg-destructive/5 p-2 text-[12px] text-destructive">
+            {error}
+          </div>
+        )}
+        {conflictRevision != null && (
+          <div className="rounded border border-amber-500/40 bg-amber-500/5 p-2 text-[12px]">
+            编辑版本已变更（服务端当前 `current_edit_revision = {conflictRevision}`）。
+            请关闭本对话框、点右上「刷新」拿到最新清单后重试。
+          </div>
+        )}
+        {createdKeys.length > 0 && (
+          <div className="rounded border border-emerald-500/40 bg-emerald-500/5 p-2 text-[12px]">
+            已生成 {createdKeys.length} 个模型：{createdKeys.join('、')}。
+            <br />
+            导入<strong>不等于可问</strong>：如需纳入问数范围，请到 <code>/iqd/scope</code> 勾选。
+          </div>
+        )}
+
+        {/* 候选表清单（单层滚动） */}
+        <div className="min-h-0 max-h-[50vh] overflow-auto rounded border border-border/60">
+          <table className="w-full text-[13px]">
+            <thead className="sticky top-0 z-10 bg-background">
+              <tr className="border-b border-border/60 text-left">
+                <th className="px-2 py-1.5 font-medium">物理表</th>
+                <th className="border-l border-border/60 px-2 py-1.5 font-medium">item_key</th>
+                <th className="w-24 border-l border-border/60 px-2 py-1.5 font-medium">操作</th>
+              </tr>
+            </thead>
+            <tbody>
+              {candidates.map((item) => (
+                <tr key={item.item_key} className="border-b border-border/40 hover:bg-accent/40">
+                  <td className="px-2 py-1">{item.display_name ?? item.item_key}</td>
+                  <td className="border-l border-border/60 px-2 py-1 font-mono text-[11px] text-muted-foreground">
+                    {item.item_key}
+                  </td>
+                  <td className="border-l border-border/60 px-2 py-1">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="h-6 px-2 text-[12px]"
+                      disabled={submitting !== null}
+                      onClick={() => void submit(item)}
+                    >
+                      {submitting === item.item_key ? '生成中…' : '生成模型'}
+                    </Button>
+                  </td>
+                </tr>
+              ))}
+              {!isLoading && candidates.length === 0 && (
+                <tr>
+                  <td colSpan={3} className="px-2 py-6 text-center text-muted-foreground">
+                    {catalogError
+                      ? `读取清单失败：${catalogError}`
+                      : catalog.length === 0
+                        ? '该连接暂无清单数据，先去建模台「表发现导入」同步库结构。'
+                        : '所有物理表都已建模（无待生成的表）。'}
+                  </td>
+                </tr>
+              )}
+              {isLoading && (
+                <tr>
+                  <td colSpan={3} className="px-2 py-6 text-center text-muted-foreground">
+                    加载中…
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={submitting !== null}>
+            关闭
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 

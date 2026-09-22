@@ -16,7 +16,8 @@
  * 少改任何一处都会得到「点得进去但没标题」或「有菜单但页面空白」这类半残状态。
  *
  * <p>icon 取值必须同步登记到 `lib/nav/icons.ts` 的 `ICON_MAP`
- * （Database/Settings/ShieldCheck/Crosshair/History/Sparkles 已存在，复用 agent 段）。
+ * （Database/Settings/ShieldCheck/Crosshair/History/Sparkles 已存在，复用 agent 段；
+ * v1.11 建模台新增 `Workflow`，登记于 V87 段）。
  *
  * <p>架构约束（arch/no-cross-feature）：本文件**只依赖** `@/lib/nav/system-nav`，
  * 不 import 任何 `features/*` 模块；问数页面组件由 keep-alive-outlet 经懒加载引入，
@@ -27,6 +28,9 @@ import type { SystemNavLeaf, SystemNavNode } from '@/lib/nav/system-nav';
 export const IQD_NAV: SystemNavNode[] = [
   // 旗舰页置顶（V77: 93040，path=/iqd/data-query，permission=ai:chat:use）
   { kind: 'leaf', path: '/iqd/data-query', title: '问数', icon: 'Database' },
+  // v1.11 可视化建模台（V87__iqd_modeling_seed.sql：sys_menu 92600，icon Workflow）
+  // 权限码 iqd:modeling:view（V87 授予 role_id=1；前端 PermissionGate，无 view 进页面 40300）
+  { kind: 'leaf', path: '/iqd/modeling', title: '可视化建模台', icon: 'Workflow' },
   // W2 问数管理（V73__iqd_w2_menu_api_seed.sql 的 sys_menu 种子：9250x 可见页，path=/iqd/*）
   { kind: 'leaf', path: '/iqd/config', title: '连接配置', icon: 'Settings' },
   { kind: 'leaf', path: '/iqd/catalog', title: '语义模型', icon: 'Database' },

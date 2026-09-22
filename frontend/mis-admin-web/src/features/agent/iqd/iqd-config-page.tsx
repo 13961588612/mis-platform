@@ -1,5 +1,5 @@
 /**
- * iqd-config-page.tsx — 问数连接配置（W2，路径 /ai/iqd/config）。
+ * iqd-config-page.tsx — 问数连接配置（W2，路径 /iqd/config）。
  *
  * <p>覆盖 mis-iqd 连接配置（iqd_connection）：WrenAI 基址 / auth_type / 超时等，
  * 连通性自检 GET {baseUrl}/health。数据源为 BFF 代理 `/api/v1/iqd/config**`
@@ -7,13 +7,14 @@
  */
 
 import { useCallback, useEffect, useState } from 'react';
-import { Activity, RefreshCw, Save } from 'lucide-react';
+import { Activity, RefreshCw, Save, Wand2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { PageHeader } from '@/components/common/page-header';
 import { buildAppBreadcrumbs } from '@/components/common/app-breadcrumbs';
 import { Badge } from '@/components/ui/badge';
+import { ConnectionWizard } from './components/wizard/ConnectionWizard';
 import {
   getIqdConfig,
   saveIqdConfig,
@@ -33,6 +34,8 @@ export function IqdConfigPage() {
   const [error, setError] = useState<string | null>(null);
   const [testResult, setTestResult] = useState<IqdConnectionTest | null>(null);
   const [enabling, setEnabling] = useState(false);
+  /** 多连接向导开关（T02b-3 入口：本页是「单连接形态」的 legacy 页，指引用户去多连接向导）。 */
+  const [connectionWizardOpen, setConnectionWizardOpen] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -132,6 +135,11 @@ export function IqdConfigPage() {
             </Button>
             <Button size="sm" variant="outline" onClick={() => void enable()} disabled={enabling || !config?.id}>
               {enabling ? '启用中…' : '启用/创建项目'}
+            </Button>
+            {/* T02b-3 入口：本页面向「单连接形态」；多连接（含 MCP 状态卡与启停）走向导 */}
+            <Button size="sm" variant="outline" onClick={() => setConnectionWizardOpen(true)}>
+              <Wand2 className="h-4 w-4" />
+              多连接向导
             </Button>
           </div>
         }
@@ -263,6 +271,18 @@ export function IqdConfigPage() {
           )}
         </div>
       </div>
+
+      {/* 多连接向导（T02b-3 入口；向导自持步骤状态，本页只持 open） */}
+      <ConnectionWizard
+        open={connectionWizardOpen}
+        onOpenChange={setConnectionWizardOpen}
+        onConnectionReady={(id) => {
+          // 未接入建模台 store（本页是单连接 legacy 页），仅触发一次刷新让新连接可见
+          setConfig((prev) => (prev ? { ...prev } : prev));
+          void load();
+          void id;
+        }}
+      />
     </div>
   );
 }

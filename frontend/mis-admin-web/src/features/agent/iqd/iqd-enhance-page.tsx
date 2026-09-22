@@ -1,5 +1,5 @@
 /**
- * iqd-enhance-page.tsx — 问数增强物料（W2/W4，路径 /ai/iqd/enhance）。
+ * iqd-enhance-page.tsx — 问数增强物料（W2/W4，路径 /iqd/enhance）。
  *
  * <p>五个 Tab：
  * <ul>

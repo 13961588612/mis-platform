@@ -1,5 +1,5 @@
 /**
- * iqd-test-chat-page.tsx — 问数测试台（W2，路径 /ai/iqd/test-chat）。
+ * iqd-test-chat-page.tsx — 问数测试台（W2，路径 /iqd/test-chat）。
  *
  * <p>后台模拟问数：可指定角色（simulate_role_code）与范围表集合（scope_hint），
  * 调用非流式 `/api/v1/iqd/ask`（需 ai:chat:use）；结果渲染 scope 裁定、SQL、

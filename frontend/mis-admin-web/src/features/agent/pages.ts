@@ -41,11 +41,17 @@ export { AgentAgentDetailPage } from './agents/agent-detail-route';
 export { DataQueryPage } from './ai/data-query-page';
 export { ApprovalCenterPage } from './ai/approval-center-page';
 export { MonitorDashboardPage } from './ai/monitor-dashboard-page';
-// W2：问数管理（/ai/iqd/* 路由，懒加载；keep-alive-outlet 用默认导出 lazy import）
-export { IqdConfigPage } from './ai/iqd/iqd-config-page';
-export { IqdCatalogPage } from './ai/iqd/iqd-catalog-page';
-export { IqdScopePage } from './ai/iqd/iqd-scope-page';
-export { IqdTestChatPage } from './ai/iqd/iqd-test-chat-page';
-export { IqdTracePage } from './ai/iqd/iqd-trace-page';
-export { IqdEnhancePage } from './ai/iqd/iqd-enhance-page';
-export { IqdInstructionPage } from './ai/iqd/iqd-instruction-page';
+// W2：问数管理（/iqd/* 路由，懒加载；keep-alive-outlet 用默认导出 lazy import）
+// v1.11（Q2=是）：问数域目录由 ./ai/iqd 迁移至 ./iqd（命名边界对齐），**导出符号名零变化**。
+// 问数页面清单唯一来源 = `./iqd/pages.ts`（本文件只做再导出，避免双份清单漂移）。
+// 新增建模台页 `IqdModelingPage`（MR-S1，T01 仅页面壳）。
+export {
+  IqdConfigPage,
+  IqdCatalogPage,
+  IqdScopePage,
+  IqdTestChatPage,
+  IqdTracePage,
+  IqdEnhancePage,
+  IqdInstructionPage,
+  IqdModelingPage,
+} from './iqd/pages';
