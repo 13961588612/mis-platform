@@ -1,21 +1,24 @@
 /**
- * propertyEditUtils.test.ts — 右栏字段编辑纯函数单测（T04b / MR-09 + MR-13 回归守卫）。
+ * propertyEditUtils.test.ts — 右栏字段编辑纯函数单测（T04b / T04b-补：MR-09 + MR-13 回归守卫）。
  *
- * <p>钉住三处**静默失效**：
+ * <p>钉住静默失效点：
  * <ol>
- *   <li>{@link buildNodeEditPayload} 的 `base_revision` + `idempotency_key`：少带 → 乐观并发/幂等静默失效；</li>
- *   <li>{@link buildMaskRulePayload} 的 `match_type`/`pattern`/规则名口径：与增强页不一致 → 「同源同优先级」静默偏离；</li>
- *   <li>{@link describeNodeEditError} 的码分流：只读 message 会丢掉 `data.current_edit_revision` / `data.field`。</li>
+ *   <li>{@link buildNodeEditPayload} / {@link buildMaskNodeEditPayload} 的
+ *       `base_revision` + `idempotency_key`：少带 → 乐观并发/幂等静默失效；</li>
+ *   <li>{@link buildMaskNodeEditPayload} 的 patch 键与清除语义（`mask_rule=''` → `null`）：写错 → 脱敏无法撤销；</li>
+ *   <li>下拉口径（五类内置 + custom）与 {@link describeNodeEditError} 的码分流。</li>
  * </ol>
  */
 import { describe, expect, it } from 'vitest';
 import {
-  FIELD_MATCH_TYPE,
+  MASK_RULE_CLEAR_VALUE,
+  MASK_RULE_FIELD_OPTIONS,
   MASK_RULE_OPTIONS,
   MASK_SAVE_PERMISSION,
   NODE_EDIT_PERMISSION,
   SENSITIVE_LEVEL_OPTIONS,
-  buildMaskRulePayload,
+  buildMaskNodeEditPayload,
+  buildMaskRuleOptions,
   buildNodeEditPayload,
   describeMaskSaveError,
   describeNodeEditError,
@@ -26,11 +29,11 @@ import {
 } from './propertyEditUtils';
 
 describe('权限码（改动即失败：写错 = 前端放行、后端 40300）', () => {
-  it('描述走 PUT /catalog/node → iqd:catalog:edit（V81:41/62）', () => {
+  it('描述 + 脱敏均走 PUT /catalog/node → iqd:catalog:edit（V81:41/62）', () => {
     expect(NODE_EDIT_PERMISSION).toBe('iqd:catalog:edit');
   });
 
-  it('脱敏走 mask-rule API → iqd:mask:save（V73:74/106）', () => {
+  it('脱敏附加闸门 → iqd:mask:save（V73:74/106；PRD MR-13）', () => {
     expect(MASK_SAVE_PERMISSION).toBe('iqd:mask:save');
   });
 });
@@ -47,19 +50,34 @@ describe('下拉口径（与增强页脱敏 Tab / 后端内置规则同源）', 
     ]);
   });
 
+  it('字段级下拉 = 清除项 + 内置 6 项（清除项在首位）', () => {
+    expect(MASK_RULE_FIELD_OPTIONS).toHaveLength(7);
+    expect(MASK_RULE_FIELD_OPTIONS[0].value).toBe(MASK_RULE_CLEAR_VALUE);
+    expect(MASK_RULE_CLEAR_VALUE).toBe('');
+  });
+
   it('敏感等级 none/low/high', () => {
     expect(SENSITIVE_LEVEL_OPTIONS.map((option) => option.value)).toEqual(['none', 'low', 'high']);
   });
 
-  it('initialMaskRule：命中内置则回填，未知值回退 full（绝不把未知串塞进下拉）', () => {
+  it('initialMaskRule：原样保留（trim），绝不静默改写未知历史值', () => {
     expect(initialMaskRule('phone')).toBe('phone');
-    expect(initialMaskRule('custom')).toBe('custom');
-    expect(initialMaskRule('legacy_rule_v0')).toBe('full');
-    expect(initialMaskRule(null)).toBe('full');
-    expect(initialMaskRule(undefined)).toBe('full');
+    expect(initialMaskRule('  high ')).toBe('high');
+    expect(initialMaskRule('legacy_rule_v0')).toBe('legacy_rule_v0');
+    expect(initialMaskRule(null)).toBe('');
+    expect(initialMaskRule(undefined)).toBe('');
   });
 
-  it('maskRuleLabel：已知值给中文，未知值原样', () => {
+  it('buildMaskRuleOptions：已知/空 → 标准 7 项；未知值 → 追加「现有」动态项', () => {
+    expect(buildMaskRuleOptions('')).toHaveLength(7);
+    expect(buildMaskRuleOptions('phone')).toHaveLength(7);
+    const withLegacy = buildMaskRuleOptions('legacy_rule_v0');
+    expect(withLegacy).toHaveLength(8);
+    expect(withLegacy[7]).toEqual({ value: 'legacy_rule_v0', label: 'legacy_rule_v0（现有）' });
+  });
+
+  it('maskRuleLabel：清除项给「无」，已知给中文，未知原样', () => {
+    expect(maskRuleLabel(MASK_RULE_CLEAR_VALUE)).toBe('无');
     expect(maskRuleLabel('phone')).toBe('手机号');
     expect(maskRuleLabel('weird')).toBe('weird');
   });
@@ -108,31 +126,49 @@ describe('buildNodeEditPayload（MR-09：严格对齐 PUT /catalog/node）', () 
     ).toBeNull();
   });
 
-  it('只带 description（不得顺手夹带 display_name/expression —— 那会误触改名引用校验）', () => {
+  it('只带 description（不得顺手夹带 display_name —— 那会误触改名引用校验）', () => {
     const payload = buildNodeEditPayload({ item_key: 'c', kind: 'column' }, 'x', 1, 'k');
     expect(Object.keys(payload.patch)).toEqual(['description']);
   });
 });
 
-describe('buildMaskRulePayload（MR-13 / A-01：复用 mask-rule API）', () => {
-  it('★ 规则名 = pattern = 列名（同列反复保存落到同一条规则，后端按 name 幂等 upsert）', () => {
-    const payload = buildMaskRulePayload('phone', 'phone', '');
+describe('buildMaskNodeEditPayload（MR-13 / T04b-补：脱敏走同一 PUT /catalog/node）', () => {
+  it('★ patch 带 sensitive_level + mask_rule，并恒带 base_revision + idempotency_key', () => {
+    const payload = buildMaskNodeEditPayload(
+      { item_key: 'pg.public.orders.phone', kind: 'column' },
+      'high',
+      'phone',
+      12,
+      'k-mask',
+    );
     expect(payload).toEqual({
-      name: 'phone',
-      match_type: FIELD_MATCH_TYPE,
-      pattern: 'phone',
-      rule: 'phone',
-      replacement: null,
-      priority: 0,
-      enabled: true,
+      item_key: 'pg.public.orders.phone',
+      kind: 'column',
+      patch: { sensitive_level: 'high', mask_rule: 'phone' },
+      base_revision: 12,
+      idempotency_key: 'k-mask',
     });
-    expect(FIELD_MATCH_TYPE).toBe('column_name');
   });
 
-  it('仅 custom 带替换值；内建规则即便填了替换值也置 null', () => {
-    expect(buildMaskRulePayload('c', 'custom', '****').replacement).toBe('****');
-    expect(buildMaskRulePayload('c', 'custom', '   ').replacement).toBeNull();
-    expect(buildMaskRulePayload('c', 'full', 'ignored').replacement).toBeNull();
+  it('★ 清除项（mask_rule=""）→ patch.mask_rule = null（撤回字段级显式规则）', () => {
+    const payload = buildMaskNodeEditPayload({ item_key: 'c', kind: 'column' }, 'low', '', 1, 'k');
+    expect(payload.patch.mask_rule).toBeNull();
+    expect(payload.patch.sensitive_level).toBe('low');
+  });
+
+  it('mask_rule 去空白；sensitive_level trim + 小写归一，空 → none', () => {
+    expect(
+      buildMaskNodeEditPayload({ item_key: 'c', kind: 'column' }, '  HIGH ', '  phone ', 1, 'k').patch,
+    ).toEqual({ sensitive_level: 'high', mask_rule: 'phone' });
+    expect(
+      buildMaskNodeEditPayload({ item_key: 'c', kind: 'column' }, '', 'full', 1, 'k').patch
+        .sensitive_level,
+    ).toBe('none');
+  });
+
+  it('只带 sensitive_level + mask_rule 两键（不夹带 description，避免描述被误写）', () => {
+    const payload = buildMaskNodeEditPayload({ item_key: 'c', kind: 'column' }, 'none', '', 1, 'k');
+    expect(Object.keys(payload.patch).sort()).toEqual(['mask_rule', 'sensitive_level']);
   });
 });
 
@@ -145,14 +181,16 @@ describe('describeNodeEditError（逐码读 data 明细）', () => {
     expect(describeNodeEditError(40901, null, 'x')).toContain('幂等键');
   });
 
-  it('42200 → 带 field / model_item_key', () => {
+  it('42200 → 带 field / model_item_key（含非法 sensitive_level 的 data.field）', () => {
     const message = describeNodeEditError(
       42200,
-      { field: 'item_key', model_item_key: 'mdl:model:ghost' },
-      '参数非法',
+      { field: 'sensitive_level' },
+      'sensitive_level 只接受 none / low / high',
     );
-    expect(message).toContain('item_key');
-    expect(message).toContain('mdl:model:ghost');
+    expect(message).toContain('sensitive_level');
+    expect(describeNodeEditError(42200, { model_item_key: 'mdl:model:ghost' }, 'x')).toContain(
+      'mdl:model:ghost',
+    );
   });
 
   it('40300 / 50300 / 未知码 / 无码', () => {
@@ -163,14 +201,12 @@ describe('describeNodeEditError（逐码读 data 明细）', () => {
   });
 });
 
-describe('describeMaskSaveError', () => {
-  it('各码给出可操作提示', () => {
-    expect(describeMaskSaveError(40900, { current_edit_revision: 9 }, 'x')).toContain('9');
-    expect(describeMaskSaveError(40901, null, 'x')).toContain('幂等键');
-    expect(describeMaskSaveError(42200, { field: 'name' }, 'x')).toContain('name');
-    expect(describeMaskSaveError(40300, null, 'x')).toContain('权限');
-    expect(describeMaskSaveError(50300, null, 'x')).toContain('建设中');
-    // mask-rule API 失败多为 plain Error（无 code）→ 原样 message
-    expect(describeMaskSaveError(null, null, '保存脱敏规则失败')).toBe('保存脱敏规则失败');
+describe('describeMaskSaveError（复用同一码分流，杜绝两份规则漂移）', () => {
+  it('与 describeNodeEditError 逐码一致', () => {
+    for (const code of [40900, 40901, 42200, 40300, 50300, 50000, null]) {
+      expect(describeMaskSaveError(code, { current_edit_revision: 9, field: 'sensitive_level' }, 'm')).toBe(
+        describeNodeEditError(code, { current_edit_revision: 9, field: 'sensitive_level' }, 'm'),
+      );
+    }
   });
 });

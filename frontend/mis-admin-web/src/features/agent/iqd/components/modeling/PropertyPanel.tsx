@@ -6,14 +6,15 @@
  * `selectedItemKey`：同一份缓存，左树/画布/右栏三处一致。**不要**在此再 `useQuery` 一次清单
  * （会多一次请求，且与画布不同步）。
  *
- * <h2>本批（T04b）新增编辑能力</h2>
+ * <h2>本批（T04b / T04b-补）新增编辑能力</h2>
  * <ol>
- *   <li><b>字段业务描述直编（MR-09）</b>：写 `iqd_catalog_item.description`，**严格**走既有
+ *   <li><b>字段业务描述直编（MR-09）</b>：写 `iqd_catalog_item.description`，走
  *       `PUT /iqd/catalog/node`（乐观并发 `base_revision` + 幂等 `idempotency_key`）——
  *       与 catalog 页同源同闭环（同一端点/同一缓存，改完 catalog 页同步可见）。</li>
- *   <li><b>字段脱敏直编（MR-13）</b>：按架构裁决 **A-01** 复用既有 mask-rule API
- *       （`POST /iqd/mask/rules`，增强页已用），与增强页脱敏 Tab **同源同优先级**；
- *       权限码 `iqd:mask:save`（无权限 → 只读）。</li>
+ *   <li><b>字段脱敏直编（MR-13）</b>：写 `iqd_catalog_item.sensitive_level` / `mask_rule`，
+ *       **同样**走 `PUT /iqd/catalog/node`（T04b-补 已把该端点 patch 扩展到接受这两个字段，
+ *       bump `edit_revision`）——命中 masking.py §7.5 规则链的**优先级 1/2**；
+ *       下拉保留五类内置 + custom（与增强页 `RULE_LABEL` 一致），权限 `catalog:edit ∧ mask:save`。</li>
  *   <li><b>依赖方提示区</b>：`GET /iqd/dependencies`（T03 已落地），删除/改名前先看谁在引用。</li>
  * </ol>
  *
@@ -31,7 +32,6 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Info, Loader2, RotateCcw, Save, ShieldCheck } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import {
   Select,
@@ -42,7 +42,6 @@ import {
 } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
 import {
-  saveIqdMaskRule,
   updateIqdCatalogNode,
   type IqdCatalogItem,
 } from '@/lib/api/iqd';
@@ -55,11 +54,11 @@ import { useModelingStore } from '../../store/modeling-store';
 import { useIqdModelingPermission } from '../shared/usePermission';
 import { useSyncStatus } from '../shared/useSyncStatus';
 import {
-  MASK_RULE_OPTIONS,
   MASK_SAVE_PERMISSION,
   NODE_EDIT_PERMISSION,
   SENSITIVE_LEVEL_OPTIONS,
-  buildMaskRulePayload,
+  buildMaskNodeEditPayload,
+  buildMaskRuleOptions,
   buildNodeEditPayload,
   describeMaskSaveError,
   describeNodeEditError,
@@ -290,7 +289,14 @@ function FieldEditor({
   const { hasPermission } = useIqdModelingPermission();
   const clearDirty = useModelingStore((state) => state.clearDirty);
   const canEditDescription = hasPermission(NODE_EDIT_PERMISSION);
-  const canSaveMask = hasPermission(MASK_SAVE_PERMISSION);
+  /**
+   * 脱敏保存闸门 = `catalog:edit ∧ mask:save`（双码）。
+   *
+   * <p>写入端点 `PUT /catalog/node` 的后端真码是 `catalog:edit`（保证与后端一致，不出现
+   * 「前端放行、后端 40300」）；额外叠加 `mask:save` 是 PRD MR-13 的显式要求
+   * （「无 `iqd:mask:save` 权限时只读」）——脱敏是敏感操作，前端严格度 ≥ 后端是安全的。
+   */
+  const canSaveMask = hasPermission(NODE_EDIT_PERMISSION) && hasPermission(MASK_SAVE_PERMISSION);
 
   const draft = useDirtyState<FieldDraftValues>({
     connectionId,
@@ -318,11 +324,19 @@ function FieldEditor({
   const descriptionDirty = touched && draft.isDirty;
 
   const columnName = fieldNameOf(field);
+  /** 脱敏表单本地态：初值取服务端当前值（FieldEditor 按 item_key 重挂载 → 换字段即重置）。 */
+  const [sensitiveLevel, setSensitiveLevel] = useState<string>(() =>
+    (field.sensitive_level ?? 'none').trim() || 'none',
+  );
   const [maskRule, setMaskRule] = useState<string>(() => initialMaskRule(field.mask_rule));
-  const [maskReplacement, setMaskReplacement] = useState('');
   const [savingMask, setSavingMask] = useState(false);
   const [maskError, setMaskError] = useState<string | null>(null);
   const [maskSaved, setMaskSaved] = useState<string | null>(null);
+  /** 下拉项：清除 + 五类内置 + custom；当前值为未知历史值时补一个「现有」动态项。 */
+  const maskRuleOptions = useMemo(
+    () => buildMaskRuleOptions(field.mask_rule ?? ''),
+    [field.mask_rule],
+  );
 
   /** 保存业务描述（MR-09）：严格走 PUT /iqd/catalog/node（乐观并发 + 幂等）。 */
   const saveDescription = useCallback(async () => {
@@ -365,26 +379,58 @@ function FieldEditor({
     }
   }, [connectionId, canEditDescription, field, draft, sync, clearDirty, queryClient]);
 
-  /** 保存脱敏规则（MR-13）：复用增强页 mask-rule API（A-01），权限 `iqd:mask:save`。 */
+  /**
+   * 保存脱敏直编（MR-13）：走 `PUT /iqd/catalog/node`（T04b-补：patch 带
+   * `sensitive_level` + `mask_rule`），与描述同端点、同乐观并发 + 幂等。
+   */
   const saveMask = useCallback(async () => {
-    if (!canSaveMask || columnName.trim() === '') {
+    if (connectionId == null || !canSaveMask) {
       return;
     }
     setSavingMask(true);
     setMaskError(null);
     setMaskSaved(null);
+    const baseRevision = sync.status?.current_edit_revision ?? 0;
     try {
-      await saveIqdMaskRule(buildMaskRulePayload(columnName, maskRule, maskReplacement));
-      setMaskSaved(`已保存脱敏规则「${columnName}」（${maskRuleLabel(maskRule)}），与增强页脱敏 Tab 同源生效。`);
+      await updateIqdCatalogNode(
+        connectionId,
+        buildMaskNodeEditPayload(
+          field,
+          sensitiveLevel,
+          maskRule,
+          baseRevision,
+          draft.idempotencyKey,
+        ),
+      );
+      // ★ 双幂等：成功后必须换新 key（脱敏与描述两次提交共用草稿幂等键，不换会拿到首次结果）
+      draft.rotateIdempotencyKey();
+      setMaskSaved(
+        `已保存脱敏：等级=${sensitiveLevel}，字段级规则=${maskRuleLabel(maskRule)}（已 bump 编辑版本，将随整库 build 生效）。`,
+      );
+      // Q5 单源：失效 catalog 缓存 → 画布/左树/catalog 页同步看到新脱敏标记
+      await queryClient.invalidateQueries({ queryKey: iqdKeys.catalogs(connectionId) });
+      sync.refresh();
     } catch (err) {
       const { code, data } = readError(err);
       setMaskError(
         describeMaskSaveError(code, data, err instanceof Error ? err.message : String(err)),
       );
+      // 失败也换新 key + 刷新版本（40901 / 40900 后可安全重试）
+      draft.rotateIdempotencyKey();
+      sync.refresh();
     } finally {
       setSavingMask(false);
     }
-  }, [canSaveMask, columnName, maskRule, maskReplacement]);
+  }, [
+    connectionId,
+    canSaveMask,
+    field,
+    sensitiveLevel,
+    maskRule,
+    draft,
+    sync,
+    queryClient,
+  ]);
 
   /** 依赖方（谁引用此字段）；仅作提示，不阻断（阻断在后端 42200）。 */
   const dependentsQuery = useQuery({
@@ -467,12 +513,31 @@ function FieldEditor({
           </span>
         </div>
         <p className="text-[11px] text-muted-foreground">
-          与增强页「脱敏规则」Tab 同源同优先级（唯一规则源 <code>iqd_mask_rule</code>）。
-          规则名固定为列名「{columnName}」，重复保存即更新同一条规则。
+          写字段级 <code>sensitive_level</code> / <code>mask_rule</code>（masking.py 规则链**优先级 1/2**），
+          与增强页脱敏 Tab 的下拉口径一致（五类内置 + custom）。字段名：{columnName}。
         </p>
         <div className="grid grid-cols-2 gap-2">
           <div className="space-y-1">
-            <Label className="text-[12px] text-muted-foreground">规则类型</Label>
+            <Label className="text-[12px] text-muted-foreground">敏感等级</Label>
+            <Select
+              value={sensitiveLevel}
+              disabled={!canSaveMask}
+              onValueChange={(value) => setSensitiveLevel(value)}
+            >
+              <SelectTrigger className="h-8 text-[12px]">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {SENSITIVE_LEVEL_OPTIONS.map((option) => (
+                  <SelectItem key={option.value} value={option.value} className="text-[12px]">
+                    {option.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="space-y-1">
+            <Label className="text-[12px] text-muted-foreground">字段级脱敏规则</Label>
             <Select
               value={maskRule}
               disabled={!canSaveMask}
@@ -482,7 +547,7 @@ function FieldEditor({
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                {MASK_RULE_OPTIONS.map((option) => (
+                {maskRuleOptions.map((option) => (
                   <SelectItem key={option.value} value={option.value} className="text-[12px]">
                     {option.label}
                   </SelectItem>
@@ -490,27 +555,28 @@ function FieldEditor({
               </SelectContent>
             </Select>
           </div>
-          <div className="space-y-1">
-            <Label className="text-[12px] text-muted-foreground">
-              自定义替换值{maskRule === 'custom' ? '' : '（仅「自定义」可填）'}
-            </Label>
-            <Input
-              value={maskReplacement}
-              disabled={!canSaveMask || maskRule !== 'custom'}
-              onChange={(event) => setMaskReplacement(event.target.value)}
-              placeholder="如 ****"
-              className="h-8 text-[12px]"
-            />
-          </div>
         </div>
+        <p className="text-[11px] text-muted-foreground">
+          提示：等级=高 即按 data_type / 列名自动脱敏；字段级规则为**显式指定**（优先级更高）。
+          「无 / 清除字段级规则」= 写 <code>null</code>（撤回字段级显式规则）。
+        </p>
         {!canSaveMask && (
           <p className="text-[11px] text-muted-foreground">
-            无 {MASK_SAVE_PERMISSION} 权限，脱敏只读。
+            需同时具备 {NODE_EDIT_PERMISSION} 与 {MASK_SAVE_PERMISSION} 权限，否则脱敏只读。
           </p>
         )}
         {maskError && (
           <div className="rounded border border-destructive/40 bg-destructive/5 px-2 py-1 text-[12px] text-destructive">
             {maskError}
+            <Button
+              size="sm"
+              variant="outline"
+              className="ml-2 h-6"
+              onClick={() => sync.refresh()}
+            >
+              <RotateCcw className="h-3 w-3" />
+              重读版本
+            </Button>
           </div>
         )}
         {maskSaved && !maskError && <p className="text-[11px] text-success">{maskSaved}</p>}
@@ -518,7 +584,7 @@ function FieldEditor({
           size="sm"
           variant="secondary"
           className="h-7"
-          disabled={!canSaveMask || savingMask || columnName.trim() === ''}
+          disabled={!canSaveMask || savingMask}
           onClick={() => void saveMask()}
         >
           {savingMask ? (

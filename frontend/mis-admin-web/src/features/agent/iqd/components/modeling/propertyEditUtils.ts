@@ -8,32 +8,42 @@
  *       （「保存成功却拿到首次结果」或「永远 40900」）；</li>
  *   <li>{@link describeNodeEditError}/{@link describeMaskSaveError}：只读 `message` 会丢掉
  *       `data` 里的 `current_edit_revision` / `field`（用户看到「失败」却不知怎么办）；</li>
- *   <li>{@link buildMaskRulePayload}：脱敏规则的 `match_type`/`pattern` 口径与增强页不一致
- *       → 「同源同优先级」的规则链（§7.5）静默偏离。</li>
+ *   <li>{@link buildMaskNodeEditPayload}：patch 键/清除语义错 → 脱敏无法撤销（`mask_rule=''`
+ *       必须写 `null`）或误写 `sensitive_level`；</li>
  * </ul>
  * 本文件**零运行时依赖**（只 `import type`），可在 node 环境直接单测。
  *
- * <h2>⚠️ 两条写路径的边界（务必区分，勿合并）</h2>
+ * <h2>⚠️ 两条写路径的边界（T04b-补 后已统一到一个端点）</h2>
  * <ul>
- *   <li><b>业务描述（MR-09）</b> → 严格走<b>既有</b> `PUT /iqd/catalog/node`
- *       （乐观并发 `base_revision` + 幂等 `idempotency_key`）。这是团队里钉死的唯一写路径，
- *       **不新增写路径**；</li>
- *   <li><b>字段脱敏（MR-13）</b> → 按架构裁决 **A-01**「复用既有 mask-rule API（增强页已用），
- *       PropertyPanel 直调同一端点；不新增建模台专属端口」→ 走 `POST /iqd/mask/rules`
- *       （{@link MASK_SAVE_PERMISSION} = `iqd:mask:save`）。
- *       规则源 `iqd_mask_rule` 是全平台唯一脱敏规则源（§7.5），故与增强页脱敏 Tab **同源同优先级**。</li>
+ *   <li><b>业务描述（MR-09）</b> → <b>既有</b> `PUT /iqd/catalog/node`；</li>
+ *   <li><b>字段脱敏（MR-13）</b> → **同样**走 `PUT /iqd/catalog/node`（T04b-补 已把该端点的 patch
+ *      扩展到接受 {@code sensitive_level} / {@code mask_rule}），携带乐观并发 + 幂等 + bump
+ *       {@code edit_revision}。二者同一端点、同一权限码 {@link NODE_EDIT_PERMISSION}。</li>
  * </ul>
- * <p>注：`iqd_catalog_item.sensitive_level` / `mask_rule` 两个**列字段**在现有后端<b>无</b>可达的
- * 单节点写路径（`PUT /catalog/node` 只处理 display_name/description/expression；`POST /catalog/batch`
- * 是 MDL 镜像语义、不 bump `edit_revision`）→ 故本面板对这两个字段**只读展示**，
- * 由「脱敏规则」承担可编辑入口（见 `TODO(mr13-column-mask-write)`）。
+ * <p>为什么不再走 mask-rule API：字段级显式规则（{@code iqd_catalog_item.mask_rule} /
+ * {@code sensitive_level}）在 masking.py §7.5 规则链里是**优先级 1/2**
+ * （`iqd_mask_rule` 注册表是优先级 3）。脱敏直编必须写优先级最高的字段级列，才符合设计。
+ *
+ * <h2>🟡 masking.py 解析语义提醒（写路径已修，但仍需注册数据配合）</h2>
+ * <p>masking.py `_resolve_rule` 对字段级 {@code mask_rule} 的解析是**按规则名匹配注册表**
+ * （`r.name == mask_rule`）；**未命中则 fail-closed 退化为 {@code full}`**（不静默放行明文）。
+ * 因此把内置关键字（`phone` 等）写入 `mask_rule` 时：若 `iqd_mask_rule` 里**没有同名规则**，
+ * 实际会**整列全遮蔽**（而非按手机号规则）。`sensitive_level=high`（优先级 2）则**不依赖注册表**
+ * （按 data_type/列名兜底），完全可用。故下拉保留了去重后的内置算法项 + custom；是否需要把
+ * 内置算法**登记进 `iqd_mask_rule`**（数据/迁移）由后续任务决定（见 T04b-补 报告）。
  */
-import type { IqdEditNodePayload, IqdMaskRuleSavePayload } from '@/lib/api/iqd';
+import type { IqdEditNodePayload } from '@/lib/api/iqd';
 
 /** 说明（MR-09）写路径权限码：`PUT /iqd/catalog/node`（V81:41/62 绑定 → 菜单 92526）。 */
 export const NODE_EDIT_PERMISSION = 'iqd:catalog:edit';
 
-/** 脱敏（MR-13）保存权限码：`POST /iqd/mask/rules`（V73:74/106 绑定 → 菜单 92516）。 */
+/**
+ * 脱敏（MR-13）**附加**权限码：`POST /iqd/mask/rules`（V73:74/106 绑定 → 菜单 92516）。
+ *
+ * <p>T04b-补 后脱敏直编走 `PUT /catalog/node`（其真码是 {@link NODE_EDIT_PERMISSION}）。
+ * 本码作为**额外的前端闸门**保留：脱敏是敏感操作，PRD MR-13 明示「无 `iqd:mask:save` 权限时只读」。
+ * 故前端以 `catalog:edit ∧ mask:save` 双码放行（前端严格度 ≥ 后端，不会出现「前端放行、后端 40300」）。
+ */
 export const MASK_SAVE_PERMISSION = 'iqd:mask:save';
 
 /** 描述草稿（UI 态；`type` 而非 `interface` —— `useDirtyState` 约束需隐式索引签名）。 */
@@ -65,22 +75,45 @@ export const MASK_RULE_OPTIONS: Array<{ value: string; label: string }> = [
   { value: 'custom', label: '自定义' },
 ];
 
-/** 脱敏匹配方式：字段级直编固定按**列名**匹配（与增强页默认一致）。 */
-export const FIELD_MATCH_TYPE = 'column_name';
+/** 脱敏字段「清除」哨兵值：选中它 → `mask_rule` 写 `null`（清空字段级显式规则）。 */
+export const MASK_RULE_CLEAR_VALUE = '';
+
+/** 字段级脱敏 `mask_rule` 下拉项：清除 + 五类内置 + custom。 */
+export const MASK_RULE_FIELD_OPTIONS: Array<{ value: string; label: string }> = [
+  { value: MASK_RULE_CLEAR_VALUE, label: '（无 / 清除字段级规则）' },
+  ...MASK_RULE_OPTIONS,
+];
 
 /**
- * 由字段当前 `mask_rule` 推导表单初值。
+ * 由字段当前 `mask_rule` 推导表单初值（trim 后的原值；`''` = 清除项）。
  *
- * <p>只有当现有值**命中已支持的规则类型**时才回填；否则回退 `full`（全遮蔽）——
- * 绝不把未知字符串塞进下拉（会造成「显示为空、保存却带旧值」的静默错配）。
+ * <p><b>不回退到某个默认算法</b>：写路径是「sensitive_level + mask_rule 一起提交」，若把未知的
+ * 历史值悄悄替换成 `full`，用户仅想改等级却会**静默改写**字段级规则。故未知值原样保留，
+ * 由 {@link buildMaskRuleOptions} 为其补一个「现有」动态项展示。
  */
 export function initialMaskRule(maskRule: string | null | undefined): string {
-  const value = (maskRule ?? '').trim();
-  return MASK_RULE_OPTIONS.some((option) => option.value === value) ? value : 'full';
+  return (maskRule ?? '').trim();
 }
 
-/** 规则类型 → 中文标签（未知值原样返回）。 */
+/**
+ * 构造下拉项：清除项 + 五类内置 + custom；若当前值未知（历史/手工数据）则**追加**
+ * 一个 `xxx（现有）` 动态项，保证既有值可显示、可原样保留（不静默改写）。
+ */
+export function buildMaskRuleOptions(current: string): Array<{ value: string; label: string }> {
+  const value = current.trim();
+  const known =
+    value === MASK_RULE_CLEAR_VALUE || MASK_RULE_OPTIONS.some((option) => option.value === value);
+  if (known) {
+    return MASK_RULE_FIELD_OPTIONS;
+  }
+  return [...MASK_RULE_FIELD_OPTIONS, { value, label: `${value}（现有）` }];
+}
+
+/** 规则类型 → 中文标签（清除项给「无」；未知值原样返回）。 */
 export function maskRuleLabel(rule: string): string {
+  if (rule === MASK_RULE_CLEAR_VALUE) {
+    return '无';
+  }
   return MASK_RULE_OPTIONS.find((option) => option.value === rule)?.label ?? rule;
 }
 
@@ -140,30 +173,43 @@ export function buildNodeEditPayload(
 }
 
 /**
- * 构造脱敏规则载荷（`POST /iqd/mask/rules`，A-01）。
+ * 构造**脱敏直编**载荷（T04b-补：与描述**同一**端点 `PUT /iqd/catalog/node`）。
  *
- * <p>规则名 **恒等于列名**（`pattern`）—— 使「同一列反复编辑」落到同一条规则（后端按 `name`
- * 幂等 upsert），避免每次保存都新建一条重复规则。`custom` 才带替换值。
+ * <p>patch 带 `sensitive_level` + `mask_rule`（后端 T04b-补 已扩展支持）：
+ * <ul>
+ *   <li>`sensitive_level`：恒为 none/low/high 之一（后端强校验，非法值 42200）；</li>
+ *   <li>`mask_rule`：下拉值；清除项（`''`）→ `null`（清空字段级显式规则）；</li>
+ *   <li>`base_revision` + `idempotency_key` 恒带（乐观并发 + 幂等），
+ *       成功后调用方必须 `rotateIdempotencyKey()`。</li>
+ * </ul>
  *
- * @param columnName 列名（`fieldNameOf(field)`）
- * @param rule       规则类型（{@link MASK_RULE_OPTIONS} 取值）
- * @param replacement 自定义替换值（仅 `rule === 'custom'` 时生效）
+ * <p>与 {@link buildNodeEditPayload} 分开构造（而非合并成一个 patch）：描述与脱敏是两次独立提交，
+ * 各自独立乐观并发/幂等，避免「改描述顺手改了脱敏」的隐式副作用。
+ *
+ * @param field        被编辑字段（`item_key` / `kind`）
+ * @param sensitiveLevel none / low / high
+ * @param maskRule     脱敏规则值；`''` → 清除（写 null）
+ * @param baseRevision 连接当前编辑版本
+ * @param idempotencyKey 幂等键（提交成功后必须 rotate）
  */
-export function buildMaskRulePayload(
-  columnName: string,
-  rule: string,
-  replacement: string,
-): IqdMaskRuleSavePayload {
-  const name = columnName.trim();
-  const replacementText = replacement.trim();
+export function buildMaskNodeEditPayload(
+  field: { item_key: string; kind: string },
+  sensitiveLevel: string,
+  maskRule: string,
+  baseRevision: number,
+  idempotencyKey: string,
+): IqdEditNodePayload {
+  const level = sensitiveLevel.trim() === '' ? 'none' : sensitiveLevel.trim().toLowerCase();
+  const rule = maskRule.trim();
   return {
-    name,
-    match_type: FIELD_MATCH_TYPE,
-    pattern: name,
-    rule,
-    replacement: rule === 'custom' && replacementText !== '' ? replacementText : null,
-    priority: 0,
-    enabled: true,
+    item_key: field.item_key,
+    kind: field.kind,
+    patch: {
+      sensitive_level: level,
+      mask_rule: rule === '' ? null : rule,
+    },
+    base_revision: baseRevision,
+    idempotency_key: idempotencyKey,
   };
 }
 
@@ -195,28 +241,17 @@ export function describeNodeEditError(
   return code != null ? `[${code}] ${message}` : message;
 }
 
-/** 脱敏规则保存失败 → 人话（A-01 走 mask-rule API；错误码口径与 BFF 透传一致）。 */
+/**
+ * 脱敏直编失败 → 人话。
+ *
+ * <p>T04b-补 后脱敏与描述**同一端点**（`PUT /catalog/node`）、同一错误码，故直接复用
+ * {@link describeNodeEditError}，避免两份码分流规则漂移（42200 的非法 `sensitive_level` 也带
+ * `data.field`，与描述路径同构）。
+ */
 export function describeMaskSaveError(
   code: number | null,
   data: Record<string, unknown> | null,
   message: string,
 ): string {
-  if (code === 40900) {
-    const current = data?.current_edit_revision;
-    return `[40900] 版本已变更（当前 ${String(current ?? '?')}），请刷新后重试`;
-  }
-  if (code === 40901) {
-    return '[40901] 该提交已被处理（幂等键重复），请稍后重试';
-  }
-  if (code === 42200) {
-    const field = typeof data?.field === 'string' ? data.field : null;
-    return `[42200] 参数校验未通过${field ? `（${field}）` : ''}：${message}`;
-  }
-  if (code === 40300) {
-    return '[40300] 无脱敏保存权限或连接不可写，请联系管理员';
-  }
-  if (code === 50300) {
-    return '[50300] 脱敏规则接口尚在建设中';
-  }
-  return code != null ? `[${code}] ${message}` : message;
+  return describeNodeEditError(code, data, message);
 }

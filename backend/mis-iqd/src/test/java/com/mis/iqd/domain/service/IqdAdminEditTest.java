@@ -31,6 +31,7 @@ import java.util.Optional;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -331,5 +332,145 @@ class IqdAdminEditTest {
         assertTrue(body.containsKey("current_edit_revision"),
                 "getCatalogFull 必须返回 current_edit_revision，否则 ai-platform 回填 edit_revision=0 致 stamped 恒为 0（违反 PRD G-B/G6）");
         assertEquals(13L, body.get("current_edit_revision"));
+    }
+
+    // ------------------------------------------------------------ T04b MR-13：字段级脱敏直编（patch 扩展）
+
+    /**
+     * T04b：{@code patch.sensitive_level}/{@code mask_rule} 必须经本端点落库、并 bump edit_revision。
+     *
+     * <p>守卫「MR-13 必须走优先级最高的字段级显式规则（masking.py 规则链第 1/2 层）」——
+     * 若有人把脱敏直编改回不写 edit_revision 的 batch 镜像路径，本用例会失败。
+     */
+    @Test
+    void updateCatalogNode_writesSensitiveLevelAndMaskRule_andBumpsRevision() {
+        IqdConnection conn = primaryConn(); // current=12
+        when(connectionRepository.findById(CONN_ID)).thenReturn(Optional.of(conn));
+        when(editIdempotencyRepository.findByConnectionIdAndIdempotencyKey(CONN_ID, "key-mask-1"))
+                .thenReturn(Optional.empty());
+        IqdCatalogItem it = item("pg.public.orders.phone", "column", "phone", null);
+        when(catalogItemRepository.findByConnectionIdAndItemKey(CONN_ID, "pg.public.orders.phone"))
+                .thenReturn(Optional.of(it));
+        when(connectionRepository.save(any(IqdConnection.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(catalogItemRepository.save(any(IqdCatalogItem.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(editIdempotencyRepository.save(any(IqdEditIdempotency.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        Map<String, Object> patch = new LinkedHashMap<>();
+        patch.put("sensitive_level", "high");
+        patch.put("mask_rule", "phone");
+        Map<String, Object> result = service.updateCatalogNode(
+                CONN_ID, "pg.public.orders.phone", "column", patch, 12L, "key-mask-1");
+
+        assertEquals(13L, result.get("edit_revision"));
+        assertTrue(result.get("edit_revision") instanceof Long r && r == 13L, "脱敏直编必须 bump edit_revision");
+        assertEquals(13L, conn.getCurrentEditRevision());
+        assertEquals("high", it.getSensitiveLevel());
+        assertEquals("phone", it.getMaskRule());
+        assertEquals("platform_edit", it.getSource());
+        assertEquals(13L, it.getEditRevision());
+    }
+
+    /** T04b：大小写 / 空白容错，统一归一为小写。 */
+    @Test
+    void updateCatalogNode_sensitiveLevel_isCaseInsensitiveNormalized() {
+        IqdConnection conn = primaryConn();
+        when(connectionRepository.findById(CONN_ID)).thenReturn(Optional.of(conn));
+        when(editIdempotencyRepository.findByConnectionIdAndIdempotencyKey(CONN_ID, "key-mask-2"))
+                .thenReturn(Optional.empty());
+        IqdCatalogItem it = item("pg.public.orders.phone", "column", "phone", null);
+        when(catalogItemRepository.findByConnectionIdAndItemKey(CONN_ID, "pg.public.orders.phone"))
+                .thenReturn(Optional.of(it));
+        when(connectionRepository.save(any(IqdConnection.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(catalogItemRepository.save(any(IqdCatalogItem.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(editIdempotencyRepository.save(any(IqdEditIdempotency.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        Map<String, Object> patch = new LinkedHashMap<>();
+        patch.put("sensitive_level", "  HIGH ");
+        service.updateCatalogNode(CONN_ID, "pg.public.orders.phone", "column", patch, 12L, "key-mask-2");
+
+        assertEquals("high", it.getSensitiveLevel());
+    }
+
+    /**
+     * T04b：{@code mask_rule} 显式置 {@code null} → 清除字段级显式规则（列可空）。
+     *
+     * <p>守卫「降级/撤销脱敏」路径：用户把字段从「显式 phone」改回「无」时，
+     * 必须真的写 null，而不是保持旧值（否则脱敏无法撤销）。
+     */
+    @Test
+    void updateCatalogNode_maskRuleNull_clearsFieldLevelRule() {
+        IqdConnection conn = primaryConn();
+        when(connectionRepository.findById(CONN_ID)).thenReturn(Optional.of(conn));
+        when(editIdempotencyRepository.findByConnectionIdAndIdempotencyKey(CONN_ID, "key-mask-3"))
+                .thenReturn(Optional.empty());
+        IqdCatalogItem it = item("pg.public.orders.phone", "column", "phone", null);
+        it.setMaskRule("phone"); // 既有字段级显式规则
+        when(catalogItemRepository.findByConnectionIdAndItemKey(CONN_ID, "pg.public.orders.phone"))
+                .thenReturn(Optional.of(it));
+        when(connectionRepository.save(any(IqdConnection.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(catalogItemRepository.save(any(IqdCatalogItem.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(editIdempotencyRepository.save(any(IqdEditIdempotency.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        Map<String, Object> patch = new LinkedHashMap<>();
+        patch.put("mask_rule", null);
+        service.updateCatalogNode(CONN_ID, "pg.public.orders.phone", "column", patch, 12L, "key-mask-3");
+
+        assertNull(it.getMaskRule(), "mask_rule=null 必须清除字段级显式规则");
+    }
+
+    /**
+     * T04b：{@code sensitive_level} 非法值 → 42200（带 {@code data.field}），且**零副作用**。
+     *
+     * <p>守卫「脏值静默让脱敏失效」：若不校验，写进一个非法等级后 masking.py 规则链第 2 层
+     * 判定落空，既不脱敏也不报错。
+     */
+    @Test
+    void updateCatalogNode_invalidSensitiveLevel_throws422_andHasNoSideEffect() {
+        IqdConnection conn = primaryConn(); // current=12
+        when(connectionRepository.findById(CONN_ID)).thenReturn(Optional.of(conn));
+        when(editIdempotencyRepository.findByConnectionIdAndIdempotencyKey(CONN_ID, "key-mask-4"))
+                .thenReturn(Optional.empty());
+        IqdCatalogItem it = item("pg.public.orders.phone", "column", "phone", null);
+        when(catalogItemRepository.findByConnectionIdAndItemKey(CONN_ID, "pg.public.orders.phone"))
+                .thenReturn(Optional.of(it));
+
+        Map<String, Object> patch = new LinkedHashMap<>();
+        patch.put("sensitive_level", "secret");
+        BusinessException ex = assertThrows(BusinessException.class, () ->
+                service.updateCatalogNode(CONN_ID, "pg.public.orders.phone", "column", patch, 12L, "key-mask-4"));
+
+        assertEquals(42200, ex.getCode());
+        @SuppressWarnings("unchecked")
+        Map<String, Object> data = (Map<String, Object>) ex.getData();
+        assertNotNull(data);
+        assertEquals("sensitive_level", data.get("field"));
+        // 零副作用：版本不 bump、节点不落库
+        assertEquals(12L, conn.getCurrentEditRevision());
+        verify(connectionRepository, never()).save(any(IqdConnection.class));
+        verify(catalogItemRepository, never()).save(any(IqdCatalogItem.class));
+    }
+
+    /** T04b：补丁未含脱敏键 → 不动既有值（present-only 语义，避免误清空）。 */
+    @Test
+    void updateCatalogNode_withoutMaskKeys_leavesExistingMaskUntouched() {
+        IqdConnection conn = primaryConn();
+        when(connectionRepository.findById(CONN_ID)).thenReturn(Optional.of(conn));
+        when(editIdempotencyRepository.findByConnectionIdAndIdempotencyKey(CONN_ID, "key-mask-5"))
+                .thenReturn(Optional.empty());
+        IqdCatalogItem it = item("pg.public.orders.phone", "column", "phone", null);
+        it.setSensitiveLevel("high");
+        it.setMaskRule("phone");
+        when(catalogItemRepository.findByConnectionIdAndItemKey(CONN_ID, "pg.public.orders.phone"))
+                .thenReturn(Optional.of(it));
+        when(connectionRepository.save(any(IqdConnection.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(catalogItemRepository.save(any(IqdCatalogItem.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(editIdempotencyRepository.save(any(IqdEditIdempotency.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        Map<String, Object> patch = new LinkedHashMap<>();
+        patch.put("description", "手机号");
+        service.updateCatalogNode(CONN_ID, "pg.public.orders.phone", "column", patch, 12L, "key-mask-5");
+
+        assertEquals("high", it.getSensitiveLevel());
+        assertEquals("phone", it.getMaskRule());
     }
 }

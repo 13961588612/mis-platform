@@ -629,6 +629,17 @@ export interface IqdEditNodePayload {
     display_name?: string | null;
     description?: string | null;
     expression?: string | null;
+    /**
+     * 字段级脱敏等级（T04b-补，MR-13）：`none` | `low` | `high`。
+     *
+     * <p>后端 `IqdAdminService.updateCatalogNode` 强校验枚举，非法值返回 42200（`data.field`）。
+     */
+    sensitive_level?: string | null;
+    /**
+     * 字段级脱敏规则（T04b-补，MR-13）：规则名（masking.py 按 `iqd_mask_rule.name` 解析；
+     * 未注册则 fail-closed 退化为 full）。`null` = 清除字段级显式规则。
+     */
+    mask_rule?: string | null;
   };
   base_revision: number;
   idempotency_key: string;

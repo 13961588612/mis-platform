@@ -58,6 +58,7 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
@@ -1384,12 +1385,18 @@ public class IqdAdminService {
     // ================================================================ 二期：语义模型编辑（P0-1~P0-12）
 
     /**
-     * 编辑 catalog 节点（写回 MDL 前置：乐观并发 + 幂等 + 引用校验）。
+     * 编辑 catalog 节点（写回 MDL 前置：乐观并发 + 幂等 + 引用校验 + 字段级脱敏）。
      *
      * <p>流程：① 仅 {@code mdl_writeback_enabled=true} 连接允许写回；② 同
      * {@code idempotency_key} 命中即返回首次结果且不二次 bump；③ {@code base_revision}
-     * 与连接当前版本不符 → 409；④ 改 display_name（即改名）且被直接引用 → 422；⑤ 否则
+     * 与连接当前版本不符 → 409；④ 改 display_name（即改名）且被直接引用 → 422；
+     * ④b {@code patch.sensitive_level} 非 none/low/high → 422（T04b）；⑤ 否则
      * bump {@code current_edit_revision}、置 {@code edit_revision} 与 {@code source=platform_edit}。
+     *
+     * <p><b>patch 支持的键</b>：{@code display_name} / {@code description} / {@code expression}
+     * / {@code sensitive_level}（none|low|high）/ {@code mask_rule}（字符串或 null=清除）。
+     * T04b 增补后两者：使「字段级脱敏直编」（MR-13）走<b>本端点</b>（bump edit_revision、
+     * 天然乐观并发 + 幂等），而非复用不写 edit_revision 的 batch 镜像路径。
      *
      * @return {@code {edit_revision, edit_status, wren_ref_id}}
      */
@@ -1438,6 +1445,18 @@ public class IqdAdminService {
                 }
             }
         }
+        // ④b 脱敏字段枚举校验（T04b：patch.sensitive_level 只接受 none/low/high；非法 → 42200。
+        //     必须在 bump 之前，避免「先 bump 后打回」——虽然本方法 @Transactional 会回滚，
+        //     但把校验前置能保持「非法请求零副作用」这一更清晰的语义。）
+        String nextSensitiveLevel = null;
+        if (patch != null && patch.containsKey("sensitive_level")) {
+            nextSensitiveLevel = normalizeSensitiveLevel(patch.get("sensitive_level"));
+            if (nextSensitiveLevel == null) {
+                Map<String, Object> data = new LinkedHashMap<>();
+                data.put("field", "sensitive_level");
+                throw new BusinessException(42200, "sensitive_level 只接受 none / low / high", data);
+            }
+        }
         // ⑤ bump 连接级版本并应用 patch
         long next = current + 1;
         conn.setCurrentEditRevision(next);
@@ -1452,6 +1471,19 @@ public class IqdAdminService {
             }
             if (patch.containsKey("expression")) {
                 item.setExpression(str(patch.get("expression")));
+            }
+            // 字段级脱敏直编（T04b / MR-13）：与 mask_rule 一同落 iqd_catalog_item，
+            // 使前端字段侧栏写入的是**优先级最高的字段级显式规则**（masking.py 规则链第 1/2 层），
+            // 而非退到优先级最低的 iqd_mask_rule 规则表。
+            // 说明：本方法在 ⑤ 已 bump edit_revision（乐观并发 + 幂等天然复用），
+            // 故脱敏直编会正常进入 build（不同于不写 edit_revision 的 batch 镜像路径）。
+            if (nextSensitiveLevel != null) {
+                item.setSensitiveLevel(nextSensitiveLevel);
+            }
+            if (patch.containsKey("mask_rule")) {
+                // null / 空串 → 清除字段级显式规则（列可空）
+                String maskRule = str(patch.get("mask_rule"));
+                item.setMaskRule(maskRule == null || maskRule.isBlank() ? null : maskRule);
             }
         }
         item.setSource("platform_edit");
@@ -1922,6 +1954,25 @@ public class IqdAdminService {
             return null;
         }
         return value instanceof String s ? s : String.valueOf(value);
+    }
+
+    /**
+     * 归一脱敏等级（T04b）：`trim` + 小写后只接受 `none` / `low` / `high`（与列注释
+     * `V71:89 sensitive_level VARCHAR(8) NOT NULL DEFAULT 'none'` 一致）。
+     *
+     * <p>返回 `null` 表示**非法**（含 `null` / 空白 / 其它取值），调用方据此抛 `42200`。
+     * 严格枚举校验的理由：该值会参与 masking.py 规则链的第 2 层判定，放行脏值会让
+     * 脱敏静默失效（既不脱敏也不报错）。
+     */
+    static String normalizeSensitiveLevel(Object raw) {
+        if (raw == null) {
+            return null;
+        }
+        String value = String.valueOf(raw).trim().toLowerCase(Locale.ROOT);
+        return switch (value) {
+            case "none", "low", "high" -> value;
+            default -> null;
+        };
     }
 
     private static Long toLong(Object value) {
