@@ -4,7 +4,9 @@
 > 配套设计：[`mis-iqd-modeling-system-design.md`](mis-iqd-modeling-system-design.md)（架构结论 / Q1-Q8 裁决 / 数据结构 / 流程 / 依赖包 / 共享知识 / 待明确事项 A-01~A-15）
 > 配套输入：[`mis-iqd-modeling-prd.md`](mis-iqd-modeling-prd.md)（PM 增量 PRD）
 > 阶段对齐：M1 基础闭环 / M2 建模全量 / M3 治理增强（PRD §7）
-> 状态：🔴 已拍板（提交主理人汇总）｜日期：2026-08-30
+> 状态：🔴 已拍板 + **✅ 已全部实现（2026-09-22）**（提交主理人汇总）｜规划日期：2026-08-30 ｜ **施工回写：2026-09-22**
+>
+> **⚠️ 施工回写说明（2026-09-22，架构师高见远）**：**T01–T05 全部完成并入库**（18 commit，门禁全绿）。各任务已加**「完成状态 + 实际产出」**标注；**计划外新增**（T03e / T04a / T04b-补 / V91）见 **§7**。**注意两处与原稿不同**：① 依赖安装**必须 `pnpm add`**（非 `npm install`）；② T05 的**六条黄金用例均未真机执行**（照实标注，未验证不得记通过）。完整状态见 **§7 实施完成状态**。
 
 ---
 
@@ -49,28 +51,32 @@ graph TD
 
 **工作量合计**：5 + 12 + 14 + 11 + 4 = **46.0 人日** ≈ 9.2 周（按 1 人 5 工作日/周）
 
+**实施状态合计（2026-09-22）**：**T01 ✅ / T02 ✅ / T03 ✅ / T04 ✅ / T05 🔶（真机待跑）** —— 全部代码实现完成并入库（**18 commit**），门禁全绿；**T05 的六条黄金用例未真机执行**（照实标注）。计划外新增 4 项（T03e / T04a / T04b-补 / V91）见 **§7**。
+
 ---
 
 ## 2. 任务详细条目
 
-### T01 — 项目基础设施 ｜ M1 ｜ 前置：无 ｜ 工作量：5.0 人日 ｜ 优先级：P0
+### T01 — 项目基础设施 ｜ M1 ｜ 前置：无 ｜ 工作量：5.0 人日 ｜ 优先级：P0 ｜ **✅ 已完成**
+
+> **完成状态（2026-09-22）**：✅ **完成**。**实际产出**：前端目录迁移 `features/agent/ai/iqd` → `features/agent/iqd`（7 页面 + 组件 + wire 层）完成；依赖用 **`pnpm add`** 落地；icon 登记（`Workflow`/`GitBranchPlus`/`Calculator`/`Layers`）；四处同改①②③落地；**迁移实际落 V87（+V88 补登）**，`sys_menu` **4 条**（92600 + 92631-92633）；后端骨架（`IqdCatalogNodeService`/`IqdModelLayoutService`/`IqdModelingController`/Repository）+ BFF 骨架 + Python `iqd_discovery.py` 骨架齐。**偏差**：原稿 `npm install` → 实测 `pnpm add`；原稿 `sys_menu` 1 条 → 实际 4 条。
 
 **范围**（最小化，聚焦基础设施；不实现任何业务端点）：
 1. **前端目录迁移**（Q2=是）：将既有 `src/features/agent/ai/iqd/`（7 页面 + 4 组件）git mv 到 `src/features/agent/iqd/`，更新所有 `import` 引用，更新 `features/agent/pages.ts` 桶导出（导出符号名零变，差异在桶文件用 `as` 吸收）；不删旧目录痕迹，等 build 通过再 `git rm`。
-2. **依赖安装**：`npm install @xyflow/react@^12.3.0 @codemirror/state@^6.4.0 @codemirror/view@^6.30.0 @codemirror/lang-sql@^6.8.0 @codemirror/language@^6.10.0 @codemirror/commands@^6.5.0 @dagrejs/dagre@^1.1.4`；`package.json` 落依赖。
+2. **依赖安装**：**⚠️ 必须 `pnpm add`（不是 `npm install`）**——本仓 `node_modules` 是 pnpm 布局 + `pnpm-lock.yaml`，`npm` 的 arborist 处理 `.pnpm/` 会报 `Cannot read properties of null`。命令：`pnpm add @xyflow/react@^12.3.0 @codemirror/state@^6.4.0 @codemirror/view@^6.30.0 @codemirror/lang-sql@^6.8.0 @codemirror/language@^6.10.0 @codemirror/commands@^6.5.0 @dagrejs/dagre@^1.1.4`；`package.json` 落依赖。
 3. **icon 登记**：在 `src/lib/nav/icons.ts` 的 `ICON_MAP` 登记 `Workflow` / `GitBranchPlus` / `Calculator` / `Layers`（lucide 既有导入），避免静默回退 LayoutDashboard。
 4. **导航注册（四处同改①②）**：
    - `lib/nav/iqd-nav.ts` 追加 `{kind:'leaf', path:'/iqd/modeling', title:'可视化建模台', icon:'Workflow'}`，注释权限码 `iqd:modeling:view`
    - `components/layout/keep-alive-outlet.tsx` 的 `PAGE_MAP` 追加 `/iqd/modeling` → 懒加载 `IqdModelingPage`
    - `features/agent/iqd/pages.ts` 桶导出 `IqdModelingPage`（占位页面壳，先返回「页面建设中」空态 + PageHeader）
-5. **V8y Flyway 迁移**：
-   - 新建 `backend/mis-migrator/src/main/resources/db/migration/V8y__iqd_modeling_seed.sql`
+5. **V8y Flyway 迁移**（**实际落 V87 + V88**）：
+   - 新建 `backend/mis-migrator/src/main/resources/db/migration/V87__iqd_modeling_seed.sql`（**+ V88 补登**）
    - ① 建表 `iqd_model_layout`（DDL 见 system-design §4.4）
-   - ② `sys_menu` 1 条（path `/iqd/modeling`，icon `Workflow`，id=92600）
-   - ③ `sys_api` 12 条（8 建模台端点 + 4 内部端点，见 system-design §3.3，ids 92601-92612）
-   - ④ `sys_menu_api` 绑定 12 条（ids 92613-92624）
-   - ⑤ `sys_role_permission` 3 条（role_id=1 授予 `iqd:modeling:view` / `:edit` / `:publish`，ids 92625-92627）
-   - ⑥ 固定 ID + `WHERE NOT EXISTS`（V81/V82 范式）
+   - ② `sys_menu` **4 条**（⚠️ **不是 1 条**）：`92600` 页面菜单（type=1，path `/iqd/modeling`，icon `Workflow`）+ **`92631`/`92632`/`92633` 三个 `type=3` 权限按钮**（`iqd:modeling:view/edit/publish`）。**缺 3 个权限按钮 ⇒ `sys_role_permission(perm_type='menu', target_id)` 无所指 ⇒ 权限码进不了 `auth-store.permissions` ⇒ `PermissionGate` 静默全拒**
+   - ③ `sys_api` 12 条（8 建模台端点 + 4 表发现端点，ids 92601-92612）→ **V88 补 5 条（92640-92644，含漏登的 `GET /connections`）**
+   - ④ `sys_menu_api` 绑定 12 条（92613-92624）+ V88 补 5 条（92645-92649）
+   - ⑤ `sys_role_permission` 3 条（role_id=1 授予 `iqd:modeling:view` / `:edit` / `:publish`，ids 92625-92627，`target_id` 指向 92631/92632/92633）
+   - ⑥ 固定 ID + `WHERE NOT EXISTS`（V81/V82 范式）；**新迁移补登，绝不改历史迁移**（见 `architecture.md §7.10`）
 6. **后端骨架（无业务逻辑）**：
    - `backend/mis-iqd/.../domain/service/IqdCatalogNodeService.java`：定义接口（5 个 `createXxx` 方法签名 + `validateExpression` + `listDependents`），所有方法体抛 `UnsupportedOperationException("T02 实现")`
    - `backend/mis-iqd/.../domain/service/IqdModelLayoutService.java`：3 个方法同上
@@ -122,7 +128,9 @@ graph TD
 
 ---
 
-### T02 — M1 基础闭环（连接向导 + 表发现 + 画布只读 + 建模型） ｜ M1 ｜ 前置：T01 + multiconn T1 ｜ 工作量：12.0 人日 ｜ 优先级：P0
+### T02 — M1 基础闭环（连接向导 + 表发现 + 画布只读 + 建模型） ｜ M1 ｜ 前置：T01 + multiconn T1 ｜ 工作量：12.0 人日 ｜ 优先级：P0 ｜ **✅ 已完成**
+
+> **完成状态（2026-09-22）**：✅ **完成**。**实际产出**：`IqdCatalogNodeService.createModelFromTable`（+columns 子节点）、`validateExpression`、建模台 6 端点、Python `IqdDiscoveryService` 4 方法、`iqd_discovery.py` 4 端点；前端三栏壳 + `ModelCanvas`（只读壳）+ `ModelNodeCard` + `ModelTree` + `PropertyPanel` + `ConnectionWizard` + `TableImportWizard` + `WizardShell`。**偏差**：① 表发现元数据读取**走 `IqdMcpClient` 的 MCP 工具** `list_models`/`describe_model`（**非 `wren list-models`/`describe-model` CLI 子命令**）；② Python discovery 路径实为 **`/api/v1/iqd/discovery/**`**（非 `/internal/v1/...`）；③ **V88 补登** `GET /connections`（V87 漏登 ⇒ 阻塞 M-G1）。**验收项 1（M-G1 E2E）未真机执行**（见 §7）。
 
 **范围**：实现 6 黄金用例中的 **M-G1**（向导建连接→发现导入 3 张表→生成 1 个模型→画布可见→build 写回 SYNCED→测试问数可问）的端到端闭环。
 
@@ -135,7 +143,7 @@ graph TD
    - 错误码：40900（base_revision 不符）/ 42200（源表不存在）/ 40901（key 重复）
 2. **mis-iqd `IqdCatalogNodeService.validateExpression`**：GET 端点，静态解析引用字段（model_item_key 范围内列存在性）
 3. **mis-iqd `IqdModelingController`**：实现 `POST /catalog/model/from-table` + `GET /catalog/validate-expression` + `GET /connections` + `POST /connections` + `POST /connections/{id}/test` + `GET /catalog/sync-status`
-4. **Python `IqdDiscoveryService`**：实现 4 个方法（listSchemas / listTables / listColumns / importTables），调用 `wren list-models` / `wren describe-model` CLI；`importTables` 触发 `IqdCatalogNodeService.createModelFromTable` × N
+4. **Python `IqdDiscoveryService`**：实现 4 个方法（listSchemas / listTables / listColumns / importTables），**元数据读取走 `IqdMcpClient` 的 MCP 工具**（`list_models` / `describe_model` / `get_mdl`；**⚠️ 实施回写：不是 `wren list-models` / `wren describe-model` CLI 子命令**）；`importTables` 触发 `IqdCatalogNodeService.createModelFromTable` × N
 5. **Python `iqd_discovery.py` 路由**：实现 4 端点
 6. **mis-iqd `IqdConnection` 增 `mcp_port`/`mcp_status`/`last_health_at`/`last_health_msg` 字段**（依赖 multiconn T1 已有实体，本任务仅消费不创建）
 
@@ -186,7 +194,9 @@ graph TD
 
 ---
 
-### T03 — M2 建模全量（关系 + Cube + 计算列 + 发布流水线可视化 + 布局持久化） ｜ M2 ｜ 前置：T02 ｜ 工作量：14.0 人日 ｜ 优先级：P0
+### T03 — M2 建模全量（关系 + Cube + 计算列 + 发布流水线可视化 + 布局持久化） ｜ M2 ｜ 前置：T02 ｜ 工作量：14.0 人日 ｜ 优先级：P0 ｜ **✅ 已完成**
+
+> **完成状态（2026-09-22）**：✅ **完成**。**实际产出**：`createModel`/`createRelationship`/`createCube`/`createCalculatedColumn` + `listDependents`；`IqdModelLayoutService`（3 方法）+ layout 端点；前端 `ModelEditDrawer`/`CalculatedColumnEditor`/`RelationshipDialog`/`CubeEditor`/`MeasureDimensionList`/`RelationEdge`/`PublishPipelineBar`/`AutoLayoutButton` + `useCodeMirror`/`useDirtyState`；`build_mdl_from_catalog` 补 `_materialize_missing_nodes()`。**偏差 / 裁决落地**：① **`autoLayout` 走了 501 路线**（**A-02**：后端不做 dagre，HTTP **501 + 业务码 50101**；前端 `@dagrejs/dagre` 算坐标 → PUT）；② `V89` 补 `iqd_catalog_item.model_ref` 列（**原稿 `patch.model_ref` 有字段但表无列**）；③ **T03e 计划外新增**：未落入 MDL 的编辑项转**可见告警**。**⚠️ 仍未物化：全新 model（from-table）**（见 §7 开放项）。**验收项 1（M-G2）、2（M-G3）未真机执行**。
 
 **范围**：实现 6 黄金用例中的 **M-G2**（画布连线建 orders-customers 关系→建 Cube（含 1 measure）→问数「上月客单价」命中 Cube 聚合）与 **M-G3**（build 人为失败→流水线定位失败段→重试成功）。
 
@@ -240,7 +250,9 @@ graph TD
 
 ---
 
-### T04 — M3 治理增强（指令/样本/知识 + 漂移详情 + scope 维度徽标 + 脱敏直编 + 自动布局按钮挂主页） ｜ M3 ｜ 前置：T03 + multiconn §6 ｜ 工作量：11.0 人日 ｜ 优先级：P0
+### T04 — M3 治理增强（指令/样本/知识 + 漂移详情 + scope 维度徽标 + 脱敏直编 + 自动布局按钮挂主页） ｜ M3 ｜ 前置：T03 + multiconn §6 ｜ 工作量：11.0 人日 ｜ 优先级：P0 ｜ **✅ 已完成**
+
+> **完成状态（2026-09-22）**：✅ **完成**。**实际产出**：`iqd_knowledge.related_item_keys` 应用层校验 + `push_enhancements` 按关联裁剪（**注意：该列早已存在 `V71:218 JSONB`，实为「给已存在的列加校验」**）；`iqd-instruction-page` 增强；`iqd-enhance-page` 样本对升级 CodeMirror 6（**A-04 已遵守：v1.10 三步交互未变**）；`PropertyPanel` 描述/脱敏直编；`DriftDetailPanel`；`iqd-scope-page` 行级维度徽标 + 谓词预览。**偏差 / 裁决落地**：① **「模拟角色 WHERE 片段预览」接口从未落地为 API** —— 前端降级为示意片段（**恒标 `degraded`**）；② `patch` 脱敏走既有 `PUT /catalog/node` 扩展（**T04b-补**，MR-13）；③ **T04a 计划外新增**：**Cube 级 upsert** `PUT /catalog/cube` + **V90** + `pruneOrphanChildren`；④ `enabled is not False` 脆弱点（5 处）已统一走 `is_enabled()` 纯函数。**验收项 1（M-G4）、2（M-G5）未真机执行；3（M-G6）部分验证（纯函数单测过，UI 真机未验）**。
 
 **范围**：实现 6 黄金用例中的 **M-G4**（漂移注入→详情面板→重新导入收敛）、**M-G5**（字段侧栏改描述/脱敏→问数结果同步生效）、**M-G6**（scope 页行级维度徽标 + 谓词预览正确）。
 
@@ -279,7 +291,13 @@ graph TD
 
 ---
 
-### T05 — 集成验收（黄金用例 E2E + 性能压测 + 跨阶段一致性核查） ｜ M3 末 ｜ 前置：T04 ｜ 工作量：4.0 人日 ｜ 优先级：P0
+### T05 — 集成验收（黄金用例 E2E + 性能压测 + 跨阶段一致性核查） ｜ M3 末 ｜ 前置：T04 ｜ 工作量：4.0 人日 ｜ 优先级：P0 ｜ **🔶 部分完成（真机待跑）**
+
+> **完成状态（2026-09-22）— 如实回写，不得含糊**：
+> - ✅ **已证**：**门禁全绿**（前端 `typecheck` 0 error / `vitest` **34 files 429 passed** / build 成功；Java mis-iqd **69 passed**；Python `-k iqd` **110 passed**）+ **跨阶段不变项 6/6**（① 四处同改齐；② icon 无静默回退；③ **权限码前后端 23 对 23 全覆盖**；④ seed ID 段无冲突；⑤ 命名边界；⑥ **7 条新写路径全 bump `edit_revision`**）+ **构建预算达标**（CodeMirror 块 **65.8KB gzip ≪ 300KB**）。
+> - ⚠️ **未验证**：**M-G1 ~ M-G6 六条黄金用例全部未真机执行**（环境无 docker / 无 wren CLI / PG 非业务库）。**M-G1 另含红线**：依赖**模型物化**，**未真机证明「问数可答」前不得判通过**。P-1/P-2/P-4/P-5/P-6 性能项亦未验证。
+> - **实际产出**：3 份文档 —— `mis-iqd-modeling-verify-checklist.md`（QA 验收结论，含已证/未证清单 + F-1~F-3）+ `mis-iqd-modeling-runbook.md` + `frontend/mis-admin-web/src/features/agent/iqd/README.md`。
+> - **计划外新增**：**V91**（修 **F-1**，P1 预存缺陷：`sql-pairs/translate` 因 `V76`/`V78` 争 `sys_api id 92586` 被静默跳过 ⇒ 必然 40300）。
 
 **范围**：6 黄金用例 E2E（端到端测试）+ 性能压测 + 跨阶段不变项核查（§4）。
 
@@ -529,3 +547,43 @@ V82：92580-92599（自愈 + sync_job.action）
 | T05 集成验收 | 新增 | 6 黄金用例 E2E + 性能压测 + 跨阶段一致性核查清单 |
 
 **结论**：本任务分解**仅派工「建模台增量」**，既有一期/二/四期 + 自愈 + multiconn 的任务不重复派工，避免任务模型膨胀。建模台任务的依赖图清晰标注**硬依赖**（multiconn T1 + §6）与**消费复用**（既有一切）。
+
+---
+
+## 7. 实施完成状态与计划外新增（2026-09-22 施工回写）
+
+### 7.1 完成状态一览
+
+| 任务 | 状态 | 实际产出摘要 | 与原稿的主要差异 |
+|---|---|---|---|
+| **T01** | ✅ 完成 | 目录迁移 + `pnpm add` 依赖 + icon 登记 + 四处同改①②③ + **V87（+V88）** 种子 + 后端/BFF/Python 骨架 | **依赖用 `pnpm add`**；**`sys_menu` 4 条**（92600 + 92631-92633）；`sys_api` 12 条 + V88 补 5 条 |
+| **T02** | ✅ 完成 | `createModelFromTable` + `validateExpression` + 建模台 6 端点 + Python `IqdDiscoveryService` 4 方法/4 端点 + 前端三栏壳/画布只读/双向导 | discovery 元数据走 **`IqdMcpClient` MCP 工具**；路径 **`/api/v1/iqd/discovery/**`**；**V88 补登** `GET /connections` |
+| **T03** | ✅ 完成 | `createModel`/`createRelationship`/`createCube`/`createCalculatedColumn` + `listDependents` + layout 3 端点 + 前端 7 组件/2 hook + `_materialize_missing_nodes()` | **`autoLayout` 走 501/50101**（A-02）；`V89` 补 `model_ref` 列；**T03e** 可见告警 |
+| **T04** | ✅ 完成 | 知识关联校验 + `push_enhancements` 裁剪 + instruction/enhance/scope 页增强 + `PropertyPanel` 直编 + `DriftDetailPanel` | **模拟角色预览从未落地 API**（前端 `degraded`）；**T04a** cube upsert（V90）；**T04b-补** MR-13 走 `catalog/node`；`is_enabled()` 修漏过滤 |
+| **T05** | 🔶 部分完成 | 门禁全绿 + **跨阶段不变项 6/6** + 构建预算达标 + 3 份文档 | **六条黄金用例未真机执行**（含 M-G1 模型物化红线）；**V91** 修 F-1 |
+
+### 7.2 计划外新增（原施工单未列，实际发生）
+
+| ID | 计划外项 | 内容 | 落点 |
+|---|---|---|---|
+| **T03e** | **可见告警** | 未落入 MDL 的编辑项（cube/measure/dimension/relationship/计算列）由 `_collect_unmatched_edits`/`_log_unmatched_edits` 转**可见告警**，不再静默丢弃 | `agent/mis_iqd/service.py` |
+| **T04a** | **Cube 级 upsert** | 新增 `PUT /api/v1/iqd/catalog/cube`（sys_api **92700** / **V90**）+ `pruneOrphanChildren` 孤儿清理；补 **MR-06「能建不能改」**缺口 | `IqdCatalogNodeService.upsertCube` |
+| **T04b-补** | **MR-13 走 `catalog/node`** | 字段级脱敏直编扩展既有 `PUT /catalog/node`（`IqdAdminService`），不新增建模台专属端口（A-01 裁决） | `IqdAdminService.updateCatalogNode` |
+| **V91** | **F-1 修复** | 新迁移补登被 `V76`/`V78` id 冲突静默跳过的 `POST /api/v1/iqd/sql-pairs/translate`（sys_api **92703** + sys_menu_api **92704** → menu 92525） | `V91__iqd_sql_pair_translate_api_fix.sql` |
+
+### 7.3 实施小结
+
+> 与 `architecture.md §11.4` / `mis-iqd-modeling-system-design.md §12` 同源。
+
+**A. 交付规模（实测）**：**18 个 commit**（`git log 134a5c7^..5b054fd` = 18；`134a5c7` 规划 → `5b054fd` V91；**brief 原述 20 与实测不符，以 18 为准**）；门禁：前端 **429 passed**（34 files）+ typecheck 0 error + build 成功，Java mis-iqd **69 passed**，Python `-k iqd` **110 passed**；3 份新文档。
+
+**B. 已证（7 项 + 跨阶段 6/6）**：四处同改齐 / icon 无静默回退 / 权限码 23 对 23 全覆盖 / seed ID 段无冲突 / 命名边界 / 7 条写路径全 bump `edit_revision` / 构建预算达标。
+
+**C. 未证（3 类）**：① **M-G1~M-G6 六条黄金用例全部未真机执行**；② **M-G1 含模型物化红线**（未证明「问数可答」前不得判通过）；③ **P-1/P-2/P-4/P-5/P-6 性能项**未验证。
+
+**D. 后续开放项清单**：① **W0 真机实测**（校准真实 MDL model schema）；② **全新 model（from-table）物化**（W0 实测 + M3.1）；③ **模拟角色 WHERE 片段预览端点**；④ **enhance 页权限闸门**；⑤ **F-3 观察项**（`iqd:test:use`/`iqd:acl:save` 前后端不齐）；⑥ **`@EnableMethodSecurity` 缺失**。
+
+### 7.4 施工期两条硬约定（工程师必读）
+
+1. **依赖安装只用 `pnpm add`**（本仓 pnpm 布局；`npm` 装不上，见 T01 与 system-design §7.1）。
+2. **派工前置自检**：涉及权限端点/菜单的派工，**先 grep `sys_api`/`sys_menu_api` 核实真码**再动手（T04 阶段靠此避免 3 次「前端放行、后端 40300」）；ID 段位分配规约见 `architecture.md §7.10`。

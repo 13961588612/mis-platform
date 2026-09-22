@@ -6,7 +6,9 @@
 > 继承二/三/四期：[`mis-iqd-edit-prd.md`](mis-iqd-edit-prd.md) · [`mis-iqd-edit-design.md`](mis-iqd-edit-design.md) · [`mis-iqd-edit-architecture-review.md`](mis-iqd-edit-architecture-review.md)
 > 被消费上游：[`mis-iqd-mcp-multiconn-prd.md`](mis-iqd-mcp-multiconn-prd.md) + [`mis-iqd-selfheal-prd.md`](mis-iqd-selfheal-prd.md)
 > 图表：[`mis-iqd-modeling-class.mermaid`](mis-iqd-modeling-class.mermaid) · [`mis-iqd-modeling-sequence.mermaid`](mis-iqd-modeling-sequence.mermaid)
-> 状态：🔴 已拍板（提交主理人汇总；Q1–Q8 见 §2 裁决一览）｜日期：2026-08-30
+> 状态：🔴 已拍板 + **✅ 已实现并回写**（Q1–Q8 见 §1.1 裁决一览）｜规划日期：2026-08-30 ｜ **实施回写：2026-09-22**
+>
+> **⚠️ 实施回写说明（2026-09-22，架构师高见远）**：本建模台已**全部实现并入库**（18 commit，门禁全绿）。实施期发现 **8 处「设计稿 vs 代码现实」偏差**，已**逐条订正**本文（§4.1 / §4.3 / §4.4 / §4.5 / §7.1 / §8.1 / §8.2），并新增 **§11 实施期事实** 与 **§12 实施小结**。**读本文时以下即为「当前真相」**；篇幅较大的实施记录以 `mis-iqd-modeling-verify-checklist.md`（QA 验收结论）与 `architecture.md §11` 为准。
 
 ---
 
@@ -256,7 +258,8 @@ frontend/mis-admin-web/src/features/agent/iqd/
 2. `components/layout/keep-alive-outlet.tsx` 的 `PAGE_MAP`：追加 `/iqd/modeling` → `IqdModelingPage`。
 3. `app/router.tsx`：通常零改动（`/iqd/*` 已整体登记，V77），需核实。
 4. `lib/nav/icons.ts`：登记新 icon（`Workflow` / `GitBranchPlus` / `Calculator` / `Layers` / `Database` 已有），**漏登记会静默回退成 LayoutDashboard**。
-5. `backend/mis-migrator/.../V8y__iqd_modeling_seed.sql`：`sys_menu`（1 菜单 + 3 按钮）+ `sys_api`（8 端点 + 3 权限码）+ `sys_menu_api` 绑定；ID 段避 V69/V73/V77/V82 已用（建议 `92600-92699`，v1.10 已用 9250x，92600+ 空闲）。
+5. `backend/mis-migrator/.../V8y__iqd_modeling_seed.sql`：`sys_menu`（**4 条 = 1 页面 + 3 权限按钮**）+ `sys_api`（8 端点 + 3 权限码）+ `sys_menu_api` 绑定；ID 段避 V69/V73/V77/V82 已用（建议 `92600-92699`，v1.10 已用 9250x，92600+ 空闲）。
+   - **⚠️ 实施回写（2026-09-22）**：实际落为 **V87**（主页 92600 + 权限按钮 **92631/92632/92633** + 12 端点 + 绑定 + 3 角色授权）+ **V88**（补登 `GET /connections` 等 5 端点）。**`sys_menu` 必须是 4 条**——页面菜单 92600 **加上 3 个 `type=3` 权限按钮**；若只落 1 条页面菜单，则 `sys_role_permission(perm_type='menu', target_id)` **无所指** ⇒ `iqd:modeling:*` 进不了 `auth-store.permissions` ⇒ `PermissionGate` **静默全拒**。详见 §8.2 与 §11.3。
 
 ### 3.2 路由与权限闸
 
@@ -302,16 +305,20 @@ frontend/mis-admin-web/src/features/agent/iqd/
 
 **目的**：DBA 在建模台向导中「按连接」发现 schema/表/列；**凭证 server-side**，前端不触达业务库。
 
-**架构师裁决**：复用 `agent/ai-platform/backend/src/adapters/iqd_cli.py`（Python 侧已有 `profile add` + `context set-profile`），由 `DBA` 在新连接创建后人工执行（沿用 multiconn §5 凭证注入流程），profile 注入到 WrenAI；建模台通过 **新增 Python 端点** 由 ai-platform Worker 暴露「按连接读 schema/表/列」的能力（**复用 WrenAI 已有的 `wren context show`/`wren list-models`/`wren describe-model` CLI**，不发明新协议），经 BFF 转发到前端。
+**架构师裁决**：复用 `agent/ai-platform/backend/src/adapters/iqd_cli.py`（Python 侧已有 `profile add` + `context set-profile`），由 `DBA` 在新连接创建后人工执行（沿用 multiconn §5 凭证注入流程），profile 注入到 WrenAI；建模台通过 **新增 Python 端点** 由 ai-platform Worker 暴露「按连接读 schema/表/列」的能力，经 BFF 转发到前端。
 
-> **不新增 Java 端口转发**（避免 Java ↔ WrenAI 多一跳延迟与凭证扩散），直接 BFF → ai-platform Python `/internal/v1/iqd/discovery/**`，复用既有 `IqdConfigClient` 调用范式。
+> **⚠️ 实施回写（2026-09-22）— 两处订正：**
+> 1. **路径前缀 = `/api/v1/iqd/discovery/**`（不是 `/internal/v1/...`）**。`/internal/v1/**` 是 **Java 侧内部面**的命名；**Python Worker 全部业务路由前缀 `/api/v1`**（路由自带前缀 `/iqd/discovery`，由 `src/main.py` 以 `prefix="/api/v1"` 挂载 ⇒ 最终 `/api/v1/iqd/discovery/**`）。**Python Worker 从不使用 `/internal/v1/**`。**
+> 2. **元数据读取走 MCP 工具，不是 CLI 子命令**：`wren list-models` / `wren describe-model` **是 `wren serve mcp` 暴露的 MCP 工具**（实现侧常量 `TOOL_LIST_MODELS="list_models"` / `TOOL_DESCRIBE_MODEL="describe_model"`），**实现走 `IqdMcpClient`**；**CLI 侧真正存在的只有 `wren get mdl` / `wren context show`**（`IqdCli` 已封装）。
+>
+> **不新增 Java 端口转发**（避免 Java ↔ WrenAI 多一跳延迟与凭证扩散），直接 BFF → ai-platform Python `/api/v1/iqd/discovery/**`，复用既有 `IqdConfigClient` 调用范式。
 
-| 端点（Python Worker） | HTTP | 入参 | 出参 | 错误码 |
+| 端点（Python Worker，实际前缀 `/api/v1`） | HTTP | 入参 | 出参 | 错误码 |
 |---|---|---|---|---|
-| `GET /internal/v1/iqd/discovery/schemas?connectionId=…` | GET | query | `{schemas:[string]}`（来自 `wren list-models` 顶层 group 或 `wren context show`） | 50201（profile 未注入/连接不可达） |
-| `GET /internal/v1/iqd/discovery/tables?connectionId=…&schema=…&page=…` | GET | query | `{tables:[{name,comment}], total, page}`（来自 `wren list-models`/`wren describe-model`） | 50201 |
-| `GET /internal/v1/iqd/discovery/columns?connectionId=…&schema=…&table=…` | GET | query | `{columns:[{name,type,comment,is_pk_inferred,nullable}]}`（来自 `wren describe-model` 的 columns 段 + 主键推断） | 50201 |
-| `POST /internal/v1/iqd/discovery/import` | POST | `{connectionId, tables:[{schema,name}], mode, in_scope}` | `{imported:[item_key], skipped:[item_key]}` | 42200/50201 |
+| `GET /api/v1/iqd/discovery/schemas?connectionId=…` | GET | query | `{schemas:[string]}`（MCP `list_models` 顶层 group 或 `get_mdl`） | 50201（profile 未注入/连接不可达） |
+| `GET /api/v1/iqd/discovery/tables?connectionId=…&schema=…&page=…&keyword=…` | GET | query | `{tables:[{name,comment}], total, page}`（MCP `list_models` / `describe_model`） | 50201 |
+| `GET /api/v1/iqd/discovery/columns?connectionId=…&schema=…&table=…` | GET | query | `{columns:[{name,type,comment,is_pk_inferred,nullable}]}`（MCP `describe_model` 的 columns 段 + 主键推断） | 50201 |
+| `POST /api/v1/iqd/discovery/import` | POST | `{connection_id, tables:[{schema,name}], mode, in_scope}` | `{imported:[item_key], skipped:[item_key]}` | 42200/50201 |
 
 **Java 侧**：`IqdDiscoveryController`（BFF）转发；权限码 `iqd:modeling:edit`；不落任何业务数据，仅缓存 5 分钟（TanStack Query）。
 
@@ -357,11 +364,13 @@ public CreateResult createNode(...) {
 }
 ```
 
-**字段扩展（V8x 迁移）**：
+**字段扩展（V8x 迁移 → 实际落 **V89**）**：
 - `iqd_catalog_item.source` 新增取值 `modeling`（应用层校验；DDL 已含 VARCHAR，扩展允许值）
 - `iqd_catalog_item.expression` 已存在（computed），calculated column 落 `expression` 字段（与 cube/measure 复用）
+- **⚠️ 实施回写：`iqd_catalog_item.model_ref` 是「新增列」**——上表 cube 的 `patch.model_ref` 字段**设计稿有、但表里原本没有该列**；已由 **V89** 补 `ALTER TABLE iqd_catalog_item ADD COLUMN IF NOT EXISTS model_ref VARCHAR(255)`（**可空、无回填**）。**为何补列而不挤进 `expression`**：① 「列存已有（`related_item_keys`）vs 新列」要看真实 DDL，不能凭稿假设；② `model_ref` 需**确定性关联**（cube → model），塞进 `expression` 会与 measure 表达式语义混叠；③ MDL 同步进来的老 cube `model_ref` 保持 `NULL`，**继续走 `expression` 兜底**，仅 T03 起新写入的 cube 填 `model_ref`。详见 §11.2。
 - 新增表 `iqd_edit_idempotency`（已在二/四期 V8x 中建，V8y 复用）
 - 新增表 `iqd_model_layout`（MR-S4，d 点）
+- **⚠️ 实施回写（T04a 计划外新增）**：`PUT /api/v1/iqd/catalog/cube`（**Cube 级 upsert**，sys_api **92700** / **V90**）+ `pruneOrphanChildren` 孤儿清理——补 PRD **MR-06「能建不能改」**缺口（`POST /catalog/cube` 是 create-only 双幂等，`PUT /catalog/node` 只能改单节点自身字段、动不了 measure/dimension 子节点）。
 
 ### 4.4 d 点 — layout 存储（MR-S4，**新建**）
 
@@ -373,11 +382,13 @@ public CreateResult createNode(...) {
 |---|---|---|---|
 | `GET /api/v1/iqd/modeling/layout/{connectionId}` | GET | `IqdModelLayoutService.get(connectionId)` | 返回 layout；空时返回 `{nodes:[],edges:[],viewport:{x:0,y:0,zoom:1},auto_layout_version:0}` |
 | `PUT /api/v1/iqd/modeling/layout/{connectionId}` | PUT | `IqdModelLayoutService.save(connectionId, dto, base_version)` | 落 JSONB；`base_version` 乐观并发；体积限制 1MB |
-| `POST /api/v1/iqd/modeling/layout/{connectionId}/auto-layout` | POST | `IqdModelLayoutService.autoLayout(connectionId, algo)` | 服务端 dagre 一键整理（也可前端 dagre，Q6 选择独立存储不限定位置） |
+| `POST /api/v1/iqd/modeling/layout/{connectionId}/auto-layout` | POST | `IqdModelLayoutService.autoLayout(connectionId, algo)` | **⚠️ 实施回写（A-02 裁决落地）：服务端按设计不实现 dagre** —— 端点返回 **HTTP 501 + 业务码 50101**（`NOT_IMPLEMENTED_BY_DESIGN`）；**前端 `@dagrejs/dagre` 算坐标 → `PUT` 落库**。协议层区分「**按设计不做**」（501/50101）与「**还没做**」（503/50300）——避免前端把两者一视同仁渲染成「建设中」 |
 
 ### 4.5 e 点 — 指令/知识「关联对象」裁剪（MR-07/09，**复用 + 增强**）
 
 **不重建 iqd_knowledge 表结构**，仅在 knowledge.content JSON 内追加 `related_item_keys: [item_key]` 字段（应用层校验），下发前由 ai-platform `IqdAskService.push_enhancements` 按 related_item_keys 裁剪。
+
+> **⚠️ 实施回写（2026-09-22）— A-06 premise 过时**：原裁决措辞为「**不新建列**，内嵌 `content.related_item_keys` JSON」，隐含前提是「该信息不存在列上」。**实测：`iqd_knowledge.related_item_keys` 列早已存在**（`V71:218`，`related_item_keys JSONB NULL`）。因此实施真相是「**给一个已存在的列加应用层校验 + 下发裁剪**」，**不是**「把字段塞进 `content` JSON」。**教训：判断「是否需新增列」必须 grep 真实 DDL（`V71`），不能凭稿假设。** 下发裁剪逻辑（`push_enhancements` 按 `related_item_keys` 只携带当前 model/cube 相关条目）与设计一致。
 
 ```json
 {
@@ -617,7 +628,8 @@ classDiagram
 **说明**：
 - **未列出既有类**（`IqdConnection` / `IqdCatalogItem` / `IqdAskService` / `IqdConfigClient` 等沿用，详见 architecture.md §4.1 类图）
 - **未列出 DB 表 schema 字段**（沿用 V71/V8x，详见 mis-iqd-edit-design.md §三 + 本设计 §4.3 + §4.4）
-- **`IqdCli` 新增 `listModels` / `describeModel`** 是建模台表发现通道的具体实现，封装 `wren list-models` / `wren describe-model` CLI 调用
+- **⚠️ 实施回写（2026-09-22）**：上图中 `IqdCli.listModels` / `describeModel` 标 `<新>` 是**设计稿的表述**；**实测这两个不是 CLI 子命令，而是 `wren serve mcp` 暴露的 MCP 工具**（`list_models` / `describe_model`），**实现落在 `IqdMcpClient`**（`adapters/iqd_mcp_client.py`，常量 `TOOL_LIST_MODELS` / `TOOL_DESCRIBE_MODEL`）。`IqdCli` 的形态保留（供 `context show` 类扩展），但**表发现不走 `IqdCli`**。读图时以本条为准。
+- `IqdCatalogNodeService.upsertCube`（T04a 计划外新增）对应 `PUT /catalog/cube` + `pruneOrphanChildren`（§4.3 已补）。
 
 ---
 
@@ -633,18 +645,19 @@ sequenceDiagram
     participant FE as FE (TanStack Query)
     participant BFF as IqdModelingController (BFF)
     participant AIP as IqdDiscoveryService (ai-platform)
-    participant WCLI as iqd_cli.py → wren CLI
+    participant MCP as IqdMcpClient → wren serve mcp
     participant MIS as IqdCatalogNodeService (mis-iqd)
     participant COORD as SyncCoordinator
     participant BLD as build_mdl_from_catalog
+    participant CLIP as IqdCli → wren CLI
     participant WREN as wren serve mcp
 
     DBA->>WIZ: 进入「表发现导入」向导
     WIZ->>FE: useQuery(['iqd','discovery','schemas',connId])
     FE->>BFF: GET /iqd/discovery/schemas?connectionId=1
-    BFF->>AIP: GET /internal/v1/iqd/discovery/schemas?connectionId=1
-    AIP->>WCLI: wren list-models --connection <id>
-    WCLI-->>AIP: [schemas]
+    BFF->>AIP: GET /api/v1/iqd/discovery/schemas?connectionId=1
+    AIP->>MCP: MCP tool list_models(connection_id)
+    MCP-->>AIP: [schemas]
     AIP-->>BFF: {schemas: ["public","sales",...]}
     BFF-->>FE: 200
     FE-->>WIZ: schemas
@@ -652,9 +665,9 @@ sequenceDiagram
     DBA->>WIZ: 选 schema → 表清单
     WIZ->>FE: useQuery(['iqd','discovery','tables',connId,schema,page])
     FE->>BFF: GET /iqd/discovery/tables
-    BFF->>AIP: GET /internal/v1/iqd/discovery/tables
-    AIP->>WCLI: wren list-models --connection <id> --schema <s>
-    WCLI-->>AIP: [tables]
+    BFF->>AIP: GET /api/v1/iqd/discovery/tables
+    AIP->>MCP: MCP tool list_models / describe_model
+    MCP-->>AIP: [tables]
     AIP-->>BFF: paged
     BFF-->>FE: paged
     FE-->>WIZ: tables
@@ -662,16 +675,16 @@ sequenceDiagram
     DBA->>WIZ: 勾选 N 张表 → 进入列预览
     WIZ->>FE: useQuery(['iqd','discovery','columns',connId,s,t]) ×N
     FE->>BFF: GET /iqd/discovery/columns
-    BFF->>AIP: GET /internal/v1/iqd/discovery/columns
-    AIP->>WCLI: wren describe-model --schema <s> --table <t>
-    WCLI-->>AIP: [columns + 主键推断]
+    BFF->>AIP: GET /api/v1/iqd/discovery/columns
+    AIP->>MCP: MCP tool describe_model(model_name)
+    MCP-->>AIP: [columns + 主键推断]
     AIP-->>FE: columns
     FE-->>WIZ: 列预览（高 PK 推断列）
 
     DBA->>WIZ: 确认导入（mode=create_or_skip）
     WIZ->>FE: useMutation → POST /iqd/discovery/import
     FE->>BFF: POST {connectionId, tables:[...], mode, in_scope:false}
-    BFF->>AIP: POST /internal/v1/iqd/discovery/import
+    BFF->>AIP: POST /api/v1/iqd/discovery/import
     AIP->>AIP: 查 iqd_catalog_item（connectionId, item_key 已存在?）
     alt 已存在 + mode=create_or_skip
         AIP-->>FE: {skipped:[...]}
@@ -691,8 +704,8 @@ sequenceDiagram
         BLD->>MIS: GET /get-catalog-full
         MIS-->>BLD: {mdl_raw, edited_items, current_edit_revision}
         BLD->>BLD: write manifest.json
-        BLD->>WCLI: wren context build --mdl <dir>
-        WCLI->>WREN: 重建 MDL + index
+        BLD->>CLIP: wren context build --mdl <dir>
+        CLIP->>WREN: 重建 MDL + index
         BLD->>MIS: POST /enhance/catalog-backfill
         MIS-->>BLD: {stamped_count: N}
     and 前端发布流水线轮询
@@ -881,7 +894,15 @@ sequenceDiagram
 
 ## 7. 依赖包列表
 
-### 7.1 前端（npm）
+### 7.1 前端（**pnpm**）
+
+> **⚠️ 实施回写（2026-09-22）— 安装命令必须用 `pnpm add`，不是 `npm install`**：本仓 `frontend/mis-admin-web` **`node_modules` 是 pnpm 布局 + `pnpm-lock.yaml`**；`npm` 的 arborist 处理 `.pnpm/` 会报 **`Cannot read properties of null`**（装不上）。**依赖安装只用 `pnpm add`，构建/测试用 `pnpm build` / `pnpm test`**（历史门禁命令里的 `npm run build` 等仅为习惯写法，安装环节严禁 `npm`）。原始安装命令：
+>
+> ```bash
+> pnpm add @xyflow/react@^12.3.0 @codemirror/state@^6.4.0 @codemirror/view@^6.30.0 \
+>           @codemirror/lang-sql@^6.8.0 @codemirror/language@^6.10.0 \
+>           @codemirror/commands@^6.5.0 @dagrejs/dagre@^1.1.4
+> ```
 
 ```jsonc
 {
@@ -959,22 +980,28 @@ pydantic = "*"
 | 前端页面组件 | `<Kind><Action>Page.tsx`，导出 `Iqd<Kind><Action>Page`（与既有 `IqdConfigPage` 一致） |
 | 建模台子组件 | `components/modeling/<Component>.tsx` 或 `components/wizard/<Wizard>.tsx` |
 | API wire | snake_case（与后端 Java 字段对齐，PRD §1.3） |
-| 后端端点 | `/api/v1/iqd/modeling/**`（建模台）+ `/api/v1/iqd/discovery/**`（表发现）+ `/api/v1/iqd/catalog/**`（既有节点编辑，建模台复用）+ `/internal/v1/iqd/discovery/**`（Python Worker 侧） |
-| Python 端点 | `/internal/v1/iqd/discovery/**`（a 点） |
-| 权限码 | `iqd:modeling:view` / `iqd:modeling:edit` / `iqd:modeling:publish`（V8y 种子） |
-| 权限码 ID 段 | `92600-92699`（避 V69/V73/V77/V82 已用；ID 段分配明细见 §9.3 风险 B） |
-| Flyway 迁移 | V8x 二/四期已用、V8y 本建模台新增（建表 `iqd_model_layout` + 权限码种子） |
+| 后端端点 | `/api/v1/iqd/modeling/**`（建模台）+ `/api/v1/iqd/discovery/**`（表发现）+ `/api/v1/iqd/catalog/**`（既有节点编辑，建模台复用）；**Python Worker 侧同为 `/api/v1/iqd/discovery/**`**（**实施回写：非 `/internal/v1`**） |
+| Python 端点 | **`/api/v1/iqd/discovery/**`**（a 点，**实施回写：非 `/internal/v1`**——`/internal/v1/**` 是 Java 侧内部面命名，Python Worker 全走 `/api/v1`） |
+| 权限码 | `iqd:modeling:view` / `iqd:modeling:edit` / `iqd:modeling:publish`（**V87** 种子）；**⚠️ 建模台实际触达 7 个权限族**：`iqd:modeling:*` / `iqd:catalog:*` / `iqd:enhance:*`（含 `iqd:enhance:manage`）/ `iqd:mask:*` / `iqd:dimension:*` / `iqd:scope:*` / `iqd:mcp:manage` |
+| 权限码 ID 段 | `92600-92699`（避 V69/V73/V77/V82 已用）——**实施落号**：`sys_menu` **92600 + 92631-92633**；`sys_api` **92601-92612**（V87）/ **92640-92644**（V88）/ **92650-92655**（V89）/ **92700**（V90）/ **92703**（V91）；分配规约见 `architecture.md §7.10` |
+| Flyway 迁移 | V8x 二/四期已用；**建模台实际落 V87–V91**（见 `architecture.md §11.3`） |
 
-### 8.2 权限码登记（V8y 迁移）
+### 8.2 权限码登记（**实际落 V87**，实施回写已订正）
 
 ```sql
--- V8y__iqd_modeling_seed.sql（增量建模台权限码）
--- ① sys_menu：路径 /iqd/modeling，title '可视化建模台'，icon 登记（icon 取 'Workflow'）
--- ② sys_api：8 端点（见 §3.3）+ 内部 4 端点
--- ③ sys_menu_api 绑定：菜单与端点一一对应
--- ④ sys_role_permission：role_id=1 授予 iqd:modeling:* 三个权限码
--- ⑤ 固定 ID 段 92600-92699（sys_menu id=92600；sys_api ids 92601-92612；sys_menu_api ids 92613-92620；sys_role_permission 92621-92623）
--- ⑥ WHERE NOT EXISTS 幂等（同 V81 范式）
+-- V87__iqd_modeling_seed.sql（增量建模台权限码；+ V88 补登，见下）
+-- ① sys_menu：**4 条**（⚠️ 不是 1 条）
+--      · 92600  页面菜单（type=1，path=/iqd/modeling，icon='Workflow'）
+--      · 92631  权限按钮（type=3，permission='iqd:modeling:view'）
+--      · 92632  权限按钮（type=3，permission='iqd:modeling:edit'）
+--      · 92633  权限按钮（type=3，permission='iqd:modeling:publish'）
+--    ❗ 缺 3 个 type=3 按钮 ⇒ sys_role_permission(perm_type='menu', target_id) 无所指
+--       ⇒ iqd:modeling:* 进不了 auth-store.permissions ⇒ PermissionGate **静默全拒**
+-- ② sys_api：12 条（8 建模台端点 + 4 表发现端点，ids 92601-92612）→ V88 补 5 条（92640-92644）
+-- ③ sys_menu_api 绑定：端点的权限码按 §3.3 均为 iqd:modeling:edit（挂 92632）；
+--      查询类端点挂 view（92631）；触发类挂 publish（92633）（ids 92613-92624）
+-- ④ sys_role_permission：role_id=1 授予 iqd:modeling:* 三个权限码（92625-92627，target_id 指向 92631/92632/92633）
+-- ⑤ 固定 ID 段 + WHERE NOT EXISTS 幂等（同 V81 范式）；**新迁移补登，绝不改历史迁移**
 ```
 
 ### 8.3 事件名 & 缓存
@@ -1058,11 +1085,11 @@ calc:<model>.<column_name>        calculated column 节点（新增，二/四期
 | # | 项 | 影响 | 建议默认（拍板参考） | 谁拍板 |
 |---|---|---|---|---|
 | **A-01** | 建模台是否引入「字段级脱敏直编」的写后端点 `PUT /iqd/mask/affected`（沿用 mask 五类下拉），还是仅前端 PropertyPanel 直调既有 `mask-rule` API | MR-13 验收 | 复用既有 `PUT /api/v1/iqd/mask-rules`（增强页已用），PropertyPanel 直调同一端点；不新增建模台专属端口 | 主理人 |
-| **A-02** | 建模台布局 dagre 算法跑在前端还是后端（影响一/二键整理性能与并发） | MR-S4 | 前端（`@dagrejs/dagre`），布局计算 <2s/200 节点；后端 autoLayout 端点作为「服务端整库重排」备选（不默认用） | 架构师 |
+| **A-02** | 建模台布局 dagre 算法跑在前端还是后端（影响一/二键整理性能与并发） | MR-S4 | **✅ 已落地（2026-09-22）**：**前端**（`@dagrejs/dagre` 算坐标 <2s/200 节点 → `PUT` 落库）；**后端 `auto-layout` 端点按设计不实现**，返回 **HTTP 501 + 业务码 50101**（区分「按设计不做」vs「还没做」503/50300） | 架构师 |
 | **A-03** | 「重新导入」（MR-11）是否需要「建模台专属」入口，还是沿用既有 `/iqd/catalog` 页的 syncCatalogFromMdl 流程 | MR-11 入口 | 建模台 `PublishPipelineBar` 顶部「重新导入」按钮（per-connection）→ 跳到既有 `syncCatalogFromMdl` 比对合并界面（不复制流程）；保留 catalog 页入口 | 主理人 |
-| **A-04** | 样本对 SQL 编辑器（MR-08）改造是否影响 v1.10 已落地的「DB 类型下拉 → 转化 → 试运行」交互 | MR-08 | 仅替换 SQL 文本框为 CodeMirror 6，不动 v1.10 交互；保留 DB 类型下拉/转化/试运行三按钮 | PM |
+| **A-04** | 样本对 SQL 编辑器（MR-08）改造是否影响 v1.10 已落地的「DB 类型下拉 → 转化 → 试运行」交互 | MR-08 | **✅ 已遵守（2026-09-22）**：**未变**——仅把 SQL 文本框换成 CodeMirror 6，**v1.10 的三步交互（DB类型下拉 → 转化 → 试运行 → 保存）完全保留** | PM |
 | **A-05** | 「视图模型」（`mdl:view:*`）是否本期支持建模台可视化编辑 | PRD §4 14 项未含 view，但 §1.2 提及 | 本期不支持，view 编辑沿用二/四期既有 `PUT /catalog/node`；建模台 view 节点只读展示（灰色 + tooltip "v2 增强"） | 主理人 |
-| **A-06** | 指令「关联对象」字段（e 点）是否需要新建 `iqd_knowledge.related_item_keys` 列，还是复用现有 `content` JSON 字段内嵌 | e 点（MR-07/09） | 内嵌 `content.related_item_keys` JSON 数组，**不新建列**（V8y 不动 V71 表结构） | 架构师 |
+| **A-06** | 指令「关联对象」字段（e 点）是否需要新建 `iqd_knowledge.related_item_keys` 列，还是复用现有 `content` JSON 字段内嵌 | e 点（MR-07/09） | **⚠️ premise 过时（2026-09-22 实测）**：`iqd_knowledge.related_item_keys` 列**早已存在**（`V71:218` JSONB）。实际是「**给已存在的列加应用层校验 + 下发裁剪**」，既非「新建列」也非「内嵌 content」 | 架构师 |
 | **A-07** | 「自动布局」按钮（MR-S4）是否在建模台首次进入时自动触发，或仅手动 | MR-S4 | 仅手动（一键整理按钮 + 拖拽坐标持久化），首次进入保留画布原位 | PM |
 | **A-08** | 「属性面板」（MR-14/09/13）字段列表默认折叠前 N 列，N = ? | MR-14 节点卡 | N=8（与 wren-ui 一致），可展开全字段 | PM |
 | **A-09** | 「Cube 节点在画布角标」（PRD §6.2）是否支持点击进入 Cube 编辑器 | MR-14/06 联动 | 是，左键单击 Cube 角标进入 CubeEditor，权限码 `iqd:modeling:edit` | 主理人 |
@@ -1084,3 +1111,100 @@ calc:<model>.<column_name>        calculated column 节点（新增，二/四期
 **硬前置**：multiconn T1（多连接 + MCP 状态落库）。
 
 **降级路径**：若 multiconn 延期，M1 退化为「单连接建模」（连接向导暂留单条形态，画布/建模不阻塞；前端在路由层阻断 per-connection MCP 状态卡与 per-connection 自愈按钮）。
+
+---
+
+## 11. 实施期事实（2026-09-22 回写）
+
+> 本节记录「设计稿之外、实施中才发现/新增」的事实，避免后续读者被设计稿误导。**8 处偏差的逐条订正已就地改在对应章节**（§4.1 / §4.3 / §4.4 / §4.5 / §7.1 / §8.1 / §8.2）；本节收纳**其余实施期事实（含计划外新增与已修缺口）**。
+
+### 11.1 「模拟角色 WHERE 片段预览」接口从未落地（偏差 6）
+
+- **设计稿**：T-W2-02a 验收 5 期望一个「模拟角色 WHERE 片段预览」接口。
+- **代码现实**：**从未落地为 API**；`simulate_role_code` **仅是 `POST /iqd/ask` 的字段**（随 `metadata.iqd.simulate_role_code` 透传，`tools.py` / `scope_resolver.py` 消费）。
+- **前端处置**：降级为**示意片段**——`rowScopeUtils` 明确产出「无专用预览端点」说明，结果恒标 **`degraded`**，不与真实注入混同。
+- **状态**：**后续开放项**（见 §12 D）。
+
+### 11.2 「字典」端点是 `dict-sync-status` 而非 `dictionaries`（偏差 7）
+
+- **设计稿**：`GET /iqd/dictionaries`。
+- **代码现实**：**不存在**。实际只有 **`GET /api/v1/iqd/scope/dict-sync-status`**（内部面 `GET /internal/v1/iqd/get-dict-sync-status`）。
+- **回写**：§8.1 已按真实端点归正；`api/iqd.ts` 的 `fetchDictSyncStatus` 走的即此路径。
+
+### 11.3 `edit_revision` 与 MDL 派生的两个关键缺口（**均已修**）
+
+1. **`build_mdl_from_catalog` 原实现只能 patch 既有基线节点，无新增能力** ⇒ 平台新建的 cube / measure / dimension / relationship / 计算列**会被静默丢弃**。
+   - **已修**：补 **`_materialize_missing_nodes()`**（把平台新建节点物化进 MDL）+ **`_collect_unmatched_edits` / `_log_unmatched_edits`**（**未落入 MDL 的编辑项转「可见告警」**，不再静默）。
+   - 对应 commit/任务：**T03e**。
+2. **仍未物化：全新 model（from-table 路径）**——因真实 WrenAI MDL 的 model schema（`refSql` vs 基线 `source`、`columns` 必填项）**未经 W0 实测校准**，盲写可能产出**非法 MDL 导致整条 build 崩**，故**刻意不物化**。
+   - **需列入 W0 实测清单 + M3.1**（见 §12 D）。
+
+### 11.4 `enabled is not False` 脆弱点（**已修**）
+
+- `service.py` 原有 **5 处** `is not False` 写法**依赖 wire 恰为 bool**；`0 is False == False` ⇒ 若 wire 传 **int `0`**，会**静默漏过滤**（本应过滤的项被放过）。
+- **已修**：统一走新的 **`is_enabled()` 纯函数**，不依赖具体 Python 类型。
+
+### 11.5 A-02 裁决落地：`auto-layout` = 501/50101
+
+见 §4.4 表内回写：**后端按设计不做 dagre**（HTTP **501** + 业务码 **50101** `NOT_IMPLEMENTED_BY_DESIGN`），前端 `@dagrejs/dagre` 算坐标 → `PUT` 落库。**协议层区分**「按设计不做」(501/50101) 与「还没做」(503/50300)。
+
+### 11.6 Cube 级 upsert（T04a 计划外新增）
+
+- 新增 **`PUT /api/v1/iqd/catalog/cube`**（sys_api **92700** / 迁移 **V90**）+ **`pruneOrphanChildren`** 孤儿清理（PUT 语义：缺省/空列表 = 清空该类子节点）。
+- 补 PRD **MR-06「能建不能改」**缺口：`POST /catalog/cube` 是 create-only 双幂等（同 key 返回首次结果、不应用新字段），`PUT /catalog/node` 只能改单节点自身字段、动不了 measure/dimension 子节点。
+- 与 `POST /catalog/cube`（**92606**）**并列**，同挂菜单 92632（`iqd:modeling:edit`）。
+
+### 11.7 F-1 预存缺陷 + 修复范式（**偏差 8，必修项**）
+
+- **缺陷**：`V76:32` 与 `V78:50` **争 `sys_api` id `92586`**；V76 版本号更小先占位 ⇒ V78 的 **`POST /api/v1/iqd/sql-pairs/translate` 的 `sys_api` 登记与 `sys_menu_api` 绑定双双被 `WHERE NOT EXISTS` 静默跳过** ⇒ `deny-unmapped` 下必然 **40300**（前端 MR-08「样本对方言转化」点了就报错；同批 `/trial` 不受影响）。
+- **修复**：**`V91`** 用 `sys_api` **92703**（**复用 V78 原 code `00960011`** 保可追溯）+ `sys_menu_api` **92704** → 菜单 **92525**（`iqd:enhance:manage`）补登。
+- **修复范式（教训）**：
+  1. **`WHERE NOT EXISTS` 守卫 + 固定 ID 段** ⇒ 两迁移争同一编号段时**后者被静默丢弃、零报错**（系统性风险，已两次：`92158` / `92586`）。
+  2. **新迁移补登，绝不改历史迁移**：Flyway 校验 checksum，改已应用迁移 ⇒ `Validate failed: Migration checksum mismatch` ⇒ **整条迁移链阻塞**（比 40300 更严重）。
+  3. **已有先例**：`V51__agent_ops_skill_builder_chat_api_fix.sql` 用同法修了 `V29`/`V46` 争 `sys_api` **92158** 的同类缺陷（补登 **92176** / code **00920077**）。
+  4. **V91 刻意不加 `EXISTS(sys_module)` 守卫**：模块缺失时让 `fk_api_module` **报错中止（fail-loud）**，优于静默跳过（后者正是 F-1 的病根）。
+  5. ⇒ **已固化为正式约定**：见 `architecture.md §7.10`「ID 段位分配规约 + 冲突自检」。
+
+### 11.8 权限码实为多族（不是 1 个）+ 派工前置自检
+
+- **`iqd` 域实测 12 个命名空间 / 25 个码**：`acl` / `catalog` / `config` / `dimension` / `enhance` / `mask` / `mcp` / `modeling` / `scope` / `selfheal` / `test` / `trace`。
+- **建模台直接触达 7 个**：`iqd:modeling:*` / `iqd:catalog:*` / `iqd:enhance:*`（含 `iqd:enhance:manage`，V78 `92586`→**V91 `92703`** 修正后仍绑菜单 **92525**）/ `iqd:mask:*` / `iqd:dimension:*` / `iqd:scope:*` / `iqd:mcp:manage`。
+- **派工前置自检（正式约定）**：每次派工**先 grep `sys_api` / `sys_menu_api` 核实真码**，再决定前端放行与后端 `@PreAuthorize` 用哪一码——T04 阶段靠此避免了 **3 次「前端放行、后端 40300」**。
+
+---
+
+## 12. 实施小结
+
+> 交付规模与门禁为**实测**；`已证 / 未证` 分界**照实写**（未真机证明前**一律不记通过**）。与 `architecture.md §11.4` 同源。
+
+### 12.1 交付规模（实测）
+
+- **18 个 commit**（`git log 134a5c7^..5b054fd` = 18；`134a5c7` 规划 → `5b054fd` V91 修 F-1；**brief 原述 20 与实测不符，以 18 为准**）。
+- **门禁（全绿）**：前端 `typecheck` **0 error** / `vitest` **34 files 429 passed** / build 成功；Java mis-iqd **69 passed**；Python `-k iqd` **110 passed**。
+- 三份新文档：`mis-iqd-modeling-verify-checklist.md` / `mis-iqd-modeling-runbook.md` / `frontend/.../iqd/README.md`。
+
+### 12.2 已证（本沙箱可复核）
+
+**7 项**：① 四处同改齐；② icon 无静默回退；③ 权限码前后端 **23 对 23** 全覆盖；④ seed ID 段无冲突；⑤ 命名边界；⑥ **7 条新写路径全 bump `edit_revision`**；⑦ 构建预算（CodeMirror 块 **65.8KB gzip ≪ 300KB**）。**跨阶段不变项 6/6**。三条门禁全绿。
+
+### 12.3 未证（需真机，不得记「通过」）
+
+**3 类**：① **M-G1 ~ M-G6 六条黄金用例全部未真机执行**（环境无 docker / 无 wren CLI / PG 非业务库）；② **M-G1 含红线**——依赖**模型物化**，未真机证明「问数可答」前**不得判通过**；③ **P-1/P-2/P-4/P-5/P-6 性能项**未验证。
+
+### 12.4 开放项清单
+
+| # | 开放项 | 归属 |
+|---|---|---|
+| 1 | **W0 真机实测**（校准真实 MDL model schema） | W0 |
+| 2 | **全新 model（from-table）物化** | W0 实测 + M3.1 |
+| 3 | **模拟角色 WHERE 片段预览端点** | 后续（前端暂 degraded） |
+| 4 | **enhance 页权限闸门** | 待补 |
+| 5 | **F-3 观察项**（`iqd:test:use` / `iqd:acl:save` 前后端不齐） | 观察 |
+| 6 | **`@EnableMethodSecurity` 缺失** | 建议核对 |
+
+---
+
+## 13. 与 `architecture.md` 的关系（版本纪律）
+
+- **`architecture.md` 已升 v1.12（基线 v1.11）**，建模台实施回写见其 **§11**；ID 段位正式约定见其 **§7.10**。
+- **v1.10（样本增量）与 v1.11（建模台规划增量）历史编号含义未被改动**；`V76`/`V78`/`V81`/`V87`–`V91` 迁移文件**一字未改**（修复一律新迁移追加）。

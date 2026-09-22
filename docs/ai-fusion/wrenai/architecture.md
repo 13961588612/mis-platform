@@ -1,7 +1,7 @@
 # MIS 平台对接 WrenAI 问数 APP — 系统架构设计
 
 > 文档角色：本需求的**架构视图 + 接口契约**（上游 [prd.md](prd.md)，下游 [tasks.md](tasks.md)）。
-> 版本：v1.11（基线 v1.10）｜状态：🔴 已修订（**v1.11 可视化建模台增量回写落盘（2026-09-22，主理人记录）**：把已拍板的「mis-iqd 前端可视化建模台」增量（PRD + 系统设计 + 任务分解 + 两张 mermaid）合订进本主架构文档，**architecture.md 自此为唯一权威基线**（不再「增量文档悬挂」）——详见 **§10 增量 v1.11 — 可视化建模台**；**v1.9 三处重大修订落盘（2026-08-22，主理人记录）**：① **A1 业务改判——落库改道**：表级 ACL 等问数配置**不落 ai_platform，改落 `mis_platform` 库**，对齐 **mis_kb 项目范式**（kb 开头的表在 mis_platform 库），项目名 **`mis-iqd`**（类似 mis_kb）、表前缀 **`iqd_`**（替代 `wren_*`）；ADR-019（原裁定落 ai_platform）**已由 ADR-020 替代**（§8 A1）；② **命名统一**：项目/表/API/权限码/模块全部收敛 `iqd`（`iqd_*` 表、`/api/v1/iqd/**`、权限码 `iqd:*`、前端 `features/agent/iqd`、`backend/mis-iqd` Java 模块），**对接外部 WrenAI 产品的适配层保留 wren**（`wren serve mcp`/`wren profile`/`wren_mcp_host`/`iqd_mcp_client.py` 类内配置键等，命名边界见 §1.5/§3.3）；③ **维度注册表提前一期 + 双维度一期**：`iqd_row_scope_dimension` 从二期 P2 提为**一期必做**、**部门不再特例**，一期同时支持「部门权限 + 门店权限」两个维度（§4.2.2 D.8/D.9）；配套：**Worker 配置消费改「BFF/Java 侧配置读取 API + Worker 本地缓存 + 变更事件/定期刷新 + 缓存不可得 fail-closed 45204」**（§4.2.2 D.7.3）、mis-iqd 模块按 mis_kb 范式落地（§3.2/§3.3）、Flyway 追加 `V71__iqd_schema.sql`、BFF 头注入按维度注册表遍历（`X-Mis-Dept-Scope` + `X-Mis-Stores`）、tasks.md 全量同步（T-W0-01 探针 3e 门店盘点 / T-W2-01 改 Java 侧 / T-W2-02a 双维度 / T-W2-02b 维度遍历注入 / 新增维度注册表子任务）、ADR-019 修订 + ADR-020 新增、两张 mermaid 同步、版本升 v1.9。**v1.8 A1/A5 拍板 + 行级权限放置/扩展设计落盘（2026-08-22，主理人记录）**：A1 当时确认——**表级 ACL 等 `wren_*` 问数配置落 `ai_platform` 库，Python 侧（ai-platform）统一管理，BFF 经 HTTP 读写，不新建 Java 领域服务**（**v1.9 已业务改判**，见上；历史裁定记录见 §8 A1 与 ADR-019）；A5 已确认——**列级隔离本期不做，预留后期方案**（预留位点见 §4.2.2 D.8.2）；新增 **D.7 行级权限数据「如何放置、如何使用」**（三层放置：平台侧 `ai_platform` 库=配置+裁定 / mis-org 侧=授权源头 / 业务库侧=数据载体；使用链路：配置在平台→锚点在头→字典在业务库→注入在 Worker→执行/脱敏/审计）与 **D.8 行级权限维度扩展设计**（`row_scope.type` 扩展点：`org_auto`=dept 维度实例化、`template` 已覆盖任意维度；维度注册表 `iqd_row_scope_dimension` 二期 P2 可选；扩展步骤模板 5 件事 + 门店示例；列级隔离预留位点）；§8 A1/A5 由「⏳ 待确认」改「✅ 业务已确认」；tasks.md T-W2-01 标注 A1 已确认、T-W2-02a 标注 type 扩展点 + 二期 P2 维度注册表、A5 相关标注 masking.py 仍为唯一出口 + 列 ACL 预留位点；**v1.7 A13 拍板 + 配置模型澄清落盘（2026-08-22，主理人记录）**：A13 三答已确认——**① 业务库部门编码与 mis_org 不统一主数据（暂时无关）→ 需要映射；② 业务库与 mis_platform 非同一实例 → 物化表（视图不可行）；③ 多数据源每库一张、集中定义从中心每日同步到各库（物化表 + 中心侧定时批同步）**；§4.2.2 D.6 深化——编码对齐决策 **X（映射内嵌字典表）** 定案（推荐理由/映射来源与维护/配置下拉数据源/T-W2-02a 工作量影响，见 D.6.3）、D.6.4 中心每日同步任务细化（归属 ai-platform 定时作业、每日全量 upsert 幂等、失败告警 + 降级 45204、目标库注册）、新增 **D.6.6 配置面 vs 数据面**（用户疑问「是否需逐库设置权限」的权威回答：权限配置平台统一一处、row_scope 模板化、mis_dept_scope 为同步数据非配置、表按数据源分组仅展示层事实）；§8 A13 由「⏳ 待确认」改「✅ 业务已确认」；tasks.md T-W0-01 探针 3e 更新（库边界已确认、剩余聚焦 DEPTID 编码体系盘点+映射可行性）、T-W2-02a 字典表子项改「物化表 + 中心每日同步」并新增同步任务/映射维护子项与配置界面验收；**v1.6 部门权限字典表方案落盘（2026-08-22，主理人记录）**：2a「直接 JOIN 平台内部 `sys_dept`」修订为「**JOIN/EXISTS 部门权限字典表 `mis_dept_scope`（表/视图）**」——同库/同实例走**视图**（实时零维护）、跨库/跨实例走**物化表+同步**（幂等）、多数据源**每库一张**、部门编码对齐与库边界列为 **A13 待业务/数据确认**（探针 3e 出前置证据）；新增 §4.2.2 D.6 mis_dept_scope 落地设计、§8 A13、tasks.md T-W0-01 探针 3d 实测对象更新为 mis_dept_scope 形态 + 新增 3e（库边界与编码对齐盘点）、T-W2-02a 新增字典表子项、T-W2-02b 黄金用例谓词更新；**v1.5 A12 拍板落盘（2026-08-22，主理人记录）**：A12 已由业务确认——**物化 `dept_path`，`PATH_PREFIX` 为唯一主路径，`CLOSURE_CTE` 不实现**（决策依据见 §8 A12 与 §4.2.2 C「策略表」）；§4.2.2 `resolve_inject_strategy` 策略精简为 **PATH_PREFIX（主）/ ENUM（降级 ≤500）/ FAIL_CLOSED（兜底）**、规模分层用例 11–15 同步更新、新增 **mis-org 物化 dept_path 落地设计小节（§4.2.2 D）**、`X-Mis-Dept-Scope` 头扩为携带锚点 `path`、tasks.md T-W0-01 探针 3b 降级为「仅记录不阻塞」+ 新增 3d（`dept_path LIKE` 实测）、T-W2-02a/b 同步；v1.4 曾修订规模策略（mis-org 部门树规模上万 → 头语义改「锚点 + 范围语义」`X-Mis-Dept-Scope`、新增规模分层策略层、新增待拍板 A12）；v1.3 曾修订 A11 行级数据范围确认本期、新增 §4.2.2 RLS 设计细节、`ScopeResolver.inject_row_scope` 展开、T-W2-02 拆分；v1.2 曾修订 MCP-first / 钉 wren-core 新线 `wren: v0.13.3` · 项目 `0.29.2` 2026-08-18、新增 §4.2.1 权限方案全景）｜日期：2026-08-22｜语言：中文
+> 版本：v1.12（基线 v1.11）｜状态：🔴 已修订（**v1.12 建模台实施回写落盘（2026-09-22，主理人记录）**：把建模台**实施期发现**合订回权威基线 —— ① **8 处「设计稿 vs 代码现实」逐条订正**（discovery 路径 `/api/v1` / `pnpm add` / `sys_menu` 4 条 / 表发现走 **MCP 工具**非 CLI 子命令 / `model_ref` + **V89** / 模拟角色预览**从未落地为 API** / `dict-sync-status` 而非 `dictionaries` / **F-1** 预存缺陷 + **V91** 修复）；② **V87–V91 五个迁移集中登记表**（版本 / 用途 / ID 段 / 关键约束）；③ **实施小结**（交付规模 / 已证 / 未证 / 开放项）；④ 沉淀 **「ID 段位分配规约 + 冲突自检」正式约定**（避免第三次 F-1 同类事故）—— 详见 **§11 增量 v1.12 — 可视化建模台实施回写**。**`V76`/`V78`/`V81`/`V87`–`V91` 迁移文件一字未改（新迁移只追加）**；**v1.10（样本增量）与 v1.11（建模台规划增量）的历史编号含义均未改动**。**v1.11 可视化建模台增量回写落盘（2026-09-22，主理人记录）**：把已拍板的「mis-iqd 前端可视化建模台」增量（PRD + 系统设计 + 任务分解 + 两张 mermaid）合订进本主架构文档，**architecture.md 自此为唯一权威基线**（不再「增量文档悬挂」）——详见 **§10 增量 v1.11 — 可视化建模台**；**v1.9 三处重大修订落盘（2026-08-22，主理人记录）**：① **A1 业务改判——落库改道**：表级 ACL 等问数配置**不落 ai_platform，改落 `mis_platform` 库**，对齐 **mis_kb 项目范式**（kb 开头的表在 mis_platform 库），项目名 **`mis-iqd`**（类似 mis_kb）、表前缀 **`iqd_`**（替代 `wren_*`）；ADR-019（原裁定落 ai_platform）**已由 ADR-020 替代**（§8 A1）；② **命名统一**：项目/表/API/权限码/模块全部收敛 `iqd`（`iqd_*` 表、`/api/v1/iqd/**`、权限码 `iqd:*`、前端 `features/agent/iqd`、`backend/mis-iqd` Java 模块），**对接外部 WrenAI 产品的适配层保留 wren**（`wren serve mcp`/`wren profile`/`wren_mcp_host`/`iqd_mcp_client.py` 类内配置键等，命名边界见 §1.5/§3.3）；③ **维度注册表提前一期 + 双维度一期**：`iqd_row_scope_dimension` 从二期 P2 提为**一期必做**、**部门不再特例**，一期同时支持「部门权限 + 门店权限」两个维度（§4.2.2 D.8/D.9）；配套：**Worker 配置消费改「BFF/Java 侧配置读取 API + Worker 本地缓存 + 变更事件/定期刷新 + 缓存不可得 fail-closed 45204」**（§4.2.2 D.7.3）、mis-iqd 模块按 mis_kb 范式落地（§3.2/§3.3）、Flyway 追加 `V71__iqd_schema.sql`、BFF 头注入按维度注册表遍历（`X-Mis-Dept-Scope` + `X-Mis-Stores`）、tasks.md 全量同步（T-W0-01 探针 3e 门店盘点 / T-W2-01 改 Java 侧 / T-W2-02a 双维度 / T-W2-02b 维度遍历注入 / 新增维度注册表子任务）、ADR-019 修订 + ADR-020 新增、两张 mermaid 同步、版本升 v1.9。**v1.8 A1/A5 拍板 + 行级权限放置/扩展设计落盘（2026-08-22，主理人记录）**：A1 当时确认——**表级 ACL 等 `wren_*` 问数配置落 `ai_platform` 库，Python 侧（ai-platform）统一管理，BFF 经 HTTP 读写，不新建 Java 领域服务**（**v1.9 已业务改判**，见上；历史裁定记录见 §8 A1 与 ADR-019）；A5 已确认——**列级隔离本期不做，预留后期方案**（预留位点见 §4.2.2 D.8.2）；新增 **D.7 行级权限数据「如何放置、如何使用」**（三层放置：平台侧 `ai_platform` 库=配置+裁定 / mis-org 侧=授权源头 / 业务库侧=数据载体；使用链路：配置在平台→锚点在头→字典在业务库→注入在 Worker→执行/脱敏/审计）与 **D.8 行级权限维度扩展设计**（`row_scope.type` 扩展点：`org_auto`=dept 维度实例化、`template` 已覆盖任意维度；维度注册表 `iqd_row_scope_dimension` 二期 P2 可选；扩展步骤模板 5 件事 + 门店示例；列级隔离预留位点）；§8 A1/A5 由「⏳ 待确认」改「✅ 业务已确认」；tasks.md T-W2-01 标注 A1 已确认、T-W2-02a 标注 type 扩展点 + 二期 P2 维度注册表、A5 相关标注 masking.py 仍为唯一出口 + 列 ACL 预留位点；**v1.7 A13 拍板 + 配置模型澄清落盘（2026-08-22，主理人记录）**：A13 三答已确认——**① 业务库部门编码与 mis_org 不统一主数据（暂时无关）→ 需要映射；② 业务库与 mis_platform 非同一实例 → 物化表（视图不可行）；③ 多数据源每库一张、集中定义从中心每日同步到各库（物化表 + 中心侧定时批同步）**；§4.2.2 D.6 深化——编码对齐决策 **X（映射内嵌字典表）** 定案（推荐理由/映射来源与维护/配置下拉数据源/T-W2-02a 工作量影响，见 D.6.3）、D.6.4 中心每日同步任务细化（归属 ai-platform 定时作业、每日全量 upsert 幂等、失败告警 + 降级 45204、目标库注册）、新增 **D.6.6 配置面 vs 数据面**（用户疑问「是否需逐库设置权限」的权威回答：权限配置平台统一一处、row_scope 模板化、mis_dept_scope 为同步数据非配置、表按数据源分组仅展示层事实）；§8 A13 由「⏳ 待确认」改「✅ 业务已确认」；tasks.md T-W0-01 探针 3e 更新（库边界已确认、剩余聚焦 DEPTID 编码体系盘点+映射可行性）、T-W2-02a 字典表子项改「物化表 + 中心每日同步」并新增同步任务/映射维护子项与配置界面验收；**v1.6 部门权限字典表方案落盘（2026-08-22，主理人记录）**：2a「直接 JOIN 平台内部 `sys_dept`」修订为「**JOIN/EXISTS 部门权限字典表 `mis_dept_scope`（表/视图）**」——同库/同实例走**视图**（实时零维护）、跨库/跨实例走**物化表+同步**（幂等）、多数据源**每库一张**、部门编码对齐与库边界列为 **A13 待业务/数据确认**（探针 3e 出前置证据）；新增 §4.2.2 D.6 mis_dept_scope 落地设计、§8 A13、tasks.md T-W0-01 探针 3d 实测对象更新为 mis_dept_scope 形态 + 新增 3e（库边界与编码对齐盘点）、T-W2-02a 新增字典表子项、T-W2-02b 黄金用例谓词更新；**v1.5 A12 拍板落盘（2026-08-22，主理人记录）**：A12 已由业务确认——**物化 `dept_path`，`PATH_PREFIX` 为唯一主路径，`CLOSURE_CTE` 不实现**（决策依据见 §8 A12 与 §4.2.2 C「策略表」）；§4.2.2 `resolve_inject_strategy` 策略精简为 **PATH_PREFIX（主）/ ENUM（降级 ≤500）/ FAIL_CLOSED（兜底）**、规模分层用例 11–15 同步更新、新增 **mis-org 物化 dept_path 落地设计小节（§4.2.2 D）**、`X-Mis-Dept-Scope` 头扩为携带锚点 `path`、tasks.md T-W0-01 探针 3b 降级为「仅记录不阻塞」+ 新增 3d（`dept_path LIKE` 实测）、T-W2-02a/b 同步；v1.4 曾修订规模策略（mis-org 部门树规模上万 → 头语义改「锚点 + 范围语义」`X-Mis-Dept-Scope`、新增规模分层策略层、新增待拍板 A12）；v1.3 曾修订 A11 行级数据范围确认本期、新增 §4.2.2 RLS 设计细节、`ScopeResolver.inject_row_scope` 展开、T-W2-02 拆分；v1.2 曾修订 MCP-first / 钉 wren-core 新线 `wren: v0.13.3` · 项目 `0.29.2` 2026-08-18、新增 §4.2.1 权限方案全景）｜日期：2026-08-22｜语言：中文
 > 图表：[class-diagram.mermaid](class-diagram.mermaid)、[sequence-diagram.mermaid](sequence-diagram.mermaid)｜部署速查：[deploy-iqd.md](deploy-iqd.md)
 > **v1.10 样本对方言转化 + 试运行增量修订（2026-08-22，架构师高见远记录）**：在 enhance 页「样本对」Tab 新增「选 DB 类型 + 写原生 SQL + 转化(wrensql) + 试运行 + 保存」能力；`IqdSqlPair` 增 `source_dialect`/`native_sql`/`wren_sql`（`sql_text` 改名 `wren_sql`）；新增 `POST /sql-pairs/translate`（后端 sqlglot 翻译）、`POST /sql-pairs/trial`（经 MCP `dry_run`/`run_sql` 在 WrenAI 引擎侧执行）；设计见 §4.2.3，待拍板见 A14，W0 探针新增 3f（目标方言确认）。
 
@@ -2300,6 +2300,27 @@ event: done          data: {}
 - **配置缓存（v1.9 修订：由「无缓存」改为「事件推送 + 缓存」）**：v1.8 原约定「范围与 ACL 裁定不加缓存，授权变更即时生效」。**v1.9 因 A1 改判（Worker 不直连 mis_platform 库）改为**：Worker 本地缓存配置（维度注册表/ACL/字典同步状态），**变更事件推送刷新（默认 ≤10s 生效）+ 每日定期全量兜底**；缓存不可得或 `config_stale=true` → **fail-closed 45204**（宁可拒不可漏，不出现「已撤权仍能问」窗口；见 D.7.3）。**若后续出现性能问题，缓存必须带 `subject_id` 维度失效通知，不得用固定 TTL。**
 - **时间**：所有时间戳 ISO 8601 UTC 存储（`TimestampMixin` 已带 `timezone=True`），前端本地化展示。
 
+### 7.10 `sys_api` / `sys_menu` ID 段位分配规约 + 冲突自检（**v1.12 新增正式约定，工程师必读**）
+
+> **由来**：本项目已**两次**发生「两个迁移争同一 `sys_api` id 段」导致后者被 `WHERE NOT EXISTS` **静默跳过、零报错** ⇒ 端点未登记 ⇒ `deny-unmapped` 下必然 **40300**：① agent-ops 域 `92158`（`V29` vs `V46`，先例修复 `V51`）；② iqd 域 `92586`（`V76` vs `V78`，修复 `V91`，即 **F-1**）。为避免第三次，固化为正式约定。
+
+**A. 段位分配（新增迁移必守）**
+1. **一段一文件**：新迁移申请 `sys_api` / `sys_menu_api` / `sys_menu` id 前，**先 grep 全仓**确认目标 id 段空闲（`grep -rhoE "\b92[0-9]{3}\b" backend/mis-migrator/src/main/resources/db/migration/*.sql | sort -u`）。
+2. **按域分段、连续取号、留间隙**：不得与他域共享同一 id（历史踩坑即跨文件重复取号）。
+3. **code 段同理**：`sys_api` 的业务 `code` 在 `module_id` 内唯一（`uk_api_module_code UNIQUE (module_id, code)`），新文件在模块内续号。
+
+**B. 冲突自检（提交前必跑，可 CI 化）**
+- 对**全量**已应用迁移做一次「表 × id」与「`(module_id, code)`」重复扫描；**对 `(http_method, path_pattern) WHERE type='api' AND status=1` 的部分唯一索引**同样扫描（`V8` 已建该索引，重复同样会静默跳过）。
+- 关键点：**只扫「已插入」的行会漏检**——被 `WHERE NOT EXISTS` 跳过的行根本不在库里。故自检必须**基于迁移源文件**（而非运行后的库），把「两个文件对同一 id 各写一行 INSERT」当作冲突告警（`V88` 的 `iqd_t05_seed_audit.py` 即此思路）。
+
+**C. 修复范式（发现冲突后）**
+- **绝不改历史迁移**：Flyway 校验已应用文件的 checksum，字符级改动 ⇒ `Validate failed: Migration checksum mismatch` ⇒ **整条迁移链阻塞**（比 40300 更严重）。
+- **新迁移补登**：用**空闲 id** 补插被跳过的那一行 + 菜单绑定（先例：`V51` 修 `V29`/`V46`；`V91` 修 `V76`/`V78`）。
+- **fail-loud 而非 fail-silent**：补登迁移**刻意不加** `EXISTS(sys_module)` 之类的守卫去「躲错」——模块缺失时让 FK 报错中止，**优于静默跳过**（静默跳过正是 F-1 的病根）。
+
+**D. 派工前置自检（每次派工必做）**
+- 凡涉及权限端点/菜单的派工，**先 grep `sys_api` / `sys_menu` / `sys_menu_api` 核实「真码是否已登记」**，再决定前端是否放行、后端 `@PreAuthorize` 用哪一码——本项在 T04 阶段靠此避免了 3 次「前端放行、后端 40300」的错配。**权限码不止一个族**：`iqd` 域实测 **12 个命名空间 / 25 个码**（`acl`/`catalog`/`config`/`dimension`/`enhance`/`mask`/`mcp`/`modeling`/`scope`/`selfheal`/`test`/`trace`），其中建模台直接触达 **7 个**（`modeling`/`catalog`/`enhance`/`mask`/`dimension`/`scope`/`mcp`）。
+
 ---
 
 ## 8. 待明确事项（需业务/架构拍板）
@@ -2480,3 +2501,93 @@ event: done          data: {}
 | **A-15** | 三栏可拖拽调宽是否本期实现 |
 
 > 逐条影响 + 建议默认 + 拍板人见 [`mis-iqd-modeling-system-design.md`](mis-iqd-modeling-system-design.md) §9。
+
+---
+
+## 11. 增量 v1.12 — 可视化建模台实施回写（2026-09-22）
+
+> 本节为**实施期发现的回写索引 + 关键决议固化**。§10 是 v1.11「规划增量」，本节是 v1.12「实施期修订 + 验收结论」，是**新的增量事实**。**细节一律引用 `mis-iqd-modeling-*` 增量文档与 QA 验收清单，不在此重复展开**；增量文档与本节冲突时，以本节固化 + 增量文档更新后的内容为准。**不变量一律沿用 v1.9/§10.3，不重做。**
+
+### 11.1 版本与章节纪律（本次回写如何定号）
+
+| 项 | 决定 | 理由 |
+|---|---|---|
+| `architecture.md` 版本 | **升 v1.12（基线 v1.11）** | v1.11 是「规划增量」，本次是「实施期修订 + 验收结论」，属**新的增量事实**；升版可让后续读者一眼区分「规划时写的」与「实施后归正的」 |
+| **v1.10 编号含义** | **一字不改** | line 6 的 v1.10 =「样本对方言转化 + 试运行增量」（2026-08-22），被 6 文档 / 40+ 处引用，改号将连锁破坏引用 |
+| **v1.11 编号含义** | **一字不改** | v1.11 =「可视化建模台规划增量」，历史含义保留 |
+| 建模台章节号 | **§10 不变**（本主文档实际只有 §0–§9 + §10 + §11） | 建模台在 §10；本次新增 **§11**，**不插入、不重排**既有章节 |
+| 迁移文件 | **`V76`/`V78`/`V81`/`V87`–`V91` 一字未改** | Flyway checksum 纪律；修复一律走**新迁移追加** |
+
+### 11.2 八处「设计稿 vs 代码现实」订正（**已分别回写至对应增量文档**）
+
+| # | 设计稿原写 | 代码现实（已核实） | 回写落点 |
+|---|---|---|---|
+| **1** | Python discovery 路径 `/internal/v1/iqd/discovery/**` | 实际 **`/api/v1/iqd/discovery/**`**（`/internal/v1/**` 是 **Java 侧**内部面约定；Python Worker 全部业务路由前缀 `/api/v1`，路由自带前缀 `/iqd/discovery` + `main.py` 以 `prefix="/api/v1"` 挂载） | `mis-iqd-modeling-system-design.md` §4.1 / §8.1 |
+| **2** | 施工单写 `npm install` | **必须 `pnpm add`**（本仓 `node_modules` 是 pnpm 布局 + `pnpm-lock.yaml`；`npm` 的 arborist 处理 `.pnpm/` 会报 `Cannot read properties of null`） | `mis-iqd-modeling-system-design.md` §7.1 / `mis-iqd-modeling-tasks.md` T01 |
+| **3** | `sys_menu` 落 1 条 | 实际需 **4 条**：**92600** 页面（`type=1`）+ **92631/92632/92633** 三个 **`type=3` 权限按钮**。否则 `sys_role_permission(perm_type='menu', target_id)` 无所指 ⇒ `iqd:modeling:*` 进不了 `auth-store.permissions` ⇒ `PermissionGate` **静默全拒** | `mis-iqd-modeling-system-design.md` §3.1 ①/§8.2、`mis-iqd-modeling-tasks.md` T01 |
+| **4** | 表发现走 `wren list-models` / `describe-model` **CLI 子命令** | 二者是 **`wren serve mcp` 暴露的 MCP 工具**（`TOOL_LIST_MODELS="list_models"` / `TOOL_DESCRIBE_MODEL="describe_model"`），实现走 **`IqdMcpClient`**；CLI 侧实际只有 `wren get mdl` / `wren context show`（`IqdCli` 已封装） | `mis-iqd-modeling-system-design.md` §4.1 / §5 类图注 |
+| **5** | Cube 的 `patch.model_ref`（§4.3 有该字段） | `iqd_catalog_item` **表里原本没有该列** → 已由 **V89** 补 `ALTER TABLE iqd_catalog_item ADD COLUMN IF NOT EXISTS model_ref VARCHAR(255)`（**可空、无回填**） | `mis-iqd-modeling-system-design.md` §4.3 + §11.3（V89 登记） |
+| **6** | 「模拟角色 WHERE 片段预览」接口（T-W2-02a 验收 5） | **从未落地为 API**（`simulate_role_code` 仅是 `POST /iqd/ask` 的字段，随 metadata 透传）⇒ 前端**降级为示意片段（恒标 `degraded`）** | `mis-iqd-modeling-system-design.md` §11.4 开放项 |
+| **7** | `GET /iqd/dictionaries` | **不存在**；实际只有 **`GET /api/v1/iqd/scope/dict-sync-status`**（内部面 `GET /internal/v1/iqd/get-dict-sync-status`） | `mis-iqd-modeling-system-design.md` §11.4 |
+| **8** | （文档未提）**F-1 预存缺陷** | `V76:32` 与 `V78:50` 争 `sys_api` id **92586**，V76 版本号更小先占位 ⇒ V78 的 `POST /api/v1/iqd/sql-pairs/translate` **登记与菜单绑定双双被 `WHERE NOT EXISTS` 静默跳过** ⇒ `deny-unmapped` 下必然 **40300**。已由 **`V91`** 用 sys_api **92703**（复用 code `00960011`）+ sys_menu_api **92704** → menu 92525 补登 | `mis-iqd-modeling-system-design.md` §11.3 教训节 + 本文 §7.10 |
+
+### 11.3 `V87`–`V91` 迁移集中登记（**新增，方便后人**）
+
+> 五个建模台相关迁移**只追加、不改历史**。ID 段全部经全仓 grep 核实空闲；范式见 §7.10。
+
+| 迁移 | 用途 | 主要 ID 段 | 关键约束 / 备注 |
+|---|---|---|---|
+| **V87** `iqd_modeling_seed` | 建模台主页菜单 + 3 权限按钮 + 12 端点 + 绑定 + 角色授权 | `sys_menu` **92600 + 92631–92633**；`sys_api` **92601–92612**；`sys_menu_api` **92613–92624**；`sys_role_permission` **92625–92627** | `sys_menu` **4 条**（1 页面 + 3 `type=3` 权限按钮，缺按钮 ⇒ `PermissionGate` 静默全拒）；code 段 0096002x–00960032 |
+| **V88** `iqd_modeling_seed_extra` | 补登 5 端点（`GET /connections` 等）+ 绑定 | `sys_api` **92640–92644**；`sys_menu_api` **92645–92649** | 因 V87 漏登 `GET /connections` ⇒ 阻塞 M-G1；**V87 一字不动**，只做增量补登 |
+| **V89** `iqd_modeling_model_ref_and_mcp_seed` | ① `iqd_catalog_item` **加 `model_ref` 列**；② MCP 相关端点/菜单补登 | `sys_menu` **92656**；`sys_api` **92650–92655**；`sys_menu_api` **92657–92662**；`sys_role_permission` **92663** | `model_ref VARCHAR(255)` **可空、无回填**（MDL 同步老 cube 继续走 `expression` 兜底）；**不改历史迁移** |
+| **V90** `iqd_modeling_cube_upsert_seed` | 登记 **`PUT /api/v1/iqd/catalog/cube`**（Cube 级 upsert，T04a）+ 绑定 | `sys_api` **92700**；`sys_menu_api` **92701** | 与 `POST /catalog/cube`（92606，create-only）**并列**，同挂菜单 92632（`iqd:modeling:edit`）；补 PRD MR-06「能建不能改」缺口；配套 `pruneOrphanChildren` 孤儿清理 |
+| **V91** `iqd_sql_pair_translate_api_fix` | **修 F-1**：补登被 V76/V78 id 冲突静默跳过的 `POST /api/v1/iqd/sql-pairs/translate` | `sys_api` **92703**（复用 code `00960011`）；`sys_menu_api` **92704** → menu **92525** | **复用 V78 原 code 保可追溯**；**刻意不加 `EXISTS(sys_module)` 守卫** —— 模块缺失时让 `fk_api_module` **报错中止（fail-loud）**，优于静默跳过（后者的病根即 F-1）；先例 `V51` |
+
+**教训（F-1 沉淀）**：`WHERE NOT EXISTS` 守卫 + 固定 ID 段 = **两个迁移争同一编号段时后者被静默丢弃、零报错**。正确做法：**新迁移补登，绝不改历史迁移**（改已应用迁移 ⇒ checksum mismatch ⇒ 整条迁移链阻塞，比 40300 更严重）。**已由 §7.10 固化为正式约定。**
+
+### 11.4 实施小结
+
+> 交付规模与门禁数据为**实测**；`已证 / 未证` 分界**照实写**（未真机证明的**一律不记通过**）。
+
+**A. 交付规模（实测）**
+- **18 个 commit**（`git log 134a5c7^..5b054fd` = 18，`134a5c7` 规划 → `5b054fd` V91 修 F-1；含 1 个 a2ui 类型修正、2 个 chore；**注：brief 原述「20 个」与实测不符，以实测 18 为准**）。
+- 代码分布在：前端 `frontend/mis-admin-web/src/features/agent/iqd/**`、Java `backend/mis-iqd` + `backend/mis-admin-bff`、Python `agent/ai-platform/backend/src/agent/mis_iqd` + `src/api/routes/iqd_discovery.py`、迁移 `backend/mis-migrator/.../db/migration/V87`–`V91`。
+- **门禁（全绿）**：前端 `typecheck` **0 error** / `vitest` **34 files 429 passed** / `npm run build` 成功；Java mis-iqd **69 passed**；Python `-k iqd` **110 passed**。
+- 三份新文档（已入库）：`mis-iqd-modeling-verify-checklist.md`（QA 验收结论）、`mis-iqd-modeling-runbook.md`（运维步骤）、`frontend/mis-admin-web/src/features/agent/iqd/README.md`（组件索引）。
+
+**B. 已证（本沙箱可复核，逐条带证据）**
+1. **跨阶段不变项 6/6**：① 四处同改齐（导航 / `PAGE_MAP` / router / V87 种子）；② icon 无静默回退；③ **权限码前后端 23 对 23 全覆盖**（前端用码 ⊆ 后端登记，无「必然 40300」）；④ seed ID 段位无冲突（V87–V90 目标段）；⑤ 命名边界（平台域 `iqd` / 外部 `wren`）；⑥ **7 条新写路径全 bump `edit_revision`**。
+2. **构建预算达标**：CodeMirror 最大懒加载块 **65.8KB gzip ≪ 300KB**。
+3. **三条门禁全绿**（见 A）。
+
+**C. 未证（需真机，不得记「通过」）**
+1. **M-G1 ~ M-G6 六条黄金用例全部未真机执行**（环境无 docker / 无 wren CLI / PG 非业务库）。
+2. **M-G1 另含红线**：依赖**模型物化**，**未真机证明「问数可答」前不得判通过**。
+3. P-1/P-2/P-4/P-5/P-6 性能项未验证（需浏览器 / WrenAI）。
+
+**D. 后续开放项清单**
+| # | 开放项 | 说明 / 归属 |
+|---|---|---|
+| 1 | **W0 真机实测** | 校准真实 WrenAI MDL 的 model schema（`refSql` vs 基线 `source`、`columns` 必填项），供模型物化使用 |
+| 2 | **全新 model（from-table 路径）物化** | `build_mdl_from_catalog` 已补 `_materialize_missing_nodes()` + 未落 MDL 的编辑项转**可见告警**；但**全新 model 仍刻意不物化**（未经 W0 校准，盲写可能产出非法 MDL 导致整条 build 崩）→ 需 **W0 实测校准 + M3.1** |
+| 3 | **模拟角色 WHERE 片段预览端点** | 从未落地为 API；前端暂以示意片段（恒标 `degraded`）兜底 |
+| 4 | **enhance 页权限闸门** | 前端页面级闸门待补（当前靠后端 `iqd:enhance:*` 兜底） |
+| 5 | **F-3 观察项** | 前端有、后端未直用/反向不齐：`iqd:test:use`、`iqd:acl:save`（疑页面级 vs 动作级授权差异，非 40300 风险） |
+| 6 | **`@EnableMethodSecurity` 缺失** | 方法级安全注解未全局开启（当前 `@PreAuthorize` 生效依赖既有配置），建议核对 |
+
+**E. 计划外新增（v1.11 施工单未列）**
+- **T03e**（未落入 MDL 的编辑项转可见告警）、**T04a**（Cube 级 upsert + V90）、**T04b-补**（MR-13 走 `catalog/node` 扩展脱敏字段）、**V91**（F-1 修复）。
+- **A-02 裁决落地**：`auto-layout` 端点返回 **HTTP 501 + 业务码 50101**（后端不做 dagre；前端 `@dagrejs/dagre` 算坐标 → PUT 落库）——协议层区分「**按设计不做**」（501/50101）与「**还没做**」（503/50300）。
+- **`enabled is not False` 脆弱点（已修）**：`service.py` 5 处依赖 wire 为 bool；`0 is False == False` ⇒ int `0` 会**静默漏过滤**；已统一走新的 `is_enabled()` 纯函数。
+- **A-04 已遵守**：样本对 SQL 升级 CodeMirror 6 时，**v1.10 的「DB类型下拉 → 转化 → 试运行 → 保存」三步交互完全未变**（仅换输入控件）。
+- **A-06 premise 过时**：稿称「不新增列，`content` 是 JSON 承载」，但 `iqd_knowledge.related_item_keys` **列早已存在**（`V71:218 JSONB`）→ 实际是「**给已存在的列加应用层校验**」。
+
+### 11.5 文档索引更新
+
+| 文档 | 角色 |
+|---|---|
+| [`mis-iqd-modeling-system-design.md`](mis-iqd-modeling-system-design.md) | 建模台系统设计；§4.1/§4.3/§4.5/§7.1/§8.2 已按本文 §11.2 订正，并新增 **§11 实施期事实**与 **§12 实施小结** |
+| [`mis-iqd-modeling-tasks.md`](mis-iqd-modeling-tasks.md) | 施工清单；T01–T05 已标注**完成状态 + 实际产出**，并记录计划外新增 |
+| [`mis-iqd-modeling-verify-checklist.md`](mis-iqd-modeling-verify-checklist.md) | QA 验收结论（已证 / 未证 / 已知问题 F-1~F-3）——**实施小结的「已证/未证」以其为准** |
+| [`mis-iqd-modeling-runbook.md`](mis-iqd-modeling-runbook.md) | 运维 runbook（启停 / 重建 / 重导入 / 索引 / 清理） |
+| `frontend/mis-admin-web/src/features/agent/iqd/README.md` | 前端组件索引 + 状态机图 |
