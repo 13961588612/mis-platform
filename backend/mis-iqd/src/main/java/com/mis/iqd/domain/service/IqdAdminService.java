@@ -201,7 +201,7 @@ public class IqdAdminService {
     }
 
     /**
-     * 连通性自检：GET {baseUrl}/health（短超时）。
+     * 连通性自检（主连接）：GET {baseUrl}/health（短超时）。
      *
      * @return 自检结果（status/latency_ms/last_health_at）
      */
@@ -211,7 +211,125 @@ public class IqdAdminService {
         if (existing.isEmpty()) {
             throw new BusinessException(ResultCode.NOT_FOUND, "尚未配置问数连接");
         }
-        IqdConnection entity = existing.get();
+        return probeHealth(existing.get());
+    }
+
+    // ---------------------------------------------------------------- v1.11 建模台：多连接（MR-01）
+
+    /**
+     * 全部连接清单（v1.11 建模台连接向导；含 MCP 运行态字段供状态卡渲染）。
+     *
+     * <p>与 {@link #getConnection()} 的区别：后者只回主连接；本方法回全量（按 id 升序，
+     * 顺序稳定便于前端列表 diff）。凭证恒 {@code ******}（复用 {@link #toVO}）。
+     *
+     * @return 连接视图列表（无连接返回空列表）
+     */
+    @Transactional(readOnly = true)
+    public List<IqdConnectionVO> listConnections() {
+        List<IqdConnection> all = connectionRepository.findAll();
+        all.sort(java.util.Comparator.comparing(IqdConnection::getId,
+                java.util.Comparator.nullsLast(java.util.Comparator.naturalOrder())));
+        List<IqdConnectionVO> out = new ArrayList<>(all.size());
+        for (IqdConnection c : all) {
+            out.add(toVO(c));
+        }
+        return out;
+    }
+
+    /**
+     * 新建连接（v1.11 建模台；多连接，与 {@link #saveConnection} 的单条 upsert 不同）。
+     *
+     * <p>语义差异：{@code saveConnection} 是「主连接 upsert」（一期单连接形态，同 id 覆盖）；
+     * 本方法是「追加一条新连接」（多连接列表），故必须做**同名冲突**校验 ——
+     * {@code iqd_connection} 上 {@code uk_iqd_connection_name} 唯一，先查再插给出可读的
+     * 40900 而非让数据库抛约束异常（后者会被降级成 50000 系统错误）。
+     *
+     * @param dto 连接保存请求（凭证非空才写入引用；GET 恒回 ******）
+     * @return 新建后的连接视图
+     */
+    @Transactional
+    public IqdConnectionVO createConnection(IqdConnectionSaveRequest dto) {
+        if (dto == null || dto.getName() == null || dto.getName().isBlank()) {
+            throw new BusinessException(42200, "连接名称不能为空", null);
+        }
+        String name = dto.getName().trim();
+        if (connectionRepository.existsByName(name)) {
+            Map<String, Object> data = new LinkedHashMap<>();
+            data.put("name", name);
+            throw new BusinessException(40900, "连接名称已存在: " + name, data);
+        }
+        IqdConnection entity = new IqdConnection();
+        entity.setId(IdGenerator.nextId());
+        entity.setCreatedAt(Instant.now());
+        entity.setName(name);
+        entity.setBaseUrl(dto.getBaseUrl());
+        if (dto.getAuthType() != null && !dto.getAuthType().isBlank()) {
+            entity.setAuthType(dto.getAuthType());
+        }
+        if (dto.getSecretRef() != null && !dto.getSecretRef().isBlank() && !dto.isSecretPlaceholder()) {
+            entity.setSecretRef(dto.getSecretRef().trim());
+        }
+        entity.setProjectId(dto.getProjectId());
+        entity.setDefaultConnector(dto.getDefaultConnector());
+        if (dto.getTimeoutSeconds() != null) {
+            entity.setTimeoutSeconds(dto.getTimeoutSeconds());
+        }
+        if (dto.getLanguage() != null && !dto.getLanguage().isBlank()) {
+            entity.setLanguage(dto.getLanguage());
+        }
+        entity.setEnabled(Boolean.TRUE.equals(dto.getEnabled()) ? 1 : 0);
+        // 新建连接默认开启写回闸门（U7/Q4），显式 false 才关
+        entity.setMdlWritebackEnabled(
+                dto.getMdlWritebackEnabled() == null || Boolean.TRUE.equals(dto.getMdlWritebackEnabled()));
+        entity.setStatus("inactive");
+        entity.setMcpStatus("stopped");
+        entity.setUpdatedAt(Instant.now());
+        connectionRepository.save(entity);
+        changeEventPublisher.publish("iqd.config.changed", "connection=" + entity.getId());
+        log.info("IQD connection created id={} name={}", entity.getId(), entity.getName());
+        return toVO(entity);
+    }
+
+    /**
+     * 连通性自检（按连接 id；v1.11 建模台连接向导「连通测试」步骤）。
+     *
+     * <p>出参按 system-design §3.3：{@code {ok, latency_ms, version}}（另附
+     * {@code status/message/last_health_at} 便于前端状态卡直接渲染，不额外取数）。
+     * 连接不可达时**不抛 50201**：连通测试的「失败」是正常业务结果（{@code ok=false}），
+     * 抛异常会让前端把它当接口故障而非「这个连接连不上」。
+     *
+     * @param connectionId 连接 id
+     * @return 自检结果
+     */
+    @Transactional
+    public Map<String, Object> testConnection(Long connectionId) {
+        if (connectionId == null) {
+            throw new BusinessException(42200, "connectionId 不能为空", null);
+        }
+        IqdConnection entity = connectionRepository.findById(connectionId)
+                .orElseThrow(() -> new BusinessException(ResultCode.NOT_FOUND,
+                        "问数连接不存在: " + connectionId));
+        Map<String, Object> probe = probeHealth(entity);
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("ok", "active".equals(entity.getStatus()));
+        out.put("latency_ms", probe.get("latency_ms"));
+        out.put("version", null);
+        out.put("status", entity.getStatus());
+        out.put("message", entity.getLastHealthMsg());
+        out.put("last_health_at", entity.getLastHealthAt());
+        return out;
+    }
+
+    /**
+     * 连通性探测公共实现（主连接 / 按 id 两条入口共用，避免两处漂移）。
+     *
+     * <p>探测目标 {@code GET {baseUrl}/health}（短超时 3s/5s）；结果回写
+     * {@code status} / {@code last_health_at} / {@code last_health_msg}。
+     *
+     * @param entity 连接实体（就地更新并保存）
+     * @return {@code {status, message, latency_ms, last_health_at}}
+     */
+    private Map<String, Object> probeHealth(IqdConnection entity) {
         String baseUrl = entity.getBaseUrl();
         if (baseUrl == null || baseUrl.isBlank()) {
             entity.setStatus("inactive");
@@ -219,7 +337,12 @@ public class IqdAdminService {
             entity.setLastHealthMsg("未配置 WrenAI 地址，请先保存连接配置");
             entity.setUpdatedAt(Instant.now());
             connectionRepository.save(entity);
-            return Map.of("status", "inactive", "message", entity.getLastHealthMsg());
+            Map<String, Object> r = new LinkedHashMap<>();
+            r.put("status", "inactive");
+            r.put("message", entity.getLastHealthMsg());
+            r.put("latency_ms", 0L);
+            r.put("last_health_at", entity.getLastHealthAt());
+            return r;
         }
 
         long start = System.currentTimeMillis();

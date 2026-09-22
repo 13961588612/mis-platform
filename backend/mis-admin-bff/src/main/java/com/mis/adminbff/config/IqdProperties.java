@@ -69,6 +69,24 @@ public class IqdProperties {
     /** 方案 A 多连接：WrenAI MCP 进程管理功能权限码（POST/GET /api/v1/iqd/mcp/*）。 */
     private String mcpManagerPermission = "iqd:mcp:manage";
 
+    // ---------------------------------------------------------------- v1.11 可视化建模台
+
+    /**
+     * 建模台权限码（V87__iqd_modeling_seed.sql 种子，MR-S3；
+     * 端点契约见 system-design §3.3 / §4.3）：
+     * <ul>
+     *   <li>{@code view}：画布只读 / 列表 / 详情（无 → 页面 40300）</li>
+     *   <li>{@code edit}：画布编辑 / 新建模型·关系·Cube / 计算列 / 字段直编（8 个建模台端点全用它）</li>
+     *   <li>{@code publish}：触发构建 / 强制重建 / 重新索引 / 模型校验（T03/T04 消费）</li>
+     * </ul>
+     *
+     * <p>三者与 mis-iqd {@code @PreAuthorize} 及前端 {@code IQD_MODELING_PERMISSIONS}
+     * 必须逐字一致（跨三端契约）。
+     */
+    private String modelingViewPermission = "iqd:modeling:view";
+    private String modelingEditPermission = "iqd:modeling:edit";
+    private String modelingPublishPermission = "iqd:modeling:publish";
+
     /** Worker 侧 mis-iqd Agent 的 agentId（ai-platform Agent Core 注册名）。 */
     private String agentId = "mis-iqd";
 
@@ -295,6 +313,30 @@ public class IqdProperties {
 
     public void setMcpManagerPermission(String mcpManagerPermission) {
         this.mcpManagerPermission = mcpManagerPermission;
+    }
+
+    public String getModelingViewPermission() {
+        return modelingViewPermission;
+    }
+
+    public void setModelingViewPermission(String modelingViewPermission) {
+        this.modelingViewPermission = modelingViewPermission;
+    }
+
+    public String getModelingEditPermission() {
+        return modelingEditPermission;
+    }
+
+    public void setModelingEditPermission(String modelingEditPermission) {
+        this.modelingEditPermission = modelingEditPermission;
+    }
+
+    public String getModelingPublishPermission() {
+        return modelingPublishPermission;
+    }
+
+    public void setModelingPublishPermission(String modelingPublishPermission) {
+        this.modelingPublishPermission = modelingPublishPermission;
     }
 
     public String getAgentId() {

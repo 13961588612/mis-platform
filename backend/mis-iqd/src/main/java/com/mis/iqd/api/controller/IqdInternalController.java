@@ -49,14 +49,17 @@ public class IqdInternalController {
     private final IqdConnectionRepository connectionRepository;
     private final IqdAdminService adminService;
     private final IqdScopeSyncJobService scopeSyncJobService;
+    private final com.mis.iqd.domain.service.IqdCatalogNodeService catalogNodeService;
 
     public IqdInternalController(
             IqdConnectionRepository connectionRepository,
             IqdAdminService adminService,
-            IqdScopeSyncJobService scopeSyncJobService) {
+            IqdScopeSyncJobService scopeSyncJobService,
+            com.mis.iqd.domain.service.IqdCatalogNodeService catalogNodeService) {
         this.connectionRepository = connectionRepository;
         this.adminService = adminService;
         this.scopeSyncJobService = scopeSyncJobService;
+        this.catalogNodeService = catalogNodeService;
     }
 
     /**
@@ -347,9 +350,46 @@ public class IqdInternalController {
         return Result.ok(body);
     }
 
+    /**
+     * 由物理表生成模型（**内部面**：ai-platform Worker 表发现导入回调；v1.11 MR-02 / §4.1 a 点）。
+     *
+     * <p>为什么走内部面而非管理面：Worker 在 {@code importTables} 里对每张勾选的表调用本端点
+     * （设计 §6.1 时序「AIP->>MIS: POST …/catalog/model/from-table × N」），调用方是**服务**
+     * 而非浏览器 —— 无 MIS JWT，故与既有 {@code /internal/v1/iqd/**} 同口径（Worker 直调，
+     * 不登记 sys_api，见 V72 说明）。业务逻辑完全复用
+     * {@link com.mis.iqd.domain.service.IqdCatalogNodeService#createModelFromTable}，
+     * 本端点只做 wire 取值与转发（**不重复实现**幂等/并发/落库）。
+     *
+     * <p>注意：内部面**不写 sys_api**，故此处不加 {@code @PreAuthorize}（无 JWT 上下文）；
+     * 权限边界由 BFF 侧 {@code iqd:modeling:edit} + 网络隔离（仅内网可达）共同保证。
+     *
+     * @param body {@code {connection_id, source_table:{schema,name,columns?}, model_item_key,
+     *             base_revision, idempotency_key, ref_sql?, in_scope?}}
+     * @return {@code {edit_revision, edit_status, item_key, column_mapping, table_key, wren_ref_id}}
+     */
+    @PostMapping("/catalog/model/from-table")
+    public Result<Map<String, Object>> createModelFromTable(@RequestBody Map<String, Object> body) {
+        Long connectionId = toLong(body.get("connection_id"));
+        @SuppressWarnings("unchecked")
+        Map<String, Object> sourceTable = body.get("source_table") instanceof Map<?, ?> m
+                ? (Map<String, Object>) m
+                : null;
+        if (sourceTable != null && sourceTable.get("ref_sql") == null && body.get("ref_sql") != null) {
+            sourceTable.put("ref_sql", body.get("ref_sql"));
+        }
+        Map<String, Object> options = new LinkedHashMap<>();
+        options.put("in_scope", body.get("in_scope"));
+        return Result.ok(catalogNodeService.createModelFromTable(
+                connectionId,
+                sourceTable,
+                str(body.get("model_item_key")),
+                toLong(body.get("base_revision")),
+                str(body.get("idempotency_key")),
+                options));
+    }
+
     /** 取主连接 id（优先 name='default' / 第一条 enabled）。 */
-    private Long resolvePrimaryConnectionId() {
-        return connectionRepository.findByName("default")
+    private Long resolvePrimaryConnectionId() {        return connectionRepository.findByName("default")
                 .map(IqdConnection::getId)
                 .orElseGet(() -> {
                     List<IqdConnection> enabled = connectionRepository.findByEnabledOrderByIdAsc(1);

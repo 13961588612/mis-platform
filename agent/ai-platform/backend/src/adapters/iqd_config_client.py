@@ -62,6 +62,9 @@ REPORT_MCP_STATUS_PATH = "/internal/v1/iqd/mcp-status"
 REPORT_MCP_DEPLOY_PATH = "/internal/v1/iqd/mcp-deploy"
 # —— 方案 A 多连接：取连接 secret_ref（D6 凭证解析前置；内部端点仅回引用不回明文）——
 GET_CONNECTION_CREDENTIALS_PATH = "/internal/v1/iqd/connection-credentials"
+# —— v1.11 建模台 a 点：表发现导入 → 由物理表生成模型（Worker → mis-iqd 内部面，
+#    §6.1 时序「AIP->>MIS: POST …/catalog/model/from-table × N」）——
+CREATE_MODEL_FROM_TABLE_PATH = "/internal/v1/iqd/catalog/model/from-table"
 
 #: 配置缓存桶名（与 IqdConfigClient 分桶缓存一一对应）
 CACHE_BUCKET_CONNECTIONS = "connections"
@@ -340,9 +343,37 @@ class IqdConfigClient:
         # 原样透传 mis-iqd 响应（含 current_edit_revision / built_edit_revision）。
         return data if isinstance(data, dict) else {}
 
+    async def create_model_from_table(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """由物理表生成模型（v1.11 建模台 a 点；Worker → mis-iqd 内部面）。
+
+        表发现导入（:meth:`IqdDiscoveryService.import_tables`）对每张勾选的表调用本方法，
+        由 mis-iqd ``IqdCatalogNodeService.createModelFromTable`` 统一落
+        ``iqd_catalog_item``（``kind=table/model/column``，``source='modeling'``）、
+        bump ``current_edit_revision``、写幂等键并发布 ``iqd.catalog.changed``。
+
+        **Worker 不直连业务库**：本方法只提交「表 + 列元数据」，落库与权限边界全在 mis-iqd。
+
+        Args:
+            payload: ``{connection_id, source_table: {schema, name, columns?: [...]},
+                      model_item_key, base_revision, idempotency_key, ref_sql?, in_scope?}``。
+                其中 ``source_table.columns`` 为 Worker 经 ``describe_model`` 取得的列定义，
+                供 mis-iqd 免去「先同步一次 MDL 才能导入」的硬依赖。
+
+        Returns:
+            mis-iqd 返回的 data：``{edit_revision, edit_status, item_key, column_mapping,
+            table_key, wren_ref_id}``。
+
+        Raises:
+            IqdConfigClientError: 网络失败或 mis-iqd 返回 ``code != 0``
+                （业务码 40900/42200/40901 由调用方按需转译）。
+        """
+        ctx = IqdCallContext()
+        data = await self._request("POST", CREATE_MODEL_FROM_TABLE_PATH, ctx, payload=payload)
+        logger.info("IQD create_model_from_table sent", trace_id=ctx.trace_id)
+        return data if isinstance(data, dict) else {}
+
     async def backfill_catalog_sync(self, payload: dict[str, Any]) -> dict[str, Any]:
         """批量回填 catalog 编辑盖章（P0-8 / U8 断点续盖）。
-
         ai-platform 在 ``build_mdl_from_catalog`` build 成功后组装报文体，把本次纳入的
         已编辑节点（``edit_revision ≤ built``）统一置 ``wren_ref_id``，并推进连接级
         ``built_edit_revision``。

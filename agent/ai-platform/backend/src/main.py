@@ -517,6 +517,7 @@ def create_app() -> FastAPI:
     from src.api.routes.channels import router as channels_router
     from src.api.routes.files import router as files_router
     from src.api.routes.iqd_enhance import router as iqd_enhance_router
+    from src.api.routes.iqd_discovery import router as iqd_discovery_router
     from src.api.routes.iqd_selfheal import router as iqd_selfheal_router
     from src.api.routes.iqd_mcp_manager import router as iqd_mcp_manager_router
     from src.api.routes.mcp import router as mcp_router
@@ -542,6 +543,9 @@ def create_app() -> FastAPI:
     app.include_router(iqd_enhance_router, prefix="/api/v1")
     # 运维自愈三按钮（BFF → AiPlatformClient → 本路由 → IqdAskService）
     app.include_router(iqd_selfheal_router, prefix="/api/v1")
+    # v1.11 建模台表发现通道（BFF → AiPlatformDiscoveryClient → 本路由 → IqdDiscoveryService）；
+    # 路由自带前缀 /iqd/discovery，挂载后为 /api/v1/iqd/discovery/**
+    app.include_router(iqd_discovery_router, prefix="/api/v1")
     # 方案 A 多连接：WrenAI MCP 连接级生命周期管理（BFF → AiPlatformClient → 本路由）
     app.include_router(iqd_mcp_manager_router, prefix="/api/v1")
 
