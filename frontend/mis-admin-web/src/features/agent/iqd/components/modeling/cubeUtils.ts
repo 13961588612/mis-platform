@@ -215,6 +215,38 @@ export function toDimensions(rows: DimensionRow[]): Dimension[] {
 }
 
 /**
+ * Cube 草稿 → 提交 patch（T04b；新建 `POST` 与更新 `PUT` 共用）。
+ *
+ * <h2>⚠️ 为什么必须抽成函数（而不是在提交处内联手写）</h2>
+ * `PUT /catalog/cube` 是**全量替换**语义：服务端按 `item_key` 与传入集合求差，
+ * **本次未出现的既有子节点会被物理删除**（孤儿清理）。因此提交 patch **永远**要带上
+ * 完整的 `measures` / `dimensions` 列表 —— 一旦某人「优化」成「只传变更项」或在某条路径上
+ * 漏传，就会**静默清空**用户的度量/维度（且服务端返回成功）。抽成唯一的
+ * {@link buildCubePatch} 把这条约束收敛到一个可单测的点。
+ *
+ * <p>`measures` / `dimensions` 为**空数组**时也会显式传出（= 目标态为空，符合 PUT 语义），
+ * 而不是省略字段 —— 省略同样会清空，且更难排查。
+ *
+ * @param draft Cube 草稿（含 UI 态行）
+ * @returns wire patch（`{display_name, model_ref, measures[], dimensions[]}`；三键恒存在）
+ */
+export function buildCubePatch(draft: CubeDraftValues): {
+  display_name: string;
+  model_ref: string;
+  measures: Measure[];
+  dimensions: Dimension[];
+} {
+  return {
+    display_name: draft.displayName.trim(),
+    // ★ 挂靠真值：传**全键**（后端也会归一，但全键最不容易出歧义）
+    model_ref: draft.modelRef,
+    // ★ 全量替换：始终带完整列表（空也带），防孤儿清理误删（见函数头）
+    measures: toMeasures(draft.measures),
+    dimensions: toDimensions(draft.dimensions),
+  };
+}
+
+/**
  * 从 catalog 回读 cube 的 measures / dimensions（T03a 落库形态：**子节点**）。
  *
  * <p>测度取 `expression` + `data_type`(format)；维度取 `expression`(ref_model_field)。

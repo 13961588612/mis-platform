@@ -14,6 +14,7 @@ import { describe, expect, it } from 'vitest';
 import type { IqdCatalogItem } from '@/lib/api/iqd';
 import {
   buildCubeItemKey,
+  buildCubePatch,
   cubeNameOf,
   describeCubeError,
   dimensionItemKey,
@@ -284,5 +285,45 @@ describe('describeCubeError（业务码 → 人话，必须读 data）', () => {
   it('无业务码（网络/未知）→ 原样 message；有码但无明细 → 带码 + message', () => {
     expect(describeCubeError(null, null, '网络错误')).toBe('网络错误');
     expect(describeCubeError(50000, null, '系统错误')).toBe('[50000] 系统错误');
+  });
+});
+
+describe('buildCubePatch（T04b：PUT 全量替换语义的防误清空守卫）', () => {
+  const draft = (): CubeDraftValues => ({
+    displayName: '  销售额 ',
+    modelRef: 'mdl:model:orders',
+    measures: [{ rowId: 'r1', name: ' total ', expression: ' sum(orders.amount) ', format: '' }],
+    dimensions: [{ rowId: 'r2', name: 'store', refModelField: ' orders.store_id ' }],
+  });
+
+  it('★ 恒带完整 measures/dimensions（含空列表）—— 否则 PUT 会误清空既有子节点', () => {
+    const patch = buildCubePatch(draft());
+    expect(Array.isArray(patch.measures)).toBe(true);
+    expect(Array.isArray(patch.dimensions)).toBe(true);
+    expect(patch.measures).toHaveLength(1);
+    expect(patch.dimensions).toHaveLength(1);
+
+    // 目标态为空也必须显式传出（= 清空该类子节点，符合 PUT 语义；省略字段更难排查）
+    const empty = buildCubePatch({ ...draft(), measures: [], dimensions: [] });
+    expect(empty.measures).toEqual([]);
+    expect(empty.dimensions).toEqual([]);
+  });
+
+  it('剥掉 UI 态 rowId；display_name / model_ref 归一（trim）', () => {
+    const patch = buildCubePatch(draft());
+    expect(patch.display_name).toBe('销售额');
+    expect(patch.model_ref).toBe('mdl:model:orders');
+    expect(patch.measures[0]).toEqual({ name: 'total', expression: 'sum(orders.amount)' });
+    expect(patch.dimensions[0]).toEqual({ name: 'store', ref_model_field: 'orders.store_id' });
+    // rowId 绝不能泄漏到 wire
+    expect('rowId' in (patch.measures[0] as unknown as Record<string, unknown>)).toBe(false);
+  });
+
+  it('format 空串不落 wire（与 toMeasures 同口径）；有值时保留', () => {
+    const withFormat = buildCubePatch({
+      ...draft(),
+      measures: [{ rowId: 'r', name: 'm', expression: 'x', format: ' currency ' }],
+    });
+    expect(withFormat.measures[0].format).toBe('currency');
   });
 });

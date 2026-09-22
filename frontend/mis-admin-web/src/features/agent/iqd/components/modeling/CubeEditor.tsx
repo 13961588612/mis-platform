@@ -6,20 +6,22 @@
  * **不塞进画布**（画布只管 ER 视图与连线；见 T03b 报告「给 T03c 的接口备注 8」）。
  * 本组件负责：挂靠模型选择、Cube 名称、measures/dimensions 编辑、依赖提示区、保存与错误分流。
  *
- * <h2>⚠️ 本批只支持「新建」；既有 Cube 为**只读查看**（重要，勿误当缺陷）</h2>
- * 后端能力边界（T03a 实测）：
+ * <h2>新建 = POST / 既有 = PUT（T04b 已放开既有 Cube 编辑）</h2>
+ * 后端能力边界（T03a 实测 + T04a 补齐）：
  * <ul>
  *   <li>`POST /catalog/cube` 是 **create-only 且双幂等**：同 `item_key` 已存在时**直接返回首次结果、
- *       不应用新字段** —— 于是「编辑既有 Cube 后保存」会变成**提示成功但没改**的静默缺陷；</li>
+ *       不应用新字段** —— 故**新建**走它；</li>
+ *   <li>`PUT /catalog/cube`（**T04a 新增**，{@link upsertCube}）语义明确的「更新既有 Cube」
+ *       （自身字段 + measures/dimensions 子节点增删改 + 孤儿清理）—— 故**既有 Cube 编辑**走它。</li>
  *   <li>`PUT /catalog/node` 只能改**单个节点自身**的 display_name/description/expression，
  *       **无法增删 cube 的 measures/dimensions 子节点**；</li>
  *   <li>`POST /catalog/batch`（saveCatalogBatch）走的是「MDL/物料镜像」语义：**不写
  *       `edit_revision`**，而派生用的 `findEditedItems` 只取 `edit_revision IS NOT NULL`
  *       → 用它写子节点会让 Cube **永远进不了 build**（比不支持编辑更糟）。</li>
  * </ul>
- * 故本批：**新建 = 全功能**（M-G2 主路径）；**既有 Cube = 只读查看**（展示挂靠/度量/维度/子节点键/依赖方），
- * 并给出明确文案与 `TODO(T04)`。更新路径需后端补一个 cube 级 upsert（或让 `createCube` 在
- * 同 `item_key` 时改为 upsert 子节点 + 删除孤儿）。
+ * 故本批：**新建 = POST**（M-G2 主路径）；**既有 Cube = PUT**（T04b 兑现 T04a 的成果）。
+ * ⚠️ `PUT` 是**全量替换**语义 → 提交 patch 由 {@link buildCubePatch} 统一构造，
+ * **永远带完整的 measures/dimensions 列表**（漏传会误清空既有子节点，见 `cubeUtils` 函数头）。
  *
  * <h2>复用（见 T03b 报告「给 T03c 的接口备注」）</h2>
  * <ul>
@@ -62,15 +64,17 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import type { IqdCatalogItem } from '@/lib/api/iqd';
-import { createCube, errorCode, errorData, listDependencies } from '../../api/iqd-modeling';
+import { createCube, errorCode, errorData, listDependencies, upsertCube } from '../../api/iqd-modeling';
 import { useDirtyState } from '../../hooks/useDirtyState';
 import { useCatalogNodes } from '../../hooks/useCatalogNodes';
 import { useSyncStatus } from '../shared/useSyncStatus';
+import { IQD_MODELING_PERMISSIONS, useIqdModelingPermission } from '../shared/usePermission';
 import { iqdKeys } from '../../queries/iqd-keys';
 import { useModelingStore } from '../../store/modeling-store';
 import { MeasureDimensionList } from './MeasureDimensionList';
 import {
   buildCubeItemKey,
+  buildCubePatch,
   cubeNameOf,
   describeCubeError,
   dimensionItemKey,
@@ -81,8 +85,6 @@ import {
   parseCubeChildren,
   toDimensionRows,
   toMeasureRows,
-  toDimensions,
-  toMeasures,
   validateCubeDraft,
   type CubeDraftValues,
 } from './cubeUtils';
@@ -136,13 +138,17 @@ function CubeForm({
   const { catalog, nodes, isLoading } = useCatalogNodes(connectionId);
   const sync = useSyncStatus(connectionId);
   const clearDirty = useModelingStore((state) => state.clearDirty);
+  /** 保存权限（T04b）：`POST/PUT /catalog/cube` 均绑 `iqd:modeling:edit`（V87:92618 / V90:92700）。 */
+  const { hasPermission } = useIqdModelingPermission();
+  const canEdit = hasPermission(IQD_MODELING_PERMISSIONS.edit);
 
-  /** 只读 = 既有 Cube（后端无更新路径，见模块头）。
+  /**
+   * 是否为「编辑既有 Cube」。
    *
-   *  TODO(T04)：后端补「cube 级 upsert（含子节点增删 + 孤儿清理）」后，把这里改成
-   *  `readOnly = false` 并复用同一草稿/幂等/错误分流链路即可（表单本身已支持编辑，
-   * 只是当前不该发写请求）。 */
-  const readOnly = cube != null;
+   * <p>T04b：`PUT /catalog/cube` 由 T04a 补齐后，既有 Cube **可编辑**（保存走 {@link upsertCube}）。
+   * 保留此布尔只用于**文案/提交分支**（新建走 POST，既有走 PUT），**不再表示只读**。
+   */
+  const isExisting = cube != null;
 
   /** 挂靠模型选项（字段取画布派生节点里的 `columns`，那是**全量**字段，非卡片上渲染的前 8 列）。 */
   const modelOptions = useMemo<ModelOption[]>(
@@ -183,8 +189,11 @@ function CubeForm({
   }, [cube, catalog, defaultModelKey, modelOptions]);
 
   /**
-   * 草稿的 `itemKey`：新建用**占位键**（不随名称输入漂移，见模块头细节 1）。
-   * 既有 Cube 直接用它的真实键（只读，不提交）。
+   * 草稿的 `itemKey`：新建用**占位键**（不随名称输入漂移，见模块头细节 1）；
+   * 既有 Cube 用它的**真实键**（`mdl:cube:<name>`）。
+   *
+   * <p>⚠️ 既有 Cube 的更新 `item_key` **必须**用它的真实键 —— 改名（改 `display_name`）时
+   * 不能重算 `buildCubeItemKey`（那会指向另一个不存在的 cube → 服务端 42200「cube 不存在」）。
    */
   const draftItemKey = cube?.item_key ?? `new-cube:${defaultModelKey ?? 'none'}`;
   const baseRevision = sync.status?.current_edit_revision ?? null;
@@ -195,7 +204,8 @@ function CubeForm({
     kind: 'cube',
     baseValues: initial,
     baseRevision: baseRevision ?? 0,
-    action: 'create',
+    // 既有 = update（幂等键 `{conn}:cube:update:{uuid}`），新建 = create
+    action: isExisting ? 'update' : 'create',
   });
 
   const [saving, setSaving] = useState(false);
@@ -207,10 +217,10 @@ function CubeForm({
     [modelOptions, draft.draft.modelRef],
   );
 
-  /** 提交前本地预检（权威仍在后端）。 */
+  /** 提交前本地预检（权威仍在后端；新建/更新同口径）。 */
   const validationErrors = useMemo(
-    () => (readOnly ? [] : validateCubeDraft(draft.draft, fieldOptions)),
-    [readOnly, draft.draft, fieldOptions],
+    () => validateCubeDraft(draft.draft, fieldOptions),
+    [draft.draft, fieldOptions],
   );
 
   /** 依赖提示区：谁引用此 Cube（仅既有 Cube 有意义）。 */
@@ -226,7 +236,7 @@ function CubeForm({
   const cubeName = cubeNameOf(cube?.item_key) || draft.draft.displayName;
 
   const canSubmit =
-    !readOnly &&
+    canEdit &&
     !saving &&
     connectionId != null &&
     validationErrors.length === 0 &&
@@ -238,24 +248,27 @@ function CubeForm({
     }
     setSaving(true);
     setError(null);
-    const itemKey = buildCubeItemKey(draft.draft.displayName);
+    // 既有 Cube 用真实键（改名不换键）；新建按名称算键。
+    const itemKey = isExisting && cube ? cube.item_key : buildCubeItemKey(draft.draft.displayName);
+    // ★ PUT 全量替换：patch 由 buildCubePatch 统一构造，**永远**带完整 measures/dimensions（防误清空）
+    const patch = buildCubePatch(draft.draft);
+    const body = {
+      connection_id: connectionId,
+      item_key: itemKey,
+      kind: 'cube' as const,
+      patch,
+      // base_revision 省略 = 服务端不校验（拿不到当前版本时不要填 0，那会必然 40900）
+      ...(baseRevision != null ? { base_revision: baseRevision } : {}),
+      idempotency_key: draft.idempotencyKey,
+    };
     try {
-      await createCube({
-        connection_id: connectionId,
-        item_key: itemKey,
-        kind: 'cube',
-        patch: {
-          display_name: draft.draft.displayName.trim(),
-          // ★ 挂靠真值：传**全键**（后端也会归一，但全键最不容易出歧义）
-          model_ref: draft.draft.modelRef,
-          measures: toMeasures(draft.draft.measures),
-          dimensions: toDimensions(draft.draft.dimensions),
-        },
-        // base_revision 省略 = 服务端不校验（拿不到当前版本时不要填 0，那会必然 40900）
-        ...(baseRevision != null ? { base_revision: baseRevision } : {}),
-        idempotency_key: draft.idempotencyKey,
-      });
-      // ★ 双幂等：成功后必须换新 key，否则下次提交会命中旧 key 返回首次结果（看起来成功却没改）
+      if (isExisting) {
+        // 既有 Cube → PUT /catalog/cube（T04a：自身字段 + 子节点增删改 + 孤儿清理）
+        await upsertCube(body);
+      } else {
+        await createCube(body);
+      }
+      // 双幂等：成功后必须换新 key，否则下次提交会命中旧 key 返回首次结果（看起来成功却没改）
       draft.rotateIdempotencyKey();
       draft.resetDraft();
       clearDirty(draftItemKey);
@@ -279,6 +292,8 @@ function CubeForm({
   }, [
     canSubmit,
     connectionId,
+    isExisting,
+    cube,
     draft,
     baseRevision,
     clearDirty,
@@ -299,11 +314,11 @@ function CubeForm({
   );
 
   // 既有 Cube 但 catalog 还没到（冷缓存）→ 不渲染表单（否则初值会「空着」且不再更新）
-  if (readOnly && isLoading && catalog.length === 0) {
+  if (isExisting && isLoading && catalog.length === 0) {
     return (
       <>
         <DialogHeader className="border-b border-border/60 px-4 py-3">
-          <DialogTitle className="text-[14px]">Cube 详情</DialogTitle>
+          <DialogTitle className="text-[14px]">编辑 Cube</DialogTitle>
         </DialogHeader>
         <div className="flex items-center gap-2 px-4 py-6 text-[13px] text-muted-foreground">
           <Loader2 className="h-4 w-4 animate-spin" />
@@ -317,7 +332,7 @@ function CubeForm({
     <>
       <DialogHeader className="border-b border-border/60 px-4 py-3">
         <DialogTitle className="text-[14px]">
-          {readOnly ? 'Cube 详情' : '新建 Cube'}：{draft.draft.displayName || cubeName || '未命名'}
+          {isExisting ? '编辑 Cube' : '新建 Cube'}：{draft.draft.displayName || cubeName || '未命名'}
         </DialogTitle>
         <DialogDescription className="text-[12px]">
           Cube 是问数的聚合出口：挂在一个模型上，度量决定「算什么」，维度决定「按什么分组」。
@@ -326,14 +341,20 @@ function CubeForm({
       </DialogHeader>
 
       <div className="min-h-0 flex-1 space-y-4 overflow-auto px-4 py-3">
-        {readOnly && (
+        {isExisting && (
+          <div className="flex items-start gap-2 rounded border border-sky-500/50 bg-sky-50/80 px-2 py-1.5 text-[12px] text-sky-900">
+            <Info className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+            <span>
+              更新走 <code>PUT /catalog/cube</code>（T04a 新增）：<strong>全量替换</strong>语义 ——
+              本次表单里的 measures/dimensions 即为目标集合，<strong>移除的行会被删除</strong>
+              （孤儿清理）。提交时前端始终带完整列表，避免误清空。
+            </span>
+          </div>
+        )}
+        {!canEdit && (
           <div className="flex items-start gap-2 rounded border border-amber-500/50 bg-amber-50/80 px-2 py-1.5 text-[12px] text-amber-900">
             <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-            <span>
-              当前为只读查看：后端 <code>POST /catalog/cube</code> 是「只新建、同键幂等返回首次结果」的语义，
-              <code>PUT /catalog/node</code> 也无法增删 measure/dimension 子节点 —— 直接改会变成「提示成功却没改」。
-              修改既有 Cube 需后端补 cube 级更新端点（已记入 T04 待办）。
-            </span>
+            <span>无 {IQD_MODELING_PERMISSIONS.edit} 权限，本弹窗只读查看。</span>
           </div>
         )}
 
@@ -343,7 +364,7 @@ function CubeForm({
             <Label className="text-[13px]">Cube 名称</Label>
             <Input
               value={draft.draft.displayName}
-              readOnly={readOnly}
+              readOnly={!canEdit}
               onChange={(event) => draft.patchDraft({ displayName: event.target.value })}
               placeholder="如 销售额"
               className="h-8 text-[13px]"
@@ -356,7 +377,7 @@ function CubeForm({
             </Label>
             <Select
               value={draft.draft.modelRef === '' ? undefined : draft.draft.modelRef}
-              disabled={readOnly || modelOptions.length === 0}
+              disabled={!canEdit || modelOptions.length === 0}
               onValueChange={(value) => draft.patchDraft({ modelRef: value })}
             >
               <SelectTrigger className="h-8 text-[13px]">
@@ -382,9 +403,12 @@ function CubeForm({
         <div className="flex flex-wrap items-center gap-2 text-[12px] text-muted-foreground">
           <span className="shrink-0">稳定键</span>
           <code className="rounded border border-border/60 bg-muted/40 px-1 py-0.5">
-            {readOnly ? cube?.item_key : buildCubeItemKey(draft.draft.displayName)}
+            {isExisting ? cube?.item_key : buildCubeItemKey(draft.draft.displayName)}
           </code>
-          {!readOnly && draft.isDirty && (
+          {isExisting && (
+            <span className="shrink-0 text-[11px]">（更新时按键定位，改名不换键）</span>
+          )}
+          {canEdit && draft.isDirty && (
             <span className="shrink-0 rounded border border-amber-500/50 bg-amber-50 px-1 py-0.5 text-amber-900">
               未保存
             </span>
@@ -396,7 +420,7 @@ function CubeForm({
           measures={draft.draft.measures}
           dimensions={draft.draft.dimensions}
           fieldOptions={fieldOptions}
-          readOnly={readOnly}
+          readOnly={!canEdit}
           onMeasuresChange={(next) => draft.patchDraft({ measures: next })}
           onDimensionsChange={(next) => draft.patchDraft({ dimensions: next })}
         />
@@ -406,7 +430,7 @@ function CubeForm({
           <p className="text-[12px] font-medium">将写入的 catalog 节点</p>
           <ul className="mt-0.5 space-y-0.5">
             <li className="text-[12px]">
-              <code className="rounded bg-background px-1">{readOnly ? cube?.item_key : buildCubeItemKey(draft.draft.displayName)}</code>
+              <code className="rounded bg-background px-1">{isExisting ? cube?.item_key : buildCubeItemKey(draft.draft.displayName)}</code>
               <span className="ml-1 text-muted-foreground">（kind=cube，挂 model_ref）</span>
             </li>
             {draft.draft.measures.map((row) => (
@@ -434,7 +458,7 @@ function CubeForm({
               <span className="ml-1 text-[11px] text-muted-foreground">共 {dependenciesQuery.data?.total ?? 0} 项</span>
             )}
           </p>
-          {!readOnly ? (
+          {!isExisting ? (
             <p className="mt-0.5 flex items-center gap-1 text-[12px] text-muted-foreground">
               <Info className="h-3 w-3" />
               新建前无引用方；保存后可在此查看（如 sql 样本对、知识条目引用了它的度量）。
@@ -481,12 +505,12 @@ function CubeForm({
 
       <DialogFooter className="border-t border-border/60 px-4 py-3">
         <Button size="sm" variant="outline" onClick={() => handleClose(false)} disabled={saving}>
-          {readOnly ? '关闭' : '取消'}
+          取消
         </Button>
-        {!readOnly && (
+        {canEdit && (
           <Button size="sm" onClick={() => void submit()} disabled={!canSubmit}>
             {saving && <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />}
-            保存 Cube
+            {isExisting ? '保存 Cube' : '新建 Cube'}
           </Button>
         )}
       </DialogFooter>

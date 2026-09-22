@@ -21,9 +21,11 @@
  * <h2>端点状态（与 T02a 后端实现对齐）</h2>
  * 已可用：`POST/GET /connections`、`POST /connections/{id}/test`、
  * `POST /catalog/model/from-table`、`GET /catalog/validate-expression`。
- * T03 未实现（调过去会 503 + 50300）：blank model / relationship / cube / calculated-column /
- * dependencies / layout。**同步状态复用 {@link getIqdCatalogSyncStatus}**（既有
- * `IqdAclController` 提供），本模块**不重复定义**。
+ * **T03 已落地**：blank model / relationship / cube（create）/ calculated-column /
+ * dependencies / layout（原「调过去 503 + 50300」的描述已过时，保留此纠正）。
+ * **T04a 新增**：`PUT /catalog/cube`（{@link upsertCube}，既有 Cube 的更新路径）。
+ * **同步状态复用 {@link getIqdCatalogSyncStatus}**（既有 `IqdAclController` 提供），
+ * 本模块**不重复定义**。
  */
 
 import api from '@/lib/api/client';
@@ -153,10 +155,32 @@ export async function createRelationship(
   return unwrap(res, '新建关系失败');
 }
 
-/** 新建 Cube（T03 未实现 → 抛 50300）。`POST /api/v1/iqd/catalog/cube`。 */
+/** 新建 Cube（create-only + 双幂等；同 `item_key` 命中返回首次结果）。`POST /api/v1/iqd/catalog/cube`。 */
 export async function createCube(body: CreateCubeRequest): Promise<IqdModelingCreateResponse> {
   const res = await api.post<ApiResult<IqdModelingCreateResponse>>('/iqd/catalog/cube', body);
   return unwrap(res, '新建 Cube 失败');
+}
+
+/**
+ * 更新既有 Cube（T04a 补齐，`PUT /api/v1/iqd/catalog/cube`）。
+ *
+ * <p>补齐 T03c 暴露的缺口：「既有 Cube 改不了」（`createCube` 是 create-only，同键不应用新字段）。
+ * 权限码 `iqd:modeling:edit`（与 `createCube` 同码 —— 同为「编辑模型语义对象」，V90 绑定 92700
+ * → 菜单 92632；与 mis-iqd `@PreAuthorize("hasAuthority('iqd:modeling:edit')")` 逐条对齐）。
+ *
+ * <h2>⚠️ patch = 全量替换语义（PUT）</h2>
+ * `patch.measures` / `patch.dimensions` 必须是**本次期望的完整集合**：服务端按 `item_key`
+ * 与之求差，**本次未出现（且既存）的子节点会被物理删除**（孤儿清理）。缺省 / 空列表 = 清空该类
+ * 子节点。故调用方**总是要带上完整的 measures/dimensions 列表**，否则会误清空既有子节点。
+ *
+ * <h2>校验链（服务端）</h2>
+ * 写回闸门 40300 → 幂等键命中（返回首次结果，不 bump）→ cube 存在性 42200（`data.item_key`）→
+ * `base_revision` 乐观并发 40900（`data.current_edit_revision`）→ `model_ref` 必需 42200 →
+ * 字段引用存在性 42201（`data.errors`）。
+ */
+export async function upsertCube(body: CreateCubeRequest): Promise<IqdModelingCreateResponse> {
+  const res = await api.put<ApiResult<IqdModelingCreateResponse>>('/iqd/catalog/cube', body);
+  return unwrap(res, '更新 Cube 失败');
 }
 
 /** 新建计算列（T03 未实现 → 抛 50300）。`POST /api/v1/iqd/catalog/calculated-column`。 */

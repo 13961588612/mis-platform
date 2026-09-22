@@ -36,6 +36,7 @@ import { ModelCanvas } from './components/modeling/ModelCanvas';
 import { CubeEditor } from './components/modeling/CubeEditor';
 import { AutoLayoutButton } from './components/modeling/AutoLayoutButton';
 import { PublishPipelineBar } from './components/modeling/PublishPipelineBar';
+import { DriftDetailPanel } from './components/modeling/DriftDetailPanel';
 import { ModelTree } from './components/modeling/ModelTree';
 import { PropertyPanel } from './components/modeling/PropertyPanel';
 import { ConnectionWizard } from './components/wizard/ConnectionWizard';
@@ -230,6 +231,8 @@ export function IqdModelingPage() {
         <>
           {/* 发布流水线（T03d）：编辑落库 → MDL build → memory index → MCP 就绪 */}
           <PublishPipelineBar connectionId={activeId} />
+          {/* 外部漂移详情面板（T04b / MR-11）：非漂移时自身返回 null（不产生空壳） */}
+          <DriftDetailPanel connectionId={activeId} />
           <div ref={panesRef} className="flex min-h-0 flex-1">
           {/* ---------- 左：模型树（T02b-2 实现） ---------- */}
           {!leftCollapsed && (
@@ -332,7 +335,7 @@ export function IqdModelingPage() {
           void queryClient.invalidateQueries({ queryKey: iqdKeys.catalogs(activeId) });
         }}
       />
-      {/* Cube 编辑器（T03c）：新建（全功能）/ 查看既有（只读，见 CubeEditor 模块头） */}
+      {/* Cube 编辑器（T03c 新建全功能 / T04b 既有编辑走 PUT /catalog/cube） */}
       <CubeEditor
         open={cubeEditor != null}
         onOpenChange={(next) => {

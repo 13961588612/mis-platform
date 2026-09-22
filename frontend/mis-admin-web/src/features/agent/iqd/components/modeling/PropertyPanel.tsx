@@ -1,21 +1,73 @@
 /**
- * PropertyPanel.tsx — 右栏属性面板（v1.11 MR-S4，T02b-3；**本批只读**）。
+ * PropertyPanel.tsx — 右栏属性面板（v1.11 MR-S4 T02b-3；**T04b 起字段可直编**）。
  *
- * <h2>🔴 不再发请求（Q5 单源）</h2>
- * 数据全部来自 {@link useCatalogNodes} 已返回的 `catalog` + store 的 `selectedItemKey`：
- * 同一份缓存，左树/画布/右栏三处一致。**不要**在此再 `useQuery` 一次清单
+ * <h2>🔴 只读展示部分不再发请求（Q5 单源）</h2>
+ * 节点/字段的**展示数据**全部来自 {@link useCatalogNodes} 已返回的 `catalog` + store 的
+ * `selectedItemKey`：同一份缓存，左树/画布/右栏三处一致。**不要**在此再 `useQuery` 一次清单
  * （会多一次请求，且与画布不同步）。
  *
- * <h2>本批范围</h2>
- * 只读展示：选中项的 kind / display_name / item_key / source / 是否纳入问数范围 /
- * 描述 / 表达式，以及（model / table 的）字段列表（含 PK / 计算列 / 脱敏徽标）。
- * **字段描述直编、脱敏直编属 T04（MR-09 / MR-13）**，此处留 TODO 不发写请求。
+ * <h2>本批（T04b）新增编辑能力</h2>
+ * <ol>
+ *   <li><b>字段业务描述直编（MR-09）</b>：写 `iqd_catalog_item.description`，**严格**走既有
+ *       `PUT /iqd/catalog/node`（乐观并发 `base_revision` + 幂等 `idempotency_key`）——
+ *       与 catalog 页同源同闭环（同一端点/同一缓存，改完 catalog 页同步可见）。</li>
+ *   <li><b>字段脱敏直编（MR-13）</b>：按架构裁决 **A-01** 复用既有 mask-rule API
+ *       （`POST /iqd/mask/rules`，增强页已用），与增强页脱敏 Tab **同源同优先级**；
+ *       权限码 `iqd:mask:save`（无权限 → 只读）。</li>
+ *   <li><b>依赖方提示区</b>：`GET /iqd/dependencies`（T03 已落地），删除/改名前先看谁在引用。</li>
+ * </ol>
+ *
+ * <h2>字段怎么「选中」</h2>
+ * 左树没有字段分组，故：选中一个 **model / table** 后，下方字段表**点行**即把 `selectedItemKey`
+ * 切到该字段（`store.setSelected(field.item_key)`）→ 面板切到「字段编辑」态。字段编辑区按
+ * `key` 重挂载（换字段 / 服务端描述变更即重置局部态，见 {@link FieldEditor} 的 key）。
+ *
+ * <h2>⚠️ 提交成功后必须 `rotateIdempotencyKey()`</h2>
+ * 后端是**双幂等**（幂等键命中 → 返回首次结果；同 `item_key` 已存在 → 也返回首次结果）。
+ * 复用旧 key 做第二次「修改」会拿到首次结果而**看起来保存成功却没改**。
  */
-import { useMemo } from 'react';
+import { useCallback, useMemo, useState } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { Info, Loader2, RotateCcw, Save, ShieldCheck } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
-import type { IqdCatalogItem } from '@/lib/api/iqd';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+import { Textarea } from '@/components/ui/textarea';
+import {
+  saveIqdMaskRule,
+  updateIqdCatalogNode,
+  type IqdCatalogItem,
+} from '@/lib/api/iqd';
+// 依赖方清单在**建模台 wire 层**（非 catalog 页 wire 层）：`GET /iqd/dependencies`。
+import { listDependencies } from '../../api/iqd-modeling';
 import { useCatalogNodes } from '../../hooks/useCatalogNodes';
+import { useDirtyState } from '../../hooks/useDirtyState';
+import { iqdKeys } from '../../queries/iqd-keys';
 import { useModelingStore } from '../../store/modeling-store';
+import { useIqdModelingPermission } from '../shared/usePermission';
+import { useSyncStatus } from '../shared/useSyncStatus';
+import {
+  MASK_RULE_OPTIONS,
+  MASK_SAVE_PERMISSION,
+  NODE_EDIT_PERMISSION,
+  SENSITIVE_LEVEL_OPTIONS,
+  buildMaskRulePayload,
+  buildNodeEditPayload,
+  describeMaskSaveError,
+  describeNodeEditError,
+  fieldNameOf,
+  initialMaskRule,
+  maskRuleLabel,
+  type FieldDraftValues,
+} from './propertyEditUtils';
 
 /** `PropertyPanel` Props。 */
 export interface PropertyPanelProps {
@@ -32,6 +84,11 @@ const KIND_LABEL: Record<string, string> = {
   column: '字段',
 };
 
+/** 敏感等级 → 中文标签（未知值原样）。 */
+function sensitiveLabel(level: string | undefined): string {
+  return SENSITIVE_LEVEL_OPTIONS.find((option) => option.value === (level ?? 'none'))?.label ?? '无';
+}
+
 /** 字段徽标（与画布节点卡同口径）。 */
 function columnBadges(column: IqdCatalogItem): string[] {
   const badges: string[] = [];
@@ -47,10 +104,22 @@ function columnBadges(column: IqdCatalogItem): string[] {
   return badges;
 }
 
-/** 右栏属性面板（只读）。 */
+/** 从任意异常里取业务 `code` / `data`（`updateIqdCatalogNode` 把它们挂在 Error 上）。 */
+function readError(err: unknown): { code: number | null; data: Record<string, unknown> | null } {
+  const shape = err as { code?: unknown; data?: unknown };
+  const code = typeof shape?.code === 'number' ? shape.code : null;
+  const data =
+    shape?.data !== null && typeof shape?.data === 'object'
+      ? (shape.data as Record<string, unknown>)
+      : null;
+  return { code, data };
+}
+
+/** 右栏属性面板。 */
 export function PropertyPanel({ connectionId }: PropertyPanelProps) {
   const { catalog } = useCatalogNodes(connectionId);
   const selectedItemKey = useModelingStore((state) => state.selectedItemKey);
+  const setSelected = useModelingStore((state) => state.setSelected);
 
   /** 选中项。 */
   const selected = useMemo(
@@ -109,15 +178,21 @@ export function PropertyPanel({ connectionId }: PropertyPanelProps) {
             value={selected.in_scope ? '是' : '否（可在 /iqd/scope 勾选）'}
           />
           <Row label="来源" value={selected.source ?? '—'} />
-          {selected.description && <Row label="描述" value={selected.description} />}
+          {/* 字段（column）的描述由下方「字段编辑」区承载，此处不重复只读行 */}
+          {selected.kind !== 'column' && selected.description && (
+            <Row label="描述" value={selected.description} />
+          )}
           {selected.expression && <Row label="表达式" value={selected.expression} mono />}
         </dl>
       </div>
 
-      {/* 字段列表（model / table） */}
+      {/* 字段列表（model / table）：点行进入字段编辑 */}
       {(selected.kind === 'model' || selected.kind === 'table') && (
-        <div className="p-2">
+        <div className="border-b border-border/60 p-2">
           <p className="mb-1 text-[13px] font-medium">字段（{fields.length}）</p>
+          <p className="mb-1 text-[11px] text-muted-foreground">
+            点字段行可在下方直接编辑业务描述与脱敏标记。
+          </p>
           <div className="rounded border border-border/60">
             <table className="w-full text-[12px]">
               <thead className="bg-muted/40">
@@ -129,7 +204,12 @@ export function PropertyPanel({ connectionId }: PropertyPanelProps) {
               </thead>
               <tbody>
                 {fields.map((field) => (
-                  <tr key={field.item_key} className="border-t border-border/40">
+                  <tr
+                    key={field.item_key}
+                    onClick={() => setSelected(field.item_key)}
+                    className="cursor-pointer border-t border-border/40 hover:bg-accent/50"
+                    title="点击编辑该字段的描述 / 脱敏"
+                  >
                     <td className="px-2 py-1">{field.display_name ?? field.item_key}</td>
                     <td className="border-l border-border/60 px-2 py-1 text-muted-foreground">
                       {field.data_type ?? '—'}
@@ -157,25 +237,23 @@ export function PropertyPanel({ connectionId }: PropertyPanelProps) {
               </tbody>
             </table>
           </div>
-
-          {/* TODO(T04)：字段描述直编（MR-09）、脱敏规则直编（MR-13）——
-              两者都是写操作，须走 PUT /iqd/catalog/node（含 base_revision 乐观并发 + idempotency_key），
-              本批不实现，避免在半只读阶段引入未验证的写路径。 */}
-          <p className="mt-2 text-[11px] text-muted-foreground">
-            字段描述 / 脱敏直编将于 T04 提供（需乐观并发与幂等键配套）。
-          </p>
         </div>
+      )}
+
+      {/* 字段编辑（选中字段时；按 item_key 重挂载，换字段即重置局部态） */}
+      {selected.kind === 'column' && (
+        <FieldEditor key={selected.item_key} connectionId={connectionId} field={selected} />
       )}
 
       {/* 指标/关系的补充说明 */}
       {selected.kind === 'cube' && (
         <div className="border-t border-border/60 p-2 text-[12px] text-muted-foreground">
-          指标的 measures / dimensions 编辑属 T03（需 `model_ref` 精确挂靠，V89 已补列）。
+          指标的 measures / dimensions 编辑在左树双击 Cube 打开编辑器（T03c/T04b）。
         </div>
       )}
       {selected.kind === 'relationship' && (
         <div className="border-t border-border/60 p-2 text-[12px] text-muted-foreground">
-          关系编辑（join 类型 / 基数 / 条件）属 T03。
+          关系编辑（join 类型 / 基数 / 条件）在画布上选边打开。
         </div>
       )}
     </div>
@@ -190,6 +268,299 @@ function Row({ label, value, mono }: { label: string; value: string; mono?: bool
       <dd className={mono ? 'min-w-0 break-all font-mono text-[11px]' : 'min-w-0 break-words'}>
         {value}
       </dd>
+    </div>
+  );
+}
+
+/**
+ * 字段编辑器（MR-09 描述直编 + MR-13 脱敏直编 + 依赖方提示）。
+ *
+ * <p>拆成独立组件并用 `key` 重挂载的理由：`useDirtyState` 的草稿是**局部 state**（初值只取一次），
+ * 换字段若不重挂载就会把上一个字段的草稿带过来 —— 同 `CubeEditor` / `RelationshipDialog` 的做法。
+ */
+function FieldEditor({
+  connectionId,
+  field,
+}: {
+  connectionId: number | null;
+  field: IqdCatalogItem;
+}) {
+  const queryClient = useQueryClient();
+  const sync = useSyncStatus(connectionId);
+  const { hasPermission } = useIqdModelingPermission();
+  const clearDirty = useModelingStore((state) => state.clearDirty);
+  const canEditDescription = hasPermission(NODE_EDIT_PERMISSION);
+  const canSaveMask = hasPermission(MASK_SAVE_PERMISSION);
+
+  const draft = useDirtyState<FieldDraftValues>({
+    connectionId,
+    itemKey: field.item_key,
+    kind: field.kind,
+    baseValues: { description: field.description ?? '' },
+    baseRevision: sync.status?.current_edit_revision ?? 0,
+    action: 'update',
+  });
+
+  const [savingDescription, setSavingDescription] = useState(false);
+  const [descriptionError, setDescriptionError] = useState<string | null>(null);
+  const [descriptionSaved, setDescriptionSaved] = useState(false);
+
+  /**
+   * 「未保存」判定的两个信号取与（`useDirtyState` 的**值比较** + store 的**触碰标记**）：
+   * <ul>
+   *   <li>只用 `draft.isDirty`（值比较）→ 保存成功后、catalog 失效回填前的往返窗口里，
+   *       草稿已收敛到新值而基线仍是旧值 → 会**误报「未保存」**（与「已保存」同屏，自相矛盾）；</li>
+   *   <li>只用 store 标记（触碰过）→ 「改了又改回原值」会**误报未保存**。</li>
+   * </ul>
+   * 二者取与即同时规避这两种误报（保存后 `clearDirty` 立刻把标记清掉）。
+   */
+  const touched = useModelingStore((state) => state.dirtyDrafts.has(field.item_key));
+  const descriptionDirty = touched && draft.isDirty;
+
+  const columnName = fieldNameOf(field);
+  const [maskRule, setMaskRule] = useState<string>(() => initialMaskRule(field.mask_rule));
+  const [maskReplacement, setMaskReplacement] = useState('');
+  const [savingMask, setSavingMask] = useState(false);
+  const [maskError, setMaskError] = useState<string | null>(null);
+  const [maskSaved, setMaskSaved] = useState<string | null>(null);
+
+  /** 保存业务描述（MR-09）：严格走 PUT /iqd/catalog/node（乐观并发 + 幂等）。 */
+  const saveDescription = useCallback(async () => {
+    if (connectionId == null || !canEditDescription) {
+      return;
+    }
+    setSavingDescription(true);
+    setDescriptionError(null);
+    setDescriptionSaved(false);
+    const baseRevision = sync.status?.current_edit_revision ?? 0;
+    const sentText = draft.draft.description.trim();
+    try {
+      await updateIqdCatalogNode(
+        connectionId,
+        buildNodeEditPayload(field, draft.draft.description, baseRevision, draft.idempotencyKey),
+      );
+      // ★ 双幂等：成功后必须换新 key，否则下次提交会命中旧 key 返回首次结果（看起来成功却没改）
+      draft.rotateIdempotencyKey();
+      // 收敛到「已保存值」（而不是 resetDraft 回退到改前值 —— 那会让编辑内容视觉上「弹回去」）
+      draft.setDraft({ description: sentText });
+      clearDirty(field.item_key);
+      setDescriptionSaved(true);
+      // Q5 单源：失效 catalog 缓存 → 画布/左树/catalog 页同时刷新
+      await queryClient.invalidateQueries({ queryKey: iqdKeys.catalogs(connectionId) });
+      sync.refresh();
+    } catch (err) {
+      const { code, data } = readError(err);
+      setDescriptionError(
+        describeNodeEditError(
+          code,
+          data,
+          err instanceof Error ? err.message : String(err),
+        ),
+      );
+      // 失败（尤其 40901 幂等键重复 / 40900 版本变更）也换新 key + 刷新版本，让「重试」真的能落地
+      draft.rotateIdempotencyKey();
+      sync.refresh();
+    } finally {
+      setSavingDescription(false);
+    }
+  }, [connectionId, canEditDescription, field, draft, sync, clearDirty, queryClient]);
+
+  /** 保存脱敏规则（MR-13）：复用增强页 mask-rule API（A-01），权限 `iqd:mask:save`。 */
+  const saveMask = useCallback(async () => {
+    if (!canSaveMask || columnName.trim() === '') {
+      return;
+    }
+    setSavingMask(true);
+    setMaskError(null);
+    setMaskSaved(null);
+    try {
+      await saveIqdMaskRule(buildMaskRulePayload(columnName, maskRule, maskReplacement));
+      setMaskSaved(`已保存脱敏规则「${columnName}」（${maskRuleLabel(maskRule)}），与增强页脱敏 Tab 同源生效。`);
+    } catch (err) {
+      const { code, data } = readError(err);
+      setMaskError(
+        describeMaskSaveError(code, data, err instanceof Error ? err.message : String(err)),
+      );
+    } finally {
+      setSavingMask(false);
+    }
+  }, [canSaveMask, columnName, maskRule, maskReplacement]);
+
+  /** 依赖方（谁引用此字段）；仅作提示，不阻断（阻断在后端 42200）。 */
+  const dependentsQuery = useQuery({
+    queryKey: iqdKeys.dependencies(connectionId, field.item_key),
+    queryFn: () => listDependencies(connectionId as number, field.item_key),
+    enabled: connectionId != null,
+    staleTime: 15_000,
+    retry: false,
+  });
+  const dependents = dependentsQuery.data?.dependents ?? [];
+
+  return (
+    <div className="space-y-3 p-2">
+      {/* ---------------- MR-09：业务描述直编 ---------------- */}
+      <div className="space-y-1.5">
+        <Label className="text-[13px]">业务描述（description）</Label>
+        <Textarea
+          value={draft.draft.description}
+          readOnly={!canEditDescription}
+          onChange={(event) => draft.patchDraft({ description: event.target.value })}
+          placeholder="给这个字段写一句业务含义（如「订单金额，含税」）"
+          rows={3}
+          className="text-[12px]"
+        />
+        {!canEditDescription && (
+          <p className="text-[11px] text-muted-foreground">
+            无 {NODE_EDIT_PERMISSION} 权限，描述只读。
+          </p>
+        )}
+        {descriptionError && (
+          <div className="rounded border border-destructive/40 bg-destructive/5 px-2 py-1 text-[12px] text-destructive">
+            {descriptionError}
+            <Button
+              size="sm"
+              variant="outline"
+              className="ml-2 h-6"
+              onClick={() => sync.refresh()}
+            >
+              <RotateCcw className="h-3 w-3" />
+              重读版本
+            </Button>
+          </div>
+        )}
+        {descriptionSaved && !descriptionError && (
+          <p className="text-[11px] text-success">已保存（catalog 页同步可见）。</p>
+        )}
+        <div className="flex items-center gap-2">
+          <Button
+            size="sm"
+            className="h-7"
+            disabled={!canEditDescription || savingDescription || !descriptionDirty}
+            onClick={() => void saveDescription()}
+          >
+            {savingDescription ? (
+              <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <Save className="mr-1 h-3.5 w-3.5" />
+            )}
+            保存描述
+          </Button>
+          {descriptionDirty && <span className="text-[11px] text-warning">未保存</span>}
+          <span className="ml-auto font-mono text-[11px] text-muted-foreground">
+            v{sync.status?.current_edit_revision ?? 0}
+          </span>
+        </div>
+      </div>
+
+      {/* ---------------- MR-13：字段脱敏直编 ---------------- */}
+      <div className="space-y-1.5 border-t border-border/60 pt-2">
+        <Label className="flex items-center gap-1 text-[13px]">
+          <ShieldCheck className="h-3.5 w-3.5" />
+          字段脱敏
+        </Label>
+        <div className="flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
+          <span>
+            当前敏感等级：<span className="text-foreground">{sensitiveLabel(field.sensitive_level)}</span>
+          </span>
+          <span>
+            当前脱敏规则：<span className="font-mono text-foreground">{field.mask_rule || '—'}</span>
+          </span>
+        </div>
+        <p className="text-[11px] text-muted-foreground">
+          与增强页「脱敏规则」Tab 同源同优先级（唯一规则源 <code>iqd_mask_rule</code>）。
+          规则名固定为列名「{columnName}」，重复保存即更新同一条规则。
+        </p>
+        <div className="grid grid-cols-2 gap-2">
+          <div className="space-y-1">
+            <Label className="text-[12px] text-muted-foreground">规则类型</Label>
+            <Select
+              value={maskRule}
+              disabled={!canSaveMask}
+              onValueChange={(value) => setMaskRule(value)}
+            >
+              <SelectTrigger className="h-8 text-[12px]">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {MASK_RULE_OPTIONS.map((option) => (
+                  <SelectItem key={option.value} value={option.value} className="text-[12px]">
+                    {option.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="space-y-1">
+            <Label className="text-[12px] text-muted-foreground">
+              自定义替换值{maskRule === 'custom' ? '' : '（仅「自定义」可填）'}
+            </Label>
+            <Input
+              value={maskReplacement}
+              disabled={!canSaveMask || maskRule !== 'custom'}
+              onChange={(event) => setMaskReplacement(event.target.value)}
+              placeholder="如 ****"
+              className="h-8 text-[12px]"
+            />
+          </div>
+        </div>
+        {!canSaveMask && (
+          <p className="text-[11px] text-muted-foreground">
+            无 {MASK_SAVE_PERMISSION} 权限，脱敏只读。
+          </p>
+        )}
+        {maskError && (
+          <div className="rounded border border-destructive/40 bg-destructive/5 px-2 py-1 text-[12px] text-destructive">
+            {maskError}
+          </div>
+        )}
+        {maskSaved && !maskError && <p className="text-[11px] text-success">{maskSaved}</p>}
+        <Button
+          size="sm"
+          variant="secondary"
+          className="h-7"
+          disabled={!canSaveMask || savingMask || columnName.trim() === ''}
+          onClick={() => void saveMask()}
+        >
+          {savingMask ? (
+            <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
+          ) : (
+            <ShieldCheck className="mr-1 h-3.5 w-3.5" />
+          )}
+          保存脱敏
+        </Button>
+      </div>
+
+      {/* ---------------- 依赖方提示区 ---------------- */}
+      <div className="space-y-1 rounded border border-border/60 bg-muted/20 px-2 py-1.5">
+        <p className="text-[12px] font-medium">
+          依赖方（谁引用此字段）
+          {dependentsQuery.isSuccess && (
+            <span className="ml-1 text-[11px] text-muted-foreground">
+              共 {dependentsQuery.data?.total ?? 0} 项
+            </span>
+          )}
+        </p>
+        {dependentsQuery.isLoading ? (
+          <p className="text-[12px] text-muted-foreground">查询中…</p>
+        ) : dependentsQuery.isError ? (
+          <p className="text-[12px] text-muted-foreground">依赖方查询失败（不影响其它操作）。</p>
+        ) : dependents.length === 0 ? (
+          <p className="text-[12px] text-muted-foreground">暂无引用方。</p>
+        ) : (
+          <ul className="space-y-0.5">
+            {dependents.map((dependent) => (
+              <li key={dependent.item_key} className="text-[12px]">
+                <code className="rounded bg-background px-1">{dependent.item_key}</code>
+                <span className="ml-1 text-muted-foreground">（{dependent.kind}）</span>
+              </li>
+            ))}
+          </ul>
+        )}
+        <p className="flex items-center gap-1 text-[11px] text-muted-foreground">
+          <Info className="h-3 w-3" />
+          被引用不阻断「改描述 / 改脱敏」；仅**改名**会触发后端引用校验（42200）。
+        </p>
+      </div>
     </div>
   );
 }
