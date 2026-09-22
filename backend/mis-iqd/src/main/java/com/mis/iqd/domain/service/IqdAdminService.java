@@ -1486,10 +1486,14 @@ public class IqdAdminService {
         List<Map<String, Object>> deps = new ArrayList<>();
         String needle = itemKey == null ? "" : itemKey;
         if (!needle.isEmpty()) {
-            // ① catalog 项 expression 引用
+            // ① catalog 项引用：expression 反向扫描（cube/relationship/metric/dimension/view 等）
+            //    或 model_ref 直接命中（T03 起：cube 的所属模型独立成列，见 V89）
             for (IqdCatalogItem it : catalogItemRepository.findByConnectionId(connectionId)) {
                 String expr = it.getExpression();
-                if (expr != null && expr.contains(needle)) {
+                String modelRef = it.getModelRef();
+                boolean refByExpression = expr != null && expr.contains(needle);
+                boolean refByModelRef = modelRef != null && modelRef.contains(needle);
+                if (refByExpression || refByModelRef) {
                     Map<String, Object> d = new LinkedHashMap<>();
                     d.put("item_key", it.getItemKey());
                     d.put("kind", it.getKind());
@@ -1625,7 +1629,8 @@ public class IqdAdminService {
      * <p>返回 {@code {connection_id, mdl_raw, edited_items[], current_edit_revision,
      * built_edit_revision}}：mdl_raw 为最近一次 WrenAI 同步基线快照（JSON 字符串）；
      * edited_items 为 {@code edit_revision} 非空的平台编辑节点（{@code item_key, kind,
-     * display_name, description, expression}）；current_edit_revision / built_edit_revision
+     * parent_key, display_name, data_type, description, expression, model_ref}）；
+     * current_edit_revision / built_edit_revision
      * 为连接级编辑版本（设计 §九.1 / §7.2），build 成功回填时 ai-platform 取
      * current_edit_revision 作为 {@code edit_revision} 传入 backfillCatalogSync（WHERE
      * {@code edit_revision <= :built} 命中已编辑节点，推进 SYNCED 状态机）。mdl_raw 为空时
@@ -1641,9 +1646,13 @@ public class IqdAdminService {
             Map<String, Object> m = new LinkedHashMap<>();
             m.put("item_key", it.getItemKey());
             m.put("kind", it.getKind());
+            m.put("parent_key", it.getParentKey());
             m.put("display_name", it.getDisplayName());
+            m.put("data_type", it.getDataType());
             m.put("description", it.getDescription());
             m.put("expression", it.getExpression());
+            // T03：cube 的所属模型独立成列（V89 model_ref），派生侧据此写回 MDL 的 baseObject
+            m.put("model_ref", it.getModelRef());
             edited.add(m);
         }
         Map<String, Object> body = new LinkedHashMap<>();
@@ -1789,6 +1798,7 @@ public class IqdAdminService {
         vo.setIsEmail(entity.getIsEmail() != null && entity.getIsEmail() == 1);
         vo.setDescription(entity.getDescription());
         vo.setExpression(entity.getExpression());
+        vo.setModelRef(entity.getModelRef());
         vo.setSource(entity.getSource());
         vo.setInScope(entity.getInScope() != null && entity.getInScope() == 1);
         vo.setSensitiveLevel(entity.getSensitiveLevel());

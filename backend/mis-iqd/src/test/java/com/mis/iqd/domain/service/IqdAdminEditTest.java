@@ -208,6 +208,31 @@ class IqdAdminEditTest {
         assertEquals("cube", deps.get(0).get("kind"));
     }
 
+    /**
+     * T03 契约守卫：{@code model_ref}（V89 独立列）也必须参与反向引用扫描。
+     *
+     * <p>若不扫，cube 通过 {@code model_ref} 挂靠的模型被删除/改名时将**静默放行**，
+     * 产生悬空 cube（build 时才炸，或更糟：build 出无 baseObject 的 cube）。
+     */
+    @Test
+    void validateCatalogRefs_scans_model_ref_column_too() {
+        when(connectionRepository.existsById(CONN_ID)).thenReturn(true);
+        IqdCatalogItem cube = new IqdCatalogItem();
+        cube.setItemKey("mdl:cube:revenue");
+        cube.setKind("cube");
+        cube.setDisplayName("营收");
+        // expression 为空（T03 明确不写 cube.expression），仅靠 model_ref 建立关联
+        cube.setModelRef("mdl:model:orders");
+        when(catalogItemRepository.findByConnectionId(CONN_ID)).thenReturn(List.of(cube));
+        when(sqlPairRepository.findByConnectionIdOrderByIdDesc(CONN_ID)).thenReturn(List.of());
+        when(knowledgeRepository.findByConnectionIdOrderByIdDesc(CONN_ID)).thenReturn(List.of());
+
+        List<Map<String, Object>> deps = service.validateCatalogRefs(CONN_ID, "mdl:model:orders", "DELETE");
+
+        assertEquals(1, deps.size(), "model_ref 指向的 cube 必须被识别为引用方");
+        assertEquals("mdl:cube:revenue", deps.get(0).get("item_key"));
+    }
+
     // ------------------------------------------------------------ P0-8 backfillCatalogSync 批量盖章
 
     @Test

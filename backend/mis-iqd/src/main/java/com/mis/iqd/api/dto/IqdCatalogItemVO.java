@@ -19,6 +19,13 @@ public class IqdCatalogItemVO {
     private Boolean isEmail;
     private String description;
     private String expression;
+    /**
+     * Cube 所属模型 item_key（仅 {@code kind=cube}；V89 列 {@code model_ref}）。
+     *
+     * <p>暴露给前端后，「画布上 cube 挂哪个模型节点」由**精确键**决定，
+     * 不再依赖「在 expression 里找模型名」的启发式猜测（T02b-1 报告暴露的缺口）。
+     */
+    private String modelRef;
     private String source;
     private Boolean inScope;
     private String sensitiveLevel;
@@ -122,6 +129,14 @@ public class IqdCatalogItemVO {
         this.expression = expression;
     }
 
+    public String getModelRef() {
+        return modelRef;
+    }
+
+    public void setModelRef(String modelRef) {
+        this.modelRef = modelRef;
+    }
+
     public String getSource() {
         return source;
     }
@@ -211,5 +226,11 @@ public class IqdCatalogItemVO {
     @JsonProperty("mask_rule")
     public String maskRuleWire() {
         return maskRule;
+    }
+
+    /** wire 别名 {@code model_ref}（V89；snake_case，与 DB 列一致）。 */
+    @JsonProperty("model_ref")
+    public String modelRefWire() {
+        return modelRef;
     }
 }

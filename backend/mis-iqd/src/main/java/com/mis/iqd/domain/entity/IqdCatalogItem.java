@@ -59,6 +59,21 @@ public class IqdCatalogItem {
     @Column(columnDefinition = "text")
     private String expression;
 
+    /**
+     * Cube 所属模型 item_key（如 {@code mdl:model:orders}）；仅 {@code kind=cube} 使用。
+     *
+     * <p>V89 新增（可空、**无回填**）。补该列的理由：唯一在写 cube 的 MDL 同步路径
+     * （{@code IqdMdlParser:158}）把 {@code baseObject} 兜底塞进了 {@code expression}，
+     * 使 {@code expression} 对 cube 成为**二义列**；把 model_ref 挤进 expression 会让
+     * 同一列含义依赖 source/kind，且破坏 {@code validateCatalogRefs} 的
+     * {@code expression.contains(item_key)} 反向引用扫描语义。故独立成列。
+     *
+     * <p>语义：{@code NULL} = 未记录（含 MDL 同步来源，其归属暂由 expression/baseObject 兜底）；
+     * 建模台新写入的 cube 一律填写（T03 {@code createCube}）。
+     */
+    @Column(name = "model_ref")
+    private String modelRef;
+
     @Column(nullable = false)
     private String source = "db_meta";
 
@@ -188,6 +203,15 @@ public class IqdCatalogItem {
 
     public void setExpression(String expression) {
         this.expression = expression;
+    }
+
+    /** Cube 所属模型 item_key（仅 kind=cube；可空，V89 列 {@code model_ref}）。 */
+    public String getModelRef() {
+        return modelRef;
+    }
+
+    public void setModelRef(String modelRef) {
+        this.modelRef = modelRef;
     }
 
     public String getSource() {

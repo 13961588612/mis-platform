@@ -906,10 +906,15 @@ class IqdAskService:
     ) -> tuple[str, dict[str, Any]]:
         """以 mdl_raw 基线 + edited_items patch 派生完整 MDL，写出临时目录 manifest.json。
 
-        G7 数据流：``mdl = deepcopy(mdl_raw)`` → 按 ``item_key→MDL 节点`` 映射 patch
-        编辑字段（display_name→name / description / expression）→ 写临时目录
-        ``manifest.json``（顶层 models/relationships/cubes/views/metrics/dimensions）→
-        返回 ``(mdl_dir, payload)`` 供 ``context_build(mdl_dir=tmp)`` 部署。
+        G7 数据流：``mdl = deepcopy(mdl_raw)`` → **物化基线缺失的新建节点**
+        （cube/measure/dimension/relationship/计算列，见 :meth:`_materialize_missing_nodes`）
+        → 按 ``item_key→MDL 节点`` 映射 patch 编辑字段（display_name→name / description /
+        expression）→ 写临时目录 ``manifest.json``（顶层 models/relationships/cubes/views/
+        metrics/dimensions）→ 返回 ``(mdl_dir, payload)`` 供 ``context_build(mdl_dir=tmp)`` 部署。
+
+        物化这一步是 T03（M2 建模全量）补上的关键缺口：基线只含「上次同步时 WrenAI 里
+        已存在」的对象，平台新建的关系 / cube / 计算列必须新增进去，否则 build 后问数
+        永远命中不到（M-G2 的 query_cube 通道因此失效）。
 
         Args:
             connection_id: 连接 id（仅用于日志/目录命名）。
@@ -950,13 +955,17 @@ class IqdAskService:
             for k in ("models", "relationships", "cubes", "views", "metrics", "dimensions"):
                 mdl.setdefault(k, [])
 
-        # ② patch 编辑字段（item_key → MDL 节点定位）
+        # ② 物化建模台**新建**节点（基线里没有的 cube/measure/dimension/relationship/计算列）
+        #    必须早于 _patch_mdl_node：patch 按「name 定位已有节点」，而物化才负责「新增」。
+        self._materialize_missing_nodes(mdl, edited_items)
+
+        # ③ patch 编辑字段（item_key → MDL 节点定位）
         for it in edited_items:
             key = it.get("item_key") or ""
             kind = it.get("kind") or ""
             self._patch_mdl_node(mdl, key, kind, it)
 
-        # ③ 写临时目录 manifest.json
+        # ④ 写临时目录 manifest.json
         tmp_dir = tempfile.mkdtemp(prefix=f"iqd_mdl_{connection_id}_")
         manifest_path = os.path.join(tmp_dir, "manifest.json")
         with open(manifest_path, "w", encoding="utf-8") as fh:
@@ -1055,6 +1064,156 @@ class IqdAskService:
                         if measure.get("name") == measure_name:
                             _set(measure)
                             return
+
+    # ================================================================ T03：新建节点物化（R-3）
+
+    @staticmethod
+    def _item_key_tail(item_key: str | None) -> str:
+        """取 item_key 末段：``mdl:cube:revenue`` → ``revenue``；``a.b.c`` → ``c``。"""
+        if not item_key:
+            return ""
+        if ":" in item_key:
+            return item_key.rsplit(":", 1)[1]
+        return item_key.rsplit(".", 1)[-1]
+
+    @staticmethod
+    def _model_name_of(model_ref: str | None) -> str:
+        """``mdl:model:orders`` → ``orders``；``orders`` → ``orders``；空 → ``""``。"""
+        if not model_ref:
+            return ""
+        return IqdAskService._item_key_tail(model_ref)
+
+    @staticmethod
+    def _parse_relationship_payload(expression: str | None) -> dict[str, Any] | None:
+        """解析建模台写入的关系信封 JSON（``join_type/cardinality/condition/source_model/target_model``）。
+
+        非 JSON（如历史 MDL 同步来源的裸 condition）→ 返回 ``None``，调用方按「无法还原
+        models，宁可不物化也不产出非法 relationship」处理。
+        """
+        if not expression or not expression.strip().startswith("{"):
+            return None
+        try:
+            parsed = json.loads(expression)
+        except (ValueError, TypeError):
+            return None
+        return parsed if isinstance(parsed, dict) else None
+
+    def _materialize_missing_nodes(
+        self, mdl: dict[str, Any], edited_items: list[dict[str, Any]]
+    ) -> None:
+        """把建模台**新建**、但 ``mdl_raw`` 基线中不存在的节点物化进派生 MDL（T03 / R-3 补丁）。
+
+        背景：``mdl_raw`` 是 WrenAI 最近一次同步快照；建模台新建的 cube / measure /
+        dimension / relationship / 计算列在基线里**没有对应节点**，而
+        :meth:`_patch_mdl_node` 只按 name 定位**已有**节点并改字段 —— 找不到即**静默丢弃**。
+        不做物化，M-G2（建关系 → 建 cube → 问数命中 cube 聚合）与 MR-04（计算列）产出的
+        语义对象永远不会进入 build，功能形同虚设。
+
+        本方法按 item_key 映射把缺失节点**新增**进派生 MDL，幂等（同名/同键已存在即跳过），
+        且不破坏既有节点结构（models/relationships/cubes 的原有数组元素原样保留）。
+
+        Args:
+            mdl: 派生中的 MDL dict（**原地修改**；顶层容器已归一）。
+            edited_items: 平台已编辑节点（``item_key/kind/parent_key/display_name/data_type/
+                expression/model_ref``；T03 起 ``IqdAdminService.getCatalogFull`` 会带上
+                后四项）。
+        """
+        if not edited_items:
+            return
+
+        cubes = mdl.setdefault("cubes", [])
+        cube_by_name: dict[str, dict[str, Any]] = {
+            c.get("name"): c for c in cubes if isinstance(c, dict)
+        }
+        models = mdl.setdefault("models", [])
+        model_by_name: dict[str, dict[str, Any]] = {
+            m.get("name"): m for m in models if isinstance(m, dict)
+        }
+        relationships = mdl.setdefault("relationships", [])
+        rel_by_name: dict[str, dict[str, Any]] = {
+            r.get("name"): r for r in relationships if isinstance(r, dict)
+        }
+
+        # ① cube 容器（先建，供 measure/dimension 挂靠）
+        for it in edited_items:
+            if (it.get("kind") or "") != "cube":
+                continue
+            tail = self._item_key_tail(it.get("item_key"))
+            name = (it.get("display_name") or "").strip() or tail
+            if not name or name in cube_by_name or (tail and tail in cube_by_name):
+                continue
+            cube: dict[str, Any] = {"name": name, "measures": [], "dimensions": []}
+            model_name = self._model_name_of(it.get("model_ref"))
+            if model_name:
+                cube["baseObject"] = model_name
+            cubes.append(cube)
+            cube_by_name[name] = cube
+
+        # ② measure / dimension 子节点（按 parent_key=mdl:cube:<cube> 挂靠）
+        for it in edited_items:
+            kind = it.get("kind") or ""
+            if kind not in ("measure", "dimension"):
+                continue
+            cube = cube_by_name.get(self._item_key_tail(it.get("parent_key")))
+            if cube is None:
+                continue
+            name = (it.get("display_name") or "").strip() or self._item_key_tail(it.get("item_key"))
+            if not name:
+                continue
+            bucket = "measures" if kind == "measure" else "dimensions"
+            children = cube.get(bucket)
+            if not isinstance(children, list):
+                children = []
+                cube[bucket] = children
+            if any(isinstance(c, dict) and c.get("name") == name for c in children):
+                continue
+            child: dict[str, Any] = {"name": name}
+            if it.get("expression") is not None:
+                child["expression"] = it["expression"]
+            if kind == "measure" and it.get("data_type"):
+                child["format"] = it["data_type"]
+            children.append(child)
+
+        # ③ relationship（解信封 JSON 取 models/joinType/condition）
+        for it in edited_items:
+            if (it.get("kind") or "") != "relationship":
+                continue
+            name = (it.get("display_name") or "").strip() or self._item_key_tail(it.get("item_key"))
+            if not name or name in rel_by_name:
+                continue
+            payload = self._parse_relationship_payload(it.get("expression"))
+            if payload is None:
+                continue
+            source = self._model_name_of(payload.get("source_model"))
+            target = self._model_name_of(payload.get("target_model"))
+            if not source or not target:
+                continue
+            relationship: dict[str, Any] = {"name": name, "models": [source, target]}
+            if payload.get("join_type"):
+                relationship["joinType"] = str(payload["join_type"]).upper()
+            if payload.get("condition"):
+                relationship["condition"] = payload["condition"]
+            relationships.append(relationship)
+            rel_by_name[name] = relationship
+
+        # ④ 计算列（item_key=calc:<model>.<col>，parent_key=mdl:model:<name>）
+        for it in edited_items:
+            item_key = it.get("item_key") or ""
+            if not item_key.startswith("calc:"):
+                continue
+            model = model_by_name.get(self._model_name_of(it.get("parent_key")))
+            if model is None:
+                continue
+            name = (it.get("display_name") or "").strip() or self._item_key_tail(item_key)
+            if not name:
+                continue
+            columns = model.get("columns")
+            if not isinstance(columns, list):
+                columns = []
+                model["columns"] = columns
+            if any(isinstance(c, dict) and c.get("name") == name for c in columns):
+                continue
+            columns.append({"name": name, "expression": it.get("expression")})
 
     async def _report_model_job(
         self,

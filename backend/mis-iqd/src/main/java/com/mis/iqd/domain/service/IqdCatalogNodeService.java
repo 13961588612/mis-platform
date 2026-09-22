@@ -49,11 +49,18 @@ import java.util.regex.Pattern;
  * {@code mis-iqd-edit-design.md} §191）：mis-iqd 只发布变更事件，不反向调用 ai-platform，
  * 避免下游服务反向依赖上游。
  *
- * <h2>T02a 已实现 / 未实现</h2>
- * 已实现：{@link #createModelFromTable}、{@link #validateExpression}。
- * 仍为 T03 stub：{@link #createModel}、{@link #createRelationship}、{@link #createCube}、
- * {@link #createCalculatedColumn}。{@link #listDependents} 复用
- * {@link IqdAdminService#validateCatalogRefs}。
+ * <h2>实现状态</h2>
+ * <ul>
+ *   <li><b>T02a</b>：{@link #createModelFromTable}、{@link #validateExpression}、{@link #listDependents}</li>
+ *   <li><b>T03</b>：{@link #createModel}（空白模型）、{@link #createRelationship}、
+ *       {@link #createCube}（含 measures/dimensions 子节点 + {@code model_ref} 落库）、
+ *       {@link #createCalculatedColumn}</li>
+ * </ul>
+ * 四个 {@code createXxx} 共用同一前置链：连接存在 + 写回闸门（40300）→ 幂等键查重
+ * （命中返回首次结果）→ 语义幂等（同 item_key 已存在）→ {@code base_revision} 乐观并发
+ * （40900）→ 引用完整性预校验 → {@code @Transactional} 落 {@code iqd_catalog_item}
+ * （{@code source='modeling'}）→ bump {@code current_edit_revision} → 写
+ * {@code iqd_edit_idempotency}（40901）→ 发 {@code iqd.catalog.changed}。
  *
  * <p>命名边界：路径/权限码一律 {@code iqd}（platform 域）；仅对接 WrenAI 处保留
  * {@code wren}（{@code wren_ref_id} / {@code mdl:*}）。
@@ -65,6 +72,25 @@ public class IqdCatalogNodeService {
 
     /** 物理表 item_key 的数据源前缀缺省值（与 {@code IqdMdlParser} / {@code syncCatalogFromMdl} 同口径）。 */
     private static final String DEFAULT_DATASOURCE = "pg_main";
+
+    /** §8.6 item_key 前缀（新建节点族统一校验 + 子节点键构造）。 */
+    private static final String MODEL_ITEM_PREFIX = "mdl:model:";
+    private static final String RELATIONSHIP_ITEM_PREFIX = "mdl:relationship:";
+    private static final String CUBE_ITEM_PREFIX = "mdl:cube:";
+    private static final String MEASURE_ITEM_PREFIX = "mdl:measure:";
+    private static final String DIMENSION_ITEM_PREFIX = "mdl:dimension:";
+    /** 计算列稳定键前缀（§8.6 {@code calc:<model>.<column_name>}）。 */
+    private static final String CALC_ITEM_PREFIX = "calc:";
+
+    /** 派生编辑态（新建后恒定；build 成功后由 backfill 推进）。 */
+    private static final String EDITED_UNSYNCED = "EDITED_UNSYNCED";
+
+    /**
+     * item_key 形态的 token（如 {@code mdl:model:orders} / {@code calc:orders.margin}）：
+     * 关系信封 JSON 里会出现这些键，扫描 condition 字段引用前先剔除，避免把
+     * {@code mdl}/{@code model}/{@code orders} 误判为字段。
+     */
+    private static final Pattern ITEM_KEY_TOKEN = Pattern.compile("[A-Za-z_][A-Za-z0-9_]*:[A-Za-z0-9_.:\\-]+");
 
     /** 表/列 item_key 统一小写（对齐 {@code IqdMdlParser.parseModel} 的 {@code tableKey.toLowerCase()}）。 */
     private static final Locale LOWER = Locale.ROOT;
@@ -244,7 +270,7 @@ public class IqdCatalogNodeService {
         String refSql = str(sourceTable == null ? null : sourceTable.get("ref_sql"));
 
         upsertNode(connectionId, tableKey, "table", null, tableName.trim(), null,
-                null, null, null, null, null, inScope ? 1 : 0, next, now);
+                null, null, null, null, null, null, inScope ? 1 : 0, next, now);
 
         Map<String, String> columnMapping = new LinkedHashMap<>();
         for (Map<String, Object> col : resolved.columns()) {
@@ -257,11 +283,11 @@ public class IqdCatalogNodeService {
             upsertNode(connectionId, colKey, "column", tableKey, colName,
                     str(col.get("type")), null,
                     toBoolean(col.get("is_primary_key")), null, null,
-                    str(col.get("comment")), inScope ? 1 : 0, next, now);
+                    str(col.get("comment")), null, inScope ? 1 : 0, next, now);
         }
 
         upsertNode(connectionId, effectiveModelKey, "model", null, tableName.trim(), null,
-                null, null, null, null, refSql, inScope ? 1 : 0, next, now);
+                null, null, null, null, refSql, null, inScope ? 1 : 0, next, now);
 
         // ---------- 5. bump current_edit_revision ----------
         conn.setCurrentEditRevision(next);
@@ -341,8 +367,34 @@ public class IqdCatalogNodeService {
             return new ValidateExprResult(false, errors);
         }
 
-        String stripped = STRING_LITERAL.matcher(expression).replaceAll("''");
+        for (String token : scanUnknownIdentifiers(expression, allowed)) {
+            errors.add("未知字段: " + token);
+        }
+        return new ValidateExprResult(errors.isEmpty(), errors);
+    }
+
+    /**
+     * 扫描表达式里的**未知字段标识符**（引用字段存在性预校验，A-10）。
+     *
+     * <p>规则：① 剔除单引号字符串字面量；② 剔除 item_key 形态 token
+     * （{@code mdl:model:orders} 等 —— 关系信封 JSON 里会出现，否则会被拆成
+     * {@code mdl}/{@code model}/{@code orders} 误判为字段）；③ SQL 关键字 / 函数走白名单；
+     * ④ 其余标识符按「逐级回退」与 {@code allowed} 匹配
+     * （{@code a.b.c} 命中 {@code a.b.c} / {@code b.c} / {@code c} 任一即可）。
+     *
+     * <p><b>只做「引用字段存在性」，不做 SQL 语法 / 类型校验</b>（后者交 WrenAI build）。
+     *
+     * @param expression 待扫描表达式
+     * @param allowed    允许的字段名集合（小写）
+     * @return 未知标识符集合（保序；空集合 = 全部命中）
+     */
+    private static Set<String> scanUnknownIdentifiers(String expression, Set<String> allowed) {
         Set<String> unknown = new LinkedHashSet<>();
+        if (expression == null || expression.isBlank() || allowed == null || allowed.isEmpty()) {
+            return unknown;
+        }
+        String stripped = STRING_LITERAL.matcher(expression).replaceAll("''");
+        stripped = ITEM_KEY_TOKEN.matcher(stripped).replaceAll(" ");
         var matcher = IDENTIFIER.matcher(stripped);
         while (matcher.find()) {
             String token = matcher.group();
@@ -350,17 +402,12 @@ public class IqdCatalogNodeService {
             if (SQL_KEYWORDS.contains(lower)) {
                 continue;
             }
-            // 逐级回退匹配：a.b.c → 允许 a.b.c / b.c / c 任一命中（兼容 schema.table.col / table.col / col）
             if (matchesAny(allowed, lower)) {
                 continue;
             }
-            // 纯数字/数值字面量不会进入 IDENTIFIER，无需处理
             unknown.add(token);
         }
-        for (String token : unknown) {
-            errors.add("未知字段: " + token);
-        }
-        return new ValidateExprResult(errors.isEmpty(), errors);
+        return unknown;
     }
 
     /** 逐级回退匹配：{@code a.b.c} 命中 {@code a.b.c} / {@code b.c} / {@code c} 任一即可。 */
@@ -446,85 +493,434 @@ public class IqdCatalogNodeService {
         return depth == 0;
     }
 
-    // ------------------------------------------------------------------ T03 stub（保持不变）
+    // ------------------------------------------------------------------ createModel（T03 实现）
 
     /**
-     * 空白模型创建（T03 实现）。
+     * 空白模型创建（v1.11 §3.3 {@code POST /api/v1/iqd/catalog/model}）。
+     *
+     * <p>与 {@link #createModelFromTable} 同口径（幂等键查重 → 语义幂等 → 乐观并发 →
+     * 引用预校验 → 落库 → bump → 幂等键 → 变更事件），差异仅在**无源表**：
+     * 只落一个 {@code kind=model} 节点（无 table/column 子节点），
+     * {@code patch.primary_keys / is_time_dimension / is_email} 在该模型**已有字段**上生效
+     * （空白模型无字段时应为空操作，待用户后续补字段）。
+     *
+     * <p>{@code patch.ref_sql} 落节点 {@code expression} 字段（模型定义体；与
+     * {@code IqdMdlParser} 把 MDL model.expression 落 catalog expression 同构）。
+     * {@code in_scope} 恒 0：语义对象默认不自动纳入问数范围（PRD §6.3「导入 ≠ 可问」），
+     * 由 {@code /iqd/scope} 治理层显式勾选。
      *
      * @param connectionId   问数连接 id
-     * @param itemKey        模型稳定键
-     * @param patch          模型补丁 {@code {display_name,description,primary_keys,is_time_dimension,is_email,ref_sql}}
-     * @param baseRevision   乐观并发基线
-     * @param idempotencyKey 幂等键
-     * @return 新建结果
+     * @param itemKey        模型稳定键（须 {@code mdl:model:<name>}）
+     * @param patch          {@code {display_name, description, primary_keys[], is_time_dimension{}, is_email{}, ref_sql?}}
+     * @param baseRevision   乐观并发基线（null = 不校验）
+     * @param idempotencyKey 幂等键（§8.4）
+     * @return {@code {edit_revision, edit_status, wren_ref_id}}
      */
+    @PreAuthorize("hasAuthority('iqd:modeling:edit')")
+    @Transactional
     public IqdModelingCreateResponse createModel(
             Long connectionId,
             String itemKey,
             Map<String, Object> patch,
             Long baseRevision,
             String idempotencyKey) {
-        throw new UnsupportedOperationException("T03 实现");
+
+        // ---------- 0. 参数校验（42200） ----------
+        if (itemKey == null || itemKey.isBlank() || !itemKey.startsWith(MODEL_ITEM_PREFIX)) {
+            throw new BusinessException(42200, "item_key 必须形如 mdl:model:<name>", null);
+        }
+        String effectiveKey = itemKey.trim();
+
+        // ---------- 连接存在 + 写回闸门（40300） ----------
+        IqdConnection conn = requireWritableConnection(connectionId);
+
+        // ---------- 1. 幂等键命中 → 返回首次结果，不 bump ----------
+        Optional<IqdEditIdempotency> prev = findIdempotent(connectionId, idempotencyKey);
+        if (prev.isPresent()) {
+            log.info("IQD createModel idempotent hit by key connectionId={} key={}", connectionId, idempotencyKey);
+            return created(prev.get().getEditRevision(), null);
+        }
+
+        // ---------- 1b. 语义幂等：同 item_key 已存在 → 返回首次结果，不 bump ----------
+        Optional<IqdCatalogItem> existing =
+                catalogItemRepository.findByConnectionIdAndItemKey(connectionId, effectiveKey);
+        if (existing.isPresent()) {
+            long rev = existing.get().getEditRevision() != null ? existing.get().getEditRevision()
+                    : currentRevision(conn);
+            log.info("IQD createModel semantic idempotent hit connectionId={} itemKey={}", connectionId, effectiveKey);
+            return created(rev, existing.get().getWrenRefId());
+        }
+
+        // ---------- 2. 乐观并发（40900 + current_edit_revision） ----------
+        long current = currentRevision(conn);
+        checkBaseRevision(conn, baseRevision, current);
+
+        // ---------- 3. 引用完整性预校验（CREATE：仅记录直接引用方，不阻断） ----------
+        logRefs(connectionId, effectiveKey);
+
+        // ---------- 4. 落 iqd_catalog_item（kind=model, source='modeling'） ----------
+        long next = current + 1;
+        Instant now = Instant.now();
+        String displayName = patchText(patch, "display_name", nodeName(effectiveKey));
+        String description = patchText(patch, "description", null);
+        String refSql = patchText(patch, "ref_sql", null);
+        upsertNode(connectionId, effectiveKey, "model", null, displayName, null, refSql,
+                null, null, null, description, null, 0, next, now);
+        applyModelPatchToColumns(connectionId, effectiveKey, patch, next, now);
+
+        // ---------- 5. bump current_edit_revision ----------
+        bumpRevision(conn, next, now);
+
+        // ---------- 6. 写 iqd_edit_idempotency（40901 竞态） ----------
+        recordIdempotency(connectionId, idempotencyKey, next, current);
+
+        // ---------- 7. 发 iqd.catalog.changed ----------
+        changeEventPublisher.publish("iqd.catalog.changed", "model=" + effectiveKey);
+
+        log.info("IQD createModel created connectionId={} itemKey={} revision={}", connectionId, effectiveKey, next);
+        return created(next, null);
     }
 
+    // ------------------------------------------------------------------ createRelationship（T03 实现）
+
     /**
-     * 建关系（画布连线即关系；T03 实现）。
+     * 建关系（画布连线即关系；v1.11 §3.3 {@code POST /api/v1/iqd/catalog/relationship}）。
+     *
+     * <p><b>校验链</b>：① 源/目标 model 均存在（42200，{@code data.field} +
+     * {@code data.model_item_key}）→ ② {@code condition} 里的字段引用必须落在
+     * 「源模型字段 ∪ 目标模型字段」内（42200，{@code data.unknown_fields}）。
+     *
+     * <p><b>落库形态</b>：{@code kind=relationship}，{@code parent_key}=源模型键，
+     * {@code expression} = 关系信封 JSON
+     * {@code {"join_type","cardinality","condition","source_model","target_model"}}。
+     * 用 JSON 信封而非裸 condition 的理由：① 五个字段在 {@code iqd_catalog_item} 里
+     * 没有专属列，信封保证**可无损回读**（ai-platform {@code build_mdl_from_catalog}
+     * 据此物化 MDL relationship 的 models/joinType/condition）；② 信封内含
+     * {@code mdl:model:*} 键 → 既有 {@code validateCatalogRefs} 的
+     * {@code expression.contains(item_key)} 反向扫描天然把「删除被关系引用的模型」识别为阻断。
      *
      * @param connectionId   问数连接 id
      * @param itemKey        关系稳定键（§8.6 {@code mdl:relationship:<name>}）
      * @param patch          {@code {join_type,cardinality,condition,source_model,target_model}}
-     * @param baseRevision   乐观并发基线
-     * @param idempotencyKey 幂等键
-     * @return 新建结果
+     * @param baseRevision   乐观并发基线（null = 不校验）
+     * @param idempotencyKey 幂等键（§8.4）
+     * @return {@code {edit_revision, edit_status, wren_ref_id}}
      */
+    @PreAuthorize("hasAuthority('iqd:modeling:edit')")
+    @Transactional
     public IqdModelingCreateResponse createRelationship(
             Long connectionId,
             String itemKey,
             Map<String, Object> patch,
             Long baseRevision,
             String idempotencyKey) {
-        throw new UnsupportedOperationException("T03 实现");
+
+        if (itemKey == null || itemKey.isBlank() || !itemKey.startsWith(RELATIONSHIP_ITEM_PREFIX)) {
+            throw new BusinessException(42200, "item_key 必须形如 mdl:relationship:<name>", null);
+        }
+        if (patch == null) {
+            throw new BusinessException(42200, "patch 不能为空", null);
+        }
+        String effectiveKey = itemKey.trim();
+
+        IqdConnection conn = requireWritableConnection(connectionId);
+
+        Optional<IqdEditIdempotency> prev = findIdempotent(connectionId, idempotencyKey);
+        if (prev.isPresent()) {
+            return created(prev.get().getEditRevision(), null);
+        }
+        Optional<IqdCatalogItem> existing =
+                catalogItemRepository.findByConnectionIdAndItemKey(connectionId, effectiveKey);
+        if (existing.isPresent()) {
+            long rev = existing.get().getEditRevision() != null ? existing.get().getEditRevision()
+                    : currentRevision(conn);
+            return created(rev, existing.get().getWrenRefId());
+        }
+
+        long current = currentRevision(conn);
+        checkBaseRevision(conn, baseRevision, current);
+
+        // 关系语义字段
+        String sourceModel = normalizeModelRef(str(patch.get("source_model")));
+        String targetModel = normalizeModelRef(str(patch.get("target_model")));
+        if (sourceModel == null || targetModel == null) {
+            throw new BusinessException(42200, "source_model / target_model 不能为空", null);
+        }
+        String condition = str(patch.get("condition"));
+        if (condition == null || condition.isBlank()) {
+            throw new BusinessException(42200, "condition 不能为空", null);
+        }
+        String joinType = orDefault(str(patch.get("join_type")), "inner");
+        String cardinality = orDefault(str(patch.get("cardinality")), "1:N");
+
+        // ① 源/目标 model 存在性
+        requireModel(connectionId, sourceModel, "source_model");
+        requireModel(connectionId, targetModel, "target_model");
+
+        // ② condition 引用字段存在性（源模型字段 ∪ 目标模型字段）
+        Set<String> allowed = new LinkedHashSet<>(collectModelFields(connectionId, sourceModel));
+        allowed.addAll(collectModelFields(connectionId, targetModel));
+        Set<String> unknown = scanUnknownIdentifiers(condition, allowed);
+        if (!unknown.isEmpty()) {
+            Map<String, Object> data = new LinkedHashMap<>();
+            data.put("unknown_fields", new ArrayList<>(unknown));
+            data.put("source_model", sourceModel);
+            data.put("target_model", targetModel);
+            throw new BusinessException(42200, "condition 引用了不存在的字段", data);
+        }
+
+        long next = current + 1;
+        Instant now = Instant.now();
+        String envelope = relationshipEnvelope(joinType, cardinality, condition, sourceModel, targetModel);
+        upsertNode(connectionId, effectiveKey, "relationship", sourceModel,
+                nodeName(effectiveKey), null, envelope, null, null, null, null, null, 0, next, now);
+
+        bumpRevision(conn, next, now);
+        recordIdempotency(connectionId, idempotencyKey, next, current);
+        changeEventPublisher.publish("iqd.catalog.changed", "relationship=" + effectiveKey);
+
+        log.info("IQD createRelationship created connectionId={} itemKey={} {}->{} revision={}",
+                connectionId, effectiveKey, sourceModel, targetModel, next);
+        return created(next, null);
     }
 
+    // ------------------------------------------------------------------ createCube（T03 实现）
+
     /**
-     * 建 Cube（measures + dimensions 子节点；T03 实现）。
+     * 建 Cube + measures + dimensions 子节点（v1.11 §3.3 {@code POST /api/v1/iqd/catalog/cube}）。
+     *
+     * <p><b>校验链</b>：① {@code model_ref} 指向的模型必须存在（42200）→ ② 每个
+     * measure 的 {@code expression} 与每个 dimension 的 {@code ref_model_field} 必须落在
+     * **该模型可见字段**内（42201 + {@code data.errors}，沿用 {@link #validateExpression}
+     * 的字段存在性扫描，保存前阻断）。
+     *
+     * <p><b>落库形态</b>（§8.6）：
+     * <ul>
+     *   <li>{@code kind=cube}，{@code item_key=mdl:cube:<name>}，{@code parent_key=model_ref}，
+     *       <b>{@code model_ref} 列必须写入</b>（V89；这是 T02b-1 暴露的缺口——
+     *       前端据此精确挂靠 cube 到模型节点，不再靠 expression 启发式猜测）；
+     *       {@code expression} 保持 {@code NULL}（cube 的 expression 是二义列，不写）；</li>
+     *   <li>{@code kind=measure}，{@code item_key=mdl:measure:<cube>.<name>}，
+     *       {@code parent_key=mdl:cube:<cube>}，{@code expression}=measure 表达式，
+     *       {@code data_type}=format；</li>
+     *   <li>{@code kind=dimension}，{@code item_key=mdl:dimension:<cube>.<name>}，
+     *       {@code parent_key=mdl:cube:<cube>}，{@code expression}=ref_model_field。</li>
+     * </ul>
      *
      * @param connectionId   问数连接 id
      * @param itemKey        Cube 稳定键（§8.6 {@code mdl:cube:<name>}）
-     * @param patch          {@code {display_name,model_ref,measures[],dimensions[]}}
-     * @param baseRevision   乐观并发基线
-     * @param idempotencyKey 幂等键
-     * @return 新建结果
+     * @param patch          {@code {display_name, model_ref, measures:[{name,expression,format?}], dimensions:[{name,ref_model_field}]}}
+     * @param baseRevision   乐观并发基线（null = 不校验）
+     * @param idempotencyKey 幂等键（§8.4）
+     * @return {@code {edit_revision, edit_status, wren_ref_id}}
      */
+    @PreAuthorize("hasAuthority('iqd:modeling:edit')")
+    @Transactional
     public IqdModelingCreateResponse createCube(
             Long connectionId,
             String itemKey,
             Map<String, Object> patch,
             Long baseRevision,
             String idempotencyKey) {
-        throw new UnsupportedOperationException("T03 实现");
+
+        if (itemKey == null || itemKey.isBlank() || !itemKey.startsWith(CUBE_ITEM_PREFIX)) {
+            throw new BusinessException(42200, "item_key 必须形如 mdl:cube:<name>", null);
+        }
+        if (patch == null) {
+            throw new BusinessException(42200, "patch 不能为空", null);
+        }
+        String effectiveKey = itemKey.trim();
+
+        IqdConnection conn = requireWritableConnection(connectionId);
+
+        Optional<IqdEditIdempotency> prev = findIdempotent(connectionId, idempotencyKey);
+        if (prev.isPresent()) {
+            return created(prev.get().getEditRevision(), null);
+        }
+        Optional<IqdCatalogItem> existing =
+                catalogItemRepository.findByConnectionIdAndItemKey(connectionId, effectiveKey);
+        if (existing.isPresent()) {
+            long rev = existing.get().getEditRevision() != null ? existing.get().getEditRevision()
+                    : currentRevision(conn);
+            return created(rev, existing.get().getWrenRefId());
+        }
+
+        long current = currentRevision(conn);
+        checkBaseRevision(conn, baseRevision, current);
+
+        // ① model_ref 指向的模型必须存在
+        String modelRef = normalizeModelRef(str(patch.get("model_ref")));
+        if (modelRef == null) {
+            throw new BusinessException(42200, "model_ref 不能为空（cube 必须挂靠一个模型）", null);
+        }
+        requireModel(connectionId, modelRef, "model_ref");
+
+        List<Map<String, Object>> measures = asMapList(patch.get("measures"));
+        List<Map<String, Object>> dimensions = asMapList(patch.get("dimensions"));
+        Set<String> allowed = collectModelFields(connectionId, modelRef);
+        List<String> errors = new ArrayList<>();
+
+        for (Map<String, Object> measure : measures) {
+            String name = str(measure.get("name"));
+            String expr = str(measure.get("expression"));
+            if (name == null || name.isBlank() || expr == null || expr.isBlank()) {
+                throw new BusinessException(42200, "measures[].name / measures[].expression 不能为空", null);
+            }
+            for (String token : scanUnknownIdentifiers(expr, allowed)) {
+                errors.add("measure " + name + " 引用不存在字段: " + token);
+            }
+        }
+        for (Map<String, Object> dimension : dimensions) {
+            String name = str(dimension.get("name"));
+            String refField = str(dimension.get("ref_model_field"));
+            if (name == null || name.isBlank() || refField == null || refField.isBlank()) {
+                throw new BusinessException(42200, "dimensions[].name / dimensions[].ref_model_field 不能为空", null);
+            }
+            if (!matchesAny(allowed, refField.toLowerCase(LOWER))) {
+                errors.add("dimension " + name + " 引用不存在字段: " + refField);
+            }
+        }
+        if (!errors.isEmpty()) {
+            Map<String, Object> data = new LinkedHashMap<>();
+            data.put("errors", errors);
+            data.put("model_ref", modelRef);
+            throw new BusinessException(42201, "cube 引用了不存在的字段", data);
+        }
+
+        long next = current + 1;
+        Instant now = Instant.now();
+        String cubeName = nodeName(effectiveKey);
+        String displayName = patchText(patch, "display_name", cubeName);
+
+        // ② 落 cube 节点（**必须写 model_ref**）
+        upsertNode(connectionId, effectiveKey, "cube", modelRef, displayName, null, null,
+                null, null, null, null, modelRef, 0, next, now);
+
+        // ③ 落 measures 子节点
+        for (Map<String, Object> measure : measures) {
+            String name = str(measure.get("name")).trim();
+            String measureKey = MEASURE_ITEM_PREFIX + cubeName + "." + name;
+            upsertNode(connectionId, measureKey, "measure", effectiveKey, name,
+                    str(measure.get("format")), str(measure.get("expression")),
+                    null, null, null, null, null, 0, next, now);
+        }
+
+        // ④ 落 dimensions 子节点
+        for (Map<String, Object> dimension : dimensions) {
+            String name = str(dimension.get("name")).trim();
+            String dimensionKey = DIMENSION_ITEM_PREFIX + cubeName + "." + name;
+            upsertNode(connectionId, dimensionKey, "dimension", effectiveKey, name,
+                    null, str(dimension.get("ref_model_field")),
+                    null, null, null, null, null, 0, next, now);
+        }
+
+        bumpRevision(conn, next, now);
+        recordIdempotency(connectionId, idempotencyKey, next, current);
+        changeEventPublisher.publish("iqd.catalog.changed", "cube=" + effectiveKey + ";model=" + modelRef);
+
+        log.info("IQD createCube created connectionId={} itemKey={} modelRef={} measures={} dimensions={} revision={}",
+                connectionId, effectiveKey, modelRef, measures.size(), dimensions.size(), next);
+        return created(next, null);
     }
 
+    // ------------------------------------------------------------------ createCalculatedColumn（T03 实现）
+
     /**
-     * 建计算列（T03 实现）。
+     * 建计算列（MR-04；v1.11 §3.3 {@code POST /api/v1/iqd/catalog/calculated-column}）。
+     *
+     * <p><b>校验链</b>：① 宿主模型存在（42200）→ ② {@code expression} 引用字段须在
+     * **本模型内**存在（42201 + {@code data.errors}）。复用 T02a 的
+     * {@link #validateExpression}，语义完全一致（字符串字面量剔除 + SQL 关键字白名单 +
+     * 逐级回退匹配），前端提交前亦可先调 {@code GET /catalog/validate-expression} 预校验（A-10）。
+     *
+     * <p><b>落库形态</b>（§8.6 {@code calc:<model>.<column_name>}）：
+     * {@code kind=column}、{@code parent_key=<model_item_key>}、{@code expression=<expr>}。
+     * 落库后 build 会把该表达式物化进派生 MDL 的 model.columns，问数即可按其聚合/过滤。
+     *
+     * <p><b>返回类型说明</b>：返回 {@code Map}（而非 {@code IqdModelingCreateResponse}），
+     * 因为 §3.3 的出参契约为
+     * {@code {edit_revision, edit_status, item_key, validated, errors?}} —— 多出
+     * {@code item_key/validated} 两个字段（前端 {@code CreateCalculatedColumnResponse}
+     * 依赖）。§5 类图对该方法只写了统一出参，此处以**端点契约**为准（与
+     * {@link #createModelFromTable} 返回 {@code Map} 同例）。
      *
      * @param connectionId   问数连接 id
-     * @param modelItemKey   宿主模型稳定键
+     * @param modelItemKey   宿主模型稳定键（{@code mdl:model:<name>}）
      * @param columnName     计算列名
      * @param expression     表达式（CodeMirror 录入）
-     * @param baseRevision   乐观并发基线
-     * @param idempotencyKey 幂等键
-     * @return 新建结果
+     * @param baseRevision   乐观并发基线（null = 不校验）
+     * @param idempotencyKey 幂等键（§8.4）
+     * @return {@code {edit_revision, edit_status, wren_ref_id, item_key, validated, errors}}
      */
-    public IqdModelingCreateResponse createCalculatedColumn(
+    @PreAuthorize("hasAuthority('iqd:modeling:edit')")
+    @Transactional
+    public Map<String, Object> createCalculatedColumn(
             Long connectionId,
             String modelItemKey,
             String columnName,
             String expression,
             Long baseRevision,
             String idempotencyKey) {
-        throw new UnsupportedOperationException("T03 实现");
+
+        if (modelItemKey == null || modelItemKey.isBlank()) {
+            throw new BusinessException(42200, "model_item_key 不能为空", null);
+        }
+        if (columnName == null || columnName.isBlank()) {
+            throw new BusinessException(42200, "column_name 不能为空", null);
+        }
+        if (expression == null || expression.isBlank()) {
+            throw new BusinessException(42200, "expression 不能为空", null);
+        }
+        String hostModel = modelItemKey.trim();
+        String colName = columnName.trim();
+
+        IqdConnection conn = requireWritableConnection(connectionId);
+
+        // 宿主模型存在性 + 计算列稳定键（§8.6 calc:<model>.<column_name>）
+        IqdCatalogItem model = requireModel(connectionId, hostModel, "model_item_key");
+        String modelName = (model.getDisplayName() != null && !model.getDisplayName().isBlank())
+                ? model.getDisplayName() : nodeName(hostModel);
+        String calcKey = CALC_ITEM_PREFIX + modelName + "." + colName;
+
+        Optional<IqdEditIdempotency> prev = findIdempotent(connectionId, idempotencyKey);
+        if (prev.isPresent()) {
+            return calcResult(prev.get().getEditRevision(), calcKey, List.of());
+        }
+        Optional<IqdCatalogItem> existing =
+                catalogItemRepository.findByConnectionIdAndItemKey(connectionId, calcKey);
+        if (existing.isPresent()) {
+            long rev = existing.get().getEditRevision() != null ? existing.get().getEditRevision()
+                    : currentRevision(conn);
+            return calcResult(rev, calcKey, List.of());
+        }
+
+        long current = currentRevision(conn);
+        checkBaseRevision(conn, baseRevision, current);
+
+        // 表达式引用字段存在性（保存前阻断 → 42201）
+        ValidateExprResult validated = validateExpression(connectionId, hostModel, expression);
+        if (!validated.isValid()) {
+            Map<String, Object> data = new LinkedHashMap<>();
+            data.put("errors", validated.getErrors());
+            data.put("item_key", calcKey);
+            data.put("model_item_key", hostModel);
+            throw new BusinessException(42201, "计算列表达式引用了不存在的字段", data);
+        }
+
+        long next = current + 1;
+        Instant now = Instant.now();
+        upsertNode(connectionId, calcKey, "column", hostModel, colName, null, expression,
+                null, null, null, null, null, 0, next, now);
+
+        bumpRevision(conn, next, now);
+        recordIdempotency(connectionId, idempotencyKey, next, current);
+        changeEventPublisher.publish("iqd.catalog.changed", "calculated_column=" + calcKey);
+
+        log.info("IQD createCalculatedColumn created connectionId={} itemKey={} model={} revision={}",
+                connectionId, calcKey, hostModel, next);
+        return calcResult(next, calcKey, List.of());
     }
+
 
     // ------------------------------------------------------------------ 依赖方（复用二/四期）
 
@@ -545,7 +941,268 @@ public class IqdCatalogNodeService {
         return new IqdDependents(out);
     }
 
-    // ------------------------------------------------------------------ 内部
+    // ------------------------------------------------------------------ 新建节点族内部辅助（T03）
+
+    /** 新建节点统一结果（§3.3 {@code {edit_revision, edit_status, wren_ref_id}}）。 */
+    private static IqdModelingCreateResponse created(long revision, String wrenRefId) {
+        return new IqdModelingCreateResponse(revision, EDITED_UNSYNCED, wrenRefId);
+    }
+
+    /** 计算列出参（§3.3 额外携带 {@code item_key / validated / errors}）。 */
+    private static Map<String, Object> calcResult(long revision, String itemKey, List<String> errors) {
+        Map<String, Object> r = new LinkedHashMap<>();
+        r.put("edit_revision", revision);
+        r.put("edit_status", EDITED_UNSYNCED);
+        r.put("wren_ref_id", null);
+        r.put("item_key", itemKey);
+        r.put("validated", errors == null || errors.isEmpty());
+        r.put("errors", errors == null ? List.of() : errors);
+        return r;
+    }
+
+    private static long currentRevision(IqdConnection conn) {
+        return conn.getCurrentEditRevision() == null ? 0L : conn.getCurrentEditRevision();
+    }
+
+    /** 连接存在性 + MDL 写回闸门（{@code 40300}）。 */
+    private IqdConnection requireWritableConnection(Long connectionId) {
+        if (connectionId == null) {
+            throw new BusinessException(42200, "connectionId 不能为空", null);
+        }
+        IqdConnection conn = connectionRepository.findById(connectionId)
+                .orElseThrow(() -> new BusinessException(ResultCode.NOT_FOUND,
+                        "问数连接不存在: " + connectionId));
+        if (!Boolean.TRUE.equals(conn.getMdlWritebackEnabled())) {
+            throw new BusinessException(40300, "该连接未开启 MDL 写回（mdl_writeback_enabled=false）", null);
+        }
+        return conn;
+    }
+
+    /** 幂等键查重（空键 → 不查，调用方视为「不做幂等」）。 */
+    private Optional<IqdEditIdempotency> findIdempotent(Long connectionId, String idempotencyKey) {
+        if (idempotencyKey == null || idempotencyKey.isBlank()) {
+            return Optional.empty();
+        }
+        return idempotencyRepository.findByConnectionIdAndIdempotencyKey(connectionId, idempotencyKey);
+    }
+
+    /** 乐观并发（{@code 40900} + {@code data.current_edit_revision}）。 */
+    private static void checkBaseRevision(IqdConnection conn, Long baseRevision, long current) {
+        if (baseRevision != null && !baseRevision.equals(current)) {
+            Map<String, Object> data = new LinkedHashMap<>();
+            data.put("current_edit_revision", current);
+            throw new BusinessException(40900, "并发编辑冲突：当前版本已变更", data);
+        }
+    }
+
+    /** bump 连接级编辑版本（并发编辑冲突的判据来源）。 */
+    private void bumpRevision(IqdConnection conn, long next, Instant now) {
+        conn.setCurrentEditRevision(next);
+        conn.setUpdatedAt(now);
+        connectionRepository.save(conn);
+    }
+
+    /** 写幂等键；撞 PK（同 key **并发**双提交）→ {@code 40901}，回滚本次事务（含节点写入与 bump）。 */
+    private void recordIdempotency(Long connectionId, String idempotencyKey, long next, long current) {
+        if (idempotencyKey == null || idempotencyKey.isBlank()) {
+            return;
+        }
+        try {
+            idempotencyRepository.save(new IqdEditIdempotency(connectionId, idempotencyKey, next));
+        } catch (DataIntegrityViolationException ex) {
+            Map<String, Object> data = new LinkedHashMap<>();
+            data.put("idempotency_key", idempotencyKey);
+            data.put("current_edit_revision", current);
+            throw new BusinessException(40901, "幂等键重复提交（同 key 并发）", data);
+        }
+    }
+
+    /** 引用完整性预校验（{@code CREATE} 语义：仅记录直接引用方，不阻断创建）。 */
+    private void logRefs(Long connectionId, String itemKey) {
+        List<Map<String, Object>> refs = adminService.validateCatalogRefs(connectionId, itemKey, "CREATE");
+        if (!refs.isEmpty()) {
+            log.info("IQD create refs pre-check connectionId={} itemKey={} deps={}",
+                    connectionId, itemKey, refs.size());
+        }
+    }
+
+    /** 归一 model 引用：{@code orders} / {@code mdl:model:orders} → {@code mdl:model:orders}；空 → {@code null}。 */
+    private static String normalizeModelRef(String modelRef) {
+        if (modelRef == null || modelRef.isBlank()) {
+            return null;
+        }
+        String v = modelRef.trim();
+        return v.startsWith(MODEL_ITEM_PREFIX) ? v : MODEL_ITEM_PREFIX + v;
+    }
+
+    /** 断言模型存在（{@code 42200} + {@code data.field} / {@code data.model_item_key}）。 */
+    private IqdCatalogItem requireModel(Long connectionId, String modelItemKey, String field) {
+        IqdCatalogItem model = catalogItemRepository
+                .findByConnectionIdAndItemKey(connectionId, modelItemKey).orElse(null);
+        if (model == null || !"model".equals(model.getKind())) {
+            Map<String, Object> data = new LinkedHashMap<>();
+            data.put("field", field);
+            data.put("model_item_key", modelItemKey);
+            throw new BusinessException(42200, "被引用的模型不存在: " + modelItemKey, data);
+        }
+        return model;
+    }
+
+    /**
+     * 关系信封 JSON（五字段全部可无损回读；ai-platform {@code build_mdl_from_catalog}
+     * 据此物化 MDL relationship 的 {@code models / joinType / condition}）。
+     */
+    private static String relationshipEnvelope(String joinType, String cardinality, String condition,
+            String sourceModel, String targetModel) {
+        Map<String, Object> fields = new LinkedHashMap<>();
+        fields.put("join_type", joinType);
+        fields.put("cardinality", cardinality);
+        fields.put("condition", condition);
+        fields.put("source_model", sourceModel);
+        fields.put("target_model", targetModel);
+        StringBuilder sb = new StringBuilder("{");
+        boolean first = true;
+        for (Map.Entry<String, Object> e : fields.entrySet()) {
+            if (!first) {
+                sb.append(',');
+            }
+            first = false;
+            sb.append('"').append(jsonEscape(e.getKey())).append("\":");
+            if (e.getValue() == null) {
+                sb.append("null");
+            } else {
+                sb.append('"').append(jsonEscape(String.valueOf(e.getValue()))).append('"');
+            }
+        }
+        return sb.append('}').toString();
+    }
+
+    private static String jsonEscape(String value) {
+        return value.replace("\\", "\\\\").replace("\"", "\\\"");
+    }
+
+    /**
+     * 应用模型 patch 到**该模型已有字段**：{@code primary_keys[]} /
+     * {@code is_time_dimension{}} / {@code is_email{}}（按字段名匹配）。
+     * 空白模型（尚无字段）时为空操作 —— patch 待后续编辑抽屉落到具体字段上。
+     */
+    private void applyModelPatchToColumns(Long connectionId, String modelItemKey,
+            Map<String, Object> patch, long revision, Instant now) {
+        if (patch == null) {
+            return;
+        }
+        Set<String> primaryKeys = asStringSet(patch.get("primary_keys"));
+        Map<String, Object> timeDims = asMap(patch.get("is_time_dimension"));
+        Map<String, Object> emails = asMap(patch.get("is_email"));
+        if (primaryKeys.isEmpty() && timeDims.isEmpty() && emails.isEmpty()) {
+            return;
+        }
+        IqdCatalogItem model = catalogItemRepository
+                .findByConnectionIdAndItemKey(connectionId, modelItemKey).orElse(null);
+        String modelName = model != null ? model.getDisplayName() : null;
+        String tableKey = null;
+        if (modelName != null && !modelName.isBlank()) {
+            for (IqdCatalogItem it : catalogItemRepository.findByConnectionId(connectionId)) {
+                if ("table".equals(it.getKind()) && it.getItemKey() != null
+                        && it.getItemKey().toLowerCase(LOWER).endsWith("." + modelName.toLowerCase(LOWER))) {
+                    tableKey = it.getItemKey();
+                    break;
+                }
+            }
+        }
+        for (IqdCatalogItem col : catalogItemRepository.findByConnectionId(connectionId)) {
+            if (!"column".equals(col.getKind())) {
+                continue;
+            }
+            boolean belongs = modelItemKey.equals(col.getParentKey())
+                    || (tableKey != null && tableKey.equals(col.getParentKey()));
+            if (!belongs) {
+                continue;
+            }
+            String name = col.getDisplayName() != null ? col.getDisplayName() : lastSegment(col.getItemKey());
+            if (name == null) {
+                continue;
+            }
+            boolean dirty = false;
+            if (primaryKeys.contains(name)) {
+                col.setIsPrimaryKey(1);
+                dirty = true;
+            }
+            if (timeDims.containsKey(name)) {
+                col.setIsTimeDimension(Boolean.TRUE.equals(toBoolean(timeDims.get(name))) ? 1 : 0);
+                dirty = true;
+            }
+            if (emails.containsKey(name)) {
+                col.setIsEmail(Boolean.TRUE.equals(toBoolean(emails.get(name))) ? 1 : 0);
+                dirty = true;
+            }
+            if (dirty) {
+                col.setSource("modeling");
+                col.setEditRevision(revision);
+                col.setUpdatedAt(now);
+                col.setLastSeenAt(now);
+                catalogItemRepository.save(col);
+            }
+        }
+    }
+
+    /** wire 值 → 字符串 Map（非 Map → 空 Map；键统一 String）。 */
+    private static Map<String, Object> asMap(Object value) {
+        if (value instanceof Map<?, ?> m) {
+            Map<String, Object> out = new LinkedHashMap<>();
+            for (Map.Entry<?, ?> e : m.entrySet()) {
+                out.put(String.valueOf(e.getKey()), e.getValue());
+            }
+            return out;
+        }
+        return Map.of();
+    }
+
+    /** wire 值 → {@code List<Map>}（非 List / 非 Map 元素一律跳过）。 */
+    private static List<Map<String, Object>> asMapList(Object value) {
+        List<Map<String, Object>> out = new ArrayList<>();
+        if (value instanceof List<?> list) {
+            for (Object o : list) {
+                if (o instanceof Map<?, ?> m) {
+                    Map<String, Object> item = new LinkedHashMap<>();
+                    for (Map.Entry<?, ?> e : m.entrySet()) {
+                        item.put(String.valueOf(e.getKey()), e.getValue());
+                    }
+                    out.add(item);
+                }
+            }
+        }
+        return out;
+    }
+
+    /** wire 值 → 字符串集合（非 List → 空集合；去空白）。 */
+    private static Set<String> asStringSet(Object value) {
+        Set<String> out = new LinkedHashSet<>();
+        if (value instanceof List<?> list) {
+            for (Object o : list) {
+                if (o != null && !String.valueOf(o).isBlank()) {
+                    out.add(String.valueOf(o).trim());
+                }
+            }
+        }
+        return out;
+    }
+
+    /** 取非空白值，否则 fallback。 */
+    private static String orDefault(String value, String fallback) {
+        return (value == null || value.isBlank()) ? fallback : value.trim();
+    }
+
+    /** 取 patch 里的文本字段（缺失 / 空白 → fallback）。 */
+    private static String patchText(Map<String, Object> patch, String key, String fallback) {
+        if (patch == null) {
+            return fallback;
+        }
+        String v = str(patch.get(key));
+        return (v == null || v.isBlank()) ? fallback : v.trim();
+    }
+
+    // ------------------------------------------------------------------ 源表解析内部
 
     /** 源表解析结果：物理表 key + 列定义。 */
     private record SourceTable(String tableKey, List<Map<String, Object>> columns) {
@@ -672,8 +1329,8 @@ public class IqdCatalogNodeService {
      */
     private void upsertNode(Long connectionId, String itemKey, String kind, String parentKey,
             String displayName, String dataType, String expression, Boolean isPrimaryKey,
-            Boolean isTimeDimension, Boolean isEmail, String description, int inScope,
-            long revision, Instant now) {
+            Boolean isTimeDimension, Boolean isEmail, String description, String modelRef,
+            int inScope, long revision, Instant now) {
         Optional<IqdCatalogItem> existing =
                 catalogItemRepository.findByConnectionIdAndItemKey(connectionId, itemKey);
         IqdCatalogItem entity = existing.orElseGet(IqdCatalogItem::new);
@@ -703,6 +1360,10 @@ public class IqdCatalogNodeService {
         }
         if (description != null) {
             entity.setDescription(description);
+        }
+        // V89：cube 的所属模型写独立列（仅 cube 传非 null；其余节点传 null 表示「不触碰」）
+        if (modelRef != null) {
+            entity.setModelRef(modelRef);
         }
         entity.setSource("modeling");
         entity.setInScope(inScope);
@@ -744,13 +1405,33 @@ public class IqdCatalogNodeService {
         return result;
     }
 
-    /** item_key 末段（{@code a.b.c} → {@code c}）。 */
+    /** item_key 末段（{@code a.b.c} → {@code c}；用于物理表/列的 {@code ds.schema.table.col} 形态）。 */
     private static String lastSegment(String itemKey) {
         if (itemKey == null) {
             return null;
         }
         int dot = itemKey.lastIndexOf('.');
         return dot >= 0 ? itemKey.substring(dot + 1) : itemKey;
+    }
+
+    /**
+     * 语义节点名（§8.6 语义键的末段）：{@code mdl:model:orders} → {@code orders}，
+     * {@code mdl:cube:revenue} → {@code revenue}，{@code mdl:relationship:a_b} → {@code a_b}；
+     * 无冒号时回退 {@link #lastSegment}（物理键形态）。
+     *
+     * <p><b>不要用 {@link #lastSegment} 处理 {@code mdl:*} 键</b>：它按 {@code .} 切分，
+     * 而 {@code mdl:cube:revenue} 里没有点 → 会原样返回整串（曾导致 cube 子节点键错成
+     * {@code mdl:measure:mdl:cube:revenue.total}）。
+     */
+    private static String nodeName(String itemKey) {
+        if (itemKey == null) {
+            return null;
+        }
+        int colon = itemKey.lastIndexOf(':');
+        if (colon >= 0 && colon < itemKey.length() - 1) {
+            return itemKey.substring(colon + 1);
+        }
+        return lastSegment(itemKey);
     }
 
     /** wire 值 → String（null 安全）。 */

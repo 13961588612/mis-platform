@@ -125,6 +125,170 @@ def test_build_mdl_from_catalog_no_baseline_no_edited_raises():
         IqdAskService().build_mdl_from_catalog(1, None, [])
 
 
+# ================================================================ T03：新建节点物化（R-3 补丁）
+
+
+def test_build_mdl_from_catalog_materializes_new_cube_with_measures_and_dimensions():
+    """M-G2 核心：平台新建的 cube 及其 measures/dimensions 必须物化进派生 MDL。
+
+    基线里没有 ``margin`` cube，而 ``_patch_mdl_node`` 只按 name 改**已有**节点 ——
+    没有物化这一步，新建 cube 会被静默丢弃，build 后问数永远命中不到 cube 聚合通道。
+    """
+    edited = [
+        {
+            "item_key": "mdl:cube:margin",
+            "kind": "cube",
+            "parent_key": "mdl:model:orders",
+            "display_name": "margin",
+            "data_type": None,
+            "description": None,
+            "expression": None,
+            "model_ref": "mdl:model:orders",
+        },
+        {
+            "item_key": "mdl:measure:margin.total",
+            "kind": "measure",
+            "parent_key": "mdl:cube:margin",
+            "display_name": "total",
+            "data_type": "¥#,##0",
+            "description": None,
+            "expression": "sum(orders.amount)",
+            "model_ref": None,
+        },
+        {
+            "item_key": "mdl:dimension:margin.store_id",
+            "kind": "dimension",
+            "parent_key": "mdl:cube:margin",
+            "display_name": "store_id",
+            "data_type": None,
+            "description": None,
+            "expression": "orders.store_id",
+            "model_ref": None,
+        },
+    ]
+
+    mdl_dir, _ = IqdAskService().build_mdl_from_catalog(1, json.dumps(BASELINE_MDL), edited)
+    mdl = _read_manifest(mdl_dir)
+
+    names = [c["name"] for c in mdl["cubes"]]
+    assert "margin" in names, "新建 cube 必须被物化"
+    cube = next(c for c in mdl["cubes"] if c["name"] == "margin")
+    assert cube["baseObject"] == "orders", "cube 的 baseObject 取自 model_ref"
+    assert cube["measures"] == [
+        {"name": "total", "expression": "sum(orders.amount)", "format": "¥#,##0"}
+    ]
+    assert cube["dimensions"] == [{"name": "store_id", "expression": "orders.store_id"}]
+
+    # 既有 cube / relationship / model 未被破坏
+    assert mdl["cubes"][0]["name"] == "revenue"
+    assert mdl["relationships"][0]["models"] == ["orders", "users"]
+
+
+def test_build_mdl_from_catalog_materializes_new_relationship_from_envelope():
+    """M-G2：画布连线建的关系必须物化（否则 orders-customers join 不会进 MDL）。"""
+    envelope = json.dumps(
+        {
+            "join_type": "inner",
+            "cardinality": "1:N",
+            "condition": "orders.customer_id = customers.id",
+            "source_model": "mdl:model:orders",
+            "target_model": "mdl:model:customers",
+        },
+        ensure_ascii=False,
+    )
+    edited = [
+        {
+            "item_key": "mdl:relationship:orders_customers",
+            "kind": "relationship",
+            "parent_key": "mdl:model:orders",
+            "display_name": "orders_customers",
+            "data_type": None,
+            "description": None,
+            "expression": envelope,
+            "model_ref": None,
+        }
+    ]
+
+    mdl_dir, _ = IqdAskService().build_mdl_from_catalog(1, json.dumps(BASELINE_MDL), edited)
+    mdl = _read_manifest(mdl_dir)
+
+    names = [r["name"] for r in mdl["relationships"]]
+    assert "orders_customers" in names
+    rel = next(r for r in mdl["relationships"] if r["name"] == "orders_customers")
+    assert rel["models"] == ["orders", "customers"], "models 由 source/target_model 去 mdl:model: 前缀得到"
+    assert rel["joinType"] == "INNER"
+    assert rel["condition"] == "orders.customer_id = customers.id"
+    # 既有 relationship 未被破坏
+    assert mdl["relationships"][0]["name"] == "orders_user"
+
+
+def test_build_mdl_from_catalog_skips_relationship_without_envelope():
+    """防御：非信封（历史 MDL 同步来源的裸 condition）无法还原 models → 宁可不物化。"""
+    edited = [
+        {
+            "item_key": "mdl:relationship:legacy",
+            "kind": "relationship",
+            "parent_key": None,
+            "display_name": "legacy",
+            "description": None,
+            "expression": "orders.uid = users.id",
+            "model_ref": None,
+        }
+    ]
+
+    mdl_dir, _ = IqdAskService().build_mdl_from_catalog(1, json.dumps(BASELINE_MDL), edited)
+    mdl = _read_manifest(mdl_dir)
+
+    assert "legacy" not in [r["name"] for r in mdl["relationships"]]
+
+
+def test_build_mdl_from_catalog_materializes_calculated_column():
+    """MR-04：计算列（item_key=calc:<model>.<col>）必须物化进宿主模型的 columns。"""
+    edited = [
+        {
+            "item_key": "calc:orders.margin",
+            "kind": "column",
+            "parent_key": "mdl:model:orders",
+            "display_name": "margin",
+            "data_type": None,
+            "description": None,
+            "expression": "orders.amount * 0.2",
+            "model_ref": None,
+        }
+    ]
+
+    mdl_dir, _ = IqdAskService().build_mdl_from_catalog(1, json.dumps(BASELINE_MDL), edited)
+    mdl = _read_manifest(mdl_dir)
+
+    orders = next(m for m in mdl["models"] if m["name"] == "orders")
+    columns = {c["name"]: c for c in orders["columns"]}
+    assert "margin" in columns, "计算列必须挂到宿主模型的 columns"
+    assert columns["margin"]["expression"] == "orders.amount * 0.2"
+    assert "id" in columns, "既有物理列未被破坏"
+
+
+def test_build_mdl_from_catalog_patches_existing_cube_without_duplicating():
+    """回归守卫：已存在于基线的 cube 只被 patch（改名），不得被物化逻辑重复追加。"""
+    edited = [
+        {
+            "item_key": "mdl:cube:revenue",
+            "kind": "cube",
+            "parent_key": "mdl:model:orders",
+            "display_name": "营收(新)",
+            "description": None,
+            "expression": None,
+            "model_ref": "mdl:model:orders",
+        }
+    ]
+
+    mdl_dir, _ = IqdAskService().build_mdl_from_catalog(1, json.dumps(BASELINE_MDL), edited)
+    mdl = _read_manifest(mdl_dir)
+
+    assert len(mdl["cubes"]) == 1, "既有 cube 不得被重复物化"
+    assert mdl["cubes"][0]["name"] == "营收(新)"
+    assert mdl["cubes"][0]["measures"][0]["name"] == "total"
+
+
 # ================================================================ P0-7 trigger_model_build 回填 revision
 
 FULL_WITH_REVISION = {

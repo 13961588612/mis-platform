@@ -2,6 +2,7 @@ package com.mis.iqd.domain.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.mis.common.core.exception.BusinessException;
+import com.mis.iqd.api.dto.IqdModelingCreateResponse;
 import com.mis.iqd.api.dto.ValidateExprResult;
 import com.mis.iqd.domain.entity.IqdCatalogItem;
 import com.mis.iqd.domain.entity.IqdConnection;
@@ -401,5 +402,345 @@ class IqdCatalogNodeServiceTest {
         assertEquals(1, out.getTotal());
         assertEquals("mdl:cube:revenue", out.getDependents().get(0).getItemKey());
         assertEquals("cube", out.getDependents().get(0).getKind());
+    }
+
+    // ============================================================ T03 createModel（空白模型）
+
+    @Test
+    void createModel_writesModelNode_bumpsRevision_andPublishes() {
+        IqdConnection c = conn(12L);
+        when(connectionRepository.findById(CONN_ID)).thenReturn(Optional.of(c));
+        stubNoExistingNodes();
+
+        Map<String, Object> patch = new LinkedHashMap<>();
+        patch.put("display_name", "orders_new");
+        patch.put("description", "空模型");
+
+        IqdModelingCreateResponse result = service.createModel(
+                CONN_ID, "mdl:model:orders_new", patch, 12L, "1:model:create:uuid");
+
+        assertEquals(13L, result.getEditRevision());
+        assertEquals("EDITED_UNSYNCED", result.getEditStatus());
+        verify(connectionRepository).save(c);
+
+        ArgumentCaptor<IqdCatalogItem> captor = ArgumentCaptor.forClass(IqdCatalogItem.class);
+        verify(catalogItemRepository, times(1)).save(captor.capture());
+        IqdCatalogItem saved = captor.getValue();
+        assertEquals("model", saved.getKind());
+        assertEquals("mdl:model:orders_new", saved.getItemKey());
+        assertEquals("orders_new", saved.getDisplayName());
+        assertEquals("modeling", saved.getSource());
+        assertEquals(13L, saved.getEditRevision());
+        assertEquals(0, saved.getInScope().intValue(), "语义对象默认不自动纳入问数范围");
+        verify(idempotencyRepository).save(any(IqdEditIdempotency.class));
+        verify(changeEventPublisher).publish(eq("iqd.catalog.changed"), anyString());
+    }
+
+    @Test
+    void createModel_requiresMdlModelItemKeyPrefix_throws42200() {
+        BusinessException ex = org.junit.jupiter.api.Assertions.assertThrows(BusinessException.class,
+                () -> service.createModel(CONN_ID, "mdl:cube:revenue", Map.of(), 12L, "k"));
+        assertEquals(42200, ex.getCode());
+    }
+
+    /**
+     * 回归守卫：语义键的「名字」取**最后一个冒号之后**，不是最后一个点之后。
+     *
+     * <p>{@code mdl:model:orders} 里没有点，若用按 {@code .} 切分的 lastSegment 会得到整串
+     * {@code mdl:model:orders} 当 display_name（并进一步污染 cube 子节点键，如
+     * {@code mdl:measure:mdl:cube:revenue.total}）。
+     */
+    @Test
+    void createModel_defaultsDisplayNameToSemanticKeyTail() {
+        when(connectionRepository.findById(CONN_ID)).thenReturn(Optional.of(conn(12L)));
+        stubNoExistingNodes();
+
+        service.createModel(CONN_ID, "mdl:model:orders", Map.of(), 12L, "k-tail");
+
+        ArgumentCaptor<IqdCatalogItem> captor = ArgumentCaptor.forClass(IqdCatalogItem.class);
+        verify(catalogItemRepository).save(captor.capture());
+        assertEquals("orders", captor.getValue().getDisplayName());
+    }
+
+    @Test
+    void createModel_staleBaseRevision_throws40900_withCurrentRevision() {
+        when(connectionRepository.findById(CONN_ID)).thenReturn(Optional.of(conn(12L)));
+        stubNoExistingNodes();
+
+        BusinessException ex = org.junit.jupiter.api.Assertions.assertThrows(BusinessException.class,
+                () -> service.createModel(CONN_ID, "mdl:model:orders", Map.of(), 11L, "k"));
+
+        assertEquals(40900, ex.getCode());
+        @SuppressWarnings("unchecked")
+        Map<String, Object> data = (Map<String, Object>) ex.getData();
+        assertEquals(12L, data.get("current_edit_revision"));
+    }
+
+    // ============================================================ T03 createRelationship
+
+    @Test
+    void createRelationship_writesEnvelopeNode_bumpsRevision() {
+        IqdConnection c = conn(12L);
+        when(connectionRepository.findById(CONN_ID)).thenReturn(Optional.of(c));
+        stubNoExistingNodes();
+        stubOrderAndCustomerModels();
+
+        Map<String, Object> patch = new LinkedHashMap<>();
+        patch.put("join_type", "inner");
+        patch.put("cardinality", "1:N");
+        patch.put("condition", "orders.customer_id = customers.id");
+        patch.put("source_model", "mdl:model:orders");
+        patch.put("target_model", "mdl:model:customers");
+
+        IqdModelingCreateResponse result = service.createRelationship(
+                CONN_ID, "mdl:relationship:orders_customers", patch, 12L, "1:relationship:create:u");
+
+        assertEquals(13L, result.getEditRevision());
+
+        ArgumentCaptor<IqdCatalogItem> captor = ArgumentCaptor.forClass(IqdCatalogItem.class);
+        verify(catalogItemRepository, times(1)).save(captor.capture());
+        IqdCatalogItem saved = captor.getValue();
+        assertEquals("relationship", saved.getKind());
+        assertEquals("mdl:relationship:orders_customers", saved.getItemKey());
+        assertEquals("orders_customers", saved.getDisplayName(), "语义键末段（冒号后），非整串");
+        assertEquals("mdl:model:orders", saved.getParentKey(), "parent_key = 源模型键（血缘）");
+        assertTrue(saved.getExpression().contains("\"join_type\":\"inner\""));
+        assertTrue(saved.getExpression().contains("\"source_model\":\"mdl:model:orders\""));
+        assertTrue(saved.getExpression().contains("\"target_model\":\"mdl:model:customers\""));
+        assertTrue(saved.getExpression().contains("orders.customer_id = customers.id"));
+        assertEquals(0, saved.getInScope().intValue());
+    }
+
+    @Test
+    void createRelationship_conditionReferencesUnknownField_throws42200() {
+        when(connectionRepository.findById(CONN_ID)).thenReturn(Optional.of(conn(12L)));
+        stubNoExistingNodes();
+        stubOrderAndCustomerModels();
+
+        Map<String, Object> patch = new LinkedHashMap<>();
+        patch.put("condition", "orders.customer_id = customers.ghost_col");
+        patch.put("source_model", "mdl:model:orders");
+        patch.put("target_model", "mdl:model:customers");
+
+        BusinessException ex = org.junit.jupiter.api.Assertions.assertThrows(BusinessException.class,
+                () -> service.createRelationship(CONN_ID, "mdl:relationship:r", patch, 12L, "k"));
+
+        assertEquals(42200, ex.getCode());
+        @SuppressWarnings("unchecked")
+        Map<String, Object> data = (Map<String, Object>) ex.getData();
+        assertTrue(String.valueOf(data.get("unknown_fields")).contains("ghost_col"));
+    }
+
+    @Test
+    void createRelationship_missingTargetModel_throws42200() {
+        when(connectionRepository.findById(CONN_ID)).thenReturn(Optional.of(conn(12L)));
+        stubNoExistingNodes();
+        stubOrderAndCustomerModels();
+
+        Map<String, Object> patch = new LinkedHashMap<>();
+        patch.put("condition", "orders.customer_id = customers.id");
+        patch.put("source_model", "mdl:model:orders");
+        patch.put("target_model", "mdl:model:ghost");
+
+        BusinessException ex = org.junit.jupiter.api.Assertions.assertThrows(BusinessException.class,
+                () -> service.createRelationship(CONN_ID, "mdl:relationship:r", patch, 12L, "k"));
+
+        assertEquals(42200, ex.getCode());
+        @SuppressWarnings("unchecked")
+        Map<String, Object> data = (Map<String, Object>) ex.getData();
+        assertEquals("target_model", data.get("field"));
+        assertEquals("mdl:model:ghost", data.get("model_item_key"));
+    }
+
+    // ============================================================ T03 createCube（model_ref 落库）
+
+    @Test
+    void createCube_writesModelRef_andMeasureDimensionChildren() {
+        IqdConnection c = conn(12L);
+        when(connectionRepository.findById(CONN_ID)).thenReturn(Optional.of(c));
+        stubNoExistingNodes();
+        stubOrderModelWithFields();
+
+        Map<String, Object> measure = new LinkedHashMap<>();
+        measure.put("name", "total");
+        measure.put("expression", "SUM(amount)");
+        measure.put("format", "¥#,##0.00");
+        Map<String, Object> dimension = new LinkedHashMap<>();
+        dimension.put("name", "store_id");
+        dimension.put("ref_model_field", "orders.store_id");
+        Map<String, Object> patch = new LinkedHashMap<>();
+        patch.put("display_name", "营收");
+        patch.put("model_ref", "mdl:model:orders");
+        patch.put("measures", List.of(measure));
+        patch.put("dimensions", List.of(dimension));
+
+        IqdModelingCreateResponse result = service.createCube(
+                CONN_ID, "mdl:cube:revenue", patch, 12L, "1:cube:create:u");
+
+        assertEquals(13L, result.getEditRevision());
+
+        ArgumentCaptor<IqdCatalogItem> captor = ArgumentCaptor.forClass(IqdCatalogItem.class);
+        verify(catalogItemRepository, times(3)).save(captor.capture());
+        List<IqdCatalogItem> saved = captor.getAllValues();
+
+        IqdCatalogItem cube = saved.stream().filter(i -> "cube".equals(i.getKind())).findFirst().orElseThrow();
+        assertEquals("mdl:cube:revenue", cube.getItemKey());
+        assertEquals("营收", cube.getDisplayName());
+        assertEquals("mdl:model:orders", cube.getModelRef(), "★ cube 必须写入 model_ref（V89）");
+        assertEquals("mdl:model:orders", cube.getParentKey());
+        assertEquals(null, cube.getExpression(), "cube 的 expression 是二义列，不写");
+
+        IqdCatalogItem m = saved.stream().filter(i -> "measure".equals(i.getKind())).findFirst().orElseThrow();
+        assertEquals("mdl:measure:revenue.total", m.getItemKey());
+        assertEquals("mdl:cube:revenue", m.getParentKey());
+        assertEquals("SUM(amount)", m.getExpression());
+        assertEquals("¥#,##0.00", m.getDataType());
+
+        IqdCatalogItem d = saved.stream().filter(i -> "dimension".equals(i.getKind())).findFirst().orElseThrow();
+        assertEquals("mdl:dimension:revenue.store_id", d.getItemKey());
+        assertEquals("mdl:cube:revenue", d.getParentKey());
+        assertEquals("orders.store_id", d.getExpression());
+
+        for (IqdCatalogItem item : saved) {
+            assertEquals("modeling", item.getSource());
+            assertEquals(13L, item.getEditRevision());
+        }
+    }
+
+    @Test
+    void createCube_missingModelRefTarget_throws42200() {
+        when(connectionRepository.findById(CONN_ID)).thenReturn(Optional.of(conn(12L)));
+        stubNoExistingNodes();
+        stubOrderModelWithFields();
+
+        Map<String, Object> patch = new LinkedHashMap<>();
+        patch.put("model_ref", "mdl:model:ghost");
+
+        BusinessException ex = org.junit.jupiter.api.Assertions.assertThrows(BusinessException.class,
+                () -> service.createCube(CONN_ID, "mdl:cube:revenue", patch, 12L, "k"));
+
+        assertEquals(42200, ex.getCode());
+        @SuppressWarnings("unchecked")
+        Map<String, Object> data = (Map<String, Object>) ex.getData();
+        assertEquals("model_ref", data.get("field"));
+    }
+
+    @Test
+    void createCube_measureExpressionReferencesUnknownField_throws42201() {
+        when(connectionRepository.findById(CONN_ID)).thenReturn(Optional.of(conn(12L)));
+        stubNoExistingNodes();
+        stubOrderModelWithFields();
+
+        Map<String, Object> measure = new LinkedHashMap<>();
+        measure.put("name", "bad");
+        measure.put("expression", "SUM(ghost_amount)");
+        Map<String, Object> patch = new LinkedHashMap<>();
+        patch.put("model_ref", "mdl:model:orders");
+        patch.put("measures", List.of(measure));
+
+        BusinessException ex = org.junit.jupiter.api.Assertions.assertThrows(BusinessException.class,
+                () -> service.createCube(CONN_ID, "mdl:cube:bad", patch, 12L, "k"));
+
+        assertEquals(42201, ex.getCode());
+        @SuppressWarnings("unchecked")
+        Map<String, Object> data = (Map<String, Object>) ex.getData();
+        assertTrue(String.valueOf(data.get("errors")).contains("ghost_amount"));
+        assertEquals("mdl:model:orders", data.get("model_ref"));
+    }
+
+    // ============================================================ T03 createCalculatedColumn
+
+    @Test
+    void createCalculatedColumn_writesKindColumnUnderModel_validatedTrue() {
+        IqdConnection c = conn(12L);
+        when(connectionRepository.findById(CONN_ID)).thenReturn(Optional.of(c));
+        stubNoExistingNodes();
+        stubOrderModelWithFields();
+        when(connectionRepository.existsById(CONN_ID)).thenReturn(true);
+
+        Map<String, Object> result = service.createCalculatedColumn(
+                CONN_ID, "mdl:model:orders", "margin", "amount * 0.2", 12L, "1:column:create:u");
+
+        assertEquals(13L, result.get("edit_revision"));
+        assertEquals("EDITED_UNSYNCED", result.get("edit_status"));
+        assertEquals("calc:orders.margin", result.get("item_key"), "§8.6 calc:<model>.<column_name>");
+        assertEquals(Boolean.TRUE, result.get("validated"));
+
+        ArgumentCaptor<IqdCatalogItem> captor = ArgumentCaptor.forClass(IqdCatalogItem.class);
+        verify(catalogItemRepository, times(1)).save(captor.capture());
+        IqdCatalogItem saved = captor.getValue();
+        assertEquals("column", saved.getKind());
+        assertEquals("calc:orders.margin", saved.getItemKey());
+        assertEquals("mdl:model:orders", saved.getParentKey());
+        assertEquals("margin", saved.getDisplayName());
+        assertEquals("amount * 0.2", saved.getExpression());
+        assertEquals(0, saved.getInScope().intValue());
+    }
+
+    @Test
+    void createCalculatedColumn_expressionReferencesUnknownField_throws42201() {
+        when(connectionRepository.findById(CONN_ID)).thenReturn(Optional.of(conn(12L)));
+        stubNoExistingNodes();
+        stubOrderModelWithFields();
+        when(connectionRepository.existsById(CONN_ID)).thenReturn(true);
+
+        BusinessException ex = org.junit.jupiter.api.Assertions.assertThrows(BusinessException.class,
+                () -> service.createCalculatedColumn(
+                        CONN_ID, "mdl:model:orders", "margin", "ghost_col * 2", 12L, "k"));
+
+        assertEquals(42201, ex.getCode());
+        @SuppressWarnings("unchecked")
+        Map<String, Object> data = (Map<String, Object>) ex.getData();
+        assertTrue(String.valueOf(data.get("errors")).contains("ghost_col"));
+        assertEquals("calc:orders.margin", data.get("item_key"));
+    }
+
+    @Test
+    void createCalculatedColumn_writebackDisabled_throws40300() {
+        IqdConnection c = conn(12L);
+        c.setMdlWritebackEnabled(false);
+        when(connectionRepository.findById(CONN_ID)).thenReturn(Optional.of(c));
+
+        BusinessException ex = org.junit.jupiter.api.Assertions.assertThrows(BusinessException.class,
+                () -> service.createCalculatedColumn(
+                        CONN_ID, "mdl:model:orders", "margin", "amount * 2", null, "k"));
+
+        assertEquals(40300, ex.getCode());
+    }
+
+    // ------------------------------------------------------------ 测试装配辅助（T03）
+
+    /** 覆盖既有「空库」桩（先 generic 后 specific，specific 生效）。 */
+    private void stubOrderModelWithFields() {
+        when(catalogItemRepository.findByConnectionIdAndItemKey(CONN_ID, "mdl:model:orders"))
+                .thenReturn(Optional.of(catalogNode("mdl:model:orders", "model", "orders", null)));
+        when(catalogItemRepository.findByConnectionId(CONN_ID)).thenReturn(orderFields());
+    }
+
+    private void stubOrderAndCustomerModels() {
+        when(catalogItemRepository.findByConnectionIdAndItemKey(CONN_ID, "mdl:model:orders"))
+                .thenReturn(Optional.of(catalogNode("mdl:model:orders", "model", "orders", null)));
+        when(catalogItemRepository.findByConnectionIdAndItemKey(CONN_ID, "mdl:model:customers"))
+                .thenReturn(Optional.of(catalogNode("mdl:model:customers", "model", "customers", null)));
+        when(catalogItemRepository.findByConnectionId(CONN_ID)).thenReturn(orderAndCustomerFields());
+    }
+
+    private List<IqdCatalogItem> orderFields() {
+        List<IqdCatalogItem> items = new ArrayList<>();
+        items.add(catalogNode("mdl:model:orders", "model", "orders", null));
+        items.add(catalogNode("pg_main.public.orders", "table", "orders", null));
+        items.add(catalogNode("pg_main.public.orders.amount", "column", "amount", "pg_main.public.orders"));
+        items.add(catalogNode("pg_main.public.orders.store_id", "column", "store_id", "pg_main.public.orders"));
+        items.add(catalogNode("pg_main.public.orders.customer_id", "column", "customer_id", "pg_main.public.orders"));
+        return items;
+    }
+
+    private List<IqdCatalogItem> orderAndCustomerFields() {
+        List<IqdCatalogItem> items = orderFields();
+        items.add(catalogNode("mdl:model:customers", "model", "customers", null));
+        items.add(catalogNode("pg_main.public.customers", "table", "customers", null));
+        items.add(catalogNode("pg_main.public.customers.id", "column", "id", "pg_main.public.customers"));
+        items.add(catalogNode("pg_main.public.customers.name", "column", "name", "pg_main.public.customers"));
+        return items;
     }
 }
