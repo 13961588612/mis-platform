@@ -24,6 +24,9 @@
  * **T03 已落地**：blank model / relationship / cube（create）/ calculated-column /
  * dependencies / layout（原「调过去 503 + 50300」的描述已过时，保留此纠正）。
  * **T04a 新增**：`PUT /catalog/cube`（{@link upsertCube}，既有 Cube 的更新路径）。
+ * **T07 新增**：`PUT /connections/{id}`（{@link updateConnection}，按 id 精确更新连接 ——
+ * 补齐「多连接下无法"编辑 / 停用"指定连接」的写入缺口；端点契约见 system-design §14.1，
+ * 权限码 `iqd:modeling:edit`，迁移 `V92` 登记 sys_api 92800 / sys_menu_api 92801）。
  * **同步状态复用 {@link getIqdCatalogSyncStatus}**（既有 `IqdAclController` 提供），
  * 本模块**不重复定义**。
  */
@@ -43,6 +46,7 @@ import type {
   IqdDependents,
   IqdModelFromTableResponse,
   IqdModelingCreateResponse,
+  UpdateConnectionRequest,
   ValidateExpressionResult,
 } from '../types/modeling';
 
@@ -123,6 +127,43 @@ export async function testConnection(connectionId: number): Promise<ConnectionTe
     `/iqd/connections/${connectionId}/test`,
   );
   return unwrap(res, '连接自检失败');
+}
+
+/**
+ * 按 id 精确更新一条既有连接（**局部更新**，T07）。`PUT /api/v1/iqd/connections/{id}`。
+ *
+ * <p>权限：<b>`iqd:modeling:edit`</b>（mis-iqd `@PreAuthorize("hasAuthority('iqd:modeling:edit')")`
+ * 逐条对齐；V92 已把该路径登记为 sys_api 92800 / 绑定菜单 92632）。前端闸门必须用**同一个码**
+ * —— 本组件同时存在 `iqd:mcp:manage`（MCP 启停用），**两个码并存、各管各的**，
+ * 照抄 MCP 那行的码会错配成「前端放行、后端 40300」。
+ *
+ * <h2>⚠️ 局部更新 = 只传"改过的字段"（详见 {@link UpdateConnectionRequest}）</h2>
+ * 后端 `IqdConnectionUpdateRequest` 字段全 null 默认、按 `containsKey` 填充 ⇒
+ * **未提交字段保留原值**。载荷组装一律走 `components/wizard/connectionEditUtils.ts` 的
+ * {@link buildUpdateRequest} / {@link buildEnabledUpdate}，**禁止手写请求体**。
+ *
+ * <h2>错误码（读 `data` 不读 `message`）</h2>
+ * <ul>
+ *   <li>`40900` 改名撞 `uk_iqd_connection_name` → `data.name`（"先查后报"，无约束异常）</li>
+ *   <li>`42200` `id` 为空 / `timeout_seconds <= 0` / **连接不存在**（与 `testConnection` 的
+ *       `40400` 不一致是**已知裁决**，§14.1 照实记录）</li>
+ *   <li>`40300` 无 `iqd:modeling:edit`（注册表未映射 / mis-iqd 拒）</li>
+ *   <li>**不采用 `40901`**（本端点无幂等键，§14.4 裁决 last-write-wins）</li>
+ * </ul>
+ *
+ * <p>成功返回值与 `GET /connections` 的元素**逐字段一致**（服务层复用 `toVO`），
+ * 故理论上可直接替换列表项；但改名 / 启停会改变列表可见性与排序 ⇒ 调用方仍**整体失效**
+ * `iqdKeys.connections()`（见 `ConnectionWizard`）。
+ *
+ * @param connectionId 连接 id（来自列表项 `Connection.id`；为空时调用方不应发起请求）
+ * @param body         仅含**被修改**字段的局部更新体（`secret_ref` 留空 ⇒ 不传该字段）
+ */
+export async function updateConnection(
+  connectionId: number,
+  body: UpdateConnectionRequest,
+): Promise<Connection> {
+  const res = await api.put<ApiResult<Connection>>(`/iqd/connections/${connectionId}`, body);
+  return unwrap(res, '更新连接失败');
 }
 
 // ================================================================ 新建节点族（§4.3 c 点）

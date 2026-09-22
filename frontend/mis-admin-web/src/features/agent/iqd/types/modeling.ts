@@ -169,6 +169,29 @@ export interface CreateConnectionRequest {
   enabled?: boolean;
 }
 
+/**
+ * 连接**局部更新**请求体（`PUT /api/v1/iqd/connections/{id}`，system-design §14.1 / T07）。
+ *
+ * <p><b>局部更新语义（铁律）</b>：后端新建了 `IqdConnectionUpdateRequest`（字段**全 null 默认、
+ * 无 `@NotBlank`/`@NotNull`**），控制器按 `containsKey` 填充 —— **缺省 / `null` = 保留原值**。
+ * 故前端**只能提交"确实被修改"的字段**：
+ * <ul>
+ *   <li>提交未修改字段 = 用"当前值"覆盖"当前值"（多数情况下无害，但 `secret_ref` /
+ *       `auth_type` 等敏感字段会因前后端默认值口径不同而**静默改写**）；</li>
+ *   <li>更危险的是**照抄 `CreateConnectionRequest` 全量字段**：后端 create DTO 带 Java 默认值
+ *       （`authType="none"` / `timeoutSeconds=60` / `language="zh-CN"` / `enabled=true`），
+ *       一旦复用就会"改名即重置超时/认证方式"——这正是后端**专门新开 DTO** 的原因。</li>
+ * </ul>
+ * 载荷组装统一走 {@link buildUpdateRequest}（`components/wizard/connectionEditUtils.ts`），
+ * **禁止在组件里手写请求体**。
+ *
+ * <p><b>本端点不支持"清空字段"</b>（§14.1 / §14.10 #2）：wire 上无法区分「未提交」与
+ * 「显式置空」，故 uniform 采用「缺省/null = 保留原值」。前端编辑表单里"留空"即等于"保留原值"。
+ *
+ * <p>`mdl_writeback_enabled` **不在本期**（归 `PUT /config` / config 页，§14.10 #4）。
+ */
+export type UpdateConnectionRequest = Partial<CreateConnectionRequest>;
+
 /** 连通性自检出参（`POST /api/v1/iqd/connections/{id}/test`）。 */
 export interface ConnectionTestResult {
   ok: boolean;
