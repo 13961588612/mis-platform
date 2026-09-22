@@ -18,7 +18,7 @@
 | 项 | 类别 | 本沙箱状态 | 真机复验 |
 |---|---|---|---|
 | 跨阶段不变项 6 项（§4） | 静态/grep | ✅ **已验证**（逐条带证据，见 §2） | 建议 CI 化 |
-| M-G1 向导闭环（含模型物化） | E2E | ⚠️ **未验证**（依赖 WrenAI 物化，见 §3.1 红线） | **必跑** |
+| M-G1 建连接+向导闭环（含模型物化） | E2E | ⚠️ **未验证**（依赖 WrenAI 物化，见 §3.1 红线） | **必跑** |
 | M-G2 关系+Cube+问数命中 | E2E | ⚠️ **未验证**（需真问数） | **必跑** |
 | M-G3 build 失败→定位→重试 | E2E | ⚠️ **未验证**（需可注入失败的真 build） | **必跑** |
 | M-G4 漂移注入→详情→收敛 | E2E | ⚠️ **未验证**（需真 MDL 漂移） | 可跑 |
@@ -38,12 +38,34 @@
 
 ## 1. 全局前置条件（真机，全部项共用）
 
-- [ ] **WrenAI** 可用：`wren --version` = 0.13.3；`wren serve mcp` 在 PATH；每连接的 wren project 目录（`/var/lib/mis-iqd/wren-projects/<connId>`）就绪（见 runbook §1）。
+- [ ] **WrenAI** 可用：`wren --version` = 0.13.3；`wren serve mcp` 在 PATH；每连接的 wren project 目录（`/var/lib/mis-iqd/wren-projects/<connId>`）就绪（见 runbook §1.5）。
 - [ ] **业务库**：待建模的连接指向一个**真正含数据**的业务 PG（非 `mis_platform`）。sample schema 建议 `public`，含 `orders` / `customers` / `stores` 三表（M-G1 最少 3 张）。
-- [ ] **mis_platform 库**：Flyway 已跑到 **V90**（`V87~V90` 建模台增量种子已落；`SELECT max(version) FROM flyway_schema_history`）。
+- [ ] **mis_platform 库**：Flyway 已跑到 **V91**（`V87~V91` 建模台增量已落；**V91 修 F-1**：`sql-pairs/translate` 端点 PK 冲突 → **必须执行**，否则该端点仍 40300；`SELECT max(version) FROM flyway_schema_history`）。
 - [ ] **后端**：mis-iqd / mis-admin-bff / ai-platform（含 `agent/mis_iqd` Worker）均已起；`MIS_API_PERMISSION_DENY_UNMAPPED=true`（默认，见 `application.yml:98`）。
 - [ ] **登录态**：`<MIS_JWT>` 属于 **role_id=1**（内置租户管理员，V87~V90 已授予 `iqd:modeling:view/edit/publish` + `iqd:mcp:manage`）。
 - [ ] **前端**：`npm run build` 产物已部署，访问 `/iqd/modeling` 侧栏可见「可视化建模台」（Workflow 图标）。
+- [ ] **DBA 侧：数据源 profile 注册**（**在 wren 机执行**；**凭证只落主机**，平台既不代敲也不经手明文——架构红线）。命令形态：
+  ```bash
+  # ① 注册业务库 profile（凭证经 ${ENV} 占位；明文只进主机 ~/.wren/.env 或 systemd Environment=）
+  wren profile add <profile_name> --connector postgres \
+    --host <BIZ_PG_HOST> --port 5432 --user <db_user> \
+    --password '${ENV:IQD_DB_PASSWORD}' --database <biz_db>
+  # ② 绑定到本连接的 wren project 目录（后续 build / serve mcp 均作用于此 project）
+  wren context set-profile <profile_name>
+  # ③ 验证：profile 列表含该名；profiles.yml 权限 0600 且 password 为占位（无明文）
+  wren profile list
+  stat -c '%a %n' ~/.wren/profiles.yml
+  grep -i password ~/.wren/profiles.yml     # 期望看到 ${ENV:IQD_DB_PASSWORD}，无明文
+  ```
+  产出 `<profile_name>` 供向导（§3.1 步骤 2，认证方式 `none` = profile 注入）关联。归属与边界见 runbook §1.5。
+- [ ] **`wren-mcp-agent` 已部署运行**（控制面 **9100** / 数据面 **9101** 可达；V89 新增的 6 条 MCP 启停端点**依赖本 Agent**，未部署则 `/mcp/enable` 会失败）：
+  ```bash
+  # wren 机本机
+  curl -sf http://127.0.0.1:9100/internal/v1/wren-mcp/health -H "Authorization: Bearer ${WREN_AGENT_TOKEN}"
+  ss -ltnp | grep -E ':(9100|9101)\b'
+  # ai-platform 机（跨机；需放行 ai-platform 源 IP → 9100/9101）
+  curl -sf -H "Authorization: Bearer ${WREN_AGENT_TOKEN}" "http://<WREN_HOST>:9100/internal/v1/wren-mcp/health"
+  ```
 
 ---
 
@@ -153,22 +175,52 @@
 > 每条给：目的 / 前置 / 执行步骤（可复制）/ 预期 / 通过标准 / 失败排查。
 > **本沙箱不伪造结果**：状态见每条头部。
 
-### 3.1 M-G1 向导闭环（连接 → 发现导入 3 表 → 建模型 → 画布可见 → build 写回 SYNCED → 测试问数可问）
+### 3.1 M-G1 向导闭环（DBA profile → 向导建连接 → MCP ready → 发现导入 3 表 → 建模型 → 画布可见 → build 写回 SYNCED → 测试问数可问）
 
 > **状态：⚠️ 未验证（本沙箱不可能）**。
 > **🔴 红线（必须诚实标注）**：M-G1 依赖「模型物化」。而 `build_mdl_from_catalog` **对全新 model 不做物化**（刻意为之——真实 MDL model 的 schema 未经 W0 真机校准）。因此即使真机跑通「画布可见 / build 写回 SYNCED」，**「测试问数可答」这一步在本阶段仍可能不成立**。**未在真机证明前，M-G1 一律记「未验证」，不得记「通过」。**
 
-- **前置**：全局前置 §1 全满足；`<CONN_ID>` 连到含 `orders/customers/stores` 的业务库。
-- **步骤**：
-  1. `/iqd/modeling` → 左树「表发现导入」→ 选 schema → 勾 3 张表 → 导入。
-  2. `curl` 校连接与发现：`GET <AI_PLATFORM_HOST>/api/v1/iqd/discovery/schemas?connectionId=<CONN_ID>`（应 200，非 40300/502）。
-  3. 双击一张表（或左树「生成模型」）→ 生成 1 个 model → 画布出现节点卡。
-  4. 观察 `PublishPipelineBar` 五态。
-  5. `/iqd/scope` 勾选纳入范围（**导入 ≠ 可问**，默认 `in_scope=false`）。
-  6. 测试问数页对 `orders` 发 1 条自然语言问数。
-- **预期**：连接创建成功；发现返回 ≥3 表；模型节点画布可见；导入触发一次整库 build；`edit_status` 走向 `SYNCED`（`built_edit_revision` 推进）；问数返回结果。
-- **通过标准**：3 步全部成立 **且** 第 6 步问数**真正命中**（非 503/空）。⚠️ 若第 6 步失败而 1~5 成立 → 记「M-G1 部分通过（模型物化缺口，已知）」，**不得记整条通过**。
-- **失败排查**：40300 → 查 §2.3/§5 F-1 端点登记；50201 → MCP/profile 未注入（runbook §3）；问数无模型 → 见上方红线。
+- **前置**：全局前置 §1 全满足（含 **DBA profile 注册** 与 **`wren-mcp-agent` 已运行**）；`<CONN_ID>` 连到含 `orders/customers/stores` 的业务库。
+- **步骤**（连接创建是**三方协作**：① DBA 主机侧 profile → ② 平台向导落库 → ③ 平台/运维拉起 MCP）：
+  1. **DBA 主机侧：数据源 profile 注册**（在 **wren 机**执行；凭证**只落主机**，平台不代敲、不经手明文）：
+     ```bash
+     wren profile add <profile_name> --connector postgres \
+       --host <BIZ_PG_HOST> --port 5432 --user <db_user> \
+       --password '${ENV:IQD_DB_PASSWORD}' --database <biz_db>
+     wren context set-profile <profile_name>
+     wren profile list                        # 验证：列表含 <profile_name>
+     grep -i password ~/.wren/profiles.yml    # 验证：值为 ${ENV:...}，无明文
+     ```
+  2. **平台侧：向导 4 步创建连接**（`/iqd/modeling` → 右上「新建连接」→ `components/wizard/ConnectionWizard.tsx`）：
+     - **步骤 1 `conn:basic`**：连接名称*（如「销售库」）/ WrenAI 地址 `base_url`（如 `http://127.0.0.1:3000`）/ 默认 connector（下拉）/ 超时（秒）；**并展示已有连接列表 + 每连接的 MCP 状态卡**。
+     - **步骤 2 `conn:datasource`**：认证方式（`none`=**profile 注入**（对应步骤 1 的 profile）/ `basic` / `token`）/ 凭证引用 `secret_ref`（password 框，**留空=保留原值**，查询恒返回 `******`）/ WrenAI `project_id`（可选，留空由 WrenAI 侧解析）。
+     - **步骤 3 `conn:profile`**：**纯说明页**——明确告知「profile 绑定由 DBA 在主机侧执行」（即步骤 1），平台此步**不收集凭证**。
+     - **步骤 4 `conn:test`**：**先落库再测试**（步骤 3→4 边界创建；**落库失败留在原步、不清屏**）→ 自检 → 拉起 MCP。
+     - 校验 API（字段对应 `IqdAdminService.createConnection`：`name` / `base_url` / `auth_type` / `secret_ref` / `project_id` / `default_connector` / `timeout_seconds` / `language` / `enabled`）：
+       ```bash
+       # ① 建连接（只存 secret_ref 引用，不存明文）
+       curl -s -X POST "<AI_PLATFORM_HOST>/api/v1/iqd/connections" \
+         -H "Authorization: Bearer <MIS_JWT>" -H "Content-Type: application/json" \
+         -d '{"name":"销售库","base_url":"http://127.0.0.1:3000","auth_type":"none",
+              "secret_ref":"<profile_name>","project_id":"","default_connector":"postgres",
+              "timeout_seconds":300,"language":"zh","enabled":true}'
+       # 返回体含 id（即 <CONN_ID>）→ ② 连接自检
+       curl -s -X POST "<AI_PLATFORM_HOST>/api/v1/iqd/connections/<CONN_ID>/test" \
+         -H "Authorization: Bearer <MIS_JWT>"
+       # ③ 首次 bootstrap：拉起该连接 MCP（经 ai-platform → wren-mcp-agent → wren serve mcp）
+       curl -s -X POST "<AI_PLATFORM_HOST>/api/v1/iqd/mcp/enable?connectionId=<CONN_ID>" \
+         -H "Authorization: Bearer <MIS_JWT>"
+       ```
+     - 校验：**每连接 MCP 状态卡应显示 `mcp_status=ready`**（`GET /api/v1/iqd/connections` 核对）。
+  3. `/iqd/modeling` → 左树「表发现导入」→ 选 schema → 勾 3 张表 → 导入。
+  4. `curl` 校连接与发现：`GET <AI_PLATFORM_HOST>/api/v1/iqd/discovery/schemas?connectionId=<CONN_ID>`（应 200，非 40300/502）。
+  5. 双击一张表（或左树「生成模型」）→ 生成 1 个 model → 画布出现节点卡。
+  6. 观察 `PublishPipelineBar` 五态。
+  7. `/iqd/scope` 勾选纳入范围（**导入 ≠ 可问**，默认 `in_scope=false`）。
+  8. 测试问数页对 `orders` 发 1 条自然语言问数。
+- **预期**：数据源 profile 已注册（主机侧 `wren profile list` 可见、无明文）；连接创建成功（返回 `<CONN_ID>`）且该连接 **MCP 状态卡 `mcp_status=ready`**；发现返回 ≥3 表；模型节点画布可见；导入触发一次整库 build；`edit_status` 走向 `SYNCED`（`built_edit_revision` 推进）；问数返回结果。
+- **通过标准**：步骤 **1~7** 全部成立 **且** 第 **8** 步问数**真正命中**（非 503/空）。⚠️ 若第 8 步失败而 1~7 成立 → 记「M-G1 部分通过（模型物化缺口，已知）」，**不得记整条通过**。
+- **失败排查**：**40900** → 连接**重名**（`iqd_connection` UK `(name)`）；**42200** → 连接**名称空**（步骤 1）或其他入参非法；**50201**（HTTP 502）→ **MCP 不可达 / profile 未注入**（核对 §1 DBA profile 步与 wren-mcp-agent 可达性，见 runbook §1.5 / §7）；**40300** → 端点未登记（查 §2.3 / §5 F-1）**或**该连接未启用写回；问数无模型 → 见上方红线。
 
 ### 3.2 M-G2 关系 + Cube + 问数命中「上月客单价」
 

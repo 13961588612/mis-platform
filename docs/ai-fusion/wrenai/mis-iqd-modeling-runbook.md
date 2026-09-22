@@ -22,6 +22,23 @@
 2. 核心不变量：`iqd_connection.built_edit_revision == WrenAI.built_mdl_hash` 代表的模型版本；偏离 → `STALE_DRIFT` + 对账收敛。
 3. fail-closed：漂移期强制重建置灰；删除被引用 cube → 422 阻断；并发 409 可重读重试。
 
+### 0.1 本次交付的更新范围（运维/联调「一处看全」）
+
+> 依据本特征 18 个 commit 的 `git log --name-only` 实测。**要更新的程序**如下（`wren-mcp-agent` 除外，见下结论）。
+
+| 程序 | 路径 | 规模 | 部署动作 |
+|---|---|---|---|
+| Flyway 迁移 | `backend/mis-migrator` | **5 个新迁移**：V87 建模台种子 / V88 补 5 端点 / V89 `model_ref`+MCP 6 端点+`iqd:mcp:manage` / V90 Cube upsert / **V91 修 F-1** | 执行迁移（**V91 必须执行**，否则 translate 端点 40300） |
+| 域服务 | `backend/mis-iqd` | 28 文件 | 重新构建部署 |
+| BFF | `backend/mis-admin-bff` | 8 文件 | 重新构建部署 |
+| AI 平台 | `agent/ai-platform/backend` | 7 文件（`iqd_config_client.py` / `discovery_service.py` / `service.py` / `iqd_discovery.py` / `main.py` + 2 测试） | 重新部署 |
+| 前端 | `frontend/mis-admin-web` | 95 文件 + `package.json`/`pnpm-lock.yaml`（7 新依赖：`@xyflow/react`、CodeMirror 6 ×5、`@dagrejs/dagre`） | **`pnpm install`**（⚠️ 不是 `npm install`）+ `npm run build` + 部署 |
+| **`wren-mcp-agent`** | `agent/ai-platform/deploy/wrenai/wren-mcp-agent/` | **零改动** | **不更新**；仅确认已部署 |
+
+**`wren-mcp-agent` 结论：本次【不需要更新】。**
+依据：本特征 18 个 commit **完全未碰** `wren-mcp-agent/`、`wren_mcp_agent_client.py`、`wren_mcp_registry.py`、`mcp_lifecycle.py` —— 控制面 `/internal/v1/wren-mcp/*`（端口 **9100**）与数据面 `/mcp/{conn_id}`（端口 **9101**）契约**未变**。
+> ⚠️ 但 **V89 新增 6 条 MCP 启停端点**（BFF 面 `/api/v1/iqd/mcp/{start,stop,restart,enable,status,list}`）**依赖 wren-mcp-agent 已部署运行**——这是**部署前提**，不是代码更新。若 Agent 未跑，启停按钮点击会失败（50201）。
+
 ---
 
 ## 1. 数据库迁移（Flyway）
@@ -42,12 +59,13 @@
 | **V88** | 补登 GET /connections、layout GET/PUT/auto-layout、GET /dependencies（92640-44 / 92645-49） |
 | **V89** | `iqd_catalog_item.model_ref` 列；MCP 六端点（92650-55/92657-62）；`iqd:mcp:manage`（92656/92663） |
 | **V90** | `PUT /catalog/cube`（92700/92701） |
+| **V91** | **修 F-1**：`sql-pairs/translate` 端点 id 冲突（重登记为空闲 id）；**必须执行**（否则该端点 40300，见 verify-checklist §5） |
 
 ### 1.2 迁移后自检
 ```sql
--- 版本到位
-SELECT max(version) FROM flyway_schema_history;              -- 期望 >= 90
--- 建模台注册表：期望 12(V87) + 5(V88) + 6(V89) + 1(V90) = 24 条，全部有绑定
+-- 版本到位（V91 修 F-1，见 §1.1）
+SELECT max(version) FROM flyway_schema_history;              -- 期望 >= 91
+-- 建模台注册表：期望 12(V87) + 5(V88) + 6(V89) + 1(V90) = 24 条，全部有绑定（V91 为改 id 登记，不新增计数）
 SELECT COUNT(*) FROM sys_api WHERE id BETWEEN 92601 AND 92612;      -- 12
 SELECT COUNT(*) FROM sys_api WHERE id BETWEEN 92640 AND 92644;      -- 5
 SELECT COUNT(*) FROM sys_api WHERE id BETWEEN 92650 AND 92655;      -- 6
@@ -58,6 +76,73 @@ FROM sys_api a JOIN sys_menu_api ma ON ma.api_id=a.id JOIN sys_menu m ON ma.menu
 WHERE a.id BETWEEN 92601 AND 92701 ORDER BY a.id;
 ```
 > ⚠️ **F-1 复验**（见 verify-checklist §5）：`SELECT path_pattern FROM sys_api WHERE path_pattern LIKE '%sql-pairs%';` —— 若**缺** `/api/v1/iqd/sql-pairs/translate`，即命中已知 id 冲突，需按 verify-checklist §5 修复。
+
+### 1.5 首次接入：数据源 profile 与连接创建
+
+> 建连接是**三方协作**：① **DBA（wren 主机侧）**注册 profile → ② **平台向导**落库连接记录 → ③ **平台/运维**拉起 MCP。平台**不代敲凭证、不经手明文**（架构红线）。
+
+#### (a) DBA 主机侧：数据源 profile 注册（**在 wren 机执行**）
+
+```bash
+# ① 注册业务库 profile（凭证经 ${ENV} 占位；明文只进主机 ~/.wren/.env 或 systemd Environment=）
+wren profile add <profile_name> --connector postgres \
+  --host <BIZ_PG_HOST> --port 5432 --user <db_user> \
+  --password '${ENV:IQD_DB_PASSWORD}' --database <biz_db>
+# ② 绑定到本连接的 wren project 目录（build / serve mcp 均作用于此 project）
+wren context set-profile <profile_name>
+# ③ 验证
+wren profile list                          # 含 <profile_name>
+stat -c '%a %n' ~/.wren/profiles.yml       # 期望 600
+grep -i password ~/.wren/profiles.yml      # 期望 ${ENV:IQD_DB_PASSWORD}，无明文
+```
+- **凭证边界**：`profiles.yml` 仅存 `host/port/user/${ENV:...}` 占位；**明文只落主机**（`.env` 0600 或 systemd `Environment=`）。平台库/前端只存 `secret_ref` **引用**。
+- 产出 `<profile_name>`，供平台向导步骤 2「认证方式=none（profile 注入）」关联。
+
+#### (b) 平台侧：向导 4 步创建连接
+
+路径：`/iqd/modeling` → 右上「新建连接」→ `components/wizard/ConnectionWizard.tsx`。
+
+| 步骤 | key | 填什么 |
+|---|---|---|
+| 1 | `conn:basic` | 连接名称*（如「销售库」）/ WrenAI 地址 `base_url`（如 `http://127.0.0.1:3000`）/ 默认 connector（下拉）/ 超时（秒）；下方展示已有连接列表 + 每连接 MCP 状态卡 |
+| 2 | `conn:datasource` | 认证方式（`none`=profile 注入 / `basic` / `token`）/ 凭证引用 `secret_ref`（password 框，**留空=保留原值**，查询恒返回 `******`）/ `project_id`（可选，留空由 WrenAI 侧解析） |
+| 3 | `conn:profile` | **纯说明页**：profile 绑定由 DBA 在主机侧执行（即 (a)），平台此步**不收集凭证** |
+| 4 | `conn:test` | **先落库再测试**（步骤 3→4 边界创建；**落库失败留在原步、不清屏**）→ 自检 → 拉起 MCP |
+
+#### (c) 对应 API（curl）
+
+```bash
+# ① 建连接（只存 secret_ref 引用，不存明文；字段见 IqdAdminService.createConnection）
+curl -s -X POST "<AI_PLATFORM_HOST>/api/v1/iqd/connections" \
+  -H "Authorization: Bearer <MIS_JWT>" -H "Content-Type: application/json" \
+  -d '{"name":"销售库","base_url":"http://127.0.0.1:3000","auth_type":"none",
+       "secret_ref":"<profile_name>","project_id":"","default_connector":"postgres",
+       "timeout_seconds":300,"language":"zh","enabled":true}'
+# ② 连接自检（返回体含 id = <CONN_ID>）
+curl -s -X POST "<AI_PLATFORM_HOST>/api/v1/iqd/connections/<CONN_ID>/test" \
+  -H "Authorization: Bearer <MIS_JWT>"
+# ③ 首次 bootstrap：拉起该连接 MCP（经 ai-platform → wren-mcp-agent → wren serve mcp）
+curl -s -X POST "<AI_PLATFORM_HOST>/api/v1/iqd/mcp/enable?connectionId=<CONN_ID>" \
+  -H "Authorization: Bearer <MIS_JWT>"
+```
+- 权限：建连接需 **`iqd:modeling:edit`**；`/mcp/enable` 需 **`iqd:mcp:manage`**（V89 绑定菜单 92656）。
+
+#### (d) 连接状态自检
+
+```bash
+curl -s "<AI_PLATFORM_HOST>/api/v1/iqd/connections" -H "Authorization: Bearer <MIS_JWT>"
+```
+- 关注字段：`mcp_status`（期望 `ready`）/ `mcp_port` / `last_health_at` / `last_health_msg`。
+- ⚠️ `mcp_host` / `agent_handle` 后端标注 `@JsonIgnore` → **前端与 API 均看不到**（勿据此排查，需上主机看）。
+
+#### (e) 失败排查（对照 §7 排障速查）
+
+| 现象 | 码 | 定位 |
+|---|---|---|
+| 连接**重名** | **40900** | `iqd_connection` UK `(name)` → 换名或复用既有连接 |
+| 连接**名称空** / 入参非法 | **42200** | 向导步骤 1 必填项（HTTP 422） |
+| MCP 不可达 / profile 未注入 | **50201**（HTTP 502） | 核对 (a) profile 与 wren-mcp-agent 9100/9101 可达性；见 §7 |
+| 未开写回 | **40300** | 该连接未启用写回（按连接灰度） |
 
 ---
 
