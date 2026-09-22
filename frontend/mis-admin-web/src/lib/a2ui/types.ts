@@ -76,6 +76,35 @@ export interface A2uiComponentNode {
   children?: A2uiComponentNode[];
 }
 
+/**
+ * 原始组件节点输入（LLM / Gateway 下发形态，归一化前）。
+ *
+ * <p>与**归一化后**的 {@link A2uiComponentNode} 区分：本类型描述 operation 入参，
+ * MessageProcessor.normalizeComponentNode 负责把它归一化为 {@link A2uiComponentNode}：
+ * - 组件名：`component`（协议形态）优先，缺省回落 `type`（LLM / AG-UI 习惯形态）；
+ * - props：`props`（协议形态）优先，缺省把其余扁平字段（`text` / `label` /
+ *   `direction` / `gap` / `padding` …）抬升进 props；
+ * - `children` 递归归一。
+ *
+ * <p>故本类型仅强制要求 `id`，其余字段宽松（非协议扁平字段经索引签名放行）——
+ * 与运行时真实接受能力一致（运行时同样读 `component` 或 `type`，见
+ * MessageProcessor.normalizeComponentNode）。
+ */
+export interface A2uiComponentInput {
+  /** 组件实例 id（Gateway 生成，updateComponents 以 path/id 定位）。 */
+  id: string;
+  /** 组件名（协议形态：registry 注册的组件名）。 */
+  component?: string;
+  /** 组件名（LLM / AG-UI 习惯形态；缺 `component` 时回落使用）。 */
+  type?: string;
+  /** 纯数据 props（协议形态）；缺省时扁平字段被抬升为 props。 */
+  props?: Record<string, unknown>;
+  /** 子节点（递归归一化）。 */
+  children?: A2uiComponentInput[];
+  /** 其余扁平字段（`text` / `label` / `direction` / `gap` / `padding` …）归一化时抬升进 props。 */
+  [extra: string]: unknown;
+}
+
 /** 单个 A2UI Surface（= 一张动态卡片 / 界面）。 */
 export interface A2uiSurface {
   surfaceId: string;
@@ -106,18 +135,22 @@ export type A2uiOpOperation =
   | {
       op: 'createSurface';
       surfaceId: string;
-      components?: A2uiComponentNode[];
+      /** 初始组件树（原始形态，MessageProcessor 归一化为 A2uiComponentNode）。 */
+      components?: A2uiComponentInput[];
     }
   | {
       op: 'updateComponents';
       surfaceId: string;
-      components: Array<{
-        /** 定位路径：`/components/{id}` 或 `/components/{index}`；缺省按 id 匹配。 */
-        path?: string;
-        component?: string;
-        props?: Record<string, unknown>;
-        children?: A2uiComponentNode[];
-      }>;
+      components: Array<
+        | A2uiComponentInput
+        | {
+            /** 定位路径：`/components/{id}` 或 `/components/{index}`；缺省按 id 匹配。 */
+            path?: string;
+            component?: string;
+            props?: Record<string, unknown>;
+            children?: A2uiComponentNode[];
+          }
+      >;
     }
   | {
       op: 'updateDataModel';
@@ -143,7 +176,7 @@ export type A2uiV09Operation =
     }
   | {
       version?: string;
-      updateComponents: { surfaceId: string; components: A2uiComponentNode[] };
+      updateComponents: { surfaceId: string; components: A2uiComponentInput[] };
     }
   | {
       version?: string;
