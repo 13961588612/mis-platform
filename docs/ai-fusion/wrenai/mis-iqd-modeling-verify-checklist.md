@@ -261,7 +261,7 @@
        curl -s -X POST "<AI_PLATFORM_HOST>/api/v1/iqd/mcp/enable?connectionId=<CONN_ID>" \
          -H "Authorization: Bearer <MIS_JWT>"
        ```
-     - 校验：**每连接 MCP 状态卡应显示 `mcp_status=ready`**（`GET /api/v1/iqd/connections` 核对）。
+     - 校验：**每连接 MCP 状态卡应显示 `mcp_status=running`**（`GET /api/v1/iqd/connections` 核对）。合法值：`running`/`starting`/`stopped`/`crashed`/`unhealthy`。
      - ✅ **注意（2026-09-22 修订：原"防两条 `enabled=true`"警告已作废）**：`iqd_connection` **可多条 `enabled=true` 并存**（原「业务上仅一条启用」约定**作废**，见 `architecture.md:882` 与 `mis-iqd-modeling-system-design.md §14.5`）。⇒ **无需**"先把旧的置 `false` 再启用新连接"；多条同时启用为**合法态**，不产生"非法态"。
        - ~~⚠️ **注意（防「两条 `enabled=true`」）**：`iqd_connection` **业务上仅一条启用**（依据 `architecture.md:882`；⚠️ `enabled` **无 DB 唯一约束**，故不是硬约束）。若库里**已有旧启用连接**，**须先将其置 `false` 再建/启用新连接**，否则产生「两条启用」非法态（接口不报错、语义违规）。作废旧连接走既有问数配置页（`PUT /api/v1/iqd/config`，单条 upsert）；**无** `PUT /iqd/connections/{id}`。~~（**以上为作废前历史原文，保留痕迹**）
        - **新口径**：主连接 = **`name='default'`**（否则 id 最小的 enabled），见 §14.5.1；**指定连接的停用/编辑**走**本期新增**的 `PUT /api/v1/iqd/connections/{id}`（§14.1 / 迁移 `V92`）。
@@ -271,7 +271,7 @@
   6. 观察 `PublishPipelineBar` 五态。
   7. `/iqd/scope` 勾选纳入范围（**导入 ≠ 可问**，默认 `in_scope=false`）。
   8. 测试问数页对 `orders` 发 1 条自然语言问数。
-- **预期**：数据源 profile 已注册（主机侧 `wren profile list` 可见、无明文）；连接创建成功（返回 `<CONN_ID>`）且该连接 **MCP 状态卡 `mcp_status=ready`**；发现返回 ≥3 表；模型节点画布可见；导入触发一次整库 build；`edit_status` 走向 `SYNCED`（`built_edit_revision` 推进）；问数返回结果。
+- **预期**：数据源 profile 已注册（主机侧 `wren profile list` 可见、无明文）；连接创建成功（返回 `<CONN_ID>`）且该连接 **MCP 状态卡 `mcp_status=running`**；发现返回 ≥3 表；模型节点画布可见；导入触发一次整库 build；`edit_status` 走向 `SYNCED`（`built_edit_revision` 推进）；问数返回结果。
 - **通过标准**：步骤 **1~7** 全部成立 **且** 第 **8** 步问数**真正命中**（非 503/空）。⚠️ 若第 8 步失败而 1~7 成立 → 记「M-G1 部分通过（模型物化缺口，已知）」，**不得记整条通过**。
 - **失败排查**：**40900** → 连接**重名**（`iqd_connection` UK `(name)`）；**42200** → 连接**名称空**（步骤 1）或其他入参非法；**50201**（HTTP 502）→ **MCP 不可达 / profile 未注入**（核对 §1 DBA profile 步与 wren-mcp-agent 可达性，见 runbook §1.5 / §7）；**40300** → 端点未登记（查 §2.3 / §5 F-1）**或**该连接未启用写回；问数无模型 → 见上方红线。
 

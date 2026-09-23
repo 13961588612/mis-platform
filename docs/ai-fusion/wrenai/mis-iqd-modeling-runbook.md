@@ -132,7 +132,7 @@ curl -s -X POST "<AI_PLATFORM_HOST>/api/v1/iqd/mcp/enable?connectionId=<CONN_ID>
 ```bash
 curl -s "<AI_PLATFORM_HOST>/api/v1/iqd/connections" -H "Authorization: Bearer <MIS_JWT>"
 ```
-- 关注字段：`mcp_status`（期望 `ready`）/ `mcp_port` / `last_health_at` / `last_health_msg`。
+- 关注字段：`mcp_status`（期望 `running`）/ `mcp_port` / `last_health_at` / `last_health_msg`。
 - ⚠️ `mcp_host` / `agent_handle` 后端标注 `@JsonIgnore` → **前端与 API 均看不到**（勿据此排查，需上主机看）。
 
 #### (e) 失败排查（对照 §7 排障速查）
@@ -165,7 +165,7 @@ curl -s "<AI_PLATFORM_HOST>/api/v1/iqd/connections" -H "Authorization: Bearer <M
 
 **③ 业务库网络可达**
 
-- profile 的 `--host` 业务 PG 必须**从 wren 机可连**（防火墙 / 端口放行）——这是 profile 生效（进而 `mcp_status=ready`）的前提。
+- profile 的 `--host` 业务 PG 必须**从 wren 机可连**（防火墙 / 端口放行）——这是 profile 生效（进而 `mcp_status=running`）的前提。
 - 连不通 → 注入 profile 后仍会 **50201**。
 
 ```bash
@@ -181,6 +181,312 @@ systemctl show ai-platform --property=Environment 2>/dev/null | grep -Ei 'WREN_A
 
 ---
 
+## 2.0 联调环境启动清单（数据库已更新后）
+
+> **本节角色**：从「Flyway 已跑到 **V92**」出发，按**依赖顺序**把可视化建模台跑起来并开始联调。
+> **与既有文档的关系**：本节 = §1.5（首次接入）＋ §2.1–2.2（启停）＋ `mis-iqd-modeling-verify-checklist.md §1`（全局前置）**串成一条可执行时间线**，并补齐 `scripts/start-integration-stack.ps1` **不含**的建模台服务。
+> **状态**：🔶 **全部「待真机」**——本清单在无 docker / 无 `wren` CLI / 无业务库的沙箱内**未实跑**，命令按静态代码核实（端口 / 命令 / env 均已 grep 核对）；真机执行时如与本节不符，以现场为准并回修本文。
+> **占位符**：`<PG_HOST>` `<WREN_HOST>` `<AI_PLATFORM_HOST>` `<MIS_IQD_HOST>` `<MIS_JWT>` `<CONN_ID>` `<BIZ_PG_HOST>` `<profile_name>` 按真机替换。
+
+### ⚠️ 起点落差：`start-integration-stack.ps1` 不覆盖建模台（必读）
+
+`scripts/start-integration-stack.ps1` 只做 5 件事（`scripts/start-integration-stack.ps1:27-77`）：
+
+1. 起基础设施（`deploy/docker-compose.dev.yml`：postgres / redis / nacos / minio）
+2. `cd backend; .\mvn.ps1 -pl mis-migrator flyway:migrate`
+3. 建 Nacos 命名空间 `integration`
+4. 推 Nacos 配置
+5. 打包并起 **`mis-gateway` + `mis-audit`**（`-WithAuthContainer` 时再加 `mis-auth`）
+
+**它完全不含**：`mis-iqd` / `mis-admin-bff` / `ai-platform`（含 `mis_iqd` Worker）/ 前端 / WrenAI 数据面。
+⇒ **只跑它，建模台所需服务一个都没起。** 用户说的「数据库已更新」通常就是它第 2 步 `flyway:migrate` 的结果 —— 迁移到位 ≠ 服务到位，本清单正是弥合这一落差。
+
+> 参考：`wrenai-ops-runbook.md` 与本文件 §0.1 亦明确「`wren-mcp-agent` 本次**零改动、不更新**，仅需确认已在跑」，但要意识到 **V89 起的 6 个 MCP 端点依赖它已部署**（部署前提，非代码更新）。
+
+---
+
+### 2.0.1 前置确认（3 项，逐条给命令 + 期望）
+
+#### ① Flyway 版本 = 92（**最先做**）
+
+```bash
+# 容器内（dev compose 方式）
+docker exec -i mis-postgres psql -U mis -d mis_platform -c \
+  "SELECT max(version) AS latest, count(*) AS applied FROM flyway_schema_history;"
+
+# 或直连业务库
+PGPASSWORD=mis123 psql -h <PG_HOST> -U mis -d mis_platform -c \
+  "SELECT max(version) FROM flyway_schema_history;"
+```
+
+**期望**：`92`。
+
+| 缺哪个 | 后果 | 表现 |
+|---|---|---|
+| **缺 V92** | `PUT /api/v1/iqd/connections/{id}`（`sys_api` id 92800 / code 00960045）未登记 | 前端「停用 / 编辑**指定**连接」**40300**（T06 唯一的按 id 写通道） |
+| **缺 V91** | `POST /api/v1/iqd/sql-pairs/translate`（id 92703）未登记（F-1：V76 与 V78 争 id 92586 致静默跳过） | 「脱敏与维度 → 样本对 → 转化」**40300** |
+
+若 `latest < 92`：
+```bash
+cd backend && .\mvn.ps1 -pl mis-migrator flyway:migrate
+```
+迁移后按 §1.2 自检复核（补充两条新端点）：
+```sql
+-- 期望 1 行，permission='iqd:modeling:edit'
+SELECT a.id, a.http_method, a.path_pattern, m.permission
+FROM sys_api a JOIN sys_menu_api ma ON ma.api_id=a.id JOIN sys_menu m ON ma.menu_id=m.id
+WHERE a.id = 92800;
+-- 期望 1 行，permission='iqd:enhance:manage'
+SELECT a.id, a.http_method, a.path_pattern, m.permission
+FROM sys_api a JOIN sys_menu_api ma ON ma.api_id=a.id JOIN sys_menu m ON ma.menu_id=m.id
+WHERE a.id = 92703;
+-- 期望 0 行（(method,path) 全库无重复）
+SELECT http_method, path_pattern, COUNT(*) FROM sys_api
+WHERE type='api' AND status=1 GROUP BY http_method, path_pattern HAVING COUNT(*)>1;
+```
+> ⚠️ V91 / V92 均为 append-only + 固定 ID + `WHERE NOT EXISTS`，**可安全重跑**。若报 `Migration checksum mismatch`，说明有人改动了**已应用**的迁移文件 → 见 §7，**不要**手工改 `flyway_schema_history`。
+
+#### ② 基础设施容器在跑
+
+```bash
+docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
+```
+
+**期望**（`deploy/docker-compose.dev.yml:9-86`）：
+
+| 容器 | 端口 | 期望状态 |
+|---|---|---|
+| `mis-postgres` | 5432 | `Up (healthy)` |
+| `mis-redis` | 6379 | `Up (healthy)` |
+| `mis-nacos` | 8848, 9848 | `Up (healthy)` |
+| `mis-minio` | 9000, 9001 | `Up (healthy)` |
+
+未起：
+```bash
+docker compose -f deploy/docker-compose.dev.yml up -d
+docker exec mis-postgres pg_isready -U postgres   # 期望: accepting connections
+```
+Nacos 控制台：`http://localhost:8848/nacos`（`nacos` / `nacos`）。
+
+#### ③ 网络可达性（三方链路）
+
+```bash
+# (a) 业务库 ← wren 机（profile 生效 / mcp_status=running 的前提）
+nc -vz <BIZ_PG_HOST> 5432
+# (b) wren 机控制面/数据面 ← ai-platform 机（否则 50201）
+nc -vz <WREN_HOST> 9100 && nc -vz <WREN_HOST> 9101
+# (c) mis-iqd ← BFF / ai-platform 机（内部面 8109）
+curl -s -o /dev/null -w "%{http_code}\n" http://<MIS_IQD_HOST>:8109/actuator/health   # 期望 200
+```
+
+> (a) 不通 → profile 注入后连接仍 **50201**；(b) 不通 → MCP 启停/健康检查 **50201**（见 `wren-mcp-agent/README.md:51`：仅放行 ai-platform 源 IP 到 9100/9101）。
+
+---
+
+### 2.0.2 启动时间线（**按依赖顺序**）
+
+> **依赖顺序**：`mis_platform(PG)` → **`mis-iqd` 先起** → `mis-admin-bff` / `ai-platform` → 前端 → 最后 WrenAI 数据面（per-connection MCP）。
+> 依据 `start-dev.ps1:80`（领域服务 → BFF → Gateway）与 `wrenai-ops-runbook.md §3.7`。**mis-iqd 必须先起**：BFF 的 IQD 适配层与 ai-platform Worker 的配置回源都指向它（`:8109`）。
+
+#### Step 1 — WrenAI 侧准备（**wren 机**，DBA 执行）
+
+```bash
+# ① 注册业务库 profile（凭证经 ${ENV} 占位；明文只落主机，平台不代敲）
+wren profile add <profile_name> --connector postgres \
+  --host <BIZ_PG_HOST> --port 5432 --user <db_user> \
+  --password '${ENV:IQD_DB_PASSWORD}' --database <biz_db>
+# ② 绑定到本连接的 wren project 目录
+wren context set-profile <profile_name>
+# ③ 验证
+wren profile list                            # 含 <profile_name>
+stat -c '%a %n' ~/.wren/profiles.yml         # 期望 600
+grep -i password ~/.wren/profiles.yml        # 期望 ${ENV:IQD_DB_PASSWORD}，无明文
+
+# ④ 确认 wren-mcp-agent 在跑（控制面 9100 / 数据面 9101）
+systemctl is-active wren-mcp-agent                          # 期望 active
+curl -s -o /dev/null -w "%{http_code}\n" http://127.0.0.1:9100/   # 期望非 000
+ss -lntp | grep -E ':(9100|9101)\b'
+```
+**期望 / 失败排查**：profile 未注册 → 向导步骤 2「认证方式=none（profile 注入）」无法关联，连接自检 **50201**；`wren-mcp-agent` 未跑 → 所有 MCP 启停端点 **50201**。详见 §1.5(a)/(e)。
+
+#### Step 2 — mis-iqd（**`:8109`**）
+
+```bash
+# 方式 A（推荐，带 .env.integration / .env 全套 env；已在跑则跳过）
+cd backend && .\start-dev.ps1 mis-iqd
+# 方式 B（分别开终端 / IDE 调试）
+cd backend && .\mvn.ps1 spring-boot:run -pl mis-iqd
+# 健康检查
+curl -s http://127.0.0.1:8109/actuator/health          # 期望 {"status":"UP"}
+```
+
+- 端口权威值 `backend/mis-iqd/src/main/resources/application.yml:2`（`server.port: 8109`）；`start-dev.ps1:88` 亦为 `mis-iqd = 8109`。
+- **`JPA ddl-auto: validate`**（`application.yml:25`）：表由 `V71__iqd_schema.sql` 建，实体不一致会**启动即失败** → 先确认 ① 的迁移到位。
+- ⚠️ `local-dev.md §5` 的 `spring-boot:run` 示例列表**漏了 mis-iqd**，用 `start-dev.ps1 mis-iqd` 或按上式直接指定模块即可。
+- **失败排查**：连不上 PG → 核对 `DB_*`；Redis 不通**不阻断启动**（B3 事件推送降级，见 `application.yml:30-36`）。
+
+#### Step 3 — mis-admin-bff（**`:8081`**）
+
+```bash
+# 现成脚本（从任意目录运行；含完整 env，见 §2.0.3）
+backend\start-bff-standalone.bat          # 构建 + 启动
+backend\start-bff-standalone.bat nopkg    # 跳过构建，直接起既有 jar（联调中改代码后重启用）
+# 健康检查
+curl -s -o /dev/null -w "%{http_code}\n" http://localhost:8081/actuator/health   # 期望 200
+```
+
+**确认注册进 Nacos 且心跳正常**（否则 remote 模式网关 **503**）：
+```bash
+curl -s "http://<NACOS_HOST>:8848/nacos/v1/ns/instance/list?serviceName=mis-admin-bff&namespaceId=integration"
+# 期望：hosts 非空，healthy=true
+```
+- ⚠️ **两种模式要分清**（这是最容易踩的点）：
+  - **本机直连模式**（默认 `MIS_REMOTE=false`）：`mis-gateway/application.yml:22,37` 把 `/api/v1/**` **硬编码直连 `http://localhost:8081`**，且 `discovery.locator.enabled: false`（`:16-18`）⇒ **不走 Nacos 发现**，BFF 不注册也照常路由；此时 BFF 挂了报 `Connection refused` / 502。
+  - **remote 集成模式**（`MIS_REMOTE=true`，即 `start-bff-standalone.bat:32` 与 `start-integration-stack.ps1` 的 `integration` 命名空间）：路由为 **`lb://mis-admin-bff`**（见该脚本 `:6-9` 注释）⇒ **BFF 必须注册进 Nacos 且 `healthy=true`**，否则网关日志 `No servers available for service: mis-admin-bff` + **503**。
+- **失败排查**：见 §2.0.5「BFF 起不来 / 网关 503」。
+
+#### Step 4 — ai-platform（**`:8000`**，含 `mis_iqd` Worker）
+
+```bash
+cd agent/ai-platform/backend
+uv run uvicorn src.main:app --host 0.0.0.0 --port 8000 --reload
+# 健康检查（ai-platform 自身）
+curl -s http://127.0.0.1:8000/api/v1/admin/health      # 期望 code:0，llm_gateway.initialized
+# 确认 mis-iqd Worker 侧连通（**注意：该端点属于 mis-iqd**，见下）
+curl -s http://<MIS_IQD_HOST>:8109/internal/v1/iqd/health
+# 期望：{"code":0,...,"data":{"status":"ok","service":"mis-iqd","time":"..."}}
+```
+
+- **端口权威值 `8000`**：`agent/ai-platform/backend/.env:19`（`PORT=8000`）、`docs/devops/local-dev.md:195`、`backend/uvicorn-startup.log`（`Uvicorn running on http://0.0.0.0:8000`）三处一致。
+  > 注：`agent/ai-platform/backend/CODE_READING_GUIDE.md:443` 的 `--port 8002` 是**示例**，非本环境约定值；`start-dev.ps1:69` / `.env.integration` 的 `AI_PLATFORM_BASE_URL=http://127.0.0.1:8000` 亦为 8000。
+- **「含 `mis_iqd` Worker」= 进程内自动启动**：`src/agent/mis_iqd/bootstrap.py` 在 lifespan 启动阶段 ① 注入 `mcp_status` 回写回调 ② **批量拉起所有「启用」连接的 WrenAI MCP 进程**（best-effort，单连接失败不阻断）③ 启动后台健康检查循环。⇒ **起了 ai-platform 即起了 Worker，无需额外命令**。
+- ⚠️ **`/internal/v1/iqd/health` 由 mis-iqd 暴露**（`IqdInternalController.java:46` `@RequestMapping("/internal/v1/iqd")` + `:68` `@GetMapping("/health")`），**不是 ai-platform** —— 它只是 ai-platform 侧 `IqdConfigClient` 的**消费目标**（`iqd_config_client.py:38`）。故 §2.1 旧写法 `curl http://<AI_PLATFORM_HOST>/internal/v1/iqd/health` 会打错主机，**请按上式打 `:8109`**。
+- **失败排查**：`WREN_AGENT_ENDPOINT` 为空 → 退回本地 Plan A 子进程，跨机场景 `mcp_host` 恒空（见 §2.0.3 与 §1.5(f)）。
+
+#### Step 5 — 前端（**`:5174`**）
+
+```bash
+cd frontend/mis-admin-web
+pnpm install          # ⚠️ 必须 pnpm（本仓 node_modules 为 pnpm 布局 + pnpm-lock.yaml；npm install 报 Cannot read properties of null）
+pnpm dev              # = vite（package.json:7）；访问 http://localhost:5174
+```
+
+- **端口权威值 `5174`**：`frontend/mis-admin-web/vite.config.ts`（`server.port: 5174`）与 `local-dev.md §6`（「访问 http://localhost:5174」）一致。
+  > ⚠️ `local-dev.md §5` 端口表写 `mis-admin-web | 5173` **系笔误**，以 `vite.config.ts` 的 **5174** 为准（构建/测试脚本可正常用 `npm run build` / `npm run typecheck`）。
+- **proxy 指向 gateway:8080（不是 BFF:8081）**：`vite.config.ts` 中 `'/api' → http://127.0.0.1:8080`；另有 `'/api/events'`、`'/api/messages'`、`'/ws' → http://127.0.0.1:3100`（AI Platform Gateway，**仅 Copilot 对话用，建模台联调非必需**）。
+- 入口：登录后进入建模台路由 **`/iqd/modeling`**（`src/components/layout/keep-alive-outlet.tsx:165`）。默认账号 `admin` / `Mis@123456`。
+- **失败排查**：`/api` **404** 多为 proxy 未指 gateway:8080（或 gateway 未起）；见 §2.0.5。
+
+#### Step 6 — 建连接 + 拉起 MCP（引用 §1.5，不重复）
+
+```bash
+# ① 建连接（需权限 iqd:modeling:edit；只存 secret_ref 引用，不存明文）
+curl -s -X POST "http://<AI_PLATFORM_HOST>:8000/api/v1/iqd/connections" \
+  -H "Authorization: Bearer <MIS_JWT>" -H "Content-Type: application/json" \
+  -d '{"name":"销售库","base_url":"http://127.0.0.1:3000","auth_type":"none",
+       "secret_ref":"<profile_name>","project_id":"","default_connector":"postgres",
+       "timeout_seconds":300,"language":"zh","enabled":true}'
+# ② 连接自检（返回体含 id = <CONN_ID>）
+curl -s -X POST "http://<AI_PLATFORM_HOST>:8000/api/v1/iqd/connections/<CONN_ID>/test" \
+  -H "Authorization: Bearer <MIS_JWT>"
+# ③ 首次 bootstrap：拉起该连接 MCP（需权限 iqd:mcp:manage）
+curl -s -X POST "http://<AI_PLATFORM_HOST>:8000/api/v1/iqd/mcp/enable?connectionId=<CONN_ID>" \
+  -H "Authorization: Bearer <MIS_JWT>"
+# ④ 验证 MCP 就绪
+curl -s "http://<AI_PLATFORM_HOST>:8000/api/v1/iqd/connections" -H "Authorization: Bearer <MIS_JWT>"
+```
+
+- **`mcp_status` 期望值 = `running`**（枚举 `src/adapters/wren_mcp_registry.py:39-47`：`running` / `starting` / `stopped` / `crashed` / `unhealthy`）。
+  > ⚠️ §1.5(d) 与 verify-checklist 写的「期望 `ready`」**系笔误**；`ready` 不是合法取值，以 `running` 为准。
+- 注意 `mcp_host` / `agent_handle` 后端 `@JsonIgnore` → **API/前端看不到**，需上主机看（见 §1.5(d)）。
+- 后续流程（向导 4 步 / curl 序列）见 **§1.5**；MCP 状态查询与启停见 **§2.2**。
+
+---
+
+### 2.0.3 环境变量清单（一张表，按服务归属）
+
+> BFF 一栏逐项取自 `backend/start-bff-standalone.bat` 实际 `set` 语句（**非凭记忆**）；其余取自各服务 `application.yml` / 后端 `.env` / `wren-mcp-agent` README。
+
+| 变量名 | 归属服务 | 必填性 | 示例 | 不设的后果 |
+|---|---|---|---|---|
+| `SERVER_PORT` / `SERVER__PORT` | BFF | **必填** | `8081` | 宿主机注入的 `SERVER__PORT=20231` 经 Spring relaxed binding 覆盖 `server.port` → **BFF 启动失败**（脚本 `:25-29` 专门覆盖之） |
+| `MIS_REMOTE` | BFF / 各 Java 服务 | **必填** | `true`（集成）/ `false`（本机） | 语义见 Step 3：`true` 走 Nacos 发现，`false` 走网关硬编码直连 |
+| `NACOS_SERVER` | BFF | `MIS_REMOTE=true` 必填 | `10.254.16.6:8848` | remote 模式服务注册失败 → 网关 503 |
+| `NACOS_NAMESPACE` | BFF | 同上 | `integration` | 注册到错误命名空间 → 网关查不到实例 |
+| `NACOS_CONFIG_GROUP` | BFF | 同上 | `MIS_GROUP` | 拉不到配置中心下发配置 |
+| `DB_HOST` / `DB_PORT` / `DB_NAME` / `DB_USER` / `DB_PASSWORD` | BFF / mis-iqd | **必填** | `10.254.16.6` / `5432` / `mis_platform` / `mis` / `mis123` | 连不上业务库；mis-iqd 因 `ddl-auto=validate` **启动即失败** |
+| `REDIS_HOST` / `REDIS_PORT` | BFF / mis-iqd | 必填 | `10.254.16.6` / `6379` | 缓存/事件推送不可用（mis-iqd 降级不阻断，BFF 可能超时） |
+| `JWT_PRIVATE_KEY_PATH` / `JWT_PUBLIC_KEY_PATH` | BFF / 各 Java 服务 | **必填** | `D:\code\mis-platform\backend\keys\private.pem` | 令牌签发/验签失败；`start-integration-stack.ps1:23` 会**直接报错退出** |
+| `MIS_IQD_BASE_URL` | BFF | 建议显式 | `http://127.0.0.1:8109` | 默认即 `127.0.0.1:8109`（`mis-admin-bff/application.yml:145`）；跨机须改为 `<MIS_IQD_HOST>:8109`，否则 BFF 转发 IQD 请求失败 |
+| `MIS_IQD_TIMEOUT_MS` | BFF | 可选 | `5000` | 默认 5000（`:146`） |
+| `MIS_IQD_AGENT_ID` | BFF | 可选 | `mis-iqd` | 默认 `mis-iqd`（`:160`） |
+| `MIS_IQD_CONFIG_BASE_URL` | **mis-iqd** | 可选 | （空 = 本服务自读配置表） | 见 `mis-iqd/application.yml:42` |
+| `JAVA_TOOL_OPTIONS` | BFF / 各 Java 服务 | **强烈建议** | `-Dfile.encoding=UTF-8` | Windows GBK 解析 Nacos 含中文注释 YAML 失败（脚本 `:45-52`） |
+| `PORT` | ai-platform | 必填 | `8000` | 端口漂移，前端/BFF/`AI_PLATFORM_BASE_URL` 全对不上 |
+| `POSTGRES_HOST` / `POSTGRES_PORT` / `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB` | ai-platform | 必填 | `10.254.16.6` / `5432` / `aiplatform` / `...` / `ai_platform` | ai-platform 自身库不可用（**注意与 MIS 业务库 `mis_platform` 是不同库**） |
+| `REDIS_HOST` / `REDIS_PORT` / `REDIS_DB` | ai-platform | 必填 | `10.254.16.6` / `6379` / `2` | Agent Core 缓存/流不可用 |
+| `WREN_AGENT_ENDPOINT` | ai-platform | **联调必填** | `http://<WREN_HOST>:9100` | 为空 → 退回本地 Plan A 子进程；跨机场景 `mcp_host` 恒空 |
+| `WREN_AGENT_TOKEN` | ai-platform | **联调必填** | `<token>` | 须与 wren 机 `WREN_AGENT_TOKEN` **一致**，否则 401 |
+| `MIS_ADMIN_BFF_BASE_URL` | ai-platform | 必填 | `http://127.0.0.1:8081` | 权限码回源失败 → 所有 skill/MCP 被 **fail-closed** 拒绝 |
+| `AI_PLATFORM_BFF_SHARED_SECRET` | ai-platform | 必填 | `o4JW22zl...` | 与 BFF 的 `service-token` 不一致 → BFF `/internal/**` **401** |
+| `MIS_ACL_ENABLED` | ai-platform | 必填 | `true` | 权限闸门失效（生产必须 `true`，禁止 `false` 绕过） |
+| `MIS_KB_BASE_URL` | ai-platform | 建议 | `http://127.0.0.1:8108` | 知识库检索不可用 |
+| `DEEPSEEK_API_KEY` / `QWEN_API_KEY` | ai-platform **与 wren 进程** | 视 provider | `sk-...` | ai-platform 侧 LLM 不可用；**wren 侧**缺 key → build→memory index→问数 链路在「记忆索引」段失败、问数无召回 |
+| `QWEN_API_ENDPOINT` | ai-platform | 视 provider | `http://10.254.6.83:4000` | 主 provider 不可达（有 DeepSeek 兜底） |
+| `WREN_EMBEDDING_MODEL` | **wren 进程** | 内网必填 | `BAAI/bge-small-zh-v1.5` | 首次 `wren memory index` 需联网拉模型，内网离线 → 记忆索引失败 |
+| `WREN_AGENT_CONTROL_PORT` / `WREN_AGENT_MCP_PORT` | **wren 机** `wren-mcp-agent` | 可选 | `9100` / `9101` | 默认即 9100/9101（`wren-mcp-agent/agent.py:48-49`） |
+| `VITE_*` | 前端 | 通常无需 | —— | 建模台 proxy 目标已**硬编码**在 `vite.config.ts`，不依赖 env |
+
+> **wren 机侧 env 核验**（一次看完，来自 §1.5(f)）：
+> ```bash
+> systemctl show wren --property=Environment 2>/dev/null | grep -Ei 'DEEPSEEK|EMBEDDING' || true
+> systemctl show wren-mcp-agent --property=Environment 2>/dev/null | grep -Ei 'WREN_AGENT_(TOKEN|CONTROL_PORT|MCP_PORT)' || true
+> ```
+
+---
+
+### 2.0.4 冒烟清单（最小可验证集，8 条 · ~10 分钟）
+
+> 目标：**先跑通，再谈 M-G1**。逐条通过 = 环境基本可用；任一条不过 → 查 §2.0.5。比 `mis-iqd-modeling-verify-checklist.md §3` 的 E2E 更短、更快反馈。
+
+| # | 验证目标 | 命令 | 期望 |
+|---|---|---|---|
+| S1 | mis-iqd 活着 | `curl -s http://127.0.0.1:8109/actuator/health` | `{"status":"UP"}` |
+| S2 | mis-iqd ← Worker 通道通 | `curl -s http://<MIS_IQD_HOST>:8109/internal/v1/iqd/health` | `code:0` + `data.status=ok` |
+| S3 | BFF 活着 | `curl -s -o /dev/null -w "%{http_code}" http://localhost:8081/actuator/health` | `200` |
+| S4 | BFF 已被网关发现（remote 模式） | `curl -s ".../instance/list?serviceName=mis-admin-bff&namespaceId=integration"` | `hosts` 非空、`healthy=true`（本机直连模式可跳过） |
+| S5 | ai-platform 活着 | `curl -s http://127.0.0.1:8000/api/v1/admin/health` | `code:0`，`llm_gateway.initialized=true` |
+| S6 | **能建连接** | ① 建连接 curl（§2.0.2 Step 6） | `code:0`，返回 `id`（记 `<CONN_ID>`） |
+| S7 | **能拉起 MCP** | ②③ `test` + `mcp/enable`，再 GET `/connections` | `mcp_status` 变为 **`running`**（非 `ready`） |
+| S8 | **能导表 + 画布见模型 + 能问数** | `discovery/tables` → `discovery/import` → 刷新 `/iqd/modeling` 画布 → 问一句数 | `imported>0`；画布出现模型节点；问数返回结果 |
+
+> **S8 失败但 S6/S7 通过**，多半是外部依赖（LLM / embedding / 业务库可达）而不是平台代码 → 见 §1.5(f) 与 §2.0.5。
+
+---
+
+### 2.0.5 常见失败对照（症状 → 最可能原因 → 排查动作）
+
+| 症状 | 最可能原因 | 排查动作 |
+|---|---|---|
+| **`40300`**「接口未授权映射」（`PUT /iqd/connections/{id}`） | 缺 **V92**（未登记 92800/92801） | ① 前置确认① ；② `SELECT max(version) FROM flyway_schema_history` = 92；③ 复核 id 92800 的 permission=`iqd:modeling:edit` |
+| **`40300`**（`sql-pairs/translate` 转化） | 缺 **V91**（F-1：V76/V78 争 id 92586 静默跳过） | 复核 id 92703 存在且 permission=`iqd:enhance:manage`；不预期则 `flyway:migrate` |
+| **`40300`**（其它端点） | 权限码与端点不匹配 / `sys_api` 与 `sys_menu_api` 只插了一张表 | 跑 §7「通用取证」SQL 对比注册表；确认登录 JWT 为 `role_id=1` 或已授予对应 `iqd:*` |
+| **`40300`**（写回类） | 该连接未启用**写回**（按连接灰度） | 查 `iqd_connection` 写回开关（§1.5(e)） |
+| **`50201`**（HTTP 502） | ① `wren-mcp-agent` 没起 ② profile 没注入 ③ **业务库从 wren 机不通** | ① `systemctl is-active wren-mcp-agent` + `nc -vz <WREN_HOST> 9100/9101`；② `wren profile list` / `~/.wren/profiles.yml`；③ **在 wren 机** `nc -vz <BIZ_PG_HOST> 5432` |
+| **网关 `503 No servers available for service: mis-admin-bff`** | **仅 remote 模式**：BFF 未注册进 Nacos / 心跳异常 | ① S4 的 instance/list 是否 `healthy=true`；② BFF 是否 `MIS_REMOTE=true` 且 `NACOS_SERVER` 正确；③ BFF 日志有无注册异常 |
+| 网关 `502 / Connection refused`（本机模式） | `MIS_REMOTE=false`，网关硬编码直连 `localhost:8081`，BFF 没起 | 启 BFF（Step 3）；`curl http://localhost:8081/actuator/health` |
+| **BFF 起不来** | 宿主机注入 `SERVER__PORT=20231` 经 relaxed binding 覆盖 `server.port` | 用 `start-bff-standalone.bat`（内含 `SERVER_PORT=8081` + `SERVER__PORT=8081` 双保险，`:25-29`）；或手工 export 这两个变量 |
+| **BFF 报 Nacos YAML 中文解析失败** | Windows 默认 GBK | 设 `JAVA_TOOL_OPTIONS=-Dfile.encoding=UTF-8`（脚本 `:45-52` 已内置） |
+| **前端 `/api` 404** | proxy 目标不是 gateway:8080（或 gateway 未起） | 核对 `vite.config.ts` 的 `'/api' → http://127.0.0.1:8080`；`curl http://localhost:8080/api/v1/auth/captcha` |
+| **前端 `npm install` 崩**（`Cannot read properties of null`） | 本仓是 **pnpm** 布局 + `pnpm-lock.yaml` | 用 `pnpm install`（Step 5） |
+| 前端访问 `5173` 打不开 | 端口是 **5174**（非 5173） | 改访问 `http://localhost:5174`（`vite.config.ts`） |
+| ai-platform 起了但 `mcp_host` 恒空 | `WREN_AGENT_ENDPOINT` 为空 → 走本地 Plan A | 设 `WREN_AGENT_ENDPOINT` / `WREN_AGENT_TOKEN`（§2.0.3） |
+| 权限码回源失败 → skill/MCP 全被拒 | `MIS_ADMIN_BFF_BASE_URL` 或 `AI_PLATFORM_BFF_SHARED_SECRET` 与 BFF 不一致 | 核对 env；BFF `/internal/**` 返回 401 即命中 |
+| 流水线「记忆索引」段失败 / 问数无召回 | wren 侧缺 `DEEPSEEK_API_KEY` 或 embedding 模型离线不可用 | §1.5(f)②：`systemctl show wren --property=Environment`；预下载 `WREN_EMBEDDING_MODEL` |
+| 迁移报 `checksum mismatch` | **已应用**迁移文件被人改动 | 见 §7；**不要**手工改 `flyway_schema_history` |
+
+---
+
 ## 2. 服务启停
 
 ### 2.1 mis-iqd（域服务）/ BFF / ai-platform
@@ -191,7 +497,7 @@ systemctl restart mis-iqd
 # BFF
 systemctl restart mis-admin-bff
 # ai-platform（含 mis_iqd Worker）；确认健康
-curl -s http://<AI_PLATFORM_HOST>/internal/v1/iqd/health
+curl -s http://<MIS_IQD_HOST>:8109/internal/v1/iqd/health
 ```
 > 顺序约束：**mis-iqd 先起跑**（Flyway 落 V87~V90），再起 BFF/Worker（见 `wrenai-ops-runbook.md §3.7`）。
 
