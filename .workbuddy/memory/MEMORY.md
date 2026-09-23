@@ -1,7 +1,9 @@
 # MIS 平台项目记忆
 
 ## 启动与测试（黄金知识）
-- 一键集成栈 `scripts/start-integration-stack.ps1`。主前端 `frontend/mis-admin-web`：`npm run dev`→:5173，proxy `/api`→ mis-gateway:8080（非 BFF 8081），代码用相对 `/api/v1/**`。
+- 一键集成栈 `scripts/start-integration-stack.ps1` —— ⚠️ **只做「infra + flyway migrate + gateway:8080 + audit」，【不含】mis-iqd / BFF / ai-platform / 前端**；跑完它 ≠ 建模台可联调（**2026-09-23 实测**）。
+- **端口权威值**：主前端 **5174**（`vite.config.ts:14`；⚠️ **旧记录 5173 有误**）/ mis-iqd **8109** / BFF **8081** / ai-platform **8000** / WrenAI 数据面 **9100**（控制）+ **9101**（数据）。前端 proxy：`/api`→gateway **8080**、`/api/events`+`/api/messages`+`/ws`→ai-platform gateway **3100**；依赖安装**必须 `pnpm install`**（`npm install` 必崩）。
+- **联调启动清单**见 `docs/ai-fusion/wrenai/mis-iqd-modeling-runbook.md` **§2.0**（含前置确认 / 启动时间线 / env 表 / 8 条冒烟 / 失败对照）+ **§1.5**（首次接入：DBA profile + 建连接）。
 - BFF `mis-admin-bff` :8081，聚合 mis-iam:8102/mis-org:8103/mis-system:8105；本地 `.\mvn.ps1 spring-boot:run -pl mis-admin-bff`。
 - 前端门禁：**vitest 已配置**（`npm run test` = `vitest run`，`vitest ^2.1.0` 在 HEAD 即存在——2026-09-22 实测修正，旧记录「无 vitest/jest」有误）；typecheck `npm run typecheck`（tsc --noEmit strict+noUnusedLocals）；eslint 存量 `arch/no-cross-feature` 11 error 集中在 `features/ai/context/form-fill-bridge.tsx`+`features/system/`。
 - Java 需 JDK17(`D:\software\jdk-17.0.2`)。Maven 直调坏（Git Bash 把 MAVEN_HOME 解析成 Unix 路径→classworlds ClassNotFoundException）。正确启动器：
