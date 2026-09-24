@@ -144,11 +144,17 @@ describe('resolvePipeline（四段状态机）', () => {
     expect(unknown.stages.find((s) => s.key === 'mcp')?.detail).toBe('未知');
   });
 
-  it('编辑失败（SYNC_FAILED）→ 段内重试 publish', () => {
-    const view = resolvePipeline(status({ edit_status: 'SYNC_FAILED' }), 'running');
+  it('SYNC_FAILED：编辑已落库 → 编辑段落 ok；失败由 MDL 构建段承担（避免「重试编辑落库」死循环）', () => {
+    const view = resolvePipeline(
+      status({ edit_status: 'SYNC_FAILED', build_status: 'failed', build_error: 'context build failed' }),
+      'running',
+    );
     const edit = view.stages.find((stage) => stage.key === 'edit');
-    expect(edit?.state).toBe('failed');
-    expect(edit?.retry).toBe('publish');
+    const build = view.stages.find((stage) => stage.key === 'build');
+    expect(edit?.state).toBe('ok');
+    expect(edit?.retry).toBeUndefined();
+    expect(build?.state).toBe('failed');
+    expect(build?.retry).toBe('rebuild');
   });
 
   it('段顺序固定：编辑 → 构建 → 索引 → MCP（UI 的箭头顺序依赖它）', () => {

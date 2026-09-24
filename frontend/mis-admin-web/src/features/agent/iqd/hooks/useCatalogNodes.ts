@@ -117,17 +117,25 @@ function lastSegment(itemKey: string | null | undefined): string {
 /**
  * 在 catalog 里找模型对应的物理表 tableKey。
  *
- * <p>两种形态都覆盖：① T02a from-table 落的 `kind=table` 行
- * （`<ds>.<schema>.<table>`，与模型 display_name 同名）；② 仅靠模型名兜底。
+ * <p>覆盖三种落库形态：
+ * ① T02a / IqdMdlParser 标准键 {@code <ds>.<schema>.<table>}（后缀匹配）；
+ * ② 历史 / 部分同步路径落的**裸表名** {@code <table>}（与 display_name 全等）；
+ * ③ item_key 末段等于表名（兜底）。
+ *
+ * <p>旧实现只认 ①，导致源为 {@code mdl} 且表键为裸名时模型卡片「无字段」、
+ * 右栏字段表为空。
  */
-function resolveTableKey(items: IqdCatalogItem[], model: IqdCatalogItem): string | null {
+export function resolveTableKey(items: IqdCatalogItem[], model: IqdCatalogItem): string | null {
   const table = lower(model.display_name) || lower(lastSegment(model.item_key));
   if (!table) {
     return null;
   }
-  const hit = items.find(
-    (it) => it.kind === 'table' && lower(it.item_key).endsWith(`.${table}`),
-  );
+  const hit =
+    items.find(
+      (it) => it.kind === 'table' && lower(it.item_key).endsWith(`.${table}`),
+    ) ??
+    items.find((it) => it.kind === 'table' && lower(it.item_key) === table) ??
+    items.find((it) => it.kind === 'table' && lower(lastSegment(it.item_key)) === table);
   return hit?.item_key ?? null;
 }
 
@@ -340,14 +348,46 @@ export function useCatalogNodes(connectionId: number | null): UseCatalogNodesRes
       }
     }
 
+    /** 按物理表 key 取列；兼容 parent_key 为全限定名 / 裸表名两种落库形态。 */
+    const columnsForTable = (tableKey: string | null, tableName: string): IqdCatalogItem[] => {
+      if (!tableKey && !tableName) {
+        return [];
+      }
+      const seen = new Set<string>();
+      const out: IqdCatalogItem[] = [];
+      const pushAll = (list: IqdCatalogItem[] | undefined) => {
+        for (const col of list ?? []) {
+          if (seen.has(col.item_key)) {
+            continue;
+          }
+          seen.add(col.item_key);
+          out.push(col);
+        }
+      };
+      if (tableKey) {
+        pushAll(columnsByParent.get(tableKey));
+      }
+      // 兜底：parent_key 末段 / 全等表名（与 resolveTableKey 对称）
+      const name = lower(tableName);
+      if (name) {
+        for (const [parent, list] of columnsByParent) {
+          if (lower(parent) === name || lower(lastSegment(parent)) === name) {
+            pushAll(list);
+          }
+        }
+      }
+      return out;
+    };
+
     const derivedNodes: Node<CatalogNodeData>[] = [];
     const modelIndex = new Map<string, string>(); // 归一模型名 → node id
 
     // ---- model 节点（已建模） ----
     models.forEach((model, index) => {
       const tableKey = resolveTableKey(catalog, model);
+      const tableName = model.display_name ?? lastSegment(model.item_key);
       const modelColumns = [
-        ...(tableKey ? columnsByParent.get(tableKey) ?? [] : []),
+        ...columnsForTable(tableKey, tableName),
         // 计算列：T03 约定 parent_key = 模型 item_key
         ...(columnsByParent.get(model.item_key) ?? []),
       ];
@@ -390,7 +430,7 @@ export function useCatalogNodes(connectionId: number | null): UseCatalogNodesRes
             itemKey: table.item_key,
             kind: 'table',
             displayName,
-            columns: columnsByParent.get(table.item_key) ?? [],
+            columns: columnsForTable(table.item_key, displayName),
             measureNames: [],
             description: table.description,
             inScope: table.in_scope === true,

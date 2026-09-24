@@ -126,16 +126,38 @@ describe('mergeDerivedNodes（本地交互态 × 服务端坐标 × 派生网格
   const derived = [node('model:mdl:model:orders', 'mdl:model:orders', 40, 40)];
   const key = 'mdl:model:orders';
 
-  it('★ 无服务端坐标时，**本地既有坐标优先**（否则 catalog 轮询会把刚拖的节点弹回原位）', () => {
+  it('★ 默认：**本地既有坐标优先**（否则 catalog 轮询会把刚拖的节点弹回原位）', () => {
     const previous = [node('model:mdl:model:orders', key, 300, 220)];
-    const merged = mergeDerivedNodes(derived, previous, new Map());
+    const merged = mergeDerivedNodes(
+      derived,
+      previous,
+      new Map([[key, { x: 5, y: 6 }]]),
+    );
     expect(merged[0].position).toEqual({ x: 300, y: 220 });
   });
 
-  it('有服务端坐标时以服务端为准（reload / 他人排布生效）', () => {
-    const previous = [node('model:mdl:model:orders', key, 300, 220)];
-    const merged = mergeDerivedNodes(derived, previous, new Map([[key, { x: 5, y: 6 }]]));
+  it('无本地节点时用服务端坐标', () => {
+    const merged = mergeDerivedNodes(derived, [], new Map([[key, { x: 5, y: 6 }]]));
     expect(merged[0].position).toEqual({ x: 5, y: 6 });
+  });
+
+  it('preferPersisted：重载 / version bump 时以服务端为准', () => {
+    const previous = [node('model:mdl:model:orders', key, 300, 220)];
+    const merged = mergeDerivedNodes(derived, previous, new Map([[key, { x: 5, y: 6 }]]), {
+      preferPersisted: true,
+    });
+    expect(merged[0].position).toEqual({ x: 5, y: 6 });
+  });
+
+  it('拖拽中即使 preferPersisted 也强制本地（避免闪回）', () => {
+    const previous = [
+      node('model:mdl:model:orders', key, 300, 220, { dragging: true }),
+    ];
+    const merged = mergeDerivedNodes(derived, previous, new Map([[key, { x: 5, y: 6 }]]), {
+      preferPersisted: true,
+    });
+    expect(merged[0].position).toEqual({ x: 300, y: 220 });
+    expect(merged[0].dragging).toBe(true);
   });
 
   it('新节点用派生网格坐标落位', () => {

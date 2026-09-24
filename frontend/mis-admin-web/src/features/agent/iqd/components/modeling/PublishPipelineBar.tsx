@@ -129,11 +129,16 @@ const SUCCESS_WORDS = new Set(['success', 'succeeded', 'ok', 'completed', 'done'
 const RUNNING_WORDS = new Set(['running', 'pending', 'indexing', 'syncing', 'in_progress', 'starting']);
 /** 失败类词。 */
 const FAILED_WORDS = new Set(['failed', 'error', 'crashed', 'unhealthy', 'stopped']);
+/** 跳过类词（reindex 等动作不跑 build，写 skipped，不当作失败）。 */
+const SKIPPED_WORDS = new Set(['skipped', 'skip', 'n/a', 'na']);
 
 /** 取状态的「三值」归类（ok / active / failed / idle）。 */
 export function classifyStatus(raw: string | null | undefined): 'ok' | 'active' | 'failed' | 'idle' {
   const value = norm(raw);
   if (value === '') {
+    return 'idle';
+  }
+  if (SKIPPED_WORDS.has(value)) {
     return 'idle';
   }
   if (SUCCESS_WORDS.has(value)) {
@@ -150,6 +155,11 @@ export function classifyStatus(raw: string | null | undefined): 'ok' | 'active' 
 
 /**
  * 编辑态 → 段状态（编辑落库是**离散枚举**，不能走 {@link classifyStatus} 的词表）。
+ *
+ * <p>{@code SYNC_FAILED}：mis-iqd 在「revision 已对齐 + 最近作业 build=failed」时派生。
+ * 此时**编辑已落平台库**，失败的是下游 Wren build —— 若把编辑段落成 failed 并提供
+ * 「重试编辑落库」→ 实际走 {@code enhance/sync(scope=materials)}，会反复报「编辑落库失败」
+ * 且修不好模型。故 SYNC_FAILED 时编辑段落 ok，只让「MDL 构建」段承担失败与重试。
  */
 function editStageState(status: ModelingSyncStatus | null): StageState {
   if (status == null) {
@@ -162,7 +172,7 @@ function editStageState(status: ModelingSyncStatus | null): StageState {
     case 'SYNCING':
       return 'active';
     case 'SYNC_FAILED':
-      return 'failed';
+      return 'ok';
     case 'STALE_DRIFT':
       return 'blocked';
     default:
@@ -395,7 +405,8 @@ export function PublishPipelineBar({ connectionId }: PublishPipelineBarProps) {
       setError(null);
       try {
         if (action === 'publish') {
-          await syncIqdEnhancements(connectionId);
+          // 建模台发布 = 按 catalog 派生 MDL（scope=model）；materials 只下发样本对/知识
+          await syncIqdEnhancements(connectionId, false, 'model');
         } else if (action === 'rebuild') {
           await selfHealForceRebuild(connectionId);
         } else if (action === 'reindex') {

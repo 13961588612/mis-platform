@@ -36,6 +36,7 @@ export function SqlEditor({
   readOnly = false,
 }: SqlEditorProps) {
   const editor = useCodeMirror({ value, onChange, placeholder, height, readOnly });
+  const boxStyle = { minHeight: height, height };
 
   // ★ 降级路径：编辑器不可用 → Textarea 兜底（不阻断业务）
   if (editor.error) {
@@ -45,7 +46,9 @@ export function SqlEditor({
           value={value}
           onChange={(event) => onChange(event.target.value)}
           readOnly={readOnly}
-          className="min-h-[90px] font-mono text-[13px]"
+          rows={Math.max(8, Math.round(height / 18))}
+          style={boxStyle}
+          className="resize-y font-mono text-[13px] leading-5"
           placeholder={placeholder}
         />
         <p className="text-[11px] text-muted-foreground">
@@ -59,7 +62,8 @@ export function SqlEditor({
     <div className="space-y-1">
       <div
         ref={editor.containerRef}
-        className="overflow-hidden rounded border border-border/60 bg-background px-2"
+        style={boxStyle}
+        className="overflow-hidden rounded border border-border/60 bg-background px-2 [&_.cm-editor]:h-full [&_.cm-scroller]:overflow-auto"
       />
       {editor.loading && (
         <p className="flex items-center gap-1 text-[11px] text-muted-foreground">

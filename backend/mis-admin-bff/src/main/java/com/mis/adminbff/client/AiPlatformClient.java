@@ -71,6 +71,11 @@ public class AiPlatformClient extends AbstractDownstreamClient {
     private final IamWebClient iamWebClient;
     private final ObjectMapper objectMapper = new ObjectMapper();
     private final Map<Long, IamCacheEntry> iamCache = new ConcurrentHashMap<>();
+    /**
+     * 自愈 / MDL 整库重建超时：须 ≥ Worker {@code build_timeout_seconds}(默认 120s)。
+     * 默认 chat 60s 会在 build 未完成时先断，前端看到「构建失败」。
+     */
+    private static final Duration SELF_HEAL_TIMEOUT = Duration.ofMillis(180_000);
 
     public AiPlatformClient(
             @Qualifier("plainWebClientBuilder") WebClient.Builder plainBuilder,
@@ -293,7 +298,7 @@ public class AiPlatformClient extends AbstractDownstreamClient {
                 .contentType(MediaType.APPLICATION_JSON)
                 .bodyValue(body)
                 .retrieve()
-                .bodyToMono(MAP_RESULT_TYPE));
+                .bodyToMono(MAP_RESULT_TYPE), SELF_HEAL_TIMEOUT);
     }
 
     /** 运维自愈-强制重建（action=force-rebuild）。 */

@@ -659,6 +659,7 @@ WREN_PROJECTS_ROOT=/var/lib/mis-iqd/wren-projects
 | `WREN_BUILD_TIMEOUT_SECONDS` | | | context build 超时 |
 | `WREN_MEMORY_INDEX_ENABLED` | | | `true` |
 | `WREN_SELF_HEAL_FORCE_BUILD_ARGS` | | | 如 `["--force"]`，W0 实测后填 |
+| `WREN_SELF_HEAL_MEMORY_RESET_ARGS` | | | 默认 `["--force"]`（非 TTY 无确认会 `Aborted`） |
 
 **跨机器示例**（写入 `agent/ai-platform/backend/.env`）：
 

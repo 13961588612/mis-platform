@@ -283,7 +283,8 @@ public class IqdInternalController {
      * 供 G7 以 mdl_raw 为基线派生完整 MDL）。
      */
     @GetMapping("/get-catalog-full")
-    public Result<Map<String, Object>> getCatalogFull(@RequestParam Long connectionId) {
+    public Result<Map<String, Object>> getCatalogFull(
+            @RequestParam("connection_id") Long connectionId) {
         Map<String, Object> body = adminService.getCatalogFull(connectionId);
         return Result.ok(body);
     }
@@ -327,7 +328,8 @@ public class IqdInternalController {
      * @return {@code {connection_id, secret_ref}}
      */
     @GetMapping("/connection-credentials")
-    public Result<Map<String, Object>> getConnectionCredentials(@RequestParam Long connectionId) {
+    public Result<Map<String, Object>> getConnectionCredentials(
+            @RequestParam("connection_id") Long connectionId) {
         return Result.ok(adminService.getConnectionSecretRef(connectionId));
     }
 
@@ -395,6 +397,7 @@ public class IqdInternalController {
         }
         Map<String, Object> options = new LinkedHashMap<>();
         options.put("in_scope", body.get("in_scope"));
+        options.put("refresh_columns", body.get("refresh_columns"));
         return Result.ok(catalogNodeService.createModelFromTable(
                 connectionId,
                 sourceTable,

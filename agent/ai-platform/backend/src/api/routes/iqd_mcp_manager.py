@@ -138,7 +138,7 @@ async def status_mcp(
     try:
         service = IqdMcpLifecycleService()
         if connection_id is not None:
-            result = service.status_connection(connection_id)
+            result = await service.status_connection(connection_id)
         else:
             result = service.list_connections()
         return success(data=result, message="ok", trace_id=trace_id)

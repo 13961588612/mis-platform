@@ -282,8 +282,8 @@ export function KeepAliveOutlet() {
             <div
               key={path}
               className={cn(
-                'absolute inset-0 flex flex-col',
-                isActive ? 'z-10' : 'pointer-events-none invisible z-0',
+                'absolute inset-0 flex flex-col bg-background',
+                isActive ? 'z-10' : 'pointer-events-none z-0 hidden',
               )}
               aria-hidden={!isActive}
             >
@@ -299,8 +299,10 @@ export function KeepAliveOutlet() {
             key={path}
             className={cn(
               // 铺满主区；overflow-auto 作为无内部滚动区页面的兜底（有内部 overflow-auto 时优先滚内层）
-              'absolute inset-0 flex min-h-0 flex-col overflow-auto',
-              isActive ? 'z-10' : 'pointer-events-none invisible z-0',
+              // bg-background：避免透明页透出 Keep-alive 下层（如建模台 ReactFlow）
+              'absolute inset-0 min-h-0 flex-col overflow-auto bg-background',
+              // inactive 用 hidden（display:none）：仅 invisible 时 ReactFlow 高 z-index 节点仍可能透到前台 Tab
+              isActive ? 'z-10 flex' : 'pointer-events-none z-0 hidden',
             )}
             aria-hidden={!isActive}
           >

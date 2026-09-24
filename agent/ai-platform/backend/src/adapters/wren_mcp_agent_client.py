@@ -123,8 +123,10 @@ class WrenMcpAgentClient:
             raise WrenMcpAgentClientError(f"WrenMcpAgent 不可达: {path} -> {exc}") from exc
         if resp.status_code in (401, 403):
             raise WrenMcpAgentClientError(f"WrenMcpAgent 鉴权失败 {resp.status_code}: {path}")
-        if resp.status_code >= 500:
-            raise WrenMcpAgentClientError(f"WrenMcpAgent 服务端错误 {resp.status_code}: {path}")
+        if resp.status_code >= 400:
+            raise WrenMcpAgentClientError(
+                f"WrenMcpAgent HTTP {resp.status_code}: {path} -> {resp.text[:300]}"
+            )
         try:
             body: Any = resp.json()
         except ValueError as exc:
@@ -254,3 +256,56 @@ class WrenMcpAgentClient:
     async def health(self) -> dict[str, Any]:
         """agent 整体健康（控制面存活 + 部署计数）。"""
         return await self._get("/health")
+
+    async def run_cli(
+        self,
+        conn_id: int | str,
+        args: list[str],
+        *,
+        mdl_manifest: str | None = None,
+        timeout: float | None = None,
+    ) -> dict[str, Any]:
+        """在 wren 机执行 ``wren`` CLI（跨机器管理面：context build / memory index）。
+
+        Args:
+            conn_id: 问数连接 id。
+            args: 子命令参数（不含二进制名，如 ``["context", "build", "--allow-write"]``）。
+            mdl_manifest: 可选派生 MDL 的 ``manifest.json`` 全文；agent 落临时目录并追加 ``--mdl``。
+            timeout: 单次超时秒数（缺省 ``build_timeout_seconds``）。
+
+        Returns:
+            ``{command, exit_code, stdout, stderr, project_home}``。
+
+        Raises:
+            WrenMcpAgentClientError: 网络/鉴权/agent 基础设施失败，或 ``exit_code != 0``。
+        """
+        settings = get_settings()
+        wait = (
+            timeout
+            if timeout is not None
+            else float(settings.iqd_mcp.build_timeout_seconds or 120.0)
+        )
+        prev_timeout = self._timeout
+        self._timeout = max(prev_timeout, wait + 15.0)
+        try:
+            data = await self._post(
+                "/cli",
+                {
+                    "conn_id": str(conn_id),
+                    "args": list(args),
+                    "mdl_manifest": mdl_manifest,
+                    "timeout_seconds": wait,
+                },
+            )
+        finally:
+            self._timeout = prev_timeout
+        if not isinstance(data, dict):
+            raise WrenMcpAgentClientError(f"WrenMcpAgent /cli 响应异常: {data!r}")
+        exit_code = int(data.get("exit_code") or 0)
+        if exit_code != 0:
+            stderr = str(data.get("stderr") or "")
+            command = str(data.get("command") or " ".join(args))
+            raise WrenMcpAgentClientError(
+                f"wren CLI 失败 exit={exit_code}: {command}\nstderr: {stderr[:500]}"
+            )
+        return data

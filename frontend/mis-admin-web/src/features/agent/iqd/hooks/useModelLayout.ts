@@ -195,27 +195,40 @@ export function layoutPositions(layout: ModelLayoutDto): Map<string, { x: number
  *
  * <p>合并规则（顺序即优先级）：
  * <ol>
- *   <li>坐标：**已持久化**（服务端）> **本地既有**（正在拖/刚拖完，还没保存完）> 派生网格坐标；</li>
+ *   <li>坐标：若节点正在 {@code dragging} → **强制本地**（拖拽中绝不用服务端坐标覆盖，
+ *       否则 catalog / layout 任一重算都会「闪回」）；</li>
+ *   <li>其余：默认 **本地既有** > **已持久化** > 派生网格；
+ *       仅当调用方显式 {@code preferPersisted}（首载 / 冲突重载 / 本端保存成功后 version bump）
+ *       时改为 **已持久化** > 本地 > 网格；</li>
  *   <li>交互态（`selected` / `dragging` / `measured`）从本地既有节点继承 —— 否则一次
  *       catalog 轮询就会把用户的选中态和刚量出的尺寸清掉（表现为「选中闪一下」）；</li>
  *   <li>catalog 里已消失的节点直接丢弃（不保留孤儿节点）；</li>
  *   <li>新增节点用网格坐标落位（`derived` 已算好）。</li>
  * </ol>
  *
- * <p><b>为什么本地既有坐标要优先于服务端坐标</b>：拖拽结束 → 防抖 600ms → PUT 完成，
+ * <p><b>为什么默认本地既有优先于服务端</b>：拖拽结束 → 防抖 600ms → PUT 完成，
  * 这段窗口内若发生 catalog 轮询（5s 一次）或 layout 重取，服务端坐标**还没有新位置**，
- * 若盲目以服务端为准就会把节点**弹回原位**（T02b-1 模块头点名的那个 bug）。
+ * 若盲目以服务端为准就会把节点**弹回原位**。
  */
 export function mergeDerivedNodes(
   derived: Array<Node<CatalogNodeData>>,
   previous: Array<Node<CatalogNodeData>>,
   positions: Map<string, { x: number; y: number }>,
+  options?: { preferPersisted?: boolean },
 ): Array<Node<CatalogNodeData>> {
+  const preferPersisted = options?.preferPersisted === true;
   const prevById = new Map(previous.map((node) => [node.id, node]));
   return derived.map((node) => {
     const prev = prevById.get(node.id);
     const persisted = positions.get(node.data.itemKey);
-    const position = persisted ?? prev?.position ?? node.position;
+    let position = node.position;
+    if (prev?.dragging) {
+      position = prev.position;
+    } else if (preferPersisted) {
+      position = persisted ?? prev?.position ?? node.position;
+    } else {
+      position = prev?.position ?? persisted ?? node.position;
+    }
     if (!prev) {
       return { ...node, position };
     }

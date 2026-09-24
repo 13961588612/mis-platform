@@ -47,7 +47,7 @@ import {
 } from '@/lib/api/iqd';
 // 依赖方清单在**建模台 wire 层**（非 catalog 页 wire 层）：`GET /iqd/dependencies`。
 import { listDependencies } from '../../api/iqd-modeling';
-import { useCatalogNodes } from '../../hooks/useCatalogNodes';
+import { resolveTableKey, useCatalogNodes } from '../../hooks/useCatalogNodes';
 import { useDirtyState } from '../../hooks/useDirtyState';
 import { iqdKeys } from '../../queries/iqd-keys';
 import { useModelingStore } from '../../store/modeling-store';
@@ -131,18 +131,33 @@ export function PropertyPanel({ connectionId }: PropertyPanelProps) {
     if (!selected || (selected.kind !== 'model' && selected.kind !== 'table')) {
       return [] as IqdCatalogItem[];
     }
-    const tableName = (selected.display_name ?? selected.item_key).toLowerCase();
-    const tableKey =
-      selected.kind === 'table'
-        ? selected.item_key
-        : catalog.find(
-            (item) => item.kind === 'table' && item.item_key.toLowerCase().endsWith(`.${tableName}`),
-          )?.item_key ?? null;
-    return catalog.filter(
-      (item) =>
-        item.kind === 'column' &&
-        ((tableKey != null && item.parent_key === tableKey) || item.parent_key === selected.item_key),
-    );
+    if (selected.kind === 'table') {
+      return catalog.filter(
+        (item) => item.kind === 'column' && item.parent_key === selected.item_key,
+      );
+    }
+    // model：兼容 `<ds>.<schema>.<table>` 与裸表名两种 parent_key
+    const tableKey = resolveTableKey(catalog, selected);
+    const tableName = selected.display_name ?? selected.item_key.split('.').pop() ?? '';
+    const nameLower = tableName.toLowerCase();
+    return catalog.filter((item) => {
+      if (item.kind !== 'column') {
+        return false;
+      }
+      const parent = item.parent_key ?? '';
+      if (parent === selected.item_key) {
+        return true; // 计算列
+      }
+      if (tableKey != null && parent === tableKey) {
+        return true;
+      }
+      // 兜底：parent 末段 / 全等表名
+      const parentLower = parent.toLowerCase();
+      return (
+        Boolean(nameLower) &&
+        (parentLower === nameLower || parentLower.endsWith(`.${nameLower}`))
+      );
+    });
   }, [catalog, selected]);
 
   if (!selected) {
@@ -198,6 +213,7 @@ export function PropertyPanel({ connectionId }: PropertyPanelProps) {
                 <tr className="text-left">
                   <th className="px-2 py-1 font-medium">字段</th>
                   <th className="border-l border-border/60 px-2 py-1 font-medium">类型</th>
+                  <th className="border-l border-border/60 px-2 py-1 font-medium">备注</th>
                   <th className="border-l border-border/60 px-2 py-1 font-medium">标记</th>
                 </tr>
               </thead>
@@ -212,6 +228,12 @@ export function PropertyPanel({ connectionId }: PropertyPanelProps) {
                     <td className="px-2 py-1">{field.display_name ?? field.item_key}</td>
                     <td className="border-l border-border/60 px-2 py-1 text-muted-foreground">
                       {field.data_type ?? '—'}
+                    </td>
+                    <td
+                      className="border-l border-border/60 px-2 py-1 text-muted-foreground"
+                      title={field.description ?? undefined}
+                    >
+                      {field.description?.trim() ? field.description : '—'}
                     </td>
                     <td className="border-l border-border/60 px-2 py-1">
                       {columnBadges(field).map((badge) => (
@@ -228,7 +250,7 @@ export function PropertyPanel({ connectionId }: PropertyPanelProps) {
                 ))}
                 {fields.length === 0 && (
                   <tr>
-                    <td colSpan={3} className="px-2 py-3 text-center text-muted-foreground">
+                    <td colSpan={4} className="px-2 py-3 text-center text-muted-foreground">
                       无字段
                     </td>
                   </tr>

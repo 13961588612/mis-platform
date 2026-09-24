@@ -38,7 +38,6 @@ from typing import Any, Callable
 from src.adapters.iqd_cli import IqdCli
 from src.adapters.iqd_config_client import IqdConfigClient, IqdConfigClientError
 from src.adapters.iqd_mcp_client import IqdMcpClient, IqdMcpClientError
-from src.adapters.wren_mcp_registry import McpEndpoint, get_process_manager
 from src.utils.logging import get_logger
 
 logger = get_logger("agent.mis_iqd.discovery")
@@ -70,27 +69,30 @@ class DiscoveryUnavailableError(RuntimeError):
 
 
 def _default_mcp_client(connection_id: int | None) -> IqdMcpClient:
-    """按连接解析 MCP 端点并构造客户端（方案 A 多连接）。
+    """按连接解析 MCP 端点并构造客户端（方案 A 多连接 / 跨机器）。
 
-    进程管理器（multiconn T1，:class:`WrenMcpProcessManager`）按 ``connId`` 持有独立
-    ``wren serve mcp`` 子进程；取到端点即按端点连，取不到（未拉起 / 单连接形态）则退化为
-    缺省客户端（沿用 ``Settings.iqd_mcp`` 的主机/端口）。
+    **必须**走 :meth:`IqdMcpClient.for_connection`：远程 WrenMcpAgent 数据面是
+    ``http://{host}:{mcp_port}/mcp/{connId}`` + bearer，仅用
+    ``get_endpoint().host/port`` 会落到无 path/无 token 的默认 ``/mcp``，
+    表发现必然 401 → mock → 50201。
 
     Args:
-        connection_id: 问数连接 id；``None`` 时用缺省端点。
+        connection_id: 问数连接 id；``None`` 时用缺省单连接端点（仅测试兜底）。
 
     Returns:
         可用的 :class:`IqdMcpClient`（尚未握手，懒连接）。
+
+    Raises:
+        DiscoveryUnavailableError: 连接 MCP 端点未就绪。
     """
-    if connection_id is not None:
-        try:
-            endpoint: McpEndpoint | None = get_process_manager().get_endpoint(connection_id)
-        except Exception as exc:  # noqa: BLE001 - 注册表不可用不应阻断缺省回退
-            logger.warning("IQD discovery mcp endpoint lookup failed", error=str(exc))
-            endpoint = None
-        if endpoint is not None:
-            return IqdMcpClient(host=endpoint.host, port=endpoint.port)
-    return IqdMcpClient()
+    if connection_id is None:
+        return IqdMcpClient()
+    try:
+        return IqdMcpClient.for_connection(connection_id)
+    except IqdMcpClientError as exc:
+        raise DiscoveryUnavailableError(
+            f"连接 {connection_id} 的 MCP 端点未就绪：{exc}"
+        ) from exc
 
 
 class IqdDiscoveryService:
@@ -219,18 +221,22 @@ class IqdDiscoveryService:
         schema: str | None = None,
         table: str | None = None,
     ) -> list[dict[str, Any]]:
-        """列出表字段（含主键推断）。
+        """列出表字段（含主键推断 + information_schema 类型纠偏）。
 
         语义模型名与物理表名在 WrenAI 里通常是同一套命名（model 即 table 的语义包装），
         故先按「表名 == 模型名」直查 ``describe_model``；失败再回退按表名匹配模型清单。
 
+        StarRocks / MySQL 协议下 Wren 常把 ``STRING`` 落成 ``VARCHAR(65533)``；本方法
+        再经 ``information_schema.columns``（best-effort）取 ``data_type`` /
+        ``is_nullable`` / 长度，并归一化为 ``STRING`` / ``varchar(n)`` / ``DOUBLE`` 等。
+
         Args:
             connection_id: 问数连接 id。
-            schema: schema 名（用于在模型清单里消歧）。
+            schema: schema 名（用于在模型清单里消歧 / info_schema 过滤）。
             table: 表名。
 
         Returns:
-            ``[{"name", "type", "comment", "is_pk_inferred", "nullable"}]``。
+            ``[{"name", "type", "comment", "is_pk_inferred", "is_primary_key", "nullable"}]``。
 
         Raises:
             DiscoveryValidationError: ``table`` 为空（42200）。
@@ -239,35 +245,70 @@ class IqdDiscoveryService:
         if not table or not table.strip():
             raise DiscoveryValidationError("table 不能为空")
         table_name = table.strip()
-        payload = await self._describe_model(connection_id, table_name)
+        target_schema = (schema or DEFAULT_SCHEMA).strip()
+        client = self._mcp_factory(connection_id)
+        await self._assert_ready(client, connection_id)
+        try:
+            payload = await client.describe_model(table_name)
+        except IqdMcpClientError as exc:
+            raise DiscoveryUnavailableError(f"读取表结构失败: {table_name} -> {exc}") from exc
+        if not isinstance(payload, dict):
+            payload = {}
 
+        pk_names = _primary_key_names(payload)
         raw_fields = _as_list(payload.get("fields")) or _as_list(payload.get("columns"))
+        meta_by_name = await self._enrich_columns_from_info_schema(
+            client, target_schema, table_name
+        )
+
         columns: list[dict[str, Any]] = []
         for idx, field in enumerate(raw_fields):
             name = _text(field, "name", "field", "column_name")
             if not name:
                 continue
             explicit_pk = _bool(field, "is_primary_key", "isPrimaryKey", "primary_key", "primaryKey")
+            if explicit_pk is None and name.lower() in pk_names:
+                explicit_pk = True
             inferred_pk = explicit_pk if explicit_pk is not None else _infer_pk(name, table_name, idx)
             nullable = _bool(field, "nullable")
             if nullable is None:
                 not_null = _bool(field, "not_null", "notNull")
                 nullable = (not not_null) if not_null is not None else True
+
+            raw_type = _text(field, "type", "data_type", "dataType")
+            enriched = meta_by_name.get(name.lower())
+            if enriched is not None:
+                if enriched.get("type"):
+                    raw_type = str(enriched["type"])
+                if enriched.get("nullable") is not None:
+                    nullable = bool(enriched["nullable"])
+
+            comment = _text(field, "comment", "description")
+            if enriched and enriched.get("comment"):
+                comment = str(enriched["comment"]) or comment
+
+            col_type = _normalize_data_type(
+                raw_type,
+                char_max=enriched.get("char_max") if enriched else None,
+            )
             columns.append(
                 {
                     "name": name,
-                    "type": _text(field, "type", "data_type", "dataType") or "text",
-                    "comment": _text(field, "comment", "description"),
+                    "type": col_type,
+                    "comment": comment,
+                    # 双写：向导预览用 is_pk_inferred；from-table 落库认 is_primary_key
                     "is_pk_inferred": bool(inferred_pk),
+                    "is_primary_key": bool(inferred_pk),
                     "nullable": bool(nullable),
                 }
             )
         logger.info(
             "IQD discovery list_columns",
             connection_id=connection_id,
-            schema=schema,
+            schema=target_schema,
             table=table_name,
             columns=len(columns),
+            enriched=len(meta_by_name),
         )
         return columns
 
@@ -322,9 +363,15 @@ class IqdDiscoveryService:
                 "connection_id": int(connection_id),
                 "source_table": {"schema": schema, "name": table_name, "columns": columns},
                 "model_item_key": model_key,
-                # 幂等键按 §3.3：{connId}+{sha1(source_table)}（确定性 → 重复导入天然幂等）
-                "idempotency_key": self._source_table_key(int(connection_id), schema, table_name),
             }
+            if mode == "create_or_update":
+                # 刷新既有列元数据：不带确定性幂等键（否则会命中首次导入结果、跳过 upsert）
+                payload["refresh_columns"] = True
+            else:
+                # 幂等键按 §3.3：{connId}+{sha1(source_table)}（确定性 → 重复导入天然幂等）
+                payload["idempotency_key"] = self._source_table_key(
+                    int(connection_id), schema, table_name
+                )
             if in_scope is not None:
                 payload["in_scope"] = in_scope
             result = await self._create_model_from_table(payload)
@@ -360,6 +407,70 @@ class IqdDiscoveryService:
         except IqdMcpClientError as exc:
             raise DiscoveryUnavailableError(f"读取表结构失败: {model_name} -> {exc}") from exc
         return payload if isinstance(payload, dict) else {}
+
+    async def _enrich_columns_from_info_schema(
+        self,
+        client: IqdMcpClient,
+        schema: str,
+        table: str,
+    ) -> dict[str, dict[str, Any]]:
+        """经 MCP ``run_sql`` 读 ``information_schema.columns`` 纠偏类型 / 可空（best-effort）。
+
+        Wren 对 info_schema 做 MDL 字段白名单校验：``column_comment`` / ``column_key``
+        常不可用；可用字段含 ``data_type`` / ``is_nullable`` / ``character_maximum_length``。
+        失败时返回空 dict，调用方继续用 describe_model 结果。
+
+        须复用与 ``describe_model`` 同一 :class:`IqdMcpClient` 会话，避免重复握手
+        触发 MCP streamable HTTP cancel-scope 竞态。
+        """
+        # 先按调用方 schema；落空再只按 table_name（StarRocks 常见 schema=adhoc）
+        candidates = [
+            (
+                "SELECT column_name, data_type, is_nullable, character_maximum_length "
+                "FROM information_schema.columns "
+                f"WHERE table_schema = '{_sql_literal(schema)}' "
+                f"AND table_name = '{_sql_literal(table)}'"
+            ),
+            (
+                "SELECT column_name, data_type, is_nullable, character_maximum_length "
+                "FROM information_schema.columns "
+                f"WHERE table_name = '{_sql_literal(table)}'"
+            ),
+        ]
+        for sql in candidates:
+            try:
+                raw = await client.run_sql(sql)
+            except IqdMcpClientError as exc:
+                logger.debug(
+                    "IQD discovery info_schema enrich skipped",
+                    table=table,
+                    error=str(exc),
+                )
+                continue
+            rows = _as_list(raw.get("rows") if isinstance(raw, dict) else None)
+            if not rows:
+                continue
+            out: dict[str, dict[str, Any]] = {}
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                name = _text(row, "column_name", "COLUMN_NAME", "name")
+                if not name:
+                    continue
+                data_type = _text(row, "data_type", "DATA_TYPE", "type")
+                is_nullable = _text(row, "is_nullable", "IS_NULLABLE")
+                char_max = _int(row, "character_maximum_length", "CHARACTER_MAXIMUM_LENGTH")
+                out[name.lower()] = {
+                    "type": data_type,
+                    "nullable": None
+                    if is_nullable is None
+                    else is_nullable.upper() in ("YES", "Y", "TRUE", "1"),
+                    "char_max": char_max,
+                    "comment": None,
+                }
+            if out:
+                return out
+        return {}
 
     async def _create_model_from_table(self, payload: dict[str, Any]) -> dict[str, Any]:
         """调 mis-iqd 内部面生成模型（表发现导入的唯一写路径）。"""
@@ -544,3 +655,46 @@ def _infer_pk(name: str, table: str, index: int) -> bool:
     if low in (f"{singular}_id", f"{table_low}_id"):
         return True
     return index == 0 and low.endswith(_PK_NAME_SUFFIXES)
+
+
+def _primary_key_names(payload: dict[str, Any]) -> set[str]:
+    """从 ``describe_model`` 顶层 ``primary_key`` 提取列名集合（大小写不敏感）。"""
+    names: set[str] = set()
+    raw = payload.get("primary_key") or payload.get("primaryKey") or payload.get("primary_keys")
+    for item in _as_list(raw):
+        if isinstance(item, str) and item.strip():
+            names.add(item.strip().lower())
+        elif isinstance(item, dict):
+            n = _text(item, "name", "column", "column_name", "field")
+            if n:
+                names.add(n.lower())
+    return names
+
+
+def _normalize_data_type(raw: str | None, *, char_max: int | None = None) -> str:
+    """归一化列类型展示：StarRocks STRING→VARCHAR(65533) 纠为 STRING。"""
+    if not raw or not str(raw).strip():
+        return "text"
+    t = str(raw).strip()
+    low = t.lower()
+    max_len = char_max
+    if max_len is None:
+        # VARCHAR(65533) / varchar(65535)
+        if low.startswith("varchar(") and low.endswith(")"):
+            inner = low[8:-1]
+            if inner.isdigit():
+                max_len = int(inner)
+    if low in ("varchar(65533)", "varchar(65535)") or max_len in (65533, 65535):
+        return "STRING"
+    if low == "varchar":
+        return f"varchar({max_len})" if max_len else "varchar"
+    if low in ("double", "float", "real"):
+        return low.upper() if low == "double" else t
+    if low in ("int", "integer", "bigint", "smallint", "tinyint", "boolean", "bool", "date", "datetime", "timestamp"):
+        return t.upper() if low in ("int", "integer", "bigint", "smallint", "tinyint", "boolean", "date") else t
+    return t
+
+
+def _sql_literal(value: str) -> str:
+    """极简 SQL 字符串转义（仅用于 discovery 内部构造的标识符字面量）。"""
+    return value.replace("'", "''")

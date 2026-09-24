@@ -192,6 +192,7 @@ public class IqdModelingController {
         String idempotencyKey = str(body.get("idempotency_key"));
         Map<String, Object> options = new java.util.LinkedHashMap<>();
         options.put("in_scope", body.get("in_scope"));
+        options.put("refresh_columns", body.get("refresh_columns"));
         // ref_sql 支持放在 source_table 内或顶层（设计 §3.3 放在顶层）
         if (sourceTable != null && sourceTable.get("ref_sql") == null && body.get("ref_sql") != null) {
             sourceTable.put("ref_sql", body.get("ref_sql"));

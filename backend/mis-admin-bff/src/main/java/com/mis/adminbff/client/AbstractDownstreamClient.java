@@ -76,8 +76,16 @@ abstract class AbstractDownstreamClient {
     }
 
     protected <T> T block(Mono<Result<T>> mono) {
+        return block(mono, timeout);
+    }
+
+    /**
+     * 带自定义超时的阻塞调用（MDL build / self-heal 等长操作需大于默认 chat 超时）。
+     */
+    protected <T> T block(Mono<Result<T>> mono, Duration overrideTimeout) {
+        Duration effective = overrideTimeout == null ? timeout : overrideTimeout;
         try {
-            Result<T> result = mono.block(timeout);
+            Result<T> result = mono.block(effective);
             return RequestContext.unwrap(result);
         } catch (BusinessException ex) {
             throw ex;

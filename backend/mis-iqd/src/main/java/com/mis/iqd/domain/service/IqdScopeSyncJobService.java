@@ -212,7 +212,7 @@ public class IqdScopeSyncJobService {
                 .GET()
                 .build();
         HttpResponse<String> resp = client.send(request, HttpResponse.BodyHandlers.ofString());
-        if (resp.statusCode() >= 500) {
+        if (resp.statusCode() < 200 || resp.statusCode() >= 300) {
             throw new IllegalStateException("目标库健康检查失败 HTTP " + resp.statusCode());
         }
         // 真实 upsert 由部署侧适配器扩展；此处返回 0 行（幂等空跑）

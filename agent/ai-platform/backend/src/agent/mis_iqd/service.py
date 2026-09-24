@@ -674,15 +674,19 @@ class IqdAskService:
     ) -> SyncResult:
         """重新索引（自愈三按钮之一）：串联 ``memory reset`` + ``memory index``。
 
-        重置 WrenAI 记忆索引后重新下发；``build_status`` 反映 reset 结果，``index_status``
-        反映 index 结果（任一失败单独标记，不相互阻断）。上报 ``action="reindex"``。
+        重置 WrenAI 记忆索引后重新下发。**不改写 MDL / 不跑 context build**。
+
+        <p>⚠️ ``build_status`` 固定为 ``skipped``（本动作与 MDL 构建无关）。reset/index
+        任一失败只写 ``index_status=failed`` + ``index_error``。若把 reset 失败写进
+        ``build_status=failed``，建模台流水线会误报「MDL 构建失败」（重试 MDL 构建能过、
+        点重新索引却必挂的根因）。
 
         Args:
             connection_id: 问数连接 id（缺省解析主连接）。
             wait: 是否阻塞至完成（自愈默认 True）。
 
         Returns:
-            :class:`SyncResult`（build_status=reset 结果，index_status=index 结果）。
+            :class:`SyncResult`（build_status=skipped，index_status=reset+index 结果）。
         """
         from src.adapters.iqd_cli import IqdCli, IqdCliError
         from src.adapters.iqd_config_client import IqdConfigClient
@@ -693,43 +697,61 @@ class IqdAskService:
         cid = connection_id or await self._resolve_primary_connection_id(client)
         if cid is None:
             result = SyncResult(
-                connection_id=None, coalesced=False,
-                build_status="failed", build_error="no primary connection",
+                connection_id=None,
+                coalesced=False,
+                build_status="skipped",
+                index_status="failed",
+                index_error="no primary connection",
             )
             await self._report_selfheal_job(client, None, "reindex", result)
             return result
 
-        # 方案 A 多连接：build/index 落到本连接专属 wren project 目录（project_dir）
+        # 方案 A 多连接：index 落到本连接专属 wren project 目录（project_dir）
         project_home = self._project_home(cid)
 
-        # ① memory reset（重新索引前置）
-        build_status = "success"
-        build_error: str | None = None
+        index_status = "skipped"
+        index_error: str | None = None
+
+        # ① memory reset（失败记到 index，绝不污染 build_status）
         try:
             await cli.memory_reset(project_dir=project_home)
         except IqdCliError as exc:
-            build_status = "failed"
-            build_error = str(exc)
+            index_status = "failed"
+            index_error = f"memory reset failed: {exc}"
             logger.warning("IQD memory reset failed", connection_id=cid, error=str(exc))
+            result = SyncResult(
+                connection_id=cid,
+                coalesced=False,
+                build_status="skipped",
+                index_status=index_status,
+                build_mdl_hash=None,
+                synced_sql_pair_count=0,
+                synced_knowledge_count=0,
+                build_error=None,
+                index_error=index_error,
+            )
+            await self._report_selfheal_job(client, cid, "reindex", result)
+            return result
 
-        # ② memory index（reset 成功后下发索引；失败单独标 failed）
-        index_status = "skipped"
-        index_error: str | None = None
-        if build_status == "success":
-            try:
-                await cli.memory_index(project_dir=project_home)
-                index_status = "success"
-            except IqdCliError as exc:
-                index_status = "failed"
-                index_error = str(exc)
-                logger.warning("IQD reindex memory index failed", connection_id=cid, error=str(exc))
+        # ② memory index
+        try:
+            await cli.memory_index(project_dir=project_home)
+            index_status = "success"
+        except IqdCliError as exc:
+            index_status = "failed"
+            index_error = str(exc)
+            logger.warning("IQD reindex memory index failed", connection_id=cid, error=str(exc))
 
         result = SyncResult(
-            connection_id=cid, coalesced=False,
-            build_status=build_status, index_status=index_status,
+            connection_id=cid,
+            coalesced=False,
+            build_status="skipped",
+            index_status=index_status,
             build_mdl_hash=None,
-            synced_sql_pair_count=0, synced_knowledge_count=0,
-            build_error=build_error, index_error=index_error,
+            synced_sql_pair_count=0,
+            synced_knowledge_count=0,
+            build_error=None,
+            index_error=index_error,
         )
         await self._report_selfheal_job(client, cid, "reindex", result)
         return result
@@ -802,17 +824,22 @@ class IqdAskService:
             result: 本次 SyncResult。
         """
         try:
-            await client.report_sync_job({
+            payload: dict[str, Any] = {
                 "connection_id": connection_id,
                 "action": action,
-                "build_status": result.build_status,
-                "build_mdl_hash": result.build_mdl_hash,
                 "index_status": result.index_status,
-                "build_error": result.build_error,
                 "index_error": result.index_error,
                 "synced_sql_pair_count": result.synced_sql_pair_count,
                 "synced_knowledge_count": result.synced_knowledge_count,
-            })
+            }
+            if action == "reindex":
+                # 重新索引不跑 context build：不覆盖既有 build_*，避免流水线误报「MDL 构建失败」
+                pass
+            else:
+                payload["build_status"] = result.build_status
+                payload["build_mdl_hash"] = result.build_mdl_hash
+                payload["build_error"] = result.build_error
+            await client.report_sync_job(payload)
         except Exception as exc:  # noqa: BLE001 - 报作业失败仅告警，不阻断返回
             logger.warning("IQD self-heal job report failed", action=action, error=str(exc))
 

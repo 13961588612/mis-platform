@@ -192,7 +192,17 @@ class IqdConfigClient:
         """
         settings = get_settings()
         iqd_cfg = settings.iqd_config
-        self._base_url: str = (base_url or iqd_cfg.internal_api_base_url).rstrip("/")
+        resolved = (base_url or iqd_cfg.internal_api_base_url).rstrip("/")
+        # 本机 Windows 无法解析 Docker 服务名 mis-iqd；开发环境自动落到 loopback
+        if "mis-iqd" in resolved and settings.is_development:
+            fallback = "http://127.0.0.1:8109"
+            logger.warning(
+                "IQD base_url contains docker hostname; rewriting for local dev",
+                original=resolved,
+                fallback=fallback,
+            )
+            resolved = fallback
+        self._base_url: str = resolved
         self._timeout: float = timeout if timeout is not None else iqd_cfg.timeout_seconds
         self._cache_ttl: int = cache_ttl if cache_ttl is not None else iqd_cfg.cache_ttl_seconds
         self._client: httpx.AsyncClient = httpx.AsyncClient(

@@ -79,6 +79,7 @@ import {
 } from '../../hooks/useCatalogNodes';
 import { useModelLayout, mergeDerivedNodes } from '../../hooks/useModelLayout';
 import { iqdKeys } from '../../queries/iqd-keys';
+import { useModelingStore } from '../../store/modeling-store';
 import { ModelNodeCard } from './ModelNodeCard';
 import { RelationEdge, RELATION_EDGE_TYPE } from './RelationEdge';
 import { RelationshipDialog, type RelationEndpoint } from './RelationshipDialog';
@@ -112,6 +113,7 @@ function ModelCanvasInner({ connectionId }: ModelCanvasProps) {
   const queryClient = useQueryClient();
   const { setViewport: applyReactFlowViewport } = useReactFlow();
   const sync = useSyncStatus(connectionId);
+  const setSelected = useModelingStore((state) => state.setSelected);
 
   const layout = useModelLayout({ connectionId, enabled: canEdit });
 
@@ -119,6 +121,16 @@ function ModelCanvasInner({ connectionId }: ModelCanvasProps) {
   const [nodes, setNodes] = useState<Array<Node<CatalogNodeData>>>([]);
   const [edges, setEdges] = useState<Array<Edge<CanvasEdgeData>>>([]);
   const viewportRef = useRef<{ x: number; y: number; zoom: number }>({ x: 0, y: 0, zoom: 1 });
+  /** 最新 nodes/edges：拖拽结束闭包里读它，避免 persist 到「上一帧」坐标。 */
+  const nodesRef = useRef(nodes);
+  const edgesRef = useRef(edges);
+  nodesRef.current = nodes;
+  edgesRef.current = edges;
+  /**
+   * 已套用过的 layout 版本戳。version 变化（首载 / 本端保存成功 / 冲突重载）时
+   * 才 `preferPersisted`；平常 catalog 轮询只合语义、不抢坐标。
+   */
+  const appliedLayoutVersionRef = useRef<string>('');
 
   /** 关系弹窗状态：create = 拖拽连线；view = 点击既有边。 */
   const [dialog, setDialog] = useState<{
@@ -133,20 +145,49 @@ function ModelCanvasInner({ connectionId }: ModelCanvasProps) {
 
   // ---------------------------------------------------------------- catalog 派生 → 本地节点（合并）
   useEffect(() => {
-    setNodes((prev) => mergeDerivedNodes(derivedNodes, prev, layout.positions));
-  }, [derivedNodes, layout.positions]);
+    if (connectionId == null) {
+      appliedLayoutVersionRef.current = '';
+      setNodes([]);
+      return;
+    }
+    if (layout.isLoading) {
+      return;
+    }
+    const versionKey = `${connectionId}:${layout.version}`;
+    const sameConnection = appliedLayoutVersionRef.current.startsWith(`${connectionId}:`);
+    const force = forceViewportReloadRef.current;
+    // 与视口同口径：仅首载 / 强制重载吃服务端坐标；本端保存 version bump 不抢本地
+    const preferPersisted =
+      appliedLayoutVersionRef.current !== versionKey && (!sameConnection || force);
+    if (appliedLayoutVersionRef.current !== versionKey) {
+      appliedLayoutVersionRef.current = versionKey;
+    }
+    setNodes((prev) =>
+      mergeDerivedNodes(derivedNodes, prev, layout.positions, { preferPersisted }),
+    );
+  }, [connectionId, derivedNodes, layout.positions, layout.version, layout.isLoading]);
 
   useEffect(() => {
     setEdges((prev) => mergeEdges(derivedEdges, prev));
   }, [derivedEdges]);
 
   /**
-   * 首次拿到已持久化视口时套用一次（之后交给 ReactFlow 自己管，避免与用户缩放打架）。
+   * 服务端视口：只在「本连接首次加载」或「强制重载」时套用一次。
    *
-   * <p>`appliedViewportRef` 记录「本连接已套用过的 layout 版本」：只在**从未套用**或
-   * **reload 拿到新版本**时套用，其它时候不干预用户视口。
+   * <p>旧逻辑在每次 layout.version 变化（含本端缩放/拖拽保存成功）都 `setViewport`，
+   * 会把用户刚滚轮缩放到一半的视口拽回保存前的旧值 → 「放大缩小闪回」。
+   * 同连接下 version 自增只更新戳，不抢 ReactFlow 当前视口；冲突「重载布局」会清空戳强制再套。
    */
   const appliedViewportRef = useRef<string>('');
+  const forceViewportReloadRef = useRef(false);
+
+  useEffect(() => {
+    // 切连接：下次 effect 视为首次
+    appliedLayoutVersionRef.current = '';
+    appliedViewportRef.current = '';
+    forceViewportReloadRef.current = false;
+  }, [connectionId]);
+
   useEffect(() => {
     if (connectionId == null || layout.isLoading) {
       return;
@@ -155,6 +196,17 @@ function ModelCanvasInner({ connectionId }: ModelCanvasProps) {
     if (appliedViewportRef.current === stamp) {
       return;
     }
+
+    const sameConnection = appliedViewportRef.current.startsWith(`${connectionId}:`);
+    const force = forceViewportReloadRef.current;
+    forceViewportReloadRef.current = false;
+
+    // 同连接、非强制重载：本端保存导致的 version bump → 不覆盖用户正在操作的视口
+    if (sameConnection && !force) {
+      appliedViewportRef.current = stamp;
+      return;
+    }
+
     appliedViewportRef.current = stamp;
     const { viewport } = layout;
     if (viewport) {
@@ -163,6 +215,13 @@ function ModelCanvasInner({ connectionId }: ModelCanvasProps) {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [connectionId, layout.isLoading, layout.version, applyReactFlowViewport]);
+
+  const handleReloadLayout = useCallback(() => {
+    // 强制套用服务端节点坐标与视口（等 isLoading 结束后由 effect 消费 force 标志）
+    appliedLayoutVersionRef.current = '';
+    forceViewportReloadRef.current = true;
+    void layout.reload();
+  }, [layout]);
 
   // ---------------------------------------------------------------- 交互
   const onNodesChange = useCallback((changes: Array<NodeChange<Node<CatalogNodeData>>>) => {
@@ -183,18 +242,32 @@ function ModelCanvasInner({ connectionId }: ModelCanvasProps) {
     setEdges((prev) => applyEdgeChanges(kept, prev));
   }, []);
 
-  /** 拖拽结束 → 防抖写回坐标。 */
+  /**
+   * 画布选中 → 同步右栏 PropertyPanel（store.selectedItemKey）。
+   *
+   * <p>此前只有左树 `ModelTree` 调 `setSelected`，点画布节点时右栏一直停在
+   * 「未选中」——看起来像属性面板坏了。多选时取第一个节点。
+   */
+  const onSelectionChange = useCallback(
+    ({ nodes: selectedNodes }: { nodes: Array<Node<CatalogNodeData>> }) => {
+      const first = selectedNodes[0];
+      setSelected(first?.data?.itemKey ?? null);
+    },
+    [setSelected],
+  );
+
+  /** 拖拽结束 → 防抖写回坐标（读 ref，避免闭包停在拖拽前一帧）。 */
   const onNodeDragStop = useCallback(() => {
-    layout.persist(nodes, edges, viewportRef.current);
-  }, [layout, nodes, edges]);
+    layout.persist(nodesRef.current, edgesRef.current, viewportRef.current);
+  }, [layout]);
 
   /** 缩放/平移结束 → 落视口（与节点共用同一防抖窗口）。 */
   const onMoveEnd = useCallback(
     (_event: unknown, viewport: { x: number; y: number; zoom: number }) => {
       viewportRef.current = viewport;
-      layout.persist(nodes, edges, viewport);
+      layout.persist(nodesRef.current, edgesRef.current, viewport);
     },
-    [layout, nodes, edges],
+    [layout],
   );
 
   /** 连线创建关系：**不开临时边**（真假值只认 catalog；保存成功后失效缓存自动出现）。 */
@@ -238,7 +311,7 @@ function ModelCanvasInner({ connectionId }: ModelCanvasProps) {
   const baseRevision = sync.status?.current_edit_revision ?? null;
 
   return (
-    <div className="relative min-h-0 flex-1 border-x border-border/60">
+    <div className="relative flex h-full min-h-0 w-full flex-1 flex-col border-x border-border/60">
       {/* 左上角状态区：权限 / 保存 / 冲突 */}
       <div className="pointer-events-none absolute left-2 top-2 z-10 flex max-w-[calc(100%-1rem)] flex-wrap items-center gap-2">
         {!canEdit && (
@@ -280,7 +353,7 @@ function ModelCanvasInner({ connectionId }: ModelCanvasProps) {
             size="sm"
             variant="outline"
             className="h-6 shrink-0 gap-1 px-2 text-[12px]"
-            onClick={() => void layout.reload()}
+            onClick={handleReloadLayout}
           >
             <RotateCcw className="h-3 w-3" />
             重载布局
@@ -323,12 +396,13 @@ function ModelCanvasInner({ connectionId }: ModelCanvasProps) {
           elementsSelectable
           onNodesChange={onNodesChange}
           onEdgesChange={onEdgesChange}
+          onSelectionChange={onSelectionChange}
           onNodeDragStop={canEdit ? onNodeDragStop : undefined}
           onMoveEnd={canEdit ? onMoveEnd : undefined}
           onConnect={onConnect}
           onEdgeClick={onEdgeClick}
-          // 无持久化布局时用 fitView 铺满；已有布局则用服务端视口（见 appliedViewportRef 效果）
-          fitView={layout.positions.size === 0}
+          // 无持久化布局时首屏 fitView；勿在缩放过程中因 positions 短暂为空反复 fit
+          fitView={layout.positions.size === 0 && !layout.isLoading}
           minZoom={0.2}
           maxZoom={2}
           proOptions={{ hideAttribution: true }}

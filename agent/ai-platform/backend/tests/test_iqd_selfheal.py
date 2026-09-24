@@ -82,20 +82,31 @@ async def test_context_build_force_false_never_appends_force_flag():
 
 @pytest.mark.asyncio
 async def test_memory_reset_args_come_from_config():
-    """memory reset 可选参数来自配置：空 → ["memory","reset"]；["--all"] → 含 --all。"""
+    """memory reset 可选参数来自配置：空 → ["memory","reset"]；["--force"] → 含 --force。"""
     with _with_iqd_mcp_settings(self_heal_memory_reset_args=[]):
         cli = IqdCli()
         cli._run = AsyncMock(return_value={"stdout": "", "stderr": "", "exit_code": 0})
         await cli.memory_reset()
         assert _capture_args(cli) == ["memory", "reset"]
 
-    with _with_iqd_mcp_settings(self_heal_memory_reset_args=["--all"]):
+    with _with_iqd_mcp_settings(self_heal_memory_reset_args=["--force"]):
         cli = IqdCli()
         cli._run = AsyncMock(return_value={"stdout": "", "stderr": "", "exit_code": 0})
         await cli.memory_reset()
         args = _capture_args(cli)
     assert args[:2] == ["memory", "reset"]
-    assert "--all" in args
+    assert "--force" in args
+
+
+@pytest.mark.asyncio
+async def test_memory_reset_default_includes_force():
+    """W0：默认 self_heal_memory_reset_args 含 --force，避免非 TTY Aborted。"""
+    assert "--force" in Settings().iqd_mcp.self_heal_memory_reset_args
+    with patch("src.adapters.iqd_cli.get_settings", return_value=Settings()):
+        cli = IqdCli()
+        cli._run = AsyncMock(return_value={"stdout": "", "stderr": "", "exit_code": 0})
+        await cli.memory_reset()
+        assert _capture_args(cli) == ["memory", "reset", "--force"]
 
 
 @pytest.mark.asyncio
@@ -220,10 +231,12 @@ async def test_trigger_reindex_resets_then_indexes_and_reports_action():
 
     assert cli.memory_reset.call_count == 1
     assert cli.memory_index.call_count == 1
-    assert result.build_status == "success"
+    assert result.build_status == "skipped"
     assert result.index_status == "success"
     report = client.report_sync_job.call_args.args[0]
     assert report["action"] == "reindex"
+    assert "build_status" not in report
+    assert report["index_status"] == "success"
 
 
 @pytest.mark.asyncio
@@ -317,8 +330,10 @@ def test_route_force_rebuild_end_to_end():
 
 def test_route_re_index_end_to_end():
     body, report = _route_test_case("re-index", cli_return={"stdout": "{}", "stderr": ""})
-    assert body["data"]["build_status"] == "success"
+    assert body["data"]["build_status"] == "skipped"
+    assert body["data"]["index_status"] == "success"
     assert report["action"] == "reindex"
+    assert "build_status" not in report
 
 
 def test_route_validate_end_to_end():

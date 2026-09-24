@@ -164,9 +164,68 @@ async def test_stop_connection_marks_retained(tmp_path: Path) -> None:
 async def test_status_connection_unknown_returns_stopped() -> None:
     """未知连接 status_connection 返回 stopped（不抛错、不静默 RUNNING）。"""
     svc = IqdMcpLifecycleService()
-    status = svc.status_connection(999)
+    with patch("src.agent.mis_iqd.mcp_lifecycle.WrenMcpAgentClient") as agent_cls:
+        agent_cls.return_value.enabled = False
+        status = await svc.status_connection(999)
     assert status["mcp_status"] == "stopped"
     assert status["port"] is None
+
+
+@pytest.mark.asyncio
+async def test_remote_ensure_continues_when_credential_resolve_fails() -> None:
+    """远程 ensure：vault 凭证解析失败时降级空 env，仍完成 agent ensure + 注册。"""
+    home = "/var/lib/mis-iqd/wren-projects/900001"
+    config_mock = MagicMock()
+    config_mock.get_connection = AsyncMock(
+        return_value={
+            "id": 900001,
+            "enabled": True,
+            "name": "seed",
+            "auth_type": "bearer",
+            "secret_ref": "starrocks",
+        }
+    )
+    resolver = MagicMock()
+    resolver.resolve_env = AsyncMock(
+        side_effect=IqdMcpLifecycleError("凭证不可得：credential_mappings missing")
+    )
+    ensure_result = MagicMock(
+        wren_host="10.254.16.27",
+        control_endpoint="http://10.254.16.27:9100",
+        mcp_endpoint="http://10.254.16.27:9101",
+        agent_handle="h1",
+        status="running",
+        project_home=home,
+    )
+    agent = MagicMock()
+    agent.enabled = True
+    agent.ensure = AsyncMock(return_value=ensure_result)
+    registry = MagicMock()
+
+    with patch(
+        "src.agent.mis_iqd.mcp_lifecycle.IqdConfigClient", return_value=config_mock
+    ), patch(
+        "src.agent.mis_iqd.mcp_lifecycle.WrenMcpAgentClient", return_value=agent
+    ), patch(
+        "src.agent.mis_iqd.mcp_lifecycle.get_agent_registry", return_value=registry
+    ), patch(
+        "src.agent.mis_iqd.mcp_lifecycle.IqdCli"
+    ) as cli_cls, patch.object(
+        IqdMcpLifecycleService,
+        "project_home_of",
+        staticmethod(lambda cid: home),
+    ), patch.object(
+        IqdMcpLifecycleService, "_report_deployment", new=AsyncMock()
+    ):
+        cli_cls.return_value.ensure_project.return_value = home
+        svc = IqdMcpLifecycleService(credential_resolver=resolver)
+        result = await svc.ensure_connection(900001)
+
+    assert result["mcp_status"] == "running"
+    assert result["remote"] is True
+    agent.ensure.assert_awaited_once()
+    assert agent.ensure.call_args.kwargs.get("credential") in (None, {})
+    registry.register.assert_called_once()
 
 
 @pytest.mark.asyncio
@@ -200,11 +259,14 @@ async def test_bulk_start_only_enabled_connections() -> None:
             raise IqdMcpLifecycleError(f"连接 {connection_id} 未启用，拒绝启动 MCP")
         return {"connection_id": connection_id, "mcp_status": "running"}
 
-    with patch("src.adapters.iqd_config_client.IqdConfigClient", return_value=config_mock), patch.object(
+    with patch("src.adapters.iqd_config_client.IqdConfigClient", return_value=config_mock), patch(
+        "src.agent.mis_iqd.bootstrap.WrenMcpAgentClient"
+    ) as agent_cls, patch.object(
         IqdMcpLifecycleService,
         "start_connection",
         new=AsyncMock(side_effect=_fake_start),
     ):
+        agent_cls.return_value.enabled = False
         started = await bulk_start_enabled_iqd_mcp()
 
     assert started == 2  # 仅连接 1、3 启动，连接 2 未启用被 best-effort 跳过

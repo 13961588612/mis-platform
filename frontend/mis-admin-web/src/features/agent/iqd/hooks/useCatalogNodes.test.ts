@@ -13,7 +13,48 @@
  * <p>只测纯函数（不挂 React / 不挂 Query），故沿用项目既有 vitest node 环境即可。
  */
 import { describe, expect, it } from 'vitest';
-import { parseJoinModels, parseRelationship } from './useCatalogNodes';
+import { parseJoinModels, parseRelationship, resolveTableKey } from './useCatalogNodes';
+import type { IqdCatalogItem } from '@/lib/api/iqd';
+
+function stub(partial: Partial<IqdCatalogItem> & Pick<IqdCatalogItem, 'item_key' | 'kind'>): IqdCatalogItem {
+  return {
+    item_key: partial.item_key,
+    kind: partial.kind,
+    display_name: partial.display_name ?? null,
+    parent_key: partial.parent_key ?? null,
+    source: 'mdl',
+    in_scope: true,
+    ...partial,
+  };
+}
+
+describe('resolveTableKey（模型 → 物理表 key）', () => {
+  const model = stub({
+    item_key: 'mdl:model:orders',
+    kind: 'model',
+    display_name: 'orders',
+  });
+
+  it('标准键 ds.schema.table：后缀匹配', () => {
+    const catalog = [
+      model,
+      stub({ item_key: 'pg_main.public.orders', kind: 'table', display_name: 'orders' }),
+    ];
+    expect(resolveTableKey(catalog, model)).toBe('pg_main.public.orders');
+  });
+
+  it('裸表名：与 display_name / item_key 全等', () => {
+    const catalog = [
+      model,
+      stub({ item_key: 'orders', kind: 'table', display_name: 'orders' }),
+    ];
+    expect(resolveTableKey(catalog, model)).toBe('orders');
+  });
+
+  it('无匹配表 → null', () => {
+    expect(resolveTableKey([model], model)).toBeNull();
+  });
+});
 
 describe('parseJoinModels（关系条件 → 参与模型对）', () => {
   it('单条件：orders.customer_id = customers.id → [orders, customers]', () => {

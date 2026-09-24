@@ -99,35 +99,69 @@ class IqdCli:
         force: bool = False,
         project_dir: str | None = None,
     ) -> dict[str, Any]:
-        """构建/部署 MDL（建模同步 push，W4 携带增强物料）。
+        """构建/部署 MDL（建模同步 push）。
+
+        当前 WrenAI CLI（真机 ``wren context build --help``）仅支持
+        ``--path/--from-osi/--data-source/--output/--validate``，**不再**接受
+        ``--allow-write`` / ``--mdl`` / ``--sql-pairs`` / ``--instructions``。
+
+        - 无 ``mdl_dir``：在 ``project_dir`` 下执行 ``wren context build``（读 YAML 工程）。
+        - 有 ``mdl_dir``（含 ``manifest.json``）：跨机器时由 agent 写入
+          ``{project}/target/mdl.json`` 直接部署；本地同目录落盘后仍跑一次 build 作校验
+          （若仅有 manifest、无 YAML 模型，build 可能 no-op/失败，以落盘为准）。
+        - ``sql_pairs`` / ``instructions``：改为写 ``knowledge/``（后续接 ``memory store``）；
+          本期先跳过并打 warning，避免 CLI 因未知 option 失败。
 
         Args:
-            mdl_dir: MDL 导出目录（``--mdl <dir>``）；缺省由 CLI 默认。
-            sql_pairs: few-shot 样本对列表（``{"question": ..., "sql": ...}``）；
-                W4 增强物料，经 ``--sql-pairs <json>`` 传入（需 ``--allow-write``）。
-            instructions: 业务术语/口径/同义词指令列表
-                （``{"title": ..., "content": ...}``）；经 ``--instructions <json>`` 传入。
-            allow_write: 是否放行写操作（缺省 True；管理面 context build 为写操作）。
-            force: 是否强制重建（附加 ``self_heal_force_build_args`` 配置项）。
-            project_dir: 目标 wren project 目录（方案 A 多连接）；缺省沿用 cwd。
+            mdl_dir: 派生 MDL 目录（内含 ``manifest.json``）；缺省则纯 project build。
+            sql_pairs: few-shot 样本（本期跳过 CLI 直传）。
+            instructions: 业务指令（本期跳过 CLI 直传）。
+            allow_write: 保留参数兼容旧调用方；**已忽略**（新 CLI 无此 flag）。
+            force: 是否附加 ``self_heal_force_build_args``。
+            project_dir: 目标 wren project 目录（方案 A 多连接）。
 
         Returns:
             CLI 调用结果字典（含 ``mdl_hash`` 等 stdout 摘要）。
         """
-        args: list[str] = ["context", "build"]
-        if allow_write:
-            args.append("--allow-write")
-        if force:
-            # 仅 force 时附加（如 --force），来源 self_heal_force_build_args 配置项（Q5）
-            args.extend(self._force_build_args)
-        if mdl_dir:
-            args.extend(["--mdl", mdl_dir])
+        del allow_write  # 旧 flag，当前 CLI 不支持
         if sql_pairs:
-            args.extend(["--sql-pairs", json.dumps(sql_pairs, ensure_ascii=False)])
+            logger.warning(
+                "IQD context_build skip sql_pairs (CLI 无 --sql-pairs；改走 knowledge/ TODO)",
+                count=len(sql_pairs),
+            )
         if instructions:
-            args.extend(["--instructions", json.dumps(instructions, ensure_ascii=False)])
-        return await self._run(args, cwd=project_dir)
+            logger.warning(
+                "IQD context_build skip instructions (CLI 无 --instructions；改走 knowledge/ TODO)",
+                count=len(instructions),
+            )
 
+        args: list[str] = ["context", "build"]
+        if force:
+            args.extend(self._force_build_args)
+        # --mdl 仅作内部标记：远程 _try_remote_run 抽出 manifest 交给 agent 写 target/mdl.json；
+        # 本地则直接写入 project_dir/target/mdl.json，不再传给 wren CLI。
+        if mdl_dir:
+            import os
+            import shutil
+
+            manifest_src = (
+                mdl_dir
+                if mdl_dir.endswith("manifest.json")
+                else os.path.join(mdl_dir, "manifest.json")
+            )
+            if project_dir:
+                target_dir = os.path.join(project_dir, "target")
+                os.makedirs(target_dir, exist_ok=True)
+                dest = os.path.join(target_dir, "mdl.json")
+                try:
+                    shutil.copyfile(manifest_src, dest)
+                except OSError as exc:
+                    raise IqdCliError(f"写入 target/mdl.json 失败: {exc}") from exc
+                # 跨机器时仍带 --mdl 标记，供 _try_remote_run 上传同一份 manifest
+                args.extend(["--mdl", mdl_dir])
+            else:
+                args.extend(["--mdl", mdl_dir])
+        return await self._run(args, cwd=project_dir)
     async def memory_index(self, *, project_dir: str | None = None) -> dict[str, Any]:
         """下发记忆索引（``wren memory index``）。
 
@@ -373,6 +407,9 @@ class IqdCli:
     async def _run(self, args: list[str], *, cwd: str | None = None) -> dict[str, Any]:
         """执行 wren CLI 子命令。
 
+        跨机器（``WREN_AGENT_ENDPOINT`` 非空）且给出 ``cwd``（``…/{connId}``）时，
+        转发到 WrenMcpAgent ``POST /cli``，在 wren 机本机执行；否则走本机 subprocess。
+
         Args:
             args: 子命令参数（不含二进制本身）。
             cwd: 子进程工作目录（方案 A 多连接；不传则沿用进程 cwd）。
@@ -383,12 +420,31 @@ class IqdCli:
         Raises:
             IqdCliError: 二进制不可执行或非零退出。
         """
+        # 跨机器：把 --mdl <local_dir> 抽成 manifest 正文，由 agent 落临时目录
+        remote = await self._try_remote_run(args, cwd=cwd)
+        if remote is not None:
+            return remote
+
         command: list[str] = [self._bin, *args]
+        # 本地路径：剥掉内部 --mdl 标记（新版 wren CLI 不接受该 option）
+        run_args: list[str] = []
+        skip_next = False
+        for i, token in enumerate(args):
+            if skip_next:
+                skip_next = False
+                continue
+            if token == "--mdl":
+                skip_next = True
+                continue
+            run_args.append(token)
+        # 若只剩 context build 且本地已写过 target/mdl.json（mdl 被剥掉），仍执行 build
+        command = [self._bin, *run_args]
         logger.info("wren CLI call", command=shlex.join(command), cwd=cwd)
 
         try:
             proc = await asyncio.create_subprocess_exec(
                 *command,
+                cwd=cwd,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
@@ -418,4 +474,69 @@ class IqdCli:
             "exit_code": proc.returncode,
             "stdout": stdout,
             "stderr": stderr,
+        }
+
+    async def _try_remote_run(
+        self, args: list[str], *, cwd: str | None
+    ) -> dict[str, Any] | None:
+        """若启用 WrenMcpAgent 且 cwd 可解析为 connId，则远程执行；否则返回 None 走本地。"""
+        import os
+
+        from src.adapters.wren_mcp_agent_client import (
+            WrenMcpAgentClient,
+            WrenMcpAgentClientError,
+        )
+
+        agent = WrenMcpAgentClient()
+        if not agent.enabled or not cwd:
+            return None
+        conn_id = os.path.basename(os.path.normpath(cwd))
+        if not conn_id:
+            return None
+
+        clean_args: list[str] = []
+        mdl_manifest: str | None = None
+        skip_next = False
+        for i, token in enumerate(args):
+            if skip_next:
+                skip_next = False
+                continue
+            if token == "--mdl" and i + 1 < len(args):
+                mdl_path = args[i + 1]
+                manifest_file = (
+                    mdl_path
+                    if mdl_path.endswith("manifest.json")
+                    else os.path.join(mdl_path, "manifest.json")
+                )
+                try:
+                    with open(manifest_file, encoding="utf-8") as fh:
+                        mdl_manifest = fh.read()
+                except OSError as exc:
+                    raise IqdCliError(f"读取派生 MDL 失败: {manifest_file} -> {exc}") from exc
+                skip_next = True
+                continue
+            clean_args.append(token)
+
+        settings = get_settings()
+        wait = float(settings.iqd_mcp.build_timeout_seconds or 120.0)
+        logger.info(
+            "wren CLI call (remote)",
+            command=shlex.join(["wren", *clean_args]),
+            conn_id=conn_id,
+            has_mdl=bool(mdl_manifest),
+        )
+        try:
+            data = await agent.run_cli(
+                conn_id,
+                clean_args,
+                mdl_manifest=mdl_manifest,
+                timeout=wait,
+            )
+        except WrenMcpAgentClientError as exc:
+            raise IqdCliError(str(exc)) from exc
+        return {
+            "command": str(data.get("command") or shlex.join(["wren", *clean_args])),
+            "exit_code": int(data.get("exit_code") or 0),
+            "stdout": str(data.get("stdout") or ""),
+            "stderr": str(data.get("stderr") or ""),
         }

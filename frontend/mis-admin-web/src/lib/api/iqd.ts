@@ -668,18 +668,33 @@ export interface IqdEditNodeResult {
 }
 
 /**
+ * 运维自愈 / 整库 MDL 构建类长操作超时（毫秒）。
+ *
+ * <p>对齐 Worker {@code build_timeout_seconds=120} + 网络余量；默认 axios 15s 会把正常 build
+ * 误判成「timeout of 15000ms exceeded」。
+ */
+const IQD_LONG_OP_TIMEOUT_MS = 180_000;
+
+/**
  * 触发增强同步（闭环补全 P0-2）：调 BFF /api/v1/iqd/enhance/sync → ai-platform Worker
  * 经 SyncCoordinator 合并窗口异步执行 context build + memory index + 回填。
  * 默认 wait=false（接受即返回）。
+ *
+ * @param scope `materials`=样本对/知识下发；`model`=建模台 catalog → MDL（可视化建模台必须用 model）
  */
 export async function syncIqdEnhancements(
   connectionId: number,
   wait = false,
+  scope: 'materials' | 'model' = 'materials',
 ): Promise<Record<string, unknown>> {
   const res = await api.post<ApiResult<Record<string, unknown>>>(
     '/iqd/enhance/sync',
     undefined,
-    { params: { connectionId, wait } },
+    {
+      params: { connectionId, wait, scope },
+      // wait=true 时与 self-heal 同量级；wait=false 接受即返回，15s 足够
+      ...(wait ? { timeout: IQD_LONG_OP_TIMEOUT_MS } : {}),
+    },
   );
   return unwrap(res, '触发增强同步失败');
 }
@@ -779,7 +794,7 @@ export async function selfHealForceRebuild(connectionId: number): Promise<IqdSel
   const res = await api.post<ApiResult<IqdSelfHealResult>>(
     '/iqd/self-heal/force-rebuild',
     undefined,
-    { params: { connectionId, wait: true } },
+    { params: { connectionId, wait: true }, timeout: IQD_LONG_OP_TIMEOUT_MS },
   );
   return unwrap(res, '强制重建失败');
 }
@@ -791,7 +806,7 @@ export async function selfHealReindex(connectionId: number): Promise<IqdSelfHeal
   const res = await api.post<ApiResult<IqdSelfHealResult>>(
     '/iqd/self-heal/re-index',
     undefined,
-    { params: { connectionId, wait: true } },
+    { params: { connectionId, wait: true }, timeout: IQD_LONG_OP_TIMEOUT_MS },
   );
   return unwrap(res, '重新索引失败');
 }
@@ -803,7 +818,7 @@ export async function selfHealValidate(connectionId: number): Promise<IqdSelfHea
   const res = await api.post<ApiResult<IqdSelfHealResult>>(
     '/iqd/self-heal/validate',
     undefined,
-    { params: { connectionId, wait: true } },
+    { params: { connectionId, wait: true }, timeout: IQD_LONG_OP_TIMEOUT_MS },
   );
   return unwrap(res, '模型校验失败');
 }

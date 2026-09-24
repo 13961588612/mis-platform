@@ -9,7 +9,8 @@ wren 机常驻 supervisor（方案 A 跨机器落地版，v0.2）。单台 wren 
    stopped 须终止），崩溃自动重启（自愈）。
 2. **端口段分配/回收**：从 `WREN_AGENT_WREN_PORT_RANGE` 按连接分配，停止回收复用。
 3. **控制面（bearer 鉴权，去 mTLS）**：`/internal/v1/wren-mcp/{ensure,start,stop,restart,
-   status,heartbeat,health}`，由 ai-platform 的 `WrenMcpAgentClient` 调。
+   status,heartbeat,cli,health}`，由 ai-platform 的 `WrenMcpAgentClient` 调。
+   `POST /cli` 在 wren 机本机执行 `wren context build` / `memory index` 等（跨机器管理面写路径）。
 4. **数据面反向代理**：`/mcp/{conn_id}` 按 connId 路由到本机 `http://127.0.0.1:{local_port}/mcp`，
    入口 bearer 校验（决策 ②）。监听 `WREN_AGENT_MCP_PORT`（与 控制面 `WREN_AGENT_CONTROL_PORT` 分离）。
 5. **凭证 env 注入（S1）**：`ensure` 推送的凭证明文经内网+bearer 通道到达后，写入临时 env

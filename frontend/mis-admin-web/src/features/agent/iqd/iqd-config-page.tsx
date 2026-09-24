@@ -118,7 +118,7 @@ export function IqdConfigPage() {
   };
 
   return (
-    <div className="flex h-full min-h-0 flex-col">
+    <div className="flex h-full min-h-0 flex-col bg-background">
       <PageHeader
         title="问数连接配置"
         description="配置 WrenAI 连接（凭证经 profile 注入，不落明文），连通自检后生效。"

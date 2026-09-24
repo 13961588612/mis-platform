@@ -70,6 +70,8 @@ class IqdMcpSettings(BaseSettings):
 
     model_config = SettingsConfigDict(
         env_prefix="WREN_",
+        env_file=".env",
+        env_file_encoding="utf-8",
         extra="ignore",
         populate_by_name=True,
     )
@@ -220,8 +222,9 @@ class IqdMcpSettings(BaseSettings):
         "W0 真机实测后由运维在 backend/.env 回填，默认空（退化普通增量 build）",
     )
     self_heal_memory_reset_args: list[str] = Field(
-        default_factory=list,
-        description="运维自愈 re-index 时附加给 `wren memory reset` 的可选参数；W0 实测后回填，默认空",
+        default_factory=lambda: ["--force"],
+        description="运维自愈 re-index 时附加给 `wren memory reset` 的可选参数；"
+        "W0 实测：非 TTY 无确认会 stderr=Aborted，须 `--force`/`-f` 跳过确认",
     )
     self_heal_context_validate_args: list[str] = Field(
         default_factory=list,
@@ -237,10 +240,16 @@ class IqdConfigClientSettings(BaseSettings):
     （启动全量 + 变更事件 + 每日兜底；缓存不可得 fail-closed 45204）。
     """
 
-    model_config = SettingsConfigDict(env_prefix="IQD_", extra="ignore")
+    model_config = SettingsConfigDict(
+        env_prefix="IQD_",
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
 
     internal_api_base_url: str = Field(
-        default="http://mis-iqd:8109",
+        # 本机联调默认 loopback；Docker Compose 用 IQD_INTERNAL_API_BASE_URL=http://mis-iqd:8109 覆盖
+        default="http://127.0.0.1:8109",
         description="mis-iqd 服务基址（内网直连，非经 Gateway）",
     )
     timeout_seconds: float = Field(

@@ -118,6 +118,7 @@ class IqdMcpClient:
         self._path: str = path or "/mcp"
         self._mcp_client: Any = None
         self._connected: bool = False
+        self._exit_stack: Any = None
 
     # ================================================================ 连通性
 
@@ -264,11 +265,16 @@ class IqdMcpClient:
         return await self._call_tool(TOOL_LIST_MODELS, kwargs)
 
     async def describe_model(self, model_name: str, **kwargs: Any) -> dict[str, Any]:
-        """describe_model：单个语义模型结构。"""
+        """describe_model：单个语义模型结构。
+
+        Wren MCP 工具入参名为 ``name``（见 tools/list 的 ``describe_modelArguments``），
+        不是 ``model``；传错会返回 validation error 且列预览为空。
+        """
         if self._mock:
             return {"type": "model", "name": model_name, "fields": []}
         payload: dict[str, Any] = dict(kwargs)
-        payload["model"] = model_name
+        payload.pop("model", None)
+        payload["name"] = model_name
         return await self._call_tool(TOOL_DESCRIBE_MODEL, payload)
 
     # ================================================================ 内部实现
@@ -299,25 +305,55 @@ class IqdMcpClient:
         return self._parse_mcp_result(result, tool_name)
 
     async def _ensure_session(self) -> Any:
-        """懒建立 MCP HTTP transport session（失败时置 mock 并返回 None）。"""
+        """懒建立 MCP Streamable HTTP session（失败时置 mock 并返回 None）。
+
+        使用与 :mod:`src.mcp.client` 相同的 ``streamable_http_client`` +
+        ``ClientSession`` 栈；旧实现 ``from mcp.client.http import http_client``
+        在当前 MCP SDK 中不存在，导致所有连接静默降级 mock。
+        """
         if self._mock:
             return None
         if self._mcp_client is not None and self._connected:
             return self._mcp_client
 
+        stack: Any = None
         try:
-            from mcp import ClientSession, StdioServerParameters  # noqa: F401 - 类型标注
-            from mcp.client.http import http_client
+            import contextlib
+
+            import httpx
+            from mcp import ClientSession
+            from mcp.client.streamable_http import streamable_http_client
+            from mcp.shared._httpx_utils import create_mcp_http_client
 
             url = f"http://{self._host}:{self._port}{self._path}"
-            # 数据面鉴权：跨机器部署经 agent 反向代理需 bearer（决策 ②，去 mTLS）；
-            # 本地 Plan A 无 token 则不带（wren serve mcp 仅本机、无 bearer）。
             headers = {"Authorization": f"Bearer {self._token}"} if self._token else None
-            # HTTP transport：streamable http 客户端
-            ctx = http_client(url, headers=headers)
-            self._mcp_client = await ctx.__aenter__()
+            timeout = httpx.Timeout(self._timeout, read=max(self._timeout * 2, 60.0))
+
+            stack = contextlib.AsyncExitStack()
+            await stack.__aenter__()
+            http_client = create_mcp_http_client(headers=headers, timeout=timeout)
+            await stack.enter_async_context(http_client)
+            read, write, _get_sid = await stack.enter_async_context(
+                streamable_http_client(
+                    url=url,
+                    http_client=http_client,
+                    terminate_on_close=True,
+                )
+            )
+            session = await stack.enter_async_context(ClientSession(read, write))
+            await session.initialize()
+
+            self._exit_stack = stack
+            self._mcp_client = session
             self._connected = True
-            return self._mcp_client
+            logger.info(
+                "wren MCP session connected",
+                host=self._host,
+                port=self._port,
+                path=self._path,
+                remote=bool(self._token),
+            )
+            return session
         except Exception as exc:
             logger.warning(
                 "wren MCP connect failed; degrade to mock",
@@ -326,28 +362,55 @@ class IqdMcpClient:
                 path=self._path,
                 error=str(exc),
             )
+            if stack is not None:
+                try:
+                    await stack.aclose()
+                except Exception:  # noqa: BLE001
+                    pass
+            self._exit_stack = None
+            self._mcp_client = None
+            self._connected = False
             self._mock = True
             return None
 
     @staticmethod
     def _parse_mcp_result(result: Any, tool_name: str) -> dict[str, Any]:
-        """解析 MCP 工具返回（兼容 content text JSON / dict 两种形态）。"""
+        """解析 MCP 工具返回（兼容 content text JSON / dict 两种形态）。
+
+        Wren 工具失败时常仍返回 CallToolResult（``isError=True`` + text 错误信息），
+        必须显式抛错，避免调用方把错误文案当空结果吞掉（列预览「无字段」假阴性）。
+        """
+        is_error = bool(getattr(result, "isError", False) or getattr(result, "is_error", False))
         if isinstance(result, dict):
+            if result.get("isError") or result.get("is_error"):
+                raise IqdMcpClientError(
+                    f"wren MCP 工具失败: {tool_name} -> {result.get('content') or result}"
+                )
             return result
 
         # MCP CallToolResult：取第一个 text content
         content: Any = getattr(result, "content", None)
         if isinstance(content, list) and content:
+            texts: list[str] = []
             for item in content:
                 text: Any = getattr(item, "text", None)
                 if text:
+                    texts.append(str(text))
                     try:
                         parsed: Any = json.loads(text)
                         if isinstance(parsed, dict):
+                            if is_error:
+                                raise IqdMcpClientError(
+                                    f"wren MCP 工具失败: {tool_name} -> {parsed}"
+                                )
                             return parsed
                     except (json.JSONDecodeError, TypeError):
                         pass
-                    return {"type": "text", "text": str(text)}
+            joined = " | ".join(texts) if texts else ""
+            if is_error:
+                raise IqdMcpClientError(f"wren MCP 工具失败: {tool_name} -> {joined or result}")
+            if joined:
+                return {"type": "text", "text": joined}
 
         if isinstance(result, str):
             try:

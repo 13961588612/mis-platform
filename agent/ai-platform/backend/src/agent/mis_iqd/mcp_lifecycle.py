@@ -35,6 +35,7 @@ from src.adapters.wren_mcp_agent_client import (
 )
 from src.adapters.wren_mcp_registry import (
     McpStatus,
+    _split_endpoint,
     get_agent_registry,
     get_process_manager,
 )
@@ -84,9 +85,21 @@ class IqdConfigCredentialResolver(CredentialResolver):
         self, connection_id: int, conn: dict[str, Any] | None
     ) -> dict[str, str]:
         client = IqdConfigClient()
+        auth = ""
+        if isinstance(conn, dict):
+            auth = str(conn.get("authType") or conn.get("auth_type") or "").strip().lower()
         try:
             return await client.get_connection_env(connection_id)
         except Exception as exc:  # noqa: BLE001 - 凭证不可得需透传给调用方.fail-closed
+            # auth_type=none：业务库凭证在 wren profile 侧，平台 vault 可无条目；
+            # 允许空 env 继续 ensure（agent 仅推送 secret_ref / 已有 profile）。
+            if auth in ("", "none"):
+                logger.warning(
+                    "IQD resolve connection env skipped (auth_type=none)",
+                    connection_id=connection_id,
+                    error=str(exc),
+                )
+                return {}
             logger.warning(
                 "IQD resolve connection env failed", connection_id=connection_id, error=str(exc)
             )
@@ -116,9 +129,15 @@ class IqdMcpLifecycleService:
 
     @staticmethod
     def project_home_of(connection_id: int | str) -> str:
-        """派生连接专属 wren project 目录（设计 §3.2）。"""
+        """派生连接专属 wren project 目录（设计 §3.2）。
+
+        一律用 POSIX ``/`` 拼接：远程 WrenMcpAgent 跑在 Linux，Windows 本机
+        ``os.path.join`` 会产生反斜杠路径（日志里曾出现
+        ``/var/lib/...\\900001``），导致 wren 机目录对不上。
+        """
         settings = get_settings()
-        return os.path.join(settings.iqd_mcp.wren_projects_root, str(connection_id))
+        root = (settings.iqd_mcp.wren_projects_root or "").rstrip("/\\")
+        return f"{root}/{connection_id}"
 
     # ================================================================ 启动
 
@@ -239,15 +258,28 @@ class IqdMcpLifecycleService:
         project_home = self.project_home_of(connection_id)
         # ① 确保 project 目录骨架（不含凭证明文）
         IqdCli().ensure_project(connection_id, project_home)
-        # ② 就绪门禁：target/mdl.json 必须已编译（build 完成）
+        # ② 远程 ensure：MDL 产物在 wren 机持久卷上，本机（尤其 Windows 联调）
+        # 目录只是骨架镜像，不能用本机 target/mdl.json 做硬门禁——否则「启用/创建项目」
+        # 永远卡在空骨架。本地 Plan A（start_connection）仍保留 MDL 门禁。
         mdl_path = os.path.join(project_home, "target", "mdl.json")
         if not os.path.exists(mdl_path):
-            raise IqdMcpLifecycleError(
-                f"连接 {connection_id} 的 MDL 尚未构建（{mdl_path} 缺失）；"
-                "请先执行语义模型同步 / 自愈 force-rebuild 再启动 MCP"
+            logger.warning(
+                "IQD remote ensure: local mdl.json missing; proceed to WrenMcpAgent",
+                connection_id=connection_id,
+                mdl_path=mdl_path,
             )
         # ③ 解析凭证 env（D6：仅 env 注入，不落盘）
-        env = await self._credential_resolver.resolve_env(connection_id, conn)
+        # 远程模式：业务库凭证常已在 wren 机 profile；本地 vault 缺表/无条目时
+        # 不得阻断 ensure（否则 bootstrap 后 agent_registry 丢连接 → 建模台「MCP 就绪失败」）。
+        try:
+            env = await self._credential_resolver.resolve_env(connection_id, conn)
+        except IqdMcpLifecycleError as exc:
+            logger.warning(
+                "IQD remote ensure: credential resolve failed; continue with empty env",
+                connection_id=connection_id,
+                error=str(exc),
+            )
+            env = {}
         secret_ref = conn.get("secret_ref") or conn.get("secretRef") or ""
         try:
             result = await agent_client.ensure(
@@ -327,6 +359,9 @@ class IqdMcpLifecycleService:
     async def restart_connection(self, connection_id: int, *, wait: bool = True) -> dict[str, Any]:
         """重启某连接的 WrenAI MCP 进程（复用端口，重新注入凭证 env）。
 
+        跨机器模式走 :meth:`ensure_connection`（远程 agent 幂等 ensure + 回填注册表），
+        避免本地 Plan A 注册表空时 ``restart`` 误报「未知连接」并把流水线打成 stopped。
+
         Args:
             connection_id: 问数连接 id。
             wait: 保留参数（兼容路由语义）。
@@ -337,6 +372,10 @@ class IqdMcpLifecycleService:
         Raises:
             IqdMcpLifecycleError: 连接不存在 / 凭证不可得 / 启动失败。
         """
+        agent_client = WrenMcpAgentClient()
+        if agent_client.enabled:
+            return await self.ensure_connection(connection_id, wait=wait)
+
         mgr = get_process_manager()
         entry = mgr.get_endpoint(connection_id)
         env: dict[str, str] | None = None
@@ -359,14 +398,73 @@ class IqdMcpLifecycleService:
 
     # ================================================================ 状态
 
-    def status_connection(self, connection_id: int) -> dict[str, Any]:
-        """取某连接的 MCP 进程状态（来自进程管理器内存注册表）。
+    async def status_connection(self, connection_id: int) -> dict[str, Any]:
+        """取某连接的 MCP 进程状态。
+
+        优先本地 Plan A 进程管理器；其次跨机器部署注册表；再回退实时调
+        WrenMcpAgent ``/status``（并回填注册表）。仅查内存时，ai-platform 重启后
+        会把远端仍 running 的连接误报 ``stopped`` → 建模台「MCP 就绪失败」。
 
         Returns:
-            ``{"connection_id", "mcp_status", "host", "port",
-            "pid", "started_at", "last_health_at", "failure_count"}``；
-            连接未注册时 ``mcp_status="stopped"``、端点为 ``None``。
+            ``{"connection_id", "mcp_status", "host", "port", ...}``；
+            三边都未命中时 ``mcp_status="stopped"``。
         """
+        local = self._status_from_local(connection_id)
+        if local is not None:
+            return local
+        dep = get_agent_registry().get(connection_id)
+        if dep is not None:
+            return self._status_from_deployment(connection_id, dep)
+
+        agent_client = WrenMcpAgentClient()
+        if agent_client.enabled:
+            try:
+                st = await agent_client.status(connection_id)
+            except WrenMcpAgentClientError as exc:
+                logger.warning(
+                    "IQD MCP remote status probe failed",
+                    connection_id=connection_id,
+                    error=str(exc),
+                )
+                st = None
+            if st is not None and st.status and st.status != McpStatus.STOPPED:
+                control = (get_settings().iqd_mcp.wren_agent_endpoint or "").rstrip("/")
+                get_agent_registry().register(
+                    connection_id,
+                    wren_host=st.wren_host or "",
+                    control_endpoint=control,
+                    mcp_endpoint=st.mcp_endpoint or "",
+                    agent_handle=st.agent_handle or "",
+                    status=st.status,
+                    project_home=st.project_home or self.project_home_of(connection_id),
+                )
+                host: str | None = None
+                port: int | None = None
+                if st.mcp_endpoint:
+                    host, port = _split_endpoint(st.mcp_endpoint)
+                return {
+                    "connection_id": connection_id,
+                    "mcp_status": st.status,
+                    "host": host or st.wren_host or None,
+                    "port": port,
+                    "mcp_endpoint": st.mcp_endpoint,
+                    "agent_handle": st.agent_handle,
+                    "project_home": st.project_home,
+                    "last_health_at": st.last_health_at or None,
+                    "last_health_msg": st.last_health_msg or None,
+                    "remote": True,
+                }
+
+        return {
+            "connection_id": connection_id,
+            "mcp_status": McpStatus.STOPPED,
+            "host": None,
+            "port": None,
+            "remote": False,
+        }
+
+    @staticmethod
+    def _status_from_local(connection_id: int) -> dict[str, Any] | None:
         mgr = get_process_manager()
         for e in mgr.list_endpoints():
             if str(e.get("conn_id")) == str(connection_id):
@@ -380,14 +478,54 @@ class IqdMcpLifecycleService:
                     "started_at": e.get("started_at"),
                     "last_health_at": e.get("last_health_at"),
                     "failure_count": e.get("failure_count"),
+                    "remote": False,
                 }
+        return None
+
+    @staticmethod
+    def _status_from_deployment(connection_id: int, dep: Any) -> dict[str, Any]:
+        host: str | None = None
+        port: int | None = None
+        if dep.mcp_endpoint:
+            host, port = _split_endpoint(dep.mcp_endpoint)
         return {
             "connection_id": connection_id,
-            "mcp_status": McpStatus.STOPPED,
-            "host": None,
-            "port": None,
+            "mcp_status": dep.status,
+            "host": host or dep.wren_host or None,
+            "port": port,
+            "mcp_endpoint": dep.mcp_endpoint,
+            "agent_handle": dep.agent_handle,
+            "project_home": dep.project_home,
+            "last_health_at": dep.last_health_at,
+            "last_health_msg": dep.last_health_msg,
+            "remote": True,
         }
 
     def list_connections(self) -> list[dict[str, Any]]:
-        """列出全部连接的 MCP 进程状态（可观测 / 调试）。"""
-        return get_process_manager().list_endpoints()
+        """列出全部连接的 MCP 状态（本地 + 远程部署合并，可观测 / 调试）。"""
+        local = get_process_manager().list_endpoints()
+        seen = {str(e.get("conn_id")) for e in local}
+        merged: list[dict[str, Any]] = [{**e, "remote": False} for e in local]
+        for dep in get_agent_registry().list():
+            cid = str(dep.get("conn_id", ""))
+            if not cid or cid in seen:
+                continue
+            host: str | None = None
+            port: int | None = None
+            endpoint = dep.get("mcp_endpoint") or ""
+            if endpoint:
+                host, port = _split_endpoint(str(endpoint))
+            merged.append(
+                {
+                    "conn_id": cid,
+                    "host": host or dep.get("wren_host"),
+                    "port": port,
+                    "status": dep.get("status"),
+                    "project_home": dep.get("project_home"),
+                    "mcp_endpoint": dep.get("mcp_endpoint"),
+                    "agent_handle": dep.get("agent_handle"),
+                    "last_health_at": dep.get("last_health_at"),
+                    "remote": True,
+                }
+            )
+        return merged

@@ -308,18 +308,32 @@ public class IqdFacadeService {
     }
 
     /**
-     * 触发增强同步（需 iqd:enhance:sync）：调 ai-platform Worker 经 SyncCoordinator
-     * 合并窗口异步执行 context build + memory index + 回填。
+     * 触发增强同步（需 {@code iqd:enhance:sync}）：调平台 Worker
+     * {@code /api/v1/iqd/enhance/sync}。
      *
      * @param connectionId 问数连接 id
      * @param wait         是否阻塞至完成（手动/重试=true；自动=false）
+     * @param scope        {@code materials}（一期物料）| {@code model}（二期模型写回）；
+     *                     非法值回落 materials
      * @param authorization BFF 收到的原始 MIS JWT（透传平台 RS256）
      * @param traceId      全链路追踪 ID
      * @return 平台响应 data（SyncResult：build/index 状态 + mdl_hash + 回填计数）
      */
-    public Map<String, Object> syncEnhancements(Long connectionId, Boolean wait, String authorization, String traceId) {
+    public Map<String, Object> syncEnhancements(
+            Long connectionId, Boolean wait, String scope, String authorization, String traceId) {
         requirePermission(properties.getEnhanceSyncPermission());
-        return aiPlatformClient.syncEnhancements(connectionId, wait, "materials", authorization, traceId);
+        String effectiveScope =
+                "model".equalsIgnoreCase(scope == null ? "" : scope.trim()) ? "model" : "materials";
+        return aiPlatformClient.syncEnhancements(
+                connectionId, wait, effectiveScope, authorization, traceId);
+    }
+
+    /**
+     * 兼容旧调用：缺省 scope=materials（增强页「立即同步」）。
+     */
+    public Map<String, Object> syncEnhancements(
+            Long connectionId, Boolean wait, String authorization, String traceId) {
+        return syncEnhancements(connectionId, wait, "materials", authorization, traceId);
     }
 
     /**

@@ -268,15 +268,18 @@ public class IqdAclController {
     /**
      * 触发增强同步（需 iqd:enhance:sync）：调 ai-platform Worker 经 SyncCoordinator
      * 合并窗口异步执行 context build + memory index + 回填。默认 wait=false（接受即返回）。
+     *
+     * @param scope {@code materials}=样本对/知识；{@code model}=建模台 catalog→MDL
      */
     @PostMapping("/enhance/sync")
     public Result<Map<String, Object>> syncEnhancements(
             @RequestParam Long connectionId,
             @RequestParam(required = false, defaultValue = "false") boolean wait,
+            @RequestParam(required = false, defaultValue = "materials") String scope,
             @RequestHeader(value = SecurityConstants.AUTHORIZATION_HEADER, required = false) String authorization,
             @RequestHeader(value = SecurityConstants.HEADER_TRACE_ID, required = false) String traceId) {
         try {
-            return Result.ok(iqdFacadeService.syncEnhancements(connectionId, wait, authorization, traceId));
+            return Result.ok(iqdFacadeService.syncEnhancements(connectionId, wait, scope, authorization, traceId));
         } catch (BusinessException ex) {
             return Result.fail(ex.getCode(), ex.getMessage());
         } catch (Exception ex) {

@@ -208,6 +208,8 @@ public class IqdCatalogNodeService {
         // 所有持有问数权限的人。仅当调用方**显式**传 in_scope=true 才纳入范围；
         // 其余（缺省 / null / false）一律不纳入，引导用户去 /iqd/scope 勾选（治理边界）。
         boolean inScope = options != null && Boolean.TRUE.equals(toBoolean(options.get("in_scope")));
+        boolean refreshColumns = options != null
+                && Boolean.TRUE.equals(toBoolean(options.get("refresh_columns")));
 
         // ---------- 连接存在 + 写回闸门 ----------
         IqdConnection conn = connectionRepository.findById(connectionId)
@@ -218,7 +220,7 @@ public class IqdCatalogNodeService {
         }
 
         // ---------- 1. 幂等：① 幂等键命中 → 返回首次结果，不 bump ----------
-        if (idempotencyKey != null && !idempotencyKey.isBlank()) {
+        if (!refreshColumns && idempotencyKey != null && !idempotencyKey.isBlank()) {
             Optional<IqdEditIdempotency> prev =
                     idempotencyRepository.findByConnectionIdAndIdempotencyKey(connectionId, idempotencyKey);
             if (prev.isPresent()) {
@@ -230,9 +232,10 @@ public class IqdCatalogNodeService {
 
         // ---------- 1b. 幂等：② 同源表重复导入（语义幂等）→ 返回首次结果，不 bump ----------
         //   与「幂等键」互补：前端每次提交用新 uuid（§8.4），若只认 key，重复导入会反复 bump。
+        //   refresh_columns=true 时跳过：表发现「更新导入」需重写列 type/PK/comment。
         Optional<IqdCatalogItem> existingModel =
                 catalogItemRepository.findByConnectionIdAndItemKey(connectionId, effectiveModelKey);
-        if (existingModel.isPresent()) {
+        if (existingModel.isPresent() && !refreshColumns) {
             long rev = conn.getCurrentEditRevision() == null ? 0L : conn.getCurrentEditRevision();
             log.info("IQD from-table semantic idempotent hit connectionId={} modelKey={}",
                     connectionId, effectiveModelKey);
@@ -282,9 +285,14 @@ public class IqdCatalogNodeService {
             }
             String colKey = tableKey + "." + colName.toLowerCase(LOWER);
             columnMapping.put(colName, colKey);
+            Boolean isPk = toBoolean(col.get("is_primary_key"));
+            if (isPk == null) {
+                // 表发现向导预览字段名为 is_pk_inferred；落库兼容双写
+                isPk = toBoolean(col.get("is_pk_inferred"));
+            }
             upsertNode(connectionId, colKey, "column", tableKey, colName,
                     str(col.get("type")), null,
-                    toBoolean(col.get("is_primary_key")), null, null,
+                    isPk, null, null,
                     str(col.get("comment")), null, inScope ? 1 : 0, next, now);
         }
 
@@ -448,10 +456,14 @@ public class IqdCatalogNodeService {
         String tableNameGuess = modelName != null ? modelName
                 : modelItemKey.substring(modelItemKey.lastIndexOf(':') + 1);
         for (IqdCatalogItem it : items) {
-            if ("table".equals(it.getKind()) && it.getItemKey() != null
-                    && it.getItemKey().toLowerCase(LOWER).endsWith("." + tableNameGuess.toLowerCase(LOWER))) {
-                tableKey = it.getItemKey();
-                break;
+            if ("table".equals(it.getKind()) && it.getItemKey() != null) {
+                String key = it.getItemKey().toLowerCase(LOWER);
+                String guess = tableNameGuess.toLowerCase(LOWER);
+                if (key.endsWith("." + guess) || key.equals(guess)
+                        || key.endsWith(":" + guess)) {
+                    tableKey = it.getItemKey();
+                    break;
+                }
             }
         }
         for (IqdCatalogItem it : items) {
@@ -1427,9 +1439,14 @@ public class IqdCatalogNodeService {
     /** 在 catalog 里找该物理表的既有 table 行 item_key（大小写不敏感后缀匹配）。 */
     private Optional<String> findExistingTableKey(Long connectionId, String schema, String table) {
         String suffix = ("." + schema + "." + table).toLowerCase(LOWER);
+        String bare = table.toLowerCase(LOWER);
         for (IqdCatalogItem it : catalogItemRepository.findByConnectionId(connectionId)) {
-            if ("table".equals(it.getKind()) && it.getItemKey() != null
-                    && it.getItemKey().toLowerCase(LOWER).endsWith(suffix)) {
+            if (!"table".equals(it.getKind()) || it.getItemKey() == null) {
+                continue;
+            }
+            String key = it.getItemKey().toLowerCase(LOWER);
+            // 兼容：完整 {ds}.{schema}.{table} / 仅表名 / 任意前缀.表名
+            if (key.endsWith(suffix) || key.equals(bare) || key.endsWith("." + bare)) {
                 return Optional.of(it.getItemKey());
             }
         }

@@ -23,12 +23,14 @@
  * (`PAGE_MAP`) ⑤ `V87__iqd_modeling_seed.sql`（sys_menu 92600）+ `lib/nav/icons.ts`（ICON_MAP）。
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useLocation } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen, Plus } from 'lucide-react';
 import { PageHeader } from '@/components/common/page-header';
 import { buildAppBreadcrumbs } from '@/components/common/app-breadcrumbs';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
+import { cn } from '@/lib/utils';
 import { IQD_MODELING_PERMISSIONS, useIqdModelingPermission } from './components/shared/usePermission';
 import { PermissionGate } from '@/components/auth/permission-gate';
 import type { IqdCatalogItem } from '@/lib/api/iqd';
@@ -116,6 +118,7 @@ function ResizeHandle({
 
 /** 建模台主页。 */
 export function IqdModelingPage() {
+  const location = useLocation();
   const queryClient = useQueryClient();
   const { canView, canEdit } = useIqdModelingPermission();
   const connectionId = useModelingStore((state) => state.connectionId);
@@ -140,6 +143,15 @@ export function IqdModelingPage() {
     defaultModelKey: string | null;
   } | null>(null);
   const panesRef = useRef<HTMLDivElement | null>(null);
+
+  /**
+   * Keep-alive 切到其它 Tab（如「连接配置」）时本页仍挂载，但用 `invisible` 藏。
+   * ReactFlow 节点/面板 z-index 可达上千，会穿透到前台页或 Dialog 上 ——
+   * 非激活路由时不挂载画布；有 Dialog 打开时用 `invisible` 压住图层。
+   */
+  const isActiveRoute = location.pathname === IQD_MODELING_PAGE_PATH;
+  const overlayOpen =
+    connectionWizardOpen || importWizardOpen || cubeEditor != null;
 
   /** 连接清单（与连接向导共用同一 queryKey → 向导保存后失效一次即可全站同步）。 */
   const connectionsQuery = useQuery({
@@ -182,7 +194,7 @@ export function IqdModelingPage() {
   const noConnection = !connectionsQuery.isLoading && connections.length === 0;
 
   return (
-    <div className="flex h-full min-h-0 flex-col">
+    <div className="flex h-full min-h-0 flex-col bg-background">
       <PageHeader
         title="可视化建模台"
         description="拖拽式语义建模：连接 → 表发现导入 → 模型/关系/Cube → 发布流水线。"
@@ -274,8 +286,20 @@ export function IqdModelingPage() {
             <ResizeHandle side="left" onResize={clampLeft} containerRef={panesRef} />
           )}
 
-          {/* ---------- 中：ER 画布（本批交付） ---------- */}
-          <ModelCanvas connectionId={activeId} />
+          {/* ---------- 中：ER 画布 ---------- */}
+          {/*
+            isolate + z-0：把 ReactFlow 内部超高 z-index 关进本层，避免盖住 Dialog。
+            切走本路由时不挂载画布（Keep-alive 后台页用 hidden，双保险防透到连接配置）。
+            本层必须是 flex 容器，否则子级 ModelCanvas 的 flex-1 高度塌成 0 → 节点全看不到。
+          */}
+          <div
+            className={cn(
+              'relative z-0 isolate flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-background',
+              overlayOpen && 'invisible pointer-events-none',
+            )}
+          >
+            {isActiveRoute ? <ModelCanvas connectionId={activeId} /> : null}
+          </div>
 
           {/* ---------- 右：属性面板（T02b-2 实现） ---------- */}
           {rightCollapsed ? (

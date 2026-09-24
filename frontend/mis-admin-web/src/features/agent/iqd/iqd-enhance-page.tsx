@@ -1169,12 +1169,14 @@ function IqdSqlPairDialog({
         if (!value) onClose();
       }}
     >
-      <DialogContent className="max-h-[85vh] overflow-y-auto">
-        <DialogHeader>
-          <DialogTitle>{initial?.id != null ? '编辑样本对' : '新增样本对'}</DialogTitle>
+      <DialogContent className="flex max-h-[90vh] w-full max-w-3xl flex-col gap-0 overflow-hidden p-0">
+        <DialogHeader className="border-b border-border/60 px-4 py-3">
+          <DialogTitle className="text-[14px]">
+            {initial?.id != null ? '编辑样本对' : '新增样本对'}
+          </DialogTitle>
         </DialogHeader>
 
-        <div className="flex flex-col gap-3">
+        <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-4 py-3">
           <div className="flex flex-col gap-1">
             <span className="text-xs text-muted-foreground">问题</span>
             <Input
@@ -1200,13 +1202,13 @@ function IqdSqlPairDialog({
           </div>
 
           <div className="flex flex-col gap-1">
-            <span className="text-xs text-muted-foreground">原生 SQL</span>
+            <span className="text-xs text-muted-foreground">原生 SQL（支持多行）</span>
             {/* T04e MR-08：SQL 框升级 CodeMirror 6（懒加载 + 高亮；不可用时自动降级 Textarea） */}
             <SqlEditor
               value={nativeSql}
               onChange={(next) => setNativeSql(next)}
-              placeholder="原生 SQL（源方言，如 Oracle/MySQL 写法）"
-              height={120}
+              placeholder="原生 SQL（源方言，如 Oracle/MySQL 写法；可多行）"
+              height={240}
             />
             <div className="flex items-center gap-2">
               <Button
@@ -1234,13 +1236,13 @@ function IqdSqlPairDialog({
           </div>
 
           <div className="flex flex-col gap-1">
-            <span className="text-xs text-muted-foreground">转化结果（wren_sql，可编辑）</span>
+            <span className="text-xs text-muted-foreground">转化结果（wren_sql，可编辑，支持多行）</span>
             {/* T04e MR-08：同上，CodeMirror 6（不可用时自动降级 Textarea） */}
             <SqlEditor
               value={wrenSql}
               onChange={(next) => setWrenSql(next)}
-              placeholder="点「转化」后回填，或直接手写 WrenAI 方言 SQL"
-              height={120}
+              placeholder="点「转化」后回填，或直接手写 WrenAI 方言 SQL（可多行）"
+              height={240}
             />
             <Button
               size="sm"
@@ -1291,7 +1293,7 @@ function IqdSqlPairDialog({
           ) : null}
         </div>
 
-        <DialogFooter>
+        <DialogFooter className="border-t border-border/60 px-4 py-3">
           <Button size="sm" variant="outline" onClick={onClose} disabled={saving}>
             取消
           </Button>

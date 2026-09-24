@@ -497,25 +497,68 @@ public class IqdAdminService {
         }
 
         long start = System.currentTimeMillis();
-        String healthUrl = baseUrl.replaceAll("/+$", "") + "/health";
+        String root = baseUrl.replaceAll("/+$", "");
+        // 传统 WrenAI：GET /health；WrenMcpAgent 控制面：GET /internal/v1/wren-mcp/health
+        String[] candidates = {
+                root + "/health",
+                root + "/internal/v1/wren-mcp/health"
+        };
         String status;
         String message;
         try {
             HttpClient client = HttpClient.newBuilder()
                     .connectTimeout(Duration.ofSeconds(3))
                     .build();
-            HttpRequest request = HttpRequest.newBuilder()
-                    .uri(URI.create(healthUrl))
-                    .timeout(Duration.ofSeconds(5))
-                    .GET()
-                    .build();
-            HttpResponse<String> resp = client.send(request, HttpResponse.BodyHandlers.ofString());
-            if (resp.statusCode() < 500) {
+            int lastCode = -1;
+            String lastPath = "/health";
+            boolean ok = false;
+            for (String healthUrl : candidates) {
+                lastPath = healthUrl.substring(root.length());
+                HttpRequest request = HttpRequest.newBuilder()
+                        .uri(URI.create(healthUrl))
+                        .timeout(Duration.ofSeconds(5))
+                        .GET()
+                        .build();
+                HttpResponse<String> resp = client.send(request, HttpResponse.BodyHandlers.ofString());
+                lastCode = resp.statusCode();
+                // 仅 2xx 视为探活成功；旧逻辑「HTTP < 500 即正常」会把 404 误标成 active
+                if (lastCode >= 200 && lastCode < 300) {
+                    ok = true;
+                    break;
+                }
+                // 鉴权失败说明控制面已打通（agent health 需 bearer）
+                if (lastCode == 401 || lastCode == 403) {
+                    break;
+                }
+                // 404：换下一候选；其它 4xx 不再继续
+                if (lastCode != 404) {
+                    break;
+                }
+            }
+            if (ok) {
                 status = "active";
-                message = "连接正常 (HTTP " + resp.statusCode() + ")";
+                message = "连接正常 (HTTP " + lastCode + "，路径 " + lastPath + ")";
+            } else if (lastCode == 401 || lastCode == 403) {
+                // WrenMcpAgent 控制面 health 需 bearer；token 只在 ai-platform（WREN_AGENT_TOKEN），
+                // mis-iqd 自检故意不带凭据。能打到 401/403 = 控制面已通，属跨机联调预期。
+                status = "active";
+                message = "WrenMcpAgent 控制面可达 (HTTP " + lastCode
+                        + "，路径 " + lastPath
+                        + ")。完整鉴权由「启用/创建项目」经 ai-platform 携带 Token 完成，本页自检无需也不应配置 Agent Token";
+            } else if (lastCode == 404) {
+                status = "error";
+                message = "健康检查端点不存在 (HTTP 404)。"
+                        + "已尝试 /health 与 /internal/v1/wren-mcp/health；"
+                        + "请确认地址是 WrenAI 服务或 WrenMcpAgent 控制面";
+            } else if (lastCode >= 500) {
+                status = "error";
+                message = "WrenAI 返回异常 (HTTP " + lastCode + "，路径 " + lastPath + ")";
+            } else if (lastCode > 0) {
+                status = "error";
+                message = "健康检查未通过 (HTTP " + lastCode + "，路径 " + lastPath + ")";
             } else {
                 status = "error";
-                message = "WrenAI 返回异常 (HTTP " + resp.statusCode() + ")";
+                message = "健康检查未返回有效状态码";
             }
         } catch (Exception exc) {
             status = "error";
@@ -1553,12 +1596,27 @@ public class IqdAdminService {
                     j.setCreatedAt(now);
                     return j;
                 });
-        job.setBuildStatus(defaultString(str(payload.get("build_status")), job.getBuildStatus()));
-        String mdlHash = str(payload.get("build_mdl_hash"));
-        if (mdlHash != null) {
-            job.setBuildMdlHash(mdlHash);
+        // 部分更新：reindex 等动作可不传 build_*，保留上次 MDL 构建结果（避免误报「MDL 构建失败」）
+        if (payload.containsKey("build_status")) {
+            String buildStatus = str(payload.get("build_status"));
+            if (buildStatus != null && !buildStatus.isBlank()) {
+                job.setBuildStatus(buildStatus);
+            }
         }
-        job.setIndexStatus(defaultString(str(payload.get("index_status")), job.getIndexStatus()));
+        if (payload.containsKey("build_mdl_hash")) {
+            String mdlHash = str(payload.get("build_mdl_hash"));
+            if (mdlHash != null) {
+                job.setBuildMdlHash(mdlHash);
+            }
+        }
+        if (payload.containsKey("index_status")) {
+            String indexStatus = str(payload.get("index_status"));
+            if (indexStatus != null && !indexStatus.isBlank()) {
+                job.setIndexStatus(indexStatus);
+            } else if (job.getIndexStatus() == null) {
+                job.setIndexStatus(defaultString(null, "pending"));
+            }
+        }
         if (isTerminalStatus(job.getBuildStatus())) {
             job.setBuildAt(now);
         }
@@ -1573,10 +1631,20 @@ public class IqdAdminService {
         if (syncedKnow != null) {
             job.setSyncedKnowledgeCount(syncedKnow);
         }
-        job.setBuildError(str(payload.get("build_error")));
-        job.setIndexError(str(payload.get("index_error")));
+        if (payload.containsKey("build_error")) {
+            job.setBuildError(str(payload.get("build_error")));
+        }
+        if (payload.containsKey("index_error")) {
+            job.setIndexError(str(payload.get("index_error")));
+        }
         // 自愈动作（force_rebuild / reindex / validate）；缺省保持 null 兼容历史 materials/model 作业
-        job.setAction(str(payload.get("action")));
+        if (payload.containsKey("action")) {
+            job.setAction(str(payload.get("action")));
+        }
+        // 新建作业且未带 build_status：reindex 写 skipped（不跑 MDL），其它写 pending
+        if (job.getBuildStatus() == null || job.getBuildStatus().isBlank()) {
+            job.setBuildStatus("reindex".equals(job.getAction()) ? "skipped" : "pending");
+        }
         job.setUpdatedAt(now);
         syncJobRepository.save(job);
         log.info("IQD sync job reported connectionId={} buildStatus={} indexStatus={} mdlHash={}",

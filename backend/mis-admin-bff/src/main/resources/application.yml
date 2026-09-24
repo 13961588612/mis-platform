@@ -6,9 +6,10 @@ spring:
     name: mis-admin-bff
   datasource:
     # D12：嵌入身份兑换直读共享平台库（agent_external_host / agent_external_identity）
-    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5432/mis_platform}
-    username: ${SPRING_DATASOURCE_USERNAME:postgres}
-    password: ${SPRING_DATASOURCE_PASSWORD:postgres}
+    # 与 mis-iqd 等一致：优先 SPRING_DATASOURCE_*，否则走 DB_HOST/DB_USER（.env.integration）
+    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:mis_platform}?tcpKeepAlive=true&ApplicationName=${spring.application.name}&loginTimeout=10}
+    username: ${SPRING_DATASOURCE_USERNAME:${DB_USER:postgres}}
+    password: ${SPRING_DATASOURCE_PASSWORD:${DB_PASSWORD:postgres}}
     driver-class-name: org.postgresql.Driver
   data:
     redis:
