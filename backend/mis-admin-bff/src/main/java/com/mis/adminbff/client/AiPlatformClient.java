@@ -101,14 +101,31 @@ public class AiPlatformClient extends AbstractDownstreamClient {
             Map<String, Object> body,
             String authorization,
             String traceId) {
+        return chat(agentId, body, authorization, traceId, null);
+    }
+
+    /**
+     * 同 {@link #chat(String, Map, String, String)}，可覆盖超时（问数编排链默认需 180s）。
+     *
+     * @param overrideTimeoutMs 覆盖超时毫秒；{@code null} 或 ≤0 时用 {@code chat-timeout-ms}
+     */
+    public AiPlatformChatData chat(
+            String agentId,
+            Map<String, Object> body,
+            String authorization,
+            String traceId,
+            Long overrideTimeoutMs) {
         Consumer<HttpHeaders> headers = buildHeaders(authorization, traceId);
+        Duration timeout = (overrideTimeoutMs != null && overrideTimeoutMs > 0)
+                ? Duration.ofMillis(overrideTimeoutMs)
+                : null;
         return block(client().post()
                 .uri("/api/v1/agents/{agentId}/chat", agentId)
                 .headers(headers)
                 .contentType(MediaType.APPLICATION_JSON)
-                    .bodyValue(body)
+                .bodyValue(body)
                 .retrieve()
-                .bodyToMono(CHAT_TYPE));
+                .bodyToMono(CHAT_TYPE), timeout);
     }
 
     /**

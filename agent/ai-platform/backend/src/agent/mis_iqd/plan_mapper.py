@@ -5,10 +5,12 @@ lineage_check / executing / masking / finished）映射为
 ``IqdAskResponse.plan[]``（architecture §4.3 示例）。
 
 B2 基础版：固定阶段模板 + 动态 detail；B3/W4 起可消费 WrenAI ``steps`` 产物。
+每步 ``duration_ms`` 按「本步开始 → 本步结束」计时（未显式 running 时取相对上一步结束）。
 """
 
 from __future__ import annotations
 
+from time import perf_counter
 from typing import Any
 
 from src.models.iqd_schema import PlanStep
@@ -25,12 +27,23 @@ _PLAN_TEMPLATE: list[dict[str, Any]] = [
     {"code": "finished", "label": "完成", "detail": None},
 ]
 
+_TERMINAL = frozenset({"done", "failed", "skipped"})
+
 
 class PlanMapper:
     """阶段 → 中文计划步骤映射器。"""
 
+    def __init__(self) -> None:
+        self._plan_started: float | None = None
+        self._last_mark_at: float | None = None
+        self._step_started: dict[str, float] = {}
+
     def build_empty(self) -> list[PlanStep]:
         """返回初始计划（全部 running，用于 SSE plan_step 首帧）。"""
+        now = perf_counter()
+        self._plan_started = now
+        self._last_mark_at = now
+        self._step_started.clear()
         return [
             PlanStep(seq=i, code=item["code"], label=item["label"], status="running")
             for i, item in enumerate(_PLAN_TEMPLATE, start=1)
@@ -57,9 +70,22 @@ class PlanMapper:
         Returns:
             更新后的计划列表。
         """
+        now = perf_counter()
         for step in steps:
             if step.code != code:
                 continue
+            if status == "running":
+                self._step_started[code] = now
+            elif status in _TERMINAL:
+                start = (
+                    self._step_started.get(code)
+                    or self._last_mark_at
+                    or self._plan_started
+                    or now
+                )
+                step.duration_ms = max(0, int((now - start) * 1000))
+                self._last_mark_at = now
+                self._step_started.pop(code, None)
             step.status = status  # type: ignore[assignment]
             if detail is not None:
                 step.detail = detail

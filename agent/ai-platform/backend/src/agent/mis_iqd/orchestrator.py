@@ -1,23 +1,26 @@
 """AskOrchestrator — 问数编排核心（v1.9 / B2）。
 
-串起完整链路（architecture §5.1 步骤 10–30）::
+串起完整链路（architecture §5.1 步骤 10–30，已按 Wren 0.13 校正）::
 
-    scope_check → get_context → dry_plan → lineage_check(断言) → dry_run
-    → run_sql → citations → (write_ask_log 由 service 层在投影前调用)
-    → AskResult（全量，含 SQL）
+    scope_check → get_context → nl2sql(LLM Gateway) → dry_plan(SQL 转译)
+    → lineage_check(断言) → dry_run → run_sql → citations
+    → (write_ask_log 由 service 层在投影前调用) → AskResult（全量，含 SQL）
 
 设计要点：
+- **NL→SQL 在平台侧**：Wren OSS 0.13 的 ``dry_plan`` 只做方言转译；生成 SQL 走
+  :class:`~src.agent.mis_iqd.nl2sql.Nl2SqlGenerator`（LLM Gateway）。
 - **不臆造数据**：任何错误都抛出 :class:`IqdError`（452xx），由 tools 层如实上报，
-  禁止 LLM 兜底编造数字（NFR-2 降级铁律）。
+  禁止用 LLM 兜底编造**查询结果数字**（NFR-2 降级铁律）；NL→SQL 仅产出 SQL 文本。
 - **fail-closed**：范围裁定 deny / 血缘越权 → 45204，不执行、不返回任何数据。
-- **可注入**：``mcp_client`` / ``scope_resolver`` / ``lineage`` / ``plan_mapper`` /
-  ``citation_builder`` 全部可注入，便于离线 mock 验证（Golden path）。
+- **可注入**：``mcp_client`` / ``nl2sql`` / ``scope_resolver`` / ``lineage`` /
+  ``plan_mapper`` / ``citation_builder`` 全部可注入，便于离线 mock 验证（Golden path）。
 - 行级注入（``inject_row_scope``）与脱敏（``MaskingEngine``）为 B3（W2）扩展钩子；
   B2 本版在 mock 下直跑，脱敏留空（``masked_columns=[]``）。
 """
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from time import perf_counter
 from typing import Any
@@ -28,11 +31,11 @@ from src.agent.mis_iqd.errors import (
     QuestionUnsupportedError,
     ScopeDeniedError,
     SqlFailedError,
-    WrenaiNotConfiguredError,
     WrenaiUnreachableError,
 )
 from src.agent.mis_iqd.lineage import CitationBuilder, LineageExtractor
 from src.agent.mis_iqd.masking import MaskingEngine, MaskOutcome
+from src.agent.mis_iqd.nl2sql import Nl2SqlGenerator
 from src.agent.mis_iqd.plan_mapper import PlanMapper
 from src.agent.mis_iqd.scope_resolver import (
     AskIdentity,
@@ -54,6 +57,29 @@ from src.models.iqd_schema import (
 from src.utils.logging import get_logger
 
 logger = get_logger("agent.mis_iqd.orchestrator")
+
+#: dry_run / 引擎报「列不存在」或可修复的方言错误时，触发一次 NL→SQL 重生成
+_COLUMN_ERROR_RE = re.compile(
+    r"(column\s+'[^']+'\s+cannot\s+be\s+resolved)"
+    r"|(unknown\s+column)"
+    r"|(no\s+such\s+column)"
+    r"|(field\s+not\s+found)"
+    r"|(无法识别\s*'[^']+'\s*列)"
+    r"|('\w+'\s+is\s+not\s+a\s+valid)",
+    re.IGNORECASE,
+)
+
+#: DataFusion 不支持的 PG 方言 / 类型错误（可修一次）
+_DIALECT_ERROR_RE = re.compile(
+    r"(date_trunc)"
+    r"|(date_part)"
+    r"|(GENERIC_USER_ERROR)"
+    r"|(unsupported\s+function)"
+    r"|(not\s+implemented)"
+    r"|(type\s+mismatch)"
+    r"|(cannot\s+cast)",
+    re.IGNORECASE,
+)
 
 
 @dataclass
@@ -88,6 +114,7 @@ class AskOrchestrator:
         self,
         *,
         mcp_client: IqdMcpClient | None = None,
+        nl2sql: Nl2SqlGenerator | None = None,
         scope_resolver: ScopeResolver | None = None,
         lineage: LineageExtractor | None = None,
         plan_mapper: PlanMapper | None = None,
@@ -99,6 +126,7 @@ class AskOrchestrator:
         # 方案 A 多连接：按 connection_id 缓存专属 client（避免跨连接串台，REQ-P0-3）。
         # 单连接默认端点走 ``_mcp_client``，专属端点走本字典。
         self._mcp_clients: dict[int | str, IqdMcpClient] = {}
+        self._nl2sql: Nl2SqlGenerator | None = nl2sql
         self._scope_resolver: ScopeResolver | None = scope_resolver
         self._lineage: LineageExtractor = lineage or LineageExtractor()
         self._plan_mapper: PlanMapper = plan_mapper or PlanMapper()
@@ -152,30 +180,97 @@ class AskOrchestrator:
             logger.warning("IQD get_context degraded", error=str(exc))
             native = {}
 
-        # ===== dry_plan：生成 SQL（不执行）=====
+        # ===== NL→SQL（平台 LLM Gateway）+ dry_plan（Wren 方言转译）=====
         plan.mark(steps, "generating", "running")
-        try:
-            plan_outcome: dict[str, Any] = await mcp.dry_plan(
-                question=request.question,
-                context=self._render_context(native),
-                allowed_tables=resolution.allowed_item_keys,
-                language=None,
+        context_text, described_models = await self._build_nl2sql_context(
+            mcp,
+            native,
+            resolution.allowed_item_keys,
+            question=request.question,
+        )
+        # 授权 item_key 若无法在 Wren 落成模型（如 pg_main.public.orders），
+        # 本轮 describe 成功的模型名并入血缘放行集，避免「有列上下文却被 45204 挡住」。
+        lineage_extra = self._lineage_extra_models(
+            resolution.allowed_item_keys, described_models
+        )
+        nl2sql = self._get_nl2sql(prefer_mock=bool(getattr(mcp, "_mock", False)))
+        nl2sql_attempts: list[dict[str, Any]] = []
+
+        def _record_attempt(outcome: Any, *, label: str) -> None:
+            nl2sql_attempts.append(
+                {
+                    "label": label,
+                    "prompt_system": getattr(outcome, "prompt_system", "") or "",
+                    "prompt_user": getattr(outcome, "prompt_user", "") or "",
+                    "raw_output": getattr(outcome, "raw", "") or "",
+                    "type": getattr(outcome, "type", "") or "",
+                    "sql": getattr(outcome, "sql", "") or "",
+                    "summary": getattr(outcome, "summary", "") or "",
+                }
             )
+
+        try:
+            nl_outcome = await nl2sql.generate(
+                question=request.question,
+                context=context_text,
+                allowed_tables=resolution.allowed_item_keys,
+                user_id=str(identity.user_id or ""),
+                session_id=str(request.thread_id or query_id),
+            )
+            _record_attempt(nl_outcome, label="generate")
         except Exception as exc:
-            raise WrenaiUnreachableError(f"问数服务暂不可用: {exc}") from exc
+            plan.mark(steps, "generating", "failed", detail="自然语言转 SQL 失败")
+            return self._failed_ask_result(
+                query_id=query_id,
+                request=request,
+                resolution=resolution,
+                steps=steps,
+                started_at=started_at,
+                message=f"未能生成有效查询: {exc}",
+                nl2sql_attempts=nl2sql_attempts,
+                sql=None,
+                context_text=context_text,
+            )
 
-        query_type: str = str(plan_outcome.get("type") or "text_to_sql")
-        if query_type.upper() == "GENERAL":
-            summary = str(plan_outcome.get("summary") or plan_outcome.get("answer") or "")
+        if str(nl_outcome.type or "").upper() == "GENERAL":
+            # 已有授权表时，不应把「查销售额」类问题当成闲聊；降级为可重试的 SQL 失败
+            if resolution.allowed_item_keys:
+                plan.mark(steps, "generating", "failed", detail="未能生成有效查询")
+                return self._failed_ask_result(
+                    query_id=query_id,
+                    request=request,
+                    resolution=resolution,
+                    steps=steps,
+                    started_at=started_at,
+                    message=(
+                        nl_outcome.summary
+                        or "未能根据当前授权表生成有效查询，请检查语义模型或换一种问法"
+                    ),
+                    nl2sql_attempts=nl2sql_attempts,
+                    sql=None,
+                    context_text=context_text,
+                )
             plan.mark_done(steps, "generating", detail="非数据类问题")
-            raise QuestionUnsupportedError(summary=summary)
+            raise QuestionUnsupportedError(summary=nl_outcome.summary or "")
 
-        sql: str = str(plan_outcome.get("sql") or "").strip()
+        sql: str = (nl_outcome.sql or "").strip()
         if not sql:
             plan.mark(steps, "generating", "failed", detail="未能生成有效查询")
-            raise SqlFailedError()
+            return self._failed_ask_result(
+                query_id=query_id,
+                request=request,
+                resolution=resolution,
+                steps=steps,
+                started_at=started_at,
+                message="未能生成有效查询",
+                nl2sql_attempts=nl2sql_attempts,
+                sql=None,
+                context_text=context_text,
+            )
 
-        # ===== 行级注入（W2）：dry 生成 SQL → inject_row_scope（多维度 AND）=====
+        sql = await self._transpile_sql(mcp, sql)
+
+        # ===== 行级注入（W2）：生成 SQL → inject_row_scope（多维度 AND）=====
         inject_outcome: RowScopeInjectOutcome = await self._inject_row_scope(
             sql, resolution, identity
         )
@@ -197,27 +292,141 @@ class AskOrchestrator:
 
         # ===== lineage_check：血缘后置断言（fail-closed，基于注入后最终 SQL）=====
         tables: list[str] = self._lineage.extract_tables(final_sql)
-        self._scope_resolver_assert(resolution, tables)
+        self._scope_resolver_assert(resolution, tables, extra_allowed=lineage_extra)
         plan.mark_done(
             steps,
             "lineage_check",
             detail=self._lineage_detail(tables, resolution),
         )
 
-        # ===== dry_run：确认可执行 =====
+        # ===== dry_run：确认可执行；列错误时带 repair_hint 重生成一次 =====
         plan.mark(steps, "executing", "running")
         try:
             await mcp.dry_run(final_sql)
         except Exception as exc:
-            plan.mark(steps, "executing", "failed", detail="SQL 预检失败")
-            raise SqlFailedError(f"未能生成有效查询: {exc}") from exc
+            if not self._is_repairable_sql_error(exc):
+                plan.mark(steps, "executing", "failed", detail="SQL 预检失败")
+                return self._failed_ask_result(
+                    query_id=query_id,
+                    request=request,
+                    resolution=resolution,
+                    steps=steps,
+                    started_at=started_at,
+                    message=f"未能生成有效查询: {exc}",
+                    nl2sql_attempts=nl2sql_attempts,
+                    sql=final_sql,
+                    inject_outcome=inject_outcome,
+                    context_text=context_text,
+                )
+            logger.warning(
+                "IQD dry_run repairable error; regenerating SQL once",
+                error=str(exc),
+            )
+            try:
+                repaired = await nl2sql.generate(
+                    question=request.question,
+                    context=context_text,
+                    allowed_tables=resolution.allowed_item_keys,
+                    user_id=str(identity.user_id or ""),
+                    session_id=str(request.thread_id or query_id),
+                    repair_hint=(
+                        f"previous_sql:\n{final_sql}\n\n"
+                        f"engine_error:\n{exc}"
+                    ),
+                )
+                _record_attempt(repaired, label="repair")
+            except Exception as regen_exc:
+                plan.mark(steps, "executing", "failed", detail="SQL 预检失败（重生成异常）")
+                return self._failed_ask_result(
+                    query_id=query_id,
+                    request=request,
+                    resolution=resolution,
+                    steps=steps,
+                    started_at=started_at,
+                    message=f"未能生成有效查询: {exc}",
+                    nl2sql_attempts=nl2sql_attempts,
+                    sql=final_sql,
+                    inject_outcome=inject_outcome,
+                    error_detail=str(regen_exc),
+                    context_text=context_text,
+                )
+
+            repaired_sql = (repaired.sql or "").strip()
+            if not repaired_sql or str(repaired.type or "").upper() == "GENERAL":
+                plan.mark(steps, "executing", "failed", detail="SQL 预检失败")
+                return self._failed_ask_result(
+                    query_id=query_id,
+                    request=request,
+                    resolution=resolution,
+                    steps=steps,
+                    started_at=started_at,
+                    message=f"未能生成有效查询: {exc}",
+                    nl2sql_attempts=nl2sql_attempts,
+                    sql=final_sql,
+                    inject_outcome=inject_outcome,
+                    context_text=context_text,
+                )
+
+            repaired_sql = await self._transpile_sql(mcp, repaired_sql)
+            inject_outcome = await self._inject_row_scope(
+                repaired_sql, resolution, identity
+            )
+            if inject_outcome.verdict == "deny":
+                plan.mark(
+                    steps,
+                    "lineage_check",
+                    "failed",
+                    detail=inject_outcome.denied_reason or "行级范围校验拒绝",
+                )
+                raise ScopeDeniedError(
+                    inject_outcome.denied_reason or "当前角色无权查询相关数据"
+                )
+            final_sql = inject_outcome.sql or repaired_sql
+            tables = self._lineage.extract_tables(final_sql)
+            self._scope_resolver_assert(
+                resolution, tables, extra_allowed=lineage_extra
+            )
+            try:
+                await mcp.dry_run(final_sql)
+            except Exception as retry_exc:
+                plan.mark(steps, "executing", "failed", detail="SQL 预检失败（重试后）")
+                return self._failed_ask_result(
+                    query_id=query_id,
+                    request=request,
+                    resolution=resolution,
+                    steps=steps,
+                    started_at=started_at,
+                    message=f"未能生成有效查询: {retry_exc}",
+                    nl2sql_attempts=nl2sql_attempts,
+                    sql=final_sql,
+                    inject_outcome=inject_outcome,
+                    context_text=context_text,
+                )
+            plan.mark_done(
+                steps,
+                "generating",
+                detail="SQL 已按列错误重生成",
+                sql=final_sql,
+            )
 
         # ===== run_sql：执行注入后 SQL =====
         try:
             run_outcome: dict[str, Any] = await mcp.run_sql(final_sql)
         except Exception as exc:
             plan.mark(steps, "executing", "failed", detail="查询执行失败")
-            raise WrenaiUnreachableError(f"问数服务暂不可用: {exc}") from exc
+            return self._failed_ask_result(
+                query_id=query_id,
+                request=request,
+                resolution=resolution,
+                steps=steps,
+                started_at=started_at,
+                message=f"问数服务暂不可用: {exc}",
+                nl2sql_attempts=nl2sql_attempts,
+                sql=final_sql,
+                inject_outcome=inject_outcome,
+                error_code="45202",
+                context_text=context_text,
+            )
 
         # ===== masking（W2：唯一脱敏出口）=====
         mask_outcome: MaskOutcome = await self._apply_masking(run_outcome, resolution)
@@ -264,6 +473,7 @@ class AskOrchestrator:
             latency_ms=latency_ms,
             error_code=None,
             error_message=None,
+            nl2sql_debug=self._nl2sql_debug_payload(nl2sql_attempts, context_text),
         )
         logger.info(
             "IQD ask succeeded",
@@ -279,6 +489,89 @@ class AskOrchestrator:
         )
 
     # ================================================================ 内部
+
+    def _failed_ask_result(
+        self,
+        *,
+        query_id: str,
+        request: AskRequest,
+        resolution: IqdScopeResolution,
+        steps: list[PlanStep],
+        started_at: float,
+        message: str,
+        nl2sql_attempts: list[dict[str, Any]],
+        sql: str | None,
+        inject_outcome: RowScopeInjectOutcome | None = None,
+        error_code: str = "45205",
+        error_detail: str = "",
+        context_text: str = "",
+    ) -> AskResult:
+        """SQL 生成/预检失败时返回 failed 帧（携带 nl2sql_debug，便于测试台排查）。"""
+        self._plan_mapper.mark_done(steps, "finished")
+        latency_ms: int = max(0, int((perf_counter() - started_at) * 1000))
+        debug = self._nl2sql_debug_payload(nl2sql_attempts, context_text)
+        if error_detail:
+            debug["error_detail"] = error_detail[:1000]
+        response = AskResponse(
+            query_id=query_id,
+            thread_id=request.thread_id,
+            status=RESULT_STATUS_FAILED,
+            answer_summary=message,
+            sql=sql,
+            sql_dialect="postgres" if sql else None,
+            data=ResultData(),
+            citations=[],
+            plan=steps,
+            scope=resolution.to_payload(),
+            masked_columns=[],
+            latency_ms=latency_ms,
+            error_code=error_code,
+            error_message=message,
+            nl2sql_debug=debug,
+        )
+        logger.warning(
+            "IQD ask failed with nl2sql debug",
+            query_id=query_id,
+            error_code=error_code,
+            attempts=len(nl2sql_attempts),
+        )
+        return AskResult(
+            response=response,
+            scope=resolution,
+            inject_outcome=inject_outcome or RowScopeInjectOutcome(),
+        )
+
+    @staticmethod
+    def _nl2sql_debug_payload(
+        attempts: list[dict[str, Any]],
+        context_text: str = "",
+    ) -> dict[str, Any]:
+        """组装 admin 可见的 NL→SQL 调试块（截断防爆）。"""
+        clipped: list[dict[str, Any]] = []
+        for item in attempts:
+            clipped.append(
+                {
+                    "label": item.get("label"),
+                    "type": item.get("type"),
+                    "sql": (item.get("sql") or "")[:4000],
+                    "summary": (item.get("summary") or "")[:500],
+                    "prompt_system": (item.get("prompt_system") or "")[:4000],
+                    "prompt_user": (item.get("prompt_user") or "")[:12000],
+                    "raw_output": (item.get("raw_output") or "")[:4000],
+                }
+            )
+        latest = clipped[-1] if clipped else {}
+        return {
+            "attempts": clipped,
+            "prompt_system": latest.get("prompt_system") or "",
+            "prompt_user": latest.get("prompt_user") or "",
+            "raw_output": latest.get("raw_output") or "",
+            "context_chars": len(context_text or ""),
+            "note": (
+                "准确率依赖：① describe 列清单 ② 字段注释 ③ sql_pairs/recall 样本 "
+                "④ 业务 instructions；缺样本/注释时易臆造列名。"
+            ),
+        }
 
     def _scope_detail(self, resolution: IqdScopeResolution) -> str:
         """scope_check 阶段明细。"""
@@ -304,7 +597,7 @@ class AskOrchestrator:
 
     @staticmethod
     def _render_context(native: dict[str, Any]) -> str:
-        """把 get_context 产物渲染为 dry_plan 的 context 文本。"""
+        """把 get_context 产物渲染为 NL→SQL 的 context 文本。"""
         parts: list[str] = []
         models = native.get("models") if isinstance(native, dict) else None
         if isinstance(models, list):
@@ -314,12 +607,330 @@ class AskOrchestrator:
                         f"- {m.get('name') or m.get('item_key')}: "
                         f"{m.get('description') or ''}"
                     )
+                    columns = m.get("columns") or m.get("fields")
+                    if isinstance(columns, list) and columns:
+                        col_bits: list[str] = []
+                        for col in columns[:40]:
+                            if isinstance(col, dict):
+                                col_bits.append(
+                                    str(col.get("name") or col.get("column") or "")
+                                )
+                            else:
+                                col_bits.append(str(col))
+                        col_bits = [c for c in col_bits if c]
+                        if col_bits:
+                            parts.append(f"  columns: {', '.join(col_bits)}")
         instructions = native.get("instructions") if isinstance(native, dict) else None
         if isinstance(instructions, list):
             for ins in instructions:
                 if isinstance(ins, dict) and ins.get("content"):
                     parts.append(f"- 口径: {ins.get('content')}")
-        return "\n".join(parts)[:4000]
+                elif isinstance(ins, str) and ins.strip():
+                    parts.append(f"- 口径: {ins.strip()}")
+        # 部分 Wren 版本把全文 schema 放在 text / schema 字段
+        for key in ("text", "schema", "describe_schema"):
+            blob = native.get(key) if isinstance(native, dict) else None
+            if isinstance(blob, str) and blob.strip():
+                parts.append(blob.strip()[:2000])
+                break
+        return "\n".join(parts)[:6000]
+
+    async def _build_nl2sql_context(
+        self,
+        mcp: IqdMcpClient,
+        native: dict[str, Any],
+        allowed_tables: list[str] | None,
+        *,
+        question: str = "",
+    ) -> tuple[str, list[str]]:
+        """组装 NL→SQL 上下文：get_context + 授权表 + list_models + describe_model 列清单。
+
+        Returns:
+            ``(context_text, described_model_names)``：后者为本轮成功 describe 的模型名，
+            供血缘放行补集使用。
+        """
+        parts: list[str] = []
+        rendered = self._render_context(native)
+        if rendered:
+            parts.append(rendered)
+
+        tables = [t for t in (allowed_tables or []) if t]
+        if tables:
+            parts.append(
+                "allowed_tables (catalog scope keys; SQL FROM must use Wren MDL "
+                "model names from model blocks below, not datasource.schema.table paths):"
+            )
+            parts.extend(f"- {t}" for t in tables[:80])
+
+        parts.append(
+            "HARD RULE: every selected column MUST appear in a model columns list; "
+            "never invent partition columns like dt/ds/biz_date."
+        )
+
+        # 相似样本召回（有则极利于对齐业务口径；无样本时跳过）
+        if question.strip():
+            try:
+                recalled = await mcp.recall_queries(question=question.strip())
+                items = None
+                if isinstance(recalled, dict):
+                    items = (
+                        recalled.get("items")
+                        or recalled.get("queries")
+                        or recalled.get("results")
+                    )
+                sample_lines: list[str] = []
+                if isinstance(items, list):
+                    for item in items[:5]:
+                        if isinstance(item, dict):
+                            q = str(
+                                item.get("question")
+                                or item.get("ask")
+                                or item.get("query")
+                                or ""
+                            ).strip()
+                            s = str(
+                                item.get("sql")
+                                or item.get("wren_sql")
+                                or item.get("answer")
+                                or ""
+                            ).strip()
+                            if q or s:
+                                sample_lines.append(f"- Q: {q[:200]}")
+                                if s:
+                                    sample_lines.append(f"  SQL: {s[:500]}")
+                        elif isinstance(item, str) and item.strip():
+                            sample_lines.append(f"- {item.strip()[:300]}")
+                if sample_lines:
+                    parts.append("similar_sql_pairs (few-shot samples):")
+                    parts.extend(sample_lines)
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("IQD recall_queries for nl2sql skipped", error=str(exc))
+
+        candidates = self._collect_model_candidates(native, tables)
+        listed_names: list[str] = []
+        try:
+            listed = await mcp.list_models()
+            raw_models = listed.get("models") if isinstance(listed, dict) else None
+            if isinstance(raw_models, list):
+                for item in raw_models:
+                    if isinstance(item, dict):
+                        name = str(item.get("name") or item.get("model") or "")
+                    else:
+                        name = str(item)
+                    if name:
+                        listed_names.append(name)
+                        if name not in candidates:
+                            candidates.append(name)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("IQD list_models for nl2sql degraded", error=str(exc))
+
+        ranked = self._rank_model_candidates(candidates, question=question, allowed=tables)
+        described_names: list[str] = []
+        for model_name in ranked[:5]:
+            block = await self._describe_model_block(mcp, model_name)
+            if block:
+                if not described_names:
+                    parts.append("model_schemas (authoritative columns):")
+                described_names.append(model_name)
+                parts.append(block)
+
+        if not described_names and listed_names:
+            parts.append("available_models:")
+            parts.extend(f"- {n}" for n in listed_names[:40])
+
+        return "\n".join(parts)[:8000], described_names
+
+    @staticmethod
+    def _lineage_extra_models(
+        allowed_tables: list[str] | None,
+        described_models: list[str],
+    ) -> list[str]:
+        """当授权键在 Wren 侧无同名模型时，把本轮 describe 成功的模型并入血缘放行集。"""
+        if not described_models:
+            return []
+        allowed = [t for t in (allowed_tables or []) if t]
+        if not allowed:
+            return list(described_models)
+        allowed_norm = {a.lower() for a in allowed}
+        allowed_shorts = {a.rsplit(".", 1)[-1].lower() for a in allowed}
+        # 任一授权键已能对上 describe 模型 → 不扩权
+        for name in described_models:
+            low = name.lower()
+            short = low.rsplit(".", 1)[-1]
+            if low in allowed_norm or short in allowed_shorts:
+                return []
+        return list(described_models)
+
+    @staticmethod
+    def _collect_model_candidates(
+        native: dict[str, Any],
+        allowed_tables: list[str],
+    ) -> list[str]:
+        """从 get_context / 授权表收集候选 Wren 模型名（保序去重）。"""
+        names: list[str] = []
+        seen: set[str] = set()
+
+        def _add(raw: str) -> None:
+            name = (raw or "").strip()
+            if not name or name in seen:
+                return
+            seen.add(name)
+            names.append(name)
+
+        models = native.get("models") if isinstance(native, dict) else None
+        if isinstance(models, list):
+            for m in models:
+                if isinstance(m, dict):
+                    _add(str(m.get("name") or m.get("item_key") or ""))
+                else:
+                    _add(str(m))
+
+        for key in allowed_tables:
+            _add(key)
+            # pg_main.public.orders → orders
+            short = key.rsplit(".", 1)[-1].strip()
+            if short and short != key:
+                _add(short)
+
+        return names
+
+    @staticmethod
+    def _rank_model_candidates(
+        candidates: list[str],
+        *,
+        question: str,
+        allowed: list[str],
+    ) -> list[str]:
+        """按问题关键词与授权表短名给候选模型打分排序。"""
+        q = (question or "").lower()
+        tokens = {
+            t
+            for t in re.split(r"[\s/_\-]+", q)
+            if len(t) >= 2
+        }
+        # 中文业务词补充（与常见 ads_* 命名对齐）
+        for word, aliases in (
+            ("销售", ("sale", "sales", "gmv", "trd", "order")),
+            ("门店", ("store", "shop", "spm")),
+            ("订单", ("order", "ord", "trd")),
+            ("客户", ("customer", "cust", "user", "member")),
+            ("成本", ("cost",)),
+            ("季度", ("day", "date", "ord_date")),
+            ("上季", ("day", "date")),
+        ):
+            if word in (question or ""):
+                tokens.update(aliases)
+
+        allowed_shorts = {
+            a.rsplit(".", 1)[-1].lower() for a in allowed if a
+        }
+
+        scored: list[tuple[int, str]] = []
+        for name in candidates:
+            low = name.lower()
+            score = 0
+            short = low.rsplit(".", 1)[-1]
+            if short in allowed_shorts or low in {a.lower() for a in allowed}:
+                score += 50
+            for tok in tokens:
+                if tok in low:
+                    score += 10
+            # 日表/销售相关轻度偏好（无命中也不惩罚）
+            if any(x in low for x in ("sale", "order", "trd", "store", "spm")):
+                score += 3
+            scored.append((score, name))
+
+        scored.sort(key=lambda x: (-x[0], x[1]))
+        return [n for _, n in scored]
+
+    async def _describe_model_block(
+        self,
+        mcp: IqdMcpClient,
+        model_name: str,
+    ) -> str:
+        """调用 describe_model，渲染为带列清单的上下文块；失败返回空串。"""
+        try:
+            payload = await mcp.describe_model(model_name)
+        except Exception as exc:  # noqa: BLE001
+            logger.debug(
+                "IQD describe_model for nl2sql skipped",
+                model=model_name,
+                error=str(exc),
+            )
+            return ""
+        if not isinstance(payload, dict):
+            return ""
+
+        name = str(payload.get("name") or model_name)
+        desc = str(payload.get("description") or payload.get("display_name") or "")
+        raw_fields = payload.get("fields") or payload.get("columns") or []
+        col_bits: list[str] = []
+        if isinstance(raw_fields, list):
+            for col_item in raw_fields[:80]:
+                if isinstance(col_item, dict):
+                    col = str(
+                        col_item.get("name")
+                        or col_item.get("column")
+                        or col_item.get("column_name")
+                        or ""
+                    )
+                    dtype = str(col_item.get("type") or col_item.get("data_type") or "")
+                    comment = str(
+                        col_item.get("comment")
+                        or col_item.get("description")
+                        or col_item.get("display_name")
+                        or ""
+                    ).strip()
+                    if col:
+                        bit = f"{col}:{dtype}" if dtype else col
+                        if comment:
+                            bit = f"{bit}({comment[:40]})"
+                        col_bits.append(bit)
+                else:
+                    text = str(col_item).strip()
+                    if text:
+                        col_bits.append(text)
+        if not col_bits:
+            return ""
+
+        lines = [f"model: {name}"]
+        if desc:
+            lines.append(f"  description: {desc[:200]}")
+        lines.append(f"  columns: {', '.join(col_bits)}")
+        return "\n".join(lines)
+
+    async def _transpile_sql(self, mcp: IqdMcpClient, sql: str) -> str:
+        """Wren dry_plan：MDL SQL → 目标方言；失败时沿用原 SQL。"""
+        try:
+            plan_outcome: dict[str, Any] = await mcp.dry_plan(sql=sql)
+            translated = str(plan_outcome.get("sql") or "").strip()
+            if translated:
+                return translated
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("IQD dry_plan transpile degraded", error=str(exc))
+        return sql
+
+    @staticmethod
+    def _is_column_error(exc: BaseException) -> bool:
+        """判断是否为列不存在类错误（可触发一次重生成）。"""
+        return AskOrchestrator._is_repairable_sql_error(exc)
+
+    @staticmethod
+    def _is_repairable_sql_error(exc: BaseException) -> bool:
+        """列错误或 DataFusion 方言错误 → 允许带 repair_hint 重生成一次。"""
+        text = str(exc) or ""
+        for attr in ("payload", "body", "detail"):
+            extra = getattr(exc, attr, None)
+            if extra is not None:
+                text = f"{text} {extra}"
+        return bool(_COLUMN_ERROR_RE.search(text) or _DIALECT_ERROR_RE.search(text))
+
+    def _get_nl2sql(self, *, prefer_mock: bool = False) -> Nl2SqlGenerator:
+        """懒加载 NL→SQL 生成器；MCP mock 时默认走 mock 生成，避免离线无 Key 断链。"""
+        if self._nl2sql is not None:
+            return self._nl2sql
+        self._nl2sql = Nl2SqlGenerator(mock=prefer_mock)
+        return self._nl2sql
 
     def _build_result_data(
         self,
@@ -334,7 +945,9 @@ class AskOrchestrator:
             raw_columns = mask_outcome.columns
         if isinstance(raw_columns, list):
             for col in raw_columns:
-                if isinstance(col, dict):
+                if isinstance(col, ColumnMeta):
+                    columns.append(col)
+                elif isinstance(col, dict):
                     columns.append(
                         ColumnMeta(
                             name=str(col.get("name") or ""),
@@ -347,13 +960,15 @@ class AskOrchestrator:
                 else:
                     columns.append(ColumnMeta(name=str(col), display_name=str(col)))
         columns = columns[:50]
+        col_names = [c.name for c in columns]
 
         rows: list[list[Any]] = []
         raw_rows: Any = run_outcome.get("rows")
-        if mask_outcome is not None and mask_outcome.rows:
+        # apply 已归一化并可能脱敏；有列元信息说明脱敏阶段已跑过，优先用其 rows
+        if mask_outcome is not None and mask_outcome.columns:
             raw_rows = mask_outcome.rows
         if isinstance(raw_rows, list):
-            rows = [list(row) for row in raw_rows[:1000] if isinstance(row, (list, tuple))]
+            rows = self._normalize_result_rows(raw_rows[:1000], col_names)
 
         return ResultData(
             columns=columns,
@@ -361,6 +976,23 @@ class AskOrchestrator:
             row_count=len(rows),
             truncated=bool(run_outcome.get("truncated") or len(rows) > 1000),
         )
+
+    @staticmethod
+    def _normalize_result_rows(
+        raw_rows: list[Any],
+        col_names: list[str],
+    ) -> list[list[Any]]:
+        """把 run_sql 的 list/tuple 或 dict 行统一为二维 list。"""
+        rows: list[list[Any]] = []
+        for row in raw_rows:
+            if isinstance(row, (list, tuple)):
+                rows.append(list(row))
+            elif isinstance(row, dict):
+                if col_names:
+                    rows.append([row.get(name) for name in col_names])
+                else:
+                    rows.append(list(row.values()))
+        return rows
 
     async def _inject_row_scope(
         self,
@@ -382,9 +1014,13 @@ class AskOrchestrator:
         rows: Any = run_outcome.get("rows")
         if not isinstance(columns, list):
             return MaskOutcome()
-        raw_rows: list[list[Any]] = [
-            list(row) for row in rows if isinstance(row, (list, tuple))
-        ] if isinstance(rows, list) else []
+        col_names = [
+            str(c.get("name") if isinstance(c, dict) else getattr(c, "name", c) or "")
+            for c in columns
+        ]
+        raw_rows: list[list[Any]] = (
+            self._normalize_result_rows(rows, col_names) if isinstance(rows, list) else []
+        )
         return await self._masking_engine.apply(
             columns,
             raw_rows,
@@ -398,10 +1034,16 @@ class AskOrchestrator:
         return "脱敏 " + ", ".join(outcome.masked_columns)
 
     def _scope_resolver_assert(
-        self, resolution: IqdScopeResolution, tables: list[str]
+        self,
+        resolution: IqdScopeResolution,
+        tables: list[str],
+        *,
+        extra_allowed: list[str] | None = None,
     ) -> None:
         """血缘断言（fail-closed 45204）。"""
-        self._get_scope_resolver().assert_sql_within_scope(tables, resolution)
+        self._get_scope_resolver().assert_sql_within_scope(
+            tables, resolution, extra_allowed=extra_allowed
+        )
 
     # ================================================================ 依赖
 

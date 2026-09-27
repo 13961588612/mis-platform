@@ -14,6 +14,7 @@
 from __future__ import annotations
 from typing import Any, AsyncIterator
 
+import asyncio
 import json
 import uuid
 
@@ -92,10 +93,13 @@ async def _collect_agent_response(
 
     Returns:
         ``(response_text, runtime_error, tool_errors)``。
+        若本轮调用了 ``iqd__ask`` 且工具成功返回 JSON，**优先采用工具原文**
+        （避免 LLM 重写时丢掉 ``plan[].duration_ms`` / ``data`` / ``sql`` 等字段）。
     """
     response_parts: list[str] = []
     runtime_error: str | None = None
     tool_errors: list[str] = []
+    last_iqd_ask_json: str | None = None
 
     async for event in instance.process_message(
         session=session, message=message, assistant_message_id=assistant_message_id
@@ -106,9 +110,17 @@ async def _collect_agent_response(
             err: Any | None = event.result.get("error")
             if err:
                 tool_errors.append(f"{event.tool_name}: {err}")
+            elif event.tool_name == "iqd__ask":
+                raw_out: Any = event.result.get("output")
+                if isinstance(raw_out, dict):
+                    last_iqd_ask_json = json.dumps(raw_out, ensure_ascii=False)
+                elif isinstance(raw_out, str) and raw_out.strip().startswith("{"):
+                    last_iqd_ask_json = raw_out.strip()
         elif event.type == AgentEventType.ERROR:
             runtime_error = event.message or "Agent runtime error"
 
+    if last_iqd_ask_json:
+        return last_iqd_ask_json, runtime_error, tool_errors
     return "".join(response_parts), runtime_error, tool_errors
 
 
@@ -373,39 +385,61 @@ async def agent_chat(
             assistant_message_id=assistant_id,
         )
 
-        # 保存助手响应（复用本轮 assistant id，使计时可按该消息逐条映射）
-        await session_manager.add_message(
-            session_id=session.session_id,
-            role="assistant",
-            content=response_text,
-            message_id=assistant_id,
-        )
-
+        # 先组响应再异步落库：落库 CancelledError/慢 PG 不得挡住已生成的回答，
+        # 否则 BFF/网关断连后只能看到 HTTP 500「下游调用失败」。
         if runtime_error and not response_text.strip():
-            return error_response(
+            payload = error_response(
                 code=9000,
                 message=runtime_error,
                 http_status=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 trace_id=trace_id,
             )
-        if runtime_error:
-            logger.warning(
-                "Agent completed with runtime warning",
-                agent_id=agent_id,
-                error=runtime_error,
-                tool_errors=tool_errors,
+        else:
+            if runtime_error:
+                logger.warning(
+                    "Agent completed with runtime warning",
+                    agent_id=agent_id,
+                    error=runtime_error,
+                    tool_errors=tool_errors,
+                )
+            payload = success(
+                data={
+                    "response": response_text,
+                    "session_id": session.session_id,
+                    "warnings": [runtime_error] if runtime_error else [],
+                    "tool_errors": tool_errors,
+                },
+                message="ok",
+                trace_id=trace_id,
             )
 
-        return success(
-            data={
-                "response": response_text,
-                "session_id": session.session_id,
-                "warnings": [runtime_error] if runtime_error else [],
-                "tool_errors": tool_errors,
-            },
-            message="ok",
-            trace_id=trace_id,
-        )
+        async def _persist_assistant() -> None:
+            try:
+                await session_manager.add_message(
+                    session_id=session.session_id,
+                    role="assistant",
+                    content=response_text,
+                    message_id=assistant_id,
+                )
+            except BaseException as save_exc:  # noqa: BLE001
+                if isinstance(save_exc, (KeyboardInterrupt, SystemExit)):
+                    raise
+                logger.error(
+                    "Failed to persist assistant message; response already returned",
+                    error=str(save_exc),
+                    agent_id=agent_id,
+                    session_id=session.session_id,
+                )
+
+        try:
+            asyncio.create_task(_persist_assistant())
+        except Exception as schedule_exc:  # noqa: BLE001
+            logger.warning(
+                "Failed to schedule assistant persist",
+                error=str(schedule_exc),
+            )
+
+        return payload
     except AgentNotFoundError as exc:
         return error_response(exc.code, exc.message, status.HTTP_404_NOT_FOUND, trace_id)
     except Exception as exc:  # noqa: BLE001
@@ -488,12 +522,22 @@ async def agent_chat_stream(
                     )
                     return
 
-            await session_manager.add_message(
-                session_id=session_id,
-                role="assistant",
-                content="".join(response_parts),
-                message_id=assistant_id,
-            )
+            try:
+                await session_manager.add_message(
+                    session_id=session_id,
+                    role="assistant",
+                    content="".join(response_parts),
+                    message_id=assistant_id,
+                )
+            except BaseException as save_exc:  # noqa: BLE001
+                if isinstance(save_exc, (KeyboardInterrupt, SystemExit)):
+                    raise
+                logger.error(
+                    "Failed to persist streamed assistant message; still emitting done",
+                    error=str(save_exc),
+                    agent_id=agent_id,
+                    session_id=session_id,
+                )
             done_payload: dict[str, Any] = {
                 "traceId": trace_id,
                 "finishReason": "stop",

@@ -41,7 +41,7 @@
 | `wren profile add/list/switch` | 连接 profile 管理 | — |
 | `wren memory index/fetch/recall/store` | 语义记忆（`fetch/recall` 收 `-q "..."`，为 agent 检索原语，非结构化 get_context） | fetch/recall 收 `-q`（检索用） |
 
-> **关键发现**：`dry_plan`（NL→SQL）在 WrenAI 中是「代理 / LLM 编排」层能力，仅经 MCP `ask`/`dry_plan` 工具及端到端 `wren ask` 暴露；CLI 的 `wren dry-plan` 仅做「已建模 SQL → 方言」转译，**不接收自然语言问题**。因此纯 CLI 无法在对等命令上复刻「问题→SQL 且中途可拦截」。
+> **关键发现（已校正）**：Wren OSS 0.13 的 CLI/MCP ``dry_plan`` **仅做 SQL 方言转译**（参数 `sql`），**不做** NL→SQL。平台问数链路已改为：`get_context` → **`Nl2SqlGenerator`（ai-platform LLM Gateway）** → `dry_plan(sql)` → 注入 → 血缘 → `dry_run` → `run_sql`。`wren ask` 仅 Prompt 包装，不可作为可拦截的「问题→SQL」原语。
 
 ### 1.3 mis-iqd 现状（源码核实）
 - **`IqdConnection`**（`backend/mis-iqd/.../entity/IqdConnection.java`）：已含 `mdlWritebackEnabled` `builtMdlHash` `staleDrift` `currentEditRevision`/`builtEditRevision` 等**按连接的 MDL 状态字段**；含 `secretRef`（凭证引用）、`projectId`、`defaultConnector`。**数据模型已具备多连接基础**，仅缺 `projectHome`/`mcpPort`/`mcpStatus` 类字段。

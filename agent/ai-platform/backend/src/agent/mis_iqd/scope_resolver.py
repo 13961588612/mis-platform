@@ -502,12 +502,15 @@ class ScopeResolver:
         self,
         lineage: list[str],
         resolution: IqdScopeResolution,
+        *,
+        extra_allowed: list[str] | None = None,
     ) -> None:
         """后置血缘断言：SQL 涉及的表必须都在允许集内。
 
         Args:
             lineage: :class:`LineageExtractor` 产出的表 item_key 列表。
             resolution: 前置裁定结果。
+            extra_allowed: 本轮补充放行键（如 describe 成功的 Wren 模型名）。
 
         Raises:
             ScopeDeniedError: 血缘含越权表（fail-closed，不透露表名）。
@@ -516,7 +519,17 @@ class ScopeResolver:
             # 无血缘信息（如纯 SELECT 1）时按放行处理
             return
         allowed = set(resolution.allowed_item_keys)
-        denied = [key for key in lineage if key not in allowed]
+        if extra_allowed:
+            allowed.update(extra_allowed)
+        allowed_shorts = {a.rsplit(".", 1)[-1].lower() for a in allowed if a}
+
+        def _in_scope(key: str) -> bool:
+            if key in allowed:
+                return True
+            short = key.rsplit(".", 1)[-1].lower()
+            return bool(short) and short in allowed_shorts
+
+        denied = [key for key in lineage if not _in_scope(key)]
         if denied:
             logger.warning(
                 "IQD scope assertion failed",

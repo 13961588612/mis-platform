@@ -89,7 +89,7 @@ export const PIPELINE_PERMISSIONS = {
 } as const;
 
 /** 单段状态（与 UI 的颜色/图标一一对应）。 */
-export type StageState = 'ok' | 'active' | 'failed' | 'idle' | 'blocked';
+export type StageState = 'ok' | 'active' | 'waiting' | 'failed' | 'idle' | 'blocked';
 
 /** 流水线动作（按钮 → 端点）。 */
 export type PipelineAction = 'publish' | 'rebuild' | 'reindex' | 'validate' | 'reconcile' | 'mcp_restart';
@@ -114,7 +114,8 @@ export interface PipelineView {
   drift: boolean;
   /** 有段失败（横幅告警）。 */
   anyFailed: boolean;
-  /** 有动作进行中（publish/build/index/mcp starting）。 */
+  /** 有动作真正进行中（SYNCING / build·index running / MCP starting）。
+   * ⚠️ 「待同步 / 待构建」是 waiting，不算 busy——否则会禁用「立即发布」等按钮形成死锁。 */
   busy: boolean;
 }
 
@@ -169,6 +170,8 @@ function editStageState(status: ModelingSyncStatus | null): StageState {
     case 'SYNCED':
       return 'ok';
     case 'EDITED_UNSYNCED':
+      // 已落库、待发布 —— 不是「进行中」，勿转圈、勿占 busy
+      return 'waiting';
     case 'SYNCING':
       return 'active';
     case 'SYNC_FAILED':
@@ -223,9 +226,17 @@ export function resolvePipeline(
   const behind = built < current;
 
   const buildClass = classifyStatus(status?.build_status);
-  // 「版本落后」也算「待构建」：编辑已落库但还没 build（这是最常见的一格）
+  // 「版本落后」= 待构建（waiting），不是 running；真正 running/pending 才是 active
   const buildState: StageState =
-    buildClass === 'failed' ? 'failed' : buildClass === 'ok' ? (behind ? 'active' : 'ok') : buildClass === 'active' ? 'active' : behind ? 'active' : 'idle';
+    buildClass === 'failed'
+      ? 'failed'
+      : buildClass === 'active'
+        ? 'active'
+        : behind
+          ? 'waiting'
+          : buildClass === 'ok'
+            ? 'ok'
+            : 'idle';
 
   const indexClass = classifyStatus(status?.index_status);
   const indexState: StageState = indexClass === 'idle' ? 'idle' : indexClass;
@@ -237,7 +248,10 @@ export function resolvePipeline(
       key: 'edit',
       title: '编辑落库',
       state: editState,
-      detail: `版本 ${current}${built ? ` / 已构建 ${built}` : ''}`,
+      detail:
+        editState === 'waiting'
+          ? '待发布'
+          : `版本 ${current}${built ? ` / 已构建 ${built}` : ''}`,
       // 编辑段失败的重试 = 重新触发一次发布（幂等：同一 revision 的重复触发由后端合并窗口吸收）
       ...(editState === 'failed' ? { retry: 'publish' as PipelineAction } : {}),
       error: editState === 'failed' ? status?.build_error ?? null : null,
@@ -246,7 +260,12 @@ export function resolvePipeline(
       key: 'build',
       title: 'MDL 构建',
       state: buildState,
-      detail: buildClass === 'active' ? '进行中' : behind && buildClass !== 'failed' ? '待构建' : status?.build_status ?? '未构建',
+      detail:
+        buildClass === 'active'
+          ? '进行中'
+          : behind && buildClass !== 'failed'
+            ? '待构建'
+            : status?.build_status ?? '未构建',
       ...(buildState === 'failed' ? { retry: 'rebuild' as PipelineAction } : {}),
       error: buildState === 'failed' ? status?.build_error ?? null : null,
     },
@@ -271,6 +290,7 @@ export function resolvePipeline(
     stages,
     drift,
     anyFailed: stages.some((stage) => stage.state === 'failed'),
+    // 仅真正进行中才 busy；waiting（待同步/待构建）必须放行「立即发布」等按钮
     busy: stages.some((stage) => stage.state === 'active'),
   };
 }
@@ -281,6 +301,7 @@ function stateVariant(state: StageState): 'default' | 'secondary' | 'destructive
     case 'ok':
       return 'default';
     case 'active':
+    case 'waiting':
       return 'secondary';
     case 'failed':
     case 'blocked':
@@ -290,10 +311,13 @@ function stateVariant(state: StageState): 'default' | 'secondary' | 'destructive
   }
 }
 
-/** 段状态 → 图标（ok 见勾、bad 见叹号、active 见转圈）。 */
+/** 段状态 → 图标（ok 见勾、bad 见叹号、active 见转圈、waiting 见静止点）。 */
 function StageIcon({ state }: { state: StageState }) {
   if (state === 'active') {
     return <Loader2 className="h-3.5 w-3.5 animate-spin" />;
+  }
+  if (state === 'waiting') {
+    return <span className="inline-block h-2 w-2 rounded-full bg-amber-500" title="待处理" />;
   }
   if (state === 'failed' || state === 'blocked') {
     return <AlertTriangle className="h-3.5 w-3.5" />;
@@ -346,6 +370,7 @@ export function PublishPipelineBar({ connectionId }: PublishPipelineBarProps) {
 
   const [running, setRunning] = useState<PipelineAction | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const [confirmRebuild, setConfirmRebuild] = useState(false);
   const [confirmDirty, setConfirmDirty] = useState<PipelineAction | null>(null);
 
@@ -403,6 +428,7 @@ export function PublishPipelineBar({ connectionId }: PublishPipelineBarProps) {
       }
       setRunning(action);
       setError(null);
+      setNotice(null);
       try {
         if (action === 'publish') {
           // 建模台发布 = 按 catalog 派生 MDL（scope=model）；materials 只下发样本对/知识
@@ -412,7 +438,17 @@ export function PublishPipelineBar({ connectionId }: PublishPipelineBarProps) {
         } else if (action === 'reindex') {
           await selfHealReindex(connectionId);
         } else if (action === 'validate') {
-          await selfHealValidate(connectionId);
+          const result = await selfHealValidate(connectionId);
+          const warnings = (result.warnings ?? []).map((w) => w.trim()).filter(Boolean);
+          if (result.build_status === 'failed') {
+            setError(
+              `模型校验未通过：${result.build_error || warnings.join('；') || '未知错误'}`,
+            );
+          } else if (warnings.length > 0) {
+            setNotice(`模型校验有 ${warnings.length} 条警告：${warnings.join('；')}`);
+          } else {
+            setNotice('模型校验通过');
+          }
         } else if (action === 'reconcile') {
           await reconcileIqdCatalog(connectionId);
         } else {
@@ -453,6 +489,7 @@ export function PublishPipelineBar({ connectionId }: PublishPipelineBarProps) {
   // 连接切换即清空瞬时态（A-14：不把 A 连接的错误带到 B）
   useEffect(() => {
     setError(null);
+    setNotice(null);
     setRunning(null);
   }, [connectionId]);
 
@@ -614,6 +651,11 @@ export function PublishPipelineBar({ connectionId }: PublishPipelineBarProps) {
       {error && (
         <div className="rounded border border-destructive/40 bg-destructive/5 px-2 py-1 text-destructive">
           {error}
+        </div>
+      )}
+      {notice && !error && (
+        <div className="rounded border border-warning/40 bg-warning/5 px-2 py-1 text-warning">
+          {notice}
         </div>
       )}
 

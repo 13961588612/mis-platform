@@ -245,8 +245,9 @@ function ModelCanvasInner({ connectionId }: ModelCanvasProps) {
   /**
    * 画布选中 → 同步右栏 PropertyPanel（store.selectedItemKey）。
    *
-   * <p>此前只有左树 `ModelTree` 调 `setSelected`，点画布节点时右栏一直停在
-   * 「未选中」——看起来像属性面板坏了。多选时取第一个节点。
+   * <p>点**整卡**时写入 model/table。点**字段行**由 {@link ModelNodeCard}
+   * 在 mousedown 上 stopPropagation 并自行 `setSelected(column.item_key)`，
+   * 因此不会被本回调覆盖回表/模型。多选时取第一个节点。
    */
   const onSelectionChange = useCallback(
     ({ nodes: selectedNodes }: { nodes: Array<Node<CatalogNodeData>> }) => {
@@ -409,7 +410,13 @@ function ModelCanvasInner({ connectionId }: ModelCanvasProps) {
           className={cn('bg-muted/20')}
         >
           <Background variant={BackgroundVariant.Dots} gap={16} size={1} />
-          <MiniMap pannable zoomable className="!bg-background" />
+          <MiniMap
+            pannable
+            zoomable
+            bgColor="#ffffff"
+            maskColor="rgb(240, 240, 240, 0.6)"
+            className="!rounded-md !border !border-dashed !border-black !bg-white"
+          />
           <Controls showInteractive={false} />
         </ReactFlow>
       )}

@@ -13,6 +13,10 @@
  * 默认**只显示前 8 列**（A-15：200 节点下每卡全展开会让画布不可读），底部「显示全部 N 列」
  * 可展开。展开态是**卡片本地 state**（瞬时视图态、不跨页复用），故不进 zustand。
  *
+ * <p><b>点字段行</b>：写入 `store.selectedItemKey = column.item_key`，右栏 PropertyPanel
+ * 切到字段编辑器（描述 / 脱敏）。须在 {@code mousedown} 上 {@code stopPropagation}，
+ * 否则 ReactFlow 会先选中整卡并把选中项覆盖回表/模型。
+ *
  * <h2>列徽标</h2>
  * `PK`（`is_primary_key`）/ `计算列`（有 `expression`，T03 计算列）/ `脱敏`
  * （`mask_rule` 非空或 `sensitive_level ∈ {low, high}`）。最多并列 3 个，超出折叠为 `+N`。
@@ -26,6 +30,7 @@ import { cn } from '@/lib/utils';
 import { Badge } from '@/components/ui/badge';
 import type { IqdCatalogItem } from '@/lib/api/iqd';
 import type { CatalogNodeData } from '../../hooks/useCatalogNodes';
+import { useModelingStore } from '../../store/modeling-store';
 
 /** 折叠时展示的字段数（A-15）。 */
 const COLLAPSED_COLUMN_LIMIT = 8;
@@ -52,6 +57,8 @@ function columnBadges(column: IqdCatalogItem): string[] {
 /** 节点卡组件（`nodeTypes` 注册为 `iqdModel` / `iqdTable`）。 */
 function ModelNodeCardInner({ data, selected }: NodeProps<Node<CatalogNodeData>>) {
   const [expanded, setExpanded] = useState(false);
+  const selectedItemKey = useModelingStore((state) => state.selectedItemKey);
+  const setSelected = useModelingStore((state) => state.setSelected);
   const isTable = data.kind === 'table';
   const columns = data.columns ?? [];
   const visible = expanded ? columns : columns.slice(0, COLLAPSED_COLUMN_LIMIT);
@@ -98,7 +105,7 @@ function ModelNodeCardInner({ data, selected }: NodeProps<Node<CatalogNodeData>>
         </div>
       </div>
 
-      {/* 字段列表 */}
+      {/* 字段列表：点行 → 右栏字段属性/编辑器 */}
       <div className="px-1 py-1">
         {visible.length === 0 && (
           <div className="px-1.5 py-1 text-[12px] text-muted-foreground">（无字段）</div>
@@ -107,10 +114,32 @@ function ModelNodeCardInner({ data, selected }: NodeProps<Node<CatalogNodeData>>
           const badges = columnBadges(column);
           const shown = badges.slice(0, MAX_COLUMN_BADGES);
           const extra = badges.length - shown.length;
+          const isFieldSelected = selectedItemKey === column.item_key;
           return (
             <div
               key={column.item_key}
-              className="flex items-center justify-between gap-2 rounded px-1.5 py-[3px] text-[13px] hover:bg-accent/60"
+              role="button"
+              tabIndex={0}
+              title="点击在右侧编辑该字段"
+              onMouseDown={(event) => {
+                // ReactFlow 在 mousedown 选中节点；必须拦住，否则会覆盖字段选中
+                event.stopPropagation();
+              }}
+              onClick={(event) => {
+                event.stopPropagation();
+                setSelected(column.item_key);
+              }}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter' || event.key === ' ') {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  setSelected(column.item_key);
+                }
+              }}
+              className={cn(
+                'flex cursor-pointer items-center justify-between gap-2 rounded px-1.5 py-[3px] text-[13px] hover:bg-accent/60',
+                isFieldSelected && 'bg-primary/10 ring-1 ring-primary/40',
+              )}
             >
               <span className="truncate" title={column.display_name ?? column.item_key}>
                 {column.display_name ?? column.item_key}

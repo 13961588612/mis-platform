@@ -6,6 +6,7 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.databind.annotation.JsonDeserialize;
 
 import java.util.List;
+import java.util.Map;
 
 /**
  * 问数响应 DTO（与 Python {@code models/iqd_schema.py::AskResponse} 同构，§4.3）。
@@ -38,10 +39,13 @@ public class IqdAskResponse {
     @JsonDeserialize(contentUsing = IqdPlanStepListDeserializer.class)
     private List<IqdPlanStep> plan;
     private IqdScopeResolutionPayload scope;
-    private List<String> maskedColumns;
+    private List<String> maskedColumns = List.of();
     private Long latencyMs;
     private String errorCode;
     private String errorMessage;
+    /** admin 视图：NL→SQL LLM 入参/出参；user 视图由 Worker 投影删除。 */
+    @JsonProperty("nl2sql_debug")
+    private Map<String, Object> nl2sqlDebug;
 
     public String getQueryId() {
         return queryId;
@@ -131,12 +135,15 @@ public class IqdAskResponse {
         this.scope = scope;
     }
 
+    @JsonProperty("masked_columns")
     public List<String> getMaskedColumns() {
-        return maskedColumns;
+        return maskedColumns != null ? maskedColumns : List.of();
     }
 
+    @JsonProperty("masked_columns")
     public void setMaskedColumns(List<String> maskedColumns) {
-        this.maskedColumns = maskedColumns;
+        // Worker / LLM 常回 null；仅有 wire getter 时 Jackson setterless 遇 null 抛 45299
+        this.maskedColumns = maskedColumns != null ? maskedColumns : List.of();
     }
 
     public Long getLatencyMs() {
@@ -163,6 +170,14 @@ public class IqdAskResponse {
         this.errorMessage = errorMessage;
     }
 
+    public Map<String, Object> getNl2sqlDebug() {
+        return nl2sqlDebug;
+    }
+
+    public void setNl2sqlDebug(Map<String, Object> nl2sqlDebug) {
+        this.nl2sqlDebug = nl2sqlDebug;
+    }
+
     @JsonProperty("query_id")
     public String queryIdWire() {
         return queryId;
@@ -186,11 +201,6 @@ public class IqdAskResponse {
     @JsonProperty("sql_dialect")
     public String sqlDialectWire() {
         return sqlDialect;
-    }
-
-    @JsonProperty("masked_columns")
-    public List<String> maskedColumnsWire() {
-        return maskedColumns;
     }
 
     @JsonProperty("latency_ms")

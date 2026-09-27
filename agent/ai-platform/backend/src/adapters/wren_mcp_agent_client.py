@@ -264,6 +264,7 @@ class WrenMcpAgentClient:
         *,
         mdl_manifest: str | None = None,
         timeout: float | None = None,
+        raise_on_error: bool = True,
     ) -> dict[str, Any]:
         """在 wren 机执行 ``wren`` CLI（跨机器管理面：context build / memory index）。
 
@@ -272,12 +273,15 @@ class WrenMcpAgentClient:
             args: 子命令参数（不含二进制名，如 ``["context", "build", "--allow-write"]``）。
             mdl_manifest: 可选派生 MDL 的 ``manifest.json`` 全文；agent 落临时目录并追加 ``--mdl``。
             timeout: 单次超时秒数（缺省 ``build_timeout_seconds``）。
+            raise_on_error: ``True``（默认）时 ``exit_code != 0`` 抛错；``False`` 时原样返回
+                stdout/stderr（供 ``context validate`` 等「警告也可能非零退出」的只读动作）。
 
         Returns:
             ``{command, exit_code, stdout, stderr, project_home}``。
 
         Raises:
-            WrenMcpAgentClientError: 网络/鉴权/agent 基础设施失败，或 ``exit_code != 0``。
+            WrenMcpAgentClientError: 网络/鉴权/agent 基础设施失败；或
+                ``raise_on_error`` 且 ``exit_code != 0``。
         """
         settings = get_settings()
         wait = (
@@ -302,10 +306,12 @@ class WrenMcpAgentClient:
         if not isinstance(data, dict):
             raise WrenMcpAgentClientError(f"WrenMcpAgent /cli 响应异常: {data!r}")
         exit_code = int(data.get("exit_code") or 0)
-        if exit_code != 0:
+        if exit_code != 0 and raise_on_error:
             stderr = str(data.get("stderr") or "")
+            stdout = str(data.get("stdout") or "")
             command = str(data.get("command") or " ".join(args))
             raise WrenMcpAgentClientError(
-                f"wren CLI 失败 exit={exit_code}: {command}\nstderr: {stderr[:500]}"
+                f"wren CLI 失败 exit={exit_code}: {command}\n"
+                f"stdout: {stdout[:2000]}\nstderr: {stderr[:2000]}"
             )
         return data

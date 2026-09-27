@@ -318,7 +318,11 @@ class SessionManager:
             return
         try:
             await self._pg_store.upsert_session(session)
-        except Exception as exc:  # noqa: BLE001 - 双保险：store 内部已兜底，这里再兜一层
+        except BaseException as exc:  # noqa: BLE001 - CancelledError/ExceptionGroup 也要降级
+            if isinstance(exc, (KeyboardInterrupt, SystemExit)):
+                raise
+            # anyio/SQLAlchemy 在请求取消或跨 task 退出 cancel scope 时会抛
+            # CancelledError / ExceptionGroup（非 Exception 子类），不得冒泡成 HTTP 500
             logger.warning(
                 "Session dual-write raised unexpectedly (degraded)",
                 session_id=session.session_id,

@@ -19,8 +19,8 @@ features/agent/iqd/
 │  ├─ modeling/              # ★ 建模台（画布/树/属性/关系/Cube/流水线/漂移/布局）
 │  ├─ wizard/                # 连接向导 + 表发现向导
 │  ├─ scope/                 # 范围与权限（行级维度徽标 rowScopeUtils）
-│  ├─ enhance/               # 脱敏与维度 / 样本对（SqlEditor）
-│  ├─ instruction/           # 指令下发
+│  ├─ enhance/               # 知识与规则 / 样本对（SqlEditor）
+│  ├─ instruction/           # 指令 Tab 面板（并入 enhance）
 │  └─ shared/                # IqdIcon / usePermission / useSyncStatus / relatedItemKeys
 ├─ hooks/                    # useCatalogNodes / useCodeMirror / useDirtyState / useModelLayout
 ├─ store/modeling-store.ts   # zustand：仅 UI 态（选中/视口/抽屉/脏草稿）

@@ -13,6 +13,10 @@ spring:
       database: 0
   cloud:
     gateway:
+      httpclient:
+        # 问数 / Agent chat 可达 180s；未配置时长请求可能被提前断连
+        connect-timeout: 5000
+        response-timeout: 180s
       discovery:
         locator:
           enabled: false

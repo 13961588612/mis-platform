@@ -49,7 +49,14 @@ function fmtHash(v?: string | null): string {
   return String(v).slice(0, 12) + '…';
 }
 
-export function CatalogSyncStatusBar({ connectionId }: { connectionId: number | null }) {
+export function CatalogSyncStatusBar({
+  connectionId,
+  compact = false,
+}: {
+  connectionId: number | null;
+  /** 嵌入父级工具栏时去掉外层卡片边框，仅渲染内容行。 */
+  compact?: boolean;
+}) {
   const [status, setStatus] = useState<IqdCatalogSyncStatus | null>(null);
   const [loading, setLoading] = useState(false);
   const [reconciling, setReconciling] = useState(false);
@@ -97,23 +104,81 @@ export function CatalogSyncStatusBar({ connectionId }: { connectionId: number | 
   };
 
   const editStatus = status?.edit_status as IqdCatalogEditStatus | undefined;
+  const driftBanner =
+    editStatus === 'STALE_DRIFT' ? (
+      <div className="flex items-center gap-2 rounded-md border border-warning/40 bg-warning/5 p-2 text-warning">
+        <AlertTriangle className="h-4 w-4 shrink-0" />
+        <span>
+          检测到外部变更（WrenAI 侧 MDL 已偏离平台基线）。请点击「重新导入」触发按 model 范围重建以重新收敛。
+        </span>
+      </div>
+    ) : null;
+
+  if (compact) {
+    return (
+      <>
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-2 text-xs">
+            <span className="shrink-0 font-semibold text-muted-foreground">编辑同步</span>
+            {status == null ? (
+              <span className="text-muted-foreground">尚未编辑</span>
+            ) : (
+              <>
+                <Badge variant={statusVariant(editStatus)}>
+                  {STATUS_LABEL[editStatus ?? ''] ?? editStatus}
+                </Badge>
+                <span className="text-muted-foreground">
+                  版本 {status.current_edit_revision ?? 0}/{status.built_edit_revision ?? 0}
+                </span>
+                {status.mdl_hash ? (
+                  <span className="hidden font-mono xl:inline" title={status.mdl_hash}>
+                    mdl {fmtHash(status.mdl_hash)}
+                  </span>
+                ) : null}
+              </>
+            )}
+            {error ? <span className="text-destructive">{error}</span> : null}
+            <div className="flex items-center gap-1.5">
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-8"
+                onClick={() => void load()}
+                disabled={loading}
+              >
+                <RefreshCw className={loading ? 'h-3.5 w-3.5 animate-spin' : 'h-3.5 w-3.5'} />
+              </Button>
+              <Button
+                size="sm"
+                variant="secondary"
+                className="h-8"
+                onClick={() => void reconcile()}
+                disabled={reconciling || connectionId == null}
+              >
+                <RotateCcw className="h-3.5 w-3.5" />
+                重新导入
+              </Button>
+            </div>
+          </div>
+        </div>
+        {driftBanner ? <div className="w-full basis-full">{driftBanner}</div> : null}
+      </>
+    );
+  }
 
   return (
-    <div className="flex flex-col gap-2 rounded-lg border bg-card p-3 text-xs">
-      <div className="flex flex-wrap items-center gap-3">
-        <span className="font-semibold text-muted-foreground">模型编辑同步</span>
+    <div className="mb-3 flex flex-col gap-2 rounded-lg border bg-card p-3 text-xs">
+      <div className="flex flex-wrap items-center gap-2 text-xs">
+        <span className="shrink-0 font-semibold text-muted-foreground">编辑同步</span>
         {status == null ? (
           <span className="text-muted-foreground">尚未编辑</span>
         ) : (
           <>
-            <span className="flex items-center gap-1">
-              <span className="text-muted-foreground">编辑态</span>
-              <Badge variant={statusVariant(editStatus)}>
-                {STATUS_LABEL[editStatus ?? ''] ?? editStatus}
-              </Badge>
-            </span>
+            <Badge variant={statusVariant(editStatus)}>
+              {STATUS_LABEL[editStatus ?? ''] ?? editStatus}
+            </Badge>
             <span className="text-muted-foreground">
-              版本 {status.current_edit_revision ?? 0} / 已写回 {status.built_edit_revision ?? 0}
+              版本 {status.current_edit_revision ?? 0}/{status.built_edit_revision ?? 0}
             </span>
             {status.mdl_hash ? (
               <span className="font-mono" title={status.mdl_hash}>
@@ -126,30 +191,24 @@ export function CatalogSyncStatusBar({ connectionId }: { connectionId: number | 
           </>
         )}
         {error ? <span className="text-destructive">{error}</span> : null}
-        <div className="ml-auto flex items-center gap-2">
-          <Button size="sm" variant="outline" onClick={() => void load()} disabled={loading}>
-            <RefreshCw className={loading ? 'h-4 w-4 animate-spin' : 'h-4 w-4'} />
+        <div className="ml-auto flex items-center gap-1.5">
+          <Button size="sm" variant="outline" className="h-8" onClick={() => void load()} disabled={loading}>
+            <RefreshCw className={loading ? 'h-3.5 w-3.5 animate-spin' : 'h-3.5 w-3.5'} />
             刷新
           </Button>
           <Button
             size="sm"
             variant="secondary"
+            className="h-8"
             onClick={() => void reconcile()}
             disabled={reconciling || connectionId == null}
           >
-            <RotateCcw className="h-4 w-4" />
+            <RotateCcw className="h-3.5 w-3.5" />
             重新导入
           </Button>
         </div>
       </div>
-      {editStatus === 'STALE_DRIFT' ? (
-        <div className="flex items-center gap-2 rounded-md border border-warning/40 bg-warning/5 p-2 text-warning">
-          <AlertTriangle className="h-4 w-4 shrink-0" />
-          <span>
-            检测到外部变更（WrenAI 侧 MDL 已偏离平台基线）。请点击「重新导入」触发按 model 范围重建以重新收敛。
-          </span>
-        </div>
-      ) : null}
+      {driftBanner}
     </div>
   );
 }

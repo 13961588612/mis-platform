@@ -107,7 +107,7 @@ class MaskingEngine:
 
     async def apply(
         self,
-        columns: list[ColumnMeta],
+        columns: list[Any],
         rows: list[list[Any]],
         *,
         connection_id: int | None = None,
@@ -117,7 +117,7 @@ class MaskingEngine:
         """对结果列/行脱敏（规则加载失败/无规则时原样返回，不阻断主链路）。
 
         Args:
-            columns: 结果列元信息（name/item_key/data_type）。
+            columns: 结果列元信息（``ColumnMeta`` / ``dict`` / ``str`` 均可）。
             rows: 结果行（与 columns 顺序对应）。
             connection_id: 连接 id（规则按连接分桶）。
             catalog_items: 清单元数据（item_key/mask_rule/sensitive_level/data_type）；
@@ -128,7 +128,9 @@ class MaskingEngine:
             :class:`MaskOutcome`。
         """
         if not columns:
-            return MaskOutcome(columns=columns, rows=rows, masked_columns=[])
+            return MaskOutcome(columns=[], rows=rows, masked_columns=[])
+
+        normalized = [self._as_column_meta(col) for col in columns]
 
         if catalog_items is None:
             catalog_items = await self._load_catalog_items(connection_id)
@@ -140,7 +142,7 @@ class MaskingEngine:
 
         mask_fns: list[MaskRule | None] = []
         new_columns: list[ColumnMeta] = []
-        for col in columns:
+        for col in normalized:
             col_meta = catalog_by_key.get(col.item_key or col.name)
             rule = self._resolve_rule(col, col_meta, rules)
             mask_fns.append(rule)
@@ -156,7 +158,7 @@ class MaskingEngine:
 
         masked_names = [
             col.name or col.item_key or ""
-            for col, rule in zip(columns, mask_fns)
+            for col, rule in zip(normalized, mask_fns)
             if rule is not None
         ]
 
@@ -203,6 +205,23 @@ class MaskingEngine:
             )
         compiled.sort(key=lambda r: r.priority)
         return compiled
+
+    @staticmethod
+    def _as_column_meta(col: Any) -> ColumnMeta:
+        """把 run_sql 返回的列（str / dict / ColumnMeta）归一为 ColumnMeta。"""
+        if isinstance(col, ColumnMeta):
+            return col
+        if isinstance(col, dict):
+            name = str(col.get("name") or "")
+            return ColumnMeta(
+                name=name,
+                item_key=str(col.get("item_key") or name or ""),
+                data_type=str(col.get("data_type") or ""),
+                display_name=str(col.get("display_name") or name or ""),
+                masked=bool(col.get("masked") or False),
+            )
+        name = str(col) if col is not None else ""
+        return ColumnMeta(name=name, item_key=name, display_name=name)
 
     def _index_catalog(self, catalog_items: list[dict[str, Any]] | None) -> dict[str, dict[str, Any]]:
         """按 item_key 索引清单元数据。"""

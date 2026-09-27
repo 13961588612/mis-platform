@@ -297,7 +297,8 @@ export interface IqdAskResponse {
   answer_summary: string;
   sql?: string | null;
   sql_dialect?: string | null;
-  data: {
+  /** 失败帧可能为 null。 */
+  data?: {
     columns: Array<{
       name: string;
       item_key?: string;
@@ -308,16 +309,16 @@ export interface IqdAskResponse {
     rows: unknown[][];
     row_count: number;
     truncated?: boolean;
-  };
-  citations: Array<{
+  } | null;
+  citations?: Array<{
     kind: string;
     item_key: string;
     display_name?: string;
     description?: string | null;
     snippet?: string | null;
     source_ref?: string | null;
-  }>;
-  plan: Array<{
+  }> | null;
+  plan?: Array<{
     seq: number;
     code: string;
     label: string;
@@ -325,19 +326,37 @@ export interface IqdAskResponse {
     sql?: string | null;
     status: string;
     duration_ms?: number;
-  }>;
-  scope: {
+  }> | null;
+  /** 失败帧（Worker 空响应 / 解析失败）可能为 null。 */
+  scope?: {
     decision: string;
     allowed_item_keys: string[];
     denied_item_keys: string[];
     reason?: string | null;
     subject_summary?: string;
     connection_id?: number | null;
-  };
-  masked_columns: string[];
-  latency_ms: number;
+  } | null;
+  masked_columns?: string[] | null;
+  latency_ms?: number | null;
   error_code?: string | null;
   error_message?: string | null;
+  /** admin 视图：NL→SQL 的 LLM 入参/出参（含重试 attempts）。 */
+  nl2sql_debug?: {
+    prompt_system?: string;
+    prompt_user?: string;
+    raw_output?: string;
+    context_chars?: number;
+    note?: string;
+    attempts?: Array<{
+      label?: string;
+      type?: string;
+      sql?: string;
+      summary?: string;
+      prompt_system?: string;
+      prompt_user?: string;
+      raw_output?: string;
+    }>;
+  } | null;
 }
 
 export interface IqdAskPayload {
@@ -784,6 +803,10 @@ export interface IqdSelfHealResult {
   build_mdl_hash?: string | null;
   build_error?: string | null;
   index_error?: string | null;
+  /** 模型校验警告/问题条目（可与 success 并存；前端逐条展示）。 */
+  warnings?: string[] | null;
+  /** 可选：CLI 原始输出（后端若回传则前端可再解析 Warnings: 分区）。 */
+  raw?: string | null;
 }
 
 /**

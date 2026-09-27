@@ -15,6 +15,7 @@ from typing import Any
 
 import asyncio
 import json
+import re
 import shlex
 
 from src.config import get_settings
@@ -203,89 +204,272 @@ class IqdCli:
     async def context_validate(self, *, project_dir: str | None = None) -> dict[str, Any]:
         """校验当前语义上下文（``wren context validate``）。
 
-        运维自愈「模型校验」动作：返回人可读错误摘要（REQ-8），供前端失败横幅展示。
+        运维自愈「模型校验」动作：返回人可读错误/警告摘要（REQ-8），供前端结果面板展示。
         可选 flag 来自配置 ``self_heal_context_validate_args``（Q5），结构命令名词固定。
 
-        Returns:
-            ``{"ok": bool, "summary": str, "raw": str}``：
-            - ``ok``：stdout/stderr 中不含 error 关键词；
-            - ``summary``：人可读错误摘要（JSON errors/message 数组 或 纯文本首段错误行）；
-            - ``raw``：原始 stdout（成功时）或异常字符串（失败时）。
+        <p><b>警告 ≠ 失败</b>：Wren 在仅有 warning 时也常 ``exit != 0``。本方法以
+        ``allow_nonzero`` 收下完整 stdout/stderr，再按解析结果判定 ``ok``——
+        「N warning(s), 0 errors」视为通过（带 warnings），不得把运维自愈标成 failed。
 
-        Note:
-            调用方据 ``ok`` / ``summary`` 写回 ``build_status`` / ``build_error``，失败不抛。
+        Returns:
+            ``{"ok": bool, "summary": str, "raw": str, "warnings": list[str], "errors": list[str]}``。
         """
         try:
             raw = await self._run(
-                ["context", "validate", *self._context_validate_args], cwd=project_dir
+                ["context", "validate", *self._context_validate_args],
+                cwd=project_dir,
+                allow_nonzero=True,
             )
         except IqdCliError as exc:
+            # 尽量从异常文案里再判一次：仅警告不算基础设施失败
+            parsed = self._parse_validate_output("", str(exc))
+            warn_n, err_n = parsed.get("warn_count"), parsed.get("error_count")
+            soft_ok = (
+                not parsed["errors"]
+                and (
+                    bool(parsed["warnings"])
+                    or (err_n == 0 and warn_n is not None)
+                )
+                and not self._looks_like_hard_failure(str(exc))
+            )
+            if soft_ok or (err_n == 0 and (warn_n or 0) > 0 and not parsed["errors"]):
+                return {
+                    "ok": True,
+                    "summary": parsed["summary"],
+                    "raw": str(exc),
+                    "warnings": parsed["warnings"]
+                    or (
+                        [
+                            f"检测到 {warn_n} 条警告，但 CLI 未输出明细。"
+                            "请在 wren 机执行 `wren context validate` 查看逐条内容。"
+                        ]
+                        if warn_n
+                        else []
+                    ),
+                    "errors": [],
+                }
             return {
                 "ok": False,
-                "summary": self._parse_validate_summary("", str(exc)),
+                "summary": parsed["summary"] or str(exc),
                 "raw": str(exc),
+                "warnings": parsed["warnings"],
+                "errors": parsed["errors"]
+                or ([parsed["summary"]] if parsed["summary"] else [str(exc)]),
             }
-        stdout = raw.get("stdout", "")
-        stderr = raw.get("stderr", "")
-        ok = "error" not in (stdout + stderr).lower()
+        stdout = str(raw.get("stdout") or "")
+        stderr = str(raw.get("stderr") or "")
+        parsed = self._parse_validate_output(stdout, stderr)
+        warn_n, err_n = parsed.get("warn_count"), parsed.get("error_count")
+        # 有真实 errors → 失败；计数摘要「0 errors」或仅有 warnings → 通过（不算运维 failed）
+        if parsed["errors"] or (err_n is not None and err_n > 0):
+            ok = False
+        elif parsed["warnings"] or (warn_n is not None and warn_n >= 0 and err_n == 0):
+            ok = True
+        else:
+            ok = not self._looks_like_hard_failure(f"{stdout}\n{stderr}")
         return {
             "ok": ok,
-            "summary": self._parse_validate_summary(stdout, stderr),
-            "raw": stdout,
+            "summary": parsed["summary"],
+            "raw": (stdout + ("\n" + stderr if stderr else "")).strip(),
+            "warnings": parsed["warnings"],
+            "errors": parsed["errors"],
         }
 
     @staticmethod
-    def _parse_validate_summary(stdout: str, stderr: str) -> str:
-        """从 ``context validate`` 的 stdout/stderr 提取人可读错误摘要（REQ-8）。
+    def _looks_like_hard_failure(text: str) -> bool:
+        """粗判是否像硬失败（排除「N warning(s), 0 errors」计数行）。"""
+        if not text or not text.strip():
+            return False
+        if IqdCli._COUNT_SUMMARY_RE.search(text):
+            m = IqdCli._COUNT_SUMMARY_RE.search(text)
+            if m and int(m.group("err")) == 0:
+                return False
+        low = text.lower()
+        for ln in text.splitlines():
+            s = ln.strip()
+            if not s:
+                continue
+            if IqdCli._COUNT_SUMMARY_RE.search(s):
+                continue
+            low_ln = s.lower()
+            if "error:" in low_ln or low_ln.startswith("error ") or "失败" in s:
+                return True
+            if "fail" in low_ln and "0 fail" not in low_ln:
+                return True
+        return "traceback" in low or "panic" in low
 
-        优先 JSON 结构化（``errors`` / ``message`` 数组），否则取首段非空错误行（纯文本）。
-        两种形态均不臆测字段名，仅做通用兜底解析（W0 校准）。
+    @staticmethod
+    def _parse_validate_summary(stdout: str, stderr: str) -> str:
+        """兼容旧调用：仅返回摘要字符串（REQ-8）。"""
+        return IqdCli._parse_validate_output(stdout, stderr)["summary"]
+
+    # Wren 常见收尾行：`3 warning(s), 0 errors.`
+    _COUNT_SUMMARY_RE = re.compile(
+        r"(?P<warn>\d+)\s*warning\(s\)\s*,\s*(?P<err>\d+)\s*errors?\.?",
+        re.IGNORECASE,
+    )
+
+    @staticmethod
+    def _parse_validate_output(stdout: str, stderr: str) -> dict[str, Any]:
+        """从 ``context validate`` 的 stdout/stderr 提取摘要与分条警告/错误。
+
+        优先 JSON 结构化（``errors`` / ``warnings`` / ``message``），否则按行拆分纯文本。
+        计数摘要行（``N warning(s), 0 errors``）**不算 error**，且仅在无明细时作占位。
 
         Returns:
-            人可读错误摘要字符串；无可解析内容时返回空串。
+            ``{"summary", "warnings", "errors", "warn_count", "error_count"}``；
+            count 字段在未解析到计数行时为 ``None``。
         """
+        warnings: list[str] = []
+        errors: list[str] = []
+        warn_count: int | None = None
+        error_count: int | None = None
+
+        def _as_msgs(items: Any) -> list[str]:
+            out: list[str] = []
+            if not isinstance(items, list):
+                return out
+            for e in items:
+                if isinstance(e, dict):
+                    text = str(
+                        e.get("message") or e.get("error") or e.get("msg") or e.get("detail") or e
+                    ).strip()
+                else:
+                    text = str(e).strip()
+                if text:
+                    out.append(text)
+            return out
+
+        def _note_counts(ln: str) -> bool:
+            nonlocal warn_count, error_count
+            m = IqdCli._COUNT_SUMMARY_RE.search(ln)
+            if not m:
+                return False
+            warn_count = int(m.group("warn"))
+            error_count = int(m.group("err"))
+            return True
+
         if (stdout and stdout.strip()) or (stderr and stderr.strip()):
-            # 1. JSON 结构化：errors / message 数组优先
             for blob in (stdout, stderr):
                 if not blob or not blob.strip():
                     continue
                 try:
                     data = json.loads(blob)
-                except (ValueError, AttributeError):
+                except (ValueError, AttributeError, TypeError):
                     continue
                 if isinstance(data, dict):
-                    errors = data.get("errors")
-                    if isinstance(errors, list) and errors:
-                        parts: list[str] = []
-                        for e in errors:
-                            if isinstance(e, dict):
-                                parts.append(
-                                    str(
-                                        e.get("message")
-                                        or e.get("error")
-                                        or e.get("msg")
-                                        or e
-                                    )
-                                )
-                            else:
-                                parts.append(str(e))
-                        if parts:
-                            return "; ".join(parts)
+                    errors.extend(_as_msgs(data.get("errors")))
+                    warnings.extend(_as_msgs(data.get("warnings")))
+                    if not errors and not warnings:
+                        errors.extend(_as_msgs(data.get("issues") or data.get("problems")))
                     msg = data.get("message") or data.get("error") or data.get("msg")
-                    if isinstance(msg, str) and msg.strip():
-                        return msg.strip()
-                    if isinstance(msg, list) and msg:
-                        return "; ".join(str(m) for m in msg)
-            # 2. 纯文本：优先含 error/fail/失败/错误 的行，否则首段非空行
-            text = f"{stdout}\n{stderr}"
-            lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
-            for ln in lines:
-                low = ln.lower()
-                if "error" in low or "fail" in low or "失败" in ln or "错误" in ln:
-                    return ln
-            if lines:
-                return lines[0]
-        return ""
+                    if isinstance(msg, str) and msg.strip() and not errors and not warnings:
+                        if _note_counts(msg):
+                            pass
+                        elif "warn" in msg.lower() or "警告" in msg:
+                            warnings.append(msg.strip())
+                        else:
+                            errors.append(msg.strip())
+                    elif isinstance(msg, list):
+                        for m in msg:
+                            text = str(m).strip()
+                            if text:
+                                errors.append(text)
+                    break
+
+            if not errors and not warnings:
+                text = f"{stdout}\n{stderr}"
+                # Wren 真机格式：
+                #   Warnings:
+                #     ⚠ Model 'xxx' has no description ...
+                #   3 warning(s), 0 errors.
+                # 明细行往往不含 "warning" 字样，必须按分区收集。
+                mode: str | None = None
+                for raw_ln in text.splitlines():
+                    stripped = raw_ln.strip()
+                    if not stripped:
+                        continue
+                    if _note_counts(stripped):
+                        mode = None
+                        continue
+                    low = stripped.lower()
+                    if low in ("warnings:", "warning:") or low == "warnings":
+                        mode = "warnings"
+                        continue
+                    if low in ("errors:", "error:") or low == "errors":
+                        mode = "errors"
+                        continue
+                    item = re.sub(r"^[\s\-\*•·▪►▶⚠⚠️]+", "", stripped).strip()
+                    if not item:
+                        continue
+                    if mode == "warnings":
+                        warnings.append(item)
+                    elif mode == "errors":
+                        errors.append(item)
+                    elif "warning" in low or "warn:" in low or "警告" in stripped:
+                        warnings.append(item)
+                    elif low.startswith("0 error") or low.startswith("0 fail"):
+                        continue
+                    elif (
+                        "error:" in low
+                        or low.startswith("error ")
+                        or "失败" in stripped
+                        or "错误" in stripped
+                    ):
+                        errors.append(item)
+
+                if not warnings and not errors and warn_count is not None:
+                    if (warn_count or 0) > 0 and (error_count or 0) == 0:
+                        warnings.append(
+                            f"检测到 {warn_count} 条警告，但 CLI 未输出明细。"
+                            "请在 wren 机执行 `wren context validate` 查看逐条内容。"
+                        )
+                    elif (error_count or 0) > 0:
+                        errors.append(
+                            f"检测到 {error_count} 条错误（CLI 未输出明细）。"
+                            "请在 wren 机执行 `wren context validate` 查看逐条内容。"
+                        )
+                elif not warnings and not errors:
+                    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+                    if lines:
+                        warnings.append(lines[0])
+
+        def _uniq(items: list[str]) -> list[str]:
+            seen: set[str] = set()
+            out: list[str] = []
+            for x in items:
+                if x not in seen:
+                    seen.add(x)
+                    out.append(x)
+            return out
+
+        errors = _uniq(errors)
+        warnings = _uniq(warnings)
+        # 计数行本身勿进 errors（「0 errors」含 error 字样）
+        errors = [e for e in errors if not IqdCli._COUNT_SUMMARY_RE.search(e)]
+        warnings = [w for w in warnings if not IqdCli._COUNT_SUMMARY_RE.search(w)]
+        # 上面过滤可能误伤「仅计数」占位——若清空且有 warn_count，补回提示
+        if not warnings and not errors and warn_count is not None and (warn_count or 0) > 0:
+            warnings.append(
+                f"检测到 {warn_count} 条警告，但 CLI 未输出明细。"
+                "请在 wren 机执行 `wren context validate` 查看逐条内容。"
+            )
+
+        if errors:
+            summary = "; ".join(errors)
+        elif warnings:
+            summary = "; ".join(warnings)
+        elif warn_count is not None:
+            summary = f"{warn_count} warning(s), {error_count or 0} errors."
+        else:
+            summary = ""
+        return {
+            "summary": summary,
+            "warnings": warnings,
+            "errors": errors,
+            "warn_count": warn_count,
+            "error_count": error_count,
+        }
 
     async def get_current_mdl_hash(self, *, project_dir: str | None = None) -> str | None:
         """取 WrenAI 当前部署的 mdl_hash（S3 漂移检测）。
@@ -404,7 +588,9 @@ class IqdCli:
 
     # ================================================================ 内部
 
-    async def _run(self, args: list[str], *, cwd: str | None = None) -> dict[str, Any]:
+    async def _run(
+        self, args: list[str], *, cwd: str | None = None, allow_nonzero: bool = False
+    ) -> dict[str, Any]:
         """执行 wren CLI 子命令。
 
         跨机器（``WREN_AGENT_ENDPOINT`` 非空）且给出 ``cwd``（``…/{connId}``）时，
@@ -413,15 +599,17 @@ class IqdCli:
         Args:
             args: 子命令参数（不含二进制本身）。
             cwd: 子进程工作目录（方案 A 多连接；不传则沿用进程 cwd）。
+            allow_nonzero: ``True`` 时非零退出仍返回 stdout/stderr（不抛）；供 validate 等
+                「警告也可能 exit!=0」的只读动作。
 
         Returns:
             含 ``command`` / ``exit_code`` / ``stdout`` / ``stderr`` 的字典。
 
         Raises:
-            IqdCliError: 二进制不可执行或非零退出。
+            IqdCliError: 二进制不可执行；或非零退出且 ``allow_nonzero=False``。
         """
         # 跨机器：把 --mdl <local_dir> 抽成 manifest 正文，由 agent 落临时目录
-        remote = await self._try_remote_run(args, cwd=cwd)
+        remote = await self._try_remote_run(args, cwd=cwd, allow_nonzero=allow_nonzero)
         if remote is not None:
             return remote
 
@@ -462,10 +650,10 @@ class IqdCli:
         stdout: str = (stdout_bytes or b"").decode("utf-8", errors="replace")
         stderr: str = (stderr_bytes or b"").decode("utf-8", errors="replace")
 
-        if proc.returncode != 0:
+        if proc.returncode != 0 and not allow_nonzero:
             raise IqdCliError(
                 f"wren CLI 失败 exit={proc.returncode}: {shlex.join(command)}\n"
-                f"stderr: {stderr[:500]}"
+                f"stdout: {stdout[:2000]}\nstderr: {stderr[:2000]}"
             )
 
         logger.info("wren CLI done", exit_code=proc.returncode, stdout_len=len(stdout))
@@ -477,7 +665,7 @@ class IqdCli:
         }
 
     async def _try_remote_run(
-        self, args: list[str], *, cwd: str | None
+        self, args: list[str], *, cwd: str | None, allow_nonzero: bool = False
     ) -> dict[str, Any] | None:
         """若启用 WrenMcpAgent 且 cwd 可解析为 connId，则远程执行；否则返回 None 走本地。"""
         import os
@@ -524,6 +712,7 @@ class IqdCli:
             command=shlex.join(["wren", *clean_args]),
             conn_id=conn_id,
             has_mdl=bool(mdl_manifest),
+            allow_nonzero=allow_nonzero,
         )
         try:
             data = await agent.run_cli(
@@ -531,6 +720,7 @@ class IqdCli:
                 clean_args,
                 mdl_manifest=mdl_manifest,
                 timeout=wait,
+                raise_on_error=not allow_nonzero,
             )
         except WrenMcpAgentClientError as exc:
             raise IqdCliError(str(exc)) from exc

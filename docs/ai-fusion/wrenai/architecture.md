@@ -21,7 +21,7 @@
 
 | # | 难点 | 对策 | 落点 |
 |---|---|---|---|
-| D1 | WrenAI 新线以 **MCP 工具**（`run_sql`/`dry_run`/`dry_plan`/`query_cube`/`get_context` 等）暴露问数与执行能力，而 MIS 前端期望流式体验 | 桥接层实现 `AskOrchestrator`：经本地 MCP client 调问数/执行工具 → 每产出一阶段即产出一个 `IqdPlanStep` → 经 Coordinator `AgentEvent` → BFF SSE 逐帧下发（MCP 为请求/响应工具调用，不再有 REST `/v1/asks` 异步轮询） | `mis_iqd/orchestrator.py` + `adapters/iqd_mcp_client.py` |
+| D1 | WrenAI 新线以 **MCP 工具**（`run_sql`/`dry_run`/`dry_plan`/`query_cube`/`get_context` 等）暴露问数与执行能力，而 MIS 前端期望流式体验 | 桥接层实现 `AskOrchestrator`：经本地 MCP client 调执行工具；**NL→SQL 由平台 `Nl2SqlGenerator`（LLM Gateway）完成**（Wren 0.13 `dry_plan` 仅方言转译）→ 每产出一阶段即产出一个 `IqdPlanStep` → 经 Coordinator `AgentEvent` → BFF SSE 逐帧下发（MCP 为请求/响应工具调用，不再有 REST `/v1/asks` 异步轮询） | `mis_iqd/orchestrator.py` + `mis_iqd/nl2sql.py` + `adapters/iqd_mcp_client.py` |
 | D2 | WrenAI 按 project/MDL 隔离语义，**没有「按角色限表」的原生入口**（版本无关） | 平台侧在调用**前**裁定 `allowed_item_keys`，通过两手段收敛：① 新线用 MCP `get_context`/`get_instructions` 做**角色级前置收窄**（注入角色可见的模型/指令上下文）；② 生成 SQL 返回后用 sqlglot 解析血缘做**后置校验**，命中越权表则拒绝返回（fail-closed） | `mis_iqd/scope_resolver.py` + `lineage.py` |
 | D3 | WrenAI 旧版结果**无独立 citation 字段**；新线 `get_context`/`list_knowledge` **暴露原生引用来源** | **优先走原生**：桥接层调 MCP `get_context`/`list_knowledge`/`recall_queries` 取原生引用（表/字段/知识命中）；sqlglot 血缘降级派生保留为兜底（原生缺失或解析失败时回退） | `mis_iqd/lineage.py` |
 | D4 | 后台要看 SQL、前端**绝不能**看 SQL | 同一份 `AskResult` 由 `ResponseProjector` 按 `view=admin\|user` 两口径投影；`view=user` 分支在**服务端**剥离 `sql` / `plan[].sql`，不靠前端隐藏。**前端不直连 MCP 由 WrenAI 官方 MCP server 默认绑 127.0.0.1 + 本版本无 bearer-token 鉴权 + 默认只读约束兜底**——必须由服务端 `mis-iqd` Worker 本地持有 MCP client | `mis_iqd/projector.py` |

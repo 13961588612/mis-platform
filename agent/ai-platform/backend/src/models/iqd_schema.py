@@ -150,6 +150,10 @@ class AskResponse(BaseModel):
     latency_ms: int = Field(default=0)
     error_code: str | None = Field(default=None)
     error_message: str | None = Field(default=None)
+    nl2sql_debug: dict[str, Any] | None = Field(
+        default=None,
+        description="admin 视图：NL→SQL 的 LLM 入参/出参（user 投影时删除）",
+    )
 
     def to_wire(self) -> dict[str, Any]:
         """序列化为 wire snake_case 字典（保持字段原样，不做 key 转换）。"""

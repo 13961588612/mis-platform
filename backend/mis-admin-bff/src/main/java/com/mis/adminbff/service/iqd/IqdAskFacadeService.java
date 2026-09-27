@@ -6,6 +6,7 @@ import com.mis.adminbff.client.AiPlatformClient;
 import com.mis.adminbff.config.IqdProperties;
 import com.mis.adminbff.dto.iqd.IqdAskRequest;
 import com.mis.adminbff.dto.iqd.IqdAskResponse;
+import com.mis.adminbff.dto.iqd.IqdScopeResolutionPayload;
 import com.mis.adminbff.security.UserPermissionLoader;
 import com.mis.adminbff.support.RequestContext;
 import com.mis.common.core.exception.BusinessException;
@@ -17,6 +18,7 @@ import org.springframework.http.codec.ServerSentEvent;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Flux;
 
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Set;
@@ -76,7 +78,8 @@ public class IqdAskFacadeService {
         requireAskPermission();
         String view = resolveView();
         Map<String, Object> body = buildBody(req, view);
-        var data = aiPlatformClient.chat(agentId(), body, authorization, traceId);
+        var data = aiPlatformClient.chat(
+                agentId(), body, authorization, traceId, properties.getAskTimeoutMs());
         return parseResponse(data);
     }
 
@@ -125,9 +128,15 @@ public class IqdAskFacadeService {
             throw new BusinessException(ResultCode.UNAUTHORIZED);
         }
         Set<String> permissions = userPermissionLoader.load(user);
-        if (permissions == null || !permissions.contains(properties.getAskPermission())) {
+        if (permissions == null) {
             throw new BusinessException(ResultCode.FORBIDDEN);
         }
+        // 与 sys_menu_api 并集一致：ai:chat:use（正式问数）或 iqd:test:use（测试台）任一即可
+        String askPermission = properties.getAskPermission();
+        if (permissions.contains(askPermission) || permissions.contains("iqd:test:use")) {
+            return;
+        }
+        throw new BusinessException(ResultCode.FORBIDDEN);
     }
 
     /** 静默判权：失败返回 false（供 SSE 分支以 error 帧收尾，避免抛异常打断流）。 */
@@ -187,6 +196,11 @@ public class IqdAskFacadeService {
     private IqdAskResponse parseResponse(com.mis.adminbff.dto.ai.AiPlatformChatData data) {
         IqdAskResponse resp = new IqdAskResponse();
         resp.setThreadId(data.getSessionId());
+        // 失败帧也给空 scope，避免前端读 scope.decision 白屏
+        resp.setScope(emptyScope());
+        resp.setPlan(Collections.emptyList());
+        resp.setCitations(Collections.emptyList());
+        resp.setMaskedColumns(Collections.emptyList());
         String raw = data.getResponse();
         if (raw == null || raw.isBlank()) {
             resp.setStatus("error");
@@ -195,7 +209,20 @@ public class IqdAskFacadeService {
             return resp;
         }
         try {
-            return objectMapper.readValue(stripJsonFences(raw), IqdAskResponse.class);
+            IqdAskResponse parsed = objectMapper.readValue(stripJsonFences(raw), IqdAskResponse.class);
+            if (parsed.getScope() == null) {
+                parsed.setScope(emptyScope());
+            }
+            if (parsed.getPlan() == null) {
+                parsed.setPlan(Collections.emptyList());
+            }
+            if (parsed.getCitations() == null) {
+                parsed.setCitations(Collections.emptyList());
+            }
+            if (parsed.getMaskedColumns() == null) {
+                parsed.setMaskedColumns(Collections.emptyList());
+            }
+            return parsed;
         } catch (Exception ex) {
             log.warn("Failed to parse iqd ask response, raw={}", raw, ex);
             resp.setStatus("error");
@@ -203,6 +230,10 @@ public class IqdAskFacadeService {
             resp.setErrorMessage("Worker 响应解析失败: " + ex.getMessage());
             return resp;
         }
+    }
+
+    private static IqdScopeResolutionPayload emptyScope() {
+        return new IqdScopeResolutionPayload(null, Collections.emptyList(), Collections.emptyList(), null, null);
     }
 
     /** 清理 LLM 输出可能裹挟的 markdown 代码围栏。 */

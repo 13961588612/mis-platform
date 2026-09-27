@@ -1,13 +1,16 @@
 /**
  * iqd-catalog-page.tsx — 问数清单管理（W2，路径 /iqd/catalog）。
  *
- * <p>覆盖 mis-iqd 清单（iqd_catalog_item）：连接配置 → 清单树（model/column/
- * relationship）→ 纳入问数范围勾选。数据源为 BFF 代理 `/api/v1/iqd/catalog**`
- * （权限码 iqd:catalog:view / iqd:scope:save）。
+ * <p>覆盖 mis-iqd 清单（iqd_catalog_item）：从连接配置选连接名 → 清单（物理表 / 模型分 Tab）→
+ * 纳入问数范围勾选。字段不进主表，由行内「字段纳入」弹窗按父节点管理。
+ * WrenAI 基址在「连接配置」页维护，本页不手填。
+ * 数据源为 BFF 代理 `/api/v1/iqd/catalog**`（权限码 iqd:catalog:view / iqd:scope:save）。
  */
 
-import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
-import { Pencil, RefreshCw, RotateCcw, Save, ShieldCheck, Sparkles } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
+import { Link } from 'react-router-dom';
+import { Columns3, Pencil, RefreshCw, RotateCcw, ShieldCheck, Sparkles } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -15,6 +18,13 @@ import { Textarea } from '@/components/ui/textarea';
 import { PageHeader } from '@/components/common/page-header';
 import { buildAppBreadcrumbs } from '@/components/common/app-breadcrumbs';
 import { Badge } from '@/components/ui/badge';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
 import {
   Dialog,
   DialogContent,
@@ -24,20 +34,19 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import {
-  getIqdConfig,
   listIqdCatalog,
-  saveIqdConfig,
   setIqdCatalogInScope,
   updateIqdCatalogNode,
   getIqdCatalogSyncStatus,
   type IqdCatalogItem,
-  type IqdConnectionConfig,
   type IqdDependents,
 } from '@/lib/api/iqd';
 import { CatalogSyncStatusBar } from './components/CatalogSyncStatusBar';
 import { SelfHealPanel } from './components/SelfHealPanel';
 import { useCatalogNodes } from './hooks/useCatalogNodes';
-import { createModelFromTable, errorCode, errorData } from './api/iqd-modeling';
+import { createModelFromTable, errorCode, errorData, listConnections } from './api/iqd-modeling';
+import { iqdKeys } from './queries/iqd-keys';
+import { IQD_CONFIG_PAGE_PATH } from './iqd-config-page';
 
 const KIND_LABEL: Record<string, string> = {
   table: '表',
@@ -51,56 +60,122 @@ const KIND_LABEL: Record<string, string> = {
   view: '视图',
 };
 
-/** 清单按类型分组的展示顺序（cube/measure 为 P0-3 补全新增）。 */
-const KIND_ORDER: string[] = [
-  'table',
-  'model',
-  'column',
+/** 主列表 Tab（字段不进主表）。 */
+type CatalogTab = 'table' | 'model' | 'other';
+
+const CATALOG_TABS: Array<{ key: CatalogTab; label: string }> = [
+  { key: 'table', label: '物理表' },
+  { key: 'model', label: '模型' },
+  { key: 'other', label: '关系 / Cube 等' },
+];
+
+/** 「其它」Tab 收录的 kind（不含 table/model/column）。 */
+const OTHER_KINDS = new Set([
   'relationship',
   'cube',
   'measure',
   'metric',
   'dimension',
   'view',
-];
+]);
+
+/**
+ * 某表/模型下的字段：表 → parent=表 key；模型 → 计算列挂模型 + 物理列挂同名表。
+ */
+function columnsOfHost(all: IqdCatalogItem[], host: IqdCatalogItem): IqdCatalogItem[] {
+  if (host.kind === 'table') {
+    return all.filter((it) => it.kind === 'column' && it.parent_key === host.item_key);
+  }
+  if (host.kind !== 'model') {
+    return [];
+  }
+  const tableName =
+    host.display_name?.trim() ||
+    host.item_key.replace(/^mdl:model:/i, '').split('.').pop() ||
+    '';
+  const nameLower = tableName.toLowerCase();
+  return all.filter((it) => {
+    if (it.kind !== 'column') return false;
+    const parent = it.parent_key ?? '';
+    if (parent === host.item_key) return true;
+    if (!nameLower) return false;
+    const parentLower = parent.toLowerCase();
+    return parentLower === nameLower || parentLower.endsWith(`.${nameLower}`);
+  });
+}
 
 export const IQD_CATALOG_PAGE_PATH = '/iqd/catalog';
 
 export function IqdCatalogPage() {
-  const [config, setConfig] = useState<IqdConnectionConfig | null>(null);
   const [items, setItems] = useState<IqdCatalogItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [keyword, setKeyword] = useState('');
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [saving, setSaving] = useState(false);
+  const [tab, setTab] = useState<CatalogTab>('table');
+  /** 当前选中的连接 id（来自连接配置清单，不手填 WrenAI 地址）。 */
+  const [connectionId, setConnectionId] = useState<number | null>(null);
+  /** 字段纳入弹窗：当前表/模型宿主。 */
+  const [fieldHost, setFieldHost] = useState<IqdCatalogItem | null>(null);
   /** T02b-4：MR-S2「从物理表生成模型」对话框开关。 */
   const [fromTableOpen, setFromTableOpen] = useState(false);
 
-  const connectionId = useMemo(() => config?.id ?? null, [config]);
+  const connectionsQuery = useQuery({
+    queryKey: iqdKeys.connections(),
+    queryFn: listConnections,
+  });
+  const connections = useMemo(
+    () => (connectionsQuery.data ?? []).filter((c) => c.id != null),
+    [connectionsQuery.data],
+  );
+  const activeConnection = useMemo(
+    () => connections.find((c) => c.id === connectionId) ?? null,
+    [connections, connectionId],
+  );
+
+  // 有连接但未选 → 默认第一条（与建模台同口径）
+  useEffect(() => {
+    if (connectionId == null && connections.length > 0 && connections[0].id != null) {
+      setConnectionId(Number(connections[0].id));
+    }
+  }, [connectionId, connections]);
+
+  // 当前选中已被删 → 回落第一条
+  useEffect(() => {
+    if (connectionId != null && connections.length > 0 && activeConnection == null) {
+      const first = connections.find((c) => c.id != null);
+      setConnectionId(first?.id != null ? Number(first.id) : null);
+    }
+  }, [connectionId, connections, activeConnection]);
 
   const load = useCallback(async () => {
+    if (connectionId == null) {
+      setItems([]);
+      return;
+    }
     setLoading(true);
     setError(null);
     try {
-      const cfg = await getIqdConfig();
-      setConfig(cfg);
-      if (cfg.id != null) {
-        setItems(await listIqdCatalog(cfg.id));
-      } else {
-        setItems([]);
-      }
+      setItems(await listIqdCatalog(connectionId));
     } catch (e) {
       setItems([]);
-      setError(e instanceof Error ? e.message : '加载失败');
+      setError(e instanceof Error ? e.message : '加载清单失败');
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [connectionId]);
 
   useEffect(() => {
     void load();
   }, [load]);
+
+  const onConnectionChange = useCallback((value: string) => {
+    const id = Number(value);
+    setConnectionId(Number.isFinite(id) ? id : null);
+    setSelected(new Set());
+    setFieldHost(null);
+  }, []);
 
   const filtered = useMemo(() => {
     const kw = keyword.trim().toLowerCase();
@@ -112,22 +187,29 @@ export function IqdCatalogPage() {
     );
   }, [items, keyword]);
 
-  // 按类型分组（树形分组；cube/measure 等新增类型自然落入分组头）。保留 KIND_ORDER 顺序。
-  const grouped = useMemo(() => {
-    const map = new Map<string, typeof items>();
-    for (const it of filtered) {
-      const arr = map.get(it.kind) ?? [];
-      arr.push(it);
-      map.set(it.kind, arr);
-    }
-    return [...map.keys()]
-      .sort((a, b) => {
-        const ia = KIND_ORDER.indexOf(a);
-        const ib = KIND_ORDER.indexOf(b);
-        return (ia === -1 ? 999 : ia) - (ib === -1 ? 999 : ib);
-      })
-      .map((kind) => ({ kind, rows: map.get(kind) ?? [] }));
+  /** 当前 Tab 主列表行（永不含 column）。 */
+  const tabRows = useMemo(() => {
+    return filtered.filter((it) => {
+      if (it.kind === 'column') return false;
+      if (tab === 'table') return it.kind === 'table';
+      if (tab === 'model') return it.kind === 'model';
+      return OTHER_KINDS.has(it.kind);
+    });
+  }, [filtered, tab]);
+
+  const tabCounts = useMemo(() => {
+    const base = filtered.filter((it) => it.kind !== 'column');
+    return {
+      table: base.filter((it) => it.kind === 'table').length,
+      model: base.filter((it) => it.kind === 'model').length,
+      other: base.filter((it) => OTHER_KINDS.has(it.kind)).length,
+    };
   }, [filtered]);
+
+  const switchTab = useCallback((next: CatalogTab) => {
+    setTab(next);
+    setSelected(new Set());
+  }, []);
 
   const toggleSelect = useCallback((itemKey: string) => {
     setSelected((prev) => {
@@ -156,33 +238,10 @@ export function IqdCatalogPage() {
     [connectionId, selected, load],
   );
 
-  const saveConnection = useCallback(async () => {
-    if (!config) return;
-    setSaving(true);
-    setError(null);
-    try {
-      const saved = await saveIqdConfig({
-        name: config.name || 'default',
-        base_url: config.base_url,
-        auth_type: config.auth_type,
-        project_id: config.project_id,
-        default_connector: config.default_connector,
-        timeout_seconds: config.timeout_seconds ?? 60,
-        language: config.language || 'zh-CN',
-        enabled: config.enabled ?? true,
-      });
-      setConfig(saved);
-      if (saved.id != null) {
-        setItems(await listIqdCatalog(saved.id));
-      }
-    } catch (e) {
-      setError(e instanceof Error ? e.message : '保存连接失败');
-    } finally {
-      setSaving(false);
-    }
-  }, [config]);
-
-  const inScopeCount = useMemo(() => items.filter((it) => it.in_scope).length, [items]);
+  const inScopeHostCount = useMemo(
+    () => items.filter((it) => it.in_scope && (it.kind === 'table' || it.kind === 'model')).length,
+    [items],
+  );
   const selectedCount = selected.size;
 
   // ===================== 二期：语义模型编辑（P0-1~P0-12）=====================
@@ -193,8 +252,9 @@ export function IqdCatalogPage() {
   );
   /** 仅 mdl_writeback_enabled && editable 的节点允许编辑（Q4 闸门 + 一期 editable）。 */
   const canEditItem = useCallback(
-    (it: IqdCatalogItem) => Boolean(config?.mdl_writeback_enabled) && Boolean(it.editable),
-    [config],
+    (it: IqdCatalogItem) =>
+      Boolean(activeConnection?.mdl_writeback_enabled) && Boolean(it.editable),
+    [activeConnection?.mdl_writeback_enabled],
   );
 
   const [editing, setEditing] = useState<IqdCatalogItem | null>(null);
@@ -304,7 +364,7 @@ export function IqdCatalogPage() {
     <div className="flex h-full min-h-0 flex-col">
       <PageHeader
         title="语义模型"
-        description="管理 WrenAI 语义模型清单，勾选纳入问数范围（治理层）。"
+        description="管理 WrenAI 语义模型清单，勾选纳入问数范围（治理层）。字段纳入请在表/模型行内操作。"
         breadcrumbs={buildAppBreadcrumbs({ app: 'agent', title: '语义模型' })}
         actions={
           <div className="flex items-center gap-2">
@@ -313,7 +373,7 @@ export function IqdCatalogPage() {
               size="sm"
               variant="outline"
               onClick={() => setFromTableOpen(true)}
-              disabled={!config?.id}
+              disabled={connectionId == null}
             >
               <Sparkles className="h-4 w-4" />
               从物理表生成模型
@@ -326,34 +386,64 @@ export function IqdCatalogPage() {
         }
       />
 
-      {/* 连接配置快捷区 */}
-      <div className="mb-3 flex flex-wrap items-end gap-2 rounded-lg border bg-card p-3">
-        <div className="min-w-[16rem] flex-1">
-          <label className="mb-[0.4rem] block text-xs text-muted-foreground">WrenAI 地址</label>
-          <Input
-            placeholder="http://host:port"
-            value={config?.base_url ?? ''}
-            onChange={(e) => setConfig((c) => (c ? { ...c, base_url: e.target.value } : c))}
-          />
+      {/* 顶栏：连接 + 编辑同步 + 运维自愈（单行） */}
+      <div className="mb-3 rounded-lg border bg-card p-3">
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+          <div className="flex shrink-0 items-center gap-2">
+            <span className="text-xs font-semibold text-muted-foreground">连接</span>
+            <Select
+              value={connectionId != null ? String(connectionId) : undefined}
+              onValueChange={onConnectionChange}
+              disabled={connectionsQuery.isLoading || connections.length === 0}
+            >
+              <SelectTrigger className="h-8 w-[11rem]">
+                <SelectValue
+                  placeholder={
+                    connectionsQuery.isLoading
+                      ? '加载中…'
+                      : connections.length === 0
+                        ? '暂无连接'
+                        : '选择连接'
+                  }
+                />
+              </SelectTrigger>
+              <SelectContent>
+                {connections.map((c) => (
+                  <SelectItem key={c.id!} value={String(c.id)}>
+                    {c.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            {activeConnection ? (
+              <Badge variant={activeConnection.status === 'active' ? 'default' : 'secondary'}>
+                {activeConnection.status ?? '未知'}
+              </Badge>
+            ) : null}
+            <Button size="sm" variant="ghost" className="h-8 px-2" asChild>
+              <Link to={IQD_CONFIG_PAGE_PATH}>配置</Link>
+            </Button>
+          </div>
+
+          <div className="hidden h-6 w-px shrink-0 bg-border sm:block" aria-hidden />
+
+          <CatalogSyncStatusBar connectionId={connectionId} compact />
+
+          <div className="hidden h-6 w-px shrink-0 bg-border lg:block" aria-hidden />
+
+          <SelfHealPanel connectionId={connectionId} compact />
         </div>
-        <div className="w-44">
-          <label className="mb-[0.4rem] block text-xs text-muted-foreground">连接状态</label>
-          <Badge variant={config?.status === 'active' ? 'default' : 'secondary'}>
-            {config?.status ?? '未配置'}
-          </Badge>
-        </div>
-        <Button size="sm" variant="secondary" onClick={() => void saveConnection()} disabled={saving}>
-          <Save className="h-4 w-4" />
-          保存连接
-        </Button>
       </div>
 
-      {/* 二期：模型编辑同步状态条（5000ms 轮询；STALE_DRIFT 横幅 + 重新导入） */}
-      <CatalogSyncStatusBar connectionId={connectionId} />
-
-      {/* 运维自愈三按钮（强制重建 + 二次确认 / 重新索引 / 模型校验；gate + 失败横幅，复用 5000ms 轮询） */}
-      <SelfHealPanel connectionId={connectionId} />
-
+      {connections.length === 0 && !connectionsQuery.isLoading ? (
+        <div className="mb-3 rounded-md border border-dashed p-4 text-center text-sm text-muted-foreground">
+          尚未创建问数连接。请先在{' '}
+          <Link className="text-primary underline-offset-4 hover:underline" to={IQD_CONFIG_PAGE_PATH}>
+            连接配置
+          </Link>{' '}
+          中创建连接（含 WrenAI 地址），再回到本页选择连接名管理语义模型清单。
+        </div>
+      ) : null}
       {error ? (
         <div className="mb-3 rounded-md border border-destructive/30 bg-destructive/5 p-3 text-xs text-destructive">
           {error}
@@ -372,7 +462,7 @@ export function IqdCatalogPage() {
         </div>
         <div className="flex items-center gap-2 pb-1">
           <span className="text-xs text-muted-foreground">
-            共 {items.length} 项，已纳入 {inScopeCount} 项
+            本页 {tabRows.length} 项 · 表/模型已纳入 {inScopeHostCount}
           </span>
         </div>
         <div className="flex items-center gap-2">
@@ -396,10 +486,28 @@ export function IqdCatalogPage() {
         </div>
       </div>
 
-      {/* 清单表格 */}
+      <div className="mb-2 flex gap-1 border-b">
+        {CATALOG_TABS.map((t) => (
+          <button
+            key={t.key}
+            type="button"
+            className={cn(
+              'border-b-2 px-3 py-2 text-sm font-medium transition-colors',
+              tab === t.key
+                ? 'border-primary text-foreground'
+                : 'border-transparent text-muted-foreground hover:text-foreground',
+            )}
+            onClick={() => switchTab(t.key)}
+          >
+            {t.label}（{tabCounts[t.key]}）
+          </button>
+        ))}
+      </div>
+
+      {/* 清单表格（按 Tab：物理表 / 模型 / 其它；不含字段） */}
       <div className="min-h-0 flex-1 overflow-auto rounded-lg border bg-table-surface">
         <table className="w-full border-separate border-spacing-0 bg-table-surface text-left text-sm">
-          <thead className="border-b-2 border-foreground/20 bg-table-header text-muted-foreground">
+          <thead className="sticky top-0 z-10 border-b-2 border-foreground/20 bg-table-header text-muted-foreground">
             <tr>
               <th className="w-10 px-3 py-2" />
               <th className="px-3 py-2 font-bold">类型</th>
@@ -408,90 +516,110 @@ export function IqdCatalogPage() {
               <th className="px-3 py-2 font-bold">敏感等级</th>
               <th className="px-3 py-2 font-bold">脱敏规则</th>
               <th className="px-3 py-2 font-bold">纳入范围</th>
+              <th className="w-40 px-3 py-2 font-bold">操作</th>
             </tr>
           </thead>
           <tbody>
             {loading && items.length === 0 ? (
               <tr>
-                <td colSpan={7} className="px-3 py-10 text-center text-muted-foreground">
+                <td colSpan={8} className="px-3 py-10 text-center text-muted-foreground">
                   加载中…
                 </td>
               </tr>
-            ) : filtered.length === 0 ? (
+            ) : tabRows.length === 0 ? (
               <tr>
-                <td colSpan={7} className="px-3 py-10 text-center text-muted-foreground">
-                  {items.length === 0 ? '清单为空（保存连接后自动同步 MDL）' : '没有匹配项'}
+                <td colSpan={8} className="px-3 py-10 text-center text-muted-foreground">
+                  {items.length === 0
+                    ? '清单为空（保存连接后自动同步 MDL）'
+                    : '当前 Tab 没有匹配项'}
                 </td>
               </tr>
             ) : (
-              grouped.map((g) => (
-                <Fragment key={g.kind}>
-                  <tr>
+              tabRows.map((it) => {
+                const hostFields =
+                  it.kind === 'table' || it.kind === 'model' ? columnsOfHost(items, it) : [];
+                const fieldInScope = hostFields.filter((c) => c.in_scope).length;
+                return (
+                  <tr
+                    key={it.item_key}
+                    className="border-b border-border/50 bg-table-row last:border-0 even:bg-table-stripe hover:bg-table-hover"
+                  >
+                    <td className="px-3 py-2">
+                      <input
+                        type="checkbox"
+                        className="h-4 w-4"
+                        checked={selected.has(it.item_key)}
+                        onChange={() => toggleSelect(it.item_key)}
+                      />
+                    </td>
+                    <td className="px-3 py-2 text-xs">
+                      <Badge variant="secondary">{KIND_LABEL[it.kind] ?? it.kind}</Badge>
+                    </td>
                     <td
-                      colSpan={7}
-                      className="border-b border-border/50 bg-muted/40 px-3 py-1.5 text-xs font-semibold text-muted-foreground"
+                      className="max-w-[24rem] truncate px-3 py-2 font-mono text-xs"
+                      title={it.item_key}
                     >
-                      {KIND_LABEL[g.kind] ?? g.kind}（{g.rows.length}）
+                      {it.item_key}
+                    </td>
+                    <td className="truncate px-3 py-2" title={it.display_name ?? ''}>
+                      <div className="flex items-center gap-2">
+                        <span className="truncate">{it.display_name || '—'}</span>
+                        {canEditItem(it) ? (
+                          <Button
+                            size="icon"
+                            variant="ghost"
+                            className="h-6 w-6 shrink-0"
+                            onClick={() => void openEdit(it)}
+                            title="编辑语义模型节点"
+                          >
+                            <Pencil className="h-3.5 w-3.5" />
+                          </Button>
+                        ) : null}
+                      </div>
+                    </td>
+                    <td className="px-3 py-2 text-xs">
+                      {it.sensitive_level === 'high' ? (
+                        <span className="text-destructive">高</span>
+                      ) : it.sensitive_level === 'low' ? (
+                        <span className="text-warning">低</span>
+                      ) : (
+                        <span className="text-muted-foreground">无</span>
+                      )}
+                    </td>
+                    <td className="truncate px-3 py-2 font-mono text-xs text-muted-foreground">
+                      {it.mask_rule || '—'}
+                    </td>
+                    <td className="px-3 py-2 text-xs">
+                      {it.in_scope ? (
+                        <span className="text-success">已纳入</span>
+                      ) : (
+                        <span className="text-muted-foreground">未纳入</span>
+                      )}
+                    </td>
+                    <td className="px-3 py-2">
+                      {it.kind === 'table' || it.kind === 'model' ? (
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          className="h-7 px-2"
+                          onClick={() => setFieldHost(it)}
+                          title="管理该节点下字段的纳入范围"
+                        >
+                          <Columns3 className="h-3.5 w-3.5" />
+                          字段纳入
+                          {hostFields.length > 0 ? (
+                            <span className="ml-1 text-muted-foreground">
+                              {fieldInScope}/{hostFields.length}
+                            </span>
+                          ) : null}
+                        </Button>
+                      ) : (
+                        <span className="text-xs text-muted-foreground">—</span>
+                      )}
                     </td>
                   </tr>
-                  {g.rows.map((it) => (
-                <tr
-                  key={it.item_key}
-                  className="border-b border-border/50 bg-table-row last:border-0 even:bg-table-stripe hover:bg-table-hover"
-                >
-                  <td className="px-3 py-2">
-                    <input
-                      type="checkbox"
-                      className="h-4 w-4"
-                      checked={selected.has(it.item_key)}
-                      onChange={() => toggleSelect(it.item_key)}
-                    />
-                  </td>
-                  <td className="px-3 py-2 text-xs">
-                    <Badge variant="secondary">{KIND_LABEL[it.kind] ?? it.kind}</Badge>
-                  </td>
-                  <td className="max-w-[24rem] truncate px-3 py-2 font-mono text-xs" title={it.item_key}>
-                    {it.item_key}
-                  </td>
-                  <td className="truncate px-3 py-2" title={it.display_name ?? ''}>
-                    <div className="flex items-center gap-2">
-                      <span className="truncate">{it.display_name || '—'}</span>
-                      {canEditItem(it) ? (
-                        <Button
-                          size="icon"
-                          variant="ghost"
-                          className="h-6 w-6 shrink-0"
-                          onClick={() => void openEdit(it)}
-                          title="编辑语义模型节点"
-                        >
-                          <Pencil className="h-3.5 w-3.5" />
-                        </Button>
-                      ) : null}
-                    </div>
-                  </td>
-                  <td className="px-3 py-2 text-xs">
-                    {it.sensitive_level === 'high' ? (
-                      <span className="text-destructive">高</span>
-                    ) : it.sensitive_level === 'low' ? (
-                      <span className="text-warning">低</span>
-                    ) : (
-                      <span className="text-muted-foreground">无</span>
-                    )}
-                  </td>
-                  <td className="truncate px-3 py-2 font-mono text-xs text-muted-foreground">
-                    {it.mask_rule || '—'}
-                  </td>
-                  <td className="px-3 py-2 text-xs">
-                    {it.in_scope ? (
-                      <span className="text-success">已纳入</span>
-                    ) : (
-                      <span className="text-muted-foreground">未纳入</span>
-                    )}
-                  </td>
-                </tr>
-                  ))}
-                </Fragment>
-              ))
+                );
+              })
             )}
           </tbody>
         </table>
@@ -587,13 +715,197 @@ export function IqdCatalogPage() {
       </Dialog>
 
       {/* T02b-4 / MR-S2：从物理表生成模型（入口在上方 actions） */}
+      <FieldScopeDialog
+        open={fieldHost != null}
+        host={fieldHost}
+        columns={fieldHost ? columnsOfHost(items, fieldHost) : []}
+        connectionId={connectionId}
+        onClose={() => setFieldHost(null)}
+        onSaved={() => void load()}
+      />
       <FromTableModelDialog
         open={fromTableOpen}
         onOpenChange={setFromTableOpen}
-        connectionId={config?.id ?? null}
+        connectionId={connectionId}
         onCreated={() => void load()}
       />
     </div>
+  );
+}
+
+/**
+ * 表/模型下的字段纳入弹窗（主列表不再平铺全部字段）。
+ * <p>问数闸门仍以表/模型级为主；此处便于按父节点批量维护字段 {@code in_scope} 标记。
+ */
+function FieldScopeDialog({
+  open,
+  host,
+  columns,
+  connectionId,
+  onClose,
+  onSaved,
+}: {
+  open: boolean;
+  host: IqdCatalogItem | null;
+  columns: IqdCatalogItem[];
+  connectionId: number | null;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const [picked, setPicked] = useState<Set<string>>(new Set());
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    setPicked(new Set());
+    setError(null);
+  }, [open, host?.item_key]);
+
+  const toggle = (key: string) => {
+    setPicked((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  };
+
+  const selectAll = () => setPicked(new Set(columns.map((c) => c.item_key)));
+  const clearAll = () => setPicked(new Set());
+
+  const apply = async (inScope: boolean) => {
+    if (connectionId == null || picked.size === 0) return;
+    setSaving(true);
+    setError(null);
+    try {
+      await setIqdCatalogInScope(connectionId, inScope, [...picked]);
+      setPicked(new Set());
+      onSaved();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : '更新字段范围失败');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Dialog
+      open={open}
+      onOpenChange={(next) => {
+        if (!next) onClose();
+      }}
+    >
+      <DialogContent className="flex max-h-[85vh] w-full max-w-2xl flex-col gap-0 overflow-hidden p-0">
+        <DialogHeader className="border-b border-border/60 px-4 py-3">
+          <DialogTitle className="text-[14px]">
+            字段纳入
+            {host ? (
+              <span className="ml-2 font-normal text-muted-foreground">
+                · {KIND_LABEL[host.kind] ?? host.kind} {host.display_name || host.item_key}
+              </span>
+            ) : null}
+          </DialogTitle>
+          <DialogDescription className="text-[12px]">
+            仅列出该表/模型下的字段。问数范围以表/模型勾选为主；字段标记供治理留痕。
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="flex items-center gap-2 border-b border-border/60 px-4 py-2">
+          <Button size="sm" variant="outline" onClick={selectAll} disabled={columns.length === 0}>
+            全选
+          </Button>
+          <Button size="sm" variant="outline" onClick={clearAll} disabled={picked.size === 0}>
+            清空勾选
+          </Button>
+          <span className="text-xs text-muted-foreground">
+            共 {columns.length} 字段 · 已勾选 {picked.size}
+          </span>
+        </div>
+
+        <div className="min-h-0 flex-1 overflow-auto px-4 py-2">
+          {columns.length === 0 ? (
+            <p className="py-8 text-center text-sm text-muted-foreground">该节点下暂无字段</p>
+          ) : (
+            <table className="w-full text-left text-sm">
+              <thead className="sticky top-0 bg-background text-muted-foreground">
+                <tr className="border-b">
+                  <th className="w-10 px-2 py-1.5" />
+                  <th className="px-2 py-1.5 font-medium">字段</th>
+                  <th className="px-2 py-1.5 font-medium">类型</th>
+                  <th className="px-2 py-1.5 font-medium">parent</th>
+                  <th className="px-2 py-1.5 font-medium">纳入</th>
+                </tr>
+              </thead>
+              <tbody>
+                {columns.map((col) => (
+                  <tr key={col.item_key} className="border-b border-border/40">
+                    <td className="px-2 py-1.5">
+                      <input
+                        type="checkbox"
+                        className="h-4 w-4"
+                        checked={picked.has(col.item_key)}
+                        onChange={() => toggle(col.item_key)}
+                      />
+                    </td>
+                    <td
+                      className="max-w-[12rem] truncate px-2 py-1.5"
+                      title={col.display_name ?? col.item_key}
+                    >
+                      {col.display_name || col.item_key.split('.').pop()}
+                    </td>
+                    <td className="px-2 py-1.5 text-xs text-muted-foreground">
+                      {col.data_type ?? '—'}
+                    </td>
+                    <td
+                      className="max-w-[10rem] truncate px-2 py-1.5 font-mono text-[11px] text-muted-foreground"
+                      title={col.parent_key ?? ''}
+                    >
+                      {col.parent_key ?? '—'}
+                    </td>
+                    <td className="px-2 py-1.5 text-xs">
+                      {col.in_scope ? (
+                        <span className="text-success">已纳入</span>
+                      ) : (
+                        <span className="text-muted-foreground">未纳入</span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+
+        {error ? (
+          <div className="mx-4 mb-2 rounded-md border border-destructive/30 bg-destructive/5 p-2 text-xs text-destructive">
+            {error}
+          </div>
+        ) : null}
+
+        <DialogFooter className="border-t border-border/60 px-4 py-3">
+          <Button size="sm" variant="outline" onClick={onClose} disabled={saving}>
+            关闭
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={saving || picked.size === 0 || connectionId == null}
+            onClick={() => void apply(false)}
+          >
+            移出范围
+          </Button>
+          <Button
+            size="sm"
+            disabled={saving || picked.size === 0 || connectionId == null}
+            onClick={() => void apply(true)}
+          >
+            <ShieldCheck className="h-4 w-4" />
+            纳入范围（{picked.size}）
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 

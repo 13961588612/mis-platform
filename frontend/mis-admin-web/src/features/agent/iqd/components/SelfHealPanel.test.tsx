@@ -106,6 +106,24 @@ describe('SelfHealPanel 失败横幅（REQ-7）', () => {
   });
 });
 
+describe('SelfHealPanel 模型校验警告', () => {
+  it('success + warnings 时自动打开详情并逐条展示', async () => {
+    m.selfHealValidate.mockResolvedValue({
+      build_status: 'success',
+      warnings: ['缺主键', '缺时间维', '未设 description'],
+    });
+    render(<SelfHealPanel connectionId={1} />);
+    const validate = await screen.findByRole('button', { name: /模型校验/ });
+    await waitFor(() => expect((validate as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(validate);
+
+    await waitFor(() => expect(screen.getByText('模型校验警告')).toBeTruthy());
+    expect(screen.getByText('缺主键')).toBeTruthy();
+    expect(screen.getByText('缺时间维')).toBeTruthy();
+    expect(screen.getByText('未设 description')).toBeTruthy();
+  });
+});
+
 describe('SelfHealPanel 5000ms 轮询（Q3）', () => {
   it('复用 5000ms 轮询通道拉取同步状态', async () => {
     vi.useFakeTimers();

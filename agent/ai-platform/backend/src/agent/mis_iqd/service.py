@@ -56,6 +56,7 @@ class SyncResult(BaseModel):
         synced_knowledge_count: 本次回填成功的知识条数。
         build_error: build 失败原因（成功为 None）。
         index_error: memory index 失败原因（成功/跳过为 None）。
+        warnings: 模型校验等只读动作的警告条目（可与 success 并存；不落库也可随 API 回传）。
     """
 
     connection_id: int | None = None
@@ -67,6 +68,9 @@ class SyncResult(BaseModel):
     synced_knowledge_count: int = 0
     build_error: str | None = None
     index_error: str | None = None
+    warnings: list[str] = []
+    # context validate 原始 stdout/stderr（前端兜底解析 Warnings: 分区）
+    raw: str | None = None
 
 
 def parse_related_item_keys(raw: Any) -> set[str]:
@@ -801,13 +805,27 @@ class IqdAskService:
 
         ok = bool(validate.get("ok"))
         summary = validate.get("summary") or ""
+        warnings_raw = validate.get("warnings") or []
+        errors_raw = validate.get("errors") or []
+        warnings: list[str] = [str(w).strip() for w in warnings_raw if str(w).strip()]
+        # 失败时若无独立 warnings，把 errors/summary 拆条，便于前端逐条查看
+        if not ok and not warnings:
+            if errors_raw:
+                warnings = [str(e).strip() for e in errors_raw if str(e).strip()]
+            elif summary:
+                warnings = [p.strip() for p in summary.split(";") if p.strip()]
+        # 成功但仅有汇总 summary、warnings 空：仍回传一条，避免「有 3 个警告却看不到」
+        if ok and not warnings and summary:
+            warnings = [summary]
         result = SyncResult(
             connection_id=cid, coalesced=False,
             build_status="success" if ok else "failed",
             index_status="skipped",
             build_mdl_hash=None,
             synced_sql_pair_count=0, synced_knowledge_count=0,
-            build_error=None if ok else summary,
+            build_error=None if ok else (summary or "模型校验未通过"),
+            warnings=warnings,
+            raw=(validate.get("raw") or None) or None,
         )
         await self._report_selfheal_job(client, cid, "validate", result)
         return result
@@ -835,6 +853,10 @@ class IqdAskService:
             if action == "reindex":
                 # 重新索引不跑 context build：不覆盖既有 build_*，避免流水线误报「MDL 构建失败」
                 pass
+            elif action == "validate":
+                # 校验只读：回写 build_status/build_error 供徽标，但不清空 mdl_hash
+                payload["build_status"] = result.build_status
+                payload["build_error"] = result.build_error
             else:
                 payload["build_status"] = result.build_status
                 payload["build_mdl_hash"] = result.build_mdl_hash

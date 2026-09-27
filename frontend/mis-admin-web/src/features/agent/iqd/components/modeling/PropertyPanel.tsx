@@ -30,6 +30,7 @@
 import { useCallback, useMemo, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Info, Loader2, RotateCcw, Save, ShieldCheck } from 'lucide-react';
+import { cn } from '@/lib/utils';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
@@ -126,39 +127,63 @@ export function PropertyPanel({ connectionId }: PropertyPanelProps) {
     [catalog, selectedItemKey],
   );
 
-  /** 选中项的字段（model/table 才有：按其物理表 key 收集列 + 计算列）。 */
+  /**
+   * 字段列表宿主：选中 model/table 时是自身；选中 column 时回退到 parent 表/模型，
+   * 以便右侧仍显示同级字段并可切换。
+   */
+  const fieldHost = useMemo(() => {
+    if (!selected) return null;
+    if (selected.kind === 'model' || selected.kind === 'table') return selected;
+    if (selected.kind === 'column') {
+      const parentKey = selected.parent_key;
+      if (!parentKey) return null;
+      const parent = catalog.find((item) => item.item_key === parentKey) ?? null;
+      if (parent) return parent;
+      // parent 可能是物理表 key，而画布选中态是 model：按表名反查 model
+      const tableName = parentKey.split('.').pop()?.toLowerCase() ?? '';
+      return (
+        catalog.find(
+          (item) =>
+            item.kind === 'model' &&
+            (item.display_name ?? item.item_key.split('.').pop() ?? '').toLowerCase() === tableName,
+        ) ?? null
+      );
+    }
+    return null;
+  }, [catalog, selected]);
+
+  /** 宿主下的字段（model/table：按其物理表 key 收集列 + 计算列）。 */
   const fields = useMemo(() => {
-    if (!selected || (selected.kind !== 'model' && selected.kind !== 'table')) {
+    if (!fieldHost || (fieldHost.kind !== 'model' && fieldHost.kind !== 'table')) {
       return [] as IqdCatalogItem[];
     }
-    if (selected.kind === 'table') {
+    if (fieldHost.kind === 'table') {
       return catalog.filter(
-        (item) => item.kind === 'column' && item.parent_key === selected.item_key,
+        (item) => item.kind === 'column' && item.parent_key === fieldHost.item_key,
       );
     }
     // model：兼容 `<ds>.<schema>.<table>` 与裸表名两种 parent_key
-    const tableKey = resolveTableKey(catalog, selected);
-    const tableName = selected.display_name ?? selected.item_key.split('.').pop() ?? '';
+    const tableKey = resolveTableKey(catalog, fieldHost);
+    const tableName = fieldHost.display_name ?? fieldHost.item_key.split('.').pop() ?? '';
     const nameLower = tableName.toLowerCase();
     return catalog.filter((item) => {
       if (item.kind !== 'column') {
         return false;
       }
       const parent = item.parent_key ?? '';
-      if (parent === selected.item_key) {
+      if (parent === fieldHost.item_key) {
         return true; // 计算列
       }
       if (tableKey != null && parent === tableKey) {
         return true;
       }
-      // 兜底：parent 末段 / 全等表名
       const parentLower = parent.toLowerCase();
       return (
         Boolean(nameLower) &&
         (parentLower === nameLower || parentLower.endsWith(`.${nameLower}`))
       );
     });
-  }, [catalog, selected]);
+  }, [catalog, fieldHost]);
 
   if (!selected) {
     return (
@@ -200,12 +225,14 @@ export function PropertyPanel({ connectionId }: PropertyPanelProps) {
         </dl>
       </div>
 
-      {/* 字段列表（model / table）：点行进入字段编辑 */}
-      {(selected.kind === 'model' || selected.kind === 'table') && (
+      {/* 字段列表：仅在选中 model/table 时展示；选中字段后只留下方编辑器 */}
+      {selected.kind !== 'column' &&
+        fieldHost &&
+        (fieldHost.kind === 'model' || fieldHost.kind === 'table') && (
         <div className="border-b border-border/60 p-2">
           <p className="mb-1 text-[13px] font-medium">字段（{fields.length}）</p>
           <p className="mb-1 text-[11px] text-muted-foreground">
-            点字段行可在下方直接编辑业务描述与脱敏标记。
+            点字段行（画布或本表均可）可直接编辑业务描述与脱敏标记。
           </p>
           <div className="rounded border border-border/60">
             <table className="w-full text-[12px]">
@@ -222,7 +249,10 @@ export function PropertyPanel({ connectionId }: PropertyPanelProps) {
                   <tr
                     key={field.item_key}
                     onClick={() => setSelected(field.item_key)}
-                    className="cursor-pointer border-t border-border/40 hover:bg-accent/50"
+                    className={cn(
+                      'cursor-pointer border-t border-border/40 hover:bg-accent/50',
+                      selectedItemKey === field.item_key && 'bg-primary/10',
+                    )}
                     title="点击编辑该字段的描述 / 脱敏"
                   >
                     <td className="px-2 py-1">{field.display_name ?? field.item_key}</td>
@@ -263,7 +293,20 @@ export function PropertyPanel({ connectionId }: PropertyPanelProps) {
 
       {/* 字段编辑（选中字段时；按 item_key 重挂载，换字段即重置局部态） */}
       {selected.kind === 'column' && (
-        <FieldEditor key={selected.item_key} connectionId={connectionId} field={selected} />
+        <>
+          {fieldHost ? (
+            <div className="border-b border-border/60 px-2 py-1.5">
+              <button
+                type="button"
+                className="text-[12px] text-primary hover:underline"
+                onClick={() => setSelected(fieldHost.item_key)}
+              >
+                ← 返回「{fieldHost.display_name ?? fieldHost.item_key}」
+              </button>
+            </div>
+          ) : null}
+          <FieldEditor key={selected.item_key} connectionId={connectionId} field={selected} />
+        </>
       )}
 
       {/* 指标/关系的补充说明 */}

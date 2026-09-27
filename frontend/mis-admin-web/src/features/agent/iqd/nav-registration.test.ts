@@ -33,7 +33,7 @@ describe('「四处同改」① 导航清单（lib/nav/iqd-nav.ts）', () => {
     expect(paths.indexOf(MODELING_PATH)).toBe(paths.indexOf('/iqd/data-query') + 1);
   });
 
-  it('既有 7 个问数页面路径未被迁移破坏（/iqd/* 不变）', () => {
+  it('既有问数页面路径未被迁移破坏（/iqd/* 不变；指令并入 enhance）', () => {
     const paths = flattenIqdNavLeaves().map((n) => n.path);
     for (const p of [
       '/iqd/data-query',
@@ -43,11 +43,13 @@ describe('「四处同改」① 导航清单（lib/nav/iqd-nav.ts）', () => {
       '/iqd/test-chat',
       '/iqd/traces',
       '/iqd/enhance',
-      '/iqd/instruction',
     ]) {
       expect(paths).toContain(p);
     }
-    expect(IQD_NAV.length).toBeGreaterThanOrEqual(9);
+    expect(paths).not.toContain('/iqd/instruction');
+    const enhance = flattenIqdNavLeaves().find((n) => n.path === '/iqd/enhance');
+    expect(enhance?.title).toBe('知识与规则');
+    expect(IQD_NAV.length).toBeGreaterThanOrEqual(8);
   });
 });
 
@@ -73,8 +75,8 @@ describe('「四处同改」② PAGE_MAP（keep-alive-outlet.tsx）', () => {
     expect(resolvePageComponent(MODELING_PATH)).not.toBeNull();
   });
 
-  it('既有 /iqd/* 路径仍可解析（迁移无 404）', () => {
-    for (const p of ['/iqd/config', '/iqd/catalog', '/iqd/scope', '/iqd/enhance']) {
+  it('既有 /iqd/* 路径仍可解析（迁移无 404；instruction 兼容重定向）', () => {
+    for (const p of ['/iqd/config', '/iqd/catalog', '/iqd/scope', '/iqd/enhance', '/iqd/instruction']) {
       expect(resolvePageComponent(p)).not.toBeNull();
     }
   });

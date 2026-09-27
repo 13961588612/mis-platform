@@ -1,13 +1,14 @@
 /**
- * iqd-enhance-page.tsx — 问数增强物料（W2/W4，路径 /iqd/enhance）。
+ * iqd-enhance-page.tsx — 问数「知识与规则」（W2/W4 + 指令，路径 /iqd/enhance）。
  *
- * <p>五个 Tab：
+ * <p>六个 Tab：
  * <ul>
  *   <li>脱敏规则（iqd_mask_rule CRUD，W2）</li>
  *   <li>行级维度注册表（iqd_row_scope_dimension CRUD，W2）</li>
  *   <li>字典同步（mis_dept_scope / mis_store_scope 手动触发 + 状态，W2）</li>
  *   <li>样本对（iqd_sql_pair CRUD，W4 few-shot；**T04e MR-08：SQL 框升级 CodeMirror 6**）</li>
  *   <li>知识/术语（iqd_knowledge CRUD + S-07 导入 + 增强推送，W4；**T04e MR-09：增「关联对象」列**）</li>
+ *   <li>指令（iqd_knowledge kind=instruction；原独立「指令下发」页并入）</li>
  * </ul>
  *
  * <h2>权限码（核实自 `sys_api ⋈ sys_menu_api ⋈ sys_menu` seed，非文档猜测）</h2>
@@ -20,6 +21,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { Plus, RefreshCw, Save, Send, Trash2, Upload } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
@@ -67,10 +69,19 @@ import {
   type S07ImportOutcome,
 } from './components/enhance/enhanceUtils';
 import { summarizeRelatedItemKeys } from './components/shared/relatedItemKeys';
+import { InstructionPanel } from './components/instruction/InstructionPanel';
 
-type Tab = 'mask' | 'dimension' | 'sync' | 'sqlpair' | 'knowledge';
+type Tab = 'mask' | 'dimension' | 'sync' | 'sqlpair' | 'knowledge' | 'instruction';
+
+const TAB_KEYS: Tab[] = ['mask', 'dimension', 'sync', 'sqlpair', 'knowledge', 'instruction'];
+
+function parseTab(raw: string | null): Tab {
+  if (raw && (TAB_KEYS as string[]).includes(raw)) return raw as Tab;
+  return 'mask';
+}
 
 export const IQD_ENHANCE_PAGE_PATH = '/iqd/enhance';
+export const IQD_ENHANCE_PAGE_TITLE = '知识与规则';
 
 const RULE_LABEL: Record<string, string> = {
   phone: '手机号',
@@ -113,7 +124,9 @@ const DIALECT_LABEL: Record<string, string> = {
 };
 
 export function IqdEnhancePage() {
-  const [tab, setTab] = useState<Tab>('mask');
+  const [searchParams, setSearchParams] = useSearchParams();
+  const tab = parseTab(searchParams.get('tab'));
+  const [instructionCount, setInstructionCount] = useState(0);
   const [maskRules, setMaskRules] = useState<IqdMaskRule[]>([]);
   const [dimensions, setDimensions] = useState<IqdScopeDimension[]>([]);
   const [syncStatus, setSyncStatus] = useState<IqdDictSyncStatus[]>([]);
@@ -224,13 +237,25 @@ export function IqdEnhancePage() {
 
   const switchTab = useCallback(
     (next: Tab) => {
-      setTab(next);
+      setSearchParams(
+        (prev) => {
+          const nextParams = new URLSearchParams(prev);
+          if (next === 'mask') nextParams.delete('tab');
+          else nextParams.set('tab', next);
+          return nextParams;
+        },
+        { replace: true },
+      );
       if ((next === 'sqlpair' || next === 'knowledge') && sqlPairs.length === 0 && knowledge.length === 0) {
         void loadEnhance();
       }
     },
-    [knowledge.length, loadEnhance, sqlPairs.length],
+    [knowledge.length, loadEnhance, setSearchParams, sqlPairs.length],
   );
+
+  const onInstructionCountChange = useCallback((count: number) => {
+    setInstructionCount(count);
+  }, []);
 
   const saveMask = useCallback(async () => {
     if (!maskName.trim() || !maskPattern.trim()) {
@@ -456,14 +481,15 @@ export function IqdEnhancePage() {
     { key: 'sync', label: '字典同步' },
     { key: 'sqlpair', label: `样本对（${sqlPairs.length}）` },
     { key: 'knowledge', label: `知识/术语（${knowledge.length}）` },
+    { key: 'instruction', label: `指令（${instructionCount}）` },
   ];
 
   return (
     <div className="flex h-full min-h-0 flex-col">
       <PageHeader
-        title="脱敏与维度"
-        description="脱敏规则（唯一出口）、行级范围维度注册表、字典同步。"
-        breadcrumbs={buildAppBreadcrumbs({ app: 'agent', title: '脱敏与维度' })}
+        title={IQD_ENHANCE_PAGE_TITLE}
+        description="脱敏规则、行级维度、样本对、知识术语与问数指令；保存后可同步至 WrenAI。"
+        breadcrumbs={buildAppBreadcrumbs({ app: 'agent', title: IQD_ENHANCE_PAGE_TITLE })}
         actions={
           <Button size="sm" variant="outline" onClick={() => void load()} disabled={loading}>
             <RefreshCw className={cn('h-4 w-4', loading && 'animate-spin')} />
@@ -498,7 +524,12 @@ export function IqdEnhancePage() {
         </div>
       ) : null}
 
-      <div className="min-h-0 flex-1 overflow-auto">
+      <div
+        className={cn(
+          'min-h-0 flex-1',
+          tab === 'instruction' ? 'flex flex-col overflow-hidden' : 'overflow-auto',
+        )}
+      >
         {/* ================= 脱敏规则 ================= */}
         {tab === 'mask' ? (
           <div className="space-y-3">
@@ -1048,6 +1079,11 @@ export function IqdEnhancePage() {
               </table>
             </div>
           </div>
+        ) : null}
+
+        {/* ================= 指令（原独立页并入）================= */}
+        {tab === 'instruction' ? (
+          <InstructionPanel onCountChange={onInstructionCountChange} />
         ) : null}
       </div>
     </div>

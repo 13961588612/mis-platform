@@ -37,8 +37,8 @@ export const IQD_NAV: SystemNavNode[] = [
   { kind: 'leaf', path: '/iqd/scope', title: '范围与权限', icon: 'ShieldCheck' },
   { kind: 'leaf', path: '/iqd/test-chat', title: '测试问数', icon: 'Crosshair' },
   { kind: 'leaf', path: '/iqd/traces', title: '问数审计', icon: 'History' },
-  { kind: 'leaf', path: '/iqd/enhance', title: '脱敏与维度', icon: 'Sparkles' },
-  { kind: 'leaf', path: '/iqd/instruction', title: '指令下发', icon: 'Sparkles' },
+  // W2 增强物料 + 指令（原「脱敏与维度」+「指令下发」合并；V98 菜单改名）
+  { kind: 'leaf', path: '/iqd/enhance', title: '知识与规则', icon: 'Sparkles' },
 ];
 
 /** 展平为叶节点列表（IQD_NAV 当前全为叶节点，保留分支处理以兼容后续扩展）。 */

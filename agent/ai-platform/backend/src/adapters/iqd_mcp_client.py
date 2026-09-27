@@ -9,8 +9,11 @@ architecture §4.4①）。工具名抽成**模块常量**，升级只改常量�
 
 离线 mock 模式（``mock=True``）：
 - 本机无 ``wren serve mcp`` 时仍可走通 orchestrator 管道（Golden path 离线验证）；
-- :meth:`dry_plan` 返回固定 SQL（命中 mock 表集合）；:meth:`dry_run` / :meth:`run_sql`
-  返回固定结果集；:meth:`health` 返回 ``{"status":"ok","mock":true}``。
+- :meth:`dry_plan` 透传入参 SQL（Wren 0.13 语义：方言转译，不做 NL→SQL）；
+  :meth:`dry_run` / :meth:`run_sql` 返回固定结果集；
+  :meth:`health` 返回 ``{"status":"ok","mock":true}``。
+
+NL→SQL 由平台 :mod:`src.agent.mis_iqd.nl2sql`（LLM Gateway）完成，本客户端不承担。
 """
 
 from __future__ import annotations
@@ -166,7 +169,19 @@ class IqdMcpClient:
             WrenAI 响应体（含 ``type`` / ``sql`` / ``steps`` / ``chart``）。
         """
         if self._mock:
-            return self._mock_plan(question, allowed_tables)
+            # ask 在 0.13 OSS 未必存在；mock 仅返回占位 SQL，正式链路走 nl2sql。
+            mock_sql = (
+                "SELECT channel, SUM(total_amount) AS gmv "
+                "FROM pg_main.public.orders "
+                "WHERE created_at >= date_trunc('month', CURRENT_DATE) "
+                "GROUP BY channel ORDER BY gmv DESC"
+            )
+            return {
+                "type": "text_to_sql",
+                "sql": mock_sql,
+                "question": question,
+                "allowed_tables": allowed_tables or [],
+            }
         payload: dict[str, Any] = {
             "question": question,
             "context": context,
@@ -181,21 +196,23 @@ class IqdMcpClient:
     async def dry_plan(
         self,
         *,
-        question: str,
-        context: str = "",
-        allowed_tables: list[str] | None = None,
-        language: str | None = None,
+        sql: str,
+        dialect: str = "postgres",
     ) -> dict[str, Any]:
-        """dry_plan：生成 SQL 不执行（Orchestrator 首选阶段）。"""
+        """dry_plan：把已建模 SQL 转译为目标方言（Wren 0.13，不执行、不做 NL→SQL）。
+
+        Args:
+            sql: 已生成的（MDL 或方言）SQL。
+            dialect: 目标方言提示（透传；引擎以 project profile 为准）。
+
+        Returns:
+            含 ``sql`` 字段的转译结果；mock 模式原样透传。
+        """
         if self._mock:
-            return self._mock_plan(question, allowed_tables)
-        payload: dict[str, Any] = {
-            "question": question,
-            "context": context,
-            "language": language or get_settings().iqd_mcp.wren_language,
-        }
-        if allowed_tables:
-            payload["allowed_tables"] = allowed_tables
+            return self._mock_plan(sql, dialect)
+        payload: dict[str, Any] = {"sql": sql}
+        if dialect:
+            payload["dialect"] = dialect
         return await self._call_tool(TOOL_DRY_PLAN, payload)
 
     async def dry_run(self, sql: str, dialect: str = "postgres") -> dict[str, Any]:
@@ -493,44 +510,14 @@ class IqdMcpClient:
         return cls(host=endpoint.host, port=endpoint.port, token="", path=None)
 
 
-def _parse_endpoint_host_port(endpoint: str) -> tuple[str, int]:
-    """从 ``http://host:port`` 或 ``host:port`` 解析 (host, port)。
-
-    用于跨机器部署数据面 ``mcp_endpoint`` 落地到 :class:`IqdMcpClient` 的
-    host/port（决策 ①⑧：ai-platform 经 agent 反向代理访问 wren 机进程）。
-
-    Returns:
-        ``(host, port)``；缺省 host=127.0.0.1、port=9101（数据面默认端口）。
-    """
-    from urllib.parse import urlparse
-
-    parsed = urlparse(endpoint if "://" in endpoint else f"http://{endpoint}")
-    host = parsed.hostname or "127.0.0.1"
-    port = parsed.port or 9101
-    return host, port
-
     # ================================================================ Mock 数据
 
-    def _mock_plan(self, question: str, allowed_tables: list[str] | None) -> dict[str, Any]:
-        """离线 mock：生成固定 SQL（用于 Golden path 验证）。"""
-        tables = allowed_tables or ["pg_main.public.orders"]
-        mock_sql = (
-            "SELECT channel, SUM(total_amount) AS gmv "
-            "FROM pg_main.public.orders "
-            "WHERE created_at >= date_trunc('month', CURRENT_DATE) "
-            "GROUP BY channel ORDER BY gmv DESC"
-        )
+    def _mock_plan(self, sql: str, dialect: str) -> dict[str, Any]:
+        """离线 mock：方言转译透传（NL→SQL 已在平台侧完成）。"""
         return {
-            "type": "text_to_sql",
-            "sql": mock_sql,
-            "steps": [
-                {"code": "understanding", "label": "理解问题"},
-                {"code": "searching", "label": "检索语义模型"},
-                {"code": "generating", "label": "生成 SQL"},
-            ],
-            "chart": None,
-            "question": question,
-            "allowed_tables": tables,
+            "type": "dry_plan",
+            "sql": sql,
+            "dialect": dialect,
         }
 
     def _mock_run(self, sql: str, dialect: str) -> dict[str, Any]:
@@ -556,3 +543,20 @@ def _parse_endpoint_host_port(endpoint: str) -> tuple[str, int]:
             "query_id": f"q-mock-{uuid.uuid4().hex[:12]}",
             "execution_time_ms": int(time.time() * 1000) % 1000 + 12,
         }
+
+
+def _parse_endpoint_host_port(endpoint: str) -> tuple[str, int]:
+    """从 ``http://host:port`` 或 ``host:port`` 解析 (host, port)。
+
+    用于跨机器部署数据面 ``mcp_endpoint`` 落地到 :class:`IqdMcpClient` 的
+    host/port（决策 ①⑧：ai-platform 经 agent 反向代理访问 wren 机进程）。
+
+    Returns:
+        ``(host, port)``；缺省 host=127.0.0.1、port=9101（数据面默认端口）。
+    """
+    from urllib.parse import urlparse
+
+    parsed = urlparse(endpoint if "://" in endpoint else f"http://{endpoint}")
+    host = parsed.hostname or "127.0.0.1"
+    port = parsed.port or 9101
+    return host, port

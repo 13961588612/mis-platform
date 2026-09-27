@@ -25,8 +25,9 @@
 只输出一个 JSON 对象，不要包含 Markdown 代码块或多余文字。
 
 **优先**：若刚调用了 `iqd__ask`，**原样输出工具返回的 JSON**（字段含
-`answer_summary` / `status` / `citations` / `plan` / `data` / `error_code` 等），
-不要改写成其它 schema，不要删 `data` / `error_*`。
+`answer_summary` / `status` / `citations` / `plan` / `data` / `error_code` /
+`latency_ms` / `masked_columns` / `sql` 等），不要改写成其它 schema，
+不要删 `data` / `error_*` / `plan[].duration_ms`。
 
 若未调工具（如闲聊拒绝），使用与 AskResponse 同构的最小结构：
 
@@ -36,8 +37,8 @@
   "answer_summary": "面向用户的自然语言说明",
   "citations": [],
   "plan": [
-    {"seq": 1, "code": "scope_check", "label": "校验可问数据范围", "status": "done"},
-    {"seq": 2, "code": "finished", "label": "完成", "status": "done"}
+    {"seq": 1, "code": "scope_check", "label": "校验可问数据范围", "status": "done", "duration_ms": 0},
+    {"seq": 2, "code": "finished", "label": "完成", "status": "done", "duration_ms": 0}
   ],
   "error_code": "45204",
   "error_message": "当前账号无可问数据范围"
@@ -46,7 +47,7 @@
 
 - `answer_summary`：与问题一致的语言，简明准确；查数成功时给出结论数字与口径
 - `citations`：实际命中的表/字段/知识；未命中 `[]`（元素形态与工具返回一致）
-- `plan`：步骤对象数组（含 `code`/`label`/`status`），**绝不含 SQL**
+- `plan`：步骤对象数组（含 `code`/`label`/`status`/`duration_ms`），**保留工具返回的耗时**，**绝不含 SQL**
 - **不要输出任何 SQL**；SQL 仅 `view=admin` 由系统注入
 
 ## 作答纪律

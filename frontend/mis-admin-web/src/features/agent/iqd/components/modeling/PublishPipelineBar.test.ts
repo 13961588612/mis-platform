@@ -88,15 +88,17 @@ describe('resolvePipeline（四段状态机）', () => {
     expect(view.busy).toBe(false);
   });
 
-  it('★ 版本落后（built < current）→ build 段显示「待构建」而非 ok', () => {
+  it('★ 版本落后（built < current）→ build 段「待构建」(waiting)，不算 busy（否则禁用立即发布）', () => {
     const view = resolvePipeline(
       status({ edit_status: 'EDITED_UNSYNCED', current_edit_revision: 5, built_edit_revision: 3, build_status: 'success', index_status: 'success' }),
       'running',
     );
+    const edit = view.stages.find((stage) => stage.key === 'edit');
     const build = view.stages.find((stage) => stage.key === 'build');
-    expect(build?.state).toBe('active');
+    expect(edit?.state).toBe('waiting');
+    expect(build?.state).toBe('waiting');
     expect(build?.detail).toBe('待构建');
-    expect(view.busy).toBe(true);
+    expect(view.busy).toBe(false);
   });
 
   it('★ 构建失败 → 该段 failed + 带 build_error + 重试动作是 rebuild（幂等重试）', () => {

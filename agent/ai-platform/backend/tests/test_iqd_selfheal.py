@@ -156,6 +156,87 @@ def test_parse_validate_summary_empty():
     assert IqdCli._parse_validate_summary("", "") == ""
 
 
+def test_parse_validate_output_json_warnings():
+    out = IqdCli._parse_validate_output(
+        '{"warnings":[{"message":"缺主键"},{"message":"缺时间维"},"未设 description"]}',
+        "",
+    )
+    assert out["errors"] == []
+    assert out["warnings"] == ["缺主键", "缺时间维", "未设 description"]
+    assert "缺主键" in out["summary"]
+
+
+def test_parse_validate_output_wren_section_format():
+    """真机 stdout：Warnings: 分区明细 + 收尾计数；明细行不含 warning 字样。"""
+    stdout = """
+Warnings:
+  ⚠ Model 'ads_spm_trd_cost_category_day_df' has no description — add properties.description
+  ⚠ Model 'ads_spm_trd_sale_category_day_df' has no description — add properties.description
+  ⚠ Model 'dwd_spm_trd_sale_ord_detl_df' has no description — add properties.description
+
+3 warning(s), 0 errors.
+"""
+    out = IqdCli._parse_validate_output(stdout, "")
+    assert out["errors"] == []
+    assert out["warn_count"] == 3
+    assert out["error_count"] == 0
+    assert len(out["warnings"]) == 3
+    assert any("ads_spm_trd_cost_category_day_df" in w for w in out["warnings"])
+    assert any("dwd_spm_trd_sale_ord_detl_df" in w for w in out["warnings"])
+
+
+@pytest.mark.asyncio
+async def test_context_validate_wren_section_ok_not_failed():
+    """含 0 errors 字样不得因 substring 'error' 判失败；应 ok + 3 条明细。"""
+    stdout = (
+        "Warnings:\n"
+        "  Model 'a' has no description\n"
+        "  Model 'b' has no description\n"
+        "  Model 'c' has no description\n"
+        "\n"
+        "3 warning(s), 0 errors.\n"
+    )
+    with _with_iqd_mcp_settings(self_heal_context_validate_args=[]):
+        cli = IqdCli()
+        cli._run = AsyncMock(return_value={"exit_code": 0, "stdout": stdout, "stderr": ""})
+        out = await cli.context_validate()
+    assert out["ok"] is True
+    assert out["errors"] == []
+    assert len(out["warnings"]) == 3
+
+
+@pytest.mark.asyncio
+async def test_context_validate_nonzero_exit_warnings_only_is_ok():
+    """Wren 仅警告时常 exit!=0：allow_nonzero 收下输出后仍 ok=True。"""
+    with _with_iqd_mcp_settings(self_heal_context_validate_args=[]):
+        cli = IqdCli()
+        cli._run = AsyncMock(
+            return_value={
+                "exit_code": 1,
+                "stdout": "Warning: model orders missing primary key\n"
+                "Warning: cube revenue has no measure\n"
+                "Warning: column x has no description\n"
+                "3 warning(s), 0 errors.\n",
+                "stderr": "",
+            }
+        )
+        out = await cli.context_validate()
+    assert out["ok"] is True
+    assert out["errors"] == []
+    assert len(out["warnings"]) >= 3
+    assert any("primary key" in w for w in out["warnings"])
+
+
+def test_parse_validate_output_plain_warning_lines():
+    out = IqdCli._parse_validate_output(
+        "Warning: missing pk on orders\nWarning: cube revenue has no measure\n3 warnings\n",
+        "",
+    )
+    assert out["errors"] == []
+    assert len(out["warnings"]) >= 2
+    assert any("missing pk" in w for w in out["warnings"])
+
+
 @pytest.mark.asyncio
 async def test_context_validate_success_returns_ok_summary_empty():
     """成功（stdout 为空、无 error 关键词）：ok=True、summary 为空、raw 为空串。"""
@@ -163,7 +244,24 @@ async def test_context_validate_success_returns_ok_summary_empty():
         cli = IqdCli()
         cli._run = AsyncMock(return_value={"stdout": "", "stderr": ""})
         out = await cli.context_validate()
-    assert out == {"ok": True, "summary": "", "raw": ""}
+    assert out == {"ok": True, "summary": "", "raw": "", "warnings": [], "errors": []}
+
+
+@pytest.mark.asyncio
+async def test_context_validate_warnings_only_still_ok():
+    """仅 warnings、无 errors：ok=True，warnings 分条回传。"""
+    with _with_iqd_mcp_settings(self_heal_context_validate_args=[]):
+        cli = IqdCli()
+        cli._run = AsyncMock(
+            return_value={
+                "stdout": '{"warnings":["a","b","c"]}',
+                "stderr": "",
+            }
+        )
+        out = await cli.context_validate()
+    assert out["ok"] is True
+    assert out["warnings"] == ["a", "b", "c"]
+    assert out["errors"] == []
 
 
 @pytest.mark.asyncio
@@ -174,6 +272,7 @@ async def test_context_validate_raises_returns_failed_with_summary():
         out = await cli.context_validate()
     assert out["ok"] is False
     assert "bad model" in out["summary"]
+    assert out["errors"] or out["warnings"]
     assert "wren CLI 失败" in out["raw"]
 
 
@@ -258,6 +357,30 @@ async def test_trigger_validate_ok_reports_action():
 
 
 @pytest.mark.asyncio
+async def test_trigger_validate_ok_with_warnings_returns_list():
+    """校验成功但有警告：build_status=success，warnings 分条回传供前端查看。"""
+    service = IqdAskService()
+    cli, client, mocks = _patch_selfheal_clients(
+        validate_return={
+            "ok": True,
+            "summary": "a; b; c",
+            "raw": "ok",
+            "warnings": ["a", "b", "c"],
+            "errors": [],
+        }
+    )
+    try:
+        result = await service.trigger_validate(connection_id=1, wait=True)
+    finally:
+        for m in mocks:
+            m.stop()
+
+    assert result.build_status == "success"
+    assert result.build_error is None
+    assert result.warnings == ["a", "b", "c"]
+
+
+@pytest.mark.asyncio
 async def test_trigger_validate_failed_reports_summary_as_build_error():
     """模型校验失败：build_status=failed，build_error=人可读摘要（REQ-8），report action=validate。"""
     service = IqdAskService()
@@ -272,6 +395,7 @@ async def test_trigger_validate_failed_reports_summary_as_build_error():
 
     assert result.build_status == "failed"
     assert result.build_error == "列 a 不存在"
+    assert result.warnings == ["列 a 不存在"]
     report = client.report_sync_job.call_args.args[0]
     assert report["action"] == "validate"
     assert report["build_status"] == "failed"

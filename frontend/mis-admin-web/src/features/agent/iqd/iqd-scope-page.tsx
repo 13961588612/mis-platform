@@ -748,7 +748,7 @@ export function IqdScopePage() {
               <code className="font-mono">{"{\"dimension\":\"dept\",\"scope\":\"dept_subtree\"}"}</code>
               ）与多维度数组（
               <code className="font-mono">{"{\"dimensions\":[...]}"}</code>
-              ，AND 叠加）。维度须在「脱敏与维度」页注册（dept = PATH_PREFIX / store = ENUM）。
+              ，AND 叠加）。维度须在「知识与规则」页注册（dept = PATH_PREFIX / store = ENUM）。
             </p>
           </div>
         </div>

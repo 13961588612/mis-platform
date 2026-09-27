@@ -129,11 +129,12 @@ sudo firewall-cmd --reload
 | 能力 | wren 机（本节） | ai-platform（第三部分 §3.4） |
 |------|-----------------|------------------------------|
 | **Embedding / 语义召回** | `wren memory index` → LanceDB；`get_context` / `recall_queries` | 平台 Skill/Qdrant embedding（`EMBEDDING_SERVICE_URL`），**与 wren 无关** |
-| **NL→SQL 生成 LLM** | 若 MCP 工具 `dry_plan(question=…)` / `ask` 需 LLM，env 注入 wren 子进程（**W0 核实** §2.1.3） | LLM Gateway（`DEEPSEEK_*` / `QWEN_*`），Coordinator 层对话 |
+| **NL→SQL 生成 LLM** | **不负责**（OSS 0.13 MCP `dry_plan` 不收自然语言） | **LLM Gateway**（`QWEN_*` / `DEEPSEEK_*`）via `mis_iqd.nl2sql.Nl2SqlGenerator` |
 | **SQL 转译 / 执行** | `dry_plan(sql)`、`dry_run`、`run_sql`（**无 LLM**，纯 MDL 引擎） | — |
 | **业务库凭证** | `~/.wren/profiles.yml` + project `.env`（`${VAR}`） | 仅存 `secret_ref`，经 S1 通道下发 |
 
-mis-iqd Orchestrator 调用链：`get_context` → `dry_plan(question)` → `dry_run` → `run_sql`。其中 **embedding 召回**在 wren 侧；**NL→SQL** 是否在 wren 进程内调 LLM 须 W0 对 `0.13.3` 实测（上游开源 `mcp_server.py` 中 `dry_plan` 参数为 `sql`，平台侧传 `question` 为对接契约，见 `iqd_mcp_client.py`）。
+mis-iqd Orchestrator 调用链（已按 Wren 0.13 校正）：`get_context` → **`nl2sql`(LLM Gateway)** → `dry_plan(sql)` 方言转译 → 行级注入 → `dry_run` → `run_sql`。  
+**embedding 召回**在 wren 侧；**NL→SQL** 固定在 ai-platform（与 Coordinator 共用 Gateway）。上游 `dry_plan` 参数为 `sql`（见官方 CLI / MCP），平台 `IqdMcpClient.dry_plan` 已对齐。
 
 ---
 
@@ -310,21 +311,21 @@ curl -s https://api.deepseek.com/chat/completions \
 
 #### Step 3：与 wren MCP 联调（W0 必做）
 
-平台问数依赖 MCP 工具 **`dry_plan` 接收自然语言 `question`**（见 `IqdMcpClient.dry_plan`）。在 wren 机启动 MCP 后探测：
+平台问数：**NL→SQL 在 ai-platform LLM Gateway**；MCP **`dry_plan` 仅收 `sql` 做方言转译**（与 Wren 0.13 官方一致）。在 wren 机启动 MCP 后探测：
 
 ```bash
 cd /var/lib/mis-iqd/wren-projects/demo
 wren serve mcp --transport http --host 127.0.0.1 --port 18080 &
-# 用 MCP 客户端或 ai-platform 调 dry_plan(question=...) / 列出 tools 签名
+# 用 MCP 客户端调 dry_plan(sql=...) / 列出 tools 签名
+# ai-platform：确认 QWEN_API_KEY 或 DEEPSEEK_API_KEY 已配，health 中 llm_gateway.initialized=true
 ```
 
 **通过标准**：
 
-- [ ] 工具清单含 `dry_plan`，且接受 `question`（不仅是 `sql`）
-- [ ] 返回 JSON 含 `type: text_to_sql` 与 `sql` 字段
-- [ ] wren 进程 env 可见 `DEEPSEEK_API_KEY`（`wren profile debug` 不展示 LLM key，需查 systemd / `/proc/<pid>/environ`）
-
-若 0.13.3 仅支持 `dry_plan(sql)`（SQL 转译），NL→SQL LLM 需 **升级 wren 版本** 或 **在 ai-platform LLM Gateway 生成 SQL 再调 MCP**（偏离当前 Orchestrator 设计，需 DEV 评估）。
+- [ ] 工具清单含 `dry_plan`，参数为 **`sql`**（方言转译）
+- [ ] `dry_plan(sql=…)` 返回含 `sql` 字段（或等价转译结果）
+- [ ] ai-platform **LLM Gateway** 可用（`/api/v1/admin/health` → `llm_gateway.initialized`）
+- [ ]（可选）wren 进程若仍配 embedding/memory，env 可见模型相关变量；**不再要求** wren 侧 NL→SQL LLM key
 
 #### 语言偏好（与平台一致）
 
@@ -393,7 +394,7 @@ MCP 新线 embedding 见 §1.4.3（本地 `WREN_EMBEDDING_MODEL`），LLM 见 §
 - [ ] `HF_HOME` 持久目录可写，首次 `wren memory index` 成功
 - [ ] DeepSeek curl 探活 `deepseek-v4-pro` 返回 200
 - [ ] WrenMcpAgent systemd 已注入 LLM/embedding env（第三部分联调前）
-- [ ] W0：`dry_plan(question=…)` 真机返回 SQL（§2.1.3）
+- [ ] W0：`dry_plan(sql=…)` 转译可用；ai-platform `nl2sql` 经 LLM Gateway 生成 SQL（§2.1.3）
 - [ ] 磁盘无经典栈 `~/.wrenai/config.yaml` 混装
 
 ## 1.5 服务器基线检查（第一部分完成标准）
@@ -445,7 +446,7 @@ wren serve mcp --transport http --host 127.0.0.1 --port 8080
 
 - [ ] `wren context build` 生成 `target/mdl.json`
 - [ ] `wren serve mcp` 可起，工具面可探测（`get_context` / `recall_queries` / `dry_plan`）
-- [ ] **`dry_plan` 接受 `question` 并返回 SQL**（§1.4.4 Step 3；若仅接受 `sql` 则阻塞问数链路）
+- [ ] **`dry_plan` 接受 `sql` 并完成方言转译**；**NL→SQL 走 ai-platform LLM Gateway**（§1.4.4 Step 3）
 - [ ] DeepSeek `deepseek-v4-pro` curl 探活通过（§1.4.4 Step 2）
 - [ ] `wren memory index` + `memory fetch` 语义召回正常（§1.4.3）
 - [ ] `wren context build --force` 行为实测（自愈按钮依赖）

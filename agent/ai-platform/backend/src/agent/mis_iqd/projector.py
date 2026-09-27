@@ -40,9 +40,10 @@ class ResponseProjector:
         return payload
 
     def _strip_sql(self, payload: dict[str, Any]) -> None:
-        """删除 SQL 相关键（顶层 sql / sql_dialect / plan[].sql）。"""
+        """删除 SQL / NL→SQL 调试相关键（顶层 sql / sql_dialect / plan[].sql / nl2sql_debug）。"""
         payload.pop("sql", None)
         payload.pop("sql_dialect", None)
+        payload.pop("nl2sql_debug", None)
 
         plan: Any = payload.get("plan")
         if isinstance(plan, list):
