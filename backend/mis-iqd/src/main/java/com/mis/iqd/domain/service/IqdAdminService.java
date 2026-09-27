@@ -45,6 +45,8 @@ import com.mis.iqd.domain.repository.IqdSyncJobRepository;
 import com.mis.iqd.domain.repository.IqdEditIdempotencyRepository;
 import com.mis.iqd.domain.repository.IqdTableAclRepository;
 import com.mis.iqd.support.IdGenerator;
+import jakarta.persistence.EntityManager;
+import jakarta.persistence.PersistenceContext;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -110,6 +112,9 @@ public class IqdAdminService {
     private final IqdEditIdempotencyRepository editIdempotencyRepository;
     private final IqdChangeEventPublisher changeEventPublisher;
     private final ObjectMapper objectMapper;
+
+    @PersistenceContext
+    private EntityManager entityManager;
 
     public IqdAdminService(
             IqdConnectionRepository connectionRepository,
@@ -299,6 +304,72 @@ public class IqdAdminService {
         changeEventPublisher.publish("iqd.config.changed", "connection=" + entity.getId());
         log.info("IQD connection created id={} name={}", entity.getId(), entity.getName());
         return toVO(entity);
+    }
+
+    /**
+     * 物理删除一条问数连接及其按 {@code connection_id} 挂靠的子表数据。
+     *
+     * <p>顺序：先删子表（满足 FK）再删 {@code iqd_connection}。MCP 进程 / Wren project
+     * 目录由 BFF/前端在调本方法前 best-effort {@code stop(retain_dir=false)}，本方法只清库。
+     *
+     * @param id 连接 id
+     * @return {@code {id, name, deleted=true}}
+     */
+    @Transactional
+    public Map<String, Object> deleteConnection(Long id) {
+        if (id == null) {
+            throw new BusinessException(42200, "connectionId 不能为空", null);
+        }
+        IqdConnection entity = connectionRepository.findById(id)
+                .orElseThrow(() -> new BusinessException(42200, "问数连接不存在: " + id, null));
+        String name = entity.getName();
+
+        // FK 子表（无 ON DELETE CASCADE）——按依赖从叶子到根清理
+        deleteByConnectionId("iqd_edit_idempotency", id);
+        deleteByConnectionId("iqd_model_layout", id);
+        deleteByConnectionId("iqd_sync_job", id);
+        deleteByConnectionId("iqd_knowledge", id);
+        deleteByConnectionId("iqd_sql_pair", id);
+        deleteByConnectionId("iqd_table_acl", id);
+        deleteByConnectionId("iqd_scope_policy", id);
+        deleteByConnectionId("iqd_catalog_item", id);
+        deleteByConnectionId("iqd_model_snapshot", id);
+        deleteByConnectionId("iqd_datasource", id);
+
+        connectionRepository.delete(entity);
+        changeEventPublisher.publish("iqd.config.changed", "connection_deleted=" + id);
+        log.info("IQD connection deleted id={} name={}", id, name);
+
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("id", id);
+        result.put("name", name);
+        result.put("deleted", Boolean.TRUE);
+        return result;
+    }
+
+    /** 按 connection_id 物理删除子表行（表名白名单，防拼接）。 */
+    private void deleteByConnectionId(String table, Long connectionId) {
+        Set<String> allowed = Set.of(
+                "iqd_edit_idempotency",
+                "iqd_model_layout",
+                "iqd_sync_job",
+                "iqd_knowledge",
+                "iqd_sql_pair",
+                "iqd_table_acl",
+                "iqd_scope_policy",
+                "iqd_catalog_item",
+                "iqd_model_snapshot",
+                "iqd_datasource");
+        if (!allowed.contains(table)) {
+            throw new IllegalArgumentException("unexpected table: " + table);
+        }
+        int n = entityManager
+                .createNativeQuery("DELETE FROM " + table + " WHERE connection_id = :cid")
+                .setParameter("cid", connectionId)
+                .executeUpdate();
+        if (n > 0) {
+            log.info("IQD cascade delete table={} connectionId={} rows={}", table, connectionId, n);
+        }
     }
 
     /**

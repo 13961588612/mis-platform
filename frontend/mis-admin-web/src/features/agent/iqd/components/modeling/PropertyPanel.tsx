@@ -11,6 +11,8 @@
  *   <li><b>字段业务描述直编（MR-09）</b>：写 `iqd_catalog_item.description`，走
  *       `PUT /iqd/catalog/node`（乐观并发 `base_revision` + 幂等 `idempotency_key`）——
  *       与 catalog 页同源同闭环（同一端点/同一缓存，改完 catalog 页同步可见）。</li>
+ *   <li><b>表 / 模型业务描述直编</b>：与字段同端点同载荷（仅 patch `description`）；选中
+ *       `table` / `model` 时在基础信息区可编，空描述也可新写（不再只读展示）。</li>
  *   <li><b>字段脱敏直编（MR-13）</b>：写 `iqd_catalog_item.sensitive_level` / `mask_rule`，
  *       **同样**走 `PUT /iqd/catalog/node`（T04b-补 已把该端点 patch 扩展到接受这两个字段，
  *       bump `edit_revision`）——命中 masking.py §7.5 规则链的**优先级 1/2**；
@@ -217,12 +219,16 @@ export function PropertyPanel({ connectionId }: PropertyPanelProps) {
             value={selected.in_scope ? '是' : '否（可在 /iqd/scope 勾选）'}
           />
           <Row label="来源" value={selected.source ?? '—'} />
-          {/* 字段（column）的描述由下方「字段编辑」区承载，此处不重复只读行 */}
-          {selected.kind !== 'column' && selected.description && (
-            <Row label="描述" value={selected.description} />
-          )}
           {selected.expression && <Row label="表达式" value={selected.expression} mono />}
         </dl>
+        {/* 表 / 模型：业务描述直编（与字段 MR-09 同端点；空描述也可写入） */}
+        {(selected.kind === 'model' || selected.kind === 'table') && (
+          <HostDescriptionEditor
+            key={selected.item_key}
+            connectionId={connectionId}
+            node={selected}
+          />
+        )}
       </div>
 
       {/* 字段列表：仅在选中 model/table 时展示；选中字段后只留下方编辑器 */}
@@ -232,7 +238,7 @@ export function PropertyPanel({ connectionId }: PropertyPanelProps) {
         <div className="border-b border-border/60 p-2">
           <p className="mb-1 text-[13px] font-medium">字段（{fields.length}）</p>
           <p className="mb-1 text-[11px] text-muted-foreground">
-            点字段行（画布或本表均可）可直接编辑业务描述与脱敏标记。
+            上方可编辑表/模型业务描述；点字段行可编辑字段描述与脱敏标记。
           </p>
           <div className="rounded border border-border/60">
             <table className="w-full text-[12px]">
@@ -332,6 +338,138 @@ function Row({ label, value, mono }: { label: string; value: string; mono?: bool
       <dd className={mono ? 'min-w-0 break-all font-mono text-[11px]' : 'min-w-0 break-words'}>
         {value}
       </dd>
+    </div>
+  );
+}
+
+/**
+ * 表 / 模型业务描述直编（与字段 MR-09 同端点 `PUT /iqd/catalog/node`）。
+ *
+ * <p>按 `item_key` 重挂载：换表即重置草稿，避免把上一张表的描述带过来。
+ */
+function HostDescriptionEditor({
+  connectionId,
+  node,
+}: {
+  connectionId: number | null;
+  node: IqdCatalogItem;
+}) {
+  const queryClient = useQueryClient();
+  const sync = useSyncStatus(connectionId);
+  const { hasPermission } = useIqdModelingPermission();
+  const clearDirty = useModelingStore((state) => state.clearDirty);
+  const canEditDescription = hasPermission(NODE_EDIT_PERMISSION);
+
+  const draft = useDirtyState<FieldDraftValues>({
+    connectionId,
+    itemKey: node.item_key,
+    kind: node.kind,
+    baseValues: { description: node.description ?? '' },
+    baseRevision: sync.status?.current_edit_revision ?? 0,
+    action: 'update',
+  });
+
+  const [savingDescription, setSavingDescription] = useState(false);
+  const [descriptionError, setDescriptionError] = useState<string | null>(null);
+  const [descriptionSaved, setDescriptionSaved] = useState(false);
+
+  const touched = useModelingStore((state) => state.dirtyDrafts.has(node.item_key));
+  const descriptionDirty = touched && draft.isDirty;
+
+  const kindLabel = KIND_LABEL[node.kind] ?? node.kind;
+  const placeholder =
+    node.kind === 'table'
+      ? '给这张物理表写业务含义（如「全渠道成交订单主表」）'
+      : '给这个语义模型写业务含义（如「订单域主模型，含成交与退款」）';
+
+  const saveDescription = useCallback(async () => {
+    if (connectionId == null || !canEditDescription) {
+      return;
+    }
+    setSavingDescription(true);
+    setDescriptionError(null);
+    setDescriptionSaved(false);
+    const baseRevision = sync.status?.current_edit_revision ?? 0;
+    const sentText = draft.draft.description.trim();
+    try {
+      await updateIqdCatalogNode(
+        connectionId,
+        buildNodeEditPayload(node, draft.draft.description, baseRevision, draft.idempotencyKey),
+      );
+      draft.rotateIdempotencyKey();
+      draft.setDraft({ description: sentText });
+      clearDirty(node.item_key);
+      setDescriptionSaved(true);
+      await queryClient.invalidateQueries({ queryKey: iqdKeys.catalogs(connectionId) });
+      sync.refresh();
+    } catch (err) {
+      const { code, data } = readError(err);
+      setDescriptionError(
+        describeNodeEditError(
+          code,
+          data,
+          err instanceof Error ? err.message : String(err),
+        ),
+      );
+      draft.rotateIdempotencyKey();
+      sync.refresh();
+    } finally {
+      setSavingDescription(false);
+    }
+  }, [connectionId, canEditDescription, node, draft, sync, clearDirty, queryClient]);
+
+  return (
+    <div className="mt-2 space-y-1.5 border-t border-border/60 pt-2">
+      <Label className="text-[13px]">业务描述（{kindLabel}）</Label>
+      <Textarea
+        value={draft.draft.description}
+        readOnly={!canEditDescription}
+        onChange={(event) => draft.patchDraft({ description: event.target.value })}
+        placeholder={placeholder}
+        rows={3}
+        className="text-[12px]"
+      />
+      {!canEditDescription && (
+        <p className="text-[11px] text-muted-foreground">
+          无 {NODE_EDIT_PERMISSION} 权限，描述只读。
+        </p>
+      )}
+      {descriptionError && (
+        <div className="rounded border border-destructive/40 bg-destructive/5 px-2 py-1 text-[12px] text-destructive">
+          {descriptionError}
+          <Button
+            size="sm"
+            variant="outline"
+            className="ml-2 h-6"
+            onClick={() => sync.refresh()}
+          >
+            <RotateCcw className="h-3 w-3" />
+            重读版本
+          </Button>
+        </div>
+      )}
+      {descriptionSaved && !descriptionError && (
+        <p className="text-[11px] text-success">已保存（catalog 页同步可见，问数 get_context 可用）。</p>
+      )}
+      <div className="flex items-center gap-2">
+        <Button
+          size="sm"
+          className="h-7"
+          disabled={!canEditDescription || savingDescription || !descriptionDirty}
+          onClick={() => void saveDescription()}
+        >
+          {savingDescription ? (
+            <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
+          ) : (
+            <Save className="mr-1 h-3.5 w-3.5" />
+          )}
+          保存描述
+        </Button>
+        {descriptionDirty && <span className="text-[11px] text-warning">未保存</span>}
+        <span className="ml-auto font-mono text-[11px] text-muted-foreground">
+          v{sync.status?.current_edit_revision ?? 0}
+        </span>
+      </div>
     </div>
   );
 }

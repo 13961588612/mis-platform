@@ -145,10 +145,10 @@ export function fieldNameOf(field: {
 /**
  * 构造描述直编载荷（**严格**对应 `PUT /iqd/catalog/node`）。
  *
- * <p>只带 `description`（MR-09 仅业务描述）；`base_revision` 恒带（乐观并发），
+ * <p>只带 `description`（MR-09 业务描述；字段 / 表 / 模型同载荷）；`base_revision` 恒带（乐观并发），
  * `idempotency_key` 恒带（幂等）。空描述归一为 `null`（清空语义，与 catalog 页一致）。
  *
- * @param field          被编辑字段（`item_key` / `kind`）
+ * @param field          被编辑节点（`item_key` / `kind`；column / table / model 均可）
  * @param description    草稿描述（空/空白 → `null`）
  * @param baseRevision   连接当前编辑版本（`sync-status.current_edit_revision`；未知时传 0 —— 与
  *                       既有 catalog 页同口径：版本 ≥1 时会 40900，由「重读版本」纠正）

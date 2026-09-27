@@ -166,6 +166,21 @@ export async function updateConnection(
   return unwrap(res, '更新连接失败');
 }
 
+/**
+ * 物理删除问数连接（级联子表）。`DELETE /api/v1/iqd/connections/{id}`。
+ *
+ * <p>权限：`iqd:modeling:edit`（V100）。调用前应先
+ * {@link mcpManage}({@code stop}, {@code retainDir=false}) 停 MCP 并尽量清 project 目录。
+ */
+export async function deleteConnection(
+  connectionId: number,
+): Promise<{ id: number; name: string; deleted: boolean }> {
+  const res = await api.delete<ApiResult<{ id: number; name: string; deleted: boolean }>>(
+    `/iqd/connections/${connectionId}`,
+  );
+  return unwrap(res, '删除连接失败');
+}
+
 // ================================================================ 新建节点族（§4.3 c 点）
 
 /** 由物理表生成模型（M-G1 黄金路径）。`POST /api/v1/iqd/catalog/model/from-table`。 */

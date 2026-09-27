@@ -2,7 +2,8 @@
  * iqd-catalog-page.tsx — 问数清单管理（W2，路径 /iqd/catalog）。
  *
  * <p>覆盖 mis-iqd 清单（iqd_catalog_item）：从连接配置选连接名 → 清单（物理表 / 模型分 Tab）→
- * 纳入问数范围勾选。字段不进主表，由行内「字段纳入」弹窗按父节点管理。
+ * 纳入问数范围勾选。字段不进主表，由行内「字段纳入」弹窗按父节点管理（弹窗内可编辑
+ * 字段业务描述）。表 / 模型行铅笔可编 display_name + description。
  * WrenAI 基址在「连接配置」页维护，本页不手填。
  * 数据源为 BFF 代理 `/api/v1/iqd/catalog**`（权限码 iqd:catalog:view / iqd:scope:save）。
  */
@@ -250,10 +251,14 @@ export function IqdCatalogPage() {
     () => new Set(['model', 'view', 'relationship', 'cube', 'measure', 'metric', 'dimension']),
     [],
   );
-  /** 仅 mdl_writeback_enabled && editable 的节点允许编辑（Q4 闸门 + 一期 editable）。 */
+  /**
+   * 写回闸门：与后端 `updateCatalogNode` 一致，仅看连接 `mdl_writeback_enabled`。
+   *
+   * <p>{@code iqd_catalog_item.editable} 一期恒 0 且从未在 upsert 路径置 1，若再 AND
+   * {@code it.editable} 会导致铅笔永远不出现。节点级 editable 留作后续灰度，本页不再挡描述写入。
+   */
   const canEditItem = useCallback(
-    (it: IqdCatalogItem) =>
-      Boolean(activeConnection?.mdl_writeback_enabled) && Boolean(it.editable),
+    (_it: IqdCatalogItem) => Boolean(activeConnection?.mdl_writeback_enabled),
     [activeConnection?.mdl_writeback_enabled],
   );
 
@@ -364,7 +369,7 @@ export function IqdCatalogPage() {
     <div className="flex h-full min-h-0 flex-col">
       <PageHeader
         title="语义模型"
-        description="管理 WrenAI 语义模型清单，勾选纳入问数范围（治理层）。字段纳入请在表/模型行内操作。"
+        description="管理 WrenAI 语义模型清单，勾选纳入问数范围；表/模型行铅笔与「字段纳入」内可编业务描述（需开启 MDL 写回）。"
         breadcrumbs={buildAppBreadcrumbs({ app: 'agent', title: '语义模型' })}
         actions={
           <div className="flex items-center gap-2">
@@ -570,7 +575,7 @@ export function IqdCatalogPage() {
                             variant="ghost"
                             className="h-6 w-6 shrink-0"
                             onClick={() => void openEdit(it)}
-                            title="编辑语义模型节点"
+                            title="编辑展示名 / 业务描述"
                           >
                             <Pencil className="h-3.5 w-3.5" />
                           </Button>
@@ -643,15 +648,31 @@ export function IqdCatalogPage() {
                 <Input
                   value={editForm.display_name}
                   onChange={(e) => setEditForm((f) => ({ ...f, display_name: e.target.value }))}
-                  placeholder="展示名"
+                  placeholder={
+                    editing.kind === 'column'
+                      ? '字段展示名（如「订单金额」）'
+                      : editing.kind === 'table'
+                        ? '表展示名（如「订单表」）'
+                        : editing.kind === 'model'
+                          ? '模型展示名（如「订单主模型」）'
+                          : '展示名'
+                  }
                 />
               </div>
               <div className="flex flex-col gap-1.5">
-                <label className="text-xs text-muted-foreground">描述（description）</label>
+                <label className="text-xs text-muted-foreground">业务描述（description）</label>
                 <Textarea
                   value={editForm.description}
                   onChange={(e) => setEditForm((f) => ({ ...f, description: e.target.value }))}
-                  placeholder="描述"
+                  placeholder={
+                    editing.kind === 'column'
+                      ? '字段业务含义（如「含税成交额，单位元」）'
+                      : editing.kind === 'table'
+                        ? '物理表业务含义（如「全渠道成交订单主表」）'
+                        : editing.kind === 'model'
+                          ? '语义模型业务含义（问数 get_context 优先使用；如「订单域主模型」）'
+                          : '业务描述'
+                  }
                   rows={3}
                 />
               </div>
@@ -720,6 +741,10 @@ export function IqdCatalogPage() {
         host={fieldHost}
         columns={fieldHost ? columnsOfHost(items, fieldHost) : []}
         connectionId={connectionId}
+        canEditColumn={(col) => canEditItem(col)}
+        onEditColumn={(col) => {
+          void openEdit(col);
+        }}
         onClose={() => setFieldHost(null)}
         onSaved={() => void load()}
       />
@@ -735,13 +760,16 @@ export function IqdCatalogPage() {
 
 /**
  * 表/模型下的字段纳入弹窗（主列表不再平铺全部字段）。
- * <p>问数闸门仍以表/模型级为主；此处便于按父节点批量维护字段 {@code in_scope} 标记。
+ * <p>问数闸门仍以表/模型级为主；此处便于按父节点批量维护字段 {@code in_scope} 标记，
+ * 并入口编辑字段业务描述（与主列表铅笔同源 {@code PUT /catalog/node}）。
  */
 function FieldScopeDialog({
   open,
   host,
   columns,
   connectionId,
+  canEditColumn,
+  onEditColumn,
   onClose,
   onSaved,
 }: {
@@ -749,6 +777,8 @@ function FieldScopeDialog({
   host: IqdCatalogItem | null;
   columns: IqdCatalogItem[];
   connectionId: number | null;
+  canEditColumn: (col: IqdCatalogItem) => boolean;
+  onEditColumn: (col: IqdCatalogItem) => void;
   onClose: () => void;
   onSaved: () => void;
 }) {
@@ -796,10 +826,10 @@ function FieldScopeDialog({
         if (!next) onClose();
       }}
     >
-      <DialogContent className="flex max-h-[85vh] w-full max-w-2xl flex-col gap-0 overflow-hidden p-0">
+      <DialogContent className="flex max-h-[85vh] w-full max-w-3xl flex-col gap-0 overflow-hidden p-0">
         <DialogHeader className="border-b border-border/60 px-4 py-3">
           <DialogTitle className="text-[14px]">
-            字段纳入
+            字段纳入与描述
             {host ? (
               <span className="ml-2 font-normal text-muted-foreground">
                 · {KIND_LABEL[host.kind] ?? host.kind} {host.display_name || host.item_key}
@@ -807,7 +837,7 @@ function FieldScopeDialog({
             ) : null}
           </DialogTitle>
           <DialogDescription className="text-[12px]">
-            仅列出该表/模型下的字段。问数范围以表/模型勾选为主；字段标记供治理留痕。
+            勾选批量维护纳入范围；铅笔编辑字段业务描述（需连接已开启 MDL 写回）。
           </DialogDescription>
         </DialogHeader>
 
@@ -833,8 +863,9 @@ function FieldScopeDialog({
                   <th className="w-10 px-2 py-1.5" />
                   <th className="px-2 py-1.5 font-medium">字段</th>
                   <th className="px-2 py-1.5 font-medium">类型</th>
-                  <th className="px-2 py-1.5 font-medium">parent</th>
+                  <th className="px-2 py-1.5 font-medium">业务描述</th>
                   <th className="px-2 py-1.5 font-medium">纳入</th>
+                  <th className="w-12 px-2 py-1.5 font-medium" />
                 </tr>
               </thead>
               <tbody>
@@ -849,7 +880,7 @@ function FieldScopeDialog({
                       />
                     </td>
                     <td
-                      className="max-w-[12rem] truncate px-2 py-1.5"
+                      className="max-w-[10rem] truncate px-2 py-1.5"
                       title={col.display_name ?? col.item_key}
                     >
                       {col.display_name || col.item_key.split('.').pop()}
@@ -858,10 +889,10 @@ function FieldScopeDialog({
                       {col.data_type ?? '—'}
                     </td>
                     <td
-                      className="max-w-[10rem] truncate px-2 py-1.5 font-mono text-[11px] text-muted-foreground"
-                      title={col.parent_key ?? ''}
+                      className="max-w-[14rem] truncate px-2 py-1.5 text-xs text-muted-foreground"
+                      title={col.description ?? undefined}
                     >
-                      {col.parent_key ?? '—'}
+                      {col.description?.trim() ? col.description : '—'}
                     </td>
                     <td className="px-2 py-1.5 text-xs">
                       {col.in_scope ? (
@@ -869,6 +900,19 @@ function FieldScopeDialog({
                       ) : (
                         <span className="text-muted-foreground">未纳入</span>
                       )}
+                    </td>
+                    <td className="px-2 py-1.5">
+                      {canEditColumn(col) ? (
+                        <Button
+                          size="icon"
+                          variant="ghost"
+                          className="h-6 w-6"
+                          title="编辑字段展示名 / 业务描述"
+                          onClick={() => onEditColumn(col)}
+                        >
+                          <Pencil className="h-3.5 w-3.5" />
+                        </Button>
+                      ) : null}
                     </td>
                   </tr>
                 ))}

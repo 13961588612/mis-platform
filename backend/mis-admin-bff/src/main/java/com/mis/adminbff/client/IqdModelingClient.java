@@ -117,6 +117,20 @@ public class IqdModelingClient extends AbstractDownstreamClient {
                 .bodyToMono(MAP_RESULT));
     }
 
+    /**
+     * 物理删除问数连接（级联子表）。{@code DELETE /api/v1/iqd/connections/{id}}。
+     *
+     * <p>下游业务失败（{@code 42200} 连接不存在）经 {@link AbstractDownstreamClient#block}
+     * 抛 {@code BusinessException}，由 BFF 控制器透传。
+     */
+    public Map<String, Object> deleteConnection(Long id) {
+        return block(client().delete()
+                .uri("/api/v1/iqd/connections/{id}", id)
+                .headers(loginContextHeaders())
+                .retrieve()
+                .bodyToMono(MAP_RESULT));
+    }
+
     // ------------------------------------------------------------------ 新建节点族（§4.3 c 点）
 
     /** 由物理表生成模型（T02a 已实现）。{@code POST /api/v1/iqd/catalog/model/from-table}。 */

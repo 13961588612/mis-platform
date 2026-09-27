@@ -7,6 +7,7 @@ import com.mis.common.core.result.Result;
 import com.mis.common.web.trace.TraceContext;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -132,6 +133,18 @@ public class IqdModelingController {
             @PathVariable Long connectionId,
             @RequestBody Map<String, Object> body) {
         return forward(() -> modelingClient.updateConnection(connectionId, body));
+    }
+
+    /**
+     * 物理删除问数连接。{@code DELETE /connections/{connectionId}}。
+     *
+     * <p>权限：注册表 V100 → {@code iqd:modeling:edit}（与创建/更新同码）。
+     * 建议前端先 {@code POST /mcp/stop?retainDir=false} 再删库。
+     */
+    @DeleteMapping("/connections/{connectionId}")
+    public ResponseEntity<Result<Map<String, Object>>> deleteConnection(
+            @PathVariable Long connectionId) {
+        return forward(() -> modelingClient.deleteConnection(connectionId));
     }
 
     /**

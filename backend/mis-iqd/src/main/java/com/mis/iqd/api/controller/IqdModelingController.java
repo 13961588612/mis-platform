@@ -15,6 +15,7 @@ import com.mis.iqd.domain.service.IqdModelLayoutService;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -168,6 +169,20 @@ public class IqdModelingController {
     @PreAuthorize("hasAuthority('iqd:modeling:edit')")
     public Result<Map<String, Object>> testConnection(@PathVariable Long connectionId) {
         return Result.ok(adminService.testConnection(connectionId));
+    }
+
+    /**
+     * 物理删除问数连接（级联清子表）。{@code DELETE /api/v1/iqd/connections/{connectionId}}。
+     *
+     * <p>权限与创建/更新同码 {@code iqd:modeling:edit}。MCP/project 目录由调用方先 stop。
+     *
+     * @param connectionId 连接 id
+     * @return {@code {id, name, deleted=true}}
+     */
+    @DeleteMapping("/connections/{connectionId}")
+    @PreAuthorize("hasAuthority('iqd:modeling:edit')")
+    public Result<Map<String, Object>> deleteConnection(@PathVariable Long connectionId) {
+        return Result.ok(adminService.deleteConnection(connectionId));
     }
 
     // ================================================================ 新建节点族（§4.3 c 点）

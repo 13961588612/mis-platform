@@ -7,7 +7,7 @@
  */
 
 import { useCallback, useEffect, useState } from 'react';
-import { Activity, RefreshCw, Save, Wand2 } from 'lucide-react';
+import { Activity, RefreshCw, Save, Settings2, Wand2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -15,6 +15,7 @@ import { PageHeader } from '@/components/common/page-header';
 import { buildAppBreadcrumbs } from '@/components/common/app-breadcrumbs';
 import { Badge } from '@/components/ui/badge';
 import { ConnectionWizard } from './components/wizard/ConnectionWizard';
+import { ConnectionManageDialog } from './components/wizard/ConnectionManageDialog';
 import {
   getIqdConfig,
   saveIqdConfig,
@@ -36,6 +37,7 @@ export function IqdConfigPage() {
   const [enabling, setEnabling] = useState(false);
   /** 多连接向导开关（T02b-3 入口：本页是「单连接形态」的 legacy 页，指引用户去多连接向导）。 */
   const [connectionWizardOpen, setConnectionWizardOpen] = useState(false);
+  const [connectionManageOpen, setConnectionManageOpen] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -140,6 +142,10 @@ export function IqdConfigPage() {
             <Button size="sm" variant="outline" onClick={() => setConnectionWizardOpen(true)}>
               <Wand2 className="h-4 w-4" />
               多连接向导
+            </Button>
+            <Button size="sm" variant="outline" onClick={() => setConnectionManageOpen(true)}>
+              <Settings2 className="h-4 w-4" />
+              连接管理
             </Button>
           </div>
         }
@@ -282,6 +288,10 @@ export function IqdConfigPage() {
           void load();
           void id;
         }}
+      />
+      <ConnectionManageDialog
+        open={connectionManageOpen}
+        onOpenChange={setConnectionManageOpen}
       />
     </div>
   );
