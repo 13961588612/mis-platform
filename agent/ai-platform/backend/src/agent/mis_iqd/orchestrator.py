@@ -38,6 +38,7 @@ from src.agent.mis_iqd.masking import MaskingEngine, MaskOutcome
 from src.agent.mis_iqd.nl2sql import CubeQuerySpec, Nl2SqlGenerator, Nl2SqlResult
 from src.agent.mis_iqd.plan_mapper import PlanMapper
 from src.agent.mis_iqd.rules_context import RuleContext
+from src.agent.mis_iqd.sql_guard import SqlGuard
 from src.agent.mis_iqd.scope_resolver import (
     AskIdentity,
     IqdScopeResolution,
@@ -1143,7 +1144,11 @@ class AskOrchestrator:
     async def _transpile_sql(self, mcp: IqdMcpClient, sql: str) -> str:
         """Wren dry_plan：MDL SQL → 目标方言；失败时沿用原 SQL。"""
         try:
-            plan_outcome: dict[str, Any] = await mcp.dry_plan(sql=sql)
+            # 真机实测（2026-09-28）：wren 的 SQL 重写会因 LIMIT 报 1064
+            # （连 `SELECT c FROM t LIMIT 1` 都失败）；行数截断应用 run_sql(limit=)。
+            # 这里兜底剥掉最外层尾部 LIMIT，避免 LLM 违反提示词就打挂整条查询。
+            guarded_sql, _stripped_limit = SqlGuard.strip_trailing_limit(sql)
+            plan_outcome: dict[str, Any] = await mcp.dry_plan(sql=guarded_sql)
             translated = str(plan_outcome.get("sql") or "").strip()
             if translated:
                 return translated

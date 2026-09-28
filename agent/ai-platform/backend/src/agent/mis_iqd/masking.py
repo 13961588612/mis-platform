@@ -143,8 +143,11 @@ class MaskingEngine:
         mask_fns: list[MaskRule | None] = []
         new_columns: list[ColumnMeta] = []
         for col in normalized:
-            col_meta = catalog_by_key.get(col.item_key or col.name)
-            rule = self._resolve_rule(col, col_meta, rules)
+            metas: list[dict[str, Any]] = []
+            for key in {col.item_key, col.name}:
+                if key:
+                    metas.extend(catalog_by_key.get(key) or [])
+            rule = self._resolve_rule(col, metas, rules)
             mask_fns.append(rule)
             new_columns.append(
                 ColumnMeta(
@@ -223,29 +226,52 @@ class MaskingEngine:
         name = str(col) if col is not None else ""
         return ColumnMeta(name=name, item_key=name, display_name=name)
 
-    def _index_catalog(self, catalog_items: list[dict[str, Any]] | None) -> dict[str, dict[str, Any]]:
-        """按 item_key 索引清单元数据。"""
-        index: dict[str, dict[str, Any]] = {}
+    def _index_catalog(
+        self, catalog_items: list[dict[str, Any]] | None
+    ) -> dict[str, list[dict[str, Any]]]:
+        """按 item_key + 列名别名索引清单元数据（**值是一组**，供 fail-closed 判定）。
+
+        <p><b>为什么需要别名</b>（2026-09-28 真机实测）：``wren run_sql`` 返回的
+        ``columns`` 是**纯列名字符串数组**（如 ``["store_name"]``），**不含表前缀**；
+        而 catalog 的 ``item_key`` 形如 ``<table>.<column>``。旧实现只按整串 item_key
+        建索引 → 字符串列名永远查不到 meta → ``_resolve_rule`` 返回 None
+        → **脱敏静默失效**（敏感列明文返回真实数据）。
+
+        <p><b>为什么存一组、且判定取「任一命中即脱敏」</b>：同名同列可能存在于多张表且
+        脱敏配置不同；只取一条会因遍历顺序而**漏脱敏（fail-open）**。这里按
+        fail-closed 处理：只要该列名在任一 catalog 条目上要求脱敏，就脱敏。
+        """
+        index: dict[str, list[dict[str, Any]]] = {}
         for item in catalog_items or []:
-            if isinstance(item, dict):
-                key = str(item.get("item_key") or item.get("name") or "")
-                if key:
-                    index[key] = item
+            if not isinstance(item, dict):
+                continue
+            key = str(item.get("item_key") or item.get("name") or "")
+            if not key:
+                continue
+            index.setdefault(key, []).append(item)
+            if "." in key:
+                tail = key.rsplit(".", 1)[-1].strip()
+                if tail and tail != key:
+                    index.setdefault(tail, []).append(item)
         return index
 
     def _resolve_rule(
         self,
         col: ColumnMeta,
-        col_meta: dict[str, Any] | None,
+        col_metas: list[dict[str, Any]],
         rules: list[MaskRule],
     ) -> MaskRule | None:
-        """按优先级为单列解析脱敏规则（返回 None = 不脱敏）。"""
+        """按优先级为单列解析脱敏规则（返回 None = 不脱敏）。
+
+        <p>``col_metas`` 是同名/同键命中的**全部** catalog 条目：**任一**要求脱敏即脱敏
+        （fail-closed，避免同名列因遍历顺序漏脱敏）。
+        """
         col_name = (col.name or "").lower()
         col_key = (col.item_key or "").lower()
 
-        # 1. catalog 显式 mask_rule
-        if col_meta:
-            explicit = col_meta.get("mask_rule")
+        # 1. catalog 显式 mask_rule（任一命中即用该规则）
+        for meta in col_metas:
+            explicit = meta.get("mask_rule")
             if explicit:
                 for r in rules:
                     if r.name == explicit:
@@ -253,9 +279,9 @@ class MaskingEngine:
                 # 显式规则名未注册：退化为 full（fail-closed，不静默放行明文）
                 return MaskRule(name=str(explicit), rule="full")
 
-        # 2. catalog sensitive_level=high → data_type / 列名兜底
-        if col_meta:
-            level = str(col_meta.get("sensitive_level") or "none")
+        # 2. catalog sensitive_level=high → data_type / 列名兜底（任一命中即脱敏）
+        for meta in col_metas:
+            level = str(meta.get("sensitive_level") or "none")
             if level == "high":
                 rule_name = _DATA_TYPE_DEFAULT_RULE.get((col.data_type or "").lower())
                 if not rule_name:

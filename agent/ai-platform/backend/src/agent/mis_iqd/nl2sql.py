@@ -48,6 +48,11 @@ _SYSTEM_PROMPT = """你是企业问数系统的 Text-to-SQL 引擎。
    - 若日期列类型为 VARCHAR/STRING（常见于 ord_date），用字符串范围比较，例如：
      `ord_date >= '2026-04-01' AND ord_date < '2026-07-01'`（上季度）。
    - 若确需按月截断且列为真正时间类型，可用 `CAST(col AS DATE)` + 字面量边界，仍避免 date_trunc。
+10. **禁止写 LIMIT / OFFSET（关键）**：真机实测（2026-09-28，Doris/StarRocks）wren 的 SQL
+    重写会把 LIMIT 放到引擎不接受的位置 —— 连 `SELECT c FROM t LIMIT 1` 都会报
+    `(1064, "You have an error in your SQL syntax ... near 'LIMIT'")`。
+    行数截断由平台用 `run_sql(limit=N)` 参数完成，**不要**在 SQL 文本里表达。
+    需要"取前 N 条/最高的一条"时，用 ORDER BY + 业务谓词表达，把截断交给平台。
 """
 
 
