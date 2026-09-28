@@ -18,12 +18,12 @@
 | 项 | 类别 | 本沙箱状态 | 真机复验 |
 |---|---|---|---|
 | 跨阶段不变项 6 项（§4） | 静态/grep | ✅ **已验证**（逐条带证据，见 §2） | 建议 CI 化 |
-| M-G1 建连接+向导闭环（含模型物化） | E2E | ⚠️ **未验证**（依赖 WrenAI 物化，见 §3.1 红线） | **必跑** |
-| M-G2 关系+Cube+问数命中 | E2E | ⚠️ **未验证**（需真问数） | **必跑** |
-| M-G3 build 失败→定位→重试 | E2E | ⚠️ **未验证**（需可注入失败的真 build） | **必跑** |
-| M-G4 漂移注入→详情→收敛 | E2E | ⚠️ **未验证**（需真 MDL 漂移） | 可跑 |
-| M-G5 字段改描述/脱敏→问数生效 | E2E | ⚠️ **未验证**（需真问数） | 可跑 |
-| M-G6 scope 行级维度徽标+谓词预览 | E2E | 🟡 **部分验证**（纯函数单测已过，见 §3.6） | 建议跑 |
+| M-G1 建连接+向导闭环（含模型物化） | E2E | ⚠️ **未验证**（依赖 WrenAI 物化，见 §3.1 红线；本环境表为既有 MDL，非向导新建） | 必跑（需样例库） |
+| M-G2 关系+Cube+问数命中 | E2E | ✅ **真机通过（2026-09-28，连接 900001）** | 已跑 |
+| M-G3 build 失败→定位→重试 | E2E | ⚠️ **未验证**（需人为制造 build 失败＝改真机工程，破坏性，本轮不做） | 需非生产环境 |
+| M-G4 漂移注入→详情→收敛 | E2E | ⚠️ **未验证**（需制造 MDL 漂移＝改真机工程，破坏性，本轮不做） | 需非生产环境 |
+| M-G5 字段改描述/脱敏→问数生效 | E2E | ✅ **真机通过（2026-09-28）**，并因此修掉 2 个真 bug（见 §3.7） | 已跑 |
+| M-G6 scope 行级维度徽标+谓词预览 | E2E | 🟡 **部分验证**（纯函数单测已过，见 §3.6；UI 渲染未跑） | 建议跑 |
 | P-1 画布 200 节点 ≥55fps | 性能 | ❌ **未验证**（需浏览器） | 可跑 |
 | P-2 500 节点折叠 ≤1s | 性能 | ❌ **未验证**（需浏览器） | 可跑 |
 | P-3 CodeMirror chunk ≤300KB gzip | 性能 | 🟡 **部分验证**（构建产物实测，见 §4.3） | 建议复测 |
@@ -339,6 +339,47 @@
 - **预期**：徽标正确反映 `iqd_row_scope_dimension` 配置；谓词预览 SQL/条件与实际注入一致（dept+store 双维度）。
 - **通过标准**：徽标与谓词预览与后端策略一致。
 - **失败排查**：徽标错位 → `rowScopeUtils`；预览与执行不一致 → `scope_resolver.py`。
+---
+
+## 3.7 真机执行结果（2026-09-28，连接 900001）
+
+> 环境：wren 0.13.3（跨机器 agent）+ Doris/StarRocks（ads_*/dwd_* 三表、46/56/88 列）
+> + 真实 LLM（qwen3.7-plus）。**不含 orders/customers/stores 样例库**，故部分用例以本环境等价物执行。
+
+### ✅ M-G2（关系 + Cube + 问数命中）— 通过
+
+- `list_cubes` → `sale_by_store`（measures `kds_sum, cust_cnt_sum`；dims `store_id, ord_date`）
+- 提问「各门店的 kds_sum 是多少」→ 命中 cube → wren 生成
+  `SELECT store_id AS store_id, SUM(kds) AS kds_sum FROM ads_spm_trd_sale_category_day_df GROUP BY 1`
+- `run_sql` **返回 32 行**真实业务数据；`ask.status=succeeded`
+- 关键：`generating` 步的 SQL 来自 **cube**，非 LLM 手写聚合 → cube 分支在真实 ask 管线生效
+
+### ✅ M-G5（字段脱敏 → 问数生效）— 通过，**并暴露 2 个真 bug**
+
+- 给 `store_name` 设 `sensitive_level=high` + `mask_rule=mask-phone`
+- 提问「0027 门店的名称是什么」→ `masked_columns=['store_name']`，明文「金坛南门店」→ **`****`**
+- 验证后已还原该列配置（`none`/NULL），环境如初
+
+**Bug 1（安全级）脱敏静默失效**：真实 `run_sql` 的 `columns` 是**纯列名字符串数组**
+（不含表前缀），而 catalog 的 `item_key` 形如 `<table>.<column>`；旧索引按整串匹配 →
+字符串列名查不到 meta → 敏感列**明文返回**。修复：登记列名别名 + 任一命中即脱敏（fail-closed）。
+
+**Bug 2 `LIMIT` 打挂查询**：wren 的 SQL 重写不接受 `LIMIT`（连 `SELECT c FROM t LIMIT 1`
+都报 1064 near 'LIMIT'）；`run_sql` 自带 `limit` 参数正常。修复：提示词禁止 LIMIT +
+`sql_guard.py` 兜底剥最外层尾部 LIMIT。
+
+### ⚠️ 未能执行的用例（如实记录，不记通过）
+
+| 用例 | 原因 |
+|---|---|
+| M-G1 | 依赖「全新 model 物化」——设计上**刻意不做**（红线，MDL model schema 未经校准）；且本环境表为既有 MDL，非向导新建 |
+| M-G3 | 需人为制造 build 失败 → 要改**真机** wren 工程（破坏性），本轮不做 |
+| M-G4 | 需制造 MDL 漂移 → 同样要改真机工程（破坏性），本轮不做 |
+| M-G6 | 纯函数单测已过；UI 真机渲染需前端联调 |
+
+> 建议：M-G1/M-G3/M-G4 在**非生产** wren 环境（可随意破坏）或样例库上执行；
+> M-G6 走前端联调。
+
 
 ---
 
