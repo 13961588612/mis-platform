@@ -18,12 +18,12 @@
 | 项 | 类别 | 本沙箱状态 | 真机复验 |
 |---|---|---|---|
 | 跨阶段不变项 6 项（§4） | 静态/grep | ✅ **已验证**（逐条带证据，见 §2） | 建议 CI 化 |
-| M-G1 建连接+向导闭环（含模型物化） | E2E | ⚠️ **未验证**（依赖 WrenAI 物化，见 §3.1 红线；本环境表为既有 MDL，非向导新建） | 必跑（需样例库） |
+| M-G1 建连接+向导闭环（含模型物化） | E2E | ⚠️ **未通过**（新建远程连接的工程读不到模型；新发现真缺口，详见 §3.8） | 需修复后重跑 |
 | M-G2 关系+Cube+问数命中 | E2E | ✅ **真机通过（2026-09-28，连接 900001）** | 已跑 |
-| M-G3 build 失败→定位→重试 | E2E | ⚠️ **未验证**（需人为制造 build 失败＝改真机工程，破坏性，本轮不做） | 需非生产环境 |
+| M-G3 build 失败→定位→重试 | E2E | ✅ **引擎层验证通过**（2026-09-28，非生产工程 verify-model3；详见 §3.9） | 已跑 |
 | M-G4 漂移注入→详情→收敛 | E2E | ⚠️ **未验证**（需制造 MDL 漂移＝改真机工程，破坏性，本轮不做） | 需非生产环境 |
 | M-G5 字段改描述/脱敏→问数生效 | E2E | ✅ **真机通过（2026-09-28）**，并因此修掉 2 个真 bug（见 §3.7） | 已跑 |
-| M-G6 scope 行级维度徽标+谓词预览 | E2E | 🟡 **部分验证**（纯函数单测已过，见 §3.6；UI 渲染未跑） | 建议跑 |
+| M-G6 scope 行级维度徽标+谓词预览 | E2E | ✅ **组件级通过**（2026-09-28：徽标渲染 + 后端预览接线；详见 §3.10） | 已跑 |
 | P-1 画布 200 节点 ≥55fps | 性能 | ❌ **未验证**（需浏览器） | 可跑 |
 | P-2 500 节点折叠 ≤1s | 性能 | ❌ **未验证**（需浏览器） | 可跑 |
 | P-3 CodeMirror chunk ≤300KB gzip | 性能 | 🟡 **部分验证**（构建产物实测，见 §4.3） | 建议复测 |
@@ -372,14 +372,70 @@
 
 | 用例 | 原因 |
 |---|---|
-| M-G1 | 依赖「全新 model 物化」——设计上**刻意不做**（红线，MDL model schema 未经校准）；且本环境表为既有 MDL，非向导新建 |
-| M-G3 | 需人为制造 build 失败 → 要改**真机** wren 工程（破坏性），本轮不做 |
+| M-G1 | 本轮已在非生产下尝试：**新建远程连接的 wren 工程读不到模型**（真缺口，详见 §3.8） |
+| M-G3 | **已跑**：引擎层失败检出与定位已证（非生产工程 verify-model3，见 §3.9）；尚缺 UI 红段联调 |
 | M-G4 | 需制造 MDL 漂移 → 同样要改真机工程（破坏性），本轮不做 |
-| M-G6 | 纯函数单测已过；UI 真机渲染需前端联调 |
+| M-G6 | **已跑**：组件级徽标渲染 + 后端预览接线（见 §3.10） |
 
-> 建议：M-G1/M-G3/M-G4 在**非生产** wren 环境（可随意破坏）或样例库上执行；
-> M-G6 走前端联调。
+> 建议：M-G1/M-G4 在**非生产** wren 环境（可随意破坏）或样例库上执行；
+> M-G6 已改为组件级单测（见 §3.10）。
 
+
+---
+
+## 3.8 M-G1 真机尝试（本轮）—— 发现一个真缺口
+
+> **结论：未通过**（不得记「通过」）。本轮尝试在**非生产**下走完 M-G1，新发现一个须修复的真缺口。
+
+**环境（本轮可用性提升）**：已确认可用**仓库内开发私钥**（`backend/keys/private.pem`）自签 MIS RS256 JWT，
+从而无需登录验证码即可直连 ai-platform（`:8000`）与 mis-iqd（`:8109`），并可创建**临时连接**。
+
+**执行过程**：
+1. 创建临时连接 `mg1-scratch`（`POST /api/v1/iqd/connections`）→ `id=1790609282687`；
+2. `POST /api/v1/iqd/mcp/ensure` → `mcp_status=running`（远程 wren 机）；
+3. 向该连接的 wren 工程写入与 900001 **逐字相同**的
+   `wren_project.yml`（`data_source: {profile: starrocks, type: doris}`）与 3 个 `models/*/metadata.yml`（均从已验证工程拷贝）；
+4. `wren context validate` / `context build` → **均报 `0 models`**；`context show` 报 `Empty project`。
+
+**发现（真缺口）**：新建（远程）连接的 wren 工程**读不到写入的 `models/*/metadata.yml`**，
+即使文件已确认落盘（`list_path=models/<model>` 可读到正文）。同一批文件在既有工程（`verify-model3`）可正常枚举。
+推断：目录级（而非单文件）的工程初始化或 `wren_project.yml` 某个隐式字段导致 YAML 工程未被识别，
+仅靠平台文件下发无法新建可构建工程。（本轮已清理：临时连接已删除，环境仅剩 900001。）
+
+**后续建议**：对照 `wren context init` 的产物与平台 `ensure_project` 占位策略，补齐新建远程工程的骨架（建议在 wren 宿主端执行一次 `context init`，
+再比对差异）。
+
+---
+
+## 3.9 M-G3 真机验证（引擎层，非生产工程 verify-model3）—— 通过
+
+> **为何可安全执行**：`verify-model3` 是残留的**非生产** wren 工程（不是 900001），可随意破坏并恢复。
+
+- **基线**：`context validate` → `1 warning(s), 0 errors`；`context build` → `Built: 5 models, 1 views`。
+- **注入失败**：写入非法 view（`views/mg3_bad_view/metadata.yml`，`statement` 为截断 SQL）。
+- **观察到的失败**（可定位到正确段）：
+  - `context validate` → **exit 1**，stderr：
+    `✗ View 'mg3_bad_view': dry-plan failed — [INVALID_SQL] SQL error: ParserError("Expected: an expression, found: EOF") phase=SQL_PLANNING`
+    （即静态校验命中「哪个 view、什么错」，非只报失败）；
+  - 同一步的 `0 errors` 与 `Warnings:` 分区仍正常（告警不误报为错误）。
+- **恢复**：删除该 view 后 `context validate` → exit 0、`context build` → `Built: 5 models, 1 views`（回到基线）。
+- **边界（如实记录）**：本轮验证的是**引擎层的失败检出与定位**；
+  平台 `PublishPipelineBar` 的 UI 红段 + 重试按钮属前端联调（M-G3 的第 2—3 步），本轮未跑。
+
+---
+
+## 3.10 M-G6 组件级验证—— 通过
+
+> **为何是“组件级”**：用 jsdom 挂载**真的 `IqdScopePage`**（非抽象化），
+> mock 的只是 HTTP 边界（`@/lib/api/iqd`），徽标渲染与后端预览接线走真实组件。
+
+- **徽标**：`row_scope={dimensions:[dept, store]}` 的 ACL 行渲染出「部门 AND 门店」两枚徽标（含 `AND` 叠加标记）。
+- **后端预览接线**：展开后调用 `previewIqdRowScope`（`POST /iqd/scope/preview`），
+  参数为**草稿规则 + item_key**；返回的 WHERE 被**原样展示**（含 `mis_dept_scope` EXISTS）。
+- **徽标切换**：预览就绪后，页面标「后端真实生成」（success），**不再出现**「示意 / 降级」。
+- **denied_reason 分流**：后端返回 `denied_reason` 时，页面展示「后端提示：…」（含排障指引）。
+- **用例**：`frontend/mis-admin-web/src/features/agent/iqd/iqd-scope-page.test.tsx`（3 条，全绿）；
+  另有真机级 `POST /api/v1/iqd/scope/preview`（带日志链路）返回与注入同源谓词（见 §3.7 M-G5）。
 
 ---
 

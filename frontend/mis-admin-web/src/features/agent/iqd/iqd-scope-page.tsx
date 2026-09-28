@@ -776,6 +776,9 @@ export function IqdScopePage() {
                                       <div className="rounded border border-border/60 bg-card p-2">
                                         <p className="text-[13px] font-medium">
                                           多维度 AND 叠加（{parsed.instances.length} 维）
+                                          <span className="ml-2 text-[11px] font-normal text-muted-foreground">
+                                            本地占位拼接（未含后端展开值；真值见下方「后端真实生成」）
+                                          </span>
                                         </p>
                                         <pre className="mt-1 overflow-x-auto rounded bg-table-header px-2 py-1 font-mono text-xs text-foreground">
                                           {combined || '（无谓词）'}
