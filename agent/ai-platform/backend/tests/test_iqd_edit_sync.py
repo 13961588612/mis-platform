@@ -293,8 +293,12 @@ def test_build_mdl_from_catalog_patches_existing_cube_without_duplicating():
 
 
 def test_build_mdl_from_catalog_flags_new_model_as_unmatched_with_warning():
-    """T03e：全新建 model（from-table 路径、基线无对应）**刻意不物化**，但必须被收集进
-    未匹配清单并发出结构化 WARNING —— 把此前的「完全静默」变为可定位痕迹。
+    """T03e：新建 model **无可物化内容**时，必须被收集进未匹配清单并发出结构化 WARNING ——
+    把此前的「完全静默」变为可定位痕迹。
+
+    <p><b>2026-09-28 行为变更</b>：全新 model 现已支持物化（真机 schema 校准后启用，
+    见 ``test_iqd_model_materialize.py``）。本用例的 fixture **只给了 model 行、没有列**，
+    属「无列 → 不建空模型」的 fail-safe 分支，因此仍应出现在未匹配清单里。
 
     ``edited_items`` 源自 ``getCatalogFull`` → ``findEditedItems``，本身即
     ``edit_revision IS NOT NULL`` 的平台编辑节点，故「未落入 MDL」即「被编辑却静默丢弃」。
@@ -317,7 +321,8 @@ def test_build_mdl_from_catalog_flags_new_model_as_unmatched_with_warning():
         )
     mdl = _read_manifest(mdl_dir)
 
-    # 决策不变：新建 model 仍**不**被物化（真实 MDL model schema 未校准，留待 W0 探针）
+    # 本 fixture 无列 → 走「无列不建空模型」的 fail-safe 分支，故未被物化
+    # （有列的新建 model 会物化，见 test_iqd_model_materialize.py）
     assert "customers" not in [m["name"] for m in mdl["models"]]
 
     # ① 被收集进未匹配清单（随 payload 回传）

@@ -1957,8 +1957,9 @@ class IqdAskService:
                     landed.add(idx)  # 基线已有 → 由 patch 负责改名/改描述
                 continue
             if template_ref is None:
-                # 无基线可参照：不盲写（保持 unmatched，由 T03e 告警可见）
-                logger.warning(
+                # 无基线可参照：不盲写（保持 unmatched —— 由 T03e 的未匹配清单上报，
+                # 那是**唯一可见渠道**；此处不另发 warning，避免同一件事重复上报）。
+                logger.debug(
                     "IQD new model not materialized (no baseline tableReference to copy)",
                     model=name,
                 )
@@ -1994,8 +1995,9 @@ class IqdAskService:
                     pk_names.append(col_name)
                 mdl_columns.append(entry)
             if not mdl_columns:
-                # 没有可用列 → 不建空模型（build 会因无列失败）
-                logger.warning("IQD new model has no columns; skip", model=name)
+                # 没有可用列 → 不建空模型（build 会因无列失败）。
+                # 同样只走 unmatched 清单，不另发 warning（避免重复上报）。
+                logger.debug("IQD new model has no columns; skip", model=name)
                 continue
 
             model: dict[str, Any] = {
