@@ -52,13 +52,14 @@ def test_mcp_start_route_prefix(client: TestClient) -> None:
 def test_mcp_status_route_prefix(client: TestClient) -> None:
     """GET /api/v1/iqd/mcp/status?connection_id=1 可达并转发到 lifecycle.status_connection。
 
-    status_connection 是同步方法（非 async），必须用 MagicMock 而非 AsyncMock 垫底，
-    否则路由会把协程塞进响应体导致 PydanticSerializationError。
+    ``status_connection`` 是 **async** 方法（路由内 ``await`` 调用），故必须用 AsyncMock
+    垫底；用 MagicMock 会返回裸 dict 并被 await → ``object dict can't be used in 'await'``
+    → 路由 500。
     """
     with patch.object(
         IqdMcpLifecycleService,
         "status_connection",
-        new=MagicMock(return_value={"connection_id": 1, "mcp_status": "running"}),
+        new=AsyncMock(return_value={"connection_id": 1, "mcp_status": "running"}),
     ):
         resp = client.get("/api/v1/iqd/mcp/status", params={"connection_id": 1})
     assert resp.status_code == 200

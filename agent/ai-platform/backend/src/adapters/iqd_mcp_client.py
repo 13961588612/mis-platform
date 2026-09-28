@@ -41,6 +41,8 @@ TOOL_RUN_SQL = "run_sql"
 TOOL_DRY_RUN = "dry_run"
 TOOL_DRY_PLAN = "dry_plan"
 TOOL_QUERY_CUBE = "query_cube"
+TOOL_LIST_CUBES = "list_cubes"
+TOOL_DESCRIBE_CUBE = "describe_cube"
 TOOL_GET_CONTEXT = "get_context"
 TOOL_LIST_KNOWLEDGE = "list_knowledge"
 TOOL_RECALL_QUERIES = "recall_queries"
@@ -58,6 +60,8 @@ READ_ONLY_TOOLS: frozenset[str] = frozenset(
         TOOL_DRY_RUN,
         TOOL_DRY_PLAN,
         TOOL_QUERY_CUBE,
+        TOOL_LIST_CUBES,
+        TOOL_DESCRIBE_CUBE,
         TOOL_GET_CONTEXT,
         TOOL_LIST_KNOWLEDGE,
         TOOL_RECALL_QUERIES,
@@ -137,9 +141,7 @@ class IqdMcpClient:
         if self._mock:
             return {"status": "ok", "service": "wren-mcp", "mock": True}
         try:
-            session = await self._ensure_session()
-            if session is None:
-                raise IqdMcpClientError("wren MCP session 不可用")
+            await self._probe_session()
             # health 是 MCP 协议层 capability；无法调用时以连通性判断兜底
             return {"status": "ok", "service": "wren-mcp", "host": self._host}
         except Exception as exc:
@@ -231,6 +233,29 @@ class IqdMcpClient:
         """query_cube：cube 查询（B2 骨架透传）。"""
         return await self._call_tool(TOOL_QUERY_CUBE, kwargs)
 
+    async def list_cubes(self, **kwargs: Any) -> dict[str, Any]:
+        """list_cubes：列出工程内 cube（名称 / 度量 / 维度）。
+
+        <p>2026-09-28 事实：cube 必须落在 ``cubes/<name>/metadata.yml`` 才能被 MCP 看见；
+        只写 ``target/mdl.json`` 时 MCP（与 ``wren context show``）读不到 —— 详见
+        ``docs/ai-fusion/wrenai/wrenai-013-field-notes.md``。
+        """
+        if self._mock:
+            return {"cubes": []}
+        return await self._call_tool(TOOL_LIST_CUBES, kwargs)
+
+    async def describe_cube(self, cube_name: str, **kwargs: Any) -> dict[str, Any]:
+        """describe_cube：单个 cube 的完整定义（度量 / 维度 / 基类）。
+
+        <p>MCP 入参名是 ``name``（与 ``describe_model`` 同构），不是 ``cube``。
+        """
+        if self._mock:
+            return {"cube": cube_name, "measures": [], "dimensions": []}
+        payload: dict[str, Any] = dict(kwargs)
+        payload.pop("cube", None)
+        payload["name"] = cube_name
+        return await self._call_tool(TOOL_DESCRIBE_CUBE, payload)
+
     # ================================================================ 角色级上下文
 
     async def get_context(
@@ -239,7 +264,7 @@ class IqdMcpClient:
         role_scope: str = "",
         language: str | None = None,
     ) -> dict[str, Any]:
-        """读取角色级语义上下文 + 原生引用来源（供前置收窄与 CitationBuilder）。"""
+        """读取角色级语义上下文 + 原生引用来源（供前置收敛与 CitationBuilder）。"""
         if self._mock:
             return {"type": "context", "models": [], "instructions": [], "knowledge": []}
         payload: dict[str, Any] = {
@@ -262,7 +287,7 @@ class IqdMcpClient:
         return await self._call_tool(TOOL_RECALL_QUERIES, kwargs)
 
     async def get_instructions(self, **kwargs: Any) -> dict[str, Any]:
-        """get_instructions：业务术语/口径/同义词指令。"""
+        """get_instructions：业务术语 / 口径 / 同义词指令。"""
         if self._mock:
             return {"type": "instructions", "items": []}
         return await self._call_tool(TOOL_GET_INSTRUCTIONS, kwargs)
@@ -284,8 +309,9 @@ class IqdMcpClient:
     async def describe_model(self, model_name: str, **kwargs: Any) -> dict[str, Any]:
         """describe_model：单个语义模型结构。
 
-        Wren MCP 工具入参名为 ``name``（见 tools/list 的 ``describe_modelArguments``），
-        不是 ``model``；传错会返回 validation error 且列预览为空。
+        <p>Wren MCP 工具入参名为 ``name``（见 tools/list 的
+        ``describe_modelArguments``），不是 ``model``；传错会返回 validation error
+        且列预览为空。
         """
         if self._mock:
             return {"type": "model", "name": model_name, "fields": []}
@@ -303,51 +329,54 @@ class IqdMcpClient:
                 f"写工具 {tool_name} 未放行（wren_mcp_allow_write=false）"
             )
 
-        session = await self._ensure_session()
-        if session is None:
-            raise IqdMcpClientError("wren MCP session 不可用")
-
         import asyncio
 
         try:
             result: Any = await asyncio.wait_for(
-                session.call_tool(tool_name, arguments),
+                self._call_tool_isolated(tool_name, arguments),
                 timeout=self._timeout,
             )
         except TimeoutError as exc:
             raise IqdMcpClientError(f"wren MCP 工具超时: {tool_name}") from exc
+        except IqdMcpClientError:
+            raise
         except Exception as exc:
             raise IqdMcpClientError(f"wren MCP 工具失败: {tool_name} -> {exc}") from exc
 
         return self._parse_mcp_result(result, tool_name)
 
-    async def _ensure_session(self) -> Any:
-        """懒建立 MCP Streamable HTTP session（失败时置 mock 并返回 None）。
+    async def _call_tool_isolated(self, tool_name: str, arguments: dict[str, Any]) -> Any:
+        """**同一 task 内**建连 → 调用 → 关闭（每次调用独立 session）。
 
-        使用与 :mod:`src.mcp.client` 相同的 ``streamable_http_client`` +
-        ``ClientSession`` 栈；旧实现 ``from mcp.client.http import http_client``
-        在当前 MCP SDK 中不存在，导致所有连接静默降级 mock。
+        <p><b>为什么不能复用 session</b>（2026-09-28 实测）：MCP SDK 的
+        streamable-http session 把 anyio 的 cancel scope 绑在**创建它的 task** 上；
+        FastAPI 每个请求是独立 task，跨请求复用后一旦发生取消/超时，就会在另一个
+        task 里退出该 scope →
+        ``RuntimeError: Attempted to exit cancel scope in a different task than it was entered in``
+        → TaskGroup 抛 ``BaseExceptionGroup`` → **HTTP 连接被重置**（日志里那串
+        ``receive_response_headers.failed / CancelledError`` 就是它）。
+
+        <p>建连成本：wren MCP 在本机（经 agent 反代），一次 initialize 约百毫秒级；
+        换来的是稳定与「不会被跨 task 取消打穿」。
+
+        <p>A/B 实测：同一 client 3 并发 task 调 ``list_models``，旧实现 3 个挂 2 个，
+        本实现 3/3 成功。
         """
         if self._mock:
-            return None
-        if self._mcp_client is not None and self._connected:
-            return self._mcp_client
+            raise IqdMcpClientError("wren MCP 不可用（mock 降级）")
 
-        stack: Any = None
-        try:
-            import contextlib
+        import contextlib
 
-            import httpx
-            from mcp import ClientSession
-            from mcp.client.streamable_http import streamable_http_client
-            from mcp.shared._httpx_utils import create_mcp_http_client
+        import httpx
+        from mcp import ClientSession
+        from mcp.client.streamable_http import streamable_http_client
+        from mcp.shared._httpx_utils import create_mcp_http_client
 
-            url = f"http://{self._host}:{self._port}{self._path}"
-            headers = {"Authorization": f"Bearer {self._token}"} if self._token else None
-            timeout = httpx.Timeout(self._timeout, read=max(self._timeout * 2, 60.0))
+        url = f"http://{self._host}:{self._port}{self._path}"
+        headers = {"Authorization": f"Bearer {self._token}"} if self._token else None
+        timeout = httpx.Timeout(self._timeout, read=max(self._timeout * 2, 60.0))
 
-            stack = contextlib.AsyncExitStack()
-            await stack.__aenter__()
+        async with contextlib.AsyncExitStack() as stack:
             http_client = create_mcp_http_client(headers=headers, timeout=timeout)
             await stack.enter_async_context(http_client)
             read, write, _get_sid = await stack.enter_async_context(
@@ -359,36 +388,39 @@ class IqdMcpClient:
             )
             session = await stack.enter_async_context(ClientSession(read, write))
             await session.initialize()
+            return await session.call_tool(tool_name, arguments)
 
-            self._exit_stack = stack
-            self._mcp_client = session
-            self._connected = True
-            logger.info(
-                "wren MCP session connected",
-                host=self._host,
-                port=self._port,
-                path=self._path,
-                remote=bool(self._token),
+    async def _probe_session(self) -> None:
+        """连通性自检：**同一 task 内**建连即关（不调用工具）。
+
+        <p>与 :meth:`_call_tool_isolated` 同一生命周期约定 —— 见那里的 cancel-scope 说明。
+        """
+        if self._mock:
+            raise IqdMcpClientError("wren MCP 不可用（mock 降级）")
+
+        import contextlib
+
+        import httpx
+        from mcp import ClientSession
+        from mcp.client.streamable_http import streamable_http_client
+        from mcp.shared._httpx_utils import create_mcp_http_client
+
+        url = f"http://{self._host}:{self._port}{self._path}"
+        headers = {"Authorization": f"Bearer {self._token}"} if self._token else None
+        timeout = httpx.Timeout(self._timeout, read=max(self._timeout * 2, 60.0))
+
+        async with contextlib.AsyncExitStack() as stack:
+            http_client = create_mcp_http_client(headers=headers, timeout=timeout)
+            await stack.enter_async_context(http_client)
+            read, write, _get_sid = await stack.enter_async_context(
+                streamable_http_client(
+                    url=url,
+                    http_client=http_client,
+                    terminate_on_close=True,
+                )
             )
-            return session
-        except Exception as exc:
-            logger.warning(
-                "wren MCP connect failed; degrade to mock",
-                host=self._host,
-                port=self._port,
-                path=self._path,
-                error=str(exc),
-            )
-            if stack is not None:
-                try:
-                    await stack.aclose()
-                except Exception:  # noqa: BLE001
-                    pass
-            self._exit_stack = None
-            self._mcp_client = None
-            self._connected = False
-            self._mock = True
-            return None
+            session = await stack.enter_async_context(ClientSession(read, write))
+            await session.initialize()
 
     @staticmethod
     def _parse_mcp_result(result: Any, tool_name: str) -> dict[str, Any]:

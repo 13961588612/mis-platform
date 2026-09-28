@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import re
 import tempfile
 import time
 import uuid
@@ -28,7 +29,7 @@ from dataclasses import dataclass, field
 from typing import Any, List, Optional
 
 import httpx
-from fastapi import Depends, FastAPI, Request, Response
+from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -395,17 +396,120 @@ class RestartRequest(BaseModel):
     credential: dict[str, str] = Field(default_factory=dict)
 
 
+class ProjectFile(BaseModel):
+    """project 内文本文件（``path`` 必须是 ``project_home`` 下的相对路径）。"""
+
+    path: str
+    content: str
+
+
 class CliRequest(BaseModel):
     """跨机器管理面：在 wren 机本机执行 ``wren`` CLI（context build / memory index 等）。
 
     ai-platform 无本地 wren 时走此通道；``args`` 不含二进制名。可选 ``mdl_manifest``
     为派生 MDL 的 ``manifest.json`` 全文，agent 写临时目录后追加 ``--mdl <tmpdir>``。
+
+    ``files``：平台生成的 project 内文本文件（相对 ``project_home``），用于下发
+    ``knowledge/rules/*.md`` 这类**只能落文件、没有 CLI 写入口**的知识；写入后
+    （``args`` 为空时）直接返回，不再执行 CLI。
     """
 
     conn_id: str
     args: List[str] = Field(default_factory=list)
     mdl_manifest: Optional[str] = None
+    files: Optional[List[ProjectFile]] = None
+    """平台下发的 project 内文本文件（覆盖写）。"""
+    delete_paths: Optional[List[str]] = None
+    """要删除的 project 内相对文件（只删文件，目录/越界一律拒绝）。"""
+    list_path: Optional[str] = None
+    """要列出的 project 内相对**目录**（返回其中文件与其正文，供平台做状态对账）。"""
+    list_prefix: Optional[str] = None
+    """列目录时的文件名前缀过滤（如 ``mis-``；缺省=不过滤）。"""
     timeout_seconds: float = 120.0
+
+
+def _safe_rel_path(path: str) -> str:
+    """校验并归一 project 内相对路径（越界即拒）。"""
+
+    raw = (path or "").replace("\\", "/").strip()
+    if raw.startswith("/") or re.match(r"^[A-Za-z]:", raw):
+        raise HTTPException(status_code=400, detail=f"非法 project 相对路径（不允许绝对路径）: {path!r}")
+    normalized = raw.strip("/")
+    segments = [seg for seg in normalized.split("/")]
+    if not normalized or any(seg in ("", ".", "..") for seg in segments):
+        raise HTTPException(status_code=400, detail=f"非法 project 相对路径: {path!r}")
+    return normalized
+
+
+def _write_project_files(project_home: str, files: List[ProjectFile]) -> List[str]:
+    """把平台下发的文本文件写入 ``project_home``（含父目录），返回已写相对路径。"""
+
+    written: List[str] = []
+    for item in files:
+        rel = _safe_rel_path(item.path)
+        dest = os.path.join(project_home, *rel.split("/"))
+        os.makedirs(os.path.dirname(dest), exist_ok=True)
+        with open(dest, "w", encoding="utf-8") as fh:
+            fh.write(item.content)
+        written.append(rel)
+    return written
+
+
+def _delete_project_files(project_home: str, paths: List[str]) -> List[str]:
+    """删除 ``project_home`` 下的相对文件（仅文件；不存在视为已删除）。"""
+
+    deleted: List[str] = []
+    for raw in paths:
+        rel = _safe_rel_path(raw)
+        dest = os.path.join(project_home, *rel.split("/"))
+        if os.path.isdir(dest):
+            raise HTTPException(status_code=400, detail=f"拒绝删除目录: {rel!r}")
+        if os.path.isfile(dest):
+            os.remove(dest)
+        deleted.append(rel)
+    return deleted
+
+
+def _list_project_files(
+    project_home: str,
+    rel_dir: str,
+    prefix: Optional[str] = None,
+    *,
+    max_files: int = 500,
+    max_bytes: int = 2_000_000,
+) -> List[dict]:
+    """列出 project 内某目录下的文件（相对路径 + 正文），供平台做下发对账。
+
+    只读、只递归一层目录：``knowledge/sql`` 这类平的 sink 足够用；
+    ``max_files`` / ``max_bytes`` 兜底防止误列大目录或把大文件读爆内存。
+
+    <p>**不可读文件一律跳过**（权限、非 UTF-8 二进制、超大文件）—— 对账只需要文本类
+    sink；为了一个二进制文件把整次下发打挂（此前表现为 HTTP 500，且日志里只有
+    ``Internal Server Error``，极难定位）是不划算的。
+    """
+
+    rel = _safe_rel_path(rel_dir)
+    root = os.path.join(project_home, *rel.split("/"))
+    if not os.path.isdir(root):
+        return []
+    out: List[dict] = []
+    for name in sorted(os.listdir(root)):
+        if prefix and not name.startswith(prefix):
+            continue
+        full = os.path.join(root, name)
+        if not os.path.isfile(full):
+            continue
+        try:
+            if os.path.getsize(full) > max_bytes:
+                continue
+            with open(full, encoding="utf-8") as fh:
+                content = fh.read()
+        except (OSError, UnicodeDecodeError):
+            continue
+        out.append({"path": f"{rel}/{name}", "content": content})
+        if len(out) >= max_files:
+            break
+    return out
 
 
 # ================================================================ 应用
@@ -565,6 +669,71 @@ async def api_cli(req: CliRequest, _: None = Depends(require_bearer)) -> JSONRes
     args = list(req.args or [])
     mdl_tmpdir: str | None = None
     deployed_mdl = False
+
+    # 平台下发的 project 文件操作：
+    #   - files：覆盖写（knowledge/rules/*.md 等**没有 CLI 写入口**的知识）；
+    #   - delete_paths / list_path：**状态对账**用（平台按 tag 回收自己下发的样本）；
+    #   - 样本内容本身仍走 `wren memory store` CLI（官方写入口，不经这里落文件）。
+    written_files: List[str] = []
+    deleted_files: List[str] = []
+    listed_files: List[dict] = []
+    try:
+        if req.files:
+            written_files = _write_project_files(project_home, req.files)
+            logger.info(
+                "agent cli wrote project files",
+                conn_id=req.conn_id,
+                count=len(written_files),
+                files=written_files,
+            )
+        if req.delete_paths:
+            deleted_files = _delete_project_files(project_home, req.delete_paths)
+            logger.info(
+                "agent cli deleted project files",
+                conn_id=req.conn_id,
+                count=len(deleted_files),
+                files=deleted_files,
+            )
+        if req.list_path:
+            listed_files = _list_project_files(project_home, req.list_path, req.list_prefix)
+            logger.info(
+                "agent cli listed project files",
+                conn_id=req.conn_id,
+                path=req.list_path,
+                count=len(listed_files),
+            )
+    except Exception as exc:  # noqa: BLE001 - 转成可读错误，别只留裸 500
+        logger.error("agent cli project files op failed", conn_id=req.conn_id, error=str(exc))
+        return JSONResponse(
+            {
+                "code": 50001,
+                "message": f"project files op 失败: {type(exc).__name__}: {exc}",
+                "data": None,
+            },
+            status_code=500,
+        )
+    # ⚠️ 判定依据是「**请求了**文件操作」，不是「产生了结果」——列表为空是最常见情况
+    # （目录刚建好 / 已回收干净），若按结果判空就会继续用空 args 跑 `wren` → exit 2 → 500。
+    file_op_requested = bool(req.files or req.delete_paths or req.list_path)
+    if file_op_requested and not args and not req.mdl_manifest:
+        return JSONResponse(
+            {
+                "code": 0,
+                "data": {
+                    "conn_id": req.conn_id,
+                    "command": "project files op",
+                    "exit_code": 0,
+                    "stdout": "wrote " + str(len(written_files)) + ", deleted "
+                    + str(len(deleted_files)) + ", listed " + str(len(listed_files)) + "\n",
+                    "stderr": "",
+                    "project_home": project_home,
+                    "written": written_files,
+                    "deleted": deleted_files,
+                    "listed": listed_files,
+                },
+            }
+        )
+
     if req.mdl_manifest:
         # 新版 wren context build 无 --mdl；平台派生的完整 MDL 直接落 target/mdl.json
         target_dir = os.path.join(project_home, "target")

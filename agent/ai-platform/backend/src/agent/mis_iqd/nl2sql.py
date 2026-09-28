@@ -51,6 +51,79 @@ _SYSTEM_PROMPT = """你是企业问数系统的 Text-to-SQL 引擎。
 """
 
 
+_CUBE_SYSTEM_PROMPT = """你是企业问数系统的语义聚合规划器（cube 模式）。
+
+用户问题已经命中一个预定义的 cube（结构化聚合视图）。**不要手写 SQL**，
+只输出一个 JSON 对象，描述如何在这个 cube 上取数：
+
+{
+  "type": "cube_query",
+  "cube": "<cube 名，必须等于给定的 cube>",
+  "measures": ["<度量名>", ...],          // 至少一个，必须来自给定 measures 清单
+  "dimensions": ["<维度名>", ...],        // 可选，必须来自给定 dimensions 清单
+  "time_dimension": "<维度:粒度>",         // 可选，形如 ord_date:month；仅当清单给了 time_dimensions
+  "filters": ["<dim>op[value]", ...],     // 可选，op ∈ =,!=,>,>=,<,<=,in,not_in
+  "limit": <int>                          // 可选
+}
+
+硬性规则：
+1. 只输出 JSON，不要 Markdown，不要解释文字。
+2. measures / dimensions / time_dimensions 的名字**必须逐字来自给定清单**，禁止臆造。
+3. 问题与数据无关（寒暄/闲聊）时输出 {"type":"GENERAL","summary":"<简短中文说明>"}。
+4. 不要加行级权限过滤条件（平台会另行注入）。
+5. 用户问"销售额/金额/数量/排名/趋势/占比"等聚合时，必须给出至少一个 measure。
+"""
+
+
+class CubeQuerySpec:
+    """LLM 产出的 cube 查询规格（结构化，不落 SQL）。"""
+
+    def __init__(
+        self,
+        *,
+        type: str,
+        cube: str = "",
+        measures: list[str] | None = None,
+        dimensions: list[str] | None = None,
+        time_dimension: str = "",
+        filters: list[str] | None = None,
+        limit: int | None = None,
+        sql: str = "",
+        summary: str = "",
+        raw: str = "",
+        prompt_system: str = "",
+        prompt_user: str = "",
+    ) -> None:
+        self.type = type
+        self.cube = cube
+        #: 由 wren ``query_cube --sql-only`` 生成的 SQL（cube 只做 SQL 生成器）
+        self.sql = sql
+        self.measures = list(measures or [])
+        self.dimensions = list(dimensions or [])
+        self.time_dimension = time_dimension
+        self.filters = list(filters or [])
+        self.limit = limit
+        self.summary = summary
+        self.raw = raw
+        self.prompt_system = prompt_system
+        self.prompt_user = prompt_user
+
+    def to_payload(self) -> dict[str, Any]:
+        """转成 MCP ``query_cube`` 的入参（``sql_only=True`` 由调用方补）。"""
+        payload: dict[str, Any] = {"cube": self.cube}
+        if self.measures:
+            payload["measures"] = self.measures
+        if self.dimensions:
+            payload["dimensions"] = self.dimensions
+        if self.time_dimension:
+            payload["time_dimension"] = self.time_dimension
+        if self.filters:
+            payload["filters"] = self.filters
+        if self.limit:
+            payload["limit"] = self.limit
+        return payload
+
+
 class Nl2SqlResult:
     """NL→SQL 一次生成结果。"""
 
@@ -146,6 +219,133 @@ class Nl2SqlGenerator:
             has_sql=bool(parsed.sql),
         )
         return parsed
+
+    async def generate_cube_query(
+        self,
+        *,
+        question: str,
+        cube: str,
+        measures: list[str],
+        dimensions: list[str] | None = None,
+        time_dimensions: list[str] | None = None,
+        allowed_tables: list[str] | None = None,
+        language: str = "zh-CN",
+        user_id: str = "",
+        session_id: str = "",
+    ) -> CubeQuerySpec:
+        """把自然语言问题转成 **cube 查询规格**（结构化，不写 SQL）。
+
+        与 :meth:`generate` 的区别：这里不生成 SQL，而是产出 ``query_cube`` 的入参
+        （measures/dimensions/filters/time_dimension），由 wren 侧结构化查询替代
+        「让模型手写 GROUP BY」——官方称 cube 为聚合正确性的最高杠杆原语。
+
+        Args:
+            cube: 命中的 cube 名（必须原样回写）。
+            measures: 该 cube 的度量名清单（LLM 只能从中选）。
+            dimensions: 该 cube 的维度名清单（可选）。
+            time_dimensions: 该 cube 的时间维度名清单（可选）。
+        """
+        if self._mock:
+            return CubeQuerySpec(
+                type="cube_query",
+                cube=cube,
+                measures=measures[:1],
+                dimensions=(dimensions or [])[:1],
+                raw="mock",
+            )
+
+        settings = get_settings()
+        model = self._model or settings.LLM_PRIMARY_MODEL
+        parts = [
+            f"language: {language}",
+            f"question: {question}",
+            f"cube: {cube}",
+            "measures:",
+            json.dumps(measures, ensure_ascii=False),
+            "dimensions:",
+            json.dumps(dimensions or [], ensure_ascii=False),
+            "time_dimensions:",
+            json.dumps(time_dimensions or [], ensure_ascii=False),
+            "allowed_tables:",
+            json.dumps(allowed_tables or [], ensure_ascii=False),
+        ]
+        user_payload = "\n".join(parts)
+        request = LLMRequest(
+            messages=[
+                LLMMessage(role=LLMRole.SYSTEM, content=_CUBE_SYSTEM_PROMPT),
+                LLMMessage(role=LLMRole.USER, content=user_payload),
+            ],
+            model=model,
+            temperature=0.0,
+            max_tokens=1024,
+            user_id=user_id,
+            session_id=session_id,
+        )
+        gateway = self._gateway if self._gateway is not None else get_llm_gateway()
+        response = await gateway.chat(request)
+        content = (getattr(response, "content", None) or "").strip()
+        spec = self._parse_cube_response(content, cube=cube)
+        spec.prompt_system = _CUBE_SYSTEM_PROMPT
+        spec.prompt_user = user_payload
+        logger.info(
+            "IQD cube_query llm io",
+            model=model,
+            cube=cube,
+            raw_chars=len(content),
+            out_type=spec.type,
+            n_measures=len(spec.measures),
+            n_dimensions=len(spec.dimensions),
+        )
+        return spec
+
+    @staticmethod
+    def _parse_cube_response(content: str, *, cube: str) -> CubeQuerySpec:
+        """解析 cube 规格 JSON；容错围栏；measures 只保留给定清单内的名字由调用方校验。"""
+        raw = (content or "").strip()
+        candidate = raw
+        if candidate.startswith("```"):
+            inner = candidate[3:]
+            nl = inner.find("\n")
+            if nl != -1:
+                inner = inner[nl + 1 :]
+            end = inner.rfind("```")
+            if end != -1:
+                inner = inner[:end]
+            candidate = inner.strip()
+        try:
+            parsed: Any = json.loads(candidate)
+        except (json.JSONDecodeError, TypeError):
+            return CubeQuerySpec(type="cube_query", cube=cube, raw=raw)
+        if not isinstance(parsed, dict):
+            return CubeQuerySpec(type="cube_query", cube=cube, raw=raw)
+        qtype = str(parsed.get("type") or "cube_query").strip() or "cube_query"
+        if qtype.upper() == "GENERAL":
+            return CubeQuerySpec(
+                type="GENERAL",
+                summary=str(parsed.get("summary") or parsed.get("answer") or "").strip(),
+                raw=raw,
+            )
+
+        def _names(key: str) -> list[str]:
+            value = parsed.get(key)
+            if not isinstance(value, list):
+                return []
+            return [str(x).strip() for x in value if str(x).strip()]
+
+        limit_raw = parsed.get("limit")
+        limit: int | None = None
+        if isinstance(limit_raw, (int, float)) and int(limit_raw) > 0:
+            limit = int(limit_raw)
+        return CubeQuerySpec(
+            type="cube_query",
+            cube=str(parsed.get("cube") or cube).strip() or cube,
+            measures=_names("measures"),
+            dimensions=_names("dimensions"),
+            time_dimension=str(parsed.get("time_dimension") or "").strip(),
+            filters=_names("filters"),
+            limit=limit,
+            raw=raw,
+        )
 
     @staticmethod
     def _build_user_payload(

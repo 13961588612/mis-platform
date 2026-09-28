@@ -2,7 +2,7 @@
 
 串起完整链路（architecture §5.1 步骤 10–30，已按 Wren 0.13 校正）::
 
-    scope_check → get_context → nl2sql(LLM Gateway) → dry_plan(SQL 转译)
+    scope_check → get_context → [cube 优先] → nl2sql(LLM Gateway) → dry_plan(SQL 转译)
     → lineage_check(断言) → dry_run → run_sql → citations
     → (write_ask_log 由 service 层在投影前调用) → AskResult（全量，含 SQL）
 
@@ -35,7 +35,7 @@ from src.agent.mis_iqd.errors import (
 )
 from src.agent.mis_iqd.lineage import CitationBuilder, LineageExtractor
 from src.agent.mis_iqd.masking import MaskingEngine, MaskOutcome
-from src.agent.mis_iqd.nl2sql import Nl2SqlGenerator
+from src.agent.mis_iqd.nl2sql import CubeQuerySpec, Nl2SqlGenerator, Nl2SqlResult
 from src.agent.mis_iqd.plan_mapper import PlanMapper
 from src.agent.mis_iqd.scope_resolver import (
     AskIdentity,
@@ -180,6 +180,27 @@ class AskOrchestrator:
             logger.warning("IQD get_context degraded", error=str(exc))
             native = {}
 
+        # ===== cube 优先（2026-09-28）：命中 cube 时用结构化聚合替代手写 SQL =====
+        # 设计：cube 只做「SQL 生成器」—— 生成出的 SQL 仍走原有
+        # inject_row_scope → lineage 断言 → dry_run → run_sql 管线，安全链路零改动。
+        # 血缘断言天然兜住越权：cube 若引用了未授权模型，lineage 会 fail-closed。
+        # 命中时把结果包装成等价的 Nl2SqlResult(type=text_to_sql, sql=<cube 生成 SQL>)，
+        # 后续零改动复用同一管线；未命中/失败一律降级到 NL→SQL（cube_error 记原因）。
+        cube_outcome: CubeQuerySpec | None = None
+        cube_error: str = ""
+        try:
+            cube_outcome, cube_error = await self._try_cube_query(
+                mcp,
+                native,
+                resolution=resolution,
+                question=request.question,
+                identity=identity,
+            )
+        except Exception as exc:  # noqa: BLE001 - cube 分支任何异常都降级到 NL→SQL
+            logger.warning("IQD cube branch degraded", error=str(exc))
+            cube_outcome = None
+            cube_error = str(exc)
+
         # ===== NL→SQL（平台 LLM Gateway）+ dry_plan（Wren 方言转译）=====
         plan.mark(steps, "generating", "running")
         context_text, described_models = await self._build_nl2sql_context(
@@ -209,15 +230,38 @@ class AskOrchestrator:
                 }
             )
 
-        try:
-            nl_outcome = await nl2sql.generate(
-                question=request.question,
-                context=context_text,
-                allowed_tables=resolution.allowed_item_keys,
-                user_id=str(identity.user_id or ""),
-                session_id=str(request.thread_id or query_id),
+        nl_outcome: Nl2SqlResult | None = None
+        if cube_outcome is not None and cube_outcome.type == "cube_query":
+            plan.mark_done(
+                steps,
+                "generating",
+                detail=(
+                    f"命中 cube「{cube_outcome.cube}」结构化聚合"
+                    f"（{len(cube_outcome.measures)} 度量"
+                    + (f" / {len(cube_outcome.dimensions)} 维度" if cube_outcome.dimensions else "")
+                    + "）"
+                ),
+                sql=cube_outcome.sql,
             )
-            _record_attempt(nl_outcome, label="generate")
+            nl_outcome = Nl2SqlResult(
+                type="text_to_sql",
+                sql=cube_outcome.sql,
+                raw=getattr(cube_outcome, "raw", ""),
+                prompt_system=getattr(cube_outcome, "prompt_system", ""),
+                prompt_user=getattr(cube_outcome, "prompt_user", ""),
+            )
+            _record_attempt(nl_outcome, label="cube")
+
+        try:
+            if nl_outcome is None:
+                nl_outcome = await nl2sql.generate(
+                    question=request.question,
+                    context=context_text,
+                    allowed_tables=resolution.allowed_item_keys,
+                    user_id=str(identity.user_id or ""),
+                    session_id=str(request.thread_id or query_id),
+                )
+                _record_attempt(nl_outcome, label="generate")
         except Exception as exc:
             plan.mark(steps, "generating", "failed", detail="自然语言转 SQL 失败")
             return self._failed_ask_result(
@@ -739,6 +783,167 @@ class AskOrchestrator:
             parts.extend(f"- {n}" for n in listed_names[:40])
 
         return "\n".join(parts)[:8000], described_names
+
+    async def _try_cube_query(
+        self,
+        mcp: IqdMcpClient,
+        native: dict[str, Any],
+        *,
+        resolution: IqdScopeResolution,
+        question: str,
+        identity: AskIdentity,
+    ) -> tuple[CubeQuerySpec | None, str]:
+        """尝试走 cube 结构化聚合；命中则返回带 SQL 的规格。
+
+        流程（**cube 只做 SQL 生成器**）：
+        1. ``list_cubes`` 取工程内 cube 清单（MCP 读 YAML 真源，2026-09-28 已打通）；
+        2. 用问题与 cube 名/度量/维度做关键词打分，挑最可能的 cube（无把握就不命中）；
+        3. LLM 产出 cube 查询规格（``generate_cube_query``，只选清单内的度量/维度）；
+        4. ``query_cube(sql_only=True)`` 让 wren 生成 SQL；
+        5. 返回规格 + SQL，交给主链路原有的
+           ``inject_row_scope → lineage 断言 → dry_run → run_sql`` 继续。
+
+        **安全**：第 5 步的血缘断言是兜底 —— 若 cube 引用了未授权模型，会在
+        ``_scope_resolver_assert`` 处 fail-closed，无需在 cube 分支另建一套授权。
+
+        Returns:
+            ``(spec | None, reason)``：未命中或失败时 spec 为 ``None``，reason 供日志/降级说明。
+        """
+        # 1) cube 清单
+        try:
+            listed = await mcp.list_cubes()
+        except Exception as exc:  # noqa: BLE001
+            return None, f"list_cubes 不可用: {exc}"
+        cubes = listed.get("cubes") if isinstance(listed, dict) else None
+        if not isinstance(cubes, list) or not cubes:
+            return None, "工程内无 cube"
+
+        # 2) 选 cube（关键词打分；无把握不命中，避免把普通问数强行套 cube）
+        picked = self._pick_cube(cubes, question=question)
+        if picked is None:
+            return None, "未匹配到合适 cube"
+
+        cube_name = str(picked.get("name") or "").strip()
+        measures = self._cube_child_names(picked, "measures")
+        dimensions = self._cube_child_names(picked, "dimensions")
+        time_dims = self._cube_child_names(
+            picked, "time_dimensions", "timeDimensions"
+        )
+        if not cube_name or not measures:
+            return None, "cube 缺名字或度量"
+
+        # 3) LLM 出规格
+        nl2sql = self._get_nl2sql(prefer_mock=bool(getattr(mcp, "_mock", False)))
+        spec = await nl2sql.generate_cube_query(
+            question=question,
+            cube=cube_name,
+            measures=measures,
+            dimensions=dimensions,
+            time_dimensions=time_dims,
+            allowed_tables=resolution.allowed_item_keys,
+            user_id=str(identity.user_id or ""),
+            session_id=question[:64],
+        )
+        if spec.type != "cube_query":
+            return None, f"LLM 判为非 cube 问题（{spec.type}）"
+        if not spec.measures:
+            return None, "LLM 未选出度量"
+
+        # 4) 白名单校验：LLM 只能选清单内的名字（防臆造）
+        allowed_m = set(measures)
+        allowed_d = set(dimensions) | set(time_dims)
+        bad = [m for m in spec.measures if m not in allowed_m]
+        if bad:
+            return None, f"度量越界: {bad}"
+        bad_d = [d for d in spec.dimensions if d not in allowed_d]
+        if bad_d:
+            return None, f"维度越界: {bad_d}"
+        picked_td = ""
+        if spec.time_dimension:
+            head = spec.time_dimension.split(":", 1)[0].strip()
+            if head not in allowed_d:
+                return None, f"时间维度越界: {spec.time_dimension}"
+            picked_td = spec.time_dimension
+
+        # 5) wren 生成 SQL
+        payload = spec.to_payload()
+        if picked_td:
+            payload["time_dimension"] = picked_td
+        payload["sql_only"] = True
+        try:
+            generated = await mcp.query_cube(**payload)
+        except Exception as exc:  # noqa: BLE001
+            return None, f"query_cube 规划失败: {exc}"
+        sql = ""
+        if isinstance(generated, dict):
+            sql = str(generated.get("sql") or "").strip()
+        if not sql:
+            return None, "query_cube 未返回 SQL"
+
+        spec.sql = sql
+        logger.info(
+            "IQD cube query planned",
+            cube=cube_name,
+            measures=spec.measures,
+            dimensions=spec.dimensions,
+            sql_chars=len(sql),
+        )
+        return spec, ""
+
+    @staticmethod
+    def _cube_child_names(cube: dict[str, Any], *keys: str) -> list[str]:
+        """取 cube 下 measure/dimension 的名字清单（兼容 camelCase/snake_case）。"""
+        for key in keys:
+            value = cube.get(key)
+            if isinstance(value, list):
+                names: list[str] = []
+                for item in value:
+                    if isinstance(item, dict):
+                        name = str(item.get("name") or "").strip()
+                    else:
+                        name = str(item).strip()
+                    if name:
+                        names.append(name)
+                if names:
+                    return names
+        return []
+
+    @classmethod
+    def _pick_cube(
+        cls, cubes: list[Any], *, question: str
+    ) -> dict[str, Any] | None:
+        """按问题与 cube 名/度量/维度的中文/英文词重合度挑 cube；平局或无信号则不命中。
+
+        <p>刻意保守：只有得分 > 0 且显著高于次席时才命中 —— cube 适合聚合类问题，
+        普通明细问数交给 NL→SQL 更稳。
+        """
+        q = (question or "").lower()
+        if not q.strip():
+            return None
+        scored: list[tuple[int, dict[str, Any]]] = []
+        for item in cubes:
+            if not isinstance(item, dict):
+                continue
+            name = str(item.get("name") or "").strip()
+            if not name:
+                continue
+            score = 0
+            if name.lower() in q:
+                score += 10
+            for token in re.split(r"[^0-9a-z_\u4e00-\u9fff]+", name.lower()):
+                if len(token) >= 3 and token in q:
+                    score += 3
+            for child in cls._cube_child_names(item, "measures", "dimensions"):
+                if child.lower() in q:
+                    score += 2
+            if score > 0:
+                scored.append((score, item))
+        if not scored:
+            return None
+        scored.sort(key=lambda pair: pair[0], reverse=True)
+        if len(scored) > 1 and scored[0][0] <= scored[1][0]:
+            return None  # 打平 → 不冒险
+        return scored[0][1]
 
     @staticmethod
     def _lineage_extra_models(

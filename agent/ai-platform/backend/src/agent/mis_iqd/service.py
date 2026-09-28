@@ -109,6 +109,31 @@ def parse_related_item_keys(raw: Any) -> set[str]:
     return set()
 
 
+# ================================================================ 知识下发（方案 A：文件即真相）
+#
+# wren 0.13.3 实测（`wren memory --help` / `wren skills get enrich-context`）：
+#   - 样本 NL→SQL 的 source of truth = `{project}/knowledge/sql/<slug>.md`，**必须**经
+#     `wren memory store` 写（官方明确「不要手写」），再由 `memory index` 建语义索引；
+#   - 术语/口径/业务规则 = `{project}/knowledge/rules/*.md`（自由 markdown，按主题一文件），
+#     由 `wren context instructions` 直接读给 LLM，**不进** memory index。
+# 平台侧因此：样本逐条 `memory store`；规则整文件**全量覆盖写**
+# （只写 pending 会让下一次下发把已下发条目擦掉）。
+IQD_RULES_REL_PATH = "knowledge/rules/mis-iqd-platform.md"
+
+# 平台样本文件所在的 wren sink 目录 + 识别标记（写侧 `memory store --tags` 写入 frontmatter）。
+IQD_SAMPLE_DIR = "knowledge/sql"
+IQD_SAMPLE_TAG = "source:mis-iqd"
+
+# 知识类型 → 规则文件里的二级标题（`iqd_knowledge.kind`；未知类型落「其它」）。
+IQD_KNOWLEDGE_SECTIONS: dict[str, str] = {
+    "term": "术语",
+    "metric_definition": "口径定义",
+    "synonym": "同义词",
+    "instruction": "业务指令",
+}
+IQD_KNOWLEDGE_FALLBACK_SECTION = "其它"
+
+
 def crop_knowledge_by_context(
     knowledge: list[dict[str, Any]],
     context_item_keys: list[str] | None,
@@ -469,14 +494,18 @@ class IqdAskService:
             if k.get("sync_status") == "pending" and is_enabled(k)
         ]
 
-        sql_pair_args = [
-            {"question": p.get("question"), "sql": p.get("wren_sql") or p.get("sql_text")}
-            for p in pending_pairs
-        ]
-        instruction_args = [
-            {"title": k.get("title"), "content": k.get("content") or ""}
-            for k in pending_knowledge
-        ]
+        # ①.5 真正下发（方案 A / 2026-09-27 实测格式）：
+        #     样本 → `wren memory store` 写 knowledge/sql/*.md（+ 索引）；
+        #     术语/口径/业务规则 → `knowledge/rules/mis-iqd-platform.md`（全量覆盖写）。
+        #     说明：**只有写成功的 id 才回填 synced**，避免「界面已同步、wren 侧没有」的假象。
+        delivery = await self._deliver_knowledge(
+            cli,
+            project_home,
+            pending_pairs=pending_pairs,
+            enabled_pairs=[p for p in sql_pairs if is_enabled(p)],
+            enabled_knowledge=[k for k in knowledge if is_enabled(k)],
+            pending_knowledge=pending_knowledge,
+        )
 
         # ② context build（整库 rebuild，返回 mdl_hash）
         build_status = "success"
@@ -484,12 +513,10 @@ class IqdAskService:
         mdl_hash: str | None = None
         try:
             build_result = await cli.context_build(
-                sql_pairs=sql_pair_args,
-                instructions=instruction_args,
                 allow_write=True,
                 project_dir=project_home,
             )
-            mdl_hash = self._parse_mdl_hash(build_result.get("stdout", ""))
+            mdl_hash = self._resolve_mdl_hash(build_result)
         except IqdCliError as exc:
             build_status = "failed"
             build_error = str(exc)
@@ -513,8 +540,9 @@ class IqdAskService:
                 await client.backfill_enhancement_sync({
                     "connection_id": cid,
                     "wren_ref_id": mdl_hash,
-                    "sql_pair_ids": [p.get("id") for p in pending_pairs if p.get("id") is not None],
-                    "knowledge_ids": [k.get("id") for k in pending_knowledge if k.get("id") is not None],
+                    # 只回填**确实写进 wren** 的条目（见 ①.5 delivery）
+                    "sql_pair_ids": delivery["pair_ids"],
+                    "knowledge_ids": delivery["knowledge_ids"],
                     "synced_at": datetime.now(timezone.utc).isoformat(),
                 })
                 backfill_ok = True
@@ -523,8 +551,10 @@ class IqdAskService:
                 build_error = f"回填失败: {exc}"
 
         # ⑤ 报作业（失败仅告警，不阻断返回）
-        synced_pairs = len(pending_pairs) if backfill_ok else 0
-        synced_knowledge = len(pending_knowledge) if backfill_ok else 0
+        synced_pairs = len(delivery["pair_ids"]) if backfill_ok else 0
+        synced_knowledge = len(delivery["knowledge_ids"]) if backfill_ok else 0
+        if delivery["error"] and not build_error:
+            build_error = delivery["error"]
         try:
             await client.report_sync_job({
                 "connection_id": cid,
@@ -607,14 +637,16 @@ class IqdAskService:
             k for k in knowledge
             if k.get("sync_status") == "pending" and is_enabled(k)
         ]
-        sql_pair_args = [
-            {"question": p.get("question"), "sql": p.get("wren_sql") or p.get("sql_text")}
-            for p in pending_pairs
-        ]
-        instruction_args = [
-            {"title": k.get("title"), "content": k.get("content") or ""}
-            for k in pending_knowledge
-        ]
+
+        # ①.5 真正下发（方案 A；与 trigger_build_index 同口径，见 _deliver_knowledge）
+        delivery = await self._deliver_knowledge(
+            cli,
+            project_home,
+            pending_pairs=pending_pairs,
+            enabled_pairs=[p for p in sql_pairs if is_enabled(p)],
+            enabled_knowledge=[k for k in knowledge if is_enabled(k)],
+            pending_knowledge=pending_knowledge,
+        )
 
         # ② context build（强制重建：仅 build 阶段传 force=True）
         build_status = "success"
@@ -622,13 +654,11 @@ class IqdAskService:
         mdl_hash: str | None = None
         try:
             build_result = await cli.context_build(
-                sql_pairs=sql_pair_args,
-                instructions=instruction_args,
                 allow_write=True,
                 force=True,
                 project_dir=project_home,
             )
-            mdl_hash = self._parse_mdl_hash(build_result.get("stdout", ""))
+            mdl_hash = self._resolve_mdl_hash(build_result)
         except IqdCliError as exc:
             build_status = "failed"
             build_error = str(exc)
@@ -652,8 +682,9 @@ class IqdAskService:
                 await client.backfill_enhancement_sync({
                     "connection_id": cid,
                     "wren_ref_id": mdl_hash,
-                    "sql_pair_ids": [p.get("id") for p in pending_pairs if p.get("id") is not None],
-                    "knowledge_ids": [k.get("id") for k in pending_knowledge if k.get("id") is not None],
+                    # 只回填**确实写进 wren** 的条目（见 ①.5 delivery）
+                    "sql_pair_ids": delivery["pair_ids"],
+                    "knowledge_ids": delivery["knowledge_ids"],
                     "synced_at": datetime.now(timezone.utc).isoformat(),
                 })
                 backfill_ok = True
@@ -661,8 +692,10 @@ class IqdAskService:
                 build_status = "failed"
                 build_error = f"回填失败: {exc}"
 
-        synced_pairs = len(pending_pairs) if backfill_ok else 0
-        synced_knowledge = len(pending_knowledge) if backfill_ok else 0
+        synced_pairs = len(delivery["pair_ids"]) if backfill_ok else 0
+        synced_knowledge = len(delivery["knowledge_ids"]) if backfill_ok else 0
+        if delivery["error"] and not build_error:
+            build_error = delivery["error"]
         result = SyncResult(
             connection_id=cid, coalesced=False,
             build_status=build_status, index_status=index_status,
@@ -866,6 +899,331 @@ class IqdAskService:
             logger.warning("IQD self-heal job report failed", action=action, error=str(exc))
 
     @staticmethod
+    def _apply_primary_keys(
+        mdl: dict[str, Any], catalog_items: list[dict[str, Any]]
+    ) -> int:
+        """把平台 catalog 的主键标记回写进派生 MDL（**只增不减**，返回生效的模型数）。
+
+        <p><b>为什么需要</b>：主键是 wren 去重/聚合/join 基数推断的基础；曾经因为
+        「平台派生 MDL →（反向导入）覆盖基线」的自循环，把 wren 原生 MDL 里的主键洗成了空
+        （2026-09-28 实测：`mdl_raw` 无 `primaryKey`、catalog 192 列 `is_primary_key` 全 0）。
+
+        <p><b>只增不减</b>：只有「catalog 明确标了主键」的列才会被置位；某张表在 catalog 里
+        没有任何主键标记时**一律不动基线**（绝不因为「平台侧没有」就把基线里的主键清掉 ——
+        那正是把 PK 洗掉的机制）。
+
+        Args:
+            mdl: 派生中的 MDL（原地修改）。
+            catalog_items: 平台清单元数据（``get_catalog_meta``；含 ``item_key`` / ``kind`` /
+                ``is_primary_key``）。
+
+        Returns:
+            被回填主键的模型数量（0=平台侧无主键信息，保持基线原样）。
+        """
+        pk_by_table: dict[str, list[str]] = {}
+        for item in catalog_items or []:
+            if str(item.get("kind") or "") != "column":
+                continue
+            key = str(item.get("item_key") or item.get("itemKey") or "")
+            flag = item.get("is_primary_key")
+            if flag is None:
+                flag = item.get("isPrimaryKey")
+            if not flag or "." not in key:
+                continue
+            table, _, column = key.partition(".")
+            pk_by_table.setdefault(table, []).append(column)
+
+        applied = 0
+        for model in mdl.get("models", []):
+            if not isinstance(model, dict):
+                continue
+            table = str(model.get("name") or "")
+            wanted = pk_by_table.get(table)
+            if not wanted:
+                continue  # 平台没说 → 保留基线（关键：绝不当作「无主键」清空）
+            columns = [c for c in model.get("columns", []) if isinstance(c, dict)]
+            present = {str(c.get("name")) for c in columns}
+            pks = [c for c in wanted if c in present]
+            if not pks:
+                continue
+            for column in columns:
+                if str(column.get("name")) in pks:
+                    column["isPrimaryKey"] = True
+            if not model.get("primaryKey"):
+                # mdl.json 用 camelCase `primaryKey`（复合主键 = 列表；wren context show 会显示 pk=[…]）
+                model["primaryKey"] = pks
+            applied += 1
+        if applied:
+            logger.info("IQD primary keys applied from catalog", models=applied)
+        return applied
+
+    @staticmethod
+    def _render_rules_markdown(knowledge: list[dict[str, Any]]) -> str:
+        """把（已启用的）平台知识渲染成 ``knowledge/rules/mis-iqd-platform.md`` 正文。
+
+        <p>**全量渲染**：该文件是平台管理的整份状态 —— 只渲染 pending 会让下一次下发把
+        已下发条目擦掉。文件头写明「自动生成、勿手改」，因为每次下发都会整份覆盖。
+        """
+        grouped: dict[str, list[dict[str, Any]]] = {}
+        for item in knowledge:
+            kind = str(item.get("kind") or "")
+            section = IQD_KNOWLEDGE_SECTIONS.get(kind, IQD_KNOWLEDGE_FALLBACK_SECTION)
+            grouped.setdefault(section, []).append(item)
+
+        lines = [
+            "# mis-iqd 平台下发知识",
+            "",
+            "> 由 mis-iqd「知识与规则」页下发，**自动生成**：每次下发整份覆盖，请勿手改。",
+            "> 读取入口：`wren context instructions`（本文件不进 memory index）。",
+            "",
+        ]
+        for section, items in grouped.items():
+            lines.append(f"## {section}")
+            lines.append("")
+            for item in items:
+                title = str(item.get("title") or "").strip()
+                content = str(item.get("content") or "").strip()
+                if not title and not content:
+                    continue
+                lines.append(f"- **{title}**：{content}" if content else f"- **{title}**")
+            lines.append("")
+        return "\n".join(lines).rstrip() + "\n"
+
+    async def _deliver_knowledge(
+        self,
+        cli: Any,
+        project_home: str,
+        *,
+        pending_pairs: list[dict[str, Any]],
+        enabled_pairs: list[dict[str, Any]],
+        enabled_knowledge: list[dict[str, Any]],
+        pending_knowledge: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        """把知识**真正**下发到 wren project（方案 A），返回「确实写成功」的 id 与错误摘要。
+
+        <p>样本逐条 ``wren memory store``（单条失败不影响其它条目）；规则整文件写
+        ``knowledge/rules/mis-iqd-platform.md``。**只有写成功的 id 才允许回填 synced** ——
+        此前「build 成功即回填全部 pending」正是「界面已同步、wren 侧没有」的来源。
+        """
+        pair_ids: list[int] = []
+        errors: list[str] = []
+        for pair in pending_pairs:
+            nl = str(pair.get("question") or "").strip()
+            sql = str(pair.get("wren_sql") or pair.get("sql_text") or "").strip()
+            if not nl or not sql:
+                errors.append(f"sql_pair#{pair.get('id')}: 缺 question/wren_sql")
+                continue
+            try:
+                await cli.memory_store(
+                    nl=nl, sql=sql, tags=IQD_SAMPLE_TAG, project_dir=project_home
+                )
+            except Exception as exc:  # noqa: BLE001 - 单条失败不阻断其余条目
+                errors.append(f"sql_pair#{pair.get('id')}: {exc}")
+                continue
+            if pair.get("id") is not None:
+                pair_ids.append(pair["id"])
+
+        # ①b 回收：wren 侧「平台下发但已不再需要」的样本文件（改动/停用/删除都会落到这里）
+        pruned = 0
+        prune_error: str | None = None
+        if hasattr(cli, "list_project_files"):
+            pruned, prune_error = await self._prune_stale_sample_files(
+                cli, project_home, enabled_pairs=enabled_pairs
+            )
+            if prune_error:
+                errors.append(prune_error)
+
+        rules_error: str | None = None
+        if enabled_knowledge:
+            try:
+                await cli.write_project_files(
+                    [
+                        {
+                            "path": IQD_RULES_REL_PATH,
+                            "content": self._render_rules_markdown(enabled_knowledge),
+                        }
+                    ],
+                    project_dir=project_home,
+                )
+            except Exception as exc:  # noqa: BLE001 - 规则失败只影响 knowledge 回填
+                rules_error = f"knowledge/rules 下发失败: {exc}"
+        if rules_error:
+            errors.append(rules_error)
+
+        knowledge_ids = (
+            [] if rules_error else [k["id"] for k in pending_knowledge if k.get("id") is not None]
+        )
+        logger.info(
+            "IQD knowledge delivered",
+            project_home=project_home,
+            pairs=len(pair_ids),
+            pending_pairs=len(pending_pairs),
+            knowledge=len(knowledge_ids),
+            errors=len(errors),
+        )
+        return {
+            "pair_ids": pair_ids,
+            "knowledge_ids": knowledge_ids,
+            "pruned": pruned,
+            "errors": errors,
+            "error": ("知识下发未全部成功: " + "; ".join(errors)) if errors else None,
+        }
+
+    @staticmethod
+    def _sample_nl_sql(pair: dict[str, Any]) -> tuple[str, str]:
+        """取样本的 (nl, sql) 归一值（与 wren ``knowledge/sql/*.md`` frontmatter 对齐）。"""
+        return (
+            str(pair.get("question") or "").strip(),
+            str(pair.get("wren_sql") or pair.get("sql_text") or "").strip(),
+        )
+
+    @staticmethod
+    def _parse_knowledge_sql_md(content: str) -> dict[str, str]:
+        """解析 ``knowledge/sql/*.md`` 的 YAML frontmatter（平铺 ``key: value``）。
+
+        <p>只处理平铺键；长值被 YAML 折行（缩进续行）时按「空格拼接」还原 —— wren 的
+        ``memory dump`` 就是这么输出长 SQL 的（``sql: SELECT … GROUP\\n    BY 1``）。
+        """
+        lines = content.splitlines()
+        if not lines or lines[0].strip() != "---":
+            return {}
+        out: dict[str, str] = {}
+        current: str | None = None
+        for line in lines[1:]:
+            if line.strip() == "---":
+                break
+            if line[:1] in (" ", "\t") and current:
+                out[current] = (out[current] + " " + line.strip()).strip()
+                continue
+            if ":" not in line:
+                current = None
+                continue
+            key, _, value = line.partition(":")
+            current = key.strip()
+            out[current] = value.strip().strip('"').strip("'")
+        return out
+
+    @staticmethod
+    def _frontmatter_block(content: str) -> str:
+        """取 ``---`` 之间的 frontmatter 原文（无 frontmatter 返回空串）。"""
+        lines = content.splitlines()
+        if not lines or lines[0].strip() != "---":
+            return ""
+        for idx in range(1, len(lines)):
+            if lines[idx].strip() == "---":
+                return "\n".join(lines[1:idx])
+        return ""
+
+    @classmethod
+    def _is_platform_sample(cls, content: str) -> bool:
+        """是否平台下发的样本文件（按平台标记识别；人工/agent 写的文件一律不碰）。
+
+        <p><b>为什么直接扫 frontmatter 原文</b>：``wren memory store --tags source:mis-iqd`` 落盘是
+        **YAML 列表**形态 ——
+
+        <pre>
+        source: user
+        tags:
+        - source:mis-iqd
+        </pre>
+
+        按「平铺 key: value」解析会把 ``- source:mis-iqd`` 当成键 ``- source``，``tags`` 读成空，
+        于是平台文件被误判成人工写的 → **永不回收**（2026-09-28 真机实测踩到）。这里改成在
+        frontmatter 原文里正则匹配标记，同时容忍 ``source: mis-iqd``（冒号后带空格）写法。
+        """
+        return re.search(r"source\s*:\s*mis-iqd", cls._frontmatter_block(content)) is not None
+
+    async def _prune_stale_sample_files(
+        self,
+        cli: Any,
+        project_home: str,
+        *,
+        enabled_pairs: list[dict[str, Any]],
+    ) -> tuple[int, str | None]:
+        """回收 wren 侧「平台下发但已不再需要」的样本文件。
+
+        <p><b>为什么必须有它</b>（2026-09-27 wren 0.13.3 实测）：``wren memory forget``
+        只删索引行、**保留** ``knowledge/sql/*.md``；而 ``memory store`` 的文件名由 wren 生成
+        （中文统一落 ``query-N.md``，平台无法按 id 反查）。于是「编辑样本 / 停用 / 删除」
+        都会在 wren 侧留下旧文件，下次 ``memory index`` 又把旧样本吃回索引。
+
+        <p><b>对账口径</b>：只看带平台 tag 的文件（人工/agent 写的不动）；``(nl, sql)`` 仍在
+        启用集里的保留一个（重复的删掉），不在的删除。**解析不出 nl 或 sql 的文件一律跳过**
+        —— 宁可留残件，也绝不误删。
+        """
+        try:
+            files = await cli.list_project_files(IQD_SAMPLE_DIR, project_dir=project_home)
+        except Exception as exc:  # noqa: BLE001 - 对账失败只告警，不回滚已下发内容
+            return 0, f"样本对账失败: {exc}"
+
+        wanted = {self._sample_nl_sql(p) for p in enabled_pairs}
+        wanted.discard(("", ""))
+        kept: set[tuple[str, str]] = set()
+        stale: list[str] = []
+        for item in files:
+            content = str(item.get("content") or "")
+            if not self._is_platform_sample(content):
+                continue
+            meta = self._parse_knowledge_sql_md(content)
+            key = (str(meta.get("nl") or "").strip(), str(meta.get("sql") or "").strip())
+            if not key[0] or not key[1]:
+                continue  # fail-safe：解析不全 → 不动
+            if key in wanted and key not in kept:
+                kept.add(key)
+                continue
+            stale.append(str(item.get("path") or ""))
+
+        stale = [p for p in stale if p]
+        if not stale:
+            return 0, None
+        try:
+            await cli.delete_project_files(stale, project_dir=project_home)
+        except Exception as exc:  # noqa: BLE001 - 删除失败只告警
+            return 0, f"样本回收失败: {exc}"
+        logger.info("IQD stale sample files pruned", project_home=project_home, count=len(stale))
+
+        problems: list[str] = []
+        # 回收后**必须重建索引**：`wren memory index` 是增量的，清不掉「已删文件对应的孤儿行」
+        # （2026-09-28 真机实测：删了 query.md 后 memory check 仍报 index 多 1 条 + stale index）。
+        # `memory reset` 只 drop 派生索引、保留 knowledge/sql/*.md 源文件，随后 index 全量重建；
+        # 其非交互 flag 来自部署配置 `WREN_SELF_HEAL_MEMORY_RESET_ARGS`（本环境已配 --force）。
+        try:
+            await cli.memory_reset(project_dir=project_home)
+            await cli.memory_index(project_dir=project_home)
+        except Exception as exc:  # noqa: BLE001 - 重建失败只告警（文件已删，下轮可再修）
+            problems.append(f"回收后重建索引失败: {exc}")
+
+        # 自证：让 wren 自己对账「源文件 vs 索引」，漂移就上报（不再静默）
+        try:
+            check = await cli.memory_check(project_dir=project_home)
+            blob = f"{check.get('stdout') or ''}{check.get('stderr') or ''}".strip()
+            lowered = blob.lower()
+            if "not indexed" in lowered or "stale index" in lowered or "out of sync" in lowered:
+                problems.append("wren memory check 报索引漂移: " + blob.replace("\n", " | ")[:200])
+        except Exception as exc:  # noqa: BLE001 - 自检失败只告警
+            problems.append(f"memory check 自检失败: {exc}")
+
+        return len(stale), ("；".join(problems) if problems else None)
+
+    @staticmethod
+    def _resolve_mdl_hash(result: dict[str, Any] | None) -> str | None:
+        """取本次部署的 ``mdl_hash``。
+
+        <p>优先级：① :class:`IqdCli.context_build` 返回的**平台内容哈希**
+        （``sha256(target/mdl.json)[:16]``，平台部署 MDL 时算，不再依赖 wren CLI 是否回 hash）；
+        ② 解析 CLI stdout（老路径）；③ 最后才用 :meth:`_fallback_mdl_hash` 造的兜底值。
+
+        <p>为什么重要：回填的 ``wren_ref_id`` 与 S3 漂移检测都比对这个值；此前一直是
+        ``wqd-{时间}-{随机}``，与 wren 侧任何值都不可比 → 漂移判定形同虚设。
+        """
+        if isinstance(result, dict):
+            value = result.get("mdl_hash")
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        stdout = result.get("stdout", "") if isinstance(result, dict) else ""
+        return IqdAskService._parse_mdl_hash(stdout or "")
+
+    @staticmethod
     def _parse_mdl_hash(stdout: str) -> str | None:
         """从 context build 的 stdout 提取 mdl_hash。
 
@@ -908,7 +1266,10 @@ class IqdAskService:
         与一期 :meth:`trigger_build_index` 的区别：本方法先从 mis-iqd 取
         ``{mdl_raw, edited_items}``，以基线 mdl_raw 派生产出完整 MDL（按 item_key→
         MDL 节点映射 patch 编辑字段），写出临时目录 ``manifest.json``，再
-        ``context_build(mdl_dir=tmp, ...)`` 一次部署「模型 + 物料」。
+        ``context_build(mdl_dir=tmp, ...)`` 部署**MDL**（写 ``target/mdl.json``）。
+
+        <p>物料（样本 / 术语口径）**不在本方法**下发：它们属 ``scope=materials`` 路径
+        （:meth:`trigger_build_index` → ``wren memory store`` + ``knowledge/rules/``）。
 
         Args:
             connection_id: 问数连接 id（缺省解析主连接）。
@@ -950,9 +1311,18 @@ class IqdAskService:
         mdl_raw = full.get("mdl_raw")
         edited_items = full.get("edited_items") or []
 
+        # catalog 元数据（含 is_primary_key）：供主键回填；取不到**不阻断**（保护语义 = 不动基线）
+        try:
+            catalog_meta = await client.get_catalog_meta(cid)
+        except Exception as exc:  # noqa: BLE001 - 主键回填是 best-effort：取不到就保持基线
+            logger.warning("IQD get_catalog_meta failed, primary keys untouched", error=str(exc))
+            catalog_meta = []
+
         # ② 派生完整 MDL 并写出临时目录
         try:
-            mdl_dir, _payload = self.build_mdl_from_catalog(cid, mdl_raw, edited_items)
+            mdl_dir, derived = self.build_mdl_from_catalog(
+                cid, mdl_raw, edited_items, catalog_meta
+            )
         except Exception as exc:  # noqa: BLE001 - 派生失败归一为 build 失败
             logger.error("IQD build_mdl_from_catalog failed", connection_id=cid, error=str(exc))
             await self._report_model_job(
@@ -972,12 +1342,10 @@ class IqdAskService:
         try:
             build_result = await cli.context_build(
                 mdl_dir=mdl_dir,
-                sql_pairs=[],  # 物料已并入 mdl_dir/manifest，不再单列
-                instructions=[],
                 allow_write=True,
                 project_dir=project_home,
             )
-            mdl_hash = self._parse_mdl_hash(build_result.get("stdout", ""))
+            mdl_hash = self._resolve_mdl_hash(build_result)
         except IqdCliError as exc:
             build_status = "failed"
             build_error = str(exc)
@@ -1014,6 +1382,8 @@ class IqdAskService:
             await self._report_model_job(
                 client, cid, build_status, mdl_hash, build_error,
                 index_error, stamped, 0,
+                unmatched_edit_count=int(derived.get("unmatched_edit_count") or 0),
+                unmatched_edits=derived.get("unmatched_edits"),
             )
         else:
             await self._report_model_job(
@@ -1066,7 +1436,11 @@ class IqdAskService:
         )
 
     def build_mdl_from_catalog(
-        self, connection_id: int, mdl_raw: str | None, edited_items: list[dict[str, Any]]
+        self,
+        connection_id: int,
+        mdl_raw: str | None,
+        edited_items: list[dict[str, Any]],
+        catalog_items: list[dict[str, Any]] | None = None,
     ) -> tuple[str, dict[str, Any]]:
         """以 mdl_raw 基线 + edited_items patch 派生完整 MDL，写出临时目录 manifest.json。
 
@@ -1137,6 +1511,11 @@ class IqdAskService:
         unmatched = self._collect_unmatched_edits(edited_items, landed)
         self._log_unmatched_edits(connection_id, unmatched)
 
+        # ③.2 主键回填（2026-09-28）：平台 catalog 的 `is_primary_key` 是权威；
+        #      历史上「平台派生 MDL → 反向导入覆盖基线」会把主键洗掉（mdl_raw 里已无 PK，
+        #      而 catalog 也全是 0），这里做**只增不减**的回写 + 保护。
+        pk_applied = self._apply_primary_keys(mdl, catalog_items or [])
+
         # ④ 写临时目录 manifest.json
         tmp_dir = tempfile.mkdtemp(prefix=f"iqd_mdl_{connection_id}_")
         manifest_path = os.path.join(tmp_dir, "manifest.json")
@@ -1151,6 +1530,7 @@ class IqdAskService:
             # 供未来 sync 状态 / 前端「N 项编辑未生效」消费（本轮不接前端）。
             "unmatched_edit_count": len(unmatched),
             "unmatched_edits": unmatched,
+            "primary_key_applied": pk_applied,
         }
         logger.info(
             "IQD build_mdl_from_catalog wrote manifest",
@@ -1187,6 +1567,17 @@ class IqdAskService:
                 node["description"] = it["description"]
             if it.get("expression") is not None:
                 node["expression"] = it["expression"]
+
+        def _set_column(column: dict[str, Any]) -> None:
+            """列的 patch：**只改 description / expression，绝不改 name**。
+
+            <p>MDL 的列名是引用锚点（模型/关系/表达式都按它引用），而平台侧列的
+            ``display_name`` 只是物理列名回显 —— 按它改 name 会把锚点改坏。
+            """
+            if it.get("description") is not None:
+                column["description"] = it["description"]
+            if it.get("expression") is not None:
+                column["expression"] = it["expression"]
 
         if item_key.startswith("mdl:model:"):
             name = item_key[len("mdl:model:"):]
@@ -1234,7 +1625,19 @@ class IqdAskService:
                     if model.get("name") == table:
                         for column in model.get("columns", []):
                             if column.get("name") == col:
-                                _set(column)
+                                _set_column(column)
+                                return True
+            elif len(parts) == 2:
+                # <table>.<column>（平台 catalog 里物理列 / 计算列的稳定键形态）→
+                # models[name==<table>].columns[name==<column>]。
+                # 缺这条分支时，「在语义模型页 / 属性面板改列描述」会**静默不生效**
+                # ——T03e 口径收窄后唯一剩下的真实告警正是它（2026-09-28 真机实测）。
+                table, col = parts[0], parts[1]
+                for model in mdl.get("models", []):
+                    if model.get("name") == table:
+                        for column in model.get("columns", []):
+                            if column.get("name") == col:
+                                _set_column(column)
                                 return True
         # <cubeKey>.<measure> 形态（cubeKey=mdl:cube:<cube>）
         if item_key.startswith("mdl:cube:") and "." in item_key[len("mdl:cube:"):]:
@@ -1249,6 +1652,33 @@ class IqdAskService:
         return False
 
     # ================================================================ T03e：未匹配编辑可见化
+
+    @staticmethod
+    def _has_effective_patch(it: dict[str, Any]) -> bool:
+        """该项是否**真有需要套用的编辑**（T03e 口径收窄，2026-09-28）。
+
+        <p><b>为什么需要</b>：``edited_items`` 里混着两类「没有可套用 patch」的行：
+        <ul>
+          <li><b>表发现导入的物理列</b>（``item_key=<table>.<column>``）：``display_name`` 只是
+              列名回显，``description/expression`` 为空 —— 它本来就在 ``model.columns`` 里；</li>
+          <li><b>平台侧展示用行</b>（kind=``table``，与 kind=``model`` 是同一张表的两种表示）。</li>
+        </ul>
+        旧口径把它们全算成「编辑未生效」。实测 900001：58 条「未生效」里 **56 条是这类噪音**，
+        真需要提醒的是「改过 description/expression 的列」与「新建的 cube/view/metric」。
+
+        <p>判据：只有 ``column``（表发现导入的物理列）与 ``table``（展示用行）的
+        ``display_name`` 是**列名/表名回显**，必须有 ``description`` / ``expression`` 才算真编辑；
+        其余类型（``model`` / ``cube`` / ``measure`` / ``dimension`` / ``relationship`` /
+        ``view`` / ``metric``）的 ``display_name`` 本身就代表「新建或改名」——
+        **全新建 model 正是这类**（刻意不物化、必须提醒），不能漏。
+        （已落入 MDL 的项在调用方已按 ``landed`` 排除，所以模型导入那些不会误报。）
+        """
+        kind = str(it.get("kind") or "")
+        desc = str(it.get("description") or "").strip()
+        expr = str(it.get("expression") or "").strip()
+        if kind in ("column", "table"):
+            return bool(desc or expr)
+        return bool(desc or expr or str(it.get("display_name") or "").strip())
 
     @staticmethod
     def _collect_unmatched_edits(
@@ -1282,6 +1712,11 @@ class IqdAskService:
             if idx in landed:
                 continue
             if not isinstance(it, dict):
+                continue
+            # 口径收窄（2026-09-28）：没有可套用 patch 的行不算「编辑未生效」——
+            # 导入的物理列（display_name 是同名回显）与展示用 table 行都会落到这里，
+            # 否则界面会拿 50+ 条噪音当告警（实测 58 条里 56 条是噪音）。
+            if not IqdAskService._has_effective_patch(it):
                 continue
             unmatched.append(
                 {
@@ -1409,6 +1844,11 @@ class IqdAskService:
                 continue
             if name in cube_by_name or (tail and tail in cube_by_name):
                 # 基线已有 → 视为已落入（后续 _patch_mdl_node 负责改名）
+                existing = cube_by_name.get(name) or (cube_by_name.get(tail) if tail else None)
+                if existing is not None and tail:
+                    # 子节点按 parent_key 的 tail 挂靠，而 cube 的 name 可能是中文显示名 ——
+                    # 两个键都指向同一 cube，否则 ② 里查不到宿主、子节点被静默丢弃。
+                    cube_by_name.setdefault(tail, existing)
                 landed.add(idx)
                 continue
             cube: dict[str, Any] = {"name": name, "measures": [], "dimensions": []}
@@ -1417,6 +1857,8 @@ class IqdAskService:
                 cube["baseObject"] = model_name
             cubes.append(cube)
             cube_by_name[name] = cube
+            if tail:
+                cube_by_name.setdefault(tail, cube)
             landed.add(idx)
 
         # ② measure / dimension 子节点（按 parent_key=mdl:cube:<cube> 挂靠）
@@ -1505,6 +1947,8 @@ class IqdAskService:
         index_error: str | None,
         stamped: int,
         synced_knowledge: int,
+        unmatched_edit_count: int = 0,
+        unmatched_edits: list[dict[str, Any]] | None = None,
     ) -> None:
         """上报模型写回作业（edit_source=model）。"""
         try:
@@ -1517,6 +1961,9 @@ class IqdAskService:
                 "index_error": index_error,
                 "synced_sql_pair_count": stamped,
                 "synced_knowledge_count": synced_knowledge,
+                # T03e：编辑未生效清单（前端提示用；没传就是空，见 V102 的全量替换语义）
+                "unmatched_edit_count": int(unmatched_edit_count or 0),
+                "unmatched_edits": list(unmatched_edits or []),
                 "edit_source": "model",
             })
         except Exception as exc:  # noqa: BLE001 - 报作业失败仅告警

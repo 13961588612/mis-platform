@@ -160,12 +160,17 @@ async def enhance_reconcile(
     """
     from src.adapters.iqd_cli import IqdCli
     from src.adapters.iqd_config_client import IqdConfigClient
+    from src.agent.mis_iqd.mcp_lifecycle import IqdMcpLifecycleService
 
     try:
         client = IqdConfigClient()
         status = await client.get_catalog_sync_status(req.connection_id)
         built_hash = status.get("mdl_hash") if isinstance(status, dict) else None
-        current = await IqdCli().get_current_mdl_hash()
+        # ⚠️ 多连接（方案 A）：必须传本连接的 project_dir —— 此前不传，远端拿不到 cwd →
+        # `get_current_mdl_hash` 恒为 None → 漂移检测从未真正执行过（2026-09-28 复核发现）。
+        cid = status.get("connection_id") or req.connection_id
+        project_home = IqdMcpLifecycleService.project_home_of(cid) if cid else None
+        current = await IqdCli().get_current_mdl_hash(project_dir=project_home)
         # 漂移判定：能取到双方 hash 且不一致 ⇒ 标记 stale_drift
         if current is not None and built_hash is not None and current != built_hash:
             await client.set_stale_drift(status.get("connection_id") or req.connection_id, True)

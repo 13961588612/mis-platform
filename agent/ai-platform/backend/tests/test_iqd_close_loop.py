@@ -138,6 +138,11 @@ async def test_trigger_build_index_memory_index_failure_is_non_blocking():
         cli.context_build = AsyncMock(
             return_value={"stdout": '{"mdl_hash":"mdl_abc123"}'}
         )
+        # 方案 A：知识下发先于 build（样本走 memory store、规则写 knowledge/rules/*.md）
+        cli.memory_store = AsyncMock(return_value={"exit_code": 0})
+        cli.write_project_files = AsyncMock(return_value={"exit_code": 0})
+        cli.list_project_files = AsyncMock(return_value=[])
+        cli.delete_project_files = AsyncMock(return_value={"exit_code": 0})
         # memory index 不可用（Q6：CLI 缺失 / 部署版本未提供子命令）
         cli.memory_index = AsyncMock(side_effect=IqdCliError("memory index 子命令不可用"))
 
@@ -192,6 +197,10 @@ async def test_trigger_build_index_context_build_failure_blocks_backfill_and_ind
     ) as MockClient:
         cli = MockCli.return_value
         cli.context_build = AsyncMock(side_effect=IqdCliError("wren CLI 不可用"))
+        cli.memory_store = AsyncMock(return_value={"exit_code": 0})
+        cli.write_project_files = AsyncMock(return_value={"exit_code": 0})
+        cli.list_project_files = AsyncMock(return_value=[])
+        cli.delete_project_files = AsyncMock(return_value={"exit_code": 0})
         cli.memory_index = AsyncMock(return_value={"exit_code": 0})
 
         client = MockClient.return_value

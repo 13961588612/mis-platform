@@ -191,6 +191,11 @@ async def test_service_selfheal_passes_connid_project_dir(tmp_path: Path) -> Non
             cli.context_build = AsyncMock(return_value={"stdout": '{"mdl_hash":"h"}'})
             cli.memory_reset = AsyncMock(return_value={"exit_code": 0})
             cli.memory_index = AsyncMock(return_value={"exit_code": 0})
+            # 方案 A：知识下发（样本 memory store / 规则 knowledge/rules/*.md）
+            cli.memory_store = AsyncMock(return_value={"exit_code": 0})
+            cli.write_project_files = AsyncMock(return_value={"exit_code": 0})
+            cli.list_project_files = AsyncMock(return_value=[])
+            cli.delete_project_files = AsyncMock(return_value={"exit_code": 0})
             cli.context_validate = AsyncMock(return_value={"ok": True, "summary": "", "raw": "ok"})
             client = MockClient.return_value
             client.get_sql_pairs = AsyncMock(return_value=[])

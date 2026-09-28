@@ -263,6 +263,10 @@ class WrenMcpAgentClient:
         args: list[str],
         *,
         mdl_manifest: str | None = None,
+        files: list[dict[str, str]] | None = None,
+        delete_paths: list[str] | None = None,
+        list_path: str | None = None,
+        list_prefix: str | None = None,
         timeout: float | None = None,
         raise_on_error: bool = True,
     ) -> dict[str, Any]:
@@ -272,6 +276,11 @@ class WrenMcpAgentClient:
             conn_id: 问数连接 id。
             args: 子命令参数（不含二进制名，如 ``["context", "build", "--allow-write"]``）。
             mdl_manifest: 可选派生 MDL 的 ``manifest.json`` 全文；agent 落临时目录并追加 ``--mdl``。
+            files: 可选 project 内文本文件 ``[{"path": "knowledge/rules/x.md", "content": "..."}]``；
+                agent 在 ``project_home`` 下安全落盘（``path`` 越界即拒）。样本对不走上这条路
+                —— 它们由 ``wren memory store`` 写 ``knowledge/sql/*.md``。
+            delete_paths: 可选要删除的 project 内相对文件（平台回收自己下发的内容）。
+            list_path / list_prefix: 可选列出该目录下的文件（含正文），供平台做状态对账。
             timeout: 单次超时秒数（缺省 ``build_timeout_seconds``）。
             raise_on_error: ``True``（默认）时 ``exit_code != 0`` 抛错；``False`` 时原样返回
                 stdout/stderr（供 ``context validate`` 等「警告也可能非零退出」的只读动作）。
@@ -298,6 +307,10 @@ class WrenMcpAgentClient:
                     "conn_id": str(conn_id),
                     "args": list(args),
                     "mdl_manifest": mdl_manifest,
+                    "files": files,
+                    "delete_paths": delete_paths,
+                    "list_path": list_path,
+                    "list_prefix": list_prefix,
                     "timeout_seconds": wait,
                 },
             )

@@ -451,10 +451,32 @@ FULL_WITH_REVISION = {
 }
 
 
+_ACTIVE_CLIENT_PATCHES: list = []
+
+
+@pytest.fixture(autouse=True)
+def _stop_client_patches():
+    """用例结束即 stop 本模块 ``_patch_clients`` 起的 patch。
+
+    <p>此前用 ``patch(...).start()`` 且从不 stop → patch 会泄漏到**同批次后续用例**
+    （实测把 test_iqd_selfheal.py 的 13 个用例拖红）。autouse fixture 收口最省事：
+    调用点无需改动。
+    """
+    yield
+    while _ACTIVE_CLIENT_PATCHES:
+        _ACTIVE_CLIENT_PATCHES.pop().stop()
+
+
 def _patch_clients(get_catalog_full_payload: dict):
     """patch IqdCli / IqdConfigClient（与 test_iqd_close_loop 同范式）。"""
-    MockCli = patch("src.adapters.iqd_cli.IqdCli").start()
-    MockClient = patch("src.adapters.iqd_config_client.IqdConfigClient").start()
+    # ⚠️ 必须留住 **patcher** 再 start()：``patch(...).start()`` 返回的是 mock 本身，
+    # 对它调 ``.stop()`` 只是 MagicMock 的自动属性（静默 no-op）→ patch 永不还原，
+    # 会泄漏到同批次后续用例（实测把 test_iqd_selfheal.py 的 13 个用例拖红）。
+    patcher_cli = patch("src.adapters.iqd_cli.IqdCli")
+    patcher_client = patch("src.adapters.iqd_config_client.IqdConfigClient")
+    MockCli = patcher_cli.start()
+    MockClient = patcher_client.start()
+    _ACTIVE_CLIENT_PATCHES.extend([patcher_cli, patcher_client])
     cli = MockCli.return_value
     cli.context_build = AsyncMock(return_value={"stdout": '{"mdl_hash":"mdl_xyz"}'})
     cli.memory_index = AsyncMock(return_value={"exit_code": 0})
@@ -474,7 +496,7 @@ def _patch_clients(get_catalog_full_payload: dict):
     })
     client.backfill_catalog_sync = AsyncMock(return_value={"stamped_count": 3})
     client.report_sync_job = AsyncMock(return_value={"id": 1})
-    return cli, client, (MockCli, MockClient)
+    return cli, client, (patcher_cli, patcher_client)
 
 
 async def test_trigger_model_build_forwards_current_edit_revision_when_present():

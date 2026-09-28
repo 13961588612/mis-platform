@@ -46,25 +46,29 @@ def _capture_args(cli: IqdCli) -> list[str]:
 
 @pytest.mark.asyncio
 async def test_context_build_force_true_with_config_injects_force_flag():
-    """配置 self_heal_force_build_args=['--force'] 时，force=True 调用 args 含 --force。"""
+    """配置 self_heal_force_build_args=['--force'] 时，force=True 调用 args 含 --force。
+
+    <p>注：新版 wren CLI 无 ``--allow-write``，``context_build`` 已显式忽略该 flag
+    （``del allow_write``），故这里只钉「结构命令 + 配置注入的 flag」两件事。
+    """
     with _with_iqd_mcp_settings(self_heal_force_build_args=["--force"]):
         cli = IqdCli()
         cli._run = AsyncMock(return_value={"stdout": "", "stderr": "", "exit_code": 0})
         await cli.context_build(force=True)
         args = _capture_args(cli)
-    assert args[:3] == ["context", "build", "--allow-write"]
+    assert args[:2] == ["context", "build"]
     assert "--force" in args, "Q5 失败：--force 应来自配置而非硬编码"
 
 
 @pytest.mark.asyncio
 async def test_context_build_force_true_empty_config_has_no_hardcoded_flag():
-    """Q5 硬约束：配置为空时 force=True 的 args 恰好为 ["context","build","--allow-write"]，无 --force。"""
+    """Q5 硬约束：配置为空时 force=True 的 args 恰好为 ["context","build"]，无 --force。"""
     with _with_iqd_mcp_settings(self_heal_force_build_args=[]):
         cli = IqdCli()
         cli._run = AsyncMock(return_value={"stdout": "", "stderr": "", "exit_code": 0})
         await cli.context_build(force=True)
         args = _capture_args(cli)
-    assert args == ["context", "build", "--allow-write"], f"Q5 失败：不应硬编码 --force，实际 {args}"
+    assert args == ["context", "build"], f"Q5 失败：不应硬编码 --force，实际 {args}"
     assert "--force" not in args
 
 
@@ -76,7 +80,7 @@ async def test_context_build_force_false_never_appends_force_flag():
         cli._run = AsyncMock(return_value={"stdout": "", "stderr": "", "exit_code": 0})
         await cli.context_build(force=False)
         args = _capture_args(cli)
-    assert args == ["context", "build", "--allow-write"]
+    assert args == ["context", "build"]
     assert "--force" not in args
 
 
@@ -282,8 +286,12 @@ def _patch_selfheal_clients(cli_return: dict | None = None, validate_return: dic
     """patch IqdCli / IqdConfigClient（与 test_iqd_close_loop 同范式），返回 (cli, client, mocks)。"""
     cli_return = cli_return or {"stdout": '{"mdl_hash":"mdl_xyz"}'}
     validate_return = validate_return or {"ok": True, "summary": "", "raw": "ok"}
-    MockCli = patch("src.adapters.iqd_cli.IqdCli").start()
-    MockClient = patch("src.adapters.iqd_config_client.IqdConfigClient").start()
+    # ⚠️ 留住 **patcher** 再 start()：``patch(...).start()`` 返回 mock 本身，
+    # 对它 ``.stop()`` 是 MagicMock 的自动属性（静默 no-op）→ patch 永不还原。
+    patcher_cli = patch("src.adapters.iqd_cli.IqdCli")
+    patcher_client = patch("src.adapters.iqd_config_client.IqdConfigClient")
+    MockCli = patcher_cli.start()
+    MockClient = patcher_client.start()
     cli = MockCli.return_value
     cli.context_build = AsyncMock(return_value=cli_return)
     cli.memory_reset = AsyncMock(return_value={"exit_code": 0})
@@ -294,7 +302,7 @@ def _patch_selfheal_clients(cli_return: dict | None = None, validate_return: dic
     client.get_knowledge = AsyncMock(return_value=[])
     client.backfill_enhancement_sync = AsyncMock(return_value={"synced_count": 0})
     client.report_sync_job = AsyncMock(return_value={"id": 1})
-    return cli, client, (MockCli, MockClient)
+    return cli, client, (patcher_cli, patcher_client)
 
 
 @pytest.mark.asyncio
