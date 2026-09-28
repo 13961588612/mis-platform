@@ -33,6 +33,7 @@
 | 门禁：前端 typecheck/vitest/build | 闸门 | ✅ **已验证** | — |
 | 门禁：Java mis-iqd | 闸门 | ✅ **已验证** | — |
 | 门禁：Python `-k iqd` | 闸门 | ✅ **已验证** | — |
+| 验收：引擎侧 `wren context validate` 0 warning | 门禁 | ✅ **已验证**（connection 900001：`Valid — 3 models, 0 views, 1 relationships`，0 warning） | 发布后自检基线 |
 
 ---
 
@@ -541,8 +542,8 @@ for f in dist/assets/*.js; do printf "%8d raw  %8d gzip  %s\n" "$(stat -c%s "$f"
 
 ## 6. 汇总
 
-- **可放行（本沙箱已证）**：跨阶段不变项 6/6；三条门禁（typecheck / vitest 34·429 / build；Java 69/69；Python `-k iqd` 110）；P-3 构建产物（部分）。
-- **必须真机复验**：M-G1~M-G6 全部（M-G1 含**模型物化缺口**红线）；P-1/P-2/P-4/P-5/P-6。
+- **可放行（本沙箱已证）**：跨阶段不变项 6/6；三条门禁（typecheck / vitest 34·429 / build；Java 69/69；Python `-k iqd` 110）；引擎侧 `wren context validate` 0 warning（connection 900001）；P-3 构建产物（部分）。
+- **必须真机复验**：M-G1（需修复远程工程读不到模型的缺口）、M-G4；M-G3 尚缺 UI 红段联调；P-1/P-2/P-4/P-5/P-6。
 - **必修项**：**F-1**（`sql-pairs/translate` 40300，P1）。
 - **待确认**：F-2（agent-ops 预存冲突）、F-3。
 
