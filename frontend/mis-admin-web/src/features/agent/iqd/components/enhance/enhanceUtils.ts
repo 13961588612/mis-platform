@@ -39,6 +39,54 @@ export const ENHANCE_PERMISSIONS = {
 // ================================================================ S-07 术语导入（③）
 
 /**
+ * 各 Tab 的「查看」权限码（**页面级闸门**：无码的 Tab 不出现，
+ * 也不触发其数据请求——避免无权的 Tab 请求 40300 把整页拉黑）。
+ *
+ * <p>权限码核实自 `sys_api ⋈ sys_menu_api ⋈ sys_menu` seed：
+ * mask/dimension/scope 看 V73，enhance:view 看 V74/V81。
+ */
+export const ENHANCE_TAB_VIEW_PERMISSIONS = {
+  mask: 'iqd:mask:view',
+  dimension: 'iqd:dimension:view',
+  sync: 'iqd:scope:view',
+  sqlpair: 'iqd:enhance:view',
+  knowledge: 'iqd:enhance:view',
+  instruction: 'iqd:enhance:view',
+} as const;
+
+/** Tab 顺序（与页面渲染一致；用于无权时回退到第一个可见 Tab）。 */
+export const ENHANCE_TAB_ORDER = [
+  'mask',
+  'dimension',
+  'sync',
+  'sqlpair',
+  'knowledge',
+  'instruction',
+] as const;
+
+/**
+ * 给定当前请求的 Tab 与「是否有该 Tab 查看权限」判定，返回应展示的 Tab：
+ * 请求的 Tab 有权则原样；否则回退到顺序里第一个有权的 Tab；全无权则返回 `null`。
+ *
+ * @param requested  URL/状态里请求的 Tab
+ * @param canView    按 Tab 判定查看权限的回调
+ */
+export function resolveAllowedTab<T extends string>(
+  requested: T,
+  canView: (tab: T) => boolean,
+): T | null {
+  if (canView(requested)) {
+    return requested;
+  }
+  for (const tab of ENHANCE_TAB_ORDER) {
+    if (canView(tab as T)) {
+      return tab as T;
+    }
+  }
+  return null;
+}
+
+/**
  * S-07 平台术语表读接口是否就绪（架构 A6）。
  *
  * <p>判定依据 = **后端能力位点**：mis-iqd `IqdAdminService.importS07Knowledge` 目前是**骨架**

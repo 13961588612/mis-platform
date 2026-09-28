@@ -2571,7 +2571,7 @@ event: done          data: {}
 | 1 | **W0 真机实测** | 校准真实 WrenAI MDL 的 model schema（`refSql` vs 基线 `source`、`columns` 必填项），供模型物化使用 |
 | 2 | **全新 model（from-table 路径）物化** | `build_mdl_from_catalog` 已补 `_materialize_missing_nodes()` + 未落 MDL 的编辑项转**可见告警**；但**全新 model 仍刻意不物化**（未经 W0 校准，盲写可能产出非法 MDL 导致整条 build 崩）→ 需 **W0 实测校准 + M3.1** |
 | 3 | **模拟角色 WHERE 片段预览端点** | 从未落地为 API；前端暂以示意片段（恒标 `degraded`）兜底 |
-| 4 | **enhance 页权限闸门** | 前端页面级闸门待补（当前靠后端 `iqd:enhance:*` 兜底） |
+| 4 | ~~**enhance 页权限闸门**~~ **已完成** | 2026-09-28：`iqd-enhance-page.tsx` 按 Tab 判定看权限（mask/dimension/scope/enhance），无权 Tab 不渲染也不发请求；按动作闸门（save/sync/manage）；全无权渲染拒绝态 |
 | 5 | **F-3 观察项** | 前端有、后端未直用/反向不齐：`iqd:test:use`、`iqd:acl:save`（疑页面级 vs 动作级授权差异，非 40300 风险） |
 | 6 | **`@EnableMethodSecurity` 缺失** | 方法级安全注解未全局开启（当前 `@PreAuthorize` 生效依赖既有配置），建议核对 |
 

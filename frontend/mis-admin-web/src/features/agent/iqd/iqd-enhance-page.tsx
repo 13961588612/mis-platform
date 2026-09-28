@@ -31,8 +31,20 @@ import { Textarea } from '@/components/ui/textarea';
 import { PageHeader } from '@/components/common/page-header';
 import { buildAppBreadcrumbs } from '@/components/common/app-breadcrumbs';
 import { Badge } from '@/components/ui/badge';
-import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
 import {
   deleteIqdDimension,
   deleteIqdKnowledge,
@@ -63,12 +75,16 @@ import {
 import { SyncStatusBar } from './components/SyncStatusBar';
 import { SqlEditor } from './components/enhance/SqlEditor';
 import {
+  ENHANCE_TAB_VIEW_PERMISSIONS,
   S07_IMPORT_READY,
   canTriggerS07Import,
   classifyS07Import,
+  resolveAllowedTab,
   s07ButtonTitle,
   type S07ImportOutcome,
 } from './components/enhance/enhanceUtils';
+import { ENHANCE_PERMISSIONS } from './components/enhance/enhanceUtils';
+import { usePermission } from '@/hooks/use-permission';
 import { summarizeRelatedItemKeys } from './components/shared/relatedItemKeys';
 import { InstructionPanel } from './components/instruction/InstructionPanel';
 
@@ -126,7 +142,33 @@ const DIALECT_LABEL: Record<string, string> = {
 
 export function IqdEnhancePage() {
   const [searchParams, setSearchParams] = useSearchParams();
-  const tab = parseTab(searchParams.get('tab'));
+  const { hasPermission } = usePermission();
+
+  /**
+   * 页面级权限闸门（开发清单第 4 项）。
+   *
+   * <p>本页 6 个 Tab 分属**不同权限码**（mask / dimension / scope / enhance），
+   * 故不能用单一“页面码”一刀切：按 Tab 判定。无权的 Tab **不出现、也不发数据请求**（否则
+   * 一个 Tab 缺码的 40300 会因 `Promise.all` 把整页拉黑）。
+   */
+  const canViewTab = useCallback(
+    (t: Tab) => hasPermission(ENHANCE_TAB_VIEW_PERMISSIONS[t]),
+    [hasPermission],
+  );
+  /** 请求的 Tab 无权 → 回退到第一个有权 Tab；全无权 → `null`（渲染拒绝态）。 */
+  const allowedTab = useMemo(
+    () => resolveAllowedTab(parseTab(searchParams.get('tab')), canViewTab),
+    [searchParams, canViewTab],
+  );
+  const tab: Tab = allowedTab ?? 'mask';
+
+  const canMaskSave = hasPermission(ENHANCE_PERMISSIONS.maskSave);
+  const canDimensionSave = hasPermission(ENHANCE_PERMISSIONS.dimensionSave);
+  const canScopeSync = hasPermission(ENHANCE_PERMISSIONS.scopeSync);
+  const canPairSave = hasPermission(ENHANCE_PERMISSIONS.enhanceSave);
+  const canKnowledgeSave = hasPermission(ENHANCE_PERMISSIONS.enhanceSave);
+  const canKnowledgeSync = hasPermission(ENHANCE_PERMISSIONS.enhanceSync);
+
   const [instructionCount, setInstructionCount] = useState(0);
   const [maskRules, setMaskRules] = useState<IqdMaskRule[]>([]);
   const [dimensions, setDimensions] = useState<IqdScopeDimension[]>([]);
@@ -175,14 +217,19 @@ export function IqdEnhancePage() {
     setLoading(true);
     setError(null);
     try {
-      const [m, d, s] = await Promise.all([
-        listIqdMaskRules(),
-        listIqdDimensions(),
-        listIqdDictSyncStatus(),
+      // 按权限只拉有权 Tab 的数据：无权的 Tab 压根不发请求，
+      // 避免一个 40300 因 Promise.all 把整页拉黑。
+      const wantMask = hasPermission(ENHANCE_TAB_VIEW_PERMISSIONS.mask);
+      const wantDimension = hasPermission(ENHANCE_TAB_VIEW_PERMISSIONS.dimension);
+      const wantSync = hasPermission(ENHANCE_TAB_VIEW_PERMISSIONS.sync);
+      const [m, d, st] = await Promise.all([
+        wantMask ? listIqdMaskRules() : Promise.resolve([] as IqdMaskRule[]),
+        wantDimension ? listIqdDimensions() : Promise.resolve([] as IqdScopeDimension[]),
+        wantSync ? listIqdDictSyncStatus() : Promise.resolve([] as IqdDictSyncStatus[]),
       ]);
       setMaskRules(m);
       setDimensions(d);
-      setSyncStatus(s);
+      setSyncStatus(st);
       // 取主连接 id（供同步状态条使用；连接未配置时状态条显示「尚未同步」）
       try {
         const cfg = await getIqdConfig();
@@ -195,7 +242,7 @@ export function IqdEnhancePage() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [hasPermission]);
 
   useEffect(() => {
     void load();
@@ -239,6 +286,10 @@ export function IqdEnhancePage() {
 
   const switchTab = useCallback(
     (next: Tab) => {
+      // 无权的 Tab 不可切换（Tab 按钮本已不渲染；此处为 URL 直达的兜底）。
+      if (!canViewTab(next)) {
+        return;
+      }
       setSearchParams(
         (prev) => {
           const nextParams = new URLSearchParams(prev);
@@ -248,11 +299,15 @@ export function IqdEnhancePage() {
         },
         { replace: true },
       );
-      if ((next === 'sqlpair' || next === 'knowledge') && sqlPairs.length === 0 && knowledge.length === 0) {
+      if (
+        (next === 'sqlpair' || next === 'knowledge') &&
+        sqlPairs.length === 0 &&
+        knowledge.length === 0
+      ) {
         void loadEnhance();
       }
     },
-    [knowledge.length, loadEnhance, setSearchParams, sqlPairs.length],
+    [canViewTab, knowledge.length, loadEnhance, setSearchParams, sqlPairs.length],
   );
 
   const onInstructionCountChange = useCallback((count: number) => {
@@ -272,7 +327,8 @@ export function IqdEnhancePage() {
         match_type: maskMatch,
         pattern: maskPattern,
         rule: maskRule,
-        replacement: maskRule === 'custom' && maskReplacement.trim() ? maskReplacement.trim() : null,
+        replacement:
+          maskRule === 'custom' && maskReplacement.trim() ? maskReplacement.trim() : null,
         priority: 0,
         enabled: true,
       });
@@ -384,7 +440,8 @@ export function IqdEnhancePage() {
     const kw = pairKeyword.trim().toLowerCase();
     return sqlPairs.filter((p) => {
       const matchKw = kw === '' || (p.question ?? '').toLowerCase().includes(kw);
-      const matchDialect = pairDialectFilter === 'all' || (p.source_dialect ?? '') === pairDialectFilter;
+      const matchDialect =
+        pairDialectFilter === 'all' || (p.source_dialect ?? '') === pairDialectFilter;
       return matchKw && matchDialect;
     });
   }, [pairDialectFilter, pairKeyword, sqlPairs]);
@@ -456,9 +513,7 @@ export function IqdEnhancePage() {
       setS07Outcome(classifyS07Import(result, null));
       await loadEnhance();
     } catch (e) {
-      setS07Outcome(
-        classifyS07Import(null, e instanceof Error ? e.message : 'S-07 导入失败'),
-      );
+      setS07Outcome(classifyS07Import(null, e instanceof Error ? e.message : 'S-07 导入失败'));
     } finally {
       setS07Importing(false);
     }
@@ -472,13 +527,16 @@ export function IqdEnhancePage() {
       const result = await pushIqdEnhancements(cid);
       const pairCount = Number(result.sql_pair_count ?? 0);
       const kbCount = Number(result.knowledge_count ?? 0);
-      setError(`待推送物料：样本对 ${pairCount} 条、知识 ${kbCount} 条（Worker 经 context build 同步）`);
+      setError(
+        `待推送物料：样本对 ${pairCount} 条、知识 ${kbCount} 条（Worker 经 context build 同步）`,
+      );
     } catch (e) {
       setError(e instanceof Error ? e.message : '增强推送失败');
     }
   }, [ensureConnection]);
 
-  const tabs: Array<{ key: Tab; label: string }> = [
+  // 无权的 Tab 不渲染（页面级闸门；避免点进去才 40300）。
+  const allTabs: Array<{ key: Tab; label: string }> = [
     { key: 'mask', label: `脱敏规则（${maskRules.length}）` },
     { key: 'dimension', label: `行级维度（${dimensions.length}）` },
     { key: 'sync', label: '字典同步' },
@@ -486,6 +544,7 @@ export function IqdEnhancePage() {
     { key: 'knowledge', label: `知识/术语（${knowledge.length}）` },
     { key: 'instruction', label: `指令（${instructionCount}）` },
   ];
+  const tabs = allTabs.filter((t) => canViewTab(t.key));
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -503,598 +562,719 @@ export function IqdEnhancePage() {
 
       <SyncStatusBar connectionId={connectionId} />
 
-      <div className="mb-3 flex gap-1 border-b">
-        {tabs.map((t) => (
-          <button
-            key={t.key}
-            type="button"
-            className={cn(
-              'border-b-2 px-3 py-2 text-sm font-medium transition-colors',
-              tab === t.key
-                ? 'border-primary text-foreground'
-                : 'border-transparent text-muted-foreground hover:text-foreground',
-            )}
-            onClick={() => switchTab(t.key)}
-          >
-            {t.label}
-          </button>
-        ))}
-      </div>
-
-      {error ? (
-        <div className="mb-3 rounded-md border border-destructive/30 bg-destructive/5 p-3 text-xs text-destructive">
-          {error}
+      {allowedTab === null ? (
+        <div className="flex min-h-0 flex-1 items-center justify-center text-[13px] text-muted-foreground">
+          当前账号无「知识与规则」任一子页的查看权限 （iqd:mask:view / iqd:dimension:view /
+          iqd:scope:view / iqd:enhance:view）。
         </div>
-      ) : null}
+      ) : (
+        <>
+          <div className="mb-3 flex gap-1 border-b">
+            {tabs.map((t) => (
+              <button
+                key={t.key}
+                type="button"
+                className={cn(
+                  'border-b-2 px-3 py-2 text-sm font-medium transition-colors',
+                  tab === t.key
+                    ? 'border-primary text-foreground'
+                    : 'border-transparent text-muted-foreground hover:text-foreground',
+                )}
+                onClick={() => switchTab(t.key)}
+              >
+                {t.label}
+              </button>
+            ))}
+          </div>
 
-      <div
-        className={cn(
-          'min-h-0 flex-1',
-          tab === 'instruction' ? 'flex flex-col overflow-hidden' : 'overflow-auto',
-        )}
-      >
-        {/* ================= 脱敏规则 ================= */}
-        {tab === 'mask' ? (
-          <div className="space-y-3">
-            <div className="rounded-lg border bg-card p-3">
-              <div className="mb-2 text-sm font-medium">新增脱敏规则</div>
-              <div className="grid grid-cols-1 gap-2 md:grid-cols-5">
-                <Input placeholder="规则名（如 phone）" value={maskName} onChange={(e) => setMaskName(e.target.value)} />
-                <select
-                  className="h-9 rounded-md border border-input bg-card px-[0.7rem] text-sm"
-                  value={maskMatch}
-                  onChange={(e) => setMaskMatch(e.target.value)}
-                >
-                  {Object.entries(MATCH_LABEL).map(([v, l]) => (
-                    <option key={v} value={v}>
-                      {l}
-                    </option>
-                  ))}
-                </select>
-                <Input
-                  placeholder="匹配 pattern（列名 / 正则）"
-                  value={maskPattern}
-                  onChange={(e) => setMaskPattern(e.target.value)}
-                />
-                <select
-                  className="h-9 rounded-md border border-input bg-card px-[0.7rem] text-sm"
-                  value={maskRule}
-                  onChange={(e) => setMaskRule(e.target.value)}
-                >
-                  {Object.entries(RULE_LABEL).map(([v, l]) => (
-                    <option key={v} value={v}>
-                      {l}
-                    </option>
-                  ))}
-                </select>
-                <div className="flex items-center gap-2">
-                  {maskRule === 'custom' ? (
+          {error ? (
+            <div className="mb-3 rounded-md border border-destructive/30 bg-destructive/5 p-3 text-xs text-destructive">
+              {error}
+            </div>
+          ) : null}
+
+          <div
+            className={cn(
+              'min-h-0 flex-1',
+              tab === 'instruction' ? 'flex flex-col overflow-hidden' : 'overflow-auto',
+            )}
+          >
+            {/* ================= 脱敏规则 ================= */}
+            {tab === 'mask' ? (
+              <div className="space-y-3">
+                <div className="rounded-lg border bg-card p-3">
+                  <div className="mb-2 text-sm font-medium">新增脱敏规则</div>
+                  <div className="grid grid-cols-1 gap-2 md:grid-cols-5">
                     <Input
-                      placeholder="替换值"
-                      value={maskReplacement}
-                      onChange={(e) => setMaskReplacement(e.target.value)}
+                      placeholder="规则名（如 phone）"
+                      value={maskName}
+                      onChange={(e) => setMaskName(e.target.value)}
                     />
-                  ) : null}
-                  <Button size="sm" onClick={() => void saveMask()} disabled={saving}>
-                    <Save className="h-4 w-4" />
-                    保存
-                  </Button>
+                    <select
+                      className="h-9 rounded-md border border-input bg-card px-[0.7rem] text-sm"
+                      value={maskMatch}
+                      onChange={(e) => setMaskMatch(e.target.value)}
+                    >
+                      {Object.entries(MATCH_LABEL).map(([v, l]) => (
+                        <option key={v} value={v}>
+                          {l}
+                        </option>
+                      ))}
+                    </select>
+                    <Input
+                      placeholder="匹配 pattern（列名 / 正则）"
+                      value={maskPattern}
+                      onChange={(e) => setMaskPattern(e.target.value)}
+                    />
+                    <select
+                      className="h-9 rounded-md border border-input bg-card px-[0.7rem] text-sm"
+                      value={maskRule}
+                      onChange={(e) => setMaskRule(e.target.value)}
+                    >
+                      {Object.entries(RULE_LABEL).map(([v, l]) => (
+                        <option key={v} value={v}>
+                          {l}
+                        </option>
+                      ))}
+                    </select>
+                    <div className="flex items-center gap-2">
+                      {maskRule === 'custom' ? (
+                        <Input
+                          placeholder="替换值"
+                          value={maskReplacement}
+                          onChange={(e) => setMaskReplacement(e.target.value)}
+                        />
+                      ) : null}
+                      <Button
+                        size="sm"
+                        onClick={() => void saveMask()}
+                        disabled={saving || !canMaskSave}
+                      >
+                        <Save className="h-4 w-4" />
+                        保存
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="rounded-lg border bg-card">
+                  <table className="w-full border-separate border-spacing-0 bg-table-surface text-left text-sm">
+                    <thead className="border-b-2 border-foreground/20 bg-table-header text-muted-foreground">
+                      <tr>
+                        <th className="px-3 py-2 font-bold">名称</th>
+                        <th className="px-3 py-2 font-bold">匹配方式</th>
+                        <th className="px-3 py-2 font-bold">pattern</th>
+                        <th className="px-3 py-2 font-bold">规则</th>
+                        <th className="px-3 py-2 font-bold">优先级</th>
+                        <th className="px-3 py-2 font-bold">启用</th>
+                        <th className="w-14 px-3 py-2" />
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {maskRules.length === 0 ? (
+                        <tr>
+                          <td colSpan={7} className="px-3 py-8 text-center text-muted-foreground">
+                            暂无脱敏规则
+                          </td>
+                        </tr>
+                      ) : (
+                        maskRules.map((r) => (
+                          <tr
+                            key={r.name}
+                            className="border-b border-border/50 bg-table-row last:border-0 even:bg-table-stripe"
+                          >
+                            <td className="px-3 py-2 font-mono text-xs">{r.name}</td>
+                            <td className="px-3 py-2 text-xs">
+                              {MATCH_LABEL[r.match_type] ?? r.match_type}
+                            </td>
+                            <td className="max-w-[18rem] truncate px-3 py-2 font-mono text-xs">
+                              {r.pattern}
+                            </td>
+                            <td className="px-3 py-2 text-xs">{RULE_LABEL[r.rule] ?? r.rule}</td>
+                            <td className="px-3 py-2 text-xs">{r.priority ?? 0}</td>
+                            <td className="px-3 py-2 text-xs">
+                              {r.enabled ? (
+                                <span className="text-success">启用</span>
+                              ) : (
+                                <span className="text-muted-foreground">停用</span>
+                              )}
+                            </td>
+                            <td className="px-3 py-2">
+                              <Button
+                                size="icon"
+                                variant="ghost"
+                                className="h-8 w-8 text-muted-foreground hover:text-destructive"
+                                onClick={() => void removeMask(r.id)}
+                                disabled={!canMaskSave}
+                                title={canMaskSave ? '删除' : '需 iqd:mask:save'}
+                              >
+                                <Trash2 className="h-4 w-4" />
+                              </Button>
+                            </td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
                 </div>
               </div>
-            </div>
-
-            <div className="rounded-lg border bg-card">
-              <table className="w-full border-separate border-spacing-0 bg-table-surface text-left text-sm">
-                <thead className="border-b-2 border-foreground/20 bg-table-header text-muted-foreground">
-                  <tr>
-                    <th className="px-3 py-2 font-bold">名称</th>
-                    <th className="px-3 py-2 font-bold">匹配方式</th>
-                    <th className="px-3 py-2 font-bold">pattern</th>
-                    <th className="px-3 py-2 font-bold">规则</th>
-                    <th className="px-3 py-2 font-bold">优先级</th>
-                    <th className="px-3 py-2 font-bold">启用</th>
-                    <th className="w-14 px-3 py-2" />
-                  </tr>
-                </thead>
-                <tbody>
-                  {maskRules.length === 0 ? (
-                    <tr>
-                      <td colSpan={7} className="px-3 py-8 text-center text-muted-foreground">
-                        暂无脱敏规则
-                      </td>
-                    </tr>
-                  ) : (
-                    maskRules.map((r) => (
-                      <tr
-                        key={r.name}
-                        className="border-b border-border/50 bg-table-row last:border-0 even:bg-table-stripe"
-                      >
-                        <td className="px-3 py-2 font-mono text-xs">{r.name}</td>
-                        <td className="px-3 py-2 text-xs">{MATCH_LABEL[r.match_type] ?? r.match_type}</td>
-                        <td className="max-w-[18rem] truncate px-3 py-2 font-mono text-xs">{r.pattern}</td>
-                        <td className="px-3 py-2 text-xs">{RULE_LABEL[r.rule] ?? r.rule}</td>
-                        <td className="px-3 py-2 text-xs">{r.priority ?? 0}</td>
-                        <td className="px-3 py-2 text-xs">
-                          {r.enabled ? <span className="text-success">启用</span> : <span className="text-muted-foreground">停用</span>}
-                        </td>
-                        <td className="px-3 py-2">
-                          <Button
-                            size="icon"
-                            variant="ghost"
-                            className="h-8 w-8 text-muted-foreground hover:text-destructive"
-                            onClick={() => void removeMask(r.id)}
-                            title="删除"
-                          >
-                            <Trash2 className="h-4 w-4" />
-                          </Button>
-                        </td>
-                      </tr>
-                    ))
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        ) : null}
-
-        {/* ================= 维度注册表 ================= */}
-        {tab === 'dimension' ? (
-          <div className="space-y-3">
-            <div className="rounded-lg border bg-card p-3">
-              <div className="mb-2 text-sm font-medium">新增维度</div>
-              <div className="grid grid-cols-1 gap-2 md:grid-cols-6">
-                <Input placeholder="维度码（dept）" value={dimCode} onChange={(e) => setDimCode(e.target.value)} />
-                <Input placeholder="维度名（部门）" value={dimName} onChange={(e) => setDimName(e.target.value)} />
-                <select
-                  className="h-9 rounded-md border border-input bg-card px-[0.7rem] text-sm"
-                  value={dimPredicate}
-                  onChange={(e) => setDimPredicate(e.target.value)}
-                >
-                  <option value="PATH_PREFIX">PATH_PREFIX</option>
-                  <option value="ENUM">ENUM</option>
-                </select>
-                <Input placeholder="条件列（dept_id）" value={dimColumn} onChange={(e) => setDimColumn(e.target.value)} />
-                <Input
-                  placeholder="请求头（X-Mis-Dept-Scope）"
-                  value={dimHeader}
-                  onChange={(e) => setDimHeader(e.target.value)}
-                />
-                <Input
-                  placeholder="字典表（mis_dept_scope）"
-                  value={dimDictTable}
-                  onChange={(e) => setDimDictTable(e.target.value)}
-                />
-              </div>
-              <div className="mt-2">
-                <Button size="sm" onClick={() => void saveDimension()} disabled={saving}>
-                  <Plus className="h-4 w-4" />
-                  新增维度
-                </Button>
-              </div>
-            </div>
-
-            <div className="rounded-lg border bg-card">
-              <table className="w-full border-separate border-spacing-0 bg-table-surface text-left text-sm">
-                <thead className="border-b-2 border-foreground/20 bg-table-header text-muted-foreground">
-                  <tr>
-                    <th className="px-3 py-2 font-bold">维度码</th>
-                    <th className="px-3 py-2 font-bold">维度名</th>
-                    <th className="px-3 py-2 font-bold">策略</th>
-                    <th className="px-3 py-2 font-bold">条件列</th>
-                    <th className="px-3 py-2 font-bold">请求头</th>
-                    <th className="px-3 py-2 font-bold">字典表</th>
-                    <th className="px-3 py-2 font-bold">启用</th>
-                    <th className="w-14 px-3 py-2" />
-                  </tr>
-                </thead>
-                <tbody>
-                  {dimensions.length === 0 ? (
-                    <tr>
-                      <td colSpan={8} className="px-3 py-8 text-center text-muted-foreground">
-                        暂无维度（内置 dept/store 种子见 V71）
-                      </td>
-                    </tr>
-                  ) : (
-                    dimensions.map((d) => (
-                      <tr
-                        key={d.dimension_code}
-                        className="border-b border-border/50 bg-table-row last:border-0 even:bg-table-stripe"
-                      >
-                        <td className="px-3 py-2 font-mono text-xs">{d.dimension_code}</td>
-                        <td className="px-3 py-2 text-xs">{d.dimension_name}</td>
-                        <td className="px-3 py-2 text-xs">{PREDICATE_LABEL[d.predicate_type] ?? d.predicate_type}</td>
-                        <td className="px-3 py-2 font-mono text-xs">{d.column_name}</td>
-                        <td className="px-3 py-2 font-mono text-xs">{d.header_name}</td>
-                        <td className="px-3 py-2 font-mono text-xs">{d.dict_table ?? '—'}</td>
-                        <td className="px-3 py-2 text-xs">
-                          {d.enabled ? <span className="text-success">启用</span> : <span className="text-muted-foreground">停用</span>}
-                        </td>
-                        <td className="px-3 py-2">
-                          <Button
-                            size="icon"
-                            variant="ghost"
-                            className="h-8 w-8 text-muted-foreground hover:text-destructive"
-                            onClick={() => void removeDimension(d.id)}
-                            title="删除"
-                          >
-                            <Trash2 className="h-4 w-4" />
-                          </Button>
-                        </td>
-                      </tr>
-                    ))
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        ) : null}
-
-        {/* ================= 字典同步 ================= */}
-        {tab === 'sync' ? (
-          <div className="space-y-3">
-            <div className="rounded-md border border-info/30 bg-info/5 p-3 text-xs text-muted-foreground">
-              <p className="leading-relaxed">
-                中心每日 03:30 全量同步（IqdScopeSyncJobService）。此处可手动触发单维度同步；
-                同步完成后发变更事件，Worker 缓存按桶失效。同步失败该连接行级降级
-                ENUM/FAIL_CLOSED（45204，不静默放行）。
-              </p>
-            </div>
-            <div className="rounded-lg border bg-card">
-              <table className="w-full border-separate border-spacing-0 bg-table-surface text-left text-sm">
-                <thead className="border-b-2 border-foreground/20 bg-table-header text-muted-foreground">
-                  <tr>
-                    <th className="px-3 py-2 font-bold">维度</th>
-                    <th className="px-3 py-2 font-bold">状态</th>
-                    <th className="px-3 py-2 font-bold">消息</th>
-                    <th className="px-3 py-2 font-bold">更新时间</th>
-                    <th className="w-28 px-3 py-2 font-bold">操作</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {syncStatus.length === 0 ? (
-                    <tr>
-                      <td colSpan={5} className="px-3 py-8 text-center text-muted-foreground">
-                        暂无同步记录（维度字典复用主数据或尚未同步）
-                      </td>
-                    </tr>
-                  ) : (
-                    syncStatus.map((s) => (
-                      <tr
-                        key={s.dimension}
-                        className="border-b border-border/50 bg-table-row last:border-0 even:bg-table-stripe"
-                      >
-                        <td className="px-3 py-2 font-mono text-xs">{s.dimension}</td>
-                        <td className="px-3 py-2 text-xs">
-                          <Badge variant={s.status === 'ok' ? 'default' : s.status === 'partial' ? 'secondary' : 'destructive'}>
-                            {s.status}
-                          </Badge>
-                        </td>
-                        <td className="max-w-[24rem] truncate px-3 py-2 text-xs text-muted-foreground" title={s.message}>
-                          {s.message ?? '—'}
-                        </td>
-                        <td className="px-3 py-2 text-xs text-muted-foreground">{s.updated_at ?? '—'}</td>
-                        <td className="px-3 py-2">
-                          <Button size="sm" variant="outline" onClick={() => void runSync(s.dimension)}>
-                            触发同步
-                          </Button>
-                        </td>
-                      </tr>
-                    ))
-                  )}
-                </tbody>
-              </table>
-            </div>
-            {syncStatus.length === 0 ? (
-              <div className="flex gap-2">
-                <Button size="sm" variant="outline" onClick={() => void runSync('dept')}>
-                  触发 dept 同步
-                </Button>
-                <Button size="sm" variant="outline" onClick={() => void runSync('store')}>
-                  触发 store 同步
-                </Button>
-              </div>
-            ) : null}
-          </div>
-        ) : null}
-
-        {/* ================= 样本对（W4）================= */}
-        {tab === 'sqlpair' ? (
-          <div className="space-y-3">
-            {/* 查询条件 */}
-            <div className="flex flex-wrap items-center gap-2 rounded-lg border bg-card p-3">
-              <Input
-                className="h-9 w-full sm:w-64"
-                placeholder="按问题关键词过滤"
-                value={pairKeyword}
-                onChange={(e) => setPairKeyword(e.target.value)}
-              />
-              <select
-                className="h-9 rounded-md border border-input bg-card px-2.5 text-sm"
-                value={pairDialectFilter}
-                onChange={(e) => setPairDialectFilter(e.target.value)}
-                aria-label="方言筛选"
-              >
-                <option value="all">全部方言</option>
-                <option value="oracle">Oracle</option>
-                <option value="mysql">MySQL</option>
-                <option value="postgres">PostgreSQL</option>
-                <option value="clickhouse">ClickHouse</option>
-              </select>
-              <Button size="sm" onClick={() => openPairDialog(null)} disabled={saving}>
-                <Plus className="h-4 w-4" />
-                新增
-              </Button>
-              <Button size="sm" variant="outline" onClick={() => void loadEnhance()} disabled={loading}>
-                <RefreshCw className={cn('h-4 w-4', loading && 'animate-spin')} />
-                刷新
-              </Button>
-            </div>
-
-            {/* 查询结果 */}
-            <div className="rounded-lg border bg-card">
-              <table className="w-full border-separate border-spacing-0 bg-table-surface text-left text-sm">
-                <thead className="border-b-2 border-foreground/20 bg-table-header text-muted-foreground">
-                  <tr>
-                    <th className="px-3 py-2 font-bold">问题</th>
-                    <th className="px-3 py-2 font-bold">方言</th>
-                    <th className="px-3 py-2 font-bold">SQL</th>
-                    <th className="px-3 py-2 font-bold">状态</th>
-                    <th className="px-3 py-2 font-bold">Wren ref</th>
-                    <th className="w-[7rem] px-3 py-2" />
-                  </tr>
-                </thead>
-                <tbody>
-                  {filteredPairs.length === 0 ? (
-                    <tr>
-                      <td colSpan={6} className="px-3 py-8 text-center text-muted-foreground">
-                        暂无样本对
-                      </td>
-                    </tr>
-                  ) : (
-                    filteredPairs.map((p) => (
-                      <tr
-                        key={p.id}
-                        className="border-b border-border/50 bg-table-row last:border-0 even:bg-table-stripe"
-                      >
-                        <td className="max-w-[14rem] truncate px-3 py-2 text-xs" title={p.question}>
-                          {p.question}
-                        </td>
-                        <td className="px-3 py-2 text-xs">
-                          {DIALECT_LABEL[p.source_dialect ?? ''] ?? p.source_dialect}
-                        </td>
-                        <td className="max-w-[24rem] truncate px-3 py-2 font-mono text-xs" title={p.wren_sql}>
-                          {p.wren_sql}
-                        </td>
-                        <td className="px-3 py-2 text-xs">
-                          <Badge
-                            variant={
-                              p.sync_status === 'synced'
-                                ? 'default'
-                                : p.sync_status === 'failed'
-                                  ? 'destructive'
-                                  : 'secondary'
-                            }
-                          >
-                            {SYNC_LABEL[p.sync_status ?? ''] ?? p.sync_status}
-                          </Badge>
-                        </td>
-                        <td className="px-3 py-2 font-mono text-xs">{p.wren_ref_id ?? '—'}</td>
-                        <td className="px-3 py-2">
-                          <div className="flex items-center gap-1">
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              className="h-8"
-                              onClick={() => openPairDialog(p)}
-                            >
-                              编辑
-                            </Button>
-                            <Button
-                              size="icon"
-                              variant="ghost"
-                              className="h-8 w-8 text-muted-foreground hover:text-destructive"
-                              onClick={() => void removePair(p.id)}
-                              title="删除"
-                            >
-                              <Trash2 className="h-4 w-4" />
-                            </Button>
-                          </div>
-                        </td>
-                      </tr>
-                    ))
-                  )}
-                </tbody>
-              </table>
-            </div>
-
-            <IqdSqlPairDialog
-              open={pairDialogOpen}
-              initial={pairEditing}
-              onClose={closePairDialog}
-              onSaved={handlePairSaved}
-              ensureConnection={ensureConnection}
-            />
-          </div>
-        ) : null}
-
-        {/* ================= 知识/术语（W4；布局对齐样本对：筛选栏 + 表格 + 弹窗）================= */}
-        {tab === 'knowledge' ? (
-          <div className="space-y-3">
-            {/* 查询条件 + 动作（**布局与样本对 Tab 一致**；新增/编辑走右侧弹窗） */}
-            <div className="flex flex-wrap items-center gap-2 rounded-lg border bg-card p-3">
-              <Input
-                className="h-9 w-full sm:w-64"
-                placeholder="按标题/内容关键词过滤"
-                value={kbKeyword}
-                onChange={(e) => setKbKeyword(e.target.value)}
-              />
-              <select
-                className="h-9 rounded-md border border-input bg-card px-2.5 text-sm"
-                value={kbKindFilter}
-                onChange={(e) => setKbKindFilter(e.target.value)}
-                aria-label="知识类型筛选"
-              >
-                <option value="all">全部类型</option>
-                {Object.entries(KNOWLEDGE_KIND_LABEL).map(([v, l]) => (
-                  <option key={v} value={v}>
-                    {l}
-                  </option>
-                ))}
-              </select>
-              <Button size="sm" onClick={() => openKnowledgeDialog(null)} disabled={saving}>
-                <Plus className="h-4 w-4" />
-                新增
-              </Button>
-              <Button size="sm" variant="outline" onClick={() => void loadEnhance()} disabled={loading}>
-                <RefreshCw className={cn('h-4 w-4', loading && 'animate-spin')} />
-                刷新
-              </Button>
-              {/* S-07 术语导入（T04e ③）：A6 未就绪 → 置灰 + tooltip（**诚实显示不可用**，不假装可用） */}
-              <Button
-                size="sm"
-                variant="outline"
-                className="h-8"
-                onClick={() => void importS07()}
-                disabled={!canTriggerS07Import(S07_IMPORT_READY, s07Importing)}
-                title={s07ButtonTitle(S07_IMPORT_READY)}
-              >
-                <Upload className="h-3.5 w-3.5" />
-                S-07 术语导入
-              </Button>
-              {!S07_IMPORT_READY ? (
-                <span className="text-[11px] text-muted-foreground">
-                  S-07 未就绪（架构 A6 待确认）：当前仅支持本地录入
-                </span>
-              ) : null}
-              <Button size="sm" variant="outline" className="h-8" onClick={() => void pushEnhance()}>
-                <Send className="h-3.5 w-3.5" />
-                增强推送
-              </Button>
-            </div>
-
-            {s07Outcome && s07Outcome.label ? (
-              <p
-                className={cn(
-                  'text-[12px]',
-                  s07Outcome.state === 'failed'
-                    ? 'text-destructive'
-                    : s07Outcome.state === 'imported'
-                      ? 'text-success'
-                      : 'text-muted-foreground',
-                )}
-              >
-                {s07Outcome.label}
-              </p>
             ) : null}
 
-            <div className="rounded-lg border bg-card">
-              <table className="w-full border-separate border-spacing-0 bg-table-surface text-left text-sm">
-                <thead className="border-b-2 border-foreground/20 bg-table-header text-muted-foreground">
-                  <tr>
-                    <th className="px-3 py-2 font-bold">类型</th>
-                    <th className="px-3 py-2 font-bold">标题</th>
-                    <th className="px-3 py-2 font-bold">内容</th>
-                    <th className="px-3 py-2 font-bold">关联对象</th>
-                    <th className="px-3 py-2 font-bold">来源</th>
-                    <th className="px-3 py-2 font-bold">状态</th>
-                    <th className="w-[7rem] px-3 py-2" />
-                  </tr>
-                </thead>
-                <tbody>
-                  {filteredKnowledge.length === 0 ? (
-                    <tr>
-                      <td colSpan={7} className="px-3 py-8 text-center text-muted-foreground">
-                        {knowledge.length === 0 ? '暂无知识条目' : '没有匹配的知识条目'}
-                      </td>
-                    </tr>
-                  ) : (
-                    filteredKnowledge.map((k) => {
-                      const related = summarizeRelatedItemKeys(k.related_item_keys);
-                      return (
-                      <tr
-                        key={k.id}
-                        className="border-b border-border/50 bg-table-row last:border-0 even:bg-table-stripe"
-                      >
-                        <td className="px-3 py-2 text-xs">
-                          {KNOWLEDGE_KIND_LABEL[k.kind] ?? k.kind}
-                        </td>
-                        <td className="max-w-[14rem] truncate px-3 py-2 text-xs" title={k.title}>
-                          {k.title}
-                        </td>
-                        <td className="max-w-[24rem] truncate px-3 py-2 text-xs text-muted-foreground" title={k.content ?? ''}>
-                          {k.content ?? '—'}
-                        </td>
-                        {/* 关联对象（T04e ②/MR-09）：wire 为 JSON 字符串数组；空 = 全连接通用 */}
-                        <td className="px-3 py-2 text-xs" title={related.keys.join('、')}>
-                          {related.isGlobal ? (
-                            <span className="text-muted-foreground">全连接通用</span>
-                          ) : (
-                            <span className="font-mono">{related.count} 项</span>
-                          )}
-                        </td>
-                        <td className="px-3 py-2 font-mono text-xs">{k.source ?? 'local'}</td>
-                        <td className="px-3 py-2 text-xs">
-                          <div className="flex items-center gap-1">
-                            <Badge
-                              variant={
-                                k.sync_status === 'synced'
-                                  ? 'default'
-                                  : k.sync_status === 'failed'
-                                    ? 'destructive'
-                                    : 'secondary'
-                              }
-                            >
-                              {SYNC_LABEL[k.sync_status ?? ''] ?? k.sync_status}
-                            </Badge>
-                            {/* 启用态可在弹窗里改；停用条目在列表里要看得见（否则改完没反馈） */}
-                            {k.enabled === false ? <Badge variant="outline">已停用</Badge> : null}
-                          </div>
-                        </td>
-                        <td className="px-3 py-2">
-                          <div className="flex items-center gap-1">
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              className="h-8"
-                              onClick={() => openKnowledgeDialog(k)}
-                            >
-                              <Pencil className="h-3.5 w-3.5" />
-                              编辑
-                            </Button>
-                            <Button
-                              size="icon"
-                              variant="ghost"
-                              className="h-8 w-8 text-muted-foreground hover:text-destructive"
-                              onClick={() => void removeKnowledgeItem(k.id)}
-                              title="删除"
-                            >
-                              <Trash2 className="h-4 w-4" />
-                            </Button>
-                          </div>
-                        </td>
+            {/* ================= 维度注册表 ================= */}
+            {tab === 'dimension' ? (
+              <div className="space-y-3">
+                <div className="rounded-lg border bg-card p-3">
+                  <div className="mb-2 text-sm font-medium">新增维度</div>
+                  <div className="grid grid-cols-1 gap-2 md:grid-cols-6">
+                    <Input
+                      placeholder="维度码（dept）"
+                      value={dimCode}
+                      onChange={(e) => setDimCode(e.target.value)}
+                    />
+                    <Input
+                      placeholder="维度名（部门）"
+                      value={dimName}
+                      onChange={(e) => setDimName(e.target.value)}
+                    />
+                    <select
+                      className="h-9 rounded-md border border-input bg-card px-[0.7rem] text-sm"
+                      value={dimPredicate}
+                      onChange={(e) => setDimPredicate(e.target.value)}
+                    >
+                      <option value="PATH_PREFIX">PATH_PREFIX</option>
+                      <option value="ENUM">ENUM</option>
+                    </select>
+                    <Input
+                      placeholder="条件列（dept_id）"
+                      value={dimColumn}
+                      onChange={(e) => setDimColumn(e.target.value)}
+                    />
+                    <Input
+                      placeholder="请求头（X-Mis-Dept-Scope）"
+                      value={dimHeader}
+                      onChange={(e) => setDimHeader(e.target.value)}
+                    />
+                    <Input
+                      placeholder="字典表（mis_dept_scope）"
+                      value={dimDictTable}
+                      onChange={(e) => setDimDictTable(e.target.value)}
+                    />
+                  </div>
+                  <div className="mt-2">
+                    <Button
+                      size="sm"
+                      onClick={() => void saveDimension()}
+                      disabled={saving || !canDimensionSave}
+                    >
+                      <Plus className="h-4 w-4" />
+                      新增维度
+                    </Button>
+                  </div>
+                </div>
+
+                <div className="rounded-lg border bg-card">
+                  <table className="w-full border-separate border-spacing-0 bg-table-surface text-left text-sm">
+                    <thead className="border-b-2 border-foreground/20 bg-table-header text-muted-foreground">
+                      <tr>
+                        <th className="px-3 py-2 font-bold">维度码</th>
+                        <th className="px-3 py-2 font-bold">维度名</th>
+                        <th className="px-3 py-2 font-bold">策略</th>
+                        <th className="px-3 py-2 font-bold">条件列</th>
+                        <th className="px-3 py-2 font-bold">请求头</th>
+                        <th className="px-3 py-2 font-bold">字典表</th>
+                        <th className="px-3 py-2 font-bold">启用</th>
+                        <th className="w-14 px-3 py-2" />
                       </tr>
-                      );
-                    })
-                  )}
-                </tbody>
-              </table>
-            </div>
+                    </thead>
+                    <tbody>
+                      {dimensions.length === 0 ? (
+                        <tr>
+                          <td colSpan={8} className="px-3 py-8 text-center text-muted-foreground">
+                            暂无维度（内置 dept/store 种子见 V71）
+                          </td>
+                        </tr>
+                      ) : (
+                        dimensions.map((d) => (
+                          <tr
+                            key={d.dimension_code}
+                            className="border-b border-border/50 bg-table-row last:border-0 even:bg-table-stripe"
+                          >
+                            <td className="px-3 py-2 font-mono text-xs">{d.dimension_code}</td>
+                            <td className="px-3 py-2 text-xs">{d.dimension_name}</td>
+                            <td className="px-3 py-2 text-xs">
+                              {PREDICATE_LABEL[d.predicate_type] ?? d.predicate_type}
+                            </td>
+                            <td className="px-3 py-2 font-mono text-xs">{d.column_name}</td>
+                            <td className="px-3 py-2 font-mono text-xs">{d.header_name}</td>
+                            <td className="px-3 py-2 font-mono text-xs">{d.dict_table ?? '—'}</td>
+                            <td className="px-3 py-2 text-xs">
+                              {d.enabled ? (
+                                <span className="text-success">启用</span>
+                              ) : (
+                                <span className="text-muted-foreground">停用</span>
+                              )}
+                            </td>
+                            <td className="px-3 py-2">
+                              <Button
+                                size="icon"
+                                variant="ghost"
+                                className="h-8 w-8 text-muted-foreground hover:text-destructive"
+                                onClick={() => void removeDimension(d.id)}
+                                disabled={!canDimensionSave}
+                                title={canDimensionSave ? '删除' : '需 iqd:dimension:save'}
+                              >
+                                <Trash2 className="h-4 w-4" />
+                              </Button>
+                            </td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            ) : null}
 
-            <IqdKnowledgeDialog
-              open={kbDialogOpen}
-              initial={kbEditing}
-              onClose={closeKnowledgeDialog}
-              onSaved={handleKnowledgeSaved}
-              ensureConnection={ensureConnection}
-            />
+            {/* ================= 字典同步 ================= */}
+            {tab === 'sync' ? (
+              <div className="space-y-3">
+                <div className="rounded-md border border-info/30 bg-info/5 p-3 text-xs text-muted-foreground">
+                  <p className="leading-relaxed">
+                    中心每日 03:30 全量同步（IqdScopeSyncJobService）。此处可手动触发单维度同步；
+                    同步完成后发变更事件，Worker 缓存按桶失效。同步失败该连接行级降级
+                    ENUM/FAIL_CLOSED（45204，不静默放行）。
+                  </p>
+                </div>
+                <div className="rounded-lg border bg-card">
+                  <table className="w-full border-separate border-spacing-0 bg-table-surface text-left text-sm">
+                    <thead className="border-b-2 border-foreground/20 bg-table-header text-muted-foreground">
+                      <tr>
+                        <th className="px-3 py-2 font-bold">维度</th>
+                        <th className="px-3 py-2 font-bold">状态</th>
+                        <th className="px-3 py-2 font-bold">消息</th>
+                        <th className="px-3 py-2 font-bold">更新时间</th>
+                        <th className="w-28 px-3 py-2 font-bold">操作</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {syncStatus.length === 0 ? (
+                        <tr>
+                          <td colSpan={5} className="px-3 py-8 text-center text-muted-foreground">
+                            暂无同步记录（维度字典复用主数据或尚未同步）
+                          </td>
+                        </tr>
+                      ) : (
+                        syncStatus.map((s) => (
+                          <tr
+                            key={s.dimension}
+                            className="border-b border-border/50 bg-table-row last:border-0 even:bg-table-stripe"
+                          >
+                            <td className="px-3 py-2 font-mono text-xs">{s.dimension}</td>
+                            <td className="px-3 py-2 text-xs">
+                              <Badge
+                                variant={
+                                  s.status === 'ok'
+                                    ? 'default'
+                                    : s.status === 'partial'
+                                      ? 'secondary'
+                                      : 'destructive'
+                                }
+                              >
+                                {s.status}
+                              </Badge>
+                            </td>
+                            <td
+                              className="max-w-[24rem] truncate px-3 py-2 text-xs text-muted-foreground"
+                              title={s.message}
+                            >
+                              {s.message ?? '—'}
+                            </td>
+                            <td className="px-3 py-2 text-xs text-muted-foreground">
+                              {s.updated_at ?? '—'}
+                            </td>
+                            <td className="px-3 py-2">
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                onClick={() => void runSync(s.dimension)}
+                                disabled={!canScopeSync}
+                                title={canScopeSync ? undefined : '需 iqd:scope:sync'}
+                              >
+                                触发同步
+                              </Button>
+                            </td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+                {syncStatus.length === 0 ? (
+                  <div className="flex gap-2">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => void runSync('dept')}
+                      disabled={!canScopeSync}
+                      title={canScopeSync ? undefined : '需 iqd:scope:sync'}
+                    >
+                      触发 dept 同步
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => void runSync('store')}
+                      disabled={!canScopeSync}
+                      title={canScopeSync ? undefined : '需 iqd:scope:sync'}
+                    >
+                      触发 store 同步
+                    </Button>
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+
+            {/* ================= 样本对（W4）================= */}
+            {tab === 'sqlpair' ? (
+              <div className="space-y-3">
+                {/* 查询条件 */}
+                <div className="flex flex-wrap items-center gap-2 rounded-lg border bg-card p-3">
+                  <Input
+                    className="h-9 w-full sm:w-64"
+                    placeholder="按问题关键词过滤"
+                    value={pairKeyword}
+                    onChange={(e) => setPairKeyword(e.target.value)}
+                  />
+                  <select
+                    className="h-9 rounded-md border border-input bg-card px-2.5 text-sm"
+                    value={pairDialectFilter}
+                    onChange={(e) => setPairDialectFilter(e.target.value)}
+                    aria-label="方言筛选"
+                  >
+                    <option value="all">全部方言</option>
+                    <option value="oracle">Oracle</option>
+                    <option value="mysql">MySQL</option>
+                    <option value="postgres">PostgreSQL</option>
+                    <option value="clickhouse">ClickHouse</option>
+                  </select>
+                  <Button size="sm" onClick={() => openPairDialog(null)} disabled={saving}>
+                    <Plus className="h-4 w-4" />
+                    新增
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => void loadEnhance()}
+                    disabled={loading}
+                  >
+                    <RefreshCw className={cn('h-4 w-4', loading && 'animate-spin')} />
+                    刷新
+                  </Button>
+                </div>
+
+                {/* 查询结果 */}
+                <div className="rounded-lg border bg-card">
+                  <table className="w-full border-separate border-spacing-0 bg-table-surface text-left text-sm">
+                    <thead className="border-b-2 border-foreground/20 bg-table-header text-muted-foreground">
+                      <tr>
+                        <th className="px-3 py-2 font-bold">问题</th>
+                        <th className="px-3 py-2 font-bold">方言</th>
+                        <th className="px-3 py-2 font-bold">SQL</th>
+                        <th className="px-3 py-2 font-bold">状态</th>
+                        <th className="px-3 py-2 font-bold">Wren ref</th>
+                        <th className="w-[7rem] px-3 py-2" />
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {filteredPairs.length === 0 ? (
+                        <tr>
+                          <td colSpan={6} className="px-3 py-8 text-center text-muted-foreground">
+                            暂无样本对
+                          </td>
+                        </tr>
+                      ) : (
+                        filteredPairs.map((p) => (
+                          <tr
+                            key={p.id}
+                            className="border-b border-border/50 bg-table-row last:border-0 even:bg-table-stripe"
+                          >
+                            <td
+                              className="max-w-[14rem] truncate px-3 py-2 text-xs"
+                              title={p.question}
+                            >
+                              {p.question}
+                            </td>
+                            <td className="px-3 py-2 text-xs">
+                              {DIALECT_LABEL[p.source_dialect ?? ''] ?? p.source_dialect}
+                            </td>
+                            <td
+                              className="max-w-[24rem] truncate px-3 py-2 font-mono text-xs"
+                              title={p.wren_sql}
+                            >
+                              {p.wren_sql}
+                            </td>
+                            <td className="px-3 py-2 text-xs">
+                              <Badge
+                                variant={
+                                  p.sync_status === 'synced'
+                                    ? 'default'
+                                    : p.sync_status === 'failed'
+                                      ? 'destructive'
+                                      : 'secondary'
+                                }
+                              >
+                                {SYNC_LABEL[p.sync_status ?? ''] ?? p.sync_status}
+                              </Badge>
+                            </td>
+                            <td className="px-3 py-2 font-mono text-xs">{p.wren_ref_id ?? '—'}</td>
+                            <td className="px-3 py-2">
+                              <div className="flex items-center gap-1">
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  className="h-8"
+                                  onClick={() => openPairDialog(p)}
+                                  disabled={!canPairSave}
+                                >
+                                  编辑
+                                </Button>
+                                <Button
+                                  size="icon"
+                                  variant="ghost"
+                                  className="h-8 w-8 text-muted-foreground hover:text-destructive"
+                                  onClick={() => void removePair(p.id)}
+                                  disabled={!canPairSave}
+                                  title={canPairSave ? '删除' : '需 iqd:enhance:save'}
+                                >
+                                  <Trash2 className="h-4 w-4" />
+                                </Button>
+                              </div>
+                            </td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+
+                <IqdSqlPairDialog
+                  open={pairDialogOpen}
+                  initial={pairEditing}
+                  onClose={closePairDialog}
+                  onSaved={handlePairSaved}
+                  ensureConnection={ensureConnection}
+                />
+              </div>
+            ) : null}
+
+            {/* ================= 知识/术语（W4；布局对齐样本对：筛选栏 + 表格 + 弹窗）================= */}
+            {tab === 'knowledge' ? (
+              <div className="space-y-3">
+                {/* 查询条件 + 动作（**布局与样本对 Tab 一致**；新增/编辑走右侧弹窗） */}
+                <div className="flex flex-wrap items-center gap-2 rounded-lg border bg-card p-3">
+                  <Input
+                    className="h-9 w-full sm:w-64"
+                    placeholder="按标题/内容关键词过滤"
+                    value={kbKeyword}
+                    onChange={(e) => setKbKeyword(e.target.value)}
+                  />
+                  <select
+                    className="h-9 rounded-md border border-input bg-card px-2.5 text-sm"
+                    value={kbKindFilter}
+                    onChange={(e) => setKbKindFilter(e.target.value)}
+                    aria-label="知识类型筛选"
+                  >
+                    <option value="all">全部类型</option>
+                    {Object.entries(KNOWLEDGE_KIND_LABEL).map(([v, l]) => (
+                      <option key={v} value={v}>
+                        {l}
+                      </option>
+                    ))}
+                  </select>
+                  <Button
+                    size="sm"
+                    onClick={() => openKnowledgeDialog(null)}
+                    disabled={saving || !canKnowledgeSave}
+                  >
+                    <Plus className="h-4 w-4" />
+                    新增
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => void loadEnhance()}
+                    disabled={loading}
+                  >
+                    <RefreshCw className={cn('h-4 w-4', loading && 'animate-spin')} />
+                    刷新
+                  </Button>
+                  {/* S-07 术语导入（T04e ③）：A6 未就绪 → 置灰 + tooltip（**诚实显示不可用**，不假装可用） */}
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-8"
+                    onClick={() => void importS07()}
+                    disabled={
+                      !canKnowledgeSave || !canTriggerS07Import(S07_IMPORT_READY, s07Importing)
+                    }
+                    title={s07ButtonTitle(S07_IMPORT_READY)}
+                  >
+                    <Upload className="h-3.5 w-3.5" />
+                    S-07 术语导入
+                  </Button>
+                  {!S07_IMPORT_READY ? (
+                    <span className="text-[11px] text-muted-foreground">
+                      S-07 未就绪（架构 A6 待确认）：当前仅支持本地录入
+                    </span>
+                  ) : null}
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-8"
+                    onClick={() => void pushEnhance()}
+                    disabled={!canKnowledgeSync}
+                    title={canKnowledgeSync ? undefined : '需 iqd:enhance:sync'}
+                  >
+                    <Send className="h-3.5 w-3.5" />
+                    增强推送
+                  </Button>
+                </div>
+
+                {s07Outcome && s07Outcome.label ? (
+                  <p
+                    className={cn(
+                      'text-[12px]',
+                      s07Outcome.state === 'failed'
+                        ? 'text-destructive'
+                        : s07Outcome.state === 'imported'
+                          ? 'text-success'
+                          : 'text-muted-foreground',
+                    )}
+                  >
+                    {s07Outcome.label}
+                  </p>
+                ) : null}
+
+                <div className="rounded-lg border bg-card">
+                  <table className="w-full border-separate border-spacing-0 bg-table-surface text-left text-sm">
+                    <thead className="border-b-2 border-foreground/20 bg-table-header text-muted-foreground">
+                      <tr>
+                        <th className="px-3 py-2 font-bold">类型</th>
+                        <th className="px-3 py-2 font-bold">标题</th>
+                        <th className="px-3 py-2 font-bold">内容</th>
+                        <th className="px-3 py-2 font-bold">关联对象</th>
+                        <th className="px-3 py-2 font-bold">来源</th>
+                        <th className="px-3 py-2 font-bold">状态</th>
+                        <th className="w-[7rem] px-3 py-2" />
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {filteredKnowledge.length === 0 ? (
+                        <tr>
+                          <td colSpan={7} className="px-3 py-8 text-center text-muted-foreground">
+                            {knowledge.length === 0 ? '暂无知识条目' : '没有匹配的知识条目'}
+                          </td>
+                        </tr>
+                      ) : (
+                        filteredKnowledge.map((k) => {
+                          const related = summarizeRelatedItemKeys(k.related_item_keys);
+                          return (
+                            <tr
+                              key={k.id}
+                              className="border-b border-border/50 bg-table-row last:border-0 even:bg-table-stripe"
+                            >
+                              <td className="px-3 py-2 text-xs">
+                                {KNOWLEDGE_KIND_LABEL[k.kind] ?? k.kind}
+                              </td>
+                              <td
+                                className="max-w-[14rem] truncate px-3 py-2 text-xs"
+                                title={k.title}
+                              >
+                                {k.title}
+                              </td>
+                              <td
+                                className="max-w-[24rem] truncate px-3 py-2 text-xs text-muted-foreground"
+                                title={k.content ?? ''}
+                              >
+                                {k.content ?? '—'}
+                              </td>
+                              {/* 关联对象（T04e ②/MR-09）：wire 为 JSON 字符串数组；空 = 全连接通用 */}
+                              <td className="px-3 py-2 text-xs" title={related.keys.join('、')}>
+                                {related.isGlobal ? (
+                                  <span className="text-muted-foreground">全连接通用</span>
+                                ) : (
+                                  <span className="font-mono">{related.count} 项</span>
+                                )}
+                              </td>
+                              <td className="px-3 py-2 font-mono text-xs">{k.source ?? 'local'}</td>
+                              <td className="px-3 py-2 text-xs">
+                                <div className="flex items-center gap-1">
+                                  <Badge
+                                    variant={
+                                      k.sync_status === 'synced'
+                                        ? 'default'
+                                        : k.sync_status === 'failed'
+                                          ? 'destructive'
+                                          : 'secondary'
+                                    }
+                                  >
+                                    {SYNC_LABEL[k.sync_status ?? ''] ?? k.sync_status}
+                                  </Badge>
+                                  {/* 启用态可在弹窗里改；停用条目在列表里要看得见（否则改完没反馈） */}
+                                  {k.enabled === false ? (
+                                    <Badge variant="outline">已停用</Badge>
+                                  ) : null}
+                                </div>
+                              </td>
+                              <td className="px-3 py-2">
+                                <div className="flex items-center gap-1">
+                                  <Button
+                                    size="sm"
+                                    variant="outline"
+                                    className="h-8"
+                                    onClick={() => openKnowledgeDialog(k)}
+                                    disabled={!canKnowledgeSave}
+                                  >
+                                    <Pencil className="h-3.5 w-3.5" />
+                                    编辑
+                                  </Button>
+                                  <Button
+                                    size="icon"
+                                    variant="ghost"
+                                    className="h-8 w-8 text-muted-foreground hover:text-destructive"
+                                    onClick={() => void removeKnowledgeItem(k.id)}
+                                    disabled={!canKnowledgeSave}
+                                    title={canKnowledgeSave ? '删除' : '需 iqd:enhance:save'}
+                                  >
+                                    <Trash2 className="h-4 w-4" />
+                                  </Button>
+                                </div>
+                              </td>
+                            </tr>
+                          );
+                        })
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+
+                <IqdKnowledgeDialog
+                  open={kbDialogOpen}
+                  initial={kbEditing}
+                  onClose={closeKnowledgeDialog}
+                  onSaved={handleKnowledgeSaved}
+                  ensureConnection={ensureConnection}
+                />
+              </div>
+            ) : null}
+
+            {/* ================= 指令（原独立页并入）================= */}
+            {tab === 'instruction' ? (
+              <InstructionPanel onCountChange={onInstructionCountChange} />
+            ) : null}
           </div>
-        ) : null}
-
-        {/* ================= 指令（原独立页并入）================= */}
-        {tab === 'instruction' ? (
-          <InstructionPanel onCountChange={onInstructionCountChange} />
-        ) : null}
-      </div>
+        </>
+      )}
     </div>
   );
 }
@@ -1116,6 +1296,11 @@ function IqdSqlPairDialog({
   onSaved,
   ensureConnection,
 }: IqdSqlPairDialogProps) {
+  const { hasPermission } = usePermission();
+  // 转化与试运行用 iqd:enhance:manage（V78:92586/92587），与保存用的
+  // iqd:enhance:save 不同（曾因未闸门而“前端放行、后端 40300”）。
+  const canManage = hasPermission(ENHANCE_PERMISSIONS.enhanceManage);
+  const canSave = hasPermission(ENHANCE_PERMISSIONS.enhanceSave);
   const [question, setQuestion] = useState('');
   const [sourceDialect, setSourceDialect] = useState('oracle');
   const [nativeSql, setNativeSql] = useState('');
@@ -1260,7 +1445,8 @@ function IqdSqlPairDialog({
                 size="sm"
                 variant="secondary"
                 onClick={() => void translate()}
-                disabled={translating || !nativeSql.trim()}
+                disabled={translating || !canManage || !nativeSql.trim()}
+                title={canManage ? undefined : '需 iqd:enhance:manage'}
               >
                 <Send className="h-4 w-4" />
                 {translating ? '转化中…' : '转化'}
@@ -1281,7 +1467,9 @@ function IqdSqlPairDialog({
           </div>
 
           <div className="flex flex-col gap-1">
-            <span className="text-xs text-muted-foreground">转化结果（wren_sql，可编辑，支持多行）</span>
+            <span className="text-xs text-muted-foreground">
+              转化结果（wren_sql，可编辑，支持多行）
+            </span>
             {/* T04e MR-08：同上，CodeMirror 6（不可用时自动降级 Textarea） */}
             <SqlEditor
               value={wrenSql}
@@ -1294,7 +1482,8 @@ function IqdSqlPairDialog({
               variant="secondary"
               className="w-fit"
               onClick={() => void trial()}
-              disabled={trialing || !wrenSql.trim()}
+              disabled={trialing || !canManage || !wrenSql.trim()}
+              title={canManage ? undefined : '需 iqd:enhance:manage'}
             >
               <Send className="h-4 w-4" />
               {trialing ? '试运行中…' : '试运行'}
@@ -1312,7 +1501,8 @@ function IqdSqlPairDialog({
                 </div>
                 {trialResult.columns && trialResult.columns.length > 0 ? (
                   <div className="mt-1 font-mono">
-                    [{trialResult.columns
+                    [
+                    {trialResult.columns
                       .map((c) =>
                         typeof c === 'object' && c !== null
                           ? String((c as { name?: string }).name ?? JSON.stringify(c))
@@ -1328,7 +1518,11 @@ function IqdSqlPairDialog({
 
           <div className="flex flex-col gap-1">
             <span className="text-xs text-muted-foreground">备注</span>
-            <Input placeholder="备注（可空）" value={remark} onChange={(e) => setRemark(e.target.value)} />
+            <Input
+              placeholder="备注（可空）"
+              value={remark}
+              onChange={(e) => setRemark(e.target.value)}
+            />
           </div>
 
           {error ? (
@@ -1342,7 +1536,7 @@ function IqdSqlPairDialog({
           <Button size="sm" variant="outline" onClick={onClose} disabled={saving}>
             取消
           </Button>
-          <Button size="sm" onClick={() => void save()} disabled={saving}>
+          <Button size="sm" onClick={() => void save()} disabled={saving || !canSave}>
             <Save className="h-4 w-4" />
             保存
           </Button>
@@ -1376,6 +1570,8 @@ export function IqdKnowledgeDialog({
   onSaved,
   ensureConnection,
 }: IqdKnowledgeDialogProps) {
+  const { hasPermission } = usePermission();
+  const canSave = hasPermission(ENHANCE_PERMISSIONS.enhanceSave);
   const [kind, setKind] = useState('term');
   const [title, setTitle] = useState('');
   const [content, setContent] = useState('');
@@ -1419,7 +1615,11 @@ export function IqdKnowledgeDialog({
       onSaved();
     } catch (e) {
       setError(
-        e instanceof Error ? e.message : initial?.id != null ? '更新知识条目失败' : '保存知识条目失败',
+        e instanceof Error
+          ? e.message
+          : initial?.id != null
+            ? '更新知识条目失败'
+            : '保存知识条目失败',
       );
     } finally {
       setSaving(false);
@@ -1508,7 +1708,7 @@ export function IqdKnowledgeDialog({
           <Button size="sm" variant="outline" onClick={onClose} disabled={saving}>
             取消
           </Button>
-          <Button size="sm" onClick={() => void save()} disabled={saving}>
+          <Button size="sm" onClick={() => void save()} disabled={saving || !canSave}>
             <Save className="h-4 w-4" />
             {initial?.id != null ? '保存修改' : '保存'}
           </Button>

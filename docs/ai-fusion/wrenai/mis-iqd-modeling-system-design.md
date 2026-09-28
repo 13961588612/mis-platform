@@ -1202,7 +1202,7 @@ calc:<model>.<column_name>        calculated column 节点（新增，二/四期
 | 1 | **W0 真机实测**（校准真实 MDL model schema） | W0 |
 | 2 | **全新 model（from-table）物化** | W0 实测 + M3.1 |
 | 3 | ~~**模拟角色 WHERE 片段预览端点**~~ **已完成**（2026-09-28：`POST /api/v1/iqd/scope/preview`，BFF+V104 登记就绪） | 已闭合 |
-| 4 | **enhance 页权限闸门** | 待补 |
+| 4 | ~~**enhance 页权限闸门**~~ **已完成**（2026-09-28：按 Tab/ 按动作级闸门，无权 Tab 不渲染也不发请求） | 已闭合 |
 | 5 | **F-3 观察项**（`iqd:test:use` / `iqd:acl:save` 前后端不齐） | 观察 |
 | 6 | **`@EnableMethodSecurity` 缺失** | 建议核对 |
 

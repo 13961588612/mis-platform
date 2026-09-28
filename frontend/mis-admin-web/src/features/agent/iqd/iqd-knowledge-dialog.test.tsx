@@ -11,11 +11,12 @@
  * </ul>
  * 这三条在界面上都看不出来，所以用单测钉住。
  */
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { IqdKnowledgeDialog } from './iqd-enhance-page';
 import type { IqdKnowledge } from '@/lib/api/iqd';
 import * as iqdApi from '@/lib/api/iqd';
+import { useAuthStore } from '@/stores/auth-store';
 
 vi.mock('@/lib/api/iqd', () => ({ saveIqdKnowledge: vi.fn() }));
 
@@ -38,9 +39,16 @@ function renderDialog(initial: IqdKnowledge | null) {
   return { onSaved, onClose };
 }
 
+beforeEach(() => {
+  // 弹窗内部有页面级权限闸门（iqd:enhance:save）；
+  // jsdom 环境默认 permissions 为空 → 保存按钮会被禁用，测试需先注入授权。
+  useAuthStore.getState().setPermissions(['iqd:enhance:save', 'iqd:enhance:manage']);
+});
+
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
+  useAuthStore.getState().setPermissions([]);
 });
 
 describe('IqdKnowledgeDialog 保存载荷', () => {
@@ -104,5 +112,22 @@ describe('IqdKnowledgeDialog 保存载荷', () => {
 
     expect(await screen.findByText('标题/术语不能为空')).toBeTruthy();
     expect(m.saveIqdKnowledge).not.toHaveBeenCalled();
+  });
+});
+
+
+describe('无权限时的保存闸门', () => {
+  it('无 iqd:enhance:save 时「保存」置灰', () => {
+    useAuthStore.getState().setPermissions([]);
+    renderDialog(null);
+    const saveBtn = screen.getByRole('button', { name: /保存/ });
+    expect((saveBtn as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it('有 iqd:enhance:save 时可点', () => {
+    useAuthStore.getState().setPermissions(['iqd:enhance:save']);
+    renderDialog(null);
+    const saveBtn = screen.getByRole('button', { name: /保存/ });
+    expect((saveBtn as HTMLButtonElement).disabled).toBe(false);
   });
 });

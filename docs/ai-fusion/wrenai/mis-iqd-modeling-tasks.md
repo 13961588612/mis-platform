@@ -581,7 +581,7 @@ V82：92580-92599（自愈 + sync_job.action）
 
 **C. 未证（3 类）**：① **M-G1~M-G6 六条黄金用例全部未真机执行**；② **M-G1 含模型物化红线**（未证明「问数可答」前不得判通过）；③ **P-1/P-2/P-4/P-5/P-6 性能项**未验证。
 
-**D. 后续开放项清单**：① **W0 真机实测**（校准真实 MDL model schema）；② **全新 model（from-table）物化**（W0 实测 + M3.1）；③ **模拟角色 WHERE 片段预览端点**；④ **enhance 页权限闸门**；⑤ **F-3 观察项**（`iqd:test:use`/`iqd:acl:save` 前后端不齐）；⑥ **`@EnableMethodSecurity` 缺失**。
+**D. 后续开放项清单**：① **W0 真机实测**（校准真实 MDL model schema）；② **全新 model（from-table）物化**（W0 实测 + M3.1）；③ ~~**模拟角色 WHERE 片段预览端点**~~ **已完成**；④ ~~**enhance 页权限闸门**~~ **已完成**；⑤ **F-3 观察项**（`iqd:test:use`/`iqd:acl:save` 前后端不齐）；⑥ **`@EnableMethodSecurity` 缺失**。
 
 ### 7.4 施工期两条硬约定（工程师必读）
 

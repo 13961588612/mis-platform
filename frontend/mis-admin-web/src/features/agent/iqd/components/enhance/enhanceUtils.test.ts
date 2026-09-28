@@ -11,10 +11,13 @@
 import { describe, expect, it } from 'vitest';
 import {
   ENHANCE_PERMISSIONS,
+  ENHANCE_TAB_ORDER,
+  ENHANCE_TAB_VIEW_PERMISSIONS,
   S07_IMPORT_READY,
   S07_NOT_READY_HINT,
   canTriggerS07Import,
   classifyS07Import,
+  resolveAllowedTab,
   s07ButtonTitle,
 } from './enhanceUtils';
 
@@ -102,5 +105,42 @@ describe('classifyS07Import（不把「未就绪空导入」当成功）', () =>
     const out = classifyS07Import({ imported: 0, skipped: 2, message: '' }, null);
     expect(out.state).toBe('empty');
     expect(out.label).toContain('2');
+  });
+});
+
+
+describe('页面级权限闸门（开发清单第 4 项）', () => {
+  it('每个 Tab 的查看码核实自 seed（改动即失败）', () => {
+    expect(ENHANCE_TAB_VIEW_PERMISSIONS.mask).toBe('iqd:mask:view');
+    expect(ENHANCE_TAB_VIEW_PERMISSIONS.dimension).toBe('iqd:dimension:view');
+    expect(ENHANCE_TAB_VIEW_PERMISSIONS.sync).toBe('iqd:scope:view');
+    expect(ENHANCE_TAB_VIEW_PERMISSIONS.sqlpair).toBe('iqd:enhance:view');
+    expect(ENHANCE_TAB_VIEW_PERMISSIONS.knowledge).toBe('iqd:enhance:view');
+    expect(ENHANCE_TAB_VIEW_PERMISSIONS.instruction).toBe('iqd:enhance:view');
+  });
+
+  it('ENHANCE_TAB_ORDER 与页面 Tab 顺序对齐（无权回退时取第一个可见）', () => {
+    expect([...ENHANCE_TAB_ORDER]).toEqual([
+      'mask',
+      'dimension',
+      'sync',
+      'sqlpair',
+      'knowledge',
+      'instruction',
+    ]);
+  });
+
+  it('resolveAllowedTab：请求的 Tab 有权则原样返回', () => {
+    const canView = (t: string) => t === 'mask';
+    expect(resolveAllowedTab('mask', canView)).toBe('mask');
+  });
+
+  it('resolveAllowedTab：无权回退到顺序里第一个有权 Tab', () => {
+    const canView = (t: string) => t === 'knowledge';
+    expect(resolveAllowedTab('mask', canView)).toBe('knowledge');
+  });
+
+  it('resolveAllowedTab：全无权 → null（渲染拒绝态，不静默展示空页）', () => {
+    expect(resolveAllowedTab('mask', () => false)).toBeNull();
   });
 });
