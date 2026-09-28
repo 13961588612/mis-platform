@@ -496,6 +496,192 @@ class ScopeResolver:
         )
         return resolution
 
+    async def preview_row_scope(
+        self,
+        identity: AskIdentity,
+        connection_id: int | None = None,
+        *,
+        item_key: str | None = None,
+        draft_rules: list[dict[str, Any]] | None = None,
+        samples: dict[str, dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        """**按身份生成真实的行级谓词预览**（与注入同源，非前端推导）。
+
+        <p><b>为什么需要</b>（2026-09-28）：范围页的「模拟角色 WHERE 片段预览」此前无后端
+        接口，前端只能按模板拼一个示意串（恒标 `degraded`）。但谓词的真实形态由
+        :meth:`_build_authorized_predicate` 决定（PATH_PREFIX 走字典表 EXISTS、ENUM 走 IN），
+        前端推导必然与实际注入不一致 —— 用户看到"配对了"其实并没有。
+
+        <p>本方法**复用同一套构造逻辑**（同一个 :meth:`_build_authorized_predicate`），
+        因此预览与实际注入逐字一致。
+
+        Args:
+            identity: 问数身份（模拟角色时已由调用方覆写 role_codes）。
+            connection_id: 指定连接；缺省取 enabled。
+            item_key: 只看某张表（catalog item_key / 表名）；缺省返回全部命中表。
+            draft_rules: 未保存的草稿规则（``[{item_key, row_scope}]``）；非空时**不查库**，
+                直接按草稿规则生成预览（供范围页编辑态使用）。
+            samples: 逐维度示意实参 ``{dimension: {path?, values?}}``；仅替换该维度的取值
+                来源，谓词仍由 :meth:`_build_authorized_predicate` 生成（形态与真实一致）。
+
+        Returns:
+            ``{"items": [{item_key, dimensions, predicates, where, strategy, denied_reason,
+            source}], "degraded": False, "note": ...}``；某表无行级规则 →
+            ``predicates=[]``、``where=""``（该表全行可见）。
+        """
+        dimensions = await self._load_dimensions()
+        dim_map: dict[str, RowScopeDimension] = {
+            d.dimension_code: d for d in dimensions if d.enabled
+        }
+
+        resolution: IqdScopeResolution | None = None
+        denied_reason: str | None = None
+        if draft_rules is None:
+            try:
+                resolution = await self.resolve(identity, connection_id)
+            except ScopeDeniedError as exc:
+                denied_reason = str(exc)
+            rules: dict[str, list[dict[str, Any]]] = (
+                (resolution.row_scope_rules if resolution else {}) or {}
+            )
+            source = "identity"
+        else:
+            # 编辑态：按草稿规则预览，不查库（避免未保存即依赖落库读回）。
+            rules = self._draft_rules_to_map(draft_rules)
+            source = "draft"
+
+        targets: list[str] = [item_key] if item_key else list(rules.keys())
+        sample_map = samples or {}
+
+        items: list[dict[str, Any]] = []
+        for table in targets:
+            table_rules = rules.get(table) or []
+            predicates: list[str] = []
+            applied: list[str] = []
+            strategies: list[str] = []
+            item_denied = denied_reason
+            table_source = source
+            for rule in table_rules:
+                for inst in self._extract_dimensions(rule):
+                    dim_code = str(inst.get("dimension") or "")
+                    dim = dim_map.get(dim_code)
+                    if dim is None:
+                        item_denied = item_denied or f"维度未配置: {dim_code}"
+                        continue
+                    sample = sample_map.get(dim_code)
+                    dim_identity = self._identity_with_sample(dim, identity, sample)
+                    if sample and (
+                        str(sample.get("path") or "").strip()
+                        or any(str(v).strip() for v in (sample.get("values") or []))
+                    ):
+                        table_source = "draft+sample"
+                    selected = await self.resolve_inject_strategy(dim, dim_identity)
+                    if selected == PREDICATE_FAIL_CLOSED:
+                        item_denied = item_denied or self._fail_closed_reason(
+                            dim, dim_identity
+                        )
+                        continue
+                    if selected not in strategies:
+                        strategies.append(selected)
+                    if dim_code not in applied:
+                        applied.append(dim_code)
+                    predicate = self._build_authorized_predicate(
+                        dim, dim_identity, selected
+                    )
+                    if predicate:
+                        predicates.append(predicate)
+                    else:
+                        item_denied = item_denied or f"缺少维度授权范围: {dim_code}"
+            items.append(
+                {
+                    "item_key": table,
+                    "dimensions": applied,
+                    "predicates": predicates,
+                    "where": " AND ".join(f"({p})" for p in predicates),
+                    # 多维度可能各自命中不同策略，逗号列出（无则 NONE）。
+                    "strategy": ", ".join(strategies) if strategies else "NONE",
+                    "denied_reason": item_denied,
+                    "source": table_source,
+                }
+            )
+
+        return {
+            "items": items,
+            "degraded": False,
+            "note": (
+                "后端按当前身份**真实生成**的行级谓词（与注入同源，逐字一致）；"
+                "模拟角色时 role_codes 已按 simulate_role_code 覆写；"
+                "草稿/示意实参只替换取值来源，谓词形态仍由引擎生成。"
+            ),
+            "subject": identity.subject_summary(),
+            "connection_id": resolution.connection_id if resolution else connection_id,
+        }
+
+    @staticmethod
+    def _draft_rules_to_map(
+        draft_rules: list[dict[str, Any]] | None,
+    ) -> dict[str, list[dict[str, Any]]]:
+        """草稿规则列表 → ``{item_key: [rule]}``（row_scope 支持 dict 或 JSON 串）。"""
+        out: dict[str, list[dict[str, Any]]] = {}
+        for entry in draft_rules or []:
+            if not isinstance(entry, dict):
+                continue
+            key = str(entry.get("item_key") or "").strip()
+            if not key:
+                continue
+            raw = entry.get("row_scope")
+            rule: dict[str, Any] | None = None
+            if isinstance(raw, dict):
+                rule = raw
+            elif isinstance(raw, str) and raw.strip():
+                try:
+                    parsed = json.loads(raw)
+                except (json.JSONDecodeError, TypeError):
+                    parsed = None
+                if isinstance(parsed, dict):
+                    rule = parsed
+            out.setdefault(key, [])
+            if rule:
+                out[key].append(rule)
+        return out
+
+    @staticmethod
+    def _identity_with_sample(
+        dimension: RowScopeDimension,
+        identity: AskIdentity,
+        sample: dict[str, Any] | None,
+    ) -> AskIdentity:
+        """按示意实参派生身份副本（仅替换该维度的取值来源，形态仍由引擎生成）。"""
+        if not sample:
+            return identity
+        raw = dict(identity.raw_headers)
+        path = str(sample.get("path") or "").strip()
+        values = [str(v).strip() for v in (sample.get("values") or []) if str(v).strip()]
+        if dimension.predicate_type == PREDICATE_PATH_PREFIX and path:
+            anchors = identity.dept_scope_anchors()
+            anchor_id = (anchors[0].get("id") if anchors else "") or "sample"
+            raw["X-Mis-Dept-Scope"] = json.dumps(
+                [{"id": anchor_id, "path": path, "scope": "sample"}]
+            )
+        elif dimension.predicate_type == PREDICATE_ENUM and values:
+            if dimension.column_name == "dept_id" or dimension.dimension_code == "dept":
+                raw["X-Mis-Dept-Scope"] = json.dumps([{"id": v} for v in values])
+            else:
+                raw["X-Mis-Stores"] = ",".join(values)
+        else:
+            return identity
+        return AskIdentity(
+            user_id=identity.user_id,
+            employee_id=identity.employee_id,
+            role_codes=list(identity.role_codes),
+            dept_ids=list(identity.dept_ids),
+            store_codes=list(identity.store_codes),
+            org_ids=list(identity.org_ids),
+            raw_headers=raw,
+            simulated_role_code=identity.simulated_role_code,
+            real_role_codes=list(identity.real_role_codes),
+        )
+
     # ================================================================ 后置断言
 
     def assert_sql_within_scope(
@@ -790,6 +976,25 @@ class ScopeResolver:
             return f"{qualifier}{column} IN ({in_list})"
 
         return ""
+
+    @staticmethod
+    def _fail_closed_reason(
+        dimension: RowScopeDimension, identity: AskIdentity
+    ) -> str:
+        """当前维度数据范围过大或不可解析 / 缺少维度授权范围 的成因文案。"""
+        if dimension.predicate_type == PREDICATE_PATH_PREFIX:
+            if not identity.dept_scope_anchors():
+                return f"缺少维度授权范围: {dimension.dimension_code}"
+        else:
+            if dimension.column_name == "dept_id" or dimension.dimension_code == "dept":
+                has_values = bool(
+                    [a for a in identity.dept_scope_anchors() if a.get("id")]
+                )
+            else:
+                has_values = bool(identity.store_codes_from_header())
+            if not has_values:
+                return f"缺少维度授权范围: {dimension.dimension_code}"
+        return f"当前维度数据范围过大或不可解析: {dimension.dimension_code}"
 
     def _enum_authorized_values(
         self, dimension: RowScopeDimension, identity: AskIdentity

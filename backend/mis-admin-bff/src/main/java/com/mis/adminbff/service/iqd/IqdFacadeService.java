@@ -132,6 +132,19 @@ public class IqdFacadeService {
     }
 
     /**
+     * 行级谓词预览（需 iqd:scope:view）。
+     *
+     * <p>转发平台 Worker {@code /api/v1/iqd/scope/preview}。身份头由
+     * {@link AiPlatformClient} 的 MIS enrichment 注入；draft_rules/samples 供编辑态
+     * 草稿预览（谓词形态仍由引擎生成，与注入同源）。
+     */
+    public Map<String, Object> previewRowScope(
+            Map<String, Object> body, String authorization, String traceId) {
+        requirePermission(properties.getScopeViewPermission());
+        return aiPlatformClient.previewIqdRowScope(body, authorization, traceId);
+    }
+
+    /**
      * 查询表级 ACL（需 iqd:acl:view）。
      */
     public List<IqdAclVO> listAcls(Long connectionId) {

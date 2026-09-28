@@ -1118,12 +1118,16 @@ calc:<model>.<column_name>        calculated column 节点（新增，二/四期
 
 > 本节记录「设计稿之外、实施中才发现/新增」的事实，避免后续读者被设计稿误导。**8 处偏差的逐条订正已就地改在对应章节**（§4.1 / §4.3 / §4.4 / §4.5 / §7.1 / §8.1 / §8.2）；本节收纳**其余实施期事实（含计划外新增与已修缺口）**。
 
-### 11.1 「模拟角色 WHERE 片段预览」接口从未落地（偏差 6）
+### 11.1 「模拟角色 WHERE 片段预览」接口从未落地（偏差 6）——**已修**（2026-09-28）
 
 - **设计稿**：T-W2-02a 验收 5 期望一个「模拟角色 WHERE 片段预览」接口。
-- **代码现实**：**从未落地为 API**；`simulate_role_code` **仅是 `POST /iqd/ask` 的字段**（随 `metadata.iqd.simulate_role_code` 透传，`tools.py` / `scope_resolver.py` 消费）。
-- **前端处置**：降级为**示意片段**——`rowScopeUtils` 明确产出「无专用预览端点」说明，结果恒标 **`degraded`**，不与真实注入混同。
-- **状态**：**后续开放项**（见 §12 D）。
+- **原代码现实**：**从未落地为 API**；`simulate_role_code` **仅是 `POST /iqd/ask` 的字段**（随 `metadata.iqd.simulate_role_code` 透传，`tools.py` / `scope_resolver.py` 消费）。
+- **原前端处置**：降级为**示意片段**——`rowScopeUtils` 明确产出「无专用预览端点」说明，结果恒标 `degraded`，不与真实注入混同。
+- **现处置（已修）**：补齐真端点 —— ai-platform 用 `ScopeResolver.preview_row_scope`（复用**同一个** `_build_authorized_predicate`，预览与注入逐字一致） + 路由 `POST /api/v1/iqd/scope/preview`；BFF 代理（`IqdAclController` / `IqdFacadeService` / `AiPlatformClient.previewIqdRowScope`），权限码 `iqd:scope:view`，登记迁移 **V104**（sys_api 92932 / sys_menu_api 92933）。
+- **前端改造**：`iqd-scope-page.tsx` 展开面板改调本端点（带 `draft_rules` 草稿规则 + `samples` 逐维度示意实参），徽标从「示意 / 降级」改为**「后端真实生成」**（成功态）；`rowScopeUtils.buildSimulatedWherePreview` 标 `@deprecated`（仅保留形态拼接与单测）。
+- **真机验证（connection 900001）**：draft 多维度（dept PATH_PREFIX + store ENUM）返回
+  `(EXISTS (SELECT 1 FROM mis_dept_scope rs WHERE rs.dept_id = dept_id AND ((rs.dept_path = '/0/1/A/' OR rs.dept_path LIKE '/0/1/A/%')))) AND (store_id IN ('S001', 'S002'))`，与注入同源。
+- **状态**：**已闭合**（单测 9 条 + 真机预览各 1 次）。
 
 ### 11.2 「字典」端点是 `dict-sync-status` 而非 `dictionaries`（偏差 7）
 
@@ -1197,7 +1201,7 @@ calc:<model>.<column_name>        calculated column 节点（新增，二/四期
 |---|---|---|
 | 1 | **W0 真机实测**（校准真实 MDL model schema） | W0 |
 | 2 | **全新 model（from-table）物化** | W0 实测 + M3.1 |
-| 3 | **模拟角色 WHERE 片段预览端点** | 后续（前端暂 degraded） |
+| 3 | ~~**模拟角色 WHERE 片段预览端点**~~ **已完成**（2026-09-28：`POST /api/v1/iqd/scope/preview`，BFF+V104 登记就绪） | 已闭合 |
 | 4 | **enhance 页权限闸门** | 待补 |
 | 5 | **F-3 观察项**（`iqd:test:use` / `iqd:acl:save` 前后端不齐） | 观察 |
 | 6 | **`@EnableMethodSecurity` 缺失** | 建议核对 |

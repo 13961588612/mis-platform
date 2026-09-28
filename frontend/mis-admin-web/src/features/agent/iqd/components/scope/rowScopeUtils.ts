@@ -415,14 +415,15 @@ export function combinePredicatesAnd(previews: PredicatePreview[]): string {
 }
 
 /**
- * 「模拟角色 WHERE 片段」预览（降级实现）。
+ * 「模拟角色 WHERE 片段」前端示意拼接（**已被后端真端点取代**，保留仅为兼容/单测）。
  *
- * <p>⚠️ 后端**无**专用预览端点（`simulate_role_code` 仅随 `POST /iqd/ask` 携带），故本函数
- * 返回**前端推导**的示意片段：由 `row_scope` 模板 + 维度注册表拼出形态，真实值（锚点 path /
- * 可见集合）由 BFF 按模拟角色经各维度展开。`degraded` 恒为 `true`，组件须据此标注「示意」。
+ * <p>⚠️ 2026-09-28 起，范围页改走后端
+ * `POST /api/v1/iqd/scope/preview`（`ScopeResolver.preview_row_scope`）：谓词真实形态由
+ * 引擎 `_build_authorized_predicate` 决定（PATH_PREFIX → 字典表 EXISTS；ENUM → IN），
+ * 与注入逐字一致。本函数仅按模板拼形态，**与真实注入不一定一致**，
+ * 新代码不应再接入；已标 `@deprecated`。
  *
- * <p>`TODO(mr12-simulated-where-endpoint)`：后端补「按 role_code + item_key 返回展开后 WHERE」
- * 的预览端点后，改走该端点。
+ * @deprecated 改用 {@link previewIqdRowScope}（`@/lib/api/iqd`）调后端真端点。
  */
 export interface SimulatedWherePreview {
   /** AND 拼接后的 WHERE 片段（无维度 → `''`）。 */
@@ -439,8 +440,8 @@ export function buildSimulatedWherePreview(previews: PredicatePreview[]): Simula
     text,
     degraded: true,
     note:
-      '无专用「模拟角色 WHERE 片段」接口（后端仅 /iqd/ask 携带 simulate_role_code），' +
-      '此处为前端按 row_scope 模板 + 维度注册表推导的示意片段；真实值由 BFF 按模拟角色经各维度展开。',
+      '已废弃：请改用后端真端点 POST /iqd/scope/preview（与注入同源）。' +
+      '此处仅按 row_scope 模板拼示意形态，与真实注入不一定一致。',
   };
 }
 

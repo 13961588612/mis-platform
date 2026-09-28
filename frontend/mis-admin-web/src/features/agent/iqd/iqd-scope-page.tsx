@@ -30,6 +30,7 @@ import {
   listIqdAcls,
   listIqdDimensions,
   listIqdScopePolicies,
+  previewIqdRowScope,
   saveIqdAcls,
   saveIqdScopePolicies,
   type IqdAcl,
@@ -37,12 +38,13 @@ import {
   type IqdScopeDimension,
   type IqdScopePolicy,
   type IqdScopePolicySavePayload,
+  type IqdScopePreview,
+  type IqdScopePreviewRequest,
 } from '@/lib/api/iqd';
 import {
   ANCHOR_PLACEHOLDER,
   SCOPE_PERMISSIONS,
   buildPredicatePreview,
-  buildSimulatedWherePreview,
   combinePredicatesAnd,
   describeScopeError,
   dimensionBadge,
@@ -126,6 +128,9 @@ export function IqdScopePage() {
   const [aclDrafts, setAclDrafts] = useState<AclDraft[]>([]);
   const [expandedAclKeys, setExpandedAclKeys] = useState<Set<string>>(new Set());
   const [sampleInputs, setSampleInputs] = useState<Record<string, SampleInput>>({});
+  const [previewMap, setPreviewMap] = useState<Record<string, IqdScopePreview | null>>({});
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [previewError, setPreviewError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [dimensionError, setDimensionError] = useState<string | null>(null);
@@ -178,6 +183,8 @@ export function IqdScopePage() {
       );
       setExpandedAclKeys(new Set());
       setSampleInputs({});
+      setPreviewMap({});
+      setPreviewError(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : '加载失败');
     } finally {
@@ -282,6 +289,64 @@ export function IqdScopePage() {
       }),
     [dimensionMap, sampleInputs],
   );
+
+  /**
+   * 调后端真端点生成「模拟角色 WHERE 片段」（与注入同源）。
+   *
+   * <p>带 `draft_rules`（当前草稿行，非库中已存）+ `samples`（逐维度示意实参）→
+   * 谓词形态仍由引擎 `_build_authorized_predicate` 生成，不再前端推导。
+   */
+  const fetchPreviews = useCallback(async () => {
+    const targets = aclDrafts.filter(
+      (d) => expandedAclKeys.has(d.key) && d.item_key.trim() !== '' && parseRowScope(d.row_scope).instances.length > 0,
+    );
+    if (targets.length === 0) {
+      setPreviewMap({});
+      setPreviewError(null);
+      return;
+    }
+    setPreviewLoading(true);
+    setPreviewError(null);
+    try {
+      const entries = await Promise.all(
+        targets.map(async (d) => {
+          const samples: Record<string, { path?: string; values?: string[] }> = {};
+          for (const instance of parseRowScope(d.row_scope).instances) {
+            const sample = sampleInputs[`${d.key}::${instance.dimension}`];
+            const path = sample?.path.trim() ?? '';
+            const values = sample?.values.trim() ? parseSampleValues(sample.values) : null;
+            if (path || values) {
+              samples[instance.dimension] = {
+                ...(path ? { path } : {}),
+                ...(values ? { values } : {}),
+              };
+            }
+          }
+          const body: IqdScopePreviewRequest = {
+            connection_id: connectionId,
+            item_key: d.item_key.trim(),
+            draft_rules: [{ item_key: d.item_key.trim(), row_scope: d.row_scope.trim() }],
+            samples,
+          };
+          const result = await previewIqdRowScope(body);
+          return [d.key, result] as const;
+        }),
+      );
+      setPreviewMap((prev) => ({ ...prev, ...Object.fromEntries(entries) }));
+    } catch (e) {
+      setPreviewError(e instanceof Error ? e.message : '行级谓词预览失败');
+    } finally {
+      setPreviewLoading(false);
+    }
+  }, [aclDrafts, expandedAclKeys, sampleInputs, connectionId]);
+
+  // 防抖：row_scope / 示意实参逐键变化时不逐键打后端（用户明确关注调用频率）。
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      void fetchPreviews();
+    }, 400);
+    return () => window.clearTimeout(timer);
+  }, [fetchPreviews]);
 
   const savePolicies = useCallback(async () => {
     if (connectionId == null) return;
@@ -517,7 +582,15 @@ export function IqdScopePage() {
                       const expanded = expandedAclKeys.has(d.key);
                       const previews = expanded ? buildDraftPreviews(d, parsed.instances) : [];
                       const combined = combinePredicatesAnd(previews);
-                      const simulated = buildSimulatedWherePreview(previews);
+                      const backendPreview = previewMap[d.key] ?? null;
+                      const simulatedText = backendPreview?.items[0]?.where ?? '';
+                      const deniedReason = backendPreview?.items[0]?.denied_reason ?? '';
+                      const simulatedNote = deniedReason
+                        ? `后端提示：${deniedReason}` +
+                          (deniedReason.includes('缺少维度授权范围')
+                            ? '；可在上方输入示意实参（锚点 path / 可见集合）查看真实谓词。'
+                            : '')
+                        : backendPreview?.note ?? '';
                       return (
                         <Fragment key={d.key}>
                           <tr
@@ -711,18 +784,29 @@ export function IqdScopePage() {
                                       <div className="rounded border border-info/30 bg-info/5 p-2">
                                         <p className="flex items-center gap-2 text-[13px] font-medium">
                                           模拟角色 WHERE 片段预览
-                                          <Badge variant="warning" className="rounded">
-                                            示意 / 降级
-                                          </Badge>
+                                          {backendPreview ? (
+                                            <Badge variant="success" className="rounded">
+                                              后端真实生成
+                                            </Badge>
+                                          ) : (
+                                            <Badge variant="secondary" className="rounded">
+                                              {previewLoading ? '加载中' : '未生成'}
+                                            </Badge>
+                                          )}
                                         </p>
                                         <pre className="mt-1 overflow-x-auto rounded bg-card px-2 py-1 font-mono text-xs text-foreground">
-                                          {simulated.text || '（无谓词）'}
+                                          {simulatedText || '（无谓词）'}
                                         </pre>
-                                        <p className="mt-1 text-[11px] text-muted-foreground">
-                                          {simulated.note}
-                                        </p>
-                                        {/* TODO(mr12-simulated-where-endpoint)：后端补「按 role_code + item_key 返回展开后 WHERE」
-                                            的预览端点后，改走该端点（当前为前端推导的示意片段）。 */}
+                                        {simulatedNote ? (
+                                          <p className="mt-1 text-[11px] text-muted-foreground">
+                                            {simulatedNote}
+                                          </p>
+                                        ) : null}
+                                        {previewError ? (
+                                          <p className="mt-1 text-[11px] text-destructive">
+                                            {previewError}
+                                          </p>
+                                        ) : null}
                                       </div>
                                     </>
                                   )}

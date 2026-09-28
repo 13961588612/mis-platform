@@ -435,6 +435,48 @@ export async function saveIqdScopePolicies(
   return unwrap(res, '保存范围策略失败');
 }
 
+/**
+ * 行级谓词预览（POST /iqd/scope/preview；需 iqd:scope:view）。
+ *
+ * <p><b>为什么走后端</b>：谓词真实形态由引擎决定（PATH_PREFIX →
+ * 字典表 EXISTS；ENUM → IN），前端推导必然与实际注入不一致。
+ * 本接口复用后端同一构造逻辑，预览与注入逐字一致。
+ */
+export interface IqdScopePreviewRequest {
+  connection_id?: number | null;
+  /** 模拟角色码（非空时覆写 role_codes，与问数 simulate_role_code 同路径）。 */
+  role_code?: string | null;
+  item_key?: string | null;
+  /** 草稿规则 [{item_key, row_scope}]；非空时按草稿预览（不查库）。 */
+  draft_rules?: { item_key: string; row_scope: string }[] | null;
+  /** 逐维度示意实参 {dimension: {path?, values?}}。 */
+  samples?: Record<string, { path?: string; values?: string[] }>;
+}
+
+export interface IqdScopePreviewItem {
+  item_key: string;
+  dimensions: string[];
+  predicates: string[];
+  where: string;
+  strategy: string;
+  denied_reason?: string | null;
+  /** 取值来源：identity（已存规则）/ draft / draft+sample。 */
+  source?: string;
+}
+
+export interface IqdScopePreview {
+  items: IqdScopePreviewItem[];
+  degraded: boolean;
+  note: string;
+  subject?: string;
+  connection_id?: number | null;
+}
+
+export async function previewIqdRowScope(body: IqdScopePreviewRequest): Promise<IqdScopePreview> {
+  const res = await api.post<ApiResult<IqdScopePreview>>('/iqd/scope/preview', body);
+  return unwrap(res, '行级谓词预览失败');
+}
+
 // ================================================================ 表级 ACL
 
 export async function listIqdAcls(connectionId: number): Promise<IqdAcl[]> {

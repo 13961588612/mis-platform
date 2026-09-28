@@ -279,8 +279,8 @@ describe('combinePredicatesAnd（多维度 AND 叠加）', () => {
   });
 });
 
-describe('buildSimulatedWherePreview（降级实现）', () => {
-  it('★ 恒标注降级 + note 说明无专用端点', () => {
+describe('buildSimulatedWherePreview（已废弃：改走后端真端点）', () => {
+  it('★ 保留形态拼接（后端真端点已取代）', () => {
     const previews = [
       buildPredicatePreview(
         { dimension: 'dept', scope: 'dept_subtree', path: '/0/1/A/', values: null },
@@ -293,7 +293,7 @@ describe('buildSimulatedWherePreview（降级实现）', () => {
     ];
     const simulated = buildSimulatedWherePreview(previews);
     expect(simulated.degraded).toBe(true);
-    expect(simulated.note).toContain('simulate_role_code');
+    expect(simulated.note).toContain('/iqd/scope/preview');
     expect(simulated.text).toContain(' AND ');
     expect(simulated.text).toContain('dept_path');
     expect(simulated.text).toContain('store_id');

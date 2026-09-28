@@ -444,6 +444,31 @@ public class AiPlatformClient extends AbstractDownstreamClient {
                 .bodyToMono(MAP_RESULT_TYPE));
     }
 
+    /**
+     * 行级谓词预览（需 iqd:scope:view）：调平台 Worker
+     * {@code POST /api/v1/iqd/scope/preview}。
+     *
+     * <p>与问数 {@code simulate_role_code} 同源：身份头由 BFF enrichment 注入
+     * （X-Mis-Roles/Depts/Orgs），可选 role_code 覆写为模拟角色；
+     * draft_rules/samples 供编辑态草稿预览（谓词形态仍由引擎生成）。
+     *
+     * @param body          请求体（connection_id/role_code/item_key/draft_rules/samples/headers）
+     * @param authorization BFF 收到的原始 MIS JWT
+     * @param traceId       全链路追踪 ID
+     * @return 平台响应 data（{items, degraded:false, note, subject, connection_id}）
+     */
+    public Map<String, Object> previewIqdRowScope(
+            Map<String, Object> body, String authorization, String traceId) {
+        Consumer<HttpHeaders> headers = buildHeaders(authorization, traceId);
+        return block(client().post()
+                .uri("/api/v1/iqd/scope/preview")
+                .headers(headers)
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(body)
+                .retrieve()
+                .bodyToMono(MAP_RESULT_TYPE));
+    }
+
     /** 组合转发头：复用基类 loginContextHeaders() + Authorization + X-Trace-Id + MIS 身份 enrichment 头。 */
     private Consumer<HttpHeaders> buildHeaders(String authorization, String traceId) {
         return headers -> {

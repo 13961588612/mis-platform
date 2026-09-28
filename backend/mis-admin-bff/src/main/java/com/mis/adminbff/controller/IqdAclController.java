@@ -100,6 +100,27 @@ public class IqdAclController {
         return Result.ok(iqdFacadeService.saveScopePolicies(connectionId, items));
     }
 
+    /**
+     * 行级谓词预览（需 iqd:scope:view）。
+     *
+     * <p>POST /api/v1/iqd/scope/preview：转发平台 Worker，返回当前身份
+     * （或模拟角色）真实生成的行级谓词（与注入同源）。
+     * body 可带 draft_rules/samples 供编辑态草稿预览。
+     */
+    @PostMapping("/scope/preview")
+    public Result<Map<String, Object>> previewRowScope(
+            @RequestBody Map<String, Object> body,
+            @RequestHeader(value = SecurityConstants.AUTHORIZATION_HEADER, required = false) String authorization,
+            @RequestHeader(value = SecurityConstants.HEADER_TRACE_ID, required = false) String traceId) {
+        try {
+            return Result.ok(iqdFacadeService.previewRowScope(body, authorization, traceId));
+        } catch (BusinessException ex) {
+            return Result.fail(ex.getCode(), ex.getMessage());
+        } catch (Exception ex) {
+            return Result.fail(ResultCode.INTERNAL_ERROR.getCode(), "行级谓词预览失败: " + ex.getMessage());
+        }
+    }
+
     // ================================================================ 表级 ACL
 
     @GetMapping("/acl")
