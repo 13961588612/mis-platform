@@ -28,7 +28,7 @@
 | **Q2** | 前端目录迁移 | **随 M1 一并迁移** `features/agent/ai/iqd` → `features/agent/iqd`（与 PM 一致） | 不迁移（保留 `ai/iqd`） | ① architecture.md §3.4 v1.9 已规划目录为 `features/agent/iqd`（**当前目录与 v1.9 命名边界不一致**，欠架构债）；② 建模台增量约 14 个新文件 + 大体量编辑抽屉/向导，画布/Cube/Calculated column 与既有 `iqd-*` 七个页面同域，迁移一次性搬齐避免永久性目录债；③ 路由 `/iqd/*` 不变（已迁独立门户 V77），仅 `import` 路径更新 + `pages.ts` 重导出，git mv + IDE 重构风险低；④ 与 W1/W2 历史已搬迁的 KB 模块做法一致。**完全采纳 PM 推荐**。 |
 | **Q3** | 画布库 | **`@xyflow/react`（React Flow v12，与 PM 一致）** | 自研 SVG / d3-force / rete.js | ① MIT、React 18 兼容（Vite 既有生态）、节点自定义渲染贴合 shadcn/ui；② 自带 `<ReactFlow>` 的 `MiniMap` / `<Controls>` / `<Background>` 与 `<Handle>` 锚点，连线即建关系天然契合（MR-14/05 核心交互）；③ `applyNodeChanges`/`applyEdgeChanges` 集成 zustand 简单；④ bundle gzip ~150KB 可接受（建模台按需懒加载）；⑤ 自研 SVG/D3 估 2–3 倍工作量，MR-14 是 P0 核心；⑥ rete.js 编辑能力更强但学习曲线 + bundle 大，无必要。**完全采纳 PM 推荐**。 |
 | **Q4** | SQL/表达式编辑器 | **CodeMirror 6**（`@codemirror/lang-sql` + `@codemirror/state` + `@codemirror/view`，与 PM 一致） | monaco-editor / 维持 textarea | ① `ref_sql`（MR-03）/ 计算列 expression（MR-04）/ 样本对 SQL（MR-08）三个落点统一编辑器；② CodeMirror 6 懒加载分包后 ~120KB gzip；monaco ~2MB+ 必懒加载且首屏影响；③ SQL 高亮/补全/行号够用，三处编辑器共用 `useCodeMirror` hook 降低工程量；④ monaco 的多光标/格式化/Pylance 等增强本期无需，YAGNI。**完全采纳 PM 推荐**。 |
-| **Q5** | 跨页状态 | **服务端状态 = TanStack Query（catalog 单一缓存源）；UI 态 = zustand（选中项 / 视口 / 抽屉开合 / 脏标记 / wizard 步骤）；画布 nodes/edges 由 catalog 数据 selector 派生，**不持有第二份真值** | Redux Toolkit / jotai | ① 既有项目已装 zustand（依赖列表已有）；② TanStack Query 的 `staleTime` + 5000ms 轮询 + `invalidateQueries(['iqd', 'catalog', connId])` 与既有 `CatalogSyncStatusBar` 5000ms 范式一致；③ 建模台三栏数据流单向：catalog → 派生（nodes/edges）→ 选中 → 抽屉，UI 态集中在 zustand（避免分散 prop drilling）；④ 不做「第二份真值」= 画布与编辑抽屉/Cube 编辑器不可能数据不一致。**完全采纳 PM 推荐**。 |
+| **Q5** | 跨页状态 | **服务端状态 = TanStack Query（catalog 单一缓存源）；UI 态 = zustand（选中项 / 视口 / 抽屉开合 / 脏标记 / wizard 步骤）；画布 nodes/edges 由 catalog 数据 selector 派生，**不持有第二份真值** | Redux Toolkit / jotai | ① 既有项目已装 zustand（依赖列表已有）；② TanStack Query 的 `staleTime` + 15000ms 轮询 + `invalidateQueries(['iqd', 'catalog', connId])` 与既有 `CatalogSyncStatusBar` 15000ms 范式一致；③ 建模台三栏数据流单向：catalog → 派生（nodes/edges）→ 选中 → 抽屉，UI 态集中在 zustand（避免分散 prop drilling）；④ 不做「第二份真值」= 画布与编辑抽屉/Cube 编辑器不可能数据不一致。**完全采纳 PM 推荐**。 |
 | **Q6** | 布局持久化 | **独立 `iqd_model_layout` JSONB 存储（与 PM 一致）**（`{connection_id, layout_json, viewport_json, updated_by, updated_at}`） | `iqd_catalog_item` 加 x/y 列 / localStorage | ① 不动既有 V71 表结构，避免对 V72/V82 既有迁移产生连锁；② 连接级一份 JSONB（含 nodes 坐标 + edges 锚点 + viewport + 折叠态 + 自动布局版本号），自动布局可随时覆盖重建（重写整 JSON）；③ localStorage 仅作未保存的 `dirty` 缓冲（断网/崩溃恢复）；④ 后端一键 GET/PUT，权限码 `iqd:modeling:view`（GET）/ `iqd:modeling:edit`（PUT）；⑤ `x/y` 入 catalog 会把「视图数据」混进「模型数据」，违背「视图/模型分离」。**完全采纳 PM 推荐**。 |
 | **Q7** | 画布规模上限 | **≤200 节点流畅（60fps 拖拽）；>200 触发「无关系表折叠」；>500 评估分区画布/按 schema 分组视图（标记 P2，不在本期实现）** | 无上限 / 仅折叠 | ① React Flow 自带节点虚拟化（`onlyRenderVisibleElements`），200 节点在 4 核 8G 笔记本实测 ≥55fps；② 「无关系表折叠」是 wren-ui 同款范式，UX 友好；③ >500 需分区画布/分页视图，工作量翻倍（路由 + 缩略图 + 关系跨区），本期不破坏大纲，落到 P2；④ 性能预算为拖拽 ≥55fps、缩放 ≥60fps、布局计算 ≤2s（200 节点）。**完全采纳 PM 推荐**（仅细化性能预算）。 |
 | **Q8** | 与 multiconn 排期耦合 | **硬依赖：M1 排在 multiconn T1（多连接 + MCP 状态落库）之后；若 multiconn 延期，M1 降级为「单连接建模」（连接向导暂留单条形态，画布/建模不阻塞；前端可在路由层阻断 per-connection 自愈按钮与 MCP 状态卡）** | 软依赖 / 各自独立 | ① MR-01（连接向导 + MCP 状态卡）的 MCP 状态/端口字段（`mcp_port`/`mcp_status`/`last_health_at`）由 multiconn T1 提供，否则连接向导只能展示「已启用」+「未启用」，无 per-connection MCP 维度；② MR-10（发布流水线）的 per-connection 强制重建/重新索引/模型校验依赖 multiconn §6 重定范围；③ 画布/MR-02/03/05/06 与 multiconn 弱相关，可在 multiconn 前以单连接形态起步；④ 但用户体验层面「多连接是基本盘」，降级路径只用于风险预案，不作为正式分期。**完全采纳 PM 推荐**（仅补充降级形态细节）。 |
@@ -146,7 +146,7 @@ flowchart TB
   MSHOME -->|发布| MSPIPE
 
   MSHOME -->|"catalog 数据（TanStack Query）"| EXCAT
-  MSHOME -->|"status 5000ms 轮询"| MSPIPE
+  MSHOME -->|"status 15000ms 轮询"| MSPIPE
   MSPIPE -->|"per-connection 启停"| MULSHE
 
   PEP --> BFFMC
@@ -222,7 +222,7 @@ frontend/mis-admin-web/src/features/agent/iqd/
 │   │
 │   ├── shared/                                [新建 M1]
 │   │   ├── usePermission.ts                   [M1] iqd:modeling:* 权限码 hook（沿用 PermissionGate）
-│   │   ├── useSyncStatus.ts                   [M1] 5000ms 轮询 hook（沿用既有 SyncStatusBar 范式）
+│   │   ├── useSyncStatus.ts                   [M1] 共享 Query 轮询 hook（空闲 15s / 进行中 5s；同连接全应用一条）
 │   │   └── IqdIcon.tsx                        [M1] icon 登记（lucide Workflow / GitBranchPlus / Calculator / Layers）
 │   │
 │   ├── CatalogSyncStatusBar.tsx               [迁移 + 改] 既有 → MR-10 集成到 PublishPipelineBar

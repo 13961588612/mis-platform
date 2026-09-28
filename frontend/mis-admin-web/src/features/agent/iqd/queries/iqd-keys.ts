@@ -32,7 +32,7 @@ export const iqdKeys = {
   catalogNode: (connectionId: string | number | null, itemKey: string) =>
     ['iqd', 'catalog', connectionId, 'node', itemKey] as const,
 
-  /** 编辑同步状态（发布流水线 5000ms 轮询）。 */
+  /** 编辑同步状态：`useSyncStatus` 的**共享 Query**（同一连接全应用一条轮询；空闲 15s / 进行中 5s）。 */
   syncStatus: (connectionId: string | number | null) =>
     ['iqd', 'catalog', connectionId, 'sync-status'] as const,
 

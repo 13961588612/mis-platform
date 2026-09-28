@@ -6,18 +6,15 @@
  * 「检测到外部变更，请重新导入」并引导触发重新导入（调 /iqd/catalog/reconcile，按
  * model 范围重建以重新收敛）。
  *
- * <p>沿用一期 SyncStatusBar 轮询范式（5000ms；Q5）。
+ * <p>状态吃 {@link useSyncStatus} 的**共享 Query**（同一连接全应用一条轮询，空闲 15s /
+ * 进行中 5s；与 `SelfHealPanel` 共用同一份缓存，不再各起一条 `setInterval`）。
  */
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { AlertTriangle, RefreshCw, RotateCcw } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import {
-  getIqdCatalogSyncStatus,
-  reconcileIqdCatalog,
-  type IqdCatalogEditStatus,
-  type IqdCatalogSyncStatus,
-} from '@/lib/api/iqd';
+import { reconcileIqdCatalog, type IqdCatalogEditStatus } from '@/lib/api/iqd';
+import { useSyncStatus } from './shared/useSyncStatus';
 
 const STATUS_LABEL: Record<string, string> = {
   EDITED_UNSYNCED: '待同步',
@@ -57,47 +54,26 @@ export function CatalogSyncStatusBar({
   /** 嵌入父级工具栏时去掉外层卡片边框，仅渲染内容行。 */
   compact?: boolean;
 }) {
-  const [status, setStatus] = useState<IqdCatalogSyncStatus | null>(null);
-  const [loading, setLoading] = useState(false);
+  const { status, loading, error: syncError, refresh } = useSyncStatus(connectionId);
   const [reconciling, setReconciling] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const timer = useRef<ReturnType<typeof setInterval> | null>(null);
+  const [reconcileError, setReconcileError] = useState<string | null>(null);
+  /** 轮询错误与对账错误共用一个展示位（对账错误在下一次轮询成功时清掉）。 */
+  const error = reconcileError ?? syncError;
 
-  const load = async () => {
-    if (connectionId == null) {
-      setStatus(null);
-      return;
-    }
-    setLoading(true);
-    setError(null);
-    try {
-      setStatus(await getIqdCatalogSyncStatus(connectionId));
-    } catch (e) {
-      setError(e instanceof Error ? e.message : '获取编辑同步状态失败');
-    } finally {
-      setLoading(false);
-    }
-  };
-
+  // 新状态到达即清掉上一次的对账错误（对齐改造前「每轮 load() 先清 error」的行为）
   useEffect(() => {
-    void load();
-    if (timer.current) clearInterval(timer.current);
-    timer.current = setInterval(() => void load(), 5000);
-    return () => {
-      if (timer.current) clearInterval(timer.current);
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [connectionId]);
+    setReconcileError(null);
+  }, [status]);
 
   const reconcile = async () => {
     if (connectionId == null) return;
     setReconciling(true);
-    setError(null);
+    setReconcileError(null);
     try {
       await reconcileIqdCatalog(connectionId);
-      await load();
+      refresh();
     } catch (e) {
-      setError(e instanceof Error ? e.message : '触发对账失败');
+      setReconcileError(e instanceof Error ? e.message : '触发对账失败');
     } finally {
       setReconciling(false);
     }
@@ -110,6 +86,24 @@ export function CatalogSyncStatusBar({
         <AlertTriangle className="h-4 w-4 shrink-0" />
         <span>
           检测到外部变更（WrenAI 侧 MDL 已偏离平台基线）。请点击「重新导入」触发按 model 范围重建以重新收敛。
+        </span>
+      </div>
+    ) : null;
+
+  // T03e：编辑了但没进 MDL 的节点（如全新建模型/视图/指标）—— 此前只写后端日志，
+  // 用户保存成功会误以为已生效，这里如实提示（hover 看清单）。
+  const unmatchedBanner =
+    (status?.unmatched_edit_count ?? 0) > 0 ? (
+      <div
+        className="flex items-center gap-2 rounded-md border border-warning/40 bg-warning/5 p-2 text-warning"
+        title={(status?.unmatched_edits ?? [])
+          .map((it) => `${it.kind ?? '?'} · ${it.display_name ?? it.item_key ?? ''}`)
+          .join('\n')}
+      >
+        <AlertTriangle className="h-4 w-4 shrink-0" />
+        <span>
+          {status?.unmatched_edit_count} 项编辑未生效：新建模型 / 视图 / 指标暂不自动物化，
+          需在 wren 侧用原生工程补齐（鼠标悬停看清单）。
         </span>
       </div>
     ) : null;
@@ -143,7 +137,7 @@ export function CatalogSyncStatusBar({
                 size="sm"
                 variant="outline"
                 className="h-8"
-                onClick={() => void load()}
+                onClick={() => refresh()}
                 disabled={loading}
               >
                 <RefreshCw className={loading ? 'h-3.5 w-3.5 animate-spin' : 'h-3.5 w-3.5'} />
@@ -161,7 +155,8 @@ export function CatalogSyncStatusBar({
             </div>
           </div>
         </div>
-        {driftBanner ? <div className="w-full basis-full">{driftBanner}</div> : null}
+            {driftBanner ? <div className="w-full basis-full">{driftBanner}</div> : null}
+            {unmatchedBanner ? <div className="w-full basis-full">{unmatchedBanner}</div> : null}
       </>
     );
   }
@@ -192,7 +187,7 @@ export function CatalogSyncStatusBar({
         )}
         {error ? <span className="text-destructive">{error}</span> : null}
         <div className="ml-auto flex items-center gap-1.5">
-          <Button size="sm" variant="outline" className="h-8" onClick={() => void load()} disabled={loading}>
+          <Button size="sm" variant="outline" className="h-8" onClick={() => refresh()} disabled={loading}>
             <RefreshCw className={loading ? 'h-3.5 w-3.5 animate-spin' : 'h-3.5 w-3.5'} />
             刷新
           </Button>
@@ -208,7 +203,8 @@ export function CatalogSyncStatusBar({
           </Button>
         </div>
       </div>
-      {driftBanner}
+            {driftBanner}
+            {unmatchedBanner}
     </div>
   );
 }

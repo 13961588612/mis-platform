@@ -192,6 +192,27 @@ export function buildNodeEditPayload(
  * @param baseRevision 连接当前编辑版本
  * @param idempotencyKey 幂等键（提交成功后必须 rotate）
  */
+/**
+ * ??**????**???2026-09-28????/?????? `PUT /iqd/catalog/node`??
+ *
+ * <p>? `kind === 'column'` ???????? column ???????`isPrimaryKey` ?
+ * `true/false` ????? PK ??? PK ??????????? + ???
+ */
+export function buildPrimaryKeyNodeEditPayload(
+  field: { item_key: string; kind: string },
+  isPrimaryKey: boolean,
+  baseRevision: number,
+  idempotencyKey: string,
+): IqdEditNodePayload {
+  return {
+    item_key: field.item_key,
+    kind: field.kind,
+    patch: { is_primary_key: isPrimaryKey },
+    base_revision: baseRevision,
+    idempotency_key: idempotencyKey,
+  };
+}
+
 export function buildMaskNodeEditPayload(
   field: { item_key: string; kind: string },
   sensitiveLevel: string,

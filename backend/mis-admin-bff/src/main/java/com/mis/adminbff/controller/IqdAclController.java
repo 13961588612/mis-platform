@@ -239,6 +239,17 @@ public class IqdAclController {
     }
 
     /**
+     * 按 id 更新知识/术语/口径（需 iqd:enhance:save）；更新后自动触发增强同步（best-effort）。
+     */
+    @PutMapping("/knowledge/{id}")
+    public Result<IqdKnowledgeVO> updateKnowledge(@PathVariable Long id,
+            @Valid @RequestBody IqdKnowledgeSaveRequest dto,
+            @RequestHeader(value = SecurityConstants.AUTHORIZATION_HEADER, required = false) String authorization,
+            @RequestHeader(value = SecurityConstants.HEADER_TRACE_ID, required = false) String traceId) {
+        return Result.ok(iqdFacadeService.updateKnowledge(id, dto, authorization, traceId));
+    }
+
+    /**
      * 删除知识/术语/口径（需 iqd:enhance:save）。
      */
     @DeleteMapping("/knowledge/{id}")
@@ -311,11 +322,12 @@ public class IqdAclController {
      */
     @PutMapping("/catalog/node")
     public Result<Map<String, Object>> updateCatalogNode(
+            @RequestParam(value = "connectionId", required = false) Long connectionId,
             @RequestBody Map<String, Object> body,
             @RequestHeader(value = SecurityConstants.AUTHORIZATION_HEADER, required = false) String authorization,
             @RequestHeader(value = SecurityConstants.HEADER_TRACE_ID, required = false) String traceId) {
         try {
-            return Result.ok(iqdFacadeService.updateCatalogNode(body, authorization, traceId));
+            return Result.ok(iqdFacadeService.updateCatalogNode(connectionId, body, authorization, traceId));
         } catch (BusinessException ex) {
             Result<Map<String, Object>> r = new Result<>();
             r.setCode(ex.getCode());

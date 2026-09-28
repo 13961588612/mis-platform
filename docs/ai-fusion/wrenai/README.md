@@ -7,14 +7,61 @@
 
 ## 文档导航
 
+> 目录内共 26 篇文档 + 12 张 mermaid 图，按「规划 / 一期 / 二期 / 多连接 / 真机事实」分组，便于按阶段进入。
+
+### 规划四件套（v1.9，需求–架构–任务–部署）
+
 | 文档 | 角色 | 关键内容 |
 |---|---|---|
-| [prd.md](prd.md) | 产品需求（许清楚） | 覆盖需求 R1–R8：后台自研对接、agent 桥接、可对接清单、权限双闸门（RBAC+KB）、样本/知识库准确度增强、后台测试对话页、前端引用、执行计划分层；含 P0/P1/P2 需求池、用户故事、用例/时序 Mermaid、10 个待确认问题 Q1–Q10 |
-| [architecture.md](architecture.md) | 系统架构设计（高见远） | 一句话架构结论、框架选型（D1–D7 难点对策）、Q1–Q10 默认建议、系统上下文图、文件清单（含 v1.9 `backend/mis-iqd` Java 模块）、`iqd_*` 表结构与「三层两套」权限映射、**§4.2.2 行级数据范围（RLS）设计细节（A11 已确认本期；v1.4 规模修订：`X-Mis-Dept-Scope` 锚点+范围语义 + `resolve_inject_strategy` 规模分层；v1.5 A12 已确认：物化 `dept_path`、`PATH_PREFIX` 唯一主路径、`CLOSURE_CTE` 不实现；v1.6 部门权限字典表：2a 改为业务库本地 `mis_dept_scope` 表/视图，新增 D.6 落地设计 + §8 A13；v1.7 A13 拍板：编码不统一→映射 X、非同一实例→物化表必选、每库一张+中心每日同步，新增 D.6.6 配置面 vs 数据面 + §5.7 字典同步时序；v1.8 A1/A5 拍板 + 行级权限放置/扩展设计：新增 D.7 三层放置 + 使用链路、D.8 行级维度扩展设计、新增 §5.8 行级权限数据流时序，§8 A1/A5 已确认；**v1.9 三处重大修订：A1 改判落 mis_platform + ADR-020、命名统一 mis-iqd/iqd_*、维度注册表一期 + 双维度（D.8 重写 + 新增 D.9 门店维度实例化 + 新增 D.7.3 Worker 配置消费路径）、§5.6/5.7/5.8 时序更新、§7.9 缓存修订、§8/§9 更新**）**、三端 DTO 契约、BFF + WrenAI 端点、时序图、依赖包、共享约定、待明确事项 A1–A13 |
-| [tasks.md](tasks.md) | 任务分解（施工清单） | 按 W0–W4 阶段有序任务：T-W0-01 拍板（**v1.4 加 3 项规模探针；v1.5：3b 方言矩阵降级为仅记录、新增 3d `dept_path LIKE` 实测；v1.6：3d 实测对象更新为 mis_dept_scope 形态、新增 3e 库边界与编码对齐盘点；v1.9：3e 新增门店维度盘点**）→ T-W1-01 基建（**v1.9：mis-iqd Java 模块 + Flyway V71**）→ T-W1-02 打通 → T-W2-01 清单/范围/ACL（**v1.9：Java 侧 + IqdConfigClient 消费**）→ **T-W2-02a/b 行级数据范围（A11 已确认；v1.4：`X-Mis-Dept-Scope` 锚点语义；v1.5：A12 已确认物化 dept_path 必做 + 策略精简 PATH_PREFIX/ENUM/FAIL_CLOSED；v1.6：新增 `mis_dept_scope` 字典表，2a 谓词改字典表形态；v1.9：维度注册表一期 + 双维度 + store 实例化 + 维度遍历注入）** → T-W3-01 测试对话/审计 → T-W4-01 增强/引用/步骤化计划；含依赖图与验收标准 |
-| [deploy-iqd.md](deploy-iqd.md) | 部署速查（规划版） | 版本钉位（`wren: v0.13.3` / `0.29.2`）、`pip install wrenai` + `wren serve mcp` 初始化脚本、MCP 工具面清单、官方安全约束（localhost/无鉴权/默认只读/凭证 server-side）、与 mis-iqd Worker 同机部署关系、待核实项 |
+| [prd.md](prd.md) | 产品需求 PRD | 需求 R1–R8：后台自研对接、agent 桥接、可对接清单、权限双闸门、样本/知识增强、后台测试对话、前端引用、执行计划分层；含 P0/P1/P2 与 Q1–Q10 |
+| [architecture.md](architecture.md) | 系统架构设计 | 架构结论、D1–D7 难点对策、`iqd_*` 表结构、行级数据范围（RLS）设计细节、三端 DTO 契约、时序图、待明确 A1–A13 |
+| [tasks.md](tasks.md) | 任务分解（施工清单） | 按 W0–W4 阶段编排（含规模探针与实测项） |
+| [deploy-iqd.md](deploy-iqd.md) | 部署速查（规划版） | 版本钉位、`pip install wrenai` + `wren serve mcp` 初始化、MCP 工具面、官方安全约束 |
 | [class-diagram.mermaid](class-diagram.mermaid) | 类图 | 抽取自 architecture.md §4.1 |
-| [sequence-diagram.mermaid](sequence-diagram.mermaid) | 时序图集 | 抽取自 architecture.md §5.1–5.5（用户端问数 / 后台测试 / 配置同步 / 增强物料 / 范围授权） |
+| [sequence-diagram.mermaid](sequence-diagram.mermaid) | 时序图集 | architecture.md §5.1–5.8（用户端问数 / 后台测试 / 配置同步 / 增强物料 / 范围授权 …） |
+| [baseline-execution.md](baseline-execution.md) | 施工基线 | 把规划四件套与仓库代码现状对齐，输出「可复用 / 需新建 / 需修改」三态结论 |
+
+### 一期：闭环补全与联调
+
+| 文档 | 角色 | 关键内容 |
+|---|---|---|
+| [mis-iqd-closure-prd.md](mis-iqd-closure-prd.md) | 闭环补全 PRD | 一期实现 + 二期前向设计的简单 PRD |
+| [mis-iqd-closure-system-design.md](mis-iqd-closure-system-design.md) | 闭环系统设计 | 架构设计 + 任务分解；配套 [mis-iqd-closure-class.mermaid](mis-iqd-closure-class.mermaid) / [mis-iqd-closure-sequence.mermaid](mis-iqd-closure-sequence.mermaid) |
+| [a2ui-integration-checklist.md](a2ui-integration-checklist.md) | A2UI 联调清单 | A2UI 通道端到端联调（聚焦 mis-iqd 问数） |
+
+### 二期：语义模型编辑 / 建模台 / 自愈 / 对话增强
+
+| 文档 | 角色 | 关键内容 |
+|---|---|---|
+| [mis-iqd-edit-prd.md](mis-iqd-edit-prd.md) | 编辑增量 PRD | 平台侧编辑 tables/relations/cubes/views 并写回 WrenAI MDL |
+| [mis-iqd-edit-architecture-review.md](mis-iqd-edit-architecture-review.md) | 编辑架构评审 | 单边风险分析；配套 [mis-iqd-edit-class.mermaid](mis-iqd-edit-class.mermaid) / [mis-iqd-edit-sequence.mermaid](mis-iqd-edit-sequence.mermaid) |
+| [mis-iqd-edit-design.md](mis-iqd-edit-design.md) | 编辑增量设计 | 编辑闭环设计；配套 [mis-iqd-edit-design-class.mermaid](mis-iqd-edit-design-class.mermaid) / [mis-iqd-edit-design-sequence.mermaid](mis-iqd-edit-design-sequence.mermaid) |
+| [mis-iqd-modeling-prd.md](mis-iqd-modeling-prd.md) | 建模台增量 PRD | 可视化建模台（经典 wren-ui 全量内嵌）；含待拍板 Q1–Q8 |
+| [mis-iqd-modeling-system-design.md](mis-iqd-modeling-system-design.md) | 建模台系统设计 | 已拍板 + 已实现并回写；配套 [mis-iqd-modeling-class.mermaid](mis-iqd-modeling-class.mermaid) / [mis-iqd-modeling-sequence.mermaid](mis-iqd-modeling-sequence.mermaid) |
+| [mis-iqd-modeling-tasks.md](mis-iqd-modeling-tasks.md) | 建模台任务分解 | 已全部实现（2026-09-22） |
+| [mis-iqd-selfheal-prd.md](mis-iqd-selfheal-prd.md) | 自愈增量 PRD | 运维自愈三按钮需求 |
+| [mis-iqd-selfheal-design.md](mis-iqd-selfheal-design.md) | 自愈增量设计 | 三按钮设计；配套 [mis-iqd-selfheal-design-class.mermaid](mis-iqd-selfheal-design-class.mermaid) / [mis-iqd-selfheal-design-sequence.mermaid](mis-iqd-selfheal-design-sequence.mermaid) |
+| [design-feedback-enhance.md](design-feedback-enhance.md) | 对话增强增量设计 | 来源 / 评价 / 步骤耗时 / 智能体路由（方案 C 定稿） |
+| [iqd-standalone-app-design.md](iqd-standalone-app-design.md) | 独立门户增量设计 | 问数从智能体子模块升级为一级应用（菜单 925xx，改 app_id） |
+
+### 多连接对接与跨机器部署（方案 A）
+
+| 文档 | 角色 | 关键内容 |
+|---|---|---|
+| [mis-iqd-mcp-multiconn-prd.md](mis-iqd-mcp-multiconn-prd.md) | 多连接增量 PRD | 多连接（多业务库）问数需求；方案 A 已拍板 |
+| [mis-iqd-mcp-multiconn-design.md](mis-iqd-mcp-multiconn-design.md) | 多连接增量设计 | 方案 A 精炼版架构设计 |
+| [mis-iqd-mcp-deploy-incremental.md](mis-iqd-mcp-deploy-incremental.md) | 部署层增量修订 | 方案 A × 跨机器事实（v0.2 决策锁定） |
+| [wren-mcp-agent-deploy.md](wren-mcp-agent-deploy.md) | 跨机器部署 Runbook | WrenMcpAgent 控制面 9100 / 数据面 9101（落地版 v0.2） |
+| [wrenai-w0-verify-checklist.md](wrenai-w0-verify-checklist.md) | W0 真机验证清单 | 跨机器部署逐项执行表（配合 ops runbook §2.2 W0-B） |
+
+### 真机实测事实与运维手册
+
+| 文档 | 角色 | 关键内容 |
+|---|---|---|
+| [wrenai-013-field-notes.md](wrenai-013-field-notes.md) | **WrenAI 0.13.3 真机实测笔记** | 真机踩坑全记录：① **真源 = YAML 工程，`target/mdl.json` 只是 `context build` 产物**（任何 build 都会覆盖它 → 只写产物是易失的）；② 读取方不一致（`context show` / `validate` / **MCP** 读 YAML；`cube list` / `cube query` 读 `target/mdl.json`）；③ 文件 schema：`models/*/metadata.yml`（**每列必填 type**，计算列需 type+expression）、`relationships.yml`（**必须 mapping**，`join_type` 是**基数枚举**不是 `INNER`）、**cube 唯一落点 `cubes/<name>/metadata.yml`**（`views/` 是 SQL 视图，必须有 statement）；④ 7 条错误原文与修法；⑤ 平台已落地的三件套镜像 + 耐久性实测。**升级 wren 版本后需逐条复测。** |
+| [wrenai-ops-runbook.md](wrenai-ops-runbook.md) | 真机运营 Runbook | mis-iqd × WrenAI 真机联调与日常运维手册（含 W0-B） |
+| [mis-iqd-modeling-runbook.md](mis-iqd-modeling-runbook.md) | 建模台运营 Runbook | 建模台日常运维与故障处置 |
+| [mis-iqd-modeling-verify-checklist.md](mis-iqd-modeling-verify-checklist.md) | 建模台验收清单 | T05 集成验收 · 真机验证逐项执行表 |
 
 ## 关键架构结论（速览）
 

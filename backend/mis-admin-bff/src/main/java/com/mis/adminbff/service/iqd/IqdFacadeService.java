@@ -284,6 +284,19 @@ public class IqdFacadeService {
     }
 
     /**
+     * 按 id 更新知识/术语/口径（需 iqd:enhance:save）；更新后自动触发增强同步（best-effort）。
+     */
+    public IqdKnowledgeVO updateKnowledge(
+            Long id, IqdKnowledgeSaveRequest dto, String authorization, String traceId) {
+        requirePermission(properties.getEnhanceSavePermission());
+        IqdKnowledgeVO saved = iqdClient.updateKnowledge(id, dto);
+        if (dto.connectionId() != null) {
+            triggerSyncBestEffort(dto.connectionId(), authorization, traceId);
+        }
+        return saved;
+    }
+
+    /**
      * 删除知识/术语/口径（需 iqd:enhance:save）。
      */
     public void deleteKnowledge(Long id) {
@@ -442,18 +455,30 @@ public class IqdFacadeService {
      * 引用校验 422 由平台返回，BFF 原样透传业务码与 data）；③ 成功后 best-effort 触发
      * model 范围同步（重新派生完整 MDL 并写回 WrenAI）。
      *
-     * @param dto     请求体 {connection_id, item_key, kind, patch, base_revision, idempotency_key}
+     * <p><b>连接 id 取哪个</b>：以 **query 参数 `connectionId`** 为准（与同控制器的
+     * {@code /catalog/sync-status}、{@code /catalog/reconcile} 同口径，也是前端
+     * {@code updateIqdCatalogNode} 实际发的位置）；仅当 query 缺省时回退读 body 的
+     * {@code connection_id}（兼容旧调用方）。两者都没有 → 明确 40001，**不再把 null
+     * 当查询参数转发下去**（否则下游收到 {@code ?connectionId=}，空串转 Long 得 null，
+     * 最终以 {@code MissingServletRequestParameterException → 50000「系统错误」} 暴露，
+     * 排查成本极高）。
+     *
+     * @param connectionId query 参数 connectionId（可空：空则回退 body）
+     * @param dto     请求体 {item_key, kind, patch, base_revision, idempotency_key}（可选 connection_id）
      * @param authorization BFF 收到的原始 MIS JWT（透传给平台 RS256）
      * @param traceId 全链路追踪 ID
      * @return mis-iqd 返回 {edit_revision, edit_status, wren_ref_id}
      */
     public Map<String, Object> updateCatalogNode(
-            Map<String, Object> dto, String authorization, String traceId) {
+            Long connectionId, Map<String, Object> dto, String authorization, String traceId) {
         requirePermission(properties.getCatalogEditPermission());
-        Long connectionId = toLong(dto.get("connection_id"));
-        Map<String, Object> result = iqdClient.updateCatalogNode(connectionId, dto);
+        Long cid = connectionId != null ? connectionId : toLong(dto.get("connection_id"));
+        if (cid == null) {
+            throw new BusinessException(ResultCode.VALIDATION_ERROR, "connectionId 不能为空");
+        }
+        Map<String, Object> result = iqdClient.updateCatalogNode(cid, dto);
         // 编辑成功后自动触发 model 范围同步（best-effort，接受即返回，不阻断写回主流程）
-        triggerSyncBestEffort(connectionId, authorization, traceId, "model");
+        triggerSyncBestEffort(cid, authorization, traceId, "model");
         return result;
     }
 

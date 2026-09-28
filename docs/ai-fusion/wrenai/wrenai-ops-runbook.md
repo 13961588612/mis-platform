@@ -250,6 +250,50 @@ wren memory recall -q "各渠道销售"    # 验证 NL→SQL 样本召回
 
 索引落盘：`{project}/.wren/memory/`（LanceDB）。**换 embedding 模型且维度不同**须先 `wren memory reset` 再 `index`，否则会报 mixed-dimension 错误。
 
+#### 1.4.3b 平台侧知识下发（mis-iqd「方案 A：文件即真相」，2026-09-27 实测 wren 0.13.3）
+
+平台「知识与规则」页的物料**不再经 `context build` 的 `--sql-pairs` / `--instructions`**
+（0.13.3 无这两个 option，旧代码只打 warning 跳过 → 界面「已同步」但 wren 侧一条没有），
+改为按 wren 自己的两种 sink 落盘：
+
+| 平台物料 | wren 侧 sink | 平台写法 | 生效入口 |
+|---|---|---|---|
+| 样本对（`iqd_sql_pair`） | `{project}/knowledge/sql/<slug>.md`（frontmatter：`nl` / `sql` / `source` / 可选 `tags`） | `wren memory store --nl … --sql … --tags source:mis-iqd`（官方明确**不要手写**该文件） | `wren memory index` 建索引 → MCP `recall_queries` / `wren memory recall` |
+| 术语 / 口径 / 业务指令（`iqd_knowledge`） | `{project}/knowledge/rules/mis-iqd-platform.md`（按 kind 分 `##` 节，整份覆盖写） | 平台经 WrenMcpAgent `/cli` 的 `files` 字段落盘（跨机器）；同机则本地直写 | `wren context instructions`（**不进** memory index）→ MCP `get_instructions` |
+
+**回填口径**：只有**真正写成功**的条目才被标 `synced`（`wren_ref_id` 仍记本次 mdl_hash）；
+失败条目保持 `pending` 并在 `iqd_sync_job.build_error` 里带原因 —— 不再出现「已同步但 wren 侧没有」。
+
+**回收（删除同步）**：`wren memory store` 的文件名由 wren 生成（中文统一落 `query-N.md`），
+平台无法按 id 反查；且 `wren memory forget` 只删索引行、**保留** `knowledge/sql/*.md`。
+故平台每次下发后做一次**对账回收**（WrenMcpAgent `list_path` + `delete_paths`）：
+
+- 只处理带平台 tag（`source:mis-iqd`）的文件 —— 人工/agent 写的样本一律不碰；
+- `(nl, sql)` 仍属启用集 → 保留一个（重复的删掉）；不再属于 → 删除；
+- **解析不出 frontmatter 的文件一律跳过（fail-safe）**：宁可留残件，绝不误删；
+- 删除源文件后**必须 `wren memory reset --force` + `wren memory index`**：`memory index` 是
+  **增量**的，清不掉「已删文件对应的索引孤儿行」（实测删了 `query.md` 后 `memory check` 仍报
+  `N user pair(s) indexed without markdown — stale index`）；
+- 平台每次回收后自跑 `wren memory check` 自证，出现 `not indexed` / `stale index` 会写进
+  `iqd_sync_job.build_error`（不静默）。
+
+> 因此「编辑样本 / 停用 / 删除」都能收敛：旧文件被回收，不会在下次索引里复活。
+>
+> ⚠️ 识别「平台下发的样本文件」靠 frontmatter 里的 `source:mis-iqd` 标记；`wren memory store
+> --tags source:mis-iqd` 落盘是 **YAML 列表**形态（`tags:\n- source:mis-iqd`），解析时不能按
+> 平铺 `key: value` 读 —— 否则会误判成「人工写的文件」而永不回收（2026-09-28 实测踩到）。
+
+**自检**：
+
+```bash
+wren memory check                 # 期望 knowledge/sql: N pair(s)；<=0 说明样本没下发
+wren context instructions         # 应打印平台规则（knowledge/rules/ + legacy instructions.md）
+wren memory list -n 20 --output json
+```
+
+> ⚠️ 跨机器写 `knowledge/rules/` 依赖 wren 机上的 **wren-mcp-agent 同步升级**（`CliRequest.files`）；
+> 样本走 `memory store` 是纯 args 调用，旧版 agent 亦可。
+
 ---
 
 ### 1.4.4 LLM 配置 — DeepSeek V4 Pro（`deepseek-v4-pro`）
@@ -733,7 +777,10 @@ mis-iqd 仅存 secret_ref → ai-platform 解 ref → bearer 通道 → wren age
 - **物料同步**：`trigger_build_index` → context build + memory index + 回填 `wren_ref_id`
 - **模型写回**：`trigger_model_build` → 派生 MDL → build + index
 - **问数**：orchestrator + `IqdMcpClient.for_connection`
-- **漂移**：`get_current_mdl_hash`；memory index 失败不阻断 build（Q6）
+- **漂移**：`get_current_mdl_hash`。**口径（2026-09-28 改）**：`mdl_hash` = 部署产物
+  `target/mdl.json` 的**内容哈希** `sha256[:16]` —— 写侧由平台部署时计算，读侧对 wren 机上现存
+  文件现算，两边同算法可比；此前是 `wqd-{时间}-{随机}` 兜底值，与 wren 侧任何值都不可比，
+  漂移检测形同虚设。memory index 失败不阻断 build（Q6）
 
 ---
 

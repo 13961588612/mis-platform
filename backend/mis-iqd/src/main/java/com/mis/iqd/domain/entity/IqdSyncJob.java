@@ -63,6 +63,18 @@ public class IqdSyncJob {
     @Column(name = "edit_source")
     private String editSource;
 
+    /**
+     * 本次派生 MDL 时「已编辑但未落入 MDL」的节点数（T03e；0=全部生效）。
+     *
+     * <p>前端据此提示「N 项编辑未生效」——此前该信息只写日志，用户保存成功后会误以为生效。
+     */
+    @Column(name = "unmatched_edit_count", nullable = false)
+    private Integer unmatchedEditCount = 0;
+
+    /** 未落入 MDL 的节点清单（JSON 数组文本；为 null 表示无）。 */
+    @Column(name = "unmatched_edits", columnDefinition = "text")
+    private String unmatchedEdits;
+
     /** 本次同步动作：force_rebuild（自愈强制重建）/ reindex（自愈重新索引）/ validate（自愈模型校验）/ materials / model。可为 null（兼容历史作业）。 */
     @Column(name = "action")
     private String action;
@@ -175,6 +187,22 @@ public class IqdSyncJob {
 
     public void setEditSource(String editSource) {
         this.editSource = editSource;
+    }
+
+    public Integer getUnmatchedEditCount() {
+        return unmatchedEditCount;
+    }
+
+    public void setUnmatchedEditCount(Integer unmatchedEditCount) {
+        this.unmatchedEditCount = unmatchedEditCount;
+    }
+
+    public String getUnmatchedEdits() {
+        return unmatchedEdits;
+    }
+
+    public void setUnmatchedEdits(String unmatchedEdits) {
+        this.unmatchedEdits = unmatchedEdits;
     }
 
     public String getAction() {

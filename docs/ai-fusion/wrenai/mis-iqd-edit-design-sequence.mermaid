@@ -47,8 +47,8 @@ sequenceDiagram
         end
     end
 
-    %% ===== 状态轮询（沿用一期 SyncStatusBar 5000ms） =====
-    U->>B: GET /iqd/catalog/sync-status（5000ms 轮询, Q5）
+    %% ===== 状态轮询（沿用一期 SyncStatusBar 15000ms） =====
+    U->>B: GET /iqd/catalog/sync-status（15000ms 轮询, Q5）
     B->>M: getCatalogSyncStatus(connection_id)
     M-->>B: {current_edit_revision, built_edit_revision, build_status, edit_status}
     B-->>U: 渲染 SYNCED / EDITED_UNSYNCED / SYNCING / SYNC_FAILED / STALE_DRIFT

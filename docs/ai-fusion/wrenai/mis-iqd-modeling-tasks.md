@@ -99,7 +99,7 @@ graph TD
    - `src/features/agent/iqd/api/iqd-layout.ts`：3 个 API 函数 stub
    - `src/features/agent/iqd/api/iqd-discovery.ts`：4 个 API 函数 stub
    - `src/features/agent/iqd/components/shared/usePermission.ts`：hook 包装 `iqd:modeling:*` 三权限码（沿用既有 `PermissionGate`）
-   - `src/features/agent/iqd/components/shared/useSyncStatus.ts`：5000ms 轮询 hook（沿用 `CatalogSyncStatusBar` 范式）
+   - `src/features/agent/iqd/components/shared/useSyncStatus.ts`：15000ms 轮询 hook（沿用 `CatalogSyncStatusBar` 范式）
    - `src/features/agent/iqd/components/shared/IqdIcon.tsx`：icon 工具组件（接入 `icons.ts` 的 `ICON_MAP`）
 
 **关键产出文件**：

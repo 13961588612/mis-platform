@@ -13,7 +13,7 @@
 | --- | --- | --- | --- |
 | Q1 | 按钮落点 | 「语义模型」页（`iqd-catalog-page`），与 `CatalogSyncStatusBar` 同页 | 新增「运维自愈」操作区，置于状态条下方（§二 T04） |
 | Q2 | 强制重建 gate | 带 gate（有进行中动作 / SYNCING 则禁用并提示）+ 二次确认弹窗（前端） | 前端 `gateBlocked` + 二次确认 `Dialog`（§四 / T04） |
-| Q3 | 轮询间隔 | 沿用 5000ms，不新增配置 | 复用 `CatalogSyncStatusBar` 既有 5000ms 轮询（§七.2） |
+| Q3 | 轮询间隔 | 沿用 15000ms（进行中 5000ms），不新增配置（**2026-09-27 由 5000ms 下调**，理由：sync-status 调用密度过高；同日改为共享 Query 去重 + 两档节奏） | 复用 `useSyncStatus` 的共享 Query（`iqdKeys.syncStatus`，§七.2） |
 | Q4 | 动作粒度 | 全局（单 profile / 单 WrenAI 实例，与现状默认主连接一致） | 三个动作均 `connection_id=None` 解析主连接，不按 connection_id 拆分（§三 service 方法） |
 | Q5 | 命令参数 | 三个新 WrenAI 命令精确参数以 W0 真机实测为准，参数隔离在 `iqd_cli.py` 配置层，不得硬编码臆造 | 三命令可选 flag 全部来自 `IqdMcpSettings.self_heal_*_args`（默认空，W0 回填）；结构命令名词固定，可选参数可配置可核对（§三 / §七.3 / §八） |
 
@@ -32,7 +32,7 @@
 
 > **术语澄清（关键）**：PRD 与团队简报中的「mis-iqd Worker 暴露三个触发端点」实际指 **ai-platform 的 Python Worker**（`IqdCli` 持有方，直调 `wren` CLI）。Java 侧 `mis-iqd` 是配置/元数据/状态服务，本期**不新增内部端点**（复用既有的 `/internal/v1/iqd/enhance/sync-job` 上报 + `/api/v1/iqd/catalog/sync-status` 状态查询）。故「三端点」归属 ai-platform 路由层。
 
-**架构模式**：复用二期闭环「平台先落库 → BFF 转发 → ai-platform 编排 → iqd_cli → WrenAI CLI → 经 `report_sync_job` 写回 `iqd_sync_job` → 前端 5000ms 轮询状态」。三动作与现有 `trigger_build_index` / `trigger_model_build` 同构，fail-closed 哲学一致（memory index 失败不阻断 build 回填，单独标 `index_status=failed`）。
+**架构模式**：复用二期闭环「平台先落库 → BFF 转发 → ai-platform 编排 → iqd_cli → WrenAI CLI → 经 `report_sync_job` 写回 `iqd_sync_job` → 前端 15000ms 轮询状态」。三动作与现有 `trigger_build_index` / `trigger_model_build` 同构，fail-closed 哲学一致（memory index 失败不阻断 build 回填，单独标 `index_status=failed`）。
 
 **核心不变量（维持）**：任一连接 `平台.built_edit_revision 对应模型 == WrenAI.build_mdl_hash 所代表版本`；自愈动作通过复用同一 `iqd_sync_job` 状态表与同一轮询通道，对运维透明可观测。
 
@@ -78,7 +78,7 @@
 | `frontend/mis-admin-web/src/lib/api/iqd.ts` | frontend | `[修改]` | 新增 `selfHealForceRebuild(conn)` / `selfHealReindex(conn)` / `selfHealValidate(conn)` + 类型 `IqdSelfHealResult`、`IqdSelfHealAction` |
 | `frontend/mis-admin-web/src/features/agent/ai/iqd/components/SelfHealPanel.tsx` | frontend | `[新建]` | 「运维自愈」操作区：3 按钮 + 二次确认 `Dialog`（强制重建）+ gate（进行中/SYNCING/stale_drift 禁用）+ 失败横幅（REQ-7）；同页复用 `CatalogSyncStatusBar` |
 | `frontend/mis-admin-web/src/features/agent/ai/iqd/iqd-catalog-page.tsx` | frontend | `[修改]` | 在 `CatalogSyncStatusBar` 下方挂载 `<SelfHealPanel connectionId={connectionId} />` |
-| `frontend/mis-admin-web/src/features/agent/ai/iqd/components/CatalogSyncStatusBar.tsx` | frontend | `[复用]` | 沿用既有 5000ms 轮询 + 5 态徽标 + mdl_hash（不新造组件，仅确保 `action` 字段若返回可被忽略） |
+| `frontend/mis-admin-web/src/features/agent/ai/iqd/components/CatalogSyncStatusBar.tsx` | frontend | `[复用]` | 沿用既有 15000ms 轮询 + 5 态徽标 + mdl_hash（不新造组件，仅确保 `action` 字段若返回可被忽略） |
 
 ### T05 — QA 测试
 
@@ -260,7 +260,7 @@ export async function selfHealValidate(connectionId: number): Promise<IqdSelfHea
 4. **编排**：`IqdCli.context_build(force=True, ...)` → `wren context build <force_build_args>`；成功 `_parse_mdl_hash` → `IqdCli.memory_index()`（`wren memory index`，失败仅标 `index_status=failed`）；组装 `SyncResult`。
 5. **状态回报**：`IqdAskService._report_selfheal_job` → `IqdConfigClient.report_sync_job({action:"force_rebuild", ...})` → mis-iqd `POST /internal/v1/iqd/enhance/sync-job` → `IqdAdminService.reportSyncJob` → `iqd_sync_job`（覆盖写，含 `action` 列）。
 6. **返回**：`SyncResult` 经路由 → BFF → 前端 `IqdSelfHealResult`；前端据 `build_status` 更新按钮态 / 失败横幅（REQ-7）/ 展示新 `mdl_hash`。
-7. **轮询**：`CatalogSyncStatusBar` 沿用 5000ms 轮询 `GET /iqd/catalog/sync-status` → mis-iqd `getCatalogSyncStatus` 读 `iqd_sync_job` 最新作业 → 渲染 5 态徽标 + `mdl_hash`。
+7. **轮询**：前端经 `useSyncStatus` 的共享 Query 轮询 `GET /iqd/catalog/sync-status`（空闲 15000ms / 进行中 5000ms；同一连接全应用只有一条轮询）→ mis-iqd `getCatalogSyncStatus` 读 `iqd_sync_job` 最新作业 → 渲染 5 态徽标 + `mdl_hash`。
 
 **重新索引** 串联 `memory_reset()` + `memory_index()`；**模型校验** 串联 `context_validate()`（返回人可读 `summary`，REQ-8）。两动作上报 `action="reindex"` / `"validate"`。
 
@@ -300,7 +300,7 @@ export async function selfHealValidate(connectionId: number): Promise<IqdSelfHea
 
 **源文件**：`lib/api/iqd.ts` / `components/SelfHealPanel.tsx`(新) / `iqd-catalog-page.tsx` / `CatalogSyncStatusBar.tsx`(复用)。
 **前端 API 签名**：见 §三.5。
-**验收**：3 按钮可见可点；强制重建经 `gateBlocked`（进行中/SYNCING/stale_drift 禁用）+ 二次确认 Dialog（未确认不发起）；点击后按钮 loading 并复用 5000ms 轮询刷新；完成徽标转 SYNCED 并展示新 mdl_hash；任一动作 `build_status=failed` 出失败横幅（复用 STALE_DRIFT 样式，REQ-7）；`validate` 失败展示 `build_error` 人可读摘要（REQ-8）。
+**验收**：3 按钮可见可点；强制重建经 `gateBlocked`（进行中/SYNCING/stale_drift 禁用）+ 二次确认 Dialog（未确认不发起）；点击后按钮 loading 并复用 15000ms 轮询刷新；完成徽标转 SYNCED 并展示新 mdl_hash；任一动作 `build_status=failed` 出失败横幅（复用 STALE_DRIFT 样式，REQ-7）；`validate` 失败展示 `build_error` 人可读摘要（REQ-8）。
 
 ### T05 — QA 测试 ｜ 依赖：T01–T04
 
@@ -323,7 +323,7 @@ export async function selfHealValidate(connectionId: number): Promise<IqdSelfHea
 
 1. **`iqd_sync_job` 状态字段复用**：三动作复用 `build_status` / `index_status` / `build_mdl_hash` / `build_error` / `index_error`，新增 `action` 区分动作来源（`force_rebuild` / `reindex` / `validate` / `materials` / `model`）。覆盖写语义不变（`findTopByConnectionIdOrderByIdDesc`）。
 2. **`action` 取值约定**：`force_rebuild` / `reindex` / `validate`（本期自愈）；既有 `materials` / `model`（二期）。`reportSyncJob` 对缺省 `action` 保持 null 兼容。
-3. **5000ms 轮询范式**：前端 `CatalogSyncStatusBar` 沿用一期 5000ms（`setInterval(load, 5000)`），不复造轮询组件；自愈按钮区与状态条同页复用同一 `getIqdCatalogSyncStatus` 通道。
+3. **共享 Query 轮询范式**：前端 `useSyncStatus` 以 `iqdKeys.syncStatus(connId)` 起**一条** Query（`refetchInterval` 传函数：空闲 15000ms / 进行中 5000ms），`CatalogSyncStatusBar` 与 `SelfHealPanel` 同页订阅同一份缓存（**不再各起 `setInterval`**，同一连接同一时刻只有一条轮询）；自愈按钮区与状态条复用同一 `getIqdCatalogSyncStatus` 通道。
 4. **参数隔离约定（Q5，硬约束）**：三个新 WrenAI 命令的**可选 flag**（`--force` / `memory reset` 参数 / `context validate` 参数）**仅**来自 `IqdMcpSettings.self_heal_*_args` 配置，方法体内不得硬编码臆造值；结构命令名词（`context build` / `memory reset` / `context validate`）固定。W0 实测后由运维在 Nacos `ai-platform.yaml` 回填具体参数，工程无需改代码。
 5. **权限码命名**：自愈统一权限码 `iqd:selfheal:exec`（BFF `IqdProperties.selfHealPermission`）；三按钮共用同一码，gate 由前端按动作语义叠加（强制重建额外 gate + 二次确认）。
 6. **动作粒度（Q4）**：三动作均为全局（单 profile / 单 WrenAI 实例），`connection_id=None` 解析主连接（`findByName('default')` 或首条 enabled），不按 `connection_id` 拆分。

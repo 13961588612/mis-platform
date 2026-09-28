@@ -20,7 +20,7 @@
 
 - **G1 自助化运维**：运维/管理员在平台内一键触发三类 WrenAI 运维动作，免登机手工敲 CLI（减少人工运维触点）。
 - **G2 风险可控**：强制重建等高危动作带二次确认/gate，避免误伤在线问数（fail-closed 思维延伸）。
-- **G3 状态可见**：复用现有 sync-job 状态机制 + 5000ms 轮询，动作进度/结果/失败对运维透明。
+- **G3 状态可见**：复用现有 sync-job 状态机制 + 15000ms 轮询，动作进度/结果/失败对运维透明。
 
 ### 2.2 用户故事（运维角色）
 
@@ -38,7 +38,7 @@
 | P0 | REQ-1 | 后端 mis-iqd Worker 暴露三个触发端点：`force-rebuild` / `re-index` / `validate`，分别串联 `IqdCli` 原子（context_build 新增强制变体、`memory_reset`+`context_build`/`memory_index`、`context_validate`）。 | 三端点可达；强制变体不依赖增量、整库重建。 |
 | P0 | REQ-2 | 三端点复用 `trigger_build_index` 的 `SyncResult` 上报机制（`report_sync_job`），将 `build_status`/`index_status`/`build_mdl_hash` 写入 sync-job 状态表。 | 动作结束在状态表可见 build_status；mdl_hash 回填。 |
 | P0 | REQ-3 | 前端「连接配置」或「语义模型」页新增「运维自愈」操作区：3 个按钮（强制重建/重新索引/模型校验）+ 状态提示，风格复用 `CatalogSyncStatusBar`。 | 3 按钮可见可点；状态区复用 5 态徽标 + mdl_hash。 |
-| P0 | REQ-4 | 前端以 **5000ms** 轮询复用现有 `/iqd/catalog/sync-status`（或同源 sync-job 状态接口）渲染进度/结果。 | 轮询间隔=5000ms；进行中徽标 SYNCING，完成 SYNCED。 |
+| P0 | REQ-4 | 前端以 **15000ms** 轮询复用现有 `/iqd/catalog/sync-status`（或同源 sync-job 状态接口）渲染进度/结果。 | 轮询间隔=空闲 15000ms / 进行中 5000ms（共享 Query，**同一连接全应用只有一条轮询**）；进行中徽标 SYNCING，完成 SYNCED。 |
 | P0 | REQ-5 | `force-rebuild` 语义 = 强制忽略增量、整库重建（对应 `context build --force`），与现有增量 `context build` 区分。 | 强制重建覆盖增量短路路径。 |
 | P1 | REQ-6 | `force-rebuild` 触发前弹二次确认（高危），文案提示将重建/中断在线语义上下文。 | 未确认不发起；确认后才调端点。 |
 | P1 | REQ-7 | 任一动作失败（`build_status=failed` / `index_status=failed`）前端横幅告警（复用 STALE_DRIFT 横幅样式）+ 操作审计落同步日志。 | 失败即横幅；审计可读。 |
@@ -50,9 +50,9 @@
 
 - **位置**：建议置于「语义模型」页（`iqd-catalog-page`）的编辑同步状态条（`CatalogSyncStatusBar`）下方，新增「运维自愈」操作区；备选「连接配置」页。
 - **构成**：一行 3 个按钮（强制重建 / 重新索引 / 模型校验）；按钮右侧状态区复用 `CatalogSyncStatusBar` 的 5 态徽标（EDITED_UNSYNCED / SYNCING / SYNCED / SYNC_FAILED / STALE_DRIFT）+ `mdl_hash` 展示。
-- **交互**：点击「强制重建」→ 二次确认弹窗（REQ-6）→ 调 `force-rebuild` 端点 → 按钮进入 loading + 状态区 5000ms 轮询刷新；完成后徽标转 SYNCED 并展示新 mdl_hash。
+- **交互**：点击「强制重建」→ 二次确认弹窗（REQ-6）→ 调 `force-rebuild` 端点 → 按钮进入 loading + 状态区 15000ms 轮询刷新；完成后徽标转 SYNCED 并展示新 mdl_hash。
 - **失败**：徽标转 SYNC_FAILED / STALE_DRIFT 样式 + 横幅（橙/红）复用 STALE_DRIFT 样式（REQ-7）。
-- **复用**：轮询范式与徽标样式直接复用 `CatalogSyncStatusBar`（5000ms），不新造组件，降低前端改动面。
+- **复用**：轮询范式与徽标样式直接复用 `CatalogSyncStatusBar`（15000ms），不新造组件，降低前端改动面。
 
 ```
 [ 运维自愈 ]  编辑态[已同步]  mdl a1b2c3d4…  构建 success   [强制重建][重新索引][模型校验]
@@ -63,7 +63,7 @@
 
 - **Q1 按钮落点**：「语义模型」页（与 `CatalogSyncStatusBar` 同页、漂移告警顺手触发）还是「连接配置」页（运维常驻）？建议前者。
 - **Q2 强制重建 gate**：在线有问数请求时是否禁用/排队，防误伤在线查询（G2）？建议带 gate + 二次确认。
-- **Q3 轮询间隔**：沿用 5000ms 还是新建间隔？建议沿用，不新增配置。
+- **Q3 轮询间隔**：沿用 15000ms 还是新建间隔？建议沿用，不新增配置。**2026-09-27 按运维反馈「sync-status 调用频率过高」由 5000ms 统一下调至 15000ms**（仍不新增配置项）。**同日二次优化**：同一连接的多个订阅者（画布 / 属性面板 / 流水线 / 自愈面板）改为共享一条 TanStack Query（`iqdKeys.syncStatus`），并分两档——空闲 15s、进行中 5s。
 - **Q4 动作粒度**：连接级（per `connection_id`）还是全局（单 profile / 单 WrenAI 实例）？现状 WrenAI 为单 profile 单实例，建议全局动作（与现有默认主连接一致）。
 - **Q5 命令参数真机核实**：三个新 WrenAI 命令的精确参数（`--force` / `memory reset` / `context validate`）以 W0 真机实测为准（见 runbook §8 + `deploy-iqd.md §5`），上线前必须核对；本 PRD 按假定形态描述，工程侧不得臆造参数。
 
@@ -75,6 +75,6 @@
 
 ## 5. 验收口径（摘要）
 
-- P0 三端点 + 三按钮 + 5000ms 状态轮询 全部可用；动作结果在 sync-job 状态表可查。
+- P0 三端点 + 三按钮 + 15000ms 状态轮询 全部可用；动作结果在 sync-job 状态表可查。
 - 强制重建经二次确认（P1）；失败有横幅 + 审计（P1）。
 - 命令参数以 W0 实测核对（Q5），不臆造。

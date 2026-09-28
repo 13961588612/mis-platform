@@ -115,7 +115,7 @@ classDiagram
         +selfHealValidate(conn) Promise~IqdSelfHealResult~
     }
     class CatalogSyncStatusBar {
-        +poll 5000ms 复用
+        +poll 15000ms 复用
     }
     SelfHealPanel ..> IqdApi : 调用
     SelfHealPanel ..> CatalogSyncStatusBar : 同页复用

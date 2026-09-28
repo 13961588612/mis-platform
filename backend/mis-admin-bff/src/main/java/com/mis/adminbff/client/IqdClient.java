@@ -434,6 +434,19 @@ public class IqdClient extends AbstractDownstreamClient {
     }
 
     /**
+     * 按 id 更新知识/术语/口径（需 iqd:enhance:save；T04e 编辑能力）。
+     */
+    public IqdKnowledgeVO updateKnowledge(Long id, IqdKnowledgeSaveRequest dto) {
+        return block(client().put()
+                .uri("/api/v1/iqd/knowledge/{id}", id)
+                .headers(loginContextHeaders())
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(dto)
+                .retrieve()
+                .bodyToMono(KNOWLEDGE_VO));
+    }
+
+    /**
      * 删除知识/术语/口径（需 iqd:enhance:save）。
      */
     public void deleteKnowledge(Long id) {
@@ -497,6 +510,11 @@ public class IqdClient extends AbstractDownstreamClient {
      * @return mis-iqd 返回 {edit_revision, edit_status, wren_ref_id}
      */
     public Map<String, Object> updateCatalogNode(Long connectionId, Map<String, Object> body) {
+        // 防御：connectionId 为 null 时 WebClient 会拼出 `?connectionId=`（空值），
+        // 下游把空串转成 null 后只报「系统错误」（50000），看不出是参数丢了 —— 这里直接拦。
+        if (connectionId == null) {
+            throw new BusinessException(ResultCode.VALIDATION_ERROR, "connectionId 不能为空");
+        }
         try {
             Result<Map<String, Object>> res = client().put()
                     .uri(uriBuilder -> uriBuilder.path("/api/v1/iqd/catalog/node")

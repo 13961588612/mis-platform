@@ -88,7 +88,7 @@
 
 - **状态徽标**：`running`(绿) / `starting`(黄) / `stopped`(灰) / `crashed`(红) / `unhealthy`(橙，健康检查失败待重启)。
 - **启停/重启按钮**：`停止`/`重启` 为高危操作，**带二次确认**（提示「将中断该连接在线问数」），防止误伤（对齐 selfheal PRD 的 fail-closed 思维）。`启动` 仅在 `stopped` 可用。
-- **数据来源**：`IqdConnection.mcpStatus` / `mcpPort` / `lastHealthAt`（REQ-P1-2 落库字段），前端轮询复用现有 5000ms 范式（与 `CatalogSyncStatusBar` 一致，不新造间隔）。
+- **数据来源**：`IqdConnection.mcpStatus` / `mcpPort` / `lastHealthAt`（REQ-P1-2 落库字段），前端轮询复用现有 15000ms 范式（与 `CatalogSyncStatusBar` 一致，不新造间隔）。
 - **复用**：徽标样式、`CatalogSyncStatusBar` 轮询范式、二次确认弹窗均复用既有组件，降低改动面。
 
 ---

@@ -9,10 +9,11 @@
  *   <li>模型校验（validate）：context validate；失败/警告均可逐条查看（REQ-8）。</li>
  * </ul>
  *
- * <p>复用 CatalogSyncStatusBar 同款 5000ms 轮询通道（GET /iqd/catalog/sync-status）渲染
- * 构建/编辑态，用于驱动 gate 与失败横幅（REQ-7，复用 STALE_DRIFT 横幅样式）。
+ * <p>状态吃 {@link useSyncStatus} 的**共享 Query**（GET /iqd/catalog/sync-status；与
+ * `CatalogSyncStatusBar` 同一份缓存、同一条轮询，空闲 15s / 进行中 5s），渲染构建/编辑态，
+ * 用于驱动 gate 与失败横幅（REQ-7，复用 STALE_DRIFT 横幅样式）。
  */
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { AlertTriangle, Database, Hammer, RefreshCw, ShieldCheck } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -25,14 +26,13 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import {
-  getIqdCatalogSyncStatus,
   selfHealForceRebuild,
   selfHealReindex,
   selfHealValidate,
-  type IqdCatalogSyncStatus,
   type IqdSelfHealAction,
   type IqdSelfHealResult,
 } from '@/lib/api/iqd';
+import { useSyncStatus } from './shared/useSyncStatus';
 
 type BadgeVariant = 'default' | 'secondary' | 'destructive' | 'outline';
 
@@ -125,45 +125,22 @@ export function SelfHealPanel({
   /** 嵌入父级工具栏时去掉外层卡片边框，仅渲染按钮行。 */
   compact?: boolean;
 }) {
-  const [status, setStatus] = useState<IqdCatalogSyncStatus | null>(null);
+  const { status, error: syncError, refresh } = useSyncStatus(connectionId);
   const [loadingAction, setLoadingAction] = useState<IqdSelfHealAction | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
   const [lastResult, setLastResult] = useState<IqdSelfHealResult | null>(null);
   const [lastAction, setLastAction] = useState<IqdSelfHealAction | null>(null);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [detailOpen, setDetailOpen] = useState(false);
-  const timer = useRef<ReturnType<typeof setInterval> | null>(null);
-
-  // 复用 5000ms 轮询通道（与 CatalogSyncStatusBar 同源）驱动 gate / 失败横幅
-  const load = async () => {
-    if (connectionId == null) {
-      setStatus(null);
-      return;
-    }
-    try {
-      setStatus(await getIqdCatalogSyncStatus(connectionId));
-    } catch (e) {
-      // 轮询失败仅降级，不影响按钮可点性，下次轮询重试
-      setError(e instanceof Error ? e.message : '获取同步状态失败');
-    }
-  };
-
-  useEffect(() => {
-    void load();
-    if (timer.current) clearInterval(timer.current);
-    timer.current = setInterval(() => void load(), 5000);
-    return () => {
-      if (timer.current) clearInterval(timer.current);
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [connectionId]);
+  /** 轮询错误与动作错误共用一个展示位（轮询错误在下一次成功拉取时自动消失）。 */
+  const error = actionError ?? syncError;
 
   // 切连接清空瞬时结果，避免串扰
   useEffect(() => {
     setLastResult(null);
     setLastAction(null);
     setDetailOpen(false);
-    setError(null);
+    setActionError(null);
   }, [connectionId]);
 
   const editStatus = status?.edit_status;
@@ -198,7 +175,7 @@ export function SelfHealPanel({
   const run = async (action: IqdSelfHealAction) => {
     if (connectionId == null) return;
     setLoadingAction(action);
-    setError(null);
+    setActionError(null);
     setDetailOpen(false);
     try {
       const fn =
@@ -210,14 +187,14 @@ export function SelfHealPanel({
       const result = await fn(connectionId);
       setLastResult(result);
       setLastAction(action);
-      await load();
+      refresh();
       // 校验有警告/失败时自动打开详情，避免「有 N 条警告却看不到」
       const nextFindings = collectFindings(result);
       if (action === 'validate' && (result.build_status === 'failed' || nextFindings.length > 0)) {
         setDetailOpen(true);
       }
     } catch (e) {
-      setError(e instanceof Error ? e.message : `${action} 触发失败`);
+      setActionError(e instanceof Error ? e.message : `${action} 触发失败`);
     } finally {
       setLoadingAction(null);
     }
@@ -392,7 +369,7 @@ export function SelfHealPanel({
           size="sm"
           variant="ghost"
           className="h-8"
-          onClick={() => void load()}
+          onClick={() => refresh()}
           disabled={loadingAction !== null}
         >
           <RefreshCw className="h-3.5 w-3.5" />

@@ -582,7 +582,17 @@ export async function listIqdKnowledge(
   return unwrap(res, '获取知识/术语失败');
 }
 
+/**
+ * 保存/更新知识/术语/口径。
+ *
+ * <p>带 {@code id} → {@code PUT /iqd/knowledge/{id}}（按主键编辑，允许改类型/标题）；
+ * 不带 → {@code POST /iqd/knowledge}（按 connection+kind+title 幂等 upsert）。
+ */
 export async function saveIqdKnowledge(body: IqdKnowledgeSavePayload): Promise<IqdKnowledge> {
+  if (body.id != null) {
+    const res = await api.put<ApiResult<IqdKnowledge>>(`/iqd/knowledge/${body.id}`, body);
+    return unwrap(res, '更新知识/术语失败');
+  }
   const res = await api.post<ApiResult<IqdKnowledge>>('/iqd/knowledge', body);
   return unwrap(res, '保存知识/术语失败');
 }
@@ -659,6 +669,7 @@ export interface IqdEditNodePayload {
      * 未注册则 fail-closed 退化为 full）。`null` = 清除字段级显式规则。
      */
     mask_rule?: string | null;
+      is_primary_key?: boolean;
   };
   base_revision: number;
   idempotency_key: string;
@@ -674,6 +685,20 @@ export interface IqdCatalogSyncStatus {
   index_status?: string;
   mdl_hash?: string | null;
   stale_drift?: boolean;
+  /**
+   * T03e：最近一次派生 MDL 时「已编辑但未落入 MDL」的节点（0 = 全部生效）。
+   *
+   * <p>例如**全新建模型 / 视图 / 指标**：平台刻意不自动物化（避免盲写非法 MDL），
+   * 此前只写日志、界面看不出来 —— 用户点保存成功会误以为已生效。前端据此提示。
+   */
+  unmatched_edit_count?: number;
+  /** 未生效节点清单（`{item_key, kind, parent_key, display_name}`）。 */
+  unmatched_edits?: Array<{
+    item_key?: string;
+    kind?: string;
+    parent_key?: string;
+    display_name?: string;
+  }>;
 }
 
 /** 直接引用方（后端 422 引用阻断依据）。 */

@@ -5,6 +5,9 @@
  * 回填计数与 mdl_hash；并提供「立即同步」（POST /iqd/enhance/sync，wait=false，
  * 接受即返回）与手动刷新。无作业记录时展示「尚未同步」。
  *
+ * <p>轮询间隔取 {@link IQD_SYNC_POLL_INTERVAL_MS}（15s；2026-09-27 由 5s 下调，
+ * 与建模台状态条 / 自愈面板同频）。
+ *
  * <p>保存物料（sql-pair / knowledge）后由 BFF 自动触发同步，状态条随之推进。
  */
 import { useEffect, useRef, useState } from 'react';
@@ -16,6 +19,7 @@ import {
   syncIqdEnhancements,
   type IqdSyncStatus,
 } from '@/lib/api/iqd';
+import { IQD_SYNC_POLL_INTERVAL_MS } from './shared/useSyncStatus';
 
 const STATUS_LABEL: Record<string, string> = {
   pending: '待处理',
@@ -73,7 +77,7 @@ export function SyncStatusBar({ connectionId }: { connectionId: number | null })
   useEffect(() => {
     void load();
     if (timer.current) clearInterval(timer.current);
-    timer.current = setInterval(() => void load(), 5000);
+    timer.current = setInterval(() => void load(), IQD_SYNC_POLL_INTERVAL_MS);
     return () => {
       if (timer.current) clearInterval(timer.current);
     };

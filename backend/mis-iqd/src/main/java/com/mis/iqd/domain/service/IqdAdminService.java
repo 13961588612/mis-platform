@@ -1361,6 +1361,14 @@ public class IqdAdminService {
                     .orElseGet(IqdSqlPair::new);
         }
         boolean isNew = pair.getId() == null;
+        int nextEnabled = dto.enabled() == null || dto.enabled() ? 1 : 0;
+        // 更新场景：只有**下发相关内容**（问题 / wren_sql / 启用态）变化才重置下发态。
+        // 不这么做的话「编辑样本」永远不会重推：界面显示已同步、wren 侧仍是旧 SQL
+        // （2026-09-28 实测）。口径与知识条目的 markKnowledgePending 对齐。
+        boolean deliveryChanged = !isNew
+                && (!Objects.equals(pair.getQuestion(), question)
+                        || !Objects.equals(pair.getWrenSql(), wrenSql)
+                        || !Objects.equals(pair.getEnabled(), nextEnabled));
         if (isNew) {
             pair.setId(IdGenerator.nextId());
             pair.setConnectionId(connectionId);
@@ -1372,11 +1380,18 @@ public class IqdAdminService {
         pair.setNativeSql(dto.nativeSql() == null ? null : dto.nativeSql());
         pair.setWrenSql(wrenSql);
         pair.setRemark(dto.remark());
-        pair.setEnabled(dto.enabled() == null || dto.enabled() ? 1 : 0);
+        pair.setEnabled(nextEnabled);
         pair.setUpdatedAt(Instant.now());
+        if (deliveryChanged) {
+            markSqlPairPending(pair);
+        }
         sqlPairRepository.save(pair);
         if (isNew) {
             changeEventPublisher.publish("iqd.enhancement.changed", "sql_pair=" + pair.getId());
+        } else {
+            // 更新**必发**事件：Worker 的配置缓存按事件失效；不发就会「编辑/停用后迟迟不回收」。
+            changeEventPublisher.publish(
+                    "iqd.enhancement.changed", "sql_pair_updated=" + pair.getId());
         }
         return toSqlPairVO(pair);
     }
@@ -1440,6 +1455,11 @@ public class IqdAdminService {
             knowledge.setSyncStatus("pending");
             knowledge.setCreatedAt(Instant.now());
         }
+        // 内容类字段是否变化：变了要回到 pending，否则「改了但不同步」——状态仍显示已同步，实际未下发
+        boolean contentChanged = isNew
+                || !Objects.equals(knowledge.getContent(), dto.content())
+                || !Objects.equals(knowledge.getRelatedItemKeys(), dto.relatedItemKeys())
+                || !kind.equals(knowledge.getKind());
         knowledge.setKind(kind);
         knowledge.setTitle(title);
         knowledge.setContent(dto.content());
@@ -1451,12 +1471,96 @@ public class IqdAdminService {
             knowledge.setKbTermId(dto.kbTermId());
         }
         knowledge.setEnabled(dto.enabled() == null || dto.enabled() ? 1 : 0);
+        if (contentChanged) {
+            markKnowledgePending(knowledge);
+        }
         knowledge.setUpdatedAt(Instant.now());
         knowledgeRepository.save(knowledge);
-        if (isNew) {
+        if (isNew || contentChanged) {
             changeEventPublisher.publish("iqd.enhancement.changed", "knowledge=" + knowledge.getId());
         }
         return toKnowledgeVO(knowledge);
+    }
+
+    /**
+     * 按 id 更新知识/术语/口径（PUT /knowledge/{id}；T04e 编辑能力）。
+     *
+     * <p>与 POST 的差别：POST 是「按 connection+kind+title 幂等 upsert」（用于新增/同名覆盖），
+     * 本方法按 **主键** 定位，允许改 kind / title。为避免两套语义打架：
+     * <ul>
+     *   <li>改名后与同连接内已有条目撞 (kind,title) → `42200`（`data.conflictId` 指向冲突行），
+     *       不做静默合并 —— 否则「编辑」会变成「删一条长一条」；</li>
+     *   <li>内容/关联/类型变化 → `sync_status` 回到 `pending` 并清空 `wren_ref_id`/`synced_at`，
+     *       等下一次 context build 重新下发（不 pretend 已同步）。</li>
+     * </ul>
+     */
+    @Transactional
+    public IqdKnowledgeVO updateKnowledge(Long id, IqdKnowledgeSaveRequest dto) {
+        if (id == null) {
+            throw new BusinessException(ResultCode.VALIDATION_ERROR, "id 不能为空");
+        }
+        IqdKnowledge knowledge = knowledgeRepository.findById(id)
+                .orElseThrow(() -> new BusinessException(ResultCode.NOT_FOUND, "知识条目不存在: " + id));
+        String kind = dto.kind() == null ? "" : dto.kind().trim();
+        String title = dto.title() == null ? "" : dto.title().trim();
+        if (kind.isEmpty() || title.isEmpty()) {
+            throw new BusinessException(ResultCode.VALIDATION_ERROR, "kind 与 title 不能为空");
+        }
+        validateRelatedItemKeys(knowledge.getConnectionId(), dto.relatedItemKeys());
+        knowledgeRepository
+                .findByConnectionIdAndKindAndTitle(knowledge.getConnectionId(), kind, title)
+                .filter(other -> !id.equals(other.getId()))
+                .ifPresent(other -> {
+                    Map<String, Object> data = new LinkedHashMap<>();
+                    data.put("field", "title");
+                    data.put("conflict_id", other.getId());
+                    throw new BusinessException(42200, "已存在同类型同标题的条目: " + title, data);
+                });
+        boolean contentChanged = !Objects.equals(knowledge.getContent(), dto.content())
+                || !Objects.equals(knowledge.getRelatedItemKeys(), dto.relatedItemKeys())
+                || !kind.equals(knowledge.getKind());
+        knowledge.setKind(kind);
+        knowledge.setTitle(title);
+        knowledge.setContent(dto.content());
+        knowledge.setRelatedItemKeys(dto.relatedItemKeys());
+        if (dto.source() != null && !dto.source().isBlank()) {
+            knowledge.setSource(dto.source());
+        }
+        if (dto.kbTermId() != null && !dto.kbTermId().isBlank()) {
+            knowledge.setKbTermId(dto.kbTermId());
+        }
+        if (dto.enabled() != null) {
+            knowledge.setEnabled(dto.enabled() ? 1 : 0);
+        }
+        if (contentChanged) {
+            markKnowledgePending(knowledge);
+        }
+        knowledge.setUpdatedAt(Instant.now());
+        knowledgeRepository.save(knowledge);
+        changeEventPublisher.publish("iqd.enhancement.changed", "knowledge_updated=" + id);
+        return toKnowledgeVO(knowledge);
+    }
+
+    /**
+     * 内容变更后重置下发态（回到 `pending` 并清空上次回填），保证下次 build 会重新带上该条目。
+     */
+    private void markKnowledgePending(IqdKnowledge knowledge) {
+        knowledge.setSyncStatus("pending");
+        knowledge.setWrenRefId(null);
+        knowledge.setSyncedAt(null);
+    }
+
+    /**
+     * 样本对「下发相关内容」变更后重置下发态（回到 {@code pending} 并清空上次回填）。
+     *
+     * <p>与 {@link #markKnowledgePending} 同口径 —— 此前样本对**只在新建时**置 pending，
+     * 更新分支沿用旧的 {@code synced}，于是「编辑样本」永不再下发：
+     * 界面显示「已同步」，wren 侧却一直是旧 SQL（2026-09-28 真机实测）。
+     */
+    private void markSqlPairPending(IqdSqlPair pair) {
+        pair.setSyncStatus("pending");
+        pair.setWrenRefId(null);
+        pair.setSyncedAt(null);
     }
 
     /**
@@ -1694,6 +1798,24 @@ public class IqdAdminService {
         if (isTerminalStatus(job.getIndexStatus())) {
             job.setIndexAt(now);
         }
+
+        // T03e：本次派生 MDL 有「编辑未生效」的节点时记下来，供前端提示（此前只写日志）。
+        // 语义是**全量替换**：没带该字段 = 本次没有未生效项 → 清 0/清空，避免旧值长期挂红。
+        Integer unmatchedCount = toInt(payload.get("unmatched_edit_count"));
+        if (payload.containsKey("unmatched_edit_count") || payload.containsKey("unmatched_edits")) {
+            job.setUnmatchedEditCount(unmatchedCount == null ? 0 : Math.max(0, unmatchedCount));
+            Object unmatched = payload.get("unmatched_edits");
+            if (unmatched == null || "[]".equals(String.valueOf(unmatched).trim())) {
+                job.setUnmatchedEdits(null);
+            } else {
+                try {
+                    job.setUnmatchedEdits(objectMapper.writeValueAsString(unmatched));
+                } catch (com.fasterxml.jackson.core.JsonProcessingException exc) {
+                    log.warn("IQD unmatched_edits serialize failed connectionId={}", connectionId, exc);
+                    job.setUnmatchedEdits(String.valueOf(unmatched));
+                }
+            }
+        }
         Integer syncedPairs = toInt(payload.get("synced_sql_pair_count"));
         if (syncedPairs != null) {
             job.setSyncedSqlPairCount(syncedPairs);
@@ -1823,6 +1945,21 @@ public class IqdAdminService {
             }
             if (patch.containsKey("expression")) {
                 item.setExpression(str(patch.get("expression")));
+            }
+            // ???????2026-09-28??patch.is_primary_key ?? kind=column ??
+            // ???/?/????????????????????
+            // true/false ????????? ? 42200?
+            if (patch.containsKey("is_primary_key") && "column".equals(item.getKind())) {
+                Object raw = patch.get("is_primary_key");
+                if (raw == null || raw instanceof Boolean || raw instanceof Number
+                        || "true".equalsIgnoreCase(String.valueOf(raw))
+                        || "false".equalsIgnoreCase(String.valueOf(raw))) {
+                    item.setIsPrimaryKey(raw != null && Boolean.parseBoolean(String.valueOf(raw)) ? 1 : 0);
+                } else {
+                    Map<String, Object> data = new LinkedHashMap<>();
+                    data.put("field", "is_primary_key");
+                    throw new BusinessException(42200, "is_primary_key ??? true / false", data);
+                }
             }
             // 字段级脱敏直编（T04b / MR-13）：与 mask_rule 一同落 iqd_catalog_item，
             // 使前端字段侧栏写入的是**优先级最高的字段级显式规则**（masking.py 规则链第 1/2 层），
@@ -1971,6 +2108,21 @@ public class IqdAdminService {
         m.put("index_status", latest == null ? null : latest.getIndexStatus());
         m.put("mdl_hash", conn.getBuiltMdlHash());
         m.put("stale_drift", Boolean.TRUE.equals(conn.getStaleDrift()));
+        // T03e：最近一次派生 MDL 里「编辑未生效」的节点（前端据此提示，见 V102）。
+        int unmatchedCount = latest == null || latest.getUnmatchedEditCount() == null
+                ? 0 : Math.max(0, latest.getUnmatchedEditCount());
+        m.put("unmatched_edit_count", unmatchedCount);
+        List<Object> unmatchedEdits = List.of();
+        if (latest != null && latest.getUnmatchedEdits() != null
+                && !latest.getUnmatchedEdits().isBlank()) {
+            try {
+                unmatchedEdits = objectMapper.readValue(
+                        latest.getUnmatchedEdits(), new TypeReference<List<Object>>() {});
+            } catch (Exception exc) {
+                log.warn("IQD unmatched_edits parse failed connectionId={}", connectionId, exc);
+            }
+        }
+        m.put("unmatched_edits", unmatchedEdits);
         return m;
     }
 

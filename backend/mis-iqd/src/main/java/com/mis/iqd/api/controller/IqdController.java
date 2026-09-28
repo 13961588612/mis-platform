@@ -348,6 +348,16 @@ public class IqdController {
     }
 
     /**
+     * 按 id 更新知识/术语/口径（T04e 编辑能力；POST 仍是幂等 upsert）。
+     */
+    @PutMapping("/knowledge/{id}")
+    public Result<IqdKnowledgeVO> updateKnowledge(
+            @PathVariable Long id,
+            @Valid @RequestBody IqdKnowledgeSaveRequest dto) {
+        return Result.ok(adminService.updateKnowledge(id, dto));
+    }
+
+    /**
      * 删除知识/术语/口径（W4）。
      */
     @DeleteMapping("/knowledge/{id}")

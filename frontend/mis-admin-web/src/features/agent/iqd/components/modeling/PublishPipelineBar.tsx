@@ -12,7 +12,8 @@
  *   <tr><td>④ MCP 就绪</td><td>**不在 sync-status 里** → `GET /iqd/mcp/status?connectionId=` 的 `mcp_status`（也见 `Connection.mcp_status`）</td>
  *       <td>running / starting / stopped / crashed / unhealthy</td></tr>
  * </table>
- * ①–③ 走既有 {@link useSyncStatus}（5000ms，**不另起轮询**）；④ 用 MCP 专用端点单独 5s 轮询
+ * ①–③ 走既有 {@link useSyncStatus}（{@link IQD_SYNC_POLL_INTERVAL_MS} = 15s，**不另起轮询**）；
+ * ④ 用 MCP 专用端点按同一常量轮询
  * —— 这是本组件引入的**唯一**新轮询，理由是 MCP 进程态根本不在 sync-status 的返回里
  * （`IqdCatalogSyncStatus` 无该字段，见 `types/modeling.ts`）。
  *
@@ -69,7 +70,7 @@ import {
 // （窄版赋给超集是允许的：多出来的都是可选属性）。
 import type { IqdCatalogSyncStatus as ModelingSyncStatus } from '../../types/modeling';
 import { errorCode, getMcpStatus, mcpManage } from '../../api/iqd-modeling';
-import { useSyncStatus } from '../shared/useSyncStatus';
+import { IQD_SYNC_POLL_INTERVAL_MS, useSyncStatus } from '../shared/useSyncStatus';
 import { useIqdModelingPermission } from '../shared/usePermission';
 import { iqdKeys } from '../../queries/iqd-keys';
 import { useModelingStore } from '../../store/modeling-store';
@@ -379,7 +380,7 @@ export function PublishPipelineBar({ connectionId }: PublishPipelineBarProps) {
     queryKey: iqdKeys.mcpStatus(connectionId),
     queryFn: () => getMcpStatus(connectionId as number),
     enabled: connectionId != null,
-    refetchInterval: 5000,
+    refetchInterval: IQD_SYNC_POLL_INTERVAL_MS,
     refetchOnWindowFocus: false,
     retry: false, // 40300（无 iqd:mcp:manage）不重试、不刷屏
   });
@@ -515,6 +516,22 @@ export function PublishPipelineBar({ connectionId }: PublishPipelineBarProps) {
         {mcpBlocked && (
           <span className="text-muted-foreground">MCP 状态需 {PIPELINE_PERMISSIONS.mcp} 权限</span>
         )}
+
+        {/* T03e：编辑了但**没进** MDL 的节点（如全新建模型/视图/指标）。
+            此前只写后端日志，用户点保存成功会误以为已生效 —— 这里如实提示。 */}
+        {(sync.status?.unmatched_edit_count ?? 0) > 0 ? (
+          <span
+            className="flex items-center gap-1 rounded-md border border-warning/40 bg-warning/5 px-1.5 py-0.5 text-warning"
+            title={
+              (sync.status?.unmatched_edits ?? [])
+                .map((it) => `${it.kind ?? '?'} · ${it.display_name ?? it.item_key ?? ''}`)
+                .join('\n') || undefined
+            }
+          >
+            <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+            {sync.status?.unmatched_edit_count} 项编辑未生效（新建模型/视图/指标暂不自动物化，详见提示）
+          </span>
+        ) : null}
 
         <div className="ml-auto flex flex-wrap items-center gap-1.5">
           <Button

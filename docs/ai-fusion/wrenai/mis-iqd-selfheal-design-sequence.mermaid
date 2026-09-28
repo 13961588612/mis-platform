@@ -39,8 +39,8 @@ sequenceDiagram
     API-->>FE: IqdSelfHealResult
     FE->>FE: 更新按钮态 / 失败横幅(REQ-7) / mdl_hash
 
-    Note over FE,JOB: 状态回报 → 前端 5000ms 轮询(复用 CatalogSyncStatusBar)
-    loop 每 5000ms
+    Note over FE,JOB: 状态回报 → 前端 15000ms 轮询(复用 CatalogSyncStatusBar)
+    loop 每 15000ms
         FE->>API: getIqdCatalogSyncStatus(connectionId)
         API->>BFF: GET /api/v1/iqd/catalog/sync-status
         BFF->>MI: getCatalogSyncStatus(conn)

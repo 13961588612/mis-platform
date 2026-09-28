@@ -18,8 +18,6 @@ import type { IqdCatalogItem } from '@/lib/api/iqd';
 
 function stub(partial: Partial<IqdCatalogItem> & Pick<IqdCatalogItem, 'item_key' | 'kind'>): IqdCatalogItem {
   return {
-    item_key: partial.item_key,
-    kind: partial.kind,
     display_name: partial.display_name ?? null,
     parent_key: partial.parent_key ?? null,
     source: 'mdl',

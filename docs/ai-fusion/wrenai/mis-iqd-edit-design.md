@@ -15,7 +15,7 @@
 | Q2 | 外部漂移重导入闭环 | 自动生成待审草稿 + 人工确认合并 | `STALE_DRIFT` 横幅 +「重新导入」引导进 `syncCatalogFromMdl` 生成待审草稿（P1-3 部分）；不自动强写 |
 | Q3 | 依赖列表粒度 | 仅直接引用方（N 条），不递归 | `validateCatalogRefs` 返回**直接引用方列表**（cube/relation/sql_pair/knowledge 各取直接引用，无递归展开） |
 | Q4 | 灰度首批连接 | 按连接开关即可，无需硬编码清单 | `mdl_writeback_enabled` 按连接粒度；预留 1 试点连接翻 `true`，代码中**不硬编码**任何连接 id |
-| Q5 | 轮询间隔 | 沿用一期 `SyncStatusBar` 间隔 | 前端 `CatalogSyncStatusBar` 沿用一期 `5000ms` 轮询（`SyncStatusBar.tsx` 同值） |
+| Q5 | 轮询间隔 | 沿用一期 `SyncStatusBar` 间隔（**2026-09-27 由 5000ms 下调至 15000ms**，同日改为共享 Query + 两档：空闲 15s / 进行中 5s） | 前端 `CatalogSyncStatusBar` 订阅 `useSyncStatus` 的共享 Query（`iqdKeys.syncStatus`，与画布 / 属性面板 / 流水线同一份缓存） |
 
 ---
 
@@ -100,9 +100,9 @@
 | --- | --- | --- | --- |
 | `frontend/mis-admin-web/src/lib/api/iqd.ts` | frontend | `[修改]` | 新增 `updateIqdCatalogNode`/`getIqdCatalogSyncStatus`/`reconcileIqdCatalog` + 类型 `IqdCatalogEditStatus`/`IqdEditNodePayload`/`IqdCatalogSyncStatus`/`IqdDependents` |
 | `frontend/mis-admin-web/src/features/agent/ai/iqd/iqd-catalog-page.tsx` | frontend | `[修改]` | 编辑弹窗（按 kind 渲染字段）、带 `base_revision`+`idempotency_key`、删除/改名前 `validateCatalogRefs` 依赖提示与 422 阻断、乐观 UI + 同步徽标；接 `CatalogSyncStatusBar` |
-| `frontend/mis-admin-web/src/features/agent/ai/iqd/components/CatalogSyncStatusBar.tsx` | frontend | `[新建]` | 轮询 `GET /catalog/sync-status`，渲染 5 态徽标 + STALE_DRIFT 横幅 + 重试；沿用一期 5000ms 间隔 |
+| `frontend/mis-admin-web/src/features/agent/ai/iqd/components/CatalogSyncStatusBar.tsx` | frontend | `[新建]` | 轮询 `GET /catalog/sync-status`，渲染 5 态徽标 + STALE_DRIFT 横幅 + 重试；沿用一期 15000ms 间隔 |
 
-**复用**：一期 `SyncStatusBar` 轮询范式（5000ms）、`IqdCatalogItem` 类型、`iqd-catalog-page` 分组展示（KIND_ORDER）。
+**复用**：一期 `SyncStatusBar` 轮询范式（15000ms）、`IqdCatalogItem` 类型、`iqd-catalog-page` 分组展示（KIND_ORDER）。
 
 ---
 
@@ -326,7 +326,7 @@ CREATE TABLE iqd_edit_idempotency (
 - 编辑弹窗仅对 `mdl_writeback_enabled && editable` 节点可点（Q4 门控 + 一期 `editable`）；
 - 提交携带 `base_revision` + `idempotency_key`(crypto.randomUUID())；收到 409 展示「版本已变更（当前 N），点重读」引导（P1-2）；
 - 删除被引用节点 → 422 依赖阻断弹窗列出直接引用方并禁用确认（P1-1）；
-- `CatalogSyncStatusBar` 渲染 5 态（沿用一期 5000ms 轮询）；`STALE_DRIFT` 显示橙标 + 横幅「检测到外部变更，请重新导入」并引导 `syncCatalogFromMdl`（P1-3/Q2）。
+- `CatalogSyncStatusBar` 渲染 5 态（沿用一期 15000ms 轮询）；`STALE_DRIFT` 显示橙标 + 横幅「检测到外部变更，请重新导入」并引导 `syncCatalogFromMdl`（P1-3/Q2）。
 
 ---
 

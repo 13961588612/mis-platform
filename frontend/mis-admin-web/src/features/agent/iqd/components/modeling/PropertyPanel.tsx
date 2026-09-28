@@ -8,6 +8,8 @@
  *
  * <h2>本批（T04b / T04b-补）新增编辑能力</h2>
  * <ol>
+        </div>
+      )}
  *   <li><b>字段业务描述直编（MR-09）</b>：写 `iqd_catalog_item.description`，走
  *       `PUT /iqd/catalog/node`（乐观并发 `base_revision` + 幂等 `idempotency_key`）——
  *       与 catalog 页同源同闭环（同一端点/同一缓存，改完 catalog 页同步可见）。</li>
@@ -63,6 +65,7 @@ import {
   buildMaskNodeEditPayload,
   buildMaskRuleOptions,
   buildNodeEditPayload,
+  buildPrimaryKeyNodeEditPayload,
   describeMaskSaveError,
   describeNodeEditError,
   fieldNameOf,
@@ -533,6 +536,11 @@ function FieldEditor({
   );
   const [maskRule, setMaskRule] = useState<string>(() => initialMaskRule(field.mask_rule));
   const [savingMask, setSavingMask] = useState(false);
+  /** PK marker (column only): local state + submit state. */
+  const [isPrimaryKey, setIsPrimaryKey] = useState<boolean>(() => Boolean(field.is_primary_key));
+  const [savingPrimaryKey, setSavingPrimaryKey] = useState(false);
+  const [primaryKeyError, setPrimaryKeyError] = useState<string | null>(null);
+  const [primaryKeySaved, setPrimaryKeySaved] = useState<string | null>(null);
   const [maskError, setMaskError] = useState<string | null>(null);
   const [maskSaved, setMaskSaved] = useState<string | null>(null);
   /** 下拉项：清除 + 五类内置 + custom；当前值为未知历史值时补一个「现有」动态项。 */
@@ -586,6 +594,38 @@ function FieldEditor({
    * 保存脱敏直编（MR-13）：走 `PUT /iqd/catalog/node`（T04b-补：patch 带
    * `sensitive_level` + `mask_rule`），与描述同端点、同乐观并发 + 幂等。
    */
+  /** Save PK marker (2026-09-28): same endpoint as description/masking (PUT /iqd/catalog/node). */
+  const savePrimaryKey = useCallback(async () => {
+    if (connectionId == null || !canEditDescription || field.kind !== 'column') {
+      return;
+    }
+    setSavingPrimaryKey(true);
+    setPrimaryKeyError(null);
+    setPrimaryKeySaved(null);
+    const baseRevision = sync.status?.current_edit_revision ?? 0;
+    try {
+      await updateIqdCatalogNode(
+        connectionId,
+        buildPrimaryKeyNodeEditPayload(field, isPrimaryKey, baseRevision, draft.idempotencyKey),
+      );
+      draft.rotateIdempotencyKey();
+      setPrimaryKeySaved(
+        `PK marker saved: ${isPrimaryKey ? 'set as primary key' : 'primary key removed'} (edit revision bumped, takes effect with the next full build).`,
+      );
+      await queryClient.invalidateQueries({ queryKey: iqdKeys.catalogs(connectionId) });
+      sync.refresh();
+    } catch (err) {
+      const { code, data } = readError(err);
+      setPrimaryKeyError(
+        describeNodeEditError(code, data, err instanceof Error ? err.message : String(err)),
+      );
+      draft.rotateIdempotencyKey();
+      sync.refresh();
+    } finally {
+      setSavingPrimaryKey(false);
+    }
+  }, [connectionId, field, isPrimaryKey, draft, sync, queryClient]);
+
   const saveMask = useCallback(async () => {
     if (connectionId == null || !canSaveMask) {
       return;
@@ -647,7 +687,41 @@ function FieldEditor({
 
   return (
     <div className="space-y-3 p-2">
-      {/* ---------------- MR-09：业务描述直编 ---------------- */}
+      {/* ---------------- PK marker (fields only) ---------------- */}
+      {field.kind === 'column' && (
+        <div className="space-y-1.5 rounded border p-2">
+          <div className="flex items-center gap-2">
+            <input
+              id={`pk-${field.item_key}`}
+              type="checkbox"
+              checked={isPrimaryKey}
+              disabled={!canEditDescription || savingPrimaryKey}
+              onChange={(event) => setIsPrimaryKey(event.target.checked)}
+              className="h-4 w-4"
+            />
+            <Label className="text-[13px]">Primary key</Label>
+          </div>
+          <p className="text-[11px] text-muted-foreground">
+            Primary keys drive wren dedup/aggregation cardinality inference; changes take effect with the next full build.
+          </p>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            disabled={!canEditDescription || savingPrimaryKey || !draft.idempotencyKey}
+            onClick={() => void savePrimaryKey()}
+          >
+            {savingPrimaryKey ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+            Saves immediately and takes effect with the next full build; check progress in Sync Status.
+          </Button>
+          {primaryKeySaved && <p className="text-[11px] text-emerald-600">{primaryKeySaved}</p>}
+          {primaryKeyError && (
+            <div className="rounded border border-destructive/40 bg-destructive/5 px-2 py-1 text-[12px] text-destructive">
+              {primaryKeyError}
+            </div>
+          )}
+          </div>
+        )}
       <div className="space-y-1.5">
         <Label className="text-[13px]">业务描述（description）</Label>
         <Textarea

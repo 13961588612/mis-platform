@@ -7,7 +7,8 @@
  *   <li>行级维度注册表（iqd_row_scope_dimension CRUD，W2）</li>
  *   <li>字典同步（mis_dept_scope / mis_store_scope 手动触发 + 状态，W2）</li>
  *   <li>样本对（iqd_sql_pair CRUD，W4 few-shot；**T04e MR-08：SQL 框升级 CodeMirror 6**）</li>
- *   <li>知识/术语（iqd_knowledge CRUD + S-07 导入 + 增强推送，W4；**T04e MR-09：增「关联对象」列**）</li>
+ *   <li>知识/术语（iqd_knowledge CRUD + S-07 导入 + 增强推送，W4；**T04e MR-09：增「关联对象」列**；
+ *       **布局与样本对 Tab 同构**：筛选栏 + 表格 + 新增/编辑弹窗，保存不再走内联表单）</li>
  *   <li>指令（iqd_knowledge kind=instruction；原独立「指令下发」页并入）</li>
  * </ul>
  *
@@ -22,7 +23,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { Plus, RefreshCw, Save, Send, Trash2, Upload } from 'lucide-react';
+import { Pencil, Plus, RefreshCw, Save, Send, Trash2, Upload } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -157,10 +158,11 @@ export function IqdEnhancePage() {
   const [pairDialogOpen, setPairDialogOpen] = useState(false);
   const [pairEditing, setPairEditing] = useState<IqdSqlPair | null>(null);
 
-  // 知识草稿（W4）
-  const [kbKind, setKbKind] = useState('term');
-  const [kbTitle, setKbTitle] = useState('');
-  const [kbContent, setKbContent] = useState('');
+  // 知识/术语查询条件与弹窗状态（W4；**与样本对同构**：筛选栏 + 表格 + 编辑弹窗）
+  const [kbKeyword, setKbKeyword] = useState('');
+  const [kbKindFilter, setKbKindFilter] = useState('all');
+  const [kbDialogOpen, setKbDialogOpen] = useState(false);
+  const [kbEditing, setKbEditing] = useState<IqdKnowledge | null>(null);
 
   // S-07 导入（T04e ③：能力位点 + 结果状态化；A6 未就绪 → 按钮置灰）
   const [s07Importing, setS07Importing] = useState(false);
@@ -401,32 +403,33 @@ export function IqdEnhancePage() {
     [loadEnhance],
   );
 
-  const saveKnowledgeItem = useCallback(async () => {
-    if (!kbTitle.trim()) {
-      setError('标题不能为空');
-      return;
-    }
-    const cid = await ensureConnection();
-    if (cid == null) return;
-    setSaving(true);
-    setError(null);
-    try {
-      await saveIqdKnowledge({
-        connection_id: cid,
-        kind: kbKind,
-        title: kbTitle.trim(),
-        content: kbContent.trim() || null,
-        enabled: true,
-      });
-      setKbTitle('');
-      setKbContent('');
-      await loadEnhance();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : '保存知识失败');
-    } finally {
-      setSaving(false);
-    }
-  }, [ensureConnection, kbContent, kbKind, kbTitle, loadEnhance]);
+  // 知识/术语编辑弹窗：新增/编辑共用（保存、启用态与关联清单的保留都在弹窗内完成）
+  const openKnowledgeDialog = useCallback((row: IqdKnowledge | null) => {
+    setKbEditing(row);
+    setKbDialogOpen(true);
+  }, []);
+
+  const closeKnowledgeDialog = useCallback(() => {
+    setKbDialogOpen(false);
+    setKbEditing(null);
+  }, []);
+
+  const handleKnowledgeSaved = useCallback(async () => {
+    await loadEnhance();
+    setKbDialogOpen(false);
+    setKbEditing(null);
+  }, [loadEnhance]);
+
+  /** 客户端过滤：标题/内容关键词（模糊）+ 知识类型（与样本对同构）。 */
+  const filteredKnowledge = useMemo(() => {
+    const kw = kbKeyword.trim().toLowerCase();
+    return knowledge.filter((k) => {
+      const haystack = `${k.title ?? ''}\n${k.content ?? ''}`.toLowerCase();
+      const matchKw = kw === '' || haystack.includes(kw);
+      const matchKind = kbKindFilter === 'all' || k.kind === kbKindFilter;
+      return matchKw && matchKind;
+    });
+  }, [kbKindFilter, kbKeyword, knowledge]);
 
   const removeKnowledgeItem = useCallback(
     async (id: number | undefined) => {
@@ -914,51 +917,38 @@ export function IqdEnhancePage() {
           </div>
         ) : null}
 
-        {/* ================= 知识/术语（W4）================= */}
+        {/* ================= 知识/术语（W4；布局对齐样本对：筛选栏 + 表格 + 弹窗）================= */}
         {tab === 'knowledge' ? (
           <div className="space-y-3">
-            <div className="rounded-lg border bg-card p-3">
-              <div className="mb-2 text-sm font-medium">新增知识/术语/口径</div>
-              <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-                <select
-                  className="h-9 w-full shrink-0 rounded-md border border-input bg-card px-2.5 text-sm sm:w-[7.5rem]"
-                  value={kbKind}
-                  onChange={(e) => setKbKind(e.target.value)}
-                  aria-label="知识类型"
-                >
-                  {Object.entries(KNOWLEDGE_KIND_LABEL).map(([v, l]) => (
-                    <option key={v} value={v}>
-                      {l}
-                    </option>
-                  ))}
-                </select>
-                <Input
-                  className="min-w-0 flex-1"
-                  placeholder="标题/术语"
-                  value={kbTitle}
-                  onChange={(e) => setKbTitle(e.target.value)}
-                />
-                <Button
-                  size="sm"
-                  className="h-9 shrink-0 px-3"
-                  onClick={() => void saveKnowledgeItem()}
-                  disabled={saving}
-                >
-                  <Save className="h-4 w-4" />
-                  保存
-                </Button>
-              </div>
-              <div className="mt-2">
-                <Textarea
-                  placeholder="内容/口径说明（可空）"
-                  value={kbContent}
-                  onChange={(e) => setKbContent(e.target.value)}
-                  rows={2}
-                />
-              </div>
-            </div>
-
-            <div className="flex flex-wrap items-center gap-2">
+            {/* 查询条件 + 动作（**布局与样本对 Tab 一致**；新增/编辑走右侧弹窗） */}
+            <div className="flex flex-wrap items-center gap-2 rounded-lg border bg-card p-3">
+              <Input
+                className="h-9 w-full sm:w-64"
+                placeholder="按标题/内容关键词过滤"
+                value={kbKeyword}
+                onChange={(e) => setKbKeyword(e.target.value)}
+              />
+              <select
+                className="h-9 rounded-md border border-input bg-card px-2.5 text-sm"
+                value={kbKindFilter}
+                onChange={(e) => setKbKindFilter(e.target.value)}
+                aria-label="知识类型筛选"
+              >
+                <option value="all">全部类型</option>
+                {Object.entries(KNOWLEDGE_KIND_LABEL).map(([v, l]) => (
+                  <option key={v} value={v}>
+                    {l}
+                  </option>
+                ))}
+              </select>
+              <Button size="sm" onClick={() => openKnowledgeDialog(null)} disabled={saving}>
+                <Plus className="h-4 w-4" />
+                新增
+              </Button>
+              <Button size="sm" variant="outline" onClick={() => void loadEnhance()} disabled={loading}>
+                <RefreshCw className={cn('h-4 w-4', loading && 'animate-spin')} />
+                刷新
+              </Button>
               {/* S-07 术语导入（T04e ③）：A6 未就绪 → 置灰 + tooltip（**诚实显示不可用**，不假装可用） */}
               <Button
                 size="sm"
@@ -979,10 +969,6 @@ export function IqdEnhancePage() {
               <Button size="sm" variant="outline" className="h-8" onClick={() => void pushEnhance()}>
                 <Send className="h-3.5 w-3.5" />
                 增强推送
-              </Button>
-              <Button size="sm" variant="outline" className="h-8" onClick={() => void loadEnhance()}>
-                <RefreshCw className="h-3.5 w-3.5" />
-                刷新
               </Button>
             </div>
 
@@ -1011,18 +997,18 @@ export function IqdEnhancePage() {
                     <th className="px-3 py-2 font-bold">关联对象</th>
                     <th className="px-3 py-2 font-bold">来源</th>
                     <th className="px-3 py-2 font-bold">状态</th>
-                    <th className="w-14 px-3 py-2" />
+                    <th className="w-[7rem] px-3 py-2" />
                   </tr>
                 </thead>
                 <tbody>
-                  {knowledge.length === 0 ? (
+                  {filteredKnowledge.length === 0 ? (
                     <tr>
                       <td colSpan={7} className="px-3 py-8 text-center text-muted-foreground">
-                        暂无知识条目
+                        {knowledge.length === 0 ? '暂无知识条目' : '没有匹配的知识条目'}
                       </td>
                     </tr>
                   ) : (
-                    knowledge.map((k) => {
+                    filteredKnowledge.map((k) => {
                       const related = summarizeRelatedItemKeys(k.related_item_keys);
                       return (
                       <tr
@@ -1048,28 +1034,43 @@ export function IqdEnhancePage() {
                         </td>
                         <td className="px-3 py-2 font-mono text-xs">{k.source ?? 'local'}</td>
                         <td className="px-3 py-2 text-xs">
-                          <Badge
-                            variant={
-                              k.sync_status === 'synced'
-                                ? 'default'
-                                : k.sync_status === 'failed'
-                                  ? 'destructive'
-                                  : 'secondary'
-                            }
-                          >
-                            {SYNC_LABEL[k.sync_status ?? ''] ?? k.sync_status}
-                          </Badge>
+                          <div className="flex items-center gap-1">
+                            <Badge
+                              variant={
+                                k.sync_status === 'synced'
+                                  ? 'default'
+                                  : k.sync_status === 'failed'
+                                    ? 'destructive'
+                                    : 'secondary'
+                              }
+                            >
+                              {SYNC_LABEL[k.sync_status ?? ''] ?? k.sync_status}
+                            </Badge>
+                            {/* 启用态可在弹窗里改；停用条目在列表里要看得见（否则改完没反馈） */}
+                            {k.enabled === false ? <Badge variant="outline">已停用</Badge> : null}
+                          </div>
                         </td>
                         <td className="px-3 py-2">
-                          <Button
-                            size="icon"
-                            variant="ghost"
-                            className="h-8 w-8 text-muted-foreground hover:text-destructive"
-                            onClick={() => void removeKnowledgeItem(k.id)}
-                            title="删除"
-                          >
-                            <Trash2 className="h-4 w-4" />
-                          </Button>
+                          <div className="flex items-center gap-1">
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="h-8"
+                              onClick={() => openKnowledgeDialog(k)}
+                            >
+                              <Pencil className="h-3.5 w-3.5" />
+                              编辑
+                            </Button>
+                            <Button
+                              size="icon"
+                              variant="ghost"
+                              className="h-8 w-8 text-muted-foreground hover:text-destructive"
+                              onClick={() => void removeKnowledgeItem(k.id)}
+                              title="删除"
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </Button>
+                          </div>
                         </td>
                       </tr>
                       );
@@ -1078,6 +1079,14 @@ export function IqdEnhancePage() {
                 </tbody>
               </table>
             </div>
+
+            <IqdKnowledgeDialog
+              open={kbDialogOpen}
+              initial={kbEditing}
+              onClose={closeKnowledgeDialog}
+              onSaved={handleKnowledgeSaved}
+              ensureConnection={ensureConnection}
+            />
           </div>
         ) : null}
 
@@ -1336,6 +1345,172 @@ function IqdSqlPairDialog({
           <Button size="sm" onClick={() => void save()} disabled={saving}>
             <Save className="h-4 w-4" />
             保存
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ================= 知识/术语编辑弹窗（新增 / 编辑）=================
+
+interface IqdKnowledgeDialogProps {
+  open: boolean;
+  initial: IqdKnowledge | null;
+  onClose: () => void;
+  onSaved: () => void;
+  ensureConnection: () => Promise<number | null>;
+}
+
+/**
+ * 知识/术语「新增 · 编辑」弹窗（**与样本对弹窗同构**：字段在弹窗内、保存即关闭）。
+ *
+ * <p>字段：类型 / 标题 / 内容 / 启用。**关联对象（`related_item_keys`）本弹窗不编辑**，
+ * 但保存时**原样带回** —— 否则 `PUT /knowledge/{id}` 会把它覆盖成 `null`（该清单归属建模台，
+ * T04e ②）。
+ */
+export function IqdKnowledgeDialog({
+  open,
+  initial,
+  onClose,
+  onSaved,
+  ensureConnection,
+}: IqdKnowledgeDialogProps) {
+  const [kind, setKind] = useState('term');
+  const [title, setTitle] = useState('');
+  const [content, setContent] = useState('');
+  const [enabled, setEnabled] = useState(true);
+  /** 原样带回的关联清单（本弹窗不编辑） */
+  const [relatedKeys, setRelatedKeys] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // 打开时按 initial 预填（编辑为行数据，新增为 null）
+  useEffect(() => {
+    if (!open) return;
+    setKind(initial?.kind ?? 'term');
+    setTitle(initial?.title ?? '');
+    setContent(initial?.content ?? '');
+    setEnabled(initial?.enabled ?? true);
+    setRelatedKeys(initial?.related_item_keys ?? null);
+    setError(null);
+  }, [open, initial]);
+
+  const save = useCallback(async () => {
+    if (!title.trim()) {
+      setError('标题/术语不能为空');
+      return;
+    }
+    const cid = await ensureConnection();
+    if (cid == null) return;
+    setSaving(true);
+    setError(null);
+    try {
+      // 带 id → PUT /knowledge/{id}（可改类型/标题）；不带 → POST 幂等 upsert
+      await saveIqdKnowledge({
+        id: initial?.id ?? undefined,
+        connection_id: cid,
+        kind,
+        title: title.trim(),
+        content: content.trim() || null,
+        related_item_keys: relatedKeys,
+        enabled,
+      });
+      onSaved();
+    } catch (e) {
+      setError(
+        e instanceof Error ? e.message : initial?.id != null ? '更新知识条目失败' : '保存知识条目失败',
+      );
+    } finally {
+      setSaving(false);
+    }
+  }, [content, enabled, ensureConnection, initial, kind, onSaved, relatedKeys, title]);
+
+  const related = summarizeRelatedItemKeys(relatedKeys);
+
+  return (
+    <Dialog
+      open={open}
+      onOpenChange={(value) => {
+        if (!value) onClose();
+      }}
+    >
+      <DialogContent className="flex max-h-[90vh] w-full max-w-3xl flex-col gap-0 overflow-hidden p-0">
+        <DialogHeader className="border-b border-border/60 px-4 py-3">
+          <DialogTitle className="text-[14px]">
+            {initial?.id != null ? `编辑知识条目 #${initial.id}` : '新增知识/术语/口径'}
+          </DialogTitle>
+        </DialogHeader>
+
+        <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-5 py-4">
+          <div className="flex flex-col gap-1">
+            <span className="text-xs text-muted-foreground">类型</span>
+            <Select value={kind} onValueChange={setKind}>
+              {/* 弹窗内各控件显式加高：默认 h-9 在弹窗里显小（用户反馈「内容组件太矮」） */}
+              <SelectTrigger className="h-11">
+                <SelectValue placeholder="选择知识类型" />
+              </SelectTrigger>
+              <SelectContent>
+                {Object.entries(KNOWLEDGE_KIND_LABEL).map(([v, l]) => (
+                  <SelectItem key={v} value={v}>
+                    {l}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+
+          <div className="flex flex-col gap-1">
+            <span className="text-xs text-muted-foreground">标题/术语</span>
+            <Input
+              className="h-11"
+              placeholder="标题/术语（如：销售额）"
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+            />
+          </div>
+
+          <div className="flex flex-col gap-1">
+            <span className="text-xs text-muted-foreground">内容/口径说明（可空）</span>
+            <Textarea
+              className="min-h-[18rem] leading-relaxed"
+              placeholder="口径说明、同义词等（可空）"
+              value={content}
+              onChange={(e) => setContent(e.target.value)}
+              rows={12}
+            />
+          </div>
+
+          <div className="flex items-center gap-2">
+            <input
+              type="checkbox"
+              className="h-4 w-4"
+              checked={enabled}
+              onChange={(e) => setEnabled(e.target.checked)}
+            />
+            <span className="text-xs text-muted-foreground">启用（同步后对问数生效）</span>
+          </div>
+
+          {/* 关联对象归属建模台：这里只读展示，保存时原样带回 */}
+          <p className="text-[11px] text-muted-foreground">
+            关联对象：{related.isGlobal ? '全连接通用' : `${related.count} 项`}
+            （由建模台维护，本弹窗不修改）
+          </p>
+
+          {error ? (
+            <div className="rounded-md border border-destructive/30 bg-destructive/5 p-2 text-xs text-destructive">
+              {error}
+            </div>
+          ) : null}
+        </div>
+
+        <DialogFooter className="border-t border-border/60 px-4 py-3">
+          <Button size="sm" variant="outline" onClick={onClose} disabled={saving}>
+            取消
+          </Button>
+          <Button size="sm" onClick={() => void save()} disabled={saving}>
+            <Save className="h-4 w-4" />
+            {initial?.id != null ? '保存修改' : '保存'}
           </Button>
         </DialogFooter>
       </DialogContent>
