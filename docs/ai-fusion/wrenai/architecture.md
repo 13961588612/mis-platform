@@ -2573,7 +2573,7 @@ event: done          data: {}
 | 3 | **模拟角色 WHERE 片段预览端点** | 从未落地为 API；前端暂以示意片段（恒标 `degraded`）兜底 |
 | 4 | ~~**enhance 页权限闸门**~~ **已完成** | 2026-09-28：`iqd-enhance-page.tsx` 按 Tab 判定看权限（mask/dimension/scope/enhance），无权 Tab 不渲染也不发请求；按动作闸门（save/sync/manage）；全无权渲染拒绝态 |
 | 5 | **F-3 观察项** | 前端有、后端未直用/反向不齐：`iqd:test:use`、`iqd:acl:save`（疑页面级 vs 动作级授权差异，非 40300 风险） |
-| 6 | **`@EnableMethodSecurity` 缺失** | 方法级安全注解未全局开启（当前 `@PreAuthorize` 生效依赖既有配置），建议核对 |
+| 6 | ~~**`@EnableMethodSecurity` 缺失**~~ **已核对** | 2026-09-28 实测：全仓无 `@EnableMethodSecurity`，且所有服务包缺 `spring-security-config`，`@PreAuthorize` **未生效**；安全靠 Gateway JWT + BFF `ApiPermissionInterceptor` 两道外层门（详见校验清单 §3.11） |
 
 **E. 计划外新增（v1.11 施工单未列）**
 - **T03e**（未落入 MDL 的编辑项转可见告警）、**T04a**（Cube 级 upsert + V90）、**T04b-补**（MR-13 走 `catalog/node` 扩展脱敏字段）、**V91**（F-1 修复）。

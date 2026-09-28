@@ -439,6 +439,40 @@
 
 ---
 
+## 3.11 `@EnableMethodSecurity` 核对（开发清单第 6 项）—— 确认缺失，且比原描述更严重
+
+> **结论**：`@PreAuthorize` **在本仓库范围内完全不生效**（不是“依赖既有配置”，是**彻底未生效**）。
+
+**证据：**
+1. 全仓 `rg -n "EnableMethodSecurity"`：**0 命中**（无任何服务开启方法级安全）。
+2. 程序包层（所有 9 个 `*-SNAPSHOT.jar`）：**`spring-security-config` 均不存在**（该包才提供
+   `@EnableMethodSecurity` 与方法拦截器）；仅有 `spring-security-core`（提供注解本身，不提供生效机制）。
+3. 真机实测（mis-iqd `:8109`，两个受 `@PreAuthorize` 保护的端点）：
+   - `GET /api/v1/iqd/modeling/layout/900001`（声明 `hasAuthority('iqd:modeling:view')`）：
+     **带看不带 `Authorization`、带不带 `X-Mis-Roles` 均返回 200 + 真实数据**；
+   - `POST /api/v1/iqd/catalog/model`（声明 `iqd:modeling:edit`）：无任何凭证即达业务校验
+     （返回 `42200 item_key 必须形如 mdl:model:<name>`，说明请求**已进入控制器**）。
+4. 即使强行开启也不会立刻生效：`GatewayContextFilter` 只写自定义
+   `com.mis.common.security.context.SecurityContextHolder`，**从未向 Spring Security 的
+   `Authentication`/`GrantedAuthority` 桥接**（全仓 0 命中 `GrantedAuthority` / `setAuthentication`）。
+
+**现行安全模型（事实）**：服务间信任靠两道外层闸门 —— ① **Gateway JWT 验签**（:8080）；
+② **BFF `ApiPermissionInterceptor`**（:8081，`sys_api ⋈ sys_menu_api ⋈ sys_menu` 判权）。**领域服务自身的
+`@PreAuthorize` 不构成防线** —— 它们是“愿景性注解”，读代码时会误以为已守住。
+
+**影响与边界：**
+- 正常部署（仅内网、不暴露领域服务端口）下，**不直接构成突破**；
+- 但“领域服务端口可被边界内任意访问者直连”时，即可绕过 BFF 的权限校验直接读写（实测已证明）。
+  这使“内网隔离”成为唯一真实控制，应在部署文档里明确（当前已隐式依赖）。
+
+**建议（本轮未实施，属跨服务高风险改动）**：
+1. 补 `spring-security-config` 依赖 + 全局 `@EnableMethodSecurity`；
+2. 在 `GatewayContextFilter` 里把 `LoginUser` 桥接为 Spring Security `Authentication`
+   并注入 `GrantedAuthority`（否则开启后将**全量拒绝** → 线上中断）；
+3. 分符合服务灰度开启（先 iqd 单服务），并补“无权 → 403”回归用例。
+
+---
+
 ## 4. 性能压测（P-1 ~ P-6）
 
 ### 4.1 画布拖拽帧率（P-1：200 节点 ≥55fps）

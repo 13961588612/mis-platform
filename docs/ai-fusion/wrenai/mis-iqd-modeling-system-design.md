@@ -1204,7 +1204,7 @@ calc:<model>.<column_name>        calculated column 节点（新增，二/四期
 | 3 | ~~**模拟角色 WHERE 片段预览端点**~~ **已完成**（2026-09-28：`POST /api/v1/iqd/scope/preview`，BFF+V104 登记就绪） | 已闭合 |
 | 4 | ~~**enhance 页权限闸门**~~ **已完成**（2026-09-28：按 Tab/ 按动作级闸门，无权 Tab 不渲染也不发请求） | 已闭合 |
 | 5 | **F-3 观察项**（`iqd:test:use` / `iqd:acl:save` 前后端不齐） | 观察 |
-| 6 | **`@EnableMethodSecurity` 缺失** | 建议核对 |
+| 6 | ~~**`@EnableMethodSecurity` 缺失**~~ **已核对**（2026-09-28：确认 `@PreAuthorize` 全仓不生效；安全靠 Gateway + BFF 两道外层门） | 已核对 |
 
 ---
 
