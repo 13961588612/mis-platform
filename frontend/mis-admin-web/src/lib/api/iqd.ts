@@ -638,6 +638,12 @@ export interface IqdSyncStatus {
   build_error?: string | null;
   index_error?: string | null;
   updated_at?: string | null;
+  /**
+   * 发布后引擎侧自检告警（2026-09-28）：JSON 字符串数组文本。
+   *
+   * <p>覆盖「build 成功但引擎侧没有 cube/关系（只写了 target/mdl.json）」这类静默失败。
+   */
+  publish_warnings?: string | null;
 }
 
 // ================================================================ 二期：语义模型编辑（P0-1~P0-12）

@@ -75,6 +75,15 @@ public class IqdSyncJob {
     @Column(name = "unmatched_edits", columnDefinition = "text")
     private String unmatchedEdits;
 
+    /**
+     * 发布后引擎侧自检告警（2026-09-28）：JSON 字符串数组。
+     *
+     * <p>发布成功后读回 {@code wren context show} 与派生 MDL 对账，差异落本列 —— 覆盖
+     * 「build 成功但引擎侧没有 cube/关系（只写了 target/mdl.json）」这类静默失败。
+     */
+    @Column(name = "publish_warnings", columnDefinition = "text")
+    private String publishWarnings;
+
     /** 本次同步动作：force_rebuild（自愈强制重建）/ reindex（自愈重新索引）/ validate（自愈模型校验）/ materials / model。可为 null（兼容历史作业）。 */
     @Column(name = "action")
     private String action;
@@ -204,6 +213,15 @@ public class IqdSyncJob {
     public void setUnmatchedEdits(String unmatchedEdits) {
         this.unmatchedEdits = unmatchedEdits;
     }
+
+    public String getPublishWarnings() {
+        return publishWarnings;
+    }
+
+    public void setPublishWarnings(String publishWarnings) {
+        this.publishWarnings = publishWarnings;
+    }
+
 
     public String getAction() {
         return action;

@@ -27,6 +27,14 @@ public class IqdSyncJobVO {
     /** 本次同步动作：force_rebuild / reindex / validate / materials / model（可为 null，兼容历史作业）。 */
     private String action;
 
+    /**
+     * 发布后引擎侧自检告警（JSON 字符串数组文本；null/空 = 引擎侧与派生 MDL 一致）。
+     *
+     * <p>前端 SyncStatusBar 解析后以警示条展示 —— 覆盖「build 成功但引擎侧
+     * 没有 cube/关系」这类静默失败。
+     */
+    private String publishWarnings;
+
     public Long getId() {
         return id;
     }
@@ -141,5 +149,14 @@ public class IqdSyncJobVO {
 
     public void setAction(String action) {
         this.action = action;
+    }
+
+    @JsonProperty("publish_warnings")
+    public String getPublishWarnings() {
+        return publishWarnings;
+    }
+
+    public void setPublishWarnings(String publishWarnings) {
+        this.publishWarnings = publishWarnings;
     }
 }

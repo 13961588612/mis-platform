@@ -1816,6 +1816,22 @@ public class IqdAdminService {
                 }
             }
         }
+        // 发布后引擎侧自检告警（2026-09-28）：与 unmatched_edits 同风格 —— 全量替换，
+        // 不带该字段 = 本次自检无告警 → 清空，避免旧告警长期挂红。
+        if (payload.containsKey("publish_warnings")) {
+            Object pw = payload.get("publish_warnings");
+            if (pw == null || "[]".equals(String.valueOf(pw).trim())) {
+                job.setPublishWarnings(null);
+            } else {
+                try {
+                    job.setPublishWarnings(objectMapper.writeValueAsString(pw));
+                } catch (com.fasterxml.jackson.core.JsonProcessingException exc) {
+                    log.warn("IQD publish_warnings serialize failed connectionId={}", connectionId, exc);
+                    job.setPublishWarnings(String.valueOf(pw));
+                }
+            }
+        }
+
         Integer syncedPairs = toInt(payload.get("synced_sql_pair_count"));
         if (syncedPairs != null) {
             job.setSyncedSqlPairCount(syncedPairs);
@@ -2591,6 +2607,7 @@ public class IqdAdminService {
         vo.setBuildError(entity.getBuildError());
         vo.setIndexError(entity.getIndexError());
         vo.setAction(entity.getAction());
+        vo.setPublishWarnings(entity.getPublishWarnings());
         vo.setUpdatedAt(entity.getUpdatedAt());
         return vo;
     }

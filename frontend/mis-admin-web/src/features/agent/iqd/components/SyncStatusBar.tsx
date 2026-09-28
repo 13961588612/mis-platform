@@ -98,7 +98,26 @@ export function SyncStatusBar({ connectionId }: { connectionId: number | null })
     }
   };
 
+  const selfcheckWarnings: string[] = (() => {
+    const raw = status?.publish_warnings;
+    if (!raw) return [];
+    try {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        return parsed.map((x) => String(x)).filter((x) => x.trim().length > 0);
+      }
+    } catch {
+      /* 非 JSON：按单条文本展示 */
+    }
+    return [String(raw)];
+  })();
+
   return (
+  /**
+   * 解析发布后引擎侧自检告警（JSON 字符串数组文本）。
+   *
+   * <p>解析失败按单条原文展示（宁可多显示一行，也不静默吞掉自检结果）。
+   */
     <div className="flex flex-wrap items-center gap-3 rounded-lg border bg-card p-3 text-xs">
       <span className="font-semibold text-muted-foreground">增强同步状态</span>
       {status == null ? (
@@ -136,9 +155,27 @@ export function SyncStatusBar({ connectionId }: { connectionId: number | null })
               索引错误
             </span>
           ) : null}
+          {selfcheckWarnings.length > 0 ? (
+            <span className="text-amber-600" title={selfcheckWarnings.join('\n')}>
+              引擎自检 {selfcheckWarnings.length} 条告警
+            </span>
+          ) : null}
         </>
       )}
       {error ? <span className="text-destructive">{error}</span> : null}
+      {selfcheckWarnings.length > 0 ? (
+        <div className="w-full rounded border border-amber-500/40 bg-amber-500/5 px-2 py-1 text-[11px] text-amber-700">
+          <div className="font-medium">发布后引擎侧自检：发现不一致（点刷新可重试）</div>
+          <ul className="mt-0.5 list-disc pl-4">
+            {selfcheckWarnings.slice(0, 3).map((w, i) => (
+              <li key={i}>{w}</li>
+            ))}
+            {selfcheckWarnings.length > 3 ? (
+              <li>…另有 {selfcheckWarnings.length - 3} 条（悬停徽标查看全部）</li>
+            ) : null}
+          </ul>
+        </div>
+      ) : null}
       <div className="ml-auto flex items-center gap-2">
         <Button size="sm" variant="outline" onClick={() => void load()} disabled={loading}>
           <RefreshCw className={loading ? 'h-4 w-4 animate-spin' : 'h-4 w-4'} />

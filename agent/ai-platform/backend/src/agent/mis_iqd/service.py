@@ -34,6 +34,7 @@ from src.agent.mis_iqd.sql_translate import (
     translate_sql_pair as sql_translate_translate,
 )
 from src.agent.mis_iqd.orchestrator import AskOrchestrator, AskResult
+from src.agent.mis_iqd.publish_selfcheck import PublishSelfCheck
 from src.agent.mis_iqd.projector import ResponseProjector
 from src.agent.mis_iqd.scope_resolver import AskIdentity, ScopeResolver
 from src.config import get_settings
@@ -1206,6 +1207,30 @@ class IqdAskService:
         return len(stale), ("；".join(problems) if problems else None)
 
     @staticmethod
+    def _load_derived_mdl(mdl_dir: str | None) -> dict[str, Any] | None:
+        """读回本次派生的 MDL（``mdl_dir/manifest.json``），供发布后自检对账。
+
+        Returns:
+            dict；不可读时 ``None``（自检据此跳过，不误报）。
+        """
+        import json as _json
+        import os
+
+        if not mdl_dir:
+            return None
+        path = (
+            mdl_dir
+            if mdl_dir.endswith("manifest.json")
+            else os.path.join(mdl_dir, "manifest.json")
+        )
+        try:
+            with open(path, encoding="utf-8") as fh:
+                data = _json.load(fh)
+        except (OSError, ValueError):
+            return None
+        return data if isinstance(data, dict) else None
+
+    @staticmethod
     def _resolve_mdl_hash(result: dict[str, Any] | None) -> str | None:
         """取本次部署的 ``mdl_hash``。
 
@@ -1362,6 +1387,32 @@ class IqdAskService:
                 index_error = str(exc)
                 logger.warning("IQD model memory index failed (non-blocking)", error=str(exc))
 
+        # ④b 发布后自检（2026-09-28）：读回引擎上下文与派生 MDL 对账。
+        #     只报不改；读回失败也仅记 warning，绝不改 build_status。
+        #     动机：cube/关系曾「发布成功但引擎侧没有」静默存在一整轮（只写了 target/mdl.json）。
+        selfcheck_warnings: list[str] = []
+        if build_status == "success":
+            try:
+                shown = await cli.context_show(project_dir=project_home)
+                if shown.get("ok"):
+                    engine_ctx = shown.get("data") or {}
+                    selfcheck_warnings = PublishSelfCheck.compare(
+                        self._load_derived_mdl(mdl_dir), engine_ctx
+                    )
+                    logger.info(
+                        "IQD publish selfcheck",
+                        connection_id=cid,
+                        summary=PublishSelfCheck.summary(engine_ctx),
+                        warnings=len(selfcheck_warnings),
+                    )
+                else:
+                    selfcheck_warnings = [
+                        f"自检：无法读回引擎上下文（{shown.get('error') or '未知原因'}）"
+                    ]
+            except Exception as exc:  # noqa: BLE001 - 自检失败不得影响发布结果
+                logger.warning("IQD publish selfcheck degraded", error=str(exc))
+                selfcheck_warnings = [f"自检：执行异常（{str(exc)[:80]}）"]
+
         synced_pairs = 0
         synced_knowledge = 0
         stamped = 0
@@ -1384,6 +1435,7 @@ class IqdAskService:
                 index_error, stamped, 0,
                 unmatched_edit_count=int(derived.get("unmatched_edit_count") or 0),
                 unmatched_edits=derived.get("unmatched_edits"),
+                warnings=selfcheck_warnings,
             )
         else:
             await self._report_model_job(
@@ -1400,6 +1452,7 @@ class IqdAskService:
             synced_knowledge_count=0,
             build_error=build_error,
             index_error=index_error,
+            warnings=list(selfcheck_warnings),
         )
 
     async def _current_edit_revision(self, full: dict[str, Any], client: Any) -> int:
@@ -1949,6 +2002,7 @@ class IqdAskService:
         synced_knowledge: int,
         unmatched_edit_count: int = 0,
         unmatched_edits: list[dict[str, Any]] | None = None,
+        warnings: list[str] | None = None,
     ) -> None:
         """上报模型写回作业（edit_source=model）。"""
         try:
@@ -1965,6 +2019,9 @@ class IqdAskService:
                 "unmatched_edit_count": int(unmatched_edit_count or 0),
                 "unmatched_edits": list(unmatched_edits or []),
                 "edit_source": "model",
+                # 发布后自检告警（2026-09-28）：落 iqd_sync_job.publish_warnings，
+                # 前端 SyncStatusBar 解析后以警示条展示。
+                "publish_warnings": list(warnings or []),
             })
         except Exception as exc:  # noqa: BLE001 - 报作业失败仅告警
             logger.warning("IQD model sync job report failed", connection_id=connection_id, error=str(exc))

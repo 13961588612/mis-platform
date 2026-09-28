@@ -855,6 +855,42 @@ class IqdCli:
         """
         return await self._run(["memory", "reset", *self._memory_reset_args], cwd=project_dir)
 
+    async def context_show(self, *, project_dir: str | None = None) -> dict[str, Any]:
+        """读回引擎侧语义上下文（``wren context show --output json``）。
+
+        <p><b>为什么需要</b>（2026-09-28 实测教训）：``target/mdl.json`` 只是 build 产物，
+        引擎（``context show`` / MCP）读的是 **YAML 工程**。平台此前只校验 build 退出码，
+        于是「发布成功但引擎侧没有 cube / 没读到规则」可以静默存在一整轮。
+        本方法用于**发布后自检**：把引擎真实上下文读回来与派生 MDL 对账。
+
+        Returns:
+            ``{"ok": bool, "data": dict, "error": str}``；``data`` 为解析后的 JSON
+            （含 ``models`` / ``cubes`` / ``relationships`` 等），失败时 ``ok=False``。
+        """
+        try:
+            raw = await self._run(
+                ["context", "show", "--output", "json"],
+                cwd=project_dir,
+                allow_nonzero=True,
+            )
+        except IqdCliError as exc:
+            return {"ok": False, "data": {}, "error": str(exc)}
+
+        text = str(raw.get("stdout") or "")
+        # CLI 的 JSON 里可能有警告前缀行，取第一个 '{' 起的内容解析
+        start = text.find("{")
+        if start < 0:
+            return {"ok": False, "data": {}, "error": "context show 未返回 JSON"}
+        import json as _json
+
+        try:
+            parsed = _json.loads(text[start:])
+        except (ValueError, TypeError) as exc:
+            return {"ok": False, "data": {}, "error": f"context show JSON 解析失败: {exc}"}
+        if not isinstance(parsed, dict):
+            return {"ok": False, "data": {}, "error": "context show 返回非对象"}
+        return {"ok": True, "data": parsed, "error": ""}
+
     async def context_validate(self, *, project_dir: str | None = None) -> dict[str, Any]:
         """校验当前语义上下文（``wren context validate``）。
 
