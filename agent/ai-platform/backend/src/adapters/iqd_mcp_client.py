@@ -261,17 +261,37 @@ class IqdMcpClient:
     async def get_context(
         self,
         *,
+        question: str = "",
         role_scope: str = "",
         language: str | None = None,
     ) -> dict[str, Any]:
-        """读取角色级语义上下文 + 原生引用来源（供前置收敛与 CitationBuilder）。"""
+        """读取语义上下文（按问题检索 schema 片段）+ 原生引用来源。
+
+        <p><b>真机实测（2026-09-28，连接 900001）</b>：wren 0.13.3 的 ``get_context``
+        **必填 ``question``**（tools/list 的 ``get_contextArguments.required = [question]``）；
+        传 ``role_scope`` 会直接校验失败：
+        ``1 validation error for get_contextArguments / question / Field required``。
+        早期实现只传 ``role_scope``，异常被调用方 try/except 吞掉 → 语义上下文**一直是空的**。
+
+        <p>真机返回形如 ``{"schema": "<全文 schema 片段>", "strategy": "full"}``（无检索扩展时
+        退化为全文），由 ``orchestrator._render_context`` 渲染进 NL→SQL 上下文。
+
+        Args:
+            question: 用户问题（**必填**，真机要求）。
+            role_scope: 保留参数（历史调用方兼容）；真机不再接受，仅在 ``question`` 为空时
+                作为兜底透传（正常不应走到）。
+            language: 生成语言。
+        """
         if self._mock:
             return {"type": "context", "models": [], "instructions": [], "knowledge": []}
         payload: dict[str, Any] = {
             "language": language or get_settings().iqd_mcp.wren_language,
         }
-        if role_scope:
-            payload["role_scope"] = role_scope
+        if question.strip():
+            payload["question"] = question.strip()
+        elif role_scope.strip():
+            # 兜底：老调用方只给 role_scope 时不至于发空请求（真机会报错，但至少语义清晰）
+            payload["question"] = role_scope.strip()
         return await self._call_tool(TOOL_GET_CONTEXT, payload)
 
     async def list_knowledge(self, **kwargs: Any) -> dict[str, Any]:

@@ -37,6 +37,7 @@ from src.agent.mis_iqd.lineage import CitationBuilder, LineageExtractor
 from src.agent.mis_iqd.masking import MaskingEngine, MaskOutcome
 from src.agent.mis_iqd.nl2sql import CubeQuerySpec, Nl2SqlGenerator, Nl2SqlResult
 from src.agent.mis_iqd.plan_mapper import PlanMapper
+from src.agent.mis_iqd.rules_context import RuleContext
 from src.agent.mis_iqd.scope_resolver import (
     AskIdentity,
     IqdScopeResolution,
@@ -170,15 +171,26 @@ class AskOrchestrator:
         native: dict[str, Any] = context_native or {}
         try:
             if not native:
-                native = await mcp.get_context(role_scope=resolution.subject_summary)
+                # 真机（0.13.3）get_context 必填 question：只传 role_scope 会校验失败，
+                # 而旧实现把异常吞成 native={} → 语义上下文一直是空的（2026-09-28 实测）。
+                native = await mcp.get_context(question=request.question)
             plan.mark_done(
                 steps,
                 "searching",
                 detail=self._search_detail(native),
             )
         except Exception as exc:  # noqa: BLE001 - 上下文获取失败降级为空引用，不阻断主链路
+            # 可观测性（2026-09-28）：语义上下文缺失会让生成质量明显下降（少列/臆造列），
+            # 但以前只写日志 —— 界面上看不出「本轮没有语义上下文」。
+            # 这里把 searching 步标 skipped 并写明原因，plan[] 会随响应回给前端。
             logger.warning("IQD get_context degraded", error=str(exc))
             native = {}
+            plan.mark(
+                steps,
+                "searching",
+                "skipped",
+                detail=f"语义上下文不可得，已降级：{self._brief_error(exc)}",
+            )
 
         # ===== cube 优先（2026-09-28）：命中 cube 时用结构化聚合替代手写 SQL =====
         # 设计：cube 只做「SQL 生成器」—— 生成出的 SQL 仍走原有
@@ -199,7 +211,7 @@ class AskOrchestrator:
         except Exception as exc:  # noqa: BLE001 - cube 分支任何异常都降级到 NL→SQL
             logger.warning("IQD cube branch degraded", error=str(exc))
             cube_outcome = None
-            cube_error = str(exc)
+            cube_error = self._brief_error(exc)
 
         # ===== NL→SQL（平台 LLM Gateway）+ dry_plan（Wren 方言转译）=====
         plan.mark(steps, "generating", "running")
@@ -621,6 +633,14 @@ class AskOrchestrator:
         """scope_check 阶段明细。"""
         return f"命中 {len(resolution.allowed_item_keys)} 张授权表"
 
+    @staticmethod
+    def _brief_error(exc: BaseException) -> str:
+        """把异常压成一行短句（用于 plan[].detail，避免把堆栈/长文本带给前端）。"""
+        text = str(exc).strip().replace("\n", " ")
+        if not text:
+            text = type(exc).__name__
+        return text[:120]
+
     def _search_detail(self, native: dict[str, Any]) -> str:
         """searching 阶段明细。"""
         models = native.get("models") if isinstance(native, dict) else None
@@ -749,6 +769,22 @@ class AskOrchestrator:
                     parts.extend(sample_lines)
             except Exception as exc:  # noqa: BLE001
                 logger.debug("IQD recall_queries for nl2sql skipped", error=str(exc))
+
+        # 业务规则 / 术语（knowledge/rules/*.md）：wren ``get_instructions`` 直读。
+        # 真机（2026-09-28）：该工具此前**从未被调用** —— 规则下发了却对问数无效。
+        # 这段是「口径」类硬约束（如 ads_* 必须过滤 data_type），必须进 NL→SQL 上下文。
+        rules_error: str = ""
+        try:
+            rules = await mcp.get_instructions()
+            rules_text = RuleContext.extract(rules)
+            if rules_text:
+                parts.append("business_rules (MUST follow; from knowledge/rules):")
+                parts.append(rules_text)
+        except Exception as exc:  # noqa: BLE001 - 规则不可得仅降级，不阻断主链路
+            # 规则缺失会让「口径类问题」（如 ads_* 必须过滤 data_type）重新变回裸生成，
+            # 用 warning 留痕（get_context 的降级另有 plan 标记）。
+            rules_error = self._brief_error(exc)
+            logger.warning("IQD get_instructions for nl2sql degraded", error=rules_error)
 
         candidates = self._collect_model_candidates(native, tables)
         listed_names: list[str] = []
