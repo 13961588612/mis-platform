@@ -1811,6 +1811,49 @@ class IqdAskService:
     # ================================================================ T03：新建节点物化（R-3）
 
     @staticmethod
+    def _table_key_of_model(
+        model_item: dict[str, Any],
+        edited_items: list[dict[str, Any]],
+        model_name: str,
+    ) -> str | None:
+        """解析「新 model 对应的物理表 key」。
+
+        <p>from-table 导入时 catalog 同时写入 ``kind=table``（item_key=表名，无前缀）
+        与 ``kind=column``（parent_key=表名）。优先用 model 的 ``parent_key``；否则回落到
+        表名本身（from-table 的 tableKey 就是表名，见 IqdCatalogNodeService.resolveSourceTable）。
+
+        Returns:
+            table key（用于取列）；无法确定时 ``None``。
+        """
+        parent = str(model_item.get("parent_key") or "").strip()
+        if parent and parent != model_item.get("item_key"):
+            return parent
+        # from-table 形态：table 行 item_key == 表名；优先找 name 匹配的 table 行
+        for it in edited_items:
+            if (it.get("kind") or "") != "table":
+                continue
+            key = str(it.get("item_key") or "").strip()
+            display = str(it.get("display_name") or "").strip()
+            if key == model_name or display == model_name:
+                return key
+        return model_name or None
+
+    @staticmethod
+    def _columns_of_table(
+        edited_items: list[dict[str, Any]], table_key: str | None
+    ) -> list[dict[str, Any]]:
+        """取某物理表下的列定义（``kind=column`` 且 ``parent_key`` 命中）。"""
+        if not table_key:
+            return []
+        out: list[dict[str, Any]] = []
+        for it in edited_items:
+            if (it.get("kind") or "") != "column":
+                continue
+            if str(it.get("parent_key") or "").strip() == table_key:
+                out.append(it)
+        return out
+
+    @staticmethod
     def _item_key_tail(item_key: str | None) -> str:
         """取 item_key 末段：``mdl:cube:revenue`` → ``revenue``；``a.b.c`` → ``c``。"""
         if not item_key:
@@ -1886,6 +1929,95 @@ class IqdAskService:
         rel_by_name: dict[str, dict[str, Any]] = {
             r.get("name"): r for r in relationships if isinstance(r, dict)
         }
+
+        # ⓪ 全新 model（from-table 路径）—— 必须先于 cube/relationship，因为它们的
+        #    baseObject / models 可能引用新模型。
+        #    <p><b>为什么此前刻意不做</b>：真实 MDL 的 model schema（tableReference / columns
+        #    必填项）未经真机校准，盲写可能产出非法 MDL 打挂整条 build。
+        #    <p><b>2026-09-28 已校准</b>（真机 mdl_raw 实测）：
+        #    model = {name, tableReference{catalog,schema,table}, columns[{name,type,notNull,
+        #    properties,isCalculated[,expression,isPrimaryKey]}], primaryKey[], cached, properties}。
+        #    因此现在可以安全物化：**以基线中任一既有 model 的 tableReference 为模板**取
+        #    catalog/schema（同连接同库），只替换 table；基线无 model 可参照时**跳过**
+        #    （fail-safe：宁可留在 unmatched 清单，也不盲猜 schema 产出非法 MDL）。
+        template_ref: dict[str, Any] | None = None
+        for m in models:
+            if isinstance(m, dict) and isinstance(m.get("tableReference"), dict):
+                template_ref = dict(m["tableReference"])
+                break
+        for idx, it in enumerate(edited_items):
+            if (it.get("kind") or "") != "model":
+                continue
+            item_key = str(it.get("item_key") or "")
+            if not item_key.startswith("mdl:model:"):
+                continue
+            name = (it.get("display_name") or "").strip() or self._item_key_tail(item_key)
+            if not name or name in model_by_name:
+                if name in model_by_name:
+                    landed.add(idx)  # 基线已有 → 由 patch 负责改名/改描述
+                continue
+            if template_ref is None:
+                # 无基线可参照：不盲写（保持 unmatched，由 T03e 告警可见）
+                logger.warning(
+                    "IQD new model not materialized (no baseline tableReference to copy)",
+                    model=name,
+                )
+                continue
+
+            table_key = self._table_key_of_model(it, edited_items, name)
+            cols = self._columns_of_table(edited_items, table_key)
+            mdl_columns: list[dict[str, Any]] = []
+            pk_names: list[str] = []
+            for col in cols:
+                col_name = (col.get("display_name") or "").strip() or self._item_key_tail(
+                    col.get("item_key")
+                )
+                if not col_name:
+                    continue
+                entry: dict[str, Any] = {
+                    "name": col_name,
+                    "type": str(col.get("data_type") or "").strip() or "VARCHAR",
+                    "notNull": False,
+                    "properties": {},
+                }
+                expression = str(col.get("expression") or "").strip()
+                if expression:
+                    entry["isCalculated"] = True
+                    entry["expression"] = expression
+                else:
+                    entry["isCalculated"] = False
+                description = str(col.get("description") or "").strip()
+                if description:
+                    entry["properties"]["description"] = description
+                if col.get("is_primary_key") or col.get("isPrimaryKey"):
+                    entry["isPrimaryKey"] = True
+                    pk_names.append(col_name)
+                mdl_columns.append(entry)
+            if not mdl_columns:
+                # 没有可用列 → 不建空模型（build 会因无列失败）
+                logger.warning("IQD new model has no columns; skip", model=name)
+                continue
+
+            model: dict[str, Any] = {
+                "name": name,
+                "tableReference": {**template_ref, "table": name},
+                "columns": mdl_columns,
+                "cached": False,
+                "properties": {},
+            }
+            description = str(it.get("description") or "").strip()
+            if description:
+                model["properties"]["description"] = description
+            if pk_names:
+                model["primaryKey"] = pk_names
+            models.append(model)
+            model_by_name[name] = model
+            landed.add(idx)
+            logger.info(
+                "IQD new model materialized",
+                model=name,
+                columns=len(mdl_columns),
+            )
 
         # ① cube 容器（先建，供 measure/dimension 挂靠）
         for idx, it in enumerate(edited_items):
