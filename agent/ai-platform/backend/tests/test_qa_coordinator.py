@@ -536,11 +536,16 @@ class TestRedlineNoNewDependencies:
         assert not unexpected, f"{relative_path} 引入了新的第三方依赖：{unexpected}"
 
     def test_dependency_manifest_untouched(self) -> None:
-        """依赖清单（pyproject / uv.lock）仅允许 sqlglot 变更（主理人拍板接受）。
+        """依赖清单（pyproject / uv.lock）仅允许既有拍板依赖变更。
 
-        v1.9（B1）红线修订：``sqlglot>=25.0.0`` 是 mis-iqd scope_resolver AST 解析
-        （血缘提取 / 行级范围注入）的设计必需依赖，已由主理人拍板纳入允许变更清单。
-        除 sqlglot 相关新增行外，pyproject.toml 与 uv.lock 仍须零改动。
+        允许清单（均经主理人拍板，附获批理由）：
+        - ``sqlglot>=25.0.0``：v1.9（B1）mis-iqd scope_resolver AST 解析（血缘提取 /
+          行级范围注入）的设计必需依赖。
+        - ``pymysql>=1.1.0``：路线 A（2026-09-29）问数连接凭证入 vault 后，
+          平台侧直连业务库（StarRocks / Doris / MySQL 协议）查 ``information_schema``
+          做全库表发现 —— wren 0.13 无法查 information_schema（``[INVALID_SQL]
+          missing field type``），必须直连，而环境仅有 asyncpg（wire 仅 Postgres）。
+        除上述两项相关新增行外，pyproject.toml 与 uv.lock 的其它改动仍视为红线违规。
         """
         probe = subprocess.run(
             ["git", "rev-parse", "--is-inside-work-tree"],
@@ -550,13 +555,32 @@ class TestRedlineNoNewDependencies:
         if probe.returncode != 0:  # pragma: no cover - 非 git 环境跳过
             pytest.skip("非 git 工作区，跳过依赖清单比对")
 
-        # uv.lock：仍须零改动（sqlglot 仅作 pyproject 声明，不落 lock 变更）
+        # uv.lock：仅允许 pymysql（路线 A 直连驱动）新增相关改动；其余须零改动。
         uv_lock_diff = subprocess.run(
-            ["git", "diff", "--stat", "HEAD", "--", "uv.lock"],
+            ["git", "diff", "HEAD", "--", "uv.lock"],
             cwd=_BACKEND_ROOT, capture_output=True, text=True, check=False,
             encoding="utf-8", errors="replace",
         )
-        assert uv_lock_diff.stdout.strip() == "", f"uv.lock 被改动：\n{uv_lock_diff.stdout}"
+        uv_added = [
+            line for line in uv_lock_diff.stdout.splitlines()
+            if line.startswith("+") and not line.startswith("+++")
+        ]
+        # pymysql 的 [[package]] 块含若干通用行（[[package]] / version / wheels / ]），
+        # 这些行本身不含 "pymysql"，故按"块"判定：只要新增行里**没有其它包名**即合规。
+        import re as _re
+        _pkg_name = _re.compile(r'^\+name = "([^"]+)"$')
+        other_pkgs = [
+            _pkg_name.match(line).group(1)
+            for line in uv_added
+            if _pkg_name.match(line) and _pkg_name.match(line).group(1) != "pymysql"
+        ]
+        assert not other_pkgs, f"uv.lock 出现 pymysql 之外的包变更：\n{other_pkgs}"
+        # 非新增包块内的依赖行也必须全部与 pymysql 相关（allowlist 行）
+        dep_lines = [
+            line for line in uv_added
+            if "{" in line and "name =" in line and "pymysql" not in line.lower()
+        ]
+        assert not dep_lines, f"uv.lock 出现 pymysql 之外的依赖行：\n{dep_lines}"
 
         # pyproject.toml：仅允许 sqlglot 相关新增行（注释 + 依赖声明）
         pyproject_diff = subprocess.run(
@@ -570,9 +594,13 @@ class TestRedlineNoNewDependencies:
         ]
         unexpected = [
             line for line in added_lines
-            if "sqlglot" not in line and "问数（mis-iqd）" not in line
+            if "sqlglot" not in line
+            and "问数（mis-iqd）" not in line
+            and "pymysql" not in line.lower()
+            and "路线 A" not in line
+            and "StarRocks" not in line
         ]
-        assert not unexpected, f"pyproject.toml 出现 sqlglot 之外的新增行：\n{unexpected}"
+        assert not unexpected, f"pyproject.toml 出现拍板依赖之外的新增行：\n{unexpected}"
 
 
 # ===================== C1：懒委托拦截返回重写模板 =====================

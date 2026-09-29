@@ -39,6 +39,14 @@ public class IqdConnectionSaveRequest {
     /** 是否允许平台写回 MDL（U7/Q4）；缺省按 false 处理。 */
     private Boolean mdlWritebackEnabled;
 
+    // ---- 路线 A：业务库连接（**非敏感展示字段**；密码只在 ai-platform vault）----
+    /** 业务库类型（starrocks/mysql/postgres/...）。 */
+    private String dbType;
+    private String dbHost;
+    private Integer dbPort;
+    private String dbDatabase;
+    private String dbUser;
+
     public String getName() {
         return name;
     }
@@ -131,6 +139,56 @@ public class IqdConnectionSaveRequest {
     @JsonProperty("mdl_writeback_enabled")
     public void setMdlWritebackEnabled(Boolean mdlWritebackEnabled) {
         this.mdlWritebackEnabled = mdlWritebackEnabled;
+    }
+
+    @JsonProperty("db_type")
+    public String getDbType() {
+        return dbType;
+    }
+
+    @JsonProperty("db_type")
+    public void setDbType(String dbType) {
+        this.dbType = dbType;
+    }
+
+    @JsonProperty("db_host")
+    public String getDbHost() {
+        return dbHost;
+    }
+
+    @JsonProperty("db_host")
+    public void setDbHost(String dbHost) {
+        this.dbHost = dbHost;
+    }
+
+    @JsonProperty("db_port")
+    public Integer getDbPort() {
+        return dbPort;
+    }
+
+    @JsonProperty("db_port")
+    public void setDbPort(Integer dbPort) {
+        this.dbPort = dbPort;
+    }
+
+    @JsonProperty("db_database")
+    public String getDbDatabase() {
+        return dbDatabase;
+    }
+
+    @JsonProperty("db_database")
+    public void setDbDatabase(String dbDatabase) {
+        this.dbDatabase = dbDatabase;
+    }
+
+    @JsonProperty("db_user")
+    public String getDbUser() {
+        return dbUser;
+    }
+
+    @JsonProperty("db_user")
+    public void setDbUser(String dbUser) {
+        this.dbUser = dbUser;
     }
 
     /** 是否为密钥占位符（GET 恒回 ******；保存时表示保留原值）。 */

@@ -377,6 +377,37 @@ class IqdCatalogNodeServiceTest {
         assertTrue(unbalanced.getErrors().stream().anyMatch(e -> e.contains("括号")));
     }
 
+    @Test
+    void validateExpression_flags_numeric_div_string_column() {
+        when(connectionRepository.existsById(CONN_ID)).thenReturn(true);
+        List<IqdCatalogItem> items = new ArrayList<>();
+        items.add(catalogNode("mdl:model:orders", "model", "orders", null));
+        items.add(catalogNode("pg_main.public.orders", "table", "orders", null));
+        IqdCatalogItem kds = catalogNode("pg_main.public.orders.kds", "column", "kds", "pg_main.public.orders");
+        kds.setDataType("DOUBLE");
+        IqdCatalogItem cust = catalogNode("pg_main.public.orders.cust_cnt", "column", "cust_cnt", "pg_main.public.orders");
+        cust.setDataType("varchar");
+        items.add(kds);
+        items.add(cust);
+        when(catalogItemRepository.findByConnectionId(CONN_ID)).thenReturn(items);
+
+        // double / varchar -> 类型不安全，应报错并提示 CAST
+        ValidateExprResult bad = service.validateExpression(
+                CONN_ID, "mdl:model:orders", "kds / cust_cnt");
+        assertFalse(bad.isValid(), () -> "expected invalid, errors=" + bad.getErrors());
+        assertTrue(bad.getErrors().stream().anyMatch(e -> e.contains("CAST")));
+
+        // 显式 CAST 后应通过
+        ValidateExprResult ok = service.validateExpression(
+                CONN_ID, "mdl:model:orders", "kds / CAST(cust_cnt AS DOUBLE)");
+        assertTrue(ok.isValid(), () -> "expected valid, errors=" + ok.getErrors());
+
+        // 两侧都是数值 -> 通过
+        ValidateExprResult ok2 = service.validateExpression(
+                CONN_ID, "mdl:model:orders", "kds * kds");
+        assertTrue(ok2.isValid(), () -> "expected valid, errors=" + ok2.getErrors());
+    }
+
     private IqdCatalogItem catalogNode(String itemKey, String kind, String displayName, String parentKey) {
         IqdCatalogItem it = new IqdCatalogItem();
         it.setItemKey(itemKey);

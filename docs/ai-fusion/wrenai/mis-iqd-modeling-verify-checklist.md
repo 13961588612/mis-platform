@@ -571,6 +571,148 @@
 
 ---
 
+## 3.14.1 路线 A 已实施（2026-09-29）：凭据入 vault + 直连表发现
+
+> **用户拍板**：业务库连接信息从「wren 机手工 profile」改为「平台侧管理」；密文进
+> **`ai_platform` 库的 vault**（复用既有 `CredentialVault` + AES-256-GCM）；mis-iqd 的
+> `iqd_connection` 仍只存 `secret_ref` 引用。
+
+**已落地改动**：
+
+| 层 | 改动 | 文件 |
+|----|------|------|
+| ai-platform 迁移 | 建 `credential_mappings` 表（补历史上从未建过的表；`user_id` 可空去 FK，`system_account` 唯一） | `alembic/versions/006_create_credential_mappings.py` |
+| ai-platform ORM | `CredentialMappingModel.user_id` 改可空、去 FK；`system_account` 加唯一 | `src/models/user.py` |
+| ai-platform Vault | 新增 `upsert_by_ref` / `delete_by_ref`（按 `secret_ref` upsert，无用户主体） | `src/identity/credential_vault.py` |
+| ai-platform 路由 | 新增 `POST/GET/DELETE /api/v1/iqd/credentials`（写入/状态/删除；**密码留空=保留既有**） | `src/api/routes/iqd_credentials.py` |
+| ai-platform 直连 | 新增 `DirectDbDiscovery`（MySQL 协议 pymysql + PostgreSQL asyncpg，只读 info_schema） | `src/agent/mis_iqd/direct_db.py` |
+| ai-platform 发现 | `list_schemas/list_tables/list_columns` 改为**直连优先、wren MCP 兜底**（能发现未建模表） | `src/agent/mis_iqd/discovery_service.py` |
+| ai-platform 配置 | 新增 `get_connection_db_profile`（mis-iqd 内部端点取非敏感坐标 + secret_ref） | `src/adapters/iqd_config_client.py` |
+| mis-iqd 迁移 | **V107** `iqd_connection` 增非敏感展示列 `db_type/db_host/db_port/db_database/db_user`（**无密码**） | `V107__iqd_connection_db_profile.sql` |
+| mis-iqd 实体/DTO | `IqdConnection` + Save/Update/VO 增 db 字段；`createConnection` 自动生成 `secret_ref=iqd-conn-{id}` | `IqdConnection.java` 等 |
+| mis-iqd 内部端点 | 新增 `GET /internal/v1/iqd/connection-db-profile`（回非敏感坐标 + secret_ref） | `IqdInternalController.java` |
+| BFF 编排 | 连接建/改时：先落 mis-iqd（**剥离 db_password**），再写 ai-platform vault（键=secret_ref）；删除时回收 vault | `IqdModelingController.java` / `AiPlatformClient.java` |
+| 前端向导 | 第 2 步从「secret_ref 密码框」改为**结构化录入**（type/host/port/database/user/password）；**删除原第 3 步 profile 占位** → 3 步向导 | `ConnectionWizard.tsx` / `ConnectionFormFields.tsx` / `connectionEditUtils.ts` |
+| 依赖 | 新增 `pymysql`（直连 MySQL 协议业务库） | `pyproject.toml` / `uv.lock` |
+
+### 3.14.2 wren 0.13 连接机制实测（2026-09-29，关键纠偏）
+
+路线 A v1 假设「`wren profile add` + `${ENV:...}` 占位」可用，**实测两处都与 wren 0.13.3 界面不符**，已按真实行为修正：
+
+| 假设（文档旧说法） | wren 0.13.3 真实行为（实测） |
+|---|---|
+| `wren serve mcp` 用 `WREN_PG_*` env 连库 | **错**。`serve mcp` 无连接信息参数，只有 `--profile <name>`；连接信息来自 `~/.wren/profiles.yml` 里该 profile。 |
+| profile 占位写 `${ENV:IQD_DB_PASSWORD}` | **错**。真实语法是 `${VAR}`；`${ENV:...}` 报 `Malformed reference`。 |
+| `--connection-info` 可给 `serve mcp` | **错**。`--connection-info` 只属于 `query`/根命令，且需 `type` 字段；`serve mcp` 不接受。 |
+
+**实测确认的正确机制**：
+- `wren profile add <name> --from-file <json>`，json schema = `{datasource,host,port,database,user,password}`；会真连库校验（非致命，exit 0 + stderr 警告）。
+- profile 值支持 `${VAR}`，启动期从**子进程 env 或 project `.env`** 解析（实测：放 `.env` 后占位解析成功、真连库 → `Access denied` 而非 `not set`）。
+- **`profile add` 幂等**（同名覆盖）；`profile rm -f` 免确认。
+
+**据此的修复（已实现，待部署 wren 机）**：
+- `agent.py::_ensure_profile`：ensure 时按连接建/刷新 `iqd-conn-{id}` profile —— **只写 `${IQD_DB_PASSWORD}` 占位，明文绝不落 profiles.yml**；
+- `serve mcp` 命令追加 `--profile iqd-conn-{id}`（不再依赖全局 active profile）；
+- `agent.py::_build_env` 归一 `WREN_IQD_CREDENTIAL_JSON`/`WREN_PG_*` → 注入 `IQD_DB_PASSWORD` 等占位变量（仅子进程 env，临时文件 chmod 600 即用即删）；
+- `iqd_config_client._map_credential_to_env` 补 `WREN_DB_TYPE`。
+
+> ⚠️ **待办**：`agent/ai-platform/deploy/wrenai/wren-mcp-agent/agent.py` 的改动需**部署到 wren 机 10.254.16.27 并 `systemctl restart wren-mcp-agent`** 才生效（本沙箱无 SSH：22 端口不通）。部署后验证：
+> 1. `POST /iqd/mcp/ensure {connection_id:900001}` → `wren profile debug iqd-conn-900001` 应存在；
+> 2. 数据面 `run_sql "select 1"` 应成功（当前报 `(2006, 'Server has gone away')`）；
+> 3. 表发现直连应能看到全部物理表。
+
+### 3.14.3 wren 0.13 MDL `type` 缺失（2026-09-29，真机定位到的问数阻断 bug）
+
+部署路线 A 修复后，`run_sql` 的错误从连接层 `(2006, Server has gone away)` 变成
+**规划层** `[INVALID_SQL] Serde JSON error: missing field `type``。用不连库的
+`dry-plan` 复现同样的错 → 证明**与凭证无关**，是平台生成的 MDL 非法。
+
+**最小化定位（真机 `dry-plan`，无需连库）**：
+
+| MDL 变体 | 结果 |
+|---|---|
+| 空 MDL / 仅 models / 仅 relationships / 仅 metrics / 仅 dimensions | exit 0 ✅ |
+| `cubes` 里 measure 只有 `name`+`expression` | exit 1 `missing field baseObject` → 补 baseObject 后 `missing field type` |
+| measure/dimension 加 `type`（DOUBLE/INT/VARCHAR 均可） | exit 0 ✅ |
+
+**根因**：wren 0.13 的 MDL schema 要求 **每个 column / measure / dimension 都必须有 `type`**
+（受控枚举）。平台 `service.py` 生成 MDL 时：
+1. cube 的 `measures[]` / `dimensions[]` 只写 `name`+`expression`（漏 `type`）；
+2. 计算列只写 `name`+`expression`（漏 `type`）。
+→ 整个连接的任何查询都在规划期失败（`ModelGenerationRule` 展开模型即报错）。
+
+**修复（`service.py`）**：
+- `_wren_type(raw, default)`：data_type 归一为 wren 受控类型（剥 `(n)` 参数、未知回退 default）；
+- `_materialize_missing_nodes`：新建 measure→DOUBLE、dimension→VARCHAR、计算列→DOUBLE（带 `type`）；
+- `_normalize_mdl_types(mdl)`：**发布前对最终 MDL 兜底补齐**所有缺失的 `type`
+  （覆盖历史 `mdl_raw` 基线节点），返回补齐条数。
+
+**验证**：
+- 单测：`test_iqd_edit_sync.py` 新增 `test_normalize_mdl_types_fills_missing_type` /
+  `test_wren_type_normalizes_parameterized_and_unknown`（断言补 4 处、类型正确）。
+- **真机**：把 900001 的 MDL 过一遍 `_normalize_mdl_types`（补 5 处）后推送重启 →
+  `run_sql "select 1 as x"` **返回真实数据 `{"x": 1}`**（凭证链路 + 连接 + MDL 加载全通）。
+
+### 3.14.4 两个旧结论被真机推翻（2026-09-29 MDL type 修复后复测）
+
+修好 §3.14.3 的 MDL `type` 后，**此前写进本文档的两条结论都不成立**：
+
+| 旧结论 | 复测真相 |
+|---|---|
+| 「wren 0.13 无法查 `information_schema`（`missing field type`）」 | **错**。那个报错就是 MDL 缺 `type` 的连带症状。修好后 `run_sql information_schema.tables` 正常，**一次列出 adhoc 全部 6 张表**：`dim_sprmrkt_itm_item_df / ads_spm_trd_sale_category_day_df / ads_spm_trd_cost_category_day_df / dim_spmrkt_chl_category_df / dwd_spm_trd_sale_ord_detl_df / dim_sprmrkt_chl_store_df`。**直连不是必需的**。 |
+| 「StarRocks 把数值列报成 STRING → 需要类型保真」 | **错**。逐列对比 MDL 与 `information_schema`：**190 列 0 处不一致**。`cust_cnt` 在 Doris 里**本就是 varchar**，`kds` 是 double，MDL 保真。 |
+
+**真正的问题（计算列类型安全）**：用户配的计算列 `kds_per_cust = kds / cust_cnt`
+（double ÷ **varchar**）在 wren 规划期触发
+`Cannot coerce arithmetic expression Float64 / Utf8`。因 wren `ModelGenerationRule`
+**展开模型全部计算列**，一个坏计算列会让**该模型的所有查询**都失败（连 `select count(*)`）。
+
+**真机验证**：把该列改为 `kds / CAST(cust_cnt AS DOUBLE)` 且 `type=DOUBLE` 后，模型所有查询
+恢复：`select count(*)` → 7034103；`select kds_per_cust` → 1.61…（真实值）。
+
+### 3.14.5 计算列类型安全（2026-09-29 已实现，两层防护）
+
+针对 §3.14.4 的「坏计算列拖垮整个模型」，做了**保存时拦截 + 发布后自检**两层：
+
+**① 保存时静态校验（mis-iqd，Java）** —— `IqdCatalogNodeService.validateExpression`
+- 新增算术对扫描 `ARITH_PAIR`（`ident <op> ident`，op ∈ `+ - * /`）；
+- 新增 `collectModelColumnTypes`（列名→基础类型）+ `checkArithmeticTypes`：
+  一侧数值列、另一侧字符串列 → `errors` 增加
+  「类型不安全: 字符串列 X 参与算术运算（kds / cust_cnt）；请显式 CAST，例如 CAST(X AS DOUBLE)」；
+- 表达式含 `CAST(` 则整段跳过（用户已处理）；类型未知不误报；
+- 该 `errors` 会由 `createCalculatedColumn` 转成 **42201** 拦截；前端也可先调
+  `GET /catalog/validate-expression` 预校验。
+- 单测：`IqdCatalogNodeServiceTest.validateExpression_flags_numeric_div_string_column`。
+
+**② 发布后自检（ai-platform，Python）** —— `PublishSelfCheck.probe_planner`
+- 发布成功后对每个 model 跑一次**只读** `wren dry-plan "select * from <model> limit 1"`；
+- 规划失败 → `SyncResult.warnings` + `iqd_sync_job.publish_warnings` 点名该模型
+  （「自检：模型 X 无法规划（Cannot coerce…）——常见原因：计算列类型不合法，建议显式 CAST」）；
+- **只报不改、失败不阻断**（探针异常仅记一条告警）；模型数上限 20；
+- 新增 `IqdCli.dry_plan`（只读，allow_nonzero）；接线在 `service.py` 发布自检块。
+- 单测：`test_iqd_publish_selfcheck.py` 新增 4 条（点名失败模型 / 正常为空 / 异常降级 / 坏输入）。
+
+**验证**：ai-platform 全量 **1256 passed** + 5 既有 SSE 失败；mis-iqd **108 passed**。
+
+**安全边界（红线，已守）**：
+- 密码**绝不落 mis-iqd**（BFF 转发前 `stripDbPassword`；mis-iqd DTO 无该字段）；
+- 密码**绝不回显**（GET 只回 `has_db_password` / 掩码账号）；
+- 密文只在 `ai_platform.credential_mappings`（AES-256-GCM，键 `CREDENTIAL_VAULT_KEY`）；
+- wren 侧解密仅在 `wren serve mcp` 启动期注 env（D6，用后即忘）。
+
+**验证**：
+- ✅ ai-platform 全量：**1247 passed** + 5 既有 SSE 失败（基线 1238 + 新增 9）；
+- ✅ mis-iqd：107 tests pass；mis-admin-bff：341 tests，仅 1 条既有 `BffApiRegistryDiffSurveyTest` 失败（无关）；
+- ✅ 前端 `tsc --noEmit` 通过；`vitest src/features/agent/iqd` **318 passed**；
+- ✅ 真机：迁移 006 已 `upgrade` 至 `ai_platform`（`credential_mappings` 建成，唯一索引在位）；
+  V107 已 `flyway:migrate` 至 `mis_platform`（db 列建成）；
+- ✅ 真机：Vault `upsert_by_ref → resolve_by_ref → delete_by_ref` 往返（写/更新/软删/查空）实测通过；
+- 🟡 **未实测**：直连业务库真实查询（本沙箱无 `10.254.16.217:9030` 的 `query` 账号密码；
+  `pymysql` 已装、错误路径 `Access denied` 证明 host/port 可达）。需在有真实业务库密码的环境复验
+  「录凭证 → 表发现见全部 6 表 → 导入未建模表」。
+
+---
+
 ## 4. 性能压测（P-1 ~ P-6）
 
 ### 4.1 画布拖拽帧率（P-1：200 节点 ≥55fps）

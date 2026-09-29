@@ -120,6 +120,25 @@ public class IqdCatalogNodeService {
             "stddev", "variance", "percentile_cont", "string_agg", "array_agg", "jsonb", "to_char",
             "to_date", "to_number", "nulls", "first", "last", "values", "with", "exists", "any", "some");
 
+    /**
+     * 二元算术运算对：``ident <op> ident``（op ∈ + - * /）。
+     *
+     * <p>用于「计算列类型安全」静态校验：若两侧一方是数值列、另一方是字符串列，
+     * 该算式在 wren 规划期必失败（``Cannot coerce arithmetic expression Float64 / Utf8``），
+     * 且因 wren 展开模型全部计算列，会拖垮**整个模型**的所有查询。
+     */
+    private static final Pattern ARITH_PAIR =
+            Pattern.compile("([A-Za-z_][A-Za-z0-9_.]*)\\s*([+\\-*/])\\s*([A-Za-z_][A-Za-z0-9_.]*)");
+
+    /** 数值型基础类型（算术合法）。 */
+    private static final Set<String> NUMERIC_TYPES = Set.of(
+            "int", "integer", "bigint", "smallint", "tinyint", "double", "float", "real",
+            "decimal", "numeric", "number");
+
+    /** 字符串型基础类型（算术非法，除非显式 CAST）。 */
+    private static final Set<String> STRING_TYPES = Set.of(
+            "char", "varchar", "string", "text", "longtext", "mediumtext", "tinytext");
+
     private final IqdConnectionRepository connectionRepository;
     private final IqdCatalogItemRepository catalogItemRepository;
     private final IqdEditIdempotencyRepository idempotencyRepository;
@@ -380,7 +399,133 @@ public class IqdCatalogNodeService {
         for (String token : scanUnknownIdentifiers(expression, allowed)) {
             errors.add("未知字段: " + token);
         }
+        // 计算列类型安全（2026-09-29 真机教训）：数值列与字符串列的算术运算在 wren
+        // 规划期必失败（Cannot coerce arithmetic expression Float64 / Utf8），且因 wren
+        // 展开模型全部计算列，会拖垮**整个模型**的所有查询。此处静态提示，引导用户 CAST。
+        if (!expression.toUpperCase(LOWER).contains("CAST(")) {
+            Map<String, String> colTypes = collectModelColumnTypes(connectionId, modelItemKey);
+            errors.addAll(checkArithmeticTypes(expression, colTypes));
+        }
         return new ValidateExprResult(errors.isEmpty(), errors);
+    }
+
+    /**
+     * 静态扫描「数值列 op 字符串列」的算术对，返回人可读错误（空 = 无问题）。
+     *
+     * <p>只提示两侧类型均可确定且一数值一字符串的情形；任一侧类型未知则不误报。
+     */
+    private static List<String> checkArithmeticTypes(
+            String expression, Map<String, String> colTypes) {
+        List<String> errors = new ArrayList<>();
+        if (expression == null || colTypes == null || colTypes.isEmpty()) {
+            return errors;
+        }
+        String stripped = STRING_LITERAL.matcher(expression).replaceAll("''");
+        stripped = ITEM_KEY_TOKEN.matcher(stripped).replaceAll(" ");
+        var matcher = ARITH_PAIR.matcher(stripped);
+        while (matcher.find()) {
+            String left = resolveType(colTypes, matcher.group(1));
+            String right = resolveType(colTypes, matcher.group(3));
+            boolean leftNum = left != null && NUMERIC_TYPES.contains(left);
+            boolean leftStr = left != null && STRING_TYPES.contains(left);
+            boolean rightNum = right != null && NUMERIC_TYPES.contains(right);
+            boolean rightStr = right != null && STRING_TYPES.contains(right);
+            if ((leftNum && rightStr) || (leftStr && rightNum)) {
+                String strCol = leftStr ? matcher.group(1) : matcher.group(3);
+                errors.add("类型不安全: 字符串列 " + strCol + " 参与算术运算（" + matcher.group()
+                        + "）；请显式 CAST，例如 CAST(" + strCol + " AS DOUBLE)");
+            }
+        }
+        return errors;
+    }
+
+    /** 按标识符（schema.table.col / table.col / col 逐级回退）解析其列基础类型。 */
+    private static String resolveType(Map<String, String> colTypes, String identifier) {
+        String lower = identifier.toLowerCase(LOWER);
+        String direct = colTypes.get(lower);
+        if (direct != null) {
+            return direct;
+        }
+        int idx = lower.indexOf('.');
+        while (idx >= 0) {
+            String tail = lower.substring(idx + 1);
+            String t = colTypes.get(tail);
+            if (t != null) {
+                return t;
+            }
+            idx = lower.indexOf('.', idx + 1);
+        }
+        return null;
+    }
+
+    /**
+     * 收集模型可见列的「名称(小写) → 基础类型(小写，剥 (n))」映射（供类型安全校验）。
+     *
+     * <p>与 collectModelFields 同口径取列范围；data_type 为空则不登记（避免误报）。
+     */
+    private Map<String, String> collectModelColumnTypes(Long connectionId, String modelItemKey) {
+        Map<String, String> out = new LinkedHashMap<>();
+        List<IqdCatalogItem> items = catalogItemRepository.findByConnectionId(connectionId);
+        String modelName = null;
+        String tableKey = null;
+        for (IqdCatalogItem it : items) {
+            if ("model".equals(it.getKind()) && modelItemKey.equals(it.getItemKey())) {
+                modelName = it.getDisplayName();
+            }
+        }
+        String tableNameGuess = modelName != null ? modelName
+                : modelItemKey.substring(modelItemKey.lastIndexOf(':') + 1);
+        for (IqdCatalogItem it : items) {
+            if ("table".equals(it.getKind()) && it.getItemKey() != null) {
+                String key = it.getItemKey().toLowerCase(LOWER);
+                String guess = tableNameGuess.toLowerCase(LOWER);
+                if (key.endsWith("." + guess) || key.equals(guess) || key.endsWith(":" + guess)) {
+                    tableKey = it.getItemKey();
+                    break;
+                }
+            }
+        }
+        for (IqdCatalogItem it : items) {
+            if (!"column".equals(it.getKind()) || it.getItemKey() == null) {
+                continue;
+            }
+            String parent = it.getParentKey();
+            boolean belongs = (tableKey != null && tableKey.equals(parent))
+                    || modelItemKey.equals(parent);
+            if (!belongs) {
+                continue;
+            }
+            String baseType = baseType(it.getDataType());
+            if (baseType == null) {
+                continue;
+            }
+            if (it.getDisplayName() != null && !it.getDisplayName().isBlank()) {
+                out.put(it.getDisplayName().toLowerCase(LOWER), baseType);
+            }
+            String key = it.getItemKey().toLowerCase(LOWER);
+            out.put(key, baseType);
+            int dot = key.lastIndexOf('.');
+            if (dot >= 0) {
+                out.put(key.substring(dot + 1), baseType);
+            }
+        }
+        return out;
+    }
+
+    /** 归一 data_type：小写、剥 (n) 参数；空白/未知返回 null。 */
+    private static String baseType(String dataType) {
+        if (dataType == null || dataType.isBlank()) {
+            return null;
+        }
+        String t = dataType.trim().toLowerCase(LOWER);
+        int paren = t.indexOf('(');
+        if (paren >= 0) {
+            t = t.substring(0, paren).trim();
+        }
+        if (t.startsWith("character varying")) {
+            t = "varchar";
+        }
+        return t.isBlank() ? null : t;
     }
 
     /**

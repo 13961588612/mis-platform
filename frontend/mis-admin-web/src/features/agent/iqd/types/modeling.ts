@@ -147,6 +147,18 @@ export interface Connection {
   mcp_host?: string | null;
   /** multiconn 跨机器：WrenMcpAgent 部署句柄（V85）。 */
   agent_handle?: string | null;
+  /** 【路线 A】业务库类型（非敏感展示）。 */
+  db_type?: string | null;
+  /** 【路线 A】业务库 host（非敏感展示）。 */
+  db_host?: string | null;
+  /** 【路线 A】业务库 port（非敏感展示）。 */
+  db_port?: number | null;
+  /** 【路线 A】业务库 database（非敏感展示）。 */
+  db_database?: string | null;
+  /** 【路线 A】业务库账号（非敏感；密码不回）。 */
+  db_user?: string | null;
+  /** 【路线 A】是否已托管业务库密码（编辑时据此提示是否需重填）。 */
+  has_db_password?: boolean | null;
 }
 
 /** 连接创建/更新请求体（`POST /api/v1/iqd/connections`）。 */
@@ -167,6 +179,14 @@ export interface CreateConnectionRequest {
   timeout_seconds?: number;
   language?: string;
   enabled?: boolean;
+  /** 【路线 A】业务库坐标（非敏感；BFF 落 mis-iqd 展示列）。 */
+  db_type?: string | null;
+  db_host?: string | null;
+  db_port?: number | null;
+  db_database?: string | null;
+  db_user?: string | null;
+  /** 【路线 A】业务库密码：**只经 BFF 送 ai-platform vault，绝不落 mis-iqd**。 */
+  db_password?: string | null;
 }
 
 /**

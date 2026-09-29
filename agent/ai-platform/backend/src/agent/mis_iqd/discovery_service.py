@@ -38,6 +38,8 @@ from typing import Any, Callable
 from src.adapters.iqd_cli import IqdCli
 from src.adapters.iqd_config_client import IqdConfigClient, IqdConfigClientError
 from src.adapters.iqd_mcp_client import IqdMcpClient, IqdMcpClientError
+from src.agent.mis_iqd.direct_db import DirectDbDiscovery, DirectDbUnavailableError
+from src.identity.credential_vault import CredentialVault
 from src.utils.logging import get_logger
 
 logger = get_logger("agent.mis_iqd.discovery")
@@ -138,6 +140,30 @@ class IqdDiscoveryService:
         Raises:
             DiscoveryUnavailableError: profile 未注入 / MCP 未就绪 / 调用失败（50201）。
         """
+        # 路线 A：优先直连业务库（能发现未建模表；wren list_models 只含已建模表）
+        try:
+            direct = await self._direct_db(connection_id)
+            schemas = await direct.list_schemas()
+            if schemas:
+                logger.info(
+                    "IQD discovery list_schemas (direct db)",
+                    connection_id=connection_id,
+                    count=len(schemas),
+                )
+                return schemas
+        except DiscoveryUnavailableError as exc:
+            logger.warning(
+                "IQD discovery list_schemas direct db unavailable; fallback to wren MCP",
+                connection_id=connection_id,
+                error=str(exc),
+            )
+        except DirectDbUnavailableError as exc:
+            logger.warning(
+                "IQD discovery list_schemas direct db failed; fallback to wren MCP",
+                connection_id=connection_id,
+                error=str(exc),
+            )
+
         payload = await self._list_models(connection_id)
 
         schemas: list[str] = []
@@ -179,6 +205,36 @@ class IqdDiscoveryService:
             DiscoveryUnavailableError: 50201。
         """
         target_schema = (schema or DEFAULT_SCHEMA).strip()
+        # 路线 A：优先直连业务库（能发现未建模表）
+        try:
+            direct = await self._direct_db(connection_id)
+            direct_rows = await direct.list_tables(target_schema, keyword)
+            if direct_rows:
+                total = len(direct_rows)
+                safe_page = max(1, int(page or 1))
+                start = (safe_page - 1) * DEFAULT_PAGE_SIZE
+                window = direct_rows[start : start + DEFAULT_PAGE_SIZE]
+                logger.info(
+                    "IQD discovery list_tables (direct db)",
+                    connection_id=connection_id,
+                    schema=target_schema,
+                    total=total,
+                    page=safe_page,
+                )
+                return {"tables": window, "total": total, "page": safe_page}
+        except DiscoveryUnavailableError as exc:
+            logger.warning(
+                "IQD discovery list_tables direct db unavailable; fallback to wren MCP",
+                connection_id=connection_id,
+                error=str(exc),
+            )
+        except DirectDbUnavailableError as exc:
+            logger.warning(
+                "IQD discovery list_tables direct db failed; fallback to wren MCP",
+                connection_id=connection_id,
+                error=str(exc),
+            )
+
         payload = await self._list_models(connection_id)
 
         rows: list[dict[str, Any]] = []
@@ -246,6 +302,31 @@ class IqdDiscoveryService:
             raise DiscoveryValidationError("table 不能为空")
         table_name = table.strip()
         target_schema = (schema or DEFAULT_SCHEMA).strip()
+        # 路线 A：优先直连业务库（未建模表在 wren 里无模型可 describe）
+        try:
+            direct = await self._direct_db(connection_id)
+            direct_cols = await direct.list_columns(target_schema, table_name)
+            if direct_cols:
+                logger.info(
+                    "IQD discovery list_columns (direct db)",
+                    connection_id=connection_id,
+                    schema=target_schema,
+                    table=table_name,
+                    columns=len(direct_cols),
+                )
+                return direct_cols
+        except DiscoveryUnavailableError as exc:
+            logger.warning(
+                "IQD discovery list_columns direct db unavailable; fallback to wren MCP",
+                connection_id=connection_id,
+                error=str(exc),
+            )
+        except DirectDbUnavailableError as exc:
+            logger.warning(
+                "IQD discovery list_columns direct db failed; fallback to wren MCP",
+                connection_id=connection_id,
+                error=str(exc),
+            )
         client = self._mcp_factory(connection_id)
         await self._assert_ready(client, connection_id)
         try:
@@ -385,6 +466,59 @@ class IqdDiscoveryService:
             skipped=len(skipped),
         )
         return {"imported": imported, "skipped": skipped}
+
+    # ================================================================ 内部：直连业务库（路线 A）
+
+    async def _direct_db(self, connection_id: int | None) -> DirectDbDiscovery:
+        """按连接解析业务库坐标 + 凭证 → 直连客户端（路线 A）。
+
+        链路：mis-iqd ``/connection-db-profile`` 取非敏感坐标 + ``secret_ref``
+        → :class:`CredentialVault` 取明文密码 → :class:`DirectDbDiscovery`。
+
+        Raises:
+            DiscoveryUnavailableError: 坐标缺失 / 凭据不可解析 / db_type 不支持（50201）。
+        """
+        if connection_id is None:
+            raise DiscoveryUnavailableError("表发现直连需要 connection_id")
+        client = self._config_factory()
+        try:
+            profile = await client.get_connection_db_profile(int(connection_id))
+        except IqdConfigClientError as exc:
+            raise DiscoveryUnavailableError(f"读取连接业务库坐标失败: {exc}") from exc
+        if not profile:
+            raise DiscoveryUnavailableError(f"连接 {connection_id} 未返回业务库坐标（路线 A）")
+        db_type = str(profile.get("db_type") or profile.get("default_connector") or "").strip()
+        host = str(profile.get("host") or "").strip()
+        port = profile.get("port")
+        database = profile.get("database")
+        user = str(profile.get("user") or "").strip()
+        secret_ref = str(profile.get("secret_ref") or "").strip()
+        if not host or not user:
+            raise DiscoveryUnavailableError(
+                f"连接 {connection_id} 未配置业务库坐标（请在连接向导填写 host/user）"
+            )
+        password = ""
+        if secret_ref:
+            cred = await CredentialVault().resolve_by_ref(secret_ref)
+            if cred:
+                password = str(cred.get("password") or cred.get("pwd") or "")
+                db_type = db_type or str(cred.get("db_type") or "")
+                host = host or str(cred.get("host") or "")
+                user = user or str(cred.get("user") or cred.get("username") or "")
+                if port is None:
+                    port = cred.get("port")
+                if not database:
+                    database = cred.get("database") or cred.get("db")
+        if not db_type:
+            db_type = "starrocks"
+        return DirectDbDiscovery(
+            db_type=db_type,
+            host=host,
+            port=int(port) if port is not None else None,
+            user=user,
+            password=password,
+            database=str(database) if database else None,
+        )
 
     # ================================================================ 内部：适配层调用
 

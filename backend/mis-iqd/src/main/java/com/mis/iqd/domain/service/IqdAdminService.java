@@ -284,6 +284,10 @@ public class IqdAdminService {
         }
         if (dto.getSecretRef() != null && !dto.getSecretRef().isBlank() && !dto.isSecretPlaceholder()) {
             entity.setSecretRef(dto.getSecretRef().trim());
+        } else {
+            // 路线 A：未显式给 secret_ref 时按 id 生成稳定引用（vault 键），
+            // 供 BFF 经内部端点取回后写入 ai-platform vault。外露视图仍恒回 ******。
+            entity.setSecretRef("iqd-conn-" + entity.getId());
         }
         entity.setProjectId(dto.getProjectId());
         entity.setDefaultConnector(dto.getDefaultConnector());
@@ -297,6 +301,11 @@ public class IqdAdminService {
         // 新建连接默认开启写回闸门（U7/Q4），显式 false 才关
         entity.setMdlWritebackEnabled(
                 dto.getMdlWritebackEnabled() == null || Boolean.TRUE.equals(dto.getMdlWritebackEnabled()));
+        entity.setDbType(dto.getDbType());
+        entity.setDbHost(dto.getDbHost());
+        entity.setDbPort(dto.getDbPort());
+        entity.setDbDatabase(dto.getDbDatabase());
+        entity.setDbUser(dto.getDbUser());
         entity.setStatus("inactive");
         entity.setMcpStatus("stopped");
         entity.setUpdatedAt(Instant.now());
@@ -509,6 +518,32 @@ public class IqdAdminService {
         }
         if (dto.getEnabled() != null) {
             entity.setEnabled(Boolean.TRUE.equals(dto.getEnabled()) ? 1 : 0);
+        }
+        // 路线 A：业务库连接展示字段（route A）—— null = 保留原值
+        if (dto.getDbType() != null) {
+            entity.setDbType(dto.getDbType());
+        }
+        if (dto.getDbHost() != null) {
+            entity.setDbHost(dto.getDbHost());
+        }
+        if (dto.getDbPort() != null) {
+            entity.setDbPort(dto.getDbPort());
+        }
+        if (dto.getDbDatabase() != null) {
+            entity.setDbDatabase(dto.getDbDatabase());
+        }
+        if (dto.getDbUser() != null) {
+            entity.setDbUser(dto.getDbUser());
+        }
+        // 路线 A：登记了业务库坐标即保证 secret_ref 为稳定引用（vault 键 = iqd-conn-{id}）。
+        // 新增 db 字段时若无引用（或引用了旧 wren profile 名），统一归一为约定值，
+        // 否则 BFF 写 vault 用的键与 mis-iqd 供 ai-platform 解析的 secret_ref 会不一致。
+        boolean touchesDb = dto.getDbHost() != null || dto.getDbUser() != null
+                || dto.getDbType() != null || dto.getDbDatabase() != null || dto.getDbPort() != null;
+        if (touchesDb && entity.getId() != null) {
+            // 强制归一为约定值：BFF 写 vault 恒用 iqd-conn-{id}，两者必须是同一个键，
+            // 否则 ai-platform ensure/resolve_env 取不到刚写入的凭据（静默凭据不可得）。
+            entity.setSecretRef("iqd-conn-" + entity.getId());
         }
     }
 
@@ -2284,6 +2319,32 @@ public class IqdAdminService {
     }
 
     /**
+     * 取连接业务库坐标 + 凭证引用（路线 A，供 ai-platform 表发现直连 + 凭证解析）。
+     *
+     * <p>回 {@code db_type/host/port/database/user}（**均为非敏感展示字段**）与
+     * {@code secret_ref}；<b>绝不回密码</b> —— 密码在 ai-platform vault，ai-platform
+     * 用 {@code secret_ref} 自行解密。凭此 ai-platform 可直连业务库查
+     * {@code information_schema}（绕开 wren 0.13 的 MDL 白名单限制）。
+     *
+     * @param connectionId 问数连接 id
+     * @return {@code {connection_id, secret_ref, db_type, host, port, database, user}}
+     */
+    public Map<String, Object> getConnectionDbProfile(Long connectionId) {
+        IqdConnection conn = connectionRepository.findById(connectionId)
+                .orElseThrow(() -> new BusinessException(
+                        ResultCode.NOT_FOUND, "问数连接不存在: " + connectionId));
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("connection_id", conn.getId());
+        m.put("secret_ref", conn.getSecretRef());
+        m.put("db_type", conn.getDbType());
+        m.put("host", conn.getDbHost());
+        m.put("port", conn.getDbPort());
+        m.put("database", conn.getDbDatabase());
+        m.put("user", conn.getDbUser());
+        return m;
+    }
+
+    /**
      * 终态判定：build/index 进入 success/failed 即视为完成（可打时间戳）。
      */
     private static boolean isTerminalStatus(String status) {
@@ -2342,6 +2403,15 @@ public class IqdAdminService {
                 && entity.getMdlWritebackEnabled());
         vo.setMcpStatus(entity.getMcpStatus());
         vo.setMcpPort(entity.getMcpPort());
+        // 路线 A：业务库连接展示字段（非敏感）
+        vo.setDbType(entity.getDbType());
+        vo.setDbHost(entity.getDbHost());
+        vo.setDbPort(entity.getDbPort());
+        vo.setDbDatabase(entity.getDbDatabase());
+        vo.setDbUser(entity.getDbUser());
+        // hasDbPassword：是否按路线 A 登记了业务库连接（有 db 坐标即密码已入 vault；不回明文）
+        vo.setHasDbPassword(entity.getDbHost() != null && !entity.getDbHost().isBlank()
+                && entity.getSecretRef() != null && !entity.getSecretRef().isBlank());
         return vo;
     }
 

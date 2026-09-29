@@ -30,6 +30,8 @@ dependencies = [
     "APScheduler>=3.10.0",
     "openharness-ai>=0.1.9",
     "psycopg2-binary>=2.9.12",
+    # 路线 A：业务库直连表发现（StarRocks / Doris / MySQL 协议）
+    "pymysql>=1.1.0",
     # 问数（mis-iqd）SQL 血缘 / 行级范围注入 AST 解析（v1.9 / B1）
     "sqlglot>=25.0.0",
 ]

@@ -20,6 +20,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import re
 import tempfile
@@ -37,6 +38,52 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from utils.logging import get_logger
 
 logger = get_logger("wren_mcp_agent")
+
+def _normalize_cred(credential: dict[str, str]) -> dict[str, str]:
+    """把平台下发的凭证 env 归一为 wren profile 需要的字段。
+
+    平台 ``_map_credential_to_env`` 发 ``WREN_PG_*`` + ``WREN_IQD_CREDENTIAL_JSON``；
+    本函数兼容两种形态，产出 ``{host, port, user, password, database, db_type}``。
+
+    优先解析 ``WREN_IQD_CREDENTIAL_JSON``（完整凭证明文），退回 ``WREN_PG_*`` 键。
+    """
+    raw = credential.get("WREN_IQD_CREDENTIAL_JSON")
+    if raw:
+        try:
+            parsed = json.loads(raw)
+            if isinstance(parsed, dict):
+                return {
+                    "host": str(parsed.get("host") or parsed.get("hostname") or ""),
+                    "port": parsed.get("port") or "",
+                    "user": str(parsed.get("user") or parsed.get("username") or ""),
+                    "password": str(parsed.get("password") or parsed.get("pwd") or ""),
+                    "database": str(
+                        parsed.get("database") or parsed.get("db") or parsed.get("dbname") or ""
+                    ),
+                    "db_type": str(parsed.get("db_type") or parsed.get("datasource") or ""),
+                }
+        except (ValueError, TypeError):
+            pass
+    return {
+        "host": str(credential.get("WREN_PG_HOST") or ""),
+        "port": credential.get("WREN_PG_PORT") or "",
+        "user": str(credential.get("WREN_PG_USER") or ""),
+        "password": str(credential.get("WREN_PG_PASSWORD") or ""),
+        "database": str(credential.get("WREN_PG_DB") or ""),
+        "db_type": str(credential.get("WREN_DB_TYPE") or ""),
+    }
+
+
+# profiles.yml 为全局文件，wren profile add 是「读-改-写」，需串行化避免并发写坏。
+_profile_lock: "asyncio.Lock | None" = None
+
+
+def _get_profile_lock() -> "asyncio.Lock":
+    """惰性创建 profile 写入锁（绑定到当前事件循环）。"""
+    global _profile_lock
+    if _profile_lock is None:
+        _profile_lock = asyncio.Lock()
+    return _profile_lock
 
 
 # ================================================================ 配置
@@ -170,6 +217,7 @@ class AgentProcessEntry:
     agent_handle: str = ""
     command: list[str] = field(default_factory=list)
     credential: dict[str, str] = field(default_factory=dict)  # 仅驻内存，绝不落盘
+    profile: str = ""  # wren profile 名（serve mcp --profile 用）
     started_at: float = 0.0
     last_health_at: float = 0.0
     failure_count: int = 0
@@ -193,6 +241,22 @@ class WrenMcpSupervisor:
         """
         if not credential:
             return None
+        cred = _normalize_cred(credential)
+        # profile 里的 ${IQD_DB_PASSWORD} 占位由此解析；坐标亦以 IQD_DB_* 暴露
+        injected: dict[str, str] = {}
+        if cred.get("password"):
+            injected["IQD_DB_PASSWORD"] = str(cred["password"])
+        if cred.get("host"):
+            injected["IQD_DB_HOST"] = str(cred["host"])
+        if cred.get("port") not in (None, ""):
+            injected["IQD_DB_PORT"] = str(cred["port"])
+        if cred.get("user"):
+            injected["IQD_DB_USER"] = str(cred["user"])
+        if cred.get("database"):
+            injected["IQD_DB_DATABASE"] = str(cred["database"])
+        if cred.get("db_type"):
+            injected["IQD_DB_TYPE"] = str(cred["db_type"])
+        all_vals = {**{k: str(v) for k, v in credential.items() if v is not None}, **injected}
         tmp_path = os.path.join(
             project_home, f".iqd-cred-{uuid.uuid4().hex[:8]}.env"
         )
@@ -201,20 +265,100 @@ class WrenMcpSupervisor:
             fd = os.open(tmp_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
             try:
                 with os.fdopen(fd, "w", encoding="utf-8") as fh:
-                    for k, v in credential.items():
-                        if v is None:
-                            continue
+                    for k, v in all_vals.items():
                         fh.write(f"{k}={v}\n")
             finally:
                 pass
             # 读取即注入 os.environ（临时文件使命完成，立即删除）
-            env = {**os.environ, **{k: str(v) for k, v in credential.items() if v is not None}}
+            env = {**os.environ, **all_vals}
         finally:
             try:
                 os.remove(tmp_path)
             except OSError:
                 pass
         return env
+
+    def _profile_name(self, entry: "AgentProcessEntry") -> str:
+        """本连接的 wren profile 名（每连接独立，避免共享全局 active profile）。"""
+        return f"iqd-conn-{entry.conn_id}"
+
+    async def _ensure_profile(
+        self, entry: "AgentProcessEntry", env: dict[str, str] | None = None
+    ) -> str:
+        """在 wren 机创建/刷新本连接的 profile（**只写 ${VAR} 占位，绝不落明文**）。
+
+        wren 0.13 的 profile（``~/.wren/profiles.yml``）支持 ``${VAR}`` 占位，值在
+        ``serve mcp`` 启动期从子进程 env 解析。故：
+
+        1. agent 生成 profile JSON（host/port/database/user 为明文坐标，password 为占位
+           ``${IQD_DB_PASSWORD}``）；
+        2. ``wren profile add <name> --from-file <tmp>`` 写入 profiles.yml（幂等，覆盖）；
+        3. 临时文件即用即删（chmod 600）。
+
+        ``serve mcp --profile <name>`` 会读该 profile，并用子进程 env 的
+        ``IQD_DB_PASSWORD`` 解析占位 —— 明文只经 env 注入，磁盘只有占位。
+
+        Returns:
+            profile 名。
+        """
+        name = self._profile_name(entry)
+        if not entry.credential:
+            return name
+        cred = _normalize_cred(entry.credential)
+        if not cred.get("host"):
+            return name
+        profile_name = entry.profile or name
+        # password 走占位；占位变量名固定 IQD_DB_PASSWORD（env 由 _build_env 注入）
+        profile_doc = {
+            "datasource": cred.get("db_type") or "doris",
+            "host": cred.get("host", ""),
+            "port": int(cred["port"]) if str(cred.get("port", "")).isdigit() else cred.get("port", ""),
+            "database": cred.get("database", ""),
+            "user": cred.get("user", ""),
+            "password": "${IQD_DB_PASSWORD}",
+        }
+        tmp_path = os.path.join(entry.project_home, f".iqd-profile-{uuid.uuid4().hex[:8]}.json")
+        try:
+            os.makedirs(entry.project_home, exist_ok=True)
+            fd = os.open(tmp_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                json.dump(profile_doc, fh, ensure_ascii=False)
+            async with _get_profile_lock():
+                proc = await asyncio.create_subprocess_exec(
+                    _settings.wren_cli_bin, "profile", "add", profile_name, "--from-file", tmp_path,
+                    cwd=entry.project_home,
+                    env=env if env is not None else None,
+                    stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+                )
+                _out, err_b = await asyncio.wait_for(proc.communicate(), timeout=30.0)
+            if proc.returncode not in (0, None):
+                # profile add 对「校验失败」仍返回 0；非 0 才是写入失败
+                logger.warning(
+                    "agent profile add nonzero",
+                    conn_id=entry.conn_id, profile=profile_name,
+                    stderr=(err_b or b"").decode("utf-8", errors="replace")[:300],
+                )
+        finally:
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
+        entry.profile = profile_name
+        return profile_name
+
+    async def _profile_exists(self, name: str) -> bool:
+        """确认 profile 已就位（``wren profile debug <name>`` exit 0）。"""
+        if not name:
+            return False
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                _settings.wren_cli_bin, "profile", "debug", name,
+                stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL,
+            )
+            await asyncio.wait_for(proc.wait(), timeout=15.0)
+            return proc.returncode == 0
+        except Exception:  # noqa: BLE001
+            return False
 
     async def _launcher(self, command: list[str], env: dict[str, str] | None, cwd: str) -> Any:
         return await asyncio.create_subprocess_exec(
@@ -272,6 +416,25 @@ class WrenMcpSupervisor:
             entry.status = "starting"
         project_home = entry.project_home
         os.makedirs(project_home, exist_ok=True)
+        # ① 先解析 env（profile 占位与 serve mcp 都靠它；明文只经 env，不落盘）
+        env = self._build_env(entry.credential, project_home)
+        # ② 建/刷新本连接 profile（占位，明文不落盘）；失败不阻断（可能已有手工 profile）
+        #    仅当凭据齐全、profile 确已建好时才传 --profile：
+        #    无凭据（如历史手工 profile 连接）→ 不传，沿用全局 active profile（保持旧行为）。
+        profile_name: str | None = entry.profile or None
+        if entry.credential and _normalize_cred(entry.credential).get("host"):
+            try:
+                created = await self._ensure_profile(entry, env)
+                if await self._profile_exists(created):
+                    profile_name = created
+                else:
+                    profile_name = None
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "agent ensure profile failed; fall back to active profile",
+                    conn_id=entry.conn_id, error=str(exc),
+                )
+                profile_name = None
         command = [
             _settings.wren_cli_bin,
             "serve", "mcp",
@@ -280,8 +443,9 @@ class WrenMcpSupervisor:
             "--port", str(entry.port),
             "--project", project_home,
         ]
+        if profile_name:
+            command += ["--profile", profile_name]
         entry.command = command
-        env = self._build_env(entry.credential, project_home)
         try:
             proc = await self._launcher(command, env, project_home)
         except Exception as exc:  # noqa: BLE001

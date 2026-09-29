@@ -44,6 +44,61 @@ from src.utils.logging import get_logger
 logger = get_logger("agent.mis_iqd.service")
 
 
+#：wren 列类型归一（0.13 要求显式 type，且为受控枚举；此处做保守映射）。
+_WREN_SIMPLE_TYPES = {
+    "int": "INT", "integer": "INT", "bigint": "BIGINT", "smallint": "SMALLINT",
+    "tinyint": "TINYINT", "double": "DOUBLE", "float": "FLOAT", "real": "DOUBLE",
+    "decimal": "DECIMAL", "numeric": "DECIMAL", "boolean": "BOOLEAN", "bool": "BOOLEAN",
+    "date": "DATE", "datetime": "TIMESTAMP", "timestamp": "TIMESTAMP",
+    "string": "VARCHAR", "text": "VARCHAR", "varchar": "VARCHAR", "char": "VARCHAR",
+}
+
+
+def _normalize_mdl_types(mdl: dict[str, Any]) -> int:
+    """兜底补齐 MDL 中缺失的列 `type`（wren 0.13 强约束）。
+
+    覆盖三类节点：
+    * ``models[].columns[]`` —— 缺 type 时按 ``isCalculated`` 给 DOUBLE，否则 VARCHAR；
+    * ``cubes[].measures[]`` —— 缺 type 时 DOUBLE；
+    * ``cubes[].dimensions[]`` —— 缺 type 时 VARCHAR。
+
+    只补**缺失**的，不覆盖已有 type（尊重用户/基线显式类型）。返回补齐条数。
+    """
+    filled = 0
+    for model in mdl.get("models") or []:
+        if not isinstance(model, dict):
+            continue
+        for col in model.get("columns") or []:
+            if isinstance(col, dict) and not col.get("type"):
+                # 带 expression 的列按「计算列」处理（本系统计算列以数值为主），
+                # 与 _materialize_missing_nodes 的计算列默认（DOUBLE）保持一致。
+                default = "DOUBLE" if (col.get("isCalculated") or col.get("expression")) else "VARCHAR"
+                col["type"] = _wren_type(col.get("data_type"), default=default)
+                filled += 1
+    for cube in mdl.get("cubes") or []:
+        if not isinstance(cube, dict):
+            continue
+        for bucket, default in (("measures", "DOUBLE"), ("dimensions", "VARCHAR")):
+            for child in cube.get(bucket) or []:
+                if isinstance(child, dict) and not child.get("type"):
+                    child["type"] = _wren_type(child.get("data_type"), default=default)
+                    filled += 1
+    return filled
+
+
+def _wren_type(raw: Any, *, default: str = "VARCHAR") -> str:
+    """把目录项 data_type 归一为 wren 0.13 可识别的列 `type`。
+
+    wren 的 MDL 列类型是受控枚举；``VARCHAR(65533)`` 这类带参数的写法在 cube 子节点
+    里不被接受（列节点本身可用）。故此处剥参数取基类型；未知一律回退 ``default``。
+    """
+    text = str(raw or "").strip()
+    if not text:
+        return default
+    base = text.split("(", 1)[0].strip().lower()
+    return _WREN_SIMPLE_TYPES.get(base, default)
+
+
 class SyncResult(BaseModel):
     """增强同步作业结果（闭环 build+index+回填 的统一返回）。
 
@@ -1396,14 +1451,20 @@ class IqdAskService:
                 shown = await cli.context_show(project_dir=project_home)
                 if shown.get("ok"):
                     engine_ctx = shown.get("data") or {}
-                    selfcheck_warnings = PublishSelfCheck.compare(
-                        self._load_derived_mdl(mdl_dir), engine_ctx
+                    derived_mdl = self._load_derived_mdl(mdl_dir)
+                    selfcheck_warnings = PublishSelfCheck.compare(derived_mdl, engine_ctx)
+                    # 规划探针（只读）：逐模型 dry-plan，抓「MDL 生成成功但引擎查不了」
+                    # （典型：计算列类型不合法，double/varchar → 整模型规划失败）
+                    probe_warnings = await PublishSelfCheck.probe_planner(
+                        cli, derived_mdl or {}
                     )
+                    selfcheck_warnings.extend(probe_warnings)
                     logger.info(
                         "IQD publish selfcheck",
                         connection_id=cid,
                         summary=PublishSelfCheck.summary(engine_ctx),
                         warnings=len(selfcheck_warnings),
+                        planner_warnings=len(probe_warnings),
                     )
                 else:
                     selfcheck_warnings = [
@@ -1570,6 +1631,11 @@ class IqdAskService:
         pk_applied = self._apply_primary_keys(mdl, catalog_items or [])
 
         # ④ 写临时目录 manifest.json
+        # ②-b wren 0.13 兼容性归一：**所有** column/measure/dimension 必须有 `type`
+        #      （缺失则查询规划期报 ``missing field `type```，整条问数链路失败）。
+        #      这里对最终 MDL 做一次兜底补齐，覆盖「历史 mdl_raw 基线节点」也漏 type 的情况。
+        normalized = _normalize_mdl_types(mdl)
+
         tmp_dir = tempfile.mkdtemp(prefix=f"iqd_mdl_{connection_id}_")
         manifest_path = os.path.join(tmp_dir, "manifest.json")
         with open(manifest_path, "w", encoding="utf-8") as fh:
@@ -2068,7 +2134,14 @@ class IqdAskService:
                 # 已存在 → 视为已落入
                 landed.add(idx)
                 continue
-            child: dict[str, Any] = {"name": name}
+            # wren 0.13 的度量/维度 schema **必须**带 `type`（缺失则查询规划期报
+            # ``missing field `type```，整条问数链路失败）。度量默认 DOUBLE、维度默认 VARCHAR；
+            # 目录项若登记了 data_type 则以其为准（归一为 wren 可识别的大写类型）。
+            default_type = "DOUBLE" if kind == "measure" else "VARCHAR"
+            child: dict[str, Any] = {
+                "name": name,
+                "type": _wren_type(it.get("data_type"), default=default_type),
+            }
             if it.get("expression") is not None:
                 child["expression"] = it["expression"]
             if kind == "measure" and it.get("data_type"):
@@ -2121,7 +2194,15 @@ class IqdAskService:
             if any(isinstance(c, dict) and c.get("name") == name for c in columns):
                 landed.add(idx)
                 continue
-            columns.append({"name": name, "expression": it.get("expression")})
+            # 同 cube 子节点：计算列也必须有 `type`（否则整条问数链路规划期失败）。
+            columns.append(
+                {
+                    "name": name,
+                    "type": _wren_type(it.get("data_type"), default="DOUBLE"),
+                    "expression": it.get("expression"),
+                    "isCalculated": True,
+                }
+            )
             landed.add(idx)
 
     async def _report_model_job(

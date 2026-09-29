@@ -70,6 +70,13 @@ export const AUTH_TYPE_OPTIONS: ReadonlyArray<{ value: string; label: string }> 
   { value: 'token', label: 'token' },
 ];
 
+/** 业务库类型下拉候选（路线 A；db_type 决定直连驱动）。 */
+export const DB_TYPE_OPTIONS: ReadonlyArray<{ value: string; label: string }> = [
+  { value: 'starrocks', label: 'StarRocks / Doris' },
+  { value: 'mysql', label: 'MySQL / MariaDB' },
+  { value: 'postgres', label: 'PostgreSQL' },
+];
+
 /** 连接表单**模式**（`create` = 新建向导；`edit` = 就地编辑既有连接，T07）。 */
 export type ConnectionFormMode = 'create' | 'edit';
 
@@ -85,6 +92,14 @@ export interface ConnectionDraft {
   authType: string;
   secretRef: string;
   projectId: string;
+  // ---- 路线 A：业务库连接（结构化录入）----
+  dbType: string;
+  dbHost: string;
+  dbPort: string;
+  dbDatabase: string;
+  dbUser: string;
+  /** 业务库密码：编辑时恒留空 = 保留 vault 既有密码；绝不回显。 */
+  dbPassword: string;
 }
 
 /** 空草稿（新建向导的初值；与实际后端 create DTO 默认值同源）。 */
@@ -97,6 +112,12 @@ export const EMPTY_DRAFT: ConnectionDraft = {
   authType: 'none',
   secretRef: '',
   projectId: '',
+  dbType: 'starrocks',
+  dbHost: '',
+  dbPort: '9030',
+  dbDatabase: '',
+  dbUser: '',
+  dbPassword: '',
 };
 
 /**
@@ -120,6 +141,14 @@ export function connectionToDraft(connection: Connection): ConnectionDraft {
     authType: connection.auth_type ?? 'none',
     secretRef: '',
     projectId: connection.project_id ?? '',
+    // 编辑态：缺省 = 空串（= 不修改）；新建态的默认值在 EMPTY_DRAFT 里给
+    dbType: connection.db_type ?? '',
+    dbHost: connection.db_host ?? '',
+    dbPort: connection.db_port != null ? String(connection.db_port) : '',
+    dbDatabase: connection.db_database ?? '',
+    dbUser: connection.db_user ?? '',
+    // 密码恒留空：GET 不回显；留空 = 保留 vault 既有密码
+    dbPassword: '',
   };
 }
 
@@ -163,11 +192,32 @@ export function buildCreateRequest(draft: ConnectionDraft): CreateConnectionRequ
     secret_ref: draft.secretRef.trim() || null,
     project_id: draft.projectId.trim() || null,
     enabled: true,
+    db_type: draft.dbType.trim() || null,
+    db_host: draft.dbHost.trim() || null,
+    db_port: parsePort(draft.dbPort),
+    db_database: draft.dbDatabase.trim() || null,
+    db_user: draft.dbUser.trim() || null,
+    db_password: draft.dbPassword || null,
   };
 }
 
+/** 端口解析：非正整数 → null。 */
+export function parsePort(value: string): number | null {
+  const n = Number.parseInt(value.trim(), 10);
+  return Number.isFinite(n) && n > 0 && n < 65536 ? n : null;
+}
+
 /** 可"留空 = 保留原值"的文本字段（`name` 单独处理；`secret_ref` 单独处理）。 */
-type PreservingTextField = 'base_url' | 'project_id' | 'default_connector' | 'language' | 'auth_type';
+type PreservingTextField =
+  | 'base_url'
+  | 'project_id'
+  | 'default_connector'
+  | 'language'
+  | 'auth_type'
+  | 'db_type'
+  | 'db_host'
+  | 'db_database'
+  | 'db_user';
 
 /** 文本字段比较 + 赋值：留空或与原名同值 → **不提交**（§14.1「缺省/null = 保留原值」）。 */
 function assignText(
@@ -246,6 +296,20 @@ export function buildUpdateRequest(
   const timeout = normalizeTimeout(draft.timeoutSeconds);
   if (timeout !== normalizeTimeout(original.timeout_seconds ?? DEFAULT_TIMEOUT_SECONDS)) {
     payload.timeout_seconds = timeout;
+  }
+
+  // ---- 路线 A：业务库坐标（留空/同值 ⇒ 省略；密码留空 ⇒ 保留 vault 既有密码）
+  assignText(payload, 'db_type', draft.dbType, original.db_type ?? null);
+  assignText(payload, 'db_host', draft.dbHost, original.db_host ?? null);
+  assignText(payload, 'db_database', draft.dbDatabase, original.db_database ?? null);
+  assignText(payload, 'db_user', draft.dbUser, original.db_user ?? null);
+  const port = parsePort(draft.dbPort);
+  if (port != null && port !== (original.db_port ?? null)) {
+    payload.db_port = port;
+  }
+  // 密码是非对称字段：非空才提交（留空 = 保留原值；后端 vault 侧合并）
+  if (draft.dbPassword !== '') {
+    payload.db_password = draft.dbPassword;
   }
 
   return payload;

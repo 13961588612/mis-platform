@@ -516,6 +516,7 @@ def create_app() -> FastAPI:
     from src.api.routes.auth import router as auth_router
     from src.api.routes.channels import router as channels_router
     from src.api.routes.files import router as files_router
+    from src.api.routes.iqd_credentials import router as iqd_credentials_router
     from src.api.routes.iqd_enhance import router as iqd_enhance_router
     from src.api.routes.iqd_discovery import router as iqd_discovery_router
     from src.api.routes.iqd_scope_preview import router as iqd_scope_preview_router
@@ -550,6 +551,8 @@ def create_app() -> FastAPI:
     app.include_router(iqd_discovery_router, prefix="/api/v1")
     # 方案 A 多连接：WrenAI MCP 连接级生命周期管理（BFF → AiPlatformClient → 本路由）
     app.include_router(iqd_mcp_manager_router, prefix="/api/v1")
+    # 路线 A：问数连接凭证保险库（BFF → AiPlatformClient → 本路由 → CredentialVault）
+    app.include_router(iqd_credentials_router, prefix="/api/v1")
 
     # ===== 统一 API 响应格式 =====
     # 所有 API 响应遵循：{ code, data, message, traceId }

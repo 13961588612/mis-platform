@@ -70,3 +70,57 @@ def test_summary_counts() -> None:
     ctx = {"models": [{"name": "a"}], "cubes": [{"name": "b"}], "relationships": []}
     assert PublishSelfCheck.summary(ctx) == "引擎侧：模型 1 / cube 1 / 关系 0"
     assert PublishSelfCheck.summary(None) == "引擎上下文不可读"
+
+
+# ---------------------------------------------------------------- 规划探针（2026-09-29）
+
+class _FakeCli:
+    """替身 CLI：按 model 名返回 dry_plan 结果。"""
+
+    def __init__(self, failing: dict[str, str] | None = None) -> None:
+        self._failing = failing or {}
+        self.calls: list[str] = []
+
+    async def dry_plan(self, sql: str, *, project_dir: str | None = None) -> dict:
+        self.calls.append(sql)
+        for model, err in self._failing.items():
+            if model in sql:
+                return {"ok": False, "error": err}
+        return {"ok": True, "error": ""}
+
+
+async def test_probe_planner_reports_unplannable_model() -> None:
+    """计算列类型不合法 → 模型无法规划 → 自检必须点名（只报不改）。"""
+    cli = _FakeCli({"ads_sale": "Cannot coerce arithmetic expression Float64 / Utf8"})
+    mdl = {"models": [{"name": "dwd_ord"}, {"name": "ads_sale"}]}
+    warnings = await PublishSelfCheck.probe_planner(cli, mdl)
+    assert len(warnings) == 1
+    assert "ads_sale" in warnings[0]
+    assert "无法规划" in warnings[0]
+    assert "CAST" in warnings[0]
+    assert len(cli.calls) == 2  # 两个模型各探一次
+
+
+async def test_probe_planner_ok_returns_empty() -> None:
+    cli = _FakeCli()
+    warnings = await PublishSelfCheck.probe_planner(
+        cli, {"models": [{"name": "m1"}, {"name": "m2"}]}
+    )
+    assert warnings == []
+
+
+async def test_probe_planner_swallows_exceptions() -> None:
+    """探针异常不得让发布失败——转成一条告警即可。"""
+    class _BoomCli:
+        async def dry_plan(self, sql: str, *, project_dir: str | None = None) -> dict:
+            raise RuntimeError("cli down")
+
+    warnings = await PublishSelfCheck.probe_planner(_BoomCli(), {"models": [{"name": "m"}]})
+    assert len(warnings) == 1
+    assert "探针异常" in warnings[0]
+
+
+async def test_probe_planner_ignores_bad_input() -> None:
+    cli = _FakeCli()
+    assert await PublishSelfCheck.probe_planner(cli, {}) == []
+    assert await PublishSelfCheck.probe_planner(cli, {"models": "notalist"}) == []

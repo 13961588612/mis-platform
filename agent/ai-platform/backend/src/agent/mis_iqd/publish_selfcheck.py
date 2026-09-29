@@ -63,6 +63,44 @@ class PublishSelfCheck:
         return warnings
 
     @staticmethod
+    async def probe_planner(cli: Any, mdl: dict[str, Any], *, limit: int = 20) -> list[str]:
+        """对派生 MDL 里每个 model 跑一次只读 ``wren dry-plan``，把规划失败变成告警。
+
+        <p><b>为什么</b>：wren 规划时会展开模型**全部计算列**；一个类型不合法的
+        计算列（``double / varchar``）会让该模型所有查询在规划期失败，但
+        ``context show`` 数量对账看不出来（模型/cube/关系都在）。本探针补上这一层：
+        哪个模型规划不了，就在自检里点名（**只报不改**）。
+
+        Args:
+            cli: :class:`src.adapters.iqd_cli.IqdCli`（含 ``dry_plan``）——可注入替身。
+            mdl: 本次发布的派生 MDL。
+            limit: 最多探测的模型数（防御性上限，避免模型过多时自检过慢）。
+
+        Returns:
+            人可读告警列表（空 = 全部模型规划通过）。
+        """
+        if not isinstance(mdl, dict):
+            return []
+        models = [m for m in (mdl.get("models") or []) if isinstance(m, dict)]
+        warnings: list[str] = []
+        for model in models[:limit]:
+            name = str(model.get("name") or "").strip()
+            if not name:
+                continue
+            try:
+                result = await cli.dry_plan(f"select * from {name} limit 1")
+            except Exception as exc:  # noqa: BLE001 - 探针失败不算发布失败
+                warnings.append(f"自检：模型 {name} 规划探针异常（{str(exc)[:80]}）")
+                continue
+            if not result.get("ok"):
+                err = str(result.get("error") or "").strip().replace("\n", " ")
+                warnings.append(
+                    f"自检：模型 {name} 无法规划（{err[:160]}）——"
+                    "常见原因：计算列类型不合法（如数值列除以字符串列），建议显式 CAST"
+                )
+        return warnings
+
+    @staticmethod
     def _names(value: Any) -> list[str]:
         """取对象名清单（model 用 name；cube/measure/dimension 亦同）。"""
         if not isinstance(value, list):

@@ -891,6 +891,33 @@ class IqdCli:
             return {"ok": False, "data": {}, "error": "context show 返回非对象"}
         return {"ok": True, "data": parsed, "error": ""}
 
+    async def dry_plan(self, sql: str, *, project_dir: str | None = None) -> dict[str, Any]:
+        """对一条 SQL 跑 ``wren dry-plan``（**只读**：经 MDL 规划，不连库、不执行）。
+
+        <p><b>为什么需要</b>：wren 规划时会展开模型**全部计算列**；一个类型不合法的
+        计算列（如 ``double_col / varchar_col``）会让该模型所有查询在规划期失败
+        （``Cannot coerce arithmetic expression`` / ``missing field `type```）。
+        发布后用本方法逐模型探一次，可把这类「MDL 生成成功但引擎查不了」的问题
+        在自检里变成可见告警（只报不改）。
+
+        Returns:
+            ``{"ok": bool, "error": str}``；``ok=True`` 表示规划通过，``error`` 为失败摘要。
+        """
+        try:
+            raw = await self._run(
+                ["dry-plan", "--sql", sql],
+                cwd=project_dir,
+                allow_nonzero=True,
+            )
+        except IqdCliError as exc:
+            return {"ok": False, "error": str(exc)[:400]}
+        stderr = str(raw.get("stderr") or "")
+        stdout = str(raw.get("stdout") or "")
+        exit_code = int(raw.get("exit_code") or 0)
+        if exit_code != 0 or "Error" in stderr:
+            return {"ok": False, "error": (stderr or stdout)[:400]}
+        return {"ok": True, "error": ""}
+
     async def context_validate(self, *, project_dir: str | None = None) -> dict[str, Any]:
         """校验当前语义上下文（``wren context validate``）。
 

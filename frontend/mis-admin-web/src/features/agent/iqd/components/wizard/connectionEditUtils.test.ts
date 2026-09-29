@@ -251,6 +251,13 @@ describe('buildCreateRequest（新建载荷，行为与既有 ensureCreated 逐�
       secret_ref: null,
       project_id: null,
       enabled: true,
+      // 路线 A：业务库连接字段（默认 starrocks:9030；密码为空 ⇒ null）
+      db_type: 'starrocks',
+      db_host: null,
+      db_port: 9030,
+      db_database: null,
+      db_user: null,
+      db_password: null,
     });
   });
 

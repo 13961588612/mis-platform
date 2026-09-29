@@ -174,10 +174,14 @@ def test_build_mdl_from_catalog_materializes_new_cube_with_measures_and_dimensio
     assert "margin" in names, "新建 cube 必须被物化"
     cube = next(c for c in mdl["cubes"] if c["name"] == "margin")
     assert cube["baseObject"] == "orders", "cube 的 baseObject 取自 model_ref"
+    # wren 0.13 要求 measure/dimension 必须带 `type`（缺失则查询规划期报
+    # missing field `type`）；度量默认 DOUBLE、维度默认 VARCHAR。
     assert cube["measures"] == [
-        {"name": "total", "expression": "sum(orders.amount)", "format": "¥#,##0"}
+        {"name": "total", "type": "DOUBLE", "expression": "sum(orders.amount)", "format": "¥#,##0"}
     ]
-    assert cube["dimensions"] == [{"name": "store_id", "expression": "orders.store_id"}]
+    assert cube["dimensions"] == [
+        {"name": "store_id", "type": "VARCHAR", "expression": "orders.store_id"}
+    ]
 
     # 既有 cube / relationship / model 未被破坏
     assert mdl["cubes"][0]["name"] == "revenue"
@@ -566,3 +570,51 @@ async def test_get_current_mdl_hash_returns_none_when_cli_unavailable():
     with patch.object(IqdCli, "_run", new=AsyncMock(side_effect=IqdCliError("wren CLI 不可用"))):
         cli = IqdCli()
         assert await cli.get_current_mdl_hash() is None
+
+
+def test_normalize_mdl_types_fills_missing_type():
+    """wren 0.13 兼容：所有 column/measure/dimension 必须补 `type`（缺失则规划期失败）。
+
+    回归自 2026-09-29 真机实测：cube measures/dimensions 与计算列缺 `type` 时，
+    wren 报 `[INVALID_SQL] Serde JSON error: missing field `type``，整条问数链路失败。
+    """
+    from src.agent.mis_iqd.service import _normalize_mdl_types
+
+    mdl = {
+        "models": [
+            {
+                "name": "t",
+                "columns": [
+                    {"name": "id", "type": "INT"},
+                    {"name": "calc", "expression": "a/b", "isCalculated": True},
+                    {"name": "raw"},
+                ],
+            }
+        ],
+        "cubes": [
+            {
+                "name": "c",
+                "measures": [{"name": "m", "expression": "SUM(x)"}],
+                "dimensions": [{"name": "d", "expression": "y"}],
+            }
+        ],
+    }
+    filled = _normalize_mdl_types(mdl)
+    assert filled == 4, f"应补 4 处，实补 {filled}"
+    cols = {c["name"]: c for c in mdl["models"][0]["columns"]}
+    assert cols["id"]["type"] == "INT"  # 已有不动
+    assert cols["calc"]["type"] == "DOUBLE"  # 计算列默认 DOUBLE
+    assert cols["raw"]["type"] == "VARCHAR"
+    assert mdl["cubes"][0]["measures"][0]["type"] == "DOUBLE"
+    assert mdl["cubes"][0]["dimensions"][0]["type"] == "VARCHAR"
+
+
+def test_wren_type_normalizes_parameterized_and_unknown():
+    from src.agent.mis_iqd.service import _wren_type
+
+    assert _wren_type("VARCHAR(65533)") == "VARCHAR"
+    assert _wren_type("bigint") == "BIGINT"
+    assert _wren_type("DOUBLE") == "DOUBLE"
+    assert _wren_type("") == "VARCHAR"
+    assert _wren_type(None, default="DOUBLE") == "DOUBLE"
+    assert _wren_type("weird_type", default="VARCHAR") == "VARCHAR"

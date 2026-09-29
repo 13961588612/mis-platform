@@ -62,6 +62,8 @@ REPORT_MCP_STATUS_PATH = "/internal/v1/iqd/mcp-status"
 REPORT_MCP_DEPLOY_PATH = "/internal/v1/iqd/mcp-deploy"
 # —— 方案 A 多连接：取连接 secret_ref（D6 凭证解析前置；内部端点仅回引用不回明文）——
 GET_CONNECTION_CREDENTIALS_PATH = "/internal/v1/iqd/connection-credentials"
+# —— 路线 A：连接业务库坐标 + 凭证引用（表发现直连 / 凭证解析；内部端点仅回非敏感字段）——
+GET_CONNECTION_DB_PROFILE_PATH = "/internal/v1/iqd/connection-db-profile"
 # —— v1.11 建模台 a 点：表发现导入 → 由物理表生成模型（Worker → mis-iqd 内部面，
 #    §6.1 时序「AIP->>MIS: POST …/catalog/model/from-table × N」）——
 CREATE_MODEL_FROM_TABLE_PATH = "/internal/v1/iqd/catalog/model/from-table"
@@ -676,6 +678,32 @@ class IqdConfigClient:
             )
         return self._map_credential_to_env(cred)
 
+    async def get_connection_db_profile(
+        self, connection_id: int, ctx: IqdCallContext | None = None
+    ) -> dict[str, Any] | None:
+        """取连接业务库坐标 + 凭证引用（路线 A 表发现直连前置）。
+
+        经 mis-iqd 内部端点取 ``{db_type, host, port, database, user, secret_ref}``
+        （**均非敏感，绝无密码**）。ai-platform 随后可：
+        ① 用 ``secret_ref`` 调本地 :class:`CredentialVault` 取密码；
+        ② 直连业务库查 ``information_schema``（绕开 wren 0.13 的 MDL 白名单限制）。
+
+        Args:
+            connection_id: 问数连接 id。
+            ctx: 身份与追踪上下文。
+
+        Returns:
+            连接业务库坐标字典；未配置时字段为 ``None``。
+
+        Raises:
+            IqdConfigClientError: mis-iqd 调用失败。
+        """
+        ctx = ctx or IqdCallContext()
+        data = await self._request(
+            "GET", GET_CONNECTION_DB_PROFILE_PATH, ctx, params={"connection_id": connection_id}
+        )
+        return data if isinstance(data, dict) else None
+
     @staticmethod
     def _map_credential_to_env(cred: dict[str, Any]) -> dict[str, str]:
         """把凭证明文字典映射为 wren 启动期 env（postgres 标准占位名 + 整份透传）。
@@ -690,6 +718,7 @@ class IqdConfigClient:
         user = cred.get("user") or cred.get("username")
         password = cred.get("password") or cred.get("pwd")
         database = cred.get("database") or cred.get("db") or cred.get("dbname")
+        db_type = cred.get("db_type") or cred.get("datasource")
         if host is not None:
             env["WREN_PG_HOST"] = str(host)
         if port is not None:
@@ -700,6 +729,9 @@ class IqdConfigClient:
             env["WREN_PG_PASSWORD"] = str(password)
         if database is not None:
             env["WREN_PG_DB"] = str(database)
+        if db_type is not None:
+            # 供 wren agent 建 profile（datasource 字段）；亦作占位模板可读键
+            env["WREN_DB_TYPE"] = str(db_type)
         env["WREN_IQD_CREDENTIAL_JSON"] = json.dumps(cred, ensure_ascii=False)
         # 剔除空值，避免注入空 env 变量
         return {k: v for k, v in env.items() if v != ""}

@@ -1,7 +1,7 @@
 /**
  * ConnectionWizard.tsx — 连接向导（4 步）+ 多连接现状管理（v1.11 MR-S1；T07 增「编辑 / 停用 / 启用」）。
  *
- * <h2>四步（与 system-design §6.1 时序对齐）</h2>
+ * <h2>三步（路线 A 调整；原「profile 绑定」占位步已删除）</h2>
  * <ol>
  *   <li><b>基本信息</b>：name / base_url / default_connector / timeout_seconds / language —— 同时展示
  *       **已有连接 + 各自 MCP 状态卡**（先看清现状再决定是否新建）；</li>
@@ -115,11 +115,13 @@ import {
   type PendingConfirm,
 } from './connectionEditUtils';
 
-/** 4 步定义（key 加 `conn:` 前缀，避免与表发现向导共用 store 槽位时语义串台）。 */
+/** 3 步定义（key 加 `conn:` 前缀，避免与表发现向导共用 store 槽位时语义串台）。
+ *
+ * 路线 A（2026-09-29）：原第 3 步「profile 绑定」为 DBA 手工占位，平台侧管理凭证后
+ * **该步骤已删除** —— 业务库连接参数改在第 2 步「数据源」结构化录入，密码经 vault 托管。 */
 const STEPS: WizardStep[] = [
   { key: 'conn:basic', title: '基本信息' },
-  { key: 'conn:datasource', title: '数据源参数' },
-  { key: 'conn:profile', title: 'profile 绑定' },
+  { key: 'conn:datasource', title: '数据源' },
   { key: 'conn:test', title: '连通测试' },
 ];
 
@@ -521,14 +523,14 @@ export function ConnectionWizard({ open, onOpenChange, onConnectionReady }: Conn
     }
   };
 
-  /** 下一步：进入第 4 步前先把连接落库，落库失败则**留在第 3 步**。 */
+  /** 下一步：从「数据源」进入「连通测试」前先把连接落库（含凭证写 vault），失败则留在原步。 */
   const handleNext = async () => {
-    if (currentStep === STEPS[2].key) {
+    if (currentStep === STEPS[1].key) {
       const id = await ensureCreated();
       if (id == null) {
         return; // 不前进：错误已展示在原步
       }
-      pushWizardStep(STEPS[3].key);
+      pushWizardStep(STEPS[2].key);
       void runTest(id);
       return;
     }
@@ -554,7 +556,7 @@ export function ConnectionWizard({ open, onOpenChange, onConnectionReady }: Conn
         dirty={dirty}
         busy={creating}
         finish={stepIndex === STEPS.length - 1}
-        nextLabel={currentStep === STEPS[2].key ? '创建并测试' : undefined}
+        nextLabel={currentStep === STEPS[1].key ? '创建并测试' : undefined}
         nextDisabled={stepIndex === 0 && draft.name.trim() === ''}
       >
         {/* ---------------- 步骤 1：基本信息 + 已有连接现状 ---------------- */}
@@ -621,30 +623,7 @@ export function ConnectionWizard({ open, onOpenChange, onConnectionReady }: Conn
           />
         )}
 
-        {/* ---------------- 步骤 3：profile 绑定（占位说明） ---------------- */}
-        {currentStep === 'conn:profile' && (
-          <div className="space-y-3">
-            <Alert>
-              <AlertTitle className="text-[13px]">profile 绑定由 DBA 在主机侧执行</AlertTitle>
-              <AlertDescription className="text-[12px]">
-                本步骤<strong>不收集任何凭证</strong>。真正的 profile 注册（
-                <code>wren profile add</code> + <code>wren context set-profile</code>）由 DBA 按
-                multiconn §5 流程在 WrenAI 主机上人工执行，凭证经 <code>${'{ENV}'}</code> 占位在
-                进程启动期注入 —— 平台既不代敲，也不经手明文（边界红线）。
-              </AlertDescription>
-            </Alert>
-            <ol className="list-decimal space-y-1 pl-5 text-[12px] text-muted-foreground">
-              <li>在 WrenAI 主机执行 <code>wren profile add</code> 注册业务库连接（凭证只落主机）。</li>
-              <li>执行 <code>wren context set-profile</code> 绑定到本连接的 project 目录。</li>
-              <li>回到本向导点「创建并测试」：平台创建连接 → 自检 → 拉起 MCP 进程。</li>
-            </ol>
-            <p className="text-[12px] text-muted-foreground">
-              完成后即可在建模台用「表发现」按连接读取 schema/表/列（凭证全程 server-side）。
-            </p>
-          </div>
-        )}
-
-        {/* ---------------- 步骤 4：连通测试 + MCP ---------------- */}
+        {/* ---------------- 步骤 3：连通测试 + MCP ---------------- */}
         {currentStep === 'conn:test' && (
           <div className="space-y-4">
             {creating && (

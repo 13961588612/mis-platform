@@ -1,7 +1,9 @@
 package com.mis.adminbff.controller;
 
+import com.mis.adminbff.client.AiPlatformClient;
 import com.mis.adminbff.client.AiPlatformDiscoveryClient;
 import com.mis.adminbff.client.IqdModelingClient;
+import com.mis.common.core.constant.SecurityConstants;
 import com.mis.common.core.exception.BusinessException;
 import com.mis.common.core.result.Result;
 import com.mis.common.web.trace.TraceContext;
@@ -9,6 +11,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
@@ -17,6 +20,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -78,23 +82,42 @@ public class IqdModelingController {
      */
     private static final int NOT_IMPLEMENTED_BY_DESIGN = 50101;
 
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(IqdModelingController.class);
+
     private final IqdModelingClient modelingClient;
     private final AiPlatformDiscoveryClient discoveryClient;
+    private final AiPlatformClient aiPlatformClient;
 
     public IqdModelingController(
             IqdModelingClient modelingClient,
-            AiPlatformDiscoveryClient discoveryClient) {
+            AiPlatformDiscoveryClient discoveryClient,
+            AiPlatformClient aiPlatformClient) {
         this.modelingClient = modelingClient;
         this.discoveryClient = discoveryClient;
+        this.aiPlatformClient = aiPlatformClient;
     }
 
     // ================================================================ 连接向导（T02）
 
-    /** 新建连接。{@code POST /connections}。 */
+    /**
+     * 新建连接。{@code POST /connections}。
+     *
+     * <p><b>路线 A 编排</b>：先经 mis-iqd 落连接元数据（含非敏感 db 坐标 + ``secret_ref``），
+     * 再把业务库明文凭证（host/port/user/password/database）写 ai-platform vault（键 = secret_ref）。
+     * 明文只在本次请求体内存在，不落 mis-iqd、不落 BFF 日志。
+     */
     @PostMapping("/connections")
     public ResponseEntity<Result<Map<String, Object>>> createConnection(
-            @RequestBody Map<String, Object> body) {
-        return forward(() -> modelingClient.createConnection(body));
+            @RequestBody Map<String, Object> body,
+            @RequestHeader(value = SecurityConstants.AUTHORIZATION_HEADER, required = false) String authorization,
+            @RequestHeader(value = SecurityConstants.HEADER_TRACE_ID, required = false) String traceId) {
+        // 密码绝不发给 mis-iqd（它只存非敏感展示列）；从转发体里剥离。
+        Map<String, Object> sanitized = stripDbPassword(body);
+        ResponseEntity<Result<Map<String, Object>>> resp = forward(() -> modelingClient.createConnection(sanitized));
+        if (resp.getStatusCode().is2xxSuccessful() && resp.getBody() != null && resp.getBody().getCode() == 0) {
+            storeCredentialIfPresent(body, resp.getBody().getData(), authorization, traceId, "create");
+        }
+        return resp;
     }
 
     /**
@@ -131,8 +154,15 @@ public class IqdModelingController {
     @PutMapping("/connections/{connectionId}")
     public ResponseEntity<Result<Map<String, Object>>> updateConnection(
             @PathVariable Long connectionId,
-            @RequestBody Map<String, Object> body) {
-        return forward(() -> modelingClient.updateConnection(connectionId, body));
+            @RequestBody Map<String, Object> body,
+            @RequestHeader(value = SecurityConstants.AUTHORIZATION_HEADER, required = false) String authorization,
+            @RequestHeader(value = SecurityConstants.HEADER_TRACE_ID, required = false) String traceId) {
+        Map<String, Object> sanitized = stripDbPassword(body);
+        ResponseEntity<Result<Map<String, Object>>> resp = forward(() -> modelingClient.updateConnection(connectionId, sanitized));
+        if (resp.getStatusCode().is2xxSuccessful() && resp.getBody() != null && resp.getBody().getCode() == 0) {
+            storeCredentialIfPresent(body, resp.getBody().getData(), authorization, traceId, "update");
+        }
+        return resp;
     }
 
     /**
@@ -143,8 +173,19 @@ public class IqdModelingController {
      */
     @DeleteMapping("/connections/{connectionId}")
     public ResponseEntity<Result<Map<String, Object>>> deleteConnection(
-            @PathVariable Long connectionId) {
-        return forward(() -> modelingClient.deleteConnection(connectionId));
+            @PathVariable Long connectionId,
+            @RequestHeader(value = SecurityConstants.AUTHORIZATION_HEADER, required = false) String authorization,
+            @RequestHeader(value = SecurityConstants.HEADER_TRACE_ID, required = false) String traceId) {
+        ResponseEntity<Result<Map<String, Object>>> resp = forward(() -> modelingClient.deleteConnection(connectionId));
+        if (resp.getStatusCode().is2xxSuccessful() && resp.getBody() != null && resp.getBody().getCode() == 0) {
+            // 路线 A：连接删除后回收 vault 凭据（best-effort，失败仅告警）
+            try {
+                aiPlatformClient.deleteIqdCredential("iqd-conn-" + connectionId, authorization, traceId);
+            } catch (Exception ex) {
+                log.warn("IQD credential delete from vault failed (connectionId={}): {}", connectionId, ex.getMessage());
+            }
+        }
+        return resp;
     }
 
     /**
@@ -318,6 +359,86 @@ public class IqdModelingController {
     public ResponseEntity<Result<Map<String, Object>>> importTables(
             @RequestBody Map<String, Object> body) {
         return forward(() -> discoveryClient.importTables(body));
+    }
+
+    // ================================================================ 路线 A：凭证编排
+
+    /**
+     * 把请求体里的业务库凭证明文写入 ai-platform vault（键 = ``secret_ref``）。
+     *
+     * <p>仅在连接元数据落库成功后调用（best-effort：vault 失败不应让「连接已建」变成 500，
+     * 但要告警，前端可据连接上的 ``has_db_password`` 判断是否需重填）。
+     *
+     * <p>密码留空 = 保留 vault 既有密码（编辑库坐标无需重输密码；由 ai-platform 侧合并）。
+     */
+    private void storeCredentialIfPresent(
+            Map<String, Object> body, Map<String, Object> resultData,
+            String authorization, String traceId, String phase) {
+        if (body == null) {
+            return;
+        }
+        // secret_ref 来源：① 请求体显式给定；② 否则用连接 id 的稳定约定（与 mis-iqd 侧一致）
+        Object secret = firstNonNull(body, "secret_ref", "secretRef");
+        if (secret == null && resultData != null) {
+            Object id = resultData.get("id");
+            if (id != null) {
+                secret = "iqd-conn-" + id;
+            }
+        }
+        Object password = firstNonNull(body, "db_password", "dbPassword", "db_pass");
+        Object host = firstNonNull(body, "db_host", "dbHost");
+        Object user = firstNonNull(body, "db_user", "dbUser");
+        Object dbType = firstNonNull(body, "db_type", "dbType");
+        Object database = firstNonNull(body, "db_database", "dbDatabase");
+        Object port = firstNonNull(body, "db_port", "dbPort");
+        // 完全不涉及凭证的更新（如只改名）→ 不触达 vault
+        boolean touchesCred = password != null || host != null || user != null || dbType != null
+                || database != null || port != null;
+        if (secret == null || !touchesCred) {
+            return;
+        }
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("secret_ref", secret);
+        if (dbType != null) payload.put("db_type", dbType);
+        if (host != null) payload.put("host", host);
+        if (port != null) payload.put("port", port);
+        if (user != null) payload.put("user", user);
+        if (database != null) payload.put("database", database);
+        if (password != null) payload.put("password", password);
+        try {
+            aiPlatformClient.storeIqdCredential(payload, authorization, traceId);
+            log.debug("IQD credential stored to vault (phase={})", phase);
+        } catch (Exception ex) {
+            log.warn("IQD credential store to vault failed (phase={}): {}", phase, ex.getMessage());
+        }
+    }
+
+    /**
+     * 从连接请求体里剥离密码字段（``db_password`` / ``dbPassword`` / ``db_pass``）。
+     *
+     * <p>密码只应经 ai-platform vault 写入；mis-iqd 永不接收，避免明文出现在其请求日志 / 上下文中。
+     * 返回**浅拷贝**（不改调用方 body，vault 写入仍需原始密码）。
+     */
+    private static Map<String, Object> stripDbPassword(Map<String, Object> body) {
+        if (body == null) {
+            return Map.of();
+        }
+        Map<String, Object> copy = new LinkedHashMap<>(body);
+        copy.remove("db_password");
+        copy.remove("dbPassword");
+        copy.remove("db_pass");
+        return copy;
+    }
+
+    /** 取 Map 中第一个非空键值。 */
+    private static Object firstNonNull(Map<String, Object> body, String... keys) {
+        for (String k : keys) {
+            Object v = body.get(k);
+            if (v != null) {
+                return v;
+            }
+        }
+        return null;
     }
 
     // ================================================================ 骨架辅助

@@ -505,6 +505,12 @@ public class IqdModelingController {
         if (writeback != null) {
             dto.setMdlWritebackEnabled(toBoolean(writeback));
         }
+        // 路线 A：业务库连接展示字段（非敏感；密码不在本 DTO）
+        dto.setDbType(str(first(b, "db_type", "dbType")));
+        dto.setDbHost(str(first(b, "db_host", "dbHost")));
+        dto.setDbPort(toInt(first(b, "db_port", "dbPort")));
+        dto.setDbDatabase(str(first(b, "db_database", "dbDatabase")));
+        dto.setDbUser(str(first(b, "db_user", "dbUser")));
         return dto;
     }
 
@@ -547,6 +553,21 @@ public class IqdModelingController {
         }
         if (hasAny(b, "enabled")) {
             dto.setEnabled(toBoolean(first(b, "enabled")));
+        }
+        if (hasAny(b, "db_type", "dbType")) {
+            dto.setDbType(str(first(b, "db_type", "dbType")));
+        }
+        if (hasAny(b, "db_host", "dbHost")) {
+            dto.setDbHost(str(first(b, "db_host", "dbHost")));
+        }
+        if (hasAny(b, "db_port", "dbPort")) {
+            dto.setDbPort(toInt(first(b, "db_port", "dbPort")));
+        }
+        if (hasAny(b, "db_database", "dbDatabase")) {
+            dto.setDbDatabase(str(first(b, "db_database", "dbDatabase")));
+        }
+        if (hasAny(b, "db_user", "dbUser")) {
+            dto.setDbUser(str(first(b, "db_user", "dbUser")));
         }
         return dto;
     }

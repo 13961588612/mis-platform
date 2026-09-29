@@ -334,6 +334,22 @@ public class IqdInternalController {
     }
 
     /**
+     * 取连接业务库坐标 + 凭证引用（路线 A，供 ai-platform 表发现直连）。
+     *
+     * <p>回 {@code db_type/host/port/database/user}（非敏感）与 {@code secret_ref}；
+     * <b>绝不回密码</b>（密码在 ai-platform vault）。ai-platform 凭此直连业务库查
+     * {@code information_schema}，绕开 wren 0.13 的 MDL 白名单限制，实现全库表发现。
+     *
+     * @param connectionId 问数连接 id
+     * @return {@code {connection_id, secret_ref, db_type, host, port, database, user}}
+     */
+    @GetMapping("/connection-db-profile")
+    public Result<Map<String, Object>> getConnectionDbProfile(
+            @RequestParam("connection_id") Long connectionId) {
+        return Result.ok(adminService.getConnectionDbProfile(connectionId));
+    }
+
+    /**
      * 回写连接级 WrenAI MCP 进程状态（方案 A 多连接可观测，REQ-P1-2）。
      *
      * <p>由 ai-platform Worker 进程管理器在启停/健康自检后回调。仅回写

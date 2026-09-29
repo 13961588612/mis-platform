@@ -65,6 +65,13 @@ public class IqdConnectionUpdateRequest {
     /** 连接可用性开关（可多条同时 true；只改本行，不联动其它）。 */
     private Boolean enabled;
 
+    // ---- 路线 A：业务库连接展示字段（null = 保留原值；密码不在本 DTO）----
+    private String dbType;
+    private String dbHost;
+    private Integer dbPort;
+    private String dbDatabase;
+    private String dbUser;
+
     public String getName() {
         return name;
     }
@@ -135,6 +142,46 @@ public class IqdConnectionUpdateRequest {
 
     public void setEnabled(Boolean enabled) {
         this.enabled = enabled;
+    }
+
+    public String getDbType() {
+        return dbType;
+    }
+
+    public void setDbType(String dbType) {
+        this.dbType = dbType;
+    }
+
+    public String getDbHost() {
+        return dbHost;
+    }
+
+    public void setDbHost(String dbHost) {
+        this.dbHost = dbHost;
+    }
+
+    public Integer getDbPort() {
+        return dbPort;
+    }
+
+    public void setDbPort(Integer dbPort) {
+        this.dbPort = dbPort;
+    }
+
+    public String getDbDatabase() {
+        return dbDatabase;
+    }
+
+    public void setDbDatabase(String dbDatabase) {
+        this.dbDatabase = dbDatabase;
+    }
+
+    public String getDbUser() {
+        return dbUser;
+    }
+
+    public void setDbUser(String dbUser) {
+        this.dbUser = dbUser;
     }
 
     /**

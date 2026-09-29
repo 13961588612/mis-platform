@@ -469,6 +469,43 @@ public class AiPlatformClient extends AbstractDownstreamClient {
                 .bodyToMono(MAP_RESULT_TYPE));
     }
 
+    // ================================================================ 路线 A：问数连接凭证保险库
+
+    /**
+     * 写入 / 更新问数连接业务库凭据（路线 A）。调平台 Worker
+     * {@code POST /api/v1/iqd/credentials}。
+     *
+     * @param body          凭据体 {@code {secret_ref, db_type, host, port, user, password, database}}
+     * @param authorization BFF 收到的原始 MIS JWT（透传平台 RS256 校验）
+     * @param traceId       全链路追踪 ID
+     * @return 平台响应 data（{@code {secret_ref, has_credential, id}}）
+     */
+    public Map<String, Object> storeIqdCredential(
+            Map<String, Object> body, String authorization, String traceId) {
+        Consumer<HttpHeaders> headers = buildHeaders(authorization, traceId);
+        return block(client().post()
+                .uri("/api/v1/iqd/credentials")
+                .headers(headers)
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(body)
+                .retrieve()
+                .bodyToMono(MAP_RESULT_TYPE));
+    }
+
+    /**
+     * 删除问数连接业务库凭据（软删除）。调平台 Worker
+     * {@code DELETE /api/v1/iqd/credentials/{secret_ref}}。
+     */
+    public Map<String, Object> deleteIqdCredential(
+            String secretRef, String authorization, String traceId) {
+        Consumer<HttpHeaders> headers = buildHeaders(authorization, traceId);
+        return block(client().delete()
+                .uri("/api/v1/iqd/credentials/{ref}", secretRef)
+                .headers(headers)
+                .retrieve()
+                .bodyToMono(MAP_RESULT_TYPE));
+    }
+
     /** 组合转发头：复用基类 loginContextHeaders() + Authorization + X-Trace-Id + MIS 身份 enrichment 头。 */
     private Consumer<HttpHeaders> buildHeaders(String authorization, String traceId) {
         return headers -> {

@@ -147,6 +147,77 @@ class CredentialVault:
                 logger.exception("Failed to decrypt credential by ref", ref=ref)
                 return None
 
+    async def upsert_by_ref(
+        self,
+        session: AsyncSession,
+        ref: str,
+        system_type: str,
+        credential: dict[str, Any],
+        *,
+        user_id: str | None = None,
+    ) -> str:
+        """按引用（``secret_ref``）加密并存储凭据（路线 A：问数连接凭证）。
+
+        与 :meth:`store_credential` 的区别：本方法以 ``system_account = ref``
+        为**唯一键**做 upsert —— 问数连接凭证没有平台用户主体（``user_id`` 可空）。
+
+        语义（更新连接时避免误清空）：
+        - 已存在同 ref 的活跃行 → 用 ``credential`` **整体覆盖**密文；
+          调用方需保证提交的是完整凭据（前端在改库参数时应重填密码）。
+
+        Returns:
+            存储的凭据映射数据库行 ID。
+
+        Raises:
+            ValueError: ``ref`` 为空。
+        """
+        if not ref or not ref.strip():
+            raise ValueError("ref (secret_ref) 不能为空")
+        ref = ref.strip()
+        encrypted: str = encrypt_dict(credential)
+
+        stmt: Any = select(CredentialMappingModel).where(
+            CredentialMappingModel.system_account == ref,
+            CredentialMappingModel.is_active.is_(True),
+        )
+        result: Any = await session.execute(stmt)
+        existing: Any = result.scalar_one_or_none()
+
+        if existing:
+            existing.system_type = system_type
+            existing.encrypted_credential = encrypted
+            if user_id is not None:
+                existing.user_id = user_id
+            await session.flush()
+            logger.info("Credential upserted by ref", ref=ref, system_type=system_type)
+            return existing.id
+
+        new_mapping: CredentialMappingModel = CredentialMappingModel(
+            user_id=user_id,
+            system_type=system_type,
+            system_account=ref,
+            encrypted_credential=encrypted,
+        )
+        session.add(new_mapping)
+        await session.flush()
+        logger.info("Credential stored by ref", ref=ref, system_type=system_type)
+        return new_mapping.id
+
+    async def delete_by_ref(self, session: AsyncSession, ref: str) -> bool:
+        """按引用软删除凭据（设置 ``is_active=False``）。"""
+        if not ref:
+            return False
+        stmt: Any = (
+            update(CredentialMappingModel)
+            .where(
+                CredentialMappingModel.system_account == ref,
+                CredentialMappingModel.is_active.is_(True),
+            )
+            .values(is_active=False)
+        )
+        result: Any = await session.execute(stmt)
+        return result.rowcount > 0  # type: ignore[union-attr]
+
     async def delete_credential(
         self,
         session: AsyncSession,

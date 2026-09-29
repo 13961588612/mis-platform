@@ -68,3 +68,61 @@ def test_mdl_manifest_and_args_still_declared():
     module = _load_agent_module()
     declared = set(module.CliRequest.model_fields)
     assert {"conn_id", "args", "mdl_manifest", "timeout_seconds"} <= declared
+
+
+def test_normalize_cred_from_credential_json():
+    """平台下发 WREN_IQD_CREDENTIAL_JSON → 归一为 profile 字段（路线 A 修复）。"""
+    module = _load_agent_module()
+    import json as _json
+
+    cred = {
+        "WREN_IQD_CREDENTIAL_JSON": _json.dumps(
+            {
+                "db_type": "doris",
+                "host": "10.0.0.1",
+                "port": 9030,
+                "user": "query",
+                "password": "pwd",
+                "database": "adhoc",
+            }
+        )
+    }
+    out = module._normalize_cred(cred)
+    assert out["host"] == "10.0.0.1"
+    assert out["port"] == 9030
+    assert out["user"] == "query"
+    assert out["password"] == "pwd"
+    assert out["database"] == "adhoc"
+    assert out["db_type"] == "doris"
+
+
+def test_normalize_cred_falls_back_to_wren_pg_keys():
+    """无 JSON 时退回 WREN_PG_* 键。"""
+    module = _load_agent_module()
+    out = module._normalize_cred(
+        {
+            "WREN_PG_HOST": "h",
+            "WREN_PG_PORT": "5432",
+            "WREN_PG_USER": "u",
+            "WREN_PG_PASSWORD": "p",
+            "WREN_PG_DB": "d",
+            "WREN_DB_TYPE": "postgres",
+        }
+    )
+    assert out == {
+        "host": "h",
+        "port": "5432",
+        "user": "u",
+        "password": "p",
+        "database": "d",
+        "db_type": "postgres",
+    }
+
+
+def test_serve_mcp_command_includes_profile():
+    """`serve mcp` 必须带 --profile（wren 0.13 用 profile 选连接；无此则落全局 active）。"""
+    source = _AGENT_PY.read_text(encoding="utf-8")
+    assert '"--profile"' in source
+    assert "_ensure_profile" in source
+    # profile 必须写占位而非明文
+    assert "${IQD_DB_PASSWORD}" in source

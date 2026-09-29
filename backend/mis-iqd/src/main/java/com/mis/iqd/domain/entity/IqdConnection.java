@@ -114,6 +114,28 @@ public class IqdConnection {
     @Column(name = "agent_handle")
     private String agentHandle;
 
+    /**
+     * 【路线 A】业务库连接展示字段（**非敏感**，V107）。
+     *
+     * <p>把「wren 机手工 profile」改为「平台侧管理连接」后，连接列表 / 编辑弹窗需
+     * 直接回显 db_type/host/port/database/user.{@code db_password} <b>不在此表</b>：
+     * 明文密码只在 ai-platform vault（{@code credential_mappings}，键 = secretRef）。
+     */
+    @Column(name = "db_type")
+    private String dbType;
+
+    @Column(name = "db_host")
+    private String dbHost;
+
+    @Column(name = "db_port")
+    private Integer dbPort;
+
+    @Column(name = "db_database")
+    private String dbDatabase;
+
+    @Column(name = "db_user")
+    private String dbUser;
+
     @Column(name = "created_at", nullable = false)
     private Instant createdAt;
 
@@ -302,6 +324,46 @@ public class IqdConnection {
 
     public void setAgentHandle(String agentHandle) {
         this.agentHandle = agentHandle;
+    }
+
+    public String getDbType() {
+        return dbType;
+    }
+
+    public void setDbType(String dbType) {
+        this.dbType = dbType;
+    }
+
+    public String getDbHost() {
+        return dbHost;
+    }
+
+    public void setDbHost(String dbHost) {
+        this.dbHost = dbHost;
+    }
+
+    public Integer getDbPort() {
+        return dbPort;
+    }
+
+    public void setDbPort(Integer dbPort) {
+        this.dbPort = dbPort;
+    }
+
+    public String getDbDatabase() {
+        return dbDatabase;
+    }
+
+    public void setDbDatabase(String dbDatabase) {
+        this.dbDatabase = dbDatabase;
+    }
+
+    public String getDbUser() {
+        return dbUser;
+    }
+
+    public void setDbUser(String dbUser) {
+        this.dbUser = dbUser;
     }
 
     public Instant getCreatedAt() {

@@ -33,6 +33,7 @@ import {
 } from '@/components/ui/select';
 import {
   AUTH_TYPE_OPTIONS,
+  DB_TYPE_OPTIONS,
   buildConnectorOptions,
   type ConnectionDraft,
   type ConnectionFormMode,
@@ -128,26 +129,26 @@ export function ConnectionFormFields({
   return (
     <div className="space-y-3">
       <Alert>
-        <AlertTitle className="text-[13px]">凭证提交规则</AlertTitle>
+        <AlertTitle className="text-[13px]">业务库连接（平台侧管理）</AlertTitle>
         <AlertDescription className="text-[12px]">
-          平台库只保存 <strong>profile 名 / 连接标识</strong>，<strong>不保存业务库明文凭证</strong>。
-          此处留空表示「保留原值」；查询接口恒返回 <code>******</code>，不会回显。
-          {mode === 'edit' && ' 编辑时留空即保留该连接当前凭证，不会清空。'}
+          在此填写业务库连接参数，密码经服务端加密存入 <strong>凭据保险库</strong>（AES-256-GCM），
+          <strong>不落平台配置库、不回显</strong>。查询接口恒返回掩码。
+          {mode === 'edit' && ' 编辑时密码留空 = 保留已存密码，不会清空。'}
         </AlertDescription>
       </Alert>
       <div className="grid gap-3 sm:grid-cols-2">
         <div className="space-y-1">
-          <Label className="text-[13px]">认证方式</Label>
+          <Label className="text-[13px]">数据库类型</Label>
           <Select
-            value={draft.authType}
+            value={draft.dbType}
             disabled={disabled}
-            onValueChange={(value) => onDraftChange({ authType: value })}
+            onValueChange={(value) => onDraftChange({ dbType: value })}
           >
             <SelectTrigger>
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              {AUTH_TYPE_OPTIONS.map((option) => (
+              {DB_TYPE_OPTIONS.map((option) => (
                 <SelectItem key={option.value} value={option.value}>
                   {option.label}
                 </SelectItem>
@@ -156,26 +157,100 @@ export function ConnectionFormFields({
           </Select>
         </div>
         <div className="space-y-1">
-          <Label className="text-[13px]">凭证引用（secret_ref）</Label>
+          <Label className="text-[13px]">主机 host</Label>
+          <Input
+            value={draft.dbHost}
+            disabled={disabled}
+            onChange={(e) => onDraftChange({ dbHost: e.target.value })}
+            placeholder="10.254.16.217"
+          />
+        </div>
+        <div className="space-y-1">
+          <Label className="text-[13px]">端口 port</Label>
+          <Input
+            value={draft.dbPort}
+            disabled={disabled}
+            onChange={(e) => onDraftChange({ dbPort: e.target.value })}
+            placeholder="9030"
+          />
+        </div>
+        <div className="space-y-1">
+          <Label className="text-[13px]">数据库 database</Label>
+          <Input
+            value={draft.dbDatabase}
+            disabled={disabled}
+            onChange={(e) => onDraftChange({ dbDatabase: e.target.value })}
+            placeholder="adhoc"
+          />
+        </div>
+        <div className="space-y-1">
+          <Label className="text-[13px]">账号 user</Label>
+          <Input
+            value={draft.dbUser}
+            disabled={disabled}
+            autoComplete="off"
+            onChange={(e) => onDraftChange({ dbUser: e.target.value })}
+            placeholder="query"
+          />
+        </div>
+        <div className="space-y-1">
+          <Label className="text-[13px]">密码 password</Label>
           <Input
             type="password"
             autoComplete="new-password"
-            value={draft.secretRef}
+            value={draft.dbPassword}
             disabled={disabled}
-            onChange={(e) => onDraftChange({ secretRef: e.target.value })}
-            placeholder="留空 = 保留原值"
-          />
-        </div>
-        <div className="space-y-1 sm:col-span-2">
-          <Label className="text-[13px]">WrenAI project_id</Label>
-          <Input
-            value={draft.projectId}
-            disabled={disabled}
-            onChange={(e) => onDraftChange({ projectId: e.target.value })}
-            placeholder="可选；留空则由 WrenAI 侧解析"
+            onChange={(e) => onDraftChange({ dbPassword: e.target.value })}
+            placeholder={mode === 'edit' ? '留空 = 保留已存密码' : '业务库密码'}
           />
         </div>
       </div>
+      <details className="rounded border border-dashed p-2">
+        <summary className="cursor-pointer text-[12px] text-muted-foreground">
+          高级：WrenAI 连接参数（可选）
+        </summary>
+        <div className="mt-2 grid gap-3 sm:grid-cols-2">
+          <div className="space-y-1">
+            <Label className="text-[13px]">认证方式</Label>
+            <Select
+              value={draft.authType}
+              disabled={disabled}
+              onValueChange={(value) => onDraftChange({ authType: value })}
+            >
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {AUTH_TYPE_OPTIONS.map((option) => (
+                  <SelectItem key={option.value} value={option.value}>
+                    {option.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="space-y-1">
+            <Label className="text-[13px]">凭证引用（secret_ref）</Label>
+            <Input
+              type="password"
+              autoComplete="new-password"
+              value={draft.secretRef}
+              disabled={disabled}
+              onChange={(e) => onDraftChange({ secretRef: e.target.value })}
+              placeholder="留空 = 自动生成"
+            />
+          </div>
+          <div className="space-y-1 sm:col-span-2">
+            <Label className="text-[13px]">WrenAI project_id</Label>
+            <Input
+              value={draft.projectId}
+              disabled={disabled}
+              onChange={(e) => onDraftChange({ projectId: e.target.value })}
+              placeholder="可选；留空则由 WrenAI 侧解析"
+            />
+          </div>
+        </div>
+      </details>
     </div>
   );
 }

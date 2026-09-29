@@ -31,6 +31,24 @@ public class IqdConnectionVO {
     /** 按连接灰度闸门：是否允许平台写回 MDL（二期 P0-1~P0-12，U7/Q4）。 */
     private Boolean mdlWritebackEnabled;
 
+    /** 【路线 A】业务库类型（非敏感展示；密码只在 vault）。 */
+    private String dbType;
+
+    /** 【路线 A】业务库 host（非敏感展示）。 */
+    private String dbHost;
+
+    /** 【路线 A】业务库 port（非敏感展示）。 */
+    private Integer dbPort;
+
+    /** 【路线 A】业务库 database（非敏感展示）。 */
+    private String dbDatabase;
+
+    /** 【路线 A】业务库账号（非敏感展示；密码不回）。 */
+    private String dbUser;
+
+    /** 【路线 A】是否已在 ai-platform vault 存有该连接的凭据（编辑时提示是否需重填密码）。 */
+    private Boolean hasDbPassword;
+
     /** 【方案A·多连接】WrenAI MCP 进程状态（running/stopped/starting/crashed/unhealthy）。 */
     private String mcpStatus;
 
@@ -155,6 +173,54 @@ public class IqdConnectionVO {
         this.mdlWritebackEnabled = mdlWritebackEnabled;
     }
 
+    public String getDbType() {
+        return dbType;
+    }
+
+    public void setDbType(String dbType) {
+        this.dbType = dbType;
+    }
+
+    public String getDbHost() {
+        return dbHost;
+    }
+
+    public void setDbHost(String dbHost) {
+        this.dbHost = dbHost;
+    }
+
+    public Integer getDbPort() {
+        return dbPort;
+    }
+
+    public void setDbPort(Integer dbPort) {
+        this.dbPort = dbPort;
+    }
+
+    public String getDbDatabase() {
+        return dbDatabase;
+    }
+
+    public void setDbDatabase(String dbDatabase) {
+        this.dbDatabase = dbDatabase;
+    }
+
+    public String getDbUser() {
+        return dbUser;
+    }
+
+    public void setDbUser(String dbUser) {
+        this.dbUser = dbUser;
+    }
+
+    public Boolean getHasDbPassword() {
+        return hasDbPassword;
+    }
+
+    public void setHasDbPassword(Boolean hasDbPassword) {
+        this.hasDbPassword = hasDbPassword;
+    }
+
     public String getMcpStatus() {
         return mcpStatus;
     }
@@ -237,6 +303,36 @@ public class IqdConnectionVO {
     @JsonProperty("mcp_port")
     public Integer mcpPortWire() {
         return mcpPort;
+    }
+
+    @JsonProperty("db_type")
+    public String dbTypeWire() {
+        return dbType;
+    }
+
+    @JsonProperty("db_host")
+    public String dbHostWire() {
+        return dbHost;
+    }
+
+    @JsonProperty("db_port")
+    public Integer dbPortWire() {
+        return dbPort;
+    }
+
+    @JsonProperty("db_database")
+    public String dbDatabaseWire() {
+        return dbDatabase;
+    }
+
+    @JsonProperty("db_user")
+    public String dbUserWire() {
+        return dbUser;
+    }
+
+    @JsonProperty("has_db_password")
+    public Boolean hasDbPasswordWire() {
+        return hasDbPassword;
     }
 
     /** 兼容旧调用方的 camelCase 视图（非 wire 主形态，仅内部用）。 */
