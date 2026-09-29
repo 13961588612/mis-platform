@@ -29,7 +29,7 @@ import java.util.Map;
  *       {@code POST /connections}、{@code GET /connections}、{@code POST /connections/{id}/test}、
  *       {@code PUT  /connections/{id}}（T06 按 id 局部更新连接）、
  *       {@code POST /catalog/model}、{@code POST /catalog/model/from-table}、
- *       {@code POST /catalog/relationship}、{@code POST /catalog/cube}、
+ *       {@code POST /catalog/relationship}、{@code DELETE /catalog/relationship/{itemKey}}、{@code POST /catalog/cube}、
  *       {@code PUT  /catalog/cube}（T04a 更新既有 Cube）、
  *       {@code POST /catalog/calculated-column}、{@code GET /catalog/validate-expression}、
  *       {@code GET /catalog/sync-status}（{@link IqdAclController} 提供，本类不重复映射）、
@@ -196,6 +196,22 @@ public class IqdModelingController {
     public ResponseEntity<Result<Map<String, Object>>> upsertCube(
             @RequestBody Map<String, Object> body) {
         return forward(() -> modelingClient.upsertCube(body));
+    }
+
+    /**
+     * 删除关系（T03c 删除路径）。{@code DELETE /catalog/relationship/{itemKey}}。
+     *
+     * <p>关系是叶子节点，删除风险最低；物理删除 + bump edit_revision，
+     * 与 T04a cube 子节点孤儿清理同口径。
+     */
+    @DeleteMapping("/catalog/relationship/{itemKey}")
+    public ResponseEntity<Result<Map<String, Object>>> deleteRelationship(
+            @PathVariable String itemKey,
+            @RequestParam Long connectionId,
+            @RequestParam(required = false) Long baseRevision,
+            @RequestParam(required = false) String idempotencyKey) {
+        return forward(() -> modelingClient.deleteRelationship(
+                connectionId, itemKey, baseRevision, idempotencyKey));
     }
 
     /** 新建计算列。{@code POST /catalog/calculated-column}。 */

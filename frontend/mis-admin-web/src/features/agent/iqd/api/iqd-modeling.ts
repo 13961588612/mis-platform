@@ -43,6 +43,7 @@ import type {
   CreateModelFromTableRequest,
   CreateModelRequest,
   CreateRelationshipRequest,
+  DeleteRelationshipResponse,
   IqdDependents,
   IqdModelFromTableResponse,
   IqdModelingCreateResponse,
@@ -209,6 +210,41 @@ export async function createRelationship(
     body,
   );
   return unwrap(res, '新建关系失败');
+}
+
+/**
+ * 删除关系（T03c 删除路径）。`DELETE /api/v1/iqd/catalog/relationship/{itemKey}`。
+ *
+ * <p><b>为何现在才有</b>：此前画布 `onEdgesChange` 主动过滤 `remove`（代价是“画布上删不掉”），
+ * 因为当时后端没有删除端点 —— 默默从画布移除会让用户以为「删了」，刷新又回来。
+ * 现在真删除落库，故放行。
+ *
+ * <p><b>物理删除</b> + bump `current_edit_revision`；与 T04a cube 子节点孤儿清理同口径。
+ * 失败分支（均抛 {@link IqdModelingApiError}，读 `code`/`data`）：
+ * 42200 形态非法 / 非关系节点 / 被引用；40400 关系不存在；40900 并发冲突。
+ *
+ * @param connectionId   问数连接 id
+ * @param itemKey        关系稳定键 `mdl:relationship:<name>`
+ * @param baseRevision   乐观并发基线（可省略 = 服务端不校验）
+ * @param idempotencyKey 幂等键
+ */
+export async function deleteRelationship(
+  connectionId: number,
+  itemKey: string,
+  baseRevision?: number,
+  idempotencyKey?: string,
+): Promise<DeleteRelationshipResponse> {
+  const res = await api.delete<ApiResult<DeleteRelationshipResponse>>(
+    `/iqd/catalog/relationship/${encodeURIComponent(itemKey)}`,
+    {
+      params: {
+        connectionId,
+        ...(baseRevision != null ? { baseRevision } : {}),
+        ...(idempotencyKey ? { idempotencyKey } : {}),
+      },
+    },
+  );
+  return unwrap(res, '删除关系失败');
 }
 
 /** 新建 Cube（create-only + 双幂等；同 `item_key` 命中返回首次结果）。`POST /api/v1/iqd/catalog/cube`。 */

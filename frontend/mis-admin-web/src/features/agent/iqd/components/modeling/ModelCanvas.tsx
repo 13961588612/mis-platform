@@ -29,13 +29,14 @@
  *   <li>`base_version` 冲突（40900）→ 顶部橙色条 + 「重载布局」按钮，且**暂停自动保存**。</li>
  * </ul>
  *
- * <h2>为什么「点边」是查看而不是编辑（偏离说明）</h2>
+ * <h2>点边 = 只读查看 + 删除；为什么不是编辑</h2>
  * T03a 的 `POST /catalog/relationship` 是 **create-only 且双幂等**：同 `item_key` 已存在时
  * 直接返回首次结果、**不应用新字段**。若把「查看弹窗」做成可编辑并保存，会出现
- * 「提示保存成功、实际没改」的静默缺陷。修改既有关系应走 `PUT /catalog/node`
- * （T03a 报告「给 T03b 的接口备注 6」），其 UI 属 T03c。故本批点边只做**只读查看**
- * （仍满足 MR-05「点击进关系弹窗」，且不撒谎）。`TODO(后续批次)`：接 `PUT /catalog/node`
- * 后把 `RelationshipDialog` 的 `mode` 扩出 `edit`。
+ * 「提示保存成功、实际没改」的静默缺陷。修改既有关系当前仍走 catalog 节点编辑；本批点边只做
+ * **只读查看 + 删除**（仍满足 MR-05「点击进关系弹窗」，且不撒谎）。
+ * **T03c 删除路径（2026-09-29）已落地**：
+ * `DELETE /api/v1/iqd/catalog/relationship/{itemKey}`（物理删除 + bump edit_revision），
+ * 故 `onEdgesChange` 不再一味过滤 `remove` —— 改为拦住并转成删除确认。
  *
  * <h2>多连接隔离（A-14）</h2>
  * `<ReactFlow key={connectionId}>`：切连接即重挂载，视口/选中/内部状态一并清空。
@@ -229,18 +230,41 @@ function ModelCanvasInner({ connectionId }: ModelCanvasProps) {
   }, []);
 
   /**
-   * 边变更：**过滤掉 `remove`**。
+   * 边变更：位置类变更照常应用；**`remove` 不静默从画布抹去**，
+   * 而是转成「删除关系确认」（T03c 删除路径：真删除落库 + 引用阻断）。
    *
-   * <p>RELATION 的删除要落 catalog（并在后端做引用阻断），属 T03c 的删除路径；
-   * 若这里默默把边从画布移除，用户会以为「关系删了」，刷新后又回来 —— 比不支持删除更糟。
+   * <p>为什么不直接放行 `applyEdgeChanges(remove)`：那只是**视图**删除，
+   * catalog 里关系仍在 → 下一次缓存刷新边又回来，用户以为「删了」。故拦住并走真删除。
    */
-  const onEdgesChange = useCallback((changes: Array<EdgeChange<Edge<CanvasEdgeData>>>) => {
-    const kept = changes.filter((change) => change.type !== 'remove');
-    if (kept.length === 0) {
-      return;
-    }
-    setEdges((prev) => applyEdgeChanges(kept, prev));
-  }, []);
+  const onEdgesChange = useCallback(
+    (changes: Array<EdgeChange<Edge<CanvasEdgeData>>>) => {
+      const removals = changes.filter((change) => change.type === 'remove');
+      if (removals.length > 0) {
+        // 只处理第一条（弹窗一次只能处理一个关系）
+        const target = removals[0] as EdgeChange<Edge<CanvasEdgeData>> & { id?: string };
+        const edge = edgesRef.current.find((e) => e.id === target.id);
+        if (edge) {
+          if (!canEdit) {
+            return; // 无写权：不执行任何删除（保持只读）
+          }
+          const { relationshipKey } = (edge.data ?? {}) as CanvasEdgeData;
+          const existing = relationshipKey
+            ? (catalog.find((item) => item.item_key === relationshipKey) ?? null)
+            : null;
+          const source = endpointOf(nodes, edge.source);
+          const endTarget = endpointOf(nodes, edge.target);
+          setDialog({ mode: 'view', source, target: endTarget, existing });
+          return;
+        }
+      }
+      const kept = changes.filter((change) => change.type !== 'remove');
+      if (kept.length === 0) {
+        return;
+      }
+      setEdges((prev) => applyEdgeChanges(kept, prev));
+    },
+    [canEdit, catalog, nodes],
+  );
 
   /**
    * 画布选中 → 同步右栏 PropertyPanel（store.selectedItemKey）。
@@ -306,6 +330,12 @@ function ModelCanvasInner({ connectionId }: ModelCanvasProps) {
   const handleSaved = useCallback(() => {
     setDialog(null);
     // 关系落库后失效 catalog 缓存 → 画布重新派生（新的关系边出现）
+    void queryClient.invalidateQueries({ queryKey: iqdKeys.catalogs(connectionId) });
+  }, [queryClient, connectionId]);
+
+  /** 关系删除成功（T03c）：与保存同口径 —— 失效 catalog 缓存 后边自然消失。 */
+  const handleDeleted = useCallback(() => {
+    setDialog(null);
     void queryClient.invalidateQueries({ queryKey: iqdKeys.catalogs(connectionId) });
   }, [queryClient, connectionId]);
 
@@ -435,6 +465,8 @@ function ModelCanvasInner({ connectionId }: ModelCanvasProps) {
         existing={dialog?.existing ?? null}
         baseRevision={baseRevision}
         onSaved={handleSaved}
+        onDeleted={handleDeleted}
+        canEdit={canEdit}
       />
     </div>
   );

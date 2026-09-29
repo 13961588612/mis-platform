@@ -474,6 +474,37 @@
 
 ---
 
+## 3.12 关系删除（T03c，2026-09-29）—— 端到端通过
+
+> **背景**：此前模型边只能建、不能删（画布主动过滤 `remove` + 后端无端点）。
+> 本轮补齐：`DELETE /api/v1/iqd/catalog/relationship/{itemKey}`（物理删除 + bump）。
+
+**端到端（connection 900001，真机）**：
+
+| 步骤 | 实测 |
+|---|---|
+| 初始 current_edit_revision | 8（`edit_status=SYNCED`） |
+| 建临时关系 `mdl:relationship:e2e_del_probe` | → revision 9，盘点出现该关系 |
+| 删除（带 `baseRevision=9` + 幂等键） | → revision 10，`deleted_item_key` 回显正确 |
+| 删后盘点 | 仅剩原有 `sale_ord_store`（探针关系已消失） |
+| **强制重建 → 引擎侧对账** | `build_status=success`；`context show` 的 relationships **只剩 `sale_ord_store`**，无 `e2e_del_probe` |
+
+> 最后一行是关键：证明删除**真的进了 MDL 派生**，而不只是落库行消失。
+
+**负例（三条，均不伤数据）**：
+
+| 输入 | 期望 | 实测 |
+|---|---|---|
+| item_key 非 `mdl:relationship:*` | 42200 | ✅ `item_key 必须形如 mdl:relationship:<name>` |
+| 不存在的关系 | 40400 | ✅ `关系不存在` + `data.item_key` |
+| `baseRevision` 不符 | 40900 | ✅ `并发编辑冲突` + `data.current_edit_revision=8` |
+
+**前端**：点已有边 → 弹窗出现「删除关系」（仅 `iqd:modeling:edit`）→ 二次确认（destructive）→ 成功失效 catalog 缓存后边自然消失；
+42200 带 `dependents` 时列出引用方并不删。画布 `onEdgesChange` 不再静默丢弃 `remove`，改为转成删除确认。
+单测：`RelationshipDialog.test.tsx`（5 条）+ `IqdCatalogNodeServiceTest` 新增 7 条（含 409/404/422/幂等各分支）。
+
+---
+
 ## 4. 性能压测（P-1 ~ P-6）
 
 ### 4.1 画布拖拽帧率（P-1：200 节点 ≥55fps）

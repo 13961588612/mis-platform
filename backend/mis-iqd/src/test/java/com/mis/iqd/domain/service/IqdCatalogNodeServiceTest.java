@@ -1000,4 +1000,136 @@ class IqdCatalogNodeServiceTest {
         items.add(catalogNode("pg_main.public.customers.name", "column", "name", "pg_main.public.customers"));
         return items;
     }
+
+
+    // ------------------------------------------------------------ 删除关系（T03c，2026-09-29）
+
+    /** 造一条既有关系节点（kind=relationship）。 */
+    private IqdCatalogItem relationshipNode() {
+        IqdCatalogItem item = new IqdCatalogItem();
+        item.setId(9001L);
+        item.setConnectionId(CONN_ID);
+        item.setItemKey("mdl:relationship:sale_ord_store");
+        item.setKind("relationship");
+        item.setParentKey("mdl:model:a");
+        item.setDisplayName("sale_ord_store");
+        return item;
+    }
+
+    @Test
+    void deleteRelationship_happyPath_deletes_bumpsRevision_and_publishes() {
+        IqdConnection c = conn(3);
+        when(connectionRepository.findById(CONN_ID)).thenReturn(Optional.of(c));
+        IqdCatalogItem item = relationshipNode();
+        when(catalogItemRepository.findByConnectionIdAndItemKey(CONN_ID, item.getItemKey()))
+                .thenReturn(Optional.of(item));
+        when(idempotencyRepository.findByConnectionIdAndIdempotencyKey(anyLong(), anyString()))
+                .thenReturn(Optional.empty());
+        when(adminService.validateCatalogRefs(eq(CONN_ID), eq(item.getItemKey()), eq("DELETE")))
+                .thenReturn(new ArrayList<>());
+        when(connectionRepository.save(any(IqdConnection.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        Map<String, Object> result = service.deleteRelationship(CONN_ID, item.getItemKey(), 3L, "idem-1");
+
+        verify(catalogItemRepository).delete(item);
+        assertEquals(4L, c.getCurrentEditRevision());
+        assertEquals(4L, result.get("edit_revision"));
+        assertEquals(item.getItemKey(), result.get("deleted_item_key"));
+        verify(changeEventPublisher).publish(eq("iqd.catalog.changed"), anyString());
+    }
+
+    @Test
+    void deleteRelationship_wrongPrefix_throws42200() {
+        BusinessException ex = org.junit.jupiter.api.Assertions.assertThrows(
+                BusinessException.class,
+                () -> service.deleteRelationship(CONN_ID, "mdl:model:orders", null, null));
+        assertEquals(42200, ex.getCode());
+    }
+
+    @Test
+    void deleteRelationship_notFound_throws40400() {
+        IqdConnection c = conn(1);
+        when(connectionRepository.findById(CONN_ID)).thenReturn(Optional.of(c));
+        when(catalogItemRepository.findByConnectionIdAndItemKey(anyLong(), anyString()))
+                .thenReturn(Optional.empty());
+        when(idempotencyRepository.findByConnectionIdAndIdempotencyKey(anyLong(), anyString()))
+                .thenReturn(Optional.empty());
+
+        BusinessException ex = org.junit.jupiter.api.Assertions.assertThrows(
+                BusinessException.class,
+                () -> service.deleteRelationship(CONN_ID, "mdl:relationship:ghost", null, null));
+        assertEquals(40400, ex.getCode());
+        verify(catalogItemRepository, never()).delete(any(IqdCatalogItem.class));
+    }
+
+    @Test
+    void deleteRelationship_notRelationshipKind_throws42200() {
+        IqdConnection c = conn(1);
+        when(connectionRepository.findById(CONN_ID)).thenReturn(Optional.of(c));
+        IqdCatalogItem cube = new IqdCatalogItem();
+        cube.setItemKey("mdl:relationship:x");
+        cube.setKind("cube");
+        when(catalogItemRepository.findByConnectionIdAndItemKey(anyLong(), anyString()))
+                .thenReturn(Optional.of(cube));
+        when(idempotencyRepository.findByConnectionIdAndIdempotencyKey(anyLong(), anyString()))
+                .thenReturn(Optional.empty());
+
+        BusinessException ex = org.junit.jupiter.api.Assertions.assertThrows(
+                BusinessException.class,
+                () -> service.deleteRelationship(CONN_ID, "mdl:relationship:x", null, null));
+        assertEquals(42200, ex.getCode());
+    }
+
+    @Test
+    void deleteRelationship_baseRevisionMismatch_throws40900() {
+        IqdConnection c = conn(5);
+        when(connectionRepository.findById(CONN_ID)).thenReturn(Optional.of(c));
+        when(catalogItemRepository.findByConnectionIdAndItemKey(anyLong(), anyString()))
+                .thenReturn(Optional.of(relationshipNode()));
+        when(idempotencyRepository.findByConnectionIdAndIdempotencyKey(anyLong(), anyString()))
+                .thenReturn(Optional.empty());
+
+        BusinessException ex = org.junit.jupiter.api.Assertions.assertThrows(
+                BusinessException.class,
+                () -> service.deleteRelationship(CONN_ID, "mdl:relationship:sale_ord_store", 3L, null));
+        assertEquals(40900, ex.getCode());
+        verify(catalogItemRepository, never()).delete(any(IqdCatalogItem.class));
+    }
+
+    @Test
+    void deleteRelationship_referenced_throws42200_withDependents() {
+        IqdConnection c = conn(2);
+        when(connectionRepository.findById(CONN_ID)).thenReturn(Optional.of(c));
+        IqdCatalogItem item = relationshipNode();
+        when(catalogItemRepository.findByConnectionIdAndItemKey(anyLong(), anyString()))
+                .thenReturn(Optional.of(item));
+        when(idempotencyRepository.findByConnectionIdAndIdempotencyKey(anyLong(), anyString()))
+                .thenReturn(Optional.empty());
+        Map<String, Object> dep = new LinkedHashMap<>();
+        dep.put("item_key", "mdl:cube:x");
+        dep.put("kind", "cube");
+        when(adminService.validateCatalogRefs(anyLong(), anyString(), eq("DELETE")))
+                .thenReturn(List.of(dep));
+
+        BusinessException ex = org.junit.jupiter.api.Assertions.assertThrows(
+                BusinessException.class,
+                () -> service.deleteRelationship(CONN_ID, item.getItemKey(), null, null));
+        assertEquals(42200, ex.getCode());
+        verify(catalogItemRepository, never()).delete(any(IqdCatalogItem.class));
+    }
+
+    @Test
+    void deleteRelationship_idempotentHit_returnsFirstRevision_withoutDelete() {
+        IqdConnection c = conn(3);
+        when(connectionRepository.findById(CONN_ID)).thenReturn(Optional.of(c));
+        when(idempotencyRepository.findByConnectionIdAndIdempotencyKey(CONN_ID, "idem-9"))
+                .thenReturn(Optional.of(new IqdEditIdempotency(CONN_ID, "idem-9", 4L)));
+
+        Map<String, Object> result = service.deleteRelationship(
+                CONN_ID, "mdl:relationship:sale_ord_store", null, "idem-9");
+
+        assertEquals(4L, result.get("edit_revision"));
+        verify(catalogItemRepository, never()).delete(any(IqdCatalogItem.class));
+    }
+
 }

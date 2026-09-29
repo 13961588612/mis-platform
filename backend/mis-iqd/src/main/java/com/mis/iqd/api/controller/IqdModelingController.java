@@ -325,6 +325,33 @@ public class IqdModelingController {
      * @param body {@code {connection_id, model_item_key, column_name, expression, base_revision, idempotency_key}}
      * @return {@code {edit_revision, edit_status, wren_ref_id, item_key, validated, errors}}
      */
+    /**
+     * 删除关系（T03c 删除路径）。{@code DELETE /api/v1/iqd/catalog/relationship/{itemKey}}。
+     *
+     * <p>关系是叶子节点（不承载列语义、不被其它节点引用），删除风险最低，故先只开
+     * 这一条删除路径；通用节点删除属另一档工作量。物理删除 + bump
+     * {@code current_edit_revision}，与 T04a cube 子节点孤儿清理同口径。
+     *
+     * <p>item_key 形如 {@code mdl:relationship:<name>}（含冒号，无斜杠），可整段作路径变量。
+     *
+     * @param itemKey 关系稳定键
+     * @param connectionId query 参数连接 id
+     * @param baseRevision 乐观并发基线（null = 不校验）
+     * @param idempotencyKey 幂等键
+     * @return {@code {edit_revision, edit_status, deleted_item_key}}
+     */
+    @DeleteMapping("/catalog/relationship/{itemKey}")
+    @PreAuthorize("hasAuthority('iqd:modeling:edit')")
+    public Result<Map<String, Object>> deleteRelationship(
+            @PathVariable String itemKey,
+            @RequestParam Long connectionId,
+            @RequestParam(required = false) Long baseRevision,
+            @RequestParam(required = false) String idempotencyKey) {
+        return Result.ok(catalogNodeService.deleteRelationship(
+                connectionId, itemKey, baseRevision, idempotencyKey));
+    }
+
+    /** 新建计算列。{@code POST /catalog/calculated-column}。 */
     @PostMapping("/catalog/calculated-column")
     @PreAuthorize("hasAuthority('iqd:modeling:edit')")
     public Result<Map<String, Object>> createCalculatedColumn(@RequestBody Map<String, Object> body) {

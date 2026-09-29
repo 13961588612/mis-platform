@@ -274,6 +274,13 @@ export interface CreateRelationshipRequest {
   idempotency_key: string;
 }
 
+/** `DELETE /api/v1/iqd/catalog/relationship/{itemKey}` 返回（T03c 删除路径）。 */
+export interface DeleteRelationshipResponse {
+  edit_revision: number;
+  edit_status: IqdCatalogEditStatus;
+  deleted_item_key: string;
+}
+
 /** Cube 度量（§5 `Measure`）。 */
 export interface Measure {
   name: string;

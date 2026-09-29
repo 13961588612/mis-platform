@@ -1112,6 +1112,97 @@ public class IqdCatalogNodeService {
     }
 
 
+    // ------------------------------------------------------------------ 删除关系（T03c 删除路径）
+
+    /**
+     * 删除关系（{@code DELETE /api/v1/iqd/catalog/relationship/{itemKey}}；T03c）。
+     *
+     * <p><b>为什么单独建删除端点而不给 {@code PUT /catalog/node} 加 delete 语义</b>：
+     * 关系是**叶子节点**（不承载列语义、不被其它节点以 {@code expression} 引用），
+     * 删除风险最低；而通用节点删除会牵动模型/字段/父子清理，属另一档工作量。
+     * 先只做关系删除，符合「最小可用 + fail-closed」。
+     *
+     * <p><b>校验链</b>：① {@code itemKey} 形态（42200）→ ② 连接存在 + 写回闸门（40300）
+     * → ③ 关系节点存在且 {@code kind=relationship}（40400）→ ④ {@code base_revision}
+     * 乐观并发（40900）→ ⑤ 物理删除 → ⑥ bump {@code current_edit_revision}
+     * → ⑦ 幂等记录 + 变更事件。
+     *
+     * <p><b>为何物理删除</b>：与 T04a cube 子节点孤儿清理同口径 —— 关系没有历史语义，
+     * 软删除会让「删了还在」的悬挂引用长期存在；行消失即天然排除在 MDL 派生之外。
+     *
+     * @param connectionId   问数连接 id
+     * @param itemKey        关系稳定键（{@code mdl:relationship:<name>}）
+     * @param baseRevision   乐观并发基线（null = 不校验）
+     * @param idempotencyKey 幂等键（§8.4）
+     * @return {@code {edit_revision, edit_status, deleted_item_key}}
+     */
+    @PreAuthorize("hasAuthority('iqd:modeling:edit')")
+    @Transactional
+    public Map<String, Object> deleteRelationship(
+            Long connectionId,
+            String itemKey,
+            Long baseRevision,
+            String idempotencyKey) {
+
+        if (itemKey == null || itemKey.isBlank() || !itemKey.startsWith(RELATIONSHIP_ITEM_PREFIX)) {
+            throw new BusinessException(42200, "item_key 必须形如 mdl:relationship:<name>", null);
+        }
+        String effectiveKey = itemKey.trim();
+
+        IqdConnection conn = requireWritableConnection(connectionId);
+
+        // 幂等命中：返回首次结果，不二次删除、不二次 bump
+        Optional<IqdEditIdempotency> prev = findIdempotent(connectionId, idempotencyKey);
+        if (prev.isPresent()) {
+            return deleted(prev.get().getEditRevision(), effectiveKey);
+        }
+
+        IqdCatalogItem item = catalogItemRepository
+                .findByConnectionIdAndItemKey(connectionId, effectiveKey)
+                .orElseThrow(() -> new BusinessException(ResultCode.NOT_FOUND.getCode(),
+                        "关系不存在: " + effectiveKey,
+                        Map.of("item_key", effectiveKey)));
+        if (!"relationship".equals(item.getKind())) {
+            Map<String, Object> data = new LinkedHashMap<>();
+            data.put("item_key", effectiveKey);
+            data.put("actual_kind", item.getKind());
+            throw new BusinessException(42200, "该节点不是关系，无法用本端点删除", data);
+        }
+
+        long current = currentRevision(conn);
+        checkBaseRevision(conn, baseRevision, current);
+
+        // 引用阻断：关系被其它节点直接引用时不允许删除（当前无此类引用，属兜底；与改名同口径）
+        List<Map<String, Object>> dependents =
+                adminService.validateCatalogRefs(connectionId, effectiveKey, "DELETE");
+        if (!dependents.isEmpty()) {
+            Map<String, Object> data = new LinkedHashMap<>();
+            data.put("dependents", dependents);
+            throw new BusinessException(42200, "该关系被引用，禁止删除", data);
+        }
+
+        long next = current + 1;
+        Instant now = Instant.now();
+        catalogItemRepository.delete(item);
+
+        bumpRevision(conn, next, now);
+        recordIdempotency(connectionId, idempotencyKey, next, current);
+        changeEventPublisher.publish("iqd.catalog.changed", "relationship_deleted=" + effectiveKey);
+
+        log.info("IQD deleteRelationship connectionId={} itemKey={} revision={}",
+                connectionId, effectiveKey, next);
+        return deleted(next, effectiveKey);
+    }
+
+    /** 删除关系结果（{@code {edit_revision, edit_status, deleted_item_key}}）。 */
+    private static Map<String, Object> deleted(long revision, String itemKey) {
+        Map<String, Object> r = new LinkedHashMap<>();
+        r.put("edit_revision", revision);
+        r.put("edit_status", EDITED_UNSYNCED);
+        r.put("deleted_item_key", itemKey);
+        return r;
+    }
+
     // ------------------------------------------------------------------ 依赖方（复用二/四期）
 
     /**

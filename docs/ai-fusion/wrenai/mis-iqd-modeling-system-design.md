@@ -284,6 +284,7 @@ frontend/mis-admin-web/src/features/agent/iqd/
 | `POST /api/v1/iqd/catalog/model` | POST | `iqd:modeling:edit` | `{connectionId, item_key, kind:'model', patch:{display_name,description,primary_keys[], is_time_dimension{}, is_email{}, ref_sql?}, base_revision, idempotency_key}` | `{edit_revision, edit_status, wren_ref_id?}` | 40900（base_revision）/ 42200（引用）/ 40901（key 重复） | `{connId}+{uuid}` | `base_revision` |
 | `POST /api/v1/iqd/catalog/model/from-table` | POST | `iqd:modeling:edit` | `{connectionId, source_table:{schema,name}, model_item_key, base_revision, idempotency_key, ref_sql?}` | `{edit_revision, edit_status, item_key, column_mapping}` | 40900/42200/40901 | `{connId}+{sha1(source_table)}` | `base_revision` |
 | `POST /api/v1/iqd/catalog/relationship` | POST | `iqd:modeling:edit` | `{connectionId, item_key, kind:'relationship', patch:{join_type, cardinality, condition, source_model, target_model}, base_revision, idempotency_key}` | `{edit_revision, edit_status}` | 40900/42200（源/目标字段不存在/被引用阻断）/40901 | `{connId}+{uuid}` | `base_revision` |
+| `DELETE /api/v1/iqd/catalog/relationship/{itemKey}` | DELETE | `iqd:modeling:edit` | query `connectionId, baseRevision?, idempotencyKey?` | `{edit_revision, edit_status, deleted_item_key}` | 40400（关系不存在）/ 42200（形态非法/非关系节点/被引用阻断）/ 40900（base_revision）| `{connId}+{uuid}` | `base_revision` |
 | `POST /api/v1/iqd/catalog/cube` | POST | `iqd:modeling:edit` | `{connectionId, item_key, kind:'cube', patch:{display_name, model_ref, measures:[{name, expression, format}], dimensions:[{name, ref_model_field}]}, base_revision, idempotency_key}` | `{edit_revision, edit_status}` | 40900/42200（引用/被引用阻断）/40901 | `{connId}+{uuid}` | `base_revision` |
 | `PUT /api/v1/iqd/catalog/node/{itemKey}` | PUT | `iqd:modeling:edit` | 既有契约，二/二/四期已落地 | 既有 | 40900/42200/40901 | 既有 | 既有 |
 | `POST /api/v1/iqd/catalog/calculated-column` | POST | `iqd:modeling:edit` | `{connectionId, model_item_key, column_name, expression, base_revision, idempotency_key}` | `{edit_revision, edit_status, item_key, validated: bool, errors?: [string]}` | 42201（expression 引用不存在字段）/ 40900/40901 | `{connId}+{uuid}` | `base_revision` |
@@ -295,7 +296,32 @@ frontend/mis-admin-web/src/features/agent/iqd/
 | `GET /api/v1/iqd/catalog/sync-status?connectionId=…` | GET | `iqd:modeling:view` | query | 既有 `IqdCatalogSyncStatus`（含 `action` 见 selfheal 二/四期） | n/a | n/a | n/a |
 | `POST /api/v1/iqd/self-heal/{action}?connectionId=…` | POST | `iqd:modeling:publish` | query | `IqdSelfHealResult` | n/a | n/a | n/a |
 
+### 增量（T03c，2026-09-29）：关系删除路径落地
+
+> **背景**：此前模型边**只能建、不能删** —— 画布 `onEdgesChange` 主动过滤 `remove`（避免“画布删了、刷新又回来”的假删除），
+> 后端也无删除端点。现补齐。
+
+**为何只开关系删除（不开通用节点删除）**：关系是**叶子节点** —— 不承载列语义、
+不被其它节点以 `expression` 引用，删除风险最低；通用节点删除（模型/字段/父子清理）属另一档工作量。
+
+**语义**与既有写路径逐条对齐：
+
+| 维度 | 行为 |
+|---|---|
+| 删除方式 | **物理删除**（与 T04a cube 子节点孤儿清理同口径）—— 关系无历史语义，行消失即天然排除在 MDL 派生之外 |
+| 版本 | bump `current_edit_revision`（与 create/update 同口径）→ 发 `iqd.catalog.changed` |
+| 幂等 | `idempotency_key` 命中→返回首次结果，**不二次删除/不二次 bump** |
+| 并发 | `base_revision` 不符 → **40900** + `data.current_edit_revision` |
+| 引用阻断 | 被引用时 **42200** + `data.dependents`（复用 `validateCatalogRefs(..., "DELETE")`，与改名阻断同源）|
+| 写回闸门 | `mdl_writeback_enabled=false` → **40300** |
+| 权限 | `iqd:modeling:edit`（mis-iqd `@PreAuthorize` + BFF `sys_api` V105 登记 92934 → 菜单 92632）|
+
+**端到端真机验证（connection 900001，2026-09-29）**：新建临时关系 → 删除 →
+强制重建 → **引擎侧 `context show` 的 relationships 里已无该关系（只剩 `sale_ord_store`）**；
+三条负例均返回正确业务码：形态非法 → 42200、不存在 → 40400、版本冲突 → 40900。
+
 **注**：所有 `POST` 建节点端点 = 落 `iqd_catalog_item`（`source='modeling'`）→ bump `current_edit_revision` → 触发 `triggerSyncBestEffort(scope=model)`（沿用二/四期 `IqdFacadeService.triggerSyncBestEffort` 范式）→ 不阻塞用户（`wait=false`，异步）。所有 `*_item_key` 命名遵循既有 `{kind}/{name}` 形态（`mdl:model:orders`、`mdl:cube:revenue`、`mdl:relationship:orders_customers`）。
+
 
 ---
 

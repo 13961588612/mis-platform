@@ -204,6 +204,36 @@ public class IqdModelingClient extends AbstractDownstreamClient {
         return postJson("/api/v1/iqd/catalog/calculated-column", body);
     }
 
+    /**
+     * 删除关系（T03c 删除路径）。{@code DELETE /api/v1/iqd/catalog/relationship/{itemKey}}。
+     *
+     * <p>item_key 含冒号（{@code mdl:relationship:<name>}）但不含斜杠，故直接作单段路径变量。
+     * 下游业务失败（42200 形态非法 / 非关系节点 / 被引用；40400 关系不存在；
+     * 40900 并发冲突）经 {@link AbstractDownstreamClient#block} 抛
+     * {@code BusinessException(code, data)}，BFF 控制器原样透传（不降级 50000）。
+     *
+     * @param connectionId   问数连接 id（query 参数）
+     * @param itemKey        关系稳定键
+     * @param baseRevision   乐观并发基线（可空）
+     * @param idempotencyKey 幂等键（可空）
+     * @return {@code {edit_revision, edit_status, deleted_item_key}}
+     */
+    public Map<String, Object> deleteRelationship(
+            Long connectionId, String itemKey, Long baseRevision, String idempotencyKey) {
+        return block(client().delete()
+                .uri(uriBuilder -> uriBuilder
+                        .path("/api/v1/iqd/catalog/relationship/{itemKey}")
+                        .queryParam("connectionId", connectionId)
+                        .queryParamIfPresent("baseRevision",
+                                java.util.Optional.ofNullable(baseRevision))
+                        .queryParamIfPresent("idempotencyKey",
+                                java.util.Optional.ofNullable(idempotencyKey))
+                        .build(itemKey))
+                .headers(loginContextHeaders())
+                .retrieve()
+                .bodyToMono(MAP_RESULT));
+    }
+
     /** 直接引用方清单。{@code GET /api/v1/iqd/dependencies?connectionId=&itemKey=}。 */
     public Map<String, Object> listDependencies(Long connectionId, String itemKey) {
         return block(client().get()

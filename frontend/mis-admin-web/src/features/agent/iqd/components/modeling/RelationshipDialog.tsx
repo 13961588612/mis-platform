@@ -36,7 +36,7 @@
  * 前端若「自以为知道」而拦截保存，会把正确的条件挡在门外。
  */
 import { useCallback, useMemo, useState } from 'react';
-import { AlertTriangle, Loader2 } from 'lucide-react';
+import { AlertTriangle, Loader2, Trash2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
   Dialog,
@@ -56,7 +56,12 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import type { IqdCatalogItem } from '@/lib/api/iqd';
-import { createRelationship, errorCode, errorData } from '../../api/iqd-modeling';
+import {
+  createRelationship,
+  deleteRelationship,
+  errorCode,
+  errorData,
+} from '../../api/iqd-modeling';
 import type { Cardinality, JoinType } from '../../types/modeling';
 import { useDirtyState } from '../../hooks/useDirtyState';
 import { useCodeMirror } from '../../hooks/useCodeMirror';
@@ -119,6 +124,13 @@ export interface RelationshipDialogProps {
   baseRevision: number | null;
   /** 保存成功回调（父组件失效 catalog 缓存刷新画布）。 */
   onSaved?: () => void;
+  /**
+   * 删除成功回调（与 {@link onSaved} 同口径：父组件失效 catalog 缓存）。
+   * T03c 删除路径（2026-09-29）新增。
+   */
+  onDeleted?: () => void;
+  /** 是否可写（`iqd:modeling:edit`）；false 时删除按钮不出现。 */
+  canEdit?: boolean;
 }
 
 /** 关系弹窗（壳：连接变化即重挂载表单，避免用 effect 手工重置）。 */
@@ -148,6 +160,8 @@ function RelationshipForm({
   baseRevision,
   onOpenChange,
   onSaved,
+  onDeleted,
+  canEdit = false,
 }: RelationshipDialogProps) {
   const clearDirty = useModelingStore((state) => state.clearDirty);
   const readOnly = mode === 'view';
@@ -197,6 +211,57 @@ function RelationshipForm({
     () => analyzeCondition(dirty.draft.condition, source, target),
     [dirty.draft.condition, source, target],
   );
+
+  /** 删除二次确认 + 进行中 / 失败状态（T03c 删除路径）。 */
+  const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  /** 被删除前检出的直接引用方（非空则禁止删除；与后端 42200 同口径）。 */
+  const [deleteBlockers, setDeleteBlockers] = useState<Array<{ item_key: string; kind: string }>>(
+    [],
+  );
+
+  /**
+   * 删除关系（物理删除 + bump）。
+   *
+   * <p>仅 view 模式（点已有边）且有 `iqd:modeling:edit` 时可用。
+   * 成功后走 {@link RelationshipDialogProps.onDeleted} 失效 catalog 缓存（画布重派生后边自然消失）。
+   */
+  const doDelete = useCallback(async () => {
+    if (connectionId == null || !existing) {
+      return;
+    }
+    setDeleting(true);
+    setDeleteError(null);
+    try {
+      await deleteRelationship(
+        connectionId,
+        existing.item_key,
+        baseRevision ?? undefined,
+        `rel-del-${existing.item_key}-${Date.now()}`,
+      );
+      clearDirty(itemKey);
+      setConfirmDeleteOpen(false);
+      onDeleted?.();
+    } catch (err) {
+      const code = errorCode(err);
+      const data = errorData(err);
+      // 42200 且带 dependents → 被引用阻断，列出引用方（与改名阻断同样式）
+      const deps = (data?.dependents ?? null) as Array<{ item_key: string; kind: string }> | null;
+      if (code === 42200 && Array.isArray(deps) && deps.length > 0) {
+        setDeleteBlockers(deps);
+        setDeleteError('该关系被引用，禁止删除。');
+      } else {
+        setDeleteBlockers([]);
+        setDeleteError(
+          err instanceof Error ? err.message : '删除关系失败',
+        );
+      }
+      setConfirmDeleteOpen(false);
+    } finally {
+      setDeleting(false);
+    }
+  }, [baseRevision, clearDirty, connectionId, existing, itemKey, onDeleted]);
 
   const canSubmit =
     !readOnly &&
@@ -278,7 +343,7 @@ function RelationshipForm({
         <DialogDescription className="text-[12px]">
           关系落 `iqd_catalog_item`（`kind=relationship`），发布后由整连接 build 派生进 MDL。
           {readOnly
-            ? '修改既有关系需走 catalog 节点编辑（T03c 提供入口），此处为只读回显。'
+            ? 'join 类型 / 基数 / 条件为只读回显（修改走 catalog 节点编辑）；本弹窗可删除该关系。'
             : '保存后画布会出现关系边；同一连接可多次建不同关系。'}
         </DialogDescription>
       </DialogHeader>
@@ -388,9 +453,46 @@ function RelationshipForm({
             {error}
           </div>
         )}
+
+        {/* 删除失败 / 被引用阻断（T03c）：与改名阻断同样式列出引用方 */}
+        {deleteError && (
+          <div className="rounded border border-destructive/40 bg-destructive/5 px-2 py-1.5 text-[12px] text-destructive">
+            <p>{deleteError}</p>
+            {deleteBlockers.length > 0 && (
+              <ul className="mt-1 space-y-0.5">
+                {deleteBlockers.map((d) => (
+                  <li key={d.item_key}>
+                    <code className="rounded bg-background px-1">{d.item_key}</code>
+                    <span className="ml-1 text-muted-foreground">（{d.kind}）</span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        )}
       </div>
 
       <DialogFooter>
+        {readOnly && existing && canEdit ? (
+          <Button
+            size="sm"
+            variant="destructive"
+            className="mr-auto"
+            onClick={() => {
+              setDeleteError(null);
+              setDeleteBlockers([]);
+              setConfirmDeleteOpen(true);
+            }}
+            disabled={deleting}
+          >
+            {deleting ? (
+              <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <Trash2 className="mr-1 h-3.5 w-3.5" />
+            )}
+            删除关系
+          </Button>
+        ) : null}
         <Button size="sm" variant="outline" onClick={() => handleClose(false)} disabled={saving}>
           {readOnly ? '关闭' : '取消'}
         </Button>
@@ -401,6 +503,33 @@ function RelationshipForm({
           </Button>
         )}
       </DialogFooter>
+
+      {/* 二次确认（与 SelfHealPanel 强制重建同范式：destructive 按钮） */}
+      <Dialog open={confirmDeleteOpen} onOpenChange={setConfirmDeleteOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>确认删除该关系？</DialogTitle>
+            <DialogDescription>
+              将从 catalog 物理删除{' '}
+              <code className="rounded bg-muted px-1">{existing?.item_key}</code>，
+              并重新派生并发布 MDL。此操作不可撤销；
+              两表之间的 join 关系将从问数上下文中消失。
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setConfirmDeleteOpen(false)}
+              disabled={deleting}
+            >
+              取消
+            </Button>
+            <Button variant="destructive" onClick={() => void doDelete()} disabled={deleting}>
+              {deleting ? '删除中…' : '确认删除'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </>
   );
 }
