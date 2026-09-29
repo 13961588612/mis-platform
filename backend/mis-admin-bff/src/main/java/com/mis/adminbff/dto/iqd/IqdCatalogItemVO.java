@@ -19,6 +19,15 @@ public class IqdCatalogItemVO {
     private Boolean isEmail;
     private String description;
     private String expression;
+    /**
+     * Cube 所属模型 item_key（仅 {@code kind=cube}；V89 列 {@code model_ref}）。
+     *
+     * <p>T03a 起由 mis-iqd 的 {@code POST /catalog/cube} 写入，并随 {@code GET /catalog}
+     * 的 VO 回传。未透传会导致：画布上「cube 挂哪个模型」只能靠名字启发式猜测，
+     * Cube 编辑弹窗的「挂靠模型」下拉也无法回显（显示未选择）。
+     */
+    @JsonProperty("model_ref")
+    private String modelRef;
     private String source;
     private Boolean inScope;
     private String sensitiveLevel;
@@ -127,6 +136,14 @@ public class IqdCatalogItemVO {
 
     public void setExpression(String expression) {
         this.expression = expression;
+    }
+
+    public String getModelRef() {
+        return modelRef;
+    }
+
+    public void setModelRef(String modelRef) {
+        this.modelRef = modelRef;
     }
 
     public String getSource() {

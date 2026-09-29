@@ -281,6 +281,14 @@ export interface DeleteRelationshipResponse {
   deleted_item_key: string;
 }
 
+/** `DELETE /api/v1/iqd/catalog/cube/{itemKey}` 返回（T03c 删除路径）。 */
+export interface DeleteCubeResponse {
+  edit_revision: number;
+  edit_status: IqdCatalogEditStatus;
+  deleted_item_key: string;
+  deleted_children: number;
+}
+
 /** Cube 度量（§5 `Measure`）。 */
 export interface Measure {
   name: string;

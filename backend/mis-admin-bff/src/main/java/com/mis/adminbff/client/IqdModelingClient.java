@@ -234,6 +234,30 @@ public class IqdModelingClient extends AbstractDownstreamClient {
                 .bodyToMono(MAP_RESULT));
     }
 
+    /**
+     * 删除 Cube（T03c 删除路径）。{@code DELETE /api/v1/iqd/catalog/cube/{itemKey}}。
+     *
+     * <p>Cube 有子节点（measures/dimensions），删除时一并物理清理；
+     * 被 sql_pair/knowledge 直接引用时 42200 + data.dependents（原样透传）。
+     *
+     * @return {@code {edit_revision, edit_status, deleted_item_key, deleted_children}}
+     */
+    public Map<String, Object> deleteCube(
+            Long connectionId, String itemKey, Long baseRevision, String idempotencyKey) {
+        return block(client().delete()
+                .uri(uriBuilder -> uriBuilder
+                        .path("/api/v1/iqd/catalog/cube/{itemKey}")
+                        .queryParam("connectionId", connectionId)
+                        .queryParamIfPresent("baseRevision",
+                                java.util.Optional.ofNullable(baseRevision))
+                        .queryParamIfPresent("idempotencyKey",
+                                java.util.Optional.ofNullable(idempotencyKey))
+                        .build(itemKey))
+                .headers(loginContextHeaders())
+                .retrieve()
+                .bodyToMono(MAP_RESULT));
+    }
+
     /** 直接引用方清单。{@code GET /api/v1/iqd/dependencies?connectionId=&itemKey=}。 */
     public Map<String, Object> listDependencies(Long connectionId, String itemKey) {
         return block(client().get()

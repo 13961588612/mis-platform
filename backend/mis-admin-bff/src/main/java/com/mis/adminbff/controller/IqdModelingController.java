@@ -204,6 +204,22 @@ public class IqdModelingController {
      * <p>关系是叶子节点，删除风险最低；物理删除 + bump edit_revision，
      * 与 T04a cube 子节点孤儿清理同口径。
      */
+    /**
+     * 删除 Cube（T03c 删除路径）。{@code DELETE /catalog/cube/{itemKey}}。
+     *
+     * <p>Cube 有子节点（measures/dimensions），删除时一并物理清理；
+     * 被 sql_pair / knowledge 直接引用时 42200 + data.dependents。
+     */
+    @DeleteMapping("/catalog/cube/{itemKey}")
+    public ResponseEntity<Result<Map<String, Object>>> deleteCube(
+            @PathVariable String itemKey,
+            @RequestParam Long connectionId,
+            @RequestParam(required = false) Long baseRevision,
+            @RequestParam(required = false) String idempotencyKey) {
+        return forward(() -> modelingClient.deleteCube(
+                connectionId, itemKey, baseRevision, idempotencyKey));
+    }
+
     @DeleteMapping("/catalog/relationship/{itemKey}")
     public ResponseEntity<Result<Map<String, Object>>> deleteRelationship(
             @PathVariable String itemKey,

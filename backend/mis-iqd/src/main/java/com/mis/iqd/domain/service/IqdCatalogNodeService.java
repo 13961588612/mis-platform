@@ -1194,6 +1194,90 @@ public class IqdCatalogNodeService {
         return deleted(next, effectiveKey);
     }
 
+    /**
+     * 删除 Cube（{@code DELETE /api/v1/iqd/catalog/cube/{itemKey}}；T03c 删除路径）。
+     *
+     * <p><b>与关系删除的差异</b>：Cube 有子节点（measures / dimensions），
+     * 删除时必须**一并物理清理**，否则孤儿节点会随 build 进入 MDL 或被当作历史殘留。
+     *
+     * <p><b>引用阻断</b>：被 sql_pair / knowledge 直接引用时 **42200** + `data.dependents`
+     * （与改名阻断同源：`validateCatalogRefs(..., "DELETE")` 反向扫 `expression`/`model_ref`）。
+     *
+     * @param connectionId   问数连接 id
+     * @param itemKey        Cube 稳定键 {@code mdl:cube:<name>}
+     * @param baseRevision   乐观并发基线（null = 不校验）
+     * @param idempotencyKey 幂等键（命中则返回首次结果，不二次删）
+     * @return {@code {edit_revision, edit_status, deleted_item_key, deleted_children}}
+     */
+    @PreAuthorize("hasAuthority('iqd:modeling:edit')")
+    @Transactional
+    public Map<String, Object> deleteCube(
+            Long connectionId,
+            String itemKey,
+            Long baseRevision,
+            String idempotencyKey) {
+
+        if (itemKey == null || itemKey.isBlank() || !itemKey.startsWith(CUBE_ITEM_PREFIX)) {
+            throw new BusinessException(42200, "item_key 必须形如 mdl:cube:<name>", null);
+        }
+        String effectiveKey = itemKey.trim();
+
+        IqdConnection conn = requireWritableConnection(connectionId);
+
+        Optional<IqdEditIdempotency> prev = findIdempotent(connectionId, idempotencyKey);
+        if (prev.isPresent()) {
+            return deleted(prev.get().getEditRevision(), effectiveKey);
+        }
+
+        IqdCatalogItem cube = catalogItemRepository
+                .findByConnectionIdAndItemKey(connectionId, effectiveKey)
+                .orElseThrow(() -> new BusinessException(ResultCode.NOT_FOUND.getCode(),
+                        "Cube 不存在: " + effectiveKey,
+                        Map.of("item_key", effectiveKey)));
+        if (!"cube".equals(cube.getKind())) {
+            Map<String, Object> data = new LinkedHashMap<>();
+            data.put("item_key", effectiveKey);
+            data.put("actual_kind", cube.getKind());
+            throw new BusinessException(42200, "该节点不是 Cube，无法用本端点删除", data);
+        }
+
+        long current = currentRevision(conn);
+        checkBaseRevision(conn, baseRevision, current);
+
+        // 引用阻断：被 sql_pair / knowledge 直接引用时不允许删除
+        List<Map<String, Object>> dependents =
+                adminService.validateCatalogRefs(connectionId, effectiveKey, "DELETE");
+        if (!dependents.isEmpty()) {
+            Map<String, Object> data = new LinkedHashMap<>();
+            data.put("dependents", dependents);
+            throw new BusinessException(42200, "该 Cube 被引用，禁止删除", data);
+        }
+
+        long next = current + 1;
+        Instant now = Instant.now();
+
+        // ① 物理删除子节点（measures + dimensions，parent_key = 本 cube 键）
+        List<IqdCatalogItem> children =
+                catalogItemRepository.findByConnectionIdAndParentKey(connectionId, effectiveKey);
+        for (IqdCatalogItem child : children) {
+            catalogItemRepository.delete(child);
+        }
+
+        // ② 物理删除 cube 本体
+        catalogItemRepository.delete(cube);
+
+        bumpRevision(conn, next, now);
+        recordIdempotency(connectionId, idempotencyKey, next, current);
+        changeEventPublisher.publish("iqd.catalog.changed",
+                "cube_deleted=" + effectiveKey + ";children=" + children.size());
+
+        log.info("IQD deleteCube connectionId={} itemKey={} children={} revision={}",
+                connectionId, effectiveKey, children.size(), next);
+        Map<String, Object> result = deleted(next, effectiveKey);
+        result.put("deleted_children", children.size());
+        return result;
+    }
+
     /** 删除关系结果（{@code {edit_revision, edit_status, deleted_item_key}}）。 */
     private static Map<String, Object> deleted(long revision, String itemKey) {
         Map<String, Object> r = new LinkedHashMap<>();

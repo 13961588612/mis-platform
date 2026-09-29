@@ -43,6 +43,7 @@ import type {
   CreateModelFromTableRequest,
   CreateModelRequest,
   CreateRelationshipRequest,
+  DeleteCubeResponse,
   DeleteRelationshipResponse,
   IqdDependents,
   IqdModelFromTableResponse,
@@ -210,6 +211,34 @@ export async function createRelationship(
     body,
   );
   return unwrap(res, '新建关系失败');
+}
+
+/**
+ * 删除 Cube（T03c 删除路径）。`DELETE /api/v1/iqd/catalog/cube/{itemKey}`。
+ *
+ * <p><b>与关系删除的差异</b>：Cube 有子节点（measures/dimensions），
+ * 删除时一并物理清理（孤儿清理）；被 sql_pair/knowledge 直接引用时
+ * 42200 + `data.dependents`（与改名阻断同样式，前端必须列出引用方）。
+ *
+ * @param baseRevision   乐观并发基线（可省略 = 服务端不校验）
+ */
+export async function deleteCube(
+  connectionId: number,
+  itemKey: string,
+  baseRevision?: number,
+  idempotencyKey?: string,
+): Promise<DeleteCubeResponse> {
+  const res = await api.delete<ApiResult<DeleteCubeResponse>>(
+    `/iqd/catalog/cube/${encodeURIComponent(itemKey)}`,
+    {
+      params: {
+        connectionId,
+        ...(baseRevision != null ? { baseRevision } : {}),
+        ...(idempotencyKey ? { idempotencyKey } : {}),
+      },
+    },
+  );
+  return unwrap(res, '删除 Cube 失败');
 }
 
 /**

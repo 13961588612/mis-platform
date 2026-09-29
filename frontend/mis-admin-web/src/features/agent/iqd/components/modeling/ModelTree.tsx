@@ -185,7 +185,13 @@ export function ModelTree({ connectionId, onOpenImport, onOpenCube }: ModelTreeP
                   active={selectedItemKey === item.item_key}
                   onSelect={() => setSelected(item.item_key)}
                   // 双击 Cube → 打开详情（T03c：只读，见 CubeEditor 模块头）
-                  onOpen={group.kind === 'cube' && onOpenCube ? () => onOpenCube(item, null) : undefined}
+                  // 双击既有 Cube → 把 model_ref 作为回显候选传给弹窗
+                  // （新建时才用 defaultModelKey 作预选中；查看时弹窗优先用 cube.model_ref）
+                  onOpen={
+                    group.kind === 'cube' && onOpenCube
+                      ? () => onOpenCube(item, item.model_ref ?? null)
+                      : undefined
+                  }
                 />
               ))}
             </div>

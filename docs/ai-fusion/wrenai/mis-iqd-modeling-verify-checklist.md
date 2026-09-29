@@ -505,6 +505,41 @@
 
 ---
 
+## 3.13 Cube 编辑弹窗「挂靠模型」与 Cube 删除（T03c，2026-09-29）— 通过
+
+### 3.13.1 双击 Cube 弹窗「未选择挂靠模型」的三个根因（均已修）
+
+1. **BFF 丢字段（问题 2 的真因）**：mis-iqd 的 `IqdCatalogItemVO` 已回传 `model_ref`
+   （`@JsonProperty("model_ref")`），但 **BFF 自己的 `IqdCatalogItemVO` 没有该字段**
+   —— Jackson 反序列化静默丢弃，前端拿到 `model_ref=null`，`inferModelRef` 返回空。
+   实测三跳对比：8109 有 `model_ref`、8081/5174 为 null。已修：BFF VO 补字段 + getter/setter，
+   重启后三跳均为 `mdl:model:ads_spm_trd_sale_category_day_df`。
+2. **新建不自动预选（问题 1）**：原初值只取「左树选中的模型」（`defaultModelKey`），
+   树里没选中就空着。已修：**新建时若该连接只有一个模型，自动选中它**；
+   多模型仍需用户显式选择（避免猜错挂靠）。
+3. **保存后仍显示未选择（问题 2 的表象）**：即第 1 条 —— BFF 丢字段导致回显永远空。
+   BFF 修复后打开既有 Cube 自动回显 `model_ref`。
+
+### 3.13.2 Cube 删除路径（问题 3）
+
+`DELETE /api/v1/iqd/catalog/cube/{itemKey}`（物理删除 + bump + 幂等 + 变更事件）：
+
+| 验证项 | 实测（connection 900001） |
+|---|---|
+| 子节点清理 | 探针 Cube（1 measure）删除后 `deleted_children=1`，cube 与子节点均消失 |
+| 不误伤 | `sale_by_store` 及其 4 个子节点完好 |
+| 引用阻断 | 被 sql_pair/knowledge 引用时 42200 + `data.dependents`（单测覆盖） |
+| 形态/存在性校验 | 非 `mdl:cube:*` → 42200；不存在 → 40400（单测覆盖） |
+| 版本收敛 | 删除 + rebuild 后 `SYNCED 20/20` |
+
+迁移 **V106**（sys_api 92936 / sys_menu_api 92937 → 菜单 92632 `iqd:modeling:edit`）。
+前端：CubeEditor 弹窗新增「删除 Cube」（destructive + 二次确认 + dependents 清单）。
+
+> ⚠️ 运维注：重启 mis-iqd / mis-admin-bff 时，若服务由**另一 Windows 身份**启动，
+> `stop-dev.ps1` 会 Access denied（脚本已给出提示）；需到启动它的终端停。
+
+---
+
 ## 4. 性能压测（P-1 ~ P-6）
 
 ### 4.1 画布拖拽帧率（P-1：200 节点 ≥55fps）

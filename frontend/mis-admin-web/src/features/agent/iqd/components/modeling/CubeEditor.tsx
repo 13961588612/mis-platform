@@ -44,7 +44,7 @@
  */
 import { useCallback, useMemo, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { AlertTriangle, Info, Loader2 } from 'lucide-react';
+import { AlertTriangle, Info, Loader2, Trash2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
   Dialog,
@@ -64,7 +64,14 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import type { IqdCatalogItem } from '@/lib/api/iqd';
-import { createCube, errorCode, errorData, listDependencies, upsertCube } from '../../api/iqd-modeling';
+import {
+  createCube,
+  deleteCube,
+  errorCode,
+  errorData,
+  listDependencies,
+  upsertCube,
+} from '../../api/iqd-modeling';
 import { useDirtyState } from '../../hooks/useDirtyState';
 import { useCatalogNodes } from '../../hooks/useCatalogNodes';
 import { useSyncStatus } from '../shared/useSyncStatus';
@@ -180,9 +187,14 @@ function CubeForm({
         dimensions: toDimensionRows(dimensions),
       };
     }
+    // 自动预选：新建时优先用左树选中的模型（defaultModelKey）；
+    // 未选中但该连接只有一个模型时直接选中它（避免每次手动选）；否则留空由用户选。
+    const fallback =
+      (defaultModelKey ?? '').trim() ||
+      (modelOptions.length === 1 ? modelOptions[0].itemKey : '');
     return {
       displayName: '',
-      modelRef: (defaultModelKey ?? '').trim(),
+      modelRef: fallback,
       measures: [emptyMeasureRow()],
       dimensions: [],
     };
@@ -234,6 +246,50 @@ function CubeForm({
 
   const dependents = dependenciesQuery.data?.dependents ?? [];
   const cubeName = cubeNameOf(cube?.item_key) || draft.draft.displayName;
+
+  /** 删除二次确认 + 状态（T03c 删除路径：物理删 + 孤儿清理）。 */
+  const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [deleteBlockers, setDeleteBlockers] = useState<Array<{ item_key: string; kind: string }>>(
+    [],
+  );
+
+  /** 删除 Cube（仅既有 Cube 且 canEdit）；成功后失效 catalog 缓存 + onSaved 关闭。 */
+  const doDelete = useCallback(async () => {
+    if (!cube || connectionId == null) {
+      return;
+    }
+    setDeleting(true);
+    setDeleteError(null);
+    try {
+      await deleteCube(
+        connectionId,
+        cube.item_key,
+        baseRevision ?? undefined,
+        `cube-del-${cube.item_key}-${Date.now()}`,
+      );
+      clearDirty(draftItemKey);
+      setConfirmDeleteOpen(false);
+      await queryClient.invalidateQueries({ queryKey: iqdKeys.catalogs(connectionId) });
+      onSaved?.();
+      onOpenChange(false);
+    } catch (err) {
+      const code = errorCode(err);
+      const data = errorData(err);
+      const deps = (data?.dependents ?? null) as Array<{ item_key: string; kind: string }> | null;
+      if (code === 42200 && Array.isArray(deps) && deps.length > 0) {
+        setDeleteBlockers(deps);
+        setDeleteError('该 Cube 被引用，禁止删除。');
+      } else {
+        setDeleteBlockers([]);
+        setDeleteError(err instanceof Error ? err.message : '删除 Cube 失败');
+      }
+      setConfirmDeleteOpen(false);
+    } finally {
+      setDeleting(false);
+    }
+  }, [baseRevision, clearDirty, connectionId, cube, draftItemKey, onSaved, onOpenChange, queryClient]);
 
   const canSubmit =
     canEdit &&
@@ -485,6 +541,23 @@ function CubeForm({
           )}
         </div>
 
+        {/* 删除失败 / 被引用阻断（T03c） */}
+        {deleteError && (
+          <div className="rounded border border-destructive/40 bg-destructive/5 px-2 py-1.5 text-[12px] text-destructive">
+            <p>{deleteError}</p>
+            {deleteBlockers.length > 0 && (
+              <ul className="mt-1 space-y-0.5">
+                {deleteBlockers.map((d) => (
+                  <li key={d.item_key}>
+                    <code className="rounded bg-background px-1">{d.item_key}</code>
+                    <span className="ml-1 text-muted-foreground">（{d.kind}）</span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        )}
+
         {/* ---------------- 预检 / 错误 ---------------- */}
         {validationErrors.length > 0 && (
           <div className="rounded border border-destructive/40 bg-destructive/5 px-2 py-1.5 text-[12px] text-destructive">
@@ -504,6 +577,26 @@ function CubeForm({
       </div>
 
       <DialogFooter className="border-t border-border/60 px-4 py-3">
+        {isExisting && canEdit ? (
+          <Button
+            size="sm"
+            variant="destructive"
+            className="mr-auto"
+            onClick={() => {
+              setDeleteError(null);
+              setDeleteBlockers([]);
+              setConfirmDeleteOpen(true);
+            }}
+            disabled={saving || deleting}
+          >
+            {deleting ? (
+              <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <Trash2 className="mr-1 h-3.5 w-3.5" />
+            )}
+            删除 Cube
+          </Button>
+        ) : null}
         <Button size="sm" variant="outline" onClick={() => handleClose(false)} disabled={saving}>
           取消
         </Button>
@@ -514,6 +607,33 @@ function CubeForm({
           </Button>
         )}
       </DialogFooter>
+
+      {/* 二次确认（与关系删除同范式：destructive 按钮） */}
+      <Dialog open={confirmDeleteOpen} onOpenChange={setConfirmDeleteOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>确认删除该 Cube？</DialogTitle>
+            <DialogDescription>
+              将从 catalog 物理删除{' '}
+              <code className="rounded bg-muted px-1">{cube?.item_key}</code>
+              及其全部 measures/dimensions 子节点，并重新派生并发布 MDL。
+              此操作不可撤销；问数将不再命中该聚合。
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setConfirmDeleteOpen(false)}
+              disabled={deleting}
+            >
+              取消
+            </Button>
+            <Button variant="destructive" onClick={() => void doDelete()} disabled={deleting}>
+              {deleting ? '删除中…' : '确认删除'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </>
   );
 }

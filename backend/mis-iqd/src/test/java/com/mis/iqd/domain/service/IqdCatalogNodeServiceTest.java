@@ -1132,4 +1132,93 @@ class IqdCatalogNodeServiceTest {
         verify(catalogItemRepository, never()).delete(any(IqdCatalogItem.class));
     }
 
+
+
+    // ------------------------------------------------------------ 删除 Cube（T03c）
+
+    /** 造一个既有 Cube 节点。 */
+    private IqdCatalogItem cubeNode() {
+        IqdCatalogItem item = new IqdCatalogItem();
+        item.setId(9100L);
+        item.setConnectionId(CONN_ID);
+        item.setItemKey("mdl:cube:sale_by_store");
+        item.setKind("cube");
+        item.setParentKey("mdl:model:a");
+        item.setDisplayName("sale_by_store");
+        return item;
+    }
+
+    @Test
+    void deleteCube_happyPath_deletesChildrenAndCube_bumpsRevision() {
+        IqdConnection c = conn(3);
+        when(connectionRepository.findById(CONN_ID)).thenReturn(Optional.of(c));
+        IqdCatalogItem cube = cubeNode();
+        when(catalogItemRepository.findByConnectionIdAndItemKey(CONN_ID, cube.getItemKey()))
+                .thenReturn(Optional.of(cube));
+        IqdCatalogItem measure = new IqdCatalogItem();
+        measure.setItemKey("mdl:measure:sale_by_store.kds_sum");
+        when(catalogItemRepository.findByConnectionIdAndParentKey(CONN_ID, cube.getItemKey()))
+                .thenReturn(List.of(measure));
+        when(idempotencyRepository.findByConnectionIdAndIdempotencyKey(anyLong(), anyString()))
+                .thenReturn(Optional.empty());
+        when(adminService.validateCatalogRefs(eq(CONN_ID), eq(cube.getItemKey()), eq("DELETE")))
+                .thenReturn(new ArrayList<>());
+        when(connectionRepository.save(any(IqdConnection.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        Map<String, Object> result = service.deleteCube(CONN_ID, cube.getItemKey(), 3L, "idem-1");
+
+        verify(catalogItemRepository).delete(measure);
+        verify(catalogItemRepository).delete(cube);
+        assertEquals(4L, c.getCurrentEditRevision());
+        assertEquals(cube.getItemKey(), result.get("deleted_item_key"));
+        assertEquals(1, ((Number) result.get("deleted_children")).intValue());
+        verify(changeEventPublisher).publish(eq("iqd.catalog.changed"), anyString());
+    }
+
+    @Test
+    void deleteCube_wrongPrefix_throws42200() {
+        BusinessException ex = org.junit.jupiter.api.Assertions.assertThrows(
+                BusinessException.class,
+                () -> service.deleteCube(CONN_ID, "mdl:model:orders", null, null));
+        assertEquals(42200, ex.getCode());
+    }
+
+    @Test
+    void deleteCube_notFound_throws40400() {
+        IqdConnection c = conn(1);
+        when(connectionRepository.findById(CONN_ID)).thenReturn(Optional.of(c));
+        when(catalogItemRepository.findByConnectionIdAndItemKey(anyLong(), anyString()))
+                .thenReturn(Optional.empty());
+        when(idempotencyRepository.findByConnectionIdAndIdempotencyKey(anyLong(), anyString()))
+                .thenReturn(Optional.empty());
+
+        BusinessException ex = org.junit.jupiter.api.Assertions.assertThrows(
+                BusinessException.class,
+                () -> service.deleteCube(CONN_ID, "mdl:cube:ghost", null, null));
+        assertEquals(40400, ex.getCode());
+        verify(catalogItemRepository, never()).delete(any(IqdCatalogItem.class));
+    }
+
+    @Test
+    void deleteCube_referenced_throws42200_withDependents() {
+        IqdConnection c = conn(2);
+        when(connectionRepository.findById(CONN_ID)).thenReturn(Optional.of(c));
+        IqdCatalogItem cube = cubeNode();
+        when(catalogItemRepository.findByConnectionIdAndItemKey(anyLong(), anyString()))
+                .thenReturn(Optional.of(cube));
+        when(idempotencyRepository.findByConnectionIdAndIdempotencyKey(anyLong(), anyString()))
+                .thenReturn(Optional.empty());
+        Map<String, Object> dep = new LinkedHashMap<>();
+        dep.put("item_key", "sql_pair:1");
+        dep.put("kind", "sql_pair");
+        when(adminService.validateCatalogRefs(anyLong(), anyString(), eq("DELETE")))
+                .thenReturn(List.of(dep));
+
+        BusinessException ex = org.junit.jupiter.api.Assertions.assertThrows(
+                BusinessException.class,
+                () -> service.deleteCube(CONN_ID, cube.getItemKey(), null, null));
+        assertEquals(42200, ex.getCode());
+        verify(catalogItemRepository, never()).delete(any(IqdCatalogItem.class));
+    }
+
 }

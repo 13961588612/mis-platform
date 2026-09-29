@@ -340,6 +340,23 @@ public class IqdModelingController {
      * @param idempotencyKey 幂等键
      * @return {@code {edit_revision, edit_status, deleted_item_key}}
      */
+    /**
+     * 删除 Cube（T03c 删除路径）。{@code DELETE /api/v1/iqd/catalog/cube/{itemKey}}。
+     *
+     * <p>Cube 有子节点（measures/dimensions），删除时一并物理清理（孤儿清理）；
+     * 被 sql_pair / knowledge 直接引用时 42200 + data.dependents。
+     */
+    @DeleteMapping("/catalog/cube/{itemKey}")
+    @PreAuthorize("hasAuthority('iqd:modeling:edit')")
+    public Result<Map<String, Object>> deleteCube(
+            @PathVariable String itemKey,
+            @RequestParam Long connectionId,
+            @RequestParam(required = false) Long baseRevision,
+            @RequestParam(required = false) String idempotencyKey) {
+        return Result.ok(catalogNodeService.deleteCube(
+                connectionId, itemKey, baseRevision, idempotencyKey));
+    }
+
     @DeleteMapping("/catalog/relationship/{itemKey}")
     @PreAuthorize("hasAuthority('iqd:modeling:edit')")
     public Result<Map<String, Object>> deleteRelationship(
