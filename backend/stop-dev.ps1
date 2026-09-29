@@ -36,35 +36,30 @@ if ($Service) {
     $targets = $all
 }
 
-function Test-MatchesTarget {
-    param([string]$CommandLine, [string[]]$Names)
-    if (-not $CommandLine) { return $false }
-    foreach ($name in $Names) {
-        if (
-            $CommandLine -match ("-pl\s+" + [regex]::Escape($name)) -or
-            $CommandLine -match ("\\" + [regex]::Escape($name) + "\\") -or
-            $CommandLine -match ("/" + [regex]::Escape($name) + "/")
-        ) {
-            return $true
-        }
-    }
-    return $false
-}
+# ---------------------------------------------------------------- 进程定位原语
+#
+# <背景> 本环境（受限权限）下 Get-CimInstance / Get-WmiObject / Get-NetTCPConnection
+# 均以 CimException「拒绝访问」失败 → 旧实现「未找到匹配进程」，端口不释放，
+# 于是 start-dev 复用了旧 JVM（改了代码却像没生效）。现改为两条**不依赖 WMI/CIM**
+# 的主路径（本环境已验证可用）：
+#   ① 启动时登记的包装进程 PID 文件（logs/<svc>.launch.pid）→ taskkill /T /F 整树；
+#   ② 端口监听进程（netstat -ano 解析）→ taskkill /T /F（pid 文件缺失/过期的兜底）。
 
-function Stop-ProcessTree {
-    param([int]$ProcessId)
-    try {
-        # /T 结束子进程树，避免只杀 powershell 留下 orphan java 占端口
-        & taskkill.exe /PID $ProcessId /T /F 2>$null | Out-Null
-    } catch {
-        Stop-Process -Id $ProcessId -Force -ErrorAction SilentlyContinue
+function Get-PortListenerPids {
+    param([int]$Port)
+    $found = @()
+    try { $rows = & netstat.exe -ano 2>$null } catch { return @() }
+    if (-not $rows) { return @() }
+    $pattern = '(?m)^\s*TCP\s+\S+:' + $Port + '\s+\S+\s+LISTENING\s+(\d+)\s*$'
+    foreach ($m in [regex]::Matches(($rows -join "`n"), $pattern)) {
+        $found += [int]$m.Groups[1].Value
     }
+    return @($found | Select-Object -Unique)
 }
 
 function Test-PortListening {
     param([int]$Port)
-    $c = @(Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue)
-    return ($c.Count -gt 0)
+    return ((Get-PortListenerPids -Port $Port).Count -gt 0)
 }
 
 function Wait-PortFree {
@@ -77,66 +72,74 @@ function Wait-PortFree {
     return $false
 }
 
+function Stop-ProcessTree {
+    param([int]$OwnerPid)
+    try {
+        & taskkill.exe /PID $OwnerPid /T /F 2>$null | Out-Null
+    } catch {
+        Stop-Process -Id $OwnerPid -Force -ErrorAction SilentlyContinue
+    }
+}
+
+$logDir = Join-Path $PSScriptRoot 'logs'
+
 Write-Host "正在停止后端服务 ..." -ForegroundColor Cyan
 
-$procs = Get-CimInstance Win32_Process |
-    Where-Object {
-        $_.Name -in @('java.exe', 'powershell.exe', 'pwsh.exe', 'cmd.exe') -and
-        (Test-MatchesTarget -CommandLine $_.CommandLine -Names $targets)
+# ① 优先按启动时登记的包装 PID 结束整树（顺带清掉 mvn/powershell 包装，避免残留堆积）
+foreach ($name in $targets) {
+    $pidFile = Join-Path $logDir "$name.launch.pid"
+    if (-not (Test-Path $pidFile)) { continue }
+    $raw = (Get-Content $pidFile -ErrorAction SilentlyContinue | Select-Object -First 1)
+    $launcherPid = 0
+    if ([int]::TryParse([string]$raw, [ref]$launcherPid) -and $launcherPid -gt 0) {
+        Write-Host "  停止 $name 启动器 PID $launcherPid（含子进程树）" -ForegroundColor Yellow
+        Stop-ProcessTree -OwnerPid $launcherPid
     }
+    Remove-Item $pidFile -Force -ErrorAction SilentlyContinue
+}
 
-if (-not $procs) {
-    Write-Host "未找到匹配进程: $($targets -join ', ')" -ForegroundColor Yellow
-} else {
-    # 先停监听端口的 java，再清包装进程，减少 Address already in use
-    $ordered = $procs | Sort-Object {
-        if ($_.Name -eq 'java.exe' -and $_.CommandLine -match 'TieredStopAtLevel|target\\classes') { 0 }
-        elseif ($_.Name -eq 'java.exe') { 1 }
-        else { 2 }
-    }
+Start-Sleep -Seconds 1
 
-    foreach ($p in $ordered) {
-        $preview = if ($p.CommandLine -and $p.CommandLine.Length -gt 100) {
-            $p.CommandLine.Substring(0, 100) + '...'
-        } else {
-            $p.CommandLine
-        }
-        Write-Host "  停止 PID $($p.ProcessId) [$($p.Name)] $preview" -ForegroundColor Yellow
-        Stop-ProcessTree -ProcessId $p.ProcessId
+# ② 兜底：按端口结束仍在监听的进程
+foreach ($name in $targets) {
+    $port = [int]$servicePorts[$name]
+    foreach ($ownerPid in (Get-PortListenerPids -Port $port)) {
+        Write-Host "  停止 PID $ownerPid（$name :$port 监听进程）" -ForegroundColor Yellow
+        Stop-ProcessTree -OwnerPid $ownerPid
     }
 }
 
 Start-Sleep -Seconds 1
 
-$left = Get-CimInstance Win32_Process |
-    Where-Object {
-        $_.Name -in @('java.exe', 'powershell.exe', 'pwsh.exe', 'cmd.exe') -and
-        (Test-MatchesTarget -CommandLine $_.CommandLine -Names $targets)
-    }
-if ($left) {
-    Write-Host "仍有残留，再次结束..." -ForegroundColor Yellow
-    $left | ForEach-Object { Stop-ProcessTree -ProcessId $_.ProcessId }
-    Start-Sleep -Seconds 1
-}
-
+# ③ 复查端口是否释放（不放过「以为停了其实没停」）
+$stuck = @()
 foreach ($name in $targets) {
     $port = [int]$servicePorts[$name]
     if (Test-PortListening -Port $port) {
-        # 端口仍被占：按端口杀监听进程（防止匹配漏掉）
-        $owners = @(Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue |
-            Select-Object -ExpandProperty OwningProcess -Unique)
-        foreach ($opid in $owners) {
-            Write-Host "  端口 $port 仍监听，结束 PID $opid" -ForegroundColor Yellow
-            Stop-ProcessTree -ProcessId $opid
+        foreach ($ownerPid in (Get-PortListenerPids -Port $port)) {
+            Write-Host "  端口 $port 仍监听，再次结束 PID $ownerPid" -ForegroundColor Yellow
+            Stop-ProcessTree -OwnerPid $ownerPid
         }
         if (-not (Wait-PortFree -Port $port -TimeoutSec 20)) {
             Write-Host "  ! $name 端口 $port 未能释放" -ForegroundColor Red
+            Write-Host "    如果该端口由另一个 Windows 账号或更高完整性级别的进程占用，当前身份会收到 Access denied（详情见 taskkill 输出）- 请到启动它的那个终端，或以管理员身份停止。" -ForegroundColor DarkGray
+            $stuck += $name
         }
     }
 }
 
-if ($Service) {
-    Write-Host "$Service 已停止" -ForegroundColor Green
+# 措辞区分：端口真正释放了才说「已停止」；否则明确说「未完全停止」并非零退出。
+if ($stuck.Count -eq 0) {
+    if ($Service) {
+        Write-Host "$Service 已停止" -ForegroundColor Green
+    } else {
+        Write-Host "全部目标服务已停止" -ForegroundColor Green
+    }
 } else {
-    Write-Host "全部目标服务已停止" -ForegroundColor Green
+    $stopped = @($targets | Where-Object { $_ -notin $stuck })
+    if ($stopped.Count -gt 0) {
+        Write-Host "已停止: $($stopped -join ', ')" -ForegroundColor Yellow
+    }
+    Write-Host "未完全停止（端口仍被占用）: $($stuck -join ', ')" -ForegroundColor Red
+    exit 1
 }

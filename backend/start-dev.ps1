@@ -107,10 +107,38 @@ if (-not $env:JAVA_HOME_17) {
     exit 1
 }
 
+# ---------------------------------------------------------------- 进程/端口原语
+#
+# <背景> 本环境（受限权限）下 Get-NetTCPConnection / Get-CimInstance / Get-WmiObject
+# 均以 CimException「拒绝访问」失败：Test-PortListening 恒返回 false，于是
+# 「已在监听」判断失效 → stop 找不到进程 → 端口不释放 → start 却以为可以启动，
+# 结果新进程 Address already in use 或**继续复用旧 JVM**（改了代码却像没生效）。
+# 现有两条**不依赖 WMI/CIM** 的主路径（本环境已验证可用）：
+#   ① netstat -ano 解析监听 PID；② taskkill /T /F 结束进程树。
+
+function Get-PortListenerPids {
+    param([int]$Port)
+    $found = @()
+    try { $rows = & netstat.exe -ano 2>$null } catch { return @() }
+    if (-not $rows) { return @() }
+    $pattern = '(?m)^\s*TCP\s+\S+:' + $Port + '\s+\S+\s+LISTENING\s+(\d+)\s*$'
+    foreach ($m in [regex]::Matches(($rows -join "`n"), $pattern)) {
+        $found += [int]$m.Groups[1].Value
+    }
+    return @($found | Select-Object -Unique)
+}
+
 function Test-PortListening {
     param([int]$Port)
-    $c = @(Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue)
-    return ($c.Count -gt 0)
+    return ((Get-PortListenerPids -Port $Port).Count -gt 0)
+}
+
+# 结束进程树（/T 连带子进程）；统一走 taskkill —— 本环境 Stop-Process 对跨权限进程常失败。
+function Stop-PortListeners {
+    param([int]$Port)
+    foreach ($ownerPid in (Get-PortListenerPids -Port $Port)) {
+        try { & taskkill.exe /PID $ownerPid /T /F 2>$null | Out-Null } catch { }
+    }
 }
 
 function Wait-PortListening {
@@ -159,7 +187,14 @@ function Test-HttpHealth {
 function Stop-DevService {
     param([string]$Name)
     $stopScript = Join-Path $Root 'stop-dev.ps1'
-    & $stopScript $Name | Out-Null
+    try { & $stopScript $Name | Out-Null } catch { }
+    # 兜底：stop-dev.ps1 若因权限/pid 文件缺失没清干净，这里按端口再确认一次，
+    # 否则 Wait-PortFree 会假成功（Test-PortListening 曾恒 false）而留下旧进程。
+    $port = [int]$servicePorts[$Name]
+    if (Test-PortListening -Port $port) {
+        Write-Host "  ~ $Name 端口 $port 仍监听，直接结束监听进程" -ForegroundColor Yellow
+        Stop-PortListeners -Port $port
+    }
 }
 
 # 传给子进程的关键变量（Hidden 窗口不会自动带上「刚从 .env 读入」的全部键，须显式写出）
@@ -219,6 +254,7 @@ try {
             Stop-DevService -Name $svc
             if (-not (Wait-PortFree -Port $port -TimeoutSec 45)) {
                 Write-Host "  x $svc 端口 $port 仍被占用，跳过启动" -ForegroundColor Red
+                Write-Host "    如果该端口由另一个 Windows 账号或更高完整性级别的进程占用，当前身份会收到 Access denied（详情见 taskkill 输出）- 请到启动它的那个终端，或以管理员身份停止。" -ForegroundColor DarkGray
                 $failed += $svc
                 continue
             }
@@ -229,6 +265,7 @@ try {
             Stop-DevService -Name $svc
             if (-not (Wait-PortFree -Port $port -TimeoutSec 45)) {
                 Write-Host "  x $svc 端口 $port 仍被占用，跳过启动" -ForegroundColor Red
+                Write-Host "    如果该端口由另一个 Windows 账号或更高完整性级别的进程占用，当前身份会收到 Access denied（详情见 taskkill 输出）- 请到启动它的那个终端，或以管理员身份停止。" -ForegroundColor DarkGray
                 $failed += $svc
                 continue
             }
@@ -254,7 +291,12 @@ $envBlock
 cmd /c "mvn spring-boot:run -pl $svc > `"$log`" 2>&1"
 "@
 
-        Start-Process powershell -ArgumentList @('-NoExit', '-Command', $childCmd) -WindowStyle Hidden | Out-Null
+        $launcher = Start-Process powershell -ArgumentList @('-NoExit', '-Command', $childCmd) -WindowStyle Hidden -PassThru
+        # 登记包装进程 PID：stop-dev.ps1 据此 taskkill /T 结束整棵树
+        # （不能依赖 Get-CimInstance 反查 CommandLine —— 本环境会权限拒绝）。
+        if ($launcher) {
+            Set-Content -Path (Join-Path $LogDir "$svc.launch.pid") -Value $launcher.Id -Encoding ASCII -ErrorAction SilentlyContinue
+        }
 
         # BFF/Gateway 较重；领域服务给短等待，减少同时抢 Maven/CPU
         $waitSec = if ($svc -eq 'mis-admin-bff' -or $svc -eq 'mis-gateway') { 180 } else { 120 }
