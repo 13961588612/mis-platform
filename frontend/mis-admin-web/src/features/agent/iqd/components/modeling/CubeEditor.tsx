@@ -74,6 +74,7 @@ import {
 } from '../../api/iqd-modeling';
 import { useDirtyState } from '../../hooks/useDirtyState';
 import { useCatalogNodes } from '../../hooks/useCatalogNodes';
+import { useDraggableDialog, type UseDraggableDialogResult } from '../../hooks/useDraggableDialog';
 import { useSyncStatus } from '../shared/useSyncStatus';
 import { IQD_MODELING_PERMISSIONS, useIqdModelingPermission } from '../shared/usePermission';
 import { iqdKeys } from '../../queries/iqd-keys';
@@ -117,6 +118,8 @@ export interface CubeEditorProps {
   defaultModelKey?: string | null;
   /** 保存成功回调（父页面可据此关闭/提示；缓存失效由本组件负责）。 */
   onSaved?: () => void;
+  /** 标题栏拖动手柄 props（由外壳注入；见 {@link useDraggableDialog}）。 */
+  dragHandleProps?: UseDraggableDialogResult['dragHandleProps'];
 }
 
 /** Cube 编辑器（壳：按目标重挂载表单）。 */
@@ -124,11 +127,25 @@ export function CubeEditor(props: CubeEditorProps) {
   const { open, onOpenChange, cube, defaultModelKey } = props;
   /** 表单身份键：换 Cube / 换默认模型即重挂载 → 局部状态重置。 */
   const formKey = `${cube?.item_key ?? 'new'}:${defaultModelKey ?? '-'}`;
+  // 标题栏拖动窗体：位移挂在 DialogContent 上（独立 translate，不干扰居中/动画）
+  const draggable = useDraggableDialog();
+
+  const handleOpenChange = (next: boolean) => {
+    if (!next) {
+      draggable.resetOffset();
+    }
+    onOpenChange(next);
+  };
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="flex max-h-[85vh] w-full max-w-6xl flex-col gap-0 p-0">
-        {open && <CubeForm key={formKey} {...props} />}
+    <Dialog open={open} onOpenChange={handleOpenChange}>
+      <DialogContent
+        className="flex max-h-[85vh] w-full max-w-6xl flex-col gap-0 p-0"
+        style={draggable.contentStyle}
+      >
+        {open && (
+          <CubeForm key={formKey} {...props} dragHandleProps={draggable.dragHandleProps} />
+        )}
       </DialogContent>
     </Dialog>
   );
@@ -141,6 +158,7 @@ function CubeForm({
   defaultModelKey,
   onOpenChange,
   onSaved,
+  dragHandleProps,
 }: CubeEditorProps) {
   const queryClient = useQueryClient();
   const { catalog, nodes, isLoading } = useCatalogNodes(connectionId);
@@ -418,7 +436,11 @@ function CubeForm({
 
   return (
     <>
-      <DialogHeader className="flex-row items-start justify-between gap-3 border-b border-border/60 bg-dialog-header px-4 py-3 pr-10">
+      <DialogHeader
+        {...dragHandleProps}
+        className="flex-row items-start justify-between gap-3 border-b border-border/60 bg-[hsl(var(--dialog-header-bg))] px-4 py-3 pr-10"
+        title="按住标题栏可拖动窗体"
+      >
         <div className="flex min-w-0 flex-col gap-1.5 pr-6">
           <DialogTitle className="text-[14px]">
             {isExisting ? '编辑 Cube' : '新建 Cube'}：{draft.draft.displayName || cubeName || '未命名'}

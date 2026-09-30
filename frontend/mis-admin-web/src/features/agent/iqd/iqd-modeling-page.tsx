@@ -31,8 +31,7 @@ import { buildAppBreadcrumbs } from '@/components/common/app-breadcrumbs';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
-import { IQD_MODELING_PERMISSIONS, useIqdModelingPermission } from './components/shared/usePermission';
-import { PermissionGate } from '@/components/auth/permission-gate';
+import { useIqdModelingPermission } from './components/shared/usePermission';
 import type { IqdCatalogItem } from '@/lib/api/iqd';
 import { ModelCanvas } from './components/modeling/ModelCanvas';
 import { CubeEditor } from './components/modeling/CubeEditor';
@@ -212,12 +211,6 @@ export function IqdModelingPage() {
             )}
             {/* 一键整理画布（T03d）：dagre 在浏览器算，落库复用 PUT layout */}
             <AutoLayoutButton connectionId={activeId} canEdit={canEdit} />
-            <PermissionGate permission={IQD_MODELING_PERMISSIONS.edit}>
-              <Button size="sm" variant="outline" onClick={() => setConnectionWizardOpen(true)}>
-                <Plus className="h-4 w-4" />
-                新建连接
-              </Button>
-            </PermissionGate>
           </div>
         }
       />

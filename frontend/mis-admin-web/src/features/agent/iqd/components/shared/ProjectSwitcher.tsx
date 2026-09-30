@@ -19,6 +19,7 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { listConnections } from '../../api/iqd-modeling';
+import { useActiveProjectId } from '../../hooks/useActiveProject';
 import { iqdKeys } from '../../queries/iqd-keys';
 import { useModelingStore } from '../../store/modeling-store';
 
@@ -26,7 +27,9 @@ import { useModelingStore } from '../../store/modeling-store';
  * 项目切换下拉（问数各页页头统一用）。切换即写 store（跨页保持）。
  */
 export function ProjectSwitcher({ className }: { className?: string }) {
-  const connectionId = useModelingStore((s) => s.connectionId);
+  // 复用 useActiveProjectId：它在 store 为空时自动选中「可用项目」（优先 name=default，
+  // 否则最小 id），并在当前选项已不存在时回落 —— 避免切换器初始显示空占位。
+  const activeProjectId = useActiveProjectId();
   const setConnectionId = useModelingStore((s) => s.setConnectionId);
 
   const { data, isLoading } = useQuery({
@@ -42,7 +45,7 @@ export function ProjectSwitcher({ className }: { className?: string }) {
 
   return (
     <Select
-      value={connectionId ?? ''}
+      value={activeProjectId != null ? String(activeProjectId) : ''}
       onValueChange={(v) => setConnectionId(v)}
       disabled={isLoading}
     >
