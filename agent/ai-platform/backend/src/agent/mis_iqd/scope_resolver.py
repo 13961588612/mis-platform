@@ -1286,7 +1286,14 @@ class ScopeResolver:
             if isinstance(item, dict)
         }
         in_scope_keys.discard("")
-        governance = policy_keys & in_scope_keys if policy_keys else in_scope_keys
+        # 治理层 = 策略集 ∩ 全局 in_scope（防御性求交，防两处表示漂移）。
+        # <p><b>空窗兼容</b>：`in_scope` 是「全局纳入问数范围」层，由**清单页**勾选维护；
+        # 新连接若尚未做全局勾选，`in_scope_keys` 为空。此时若仍求交会把主体（角色/部门/用户）
+        # 的范围模板与 ask ACL **整体清零** —— 表现为「范围页已授权、问数测试台却 0 张授权表」
+        # （2026-09-30 实测：连接 1790686095967 有 81 条 role 策略 + 3 条 ask ACL，但 in_scope=0）。
+        # 与下方 ACL 的“无 ACL 数据空窗”同源口径：**全局层未配置时不作为外层约束**，
+        # 由主体层（范围模板 ∪ ask ACL）放行；全局层一旦配置，仍严格求交。
+        governance = policy_keys & in_scope_keys if in_scope_keys else policy_keys
 
         # ---- 授权层：table_acl action=ask
         acl_ask: set[str] = set()
