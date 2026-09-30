@@ -20,13 +20,6 @@ import { PageHeader } from '@/components/common/page-header';
 import { buildAppBreadcrumbs } from '@/components/common/app-breadcrumbs';
 import { Badge } from '@/components/ui/badge';
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select';
-import {
   Dialog,
   DialogContent,
   DialogDescription,
@@ -47,6 +40,8 @@ import { SelfHealPanel } from './components/SelfHealPanel';
 import { useCatalogNodes } from './hooks/useCatalogNodes';
 import { createModelFromTable, errorCode, errorData, listConnections } from './api/iqd-modeling';
 import { iqdKeys } from './queries/iqd-keys';
+import { ProjectSwitcher } from './components/shared/ProjectSwitcher';
+import { useActiveProjectId } from './hooks/useActiveProject';
 import { IQD_CONFIG_PAGE_PATH } from './iqd-config-page';
 
 const KIND_LABEL: Record<string, string> = {
@@ -115,8 +110,8 @@ export function IqdCatalogPage() {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [saving, setSaving] = useState(false);
   const [tab, setTab] = useState<CatalogTab>('table');
-  /** 当前选中的连接 id（来自连接配置清单，不手填 WrenAI 地址）。 */
-  const [connectionId, setConnectionId] = useState<number | null>(null);
+  /** 当前项目（统一取自共享 store，与其他问数页一致）。 */
+  const connectionId = useActiveProjectId();
   /** 字段纳入弹窗：当前表/模型宿主。 */
   const [fieldHost, setFieldHost] = useState<IqdCatalogItem | null>(null);
   /** T02b-4：MR-S2「从物理表生成模型」对话框开关。 */
@@ -134,21 +129,6 @@ export function IqdCatalogPage() {
     () => connections.find((c) => c.id === connectionId) ?? null,
     [connections, connectionId],
   );
-
-  // 有连接但未选 → 默认第一条（与建模台同口径）
-  useEffect(() => {
-    if (connectionId == null && connections.length > 0 && connections[0].id != null) {
-      setConnectionId(Number(connections[0].id));
-    }
-  }, [connectionId, connections]);
-
-  // 当前选中已被删 → 回落第一条
-  useEffect(() => {
-    if (connectionId != null && connections.length > 0 && activeConnection == null) {
-      const first = connections.find((c) => c.id != null);
-      setConnectionId(first?.id != null ? Number(first.id) : null);
-    }
-  }, [connectionId, connections, activeConnection]);
 
   const load = useCallback(async () => {
     if (connectionId == null) {
@@ -171,12 +151,11 @@ export function IqdCatalogPage() {
     void load();
   }, [load]);
 
-  const onConnectionChange = useCallback((value: string) => {
-    const id = Number(value);
-    setConnectionId(Number.isFinite(id) ? id : null);
+  // 项目变更（跨页也会变）→ 清空本页选中与弹窗実体，避免跨项目串扰
+  useEffect(() => {
     setSelected(new Set());
     setFieldHost(null);
-  }, []);
+  }, [connectionId]);
 
   const filtered = useMemo(() => {
     const kw = keyword.trim().toLowerCase();
@@ -395,31 +374,8 @@ export function IqdCatalogPage() {
       <div className="mb-3 rounded-lg border bg-card p-3">
         <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
           <div className="flex shrink-0 items-center gap-2">
-            <span className="text-xs font-semibold text-muted-foreground">连接</span>
-            <Select
-              value={connectionId != null ? String(connectionId) : undefined}
-              onValueChange={onConnectionChange}
-              disabled={connectionsQuery.isLoading || connections.length === 0}
-            >
-              <SelectTrigger className="h-8 w-[11rem]">
-                <SelectValue
-                  placeholder={
-                    connectionsQuery.isLoading
-                      ? '加载中…'
-                      : connections.length === 0
-                        ? '暂无连接'
-                        : '选择连接'
-                  }
-                />
-              </SelectTrigger>
-              <SelectContent>
-                {connections.map((c) => (
-                  <SelectItem key={c.id!} value={String(c.id)}>
-                    {c.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            <span className="text-xs font-semibold text-muted-foreground">项目</span>
+            <ProjectSwitcher className="h-8 w-[13rem]" />
             {activeConnection ? (
               <Badge variant={activeConnection.status === 'active' ? 'default' : 'secondary'}>
                 {activeConnection.status ?? '未知'}

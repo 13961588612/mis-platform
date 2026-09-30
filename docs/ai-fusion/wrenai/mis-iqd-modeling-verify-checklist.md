@@ -884,6 +884,30 @@ ai-platform **1260 passed**（+5 既有 SSE 失败）；前端 `tsc` + `vitest` 
 
 **测试**：前端 `tsc` + `vitest src/features/agent/iqd` **318 passed**。
 
+### 3.16 问数域「当前项目」统一（2026-09-30）
+
+**用户问题**：可视化工作台能切项目，其他页面也需要切吗？
+
+**现状（排查）**：问数各页都以「项目」（= wren context）为上下文，但此前各取各的：
+- 可视化工作台（建模台）：store.connectionId（已有切换器）；
+- 语义模型（catalog）：本地态 + 自动选第一条（有下拉）；
+- 范围与权限（scope）/ 知识与规则（enhance）：`getIqdConfig()` → **主连接**（切不动）；
+- 问数测试台（test-chat）：不传 connection_id（后端取主连接）；
+- 审计（trace）：按用户/状态查，不按连接（不适用）。
+
+**统一实现**：
+- 新增 `hooks/useActiveProject.ts` 的 `useActiveProjectId()`：读 `useModelingStore.connectionId`
+  （**共享单一槽位**），store 为空时自动落到默认项目（`name='default'` 优先，否则最小 id）；
+  已删项目自动回落。
+- 新增 `components/shared/ProjectSwitcher.tsx`：问数各页页头统一下拉（列项目 + 绑定 profile +
+  MCP 运行态），切换即写 store → **切一处全问数域跟随、跨页保持**。
+- 五个页面对齐：建模台 / 语义模型 / 范围与权限 / 知识与规则 / 问数测试台 均改用共享 store；
+  scope/enhance 删掉 `getIqdConfig()` 取主连接逻辑；test-chat 的 `askIqd` 带上当前项目
+  `connection_id`；catalog 的本地选择态并入 store。
+
+**测试**：`iqd-scope-page.test.tsx` 包 `QueryClientProvider`，并 mock `listConnections`；
+前端 `tsc` + `vitest src/features/agent/iqd` **318 passed**、eslint 干净（仅存量 SelfHealPanel error）。
+
 **安全边界（红线，已守）**：
 - 密码**绝不落 mis-iqd**（BFF 转发前 `stripDbPassword`；mis-iqd DTO 无该字段）；
 - 密码**绝不回显**（GET 只回 `has_db_password` / 掩码账号）；

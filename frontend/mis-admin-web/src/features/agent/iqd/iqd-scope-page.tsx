@@ -26,7 +26,6 @@ import { buildAppBreadcrumbs } from '@/components/common/app-breadcrumbs';
 import { Badge } from '@/components/ui/badge';
 import {
   deleteIqdAcl,
-  getIqdConfig,
   listIqdAcls,
   listIqdDimensions,
   listIqdScopePolicies,
@@ -41,6 +40,8 @@ import {
   type IqdScopePreview,
   type IqdScopePreviewRequest,
 } from '@/lib/api/iqd';
+import { ProjectSwitcher } from './components/shared/ProjectSwitcher';
+import { useActiveProjectId } from './hooks/useActiveProject';
 import {
   ANCHOR_PLACEHOLDER,
   SCOPE_PERMISSIONS,
@@ -120,7 +121,8 @@ export function IqdScopePage() {
   const { hasPermission } = usePermission();
   const canViewDimensions = hasPermission(SCOPE_PERMISSIONS.dimensionView);
 
-  const [connectionId, setConnectionId] = useState<number | null>(null);
+  // 项目（= wren context）统一取自共享 store：切一处全问数域跟随
+  const connectionId = useActiveProjectId();
   const [policies, setPolicies] = useState<IqdScopePolicy[]>([]);
   const [acls, setAcls] = useState<IqdAcl[]>([]);
   const [dimensions, setDimensions] = useState<IqdScopeDimension[]>([]);
@@ -148,15 +150,15 @@ export function IqdScopePage() {
     setLoading(true);
     setError(null);
     try {
-      const cfg = await getIqdConfig();
-      if (cfg.id == null) {
-        setConnectionId(null);
+      if (connectionId == null) {
         setPolicies([]);
         setAcls([]);
         return;
       }
-      setConnectionId(cfg.id);
-      const [ps, as] = await Promise.all([listIqdScopePolicies(cfg.id), listIqdAcls(cfg.id)]);
+      const [ps, as] = await Promise.all([
+        listIqdScopePolicies(connectionId),
+        listIqdAcls(connectionId),
+      ]);
       setPolicies(ps);
       setAcls(as);
       setPolicyDrafts(
@@ -190,7 +192,7 @@ export function IqdScopePage() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [connectionId]);
 
   // 维度注册表（谓词预览的形态来源）：独立加载 + 独立错误面，避免拖垮主表。
   const loadDimensions = useCallback(async () => {
@@ -212,7 +214,7 @@ export function IqdScopePage() {
 
   useEffect(() => {
     void load();
-  }, [load]);
+  }, [load, connectionId]);
 
   useEffect(() => {
     void loadDimensions();
@@ -413,6 +415,7 @@ export function IqdScopePage() {
         breadcrumbs={buildAppBreadcrumbs({ app: 'agent', title: '问数范围与权限' })}
         actions={
           <div className="flex items-center gap-2">
+            <ProjectSwitcher />
             <Button size="sm" variant="outline" onClick={() => void load()} disabled={loading}>
               <RefreshCw className={cn('h-4 w-4', loading && 'animate-spin')} />
               刷新

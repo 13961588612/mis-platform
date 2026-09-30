@@ -15,6 +15,8 @@ import { PageHeader } from '@/components/common/page-header';
 import { buildAppBreadcrumbs } from '@/components/common/app-breadcrumbs';
 import { Badge } from '@/components/ui/badge';
 import { askIqd, type IqdAskResponse } from '@/lib/api/iqd';
+import { ProjectSwitcher } from './components/shared/ProjectSwitcher';
+import { useActiveProjectId } from './hooks/useActiveProject';
 
 export const IQD_TEST_CHAT_PAGE_PATH = '/iqd/test-chat';
 
@@ -30,6 +32,7 @@ const PLAN_LABEL: Record<string, string> = {
 };
 
 export function IqdTestChatPage() {
+  const connectionId = useActiveProjectId();
   const [question, setQuestion] = useState('');
   const [simulateRole, setSimulateRole] = useState('');
   const [scopeHint, setScopeHint] = useState('');
@@ -53,6 +56,7 @@ export function IqdTestChatPage() {
         .filter(Boolean);
       const res = await askIqd({
         question: question.trim(),
+        connection_id: connectionId,
         view,
         simulate_role_code: simulateRole.trim() || null,
         scope_hint: scopeHintList.length > 0 ? scopeHintList : undefined,
@@ -67,7 +71,7 @@ export function IqdTestChatPage() {
     } finally {
       setLoading(false);
     }
-  }, [question, simulateRole, scopeHint, view]);
+  }, [question, simulateRole, scopeHint, view, connectionId]);
 
   const reset = useCallback(() => {
     setQuestion('');
@@ -83,6 +87,7 @@ export function IqdTestChatPage() {
         title="问数测试台"
         description="模拟角色/范围执行问数，验证范围裁定、行级注入与脱敏（admin 视图可见 SQL）。"
         breadcrumbs={buildAppBreadcrumbs({ app: 'agent', title: '问数测试台' })}
+        actions={<ProjectSwitcher />}
       />
 
       {/* 请求区 */}

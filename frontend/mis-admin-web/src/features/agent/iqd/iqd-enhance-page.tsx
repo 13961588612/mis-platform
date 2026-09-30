@@ -29,6 +29,8 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { PageHeader } from '@/components/common/page-header';
+import { ProjectSwitcher } from './components/shared/ProjectSwitcher';
+import { useActiveProjectId } from './hooks/useActiveProject';
 import { buildAppBreadcrumbs } from '@/components/common/app-breadcrumbs';
 import { Badge } from '@/components/ui/badge';
 import {
@@ -48,7 +50,6 @@ import {
 import {
   deleteIqdDimension,
   deleteIqdKnowledge,
-  getIqdConfig,
   deleteIqdMaskRule,
   deleteIqdSqlPair,
   importIqdKnowledgeS07,
@@ -210,8 +211,8 @@ export function IqdEnhancePage() {
   const [s07Importing, setS07Importing] = useState(false);
   const [s07Outcome, setS07Outcome] = useState<S07ImportOutcome | null>(null);
 
-  // 主连接 id（增强物料均挂主连接）
-  const [connectionId, setConnectionId] = useState<number | null>(null);
+  // 项目（= wren context）统一取自共享 store（与其他问数页一致）
+  const connectionId = useActiveProjectId();
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -230,13 +231,6 @@ export function IqdEnhancePage() {
       setMaskRules(m);
       setDimensions(d);
       setSyncStatus(st);
-      // 取主连接 id（供同步状态条使用；连接未配置时状态条显示「尚未同步」）
-      try {
-        const cfg = await getIqdConfig();
-        setConnectionId(cfg.id ?? null);
-      } catch {
-        setConnectionId(null);
-      }
     } catch (e) {
       setError(e instanceof Error ? e.message : '加载失败');
     } finally {
@@ -248,18 +242,13 @@ export function IqdEnhancePage() {
     void load();
   }, [load]);
 
-  // 增强物料 Tab 懒加载：需要 connection_id（从连接配置取主连接）
+  // 增强物料 Tab 懒加载：直接用当前项目（store）
   const ensureConnection = useCallback(async (): Promise<number | null> => {
-    if (connectionId != null) return connectionId;
-    try {
-      const cfg = await import('@/lib/api/iqd').then((m) => m.getIqdConfig());
-      const cid = cfg.id ?? null;
-      setConnectionId(cid);
-      return cid;
-    } catch {
-      setError('获取问数连接失败');
+    if (connectionId == null) {
+      setError('请先选择项目');
       return null;
     }
+    return connectionId;
   }, [connectionId]);
 
   const loadEnhance = useCallback(async () => {
@@ -553,10 +542,13 @@ export function IqdEnhancePage() {
         description="脱敏规则、行级维度、样本对、知识术语与问数指令；保存后可同步至 WrenAI。"
         breadcrumbs={buildAppBreadcrumbs({ app: 'agent', title: IQD_ENHANCE_PAGE_TITLE })}
         actions={
-          <Button size="sm" variant="outline" onClick={() => void load()} disabled={loading}>
-            <RefreshCw className={cn('h-4 w-4', loading && 'animate-spin')} />
-            刷新
-          </Button>
+          <div className="flex items-center gap-2">
+            <ProjectSwitcher />
+            <Button size="sm" variant="outline" onClick={() => void load()} disabled={loading}>
+              <RefreshCw className={cn('h-4 w-4', loading && 'animate-spin')} />
+              刷新
+            </Button>
+          </div>
         }
       />
 

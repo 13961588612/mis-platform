@@ -14,9 +14,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { IqdScopePage } from './iqd-scope-page';
 import * as iqdApi from '@/lib/api/iqd';
 import { useAuthStore } from '@/stores/auth-store';
+
+vi.mock('@/features/agent/iqd/api/iqd-modeling', () => ({
+  listConnections: vi.fn(async () => [{ id: 900001, name: 'default', mcp_status: 'running' }]),
+}));
 
 vi.mock('@/lib/api/iqd', () => ({
   getIqdConfig: vi.fn(),
@@ -101,12 +106,19 @@ describe('M-G6 scope 页徽标 + 后端谓词预览', () => {
     fireEvent.click(btn);
   }
 
-  it('ACL 行渲染 dept + store 两个行级维度徽标', async () => {
-    render(
-      <MemoryRouter>
-        <IqdScopePage />
-      </MemoryRouter>,
+  function renderPage() {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    return render(
+      <QueryClientProvider client={qc}>
+        <MemoryRouter>
+          <IqdScopePage />
+        </MemoryRouter>
+      </QueryClientProvider>,
     );
+  }
+
+  it('ACL 行渲染 dept + store 两个行级维度徽标', async () => {
+    renderPage();
     await screen.findByText(/表级 ACL/);
     // 徽标在展开按钮内（与主体类型下拉的「部门」选项同名，故限定作用域）
     const btn = await screen.findByTitle('点击展开行级谓词预览');
@@ -116,11 +128,7 @@ describe('M-G6 scope 页徽标 + 后端谓词预览', () => {
   });
 
   it('展开后调后端预览端点，并原样展示返回的 WHERE', async () => {
-    render(
-      <MemoryRouter>
-        <IqdScopePage />
-      </MemoryRouter>,
-    );
+    renderPage();
     await expandBadgeCell();
 
     await waitFor(() => expect(m.previewIqdRowScope).toHaveBeenCalled());
@@ -151,11 +159,7 @@ describe('M-G6 scope 页徽标 + 后端谓词预览', () => {
         },
       ],
     } as never);
-    render(
-      <MemoryRouter>
-        <IqdScopePage />
-      </MemoryRouter>,
-    );
+    renderPage();
     await expandBadgeCell();
 
     expect(
