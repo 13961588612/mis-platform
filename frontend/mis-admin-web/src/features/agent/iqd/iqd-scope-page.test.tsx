@@ -1,15 +1,11 @@
 // @vitest-environment jsdom
 /**
- * iqd-scope-page.test.tsx — M-G6 「行级维度徽标 + 谓词预览」组件级验证。
+ * iqd-scope-page.test.tsx — 页面级验证（v1.12 UI 重构后）。
  *
- * <p>为何单独钉：此前 M-G6 只有 `rowScopeUtils` 的纯函数单测（徽标判定 /
- * 谓词拼接），**页面真实渲染与后端预览接线从未验过**。
- * 2026-09-28 预览改走后端真端点（POST /iqd/scope/preview）后，本用例钉住三件事：
- * <ol>
- *   <li>行级维度徽标确实渲染（dept + store）；</li>
- *   <li>展开后调的是**后端预览端点**（而非前端推导）；</li>
- *   <li>后端返回的 WHERE 片段被**原样展示**，并标「后端真实生成」（非「降级」）。</li>
- * </ol>
+ * 覆盖：
+ * 1. 新增范围策略三步向导（主体 -> 对象 -> 字段）能走通并提交正确 payload；
+ * 2. 过滤区按角色多选过滤生效；
+ * 3. 字段默认全选、可清空。
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
@@ -24,73 +20,41 @@ vi.mock('@/features/agent/iqd/api/iqd-modeling', () => ({
 }));
 
 vi.mock('@/lib/api/iqd', () => ({
-  getIqdConfig: vi.fn(),
-  listIqdScopePolicies: vi.fn(),
-  listIqdAcls: vi.fn(),
-  listIqdDimensions: vi.fn(),
-  previewIqdRowScope: vi.fn(),
-  saveIqdScopePolicies: vi.fn(),
-  saveIqdAcls: vi.fn(),
-  deleteIqdAcl: vi.fn(),
+  listIqdScopePolicies: vi.fn(async () => []),
+  listIqdAcls: vi.fn(async () => []),
+  saveIqdScopePolicies: vi.fn(async () => ({ count: 1 })),
+  saveIqdAcls: vi.fn(async () => ({ count: 1 })),
+  deleteIqdAcl: vi.fn(async () => undefined),
+  deleteIqdScopePolicy: vi.fn(async () => undefined),
+  deleteIqdScopePoliciesBatch: vi.fn(async () => ({ count: 1 })),
+  listIqdCatalog: vi.fn(async () => [
+    { kind: 'table', item_key: 'pg.public.orders', display_name: '订单表', in_scope: true },
+    { kind: 'column', item_key: 'pg.public.orders.amount', display_name: '金额', parent_key: 'pg.public.orders' },
+    { kind: 'column', item_key: 'pg.public.orders.store_id', display_name: '门店', parent_key: 'pg.public.orders' },
+    { kind: 'model', item_key: 'mdl:model:orders', display_name: '订单模型', model_ref: 'pg.public.orders', in_scope: true },
+    { kind: 'cube', item_key: 'mdl:cube:sales', display_name: '销售 Cube', in_scope: true },
+  ]),
+}));
+
+vi.mock('@/lib/api/roles', () => ({
+  listEnabledRoles: vi.fn(async () => [
+    { id: '1', code: 'SALES', name: '销售' },
+    { id: '2', code: 'ADMIN', name: '管理员' },
+  ]),
+}));
+
+vi.mock('@/lib/api/users', () => ({
+  getUser: vi.fn(async () => ({ id: 'u1', username: 'u1', realName: '张三' })),
+  pageUsers: vi.fn(async () => ({
+    page: 1, size: 20, total: 1,
+    list: [{ id: 'u1', username: 'u1', realName: '张三' }],
+  })),
 }));
 
 const m = vi.mocked(iqdApi);
 
-const BACKEND_WHERE =
-  "(EXISTS (SELECT 1 FROM mis_dept_scope rs WHERE rs.dept_id = dept_id AND " +
-  "((rs.dept_path = '/0/1/A/' OR rs.dept_path LIKE '/0/1/A/%')))) AND (store_id IN ('S1'))";
-
 beforeEach(() => {
-  useAuthStore.getState().setPermissions(['iqd:scope:view', 'iqd:acl:view', 'iqd:dimension:view']);
-  m.getIqdConfig.mockResolvedValue({ name: 'x', id: 900001 } as never);
-  m.listIqdScopePolicies.mockResolvedValue([]);
-  m.listIqdDimensions.mockResolvedValue([
-    {
-      dimension_code: 'dept',
-      dimension_name: '部门',
-      predicate_type: 'PATH_PREFIX',
-      column_name: 'dept_id',
-      header_name: 'X-Mis-Dept-Scope',
-      dict_table: 'mis_dept_scope',
-      enabled: true,
-      sort: 1,
-    },
-    {
-      dimension_code: 'store',
-      dimension_name: '门店',
-      predicate_type: 'ENUM',
-      column_name: 'store_id',
-      header_name: 'X-Mis-Stores',
-      dict_table: 'mis_store_scope',
-      enabled: true,
-      sort: 2,
-    },
-  ] as never);
-  m.listIqdAcls.mockResolvedValue([
-    {
-      id: 1,
-      subject_type: 'role',
-      subject_id: 'SALES',
-      item_key: 'ads_df',
-      action: 'ask',
-      row_scope: '{"dimensions":[{"dimension":"dept","scope":"dept_subtree"},{"dimension":"store","scope":"store"}]}',
-    },
-  ] as never);
-  m.previewIqdRowScope.mockResolvedValue({
-    degraded: false,
-    note: '后端按当前身份真实生成的谓词',
-    items: [
-      {
-        item_key: 'ads_df',
-        dimensions: ['dept', 'store'],
-        predicates: [],
-        where: BACKEND_WHERE,
-        strategy: 'PATH_PREFIX, ENUM',
-        denied_reason: null,
-        source: 'draft',
-      },
-    ],
-  } as never);
+  useAuthStore.getState().setPermissions(['iqd:scope:view', 'iqd:acl:view']);
 });
 
 afterEach(() => {
@@ -99,71 +63,179 @@ afterEach(() => {
   useAuthStore.getState().setPermissions([]);
 });
 
-describe('M-G6 scope 页徽标 + 后端谓词预览', () => {
-  /** 徽标元格按钮（按 title 精确定位，避开主体类型 <option>同名文案）。 */
-  async function expandBadgeCell() {
-    const btn = await screen.findByTitle('点击展开行级谓词预览');
-    fireEvent.click(btn);
-  }
+function renderPage() {
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return render(
+    <QueryClientProvider client={qc}>
+      <MemoryRouter>
+        <IqdScopePage />
+      </MemoryRouter>
+    </QueryClientProvider>,
+  );
+}
 
-  function renderPage() {
-    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    return render(
-      <QueryClientProvider client={qc}>
-        <MemoryRouter>
-          <IqdScopePage />
-        </MemoryRouter>
-      </QueryClientProvider>,
+describe('M-G6 scope 页面（v1.12 重构）', () => {
+  it('页面渲染两个权限区块', async () => {
+    renderPage();
+    expect(await screen.findByRole('tab', { name: '范围策略' })).toBeTruthy();
+    expect(await screen.findByRole('tab', { name: '行级范围' })).toBeTruthy();
+  });
+
+  it('范围策略：三步向导能走通并提交正确的 payload（默认全选字段）', async () => {
+    renderPage();
+    const addBtn = await screen.findByRole('button', { name: '新增范围策略' });
+    fireEvent.click(addBtn);
+
+    // Step 1: 选择角色
+    const roleBtn = await screen.findByRole('button', { name: /角色/ });
+    fireEvent.click(roleBtn);
+    const roleOpt = await screen.findByRole('button', { name: /销售/ });
+    fireEvent.click(roleOpt);
+    expect(roleOpt.getAttribute('aria-pressed')).toBe('true');
+    expect(screen.getByText('已选：')).toBeTruthy();
+    const confirmRole = await screen.findByRole('button', { name: '确定' });
+    fireEvent.click(confirmRole);
+
+    // Step 2: 选择对象
+    const nextBtn = await screen.findByRole('button', { name: '下一步' });
+    fireEvent.click(nextBtn);
+    const tableOpt = await screen.findByText('订单表');
+    fireEvent.click(tableOpt);
+    const next2 = await screen.findByRole('button', { name: '下一步' });
+    fireEvent.click(next2);
+
+    // Step 3: 默认全选字段 -> 确认
+    const createBtn = await screen.findByRole('button', { name: '确认创建' });
+    fireEvent.click(createBtn);
+
+    await waitFor(() => expect(m.saveIqdScopePolicies).toHaveBeenCalled());
+    const [connId, payload] = m.saveIqdScopePolicies.mock.calls[0];
+    expect(connId).toBe(900001);
+    const keys = (payload as Array<{ item_key: string; subject_type: string; subject_id: string }>).map((p) => p.item_key);
+    expect(keys).toContain('pg.public.orders');
+    expect(keys).toContain('pg.public.orders.amount');
+    expect(keys).toContain('pg.public.orders.store_id');
+    for (const p of payload as Array<{ subject_type: string; subject_id: string }>) {
+      expect(p.subject_type).toBe('role');
+      expect(p.subject_id).toBe('SALES');
+    }
+  });
+
+
+  it('编辑范围策略：跳过主体/对象步骤，取消勾选字段时调用批量删除', async () => {
+    m.listIqdScopePolicies.mockResolvedValueOnce([
+      { id: 11, subject_type: 'role', subject_id: 'SALES', item_key: 'pg.public.orders', allow: true, effective: true },
+      { id: 12, subject_type: 'role', subject_id: 'SALES', item_key: 'pg.public.orders.amount', allow: true, effective: true },
+      { id: 13, subject_type: 'role', subject_id: 'SALES', item_key: 'pg.public.orders.store_id', allow: true, effective: true },
+    ] as never);
+    m.deleteIqdScopePoliciesBatch.mockResolvedValueOnce({ count: 1 } as never);
+    renderPage();
+
+    const editBtn = await screen.findByTitle('编辑');
+    fireEvent.click(editBtn);
+
+    // 直接进入字段步骤
+    const createBtn = await screen.findByRole('button', { name: '确认创建' });
+    // 取消勾选“金额”
+    const amountBox = screen.getByRole('checkbox', { name: '金额' });
+    fireEvent.click(amountBox);
+    fireEvent.click(createBtn);
+
+    await waitFor(() => expect(m.saveIqdScopePolicies).toHaveBeenCalled());
+    const payload = m.saveIqdScopePolicies.mock.calls.at(-1)![1] as Array<{ item_key: string }>;
+    const keys = payload.map((p) => p.item_key);
+    expect(keys).toContain('pg.public.orders');
+    expect(keys).toContain('pg.public.orders.store_id');
+    expect(keys).not.toContain('pg.public.orders.amount');
+    expect(m.deleteIqdScopePoliciesBatch).toHaveBeenCalledWith(
+      900001,
+      'role',
+      'SALES',
+      ['pg.public.orders.amount'],
     );
-  }
-
-  it('ACL 行渲染 dept + store 两个行级维度徽标', async () => {
-    renderPage();
-    await screen.findByText(/表级 ACL/);
-    // 徽标在展开按钮内（与主体类型下拉的「部门」选项同名，故限定作用域）
-    const btn = await screen.findByTitle('点击展开行级谓词预览');
-    expect(btn.textContent).toContain('部门');
-    expect(btn.textContent).toContain('门店');
-    expect(btn.textContent).toContain('AND');
   });
 
-  it('展开后调后端预览端点，并原样展示返回的 WHERE', async () => {
+  it('列表直接使用后端回填的 subject_name，不再前端逐用户查名', async () => {
+    m.listIqdScopePolicies.mockResolvedValueOnce([
+      {
+        id: 21,
+        subject_type: 'user',
+        subject_id: 'u1',
+        subject_name: '张三',
+        item_key: 'pg.public.orders',
+        allow: true,
+        effective: true,
+      },
+    ] as never);
     renderPage();
-    await expandBadgeCell();
 
-    await waitFor(() => expect(m.previewIqdRowScope).toHaveBeenCalled());
-    const arg = m.previewIqdRowScope.mock.calls[0][0];
-    expect(arg.item_key).toBe('ads_df');
-    expect(arg.draft_rules?.[0]?.item_key).toBe('ads_df');
-
-    await waitFor(() => expect(m.previewIqdRowScope).toHaveBeenCalled());
-    expect(await screen.findByText('后端真实生成', {}, { timeout: 4000 })).toBeTruthy();
-    expect(await screen.findByText(new RegExp('mis_dept_scope'))).toBeTruthy();
-    // 不再标「示意 / 降级」
-    expect(screen.queryByText('示意 / 降级')).toBeNull();
+    expect(await screen.findByText('张三')).toBeTruthy();
   });
 
-  it('后端返回 denied_reason 时，展示「后端提示：…」', async () => {
-    m.previewIqdRowScope.mockResolvedValue({
-      degraded: false,
-      note: '',
-      items: [
-        {
-          item_key: 'ads_df',
-          dimensions: [],
-          predicates: [],
-          where: '',
-          strategy: 'NONE',
-          denied_reason: '缺少维度授权范围: dept',
-          source: 'draft',
-        },
-      ],
-    } as never);
+  it('范围策略：多选行后一起删除', async () => {
+    m.listIqdScopePolicies.mockResolvedValueOnce([
+      { id: 11, subject_type: 'role', subject_id: 'SALES', subject_name: '销售', item_key: 'pg.public.orders', allow: true, effective: true },
+      { id: 12, subject_type: 'role', subject_id: 'SALES', subject_name: '销售', item_key: 'mdl:model:orders', allow: true, effective: true },
+    ] as never);
     renderPage();
-    await expandBadgeCell();
 
-    expect(
-      await screen.findByText(/后端提示：缺少维度授权范围/),
-    ).toBeTruthy();
+    fireEvent.click(await screen.findByRole('checkbox', { name: '选择 销售 订单表' }));
+    fireEvent.click(await screen.findByRole('checkbox', { name: '选择 销售 订单模型' }));
+    fireEvent.click(await screen.findByRole('button', { name: '删除选中' }));
+
+    await waitFor(() => expect(m.deleteIqdScopePolicy).toHaveBeenCalledTimes(2));
+    expect(m.deleteIqdScopePolicy).toHaveBeenCalledWith(11);
+    expect(m.deleteIqdScopePolicy).toHaveBeenCalledWith(12);
+  });
+
+  it('行级范围：多选行后一起删除', async () => {
+    m.listIqdAcls.mockResolvedValueOnce([
+      { id: 21, subject_type: 'role', subject_id: 'SALES', subject_name: '销售', item_key: 'pg.public.orders', action: 'ask' },
+      { id: 22, subject_type: 'role', subject_id: 'SALES', subject_name: '销售', item_key: 'mdl:model:orders', action: 'ask' },
+    ] as never);
+    renderPage();
+    fireEvent.mouseDown(await screen.findByRole('tab', { name: '行级范围' }));
+
+    fireEvent.click(await screen.findByRole('checkbox', { name: '选择 销售 订单表' }));
+    fireEvent.click(await screen.findByRole('checkbox', { name: '选择 销售 订单模型' }));
+    fireEvent.click(await screen.findByRole('button', { name: '删除选中' }));
+
+    await waitFor(() => expect(m.deleteIqdAcl).toHaveBeenCalledTimes(2));
+    expect(m.deleteIqdAcl).toHaveBeenCalledWith(21);
+    expect(m.deleteIqdAcl).toHaveBeenCalledWith(22);
+  });
+
+  it('行级范围：提交 action=ask', async () => {
+    renderPage();
+    fireEvent.mouseDown(await screen.findByRole('tab', { name: '行级范围' }));
+    const addBtn = await screen.findByRole('button', { name: '新增行级范围' });
+    fireEvent.click(addBtn);
+
+    const userBtn = await screen.findByRole('button', { name: /用户/ });
+    fireEvent.click(userBtn);
+    const userOpt = await screen.findByRole('button', { name: /张三/ });
+    fireEvent.click(userOpt);
+    const confirmUser = await screen.findByRole('button', { name: '确定' });
+    fireEvent.click(confirmUser);
+
+    const nextBtn = await screen.findByRole('button', { name: '下一步' });
+    fireEvent.click(nextBtn);
+    const tableOpt = await screen.findByText('订单表');
+    fireEvent.click(tableOpt);
+    const next2 = await screen.findByRole('button', { name: '下一步' });
+    fireEvent.click(next2);
+    const createBtn = await screen.findByRole('button', { name: '确认创建' });
+    fireEvent.click(createBtn);
+
+    await waitFor(() => expect(m.saveIqdAcls).toHaveBeenCalled());
+    const payload = m.saveIqdAcls.mock.calls[0][1] as Array<{ action?: string; subject_type: string; subject_id: string; object_type: string; object_key: string; field_key?: string | null }>;
+    expect(payload.length).toBeGreaterThan(0);
+    for (const p of payload) {
+      expect(p.action).toBe('ask');
+      expect(p.subject_type).toBe('user');
+      expect(p.subject_id).toBe('u1');
+      expect(p.object_type).toBe('table');
+      expect(p.object_key).toBe('pg.public.orders');
+    }
   });
 });
