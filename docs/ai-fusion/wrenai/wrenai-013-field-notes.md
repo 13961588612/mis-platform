@@ -91,6 +91,12 @@ genbi / profile / serve
 - 还承载 `profile` / `data_source` / `schema` / `catalog`。
 - 注意：`context init --from-mdl --force` 会**覆盖**它并丢掉 `name` → 不能拿来重新生成真机工程。
 
+- **顶层 `catalog` / `data_source` 必须是字符串，不能是 map**（2026-09-30 实测）。旧的平台占位写成 `catalog:\n  schema: public` 与 `data_source:\n  profile: ''\n  type: ''`，下游页面直接报：
+  - `wren context build` 报 `wren_project.yml: missing required field 'data_source'`（`data_source` 取不到字符串）；
+  - `wren dry-plan` 报 `Serde JSON error: invalid type: map, expected a string`（顶层 `catalog` 是 map）。
+  正确写法：`catalog: wren` + `schema: public` + `data_source: doris`（或 `postgres`）；`wren context set-profile <name>` 会把 `data_source` 补成真实方言（含上下文）但**不会**修 map 形态的 `catalog`。
+- **MDL 顶层 `catalog` / `dataSource`（`target/mdl.json`）同样受约束**：`catalog` 必须是非空字符串（缺失 → `missing field catalog`；map → `invalid type: map, expected a string`）；`dataSource` 必须是受控枚举字符串或**整键缺失**（map → `unknown variant 'profile'`；缺失可通行）。平台发布时已在 `build_mdl_from_catalog` 里归一顶层头。
+
 ### 3.2 `models/<name>/metadata.yml`
 
 ```yaml
@@ -287,6 +293,10 @@ cube 若引用了未授权模型，`_scope_resolver_assert` 会 fail-closed（45
 | `cube query` 报 `unknown variant INNER` | `join_type` 是基数枚举不是连接类型 | `cardinality` → 枚举映射 |
 | MCP `list_cubes` 空 | MCP 读 YAML 工程 | cube 必须进 `cubes/` 目录 |
 | 界面无法改主键 | `PUT /catalog/node` 的 patch 原先不支持 `is_primary_key` | 已补（仅 `column`；写 `iqd_catalog_item.is_primary_key` + bump revision） |
+| `dry-plan` 报 `invalid type: map, expected a string` / `missing field catalog` | MDL 顶层 `catalog` 是 map 或缺失（常由旧 `wren_project.yml` map 形态经 `context build` 流入 `target/mdl.json`） | 归一为 `"wren"` 字符串；兼修 `wren_project.yml` |
+| `dry-plan` 报 `unknown variant 'profile'` | MDL 顶层 `dataSource` 是 map（`{profile, type}`） | 改为受控枚举字符串（`starrocks`→`doris`）或删除该键 |
+| `context build` 报 `missing required field 'data_source'` | `wren_project.yml` 的 `data_source` 是 map / 空 | 改写为字符串（`doris`/`postgres`）；`context set-profile` 也可补齐 |
+| `context show` 恒为 0 models | `wren_project.yml` 用 `version: 1`（旧 schema） | 改 `schema_version: 5`；`context upgrade` 不修 map 头 |
 
 ---
 
