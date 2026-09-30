@@ -204,7 +204,7 @@ export function IqdModelingPage() {
         actions={
           <div className="flex items-center gap-2">
             {/* 项目切换器（统一组件，与其他问数页同一个 store 槽位） */}
-            <ProjectSwitcher className="h-8 w-[15rem]" />
+            <ProjectSwitcher className="h-8 w-[19rem] pr-8" />
             {activeConnection && activeConnection.status && (
               <Badge variant="outline" className="text-[12px]">
                 {activeConnection.status}

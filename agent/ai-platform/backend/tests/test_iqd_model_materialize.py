@@ -130,3 +130,69 @@ def test_existing_model_not_duplicated() -> None:
     IqdAskService()._materialize_missing_nodes(mdl, edited, landed)
     assert len([m for m in mdl["models"] if m["name"] == "existing_tbl"]) == 1
     assert 0 in landed
+
+
+# ================================================================ 无基线派生（新连接 / mdl_raw=null）
+
+def test_derive_table_reference_from_physical_key() -> None:
+    """``{datasource}.{schema}.{table}`` → ``{catalog:'', schema, table}``（真机实测口径）。"""
+    ref = IqdAskService._derive_table_reference("pg_main.adhoc.sale_ord")
+    assert ref == {"catalog": "", "schema": "adhoc", "table": "sale_ord"}
+
+
+def test_derive_table_reference_rejects_short_key() -> None:
+    """不足两段 → 不盲猜 schema，返回 None。"""
+    assert IqdAskService._derive_table_reference("sale_ord") is None
+    assert IqdAskService._derive_table_reference("") is None
+    assert IqdAskService._derive_table_reference(None) is None
+
+
+def _edited_no_baseline() -> list[dict]:
+    """模拟 from-table 导入但连接尚无 mdl_raw（test 连接的 273 edited_items 同形）。"""
+    return [
+        {"item_key": "pg_main.adhoc.sale_ord", "kind": "table",
+         "display_name": "sale_ord"},
+        {"item_key": "pg_main.adhoc.sale_ord.id", "kind": "column",
+         "parent_key": "pg_main.adhoc.sale_ord", "display_name": "id",
+         "data_type": "BIGINT", "is_primary_key": True},
+        {"item_key": "pg_main.adhoc.sale_ord.amount", "kind": "column",
+         "parent_key": "pg_main.adhoc.sale_ord", "display_name": "amount",
+         "data_type": "DOUBLE"},
+        {"item_key": "mdl:model:sale_ord", "kind": "model",
+         "display_name": "sale_ord", "description": "订单"},
+    ]
+
+
+def test_new_model_materialized_without_baseline_uses_derived_table_reference() -> None:
+    """无 mdl_raw 基线时，也能从 table item_key 推导 tableReference 物化出模型。
+
+    <背景>修复前：无基线 → 无 tableReference 模板 → 新建 model 全部跳过 →
+    发布/强制重建产出 **0 models**（test 连接 force-rebuild 的真实故障）。
+    """
+    mdl = {"models": [], "relationships": [], "cubes": [], "views": [], "metrics": [], "dimensions": []}
+    edited = _edited_no_baseline()
+    landed: set[int] = set()
+    IqdAskService()._materialize_missing_nodes(mdl, edited, landed)
+
+    model = next(m for m in mdl["models"] if m["name"] == "sale_ord")
+    assert model["tableReference"] == {"catalog": "", "schema": "adhoc", "table": "sale_ord"}
+    names = [c["name"] for c in model["columns"]]
+    assert names == ["id", "amount"], names
+    assert model["primaryKey"] == ["id"]
+    assert model["properties"]["description"] == "订单"
+    model_idx = next(i for i, it in enumerate(edited) if it["item_key"] == "mdl:model:sale_ord")
+    assert model_idx in landed
+
+
+def test_new_model_without_derivable_key_still_skipped() -> None:
+    """table item_key 不足以推导 schema（无点分段）时，仍不盲写（fail-safe）。"""
+    mdl = {"models": [], "relationships": [], "cubes": [], "views": [], "metrics": [], "dimensions": []}
+    edited = [
+        {"item_key": "sale_ord", "kind": "table", "display_name": "sale_ord"},
+        {"item_key": "sale_ord.id", "kind": "column", "parent_key": "sale_ord",
+         "display_name": "id", "data_type": "BIGINT"},
+        {"item_key": "mdl:model:sale_ord", "kind": "model", "display_name": "sale_ord"},
+    ]
+    landed: set[int] = set()
+    IqdAskService()._materialize_missing_nodes(mdl, edited, landed)
+    assert all(m["name"] != "sale_ord" for m in mdl["models"])

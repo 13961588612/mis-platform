@@ -46,7 +46,7 @@ export function ProjectSwitcher({ className }: { className?: string }) {
       onValueChange={(v) => setConnectionId(v)}
       disabled={isLoading}
     >
-      <SelectTrigger className={className ?? 'h-8 w-[15rem]'}>
+      <SelectTrigger className={className ?? 'h-8 w-[19rem] pr-8'}>
         <FolderCog className="mr-1.5 h-3.5 w-3.5 shrink-0 text-muted-foreground" />
         <SelectValue placeholder="选择项目" />
       </SelectTrigger>

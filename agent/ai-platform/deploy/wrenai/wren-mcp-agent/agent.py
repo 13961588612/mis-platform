@@ -605,6 +605,35 @@ def _safe_rel_path(path: str) -> str:
     return normalized
 
 
+def _ensure_project_skeleton(project_home: str, conn_id: str) -> None:
+    """确保 project 骨架存在（至少 ``wren_project.yml``）。
+
+    <p>``wren context build`` / ``context show`` 都要求当前目录是一个
+    wren 工程（含 ``wren_project.yml``），否则报
+    ``Error: no wren project found``。平台侧 ``IqdCli.ensure_project`` 只写本机目录
+    （ai-platform 所在机），跨机器时 wren 机目录并未落盘。故在 agent 这侧
+    补一次：**仅当缺失时**写最小占位（绝不覆盖已有工程）。
+    """
+    yml = os.path.join(project_home, "wren_project.yml")
+    if os.path.exists(yml):
+        return
+    placeholder = (
+        "version: 1\n"
+        f"name: iqd-conn-{conn_id}\n"
+        "catalog:\n"
+        "  schema: public\n"
+        "data_source:\n"
+        "  profile: ''\n"
+        "  type: ''\n"
+    )
+    try:
+        with open(yml, "w", encoding="utf-8") as fh:
+            fh.write(placeholder)
+        logger.info("agent ensured wren_project.yml", conn_id=conn_id, path=yml)
+    except OSError as exc:  # noqa: BLE001 - 写失败不阻断，由 CLI 报错
+        logger.warning("agent write wren_project.yml failed", conn_id=conn_id, error=str(exc))
+
+
 def _write_project_files(project_home: str, files: List[ProjectFile]) -> List[str]:
     """把平台下发的文本文件写入 ``project_home``（含父目录），返回已写相对路径。"""
 
@@ -920,9 +949,11 @@ async def api_cli(req: CliRequest, _: None = Depends(require_bearer)) -> JSONRes
             cleaned.append(token)
         args = cleaned
 
-    # 若仅部署 manifest（args 空或只剩 context build），写完 mdl.json 即视为成功；
-    # 再跑 context build 会用 YAML 工程覆盖 target/mdl.json。
-    only_build = args == ["context", "build"] or args == []
+    # 若仅部署 manifest（args 空 / 只剩 `context build` / `context build` + 可选 flag），
+    # 写完 mdl.json 即视为成功；**再跑 context build 会用 YAML 工程覆盖 target/mdl.json**，
+    # 而 wren 0.13 的 ``context build`` 不接受任何语义 flag，故只要命令是 context build
+    # 就短路返回（含 force-rebuild 可能附加的 ``self_heal_force_build_args``，避免误覆盖）。
+    only_build = args == [] or args[:2] == ["context", "build"]
     if deployed_mdl and only_build:
         return JSONResponse(
             {
@@ -937,6 +968,9 @@ async def api_cli(req: CliRequest, _: None = Depends(require_bearer)) -> JSONRes
                 },
             }
         )
+
+    # 确保工程骨架（wren_project.yml）存在，否则 context build/show 会报 no wren project found
+    _ensure_project_skeleton(project_home, req.conn_id)
 
     command = [_settings.wren_cli_bin, *args]
     logger.info(

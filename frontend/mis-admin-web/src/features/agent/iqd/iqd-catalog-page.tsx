@@ -375,7 +375,7 @@ export function IqdCatalogPage() {
         <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
           <div className="flex shrink-0 items-center gap-2">
             <span className="text-xs font-semibold text-muted-foreground">项目</span>
-            <ProjectSwitcher className="h-8 w-[13rem]" />
+            <ProjectSwitcher className="h-8 w-[19rem] pr-8" />
             {activeConnection ? (
               <Badge variant={activeConnection.status === 'active' ? 'default' : 'secondary'}>
                 {activeConnection.status ?? '未知'}

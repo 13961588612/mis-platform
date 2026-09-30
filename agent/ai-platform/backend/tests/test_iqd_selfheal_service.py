@@ -33,6 +33,15 @@ def _make_cli_config_mocks() -> tuple[AsyncMock, AsyncMock]:
     config = AsyncMock()
     config.get_sql_pairs.return_value = []
     config.get_knowledge.return_value = []
+    # force-rebuild 现在先派生平台完整 MDL 再部署（关键修正 2026-09-30）：
+    # 提供一组最小 catalog（含一个 from-table 模型）以走通「派生 → context_build(mdl_dir)」。
+    config.get_catalog_full.return_value = {"mdl_raw": None, "edited_items": [
+        {"item_key": "pg_main.adhoc.t1", "kind": "table", "display_name": "t1"},
+        {"item_key": "pg_main.adhoc.t1.id", "kind": "column",
+         "parent_key": "pg_main.adhoc.t1", "display_name": "id", "data_type": "BIGINT"},
+        {"item_key": "mdl:model:t1", "kind": "model", "display_name": "t1"},
+    ]}
+    config.get_catalog_meta.return_value = []
     config.backfill_enhancement_sync.return_value = {}
     config.report_sync_job.return_value = {}
     return cli, config
@@ -56,6 +65,8 @@ async def test_force_rebuild_passes_connid_and_project_dir_to_cli() -> None:
     _, kwargs = cli.context_build.call_args
     assert kwargs.get("project_dir") == expected_home
     assert kwargs.get("force") is True
+    # 派生出的完整 MDL 目录必须一并下发（否则空 YAML 会覆盖成 0 models）
+    assert kwargs.get("mdl_dir")
 
     # memory index 同样落到该连接目录
     cli.memory_index.assert_awaited_once()

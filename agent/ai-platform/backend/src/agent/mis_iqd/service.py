@@ -704,12 +704,49 @@ class IqdAskService:
             pending_knowledge=pending_knowledge,
         )
 
-        # ② context build（强制重建：仅 build 阶段传 force=True）
+        # ② 派生平台完整 MDL 并部署（关键修正 2026-09-30）
+        #   旧实现直接对空的 YAML 工程跑 ``context build`` → 两个真实 bug：
+        #   ① 若 wren 机无 ``wren_project.yml``（新连接常见）直接 no wren project found；
+        #   ② 即使能跑，YAML 无模型 → 把 ``target/mdl.json`` 覆盖成 **0 models**（模型丢失）。
+        #   正确做法与模型发布同路径：从 platform catalog 派生完整 MDL（mdl_raw 基线
+        #   + edited_items）→ ``context_build(mdl_dir=...)” 部署（写 target/mdl.json + YAML 镜像）。
+        from src.adapters.iqd_config_client import IqdConfigClientError as _IqdConfigError
+
+        try:
+            full = await client.get_catalog_full(cid)
+        except _IqdConfigError as exc:
+            result = SyncResult(
+                connection_id=cid, coalesced=False,
+                build_status="failed", build_error=f"拉取 catalog 全量失败: {exc}",
+            )
+            await self._report_selfheal_job(client, cid, "force_rebuild", result)
+            return result
+        mdl_raw = full.get("mdl_raw")
+        edited_items = full.get("edited_items") or []
+        try:
+            catalog_meta = await client.get_catalog_meta(cid)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("IQD force-rebuild get_catalog_meta failed", error=str(exc))
+            catalog_meta = []
+        try:
+            mdl_dir, _derived = self.build_mdl_from_catalog(
+                cid, mdl_raw, edited_items, catalog_meta
+            )
+        except Exception as exc:  # noqa: BLE001 - 派生失败归一为 build 失败
+            result = SyncResult(
+                connection_id=cid, coalesced=False,
+                build_status="failed", build_error=f"派生完整 MDL 失败: {exc}",
+            )
+            await self._report_selfheal_job(client, cid, "force_rebuild", result)
+            return result
+
+        # ③ context build（部署 MDL + YAML 镜像；force 仅作日志标记，实际重建由 mdl_dir 驱动）
         build_status = "success"
         build_error: str | None = None
         mdl_hash: str | None = None
         try:
             build_result = await cli.context_build(
+                mdl_dir=mdl_dir,
                 allow_write=True,
                 force=True,
                 project_dir=project_home,
@@ -1877,6 +1914,21 @@ class IqdAskService:
     # ================================================================ T03：新建节点物化（R-3）
 
     @staticmethod
+    def _derive_table_reference(table_key: str | None) -> dict[str, Any] | None:
+        """从物理表 item_key 推导 MDL ``tableReference``（无 mdl_raw 基线时用）。
+
+        item_key 形如 ``{datasource}.{schema}.{table}``（如 ``pg_main.adhoc.sale_ord``）；
+        真机基线实测的 tableReference 为 ``{catalog:'', schema:'adhoc', table:'sale_ord'}``。
+        无法解析出至少两段时返回 ``None``（不盲猜 schema）。
+        """
+        if not table_key:
+            return None
+        parts = [p for p in str(table_key).split(".") if p]
+        if len(parts) < 2:
+            return None
+        return {"catalog": "", "schema": parts[-2], "table": parts[-1]}
+
+    @staticmethod
     def _table_key_of_model(
         model_item: dict[str, Any],
         edited_items: list[dict[str, Any]],
@@ -2022,16 +2074,22 @@ class IqdAskService:
                 if name in model_by_name:
                     landed.add(idx)  # 基线已有 → 由 patch 负责改名/改描述
                 continue
-            if template_ref is None:
-                # 无基线可参照：不盲写（保持 unmatched —— 由 T03e 的未匹配清单上报，
-                # 那是**唯一可见渠道**；此处不另发 warning，避免同一件事重复上报）。
+            table_key = self._table_key_of_model(it, edited_items, name)
+            # 无基线时（如 from-table 导入后尚未同步，mdl_raw 为空）：
+            # 从 table 节点的 item_key（``{datasource}.{schema}.{table}``）推导
+            # tableReference（catalog='' / schema=第二段，与真机 mdl_raw 实测一致）。
+            # 否则新建连接（无 mdl_raw）永远物化不出模型 → 发布出 0 models。
+            ref = template_ref
+            if ref is None:
+                ref = self._derive_table_reference(table_key)
+            if ref is None:
+                # 真的参照不到：不盲写（保持 unmatched，由 T03e 未匹配清单上报）。
                 logger.debug(
-                    "IQD new model not materialized (no baseline tableReference to copy)",
+                    "IQD new model not materialized (no tableReference derivable)",
                     model=name,
                 )
                 continue
 
-            table_key = self._table_key_of_model(it, edited_items, name)
             cols = self._columns_of_table(edited_items, table_key)
             mdl_columns: list[dict[str, Any]] = []
             pk_names: list[str] = []
@@ -2068,7 +2126,7 @@ class IqdAskService:
 
             model: dict[str, Any] = {
                 "name": name,
-                "tableReference": {**template_ref, "table": name},
+                "tableReference": {**ref, "table": name},
                 "columns": mdl_columns,
                 "cached": False,
                 "properties": {},

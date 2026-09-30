@@ -300,6 +300,15 @@ def _patch_selfheal_clients(cli_return: dict | None = None, validate_return: dic
     client = MockClient.return_value
     client.get_sql_pairs = AsyncMock(return_value=[])
     client.get_knowledge = AsyncMock(return_value=[])
+    # force-rebuild 关键修正（2026-09-30）：先派生平台完整 MDL 再 context_build(mdl_dir)。
+    # 这里给出最小 catalog（含 from-table 模型）以走通派生路径。
+    client.get_catalog_full = AsyncMock(return_value={"mdl_raw": None, "edited_items": [
+        {"item_key": "pg_main.adhoc.t1", "kind": "table", "display_name": "t1"},
+        {"item_key": "pg_main.adhoc.t1.id", "kind": "column",
+         "parent_key": "pg_main.adhoc.t1", "display_name": "id", "data_type": "BIGINT"},
+        {"item_key": "mdl:model:t1", "kind": "model", "display_name": "t1"},
+    ]})
+    client.get_catalog_meta = AsyncMock(return_value=[])
     client.backfill_enhancement_sync = AsyncMock(return_value={"synced_count": 0})
     client.report_sync_job = AsyncMock(return_value={"id": 1})
     return cli, client, (patcher_cli, patcher_client)
@@ -431,6 +440,14 @@ def _route_test_case(action: str, cli_return: dict, validate_return: dict | None
         client = MockClient.return_value
         client.get_sql_pairs = AsyncMock(return_value=[])
         client.get_knowledge = AsyncMock(return_value=[])
+        # force-rebuild 先派生平台完整 MDL（2026-09-30 修正）→ 提供最小 catalog。
+        client.get_catalog_full = AsyncMock(return_value={"mdl_raw": None, "edited_items": [
+            {"item_key": "pg_main.adhoc.t1", "kind": "table", "display_name": "t1"},
+            {"item_key": "pg_main.adhoc.t1.id", "kind": "column",
+             "parent_key": "pg_main.adhoc.t1", "display_name": "id", "data_type": "BIGINT"},
+            {"item_key": "mdl:model:t1", "kind": "model", "display_name": "t1"},
+        ]})
+        client.get_catalog_meta = AsyncMock(return_value=[])
         client.backfill_enhancement_sync = AsyncMock(return_value={"synced_count": 0})
         client.report_sync_job = AsyncMock(return_value={"id": 1})
 
