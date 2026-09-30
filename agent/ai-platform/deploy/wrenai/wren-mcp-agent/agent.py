@@ -327,14 +327,29 @@ class WrenMcpSupervisor:
             return name
         profile_name = entry.profile or name
         # password 走占位；占位变量名固定 IQD_DB_PASSWORD（env 由 _build_env 注入）
+        # Port must be a non-empty numeric string (or omitted). wren rejects an empty
+        # port with "invalid literal for int() with base 10: ''" at dry_run time.
+        # wren profile ``datasource`` must be the connector/engine name: StarRocks is
+        # exposed as ``doris`` (``wren profile list`` shows ``starrocks (doris)``). Passing
+        # the raw db_type ``starrocks`` makes ``wren serve mcp`` reject the profile.
+        _ds = str(cred.get("db_type") or "").strip().lower()
+        _wren_datasource = {"starrocks": "doris", "mysql": "mysql", "mariadb": "mysql"}.get(
+            _ds, _ds or "doris"
+        )
+        raw_port = str(cred.get("port") or "").strip()
+        if raw_port.isdigit():
+            port_value: object = int(raw_port)
+        else:
+            port_value = raw_port if raw_port else None
         profile_doc = {
-            "datasource": cred.get("db_type") or "doris",
+            "datasource": _wren_datasource,
             "host": cred.get("host", ""),
-            "port": int(cred["port"]) if str(cred.get("port", "")).isdigit() else cred.get("port", ""),
+            "port": port_value,
             "database": cred.get("database", ""),
             "user": cred.get("user", ""),
             "password": "${IQD_DB_PASSWORD}",
         }
+        profile_doc = {k: v for k, v in profile_doc.items() if v is not None}
         tmp_path = os.path.join(entry.project_home, f".iqd-profile-{uuid.uuid4().hex[:8]}.json")
         try:
             os.makedirs(entry.project_home, exist_ok=True)

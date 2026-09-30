@@ -676,6 +676,27 @@ class IqdConfigClient:
             raise IqdConfigClientError(
                 f"连接 {connection_id} 凭证不可解析（secret_ref={secret_ref} 无匹配明文）"
             )
+        # Merge non-sensitive coordinates from the connection db profile: the vault
+        # ciphertext may contain only host/user/password/database (no port, seen on the
+        # real machine). Without this, the agent writes an empty port into the wren
+        # profile and dry_run fails with "invalid literal for int() with base 10: ''".
+        try:
+            profile = await self.get_connection_db_profile(connection_id, ctx)
+        except IqdConfigClientError:
+            profile = None
+        if isinstance(profile, dict):
+            for key in ("host", "port", "user", "database", "db_type"):
+                value = profile.get(key)
+                if value in (None, "") and key == "port":
+                    value = profile.get("db_port")
+                if value not in (None, "") and not cred.get(key):
+                    cred[key] = value
+        # wren profile ``datasource`` must be the engine name, not the platform db_type:
+        # StarRocks is exposed as ``doris``. Without this, a starrocks connection crashes
+        # ``wren serve mcp`` at profile load (only the doris connector is registered).
+        _ds = str(cred.get("db_type") or "").strip().lower()
+        if _ds == "starrocks":
+            cred["db_type"] = "doris"
         return self._map_credential_to_env(cred)
 
     async def get_connection_db_profile(
