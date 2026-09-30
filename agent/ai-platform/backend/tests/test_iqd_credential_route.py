@@ -183,3 +183,107 @@ async def test_discovery_falls_back_to_wren_when_direct_unavailable() -> None:
         result = await svc.list_tables(900001, "adhoc", 1, None)
     assert result["total"] == 1
     assert result["tables"][0]["name"] == "sale_ord"
+
+
+@pytest.mark.asyncio
+async def test_discovery_marks_source_direct_and_fallback() -> None:
+    """表发现须标记数据来源：直连=direct_db；回落 MCP=wren_mcp（供前端提示「非全库」）。"""
+    from src.agent.mis_iqd.discovery_service import (
+        DiscoveryUnavailableError,
+        IqdDiscoveryService,
+    )
+
+    # 直连可用 → source=direct_db
+    svc = IqdDiscoveryService()
+    direct = MagicMock()
+    direct.list_tables = AsyncMock(
+        return_value=[{"name": "t1", "comment": None, "row_count_estimate": None}]
+    )
+    with patch.object(svc, "_direct_db", new=AsyncMock(return_value=direct)):
+        await svc.list_tables(900001, "adhoc", 1, None)
+    assert svc.last_source == "direct_db"
+
+    # 直连不可用 → 回落 mcp，source=wren_mcp
+    svc2 = IqdDiscoveryService()
+    mcp = MagicMock()
+    mcp.list_models = AsyncMock(
+        return_value={"models": [{"name": "m", "table": "t1", "properties": {"schema": "adhoc"}}]}
+    )
+    svc2._mcp_factory = lambda cid: mcp  # type: ignore[assignment]
+    svc2._assert_ready = AsyncMock()  # type: ignore[assignment]
+    with patch.object(
+        svc2, "_direct_db",
+        new=AsyncMock(side_effect=DiscoveryUnavailableError("no coords")),
+    ):
+        await svc2.list_tables(900001, "adhoc", 1, None)
+    assert svc2.last_source == "wren_mcp"
+
+
+@pytest.mark.asyncio
+async def test_direct_db_merges_vault_coords_before_guard() -> None:
+    """vault 里有 host/database 时，应合并后再判齐全（旧版顺序 bug 会误报缺坐标）。"""
+    from src.agent.mis_iqd.discovery_service import IqdDiscoveryService
+
+    svc = IqdDiscoveryService()
+    config = MagicMock()
+    config.get_connection_db_profile = AsyncMock(
+        return_value={"db_type": "starrocks", "port": 9030, "secret_ref": "ref-1"}
+    )
+    svc._config_factory = lambda: config  # type: ignore[assignment]
+    vault = MagicMock()
+    vault.resolve_by_ref = AsyncMock(
+        return_value={"host": "10.0.0.1", "user": "query", "password": "p",
+                      "database": "adhoc", "db_type": "starrocks", "port": 9030}
+    )
+    with patch("src.agent.mis_iqd.discovery_service.CredentialVault", return_value=vault):
+        d = await svc._direct_db(900001)
+    assert (d._host, d._user, d._database) == ("10.0.0.1", "query", "adhoc")
+
+
+# ---------------------------------------------------------------- 数据库连接配置测试端点（Tab①）
+
+def test_db_profile_test_no_password_no_ref() -> None:
+    """无密码、无 secret_ref → ok:false（不查库），提示先存密码。"""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from src.api.deps import get_current_user, get_trace_id
+    from src.api.routes.iqd_db_profile_test import router
+
+    app = FastAPI()
+    app.include_router(router, prefix="/api/v1")
+    app.dependency_overrides[get_current_user] = lambda: {"user_id": 1}
+    app.dependency_overrides[get_trace_id] = lambda: "t"
+    client = TestClient(app)
+    r = client.post("/api/v1/iqd/db-profiles/test", json={"host": "h", "user": "u"})
+    assert r.status_code == 200
+    assert r.json()["data"]["ok"] is False
+
+
+def test_db_profile_test_resolves_password_from_vault() -> None:
+    """传 secret_ref → 从 vault 取明文密码交给 DirectDbDiscovery（与表发现直连同源）。"""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from src.api.deps import get_current_user, get_trace_id
+    from src.api.routes.iqd_db_profile_test import router
+
+    app = FastAPI()
+    app.include_router(router, prefix="/api/v1")
+    app.dependency_overrides[get_current_user] = lambda: {"user_id": 1}
+    app.dependency_overrides[get_trace_id] = lambda: "t"
+    client = TestClient(app)
+
+    inst = MagicMock()
+    inst.list_schemas = AsyncMock(return_value=["adhoc"])
+    with patch("src.api.routes.iqd_db_profile_test.CredentialVault") as V, patch(
+        "src.api.routes.iqd_db_profile_test.DirectDbDiscovery", return_value=inst
+    ) as D:
+        V.return_value.resolve_by_ref = AsyncMock(return_value={"password": "pwd-from-vault"})
+        r = client.post(
+            "/api/v1/iqd/db-profiles/test",
+            json={"host": "h", "user": "u", "secret_ref": "ref-1", "database": "adhoc"},
+        )
+    assert r.status_code == 200
+    assert r.json()["data"]["ok"] is True
+    assert D.call_args.kwargs.get("password") == "pwd-from-vault"

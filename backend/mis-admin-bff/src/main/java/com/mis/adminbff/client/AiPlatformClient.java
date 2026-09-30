@@ -506,6 +506,27 @@ public class AiPlatformClient extends AbstractDownstreamClient {
                 .bodyToMono(MAP_RESULT_TYPE));
     }
 
+    /**
+     * 数据库连接配置连通性测试（Tab①）。调平台 Worker
+     * {@code POST /api/v1/iqd/db-profiles/test}（直连业务库只读探测）。
+     *
+     * @param body          {@code {db_type, host, port, user, password, database}}
+     * @param authorization BFF 收到的原始 MIS JWT（透传平台 RS256 校验）
+     * @param traceId       全链路追踪 ID
+     * @return 平台响应 data：{@code {ok, latency_ms, message, schemas}}
+     */
+    public Map<String, Object> testIqdDbProfile(
+            Map<String, Object> body, String authorization, String traceId) {
+        Consumer<HttpHeaders> headers = buildHeaders(authorization, traceId);
+        return block(client().post()
+                .uri("/api/v1/iqd/db-profiles/test")
+                .headers(headers)
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(body)
+                .retrieve()
+                .bodyToMono(MAP_RESULT_TYPE));
+    }
+
     /** 组合转发头：复用基类 loginContextHeaders() + Authorization + X-Trace-Id + MIS 身份 enrichment 头。 */
     private Consumer<HttpHeaders> buildHeaders(String authorization, String traceId) {
         return headers -> {

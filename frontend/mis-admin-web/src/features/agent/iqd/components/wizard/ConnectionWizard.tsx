@@ -92,6 +92,7 @@ import {
   errorCode,
   errorData,
   listConnections,
+  listDbProfiles,
   mcpManage,
   testConnection,
   updateConnection,
@@ -110,6 +111,7 @@ import {
   describeConnectionConfirm,
   describeConnectionUpdateError,
   EMPTY_DRAFT,
+  missingDbFields,
   type ConnectionDraft,
   type ConnectionFormMode,
   type PendingConfirm,
@@ -164,6 +166,22 @@ function mcpBadgeClass(status: string | null | undefined): string {
  * @param busyAction        正在进行中的 MCP 操作（用于按钮 loading/禁用）
  * @param busyConnection    连接写操作（编辑/启停）进行中（禁用该组按钮防重复提交）
  */
+/**
+ * 判断 MCP 操作失败是否因为「MDL 尚未构建」。
+ *
+ * <p>「启动」(`/iqd/mcp/start`) 走本地子进程，**硬门禁**要求本机 `target/mdl.json`
+ * 已存在；新连接还没建模型/发布时必然失败。此时给用户**明确的下一步**，
+ * 而不是只显示「下游调用失败」。
+ */
+function isMdlNotBuiltError(message: string | null): boolean {
+  if (!message) return false;
+  return (
+    message.includes('MDL 尚未构建') ||
+    message.includes('mdl.json') ||
+    message.includes('请先执行语义模型同步')
+  );
+}
+
 function McpStatusCard({
   connection,
   canManageMcp,
@@ -308,12 +326,14 @@ export interface ConnectionWizardProps {
   onOpenChange: (open: boolean) => void;
   /** 创建/选中连接后回调（父组件据此把画布切到该连接）。 */
   onConnectionReady?: (connectionId: number) => void;
+  /** 【项目 Tab】指定要编辑的项目：非空则打开即进入编辑弹窗（就地改 name/数据库连接 等）。 */
+  editTarget?: Connection | null;
 }
 
 /**
  * 连接向导：4 步新建 + 多连接现状管理（含按 id 的编辑 / 停用 / 启用）。
  */
-export function ConnectionWizard({ open, onOpenChange, onConnectionReady }: ConnectionWizardProps) {
+export function ConnectionWizard({ open, onOpenChange, onConnectionReady, editTarget }: ConnectionWizardProps) {
   const queryClient = useQueryClient();
   const { hasPermission } = usePermission();
 
@@ -368,6 +388,15 @@ export function ConnectionWizard({ open, onOpenChange, onConnectionReady }: Conn
   });
   const connections = useMemo(() => connectionsQuery.data ?? [], [connectionsQuery.data]);
 
+  /** 数据库连接配置清单（Tab①）：project 以此选 profile。 */
+  const dbProfilesQuery = useQuery({
+    queryKey: iqdKeys.dbProfiles(),
+    queryFn: listDbProfiles,
+    enabled: open,
+    staleTime: 30_000,
+  });
+  const dbProfiles = useMemo(() => dbProfilesQuery.data ?? [], [dbProfilesQuery.data]);
+
   // 打开向导 → 重置到第一步（store 的 wizardStep 是全局槽位，必须显式初始化）
   useEffect(() => {
     if (open) {
@@ -393,6 +422,10 @@ export function ConnectionWizard({ open, onOpenChange, onConnectionReady }: Conn
     setCreating(true);
     setCreateError(null);
     try {
+      const missing = missingDbFields(draft, 'create');
+      if (missing.length > 0) {
+        throw new Error(`请补全数据源必填项：${missing.join('、')}（否则表发现无法直连业务库，只能看到已建模的表）`);
+      }
       const created = await createConnection(buildCreateRequest(draft));
       const id = created.id ?? null;
       setCreatedId(id);
@@ -434,7 +467,16 @@ export function ConnectionWizard({ open, onOpenChange, onConnectionReady }: Conn
       const code = errorCode(err);
       const message = err instanceof Error ? err.message : String(err);
       // 40300 大概率是「注册表未登记」（见 api 层注释）——给出可诊断的提示
-      setActionError(code != null ? `[${code}] ${message}` : message);
+      let text = code != null ? `[${code}] ${message}` : message;
+      // MDL 未构建：给出可执行的下一步，而不是让用户对着「下游调用失败」发懵
+      if ((action === 'start' || action === 'restart') && isMdlNotBuiltError(message)) {
+        text =
+          '该连接的 MDL 尚未构建，无法启动 MCP。请先完成：' +
+          '① 连接向导「数据源」填好业务库参数 → ② 建模台「表发现导入」选表 → ' +
+          '③「发布流水线」执行 MDL 构建，然后再启动。' +
+          `（原始信息：${text}）`;
+      }
+      setActionError(text);
     } finally {
       setBusyAction(null);
     }
@@ -489,6 +531,17 @@ export function ConnectionWizard({ open, onOpenChange, onConnectionReady }: Conn
   };
 
   /** 打开编辑表单（edit 模式）——预填现值，`secret_ref` 恒留空 = 保留原值。 */
+  // 【项目 Tab】父组件指定 editTarget → 打开即进入该项目编辑弹窗
+  useEffect(() => {
+    if (open && editTarget) {
+      setEditingConnection(editTarget);
+      setEditDraft(connectionToDraft(editTarget));
+      setEditError(null);
+      setMode('edit');
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, editTarget?.id]);
+
   const startEdit = (connection: Connection) => {
     setEditingConnection(connection);
     setEditDraft(connectionToDraft(connection));
@@ -502,6 +555,11 @@ export function ConnectionWizard({ open, onOpenChange, onConnectionReady }: Conn
     setEditingConnection(null);
     setEditDraft(EMPTY_DRAFT);
     setEditError(null);
+    // 由【项目 Tab】从外部指定 editTarget 打开时，关闭编辑弹窗就应整体收起；
+    // 否则父组件的 open 仍为 true，会留下一个空的向导壳（真机踩坑）。
+    if (editTarget != null) {
+      onOpenChange(false);
+    }
   };
 
   /** 保存编辑（二次确认之后调用）。 */
@@ -509,6 +567,11 @@ export function ConnectionWizard({ open, onOpenChange, onConnectionReady }: Conn
     const target = editingConnection;
     if (target?.id == null) {
       setEditError('该连接缺少 id，无法按 id 更新');
+      return;
+    }
+    const missing = missingDbFields(editDraft, 'edit');
+    if (missing.length > 0) {
+      setEditError(`请补全数据源必填项：${missing.join('、')}`);
       return;
     }
     const body = buildUpdateRequest(editDraft, target);
@@ -545,7 +608,7 @@ export function ConnectionWizard({ open, onOpenChange, onConnectionReady }: Conn
   return (
     <>
       <WizardShell
-        open={open}
+        open={open && editTarget == null}
         onOpenChange={onOpenChange}
         title="连接向导"
         description="新建问数连接，并查看各连接的 WrenAI MCP 进程状态（可编辑 / 停用 / 启用）。"
@@ -619,6 +682,7 @@ export function ConnectionWizard({ open, onOpenChange, onConnectionReady }: Conn
             section="datasource"
             mode="create"
             draft={draft}
+            dbProfiles={dbProfiles}
             onDraftChange={(patch) => setDraft((prev) => ({ ...prev, ...patch }))}
           />
         )}
@@ -739,6 +803,7 @@ export function ConnectionWizard({ open, onOpenChange, onConnectionReady }: Conn
               section="datasource"
               mode="edit"
               draft={editDraft}
+              dbProfiles={dbProfiles}
               disabled={savingConnection}
               onDraftChange={(patch) => setEditDraft((prev) => ({ ...prev, ...patch }))}
             />

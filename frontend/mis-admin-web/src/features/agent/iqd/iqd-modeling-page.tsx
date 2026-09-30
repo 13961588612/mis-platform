@@ -30,6 +30,13 @@ import { PageHeader } from '@/components/common/page-header';
 import { buildAppBreadcrumbs } from '@/components/common/app-breadcrumbs';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
 import { cn } from '@/lib/utils';
 import { IQD_MODELING_PERMISSIONS, useIqdModelingPermission } from './components/shared/usePermission';
 import { PermissionGate } from '@/components/auth/permission-gate';
@@ -182,6 +189,18 @@ export function IqdModelingPage() {
     }
   }, [connectionId, connections, activeConnection, setConnectionId]);
 
+  /**
+   * 切换连接（A-14）：改 store.connectionId 会清空选中/抽屉/草稿/wizard，避免跨连接串扰；
+   * 画布按 key=connId 重挂载。此前该能力只写在注释里、**没有 UI 入口**，导致用户
+   * 建了新连接却只能看默认第一条（表发现也只有它的表）。
+   */
+  const onConnectionChange = useCallback(
+    (value: string) => {
+      setConnectionId(value);
+    },
+    [setConnectionId],
+  );
+
   const clampLeft = useCallback((deltaPct: number) => {
     setLeftPct((prev) => Math.min(MAX_PANE_PCT, Math.max(MIN_PANE_PCT, prev + deltaPct)));
   }, []);
@@ -201,10 +220,32 @@ export function IqdModelingPage() {
         breadcrumbs={buildAppBreadcrumbs({ app: 'agent', title: '可视化建模台' })}
         actions={
           <div className="flex items-center gap-2">
-            {activeConnection && (
+            {/* 连接切换器（A-14）：建模台一切以「连接」为上下文，必须能切。
+                此前只有只读 Badge + 自动选第一条 → 新建连接后无法切过去看它的表。 */}
+            {connections.length > 0 && (
+              <Select
+                value={connectionId != null ? String(connectionId) : undefined}
+                onValueChange={onConnectionChange}
+                disabled={connectionsQuery.isLoading}
+              >
+                <SelectTrigger className="h-8 w-[13rem]">
+                  <SelectValue placeholder="选择连接" />
+                </SelectTrigger>
+                <SelectContent>
+                  {connections
+                    .filter((c) => c.id != null)
+                    .map((c) => (
+                      <SelectItem key={c.id} value={String(c.id)}>
+                        {c.name}
+                        {c.mcp_status ? ` · ${c.mcp_status}` : ''}
+                      </SelectItem>
+                    ))}
+                </SelectContent>
+              </Select>
+            )}
+            {activeConnection && activeConnection.status && (
               <Badge variant="outline" className="text-[12px]">
-                {activeConnection.name}
-                {activeConnection.mcp_status ? ` · ${activeConnection.mcp_status}` : ''}
+                {activeConnection.status}
               </Badge>
             )}
             {/* 一键整理画布（T03d）：dagre 在浏览器算，落库复用 PUT layout */}

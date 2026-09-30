@@ -91,9 +91,14 @@ async def test_start_connection_readiness_gate_missing_mdl(tmp_path: Path) -> No
         staticmethod(lambda cid: home),
     ):
         cli_cls.return_value.ensure_project.return_value = home
-        svc = IqdMcpLifecycleService()
-        with pytest.raises(IqdMcpLifecycleError):
-            await svc.start_connection(1)
+        # 本用例校验「本地 Plan A」的就绪门禁：显式钉住 agent 不可用（否则 start 会委派远程 ensure）
+        with patch(
+            "src.agent.mis_iqd.mcp_lifecycle.WrenMcpAgentClient"
+        ) as agent_cls:
+            agent_cls.return_value.enabled = False
+            svc = IqdMcpLifecycleService()
+            with pytest.raises(IqdMcpLifecycleError):
+                await svc.start_connection(1)
 
     # 未就绪：进程管理器不应注册任何端点
     assert mgr.get_endpoint("1") is None
@@ -128,8 +133,13 @@ async def test_start_connection_happy_path(tmp_path: Path) -> None:
         staticmethod(lambda cid: home),
     ):
         cli_cls.return_value.ensure_project.return_value = home
-        svc = IqdMcpLifecycleService(credential_resolver=resolver)
-        result = await svc.start_connection(1)
+        # 本地 Plan A happy path：钉住 agent 不可用，走本地子进程管理器
+        with patch(
+            "src.agent.mis_iqd.mcp_lifecycle.WrenMcpAgentClient"
+        ) as agent_cls:
+            agent_cls.return_value.enabled = False
+            svc = IqdMcpLifecycleService(credential_resolver=resolver)
+            result = await svc.start_connection(1)
 
     assert result["mcp_status"] == "running"
     assert result["port"] == 18080
@@ -151,7 +161,11 @@ async def test_stop_connection_marks_retained(tmp_path: Path) -> None:
         IqdMcpLifecycleService,
         "project_home_of",
         staticmethod(lambda cid: home),
-    ):
+    ), patch(
+        # 本地 Plan A 用例：钉住 agent 不可用，否则 stop 会委派远程
+        "src.agent.mis_iqd.mcp_lifecycle.WrenMcpAgentClient"
+    ) as agent_cls:
+        agent_cls.return_value.enabled = False
         svc = IqdMcpLifecycleService()
         result = await svc.stop_connection(1, retain_dir=True)
 

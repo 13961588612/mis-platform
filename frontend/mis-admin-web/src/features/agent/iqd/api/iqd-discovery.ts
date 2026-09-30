@@ -109,9 +109,9 @@ export interface ListColumnsParams {
  * <p>注意 query 名是 **camelCase** `connectionId`（Worker 侧 alias），见模块头说明。
  */
 export async function listSchemas(connectionId: number): Promise<DiscoverySchema[]> {
-  const data = await call<{ schemas?: string[] }>(
+  const data = await call<{ schemas?: string[]; source?: string }>(
     () =>
-      api.get<ApiResult<{ schemas: string[] }>>('/iqd/discovery/schemas', {
+      api.get<ApiResult<{ schemas: string[]; source?: string }>>('/iqd/discovery/schemas', {
         params: { connectionId },
       }),
     '获取 schema 列表失败',

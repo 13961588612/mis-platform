@@ -121,6 +121,15 @@ public class IqdConnection {
      * 直接回显 db_type/host/port/database/user.{@code db_password} <b>不在此表</b>：
      * 明文密码只在 ai-platform vault（{@code credential_mappings}，键 = secretRef）。
      */
+    /**
+     * 【分层 2026-09-29】所属数据库连接配置（iqd_db_profile.id）。
+     *
+     * <p>「项目 = wren context」只描述语义工程；业务库连接（profile）由其指向，
+     * 二者是 **N : 1**（同一 profile 可被多个项目复用）。
+     */
+    @Column(name = "profile_id")
+    private Long profileId;
+
     @Column(name = "db_type")
     private String dbType;
 
@@ -324,6 +333,14 @@ public class IqdConnection {
 
     public void setAgentHandle(String agentHandle) {
         this.agentHandle = agentHandle;
+    }
+
+    public Long getProfileId() {
+        return profileId;
+    }
+
+    public void setProfileId(Long profileId) {
+        this.profileId = profileId;
     }
 
     public String getDbType() {

@@ -90,11 +90,42 @@ abstract class AbstractDownstreamClient {
         } catch (BusinessException ex) {
             throw ex;
         } catch (WebClientResponseException ex) {
-            throw new BusinessException(ResultCode.INTERNAL_ERROR,
-                    "下游调用失败: HTTP " + ex.getStatusCode().value());
+            throw downstreamFailure(ex);
         } catch (Exception ex) {
             throw new BusinessException(ResultCode.INTERNAL_ERROR, "下游调用失败: " + ex.getMessage());
         }
+    }
+
+    /**
+     * 把下游（mis-iqd / ai-platform）的 HTTP 错误尽量透出可读原因。
+     *
+     * <p>此前统一吞成「下游调用失败: HTTP 500」，用户在界面上看不到真实原因
+     * （例如 ai-platform 的「连接 X 的 MDL 尚未构建」），无法自救。
+     *
+     * <p>下游错误体多为 code/message 信封（HTTP 500 时 WebClient 在反序列化前
+     * 即抛 WebClientResponseException）；这里手工解析该体，命中则以**下游 code + message**
+     * 抛出（保留可诊断信息），否则回退到通用文案。
+     */
+    protected BusinessException downstreamFailure(WebClientResponseException ex) {
+        int status = ex.getStatusCode().value();
+        String raw = ex.getResponseBodyAsString();
+        if (raw != null && !raw.isBlank()) {
+            try {
+                com.fasterxml.jackson.databind.JsonNode node =
+                        new com.fasterxml.jackson.databind.ObjectMapper().readTree(raw);
+                String message = node.path("message").asText("");
+                int code = node.path("code").asInt(0);
+                if (message != null && !message.isBlank()) {
+                    int outCode = code != 0 ? code : ResultCode.INTERNAL_ERROR.getCode();
+                    return new BusinessException(outCode,
+                            "下游调用失败: " + message + "（HTTP " + status + "）");
+                }
+            } catch (Exception ignore) {
+                // 回退通用文案
+            }
+        }
+        return new BusinessException(ResultCode.INTERNAL_ERROR,
+                "下游调用失败: HTTP " + status);
     }
 
     /** 拉取非 Result 包装的原始字节（如图片代理）。 */
@@ -108,8 +139,7 @@ abstract class AbstractDownstreamClient {
         } catch (BusinessException ex) {
             throw ex;
         } catch (WebClientResponseException ex) {
-            throw new BusinessException(ResultCode.INTERNAL_ERROR,
-                    "下游调用失败: HTTP " + ex.getStatusCode().value());
+            throw downstreamFailure(ex);
         } catch (Exception ex) {
             throw new BusinessException(ResultCode.INTERNAL_ERROR, "下游调用失败: " + ex.getMessage());
         }

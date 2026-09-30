@@ -92,6 +92,8 @@ export interface ConnectionDraft {
   authType: string;
   secretRef: string;
   projectId: string;
+  /** 分层：所属数据库连接配置 id（字符串，空 = 未选）。 */
+  profileId: string;
   // ---- 路线 A：业务库连接（结构化录入）----
   dbType: string;
   dbHost: string;
@@ -112,6 +114,7 @@ export const EMPTY_DRAFT: ConnectionDraft = {
   authType: 'none',
   secretRef: '',
   projectId: '',
+  profileId: '',
   dbType: 'starrocks',
   dbHost: '',
   dbPort: '9030',
@@ -141,6 +144,7 @@ export function connectionToDraft(connection: Connection): ConnectionDraft {
     authType: connection.auth_type ?? 'none',
     secretRef: '',
     projectId: connection.project_id ?? '',
+    profileId: connection.profile_id != null ? String(connection.profile_id) : '',
     // 编辑态：缺省 = 空串（= 不修改）；新建态的默认值在 EMPTY_DRAFT 里给
     dbType: connection.db_type ?? '',
     dbHost: connection.db_host ?? '',
@@ -173,6 +177,34 @@ export function normalizeTimeout(value: number): number {
   return Number.isFinite(seconds) && seconds > 0 ? seconds : DEFAULT_TIMEOUT_SECONDS;
 }
 
+/**
+ * 业务库连接必填校验（路线 A）。
+ *
+ * <p><b>为什么必须拦</b>：连接向导里 `dbType`/`dbPort` 有默认值（starrocks/9030），
+ * 用户只填密码、留着 host/database/user 空着也能保存 —— 之后**表发现直连拿不到坐标**
+ * 会静默回落到 wren MCP，界面只显示「已建模的几张表」，用户根本不知道少了表。
+ * 故此处要求 host/database/user 必填（新增时还要求密码），在提交前拦截。
+ *
+ * @returns 缺失字段的中文名列表（空 = 通过）
+ */
+export function missingDbFields(draft: ConnectionDraft, mode: ConnectionFormMode): string[] {
+  // 仅在用户确实要用平台托管连接（填了任一 db 字段）时校验，避免影响纯 wren/MCP 用法。
+  const touchesDb =
+    draft.dbHost.trim() !== '' ||
+    draft.dbDatabase.trim() !== '' ||
+    draft.dbUser.trim() !== '' ||
+    draft.dbPassword !== '';
+  if (!touchesDb) {
+    return [];
+  }
+  const missing: string[] = [];
+  if (draft.dbHost.trim() === '') missing.push('主机 host');
+  if (draft.dbDatabase.trim() === '') missing.push('数据库 database');
+  if (draft.dbUser.trim() === '') missing.push('账号 user');
+  if (mode === 'create' && draft.dbPassword === '') missing.push('密码 password');
+  return missing;
+}
+
 // ================================================================ 载荷组装
 
 /**
@@ -191,6 +223,7 @@ export function buildCreateRequest(draft: ConnectionDraft): CreateConnectionRequ
     auth_type: draft.authType,
     secret_ref: draft.secretRef.trim() || null,
     project_id: draft.projectId.trim() || null,
+    profile_id: parsePort(draft.profileId),
     enabled: true,
     db_type: draft.dbType.trim() || null,
     db_host: draft.dbHost.trim() || null,
@@ -285,6 +318,12 @@ export function buildUpdateRequest(
   assignText(payload, 'language', draft.language, original.language ?? null);
   // auth_type：后端「空串视为缺省」（§14.1）⇒ 与"留空 = 保留原值"同义，走同一分支
   assignText(payload, 'auth_type', draft.authType, original.auth_type ?? null);
+
+  // ---- profile_id（分层）：非空且与当前不同才提交
+  const profileIdNum = parsePort(draft.profileId);
+  if (profileIdNum != null && profileIdNum !== (original.profile_id ?? null)) {
+    payload.profile_id = profileIdNum;
+  }
 
   // ---- secret_ref：留空 / 占位符 ⇒ **完全不传该字段**（见上方铁律）
   const secret = draft.secretRef.trim();

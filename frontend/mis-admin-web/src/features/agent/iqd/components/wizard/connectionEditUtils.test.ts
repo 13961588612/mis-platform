@@ -251,6 +251,8 @@ describe('buildCreateRequest（新建载荷，行为与既有 ensureCreated 逐�
       secret_ref: null,
       project_id: null,
       enabled: true,
+      // 分层：project 默认未绑定数据库连接
+      profile_id: null,
       // 路线 A：业务库连接字段（默认 starrocks:9030；密码为空 ⇒ null）
       db_type: 'starrocks',
       db_host: null,

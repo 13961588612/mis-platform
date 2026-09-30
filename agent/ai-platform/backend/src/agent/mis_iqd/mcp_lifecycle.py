@@ -167,10 +167,20 @@ class IqdMcpLifecycleService:
             raise IqdMcpLifecycleError(f"连接 {connection_id} 未启用，拒绝启动 MCP")
 
         project_home = self.project_home_of(connection_id)
-        # ① 确保 project 目录骨架（不含凭证明文）
-        IqdCli().ensure_project(connection_id, project_home)
 
-        # ② 就绪门禁：target/mdl.json 必须已编译（build 完成）
+        # ① 跨机器优先：WrenMcpAgent 已配置 ⇒ MCP 进程在 wren 机（MDL 也在那里）。
+        #   此时本机 `os.path.exists(/var/.../mdl.json)` 没意义（ai-platform 跑在 Windows /
+        #   不同主机），也不能走本地子进程管理器。“启动”应与“启用/创建项目”
+        #   同路径（声明式 ensure → WrenMcpAgentClient.ensure）。
+        if WrenMcpAgentClient().enabled:
+            logger.info(
+                "IQD start: cross-machine agent enabled; delegate to ensure",
+                connection_id=connection_id,
+            )
+            return await self.ensure_connection(connection_id, wait=wait)
+
+        # ② 本地 Plan A：确保 project 目录骨架 + 就绪门禁（本机 target/mdl.json）
+        IqdCli().ensure_project(connection_id, project_home)
         mdl_path = os.path.join(project_home, "target", "mdl.json")
         if not os.path.exists(mdl_path):
             raise IqdMcpLifecycleError(
@@ -258,16 +268,13 @@ class IqdMcpLifecycleService:
         project_home = self.project_home_of(connection_id)
         # ① 确保 project 目录骨架（不含凭证明文）
         IqdCli().ensure_project(connection_id, project_home)
-        # ② 远程 ensure：MDL 产物在 wren 机持久卷上，本机（尤其 Windows 联调）
-        # 目录只是骨架镜像，不能用本机 target/mdl.json 做硬门禁——否则「启用/创建项目」
-        # 永远卡在空骨架。本地 Plan A（start_connection）仍保留 MDL 门禁。
-        mdl_path = os.path.join(project_home, "target", "mdl.json")
-        if not os.path.exists(mdl_path):
-            logger.warning(
-                "IQD remote ensure: local mdl.json missing; proceed to WrenMcpAgent",
-                connection_id=connection_id,
-                mdl_path=mdl_path,
-            )
+        # ② 就绪门禁（真相以 **wren 机产物** 为准）：
+        #   本机 target/mdl.json 在跨机器下无意义（ai-platform 可能跑在 Windows），
+        #   但 wren 机上的 target/mdl.json 必须存在——否则 wren serve mcp 会启动即崩，
+        #   agent 自愈反复重拉（实测：pid 不断变化而 status 恒为 running，
+        #   用户看到「已运行」却查不了数）。故这里先向 agent 探一次远程产物，
+        #   缺失则**明确报错**，而不是去拉一个必崩的进程。
+        await self._assert_remote_mdl_ready(connection_id, agent_client)
         # ③ 解析凭证 env（D6：仅 env 注入，不落盘）
         # 远程模式：业务库凭证常已在 wren 机 profile；本地 vault 缺表/无条目时
         # 不得阻断 ensure（否则 bootstrap 后 agent_registry 丢连接 → 建模台「MCP 就绪失败」）。
@@ -324,6 +331,38 @@ class IqdMcpLifecycleService:
             "remote": True,
         }
 
+    async def _assert_remote_mdl_ready(
+        self, connection_id: int, agent_client: WrenMcpAgentClient
+    ) -> None:
+        """向 wren 机探本连接的 `target/mdl.json`；缺失则明确报错。
+
+        <p>为什么不用本机文件判定：跨机器下本机目录只是骨架镜像，
+        真正被 `wren serve mcp` 读取的是 wren 机持久卷上的产物。缺失时不报错
+        会让 agent 反复重拉一个必崩的进程，前端却显示「已运行」。
+        """
+        try:
+            data = await agent_client.run_cli(
+                connection_id,
+                [],
+                list_path="target",
+                list_prefix="",
+                raise_on_error=False,
+            )
+        except Exception as exc:  # noqa: BLE001 - 探测失败不硬拦（避免误伤已有 profile 的连接）
+            logger.warning(
+                "IQD remote mdl probe failed; continue",
+                connection_id=connection_id,
+                error=str(exc),
+            )
+            return
+        listed = [str(f.get("path") or "") for f in (data.get("listed") or [])]
+        if not any(p.endswith("mdl.json") for p in listed):
+            raise IqdMcpLifecycleError(
+                f"连接 {connection_id} 的 MDL 尚未构建（wren 机 "
+                f"target/mdl.json 缺失）；请先在模型发布流水线执行 "
+                "MDL 构建（或自愈 force-rebuild）再启动 MCP"
+            )
+
     async def _report_deployment(
         self, connection_id: int, result: WrenMcpAgentEnsureResult
     ) -> None:
@@ -349,10 +388,45 @@ class IqdMcpLifecycleService:
         Returns:
             ``{"connection_id", "mcp_status": "stopped"}``。
         """
+        # 跨机器优先：WrenMcpAgent 已配置 ⇒ 进程在 wren 机，必须经控制面叫它 stop；
+        # 否则只停本地 Plan A 进程管理器，wren 机进程照旧跑，状态查询马上又回 running（真机踩坑）。
+        agent_client = WrenMcpAgentClient()
+        if agent_client.enabled:
+            try:
+                data = await agent_client.stop(connection_id)
+                logger.info(
+                    "IQD MCP remote connection stopped",
+                    connection_id=connection_id,
+                    result=str(data)[:200],
+                )
+            except Exception as exc:  # noqa: BLE001 - 远程 stop 失败不得静默：回验状态
+                logger.warning(
+                    "IQD MCP remote stop failed",
+                    connection_id=connection_id,
+                    error=str(exc),
+                )
+                raise IqdMcpLifecycleError(
+                    f"连接 {connection_id} 远程停止失败：{exc}"
+                ) from exc
+            # 注销本地跨机器登记（避免 status 从注册表读到旧 running）
+            try:
+                get_agent_registry().remove(connection_id)
+            except Exception:  # noqa: BLE001
+                pass
+            # 只回写状态（不动 mcp_host/agent_handle，避免把部署引用清空）
+            try:
+                await IqdConfigClient().report_mcp_status(
+                    int(connection_id), McpStatus.STOPPED, None
+                )
+            except Exception:  # noqa: BLE001
+                pass
+            return {"connection_id": connection_id, "mcp_status": McpStatus.STOPPED}
+
         mgr = get_process_manager()
         await mgr.stop(connection_id, retain_dir=retain_dir)
         logger.info("IQD MCP connection stopped", connection_id=connection_id)
         return {"connection_id": connection_id, "mcp_status": McpStatus.STOPPED}
+
 
     # ================================================================ 重启
 

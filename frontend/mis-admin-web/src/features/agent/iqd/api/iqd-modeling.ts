@@ -50,6 +50,9 @@ import type {
   IqdModelingCreateResponse,
   UpdateConnectionRequest,
   ValidateExpressionResult,
+  DbProfile,
+  DbProfileSaveRequest,
+  DbProfileTestResult,
 } from '../types/modeling';
 
 // ================================================================ 错误类型 + 解包
@@ -181,6 +184,42 @@ export async function deleteConnection(
     `/iqd/connections/${connectionId}`,
   );
   return unwrap(res, '删除连接失败');
+}
+
+// ================================================================ 数据库连接配置（Tab①，2026-09-29）
+
+/** 清单。`GET /api/v1/iqd/db-profiles`。 */
+export async function listDbProfiles(): Promise<DbProfile[]> {
+  const res = await api.get<ApiResult<DbProfile[]>>('/iqd/db-profiles');
+  return unwrap(res, '获取数据库连接配置失败') ?? [];
+}
+
+/** 新建。`POST /api/v1/iqd/db-profiles`。 */
+export async function createDbProfile(body: DbProfileSaveRequest): Promise<DbProfile> {
+  const res = await api.post<ApiResult<DbProfile>>('/iqd/db-profiles', body);
+  return unwrap(res, '新建数据库连接配置失败');
+}
+
+/** 按 id 更新。`PUT /api/v1/iqd/db-profiles/{id}`。 */
+export async function updateDbProfile(id: number, body: DbProfileSaveRequest): Promise<DbProfile> {
+  const res = await api.put<ApiResult<DbProfile>>(`/iqd/db-profiles/${id}`, body);
+  return unwrap(res, '更新数据库连接配置失败');
+}
+
+/** 删除（引用阻断 42200 + data.dependents）。`DELETE /api/v1/iqd/db-profiles/{id}`。 */
+export async function deleteDbProfile(id: number): Promise<Record<string, unknown>> {
+  const res = await api.delete<ApiResult<Record<string, unknown>>>(`/iqd/db-profiles/${id}`);
+  return unwrap(res, '删除数据库连接配置失败');
+}
+
+/**
+ * 连通性测试。`POST /api/v1/iqd/db-profiles/{id}/test`。
+ *
+ * <p>⚠️ 需先保存（拿到 id）—— 测试走服务端直连，需要已落库的 profile 与 vault 密码。
+ */
+export async function testDbProfile(id: number): Promise<DbProfileTestResult> {
+  const res = await api.post<ApiResult<DbProfileTestResult>>(`/iqd/db-profiles/${id}/test`);
+  return unwrap(res, '数据库连通测试失败');
 }
 
 // ================================================================ 新建节点族（§4.3 c 点）

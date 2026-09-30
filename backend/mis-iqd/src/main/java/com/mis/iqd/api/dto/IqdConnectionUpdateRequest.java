@@ -65,6 +65,9 @@ public class IqdConnectionUpdateRequest {
     /** 连接可用性开关（可多条同时 true；只改本行，不联动其它）。 */
     private Boolean enabled;
 
+    /** 【分层 2026-09-29】所属数据库连接配置（null = 保留原值）。 */
+    private Long profileId;
+
     // ---- 路线 A：业务库连接展示字段（null = 保留原值；密码不在本 DTO）----
     private String dbType;
     private String dbHost;
@@ -182,6 +185,14 @@ public class IqdConnectionUpdateRequest {
 
     public void setDbUser(String dbUser) {
         this.dbUser = dbUser;
+    }
+
+    public Long getProfileId() {
+        return profileId;
+    }
+
+    public void setProfileId(Long profileId) {
+        this.profileId = profileId;
     }
 
     /**

@@ -505,6 +505,8 @@ public class IqdModelingController {
         if (writeback != null) {
             dto.setMdlWritebackEnabled(toBoolean(writeback));
         }
+        // 分层：project → profile 指向
+        dto.setProfileId(toLong(first(b, "profile_id", "profileId")));
         // 路线 A：业务库连接展示字段（非敏感；密码不在本 DTO）
         dto.setDbType(str(first(b, "db_type", "dbType")));
         dto.setDbHost(str(first(b, "db_host", "dbHost")));
@@ -553,6 +555,9 @@ public class IqdModelingController {
         }
         if (hasAny(b, "enabled")) {
             dto.setEnabled(toBoolean(first(b, "enabled")));
+        }
+        if (hasAny(b, "profile_id", "profileId")) {
+            dto.setProfileId(toLong(first(b, "profile_id", "profileId")));
         }
         if (hasAny(b, "db_type", "dbType")) {
             dto.setDbType(str(first(b, "db_type", "dbType")));

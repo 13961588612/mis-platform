@@ -31,6 +31,12 @@ public class IqdConnectionVO {
     /** 按连接灰度闸门：是否允许平台写回 MDL（二期 P0-1~P0-12，U7/Q4）。 */
     private Boolean mdlWritebackEnabled;
 
+    /** 【分层 2026-09-29】所属数据库连接配置（iqd_db_profile.id）；project : profile = N : 1。 */
+    private Long profileId;
+
+    /** 【分层】profile 名（列表直接展示，免二次查询）。 */
+    private String profileName;
+
     /** 【路线 A】业务库类型（非敏感展示；密码只在 vault）。 */
     private String dbType;
 
@@ -173,6 +179,22 @@ public class IqdConnectionVO {
         this.mdlWritebackEnabled = mdlWritebackEnabled;
     }
 
+    public Long getProfileId() {
+        return profileId;
+    }
+
+    public void setProfileId(Long profileId) {
+        this.profileId = profileId;
+    }
+
+    public String getProfileName() {
+        return profileName;
+    }
+
+    public void setProfileName(String profileName) {
+        this.profileName = profileName;
+    }
+
     public String getDbType() {
         return dbType;
     }
@@ -303,6 +325,16 @@ public class IqdConnectionVO {
     @JsonProperty("mcp_port")
     public Integer mcpPortWire() {
         return mcpPort;
+    }
+
+    @JsonProperty("profile_id")
+    public Long profileIdWire() {
+        return profileId;
+    }
+
+    @JsonProperty("profile_name")
+    public String profileNameWire() {
+        return profileName;
     }
 
     @JsonProperty("db_type")

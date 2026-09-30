@@ -131,6 +131,63 @@ public class IqdModelingClient extends AbstractDownstreamClient {
                 .bodyToMono(MAP_RESULT));
     }
 
+    // ------------------------------------------------------------------ 数据库连接配置（Tab①）
+
+    /** 清单。{@code GET /api/v1/iqd/db-profiles}。 */
+    public List<Map<String, Object>> listDbProfiles() {
+        return block(client().get()
+                .uri("/api/v1/iqd/db-profiles")
+                .headers(loginContextHeaders())
+                .retrieve()
+                .bodyToMono(MAP_LIST_RESULT));
+    }
+
+    /** 新建。{@code POST /api/v1/iqd/db-profiles}。 */
+    public Map<String, Object> createDbProfile(Map<String, Object> body) {
+        return postJson("/api/v1/iqd/db-profiles", body);
+    }
+
+    /** 按 id 更新。{@code PUT /api/v1/iqd/db-profiles/{id}}。 */
+    public Map<String, Object> updateDbProfile(Long id, Map<String, Object> body) {
+        return block(client().put()
+                .uri("/api/v1/iqd/db-profiles/{id}", id)
+                .headers(loginContextHeaders())
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(body == null ? Map.of() : body)
+                .retrieve()
+                .bodyToMono(MAP_RESULT));
+    }
+
+    /** 删除（引用阻断 42200 + data.dependents）。{@code DELETE /api/v1/iqd/db-profiles/{id}}。 */
+    public Map<String, Object> deleteDbProfile(Long id) {
+        return block(client().delete()
+                .uri("/api/v1/iqd/db-profiles/{id}", id)
+                .headers(loginContextHeaders())
+                .retrieve()
+                .bodyToMono(MAP_RESULT));
+    }
+
+    /** 取凭证引用 + 非敏感坐标（供 BFF 驱动 ai-platform 直连测试）。 */
+    public Map<String, Object> getDbProfileCredentials(Long id) {
+        return block(client().get()
+                .uri("/api/v1/iqd/db-profiles/{id}/credentials", id)
+                .headers(loginContextHeaders())
+                .retrieve()
+                .bodyToMono(MAP_RESULT));
+    }
+
+    /** 回写连通性测试结果。{@code POST /api/v1/iqd/db-profiles/{id}/test-result?ok=&message=}。 */
+    public Map<String, Object> reportDbProfileTest(Long id, boolean ok, String message) {
+        return block(client().post()
+                .uri(uriBuilder -> uriBuilder.path("/api/v1/iqd/db-profiles/{id}/test-result")
+                        .queryParam("ok", ok)
+                        .queryParam("message", message == null ? "" : message)
+                        .build(id))
+                .headers(loginContextHeaders())
+                .retrieve()
+                .bodyToMono(MAP_RESULT));
+    }
+
     // ------------------------------------------------------------------ 新建节点族（§4.3 c 点）
 
     /** 由物理表生成模型（T02a 已实现）。{@code POST /api/v1/iqd/catalog/model/from-table}。 */

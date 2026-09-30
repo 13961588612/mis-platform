@@ -196,6 +196,136 @@ public class IqdModelingController {
      * 启动 <b>Ambiguous mapping</b>；建模台发布流水线复用该既有端点即可。
      */
 
+    // ================================================================ 数据库连接配置（Tab①，2026-09-29）
+
+    /** 数据库连接配置清单。{@code GET /db-profiles}。 */
+    @GetMapping("/db-profiles")
+    public ResponseEntity<Result<List<Map<String, Object>>>> listDbProfiles() {
+        return ResponseEntity.ok(Result.ok(modelingClient.listDbProfiles()));
+    }
+
+    /** 新建。{@code POST /db-profiles}（密码经本类转投 vault，不落 mis-iqd）。 */
+    @PostMapping("/db-profiles")
+    public ResponseEntity<Result<Map<String, Object>>> createDbProfile(
+            @RequestBody Map<String, Object> body,
+            @RequestHeader(value = SecurityConstants.AUTHORIZATION_HEADER, required = false) String authorization,
+            @RequestHeader(value = SecurityConstants.HEADER_TRACE_ID, required = false) String traceId) {
+        Map<String, Object> sanitized = stripDbPassword(body);
+        ResponseEntity<Result<Map<String, Object>>> resp = forward(() -> modelingClient.createDbProfile(sanitized));
+        if (resp.getStatusCode().is2xxSuccessful() && resp.getBody() != null && resp.getBody().getCode() == 0) {
+            storeProfileCredential(body, resp.getBody().getData(), authorization, traceId);
+        }
+        return resp;
+    }
+
+    /** 按 id 更新。{@code PUT /db-profiles/{id}}。 */
+    @PutMapping("/db-profiles/{id}")
+    public ResponseEntity<Result<Map<String, Object>>> updateDbProfile(
+            @PathVariable Long id,
+            @RequestBody Map<String, Object> body,
+            @RequestHeader(value = SecurityConstants.AUTHORIZATION_HEADER, required = false) String authorization,
+            @RequestHeader(value = SecurityConstants.HEADER_TRACE_ID, required = false) String traceId) {
+        Map<String, Object> sanitized = stripDbPassword(body);
+        ResponseEntity<Result<Map<String, Object>>> resp = forward(() -> modelingClient.updateDbProfile(id, sanitized));
+        if (resp.getStatusCode().is2xxSuccessful() && resp.getBody() != null && resp.getBody().getCode() == 0) {
+            storeProfileCredential(body, resp.getBody().getData(), authorization, traceId);
+        }
+        return resp;
+    }
+
+    /** 删除（引用阻断）。{@code DELETE /db-profiles/{id}}。 */
+    @DeleteMapping("/db-profiles/{id}")
+    public ResponseEntity<Result<Map<String, Object>>> deleteDbProfile(@PathVariable Long id) {
+        return forward(() -> modelingClient.deleteDbProfile(id));
+    }
+
+    /**
+     * 连通性测试。{@code POST /db-profiles/{id}/test}。
+     *
+     * <p>链路：取 profile 非敏感坐标 + secret_ref → ai-platform vault 解密 → 直连业务库
+     * 只读探测 → 回写 mis-iqd 的 last_test_*。
+     */
+    @PostMapping("/db-profiles/{id}/test")
+    public ResponseEntity<Result<Map<String, Object>>> testDbProfile(
+            @PathVariable Long id,
+            @RequestHeader(value = SecurityConstants.AUTHORIZATION_HEADER, required = false) String authorization,
+            @RequestHeader(value = SecurityConstants.HEADER_TRACE_ID, required = false) String traceId) {
+        return forward(() -> {
+            Map<String, Object> creds = modelingClient.getDbProfileCredentials(id);
+            Map<String, Object> body = new LinkedHashMap<>();
+            body.put("db_type", creds.get("db_type"));
+            body.put("host", creds.get("host"));
+            body.put("port", creds.get("port"));
+            body.put("user", creds.get("user"));
+            body.put("database", creds.get("database"));
+            // secret_ref 透传：ai-platform 据此从 vault 取明文密码（密码不经 BFF/mis-iqd）
+            body.put("secret_ref", creds.get("secret_ref"));
+            Map<String, Object> test;
+            try {
+                test = aiPlatformClient.testIqdDbProfile(body, authorization, traceId);
+            } catch (BusinessException ex) {
+                throw ex;
+            }
+            boolean ok = Boolean.TRUE.equals(test.get("ok"));
+            String message = test.get("message") == null ? "" : String.valueOf(test.get("message"));
+            try {
+                modelingClient.reportDbProfileTest(id, ok, message);
+            } catch (Exception ex) {
+                log.warn("db profile test result report failed id={}: {}", id, ex.getMessage());
+            }
+            return test;
+        });
+    }
+
+    /**
+     * 把 profile 的库参数 + 明文密码写入 ai-platform vault（键 = profile 的 secret_ref）。
+     *
+     * <p>与连接同口径：密码只经 vault，不进 mis-iqd。留空 = 保留 vault 既有密码。
+     */
+    private void storeProfileCredential(
+            Map<String, Object> body, Map<String, Object> resultData,
+            String authorization, String traceId) {
+        if (body == null || resultData == null) {
+            return;
+        }
+        // 关键：使用服务端返回的 profile 真实 secret_ref（而非前端传入或自行推导）。
+        // 否则编辑时会把密码写到不同的 vault 键下，而 profile.secret_ref 仍指向旧键 → 密码修改静默不生效。
+        Object secret = resultData.get("id") != null
+                ? fetchProfileSecretRef(Long.valueOf(String.valueOf(resultData.get("id"))))
+                : null;
+        if (secret == null) {
+            secret = firstNonNull(body, "secret_ref", "secretRef");
+        }
+        Object id = resultData.get("id");
+        if (secret == null && id != null) {
+            secret = "iqd-profile-" + id;
+        }
+        Object password = firstNonNull(body, "db_password", "dbPassword");
+        Object host = firstNonNull(body, "db_host", "dbHost");
+        Object user = firstNonNull(body, "db_user", "dbUser");
+        Object dbType = firstNonNull(body, "db_type", "dbType");
+        Object database = firstNonNull(body, "db_database", "dbDatabase");
+        Object port = firstNonNull(body, "db_port", "dbPort");
+        boolean touches = password != null || host != null || user != null || dbType != null
+                || database != null || port != null;
+        if (secret == null || !touches) {
+            return;
+        }
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("secret_ref", secret);
+        if (dbType != null) payload.put("db_type", dbType);
+        if (host != null) payload.put("host", host);
+        if (port != null) payload.put("port", port);
+        if (user != null) payload.put("user", user);
+        if (database != null) payload.put("database", database);
+        if (password != null) payload.put("password", password);
+        try {
+            aiPlatformClient.storeIqdCredential(payload, authorization, traceId);
+        } catch (Exception ex) {
+            log.warn("db profile credential store failed: {}", ex.getMessage());
+        }
+    }
+
     // ================================================================ 新建节点族（§4.3 c 点）
 
     /** 空白模型创建。{@code POST /catalog/model}。 */
@@ -359,6 +489,22 @@ public class IqdModelingController {
     public ResponseEntity<Result<Map<String, Object>>> importTables(
             @RequestBody Map<String, Object> body) {
         return forward(() -> discoveryClient.importTables(body));
+    }
+
+    /**
+     * 向 mis-iqd 取 profile 的真实 secret_ref（内部端点，不掩码）。
+     *
+     * <p>用于把密码写入与 profile 一致的 vault 键；失败返回 null（回退到调用方推导）。
+     */
+    private String fetchProfileSecretRef(Long profileId) {
+        try {
+            Map<String, Object> creds = modelingClient.getDbProfileCredentials(profileId);
+            Object ref = creds == null ? null : creds.get("secret_ref");
+            return ref == null ? null : String.valueOf(ref);
+        } catch (Exception ex) {
+            log.warn("fetch profile secret_ref failed id={}: {}", profileId, ex.getMessage());
+            return null;
+        }
     }
 
     // ================================================================ 路线 A：凭证编排

@@ -153,6 +153,13 @@ export function TableImportWizard({
   const columns = useMemo<DiscoveryColumn[]>(() => columnsQuery.data ?? [], [columnsQuery.data]);
   const total = tablesQuery.data?.total ?? 0;
 
+  /**
+   * 数据来源提醒：直连业务库失败时会**静默回落 wren MCP**（只含已建模表）。
+   * 若不提示，用户会以为「库里就这几张表」，从而漏建模 —— 这正是本轮踩过的坑。
+   */
+  const tableSource = tablesQuery.data?.source;
+  const fellBackToMcp = tableSource === 'wren_mcp';
+
   /** 错误分流：50201 / 42200 各自语义（**不得**笼统成「加载失败」）。 */
   const schemaError = describeError(schemasQuery.error);
   const tablesError = describeError(tablesQuery.error);
@@ -303,6 +310,17 @@ export function TableImportWizard({
       {ready && currentStep === 'import:tables' && (
         <div className="flex min-h-0 flex-col gap-2">
           <ErrorAlert error={tablesError} />
+          {fellBackToMcp && (
+            <Alert>
+              <AlertTriangle className="h-4 w-4" />
+              <AlertTitle className="text-[13px]">当前只列出「已建模的表」</AlertTitle>
+              <AlertDescription className="text-[12px]">
+                直连业务库未生效（连接缺 host / database / user，或数据库不可达），已回落
+                MCP 清单 —— <strong>这里不是全库表清单</strong>。请到「连接向导 → 数据源」
+                补全业务库参数后再试，否则会漏掉未建模的表。
+              </AlertDescription>
+            </Alert>
+          )}
           <div className="flex items-center gap-2">
             <div className="relative flex-1">
               <Search className="absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />

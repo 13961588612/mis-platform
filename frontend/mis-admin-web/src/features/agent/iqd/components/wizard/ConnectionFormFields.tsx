@@ -50,6 +50,8 @@ export interface ConnectionFormFieldsProps {
   onDraftChange: (patch: Partial<ConnectionDraft>) => void;
   /** 提交中禁用全部输入。 */
   disabled?: boolean;
+  /** 【分层】可选：数据库连接配置清单（供 project 选题 profile；未传则回退结构化录入）。 */
+  dbProfiles?: ReadonlyArray<{ id?: number | null; name: string; db_type?: string | null }>;
 }
 
 /**
@@ -61,6 +63,7 @@ export function ConnectionFormFields({
   draft,
   onDraftChange,
   disabled = false,
+  dbProfiles,
 }: ConnectionFormFieldsProps) {
   if (section === 'basic') {
     return (
@@ -121,6 +124,40 @@ export function ConnectionFormFields({
             onChange={(e) => onDraftChange({ language: e.target.value })}
             placeholder="zh-CN"
           />
+        </div>
+      </div>
+    );
+  }
+
+  if (dbProfiles && dbProfiles.length > 0) {
+    return (
+      <div className="space-y-3">
+        <Alert>
+          <AlertTitle className="text-[13px]">选择数据库连接</AlertTitle>
+          <AlertDescription className="text-[12px]">
+            项目（= wren context）通过这里选定业务库连接（profile）。数据库连接的 host / 账号 / 密码在
+            「数据库连接配置」里维护，项目侧不再重复填写。
+          </AlertDescription>
+        </Alert>
+        <div className="space-y-1">
+          <Label className="text-[13px]">数据库连接配置 *</Label>
+          <Select
+            value={draft.profileId !== '' ? draft.profileId : undefined}
+            disabled={disabled}
+            onValueChange={(value) => onDraftChange({ profileId: value })}
+          >
+            <SelectTrigger>
+              <SelectValue placeholder="选择数据库连接" />
+            </SelectTrigger>
+            <SelectContent>
+              {dbProfiles.filter((p) => p.id != null).map((p) => (
+                <SelectItem key={p.id} value={String(p.id)}>
+                  {p.name}
+                  {p.db_type ? ` · ${p.db_type}` : ''}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         </div>
       </div>
     );

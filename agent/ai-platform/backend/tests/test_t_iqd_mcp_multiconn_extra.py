@@ -257,7 +257,11 @@ async def test_lifecycle_injects_credential_env(tmp_path: Path) -> None:
     ) as MockCli, patch(
         "src.agent.mis_iqd.mcp_lifecycle.IqdMcpLifecycleService.project_home_of",
         staticmethod(lambda cid: str(proj)),
-    ):
+    ), patch(
+        # 本地 Plan A 用例：钉住 agent 不可用，走本地子进程管理器
+        "src.agent.mis_iqd.mcp_lifecycle.WrenMcpAgentClient"
+    ) as agent_cls:
+        agent_cls.return_value.enabled = False
         MockClient.return_value.get_connection = AsyncMock(
             return_value={"id": 1, "enabled": True, "name": "x"}
         )

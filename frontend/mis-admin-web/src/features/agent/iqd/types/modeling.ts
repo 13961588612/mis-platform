@@ -157,6 +157,10 @@ export interface Connection {
   db_database?: string | null;
   /** 【路线 A】业务库账号（非敏感；密码不回）。 */
   db_user?: string | null;
+  /** 【分层 2026-09-29】所属数据库连接配置 id。 */
+  profile_id?: number | null;
+  /** 【分层】profile 名（列表直接展示）。 */
+  profile_name?: string | null;
   /** 【路线 A】是否已托管业务库密码（编辑时据此提示是否需重填）。 */
   has_db_password?: boolean | null;
 }
@@ -179,6 +183,8 @@ export interface CreateConnectionRequest {
   timeout_seconds?: number;
   language?: string;
   enabled?: boolean;
+  /** 【分层】所属数据库连接配置 id。 */
+  profile_id?: number | null;
   /** 【路线 A】业务库坐标（非敏感；BFF 落 mis-iqd 展示列）。 */
   db_type?: string | null;
   db_host?: string | null;
@@ -218,6 +224,57 @@ export interface ConnectionTestResult {
   latency_ms?: number | null;
   version?: string | null;
   message?: string | null;
+}
+
+// ================================================================ 数据库连接配置（Tab①，2026-09-29）
+
+/**
+ * 数据库连接配置（= wren profile 的平台登记）。密码恒不回显（`secret_ref` 恒 `******`，
+ * 只回 `has_password`）。
+ *
+ * <p>分层：profile : project = 1 : N（同一业务库可挂多个语义工程）。
+ */
+export interface DbProfile {
+  id?: number | null;
+  name: string;
+  db_type?: string | null;
+  db_host?: string | null;
+  db_port?: number | null;
+  db_database?: string | null;
+  db_user?: string | null;
+  secret_ref?: string | null;
+  has_password?: boolean | null;
+  description?: string | null;
+  enabled?: boolean;
+  is_default?: boolean;
+  last_test_at?: string | null;
+  last_test_ok?: boolean | null;
+  last_test_msg?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+/** 保存入参（密码只经 BFF 转投 vault，不落 mis-iqd）。 */
+export interface DbProfileSaveRequest {
+  name: string;
+  db_type?: string | null;
+  db_host?: string | null;
+  db_port?: number | null;
+  db_database?: string | null;
+  db_user?: string | null;
+  secret_ref?: string | null;
+  db_password?: string | null;
+  description?: string | null;
+  enabled?: boolean;
+  is_default?: boolean;
+}
+
+/** 连通测试结果。 */
+export interface DbProfileTestResult {
+  ok: boolean;
+  latency_ms?: number | null;
+  message?: string | null;
+  schemas?: string[];
 }
 
 // ================================================================ 新建节点请求（§4.3 c 点）
@@ -446,6 +503,13 @@ export interface DiscoveryTablePage {
   tables: DiscoveryTable[];
   total: number;
   page: number;
+  /**
+   * 数据来源：`direct_db`（直连业务库，含未建模表）| `wren_mcp`（回落 MCP，**只含已建模表**）。
+   *
+   * <p>⚠️ 直连失败会静默回落 MCP —— 界面只显示「已建模的几张表」。前端据此提示用户
+   * 「这不是全库清单，请补全连接的数据源参数」。
+   */
+  source?: 'direct_db' | 'wren_mcp' | string;
 }
 
 /** `POST /api/v1/iqd/discovery/import` 入参。 */

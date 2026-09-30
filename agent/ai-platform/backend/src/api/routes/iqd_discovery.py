@@ -120,8 +120,13 @@ async def list_schemas(
 ) -> Any:
     """列出连接下可见 schema。"""
     try:
-        schemas = await IqdDiscoveryService().list_schemas(connection_id)
-        return success(data={"schemas": schemas}, message="ok", trace_id=trace_id)
+        svc = IqdDiscoveryService()
+        schemas = await svc.list_schemas(connection_id)
+        return success(
+            data={"schemas": schemas, "source": svc.last_source},
+            message="ok",
+            trace_id=trace_id,
+        )
     except Exception as exc:  # noqa: BLE001 - 统一在 _error_response 内分流
         return _error_response(exc, trace_id, "IQD discovery list_schemas failed")
 
@@ -138,7 +143,9 @@ async def list_tables(
 ) -> Any:
     """分页列出表清单。"""
     try:
-        result = await IqdDiscoveryService().list_tables(connection_id, schema, page, keyword)
+        svc = IqdDiscoveryService()
+        result = await svc.list_tables(connection_id, schema, page, keyword)
+        result = {**result, "source": svc.last_source}
         return success(data=result, message="ok", trace_id=trace_id)
     except Exception as exc:  # noqa: BLE001
         return _error_response(exc, trace_id, "IQD discovery list_tables failed")

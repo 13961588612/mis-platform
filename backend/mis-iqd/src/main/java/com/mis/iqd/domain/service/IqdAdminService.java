@@ -25,6 +25,7 @@ import com.mis.iqd.api.dto.IqdSyncJobVO;
 import com.mis.iqd.domain.entity.IqdAskLog;
 import com.mis.iqd.domain.entity.IqdCatalogItem;
 import com.mis.iqd.domain.entity.IqdConnection;
+import com.mis.iqd.domain.entity.IqdDbProfile;
 import com.mis.iqd.domain.entity.IqdEditIdempotency;
 import com.mis.iqd.domain.entity.IqdKnowledge;
 import com.mis.iqd.domain.entity.IqdMaskRule;
@@ -36,6 +37,7 @@ import com.mis.iqd.domain.entity.IqdTableAcl;
 import com.mis.iqd.domain.repository.IqdAskLogRepository;
 import com.mis.iqd.domain.repository.IqdCatalogItemRepository;
 import com.mis.iqd.domain.repository.IqdConnectionRepository;
+import com.mis.iqd.domain.repository.IqdDbProfileRepository;
 import com.mis.iqd.domain.repository.IqdKnowledgeRepository;
 import com.mis.iqd.domain.repository.IqdMaskRuleRepository;
 import com.mis.iqd.domain.repository.IqdRowScopeDimensionRepository;
@@ -100,6 +102,7 @@ public class IqdAdminService {
     private static final String PRIMARY_CONNECTION_NAME = "default";
 
     private final IqdConnectionRepository connectionRepository;
+    private final IqdDbProfileRepository dbProfileRepository;
     private final IqdAskLogRepository askLogRepository;
     private final IqdCatalogItemRepository catalogItemRepository;
     private final IqdScopePolicyRepository scopePolicyRepository;
@@ -118,6 +121,7 @@ public class IqdAdminService {
 
     public IqdAdminService(
             IqdConnectionRepository connectionRepository,
+            IqdDbProfileRepository dbProfileRepository,
             IqdAskLogRepository askLogRepository,
             IqdCatalogItemRepository catalogItemRepository,
             IqdScopePolicyRepository scopePolicyRepository,
@@ -131,6 +135,7 @@ public class IqdAdminService {
             IqdChangeEventPublisher changeEventPublisher,
             ObjectMapper objectMapper) {
         this.connectionRepository = connectionRepository;
+        this.dbProfileRepository = dbProfileRepository;
         this.askLogRepository = askLogRepository;
         this.catalogItemRepository = catalogItemRepository;
         this.scopePolicyRepository = scopePolicyRepository;
@@ -301,6 +306,7 @@ public class IqdAdminService {
         // 新建连接默认开启写回闸门（U7/Q4），显式 false 才关
         entity.setMdlWritebackEnabled(
                 dto.getMdlWritebackEnabled() == null || Boolean.TRUE.equals(dto.getMdlWritebackEnabled()));
+        entity.setProfileId(dto.getProfileId());
         entity.setDbType(dto.getDbType());
         entity.setDbHost(dto.getDbHost());
         entity.setDbPort(dto.getDbPort());
@@ -518,6 +524,10 @@ public class IqdAdminService {
         }
         if (dto.getEnabled() != null) {
             entity.setEnabled(Boolean.TRUE.equals(dto.getEnabled()) ? 1 : 0);
+        }
+        // 分层：project → profile 指向（null = 保留原值）
+        if (dto.getProfileId() != null) {
+            entity.setProfileId(dto.getProfileId());
         }
         // 路线 A：业务库连接展示字段（route A）—— null = 保留原值
         if (dto.getDbType() != null) {
@@ -2312,9 +2322,17 @@ public class IqdAdminService {
         IqdConnection conn = connectionRepository.findById(connectionId)
                 .orElseThrow(() -> new BusinessException(
                         ResultCode.NOT_FOUND, "问数连接不存在: " + connectionId));
+        // 分层：优先取关联 profile 的 secret_ref（业务库凭证已迁到 profile）
+        String ref = conn.getSecretRef();
+        if (conn.getProfileId() != null) {
+            ref = dbProfileRepository.findById(conn.getProfileId())
+                    .map(IqdDbProfile::getSecretRef)
+                    .filter(r -> r != null && !r.isBlank())
+                    .orElse(ref);
+        }
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("connection_id", conn.getId());
-        m.put("secret_ref", conn.getSecretRef());
+        m.put("secret_ref", ref);
         return m;
     }
 
@@ -2333,14 +2351,28 @@ public class IqdAdminService {
         IqdConnection conn = connectionRepository.findById(connectionId)
                 .orElseThrow(() -> new BusinessException(
                         ResultCode.NOT_FOUND, "问数连接不存在: " + connectionId));
+        // 分层（2026-09-29）：业务库坐标/凭证以**关联 profile 为准**；
+        // 未绑定 profile 时回退旧 db_* 列（灰度兼容）。
+        IqdDbProfile profile = conn.getProfileId() == null ? null
+                : dbProfileRepository.findById(conn.getProfileId()).orElse(null);
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("connection_id", conn.getId());
-        m.put("secret_ref", conn.getSecretRef());
-        m.put("db_type", conn.getDbType());
-        m.put("host", conn.getDbHost());
-        m.put("port", conn.getDbPort());
-        m.put("database", conn.getDbDatabase());
-        m.put("user", conn.getDbUser());
+        m.put("profile_id", profile == null ? null : profile.getId());
+        if (profile != null) {
+            m.put("secret_ref", profile.getSecretRef());
+            m.put("db_type", profile.getDbType());
+            m.put("host", profile.getDbHost());
+            m.put("port", profile.getDbPort());
+            m.put("database", profile.getDbDatabase());
+            m.put("user", profile.getDbUser());
+        } else {
+            m.put("secret_ref", conn.getSecretRef());
+            m.put("db_type", conn.getDbType());
+            m.put("host", conn.getDbHost());
+            m.put("port", conn.getDbPort());
+            m.put("database", conn.getDbDatabase());
+            m.put("user", conn.getDbUser());
+        }
         return m;
     }
 
@@ -2404,6 +2436,11 @@ public class IqdAdminService {
         vo.setMcpStatus(entity.getMcpStatus());
         vo.setMcpPort(entity.getMcpPort());
         // 路线 A：业务库连接展示字段（非敏感）
+        vo.setProfileId(entity.getProfileId());
+        if (entity.getProfileId() != null) {
+            vo.setProfileName(dbProfileRepository.findById(entity.getProfileId())
+                    .map(IqdDbProfile::getName).orElse(null));
+        }
         vo.setDbType(entity.getDbType());
         vo.setDbHost(entity.getDbHost());
         vo.setDbPort(entity.getDbPort());

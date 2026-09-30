@@ -1,297 +1,90 @@
 /**
- * iqd-config-page.tsx — 问数连接配置（W2，路径 /iqd/config）。
+ * iqd-config-page.tsx — 问数配置（路径 /iqd/config，2026-09-29 分层改版）。
  *
- * <p>覆盖 mis-iqd 连接配置（iqd_connection）：WrenAI 基址 / auth_type / 超时等，
- * 连通性自检 GET {baseUrl}/health。数据源为 BFF 代理 `/api/v1/iqd/config**`
- * （权限码 iqd:config:view / iqd:config:save / iqd:config:test）。
+ * <h2>两个 Tab（用户拍板）</h2>
+ * <ol>
+ *   <li><b>数据库连接配置</b>（{@link DbProfilePanel}）：业务库连接 = wren profile，
+ *       保存即新建/修改 profile（name / datasource / host / port / database / user / password），
+ *       可测试数据库连通性；<b>密码入 vault、不回显</b>。</li>
+ *   <li><b>项目配置</b>（{@link ProjectPanel}）：项目 = wren context（语义工程），
+ *       name / 选择数据库连接 / 启停 / 启停 MCP。</li>
+ * </ol>
+ * 「可视化工作台」只按 **项目** 切换。
+ *
+ * <h2>为什么这样分</h2>
+ * 原先把「业务库在哪（profile）」与「语义工程是什么（context）」混在 iqd_connection 一行，
+ * 菜单与心智混乱；且 profile 与 project 被 1:1 硬绑。分层后 profile : project = 1 : N。
+ *
+ * <h2>权限</h2>
+ * 数据库连接配置：{@code iqd:config:view/save/test}；项目：{@code iqd:modeling:edit} + {@code iqd:mcp:manage}。
  */
-
-import { useCallback, useEffect, useState } from 'react';
-import { Activity, RefreshCw, Save, Settings2, Wand2 } from 'lucide-react';
-import { cn } from '@/lib/utils';
-import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
+import { useState } from 'react';
+import { Database, FolderCog } from 'lucide-react';
 import { PageHeader } from '@/components/common/page-header';
 import { buildAppBreadcrumbs } from '@/components/common/app-breadcrumbs';
-import { Badge } from '@/components/ui/badge';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { DbProfilePanel } from './components/config/DbProfilePanel';
+import { ProjectPanel } from './components/config/ProjectPanel';
 import { ConnectionWizard } from './components/wizard/ConnectionWizard';
-import { ConnectionManageDialog } from './components/wizard/ConnectionManageDialog';
-import {
-  getIqdConfig,
-  saveIqdConfig,
-  testIqdConfig,
-  enableProject,
-  type IqdConnectionConfig,
-  type IqdConnectionTest,
-} from '@/lib/api/iqd';
+import type { Connection } from './types/modeling';
 
 export const IQD_CONFIG_PAGE_PATH = '/iqd/config';
 
 export function IqdConfigPage() {
-  const [config, setConfig] = useState<IqdConnectionConfig | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [saving, setSaving] = useState(false);
-  const [testing, setTesting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [testResult, setTestResult] = useState<IqdConnectionTest | null>(null);
-  const [enabling, setEnabling] = useState(false);
-  /** 多连接向导开关（T02b-3 入口：本页是「单连接形态」的 legacy 页，指引用户去多连接向导）。 */
-  const [connectionWizardOpen, setConnectionWizardOpen] = useState(false);
-  const [connectionManageOpen, setConnectionManageOpen] = useState(false);
+  const [wizardOpen, setWizardOpen] = useState(false);
+  const [editTarget, setEditTarget] = useState<Connection | null>(null);
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      setConfig(await getIqdConfig());
-    } catch (e) {
-      setError(e instanceof Error ? e.message : '加载失败');
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    void load();
-  }, [load]);
-
-  const save = useCallback(async () => {
-    if (!config) return;
-    setSaving(true);
-    setError(null);
-    try {
-      const saved = await saveIqdConfig({
-        name: config.name || 'default',
-        base_url: config.base_url,
-        auth_type: config.auth_type,
-        secret_ref: config.secret_ref,
-        project_id: config.project_id,
-        default_connector: config.default_connector,
-        timeout_seconds: config.timeout_seconds ?? 60,
-        language: config.language || 'zh-CN',
-        enabled: config.enabled ?? true,
-        mdl_writeback_enabled: config.mdl_writeback_enabled ?? true,
-      });
-      setConfig(saved);
-      setTestResult(null);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : '保存失败');
-    } finally {
-      setSaving(false);
-    }
-  }, [config]);
-
-  const test = useCallback(async () => {
-    setTesting(true);
-    setError(null);
-    setTestResult(null);
-    try {
-      setTestResult(await testIqdConfig());
-    } catch (e) {
-      setError(e instanceof Error ? e.message : '自检失败');
-    } finally {
-      setTesting(false);
-    }
-  }, []);
-
-  const enable = useCallback(async () => {
-    if (!config?.id) return;
-    setEnabling(true);
-    setError(null);
-    try {
-      await enableProject(config.id);
-      await load();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : '启用问数项目失败');
-    } finally {
-      setEnabling(false);
-    }
-  }, [config, load]);
-
-  const field = (key: keyof IqdConnectionConfig): string | number => {
-    const v = config?.[key];
-    // 布尔/空值统一回退为空串，避免 boolean 误入 Input/select value（TS2322）
-    if (typeof v === 'boolean' || v == null) return '';
-    return v;
+  const openCreate = () => {
+    setEditTarget(null);
+    setWizardOpen(true);
   };
-
-  const setField = (key: keyof IqdConnectionConfig, value: string | boolean | number | null) => {
-    setConfig((c) => (c ? { ...c, [key]: value } : c));
+  const openEdit = (connection: Connection) => {
+    setEditTarget(connection);
+    setWizardOpen(true);
   };
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-background">
       <PageHeader
-        title="问数连接配置"
-        description="配置 WrenAI 连接（凭证经 profile 注入，不落明文），连通自检后生效。"
-        breadcrumbs={buildAppBreadcrumbs({ app: 'agent', title: '问数连接配置' })}
-        actions={
-          <div className="flex items-center gap-2">
-            <Button size="sm" variant="outline" onClick={() => void load()} disabled={loading}>
-              <RefreshCw className={cn('h-4 w-4', loading && 'animate-spin')} />
-              刷新
-            </Button>
-            <Button size="sm" onClick={() => void save()} disabled={saving || !config}>
-              <Save className="h-4 w-4" />
-              保存
-            </Button>
-            <Button size="sm" variant="outline" onClick={() => void enable()} disabled={enabling || !config?.id}>
-              {enabling ? '启用中…' : '启用/创建项目'}
-            </Button>
-            {/* T02b-3 入口：本页面向「单连接形态」；多连接（含 MCP 状态卡与启停）走向导 */}
-            <Button size="sm" variant="outline" onClick={() => setConnectionWizardOpen(true)}>
-              <Wand2 className="h-4 w-4" />
-              多连接向导
-            </Button>
-            <Button size="sm" variant="outline" onClick={() => setConnectionManageOpen(true)}>
-              <Settings2 className="h-4 w-4" />
-              连接管理
-            </Button>
-          </div>
-        }
+        title="问数配置"
+        description="数据库连接（wren profile）与项目（wren context）分开配置：连接管「业务库在哪」，项目管「语义工程」。"
+        breadcrumbs={buildAppBreadcrumbs({ app: 'agent', title: '问数配置' })}
       />
 
-      {error ? (
-        <div className="mb-3 rounded-md border border-destructive/30 bg-destructive/5 p-3 text-xs text-destructive">
-          {error}
-        </div>
-      ) : null}
+      <div className="min-h-0 flex-1 overflow-auto px-1">
+        <Tabs defaultValue="db-profiles" className="flex min-h-0 flex-col">
+          <TabsList className="w-fit">
+            <TabsTrigger value="db-profiles" className="gap-1.5">
+              <Database className="h-4 w-4" />
+              数据库连接配置
+            </TabsTrigger>
+            <TabsTrigger value="projects" className="gap-1.5">
+              <FolderCog className="h-4 w-4" />
+              项目配置
+            </TabsTrigger>
+          </TabsList>
 
-      <div className="max-w-2xl space-y-3">
-        <div className="rounded-lg border bg-card p-4">
-          <div className="mb-3 flex items-center gap-2">
-            <span className="text-sm font-medium">连接信息</span>
-            <Badge variant={config?.status === 'active' ? 'default' : 'secondary'}>
-              {config?.status ?? 'inactive'}
-            </Badge>
-          </div>
-          <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-            <div>
-              <label className="mb-[0.4rem] block text-xs text-muted-foreground">连接名</label>
-              <Input value={field('name')} onChange={(e) => setField('name', e.target.value)} />
-            </div>
-            <div>
-              <label className="mb-[0.4rem] block text-xs text-muted-foreground">WrenAI 地址</label>
-              <Input
-                placeholder="http://host:port"
-                value={field('base_url')}
-                onChange={(e) => setField('base_url', e.target.value)}
-              />
-            </div>
-            <div>
-              <label className="mb-[0.4rem] block text-xs text-muted-foreground">认证方式</label>
-              <select
-                className="h-9 w-full rounded-md border border-input bg-card px-[0.7rem] text-sm"
-                value={field('auth_type') || 'none'}
-                onChange={(e) => setField('auth_type', e.target.value)}
-              >
-                <option value="none">none</option>
-                <option value="api_key">api_key</option>
-                <option value="bearer">bearer</option>
-              </select>
-            </div>
-            <div>
-              <label className="mb-[0.4rem] block text-xs text-muted-foreground">
-                密钥引用（提交非空才更新）
-              </label>
-              <Input
-                placeholder="******"
-                type="password"
-                value={field('secret_ref') || ''}
-                onChange={(e) => setField('secret_ref', e.target.value)}
-              />
-            </div>
-            <div>
-              <label className="mb-[0.4rem] block text-xs text-muted-foreground">Project ID</label>
-              <Input value={field('project_id')} onChange={(e) => setField('project_id', e.target.value)} />
-            </div>
-            <div>
-              <label className="mb-[0.4rem] block text-xs text-muted-foreground">默认连接器</label>
-              <Input
-                value={field('default_connector')}
-                onChange={(e) => setField('default_connector', e.target.value)}
-              />
-            </div>
-            <div>
-              <label className="mb-[0.4rem] block text-xs text-muted-foreground">超时（秒）</label>
-              <Input
-                type="number"
-                min={1}
-                max={600}
-                value={field('timeout_seconds') || 60}
-                onChange={(e) => setField('timeout_seconds', Number(e.target.value))}
-              />
-            </div>
-            <div>
-              <label className="mb-[0.4rem] block text-xs text-muted-foreground">语言</label>
-              <Input value={field('language') || 'zh-CN'} onChange={(e) => setField('language', e.target.value)} />
-            </div>
-            <div className="flex items-center gap-2 md:col-span-2">
-              <input
-                type="checkbox"
-                className="h-4 w-4"
-                checked={config?.enabled ?? true}
-                onChange={(e) => setField('enabled', e.target.checked)}
-              />
-              <span className="text-xs text-muted-foreground">启用该连接</span>
-            </div>
-            <div className="flex items-center gap-2 md:col-span-2">
-              <input
-                type="checkbox"
-                className="h-4 w-4"
-                checked={Boolean(config?.mdl_writeback_enabled)}
-                onChange={(e) => setField('mdl_writeback_enabled', e.target.checked)}
-              />
-              <span className="text-xs text-muted-foreground">
-                允许平台编辑语义模型并写回 WrenAI（MDL 写回）
-              </span>
-            </div>
-          </div>
-        </div>
+          <TabsContent value="db-profiles" className="mt-3">
+            <DbProfilePanel />
+          </TabsContent>
 
-        <div className="rounded-lg border bg-card p-4">
-          <div className="mb-3 flex items-center gap-2">
-            <span className="text-sm font-medium">连通性自检</span>
-            <Button size="sm" variant="outline" onClick={() => void test()} disabled={testing}>
-              <Activity className={cn('h-4 w-4', testing && 'animate-pulse')} />
-              {testing ? '检测中…' : '执行自检'}
-            </Button>
-          </div>
-          {testResult ? (
-            <div className="space-y-1 text-xs">
-              <div className="flex items-center gap-2">
-                <Badge variant={testResult.status === 'active' ? 'default' : 'destructive'}>
-                  {testResult.status}
-                </Badge>
-                <span className="text-muted-foreground">{testResult.message ?? ''}</span>
-              </div>
-              {testResult.latency_ms != null ? (
-                <div className="text-muted-foreground">延迟 {testResult.latency_ms} ms</div>
-              ) : null}
-              {testResult.last_health_at ? (
-                <div className="text-muted-foreground">最近检测 {testResult.last_health_at}</div>
-              ) : null}
-            </div>
-          ) : (
-            <div className="text-xs text-muted-foreground">保存后执行自检，验证 WrenAI 可达性。</div>
-          )}
-        </div>
+          <TabsContent value="projects" className="mt-3">
+            <ProjectPanel onOpenCreate={openCreate} onOpenEdit={openEdit} />
+          </TabsContent>
+        </Tabs>
       </div>
 
-      {/* 多连接向导（T02b-3 入口；向导自持步骤状态，本页只持 open） */}
       <ConnectionWizard
-        open={connectionWizardOpen}
-        onOpenChange={setConnectionWizardOpen}
-        onConnectionReady={(id) => {
-          // 未接入建模台 store（本页是单连接 legacy 页），仅触发一次刷新让新连接可见
-          setConfig((prev) => (prev ? { ...prev } : prev));
-          void load();
-          void id;
+        open={wizardOpen}
+        onOpenChange={(next) => {
+          setWizardOpen(next);
+          if (!next) setEditTarget(null);
         }}
-      />
-      <ConnectionManageDialog
-        open={connectionManageOpen}
-        onOpenChange={setConnectionManageOpen}
+        editTarget={editTarget}
+        onConnectionReady={() => {
+          setWizardOpen(false);
+          setEditTarget(null);
+        }}
       />
     </div>
   );

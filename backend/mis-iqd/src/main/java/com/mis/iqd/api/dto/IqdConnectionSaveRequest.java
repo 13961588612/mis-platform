@@ -39,6 +39,9 @@ public class IqdConnectionSaveRequest {
     /** 是否允许平台写回 MDL（U7/Q4）；缺省按 false 处理。 */
     private Boolean mdlWritebackEnabled;
 
+    /** 【分层 2026-09-29】所属数据库连接配置（iqd_db_profile.id）。 */
+    private Long profileId;
+
     // ---- 路线 A：业务库连接（**非敏感展示字段**；密码只在 ai-platform vault）----
     /** 业务库类型（starrocks/mysql/postgres/...）。 */
     private String dbType;
@@ -189,6 +192,16 @@ public class IqdConnectionSaveRequest {
     @JsonProperty("db_user")
     public void setDbUser(String dbUser) {
         this.dbUser = dbUser;
+    }
+
+    @JsonProperty("profile_id")
+    public Long getProfileId() {
+        return profileId;
+    }
+
+    @JsonProperty("profile_id")
+    public void setProfileId(Long profileId) {
+        this.profileId = profileId;
     }
 
     /** 是否为密钥占位符（GET 恒回 ******；保存时表示保留原值）。 */

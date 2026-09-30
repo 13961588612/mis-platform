@@ -694,6 +694,196 @@
 
 **验证**：ai-platform 全量 **1256 passed** + 5 既有 SSE 失败；mis-iqd **108 passed**。
 
+### 3.14.6 MCP「启动」职责纠偏 + 错误透传（2026-09-29，真机踩坑）
+
+**用户踩坑**：新连接点「启动 MCP」→ `code 50000 / 下游调用失败: HTTP 500`。
+
+**根因（后端日志）**：`/iqd/mcp/start` 就绪门禁报「连接 X 的 MDL 尚未构建（本机
+`target/mdl.json` 缺失）」，被 BFF 统一吞成 `50000`。而用户处在**跨机器**部署，
+「启动」（本地 Plan A 子进程）与「启用/创建项目」（`ensure` → WrenMcpAgent）职责不同。
+
+**修复（三层）**：
+
+1. **BFF 错误透传**（`AbstractDownstreamClient`）：新增 `downstreamFailure(WebClientResponseException)`，
+   手工解析下游 `{code,message}` 信封并以**下游 code + message** 抛出，不再一律
+   「下游调用失败: HTTP 500」。用户能看到「MDL 尚未构建」这类可诊断原因。
+2. **`start` 委派远端**（`mcp_lifecycle.start_connection`）：`WrenMcpAgentClient` 已配置
+   （跨机器）时，「启动」直接委派 `ensure_connection`（与「启用/创建项目」同路径），
+   不再拿本机 Linux 路径做无意义的本地门禁。
+3. **远端 MDL 就绪探测**（`_assert_remote_mdl_ready`）：远端 `ensure` 前向 wren 机探
+   `target/mdl.json`；**缺失则明确报错**。真机实测：无 MDL 时 `ensure` 会让进程
+   **崩溃自愈循环**（pid 不断变、`alive=false`，而 `status` 恒 `running`），前端显示
+   「已运行」却查不了数——所以必须前置拦截。
+4. **前端引导**（`ConnectionWizard`）：`start/restart` 失败且消息含「MDL 尚未构建」
+   时，展示可执行下一步（填数据源 → 表发现导入 → 发布构建 → 再启动）。
+
+**测试**：本地 Plan A 用例显式钉住 `WrenMcpAgentClient.enabled=False`（区分本地/远程路径）；
+ai-platform 全量 **1256 passed** + 5 既有 SSE 失败；BFF 341（仅 1 条既有无关失败）；
+前端 `tsc` + `vitest` 318 passed。
+
+### 3.14.7 表发现只显示 3 张表 —— 真因是连接字段没填全（2026-09-29）
+
+**用户现象**：表发现仍只有 3 张表。
+
+**排查（真机）**：直连本身是**通的**——用 vault 里的密码实测 `DirectDbDiscovery`，
+返回 `adhoc` 全部 6 张表 + `crm` schema。问题在**连接数据没存全**：
+
+| 字段 | 1790686095967 |
+|---|---|
+| db_type | starrocks ✅（默认值） |
+| db_port | 9030 ✅（默认值） |
+| **db_host / db_database / db_user** | **NULL ❌** |
+| vault('test') | `{db_type, password, port}`（同样无 host/db/user） |
+
+`db_type`/`db_port` 有默认值 → 用户**只填了密码**就保存成功 → 直连缺坐标失败 →
+**静默回落** wren MCP（只含 3 张已建模表）。界面对此**毫无提示**。
+
+**三处修复**：
+
+1. **连接向导必填校验**（前端 `connectionEditUtils.missingDbFields` + `ConnectionWizard`）：
+   新增/编辑时，若填了任一 db 字段，则 **host / database / user（新增还要 password）必须齐全**，
+   否则阻止提交并提示「否则表发现无法直连业务库，只能看到已建模的表」。
+2. **直连坐标合并顺序 bug**（`discovery_service._direct_db`）：旧代码在**合并 vault 之前**
+   就因缺 host/user 报错，导致 vault 里的坐标永远补不上。改为**先合并 vault、再判齐全**，
+   且缺 `database` 也算缺失。
+3. **回落可见**（`discovery_service.last_source` + 路由透出 + 前端 `TableImportWizard`）：
+   `list_tables/list_schemas` 返回 `source` 字段（`direct_db` | `wren_mcp`）；回落 MCP 时
+   界面显式警示「当前只列出已建模的表，不是全库清单，请补全数据源参数」。
+
+**测试**：新增 `test_discovery_marks_source_direct_and_fallback`、
+`test_direct_db_merges_vault_coords_before_guard`；ai-platform **1256 passed** + 5 既有 SSE 失败；
+前端 `tsc` + `vitest` 318 passed。
+
+**纠偏**：§3.14.3 曾断言「wren 0.13 无法查 information_schema」，§3.14.4 已推翻——
+修好 MDL type 后 wren 也能查。直连仍是更稳主路，二者都能给出全库表。
+
+### 3.14.8 建模台缺「切换连接」入口（2026-09-29）
+
+**用户现象**：新建连接 `test` 后，可视化建模台仍只显示 3 张表；问「是不是要先切换连接」。
+
+**根因**：建模台**根本没有切换连接的 UI**。`iqd-modeling-page.tsx` 只有：
+- 一个**只读** Badge（显示当前连接名 + mcp_status）；
+- 两个 useEffect **自动选第一条**连接（`connections[0]`）。
+
+文件头注释写着「切换连接 → `store.setConnectionId` …」但**没有实现入口**。所以用户新建的
+「test」连接永远选不上，看到的始终是第一条（seed-wren-local）的表 → 只有它已建模的 3 张表。
+
+**修复**（`iqd-modeling-page.tsx`）：把只读 Badge 换成**连接下拉切换器**（复用「语义模型」页
+`iqd-catalog-page.tsx` 的 `Select` 范式）：
+- 选项列出全部连接（带 `mcp_status`）；切换走 `store.setConnectionId`（A-14：会清空
+  选中/抽屉/草稿/wizard，避免跨连接串扰；画布按 `key=connId` 重挂载）；
+- 保留一个只读状态 Badge。
+
+**测试**：前端 `tsc` + `vitest src/features/agent/iqd` **318 passed**。
+
+**用法**：建模台页头左上「选择连接」下拉 → 选「test」→ 表发现/模型/发布流水线全部切到该连接。
+
+### 3.15 连接配置分层：数据库连接（profile） / 项目（wren context）（2026-09-30）
+
+**用户诉求**：连接配置菜单混乱，拆成两个 Tab —— ① 数据库连接配置（= wren profile，
+name/datasource/host/port/database/user/password，可测连通性）② 项目配置（= wren context，
+name/选择连接/启停）③ 可视化工作台只切项目。并「全部做完」。
+
+**核心结构性事实**：**profile : project = 1 : N**（同一业务库可挂多个语义工程）。
+原先把两者混在 `iqd_connection` 一行且 1:1 硬绑，是菜单混乱的根因。
+
+**落地**：
+
+| 层 | 改动 |
+|----|------|
+| DB | **V108** 新表 `iqd_db_profile`（profile）+ `iqd_connection.profile_id`（project→profile FK）；含**幂等回填**（旧连接按坐标生成 profile 并绑定） |
+| DB | **V109** 登记 `/api/v1/iqd/db-profiles/**` 到既有 `iqd:config:view/save/test` |
+| mis-iqd | `IqdDbProfile` 实体 + Repository + `IqdDbProfileService`（CRUD/默认项/**删除引用阻断 42200+data.dependents**/测试结果回写）+ `IqdDbProfileController`；`IqdAdminService.getConnectionDbProfile`/`getConnectionSecretRef` 改以**关联 profile 为准**（无 profile 回退旧列）；连接 DTO/VO 增 `profile_id/profile_name` |
+| ai-platform | 新路由 `POST /api/v1/iqd/db-profiles/test`（复用 `DirectDbDiscovery` 只读探测） |
+| BFF | `IqdModelingController` 增 `/db-profiles` 建/改/删/测（建改时把密码转投 vault，**用服务端返回的真实 secret_ref**，避免写错键）；`AiPlatformClient.testIqdDbProfile` |
+| 前端 | `IqdConfigPage` 改**双 Tab**：`DbProfilePanel`（连接 CRUD + 测试）/ `ProjectPanel`（项目列表 + 启停 + MCP）；`ConnectionWizard` 增 `editTarget` + `dbProfiles` 选择器（项目侧只选 profile）；建模台页头**连接切换器**（= 切项目） |
+
+**关键修复（分层引入的真实 bug）**：BFF 原先按 `iqd-profile-{id}` 推 vault 键，
+但迁移出的 profile `secret_ref` 是 `iqd-conn-{旧连接id}` → 编辑密码会写到**不同的键**、
+静默失效。已改为**取服务端 profile.secret_ref**。
+
+**迁移实测（真机）**：V108/V109 已 apply；`iqd_db_profile` 迁移出 `test 数据源`
+（starrocks / 10.254.16.217:9030 / adhoc / query），并绑定 project `test`(1790686095967)，
+`is_default=1`。
+
+**建议属性（已加 / 待评估）**：已加 `description/enabled/is_default/last_test_at/last_test_ok/
+last_test_msg`；profile 侧 `extra options`（charset/ssl_mode/timezone/超时）与权限码拆分
+（`iqd:profile:*` vs `iqd:project:*`）留作后续（现复用 `iqd:config:*`）。
+
+**测试**：ai-platform **1258 passed**（+5 既有 SSE 失败）；mis-iqd **108 passed**；
+BFF 341（仅 1 条既有无关失败）；前端 `tsc` + `vitest` **318 passed**。
+
+### 3.15.1 分层落地时揪出的两个真实 bug（2026-09-30）
+
+**Bug A：profile id 超出 JS 安全整数 → 前端删不掉**
+- V108 回填用 `7000000000000000000 + ROW_NUMBER()` = `7000000000000000001`，
+  **超过 `Number.MAX_SAFE_INTEGER`（9007199254740991）**；前端 `JSON.parse` 把它舍入为
+  `...000`（末位丢失）→ `DELETE /db-profiles/7000000000000000000` 报
+  `40400 数据库连接配置不存在`，而库里是 `...001`。
+- **V110** 把 > 2^53-1 的 id 重编号到 `9000000000000000+` 安全区间并同步外键；
+  无超大 id 时 no-op。真机验证：id 变为 `9000000000000000000+1`，前端可正常操作。
+- 说明：`IdGenerator.nextId()`（System.currentTimeMillis ≈1.79e12）**远在安全范围内**，
+  仅 V108 的硬编码回填是隐患；已全局自查无其它 >16 位硬编码 id。
+
+**Bug B：连通测试拿不到密码（using password: NO）**
+- `POST /db-profiles/{id}/test` 最初只传坐标、不传密码 → ai-platform 直连报
+  `Access denied ... (using password: NO)`。
+- 修：BFF 把 profile 的 **`secret_ref`** 透传给 ai-platform；ai-platform 测试端点用
+  `CredentialVault.resolve_by_ref` **自行从 vault 取明文密码**（与表发现直连同源，
+  密码不经 BFF/mis-iqd）。未存密码时回 `ok:false` 并提示先保存密码。
+
+**测试**：新增 `test_db_profile_test_no_password_no_ref` /
+`test_db_profile_test_resolves_password_from_vault`；ai-platform **1260 passed**
+（+5 既有 SSE 失败）。
+
+### 3.15.2 项目 Tab「停用无效」+ 两个状态说明（2026-09-30）
+
+**用户现象**：项目配置里「状态」「MCP」两个状态看不懂；后面一堆「启动/停用」按钮，点停用无效。
+
+**真相（真机复现）**：
+- 「停用」（`enabled`）在**后端是生效的**（经 BFF 网关 PUT `enabled=false` → OK → 再查确认 false）；
+  它控制**是否纳入问数范围**，不影响 MCP 进程。
+- 用户点的很可能是 **MCP「停止」**——它**确实无效**：调 `/iqd/mcp/stop` 返回 `stopped`，
+  紧接着查状态**仍是 `running`**。真机验证（直连 BFF 网关）：
+  `mcp/stop → {mcp_status: stopped}`，立刻 `mcp/status → {mcp_status: running}`。
+
+**根因**：`IqdMcpLifecycleService.stop_connection` 只调**本地 Plan A** 进程管理器
+（`get_process_manager().stop`），**跨机器模式下没经 WrenMcpAgent `stop`** —— wren 机进程
+照旧跑，状态查询随即又回 `running`。（与 §3.14.6 的 start 同源问题。）
+
+**修复**：
+- `stop_connection` 跨机器优先：`WrenMcpAgentClient.enabled` 时调 `agent_client.stop(connId)`，
+  并 `get_agent_registry().remove()` 注销本地登记、`report_mcp_status(stopped)` 回写 mis-iqd；
+  远程 stop 失败**不静默**（抛 `IqdMcpLifecycleError`）。
+- 真机验证：agent `stop` 后 `/status` = `stopped`（`alive=false`, `desired_state=stopped`）。
+
+**UI 消歧（ProjectPanel）**：
+- 两列表头注明语义：**启用状态（是否纳入问数）** / **MCP 进程（语义引擎进程）**；
+- 顶部加「两个状态分别是什么？」说明；列内文案改「已启用/已停用」「运行中/已停止」；
+- 按钮按 MCP 状态**互斥显示**：运行中→「停止 MCP」，否则→「启动 MCP」；「启用/停用」独立，
+  并加 `title` 说明「停用 = 移出问数范围，不影响 MCP 进程」。
+
+**测试**：本地 Plan A 的 stop 用例显式钉住 `WrenMcpAgentClient.enabled=False`（区分本地/远程）。
+ai-platform **1260 passed**（+5 既有 SSE 失败）；前端 `tsc` + `vitest` 318 passed。
+
+### 3.15.3 项目「编辑」连跳两个弹窗（2026-09-30）
+
+**用户现象**：项目配置点「编辑」→ 同时弹出两个弹窗。
+
+**根因**：`ConnectionWizard` 里【项目 Tab】的外部编辑用 `editTarget` 驱动——父组件把
+`open=true` + `editTarget=X` 传进来后：
+1. `WizardShell`（open=true）先渲染（第 1 个弹窗）；
+2. `useEffect(open && editTarget)` 设 `mode='edit'` → 编辑 Dialog（`editOpen`）也渲染（第 2 个弹窗）。
+即「向导壳 + 编辑弹窗」同时出现。
+
+**修复**（`ConnectionWizard`）：
+- 外部 `editTarget` 驱动时，`WizardShell` 用 `open={open && editTarget == null}` **不渲染**；
+  只有编辑 Dialog 显示。
+- `closeEdit()` 在 `editTarget != null` 时回调 `onOpenChange(false)` 整体收起——否则父组件
+  `open` 仍为 true，会留一个空的向导壳。
+
+**测试**：前端 `tsc` + `vitest src/features/agent/iqd` **318 passed**。
+
 **安全边界（红线，已守）**：
 - 密码**绝不落 mis-iqd**（BFF 转发前 `stripDbPassword`；mis-iqd DTO 无该字段）；
 - 密码**绝不回显**（GET 只回 `has_db_password` / 掩码账号）；

@@ -115,6 +115,9 @@ class IqdDiscoveryService:
         self._cli: IqdCli = cli if cli is not None else IqdCli()
         self._mcp_factory: Callable[[int | None], IqdMcpClient] = mcp_factory or _default_mcp_client
         self._config_factory: Callable[[], IqdConfigClient] = config_factory or IqdConfigClient
+        #: 最近一次 list_schemas/list_tables 的数据来源（"direct_db" | "wren_mcp"）。
+        #: 供路由透出：直连失败会静默回落 wren MCP（只含已建模表），前端需据此提示用户。
+        self.last_source: str = ""
 
     @property
     def cli(self) -> IqdCli:
@@ -145,6 +148,7 @@ class IqdDiscoveryService:
             direct = await self._direct_db(connection_id)
             schemas = await direct.list_schemas()
             if schemas:
+                self.last_source = "direct_db"
                 logger.info(
                     "IQD discovery list_schemas (direct db)",
                     connection_id=connection_id,
@@ -164,6 +168,7 @@ class IqdDiscoveryService:
                 error=str(exc),
             )
 
+        self.last_source = "wren_mcp"
         payload = await self._list_models(connection_id)
 
         schemas: list[str] = []
@@ -210,6 +215,7 @@ class IqdDiscoveryService:
             direct = await self._direct_db(connection_id)
             direct_rows = await direct.list_tables(target_schema, keyword)
             if direct_rows:
+                self.last_source = "direct_db"
                 total = len(direct_rows)
                 safe_page = max(1, int(page or 1))
                 start = (safe_page - 1) * DEFAULT_PAGE_SIZE
@@ -235,6 +241,7 @@ class IqdDiscoveryService:
                 error=str(exc),
             )
 
+        self.last_source = "wren_mcp"
         payload = await self._list_models(connection_id)
 
         rows: list[dict[str, Any]] = []
@@ -493,22 +500,25 @@ class IqdDiscoveryService:
         database = profile.get("database")
         user = str(profile.get("user") or "").strip()
         secret_ref = str(profile.get("secret_ref") or "").strip()
-        if not host or not user:
-            raise DiscoveryUnavailableError(
-                f"连接 {connection_id} 未配置业务库坐标（请在连接向导填写 host/user）"
-            )
+        # 先合并 vault 凭证（可能带坐标），**然后**才判坐标是否齐全。
+        # （旧版守卫在合并 vault 之前，会误报。）
         password = ""
         if secret_ref:
             cred = await CredentialVault().resolve_by_ref(secret_ref)
             if cred:
                 password = str(cred.get("password") or cred.get("pwd") or "")
-                db_type = db_type or str(cred.get("db_type") or "")
-                host = host or str(cred.get("host") or "")
+                db_type = db_type or str(cred.get("db_type") or cred.get("datasource") or "")
+                host = host or str(cred.get("host") or cred.get("hostname") or "")
                 user = user or str(cred.get("user") or cred.get("username") or "")
                 if port is None:
                     port = cred.get("port")
                 if not database:
-                    database = cred.get("database") or cred.get("db")
+                    database = cred.get("database") or cred.get("db") or cred.get("dbname")
+        if not host or not user or not database:
+            raise DiscoveryUnavailableError(
+                f"连接 {connection_id} 未配置完整的业务库连接参数（缺 host/user/database）；"
+                "请在连接向导「数据源」补全"
+            )
         if not db_type:
             db_type = "starrocks"
         return DirectDbDiscovery(
