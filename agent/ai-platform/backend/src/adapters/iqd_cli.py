@@ -185,11 +185,15 @@ class IqdCli:
             # 镜像进 ``relationships.yml``（视图/cube 在 0.13 的 YAML 里无对应表达，见
             # ``wren context build --help``：views 必须带 statement，属 SQL 视图）。
             if project_dir:
+                # ① 模型 → models/<name>/metadata.yml（引擎 context build/show 的主输入）
                 mirror_files = self._models_mirror_files(manifest_text)
-                # cube ??????? views/??? SQL ?????? statement??
-                # ?? wren ?? cube_proposals ??? ``cubes/<name>/metadata.yml``?
-                # ????? 900001?2026-09-28????? ``context show`` cubes=1?
-                # ``wren cube query --sql-only`` ??????????? context build?
+                # ② 关系 → relationships.yml（缺此镜像时 context show 关系恒为 0；
+                #    2026-09-30 排查：该函数此前**定义了却从未被调用**，是自检报
+                #    「N 个关系未进引擎上下文」的直接原因）。
+                rel_files = self._relationships_mirror_files(manifest_text)
+                if rel_files:
+                    mirror_files = (mirror_files or []) + rel_files
+                # ③ cube → cubes/<name>/metadata.yml
                 cube_files = self._cube_mirror_files(manifest_text)
                 if cube_files:
                     mirror_files = (mirror_files or []) + cube_files
@@ -1324,16 +1328,17 @@ class IqdCli:
 
         wren_yaml_path = os.path.join(project_home, "wren_project.yml")
         if not os.path.exists(wren_yaml_path):
-            # 最小占位：schema_version + name + 空 catalog/data_source/profile 骨架。
+            # 最小占位：**必须** schema_version 为 wren 0.13 当前值（实测 5）。
+            # 写成 ``version: 1`` 会让 ``context build`` / ``context show`` 不扫描
+            # ``models/*``，永远读到 0 models，并用空工程覆盖 target/mdl.json
+            # （2026-09-30 排查：自检「N 个模型未进引擎上下文」的根因）。
             # 真实 catalog/data_source/profile 由 wren CLI 在 profile add / context build 时补全。
             placeholder = (
-                "version: 1\n"
+                "schema_version: 5\n"
                 f"name: iqd-conn-{conn_id}\n"
-                "catalog:\n"
-                "  schema: public\n"
-                "data_source:\n"
-                "  profile: ''\n"
-                "  type: ''\n"
+                "catalog: wren\n"
+                "schema: public\n"
+                "data_source: postgres\n"
             )
             try:
                 with open(wren_yaml_path, "w", encoding="utf-8") as fh:
@@ -1344,10 +1349,65 @@ class IqdCli:
                     conn_id=conn_id,
                     error=str(exc),
                 )
+        else:
+            # Repair legacy map-form header (idempotent; no-op when already a string).
+            self._repair_project_yaml(wren_yaml_path, conn_id=conn_id)
         logger.info("IQD wren project ensured", conn_id=conn_id, project_home=project_home)
         return project_home
 
     # ================================================================ 内部
+
+    @staticmethod
+    def _repair_project_yaml(wren_yaml_path: str, *, conn_id: int | str = "") -> bool:
+        """Repair a legacy ``wren_project.yml`` whose ``catalog`` / ``data_source`` are maps.
+
+        Real wren 0.13 (verified 2026-09-30) requires top-level ``catalog`` and
+        ``data_source`` to be plain strings; the old platform placeholder wrote them as maps
+        (``catalog: {schema: public}`` / ``data_source: {profile, type}``), which makes every
+        ``wren dry-plan`` fail with ``Serde JSON error: invalid type: map, expected a string``.
+        Targeted, idempotent text rewrite (no YAML round-trip, to avoid clobbering comments /
+        key order). Returns True when the file was rewritten.
+        """
+        import os
+        import re
+
+        if not os.path.exists(wren_yaml_path):
+            return False
+        try:
+            with open(wren_yaml_path, encoding="utf-8") as fh:
+                text = fh.read()
+        except OSError:
+            return False
+        original = text
+
+        def _cat(match):
+            return "catalog: wren\nschema: " + match.group("schema").strip()
+
+        # catalog:\n  schema: <x>  ->  catalog: wren\nschema: <x>
+        text = re.sub(
+            r"catalog:\s*\n\s+schema:\s*(?P<schema>[^\n#]+)",
+            _cat,
+            text,
+            count=1,
+        )
+        # data_source:\n  profile: ...\n  type: ...  ->  data_source: postgres
+        text = re.sub(
+            r"data_source:\s*\n(?:\s+(?:profile|type):[^\n]*\n?)+",
+            "data_source: postgres\n",
+            text,
+            count=1,
+        )
+        text = text.replace("catalog: {schema: public}", "catalog: wren\nschema: public")
+        if text == original:
+            return False
+        try:
+            with open(wren_yaml_path, "w", encoding="utf-8") as fh:
+                fh.write(text)
+        except OSError as exc:  # noqa: BLE001
+            logger.warning("IQD wren_project.yml repair failed", conn_id=conn_id, error=str(exc))
+            return False
+        logger.info("IQD wren_project.yml repaired (map->string header)", conn_id=conn_id)
+        return True
 
     async def _run(
         self,

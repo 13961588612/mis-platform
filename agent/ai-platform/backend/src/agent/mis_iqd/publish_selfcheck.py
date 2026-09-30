@@ -63,7 +63,13 @@ class PublishSelfCheck:
         return warnings
 
     @staticmethod
-    async def probe_planner(cli: Any, mdl: dict[str, Any], *, limit: int = 20) -> list[str]:
+    async def probe_planner(
+        cli: Any,
+        mdl: dict[str, Any],
+        *,
+        limit: int = 20,
+        project_dir: str | None = None,
+    ) -> list[str]:
         """对派生 MDL 里每个 model 跑一次只读 ``wren dry-plan``，把规划失败变成告警。
 
         <p><b>为什么</b>：wren 规划时会展开模型**全部计算列**；一个类型不合法的
@@ -88,7 +94,9 @@ class PublishSelfCheck:
             if not name:
                 continue
             try:
-                result = await cli.dry_plan(f"select * from {name} limit 1")
+                result = await cli.dry_plan(
+                    f"select * from {name} limit 1", project_dir=project_dir
+                )
             except Exception as exc:  # noqa: BLE001 - 探针失败不算发布失败
                 warnings.append(f"自检：模型 {name} 规划探针异常（{str(exc)[:80]}）")
                 continue

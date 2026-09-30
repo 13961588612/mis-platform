@@ -634,15 +634,18 @@ def _ensure_project_skeleton(project_home: str, conn_id: str) -> None:
     """
     yml = os.path.join(project_home, "wren_project.yml")
     if os.path.exists(yml):
+        # Repair legacy map-form header (idempotent; no-op when already string).
+        _repair_project_yml_header(yml, conn_id=conn_id)
         return
+    # 🔴 schema_version 必须是 wren 0.13 当前值（实测 5）；写成 ``version: 1`` 会让
+    # ``context build`` / ``context show`` **不扫描 models/\***，永远读到 0 models，
+    # 还会用空工程覆盖 target/mdl.json（2026-09-30 排查：自检报「N 个模型未进引擎上下文」的根因）。
     placeholder = (
-        "version: 1\n"
+        "schema_version: 5\n"
         f"name: iqd-conn-{conn_id}\n"
-        "catalog:\n"
-        "  schema: public\n"
-        "data_source:\n"
-        "  profile: ''\n"
-        "  type: ''\n"
+        "catalog: wren\n"
+        "schema: public\n"
+        "data_source: postgres\n"
     )
     try:
         with open(yml, "w", encoding="utf-8") as fh:
@@ -650,6 +653,47 @@ def _ensure_project_skeleton(project_home: str, conn_id: str) -> None:
         logger.info("agent ensured wren_project.yml", conn_id=conn_id, path=yml)
     except OSError as exc:  # noqa: BLE001 - 写失败不阻断，由 CLI 报错
         logger.warning("agent write wren_project.yml failed", conn_id=conn_id, error=str(exc))
+
+
+def _repair_project_yml_header(yml: str, *, conn_id: str = "") -> bool:
+    """Idempotently repair a legacy ``wren_project.yml`` with map-form catalog/data_source.
+
+    wren 0.13 (verified 2026-09-30) requires top-level ``catalog`` / ``data_source`` to be
+    plain strings. Targeted text rewrite (no YAML round-trip, preserving comments/order).
+    Returns True when the file was rewritten.
+    """
+    import re
+
+    try:
+        with open(yml, encoding="utf-8") as fh:
+            text = fh.read()
+    except OSError:
+        return False
+    original = text
+
+    def _cat(match):
+        return "catalog: wren\nschema: " + match.group("schema").strip()
+
+    text = re.sub(
+        r"catalog:\s*\n\s+schema:\s*(?P<schema>[^\n#]+)", _cat, text, count=1
+    )
+    text = re.sub(
+        r"data_source:\s*\n(?:\s+(?:profile|type):[^\n]*\n?)+",
+        "data_source: postgres\n",
+        text,
+        count=1,
+    )
+    text = text.replace("catalog: {schema: public}", "catalog: wren\nschema: public")
+    if text == original:
+        return False
+    try:
+        with open(yml, "w", encoding="utf-8") as fh:
+            fh.write(text)
+    except OSError as exc:  # noqa: BLE001
+        logger.warning("agent repair wren_project.yml failed", conn_id=conn_id, error=str(exc))
+        return False
+    logger.info("agent repaired wren_project.yml (map->string header)", conn_id=conn_id)
+    return True
 
 
 def _write_project_files(project_home: str, files: List[ProjectFile]) -> List[str]:

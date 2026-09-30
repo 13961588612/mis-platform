@@ -54,6 +54,92 @@ _WREN_SIMPLE_TYPES = {
 }
 
 
+#: Platform / business-db ``db_type`` -> wren MDL ``dataSource`` controlled enum.
+#  wren 0.13.3 only accepts this enum set (BIGQUERY/CLICKHOUSE/MYSQL/DORIS/POSTGRES/...).
+#  StarRocks is recorded as ``doris`` in wren profiles (verified via ``wren profile debug``),
+#  hence the same mapping here.
+_WREN_DATASOURCE_ENUM = {
+    "starrocks": "doris",
+    "doris": "doris",
+    "mysql": "mysql",
+    "mariadb": "mysql",
+    "postgres": "postgres",
+    "postgresql": "postgres",
+    "pg": "postgres",
+    "clickhouse": "clickhouse",
+    "bigquery": "bigquery",
+    "snowflake": "snowflake",
+    "trino": "trino",
+    "mssql": "mssql",
+    "sqlserver": "mssql",
+    "oracle": "oracle",
+    "duckdb": "duckdb",
+    "spark": "spark",
+    "databricks": "databricks",
+    "redshift": "redshift",
+    "athena": "athena",
+}
+
+
+def _wren_datasource(db_type: Any) -> str | None:
+    """Map platform/business-db ``db_type`` to a wren MDL ``dataSource`` enum (None if unknown)."""
+    text = str(db_type or "").strip().lower()
+    if not text:
+        return None
+    return _WREN_DATASOURCE_ENUM.get(text)
+
+
+def _normalize_mdl_header(
+    mdl: dict[str, Any],
+    *,
+    catalog: str = "wren",
+    schema: str = "public",
+    datasource: str | None = None,
+) -> list[str]:
+    """Normalize the MDL top-level header (catalog / schema / dataSource) for wren 0.13.
+
+    Verified on real 0.13.3 (2026-09-30): wren ``dry-plan`` enforces these top-level shapes:
+
+    * ``catalog`` MUST be a string. When written as a map (e.g. ``catalog: {schema: public}``
+      from the YAML placeholder flowing into ``target/mdl.json``), planning fails with
+      ``Serde JSON error: invalid type: map, expected a string`` for EVERY model on the
+      connection; when missing it fails with ``missing field catalog``.
+    * ``dataSource`` MUST be a controlled enum string or absent entirely. A map
+      (``{profile, type}``) fails with ``unknown variant 'profile'``. So map/empty values are
+      replaced with the normalized enum, and the key is DELETED when no enum can be derived.
+
+    Only these three top-level keys are touched; models/relationships/cubes are left intact.
+    Returns the list of keys that were changed (for logging / unit-test assertions).
+    """
+    changed: list[str] = []
+    raw_catalog = mdl.get("catalog")
+    if not isinstance(raw_catalog, str) or not raw_catalog.strip():
+        mdl["catalog"] = catalog
+        changed.append("catalog")
+    raw_schema = mdl.get("schema")
+    if not isinstance(raw_schema, str) or not raw_schema.strip():
+        mdl["schema"] = schema
+        changed.append("schema")
+    raw_ds = mdl.get("dataSource")
+    if isinstance(raw_ds, str) and raw_ds.strip():
+        # Already a string: collapse only when it is not a controlled enum (legacy dirty value).
+        if _wren_datasource(raw_ds) is None and raw_ds.strip().lower() not in set(
+            _WREN_DATASOURCE_ENUM.values()
+        ):
+            if datasource:
+                mdl["dataSource"] = datasource
+            else:
+                mdl.pop("dataSource", None)
+            changed.append("dataSource")
+    else:
+        if datasource:
+            mdl["dataSource"] = datasource
+        else:
+            mdl.pop("dataSource", None)
+        changed.append("dataSource")
+    return changed
+
+
 def _normalize_mdl_types(mdl: dict[str, Any]) -> int:
     """兜底补齐 MDL 中缺失的列 `type`（wren 0.13 强约束）。
 
@@ -733,8 +819,9 @@ class IqdAskService:
             logger.warning("IQD force-rebuild get_catalog_meta failed", error=str(exc))
             catalog_meta = []
         try:
+            datasource = await self._resolve_wren_datasource(client, cid)
             mdl_dir, derived = self.build_mdl_from_catalog(
-                cid, mdl_raw, edited_items, catalog_meta
+                cid, mdl_raw, edited_items, catalog_meta, datasource=datasource
             )
         except Exception as exc:  # noqa: BLE001 - 派生失败归一为 build 失败
             result = SyncResult(
@@ -992,8 +1079,9 @@ class IqdAskService:
             logger.warning("IQD validate recompute unmatched: get_catalog_meta failed", error=str(exc))
             catalog_meta = []
         try:
+            datasource = await self._resolve_wren_datasource(client, connection_id)
             _dir, payload = self.build_mdl_from_catalog(
-                connection_id, mdl_raw, edited_items, catalog_meta
+                connection_id, mdl_raw, edited_items, catalog_meta, datasource=datasource
             )
         except Exception as exc:  # noqa: BLE001 - 如「无基线且无编辑」→ 视为 0
             logger.warning("IQD validate recompute unmatched: derive failed", error=str(exc))
@@ -1486,8 +1574,9 @@ class IqdAskService:
 
         # ② 派生完整 MDL 并写出临时目录
         try:
+            datasource = await self._resolve_wren_datasource(client, cid)
             mdl_dir, derived = self.build_mdl_from_catalog(
-                cid, mdl_raw, edited_items, catalog_meta
+                cid, mdl_raw, edited_items, catalog_meta, datasource=datasource
             )
         except Exception as exc:  # noqa: BLE001 - 派生失败归一为 build 失败
             logger.error("IQD build_mdl_from_catalog failed", connection_id=cid, error=str(exc))
@@ -1542,7 +1631,7 @@ class IqdAskService:
                     # 规划探针（只读）：逐模型 dry-plan，抓「MDL 生成成功但引擎查不了」
                     # （典型：计算列类型不合法，double/varchar → 整模型规划失败）
                     probe_warnings = await PublishSelfCheck.probe_planner(
-                        cli, derived_mdl or {}
+                        cli, derived_mdl or {}, project_dir=project_home
                     )
                     selfcheck_warnings.extend(probe_warnings)
                     logger.info(
@@ -1637,12 +1726,29 @@ class IqdAskService:
             "拒绝以 0 回填（将导致 stampCatalogSync 命中不到已编辑节点，违反 PRD G-B/G6）"
         )
 
+    @staticmethod
+    async def _resolve_wren_datasource(client: Any, connection_id: int) -> str | None:
+        """Resolve the wren MDL ``dataSource`` enum for a connection (best-effort).
+
+        Source: connection db profile ``db_type`` (e.g. starrocks) mapped via
+        ``_wren_datasource``. Returns None when unavailable (caller then omits the key).
+        """
+        try:
+            profile = await client.get_connection_db_profile(int(connection_id))
+        except Exception as exc:  # noqa: BLE001 - datasource is best-effort
+            logger.warning("IQD resolve datasource failed", connection_id=connection_id, error=str(exc))
+            return None
+        if not isinstance(profile, dict):
+            return None
+        return _wren_datasource(profile.get("db_type") or profile.get("default_connector"))
+
     def build_mdl_from_catalog(
         self,
         connection_id: int,
         mdl_raw: str | None,
         edited_items: list[dict[str, Any]],
         catalog_items: list[dict[str, Any]] | None = None,
+        datasource: str | None = None,
     ) -> tuple[str, dict[str, Any]]:
         """以 mdl_raw 基线 + edited_items patch 派生完整 MDL，写出临时目录 manifest.json。
 
@@ -1723,6 +1829,11 @@ class IqdAskService:
         #      （缺失则查询规划期报 ``missing field `type```，整条问数链路失败）。
         #      这里对最终 MDL 做一次兜底补齐，覆盖「历史 mdl_raw 基线节点」也漏 type 的情况。
         normalized = _normalize_mdl_types(mdl)
+        # wren 0.13 dry-plan reads target/mdl.json and requires a string `catalog` +
+        # enum-or-absent `dataSource`. Derive the datasource from mdl_raw if valid,
+        # else fall back to the caller-provided datasource, else omit the key.
+        src_ds = _wren_datasource(mdl.get("dataSource")) or _wren_datasource(datasource)
+        header_changed = _normalize_mdl_header(mdl, datasource=src_ds)
 
         tmp_dir = tempfile.mkdtemp(prefix=f"iqd_mdl_{connection_id}_")
         manifest_path = os.path.join(tmp_dir, "manifest.json")
@@ -1738,6 +1849,7 @@ class IqdAskService:
             "unmatched_edit_count": len(unmatched),
             "unmatched_edits": unmatched,
             "primary_key_applied": pk_applied,
+            "header_normalized": header_changed,
         }
         logger.info(
             "IQD build_mdl_from_catalog wrote manifest",
@@ -2060,6 +2172,25 @@ class IqdAskService:
             return ""
         return IqdAskService._item_key_tail(model_ref)
 
+    #: 平台关系信封 ``cardinality``（``1:N``）→ wren MDL ``joinType`` 基数枚举。
+    _CARDINALITY_ENUM: dict[str, str] = {
+        "1:1": "ONE_TO_ONE",
+        "1:N": "ONE_TO_MANY",
+        "N:1": "MANY_TO_ONE",
+        "M:N": "MANY_TO_MANY",
+        "N:N": "MANY_TO_MANY",
+    }
+
+    @staticmethod
+    def _cardinality_join_type(payload: dict[str, Any]) -> str | None:
+        """把平台关系信封的 ``cardinality``（``1:N``）映射为 wren MDL ``joinType`` 枚举。
+
+        <p>wren 只接受 ``ONE_TO_ONE`` / ``ONE_TO_MANY`` / ``MANY_TO_ONE`` / ``MANY_TO_MANY``；
+        取不到基数返回 ``None``（调用方不写该字段，宁缺勿错）。
+        """
+        raw = str(payload.get("cardinality") or "").strip().upper().replace(" ", "")
+        return IqdAskService._CARDINALITY_ENUM.get(raw)
+
     @staticmethod
     def _parse_relationship_payload(expression: str | None) -> dict[str, Any] | None:
         """解析建模台写入的关系信封 JSON（``join_type/cardinality/condition/source_model/target_model``）。
@@ -2299,8 +2430,13 @@ class IqdAskService:
             if not source or not target:
                 continue
             relationship: dict[str, Any] = {"name": name, "models": [source, target]}
-            if payload.get("join_type"):
-                relationship["joinType"] = str(payload["join_type"]).upper()
+            # 🔴 wren MDL 的 ``joinType`` 是**基数枚举**（ONE_TO_MANY…），**不是** SQL join
+            # 类型（INNER/LEFT）。此前误把 payload.join_type（inner）写进 joinType，导致
+            # 规划期报 ``unknown variant INNER``，该关系涉及的所有模型 dry-plan 全失败
+            # （2026-09-30 实测：6 条「模型无法规划」告警的根因）。拿不到基数就不写该字段。
+            join_enum = IqdAskService._cardinality_join_type(payload)
+            if join_enum:
+                relationship["joinType"] = join_enum
             if payload.get("condition"):
                 relationship["condition"] = payload["condition"]
             relationships.append(relationship)

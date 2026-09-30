@@ -220,7 +220,7 @@ def test_build_mdl_from_catalog_materializes_new_relationship_from_envelope():
     assert "orders_customers" in names
     rel = next(r for r in mdl["relationships"] if r["name"] == "orders_customers")
     assert rel["models"] == ["orders", "customers"], "models 由 source/target_model 去 mdl:model: 前缀得到"
-    assert rel["joinType"] == "INNER"
+    assert rel["joinType"] == "ONE_TO_MANY"  # wren MDL joinType is a cardinality enum (1:N), NOT SQL join type
     assert rel["condition"] == "orders.customer_id = customers.id"
     # 既有 relationship 未被破坏
     assert mdl["relationships"][0]["name"] == "orders_user"
