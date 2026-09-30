@@ -27,6 +27,7 @@ import java.util.Map;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
@@ -541,6 +542,28 @@ class IqdCatalogNodeServiceTest {
         assertTrue(saved.getExpression().contains("\"target_model\":\"mdl:model:customers\""));
         assertTrue(saved.getExpression().contains("orders.customer_id = customers.id"));
         assertEquals(0, saved.getInScope().intValue());
+    }
+
+    @Test
+    void createRelationship_oversizedIdempotencyKey_throws42200NotRaw500() {
+        // 回归（2026-09-30）：连接 id 变长后前端幂等键模板可达 ~70 字符，超过旧列宽 64，
+        // 直接落库会抛原生 value-too-long → 裸 500。这里必须归一为可诊断的 42200。
+        IqdConnection c = conn(12L);
+        when(connectionRepository.findById(CONN_ID)).thenReturn(Optional.of(c));
+        stubNoExistingNodes();
+        stubOrderAndCustomerModels();
+
+        Map<String, Object> patch = new LinkedHashMap<>();
+        patch.put("condition", "orders.customer_id = customers.id");
+        patch.put("source_model", "mdl:model:orders");
+        patch.put("target_model", "mdl:model:customers");
+
+        String tooLong = "x".repeat(200);
+        BusinessException ex = assertThrows(BusinessException.class, () ->
+                service.createRelationship(
+                        CONN_ID, "mdl:relationship:r_big", patch, 12L, tooLong));
+        assertEquals(42200, ex.getCode());
+        verify(catalogItemRepository, never()).save(any());
     }
 
     @Test

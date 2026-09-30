@@ -25,7 +25,7 @@ public class IqdEditIdempotency {
     private Long connectionId;
 
     @Id
-    @Column(name = "idempotency_key", nullable = false)
+    @Column(name = "idempotency_key", nullable = false, length = 128)
     private String idempotencyKey;
 
     @Column(name = "edit_revision", nullable = false)

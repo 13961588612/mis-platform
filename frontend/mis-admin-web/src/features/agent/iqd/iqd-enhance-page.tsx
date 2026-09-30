@@ -594,6 +594,11 @@ export function IqdEnhancePage() {
             {/* ================= 脱敏规则 ================= */}
             {tab === 'mask' ? (
               <div className="space-y-3">
+                <div className="rounded-md border border-primary/25 bg-primary/5 p-3 text-xs text-muted-foreground">
+                  <span className="font-medium text-foreground">全局生效（不随项目切换）</span>
+                  ：脱敏规则是全平台唯一规则源，对所有项目的问数结果统一生效；切换上方「项目」不会改变这里的规则。
+                  优先级：字段显式 <code>mask_rule</code> &gt; <code>sensitive_level=high</code> 按类型推断 &gt; 本表规则匹配。
+                </div>
                 <div className="rounded-lg border bg-card p-3">
                   <div className="mb-2 text-sm font-medium">新增脱敏规则</div>
                   <div className="grid grid-cols-1 gap-2 md:grid-cols-5">
@@ -715,6 +720,12 @@ export function IqdEnhancePage() {
             {/* ================= 维度注册表 ================= */}
             {tab === 'dimension' ? (
               <div className="space-y-3">
+                <div className="rounded-md border border-primary/25 bg-primary/5 p-3 text-xs text-muted-foreground">
+                  <span className="font-medium text-foreground">全局注册表（不随项目切换）</span>
+                  ：行级维度是平台级定义（dept / store 等），对本页所有项目通用；切换上方「项目」不影响这里。
+                  其字典同步会扇出到<b>所有启用「字典同步」的数据源</b>（见「字典同步」Tab），
+                  <code>dict_table</code> 为空表示复用主数据、无需同步。
+                </div>
                 <div className="rounded-lg border bg-card p-3">
                   <div className="mb-2 text-sm font-medium">新增维度</div>
                   <div className="grid grid-cols-1 gap-2 md:grid-cols-6">

@@ -1488,12 +1488,39 @@ public class IqdCatalogNodeService {
         return conn;
     }
 
+    /** 幂等键最大长度（与 {@code iqd_edit_idempotency.idempotency_key} 列宽一致）。 */
+    private static final int IDEMPOTENCY_KEY_MAX = 128;
+
+    /**
+     * 归一幂等键：空 → {@code null}（不做幂等）；超长 → {@code 42200}（fail-loud）。
+     *
+     * <p>为什么要显式拦截：列是 {@code VARCHAR(128)}，若客户端传入更长的自定义键，
+     * 直接落库会抛原生 {@code value too long for type character varying(...)} → 裸 500
+     * （2026-09-30 实测：POST /catalog/relationship 因 70 字符键撞 64 列宽而 500）。
+     * 这里改为可诊断的业务错误，消息里带上实际长度与上限。
+     */
+    private static String normalizeIdempotencyKey(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return null;
+        }
+        String key = raw.trim();
+        if (key.length() > IDEMPOTENCY_KEY_MAX) {
+            Map<String, Object> data = new LinkedHashMap<>();
+            data.put("idempotency_key_length", key.length());
+            data.put("max_length", IDEMPOTENCY_KEY_MAX);
+            throw new BusinessException(42200,
+                    "idempotency_key 过长（当前 " + key.length() + " 字符，上限 " + IDEMPOTENCY_KEY_MAX + "）", data);
+        }
+        return key;
+    }
+
     /** 幂等键查重（空键 → 不查，调用方视为「不做幂等」）。 */
     private Optional<IqdEditIdempotency> findIdempotent(Long connectionId, String idempotencyKey) {
-        if (idempotencyKey == null || idempotencyKey.isBlank()) {
+        String key = normalizeIdempotencyKey(idempotencyKey);
+        if (key == null) {
             return Optional.empty();
         }
-        return idempotencyRepository.findByConnectionIdAndIdempotencyKey(connectionId, idempotencyKey);
+        return idempotencyRepository.findByConnectionIdAndIdempotencyKey(connectionId, key);
     }
 
     /** 乐观并发（{@code 40900} + {@code data.current_edit_revision}）。 */
@@ -1514,14 +1541,15 @@ public class IqdCatalogNodeService {
 
     /** 写幂等键；撞 PK（同 key **并发**双提交）→ {@code 40901}，回滚本次事务（含节点写入与 bump）。 */
     private void recordIdempotency(Long connectionId, String idempotencyKey, long next, long current) {
-        if (idempotencyKey == null || idempotencyKey.isBlank()) {
+        String key = normalizeIdempotencyKey(idempotencyKey);
+        if (key == null) {
             return;
         }
         try {
-            idempotencyRepository.save(new IqdEditIdempotency(connectionId, idempotencyKey, next));
+            idempotencyRepository.save(new IqdEditIdempotency(connectionId, key, next));
         } catch (DataIntegrityViolationException ex) {
             Map<String, Object> data = new LinkedHashMap<>();
-            data.put("idempotency_key", idempotencyKey);
+            data.put("idempotency_key", key);
             data.put("current_edit_revision", current);
             throw new BusinessException(40901, "幂等键重复提交（同 key 并发）", data);
         }
