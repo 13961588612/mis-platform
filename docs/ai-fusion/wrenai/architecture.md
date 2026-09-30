@@ -884,7 +884,7 @@ classDiagram
 | 3 | `iqd_model_snapshot` | `connection_id, mdl_hash, mdl_json JSONB, source(pull\|push), model_count, synced_at, synced_by, status(ok\|failed), error_message` | FK→1；IDX `(connection_id, synced_at DESC)` | FR-CFG-3, Q4 |
 | 4 | `iqd_catalog_item` | `connection_id, kind(table\|column\|model\|relationship\|metric\|dimension\|view), parent_key, item_key, display_name, data_type, is_primary_key, is_time_dimension, is_email, description, expression, source(db_meta\|mdl), in_scope, sensitive_level(none\|low\|high), mask_rule, last_seen_at` | FK→1；**UK `(connection_id, item_key)`**；IDX `(connection_id, kind)`、`(connection_id, parent_key)`、`(connection_id, in_scope)` | FR-INV-1/2/3, FR-ACC-3 |
 | 5 | `iqd_scope_policy` | `connection_id, subject_type(global\|role\|dept\|user\|store), subject_id, item_key, allow, effective, remark, created_by` | **UK `(connection_id, subject_type, subject_id, item_key)`**；IDX `(connection_id, subject_type, subject_id)` | FR-INV-3/4（v1.9：subject_type 可含 store 门店主体） |
-| 6 | `iqd_table_acl` | `connection_id, subject_type(role\|dept\|user\|store), subject_id, item_key, action(ask\|manage), row_scope JSONB, created_by` | **UK `(connection_id, subject_type, subject_id, item_key, action)`**；CHECK `action IN ('ask','manage')`；IDX `(connection_id, subject_type, subject_id, action)`；`row_scope` NULL=全行可见（向后兼容）；**v1.9：`row_scope` 语义为「维度注册表实例」（可含多维度 AND 叠加，见 §4.2.2 A）** | FR-PERM-2/4, **A11 行级范围** |
+| 6 | `iqd_table_acl` | `connection_id, subject_type(role\|dept\|user\|store), subject_id, item_key, action=ask, row_scope JSONB, created_by` | **UK `(connection_id, subject_type, subject_id, item_key, action)`**；CHECK `action='ask'`；IDX `(connection_id, subject_type, subject_id, action)`；`row_scope` NULL=全行可见（向后兼容）；**v1.9：`row_scope` 语义为「维度注册表实例」（可含多维度 AND 叠加，见 §4.2.2 A）** | FR-PERM-2/4, **A11 行级范围** |
 | 7 | `iqd_row_scope_dimension` | **（v1.9 一期新增）** `dimension_code PK, dimension_name, predicate_type(PATH_PREFIX\|ENUM), column_name, header_name, param_whitelist JSONB, dict_table, auto_mode, enabled, sort, created_at, updated_at` | PK `dimension_code`；UK `(header_name)`；IDX `(enabled, sort)`；**一期种子：`dept` + `store` 两条（见 §4.2.2 D.8.1）** | **A11 行级范围维度注册表（v1.9 一期必做）** |
 | 8 | `iqd_sql_pair` | `connection_id, question, source_dialect(枚举 oracle/mysql/postgres/clickhouse), native_sql, wren_sql(=原 sql_text，转化后可编辑、最终入库推 WrenAI 的方言), remark, enabled, wren_ref_id, sync_status(pending\|synced\|failed), synced_at, created_by` | FK→1；IDX `(connection_id, sync_status)` | FR-ACC-1（**v1.10 增量**：新增 `source_dialect`/`native_sql`，`sql_text` 改名为 `wren_sql`，入库推 WrenAI 的是 `wren_sql` 而非 `native_sql`） |
 | 9 | `iqd_knowledge` | `connection_id, kind(term\|metric_definition\|synonym\|instruction), title, content, related_item_keys JSONB, source(local\|kb_s07), kb_term_id, enabled, wren_ref_id, sync_status, synced_at` | FK→1；IDX `(connection_id, kind)`、`(kb_term_id)` | FR-ACC-2/4, Q8 |
@@ -905,11 +905,10 @@ classDiagram
 第 1 层  iqd_scope_policy (subject_type=global)   ← 治理层：平台整体「哪些表进入问数范围」
 第 2 层  iqd_scope_policy (subject_type=role|dept|user) ← 差异化范围模板（FR-INV-4）
 第 3 层  iqd_table_acl action='ask'               ← 可问/可见语义（类比 kb_acl read）
-         iqd_table_acl action='manage'            ← 管辖/授权语义（类比 kb_acl manage）
 
-最终可问表集合 = 全局范围 ∩ (主体范围模板 ∪ 主体 ask ACL)
-授权入口资格   = iqd_table_acl action='manage' ∨ 全局管理员角色码（沿用 mis.kb.admin.global-role-codes 同款配置项）
-双口径         = 后台管理页用 manage 口径；用户端问数用 ask 口径
+最终可问集合 = 全局 in_scope ∩ 主体范围模板（iqd_scope_policy）；表级 ACL 仅作行级 row_scope（方案 A，2026-10-01）
+授权入口资格   = 后台权限码（iqd:scope:save / iqd:acl:save）或全局管理员角色码
+单口径         = iqd_table_acl 仅 ask（问数数据权限唯一语义），不再有 manage
 ```
 
 ### 4.2.1 权限方案全景与组合策略（问数系统常见权限方案）
@@ -1802,7 +1801,7 @@ sequenceDiagram
     CO->>CO: 意图识别 → data-query
     CO->>W: agent__invoke(mis-iqd, TaskBrief) max_depth=1
     W->>SR: resolve(identity, connection_id)
-    SR->>CFG: 读配置缓存 iqd_scope_policy(global) ∩ (主体模板 ∪ iqd_table_acl action=ask)（v1.9：API + 缓存，不直连库）
+    SR->>CFG: 读配置缓存 iqd_scope_policy(global ∩ 主体模板)；iqd_table_acl 仅供 row_scope（v1.9：API + 缓存）
     CFG-->>SR: allowed_item_keys
     alt decision = DENY
         SR-->>W: IqdScopeResolution(deny)
@@ -2011,7 +2010,7 @@ sequenceDiagram
     SEC->>SP: 切到「按角色差异化」→ 选角色 → 勾选表 → 授权
     SP->>BFF: POST /api/v1/iqd/acl {subject_type:"role", subject_id:"SALES_MANAGER", item_keys:[...], action:"ask"} (iqd:acl:grant)
     BFF->>SVC: grant_acl(dto)
-    SVC->>DB: 前置校验：操作者须持 action=manage 或全局管理员角色码
+    SVC->>DB: 前置校验：操作者须持后台权限码（iqd:acl:save）
     Note over SVC: 对齐 KB 评审 R6 —— 「谁能 grant」= 能管理该对象的人，非「有码即放行」
     SVC->>DB: insert iqd_table_acl
     SVC-->>SP: 授权成功（保存后发 iqd.config.changed → Worker 缓存刷新，默认 ≤10s 生效；缓存不可得 fail-closed 45204，见 D.7.3）
