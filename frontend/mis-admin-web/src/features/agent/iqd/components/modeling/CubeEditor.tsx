@@ -79,6 +79,7 @@ import { IQD_MODELING_PERMISSIONS, useIqdModelingPermission } from '../shared/us
 import { iqdKeys } from '../../queries/iqd-keys';
 import { useModelingStore } from '../../store/modeling-store';
 import { MeasureDimensionList } from './MeasureDimensionList';
+import { ModelFieldReference, type ModelField } from './ModelFieldReference';
 import {
   buildCubeItemKey,
   buildCubePatch,
@@ -126,7 +127,7 @@ export function CubeEditor(props: CubeEditorProps) {
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="flex max-h-[85vh] w-full max-w-3xl flex-col gap-0 p-0">
+      <DialogContent className="flex max-h-[85vh] w-full max-w-5xl flex-col gap-0 p-0">
         {open && <CubeForm key={formKey} {...props} />}
       </DialogContent>
     </Dialog>
@@ -228,6 +229,33 @@ function CubeForm({
     () => modelOptions.find((option) => option.itemKey === draft.draft.modelRef)?.fieldOptions ?? [],
     [modelOptions, draft.draft.modelRef],
   );
+
+  /** 所选挂靠模型节点（用于右侧「字段清单」参考面板；含类型/主键标记）。 */
+  const selectedModel = useMemo(
+    () => nodes.find((node) => node.data.kind === 'model' && node.data.itemKey === draft.draft.modelRef),
+    [nodes, draft.draft.modelRef],
+  );
+  const selectedModelName = selectedModel?.data.displayName ?? null;
+  const modelFields = useMemo<ModelField[]>(() => {
+    if (!selectedModel) {
+      return [];
+    }
+    const displayName = selectedModel.data.displayName;
+    return (selectedModel.data.columns ?? [])
+      .map((column) => {
+        const name = column.display_name ?? keyTail(column.item_key);
+        if (name === '') {
+          return null;
+        }
+        return {
+          qualified: `${displayName}.${name}`,
+          name,
+          dataType: (column.data_type ?? '').trim() || null,
+          isPrimaryKey: column.is_primary_key === true,
+        };
+      })
+      .filter((field): field is ModelField => field !== null);
+  }, [selectedModel]);
 
   /** 提交前本地预检（权威仍在后端；新建/更新同口径）。 */
   const validationErrors = useMemo(
@@ -396,7 +424,9 @@ function CubeForm({
         </DialogDescription>
       </DialogHeader>
 
-      <div className="min-h-0 flex-1 space-y-4 overflow-auto px-4 py-3">
+      <div className="flex min-h-0 flex-1 gap-3 overflow-hidden px-4 py-3">
+        {/* 左：录入区（可滚动） */}
+        <div className="min-h-0 flex-1 space-y-4 overflow-auto pr-1">
         {isExisting && (
           <div className="flex items-start gap-2 rounded border border-sky-500/50 bg-sky-50/80 px-2 py-1.5 text-[12px] text-sky-900">
             <Info className="mt-0.5 h-3.5 w-3.5 shrink-0" />
@@ -574,6 +604,12 @@ function CubeForm({
             {error}
           </div>
         )}
+        </div>
+
+        {/* 右：挂靠模型字段清单（参考录入度量表达式；点击复制限定名） */}
+        <div className="hidden w-64 shrink-0 md:flex">
+          <ModelFieldReference modelName={selectedModelName} fields={modelFields} />
+        </div>
       </div>
 
       <DialogFooter className="border-t border-border/60 px-4 py-3">
