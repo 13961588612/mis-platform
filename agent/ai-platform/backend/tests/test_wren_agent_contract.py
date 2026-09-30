@@ -126,3 +126,40 @@ def test_serve_mcp_command_includes_profile():
     assert "_ensure_profile" in source
     # profile 必须写占位而非明文
     assert "${IQD_DB_PASSWORD}" in source
+
+
+def test_cli_lock_serializes_same_connection():
+    """同一 conn_id 的 /cli 必须串行（防 LanceDB / target/mdl.json 并发竞争）。
+
+    <p>背景（2026-09-30 排查）：自愈 force-rebuild 与 re-index 并发触发时，
+    两个 ``wren memory index`` 会同时操作同一 ``.wren/memory`` LanceDB，偶发
+    ``Table 'schema_items' already exists``；``memory reset`` 插进 index 中间则报
+    ``was not found``。agent 侧对同 conn_id 加锁即消除该竞争。
+    """
+    import asyncio
+
+    module = _load_agent_module()
+
+    events: list[str] = []
+
+    async def worker(tag: str, delay: float) -> None:
+        async with module._get_cli_lock("c1"):
+            events.append(f"{tag}:enter")
+            await asyncio.sleep(delay)
+            events.append(f"{tag}:exit")
+
+    async def main() -> None:
+        await asyncio.gather(worker("a", 0.05), worker("b", 0.01))
+
+    asyncio.run(main())
+    assert events in (
+        ["a:enter", "a:exit", "b:enter", "b:exit"],
+        ["b:enter", "b:exit", "a:enter", "a:exit"],
+    ), events
+
+
+def test_cli_lock_is_per_connection():
+    """不同 conn_id 各有独立锁（不互相阻塞）。"""
+    module = _load_agent_module()
+    assert module._get_cli_lock("c1") is module._get_cli_lock("c1")
+    assert module._get_cli_lock("c1") is not module._get_cli_lock("c2")

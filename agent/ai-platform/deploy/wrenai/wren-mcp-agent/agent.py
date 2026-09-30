@@ -86,6 +86,24 @@ def _get_profile_lock() -> "asyncio.Lock":
     return _profile_lock
 
 
+# 每个连接一把 CLI 锁：同一 project 目录下的 wren 子进程必须串行。
+# 背景（2026-09-30 排查）：/cli 原先无并发保护，自愈 force-rebuild / re-index 并发
+# 触发时两个 ``wren memory index`` 会同时操作 <project>/.wren/memory 的 LanceDB，
+# 偶发 ``Table 'schema_items' already exists``；``memory reset`` 插进 index 中间则报
+# ``was not found``。此外 ``context build`` 写 target/mdl.json 时会与 ``memory index``
+# 默认读取的同一文件冲突。故对同一 conn_id 的 CLI（含文件操作）整体串行。
+_cli_locks: "dict[str, asyncio.Lock]" = {}
+
+
+def _get_cli_lock(conn_id: str) -> "asyncio.Lock":
+    """取（或建）连接级 CLI 串行锁。"""
+    lock = _cli_locks.get(conn_id)
+    if lock is None:
+        lock = asyncio.Lock()
+        _cli_locks[conn_id] = lock
+    return lock
+
+
 # ================================================================ 配置
 
 
@@ -847,6 +865,17 @@ async def api_heartbeat(conn_id: str, _: None = Depends(require_bearer)) -> JSON
 @app.post("/internal/v1/wren-mcp/cli")
 async def api_cli(req: CliRequest, _: None = Depends(require_bearer)) -> JSONResponse:
     """在 wren 机对本连接 project 执行 ``wren`` CLI（跨机器管理面写路径）。
+
+    <p>同一 ``conn_id`` 的调用**整体串行**（见 :func:`_get_cli_lock`）：并发自愈动作
+    （force-rebuild / re-index / 物料同步）会竞争同一 project 目录下的 LanceDB 索引与
+    ``target/mdl.json``，必须互斥执行。
+    """
+    async with _get_cli_lock(req.conn_id):
+        return await _api_cli_locked(req)
+
+
+async def _api_cli_locked(req: CliRequest) -> JSONResponse:
+    """``/cli`` 的实际执行体（已持有连接级锁）。
 
     失败时仍 ``code=0`` + ``exit_code!=0``（与本地 IqdCli 返回形态对齐），由调用方抛错；
     仅二进制缺失 / 超时等基础设施错误用非 0 code。

@@ -113,6 +113,62 @@ async def test_memory_reset_default_includes_force():
         assert _capture_args(cli) == ["memory", "reset", "--force"]
 
 
+# ================================================================ memory index 瞬时 LanceDB 错误重试
+
+def test_transient_memory_index_error_matcher():
+    """只有 LanceDB「Malformed manifest + schema_items」类瞬时错误才判定可重试。"""
+    assert IqdCli._is_transient_memory_index_error(
+        "Malformed manifest: Table 'schema_items' already exists"
+    )
+    assert IqdCli._is_transient_memory_index_error(
+        "Malformed manifest: Table 'schema_items' was not found"
+    )
+    # 非瞬时：不得重试，避免掩盖真实错误
+    assert not IqdCli._is_transient_memory_index_error("no wren project found")
+    assert not IqdCli._is_transient_memory_index_error(
+        "Malformed manifest: Table 'query_history' already exists"
+    )
+
+
+@pytest.mark.asyncio
+async def test_memory_index_retries_transient_then_succeeds():
+    """第一次报瞬时 LanceDB 错误 → 重试后成功，不向上抛（兜底并发抖动）。"""
+    cli = IqdCli()
+    cli._run = AsyncMock(
+        side_effect=[
+            IqdCliError("Malformed manifest: Table 'schema_items' already exists"),
+            {"stdout": "Indexed 1", "stderr": "", "exit_code": 0},
+        ]
+    )
+    with patch("src.adapters.iqd_cli.asyncio.sleep", new=AsyncMock()):
+        result = await cli.memory_index()
+    assert result["exit_code"] == 0
+    assert cli._run.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_memory_index_transient_retry_exhausted_raises():
+    """三次都是瞬时错误 → 最终仍抛出（不无限重试）。"""
+    cli = IqdCli()
+    cli._run = AsyncMock(
+        side_effect=IqdCliError("Malformed manifest: Table 'schema_items' was not found")
+    )
+    with patch("src.adapters.iqd_cli.asyncio.sleep", new=AsyncMock()):
+        with pytest.raises(IqdCliError):
+            await cli.memory_index()
+    assert cli._run.await_count == 3
+
+
+@pytest.mark.asyncio
+async def test_memory_index_non_transient_error_does_not_retry():
+    """非瞬时错误（如 no wren project）→ 立即抛，不重试。"""
+    cli = IqdCli()
+    cli._run = AsyncMock(side_effect=IqdCliError("no wren project found"))
+    with pytest.raises(IqdCliError):
+        await cli.memory_index()
+    assert cli._run.await_count == 1
+
+
 @pytest.mark.asyncio
 async def test_context_validate_args_come_from_config():
     """context validate 可选参数来自配置：空 → ["context","validate"]；["--verbose"] → 含 --verbose。"""

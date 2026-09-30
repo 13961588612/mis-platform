@@ -638,8 +638,36 @@ class IqdCli:
         Note:
             调用方需对 ``IqdCliError`` 做容错（Q6）：CLI 缺失/失败不得中断 build 回填，
             仅单独标记 ``index_status=failed``。
+
+        <p><b>已知瞬时错误自动重试</b>（2026-09-30 排查）：wren 的 ``memory index``
+        用 LanceDB 存派生索引（``<project>/.wren/memory/``）。并发或半写入状态下，
+        偶发 ``Malformed manifest: Table 'schema_items' {already exists|was not found}``
+        ——这是可自愈的瞬时状态（重跑即成功），非数据损坏。此处对这两条 stderr 做
+        **有界重试**（最多 3 次、间隔 1.5s），避免把瞬时抖动上报成 ``index_status=failed``。
+        根因（同连接并发 CLI）已在 wren-mcp-agent ``/cli`` 侧加连接级串行锁根治，此重试为兜底。
         """
-        return await self._run(["memory", "index"], cwd=project_dir)
+        last_exc: IqdCliError | None = None
+        for attempt in range(3):
+            try:
+                return await self._run(["memory", "index"], cwd=project_dir)
+            except IqdCliError as exc:
+                last_exc = exc
+                if not self._is_transient_memory_index_error(str(exc)) or attempt == 2:
+                    raise
+                await asyncio.sleep(1.5)
+        raise last_exc  # pragma: no cover - 循环要么 return 要么 raise
+
+    @staticmethod
+    def _is_transient_memory_index_error(message: str) -> bool:
+        """判定 ``memory index`` 失败是否属「重跑即愈」的 LanceDB 瞬时错误。"""
+        lowered = (message or "").lower()
+        if "malformed manifest" not in lowered:
+            return False
+        # 仅限已观测到的 LanceDB 表冲突（schema_items）；不对任意 "already exists"
+        # 重试，避免把真实错误（表名异常等）当成瞬时抖动而掩盖。
+        return "schema_items" in lowered and (
+            "already exists" in lowered or "was not found" in lowered
+        )
 
     # ================================================================ 知识下发（方案 A：文件即真相）
 
