@@ -10,8 +10,8 @@ import { cleanup, render, screen } from '@testing-library/react';
 import { ModelFieldReference, type ModelField } from './ModelFieldReference';
 
 const FIELDS: ModelField[] = [
-  { qualified: 'orders.id', name: 'id', dataType: 'BIGINT', isPrimaryKey: true },
-  { qualified: 'orders.amount', name: 'amount', dataType: 'DOUBLE', isPrimaryKey: false },
+  { qualified: 'orders.id', name: 'id', dataType: 'BIGINT', isPrimaryKey: true, description: '订单主键' },
+  { qualified: 'orders.amount', name: 'amount', dataType: 'DOUBLE', isPrimaryKey: false, description: null },
 ];
 
 afterEach(() => {
@@ -30,7 +30,7 @@ describe('ModelFieldReference', () => {
     // 仅主键列带 PK 标记
     expect(screen.getAllByText('PK')).toHaveLength(1);
     // 每个字段可点击复制限定名（title 里带限定名）
-    expect(screen.getByTitle('点击复制 orders.amount')).toBeTruthy();
+    expect(screen.getAllByTitle('点击复制 orders.amount').length).toBeGreaterThan(0);
   });
 
   it('未选模型：提示先选择挂靠模型', () => {
@@ -41,5 +41,17 @@ describe('ModelFieldReference', () => {
   it('已选模型但无字段：提示该模型暂无字段', () => {
     render(<ModelFieldReference modelName="orders" fields={[]} />);
     expect(screen.getByText(/该模型暂无字段/)).toBeTruthy();
+  });
+});
+
+describe('ModelFieldReference 描述列', () => {
+  it('字段描述非空时展示', () => {
+    render(<ModelFieldReference modelName="orders" fields={FIELDS} />);
+    expect(screen.getByText('订单主键')).toBeTruthy();
+  });
+
+  it('字段描述为空时不渲染空描述', () => {
+    render(<ModelFieldReference modelName="orders" fields={[FIELDS[1]]} />);
+    expect(screen.queryByText('订单主键')).toBeNull();
   });
 });

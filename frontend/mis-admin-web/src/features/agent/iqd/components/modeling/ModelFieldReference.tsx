@@ -24,6 +24,8 @@ export interface ModelField {
   dataType: string | null;
   /** 是否主键（前端仅作提示，权威在主键回填链路）。 */
   isPrimaryKey: boolean;
+  /** 字段描述（目录里的 description；无则 null）。 */
+  description: string | null;
 }
 
 export interface ModelFieldReferenceProps {
@@ -87,12 +89,19 @@ export function ModelFieldReference({ modelName, fields }: ModelFieldReferencePr
           该模型暂无字段（可能尚未从表导入列）。
         </p>
       ) : (
-        <ul className="min-h-0 flex-1 space-y-0.5 overflow-auto px-1.5 py-1.5">
+        <div className="flex min-h-0 flex-1 flex-col">
+          <div className="grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1.3fr)] gap-x-2 border-b border-border/40 px-1.5 py-1 text-[10px] font-medium text-muted-foreground">
+            <span>字段</span>
+            <span>类型</span>
+            <span className="text-right">描述</span>
+          </div>
+          <ul className="min-h-0 flex-1 space-y-0.5 overflow-auto px-1.5 py-1.5">
           {fields.map((field) => (
             <li key={field.qualified}>
+              {/* 三列：字段名(+PK) | 类型 | 描述（点击整行复制限定名） */}
               <button
                 type="button"
-                className="group flex w-full items-center justify-between gap-2 rounded px-1.5 py-1 text-left hover:bg-background"
+                className="group grid w-full grid-cols-[minmax(0,1fr)_auto_minmax(0,1.3fr)] items-center gap-x-2 rounded px-1.5 py-1 text-left hover:bg-background"
                 title={`点击复制 ${field.qualified}`}
                 onClick={() => void onCopy(field.qualified)}
               >
@@ -104,20 +113,27 @@ export function ModelFieldReference({ modelName, fields }: ModelFieldReferencePr
                     </span>
                   )}
                 </span>
-                <span className="flex shrink-0 items-center gap-1">
-                  {field.dataType && (
-                    <span className="text-[10px] uppercase text-muted-foreground">{field.dataType}</span>
-                  )}
+                <span className="shrink-0 text-[10px] uppercase text-muted-foreground">
+                  {field.dataType ?? '—'}
+                </span>
+                <span className="flex min-w-0 items-center justify-end gap-1">
+                  <span
+                    className="truncate text-[11px] text-muted-foreground"
+                    title={field.description ?? undefined}
+                  >
+                    {field.description ?? ''}
+                  </span>
                   {copied === field.qualified ? (
-                    <Check className="h-3 w-3 text-success" />
+                    <Check className="h-3 w-3 shrink-0 text-success" />
                   ) : (
-                    <Copy className="h-3 w-3 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100" />
+                    <Copy className="h-3 w-3 shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100" />
                   )}
                 </span>
               </button>
             </li>
           ))}
-        </ul>
+          </ul>
+        </div>
       )}
     </aside>
   );

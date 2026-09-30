@@ -44,7 +44,7 @@
  */
 import { useCallback, useMemo, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { AlertTriangle, Info, Loader2, Trash2 } from 'lucide-react';
+import { AlertTriangle, Columns, Info, Loader2, Trash2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
   Dialog,
@@ -127,7 +127,7 @@ export function CubeEditor(props: CubeEditorProps) {
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="flex max-h-[85vh] w-full max-w-5xl flex-col gap-0 p-0">
+      <DialogContent className="flex max-h-[85vh] w-full max-w-6xl flex-col gap-0 p-0">
         {open && <CubeForm key={formKey} {...props} />}
       </DialogContent>
     </Dialog>
@@ -252,6 +252,7 @@ function CubeForm({
           name,
           dataType: (column.data_type ?? '').trim() || null,
           isPrimaryKey: column.is_primary_key === true,
+          description: (column.description ?? '').trim() || null,
         };
       })
       .filter((field): field is ModelField => field !== null);
@@ -274,6 +275,9 @@ function CubeForm({
 
   const dependents = dependenciesQuery.data?.dependents ?? [];
   const cubeName = cubeNameOf(cube?.item_key) || draft.draft.displayName;
+
+  /** 右侧「挂靠模型字段清单」是否显示（按钮可切换；默认显示）。 */
+  const [showFieldList, setShowFieldList] = useState(true);
 
   /** 删除二次确认 + 状态（T03c 删除路径：物理删 + 孤儿清理）。 */
   const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false);
@@ -414,14 +418,27 @@ function CubeForm({
 
   return (
     <>
-      <DialogHeader className="border-b border-border/60 px-4 py-3">
-        <DialogTitle className="text-[14px]">
-          {isExisting ? '编辑 Cube' : '新建 Cube'}：{draft.draft.displayName || cubeName || '未命名'}
-        </DialogTitle>
-        <DialogDescription className="text-[12px]">
-          Cube 是问数的聚合出口：挂在一个模型上，度量决定「算什么」，维度决定「按什么分组」。
-          落库后由整连接 build 派生进 MDL，问数即可命中聚合通道。
-        </DialogDescription>
+      <DialogHeader className="flex-row items-start justify-between gap-3 border-b border-border/60 bg-dialog-header px-4 py-3 pr-10">
+        <div className="flex min-w-0 flex-col gap-1.5 pr-6">
+          <DialogTitle className="text-[14px]">
+            {isExisting ? '编辑 Cube' : '新建 Cube'}：{draft.draft.displayName || cubeName || '未命名'}
+          </DialogTitle>
+          <DialogDescription className="text-[12px]">
+            Cube 是问数的聚合出口：挂在一个模型上，度量决定「算什么」，维度决定「按什么分组」。
+            落库后由整连接 build 派生进 MDL，问数即可命中聚合通道。
+          </DialogDescription>
+        </div>
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          className="mt-0.5 h-7 shrink-0 gap-1 px-2 text-[12px]"
+          onClick={() => setShowFieldList((v) => !v)}
+          title={showFieldList ? '隐藏挂靠模型字段清单' : '显示挂靠模型字段清单（参考录入表达式）'}
+        >
+          <Columns className="h-3.5 w-3.5" />
+          {showFieldList ? '隐藏字段清单' : '显示字段清单'}
+        </Button>
       </DialogHeader>
 
       <div className="flex min-h-0 flex-1 gap-3 overflow-hidden px-4 py-3">
@@ -606,10 +623,12 @@ function CubeForm({
         )}
         </div>
 
-        {/* 右：挂靠模型字段清单（参考录入度量表达式；点击复制限定名） */}
-        <div className="hidden w-64 shrink-0 md:flex">
-          <ModelFieldReference modelName={selectedModelName} fields={modelFields} />
-        </div>
+        {/* 右：挂靠模型字段清单（参考录入度量表达式；点击复制限定名）；受标题栏按钮控制 */}
+        {showFieldList && (
+          <div className="hidden w-80 shrink-0 md:flex">
+            <ModelFieldReference modelName={selectedModelName} fields={modelFields} />
+          </div>
+        )}
       </div>
 
       <DialogFooter className="border-t border-border/60 px-4 py-3">
