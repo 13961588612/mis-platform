@@ -127,6 +127,10 @@ class SyncResult(BaseModel):
     warnings: list[str] = []
     # context validate 原始 stdout/stderr（前端兜底解析 Warnings: 分区）
     raw: str | None = None
+    # T03e：本动作派生出的「编辑未生效」清单（validate 重算 / build 回写共用；
+    # 没算过时为 0 空列表，由 report_sync_job 全量替换落 iqd_sync_job）。
+    unmatched_edit_count: int = 0
+    unmatched_edits: list[dict[str, Any]] = []
 
 
 def parse_related_item_keys(raw: Any) -> set[str]:
@@ -729,7 +733,7 @@ class IqdAskService:
             logger.warning("IQD force-rebuild get_catalog_meta failed", error=str(exc))
             catalog_meta = []
         try:
-            mdl_dir, _derived = self.build_mdl_from_catalog(
+            mdl_dir, derived = self.build_mdl_from_catalog(
                 cid, mdl_raw, edited_items, catalog_meta
             )
         except Exception as exc:  # noqa: BLE001 - 派生失败归一为 build 失败
@@ -795,6 +799,10 @@ class IqdAskService:
             build_mdl_hash=mdl_hash,
             synced_sql_pair_count=synced_pairs, synced_knowledge_count=synced_knowledge,
             build_error=build_error, index_error=index_error,
+            # T03e：把本次派生出的未生效清单随结果回传，供 _report_selfheal_job
+            # 全量替换写回 iqd_sync_job（否则前端会继续显示上一次的陈旧计数）。
+            unmatched_edit_count=int(derived.get("unmatched_edit_count") or 0),
+            unmatched_edits=list(derived.get("unmatched_edits") or []),
         )
         await self._report_selfheal_job(client, cid, "force_rebuild", result)
         return result
@@ -943,6 +951,11 @@ class IqdAskService:
         # 成功但仅有汇总 summary、warnings 空：仍回传一条，避免「有 3 个警告却看不到」
         if ok and not warnings and summary:
             warnings = [summary]
+        # T03e（2026-09-30）：校验顺带**按当前 catalog 重算**「编辑未生效」清单并回写。
+        # 起因：该计数原只在 build 时写，用户点「模型校验」不构建 → 前端长期看到陈旧值
+        # （实测连接 1790686095967 显示 267，实际已降到 2/0）。此处为**只读派生**：
+        # build_mdl_from_catalog 只写临时目录、**不部署**，符合「校验只读」语义。
+        unmatched_count, unmatched_edits = await self._derive_unmatched_for_validate(client, cid)
         result = SyncResult(
             connection_id=cid, coalesced=False,
             build_status="success" if ok else "failed",
@@ -952,9 +965,40 @@ class IqdAskService:
             build_error=None if ok else (summary or "模型校验未通过"),
             warnings=warnings,
             raw=(validate.get("raw") or None) or None,
+            unmatched_edit_count=unmatched_count,
+            unmatched_edits=unmatched_edits,
         )
         await self._report_selfheal_job(client, cid, "validate", result)
         return result
+
+    async def _derive_unmatched_for_validate(
+        self, client: Any, connection_id: int
+    ) -> tuple[int, list[dict[str, Any]]]:
+        """只读派生当前 catalog 的「编辑未生效」清单（供模型校验重算，不部署）。
+
+        ``build_mdl_from_catalog`` 只把派生 MDL 写临时目录、不触碰 wren 工程，故可用于
+        只读校验动作。取 catalog 失败时**降级为 (0, [])**（不阻断校验返回），并记 warning。
+        """
+        try:
+            full = await client.get_catalog_full(connection_id)
+        except Exception as exc:  # noqa: BLE001 - 重算失败不应让校验失败
+            logger.warning("IQD validate recompute unmatched: get_catalog_full failed", error=str(exc))
+            return 0, []
+        mdl_raw = full.get("mdl_raw")
+        edited_items = full.get("edited_items") or []
+        try:
+            catalog_meta = await client.get_catalog_meta(connection_id)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("IQD validate recompute unmatched: get_catalog_meta failed", error=str(exc))
+            catalog_meta = []
+        try:
+            _dir, payload = self.build_mdl_from_catalog(
+                connection_id, mdl_raw, edited_items, catalog_meta
+            )
+        except Exception as exc:  # noqa: BLE001 - 如「无基线且无编辑」→ 视为 0
+            logger.warning("IQD validate recompute unmatched: derive failed", error=str(exc))
+            return 0, []
+        return int(payload.get("unmatched_edit_count") or 0), list(payload.get("unmatched_edits") or [])
 
     async def _report_selfheal_job(
         self, client: Any, connection_id: int | None, action: str, result: SyncResult
@@ -987,6 +1031,11 @@ class IqdAskService:
                 payload["build_status"] = result.build_status
                 payload["build_mdl_hash"] = result.build_mdl_hash
                 payload["build_error"] = result.build_error
+            # T03e：validate 会**按当前 catalog 重算**未生效清单（见 trigger_validate），
+            # build 则用派生产物里的清单；两者都经这里全量替换写回，避免前端长期看到陈旧计数。
+            if action in ("validate", "force_rebuild"):
+                payload["unmatched_edit_count"] = int(result.unmatched_edit_count or 0)
+                payload["unmatched_edits"] = list(result.unmatched_edits or [])
             await client.report_sync_job(payload)
         except Exception as exc:  # noqa: BLE001 - 报作业失败仅告警，不阻断返回
             logger.warning("IQD self-heal job report failed", action=action, error=str(exc))
@@ -1551,6 +1600,8 @@ class IqdAskService:
             build_error=build_error,
             index_error=index_error,
             warnings=list(selfcheck_warnings),
+            unmatched_edit_count=int(derived.get("unmatched_edit_count") or 0),
+            unmatched_edits=list(derived.get("unmatched_edits") or []),
         )
 
     async def _current_edit_revision(self, full: dict[str, Any], client: Any) -> int:
@@ -1698,6 +1749,36 @@ class IqdAskService:
         return tmp_dir, payload
 
     @staticmethod
+    def _patch_column(mdl: dict[str, Any], table: str, col: str, apply_patch) -> bool:
+        """定位 ``models[name==table].columns[name==col]`` 并套用列的 patch。
+
+        <p><b>为什么大小写不敏感</b>（2026-09-30 实测）：WrenAI 把物理列名回写成**大写**
+        （如 MDL 里 ``HSSUPZK``），而平台 catalog 的 ``item_key`` 用**小写**
+        （``...ads_..._df.hssupzk``）。若按 ``==`` 精确匹配会「明明已落进 MDL 却判成未生效」，
+        产生假告警（实测同一个连接：267 条里既有真实项、也有这类大小写误报）。列名是引用锚点、
+        **只匹配定位、不改名**，故这里用 ``casefold`` 双向匹配是安全的。
+
+        Args:
+            mdl: 派生中的 MDL（原地修改）。
+            table: 表名（来自 item_key，大小写不保证）。
+            col: 列名（来自 item_key，大小写不保证）。
+            apply_patch: ``_patch_mdl_node`` 内的 ``_set_column``（只改描述/表达式）。
+
+        Returns:
+            ``True`` 命中并套用；``False`` 未命中（交由调用方判定是否算未生效）。
+        """
+        target_table = table.casefold()
+        target_col = col.casefold()
+        for model in mdl.get("models", []):
+            if str(model.get("name") or "").casefold() != target_table:
+                continue
+            for column in model.get("columns", []):
+                if str(column.get("name") or "").casefold() == target_col:
+                    apply_patch(column)
+                    return True
+        return False
+
+    @staticmethod
     def _patch_mdl_node(mdl: dict[str, Any], item_key: str, kind: str, it: dict[str, Any]) -> bool:
         """按 item_key→MDL 节点映射，把编辑字段（display_name/description/expression）套用到节点。
 
@@ -1777,24 +1858,16 @@ class IqdAskService:
             if len(parts) >= 4:
                 table = parts[2]
                 col = parts[3]
-                for model in mdl.get("models", []):
-                    if model.get("name") == table:
-                        for column in model.get("columns", []):
-                            if column.get("name") == col:
-                                _set_column(column)
-                                return True
+                if IqdAskService._patch_column(mdl, table, col, _set_column):
+                    return True
             elif len(parts) == 2:
                 # <table>.<column>（平台 catalog 里物理列 / 计算列的稳定键形态）→
                 # models[name==<table>].columns[name==<column>]。
                 # 缺这条分支时，「在语义模型页 / 属性面板改列描述」会**静默不生效**
                 # ——T03e 口径收窄后唯一剩下的真实告警正是它（2026-09-28 真机实测）。
                 table, col = parts[0], parts[1]
-                for model in mdl.get("models", []):
-                    if model.get("name") == table:
-                        for column in model.get("columns", []):
-                            if column.get("name") == col:
-                                _set_column(column)
-                                return True
+                if IqdAskService._patch_column(mdl, table, col, _set_column):
+                    return True
         # <cubeKey>.<measure> 形态（cubeKey=mdl:cube:<cube>）
         if item_key.startswith("mdl:cube:") and "." in item_key[len("mdl:cube:"):]:
             cube_part = item_key[len("mdl:cube:"):]

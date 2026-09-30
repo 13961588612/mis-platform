@@ -412,6 +412,51 @@ async def test_trigger_reindex_resets_then_indexes_and_reports_action():
 
 
 @pytest.mark.asyncio
+async def test_validate_recomputes_unmatched_and_reports():
+    """模型校验顺带重算「编辑未生效」清单并随 report_sync_job 全量替换回写（2026-09-30）。"""
+    service = IqdAskService()
+    cli, client, mocks = _patch_selfheal_clients(validate_return={"ok": True, "summary": "", "raw": "ok"})
+    client.get_catalog_full = AsyncMock(return_value={
+        "mdl_raw": None,
+        "edited_items": [
+            {"item_key": "pg_main.adhoc.t1", "kind": "table", "display_name": "t1"},
+            {"item_key": "pg_main.adhoc.t1.hssupzk", "kind": "column",
+             "parent_key": "pg_main.adhoc.t1", "display_name": "HSSUPZK",
+             "data_type": "DOUBLE", "description": "description"},
+            {"item_key": "mdl:model:t1", "kind": "model", "display_name": "t1"},
+        ],
+    })
+    client.get_catalog_meta = AsyncMock(return_value=[])
+    try:
+        result = await service.trigger_validate(connection_id=1, wait=True)
+    finally:
+        for m in mocks:
+            m.stop()
+
+    assert result.build_status == "success"
+    assert result.unmatched_edit_count == 0, result.unmatched_edits
+    report = client.report_sync_job.call_args.args[0]
+    assert report["action"] == "validate"
+    assert report["unmatched_edit_count"] == 0
+    assert report["unmatched_edits"] == []
+
+
+@pytest.mark.asyncio
+async def test_validate_without_catalog_degrades_gracefully():
+    """catalog 拉取失败时，重算降级为 0 且不阻断校验返回。"""
+    service = IqdAskService()
+    cli, client, mocks = _patch_selfheal_clients()
+    client.get_catalog_full = AsyncMock(side_effect=RuntimeError("boom"))
+    try:
+        result = await service.trigger_validate(connection_id=1, wait=True)
+    finally:
+        for m in mocks:
+            m.stop()
+    assert result.build_status == "success"
+    assert result.unmatched_edit_count == 0
+
+
+@pytest.mark.asyncio
 async def test_trigger_validate_ok_reports_action():
     """模型校验成功：build_status=success，report action=validate。"""
     service = IqdAskService()

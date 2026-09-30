@@ -196,3 +196,67 @@ def test_new_model_without_derivable_key_still_skipped() -> None:
     landed: set[int] = set()
     IqdAskService()._materialize_missing_nodes(mdl, edited, landed)
     assert all(m["name"] != "sale_ord" for m in mdl["models"])
+
+
+# ================================================================ 列 patch 大小写不敏感（2026-09-30）
+
+def _mdl_with_upper_column() -> dict:
+    """MDL 里列名是大写（wren 物理列回写口径），平台 item_key 是小写。"""
+    return {
+        "models": [
+            {
+                "name": "ads_ord",
+                "tableReference": {"catalog": "", "schema": "adhoc", "table": "ads_ord"},
+                "columns": [
+                    {"name": "HSSUPZK", "type": "DOUBLE", "notNull": False, "properties": {}, "isCalculated": False},
+                ],
+                "cached": False,
+                "properties": {},
+            }
+        ],
+        "relationships": [], "cubes": [], "views": [], "metrics": [], "dimensions": [],
+    }
+
+
+def test_patch_column_case_insensitive_matches_upper_mdl_name() -> None:
+    """item_key 小写列名应命中 MDL 里大写列名（否则「已生效」被误判为未生效）。"""
+    mdl = _mdl_with_upper_column()
+    it = {
+        "item_key": "pg_main.adhoc.ads_ord.hssupzk",
+        "kind": "column",
+        "display_name": "HSSUPZK",
+        "description": "含税应结折扣金额",
+    }
+    hit = IqdAskService._patch_mdl_node(mdl, it["item_key"], it["kind"], it)
+    assert hit is True, "小写 item_key 必须命中大写 MDL 列名"
+    col = mdl["models"][0]["columns"][0]
+    assert col["description"] == "含税应结折扣金额"
+    assert col["name"] == "HSSUPZK", "列名是引用锚点，大小写匹配也不得改名"
+
+
+def test_patch_column_two_part_key_case_insensitive() -> None:
+    """<table>.<column> 两段形态同样大小写不敏感。"""
+    mdl = _mdl_with_upper_column()
+    it = {"item_key": "ads_ord.hssupzk", "kind": "column", "display_name": "HSSUPZK", "description": "d"}
+    assert IqdAskService._patch_mdl_node(mdl, it["item_key"], it["kind"], it) is True
+    assert mdl["models"][0]["columns"][0]["description"] == "d"
+
+
+def test_no_false_unmatched_when_only_case_differs() -> None:
+    """端到端：列名只差大小写时，不再出现在「编辑未生效」清单里。"""
+    mdl = {"models": [], "relationships": [], "cubes": [], "views": [], "metrics": [], "dimensions": []}
+    edited = [
+        {"item_key": "pg_main.adhoc.ads_ord", "kind": "table", "display_name": "ads_ord"},
+        {"item_key": "pg_main.adhoc.ads_ord.hssupzk", "kind": "column",
+         "parent_key": "pg_main.adhoc.ads_ord", "display_name": "HSSUPZK",
+         "data_type": "DOUBLE", "description": "含税应结折扣金额"},
+        {"item_key": "mdl:model:ads_ord", "kind": "model", "display_name": "ads_ord"},
+    ]
+    landed: set[int] = set()
+    svc = IqdAskService()
+    svc._materialize_missing_nodes(mdl, edited, landed)
+    for idx, it in enumerate(edited):
+        if svc._patch_mdl_node(mdl, it.get("item_key") or "", it.get("kind") or "", it):
+            landed.add(idx)
+    unmatched = svc._collect_unmatched_edits(edited, landed)
+    assert unmatched == [], f"大小写差异不应产生未生效告警: {unmatched}"

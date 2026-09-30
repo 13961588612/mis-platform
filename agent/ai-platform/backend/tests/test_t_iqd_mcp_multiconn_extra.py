@@ -200,6 +200,14 @@ async def test_service_selfheal_passes_connid_project_dir(tmp_path: Path) -> Non
             client = MockClient.return_value
             client.get_sql_pairs = AsyncMock(return_value=[])
             client.get_knowledge = AsyncMock(return_value=[])
+            # force-rebuild 现会先派生平台完整 MDL（2026-09-30）→ 需要 catalog 拉取桩
+            client.get_catalog_full = AsyncMock(return_value={"mdl_raw": None, "edited_items": [
+                {"item_key": "pg_main.adhoc.t1", "kind": "table", "display_name": "t1"},
+                {"item_key": "pg_main.adhoc.t1.id", "kind": "column",
+                 "parent_key": "pg_main.adhoc.t1", "display_name": "id", "data_type": "BIGINT"},
+                {"item_key": "mdl:model:t1", "kind": "model", "display_name": "t1"},
+            ]})
+            client.get_catalog_meta = AsyncMock(return_value=[])
             client.backfill_enhancement_sync = AsyncMock(return_value={"synced_count": 0})
             client.report_sync_job = AsyncMock(return_value={"id": 1})
 
