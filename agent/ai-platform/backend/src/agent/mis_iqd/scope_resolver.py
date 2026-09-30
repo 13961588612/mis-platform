@@ -1295,8 +1295,10 @@ class ScopeResolver:
         # 由主体层（范围模板 ∪ ask ACL）放行；全局层一旦配置，仍严格求交。
         governance = policy_keys & in_scope_keys if in_scope_keys else policy_keys
 
-        # ---- 授权层：table_acl action=ask
-        acl_ask: set[str] = set()
+        # ---- 行级范围（原表级 ACL 表）：只承载 row_scope，不再参与 grant 裁定。
+        # 2026-10-01 语义收敛（方案 A）：谁能问哪张表/哪个字段，只由 iqd_scope_policy
+        # （范围策略）负责；iqd_table_acl 收缩为「行级范围」专用——给已在范围内的对象
+        # 叠加 row_scope 行条件。故 allowed 直接取治理集，不再与 acl_ask 求交。
         row_scope_rules: dict[str, list[dict[str, Any]]] = {}
         for raw in acls_raw:
             if not isinstance(raw, dict):
@@ -1310,22 +1312,15 @@ class ScopeResolver:
                 continue
             if (stype, sid) not in subject_keys and stype != SUBJECT_GLOBAL:
                 continue
-            acl_ask.add(item_key)
             row_scope = raw.get("row_scope")
             if row_scope:
                 row_scope_rules.setdefault(item_key, []).append(
                     row_scope if isinstance(row_scope, dict) else {}
                 )
 
-        if acl_ask:
-            allowed = sorted(governance & acl_ask)
-            row_scope_rules = {
-                k: v for k, v in row_scope_rules.items() if k in allowed
-            }
-        else:
-            # 无 ACL 数据空窗：按治理层放行（W1 兼容）
-            allowed = sorted(governance)
-            row_scope_rules = {}
+        allowed = sorted(governance)
+        # 行级规则只对「范围内」对象生效；范围外对象的 row_scope 视为死行。
+        row_scope_rules = {k: v for k, v in row_scope_rules.items() if k in allowed}
 
         return allowed, row_scope_rules, cid
 
