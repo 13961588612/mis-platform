@@ -19,7 +19,7 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { listConnections } from '../../api/iqd-modeling';
-import { useActiveProjectId } from '../../hooks/useActiveProject';
+import { selectableConnections, useActiveProjectId } from '../../hooks/useActiveProject';
 import { iqdKeys } from '../../queries/iqd-keys';
 import { useModelingStore } from '../../store/modeling-store';
 
@@ -37,7 +37,8 @@ export function ProjectSwitcher({ className }: { className?: string }) {
     queryFn: listConnections,
     staleTime: 30_000,
   });
-  const connections = useMemo(() => (data ?? []).filter((c) => c.id != null), [data]);
+  // 仅列 enabled 项目（与运行时裁定口径一致：停用连接不参与问数，不再出现在切换器里）。
+  const connections = useMemo(() => selectableConnections(data ?? []), [data]);
 
   if (connections.length === 0) {
     return null;
