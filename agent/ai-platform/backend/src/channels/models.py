@@ -11,7 +11,7 @@ camelCase（如 ``wsUrl``）都会让 ``agent-wecom-page.tsx`` 的 ``BOT_COLS`` 
       bot_id: string;
       name: string;
       enabled: boolean;
-      ws_url: string;
+      bot_secret_id: string;
       secret_masked: string;
       bound_agent_id?: string;
       health: 'connected' | 'disconnected' | 'unknown';
@@ -19,7 +19,7 @@ camelCase（如 ``wsUrl``）都会让 ``agent-wecom-page.tsx`` 的 ``BOT_COLS`` 
 
     export interface WecomBotPayload {
       name: string;
-      ws_url: string;
+      bot_secret_id: string;
       secret?: string;          // 留空 = 不修改
       bound_agent_id?: string;
     }
@@ -58,8 +58,8 @@ MAX_SECRET_LENGTH: int = 512
 #: ``name`` 允许的最大长度。
 MAX_NAME_LENGTH: int = 64
 
-#: ``ws_url`` 允许的最大长度。
-MAX_WS_URL_LENGTH: int = 512
+#: ``bot_secret_id`` 允许的最大长度（防止误粘贴超长内容）。
+MAX_BOT_SECRET_ID_LENGTH: int = 128
 
 
 def _utc_now_iso() -> str:
@@ -90,16 +90,16 @@ class WecomBotRecord(BaseModel):
     对应 ``configs/channels/wecom-bots.yaml`` 中 ``bots[]`` 的一项。
     """
 
-    bot_id: str = Field(..., description="Bot 唯一 ID（创建时后端生成，不可变更）")
+    bot_id: str = Field(..., description="平台内部唯一 ID（创建时后端生成，不可变更）")
+    bot_secret_id: str = Field(..., description="企微官方 BotID（长连接鉴权）")
     name: str = Field(default="", description="展示名称")
     enabled: bool = Field(default=True, description="是否启用（Gateway 只拉取 enabled=true）")
-    ws_url: str = Field(default="", description="企微 Bot 回调 WebSocket 地址")
     secret: str = Field(default="", description="明文 secret（仅落盘，不出响应）")
     bound_agent_id: str = Field(default="", description="绑定的 Agent ID；空串表示未绑定")
     created_at: str = Field(default_factory=_utc_now_iso, description="创建时间 ISO-8601")
     updated_at: str = Field(default_factory=_utc_now_iso, description="更新时间 ISO-8601")
 
-    @field_validator("bot_id", "name", "ws_url", "secret", "bound_agent_id", mode="before")
+    @field_validator("bot_id", "name", "bot_secret_id", "secret", "bound_agent_id", mode="before")
     @classmethod
     def _coerce_str(cls, value: Any) -> str:
         """把 ``None`` / 非字符串安全地折叠成字符串，避免 YAML 手改后炸掉。
@@ -145,7 +145,7 @@ class WecomBotRecord(BaseModel):
             "bot_id": self.bot_id,
             "name": self.name,
             "enabled": self.enabled,
-            "ws_url": self.ws_url,
+            "bot_secret_id": self.bot_secret_id,
             "secret": self.secret,
             "bound_agent_id": self.bound_agent_id,
             "created_at": self.created_at,
@@ -166,7 +166,7 @@ class WecomBotRecord(BaseModel):
             "bot_id": self.bot_id,
             "name": self.name,
             "enabled": self.enabled,
-            "ws_url": self.ws_url,
+            "bot_secret_id": self.bot_secret_id,
             "secret_masked": mask_secret(self.secret),
             "health": normalized_health,
         }
@@ -184,10 +184,10 @@ class WecomBotWire(BaseModel):
     在 ``bound_agent_id`` 为 ``None`` 时仍然下发 key。
     """
 
-    bot_id: str = Field(..., description="Bot 唯一 ID")
+    bot_id: str = Field(..., description="平台内部唯一 ID")
+    bot_secret_id: str = Field(..., description="企微官方 BotID（长连接鉴权）")
     name: str = Field(default="", description="展示名称")
     enabled: bool = Field(default=True, description="是否启用")
-    ws_url: str = Field(default="", description="WebSocket 地址")
     secret_masked: str = Field(default="", description="脱敏后的 secret（从不返回明文）")
     bound_agent_id: str | None = Field(default=None, description="绑定的 Agent ID")
     health: BotHealth = Field(default="unknown", description="运行时健康状态")
@@ -197,13 +197,13 @@ class WecomBotCreateRequest(BaseModel):
     """创建 Bot 的请求体（对应前端 ``WecomBotPayload``，#49）。"""
 
     name: str = Field(..., min_length=1, max_length=MAX_NAME_LENGTH, description="展示名称")
-    ws_url: str = Field(
-        ..., min_length=1, max_length=MAX_WS_URL_LENGTH, description="WebSocket 地址"
+    bot_secret_id: str = Field(
+        ..., min_length=1, max_length=MAX_BOT_SECRET_ID_LENGTH, description="企微官方 BotID"
     )
     secret: str = Field(default="", max_length=MAX_SECRET_LENGTH, description="明文 secret")
     bound_agent_id: str = Field(default="", description="绑定的 Agent ID，可留空")
 
-    @field_validator("name", "ws_url", "secret", "bound_agent_id", mode="before")
+    @field_validator("name", "bot_secret_id", "secret", "bound_agent_id", mode="before")
     @classmethod
     def _strip(cls, value: Any) -> str:
         """去除首尾空白并把 ``None`` 折叠成空串。
@@ -218,24 +218,6 @@ class WecomBotCreateRequest(BaseModel):
             return ""
         return str(value).strip()
 
-    @field_validator("ws_url")
-    @classmethod
-    def _validate_ws_url(cls, value: str) -> str:
-        """校验 WebSocket 地址协议前缀。
-
-        Args:
-            value: 待校验地址。
-
-        Returns:
-            原值。
-
-        Raises:
-            ValueError: 协议不是 ``ws://`` / ``wss://`` 时抛出。
-        """
-        if not value.startswith(("ws://", "wss://")):
-            raise ValueError("ws_url must start with ws:// or wss://")
-        return value
-
 
 class WecomBotUpdateRequest(BaseModel):
     """更新 Bot 的请求体（#50）。
@@ -246,8 +228,8 @@ class WecomBotUpdateRequest(BaseModel):
     """
 
     name: str | None = Field(default=None, max_length=MAX_NAME_LENGTH, description="展示名称")
-    ws_url: str | None = Field(
-        default=None, max_length=MAX_WS_URL_LENGTH, description="WebSocket 地址"
+    bot_secret_id: str | None = Field(
+        default=None, max_length=MAX_BOT_SECRET_ID_LENGTH, description="企微官方 BotID；缺省 = 不修改"
     )
     secret: str | None = Field(
         default=None, max_length=MAX_SECRET_LENGTH, description="新 secret；留空/缺省 = 不修改"
@@ -255,7 +237,7 @@ class WecomBotUpdateRequest(BaseModel):
     bound_agent_id: str | None = Field(default=None, description="绑定的 Agent ID；空串 = 解绑")
     secret_clear: bool = Field(default=False, description="显式清空 secret")
 
-    @field_validator("name", "ws_url", "secret", "bound_agent_id", mode="before")
+    @field_validator("name", "bot_secret_id", "secret", "bound_agent_id", mode="before")
     @classmethod
     def _strip_optional(cls, value: Any) -> str | None:
         """去除首尾空白，保留 ``None``（表示「字段缺省 / 不修改」）。
@@ -270,22 +252,3 @@ class WecomBotUpdateRequest(BaseModel):
             return None
         return str(value).strip()
 
-    @field_validator("ws_url")
-    @classmethod
-    def _validate_ws_url(cls, value: str | None) -> str | None:
-        """校验 WebSocket 地址协议前缀（仅在显式提供时）。
-
-        Args:
-            value: 待校验地址或 ``None``。
-
-        Returns:
-            原值。
-
-        Raises:
-            ValueError: 显式提供了非空且协议非法的地址时抛出。
-        """
-        if value is None or value == "":
-            return value
-        if not value.startswith(("ws://", "wss://")):
-            raise ValueError("ws_url must start with ws:// or wss://")
-        return value

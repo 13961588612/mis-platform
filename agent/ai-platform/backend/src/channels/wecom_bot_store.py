@@ -8,9 +8,9 @@
     version: 1
     bots:
       - bot_id: wb-3f2a1c9d
+        bot_secret_id: wxbot-xxxx
         name: 运维助手
         enabled: true
-        ws_url: wss://qyapi.weixin.qq.com/ws/xxx
         secret: <明文>
         bound_agent_id: ops-agent
         created_at: "2025-01-01T12:00:00+00:00"
@@ -367,7 +367,7 @@ class WecomBotStore:
                 bot_id=bot_id,
                 name=payload.name,
                 enabled=True,
-                ws_url=payload.ws_url,
+                bot_secret_id=payload.bot_secret_id,
                 secret=payload.secret,
                 bound_agent_id=payload.bound_agent_id,
                 created_at=now,
@@ -412,8 +412,8 @@ class WecomBotStore:
                         )
                 record.name = payload.name
 
-            if payload.ws_url is not None and payload.ws_url != "":
-                record.ws_url = payload.ws_url
+            if payload.bot_secret_id is not None and payload.bot_secret_id != "":
+                record.bot_secret_id = payload.bot_secret_id
 
             if payload.secret_clear:
                 record.secret = ""

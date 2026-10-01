@@ -15,7 +15,7 @@ mock ``WecomBotStore``，**禁止读写真实配置文件 / 连接真实服务**
 * ``GET    /channels/wecom/bots/runtime``         — Gateway 运行时清单（内部令牌闸门）
 
 wire 契约（断言铁律）：``WecomBot`` 一律 snake_case——
-``bot_id / name / enabled / ws_url / secret_masked / bound_agent_id? / health``，
+``bot_id / name / enabled / bot_secret_id / secret_masked / bound_agent_id? / health``，
 运营端点响应**绝不出现明文 ``secret`` 键**。
 """
 
@@ -37,7 +37,7 @@ from src.channels.wecom_bot_store import WecomBotConflictError, WecomBotNotFound
 
 #: 前端 ``WecomBot`` 契约必含字段（bound_agent_id 未绑定时不下发，另行断言）。
 WECOM_WIRE_REQUIRED_KEYS: frozenset[str] = frozenset(
-    {"bot_id", "name", "enabled", "ws_url", "secret_masked", "health"}
+    {"bot_id", "name", "enabled", "bot_secret_id", "secret_masked", "health"}
 )
 
 INTERNAL_TOKEN: str = "tok-abc-123"
@@ -49,14 +49,14 @@ def _record(
     enabled: bool = True,
     secret: str = "plain-secret-1",
     bound_agent_id: str = "a1",
-    ws_url: str = "wss://qyapi.weixin.qq.com/ws/1",
+    bot_secret_id: str = "wxbot-1",
 ) -> WecomBotRecord:
     """构造一条落盘态记录（含明文 secret，仅供 store mock 内部使用）。"""
     return WecomBotRecord(
         bot_id=bot_id,
         name=name,
         enabled=enabled,
-        ws_url=ws_url,
+        bot_secret_id=bot_secret_id,
         secret=secret,
         bound_agent_id=bound_agent_id,
     )
@@ -195,7 +195,7 @@ def test_create_wecom_bot_returns_wire_unknown_health(
 
     resp = client.post(
         "/api/v1/channels/wecom/bots",
-        json={"name": "新 Bot", "ws_url": "wss://qyapi.weixin.qq.com/ws/2", "secret": "s3"},
+        json={"name": "新 Bot", "bot_secret_id": "wxbot-2", "secret": "s3"},
     )
 
     assert resp.status_code == 200
@@ -215,7 +215,7 @@ def test_create_wecom_bot_conflict_409(
 
     resp = client.post(
         "/api/v1/channels/wecom/bots",
-        json={"name": "重复", "ws_url": "wss://qyapi.weixin.qq.com/ws/2"},
+        json={"name": "重复", "bot_secret_id": "wxbot-2"},
     )
 
     assert resp.status_code == 409
@@ -482,7 +482,7 @@ def test_runtime_endpoint_valid_token_returns_records(
     data = resp.json()["data"]
     assert isinstance(data, list) and len(data) == 2
     item = data[0]
-    # 运行时契约：bot_id / name / enabled / ws_url / secret / bound_agent_id
+    # 运行时契约：bot_id / name / enabled / bot_secret_id / secret / bound_agent_id
     assert item["bot_id"] == "wb-1"
     assert item["secret"] == "s1"  # Gateway 启动需要明文
     assert item["bound_agent_id"] == "a1"

@@ -109,7 +109,7 @@ wecom:
     callback_token: "${WECOM_BOT_CALLBACK_TOKEN}"
     encoding_aes_key: "${WECOM_BOT_CALLBACK_ENCODING_AES_KEY}"
     websocket:
-      endpoint: "wss://qyapi.weixin.qq.com/cgi-bin/wxconnect"
+      endpoint: "wss://openws.work.weixin.qq.com"
       heartbeat_interval: 30      # 秒
       reconnect_interval: 5       # 秒
       max_reconnect_attempts: 10

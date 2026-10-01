@@ -843,7 +843,7 @@ export interface WecomBot {
   bot_id: string;
   name: string;
   enabled: boolean;
-  ws_url: string;
+  bot_secret_id: string;
   secret_masked: string;
   bound_agent_id?: string;
   health: 'connected' | 'disconnected' | 'unknown';
@@ -851,7 +851,7 @@ export interface WecomBot {
 
 export interface WecomBotPayload {
   name: string;
-  ws_url: string;
+  bot_secret_id: string;
   /** 留空表示不修改既有 secret（新建时必填）。 */
   secret?: string;
   bound_agent_id?: string;

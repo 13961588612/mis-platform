@@ -77,9 +77,9 @@ function loadMisJwtPublicKey(): string | undefined {
  * - WECOM_SECRET: 企业微信应用 Secret
  * - WECOM_API_BASE_URL: 企业微信 API 基础 URL
  * - WECOM_BOT_CALLBACK_TOKEN: 企业微信 Bot 回调 Token（URL 回调模式）
- * - WECOM_BOT_ID: 智能机器人 BotID（长连接鉴权）
+ * - WECOM_BOT_ID: 智能机器人官方 BotID（长连接鉴权）
  * - WECOM_BOT_SECRET: 智能机器人长连接 Secret
- * - WECOM_BOT_WS_URL: 可选，默认 wss://openws.work.weixin.qq.com
+ * - WECOM_BOT_WS_URL: 高级覆盖项，默认 wss://openws.work.weixin.qq.com
  * - AGENT_CORE_API_URL: Agent Core API URL
  * - CORS_ORIGINS: CORS 允许的源（逗号分隔）
  *

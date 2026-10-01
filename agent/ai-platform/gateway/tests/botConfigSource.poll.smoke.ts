@@ -139,11 +139,11 @@ async function main(): Promise<void> {
             bot_id: 'bot-1',
             name: 'Bot 1',
             enabled: true,
-            ws_url: 'wss://custom.example/ws',
+            bot_secret_id: 'wxbot-1',
             secret: 's3cr3t',
             bound_agent_id: 'crm-assistant',
           },
-          { bot_id: '', name: 'bad', enabled: true, ws_url: '', secret: '' },
+          { bot_id: '', name: 'bad', enabled: true, bot_secret_id: '', secret: '' },
         ],
       },
     };
@@ -154,7 +154,7 @@ async function main(): Promise<void> {
       check('过滤掉缺 botId/secret 项', result.length === 1, `len=${result.length}`);
       const cfg = result[0]!;
       check('botId 映射', cfg.botId === 'bot-1');
-      check('wsUrl 映射', cfg.wsUrl === 'wss://custom.example/ws');
+      check('连接官方 endpoint', cfg.wsUrl === 'wss://openws.work.weixin.qq.com');
       check('secret 透传', cfg.secret === 's3cr3t');
       check('boundAgentId 映射', cfg.boundAgentId === 'crm-assistant');
       check('name 映射', cfg.name === 'Bot 1');
@@ -198,7 +198,7 @@ async function main(): Promise<void> {
       status: 200,
       data: {
         code: 0,
-        data: [{ bot_id: 'bot-x', name: 'X', enabled: true, ws_url: '', secret: 's' }],
+        data: [{ bot_id: 'bot-x', name: 'X', enabled: true, bot_secret_id: '', secret: 's' }],
       },
     };
     const source = makeSource('tok');

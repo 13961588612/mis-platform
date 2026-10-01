@@ -52,8 +52,8 @@ const selectClass =
 
 const BOT_COLS: ResizableColumn[] = [
   { key: 'name', label: '名称' },
-  { key: 'bot_id', label: 'Bot ID' },
-  { key: 'ws_url', label: 'WS 地址' },
+  { key: 'bot_id', label: '平台 Bot ID' },
+  { key: 'bot_secret_id', label: '企微 BotID' },
   { key: 'bound_agent_id', label: '绑定 Agent' },
   { key: 'health', label: '连接健康' },
   { key: 'enabled', label: '启用状态' },
@@ -192,7 +192,7 @@ export function AgentWecomPage() {
       return (
         b.name.toLowerCase().includes(kw) ||
         b.bot_id.toLowerCase().includes(kw) ||
-        b.ws_url.toLowerCase().includes(kw)
+        b.bot_secret_id.toLowerCase().includes(kw)
       );
     });
   }, [bots, keyword, enabledFilter]);
@@ -273,7 +273,7 @@ export function AgentWecomPage() {
           <div className="min-w-[14rem] flex-1">
             <label className="mb-[0.4rem] block text-xs text-muted-foreground">关键字</label>
             <Input
-              placeholder="搜索名称 / Bot ID / WS 地址"
+              placeholder="搜索名称 / 平台 Bot ID / 企微 BotID"
               value={keyword}
               onChange={(e) => setKeyword(e.target.value)}
             />
@@ -398,9 +398,9 @@ export function AgentWecomPage() {
                           </td>
                           <td
                             className="truncate px-3 py-2 font-mono text-xs text-muted-foreground"
-                            title={bot.ws_url}
+                            title={bot.bot_secret_id}
                           >
-                            {bot.ws_url}
+                            {bot.bot_secret_id}
                           </td>
                           <td className="truncate px-3 py-2 text-xs">
                             {bot.bound_agent_id

@@ -26,7 +26,7 @@ T03 的 :func:`~src.api.deps.require_ops_permission` fail-closed 权限闸门由
 **路由顺序**：``/wecom/bots/health`` 必须声明在 ``/wecom/bots/{bot_id}`` **之前**，
 否则 FastAPI 会把字面量 ``health`` 当成 ``bot_id`` 捕获（经典坑）。
 
-**wire 契约**：响应体一律 snake_case（``bot_id`` / ``ws_url`` / ``secret_masked``
+**wire 契约**：响应体一律 snake_case（``bot_id`` / ``bot_secret_id`` / ``secret_masked``
 / ``bound_agent_id`` / ``health``），与 ``features/agent/types.ts`` 的
 ``WecomBot`` 逐字段对齐。``#48`` 返回**扁平数组**（不是 ``AgentPage``），
 ``#54`` 返回 ``Record<bot_id, health>``，均以前端
@@ -140,7 +140,7 @@ async def list_wecom_bots_runtime(
         store: Bot 配置存储。
 
     Returns:
-        ``{code:0, data:[{bot_id, name, enabled, ws_url, secret, bound_agent_id}]}``。
+        ``{code:0, data:[{bot_id, name, enabled, bot_secret_id, secret, bound_agent_id}]}``。
     """
     expected: str = get_settings().GATEWAY_INTERNAL_TOKEN
     if not expected:
@@ -167,7 +167,7 @@ async def list_wecom_bots_runtime(
             "bot_id": r.bot_id,
             "name": r.name,
             "enabled": r.enabled,
-            "ws_url": r.ws_url,
+            "bot_secret_id": r.bot_secret_id,
             "secret": r.secret,
             "bound_agent_id": r.bound_agent_id,
         }

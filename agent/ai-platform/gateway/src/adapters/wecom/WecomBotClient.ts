@@ -114,7 +114,7 @@ const DEFAULT_CONFIG: WecomBotClientConfig = {
  * 企业微信智能机器人 WebSocket 客户端
  */
 export class WecomBotClient {
-  /** Bot 长连接配置（BotID、Secret、WS 地址、心跳与重连参数等） */
+  /** Bot 长连接配置（企微官方 BotID、Secret、endpoint、心跳与重连参数等） */
   private readonly config: WecomBotClientConfig;
   /** 当前 WebSocket 实例；未连接或已关闭时为 null */
   private ws: WebSocket | null = null;

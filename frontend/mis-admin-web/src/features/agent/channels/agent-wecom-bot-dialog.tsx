@@ -43,14 +43,14 @@ const selectClass =
 /** 表单态：全部摊平成非空字符串，避免受控输入在 undefined ⇄ '' 之间抖动。 */
 interface BotFormValues {
   name: string;
-  ws_url: string;
+  bot_secret_id: string;
   secret: string;
   bound_agent_id: string;
 }
 
 const EMPTY_FORM: BotFormValues = {
   name: '',
-  ws_url: '',
+  bot_secret_id: '',
   secret: '',
   bound_agent_id: '',
 };
@@ -61,18 +61,17 @@ const EMPTY_FORM: BotFormValues = {
  * <p>新建必填；编辑态只有在用户勾选「更换 Secret」后才必填 ——
  * 勾了却留空说明是误操作，此时报错比静默"不修改"更符合预期。
  *
- * <p>`ws_url` 限定 `ws://` / `wss://`：企微回调走 WebSocket 长连，
- * 填成 `https://` 会在 Gateway 启动时才失败，那时已经离配置现场很远了。
+ * <p>`bot_secret_id` 是企微后台智能机器人的官方 BotID，不是平台生成的 `bot_id`。
+ * 官方长连接 endpoint 固定为 `wss://openws.work.weixin.qq.com`，无需运营配置。
  */
 function buildSchema(secretRequired: boolean) {
   return z.object({
     name: z.string().trim().min(1, '名称必填').max(64, '名称不超过 64 字符'),
-    ws_url: z
+    bot_secret_id: z
       .string()
       .trim()
-      .min(1, 'WS 地址必填')
-      .max(500, 'WS 地址不超过 500 字符')
-      .regex(/^wss?:\/\/.+/i, '需以 ws:// 或 wss:// 开头'),
+      .min(1, '企微 BotID 必填')
+      .max(128, '企微 BotID 不超过 128 字符'),
     secret: secretRequired
       ? z.string().trim().min(1, 'Secret 必填').max(200, 'Secret 不超过 200 字符')
       : z.string().trim().max(200, 'Secret 不超过 200 字符'),
@@ -119,7 +118,7 @@ export function AgentWecomBotDialog({
       bot
         ? {
             name: bot.name,
-            ws_url: bot.ws_url,
+            bot_secret_id: bot.bot_secret_id,
             secret: '',
             bound_agent_id: bot.bound_agent_id ?? '',
           }
@@ -158,7 +157,7 @@ export function AgentWecomBotDialog({
     const values = parsed.data;
     const payload: WecomBotPayload = {
       name: values.name,
-      ws_url: values.ws_url,
+      bot_secret_id: values.bot_secret_id,
       bound_agent_id: values.bound_agent_id || undefined,
     };
     // 空串绝不进 payload：后端把「字段缺席」判为不修改，把空串判为清空
@@ -204,21 +203,21 @@ export function AgentWecomBotDialog({
           </div>
 
           <div>
-            <label className={fieldLabel} htmlFor="wecom-ws-url">
-              WS 地址 *
+            <label className={fieldLabel} htmlFor="wecom-bot-secret-id">
+              企微 BotID *
             </label>
             <Input
-              id="wecom-ws-url"
-              value={form.ws_url}
+              id="wecom-bot-secret-id"
+              value={form.bot_secret_id}
               autoComplete="off"
-              placeholder="wss://gateway.example.com/wecom/bot-1"
-              onChange={(e) => patch('ws_url', e.target.value)}
+              placeholder="企微智能机器人的 BotID"
+              onChange={(e) => patch('bot_secret_id', e.target.value)}
             />
             <p className="mt-[0.35rem] text-xs text-muted-foreground">
-              Gateway 与企微之间的 WebSocket 接入地址，需以 ws:// 或 wss:// 开头。
+              企微后台智能机器人的官方 BotID，用于长连接鉴权；平台列表中的 Bot ID 是内部记录 ID。
             </p>
-            {errors.ws_url ? (
-              <p className="mt-1 text-xs text-destructive">{errors.ws_url}</p>
+            {errors.bot_secret_id ? (
+              <p className="mt-1 text-xs text-destructive">{errors.bot_secret_id}</p>
             ) : null}
           </div>
 
