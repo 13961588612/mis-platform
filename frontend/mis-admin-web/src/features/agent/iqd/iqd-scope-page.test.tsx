@@ -236,6 +236,7 @@ describe('M-G6 scope 页面（v1.12 重构）', () => {
       expect(p.subject_id).toBe('u1');
       expect(p.object_type).toBe('table');
       expect(p.object_key).toBe('pg.public.orders');
+      expect(p.field_key ?? null).toBeNull();
     }
   });
 });

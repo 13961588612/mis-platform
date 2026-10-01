@@ -5,9 +5,9 @@
  * <ul>
  *   <li>过滤区：按角色多选、按用户姓名查询；</li>
  *   <li>权限情况表格：一行 = 一个主体 + 一种对象类型；列为 主体类型 / 主体 ID / 主体名 /
- *       权限对象类型（表 · 模型 · Cube）/ 对象名 / 可访问字段；</li>
+ *       权限对象类型（表 · 模型 · Cube）/ 对象名 / 行级范围；</li>
  *   <li>新增弹窗：选择主体（角色 / 用户，用户走弹窗选择）→ 选择权限对象（表 / 模型 / Cube 三个 TAB，
- *       可多选）→ 逐个对象编辑「可访问字段」（默认全部选中）。</li>
+ *       可多选）→ 逐个对象编辑「行级范围 row_scope」。</li>
  * </ul>
  *
  * <p><b>字段级可访问实现说明</b>：后端本期未提供列级 ACL 表，故字段选择以「同一 iqd_scope_policy /
@@ -53,6 +53,7 @@ import { listEnabledRoles } from '@/lib/api/roles';
 import { ProjectSwitcher } from './components/shared/ProjectSwitcher';
 import { useActiveProjectId } from './hooks/useActiveProject';
 import { resolveTableKey, useCatalogNodes } from './hooks/useCatalogNodes';
+import { summarizeRowScope } from './components/scope/rowScopeUtils';
 import type { RoleItem, UserView } from '@/types/api';
 
 const SUBJECT_TYPE_LABEL: Record<string, string> = {
@@ -106,8 +107,10 @@ interface DisplayRow {
   fieldCount?: number;
   fieldTotal?: number;
   action?: string;
-  /** 已存字段级 itemKey（编辑回显用）。 */
+  /** 已存字段级 itemKey（编辑回显用；仅范围策略用）。 */
   rawFieldKeys: string[];
+  /** 行级范围 row_scope 原文（仅行级范围行）。 */
+  rowScope?: string;
 }
 
 interface FieldSelection {
@@ -379,6 +382,8 @@ export interface EditContext {
   objectKind: ObjectKind;
   selectedFieldKeys: Set<string>;
   action?: string;
+  /** 行级范围编辑回显（仅 target=acl）。 */
+  rowScope?: string;
 }
 
 function AddPermissionWizard({
@@ -414,6 +419,7 @@ function AddPermissionWizard({
       setSubject(edit.subject);
       setSelectedKeys(new Set([edit.objectKey]));
       setFieldSelection({ [edit.objectKey]: new Set(edit.selectedFieldKeys) });
+      setRowScopeDraft(edit.rowScope ? { [edit.objectKey]: edit.rowScope } : {});
       return;
     }
     setStep('subject');
@@ -527,9 +533,12 @@ function AddPermissionWizard({
         subject,
         objects: selectedObjects.map((obj) => ({
           object: obj,
-          fields: obj.fields.filter((f) =>
-            (fieldSelection[obj.itemKey] ?? new Set<string>()).has(f.itemKey),
-          ),
+          fields:
+            target === 'acl'
+              ? []
+              : obj.fields.filter((f) =>
+                  (fieldSelection[obj.itemKey] ?? new Set<string>()).has(f.itemKey),
+                ),
           rowScope: (rowScopeDraft[obj.itemKey] ?? '').trim() || undefined,
         })),
       });
@@ -552,7 +561,9 @@ function AddPermissionWizard({
                 ? '第一步：选择主体（角色 / 用户）'
                 : step === 'object'
                   ? '第二步：选择权限对象（可多选；表 / 模型 / Cube）'
-                  : '第三步：配置每个对象的可访问字段（默认全部选中）'}
+                  : target === 'acl'
+                    ? '第三步：配置每个对象的行级范围 row_scope（留空=全行可见）'
+                    : '第三步：配置每个对象的可访问字段（默认全部选中）'}
             </DialogDescription>
           </DialogHeader>
 
@@ -649,6 +660,7 @@ function AddPermissionWizard({
                             {OBJECT_TYPE_LABEL[obj.kind]}
                           </Badge>
                           <span className="text-sm font-medium">{obj.name}</span>
+                          {target === 'policy' ? (
                           <span className="ml-auto flex items-center gap-2 text-xs">
                             <button
                               type="button"
@@ -665,8 +677,26 @@ function AddPermissionWizard({
                               清空
                             </button>
                           </span>
+                          ) : null}
                         </div>
-                        {obj.fields.length === 0 ? (
+                        {target === 'acl' ? (
+                          <div className="mt-1">
+                            <label className="mb-1 block text-xs text-muted-foreground">
+                              {'行级范围 row_scope（JSON；留空=全行可见）'}
+                            </label>
+                            <textarea
+                              className="min-h-[3rem] w-full rounded border border-input bg-background px-2 py-1 font-mono text-xs"
+                              placeholder={'{"dimension":"store","scope":"store"}'}
+                              value={rowScopeDraft[obj.itemKey] ?? ''}
+                              onChange={(e) =>
+                                setRowScopeDraft((prev) => ({
+                                  ...prev,
+                                  [obj.itemKey]: e.target.value,
+                                }))
+                              }
+                            />
+                          </div>
+                        ) : obj.fields.length === 0 ? (
                           <p className="text-xs text-muted-foreground">该对象暂无可选字段</p>
                         ) : (
                           <div className="flex flex-wrap gap-x-4 gap-y-2">
@@ -682,23 +712,6 @@ function AddPermissionWizard({
                             ))}
                           </div>
                         )}
-                        {target === 'acl' ? (
-                          <div className="mt-3 border-t border-border/60 pt-2">
-                            <label className="mb-1 block text-xs text-muted-foreground">
-                              {'行级范围 row_scope（JSON，留空=全行可见）'}
-                            </label>
-                            <textarea
-                              className="min-h-[3rem] w-full rounded border border-input bg-background px-2 py-1 font-mono text-xs"
-                              value={rowScopeDraft[obj.itemKey] ?? ''}
-                              onChange={(e) =>
-                                setRowScopeDraft((prev) => ({
-                                  ...prev,
-                                  [obj.itemKey]: e.target.value,
-                                }))
-                              }
-                            />
-                          </div>
-                        ) : null}
                       </div>
                     );
                   })
@@ -780,13 +793,7 @@ export function IqdScopePage() {
   const [aclWizardOpen, setAclWizardOpen] = useState(false);
   // 编辑上下文：非空时向导直接进入字段步骤，并启用字段删除清理。
   const [editPolicy, setEditPolicy] = useState<DisplayRow | null>(null);
-  const [editAcl, setEditAcl] = useState<
-    (DisplayRow & {
-      rawFieldIds: number[];
-      rawFieldKeyById: Map<number, string>;
-      rawFieldIdByKey: Map<string, number>;
-    }) | null
-  >(null);
+  const [editAcl, setEditAcl] = useState<DisplayRow | null>(null);
 
   const openEditPolicy = useCallback((row: DisplayRow) => {
     setPolicyWizardOpen(false);
@@ -883,25 +890,11 @@ export function IqdScopePage() {
   }, [objectFields]);
 
   const openEditAcl = useCallback((row: DisplayRow) => {
-    const rawFieldIds: number[] = [];
-    const rawFieldKeyById = new Map<number, string>();
-    const rawFieldIdByKey = new Map<string, number>();
-    for (const a of rawAcls) {
-      if (
-        a.subject_type === row.subjectType &&
-        a.subject_id === row.subjectId &&
-        fieldToObject.get(a.item_key) === row.objectKey &&
-        a.id != null
-      ) {
-        rawFieldIds.push(a.id);
-        rawFieldKeyById.set(a.id, a.item_key);
-        rawFieldIdByKey.set(a.item_key, a.id);
-      }
-    }
+    // 方案 A：行级范围行只编辑 row_scope，无字段级子行需扫描。
     setAclWizardOpen(false);
-    setEditAcl({ ...row, rawFieldIds, rawFieldKeyById, rawFieldIdByKey });
+    setEditAcl(row);
     setAclWizardOpen(true);
-  }, [rawAcls, fieldToObject]);
+  }, []);
 
 
   const policyRows = useMemo<DisplayRow[]>(() => {
@@ -935,21 +928,12 @@ export function IqdScopePage() {
   }, [rawPolicies, fieldKeySet, fieldToObject, objectFields, subjectName]);
 
   const aclRows = useMemo<DisplayRow[]>(() => {
+    // 方案 A：行级范围只看对象级行（field_key 为空），不再处理字段级子行。
     const tops = rawAcls.filter((a) => !a.field_key);
-    const fieldsByObject = new Map<string, string[]>();
-    for (const a of rawAcls) {
-      if (!a.field_key) continue;
-      const owner = a.object_key || fieldToObject.get(a.field_key) || fieldToObject.get(a.item_key);
-      if (!owner) continue;
-      const list = fieldsByObject.get(owner) ?? [];
-      list.push(a.field_key);
-      fieldsByObject.set(owner, list);
-    }
     return tops.map<DisplayRow>((a, i) => {
       const objectKey = a.object_key || a.item_key;
       const kind = objectKindOf(objectKey);
       const obj = objectFields.get(objectKey);
-      const selected = fieldsByObject.get(objectKey);
       return {
         key: `acl-${a.id ?? i}`,
         id: a.id,
@@ -959,12 +943,11 @@ export function IqdScopePage() {
         objectKind: kind,
         objectKey,
         objectName: obj?.name ?? shortName(objectKey),
-        fieldCount: selected?.length,
-        fieldTotal: obj?.fields.length,
-        rawFieldKeys: selected ?? [],
+        rawFieldKeys: [],
+        rowScope: a.row_scope ?? '',
       };
     });
-  }, [rawAcls, fieldToObject, objectFields, subjectName]);
+  }, [rawAcls, objectFields, subjectName]);
 
   const matchesFilter = useCallback(
     (row: DisplayRow) => {
@@ -1035,7 +1018,8 @@ export function IqdScopePage() {
     async ({ subject, objects }: WizardPayload) => {
       if (connectionId == null) return;
       const payload: IqdAclSavePayload[] = [];
-      for (const { object, fields, rowScope } of objects) {
+      // 方案 A：行级范围只写对象级行（field_key=null）+ row_scope，不再写字段级 ACL。
+      for (const { object, rowScope } of objects) {
         payload.push({
           subject_type: subject.kind,
           subject_id: subject.id,
@@ -1046,31 +1030,9 @@ export function IqdScopePage() {
           action: 'ask',
           row_scope: rowScope ?? null,
         });
-        for (const f of fields) {
-          payload.push({
-            subject_type: subject.kind,
-            subject_id: subject.id,
-            object_type: object.kind,
-            object_key: object.itemKey,
-            field_key: f.itemKey,
-            item_key: f.itemKey,
-            action: 'ask',
-          });
-        }
       }
-      if (editAcl) {
-        const keep = new Set(payload.map((p) => p.item_key));
-        const toRemove: string[] = [];
-        // ACL 删除端点按 id；字段级行需逐个删除
-        for (const id of editAcl.rawFieldIds) {
-          const key = editAcl.rawFieldKeyById.get(id);
-          if (key && !keep.has(key)) toRemove.push(key);
-        }
-        for (const key of toRemove) {
-          const id = editAcl.rawFieldIdByKey.get(key);
-          if (id != null) await deleteIqdAcl(id);
-        }
-      }
+      // 方案 A：不再存在字段级行，无需清理孤儿（同一对象按 UK
+      // (connection, subject*, item_key, action) 幂等覆盖，row_scope 清空则覆为 null）。
       await saveIqdAcls(connectionId, payload);
       await load();
     },
@@ -1104,6 +1066,7 @@ export function IqdScopePage() {
       objectKind: editAcl.objectKind,
       selectedFieldKeys: selected,
       action: 'ask',
+      rowScope: editAcl.rowScope ?? '',
     };
   }, [editAcl]);
 
@@ -1238,6 +1201,7 @@ export function IqdScopePage() {
     selected?: Set<string>,
     onToggle?: (key: string, checked: boolean) => void,
     onToggleAll?: (checked: boolean) => void,
+    variant: 'policy' | 'acl' = 'policy',
   ) => (
     <div className="min-h-0 flex-1 overflow-auto">
       <table className="w-full border-separate border-spacing-0 text-left text-sm">
@@ -1258,7 +1222,9 @@ export function IqdScopePage() {
             <th className="border-l border-border/60 px-3 py-2 font-bold">主体名</th>
             <th className="border-l border-border/60 px-3 py-2 font-bold">权限对象类型</th>
             <th className="border-l border-border/60 px-3 py-2 font-bold">对象名</th>
-            <th className="border-l border-border/60 px-3 py-2 font-bold">可访问字段</th>
+            <th className="border-l border-border/60 px-3 py-2 font-bold">
+              {variant === 'acl' ? '行级范围' : '可访问字段'}
+            </th>
             {withAction ? (
               <th className="border-l border-border/60 px-3 py-2 font-bold">动作</th>
             ) : null}
@@ -1312,7 +1278,29 @@ export function IqdScopePage() {
                   </span>
                 </td>
                 <td className="border-l border-border/60 px-3 py-1.5">
-                  {row.fieldTotal == null ? (
+                  {variant === 'acl' ? (
+                    (() => {
+                      const summary = summarizeRowScope(row.rowScope);
+                      if (summary.parseError) {
+                        return <span className="text-xs text-destructive">row_scope 非法</span>;
+                      }
+                      if (!summary.hasRowScope) {
+                        return <span className="text-xs text-muted-foreground">全行可见</span>;
+                      }
+                      return (
+                        <span className="flex flex-wrap items-center gap-1">
+                          {summary.badges.map((b) => (
+                            <Badge key={b.code} variant="secondary" className="rounded text-[10px]">
+                              {b.label}
+                            </Badge>
+                          ))}
+                          {summary.count > summary.badges.length ? (
+                            <span className="text-xs text-muted-foreground">+{summary.count - summary.badges.length}</span>
+                          ) : null}
+                        </span>
+                      );
+                    })()
+                  ) : row.fieldTotal == null ? (
                     <span className="text-xs text-muted-foreground">—</span>
                   ) : row.fieldCount == null ? (
                     <span className="text-xs text-muted-foreground">全部（{row.fieldTotal}）</span>
@@ -1400,7 +1388,7 @@ export function IqdScopePage() {
             />
           </div>
           <span className="text-xs text-muted-foreground">
-            范围策略 {filteredPolicyRows.length} 条 · 表级 ACL {filteredAclRows.length} 条
+            范围策略 {filteredPolicyRows.length} 条 · 行级范围 {filteredAclRows.length} 条
           </span>
         </div>
 
@@ -1496,6 +1484,7 @@ export function IqdScopePage() {
               selectedAclRows,
               toggleAclSelection,
               toggleAllAclRows,
+              'acl',
             )}
           </div>
         </TabsContent>
