@@ -423,7 +423,7 @@ function CubeForm({
   if (isExisting && isLoading && catalog.length === 0) {
     return (
       <>
-        <DialogHeader className="border-b border-border/60 px-4 py-3">
+        <DialogHeader className="mx-0 mt-0 rounded-none border-b border-border/60 px-4 py-3">
           <DialogTitle className="text-[14px]">编辑 Cube</DialogTitle>
         </DialogHeader>
         <div className="flex items-center gap-2 px-4 py-6 text-[13px] text-muted-foreground">
@@ -438,7 +438,7 @@ function CubeForm({
     <>
       <DialogHeader
         {...dragHandleProps}
-        className="flex-row items-start justify-between gap-3 border-b border-border/60 bg-[hsl(var(--dialog-header-bg))] px-4 py-3 pr-10"
+        className="mx-0 mt-0 flex-row items-start justify-between gap-3 rounded-none border-b border-border/60 bg-[hsl(var(--dialog-header-bg))] px-4 py-3 pr-10"
         title="按住标题栏可拖动窗体"
       >
         <div className="flex min-w-0 flex-col gap-1.5 pr-6">
@@ -653,7 +653,7 @@ function CubeForm({
         )}
       </div>
 
-      <DialogFooter className="border-t border-border/60 px-4 py-3">
+      <DialogFooter className="mx-0 mb-0 rounded-none border-t border-border/60 px-4 py-3">
         {isExisting && canEdit ? (
           <Button
             size="sm"

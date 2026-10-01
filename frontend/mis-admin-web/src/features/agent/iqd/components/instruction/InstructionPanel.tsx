@@ -383,7 +383,7 @@ export function InstructionPanel({ onCountChange }: InstructionPanelProps) {
         }}
       >
         <DialogContent className="flex max-h-[85vh] w-full max-w-2xl flex-col gap-0 overflow-hidden p-0">
-          <DialogHeader className="border-b border-border/60 px-4 py-3">
+          <DialogHeader className="mx-0 mt-0 rounded-none border-b border-border/60 bg-[hsl(var(--dialog-header-bg))] px-4 py-3 pr-10">
             <DialogTitle className="text-[14px]">
               {editingId != null ? '编辑指令' : '新建指令'}
               {editingId != null ? (
@@ -465,7 +465,7 @@ export function InstructionPanel({ onCountChange }: InstructionPanelProps) {
             </div>
           </div>
 
-          <DialogFooter className="border-t border-border/60 px-4 py-3">
+          <DialogFooter className="mx-0 mb-0 rounded-none border-t border-border/60 px-4 py-3">
             <Button size="sm" variant="outline" onClick={closeEditor} disabled={saving}>
               取消
             </Button>

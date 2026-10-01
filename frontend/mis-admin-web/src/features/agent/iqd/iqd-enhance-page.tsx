@@ -1403,7 +1403,7 @@ function IqdSqlPairDialog({
       }}
     >
       <DialogContent className="flex max-h-[90vh] w-full max-w-3xl flex-col gap-0 overflow-hidden p-0">
-        <DialogHeader className="border-b border-border/60 px-4 py-3">
+        <DialogHeader className="mx-0 mt-0 rounded-none border-b border-border/60 bg-[hsl(var(--dialog-header-bg))] px-4 py-3 pr-10">
           <DialogTitle className="text-[14px]">
             {initial?.id != null ? '编辑样本对' : '新增样本对'}
           </DialogTitle>
@@ -1535,7 +1535,7 @@ function IqdSqlPairDialog({
           ) : null}
         </div>
 
-        <DialogFooter className="border-t border-border/60 px-4 py-3">
+        <DialogFooter className="mx-0 mb-0 rounded-none border-t border-border/60 px-4 py-3">
           <Button size="sm" variant="outline" onClick={onClose} disabled={saving}>
             取消
           </Button>
@@ -1639,7 +1639,7 @@ export function IqdKnowledgeDialog({
       }}
     >
       <DialogContent className="flex max-h-[90vh] w-full max-w-3xl flex-col gap-0 overflow-hidden p-0">
-        <DialogHeader className="border-b border-border/60 px-4 py-3">
+        <DialogHeader className="mx-0 mt-0 rounded-none border-b border-border/60 bg-[hsl(var(--dialog-header-bg))] px-4 py-3 pr-10">
           <DialogTitle className="text-[14px]">
             {initial?.id != null ? `编辑知识条目 #${initial.id}` : '新增知识/术语/口径'}
           </DialogTitle>
@@ -1707,7 +1707,7 @@ export function IqdKnowledgeDialog({
           ) : null}
         </div>
 
-        <DialogFooter className="border-t border-border/60 px-4 py-3">
+        <DialogFooter className="mx-0 mb-0 rounded-none border-t border-border/60 px-4 py-3">
           <Button size="sm" variant="outline" onClick={onClose} disabled={saving}>
             取消
           </Button>

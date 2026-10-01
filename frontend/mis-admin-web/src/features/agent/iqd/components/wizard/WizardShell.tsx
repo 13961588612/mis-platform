@@ -123,7 +123,7 @@ export function WizardShell({
             }
           }}
         >
-          <DialogHeader className="border-b border-border/60 px-4 py-3">
+          <DialogHeader className="mx-0 mt-0 rounded-none border-b border-border/60 bg-[hsl(var(--dialog-header-bg))] px-4 py-3 pr-10">
             <DialogTitle className="text-[14px]">{title}</DialogTitle>
             {description && (
               <DialogDescription className="text-[12px]">{description}</DialogDescription>
@@ -167,7 +167,7 @@ export function WizardShell({
           {/* 内容区：单层滚动（min-h-0 + flex-1 + overflow-auto） */}
           <div className="min-h-0 flex-1 overflow-auto px-4 py-3">{children}</div>
 
-          <DialogFooter className="border-t border-border/60 px-4 py-3">
+          <DialogFooter className="mx-0 mb-0 rounded-none border-t border-border/60 px-4 py-3">
             <Button variant="outline" size="sm" onClick={requestClose} disabled={busy}>
               取消
             </Button>

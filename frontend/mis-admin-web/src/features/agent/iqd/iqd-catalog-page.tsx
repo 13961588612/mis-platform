@@ -783,7 +783,7 @@ function FieldScopeDialog({
       }}
     >
       <DialogContent className="flex max-h-[85vh] w-full max-w-3xl flex-col gap-0 overflow-hidden p-0">
-        <DialogHeader className="border-b border-border/60 px-4 py-3">
+        <DialogHeader className="mx-0 mt-0 rounded-none border-b border-border/60 bg-[hsl(var(--dialog-header-bg))] px-4 py-3 pr-10">
           <DialogTitle className="text-[14px]">
             字段纳入与描述
             {host ? (
@@ -883,7 +883,7 @@ function FieldScopeDialog({
           </div>
         ) : null}
 
-        <DialogFooter className="border-t border-border/60 px-4 py-3">
+        <DialogFooter className="mx-0 mb-0 rounded-none border-t border-border/60 px-4 py-3">
           <Button size="sm" variant="outline" onClick={onClose} disabled={saving}>
             关闭
           </Button>

@@ -115,7 +115,7 @@ export function ConnectionManageDialog({ open, onOpenChange }: ConnectionManageD
     <>
       <Dialog open={open} onOpenChange={onOpenChange}>
         <DialogContent className="flex max-h-[85vh] w-full max-w-2xl flex-col gap-0 overflow-hidden p-0">
-          <DialogHeader className="border-b border-border/60 px-4 py-3">
+          <DialogHeader className="mx-0 mt-0 rounded-none border-b border-border/60 bg-[hsl(var(--dialog-header-bg))] px-4 py-3 pr-10">
             <DialogTitle className="text-[14px]">连接管理</DialogTitle>
             <DialogDescription className="text-[12px]">
               停止 MCP、停用或物理删除问数连接。删除会级联清理该连接下的 catalog / 范围 / 知识等，不可恢复。
@@ -214,7 +214,7 @@ export function ConnectionManageDialog({ open, onOpenChange }: ConnectionManageD
             )}
           </div>
 
-          <DialogFooter className="border-t border-border/60 px-4 py-3">
+          <DialogFooter className="mx-0 mb-0 rounded-none border-t border-border/60 px-4 py-3">
             <Button size="sm" variant="outline" onClick={() => onOpenChange(false)}>
               关闭
             </Button>
