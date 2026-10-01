@@ -553,7 +553,12 @@ function AddPermissionWizard({
   return (
     <>
       <Dialog open={open} onOpenChange={onOpenChange}>
-        <DialogContent className="flex max-h-[90vh] flex-col sm:max-w-3xl">
+        <DialogContent
+          className={cn(
+            'flex flex-col sm:max-w-3xl',
+            target === 'acl' ? 'h-[85vh]' : 'max-h-[90vh]',
+          )}
+        >
           <DialogHeader>
             <DialogTitle>{title}</DialogTitle>
             <DialogDescription>
@@ -610,7 +615,7 @@ function AddPermissionWizard({
                 </TabsList>
                 {(['table', 'model', 'cube'] as ObjectKind[]).map((kind) => (
                   <TabsContent key={kind} value={kind}>
-                    <div className="max-h-72 space-y-1 overflow-auto rounded-md border p-2">
+                    <div className="max-h-[36rem] space-y-1 overflow-auto rounded-md border p-2">
                       {catalogLoading ? (
                         <p className="py-4 text-center text-sm text-muted-foreground">加载中…</p>
                       ) : tabObjects[kind].length === 0 ? (
