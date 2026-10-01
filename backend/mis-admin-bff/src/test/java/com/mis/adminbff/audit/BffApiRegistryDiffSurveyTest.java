@@ -679,6 +679,8 @@ class BffApiRegistryDiffSurveyTest {
             "GET /api/v1/agent-ops/sessions/feedback/stats",
             "POST /api/v1/agent-ops/sessions/feedback/{feedbackId}/process",
             "POST /api/v1/agent-ops/sessions/feedback/batch-process",
+            // ---- V76：用户端评价提交（sys_api 92586 / menu 613 ai:chat:use）----
+            "POST /api/v1/agent-ops/sessions/{session_id}/feedback",
             "DELETE /api/v1/agent-ops/sessions/{id}",
             "POST /api/v1/agent-ops/sessions/batch-delete",
             "POST /api/v1/agent-ops/chat/sessions",
