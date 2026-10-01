@@ -651,7 +651,13 @@ function AddPermissionWizard({
             ) : null}
 
             {step === 'fields' ? (
-              <div className="space-y-3">
+              <div
+                className={cn(
+                  target === 'acl'
+                    ? 'flex h-full min-h-0 flex-col gap-3'
+                    : 'space-y-3',
+                )}
+              >
                 {selectedObjects.length === 0 ? (
                   <p className="py-4 text-center text-sm text-muted-foreground">尚未选择对象</p>
                 ) : (
@@ -659,7 +665,13 @@ function AddPermissionWizard({
                     const selected =
                       fieldSelection[obj.itemKey] ?? new Set(obj.fields.map((f) => f.itemKey));
                     return (
-                      <div key={obj.itemKey} className="rounded-md border p-3">
+                      <div
+                        key={obj.itemKey}
+                        className={cn(
+                          'rounded-md border p-3',
+                          target === 'acl' && 'flex min-h-0 flex-1 flex-col',
+                        )}
+                      >
                         <div className="mb-2 flex items-center gap-2">
                           <Badge variant="secondary" className="rounded">
                             {OBJECT_TYPE_LABEL[obj.kind]}
@@ -685,12 +697,12 @@ function AddPermissionWizard({
                           ) : null}
                         </div>
                         {target === 'acl' ? (
-                          <div className="mt-1">
-                            <label className="mb-1 block text-xs text-muted-foreground">
+                          <div className="mt-1 flex min-h-0 flex-1 flex-col">
+                            <label className="mb-1 block shrink-0 text-xs text-muted-foreground">
                               {'行级范围 row_scope（JSON；留空=全行可见）'}
                             </label>
                             <textarea
-                              className="min-h-[3rem] w-full rounded border border-input bg-background px-2 py-1 font-mono text-xs"
+                              className="min-h-[6rem] w-full flex-1 resize-none rounded border border-input bg-background px-2 py-1 font-mono text-xs"
                               placeholder={'{"dimension":"store","scope":"store"}'}
                               value={rowScopeDraft[obj.itemKey] ?? ''}
                               onChange={(e) =>
