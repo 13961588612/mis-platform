@@ -213,6 +213,28 @@ public class IqdClient extends AbstractDownstreamClient {
     }
 
     /**
+     * 删除单条范围策略。
+     */
+    public void deleteScopePolicy(Long id) {
+        blockVoid(delete(loginContextHeaders(), "/api/v1/iqd/scope/policies/{id}", id));
+    }
+
+    public Map<String, Object> deleteScopePoliciesBatch(
+            Long connectionId, String subjectType, String subjectId, List<String> itemKeys) {
+        return block(client().post()
+                .uri(uriBuilder -> uriBuilder.path("/api/v1/iqd/scope/policies/delete-batch")
+                        .queryParam("connectionId", connectionId)
+                        .queryParam("subjectType", subjectType)
+                        .queryParam("subjectId", subjectId)
+                        .build())
+                .headers(loginContextHeaders())
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(itemKeys == null ? List.of() : itemKeys)
+                .retrieve()
+                .bodyToMono(MAP_RESULT));
+    }
+
+    /**
      * 查询表级 ACL。
      */
     public List<IqdAclVO> listAcls(Long connectionId) {

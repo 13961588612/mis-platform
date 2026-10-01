@@ -108,6 +108,7 @@ export interface IqdScopePolicy {
   connection_id?: number;
   subject_type: string;
   subject_id: string;
+  subject_name?: string | null;
   item_key: string;
   allow?: boolean;
   effective?: boolean;
@@ -128,16 +129,23 @@ export interface IqdAcl {
   connection_id?: number;
   subject_type: string;
   subject_id: string;
+  subject_name?: string | null;
+  object_type?: string | null;
+  object_key?: string | null;
+  field_key?: string | null;
   item_key: string;
-  action: string;
+  action?: string;
   row_scope?: string | null;
 }
 
 export interface IqdAclSavePayload {
   subject_type: string;
   subject_id: string;
-  item_key: string;
-  action: string;
+  object_type: string;
+  object_key: string;
+  field_key?: string | null;
+  item_key?: string;
+  action?: string;
   row_scope?: string | null;
 }
 
@@ -494,6 +502,28 @@ export async function saveIqdAcls(
     params: { connectionId },
   });
   return unwrap(res, '保存表级 ACL 失败');
+}
+
+export async function deleteIqdScopePolicy(id: number): Promise<void> {
+  const res = await api.delete<ApiResult<null>>(`/iqd/scope/policies/${id}`);
+  if (res.data.code !== 0) throw new Error(res.data.message || '删除范围策略失败');
+}
+
+/**
+ * 按 (主体 + 对象) 批量删除范围策略（编辑场景：删除取消勾选的字段行）。
+ */
+export async function deleteIqdScopePoliciesBatch(
+  connectionId: number,
+  subjectType: string,
+  subjectId: string,
+  itemKeys: string[],
+): Promise<{ count: number }> {
+  const res = await api.post<ApiResult<{ count: number }>>(
+    '/iqd/scope/policies/delete-batch',
+    itemKeys,
+    { params: { connectionId, subjectType, subjectId } },
+  );
+  return unwrap(res, '批量删除范围策略失败');
 }
 
 export async function deleteIqdAcl(id: number): Promise<void> {

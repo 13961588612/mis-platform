@@ -1,7 +1,9 @@
 package com.mis.adminbff.service.iqd;
 
 import com.mis.adminbff.client.AiPlatformClient;
+import com.mis.adminbff.client.IamWebClient;
 import com.mis.adminbff.client.IqdClient;
+import com.mis.adminbff.client.model.IamRoleVO;
 import com.mis.adminbff.config.IqdProperties;
 import com.mis.adminbff.dto.iqd.IqdAclSaveRequest;
 import com.mis.adminbff.dto.iqd.IqdAclVO;
@@ -21,6 +23,7 @@ import com.mis.adminbff.dto.iqd.IqdScopePolicyVO;
 import com.mis.adminbff.dto.iqd.IqdSqlPairSaveRequest;
 import com.mis.adminbff.dto.iqd.IqdSqlPairVO;
 import com.mis.adminbff.security.UserPermissionLoader;
+import com.mis.adminbff.service.KbSubjectProxyService;
 import com.mis.adminbff.support.RequestContext;
 import com.mis.common.core.exception.BusinessException;
 import com.mis.common.core.exception.ResultCode;
@@ -29,6 +32,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -51,16 +56,22 @@ public class IqdFacadeService {
     private final IqdProperties properties;
     private final UserPermissionLoader userPermissionLoader;
     private final AiPlatformClient aiPlatformClient;
+    private final KbSubjectProxyService subjectProxyService;
+    private final IamWebClient iamWebClient;
 
     public IqdFacadeService(
             IqdClient iqdClient,
             IqdProperties properties,
             UserPermissionLoader userPermissionLoader,
-            AiPlatformClient aiPlatformClient) {
+            AiPlatformClient aiPlatformClient,
+            KbSubjectProxyService subjectProxyService,
+            IamWebClient iamWebClient) {
         this.iqdClient = iqdClient;
         this.properties = properties;
         this.userPermissionLoader = userPermissionLoader;
         this.aiPlatformClient = aiPlatformClient;
+        this.subjectProxyService = subjectProxyService;
+        this.iamWebClient = iamWebClient;
     }
 
     // ================================================================ 连接配置
@@ -120,7 +131,9 @@ public class IqdFacadeService {
      */
     public List<IqdScopePolicyVO> listScopePolicies(Long connectionId) {
         requirePermission(properties.getScopeViewPermission());
-        return iqdClient.listScopePolicies(connectionId);
+        List<IqdScopePolicyVO> rows = iqdClient.listScopePolicies(connectionId);
+        enrichScopePolicySubjectNames(rows);
+        return rows;
     }
 
     /**
@@ -129,6 +142,20 @@ public class IqdFacadeService {
     public Map<String, Object> saveScopePolicies(Long connectionId, List<IqdScopePolicySaveRequest> items) {
         requirePermission(properties.getScopeSavePermission());
         return iqdClient.saveScopePolicies(connectionId, items);
+    }
+
+    /**
+     * 删除单条范围策略（需 iqd:scope:save）。
+     */
+    public void deleteScopePolicy(Long id) {
+        requirePermission(properties.getScopeSavePermission());
+        iqdClient.deleteScopePolicy(id);
+    }
+
+    public Map<String, Object> deleteScopePoliciesBatch(
+            Long connectionId, String subjectType, String subjectId, List<String> itemKeys) {
+        requirePermission(properties.getScopeSavePermission());
+        return iqdClient.deleteScopePoliciesBatch(connectionId, subjectType, subjectId, itemKeys);
     }
 
     /**
@@ -149,7 +176,9 @@ public class IqdFacadeService {
      */
     public List<IqdAclVO> listAcls(Long connectionId) {
         requirePermission(properties.getAclViewPermission());
-        return iqdClient.listAcls(connectionId);
+        List<IqdAclVO> rows = iqdClient.listAcls(connectionId);
+        enrichAclSubjectNames(rows);
+        return rows;
     }
 
     /**
@@ -554,6 +583,116 @@ public class IqdFacadeService {
         } catch (Exception exc) {
             log.warn("IQD auto sync after save skipped connectionId={} scope={} error={}",
                     connectionId, scope, exc.getMessage());
+        }
+    }
+
+    private void enrichScopePolicySubjectNames(List<IqdScopePolicyVO> rows) {
+        if (rows == null || rows.isEmpty()) {
+            return;
+        }
+        Set<KbSubjectProxyService.SubjectKey> keys = new LinkedHashSet<>();
+        Set<String> roleCodes = new LinkedHashSet<>();
+        for (IqdScopePolicyVO row : rows) {
+            collectSubjectKey(row.getSubjectType(), row.getSubjectId(), keys, roleCodes);
+        }
+        Map<String, String> names = subjectProxyService.resolveNames(keys);
+        Map<String, String> roleNames = resolveRoleNamesByCode(roleCodes);
+        for (IqdScopePolicyVO row : rows) {
+            row.setSubjectName(resolveSubjectName(
+                    row.getSubjectType(), row.getSubjectId(), names, roleNames));
+        }
+    }
+
+    private void enrichAclSubjectNames(List<IqdAclVO> rows) {
+        if (rows == null || rows.isEmpty()) {
+            return;
+        }
+        Set<KbSubjectProxyService.SubjectKey> keys = new LinkedHashSet<>();
+        Set<String> roleCodes = new LinkedHashSet<>();
+        for (IqdAclVO row : rows) {
+            collectSubjectKey(row.getSubjectType(), row.getSubjectId(), keys, roleCodes);
+        }
+        Map<String, String> names = subjectProxyService.resolveNames(keys);
+        Map<String, String> roleNames = resolveRoleNamesByCode(roleCodes);
+        for (IqdAclVO row : rows) {
+            row.setSubjectName(resolveSubjectName(
+                    row.getSubjectType(), row.getSubjectId(), names, roleNames));
+        }
+    }
+
+    private static void collectSubjectKey(
+            String subjectType, String subjectId,
+            Set<KbSubjectProxyService.SubjectKey> keys, Set<String> roleCodes) {
+        String type = subjectType == null ? null : subjectType.trim().toLowerCase();
+        String id = subjectId == null ? null : subjectId.trim();
+        if (type == null || type.isBlank() || id == null || id.isBlank()) {
+            return;
+        }
+        Long parsedId = parseSubjectId(id);
+        if (parsedId != null) {
+            keys.add(new KbSubjectProxyService.SubjectKey(type, parsedId));
+        } else if (KbSubjectProxyService.TYPE_ROLE.equals(type)) {
+            roleCodes.add(id);
+        }
+    }
+
+    private Map<String, String> resolveRoleNamesByCode(Set<String> roleCodes) {
+        if (roleCodes == null || roleCodes.isEmpty()) {
+            return Map.of();
+        }
+        try {
+            List<IamRoleVO> roles = iamWebClient.listEnabledRoles(
+                    RequestContext.requireTenantId(), RequestContext.requireAppId());
+            Map<String, String> names = new LinkedHashMap<>();
+            if (roles != null) {
+                for (IamRoleVO role : roles) {
+                    if (role == null || role.name() == null) {
+                        continue;
+                    }
+                    if (role.code() != null && roleCodes.contains(role.code())) {
+                        names.put(role.code(), role.name());
+                    }
+                    if (role.id() != null && roleCodes.contains(role.id())) {
+                        names.put(role.id(), role.name());
+                    }
+                }
+            }
+            return names;
+        } catch (Exception ex) {
+            log.debug("IQD subject_name role-code resolve failed: {}", ex.getMessage());
+            return Map.of();
+        }
+    }
+
+    private static String resolveSubjectName(
+            String subjectType, String subjectId,
+            Map<String, String> names, Map<String, String> roleNames) {
+        if (subjectType == null || subjectId == null) {
+            return null;
+        }
+        String type = subjectType.trim().toLowerCase();
+        String id = subjectId.trim();
+        if (type.isBlank() || id.isBlank()) {
+            return null;
+        }
+        String name = names.get(type + ":" + id);
+        if (name != null) {
+            return name;
+        }
+        if (KbSubjectProxyService.TYPE_ROLE.equals(type)) {
+            return roleNames.get(id);
+        }
+        return null;
+    }
+
+    private static Long parseSubjectId(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return null;
+        }
+        try {
+            return Long.parseLong(raw.trim());
+        } catch (NumberFormatException ex) {
+            return null;
         }
     }
 

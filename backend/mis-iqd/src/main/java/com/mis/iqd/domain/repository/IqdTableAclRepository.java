@@ -18,6 +18,14 @@ public interface IqdTableAclRepository extends JpaRepository<IqdTableAcl, Long> 
     Optional<IqdTableAcl> findByConnectionIdAndSubjectTypeAndSubjectIdAndItemKeyAndAction(
             Long connectionId, String subjectType, String subjectId, String itemKey, String action);
 
+    Optional<IqdTableAcl> findByConnectionIdAndSubjectTypeAndSubjectIdAndObjectTypeAndObjectKeyAndFieldKeyIsNullAndAction(
+            Long connectionId, String subjectType, String subjectId,
+            String objectType, String objectKey, String action);
+
+    Optional<IqdTableAcl> findByConnectionIdAndSubjectTypeAndSubjectIdAndObjectTypeAndObjectKeyAndFieldKeyAndAction(
+            Long connectionId, String subjectType, String subjectId,
+            String objectType, String objectKey, String fieldKey, String action);
+
     boolean existsByConnectionIdAndSubjectTypeAndSubjectIdAndItemKeyAndAction(
             Long connectionId, String subjectType, String subjectId, String itemKey, String action);
 }

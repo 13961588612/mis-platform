@@ -101,6 +101,25 @@ public class IqdAclController {
     }
 
     /**
+     * 删除单条范围策略（需 iqd:scope:save）。
+     */
+    @DeleteMapping("/scope/policies/{id}")
+    public Result<Void> deleteScopePolicy(@PathVariable Long id) {
+        iqdFacadeService.deleteScopePolicy(id);
+        return Result.ok();
+    }
+
+    @PostMapping("/scope/policies/delete-batch")
+    public Result<Map<String, Object>> deleteScopePoliciesBatch(
+            @RequestParam Long connectionId,
+            @RequestParam String subjectType,
+            @RequestParam String subjectId,
+            @RequestBody List<String> itemKeys) {
+        return Result.ok(iqdFacadeService.deleteScopePoliciesBatch(
+                connectionId, subjectType, subjectId, itemKeys));
+    }
+
+    /**
      * 行级谓词预览（需 iqd:scope:view）。
      *
      * <p>POST /api/v1/iqd/scope/preview：转发平台 Worker，返回当前身份

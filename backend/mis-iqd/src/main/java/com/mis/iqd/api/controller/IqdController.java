@@ -166,6 +166,28 @@ public class IqdController {
         return Result.ok(body);
     }
 
+    /**
+     * 删除单条范围策略（编辑场景）。
+     */
+    @DeleteMapping("/scope/policies/{id}")
+    public Result<Void> deleteScopePolicy(@PathVariable Long id) {
+        adminService.deleteScopePolicy(id);
+        return Result.ok();
+    }
+
+    @PostMapping("/scope/policies/delete-batch")
+    public Result<Map<String, Object>> deleteScopePoliciesBatch(
+            @RequestParam Long connectionId,
+            @RequestParam String subjectType,
+            @RequestParam String subjectId,
+            @RequestBody List<String> itemKeys) {
+        int count = adminService.deleteScopePoliciesByKeys(
+                connectionId, subjectType, subjectId, itemKeys);
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("count", count);
+        return Result.ok(body);
+    }
+
     // ================================================================ 表级 ACL
 
     /**
@@ -177,7 +199,7 @@ public class IqdController {
     }
 
     /**
-     * 批量提交表级 ACL（action=ask/manage）。
+     * 批量提交行级范围（iqd_table_acl.action 恒为 ask；仅承载 row_scope）。
      */
     @PostMapping("/acl/batch")
     public Result<Map<String, Object>> saveAcls(

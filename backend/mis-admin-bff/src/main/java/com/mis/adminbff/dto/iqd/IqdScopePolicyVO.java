@@ -11,6 +11,7 @@ public class IqdScopePolicyVO {
     private Long connectionId;
     private String subjectType;
     private String subjectId;
+    private String subjectName;
     private String itemKey;
     private Boolean allow;
     private Boolean effective;
@@ -48,6 +49,15 @@ public class IqdScopePolicyVO {
 
     public void setSubjectId(String subjectId) {
         this.subjectId = subjectId;
+    }
+
+    @JsonProperty("subject_name")
+    public String getSubjectName() {
+        return subjectName;
+    }
+
+    public void setSubjectName(String subjectName) {
+        this.subjectName = subjectName;
     }
 
     @JsonProperty("item_key")

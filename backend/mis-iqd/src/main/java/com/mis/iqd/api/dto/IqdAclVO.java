@@ -11,6 +11,9 @@ public class IqdAclVO {
     private Long connectionId;
     private String subjectType;
     private String subjectId;
+    private String objectType;
+    private String objectKey;
+    private String fieldKey;
     private String itemKey;
     private String action;
     private String rowScope;
@@ -45,6 +48,33 @@ public class IqdAclVO {
 
     public void setSubjectId(String subjectId) {
         this.subjectId = subjectId;
+    }
+
+    @JsonProperty("object_type")
+    public String getObjectType() {
+        return objectType;
+    }
+
+    public void setObjectType(String objectType) {
+        this.objectType = objectType;
+    }
+
+    @JsonProperty("object_key")
+    public String getObjectKey() {
+        return objectKey;
+    }
+
+    public void setObjectKey(String objectKey) {
+        this.objectKey = objectKey;
+    }
+
+    @JsonProperty("field_key")
+    public String getFieldKey() {
+        return fieldKey;
+    }
+
+    public void setFieldKey(String fieldKey) {
+        this.fieldKey = fieldKey;
     }
 
     public String getItemKey() {

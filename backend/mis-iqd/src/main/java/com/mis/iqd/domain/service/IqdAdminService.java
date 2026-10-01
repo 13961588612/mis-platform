@@ -1029,7 +1029,9 @@ public class IqdAdminService {
         Instant now = Instant.now();
         int count = 0;
         for (IqdAclSaveRequest dto : items) {
-            if (dto.itemKey() == null || dto.itemKey().isBlank()) {
+            String objectKeyRaw = defaultString(dto.objectKey(), dto.itemKey()).trim();
+            String fieldKeyRaw = defaultString(dto.fieldKey(), "").trim();
+            if (objectKeyRaw.isBlank() && fieldKeyRaw.isBlank()) {
                 continue;
             }
             String subjectType = defaultString(dto.subjectType(), "role");
@@ -1037,15 +1039,19 @@ public class IqdAdminService {
             if (subjectId.isBlank()) {
                 throw new BusinessException(ResultCode.VALIDATION_ERROR, "ACL 主体不能为空");
             }
-            String action = defaultString(dto.action(), "ask");
-            if (!Set.of("ask", "manage").contains(action)) {
-                throw new BusinessException(ResultCode.VALIDATION_ERROR, "ACL action 仅支持 ask/manage");
-            }
+            String action = "ask";
+            String objectType = normalizeAclObjectType(dto.objectType(), objectKeyRaw);
+            String objectKey = objectKeyRaw.isBlank() ? fieldKeyRaw : objectKeyRaw;
+            String fieldKey = fieldKeyRaw.isBlank() ? null : fieldKeyRaw;
             validateRowScope(dto.rowScope());
 
-            Optional<IqdTableAcl> existing = tableAclRepository
-                    .findByConnectionIdAndSubjectTypeAndSubjectIdAndItemKeyAndAction(
-                            connectionId, subjectType, subjectId, dto.itemKey(), action);
+            Optional<IqdTableAcl> existing = fieldKey == null
+                    ? tableAclRepository
+                            .findByConnectionIdAndSubjectTypeAndSubjectIdAndObjectTypeAndObjectKeyAndFieldKeyIsNullAndAction(
+                                    connectionId, subjectType, subjectId, objectType, objectKey, action)
+                    : tableAclRepository
+                            .findByConnectionIdAndSubjectTypeAndSubjectIdAndObjectTypeAndObjectKeyAndFieldKeyAndAction(
+                                    connectionId, subjectType, subjectId, objectType, objectKey, fieldKey, action);
             IqdTableAcl acl = existing.orElseGet(IqdTableAcl::new);
             boolean isNew = acl.getId() == null;
             if (isNew) {
@@ -1053,9 +1059,18 @@ public class IqdAdminService {
                 acl.setConnectionId(connectionId);
                 acl.setSubjectType(subjectType);
                 acl.setSubjectId(subjectId);
-                acl.setItemKey(dto.itemKey().trim());
+                acl.setObjectType(objectType);
+                acl.setObjectKey(objectKey);
+                acl.setFieldKey(fieldKey);
+                acl.setItemKey(fieldKey == null ? objectKey : fieldKey);
                 acl.setAction(action);
                 acl.setCreatedAt(now);
+            } else {
+                acl.setObjectType(objectType);
+                acl.setObjectKey(objectKey);
+                acl.setFieldKey(fieldKey);
+                acl.setItemKey(fieldKey == null ? objectKey : fieldKey);
+                acl.setAction(action);
             }
             acl.setRowScope(dto.rowScope());
             acl.setUpdatedAt(now);
@@ -1079,6 +1094,61 @@ public class IqdAdminService {
         log.info("IQD ACL deleted id={}", id);
     }
 
+    /**
+     * 删除单条范围策略。
+     */
+    @Transactional
+    public void deleteScopePolicy(Long id) {
+        IqdScopePolicy policy = scopePolicyRepository.findById(id)
+                .orElseThrow(() -> new BusinessException(ResultCode.NOT_FOUND, "范围策略不存在"));
+        scopePolicyRepository.delete(policy);
+        changeEventPublisher.publish("iqd.scope.changed", "policy_deleted=" + id);
+        log.info("IQD scope policy deleted id={}", id);
+    }
+
+    /**
+     * 按 (connectionId, subjectType, subjectId, itemKey) 批量删除范围策略（含字段级行）。
+     *
+     * @return 删除行数
+     */
+    @Transactional
+    public int deleteScopePoliciesByKeys(
+            Long connectionId, String subjectType, String subjectId, List<String> itemKeys) {
+        if (connectionId == null || subjectType == null || subjectId == null
+                || itemKeys == null || itemKeys.isEmpty()) {
+            return 0;
+        }
+        int count = 0;
+        for (String itemKey : itemKeys) {
+            if (itemKey == null || itemKey.isBlank()) {
+                continue;
+            }
+            Optional<IqdScopePolicy> existing = scopePolicyRepository
+                    .findByConnectionIdAndSubjectTypeAndSubjectIdAndItemKey(
+                            connectionId, subjectType, subjectId, itemKey);
+            if (existing.isPresent()) {
+                scopePolicyRepository.delete(existing.get());
+                count++;
+            }
+        }
+        if (count > 0) {
+            changeEventPublisher.publish("iqd.scope.changed", "policies_deleted=" + count);
+            log.info("IQD scope policies deleted connectionId={} subject={}:{} count={}",
+                    connectionId, subjectType, subjectId, count);
+        }
+        return count;
+    }
+
+    private static String normalizeAclObjectType(String objectType, String itemKey) {
+        String type = defaultString(objectType, "").trim().toLowerCase();
+        if (Set.of("table", "model", "cube").contains(type)) {
+            return type;
+        }
+        String key = defaultString(itemKey, "");
+        if (key.startsWith("mdl:model:")) return "model";
+        if (key.startsWith("mdl:cube:")) return "cube";
+        return "table";
+    }
     /**
      * 校验 row_scope JSONB（W2：维度存在性 / 白名单语法）。
      *
@@ -2494,6 +2564,9 @@ public class IqdAdminService {
         vo.setConnectionId(entity.getConnectionId());
         vo.setSubjectType(entity.getSubjectType());
         vo.setSubjectId(entity.getSubjectId());
+        vo.setObjectType(entity.getObjectType());
+        vo.setObjectKey(entity.getObjectKey());
+        vo.setFieldKey(entity.getFieldKey());
         vo.setItemKey(entity.getItemKey());
         vo.setAction(entity.getAction());
         vo.setRowScope(entity.getRowScope());

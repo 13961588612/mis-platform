@@ -12,7 +12,7 @@ import java.time.Instant;
 /**
  * 问数表级 ACL（iqd_table_acl）。
  *
- * <p>{@code action=ask}（可问/可见语义）/ {@code manage}（管辖/授权语义）；
+ * <p>{@code action=ask}（问数数据权限唯一语义；manage 属于后台权限码，不落本表）；
  * {@code row_scope} JSONB 为行级范围（v1.9 语义：维度注册表实例，单维度对象或
  * {@code dimensions} 数组 AND 叠加；{@code NULL}=全行可见，向后兼容）。
  * {@code subject_id} 复用角色码/部门 id/用户 id/门店编码（字符串形态）。
@@ -35,6 +35,15 @@ public class IqdTableAcl {
 
     @Column(name = "item_key", nullable = false)
     private String itemKey;
+
+    @Column(name = "object_type")
+    private String objectType;
+
+    @Column(name = "object_key")
+    private String objectKey;
+
+    @Column(name = "field_key")
+    private String fieldKey;
 
     @Column(nullable = false)
     private String action;
@@ -90,6 +99,30 @@ public class IqdTableAcl {
 
     public void setItemKey(String itemKey) {
         this.itemKey = itemKey;
+    }
+
+    public String getObjectType() {
+        return objectType;
+    }
+
+    public void setObjectType(String objectType) {
+        this.objectType = objectType;
+    }
+
+    public String getObjectKey() {
+        return objectKey;
+    }
+
+    public void setObjectKey(String objectKey) {
+        this.objectKey = objectKey;
+    }
+
+    public String getFieldKey() {
+        return fieldKey;
+    }
+
+    public void setFieldKey(String fieldKey) {
+        this.fieldKey = fieldKey;
     }
 
     public String getAction() {
