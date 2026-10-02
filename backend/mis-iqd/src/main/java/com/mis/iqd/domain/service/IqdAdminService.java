@@ -1420,7 +1420,7 @@ public class IqdAdminService {
                     org.springframework.data.domain.Sort.by(org.springframework.data.domain.Sort.Direction.DESC, "id")
             ).stream().limit(capped).toList();
         }
-        return entities.stream().limit(capped).map(this::toAskLogVO).toList();
+        return entities.stream().limit(capped).map(this::toAskLogSummaryVO).toList();
     }
 
     /**
@@ -2731,6 +2731,38 @@ public class IqdAdminService {
         vo.setErrorMessage(entity.getErrorMessage());
         vo.setViewMode(entity.getViewMode());
         vo.setSimulatedRoleCode(entity.getSimulatedRoleCode());
+        vo.setCreatedAt(entity.getCreatedAt());
+        return vo;
+    }
+
+    /**
+     * 列表用的<b>瘦身</b>映射（{@code /traces} 专用）：只回列表页真正渲染的字段。
+     *
+     * <p>为什么不复用 {@link #toAskLogVO}：审计明细里的 {@code plan_steps} /
+     * {@code resolved_scope} / {@code sql_text} 都是长 JSON 字符串，实测
+     * {@code limit=100} 时三项合计约 200KB（占响应 90%），却只有<b>详情页</b>需要。
+     * 列表带上它们会让响应逼近 BFF 的 WebClient 缓冲上限（历史上已因此报过
+     * 「下游调用失败: HTTP 200」），并且随着审计量增长持续放大。
+     *
+     * <p>瘦身后列表只含：id / trace_id / session_id / query_id / user_id /
+     * employee_id / question / status / row_count / latency_ms / error_code /
+     * view_mode / created_at —— 全部是列表或筛选需要的短字段。
+     * 需要 SQL / 计划 / 引用明细请走 {@code GET /traces/{id}}。
+     */
+    private IqdAskLogVO toAskLogSummaryVO(IqdAskLog entity) {
+        IqdAskLogVO vo = new IqdAskLogVO();
+        vo.setId(entity.getId());
+        vo.setTraceId(entity.getTraceId());
+        vo.setSessionId(entity.getSessionId());
+        vo.setQueryId(entity.getQueryId());
+        vo.setUserId(entity.getUserId());
+        vo.setEmployeeId(entity.getEmployeeId());
+        vo.setQuestion(entity.getQuestion());
+        vo.setStatus(entity.getStatus());
+        vo.setRowCount(entity.getRowCount());
+        vo.setLatencyMs(entity.getLatencyMs());
+        vo.setErrorCode(entity.getErrorCode());
+        vo.setViewMode(entity.getViewMode());
         vo.setCreatedAt(entity.getCreatedAt());
         return vo;
     }

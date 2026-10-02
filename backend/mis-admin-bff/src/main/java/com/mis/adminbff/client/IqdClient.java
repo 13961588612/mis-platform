@@ -89,11 +89,41 @@ public class IqdClient extends AbstractDownstreamClient {
     private final IqdProperties properties;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
+    /**
+     * 单次响应允许缓冲的最大字节数（16MB）。
+     *
+     * <p>WebClient 默认只给 256KB。问数审计列表 {@code GET /api/v1/iqd/traces?limit=100}
+     * 的响应实测约 290KB（每条审计含 {@code sql_text} / {@code resolved_scope} /
+     * {@code plan_steps} / {@code wren_status_trail} 等长 JSON 字符串），越过 256KB 后
+     * 抛 {@code DataBufferLimitException}，被 {@code catch (Exception)} 兜住后表现为
+     * 「下游调用失败: HTTP 200」——状态码明明是 200，看错误完全不知所云。
+     * 问数审计详情、样本对 / 知识清单列表同理。
+     *
+     * <p>只放宽<b>本客户端</b>的编解码上限——见构造器里的 {@code clone()}。
+     */
+    private static final int MAX_IN_MEMORY_BYTES = 16 * 1024 * 1024;
+
     public IqdClient(
             @Qualifier("plainWebClientBuilder") WebClient.Builder plainBuilder,
             IqdProperties properties) {
-        super(plainBuilder.baseUrl(properties.getBaseUrl()).build(), properties.getTimeoutMs());
+        super(buildClient(plainBuilder, properties), properties.getTimeoutMs());
         this.properties = properties;
+    }
+
+    /**
+     * 组装本客户端专属的 {@link WebClient}。
+     *
+     * <p><b>{@code clone()} 是必需的</b>：{@code plainWebClientBuilder} 在
+     * {@code BffConfiguration} 里是单例 Bean，而 {@code WebClient.Builder} 是可变对象。
+     * {@code codecs()} 是<b>追加</b>语义（configurer 存进列表），直接调用会让此后所有共享
+     * 该 builder 构建的下游客户端统统继承这里的 16MB 上限，且受影响范围随 Bean 创建顺序
+     * 漂移。克隆出私有副本后，改动只作用于本客户端。
+     */
+    private static WebClient buildClient(WebClient.Builder plainBuilder, IqdProperties properties) {
+        return plainBuilder.clone()
+                .baseUrl(properties.getBaseUrl())
+                .codecs(configurer -> configurer.defaultCodecs().maxInMemorySize(MAX_IN_MEMORY_BYTES))
+                .build();
     }
 
     // ------------------------------------------------------------------ 管理面

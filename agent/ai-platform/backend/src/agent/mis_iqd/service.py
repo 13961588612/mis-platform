@@ -512,7 +512,11 @@ class IqdAskService:
             user_id: 用户 id 过滤。
 
         Returns:
-            审计日志列表（snake_case wire，含 sql_text / plan_steps / citations）。
+            审计日志列表（snake_case wire，**列表为瘦身视图**：只含
+            id/trace_id/session_id/query_id/user_id/employee_id/question/status/
+            row_count/latency_ms/error_code/view_mode/created_at；不含
+            sql_text / plan_steps / resolved_scope / citations 等长 JSON 字段——
+            它们只经详情接口返回，避免列表响应逼近 WebClient 缓冲上限）。
         """
         client = self._get_config_client()
         try:
