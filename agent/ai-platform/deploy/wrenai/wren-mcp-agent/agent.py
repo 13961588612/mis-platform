@@ -136,9 +136,55 @@ class AgentSettings(BaseSettings):
     health_interval_seconds: float = Field(default=15.0, description="自愈健康循环间隔")
     start_timeout_seconds: float = Field(default=60.0, description="单次拉起等待 ready 超时")
     max_connections: int = Field(default=10, description="≤10 DB（决策 ⑦）：并发连接上限")
+    conn_selfheal: bool = Field(
+        default=True,
+        description=(
+            "给 wren 子进程注入连接自愈补丁（wren connector 无连接池/无失效检测，"
+            "业务库断连后单连接会永久坏死）。关闭则恢复 wren 原生行为。"
+        ),
+    )
+    conn_selfheal_dir: str = Field(
+        default="",
+        description=(
+            "连接自愈补丁目录（内含 sitecustomize.py）；缺省取 agent.py 同级 conn_selfheal/"
+        ),
+    )
 
 
 _settings = AgentSettings()
+
+
+def _conn_selfheal_dir() -> str:
+    """连接自愈补丁目录（含 ``sitecustomize.py``）。
+
+    缺省取 ``agent.py`` 同级的 ``conn_selfheal/``。放在独立子目录而非 agent 根目录，
+    是为了让 ``PYTHONPATH`` 只暴露这一个模块，避免 agent 目录里的 ``utils/`` 等
+    遮蔽 wren 自身的依赖。
+    """
+    if _settings.conn_selfheal_dir:
+        return _settings.conn_selfheal_dir
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), "conn_selfheal")
+
+
+def _with_conn_selfheal(env: dict[str, str] | None) -> dict[str, str] | None:
+    """把自愈补丁目录挂到子进程 ``PYTHONPATH``（前置，优先加载本补丁）。
+
+    wren connector 没有连接池与失效检测（见 ``conn_selfheal/sitecustomize.py`` 文件头），
+    业务库断连后那条单连接会永久坏死。此处注入补丁让 wren 进程具备「失败即重连」能力。
+
+    ``env`` 为 ``None``（无凭据、沿用 os.environ）时也注入，保证所有 wren 子进程生效。
+    """
+    if not _settings.conn_selfheal:
+        return env
+    patch_dir = _conn_selfheal_dir()
+    if not os.path.isdir(patch_dir):
+        logger.warning("conn selfheal dir missing; skipping patch", patch_dir=patch_dir)
+        return env
+    base = dict(env) if env is not None else dict(os.environ)
+    existing = base.get("PYTHONPATH", "")
+    parts = [patch_dir] + [p for p in existing.split(os.pathsep) if p and p != patch_dir]
+    base["PYTHONPATH"] = os.pathsep.join(parts)
+    return base
 
 
 def _reachable_host() -> str:
@@ -394,9 +440,10 @@ class WrenMcpSupervisor:
             return False
 
     async def _launcher(self, command: list[str], env: dict[str, str] | None, cwd: str) -> Any:
+        # 连接自愈补丁经 PYTHONPATH 注入（wren connector 无连接池/无失效检测）。
         return await asyncio.create_subprocess_exec(
             *command,
-            env=env,
+            env=_with_conn_selfheal(env),
             cwd=cwd,
             stdout=asyncio.subprocess.DEVNULL,
             stderr=asyncio.subprocess.DEVNULL,
