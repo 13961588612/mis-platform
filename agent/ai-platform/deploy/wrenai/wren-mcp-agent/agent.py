@@ -406,7 +406,7 @@ class WrenMcpSupervisor:
                 proc = await asyncio.create_subprocess_exec(
                     _settings.wren_cli_bin, "profile", "add", profile_name, "--from-file", tmp_path,
                     cwd=entry.project_home,
-                    env=env if env is not None else None,
+                    env=_with_conn_selfheal(env),
                     stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
                 )
                 _out, err_b = await asyncio.wait_for(proc.communicate(), timeout=30.0)
@@ -432,6 +432,7 @@ class WrenMcpSupervisor:
         try:
             proc = await asyncio.create_subprocess_exec(
                 _settings.wren_cli_bin, "profile", "debug", name,
+                env=_with_conn_selfheal(None),
                 stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL,
             )
             await asyncio.wait_for(proc.wait(), timeout=15.0)
@@ -1120,6 +1121,7 @@ async def _api_cli_locked(req: CliRequest) -> JSONResponse:
         proc = await asyncio.create_subprocess_exec(
             *command,
             cwd=project_home,
+            env=_with_conn_selfheal(None),
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
