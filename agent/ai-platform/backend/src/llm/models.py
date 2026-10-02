@@ -104,6 +104,10 @@ class LLMRequest(BaseModel):
     # 额外的 provider 特定参数
     extra: dict[str, Any] = Field(default_factory=dict)
 
+    # 路由与超时：仅平台内部使用，不传给 OpenAI SDK。
+    provider: str = Field(default="", description="显式 LLM provider（deepseek/qwen）")
+    timeout: int | None = Field(default=None, ge=1, description="单请求超时秒数")
+
 
 class LLMChunk(BaseModel):
     """LLM 流式响应中的单个数据块。"""

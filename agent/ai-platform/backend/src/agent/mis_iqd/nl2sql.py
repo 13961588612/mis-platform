@@ -170,6 +170,23 @@ class Nl2SqlGenerator:
         self._mock = mock
         self._model = model
 
+    @staticmethod
+    def _request_extra(settings: Any, *, model: str) -> dict[str, Any]:
+        """问数模型请求参数；Qwen 关闭 thinking 时通过 extra_body 透传。"""
+        if getattr(settings, "IQD_NL2SQL_ENABLE_THINKING", True):
+            return {}
+        if "qwen" not in (model or "").lower():
+            return {}
+        return {"extra_body": {"enable_thinking": False}}
+
+    def _resolve_model(self, settings: Any) -> str:
+        """模型优先级：显式注入 > IQD_NL2SQL_MODEL > 全局主模型。"""
+        return (
+            self._model
+            or getattr(settings, "IQD_NL2SQL_MODEL", "")
+            or settings.LLM_PRIMARY_MODEL
+        )
+
     async def generate(
         self,
         *,
@@ -190,7 +207,7 @@ class Nl2SqlGenerator:
             return self._mock_result(question, allowed_tables)
 
         settings = get_settings()
-        model = self._model or settings.LLM_PRIMARY_MODEL
+        model = self._resolve_model(settings)
         user_payload = self._build_user_payload(
             question=question,
             context=context,
@@ -204,10 +221,13 @@ class Nl2SqlGenerator:
                 LLMMessage(role=LLMRole.USER, content=user_payload),
             ],
             model=model,
-            temperature=0.1,
-            max_tokens=2048,
+            temperature=settings.IQD_NL2SQL_TEMPERATURE,
+            max_tokens=settings.IQD_NL2SQL_MAX_TOKENS,
             user_id=user_id,
             session_id=session_id,
+            provider=settings.IQD_NL2SQL_PROVIDER,
+            timeout=settings.IQD_NL2SQL_TIMEOUT_SECONDS,
+            extra=self._request_extra(settings, model=model),
         )
         gateway = self._gateway if self._gateway is not None else get_llm_gateway()
         response = await gateway.chat(request)
@@ -260,7 +280,7 @@ class Nl2SqlGenerator:
             )
 
         settings = get_settings()
-        model = self._model or settings.LLM_PRIMARY_MODEL
+        model = self._resolve_model(settings)
         parts = [
             f"language: {language}",
             f"question: {question}",
@@ -281,10 +301,13 @@ class Nl2SqlGenerator:
                 LLMMessage(role=LLMRole.USER, content=user_payload),
             ],
             model=model,
-            temperature=0.0,
-            max_tokens=1024,
+            temperature=settings.IQD_NL2SQL_TEMPERATURE,
+            max_tokens=settings.IQD_NL2SQL_MAX_TOKENS,
             user_id=user_id,
             session_id=session_id,
+            provider=settings.IQD_NL2SQL_PROVIDER,
+            timeout=settings.IQD_NL2SQL_TIMEOUT_SECONDS,
+            extra=self._request_extra(settings, model=model),
         )
         gateway = self._gateway if self._gateway is not None else get_llm_gateway()
         response = await gateway.chat(request)

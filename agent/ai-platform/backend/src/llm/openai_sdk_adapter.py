@@ -245,7 +245,7 @@ class OpenAISDKAdapter:
         """
         proxy_url: str | None = _get_proxy_url(proxy_manager)
         try:
-            async with httpx.AsyncClient(proxy=proxy_url, timeout=self._timeout) as http_client:
+            async with httpx.AsyncClient(proxy=proxy_url, timeout=request.timeout or self._timeout) as http_client:
                 client: AsyncOpenAI = AsyncOpenAI(
                     api_key=api_key,
                     base_url=self._base_url,
@@ -309,7 +309,7 @@ class OpenAISDKAdapter:
         """
         proxy_url: str | None = _get_proxy_url(proxy_manager)
         try:
-            async with httpx.AsyncClient(proxy=proxy_url, timeout=self._timeout) as http_client:
+            async with httpx.AsyncClient(proxy=proxy_url, timeout=request.timeout or self._timeout) as http_client:
                 client: AsyncOpenAI = AsyncOpenAI(
                     api_key=api_key,
                     base_url=self._base_url,

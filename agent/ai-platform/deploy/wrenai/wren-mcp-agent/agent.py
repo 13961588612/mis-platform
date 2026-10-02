@@ -440,13 +440,15 @@ class WrenMcpSupervisor:
             return False
 
     async def _launcher(self, command: list[str], env: dict[str, str] | None, cwd: str) -> Any:
+        # 子进程日志交由 systemd/journal（或 Docker logs）统一采集。
+        # 先前使用 DEVNULL 会让 wren serve mcp 的 SQL/数据库错误完全消失。
         # 连接自愈补丁经 PYTHONPATH 注入（wren connector 无连接池/无失效检测）。
         return await asyncio.create_subprocess_exec(
             *command,
             env=_with_conn_selfheal(env),
             cwd=cwd,
-            stdout=asyncio.subprocess.DEVNULL,
-            stderr=asyncio.subprocess.DEVNULL,
+            stdout=None,
+            stderr=None,
         )
 
     async def ensure(

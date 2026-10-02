@@ -81,6 +81,66 @@ async def test_nl2sql_mock_generate() -> None:
 
 
 @pytest.mark.asyncio
+async def test_nl2sql_uses_dedicated_model_and_qwen_no_thinking() -> None:
+    class FakeGateway:
+        def __init__(self) -> None:
+            self.request = None
+
+        async def chat(self, request: Any) -> Any:
+            self.request = request
+            return MagicMock(content='{"type":"text_to_sql","sql":"SELECT 1"}')
+
+    gateway = FakeGateway()
+    settings = MagicMock(
+        IQD_NL2SQL_MODEL="qwen3.7-plus",
+        IQD_NL2SQL_PROVIDER="qwen",
+        IQD_NL2SQL_ENABLE_THINKING=False,
+        IQD_NL2SQL_TEMPERATURE=0.0,
+        IQD_NL2SQL_MAX_TOKENS=512,
+        IQD_NL2SQL_TIMEOUT_SECONDS=12,
+        LLM_PRIMARY_MODEL="outer-answer-model",
+    )
+
+    with patch("src.agent.mis_iqd.nl2sql.get_settings", return_value=settings):
+        gen = Nl2SqlGenerator(gateway=gateway)
+        await gen.generate(question="4月份各门店销售", allowed_tables=["sale_by_store"])
+
+    assert gateway.request.model == "qwen3.7-plus"
+    assert gateway.request.provider == "qwen"
+    assert gateway.request.max_tokens == 512
+    assert gateway.request.timeout == 12
+    assert gateway.request.extra == {"extra_body": {"enable_thinking": False}}
+
+
+@pytest.mark.asyncio
+async def test_nl2sql_falls_back_to_primary_model_without_dedicated_model() -> None:
+    class FakeGateway:
+        def __init__(self) -> None:
+            self.request = None
+
+        async def chat(self, request: Any) -> Any:
+            self.request = request
+            return MagicMock(content='{"type":"text_to_sql","sql":"SELECT 1"}')
+
+    gateway = FakeGateway()
+    settings = MagicMock(
+        IQD_NL2SQL_MODEL="",
+        IQD_NL2SQL_PROVIDER="",
+        IQD_NL2SQL_ENABLE_THINKING=False,
+        IQD_NL2SQL_TEMPERATURE=0.0,
+        IQD_NL2SQL_MAX_TOKENS=512,
+        IQD_NL2SQL_TIMEOUT_SECONDS=12,
+        LLM_PRIMARY_MODEL="qwen3.7-plus",
+    )
+
+    with patch("src.agent.mis_iqd.nl2sql.get_settings", return_value=settings):
+        gen = Nl2SqlGenerator(gateway=gateway)
+        await gen.generate(question="4月份各门店销售")
+
+    assert gateway.request.model == "qwen3.7-plus"
+
+
+@pytest.mark.asyncio
 async def test_build_nl2sql_context_injects_describe_columns() -> None:
     mock_client = AsyncMock(spec=IqdMcpClient)
     mock_client.list_models.return_value = {

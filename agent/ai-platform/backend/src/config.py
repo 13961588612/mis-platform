@@ -491,6 +491,16 @@ class Settings(BaseSettings):
     LLM_MAX_RETRIES: int = 3
     LLM_FAILOVER_AUTO_SWITCH: bool = True
 
+    # ===== IQD NL2SQL Dedicated Model =====
+    # 仅接管问数 SQL 生成：NL->SQL 与 cube 规格生成；不影响外层回答模型。
+    # 为空时回退 LLM_PRIMARY_MODEL，保持向后兼容。
+    IQD_NL2SQL_MODEL: str = ""
+    IQD_NL2SQL_PROVIDER: str = ""
+    IQD_NL2SQL_ENABLE_THINKING: bool = False
+    IQD_NL2SQL_TEMPERATURE: float = Field(default=0.0, ge=0.0, le=2.0)
+    IQD_NL2SQL_MAX_TOKENS: int = Field(default=1024, ge=1)
+    IQD_NL2SQL_TIMEOUT_SECONDS: int | None = Field(default=30, ge=0)
+
     # DeepSeek API
     DEEPSEEK_API_KEY: str = ""
     DEEPSEEK_API_ENDPOINT: str = "https://api.deepseek.com/v1"
