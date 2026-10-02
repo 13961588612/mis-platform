@@ -531,6 +531,107 @@ public class AgentOpsClient extends AgentOpsTransport {
     }
 
     // ==================================================================
+    // 企微用户身份绑定（wecom-user-binding-design.md §11）
+    //
+    // 路径同样**不带 /admin 段**：绑定路由挂在 ai-platform backend 的
+    // /api/v1/channels/wecom/users**（无 /admin），写错会把 404 伪装成
+    // 「未实现」（与 #48 历史 bug 同款）。
+    // ==================================================================
+
+    private static final String WECOM_USERS = "/api/v1/channels/wecom/users";
+
+    /** #59 {@code GET /api/v1/channels/wecom/users}。 */
+    public JsonNode listWecomBindings(Map<String, String> query) {
+        return getJson(builder -> AgentOpsUri.query(builder.path(WECOM_USERS), query).build(),
+                "GET " + WECOM_USERS);
+    }
+
+    /** #60 {@code POST /api/v1/channels/wecom/users/{corpId}/{wecomUserId}/bind}。 */
+    public JsonNode bindWecomUser(String corpId, String wecomUserId, Object body) {
+        return postJson(
+                builder -> builder.path(WECOM_USERS + "/{corpId}/{wecomUserId}/bind")
+                        .build(corpId, wecomUserId),
+                body,
+                "POST " + WECOM_USERS + "/{corpId}/{wecomUserId}/bind");
+    }
+
+    /** #61 {@code POST /api/v1/channels/wecom/users/{corpId}/{wecomUserId}/unbind}。 */
+    public JsonNode unbindWecomUser(String corpId, String wecomUserId) {
+        return postJson(
+                builder -> builder.path(WECOM_USERS + "/{corpId}/{wecomUserId}/unbind")
+                        .build(corpId, wecomUserId),
+                null,
+                "POST " + WECOM_USERS + "/{corpId}/{wecomUserId}/unbind");
+    }
+
+    /** #62 {@code POST /api/v1/channels/wecom/users/{corpId}/{wecomUserId}/verify}。 */
+    public JsonNode verifyWecomUser(String corpId, String wecomUserId) {
+        return postJson(
+                builder -> builder.path(WECOM_USERS + "/{corpId}/{wecomUserId}/verify")
+                        .build(corpId, wecomUserId),
+                null,
+                "POST " + WECOM_USERS + "/{corpId}/{wecomUserId}/verify");
+    }
+
+    /** #63 P5 同步回填 {@code POST /api/v1/channels/wecom/users/sync-backfill}。 */
+    public JsonNode syncBackfillWecomBindings(Map<String, String> query) {
+        return postJson(
+                builder -> AgentOpsUri.query(builder.path(WECOM_USERS + "/sync-backfill"), query)
+                        .build(),
+                null,
+                "POST " + WECOM_USERS + "/sync-backfill");
+    }
+
+    // ----- 企微企业配置（方案 B：#64–#70）-----
+
+    private static final String WECOM_CORPS = "/api/v1/channels/wecom/corps";
+
+    /** #64 {@code GET /api/v1/channels/wecom/corps}。 */
+    public JsonNode listWecomCorps() {
+        return getJson(builder -> builder.path(WECOM_CORPS).build(), "GET " + WECOM_CORPS);
+    }
+
+    /** #65 {@code POST /api/v1/channels/wecom/corps}。 */
+    public JsonNode createWecomCorp(Object body) {
+        return postJson(builder -> builder.path(WECOM_CORPS).build(), body, "POST " + WECOM_CORPS);
+    }
+
+    /** #66 {@code PUT /api/v1/channels/wecom/corps/{corpId}}。 */
+    public JsonNode updateWecomCorp(String corpId, Object body) {
+        return putJson(builder -> builder.path(WECOM_CORPS + "/{corpId}").build(corpId), body,
+                "PUT " + WECOM_CORPS + "/{corpId}");
+    }
+
+    /** #67 {@code DELETE /api/v1/channels/wecom/corps/{corpId}}。 */
+    public JsonNode deleteWecomCorp(String corpId, Map<String, String> query) {
+        return deleteJson(
+                builder -> AgentOpsUri.query(builder.path(WECOM_CORPS + "/{corpId}"), query)
+                        .build(corpId),
+                "DELETE " + WECOM_CORPS + "/{corpId}");
+    }
+
+    /** #68 {@code PUT /api/v1/channels/wecom/corps/{corpId}/secret}。 */
+    public JsonNode setWecomCorpSecret(String corpId, Object body) {
+        return putJson(
+                builder -> builder.path(WECOM_CORPS + "/{corpId}/secret").build(corpId), body,
+                "PUT " + WECOM_CORPS + "/{corpId}/secret");
+    }
+
+    /** #69 {@code DELETE /api/v1/channels/wecom/corps/{corpId}/secret}。 */
+    public JsonNode deleteWecomCorpSecret(String corpId) {
+        return deleteJson(
+                builder -> builder.path(WECOM_CORPS + "/{corpId}/secret").build(corpId),
+                "DELETE " + WECOM_CORPS + "/{corpId}/secret");
+    }
+
+    /** #70 {@code POST /api/v1/channels/wecom/corps/{corpId}/test}。 */
+    public JsonNode testWecomCorp(String corpId) {
+        return postJson(
+                builder -> builder.path(WECOM_CORPS + "/{corpId}/test").build(corpId), null,
+                "POST " + WECOM_CORPS + "/{corpId}/test");
+    }
+
+    // ==================================================================
     // 监控与审批 §4.3 #55–#58
     // ==================================================================
 

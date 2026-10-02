@@ -370,6 +370,8 @@ class WecomBotStore:
                 bot_secret_id=payload.bot_secret_id,
                 secret=payload.secret,
                 bound_agent_id=payload.bound_agent_id,
+                corp_id=getattr(payload, "corp_id", "") or "",
+                tenant_id=getattr(payload, "tenant_id", None),
                 created_at=now,
                 updated_at=now,
             )
@@ -419,6 +421,12 @@ class WecomBotStore:
                 record.secret = ""
             elif payload.secret:
                 record.secret = payload.secret
+
+            # 身份绑定扩展：corp_id / tenant_id 缺省 = 不修改。
+            if getattr(payload, "corp_id", None) is not None and payload.corp_id != "":
+                record.corp_id = payload.corp_id
+            if getattr(payload, "tenant_id", None) is not None:
+                record.tenant_id = payload.tenant_id
 
             if payload.bound_agent_id is not None:
                 # 显式传空串 = 解绑（前端 `bound_agent_id || undefined` 不会传空串，

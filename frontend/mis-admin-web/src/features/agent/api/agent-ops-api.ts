@@ -56,6 +56,14 @@ import type {
   SkillStats,
   WecomBot,
   WecomBotPayload,
+  WecomCorp,
+  WecomCorpPayload,
+  WecomCorpTestResult,
+  WecomCorpUpdatePayload,
+  WecomUserBindPayload,
+  WecomUserBinding,
+  WecomUserBindingPage,
+  WecomUserBindingQuery,
   WorkerCatalog,
   WorkerCatalogWorker,
 } from '../types';
@@ -784,6 +792,142 @@ export async function getWecomBotsHealth(): Promise<Record<string, WecomBot['hea
     '/agent-ops/channels/wecom/bots/health',
   );
   return unwrap(res, '获取企微机器人健康状态失败');
+}
+
+// ------------------------------------------------------------------ 企微用户身份绑定（§11 #59–#62）
+
+/** §11 #59 — agent:wecom:user:list */
+export async function listWecomBindings(
+  query: WecomUserBindingQuery = {},
+): Promise<WecomUserBindingPage> {
+  const res = await api.get<ApiResult<WecomUserBindingPage>>(
+    '/agent-ops/channels/wecom/users',
+    { params: cleanParams(query as Record<string, unknown>) },
+  );
+  const payload = unwrap(res, '获取企微用户绑定列表失败');
+  // 兼容「扁平数组」与「分页对象」两种下游形态。
+  if (Array.isArray(payload)) {
+    return { items: payload, total: payload.length, page: 1, page_size: payload.length };
+  }
+  return payload;
+}
+
+/** §11 #60 — agent:wecom:user:manage */
+export async function bindWecomUser(
+  corpId: string,
+  wecomUserId: string,
+  payload: WecomUserBindPayload,
+): Promise<WecomUserBinding> {
+  const res = await api.post<ApiResult<WecomUserBinding>>(
+    `/agent-ops/channels/wecom/users/${seg(corpId)}/${seg(wecomUserId)}/bind`,
+    payload,
+  );
+  return unwrap(res, '人工绑定企微用户失败');
+}
+
+/** §11 #61 — agent:wecom:user:manage */
+export async function unbindWecomUser(corpId: string, wecomUserId: string): Promise<void> {
+  const res = await api.post<ApiResult<unknown>>(
+    `/agent-ops/channels/wecom/users/${seg(corpId)}/${seg(wecomUserId)}/unbind`,
+  );
+  if (res.data.code !== 0) throw new Error(res.data.message || '解绑企微用户失败');
+}
+
+/** §11 #62 — agent:wecom:user:manage */
+export async function verifyWecomUser(
+  corpId: string,
+  wecomUserId: string,
+): Promise<WecomUserBinding> {
+  const res = await api.post<ApiResult<WecomUserBinding>>(
+    `/agent-ops/channels/wecom/users/${seg(corpId)}/${seg(wecomUserId)}/verify`,
+  );
+  return unwrap(res, '校验企微用户绑定失败');
+}
+
+
+/** §11 #63 — agent:wecom:user:manage。P5 同步回填（按通讯录批量发现未绑定用户）。 */
+export interface WecomBackfillCorpReport {
+  corp_id: string;
+  entries: number;
+  bound: number;
+  skipped: number;
+  conflict: number;
+  unmatched: number;
+}
+
+export interface WecomBackfillResult {
+  corps: WecomBackfillCorpReport[];
+}
+
+/** §11 #63 — 触发一次同步回填；`corpId` 缺省时处理全部已配置 corp。 */
+export async function syncBackfillWecomBindings(corpId?: string): Promise<WecomBackfillResult> {
+  const res = await api.post<ApiResult<WecomBackfillResult>>(
+    '/agent-ops/channels/wecom/users/sync-backfill',
+    undefined,
+    { params: cleanParams({ corp_id: corpId }) },
+  );
+  return unwrap(res, '同步回填企微绑定失败');
+}
+
+// ------------------------------------------------------------------ 企微企业配置（方案 B §64–#70）
+
+/** §64 — agent:wecom:manage */
+export async function listWecomCorps(): Promise<WecomCorp[]> {
+  const res = await api.get<ApiResult<WecomCorp[]>>('/agent-ops/channels/wecom/corps');
+  const payload = unwrap(res, '获取企微企业列表失败');
+  return Array.isArray(payload) ? payload : [];
+}
+
+/** §65 — agent:wecom:manage */
+export async function createWecomCorp(payload: WecomCorpPayload): Promise<WecomCorp> {
+  const res = await api.post<ApiResult<WecomCorp>>('/agent-ops/channels/wecom/corps', payload);
+  return unwrap(res, '新增企微企业失败');
+}
+
+/** §66 — agent:wecom:manage */
+export async function updateWecomCorp(
+  corpId: string,
+  payload: WecomCorpUpdatePayload,
+): Promise<WecomCorp> {
+  const res = await api.put<ApiResult<WecomCorp>>(
+    `/agent-ops/channels/wecom/corps/${seg(corpId)}`,
+    payload,
+  );
+  return unwrap(res, '更新企微企业失败');
+}
+
+/** §67 — agent:wecom:manage。deleteSecret=true 时一并清理密钥。 */
+export async function deleteWecomCorp(corpId: string, deleteSecret = false): Promise<void> {
+  const res = await api.delete<ApiResult<unknown>>(
+    `/agent-ops/channels/wecom/corps/${seg(corpId)}`,
+    { params: cleanParams({ delete_secret: deleteSecret ? 'true' : undefined }) },
+  );
+  if (res.data.code !== 0) throw new Error(res.data.message || '删除企微企业失败');
+}
+
+/** §68 — agent:wecom:manage。corpsecret 只写不读。 */
+export async function setWecomCorpSecret(corpId: string, corpsecret: string): Promise<void> {
+  const res = await api.put<ApiResult<unknown>>(
+    `/agent-ops/channels/wecom/corps/${seg(corpId)}/secret`,
+    { corpsecret },
+  );
+  if (res.data.code !== 0) throw new Error(res.data.message || '配置企业密钥失败');
+}
+
+/** §69 — agent:wecom:manage */
+export async function deleteWecomCorpSecret(corpId: string): Promise<void> {
+  const res = await api.delete<ApiResult<unknown>>(
+    `/agent-ops/channels/wecom/corps/${seg(corpId)}/secret`,
+  );
+  if (res.data.code !== 0) throw new Error(res.data.message || '删除企业密钥失败');
+}
+
+/** §70 — agent:wecom:manage */
+export async function testWecomCorp(corpId: string): Promise<WecomCorpTestResult> {
+  const res = await api.post<ApiResult<WecomCorpTestResult>>(
+    `/agent-ops/channels/wecom/corps/${seg(corpId)}/test`,
+  );
+  return unwrap(res, '企业连通性测试失败');
 }
 
 // ------------------------------------------------------------------ 监控 / 审批（§4.3 #55–#58）

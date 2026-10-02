@@ -847,6 +847,10 @@ export interface WecomBot {
   secret_masked: string;
   bound_agent_id?: string;
   health: 'connected' | 'disconnected' | 'unknown';
+  /** 企微企业 ID（身份绑定的 corp 维度）；未配置时不返回。 */
+  corp_id?: string;
+  /** 对应 MIS 租户 ID；未配置时不返回。 */
+  tenant_id?: number;
 }
 
 export interface WecomBotPayload {
@@ -855,6 +859,91 @@ export interface WecomBotPayload {
   /** 留空表示不修改既有 secret（新建时必填）。 */
   secret?: string;
   bound_agent_id?: string;
+  /** 企微企业 ID（用于「企微 userid → MIS 用户」身份绑定）。 */
+  corp_id?: string;
+  /** 对应 MIS 租户 ID。 */
+  tenant_id?: number;
+}
+// ------------------------------------------------------------------ 企微企业配置（方案 B §64–#70）
+
+/** 密钥引用类型：vault（Vault）/ env（环境变量）/ inline（明文）/ global（回退全局）。 */
+export type WecomCorpSecretRefKind = 'vault' | 'env' | 'inline' | 'global';
+
+/** 一条企微企业配置（corpsecret 不回明文，只有配置状态）。 */
+export interface WecomCorp {
+  corp_id: string;
+  tenant_id: number;
+  name: string;
+  secret_ref: string;
+  secret_ref_kind: WecomCorpSecretRefKind;
+  secret_configured: boolean;
+  user_bind_mode: 'auto_phone' | 'manual_only' | 'disabled';
+}
+
+export interface WecomCorpPayload {
+  corp_id: string;
+  tenant_id: number;
+  name?: string;
+  user_bind_mode?: 'auto_phone' | 'manual_only' | 'disabled';
+}
+
+export interface WecomCorpUpdatePayload {
+  tenant_id?: number;
+  name?: string;
+  user_bind_mode?: 'auto_phone' | 'manual_only' | 'disabled';
+}
+
+export interface WecomCorpTestResult {
+  corp_id: string;
+  ok: boolean;
+}
+
+// ------------------------------------------------------------------ 企微用户身份绑定（§11 #59–#62）
+
+/** 绑定来源：人工绑定 / 首次手机号自动匹配 / 组织架构同步回填。 */
+export type WecomBindSource = 'manual' | 'auto_phone' | 'sync';
+
+/** 绑定状态：生效 / 已停用（不自动重生）。 */
+export type WecomBindStatus = 'active' | 'disabled';
+
+/** 一条企微身份绑定记录（手机号只回掩码，明文永不返回）。 */
+export interface WecomUserBinding {
+  id: string;
+  corp_id: string;
+  wecom_user_id: string;
+  tenant_id: number;
+  mis_user_id: number;
+  bind_source: WecomBindSource;
+  status: WecomBindStatus;
+  phone_masked: string | null;
+  last_verified_at: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+/** #59 绑定列表响应。 */
+export interface WecomUserBindingPage {
+  items: WecomUserBinding[];
+  total: number;
+  page: number;
+  page_size: number;
+}
+
+/** #59 绑定列表查询参数。 */
+export interface WecomUserBindingQuery {
+  corp_id?: string;
+  tenant_id?: number | string;
+  status?: string;
+  keyword?: string;
+  page?: number;
+  page_size?: number;
+}
+
+/** #60 人工绑定请求体。 */
+export interface WecomUserBindPayload {
+  tenant_id: number;
+  mis_user_id: number;
+  phone?: string;
 }
 
 // ------------------------------------------------------------------ 监控 / 审批

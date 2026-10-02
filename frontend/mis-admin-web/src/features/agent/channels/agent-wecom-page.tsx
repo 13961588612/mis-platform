@@ -32,10 +32,13 @@ import { SortIndicator } from '@/components/common/sort-indicator';
 import { useClientSort } from '@/components/common/use-client-sort';
 import { useColumnWidths, type ResizableColumn } from '@/components/common/use-column-widths';
 import { RESET_COL_WIDTH_OVERLAY_CLASS, ResetColWidthButton } from '@/components/common/header-action-buttons';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { AgentPageShell, AgentContentState } from '../components/agent-page-shell';
 import { AgentConfirmDialog } from '../components/agent-confirm-dialog';
 import { AgentStatusBadge } from '../components/agent-status-badge';
 import { AgentWecomBotDialog } from './agent-wecom-bot-dialog';
+import { AgentWecomBindingPanel } from './agent-wecom-binding-panel';
+import { AgentWecomCorpPanel } from './agent-wecom-corp-panel';
 import {
   deleteWecomBot,
   disableWecomBot,
@@ -249,6 +252,13 @@ export function AgentWecomPage() {
       */
       loading={loading && bots.length === 0 && error === null}
     >
+      <Tabs defaultValue="bots" className="flex min-h-0 flex-1 flex-col">
+        <TabsList className="w-fit shrink-0">
+          <TabsTrigger value="bots">机器人接入</TabsTrigger>
+          <TabsTrigger value="bindings">用户绑定</TabsTrigger>
+          <TabsTrigger value="corps">企业配置</TabsTrigger>
+        </TabsList>
+        <TabsContent value="bots" className="flex min-h-0 flex-1 flex-col overflow-hidden">
       <div className="flex min-h-0 flex-1 flex-col gap-3">
         {/* ---------------- 常驻策略提示：配置已热生效（O1f-2） ---------------- */}
         <div className="flex gap-2 rounded-md border border-warning/30 bg-warning/5 p-3 text-xs text-muted-foreground">
@@ -476,6 +486,14 @@ export function AgentWecomPage() {
           </AgentContentState>
         </div>
       </div>
+        </TabsContent>
+        <TabsContent value="bindings" className="flex min-h-0 flex-1 flex-col overflow-hidden">
+          <AgentWecomBindingPanel />
+        </TabsContent>
+        <TabsContent value="corps" className="flex min-h-0 flex-1 flex-col overflow-hidden">
+          <AgentWecomCorpPanel />
+        </TabsContent>
+      </Tabs>
 
       <AgentWecomBotDialog
         open={formOpen}

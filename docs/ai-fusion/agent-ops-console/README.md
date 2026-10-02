@@ -13,6 +13,7 @@
 | 3 | [architecture.md](architecture.md) | host App + BFF + ai-platform |
 | 4 | [adr.md](adr.md) | 决策：host App 优先；运行时不搬 Java |
 | 5 | [spec.md](spec.md) | 路由、BFF API、权限码、分期 |
+| 6 | [wecom-user-binding-design.md](wecom-user-binding-design.md) | **企微 Bot 身份绑定**：BotID/Secret、通讯录应用凭证、wecom_user_id→mis_user_id |
 
 ## 一句话结论
 
@@ -40,5 +41,6 @@
 | BFF | `backend/mis-admin-bff/...` AgentOps Facade / WebClient（待建） |
 | 运行时 | `agent/ai-platform/backend`、`gateway`、`configs/` |
 | 种子 | `mis-migrator`：`sys_app`/`sys_menu`/权限（待建） |
+| 企微身份绑定 | [wecom-user-binding-design.md](wecom-user-binding-design.md) |
 | C–W | [`../coordinator-worker/`](../coordinator-worker/README.md) |
 | 融合总览 | [`../README.md`](../README.md) |

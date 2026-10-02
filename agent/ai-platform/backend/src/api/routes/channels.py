@@ -40,10 +40,19 @@ from typing import Any
 import hmac
 from fastapi import APIRouter, Depends, Header, Path as PathParam, Query, status
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel, Field
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.api.deps import get_current_user
 from src.api.response import error_response, success
 from src.channels.models import WecomBotCreateRequest, WecomBotRecord, WecomBotUpdateRequest
+from src.channels.wecom_binding_service import WecomUserBindingService
+from src.channels.wecom_corp_secret_service import WecomCorpSecretService
+from src.channels.wecom_corp_store import (
+    WecomCorpCreateRequest,
+    WecomCorpUpdateRequest,
+    get_wecom_corp_store,
+)
 from src.channels.wecom_bot_store import (
     WecomBotConflictError,
     WecomBotNotFoundError,
@@ -51,6 +60,7 @@ from src.channels.wecom_bot_store import (
     get_wecom_bot_store,
 )
 from src.config import get_settings
+from src.db.session import get_db_session
 from src.utils.exceptions import AIPlatformError
 from src.utils.logging import get_logger
 
@@ -170,6 +180,8 @@ async def list_wecom_bots_runtime(
             "bot_secret_id": r.bot_secret_id,
             "secret": r.secret,
             "bound_agent_id": r.bound_agent_id,
+            "corp_id": r.corp_id,
+            "tenant_id": r.tenant_id,
         }
         for r in records
     ]
@@ -458,3 +470,377 @@ async def get_wecom_bot(
     except Exception as exc:  # noqa: BLE001
         logger.error("Failed to get wecom bot", bot_id=bot_id, error=str(exc))
         return _store_error_to_response(exc)
+# ===========================================================================
+# 企微用户身份绑定（wecom-user-binding-design.md §11）—— 运营台子页
+#
+# endpoints:
+#   59 GET    /channels/wecom/users                              agent:wecom:user:list
+#   60 POST   /channels/wecom/users/{corp_id}/{wecom_user_id}/bind    agent:wecom:user:manage
+#   61 POST   /channels/wecom/users/{corp_id}/{wecom_user_id}/unbind  agent:wecom:user:manage
+#   62 POST   /channels/wecom/users/{corp_id}/{wecom_user_id}/verify  agent:wecom:user:manage
+#
+# 说明：BFF 侧路径是 /api/v1/agent-ops/channels/wecom/users**，透明透传到本文件
+# （不加 /admin 段，与 #48–#54 同款）。绑定事实落 ai_platform 库的
+# wecom_identity_bindings 表；解绑 = 置 disabled（保留审计），不物理删除。
+# ===========================================================================
+
+
+def _binding_error_to_response(exc: Exception) -> JSONResponse:
+    """把绑定域异常映射为响应信封（统一 500，交由前端提示）。"""
+    logger.error("WeCom binding operation failed", error=str(exc))
+    return error_response(9000, str(exc), status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@router.get("/wecom/users")
+async def list_wecom_bindings(
+    corp_id: str | None = Query(default=None, description="按 corp 过滤"),
+    tenant_id: int | None = Query(default=None, description="按租户过滤"),
+    status_filter: str | None = Query(
+        default=None, alias="status", description="active / disabled"
+    ),
+    keyword: str | None = Query(default=None, description="userid 或 mis_user_id 模糊匹配"),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=50, ge=1, le=200),
+    db: AsyncSession = Depends(get_db_session),
+    user: dict[str, Any] = Depends(get_current_user),
+) -> dict[str, Any]:
+    """#59 绑定列表（运营台「企微用户绑定」子页）。
+
+    Returns:
+        ``{code:0, data:{items:[...], total, page, page_size}}``，每项含
+        ``corp_id / wecom_user_id / tenant_id / mis_user_id / bind_source /
+        status / phone_masked / last_verified_at``（**不含明文手机号**）。
+    """
+    try:
+        rows, total = await WecomUserBindingService().list_bindings(
+            db,
+            corp_id=(corp_id or "").strip(),
+            tenant_id=tenant_id,
+            status=(status_filter or "").strip(),
+            keyword=(keyword or "").strip(),
+            limit=page_size,
+            offset=(page - 1) * page_size,
+        )
+        return success(
+            data={
+                "items": [r.to_dict() for r in rows],
+                "total": total,
+                "page": page,
+                "page_size": page_size,
+            }
+        )
+    except Exception as exc:  # noqa: BLE001
+        return _binding_error_to_response(exc)
+
+
+class WecomBindingBindRequest(BaseModel):
+    """#60 人工绑定请求体。"""
+
+    tenant_id: int = Field(..., description="MIS 租户 ID")
+    mis_user_id: int = Field(..., description="MIS 用户 ID（权限主体）")
+    phone: str = Field(default="", max_length=32, description="手机号（可选，仅存哈希）")
+
+
+@router.post("/wecom/users/{corp_id}/{wecom_user_id}/bind")
+async def bind_wecom_user(
+    req: WecomBindingBindRequest,
+    corp_id: str = PathParam(..., description="企微企业 ID"),
+    wecom_user_id: str = PathParam(..., description="企微成员 userid"),
+    db: AsyncSession = Depends(get_db_session),
+    user: dict[str, Any] = Depends(get_current_user),
+) -> dict[str, Any]:
+    """#60 人工绑定：创建或覆盖为 ``manual`` 来源（优先级最高）。"""
+    try:
+        binding = await WecomUserBindingService().manual_bind(
+            db,
+            corp_id=corp_id.strip(),
+            wecom_user_id=wecom_user_id.strip(),
+            tenant_id=int(req.tenant_id),
+            mis_user_id=int(req.mis_user_id),
+            phone=(req.phone or "").strip(),
+        )
+        logger.info(
+            "WeCom identity manually bound",
+            corp_id=corp_id,
+            wecom_user_id=wecom_user_id,
+            mis_user_id=req.mis_user_id,
+            operator=user.get("user_id", ""),
+        )
+        return success(data=binding.to_dict(), message="WeCom user bound")
+    except Exception as exc:  # noqa: BLE001
+        return _binding_error_to_response(exc)
+
+
+@router.post("/wecom/users/{corp_id}/{wecom_user_id}/unbind")
+async def unbind_wecom_user(
+    corp_id: str = PathParam(..., description="企微企业 ID"),
+    wecom_user_id: str = PathParam(..., description="企微成员 userid"),
+    db: AsyncSession = Depends(get_db_session),
+    user: dict[str, Any] = Depends(get_current_user),
+) -> dict[str, Any]:
+    """#61 解绑：置 ``disabled``（保留审计），后续不做自动重生。"""
+    try:
+        ok = await WecomUserBindingService().unbind(
+            db, corp_id=corp_id.strip(), wecom_user_id=wecom_user_id.strip()
+        )
+        logger.info(
+            "WeCom identity unbound",
+            corp_id=corp_id,
+            wecom_user_id=wecom_user_id,
+            found=ok,
+            operator=user.get("user_id", ""),
+        )
+        return success(
+            data={"corp_id": corp_id, "wecom_user_id": wecom_user_id, "unbound": ok},
+            message="WeCom user unbound" if ok else "WeCom binding not found (idempotent)",
+        )
+    except Exception as exc:  # noqa: BLE001
+        return _binding_error_to_response(exc)
+
+
+@router.post("/wecom/users/{corp_id}/{wecom_user_id}/verify")
+async def verify_wecom_user(
+    corp_id: str = PathParam(..., description="企微企业 ID"),
+    wecom_user_id: str = PathParam(..., description="企微成员 userid"),
+    db: AsyncSession = Depends(get_db_session),
+    user: dict[str, Any] = Depends(get_current_user),
+) -> dict[str, Any]:
+    """#62 校验：刷新 ``last_verified_at``（人工确认绑定仍有效）。"""
+    try:
+        binding = await WecomUserBindingService().verify(
+            db, corp_id=corp_id.strip(), wecom_user_id=wecom_user_id.strip()
+        )
+        if binding is None:
+            return error_response(4040, "绑定不存在", status.HTTP_404_NOT_FOUND)
+        return success(data=binding.to_dict(), message="WeCom binding verified")
+    except Exception as exc:  # noqa: BLE001
+        return _binding_error_to_response(exc)
+@router.post("/wecom/users/sync-backfill")
+async def sync_backfill_wecom_bindings(
+    corp_id: str | None = Query(default=None, description="限定单个 corp；缺省=全部已配置 corp"),
+    db: AsyncSession = Depends(get_db_session),
+    user: dict[str, Any] = Depends(get_current_user),
+) -> dict[str, Any]:
+    """#63 P5 同步回填：按通讯录批量发现未绑定用户并落 ``sync`` 绑定。
+
+    规则与首次入站自动绑定完全一致：**只对未绑定用户、手机号 exact-one**
+    才写绑定；绝不覆盖 ``manual`` / ``disabled``，也不为 0 个 / 多个命中建立绑定。
+
+    Returns:
+        ``{code:0, data:{corps:[{corp_id, entries, bound, skipped, conflict, unmatched}]}}``。
+    """
+    from src.channels.wecom_contacts_client import WecomContactsClient
+    from src.channels.wecom_corp_store import get_wecom_corp_store
+
+    try:
+        corp_store = get_wecom_corp_store()
+        corp_filter = (corp_id or "").strip()
+        corps = [
+            c
+            for c in corp_store.list_corps()
+            if not corp_filter or c.corp_id == corp_filter
+        ]
+        contacts = WecomContactsClient()
+        service = WecomUserBindingService()
+        reports: list[dict[str, Any]] = []
+        for corp in corps:
+            entries = await contacts.list_all_users(corp.corp_id)
+            stats = await service.backfill_from_entries(
+                db,
+                corp_id=corp.corp_id,
+                tenant_id=corp.tenant_id,
+                entries=entries,
+            )
+            reports.append(
+                {
+                    "corp_id": corp.corp_id,
+                    "entries": len(entries),
+                    **stats,
+                }
+            )
+        logger.info(
+            "WeCom binding sync backfill completed",
+            corps=len(reports),
+            operator=user.get("user_id", ""),
+        )
+        return success(data={"corps": reports})
+    except Exception as exc:  # noqa: BLE001
+        return _binding_error_to_response(exc)
+# ===========================================================================
+# 企微企业配置（方案 B）—— 运营台管「企业清单 + 密钥」
+#
+#   #64 GET    /channels/wecom/corps                        agent:wecom:manage
+#   #65 POST   /channels/wecom/corps                        agent:wecom:manage
+#   #66 PUT    /channels/wecom/corps/{corp_id}              agent:wecom:manage
+#   #67 DELETE /channels/wecom/corps/{corp_id}              agent:wecom:manage
+#   #68 PUT    /channels/wecom/corps/{corp_id}/secret       agent:wecom:manage
+#   #69 DELETE /channels/wecom/corps/{corp_id}/secret       agent:wecom:manage
+#   #70 POST   /channels/wecom/corps/{corp_id}/test         agent:wecom:manage
+#
+# 企业清单落 configs/channels/wecom-corps.yaml（corp_id/tenant_id/绑定模式）；
+# corpsecret 加密落 ai_platform.credential_mappings，YAML 只存 secret:// 引用。
+# 明文 corpsecret 永不回传、永不入日志。
+# ===========================================================================
+
+
+class WecomCorpSecretRequest(BaseModel):
+    """#68 写入 corpsecret 请求体。"""
+
+    corpsecret: str = Field(..., min_length=1, max_length=512, description="企微应用 corpsecret")
+
+
+@router.get("/wecom/corps")
+async def list_wecom_corps(
+    user: dict[str, Any] = Depends(get_current_user),
+) -> dict[str, Any]:
+    """#64 列出全部企业配置（含密钥配置状态，不含明文）。"""
+    try:
+        store = get_wecom_corp_store()
+        records = store.list_corps()
+        flags = await WecomCorpSecretService().configured_map([r.corp_id for r in records])
+        return success(data=store.list_wire(secret_configured=flags))
+    except Exception as exc:  # noqa: BLE001
+        return _binding_error_to_response(exc)
+
+
+@router.post("/wecom/corps")
+async def create_wecom_corp(
+    req: WecomCorpCreateRequest,
+    user: dict[str, Any] = Depends(get_current_user),
+) -> dict[str, Any]:
+    """#65 新增企业条目（corpsecret 另经 #68 单独配置）。"""
+    try:
+        record = await get_wecom_corp_store().create(req)
+        logger.info(
+            "WeCom corp created", corp_id=record.corp_id, operator=user.get("user_id", "")
+        )
+        return success(
+            data={
+                "corp_id": record.corp_id,
+                "tenant_id": record.tenant_id,
+                "name": record.name,
+                "secret_ref": record.secret_ref,
+                "secret_ref_kind": "vault",
+                "secret_configured": False,
+                "user_bind_mode": record.user_bind_mode,
+            },
+            message="WeCom corp created",
+        )
+    except Exception as exc:  # noqa: BLE001
+        return _store_error_to_response(exc)
+
+
+@router.put("/wecom/corps/{corp_id}")
+async def update_wecom_corp(
+    req: WecomCorpUpdateRequest,
+    corp_id: str = PathParam(..., description="企微企业 ID"),
+    user: dict[str, Any] = Depends(get_current_user),
+) -> dict[str, Any]:
+    """#66 更新企业条目（tenant / name / 绑定模式；缺省字段不修改）。"""
+    try:
+        record = await get_wecom_corp_store().update(corp_id, req)
+        flags = await WecomCorpSecretService().configured_map([record.corp_id])
+        return success(
+            data={
+                "corp_id": record.corp_id,
+                "tenant_id": record.tenant_id,
+                "name": record.name,
+                "secret_ref": record.secret_ref,
+                "secret_configured": flags.get(record.corp_id, False),
+                "user_bind_mode": record.user_bind_mode,
+            },
+            message="WeCom corp updated",
+        )
+    except Exception as exc:  # noqa: BLE001
+        return _store_error_to_response(exc)
+
+
+@router.delete("/wecom/corps/{corp_id}")
+async def delete_wecom_corp(
+    corp_id: str = PathParam(..., description="企微企业 ID"),
+    delete_secret: bool = Query(default=False, description="同时删除已存的 corpsecret"),
+    user: dict[str, Any] = Depends(get_current_user),
+) -> dict[str, Any]:
+    """#67 删除企业条目（幂等）；``delete_secret=true`` 时一并清理密钥。"""
+    try:
+        deleted = await get_wecom_corp_store().delete(corp_id)
+        secret_deleted = False
+        if delete_secret:
+            secret_deleted = await WecomCorpSecretService().delete_secret(corp_id)
+        logger.info(
+            "WeCom corp deleted",
+            corp_id=corp_id,
+            deleted=deleted,
+            secret_deleted=secret_deleted,
+            operator=user.get("user_id", ""),
+        )
+        return success(
+            data={
+                "corp_id": corp_id,
+                "deleted": deleted,
+                "secret_deleted": secret_deleted,
+            },
+            message="WeCom corp deleted" if deleted else "WeCom corp not found (idempotent)",
+        )
+    except Exception as exc:  # noqa: BLE001
+        return _store_error_to_response(exc)
+
+
+@router.put("/wecom/corps/{corp_id}/secret")
+async def set_wecom_corp_secret(
+    req: WecomCorpSecretRequest,
+    corp_id: str = PathParam(..., description="企微企业 ID"),
+    user: dict[str, Any] = Depends(get_current_user),
+) -> dict[str, Any]:
+    """#68 写入 / 覆盖 corpsecret（明文只在请求体短暂存在，随即加密落库）。"""
+    try:
+        if get_wecom_corp_store().get(corp_id) is None:
+            return error_response(4040, "企业配置不存在", status.HTTP_404_NOT_FOUND)
+        await WecomCorpSecretService().set_secret(corp_id, req.corpsecret)
+        logger.info(
+            "WeCom corp secret updated", corp_id=corp_id, operator=user.get("user_id", "")
+        )
+        return success(
+            data={"corp_id": corp_id, "secret_configured": True},
+            message="WeCom corp secret stored",
+        )
+    except Exception as exc:  # noqa: BLE001
+        return _binding_error_to_response(exc)
+
+
+@router.delete("/wecom/corps/{corp_id}/secret")
+async def delete_wecom_corp_secret(
+    corp_id: str = PathParam(..., description="企微企业 ID"),
+    user: dict[str, Any] = Depends(get_current_user),
+) -> dict[str, Any]:
+    """#69 删除 corpsecret（软删除，企业条目保留）。"""
+    try:
+        deleted = await WecomCorpSecretService().delete_secret(corp_id)
+        return success(
+            data={"corp_id": corp_id, "secret_deleted": deleted},
+            message="WeCom corp secret deleted" if deleted else "secret not found (idempotent)",
+        )
+    except Exception as exc:  # noqa: BLE001
+        return _binding_error_to_response(exc)
+
+
+@router.post("/wecom/corps/{corp_id}/test")
+async def test_wecom_corp_connection(
+    corp_id: str = PathParam(..., description="企微企业 ID"),
+    user: dict[str, Any] = Depends(get_current_user),
+) -> dict[str, Any]:
+    """#70 连通性测试：用该 corp 的 corpsecret 换一次 access_token。"""
+    try:
+        record = get_wecom_corp_store().get(corp_id)
+        if record is None:
+            return error_response(4040, "企业配置不存在", status.HTTP_404_NOT_FOUND)
+        from src.channels.wecom_contacts_client import WecomContactsClient
+
+        client = WecomContactsClient()
+        ok = await client.check_connection(corp_id)
+        return success(
+            data={"corp_id": corp_id, "ok": ok},
+            message="corp connection ok" if ok else "corp secret invalid or unreachable",
+        )
+    except Exception as exc:  # noqa: BLE001
+        return _binding_error_to_response(exc)

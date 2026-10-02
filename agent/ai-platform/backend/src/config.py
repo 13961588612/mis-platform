@@ -752,6 +752,12 @@ class Settings(BaseSettings):
     # ===== 企微多 Bot（T04 Q4 方案 A：配置文件持久化）=====
     #: 相对 CONFIG_BASE_PATH 的企微 Bot 清单文件路径。
     WECOM_BOT_CONFIG_FILE: str = "channels/wecom-bots.yaml"
+    #: Corp->tenant / 通讯录应用凭证配置文件（多 corp）。
+    WECOM_CORP_CONFIG_FILE: str = "channels/wecom-corps.yaml"
+    #: 企微用户身份绑定：手机号哈希用盐（不落明文手机号）。
+    WECOM_PHONE_HASH_SALT: str = "mis-wecom-phone-salt"
+    #: 企微身份绑定总开关（关闭则入站企微身份一律 fail-closed）。
+    WECOM_IDENTITY_BINDING_ENABLED: bool = True
     #: Gateway ⇄ backend 服务间共享令牌。
     #:
     #: Gateway 启动时需要拉取**含明文 secret** 的 Bot 运行时清单

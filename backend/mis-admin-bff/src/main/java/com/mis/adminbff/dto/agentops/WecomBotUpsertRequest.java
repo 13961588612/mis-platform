@@ -19,9 +19,11 @@ import jakarta.validation.constraints.Size;
  * 「同一字段在新建与编辑下必填性不同」是注解式校验表达不了的，必须落到代码里。
  *
  * @param name         显示名，必填
- * @param wsUrl        WebSocket 接入地址，必填
+ * @param wsUrl        WebSocket 接入地址；<b>可选</b>（官方 endpoint 固定，留空由下游取默认值）
  * @param secret       密钥；<b>留空表示不修改</b>，新建时由服务层校验必填
  * @param boundAgentId 绑定的 Agent，可空
+ * @param corpId       企微企业 ID（身份绑定的 corp 维度），可空
+ * @param tenantId     对应 MIS 租户 ID，可空
  */
 public record WecomBotUpsertRequest(
         @JsonProperty("name")
@@ -30,7 +32,6 @@ public record WecomBotUpsertRequest(
         String name,
 
         @JsonProperty("ws_url")
-        @NotBlank(message = "ws_url 不能为空")
         @Size(max = 512, message = "ws_url 长度不能超过 512")
         String wsUrl,
 
@@ -40,7 +41,14 @@ public record WecomBotUpsertRequest(
 
         @JsonProperty("bound_agent_id")
         @Size(max = 128, message = "bound_agent_id 长度不能超过 128")
-        String boundAgentId) {
+        String boundAgentId,
+
+        @JsonProperty("corp_id")
+        @Size(max = 64, message = "corp_id 长度不能超过 64")
+        String corpId,
+
+        @JsonProperty("tenant_id")
+        Integer tenantId) {
 
     /**
      * @return 用户是否在本次请求中提供了新密钥

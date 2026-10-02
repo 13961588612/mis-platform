@@ -95,6 +95,76 @@ public class WecomBotFacadeService {
         return client.wecomBotsHealth();
     }
 
+   // ------------------------------------------------------------------
+   // 内部：请求体组装 + 脱敏
+   // ------------------------------------------------------------------
+
+    // ==================================================================
+    // 企微用户身份绑定（§11）
+    // ==================================================================
+
+    /** #59 绑定列表（透传，不含明文手机号）。 */
+    public JsonNode listWecomBindings(Map<String, String> query) {
+        return client.listWecomBindings(query);
+    }
+
+    /** #60 人工绑定（透传）。 */
+    public JsonNode bindWecomUser(String corpId, String wecomUserId, Object body) {
+        return client.bindWecomUser(corpId, wecomUserId, body);
+    }
+
+    /** #61 解绑（透传）。 */
+    public JsonNode unbindWecomUser(String corpId, String wecomUserId) {
+        return client.unbindWecomUser(corpId, wecomUserId);
+    }
+
+    /** #62 校验（透传）。 */
+    public JsonNode verifyWecomUser(String corpId, String wecomUserId) {
+        return client.verifyWecomUser(corpId, wecomUserId);
+    }
+
+    /** #63 P5 同步回填（透传）。 */
+    public JsonNode syncBackfillWecomBindings(java.util.Map<String, String> query) {
+        return client.syncBackfillWecomBindings(query);
+    }
+
+    // ----- 企微企业配置（方案 B：#64–#70，全部透传；明文 corpsecret 只进不出）-----
+
+    /** #64 企业列表（含密钥配置状态，不含明文）。 */
+    public JsonNode listWecomCorps() {
+        return client.listWecomCorps();
+    }
+
+    /** #65 新增企业。 */
+    public JsonNode createWecomCorp(Object body) {
+        return client.createWecomCorp(body);
+    }
+
+    /** #66 更新企业。 */
+    public JsonNode updateWecomCorp(String corpId, Object body) {
+        return client.updateWecomCorp(corpId, body);
+    }
+
+    /** #67 删除企业（可选一并删密钥）。 */
+    public JsonNode deleteWecomCorp(String corpId, java.util.Map<String, String> query) {
+        return client.deleteWecomCorp(corpId, query);
+    }
+
+    /** #68 写入 / 覆盖 corpsecret。 */
+    public JsonNode setWecomCorpSecret(String corpId, Object body) {
+        return client.setWecomCorpSecret(corpId, body);
+    }
+
+    /** #69 删除 corpsecret。 */
+    public JsonNode deleteWecomCorpSecret(String corpId) {
+        return client.deleteWecomCorpSecret(corpId);
+    }
+
+    /** #70 连通性测试。 */
+    public JsonNode testWecomCorp(String corpId) {
+        return client.testWecomCorp(corpId);
+    }
+
     // ------------------------------------------------------------------
     // 内部：请求体组装 + 脱敏
     // ------------------------------------------------------------------
@@ -109,10 +179,20 @@ public class WecomBotFacadeService {
     private Map<String, Object> buildBody(WecomBotUpsertRequest request) {
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("name", request.name());
-        body.put("ws_url", request.wsUrl());
+        // ws_url 不再是运营输入项（官方 endpoint 固定）：留空时不下发，由下游取默认值。
+        if (request.wsUrl() != null && !request.wsUrl().isBlank()) {
+            body.put("ws_url", request.wsUrl());
+        }
         body.put("bound_agent_id", request.boundAgentId());
         if (request.hasSecret()) {
             body.put("secret", request.secret());
+        }
+        // 企微身份绑定：corp_id / tenant_id 仅在提供时下发（缺省 = 不修改）。
+        if (request.corpId() != null && !request.corpId().isBlank()) {
+            body.put("corp_id", request.corpId());
+        }
+        if (request.tenantId() != null) {
+            body.put("tenant_id", request.tenantId());
         }
         return body;
     }

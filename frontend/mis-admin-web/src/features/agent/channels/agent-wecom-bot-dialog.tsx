@@ -46,6 +46,8 @@ interface BotFormValues {
   bot_secret_id: string;
   secret: string;
   bound_agent_id: string;
+  corp_id: string;
+  tenant_id: string;
 }
 
 const EMPTY_FORM: BotFormValues = {
@@ -53,6 +55,8 @@ const EMPTY_FORM: BotFormValues = {
   bot_secret_id: '',
   secret: '',
   bound_agent_id: '',
+  corp_id: '',
+  tenant_id: '',
 };
 
 /**
@@ -76,6 +80,12 @@ function buildSchema(secretRequired: boolean) {
       ? z.string().trim().min(1, 'Secret 必填').max(200, 'Secret 不超过 200 字符')
       : z.string().trim().max(200, 'Secret 不超过 200 字符'),
     bound_agent_id: z.string().trim().max(128, 'Agent ID 不超过 128 字符'),
+    corp_id: z.string().trim().max(64, '企业 ID 不超过 64 字符'),
+    tenant_id: z
+      .string()
+      .trim()
+      .regex(/^\d*$/, '租户 ID 必须是整数')
+      .refine((v) => v === '' || Number(v) > 0, '租户 ID 必须为正整数'),
   });
 }
 
@@ -121,6 +131,8 @@ export function AgentWecomBotDialog({
             bot_secret_id: bot.bot_secret_id,
             secret: '',
             bound_agent_id: bot.bound_agent_id ?? '',
+            corp_id: bot.corp_id ?? '',
+            tenant_id: bot.tenant_id != null ? String(bot.tenant_id) : '',
           }
         : EMPTY_FORM,
     );
@@ -162,6 +174,9 @@ export function AgentWecomBotDialog({
     };
     // 空串绝不进 payload：后端把「字段缺席」判为不修改，把空串判为清空
     if (values.secret) payload.secret = values.secret;
+    // 企微企业 / 租户用于「企微 userid → MIS 用户」身份绑定；空串则不下发。
+    if (values.corp_id.trim()) payload.corp_id = values.corp_id.trim();
+    if (values.tenant_id.trim()) payload.tenant_id = Number(values.tenant_id.trim());
 
     setSaving(true);
     try {
@@ -259,6 +274,46 @@ export function AgentWecomBotDialog({
             {errors.secret ? (
               <p className="mt-1 text-xs text-destructive">{errors.secret}</p>
             ) : null}
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className={fieldLabel} htmlFor="wecom-corp-id">
+                企微企业 ID（corp_id）
+              </label>
+              <Input
+                id="wecom-corp-id"
+                value={form.corp_id}
+                autoComplete="off"
+                placeholder="ww-xxxxxxxxxxxx"
+                onChange={(e) => patch('corp_id', e.target.value)}
+              />
+              <p className="mt-[0.35rem] text-xs text-muted-foreground">
+                用于「企微 userid → MIS 用户」身份绑定；留空则该 Bot 走旧绑定路径。
+              </p>
+              {errors.corp_id ? (
+                <p className="mt-1 text-xs text-destructive">{errors.corp_id}</p>
+              ) : null}
+            </div>
+            <div>
+              <label className={fieldLabel} htmlFor="wecom-tenant-id">
+                对应 MIS 租户 ID
+              </label>
+              <Input
+                id="wecom-tenant-id"
+                value={form.tenant_id}
+                inputMode="numeric"
+                autoComplete="off"
+                placeholder="1"
+                onChange={(e) => patch('tenant_id', e.target.value)}
+              />
+              <p className="mt-[0.35rem] text-xs text-muted-foreground">
+                首次手机号自动绑定的租户边界；留空则由 corp 配置决定。
+              </p>
+              {errors.tenant_id ? (
+                <p className="mt-1 text-xs text-destructive">{errors.tenant_id}</p>
+              ) : null}
+            </div>
           </div>
 
           <div>

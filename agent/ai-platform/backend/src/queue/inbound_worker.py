@@ -123,6 +123,12 @@ async def _resolve_inbound_mis_user_id(
         from src.db.session import db_session_context
 
         async with db_session_context() as db:
+            # 企微 Bot：先走多 corp 身份绑定；命中即返回。
+            from src.channels.wecom_binding_hook import resolve_wecom_bot_binding
+
+            bound = await resolve_wecom_bot_binding(db, inbound)
+            if bound is not None:
+                return bound
             return await resolve_mis_user_id_async(identity, db=db)
     except Exception as exc:  # noqa: BLE001 - DB 不可用不得阻断入站消息处理
         logger.warning(

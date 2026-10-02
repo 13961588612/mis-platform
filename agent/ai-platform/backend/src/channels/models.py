@@ -92,6 +92,8 @@ class WecomBotRecord(BaseModel):
 
     bot_id: str = Field(..., description="平台内部唯一 ID（创建时后端生成，不可变更）")
     bot_secret_id: str = Field(..., description="企微官方 BotID（长连接鉴权）")
+    corp_id: str = Field(default="", description="企微企业 ID（用于身份绑定）")
+    tenant_id: int | None = Field(default=None, description="对应 MIS 租户 ID")
     name: str = Field(default="", description="展示名称")
     enabled: bool = Field(default=True, description="是否启用（Gateway 只拉取 enabled=true）")
     secret: str = Field(default="", description="明文 secret（仅落盘，不出响应）")
@@ -99,7 +101,7 @@ class WecomBotRecord(BaseModel):
     created_at: str = Field(default_factory=_utc_now_iso, description="创建时间 ISO-8601")
     updated_at: str = Field(default_factory=_utc_now_iso, description="更新时间 ISO-8601")
 
-    @field_validator("bot_id", "name", "bot_secret_id", "secret", "bound_agent_id", mode="before")
+    @field_validator("bot_id", "name", "bot_secret_id", "secret", "bound_agent_id", "corp_id", mode="before")
     @classmethod
     def _coerce_str(cls, value: Any) -> str:
         """把 ``None`` / 非字符串安全地折叠成字符串，避免 YAML 手改后炸掉。
@@ -148,6 +150,8 @@ class WecomBotRecord(BaseModel):
             "bot_secret_id": self.bot_secret_id,
             "secret": self.secret,
             "bound_agent_id": self.bound_agent_id,
+            "corp_id": self.corp_id,
+            "tenant_id": self.tenant_id,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
         }
@@ -174,6 +178,11 @@ class WecomBotRecord(BaseModel):
         # 与 dialog 里 `bound_agent_id || undefined` 的写法对称。
         if self.bound_agent_id:
             wire["bound_agent_id"] = self.bound_agent_id
+        # 身份绑定扩展（方案 §8.1）：仅在配置后下发，不破坏旧前端契约。
+        if self.corp_id:
+            wire["corp_id"] = self.corp_id
+        if self.tenant_id is not None:
+            wire["tenant_id"] = self.tenant_id
         return wire
 
 
@@ -202,8 +211,10 @@ class WecomBotCreateRequest(BaseModel):
     )
     secret: str = Field(default="", max_length=MAX_SECRET_LENGTH, description="明文 secret")
     bound_agent_id: str = Field(default="", description="绑定的 Agent ID，可留空")
+    corp_id: str = Field(default="", description="企微企业 ID（用于身份绑定）")
+    tenant_id: int | None = Field(default=None, description="对应 MIS 租户 ID")
 
-    @field_validator("name", "bot_secret_id", "secret", "bound_agent_id", mode="before")
+    @field_validator("name", "bot_secret_id", "secret", "bound_agent_id", "corp_id", mode="before")
     @classmethod
     def _strip(cls, value: Any) -> str:
         """去除首尾空白并把 ``None`` 折叠成空串。
@@ -235,9 +246,11 @@ class WecomBotUpdateRequest(BaseModel):
         default=None, max_length=MAX_SECRET_LENGTH, description="新 secret；留空/缺省 = 不修改"
     )
     bound_agent_id: str | None = Field(default=None, description="绑定的 Agent ID；空串 = 解绑")
+    corp_id: str | None = Field(default=None, description="企微企业 ID；缺省 = 不修改")
+    tenant_id: int | None = Field(default=None, description="对应 MIS 租户 ID；缺省 = 不修改")
     secret_clear: bool = Field(default=False, description="显式清空 secret")
 
-    @field_validator("name", "bot_secret_id", "secret", "bound_agent_id", mode="before")
+    @field_validator("name", "bot_secret_id", "secret", "bound_agent_id", "corp_id", mode="before")
     @classmethod
     def _strip_optional(cls, value: Any) -> str | None:
         """去除首尾空白，保留 ``None``（表示「字段缺省 / 不修改」）。

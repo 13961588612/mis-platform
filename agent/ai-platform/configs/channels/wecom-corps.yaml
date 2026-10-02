@@ -1,0 +1,40 @@
+# 企微通讯录应用配置（多 corp）—— `wecom-user-binding-design.md` §8.2
+#
+# 用途：机器人长连接只用 BotID + Secret；但「企微 userid → MIS userId」的手机号
+# 兜底绑定需要按 corp 维度的企微应用凭证读取通讯录成员手机号。
+#
+# 路径：{CONFIG_BASE_PATH}/channels/wecom-corps.yaml（默认 /app/configs/channels/）
+# 环境变量可覆盖：WECOM_CORP_CONFIG_FILE
+#
+# 字段说明：
+#   corp_id        企微企业 ID（与 wecom-bots.yaml 中 Bot 的 corp_id 对应）
+#   tenant_id      该企业对应的 MIS 租户 ID（手机号反查的隔离边界）
+#   name           展示名
+#   secret_ref     企微应用 / 通讯录同步 secret 引用：
+#                    ""（空）          -> 回退全局 WECOM_SECRET（单企业 MVP）
+#                    "env:MY_CORP_SECRET" -> 读环境变量 MY_CORP_SECRET
+#                    "secret://..."    -> 预留（由外部 Vault 注入，见 resolve_corp_secret）
+#                    "明文secret"      -> 直接使用（仅限受控部署环境）
+#   user_bind_mode 用户绑定模式：
+#                    auto_phone   首次无绑定时按手机号 exact-one 自动绑定（默认）
+#                    manual_only  只允许运营台人工绑定
+#                    disabled     该 corp 不参与绑定（入站 fail-closed）
+#
+# 安全：本文件含 corpsecret，务必限制文件权限（如 chmod 600）与访问范围。
+#
+# 示例：
+# version: 1
+# corps:
+#   - corp_id: ww-xxxxxxxxxxxxxxxx
+#     tenant_id: 1
+#     name: 集团总部
+#     secret_ref: env:WECOM_CORP_SECRET_HQ
+#     user_bind_mode: auto_phone
+#   - corp_id: ww-yyyyyyyyyyyyyyyy
+#     tenant_id: 1
+#     name: 华东子公司
+#     secret_ref: secret://wecom/corp/ww-yyyyyyyyyyyyyyyy
+#     user_bind_mode: manual_only
+
+version: 1
+corps: []
