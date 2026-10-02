@@ -116,6 +116,25 @@ class IqdMcpSettings(BaseSettings):
             "MCP_HEALTH_FAILURE_THRESHOLD", "WREN_MCP_HEALTH_FAILURE_THRESHOLD"
         ),
     )
+    wren_mcp_dryrun_restart_threshold: int = Field(
+        default=2,
+        description=(
+            "dry_run 连续返回基础设施错误（连接失效）多少次后自动重启该连接的 MCP 进程；"
+            "0 关闭看门狗。默认 2：单次失败可能只是抖动，连续两次即认定 wren 进程池"
+            "持有的 DB 连接已坏死（实测不会自愈），重启是唯一恢复手段。"
+        ),
+        validation_alias=_wren_env(
+            "MCP_DRYRUN_RESTART_THRESHOLD", "WREN_MCP_DRYRUN_RESTART_THRESHOLD"
+        ),
+    )
+    wren_mcp_dryrun_restart_cooldown_seconds: float = Field(
+        default=120.0,
+        description="两次自动重启之间的最小间隔（秒），防止重启风暴",
+        validation_alias=_wren_env(
+            "MCP_DRYRUN_RESTART_COOLDOWN_SECONDS", "WREN_MCP_DRYRUN_RESTART_COOLDOWN_SECONDS"
+        ),
+    )
+
     wren_mcp_start_timeout_seconds: float = Field(
         default=30.0,
         description="单进程拉起后等待 ready（target/mdl.json 可读 + HTTP health）的超时（秒）",

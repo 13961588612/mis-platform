@@ -34,11 +34,16 @@ from src.agent.mis_iqd.errors import (
     WrenaiUnreachableError,
 )
 from src.agent.mis_iqd.lineage import CitationBuilder, LineageExtractor
+from src.agent.mis_iqd.mcp_watchdog import McpConnectionWatchdog
 from src.agent.mis_iqd.masking import MaskingEngine, MaskOutcome
 from src.agent.mis_iqd.nl2sql import CubeQuerySpec, Nl2SqlGenerator, Nl2SqlResult
 from src.agent.mis_iqd.plan_mapper import PlanMapper
 from src.agent.mis_iqd.rules_context import RuleContext
 from src.agent.mis_iqd.sql_guard import SqlGuard
+from src.agent.mis_iqd.sql_errors import (
+    is_infra_error as _is_infra_error_text,
+    is_repairable_sql_error as _is_repairable_sql_error_text,
+)
 from src.agent.mis_iqd.scope_resolver import (
     AskIdentity,
     IqdScopeResolution,
@@ -60,28 +65,30 @@ from src.utils.logging import get_logger
 
 logger = get_logger("agent.mis_iqd.orchestrator")
 
-#: dry_run / 引擎报「列不存在」或可修复的方言错误时，触发一次 NL→SQL 重生成
-_COLUMN_ERROR_RE = re.compile(
-    r"(column\s+'[^']+'\s+cannot\s+be\s+resolved)"
-    r"|(unknown\s+column)"
-    r"|(no\s+such\s+column)"
-    r"|(field\s+not\s+found)"
-    r"|(无法识别\s*'[^']+'\s*列)"
-    r"|('\w+'\s+is\s+not\s+a\s+valid)",
-    re.IGNORECASE,
-)
+def _build_default_watchdog() -> McpConnectionWatchdog | None:
+    """按配置构造默认连接看门狗（阈值 <= 0 时返回 ``None`` 表示停用）。
 
-#: DataFusion 不支持的 PG 方言 / 类型错误（可修一次）
-_DIALECT_ERROR_RE = re.compile(
-    r"(date_trunc)"
-    r"|(date_part)"
-    r"|(GENERIC_USER_ERROR)"
-    r"|(unsupported\s+function)"
-    r"|(not\s+implemented)"
-    r"|(type\s+mismatch)"
-    r"|(cannot\s+cast)",
-    re.IGNORECASE,
-)
+    重启回调委托给 :class:`~src.agent.mis_iqd.mcp_lifecycle.IqdMcpLifecycleService`
+    （跨机器走 agent ``/restart``，本地走进程管理器），与运营台「重启 MCP」同一路径。
+    """
+    from src.config import get_settings
+
+    wren = get_settings().iqd_mcp
+    threshold = int(getattr(wren, "wren_mcp_dryrun_restart_threshold", 0) or 0)
+    if threshold <= 0:
+        return None
+    cooldown = float(
+        getattr(wren, "wren_mcp_dryrun_restart_cooldown_seconds", 120.0) or 0.0
+    )
+
+    async def _restart(connection_id: int | str) -> object:
+        from src.agent.mis_iqd.mcp_lifecycle import IqdMcpLifecycleService
+
+        return await IqdMcpLifecycleService().restart_connection(int(connection_id))
+
+    return McpConnectionWatchdog(
+        threshold=threshold, cooldown_seconds=cooldown, restart=_restart
+    )
 
 
 @dataclass
@@ -122,6 +129,7 @@ class AskOrchestrator:
         plan_mapper: PlanMapper | None = None,
         citation_builder: CitationBuilder | None = None,
         masking_engine: MaskingEngine | None = None,
+        mcp_watchdog: "McpConnectionWatchdog | None" = None,
     ) -> None:
         """初始化编排器（全部依赖可注入）。"""
         self._mcp_client: IqdMcpClient | None = mcp_client
@@ -134,6 +142,9 @@ class AskOrchestrator:
         self._plan_mapper: PlanMapper = plan_mapper or PlanMapper()
         self._citation_builder: CitationBuilder = citation_builder or CitationBuilder()
         self._masking_engine: MaskingEngine = masking_engine or MaskingEngine()
+        self._mcp_watchdog: McpConnectionWatchdog | None = (
+            mcp_watchdog if mcp_watchdog is not None else _build_default_watchdog()
+        )
 
     # ================================================================ 主入口
 
@@ -360,19 +371,36 @@ class AskOrchestrator:
         plan.mark(steps, "executing", "running")
         try:
             await mcp.dry_run(final_sql)
+            self._watchdog_success(resolution.connection_id)
         except Exception as exc:
+            await self._watchdog_failure(resolution.connection_id, exc)
             if not self._is_repairable_sql_error(exc):
-                plan.mark(steps, "executing", "failed", detail="SQL 预检失败")
+                # 基础设施 / 连接类错误 vs 真正的 SQL 语法/列错误，分开定性与定码：
+                #   基础设施 → 45202「服务暂不可用，稍后重试」（不该暗示用户换说法）
+                #   其它     → 45205「未能生成有效查询」
+                infra = self._is_infra_error(exc)
+                if infra:
+                    plan.mark(
+                        steps, "executing", "failed",
+                        detail=f"SQL 预检失败：底层数据源连接中断（{exc}）",
+                    )
+                else:
+                    plan.mark(steps, "executing", "failed", detail="SQL 预检失败")
                 return self._failed_ask_result(
                     query_id=query_id,
                     request=request,
                     resolution=resolution,
                     steps=steps,
                     started_at=started_at,
-                    message=f"未能生成有效查询: {exc}",
+                    message=(
+                        f"问数服务暂不可用（数据源连接异常）: {exc}"
+                        if infra
+                        else f"未能生成有效查询: {exc}"
+                    ),
                     nl2sql_attempts=nl2sql_attempts,
                     sql=final_sql,
                     inject_outcome=inject_outcome,
+                    error_code="45202" if infra else "45205",
                     context_text=context_text,
                 )
             logger.warning(
@@ -445,7 +473,10 @@ class AskOrchestrator:
             )
             try:
                 await mcp.dry_run(final_sql)
+                self._watchdog_success(resolution.connection_id)
             except Exception as retry_exc:
+                await self._watchdog_failure(resolution.connection_id, retry_exc)
+                retry_infra = self._is_infra_error(retry_exc)
                 plan.mark(steps, "executing", "failed", detail="SQL 预检失败（重试后）")
                 return self._failed_ask_result(
                     query_id=query_id,
@@ -453,10 +484,15 @@ class AskOrchestrator:
                     resolution=resolution,
                     steps=steps,
                     started_at=started_at,
-                    message=f"未能生成有效查询: {retry_exc}",
+                    message=(
+                        f"问数服务暂不可用（数据源连接异常）: {retry_exc}"
+                        if retry_infra
+                        else f"未能生成有效查询: {retry_exc}"
+                    ),
                     nl2sql_attempts=nl2sql_attempts,
                     sql=final_sql,
                     inject_outcome=inject_outcome,
+                    error_code="45202" if retry_infra else "45205",
                     context_text=context_text,
                 )
             plan.mark_done(
@@ -1163,13 +1199,18 @@ class AskOrchestrator:
 
     @staticmethod
     def _is_repairable_sql_error(exc: BaseException) -> bool:
-        """列错误或 DataFusion 方言错误 → 允许带 repair_hint 重生成一次。"""
-        text = str(exc) or ""
-        for attr in ("payload", "body", "detail"):
-            extra = getattr(exc, attr, None)
-            if extra is not None:
-                text = f"{text} {extra}"
-        return bool(_COLUMN_ERROR_RE.search(text) or _DIALECT_ERROR_RE.search(text))
+        """列错误或 DataFusion 方言错误 → 允许带 repair_hint 重生成一次。
+
+        <b>先判基础设施错误</b>：连接中断 / 超时 / wren 预检通用错误等**绝不可修复**，
+        重生成 SQL 只会白烧一次 LLM 调用（故障期实测多耗 3~5s，且必然再次失败）。
+        判定逻辑收敛在 :mod:`src.agent.mis_iqd.sql_errors`（与看门狗共用，避免循环导入）。
+        """
+        return _is_repairable_sql_error_text(exc)
+
+    @staticmethod
+    def _is_infra_error(exc: BaseException) -> bool:
+        """是否基础设施 / 连接类错误（据此把错误码归到 45202 而非 45205）。"""
+        return _is_infra_error_text(exc)
 
     def _get_nl2sql(self, *, prefer_mock: bool = False) -> Nl2SqlGenerator:
         """懒加载 NL→SQL 生成器；MCP mock 时默认走 mock 生成，避免离线无 Key 断链。"""
@@ -1338,6 +1379,32 @@ class AskOrchestrator:
         if self._scope_resolver is None:
             self._scope_resolver = ScopeResolver()
         return self._scope_resolver
+
+    # ---------------------------------------------------------------- 连接看门狗
+
+    def _watchdog_success(self, connection_id: int | str | None) -> None:
+        """dry_run 成功：清空该连接的连续失败计数。"""
+        if self._mcp_watchdog is None or connection_id is None:
+            return
+        try:
+            self._mcp_watchdog.record_success(connection_id)
+        except Exception as exc:  # noqa: BLE001 - 看门狗绝不影响主链路
+            logger.warning("IQD MCP watchdog record_success failed", error=str(exc))
+
+    async def _watchdog_failure(
+        self, connection_id: int | str | None, exc: BaseException
+    ) -> None:
+        """dry_run 失败：基础设施类错误累计到阈值即重启该连接的 wren 进程。
+
+        这是连接池失效（``Server has gone away`` 且不自愈）的唯一自动恢复手段——
+        进程存活探测与 MCP HTTP probe 都覆盖不到这种故障。
+        """
+        if self._mcp_watchdog is None or connection_id is None:
+            return
+        try:
+            await self._mcp_watchdog.record_failure(connection_id, exc)
+        except Exception as e:  # noqa: BLE001 - 看门狗绝不影响主链路
+            logger.warning("IQD MCP watchdog record_failure failed", error=str(e))
 
     def _get_config_client(self) -> Any:
         """懒加载 IqdConfigClient（W4 知识缓存拉取）。"""
