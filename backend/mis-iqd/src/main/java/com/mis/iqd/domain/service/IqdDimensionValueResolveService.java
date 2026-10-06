@@ -162,6 +162,79 @@ public class IqdDimensionValueResolveService {
         rows.forEach(m -> resolved.add(m.getExternalValue().trim()));
     }
 
+    /**
+     * ????dept??????????? (external_value, dept_path) ?????????
+     * ????? ``mis_dept_scope(dept_id, dept_path)``?
+     *
+     * <p>????? :meth:`resolve` ?????????????????????????
+     * ? resolve ??????**??????**????????? dept ??????
+     * ?? ????????????????????
+     *
+     * @return ?? ``[{external_value, dept_path}]`` ?????
+     */
+    @Transactional(readOnly = true)
+    public List<Map<String, String>> materializeDeptRows(Long connectionId) {
+        List<IqdDimensionValueMap> all = mapRepository
+                .findByConnectionIdAndDimensionCodeOrderByMisValueAscIdAsc(connectionId, DIM_DEPT)
+                .stream()
+                .filter(m -> m.getEffective() == null || m.getEffective() == 1)
+                .filter(m -> m.getExternalValue() != null && !m.getExternalValue().isBlank())
+                .toList();
+        if (all.isEmpty()) {
+            return List.of();
+        }
+        // ?? mis_value ??????sys_dept.dept_path?
+        java.util.Map<String, String> pathByMisValue = new java.util.LinkedHashMap<>();
+        for (IqdDimensionValueMap m : all) {
+            pathByMisValue.computeIfAbsent(m.getMisValue(), k -> {
+                List<IqdDeptSubtreeLookup.DeptNode> nodes = deptSubtreeLookup.subtreeNodes(k);
+                for (IqdDeptSubtreeLookup.DeptNode n : nodes) {
+                    if (n.id().equals(k)) {
+                        return n.path();
+                    }
+                }
+                return null;
+            });
+        }
+        java.util.Map<String, List<IqdDimensionValueMap>> byMisValue = all.stream()
+                .collect(Collectors.groupingBy(IqdDimensionValueMap::getMisValue));
+
+        // ??????????????????????????????????
+        List<String> ordered = new ArrayList<>(byMisValue.keySet());
+        ordered.sort((a, b) -> {
+            String pa = pathByMisValue.getOrDefault(a, "");
+            String pb = pathByMisValue.getOrDefault(b, "");
+            return pa.compareTo(pb);
+        });
+
+        List<String> coveringPaths = new ArrayList<>();
+        java.util.Set<String> emitted = new java.util.LinkedHashSet<>();
+        List<Map<String, String>> out = new ArrayList<>();
+        for (String misValue : ordered) {
+            String path = pathByMisValue.get(misValue);
+            if (coveredBySelectedAncestor(path, coveringPaths)) {
+                continue;
+            }
+            boolean covers = false;
+            for (IqdDimensionValueMap m : byMisValue.get(misValue)) {
+                if (m.getCoversSubtree() == null || m.getCoversSubtree() == 1) {
+                    covers = true;
+                }
+                String key = m.getExternalValue().trim() + "\u0000" + (path == null ? "" : path);
+                if (emitted.add(key)) {
+                    Map<String, String> row = new java.util.LinkedHashMap<>();
+                    row.put("external_value", m.getExternalValue().trim());
+                    row.put("dept_path", path);
+                    out.add(row);
+                }
+            }
+            if (covers && path != null && !path.isBlank()) {
+                coveringPaths.add(path);
+            }
+        }
+        return out;
+    }
+
     /** CRUD?????????????????? */
     @Transactional(readOnly = true)
     public List<IqdDimensionValueMap> list(Long connectionId, String dimensionCode) {

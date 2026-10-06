@@ -624,11 +624,16 @@ export async function resolveIqdDimensionValues(
 
 // ================================================================ 字典同步
 
-export async function syncIqdDimension(dimensionCode: string): Promise<Record<string, unknown>> {
+export async function syncIqdDimension(
+  dimensionCode: string,
+  connectionId?: number,
+): Promise<Record<string, unknown>> {
   const res = await api.post<ApiResult<Record<string, unknown>>>(
     `/iqd/scope/sync/${encodeURIComponent(dimensionCode)}`,
+    undefined,
+    { params: connectionId != null ? { connection_id: connectionId } : undefined },
   );
-  return unwrap(res, '触发字典同步失败');
+  return unwrap(res, 'trigger dict sync failed');
 }
 
 export async function listIqdDictSyncStatus(): Promise<IqdDictSyncStatus[]> {

@@ -343,7 +343,7 @@ export function IqdEnhancePage() {
         setError(e instanceof Error ? e.message : '删除脱敏规则失败');
       }
     },
-    [load],
+    [load, connectionId],
   );
 
   const saveDimension = useCallback(async () => {
@@ -396,7 +396,7 @@ export function IqdEnhancePage() {
     async (dimensionCode: string) => {
       setError(null);
       try {
-        await syncIqdDimension(dimensionCode);
+        await syncIqdDimension(dimensionCode, connectionId ?? undefined);
         await load();
       } catch (e) {
         setError(e instanceof Error ? e.message : '字典同步失败');

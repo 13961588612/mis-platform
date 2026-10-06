@@ -201,8 +201,24 @@ public class IqdAclController {
     // ================================================================ 字典同步
 
     @PostMapping("/scope/sync/{dimensionCode}")
-    public Result<Map<String, Object>> syncDimension(@PathVariable String dimensionCode) {
-        return Result.ok(iqdFacadeService.syncDimension(dimensionCode));
+    public Result<Map<String, Object>> syncDimension(
+            @PathVariable String dimensionCode,
+            @RequestParam(value = "connection_id", required = false) Long connectionId,
+            @RequestHeader(value = SecurityConstants.AUTHORIZATION_HEADER, required = false) String authorization,
+            @RequestHeader(value = SecurityConstants.HEADER_TRACE_ID, required = false) String traceId) {
+        // dept?? ai-platform ??????????? mis_dept_scope?
+        // ? connection_id ???? mis-iqd ????????????
+        if (connectionId == null) {
+            return Result.ok(iqdFacadeService.syncDimension(dimensionCode));
+        }
+        try {
+            return Result.ok(
+                    iqdFacadeService.syncScopeDict(connectionId, dimensionCode, authorization, traceId));
+        } catch (BusinessException ex) {
+            return Result.fail(ex.getCode(), ex.getMessage());
+        } catch (Exception ex) {
+            return Result.fail(ResultCode.INTERNAL_ERROR.getCode(), "??????: " + ex.getMessage());
+        }
     }
 
     @GetMapping("/scope/dict-sync-status")

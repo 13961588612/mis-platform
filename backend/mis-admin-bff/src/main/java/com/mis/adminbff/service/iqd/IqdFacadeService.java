@@ -256,6 +256,19 @@ public class IqdFacadeService {
     }
 
     /**
+     * dept ?????? iqd:scope:sync??? ai-platform ? mis-iqd ??????????
+     * ``mis_dept_scope``?Worker PATH_PREFIX EXISTS ????store ????????????
+     */
+    public Map<String, Object> syncScopeDict(
+            Long connectionId, String dimensionCode, String authorization, String traceId) {
+        requirePermission(properties.getSyncPermission());
+        Map<String, Object> body = new java.util.LinkedHashMap<>();
+        body.put("connection_id", connectionId);
+        body.put("dimension_code", dimensionCode == null || dimensionCode.isBlank() ? "dept" : dimensionCode);
+        return aiPlatformClient.syncIqdScopeDict(body, authorization, traceId);
+    }
+
+    /**
      * 拉取字典同步状态（需 iqd:scope:view）。
      */
     public List<Map<String, Object>> listDictSyncStatus() {

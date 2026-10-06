@@ -29,10 +29,14 @@
 -- 0. 字典表 (仓库内无 DDL, 自建最小结构, 仅含 scope_resolver 查询用列)
 -- ---------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS mis_dept_scope (
-    dept_id   VARCHAR(64)  NOT NULL,
-    dept_path VARCHAR(512) NOT NULL,          -- 物化路径, 形如 /0/1/100/ ; 前缀匹配
-    PRIMARY KEY (dept_id)
+    dept_id   VARCHAR(64)  NOT NULL,          -- = warehouse external code (mapped; NOT MIS id)
+    dept_path VARCHAR(512) NOT NULL,          -- MIS materialized path, e.g. /0/1/100/ ; prefix match
+    -- composite PK: same external code reachable via multiple MIS paths; one path may map many codes (1:N)
+    PRIMARY KEY (dept_id, dept_path)
 );
+-- LIKE '/0/1/100/%' uses prefix index (plain btree can't use LIKE prefix under default collation)
+CREATE INDEX IF NOT EXISTS idx_mis_dept_scope_path
+    ON mis_dept_scope (dept_path text_pattern_ops);
 
 CREATE TABLE IF NOT EXISTS mis_store_scope (
     store_id VARCHAR(64) NOT NULL,
@@ -50,7 +54,7 @@ INSERT INTO mis_dept_scope (dept_id, dept_path) VALUES
     ('1002', '/0/1/100/1002/'),
     ('200',  '/0/1/200/'),          -- 越权部门 (不在 100 子树, 用于负向用例)
     ('2001', '/0/1/200/2001/')
-ON CONFLICT (dept_id) DO UPDATE SET dept_path = EXCLUDED.dept_path;
+  ON CONFLICT (dept_id, dept_path) DO NOTHING;
 
 -- ---------------------------------------------------------------------------
 -- 2. 门店维度造数 (ENUM<=500): 一期扁平可见集合

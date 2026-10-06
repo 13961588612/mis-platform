@@ -68,6 +68,7 @@ GET_CONNECTION_DB_PROFILE_PATH = "/internal/v1/iqd/connection-db-profile"
 #    §6.1 时序「AIP->>MIS: POST …/catalog/model/from-table × N」）——
 CREATE_MODEL_FROM_TABLE_PATH = "/internal/v1/iqd/catalog/model/from-table"
 RESOLVE_DIMENSION_VALUES_PATH = "/internal/v1/iqd/dimension-value-maps/resolve"
+SCOPE_DICT_MATERIALIZE_PATH = "/internal/v1/iqd/scope/dict-materialize"
 
 #: 配置缓存桶名（与 IqdConfigClient 分桶缓存一一对应）
 CACHE_BUCKET_CONNECTIONS = "connections"
@@ -360,6 +361,25 @@ class IqdConfigClient:
         }
         data = await self._request("POST", RESOLVE_DIMENSION_VALUES_PATH, ctx, payload=payload)
         return data if isinstance(data, dict) else {"resolved": [], "dropped": [], "empty": True}
+
+    async def get_scope_dict_materialize(
+        self,
+        connection_id: int,
+        dimension_code: str = "dept",
+        ctx: IqdCallContext | None = None,
+    ) -> dict[str, Any]:
+        """????????????????????dept ???
+
+        ???? ``{"connection_id":1,"dimension_code":"dept","rows":[{"external_value","dept_path"}]}``?
+        """
+        ctx = ctx or IqdCallContext()
+        data = await self._request(
+            "GET",
+            SCOPE_DICT_MATERIALIZE_PATH,
+            ctx,
+            params={"connection_id": connection_id, "dimension_code": dimension_code},
+        )
+        return data if isinstance(data, dict) else {"rows": []}
 
     async def write_ask_log(self, payload: dict[str, Any]) -> dict[str, Any]:
         """写问数审计日志（投影前全量，经 mis-iqd 内部 API）。

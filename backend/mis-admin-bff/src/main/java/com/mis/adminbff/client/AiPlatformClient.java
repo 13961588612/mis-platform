@@ -467,6 +467,22 @@ public class AiPlatformClient extends AbstractDownstreamClient {
      * @param traceId       全链路追踪 ID
      * @return 平台响应 data（{items, degraded:false, note, subject, connection_id}）
      */
+    /**
+     * dept ?????? ai-platform ``POST /api/v1/iqd/scope/dict-sync``
+     * ?mis-iqd ???? ? ??? mis_dept_scope??
+     */
+    public Map<String, Object> syncIqdScopeDict(
+            Map<String, Object> body, String authorization, String traceId) {
+        Consumer<HttpHeaders> headers = buildHeaders(authorization, traceId);
+        return block(client().post()
+                .uri("/api/v1/iqd/scope/dict-sync")
+                .headers(headers)
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(body)
+                .retrieve()
+                .bodyToMono(MAP_RESULT_TYPE));
+    }
+
     public Map<String, Object> previewIqdRowScope(
             Map<String, Object> body, String authorization, String traceId) {
         Consumer<HttpHeaders> headers = buildHeaders(authorization, traceId);

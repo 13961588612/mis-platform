@@ -548,4 +548,26 @@ public class IqdInternalController {
         return Result.ok(dimensionValueResolveService.resolve(connectionId, dimensionCode, misValues));
     }
 
+
+    /**
+     * ?????????dept??????????????? (external_value, dept_path) ??
+     *
+     * <p>? ai-platform ?????????????? upsert ``mis_dept_scope``?
+     * ????? resolve ?????????????? MIS ????
+     */
+    @GetMapping("/scope/dict-materialize")
+    public Result<Map<String, Object>> dictMaterialize(
+            @RequestParam("connection_id") Long connectionId,
+            @RequestParam(value = "dimension_code", defaultValue = "dept") String dimensionCode) {
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("connection_id", connectionId);
+        body.put("dimension_code", dimensionCode);
+        if ("dept".equalsIgnoreCase(dimensionCode)) {
+            body.put("rows", dimensionValueResolveService.materializeDeptRows(connectionId));
+        } else {
+            body.put("rows", List.of());
+        }
+        return Result.ok(body);
+    }
+
 }
