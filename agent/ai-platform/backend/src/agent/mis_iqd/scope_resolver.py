@@ -866,10 +866,30 @@ class ScopeResolver:
                     if dim_code not in applied_dimensions:
                         applied_dimensions.append(dim_code)
 
+                    eff_col = self._effective_column(dim, inst)
+
+                    # ENUM (flat dims e.g. store): translate MIS ids -> external codes via mapping.
+                    enum_values: list[str] | None = None
+                    if selected == PREDICATE_ENUM:
+                        enum_values = await self._resolve_mapped_enum_values(
+                            dim, identity, resolution.connection_id
+                        )
+                        if enum_values is not None and not enum_values:
+                            logger.warning(
+                                "IQD row scope mapping resolved empty; fail-closed",
+                                dimension=dim_code,
+                                connection_id=resolution.connection_id,
+                            )
+                            outcome.verdict = "deny"
+                            outcome.denied_reason = "dimension values have no mapping"
+                            outcome.strategy = PREDICATE_FAIL_CLOSED
+                            return outcome
+
                     # P1-4：注入前检查用户 SQL 显式引用受控列值是否越权。
                     # 授权集合内幂等放行；集合外任一值 → 45204 拒绝（不静默空集）。
                     unauthorized = self._explicit_unauthorized_values(
-                        original, dim, identity, selected, column=self._effective_column(dim, inst), dialect=dialect
+                        original, dim, identity, selected,
+                        column=eff_col, enum_values=enum_values, dialect=dialect
                     )
                     if unauthorized:
                         logger.warning(
@@ -883,7 +903,7 @@ class ScopeResolver:
                         return outcome
 
                     predicate = self._build_authorized_predicate(
-                        dim, identity, selected, alias=alias, column=self._effective_column(dim, inst)
+                        dim, identity, selected, alias=alias, column=eff_col, enum_values=enum_values
                     )
                     if not predicate:
                         outcome.verdict = "deny"
@@ -912,6 +932,41 @@ class ScopeResolver:
                 dimensions=applied_dimensions,
             )
         return outcome
+
+    async def _resolve_mapped_enum_values(
+        self,
+        dimension: RowScopeDimension,
+        identity: AskIdentity,
+        connection_id: int | None,
+    ) -> list[str] | None:
+        """? ENUM ??? MIS ???????????????????????
+
+        ???
+          - ``None``?????????? / ?????? ????? header ??????????
+          - ``list``?????????? ? ??? fail-closed??
+        """
+        if connection_id is None:
+            return None
+        raw_values = self._enum_authorized_values(dimension, identity)
+        if not raw_values:
+            return None
+        try:
+            client = self._get_client()
+            data = await client.resolve_dimension_values(
+                int(connection_id), dimension.dimension_code, list(raw_values)
+            )
+        except Exception as exc:  # noqa: BLE001 - ???????????????dept ??????
+            logger.warning(
+                "IQD dimension value mapping unavailable; fall back to header values",
+                dimension=dimension.dimension_code,
+                connection_id=connection_id,
+                error=str(exc),
+            )
+            return None
+        resolved = data.get("resolved") if isinstance(data, dict) else None
+        if not isinstance(resolved, list):
+            return None
+        return [str(v) for v in resolved if v is not None and str(v).strip()]
 
     async def resolve_inject_strategy(
         self,
@@ -967,6 +1022,7 @@ class ScopeResolver:
         *,
         alias: str = "",
         column=None,
+        enum_values=None,
     ) -> str:
         """按维度策略生成授权谓词。
 
@@ -1024,8 +1080,12 @@ class ScopeResolver:
             return f"{qualifier}{col} IN ({in_list})"
 
         if strategy == PREDICATE_ENUM:
-            # P1-6：dept 降级 ENUM 用 dept 锚点集合；store 用 X-Mis-Stores
-            values = self._enum_authorized_values(dimension, identity)
+            # prefer mapped external codes (enum_values) when provided
+            values = (
+                enum_values
+                if enum_values is not None
+                else self._enum_authorized_values(dimension, identity)
+            )
             if not values:
                 return ""
             in_list = ", ".join(_quote(v) for v in values)
@@ -1093,6 +1153,7 @@ class ScopeResolver:
         strategy: str,
         *,
         column=None,
+        enum_values=None,
         dialect: str = "postgres",
     ) -> list[str]:
         """扫描用户 SQL 显式引用受控列的取值，返回其中不在授权集合内的值。
@@ -1114,7 +1175,9 @@ class ScopeResolver:
         col = column or dimension.column_name
         if not col or not sql:
             return []
-        authorized = self._enum_authorized_values(dimension, identity)
+        authorized = enum_values if enum_values is not None else self._enum_authorized_values(
+            dimension, identity
+        )
         if not authorized:
             return []
         values: list[str] = []

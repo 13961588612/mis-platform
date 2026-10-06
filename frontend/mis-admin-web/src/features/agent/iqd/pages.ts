@@ -20,3 +20,5 @@ export { IqdEnhancePage } from './iqd-enhance-page';
 export { IqdInstructionPage } from './iqd-instruction-page';
 // v1.11 建模台主页（MR-S1，T01 页面壳）
 export { IqdModelingPage } from './iqd-modeling-page';
+// ??????MIS ??/?? ? ???????? /iqd/mapping
+export { IqdMappingPage } from './iqd-mapping-page';

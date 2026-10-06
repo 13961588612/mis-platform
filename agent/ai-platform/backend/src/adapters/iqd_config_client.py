@@ -67,6 +67,7 @@ GET_CONNECTION_DB_PROFILE_PATH = "/internal/v1/iqd/connection-db-profile"
 # —— v1.11 建模台 a 点：表发现导入 → 由物理表生成模型（Worker → mis-iqd 内部面，
 #    §6.1 时序「AIP->>MIS: POST …/catalog/model/from-table × N」）——
 CREATE_MODEL_FROM_TABLE_PATH = "/internal/v1/iqd/catalog/model/from-table"
+RESOLVE_DIMENSION_VALUES_PATH = "/internal/v1/iqd/dimension-value-maps/resolve"
 
 #: 配置缓存桶名（与 IqdConfigClient 分桶缓存一一对应）
 CACHE_BUCKET_CONNECTIONS = "connections"
@@ -328,6 +329,37 @@ class IqdConfigClient:
         logger.info("IQD config cache invalidated", cache_key=cache_key)
 
     # ================================================================ 审计写入
+
+    async def resolve_dimension_values(
+        self,
+        connection_id: int,
+        dimension_code: str,
+        mis_values: list[str],
+        ctx: IqdCallContext | None = None,
+    ) -> dict[str, Any]:
+        """? MIS ??????? id / ?? id?????????????????
+
+        ?? mis-iqd ?????????????store ??????dept ?????????
+        ?????????????????
+        ``{"resolved": [...], "dropped": [...], "empty": bool}``?
+
+        Args:
+            connection_id: ????????????????
+            dimension_code: ????dept / store / ...??
+            mis_values: MIS ???????
+            ctx: ????????????
+
+        Raises:
+            IqdConfigClientError: ????? mis-iqd ?? ``code != 0``?
+        """
+        ctx = ctx or IqdCallContext()
+        payload = {
+            "connection_id": connection_id,
+            "dimension_code": dimension_code,
+            "mis_values": list(mis_values or []),
+        }
+        data = await self._request("POST", RESOLVE_DIMENSION_VALUES_PATH, ctx, payload=payload)
+        return data if isinstance(data, dict) else {"resolved": [], "dropped": [], "empty": True}
 
     async def write_ask_log(self, payload: dict[str, Any]) -> dict[str, Any]:
         """写问数审计日志（投影前全量，经 mis-iqd 内部 API）。

@@ -184,6 +184,27 @@ export interface IqdScopeDimension {
   sort?: number;
 }
 
+export interface IqdDimensionValueMap {
+  id?: number;
+  connection_id: number;
+  dimension_code: string;
+  mis_value: string;
+  external_value: string;
+  effective?: boolean;
+  covers_subtree?: boolean;
+  remark?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+export interface IqdDimensionResolveResult {
+  connection_id?: number | null;
+  dimension_code?: string | null;
+  resolved: string[];
+  dropped: string[];
+  empty: boolean;
+}
+
 export interface IqdDictSyncStatus {
   dimension: string;
   status: string;
@@ -563,6 +584,42 @@ export async function saveIqdDimension(body: Partial<IqdScopeDimension>): Promis
 export async function deleteIqdDimension(id: number): Promise<void> {
   const res = await api.delete<ApiResult<null>>(`/iqd/dimensions/${id}`);
   if (res.data.code !== 0) throw new Error(res.data.message || '删除维度注册表失败');
+}
+
+// ================================================================ dimension value maps
+
+export async function listIqdDimensionValueMaps(
+  connectionId: number,
+  dimensionCode?: string,
+): Promise<IqdDimensionValueMap[]> {
+  const res = await api.get<ApiResult<IqdDimensionValueMap[]>>('/iqd/dimension-value-maps', {
+    params: { connection_id: connectionId, dimension_code: dimensionCode || undefined },
+  });
+  return unwrap(res, 'list dimension value maps failed');
+}
+
+export async function saveIqdDimensionValueMap(
+  body: Partial<IqdDimensionValueMap>,
+): Promise<IqdDimensionValueMap> {
+  const res = await api.post<ApiResult<IqdDimensionValueMap>>('/iqd/dimension-value-maps', body);
+  return unwrap(res, 'save dimension value map failed');
+}
+
+export async function deleteIqdDimensionValueMap(id: number): Promise<void> {
+  const res = await api.delete<ApiResult<null>>(`/iqd/dimension-value-maps/${id}`);
+  if (res.data.code !== 0) throw new Error(res.data.message || 'delete dimension value map failed');
+}
+
+export async function resolveIqdDimensionValues(
+  connectionId: number,
+  dimensionCode: string,
+  misValues: string[],
+): Promise<IqdDimensionResolveResult> {
+  const res = await api.post<ApiResult<IqdDimensionResolveResult>>(
+    '/iqd/dimension-value-maps/resolve',
+    { connection_id: connectionId, dimension_code: dimensionCode, mis_values: misValues },
+  );
+  return unwrap(res, 'resolve dimension values failed');
 }
 
 // ================================================================ 字典同步

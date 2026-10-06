@@ -26,6 +26,11 @@ class FakeConfigClient:
     async def get_dimensions(self, ctx=None):
         return []
 
+    async def resolve_dimension_values(self, connection_id, dimension_code, mis_values, ctx=None):
+        # default: no mapping configured -> return None-like by raising? No: return empty resolved
+        # Tests that need mapping override this via a subclass.
+        raise RuntimeError("no mapping client")
+
     async def load_configs(self, ctx=None):
         return [{"id": 1, "name": "wren", "enabled": 1}]
 
@@ -535,6 +540,55 @@ def test_inject_multi_dim_mixed_columns():
     assert "department_key" in out.sql
     # store should use global column
     assert "store_id IN" in out.sql
+
+
+
+# ================================================================ dimension value mapping (store)
+
+
+class MappingConfigClient(FakeConfigClient):
+    """FakeClient that returns mapped external codes for store dimension."""
+
+    def __init__(self, mapping: dict[str, list[str]]):
+        self._mapping = mapping
+
+    async def resolve_dimension_values(self, connection_id, dimension_code, mis_values, ctx=None):
+        resolved: list[str] = []
+        for v in mis_values:
+            resolved.extend(self._mapping.get(v, []))
+        return {"resolved": resolved, "dropped": [], "empty": len(resolved) == 0}
+
+
+def test_store_enum_uses_mapped_external_codes():
+    """store ENUM?MIS ?? id ????????? external ???? IN?"""
+    resolver = ScopeResolver(config_client=MappingConfigClient({"S1": ["SHOP_A"], "S2": ["SHOP_B"]}))
+    sql = "SELECT * FROM pg_main.public.orders"
+    resolution = resolution_for("pg_main.public.orders", [{"dimension": "store"}])
+    out = run_inject(resolver, sql, resolution, store_identity(["S1", "S2"]))
+    assert out.verdict == "allow", out.denied_reason
+    assert "SHOP_A" in out.sql and "SHOP_B" in out.sql
+    assert "'S1'" not in out.sql and "'S2'" not in out.sql
+
+
+def test_store_enum_mapped_empty_fail_closed():
+    """store ENUM??????? ? fail-closed??????"""
+    resolver = ScopeResolver(config_client=MappingConfigClient({}))
+    sql = "SELECT * FROM pg_main.public.orders"
+    resolution = resolution_for("pg_main.public.orders", [{"dimension": "store"}])
+    out = run_inject(resolver, sql, resolution, store_identity(["S9"]))
+    assert out.verdict == "deny"
+    assert out.strategy == PREDICATE_FAIL_CLOSED
+
+
+def test_dept_path_prefix_not_mapped_at_inject_time():
+    """dept PATH_PREFIX ????? EXISTS??????????"""
+    resolver = ScopeResolver(config_client=MappingConfigClient({"A": ["XX"]}))
+    sql = "SELECT * FROM pg_main.public.orders"
+    resolution = resolution_for("pg_main.public.orders", [{"dimension": "dept"}])
+    out = run_inject(resolver, sql, resolution, dept_identity(path="/0/1/A/"))
+    assert out.verdict == "allow", out.denied_reason
+    assert "mis_dept_scope" in out.sql
+    assert "'XX'" not in out.sql
 
 
 if __name__ == "__main__":

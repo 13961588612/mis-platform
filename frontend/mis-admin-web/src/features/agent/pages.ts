@@ -54,4 +54,5 @@ export {
   IqdEnhancePage,
   IqdInstructionPage,
   IqdModelingPage,
+  IqdMappingPage,
 } from './iqd/pages';

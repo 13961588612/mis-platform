@@ -73,6 +73,7 @@ const LazyIqdEnhancePage = lazy(() => import('@/features/agent/iqd/iqd-enhance-p
 const LazyIqdInstructionPage = lazy(() => import('@/features/agent/iqd/iqd-instruction-page'));
 // v1.11 建模台主页（MR-S1，T01 仅页面壳；三栏与画布在 T02 补全）
 const LazyIqdModelingPage = lazy(() => import('@/features/agent/iqd/iqd-modeling-page'));
+const LazyIqdMappingPage = lazy(() => import('@/features/agent/iqd/iqd-mapping-page'));
 
 /** 懒加载页面的 Suspense 占位（轻量，避免白屏闪烁）。 */
 function LazyPageFallback() {
@@ -157,6 +158,7 @@ const PAGE_MAP: Record<string, ComponentType> = {
   '/iqd/config': LazyIqdConfigPage,
   '/iqd/catalog': LazyIqdCatalogPage,
   '/iqd/scope': LazyIqdScopePage,
+  '/iqd/mapping': LazyIqdMappingPage,
   '/iqd/test-chat': LazyIqdTestChatPage,
   '/iqd/traces': LazyIqdTracePage,
   '/iqd/enhance': LazyIqdEnhancePage,
