@@ -8,6 +8,9 @@ import com.mis.iqd.api.dto.IqdCatalogItemSaveRequest;
 import com.mis.iqd.api.dto.IqdCatalogItemVO;
 import com.mis.iqd.api.dto.IqdConnectionSaveRequest;
 import com.mis.iqd.api.dto.IqdConnectionVO;
+import com.mis.iqd.api.dto.IqdDimensionResolveVO;
+import com.mis.iqd.api.dto.IqdDimensionValueMapSaveRequest;
+import com.mis.iqd.api.dto.IqdDimensionValueMapVO;
 import com.mis.iqd.api.dto.IqdKnowledgeSaveRequest;
 import com.mis.iqd.api.dto.IqdKnowledgeVO;
 import com.mis.iqd.api.dto.IqdMaskRuleSaveRequest;
@@ -19,6 +22,7 @@ import com.mis.iqd.api.dto.IqdSqlPairSaveRequest;
 import com.mis.iqd.api.dto.IqdSqlPairVO;
 import com.mis.iqd.api.dto.IqdSyncJobVO;
 import com.mis.iqd.domain.service.IqdAdminService;
+import com.mis.iqd.domain.service.IqdDimensionValueResolveService;
 import com.mis.iqd.domain.service.IqdScopeSyncJobService;
 import jakarta.validation.Valid;
 import org.springframework.web.bind.annotation.DeleteMapping;
@@ -47,10 +51,15 @@ public class IqdController {
 
     private final IqdAdminService adminService;
     private final IqdScopeSyncJobService scopeSyncJobService;
+    private final IqdDimensionValueResolveService dimensionValueResolveService;
 
-    public IqdController(IqdAdminService adminService, IqdScopeSyncJobService scopeSyncJobService) {
+    public IqdController(
+            IqdAdminService adminService,
+            IqdScopeSyncJobService scopeSyncJobService,
+            IqdDimensionValueResolveService dimensionValueResolveService) {
         this.adminService = adminService;
         this.scopeSyncJobService = scopeSyncJobService;
+        this.dimensionValueResolveService = dimensionValueResolveService;
     }
 
     /**
@@ -478,4 +487,74 @@ public class IqdController {
             return null;
         }
     }
+
+    // ================================================================ 行级维度值映射（MIS 值 ⇄ 数仓值）
+
+    /**
+     * 列出某连接的维度值映射（可按维度过滤）。
+     */
+    @GetMapping("/dimension-value-maps")
+    public Result<List<IqdDimensionValueMapVO>> listDimensionValueMaps(
+            @RequestParam("connection_id") Long connectionId,
+            @RequestParam(value = "dimension_code", required = false) String dimensionCode) {
+        List<IqdDimensionValueMapVO> out = dimensionValueResolveService
+                .list(connectionId, dimensionCode).stream()
+                .map(this::toDimensionValueMapVO)
+                .toList();
+        return Result.ok(out);
+    }
+
+    /**
+     * 保存（幂等 upsert）一条维度值映射。
+     */
+    @PostMapping("/dimension-value-maps")
+    public Result<IqdDimensionValueMapVO> saveDimensionValueMap(
+            @RequestBody IqdDimensionValueMapSaveRequest dto) {
+        return Result.ok(toDimensionValueMapVO(dimensionValueResolveService.save(
+                dto.connectionId(), dto.dimensionCode(), dto.misValue(),
+                dto.externalValue(), dto.effective(), dto.coversSubtree(), dto.remark())));
+    }
+
+    /**
+     * 删除一条维度值映射。
+     */
+    @DeleteMapping("/dimension-value-maps/{id}")
+    public Result<Map<String, Object>> deleteDimensionValueMap(@PathVariable Long id) {
+        dimensionValueResolveService.delete(id);
+        return Result.ok(Map.of("deleted", id));
+    }
+
+    /**
+     * 解析 MIS 值 → 该连接数仓外部编码（行级注入取值源；dept 支持向下找有映射的后代）。
+     */
+    @PostMapping("/dimension-value-maps/resolve")
+    public Result<IqdDimensionResolveVO> resolveDimensionValues(
+            @RequestBody Map<String, Object> body) {
+        Long connectionId = body.get("connection_id") == null
+                ? null : Long.valueOf(String.valueOf(body.get("connection_id")));
+        String dimensionCode = body.get("dimension_code") == null
+                ? null : String.valueOf(body.get("dimension_code"));
+        List<String> misValues = new java.util.ArrayList<>();
+        Object raw = body.get("mis_values");
+        if (raw instanceof List<?> list) {
+            for (Object v : list) {
+                if (v != null) {
+                    misValues.add(String.valueOf(v));
+                }
+            }
+        }
+        return Result.ok(dimensionValueResolveService.resolve(connectionId, dimensionCode, misValues));
+    }
+
+    private IqdDimensionValueMapVO toDimensionValueMapVO(
+            com.mis.iqd.domain.entity.IqdDimensionValueMap e) {
+        return new IqdDimensionValueMapVO(
+                e.getId(), e.getConnectionId(), e.getDimensionCode(), e.getMisValue(),
+                e.getExternalValue(), e.getEffective() != null && e.getEffective() == 1,
+                e.getCoversSubtree() == null || e.getCoversSubtree() == 1,
+                e.getRemark(),
+                e.getCreatedAt() == null ? null : e.getCreatedAt().toString(),
+                e.getUpdatedAt() == null ? null : e.getUpdatedAt().toString());
+    }
+
 }

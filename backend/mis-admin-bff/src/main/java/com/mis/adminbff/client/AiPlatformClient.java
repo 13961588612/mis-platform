@@ -1,4 +1,4 @@
-﻿package com.mis.adminbff.client;
+package com.mis.adminbff.client;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.core.JsonProcessingException;
@@ -616,15 +616,18 @@ public class AiPlatformClient extends AbstractDownstreamClient {
                 if (!roles.isEmpty()) {
                     headers.set(HEADER_MIS_ROLES, objectMapper.writeValueAsString(roles));
                 }
+            } catch (Exception ignored) {
+                // IAM unavailable -> degrade (skip base headers), do not block.
+            }
 
-            // --- IQD 行级数据范围头注入 ---
+            // --- IQD row-scope header injection ---
             try {
                 LoginUser iqdcUser = SecurityContextHolder.getOptional().orElse(null);
                 if (iqdcUser != null && iqdcUser.getUserId() != null) {
                     injectDataRowScopeHeaders(headers, iqdcUser.getUserId());
                 }
             } catch (Exception ignored) {
-                // mis-org 不可达 / 解析失败 -> 不加范围头，Worker 侧 fail-closed
+                // mis-org unreachable -> skip scope headers; Worker fail-closed.
             }
         };
     }
@@ -673,6 +676,31 @@ public class AiPlatformClient extends AbstractDownstreamClient {
         }
     }
 
+    /**
+     * ? MIS IAM ?????? TTL ???T4.4??
+     *
+     * @param userId IAM ?? id?= LoginUser.getUserId()?? R3?
+     * @return IAM ?????IAM ?????? {@code null}
+     */
+    private IamUserVO lookupIamUser(Long userId) {
+        IamCacheEntry entry = iamCache.get(userId);
+        if (entry != null && entry.isAlive()) {
+            return entry.user();
+        }
+        IamUserVO user = iamWebClient.getUser(userId);
+        if (user != null) {
+            iamCache.put(userId, new IamCacheEntry(user, System.currentTimeMillis() + IAM_CACHE_TTL_MS));
+        }
+        return user;
+    }
+
+    /** IAM ???????T4.4?????????TTL ? 60s?? */
+    private record IamCacheEntry(IamUserVO user, long expireAt) {
+        private boolean isAlive() {
+            return System.currentTimeMillis() < expireAt;
+        }
+    }
+
     /** Cache lookup for mis-org data scope view (~60s TTL). Returns null on failure. */
     private UserDataSetScopeVO lookupOrgDataScope(Long userId) {
         OrgCacheEntry entry = orgCache.get(userId);
@@ -691,4 +719,4 @@ public class AiPlatformClient extends AbstractDownstreamClient {
     private record OrgCacheEntry(UserDataSetScopeVO scope, long expireAt) {
         boolean isAlive() { return System.currentTimeMillis() < expireAt; }
     }
-
+}

@@ -1,4 +1,4 @@
-﻿package com.mis.adminbff.client.model;
+package com.mis.adminbff.client.model;
 
 import java.util.List;
 import java.util.Map;

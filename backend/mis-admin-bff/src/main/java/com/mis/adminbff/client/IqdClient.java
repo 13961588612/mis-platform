@@ -9,6 +9,8 @@ import com.mis.adminbff.dto.iqd.IqdCatalogItemVO;
 import com.mis.adminbff.dto.iqd.IqdConnectionConfigVO;
 import com.mis.adminbff.dto.iqd.IqdConnectionSaveRequest;
 import com.mis.adminbff.dto.iqd.IqdConnectionTestVO;
+import com.mis.adminbff.dto.iqd.IqdDimensionResolveVO;
+import com.mis.adminbff.dto.iqd.IqdDimensionValueMapVO;
 import com.mis.adminbff.dto.iqd.IqdKnowledgeSaveRequest;
 import com.mis.adminbff.dto.iqd.IqdKnowledgeVO;
 import com.mis.adminbff.dto.iqd.IqdMaskRuleSaveRequest;
@@ -66,6 +68,12 @@ public class IqdClient extends AbstractDownstreamClient {
     private static final ParameterizedTypeReference<com.mis.common.core.result.Result<List<IqdAclVO>>> ACL_LIST =
             new ParameterizedTypeReference<>() {};
     private static final ParameterizedTypeReference<com.mis.common.core.result.Result<List<IqdMaskRuleVO>>> MASK_RULE_LIST =
+            new ParameterizedTypeReference<>() {};
+    private static final ParameterizedTypeReference<com.mis.common.core.result.Result<List<IqdDimensionValueMapVO>>> DIM_VALUE_MAP_LIST =
+            new ParameterizedTypeReference<>() {};
+    private static final ParameterizedTypeReference<com.mis.common.core.result.Result<IqdDimensionValueMapVO>> DIM_VALUE_MAP =
+            new ParameterizedTypeReference<>() {};
+    private static final ParameterizedTypeReference<com.mis.common.core.result.Result<IqdDimensionResolveVO>> DIM_RESOLVE =
             new ParameterizedTypeReference<>() {};
     private static final ParameterizedTypeReference<com.mis.common.core.result.Result<List<IqdScopeDimensionVO>>> DIMENSION_LIST =
             new ParameterizedTypeReference<>() {};
@@ -737,4 +745,50 @@ public class IqdClient extends AbstractDownstreamClient {
     public IqdProperties properties() {
         return properties;
     }
+
+    // ================================================================ 行级维度值映射（MIS 值 ⇄ 数仓值）
+
+    /** 列出某连接的维度值映射（可按维度过滤）。 */
+    public List<IqdDimensionValueMapVO> listDimensionValueMaps(Long connectionId, String dimensionCode) {
+        return block(client().get()
+                .uri(uriBuilder -> {
+                    uriBuilder.path("/api/v1/iqd/dimension-value-maps")
+                            .queryParam("connection_id", connectionId);
+                    if (dimensionCode != null && !dimensionCode.isBlank()) {
+                        uriBuilder.queryParam("dimension_code", dimensionCode);
+                    }
+                    return uriBuilder.build();
+                })
+                .headers(loginContextHeaders())
+                .retrieve()
+                .bodyToMono(DIM_VALUE_MAP_LIST));
+    }
+
+    /** 保存（幂等 upsert）一条维度值映射。 */
+    public IqdDimensionValueMapVO saveDimensionValueMap(Map<String, Object> dto) {
+        return block(client().post()
+                .uri("/api/v1/iqd/dimension-value-maps")
+                .headers(loginContextHeaders())
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(dto)
+                .retrieve()
+                .bodyToMono(DIM_VALUE_MAP));
+    }
+
+    /** 删除一条维度值映射。 */
+    public void deleteDimensionValueMap(Long id) {
+        blockVoid(delete(loginContextHeaders(), "/api/v1/iqd/dimension-value-maps/{id}", id));
+    }
+
+    /** 解析 MIS 值 → 数仓外部编码（映射维护页预览用）。 */
+    public IqdDimensionResolveVO resolveDimensionValues(Map<String, Object> dto) {
+        return block(client().post()
+                .uri("/api/v1/iqd/dimension-value-maps/resolve")
+                .headers(loginContextHeaders())
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(dto)
+                .retrieve()
+                .bodyToMono(DIM_RESOLVE));
+    }
+
 }

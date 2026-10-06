@@ -17,6 +17,8 @@ import com.mis.adminbff.dto.iqd.IqdKnowledgeSaveRequest;
 import com.mis.adminbff.dto.iqd.IqdKnowledgeVO;
 import com.mis.adminbff.dto.iqd.IqdMaskRuleSaveRequest;
 import com.mis.adminbff.dto.iqd.IqdMaskRuleVO;
+import com.mis.adminbff.dto.iqd.IqdDimensionResolveVO;
+import com.mis.adminbff.dto.iqd.IqdDimensionValueMapVO;
 import com.mis.adminbff.dto.iqd.IqdScopeDimensionVO;
 import com.mis.adminbff.dto.iqd.IqdScopePolicySaveRequest;
 import com.mis.adminbff.dto.iqd.IqdScopePolicyVO;
@@ -707,4 +709,31 @@ public class IqdFacadeService {
             throw new BusinessException(ResultCode.FORBIDDEN);
         }
     }
+
+    // ================================================================ 行级维度值映射（MIS 值 ⇄ 数仓值）
+
+    /** 列出某连接的维度值映射（按维度过滤可选）。 */
+    public List<IqdDimensionValueMapVO> listDimensionValueMaps(Long connectionId, String dimensionCode) {
+        requirePermission(properties.getDimensionViewPermission());
+        return iqdClient.listDimensionValueMaps(connectionId, dimensionCode);
+    }
+
+    /** 保存（幂等 upsert）一条维度值映射。 */
+    public IqdDimensionValueMapVO saveDimensionValueMap(Map<String, Object> dto) {
+        requirePermission(properties.getDimensionSavePermission());
+        return iqdClient.saveDimensionValueMap(dto);
+    }
+
+    /** 删除一条维度值映射。 */
+    public void deleteDimensionValueMap(Long id) {
+        requirePermission(properties.getDimensionSavePermission());
+        iqdClient.deleteDimensionValueMap(id);
+    }
+
+    /** 解析 MIS 值 → 数仓外部编码（映射维护页预览用）。 */
+    public IqdDimensionResolveVO resolveDimensionValues(Map<String, Object> dto) {
+        requirePermission(properties.getDimensionViewPermission());
+        return iqdClient.resolveDimensionValues(dto);
+    }
+
 }

@@ -68,6 +68,7 @@ class IqdInternalPrimaryConnectionTest {
     // 控制器其余依赖（本测试不触达，mock 以满足构造）
     @Mock IqdScopeSyncJobService scopeSyncJobService;
     @Mock IqdCatalogNodeService catalogNodeService;
+    @Mock com.mis.iqd.domain.service.IqdDimensionValueResolveService dimensionValueResolveService;
 
     private IqdInternalController controller;
 
@@ -76,7 +77,7 @@ class IqdInternalPrimaryConnectionTest {
         // 关键：控制器与 adminService 共用同一个 connectionRepository mock
         // ⇒ getConnections() 与 findPrimaryConnection() 走同一份仓库桩，口径可对齐验证。
         controller = new IqdInternalController(
-                connectionRepository, adminService, scopeSyncJobService, catalogNodeService);
+                connectionRepository, adminService, scopeSyncJobService, catalogNodeService, dimensionValueResolveService);
     }
 
     /** 构造一条最小连接。 */

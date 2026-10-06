@@ -13,6 +13,7 @@ import com.mis.iqd.api.dto.IqdSyncJobVO;
 import com.mis.iqd.domain.entity.IqdConnection;
 import com.mis.iqd.domain.repository.IqdConnectionRepository;
 import com.mis.iqd.domain.service.IqdAdminService;
+import com.mis.iqd.domain.service.IqdDimensionValueResolveService;
 import com.mis.iqd.domain.service.IqdScopeSyncJobService;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -50,16 +51,19 @@ public class IqdInternalController {
     private final IqdAdminService adminService;
     private final IqdScopeSyncJobService scopeSyncJobService;
     private final com.mis.iqd.domain.service.IqdCatalogNodeService catalogNodeService;
+    private final IqdDimensionValueResolveService dimensionValueResolveService;
 
     public IqdInternalController(
             IqdConnectionRepository connectionRepository,
             IqdAdminService adminService,
             IqdScopeSyncJobService scopeSyncJobService,
-            com.mis.iqd.domain.service.IqdCatalogNodeService catalogNodeService) {
+            com.mis.iqd.domain.service.IqdCatalogNodeService catalogNodeService,
+            IqdDimensionValueResolveService dimensionValueResolveService) {
         this.connectionRepository = connectionRepository;
         this.adminService = adminService;
         this.scopeSyncJobService = scopeSyncJobService;
         this.catalogNodeService = catalogNodeService;
+        this.dimensionValueResolveService = dimensionValueResolveService;
     }
 
     /**
@@ -516,4 +520,32 @@ public class IqdInternalController {
             return Instant.now();
         }
     }
+
+    /**
+     * 行级维度值解析（MIS 值 → 该连接数仓外部编码）。
+     *
+     * <p>Worker 行级注入前调用：store 无映射=无权限（丢弃）；dept 锚点无直接映射时向下
+     * 找有映射的后代作为限制范围；结果为空 → 调用方按 45204 fail-closed。
+     *
+     * <p>请求体：{@code {"connection_id":1,"dimension_code":"dept","mis_values":["100","101"]}}。
+     */
+    @PostMapping("/dimension-value-maps/resolve")
+    public Result<com.mis.iqd.api.dto.IqdDimensionResolveVO> resolveDimensionValues(
+            @RequestBody Map<String, Object> body) {
+        Long connectionId = body.get("connection_id") == null
+                ? null : Long.valueOf(String.valueOf(body.get("connection_id")));
+        String dimensionCode = body.get("dimension_code") == null
+                ? null : String.valueOf(body.get("dimension_code"));
+        List<String> misValues = new ArrayList<>();
+        Object raw = body.get("mis_values");
+        if (raw instanceof List<?> list) {
+            for (Object v : list) {
+                if (v != null) {
+                    misValues.add(String.valueOf(v));
+                }
+            }
+        }
+        return Result.ok(dimensionValueResolveService.resolve(connectionId, dimensionCode, misValues));
+    }
+
 }

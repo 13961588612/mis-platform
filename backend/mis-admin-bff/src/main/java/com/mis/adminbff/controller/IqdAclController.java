@@ -9,6 +9,8 @@ import com.mis.adminbff.dto.iqd.IqdKnowledgeSaveRequest;
 import com.mis.adminbff.dto.iqd.IqdKnowledgeVO;
 import com.mis.adminbff.dto.iqd.IqdMaskRuleSaveRequest;
 import com.mis.adminbff.dto.iqd.IqdMaskRuleVO;
+import com.mis.adminbff.dto.iqd.IqdDimensionResolveVO;
+import com.mis.adminbff.dto.iqd.IqdDimensionValueMapVO;
 import com.mis.adminbff.dto.iqd.IqdScopeDimensionVO;
 import com.mis.adminbff.dto.iqd.IqdScopePolicySaveRequest;
 import com.mis.adminbff.dto.iqd.IqdScopePolicyVO;
@@ -616,4 +618,30 @@ public class IqdAclController {
             return Result.fail(ResultCode.INTERNAL_ERROR.getCode(), "样本对试运行失败: " + ex.getMessage());
         }
     }
+
+    // ================================================================ 行级维度值映射（MIS 值 ⇄ 数仓值）
+
+    @GetMapping("/dimension-value-maps")
+    public Result<List<IqdDimensionValueMapVO>> listDimensionValueMaps(
+            @RequestParam("connection_id") Long connectionId,
+            @RequestParam(value = "dimension_code", required = false) String dimensionCode) {
+        return Result.ok(iqdFacadeService.listDimensionValueMaps(connectionId, dimensionCode));
+    }
+
+    @PostMapping("/dimension-value-maps")
+    public Result<IqdDimensionValueMapVO> saveDimensionValueMap(@RequestBody Map<String, Object> dto) {
+        return Result.ok(iqdFacadeService.saveDimensionValueMap(dto));
+    }
+
+    @DeleteMapping("/dimension-value-maps/{id}")
+    public Result<Void> deleteDimensionValueMap(@PathVariable Long id) {
+        iqdFacadeService.deleteDimensionValueMap(id);
+        return Result.ok();
+    }
+
+    @PostMapping("/dimension-value-maps/resolve")
+    public Result<IqdDimensionResolveVO> resolveDimensionValues(@RequestBody Map<String, Object> dto) {
+        return Result.ok(iqdFacadeService.resolveDimensionValues(dto));
+    }
+
 }
