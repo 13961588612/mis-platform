@@ -8,6 +8,7 @@ import com.mis.adminbff.client.model.DeptVO;
 import com.mis.adminbff.client.model.EmployeePhoneMatchVO;
 import com.mis.adminbff.client.model.EmployeeVO;
 import com.mis.adminbff.client.model.OrgVO;
+import com.mis.adminbff.client.model.UserDataSetScopeVO;
 import com.mis.adminbff.client.model.PostTypeTreeNodeVO;
 import com.mis.adminbff.client.model.PostTypeVO;
 import com.mis.adminbff.client.model.PostVO;
@@ -59,7 +60,10 @@ public class OrgWebClient extends AbstractDownstreamClient {
             new ParameterizedTypeReference<>() {};
     private static final ParameterizedTypeReference<Result<DeptTypeVO>> DEPT_TYPE =
             new ParameterizedTypeReference<>() {};
-    private static final ParameterizedTypeReference<Result<Void>> VOID =
+    private static final ParameterizedTypeReference<Result<UserDataSetScopeVO>> DATA_SCOPE =
+            new ParameterizedTypeReference<>() {};
+
+        private static final ParameterizedTypeReference<Result<Void>> VOID =
             new ParameterizedTypeReference<>() {};
     private static final ParameterizedTypeReference<Result<Map<String, Long>>> COUNT =
             new ParameterizedTypeReference<>() {};
@@ -340,4 +344,12 @@ public class OrgWebClient extends AbstractDownstreamClient {
         body.put("phone", phone);
         return body;
     }
+    /** Query user data scope view from mis-org (for IQD header injection). */
+    public UserDataSetScopeVO getUserDataSetScope(Long userId) {
+        return block(client().get()
+                .uri("/internal/v1/orgs/users/{userId}/data-scope", userId)
+                .retrieve()
+                .bodyToMono(DATA_SCOPE));
+    }
+
 }

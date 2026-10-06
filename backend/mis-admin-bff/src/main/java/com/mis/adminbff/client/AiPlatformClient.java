@@ -1,6 +1,8 @@
-package com.mis.adminbff.client;
+﻿package com.mis.adminbff.client;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.mis.adminbff.client.model.UserDataSetScopeVO;
 import com.mis.adminbff.client.model.IamRoleVO;
 import com.mis.adminbff.client.model.IamUserVO;
 import com.mis.adminbff.config.AiPlatformProperties;
@@ -65,12 +67,18 @@ public class AiPlatformClient extends AbstractDownstreamClient {
     private static final String HEADER_MIS_ORGS = "X-Mis-Orgs";
     private static final String HEADER_MIS_ROLES = "X-Mis-Roles";
 
+    private static final String HEADER_MIS_DEPT_SCOPE = "X-Mis-Dept-Scope";
+    private static final String HEADER_MIS_STORES = "X-Mis-Stores";
+    private static final String HEADER_MIS_DATA_SCOPE = "X-Mis-Data-Scope";
+
     /** IAM 取数短 TTL 缓存（T4.4，降低 IAM 压力与请求延迟）。 */
     private static final long IAM_CACHE_TTL_MS = 60_000L;
 
     private final IamWebClient iamWebClient;
     private final ObjectMapper objectMapper = new ObjectMapper();
     private final Map<Long, IamCacheEntry> iamCache = new ConcurrentHashMap<>();
+    private final OrgWebClient orgWebClient;
+    private final Map<Long, OrgCacheEntry> orgCache = new ConcurrentHashMap<>();
     /**
      * 自愈 / MDL 整库重建超时：须 ≥ Worker {@code build_timeout_seconds}(默认 120s)。
      * 默认 chat 60s 会在 build 未完成时先断，前端看到「构建失败」。
@@ -80,11 +88,13 @@ public class AiPlatformClient extends AbstractDownstreamClient {
     public AiPlatformClient(
             @Qualifier("plainWebClientBuilder") WebClient.Builder plainBuilder,
             AiPlatformProperties properties,
-            IamWebClient iamWebClient) {
+            IamWebClient iamWebClient,
+            OrgWebClient orgWebClient) {
         super(
                 plainBuilder.baseUrl(properties.getBaseUrl()).build(),
                 properties.getChatTimeoutMs());
         this.iamWebClient = iamWebClient;
+        this.orgWebClient = orgWebClient;
     }
 
     /**
@@ -542,7 +552,8 @@ public class AiPlatformClient extends AbstractDownstreamClient {
     }
 
     /**
-     * 从安全上下文取 LoginUser → 调 MIS IAM 取 roles + deptId → 组装 X-Mis-Depts / X-Mis-Orgs / X-Mis-Roles。
+    /**
+     * 从安全上下文取 LoginUser -> 调 MIS IAM 取 roles + deptId -> 组装 X-Mis-Depts / X-Mis-Orgs / X-Mis-Roles。
      *
      * <p>取值约定（docs/identity-enrichment-task-list.md §4）：
      * <ul>
@@ -558,7 +569,7 @@ public class AiPlatformClient extends AbstractDownstreamClient {
             try {
                 LoginUser user = SecurityContextHolder.getOptional().orElse(null);
                 if (user == null || user.getUserId() == null) {
-                    return; // 无登录上下文则不注入
+                    return;
                 }
 
                 IamUserVO iamUser = lookupIamUser(user.getUserId());
@@ -605,34 +616,79 @@ public class AiPlatformClient extends AbstractDownstreamClient {
                 if (!roles.isEmpty()) {
                     headers.set(HEADER_MIS_ROLES, objectMapper.writeValueAsString(roles));
                 }
+
+            // --- IQD 行级数据范围头注入 ---
+            try {
+                LoginUser iqdcUser = SecurityContextHolder.getOptional().orElse(null);
+                if (iqdcUser != null && iqdcUser.getUserId() != null) {
+                    injectDataRowScopeHeaders(headers, iqdcUser.getUserId());
+                }
             } catch (Exception ignored) {
-                // 降级：IAM 不可达 / 解析失败 → 省略 X-Mis-* 头，平台退化为旧行为（不阻断主流程）
+                // mis-org 不可达 / 解析失败 -> 不加范围头，Worker 侧 fail-closed
             }
         };
     }
 
     /**
-     * 取 MIS IAM 用户明细，带短 TTL 缓存（T4.4）。
-     *
-     * @param userId IAM 用户 id（= LoginUser.getUserId()，详见 R3）
-     * @return IAM 用户视图；IAM 不可达时返回 {@code null}
+     * 从 mis-org 查询用户数据范围并注入问数 Worker 范围控制头。
      */
-    private IamUserVO lookupIamUser(Long userId) {
-        IamCacheEntry entry = iamCache.get(userId);
-        if (entry != null && entry.isAlive()) {
-            return entry.user();
+    private void injectDataRowScopeHeaders(HttpHeaders headers, Long userId) {
+        UserDataSetScopeVO scope = lookupOrgDataScope(userId);
+        if (scope == null) return;
+
+        // ALL 显式放行
+        if (Boolean.TRUE.equals(scope.all())) {
+            headers.set(HEADER_MIS_DATA_SCOPE, "all");
+            return;
         }
-        IamUserVO user = iamWebClient.getUser(userId);
-        if (user != null) {
-            iamCache.put(userId, new IamCacheEntry(user, System.currentTimeMillis() + IAM_CACHE_TTL_MS));
+
+        // deptAnchors -> PATH_PREFIX range header
+        List<UserDataSetScopeVO.DeptAnchor> anchors = scope.deptAnchors();
+        if (anchors != null && !anchors.isEmpty()) {
+            List<Map<String, Object>> anchorJsonList = new ArrayList<>();
+            for (UserDataSetScopeVO.DeptAnchor a : anchors) {
+                Map<String, Object> m = new LinkedHashMap<>();
+                m.put("id", String.valueOf(a.id()));
+                if (a.path() != null && !a.path().isEmpty()) m.put("path", a.path());
+                if (a.scope() != null && !a.scope().isEmpty()) m.put("scope", a.scope());
+                anchorJsonList.add(m);
+            }
+            try {
+                headers.set(HEADER_MIS_DEPT_SCOPE, objectMapper.writeValueAsString(anchorJsonList));
+            } catch (JsonProcessingException e) {
+                // ignore serialization error
+            }
         }
-        return user;
+
+        // storeIds -> ENUM range header
+        List<Long> storeIds = scope.storeIds();
+        if (storeIds != null && !storeIds.isEmpty()) {
+            List<String> storeCodes = new ArrayList<>(storeIds.size());
+            for (Long sid : storeIds) storeCodes.add(String.valueOf(sid));
+            try {
+                headers.set(HEADER_MIS_STORES, objectMapper.writeValueAsString(storeCodes));
+            } catch (JsonProcessingException e) {
+                // ignore serialization error
+            }
+        }
     }
 
-    /** IAM 取数缓存条目（T4.4）：携带过期时间戳，TTL ≈ 60s。 */
-    private record IamCacheEntry(IamUserVO user, long expireAt) {
-        private boolean isAlive() {
-            return System.currentTimeMillis() < expireAt;
+    /** Cache lookup for mis-org data scope view (~60s TTL). Returns null on failure. */
+    private UserDataSetScopeVO lookupOrgDataScope(Long userId) {
+        OrgCacheEntry entry = orgCache.get(userId);
+        if (entry != null && entry.isAlive()) return entry.scope();
+        try {
+            UserDataSetScopeVO scope = orgWebClient.getUserDataSetScope(userId);
+            if (scope != null) {
+                orgCache.put(userId, new OrgCacheEntry(scope, System.currentTimeMillis() + IAM_CACHE_TTL_MS));
+            }
+            return scope;
+        } catch (Exception e) {
+            return null;
         }
     }
-}
+
+    private record OrgCacheEntry(UserDataSetScopeVO scope, long expireAt) {
+        boolean isAlive() { return System.currentTimeMillis() < expireAt; }
+    }
+

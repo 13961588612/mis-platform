@@ -58,11 +58,13 @@ public class IamDataScopeClient {
     public record DataScopePayload(
             int dataScope,
             List<Long> customOrgIds,
-            List<Long> customDeptIds
+            List<Long> customDeptIds,
+            List<Long> customStoreIds
     ) {
         public DataScopePayload {
             customOrgIds = customOrgIds != null ? customOrgIds : List.of();
             customDeptIds = customDeptIds != null ? customDeptIds : List.of();
+            customStoreIds = customStoreIds != null ? customStoreIds : List.of();
         }
     }
 }

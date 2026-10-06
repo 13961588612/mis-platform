@@ -178,7 +178,9 @@ public class UserService {
                 rolePermissionRepository.findTargetIdsByUserIdAndPermType(
                         userId, SysRolePermission.PermType.org),
                 rolePermissionRepository.findTargetIdsByUserIdAndPermType(
-                        userId, SysRolePermission.PermType.dept));
+                        userId, SysRolePermission.PermType.dept),
+                rolePermissionRepository.findTargetIdsByUserIdAndPermType(
+                        userId, SysRolePermission.PermType.store));
     }
 
     @Transactional(readOnly = true)
@@ -518,6 +520,14 @@ public class UserService {
 
     private static boolean isTenantAdmin(SysUser user) {
         return user.getIsTenantAdmin() != null && user.getIsTenantAdmin() == 1;
+    }
+
+
+    /** Retrieve the bound employeeId for a user (for mis-org DataSetScopeService). */
+    @Transactional(readOnly = true)
+    public Long resolveEmployeeId(Long userId) {
+        SysUser user = requireUser(userId);
+        return user.getEmployeeId();
     }
 
     private SysUser requireUser(Long id) {

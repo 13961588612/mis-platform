@@ -1,4 +1,4 @@
-"""ScopeResolver — 问数数据范围裁定 + 行级注入（v1.9 / W2）。
+﻿"""ScopeResolver — 问数数据范围裁定 + 行级注入（v1.9 / W2）。
 
 双闸门第二闸（architecture §5.1 步骤 10/25）：
 - **前置** resolve(identity, connection_id)：按身份 + 配置缓存裁定可问表集合；
@@ -82,6 +82,7 @@ class AskIdentity:
     raw_headers: dict[str, str] = field(default_factory=dict)
     simulated_role_code: str | None = None
     real_role_codes: list[str] = field(default_factory=list)
+    data_scope_all: bool = False
 
     def is_simulated(self) -> bool:
         """是否处于模拟角色状态（B6 后台测试页）。"""
@@ -303,6 +304,35 @@ class RowScopeInjectOutcome:
             "dimensions": list(self.dimensions),
             "original_sql": self.original_sql,
         }
+
+
+
+@staticmethod
+def from_request_headers(raw_headers: dict[str, str]) -> "AskIdentity":
+    """From BFF X-Mis-* headers into an AskIdentity."""
+    identity = AskIdentity(
+        user_id=int(raw_headers.get("X-Mis-User-Id")) if raw_headers.get("X-Mis-User-Id") else None,
+        employee_id=raw_headers.get("X-Mis-Employee-Id"),
+        role_codes=json.loads(raw_headers.get("X-Mis-Roles", "[]")) if raw_headers.get("X-Mis-Roles") else [],
+        dept_ids=[],
+        store_codes=json.loads(raw_headers.get("X-Mis-Stores", "[]")) if raw_headers.get("X-Mis-Stores") else [],
+        org_ids=json.loads(raw_headers.get("X-Mis-Orgs", "[]")) if raw_headers.get("X-Mis-Orgs") else [],
+        raw_headers=dict(raw_headers),
+    )
+
+    ds = raw_headers.get("X-Mis-Data-Scope", "").strip().lower()
+    if ds == "all":
+        identity.data_scope_all = True
+
+    dept_raw = raw_headers.get("X-Mis-Dept-Scope", "")
+    if dept_raw:
+        try:
+            anchors = json.loads(dept_raw)
+            identity.dept_ids = [str(a["id"]) for a in anchors if isinstance(a, dict) and a.get("id")]
+        except (json.JSONDecodeError, TypeError, KeyError):
+            pass
+
+    return identity
 
 
 @dataclass
@@ -759,7 +789,11 @@ class ScopeResolver:
             original_sql=original,
         )
         if not resolution.has_row_scope:
-            return outcome
+            if identity.data_scope_all:
+                # ALL scope: skip row-level injection entirely, keep SQL as-is
+                logger.info("IQD row scope: data_scope=all, skip injection")
+                return outcome
+            raise ScopeDeniedError(detail="no row-level conditions matched, deny execution")
 
         dimensions = await self._load_dimensions()
         dim_map: dict[str, RowScopeDimension] = {

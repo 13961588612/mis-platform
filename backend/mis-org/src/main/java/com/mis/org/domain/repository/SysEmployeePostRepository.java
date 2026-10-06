@@ -30,4 +30,8 @@ public interface SysEmployeePostRepository extends JpaRepository<SysEmployeePost
             WHERE ep.employeeId = :employeeId AND ep.status = 1 AND p.status = 1
             """)
     List<Long> findActivePostDeptIds(@Param("employeeId") Long employeeId);
+
+
+    /** order by effective_start asc */
+    List<SysEmployeePost> findByEmployeeIdOrderByEffectiveStartAsc(Long employeeId);
 }
