@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from 'react';
+﻿import { useEffect, useState, type ReactNode } from 'react';
 import { ChevronLeft, ChevronRight, Eye, Search } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -89,11 +89,11 @@ function highlight(text: string, keyword: string): ReactNode {
   const lower = kw.toLowerCase();
   return text.split(new RegExp(`(${escaped})`, 'gi')).map((part, i) =>
     part.toLowerCase() === lower ? (
-      <mark key={i} className="rounded bg-warning/25 px-0.5 text-foreground">
+      <mark key={`hl-${i}`} className="rounded bg-warning/25 px-0.5 text-foreground">
         {part}
       </mark>
     ) : (
-      <span key={i}>{part}</span>
+      <span key={`nl-${i}`}>{part}</span>
     ),
   );
 }

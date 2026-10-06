@@ -1,4 +1,4 @@
-import { useMemo, useState, type ChangeEvent } from 'react';
+﻿import { useMemo, useState, type ChangeEvent } from 'react';
 import { Check, FileUp, Loader2, Send, Sparkles } from 'lucide-react';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
@@ -318,7 +318,7 @@ export function AiFormFill({ onClose }: { onClose: () => void }) {
                 <div className="rounded-md border border-dashed border-border p-2.5 text-xs text-muted-foreground">
                   <div className="mb-1 font-medium text-foreground">未映射项（{unmapped.length}）</div>
                   {unmapped.map((u, i) => (
-                    <div key={i} className="truncate">
+                    <div key={`formfill-skel-${i}`} className="truncate">
                       · {u.raw}
                       {u.hint ? `（${u.hint}）` : ''}
                     </div>

@@ -1,4 +1,4 @@
-/**
+﻿/**
  * iqd-enhance-page.tsx — 问数「知识与规则」（W2/W4 + 指令，路径 /iqd/enhance）。
  *
  * <p>六个 Tab：
@@ -1463,7 +1463,7 @@ function IqdSqlPairDialog({
             {warnings.length > 0 ? (
               <ul className="list-disc space-y-1 rounded-md bg-amber-50 px-3 py-2 text-xs text-amber-700">
                 {warnings.map((w, i) => (
-                  <li key={i}>{w}</li>
+                  <li key={"warn-" + i}>{w}</li>
                 ))}
               </ul>
             ) : null}

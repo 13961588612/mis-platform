@@ -1,4 +1,4 @@
-/**
+﻿/**
  * ai-chat-panel.tsx — A2UI 对话面板（T09，从 旧版独立前端 ChatPanel + ChatPage 迁移）。
  *
  * <p>知识库问答 / 问数两页共用的对话壳：
@@ -388,7 +388,7 @@ export function AiChatPanel({
             <div className="space-y-3">
               {[0, 1, 2].map((i) => (
                 <div
-                  key={i}
+                  key={`chat-skel-${i}`}
                   className={cn('flex', i % 2 === 0 ? 'justify-end' : 'justify-start')}
                 >
                   <div className="h-12 w-2/3 animate-pulse rounded-lg bg-muted/60" />

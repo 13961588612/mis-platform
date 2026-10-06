@@ -1,4 +1,4 @@
-/**
+﻿/**
  * CopilotPanel — 原生 AI Copilot 对话面板（T06'）。
  *
  * <p>02 文档 §1 T06'：废弃 iframe（CopilotH5Frame），原生 Sheet + ChatShell + SSE 直连
@@ -484,7 +484,7 @@ export function CopilotPanel({
               <div className="space-y-3">
                 {[0, 1, 2].map((i) => (
                   <div
-                    key={i}
+                    key={`bubble-skel-${i}`}
                     className={cn(
                       'flex items-start gap-3',
                       i % 2 === 0 ? 'justify-end' : 'justify-start',
@@ -525,7 +525,7 @@ export function CopilotPanel({
                     );
                   return (
                     <ChatBubble
-                      key={`${msg.role}-${msg.id}-${index}`}
+                      key={msg.role + "-" + msg.id + "-" + index}
                       message={msg}
                       hideEmptyDuplicate={laterHasPayload}
                     />

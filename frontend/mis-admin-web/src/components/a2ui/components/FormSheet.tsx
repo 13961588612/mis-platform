@@ -1,4 +1,4 @@
-/**
+﻿/**
  * FormSheet — A2UI `form-sheet` 组件（shadcn，T06'）。
  *
  * <p>渲染权限：默认可见；写操作 `form:submit` 经 bff-actions → BFF 校验。
@@ -116,7 +116,7 @@ export function FormSheet({ props }: A2uiComponentProps) {
                         {(f.options ?? []).map((o, i) => {
                           const opt = typeof o === 'string' ? { value: o, label: o } : o;
                           return (
-                            <SelectItem key={i} value={opt.value}>
+                            <SelectItem key={opt.value} value={opt.value}>
                               {opt.label}
                             </SelectItem>
                           );

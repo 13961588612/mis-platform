@@ -1,4 +1,4 @@
-/**
+﻿/**
  * SyncStatusBar.tsx — 问数增强同步状态条（闭环补全 P0-4）。
  *
  * <p>轮询 GET /iqd/enhance/sync-status，渲染最近一次 build/index 阶段状态、
@@ -168,7 +168,7 @@ export function SyncStatusBar({ connectionId }: { connectionId: number | null })
           <div className="font-medium">发布后引擎侧自检：发现不一致（点刷新可重试）</div>
           <ul className="mt-0.5 list-disc pl-4">
             {selfcheckWarnings.slice(0, 3).map((w, i) => (
-              <li key={i}>{w}</li>
+              <li key={"warn-" + i}>{w}</li>
             ))}
             {selfcheckWarnings.length > 3 ? (
               <li>…另有 {selfcheckWarnings.length - 3} 条（悬停徽标查看全部）</li>

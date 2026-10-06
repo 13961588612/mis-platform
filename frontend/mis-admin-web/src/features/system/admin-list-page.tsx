@@ -98,7 +98,7 @@ function TagCluster({ values, flat = false }: { values: unknown[]; flat?: boolea
     <div className="flex flex-wrap items-center gap-1">
       {values.map((v, i) => (
         <span
-          key={i}
+          key={String(v) + "-" + i}
           className={
             !flat && i === 0
               ? 'inline-flex items-center rounded-md bg-primary/10 px-1.5 py-0.5 text-[0.75rem] font-medium text-primary'
@@ -194,7 +194,7 @@ function AssignmentEditor({
               </tr>
             ) : (
               list.map((a, i) => (
-                <tr key={i} className="border-t border-border/50 last:border-0">
+                <tr key={a.dept + ":" + a.post + ":" + a.startDate} className="border-t border-border/50 last:border-0">
                   <td className="px-2 py-1.5">
                     <DeptTreeSelect
                       value={a.dept ?? ''}
@@ -285,7 +285,7 @@ function AssignmentTable({ list }: { list: Assignment[] }) {
       </thead>
       <tbody>
         {list.map((a, i) => (
-          <tr key={i}>
+          <tr key={a.dept + ":" + a.post + ":" + a.startDate}>
             <td className="px-3 py-2 font-medium text-foreground">{a.deptLabel || a.dept || '—'}</td>
             {showOrg && <td className="border-l border-border/60 px-3 py-2 font-medium text-foreground">{a.orgName ?? '—'}</td>}
             <td className="border-l border-border/60 px-3 py-2 font-medium text-foreground">

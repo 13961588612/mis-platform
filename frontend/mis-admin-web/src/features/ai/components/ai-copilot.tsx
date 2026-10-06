@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+﻿import { useEffect, useRef, useState } from 'react';
 import { Send } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
@@ -74,7 +74,7 @@ export function AiCopilot(_props: AiCopilotProps) {
           </div>
         ) : (
           messages.map((m, i) => (
-            <div key={i} className={cn('flex', m.role === 'user' ? 'justify-end' : 'justify-start')}>
+            <div key={m.id ?? `msg-${i}`} className={cn('flex', m.role === 'user' ? 'justify-end' : 'justify-start')}>
               <div
                 className={cn(
                   'max-w-[85%] rounded-lg px-3 py-2 text-sm',

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+﻿import { useCallback, useEffect, useMemo, useState } from 'react';
 import { AlertTriangle, History, PlayCircle, RefreshCw, RotateCcw, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
@@ -288,7 +288,7 @@ export function KbEngineRenameCard() {
             {plan.items && plan.items.length > 0 ? (
               <ul className="max-h-72 divide-y divide-border/60 overflow-auto rounded-md border">
                 {plan.items.map((it, i) => (
-                  <li key={i} className="px-3 py-2 text-sm">
+                  <li key={`rename-${it.libraryId ?? "none"}-${i}`} className="px-3 py-2 text-sm">
                     <div className="flex flex-wrap items-center gap-2">
                       <Badge
                         variant={

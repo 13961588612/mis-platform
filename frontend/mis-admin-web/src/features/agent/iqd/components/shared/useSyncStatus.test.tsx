@@ -1,4 +1,4 @@
-// @vitest-environment jsdom
+﻿// @vitest-environment jsdom
 /**
  * useSyncStatus.test.tsx — catalog 同步状态共享 Query（去重 + 两档节奏）。
  *
@@ -52,7 +52,7 @@ function Probes({
   return (
     <QueryClientProvider client={client}>
       {connectionIds.map((id, i) => (
-        <Probe key={i} connectionId={id} />
+        <Probe key={"probe-" + id} connectionId={id} />
       ))}
     </QueryClientProvider>
   );

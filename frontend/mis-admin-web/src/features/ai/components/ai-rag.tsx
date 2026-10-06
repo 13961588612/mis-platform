@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+﻿import { useRef, useState } from 'react';
 import { Loader2, Sparkles } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
@@ -80,7 +80,7 @@ export function AiRag({ record }: { record?: Record<string, unknown> | null; onC
           </div>
         ) : (
           history.map((item, i) => (
-            <div key={i} className="space-y-2">
+            <div key={`rag-skel-${i}`} className="space-y-2">
               <div className="flex justify-end">
                 <div className="max-w-[85%] rounded-lg bg-primary px-3 py-2 text-sm text-primary-foreground">
                   {item.question}

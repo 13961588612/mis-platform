@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+﻿import { useEffect, useRef, useState } from 'react';
 import { ChevronDown, Sparkles } from 'lucide-react';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
@@ -97,7 +97,7 @@ export function AiSummary({
             {points.length > 0 ? (
               <ul className="list-disc space-y-1 pl-5">
                 {points.map((p, i) => (
-                  <li key={i}>
+                  <li key={`sum-skel-${i}`}>
                     {p.label ? <span className="font-medium">{p.label}：</span> : null}
                     {p.text ?? p.value ?? ''}
                     {p.risk ? <span className="ml-1 text-warning">（风险：{p.risk}）</span> : null}

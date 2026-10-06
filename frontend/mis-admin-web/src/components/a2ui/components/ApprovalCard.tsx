@@ -1,4 +1,4 @@
-/**
+﻿/**
  * ApprovalCard — A2UI `approval-card` 组件（shadcn 一处实现，T06'）。
  *
  * <p>渲染权限 `approval:view`（registry 声明）；写操作 `approval:decide`（通过/驳回）
@@ -91,7 +91,7 @@ export function ApprovalCard({ props }: A2uiComponentProps) {
         {fields.length > 0 ? (
           <dl className="space-y-1 text-xs text-muted-foreground">
             {fields.map((f, i) => (
-              <div key={i} className="flex gap-2">
+              <div key={`field-${i}`} className="flex gap-2">
                 <dt className="font-medium text-foreground/80">{f.label ?? ''}</dt>
                 <dd className="break-all">{String(f.value ?? '')}</dd>
               </div>

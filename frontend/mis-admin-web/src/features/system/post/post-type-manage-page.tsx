@@ -1,4 +1,4 @@
-import { SHEET_FORM_BODY, SHEET_FORM_FIELD, SHEET_FORM_LABEL } from '@/components/common/sheet-form-styles';
+﻿import { SHEET_FORM_BODY, SHEET_FORM_FIELD, SHEET_FORM_LABEL } from '@/components/common/sheet-form-styles';
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { ChevronRight, Folder, Layers, Pencil, Plus, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
@@ -254,7 +254,7 @@ export function PostTypeManagePage({ headerExtra }: { headerExtra?: ReactNode })
         {loading ? (
           <div className="space-y-2 p-4">
             {Array.from({ length: 5 }).map((_, i) => (
-              <div key={i} className="h-8 animate-pulse rounded bg-muted" />
+              <div key={`skel-${i}`} className="h-8 animate-pulse rounded bg-muted" />
             ))}
           </div>
         ) : rows.length === 0 ? (

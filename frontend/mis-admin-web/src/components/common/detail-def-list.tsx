@@ -1,4 +1,4 @@
-import { Fragment, type ReactNode } from 'react';
+﻿import { Fragment, type ReactNode } from 'react';
 import { cn } from '@/lib/utils';
 
 export interface DefItem {
@@ -36,7 +36,7 @@ function renderValue(value: ReactNode) {
       <span className="flex flex-wrap items-center gap-1">
         {value.map((v, i) => (
           <span
-            key={i}
+            key={String(v) + "-" + i}
             className="inline-flex items-center rounded-md border border-border bg-muted/40 px-1.5 py-0.5 text-[0.75rem] text-muted-foreground"
           >
             {String(v)}
