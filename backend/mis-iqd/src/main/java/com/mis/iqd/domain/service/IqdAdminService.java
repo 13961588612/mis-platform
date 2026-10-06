@@ -1043,7 +1043,7 @@ public class IqdAdminService {
             String objectType = normalizeAclObjectType(dto.objectType(), objectKeyRaw);
             String objectKey = objectKeyRaw.isBlank() ? fieldKeyRaw : objectKeyRaw;
             String fieldKey = fieldKeyRaw.isBlank() ? null : fieldKeyRaw;
-            validateRowScope(dto.rowScope());
+            validateRowScope(connectionId, objectKey, dto.rowScope());
 
             Optional<IqdTableAcl> existing = fieldKey == null
                     ? tableAclRepository
@@ -1155,6 +1155,17 @@ public class IqdAdminService {
      * @param rowScope JSONB 字符串（null/空 = 全行可见，合法）
      */
     public void validateRowScope(String rowScope) {
+        validateRowScope(null, null, rowScope);
+    }
+
+    /**
+     * 校验 row_scope（W2 + P3-1：对象级列覆盖）。
+     *
+     * @param connectionId 连接 id（用于 catalog 归属校验；null 时跳过归属校验，仅正则）
+     * @param objectKey    对象 item_key（表 / 模型 / Cube；用于 catalog 归属校验）
+     * @param rowScope     JSONB 字符串（null/空 = 全行可见，合法）
+     */
+    public void validateRowScope(Long connectionId, String objectKey, String rowScope) {
         if (rowScope == null || rowScope.isBlank()) {
             return;
         }
@@ -1191,12 +1202,69 @@ public class IqdAdminService {
                 if ("manual".equalsIgnoreCase(mode)) {
                     validateManualParams(code, dim);
                 }
+                // P3-1: object-level column override validation（正则白名单 + catalog 归属）
+                String columnOverride = str(dim.get("column"));
+                if (columnOverride != null && !columnOverride.isBlank()) {
+                    String col = columnOverride.trim();
+                    if (!col.matches("^[A-Za-z_][A-Za-z0-9_]*$")) {
+                        throw new BusinessException(
+                                ResultCode.VALIDATION_ERROR,
+                                "行级覆盖列名非法（仅允许字母、数字、下划线）: " + col);
+                    }
+                    if (connectionId != null && objectKey != null && !objectKey.isBlank()
+                            && !catalogHasColumn(connectionId, objectKey, col)) {
+                        throw new BusinessException(
+                                ResultCode.VALIDATION_ERROR,
+                                "行级覆盖列不属于该对象的 catalog 字段: " + col);
+                    }
+                }
             }
         } catch (BusinessException exc) {
             throw exc;
         } catch (Exception exc) {
             throw new BusinessException(ResultCode.VALIDATION_ERROR, "row_scope 不是合法 JSON");
         }
+    }
+
+    /**
+     * catalog 归属校验：覆盖列必须属于该对象的 catalog 字段
+     * （iqd_catalog_item：kind=column 且 parent_key 指向该对象 / 其物理表）。
+     *
+     * <p>候选父键：对象 key 本身 + 模型/Cube 的 model_ref（物理表）+ 对象 key 末段（裸表名兜底）。
+     * catalog 未命中 → false（保存按 42200 拒绝，fail-closed）。
+     */
+    private boolean catalogHasColumn(Long connectionId, String objectKey, String columnName) {
+        Set<String> parents = new java.util.LinkedHashSet<>();
+        parents.add(objectKey);
+        parents.add(lastSegment(objectKey));
+        catalogItemRepository.findByConnectionIdAndItemKey(connectionId, objectKey).ifPresent(it -> {
+            String ref = it.getModelRef();
+            if (ref != null && !ref.isBlank()) {
+                parents.add(ref.trim());
+                parents.add(lastSegment(ref.trim()));
+            }
+        });
+        for (String parent : parents) {
+            if (parent == null || parent.isBlank()) {
+                continue;
+            }
+            for (IqdCatalogItem item : catalogItemRepository.findByConnectionIdAndParentKey(connectionId, parent)) {
+                if ("column".equalsIgnoreCase(item.getKind())
+                        && columnName.equals(lastSegment(item.getItemKey()))) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    /** item_key 末段（`pg.public.orders.dept_id` → `dept_id`；无 `.` 原样返回）。 */
+    private static String lastSegment(String key) {
+        if (key == null) {
+            return "";
+        }
+        int dot = key.lastIndexOf('.');
+        return dot >= 0 ? key.substring(dot + 1) : key;
     }
 
     /**

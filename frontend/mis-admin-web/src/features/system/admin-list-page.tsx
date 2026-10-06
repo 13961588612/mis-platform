@@ -284,7 +284,7 @@ function AssignmentTable({ list }: { list: Assignment[] }) {
         </tr>
       </thead>
       <tbody>
-        {list.map((a, i) => (
+        {list.map((a) => (
           <tr key={a.dept + ":" + a.post + ":" + a.startDate}>
             <td className="px-3 py-2 font-medium text-foreground">{a.deptLabel || a.dept || '—'}</td>
             {showOrg && <td className="border-l border-border/60 px-3 py-2 font-medium text-foreground">{a.orgName ?? '—'}</td>}

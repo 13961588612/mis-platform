@@ -44,7 +44,9 @@ import {
   saveIqdScopePolicies,
   type IqdAcl,
   type IqdAclSavePayload,
+  listIqdDimensions,
   type IqdCatalogItem,
+  type IqdScopeDimension,
   type IqdScopePolicy,
   type IqdScopePolicySavePayload,
 } from '@/lib/api/iqd';
@@ -53,7 +55,12 @@ import { listEnabledRoles } from '@/lib/api/roles';
 import { ProjectSwitcher } from './components/shared/ProjectSwitcher';
 import { useActiveProjectId } from './hooks/useActiveProject';
 import { resolveTableKey, useCatalogNodes } from './hooks/useCatalogNodes';
-import { summarizeRowScope } from './components/scope/rowScopeUtils';
+import {
+  buildRowScope,
+  catalogColumnName,
+  parseRowScope,
+  summarizeRowScope,
+} from './components/scope/rowScopeUtils';
 import type { RoleItem, UserView } from '@/types/api';
 
 const SUBJECT_TYPE_LABEL: Record<string, string> = {
@@ -386,6 +393,158 @@ export interface EditContext {
   rowScope?: string;
 }
 
+
+// ================================================================ 行级范围结构化编辑器（对象级列覆盖）
+
+/**
+ * 结构化行级范围编辑器：为当前对象选择维度 + 覆盖列名（下拉，仅本对象 catalog 字段）。
+ *
+ * <p>列名默认取维度全局 `column_name`（作为「默认」选项）；也可从该对象的 catalog 字段
+ * 下拉选择覆盖列，写回 `row_scope.dimensions[].column`。不选覆盖列 = 维度全局列（零回归）。
+ */
+function DimensionScopeEditor({
+  dimensions,
+  fields,
+  value,
+  onChange,
+}: {
+  dimensions: IqdScopeDimension[];
+  fields: ObjectField[];
+  value: string;
+  onChange: (next: string) => void;
+}) {
+  const parsed = useMemo(() => parseRowScope(value), [value]);
+  const instances = parsed.instances;
+
+  const columnOptions = useMemo(() => {
+    const seen = new Set<string>();
+    const out: string[] = [];
+    for (const f of fields) {
+      const name = catalogColumnName({ item_key: f.itemKey });
+      if (name && !seen.has(name)) {
+        seen.add(name);
+        out.push(name);
+      }
+    }
+    return out;
+  }, [fields]);
+
+  const emit = (next: Array<{ dimension: string; column?: string | null; scope?: string | null }>) => {
+    onChange(buildRowScope(next) ?? '');
+  };
+
+  const update = (idx: number, patch: Partial<{ dimension: string; column: string }>) => {
+    const next = instances.map((inst, i) =>
+      i === idx
+        ? { dimension: patch.dimension ?? inst.dimension, column: patch.column ?? inst.column, scope: inst.scope }
+        : { dimension: inst.dimension, column: inst.column, scope: inst.scope },
+    );
+    emit(next);
+  };
+
+  const remove = (idx: number) => {
+    emit(
+      instances
+        .filter((_, i) => i !== idx)
+        .map((inst) => ({ dimension: inst.dimension, column: inst.column, scope: inst.scope })),
+    );
+  };
+
+  const add = () => {
+    const first = dimensions[0];
+    if (!first) return;
+    emit([
+      ...instances.map((inst) => ({ dimension: inst.dimension, column: inst.column, scope: inst.scope })),
+      { dimension: first.dimension_code, column: '' },
+    ]);
+  };
+
+  return (
+    <div className="mt-1 flex min-h-0 flex-1 flex-col gap-2">
+      <div className="flex items-center justify-between">
+        <label className="block shrink-0 text-xs text-muted-foreground">
+          {'行级范围（留空=全行可见；列名默认取维度全局列，可被本对象覆盖）'}
+        </label>
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          className="h-7 px-2"
+          onClick={add}
+          disabled={dimensions.length === 0}
+        >
+          <Plus className="h-3.5 w-3.5" />
+          添加维度
+        </Button>
+      </div>
+      {parsed.error ? (
+        <p className="text-xs text-destructive">
+          {parsed.error}（原始值：{parsed.raw}）
+        </p>
+      ) : null}
+      {instances.length === 0 ? (
+        <p className="text-xs text-muted-foreground">未配置维度 → 全行可见</p>
+      ) : (
+        <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-auto">
+          {instances.map((inst, idx) => {
+            const dim = dimensions.find((d) => d.dimension_code === inst.dimension);
+            const defaultColumn = dim?.column_name ?? '';
+            const override = (inst.column ?? '').trim();
+            const selectValue = override !== '' ? override : '__default__';
+            const options = Array.from(new Set([defaultColumn, ...columnOptions].filter(Boolean)));
+            return (
+              <div key={`${inst.dimension}-${idx}`} className="flex flex-wrap items-center gap-2 rounded border p-2">
+                <select
+                  className="h-8 rounded border border-input bg-card px-2 text-xs"
+                  value={inst.dimension}
+                  onChange={(e) => {
+                    update(idx, { dimension: e.target.value, column: '' });
+                  }}
+                >
+                  {dimensions.map((d) => (
+                    <option key={d.dimension_code} value={d.dimension_code}>
+                      {d.dimension_name || d.dimension_code}
+                    </option>
+                  ))}
+                </select>
+                <span className="text-xs text-muted-foreground">列名</span>
+                <select
+                  className="h-8 rounded border border-input bg-card px-2 font-mono text-xs"
+                  value={selectValue}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    update(idx, { column: v === '__default__' ? '' : v });
+                  }}
+                >
+                  <option value="__default__">
+                    {defaultColumn ? `默认（${defaultColumn}）` : '默认（维度全局列）'}
+                  </option>
+                  {options
+                    .filter((c) => c !== defaultColumn)
+                    .map((c) => (
+                      <option key={c} value={c}>
+                        {c}
+                      </option>
+                    ))}
+                </select>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="ghost"
+                  className="ml-auto h-7 px-2 text-destructive"
+                  onClick={() => remove(idx)}
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                </Button>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function AddPermissionWizard({
   open,
   target,
@@ -408,9 +567,25 @@ function AddPermissionWizard({
   const [selectedKeys, setSelectedKeys] = useState<Set<string>>(new Set());
   const [fieldSelection, setFieldSelection] = useState<FieldSelection>({});
   const [rowScopeDraft, setRowScopeDraft] = useState<Record<string, string>>({});
+  const [aclDimensions, setAclDimensions] = useState<IqdScopeDimension[]>([]);
   const [showRole, setShowRole] = useState(false);
   const [showUser, setShowUser] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+
+  useEffect(() => {
+    if (!open || target !== 'acl') return;
+    let cancelled = false;
+    void listIqdDimensions()
+      .then((dims) => {
+        if (!cancelled) setAclDimensions(dims.filter((d) => d.enabled !== false));
+      })
+      .catch(() => {
+        if (!cancelled) setAclDimensions([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open, target]);
 
   useEffect(() => {
     if (!open) return;
@@ -697,22 +872,17 @@ function AddPermissionWizard({
                           ) : null}
                         </div>
                         {target === 'acl' ? (
-                          <div className="mt-1 flex min-h-0 flex-1 flex-col">
-                            <label className="mb-1 block shrink-0 text-xs text-muted-foreground">
-                              {'行级范围 row_scope（JSON；留空=全行可见）'}
-                            </label>
-                            <textarea
-                              className="min-h-[6rem] w-full flex-1 resize-none rounded border border-input bg-background px-2 py-1 font-mono text-xs"
-                              placeholder={'{"dimension":"store","scope":"store"}'}
-                              value={rowScopeDraft[obj.itemKey] ?? ''}
-                              onChange={(e) =>
-                                setRowScopeDraft((prev) => ({
-                                  ...prev,
-                                  [obj.itemKey]: e.target.value,
-                                }))
-                              }
-                            />
-                          </div>
+                          <DimensionScopeEditor
+                            dimensions={aclDimensions}
+                            fields={obj.fields}
+                            value={rowScopeDraft[obj.itemKey] ?? ''}
+                            onChange={(next) =>
+                              setRowScopeDraft((prev) => ({
+                                ...prev,
+                                [obj.itemKey]: next,
+                              }))
+                            }
+                          />
                         ) : obj.fields.length === 0 ? (
                           <p className="text-xs text-muted-foreground">该对象暂无可选字段</p>
                         ) : (

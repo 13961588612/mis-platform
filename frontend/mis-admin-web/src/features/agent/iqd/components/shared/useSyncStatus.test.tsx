@@ -51,7 +51,7 @@ function Probes({
 }) {
   return (
     <QueryClientProvider client={client}>
-      {connectionIds.map((id, i) => (
+      {connectionIds.map((id) => (
         <Probe key={"probe-" + id} connectionId={id} />
       ))}
     </QueryClientProvider>

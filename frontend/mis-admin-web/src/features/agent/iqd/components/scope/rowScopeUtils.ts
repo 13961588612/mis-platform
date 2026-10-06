@@ -69,6 +69,8 @@ export const SCOPE_PERMISSIONS = {
 export interface RowScopeInstance {
   /** 维度码（引用 `iqd_row_scope_dimension.dimension_code`，如 `dept` / `store`）。 */
   dimension: string;
+  /** 覆盖列名（对象级条件列；未写时回落维度全局 column_name）。*/
+  column?: string | null;
   /** 范围语义（`dept` | `dept_subtree` | `org` | `self` | `store` | `store_subtree` …）。 */
   scope: string;
   /** 锚点 path（`PATH_PREFIX` 预览用；缺省 `null`）。 */
@@ -129,8 +131,11 @@ function toInstance(value: unknown): RowScopeInstance | null {
   if (dimension === '') {
     return null;
   }
+  const column = toText(record.column);
   return {
     dimension,
+    // 仅在有对象级覆盖列时写入，避免污染既有解析结构（缺失 = 回落维度全局列）
+    ...(column !== '' ? { column } : {}),
     scope: toText(record.scope ?? record.semantic),
     // 兼容 `path` / `anchor_path` / `anchorPath`；`values` / `store_ids` / `ids`
     path: toTextOrNull(record.path ?? record.anchor_path ?? record.anchorPath),
@@ -535,4 +540,43 @@ export function describeScopeError(
     return `[50000] 系统错误：${message}`;
   }
   return code !== null ? `[${code}] ${message}` : message;
+}
+
+
+// ================================================================ row_scope 构造（对象级列覆盖）
+
+/**
+ * 把一个对象的维度实例构造回 `row_scope` JSON 字符串。
+ *
+ * <p>每个维度实例可带对象级覆盖列 `column`；未写（空）则回落维度全局 `column_name`
+ * （后端语义）。全部为空 → 返回 `null`（表示全行可见）。
+ *
+ * @param instances 维度实例（含可选 `column`）
+ * @returns 紧凑 JSON（`{"dimensions":[...]}`）；无有效维度 → `null`
+ */
+export function buildRowScope(
+  instances: Array<{ dimension: string; column?: string | null; scope?: string | null }>,
+): string | null {
+  const dims = (instances ?? [])
+    .map((inst) => {
+      const dimension = (inst.dimension ?? '').trim();
+      if (dimension === '') {
+        return null;
+      }
+      const out: Record<string, string> = { dimension };
+      const column = (inst.column ?? '').trim();
+      if (column !== '') {
+        out.column = column;
+      }
+      const scope = (inst.scope ?? '').trim();
+      if (scope !== '') {
+        out.scope = scope;
+      }
+      return out;
+    })
+    .filter((x): x is Record<string, string> => x !== null);
+  if (dims.length === 0) {
+    return null;
+  }
+  return JSON.stringify({ dimensions: dims });
 }

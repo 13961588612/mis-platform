@@ -748,7 +748,7 @@ export function IqdEnhancePage() {
                       <option value="ENUM">ENUM</option>
                     </select>
                     <Input
-                      placeholder="条件列（dept_id）"
+                      placeholder="默认条件列（dept_id；可被对象级覆盖）"
                       value={dimColumn}
                       onChange={(e) => setDimColumn(e.target.value)}
                     />
@@ -782,7 +782,7 @@ export function IqdEnhancePage() {
                         <th className="px-3 py-2 font-bold">维度码</th>
                         <th className="px-3 py-2 font-bold">维度名</th>
                         <th className="px-3 py-2 font-bold">策略</th>
-                        <th className="px-3 py-2 font-bold">条件列</th>
+                        <th className="px-3 py-2 font-bold">默认条件列</th>
                         <th className="px-3 py-2 font-bold">请求头</th>
                         <th className="px-3 py-2 font-bold">字典表</th>
                         <th className="px-3 py-2 font-bold">启用</th>

@@ -1,4 +1,4 @@
-﻿"""ScopeResolver — 问数数据范围裁定 + 行级注入（v1.9 / W2）。
+"""ScopeResolver — 问数数据范围裁定 + 行级注入（v1.9 / W2）。
 
 双闸门第二闸（architecture §5.1 步骤 10/25）：
 - **前置** resolve(identity, connection_id)：按身份 + 配置缓存裁定可问表集合；
@@ -55,6 +55,8 @@ ENUM_LIMIT = 500
 
 #: 业务库部门权限字典表（v1.6 定案，v1.7 A13 物化表形态）
 DICT_DEPT_SCOPE = "mis_dept_scope"
+#: Column-name whitelist regex (used by object-level override).
+_COL_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
 @dataclass
@@ -756,6 +758,25 @@ class ScopeResolver:
 
     # ================================================================ 行级注入（W2）
 
+
+    def _effective_column(self, dim: RowScopeDimension, inst: dict[str, Any]) -> str:
+        """Resolve effective column name for a dimension instance.
+
+        Priority: object-level ``column`` (in row_scope dimensions array) >
+        dimension global ``column_name``.
+
+        Raises:
+            ScopeDeniedError: column override fails the whitelist regex.
+        """
+        override = str(inst.get("column") or "").strip()
+        if override:
+            if not _COL_NAME_RE.match(override):
+                raise ScopeDeniedError(
+                    f"行级覆盖列名非法（仅允许字母、数字、下划线）: {override}"
+                )
+            return override
+        return dim.column_name
+
     async def inject_row_scope(
         self,
         sql: str,
@@ -793,7 +814,7 @@ class ScopeResolver:
                 # ALL scope: skip row-level injection entirely, keep SQL as-is
                 logger.info("IQD row scope: data_scope=all, skip injection")
                 return outcome
-            raise ScopeDeniedError(detail="no row-level conditions matched, deny execution")
+            raise ScopeDeniedError("未匹配到行级范围条件，拒绝执行")
 
         dimensions = await self._load_dimensions()
         dim_map: dict[str, RowScopeDimension] = {
@@ -848,7 +869,7 @@ class ScopeResolver:
                     # P1-4：注入前检查用户 SQL 显式引用受控列值是否越权。
                     # 授权集合内幂等放行；集合外任一值 → 45204 拒绝（不静默空集）。
                     unauthorized = self._explicit_unauthorized_values(
-                        original, dim, identity, selected, dialect=dialect
+                        original, dim, identity, selected, column=self._effective_column(dim, inst), dialect=dialect
                     )
                     if unauthorized:
                         logger.warning(
@@ -862,7 +883,7 @@ class ScopeResolver:
                         return outcome
 
                     predicate = self._build_authorized_predicate(
-                        dim, identity, selected, alias=alias
+                        dim, identity, selected, alias=alias, column=self._effective_column(dim, inst)
                     )
                     if not predicate:
                         outcome.verdict = "deny"
@@ -945,6 +966,7 @@ class ScopeResolver:
         strategy: str,
         *,
         alias: str = "",
+        column=None,
     ) -> str:
         """按维度策略生成授权谓词。
 
@@ -968,7 +990,7 @@ class ScopeResolver:
         Returns:
             SQL 谓词；无授权值返回空串。
         """
-        column = dimension.column_name
+        col = column or dimension.column_name
         qualifier = f"{alias}." if alias else ""
         if strategy == PREDICATE_PATH_PREFIX:
             anchors = identity.dept_scope_anchors()
@@ -991,7 +1013,7 @@ class ScopeResolver:
                     return ""
                 return (
                     f"EXISTS (SELECT 1 FROM {dimension.dict_table} rs "
-                    f"WHERE rs.dept_id = {qualifier}{column} "
+                    f"WHERE rs.dept_id = {qualifier}{col} "
                     f"AND ({' OR '.join(branches)}))"
                 )
             # 无字典表：ENUM 回退
@@ -999,7 +1021,7 @@ class ScopeResolver:
             if not values:
                 return ""
             in_list = ", ".join(_quote(v) for v in values)
-            return f"{qualifier}{column} IN ({in_list})"
+            return f"{qualifier}{col} IN ({in_list})"
 
         if strategy == PREDICATE_ENUM:
             # P1-6：dept 降级 ENUM 用 dept 锚点集合；store 用 X-Mis-Stores
@@ -1007,7 +1029,7 @@ class ScopeResolver:
             if not values:
                 return ""
             in_list = ", ".join(_quote(v) for v in values)
-            return f"{qualifier}{column} IN ({in_list})"
+            return f"{qualifier}{col} IN ({in_list})"
 
         return ""
 
@@ -1070,6 +1092,7 @@ class ScopeResolver:
         identity: AskIdentity,
         strategy: str,
         *,
+        column=None,
         dialect: str = "postgres",
     ) -> list[str]:
         """扫描用户 SQL 显式引用受控列的取值，返回其中不在授权集合内的值。
@@ -1088,8 +1111,8 @@ class ScopeResolver:
         Returns:
             越权引用值列表；空表示未发现显式越权引用。
         """
-        column = dimension.column_name
-        if not column or not sql:
+        col = column or dimension.column_name
+        if not col or not sql:
             return []
         authorized = self._enum_authorized_values(dimension, identity)
         if not authorized:
@@ -1108,7 +1131,7 @@ class ScopeResolver:
 
         # 等值形态：col = 'v' / col = "v" / col = 123
         eq = re.compile(
-            rf"\b{re.escape(column)}\s*=\s*(?:'([^']*)'|\"([^\"]*)\"|([A-Za-z0-9_.\-]+))",
+            rf"\b{re.escape(col)}\s*=\s*(?:'([^']*)'|\"([^\"]*)\"|([A-Za-z0-9_.\-]+))",
             re.IGNORECASE,
         )
         for m in eq.finditer(sql):
@@ -1117,7 +1140,7 @@ class ScopeResolver:
                 values.append(token)
 
         # IN 形态：col IN ('v1','v2') / col IN (1,2)
-        inn = re.compile(rf"\b{re.escape(column)}\s+IN\s*\(([^)]*)\)", re.IGNORECASE)
+        inn = re.compile(rf"\b{re.escape(col)}\s+IN\s*\(([^)]*)\)", re.IGNORECASE)
         for m in inn.finditer(sql):
             inner = m.group(1)
             for tok in inner.split(","):

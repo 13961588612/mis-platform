@@ -19,6 +19,7 @@ import {
   SCOPE_PERMISSIONS,
   alignDimensionToCatalogField,
   buildPredicatePreview,
+  buildRowScope,
   buildSimulatedWherePreview,
   catalogColumnName,
   combinePredicatesAnd,
@@ -378,5 +379,45 @@ describe('describeScopeError（逐码读 data 明细）', () => {
     expect(describeScopeError(50000, null, '系统错误')).toBe('[50000] 系统错误：系统错误');
     expect(describeScopeError(40900, null, '冲突')).toBe('[40900] 冲突');
     expect(describeScopeError(null, null, '网络错误')).toBe('网络错误');
+  });
+});
+
+describe('buildRowScope（对象级列覆盖构造）', () => {
+  it('未写 column → 仅 dimension', () => {
+    const out = buildRowScope([{ dimension: 'dept' }]);
+    expect(out).toBe('{"dimensions":[{"dimension":"dept"}]}');
+  });
+
+  it('写 column → 覆盖列写入 dimensions[].column', () => {
+    const out = buildRowScope([{ dimension: 'dept', column: 'org_dept_code' }]);
+    expect(out).toBe('{"dimensions":[{"dimension":"dept","column":"org_dept_code"}]}');
+  });
+
+  it('空串 column → 不写（回落维度全局列）', () => {
+    const out = buildRowScope([{ dimension: 'store', column: '  ' }]);
+    expect(out).toBe('{"dimensions":[{"dimension":"store"}]}');
+  });
+
+  it('多维度独立覆盖 + 保留 scope', () => {
+    const out = buildRowScope([
+      { dimension: 'dept', column: 'org_dept_code', scope: 'dept_subtree' },
+      { dimension: 'store', column: 'shop_no' },
+    ]);
+    expect(out).toBe(
+      '{"dimensions":[{"dimension":"dept","column":"org_dept_code","scope":"dept_subtree"},{"dimension":"store","column":"shop_no"}]}',
+    );
+  });
+
+  it('无有效维度 → null（全行可见）', () => {
+    expect(buildRowScope([])).toBeNull();
+    expect(buildRowScope([{ dimension: '  ' }])).toBeNull();
+  });
+
+  it('与 parseRowScope 往返一致（含 column）', () => {
+    const json = buildRowScope([{ dimension: 'dept', column: 'department_key' }])!;
+    const parsed = parseRowScope(json);
+    expect(parsed.error).toBeNull();
+    expect(parsed.instances[0].dimension).toBe('dept');
+    expect(parsed.instances[0].column).toBe('department_key');
   });
 });

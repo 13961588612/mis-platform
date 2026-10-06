@@ -22,6 +22,10 @@ vi.mock('@/features/agent/iqd/api/iqd-modeling', () => ({
 vi.mock('@/lib/api/iqd', () => ({
   listIqdScopePolicies: vi.fn(async () => []),
   listIqdAcls: vi.fn(async () => []),
+  listIqdDimensions: vi.fn(async () => [
+    { dimension_code: 'dept', dimension_name: '部门', predicate_type: 'PATH_PREFIX', column_name: 'dept_id', header_name: 'X-Mis-Dept-Scope', enabled: true },
+    { dimension_code: 'store', dimension_name: '门店', predicate_type: 'ENUM', column_name: 'store_id', header_name: 'X-Mis-Stores', enabled: true },
+  ]),
   saveIqdScopePolicies: vi.fn(async () => ({ count: 1 })),
   saveIqdAcls: vi.fn(async () => ({ count: 1 })),
   deleteIqdAcl: vi.fn(async () => undefined),

@@ -113,7 +113,7 @@ export function FormSheet({ props }: A2uiComponentProps) {
                         <SelectValue placeholder="请选择" />
                       </SelectTrigger>
                       <SelectContent>
-                        {(f.options ?? []).map((o, i) => {
+                        {(f.options ?? []).map((o) => {
                           const opt = typeof o === 'string' ? { value: o, label: o } : o;
                           return (
                             <SelectItem key={opt.value} value={opt.value}>
