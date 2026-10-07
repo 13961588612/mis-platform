@@ -368,3 +368,94 @@ describe('空 done + messageId / 安全超时回填', () => {
     expect(useChatStore.getState().error).toBeNull();
   });
 });
+
+describe('陈旧生成态恢复（切页/重挂载转圈回归）', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('拥有者在收到 done 前卸载 → 收尾本轮生成（按钮不再转圈）', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({ ok: true, json: async () => ({ code: 0, data: [] }) }) as never),
+    );
+
+    const first = renderHook(() => useChat({ autoConnect: true }));
+    await waitFor(() => expect(sseHarness.getOnEvent()).toBeTruthy());
+    act(() => {
+      first.result.current.sendMessage('问题');
+    });
+    act(() => {
+      sseHarness.getOnEvent()?.({ type: 'stream', content: '已流出正文' });
+    });
+    expect(useChatStore.getState().isGenerating).toBe(true);
+
+    // 承载本轮生成的组件被卸载（切页/关闭面板）→ 收尾，按钮解锁。
+    first.unmount();
+    expect(useChatStore.getState().isGenerating).toBe(false);
+    const assistant = useChatStore.getState().messages.find((m) => m.role === 'assistant');
+    expect(assistant?.status).toBe('delivered');
+  });
+
+  it('无锚点的旁观实例卸载，不会误清他人在进行的生成', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({ ok: true, json: async () => ({ code: 0, data: [] }) }) as never),
+    );
+
+    // owner：真正发起并持有流锚点的实例
+    const owner = renderHook(() => useChat({ autoConnect: true }));
+    await waitFor(() => expect(sseHarness.getOnEvent()).toBeTruthy());
+    act(() => {
+      owner.result.current.sendMessage('问题');
+    });
+    act(() => {
+      sseHarness.getOnEvent()?.({ type: 'stream', content: '流式正文' });
+    });
+    expect(useChatStore.getState().isGenerating).toBe(true);
+
+    // bystander：另一个 useChat 实例（无锚点）挂载后卸载，不得清除 owner 的生成态。
+    const bystander = renderHook(() => useChat({ autoConnect: true }));
+    await act(async () => {
+      await Promise.resolve();
+    });
+    bystander.unmount();
+    expect(useChatStore.getState().isGenerating).toBe(true);
+
+    owner.unmount();
+  });
+
+  it('安全超时不被 delta 无限续期（硬上限一次约 140s）', async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({ ok: true, json: async () => ({ code: 0, data: [] }) }) as never),
+    );
+
+    const { result } = renderHook(() => useChat({ autoConnect: true }));
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    act(() => {
+      result.current.sendMessage('问题');
+    });
+    // 第一帧：开始计时
+    act(() => {
+      sseHarness.getOnEvent()?.({ type: 'stream', content: 'A' });
+    });
+    // 多次 delta（旧逻辑会把 140s 无限顺延；新逻辑保持首次计时）
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(100_000);
+    });
+    act(() => {
+      sseHarness.getOnEvent()?.({ type: 'stream', content: 'B' });
+    });
+    // 再推进剩余 40s+ → 应触发硬上限并解锁
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(45_000);
+    });
+
+    expect(useChatStore.getState().isGenerating).toBe(false);
+  });
+});

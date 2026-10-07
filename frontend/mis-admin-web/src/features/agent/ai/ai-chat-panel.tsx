@@ -241,6 +241,7 @@ export function AiChatPanel({
   const [input, setInput] = useState('');
   const [dragOver, setDragOver] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const dispatchTrace = useChatStore((s) => s.dispatchTrace);
   const connectionState = useChatStore((s) => s.connectionState);
 
@@ -250,6 +251,17 @@ export function AiChatPanel({
     void chat.ensureSession();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [active, location.pathname]);
+
+  // 新消息 / 流式增量 / 思考态变化 → 自动滚到底部（与 Copilot 面板一致）。
+  // 以「最后一条消息内容长度」为依赖，覆盖同一条 assistant 气泡持续追加正文的流式更新。
+  const lastContentLen =
+    chat.messages.length > 0
+      ? (chat.messages[chat.messages.length - 1]?.content?.length ?? 0)
+      : 0;
+  useEffect(() => {
+    if (!active) return;
+    messagesEndRef.current?.scrollIntoView({ block: 'end', behavior: 'smooth' });
+  }, [active, chat.messages.length, lastContentLen, chat.isGenerating]);
 
   const canSend =
     active &&
@@ -432,6 +444,8 @@ export function AiChatPanel({
                   正在思考…
                 </div>
               ) : null}
+              {/* 滚动锚点：消息/流式更新时滚到底部 */}
+              <div ref={messagesEndRef} />
             </div>
           )}
         </div>

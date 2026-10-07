@@ -186,6 +186,35 @@ export function useChat(options?: UseChatOptions): UseChatReturn {
   }, []);
 
   /**
+   * 收尾「本实例拥有的」未完成生成——仅在本 hook 卸载且自带活跃流锚点时调用。
+   *
+   * <p>背景：安全超时计时器存在组件 ref 里、随卸载消失；但 {@code isGenerating} 存在
+   * 全局 zustand store 里会存活。若承载本轮生成的组件（如 Copilot 面板切页/关闭）在
+   * 收到 done 前被卸载，就会残留 {@code isGenerating=true} 且永无计时器 → 发送按钮
+   * 永久转圈（2026-10 回归）。
+   *
+   * <p><b>精确归属</b>：只有「本实例 {@code streamingMessageIdRef} 指向 store 中仍存在的
+   * streaming 消息」才算作本实例拥有本轮生成。这样多实例（Copilot 面板 + keep-alive
+   * 问数页）共用同一 global store 时，未持有锚点的实例绝不会误清别人的进行中生成。
+   *
+   * @returns 是否执行了收尾
+   */
+  const finalizeOwnedGeneratingOnUnmount = useCallback((): boolean => {
+    const streamingId = streamingMessageIdRef.current;
+    if (!streamingId) return false;
+    const store = useChatStore.getState();
+    const owned = store.messages.find((m) => m.id === streamingId);
+    if (!owned || owned.status !== 'streaming') return false;
+    clearGenerateTimeout();
+    streamingMessageIdRef.current = null;
+    sendLockRef.current = false;
+    const hasPayload = Boolean(owned.content.trim() || owned.surfaceId);
+    store.updateMessageStatus(owned.id, hasPayload ? 'delivered' : 'error');
+    store.setGenerating(false);
+    return true;
+  }, [clearGenerateTimeout]);
+
+  /**
    * 将仍 streaming 的助手气泡收为 delivered，并钉住 surface（若有）。
    */
   const finalizeStreamingAssistant = useCallback(
@@ -213,9 +242,16 @@ export function useChat(options?: UseChatOptions): UseChatReturn {
     [],
   );
 
-  /** 启动/重置生成安全超时（收不到 done/error 时强制解锁输入）。 */
+  /**
+   * 启动生成安全超时（收不到 done/error 时强制解锁输入）。
+   *
+   * <p><b>每轮只 arm 一次</b>：delta / surface 事件不再无条件续期，避免慢速或零星帧
+   * 把 140s 上限无限顺延、发送按钮永久转圈。若需真正重开计时，先调
+   * {@link clearGenerateTimeout}（例如新一轮发送前）。
+   */
   const armGenerateTimeout = useCallback((): void => {
-    clearGenerateTimeout();
+    // 已有计时器 → 说明本轮已在计时，保持原有 start 时间，不重置上限。
+    if (generateTimeoutRef.current != null) return;
     generateTimeoutRef.current = setTimeout(() => {
       void (async () => {
         generateTimeoutRef.current = null;
@@ -259,6 +295,17 @@ export function useChat(options?: UseChatOptions): UseChatReturn {
       })();
     }, GENERATE_SAFETY_TIMEOUT_MS);
   }, [clearGenerateTimeout, finalizeStreamingAssistant]);
+
+  // 卸载兜底：仅当本实例仍持有活跃流锚点（= 本轮生成由本实例发起）时收尾，
+  // 避免「收到 done 前组件被卸载 → isGenerating 永久残留 → 发送按钮一直转圈」。
+  // 用 ref 存最新实现，卸载 effect 只跑一次，依赖为空。
+  const finalizeOnUnmountRef = useRef<() => boolean>(() => false);
+  finalizeOnUnmountRef.current = finalizeOwnedGeneratingOnUnmount;
+  useEffect(() => {
+    return () => {
+      finalizeOnUnmountRef.current();
+    };
+  }, []);
 
   // ------------------------------------------------------------------ 事件处理
 
@@ -457,9 +504,13 @@ export function useChat(options?: UseChatOptions): UseChatReturn {
 
   // 切换会话时重置流锚点与安全超时（连接 effect 不再清这些，避免误重连丢锚）
   useEffect(() => {
+    // 会话切换：若本实例仍持有上一会话的「进行中生成」锚点，先收尾再丢锚。
+    // 否则 ref 被清空后 isGenerating 将无人负责回收（卸载兜底也认不出归属），
+    // 残留为 true → 发送按钮一直转圈。
+    finalizeOwnedGeneratingOnUnmount();
     streamingMessageIdRef.current = null;
     clearGenerateTimeout();
-  }, [sessionId, clearGenerateTimeout]);
+  }, [sessionId, clearGenerateTimeout, finalizeOwnedGeneratingOnUnmount]);
 
   // ------------------------------------------------------------------ 会话
 
@@ -882,7 +933,8 @@ export function useChat(options?: UseChatOptions): UseChatReturn {
     wsRef.current = ws;
 
     return () => {
-      // 仅拆连接；保留 streamingMessageId / 超时，避免重连瞬间「丢锚」空气泡
+      // 仅拆连接；生成态的清理由「拥有者卸载」effect 精确负责（见下），
+      // 绝不在此处按全局 isGenerating 猜测——多实例共用 global store 会误杀他人生成。
       sse.abort();
       ws.close();
       sseRef.current = null;
