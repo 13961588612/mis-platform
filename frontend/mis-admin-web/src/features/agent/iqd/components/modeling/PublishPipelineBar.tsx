@@ -440,7 +440,15 @@ export function PublishPipelineBar({ connectionId }: PublishPipelineBarProps) {
           await selfHealReindex(connectionId);
         } else if (action === 'validate') {
           const result = await selfHealValidate(connectionId);
-          const warnings = (result.warnings ?? []).map((w) => w.trim()).filter(Boolean);
+          // Wren 成功库存行（Valid — N models…）可能被旧后端误塞进 warnings，剥掉再判
+          const inventoryRe = /^\s*valid\b/i;
+          const inventory =
+            (result.summary ?? '').trim() ||
+            (result.warnings ?? []).map((w) => w.trim()).find((w) => inventoryRe.test(w)) ||
+            '';
+          const warnings = (result.warnings ?? [])
+            .map((w) => w.trim())
+            .filter((w) => w && !inventoryRe.test(w));
           if (result.build_status === 'failed') {
             setError(
               `模型校验未通过：${result.build_error || warnings.join('；') || '未知错误'}`,
@@ -448,7 +456,11 @@ export function PublishPipelineBar({ connectionId }: PublishPipelineBarProps) {
           } else if (warnings.length > 0) {
             setNotice(`模型校验有 ${warnings.length} 条警告：${warnings.join('；')}`);
           } else {
-            setNotice('模型校验通过');
+            setNotice(
+              inventory
+                ? `模型校验通过：${inventory}`
+                : '模型校验通过',
+            );
           }
         } else if (action === 'reconcile') {
           await reconcileIqdCatalog(connectionId);

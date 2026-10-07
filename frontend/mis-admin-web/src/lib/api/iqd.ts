@@ -970,6 +970,11 @@ export interface IqdSelfHealResult {
   index_error?: string | null;
   /** 模型校验警告/问题条目（可与 success 并存；前端逐条展示）。 */
   warnings?: string[] | null;
+  /**
+   * 模型校验通过时的库存摘要（如 `Valid — 6 models, 0 views, 3 relationships.`）。
+   * 不是警告；勿与 warnings 混展示。
+   */
+  summary?: string | null;
   /** 可选：CLI 原始输出（后端若回传则前端可再解析 Warnings: 分区）。 */
   raw?: string | null;
 }

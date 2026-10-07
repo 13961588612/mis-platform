@@ -142,6 +142,25 @@ describe('SelfHealPanel 模型校验警告', () => {
     expect(screen.getByText('缺时间维')).toBeTruthy();
     expect(screen.getByText('未设 description')).toBeTruthy();
   });
+
+  it('Valid 库存摘要不当作警告，展示为「模型校验通过」', async () => {
+    m.selfHealValidate.mockResolvedValue({
+      build_status: 'success',
+      summary: 'Valid — 6 models, 0 views, 3 relationships.',
+      warnings: [],
+    });
+    renderPanel();
+    const validate = await screen.findByRole('button', { name: /模型校验/ });
+    await waitFor(() => expect((validate as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(validate);
+
+    await waitFor(() =>
+      expect(
+        screen.getByText(/模型校验通过：Valid — 6 models, 0 views, 3 relationships\./),
+      ).toBeTruthy(),
+    );
+    expect(screen.queryByText('模型校验警告')).toBeNull();
+  });
 });
 
 describe('SelfHealPanel 状态轮询（Q3）', () => {

@@ -199,6 +199,8 @@ class SyncResult(BaseModel):
         build_error: build 失败原因（成功为 None）。
         index_error: memory index 失败原因（成功/跳过为 None）。
         warnings: 模型校验等只读动作的警告条目（可与 success 并存；不落库也可随 API 回传）。
+        summary: 只读动作的成功库存摘要（如 ``Valid — 6 models, 0 views, 3 relationships.``）；
+            **不是**警告，前端应作为「通过」旁注展示，勿塞进 warnings。
     """
 
     connection_id: int | None = None
@@ -211,12 +213,25 @@ class SyncResult(BaseModel):
     build_error: str | None = None
     index_error: str | None = None
     warnings: list[str] = []
+    summary: str | None = None
     # context validate 原始 stdout/stderr（前端兜底解析 Warnings: 分区）
     raw: str | None = None
     # T03e：本动作派生出的「编辑未生效」清单（validate 重算 / build 回写共用；
     # 没算过时为 0 空列表，由 report_sync_job 全量替换落 iqd_sync_job）。
     unmatched_edit_count: int = 0
     unmatched_edits: list[dict[str, Any]] = []
+
+
+# Wren ``context validate`` 成功时常见库存摘要，例如：
+#   Valid — 6 models, 0 views, 3 relationships.
+_VALIDATE_SUCCESS_INVENTORY_RE = re.compile(
+    r"(?is)^\s*valid\b.*\b(models?|views?|relationships?)\b",
+)
+
+
+def _is_validate_success_inventory(text: str) -> bool:
+    """判断文案是否为 Wren 校验**通过**的库存摘要（不是警告）。"""
+    return bool(text and _VALIDATE_SUCCESS_INVENTORY_RE.search(text.strip()))
 
 
 def parse_related_item_keys(raw: Any) -> set[str]:
@@ -1036,7 +1051,7 @@ class IqdAskService:
             return result
 
         ok = bool(validate.get("ok"))
-        summary = validate.get("summary") or ""
+        summary = str(validate.get("summary") or "").strip()
         warnings_raw = validate.get("warnings") or []
         errors_raw = validate.get("errors") or []
         warnings: list[str] = [str(w).strip() for w in warnings_raw if str(w).strip()]
@@ -1046,8 +1061,16 @@ class IqdAskService:
                 warnings = [str(e).strip() for e in errors_raw if str(e).strip()]
             elif summary:
                 warnings = [p.strip() for p in summary.split(";") if p.strip()]
-        # 成功但仅有汇总 summary、warnings 空：仍回传一条，避免「有 3 个警告却看不到」
-        if ok and not warnings and summary:
+        # 成功但仅有汇总 summary、warnings 空：
+        # - Wren 成功库存行（Valid — N models…）→ 放 summary，**不要**塞进 warnings
+        #   （否则前端会显示「有 1 条警告：Valid — …」，误导成校验失败）；
+        # - 其它像警告的汇总文案 → 仍回传一条，避免「有 3 个警告却看不到」。
+        inventory_summary: str | None = None
+        if ok and summary and _is_validate_success_inventory(summary):
+            inventory_summary = summary
+            # 若 CLI 误把库存行也塞进 warnings，剥掉，避免前端当警告
+            warnings = [w for w in warnings if not _is_validate_success_inventory(w)]
+        elif ok and not warnings and summary:
             warnings = [summary]
         # T03e（2026-09-30）：校验顺带**按当前 catalog 重算**「编辑未生效」清单并回写。
         # 起因：该计数原只在 build 时写，用户点「模型校验」不构建 → 前端长期看到陈旧值
@@ -1062,6 +1085,7 @@ class IqdAskService:
             synced_sql_pair_count=0, synced_knowledge_count=0,
             build_error=None if ok else (summary or "模型校验未通过"),
             warnings=warnings,
+            summary=inventory_summary,
             raw=(validate.get("raw") or None) or None,
             unmatched_edit_count=unmatched_count,
             unmatched_edits=unmatched_edits,

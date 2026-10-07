@@ -55,12 +55,14 @@ function statusVariant(status?: string): BadgeVariant {
 
 /** 从校验结果抽出可逐条展示的条目（warnings 优先，其次拆 build_error / raw）。 */
 const COUNT_ONLY_RE = /^\d+\s*warning\(s\)\s*,\s*\d+\s*errors?\.?$/i;
+/** Wren 成功库存摘要，不是警告（如 Valid — 6 models, 0 views, 3 relationships.）。 */
+const VALID_INVENTORY_RE = /^\s*valid\b/i;
 
 function collectFindings(result: IqdSelfHealResult | null): string[] {
   if (result == null) return [];
   const fromWarnings = (result.warnings ?? [])
     .map((w) => w.trim())
-    .filter((w) => w && !COUNT_ONLY_RE.test(w));
+    .filter((w) => w && !COUNT_ONLY_RE.test(w) && !VALID_INVENTORY_RE.test(w));
   if (fromWarnings.length > 0) return [...new Set(fromWarnings)];
 
   const raw = (result as IqdSelfHealResult & { raw?: string | null }).raw;
@@ -240,7 +242,15 @@ export function SelfHealPanel({
         </div>
       ) : lastAction === 'validate' ? (
         <div className="rounded-md border border-border/60 bg-muted/30 px-2 py-1.5 text-xs text-muted-foreground">
-          模型校验通过，未发现警告
+          {(() => {
+            const inventory =
+              (lastResult.summary ?? '').trim() ||
+              (lastResult.warnings ?? []).map((w) => w.trim()).find((w) => VALID_INVENTORY_RE.test(w)) ||
+              '';
+            return inventory
+              ? `模型校验通过：${inventory}`
+              : '模型校验通过，未发现警告';
+          })()}
         </div>
       ) : null
     ) : null;

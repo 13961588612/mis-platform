@@ -499,6 +499,32 @@ async def test_trigger_validate_ok_with_warnings_returns_list():
     assert result.warnings == ["a", "b", "c"]
 
 
+@pytest.mark.asyncio
+async def test_trigger_validate_ok_inventory_summary_not_warning():
+    """Wren 成功库存行（Valid — N models…）进 summary，不进 warnings（避免前端误报警告）。"""
+    service = IqdAskService()
+    inventory = "Valid — 6 models, 0 views, 3 relationships."
+    cli, client, mocks = _patch_selfheal_clients(
+        validate_return={
+            "ok": True,
+            "summary": inventory,
+            "raw": inventory,
+            "warnings": [inventory],  # CLI 偶发把库存行也塞进来，须剥掉
+            "errors": [],
+        }
+    )
+    try:
+        result = await service.trigger_validate(connection_id=1, wait=True)
+    finally:
+        for m in mocks:
+            m.stop()
+
+    assert result.build_status == "success"
+    assert result.build_error is None
+    assert result.summary == inventory
+    assert result.warnings == []
+
+
 # ================================================================ profile 自动绑定（2026-10 修复）
 
 @pytest.mark.asyncio
