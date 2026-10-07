@@ -15,6 +15,7 @@ import com.mis.adminbff.controller.DeptController;
 import com.mis.adminbff.controller.DictController;
 import com.mis.adminbff.controller.EmployeeController;
 import com.mis.adminbff.controller.EmbedIdentityController;
+import com.mis.adminbff.controller.InternalIdentityController;
 import com.mis.adminbff.controller.InternalPermissionController;
 import com.mis.adminbff.controller.KbController;
 import com.mis.adminbff.controller.KbSynonymController;
@@ -32,6 +33,7 @@ import com.mis.adminbff.service.AiFeatureConfigService;
 import com.mis.adminbff.service.DashboardAggregateService;
 import com.mis.adminbff.service.DictFacadeService;
 import com.mis.adminbff.service.EmbedIdentityService;
+import com.mis.adminbff.service.IdentityContextService;
 import com.mis.adminbff.service.KbFacadeService;
 import com.mis.adminbff.service.KbSynonymFacadeService;
 import com.mis.adminbff.service.MenuAggregateService;
@@ -379,6 +381,8 @@ class BffApiRegistryDiffSurveyTest {
                 mock(AgentOpsFacadeService.class)));
         context.getBeanFactory().registerSingleton("internalPermissionController", new InternalPermissionController(
                 mock(SkillPermissionChecker.class)));
+        context.getBeanFactory().registerSingleton("internalIdentityController", new InternalIdentityController(
+                mock(IdentityContextService.class)));
         context.getBeanFactory().registerSingleton("mcpPermissionController", new McpPermissionController(
                 mock(McpPermissionService.class)));
         context.getBeanFactory().registerSingleton("embedIdentityController", new EmbedIdentityController(

@@ -1,11 +1,9 @@
 package com.mis.adminbff.client;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.mis.adminbff.client.model.UserDataSetScopeVO;
-import com.mis.adminbff.client.model.IamRoleVO;
-import com.mis.adminbff.client.model.IamUserVO;
 import com.mis.adminbff.config.AiPlatformProperties;
+import com.mis.adminbff.service.IdentityAskContext;
+import com.mis.adminbff.service.IdentityContextService;
 import com.mis.adminbff.dto.ai.AiPlatformChatData;
 import com.mis.common.core.constant.SecurityConstants;
 import com.mis.common.core.result.Result;
@@ -21,11 +19,9 @@ import org.springframework.web.reactive.function.client.WebClient;
 import reactor.core.publisher.Flux;
 
 import java.time.Duration;
-import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Consumer;
 
 /**
@@ -62,23 +58,8 @@ public class AiPlatformClient extends AbstractDownstreamClient {
     private static final ParameterizedTypeReference<Result<List<Map<String, Object>>>> MCP_LIST_TYPE =
             new ParameterizedTypeReference<>() {};
 
-    /** X-Mis-* 头名（与平台 docs/identity-enrichment-task-list.md §4 约定一致）。 */
-    private static final String HEADER_MIS_DEPTS = "X-Mis-Depts";
-    private static final String HEADER_MIS_ORGS = "X-Mis-Orgs";
-    private static final String HEADER_MIS_ROLES = "X-Mis-Roles";
-
-    private static final String HEADER_MIS_DEPT_SCOPE = "X-Mis-Dept-Scope";
-    private static final String HEADER_MIS_STORES = "X-Mis-Stores";
-    private static final String HEADER_MIS_DATA_SCOPE = "X-Mis-Data-Scope";
-
-    /** IAM 取数短 TTL 缓存（T4.4，降低 IAM 压力与请求延迟）。 */
-    private static final long IAM_CACHE_TTL_MS = 60_000L;
-
-    private final IamWebClient iamWebClient;
+    private final IdentityContextService identityContextService;
     private final ObjectMapper objectMapper = new ObjectMapper();
-    private final Map<Long, IamCacheEntry> iamCache = new ConcurrentHashMap<>();
-    private final OrgWebClient orgWebClient;
-    private final Map<Long, OrgCacheEntry> orgCache = new ConcurrentHashMap<>();
     /**
      * 自愈 / MDL 整库重建超时：须 ≥ Worker {@code build_timeout_seconds}(默认 120s)。
      * 默认 chat 60s 会在 build 未完成时先断，前端看到「构建失败」。
@@ -88,13 +69,11 @@ public class AiPlatformClient extends AbstractDownstreamClient {
     public AiPlatformClient(
             @Qualifier("plainWebClientBuilder") WebClient.Builder plainBuilder,
             AiPlatformProperties properties,
-            IamWebClient iamWebClient,
-            OrgWebClient orgWebClient) {
+            IdentityContextService identityContextService) {
         super(
                 plainBuilder.baseUrl(properties.getBaseUrl()).build(),
                 properties.getChatTimeoutMs());
-        this.iamWebClient = iamWebClient;
-        this.orgWebClient = orgWebClient;
+        this.identityContextService = identityContextService;
     }
 
     /**
@@ -568,17 +547,10 @@ public class AiPlatformClient extends AbstractDownstreamClient {
     }
 
     /**
-    /**
-     * 从安全上下文取 LoginUser -> 调 MIS IAM 取 roles + deptId -> 组装 X-Mis-Depts / X-Mis-Orgs / X-Mis-Roles。
+     * 从安全上下文取 LoginUser，经 {@link IdentityContextService} 组装 X-Mis-* 头。
      *
-     * <p>取值约定（docs/identity-enrichment-task-list.md §4）：
-     * <ul>
-     *   <li>X-Mis-Depts：[{@code {"id": deptId}}]（本阶段单部门，见 R1）</li>
-     *   <li>X-Mis-Orgs：[{@code {"id": tenantId}}]（主租户，见决策#3）</li>
-     *   <li>X-Mis-Roles：[{@code {"id": roleId, "code": roleCode}}]（以 code 为主键）</li>
-     * </ul>
-     *
-     * <p>IAM 调用异常 / 空结果时<b>降级</b>（不加头），不阻断主流程；平台将退化为阶段1/2 行为。
+     * <p>IAM 调用异常时<b>降级</b>（不加头），不阻断 REST 主流程；
+     * Copilot WS 回源走内部 ask-context，源失败由 Worker fail-closed。
      */
     private Consumer<HttpHeaders> buildMisEnrichmentHeaders() {
         return headers -> {
@@ -587,152 +559,11 @@ public class AiPlatformClient extends AbstractDownstreamClient {
                 if (user == null || user.getUserId() == null) {
                     return;
                 }
-
-                IamUserVO iamUser = lookupIamUser(user.getUserId());
-                if (iamUser == null) {
-                    return;
-                }
-
-                // X-Mis-Depts：本阶段单部门（R1）
-                List<Map<String, String>> depts = new ArrayList<>();
-                if (iamUser.deptId() != null && !iamUser.deptId().isBlank()) {
-                    depts.add(Map.of("id", iamUser.deptId()));
-                }
-
-                // X-Mis-Orgs：主租户（决策#3，单 tenant + 多 dept）
-                List<Map<String, String>> orgs = new ArrayList<>();
-                if (user.getTenantId() != null) {
-                    orgs.add(Map.of("id", String.valueOf(user.getTenantId())));
-                }
-
-                // X-Mis-Roles：以 code 为主键（与 JWT roles / 平台 PermissionEngine 命名空间一致）
-                List<Map<String, String>> roles = new ArrayList<>();
-                if (iamUser.roles() != null) {
-                    for (IamRoleVO r : iamUser.roles()) {
-                        if (r == null) {
-                            continue;
-                        }
-                        String code = r.code();
-                        if (code == null) {
-                            code = r.id();
-                        }
-                        if (code != null && !code.isBlank()) {
-                            String id = r.id() != null ? r.id() : code;
-                            roles.add(Map.of("id", id, "code", code));
-                        }
-                    }
-                }
-
-                if (!depts.isEmpty()) {
-                    headers.set(HEADER_MIS_DEPTS, objectMapper.writeValueAsString(depts));
-                }
-                if (!orgs.isEmpty()) {
-                    headers.set(HEADER_MIS_ORGS, objectMapper.writeValueAsString(orgs));
-                }
-                if (!roles.isEmpty()) {
-                    headers.set(HEADER_MIS_ROLES, objectMapper.writeValueAsString(roles));
-                }
+                IdentityAskContext ctx = identityContextService.resolve(user.getUserId(), user.getTenantId());
+                ctx.applyTo(headers);
             } catch (Exception ignored) {
-                // IAM unavailable -> degrade (skip base headers), do not block.
-            }
-
-            // --- IQD row-scope header injection ---
-            try {
-                LoginUser iqdcUser = SecurityContextHolder.getOptional().orElse(null);
-                if (iqdcUser != null && iqdcUser.getUserId() != null) {
-                    injectDataRowScopeHeaders(headers, iqdcUser.getUserId());
-                }
-            } catch (Exception ignored) {
-                // mis-org unreachable -> skip scope headers; Worker fail-closed.
+                // IAM / org unavailable -> skip headers; Worker fail-closed on empty scope.
             }
         };
-    }
-
-    /**
-     * 从 mis-org 查询用户数据范围并注入问数 Worker 范围控制头。
-     */
-    private void injectDataRowScopeHeaders(HttpHeaders headers, Long userId) {
-        UserDataSetScopeVO scope = lookupOrgDataScope(userId);
-        if (scope == null) return;
-
-        // ALL 显式放行
-        if (Boolean.TRUE.equals(scope.all())) {
-            headers.set(HEADER_MIS_DATA_SCOPE, "all");
-            return;
-        }
-
-        // deptAnchors -> PATH_PREFIX range header
-        List<UserDataSetScopeVO.DeptAnchor> anchors = scope.deptAnchors();
-        if (anchors != null && !anchors.isEmpty()) {
-            List<Map<String, Object>> anchorJsonList = new ArrayList<>();
-            for (UserDataSetScopeVO.DeptAnchor a : anchors) {
-                Map<String, Object> m = new LinkedHashMap<>();
-                m.put("id", String.valueOf(a.id()));
-                if (a.path() != null && !a.path().isEmpty()) m.put("path", a.path());
-                if (a.scope() != null && !a.scope().isEmpty()) m.put("scope", a.scope());
-                anchorJsonList.add(m);
-            }
-            try {
-                headers.set(HEADER_MIS_DEPT_SCOPE, objectMapper.writeValueAsString(anchorJsonList));
-            } catch (JsonProcessingException e) {
-                // ignore serialization error
-            }
-        }
-
-        // storeIds -> ENUM range header
-        List<Long> storeIds = scope.storeIds();
-        if (storeIds != null && !storeIds.isEmpty()) {
-            List<String> storeCodes = new ArrayList<>(storeIds.size());
-            for (Long sid : storeIds) storeCodes.add(String.valueOf(sid));
-            try {
-                headers.set(HEADER_MIS_STORES, objectMapper.writeValueAsString(storeCodes));
-            } catch (JsonProcessingException e) {
-                // ignore serialization error
-            }
-        }
-    }
-
-    /**
-     * ? MIS IAM ?????? TTL ???T4.4??
-     *
-     * @param userId IAM ?? id?= LoginUser.getUserId()?? R3?
-     * @return IAM ?????IAM ?????? {@code null}
-     */
-    private IamUserVO lookupIamUser(Long userId) {
-        IamCacheEntry entry = iamCache.get(userId);
-        if (entry != null && entry.isAlive()) {
-            return entry.user();
-        }
-        IamUserVO user = iamWebClient.getUser(userId);
-        if (user != null) {
-            iamCache.put(userId, new IamCacheEntry(user, System.currentTimeMillis() + IAM_CACHE_TTL_MS));
-        }
-        return user;
-    }
-
-    /** IAM ???????T4.4?????????TTL ? 60s?? */
-    private record IamCacheEntry(IamUserVO user, long expireAt) {
-        private boolean isAlive() {
-            return System.currentTimeMillis() < expireAt;
-        }
-    }
-
-    /** Cache lookup for mis-org data scope view (~60s TTL). Returns null on failure. */
-    private UserDataSetScopeVO lookupOrgDataScope(Long userId) {
-        OrgCacheEntry entry = orgCache.get(userId);
-        if (entry != null && entry.isAlive()) return entry.scope();
-        try {
-            UserDataSetScopeVO scope = orgWebClient.getUserDataSetScope(userId);
-            if (scope != null) {
-                orgCache.put(userId, new OrgCacheEntry(scope, System.currentTimeMillis() + IAM_CACHE_TTL_MS));
-            }
-            return scope;
-        } catch (Exception e) {
-            return null;
-        }
-    }
-
-    private record OrgCacheEntry(UserDataSetScopeVO scope, long expireAt) {
-        boolean isAlive() { return System.currentTimeMillis() < expireAt; }
     }
 }

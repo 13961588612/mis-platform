@@ -609,6 +609,11 @@ class InboundStreamWorker:
             inbound: Gateway 写入的入站消息。
             stream_key: 消息来源 stream 键名（用于推断 ``agent_id``）。
         """
+        if inbound.message_type == "generation.cancel":
+            # Copilot 用户主动停止：取消当前 a2ui_run + 父会话下 Worker
+            await self._process_generation_cancel(inbound)
+            return
+
         if inbound.message_type == "entity_select":
             # HITL 实体选择回调（企微按钮 / H5 提交）→ 续跑表单填充（T05）
             await self._process_formfill_resume(inbound, stream_key)
@@ -809,11 +814,17 @@ class InboundStreamWorker:
                 "：" + "、".join(att_names) if att_names else ""
             )
 
+        from src.identity.ask_identity_context import enrich_inbound_ask_identity
+
+        ask_metadata: dict[str, Any] = await enrich_inbound_ask_identity(
+            inbound.metadata if isinstance(inbound.metadata, dict) else {},
+            mis_user_id=session.mis_user_id,
+        )
         user_msg: Message = await session_manager.add_message(
             session_id=session.session_id,
             role="user",
             content=user_content or inbound.content,
-            metadata=inbound.metadata,
+            metadata=ask_metadata,
         )
 
         t_agent0: float = time.perf_counter()
@@ -1111,7 +1122,20 @@ class InboundStreamWorker:
         # H5：Gateway JWT sub → userId / metadata.misUserId；企微：档 2 查库。
         # 解析不出 → None → 工具执行按无身份拒绝（fail-closed），绝不回退企微 userid。
         mis_user_id: int | None = await _resolve_inbound_mis_user_id(inbound)
+        # Copilot / embed 主路径是 a2ui_run（不是普通 text 入站）；问数身份必须在此补齐，
+        # 否则 agent__invoke → mis-iqd 的 tool_metadata 无 X-Mis-Roles → 45204。
+        from src.identity.ask_identity_context import enrich_inbound_ask_identity
+
+        ask_tool_metadata: dict[str, Any] = await enrich_inbound_ask_identity(
+            inbound.metadata if isinstance(inbound.metadata, dict) else {},
+            mis_user_id=mis_user_id,
+        )
         timeout_sec: Any = self._settings.AGENT_MESSAGE_TIMEOUT
+        from src.runtime.a2ui_run_registry import register_a2ui_run, unregister_a2ui_run
+
+        current_task = asyncio.current_task()
+        if current_task is not None:
+            register_a2ui_run(inbound.session_id, current_task)
         try:
             async with asyncio.timeout(timeout_sec):
                 await loop.run(
@@ -1121,6 +1145,7 @@ class InboundStreamWorker:
                     agent_id=inbound.agent_id,
                     mis_user_id=mis_user_id,
                     run_agent_input=run_agent_input,
+                    ask_tool_metadata=ask_tool_metadata,
                 )
         except TimeoutError:
             logger.error(
@@ -1133,6 +1158,17 @@ class InboundStreamWorker:
                 "A2UI_TIMEOUT",
                 f"处理超时（{timeout_sec}s），请稍后重试",
             )
+        except asyncio.CancelledError:
+            # 用户 generation.cancel：吞掉取消，回 CANCELLED 后正常 ACK
+            logger.info("A2UI run cancelled by user", session_id=inbound.session_id)
+            try:
+                await publisher.publish_error(
+                    inbound.session_id,
+                    "CANCELLED",
+                    "已停止生成",
+                )
+            except Exception:  # noqa: BLE001 - 取消路径尽力回包
+                pass
         except Exception as exc:  # noqa: BLE001 - run 失败必须回 error 终止 Gateway 订阅
             logger.error(
                 "A2UI run failed",
@@ -1146,6 +1182,7 @@ class InboundStreamWorker:
                 str(exc) or "A2UI run failed",
             )
         finally:
+            unregister_a2ui_run(inbound.session_id, current_task)
             # 处理已终结（成功/超时/业务错误）：延长幂等键，避免短窗内重投再跑。
             # kill -9 中途崩溃时本 finally 不执行，键按短 TTL 过期后可正当重试。
             if claim_key is not None:
@@ -1153,6 +1190,33 @@ class InboundStreamWorker:
                     await redis.expire(claim_key, 86_400)
                 except Exception:  # noqa: BLE001 - 幂等键续期失败不阻断 ACK
                     pass
+
+    async def _process_generation_cancel(self, inbound: InboundStreamMessage) -> None:
+        """处理 ``generation.cancel``：取消 A2UI run + 父会话下全部 Worker。"""
+        from src.coordinator.sessions import cancel_all_running_tasks
+        from src.runtime.a2ui_run_registry import cancel_a2ui_run
+
+        sid = inbound.session_id
+        workers = cancel_all_running_tasks(sid)
+        a2ui = cancel_a2ui_run(sid)
+        logger.info(
+            "generation.cancel processed",
+            session_id=sid,
+            a2ui_cancelled=a2ui,
+            workers_cancelled=workers,
+        )
+        # 若没有可取消的 run（已结束 / 异进程），仍回一条 CANCELLED 让前端解锁
+        if not a2ui:
+            try:
+                redis: aioredis.Redis = await self._get_redis()
+                publisher = A2uiOutboundPublisher(redis)
+                await publisher.publish_error(sid, "CANCELLED", "已停止生成")
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "generation.cancel outbound failed",
+                    session_id=sid,
+                    error=str(exc),
+                )
 
     async def _process_formfill_resume(
         self, inbound: InboundStreamMessage, stream_key: str
@@ -1223,11 +1287,17 @@ class InboundStreamWorker:
 
         if outcome.kind == "continue":
             # 续跑：把 apply 结果作为用户消息，继续驱动 agent
+            from src.identity.ask_identity_context import enrich_inbound_ask_identity
+
+            ff_meta: dict[str, Any] = await enrich_inbound_ask_identity(
+                inbound.metadata if isinstance(inbound.metadata, dict) else {},
+                mis_user_id=session.mis_user_id,
+            )
             user_msg = await session_manager.add_message(
                 session_id=session.session_id,
                 role="user",
                 content=outcome.content,
-                metadata={**(inbound.metadata or {}), "formfill_resume": True},
+                metadata={**ff_meta, "formfill_resume": True},
             )
             await self._run_formfill_and_publish(instance, session, user_msg, inbound, producer)
         elif outcome.kind == "error":

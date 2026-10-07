@@ -834,6 +834,7 @@ def test_a2ui_run_execute_skill_tool_real_dispatch(redis):
                 "misUserId": "10086",
             },
             agent_id="agent-x",
+            ask_tool_metadata={"X-Mis-Roles": '[{"code":"IT-TESTER"}]'},
         )
         assert result["ok"] is True
         assert result["output"] == "executed:member.profile"
@@ -842,6 +843,7 @@ def test_a2ui_run_execute_skill_tool_real_dispatch(redis):
         _args, context = tool.calls[0]
         assert context.metadata["session_id"] == "sess-skill"
         assert context.metadata["identity"]["misUserId"] == "10086"
+        assert "IT-TESTER" in context.metadata["X-Mis-Roles"]
 
     asyncio.run(run())
 
@@ -1175,6 +1177,18 @@ def test_inbound_worker_process_a2ui_run(monkeypatch):
         import src.queue.inbound_worker as iw
 
         monkeypatch.setattr(iw, "A2uiRunLoop", _FakeLoop)
+
+        async def fake_enrich(metadata: Any, *, mis_user_id: Any = None, **_kw: Any) -> dict[str, Any]:
+            return {
+                **(metadata if isinstance(metadata, dict) else {}),
+                "X-Mis-Roles": '[{"code":"IT-TESTER"}]',
+                "mis_user_id": mis_user_id,
+            }
+
+        monkeypatch.setattr(
+            "src.identity.ask_identity_context.enrich_inbound_ask_identity",
+            fake_enrich,
+        )
         fake_redis = fakeredis.aioredis.FakeRedis(decode_responses=True)
         worker._redis = fake_redis  # 直接注入，绕过 _get_redis 真实连接
 
@@ -1203,6 +1217,7 @@ def test_inbound_worker_process_a2ui_run(monkeypatch):
         assert captured["user_id"] == "u1"
         assert captured["trace_id"] == "t1"
         assert captured["run_agent_input"]["messages"][0]["content"] == "hi"
+        assert "IT-TESTER" in captured["ask_tool_metadata"]["X-Mis-Roles"]
 
     asyncio.run(run())
 
@@ -1224,6 +1239,14 @@ def test_inbound_worker_process_a2ui_run_skips_duplicate_run_id(monkeypatch):
         import src.queue.inbound_worker as iw
 
         monkeypatch.setattr(iw, "A2uiRunLoop", _FakeLoop)
+
+        async def fake_enrich(metadata: Any, **_kw: Any) -> dict[str, Any]:
+            return dict(metadata) if isinstance(metadata, dict) else {}
+
+        monkeypatch.setattr(
+            "src.identity.ask_identity_context.enrich_inbound_ask_identity",
+            fake_enrich,
+        )
         fake_redis = fakeredis.aioredis.FakeRedis(decode_responses=True)
         worker._redis = fake_redis
 

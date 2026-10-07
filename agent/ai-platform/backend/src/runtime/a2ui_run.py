@@ -536,6 +536,7 @@ class A2uiRunLoop:
         agent_id: str | None = None,
         mis_user_id: int | None = None,
         run_agent_input: dict[str, Any],
+        ask_tool_metadata: dict[str, Any] | None = None,
     ) -> None:
         """执行一轮 A2UI run 并回包事件流。
 
@@ -551,6 +552,8 @@ class A2uiRunLoop:
             mis_user_id: MIS userId（T03 S9 第五键）；skill/mcp 工具 ACL
                 fail-closed 判权的唯一身份来源；``None`` 时工具执行按无身份拒绝。
             run_agent_input: ``metadata.a2ui.runAgentInput``（RunAgentInput dict）。
+            ask_tool_metadata: BFF 问数身份头（``X-Mis-*`` / ``iqd.connection_id``），
+                写入工具上下文供 ``agent__invoke`` → Worker ``iqd__ask`` 消费。
         """
         messages: list[dict[str, Any]] = run_agent_input.get("messages") or []
         tools: list[Any] = run_agent_input.get("tools") or []
@@ -565,6 +568,7 @@ class A2uiRunLoop:
             channel="h5",
             mis_user_id=mis_user_id,
         )
+        ask_meta: dict[str, Any] = dict(ask_tool_metadata or {})
 
         history: list[LLMMessage] = await self._load_history(
             session_id,
@@ -674,6 +678,7 @@ class A2uiRunLoop:
                     session_id,
                     identity=identity,
                     agent_id=resolved_agent_id,
+                    ask_tool_metadata=ask_meta,
                 )
                 await self._publisher.publish(
                     session_id, AgentEvent.tool_result(tool_name, result)
@@ -754,6 +759,7 @@ class A2uiRunLoop:
         *,
         identity: dict[str, str] | None = None,
         agent_id: str | None = None,
+        ask_tool_metadata: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """执行单个 LLM 工具调用并返回 ``tool.result`` 载荷。
 
@@ -770,6 +776,7 @@ class A2uiRunLoop:
             session_id: 会话 ID。
             identity: 工具执行身份（含 ``misUserId`` 第五键）；缺省空身份（fail-closed）。
             agent_id: Agent ID（懒装配注册表时使用）。
+            ask_tool_metadata: 问数身份头（``X-Mis-*``），合并进工具 metadata。
 
         Returns:
             ``tool.result`` 载荷 dict。
@@ -811,12 +818,19 @@ class A2uiRunLoop:
                 "error": f"invalid arguments for {tool_name}: {exc}",
             }
 
+        tool_meta: dict[str, Any] = {
+            "session_id": session_id,
+            "identity": identity or build_mcp_identity(),
+        }
+        # 只合并受信 BFF 头（入站已剥伪造）；供 agent__invoke / iqd__ask 读取。
+        for key, value in (ask_tool_metadata or {}).items():
+            if key in ("session_id", "identity"):
+                continue
+            if value is not None and value != "":
+                tool_meta[key] = value
         context: ToolExecutionContext = ToolExecutionContext(
             cwd=Path(self._settings.CONFIG_BASE_PATH).resolve(),
-            metadata={
-                "session_id": session_id,
-                "identity": identity or build_mcp_identity(),
-            },
+            metadata=tool_meta,
         )
         try:
             result: Any = await tool.execute(arguments, context)

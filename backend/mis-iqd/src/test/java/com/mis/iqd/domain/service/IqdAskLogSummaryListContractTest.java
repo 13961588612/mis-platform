@@ -90,7 +90,7 @@ class IqdAskLogSummaryListContractTest {
     @DisplayName("列表只回短字段：plan_steps/resolved_scope/sql_text 等重字段必须为 null")
     void listStripsHeavyFields() {
         // 走 status 过滤分支（findAll(Sort) 有重载歧义，any() 会编译不过）。
-        when(askLogRepository.findByStatusOrderByIdDesc("succeeded"))
+        when(askLogRepository.findByStatusOrderByCreatedAtDescIdDesc("succeeded"))
                 .thenReturn(List.of(sampleLog()));
 
         List<IqdAskLogVO> rows = service.listAskLogs(100, "succeeded", null);

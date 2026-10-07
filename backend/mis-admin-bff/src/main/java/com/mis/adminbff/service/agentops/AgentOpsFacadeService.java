@@ -272,9 +272,12 @@ public class AgentOpsFacadeService {
         Map<String, String> params = AgentOpsUri.of(
                 "agent_id", query.agentId(),
                 "channel", query.channel(),
+                "user_id", query.userId(),
                 "keyword", query.keyword(),
                 "from", query.from(),
                 "to", query.to(),
+                "include_empty",
+                query.includeEmpty() == null ? null : String.valueOf(query.includeEmpty()),
                 "page", query.normalizedPage(),
                 "page_size", query.normalizedPageSize());
         return client.listSessions(params);

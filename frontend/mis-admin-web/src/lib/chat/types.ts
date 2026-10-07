@@ -156,6 +156,7 @@ export interface InboundMessage {
     | 'approval'
     | 'entity_select'
     | 'a2ui_action'
+    | 'generation.cancel'
     | 'ping'
     | 'session.close';
   sessionId: string;
@@ -164,6 +165,8 @@ export interface InboundMessage {
   agentId?: string;
   content?: string;
   messageType?: string;
+  /** generation.cancel 可选：对应当前 A2UI runId。 */
+  runId?: string;
   metadata?: {
     /** A2UI opt-in 标记。 */
     a2ui?: boolean;
@@ -263,6 +266,8 @@ export interface UseChatReturn {
   loadHistory: () => Promise<void>;
   /** 会话列表切换：不清成 null 中间态，强制重拉历史。 */
   switchSession: (sessionId: string) => Promise<void>;
+  /** 主动停止当前生成（WS generation.cancel + 本地解锁）。 */
+  stopGenerating: () => void;
   closeSession: () => void;
   reconnect: () => void;
 }

@@ -1,3 +1,4 @@
+import type { Components } from 'react-markdown';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { cn } from '@/lib/utils';
@@ -7,8 +8,30 @@ import { cn } from '@/lib/utils';
  *
  * <p>纯展示组件、无领域逻辑，置于 components/common 供各 feature 复用
  * （避免 AI 与知识库之间形成跨 feature 依赖，见架构军规1）。
- * 不依赖 @tailwindcss/typography：自带标题/列表样式，避免 prose 未启用时标题像纯文本。
+ * 不依赖 @tailwindcss/typography：自带标题/列表/表格样式，避免 prose 未启用时标题像纯文本。
+ * GFM 表格：外层横滚 + 单元格 padding，避免 Copilot 窄气泡内数字挤成一团。
  */
+
+const markdownComponents: Components = {
+  table: ({ children }) => (
+    <div className="my-2 max-w-full overflow-x-auto rounded-lg border bg-card">
+      <table className="w-max min-w-full border-collapse text-xs">{children}</table>
+    </div>
+  ),
+  thead: ({ children }) => <thead className="bg-muted/50">{children}</thead>,
+  th: ({ children }) => (
+    <th className="whitespace-nowrap border-b px-2.5 py-1.5 text-left font-medium text-foreground">
+      {children}
+    </th>
+  ),
+  td: ({ children }) => (
+    <td className="whitespace-nowrap border-b border-border/60 px-2.5 py-1.5 align-top text-foreground">
+      {children}
+    </td>
+  ),
+  tr: ({ children }) => <tr className="even:bg-muted/30">{children}</tr>,
+};
+
 export function MarkdownView({ content, className }: { content: string; className?: string }) {
   return (
     <div
@@ -27,7 +50,9 @@ export function MarkdownView({ content, className }: { content: string; classNam
         className,
       )}
     >
-      <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>
+      <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
+        {content}
+      </ReactMarkdown>
     </div>
   );
 }

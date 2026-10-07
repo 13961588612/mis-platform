@@ -34,6 +34,7 @@ import {
   Plus,
   SendHorizonal,
   Sparkles,
+  Square,
   X,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
@@ -65,8 +66,20 @@ import { KbSourceHostProvider } from '@/components/common/kb-source-host-context
 import type { A2uiComponentName } from '@/lib/a2ui/types';
 import type { ChatMessage } from '@/lib/chat/types';
 import { useAuthStore } from '@/stores/auth-store';
-import { listSessions } from '@/features/agent/api/agent-ops-api';
+import { batchDeleteSessions, listSessions } from '@/features/agent/api/agent-ops-api';
 import { formatTime, type Session } from '@/features/agent/types';
+
+/** Copilot 侧栏只列本 Coordinator，避免混入 Worker 子会话。 */
+const COPILOT_AGENT_ID = 'mis-copilot';
+
+/** 侧栏可展示：有标题，或至少有一条消息且标题可回退展示。无标题空壳不进列表。 */
+function isCopilotSidebarSession(s: Session): boolean {
+  const count = s.message_count ?? 0;
+  if (count <= 0) return false;
+  const title = (s.title ?? '').trim();
+  // 无 title 的噪声会话（仅 tool/assistant、附件占位等）不展示，交清理逻辑删除
+  return title.length > 0;
+}
 
 /** 旧协议 ui.render 单条渲染（registry 组件 + 权限门控）。 */
 function A2uiMessageRenderer({ render }: { render: NonNullable<ChatMessage['a2ui']> }) {
@@ -235,13 +248,40 @@ export function CopilotPanel({
   /** 用于检测「生成结束」以便刷新侧栏时间/标题。 */
   const wasGeneratingRef = useRef(false);
 
+  const userId = useAuthStore((s) => s.user?.id);
+  const userIdStr = userId != null ? String(userId) : undefined;
+
   const loadSessions = async (): Promise<void> => {
     setSessionsLoading(true);
     try {
-      const page = await listSessions({ page: 1, page_size: 50 });
+      const page = await listSessions({
+        page: 1,
+        page_size: 50,
+        agent_id: COPILOT_AGENT_ID,
+        user_id: userIdStr,
+      });
       const items = Array.isArray(page.items) ? page.items : [];
-      // Copilot 侧栏不展示空会话：ensure_session / 新建会立刻落库，否则每连一次就多一条「未命名」。
-      setSessions(items.filter((s) => (s.message_count ?? 0) > 0));
+      setSessions(items.filter(isCopilotSidebarSession));
+
+      // 顺带清掉本用户 Copilot 空壳 / 无标题噪声（含 include_empty）
+      void (async () => {
+        try {
+          const junkPage = await listSessions({
+            page: 1,
+            page_size: 50,
+            agent_id: COPILOT_AGENT_ID,
+            user_id: userIdStr,
+            include_empty: true,
+          });
+          const junk = (Array.isArray(junkPage.items) ? junkPage.items : []).filter(
+            (s) => !isCopilotSidebarSession(s),
+          );
+          if (junk.length === 0) return;
+          await batchDeleteSessions(junk.map((s) => s.session_id));
+        } catch {
+          /* 清理失败不阻断侧栏 */
+        }
+      })();
     } catch {
       // 本地无后端 / 未登录 / 接口失败 → 降级空列表，不白屏
       setSessions([]);
@@ -613,25 +653,31 @@ export function CopilotPanel({
                 >
                   <Paperclip className="h-4 w-4" />
                 </Button>
-                <Button
-                  type="button"
-                  size="icon"
-                  className={cn(
-                    'h-9 w-9 shrink-0 rounded-full',
-                    chat.isGenerating && 'disabled:opacity-100',
-                  )}
-                  disabled={!canSend}
-                  title={chat.isGenerating ? '生成中…' : '发送'}
-                  aria-label={chat.isGenerating ? '生成中' : '发送'}
-                  aria-busy={chat.isGenerating}
-                  onClick={handleSend}
-                >
-                  {chat.isGenerating ? (
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                  ) : (
+                {chat.isGenerating ? (
+                  <Button
+                    type="button"
+                    size="icon"
+                    variant="destructive"
+                    className="h-9 w-9 shrink-0 rounded-full"
+                    title="停止生成"
+                    aria-label="停止生成"
+                    onClick={() => chat.stopGenerating()}
+                  >
+                    <Square className="h-3.5 w-3.5 fill-current" />
+                  </Button>
+                ) : (
+                  <Button
+                    type="button"
+                    size="icon"
+                    className="h-9 w-9 shrink-0 rounded-full"
+                    disabled={!canSend}
+                    title="发送"
+                    aria-label="发送"
+                    onClick={handleSend}
+                  >
                     <SendHorizonal className="h-4 w-4" />
-                  )}
-                </Button>
+                  </Button>
+                )}
               </div>
             </div>
             <p

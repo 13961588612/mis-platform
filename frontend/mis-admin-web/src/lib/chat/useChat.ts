@@ -20,6 +20,7 @@ import { subscribeChatStream, type ChatSseController } from './sse-client';
 import { ChatWsClient } from './ws-client';
 import { processA2uiMessage } from '@/lib/a2ui/MessageProcessor';
 import { generateClientId, type Attachment, type ChatMessage, type ChatStreamEvent, type InboundMessage, type SessionMessage, type UseChatReturn } from './types';
+import { useEmbedStore } from '@/embed/embedStore';
 
 /** 会话 id 持久化 key（Copilot 面板最近会话）。 */
 const LAST_SESSION_KEY = 'mis.copilot.lastSession';
@@ -29,11 +30,11 @@ const DEFAULT_AGENT_ID = '';
 /**
  * 前端生成安全超时（毫秒）。
  *
- * <p>Agent Core {@code AGENT_MESSAGE_TIMEOUT} 默认 120s；前端略放宽到 140s，
+ * <p>须略大于 Agent Core {@code AGENT_MESSAGE_TIMEOUT}（本地常配 240s），
  * 避免收不到 done/error（SSE 丢帧 / 粘滞映射丢失）时 {@code isGenerating}
  * 永久为 true、输入框锁死。超时后强制解锁并提示可重试。
  */
-export const GENERATE_SAFETY_TIMEOUT_MS = 140_000;
+export const GENERATE_SAFETY_TIMEOUT_MS = 260_000;
 
 /**
  * A2UI 对话 opt-in 默认开关。
@@ -197,6 +198,10 @@ export function useChat(options?: UseChatOptions): UseChatReturn {
    * streaming 消息」才算作本实例拥有本轮生成。这样多实例（Copilot 面板 + keep-alive
    * 问数页）共用同一 global store 时，未持有锚点的实例绝不会误清别人的进行中生成。
    *
+   * <p><b>切走勿误报失败</b>：关闭 / 切页是用户主动离开，不是后端失败。已有可见内容
+   * → {@code delivered}；尚无正文/surface 的占位气泡 → 直接移除，勿标 {@code error}
+   *（否则再打开会看到「回复失败，可重试」）。
+   *
    * @returns 是否执行了收尾
    */
   const finalizeOwnedGeneratingOnUnmount = useCallback((): boolean => {
@@ -208,9 +213,13 @@ export function useChat(options?: UseChatOptions): UseChatReturn {
     clearGenerateTimeout();
     streamingMessageIdRef.current = null;
     sendLockRef.current = false;
-    const hasPayload = Boolean(owned.content.trim() || owned.surfaceId);
-    store.updateMessageStatus(owned.id, hasPayload ? 'delivered' : 'error');
+    if (hasVisibleAssistantPayload(owned)) {
+      store.updateMessageStatus(owned.id, 'delivered');
+    } else {
+      store.removeMessage(owned.id);
+    }
     store.setGenerating(false);
+    store.setError(null);
     return true;
   }, [clearGenerateTimeout]);
 
@@ -307,7 +316,46 @@ export function useChat(options?: UseChatOptions): UseChatReturn {
     };
   }, []);
 
+  /**
+   * 挂载自愈：全局 {@code isGenerating=true} 但已无 streaming 气泡时强制解锁。
+   *
+   * <p>典型场景：上一次 Copilot 关闭 / KeepAlive 切页后，旁观实例吃到晚到 SSE 帧把
+   * generating 重新拉高，随后连接断开 → 用户再进 Copilot 发送按钮一直转圈。
+   */
+  useEffect(() => {
+    const store = useChatStore.getState();
+    if (!store.isGenerating) return;
+    const hasStreaming = store.messages.some(
+      (m) => m.role === 'assistant' && m.status === 'streaming',
+    );
+    if (!hasStreaming) {
+      store.setGenerating(false);
+    }
+  }, []);
+
+  /**
+   * KeepAlive 下 {@code autoConnect=false} 时组件不卸载，只拆 SSE/WS。
+   * 若本实例仍持有流锚点，必须在此收尾——否则全局 isGenerating 卡住，
+   * 打开 Copilot 就会看到发送按钮转圈。
+   */
+  useEffect(() => {
+    if (autoConnect) return;
+    finalizeOnUnmountRef.current();
+  }, [autoConnect]);
+
   // ------------------------------------------------------------------ 事件处理
+
+  /**
+   * 是否应消费本帧流式事件并（必要时）拉高 generating。
+   *
+   * <p>拒收「无人认领」的晚到帧：owner 已收尾（isGenerating=false 且本实例无锚点）
+   * 时若仍 setGenerating(true)，会导致发送按钮永久转圈（多实例 SSE 旁观常见）。
+   */
+  const shouldAcceptStreamFrame = (store: ReturnType<typeof useChatStore.getState>): boolean => {
+    if (streamingMessageIdRef.current) return true;
+    if (store.isGenerating) return true;
+    return false;
+  };
 
   /** 处理单条流式事件（写入 chat-store / surface-store）。 */
   const handleEvent = useCallback((event: ChatStreamEvent): void => {
@@ -318,6 +366,8 @@ export function useChat(options?: UseChatOptions): UseChatReturn {
       case 'stream': {
         const delta = event.content ?? '';
         if (!delta) break;
+        // 拒收 owner 已收尾后的旁观晚到帧，避免重新拉高 isGenerating
+        if (!shouldAcceptStreamFrame(store)) break;
         // 文本增量到达：恢复 generating，保证「正在思考/流式」态与气泡联动
         if (!store.isGenerating) store.setGenerating(true);
         armGenerateTimeout();
@@ -333,6 +383,7 @@ export function useChat(options?: UseChatOptions): UseChatReturn {
       case 'a2ui_surface': {
         // 写入 SurfaceStore，并把 surfaceId 挂到当前 assistant 气泡。
         // 不在此处解锁输入：正文常在 surface 之后以 stream 继续到达。
+        if (!shouldAcceptStreamFrame(store)) break;
         if (!store.isGenerating) store.setGenerating(true);
         armGenerateTimeout();
         const surfaceId = processA2uiMessage(event) ?? event.surfaceId;
@@ -387,6 +438,25 @@ export function useChat(options?: UseChatOptions): UseChatReturn {
       case 'error': {
         clearGenerateTimeout();
         const streamingId = streamingMessageIdRef.current;
+        const isCancelled = (event.errorCode ?? '').toUpperCase() === 'CANCELLED';
+        if (isCancelled) {
+          // 用户主动停止：有可见内容 → delivered；空气泡 → 移除；不标红失败
+          if (streamingId) {
+            const owned = store.messages.find((m) => m.id === streamingId);
+            streamingMessageIdRef.current = null;
+            if (owned && owned.status === 'streaming') {
+              if (hasVisibleAssistantPayload(owned)) {
+                store.updateMessageStatus(owned.id, 'delivered');
+              } else {
+                store.removeMessage(owned.id);
+              }
+            }
+          }
+          store.setError(null);
+          store.setGenerating(false);
+          sendLockRef.current = false;
+          break;
+        }
         if (streamingId) {
           store.updateMessageStatus(streamingId, 'error');
           streamingMessageIdRef.current = null;
@@ -401,6 +471,7 @@ export function useChat(options?: UseChatOptions): UseChatReturn {
       case 'text.delta': {
         const delta = event.content ?? '';
         if (!delta) break;
+        if (!shouldAcceptStreamFrame(store)) break;
         if (!store.isGenerating) store.setGenerating(true);
         armGenerateTimeout();
         const targetId = resolveAssistantTargetId(store, streamingMessageIdRef, sid);
@@ -823,6 +894,11 @@ export function useChat(options?: UseChatOptions): UseChatReturn {
           url: a.url,
         }));
       }
+      // iframe PAGE_CONTEXT 只作连接 hint，服务端会再过 enabled 连接校验；不传角色。
+      const embedRef = useEmbedStore.getState().pageContext?.contextRef;
+      if (embedRef && typeof embedRef === 'object') {
+        metadata.contextRef = embedRef;
+      }
 
       const inbound: InboundMessage = {
         type: 'chat',
@@ -995,6 +1071,32 @@ export function useChat(options?: UseChatOptions): UseChatReturn {
     wsRef.current = ws;
   }, []);
 
+  /**
+   * 主动停止当前生成：通知后端取消 a2ui_run / Worker，并本地解锁输入。
+   */
+  const stopGenerating = useCallback((): void => {
+    const sid = sessionIdRef.current;
+    const store = useChatStore.getState();
+    if (!store.isGenerating && !streamingMessageIdRef.current) return;
+
+    if (sid) {
+      sendInbound({
+        type: 'generation.cancel',
+        sessionId: sid,
+        userId: userId ?? undefined,
+        // 有绑定则走 agent 流；缺省 mis-copilot 避免 cancel 进渠道队列无人认领
+        agentId: store.agentId || agentIdOption || 'mis-copilot',
+        timestamp: new Date().toISOString(),
+      });
+    }
+
+    // 本地立即收尾（不等后端 CANCELLED，避免按钮卡死）
+    finalizeOwnedGeneratingOnUnmount();
+    store.setError(null);
+    store.setGenerating(false);
+    sendLockRef.current = false;
+  }, [agentIdOption, finalizeOwnedGeneratingOnUnmount, sendInbound, userId]);
+
   return {
     sessionId,
     agentId,
@@ -1004,6 +1106,7 @@ export function useChat(options?: UseChatOptions): UseChatReturn {
     error,
     historyState,
     sendMessage,
+    stopGenerating,
     respondToApproval,
     respondToEntitySelect,
     dispatchA2uiAction,

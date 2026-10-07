@@ -360,6 +360,8 @@ function registerRoutes(
           sessionId?: string;
           agentId?: string;
           messageType?: string;
+          /** generation.cancel 可选 runId */
+          runId?: string;
           metadata?: Record<string, unknown>;
           action?: A2uiClientAction;
           entitySelectResponse?: {
@@ -374,6 +376,32 @@ function registerRoutes(
         }
 
         if (message.type === 'session.create' || message.type === 'session.close') {
+          return;
+        }
+
+        // Copilot 主动停止当前生成：入站 messageType=generation.cancel → Core 取消 a2ui_run + Worker
+        if (message.type === 'generation.cancel') {
+          const cancelSessionId = message.sessionId ?? clientSessionId;
+          logger.info(
+            { sessionId: cancelSessionId, userId: user.userId },
+            'generation.cancel received from frontend',
+          );
+          const inbound = MessageRouter.createInboundMessage({
+            userId: user.userId,
+            channel: 'h5',
+            content: '',
+            sessionId: cancelSessionId,
+            agentId: message.agentId,
+            traceId: String(req.id),
+            messageType: 'generation.cancel',
+            metadata: {
+              source: 'h5-generation-cancel',
+              ...(typeof message.runId === 'string' && message.runId.length > 0
+                ? { runId: message.runId }
+                : {}),
+            },
+          });
+          await messageRouter.route(inbound);
           return;
         }
 

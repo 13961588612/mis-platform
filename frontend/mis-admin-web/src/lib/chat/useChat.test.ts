@@ -36,13 +36,27 @@ vi.mock('./sse-client', () => ({
   buildChatStreamUrl: (sessionId: string) => `/api/events/stream?sessionId=${sessionId}`,
 }));
 
+const wsHarness = vi.hoisted(() => {
+  const sent: unknown[] = [];
+  return {
+    sent,
+    clear: () => {
+      sent.length = 0;
+    },
+    ChatWsClient: vi.fn().mockImplementation(() => ({
+      connect: vi.fn(),
+      close: vi.fn(),
+      isOpen: () => true,
+      send: (msg: unknown) => {
+        sent.push(msg);
+        return true;
+      },
+    })),
+  };
+});
+
 vi.mock('./ws-client', () => ({
-  ChatWsClient: vi.fn().mockImplementation(() => ({
-    connect: vi.fn(),
-    close: vi.fn(),
-    isOpen: () => true,
-    send: () => true,
-  })),
+  ChatWsClient: wsHarness.ChatWsClient,
   buildChatWsUrl: () => '/ws/chat',
 }));
 
@@ -58,6 +72,7 @@ function setSession(sid: string) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  wsHarness.clear();
   setSession(SID);
   useAuthStore.setState({
     accessToken: 'test-token',
@@ -397,6 +412,27 @@ describe('陈旧生成态恢复（切页/重挂载转圈回归）', () => {
     expect(assistant?.status).toBe('delivered');
   });
 
+  it('关闭 Copilot 时尚无正文 → 移除占位气泡，不报「回复失败」', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({ ok: true, json: async () => ({ code: 0, data: [] }) }) as never),
+    );
+
+    const first = renderHook(() => useChat({ autoConnect: true }));
+    await waitFor(() => expect(sseHarness.getOnEvent()).toBeTruthy());
+    act(() => {
+      first.result.current.sendMessage('问数中切走');
+    });
+    expect(useChatStore.getState().isGenerating).toBe(true);
+    expect(useChatStore.getState().messages.some((m) => m.role === 'assistant')).toBe(true);
+
+    first.unmount();
+    expect(useChatStore.getState().isGenerating).toBe(false);
+    expect(useChatStore.getState().error).toBeNull();
+    expect(useChatStore.getState().messages.some((m) => m.role === 'assistant')).toBe(false);
+    expect(useChatStore.getState().messages.some((m) => m.status === 'error')).toBe(false);
+  });
+
   it('无锚点的旁观实例卸载，不会误清他人在进行的生成', async () => {
     vi.stubGlobal(
       'fetch',
@@ -425,7 +461,82 @@ describe('陈旧生成态恢复（切页/重挂载转圈回归）', () => {
     owner.unmount();
   });
 
-  it('安全超时不被 delta 无限续期（硬上限一次约 140s）', async () => {
+  it('挂载时若 isGenerating=true 且无 streaming 气泡 → 立即解锁（进 Copilot 不再转圈）', async () => {
+    useChatStore.getState().setGenerating(true);
+    useChatStore.getState().setMessages([
+      {
+        id: 'a1',
+        sessionId: SID,
+        role: 'assistant',
+        content: '已结束的回复',
+        status: 'delivered',
+        timestamp: '2026-01-01T00:00:00Z',
+      },
+    ]);
+    expect(useChatStore.getState().isGenerating).toBe(true);
+
+    renderHook(() => useChat({ autoConnect: false }));
+    expect(useChatStore.getState().isGenerating).toBe(false);
+  });
+
+  it('owner 收尾后，旁观实例晚到的 stream 帧不得重新拉高 isGenerating', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({ ok: true, json: async () => ({ code: 0, data: [] }) }) as never),
+    );
+
+    const owner = renderHook(() => useChat({ autoConnect: true }));
+    await waitFor(() => expect(sseHarness.getOnEvent()).toBeTruthy());
+    const ownerOnEvent = sseHarness.getOnEvent()!;
+
+    act(() => {
+      owner.result.current.sendMessage('问题');
+    });
+    act(() => {
+      ownerOnEvent({ type: 'stream', content: '正文' });
+    });
+    expect(useChatStore.getState().isGenerating).toBe(true);
+
+    // 旁观实例也挂上同一路 SSE 回调模拟（第二个 hook 会覆盖 harness 的 onEvent）
+    const bystander = renderHook(() => useChat({ autoConnect: true }));
+    await waitFor(() => expect(sseHarness.getOnEvent()).not.toBe(ownerOnEvent));
+    const bystanderOnEvent = sseHarness.getOnEvent()!;
+
+    // owner 收尾（卸载 = 关闭 Copilot）
+    owner.unmount();
+    expect(useChatStore.getState().isGenerating).toBe(false);
+
+    // 晚到帧打到旁观实例 → 必须忽略，不能再转圈
+    act(() => {
+      bystanderOnEvent({ type: 'stream', content: '晚到增量' });
+    });
+    expect(useChatStore.getState().isGenerating).toBe(false);
+
+    bystander.unmount();
+  });
+
+  it('KeepAlive 下 autoConnect→false 时收尾本实例生成（切走问数页不再残留转圈）', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({ ok: true, json: async () => ({ code: 0, data: [] }) }) as never),
+    );
+
+    const { result, rerender } = renderHook(
+      ({ autoConnect }: { autoConnect: boolean }) => useChat({ autoConnect }),
+      { initialProps: { autoConnect: true } },
+    );
+    await waitFor(() => expect(sseHarness.getOnEvent()).toBeTruthy());
+    act(() => {
+      result.current.sendMessage('问题');
+    });
+    expect(useChatStore.getState().isGenerating).toBe(true);
+
+    // 模拟 KeepAlive 切走：active=false → autoConnect=false，组件不卸载
+    rerender({ autoConnect: false });
+    expect(useChatStore.getState().isGenerating).toBe(false);
+  });
+
+  it('安全超时不被 delta 无限续期（硬上限一次，不被 delta 顺延）', async () => {
     vi.useFakeTimers();
     vi.stubGlobal(
       'fetch',
@@ -444,18 +555,76 @@ describe('陈旧生成态恢复（切页/重挂载转圈回归）', () => {
     act(() => {
       sseHarness.getOnEvent()?.({ type: 'stream', content: 'A' });
     });
-    // 多次 delta（旧逻辑会把 140s 无限顺延；新逻辑保持首次计时）
+    // 多次 delta（旧逻辑会无限顺延；新逻辑保持首次计时）
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(100_000);
+      await vi.advanceTimersByTimeAsync(200_000);
     });
     act(() => {
       sseHarness.getOnEvent()?.({ type: 'stream', content: 'B' });
     });
-    // 再推进剩余 40s+ → 应触发硬上限并解锁
+    // 再推进剩余 → 应触发硬上限并解锁
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(45_000);
+      await vi.advanceTimersByTimeAsync(65_000);
     });
 
+    expect(useChatStore.getState().isGenerating).toBe(false);
+  });
+});
+
+describe('stopGenerating（中途终止）', () => {
+  it('生成中点停止：发 generation.cancel、本地解锁、空气泡移除', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({ ok: true, json: async () => ({ code: 0, data: [] }) }) as never),
+    );
+
+    const { result } = renderHook(() => useChat({ autoConnect: true }));
+    await waitFor(() => expect(sseHarness.getOnEvent()).toBeTruthy());
+    act(() => {
+      result.current.sendMessage('很长的问数');
+    });
+    expect(useChatStore.getState().isGenerating).toBe(true);
+    expect(useChatStore.getState().messages.some((m) => m.role === 'assistant')).toBe(true);
+
+    act(() => {
+      result.current.stopGenerating();
+    });
+
+    expect(useChatStore.getState().isGenerating).toBe(false);
+    expect(useChatStore.getState().error).toBeNull();
+    expect(useChatStore.getState().messages.some((m) => m.role === 'assistant')).toBe(false);
+    expect(
+      wsHarness.sent.some(
+        (m) =>
+          typeof m === 'object' &&
+          m != null &&
+          (m as { type?: string }).type === 'generation.cancel',
+      ),
+    ).toBe(true);
+  });
+
+  it('已有正文时停止：标 delivered，不报失败', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({ ok: true, json: async () => ({ code: 0, data: [] }) }) as never),
+    );
+
+    const { result } = renderHook(() => useChat({ autoConnect: true }));
+    await waitFor(() => expect(sseHarness.getOnEvent()).toBeTruthy());
+    act(() => {
+      result.current.sendMessage('问题');
+    });
+    act(() => {
+      sseHarness.getOnEvent()?.({ type: 'stream', content: '部分回复' });
+    });
+
+    act(() => {
+      result.current.stopGenerating();
+    });
+
+    const assistant = useChatStore.getState().messages.find((m) => m.role === 'assistant');
+    expect(assistant?.status).toBe('delivered');
+    expect(assistant?.content).toContain('部分回复');
     expect(useChatStore.getState().isGenerating).toBe(false);
   });
 });

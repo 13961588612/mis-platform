@@ -229,12 +229,15 @@ public class AgentOpsController {
     public Result<JsonNode> listSessions(
             @RequestParam(required = false) String agent_id,
             @RequestParam(required = false) String channel,
+            @RequestParam(required = false) String user_id,
             @RequestParam(required = false) String keyword,
             @RequestParam(required = false) String from,
             @RequestParam(required = false) String to,
+            @RequestParam(required = false) Boolean include_empty,
             @RequestParam(required = false) Integer page,
             @RequestParam(required = false) Integer page_size) {
-        SessionQuery query = new SessionQuery(agent_id, channel, keyword, from, to, page, page_size);
+        SessionQuery query = new SessionQuery(
+                agent_id, channel, user_id, keyword, from, to, include_empty, page, page_size);
         return Result.ok(facade.listSessions(query));
     }
 

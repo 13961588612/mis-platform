@@ -550,9 +550,13 @@ export interface SessionMessage {
 export interface SessionQuery extends AgentPageQuery {
   agent_id?: string;
   channel?: SessionChannel;
+  /** 按用户过滤（Copilot 侧栏收口本用户）。 */
+  user_id?: string;
   keyword?: string;
   from?: string;
   to?: string;
+  /** 为 true 时包含 message_count=0 的空会话（清理用）。 */
+  include_empty?: boolean;
 }
 
 // ------------------------------------------------------------------ 会话反馈（CF-01 / CF-03 / CF-05）

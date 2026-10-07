@@ -595,6 +595,10 @@ class Settings(BaseSettings):
     MIS_ACL_HTTP_TIMEOUT: float = 3.0
     # 回源路径（挂在 MIS_ADMIN_BFF_BASE_URL 之下）。
     MIS_ACL_PERMISSIONS_PATH: str = "/internal/permissions"
+    # Copilot / iframe 问数身份回源（与测试问数 X-Mis-* 同构）。
+    MIS_ASK_IDENTITY_PATH: str = "/internal/identity/ask-context"
+    MIS_ASK_IDENTITY_CACHE_KEY_PREFIX: str = "mis:acl:askident:"
+    MIS_ASK_IDENTITY_CACHE_TTL: int = 60
     # 回源时 appId 入参的默认值（工具执行链路无 JWT，取此默认；REST 链路优先取 ctx.profile["app_id"]）。
     MIS_ACL_DEFAULT_APP_ID: str = ""
     # MCP 工具（E2）在 skill 注册表未命中时的兜底权限码（V22 已落真实码：菜单 92301，

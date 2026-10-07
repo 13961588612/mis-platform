@@ -1473,20 +1473,21 @@ public class IqdAdminService {
      * @param limit  每页条数（缺省 50，上限 200）
      * @param status 状态过滤（可空）
      * @param userId 用户 id 过滤（可空）
-     * @return 日志列表（按 id 倒序）
+     * @return 日志列表（按 {@code created_at} 倒序，同秒再按 id 倒序）
      */
     @Transactional(readOnly = true)
     public List<IqdAskLogVO> listAskLogs(Integer limit, String status, Long userId) {
         int capped = limit == null ? 50 : Math.min(Math.max(limit, 1), 200);
         List<IqdAskLog> entities;
+        var timeDesc = org.springframework.data.domain.Sort.by(
+                org.springframework.data.domain.Sort.Order.desc("createdAt"),
+                org.springframework.data.domain.Sort.Order.desc("id"));
         if (userId != null) {
-            entities = askLogRepository.findByUserIdOrderByIdDesc(userId);
+            entities = askLogRepository.findByUserIdOrderByCreatedAtDescIdDesc(userId);
         } else if (status != null && !status.isBlank()) {
-            entities = askLogRepository.findByStatusOrderByIdDesc(status);
+            entities = askLogRepository.findByStatusOrderByCreatedAtDescIdDesc(status);
         } else {
-            entities = askLogRepository.findAll(
-                    org.springframework.data.domain.Sort.by(org.springframework.data.domain.Sort.Direction.DESC, "id")
-            ).stream().limit(capped).toList();
+            entities = askLogRepository.findAll(timeDesc).stream().limit(capped).toList();
         }
         return entities.stream().limit(capped).map(this::toAskLogSummaryVO).toList();
     }

@@ -8,11 +8,13 @@ import java.util.List;
 
 public interface IqdAskLogRepository extends JpaRepository<IqdAskLog, Long> {
 
-    List<IqdAskLog> findByUserIdOrderByIdDesc(Long userId);
+    /** 按用户过滤，时间倒序（同秒再按 id 倒序）。 */
+    List<IqdAskLog> findByUserIdOrderByCreatedAtDescIdDesc(Long userId);
 
     List<IqdAskLog> findByTraceId(String traceId);
 
-    List<IqdAskLog> findByStatusOrderByIdDesc(String status);
+    /** 按状态过滤，时间倒序（同秒再按 id 倒序）。 */
+    List<IqdAskLog> findByStatusOrderByCreatedAtDescIdDesc(String status);
 
-    List<IqdAskLog> findByCreatedAtAfterOrderByIdDesc(Instant after);
+    List<IqdAskLog> findByCreatedAtAfterOrderByCreatedAtDescIdDesc(Instant after);
 }

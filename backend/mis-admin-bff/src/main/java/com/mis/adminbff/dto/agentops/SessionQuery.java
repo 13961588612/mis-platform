@@ -17,20 +17,24 @@ import com.fasterxml.jackson.annotation.JsonProperty;
  * 这类兜底放在 BFF 是合适的：它是所有运营台流量的必经之路，
  * 而下游还要服务其它调用方，不该为运营台的分页习惯做特殊约束。
  *
- * @param agentId 按 Agent 过滤
- * @param channel 按渠道过滤
- * @param keyword 关键词（标题 / 内容）
- * @param from    起始时间（ISO-8601）
- * @param to      截止时间（ISO-8601）
- * @param page    页码，从 1 开始
- * @param pageSize 每页条数
+ * @param agentId      按 Agent 过滤
+ * @param channel      按渠道过滤
+ * @param userId       按用户过滤（Copilot 侧栏收口本用户）
+ * @param keyword      关键词（标题 / 内容）
+ * @param from         起始时间（ISO-8601）
+ * @param to           截止时间（ISO-8601）
+ * @param includeEmpty 为 true 时包含 message_count=0 的空会话（用于清理）
+ * @param page         页码，从 1 开始
+ * @param pageSize     每页条数
  */
 public record SessionQuery(
         @JsonProperty("agent_id") String agentId,
         @JsonProperty("channel") String channel,
+        @JsonProperty("user_id") String userId,
         @JsonProperty("keyword") String keyword,
         @JsonProperty("from") String from,
         @JsonProperty("to") String to,
+        @JsonProperty("include_empty") Boolean includeEmpty,
         @JsonProperty("page") Integer page,
         @JsonProperty("page_size") Integer pageSize) {
 

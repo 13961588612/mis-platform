@@ -39,6 +39,8 @@ interface ChatState {
   addMessage: (message: ChatMessage) => void;
   updateMessage: (id: string, updates: Partial<ChatMessage>) => void;
   updateMessageStatus: (id: string, status: MessageStatus) => void;
+  /** 移除单条消息（切走/关闭时丢掉空气泡，勿标 error）。 */
+  removeMessage: (id: string) => void;
   clearMessages: () => void;
   setMessages: (messages: ChatMessage[]) => void;
   setGenerating: (generating: boolean) => void;
@@ -79,6 +81,11 @@ export const useChatStore = create<ChatState>((set) => ({
   updateMessageStatus: (id, status) =>
     set((state) => ({
       messages: state.messages.map((m) => (m.id === id ? { ...m, status } : m)),
+    })),
+
+  removeMessage: (id) =>
+    set((state) => ({
+      messages: state.messages.filter((m) => m.id !== id),
     })),
 
   clearMessages: () =>

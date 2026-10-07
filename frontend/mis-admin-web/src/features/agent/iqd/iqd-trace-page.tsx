@@ -82,7 +82,14 @@ export function IqdTracePage() {
         limit: 100,
         status: statusFilter.trim() || undefined,
       });
-      setLogs(items);
+      // 时间倒序兜底（后端已按 created_at desc；同秒按 id desc）
+      const sorted = [...items].sort((a, b) => {
+        const ta = a.created_at ? Date.parse(a.created_at) : 0;
+        const tb = b.created_at ? Date.parse(b.created_at) : 0;
+        if (tb !== ta) return tb - ta;
+        return (b.id ?? 0) - (a.id ?? 0);
+      });
+      setLogs(sorted);
     } catch (e) {
       setError(e instanceof Error ? e.message : '加载审计日志失败');
     } finally {

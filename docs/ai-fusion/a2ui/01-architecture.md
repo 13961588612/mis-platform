@@ -41,7 +41,7 @@ graph TB
 
     subgraph Platform["平台层"]
         GW["Gateway<br/>A2UIRuntime + RedisStreamAgent<br/>+ EventConverter + SurfacePermissionFilter"]
-        BFF["mis-admin-bff<br/>/internal/permissions + ApiPermissionInterceptor<br/>+ /api/v1/embed/identity/exchange（D12）"]
+        BFF["mis-admin-bff<br/>/internal/permissions + /internal/identity/ask-context<br/>+ /api/v1/embed/identity/exchange（D12）"]
         PY["Python Agent Backend<br/>（Redis Streams 通信）"]
         REDIS["Redis Streams<br/>aip:inbound:{channel} / aip:outbound:{sessionId}<br/>+ mis:acl:skillperm:{userId}"]
     end

@@ -402,6 +402,19 @@ class InvokeAgentTool(BaseTool):
         child_meta["delegated_from"] = "mis-copilot"
         if parent_session_id:
             child_meta["parent_session_id"] = parent_session_id
+        # Copilot A2UI：父上下文已由入站回源写入 X-Mis-*；透传给 Worker，
+        # 否则 iqd__ask 只有 misUserId、无角色码 → 45204。
+        from src.identity.ask_identity_context import X_MIS_HEADER_KEYS
+
+        for header_key in X_MIS_HEADER_KEYS:
+            value = meta.get(header_key)
+            if isinstance(value, str) and value.strip():
+                child_meta.setdefault(header_key, value)
+        parent_iqd = meta.get("iqd")
+        if isinstance(parent_iqd, dict) and parent_iqd.get("connection_id") is not None:
+            child_iqd = dict(child_meta.get("iqd") or {}) if isinstance(child_meta.get("iqd"), dict) else {}
+            child_iqd.setdefault("connection_id", parent_iqd.get("connection_id"))
+            child_meta["iqd"] = child_iqd
 
         # ===== 续聊锚点（C5）：命中则复用子会话，未命中静默降级 spawn =====
         reuse_session_id = await self._resolve_continue_session(
