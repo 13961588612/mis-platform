@@ -1,16 +1,18 @@
 package com.mis.org.service;
 
 import com.mis.common.core.exception.BusinessException;
+import com.mis.common.core.exception.ResultCode;
 import com.mis.common.core.result.Result;
-import com.mis.common.core.result.ResultCode;
 import com.mis.org.client.IamDataScopeClient;
 import com.mis.org.client.IamDataScopeClient.DataScopePayload;
 import com.mis.org.config.OrgProperties;
 import com.mis.org.domain.entity.SysDept;
 import com.mis.org.domain.entity.SysEmployeePost;
+import com.mis.org.domain.entity.SysPost;
 import com.mis.org.domain.repository.SysDeptRepository;
 import com.mis.org.domain.repository.SysEmployeePostRepository;
 import com.mis.org.domain.repository.SysEmployeeRepository;
+import com.mis.org.domain.repository.SysPostRepository;
 import com.mis.org.dto.UserDataSetScopeVO;
 import com.mis.org.dto.UserDataSetScopeVO.DeptAnchor;
 import org.slf4j.Logger;
@@ -22,13 +24,14 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientException;
 
+import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 
 /**
- * \u4e3a\u95ee\u6570 Worker \u51c6\u5907\u7684\u7528\u6237\u6570\u636e\u8303\u56f4\u89c6\u56fe\u3002
+ * 为数据 Worker 准备的用户数据范围视图。
  */
 @Service
 public class DataSetScopeService {
@@ -39,6 +42,7 @@ public class DataSetScopeService {
     private final SysDeptRepository deptRepository;
     private final SysEmployeeRepository employeeRepository;
     private final SysEmployeePostRepository employeePostRepository;
+    private final SysPostRepository postRepository;
     private final RestClient iamRestClient;
 
     public DataSetScopeService(
@@ -46,11 +50,13 @@ public class DataSetScopeService {
             SysDeptRepository deptRepository,
             SysEmployeeRepository employeeRepository,
             SysEmployeePostRepository employeePostRepository,
+            SysPostRepository postRepository,
             OrgProperties properties) {
         this.iamDataScopeClient = iamDataScopeClient;
         this.deptRepository = deptRepository;
         this.employeeRepository = employeeRepository;
         this.employeePostRepository = employeePostRepository;
+        this.postRepository = postRepository;
         String baseUrl = properties.isIamDiscoveryEnabled()
                 ? "http://" + properties.getIamServiceId()
                 : properties.getIamBaseUrl();
@@ -91,16 +97,35 @@ public class DataSetScopeService {
                 storeIds != null ? storeIds : List.of());
     }
 
+    /**
+     * 解析用户实际拥有的部门 ID（含任职记录对应的部门）。
+     */
     private Set<Long> resolveAssignedDeptIds(Long userId) {
         Long employeeId = resolveEmployeeIdByUserId(userId);
         if (employeeId == null) return Set.of();
         Set<Long> deptIds = new HashSet<>();
+
+        // 员工主部门
         employeeRepository.findById(employeeId).ifPresent(emp -> {
             if (emp.getDeptId() != null) deptIds.add(emp.getDeptId());
         });
-        List<SysEmployeePost> posts = employeePostRepository.findByEmployeeIdOrderByEffectiveStartAsc(employeeId);
-        for (SysEmployeePost post : posts) {
-            if (post.getDeptId() != null) deptIds.add(post.getDeptId());
+
+        // 任职部门的部门：取 startDate IS NULL 或 startDate <= today 的记录，关联 sys_post 获取 deptId
+        LocalDate today = LocalDate.now();
+        List<SysEmployeePost> activePosts = employeePostRepository
+                .findActivePostsAsOfToday(employeeId, today);
+
+        Set<Long> postIdSet = new HashSet<>();
+        for (SysEmployeePost post : activePosts) {
+            postIdSet.add(post.getPostId());
+        }
+        if (!postIdSet.isEmpty()) {
+            List<SysPost> posts = postRepository.findAllById(postIdSet);
+            for (SysPost post : posts) {
+                if (post.getStatus() == 1 && post.getDeptId() != null) {
+                    deptIds.add(post.getDeptId());
+                }
+            }
         }
         return deptIds;
     }

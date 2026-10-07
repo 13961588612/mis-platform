@@ -91,14 +91,14 @@ public class UserController {
         return Result.ok(userService.getAuthUserById(id));
     }
 
-    @GetMapping("/{id}
 
     /** mis-org query employeeId for DataSetScopeService. */
     @GetMapping("/{id}/employee-id")
     public Result<Long> getEmployeeId(@PathVariable Long id) {
         return Result.ok(userService.resolveEmployeeId(id));
     }
-/data-scope")
+
+    @GetMapping("/{id}/data-scope")
     public Result<DataScopeVO> dataScope(@PathVariable Long id) {
         return Result.ok(userService.resolveDataScope(id));
     }
