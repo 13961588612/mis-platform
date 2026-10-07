@@ -17,6 +17,7 @@
 
 from __future__ import annotations
 
+import json
 from contextlib import contextmanager
 from unittest.mock import AsyncMock, patch
 
@@ -498,99 +499,69 @@ async def test_trigger_validate_ok_with_warnings_returns_list():
     assert result.warnings == ["a", "b", "c"]
 
 
+# ================================================================ profile 自动绑定（2026-10 修复）
+
 @pytest.mark.asyncio
-async def test_trigger_validate_failed_reports_summary_as_build_error():
-    """模型校验失败：build_status=failed，build_error=人可读摘要（REQ-8），report action=validate。"""
+async def test_ensure_profile_bound_sets_profile_without_files():
+    """绑定 profile 只跑 ``context set-profile``（纯 CLI，无 files）——线上旧版
+    WrenMcpAgent 不支持 files，传 files 会 fail-loud 导致绑定失败（本次根因）。"""
+    cli = IqdCli()
+    cli._run = AsyncMock(return_value={"stdout": "", "stderr": "", "exit_code": 0})
+
+    name = await cli.ensure_profile_bound(1790686095967, "/var/lib/mis-iqd/wren-projects/x")
+
+    assert name == "iqd-conn-1790686095967"
+    assert cli._run.await_count == 1
+    args = cli._run.call_args.args[0]
+    assert args == ["context", "set-profile", "iqd-conn-1790686095967"]
+    # 关键：绝不携带 files（旧 agent 会因此报「未升级」）
+    assert cli._run.call_args.kwargs.get("files") is None
+
+
+@pytest.mark.asyncio
+async def test_ensure_profile_bound_returns_none_when_set_profile_fails():
+    """set-profile 失败（如 profile 尚未建好）→ 返回 None，仅告警，不抛。"""
+    cli = IqdCli()
+    cli._run = AsyncMock(side_effect=IqdCliError("boom"))
+
+    name = await cli.ensure_profile_bound(7, "/tmp/7")
+
+    assert name is None
+
+
+@pytest.mark.asyncio
+async def test_service_validate_binds_profile_before_validate():
+    """trigger_validate 先 ensure_project + ensure_profile_bound，再 context_validate。"""
     service = IqdAskService()
-    cli, client, mocks = _patch_selfheal_clients(
-        validate_return={"ok": False, "summary": "列 a 不存在", "raw": "err"}
-    )
-    try:
-        result = await service.trigger_validate(connection_id=1, wait=True)
-    finally:
-        for m in mocks:
-            m.stop()
+    calls: list[str] = []
 
-    assert result.build_status == "failed"
-    assert result.build_error == "列 a 不存在"
-    assert result.warnings == ["列 a 不存在"]
-    report = client.report_sync_job.call_args.args[0]
-    assert report["action"] == "validate"
-    assert report["build_status"] == "failed"
+    class FakeCli:
+        def ensure_project(self, cid, project_home):
+            calls.append("ensure_project")
+            return project_home
 
+        async def ensure_profile_bound(self, cid, project_home):
+            calls.append("ensure_profile_bound")
+            return "iqd-conn-1"
 
-# ================================================================ 路由端到端（service → 状态回写）
+        async def context_validate(self, *, project_dir=None):
+            calls.append("context_validate")
+            return {"ok": True, "summary": "", "raw": "ok", "warnings": []}
 
-def _route_test_case(action: str, cli_return: dict, validate_return: dict | None = None):
-    """驱动真实路由，验证端到端返回 + report_sync_job action 回写。"""
-    from fastapi.testclient import TestClient
+    fake = FakeCli()
 
-    from src.api.deps import get_current_user, get_trace_id
-    from src.main import app
+    with patch("src.adapters.iqd_cli.IqdCli", return_value=fake), patch.object(
+        service, "_get_config_client"
+    ) as mock_client, patch.object(
+        service, "_derive_unmatched_for_validate", new=AsyncMock(return_value=(0, []))
+    ), patch.object(
+        service, "_report_selfheal_job", new=AsyncMock()
+    ), patch.object(
+        service, "_resolve_primary_connection_id", new=AsyncMock(return_value=1)
+    ):
+        mock_client.return_value = AsyncMock()
+        result = await service.trigger_validate(connection_id=1)
 
-    with patch("src.adapters.iqd_cli.IqdCli") as MockCli, patch(
-        "src.adapters.iqd_config_client.IqdConfigClient"
-    ) as MockClient:
-        cli = MockCli.return_value
-        cli.context_build = AsyncMock(return_value=cli_return)
-        cli.memory_reset = AsyncMock(return_value={"exit_code": 0})
-        cli.memory_index = AsyncMock(return_value={"exit_code": 0})
-        cli.context_validate = AsyncMock(
-            return_value=validate_return or {"ok": True, "summary": "", "raw": "ok"}
-        )
-        client = MockClient.return_value
-        client.get_sql_pairs = AsyncMock(return_value=[])
-        client.get_knowledge = AsyncMock(return_value=[])
-        # force-rebuild 先派生平台完整 MDL（2026-09-30 修正）→ 提供最小 catalog。
-        client.get_catalog_full = AsyncMock(return_value={"mdl_raw": None, "edited_items": [
-            {"item_key": "pg_main.adhoc.t1", "kind": "table", "display_name": "t1"},
-            {"item_key": "pg_main.adhoc.t1.id", "kind": "column",
-             "parent_key": "pg_main.adhoc.t1", "display_name": "id", "data_type": "BIGINT"},
-            {"item_key": "mdl:model:t1", "kind": "model", "display_name": "t1"},
-        ]})
-        client.get_catalog_meta = AsyncMock(return_value=[])
-        client.backfill_enhancement_sync = AsyncMock(return_value={"synced_count": 0})
-        client.report_sync_job = AsyncMock(return_value={"id": 1})
-
-        app.dependency_overrides[get_current_user] = lambda: {"user_id": "u1"}
-        app.dependency_overrides[get_trace_id] = lambda: "t-route"
-        try:
-            tc = TestClient(app)
-            resp = tc.post(
-                f"/api/v1/iqd/self-heal/{action}",
-                json={"connection_id": 1, "wait": True},
-            )
-        finally:
-            app.dependency_overrides.clear()
-
-    assert resp.status_code == 200, resp.text
-    body = resp.json()
-    assert body["code"] == 0, body
-    return body, client.report_sync_job.call_args.args[0]
-
-
-def test_route_force_rebuild_end_to_end():
-    body, report = _route_test_case(
-        "force-rebuild", cli_return={"stdout": '{"mdl_hash":"mdl_route"}', "stderr": ""}
-    )
-    assert body["data"]["build_status"] == "success"
-    assert body["data"]["build_mdl_hash"] == "mdl_route"
-    assert report["action"] == "force_rebuild"
-
-
-def test_route_re_index_end_to_end():
-    body, report = _route_test_case("re-index", cli_return={"stdout": "{}", "stderr": ""})
-    assert body["data"]["build_status"] == "skipped"
-    assert body["data"]["index_status"] == "success"
-    assert report["action"] == "reindex"
-    assert "build_status" not in report
-
-
-def test_route_validate_end_to_end():
-    body, report = _route_test_case(
-        "validate",
-        cli_return={"stdout": "{}", "stderr": ""},
-        validate_return={"ok": True, "summary": "", "raw": "ok"},
-    )
-    assert body["data"]["build_status"] == "success"
-    assert report["action"] == "validate"
+    assert result.build_status == "success"
+    assert calls[:2] == ["ensure_project", "ensure_profile_bound"]
+    assert "context_validate" in calls

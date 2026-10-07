@@ -623,6 +623,8 @@ class IqdAskService:
 
         # 方案 A 多连接：build/index 落到本连接专属 wren project 目录（project_dir）
         project_home = self._project_home(cid)
+        # 确保 project 绑定 profile（消除 context build/validate 的 no-profile 警告）
+        await self._ensure_project_profile_bound(cli, cid, project_home)
 
         # ① 拉待下发物料（pending + enabled）
         try:
@@ -767,6 +769,8 @@ class IqdAskService:
 
         # 方案 A 多连接：build/index 落到本连接专属 wren project 目录（project_dir）
         project_home = self._project_home(cid)
+        # 确保 project 绑定 profile（消除 context build/validate 的 no-profile 警告）
+        await self._ensure_project_profile_bound(cli, cid, project_home)
 
         # ① 拉待下发物料（pending + enabled）
         try:
@@ -1016,6 +1020,9 @@ class IqdAskService:
 
         # 方案 A 多连接：校验落到本连接专属 wren project 目录（project_dir）
         project_home = self._project_home(cid)
+        # 确保 project 绑定 profile（消除 context validate 的 no-profile 警告，且让
+        # 校验用与 serve mcp 相同的数据源）
+        await self._ensure_project_profile_bound(cli, cid, project_home)
 
         try:
             validate = await cli.context_validate(project_dir=project_home)
@@ -2527,6 +2534,30 @@ class IqdAskService:
             主连接 id；无可用连接 / 拉取失败时返回 ``None``。
         """
         return await client.resolve_primary_connection_id()
+
+    async def _ensure_project_profile_bound(self, cli: Any, cid: int, project_home: str) -> None:
+        """确保 project 目录骨架存在且已绑定本连接专属 wren profile（幂等）。
+
+        <p>修复「模型校验」出现的 ``Note: no profile bound to this project`` 警告：
+        ``wren context validate/build`` 读的是 project ``.wren`` 绑定的 active profile，
+        此前该绑定由运维人工执行，平台未代劳 → 新建连接普遍缺这步，validate 只能回退默认
+        profile 并告警。此处自动 ``profile add`` + ``context set-profile``，与
+        ``serve mcp`` 用同一 profile 名，保证校验/构建与取数同源。
+
+        <p>失败不阻断主流程（仅告警）：profile 绑定属「对齐取数口径」的增强，且
+        ``context validate`` 本身允许仅有 warning。
+        """
+        try:
+            cli.ensure_project(cid, project_home)
+        except Exception as exc:  # noqa: BLE001 - 目录初始化失败仍尝试后续
+            logger.warning("IQD ensure_project failed", connection_id=cid, error=str(exc))
+            return
+        try:
+            await cli.ensure_profile_bound(cid, project_home)
+        except Exception as exc:  # noqa: BLE001 - 绑定失败不阻断校验/构建
+            logger.warning(
+                "IQD ensure_profile_bound failed (non-blocking)", connection_id=cid, error=str(exc)
+            )
 
     @staticmethod
     def _project_home(connection_id: int) -> str:

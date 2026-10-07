@@ -476,6 +476,26 @@ class OpenHarnessRuntime(AgentRuntime):
                 mis_user_id=mis_user_id,
             )
 
+            # 把本轮请求体 metadata（BFF ``IqdAskFacadeService.buildBody`` 注入的
+            # ``metadata.iqd.{question,view,connection_id,simulate_role_code,scope_hint}``，
+            # 以及未来任何 body 承载的范围信息）合并进工具的 tool_metadata。
+            # 工具执行上下文 metadata 与本 dict 同源（openharness QueryContext.tool_metadata
+            # → ToolExecutionContext.metadata），故 iqd__ask 的 ``_build_identity`` 才能读到
+            # ``iqd.simulate_role_code``；此前该 metadata 在会话→运行时转换时被丢弃。
+            try:
+                _req_meta: Any = None
+                for _m in reversed(messages):
+                    if not isinstance(_m, dict):
+                        continue
+                    _candidate = _m.get("metadata")
+                    if isinstance(_candidate, dict) and _candidate:
+                        _req_meta = _candidate
+                        break
+                if _req_meta:
+                    engine.tool_metadata.update(_req_meta)
+            except Exception:  # noqa: BLE001 - 元数据合并失败不得阻断对话
+                logger.warning("merge request metadata into tool_metadata failed", exc_info=True)
+
             if len(oh_messages) > 1:
                 engine.load_messages(oh_messages[:-1])
                 prompt: Any = oh_messages[-1]

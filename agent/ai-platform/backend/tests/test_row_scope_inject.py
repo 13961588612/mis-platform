@@ -277,10 +277,13 @@ def test_inject_unparseable_sql_fails_closed():
     assert "解析失败" in (out.denied_reason or "")
 
 
-def test_inject_no_row_scope_denies_fail_closed():
-    """无命中行级规则 + 非 ALL → fail-closed（缺失必须显式 X-Mis-Data-Scope: all）。"""
-    from src.agent.mis_iqd.errors import ScopeDeniedError
+def test_inject_no_row_scope_allows_when_table_authorized():
+    """无命中行级规则 + 表级已授权 → 全行可见，原样返回（NONE）。
 
+    行级范围是可选的叠加约束：某张表已在范围策略（range policy）里授权、
+    但未配置 row_scope 时，应放行整表，而不是 fail-closed。否则「范围与权限」
+    已授权却会表现为 0 张授权表（2026-10 回归）。
+    """
     resolver = make_resolver()
     sql = "SELECT * FROM pg_main.public.orders"
     resolution = IqdScopeResolution(
@@ -289,8 +292,10 @@ def test_inject_no_row_scope_denies_fail_closed():
         row_scope_rules={},
         connection_id=1,
     )
-    with pytest.raises(ScopeDeniedError):
-        run_inject(resolver, sql, resolution, no_header_identity())
+    out = run_inject(resolver, sql, resolution, no_header_identity())
+    assert out.verdict == "allow"
+    assert out.sql == sql
+    assert out.strategy == "NONE"
 
 
 def test_inject_no_row_scope_with_all_scope_skips_injection():
@@ -593,3 +598,27 @@ def test_dept_path_prefix_not_mapped_at_inject_time():
 
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-v"]))
+
+
+# ================================================================ 身份头解析（BFF 透传）
+
+def test_identity_from_headers_parses_data_scope_all():
+    """BFF 注入的 X-Mis-Data-Scope: all → data_scope_all=True。"""
+    identity = AskIdentity.from_headers({"X-Mis-Data-Scope": "all"})
+    assert identity.data_scope_all is True
+
+
+def test_identity_from_headers_parses_dept_scope_anchors():
+    """X-Mis-Dept-Scope 锚点 id 回填 dept_ids；dept_scope_anchors 保留 path/scope。"""
+    raw = json.dumps([{"id": "A", "path": "/0/1/A/", "scope": "dept_subtree"}])
+    identity = AskIdentity.from_headers({"X-Mis-Dept-Scope": raw})
+    assert identity.dept_ids == ["A"]
+    anchors = identity.dept_scope_anchors()
+    assert anchors == [{"id": "A", "path": "/0/1/A/", "scope": "dept_subtree"}]
+
+
+def test_identity_from_headers_no_scope_header_stays_false():
+    """无 X-Mis-Data-Scope 头 → data_scope_all 默认 False（fail-closed 语义不变）。"""
+    identity = AskIdentity.from_headers({"X-Mis-Roles": json.dumps([{"code": "SALES"}])})
+    assert identity.data_scope_all is False
+    assert identity.role_codes == ["SALES"]

@@ -111,6 +111,9 @@ class AskIdentity:
             raw_headers=dict(self.raw_headers),
             simulated_role_code=role_code or None,
             real_role_codes=list(self.role_codes),
+            # 数据范围（ALL）与模拟角色正交：模拟身份必须继承，否则
+            # X-Mis-Data-Scope: all 会在模拟时被静默丢弃 → 行级注入 fail-closed。
+            data_scope_all=self.data_scope_all,
         )
 
     def real_identity(self) -> AskIdentity:
@@ -132,6 +135,7 @@ class AskIdentity:
             raw_headers=dict(self.raw_headers),
             simulated_role_code=None,
             real_role_codes=[],
+            data_scope_all=self.data_scope_all,
         )
 
     def subject_summary(self) -> str:
@@ -171,13 +175,28 @@ class AskIdentity:
             except (json.JSONDecodeError, TypeError):
                 return [v for v in (p.strip() for p in raw.split(",")) if v]
 
-        return cls(
+        identity = cls(
             role_codes=_parse_list("X-Mis-Roles"),
             dept_ids=_parse_list("X-Mis-Depts"),
             store_codes=_parse_list("X-Mis-Stores"),
             org_ids=_parse_list("X-Mis-Orgs"),
             raw_headers={k: v for k, v in headers.items() if k and v},
         )
+        # BFF 注入的显式数据范围头：``all`` → 跳过行级注入（全行可见）。
+        if headers.get("X-Mis-Data-Scope", "").strip().lower() == "all":
+            identity.data_scope_all = True
+        # ``X-Mis-Dept-Scope`` 锚点（含 path）也回填 dept_ids，供 _subject_keys 命中
+        # 部门级 scope_policy；具体 path 由 dept_scope_anchors() 从 raw_headers 消费。
+        anchors = json.loads(headers.get("X-Mis-Dept-Scope") or "[]") if headers.get("X-Mis-Dept-Scope") else []
+        if isinstance(anchors, list):
+            anchor_ids = [
+                str(a.get("id"))
+                for a in anchors
+                if isinstance(a, dict) and a.get("id") is not None
+            ]
+            if anchor_ids:
+                identity.dept_ids = list(dict.fromkeys([*identity.dept_ids, *anchor_ids]))
+        return identity
 
     def dept_scope_anchors(self) -> list[dict[str, str]]:
         """解析 ``X-Mis-Dept-Scope`` 锚点集合（含 path，Worker 零查询）。
@@ -307,34 +326,6 @@ class RowScopeInjectOutcome:
             "original_sql": self.original_sql,
         }
 
-
-
-@staticmethod
-def from_request_headers(raw_headers: dict[str, str]) -> "AskIdentity":
-    """From BFF X-Mis-* headers into an AskIdentity."""
-    identity = AskIdentity(
-        user_id=int(raw_headers.get("X-Mis-User-Id")) if raw_headers.get("X-Mis-User-Id") else None,
-        employee_id=raw_headers.get("X-Mis-Employee-Id"),
-        role_codes=json.loads(raw_headers.get("X-Mis-Roles", "[]")) if raw_headers.get("X-Mis-Roles") else [],
-        dept_ids=[],
-        store_codes=json.loads(raw_headers.get("X-Mis-Stores", "[]")) if raw_headers.get("X-Mis-Stores") else [],
-        org_ids=json.loads(raw_headers.get("X-Mis-Orgs", "[]")) if raw_headers.get("X-Mis-Orgs") else [],
-        raw_headers=dict(raw_headers),
-    )
-
-    ds = raw_headers.get("X-Mis-Data-Scope", "").strip().lower()
-    if ds == "all":
-        identity.data_scope_all = True
-
-    dept_raw = raw_headers.get("X-Mis-Dept-Scope", "")
-    if dept_raw:
-        try:
-            anchors = json.loads(dept_raw)
-            identity.dept_ids = [str(a["id"]) for a in anchors if isinstance(a, dict) and a.get("id")]
-        except (json.JSONDecodeError, TypeError, KeyError):
-            pass
-
-    return identity
 
 
 @dataclass
@@ -810,11 +801,15 @@ class ScopeResolver:
             original_sql=original,
         )
         if not resolution.has_row_scope:
+            # 空 SQL 属于上游未产出可执行语句，仍 fail-closed（不得静默放行）。
+            if not original:
+                raise ScopeDeniedError("待注入 SQL 为空，拒绝执行")
+            # 无命中本主体的行级规则 → 表级已授权即可全行可见（行级范围是可选的叠加约束）。
+            # fail-closed 仅发生在下方「命中规则但取不到维度取值」的分支，不在此处整体拒绝；
+            # 否则「范围与权限」已授权但未配行级规则的表会被误判为 0 张授权表。
             if identity.data_scope_all:
-                # ALL scope: skip row-level injection entirely, keep SQL as-is
                 logger.info("IQD row scope: data_scope=all, skip injection")
-                return outcome
-            raise ScopeDeniedError("未匹配到行级范围条件，拒绝执行")
+            return outcome
 
         dimensions = await self._load_dimensions()
         dim_map: dict[str, RowScopeDimension] = {

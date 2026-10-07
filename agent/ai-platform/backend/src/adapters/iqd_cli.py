@@ -99,6 +99,66 @@ class IqdCli:
         """
         return await self._run(["context", "set-profile", name], cwd=project_dir)
 
+    async def ensure_profile_bound(
+        self,
+        connection_id: int | str,
+        project_dir: str,
+        *,
+        credential: dict[str, Any] | None = None,
+    ) -> str | None:
+        """确保本连接 project 目录绑定到其专属 wren profile（幂等）。
+
+        <p>背景（2026-10 修复）：``wren context validate/build`` 读的是 **project 目录
+        ``.wren`` 里绑定的 active profile**；若从未执行 ``wren context set-profile``，
+        validate 会打印 ``Note: no profile bound to this project. Connection will
+        fall back to ...`` 警告（旧行为：该绑定由运维人工执行，平台不代劳 → 新建连接
+        普遍缺这步）。本方法把「profile add + context set-profile」两步自动化，
+        与 :class:`WrenMcpProcessManager` 用**同一个 profile 名**（``iqd-conn-{id}``），
+        保证 ``context build/validate`` 与 ``serve mcp`` 取数使用同一数据源。
+
+        <p>安全（D6 铁律）：密码写入 ``${IQD_DB_PASSWORD}`` 占位，明文只经
+        ``serve mcp`` 子进程 env 注入，**绝不落 profiles.yml**。
+
+        <p>坐标只取**非敏感**的 ``/connection-db-profile``（host/port/user/db/db_type），
+        **不需要** vault 解密密码（password 恒为占位）。无坐标（host 缺失，如历史手工
+        连接）时退化为「仅把既有 profile 名绑到本 project」，同样消除警告。
+
+        Args:
+            connection_id: 问数连接 id。
+            project_dir: 连接专属 wren project 目录（已 ``ensure_project``）。
+            credential: 可选业务库坐标字典（缺省经 :class:`IqdConfigClient` 取）。
+
+        Returns:
+            绑定的 profile 名；失败时 ``None``。
+        """
+        profile_name = f"iqd-conn-{connection_id}"
+
+        # 关键（2026-10 修复）：**不传 files**。profile 由 WrenMcpAgent 在 ``serve mcp
+        # --profile`` 启动时就地 ``wren profile add``（``_ensure_profile``）建好，坐标为
+        # 非敏感值、密码为 ``${IQD_DB_PASSWORD}`` 占位；本方法只需把它**绑到 project**。
+        #
+        # 此前用 ``_run(files=[...])`` 上传 profile JSON，但线上 WrenMcpAgent 为旧版，
+        # ``/cli`` 不返回 ``written`` 回执 → ``_try_remote_run`` 的 fail-loud 断言直接抛
+        # 「WrenMcpAgent 未升级：不支持 files」→ 绑定整体失败 → validate 仍报 no-profile。
+        # ``context set-profile`` 是纯 CLI（无 files），新旧 agent 都支持。
+        #
+        # 若 profile 尚未建好（MCP 从未启动），``set-profile`` 会失败 → 仅告警；
+        # 待 MCP 启动后 profile 即就绪，下次绑定成功。
+        try:
+            await self.context_set_profile(profile_name, project_dir=project_dir)
+        except IqdCliError as exc:
+            logger.warning(
+                "IQD ensure_profile_bound failed (context set-profile)",
+                connection_id=connection_id,
+                profile=profile_name,
+                error=str(exc),
+            )
+            return None
+        logger.info(
+            "IQD profile bound to project", connection_id=connection_id, profile=profile_name
+        )
+        return profile_name
+
     async def context_build(
         self,
         *,

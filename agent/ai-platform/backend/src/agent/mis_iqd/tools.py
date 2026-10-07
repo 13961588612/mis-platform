@@ -64,8 +64,10 @@ def _build_identity(metadata: dict[str, Any] | None) -> AskIdentity:
     for header_key in (
         "X-Mis-Roles",
         "X-Mis-Depts",
+        "X-Mis-Dept-Scope",
         "X-Mis-Stores",
         "X-Mis-Orgs",
+        "X-Mis-Data-Scope",
         "X-Trace-Id",
         "X-User-Id",
         "X-Employee-Id",

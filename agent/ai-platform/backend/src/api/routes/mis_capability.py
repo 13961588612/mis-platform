@@ -53,6 +53,41 @@ router = APIRouter(tags=["mis-capability"])
 # ===== 请求模型 =====
 
 
+def _merge_identity_headers_into_metadata(
+    metadata: dict[str, Any] | None,
+    *,
+    x_mis_roles: str = "",
+    x_mis_depts: str = "",
+    x_mis_orgs: str = "",
+    x_mis_dept_scope: str = "",
+    x_mis_stores: str = "",
+    x_mis_data_scope: str = "",
+) -> dict[str, Any]:
+    """把 BFF 注入的 X-Mis-* 身份/范围头并入消息 metadata。
+
+    <p>``mis-admin-bff`` 经 ``AiPlatformClient.buildHeaders`` 透传
+    ``X-Mis-Roles/Depts/Orgs``（enrichment）与 ``X-Mis-Dept-Scope/Stores/Data-Scope``
+    （行级范围），但平台侧此前只把 ``X-Mis-Roles`` 读进 ``UserContext``，未回灌到
+    Worker 的工具上下文——导致问数的 ``AskIdentity`` 拿不到真实角色/部门/数据范围。
+
+    <p>本函数把这些头原样附到本轮消息 metadata（键名与 ``AskIdentity.from_headers``
+    对齐），再由 ``OpenHarnessRuntime.run`` 合并进 ``tool_metadata``，最终供
+    ``iqd__ask`` 的 ``_build_identity`` 消费。
+    """
+    merged: dict[str, Any] = dict(metadata or {})
+    for key, value in (
+        ("X-Mis-Roles", x_mis_roles),
+        ("X-Mis-Depts", x_mis_depts),
+        ("X-Mis-Orgs", x_mis_orgs),
+        ("X-Mis-Dept-Scope", x_mis_dept_scope),
+        ("X-Mis-Stores", x_mis_stores),
+        ("X-Mis-Data-Scope", x_mis_data_scope),
+    ):
+        if isinstance(value, str) and value.strip():
+            merged[key] = value
+    return merged
+
+
 class AgentChatRequest(BaseModel):
     """受 MIS RS256 保护的 Agent 对话请求体。"""
 
@@ -344,6 +379,12 @@ async def agent_chat(
     authorization: str = Header(default=""),
     x_tenant_id: str = Header(default="", alias="X-Tenant-Id"),
     x_app_id: str = Header(default="", alias="X-App-Id"),
+    x_mis_roles: str = Header(default="", alias="X-Mis-Roles"),
+    x_mis_depts: str = Header(default="", alias="X-Mis-Depts"),
+    x_mis_orgs: str = Header(default="", alias="X-Mis-Orgs"),
+    x_mis_dept_scope: str = Header(default="", alias="X-Mis-Dept-Scope"),
+    x_mis_stores: str = Header(default="", alias="X-Mis-Stores"),
+    x_mis_data_scope: str = Header(default="", alias="X-Mis-Data-Scope"),
 ) -> dict[str, Any]:
     """受 MIS RS256 保护的 Agent 非流式对话端点（供 BFF 适配层调用）。
 
@@ -351,6 +392,15 @@ async def agent_chat(
     走 :func:`_run_kb_qa` 的知识库增强管线；其余 Agent 保持原有通用流程零改动。
     """
     try:
+        req.metadata = _merge_identity_headers_into_metadata(
+            req.metadata,
+            x_mis_roles=x_mis_roles,
+            x_mis_depts=x_mis_depts,
+            x_mis_orgs=x_mis_orgs,
+            x_mis_dept_scope=x_mis_dept_scope,
+            x_mis_stores=x_mis_stores,
+            x_mis_data_scope=x_mis_data_scope,
+        )
         session_manager: SessionManager = get_session_manager()
         agent_manager: AgentManager = get_agent_manager()
         user_id: str = current_user.get("user_id", "mis-user")
@@ -461,6 +511,12 @@ async def agent_chat_stream(
     authorization: str = Header(default=""),
     x_tenant_id: str = Header(default="", alias="X-Tenant-Id"),
     x_app_id: str = Header(default="", alias="X-App-Id"),
+    x_mis_roles: str = Header(default="", alias="X-Mis-Roles"),
+    x_mis_depts: str = Header(default="", alias="X-Mis-Depts"),
+    x_mis_orgs: str = Header(default="", alias="X-Mis-Orgs"),
+    x_mis_dept_scope: str = Header(default="", alias="X-Mis-Dept-Scope"),
+    x_mis_stores: str = Header(default="", alias="X-Mis-Stores"),
+    x_mis_data_scope: str = Header(default="", alias="X-Mis-Data-Scope"),
 ) -> StreamingResponse:
     """受 MIS RS256 保护的 Agent SSE 流式对话端点（供 BFF 适配层调用）。
 
@@ -480,6 +536,15 @@ async def agent_chat_stream(
         session_id: str | None = None
         response_parts: list[str] = []
         try:
+            req.metadata = _merge_identity_headers_into_metadata(
+                req.metadata,
+                x_mis_roles=x_mis_roles,
+                x_mis_depts=x_mis_depts,
+                x_mis_orgs=x_mis_orgs,
+                x_mis_dept_scope=x_mis_dept_scope,
+                x_mis_stores=x_mis_stores,
+                x_mis_data_scope=x_mis_data_scope,
+            )
             session_manager: SessionManager = get_session_manager()
             agent_manager: AgentManager = get_agent_manager()
             user_id: str = current_user.get("user_id", "mis-user")
