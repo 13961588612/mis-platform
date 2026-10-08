@@ -53,6 +53,34 @@ logger = get_logger("skills.invoke_agent")
 # 协程内调度深度（防止子 Agent 再 invoke）
 _invoke_depth: ContextVar[int] = ContextVar("invoke_agent_depth", default=0)
 
+#: 委派结果回传 Coordinator 的字符上限（超出则截断，避免下一轮 LLM 超时）
+_INVOKE_OUTPUT_MAX_CHARS = 24_000
+
+
+def _clip_invoke_output(text: str, *, max_chars: int = _INVOKE_OUTPUT_MAX_CHARS) -> str:
+    """截断过长的 ``agent__invoke`` 工具输出。
+
+    Args:
+        text: 原始工具输出。
+        max_chars: 最大字符数。
+
+    Returns:
+        原样或带截断提示的文本。
+    """
+    raw = text or ""
+    if len(raw) <= max_chars:
+        return raw
+    keep = max(0, max_chars - 120)
+    logger.warning(
+        "invoke_agent output clipped for coordinator LLM",
+        original_chars=len(raw),
+        kept_chars=keep,
+    )
+    return (
+        raw[:keep]
+        + "\n\n…[委派结果过长已截断；请基于上文摘要与预览作答，勿要求全量明细]"
+    )
+
 
 def _coerce_mis_user_id(value: Any) -> int | None:
     """把 identity 第五键 ``misUserId`` 规约为 ``int | None``（T03 S9）。
@@ -778,7 +806,9 @@ class InvokeAgentTool(BaseTool):
                 sub_stages=sub_stages,
             ),
         )
-        return ToolResult(output=notification.to_tool_output(), is_error=is_error)
+        # Coordinator 下一轮 LLM 吃不下超长 Worker 正文（尤其 mis-iqd 全量 JSON）会超时。
+        raw_output = notification.to_tool_output()
+        return ToolResult(output=_clip_invoke_output(raw_output), is_error=is_error)
 
     @staticmethod
     async def _record_failure(

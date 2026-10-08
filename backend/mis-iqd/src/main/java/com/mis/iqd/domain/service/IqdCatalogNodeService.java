@@ -1404,6 +1404,18 @@ public class IqdCatalogNodeService {
         // ① 物理删除子节点（measures + dimensions，parent_key = 本 cube 键）
         List<IqdCatalogItem> children =
                 catalogItemRepository.findByConnectionIdAndParentKey(connectionId, effectiveKey);
+
+        // ①′ 级联清除范围策略 / 行级 ACL（cube 本体 + 子节点 item_key），避免 orphan
+        Set<String> cascadeKeys = new LinkedHashSet<>();
+        cascadeKeys.add(effectiveKey);
+        for (IqdCatalogItem child : children) {
+            if (child.getItemKey() != null && !child.getItemKey().isBlank()) {
+                cascadeKeys.add(child.getItemKey());
+            }
+        }
+        Map<String, Integer> cascade =
+                adminService.cascadeDeleteScopeForItemKeys(connectionId, cascadeKeys);
+
         for (IqdCatalogItem child : children) {
             catalogItemRepository.delete(child);
         }
@@ -1416,10 +1428,15 @@ public class IqdCatalogNodeService {
         changeEventPublisher.publish("iqd.catalog.changed",
                 "cube_deleted=" + effectiveKey + ";children=" + children.size());
 
-        log.info("IQD deleteCube connectionId={} itemKey={} children={} revision={}",
-                connectionId, effectiveKey, children.size(), next);
+        log.info(
+                "IQD deleteCube connectionId={} itemKey={} children={} cascadePolicies={} cascadeAcls={} revision={}",
+                connectionId, effectiveKey, children.size(),
+                cascade.getOrDefault("scope_policies", 0),
+                cascade.getOrDefault("acls", 0), next);
         Map<String, Object> result = deleted(next, effectiveKey);
         result.put("deleted_children", children.size());
+        result.put("cascade_scope_policies", cascade.getOrDefault("scope_policies", 0));
+        result.put("cascade_acls", cascade.getOrDefault("acls", 0));
         return result;
     }
 

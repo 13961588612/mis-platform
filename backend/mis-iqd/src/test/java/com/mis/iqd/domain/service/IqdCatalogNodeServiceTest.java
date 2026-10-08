@@ -1217,15 +1217,27 @@ class IqdCatalogNodeServiceTest {
                 .thenReturn(Optional.empty());
         when(adminService.validateCatalogRefs(eq(CONN_ID), eq(cube.getItemKey()), eq("DELETE")))
                 .thenReturn(new ArrayList<>());
+        Map<String, Integer> cascade = new LinkedHashMap<>();
+        cascade.put("scope_policies", 2);
+        cascade.put("acls", 1);
+        when(adminService.cascadeDeleteScopeForItemKeys(eq(CONN_ID), any()))
+                .thenReturn(cascade);
         when(connectionRepository.save(any(IqdConnection.class))).thenAnswer(inv -> inv.getArgument(0));
 
         Map<String, Object> result = service.deleteCube(CONN_ID, cube.getItemKey(), 3L, "idem-1");
 
+        ArgumentCaptor<java.util.Collection<String>> keysCaptor =
+                ArgumentCaptor.forClass(java.util.Collection.class);
+        verify(adminService).cascadeDeleteScopeForItemKeys(eq(CONN_ID), keysCaptor.capture());
+        assertTrue(keysCaptor.getValue().contains(cube.getItemKey()));
+        assertTrue(keysCaptor.getValue().contains(measure.getItemKey()));
         verify(catalogItemRepository).delete(measure);
         verify(catalogItemRepository).delete(cube);
         assertEquals(4L, c.getCurrentEditRevision());
         assertEquals(cube.getItemKey(), result.get("deleted_item_key"));
         assertEquals(1, ((Number) result.get("deleted_children")).intValue());
+        assertEquals(2, ((Number) result.get("cascade_scope_policies")).intValue());
+        assertEquals(1, ((Number) result.get("cascade_acls")).intValue());
         verify(changeEventPublisher).publish(eq("iqd.catalog.changed"), anyString());
     }
 

@@ -24,6 +24,7 @@ from pydantic import BaseModel, Field
 from openharness.tools.base import BaseTool, ToolExecutionContext, ToolResult
 
 from src.agent.mis_iqd.errors import IqdError
+from src.agent.mis_iqd.projector import compact_ask_payload_for_llm
 from src.agent.mis_iqd.scope_resolver import AskIdentity
 from src.agent.mis_iqd.service import IqdAskService
 from src.models.iqd_schema import AskRequest, VIEW_USER
@@ -226,13 +227,20 @@ class IqdAskTool(BaseTool):
                 is_error=True,
             )
 
+        # 给 LLM 的回传必须瘦身：全量 rows 曾导致 Worker/Coordinator 超时与空气泡。
+        compact = compact_ask_payload_for_llm(payload)
         logger.info(
             "iqd__ask done",
             query_id=payload.get("query_id"),
             user_id=identity.user_id,
             rows=payload.get("data", {}).get("row_count") if isinstance(payload.get("data"), dict) else None,
+            preview_rows=(
+                compact.get("data", {}).get("preview_rows")
+                if isinstance(compact.get("data"), dict)
+                else None
+            ),
         )
-        return ToolResult(output=json.dumps(payload, ensure_ascii=False))
+        return ToolResult(output=json.dumps(compact, ensure_ascii=False))
 
     def _get_service(self) -> IqdAskService:
         """懒加载问数服务。"""

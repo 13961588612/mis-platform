@@ -704,8 +704,29 @@ class A2uiRunLoop:
                 session_id=session_id,
                 error=error_message,
             )
+            # 同时下发可读正文 + done，避免前端只拿到 error 条或空气泡
+            # 「未收到有效回复」。
+            user_facing = (
+                f"抱歉，本轮回复失败：{error_message}\n"
+                "请重试提问；若刚查询了较多数据，可缩小时间范围或门店后再问。"
+            )
+            await self._publisher.publish(
+                session_id, AgentEvent.text_delta(user_facing)
+            )
             await self._publisher.publish_error(
                 session_id, "A2UI_RUN_ERROR", error_message
+            )
+            fail_message_id = str(uuid.uuid4())
+            await self._persist_assistant(
+                session_id, user_facing, message_id=fail_message_id
+            )
+            await self._publisher.publish(
+                session_id,
+                AgentEvent.done(
+                    total_usage,
+                    message_id=fail_message_id,
+                    session_id=session_id,
+                ),
             )
             return
 
@@ -730,6 +751,17 @@ class A2uiRunLoop:
             assistant_parts.append(fence_text)
 
         assistant_text: str = "".join(assistant_parts).strip()
+        # 成功结束但无任何正文/围栏：补一句可读提示，避免「未收到有效回复」空壳。
+        if not assistant_text:
+            assistant_text = (
+                "未生成有效文字回复。若查询已成功，请重试让我整理结论；"
+                "也可缩小范围后再问。"
+            )
+            await self._publisher.publish(
+                session_id, AgentEvent.text_delta(assistant_text)
+            )
+            assistant_parts.append(assistant_text)
+
         # 评价锚点（feedback-enhance §2.2 方案 C）：预生成 assistant 消息 UUID，
         # 落库（_persist_assistant → add_message(message_id=...)）与 done 事件
         # 透传共用同一 UUID，保证 agent_feedback 评价回放能精确命中该条消息。

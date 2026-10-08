@@ -5,8 +5,10 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import com.mis.iqd.api.dto.IqdSyncJobVO;
 import com.mis.iqd.domain.entity.IqdKnowledge;
+import com.mis.iqd.domain.entity.IqdScopePolicy;
 import com.mis.iqd.domain.entity.IqdSqlPair;
 import com.mis.iqd.domain.entity.IqdSyncJob;
+import com.mis.iqd.domain.entity.IqdTableAcl;
 import com.mis.iqd.domain.repository.IqdAskLogRepository;
 import com.mis.iqd.domain.repository.IqdCatalogItemRepository;
 import com.mis.iqd.domain.repository.IqdConnectionRepository;
@@ -32,9 +34,12 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -311,5 +316,64 @@ class IqdAdminServiceCloseLoopTest {
                 "wire JSON 必须含 snake_case 的 index_status，实际: " + json);
         assertTrue(node.containsKey("build_mdl_hash"));
         assertTrue(node.containsKey("synced_sql_pair_count"));
+    }
+
+    // ------------------------------------------------------------ Cube 删除级联清 scope/ACL
+
+    @Test
+    void cascadeDeleteScopeForItemKeys_deletesMatchingPoliciesAndAcls() {
+        String cubeKey = "mdl:cube:sale";
+        String measureKey = "mdl:measure:sale.kds_sum";
+
+        IqdScopePolicy hitPolicy = new IqdScopePolicy();
+        hitPolicy.setId(1L);
+        hitPolicy.setConnectionId(CONNECTION_ID);
+        hitPolicy.setItemKey(cubeKey);
+        IqdScopePolicy otherPolicy = new IqdScopePolicy();
+        otherPolicy.setId(2L);
+        otherPolicy.setConnectionId(CONNECTION_ID);
+        otherPolicy.setItemKey("mdl:cube:keep");
+        when(scopePolicyRepository.findByConnectionIdAndItemKeyIn(
+                eq(CONNECTION_ID), eq(Set.of(cubeKey, measureKey))))
+                .thenReturn(List.of(hitPolicy));
+
+        IqdTableAcl byItem = new IqdTableAcl();
+        byItem.setId(11L);
+        byItem.setConnectionId(CONNECTION_ID);
+        byItem.setItemKey(cubeKey);
+        IqdTableAcl byObject = new IqdTableAcl();
+        byObject.setId(12L);
+        byObject.setConnectionId(CONNECTION_ID);
+        byObject.setItemKey("mdl:model:x");
+        byObject.setObjectKey(measureKey);
+        IqdTableAcl keepAcl = new IqdTableAcl();
+        keepAcl.setId(13L);
+        keepAcl.setConnectionId(CONNECTION_ID);
+        keepAcl.setItemKey("mdl:cube:keep");
+        when(tableAclRepository.findByConnectionId(CONNECTION_ID))
+                .thenReturn(List.of(byItem, byObject, keepAcl));
+
+        Map<String, Integer> result =
+                service.cascadeDeleteScopeForItemKeys(CONNECTION_ID, Set.of(cubeKey, measureKey));
+
+        assertEquals(1, result.get("scope_policies"));
+        assertEquals(2, result.get("acls"));
+        verify(scopePolicyRepository).delete(hitPolicy);
+        verify(scopePolicyRepository, never()).delete(otherPolicy);
+        verify(tableAclRepository).delete(byItem);
+        verify(tableAclRepository).delete(byObject);
+        verify(tableAclRepository, never()).delete(keepAcl);
+        verify(changeEventPublisher).publish(eq("iqd.scope.changed"), any());
+        verify(changeEventPublisher).publish(eq("iqd.acl.changed"), any());
+    }
+
+    @Test
+    void cascadeDeleteScopeForItemKeys_emptyKeys_noop() {
+        Map<String, Integer> result =
+                service.cascadeDeleteScopeForItemKeys(CONNECTION_ID, List.of());
+        assertEquals(0, result.get("scope_policies"));
+        assertEquals(0, result.get("acls"));
+        verify(scopePolicyRepository, never()).findByConnectionIdAndItemKeyIn(any(), any());
+        verify(tableAclRepository, never()).findByConnectionId(any());
     }
 }

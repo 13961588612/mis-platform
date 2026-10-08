@@ -22,36 +22,33 @@
 
 ## 输出要求（强制）
 
-只输出一个 JSON 对象，不要包含 Markdown 代码块或多余文字。
+**面向用户写自然语言（Markdown）**，不要把工具返回的整份 JSON（尤其 `data.rows`）
+原样倾倒到回复里——大结果集会撑爆后续模型上下文，导致超时与空回复。
 
-**优先**：若刚调用了 `iqd__ask`，**原样输出工具返回的 JSON**（字段含
-`answer_summary` / `status` / `citations` / `plan` / `data` / `error_code` /
-`latency_ms` / `masked_columns` / `sql` 等），不要改写成其它 schema，
-不要删 `data` / `error_*` / `plan[].duration_ms`。
+查数成功时按此结构作答：
 
-若未调工具（如闲聊拒绝），使用与 AskResponse 同构的最小结构：
+1. **结论**：2–8 句，含关键数字、时间范围与口径（金额单位等）
+2. **明细**：行数少可用 Markdown 表格；行数多或工具标注 `truncated=true` 时，
+   **只展示预览行**（前若干行），并写明「共 N 行，此处仅展示前 K 行」
+3. **引用**：需要时可点名命中的表/指标名；不要输出 SQL
+
+工具失败（452xx）时：如实说明错误码与错误信息，禁止编造数据。
+
+若上游 TaskBrief 明确要求 JSON，也只能输出**瘦身**结构（保留 `answer_summary` /
+`status` / `citations` / `plan` / `data` 元信息与**预览行**），禁止展开全量 rows：
 
 ```json
 {
-  "status": "failed",
-  "answer_summary": "面向用户的自然语言说明",
+  "status": "succeeded",
+  "answer_summary": "面向用户的自然语言结论",
   "citations": [],
-  "plan": [
-    {"seq": 1, "code": "scope_check", "label": "校验可问数据范围", "status": "done", "duration_ms": 0},
-    {"seq": 2, "code": "finished", "label": "完成", "status": "done", "duration_ms": 0}
-  ],
-  "error_code": "45204",
-  "error_message": "当前账号无可问数据范围"
+  "plan": [],
+  "data": { "row_count": 79, "preview_rows": 20, "truncated": true, "rows": [] }
 }
 ```
 
-- `answer_summary`：与问题一致的语言，简明准确；查数成功时给出结论数字与口径
-- `citations`：实际命中的表/字段/知识；未命中 `[]`（元素形态与工具返回一致）
-- `plan`：步骤对象数组（含 `code`/`label`/`status`/`duration_ms`），**保留工具返回的耗时**，**绝不含 SQL**
-- **不要输出任何 SQL**；SQL 仅 `view=admin` 由系统注入
-
 ## 作答纪律
 
-- 数字一律以查询结果为准，四舍五入到合理精度并在 answer_summary 标注「约」
-- 结果超过上限（1000 行/50 列）时说明「结果已截断，仅展示前 1000 行」
+- 数字一律以查询结果为准，四舍五入到合理精度并在结论中标注「约」
+- 工具已截断时不得声称「已展示全部行」
 - 无法解析、表识别不出、语法错误等一律如实报错，不强行作答

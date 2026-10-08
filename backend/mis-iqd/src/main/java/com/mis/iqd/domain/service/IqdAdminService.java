@@ -61,7 +61,9 @@ import java.net.http.HttpResponse;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -1137,6 +1139,73 @@ public class IqdAdminService {
                     connectionId, subjectType, subjectId, count);
         }
         return count;
+    }
+
+    /**
+     * 建模节点删除时级联清理范围策略与行级 ACL，避免 orphan。
+     *
+     * <p>命中规则：
+     * <ul>
+     *   <li>{@code iqd_scope_policy.item_key ∈ keys}（含 global「纳入问数」同步行与角色/用户策略）</li>
+     *   <li>{@code iqd_table_acl} 的 {@code item_key} / {@code object_key} / {@code field_key} 任一 ∈ keys</li>
+     * </ul>
+     *
+     * @param connectionId 问数连接
+     * @param itemKeys     被删节点及其子节点的 item_key 集合
+     * @return {@code {scope_policies, acls}} 删除行数
+     */
+    @Transactional
+    public Map<String, Integer> cascadeDeleteScopeForItemKeys(
+            Long connectionId, Collection<String> itemKeys) {
+        Map<String, Integer> result = new LinkedHashMap<>();
+        result.put("scope_policies", 0);
+        result.put("acls", 0);
+        if (connectionId == null || itemKeys == null || itemKeys.isEmpty()) {
+            return result;
+        }
+        Set<String> keys = itemKeys.stream()
+                .filter(k -> k != null && !k.isBlank())
+                .map(String::trim)
+                .collect(Collectors.toCollection(LinkedHashSet::new));
+        if (keys.isEmpty()) {
+            return result;
+        }
+
+        int policyCount = 0;
+        for (IqdScopePolicy policy : scopePolicyRepository.findByConnectionIdAndItemKeyIn(
+                connectionId, keys)) {
+            scopePolicyRepository.delete(policy);
+            policyCount++;
+        }
+
+        int aclCount = 0;
+        for (IqdTableAcl acl : tableAclRepository.findByConnectionId(connectionId)) {
+            String itemKey = acl.getItemKey();
+            String objectKey = acl.getObjectKey();
+            String fieldKey = acl.getFieldKey();
+            if ((itemKey != null && keys.contains(itemKey))
+                    || (objectKey != null && keys.contains(objectKey))
+                    || (fieldKey != null && keys.contains(fieldKey))) {
+                tableAclRepository.delete(acl);
+                aclCount++;
+            }
+        }
+
+        result.put("scope_policies", policyCount);
+        result.put("acls", aclCount);
+        if (policyCount > 0) {
+            changeEventPublisher.publish(
+                    "iqd.scope.changed", "catalog_cascade_policies=" + policyCount);
+        }
+        if (aclCount > 0) {
+            changeEventPublisher.publish("iqd.acl.changed", "catalog_cascade_acls=" + aclCount);
+        }
+        if (policyCount > 0 || aclCount > 0) {
+            log.info(
+                    "IQD cascade delete scope/acl connectionId={} keys={} policies={} acls={}",
+                    connectionId, keys.size(), policyCount, aclCount);
+        }
+        return result;
     }
 
     private static String normalizeAclObjectType(String objectType, String itemKey) {
