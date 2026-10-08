@@ -400,14 +400,69 @@ class IqdAskService:
         Raises:
             IqdError: 452xx 系列错误（fail-closed）。
         """
+        from uuid import uuid4
+
+        from src.agent.mis_iqd.errors import ScopeDeniedError
+        from src.agent.mis_iqd.scope_resolver import (
+            IqdScopeResolution,
+            RowScopeInjectOutcome,
+        )
+        from src.models.iqd_schema import (
+            AskResponse,
+            PlanStep,
+            RESULT_STATUS_FAILED,
+            ResultData,
+        )
+
         resolver = self._get_scope_resolver()
         # 使用 resolve_effective：模拟角色（metadata.iqd.simulate_role_code）时按模拟
         # role_codes 裁定，并与真实用户范围求交收紧（模拟不放大权限，T-W3-01 验收 2）
-        scope = await resolver.resolve_effective(
-            identity,
-            request.connection_id,
-            scope_hint=request.scope_hint or None,
-        )
+        try:
+            scope = await resolver.resolve_effective(
+                identity,
+                request.connection_id,
+                scope_hint=request.scope_hint or None,
+            )
+        except ScopeDeniedError as exc:
+            # 前置 deny 也要落审计，否则运营页「完全没记录」。
+            deny_scope = IqdScopeResolution(
+                decision="deny",
+                allowed_item_keys=[],
+                denied_item_keys=list(request.scope_hint or []),
+                reason=str(exc) or "当前角色无可问数据范围",
+                subject_summary=identity.subject_summary(),
+            )
+            result = AskResult(
+                response=AskResponse(
+                    query_id=f"q-{uuid4().hex[:12]}",
+                    thread_id=request.thread_id,
+                    status=RESULT_STATUS_FAILED,
+                    answer_summary=str(exc) or "当前角色无权查询相关数据",
+                    data=ResultData(),
+                    plan=[
+                        PlanStep(
+                            seq=1,
+                            code="scope_resolve",
+                            label="裁定可问范围",
+                            status="failed",
+                        )
+                    ],
+                    scope=deny_scope.to_payload(),
+                    latency_ms=0,
+                    error_code="45204",
+                    error_message=str(exc) or "当前角色无权查询相关数据",
+                ),
+                scope=deny_scope,
+                inject_outcome=RowScopeInjectOutcome(),
+            )
+            try:
+                await self.write_ask_log(request, identity, result, view)
+            except Exception as log_exc:  # noqa: BLE001
+                logger.warning(
+                    "IQD ask log write failed (degraded)",
+                    error=str(log_exc),
+                )
+            raise
 
         if mock_allowed_keys:
             # 离线 mock：把真实裁定替换为固定允许集（Golden path 验证）
@@ -418,7 +473,7 @@ class IqdAskService:
         orchestrator = self._get_orchestrator()
         result: AskResult = await orchestrator.ask(request, identity, scope)
 
-        # ===== 投影前写审计（失败不阻断）=====
+        # ===== 投影前写审计（含 failed/45204；失败不阻断）=====
         try:
             await self.write_ask_log(request, identity, result, view)
         except Exception as exc:  # noqa: BLE001 - 审计失败降级，不得吞答案

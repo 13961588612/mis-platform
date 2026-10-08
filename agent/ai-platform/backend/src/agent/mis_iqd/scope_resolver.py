@@ -740,9 +740,12 @@ class ScopeResolver:
 
         denied = [key for key in lineage if not _in_scope(key)]
         if denied:
+            # 运维可查：不回传给用户（对外文案仍泛化），但日志需能定位越权表/模型名。
             logger.warning(
                 "IQD scope assertion failed",
                 denied_count=len(denied),
+                denied_keys=denied[:20],
+                allowed_count=len(allowed),
                 subject=resolution.subject_summary,
             )
             raise ScopeDeniedError("当前角色无权查询相关数据")

@@ -349,7 +349,20 @@ class AskOrchestrator:
                 "failed",
                 detail=inject_outcome.denied_reason or "行级范围校验拒绝",
             )
-            raise ScopeDeniedError(inject_outcome.denied_reason or "当前角色无权查询相关数据")
+            # 返回 failed 帧（勿 raise）：否则 service.ask 跳过 write_ask_log，审计页空白。
+            return self._failed_ask_result(
+                query_id=query_id,
+                request=request,
+                resolution=resolution,
+                steps=steps,
+                started_at=started_at,
+                message=inject_outcome.denied_reason or "当前角色无权查询相关数据",
+                nl2sql_attempts=nl2sql_attempts,
+                sql=sql,
+                inject_outcome=inject_outcome,
+                error_code="45204",
+                context_text=context_text,
+            )
         final_sql: str = inject_outcome.sql or sql
         plan.mark_done(
             steps,
@@ -360,7 +373,28 @@ class AskOrchestrator:
 
         # ===== lineage_check：血缘后置断言（fail-closed，基于注入后最终 SQL）=====
         tables: list[str] = self._lineage.extract_tables(final_sql)
-        self._scope_resolver_assert(resolution, tables, extra_allowed=lineage_extra)
+        try:
+            self._scope_resolver_assert(resolution, tables, extra_allowed=lineage_extra)
+        except ScopeDeniedError as exc:
+            plan.mark(
+                steps,
+                "lineage_check",
+                "failed",
+                detail=str(exc) or "血缘范围校验拒绝",
+            )
+            return self._failed_ask_result(
+                query_id=query_id,
+                request=request,
+                resolution=resolution,
+                steps=steps,
+                started_at=started_at,
+                message=str(exc) or "当前角色无权查询相关数据",
+                nl2sql_attempts=nl2sql_attempts,
+                sql=final_sql,
+                inject_outcome=inject_outcome,
+                error_code="45204",
+                context_text=context_text,
+            )
         plan.mark_done(
             steps,
             "lineage_check",
@@ -463,14 +497,45 @@ class AskOrchestrator:
                     "failed",
                     detail=inject_outcome.denied_reason or "行级范围校验拒绝",
                 )
-                raise ScopeDeniedError(
-                    inject_outcome.denied_reason or "当前角色无权查询相关数据"
+                return self._failed_ask_result(
+                    query_id=query_id,
+                    request=request,
+                    resolution=resolution,
+                    steps=steps,
+                    started_at=started_at,
+                    message=inject_outcome.denied_reason or "当前角色无权查询相关数据",
+                    nl2sql_attempts=nl2sql_attempts,
+                    sql=repaired_sql,
+                    inject_outcome=inject_outcome,
+                    error_code="45204",
+                    context_text=context_text,
                 )
             final_sql = inject_outcome.sql or repaired_sql
             tables = self._lineage.extract_tables(final_sql)
-            self._scope_resolver_assert(
-                resolution, tables, extra_allowed=lineage_extra
-            )
+            try:
+                self._scope_resolver_assert(
+                    resolution, tables, extra_allowed=lineage_extra
+                )
+            except ScopeDeniedError as exc:
+                plan.mark(
+                    steps,
+                    "lineage_check",
+                    "failed",
+                    detail=str(exc) or "血缘范围校验拒绝",
+                )
+                return self._failed_ask_result(
+                    query_id=query_id,
+                    request=request,
+                    resolution=resolution,
+                    steps=steps,
+                    started_at=started_at,
+                    message=str(exc) or "当前角色无权查询相关数据",
+                    nl2sql_attempts=nl2sql_attempts,
+                    sql=final_sql,
+                    inject_outcome=inject_outcome,
+                    error_code="45204",
+                    context_text=context_text,
+                )
             try:
                 await mcp.dry_run(final_sql)
                 self._watchdog_success(resolution.connection_id)
