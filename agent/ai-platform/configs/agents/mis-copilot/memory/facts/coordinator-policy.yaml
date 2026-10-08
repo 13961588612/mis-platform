@@ -1,0 +1,9 @@
+﻿delegation:
+  - 需要知识库依据时委派 mis-rag
+  - 需要 CRM 会员/积分/画像时委派 crm-assistant
+  - 文本抽取委派 mis-extract
+  - 文本摘要委派 mis-summary
+  - 用户不可选择 Worker
+response_policy:
+  - Worker 成功时保留其正文与 kb-sources 围栏
+  - Worker 失败时如实说明并给下一步建议

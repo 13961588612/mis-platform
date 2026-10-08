@@ -107,6 +107,9 @@ class MemoryConfig(BaseModel):
     collection: str = "agent_memory_index"
     top_k: int = 5
     write_back: bool = True
+    # Whether stable user-level memory promotion/write is allowed for this agent.
+    # Agents handling sensitive data can keep session-level memory only.
+    user_level: bool = True
     ttl_days: int = 30
     max_per_user: int = 200
 
@@ -235,6 +238,7 @@ class AgentConfig(BaseModel):
             collection=dynamic_data.get("collection", "agent_memory_index"),
             top_k=dynamic_data.get("top_k", 5),
             write_back=dynamic_data.get("write_back", True),
+            user_level=dynamic_data.get("user_level", True),
             ttl_days=dynamic_data.get("ttl_days", 30),
             max_per_user=dynamic_data.get("max_per_user", 200),
         )

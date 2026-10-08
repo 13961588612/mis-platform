@@ -12,6 +12,7 @@ from src.agent.lifecycle import LifecycleEvent
 from src.agent.manager import AgentInstance
 from src.agent.session import Message, Session
 from src.memory.injector import AgentRunContext, MemoryInjector
+from src.memory.manager import MemoryManager
 from src.memory.models import ExtractedMemory, MemoryType
 from src.runtime.events import AgentEvent
 
@@ -107,8 +108,6 @@ async def test_before_agent_run_builds_memory_only_context_and_canonical_owner()
 
 @pytest.mark.asyncio
 async def test_write_extracted_prefers_user_scope_for_stable_owner() -> None:
-    from src.memory.manager import MemoryManager
-
     manager = MemoryManager.__new__(MemoryManager)
     manager.write_dynamic_memory = AsyncMock(return_value=MagicMock())
     extracted = [
@@ -148,6 +147,29 @@ async def test_write_extracted_keeps_session_scope_for_anonymous_owner() -> None
     await manager.write_extracted_memories(
         agent_name="a",
         user_id="session-owner:s1",
+        session_id="s1",
+        extracted=extracted,
+        metadata={"user_level_eligible": False},
+    )
+
+    assert manager.write_dynamic_memory.await_args.kwargs["session_id"] == "s1"
+
+
+@pytest.mark.asyncio
+async def test_agent_memory_config_user_level_false_forces_session_scope() -> None:
+    manager = MemoryManager.__new__(MemoryManager)
+    manager.write_dynamic_memory = AsyncMock(return_value=MagicMock())
+    extracted = [
+        ExtractedMemory(
+            memory_type=MemoryType.PREFERENCE,
+            content="prefers concise data answers",
+            importance=0.8,
+        )
+    ]
+
+    await manager.write_extracted_memories(
+        agent_name="mis-iqd",
+        user_id="mis:123",
         session_id="s1",
         extracted=extracted,
         metadata={"user_level_eligible": False},

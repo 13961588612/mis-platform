@@ -194,6 +194,8 @@ class MemoryInjector:
 
         # Use per-agent memory config, falling back to global settings.
         mc: Any = context.memory_config
+        if context.memory_owner_id and mc is not None and not mc.user_level:
+            context.user_level_eligible = False
         static_enabled: Any = mc.static_enabled if mc else True
         dynamic_enabled: Any = mc.dynamic_enabled if mc else self._dynamic_enabled
         top_k: Any = mc.top_k if mc else self._default_top_k
