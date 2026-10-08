@@ -145,7 +145,7 @@ export function IqdTracePage() {
       <div className="mb-3 flex items-center gap-2">
         <Input
           className="w-56"
-          placeholder="状态过滤（succeeded/failed/denied）"
+          placeholder="状态过滤（succeeded/failed/unsupported）"
           value={statusFilter}
           onChange={(e) => setStatusFilter(e.target.value)}
         />

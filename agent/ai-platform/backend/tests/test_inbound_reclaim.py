@@ -123,4 +123,4 @@ def test_reclaim_all_streams_uses_agent_core_group(redis):
     # 订阅流来自配置解析；这里直接验证常量与消费者命名符合设计
     assert CONSUMER_GROUP == "agent-core-group"
     assert w._consumer_name == f"agent-core-{os.getpid()}"
-    assert get_settings().XCLAIM_MIN_IDLE_MS == 150000  # 默认阈值（> AGENT_MESSAGE_TIMEOUT）
+    assert get_settings().XCLAIM_MIN_IDLE_MS == 1_920_000  # 默认阈值（> AGENT_MESSAGE_TIMEOUT）

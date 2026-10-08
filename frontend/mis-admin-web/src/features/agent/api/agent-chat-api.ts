@@ -2,7 +2,7 @@
  * Agent 运营台「本地对话」专用 HTTP 客户端。
  *
  * <p>与全局 {@code lib/api/client.ts}（15s）分离：§4.3 #32/#33 背后是完整 LLM 推理，
- * 且可能经 Coordinator→Worker 多跳，BFF {@code mis.agent-ops.chat-timeout-ms} 已放宽到 180s，
+ * 且可能经 Coordinator→Worker 多跳，BFF {@code mis.agent-ops.chat-timeout-ms} 已放宽到 1800s，
  * 前端必须对齐，否则浏览器先断。其它 agent-ops 接口仍走默认 15s 客户端，互不影响。
  */
 import axios, { type AxiosError, type InternalAxiosRequestConfig } from 'axios';
@@ -18,7 +18,7 @@ import type {
 } from '../types';
 
 /** 与 BFF {@code mis.agent-ops.chat-timeout-ms} 对齐（毫秒）。 */
-export const AGENT_CHAT_TIMEOUT_MS = 180_000;
+export const AGENT_CHAT_TIMEOUT_MS = 1_800_000;
 
 const chatApi = axios.create({
   baseURL: '/api/v1',

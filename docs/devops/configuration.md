@@ -108,7 +108,7 @@ spring.cloud.nacos.discovery.*   # enabled 与 config 同步；server-addr / nam
 | `management` / `logging` | 是 | health 暴露；本机可 `DEBUG` |
 | `mis.*.*-discovery-enabled` | 是 | local **一律 `false`** |
 | `mis.*.*-base-url` | 是 | `http://localhost:{port}` |
-| `mis.*` 业务开关 / 超时 / TTL | 是 | local 合理默认（如 agent-ops `chat-timeout-ms: 180000`） |
+| `mis.*` 业务开关 / 超时 / TTL | 是 | local 合理默认（如 agent-ops `chat-timeout-ms: 1800000`） |
 | 密钥类 | **只写 `${ENV}` 或空默认** | JWT 路径、`api-key`、`service-token`、`MIS_JWT_PUBLIC_KEY`；**不要**把生产密钥写进仓库 |
 | `default-password` | 可保留开发默认 | local 可用文档约定口令；remote/Nacos 改为 `${ENV}` |
 
@@ -123,7 +123,7 @@ spring.cloud.nacos.discovery.*   # enabled 与 config 同步；server-addr / nam
 | **mis-system** | `port:8105`；DB+JPA |
 | **mis-audit** | `port:8106`；DB+JPA |
 | **mis-kb** | `port:8108`；DB+JPA；`mis.kb.iam.base-url`（查用户角色码，TENANT_ADMIN 管辖短路；未配则分类管理会全部「不在管理范围」）；`mis.kb.engine.*`（type/base-url/api-key/rerank/reconcile 等，密钥用 `${MIS_KB_*}`） |
-| **mis-admin-bff** | `port:8081`；Redis；`mis.bff.*` 下游全套 discovery=false + localhost；`aggregate-timeout-ms`；`api-permission.*`；`ai-platform.*`（含 reverse-trust 的 `${ENV}`）；`agent-ops.*`（含 180s chat-timeout）；`mcp.servers` localhost |
+| **mis-admin-bff** | `port:8081`；Redis；`mis.bff.*` 下游全套 discovery=false + localhost；`aggregate-timeout-ms`；`api-permission.*`；`ai-platform.*`（含 reverse-trust 的 `${ENV}`）；`agent-ops.*`（含 1800s chat-timeout）；`mcp.servers` localhost |
 
 > **没有** 独立的「本地 mis-common 文件」：共享项在 local 模式下由各服务 `application.yml` **各自写齐**（或靠本机 env）；remote 才由 Nacos `mis-common` 统一下发。
 

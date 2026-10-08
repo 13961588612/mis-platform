@@ -163,7 +163,7 @@ class TestFlagsSafeRead:
         assert s.INVOKE_AGENT_CONTINUE_ENABLED is False
         assert s.TASK_NOTIFICATION_MODE == "text_with_header"
         assert s.INVOKE_AGENT_MAX_DEPTH == 1
-        assert s.INVOKE_AGENT_TIMEOUT_SECONDS == 120
+        assert s.INVOKE_AGENT_TIMEOUT_SECONDS == 1680
         # 1.3/1.4：白名单移除已灰度的 mis-extract/mis-summary、加入承接其能力的
         # mis-user-helper，与 DEFAULT_WHITELIST（兜底常量，仍保留旧 worker）解耦，
         # 二者不再要求相等。v1.9（B1）：追加 mis-iqd（问数 Worker）。

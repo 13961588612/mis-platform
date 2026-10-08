@@ -142,6 +142,51 @@ async def test_write_ask_log_no_simulate_simulated_role_code_none() -> None:
     assert client.payload.get("user_id") == 2002
 
 
+@pytest.mark.asyncio
+async def test_ask_writes_log_when_orchestrator_raises_timeout() -> None:
+    from src.agent.mis_iqd.errors import WrenaiTimeoutError
+    from src.agent.mis_iqd.service import IqdAskService
+
+    class _Orch:
+        async def ask(self, *args: Any, **kwargs: Any) -> Any:
+            raise WrenaiTimeoutError("本次查询超时")
+
+    class _Resolver:
+        async def resolve_effective(self, *args: Any, **kwargs: Any) -> IqdScopeResolution:
+            return IqdScopeResolution(decision="allow", allowed_item_keys=["t"])
+
+    client = _CaptureClient()
+    svc = IqdAskService(orchestrator=_Orch(), scope_resolver=_Resolver())  # type: ignore[arg-type]
+    svc._get_config_client = lambda: client  # type: ignore[method-assign]
+    ident = AskIdentity(user_id=9, role_codes=["r"])
+    with pytest.raises(WrenaiTimeoutError):
+        await svc.ask(AskRequest(question="销售额"), ident)
+    assert client.payload.get("status") == "failed"
+    assert str(client.payload.get("error_code")) == "45203"
+    assert client.payload.get("question") == "销售额"
+
+
+@pytest.mark.asyncio
+async def test_ask_writes_log_when_worker_cancelled() -> None:
+    from src.agent.mis_iqd.service import IqdAskService
+
+    class _Orch:
+        async def ask(self, *args: Any, **kwargs: Any) -> Any:
+            raise asyncio.CancelledError()
+
+    class _Resolver:
+        async def resolve_effective(self, *args: Any, **kwargs: Any) -> IqdScopeResolution:
+            return IqdScopeResolution(decision="allow", allowed_item_keys=["t"])
+
+    client = _CaptureClient()
+    svc = IqdAskService(orchestrator=_Orch(), scope_resolver=_Resolver())  # type: ignore[arg-type]
+    svc._get_config_client = lambda: client  # type: ignore[method-assign]
+    with pytest.raises(asyncio.CancelledError):
+        await svc.ask(AskRequest(question="q"), AskIdentity(user_id=1, role_codes=["r"]))
+    assert client.payload.get("status") == "failed"
+    assert client.payload.get("question") == "q"
+
+
 # ================================================================ resolve_effective
 
 

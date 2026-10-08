@@ -30,12 +30,12 @@ const DEFAULT_AGENT_ID = '';
 /**
  * 前端生成安全超时（毫秒）。
  *
- * <p>须略大于 Agent Core {@code AGENT_MESSAGE_TIMEOUT}（本地常配 240s），
+ * <p>须略大于 Agent Core {@code AGENT_MESSAGE_TIMEOUT}（默认 1800s / 30min），
  * 避免收不到 done/error（SSE 丢帧 / 粘滞映射丢失）时 {@code isGenerating}
  * 永久为 true、输入框锁死。超时后强制解锁并提示可重试。
  */
 /** 前端安全解锁上限：须略大于后端 AGENT_MESSAGE_TIMEOUT，避免先于 A2UI_TIMEOUT 误报。 */
-export const GENERATE_SAFETY_TIMEOUT_MS = 450_000;
+export const GENERATE_SAFETY_TIMEOUT_MS = 1_860_000;
 
 /**
  * A2UI 对话 opt-in 默认开关。

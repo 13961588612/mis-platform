@@ -60,7 +60,7 @@ class CoordinationDelegation(BaseModel):
     spawn_tools_enabled: bool = True
     enforce_task_brief: bool = True
     max_depth: int = Field(default=1, ge=1, le=5)
-    timeout_seconds: int = Field(default=120, ge=1)
+    timeout_seconds: int = Field(default=1680, ge=1)
     emit_dispatch_trace: bool = True
     forbid_self_invoke: bool = True
     worker_ids: list[str] = Field(default_factory=list)
@@ -75,7 +75,7 @@ class CoordinationCatalog(BaseModel):
     input_contract: list[str] = Field(default_factory=list)
     output_contract: str = "text"
     security_level: str = Field(default="read_only", description="read_only | needs_hitl")
-    timeout_seconds: int = Field(default=120, ge=1)
+    timeout_seconds: int = Field(default=1680, ge=1)
     degrade_message: str = ""
 
 

@@ -33,7 +33,7 @@ mis:
   ai-platform:
     base-url: ${AI_PLATFORM_BASE_URL:http://ai-platform-backend:8000}
     enabled: true
-    chat-timeout-ms: 60000
+    chat-timeout-ms: 1800000
     sse-enabled: ${AI_PLATFORM_SSE_ENABLED:true}
     health-check-interval-ms: 15000
     features:
@@ -52,7 +52,7 @@ mis:
     backend-base-url: ${AGENT_OPS_BACKEND_BASE_URL:http://ai-platform-backend:8000}
     gateway-base-url: ${AGENT_OPS_GATEWAY_BASE_URL:http://ai-platform-gateway:3100}
     timeout-ms: ${AGENT_OPS_TIMEOUT_MS:15000}
-    chat-timeout-ms: ${AGENT_OPS_CHAT_TIMEOUT_MS:180000}
+    chat-timeout-ms: ${AGENT_OPS_CHAT_TIMEOUT_MS:1800000}
   mcp:
     servers:
       org: http://mis-org:8103

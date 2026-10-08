@@ -103,7 +103,7 @@ mis:
     # 本地默认 127.0.0.1（避免 Windows 上 localhost→::1 而 Agent 仅听 IPv4）；Docker/Nacos 用服务名覆盖（R1）。
     base-url: ${AI_PLATFORM_BASE_URL:http://127.0.0.1:8000}
     enabled: true
-    chat-timeout-ms: ${AI_PLATFORM_CHAT_TIMEOUT_MS:180000}
+    chat-timeout-ms: ${AI_PLATFORM_CHAT_TIMEOUT_MS:1800000}
     # 前端 Copilot 固定 stream:true；本地默认开启，否则 Accept:text/event-stream 与 Result JSON 协商会 500
     sse-enabled: ${AI_PLATFORM_SSE_ENABLED:true}
     health-check-interval-ms: 15000
@@ -135,8 +135,8 @@ mis:
     # 启停 Agent / 重建索引 / 连接 MCP 都涉及真实进程与网络初始化，3s（aggregate-timeout-ms）会误判超时
     timeout-ms: ${AGENT_OPS_TIMEOUT_MS:15000}
     # 对话消息背后是一次完整 LLM 推理（运营台本地对话还可能经 Coordinator→Worker 多跳），
-    # 60s 在委派场景会常态误判超时（BFF 先断、下游仍在跑）。默认放宽到 180s，可用环境变量覆盖。
-    chat-timeout-ms: ${AGENT_OPS_CHAT_TIMEOUT_MS:180000}
+    # 60s 在委派场景会常态误判超时（BFF 先断、下游仍在跑）。默认放宽到 1800s（30min），可用环境变量覆盖。
+    chat-timeout-ms: ${AGENT_OPS_CHAT_TIMEOUT_MS:1800000}
   mcp:
     servers:
       org: http://localhost:8103

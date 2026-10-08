@@ -24,7 +24,7 @@ def test_xclaim_config_declared_defaults():
     """config.py 源代码声明的默认值即设计所需值（源码层面，不依赖 env）。"""
     fields = Settings.model_fields
     assert fields["XCLAIM_INTERVAL_MS"].default == 5000
-    assert fields["XCLAIM_MIN_IDLE_MS"].default == 150_000
+    assert fields["XCLAIM_MIN_IDLE_MS"].default == 1_920_000
     # 重投阈值须覆盖单条处理超时，否则长 a2ui_run 会被误重投
     assert fields["XCLAIM_MIN_IDLE_MS"].default > fields["AGENT_MESSAGE_TIMEOUT"].default * 1000
 
@@ -32,11 +32,11 @@ def test_xclaim_config_declared_defaults():
 def test_xclaim_config_runtime_pickup(monkeypatch):
     """模拟部署注入，验证运行时配置正确。"""
     monkeypatch.setenv("XCLAIM_INTERVAL_MS", "5000")
-    monkeypatch.setenv("XCLAIM_MIN_IDLE_MS", "150000")
+    monkeypatch.setenv("XCLAIM_MIN_IDLE_MS", "1920000")
     get_settings.cache_clear()
     s = get_settings()
     assert s.XCLAIM_INTERVAL_MS == 5000
-    assert s.XCLAIM_MIN_IDLE_MS == 150000
+    assert s.XCLAIM_MIN_IDLE_MS == 1920000
 
 
 def test_prefix_and_db_isolation_unchanged_by_t_batch(monkeypatch):

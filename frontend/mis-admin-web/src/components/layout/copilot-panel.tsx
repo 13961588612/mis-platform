@@ -208,6 +208,8 @@ export function CopilotPanel({ open, onOpenChange }: CopilotPanelProps) {
   // 放大模式：仅在「当前会话面板打开」时恢复；刷新后 open 恒为 false，
   // 若仍读 localStorage=1 会出现 expanded&&!open → FAB 与面板双不可见。
   const [expanded, setExpanded] = useState<boolean>(false);
+  /** 首次打开后保持挂载，关闭 Sheet 不断 SSE，后台问数结果仍能写入会话。 */
+  const [activated, setActivated] = useState(false);
 
   const toggleExpanded = useCallback(() => {
     setExpanded((prev) => {
@@ -232,6 +234,7 @@ export function CopilotPanel({ open, onOpenChange }: CopilotPanelProps) {
   // 打开面板时：若上次以放大态关闭前曾写过 flag，恢复放大；否则普通 Sheet
   useEffect(() => {
     if (open) {
+      setActivated(true);
       setExpanded(readExpandedFlag());
     }
   }, [open]);
@@ -262,7 +265,7 @@ export function CopilotPanel({ open, onOpenChange }: CopilotPanelProps) {
             </SheetHeader>
             <div className="flex min-h-0 flex-1 flex-col">
               <Suspense fallback={<CopilotPanelFallback />}>
-                {open ? (
+                {activated ? (
                   <CopilotPanelLazy
                     expanded={false}
                     onToggleExpanded={toggleExpanded}

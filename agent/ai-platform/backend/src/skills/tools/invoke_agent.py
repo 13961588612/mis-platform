@@ -265,7 +265,7 @@ class InvokeAgentTool(BaseTool):
         settings = get_settings()
         whitelist = resolve_whitelist(settings.INVOKE_AGENT_WHITELIST)
         max_depth = max(1, int(settings.INVOKE_AGENT_MAX_DEPTH or 1))
-        timeout_s = max(5, int(settings.INVOKE_AGENT_TIMEOUT_SECONDS or 120))
+        timeout_s = max(5, int(settings.INVOKE_AGENT_TIMEOUT_SECONDS or 1680))
 
         agent_id = (arguments.agent_id or "").strip()
         content = (arguments.content or "").strip()

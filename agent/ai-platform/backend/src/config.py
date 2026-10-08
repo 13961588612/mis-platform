@@ -331,8 +331,8 @@ class Settings(BaseSettings):
     )
     AGENT_TRACE_LOG: bool = True
     AGENT_MESSAGE_TIMEOUT: int = Field(
-        default=120,
-        description="单条入站消息 Agent 处理超时（秒），超时后向前端推送 error + done",
+        default=1800,
+        description="单条入站消息 Agent 处理超时（秒，默认 30min），超时后向前端推送 error + done",
     )
     MCP_TOOL_CALL_TIMEOUT: int = Field(
         default=30,
@@ -414,9 +414,9 @@ class Settings(BaseSettings):
         # 必须 > AGENT_MESSAGE_TIMEOUT：入站 ACK 在整段处理结束后才发。
         # 旧默认 30s 时，A2UI/RAG 常跑 40s+，PEL idle 超阈值会被 XAUTOCLAIM
         # 重投 → 同 run 再跑一遍、用户消息重复落库（看起来像「自动发了两次」）。
-        default=150_000,
+        default=1_920_000,
         description=(
-            "孤儿消息进入重投的最小 idle 阈值（毫秒）；须大于 "
+            "孤儿消息进入重投的最小 idle 阈值（毫秒，默认 32min）；须大于 "
             "AGENT_MESSAGE_TIMEOUT（秒）×1000，避免长任务处理中被误重投"
         ),
     )
@@ -447,10 +447,10 @@ class Settings(BaseSettings):
         description="session 锁看门狗续期间隔（秒）",
     )
     SESSION_LOCK_MAX_HOLD_S: int = Field(
-        default=30,
-        description="session 锁累计持有上限（秒）；看门狗续期不超过此窗口，到时停止续期"
-        "使锁随 TTL 自然过期，兜底持有方卡死导致锁永不释放、后续请求无限等待（如 120s）"
-        "的极端场景。须 >= SESSION_LOCK_TTL_S。",
+        default=1860,
+        description="session 锁累计持有上限（秒，默认 31min）；看门狗续期不超过此窗口，到时停止续期"
+        "使锁随 TTL 自然过期，兜底持有方卡死导致锁永不释放、后续请求无限等待"
+        "的极端场景。须 >= SESSION_LOCK_TTL_S，且覆盖 AGENT_MESSAGE_TIMEOUT。",
     )
     AGENT_RESYNC_S: int = Field(
         default=15,
@@ -691,8 +691,8 @@ class Settings(BaseSettings):
         description="invoke_agent 最大深度（1=仅顶层 Copilot 可委托，禁止递归）",
     )
     INVOKE_AGENT_TIMEOUT_SECONDS: int = Field(
-        default=120,
-        description="单次子 Agent 委托超时（秒）",
+        default=1680,
+        description="单次子 Agent 委托超时（秒，默认 28min，须小于 AGENT_MESSAGE_TIMEOUT）",
     )
 
     # ===== Coordinator–Worker 调度基座（C1/C3/C5，design-impl.md §6.2）=====

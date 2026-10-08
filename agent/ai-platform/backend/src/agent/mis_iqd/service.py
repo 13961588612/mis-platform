@@ -19,6 +19,7 @@ W4 扩展：:meth:`list_sql_pairs` / :meth:`list_knowledge`（增强物料缓存
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 import time
@@ -28,7 +29,11 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 from src.adapters.iqd_mcp_client import IqdMcpClient
-from src.agent.mis_iqd.errors import IqdError
+from src.agent.mis_iqd.errors import (
+    IqdError,
+    QuestionUnsupportedError,
+    WrenaiTimeoutError,
+)
 from src.agent.mis_iqd.sql_translate import (
     WREN_TARGET_DIALECT,
     translate_sql_pair as sql_translate_translate,
@@ -400,19 +405,7 @@ class IqdAskService:
         Raises:
             IqdError: 452xx 系列错误（fail-closed）。
         """
-        from uuid import uuid4
-
-        from src.agent.mis_iqd.errors import ScopeDeniedError
-        from src.agent.mis_iqd.scope_resolver import (
-            IqdScopeResolution,
-            RowScopeInjectOutcome,
-        )
-        from src.models.iqd_schema import (
-            AskResponse,
-            PlanStep,
-            RESULT_STATUS_FAILED,
-            ResultData,
-        )
+        from src.models.iqd_schema import RESULT_STATUS_FAILED, RESULT_STATUS_UNSUPPORTED
 
         resolver = self._get_scope_resolver()
         # 使用 resolve_effective：模拟角色（metadata.iqd.simulate_role_code）时按模拟
@@ -423,45 +416,17 @@ class IqdAskService:
                 request.connection_id,
                 scope_hint=request.scope_hint or None,
             )
-        except ScopeDeniedError as exc:
-            # 前置 deny 也要落审计，否则运营页「完全没记录」。
-            deny_scope = IqdScopeResolution(
-                decision="deny",
-                allowed_item_keys=[],
-                denied_item_keys=list(request.scope_hint or []),
-                reason=str(exc) or "当前角色无可问数据范围",
-                subject_summary=identity.subject_summary(),
+        except IqdError as exc:
+            # 前置 deny / 未配置 也要落审计，否则运营页「完全没记录」。
+            failed = self._exception_ask_result(
+                request,
+                identity,
+                exc,
+                status=RESULT_STATUS_FAILED,
+                plan_code="scope_resolve",
+                plan_label="裁定可问范围",
             )
-            result = AskResult(
-                response=AskResponse(
-                    query_id=f"q-{uuid4().hex[:12]}",
-                    thread_id=request.thread_id,
-                    status=RESULT_STATUS_FAILED,
-                    answer_summary=str(exc) or "当前角色无权查询相关数据",
-                    data=ResultData(),
-                    plan=[
-                        PlanStep(
-                            seq=1,
-                            code="scope_resolve",
-                            label="裁定可问范围",
-                            status="failed",
-                        )
-                    ],
-                    scope=deny_scope.to_payload(),
-                    latency_ms=0,
-                    error_code="45204",
-                    error_message=str(exc) or "当前角色无权查询相关数据",
-                ),
-                scope=deny_scope,
-                inject_outcome=RowScopeInjectOutcome(),
-            )
-            try:
-                await self.write_ask_log(request, identity, result, view)
-            except Exception as log_exc:  # noqa: BLE001
-                logger.warning(
-                    "IQD ask log write failed (degraded)",
-                    error=str(log_exc),
-                )
+            await self._write_ask_log_best_effort(request, identity, failed, view)
             raise
 
         if mock_allowed_keys:
@@ -471,19 +436,115 @@ class IqdAskService:
             scope.reason = None
 
         orchestrator = self._get_orchestrator()
-        result: AskResult = await orchestrator.ask(request, identity, scope)
+        try:
+            result = await orchestrator.ask(request, identity, scope)
+        except asyncio.CancelledError:
+            # A2UI / Copilot 超时或 generation.cancel 会取消 Worker；不落审计则运营页空白。
+            cancelled = self._exception_ask_result(
+                request,
+                identity,
+                IqdError(45203, "问数被取消或会话超时"),
+                status=RESULT_STATUS_FAILED,
+            )
+            await self._write_ask_log_best_effort(
+                request, identity, cancelled, view, shield=True
+            )
+            raise
+        except IqdError as exc:
+            failed = self._exception_ask_result(
+                request,
+                identity,
+                exc,
+                status=(
+                    RESULT_STATUS_UNSUPPORTED
+                    if isinstance(exc, QuestionUnsupportedError)
+                    else RESULT_STATUS_FAILED
+                ),
+            )
+            await self._write_ask_log_best_effort(request, identity, failed, view)
+            raise
 
         # ===== 投影前写审计（含 failed/45204；失败不阻断）=====
+        await self._write_ask_log_best_effort(request, identity, result, view)
+
+        return self._projector.project(result.response, view)
+
+    async def _write_ask_log_best_effort(
+        self,
+        request: AskRequest,
+        identity: AskIdentity,
+        result: AskResult,
+        view: str,
+        *,
+        shield: bool = False,
+    ) -> None:
+        """写审计；失败只记 warning。``shield=True`` 用于取消路径，避免写入被一并取消。"""
         try:
-            await self.write_ask_log(request, identity, result, view)
-        except Exception as exc:  # noqa: BLE001 - 审计失败降级，不得吞答案
+            write = self.write_ask_log(request, identity, result, view)
+            if shield:
+                await asyncio.shield(write)
+            else:
+                await write
+        except Exception as exc:  # noqa: BLE001 - 审计失败降级，不得吞答案/取消
             logger.warning(
                 "IQD ask log write failed (degraded)",
-                query_id=result.response.query_id,
+                query_id=getattr(getattr(result, "response", None), "query_id", None),
                 error=str(exc),
             )
 
-        return self._projector.project(result.response, view)
+    def _exception_ask_result(
+        self,
+        request: AskRequest,
+        identity: AskIdentity,
+        exc: IqdError,
+        *,
+        status: str,
+        plan_code: str = "executing",
+        plan_label: str = "问数执行",
+    ) -> AskResult:
+        """把抛出的 452xx 编成 failed/unsupported 帧，供审计落库。"""
+        from uuid import uuid4
+
+        from src.agent.mis_iqd.scope_resolver import (
+            IqdScopeResolution,
+            RowScopeInjectOutcome,
+        )
+        from src.models.iqd_schema import AskResponse, PlanStep, ResultData
+
+        message = str(exc) or "问数失败"
+        if isinstance(exc, WrenaiTimeoutError):
+            message = str(exc) or "本次查询超时，请缩小问题范围"
+        deny_scope = IqdScopeResolution(
+            decision="deny" if getattr(exc, "code", None) == 45204 else "allow",
+            allowed_item_keys=[],
+            denied_item_keys=[],
+            reason=message,
+            subject_summary=identity.subject_summary(),
+        )
+        return AskResult(
+            response=AskResponse(
+                query_id=f"q-{uuid4().hex[:12]}",
+                thread_id=request.thread_id,
+                status=status,
+                answer_summary=message,
+                data=ResultData(),
+                plan=[
+                    PlanStep(
+                        seq=1,
+                        code=plan_code,
+                        label=plan_label,
+                        status="failed",
+                        detail=message,
+                    )
+                ],
+                scope=deny_scope.to_payload(),
+                latency_ms=0,
+                error_code=str(exc.code),
+                error_message=message,
+            ),
+            scope=deny_scope,
+            inject_outcome=RowScopeInjectOutcome(),
+        )
 
     # ================================================================ 审计
 

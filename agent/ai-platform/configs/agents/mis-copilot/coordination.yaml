@@ -8,10 +8,10 @@ delegation:
   spawn_tools_enabled: true
   enforce_task_brief: true
   max_depth: 1
-  # 问数 Worker 常拆多子问 + Wren/NL2SQL，120s 易被父会话取消（dispatch status=killed）
+  # 问数 Worker 常拆多子问 + Wren/NL2SQL，短超时易被父会话取消（dispatch status=killed）
   # 导致 Copilot 无表、仅有残缺 text。
-  # 须与 .env 对齐：INVOKE_AGENT_TIMEOUT_SECONDS ≥ 本值；AGENT_MESSAGE_TIMEOUT ≥ 本值+120。
-  timeout_seconds: 240
+  # 须与 .env 对齐：INVOKE_AGENT_TIMEOUT_SECONDS ≥ 本值；AGENT_MESSAGE_TIMEOUT ≥ 本值+余量。
+  timeout_seconds: 1680
   emit_dispatch_trace: true
   forbid_self_invoke: true
   # 硬约束（R4/R8）：mis-admin-helper 不进 copilot（后台操作员专属，fail-closed）。

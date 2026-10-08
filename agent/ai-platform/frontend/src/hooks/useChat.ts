@@ -52,7 +52,7 @@ const RECONNECT_BASE_DELAY = 1000;
 const HEARTBEAT_INTERVAL = 30000;
 
 /** Abort generation if no terminal event within this window (ms). */
-const GENERATION_TIMEOUT_MS = 120_000;
+const GENERATION_TIMEOUT_MS = 1_860_000;
 
 // ===== Hook Return Type =====
 

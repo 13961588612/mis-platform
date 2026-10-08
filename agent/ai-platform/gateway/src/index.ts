@@ -256,7 +256,7 @@ async function main(): Promise<void> {
     // 仅真正持有该 bot 的 Gateway 实际投递（其余无对应 adapter ⇒ 自然 no-op）。
     const XCLAIM_INTERVAL_MS = parseInt(process.env['XCLAIM_INTERVAL_MS'] ?? '5000', 10);
     // 与 Agent Core 对齐：须大于最长入站处理窗口，避免长任务 PEL 误重投。
-    const XCLAIM_MIN_IDLE_MS = parseInt(process.env['XCLAIM_MIN_IDLE_MS'] ?? '150000', 10);
+    const XCLAIM_MIN_IDLE_MS = parseInt(process.env['XCLAIM_MIN_IDLE_MS'] ?? '1920000', 10);
 
     const eventConsumer = new StreamConsumer(
       redisConsumer,
