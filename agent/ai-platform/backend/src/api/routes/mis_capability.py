@@ -12,11 +12,12 @@
 """
 
 from __future__ import annotations
-from typing import Any, AsyncIterator
 
 import asyncio
 import json
 import uuid
+from collections.abc import AsyncIterator
+from typing import Any
 
 from fastapi import APIRouter, Depends, Header, status
 from fastapi.responses import StreamingResponse
@@ -35,6 +36,7 @@ from src.agent.mis_rag import (
 from src.agent.session import Message, SessionManager, get_session_manager
 from src.api.deps import get_current_user, get_trace_id, resolve_mis_user_id_with_db
 from src.api.response import error_response, success
+from src.cluster.session_lock import get_shared_redis_session_lock
 from src.config import get_settings
 from src.coordinator.trace import (
     QA_SUB_STAGES_CV,
@@ -570,39 +572,48 @@ async def agent_chat_stream(
                 )
             # 2.1：本轮 assistant 消息 id 预先生成，计时按轮（turn_key=该 id）落库。
             assistant_id: str = str(uuid.uuid4())
-            async for event in instance.process_message(
-                session=session,
-                message=Message(role=req.role, content=req.content, metadata=req.metadata),
-                assistant_message_id=assistant_id,
-            ):
-                if event.type == AgentEventType.TEXT_DELTA and event.content:
-                    response_parts.append(event.content)
-                    yield _sse_frame(
-                        "delta", {"traceId": trace_id, "delta": event.content}
-                    )
-                elif event.type == AgentEventType.ERROR:
+            lock = await get_shared_redis_session_lock()
+            async with lock.acquire(session_id) as lock_result:
+                if not lock_result.locked:
                     yield _sse_frame(
                         "error",
-                        {"traceId": trace_id, "message": event.message or "Agent runtime error"},
+                        {"traceId": trace_id, "message": "Session is busy"},
                     )
                     return
 
-            try:
-                await session_manager.add_message(
-                    session_id=session_id,
-                    role="assistant",
-                    content="".join(response_parts),
-                    message_id=assistant_id,
-                )
-            except BaseException as save_exc:  # noqa: BLE001
-                if isinstance(save_exc, (KeyboardInterrupt, SystemExit)):
-                    raise
-                logger.error(
-                    "Failed to persist streamed assistant message; still emitting done",
-                    error=str(save_exc),
-                    agent_id=agent_id,
-                    session_id=session_id,
-                )
+                async for event in instance.process_message(
+                    session=session,
+                    message=Message(role=req.role, content=req.content, metadata=req.metadata),
+                    assistant_message_id=assistant_id,
+                ):
+                    if event.type == AgentEventType.TEXT_DELTA and event.content:
+                        response_parts.append(event.content)
+                        yield _sse_frame(
+                            "delta", {"traceId": trace_id, "delta": event.content}
+                        )
+                    elif event.type == AgentEventType.ERROR:
+                        yield _sse_frame(
+                            "error",
+                            {"traceId": trace_id, "message": event.message or "Agent runtime error"},
+                        )
+                        return
+
+                try:
+                    await session_manager.add_message(
+                        session_id=session_id,
+                        role="assistant",
+                        content="".join(response_parts),
+                        message_id=assistant_id,
+                    )
+                except BaseException as save_exc:  # noqa: BLE001
+                    if isinstance(save_exc, (KeyboardInterrupt, SystemExit)):
+                        raise
+                    logger.error(
+                        "Failed to persist streamed assistant message; still emitting done",
+                        error=str(save_exc),
+                        agent_id=agent_id,
+                        session_id=session_id,
+                    )
             done_payload: dict[str, Any] = {
                 "traceId": trace_id,
                 "finishReason": "stop",

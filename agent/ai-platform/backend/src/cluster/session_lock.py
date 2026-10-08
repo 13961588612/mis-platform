@@ -19,12 +19,12 @@
 
 from __future__ import annotations
 
-from contextlib import asynccontextmanager
-from dataclasses import dataclass
-from typing import AsyncIterator, Any
-
 import asyncio
 import uuid
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager, suppress
+from dataclasses import dataclass
+from typing import Any
 
 import redis.asyncio as aioredis
 
@@ -47,6 +47,39 @@ def session_lock_key(session_id: str) -> str:
 
 
 # 续租 Lua：仅当仍为本持有者时刷新 TTL，否则返回 0（已易主）。
+_shared_redis: aioredis.Redis | None = None
+_shared_lock: "RedisSessionLock | None" = None
+_shared_loop: asyncio.AbstractEventLoop | None = None
+
+
+async def get_shared_redis_session_lock() -> "RedisSessionLock":
+    """Return a process-wide Redis lock for non-inbound API paths."""
+    global _shared_redis, _shared_lock, _shared_loop
+    loop = asyncio.get_running_loop()
+    if _shared_lock is not None and _shared_loop is loop and not loop.is_closed():
+        return _shared_lock
+    if _shared_redis is not None:
+        with suppress(Exception):
+            await _shared_redis.aclose()
+        _shared_redis = None
+        _shared_lock = None
+
+    settings = get_settings()
+    _shared_redis = aioredis.from_url(
+        settings.redis_url,
+        max_connections=settings.REDIS_MAX_CONNECTIONS,
+        decode_responses=True,
+        socket_connect_timeout=5,
+    )
+    _shared_lock = RedisSessionLock(
+        _shared_redis,
+        lock_ttl_s=settings.SESSION_LOCK_TTL_S,
+        extend_s=settings.SESSION_LOCK_EXTEND_S,
+        max_hold_s=settings.SESSION_LOCK_MAX_HOLD_S,
+        core_id="http",
+    )
+    return _shared_lock
+
 _RENEW_SCRIPT = """
 if redis.call('GET', KEYS[1]) == ARGV[1] then
   redis.call('PEXPIRE', KEYS[1], tonumber(ARGV[2]))

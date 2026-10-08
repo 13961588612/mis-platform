@@ -10,18 +10,17 @@ FastAPI 应用入口。
 """
 
 from __future__ import annotations
-from typing import Any
 
 import asyncio
-from contextlib import asynccontextmanager
 from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+from typing import Any
 
 import redis.asyncio as aioredis
 import structlog
 from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from src.agent.manager import AgentManager
@@ -131,12 +130,28 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         logger.warning("ConfigManager init deferred", error=str(exc))
 
     # 初始化 PushScheduler
+    memory_forget_job_id: str = "agent-memory-forget-cycle"
     try:
+        from apscheduler.triggers.interval import IntervalTrigger
+
+        from src.memory.manager import get_memory_manager
         from src.push.scheduler import get_push_scheduler
 
         push_scheduler: PushScheduler = get_push_scheduler()
         await push_scheduler.start()
-        logger.info("PushScheduler started")
+        scheduler: Any = getattr(push_scheduler, "_scheduler", None)
+        if scheduler is None:
+            raise RuntimeError("PushScheduler does not expose _scheduler")
+        scheduler.add_job(
+            get_memory_manager().run_forget_cycle,
+            trigger=IntervalTrigger(hours=1, timezone=settings.SCHEDULER_TIMEZONE),
+            id=memory_forget_job_id,
+            name="Agent memory forget cycle",
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True,
+        )
+        logger.info("PushScheduler started", memory_forget_job_id=memory_forget_job_id)
     except Exception as exc:
         logger.warning("PushScheduler init deferred", error=str(exc))
 
@@ -517,13 +532,13 @@ def create_app() -> FastAPI:
     from src.api.routes.channels import router as channels_router
     from src.api.routes.files import router as files_router
     from src.api.routes.iqd_credentials import router as iqd_credentials_router
-    from src.api.routes.iqd_enhance import router as iqd_enhance_router
     from src.api.routes.iqd_db_profile_test import router as iqd_db_profile_test_router
     from src.api.routes.iqd_discovery import router as iqd_discovery_router
-    from src.api.routes.iqd_scope_preview import router as iqd_scope_preview_router
-    from src.api.routes.iqd_scope_dict_sync import router as iqd_scope_dict_sync_router
-    from src.api.routes.iqd_selfheal import router as iqd_selfheal_router
+    from src.api.routes.iqd_enhance import router as iqd_enhance_router
     from src.api.routes.iqd_mcp_manager import router as iqd_mcp_manager_router
+    from src.api.routes.iqd_scope_dict_sync import router as iqd_scope_dict_sync_router
+    from src.api.routes.iqd_scope_preview import router as iqd_scope_preview_router
+    from src.api.routes.iqd_selfheal import router as iqd_selfheal_router
     from src.api.routes.mcp import router as mcp_router
     from src.api.routes.mis_capability import router as mis_capability_router
     from src.api.routes.push import router as push_router

@@ -403,7 +403,8 @@ class TestRedlineDefaultsAndSseFrame:
         ]
         assert len(done_blocks) == 1
         data = json.loads(done_blocks[0].split("data:", 1)[1].strip())
-        assert set(data) == {"traceId", "finishReason", "sessionId"}
+        assert {"traceId", "finishReason", "sessionId"}.issubset(data)
+        assert data.get("messageId")
         assert "dispatchTrace" not in resp.text
 
     @pytest.mark.asyncio
@@ -635,7 +636,9 @@ class TestLazyDelegationRewriteTemplate:
         assert parsed["goal"] and parsed["expected_output"]
         assert "user_question" in parsed["inputs"]
 
-    @pytest.mark.parametrize("reason", ["missing_goal", "too_short", "lazy_delegation", "empty_question"])
+    @pytest.mark.parametrize(
+        "reason", ["missing_goal", "too_short", "lazy_delegation", "empty_question"]
+    )
     def test_every_reason_renders_chinese_text(self, reason: str) -> None:
         """四类拒绝原因都要有中文可读描述，不得回退成枚举字面量。"""
         error = BriefValidationError(reason=reason)  # type: ignore[arg-type]

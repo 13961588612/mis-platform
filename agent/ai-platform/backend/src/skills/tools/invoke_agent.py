@@ -27,9 +27,8 @@ from time import perf_counter
 from typing import Any, Literal
 from uuid import uuid4
 
-from pydantic import BaseModel, Field, field_validator
-
 from openharness.tools.base import BaseTool, ToolExecutionContext, ToolResult
+from pydantic import BaseModel, Field, field_validator
 
 from src.config import get_settings
 from src.coordinator.brief import TaskBrief, TaskBriefBuilder
@@ -961,28 +960,43 @@ async def _run_child_agent(
     tokens: int = 0
     kb_retrieve_hits: list[Any] = []
 
-    async for event in instance.process_message(
-        session=child_session,
-        message=Message(role="user", content=content, metadata=metadata),
-    ):
-        if event.type == AgentEventType.TEXT_DELTA and event.content:
-            response_parts.append(event.content)
-        elif event.type == AgentEventType.TOOL_CALL:
-            tool_uses += 1
-        elif event.type == AgentEventType.TOOL_RESULT and event.result:
-            err: Any | None = event.result.get("error")
-            if err:
-                tool_errors.append(f"{event.tool_name}: {err}")
-            elif event.tool_name == "kb_retrieve":
-                output = event.result.get("output")
-                if isinstance(output, str) and output.strip():
-                    from src.agent.mis_rag.qa_pipeline import parse_kb_retrieve_tool_output
+    from contextlib import nullcontext
 
-                    kb_retrieve_hits = parse_kb_retrieve_tool_output(output)
-        elif event.type == AgentEventType.ERROR:
-            runtime_error = event.message or "Agent runtime error"
-        elif event.type == AgentEventType.DONE and event.token_usage is not None:
-            tokens = int(getattr(event.token_usage, "total", 0) or 0)
+    from src.cluster.session_lock import get_shared_redis_session_lock
+
+    try:
+        lock = await get_shared_redis_session_lock()
+        lock_ctx = lock.acquire(child_session.session_id)
+    except Exception as exc:  # noqa: BLE001 - lock unavailable must not block delegated work
+        logger.warning("child session lock unavailable; running without lock", error=str(exc))
+        lock_ctx = nullcontext()
+
+    async with lock_ctx as lock_result:
+        if lock_result is not None and not lock_result.locked:
+            raise RuntimeError("child session is busy")
+
+        async for event in instance.process_message(
+            session=child_session,
+            message=Message(role="user", content=content, metadata=metadata),
+        ):
+            if event.type == AgentEventType.TEXT_DELTA and event.content:
+                response_parts.append(event.content)
+            elif event.type == AgentEventType.TOOL_CALL:
+                tool_uses += 1
+            elif event.type == AgentEventType.TOOL_RESULT and event.result:
+                err: Any | None = event.result.get("error")
+                if err:
+                    tool_errors.append(f"{event.tool_name}: {err}")
+                elif event.tool_name == "kb_retrieve":
+                    output = event.result.get("output")
+                    if isinstance(output, str) and output.strip():
+                        from src.agent.mis_rag.qa_pipeline import parse_kb_retrieve_tool_output
+
+                        kb_retrieve_hits = parse_kb_retrieve_tool_output(output)
+            elif event.type == AgentEventType.ERROR:
+                runtime_error = event.message or "Agent runtime error"
+            elif event.type == AgentEventType.DONE and event.token_usage is not None:
+                tokens = int(getattr(event.token_usage, "total", 0) or 0)
 
     text = "".join(response_parts).strip()
     child_session_id = str(getattr(child_session, "session_id", "") or "")

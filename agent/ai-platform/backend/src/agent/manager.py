@@ -5,12 +5,12 @@
 """
 
 from __future__ import annotations
-from typing import Any
 
 import asyncio
 import json
 from collections.abc import AsyncIterator
-from datetime import datetime, timezone
+from datetime import UTC, datetime
+from typing import Any
 
 from src.agent.config import AgentConfig
 from src.agent.lifecycle import InstanceState, LifecycleEvent, LifecycleStateMachine
@@ -19,6 +19,7 @@ from src.agent.session import Message, Session
 from src.agent.session_timing import RedisTimingStore, SessionTimingRecorder
 from src.cluster.core_ownership import agent_registry_key
 from src.config import get_settings
+from src.memory.injector import AgentRunContext, get_memory_injector
 from src.runtime.base import AgentRuntime
 from src.runtime.events import AgentEvent, AgentEventType, HealthStatus
 from src.runtime.factory import create_runtime
@@ -95,7 +96,25 @@ class AgentInstance:
             recorder = SessionTimingRecorder(session.session_id, assistant_message_id)
             store = RedisTimingStore(get_settings())
 
-            # 通过运行时执行
+            memory_injector = get_memory_injector()
+            memory_context: AgentRunContext = AgentRunContext(
+                agent_id=self.id,
+                agent_name=self.id,
+                user_id=session.user_id,
+                session_id=session.session_id,
+                query=message.content or "",
+                system_prompt=self.config.system_prompt,
+                messages=messages,
+                memory_config=self.config.memory,
+                metadata={
+                    "mis_user_id": session.mis_user_id,
+                    "channel": session.channel,
+                    "channel_user_id": session.channel_user_id,
+                },
+            )
+            await memory_injector.before_agent_run(memory_context)
+            response_parts: list[str] = []
+
             async for event in self.runtime.run(
                 messages=messages,
                 config=self.config,
@@ -104,11 +123,16 @@ class AgentInstance:
                 user_mobile=session.user_mobile,
                 channel=session.channel,
                 channel_user_id=session.channel_user_id or session.user_id,
-                # T03 S9 第 2 跳：MIS userId 全链透传（None 时下游 fail-closed）。
                 mis_user_id=session.mis_user_id,
+                memory_context=memory_context.memory_context,
             ):
+                if event.type == AgentEventType.TEXT_DELTA and event.content:
+                    response_parts.append(event.content)
                 recorder.observe(event)
                 yield event
+
+            memory_context.assistant_response = "".join(response_parts)
+            await memory_injector.after_agent_run(memory_context)
             # 注：成功路径不再在此 complete() 钉死 _end_t；计时窗交由 finally 末
             # 的 recorder.close() 收口到 post_process 完成之后（Q5 / T05）。
         except Exception:
@@ -246,7 +270,7 @@ class AgentManager:
     async def start_agent(self, agent_id: str) -> InstanceState:
         """启动一个 Agent 实例（CREATED/STOPPED → RUNNING）。"""
         instance: AgentInstance = self._get_instance(agent_id)
-        instance.started_at = datetime.now(timezone.utc)
+        instance.started_at = datetime.now(UTC)
         state: InstanceState = instance.lifecycle.transition(LifecycleEvent.START)
         logger.info("Agent started", agent_id=agent_id, state=state.value)
         return state
@@ -455,7 +479,7 @@ class AgentManager:
                     "state": instance.lifecycle.current_state.value,
                     "config_version": getattr(instance.config, "version", None),
                     "core_id": self._core_id,
-                    "last_seen": datetime.now(timezone.utc).isoformat(),
+                    "last_seen": datetime.now(UTC).isoformat(),
                 },
                 ensure_ascii=False,
             )

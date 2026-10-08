@@ -18,9 +18,10 @@ from src.agent.mis_rag.qa_pipeline import (
     parse_kb_retrieve_tool_output,
     should_append_pending_kb_sources_fence,
 )
-from src.models.retrieve import ChunkHit, QaAnswer, QaCitation
 from src.api.deps import get_agent_manager_dep, get_optional_current_user, get_session_manager_dep
 from src.api.routes.session import router
+from src.cluster.session_lock import LockAcquireResult
+from src.models.retrieve import ChunkHit, QaAnswer, QaCitation
 
 
 def test_session_title_truncates_long_question() -> None:
@@ -219,6 +220,20 @@ def kb_chat_client() -> tuple[TestClient, MagicMock, MagicMock]:
 
     app = FastAPI()
     app.include_router(router, prefix="/api/v1")
+
+    class _NoopCtx:
+        async def __aenter__(self):
+            return LockAcquireResult(True)
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+    class _NoopLock:
+        def acquire(self, session_id):
+            return _NoopCtx()
+
+    router_mod = __import__("src.api.routes.session", fromlist=["get_shared_redis_session_lock"])
+    router_mod.get_shared_redis_session_lock = AsyncMock(return_value=_NoopLock())
     app.dependency_overrides[get_session_manager_dep] = lambda: session_manager
     app.dependency_overrides[get_agent_manager_dep] = lambda: agent_manager
     app.dependency_overrides[get_optional_current_user] = lambda: {"user_id": "1001"}
@@ -236,7 +251,9 @@ def test_send_message_mis_rag_uses_kb_pipeline(
         def __init__(self, *args: Any, **kwargs: Any) -> None:
             self.closed = False
 
-        async def run(self, req: Any, ctx: Any, generate: Any, *, structured: bool = True) -> QaAnswer:
+        async def run(
+            self, req: Any, ctx: Any, generate: Any, *, structured: bool = True
+        ) -> QaAnswer:
             assert structured is False
             assert req.question == "年假怎么休"
             await generate("## 检索到的知识库片段\n...")

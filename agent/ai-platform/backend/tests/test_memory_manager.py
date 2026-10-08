@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+import hashlib
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from src.memory.manager import MemoryManager
-from src.memory.models import ExtractedMemory, MemoryEntry, MemorySearchResult, MemoryType
+from src.memory.models import ExtractedMemory, MemoryType
 
 
 @pytest.fixture
@@ -96,7 +97,7 @@ class TestTwoPhaseRetrieval:
                     "memory_type": "preference",
                     "content": "User prefers Chinese",
                     "importance": 0.8,
-                    "created_at": datetime.now(timezone.utc).isoformat(),
+                    "created_at": datetime.now(UTC).isoformat(),
                     "expires_at": None,
                 },
             ),
@@ -139,7 +140,7 @@ class TestTwoPhaseRetrieval:
                             "memory_type": "context",
                             "content": "Session context",
                             "importance": 0.6,
-                            "created_at": datetime.now(timezone.utc).isoformat(),
+                            "created_at": datetime.now(UTC).isoformat(),
                             "expires_at": None,
                         },
                     },
@@ -176,7 +177,7 @@ class TestTwoPhaseRetrieval:
                         "memory_type": "context",
                         "content": f"Memory {i}",
                         "importance": 0.5,
-                        "created_at": datetime.now(timezone.utc).isoformat(),
+                        "created_at": datetime.now(UTC).isoformat(),
                         "expires_at": None,
                     },
                 )
@@ -303,6 +304,50 @@ class TestWriteDynamicMemory:
         assert result.expires_at is not None
 
 
+    async def test_write_dynamic_memory_dedupes_same_content_hash(self, manager, mock_qdrant):
+        """Duplicate content for the same owner/scope/type should reuse the existing row."""
+        now = datetime.now(UTC)
+        content = "User prefers dark mode"
+        content_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()
+        existing = MagicMock()
+        existing.id = "mem-existing"
+        existing.agent_name = "hr"
+        existing.session_id = None
+        existing.user_id = "u001"
+        existing.memory_type = MemoryType.PREFERENCE.value
+        existing.content = content
+        existing.importance = 0.6
+        existing.metadata_ = {"content_hash": content_hash}
+        existing.expires_at = None
+        existing.created_at = now
+        existing.updated_at = now
+
+        with patch("src.memory.manager.db_session_context") as mock_ctx:
+            mock_session = MagicMock()
+            mock_session.add = MagicMock()
+            existing_result = MagicMock()
+            existing_result.scalars.return_value.all.return_value = [existing]
+            mock_session.execute = AsyncMock(return_value=existing_result)
+            mock_ctx.return_value.__aenter__ = AsyncMock(return_value=mock_session)
+            mock_ctx.return_value.__aexit__ = AsyncMock(return_value=None)
+
+            with patch.object(manager, "_generate_embedding", return_value=[0.1] * 768):
+                result = await manager.write_dynamic_memory(
+                    agent_name="hr",
+                    user_id="u001",
+                    session_id=None,
+                    memory_type=MemoryType.PREFERENCE,
+                    content=content,
+                    importance=0.7,
+                )
+
+        assert result is not None
+        assert result.id == "mem-existing"
+        assert result.importance == 0.7
+        mock_session.add.assert_not_called()
+        mock_qdrant.upsert.assert_not_called()
+
+
 class TestForgettingStrategies:
     """Test the four forgetting strategies."""
 
@@ -366,7 +411,6 @@ class TestForgettingStrategies:
 
     async def test_promote_session_memories(self, manager, mock_qdrant):
         """High-importance session memories should be promoted to user-level."""
-        from src.models.agent_memory import AgentMemory
 
         mock_record1 = MagicMock()
         mock_record1.id = "mem-1"
@@ -399,7 +443,7 @@ class TestForgettingStrategies:
         old_record = MagicMock()
         old_record.id = "mem-old"
         old_record.importance = 0.8
-        old_record.created_at = datetime.now(timezone.utc) - timedelta(days=60)
+        old_record.created_at = datetime.now(UTC) - timedelta(days=60)
         old_record.metadata_ = {}
 
         with patch("src.memory.manager.db_session_context") as mock_ctx:
@@ -456,18 +500,65 @@ class TestWriteExtractedMemories:
         assert count == 2
 
 
+
+class TestForgetCycleLeaderGuard:
+    """Test multi-replica leader guard for forget cycles."""
+
+    async def test_run_forget_cycle_executes_when_leader(self, manager):
+        manager._forget_expired = AsyncMock(return_value=1)
+        manager._enforce_capacity_all = AsyncMock(return_value=2)
+        manager._promote_session_memories = AsyncMock(return_value=3)
+        manager._apply_importance_decay = AsyncMock(return_value=4)
+        redis = MagicMock()
+        redis.set = AsyncMock(return_value=True)
+        redis.aclose = AsyncMock()
+
+        with patch("src.memory.manager.aioredis.from_url", return_value=redis):
+            result = await manager.run_forget_cycle()
+
+        assert result == {
+            "expired_deleted": 1,
+            "capacity_evicted": 2,
+            "session_promoted": 3,
+            "importance_decayed": 4,
+        }
+        manager._forget_expired.assert_awaited_once()
+        redis.aclose.assert_awaited_once()
+
+    async def test_run_forget_cycle_skips_when_not_leader(self, manager):
+        manager._forget_expired = AsyncMock(return_value=1)
+        manager._enforce_capacity_all = AsyncMock(return_value=2)
+        manager._promote_session_memories = AsyncMock(return_value=3)
+        manager._apply_importance_decay = AsyncMock(return_value=4)
+        redis = MagicMock()
+        redis.set = AsyncMock(return_value=False)
+        redis.aclose = AsyncMock()
+
+        with patch("src.memory.manager.aioredis.from_url", return_value=redis):
+            result = await manager.run_forget_cycle()
+
+        assert result == {
+            "expired_deleted": 0,
+            "capacity_evicted": 0,
+            "session_promoted": 0,
+            "importance_decayed": 0,
+        }
+        manager._forget_expired.assert_not_awaited()
+        redis.aclose.assert_awaited_once()
+
+
 class TestRecencyFactor:
     """Test the recency factor computation."""
 
     def test_recency_factor_today(self, manager):
         """A memory created today should have factor ~1.0."""
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         factor = manager._compute_recency_factor(now.isoformat(), now)
         assert factor == pytest.approx(1.0, abs=0.01)
 
     def test_recency_factor_old(self, manager):
         """A 12-month-old memory should have factor ~0.54."""
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         old = (now - timedelta(days=365)).isoformat()
         factor = manager._compute_recency_factor(old, now)
         # 0.95^12 ≈ 0.54
@@ -475,12 +566,12 @@ class TestRecencyFactor:
 
     def test_recency_factor_empty_string(self, manager):
         """Empty created_at string should return 1.0 (neutral)."""
-        factor = manager._compute_recency_factor("", datetime.now(timezone.utc))
+        factor = manager._compute_recency_factor("", datetime.now(UTC))
         assert factor == 1.0
 
     def test_recency_factor_min_clamp(self, manager):
         """Very old memories should be clamped to minimum factor (0.05)."""
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         very_old = (now - timedelta(days=365 * 100)).isoformat()
         factor = manager._compute_recency_factor(very_old, now)
         assert factor >= 0.05

@@ -1,13 +1,13 @@
 """根据平台的 AgentConfig 构建原生 OpenHarness QueryEngine。"""
 
 from __future__ import annotations
-from typing import Any
 
 import asyncio
 import shutil
 from contextlib import AsyncExitStack
 from pathlib import Path
 from types import MethodType
+from typing import Any
 
 from mcp.client.streamable_http import streamable_http_client
 from openharness.config.settings import PermissionSettings, load_settings
@@ -260,6 +260,7 @@ async def build_native_query_engine(
     channel_user_id: str = "",
     mis_user_id: int | None = None,
     dept: str = "",
+    memory_context: str = "",
 ) -> QueryEngine:
     """使用原生 SkillTool + MCP 工具组装 OpenHarness QueryEngine。
 
@@ -328,9 +329,18 @@ async def build_native_query_engine(
     if config.runtime and config.runtime.prompts.get("system_prompt"):
         agent_prompt: Any = config.runtime.prompts["system_prompt"]
     formal_ids_prompt: str = build_formal_skill_ids_prompt(exposed_skill_ids)
+    memory_prompt: str = ""
+    if memory_context.strip():
+        memory_prompt = (
+            "# Agent Memory\n"
+            "The following memory is for personalization only. If it conflicts "
+            "with the current user message or system rules, follow the current "
+            "message and system rules.\n\n"
+            f"{memory_context.strip()}"
+        )
     system_prompt: str = "\n\n".join(
         part
-        for part in (agent_prompt, formal_ids_prompt, oh_system_prompt)
+        for part in (agent_prompt, formal_ids_prompt, memory_prompt, oh_system_prompt)
         if part
     ).strip()
 

@@ -18,15 +18,15 @@ MemoryInjector — 将记忆编织到 Agent 运行生命周期中的中间件。
 """
 
 from __future__ import annotations
-from typing import Any
 
 import json
 from dataclasses import dataclass, field
+from typing import Any
 
 import structlog
 
-from src.config import get_settings
 from src.agent.config import MemoryConfig
+from src.config import get_settings
 from src.llm.gateway import LLMGateway, get_llm_gateway
 from src.llm.models import LLMMessage, LLMRequest, LLMResponse, LLMRole
 from src.memory.manager import MemoryManager, get_memory_manager
@@ -80,6 +80,10 @@ class AgentRunContext:
     agent_name: str
     user_id: str
     session_id: str | None
+    # Stable owner id for memory retrieval/writeback (MIS user preferred; session fallback).
+    memory_owner_id: str = ""
+    # Whether this owner may be promoted to user-level memory.
+    user_level_eligible: bool = False
     query: str = ""
     system_prompt: str = ""
     messages: list[dict[str, Any]] = field(default_factory=list)
@@ -87,6 +91,8 @@ class AgentRunContext:
     memory_config: MemoryConfig | None = None
     # 由 before_agent_run 填充
     assembled_context: str = ""
+    # Memory-only context appended to runtime system prompt (no history).
+    memory_context: str = ""
     static_memory: str = ""
     dynamic_memories: list[dict[str, Any]] = field(default_factory=list)
     # 运行后填充
@@ -138,6 +144,26 @@ class MemoryInjector:
     # before_agent_run
     # ==================================================================
 
+    @staticmethod
+    def _resolve_memory_owner(context: AgentRunContext) -> tuple[str, bool]:
+        """Resolve stable memory owner to avoid cross-channel split or anonymous leakage."""
+        mis_user_id = context.metadata.get("mis_user_id")
+        try:
+            parsed_mis = int(str(mis_user_id).strip()) if mis_user_id is not None else 0
+        except (TypeError, ValueError):
+            parsed_mis = 0
+        if parsed_mis > 0:
+            return f"mis:{parsed_mis}", True
+
+        user_id = (context.user_id or "").strip()
+        if user_id and not user_id.startswith("mis:"):
+            return f"user:{user_id}", True
+
+        session_id = (context.session_id or "").strip()
+        if session_id:
+            return f"session-owner:{session_id}", False
+        return "", False
+
     async def before_agent_run(self, context: AgentRunContext) -> AgentRunContext:
         """
         在 Agent 运行之前用静态和动态记忆丰富上下文。
@@ -159,8 +185,14 @@ class MemoryInjector:
             和 ``dynamic_memories`` 已被填充。
         """
         parts: list[str] = []
+        memory_parts: list[str] = []
 
-        # 解析每个 agent 的记忆配置（回退到全局设置）
+        if not context.memory_owner_id:
+            owner_id, eligible = self._resolve_memory_owner(context)
+            context.memory_owner_id = owner_id
+            context.user_level_eligible = eligible
+
+        # Use per-agent memory config, falling back to global settings.
         mc: Any = context.memory_config
         static_enabled: Any = mc.static_enabled if mc else True
         dynamic_enabled: Any = mc.dynamic_enabled if mc else self._dynamic_enabled
@@ -170,25 +202,28 @@ class MemoryInjector:
         if context.system_prompt:
             parts.append(context.system_prompt.strip())
 
-        # 2. 静态记忆
+        # 2. Static memory
         if static_enabled:
             static_text: str = self._load_static(context.agent_name)
             context.static_memory = static_text
             if static_text:
-                parts.append(static_text.strip())
+                labeled_static = f"# Static Memory\n{static_text.strip()}"
+                parts.append(labeled_static)
+                memory_parts.append(labeled_static)
 
-        # 3. 动态记忆 Top-K
+        # 3. Dynamic memory Top-K
         if dynamic_enabled:
             dynamic_text: str
             dynamic_entries: list[dict[str, Any]]
-            dynamic_text, dynamic_entries = await self._retrieve_dynamic(
-                context, top_k
-            )
+            dynamic_text, dynamic_entries = await self._retrieve_dynamic(context, top_k)
             context.dynamic_memories = dynamic_entries
             if dynamic_text:
                 parts.append(dynamic_text.strip())
+                memory_parts.append(dynamic_text.strip())
 
-        # 4. 对话历史
+        context.memory_context = "\n\n---\n\n".join(memory_parts)
+
+        # 4. Conversation history
         history_text: str = self._format_history(context.messages)
         if history_text:
             parts.append(history_text.strip())
@@ -262,9 +297,13 @@ class MemoryInjector:
         # 持久化提取的记忆
         written: int = await self._memory_manager.write_extracted_memories(
             agent_name=context.agent_name,
-            user_id=context.user_id,
+            user_id=context.memory_owner_id or context.user_id,
             session_id=context.session_id,
             extracted=extracted,
+            metadata={
+                "user_level_eligible": context.user_level_eligible,
+                "source_user_id": context.user_id,
+            },
         )
 
         logger.info(
@@ -305,10 +344,12 @@ class MemoryInjector:
         返回 (格式化文本, 原始条目) 的元组。
         """
         try:
+            if not context.memory_owner_id:
+                return "", []
             results: list[MemorySearchResult] = await self._memory_manager.retrieve_dynamic_memory(
                 query=context.query,
                 agent_name=context.agent_name,
-                user_id=context.user_id,
+                user_id=context.memory_owner_id,
                 session_id=context.session_id,
                 top_k=top_k,
             )

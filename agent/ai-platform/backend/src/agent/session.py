@@ -18,11 +18,12 @@ TTL 一过历史就没了。本次把双写真正接上，并保证：
 """
 
 from __future__ import annotations
-from typing import Any, Sequence
 
 import json
 import uuid
-from datetime import datetime, timezone
+from collections.abc import Sequence
+from datetime import UTC, datetime
+from typing import Any
 
 import redis.asyncio as aioredis
 
@@ -94,7 +95,7 @@ class Message:
         self.role = role
         self.content = content
         self.metadata = metadata or {}
-        self.timestamp = datetime.now(timezone.utc)
+        self.timestamp = datetime.now(UTC)
 
     def to_dict(self) -> dict[str, Any]:
         """将消息序列化为字典。"""
@@ -161,8 +162,8 @@ class Session:
         self.user_name = user_name or ""
         self.messages: list[Message] = []
         self.state: dict[str, Any] = {}
-        self.created_at = datetime.now(timezone.utc)
-        self.updated_at = datetime.now(timezone.utc)
+        self.created_at = datetime.now(UTC)
+        self.updated_at = datetime.now(UTC)
 
     def add_message(
         self,
@@ -182,7 +183,7 @@ class Session:
         """
         msg: Message = Message(role=role, content=content, metadata=metadata, message_id=message_id)
         self.messages.append(msg)
-        self.updated_at = datetime.now(timezone.utc)
+        self.updated_at = datetime.now(UTC)
         return msg
 
     def get_messages(self) -> list[dict[str, Any]]:
@@ -226,9 +227,9 @@ class Session:
 
     def set_pending_formfill(self, resume_token: str, ttl_seconds: int = 1800) -> None:
         """记录当前会话挂起的表单填充任务令牌（TTL 默认 30 分钟）。"""
-        from datetime import datetime, timedelta, timezone
+        from datetime import datetime, timedelta
 
-        expires_at = datetime.now(timezone.utc) + timedelta(seconds=ttl_seconds)
+        expires_at = datetime.now(UTC) + timedelta(seconds=ttl_seconds)
         self.state["pending_formfill"] = {
             "resume_token": resume_token,
             "expires_at": expires_at.isoformat(),
@@ -236,7 +237,7 @@ class Session:
 
     def get_pending_formfill(self) -> str | None:
         """返回有效的挂起表单填充令牌；已过期或不存在则返回 None。"""
-        from datetime import datetime, timezone
+        from datetime import datetime
 
         pending = self.state.get("pending_formfill")
         if not isinstance(pending, dict):
@@ -244,7 +245,7 @@ class Session:
         expires_at = pending.get("expires_at")
         if expires_at:
             try:
-                if datetime.fromisoformat(expires_at) < datetime.now(timezone.utc):
+                if datetime.fromisoformat(expires_at) < datetime.now(UTC):
                     self.state.pop("pending_formfill", None)
                     return None
             except (ValueError, TypeError):
@@ -575,7 +576,7 @@ class SessionManager:
         Args:
             session: 待持久化的会话对象。
         """
-        session.updated_at = datetime.now(timezone.utc)
+        session.updated_at = datetime.now(UTC)
         await self._redis_op(
             "set",
             self._session_key(session.session_id),
@@ -675,12 +676,12 @@ class SessionManager:
         payload: dict[str, Any] = {
             "rating": rating,
             "comment": (comment or "").strip() or None,
-            "updated_at": datetime.now(timezone.utc).isoformat(),
+            "updated_at": datetime.now(UTC).isoformat(),
         }
         meta = dict(target.metadata or {})
         meta["feedback"] = payload
         target.metadata = meta
-        session.updated_at = datetime.now(timezone.utc)
+        session.updated_at = datetime.now(UTC)
         await self.save_session(session)
         try:
             await self._pg_store.update_message_metadata(target.id, meta)
@@ -828,6 +829,16 @@ class SessionManager:
         for session_id in session_ids:
             await self._redis_op("delete", self._session_key(session_id))
             await self._redis_op("delete", self._agent_binding_key(session_id))
+            try:
+                from src.memory.manager import get_memory_manager
+
+                await get_memory_manager().cleanup_session(session_id)
+            except Exception as exc:  # noqa: BLE001 - memory cleanup must not block deletion
+                logger.warning(
+                    "Session memory cleanup failed (degraded)",
+                    session_id=session_id,
+                    error=str(exc),
+                )
 
         deleted: int = await self._pg_store.soft_delete(list(session_ids))
         logger.info(

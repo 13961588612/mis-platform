@@ -6,11 +6,11 @@ MCP 工具注册。LLM 调用通过 ``GatewayApiClient`` 路由到平台的 ``LL
 """
 
 from __future__ import annotations
-from typing import Any
 
 import json
 from collections.abc import AsyncIterator
 from pathlib import Path
+from typing import Any
 
 from src.agent.config import AgentConfig
 from src.config import get_settings
@@ -21,9 +21,9 @@ from src.coordinator.trace import (
     persist_dispatch_traces,
 )
 from src.llm.gateway import LLMGateway
+from src.runtime.a2ui_pending import drain_a2ui_renders
 from src.runtime.base import AgentRuntime
 from src.runtime.events import AgentEvent, HealthStatus, TokenUsage
-from src.runtime.a2ui_pending import drain_a2ui_renders
 from src.runtime.oh_runtime_builder import (
     build_native_query_engine,
     connect_mcp_manager,
@@ -376,6 +376,7 @@ class OpenHarnessRuntime(AgentRuntime):
         channel: str = "",
         channel_user_id: str = "",
         mis_user_id: int | None = None,
+        memory_context: str = "",
     ) -> AsyncIterator[AgentEvent]:
         """驱动原生 QueryEngine 执行一轮对话并映射为平台 AgentEvent。
 
@@ -474,6 +475,7 @@ class OpenHarnessRuntime(AgentRuntime):
                 channel=channel,
                 channel_user_id=channel_user_id,
                 mis_user_id=mis_user_id,
+                memory_context=memory_context,
             )
 
             # 把本轮请求体 metadata（BFF ``IqdAskFacadeService.buildBody`` 注入的
