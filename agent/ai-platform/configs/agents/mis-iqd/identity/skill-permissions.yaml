@@ -1,0 +1,3 @@
+skill_permissions:
+  business.analysis:
+    required: [iqd:ask:use]

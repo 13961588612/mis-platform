@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
+
+import src.config_manager.loader as config_loader_mod
 from openharness.tools.base import ToolExecutionContext
 from pydantic import ValidationError
 
 from src.agent.config import AgentConfig, SkillRef
+from src.config_manager.loader import ConfigLoader
 from src.runtime.oh_runtime_builder import (
     build_formal_skill_ids_prompt,
     enabled_package_skill_ids,
@@ -79,6 +83,27 @@ def test_materialize_oh_skill_view_uses_formal_skill_id_dirs(tmp_path: Path) -> 
     # resolve_extra_skill_dirs 与物化结果一致，且不再暴露 packages/crm 整类目录
     assert resolve_extra_skill_dirs(cfg, tmp_path) == dirs
     assert not any(Path(d).name == "crm" for d in dirs)
+
+
+@pytest.mark.asyncio
+async def test_mis_iqd_business_analysis_skill_materializes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config_base = Path(__file__).resolve().parents[2] / "configs"
+    settings = SimpleNamespace(CONFIG_BASE_PATH=str(config_base), CONFIG_MODE="file_system")
+    monkeypatch.setattr(config_loader_mod, "get_settings", lambda: settings)
+
+    cfg = await ConfigLoader().load_agent_config("mis-iqd")
+
+    assert "skill" in cfg.runtime.allowed_tools
+    assert "iqd__ask" in cfg.runtime.allowed_tools
+    assert "business.analysis" in {skill.skill_id for skill in cfg.skills}
+
+    dirs, exposed = materialize_oh_skill_view(cfg, config_base)
+    assert exposed == ["business.analysis"]
+    skill_md = Path(dirs[0]) / "business.analysis" / "SKILL.md"
+    assert skill_md.is_file()
+    assert "iqd__ask" in skill_md.read_text(encoding="utf-8")
 
 
 def test_formal_skill_ids_prompt_lists_ids_only() -> None:

@@ -2,10 +2,11 @@ runtime:
   type: openharness
   version: "1.0.0"
   allowed_tools:
+    - skill
     - iqd__ask
     - iqd__describe_scope
   params:
-    maxSteps: 8
+    maxSteps: 12
     temperature: 0.1
     maxTokens: 4096
   prompts:
