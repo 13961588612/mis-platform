@@ -46,6 +46,8 @@
 | **D12** | 外部身份映射 = BFF 兑换端点 | 外部独立账号经 `POST /api/v1/embed/identity/exchange` 兑换短时 RS256 MIS JWT（TTL 30min）；三级回退（显式映射表 → 手机号匹配 → 影子账号）；安全红线 R1-R6；mappedBy 审计 |
 | **D13** | 单前端统一 | agent/frontend 退役，mis-admin-web 为唯一前端 + 唯一对外出口（`/embed/*`）；双 JWT 收敛为 RS256 唯一生产通道（HS256 仅过渡期） |
 | **D14** | iframe 为唯一外部嵌入形态 | 组件化封装搁置 P2；postMessage 协议（AUTH_READY/AUTH_TOKEN/PAGE_CONTEXT + A2UI_EVENT/A2UI_EVENT_RESULT）承载于 `/embed/*`；VITE_PARENT_ORIGINS 白名单；多宿主会话隔离（sessionId + hostId 广播） |
+
+> **对外接入手册**（宿主联调）：[`docs/integration/embed-copilot.md`](../../integration/embed-copilot.md) · 示例页 `frontend/mis-admin-web/public/embed-host-demo.html`
 | **D15** | 视觉基线统一 shadcn | 所有迁入组件统一 shadcn 视觉，废弃 agent/frontend Tailwind + surface-muted 自有设计 |
 | **手机号匹配规则** | 用户已拍板 | MIS sys_user 允许"一手机号多账号"历史数据不清理；反查按正常状态账号计数：=1 映射 / >1 一律 40301 / =0 同样 40301；fail-closed 且不区分提示防枚举；**不进入影子账号回退** |
 

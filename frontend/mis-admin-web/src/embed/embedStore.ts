@@ -35,23 +35,32 @@ interface EmbedState {
   authState: EmbedAuthState;
   /** 父页推送的 MIS RS256 JWT。 */
   token: string | null;
+  /** JWT 过期时间（ms epoch）；来自 token.exp。 */
+  tokenExpiresAt: number | null;
   /** 已通过白名单校验的父页 origin（事件桥回包目标）。 */
   parentOrigin: string | null;
   pageContext: EmbedPageContext | null;
   authError: string | null;
+  /** 是否正在等待父页响应 AUTH_TOKEN_REQUEST。 */
+  refreshPending: boolean;
   setAuthenticated: (token: string, parentOrigin: string) => void;
+  /** 续期热替换：保持 parentOrigin / session，仅换 token。 */
+  refreshToken: (token: string) => void;
   setPageContext: (ctx: EmbedPageContext) => void;
+  setRefreshPending: (pending: boolean) => void;
   setRejected: (reason: string) => void;
   setTimedOut: () => void;
   reset: () => void;
 }
 
-export const useEmbedStore = create<EmbedState>((set) => ({
+export const useEmbedStore = create<EmbedState>((set, get) => ({
   authState: 'waiting',
   token: null,
+  tokenExpiresAt: null,
   parentOrigin: null,
   pageContext: null,
   authError: null,
+  refreshPending: false,
 
   setAuthenticated: (token, parentOrigin) => {
     const expiresAt = getJwtExpiry(token);
@@ -60,7 +69,34 @@ export const useEmbedStore = create<EmbedState>((set) => ({
       accessToken: token,
       expiresAt: expiresAt ?? Date.now() + 30 * 60 * 1000,
     });
-    set({ authState: 'authenticated', token, parentOrigin, authError: null });
+    set({
+      authState: 'authenticated',
+      token,
+      tokenExpiresAt: expiresAt,
+      parentOrigin,
+      authError: null,
+      refreshPending: false,
+    });
+  },
+
+  refreshToken: (token) => {
+    const parentOrigin = get().parentOrigin;
+    if (!parentOrigin) {
+      set({ authState: 'rejected', authError: '续期失败：父页 origin 未知' });
+      return;
+    }
+    const expiresAt = getJwtExpiry(token);
+    useAuthStore.setState({
+      accessToken: token,
+      expiresAt: expiresAt ?? Date.now() + 30 * 60 * 1000,
+    });
+    set({
+      authState: 'authenticated',
+      token,
+      tokenExpiresAt: expiresAt,
+      authError: null,
+      refreshPending: false,
+    });
   },
 
   setPageContext: (pageContext) => {
@@ -71,10 +107,26 @@ export const useEmbedStore = create<EmbedState>((set) => ({
     set({ pageContext });
   },
 
-  setRejected: (reason) => set({ authState: 'rejected', authError: reason }),
-  setTimedOut: () => set({ authState: 'timeout', authError: '等待父页 AUTH_TOKEN 超时' }),
+  setRefreshPending: (pending) => set({ refreshPending: pending }),
+
+  setRejected: (reason) =>
+    set({ authState: 'rejected', authError: reason, refreshPending: false }),
+  setTimedOut: () =>
+    set({
+      authState: 'timeout',
+      authError: '等待父页 AUTH_TOKEN 超时',
+      refreshPending: false,
+    }),
   reset: () =>
-    set({ authState: 'waiting', token: null, parentOrigin: null, pageContext: null, authError: null }),
+    set({
+      authState: 'waiting',
+      token: null,
+      tokenExpiresAt: null,
+      parentOrigin: null,
+      pageContext: null,
+      authError: null,
+      refreshPending: false,
+    }),
 }));
 
 export default useEmbedStore;

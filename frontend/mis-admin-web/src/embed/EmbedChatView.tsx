@@ -9,7 +9,7 @@
  */
 
 import { lazy, Suspense, useEffect, useMemo, useState, type KeyboardEvent } from 'react';
-import { Loader2, MessageSquarePlus, SendHorizonal, Sparkles } from 'lucide-react';
+import { Loader2, MessageSquarePlus, SendHorizonal, Sparkles, Square } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
@@ -177,20 +177,31 @@ export function EmbedChatView({ hostId, sessionId, onNewSession }: EmbedChatView
               placeholder="输入消息，Enter 发送，Shift+Enter 换行"
               className="min-h-[3.25rem] flex-1 resize-none"
             />
-            <Button
-              type="button"
-              size="sm"
-              disabled={!canSend}
-              onClick={handleSend}
-              className="h-9 shrink-0"
-            >
-              {chat.isGenerating ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
+            {chat.isGenerating ? (
+              <Button
+                type="button"
+                size="sm"
+                variant="destructive"
+                onClick={() => chat.stopGenerating()}
+                className="h-9 shrink-0"
+                title="停止生成"
+                aria-label="停止生成"
+              >
+                <Square className="h-3.5 w-3.5 fill-current" />
+                停止
+              </Button>
+            ) : (
+              <Button
+                type="button"
+                size="sm"
+                disabled={!canSend}
+                onClick={handleSend}
+                className="h-9 shrink-0"
+              >
                 <SendHorizonal className="h-4 w-4" />
-              )}
-              发送
-            </Button>
+                发送
+              </Button>
+            )}
           </div>
           <p className="mt-1.5 text-[11px] text-muted-foreground">
             {chat.connectionState === 'connected'

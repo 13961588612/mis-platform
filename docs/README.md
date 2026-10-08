@@ -28,6 +28,7 @@
 | 配置 Cursor Agent 角色/规范 | [ai-assisted-dev](project/ai-assisted-dev.md) · [AGENTS.md](../AGENTS.md) |
 | **多窗口 Agent 团队（PM/DEV/QA/OPS）** | **[agents/README](agents/README.md)** · [定稿方案](agents/大型项目cursor方案.md) |
 | 财务辅助 / POS 对账迁入 | [ADR-021](adr/ADR-021-finance-pos-account-bff-legacy-token.md) · [老 auth 兑换](integration/smp-auth-service-exchange.md) · [MIS 回查手机号](integration/mis-legacy-auth-me.md) · 迁移 `V86__finance_pos_account_seed.sql` |
+| 外部 iframe 嵌入 Copilot | [embed-copilot](integration/embed-copilot.md) · [A2UI 架构 D12/D14](ai-fusion/a2ui/01-architecture.md) · demo `frontend/mis-admin-web/public/embed-host-demo.html` |
 
 ---
 

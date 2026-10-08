@@ -36,9 +36,10 @@ mis:
       access-token-ttl-seconds: ${MIS_JWT_ACCESS_TOKEN_TTL:1800}
   embed:
     # 宿主共享密钥（hostId → client_secret 明文，用于 externalToken HS256 验签）。
-    # 仅注释子项时 YAML 会把本键解析成 ""，无法绑定 Map；本地默认空 Map。
-    # 部署示例：crm-web: ${MIS_EMBED_HOST_CRM_WEB_CLIENT_SECRET:}
-    client-secrets: {}
+    # 与 agent_external_host.client_secret_hash（sha256）交叉校验；生产务必用环境变量覆盖。
+    # 文档：docs/integration/embed-copilot.md
+    client-secrets:
+      embed-demo: ${MIS_EMBED_HOST_EMBED_DEMO_CLIENT_SECRET:embed-demo-local-secret-do-not-use-in-prod}
     # phone_hash 加盐（R5 脱敏存储；空 = 不加盐）
     salt: ${MIS_EMBED_PHONE_HASH_SALT:}
     # 手机号匹配开关（03 §5.2 phone_match_enabled 默认 true）

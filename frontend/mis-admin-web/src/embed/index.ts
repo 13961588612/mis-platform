@@ -1,7 +1,12 @@
 /**
  * embed 模块桶导出（T07'）。
  */
-export { EmbedAuthBridge, EMBED_AUTH_TIMEOUT_MS } from './EmbedAuthBridge';
+export {
+  EmbedAuthBridge,
+  EMBED_AUTH_TIMEOUT_MS,
+  EMBED_TOKEN_REFRESH_LEAD_MS,
+  EMBED_TOKEN_REFRESH_TIMEOUT_MS,
+} from './EmbedAuthBridge';
 export { useEmbedStore, type EmbedPageContext, type EmbedAuthState } from './embedStore';
 export { configureEmbedAuthStore, getJwtExpiry, isValidJwtShape } from './embed-auth';
 export { parseParentOrigins, isAllowedParentOrigin, isEmbeddedFrame } from './embed-env';

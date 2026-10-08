@@ -96,7 +96,13 @@ function EmbedStatusView({
     );
   }
 
-  const title = state === 'timeout' ? '等待宿主鉴权超时' : '嵌入鉴权失败';
+  const isRefreshFail = Boolean(error && error.includes('续期'));
+  const title =
+    state === 'timeout'
+      ? '等待宿主鉴权超时'
+      : isRefreshFail
+        ? '需重新登录'
+        : '嵌入鉴权失败';
   return (
     <div className="flex flex-1 flex-col items-center justify-center gap-3 px-6 text-center">
       <Alert variant="destructive" className="max-w-md rounded-md">
@@ -104,8 +110,9 @@ function EmbedStatusView({
         <AlertDescription className="break-all text-xs">{error ?? '未知错误'}</AlertDescription>
       </Alert>
       <p className="max-w-md text-[11px] text-muted-foreground/60">
-        请确认父页已配置 VITE_PARENT_ORIGINS（逗号分隔的父域白名单），且父页已先调 POST
-        /api/v1/embed/identity/exchange 兑换 MIS JWT 并回传 AUTH_TOKEN。
+        {isRefreshFail
+          ? '宿主未在时限内响应 AUTH_TOKEN_REQUEST。请在父系统重新登录后刷新本页。'
+          : '请确认父页已配置 VITE_PARENT_ORIGINS（逗号分隔的父域白名单），且父页已先调 POST /api/v1/embed/identity/exchange 兑换 MIS JWT 并回传 AUTH_TOKEN。'}
         {hostId && hostId !== 'anon' ? `（宿主：${hostId}）` : null}
       </p>
     </div>

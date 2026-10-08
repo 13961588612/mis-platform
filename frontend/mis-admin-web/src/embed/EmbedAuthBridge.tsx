@@ -5,21 +5,28 @@
  * - iframe 加载后发 `AUTH_READY` 通知父页
  * - 父页回 `AUTH_TOKEN`（外部系统先调 BFF POST /api/v1/embed/identity/exchange 换的 MIS JWT）
  * - 父页回 `PAGE_CONTEXT`（hostId / embedMode / contextRef / sessionHint 扩展）
+ * - 临期发 `AUTH_TOKEN_REQUEST`；父页再推 `AUTH_TOKEN` 热替换（session 不变）
  *
  * <p>安全（§5.3）：
  * - 只接受 `VITE_PARENT_ORIGINS` 白名单内 origin（空白名单 = 拒绝一切）
  * - token 结构/有效期不可验 → 明确拒绝 + 告警日志（Gateway 才是验签权威）
- * - 父页超时无响应 → timeout 错误态
+ * - 父页超时无响应 → timeout / 续期失败错误态
  */
 
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { isAllowedParentOrigin } from './embed-env';
 import { isValidJwtShape } from './embed-auth';
 import { sanitizeHostId } from './embed-session';
 import { useEmbedStore, type EmbedPageContext } from './embedStore';
 
-/** 等待父页 AUTH_TOKEN 的超时阈值（ms）。 */
+/** 等待父页首个 AUTH_TOKEN 的超时阈值（ms）。 */
 export const EMBED_AUTH_TIMEOUT_MS = 10_000;
+
+/** 提前多久向父页请求续期（ms）。 */
+export const EMBED_TOKEN_REFRESH_LEAD_MS = 5 * 60 * 1000;
+
+/** 等待父页响应 AUTH_TOKEN_REQUEST 的超时（ms）。 */
+export const EMBED_TOKEN_REFRESH_TIMEOUT_MS = 15_000;
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return value != null && typeof value === 'object' && !Array.isArray(value);
@@ -44,13 +51,62 @@ function parsePageContext(raw: unknown): EmbedPageContext | null {
   };
 }
 
+function requestTokenRefresh(parentOrigin: string): void {
+  try {
+    window.parent?.postMessage(
+      { type: 'AUTH_TOKEN_REQUEST', reason: 'expiring' },
+      parentOrigin,
+    );
+  } catch {
+    /* cross-origin 受限时忽略 */
+  }
+}
+
 export function EmbedAuthBridge(): null {
   const setAuthenticated = useEmbedStore((s) => s.setAuthenticated);
+  const refreshToken = useEmbedStore((s) => s.refreshToken);
   const setPageContext = useEmbedStore((s) => s.setPageContext);
   const setRejected = useEmbedStore((s) => s.setRejected);
   const setTimedOut = useEmbedStore((s) => s.setTimedOut);
+  const setRefreshPending = useEmbedStore((s) => s.setRefreshPending);
+
+  const refreshTimerRef = useRef<number | null>(null);
+  const refreshWaitRef = useRef<number | null>(null);
 
   useEffect(() => {
+    const clearRefreshTimers = (): void => {
+      if (refreshTimerRef.current != null) {
+        window.clearTimeout(refreshTimerRef.current);
+        refreshTimerRef.current = null;
+      }
+      if (refreshWaitRef.current != null) {
+        window.clearTimeout(refreshWaitRef.current);
+        refreshWaitRef.current = null;
+      }
+    };
+
+    const scheduleRefresh = (expiresAt: number | null): void => {
+      clearRefreshTimers();
+      if (expiresAt == null || !Number.isFinite(expiresAt)) return;
+
+      const fireAt = expiresAt - EMBED_TOKEN_REFRESH_LEAD_MS;
+      const delay = Math.max(0, fireAt - Date.now());
+
+      refreshTimerRef.current = window.setTimeout(() => {
+        const { authState, parentOrigin } = useEmbedStore.getState();
+        if (authState !== 'authenticated' || !parentOrigin) return;
+
+        setRefreshPending(true);
+        requestTokenRefresh(parentOrigin);
+
+        refreshWaitRef.current = window.setTimeout(() => {
+          if (useEmbedStore.getState().refreshPending) {
+            setRejected('令牌续期超时，请重新登录宿主系统');
+          }
+        }, EMBED_TOKEN_REFRESH_TIMEOUT_MS);
+      }, delay);
+    };
+
     const handler = (event: MessageEvent): void => {
       const data = event.data as { type?: unknown; token?: unknown; context?: unknown } | null;
       if (data == null || typeof data.type !== 'string') return;
@@ -74,7 +130,16 @@ export function EmbedAuthBridge(): null {
           setRejected('AUTH_TOKEN 无效或已过期');
           return;
         }
-        setAuthenticated(data.token, event.origin);
+
+        const prev = useEmbedStore.getState();
+        if (prev.authState === 'authenticated' && prev.parentOrigin === event.origin) {
+          // 续期热替换：保持 session，只换 token
+          refreshToken(data.token);
+        } else {
+          setAuthenticated(data.token, event.origin);
+        }
+        const expiresAt = useEmbedStore.getState().tokenExpiresAt;
+        scheduleRefresh(expiresAt);
         return;
       }
 
@@ -101,6 +166,7 @@ export function EmbedAuthBridge(): null {
     return () => {
       window.removeEventListener('message', handler);
       window.clearTimeout(timeout);
+      clearRefreshTimers();
     };
     // 依赖均为 zustand 稳定 action，仅挂载一次
     // eslint-disable-next-line react-hooks/exhaustive-deps

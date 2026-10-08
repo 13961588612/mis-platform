@@ -107,7 +107,7 @@ export interface CopilotPanelProps {
   expanded?: boolean;
   /** 切换放大 / 还原。 */
   onToggleExpanded: () => void;
-  /** 放大模式下「关闭 Copilot」的回调（回到普通关闭态）。 */
+  /** 「关闭 Copilot」回调（普通 Sheet / 放大全屏共用；有则在标题栏右侧渲染关闭钮）。 */
   onRequestClose?: () => void;
 }
 
@@ -482,31 +482,48 @@ export function CopilotPanel({
 
         {/* 右侧 / 下方：聊天主区 */}
         <div className="flex min-h-0 flex-1 flex-col">
-          {/* 头部 */}
+          {/* 单层标题栏：标题 + 连接状态 + 放大/新建/关闭 */}
           <div className="flex shrink-0 items-center gap-2 border-b px-4 py-2.5">
-            <Sparkles className="h-4 w-4 text-primary" />
-            <span className="text-sm font-semibold">AI Copilot</span>
-            <span className="ml-auto flex items-center gap-2">{statusBadge}</span>
-            <Button
-              type="button"
-              size="icon"
-              variant="ghost"
-              className="h-7 w-7"
-              title={expanded ? '还原' : '放大'}
-              onClick={onToggleExpanded}
-            >
-              {expanded ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
-            </Button>
-            <Button
-              type="button"
-              size="icon"
-              variant="ghost"
-              className="h-7 w-7"
-              title="新建会话"
-              onClick={handleNewSession}
-            >
-              <MessageSquarePlus className="h-4 w-4" />
-            </Button>
+            <Sparkles className="h-4 w-4 shrink-0 text-primary" />
+            <span className="truncate text-sm font-semibold">AI Copilot</span>
+            <span className="ml-auto flex shrink-0 items-center gap-1.5">
+              {statusBadge}
+              <Button
+                type="button"
+                size="icon"
+                variant="ghost"
+                className="h-7 w-7"
+                title={expanded ? '还原' : '放大'}
+                aria-label={expanded ? '还原' : '放大'}
+                onClick={onToggleExpanded}
+              >
+                {expanded ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
+              </Button>
+              <Button
+                type="button"
+                size="icon"
+                variant="ghost"
+                className="h-7 w-7"
+                title="新建会话"
+                aria-label="新建会话"
+                onClick={handleNewSession}
+              >
+                <MessageSquarePlus className="h-4 w-4" />
+              </Button>
+              {onRequestClose ? (
+                <Button
+                  type="button"
+                  size="icon"
+                  variant="ghost"
+                  className="h-7 w-7"
+                  title="关闭"
+                  aria-label="关闭 Copilot"
+                  onClick={onRequestClose}
+                >
+                  <X className="h-4 w-4" />
+                </Button>
+              ) : null}
+            </span>
           </div>
 
           {/* 错误条（常驻，非 toast） */}

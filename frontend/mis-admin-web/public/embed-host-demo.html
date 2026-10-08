@@ -1,0 +1,315 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>MIS Copilot Embed Host Demo</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --bg: #f4f6f8;
+        --card: #fff;
+        --border: #d8dee6;
+        --text: #1a2332;
+        --muted: #5b6b7c;
+        --accent: #2563eb;
+        --danger: #b91c1c;
+        font-family: "Segoe UI", system-ui, sans-serif;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--text);
+        min-height: 100vh;
+      }
+      header {
+        padding: 1rem 1.25rem;
+        border-bottom: 1px solid var(--border);
+        background: var(--card);
+      }
+      header h1 {
+        margin: 0;
+        font-size: 1.1rem;
+        font-weight: 650;
+      }
+      header p {
+        margin: 0.35rem 0 0;
+        color: var(--muted);
+        font-size: 0.85rem;
+      }
+      main {
+        display: grid;
+        grid-template-columns: minmax(280px, 1fr) 420px;
+        gap: 1rem;
+        padding: 1rem;
+        max-width: 1100px;
+        margin: 0 auto;
+      }
+      @media (max-width: 860px) {
+        main { grid-template-columns: 1fr; }
+      }
+      .panel {
+        background: var(--card);
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        padding: 1rem;
+      }
+      label {
+        display: block;
+        font-size: 0.75rem;
+        color: var(--muted);
+        margin: 0.65rem 0 0.25rem;
+      }
+      input, textarea, select, button {
+        font: inherit;
+      }
+      input, textarea, select {
+        width: 100%;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 0.5rem 0.65rem;
+        background: #fff;
+      }
+      textarea { min-height: 5.5rem; resize: vertical; font-family: ui-monospace, monospace; font-size: 0.8rem; }
+      .row { display: flex; gap: 0.5rem; flex-wrap: wrap; margin-top: 0.85rem; }
+      button {
+        border: 0;
+        border-radius: 8px;
+        padding: 0.5rem 0.85rem;
+        background: var(--accent);
+        color: #fff;
+        cursor: pointer;
+      }
+      button.secondary { background: #e8eef7; color: var(--text); }
+      button:disabled { opacity: 0.55; cursor: not-allowed; }
+      #log {
+        margin-top: 0.85rem;
+        max-height: 280px;
+        overflow: auto;
+        background: #0f172a;
+        color: #e2e8f0;
+        border-radius: 8px;
+        padding: 0.75rem;
+        font: 0.75rem/1.45 ui-monospace, monospace;
+        white-space: pre-wrap;
+        word-break: break-all;
+      }
+      .frame-wrap {
+        background: var(--card);
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        overflow: hidden;
+        min-height: 640px;
+        display: flex;
+        flex-direction: column;
+      }
+      .frame-wrap header {
+        border: 0;
+        border-bottom: 1px solid var(--border);
+        padding: 0.65rem 0.85rem;
+      }
+      iframe {
+        flex: 1;
+        width: 100%;
+        min-height: 600px;
+        border: 0;
+        background: #fff;
+      }
+      .hint { font-size: 0.78rem; color: var(--muted); margin-top: 0.5rem; }
+      .err { color: var(--danger); }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>MIS Copilot · Embed Host Demo</h1>
+      <p>
+        模拟外部系统父页：监听 <code>AUTH_READY</code> /
+        <code>AUTH_TOKEN_REQUEST</code> / <code>A2UI_EVENT</code>，回推令牌与上下文。
+        文档见 <code>docs/integration/embed-copilot.md</code>。
+      </p>
+    </header>
+    <main>
+      <section class="panel">
+        <label for="embedOrigin">Embed 页 origin（MIS Web）</label>
+        <input id="embedOrigin" value="" placeholder="http://localhost:5173" />
+
+        <label for="hostId">hostId</label>
+        <input id="hostId" value="embed-demo" />
+
+        <label for="misJwt">MIS JWT（本地联调可粘贴登录后的 accessToken；生产应由后端 exchange）</label>
+        <textarea id="misJwt" placeholder="eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9..."></textarea>
+
+        <label for="permissions">permissions（逗号分隔，可选）</label>
+        <input id="permissions" value="agent:chat:use,approval:view,approval:decide,form:submit" />
+
+        <label for="contextRef">contextRef JSON</label>
+        <textarea id="contextRef">{
+  "pageId": "demo-home",
+  "pageName": "Embed Host Demo",
+  "moduleCode": "demo",
+  "orgId": "1001"
+}</textarea>
+
+        <div class="row">
+          <button type="button" id="btnLoad">加载 / 重载 iframe</button>
+          <button type="button" id="btnPush" class="secondary">手动推送 TOKEN</button>
+          <button type="button" id="btnClearLog" class="secondary">清空日志</button>
+        </div>
+        <p class="hint">
+          本页与 iframe 建议同 origin（Vite 托管 <code>/embed-host-demo.html</code>），
+          且 <code>VITE_PARENT_ORIGINS</code> 包含本页 origin。密钥请勿写入此页。
+        </p>
+        <div id="log" aria-live="polite"></div>
+      </section>
+
+      <section class="frame-wrap">
+        <header>
+          <strong>iframe · /embed/chat</strong>
+          <div class="hint" id="frameStatus">未加载</div>
+        </header>
+        <iframe
+          id="copilot"
+          title="MIS Copilot"
+          sandbox="allow-scripts allow-same-origin allow-forms"
+        ></iframe>
+      </section>
+    </main>
+
+    <script>
+      (function () {
+        const $ = (id) => document.getElementById(id);
+        const logEl = $('log');
+        const frame = $('copilot');
+        const statusEl = $('frameStatus');
+
+        function defaultOrigin() {
+          return window.location.origin;
+        }
+
+        $('embedOrigin').value = defaultOrigin();
+
+        function log(msg, isErr) {
+          const line = '[' + new Date().toISOString().slice(11, 19) + '] ' + msg;
+          const span = document.createElement('div');
+          if (isErr) span.className = 'err';
+          span.textContent = line;
+          logEl.appendChild(span);
+          logEl.scrollTop = logEl.scrollHeight;
+        }
+
+        function parseContextRef() {
+          try {
+            return JSON.parse($('contextRef').value);
+          } catch (e) {
+            log('contextRef JSON 无效: ' + e, true);
+            return { pageId: 'demo-home', moduleCode: 'demo' };
+          }
+        }
+
+        function permissions() {
+          return $('permissions')
+            .value.split(',')
+            .map((s) => s.trim())
+            .filter(Boolean);
+        }
+
+        function pushAuth(reason) {
+          const token = $('misJwt').value.trim();
+          const target = $('embedOrigin').value.trim() || defaultOrigin();
+          if (!token) {
+            log('缺少 MIS JWT，无法推送 AUTH_TOKEN', true);
+            statusEl.textContent = '等待粘贴 JWT';
+            return;
+          }
+          if (!frame.contentWindow) {
+            log('iframe 未就绪', true);
+            return;
+          }
+          frame.contentWindow.postMessage({ type: 'AUTH_TOKEN', token }, target);
+          frame.contentWindow.postMessage(
+            {
+              type: 'PAGE_CONTEXT',
+              context: {
+                hostId: $('hostId').value.trim() || 'embed-demo',
+                embedMode: 'iframe',
+                route: '/embed-host-demo',
+                module: 'demo',
+                title: 'Embed Host Demo',
+                contextRef: parseContextRef(),
+                permissions: permissions(),
+              },
+            },
+            target,
+          );
+          log('已推送 AUTH_TOKEN + PAGE_CONTEXT' + (reason ? '（' + reason + '）' : ''));
+          statusEl.textContent = '已推送鉴权';
+        }
+
+        function loadFrame() {
+          const origin = $('embedOrigin').value.trim() || defaultOrigin();
+          const hostId = encodeURIComponent($('hostId').value.trim() || 'embed-demo');
+          const src = origin.replace(/\/$/, '') + '/embed/chat?hostId=' + hostId;
+          frame.src = src;
+          statusEl.textContent = '加载中: ' + src;
+          log('加载 iframe: ' + src);
+        }
+
+        window.addEventListener('message', (event) => {
+          const expected = $('embedOrigin').value.trim() || defaultOrigin();
+          if (event.origin !== expected) {
+            log('忽略非预期 origin: ' + event.origin);
+            return;
+          }
+          const data = event.data || {};
+          const type = data.type;
+          if (!type) return;
+
+          if (type === 'AUTH_READY') {
+            log('收到 AUTH_READY');
+            pushAuth('AUTH_READY');
+            return;
+          }
+          if (type === 'AUTH_TOKEN_REQUEST') {
+            log('收到 AUTH_TOKEN_REQUEST: ' + JSON.stringify(data.reason || data));
+            pushAuth('续期');
+            return;
+          }
+          if (type === 'A2UI_EVENT') {
+            log('收到 A2UI_EVENT: ' + JSON.stringify(data.event || {}));
+            // Demo：回写成功，真实宿主应调用自有业务 API
+            if (frame.contentWindow) {
+              frame.contentWindow.postMessage(
+                {
+                  type: 'A2UI_EVENT_RESULT',
+                  eventId: data.eventId,
+                  ok: true,
+                  data: { demo: true, echo: data.event },
+                },
+                expected,
+              );
+              log('已回写 A2UI_EVENT_RESULT ok=true');
+            }
+          }
+        });
+
+        $('btnLoad').addEventListener('click', loadFrame);
+        $('btnPush').addEventListener('click', () => pushAuth('手动'));
+        $('btnClearLog').addEventListener('click', () => {
+          logEl.textContent = '';
+        });
+
+        // 若 URL 带 ?token= 便于本地粘贴后刷新（勿用于生产）
+        const params = new URLSearchParams(location.search);
+        if (params.get('token')) {
+          $('misJwt').value = params.get('token');
+        }
+        if (params.get('autoload') === '1') {
+          loadFrame();
+        }
+
+        log('Demo 就绪。请粘贴 MIS JWT 后点击「加载 / 重载 iframe」。');
+      })();
+    </script>
+  </body>
+</html>

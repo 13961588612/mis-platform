@@ -252,20 +252,22 @@ export function CopilotPanel({ open, onOpenChange }: CopilotPanelProps) {
           <SheetContent
             side="right"
             forceMount
+            showCloseButton={false}
             className="flex h-[100dvh] max-h-[100dvh] w-full max-w-xl flex-col overflow-hidden p-0 sm:max-w-xl"
           >
-            <SheetHeader className="shrink-0">
-              <SheetTitle className="flex items-center gap-2">
-                <Sparkles className="h-4 w-4 text-primary" />
-                AI Copilot
-              </SheetTitle>
+            {/* a11y：标题/描述留给屏幕阅读器；可视标题栏由 CopilotPanel 统一渲染 */}
+            <SheetHeader className="sr-only">
+              <SheetTitle>AI Copilot</SheetTitle>
               <SheetDescription>原生对话 · A2UI 动态界面 · 直连 Agent 网关</SheetDescription>
             </SheetHeader>
-            {/* flex-1 min-h-0 承接 header 之后的剩余高度，令 CopilotPanel 的 h-full 不溢出外层 */}
             <div className="flex min-h-0 flex-1 flex-col">
               <Suspense fallback={<CopilotPanelFallback />}>
                 {open ? (
-                  <CopilotPanelLazy expanded={false} onToggleExpanded={toggleExpanded} />
+                  <CopilotPanelLazy
+                    expanded={false}
+                    onToggleExpanded={toggleExpanded}
+                    onRequestClose={() => handleOpenChange(false)}
+                  />
                 ) : null}
               </Suspense>
             </div>

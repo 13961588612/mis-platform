@@ -41,8 +41,10 @@ const SheetContent = React.forwardRef<
     side?: 'right' | 'left';
     /** 关闭时也保留 DOM（如 Copilot iframe 需保持会话状态） */
     forceMount?: true;
+    /** 是否渲染右上角默认关闭按钮；自定义标题栏时可关掉避免双层。默认 true。 */
+    showCloseButton?: boolean;
   }
->(({ className, children, side = 'right', forceMount, onPointerDownOutside, onFocusOutside, onInteractOutside, ...props }, ref) => (
+>(({ className, children, side = 'right', forceMount, showCloseButton = true, onPointerDownOutside, onFocusOutside, onInteractOutside, ...props }, ref) => (
   <SheetPortal forceMount={forceMount}>
     <SheetOverlay forceMount={forceMount} />
     <DialogPrimitive.Content
@@ -74,10 +76,12 @@ const SheetContent = React.forwardRef<
       {...props}
     >
       {children}
-      <DialogPrimitive.Close className="absolute right-3 top-3 rounded-md p-1 text-muted-foreground hover:bg-accent hover:text-foreground">
-        <X className="h-4 w-4" />
-        <span className="sr-only">关闭</span>
-      </DialogPrimitive.Close>
+      {showCloseButton ? (
+        <DialogPrimitive.Close className="absolute right-3 top-3 rounded-md p-1 text-muted-foreground hover:bg-accent hover:text-foreground">
+          <X className="h-4 w-4" />
+          <span className="sr-only">关闭</span>
+        </DialogPrimitive.Close>
+      ) : null}
     </DialogPrimitive.Content>
   </SheetPortal>
 ));

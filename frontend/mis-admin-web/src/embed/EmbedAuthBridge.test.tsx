@@ -10,7 +10,11 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { render, act } from '@testing-library/react';
-import { EmbedAuthBridge, EMBED_AUTH_TIMEOUT_MS } from './EmbedAuthBridge';
+import {
+  EmbedAuthBridge,
+  EMBED_AUTH_TIMEOUT_MS,
+  EMBED_TOKEN_REFRESH_TIMEOUT_MS,
+} from './EmbedAuthBridge';
 import { useEmbedStore } from './embedStore';
 import { useAuthStore } from '@/stores/auth-store';
 
@@ -143,5 +147,55 @@ describe('EmbedAuthBridge 鉴权态机', () => {
     const ctx = useEmbedStore.getState().pageContext;
     expect(ctx?.hostId).toBe('crmonmouseoverx');
     expect(ctx?.embedMode).toBe('iframe'); // 非 standalone → 回退 iframe
+  });
+
+  it('临期发 AUTH_TOKEN_REQUEST；父页再推 TOKEN → 热替换且 session 保持 authenticated', () => {
+    vi.useFakeTimers();
+    const spy = vi.fn();
+    window.postMessage = spy;
+
+    render(<EmbedAuthBridge />);
+    // exp 仅剩 60s → lead=5min → 立即调度续期
+    const shortLived = makeJwt({ exp: Math.floor(Date.now() / 1000) + 60 });
+    post({ type: 'AUTH_TOKEN', token: shortLived }, PARENT_ORIGIN);
+    expect(useEmbedStore.getState().authState).toBe('authenticated');
+
+    act(() => {
+      vi.advanceTimersByTime(1);
+    });
+    expect(spy).toHaveBeenCalledWith(
+      { type: 'AUTH_TOKEN_REQUEST', reason: 'expiring' },
+      PARENT_ORIGIN,
+    );
+    expect(useEmbedStore.getState().refreshPending).toBe(true);
+
+    const renewed = makeJwt({ exp: Math.floor(Date.now() / 1000) + 3600 });
+    post({ type: 'AUTH_TOKEN', token: renewed }, PARENT_ORIGIN);
+    expect(useEmbedStore.getState().authState).toBe('authenticated');
+    expect(useEmbedStore.getState().token).toBe(renewed);
+    expect(useEmbedStore.getState().parentOrigin).toBe(PARENT_ORIGIN);
+    expect(useEmbedStore.getState().refreshPending).toBe(false);
+    expect(useAuthStore.getState().accessToken).toBe(renewed);
+  });
+
+  it('AUTH_TOKEN_REQUEST 超时无响应 → rejected（需重新登录）', () => {
+    vi.useFakeTimers();
+    window.postMessage = vi.fn();
+
+    render(<EmbedAuthBridge />);
+    const shortLived = makeJwt({ exp: Math.floor(Date.now() / 1000) + 60 });
+    post({ type: 'AUTH_TOKEN', token: shortLived }, PARENT_ORIGIN);
+
+    act(() => {
+      vi.advanceTimersByTime(1);
+    });
+    expect(useEmbedStore.getState().refreshPending).toBe(true);
+
+    act(() => {
+      vi.advanceTimersByTime(EMBED_TOKEN_REFRESH_TIMEOUT_MS + 1);
+    });
+    expect(useEmbedStore.getState().authState).toBe('rejected');
+    expect(useEmbedStore.getState().authError).toContain('续期');
+    expect(useEmbedStore.getState().refreshPending).toBe(false);
   });
 });
