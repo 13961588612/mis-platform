@@ -176,6 +176,37 @@ describe('M-G6 scope 页面（v1.12 重构）', () => {
     expect(await screen.findByText('张三')).toBeTruthy();
   });
 
+  it('范围策略可显示 global，并支持「只看全局」过滤', async () => {
+    m.listIqdScopePolicies.mockResolvedValueOnce([
+      {
+        id: 1,
+        subject_type: 'global',
+        subject_id: 'global',
+        subject_name: '全局',
+        item_key: 'pg.public.orders',
+        allow: true,
+        effective: true,
+      },
+      {
+        id: 2,
+        subject_type: 'role',
+        subject_id: 'SALES',
+        subject_name: '销售',
+        item_key: 'pg.public.orders',
+        allow: true,
+        effective: true,
+      },
+    ] as never);
+    renderPage();
+
+    expect(await screen.findByText('销售')).toBeTruthy();
+    expect(screen.getAllByText('全局').length).toBeGreaterThan(0);
+
+    fireEvent.change(screen.getByLabelText('主体类型过滤'), { target: { value: 'global' } });
+    expect(screen.getAllByText('全局').length).toBeGreaterThan(0);
+    expect(screen.queryByText('销售')).toBeNull();
+  });
+
   it('范围策略：多选行后一起删除', async () => {
     m.listIqdScopePolicies.mockResolvedValueOnce([
       { id: 11, subject_type: 'role', subject_id: 'SALES', subject_name: '销售', item_key: 'pg.public.orders', allow: true, effective: true },

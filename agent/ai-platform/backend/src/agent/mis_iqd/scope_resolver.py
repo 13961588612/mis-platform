@@ -1348,13 +1348,16 @@ class ScopeResolver:
     async def _load_allowed_and_row_scope(
         self, identity: AskIdentity, connection_id: int | None
     ) -> tuple[list[str], dict[str, list[dict[str, Any]]]]:
-        """从配置缓存读取允许键集合与行级规则（scope_policy ∩ acl ∩ in_scope）。
+        """从配置缓存读取允许键集合与行级规则。
 
-        - scope_policy（治理层）：subject_type=global 或命中主体 → 表进入可问集合；
-        - table_acl（授权层）：action=ask 授权 → 该主体可问；row_scope 非空 → 行级条件；
-        - iqd_catalog_item.in_scope：治理勾选（与 global scope_policy 一致，防御性求交）。
-        - 允许集合 = 治理集 ∩ (主体 ask 授权集)；有 ACL 行时严格求交（越权 45204）；
-          无 ACL 行时按治理集放行（W1 期无 ACL 数据的空窗兼容）。
+        口径（对齐 architecture「最终可问 = 全局白名单 ∩ 主体范围模板」）：
+
+        - **授权（grant）**：仅 ``iqd_scope_policy`` 中命中当前身份的主体行
+          （role / dept / user / store）。``subject_type=global`` **不单独放行任何人**。
+        - **白名单（outer）**：``iqd_catalog_item.in_scope`` 与 global 策略行防御性求交；
+          清单「纳入问数」写入的 global 只扩充/约束白名单，不会让未配角色的人可问。
+        - **空窗兼容**：``in_scope`` 尚未配置（空集）时，不以外层空集清零主体授权。
+        - **行级**：``iqd_table_acl.row_scope`` 只叠加行条件，不参与 grant。
 
         Returns:
             ``(allowed_item_keys, row_scope_rules, resolved_connection_id)``。
@@ -1381,9 +1384,9 @@ class ScopeResolver:
             logger.warning("IQD config cache unavailable; fail-closed", error=str(exc))
             raise ScopeDeniedError("当前角色无可问数据范围") from exc
 
-        # ---- 治理层：global scope_policy ∩ catalog in_scope（两表一致，防御性求交）
-        policy_keys: set[str] = set()
         subject_keys = _subject_keys(identity)
+        subject_allow: set[str] = set()
+        global_allow: set[str] = set()
         for raw in policies_raw:
             if not isinstance(raw, dict):
                 continue
@@ -1394,9 +1397,12 @@ class ScopeResolver:
             item_key = str(raw.get("item_key") or "")
             if not item_key:
                 continue
-            if stype == SUBJECT_GLOBAL or (stype, sid) in subject_keys:
-                if bool(raw.get("allow", True)):
-                    policy_keys.add(item_key)
+            if not bool(raw.get("allow", True)):
+                continue
+            if stype == SUBJECT_GLOBAL:
+                global_allow.add(item_key)
+            elif (stype, sid) in subject_keys:
+                subject_allow.add(item_key)
 
         in_scope_keys: set[str] = {
             str(item.get("item_key") or "")
@@ -1404,19 +1410,24 @@ class ScopeResolver:
             if isinstance(item, dict)
         }
         in_scope_keys.discard("")
-        # 治理层 = 策略集 ∩ 全局 in_scope（防御性求交，防两处表示漂移）。
-        # <p><b>空窗兼容</b>：`in_scope` 是「全局纳入问数范围」层，由**清单页**勾选维护；
-        # 新连接若尚未做全局勾选，`in_scope_keys` 为空。此时若仍求交会把主体（角色/部门/用户）
-        # 的范围模板与 ask ACL **整体清零** —— 表现为「范围页已授权、问数测试台却 0 张授权表」
-        # （2026-09-30 实测：连接 1790686095967 有 81 条 role 策略 + 3 条 ask ACL，但 in_scope=0）。
-        # 与下方 ACL 的“无 ACL 数据空窗”同源口径：**全局层未配置时不作为外层约束**，
-        # 由主体层（范围模板 ∪ ask ACL）放行；全局层一旦配置，仍严格求交。
-        governance = policy_keys & in_scope_keys if in_scope_keys else policy_keys
 
-        # ---- 行级范围（原表级 ACL 表）：只承载 row_scope，不再参与 grant 裁定。
-        # 2026-10-01 语义收敛（方案 A）：谁能问哪张表/哪个字段，只由 iqd_scope_policy
-        # （范围策略）负责；iqd_table_acl 收缩为「行级范围」专用——给已在范围内的对象
-        # 叠加 row_scope 行条件。故 allowed 直接取治理集，不再与 acl_ask 求交。
+        # 白名单：in_scope 与 global 防御性求交；任一侧未配置则不拿空集清零另一侧。
+        if in_scope_keys and global_allow:
+            whitelist: set[str] | None = in_scope_keys & global_allow
+        elif in_scope_keys:
+            whitelist = in_scope_keys
+        elif global_allow:
+            whitelist = global_allow
+        else:
+            whitelist = None  # 全局层未配置：不作为外层约束
+
+        # 必须有主体范围策略；global/in_scope 不能单独授予可问。
+        if whitelist is None:
+            governance = subject_allow
+        else:
+            governance = subject_allow & whitelist
+
+        # ---- 行级范围：只承载 row_scope，不参与 grant。
         row_scope_rules: dict[str, list[dict[str, Any]]] = {}
         for raw in acls_raw:
             if not isinstance(raw, dict):
@@ -1428,7 +1439,7 @@ class ScopeResolver:
             item_key = str(raw.get("item_key") or "")
             if not item_key:
                 continue
-            if (stype, sid) not in subject_keys and stype != SUBJECT_GLOBAL:
+            if (stype, sid) not in subject_keys:
                 continue
             row_scope = raw.get("row_scope")
             if row_scope:
@@ -1437,7 +1448,6 @@ class ScopeResolver:
                 )
 
         allowed = sorted(governance)
-        # 行级规则只对「范围内」对象生效；范围外对象的 row_scope 视为死行。
         row_scope_rules = {k: v for k, v in row_scope_rules.items() if k in allowed}
 
         return allowed, row_scope_rules, cid

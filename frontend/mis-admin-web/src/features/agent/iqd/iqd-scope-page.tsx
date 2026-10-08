@@ -10,10 +10,9 @@
  *       可多选）→ 逐个对象编辑「行级范围 row_scope」。</li>
  * </ul>
  *
- * <p><b>字段级可访问实现说明</b>：后端本期未提供列级 ACL 表，故字段选择以「同一 iqd_scope_policy /
- * iqd_table_acl 表 + 字段级 item_key」落库：一个对象一行、每个勾选字段再一行。运行时 Worker 仅按表级
- * item_key 消费（字段级行被治理集 ∩ 授权集过滤掉），因此对现网数据面安全无影响，同时满足配置面
- * 「字段可访问范围」的显式记录与回显。
+ * <p><b>字段级可访问实现说明</b>：后端本期未提供列级 ACL 表，故字段选择以「同一 iqd_scope_policy
+ * + 字段级 item_key」落库：一个对象一行、每个勾选字段再一行。列表「字段访问」列展示
+ * 「可访问 n · 不可访问 m（共 N）」；仅对象级、无字段子行时视为全部可访问。
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
@@ -111,13 +110,56 @@ interface DisplayRow {
   objectKind: ObjectKind;
   objectKey: string;
   objectName: string;
+  /**
+   * 已写入策略的可访问字段数；`undefined` 表示仅有对象级行、未配置字段级
+   * （展示为「全部可访问」）。
+   */
   fieldCount?: number;
+  /** 清单中该对象的字段总数（catalog）。 */
   fieldTotal?: number;
   action?: string;
   /** 已存字段级 itemKey（编辑回显用；仅范围策略用）。 */
   rawFieldKeys: string[];
   /** 行级范围 row_scope 原文（仅行级范围行）。 */
   rowScope?: string;
+}
+
+/** 范围策略「字段访问」列文案：可访问 / 不可访问 / 共 N，避免模糊的 a/b。 */
+function formatFieldAccessSummary(row: DisplayRow): { text: string; title: string; muted?: boolean } {
+  const total = row.fieldTotal;
+  if (total == null) {
+    return { text: '—', title: '清单中尚无该对象的字段元数据', muted: true };
+  }
+  if (total === 0) {
+    return { text: '无字段', title: '该对象在清单中没有可枚举字段', muted: true };
+  }
+  // 仅对象级策略、无字段级子行 → 视为对象下全部字段可访问
+  if (row.fieldCount == null) {
+    return {
+      text: `全部可访问（共 ${total}）`,
+      title: '未单独勾选字段，按对象级授权视为全部可访问',
+      muted: true,
+    };
+  }
+  const allowed = Math.min(Math.max(0, row.fieldCount), total);
+  const denied = total - allowed;
+  if (allowed === 0) {
+    return {
+      text: `全部不可访问（共 ${total}）`,
+      title: `清单共 ${total} 个字段，均未勾选为可访问`,
+      muted: true,
+    };
+  }
+  if (denied === 0) {
+    return {
+      text: `全部可访问（共 ${total}）`,
+      title: `清单共 ${total} 个字段，均已勾选为可访问`,
+    };
+  }
+  return {
+    text: `可访问 ${allowed} · 不可访问 ${denied}（共 ${total}）`,
+    title: `已勾选可访问 ${allowed} 个；未勾选（不可访问）${denied} 个；清单共 ${total} 个字段`,
+  };
 }
 
 interface FieldSelection {
@@ -662,6 +704,8 @@ function AddPermissionWizard({
 
   useEffect(() => {
     if (step !== 'fields') return;
+    // 编辑态已由 edit.selectedFieldKeys 回填；勿在「已清空」时再强制全选。
+    if (edit) return;
     setFieldSelection((prev) => {
       const next: FieldSelection = { ...prev };
       for (const obj of selectedObjects) {
@@ -671,7 +715,7 @@ function AddPermissionWizard({
       }
       return next;
     });
-  }, [step, selectedObjects]);
+  }, [step, selectedObjects, edit]);
 
   const toggleObject = (key: string) =>
     setSelectedKeys((prev) => {
@@ -731,11 +775,11 @@ function AddPermissionWizard({
         <DialogContent
           className={cn(
             'flex flex-col sm:max-w-3xl',
-            target === 'acl' ? 'h-[85vh]' : 'max-h-[90vh]',
+            target === 'acl' || step === 'fields' ? 'h-[85vh]' : 'max-h-[90vh]',
           )}
         >
           <DialogHeader>
-            <DialogTitle>{title}</DialogTitle>
+            <DialogTitle>{edit ? (target === 'policy' ? '修改可访问字段' : '修改行级范围') : title}</DialogTitle>
             <DialogDescription>
               {step === 'subject'
                 ? '第一步：选择主体（角色 / 用户）'
@@ -743,7 +787,7 @@ function AddPermissionWizard({
                   ? '第二步：选择权限对象（可多选；表 / 模型 / Cube）'
                   : target === 'acl'
                     ? '第三步：配置每个对象的行级范围 row_scope（留空=全行可见）'
-                    : '第三步：配置每个对象的可访问字段（默认全部选中）'}
+                    : '列出该表/模型的全部字段；勾选表示可访问（默认全部选中）'}
             </DialogDescription>
           </DialogHeader>
 
@@ -828,9 +872,7 @@ function AddPermissionWizard({
             {step === 'fields' ? (
               <div
                 className={cn(
-                  target === 'acl'
-                    ? 'flex h-full min-h-0 flex-col gap-3'
-                    : 'space-y-3',
+                  'flex h-full min-h-0 flex-col gap-3',
                 )}
               >
                 {selectedObjects.length === 0 ? (
@@ -839,21 +881,23 @@ function AddPermissionWizard({
                   selectedObjects.map((obj) => {
                     const selected =
                       fieldSelection[obj.itemKey] ?? new Set(obj.fields.map((f) => f.itemKey));
+                    const checkedCount = obj.fields.filter((f) => selected.has(f.itemKey)).length;
                     return (
                       <div
                         key={obj.itemKey}
-                        className={cn(
-                          'rounded-md border p-3',
-                          target === 'acl' && 'flex min-h-0 flex-1 flex-col',
-                        )}
+                        className="flex min-h-0 flex-1 flex-col rounded-md border p-3"
                       >
-                        <div className="mb-2 flex items-center gap-2">
+                        <div className="mb-2 flex shrink-0 items-center gap-2">
                           <Badge variant="secondary" className="rounded">
                             {OBJECT_TYPE_LABEL[obj.kind]}
                           </Badge>
                           <span className="text-sm font-medium">{obj.name}</span>
+                          <span className="font-mono text-xs text-muted-foreground">{obj.itemKey}</span>
                           {target === 'policy' ? (
                           <span className="ml-auto flex items-center gap-2 text-xs">
+                            <span className="text-muted-foreground">
+                              已选 {checkedCount}/{obj.fields.length}
+                            </span>
                             <button
                               type="button"
                               className="rounded border border-input px-2 py-0.5 hover:bg-accent"
@@ -886,17 +930,36 @@ function AddPermissionWizard({
                         ) : obj.fields.length === 0 ? (
                           <p className="text-xs text-muted-foreground">该对象暂无可选字段</p>
                         ) : (
-                          <div className="flex flex-wrap gap-x-4 gap-y-2">
-                            {obj.fields.map((f) => (
-                              <label key={f.itemKey} className="flex items-center gap-1.5 text-sm">
-                                <input
-                                  type="checkbox"
-                                  checked={selected.has(f.itemKey)}
-                                  onChange={() => toggleField(obj.itemKey, f.itemKey)}
-                                />
-                                <span>{f.name}</span>
-                              </label>
-                            ))}
+                          <div className="min-h-0 flex-1 space-y-0.5 overflow-auto rounded-md border p-1">
+                            {obj.fields.map((f) => {
+                              const on = selected.has(f.itemKey);
+                              return (
+                                <label
+                                  key={f.itemKey}
+                                  className={cn(
+                                    'flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-sm transition-colors hover:bg-accent/60',
+                                    on && 'bg-primary/5',
+                                  )}
+                                >
+                                  <input
+                                    type="checkbox"
+                                    aria-label={f.name}
+                                    checked={on}
+                                    onChange={() => toggleField(obj.itemKey, f.itemKey)}
+                                    className="shrink-0"
+                                  />
+                                  <span className="min-w-0 flex-1 truncate font-medium">{f.name}</span>
+                                  <span className="max-w-[55%] truncate font-mono text-xs text-muted-foreground">
+                                    {f.itemKey}
+                                  </span>
+                                  {on ? (
+                                    <Check className="h-3.5 w-3.5 shrink-0 text-primary" aria-hidden />
+                                  ) : (
+                                    <span className="inline-block h-3.5 w-3.5 shrink-0" aria-hidden />
+                                  )}
+                                </label>
+                              );
+                            })}
                           </div>
                         )}
                       </div>
@@ -972,6 +1035,10 @@ export function IqdScopePage() {
   const [selectedAclRows, setSelectedAclRows] = useState<Set<string>>(new Set());
   const [bulkDeleting, setBulkDeleting] = useState(false);
   const [roles, setRoles] = useState<RoleItem[]>([]);
+  /** 主体类型过滤：all | global | role | user */
+  const [subjectTypeFilter, setSubjectTypeFilter] = useState<'all' | 'global' | 'role' | 'user'>(
+    'all',
+  );
   const [roleFilter, setRoleFilter] = useState<string[]>([]);
   const [userKeyword, setUserKeyword] = useState('');
   const [loading, setLoading] = useState(false);
@@ -1085,25 +1152,29 @@ export function IqdScopePage() {
 
 
   const policyRows = useMemo<DisplayRow[]>(() => {
+    // 含 global（清单「纳入问数」同步）与角色/用户主体模板；用「主体类型」过滤可只看 global。
     const tops = rawPolicies.filter((p) => !fieldKeySet.has(p.item_key));
     const fieldsByObject = new Map<string, string[]>();
     for (const p of rawPolicies) {
       const owner = fieldToObject.get(p.item_key);
       if (!owner) continue;
-      const list = fieldsByObject.get(owner) ?? [];
+      const bucket = `${p.subject_type}:${p.subject_id}:${owner}`;
+      const list = fieldsByObject.get(bucket) ?? [];
       list.push(p.item_key);
-      fieldsByObject.set(owner, list);
+      fieldsByObject.set(bucket, list);
     }
     return tops.map<DisplayRow>((p, i) => {
       const kind = objectKindOf(p.item_key);
       const obj = objectFields.get(p.item_key);
-      const selected = fieldsByObject.get(p.item_key);
+      const selected = fieldsByObject.get(`${p.subject_type}:${p.subject_id}:${p.item_key}`);
       return {
         key: `pol-${p.id ?? i}`,
         id: p.id,
         subjectType: p.subject_type,
         subjectId: p.subject_id,
-        subjectName: p.subject_name || subjectName(p.subject_type, p.subject_id),
+        subjectName:
+          p.subject_name ||
+          (p.subject_type === 'global' ? '全局' : subjectName(p.subject_type, p.subject_id)),
         objectKind: kind,
         objectKey: p.item_key,
         objectName: obj?.name ?? shortName(p.item_key),
@@ -1138,6 +1209,11 @@ export function IqdScopePage() {
 
   const matchesFilter = useCallback(
     (row: DisplayRow) => {
+      if (subjectTypeFilter !== 'all' && row.subjectType !== subjectTypeFilter) {
+        return false;
+      }
+      // 只看全局时不再套角色/用户条件
+      if (subjectTypeFilter === 'global') return true;
       if (roleFilter.length > 0) {
         if (row.subjectType !== 'role') return false;
         if (!roleFilter.includes(row.subjectId)) return false;
@@ -1148,7 +1224,7 @@ export function IqdScopePage() {
       }
       return true;
     },
-    [roleFilter, userKeyword],
+    [subjectTypeFilter, roleFilter, userKeyword],
   );
 
   const filteredPolicyRows = useMemo(
@@ -1410,7 +1486,7 @@ export function IqdScopePage() {
             <th className="border-l border-border/60 px-3 py-2 font-bold">权限对象类型</th>
             <th className="border-l border-border/60 px-3 py-2 font-bold">对象名</th>
             <th className="border-l border-border/60 px-3 py-2 font-bold">
-              {variant === 'acl' ? '行级范围' : '可访问字段'}
+              {variant === 'acl' ? '行级范围' : '字段访问'}
             </th>
             {withAction ? (
               <th className="border-l border-border/60 px-3 py-2 font-bold">动作</th>
@@ -1447,7 +1523,16 @@ export function IqdScopePage() {
                   </td>
                 ) : null}
                 <td className="px-3 py-1.5">
-                  <Badge variant={row.subjectType === 'role' ? 'default' : 'info'} className="rounded">
+                  <Badge
+                    variant={
+                      row.subjectType === 'global'
+                        ? 'secondary'
+                        : row.subjectType === 'role'
+                          ? 'default'
+                          : 'info'
+                    }
+                    className="rounded"
+                  >
                     {SUBJECT_TYPE_LABEL[row.subjectType] ?? row.subjectType}
                   </Badge>
                 </td>
@@ -1487,14 +1572,21 @@ export function IqdScopePage() {
                         </span>
                       );
                     })()
-                  ) : row.fieldTotal == null ? (
-                    <span className="text-xs text-muted-foreground">—</span>
-                  ) : row.fieldCount == null ? (
-                    <span className="text-xs text-muted-foreground">全部（{row.fieldTotal}）</span>
                   ) : (
-                    <span className="text-xs">
-                      {row.fieldCount} / {row.fieldTotal}
-                    </span>
+                    (() => {
+                      const summary = formatFieldAccessSummary(row);
+                      return (
+                        <span
+                          className={cn(
+                            'text-xs',
+                            summary.muted && 'text-muted-foreground',
+                          )}
+                          title={summary.title}
+                        >
+                          {summary.text}
+                        </span>
+                      );
+                    })()
                   )}
                 </td>
                 {withAction ? (
@@ -1506,16 +1598,25 @@ export function IqdScopePage() {
                 ) : null}
                 {onEdit ? (
                   <td className="border-l border-border/60 px-3 py-1.5 text-right">
-                    <div className="inline-flex items-center gap-0.5">
-                      <button
-                        type="button"
-                        title="编辑"
-                        onClick={() => onEdit(row)}
-                        className="inline-flex h-6 w-6 items-center justify-center rounded text-muted-foreground hover:bg-accent hover:text-foreground"
+                    {row.subjectType === 'global' ? (
+                      <span
+                        className="text-[11px] text-muted-foreground"
+                        title="由清单「纳入问数」维护，此处只读"
                       >
-                        <Pencil className="h-3.5 w-3.5" />
-                      </button>
-                    </div>
+                        只读
+                      </span>
+                    ) : (
+                      <div className="inline-flex items-center gap-0.5">
+                        <button
+                          type="button"
+                          title="编辑"
+                          onClick={() => onEdit(row)}
+                          className="inline-flex h-6 w-6 items-center justify-center rounded text-muted-foreground hover:bg-accent hover:text-foreground"
+                        >
+                          <Pencil className="h-3.5 w-3.5" />
+                        </button>
+                      </div>
+                    )}
                   </td>
                 ) : null}
               </tr>
@@ -1530,7 +1631,7 @@ export function IqdScopePage() {
     <div className="flex h-full min-h-0 flex-col">
       <PageHeader
         title="问数范围与权限"
-        description="范围策略（授权：谁能问哪张表/字段） + 行级范围（row_scope 行条件注入）。"
+        description="可问 = 角色/用户范围策略 ∩ 清单「纳入问数」。仅勾纳入不会放行；须在本页为角色或用户配置策略。行级范围另配 row_scope。"
         breadcrumbs={buildAppBreadcrumbs({ app: 'agent', title: '问数范围与权限' })}
         actions={
           <div className="flex items-center gap-2">
@@ -1557,13 +1658,36 @@ export function IqdScopePage() {
 
         <div className="mb-3 flex flex-wrap items-center gap-3 rounded-lg border bg-card p-3">
           <div className="flex items-center gap-2">
+            <span className="text-xs font-medium text-muted-foreground">主体类型</span>
+            <select
+              className="h-9 rounded-md border border-input bg-background px-2 text-sm"
+              aria-label="主体类型过滤"
+              value={subjectTypeFilter}
+              onChange={(e) =>
+                setSubjectTypeFilter(e.target.value as 'all' | 'global' | 'role' | 'user')
+              }
+            >
+              <option value="all">全部</option>
+              <option value="global">只看全局</option>
+              <option value="role">只看角色</option>
+              <option value="user">只看用户</option>
+            </select>
+          </div>
+          <div className="flex items-center gap-2">
             <span className="text-xs font-medium text-muted-foreground">角色</span>
-            <FilterMultiSelect
-              options={roleOptions}
-              value={roleFilter}
-              onChange={(v) => setRoleFilter(Array.isArray(v) ? (v as string[]) : [])}
-              triggerClassName="w-64"
-            />
+            <div
+              className={cn(
+                (subjectTypeFilter === 'global' || subjectTypeFilter === 'user') &&
+                  'pointer-events-none opacity-50',
+              )}
+            >
+              <FilterMultiSelect
+                options={roleOptions}
+                value={roleFilter}
+                onChange={(v) => setRoleFilter(Array.isArray(v) ? (v as string[]) : [])}
+                triggerClassName="w-64"
+              />
+            </div>
           </div>
           <div className="flex items-center gap-2">
             <span className="text-xs font-medium text-muted-foreground">用户姓名</span>
@@ -1572,6 +1696,7 @@ export function IqdScopePage() {
               placeholder="按用户姓名过滤"
               value={userKeyword}
               onChange={(e) => setUserKeyword(e.target.value)}
+              disabled={subjectTypeFilter === 'global' || subjectTypeFilter === 'role'}
             />
           </div>
           <span className="text-xs text-muted-foreground">

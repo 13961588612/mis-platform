@@ -1,12 +1,13 @@
 """Scope resolution semantics after the 2026-10-01 方案 A convergence.
 
-Governance source of truth is `iqd_scope_policy` (role/global scope templates), intersected
-with the global `iqd_catalog_item.in_scope` layer WHEN that layer is configured. `iqd_table_acl`
-no longer participates in the grant decision at all -- it is repurposed to carry row-level
-`row_scope` only (see `docs/ai-fusion/wrenai/architecture.md` and scope_resolver history).
+Grant = subject-matched `iqd_scope_policy` (role/dept/user/store). `subject_type=global`
+and `iqd_catalog_item.in_scope` are outer whitelist only — they must NOT grant ask access
+by themselves (清单「纳入问数」自动写的 global 行尤其如此). `iqd_table_acl` only carries
+`row_scope`.
 
 These tests pin:
 - role (subject) policies drive the allow set;
+- global-only policies do not grant anyone;
 - an empty global in_scope layer does not nullify subject policies;
 - a configured global in_scope layer still acts as an outer constraint;
 - ACL rows do NOT shrink or grant the allowed set anymore.
@@ -131,6 +132,44 @@ async def test_configured_global_layer_still_intersects() -> None:
             policies=_role_policies(["t.orders", "t.secret"]),
             acls=[],
             in_scope=[{"item_key": "t.orders"}],  # global layer configured -> outer constraint applies
+        )
+    )
+    scope = await resolver.resolve(_ident(), 1)
+    assert scope.allowed_item_keys == ["t.orders"]
+
+
+def _global_policies(keys):
+    return [
+        {"subject_type": "global", "subject_id": "global", "item_key": k, "allow": 1, "effective": 1}
+        for k in keys
+    ]
+
+
+@pytest.mark.asyncio
+async def test_global_alone_does_not_grant() -> None:
+    """纳入问数同步的 global 行不能让未配角色/用户策略的人可问。"""
+    resolver = ScopeResolver(
+        config_client=_FakeConfig(
+            policies=_global_policies(["t.orders", "t.customers"]),
+            acls=[],
+            in_scope=[{"item_key": "t.orders"}, {"item_key": "t.customers"}],
+        )
+    )
+    with pytest.raises(IqdError):
+        await resolver.resolve(_ident(), 1)
+
+
+@pytest.mark.asyncio
+async def test_role_intersect_global_whitelist() -> None:
+    """主体策略 ∩ (in_scope ∩ global) 才可问。"""
+    resolver = ScopeResolver(
+        config_client=_FakeConfig(
+            policies=[
+                *_role_policies(["t.orders", "t.secret"]),
+                *_global_policies(["t.orders", "t.customers"]),
+            ],
+            acls=[],
+            in_scope=[{"item_key": "t.orders"}, {"item_key": "t.customers"}],
         )
     )
     scope = await resolver.resolve(_ident(), 1)
