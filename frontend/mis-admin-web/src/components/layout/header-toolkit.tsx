@@ -3,11 +3,12 @@ import { useNavigate } from 'react-router-dom';
 import { Bell, CheckSquare, ChevronRight, LayoutDashboard, Search } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { useAuthStore } from '@/stores/auth-store';
-import { fetchMyTasks, type TaskItem } from '@/lib/api/tasks';
-import { fetchInbox, type MessageItem } from '@/lib/api/messages';
+import { fetchMyTasks, fetchTaskStats, type TaskItem } from '@/lib/api/tasks';
+import { fetchInbox, fetchMessageStats, type MessageItem } from '@/lib/api/messages';
 import { cn } from '@/lib/utils';
+import { UnreadDot } from '@/components/common/unread-dot';
 
-/** 顶栏通知项：待办优先，其次未读消息。 */
+/** 顶栏通知项：待办优先，其次消息。 */
 interface NotificationItem {
   id: string;
   kind: 'task' | 'message';
@@ -26,10 +27,20 @@ interface HeaderToolkitProps {
 
 const TENANT_ID = '1';
 
+/** 铃铛数字的展示上限：超过 9 显示「9+」。 */
+function badgeText(n: number): string {
+  return n > 9 ? '9+' : String(n);
+}
+
 /**
  * 全局顶栏工具区：搜索（⌘K）、通知铃铛、工作台入口。
  *
- * <p>铃铛接真实数据（待办 + 未读消息），不再使用演示占位；工作台按钮回到门户。
+ * <p>铃铛接真实数据（待办 + 消息），不再使用演示占位；工作台按钮回到门户。
+ *
+ * <p>**数字一律取后端stats 接口的权威值**（`GET /tasks/stats` 的 pending、
+ * `GET /messages/stats` 的 unread），前端不做加总。改造前这里用
+ * `items.filter(n => !n.read).length` 前端假算，而列表接口 `size:4` 截断、
+ * 待办的 `read` 又恒为 false，导致消息超4 条时铃铛显示「3」而收件箱显示「57」。
  */
 export function HeaderToolkit({ onOpenCommand, className, showSearchPill = true }: HeaderToolkitProps) {
   const navigate = useNavigate();
@@ -38,9 +49,15 @@ export function HeaderToolkit({ onOpenCommand, className, showSearchPill = true 
 
   const [open, setOpen] = useState(false);
   const [items, setItems] = useState<NotificationItem[]>([]);
+  /** 待办待处理数（`GET /tasks/stats`.pending），铃铛数字的权威来源。 */
+  const [pendingCount, setPendingCount] = useState(0);
+  /** 消息未读数（`GET /messages/stats`.unread），铃铛数字的权威来源。 */
+  const [unreadCount, setUnreadCount] = useState(0);
 
   const load = useCallback(async () => {
     if (!userId) return;
+    const statsTask = fetchTaskStats(TENANT_ID, userId).catch(() => null);
+    const statsMsg = fetchMessageStats(TENANT_ID, userId).catch(() => null);
     try {
       const [tasks, messages] = await Promise.allSettled([
         fetchMyTasks({ tenantId: TENANT_ID, assigneeId: userId, status: 'PENDING', page: 1, size: 4 }),
@@ -56,7 +73,8 @@ export function HeaderToolkit({ onOpenCommand, className, showSearchPill = true 
             title: t.bizTitle,
             body: `${t.taskType} · 待你处理`,
             time: t.dueDate ? `截止 ${t.dueDate.replace('T', ' ').slice(5, 16)}` : '',
-            read: false,
+            // 待办列表接口不返回可靠的已读语义（历史实现恒为 false），这里不参与未读计算，
+            // 未读数字只看下面的 unreadCount（后端 stats 权威值）。
             to: '/task/pending',
           });
         }
@@ -75,6 +93,11 @@ export function HeaderToolkit({ onOpenCommand, className, showSearchPill = true 
         }
       }
       setItems(out.slice(0, 8));
+
+      // 统计与列表并行发出；任一失败都不影响铃铛可用（数字回落 0）。
+      const [st, sm] = await Promise.all([statsTask, statsMsg]);
+      setPendingCount(st?.pending ?? 0);
+      setUnreadCount(sm?.unread ?? 0);
     } catch {
       setItems([]);
     }
@@ -89,7 +112,9 @@ export function HeaderToolkit({ onOpenCommand, className, showSearchPill = true 
     void load();
   }, [open, load]);
 
-  const unread = items.filter((n) => !n.read).length;
+  // 未处理总数 = 待办待处理（权威 stats）+ 消息未读（权威 stats）。
+  // 两个后端计数器的直接呈现，不是「列表长度」的推算：列表只取 4 条做预览用。
+  const unread = pendingCount + unreadCount;
 
   return (
     <div className={cn('flex min-w-0 items-center gap-2', className)}>
@@ -143,7 +168,7 @@ export function HeaderToolkit({ onOpenCommand, className, showSearchPill = true 
           <Bell className="h-4 w-4" />
           {unread > 0 ? (
             <span className="absolute right-1 top-1 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-destructive px-1 text-[9px] font-semibold leading-none text-destructive-foreground">
-              {unread > 9 ? '9+' : unread}
+              {badgeText(unread)}
             </span>
           ) : null}
         </Button>
@@ -158,7 +183,9 @@ export function HeaderToolkit({ onOpenCommand, className, showSearchPill = true 
             <div className="absolute right-0 top-full z-50 mt-2 w-80 rounded-md border bg-popover p-1 shadow-card">
               <div className="flex items-center justify-between border-b px-3 py-2">
                 <span className="text-sm font-medium">待办与消息</span>
-                <span className="text-xs text-muted-foreground">{unread} 条未处理</span>
+                <span className="text-xs text-muted-foreground">
+                  待办 {pendingCount} · 未读 {unreadCount}
+                </span>
               </div>
               {items.length === 0 ? (
                 <div className="px-3 py-6 text-center text-xs text-muted-foreground">暂无待办或消息</div>
@@ -177,7 +204,7 @@ export function HeaderToolkit({ onOpenCommand, className, showSearchPill = true 
                         {n.kind === 'task' ? (
                           <CheckSquare className="mt-0.5 h-3.5 w-3.5 shrink-0 text-primary" />
                         ) : (
-                          <span className={cn('mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full', n.read ? 'bg-muted-foreground/25' : 'bg-primary')} />
+                          <UnreadDot read={Boolean(n.read)} className="mt-1 h-1.5 w-1.5" />
                         )}
                         <span className="min-w-0 flex-1">
                           <span className="flex items-center gap-1.5">
