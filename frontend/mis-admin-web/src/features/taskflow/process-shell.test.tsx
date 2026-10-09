@@ -8,13 +8,16 @@
  * 5. P0-7：批完自动续下一条（跳队列里的下一个流程实例，并带上 return path）
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter, Route, Routes, useLocation, type Location } from 'react-router-dom';
 import { ProcessShell } from './process-shell';
 import * as workflowApi from '@/lib/api/workflow';
 import * as tasksApi from '@/lib/api/tasks';
 import api from '@/lib/api/client';
 import { useAuthStore } from '@/stores/auth-store';
+import { __resetRegistryForTest, registerForms } from '@/features/biz/forms/registry';
+import { __setFormLoadersForTest } from '@/features/biz/forms/forms/form-loaders';
+import type { FormComponent } from '@/features/biz/forms/types';
 
 vi.mock('@/lib/api/workflow', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/api/workflow')>();
@@ -156,7 +159,7 @@ describe('ProcessShell', () => {
     );
     expect((await screen.findAllByText('PO-001')).length).toBeGreaterThan(0);
     expect(screen.getByText('主管审批')).toBeTruthy();
-    expect(screen.getByText('业务数据（只读）')).toBeTruthy();
+    expect(screen.getByText('业务表单')).toBeTruthy();
     expect(screen.getByText('PURCHASE_ORDER')).toBeTruthy();
   });
 
@@ -257,5 +260,135 @@ describe('ProcessShell', () => {
 
     expect(await screen.findByText(/待处理队列已清空/)).toBeTruthy();
     expect(screen.getByText('查看已办')).toBeTruthy();
+  });
+});
+
+/**
+ * T3.2：套壳接入后的结构保证。
+ *
+ * 这组断言的价值在于它们是**结构性的**，不是快照式的：
+ * 「审批栏在套壳之外」这件事一旦被破坏，表现是审批功能整体不可用，
+ * 而肉眼看 UI 很容易漏过去。
+ */
+describe('ProcessShell · 套壳接入（T3.2）', () => {
+  beforeEach(() => {
+    vi.mocked(workflowApi.fetchProcessDetail).mockResolvedValue(baseDetail);
+    vi.mocked(tasksApi.fetchMyTasks).mockResolvedValue({ page: 1, size: 20, total: 0, list: [] });
+    vi.mocked(api.post).mockResolvedValue({ data: { code: 0, data: null, message: '' } } as never);
+    __resetRegistryForTest();
+    __setFormLoadersForTest({});
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    cleanup();
+    vi.clearAllMocks();
+    vi.restoreAllMocks();
+  });
+
+  /** 套壳所在的卡片：应当占 lg:grid-cols-3 里的 2 列。 */
+  function shellCard(): HTMLElement {
+    const shell = screen.getByTestId('form-shell');
+    const card = shell.closest('div.lg\\:col-span-2');
+    if (!card) throw new Error('套壳未放在 lg:col-span-2 的卡片里');
+    return card as HTMLElement;
+  }
+
+  it('套壳放在 lg:col-span-2 的左栏（右栏是窄的审批历史，放不下多行文本）', async () => {
+    setUser('700001');
+    render(
+      <MemoryRouter>
+        <ProcessShell instanceId="128" />
+      </MemoryRouter>,
+    );
+
+    await screen.findByTestId('form-shell');
+    expect(shellCard()).toBeTruthy();
+    // 右栏审批历史不占 2 列
+    expect(screen.getByText('审批历史').closest('div.lg\\:col-span-2')).toBeNull();
+  });
+
+  it('4 个流程元信息收进 details 且**默认收起**', async () => {
+    setUser('700001');
+    render(
+      <MemoryRouter>
+        <ProcessShell instanceId="128" />
+      </MemoryRouter>,
+    );
+
+    const details = await screen.findByTestId('process-meta');
+    // 默认收起：没有 open 属性。审批人 90% 注意力在业务数据
+    expect(details.hasAttribute('open')).toBe(false);
+    expect(details.tagName).toBe('DETAILS');
+    // 内容仍在 DOM 里（收起 ≠ 不渲染，查证时不需要额外请求）
+    // ⚠️ 用 within 限定在字段容器内：details 的 summary 文字里也含「发起人」等词
+    const fields = within(details).getByTestId('process-meta-fields');
+    expect(within(fields).getByText('业务类型')).toBeTruthy();
+    expect(within(fields).getByText('业务单号')).toBeTruthy();
+    expect(within(fields).getByText('当前节点')).toBeTruthy();
+    // 4 个字段齐全：发起人 label + 其值（fixture 里两者文字相同，故用 getAllByText计数）
+    expect(within(fields).getAllByText('发起人')).toHaveLength(2);
+  });
+
+  it('⚠️ 表单渲染抛错时，同意/驳回依然可点并真的发起审批', async () => {
+    setUser('700001');
+    // 让 schema 在读取时抛错 ⇒ 套壳内 ErrorBoundary 兜底，套壳外不受影响
+    const entry = {
+      formCode: 'PUR_FORM',
+      name: '会炸的表单',
+      component: (() => <div />) as FormComponent,
+      fields: [],
+    };
+    Object.defineProperty(entry, 'fields', {
+      get() {
+        throw new Error('schema 读取失败');
+      },
+    });
+    registerForms([entry]);
+
+    render(
+      <MemoryRouter>
+        <ProcessShell instanceId="128" />
+      </MemoryRouter>,
+    );
+
+    // 表单区域已降级
+    expect((await screen.findByTestId('form-missing')).getAttribute('data-reason')).toBe('render-error');
+
+    // ⚠️ 审批动作照常发出——这是硬要求，不是优化
+    fireEvent.click(screen.getByText('同意'));
+
+    await waitFor(() => expect(api.post).toHaveBeenCalled());
+    expect(vi.mocked(api.post).mock.calls[0][0]).toContain('/workflow/tasks/501/complete');
+  });
+
+  it('⚠️ 表单未注册（发版漏了）时审批栏同样可点', async () => {
+    setUser('700001');
+
+    render(
+      <MemoryRouter>
+        <ProcessShell instanceId="128" />
+      </MemoryRouter>,
+    );
+
+    expect((await screen.findByTestId('form-missing')).getAttribute('data-reason')).toBe('not-registered');
+
+    fireEvent.click(screen.getByText('同意'));
+
+    await waitFor(() => expect(api.post).toHaveBeenCalled());
+  });
+
+  it('单层滚动：外层网格是滚动容器，套壳内部不再套 overflow-auto', async () => {
+    setUser('700001');
+    render(
+      <MemoryRouter>
+        <ProcessShell instanceId="128" />
+      </MemoryRouter>,
+    );
+
+    const shell = await screen.findByTestId('form-shell');
+    expect(shell.className).not.toContain('overflow');
+    // 外层网格承担滚动
+    expect(shell.closest('.overflow-auto')).toBeTruthy();
   });
 });

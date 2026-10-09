@@ -12,6 +12,7 @@ import { ArrowRight, CheckCircle2, Circle, Clock } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { PageHeader } from '@/components/common/page-header';
+import { FormShell } from '@/features/biz/forms/form-shell';
 import { ReadOnlyField, ReadOnlyText } from './readonly-field';
 import {
   fetchProcessDetail,
@@ -189,24 +190,48 @@ export function ProcessShell({ instanceId }: ProcessShellProps) {
         </div>
       </div>
 
-      {/* 中部：只读表单区 + 审批历史 */}
+      {/* 中部：业务表单（套壳）+ 审批历史 */}
+      {/*
+        ⚠️布局约束（方案 §3.1）：`:193` 的容器已是 `overflow-auto`，
+        套壳内部**不能再加滚动容器**，否则出现嵌套滚动条、鼠标滚轮在内层滚不动。
+      */}
       <div className="grid min-h-0 flex-1 grid-cols-1 gap-4 overflow-auto lg:grid-cols-3">
-        <div className="rounded-md border bg-card p-4 lg:col-span-2">
-          <h3 className="mb-3 text-[13px] font-semibold">业务数据（只读）</h3>
-          <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-            <ReadOnlyField label="业务类型">
-              <ReadOnlyText value={instance.businessType} />
-            </ReadOnlyField>
-            <ReadOnlyField label="业务单号">
-              <ReadOnlyText value={instance.businessId} />
-            </ReadOnlyField>
-            <ReadOnlyField label="发起人">
-              <ReadOnlyText value={instance.initiatorName ?? instance.initiatorId} />
-            </ReadOnlyField>
-            <ReadOnlyField label="当前节点">
-              <ReadOnlyText value={instance.currentNodeCode} />
-            </ReadOnlyField>
-          </div>
+        <div className="flex flex-col gap-3 rounded-md border bg-card p-4 lg:col-span-2">
+          {/*
+            4 个流程元信息收进`<details>` **默认收起**（方案 §3.1）。
+            收而不删：它们是流程元信息不是业务数据，且业务单号已在 PageHeader、
+            发起人已在顶部任务条，直接删是信息丢失、顶替是语义混乱。
+            折叠而非平铺：审批人 90% 注意力在业务数据，元信息是查证时才看的。
+          */}
+          <details className="rounded border border-border/60 px-3 py-2" data-testid="process-meta">
+            <summary className="cursor-pointer text-[12px] text-muted-foreground">
+              查看流程信息（业务类型 / 单号 / 发起人 / 当前节点）
+            </summary>
+            <div className="mt-2 grid grid-cols-1 gap-3 md:grid-cols-2" data-testid="process-meta-fields">
+              <ReadOnlyField label="业务类型">
+                <ReadOnlyText value={instance.businessType} />
+              </ReadOnlyField>
+              <ReadOnlyField label="业务单号">
+                <ReadOnlyText value={instance.businessId} />
+              </ReadOnlyField>
+              <ReadOnlyField label="发起人">
+                <ReadOnlyText value={instance.initiatorName ?? instance.initiatorId} />
+              </ReadOnlyField>
+              <ReadOnlyField label="当前节点">
+                <ReadOnlyText value={instance.currentNodeCode} />
+              </ReadOnlyField>
+            </div>
+          </details>
+
+          {/*
+            ⚠️ 审批栏在**本组件之外**（见文件末尾），所以这里无论抛错、
+            降级还是加载中，同意/驳回都依然可点——这是方案 §3.3 的硬要求。
+          */}
+          <FormShell
+            formCode={instance.startedFormCode}
+            formData={detail.formData}
+            onRetry={load}
+          />
         </div>
 
         <div className="rounded-md border bg-card p-4">
