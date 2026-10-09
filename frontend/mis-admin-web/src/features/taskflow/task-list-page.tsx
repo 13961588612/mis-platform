@@ -18,13 +18,14 @@ import { useAuthStore } from '@/stores/auth-store';
 import { cn } from '@/lib/utils';
 import { wfInstanceId } from '@/lib/api/wf-instance';
 import { returnPath } from '@/lib/nav/return-path';
+import { TASK_STATUS, TaskStatusBadge } from './task-status';
 
 const STATUS_TABS = [
   { key: '', label: '待我处理' },
-  { key: 'PENDING', label: '待处理' },
-  { key: 'APPROVING', label: '审批中' },
-  { key: 'APPROVED', label: '已通过' },
-  { key: 'REJECTED', label: '已驳回' },
+  { key: 'PENDING', label: TASK_STATUS.PENDING.text },
+  { key: 'APPROVING', label: TASK_STATUS.APPROVING.text },
+  { key: 'APPROVED', label: TASK_STATUS.APPROVED.text },
+  { key: 'REJECTED', label: TASK_STATUS.REJECTED.text },
 ];
 
 /**
@@ -131,6 +132,16 @@ export function TaskListPage() {
     }
   }
 
+  /** 整行可点（R-1）：进流程详情回看流转。待办态与已办态同一入口。 */
+  function open(item: TaskItem) {
+    const inst = wfInstanceId(item);
+    if (inst) {
+      navigate(`/task/process/${inst}`, { state: from });
+      return;
+    }
+    navigate('/task/my-processed');
+  }
+
   /** 队列已空且本轮确实处理过东西 —— 展示完成态出口，而不是干巴巴的「暂无待办」。 */
   const queueDrained = doneCount > 0 && items.length === 0 && !loading && !error;
 
@@ -204,7 +215,26 @@ export function TaskListPage() {
               const isOpen = item.status === 'PENDING' || item.status === 'APPROVING';
               const overdue = item.dueDate && isOpen && new Date(item.dueDate) < new Date();
               return (
-                <li key={item.id} className="flex items-start gap-4 px-4 py-3">
+                <li
+                  key={item.id}
+                  role="button"
+                  tabIndex={0}
+                  className={cn(
+                    'flex items-start gap-4 px-4 py-3 transition',
+                    // 已办态只可回看，hover 反馈比待办态弱一档，区分「可操作」与「仅可查看」
+                    isOpen ? 'cursor-pointer hover:bg-muted/40' : 'cursor-pointer hover:bg-muted/20',
+                  )}
+                  onClick={() => open(item)}
+                  // 行内「驳回 / 同意」是<button>：Enter 的 click、Space 的 keyup→click
+                  // 都会冒泡到行，不挡掉就会「既批了该条、又跳去详情页」。
+                  onKeyDown={(e) => {
+                    if (e.target !== e.currentTarget) return;
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault();
+                      open(item);
+                    }
+                  }}
+                >
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2">
                       <span className="truncate text-[13px] font-medium">{item.bizTitle}</span>
@@ -234,16 +264,26 @@ export function TaskListPage() {
                           size="sm"
                           variant="outline"
                           disabled={acting === item.id}
-                          onClick={() => void onHandle(item, 'REJECT')}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            void onHandle(item, 'REJECT');
+                          }}
                         >
                           驳回
                         </Button>
-                        <Button size="sm" disabled={acting === item.id} onClick={() => void onHandle(item, 'APPROVE')}>
+                        <Button
+                          size="sm"
+                          disabled={acting === item.id}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            void onHandle(item, 'APPROVE');
+                          }}
+                        >
                           同意
                         </Button>
                       </>
                     ) : (
-                      <span className="text-xs text-muted-foreground">{item.status}</span>
+                      <TaskStatusBadge status={item.status} />
                     )}
                   </div>
                 </li>

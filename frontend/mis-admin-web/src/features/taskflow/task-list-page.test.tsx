@@ -4,10 +4,11 @@
  * 1. 渲染待办列表与统计角标
  * 2. 点击「同意」调用 handleTask 并刷新
  * 3. 无数据显示空态
+ * 4. 整行可点（R-1）：已办态点行跳流程详情；行内按钮不冒泡到行
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter, useLocation, type Location } from 'react-router-dom';
 import { TaskListPage } from './task-list-page';
 import * as tasksApi from '@/lib/api/tasks';
 import { useAuthStore } from '@/stores/auth-store';
@@ -21,6 +22,13 @@ vi.mock('@/lib/api/tasks', () => ({
 vi.mock('sonner', () => ({
   toast: { success: vi.fn(), error: vi.fn() },
 }));
+
+/** 记录跳转结果，断言整行点击是否真的进了流程详情。 */
+function LocationProbe({ sink }: { sink: { current: Location | null } }) {
+  const loc = useLocation();
+  sink.current = loc;
+  return null;
+}
 
 const sampleTask = {
   id: '5001',
@@ -40,6 +48,16 @@ const sampleTask = {
   read: false,
   completedAt: null,
   createdAt: '2026-10-08T10:00:00',
+};
+
+/** 已办态：流程已结束，行内只剩状态徽标（曾因无 onClick 而完全点不动）。 */
+const doneTask = {
+  ...sampleTask,
+  id: '5002',
+  bizTitle: '采购审批 - 已通过的',
+  status: 'APPROVED',
+  metadata: '{"wfInstanceId":128}',
+  completedAt: '2026-10-08T12:00:00',
 };
 
 describe('TaskListPage', () => {
@@ -154,5 +172,80 @@ describe('TaskListPage', () => {
     expect(await screen.findByText(/本页待办已清空/)).toBeTruthy();
     expect(screen.getByText('返回工作台')).toBeTruthy();
     expect(screen.getByText('查看已办')).toBeTruthy();
+  });
+
+  it('R-1 回归：已办态整行点击跳流程详情（修复前该行完全点不动）', async () => {
+    vi.mocked(tasksApi.fetchMyTasks).mockResolvedValue({
+      page: 1,
+      size: 20,
+      total: 1,
+      list: [doneTask],
+    });
+    const loc = { current: null as Location | null };
+    render(
+      <MemoryRouter>
+        <LocationProbe sink={loc} />
+        <TaskListPage />
+      </MemoryRouter>,
+    );
+
+    // 已办态渲染中文状态徽标，不再是英文原始值 APPROVED
+    expect(await screen.findByText('已通过')).toBeTruthy();
+
+    fireEvent.click(screen.getByText('采购审批 - 已通过的'));
+
+    await waitFor(() => {
+      expect(loc.current?.pathname).toBe('/task/process/128');
+    });
+  });
+
+  it('R-1：待办态点「同意」只触发 handle，不冒泡触发行跳转', async () => {
+    vi.mocked(tasksApi.fetchMyTasks).mockResolvedValue({
+      page: 1,
+      size: 20,
+      total: 1,
+      list: [sampleTask],
+    });
+    const loc = { current: null as Location | null };
+    render(
+      <MemoryRouter>
+        <LocationProbe sink={loc} />
+        <TaskListPage />
+      </MemoryRouter>,
+    );
+
+    fireEvent.click(await screen.findByText('同意'));
+
+    await waitFor(() =>
+      expect(tasksApi.handleTask).toHaveBeenCalledWith('5001', '1', '700001', 'APPROVE', '同意'),
+    );
+    // sampleTask 无 wfInstanceId，若按钮点击冒泡到行会跳去 /task/my-processed
+    expect(loc.current?.pathname).not.toBe('/task/my-processed');
+  });
+
+  it('R-1：整行可键盘触发（Enter）', async () => {
+    vi.mocked(tasksApi.fetchMyTasks).mockResolvedValue({
+      page: 1,
+      size: 20,
+      total: 1,
+      list: [doneTask],
+    });
+    const loc = { current: null as Location | null };
+    render(
+      <MemoryRouter>
+        <LocationProbe sink={loc} />
+        <TaskListPage />
+      </MemoryRouter>,
+    );
+
+    const row = (await screen.findByText('采购审批 - 已通过的')).closest('li');
+    expect(row?.getAttribute('role')).toBe('button');
+    expect(row?.getAttribute('tabindex')).toBe('0');
+
+    fireEvent.keyDown(row as HTMLElement, { key: 'Enter' });
+
+    await waitFor(() => {
+      expect(loc.current?.pathname).toBe('/task/process/128');
+    });
   });
 });

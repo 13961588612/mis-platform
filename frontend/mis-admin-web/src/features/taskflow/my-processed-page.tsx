@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { CheckCircle2, History, XCircle } from 'lucide-react';
+import { History } from 'lucide-react';
 import { PageHeader } from '@/components/common/page-header';
 import { EmptyState, ListError, ListLoading } from '@/components/common/empty-state';
 import { PaginationFooter } from '@/components/common/pagination-footer';
@@ -9,11 +9,7 @@ import { useAuthStore } from '@/stores/auth-store';
 import { cn } from '@/lib/utils';
 import { wfInstanceId } from '@/lib/api/wf-instance';
 import { returnPath } from '@/lib/nav/return-path';
-
-const STATUS: Record<string, { text: string; cls: string; icon: typeof CheckCircle2 }> = {
-  APPROVED: { text: '已通过', cls: 'bg-success/10 text-success', icon: CheckCircle2 },
-  REJECTED: { text: '已驳回', cls: 'bg-destructive/10 text-destructive', icon: XCircle },
-};
+import { TASK_STATUS } from './task-status';
 
 /** 流程维度：我审批的（我处理过的历史记录）。 */
 export function TaskMyProcessedPage() {
@@ -77,7 +73,7 @@ export function TaskMyProcessedPage() {
         ) : (
           <ul className="divide-y">
             {items.map((item) => {
-              const st = STATUS[item.status] ?? STATUS.APPROVED;
+              const st = TASK_STATUS[item.status] ?? TASK_STATUS.APPROVED;
               const Icon = st.icon;
               return (
                 <li key={item.id}>
