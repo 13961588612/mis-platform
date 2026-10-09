@@ -64,6 +64,10 @@ export const SYSTEM_NAV: SystemNavNode[] = [
     icon: 'Workflow',
     children: [
       { path: '/system/workflow/definitions', title: '流程定义', icon: 'GitBranch' },
+      // ⚠️ 编排已 Dialog 化（在流程定义页里打开），本项只作「跳到流程中心」的入口：
+      // designer-page 进来后立刻 `replace` 回 /system/workflow/definitions，不留历史。
+      // 菜单 95007 及它上面绑的 sys_menu_api（取消发布 / PUT 更新定义）**不能删**，
+      // 删了那两个端点就全部 403。
       { path: '/system/workflow/designer', title: '流程编排', icon: 'Workflow' },
     ],
   },

@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
 import { Undo2, FilePlus2, GitBranch, Layers, RefreshCw, Workflow } from 'lucide-react';
 import { PermissionGate } from '@/components/auth/permission-gate';
 import { PageHeader } from '@/components/common/page-header';
@@ -10,10 +9,22 @@ import {
   fetchDefinitions,
   type WfDefinition,
 } from '@/lib/api/workflow';
+import { DesignerDialog } from './designer-dialog';
+import { DefinitionDialog, type DefinitionDraft } from './definition-dialog';
+import type { FlowMeta } from './property-panel';
 import { cn } from '@/lib/utils';
 
 /** 流程编排 / 定义编辑的权限码（V123:44 菜单 95007 `workflow-designer`）。 */
 const PERM_EDIT = 'workflow:definition:edit';
+
+/** 编排 Dialog 的打开态：全程由本页 state 持有，**不碰路由**。 */
+interface DesignerState {
+  open: boolean;
+  definitionId?: string;
+  initialFlowMeta?: Partial<FlowMeta>;
+}
+
+const CLOSED: DesignerState = { open: false };
 
 const STATUS: Record<string, { text: string; cls: string }> = {
   DRAFT: { text: '草稿', cls: 'bg-muted text-muted-foreground' },
@@ -27,7 +38,6 @@ const STATUS: Record<string, { text: string; cls: string }> = {
  * <p>列出自租户已建立的流程定义（含表单白名单与节点数），支持发布与进入编排。
  */
 export function WorkflowDefinitionPage() {
-  const navigate = useNavigate();
   const tenantId = '1';
 
   const [items, setItems] = useState<WfDefinition[]>([]);
@@ -37,6 +47,8 @@ export function WorkflowDefinitionPage() {
   const [page, setPage] = useState(1);
   const [total, setTotal] = useState(0);
   const size = 20;
+  const [createOpen, setCreateOpen] = useState(false);
+  const [designer, setDesigner] = useState<DesignerState>(CLOSED);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -80,6 +92,17 @@ export function WorkflowDefinitionPage() {
     }
   }
 
+  /**
+   * 保存成功后：先刷新列表再关 Dialog，顺序不能反（方案 §4.5）。
+   *
+   * ⚠️ 全程只动 `useState`，**不 navigate**：`navigate(-1)` 会在浏览器历史里留下
+   * 「编排」记录，用户按后退会再进一次（方案 §4.3）。
+   */
+  const onDesignerSaved = useCallback(async () => {
+    await load();
+    setDesigner(CLOSED);
+  }, [load]);
+
   const totalPages = Math.max(1, Math.ceil(total / size));
 
   return (
@@ -93,7 +116,7 @@ export function WorkflowDefinitionPage() {
               <RefreshCw className="mr-1 h-3.5 w-3.5" />
               刷新
             </Button>
-            <Button size="sm" onClick={() => navigate('/system/workflow/designer')}>
+            <Button size="sm" onClick={() => setCreateOpen(true)}>
               <FilePlus2 className="mr-1 h-3.5 w-3.5" />
               新建流程
             </Button>
@@ -115,7 +138,7 @@ export function WorkflowDefinitionPage() {
           <div className="flex h-40 flex-col items-center justify-center gap-2 text-sm text-muted-foreground">
             <Workflow className="h-6 w-6 opacity-40" />
             暂无流程定义
-            <Button size="sm" variant="outline" onClick={() => navigate('/system/workflow/designer')}>
+            <Button size="sm" variant="outline" onClick={() => setCreateOpen(true)}>
               去创建一个
             </Button>
           </div>
@@ -166,10 +189,28 @@ export function WorkflowDefinitionPage() {
                     </td>
                     <td className="px-3 py-2">
                       <div className="flex items-center gap-2">
+                        {/*
+                          ⚠️ 传 `definitionId`：改版前点哪一行都是空白画布（现存 bug）。
+                          `ACTIVE` 不可编辑（后端 `update` 会拒）⇒ 直接禁用并给出原因。
+                        */}
                         <Button
                           size="sm"
                           variant="outline"
-                          onClick={() => navigate('/system/workflow/designer')}
+                          disabled={def.status === 'ACTIVE'}
+                          title={def.status === 'ACTIVE' ? '已发布流程不可编辑，请先取消发布' : undefined}
+                          onClick={() =>
+                            setDesigner({
+                              open: true,
+                              definitionId: def.id,
+                              initialFlowMeta: {
+                                code: def.code,
+                                name: def.name,
+                                category: def.category,
+                                description: def.description ?? '',
+                                supportedFormCodes: (def.supportedFormCodes ?? []).join(','),
+                              },
+                            })
+                          }
                         >
                           编排
                         </Button>
@@ -219,6 +260,34 @@ export function WorkflowDefinitionPage() {
           </Button>
         </div>
       </div>
+
+      {/*
+        两个 Dialog 都用 `useState` 开关，**不产生任何浏览器历史条目**：
+        打开→编排→关闭，历史条数恒定，用户按后退不会「再进一次编排」。
+      */}
+      {/*
+        ⚠️ 条件挂载而不是 `open={createOpen}`：DefinitionDialog 一挂载就会拉表单候选清单，
+        常驻挂载会让每个打开流程定义页的用户都多发一次（无 `biz:form:list` 的人还是 403）。
+      */}
+      {createOpen ? (
+        <DefinitionDialog
+          open
+          onOpenChange={setCreateOpen}
+          onSubmit={(draft: DefinitionDraft) =>
+            setDesigner({
+              open: true,
+              initialFlowMeta: { ...draft, supportedFormCodes: draft.supportedFormCodes.join(',') },
+            })
+          }
+        />
+      ) : null}
+      <DesignerDialog
+        open={designer.open}
+        definitionId={designer.definitionId}
+        initialFlowMeta={designer.initialFlowMeta}
+        onOpenChange={(open) => setDesigner((s) => ({ ...s, open }))}
+        onSaved={() => void onDesignerSaved()}
+      />
     </div>
   );
 }

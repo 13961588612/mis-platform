@@ -146,6 +146,9 @@ const PAGE_MAP: Record<string, ComponentType> = {
   '/task/pending': TaskListPage,
   '/task/my-sent': TaskMySentPage,
   '/task/my-processed': TaskMyProcessedPage,
+  // 编排已 Dialog 化：本路由保留为重定向壳（进来后 replace 回流程定义页），
+  // 但 **不能注销** —— V123 的 sys_menu 95007 与 V128 绑在它上面的两个 sys_menu_api
+  //（取消发布 / PUT 更新定义）都还指着这个 path，注销会让菜单解析不到页面。
   '/system/workflow/designer': WorkflowDesignerPage,
   '/system/workflow/definitions': WorkflowDefinitionPage,
   // 知识库子系统（路径与 V13__kb_seed.sql / V17__kb_hittest_perms.sql 的 sys_menu.path 一一对应）
