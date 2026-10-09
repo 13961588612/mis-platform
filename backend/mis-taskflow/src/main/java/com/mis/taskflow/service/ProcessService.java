@@ -17,13 +17,18 @@ import com.mis.taskflow.domain.repository.WfNodeRepository;
 import com.mis.taskflow.domain.repository.WfTaskRepository;
 import com.mis.taskflow.dto.CompleteWfTaskRequest;
 import com.mis.taskflow.dto.CreateTaskRequest;
+import com.mis.taskflow.dto.HandleTaskRequest;
 import com.mis.taskflow.dto.ProcessDetailVO;
 import com.mis.taskflow.dto.StartProcessRequest;
 import com.mis.taskflow.dto.WfHistoryVO;
 import com.mis.taskflow.dto.WfInstanceVO;
 import com.mis.taskflow.dto.WfTaskVO;
+import com.mis.taskflow.support.AuditContext;
+import com.mis.taskflow.support.BusinessOperation;
 import com.mis.taskflow.support.IdGenerator;
 import com.mis.taskflow.support.TaskflowStatus;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -51,6 +56,8 @@ import java.util.List;
  */
 @Service
 public class ProcessService {
+
+    private static final Logger log = LoggerFactory.getLogger(ProcessService.class);
 
     private final WfDefinitionRepository definitionRepository;
     private final WfNodeRepository nodeRepository;
@@ -136,8 +143,15 @@ public class ProcessService {
      * 处理流程任务。
      *
      * <p>APPROVE → 记录历史并推进下一节点；REJECT → 终止实例并通知发起人。
+     *
+     * <p><b>为什么挂 {@code @BusinessOperation}</b>：本方法是用户在流程详情页点「同意/驳回」
+     * 的唯一入口，不审计等于审批动作无痕。{@code handleTask} 也有同名注解，
+     * 二者嵌套由 {@code AuditContext} 的快照-恢复机制保证互不污染。
      */
     @Transactional
+    @BusinessOperation(module = "流程审批", type = "APPROVE",
+            businessType = "WF_INSTANCE", description = "处理流程任务",
+            captureBefore = true, captureAfter = true)
     public void completeTask(Long tenantId, Long wfTaskId, CompleteWfTaskRequest req, Long operatorId) {
         WfTask wfTask = wfTaskRepository.findByIdAndTenantId(wfTaskId, tenantId)
                 .orElseThrow(() -> new BusinessException(ResultCode.NOT_FOUND, "流程任务不存在"));
@@ -155,6 +169,9 @@ public class ProcessService {
         LocalDateTime now = LocalDateTime.now();
         String action = req.action().trim().toUpperCase();
 
+        AuditContext.businessId(instance.getBusinessType() + "/" + instance.getBusinessId());
+        AuditContext.before(auditSnapshot(instance));
+
         if ("REJECT".equals(action)) {
             wfTask.setStatus(WfTask.STATUS_COMPLETED);
             wfTask.setCompletedAt(now);
@@ -169,6 +186,9 @@ public class ProcessService {
                     WfHistory.OP_REJECT, wfTask.getNodeCode(), null, req.comment(), now);
 
             notify(instance, "REJECT", "申请被驳回", trimDefault(req.comment(), "您的申请已被驳回"));
+
+            syncLinkedSysTask(tenantId, wfTask, action, req.comment(), operatorId);
+            AuditContext.after(auditSnapshot(instance));
             return;
         }
 
@@ -181,14 +201,7 @@ public class ProcessService {
         wfTaskRepository.save(wfTask);
 
         // 同步关闭关联的用户视角代办
-        if (wfTask.getSysTaskId() != null) {
-            try {
-                taskService.handleTask(tenantId, wfTask.getSysTaskId(),
-                        new com.mis.taskflow.dto.HandleTaskRequest("APPROVE", req.comment(), null), operatorId);
-            } catch (BusinessException ignored) {
-                // 代办可能已由其他路径处理，忽略
-            }
-        }
+        syncLinkedSysTask(tenantId, wfTask, action, req.comment(), operatorId);
 
         WfNode currentNode = nodeRepository.findByDefinitionIdOrderBySortOrderAsc(instance.getDefinitionId()).stream()
                 .filter(n -> n.getNodeCode().equals(wfTask.getNodeCode()))
@@ -201,12 +214,54 @@ public class ProcessService {
         // 会签/路由节点：等待聚合条件满足再推进
         if (WfNode.TYPE_ROUTING.equals(currentNode.getNodeType())) {
             if (!aggregationSatisfied(instance, currentNode)) {
+                AuditContext.after(auditSnapshot(instance));
                 return; // 还有待处理任务，等其余会签人
             }
         }
 
         advanceToNext(instance, nodeRepository.findByDefinitionIdOrderBySortOrderAsc(instance.getDefinitionId()),
                 currentNode, now);
+        AuditContext.after(auditSnapshot(instance));
+    }
+
+    /** 审计快照：实例状态 + 当前节点，用于生成可读的 before/after diff。 */
+    private String auditSnapshot(WfInstance instance) {
+        return "{\"status\":\"" + instance.getStatus() + "\",\"currentNodeCode\":\""
+                + (instance.getCurrentNodeCode() == null ? "" : instance.getCurrentNodeCode()) + "\"}";
+    }
+
+    /**
+     * 把流程任务的动作同步到关联的用户视角代办（{@code sys_task}）。
+     *
+     * <p>APPROVE 与 REJECT 都必须走这里：驳回时若不同步，待办会永远停在 PENDING，
+     * 用户在「我的待办」里反复看到一条已终止流程的审批。
+     *
+     * <p>失败不阻断流程：代办可能已由用户在待办中心直接处理过。但必须留日志，
+     * 否则「流程已完成、待办不同步」这类线上问题无从追溯。
+     *
+     * <p><b>为什么要回填 operatorId</b>：{@code completeTask} 的处理人校验（见本类上方）
+     * 是 {@code operatorId != null && ...}，即「未携带操作人」视为系统调用而放行；
+     * 而 {@code TaskService.requireTask} 是 B-1 越权防护，语义为
+     * {@code operatorId == null || ...} 即缺操作人一律拒绝。两者对 null 的态度相反，
+     * 若直接透传 null，内部调用必被拒并被下方 catch 静默吞掉 →
+     * 流程已终止但 sys_task 仍是 PENDING（B-2「处理完了但待办还在」被重新引入）。
+     * 因此这里用 wf_task 自身的 assignee 回填：wf_task 与其关联的 sys_task 由
+     * {@code assignNode} 用同一个 assignee 创建，两者处理人本就一致，回填是补全
+     * 缺失信息而非绕过校验——B-1 的 assignee 比对依然真实生效。
+     */
+    private void syncLinkedSysTask(Long tenantId, WfTask wfTask, String action,
+                                   String comment, Long operatorId) {
+        if (wfTask.getSysTaskId() == null) {
+            return;
+        }
+        Long handlerId = operatorId != null ? operatorId : wfTask.getAssigneeId();
+        try {
+            taskService.handleTask(tenantId, wfTask.getSysTaskId(),
+                    new HandleTaskRequest(action, comment, null), handlerId);
+        } catch (BusinessException e) {
+            log.warn("同步 sys_task 失败: wfTaskId={}, sysTaskId={}, action={}, reason={}",
+                    wfTask.getId(), wfTask.getSysTaskId(), action, e.getMessage());
+        }
     }
 
     /**

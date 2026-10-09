@@ -12,6 +12,7 @@ import org.springframework.core.annotation.Order;
 import org.springframework.stereotype.Component;
 
 import java.time.LocalDateTime;
+import java.util.Map;
 import java.util.Optional;
 
 /**
@@ -37,6 +38,10 @@ public class BusinessOperationAspect {
     public Object around(ProceedingJoinPoint pjp, BusinessOperation bizOp) throws Throwable {
         long start = System.currentTimeMillis();
         Optional<LoginUser> login = SecurityContextHolder.getOptional();
+        // 快照-恢复而非直接 clear()：被注解方法内部再调用另一个被注解方法时
+        // （如 ProcessService.completeTask → TaskService.handleTask），
+        // 内层切面退出不能把外层已设置的 before/after 抹掉。
+        Map<String, String> outerSnapshot = AuditContext.snapshot();
 
         try {
             Object result = pjp.proceed();
@@ -46,7 +51,7 @@ public class BusinessOperationAspect {
             record(bizOp, login, false, ex.getMessage(), System.currentTimeMillis() - start);
             throw ex;
         } finally {
-            AuditContext.clear();
+            AuditContext.restore(outerSnapshot);
         }
     }
 

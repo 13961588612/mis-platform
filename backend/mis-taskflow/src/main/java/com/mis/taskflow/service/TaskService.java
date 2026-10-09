@@ -117,7 +117,7 @@ public class TaskService {
             businessType = "SYS_TASK", description = "处理代办任务",
             captureBefore = true, captureAfter = true)
     public void handleTask(Long tenantId, Long taskId, HandleTaskRequest req, Long operatorId) {
-        SysTask task = requireTask(taskId, tenantId);
+        SysTask task = requireTask(taskId, tenantId, operatorId);
         if (!isOpen(task.getStatus())) {
             throw new BusinessException(ResultCode.VALIDATION_ERROR, "该代办已处理，无法重复操作");
         }
@@ -146,13 +146,24 @@ public class TaskService {
 
     /**
      * 转办：变更处理人，任务回到 PENDING。
+     *
+     * <p><b>为什么必须审计</b>：转办把责任从一个人移交到另一个人，是「责任归属」变更；
+     * 无痕转办等于允许私下甩锅，必须留 before/after 的处理人差异。
      */
     @Transactional
+    @BusinessOperation(module = "代办任务", type = "ASSIGN",
+            businessType = "SYS_TASK", description = "转办代办任务",
+            captureBefore = true, captureAfter = true)
     public void transferTask(Long tenantId, Long taskId, TransferTaskRequest req, Long operatorId) {
-        SysTask task = requireTask(taskId, tenantId);
+        SysTask task = requireTask(taskId, tenantId, operatorId);
         if (!isOpen(task.getStatus())) {
             throw new BusinessException(ResultCode.VALIDATION_ERROR, "该代办已处理，无法转办");
         }
+
+        AuditContext.businessId(task.getBizType() + "/" + task.getBizRefId());
+        AuditContext.before("{\"assigneeId\":" + task.getAssigneeId()
+                + ",\"status\":\"" + task.getStatus() + "\"}");
+
         task.setAssigneeId(req.newAssigneeId());
         task.setAssigneeName(trimToNull(req.newAssigneeName()));
         task.setStatus(TaskflowStatus.Task.PENDING);
@@ -160,6 +171,9 @@ public class TaskService {
         task.setViewedAt(null);
         task.setUpdatedAt(LocalDateTime.now());
         taskRepository.save(task);
+
+        AuditContext.after("{\"assigneeId\":" + req.newAssigneeId()
+                + ",\"status\":\"" + TaskflowStatus.Task.PENDING + "\"}");
 
         // 给新处理人补发一条关联通知
         PublishMessageRequest msg = new PublishMessageRequest(
@@ -194,11 +208,30 @@ public class TaskService {
         return new TaskStatsVO(pending, urgent, overdue);
     }
 
-    private SysTask requireTask(Long taskId, Long tenantId) {
-        SysTask task = taskRepository.findByIdAndDeleted(taskId, 0)
+    /**
+     * 取出待办并校验调用方权限，处理与转办在**同一把悲观行锁**内完成。
+     *
+     * <p><b>为什么必须加锁</b>：{@code isOpen()} 是 check-then-act。两人同时点「同意」
+     * 会双双通过校验、双双返回 200；转办竞态更糟——可出现「任务已办但 assignee 是新人」
+     * （新人收到待办提醒却点进去发现已办），反向则已办任务复活成待办。
+     * 行锁把 read-check-write 串行化，后到者必然看到已提交的终态而被拒。
+     *
+     * <p><b>为什么必须校验 assignee</b>：同租户内任意登录用户都能猜到 {@code taskId}，
+     * 只校验 {@code tenantId} 会导致「处理别人的待办」（越权）。语义与
+     * {@code ProcessService.completeTask} 的处理人校验保持一致。
+     *
+     * <p>{@code operatorId} 为 null 表示调用方未携带操作人（未认证请求），一律拒绝。
+     *
+     * <p>调用方必须处于事务中（行锁持有到事务结束），本类所有写方法均已 {@code @Transactional}。
+     */
+    private SysTask requireTask(Long taskId, Long tenantId, Long operatorId) {
+        SysTask task = taskRepository.findByIdForUpdate(taskId)
                 .orElseThrow(() -> new BusinessException(ResultCode.NOT_FOUND, "代办不存在"));
         if (!task.getTenantId().equals(tenantId)) {
             throw new BusinessException(ResultCode.FORBIDDEN, "无权访问该代办");
+        }
+        if (operatorId == null || !operatorId.equals(task.getAssigneeId())) {
+            throw new BusinessException(ResultCode.FORBIDDEN, "无权处理该代办");
         }
         return task;
     }

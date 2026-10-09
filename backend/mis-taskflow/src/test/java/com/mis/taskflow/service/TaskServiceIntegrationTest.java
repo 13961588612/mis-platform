@@ -1,6 +1,7 @@
 package com.mis.taskflow.service;
 
 import com.mis.common.core.exception.BusinessException;
+import com.mis.common.core.exception.ResultCode;
 import com.mis.taskflow.domain.repository.SysMessageReceiverRepository;
 import com.mis.taskflow.domain.repository.SysMessageRepository;
 import com.mis.taskflow.domain.repository.SysTaskRepository;
@@ -215,5 +216,48 @@ class TaskServiceIntegrationTest {
         assertThrows(BusinessException.class,
                 () -> taskService.handleTask(TENANT, 999_999_999_999L,
                         new HandleTaskRequest("APPROVE", null, null), 1L));
+    }
+
+    @Test
+    @DisplayName("安全：同租户非处理人处理待办被拒（FORBIDDEN）——防越权")
+    void nonAssigneeHandleForbidden() {
+        long owner = nextUser();
+        long intruder = nextUser();
+        Long taskId = create(owner, "越权处理");
+
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> taskService.handleTask(TENANT, taskId, new HandleTaskRequest("APPROVE", "抢办", null), intruder),
+                "同租户非处理人不得处理他人待办");
+        assertEquals(ResultCode.FORBIDDEN.getCode(), ex.getCode(), "应为权限不足");
+
+        assertEquals("PENDING", taskRepository.findById(taskId).orElseThrow().getStatus(),
+                "越权请求不得改动待办状态");
+    }
+
+    @Test
+    @DisplayName("安全：同租户非处理人转办待办被拒（FORBIDDEN）")
+    void nonAssigneeTransferForbidden() {
+        long owner = nextUser();
+        long intruder = nextUser();
+        Long taskId = create(owner, "越权转办");
+
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> taskService.transferTask(TENANT, taskId,
+                        new TransferTaskRequest(nextUser(), "接手人", null), intruder));
+        assertEquals(ResultCode.FORBIDDEN.getCode(), ex.getCode(), "应为权限不足");
+
+        assertEquals(owner, taskRepository.findById(taskId).orElseThrow().getAssigneeId(),
+                "越权转办不得改动处理人");
+    }
+
+    @Test
+    @DisplayName("安全：未携带 operatorId 的处理请求被拒（不因缺参而绕过 assignee 校验）")
+    void nullOperatorForbidden() {
+        long owner = nextUser();
+        Long taskId = create(owner, "缺操作人");
+
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> taskService.handleTask(TENANT, taskId, new HandleTaskRequest("APPROVE", null, null), null));
+        assertEquals(ResultCode.FORBIDDEN.getCode(), ex.getCode(), "缺少操作人不得放行");
     }
 }

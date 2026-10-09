@@ -1,13 +1,18 @@
 package com.mis.taskflow.service;
 
 import com.mis.common.core.exception.BusinessException;
+import com.mis.taskflow.domain.entity.SysAuditOp;
 import com.mis.taskflow.domain.entity.WfInstance;
+import com.mis.taskflow.domain.repository.SysAuditOpRepository;
+import com.mis.taskflow.domain.repository.SysTaskRepository;
 import com.mis.taskflow.domain.repository.WfInstanceRepository;
 import com.mis.taskflow.domain.repository.WfTaskRepository;
 import com.mis.taskflow.dto.CompleteWfTaskRequest;
 import com.mis.taskflow.dto.CreateDefinitionRequest;
+import com.mis.taskflow.dto.CreateTaskRequest;
 import com.mis.taskflow.dto.ProcessDetailVO;
 import com.mis.taskflow.dto.StartProcessRequest;
+import com.mis.taskflow.dto.TransferTaskRequest;
 import com.mis.taskflow.dto.WfNodeDTO;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -19,6 +24,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -35,12 +41,25 @@ class ProcessServiceIntegrationTest {
 
     @Autowired private WfDefinitionService definitionService;
     @Autowired private ProcessService processService;
+    @Autowired private TaskService taskService;
     @Autowired private WfInstanceRepository instanceRepository;
     @Autowired private WfTaskRepository wfTaskRepository;
+    @Autowired private SysTaskRepository sysTaskRepository;
+    @Autowired private SysAuditOpRepository auditRepository;
 
     private String uniqueCode() {
         return "P5_" + System.nanoTime();
     }
+
+    private long nextUser() {
+        return 700100L + (System.nanoTime() % 100_000);
+    }
+
+    /**
+     * 审计切面在无 {@code LoginUser} 上下文时把 tenantId 兜底为 1
+     * （见 {@code BusinessOperationAspect.record}），测试环境即此情形。
+     */
+    private static final long AUDIT_TENANT = 1L;
 
     /**
      * 建一个单级审批流程：START → APPROVAL(FIXED) → END。
@@ -139,6 +158,160 @@ class ProcessServiceIntegrationTest {
         processService.completeTask(TENANT, wfTaskId, new CompleteWfTaskRequest("REJECT", "不同意"), approver);
 
         assertEquals("TERMINATED", instanceRepository.findById(instId).orElseThrow().getStatus());
+    }
+
+    @Test
+    @DisplayName("B2：驳回时同步关闭用户视角代办——sys_task 置 REJECTED（回归：曾恒为 PENDING）")
+    void rejectSyncsLinkedSysTask() {
+        long approver = 700011L;
+        String formCode = "FORM_" + System.nanoTime();
+        String code = createSingleApprovalFlow(formCode, approver);
+        Long instId = start(code, formCode, "PO-" + System.nanoTime());
+
+        var pending = wfTaskRepository.findPendingByInstance(instId);
+        Long sysTaskId = pending.get(0).getSysTaskId();
+        assertNotNull(sysTaskId, "应关联用户视角代办");
+        assertEquals("PENDING", sysTaskRepository.findById(sysTaskId).orElseThrow().getStatus());
+
+        processService.completeTask(TENANT, pending.get(0).getId(),
+                new CompleteWfTaskRequest("REJECT", "不同意"), approver);
+
+        assertEquals("REJECTED", sysTaskRepository.findById(sysTaskId).orElseThrow().getStatus(),
+                "驳回后关联代办必须同步为 REJECTED，不能停留在 PENDING");
+    }
+
+    @Test
+    @DisplayName("P1：completeTask(operatorId=null) 驳回——sys_task 不得停留在 PENDING（回归：曾重新引入 B-2）")
+    void rejectWithoutOperatorStillSyncsLinkedSysTask() {
+        long approver = 700013L;
+        String formCode = "FORM_" + System.nanoTime();
+        String code = createSingleApprovalFlow(formCode, approver);
+        Long instId = start(code, formCode, "PO-" + System.nanoTime());
+
+        var pending = wfTaskRepository.findPendingByInstance(instId);
+        Long sysTaskId = pending.get(0).getSysTaskId();
+        assertEquals(approver, pending.get(0).getAssigneeId(), "前置：wf_task 处理人应为定岗审批人");
+        assertEquals("PENDING", sysTaskRepository.findById(sysTaskId).orElseThrow().getStatus());
+
+        // operatorId=null：completeTask 的守卫将其视为系统调用放行（既有语义，不改）
+        processService.completeTask(TENANT, pending.get(0).getId(),
+                new CompleteWfTaskRequest("REJECT", "不同意"), null);
+
+        assertEquals("TERMINATED", instanceRepository.findById(instId).orElseThrow().getStatus(),
+                "流程应已终止");
+        assertNotEquals("PENDING", sysTaskRepository.findById(sysTaskId).orElseThrow().getStatus(),
+                "operatorId 为 null 时 sys_task 仍必须同步为终态，否则用户永远看到一条待办（B-2）");
+        assertEquals("REJECTED", sysTaskRepository.findById(sysTaskId).orElseThrow().getStatus(),
+                "回填 wf_task.assigneeId 后应同步为 REJECTED");
+    }
+
+    @Test
+    @DisplayName("P1：completeTask(operatorId=null) 同意——sys_task 同步为 APPROVED（回归：曾重新引入 B-2）")
+    void approveWithoutOperatorStillSyncsLinkedSysTask() {
+        long approver = 700014L;
+        String formCode = "FORM_" + System.nanoTime();
+        String code = createSingleApprovalFlow(formCode, approver);
+        Long instId = start(code, formCode, "PO-" + System.nanoTime());
+
+        var pending = wfTaskRepository.findPendingByInstance(instId);
+        Long sysTaskId = pending.get(0).getSysTaskId();
+
+        processService.completeTask(TENANT, pending.get(0).getId(),
+                new CompleteWfTaskRequest("APPROVE", "同意"), null);
+
+        assertEquals("COMPLETED", instanceRepository.findById(instId).orElseThrow().getStatus());
+        assertEquals("APPROVED", sysTaskRepository.findById(sysTaskId).orElseThrow().getStatus(),
+                "operatorId 为 null 时同意路径同样必须同步代办，不能停留在 PENDING（B-2）");
+    }
+
+    @Test
+    @DisplayName("P1：正常 assignee 处理——sys_task 状态随 action 正确落为 APPROVED")
+    void approveByAssigneeSyncsLinkedSysTaskToApproved() {
+        long approver = 700015L;
+        String formCode = "FORM_" + System.nanoTime();
+        String code = createSingleApprovalFlow(formCode, approver);
+        Long instId = start(code, formCode, "PO-" + System.nanoTime());
+
+        var pending = wfTaskRepository.findPendingByInstance(instId);
+        Long sysTaskId = pending.get(0).getSysTaskId();
+
+        processService.completeTask(TENANT, pending.get(0).getId(),
+                new CompleteWfTaskRequest("APPROVE", "同意"), approver);
+
+        assertEquals("APPROVED", sysTaskRepository.findById(sysTaskId).orElseThrow().getStatus(),
+                "正常处理人同意后关联代办应为 APPROVED");
+    }
+
+    @Test
+    @DisplayName("B4：审批动作落审计，且 before/after diff 非空（回归：曾无审计记录）")
+    void completeTaskWritesAuditWithDiff() {
+        long approver = 700012L;
+        String formCode = "FORM_" + System.nanoTime();
+        String code = createSingleApprovalFlow(formCode, approver);
+        String bizId = "PO-" + System.nanoTime();
+        Long instId = start(code, formCode, bizId);
+
+        processService.completeTask(TENANT, wfTaskRepository.findPendingByInstance(instId).get(0).getId(),
+                new CompleteWfTaskRequest("APPROVE", "同意"), approver);
+
+        var ops = auditRepository.findByTenantIdAndBusinessTypeAndBusinessIdOrderByOperTimeAsc(
+                AUDIT_TENANT, "WF_INSTANCE", "PURCHASE_ORDER/" + bizId);
+        assertEquals(1, ops.size(), "流程审批应恰好记录 1 条审计");
+        SysAuditOp op = ops.get(0);
+        assertEquals(SysAuditOp.SUCCESS, op.getResultStatus());
+        assertEquals("流程审批", op.getModule());
+        assertTrue(op.getBeforeData().contains("RUNNING"), "before 应含审批前实例状态: " + op.getBeforeData());
+        assertTrue(op.getAfterData().contains("COMPLETED"), "after 应含审批后实例状态: " + op.getAfterData());
+        assertTrue(op.getDiffSummary().contains("status"), "diff 不应为空: " + op.getDiffSummary());
+    }
+
+    @Test
+    @DisplayName("B4：转办落审计，before/after 记录处理人变更")
+    void transferWritesAuditWithAssigneeDiff() {
+        long from = nextUser();
+        long to = nextUser();
+        String bizRefId = "PO-" + System.nanoTime();
+        Long taskId = taskService.createTask(TENANT, 1L, new CreateTaskRequest(
+                "PURCHASE_APPROVAL", "PURCHASE_ORDER", bizRefId, "转办审计",
+                "PURCHASE_ORDER", from, "原处理人", (short) 2, null, "{}", null, null));
+
+        taskService.transferTask(TENANT, taskId, new TransferTaskRequest(to, "新处理人", "请接手"), from);
+
+        var ops = auditRepository.findByTenantIdAndBusinessTypeAndBusinessIdOrderByOperTimeAsc(
+                AUDIT_TENANT, "SYS_TASK", "PURCHASE_ORDER/" + bizRefId);
+        assertEquals(1, ops.size(), "转办应恰好记录 1 条审计");
+        SysAuditOp op = ops.get(0);
+        assertEquals("ASSIGN", op.getOperationType());
+        assertTrue(op.getBeforeData().contains(String.valueOf(from)), "before 应含原处理人: " + op.getBeforeData());
+        assertTrue(op.getAfterData().contains(String.valueOf(to)), "after 应含新处理人: " + op.getAfterData());
+        assertTrue(op.getDiffSummary().contains("assigneeId"), "diff 应含 assigneeId 变更: " + op.getDiffSummary());
+    }
+
+    @Test
+    @DisplayName("B4：内层 handleTask 的审计不得污染外层 completeTask 的 before/after")
+    void nestedAuditContextsAreIsolated() {
+        long approver = 700013L;
+        String formCode = "FORM_" + System.nanoTime();
+        String code = createSingleApprovalFlow(formCode, approver);
+        String bizId = "PO-" + System.nanoTime();
+        Long instId = start(code, formCode, bizId);
+
+        processService.completeTask(TENANT, wfTaskRepository.findPendingByInstance(instId).get(0).getId(),
+                new CompleteWfTaskRequest("APPROVE", "同意"), approver);
+
+        // 外层（流程审批）与内层（代办处理）各一条，且都带非空 diff
+        var outer = auditRepository.findByTenantIdAndBusinessTypeAndBusinessIdOrderByOperTimeAsc(
+                AUDIT_TENANT, "WF_INSTANCE", "PURCHASE_ORDER/" + bizId);
+        assertEquals(1, outer.size());
+        assertTrue(outer.get(0).getBeforeData().contains("RUNNING"),
+                "外层 before 不应被内层覆盖成代办状态: " + outer.get(0).getBeforeData());
+        assertTrue(outer.get(0).getDiffSummary().contains("status"), "外层 diff 不应为空");
+
+        var inner = auditRepository.findByTenantIdAndBusinessTypeAndBusinessIdOrderByOperTimeAsc(
+                AUDIT_TENANT, "SYS_TASK", "PURCHASE_ORDER/" + bizId);
+        assertEquals(1, inner.size(), "内层代办审计应恰好 1 条");
+        assertTrue(inner.get(0).getBeforeData().contains("PENDING"), "内层 before 应为代办原状态");
+        assertTrue(inner.get(0).getAfterData().contains("APPROVED"), "内层 after 应为代办终态");
     }
 
     @Test
