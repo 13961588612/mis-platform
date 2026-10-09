@@ -4,6 +4,8 @@ import com.mis.taskflow.domain.entity.WfDefinition;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 
 import java.util.List;
 import java.util.Optional;
@@ -19,4 +21,16 @@ public interface WfDefinitionRepository extends JpaRepository<WfDefinition, Long
     List<WfDefinition> findByTenantIdAndDeletedOrderByUpdatedAtDesc(Long tenantId, Integer deleted);
 
     Page<WfDefinition> findByTenantIdAndDeleted(Long tenantId, Integer deleted, Pageable pageable);
+
+    /**
+     * 引用计数：白名单里含该 formCode 的流程定义数（含软删行）。
+     *
+     * <p>删除表单定义前必须查——{@code supported_form_codes} 是 TEXT[]，用 {@code = ANY(数组)} 判定。
+     * 不过滤 deleted：软删的流程定义也可能是别人引用的历史证据，宁可多拒一次。
+     */
+    @Query(value = """
+            select count(*) from wf_definition
+            where tenant_id = :tenantId and :code = any(supported_form_codes)
+            """, nativeQuery = true)
+    long countBySupportedFormCode(@Param("tenantId") Long tenantId, @Param("code") String code);
 }
