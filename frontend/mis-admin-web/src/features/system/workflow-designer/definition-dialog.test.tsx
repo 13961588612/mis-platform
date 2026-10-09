@@ -131,6 +131,7 @@ describe('DefinitionDialog', () => {
           formSchema: null,
           config: '{}',
           nodes: [],
+          edges: null,
           createdAt: '',
           updatedAt: '',
         },

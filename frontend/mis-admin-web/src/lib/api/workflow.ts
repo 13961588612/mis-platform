@@ -21,6 +21,16 @@ export interface WfNode {
   config: string;
 }
 
+/** 画布连线（后端 `WfEdgeDTO`：source/target 存的是 **nodeCode**，不是画布 id）。 */
+export interface WfEdge {
+  source: string;
+  target: string;
+  edgeType: string;
+  label: string | null;
+  conditionExpr: string | null;
+  sortOrder: number | null;
+}
+
 export interface WfDefinition {
   id: string;
   tenantId: string;
@@ -34,6 +44,8 @@ export interface WfDefinition {
   formSchema: string | null;
   config: string;
   nodes: WfNode[];
+  /** 设计器连线；老定义可能没有（后端按 sortOrder 线性推进）。 */
+  edges: WfEdge[] | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -114,6 +126,27 @@ export async function activateDefinition(id: string, tenantId: string): Promise<
     params: { tenantId },
   });
   if (res.data.code !== 0) throw new Error(res.data.message || '发布流程失败');
+}
+
+/**
+ * 取消发布：ACTIVE → DRAFT（后端非 ACTIVE 时幂等返回）。
+ *
+ * ⚠️ 端点 `POST /api/v1/workflow/definitions/{id}/deactivate` 由 V128 登记为 `sys_api` 95050
+ * 并绑到菜单 95007（permission `workflow:definition:edit`）——没绑就会被 deny-unmapped 拦成 403。
+ */
+export async function deactivateDefinition(id: string, tenantId: string): Promise<void> {
+  const res = await api.post<ApiResult<null>>(`/workflow/definitions/${id}/deactivate`, null, {
+    params: { tenantId },
+  });
+  if (res.data.code !== 0) throw new Error(res.data.message || '取消发布失败');
+}
+
+/** 流程定义详情（含 nodes/edges，供编排页编辑态还原）。 */
+export async function fetchDefinition(id: string, tenantId: string): Promise<WfDefinition> {
+  const res = await api.get<ApiResult<WfDefinition>>(`/workflow/definitions/${id}`, {
+    params: { tenantId },
+  });
+  return unwrap(res, '获取流程定义失败');
 }
 
 export async function fetchProcessDetail(id: string, tenantId: string): Promise<ProcessDetail> {

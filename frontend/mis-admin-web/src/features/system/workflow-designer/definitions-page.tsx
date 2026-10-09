@@ -1,10 +1,19 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { FilePlus2, GitBranch, Layers, RefreshCw, Workflow } from 'lucide-react';
+import { Undo2, FilePlus2, GitBranch, Layers, RefreshCw, Workflow } from 'lucide-react';
+import { PermissionGate } from '@/components/auth/permission-gate';
 import { PageHeader } from '@/components/common/page-header';
 import { Button } from '@/components/ui/button';
-import { activateDefinition, fetchDefinitions, type WfDefinition } from '@/lib/api/workflow';
+import {
+  activateDefinition,
+  deactivateDefinition,
+  fetchDefinitions,
+  type WfDefinition,
+} from '@/lib/api/workflow';
 import { cn } from '@/lib/utils';
+
+/** 流程编排 / 定义编辑的权限码（V123:44 菜单 95007 `workflow-designer`）。 */
+const PERM_EDIT = 'workflow:definition:edit';
 
 const STATUS: Record<string, { text: string; cls: string }> = {
   DRAFT: { text: '草稿', cls: 'bg-muted text-muted-foreground' },
@@ -54,6 +63,18 @@ export function WorkflowDefinitionPage() {
       await load();
     } catch (e) {
       setError(e instanceof Error ? e.message : '发布失败');
+    } finally {
+      setActing(null);
+    }
+  }
+
+  async function onDeactivate(def: WfDefinition) {
+    setActing(def.id);
+    try {
+      await deactivateDefinition(def.id, tenantId);
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : '取消发布失败');
     } finally {
       setActing(null);
     }
@@ -152,11 +173,29 @@ export function WorkflowDefinitionPage() {
                         >
                           编排
                         </Button>
-                        {def.status !== 'ACTIVE' ? (
-                          <Button size="sm" disabled={acting === def.id} onClick={() => void onActivate(def)}>
-                            {acting === def.id ? '发布中…' : '发布'}
-                          </Button>
-                        ) : null}
+                        {/*
+                          ⚠️ 无 `workflow:definition:edit` 时**隐藏**而不是禁用：
+                          发布/取消发布是纯管理工作，让无权限者看到一排永远点不动的按钮
+                          只会制造「系统坏了」的错觉；隐藏也省掉了为每个按钮写 tooltip 的成本。
+                        */}
+                        <PermissionGate permission={PERM_EDIT}>
+                          {def.status !== 'ACTIVE' ? (
+                            <Button size="sm" disabled={acting === def.id} onClick={() => void onActivate(def)}>
+                              {acting === def.id ? '发布中…' : '发布'}
+                            </Button>
+                          ) : (
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              disabled={acting === def.id}
+                              onClick={() => void onDeactivate(def)}
+                              title="取消发布后回到草稿，可再次编排"
+                            >
+                              <Undo2 className="mr-1 h-3.5 w-3.5" />
+                              {acting === def.id ? '取消中…' : '取消发布'}
+                            </Button>
+                          )}
+                        </PermissionGate>
                       </div>
                     </td>
                   </tr>
