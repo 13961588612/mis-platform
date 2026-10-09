@@ -499,7 +499,7 @@ public class ProcessService {
                         h.getOperatorName(), h.getOperation(), h.getFromNode(), h.getToNode(),
                         h.getComment(), h.getCreatedAt()))
                 .toList();
-        return new ProcessDetailVO(toInstanceVo(instance), tasks, history);
+        return new ProcessDetailVO(toInstanceVo(instance), tasks, history, instance.getFormData());
     }
 
     @Transactional(readOnly = true)
