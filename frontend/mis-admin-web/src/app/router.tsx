@@ -55,6 +55,7 @@ export function AppRouter() {
               <Route path="/dashboard" element={null} />
               <Route path="/system/*" element={null} />
               <Route path="/monitor/*" element={null} />
+              <Route path="/task/*" element={null} />
               <Route path="/kb/*" element={null} />
               <Route path="/agent/*" element={null} />
               {/* V77：问数独立门户应用 /iqd/*（保留 /ai/* 容纳其余存量页） */}

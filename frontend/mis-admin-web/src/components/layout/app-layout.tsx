@@ -41,6 +41,7 @@ import {
   pickBestNavLeaf,
   type SystemNavNode,
 } from '@/lib/nav/system-nav';
+import { TASK_NAV } from '@/lib/nav/task-nav';
 import { KB_NAV } from '@/lib/nav/kb-nav';
 import { AGENT_NAV } from '@/lib/nav/agent-nav';
 import { IQD_NAV } from '@/lib/nav/iqd-nav';
@@ -84,7 +85,9 @@ export function AppLayout() {
     // 各子系统的静态权威清单：动态菜单仅作增强，避免 seed/授权缺漏导致侧栏空洞。
     // activeAppCode 已按路由前缀优先（kb / agent / iframe），再回退登录 app。
     const fallback =
-      activeAppCode === 'kb'
+      activeAppCode === 'task'
+        ? TASK_NAV
+        : activeAppCode === 'kb'
         ? KB_NAV
         : activeAppCode === 'agent'
           ? AGENT_NAV
@@ -172,10 +175,14 @@ export function AppLayout() {
     () => apps.find((a) => a.code === activeAppCode) ?? null,
     [apps, activeAppCode],
   );
-  const activeAppName = currentAppMeta?.name ?? (activeAppCode === 'system' ? '系统管理' : activeAppCode);
+  const activeAppName =
+    currentAppMeta?.name ??
+    (activeAppCode === 'system' ? '系统管理' : activeAppCode === 'task' ? '工作台' : activeAppCode);
   const AppIcon = resolveNavIcon(
     currentAppMeta?.icon ??
-      (activeAppCode === 'agent'
+      (activeAppCode === 'task'
+        ? 'ClipboardList'
+        : activeAppCode === 'agent'
         ? 'Bot'
         : activeAppCode === 'kb'
           ? 'BookOpen'
@@ -386,7 +393,9 @@ export function AppLayout() {
               onToggleBranch={handleToggleBranch}
               onExpandBranch={handleExpandBranch}
               sectionLabel={
-                activeAppCode === 'system'
+                activeAppCode === 'task'
+                  ? '工作台'
+                  : activeAppCode === 'system'
                   ? '管理与治理'
                   : activeAppCode === 'kb'
                     ? '知识管理'

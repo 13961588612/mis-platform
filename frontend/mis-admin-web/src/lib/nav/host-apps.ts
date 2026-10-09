@@ -17,6 +17,8 @@ const HOST_APP_LANDING: Record<string, string> = {
   iqd: '/iqd/data-query',
   // V86：财务辅助 · POS 对账落地页
   finance: '/finance/bank-account/pos-account/terminals',
+  // 工作台（个人事务中心）：独立宿主应用
+  task: '/task/pending',
 };
 
 /**
@@ -50,6 +52,9 @@ export function resolveActiveHostAppCode(
   pathname: string,
   loginAppCode?: string | null,
 ): string {
+  // 工作台：个人事务中心，独立于任何业务子系统（含门户）
+  if (pathname === '/task' || pathname.startsWith('/task/')) return 'task';
+  if (pathname === '/portal' || pathname.startsWith('/portal/')) return 'task';
   if (pathname === '/kb' || pathname.startsWith('/kb/')) return 'kb';
   if (pathname === '/agent' || pathname.startsWith('/agent/')) return 'agent';
   // V77：问数独立门户应用。/iqd/* 必须**先于** /ai/* 解析，否则会被 agent 规则吞掉。

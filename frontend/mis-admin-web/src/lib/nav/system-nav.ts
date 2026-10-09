@@ -60,11 +60,22 @@ export const SYSTEM_NAV: SystemNavNode[] = [
   },
   {
     kind: 'branch',
+    title: '流程中心',
+    icon: 'Workflow',
+    children: [
+      { path: '/system/workflow/definitions', title: '流程定义', icon: 'GitBranch' },
+      { path: '/system/workflow/designer', title: '流程编排', icon: 'Workflow' },
+    ],
+  },
+  {
+    kind: 'branch',
     title: '审计',
     icon: 'Activity',
     children: [
       { path: '/monitor/login-log', title: '登录日志', icon: 'Activity' },
       { path: '/monitor/oper-log', title: '操作日志', icon: 'ClipboardList' },
+      { path: '/system/audit-op', title: '业务审计', icon: 'ClipboardCheck' },
+      { path: '/system/exec-monitor', title: '执行监控', icon: 'Activity' },
     ],
   },
 ];

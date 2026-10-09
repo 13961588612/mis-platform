@@ -172,6 +172,57 @@
 }
 
 /* 侧栏纵向滚动条：轨道同面板底色，滑块用侧栏边框色（适配明暗主题） */
+
+@layer components {
+  /*
+   * 门户工作台作用域主题（白底 + 现代商务蓝）。
+   * 仅作用于 .portal-shell 内部，不改全局 token，避免影响后台其他页面。
+   * 见 docs/design/portal-workbench-layout.md §10。
+   */
+  .portal-shell {
+    --background: 0 0% 100%;
+    --foreground: 222 25% 15%;
+    --card: 0 0% 100%;
+    --card-foreground: 222 25% 15%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 222 25% 15%;
+    --muted: 220 20% 96%;
+    --muted-foreground: 220 12% 45%;
+    --border: 220 16% 92%;
+    --input: 220 16% 90%;
+    --ring: 222 65% 45%;
+    --primary: 222 65% 45%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 220 20% 96%;
+    --secondary-foreground: 222 25% 15%;
+    --accent: 220 20% 96%;
+    --accent-foreground: 222 25% 15%;
+    --success: 158 55% 38%;
+    --warning: 32 85% 45%;
+    --destructive: 0 62% 48%;
+    --info: 210 70% 45%;
+    --icon-badge-bg: 222 65% 45% / 0.1;
+    --icon-badge-fg: 222 65% 45%;
+    --portal-card-accent: 222 65% 45%;
+    --card-shadow: 0 1px 2px rgb(15 23 42 / 0.04), 0 1px 3px rgb(15 23 42 / 0.06);
+    --card-hover-shadow: 0 4px 12px -2px rgb(15 23 42 / 0.08), 0 2px 6px -2px rgb(15 23 42 / 0.05);
+  }
+  /* 深色下门户跟随全局深色 token，不覆盖 */
+  .dark .portal-shell {
+    --background: 222 30% 9%;
+    --foreground: 210 40% 96%;
+    --card: 222 30% 12%;
+    --card-foreground: 210 40% 96%;
+    --muted: 222 26% 16%;
+    --muted-foreground: 215 20% 68%;
+    --border: 222 26% 20%;
+    --primary: 222 75% 62%;
+    --primary-foreground: 222 47% 11%;
+    --icon-badge-bg: 222 75% 62% / 0.16;
+    --icon-badge-fg: 222 75% 72%;
+  }
+}
+
 @layer utilities {
   .sidebar-scroll {
     overflow-x: hidden;

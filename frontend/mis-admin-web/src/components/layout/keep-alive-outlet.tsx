@@ -18,6 +18,15 @@ import { RoleListPage } from '@/features/system/role/role-list-page';
 import { MenuManagePage } from '@/features/system/menu/menu-manage-page';
 import { DictManagePage } from '@/features/system/dict/dict-manage-page';
 import { LoginLogListPage, OperLogListPage } from '@/features/monitor/log-pages';
+import { TaskMySentPage } from '@/features/taskflow/my-sent-page';
+import { TaskMyProcessedPage } from '@/features/taskflow/my-processed-page';
+import { InboxPage } from '@/features/taskflow/inbox-page';
+import { TaskListPage } from '@/features/taskflow/task-list-page';
+import { ProcessDetailPage } from '@/features/taskflow/process-detail-page';
+import { AuditOpPage } from '@/features/system/audit/audit-op-page';
+import { ExecMonitorPage } from '@/features/system/exec-monitor/exec-monitor-page';
+import { WorkflowDesignerPage } from '@/features/system/workflow-designer/designer-page';
+import { WorkflowDefinitionPage } from '@/features/system/workflow-designer/definitions-page';
 import { KbOverviewPage } from '@/features/kb/kb-overview-page';
 import { KbCategoryPage } from '@/features/kb/category/kb-category-page';
 import { KbLibraryPage } from '@/features/kb/library/kb-library-page';
@@ -125,6 +134,16 @@ const PAGE_MAP: Record<string, ComponentType> = {
   '/system/config': ConfigPage,
   '/monitor/login-log': LoginLogListPage,
   '/monitor/oper-log': OperLogListPage,
+  '/system/audit-op': AuditOpPage,
+  '/system/exec-monitor': ExecMonitorPage,
+  // 任务流：流程维度（工作台）+ 管理维度（流程中心）
+  '/task/inbox': InboxPage,
+  '/task/process/:id': ProcessDetailPage,
+  '/task/pending': TaskListPage,
+  '/task/my-sent': TaskMySentPage,
+  '/task/my-processed': TaskMyProcessedPage,
+  '/system/workflow/designer': WorkflowDesignerPage,
+  '/system/workflow/definitions': WorkflowDefinitionPage,
   // 知识库子系统（路径与 V13__kb_seed.sql / V17__kb_hittest_perms.sql 的 sys_menu.path 一一对应）
   '/kb/overview': KbOverviewPage,
   '/kb/categories': KbCategoryPage,
