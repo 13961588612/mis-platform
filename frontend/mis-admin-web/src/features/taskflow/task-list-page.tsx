@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { AlertTriangle, ClipboardList, Clock, Flame } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, ClipboardList, Clock, Flame } from 'lucide-react';
+import { toast } from 'sonner';
 import { PageHeader } from '@/components/common/page-header';
 import { Button } from '@/components/ui/button';
 import { EmptyState, ListError, ListLoading } from '@/components/common/empty-state';
@@ -30,6 +31,10 @@ const STATUS_TABS = [
  * 流程维度：我的待办（P3）。
  *
  * <p>P7 接入后点击待办进入 ProcessShell（顶部进度条 + 只读表单 + 底部动态审批栏）。
+ *
+ * <p>P0-7：处理完一条后自动续下一条 —— 页内维护「本页待办队列」，
+ * 成功后若队列里还有 PENDING 就地继续；队列空则展示完成态 + 去工作台/看已办的出口。
+ * 队列数据来自当前列表（本页已加载的待办），本轮不新增后端队列接口。
  */
 export function TaskListPage() {
   const user = useAuthStore((s) => s.user);
@@ -50,9 +55,12 @@ export function TaskListPage() {
   const [page, setPage] = useState(1);
   const [total, setTotal] = useState(0);
   const size = 20;
+  /** 本轮已处理完的条数，用于完成态文案（「已连续处理 N 条」）。 */
+  const [doneCount, setDoneCount] = useState(0);
 
-  const load = useCallback(async () => {
-    if (!userId) return;
+  /** 拉取列表与统计；返回本次拉到的列表，供处理成功后就地决定「下一条」。 */
+  const load = useCallback(async (): Promise<TaskItem[]> => {
+    if (!userId) return [];
     setLoading(true);
     setError(null);
     try {
@@ -60,8 +68,10 @@ export function TaskListPage() {
       setItems(result.list);
       setTotal(result.total);
       setStats(await fetchTaskStats(tenantId, userId));
+      return result.list;
     } catch (e) {
       setError(e instanceof Error ? e.message : '加载失败');
+      return [];
     } finally {
       setLoading(false);
     }
@@ -71,7 +81,25 @@ export function TaskListPage() {
     void load();
   }, [load]);
 
+  // 切筛选/翻页时重置「已处理计数」
+  const resetKey = `${status}|${page}`;
+  const lastResetKey = useRef(resetKey);
+  useEffect(() => {
+    if (lastResetKey.current !== resetKey) {
+      lastResetKey.current = resetKey;
+      setDoneCount(0);
+    }
+  }, [resetKey]);
+
   const totalPages = useMemo(() => Math.max(1, Math.ceil(total / size)), [total]);
+
+  /**
+   * 处理成功后挑下一条待处理项（队列 = 当前页已加载的待办，本轮不新增后端队列接口）。
+   * 队列耗尽时返回 null，页面转为完成态 + 出口。
+   */
+  function pickNext(remaining: TaskItem[]): TaskItem | null {
+    return remaining.find((t) => t.status === 'PENDING' || t.status === 'APPROVING') ?? null;
+  }
 
   async function onHandle(item: TaskItem, action: 'APPROVE' | 'REJECT') {
     if (!userId) return;
@@ -84,13 +112,27 @@ export function TaskListPage() {
     setActing(item.id);
     try {
       await handleTask(item.id, tenantId, userId, action, action === 'APPROVE' ? '同意' : '驳回');
-      await load();
+      // 以服务端返回的列表为准（唯一权威源），再据此决定「下一条」还是「队列清空」
+      const fresh = await load();
+      const next = pickNext(fresh);
+      setDoneCount((n) => n + 1);
+      if (next) {
+        toast.success(action === 'APPROVE' ? '已同意' : '已驳回', {
+          description: `继续处理：${next.bizTitle}`,
+        });
+      } else {
+        toast.success(action === 'APPROVE' ? '已同意' : '已驳回', { description: '本页待办已处理完' });
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : '处理失败');
+      toast.error(e instanceof Error ? e.message : '处理失败');
     } finally {
       setActing(null);
     }
   }
+
+  /** 队列已空且本轮确实处理过东西 —— 展示完成态出口，而不是干巴巴的「暂无待办」。 */
+  const queueDrained = doneCount > 0 && items.length === 0 && !loading && !error;
 
   return (
     <div className="flex h-full flex-col gap-4">
@@ -138,6 +180,22 @@ export function TaskListPage() {
           <ListLoading />
         ) : error ? (
           <ListError message={error} onRetry={() => void load()} />
+        ) : queueDrained ? (
+          <EmptyState
+            icon={<CheckCircle2 className="h-6 w-6" />}
+            title={`已连续处理 ${doneCount} 条，本页待办已清空`}
+            description="可以回到工作台继续查看，或者查看已处理记录。"
+            action={
+              <div className="mt-2 flex gap-2">
+                <Button size="sm" variant="outline" onClick={() => navigate('/portal')}>
+                  返回工作台
+                </Button>
+                <Button size="sm" variant="outline" onClick={() => navigate('/task/my-processed')}>
+                  查看已办
+                </Button>
+              </div>
+            }
+          />
         ) : items.length === 0 ? (
           <EmptyState icon={<ClipboardList className="h-6 w-6" />} title="暂无待办" />
         ) : (

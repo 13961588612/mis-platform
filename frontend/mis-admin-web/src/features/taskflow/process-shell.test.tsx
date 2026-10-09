@@ -1,22 +1,39 @@
 // @vitest-environment jsdom
 /**
- * ProcessShell 单测（P7 + P0-6）：
+ * ProcessShell单测（P7 + P0-6 + P0-7）：
  * 1. 渲染流程进度、只读业务数据与审批历史
  * 2. 处理人本人可见审批栏（同意/驳回）
  * 3. 非处理人（或流程已结束）不显示审批栏
- * 4. P0-6：面包屑首级取跳转来源（state.from），直接输 URL 时回落 /task/pending
+ * 4. P0-6：面包屑首级取跳转来源（`state.from`），直接输 URL 时回落 /task/pending
+ * 5. P0-7：批完自动续下一条（跳队列里的下一个流程实例，并带上 return path）
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
-import { MemoryRouter } from 'react-router-dom';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { MemoryRouter, Route, Routes, useLocation, type Location } from 'react-router-dom';
 import { ProcessShell } from './process-shell';
 import * as workflowApi from '@/lib/api/workflow';
+import * as tasksApi from '@/lib/api/tasks';
+import api from '@/lib/api/client';
 import { useAuthStore } from '@/stores/auth-store';
 
 vi.mock('@/lib/api/workflow', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/api/workflow')>();
   return { ...actual, fetchProcessDetail: vi.fn() };
 });
+
+vi.mock('@/lib/api/tasks', () => ({
+  fetchMyTasks: vi.fn(),
+  fetchTaskStats: vi.fn(),
+}));
+
+vi.mock('@/lib/api/client', () => ({
+  default: { post: vi.fn() },
+}));
+
+// sonner 在 jsdom 里无 Toaster 宿主，直接 mock 掉避免噪声
+vi.mock('sonner', () => ({
+  toast: { success: vi.fn(), error: vi.fn() },
+}));
 
 const baseDetail = {
   instance: {
@@ -67,6 +84,29 @@ const baseDetail = {
   ],
 };
 
+/** 造一条带 wfInstanceId 的待办。 */
+function pendingTask(id: string, instanceId: string) {
+  return {
+    id,
+    tenantId: '1',
+    taskType: 'PURCHASE_APPROVAL',
+    bizType: 'PURCHASE_ORDER',
+    bizRefId: 'PO-001',
+    bizTitle: `待办 ${id}`,
+    targetEntity: null,
+    assigneeId: '700001',
+    assigneeName: '主管',
+    status: 'PENDING',
+    priority: 2,
+    dueDate: null,
+    metadata: JSON.stringify({ wfInstanceId: instanceId }),
+    result: null,
+    read: false,
+    completedAt: null,
+    createdAt: '2026-10-08T10:00:00',
+  };
+}
+
 function setUser(id: string) {
   useAuthStore.setState({
     user: {
@@ -76,14 +116,26 @@ function setUser(id: string) {
   });
 }
 
+/** 记录当前 location，便于断言 return path 是否被带上。 */
+function LocationProbe({ sink }: { sink: { current: Location | null } }) {
+  sink.current = useLocation();
+  return null;
+}
+
 describe('ProcessShell', () => {
   beforeEach(() => {
     vi.mocked(workflowApi.fetchProcessDetail).mockResolvedValue(baseDetail);
+    vi.mocked(tasksApi.fetchMyTasks).mockResolvedValue({ page: 1, size: 20, total: 0, list: [] });
+    // 审批动作走 api.post（axios），给个 code=0 的成功响应
+    vi.mocked(api.post).mockResolvedValue({
+      data: { code: 0, data: null, message: '' },
+    } as never);
   });
 
   afterEach(() => {
     cleanup();
     vi.clearAllMocks();
+    vi.restoreAllMocks();
   });
 
   it('渲染进度与只读业务数据', async () => {
@@ -121,8 +173,20 @@ describe('ProcessShell', () => {
     expect(screen.queryByText('同意')).toBeNull();
   });
 
-  it('P0-6：直接输 URL（无 state）时回落「工作台」且不报错', async () => {
+  it('P0-6：面包屑首级取 state.from（来自门户），直接输 URL 时回落工作台', async () => {
     setUser('700001');
+    // 从门户进来：state带from=/portal
+    const { unmount } = render(
+      <MemoryRouter
+        initialEntries={[{ pathname: '/task/process/128', state: { from: '/portal', fromLabel: '工作台' } }]}
+      >
+        <ProcessShell instanceId="128" />
+      </MemoryRouter>,
+    );
+    expect(await screen.findByText('工作台')).toBeTruthy();
+    unmount();
+
+    // 直接输 URL：无 state，必须回落 /task/pending 且不报错
     render(
       <MemoryRouter initialEntries={['/task/process/128']}>
         <ProcessShell instanceId="128" />
@@ -132,30 +196,57 @@ describe('ProcessShell', () => {
     expect(screen.getByText('流程详情')).toBeTruthy();
   });
 
-  it('P0-6：面包屑首级取 state.from / fromLabel', async () => {
+  it('P0-7：批完自动续下一条，跳到队列里的下一个流程并保留 return path', async () => {
     setUser('700001');
+    // 队列里有一个「下一条」实例 129
+    vi.mocked(tasksApi.fetchMyTasks).mockResolvedValue({
+      page: 1,
+      size: 20,
+      total: 1,
+      list: [pendingTask('6001', '129')],
+    });
+
+    const loc = { current: null as Location | null };
     render(
       <MemoryRouter
-        initialEntries={[
-          { pathname: '/task/process/128', state: { from: '/task/my-sent', fromLabel: '我发起的' } },
-        ]}
+        initialEntries={[{ pathname: '/task/process/128', state: { from: '/task/my-processed', fromLabel: '我审批的' } }]}
       >
-        <ProcessShell instanceId="128" />
+        <LocationProbe sink={loc} />
+        <Routes>
+          <Route path="/task/process/:id" element={<ProcessShell instanceId="128" />} />
+        </Routes>
       </MemoryRouter>,
     );
-    expect(await screen.findByText('我发起的')).toBeTruthy();
-    expect(screen.queryByText('工作台')).toBeNull();
+
+    fireEvent.click(await screen.findByText('同意'));
+
+    await waitFor(() => {
+      expect(loc.current?.pathname).toBe('/task/process/129');
+    });
+    // return path 不能在「续下一条」时丢掉
+    expect((loc.current?.state as { from?: string } | null)?.from).toBe('/task/my-processed');
   });
 
-  it('P0-6：非法 state（from 非绝对路径）也回落，不抛错', async () => {
+  it('P0-7：队列为空时批完停留在原地并给出队列清空文案', async () => {
     setUser('700001');
+    vi.mocked(tasksApi.fetchMyTasks).mockResolvedValue({ page: 1, size: 20, total: 0, list: [] });
+    // 处理后详情变为「我已处理完」：无 PENDING 任务
+    vi.mocked(workflowApi.fetchProcessDetail)
+      .mockResolvedValueOnce(baseDetail)
+      .mockResolvedValue({
+        ...baseDetail,
+        tasks: [{ ...baseDetail.tasks[0], status: 'COMPLETED' }],
+      });
+
     render(
-      <MemoryRouter
-        initialEntries={[{ pathname: '/task/process/128', state: { from: 'evil', fromLabel: 'x' } }]}
-      >
+      <MemoryRouter>
         <ProcessShell instanceId="128" />
       </MemoryRouter>,
     );
-    expect(await screen.findByText('工作台')).toBeTruthy();
+
+    fireEvent.click(await screen.findByText('同意'));
+
+    expect(await screen.findByText(/待处理队列已清空/)).toBeTruthy();
+    expect(screen.getByText('查看已办')).toBeTruthy();
   });
 });

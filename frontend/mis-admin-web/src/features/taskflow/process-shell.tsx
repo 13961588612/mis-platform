@@ -7,7 +7,9 @@
  * <p>数据来自 `GET /api/v1/workflow/instances/{id}`（含 instance/tasks/history）。
  */
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { ArrowRight, CheckCircle2, Circle, Clock } from 'lucide-react';
+import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { PageHeader } from '@/components/common/page-header';
 import { ReadOnlyField, ReadOnlyText } from './readonly-field';
@@ -16,6 +18,8 @@ import {
   type ProcessDetail,
   type WfTask,
 } from '@/lib/api/workflow';
+import { fetchMyTasks } from '@/lib/api/tasks';
+import { wfInstanceId } from '@/lib/api/wf-instance';
 import { useAuthStore } from '@/stores/auth-store';
 import { cn } from '@/lib/utils';
 import { useReturnPath } from '@/lib/nav/return-path';
@@ -38,6 +42,15 @@ export function ProcessShell({ instanceId }: ProcessShellProps) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [acting, setActing] = useState(false);
+  /**
+   * P0-7 队列：进入本页时待处理的其他流程实例 ID。
+   * 数据来源是 `/tasks/my`（本页已有的待办接口），本轮不新增后端队列接口；
+   * 用户在本页批完一条后自动跳下一条，队列耗尽则留在原地给出去向。
+   */
+  const [queue, setQueue] = useState<string[]>([]);
+  const navigate = useNavigate();
+  /** 已处理条数，用于「已连续处理 N 条」文案。 */
+  const [doneCount, setDoneCount] = useState(0);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -55,6 +68,28 @@ export function ProcessShell({ instanceId }: ProcessShellProps) {
     void load();
   }, [load]);
 
+  /**
+   * 载入待处理队列（用于「批完自动续下一条」）。
+   * 只取有流程实例的 PENDING 待办；失败静默降级为「无队列」，不影响本页正常处理。
+   */
+  useEffect(() => {
+    if (!userId) return;
+    let cancelled = false;
+    void fetchMyTasks({ tenantId: TENANT_ID, assigneeId: userId, status: 'PENDING', page: 1, size: 20 })
+      .then((r) => {
+        if (cancelled) return;
+        const ids = r.list
+          .map((t) => wfInstanceId(t))
+          .filter((id): id is string => id != null && id !== instanceId);
+        setQueue(Array.from(new Set(ids)));
+      })
+      .catch(() => {
+        if (!cancelled) setQueue([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [userId, instanceId]);
 
   /** 我的待处理流程任务（用于判断是否注入审批栏）。 */
   const myPendingTask = useMemo<WfTask | null>(() => {
@@ -75,14 +110,29 @@ export function ProcessShell({ instanceId }: ProcessShellProps) {
           { params: { tenantId: TENANT_ID, operatorId: userId } },
         );
         if (res.data.code !== 0) throw new Error(res.data.message || '处理失败');
-        await load();
+        const next = queue[0] ?? null;
+        if (next) {
+          // P0-7：队列里还有下一条 → 就地跳过去继续批，并带上 return path
+          const rest = queue.slice(1);
+          setQueue(rest);
+          setDoneCount((n) => n + 1);
+          toast.success(action === 'APPROVE' ? '已同意' : '已驳回', {
+            description: `继续处理第 ${queue.length + doneCount + 1} 条`,
+          });
+          navigate(`/task/process/${next}`, { state: returnPathState });
+        } else {
+          setDoneCount((n) => n + 1);
+          toast.success(action === 'APPROVE' ? '已同意' : '已驳回', { description: '待处理队列已清空' });
+          await load();
+        }
       } catch (e) {
         setError(e instanceof Error ? e.message : '处理失败');
+        toast.error(e instanceof Error ? e.message : '处理失败');
       } finally {
         setActing(false);
       }
     },
-    [myPendingTask, userId, load],
+    [myPendingTask, userId, load, queue, doneCount, navigate, returnPathState],
   );
 
   if (loading && !detail) {
@@ -184,12 +234,26 @@ export function ProcessShell({ instanceId }: ProcessShellProps) {
         <div className="flex items-center justify-end gap-3 rounded-md border bg-card p-3">
           <span className="mr-auto text-[12px] text-muted-foreground">
             当前待办：{myPendingTask.nodeName}
+            {doneCount > 0 ? ` · 已连续处理 ${doneCount} 条` : ''}
           </span>
           <Button variant="destructive" size="sm" disabled={acting} onClick={() => void handle('REJECT')}>
             驳回
           </Button>
           <Button size="sm" disabled={acting} onClick={() => void handle('APPROVE')}>
             同意
+          </Button>
+        </div>
+      ) : doneCount > 0 && queue.length === 0 ? (
+        /* P0-7：队列耗尽 + 本轮处理过东西 → 给出去向，而不是一句「流程已结束」 */
+        <div className="flex flex-wrap items-center justify-end gap-2 rounded-md border bg-card p-3">
+          <span className="mr-auto text-[12px] text-muted-foreground">
+            已连续处理 {doneCount} 条，待处理队列已清空
+          </span>
+          <Button size="sm" variant="outline" onClick={() => navigate(returnPathState.from)}>
+            返回{returnPathState.fromLabel}
+          </Button>
+          <Button size="sm" variant="outline" onClick={() => navigate('/task/my-processed')}>
+            查看已办
           </Button>
         </div>
       ) : (

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 /**
- * TaskListPage 单测（P3 + P0-6）：
+ * TaskListPage 单测（P3）：
  * 1. 渲染待办列表与统计角标
  * 2. 点击「同意」调用 handleTask 并刷新
  * 3. 无数据显示空态
@@ -16,6 +16,10 @@ vi.mock('@/lib/api/tasks', () => ({
   fetchMyTasks: vi.fn(),
   fetchTaskStats: vi.fn(),
   handleTask: vi.fn(),
+}));
+
+vi.mock('sonner', () => ({
+  toast: { success: vi.fn(), error: vi.fn() },
 }));
 
 const sampleTask = {
@@ -107,5 +111,48 @@ describe('TaskListPage', () => {
       </MemoryRouter>,
     );
     expect(await screen.findByText('暂无待办')).toBeTruthy();
+  });
+
+  it('P0-7：批完自动续下一条 —— 处理后剩一条时列表就地推进且不出现完成态', async () => {
+    const two = [sampleTask, { ...sampleTask, id: '5002', bizTitle: '采购审批 - 网络设备' }];
+    // 服务端语义：处理掉 5001 后再拉就只剩 5002
+    vi.mocked(tasksApi.fetchMyTasks)
+      .mockResolvedValueOnce({ page: 1, size: 20, total: 2, list: two })
+      .mockResolvedValue({ page: 1, size: 20, total: 1, list: [two[1]] });
+    render(
+      <MemoryRouter>
+        <TaskListPage />
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText('采购审批 - 服务器采购')).toBeTruthy();
+    expect(screen.getByText('采购审批 - 网络设备')).toBeTruthy();
+
+    fireEvent.click(screen.getAllByText('同意')[0]);
+
+    await waitFor(() => {
+      expect(screen.queryByText('采购审批 - 服务器采购')).toBeNull();
+    });
+    // 下一条仍在队列里，没有进入完成态
+    expect(screen.getByText('采购审批 - 网络设备')).toBeTruthy();
+    expect(screen.queryByText(/本页待办已清空/)).toBeNull();
+  });
+
+  it('P0-7：队列耗尽展示完成态并给出返回工作台 / 查看已办出口', async () => {
+    // 服务端语义：处理掉最后一条后再拉就空了
+    vi.mocked(tasksApi.fetchMyTasks)
+      .mockResolvedValueOnce({ page: 1, size: 20, total: 1, list: [sampleTask] })
+      .mockResolvedValue({ page: 1, size: 20, total: 0, list: [] });
+    render(
+      <MemoryRouter>
+        <TaskListPage />
+      </MemoryRouter>,
+    );
+
+    fireEvent.click(await screen.findByText('同意'));
+
+    expect(await screen.findByText(/本页待办已清空/)).toBeTruthy();
+    expect(screen.getByText('返回工作台')).toBeTruthy();
+    expect(screen.getByText('查看已办')).toBeTruthy();
   });
 });
