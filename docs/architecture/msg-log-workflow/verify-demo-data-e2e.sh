@@ -26,7 +26,10 @@
 set -u
 
 REPO="d:/code/mis-platform"
-LOG_DIR="$REPO/.tmp-demo-data/logs"
+# Java 助手（Q=查库、AssertFields=字段名断言、RunSql=直跑迁移）与其 .class
+# 都放在 e2e-helpers/，与本脚本同目录 ⇒ 换机器/换分支也能直接复跑，不依赖任何临时目录。
+HELPERS="$REPO/docs/architecture/msg-log-workflow/e2e-helpers"
+LOG_DIR="$HELPERS/logs"
 OUT="$LOG_DIR/verify-demo-data-e2e.txt"
 TF_PORT=18081
 BFF_PORT=18083
@@ -60,7 +63,9 @@ trap cleanup EXIT
 say "=============================================================="
 say " 断言 A：Flyway 版本登记"
 say "=============================================================="
-cd "$REPO/.tmp-demo-data" 2>/dev/null || { say "[FAIL] 缺少 .tmp-demo-data（需先编译 Q.java）"; exit 1; }
+cd "$HELPERS" || { say "[FAIL] 缺少 e2e-helpers/ 目录"; exit 1; }
+# 从源码现编，避免依赖已提交的 .class 与 JDK 小版本
+"$JAVAC8" -encoding UTF-8 -cp "$PG_JAR" Q.java AssertFields.java >> "$OUT" 2>&1
 java -cp ".;$PG_JAR" Q \
   "SELECT version, description, success FROM flyway_schema_history WHERE version IN ('128','129') ORDER BY installed_rank" \
   > "$LOG_DIR/_a.txt" 2>&1
@@ -132,7 +137,7 @@ say " 断言 D：form_data key 与 pur-form.tsx PUR_FIELDS 逐字一致"
 say "=============================================================="
 "$JAVAC8" -encoding UTF-8 -cp "$PG_JAR" AssertFields.java >> "$OUT" 2>&1
 java -cp ".;$PG_JAR" AssertFields >> "$OUT" 2>&1
-check $? "4 条实例的 form_data key均为 8/8 匹配且类型正确"
+check $? "4 条实例的 form_data key 均为 8/8 匹配且类型正确"
 
 say ""
 say "=============================================================="
