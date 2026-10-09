@@ -2,29 +2,14 @@ import { useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { AlertTriangle, ChevronRight, Inbox } from 'lucide-react';
 import { fetchMyTasks, type TaskItem } from '@/lib/api/tasks';
-import { cn } from '@/lib/utils';
+import { ListError, ListLoading } from '@/components/common/empty-state';
+import { PriorityBadge } from '@/components/common/priority-badge';
+import { wfInstanceId } from '@/lib/api/wf-instance';
+import { returnPath } from '@/lib/nav/return-path';
 
 interface TaskBoardProps {
   tenantId: string;
   userId: string;
-}
-
-const PRIORITY: Record<number, { text: string; cls: string }> = {
-  4: { text: '紧急', cls: 'bg-destructive/10 text-destructive' },
-  3: { text: '高', cls: 'bg-warning/10 text-warning' },
-  2: { text: '普通', cls: 'bg-info/10 text-info' },
-  1: { text: '低', cls: 'bg-muted text-muted-foreground' },
-};
-
-/** 从 sys_task.metadata 解析流程实例 ID（存在则进入 ProcessShell）。 */
-function wfInstanceId(item: TaskItem): string | null {
-  if (!item.metadata) return null;
-  try {
-    const parsed = JSON.parse(item.metadata) as { wfInstanceId?: number | string };
-    return parsed.wfInstanceId != null ? String(parsed.wfInstanceId) : null;
-  } catch {
-    return null;
-  }
 }
 
 /**
@@ -54,9 +39,12 @@ export function TaskBoard({ tenantId, userId }: TaskBoardProps) {
     void load();
   }, [load]);
 
+  // P0-6：带上来源，详情页面包屑可回到门户工作台
+  const from = returnPath('/portal', '工作台');
+
   function open(item: TaskItem) {
     const inst = wfInstanceId(item);
-    if (inst) navigate(`/task/process/${inst}`);
+    if (inst) navigate(`/task/process/${inst}`, { state: from });
     else navigate('/task/pending');
   }
 
@@ -74,14 +62,9 @@ export function TaskBoard({ tenantId, userId }: TaskBoardProps) {
       </header>
 
       {loading ? (
-        <div className="flex h-28 items-center justify-center text-[13px] text-muted-foreground">加载中…</div>
+        <ListLoading label="加载中…" compact />
       ) : error ? (
-        <div className="flex h-28 flex-col items-center justify-center gap-1 text-[13px] text-destructive">
-          {error}
-          <button type="button" className="text-[12px] underline" onClick={() => void load()}>
-            重试
-          </button>
-        </div>
+        <ListError message={error} onRetry={() => void load()} compact />
       ) : items.length === 0 ? (
         <div className="flex h-28 flex-col items-center justify-center gap-1 text-[13px] text-muted-foreground">
           <Inbox className="h-5 w-5 opacity-40" />
@@ -90,7 +73,6 @@ export function TaskBoard({ tenantId, userId }: TaskBoardProps) {
       ) : (
         <ul className="divide-y">
           {items.map((item) => {
-            const pr = PRIORITY[item.priority] ?? PRIORITY[1];
             const overdue = item.dueDate != null && new Date(item.dueDate) < new Date();
             return (
               <li key={item.id}>
@@ -99,7 +81,7 @@ export function TaskBoard({ tenantId, userId }: TaskBoardProps) {
                   onClick={() => open(item)}
                   className="flex w-full items-center gap-3 px-4 py-2.5 text-left transition hover:bg-muted/60"
                 >
-                  <span className={cn('shrink-0 rounded px-1.5 py-0.5 text-[10px]', pr.cls)}>{pr.text}</span>
+                  <PriorityBadge priority={item.priority} />
                   <span className="min-w-0 flex-1 truncate text-[13px]">{item.bizTitle}</span>
                   {overdue ? (
                     <span className="inline-flex shrink-0 items-center gap-0.5 text-[11px] text-destructive">

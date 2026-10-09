@@ -3,6 +3,8 @@ import { useNavigate } from 'react-router-dom';
 import { Bell, ChevronRight } from 'lucide-react';
 import { fetchInbox, type MessageItem } from '@/lib/api/messages';
 import { cn } from '@/lib/utils';
+import { ListError, ListLoading } from '@/components/common/empty-state';
+import { UnreadDot } from '@/components/common/unread-dot';
 
 interface MessageBoardProps {
   tenantId: string;
@@ -48,14 +50,9 @@ export function MessageBoard({ tenantId, userId }: MessageBoardProps) {
       </header>
 
       {loading ? (
-        <div className="flex h-28 items-center justify-center text-[13px] text-muted-foreground">加载中…</div>
+        <ListLoading label="加载中…" compact />
       ) : error ? (
-        <div className="flex h-28 flex-col items-center justify-center gap-1 text-[13px] text-destructive">
-          {error}
-          <button type="button" className="text-[12px] underline" onClick={() => void load()}>
-            重试
-          </button>
-        </div>
+        <ListError message={error} onRetry={() => void load()} compact />
       ) : items.length === 0 ? (
         <div className="flex h-28 flex-col items-center justify-center gap-1 text-[13px] text-muted-foreground">
           <Bell className="h-5 w-5 opacity-40" />
@@ -70,12 +67,7 @@ export function MessageBoard({ tenantId, userId }: MessageBoardProps) {
                 onClick={() => navigate('/task/inbox')}
                 className="flex w-full items-center gap-2.5 px-4 py-2.5 text-left transition hover:bg-muted/60"
               >
-                <span
-                  className={cn(
-                    'h-1.5 w-1.5 shrink-0 rounded-full',
-                    item.read ? 'bg-muted-foreground/25' : 'bg-primary',
-                  )}
-                />
+                <UnreadDot read={item.read} className="h-1.5 w-1.5" />
                 <span className={cn('min-w-0 flex-1 truncate text-[13px]', !item.read && 'font-medium')}>
                   {item.title}
                 </span>

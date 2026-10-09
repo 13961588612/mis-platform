@@ -1,11 +1,14 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { CheckCircle2, History, XCircle } from 'lucide-react';
 import { PageHeader } from '@/components/common/page-header';
-import { Button } from '@/components/ui/button';
+import { EmptyState, ListError, ListLoading } from '@/components/common/empty-state';
+import { PaginationFooter } from '@/components/common/pagination-footer';
 import { fetchHandledTasks, type TaskItem } from '@/lib/api/tasks';
 import { useAuthStore } from '@/stores/auth-store';
 import { cn } from '@/lib/utils';
+import { wfInstanceId } from '@/lib/api/wf-instance';
+import { returnPath } from '@/lib/nav/return-path';
 
 const STATUS: Record<string, { text: string; cls: string; icon: typeof CheckCircle2 }> = {
   APPROVED: { text: '已通过', cls: 'bg-success/10 text-success', icon: CheckCircle2 },
@@ -46,7 +49,19 @@ export function TaskMyProcessedPage() {
     void load();
   }, [load]);
 
-  const totalPages = Math.max(1, Math.ceil(total / size));
+  const totalPages = useMemo(() => Math.max(1, Math.ceil(total / size)), [total]);
+
+  // P0-6：带上来源，详情页面包屑可回到「我审批的」
+  const from = returnPath('/task/my-processed', '我审批的');
+
+  function open(item: TaskItem) {
+    const inst = wfInstanceId(item);
+    if (inst) {
+      navigate(`/task/process/${inst}`, { state: from });
+      return;
+    }
+    navigate('/task/pending');
+  }
 
   return (
     <div className="flex h-full flex-col gap-4">
@@ -54,19 +69,11 @@ export function TaskMyProcessedPage() {
 
       <div className="min-h-0 flex-1 overflow-auto rounded-md border bg-card">
         {loading ? (
-          <div className="flex h-40 items-center justify-center text-sm text-muted-foreground">加载中…</div>
+          <ListLoading />
         ) : error ? (
-          <div className="flex h-40 flex-col items-center justify-center gap-2 text-sm text-destructive">
-            {error}
-            <Button size="sm" variant="outline" onClick={() => void load()}>
-              重试
-            </Button>
-          </div>
+          <ListError message={error} onRetry={() => void load()} />
         ) : items.length === 0 ? (
-          <div className="flex h-40 flex-col items-center justify-center gap-2 text-sm text-muted-foreground">
-            <History className="h-6 w-6 opacity-40" />
-            暂无审批记录
-          </div>
+          <EmptyState icon={<History className="h-6 w-6" />} title="暂无审批记录" />
         ) : (
           <ul className="divide-y">
             {items.map((item) => {
@@ -76,20 +83,7 @@ export function TaskMyProcessedPage() {
                 <li key={item.id}>
                   <button
                     type="button"
-                    onClick={() => {
-                      if (item.metadata) {
-                        try {
-                          const m = JSON.parse(item.metadata) as { wfInstanceId?: number | string };
-                          if (m.wfInstanceId != null) {
-                            navigate(`/task/process/${m.wfInstanceId}`);
-                            return;
-                          }
-                        } catch {
-                          /* ignore */
-                        }
-                      }
-                      navigate('/task/pending');
-                    }}
+                    onClick={() => open(item)}
                     className="flex w-full items-center gap-4 px-4 py-3 text-left transition hover:bg-muted/40"
                   >
                     <div className="min-w-0 flex-1">
@@ -120,19 +114,7 @@ export function TaskMyProcessedPage() {
         )}
       </div>
 
-      <div className="flex items-center justify-between text-sm text-muted-foreground">
-        <span>
-          共 <b className="text-foreground">{total}</b> 条 · 第 {page}/{totalPages} 页
-        </span>
-        <div className="flex gap-2">
-          <Button size="sm" variant="outline" disabled={page <= 1} onClick={() => setPage((p) => p - 1)}>
-            上一页
-          </Button>
-          <Button size="sm" variant="outline" disabled={page >= totalPages} onClick={() => setPage((p) => p + 1)}>
-            下一页
-          </Button>
-        </div>
-      </div>
+      <PaginationFooter total={total} page={page} totalPages={totalPages} onPageChange={setPage} />
     </div>
   );
 }

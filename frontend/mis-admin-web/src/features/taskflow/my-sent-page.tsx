@@ -1,10 +1,12 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { PageHeader } from '@/components/common/page-header';
-import { Button } from '@/components/ui/button';
+import { EmptyState, ListError, ListLoading } from '@/components/common/empty-state';
+import { PaginationFooter } from '@/components/common/pagination-footer';
 import { fetchMyProcesses, type WfInstance } from '@/lib/api/workflow';
 import { useAuthStore } from '@/stores/auth-store';
 import { cn } from '@/lib/utils';
+import { returnPath } from '@/lib/nav/return-path';
 
 const STATUS_LABEL: Record<string, { text: string; cls: string }> = {
   RUNNING: { text: '进行中', cls: 'bg-info/10 text-info' },
@@ -46,7 +48,10 @@ export function TaskMySentPage() {
     void load();
   }, [load]);
 
-  const totalPages = Math.max(1, Math.ceil(total / size));
+  const totalPages = useMemo(() => Math.max(1, Math.ceil(total / size)), [total]);
+
+  // P0-6：带上来源，详情页面包屑可回到「我发起的」
+  const from = returnPath('/task/my-sent', '我发起的');
 
   return (
     <div className="flex h-full flex-col gap-4">
@@ -54,11 +59,11 @@ export function TaskMySentPage() {
 
       <div className="min-h-0 flex-1 overflow-auto rounded-md border bg-card">
         {loading ? (
-          <div className="flex h-40 items-center justify-center text-sm text-muted-foreground">加载中…</div>
+          <ListLoading />
         ) : error ? (
-          <div className="flex h-40 items-center justify-center text-sm text-destructive">{error}</div>
+          <ListError message={error} onRetry={() => void load()} />
         ) : items.length === 0 ? (
-          <div className="flex h-40 items-center justify-center text-sm text-muted-foreground">暂无发起的流程</div>
+          <EmptyState title="暂无发起的流程" />
         ) : (
           <ul className="divide-y">
             {items.map((item) => {
@@ -67,7 +72,7 @@ export function TaskMySentPage() {
                 <li
                 key={item.id}
                 className="flex cursor-pointer items-center gap-4 px-4 py-3 transition hover:bg-muted/40"
-                onClick={() => navigate(`/task/process/${item.id}`)}
+                onClick={() => navigate(`/task/process/${item.id}`, { state: from })}
               >
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2">
@@ -96,19 +101,7 @@ export function TaskMySentPage() {
         )}
       </div>
 
-      <div className="flex items-center justify-between text-sm text-muted-foreground">
-        <span>
-          共 <b className="text-foreground">{total}</b> 条 · 第 {page}/{totalPages} 页
-        </span>
-        <div className="flex gap-2">
-          <Button size="sm" variant="outline" disabled={page <= 1} onClick={() => setPage((p) => p - 1)}>
-            上一页
-          </Button>
-          <Button size="sm" variant="outline" disabled={page >= totalPages} onClick={() => setPage((p) => p + 1)}>
-            下一页
-          </Button>
-        </div>
-      </div>
+      <PaginationFooter total={total} page={page} totalPages={totalPages} onPageChange={setPage} />
     </div>
   );
 }
