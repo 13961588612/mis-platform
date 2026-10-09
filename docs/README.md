@@ -89,6 +89,8 @@ docs/
 6. [微服务划分](backend/microservices.md) + [公共模块](backend/common-modules.md)
 7. **[运维总览](devops/README.md)** → [本地开发](devops/local-dev.md)
 8. [代码阅读顺序](CODE-READING-GUIDE.md)
+9. [消息·日志·工作流综合架构设计](architecture/msg-log-workflow/06-workflow-architecture-final-design-v4.md)
+10. [全量开发与测试总计划](architecture/msg-log-workflow/07-full-development-plan.md)
 
 ---
 
@@ -105,6 +107,7 @@ docs/
 | mis-org | ✅ | 组织/部门/员工 |
 | mis-admin-bff | ✅ | 聚合、API 权限、门户 `/apps`、`/auth/me` |
 | mis-system | ✅ | 菜单 router/permissions、仪表盘 stats |
+| **mis-taskflow** | ✅ | 消息中心 + 代办任务 + 工作流引擎 + 高可用执行闭环；见 [07-full-development-plan](architecture/msg-log-workflow/07-full-development-plan.md) |
 | 前端 mis-admin-web | ✅ | 登录 + 门户九宫格 + 子系统壳；业务 CRUD 页迭代中 |
 | **AI 融合（MIS × ai-platform）** | ✅ | 阶段5 前端 MVP + 后端扩展 + 融合部署全闭环；详见 [AI 融合文档中心](ai-fusion/README.md) |
 | **Coordinator–Worker 调度基座** | ✅ | 需求/架构/ADR/规范齐套；目录 [ai-fusion/coordinator-worker/](ai-fusion/coordinator-worker/README.md) |

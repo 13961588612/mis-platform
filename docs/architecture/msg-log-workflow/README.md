@@ -12,6 +12,20 @@
 | 1 | [01-message-task-design.md](./01-message-task-design.md) | 统一消息中心与代办任务体系设计 | ✅ 完成 |
 | 2 | [02-operational-logging-design.md](./02-operational-logging-design.md) | 统一操作日志体系设计 | ✅ 完成 |
 | 3 | [03-workflow-integration-design.md](./03-workflow-integration-design.md) | 工作流整合设计规范 | ✅ 完成 |
+| 4 | [04-flow-designer-design.md](./04-flow-designer-design.md) | 可视化流程编排器设计 | ✅ |
+| 5 | [05-standard-form-development-guide.md](./05-standard-form-development-guide.md) | 标准化表单开发指南 (SOP) | ✅ |
+| 6 | [06-workflow-architecture-final-design-v4.md](./06-workflow-architecture-final-design-v4.md) | 综合架构设计（最终实施版） | ✅ |
+| 7 | [07-full-development-plan.md](./07-full-development-plan.md) | 全量开发与测试总计划（含 P1-P8 执行状态） | ✅ |
+| 8 | [08-taskflow-tryout-guide.md](./08-taskflow-tryout-guide.md) | 联调与试用手册 | ✅ |
+| 9 | [09-unified-inbox-plan.md](./09-unified-inbox-plan.md) | **统一收件箱（消息/通知/待办/已办）统一规划** | 📋 规划待评审 |
+
+> ⚠️ **基线声明（2026-10-09）**
+>
+> - 第 6 篇以 **`06-workflow-architecture-final-design-v4.md`（v4.0）** 为唯一有效基线；不带 `-v4` 后缀的 v3.0 版本与 `001-` 前缀的早期精简版**均视为已废弃**，不得作为设计依据。
+> - 本目录下文档记录的模块名 `mis-notification` 与桥接表 `sys_biz_reference` **在实现中并不存在**（实际模块为 `mis-taskflow`，该桥接表已在 `V120` 中声明去掉）。请以迁移脚本与代码为准。
+> - 文档中反复出现的 **WebSocket 实时推送承诺，代码零落地**。按第 9 篇规划 §4.4 改为「轮询 → SSE」，WebSocket 方案建议在 ADR 中显式判死。
+> - 收到/处理/已办等功能的现状问题、真相源裁定与分期路线，以第 9 篇规划为准。
+
 
 ---
 
@@ -69,7 +83,8 @@
 | components/layout | header-toolkit, app-layout, side-nav |
 | stores | Zustand store 模式 |
 | lib/api | API 客户端封装 |
-| outer.tsx | KeepAliveOutlet 懒加载路由 |
+| 
+outer.tsx | KeepAliveOutlet 懒加载路由 |
 
 ---
 
