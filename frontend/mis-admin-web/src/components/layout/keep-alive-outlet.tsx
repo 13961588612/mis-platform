@@ -141,7 +141,8 @@ const PAGE_MAP: Record<string, ComponentType> = {
   '/system/exec-monitor': ExecMonitorPage,
   // 任务流：流程维度（工作台）+ 管理维度（流程中心）
   '/task/inbox': InboxPage,
-  '/task/process/:id': ProcessDetailPage,
+  // 注：流程详情 `/task/process/:id` 是动态路径，登记在下方 DYNAMIC_PAGES（前缀匹配），
+  // 放进PAGE_MAP 会被 `PAGE_MAP[path]` 精确匹配miss ⇒ 落到「页面不存在」。
   '/task/pending': TaskListPage,
   '/task/my-sent': TaskMySentPage,
   '/task/my-processed': TaskMyProcessedPage,
@@ -233,6 +234,14 @@ const DYNAMIC_PAGES: DynamicPageRule[] = [
     component: KbLibraryDetailPage,
     title: '知识库详情',
     icon: 'Database',
+  },
+  // 任务流 · 流程详情（不进侧栏）。门户卡片 / 我的待办 / 我发起的 / 我审批的 共 7 处跳转
+  // 都指向 `/task/process/{实例ID}`，必须走前缀匹配；单段 ID 故maxSegments 缺省 1。
+  {
+    prefix: '/task/process/',
+    component: ProcessDetailPage,
+    title: '流程详情',
+    icon: 'Workflow',
   },
   // 智能体运营控制台：Agent 详情子路由（V19: type=2 + visible=0，不进侧栏）。
   // 覆盖 `/agent/agents/:id` 与 `/agent/agents/:id/{skills|config|coordination}`，
