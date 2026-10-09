@@ -1,8 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { AlertTriangle, Clock, Flame } from 'lucide-react';
+import { AlertTriangle, ClipboardList, Clock, Flame } from 'lucide-react';
 import { PageHeader } from '@/components/common/page-header';
 import { Button } from '@/components/ui/button';
+import { EmptyState, ListError, ListLoading } from '@/components/common/empty-state';
+import { PaginationFooter } from '@/components/common/pagination-footer';
+import { PriorityBadge } from '@/components/common/priority-badge';
 import {
   fetchMyTasks,
   fetchTaskStats,
@@ -12,6 +15,8 @@ import {
 } from '@/lib/api/tasks';
 import { useAuthStore } from '@/stores/auth-store';
 import { cn } from '@/lib/utils';
+import { wfInstanceId } from '@/lib/api/wf-instance';
+import { returnPath } from '@/lib/nav/return-path';
 
 const STATUS_TABS = [
   { key: '', label: '待我处理' },
@@ -20,13 +25,6 @@ const STATUS_TABS = [
   { key: 'APPROVED', label: '已通过' },
   { key: 'REJECTED', label: '已驳回' },
 ];
-
-const PRIORITY_LABEL: Record<number, { text: string; cls: string }> = {
-  4: { text: '紧急', cls: 'bg-destructive/10 text-destructive' },
-  3: { text: '高', cls: 'bg-warning/10 text-warning' },
-  2: { text: '普通', cls: 'bg-info/10 text-info' },
-  1: { text: '低', cls: 'bg-muted text-muted-foreground' },
-};
 
 /**
  * 流程维度：我的待办（P3）。
@@ -40,16 +38,8 @@ export function TaskListPage() {
   const userId = user?.id ?? '';
   const navigate = useNavigate();
 
-  /** 从 sys_task.metadata 中解析关联的流程实例 ID（存在则进入 ProcessShell）。 */
-  function wfInstanceId(item: TaskItem): string | null {
-    if (!item.metadata) return null;
-    try {
-      const parsed = JSON.parse(item.metadata) as { wfInstanceId?: number | string };
-      return parsed.wfInstanceId != null ? String(parsed.wfInstanceId) : null;
-    } catch {
-      return null;
-    }
-  }
+  // P0-6：待办详情带来源，面包屑可回到本页
+  const from = returnPath('/task/pending', '我的待办');
 
   const [items, setItems] = useState<TaskItem[]>([]);
   const [stats, setStats] = useState<TaskStats>({ pending: 0, urgent: 0, overdue: 0 });
@@ -88,7 +78,7 @@ export function TaskListPage() {
     // 流程驱动的待办：交由 ProcessShell 统一处理（顶部进度 + 只读表单 + 审批栏）。
     const instId = wfInstanceId(item);
     if (instId && action === 'APPROVE') {
-      navigate(`/task/process/${instId}`);
+      navigate(`/task/process/${instId}`, { state: from });
       return;
     }
     setActing(item.id);
@@ -145,15 +135,14 @@ export function TaskListPage() {
 
       <div className="min-h-0 flex-1 overflow-auto rounded-md border bg-card">
         {loading ? (
-          <div className="flex h-40 items-center justify-center text-sm text-muted-foreground">加载中…</div>
+          <ListLoading />
         ) : error ? (
-          <div className="flex h-40 items-center justify-center text-sm text-destructive">{error}</div>
+          <ListError message={error} onRetry={() => void load()} />
         ) : items.length === 0 ? (
-          <div className="flex h-40 items-center justify-center text-sm text-muted-foreground">暂无待办</div>
+          <EmptyState icon={<ClipboardList className="h-6 w-6" />} title="暂无待办" />
         ) : (
           <ul className="divide-y">
             {items.map((item) => {
-              const pr = PRIORITY_LABEL[item.priority] ?? PRIORITY_LABEL[1];
               const isOpen = item.status === 'PENDING' || item.status === 'APPROVING';
               const overdue = item.dueDate && isOpen && new Date(item.dueDate) < new Date();
               return (
@@ -161,7 +150,7 @@ export function TaskListPage() {
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2">
                       <span className="truncate text-[13px] font-medium">{item.bizTitle}</span>
-                      <span className={cn('shrink-0 rounded px-1.5 py-0.5 text-[10px]', pr.cls)}>{pr.text}</span>
+                      <PriorityBadge priority={item.priority} />
                       {overdue ? (
                         <span className="shrink-0 rounded bg-destructive/10 px-1.5 py-0.5 text-[10px] text-destructive">
                           已逾期
@@ -206,24 +195,7 @@ export function TaskListPage() {
         )}
       </div>
 
-      <div className="flex items-center justify-between text-sm text-muted-foreground">
-        <span>
-          共 <b className="text-foreground">{total}</b> 条 · 第 {page}/{totalPages} 页
-        </span>
-        <div className="flex gap-2">
-          <Button size="sm" variant="outline" disabled={page <= 1} onClick={() => setPage((p) => p - 1)}>
-            上一页
-          </Button>
-          <Button
-            size="sm"
-            variant="outline"
-            disabled={page >= totalPages}
-            onClick={() => setPage((p) => p + 1)}
-          >
-            下一页
-          </Button>
-        </div>
-      </div>
+      <PaginationFooter total={total} page={page} totalPages={totalPages} onPageChange={setPage} />
     </div>
   );
 }

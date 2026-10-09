@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 /**
- * TaskListPage 单测（P3）：
+ * TaskListPage 单测（P3 + P0-6）：
  * 1. 渲染待办列表与统计角标
  * 2. 点击「同意」调用 handleTask 并刷新
  * 3. 无数据显示空态

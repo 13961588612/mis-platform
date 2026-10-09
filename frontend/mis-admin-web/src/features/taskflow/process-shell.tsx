@@ -18,6 +18,7 @@ import {
 } from '@/lib/api/workflow';
 import { useAuthStore } from '@/stores/auth-store';
 import { cn } from '@/lib/utils';
+import { useReturnPath } from '@/lib/nav/return-path';
 import api from '@/lib/api/client';
 import type { ApiResult } from '@/types/api';
 
@@ -30,6 +31,8 @@ export interface ProcessShellProps {
 export function ProcessShell({ instanceId }: ProcessShellProps) {
   const user = useAuthStore((s) => s.user);
   const userId = user?.id ?? '';
+  // P0-6：面包屑首级取「跳转来源」，直接输 URL 时回落 /task/pending
+  const returnPathState = useReturnPath();
 
   const [detail, setDetail] = useState<ProcessDetail | null>(null);
   const [loading, setLoading] = useState(false);
@@ -51,6 +54,7 @@ export function ProcessShell({ instanceId }: ProcessShellProps) {
   useEffect(() => {
     void load();
   }, [load]);
+
 
   /** 我的待处理流程任务（用于判断是否注入审批栏）。 */
   const myPendingTask = useMemo<WfTask | null>(() => {
@@ -96,7 +100,10 @@ export function ProcessShell({ instanceId }: ProcessShellProps) {
       <PageHeader
         title={instance.businessId}
         description={`${instance.definitionCode} · 表单 ${instance.startedFormCode ?? '-'}`}
-        breadcrumbs={[{ label: '工作台', to: '/task/pending' }, { label: '流程详情' }]}
+        breadcrumbs={[
+          { label: returnPathState.fromLabel, to: returnPathState.from },
+          { label: '流程详情' },
+        ]}
       />
 
       {/* 顶部：流程进度与参与人 */}
