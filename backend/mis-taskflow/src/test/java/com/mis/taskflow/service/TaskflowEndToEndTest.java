@@ -12,6 +12,7 @@ import com.mis.taskflow.dto.CompleteWfTaskRequest;
 import com.mis.taskflow.dto.CreateDefinitionRequest;
 import com.mis.taskflow.dto.StartProcessRequest;
 import com.mis.taskflow.dto.WfNodeDTO;
+import com.mis.taskflow.support.FormTestFixtures;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
@@ -36,6 +37,7 @@ class TaskflowEndToEndTest {
     private static final long TENANT = 900002L;
 
     @Autowired private WfDefinitionService definitionService;
+    @Autowired private FormDefinitionService formDefinitionService;
     @Autowired private ProcessService processService;
     @Autowired private ExecutionTaskService executionTaskService;
     @Autowired private WfDefinitionRepository definitionRepository;
@@ -56,6 +58,7 @@ class TaskflowEndToEndTest {
         String bizId = "E2E-PO-" + System.nanoTime();
 
         String code = "E2E_" + System.nanoTime();
+        FormTestFixtures.register(formDefinitionService, TENANT, formCode, "E2E 表单");
         Long defId = definitionService.create(TENANT, 1L, new CreateDefinitionRequest(
                 code, "E2E 单级审批", "APPROVAL", null, List.of(formCode), "{}",
                 List.of(

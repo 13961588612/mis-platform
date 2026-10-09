@@ -10,6 +10,7 @@ import com.mis.taskflow.dto.CreateDefinitionRequest;
 import com.mis.taskflow.dto.StartProcessRequest;
 import com.mis.taskflow.dto.WfEdgeDTO;
 import com.mis.taskflow.dto.WfNodeDTO;
+import com.mis.taskflow.support.FormTestFixtures;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
@@ -36,11 +37,13 @@ class WorkflowEdgeFlowIntegrationTest {
     private static final long TENANT = 900003L;
 
     @Autowired private WfDefinitionService definitionService;
+    @Autowired private FormDefinitionService formDefinitionService;
     @Autowired private ProcessService processService;
     @Autowired private WfTaskRepository wfTaskRepository;
 
     private String createBranchFlow(String formCode, long gm, long dept) {
         String code = "EDGE_" + System.nanoTime();
+        FormTestFixtures.register(formDefinitionService, TENANT, formCode, "条件分支表单");
         Long defId = definitionService.create(TENANT, 1L, new CreateDefinitionRequest(
                 code, "条件分支流程", "APPROVAL", null, List.of(formCode), "{}",
                 List.of(

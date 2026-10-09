@@ -7,6 +7,7 @@ import com.mis.taskflow.dto.CreateDefinitionRequest;
 import com.mis.taskflow.dto.StartProcessRequest;
 import com.mis.taskflow.dto.WfEdgeDTO;
 import com.mis.taskflow.dto.WfNodeDTO;
+import com.mis.taskflow.support.FormTestFixtures;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
@@ -32,12 +33,14 @@ class CountersignIntegrationTest {
     private static final long TENANT = 900004L;
 
     @Autowired private WfDefinitionService definitionService;
+    @Autowired private FormDefinitionService formDefinitionService;
     @Autowired private ProcessService processService;
     @Autowired private WfTaskRepository wfTaskRepository;
     @Autowired private WfInstanceRepository instanceRepository;
 
     private String createCountersign(String strategy) {
         String code = "CS_" + System.nanoTime();
+        FormTestFixtures.register(formDefinitionService, TENANT, "CS_FORM", "会签表单");
         String rule = "{\"type\":\"USER_LIST\",\"value\":[920001,920002,920003]}";
         String config = "{\"routingStrategy\":\"" + strategy + "\"}";
         Long defId = definitionService.create(TENANT, 1L, new CreateDefinitionRequest(

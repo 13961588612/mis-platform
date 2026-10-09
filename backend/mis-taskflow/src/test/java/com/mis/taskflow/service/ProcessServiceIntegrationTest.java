@@ -14,6 +14,7 @@ import com.mis.taskflow.dto.ProcessDetailVO;
 import com.mis.taskflow.dto.StartProcessRequest;
 import com.mis.taskflow.dto.TransferTaskRequest;
 import com.mis.taskflow.dto.WfNodeDTO;
+import com.mis.taskflow.support.FormTestFixtures;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
@@ -40,6 +41,7 @@ class ProcessServiceIntegrationTest {
     private static final long TENANT = 900001L;
 
     @Autowired private WfDefinitionService definitionService;
+    @Autowired private FormDefinitionService formDefinitionService;
     @Autowired private ProcessService processService;
     @Autowired private TaskService taskService;
     @Autowired private WfInstanceRepository instanceRepository;
@@ -66,6 +68,7 @@ class ProcessServiceIntegrationTest {
      */
     private String createSingleApprovalFlow(String formCode, long approver) {
         String code = uniqueCode();
+        FormTestFixtures.register(formDefinitionService, TENANT, formCode, "单级审批表单");
         Long defId = definitionService.create(TENANT, 1L, new CreateDefinitionRequest(
                 code, "单级审批", "APPROVAL", null, List.of(formCode), "{}",
                 List.of(
@@ -80,6 +83,7 @@ class ProcessServiceIntegrationTest {
 
     private String createTwoLevelFlow(String formCode, long a1, long a2) {
         String code = uniqueCode();
+        FormTestFixtures.register(formDefinitionService, TENANT, formCode, "两级审批表单");
         Long defId = definitionService.create(TENANT, 1L, new CreateDefinitionRequest(
                 code, "两级审批", "APPROVAL", null, List.of(formCode), "{}",
                 List.of(
