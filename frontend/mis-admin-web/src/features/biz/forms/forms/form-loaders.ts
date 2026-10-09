@@ -27,7 +27,12 @@ import type { FormRegistryEntry } from '../types';
 /** formCode → 动态 import 出该表单的注册条目。 */
 type FormEntryLoader = () => Promise<FormRegistryEntry[]>;
 
-const loaders: Record<string, FormEntryLoader> = {};
+const loaders: Record<string, FormEntryLoader> = {
+  // ⚠️ 必须存在：`V123__taskflow_menu_api_seed.sql:145` 种了演示定义
+  // `PURCHASE_APPROVAL_DEMO`，白名单是 `ARRAY['PUR_FORM']`。
+  // 没有这一行 ⇒ 那条既有演示流程的审批页直接走 not-registered。
+  PUR_FORM: async () => [(await import('./pur-form')).purFormEntry],
+};
 
 /** 进行中的加载，用于并发去重（同一 code 被两个套壳同时挂载只import 一次）。 */
 const inflight = new Map<string, Promise<boolean>>();
