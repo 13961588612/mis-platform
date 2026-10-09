@@ -4,7 +4,6 @@ import { GuestRoute, ProtectedRoute } from '@/components/auth/protected-route';
 import { AppLayout } from '@/components/layout/app-layout';
 import { LoginPage } from '@/features/auth/login-page';
 import { ChangePasswordPage } from '@/features/auth/change-password-page';
-import { PortalPage } from '@/features/portal/portal-page';
 import { bootstrapSession } from '@/lib/auth/bootstrap';
 import { useAuthStore } from '@/stores/auth-store';
 import { AIProvider } from '@/features/ai/ai-context';
@@ -48,10 +47,13 @@ export function AppRouter() {
             <Route path="/login" element={<LoginPage />} />
           </Route>
           <Route element={<ProtectedRoute />}>
-            <Route path="/portal" element={<PortalPage />} />
             <Route path="/change-password" element={<ChangePasswordPage />} />
             {/* 子路由仅作路径匹配；页面由 AppLayout 内 KeepAliveOutlet 渲染 */}
             <Route element={<AppLayout />}>
+              {/* P0-5：/portal 归位进 AppLayout（此前裸挂，自造了一套 header）。
+                  页面组件由 KeepAliveOutlet 的 PAGE_MAP 解析（'/portal' -> PortalPage），
+                  故element 为 null，与 /task/* 等同构。 */}
+              <Route path="/portal" element={null} />
               <Route path="/dashboard" element={null} />
               <Route path="/system/*" element={null} />
               <Route path="/monitor/*" element={null} />

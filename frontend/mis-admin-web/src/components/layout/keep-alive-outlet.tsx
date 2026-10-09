@@ -4,6 +4,8 @@ import { cn } from '@/lib/utils';
 import { useTabStore } from '@/stores/tab-store';
 import { getIframeApp, useIframeRegistryVersion } from '@/lib/nav/iframe-apps';
 import { DashboardPage } from '@/features/dashboard/dashboard-page';
+// P0-5：/portal 归位进 AppLayout 后，门户页面也由本组件渲染（与 /task/* 同构）
+import { PortalPage } from '@/features/portal/portal-page';
 import {
   AppManagePage,
   ConfigPage,
@@ -119,6 +121,7 @@ function IframePage({ basePath, title }: { basePath: string; title: string }) {
 }
 
 const PAGE_MAP: Record<string, ComponentType> = {
+  '/portal': PortalPage,
   '/dashboard': DashboardPage,
   '/403': ForbiddenPage,
   '/system/user': UserListPage,
