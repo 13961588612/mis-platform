@@ -29,6 +29,7 @@ import { AuditOpPage } from '@/features/system/audit/audit-op-page';
 import { ExecMonitorPage } from '@/features/system/exec-monitor/exec-monitor-page';
 import { WorkflowDesignerPage } from '@/features/system/workflow-designer/designer-page';
 import { WorkflowDefinitionPage } from '@/features/system/workflow-designer/definitions-page';
+import { FormDefinitionManagePage } from '@/features/biz/forms/form-definition-manage-page';
 import { KbOverviewPage } from '@/features/kb/kb-overview-page';
 import { KbCategoryPage } from '@/features/kb/category/kb-category-page';
 import { KbLibraryPage } from '@/features/kb/library/kb-library-page';
@@ -151,6 +152,8 @@ const PAGE_MAP: Record<string, ComponentType> = {
   //（取消发布 / PUT 更新定义）都还指着这个 path，注销会让菜单解析不到页面。
   '/system/workflow/designer': WorkflowDesignerPage,
   '/system/workflow/definitions': WorkflowDefinitionPage,
+  // 业务 · 表单注册（对齐 system-nav 的「表单管理」branch 叶子 /system/forms）
+  '/system/forms': FormDefinitionManagePage,
   // 知识库子系统（路径与 V13__kb_seed.sql / V17__kb_hittest_perms.sql 的 sys_menu.path 一一对应）
   '/kb/overview': KbOverviewPage,
   '/kb/categories': KbCategoryPage,
