@@ -65,8 +65,14 @@ vi.mock('@/features/taskflow/task-list-page', () => ({
   TaskListPage: () => <div data-testid="pending-page" />,
 }));
 
-vi.mock('@/features/taskflow/process-detail-page', () => ({
-  ProcessDetailPage: () => <div data-testid="process-detail-page" />,
+// ⚠️ 这里**只**替换 ProcessShell（详情壳：挂载即发接口），**绝不替换 ProcessDetailPage**：
+// ProcessDetailPage 正是本次修复的被测对象，替身掉就等于把「页面能否从 pathname 拿到 ID」
+// 换成测试自己的副本，`useParams` 恒空这个 Bug 在替身下测不出来（上一轮已踩过这个坑）。
+// ProcessShell 替身把 instanceId 打到 DOM 上，供断言页面确实取到了 128。
+vi.mock('@/features/taskflow/process-shell', () => ({
+  ProcessShell: ({ instanceId }: { instanceId: string }) => (
+    <div data-testid="process-shell">{instanceId}</div>
+  ),
 }));
 
 // 替身改用真实 resolvePageComponent 后，命中路径会真的渲染页面组件。
@@ -215,7 +221,7 @@ describe('回归：/task/process/:id 动态明细路由（错放 PAGE_MAP → �
 
   it('路由实渲染：/task/process/128 命中页面而非「页面不存在」', async () => {
     goto('/task/process/128');
-    expect(await screen.findByTestId('process-detail-page')).toBeTruthy();
+    expect(await screen.findByTestId('process-shell')).toBeTruthy();
     expect(screen.queryByTestId('page-not-found')).toBeNull();
   });
 
@@ -257,5 +263,48 @@ describe('回归：/task/process/:id 动态明细路由（错放 PAGE_MAP → �
     expect(resolvePageComponent('/kb/libraries/12')).not.toBeNull();
     expect(resolvePageComponent('/agent/agents/7')).not.toBeNull();
     expect(resolvePageComponent('/agent/agents/7/skills')).not.toBeNull();
+  });
+});
+
+/**
+ * 回归：ProcessDetailPage 曾用 `useParams` 取实例 ID，而本页由 KeepAliveOutlet 直挂、
+ * **不在任何 `<Route>` 上下文内**（`router.tsx` 对 `/task/*` 只登记 `element={null}`）
+ * ⇒ `useParams()` 恒为 `{}` ⇒ 点开任何流程都显示「缺少流程实例 ID」（7 处跳转全死）。
+ *
+ * <p>本组用例经**真实 AppRouter + 真实 resolvePageComponent + 真实 ProcessDetailPage**
+ * 全链路渲染，仅把发接口的 ProcessShell 换成替身，断言 ID 真的传到了详情壳。
+ */
+describe('回归：流程详情在无 Route 上下文下从 pathname 取 ID（原 useParams 恒空）', () => {
+  beforeEach(() => {
+    useAuthStore.setState({ accessToken: 'test-token', expiresAt: Date.now() + 3_600_000 });
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  it('全链路：/task/process/128 渲染出的页面拿到 ID 128', async () => {
+    goto('/task/process/128');
+    const shell = await screen.findByTestId('process-shell');
+    expect(shell.textContent).toBe('128');
+    expect(screen.queryByText(/缺少流程实例 ID/)).toBeNull();
+  });
+
+  /**
+   * 空尾段 `/task/process/` 在**路由层**就被挡掉了：`matchDynamicPage` 对空 rest 直接
+   * `continue`（见 `keep-alive-outlet.tsx`），故 resolvePageComponent 返回 null ⇒
+   * 渲染「页面不存在」，压根进不到 ProcessDetailPage 的空 ID 分支。
+   * 组件自身那条空尾段分支由 `process-detail-page.test.tsx` 直接渲染组件覆盖。
+   */
+  it('空尾段 /task/process/ ⇒ 路由层兜底为「页面不存在」，不崩、不挂详情壳', async () => {
+    goto('/task/process/');
+    expect(await screen.findByTestId('page-not-found')).toBeTruthy();
+    expect(screen.queryByTestId('process-shell')).toBeNull();
+  });
+
+  it('/task/process/abc 渲染出错误提示而非详情壳（不拿脏 ID 打接口）', async () => {
+    goto('/task/process/abc');
+    expect(await screen.findByText('流程实例 ID 非法')).toBeTruthy();
+    expect(screen.queryByTestId('process-shell')).toBeNull();
   });
 });
