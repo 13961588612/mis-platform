@@ -87,6 +87,19 @@ export interface ProcessDetail {
   instance: WfInstance;
   tasks: WfTask[];
   history: WfHistory[];
+  /**
+   * 本次发起提交的业务表单数据，**JSON 字符串**。
+   *
+   * ⚠️ 是 `string` 不是对象：后端 `ProcessDetailVO.formData` 直接透出
+   * `wf_instance.form_data`（JSONB 的字符串形态），不做解析。
+   * 前端**不要**在这里 `JSON.parse` —— 解析与容错统一由
+   * `features/biz/forms/parse-form-data.ts` 的 `parseFormData` 负责，
+   * 它对非法串返回 `{ ok: false, raw }` 供兜底卡展示原文，不抛。
+   *
+   * ⚠️ 刻意**不放在 `WfInstance` 上**：`GET /workflow/instances/my` 分页 20 条，
+   * 挂在那里会让列表接口多传 20 份表单 JSON。
+   */
+  formData: string | null;
 }
 
 export async function fetchDefinitions(tenantId: string, page = 1, size = 20): Promise<PageResult<WfDefinition>> {

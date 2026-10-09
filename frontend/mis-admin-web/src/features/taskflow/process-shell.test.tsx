@@ -82,6 +82,15 @@ const baseDetail = {
       createdAt: '2026-10-08T10:00:00',
     },
   ],
+  // ⚠️ 是 JSON **字符串**（后端 JSONB 的字符串形态），不是对象
+  formData: JSON.stringify({
+    orderNo: 'PO-001',
+    supplier: '华东电子',
+    amount: 128000,
+    applyDate: '2026-10-09',
+    priority: 'HIGH',
+    urgent: true,
+  }),
 };
 
 /** 造一条带 wfInstanceId 的待办。 */
