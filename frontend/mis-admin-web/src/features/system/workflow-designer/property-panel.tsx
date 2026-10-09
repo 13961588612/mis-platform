@@ -6,8 +6,19 @@
  */
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { MultiSelect } from '@/components/ui/multi-select';
 import { cn } from '@/lib/utils';
+import {
+  missingFormCodes,
+  parseFormCodes,
+  serializeFormCodes,
+  useFormCatalog,
+  type FormOption,
+} from './form-catalog';
 import type { WfFlowNode } from './types';
+
+/** 分类枚举：方案 §4.4 字段 3，收敛为枚举（原来是自由文本）。 */
+export const WF_CATEGORIES = ['APPROVAL', 'NOTICE', 'TASK'] as const;
 
 export interface FlowMeta {
   code: string;
@@ -44,19 +55,25 @@ export function PropertyPanel({
             <Input value={flowMeta.name} onChange={(e) => onFlowMetaChange({ ...flowMeta, name: e.target.value })} placeholder="采购审批流程" className="h-8" />
           </Field>
           <Field label="分类">
-            <Input value={flowMeta.category} onChange={(e) => onFlowMetaChange({ ...flowMeta, category: e.target.value })} placeholder="APPROVAL" className="h-8" />
+            <select
+              value={flowMeta.category}
+              onChange={(e) => onFlowMetaChange({ ...flowMeta, category: e.target.value })}
+              className="h-8 w-full rounded-md border border-input bg-background px-2 text-sm"
+            >
+              {WF_CATEGORIES.map((c) => (
+                <option key={c} value={c}>
+                  {c}
+                </option>
+              ))}
+            </select>
           </Field>
           <Field label="说明">
             <Input value={flowMeta.description} onChange={(e) => onFlowMetaChange({ ...flowMeta, description: e.target.value })} className="h-8" />
           </Field>
-          <Field label="表单白名单（逗号分隔）">
-            <Input
-              value={flowMeta.supportedFormCodes}
-              onChange={(e) => onFlowMetaChange({ ...flowMeta, supportedFormCodes: e.target.value })}
-              placeholder="PUR_FORM, PUR_EMERGENCY_FORM"
-              className="h-8"
-            />
-          </Field>
+          <FormWhitelistField
+            supportedFormCodes={flowMeta.supportedFormCodes}
+            onChange={(codes) => onFlowMetaChange({ ...flowMeta, supportedFormCodes: serializeFormCodes(codes) })}
+          />
           <p className="text-[11px] text-muted-foreground">
             一个流程可绑定多个表单；启动实例时表单代码必须在此白名单内。
           </p>
@@ -139,6 +156,50 @@ export function PropertyPanel({
         </button>
       </div>
     </div>
+  );
+}
+
+/**
+ * 表单白名单：下拉多选（T4.6）。
+ *
+ * <p>候选项来自后端「已启用」清单与前端「已实现」清单的**交集**，不再允许手打字符串
+ * ——手打能绕过任何前端校验，拼错了只能等保存时被后端拒。
+ *
+ * <p>⚠️ 后端不就绪时降级为「前端已实现清单」并打出可见提示，绝不白屏。
+ */
+export function FormWhitelistField({
+  supportedFormCodes,
+  onChange,
+  tenantId = '1',
+}: {
+  supportedFormCodes: string;
+  onChange: (codes: string[]) => void;
+  tenantId?: string;
+}) {
+  const { options, loading, notice } = useFormCatalog(tenantId);
+  const selected = parseFormCodes(supportedFormCodes);
+  const missing = missingFormCodes(options, selected);
+  const selectOptions = [
+    ...options.map((o: FormOption) => ({ value: o.code, label: `${o.name}（${o.code}）` })),
+    ...missing.map((code) => ({ value: code, label: `${code}（未注册或已停用）` })),
+  ];
+
+  return (
+    <Field label="表单白名单">
+      <MultiSelect
+        options={selectOptions}
+        value={selected}
+        onChange={onChange}
+        placeholder={loading ? '加载表单清单…' : '选择表单（可多选）'}
+        disabled={loading}
+      />
+      {notice ? <p className="mt-1 text-[11px] text-warning">{notice}</p> : null}
+      {missing.length > 0 ? (
+        <p className="mt-1 text-[11px] text-destructive">
+          已选中的 {missing.join('、')} 未注册或已停用，保存会被后端拒绝。
+        </p>
+      ) : null}
+    </Field>
   );
 }
 
