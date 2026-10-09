@@ -49,6 +49,13 @@ public class WfDefinitionController {
         return Result.ok();
     }
 
+    /** 取消发布：ACTIVE → DRAFT。非 ACTIVE 幂等。 */
+    @PostMapping("/{id}/deactivate")
+    public Result<Void> deactivate(@PathVariable Long id, @RequestParam Long tenantId) {
+        definitionService.deactivate(id, tenantId);
+        return Result.ok();
+    }
+
     @GetMapping("/{id}")
     public Result<WfDefinitionDTO> get(@PathVariable Long id, @RequestParam Long tenantId) {
         return Result.ok(definitionService.get(id, tenantId));

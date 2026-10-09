@@ -13,6 +13,7 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.Map;
@@ -52,6 +53,28 @@ public class WorkflowController {
     @PostMapping("/definitions/{id}/activate")
     public Result<Void> activate(@PathVariable Long id, @RequestParam(required = false) Long tenantId) {
         taskflowWebClient.activateWorkflowDefinition(id, TaskflowIdentity.tenantId(tenantId));
+        return Result.ok();
+    }
+
+    /**
+     * 更新流程定义（草稿）。
+     *
+     * <p>⚠️ 本端点在 V128 之前就已存在于 mis-taskflow，但 sys_api 从未登记（V123 只登记了
+     * GET/POST/activate），{@code deny-unmapped:true} 会把它拦成 403 ⇒「编辑已有定义」这条路
+     * 一直是死的。V128 的 95056 补上登记。
+     */
+    @PutMapping("/definitions/{id}")
+    public Result<Void> updateDefinition(@PathVariable Long id,
+                                         @RequestParam(required = false) Long tenantId,
+                                         @RequestBody Map<String, Object> body) {
+        taskflowWebClient.updateWorkflowDefinition(id, TaskflowIdentity.tenantId(tenantId), body);
+        return Result.ok();
+    }
+
+    /** 取消发布：ACTIVE → DRAFT。非ACTIVE 幂等。 */
+    @PostMapping("/definitions/{id}/deactivate")
+    public Result<Void> deactivate(@PathVariable Long id, @RequestParam(required = false) Long tenantId) {
+        taskflowWebClient.deactivateWorkflowDefinition(id, TaskflowIdentity.tenantId(tenantId));
         return Result.ok();
     }
 

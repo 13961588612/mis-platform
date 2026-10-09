@@ -8,6 +8,7 @@ import com.mis.adminbff.client.model.AuditOpVO;
 import com.mis.adminbff.client.model.AuditStatsVO;
 import com.mis.adminbff.client.model.AuditTimelineItem;
 import com.mis.adminbff.client.model.ExecutionTaskVO;
+import com.mis.adminbff.client.model.FormDefinitionVO;
 import com.mis.adminbff.client.model.ProcessDetailVO;
 import com.mis.adminbff.client.model.TaskStatsVO;
 import com.mis.adminbff.client.model.TaskVO;
@@ -67,6 +68,12 @@ public class TaskflowWebClient extends AbstractDownstreamClient {
     private static final ParameterizedTypeReference<Result<ProcessDetailVO>> WF_PROCESS_DETAIL =
             new ParameterizedTypeReference<>() {};
     private static final ParameterizedTypeReference<Result<PageResult<WfInstanceVO>>> WF_INSTANCE_PAGE =
+            new ParameterizedTypeReference<>() {};
+    private static final ParameterizedTypeReference<Result<java.util.List<FormDefinitionVO>>> FORM_DEF_LIST =
+            new ParameterizedTypeReference<>() {};
+    private static final ParameterizedTypeReference<Result<java.util.List<FormDefinitionVO>>> FORM_DEF_TREE =
+            new ParameterizedTypeReference<>() {};
+    private static final ParameterizedTypeReference<Result<FormDefinitionVO>> FORM_DEF_ONE =
             new ParameterizedTypeReference<>() {};
     private static final ParameterizedTypeReference<Result<PageResult<ExecutionTaskVO>>> EXEC_PAGE =
             new ParameterizedTypeReference<>() {};
@@ -301,6 +308,65 @@ public class TaskflowWebClient extends AbstractDownstreamClient {
         String uri = UriComponentsBuilder.fromPath("/internal/v1/workflow/definitions/{id}/activate")
                 .queryParam("tenantId", tenantId).buildAndExpand(id).toUriString();
         blockVoid(client().post().uri(uri).retrieve().bodyToMono(VOID));
+    }
+
+    public void updateWorkflowDefinition(Long id, Long tenantId, Map<String, Object> body) {
+        String uri = UriComponentsBuilder.fromPath("/internal/v1/workflow/definitions/{id}")
+                .queryParam("tenantId", tenantId).buildAndExpand(id).toUriString();
+        blockVoid(client().put().uri(uri).contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(body).retrieve().bodyToMono(VOID));
+    }
+
+    public void deactivateWorkflowDefinition(Long id, Long tenantId) {
+        String uri = UriComponentsBuilder.fromPath("/internal/v1/workflow/definitions/{id}/deactivate")
+                .queryParam("tenantId", tenantId).buildAndExpand(id).toUriString();
+        blockVoid(client().post().uri(uri).retrieve().bodyToMono(VOID));
+    }
+
+    // ------------------------------------------------------------------
+    // 业务表单注册（form_definition）
+    // ------------------------------------------------------------------
+
+    public java.util.List<FormDefinitionVO> formDefinitionTree(Long tenantId) {
+        String uri = UriComponentsBuilder.fromPath("/internal/v1/form-definitions/tree")
+                .queryParam("tenantId", tenantId).toUriString();
+        return block(client().get().uri(uri).retrieve().bodyToMono(FORM_DEF_TREE));
+    }
+
+    public java.util.List<FormDefinitionVO> formDefinitions(Long tenantId, String status) {
+        String uri = UriComponentsBuilder.fromPath("/internal/v1/form-definitions")
+                .queryParam("tenantId", tenantId)
+                .queryParamIfPresent("status", Optional.ofNullable(status))
+                .toUriString();
+        return block(client().get().uri(uri).retrieve().bodyToMono(FORM_DEF_LIST));
+    }
+
+    public FormDefinitionVO formDefinition(Long id, Long tenantId) {
+        String uri = UriComponentsBuilder.fromPath("/internal/v1/form-definitions/{id}")
+                .queryParam("tenantId", tenantId).buildAndExpand(id).toUriString();
+        return block(client().get().uri(uri).retrieve().bodyToMono(FORM_DEF_ONE));
+    }
+
+    public Long createFormDefinition(Long tenantId, Long operatorId, Map<String, Object> body) {
+        String uri = UriComponentsBuilder.fromPath("/internal/v1/form-definitions")
+                .queryParam("tenantId", tenantId)
+                .queryParamIfPresent("operatorId", Optional.ofNullable(operatorId))
+                .toUriString();
+        return block(client().post().uri(uri).contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(body).retrieve().bodyToMono(LONG_RESULT));
+    }
+
+    public void updateFormDefinition(Long id, Long tenantId, Map<String, Object> body) {
+        String uri = UriComponentsBuilder.fromPath("/internal/v1/form-definitions/{id}")
+                .queryParam("tenantId", tenantId).buildAndExpand(id).toUriString();
+        blockVoid(client().put().uri(uri).contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(body).retrieve().bodyToMono(VOID));
+    }
+
+    public void deleteFormDefinition(Long id, Long tenantId) {
+        String uri = UriComponentsBuilder.fromPath("/internal/v1/form-definitions/{id}")
+                .queryParam("tenantId", tenantId).buildAndExpand(id).toUriString();
+        blockVoid(client().delete().uri(uri).retrieve().bodyToMono(VOID));
     }
 
     public Long startProcess(Long tenantId, Map<String, Object> body) {

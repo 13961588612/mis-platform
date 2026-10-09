@@ -32,17 +32,20 @@ public class WfDefinitionService {
     private final WfDefinitionRepository definitionRepository;
     private final WfNodeRepository nodeRepository;
     private final WfEdgeRepository edgeRepository;
+    private final FormDefinitionService formDefinitionService;
 
     public WfDefinitionService(WfDefinitionRepository definitionRepository, WfNodeRepository nodeRepository,
-                               WfEdgeRepository edgeRepository) {
+                               WfEdgeRepository edgeRepository, FormDefinitionService formDefinitionService) {
         this.definitionRepository = definitionRepository;
         this.nodeRepository = nodeRepository;
         this.edgeRepository = edgeRepository;
+        this.formDefinitionService = formDefinitionService;
     }
 
     @Transactional
     public Long create(Long tenantId, Long operatorId, CreateDefinitionRequest req) {
         validateNodes(req.nodes());
+        validateSupportedForms(tenantId, req.supportedFormCodes());
         LocalDateTime now = LocalDateTime.now();
         Long defId = IdGenerator.nextId();
 
@@ -71,9 +74,10 @@ public class WfDefinitionService {
     public void update(Long id, Long tenantId, CreateDefinitionRequest req) {
         WfDefinition def = requireDef(id, tenantId);
         if (!WfDefinition.STATUS_DRAFT.equals(def.getStatus())) {
-            throw new BusinessException(ResultCode.VALIDATION_ERROR, "仅草稿状态可修改，已发布流程请创建新版本");
+            throw new BusinessException(ResultCode.VALIDATION_ERROR, "仅草稿状态可修改，已发布流程请先取消发布或创建新版本");
         }
         validateNodes(req.nodes());
+        validateSupportedForms(tenantId, req.supportedFormCodes());
         LocalDateTime now = LocalDateTime.now();
         def.setName(req.name().trim());
         def.setCategory(StringUtils.hasText(req.category()) ? req.category().trim() : "APPROVAL");
@@ -85,6 +89,10 @@ public class WfDefinitionService {
 
         nodeRepository.deleteByDefinitionId(id);
         edgeRepository.deleteByDefinitionId(id);
+        // ⚠️ 必须显式 flush：Hibernate 的动作队列里 INSERT 排在 DELETE 之前，
+        // 不 flush 的话新节点会先撞上 uk_wf_node_code (definition_id, node_code)。
+        nodeRepository.flush();
+        edgeRepository.flush();
         saveNodes(id, req.nodes(), now);
         saveEdges(id, req.edges(), now);
     }
@@ -98,6 +106,30 @@ public class WfDefinitionService {
         }
         validateNodes(toNodeDtos(nodeRepository.findByDefinitionIdOrderBySortOrderAsc(id)));
         def.setStatus(WfDefinition.STATUS_ACTIVE);
+        def.setUpdatedAt(LocalDateTime.now());
+        definitionRepository.save(def);
+    }
+
+    /**
+     * 取消发布：ACTIVE -> DRAFT。
+     *
+     * <p>非 ACTIVE（含已是 DRAFT / ARCHIVED）时幂等返回，不抛错。
+     *
+     * <p>⚠️ 只能改 {@code status}，<b>不能删定义</b>：唯一索引是
+     * {@code uk_wf_def_tenant_code_ver (tenant_id, code, version) WHERE deleted = 0}（V121:26），
+     * 同 code 可多版本并存，且 {@code wf_instance.definition_id} 是外键指向具体定义行。
+     * 删除会让历史实例的 definition 失联。
+     *
+     * <p>取消发布后 {@code status = DRAFT} ⇒ {@link #update} 的「仅草稿可改」守卫自然放行，
+     * 编辑路径无需额外改动。
+     */
+    @Transactional
+    public void deactivate(Long id, Long tenantId) {
+        WfDefinition def = requireDef(id, tenantId);
+        if (!WfDefinition.STATUS_ACTIVE.equals(def.getStatus())) {
+            return;
+        }
+        def.setStatus(WfDefinition.STATUS_DRAFT);
         def.setUpdatedAt(LocalDateTime.now());
         definitionRepository.save(def);
     }
@@ -167,6 +199,29 @@ public class WfDefinitionService {
             edge.setCreatedAt(now);
             sort++;
             edgeRepository.save(edge);
+        }
+    }
+
+    /**
+     * 白名单强校验：每个 formCode 必须已在 {@code form_definition} 注册、未软删且 {@code status=ENABLED}。
+     *
+     * <p>这是「后台定义了 formCode 但前端没注册」双保险里的<b>权威层</b>（前端拦截只是提效）。
+     * 绕过前端直调API 也能挡住脏数据。
+     */
+    private void validateSupportedForms(Long tenantId, List<String> codes) {
+        if (codes == null || codes.isEmpty()) {
+            return;
+        }
+        List<String> wanted = codes.stream().filter(StringUtils::hasText).map(String::trim).distinct().toList();
+        if (wanted.isEmpty()) {
+            return;
+        }
+        List<String> enabled = formDefinitionService.listEnabledCodes(tenantId, wanted);
+        for (String code : wanted) {
+            if (!enabled.contains(code)) {
+                throw new BusinessException(ResultCode.VALIDATION_ERROR,
+                        "表单「" + code + "」未注册或已停用，请先在表单管理中登记并启用");
+            }
         }
     }
 
