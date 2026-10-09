@@ -18,8 +18,13 @@ import jakarta.validation.constraints.Size;
  * 而不是在这里加 {@code @NotBlank} —— 加了会让编辑请求无法通过校验。
  * 「同一字段在新建与编辑下必填性不同」是注解式校验表达不了的，必须落到代码里。
  *
+ * <h2>{@code botSecretId} 是下游的必填项，缺了必 422</h2>
+ * 企微智能机器人长连接用官方 BotID 鉴权（{@code 59a3e32e} 把 {@code ws_url} 重命名而来），
+ * 下游 {@code WecomBotCreateRequest} 声明为必填，BFF 漏字段会让 Python 直接回 422。
+ * 前端表单新建/编辑均必填，故此处也加 {@code @NotBlank}。
+ *
  * @param name         显示名，必填
- * @param wsUrl        WebSocket 接入地址；<b>可选</b>（官方 endpoint 固定，留空由下游取默认值）
+ * @param botSecretId  企微官方 BotID（长连接鉴权），必填
  * @param secret       密钥；<b>留空表示不修改</b>，新建时由服务层校验必填
  * @param boundAgentId 绑定的 Agent，可空
  * @param corpId       企微企业 ID（身份绑定的 corp 维度），可空
@@ -31,9 +36,10 @@ public record WecomBotUpsertRequest(
         @Size(max = 64, message = "Bot 名称长度不能超过 64")
         String name,
 
-        @JsonProperty("ws_url")
-        @Size(max = 512, message = "ws_url 长度不能超过 512")
-        String wsUrl,
+        @JsonProperty("bot_secret_id")
+        @NotBlank(message = "企微 BotID 不能为空")
+        @Size(max = 128, message = "企微 BotID 长度不能超过 128")
+        String botSecretId,
 
         @JsonProperty("secret")
         @Size(max = 512, message = "secret 长度不能超过 512")
