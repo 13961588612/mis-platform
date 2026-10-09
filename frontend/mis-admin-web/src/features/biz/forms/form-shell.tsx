@@ -41,10 +41,6 @@ export interface FormShellProps {
    * 用于「同一表单在不同流程版本下字段集不同」的场景。
    */
   fields?: FormFieldSchema[];
-  /** 流程实例 ID（透给只读视图的业务扩展位，本套壳本身不用）。 */
-  instanceId?: string;
-  /** 业务对象 ID。 */
-  businessId?: string;
   /** 重新拉数据。表单降级卡上的「重新加载」会调它（并顺带重试加载表单实现）。 */
   onRetry?: () => void;
   /** 「有数据但 schema 为空」时的空态文案。 */
