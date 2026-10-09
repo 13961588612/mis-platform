@@ -18,11 +18,11 @@
  * |---|---|---|
  * | ① | `startedFormCode` 为空/null/'' | `FormMissing(no-code)` |
  * | ② | `resolveForm(code)` 返回 null | `FormMissing(not-registered)` |
- * | ③ | `form_data` 为 null/空串，或解析后0 键 | `FormMissing(empty-data)` |
+ * | ③ | `form_data` 为 null/空串 | `FormMissing(empty-data)` |
  * | ④ | `form_data` 是非空但非法的 JSON 串 | `FormMissing(bad-json)` + `<pre>` 原文 |
- * | — | 全部通过 | `ReadOnlyForm`（schema 未声明的键由降级 ④ 处理） |
+ * | — | 全部通过 | `ReadOnlyForm`（schema 未声明的键由 §3.3 降级 ④ 处理） |
  *
- * ⚠️ **顺序与方案 §3.4组合表一致**，其中两条容易搞反：
+ * ⚠️ **顺序与方案 §3.4 组合表一致**，其中两条容易搞反：
  *
  * 1. `no-code` 必须**最先**判：`startedFormCode` 为空时 form_data 往往也是空，
  *    此时报「未记录表单编码」才对；反序会误导成「表单没有数据」。
@@ -64,9 +64,9 @@ export function ReadOnlyFormView({ formCode, formData, fields, onRetry, emptyTex
 
   const entry = resolveForm(formCode);
 
-  // ④ 前端未注册：黄色告警卡（配置缺，不是数据错），且提供重试。
+  // ② 前端未注册：黄色告警卡（配置缺，不是数据错），且提供重试。
   // ⚠️ 优先级高于 bad-json：先说「没注册」，再说数据问题——
-  //    没注册时数据再坏也是次要问题，且原文照样展示在卡里。
+  //    没注册时数据再坏也是次要问题，且原文照样展示在卡里可查。
   if (!entry) {
     return <FormMissing reason="not-registered" formCode={formCode} rawData={formData} onRetry={onRetry} />;
   }
@@ -78,14 +78,15 @@ export function ReadOnlyFormView({ formCode, formData, fields, onRetry, emptyTex
 
   const parsed = parseFormData(formData);
 
-  // ② 非法 JSON：展示原文，不抛
+  // ④ 非法 JSON：展示原文，不抛
   if (!parsed.ok) {
     return <FormMissing reason="bad-json" formCode={formCode} rawData={parsed.raw} onRetry={onRetry} />;
   }
 
-  // 已登记但提交的是空对象
+  // 已登记但提交的是空对象：`{}` 本身没信息量，但原始串仍可能有排查价值，
+  // 所以透给「查看原始数据」。
   if (isEmptyFormData(parsed.data)) {
-    return <FormMissing reason="empty-data" formCode={formCode} rawData={parsed.raw ?? null} onRetry={onRetry} />;
+    return <FormMissing reason="empty-data" formCode={formCode} rawData={formData ?? null} onRetry={onRetry} />;
   }
 
   // 只读视图：只有 schema + 数据，业务组件到此为止

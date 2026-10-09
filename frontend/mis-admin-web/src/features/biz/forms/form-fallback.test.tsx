@@ -111,7 +111,7 @@ describe('parseFormData', () => {
 
 describe('四级降级 · 从上到下依次判定', () => {
   it('① no-code：startedFormCode 为 null → 未记录表单编码（中性灰底）', () => {
-    const { container } = render(<ReadOnlyFormView formCode={null} formData='{"a":1}' />);
+    render(<ReadOnlyFormView formCode={null} formData='{"a":1}' />);
 
     const el = screen.getByTestId('form-missing');
     expect(el.getAttribute('data-reason')).toBe('no-code');
@@ -376,20 +376,19 @@ describe('⚠️ 只读态不实例化业务组件 · 核心证明', () => {
   });
 
   it('降级各分支下业务组件同样零挂载', () => {
-    registerSpyForm();
-    const cases: Array<[string, string | null]> = [
-      ['no-code', '{"a":1}'],
-      ['not-registered', '{"a":1}'],
-      ['bad-json', '{oops'],
-      ['empty-data', '{}'],
+    // [期望 reason, 传入的 formCode, 传入的 formData]
+    const cases: Array<[string, string | null, string | null]> = [
+      ['no-code', null, '{"a":1}'],
+      ['not-registered', 'NOPE', '{"a":1}'],
+      ['bad-json', 'PUR_FORM', '{oops'],
+      ['empty-data', 'PUR_FORM', '{}'],
+      ['empty-data', 'PUR_FORM', null],
     ];
 
-    for (const [expectedReason, formData] of cases) {
+    for (const [expectedReason, formCode, formData] of cases) {
       __resetRegistryForTest();
       registerSpyForm();
-      const { unmount } = render(
-        <ReadOnlyFormView formCode={expectedReason === 'no-code' ? null : expectedReason === 'not-registered' ? 'NOPE' : 'PUR_FORM'} formData={formData} />,
-      );
+      const { unmount } = render(<ReadOnlyFormView formCode={formCode} formData={formData} />);
 
       expect(screen.getByTestId('form-missing').getAttribute('data-reason')).toBe(expectedReason);
       expect(businessEffect).not.toHaveBeenCalled();
