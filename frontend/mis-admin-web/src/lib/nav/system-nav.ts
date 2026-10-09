@@ -68,7 +68,16 @@ export const SYSTEM_NAV: SystemNavNode[] = [
       // designer-page 进来后立刻 `replace` 回 /system/workflow/definitions，不留历史。
       // 菜单 95007 及它上面绑的 sys_menu_api（取消发布 / PUT 更新定义）**不能删**，
       // 删了那两个端点就全部 403。
-      { path: '/system/workflow/designer', title: '流程编排', icon: 'Workflow' },
+      // 注：侧栏「流程编排」入口已移除（编排在流程定义页内 Dialog 化），但 designer-page
+      // 路由（keep-alive-outlet 的 PAGE_MAP）**保留**，否则 95007 相关接口回退 403。
+    ],
+  },
+  {
+    kind: 'branch',
+    title: '表单管理',
+    icon: 'FileStack',
+    children: [
+      { path: '/system/forms', title: '表单注册', icon: 'ListTree' },
     ],
   },
   {
