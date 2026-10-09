@@ -1,6 +1,45 @@
 # 09 · 统一收件箱（消息 / 待办 / 已办）统一规划
 
-> 版本：**v1.0-draft**（待评审）
+> # ⚠️ 本文档已被推翻（2026-10-09）— 请勿据此动工
+>
+> **后续核实与重设计发现了 1 个安全漏洞 + 3 处方向性错误 + 2 处事实错误。**
+> **当前有效设计请看：[`12-complete-design.md`](./12-complete-design.md)。**
+>
+> ## 被推翻的内容
+>
+> | 原文位置 | 原文结论 | 实际情况 |
+> |---|---|---|
+> | §5.1「真相源裁定」 | `wf_task` 降级为节点身份表，禁止独立流转 status | **方向反了**。`ProcessService.aggregationSatisfied:222-244` 用 `countPendingByNode`/`countCompletedByNode` **靠 `wf_task.status` 聚合判定会签**（或签靠置 `CANCELLED`）。禁止流转 ⇒ **ALL_PASS 永不推进、流程全卡死** |
+> | §5.1「真相源裁定」 | `sys_task` 是待办唯一真相源 | **外键方向相反**。`wf_task.sys_task_id`（`V121:94`，带索引）指向 `sys_task`，而 `sys_task` **完全无 wf/instance 列**；且注释「纯流程任务可为空」⇒ 基数是 **0..1:1 不是镜像** |
+> | §4.3「统一动作出口」 | 让 `handleTask` 具备流程推进能力，反向调 `ProcessService` | **会循环依赖导致启动失败**。`ProcessService:62` 已注入 `TaskService`，反向注入即成环；Boot **3.2.5**（`pom.xml:38`）默认禁止，全仓无 `allow-circular-references`。正解是新增门面 `InboxActionService`，两者依赖方向不动 |
+> | §7 P0-1 | 接通 `syncLinkedMessagesToHandled()` | **手段选错**。真正要删的是 `ProcessService:184-191` 的 `catch (BusinessException ignored)`（幽灵待办制造者）；该空方法保留 |
+> | §0 D8 | `sys_task.read_flag` 是死字段 | **错**。`TaskService.java:159` `transferTask` 的 `setRead(FALSE)` 与 `viewedAt(null)` 成对使用，语义是「转办后重置未读」。真问题是「只有 FALSE 方向、无 TRUE 方向」。按"死字段"清理会**打断转办语义** |
+> | §0 D11 | 流程详情页看不到单据 | **错**。`process-shell.tsx:140-152` **已展示**业务类型/单号/发起人/当前节点四字段且有测试守护。真实缺口是「**看得到单号但点不进去**」 |
+> | §3.2 R-3 | 统一 480px 右侧抽屉 | 会让待办降级。`process-shell.tsx:136` 是 `lg:grid-cols-3` 两栏布局。正解：**知会用抽屉、待办用独立页** |
+> | §5.2 / §6 | `read_flag` 改名 `seen` | 收益低于风险（锁表 + 索引定义连带变化）。中文歧义用文案解决 |
+> | §5.4 迁移清单 | 只写「新增 `inbox_item_view`」 | **漏 `sys_api` 登记**。`mis-admin-bff/application.yml:103` `deny-unmapped: true`，不登记端点直接 **403**。这是同类坑第三次（92158/V51、92586/V91 之后） |
+>
+> ## 原文完全遗漏的问题
+>
+> - 🔴 **越权漏洞**：`TaskService.handleTask:119-145` 的 `operatorId` **全程未出现在方法体**，`requireTask:197-203` 只校验 `tenantId` 不校验 assignee ⇒ **任何登录用户可处理任何人的待办**。对比 `ProcessService.java:148` **有** assignee 校验 ⇒ 属遗漏非设计。**优先级高于全部 UI 任务**
+> - 🔴 **REJECT 路径漏同步**：`ProcessService.java:158-171` 处理完在 `:172` **提前 return**，`:184-189` 的 `handleTask` 同步**只在 APPROVE 路径执行** ⇒ 流程已驳回终止但 `sys_task.status` 仍留 `PENDING`，待办列表继续显示"待处理"。**数据不一致且零测试覆盖**
+> - 🔴 **未读口径不一致**：`SysMessageReceiverRepository.java:20-23` `countUnread` 只判 `r.read = false`，**完全不看 `status`** ⇒ 即使接通联动、置 HANDLED，**角标和列表一个都不会变**。必须先定口径再改
+> - 🔴 **并发无保护**：`SysTask` 零 `@Version`、Repository 零 `@Lock`，`isOpen()` 是 check-then-act ⇒ 双击同意可能双成功；`transferTask` 竞态**可让已办任务复活成待办**
+> - ⚠️ **转办消息误伤**：转办消息与原消息**共用同一 `task_id`**（`MessageService:101` + `TaskService:171`）⇒ 联动必须按 `(task_id, user_id)` 关联，不能只按 task_id
+> - ⚠️ **流程通知无上下文**：`ProcessService.notify:408-410` 传 `referenceTaskId=null` ⇒ 通知点不出上下文
+> - ⚠️ **门禁是假安全感**：`Tests run: 82, Skipped: 59`（**72% 跳过**），`TaskServiceIntegrationTest` 12 个测试在 `MIS_DB_TEST` 未设时**全跳过**仍 BUILD SUCCESS ⇒ **改坏流程推进，`mvn test` 依然全绿**
+> - ⚠️ **既存红基线**：`npm run test` → `Tests 1 failed | 558 passed`，唯一失败 `src/lib/chat/useChat.test.ts:570`（聊天模块安全超时，与本轮正交）
+>
+> ## 真正的根因
+>
+> 「待办」在代码里**没有实体**，被拆成 `sys_task.status` / `wf_task.status` / `sys_message_receiver.status` **三个互不同步、各自独立流转的字段**。于是每个界面都能挑一个当真相（铃铛挑前端硬编码、列表挑 `sys_task`、流程页挑 `wf_task`、角标挑 receiver）。
+> **界面乱是症状，三个 status 各自为政是病因。**
+>
+> ---
+>
+> 以下为原始规划全文，**保留供追溯**，但其中的裁定与排期**均已失效**。
+
+> 版本：**v1.0-draft**（已被 12-complete-design.md 取代）
 > 日期：2026-10-09
 > 基线：`06-workflow-architecture-final-design-v4.md`（唯一有效基线，v3 视为已废弃）
 > 性质：**纯规划**。本文不含代码改动、不含提交。所有实现必须另开 ADR 与工单。
@@ -20,9 +59,16 @@
 | D6 | `sys_task` 与 `wf_task` 双表镜像，一个待办在库里有两条独立流转的记录 | 事实·`V120:61-83` / `V121:87-102` |
 | D7 | 文档反复承诺的 **WebSocket 实时推送**，代码零落地 | 事实·`README.md:37` 承诺，grep 无 `WebSocket/SseEmitter/stomp` |
 | D8 | 库里有**两套已读模型**（`sys_task.read_flag` 恒 false / `sys_message_receiver.read_flag` 有完整链路） | 事实·grep `setRead` 仅 2 处 `FALSE`，0 处 `TRUE` |
+| D9 | **门户是布局孤岛**：`/portal` 裸挂无 `AppLayout`，自造一套 header；从门户进待办等于换掉整个框架 | 事实·`router.tsx:51` vs `:54`；`portal-page.tsx:82` |
+| D10 | 处理完待办**停在原地**，不续下一条；想继续得手动导航 | 事实·`process-shell.tsx:74`、`task-list-page.tsx:97` 均只 `await load()` |
+| D11 | 流程详情页展示 `definitionCode`/`startedFormCode`，**看不到在批什么单据** | 事实·`process-shell.tsx:96-99` |
+| D12 | 业务单据详情页**尚不存在**，`bizType/bizRefId` 前端仅作字符串显示 | 事实·`router.tsx` 无业务详情路由；`task-list-page.tsx:174` 直接渲染字符串 |
 
 **统一规划的靶心一句话**：
 > 把「四个各自为政的列表页」压成**一个收件箱页 + 一个摘要接口 + 一个动作出口 + 一个真相源**，让角标、详情、动作、已读在全局只有一种语义。
+
+**且必须同时补上第二句话**：
+> 让用户**从门户进、从门户出，处理完自动接下一条**——上下文不中断，这比"界面统一"更影响体感。详见 §11。
 
 ---
 
@@ -452,8 +498,13 @@ flowchart TB
 | P0-2 | 铃铛改用 `/messages/stats` + `/tasks/stats` 真实值，去掉前端聚合 | P0-2 | 消息 57 条时铃铛与收件箱 Tab 计数**完全一致** |
 | P0-3 | 前端删掉 `wfInstanceId` 判断分支，同意/驳回统一走 `/tasks/{id}/handle` | P0-3 | 同一行两个按钮产生**同一种**后端语义 |
 | P0-4 | 消息行点击改为打开**右侧详情抽屉**（即使内容仅摘要） | P0-1 | 点任意消息不再跳到待办页 |
+| P0-5 | **门户外壳归位**：`/portal` 挂进 `AppLayout`，删 `portal-page.tsx:82` 自造 header | D9 · B-1 | 门户↔内页切换时侧栏与铃铛不消失（§11.4-1） |
+| P0-6 | **详情页回原处**：跳转带 `state.from`，面包屑渲染真实来源 | D10 · B-4 | 从门户进详情页，面包屑首级为「工作台」且可点回（§11.4-2） |
+| P0-7 | **批完自动续下一条（简化版）**：页内维护队列，成功后就地加载下一条 | D10 · B-3 | 连续处理 5 条，导航点击 ≤ 1 次（§11.4-4） |
 
 > P0 全程**不新增表、不改迁移、不动契约**，纯逻辑修复。风险最低，收益最直接。
+>
+> **P0-5~P0-7 属 §11 连续处理闭环**，纯前端、零契约风险，但体感提升最大，建议与 P0-1~P0-4 **同批交付**（用户感知是一次性的，分批交付反而显得"修一半"）。
 
 ### P1 · 收敛（新增契约，2–3 个迭代）
 
@@ -483,6 +534,7 @@ flowchart TB
 | P3-1 | SSE 推送 | 替代 WebSocket 承诺 |
 | P3-2 | 外部渠道（企微 / 邮件 / 短信） | 当前**零规划零代码**：`mis-taskflow` 无任何 Channel/SMS/Email 抽象。需先出 ADR 再动工 |
 | P3-3 | Agent HITL 审批是否并入收件箱 | 需裁决 `hitl/approval.py` 自建 store 与 `sys_task` 的关系 |
+| P3-4 | **待办跳业务单据**（§11.2 C-4） | ⚠️ **前置依赖业务子系统先提供详情页**（`bizType` 唯一取值 `PURCHASE_ORDER` 只存在于测试 fixture，`router.tsx` 无业务详情路由）。收件箱侧只做 `resolveBizLink` + 优雅降级 |
 
 ---
 
@@ -516,6 +568,10 @@ flowchart TB
 | 角标延迟 | 需手动刷新 | ≤30s |
 | 待办处理后角标残留 | 100%（P0-4） | 0 |
 | 收件箱页面数 | 4 平行页 | 1 主 + 1 辅 |
+| **连续处理 5 条待办的导航点击次数** | 约 10 次（每条都要点侧栏/面包屑） | **≤ 1 次**（§11.4-4） |
+| **门户↔内页切换时框架是否突变** | 是（D9） | 否，侧栏与铃铛恒在 |
+| **详情页能看出在批什么单据** | 不能（只显示流程编码） | 能（`bizTitle` + 关键字段） |
+| 跨模块往返后上下文保持 | 丢失（D10） | 保持（Return Path） |
 
 ---
 
@@ -543,6 +599,129 @@ flowchart TB
 | 删除 `wf_task` | 只降级不删，保留流程引擎身份与回滚余地 |
 | 改写 Flyway 历史迁移 | 违反项目铁律（checksum 变更阻塞整条链） |
 | "我发起的" 合并进收件箱 | §3.1 已说明：发起者视角 vs 处理者视角信息结构不同 |
+| 在收件箱内新建"业务单据中心" | 业务单据属各子系统自治范围，收件箱只做**跳转**，不做二次实现（见 §11.3 前置条件） |
+
+---
+
+## 11. 连续处理闭环（上下文不中断）
+
+> 本章回应一个独立于 §1.2 的问题：**用户从门户进入，处理完还要点回门户才能继续处理下一条**。
+> 该问题不影响"数据对不对"，但**最影响体感**，且与 §1–§10 正交——§1–§10 是"界面统一"，本章是"流程不断"。
+
+### 11.1 上下文断裂的四处证据
+
+```mermaid
+flowchart TB
+    P["门户 /portal<br/>裸挂无 AppLayout<br/>自造 header"] -->|点卡片| T["待办 / 流程详情<br/>AppLayout 内<br/>框架突变：侧栏凭空出现"]
+    T -->|处理完| S["原地 load<br/>停在当前详情页"]
+    S -->|想找下一条| N["手动点侧栏 / 面包屑<br/>面包屑还指向 /task/pending"]
+    N -->|想回门户| B["在侧栏里翻「返回门户」按钮<br/>app-layout.tsx:248"]
+    T -->|想知道在批什么| D["只显示 definitionCode<br/>process-shell.tsx:96-99"]
+    D -->|想看单据| X["无跳转入口<br/>bizType 仅字符串显示"]
+```
+
+| # | 断裂 | 证据 |
+|---|---|---|
+| B-1 | **门户是布局孤岛**，进出即换框架 | `router.tsx:51`（`/portal` 裸挂）vs `:54`（`/task/*` 在 `AppLayout` 内）；`portal-page.tsx:82` 自造 header |
+| B-2 | **流程详情页看不到单据** | `process-shell.tsx:96-99` title 是 `instance.businessId`，description 是 `definitionCode · 表单 startedFormCode` |
+| B-3 | **批完停在原地**，不续下一条 | `process-shell.tsx:74`、`task-list-page.tsx:97` 均为 `await load()` |
+| B-4 | **面包屑回不到来处** | `process-shell.tsx:99` 首级写死 `工作台 → /task/pending`，从门户进来也回门户 |
+
+### 11.2 五条对策
+
+| # | 对策 | 改动面 | 风险 | 归属期 |
+|---|---|---|---|---|
+| C-1 | **门户外壳归位**：`/portal` 挂进 `AppLayout`，删 `portal-page.tsx:82` 起的自造 header | 2 文件，纯前端 | 低 | **P0** |
+| C-2 | **详情页回原处（Return Path）**：点击时带 `state.from`，面包屑读 `location.state` | 前端若干跳转点 | 低 | **P0** |
+| C-3 | **批完自动续下一条**：处理成功后就地加载队列中下一条 PENDING | 前端 + 队列查询 | 中 | **P0**（简化版）/ P2（完整版） |
+| C-4 | **待办跳业务单据**：`resolveBizLink(bizType, bizRefId)` 统一映射 | 依赖前置条件 | **高，见 §11.3** | **P3** |
+| C-5 | **键盘流**：`J`/`K` 上下条、`A` 同意、`R` 驳回、`Enter` 看单据 | 前端 | 低 | P2 |
+
+#### C-1 门户外壳归位（详细）
+
+**含义**：让 `/portal` 挂进 `AppLayout`，删掉 `PortalPage` 自造的那套 header，只保留门户独有的内容。
+
+| 项 | 现在 | 归位后 |
+|---|---|---|
+| 路由 | `/portal` 裸挂 | 挂进 `AppLayout`（与 `/task/*` 同级） |
+| 顶部条 | `portal-page.tsx:82` 自造 | 用平台统一 `HeaderToolkit` |
+| 侧栏 | 门户无 | 一直在，无需找"返回门户"按钮 |
+| 主题 / 用户菜单 | 门户自造一套 | 与内页共用同一套 |
+| **保留** | 工作台四卡片 + 应用导航 rail | 不变（门户独有内容） |
+| **删除** | 自造 header 全块 | — |
+
+**有利前提**：`host-apps.ts:57` 已有 `if (pathname === '/portal' || pathname.startsWith('/portal/')) return 'task';` —— 侧栏归属早已预留，只是路由层没接上。此改动属**补完既定设计**，非新设计。
+
+**顺带治好**：`command-palette.tsx:32` 把 `/portal` 收在「快捷」组——它是首页，不该被当成快捷方式。归位后命令面板不再需要这条特例。
+
+#### C-2 详情页回原处（Return Path）
+
+```
+跳转方 → navigate(`/task/process/${inst}`, { state: { from: '/portal', fromLabel: '工作台' } })
+详情页 → const from = location.state?.from ?? '/task/pending'
+       → 面包屑首级渲染 fromLabel，to = from
+```
+
+规则：
+- 缺省回落 `/task/pending`（保证直接访问 URL 也能用）
+- 详情页内「下一条」跳转**不丢失 return path**（C-3 依赖此点）
+- 涉及跳转点：`task-board.tsx:58`、`inbox-page.tsx:84`、`my-processed-page.tsx:82`、`my-sent-page.tsx:79`、`header-toolkit.tsx:180`
+
+#### C-3 批完自动续下一条
+
+**简化版（P0，零后端改动）**：详情页内维护一个 `queue: string[]`（进入时按 `instanceId` 顺序生成，来源可为当前待办列表或门户卡片）。`handle` 成功后：
+
+```
+if (queue 还有下一条) → 就地加载下一条 + toast('已同意，继续第 N 条')
+else                  → 空态 + [返回工作台] [查看已办]
+```
+
+**完整版（P2）**：后端提供 `GET /api/v1/inbox/queue?kind=TASK` 返回按优先级/截止排序的待办 ID 队列，前端只管消费。
+
+> 为什么分两版：简化版**不动任何接口**，当天可上；完整版要新增契约，归 P2。
+
+#### C-4 待办跳业务单据 —— ⚠️ 有前置条件
+
+**核实结论（重要，不可跳过）**：
+
+| 事实 | 证据 |
+|---|---|
+| `biz_type` / `biz_ref_id` 字段**已存在**且有索引 | `V120:65-66`、`:86`（`idx_task_biz`） |
+| 但前端**只当字符串显示**，从不用于跳转 | `task-list-page.tsx:174`、`my-processed-page.tsx:106` 均 `{item.bizType} / {item.bizRefId}` |
+| 唯一取值 `PURCHASE_ORDER` **只出现在测试 fixture** | 4 个 `.test.tsx` 文件；主代码无任何业务单据路由 |
+| `router.tsx` **没有采购单等业务详情路由** | 实测无 `order`/`purchase` 路由 |
+
+**结论**：业务单据详情页**尚不存在**。C-4 **不能在收件箱内"补个映射表"了事**，它依赖各业务子系统先提供详情页。
+
+**因此 C-4 重新定级为 P3 + 前置依赖**：
+
+| 步骤 | 内容 | 归属 |
+|---|---|---|
+| 1 | 各业务子系统提供详情路由，并向收件箱**注册** `bizType → 路由模板` | 业务子系统，**收件箱管不了** |
+| 2 | 收件箱建 `resolveBizLink(bizType, bizRefId)`，缺值时优雅降级（不显示链接，不报错） | 收件箱 |
+| 3 | 详情页 PageHeader 改用 `bizTitle` + 关键字段摘要；C-5 的 `Enter` 键绑定该链接 | 收件箱 |
+
+> **在此之前**：§11.2 的 C-2、C-3 依然完全可做。**不要因为 C-4 卡住而把 C-1/C-2/C-3 一起挂起。**
+
+### 11.3 与主规划的关系
+
+| 项 | 说明 |
+|---|---|
+| 独立性 | §11 不依赖 §4 的新契约。C-1/C-2/C-3 全部可在 P0 独立完成 |
+| 与 §3.1 的关系 | §3.1 决定"页面收敛成什么样"，§11 决定"用户在页面间怎么移动"。两者叠加才是完整方案 |
+| 与 §6.1 的关系 | C-3 需要的队列状态，应复用 §6.1 的 `useInboxQuery`，不另造 hook |
+| 新增根因 | §1.3 的 R4（规范滞后）同样覆盖本章：C-1~C-5 应写进 §6.2 的 R-1~R-10，扩为 **R-1~R-15** |
+
+### 11.4 本章验收标准
+
+| # | 验收项 | 判定 |
+|---|---|---|
+| 1 | 门户 → 待办 → 处理完 → 回门户，**全程侧栏与铃铛不消失** | 目视 |
+| 2 | 从门户进详情页，面包屑首级显示「工作台」且点击回门户 | 目视 |
+| 3 | 详情页直接输 URL 访问时，面包屑回落 `/task/pending` 不报错 | 目视 |
+| 4 | 连续处理 5 条待办，**导航点击次数 ≤ 1**（其余靠 `J`/`A` 键） | 实测 |
+| 5 | `resolveBizLink` 在 `bizType` 无映射时**不显示死链、不报错** | 单测 |
+| 6 | 门户外壳归位后，门户与内页**共用** `HeaderToolkit`，无重复 DOM 节点 | DOM 检查 |
 
 ---
 
@@ -572,6 +751,23 @@ flowchart TB
 | 迁移登记滞后 | `08-taskflow-tryout-guide.md:40`（写 123，实际 V127） |
 | 规范滞后 | `docs/frontend/admin-web-design.md:3`（v1.1-draft）、`:95-105`、`:220-310` |
 | Python 侧独立审批 | `agent/ai-platform/backend/src/hitl/approval.py`、`src/push/wecom_pusher.py` |
+
+**§11 连续处理闭环补充证据**
+
+| 结论 | 出处 |
+|---|---|
+| `/portal` 裸挂、无 `AppLayout` | `frontend/mis-admin-web/src/app/router.tsx:51` vs `:54` |
+| 门户自造 header | `frontend/mis-admin-web/src/features/portal/portal-page.tsx:82` 起 |
+| 侧栏归属早已预留 `/portal` | `frontend/mis-admin-web/src/lib/nav/host-apps.ts:57` |
+| 命令面板把 `/portal` 收在「快捷」组 | `frontend/mis-admin-web/src/components/layout/command-palette.tsx:32` |
+| 「返回门户」按钮埋在侧栏里 | `frontend/mis-admin-web/src/components/layout/app-layout.tsx:248` |
+| 处理完只重载当前页 | `features/taskflow/process-shell.tsx:74`、`task-list-page.tsx:97` |
+| 详情页只显示流程编码、面包屑写死 | `features/taskflow/process-shell.tsx:96-99` |
+| 门户卡片点击无流程实例则丢回列表 | `features/portal/components/task-board.tsx:57-60` |
+| `bizType` 仅作字符串显示 | `features/taskflow/task-list-page.tsx:174`、`my-processed-page.tsx:106` |
+| `biz_type` 字段与索引已存在 | `V120__taskflow_message_task_schema.sql:65-66`、`:86` |
+| `PURCHASE_ORDER` 仅存在于测试 fixture | `task-list-page.test.tsx:28`、`process-shell.test.tsx:25` 等 4 处 |
+| `router.tsx` 无业务单据详情路由 | 实测无 `order`/`purchase` 路由 |
 
 ## 附录 B · 术语对照速查
 

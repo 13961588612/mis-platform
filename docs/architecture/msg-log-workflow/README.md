@@ -17,14 +17,44 @@
 | 6 | [06-workflow-architecture-final-design-v4.md](./06-workflow-architecture-final-design-v4.md) | 综合架构设计（最终实施版） | ✅ |
 | 7 | [07-full-development-plan.md](./07-full-development-plan.md) | 全量开发与测试总计划（含 P1-P8 执行状态） | ✅ |
 | 8 | [08-taskflow-tryout-guide.md](./08-taskflow-tryout-guide.md) | 联调与试用手册 | ✅ |
-| 9 | [09-unified-inbox-plan.md](./09-unified-inbox-plan.md) | **统一收件箱（消息/通知/待办/已办）统一规划** | 📋 规划待评审 |
+| 9 | [09-unified-inbox-plan.md](./09-unified-inbox-plan.md) | 统一收件箱统一规划（**已被推翻，仅供追溯**） | ⚠️ 作废 |
+| 10 | [11-verification-report.md](./11-verification-report.md) | 现状核实报告：逐条验证 D1~D12 + 遗漏清单 |✅ 完成 |
+| 11 | [12-complete-design.md](./12-complete-design.md) | **完整设计方案（当前唯一有效基线）** | ✅ 已实施 |
+| 12 | [13-test-strategy.md](./13-test-strategy.md) | 测试基建评估与测试策略 | ✅ 完成 |
+| 13 | [14-replan-delivery.md](./14-replan-delivery.md) | 重做规划交付说明 | ✅ 完成 |
+| 14 | [15-qa-verification.md](./15-qa-verification.md) | QA 交叉验收报告（含发现的 P1） | ✅ 完成 |
+| 15 | [16-final-delivery.md](./16-final-delivery.md) | **改造最终交付总结** | ✅ 完成 |
 
-> ⚠️ **基线声明（2026-10-09）**
+> # ✅ 实施完成（2026-10-09）
 >
-> - 第 6 篇以 **`06-workflow-architecture-final-design-v4.md`（v4.0）** 为唯一有效基线；不带 `-v4` 后缀的 v3.0 版本与 `001-` 前缀的早期精简版**均视为已废弃**，不得作为设计依据。
+> **前端** `57 files / 598 passed / 1 todo / 0 failed`｜**typecheck** EXIT=0
+> **后端** `Tests run: 95 / Failures: 0 / Errors: 0 / Skipped: 0`
+> **Flyway** V120~V127 零改动，无新迁移｜**Commit** 8 个
+>
+> 已修 4 个缺陷：**B-1 越权**（任何登录用户可处理他人待办）、**B-2 REJECT 漏同步**（流程已终止但待办留着）、**B-3 并发无保护**（双击同意都返回 200）、**B-4 审计挂错路径**（审批无审计记录）。
+>
+> 交付总结见 [`16-final-delivery.md`](./16-final-delivery.md)，遗留项见该文第六节。
+
+> # ⚠️ 设计基线说明
+>
+> **当前唯一有效设计基线是 [`12-complete-design.md`](./12-complete-design.md)。**
+>
+> 第 9 篇已被核实推翻，含 **1 个安全漏洞 + 3 处方向性错误 + 2 处事实错误**：
+> - 🔴 越权：`TaskService.handleTask` 缺 assignee 校验，**任何登录用户可处理他人待办**（优先级高于全部 UI 工作）
+> - ❌ `wf_task` 降级为身份表 → **会签/或签失效、流程卡死**
+> - ❌ `sys_task` 为唯一真相源 → **外键方向相反**
+> - ❌ 动作出口反向注入 → **循环依赖，Boot 启动失败**
+> - ❌ D8「`read_flag` 死字段」/ D11「详情页看不到单据」→ **均为事实错误**
+>
+> 核实证据见 [`11-verification-report.md`](11-verification-report.md)，测试策略见 [`13-test-strategy.md`](13-test-strategy.md)。
+>
+> **根因**：「待办」在代码里没有实体，被拆成三个互不同步、各自独立流转的 status 字段。**界面乱是症状，三个 status 各自为政是病因。**
+
+> ⚠️ **其余基线声明（2026-10-09）**
+>
+> - 第 6 篇以 **`06-workflow-architecture-final-design-v4.md`（v4.0）** 为唯一有效基线；不带 `-v4` 后缀的 v3.0 版本与 `001-` 前缀的早期精简版**均视为已废弃**。
 > - 本目录下文档记录的模块名 `mis-notification` 与桥接表 `sys_biz_reference` **在实现中并不存在**（实际模块为 `mis-taskflow`，该桥接表已在 `V120` 中声明去掉）。请以迁移脚本与代码为准。
-> - 文档中反复出现的 **WebSocket 实时推送承诺，代码零落地**。按第 9 篇规划 §4.4 改为「轮询 → SSE」，WebSocket 方案建议在 ADR 中显式判死。
-> - 收到/处理/已办等功能的现状问题、真相源裁定与分期路线，以第 9 篇规划为准。
+> - 文档中反复出现的 **WebSocket 实时推送承诺，代码零落地**。按第 11 篇设计改为「轮询 → SSE」，WebSocket 方案建议在 ADR 中显式判死。
 
 
 ---
