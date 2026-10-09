@@ -555,16 +555,16 @@ describe('陈旧生成态恢复（切页/重挂载转圈回归）', () => {
     act(() => {
       sseHarness.getOnEvent()?.({ type: 'stream', content: 'A' });
     });
-    // 多次 delta（旧逻辑会无限顺延；新逻辑保持首次计时）
+    // 推进到临近上限（留 60s 余量）
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(200_000);
+      await vi.advanceTimersByTimeAsync(GENERATE_SAFETY_TIMEOUT_MS - 60_000);
     });
     act(() => {
       sseHarness.getOnEvent()?.({ type: 'stream', content: 'B' });
     });
-    // 再推进剩余 → 应触发硬上限并解锁
+    // 再推满剩余 → 应触发硬上限并解锁（delta 不得顺延）
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(65_000);
+      await vi.advanceTimersByTimeAsync(60_000);
     });
 
     expect(useChatStore.getState().isGenerating).toBe(false);
