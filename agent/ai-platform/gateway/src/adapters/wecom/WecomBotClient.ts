@@ -22,8 +22,19 @@ import { logger } from '../../middleware/logger.js';
 
 /** Bot WebSocket 客户端配置 */
 export interface WecomBotClientConfig {
-  /** 智能机器人 BotID */
+  /**
+   * 平台内部 Bot ID —— 用作注册表键 / sessionId，须与 backend `bot_id` 对齐。
+   * **不用于长连接鉴权**（鉴权见 {@link subscribeBotId}）。
+   */
   botId: string;
+  /**
+   * 企微官方 BotID —— `aibot_subscribe` 的鉴权主体。
+   *
+   * **必填，且绝不可从 {@link botId} 派生**：二者语义不同（后者是平台内部
+   * ID，仅作注册表键 / sessionId），误用会让订阅鉴权失败（errcode≠0），
+   * 表现是连接永远 `disconnected`、企微发消息机器人无回复。
+   */
+  subscribeBotId: string;
   /** 长连接专用 Secret */
   secret: string;
   /** WebSocket URL，默认官方 openws */
@@ -95,6 +106,8 @@ const DEFAULT_WS_URL = 'wss://openws.work.weixin.qq.com';
 
 const DEFAULT_CONFIG: WecomBotClientConfig = {
   botId: '',
+  // 空默认值仅为满足类型；调用方必须显式传入（无回落，见 WecomBotClientConfig）。
+  subscribeBotId: '',
   secret: '',
   wsUrl: DEFAULT_WS_URL,
   heartbeatIntervalSec: 30,
@@ -392,7 +405,9 @@ export class WecomBotClient {
       cmd: 'aibot_subscribe',
       headers: { req_id: reqId },
       body: {
-        bot_id: this.config.botId,
+        // 鉴权主体是企微【官方 BotID】（subscribeBotId），不是平台内部 botId。
+        // 该字段必填且无回落 —— 回落会把本 bug 静默复活（见类型注释）。
+        bot_id: this.config.subscribeBotId,
         secret: this.config.secret,
       },
     };

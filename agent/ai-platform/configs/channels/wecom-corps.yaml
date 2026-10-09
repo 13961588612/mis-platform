@@ -13,7 +13,7 @@
 #   secret_ref     企微应用 / 通讯录同步 secret 引用：
 #                    ""（空）          -> 回退全局 WECOM_SECRET（单企业 MVP）
 #                    "env:MY_CORP_SECRET" -> 读环境变量 MY_CORP_SECRET
-#                    "secret://..."    -> 预留（由外部 Vault 注入，见 resolve_corp_secret）
+#                    "secret://..."    -> Vault 加密存储（首选；运营台写入的即此形态）
 #                    "明文secret"      -> 直接使用（仅限受控部署环境）
 #   user_bind_mode 用户绑定模式：
 #                    auto_phone   首次无绑定时按手机号 exact-one 自动绑定（默认）
@@ -24,17 +24,9 @@
 #
 # 示例：
 # version: 1
-# corps:
-#   - corp_id: ww-xxxxxxxxxxxxxxxx
-#     tenant_id: 1
-#     name: 集团总部
-#     secret_ref: env:WECOM_CORP_SECRET_HQ
-#     user_bind_mode: auto_phone
-#   - corp_id: ww-yyyyyyyyyyyyyyyy
-#     tenant_id: 1
-#     name: 华东子公司
-#     secret_ref: secret://wecom/corp/ww-yyyyyyyyyyyyyyyy
-#     user_bind_mode: manual_only
-
-version: 1
-corps: []
+corps:
+- corp_id: wwca47043f28027a07
+  tenant_id: 1
+  name: ''
+  secret_ref: secret://wecom/corp/wwca47043f28027a07
+  user_bind_mode: auto_phone

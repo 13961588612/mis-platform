@@ -40,6 +40,17 @@ export interface BotRuntimeConfig extends WecomBotAdapterConfig {
   enabled: boolean;
   /** 绑定的 Agent ID；为空表示走默认路由 */
   boundAgentId?: string;
+  /**
+   * 企微官方 BotID —— 长连接 `aibot_subscribe` 的鉴权主体。
+   *
+   * 与 {@link WecomBotClientConfig.botId}（平台内部 ID，用作注册表键、sessionId、
+   * 与 backend `bot_id` 对齐）**是两回事**：前者是企微后台生成的官方标识，后者是
+   * 本平台创建的记录 ID。混用会让订阅鉴权失败 ⇒ 连接永远 `disconnected`。
+   *
+   * **必填，且不从 `botId` 回落**：backend 路径缺 `bot_secret_id` 时该 Bot 会被
+   * 跳过（:meth:`toRuntimeConfig` 返回 null）而非降级，避免静默用错鉴权身份。
+   */
+  subscribeBotId: string;
 }
 
 /** backend `/channels/wecom/bots/runtime` 的单条回包（snake_case） */
@@ -384,9 +395,20 @@ export class BotConfigSource {
 
     const d = this.options.defaults;
     const boundAgentId = asString(wire.bound_agent_id);
+    // 企微官方 BotID（鉴权主体）。**缺失即跳过该 Bot，绝不回落平台 botId** ——
+    // 回落会让 aibot_subscribe 用错身份静默失败（正是本处修复的缺陷）。
+    const subscribeBotId = asString(wire.bot_secret_id);
+    if (subscribeBotId.length === 0) {
+      logger.warn(
+        { botId },
+        'Skip wecom bot without bot_secret_id (official BotID required for subscribe)',
+      );
+      return null;
+    }
 
     return {
       botId,
+      subscribeBotId,
       secret,
       wsUrl: d.defaultWsUrl,
       name: asString(wire.name) || botId,
@@ -419,6 +441,9 @@ export class BotConfigSource {
     return [
       {
         botId,
+        // 环境变量兜底路径的 WECOM_BOT_ID 填的本就是企微官方 BotID
+        // （与 backend 的 bot_secret_id 同源语义），故显式并列声明。
+        subscribeBotId: botId,
         secret,
         wsUrl: d.defaultWsUrl,
         name: `${botId} (env)`,

@@ -1,0 +1,29 @@
+# 企微智能机器人（多 Bot）—— 长连接接入配置
+#
+# 用途：Gateway 按 enabled=true 拉取本清单，逐个建立到企微官方 openws 的长连接。
+#       运营台「企微机器人」页增删改后写回本文件，Gateway 轮询自动应用（约 30s）。
+#
+# 路径：{CONFIG_BASE_PATH}/channels/wecom-bots.yaml（环境变量 WECOM_BOT_CONFIG_FILE 可覆盖）
+#
+# 字段说明：
+#   bot_id          平台内部唯一 ID（后端生成，用于注册表键 / 会话 ID）
+#   bot_secret_id   企微官方 BotID（长连接 aibot_subscribe 的鉴权主体）
+#   secret_ref      长连接 Secret 引用：secret://wecom/bot/<bot_id> 指向 Vault 密文；
+#                   历史数据可能仍是明文或 env:<NAME>（读取时兼容）
+#   bound_agent_id  该 Bot 消息路由到的 Agent
+#   corp_id         企微企业 ID（身份绑定维度，须在 wecom-corps.yaml 有对应条目）
+#   tenant_id       MIS 租户 ID（一般留空，由 corp 条目统一指定）
+#
+# 安全：明文本文件不含明文密钥（只存 Vault 引用），可安全入库。
+version: 1
+bots:
+- bot_id: wb-e8d78a6f
+  name: 问数
+  enabled: true
+  bot_secret_id: aibXr7gkAB_OFC7ZaZJ0wnxLVA_fwCWxvjh
+  secret_ref: secret://wecom/bot/wb-e8d78a6f
+  bound_agent_id: mis-copilot
+  corp_id: wwca47043f28027a07
+  tenant_id: null
+  created_at: '2026-10-09T02:55:06+00:00'
+  updated_at: '2026-10-09T07:17:53+00:00'

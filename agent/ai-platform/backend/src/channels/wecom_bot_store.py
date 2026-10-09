@@ -11,10 +11,15 @@
         bot_secret_id: wxbot-xxxx
         name: 运维助手
         enabled: true
-        secret: <明文>
+        secret_ref: secret://wecom/bot/wb-3f2a1c9d
         bound_agent_id: ops-agent
         created_at: "2025-01-01T12:00:00+00:00"
         updated_at: "2025-01-01T12:00:00+00:00"
+
+``secret_ref`` 只存引用，**明文密钥不落 YAML**：由
+:class:`~src.channels.wecom_bot_secret_service.WecomBotSecretService` 加密存到
+``ai_platform.credential_mappings``（对齐 corp 的做法）。为兼容升级前的历史
+数据，读取时旧的 ``secret: <明文>`` 会被自动搬进 ``secret_ref``。
 
 设计要点
 --------
@@ -70,6 +75,10 @@ MAX_BOTS: int = 200
 
 #: 向 Gateway 查询健康状态的超时（秒）。宁可快速降级也不拖慢运营台列表。
 GATEWAY_HEALTH_TIMEOUT_SECONDS: float = 2.0
+
+#: 密钥引用前缀：``secret://wecom/bot/<bot_id>``（对齐 corp 的 ``wecom/corp/``）。
+#: YAML 里只写引用，明文经 CredentialVault 加密存 credential_mappings。
+SECRET_REF_PREFIX: str = "secret://wecom/bot/"
 
 
 class WecomBotNotFoundError(AIPlatformError):
@@ -333,6 +342,34 @@ class WecomBotStore:
         self._load()
         return bot_id in self._bots
 
+    async def set_secret_ref(self, bot_id: str, secret_ref: str) -> None:
+        """改写某 Bot 的密钥引用（不触碰 Vault 密文）。
+
+        供 :class:`~src.channels.wecom_bot_secret_service.WecomBotSecretService`
+        在首次把明文收编进 Vault 后回写规范引用；幂等（引用未变则不写盘）。
+
+        Args:
+            bot_id: 目标 Bot ID。
+            secret_ref: 新的引用（通常为 ``secret://wecom/bot/<bot_id>``）。
+
+        Raises:
+            WecomBotNotFoundError: Bot 不存在时抛出。
+            AIPlatformError: 落盘失败时抛出。
+        """
+        async with self._lock:
+            self._load()
+            record: WecomBotRecord | None = self._bots.get(bot_id)
+            if record is None:
+                raise WecomBotNotFoundError(bot_id)
+            if record.secret_ref == secret_ref:
+                return
+            record.secret_ref = secret_ref
+            record.updated_at = _utc_now_iso()
+            self._bots[bot_id] = record
+            self._persist()
+
+        await self._notify(bot_id, "updated")
+
     # -------------------------------------------------------------------
     # 写
     # -------------------------------------------------------------------
@@ -368,7 +405,8 @@ class WecomBotStore:
                 name=payload.name,
                 enabled=True,
                 bot_secret_id=payload.bot_secret_id,
-                secret=payload.secret,
+                # 明文不落 YAML：先写规范引用，明文随后进 Vault（见下方 set_secret）。
+                secret_ref=f"{SECRET_REF_PREFIX}{bot_id}",
                 bound_agent_id=payload.bound_agent_id,
                 corp_id=getattr(payload, "corp_id", "") or "",
                 tenant_id=getattr(payload, "tenant_id", None),
@@ -379,6 +417,8 @@ class WecomBotStore:
             self._order.append(bot_id)
             self._persist()
 
+        # 明文密钥不进 YAML、也不在此处处理 —— 由路由层调 WecomBotSecretService
+        # 写入 Vault（保持本 Store 只管 YAML 持久化，不与 Vault 耦合）。
         await self._notify(bot_id, "created")
         return record.model_copy(deep=True)
 
@@ -418,9 +458,12 @@ class WecomBotStore:
                 record.bot_secret_id = payload.bot_secret_id
 
             if payload.secret_clear:
-                record.secret = ""
+                # 清空密钥 = 只清引用；Vault 里的密文由路由层调
+                # WecomBotSecretService.delete_secret 一并软删除。
+                record.secret_ref = ""
             elif payload.secret:
-                record.secret = payload.secret
+                # 明文不落 YAML：保留引用不变，实际轮换由路由层写 Vault。
+                record.secret_ref = record.secret_ref or f"{SECRET_REF_PREFIX}{bot_id}"
 
             # 身份绑定扩展：corp_id / tenant_id 缺省 = 不修改。
             if getattr(payload, "corp_id", None) is not None and payload.corp_id != "":

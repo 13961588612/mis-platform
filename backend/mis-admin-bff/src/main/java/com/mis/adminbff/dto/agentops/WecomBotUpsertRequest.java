@@ -19,8 +19,8 @@ import jakarta.validation.constraints.Size;
  * 「同一字段在新建与编辑下必填性不同」是注解式校验表达不了的，必须落到代码里。
  *
  * <h2>{@code botSecretId} 是下游的必填项，缺了必 422</h2>
- * 企微智能机器人长连接用官方 BotID 鉴权（{@code 59a3e32e} 把 {@code ws_url} 重命名而来），
- * 下游 {@code WecomBotCreateRequest} 声明为必填，BFF 漏字段会让 Python 直接回 422。
+ * 企微智能机器人长连接用官方 BotID（非自定义 WS 地址）鉴权，下游
+ * {@code WecomBotCreateRequest} 将其声明为必填，BFF 漏字段会让 Python 直接回 422。
  * 前端表单新建/编辑均必填，故此处也加 {@code @NotBlank}。
  *
  * @param name         显示名，必填

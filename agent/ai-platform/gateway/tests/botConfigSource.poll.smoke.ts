@@ -82,6 +82,7 @@ function makeSource(internalToken: string): BotConfigSource {
 function baseConfig(overrides: Partial<BotRuntimeConfig>): BotRuntimeConfig {
   return {
     botId: 'bot-1',
+    subscribeBotId: 'wxbot-1',
     name: 'Bot 1',
     enabled: true,
     secret: 'secret-1',
@@ -153,12 +154,49 @@ async function main(): Promise<void> {
     if (result != null) {
       check('过滤掉缺 botId/secret 项', result.length === 1, `len=${result.length}`);
       const cfg = result[0]!;
-      check('botId 映射', cfg.botId === 'bot-1');
+      check('botId 映射（平台内部 ID，用作注册表键）', cfg.botId === 'bot-1');
       check('连接官方 endpoint', cfg.wsUrl === 'wss://openws.work.weixin.qq.com');
       check('secret 透传', cfg.secret === 's3cr3t');
       check('boundAgentId 映射', cfg.boundAgentId === 'crm-assistant');
       check('name 映射', cfg.name === 'Bot 1');
+      // 回归：企微长连接鉴权用【官方 BotID】(bot_secret_id)，不是平台内部 bot_id。
+      // 二者混用会让 aibot_subscribe 鉴权失败 ⇒ 连接永远 disconnected、消息无回复。
+      check(
+        'subscribeBotId 取官方 BotID（回归：曾误用平台 bot_id）',
+        cfg.subscribeBotId === 'wxbot-1',
+        `subscribeBotId=${String(cfg.subscribeBotId)}`,
+      );
     }
+  }
+
+  console.log('\n[④b 缺 bot_secret_id] 跳过该 Bot，绝不回落平台 botId');
+  {
+    canned = {
+      status: 200,
+      data: {
+        code: 0,
+        data: [
+          { bot_id: 'bot-no-botid', name: '缺官方BotID', enabled: true, secret: 's' },
+          {
+            bot_id: 'bot-ok',
+            name: 'OK',
+            enabled: true,
+            bot_secret_id: 'wxbot-ok',
+            secret: 's2',
+          },
+        ],
+      },
+    };
+    const source = makeSource('tok');
+    const result = await source.fetchRuntime();
+    check('仅保留有 bot_secret_id 的项', result?.length === 1, `len=${result?.length}`);
+    check('保留的是 bot-ok', result?.[0]?.botId === 'bot-ok', `got ${result?.[0]?.botId}`);
+    // 核心回归：绝不把平台 botId 当作鉴权 ID 回落下来（那会让订阅静默失败）
+    check(
+      'subscribeBotId 未被回落成平台 botId',
+      result?.[0]?.subscribeBotId !== 'bot-no-botid',
+      `subscribeBotId=${String(result?.[0]?.subscribeBotId)}`,
+    );
   }
 
   console.log('\n[⑤ interval<=0] startPolling 不启动，返回幂等 stop');
@@ -198,7 +236,9 @@ async function main(): Promise<void> {
       status: 200,
       data: {
         code: 0,
-        data: [{ bot_id: 'bot-x', name: 'X', enabled: true, bot_secret_id: '', secret: 's' }],
+        data: [
+          { bot_id: 'bot-x', name: 'X', enabled: true, bot_secret_id: 'wxbot-x', secret: 's' },
+        ],
       },
     };
     const source = makeSource('tok');

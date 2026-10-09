@@ -26,8 +26,9 @@ WSS endpoint = wss://openws.work.weixin.qq.com
   - 连接后发送 `aibot_subscribe`；
   - 默认 WSS endpoint 固定为 `wss://openws.work.weixin.qq.com`。
 - `agent/ai-platform/backend/src/channels/models.py`：
-  - 落盘态 `WecomBotRecord` 字段为 `bot_id`、`bot_secret_id`、`secret`；
-  - 其中 `bot_secret_id` 是“企微官方 BotID（长连接鉴权）”，`secret` 是“长连接专用 Secret”。
+  - 落盘态 `WecomBotRecord` 字段为 `bot_id`、`bot_secret_id`、`secret_ref`；
+  - 其中 `bot_secret_id` 是“企微官方 BotID（长连接鉴权）”，`secret_ref` 是
+    “长连接专用 Secret 的 Vault 引用”（明文不落 YAML，见 §8.1 / §12）。
 - `agent/ai-platform/configs/system/system.yaml`：
   - `wecom.bot.websocket.endpoint` 是系统默认 endpoint，不是每个 Bot 的业务配置项。
 
@@ -322,7 +323,7 @@ bots:
     bot_secret_id: wxbot-xxxx
     name: 运维助手
     enabled: true
-    secret: <long-connection-secret>
+    secret_ref: secret://wecom/bot/wb-3f2a1c9d
     bound_agent_id: ops-agent
     corp_id: ww-xxxx
     tenant_id: 1
@@ -330,9 +331,14 @@ bots:
 
 说明：
 
-- `bot_secret_id` + `secret`：机器人长连接。
+- `bot_secret_id` + Bot Secret：机器人长连接。**Bot Secret 不落 YAML**，
+  只存 `secret_ref`，明文经 `CredentialVault` 加密存
+  `ai_platform.credential_mappings`（与 §8.2 的 corp 方案一致，满足 §12
+  「不记录明文 Bot Secret」）。Gateway 拉取运行时清单时由 backend 解密下发。
 - `corp_id` + `tenant_id`：把入站发送者映射到企业主体和 MIS 租户。
 - `corp_id` 是后续通讯录查询和绑定表主键的一部分。
+- 历史数据里的明文 `secret:`（升级前写法）读取时会被自动搬进 `secret_ref`，
+  运维台下次保存即收编进 Vault。
 
 ### 8.2 新通讯录应用配置
 
