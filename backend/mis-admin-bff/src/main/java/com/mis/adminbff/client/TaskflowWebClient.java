@@ -24,10 +24,12 @@ import org.springframework.core.ParameterizedTypeReference;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
 import org.springframework.web.reactive.function.client.WebClient;
-import org.springframework.web.util.UriComponentsBuilder;
+import org.springframework.web.util.UriBuilder;
 
+import java.net.URI;
+import java.util.LinkedHashMap;
 import java.util.Map;
-import java.util.Optional;
+import java.util.function.Function;
 
 /**
  * mis-taskflow 下游客户端。
@@ -106,6 +108,72 @@ public class TaskflowWebClient extends AbstractDownstreamClient {
                 properties.getTaskflowBaseUrl())).build();
     }
 
+    // ------------------------------------------------------------------
+    // 出站 URI 构造（编码修复，全客户端统一）
+    // ------------------------------------------------------------------
+
+    /**
+     * 构造出站 URI 的函数，交给 {@code WebClient.uri(Function<UriBuilder, URI>)} 重载。
+     *
+     * <p><b>为什么必须走 {@code uri(Function)}（本次 Bug 修复的核心）：</b>
+     * <ul>
+     *   <li>旧写法先 {@code UriComponentsBuilder...toUriString()}（<b>已做一次百分号编码</b>），
+     *       再交给 {@code uri(String)}；后者内部是 {@code DefaultUriBuilderFactory}，默认
+     *       {@code EncodingMode.TEMPLATE_AND_VALUES} 会把 {@code %} 又编码一次：
+     *       中文 {@code 通过} → {@code q=%E9%80%9A%E8%BF%87} → {@code q=%25E9%2580%259A%25E8%25BF%2587}。
+     *       下游 taskflow 只解一次码，拿到字面量 {@code %E9...}，故<b>非 ASCII 关键词/筛选恒匹配 0 条</b>
+     *       （ASCII 无字符需编码，二次编码是恒等变换，所以从没被单测暴露）。</li>
+     *   <li>若改成把 {@code URI} 对象交给 {@code uri(URI)}：虽可绕过二次编码，但 {@code uri(URI)}
+     *       <b>不经过 {@code uriBuilderFactory}</b>，相对 URI 会<b>丢掉 baseUrl</b>（scheme/host/port
+     *       与服务发现 host 全丢），比双重编码更难查 —— 实测已证 {@code uri(URI)} 产出相对地址。</li>
+     * </ul>
+     * 只有 {@code uri(Function<UriBuilder, URI>)} 二者兼顾：经带 baseUrl 的 {@code UriBuilderFactory}
+     * 展开，<b>baseUrl 保留且编码只发生一次</b>。
+     *
+     * <p>查询参数值以 {@code {qN}} 占位 + {@code build(Map)} 展开：值里的 {@code & = { }} 一律被当成
+     * 纯数据整体编码，既防查询串注入，也避免被误解析成 URI 模板变量（否则值含 {@code {} 会抛
+     * {@code IllegalArgumentException: Not enough variable values}）。
+     *
+     * @param path        路径（相对 baseUrl，可含 {@code {}} 路径变量，如 {@code /internal/v1/messages/{id}}）
+     * @param pathVars    路径变量（{@code null} 表示无）
+     * @param queryParams 查询参数（按插入顺序输出；调用方已按原语义决定增删；值为 {@code null} 时输出空值键）
+     * @return 供 {@code WebClient.uri(Function)} 消费的 URI 构造函数
+     */
+    private static Function<UriBuilder, URI> uriOf(String path, Map<String, ?> pathVars, Map<String, ?> queryParams) {
+        return ub -> {
+            ub.path(path);
+            Map<String, Object> vars = new LinkedHashMap<>();
+            if (pathVars != null) {
+                vars.putAll(pathVars);
+            }
+            if (queryParams != null) {
+                int i = 0;
+                for (Map.Entry<String, ?> e : queryParams.entrySet()) {
+                    String var = "q" + (i++);
+                    ub.queryParam(e.getKey(), "{" + var + "}");
+                    vars.put(var, e.getValue());
+                }
+            }
+            return ub.build(vars);
+        };
+    }
+
+    /** 无路径变量版本的 {@link #uriOf(String, Map, Map)}。 */
+    private static Function<UriBuilder, URI> uriOf(String path, Map<String, ?> queryParams) {
+        return uriOf(path, null, queryParams);
+    }
+
+    /** 路径变量构造：{@code pathVars("id", id, "bt", businessType, ...)}，值允许为 {@code null}。 */
+    private static Map<String, Object> pathVars(Object... nameValuePairs) {
+        Map<String, Object> vars = new LinkedHashMap<>();
+        if (nameValuePairs != null) {
+            for (int i = 0; i + 1 < nameValuePairs.length; i += 2) {
+                vars.put(String.valueOf(nameValuePairs[i]), nameValuePairs[i + 1]);
+            }
+        }
+        return vars;
+    }
+
     /** 探针：验证 BFF -> mis-taskflow 链路。 */
     public Map<String, Object> health() {
         return block(client().get()
@@ -119,14 +187,15 @@ public class TaskflowWebClient extends AbstractDownstreamClient {
     // ------------------------------------------------------------------
 
     public PageResult<MessageVO> inbox(Long tenantId, Long userId, String msgType, int page, int size) {
-        String uri = UriComponentsBuilder.fromPath("/internal/v1/messages/inbox")
-                .queryParam("tenantId", tenantId)
-                .queryParam("userId", userId)
-                .queryParamIfPresent("msgType", Optional.ofNullable(msgType))
-                .queryParam("page", page)
-                .queryParam("size", size)
-                .toUriString();
-        return block(client().get().uri(uri).retrieve().bodyToMono(MESSAGE_PAGE));
+        Map<String, Object> q = new LinkedHashMap<>();
+        q.put("tenantId", tenantId);
+        q.put("userId", userId);
+        if (msgType != null) {
+            q.put("msgType", msgType);
+        }
+        q.put("page", page);
+        q.put("size", size);
+        return block(client().get().uri(uriOf("/internal/v1/messages/inbox", q)).retrieve().bodyToMono(MESSAGE_PAGE));
     }
 
     /**
@@ -135,45 +204,44 @@ public class TaskflowWebClient extends AbstractDownstreamClient {
      */
     public PageResult<MessageVO> searchMessages(Long tenantId, Long userId, String msgType, String keyword,
                                                 int page, int size) {
-        String uri = UriComponentsBuilder.fromPath("/internal/v1/messages/search")
-                .queryParam("tenantId", tenantId)
-                .queryParam("userId", userId)
-                .queryParamIfPresent("msgType", nonBlank(msgType))
-                .queryParam("q", keyword)
-                .queryParam("page", page)
-                .queryParam("size", size)
-                .toUriString();
-        return block(client().get().uri(uri).retrieve().bodyToMono(MESSAGE_PAGE));
+        Map<String, Object> q = new LinkedHashMap<>();
+        q.put("tenantId", tenantId);
+        q.put("userId", userId);
+        if (msgType != null && !msgType.isBlank()) {
+            q.put("msgType", msgType);
+        }
+        q.put("q", keyword);
+        q.put("page", page);
+        q.put("size", size);
+        return block(client().get().uri(uriOf("/internal/v1/messages/search", q)).retrieve().bodyToMono(MESSAGE_PAGE));
     }
 
     public MessageDetailVO messageDetail(Long id, Long userId) {
-        String uri = UriComponentsBuilder.fromPath("/internal/v1/messages/{id}")
-                .queryParam("userId", userId)
-                .buildAndExpand(id).toUriString();
-        return block(client().get().uri(uri).retrieve().bodyToMono(MESSAGE_DETAIL));
+        Map<String, Object> q = new LinkedHashMap<>();
+        q.put("userId", userId);
+        return block(client().get()
+                .uri(uriOf("/internal/v1/messages/{id}", pathVars("id", id), q))
+                .retrieve().bodyToMono(MESSAGE_DETAIL));
     }
 
     public int markMessagesRead(Long userId, Map<String, Object> body) {
-        String uri = UriComponentsBuilder.fromPath("/internal/v1/messages/read")
-                .queryParam("userId", userId)
-                .toUriString();
-        return block(client().post().uri(uri).contentType(MediaType.APPLICATION_JSON)
+        Map<String, Object> q = new LinkedHashMap<>();
+        q.put("userId", userId);
+        return block(client().post().uri(uriOf("/internal/v1/messages/read", q)).contentType(MediaType.APPLICATION_JSON)
                 .bodyValue(body).retrieve().bodyToMono(INT_RESULT));
     }
 
     public MessageStatsVO messageStats(Long tenantId, Long userId) {
-        String uri = UriComponentsBuilder.fromPath("/internal/v1/messages/stats")
-                .queryParam("tenantId", tenantId)
-                .queryParam("userId", userId)
-                .toUriString();
-        return block(client().get().uri(uri).retrieve().bodyToMono(MESSAGE_STATS));
+        Map<String, Object> q = new LinkedHashMap<>();
+        q.put("tenantId", tenantId);
+        q.put("userId", userId);
+        return block(client().get().uri(uriOf("/internal/v1/messages/stats", q)).retrieve().bodyToMono(MESSAGE_STATS));
     }
 
     public Long publishMessage(Long tenantId, Map<String, Object> body) {
-        String uri = UriComponentsBuilder.fromPath("/internal/v1/messages")
-                .queryParam("tenantId", tenantId)
-                .toUriString();
-        return block(client().post().uri(uri).contentType(MediaType.APPLICATION_JSON)
+        Map<String, Object> q = new LinkedHashMap<>();
+        q.put("tenantId", tenantId);
+        return block(client().post().uri(uriOf("/internal/v1/messages", q)).contentType(MediaType.APPLICATION_JSON)
                 .bodyValue(body).retrieve().bodyToMono(LONG_RESULT));
     }
 
@@ -185,18 +253,16 @@ public class TaskflowWebClient extends AbstractDownstreamClient {
      */
     public void replyMessage(Long id, Long tenantId, Long operatorId, String operatorName,
                              Map<String, Object> body) {
-        String uri = UriComponentsBuilder.fromPath("/internal/v1/messages/{id}/reply")
-                .queryParam("tenantId", tenantId)
-                .queryParamIfPresent("operatorId", Optional.ofNullable(operatorId))
-                .queryParamIfPresent("operatorName", nonBlank(operatorName))
-                .buildAndExpand(id).toUriString();
-        blockVoid(client().post().uri(uri).contentType(MediaType.APPLICATION_JSON)
-                .bodyValue(body).retrieve().bodyToMono(VOID));
-    }
-
-    /** 空串/空白一律视为「不传」，返回空 Optional。 */
-    private static Optional<String> nonBlank(String v) {
-        return Optional.ofNullable(v).filter(s -> !s.isBlank());
+        Map<String, Object> q = new LinkedHashMap<>();
+        q.put("tenantId", tenantId);
+        if (operatorId != null) {
+            q.put("operatorId", operatorId);
+        }
+        if (operatorName != null && !operatorName.isBlank()) {
+            q.put("operatorName", operatorName);
+        }
+        blockVoid(client().post().uri(uriOf("/internal/v1/messages/{id}/reply", pathVars("id", id), q))
+                .contentType(MediaType.APPLICATION_JSON).bodyValue(body).retrieve().bodyToMono(VOID));
     }
 
     // ------------------------------------------------------------------
@@ -204,70 +270,77 @@ public class TaskflowWebClient extends AbstractDownstreamClient {
     // ------------------------------------------------------------------
 
     public Long createTask(Long tenantId, Long operatorId, Map<String, Object> body) {
-        String uri = UriComponentsBuilder.fromPath("/internal/v1/tasks")
-                .queryParam("tenantId", tenantId)
-                .queryParamIfPresent("operatorId", Optional.ofNullable(operatorId))
-                .toUriString();
-        return block(client().post().uri(uri).contentType(MediaType.APPLICATION_JSON)
+        Map<String, Object> q = new LinkedHashMap<>();
+        q.put("tenantId", tenantId);
+        if (operatorId != null) {
+            q.put("operatorId", operatorId);
+        }
+        return block(client().post().uri(uriOf("/internal/v1/tasks", q)).contentType(MediaType.APPLICATION_JSON)
                 .bodyValue(body).retrieve().bodyToMono(LONG_RESULT));
     }
 
     public PageResult<TaskVO> myTasks(Long tenantId, Long assigneeId, String status, String keyword,
                                       int page, int size) {
-        String uri = UriComponentsBuilder.fromPath("/internal/v1/tasks/my")
-                .queryParam("tenantId", tenantId)
-                .queryParam("assigneeId", assigneeId)
-                .queryParamIfPresent("status", Optional.ofNullable(status))
-                .queryParamIfPresent("keyword", nonBlank(keyword))
-                .queryParam("page", page)
-                .queryParam("size", size)
-                .toUriString();
-        return block(client().get().uri(uri).retrieve().bodyToMono(TASK_PAGE));
+        Map<String, Object> q = new LinkedHashMap<>();
+        q.put("tenantId", tenantId);
+        q.put("assigneeId", assigneeId);
+        if (status != null) {
+            q.put("status", status);
+        }
+        if (keyword != null && !keyword.isBlank()) {
+            q.put("keyword", keyword);
+        }
+        q.put("page", page);
+        q.put("size", size);
+        return block(client().get().uri(uriOf("/internal/v1/tasks/my", q)).retrieve().bodyToMono(TASK_PAGE));
     }
 
     public PageResult<TaskVO> handledTasks(Long tenantId, Long assigneeId, String keyword, int page, int size) {
-        String uri = UriComponentsBuilder.fromPath("/internal/v1/tasks/handled")
-                .queryParam("tenantId", tenantId)
-                .queryParam("assigneeId", assigneeId)
-                .queryParamIfPresent("keyword", nonBlank(keyword))
-                .queryParam("page", page)
-                .queryParam("size", size)
-                .toUriString();
-        return block(client().get().uri(uri).retrieve().bodyToMono(TASK_PAGE));
+        Map<String, Object> q = new LinkedHashMap<>();
+        q.put("tenantId", tenantId);
+        q.put("assigneeId", assigneeId);
+        if (keyword != null && !keyword.isBlank()) {
+            q.put("keyword", keyword);
+        }
+        q.put("page", page);
+        q.put("size", size);
+        return block(client().get().uri(uriOf("/internal/v1/tasks/handled", q)).retrieve().bodyToMono(TASK_PAGE));
     }
 
     public TaskStatsVO taskStats(Long tenantId, Long assigneeId) {
-        String uri = UriComponentsBuilder.fromPath("/internal/v1/tasks/stats")
-                .queryParam("tenantId", tenantId)
-                .queryParam("assigneeId", assigneeId)
-                .toUriString();
-        return block(client().get().uri(uri).retrieve().bodyToMono(TASK_STATS));
+        Map<String, Object> q = new LinkedHashMap<>();
+        q.put("tenantId", tenantId);
+        q.put("assigneeId", assigneeId);
+        return block(client().get().uri(uriOf("/internal/v1/tasks/stats", q)).retrieve().bodyToMono(TASK_STATS));
     }
 
     public void handleTask(Long id, Long tenantId, Long operatorId, Map<String, Object> body) {
-        String uri = UriComponentsBuilder.fromPath("/internal/v1/tasks/{id}/handle")
-                .queryParam("tenantId", tenantId)
-                .queryParamIfPresent("operatorId", Optional.ofNullable(operatorId))
-                .buildAndExpand(id).toUriString();
-        blockVoid(client().post().uri(uri).contentType(MediaType.APPLICATION_JSON)
-                .bodyValue(body).retrieve().bodyToMono(VOID));
+        Map<String, Object> q = new LinkedHashMap<>();
+        q.put("tenantId", tenantId);
+        if (operatorId != null) {
+            q.put("operatorId", operatorId);
+        }
+        blockVoid(client().post().uri(uriOf("/internal/v1/tasks/{id}/handle", pathVars("id", id), q))
+                .contentType(MediaType.APPLICATION_JSON).bodyValue(body).retrieve().bodyToMono(VOID));
     }
 
     public void transferTask(Long id, Long tenantId, Long operatorId, Map<String, Object> body) {
-        String uri = UriComponentsBuilder.fromPath("/internal/v1/tasks/{id}/transfer")
-                .queryParam("tenantId", tenantId)
-                .queryParamIfPresent("operatorId", Optional.ofNullable(operatorId))
-                .buildAndExpand(id).toUriString();
-        blockVoid(client().post().uri(uri).contentType(MediaType.APPLICATION_JSON)
-                .bodyValue(body).retrieve().bodyToMono(VOID));
+        Map<String, Object> q = new LinkedHashMap<>();
+        q.put("tenantId", tenantId);
+        if (operatorId != null) {
+            q.put("operatorId", operatorId);
+        }
+        blockVoid(client().post().uri(uriOf("/internal/v1/tasks/{id}/transfer", pathVars("id", id), q))
+                .contentType(MediaType.APPLICATION_JSON).bodyValue(body).retrieve().bodyToMono(VOID));
     }
 
     public int batchHandleTasks(Long tenantId, Long operatorId, Map<String, Object> body) {
-        String uri = UriComponentsBuilder.fromPath("/internal/v1/tasks/batch-handle")
-                .queryParam("tenantId", tenantId)
-                .queryParamIfPresent("operatorId", Optional.ofNullable(operatorId))
-                .toUriString();
-        return block(client().post().uri(uri).contentType(MediaType.APPLICATION_JSON)
+        Map<String, Object> q = new LinkedHashMap<>();
+        q.put("tenantId", tenantId);
+        if (operatorId != null) {
+            q.put("operatorId", operatorId);
+        }
+        return block(client().post().uri(uriOf("/internal/v1/tasks/batch-handle", q)).contentType(MediaType.APPLICATION_JSON)
                 .bodyValue(body).retrieve().bodyToMono(INT_RESULT));
     }
 
@@ -278,41 +351,43 @@ public class TaskflowWebClient extends AbstractDownstreamClient {
     public PageResult<AuditOpVO> auditOps(Long tenantId, Long userId, String module, String operationType,
                                           String businessType, String resultStatus, String keyword,
                                           String startTime, String endTime, int page, int size) {
-        UriComponentsBuilder b = UriComponentsBuilder.fromPath("/internal/v1/audit-ops")
-                .queryParam("tenantId", tenantId)
-                .queryParam("page", page)
-                .queryParam("size", size);
-        if (userId != null) b.queryParam("userId", userId);
-        if (module != null && !module.isBlank()) b.queryParam("module", module);
-        if (operationType != null && !operationType.isBlank()) b.queryParam("operationType", operationType);
-        if (businessType != null && !businessType.isBlank()) b.queryParam("businessType", businessType);
-        if (resultStatus != null && !resultStatus.isBlank()) b.queryParam("resultStatus", resultStatus);
-        if (keyword != null && !keyword.isBlank()) b.queryParam("keyword", keyword);
-        if (startTime != null && !startTime.isBlank()) b.queryParam("startTime", startTime);
-        if (endTime != null && !endTime.isBlank()) b.queryParam("endTime", endTime);
-        return block(client().get().uri(b.toUriString()).retrieve().bodyToMono(AUDIT_PAGE));
+        Map<String, Object> q = new LinkedHashMap<>();
+        q.put("tenantId", tenantId);
+        q.put("page", page);
+        q.put("size", size);
+        if (userId != null) q.put("userId", userId);
+        if (module != null && !module.isBlank()) q.put("module", module);
+        if (operationType != null && !operationType.isBlank()) q.put("operationType", operationType);
+        if (businessType != null && !businessType.isBlank()) q.put("businessType", businessType);
+        if (resultStatus != null && !resultStatus.isBlank()) q.put("resultStatus", resultStatus);
+        if (keyword != null && !keyword.isBlank()) q.put("keyword", keyword);
+        if (startTime != null && !startTime.isBlank()) q.put("startTime", startTime);
+        if (endTime != null && !endTime.isBlank()) q.put("endTime", endTime);
+        return block(client().get().uri(uriOf("/internal/v1/audit-ops", q)).retrieve().bodyToMono(AUDIT_PAGE));
     }
 
     public AuditOpDetailVO auditOpDetail(Long id, Long tenantId) {
-        String uri = UriComponentsBuilder.fromPath("/internal/v1/audit-ops/{id}")
-                .queryParam("tenantId", tenantId)
-                .buildAndExpand(id).toUriString();
-        return block(client().get().uri(uri).retrieve().bodyToMono(AUDIT_DETAIL));
+        Map<String, Object> q = new LinkedHashMap<>();
+        q.put("tenantId", tenantId);
+        return block(client().get()
+                .uri(uriOf("/internal/v1/audit-ops/{id}", pathVars("id", id), q))
+                .retrieve().bodyToMono(AUDIT_DETAIL));
     }
 
     public java.util.List<AuditTimelineItem> auditTimeline(Long tenantId, String businessType, String businessId) {
-        String uri = UriComponentsBuilder.fromPath("/internal/v1/audit-ops/timeline/{bt}/{bid}")
-                .queryParam("tenantId", tenantId)
-                .buildAndExpand(businessType, businessId).toUriString();
-        return block(client().get().uri(uri).retrieve().bodyToMono(AUDIT_TIMELINE));
+        Map<String, Object> q = new LinkedHashMap<>();
+        q.put("tenantId", tenantId);
+        return block(client().get()
+                .uri(uriOf("/internal/v1/audit-ops/timeline/{bt}/{bid}",
+                        pathVars("bt", businessType, "bid", businessId), q))
+                .retrieve().bodyToMono(AUDIT_TIMELINE));
     }
 
     public AuditStatsVO auditStats(Long tenantId, int days) {
-        String uri = UriComponentsBuilder.fromPath("/internal/v1/audit-ops/stats")
-                .queryParam("tenantId", tenantId)
-                .queryParam("days", days)
-                .toUriString();
-        return block(client().get().uri(uri).retrieve().bodyToMono(AUDIT_STATS));
+        Map<String, Object> q = new LinkedHashMap<>();
+        q.put("tenantId", tenantId);
+        q.put("days", days);
+        return block(client().get().uri(uriOf("/internal/v1/audit-ops/stats", q)).retrieve().bodyToMono(AUDIT_STATS));
     }
 
     // ------------------------------------------------------------------
@@ -320,18 +395,21 @@ public class TaskflowWebClient extends AbstractDownstreamClient {
     // ------------------------------------------------------------------
 
     public Long createWorkflowDefinition(Long tenantId, Long operatorId, Map<String, Object> body) {
-        String uri = UriComponentsBuilder.fromPath("/internal/v1/workflow/definitions")
-                .queryParam("tenantId", tenantId)
-                .queryParamIfPresent("operatorId", Optional.ofNullable(operatorId))
-                .toUriString();
-        return block(client().post().uri(uri).contentType(MediaType.APPLICATION_JSON)
+        Map<String, Object> q = new LinkedHashMap<>();
+        q.put("tenantId", tenantId);
+        if (operatorId != null) {
+            q.put("operatorId", operatorId);
+        }
+        return block(client().post().uri(uriOf("/internal/v1/workflow/definitions", q)).contentType(MediaType.APPLICATION_JSON)
                 .bodyValue(body).retrieve().bodyToMono(LONG_RESULT));
     }
 
     public WfDefinitionDTO workflowDefinition(Long id, Long tenantId) {
-        String uri = UriComponentsBuilder.fromPath("/internal/v1/workflow/definitions/{id}")
-                .queryParam("tenantId", tenantId).buildAndExpand(id).toUriString();
-        return block(client().get().uri(uri).retrieve().bodyToMono(WF_DEFINITION));
+        Map<String, Object> q = new LinkedHashMap<>();
+        q.put("tenantId", tenantId);
+        return block(client().get()
+                .uri(uriOf("/internal/v1/workflow/definitions/{id}", pathVars("id", id), q))
+                .retrieve().bodyToMono(WF_DEFINITION));
     }
 
     public PageResult<WfDefinitionDTO> workflowDefinitions(Long tenantId, int page, int size) {
@@ -352,36 +430,38 @@ public class TaskflowWebClient extends AbstractDownstreamClient {
 
     public PageResult<WfDefinitionDTO> workflowDefinitions(Long tenantId, int page, int size,
                                                            java.util.List<Long> categoryIds, String keyword) {
-        UriComponentsBuilder b = UriComponentsBuilder.fromPath("/internal/v1/workflow/definitions")
-                .queryParam("tenantId", tenantId)
-                .queryParam("page", page)
-                .queryParam("size", size);
+        Map<String, Object> q = new LinkedHashMap<>();
+        q.put("tenantId", tenantId);
+        q.put("page", page);
+        q.put("size", size);
         if (categoryIds != null && !categoryIds.isEmpty()) {
-            b.queryParam("categoryIds", String.join(",", categoryIds.stream().map(String::valueOf).toList()));
+            q.put("categoryIds", String.join(",", categoryIds.stream().map(String::valueOf).toList()));
         }
         if (keyword != null && !keyword.isBlank()) {
-            b.queryParam("keyword", keyword.trim());
+            q.put("keyword", keyword.trim());
         }
-        return block(client().get().uri(b.toUriString()).retrieve().bodyToMono(WF_DEFINITION_PAGE));
+        return block(client().get().uri(uriOf("/internal/v1/workflow/definitions", q)).retrieve().bodyToMono(WF_DEFINITION_PAGE));
     }
 
     public void activateWorkflowDefinition(Long id, Long tenantId) {
-        String uri = UriComponentsBuilder.fromPath("/internal/v1/workflow/definitions/{id}/activate")
-                .queryParam("tenantId", tenantId).buildAndExpand(id).toUriString();
-        blockVoid(client().post().uri(uri).retrieve().bodyToMono(VOID));
+        Map<String, Object> q = new LinkedHashMap<>();
+        q.put("tenantId", tenantId);
+        blockVoid(client().post().uri(uriOf("/internal/v1/workflow/definitions/{id}/activate", pathVars("id", id), q))
+                .retrieve().bodyToMono(VOID));
     }
 
     public void updateWorkflowDefinition(Long id, Long tenantId, Map<String, Object> body) {
-        String uri = UriComponentsBuilder.fromPath("/internal/v1/workflow/definitions/{id}")
-                .queryParam("tenantId", tenantId).buildAndExpand(id).toUriString();
-        blockVoid(client().put().uri(uri).contentType(MediaType.APPLICATION_JSON)
-                .bodyValue(body).retrieve().bodyToMono(VOID));
+        Map<String, Object> q = new LinkedHashMap<>();
+        q.put("tenantId", tenantId);
+        blockVoid(client().put().uri(uriOf("/internal/v1/workflow/definitions/{id}", pathVars("id", id), q))
+                .contentType(MediaType.APPLICATION_JSON).bodyValue(body).retrieve().bodyToMono(VOID));
     }
 
     public void deactivateWorkflowDefinition(Long id, Long tenantId) {
-        String uri = UriComponentsBuilder.fromPath("/internal/v1/workflow/definitions/{id}/deactivate")
-                .queryParam("tenantId", tenantId).buildAndExpand(id).toUriString();
-        blockVoid(client().post().uri(uri).retrieve().bodyToMono(VOID));
+        Map<String, Object> q = new LinkedHashMap<>();
+        q.put("tenantId", tenantId);
+        blockVoid(client().post().uri(uriOf("/internal/v1/workflow/definitions/{id}/deactivate", pathVars("id", id), q))
+                .retrieve().bodyToMono(VOID));
     }
 
     // ------------------------------------------------------------------
@@ -389,43 +469,47 @@ public class TaskflowWebClient extends AbstractDownstreamClient {
     // ------------------------------------------------------------------
 
     public java.util.List<WfCategoryVO> wfCategoryTree(Long tenantId) {
-        String uri = UriComponentsBuilder.fromPath("/internal/v1/workflow/categories/tree")
-                .queryParam("tenantId", tenantId).toUriString();
-        return block(client().get().uri(uri).retrieve().bodyToMono(WF_CATEGORY_LIST));
+        Map<String, Object> q = new LinkedHashMap<>();
+        q.put("tenantId", tenantId);
+        return block(client().get().uri(uriOf("/internal/v1/workflow/categories/tree", q)).retrieve().bodyToMono(WF_CATEGORY_LIST));
     }
 
     public java.util.List<WfCategoryVO> wfCategories(Long tenantId) {
-        String uri = UriComponentsBuilder.fromPath("/internal/v1/workflow/categories")
-                .queryParam("tenantId", tenantId).toUriString();
-        return block(client().get().uri(uri).retrieve().bodyToMono(WF_CATEGORY_LIST));
+        Map<String, Object> q = new LinkedHashMap<>();
+        q.put("tenantId", tenantId);
+        return block(client().get().uri(uriOf("/internal/v1/workflow/categories", q)).retrieve().bodyToMono(WF_CATEGORY_LIST));
     }
 
     public WfCategoryVO getWfCategory(Long id, Long tenantId) {
-        String uri = UriComponentsBuilder.fromPath("/internal/v1/workflow/categories/{id}")
-                .queryParam("tenantId", tenantId).buildAndExpand(id).toUriString();
-        return block(client().get().uri(uri).retrieve().bodyToMono(WF_CATEGORY_ONE));
+        Map<String, Object> q = new LinkedHashMap<>();
+        q.put("tenantId", tenantId);
+        return block(client().get()
+                .uri(uriOf("/internal/v1/workflow/categories/{id}", pathVars("id", id), q))
+                .retrieve().bodyToMono(WF_CATEGORY_ONE));
     }
 
     public Long createWfCategory(Long tenantId, Long operatorId, Map<String, Object> body) {
-        String uri = UriComponentsBuilder.fromPath("/internal/v1/workflow/categories")
-                .queryParam("tenantId", tenantId)
-                .queryParamIfPresent("operatorId", Optional.ofNullable(operatorId))
-                .toUriString();
-        return block(client().post().uri(uri).contentType(MediaType.APPLICATION_JSON)
+        Map<String, Object> q = new LinkedHashMap<>();
+        q.put("tenantId", tenantId);
+        if (operatorId != null) {
+            q.put("operatorId", operatorId);
+        }
+        return block(client().post().uri(uriOf("/internal/v1/workflow/categories", q)).contentType(MediaType.APPLICATION_JSON)
                 .bodyValue(body).retrieve().bodyToMono(LONG_RESULT));
     }
 
     public void updateWfCategory(Long id, Long tenantId, Map<String, Object> body) {
-        String uri = UriComponentsBuilder.fromPath("/internal/v1/workflow/categories/{id}")
-                .queryParam("tenantId", tenantId).buildAndExpand(id).toUriString();
-        blockVoid(client().put().uri(uri).contentType(MediaType.APPLICATION_JSON)
-                .bodyValue(body).retrieve().bodyToMono(VOID));
+        Map<String, Object> q = new LinkedHashMap<>();
+        q.put("tenantId", tenantId);
+        blockVoid(client().put().uri(uriOf("/internal/v1/workflow/categories/{id}", pathVars("id", id), q))
+                .contentType(MediaType.APPLICATION_JSON).bodyValue(body).retrieve().bodyToMono(VOID));
     }
 
     public void deleteWfCategory(Long id, Long tenantId) {
-        String uri = UriComponentsBuilder.fromPath("/internal/v1/workflow/categories/{id}")
-                .queryParam("tenantId", tenantId).buildAndExpand(id).toUriString();
-        blockVoid(client().delete().uri(uri).retrieve().bodyToMono(VOID));
+        Map<String, Object> q = new LinkedHashMap<>();
+        q.put("tenantId", tenantId);
+        blockVoid(client().delete().uri(uriOf("/internal/v1/workflow/categories/{id}", pathVars("id", id), q))
+                .retrieve().bodyToMono(VOID));
     }
 
     // ------------------------------------------------------------------
@@ -433,43 +517,47 @@ public class TaskflowWebClient extends AbstractDownstreamClient {
     // ------------------------------------------------------------------
 
     public java.util.List<FormCategoryVO> formCategoryTree(Long tenantId) {
-        String uri = UriComponentsBuilder.fromPath("/internal/v1/form-categories/tree")
-                .queryParam("tenantId", tenantId).toUriString();
-        return block(client().get().uri(uri).retrieve().bodyToMono(FORM_CATEGORY_LIST));
+        Map<String, Object> q = new LinkedHashMap<>();
+        q.put("tenantId", tenantId);
+        return block(client().get().uri(uriOf("/internal/v1/form-categories/tree", q)).retrieve().bodyToMono(FORM_CATEGORY_LIST));
     }
 
     public java.util.List<FormCategoryVO> formCategories(Long tenantId) {
-        String uri = UriComponentsBuilder.fromPath("/internal/v1/form-categories")
-                .queryParam("tenantId", tenantId).toUriString();
-        return block(client().get().uri(uri).retrieve().bodyToMono(FORM_CATEGORY_LIST));
+        Map<String, Object> q = new LinkedHashMap<>();
+        q.put("tenantId", tenantId);
+        return block(client().get().uri(uriOf("/internal/v1/form-categories", q)).retrieve().bodyToMono(FORM_CATEGORY_LIST));
     }
 
     public FormCategoryVO getFormCategory(Long id, Long tenantId) {
-        String uri = UriComponentsBuilder.fromPath("/internal/v1/form-categories/{id}")
-                .queryParam("tenantId", tenantId).buildAndExpand(id).toUriString();
-        return block(client().get().uri(uri).retrieve().bodyToMono(FORM_CATEGORY_ONE));
+        Map<String, Object> q = new LinkedHashMap<>();
+        q.put("tenantId", tenantId);
+        return block(client().get()
+                .uri(uriOf("/internal/v1/form-categories/{id}", pathVars("id", id), q))
+                .retrieve().bodyToMono(FORM_CATEGORY_ONE));
     }
 
     public Long createFormCategory(Long tenantId, Long operatorId, Map<String, Object> body) {
-        String uri = UriComponentsBuilder.fromPath("/internal/v1/form-categories")
-                .queryParam("tenantId", tenantId)
-                .queryParamIfPresent("operatorId", Optional.ofNullable(operatorId))
-                .toUriString();
-        return block(client().post().uri(uri).contentType(MediaType.APPLICATION_JSON)
+        Map<String, Object> q = new LinkedHashMap<>();
+        q.put("tenantId", tenantId);
+        if (operatorId != null) {
+            q.put("operatorId", operatorId);
+        }
+        return block(client().post().uri(uriOf("/internal/v1/form-categories", q)).contentType(MediaType.APPLICATION_JSON)
                 .bodyValue(body).retrieve().bodyToMono(LONG_RESULT));
     }
 
     public void updateFormCategory(Long id, Long tenantId, Map<String, Object> body) {
-        String uri = UriComponentsBuilder.fromPath("/internal/v1/form-categories/{id}")
-                .queryParam("tenantId", tenantId).buildAndExpand(id).toUriString();
-        blockVoid(client().put().uri(uri).contentType(MediaType.APPLICATION_JSON)
-                .bodyValue(body).retrieve().bodyToMono(VOID));
+        Map<String, Object> q = new LinkedHashMap<>();
+        q.put("tenantId", tenantId);
+        blockVoid(client().put().uri(uriOf("/internal/v1/form-categories/{id}", pathVars("id", id), q))
+                .contentType(MediaType.APPLICATION_JSON).bodyValue(body).retrieve().bodyToMono(VOID));
     }
 
     public void deleteFormCategory(Long id, Long tenantId) {
-        String uri = UriComponentsBuilder.fromPath("/internal/v1/form-categories/{id}")
-                .queryParam("tenantId", tenantId).buildAndExpand(id).toUriString();
-        blockVoid(client().delete().uri(uri).retrieve().bodyToMono(VOID));
+        Map<String, Object> q = new LinkedHashMap<>();
+        q.put("tenantId", tenantId);
+        blockVoid(client().delete().uri(uriOf("/internal/v1/form-categories/{id}", pathVars("id", id), q))
+                .retrieve().bodyToMono(VOID));
     }
 
     // ------------------------------------------------------------------
@@ -489,76 +577,88 @@ public class TaskflowWebClient extends AbstractDownstreamClient {
      */
     public java.util.List<FormDefinitionVO> formDefinitions(Long tenantId, String status,
                                                             java.util.List<Long> categoryIds) {
-        UriComponentsBuilder b = UriComponentsBuilder.fromPath("/internal/v1/form-definitions")
-                .queryParam("tenantId", tenantId)
-                .queryParamIfPresent("status", Optional.ofNullable(status));
-        if (categoryIds != null && !categoryIds.isEmpty()) {
-            b.queryParam("categoryIds", String.join(",", categoryIds.stream().map(String::valueOf).toList()));
+        Map<String, Object> q = new LinkedHashMap<>();
+        q.put("tenantId", tenantId);
+        if (status != null) {
+            q.put("status", status);
         }
-        return block(client().get().uri(b.toUriString()).retrieve().bodyToMono(FORM_DEF_LIST));
+        if (categoryIds != null && !categoryIds.isEmpty()) {
+            q.put("categoryIds", String.join(",", categoryIds.stream().map(String::valueOf).toList()));
+        }
+        return block(client().get().uri(uriOf("/internal/v1/form-definitions", q)).retrieve().bodyToMono(FORM_DEF_LIST));
     }
 
     public FormDefinitionVO formDefinition(Long id, Long tenantId) {
-        String uri = UriComponentsBuilder.fromPath("/internal/v1/form-definitions/{id}")
-                .queryParam("tenantId", tenantId).buildAndExpand(id).toUriString();
-        return block(client().get().uri(uri).retrieve().bodyToMono(FORM_DEF_ONE));
+        Map<String, Object> q = new LinkedHashMap<>();
+        q.put("tenantId", tenantId);
+        return block(client().get()
+                .uri(uriOf("/internal/v1/form-definitions/{id}", pathVars("id", id), q))
+                .retrieve().bodyToMono(FORM_DEF_ONE));
     }
 
     public Long createFormDefinition(Long tenantId, Long operatorId, Map<String, Object> body) {
-        String uri = UriComponentsBuilder.fromPath("/internal/v1/form-definitions")
-                .queryParam("tenantId", tenantId)
-                .queryParamIfPresent("operatorId", Optional.ofNullable(operatorId))
-                .toUriString();
-        return block(client().post().uri(uri).contentType(MediaType.APPLICATION_JSON)
+        Map<String, Object> q = new LinkedHashMap<>();
+        q.put("tenantId", tenantId);
+        if (operatorId != null) {
+            q.put("operatorId", operatorId);
+        }
+        return block(client().post().uri(uriOf("/internal/v1/form-definitions", q)).contentType(MediaType.APPLICATION_JSON)
                 .bodyValue(body).retrieve().bodyToMono(LONG_RESULT));
     }
 
     public void updateFormDefinition(Long id, Long tenantId, Map<String, Object> body) {
-        String uri = UriComponentsBuilder.fromPath("/internal/v1/form-definitions/{id}")
-                .queryParam("tenantId", tenantId).buildAndExpand(id).toUriString();
-        blockVoid(client().put().uri(uri).contentType(MediaType.APPLICATION_JSON)
-                .bodyValue(body).retrieve().bodyToMono(VOID));
+        Map<String, Object> q = new LinkedHashMap<>();
+        q.put("tenantId", tenantId);
+        blockVoid(client().put().uri(uriOf("/internal/v1/form-definitions/{id}", pathVars("id", id), q))
+                .contentType(MediaType.APPLICATION_JSON).bodyValue(body).retrieve().bodyToMono(VOID));
     }
 
     public void deleteFormDefinition(Long id, Long tenantId) {
-        String uri = UriComponentsBuilder.fromPath("/internal/v1/form-definitions/{id}")
-                .queryParam("tenantId", tenantId).buildAndExpand(id).toUriString();
-        blockVoid(client().delete().uri(uri).retrieve().bodyToMono(VOID));
+        Map<String, Object> q = new LinkedHashMap<>();
+        q.put("tenantId", tenantId);
+        blockVoid(client().delete().uri(uriOf("/internal/v1/form-definitions/{id}", pathVars("id", id), q))
+                .retrieve().bodyToMono(VOID));
     }
 
     public Long startProcess(Long tenantId, Map<String, Object> body) {
-        String uri = UriComponentsBuilder.fromPath("/internal/v1/workflow/instances/start")
-                .queryParam("tenantId", tenantId).toUriString();
-        return block(client().post().uri(uri).contentType(MediaType.APPLICATION_JSON)
+        Map<String, Object> q = new LinkedHashMap<>();
+        q.put("tenantId", tenantId);
+        return block(client().post().uri(uriOf("/internal/v1/workflow/instances/start", q)).contentType(MediaType.APPLICATION_JSON)
                 .bodyValue(body).retrieve().bodyToMono(LONG_RESULT));
     }
 
     public ProcessDetailVO processDetail(Long id, Long tenantId) {
-        String uri = UriComponentsBuilder.fromPath("/internal/v1/workflow/instances/{id}")
-                .queryParam("tenantId", tenantId).buildAndExpand(id).toUriString();
-        return block(client().get().uri(uri).retrieve().bodyToMono(WF_PROCESS_DETAIL));
+        Map<String, Object> q = new LinkedHashMap<>();
+        q.put("tenantId", tenantId);
+        return block(client().get()
+                .uri(uriOf("/internal/v1/workflow/instances/{id}", pathVars("id", id), q))
+                .retrieve().bodyToMono(WF_PROCESS_DETAIL));
     }
 
     public PageResult<WfInstanceVO> myProcesses(Long tenantId, Long initiatorId, String status, String keyword,
                                                 int page, int size) {
-        String uri = UriComponentsBuilder.fromPath("/internal/v1/workflow/instances/my")
-                .queryParam("tenantId", tenantId)
-                .queryParam("initiatorId", initiatorId)
-                .queryParamIfPresent("status", Optional.ofNullable(status))
-                .queryParamIfPresent("keyword", nonBlank(keyword))
-                .queryParam("page", page)
-                .queryParam("size", size)
-                .toUriString();
-        return block(client().get().uri(uri).retrieve().bodyToMono(WF_INSTANCE_PAGE));
+        Map<String, Object> q = new LinkedHashMap<>();
+        q.put("tenantId", tenantId);
+        q.put("initiatorId", initiatorId);
+        if (status != null) {
+            q.put("status", status);
+        }
+        if (keyword != null && !keyword.isBlank()) {
+            q.put("keyword", keyword);
+        }
+        q.put("page", page);
+        q.put("size", size);
+        return block(client().get().uri(uriOf("/internal/v1/workflow/instances/my", q)).retrieve().bodyToMono(WF_INSTANCE_PAGE));
     }
 
     public void completeWfTask(Long id, Long tenantId, Long operatorId, Map<String, Object> body) {
-        String uri = UriComponentsBuilder.fromPath("/internal/v1/workflow/tasks/{id}/complete")
-                .queryParam("tenantId", tenantId)
-                .queryParamIfPresent("operatorId", Optional.ofNullable(operatorId))
-                .buildAndExpand(id).toUriString();
-        blockVoid(client().post().uri(uri).contentType(MediaType.APPLICATION_JSON)
-                .bodyValue(body).retrieve().bodyToMono(VOID));
+        Map<String, Object> q = new LinkedHashMap<>();
+        q.put("tenantId", tenantId);
+        if (operatorId != null) {
+            q.put("operatorId", operatorId);
+        }
+        blockVoid(client().post().uri(uriOf("/internal/v1/workflow/tasks/{id}/complete", pathVars("id", id), q))
+                .contentType(MediaType.APPLICATION_JSON).bodyValue(body).retrieve().bodyToMono(VOID));
     }
 
     // ------------------------------------------------------------------
@@ -566,31 +666,36 @@ public class TaskflowWebClient extends AbstractDownstreamClient {
     // ------------------------------------------------------------------
 
     public PageResult<ExecutionTaskVO> execMonitor(Long tenantId, String status, int page, int size) {
-        String uri = UriComponentsBuilder.fromPath("/internal/v1/exec-monitor")
-                .queryParam("tenantId", tenantId)
-                .queryParamIfPresent("status", Optional.ofNullable(status))
-                .queryParam("page", page)
-                .queryParam("size", size)
-                .toUriString();
-        return block(client().get().uri(uri).retrieve().bodyToMono(EXEC_PAGE));
+        Map<String, Object> q = new LinkedHashMap<>();
+        q.put("tenantId", tenantId);
+        if (status != null) {
+            q.put("status", status);
+        }
+        q.put("page", page);
+        q.put("size", size);
+        return block(client().get().uri(uriOf("/internal/v1/exec-monitor", q)).retrieve().bodyToMono(EXEC_PAGE));
     }
 
     public ExecutionTaskVO execTask(Long id, Long tenantId) {
-        String uri = UriComponentsBuilder.fromPath("/internal/v1/exec-monitor/{id}")
-                .queryParam("tenantId", tenantId).buildAndExpand(id).toUriString();
-        return block(client().get().uri(uri).retrieve().bodyToMono(EXEC_TASK));
+        Map<String, Object> q = new LinkedHashMap<>();
+        q.put("tenantId", tenantId);
+        return block(client().get()
+                .uri(uriOf("/internal/v1/exec-monitor/{id}", pathVars("id", id), q))
+                .retrieve().bodyToMono(EXEC_TASK));
     }
 
     public void execRetry(Long id, Long tenantId) {
-        String uri = UriComponentsBuilder.fromPath("/internal/v1/exec-monitor/{id}/retry")
-                .queryParam("tenantId", tenantId).buildAndExpand(id).toUriString();
-        blockVoid(client().post().uri(uri).retrieve().bodyToMono(VOID));
+        Map<String, Object> q = new LinkedHashMap<>();
+        q.put("tenantId", tenantId);
+        blockVoid(client().post().uri(uriOf("/internal/v1/exec-monitor/{id}/retry", pathVars("id", id), q))
+                .retrieve().bodyToMono(VOID));
     }
 
     public void execForceArchive(Long id, Long tenantId) {
-        String uri = UriComponentsBuilder.fromPath("/internal/v1/exec-monitor/{id}/force-archive")
-                .queryParam("tenantId", tenantId).buildAndExpand(id).toUriString();
-        blockVoid(client().post().uri(uri).retrieve().bodyToMono(VOID));
+        Map<String, Object> q = new LinkedHashMap<>();
+        q.put("tenantId", tenantId);
+        blockVoid(client().post().uri(uriOf("/internal/v1/exec-monitor/{id}/force-archive", pathVars("id", id), q))
+                .retrieve().bodyToMono(VOID));
     }
 
     public int execScan() {
