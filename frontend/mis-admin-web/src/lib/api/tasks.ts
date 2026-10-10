@@ -38,17 +38,28 @@ export interface TaskQuery {
   tenantId: string;
   assigneeId: string;
   status?: string;
+  /** 关键词模糊匹配（PR-04）；空白/空串**不透传**（见下方 buildQuery）。 */
+  keyword?: string;
   page?: number;
   size?: number;
 }
 
+/** 构造请求参数：`keyword` 空白（null/undefined/纯空格）时**不带该 query**，退化为原查询。 */
+function buildQuery(params: TaskQuery): Record<string, unknown> {
+  const { keyword, ...rest } = params;
+  const out: Record<string, unknown> = { ...rest };
+  const kw = keyword?.trim();
+  if (kw) out.keyword = kw;
+  return out;
+}
+
 export async function fetchMyTasks(params: TaskQuery): Promise<PageResult<TaskItem>> {
-  const res = await api.get<ApiResult<PageResult<TaskItem>>>('/tasks/my', { params });
+  const res = await api.get<ApiResult<PageResult<TaskItem>>>('/tasks/my', { params: buildQuery(params) });
   return unwrap(res, '获取待办失败');
 }
 
 export async function fetchHandledTasks(params: TaskQuery): Promise<PageResult<TaskItem>> {
-  const res = await api.get<ApiResult<PageResult<TaskItem>>>('/tasks/handled', { params });
+  const res = await api.get<ApiResult<PageResult<TaskItem>>>('/tasks/handled', { params: buildQuery(params) });
   return unwrap(res, '获取审批记录失败');
 }
 

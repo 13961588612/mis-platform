@@ -172,15 +172,24 @@ export async function fetchProcessDetail(id: string, tenantId: string): Promise<
   return unwrap(res, '获取流程详情失败');
 }
 
+/**
+ * 我发起的流程实例分页（PR-04）。
+ *
+ * <p>`keyword` 为**尾参**（新增），保证既有 5 参调用（`my-sent-page.tsx`）不破；
+ * 非空时按后端 `findByInitiator` 对 `business_id`/`business_type`/`definition_code`/
+ * `initiator_name` 做大小写不敏感模糊匹配；空白/空串**不透传**（退化为原查询）。
+ */
 export async function fetchMyProcesses(
   tenantId: string,
   initiatorId: string,
   status?: string,
   page = 1,
   size = 20,
+  keyword?: string | null,
 ): Promise<PageResult<WfInstance>> {
-  const res = await api.get<ApiResult<PageResult<WfInstance>>>('/workflow/instances/my', {
-    params: { tenantId, initiatorId, status, page, size },
-  });
+  const params: Record<string, unknown> = { tenantId, initiatorId, status, page, size };
+  const kw = keyword?.trim();
+  if (kw) params.keyword = kw;
+  const res = await api.get<ApiResult<PageResult<WfInstance>>>('/workflow/instances/my', { params });
   return unwrap(res, '获取我发起的流程失败');
 }

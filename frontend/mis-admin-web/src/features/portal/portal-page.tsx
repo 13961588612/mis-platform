@@ -1,89 +1,58 @@
-import { useCallback, useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { fetchApps } from '@/lib/api/platform';
-import { registerIframeApps } from '@/lib/nav/iframe-apps';
-import { useAuthStore } from '@/stores/auth-store';
-import type { AppItem } from '@/types/api';
-import { resolveAppEntry } from '@/lib/nav/host-apps';
-import { WorkbenchOverview } from './components/workbench-overview';
-import { TaskBoard } from './components/task-board';
-import { MessageBoard } from './components/message-board';
-import { ProcessBoard } from './components/process-board';
-import { AppRail } from './components/app-rail';
+import { useState } from 'react';
+import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
+import { PortalHomeTab } from './tabs/portal-home-tab';
+import { PortalTodoTab } from './tabs/portal-todo-tab';
+import { PortalMessageTab } from './tabs/portal-message-tab';
+
+/** 门户三 Tab 键（**本地态，绝不入 URL**）。 */
+type PortalTabKey = 'home' | 'todo' | 'message';
 
 /**
- * 门户工作台（P0-5：外壳已归位到 AppLayout）。
+ * 门户工作台容器（T01：三 Tab 骨架）。
  *
- * <p>此前本组件自造了整套 `<header>`（M logo、「MIS Platform」标题、主题切换、
- * 用户菜单、退出登录、HeaderToolkit）以及一份 Ctrl+J Copilot 热键，
- * 而 `/portal` 又恰好裸挂在 ProtectedRoute 下、不经过 AppLayout，于是形成
- * 「另一套外壳」。现已把 `/portal` 移进 AppLayout，本组件只保留门户独有的内容：
- * 工作台四卡片 + AppRail 应用导航。顶栏 /侧栏 / 命令面板 / Copilot 全部由 AppLayout 提供。
+ * <p><b>为什么用单页内 `useState` 切换、不新增路由</b>：`/portal` 由
+ * `keep-alive-outlet.tsx` 的 `PAGE_MAP['/portal']` 以 `<Comp/>` 直挂渲染，
+ * **不在任何 `<Route>` 上下文内**（`useParams` 恒空）——若把 Tab 做成路由段，
+ * 会同时撞上 `PAGE_MAP` 精确匹配与 `useParams` 恒空两个坑。故三 Tab 一律
+ * 组件内 `useState` 切换，**不进 URL、不新增路由、不触碰 router/keep-alive**。
  *
- * <p>间距遵循 `docs/frontend/admin-web-design.md` §4.2.1：外距只由 AppLayout 主槽
- * `p-4 md:p-6` 提供，页根不再套内层 padding。
+ * <p>外壳（顶栏 / 命令面板 / Copilot）由 `AppLayout` 提供；`/portal` 下由
+ * `AppLayout` 隐藏左栏（见 `app-layout.tsx` 的 `hideSidebar`），主区自然占满宽度。
+ *
+ * <p>布局：根容器 `flex h-full flex-col`，`Tabs` 撑满剩余高度；页内**不加内层
+ * padding**（外距由 AppLayout 主槽 `p-4 md:p-6` 提供），滚动交回各 Tab 内容自持
+ * （首页 `overflow-auto` 为门户唯一滚动层，占位 Tab 无需滚动）。
  */
 export function PortalPage() {
-  const [apps, setApps] = useState<AppItem[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
-  const user = useAuthStore((s) => s.user);
-  const currentApp = useAuthStore((s) => s.app);
-  const tenantId = '1';
-  const userId = user?.id ?? '';
-  const navigate = useNavigate();
-
-  useEffect(() => {
-    void fetchApps()
-      .then((data) => {
-        setApps(data);
-        registerIframeApps(data);
-      })
-      .catch((e) => setError(e instanceof Error ? e.message : '加载失败'))
-      .finally(() => setLoading(false));
-  }, []);
-
-  const enterApp = useCallback(
-    (app: AppItem) => {
-      if (!app.enterable) return;
-      if (app.runtime === 'iframe' && app.basePath) {
-        navigate(`/iframe/${app.code}`);
-        return;
-      }
-      if (app.code === 'system' || app.runtime === 'host') {
-        navigate(resolveAppEntry(app.code, app.basePath));
-      }
-    },
-    [navigate],
-  );
+  const [activeTab, setActiveTab] = useState<PortalTabKey>('home');
+  // 抽屉/详情态**归各 Tab 自持**（`PortalTodoTab.openId` / `PortalMessageTab.openId`，
+  // 均为组件内 useState，关闭即销毁、**不入 URL**）。故容器层不持有任何抽屉状态——
+  // 切 Tab 时非激活面板被 Radix 卸载（`data-[state=inactive]:!hidden` 且默认不挂载），
+  // 其抽屉随之关闭，这是期望语义（T05 复核确认，无需提升到此处）。
 
   return (
-    <div className="portal-shell flex h-full flex-col overflow-auto">
-      <div className="grid gap-5 lg:grid-cols-3">
-        {/* 主体：工作台（占 2/3） */}
-        <div className="flex flex-col gap-4 lg:col-span-2">
-          <section className="rounded-lg border bg-card px-5 py-4 shadow-card">
-            <h1 className="text-lg font-semibold">你好，{user?.realName ?? user?.username}</h1>
-            <p className="mt-1 text-[13px] text-muted-foreground">
-              这里是你的工作台 —— 待办、消息与发起的流程
-            </p>
-          </section>
+    <div className="flex h-full flex-col">
+      <Tabs
+        value={activeTab}
+        onValueChange={(v) => setActiveTab(v as PortalTabKey)}
+        className="flex h-full min-h-0 flex-col"
+      >
+        <TabsList className="w-fit shrink-0">
+          <TabsTrigger value="home">首页</TabsTrigger>
+          <TabsTrigger value="todo">待办事项</TabsTrigger>
+          <TabsTrigger value="message">消息中心</TabsTrigger>
+        </TabsList>
 
-          {userId ? <WorkbenchOverview tenantId={tenantId} userId={userId} /> : null}
-          {userId ? <TaskBoard tenantId={tenantId} userId={userId} /> : null}
-          {userId ? <MessageBoard tenantId={tenantId} userId={userId} /> : null}
-          {userId ? <ProcessBoard tenantId={tenantId} userId={userId} /> : null}
-        </div>
-
-        {/* 侧栏：模块导航（占 1/3） */}
-        <aside className="lg:col-span-1">
-          <div className="lg:sticky lg:top-4">
-            {error ? <p className="mb-3 text-[13px] text-destructive">{error}</p> : null}
-            {loading ? <p className="mb-3 text-[13px] text-muted-foreground">加载子系统…</p> : null}
-            <AppRail apps={apps} currentAppCode={currentApp?.code} onEnter={enterApp} />
-          </div>
-        </aside>
-      </div>
+        <TabsContent value="home" className="min-h-0 flex-1">
+          <PortalHomeTab />
+        </TabsContent>
+        <TabsContent value="todo" className="min-h-0 flex-1">
+          <PortalTodoTab />
+        </TabsContent>
+        <TabsContent value="message" className="min-h-0 flex-1">
+          <PortalMessageTab />
+        </TabsContent>
+      </Tabs>
     </div>
   );
 }

@@ -37,6 +37,8 @@ const sampleItem = {
   readCount: 0,
   totalCount: 1,
   createdAt: '2026-10-08T10:00:00',
+  instanceId: null,
+  canReply: false,
 };
 
 const sampleDetail = {

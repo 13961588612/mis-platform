@@ -23,6 +23,16 @@ export interface MessageItem {
   readCount: number;
   totalCount: number;
   createdAt: string;
+  /**
+   * 关联流程实例 ID（无关联时为 `null`）。由 V134 新增列 `sys_message.instance_id` 透出。
+   * 门户消息抽屉据此判定「流程通知形态」（展示只读表单 + 回复区）还是「普通消息形态」。
+   */
+  instanceId: string | null;
+  /**
+   * 是否可回复（后端口径：`msgType==='NOTIFY' && instanceId!=null`）。
+   * 前端**仅据此**控制回复入口显隐，不自行推断（避免与后端口径漂移）。
+   */
+  canReply: boolean;
 }
 
 export interface MessageDetail extends MessageItem {
@@ -69,4 +79,29 @@ export async function markMessagesRead(userId: string, ids: string[]): Promise<n
 export async function fetchMessageStats(tenantId: string, userId: string): Promise<MessageStats> {
   const res = await api.get<ApiResult<MessageStats>>('/messages/stats', { params: { tenantId, userId } });
   return unwrap(res, '获取消息统计失败');
+}
+
+/**
+ * 回复流程通知消息（T02 新增端点 `POST /api/v1/messages/{id}/reply`）。
+ *
+ * <p>后端编排归属 `ProcessService.replyToMessage`：把回复内容作为一条
+ * `wf_history(operation='COMMENT')` 追加到关联流程实例，故回复会出现在
+ * `GET /workflow/instances/{id}` 的 history（审批信息区）里。
+ *
+ * <p>`tenantId`/`operatorId`/`operatorName` 均为查询参数（后端 `required=false`，
+ * 由 BFF 网关身份兜底），body 为 `{ content }`。
+ */
+export async function replyMessage(
+  id: string,
+  tenantId: string,
+  operatorId: string,
+  operatorName: string,
+  content: string,
+): Promise<void> {
+  const res = await api.post<ApiResult<null>>(
+    `/messages/${id}/reply`,
+    { content },
+    { params: { tenantId, operatorId, operatorName } },
+  );
+  if (res.data.code !== 0) throw new Error(res.data.message || '回复失败');
 }

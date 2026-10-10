@@ -76,6 +76,11 @@ export function AppLayout() {
   const location = useLocation();
   const openTab = useTabStore((s) => s.openTab);
 
+  // 仅 /portal 隐藏左栏（PRD §9.2 / 设计 §1.3）：门户是三 Tab 全宽工作台，不需要子系统侧栏；
+  // 其余路径（/task/*、/kb/*、/system/* …）左栏原样恢复。只影响 <aside> 的条件渲染，
+  // navNodes / activeAppCode / TASK_NAV 等逻辑一行不动。
+  const hideSidebar = location.pathname === '/portal';
+
   const activeAppCode = useMemo(
     () => resolveActiveHostAppCode(location.pathname, app?.code),
     [location.pathname, app?.code],
@@ -353,6 +358,7 @@ export function AppLayout() {
 
       {/* 设计稿：侧栏常驻（非抽屉），与主区并排；min-h-0 + 侧栏 h-0/flex-1 保证菜单可滚 */}
       <div className="flex min-h-0 flex-1 overflow-hidden">
+        {!hideSidebar ? (
         <aside
           className={cn(
             'flex h-full min-h-0 shrink-0 flex-col overflow-hidden border-r border-sidebar-border bg-sidebar text-sidebar-foreground',
@@ -423,6 +429,7 @@ export function AppLayout() {
             </Button>
           </div>
         </aside>
+        ) : null}
 
         <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
           <TabBar />
