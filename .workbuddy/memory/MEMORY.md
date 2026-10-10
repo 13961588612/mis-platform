@@ -19,6 +19,8 @@
 
 ## 数据库/迁移
 - Flyway **只追加**：绝不改历史迁移（checksum 变更阻塞整条链）。派工前 grep `sys_api`+`sys_menu_api` 核实权限码真值，否则「前端放行后端 40300」。
+- 🔴 **checksum 覆盖整个文件含注释，且刚落库的新迁移立刻被锁**：2026-10-11 实测——V135 当场应用到测试库后，「只改注释不动 SQL 一行」照样 `checksum mismatch` → 后续 `flyway:migrate/validate` 全崩（含 CI）。**派工写「只改注释」前必须先问：该迁移是否已落库？** 已落库只能走 `flyway:repair`（会改库状态，需授权）或把说明挪到实体/文档（推荐）。
+- 🔴 **`wf_task.sys_task_id` 既无唯一约束也无外键**（已查 `pg_constraint` 确认）→ JOIN 多行匹配 `UPDATE...FROM` **取任意一行**。同一 sys_task 会被同实例多节点共享（960122 ← 960112/960113）。若出现跨实例脏数据 ⇒ 取到任意 instance，**属错数据非损坏**。彻底消除需 DB 级约束，**本轮未做属技术债**（警告已落在 `WfTask.sysTaskId` 字段注释）。
 - 测试库直连 Flyway：`cd backend/mis-migrator; ..\mvn.ps1 flyway:migrate "-Ddb.host=10.254.16.6" "-Ddb.port=5432" "-Ddb.name=mis_platform" "-Ddb.user=mis" "-Ddb.password=mis123"`。
 - 真实 PG 在 10.254.16.6:5432；alembic `POSTGRES_HOST` 默认 postgres（仅 Docker 内网），宿主机跑须 `$env:POSTGRES_HOST=10.254.16.6`。
 
@@ -60,6 +62,7 @@ BFF/mis-taskflow 的 `/api/v1/**` 响应缺字段/值为 null（新字段整个�
 - api 层：`vi.mock('@/lib/api/xxx', () => ({ 函数: vi.fn() }))` + `vi.mocked(...).mockResolvedValue(...)`。
 - zustand **不 mock**：`useAuthStore.setState(...)`；`next-themes` **必须 mock**。
 - `AppRail` 应用名渲染两次须 `getAllByText`；不能用 `queryByRole('banner')`。
+- 🔴 **断 className 必须按精确 token 判等**：`cls.split(/\s+/)` 成 `Set` 再 `.has()`。子串匹配 `toContain('border-t')` 会被 `border-transparent` **假命中**；反向 `not.toContain('border-t')` 也会**假失败**。同理统计用例数要用词边界 `grep -c '\bit('`，直接 `grep -c "it("` 会把 `split(` 算进去（曾据此误判「多了一个用例」）。
 
 ## 多 Agent 实施纪律
 1. 单批 ≤2–4 新文件，无 >15KB 超大单文件。2. 临时脚本/输出放系统临时目录。3. 测试真实性：禁删测试/skip/`as any`/改 fixture。4. 主理人验证：不信转述，查磁盘+独立跑门禁。5. 派活前 `git status`+`git log`。
