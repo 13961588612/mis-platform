@@ -1,0 +1,118 @@
+%% ============================================================
+%% 门户重构 时序图
+%% ① 门户待办点击 → 抽屉加载流程详情 → 三动作提交（同意/驳回/转办）
+%% ② 消息点击 → 抽屉（流程通知）→ 回复回写审批意见
+%% ============================================================
+
+sequenceDiagram
+  autonumber
+  actor U as 用户
+  participant PT as PortalTodoTab
+  participant DD as TodoDetailDrawer
+  participant PS as ProcessShell(embedded)
+  participant API as lib/api(workflow|tasks)
+  participant BFF as mis-admin-bff
+  participant TF as mis-taskflow
+
+  rect rgb(238,242,255)
+  note over U,TF: ① 待办：点击 → 抽屉加载 → 三动作
+  U->>PT: 切换「待办事项」Tab / 点击某子Tab(待处理)
+  PT->>API: fetchMyTasks({tenantId,assigneeId,status,page,size,keyword?})
+  API->>BFF: GET /api/v1/tasks/my?...&keyword=
+  BFF->>TF: GET /internal/v1/tasks/my
+  TF->>TF: SysTaskRepository.findByAssignee(+keyword模糊)
+  TF-->>BFF: PageResult<TaskVO>
+  BFF-->>API: Result<PageResult>
+  API-->>PT: PageResult<TaskItem>
+  PT->>PT: TodoAdapters.fromTaskItem → PortalTodoRow[]
+  PT-->>U: 渲染列表行
+
+  U->>PT: 点击一行
+  PT->>DD: open(row)
+  DD->>PS: 挂载 <ProcessShell instanceId=row.instanceId variant="embedded">
+  PS->>API: fetchProcessDetail(instanceId,tenantId)
+  API->>BFF: GET /api/v1/workflow/instances/{id}
+  BFF->>TF: GET /internal/v1/workflow/instances/{id}
+  TF-->>BFF: ProcessDetailVO{instance,tasks,history,formData}
+  BFF-->>API: Result<ProcessDetail>
+  API-->>PS: ProcessDetail
+  PS->>PS: myPendingTask = tasks.find(PENDING & assignee==me)
+  PS-->>DD: 渲染 ①审批进度 ②只读表单(FormShell) ③审批历史
+  DD-->>U: 抽屉展示（单层滚动）
+
+  alt 同意 (APPROVE) / 驳回 (REJECT) —— 操作对象 = wfTask
+    U->>DD: 点击「同意」或「驳回」
+    DD->>PS: handle(action)
+    PS->>API: POST /workflow/tasks/{wfTaskId}/complete {action,comment}
+    API->>BFF: POST /api/v1/workflow/tasks/{id}/complete
+    BFF->>TF: ProcessService.completeTask(...)
+    TF->>TF: 记 wf_history(APPROVE/REJECT) + advance/terminate
+    TF->>TF: syncLinkedSysTask(关闭 sys_task)
+    TF->>TF: notify(instance) → publish(instanceId)
+    TF-->>BFF: Result<Void>
+    BFF-->>API: Result<Void>
+    API-->>PS: ok
+    PS->>DD: onActionDone()
+    DD->>PT: 刷新列表 + 关闭抽屉
+  else 转办 (transfer) —— 操作对象 = sysTask(=myPendingTask.sysTaskId)
+    U->>DD: 点击「转办」→ 选择新处理人
+    DD->>PS: handleTransfer(sysTaskId,newAssignee)
+    PS->>API: transferTask(sysTaskId,tenantId,operatorId,newAssigneeId,...)
+    API->>BFF: POST /api/v1/tasks/{id}/transfer
+    BFF->>TF: TaskService.transferTask(...)
+    TF->>TF: 改 assignee + 置回 PENDING + 补发 REMIND
+    TF-->>BFF: Result<Void>
+    BFF-->>API: Result<Void>
+    API-->>PS: ok
+    PS->>DD: onActionDone()
+    DD->>PT: 刷新列表 + 关闭抽屉
+  end
+  end
+
+  rect rgb(236,253,245)
+  note over U,TF: ② 消息：点击 → 抽屉（流程通知）→ 回复回写
+  actor U2 as 用户
+  participant PM as PortalMessageTab
+  participant MD as MessageDetailDrawer
+  participant MAPI as lib/api/messages
+
+  U2->>PM: 切换「消息中心」/ 子Tab「通知」/ 搜索
+  PM->>MAPI: fetchInbox / searchMessages({msgType,keyword})
+  MAPI->>BFF: GET /api/v1/messages/inbox|search
+  BFF->>TF: MessageService.inbox|search
+  TF-->>BFF: PageResult<MessageVO{+instanceId,+canReply}>
+  BFF-->>MAPI: Result<PageResult>
+  MAPI-->>PM: PageResult<MessageItem>
+  PM-->>U2: 渲染消息列表
+
+  U2->>PM: 点击一条流程通知
+  PM->>MD: open(messageId)
+  MD->>MAPI: fetchMessageDetail(id,userId)
+  MAPI->>BFF: GET /api/v1/messages/{id}
+  BFF->>TF: MessageService.detail
+  TF-->>BFF: MessageDetailVO{+instanceId,+canReply}
+  BFF-->>MAPI: Result<MessageDetail>
+  MAPI-->>MD: MessageDetail
+  alt instanceId != null (流程通知)
+    MD->>API: fetchProcessDetail(instanceId,tenantId)
+    API->>BFF: GET /api/v1/workflow/instances/{id}
+    BFF->>TF: ProcessService.detail
+    TF-->>BFF: ProcessDetailVO{formData,history,...}
+    BFF-->>API: Result<ProcessDetail>
+    API-->>MD: ProcessDetail
+    MD-->>U2: 正文 + 只读表单(FormShell) + 回复区
+    U2->>MD: 输入回复 → 提交
+    MD->>MAPI: replyMessage(messageId,userId,content)
+    MAPI->>BFF: POST /api/v1/messages/{id}/reply {content}
+    BFF->>TF: ProcessService.replyToMessage(...)
+    TF->>TF: 读 message.instanceId (无则 400)
+    TF->>TF: recordHistory(OP_COMMENT, comment=content)  %% 追加 wf_history
+    TF-->>BFF: Result<Void>
+    BFF-->>MAPI: Result<Void>
+    MAPI-->>MD: ok
+    MD->>MD: 就地回显本条回复 + toast
+    MD->>API: (可选) 重新拉 fetchProcessDetail 刷新「审批信息」区
+  else instanceId == null (普通消息 / 降级)
+    MD-->>U2: 仅正文 + 元信息，隐藏回复入口
+  end
+  end
