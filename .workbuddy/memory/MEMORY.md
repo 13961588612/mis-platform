@@ -48,6 +48,8 @@ BFF/mis-taskflow 的 `/api/v1/**` 响应缺字段/值为 null（新字段整个�
 - 风格：圆角 4px、表头/标签 13px、列间竖线 `border-l border-border/60`、主色 `#4f46e5` 不动。
 - icon 必须真实登记：`icons.ts:106 ICON_MAP` 漏登记静默回退 `LayoutDashboard`。
 - 整行可点 (R-1)：行 onClick+role=button+tabIndex+Enter/Space；行内按钮 stopPropagation；键盘事件 `e.target!==e.currentTarget` 防误取消。
+- 🔴 **覆写共享组件样式必查固定尺寸**：`cn()`=tailwind-merge **只在同类组内去重**、跨类不动。基类 `ui/tabs.tsx` 的 `TabsList` 带 `h-9`(36px 固定)，只覆写 `items-end`/`p-1.5` **压不掉它** → 须显式 `h-auto`（否则卡片式 tab 上浮 8px 探出 bar 顶边）。**此类缺陷 jsdom 测不出**（无布局引擎），只能盒高手算 + 真浏览器 `getBoundingClientRect`；验收用 twMerge 反证（去掉修复类看基类是否复活）。
+- 门户三 Tab 激活态在 `stores/portal-tab-store.ts`（**不进 URL**：keep-alive 直挂、不在 Route 上下文，改 query 会踩「URL 变了但常驻实例不重渲染」）。**门户相关测试必须在 `beforeEach` 复位该 store**，否则串味且偶发难查。
 
 ## 🔴 前端路由两大坑（同一根因）
 `keep-alive-outlet.tsx:350` 页面以 `<Comp/>` 渲染，**不在任何 `<Route>` 上下文**；`router.tsx` 只登记通配 `/task/*` ⇒ `useParams`/`useMatch` 恒空。
@@ -74,6 +76,8 @@ BFF/mis-taskflow 的 `/api/v1/**` 响应缺字段/值为 null（新字段整个�
 - 门户 `/portal` 布局孤岛（无 AppLayout，`app-layout.tsx` 仅 `hideSidebar = pathname==='/portal'` 包 `<aside>`），业务单据页尚不存在(P3-4)。
 
 ## 已交付里程碑（分支 `flow`，最新在上）
+- `2dd0600` feat(portal) 门户 UI 精修：Tab 卡片式风格(图标+文字、不可关闭) + 首页三板点行改抽屉滑出 + 铃铛下拉「待办+消息合计最近 20 条」+「打开消息中心」真正切 Tab。纯前端，`ui/tabs.tsx` 零改动。
+- `c51a14b` chore(memory) 精简 MEMORY.md 至注入限额内。
 - `72cfaa5` fix(bff) 下游 URI 双重编码（真 Bug=TaskflowWebClient；Kb/System 防御性统一）→ **live 已验证中文检索恢复**。
 - `e5c3adf`/`9753325`/`68561fb`/`62ac401` 门户三 Tab 重构 + 消息↔实例关联 + 回复回写审批意见。
 - `498f476`/`e1f8632`/`f3b3a3f` 分类筛选下拉树多选 + 表单表格高度修复 + 流程定义分类过滤。
