@@ -29,6 +29,11 @@ public class FormDefinition {
     /** 根分类的 parentId。 */
     public static final Long ROOT_PARENT_ID = 0L;
 
+    /** 节点类型：纯文件夹（code 为文件夹 key）。 */
+    public static final String KIND_CATEGORY = "CATEGORY";
+    /** 节点类型：真实表单（code 必须 ∈ 前端已注册组件）。 */
+    public static final String KIND_FORM = "FORM";
+
     @Id
     private Long id;
 
@@ -51,6 +56,13 @@ public class FormDefinition {
 
     @Column(nullable = false, length = 16)
     private String status = STATUS_ENABLED;
+
+    /**
+     * 节点类型（V131 新增）：{@link #KIND_CATEGORY} 纯文件夹 / {@link #KIND_FORM} 真实表单。
+     * 默认 {@link #KIND_FORM}——历史行与未显式指定 kind 的写入一律按真实表单处理。
+     */
+    @Column(nullable = false, length = 16)
+    private String kind = KIND_FORM;
 
     @Column(name = "sort_order", nullable = false)
     private Integer sortOrder = 0;
@@ -86,6 +98,8 @@ public class FormDefinition {
     public void setDescription(String description) { this.description = description; }
     public String getStatus() { return status; }
     public void setStatus(String status) { this.status = status; }
+    public String getKind() { return kind; }
+    public void setKind(String kind) { this.kind = kind; }
     public Integer getSortOrder() { return sortOrder; }
     public void setSortOrder(Integer sortOrder) { this.sortOrder = sortOrder; }
     public String getConfig() { return config; }

@@ -22,6 +22,9 @@ public interface WfDefinitionRepository extends JpaRepository<WfDefinition, Long
 
     Page<WfDefinition> findByTenantIdAndDeleted(Long tenantId, Integer deleted, Pageable pageable);
 
+    /** 按流程分类筛选（决策 B：categoryId 软引用，可空）。 */
+    List<WfDefinition> findByTenantIdAndCategoryIdAndDeleted(Long tenantId, Long categoryId, Integer deleted);
+
     /**
      * 引用计数：白名单里含该 formCode 的流程定义数（含软删行）。
      *

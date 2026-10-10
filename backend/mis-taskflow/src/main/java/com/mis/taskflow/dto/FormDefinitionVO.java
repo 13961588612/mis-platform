@@ -17,6 +17,7 @@ import java.time.LocalDateTime;
  * @param children     子节点（仅树接口填充，列表接口为 null）
  * @param createdAt    创建时间
  * @param updatedAt    更新时间
+ * @param kind         CATEGORY / FORM（V131 新增）
  */
 public record FormDefinitionVO(
         String id,
@@ -30,6 +31,7 @@ public record FormDefinitionVO(
         String config,
         java.util.List<FormDefinitionVO> children,
         LocalDateTime createdAt,
-        LocalDateTime updatedAt
+        LocalDateTime updatedAt,
+        String kind
 ) {
 }

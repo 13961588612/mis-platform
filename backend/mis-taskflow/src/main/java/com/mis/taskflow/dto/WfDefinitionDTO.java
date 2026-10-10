@@ -5,6 +5,8 @@ import java.util.List;
 
 /**
  * 流程定义视图（含节点）。
+ *
+ * @param categoryId 流程分类 id（V131 新增，指向 wf_category.id，可空；旧 category 列保留废弃）
  */
 public record WfDefinitionDTO(
         String id,
@@ -21,6 +23,7 @@ public record WfDefinitionDTO(
         List<WfNodeDTO> nodes,
         List<WfEdgeDTO> edges,
         LocalDateTime createdAt,
-        LocalDateTime updatedAt
+        LocalDateTime updatedAt,
+        Long categoryId
 ) {
 }

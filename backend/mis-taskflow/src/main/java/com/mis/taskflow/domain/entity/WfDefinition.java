@@ -38,6 +38,13 @@ public class WfDefinition {
     @Column(nullable = false, length = 32)
     private String category = "APPROVAL";
 
+    /**
+     * 流程分类（V131 新增）：指向 {@code wf_category.id} 的软引用（无外键约束）。
+     * 新代码只认 {@code categoryId}；旧 {@link #category VARCHAR} 列保留但废弃，不再赋予业务含义。
+     */
+    @Column(name = "category_id")
+    private Long categoryId;
+
     @Column(columnDefinition = "text")
     private String description;
 
@@ -81,6 +88,8 @@ public class WfDefinition {
     public void setName(String name) { this.name = name; }
     public String getCategory() { return category; }
     public void setCategory(String category) { this.category = category; }
+    public Long getCategoryId() { return categoryId; }
+    public void setCategoryId(Long categoryId) { this.categoryId = categoryId; }
     public String getDescription() { return description; }
     public void setDescription(String description) { this.description = description; }
     public Integer getVersion() { return version; }

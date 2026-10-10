@@ -30,6 +30,13 @@ public interface FormDefinitionRepository extends JpaRepository<FormDefinition, 
     List<FormDefinition> findByTenantIdAndStatusAndDeletedOrderBySortOrderAscIdAsc(
             Long tenantId, String status, Integer deleted);
 
+    /** 按 kind 过滤的平铺列表（决策 B：CATEGORY 仅取文件夹、FORM 仅取真实表单）。 */
+    List<FormDefinition> findByTenantIdAndKindAndDeletedOrderByParentIdAscSortOrderAscIdAsc(
+            Long tenantId, String kind, Integer deleted);
+
+    /** 某分类（指定 kind）下未软删的子节点数——删除前校验用。 */
+    long countByTenantIdAndKindAndParentIdAndDeleted(Long tenantId, String kind, Long parentId, Integer deleted);
+
     /**
      * 批量按 code 取未软删记录，用于流程定义保存时的白名单强校验（避免逐个查询）。
      */
