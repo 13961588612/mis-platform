@@ -82,6 +82,7 @@ public class MessageService {
         msg.setReceiverIds(receivers.toArray(Long[]::new));
         msg.setReceiverGroupType(receivers.size() > 1 ? "GROUP" : "SINGLE");
         msg.setReferenceTaskId(req.referenceTaskId());
+        msg.setInstanceId(req.instanceId());
         msg.setReadCount(0);
         msg.setTotalCount(receivers.size());
         msg.setCreatedBy(req.senderId());
@@ -129,14 +130,24 @@ public class MessageService {
 
     /**
      * 关键词检索（标题 + 摘要）。
+     *
+     * <p><b>类型内独立搜索（PRD D-5 / Q3）</b>：{@code msgType} 非空时**只在该类型内**检索
+     * （走 {@link SysMessageRepository#searchInboxByType}），保证「审批/通知/提醒/系统告警」
+     * 各子 Tab 的搜索互不串台；{@code msgType} 为空时**跨类型**检索（走旧
+     * {@link SysMessageRepository#searchInbox}），保持既有行为不变。
+     *
+     * @param msgType 消息类型过滤；空白/{@code null} 表示不限定类型（跨类型检索）
      */
     @Transactional(readOnly = true)
-    public PageResult<MessageVO> search(Long tenantId, Long userId, String keyword, int page, int size) {
+    public PageResult<MessageVO> search(Long tenantId, Long userId, String msgType, String keyword, int page, int size) {
         if (!StringUtils.hasText(keyword)) {
             return PageResult.empty(page, clampSize(size));
         }
         Pageable pageable = PageRequest.of(Math.max(page - 1, 0), clampSize(size));
-        Page<SysMessage> p = messageRepository.searchInbox(tenantId, userId, keyword.trim(), pageable);
+        String type = trimToNull(msgType);
+        Page<SysMessage> p = (type == null)
+                ? messageRepository.searchInbox(tenantId, userId, keyword.trim(), pageable)
+                : messageRepository.searchInboxByType(tenantId, userId, type, keyword.trim(), pageable);
 
         List<Long> ids = p.getContent().stream().map(SysMessage::getId).toList();
         Map<Long, SysMessageReceiver> mine = ids.isEmpty()
@@ -174,7 +185,9 @@ public class MessageService {
                 nullableId(msg.getReferenceTaskId()),
                 Boolean.TRUE.equals(mine.getRead()),
                 receivers,
-                msg.getCreatedAt());
+                msg.getCreatedAt(),
+                nullableId(msg.getInstanceId()),
+                canReply(msg));
     }
 
     /**
@@ -221,6 +234,17 @@ public class MessageService {
         return new MessageStatsVO(unread, total);
     }
 
+    /**
+     * 读取指定消息所关联的流程实例 ID（供 {@code ProcessService.replyToMessage} 复用）。
+     *
+     * @return 关联的 {@code wf_instance.id}；无关联时返回 {@code null}
+     * @throws BusinessException NOT_FOUND 消息不存在或已删除
+     */
+    @Transactional(readOnly = true)
+    public Long instanceIdOf(Long messageId) {
+        return requireMessage(messageId).getInstanceId();
+    }
+
     private SysMessage requireMessage(Long messageId) {
         return messageRepository.findById(messageId)
                 .filter(m -> m.getDeleted() == null || m.getDeleted() == 0)
@@ -242,7 +266,18 @@ public class MessageService {
                 mine != null && Boolean.TRUE.equals(mine.getRead()),
                 m.getReadCount(),
                 m.getTotalCount(),
-                m.getCreatedAt());
+                m.getCreatedAt(),
+                nullableId(m.getInstanceId()),
+                canReply(m));
+    }
+
+    /**
+     * 可回复判定（服务端权威口径）：仅「通知类 + 已关联流程实例」的消息可回复。
+     *
+     * <p>回复语义锚点是流程审批意见（PR-18），无实例则语义落空，前端据此隐藏入口。
+     */
+    private static boolean canReply(SysMessage m) {
+        return "NOTIFY".equals(m.getMsgType()) && m.getInstanceId() != null;
     }
 
     private static List<Long> dedupe(List<Long> ids) {

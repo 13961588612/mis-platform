@@ -66,6 +66,15 @@ public class SysMessage {
     @Column(name = "reference_task_id")
     private Long referenceTaskId;
 
+    /**
+     * 关联流程实例 ID（{@code wf_instance.id} 的软引用，无外键）；NULL = 非流程通知。
+     *
+     * <p>由 {@code ProcessService.notify(...)} 写入，是 PR-07（流程通知看表单）
+     * 与 PR-18（回复回写审批意见）单跳定位实例的唯一线索。
+     */
+    @Column(name = "instance_id")
+    private Long instanceId;
+
     @Column(name = "read_count", nullable = false)
     private Integer readCount = 0;
 
@@ -110,6 +119,8 @@ public class SysMessage {
     public void setReceiverGroupType(String receiverGroupType) { this.receiverGroupType = receiverGroupType; }
     public Long getReferenceTaskId() { return referenceTaskId; }
     public void setReferenceTaskId(Long referenceTaskId) { this.referenceTaskId = referenceTaskId; }
+    public Long getInstanceId() { return instanceId; }
+    public void setInstanceId(Long instanceId) { this.instanceId = instanceId; }
     public Integer getReadCount() { return readCount; }
     public void setReadCount(Integer readCount) { this.readCount = readCount; }
     public Integer getTotalCount() { return totalCount; }

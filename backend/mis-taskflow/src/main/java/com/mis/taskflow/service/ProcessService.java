@@ -37,6 +37,7 @@ import org.springframework.util.StringUtils;
 import java.time.LocalDateTime;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Locale;
 
 /**
  * 流程引擎核心（P5）。
@@ -222,6 +223,45 @@ public class ProcessService {
         advanceToNext(instance, nodeRepository.findByDefinitionIdOrderBySortOrderAsc(instance.getDefinitionId()),
                 currentNode, now);
         AuditContext.after(auditSnapshot(instance));
+    }
+
+    /**
+     * 回复消息 → 回写为该消息所关联流程实例的一条审批意见（PR-18）。
+     *
+     * <p><b>编排归属</b>：回复既要读消息（{@code MessageService} 的地盘）又要写
+     * {@code wf_history}（本类地盘）。{@code ProcessService} 已依赖 {@code MessageService}，
+     * 若把编排反过来放到 {@code MessageService} 会形成循环依赖，故编排置于本类：用已注入的
+     * {@code messageService} 读消息拿 {@code instanceId}，再用本地 {@code historyRepository} 追加。
+     *
+     * <p><b>动作性质</b>：仅追加 {@code COMMENT} 历史，<b>不改变流程状态、不推进节点</b>，
+     * 与「同意/驳回/转办」互不干扰。
+     *
+     * @throws BusinessException NOT_FOUND        消息不存在，或所关联的流程实例不存在
+     * @throws BusinessException VALIDATION_ERROR 消息未关联流程实例 / 回复内容为空
+     */
+    @Transactional
+    public void replyToMessage(Long tenantId, Long messageId, Long operatorId,
+                               String operatorName, String content) {
+        if (!StringUtils.hasText(content)) {
+            throw new BusinessException(ResultCode.VALIDATION_ERROR, "回复内容不能为空");
+        }
+
+        // 消息不存在 → 404（由 MessageService.requireMessage 抛出 NOT_FOUND）
+        Long instanceId = messageService.instanceIdOf(messageId);
+        if (instanceId == null) {
+            throw new BusinessException(ResultCode.VALIDATION_ERROR, "该消息无关联流程，暂不支持回复");
+        }
+
+        WfInstance instance = instanceRepository.findByIdAndTenantId(instanceId, tenantId)
+                .orElseThrow(() -> new BusinessException(ResultCode.NOT_FOUND, "流程实例不存在"));
+
+        LocalDateTime now = LocalDateTime.now();
+        // node_code 为 NOT NULL：实例当前无节点时回退占位符 "-"
+        String nodeCode = StringUtils.hasText(instance.getCurrentNodeCode())
+                ? instance.getCurrentNodeCode() : "-";
+
+        recordHistory(instanceId, nodeCode, operatorId, operatorName,
+                WfHistory.OP_COMMENT, null, null, content.trim(), now);
     }
 
     /** 审计快照：实例状态 + 当前节点，用于生成可读的 before/after diff。 */
@@ -462,7 +502,7 @@ public class ProcessService {
         try {
             messageService.publish(instance.getTenantId(), new com.mis.taskflow.dto.PublishMessageRequest(
                     "NOTIFY", "TASK", title, summary, null, null,
-                    null, "系统", List.of(instance.getInitiatorId()), null));
+                    null, "系统", List.of(instance.getInitiatorId()), null, instance.getId()));
         } catch (Exception ignored) {
             // 通知失败不影响流程
         }
@@ -504,8 +544,21 @@ public class ProcessService {
 
     @Transactional(readOnly = true)
     public PageResult<WfInstanceVO> myInitiated(Long tenantId, Long initiatorId, String status, int page, int size) {
+        return myInitiated(tenantId, initiatorId, status, page, size, null);
+    }
+
+    /**
+     * 我发起的流程分页（可含 keyword 模糊过滤，PR-04）。
+     *
+     * <p>{@code keyword} 命中 {@code business_id} / {@code business_type} /
+     * {@code definition_code} / {@code initiator_name}；为 {@code null}/空时退化为原查询（零回归）。
+     */
+    @Transactional(readOnly = true)
+    public PageResult<WfInstanceVO> myInitiated(Long tenantId, Long initiatorId, String status,
+                                                int page, int size, String keyword) {
         var pageable = PageRequest.of(Math.max(page - 1, 0), Math.min(Math.max(size, 1), 200));
-        var p = instanceRepository.findByInitiator(tenantId, initiatorId, blankToNull(status), pageable);
+        var p = instanceRepository.findByInitiator(tenantId, initiatorId, blankToNull(status),
+                likePattern(keyword), pageable);
         return PageResult.of(page, pageable.getPageSize(), p.getTotalElements(),
                 p.getContent().stream().map(this::toInstanceVo).toList());
     }
@@ -532,6 +585,25 @@ public class ProcessService {
 
     private static String blankToNull(String v) {
         return v == null || v.isBlank() ? null : v.trim();
+    }
+
+    /**
+     * 把用户输入关键字转换为「大小写不敏感的 LIKE 模式」。
+     *
+     * <p>返回 {@code null}（关键字为 null / 空白）时，仓储查询中的 keyword 子句严格退化为原查询。
+     *
+     * <p><b>为什么在 Java 侧做 {@code toLowerCase} 而不是在 JPQL 里写
+     * {@code lower(concat('%', :keyword, '%'))}</b>：后者在 Hibernate 6 下会因参数类型推断缺陷，
+     * 把同一查询里被绑成 null 的 {@code :keyword} 绑成 {@code bytea}，PostgreSQL 报
+     * {@code function lower(bytea) does not exist}。改为传递已小写的 {@code :pattern}，
+     * 让 {@code :pattern} 只出现在 {@code like} 右侧而获得确定的字符串类型。
+     * 使用 {@link Locale#ROOT} 保证大小写转换与运行环境区域设置无关（确定性）。
+     */
+    static String likePattern(String keyword) {
+        if (keyword == null || keyword.isBlank()) {
+            return null;
+        }
+        return "%" + keyword.trim().toLowerCase(Locale.ROOT) + "%";
     }
 
     private static String trimDefault(String v, String def) {

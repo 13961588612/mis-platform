@@ -17,6 +17,8 @@ public record MessageVO(
         boolean read,
         Integer readCount,
         Integer totalCount,
-        LocalDateTime createdAt
+        LocalDateTime createdAt,
+        String instanceId,
+        boolean canReply
 ) {
 }

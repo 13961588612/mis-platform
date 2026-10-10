@@ -46,7 +46,7 @@ class MessageServiceIntegrationTest {
     private Long publish(String title, List<Long> receivers) {
         return messageService.publish(TENANT, new PublishMessageRequest(
                 "NOTIFY", "ANNOUNCEMENT", title, "summary-" + title, null, null,
-                1L, "系统", receivers, null));
+                1L, "系统", receivers, null, null));
     }
 
     @Test
@@ -144,9 +144,35 @@ class MessageServiceIntegrationTest {
         publish(marker + "标题命中", List.of(u));
         publish("普通标题", List.of(u)); // summary 不同
 
-        PageResult<MessageVO> hit = messageService.search(TENANT, u, marker, 1, 20);
+        // msgType=null ⇒ 跨类型检索（保持既有行为）
+        PageResult<MessageVO> hit = messageService.search(TENANT, u, null, marker, 1, 20);
         assertTrue(hit.getTotal() >= 1, "应至少命中一条");
         assertTrue(hit.getList().stream().allMatch(v -> v.title().contains(marker)), "命中应来自该关键词");
+    }
+
+    @Test
+    @DisplayName("PRD D-5/Q3：msgType 非空时只搜该类型；null 时跨类型回退")
+    void searchScopedByMsgType() {
+        long u = nextUser(850001);
+        String marker = "ZD" + System.nanoTime();
+        // 同关键词、同接收者，两种类型各一条
+        messageService.publish(TENANT, new PublishMessageRequest(
+                "APPROVAL", "TASK", marker + "审批类", "s", null, null, 1L, "系统", List.of(u), null, null));
+        messageService.publish(TENANT, new PublishMessageRequest(
+                "SYSTEM_ALERT", "SYSTEM", marker + "告警类", "s", null, null, 1L, "系统", List.of(u), null, null));
+
+        // 限定 SYSTEM_ALERT ⇒ 只返回该类型
+        PageResult<MessageVO> scoped = messageService.search(TENANT, u, "SYSTEM_ALERT", marker, 1, 20);
+        assertTrue(scoped.getTotal() >= 1, "限定类型应至少命中一条");
+        assertTrue(scoped.getList().stream().allMatch(v -> "SYSTEM_ALERT".equals(v.msgType())),
+                "限定 msgType 后不应混入其它类型");
+
+        // msgType=null ⇒ 跨类型，两种都能搜到（回退行为）
+        PageResult<MessageVO> all = messageService.search(TENANT, u, null, marker, 1, 20);
+        assertTrue(all.getList().stream().anyMatch(v -> "APPROVAL".equals(v.msgType())),
+                "跨类型检索应包含 APPROVAL");
+        assertTrue(all.getList().stream().anyMatch(v -> "SYSTEM_ALERT".equals(v.msgType())),
+                "跨类型检索应包含 SYSTEM_ALERT");
     }
 
     @Test
@@ -178,6 +204,6 @@ class MessageServiceIntegrationTest {
     @DisplayName("P2：空接收者发布被拒绝")
     void emptyReceiversRejected() {
         assertThrows(BusinessException.class, () -> messageService.publish(TENANT,
-                new PublishMessageRequest("NOTIFY", "ANNOUNCEMENT", "空", null, null, null, 1L, "x", List.of(), null)));
+                new PublishMessageRequest("NOTIFY", "ANNOUNCEMENT", "空", null, null, null, 1L, "x", List.of(), null, null)));
     }
 }

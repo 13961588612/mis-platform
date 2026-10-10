@@ -17,6 +17,8 @@ public record MessageDetailVO(
         String referenceTaskId,
         boolean read,
         List<String> receiverUserIds,
-        LocalDateTime createdAt
+        LocalDateTime createdAt,
+        String instanceId,
+        boolean canReply
 ) {
 }

@@ -41,23 +41,25 @@ public class TaskController {
         return Result.ok(taskService.createTask(tenantId, operatorId, request));
     }
 
-    /** 我的待办。 */
+    /** 我的待办（可含 keyword 模糊过滤）。 */
     @GetMapping("/my")
     public Result<PageResult<TaskVO>> my(@RequestParam Long tenantId,
                                          @RequestParam Long assigneeId,
                                          @RequestParam(required = false) String status,
+                                         @RequestParam(required = false) String keyword,
                                          @RequestParam(defaultValue = "1") int page,
                                          @RequestParam(defaultValue = "20") int size) {
-        return Result.ok(taskService.myTasks(tenantId, assigneeId, status, page, size));
+        return Result.ok(taskService.myTasks(tenantId, assigneeId, status, page, size, keyword));
     }
 
-    /** 我处理过的（已通过 / 已驳回）。 */
+    /** 我处理过的（已通过 / 已驳回；可含 keyword 模糊过滤）。 */
     @GetMapping("/handled")
     public Result<PageResult<TaskVO>> handled(@RequestParam Long tenantId,
                                               @RequestParam Long assigneeId,
+                                              @RequestParam(required = false) String keyword,
                                               @RequestParam(defaultValue = "1") int page,
                                               @RequestParam(defaultValue = "20") int size) {
-        return Result.ok(taskService.handledTasks(tenantId, assigneeId, page, size));
+        return Result.ok(taskService.handledTasks(tenantId, assigneeId, page, size, keyword));
     }
 
     /** 待办统计。 */

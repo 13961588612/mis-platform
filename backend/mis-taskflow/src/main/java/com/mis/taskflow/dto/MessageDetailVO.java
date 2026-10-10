@@ -5,6 +5,9 @@ import java.util.List;
 
 /**
  * 消息详情（含内容与附件）。
+ *
+ * @param instanceId 关联流程实例 ID（无关联时为 {@code null}）
+ * @param canReply   是否可回复（{@code msgType=='NOTIFY' && instanceId!=null}）
  */
 public record MessageDetailVO(
         String id,
@@ -19,6 +22,8 @@ public record MessageDetailVO(
         String referenceTaskId,
         boolean read,
         List<String> receiverUserIds,
-        LocalDateTime createdAt
+        LocalDateTime createdAt,
+        String instanceId,
+        boolean canReply
 ) {
 }

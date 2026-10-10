@@ -44,15 +44,33 @@ public class MessageController {
     @GetMapping("/search")
     public Result<PageResult<MessageVO>> search(@RequestParam(required = false) Long tenantId,
                                                 @RequestParam(required = false) Long userId,
+                                                @RequestParam(required = false) String msgType,
                                                 @RequestParam String q,
                                                 @RequestParam(defaultValue = "1") int page,
                                                 @RequestParam(defaultValue = "20") int size) {
-        return Result.ok(taskflowWebClient.searchMessages(TaskflowIdentity.tenantId(tenantId), TaskflowIdentity.userId(userId), q, page, size));
+        return Result.ok(taskflowWebClient.searchMessages(TaskflowIdentity.tenantId(tenantId), TaskflowIdentity.userId(userId), msgType, q, page, size));
     }
 
     @GetMapping("/{id}")
     public Result<MessageDetailVO> detail(@PathVariable Long id, @RequestParam(required = false) Long userId) {
         return Result.ok(taskflowWebClient.messageDetail(id, TaskflowIdentity.userId(userId)));
+    }
+
+    /**
+     * 回复消息（PR-18）—— 透传到 mis-taskflow，回写为关联流程的一条审批意见。
+     *
+     * <p>isPortaledFloatingTarget / 权限：新路径已登记 sys_api 95072 并绑菜单 95003，
+     * 否则 {@code deny-unmapped:true} 会 403。
+     */
+    @PostMapping("/{id}/reply")
+    public Result<Void> reply(@PathVariable Long id,
+                              @RequestParam(required = false) Long tenantId,
+                              @RequestParam(required = false) Long operatorId,
+                              @RequestParam(required = false) String operatorName,
+                              @RequestBody Map<String, Object> body) {
+        taskflowWebClient.replyMessage(id, TaskflowIdentity.tenantId(tenantId),
+                TaskflowIdentity.operatorId(operatorId), operatorName, body);
+        return Result.ok();
     }
 
     @PostMapping("/read")

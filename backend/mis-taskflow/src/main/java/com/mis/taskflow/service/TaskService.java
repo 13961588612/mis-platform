@@ -25,6 +25,7 @@ import org.springframework.util.StringUtils;
 
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Locale;
 
 /**
  * 代办任务中心（P3）。
@@ -76,7 +77,7 @@ public class TaskService {
         if (StringUtils.hasText(req.notifyTitle())) {
             PublishMessageRequest msg = new PublishMessageRequest(
                     "APPROVAL", "TASK", req.notifyTitle().trim(), trimToNull(req.notifySummary()),
-                    null, null, operatorId, null, List.of(req.assigneeId()), taskId);
+                    null, null, operatorId, null, List.of(req.assigneeId()), taskId, null);
             messageService.publish(tenantId, msg);
         }
 
@@ -88,10 +89,23 @@ public class TaskService {
      */
     @Transactional(readOnly = true)
     public PageResult<TaskVO> myTasks(Long tenantId, Long assigneeId, String status, int page, int size) {
+        return myTasks(tenantId, assigneeId, status, page, size, null);
+    }
+
+    /**
+     * 我的待办分页（可含 keyword 模糊过滤，PR-04）。
+     *
+     * <p>{@code keyword} 命中 {@code biz_title} / {@code biz_type} / {@code biz_ref_id} /
+     * {@code assignee_name}；为 {@code null}/空时退化为原查询（零回归）。
+     */
+    @Transactional(readOnly = true)
+    public PageResult<TaskVO> myTasks(Long tenantId, Long assigneeId, String status,
+                                      int page, int size, String keyword) {
         Pageable pageable = PageRequest.of(Math.max(page - 1, 0), clampSize(size));
+        String pattern = likePattern(keyword);
         Page<SysTask> p = StringUtils.hasText(status)
-                ? taskRepository.findByAssignee(tenantId, assigneeId, status.trim(), pageable)
-                : taskRepository.findOpenByAssignee(tenantId, assigneeId, pageable);
+                ? taskRepository.findByAssignee(tenantId, assigneeId, status.trim(), pattern, pageable)
+                : taskRepository.findOpenByAssignee(tenantId, assigneeId, pattern, pageable);
         return PageResult.of(page, pageable.getPageSize(), p.getTotalElements(),
                 p.getContent().stream().map(this::toVo).toList());
     }
@@ -101,8 +115,16 @@ public class TaskService {
      */
     @Transactional(readOnly = true)
     public PageResult<TaskVO> handledTasks(Long tenantId, Long assigneeId, int page, int size) {
+        return handledTasks(tenantId, assigneeId, page, size, null);
+    }
+
+    /**
+     * 我处理的（handled）分页（可含 keyword 模糊过滤，PR-04）。
+     */
+    @Transactional(readOnly = true)
+    public PageResult<TaskVO> handledTasks(Long tenantId, Long assigneeId, int page, int size, String keyword) {
         Pageable pageable = PageRequest.of(Math.max(page - 1, 0), clampSize(size));
-        Page<SysTask> p = taskRepository.findHandledByAssignee(tenantId, assigneeId, pageable);
+        Page<SysTask> p = taskRepository.findHandledByAssignee(tenantId, assigneeId, likePattern(keyword), pageable);
         return PageResult.of(page, pageable.getPageSize(), p.getTotalElements(),
                 p.getContent().stream().map(this::toVo).toList());
     }
@@ -178,7 +200,7 @@ public class TaskService {
         // 给新处理人补发一条关联通知
         PublishMessageRequest msg = new PublishMessageRequest(
                 "REMIND", "TASK", "转办待办：" + task.getBizTitle(),
-                req.comment(), null, null, operatorId, null, List.of(req.newAssigneeId()), taskId);
+                req.comment(), null, null, operatorId, null, List.of(req.newAssigneeId()), taskId, null);
         messageService.publish(tenantId, msg);
     }
 
@@ -286,5 +308,24 @@ public class TaskService {
 
     private static String trimToNull(String v) {
         return StringUtils.hasText(v) ? v.trim() : null;
+    }
+
+    /**
+     * 把用户输入关键字转换为「大小写不敏感的 LIKE 模式」。
+     *
+     * <p>返回 {@code null}（关键字为 null / 空白）时，仓储查询中的 keyword 子句严格退化为原查询。
+     *
+     * <p><b>为什么在 Java 侧做 {@code toLowerCase} 而不是在 JPQL 里写
+     * {@code lower(concat('%', :keyword, '%'))}</b>：后者在 Hibernate 6 下会因参数类型推断缺陷，
+     * 把同一查询里被绑成 null 的 {@code :keyword} 绑成 {@code bytea}，PostgreSQL 报
+     * {@code function lower(bytea) does not exist}（当查询里同时存在其它 null 参数时触发）。
+     * 改为传递已小写的 {@code :pattern}，让 {@code :pattern} 只出现在 {@code like} 右侧
+     * 而获得确定的字符串类型。使用 {@link Locale#ROOT} 保证与运行环境区域设置无关（确定性）。
+     */
+    static String likePattern(String keyword) {
+        if (keyword == null || keyword.isBlank()) {
+            return null;
+        }
+        return "%" + keyword.trim().toLowerCase(Locale.ROOT) + "%";
     }
 }

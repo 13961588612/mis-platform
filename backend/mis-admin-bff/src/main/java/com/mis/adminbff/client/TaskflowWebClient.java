@@ -129,10 +129,16 @@ public class TaskflowWebClient extends AbstractDownstreamClient {
         return block(client().get().uri(uri).retrieve().bodyToMono(MESSAGE_PAGE));
     }
 
-    public PageResult<MessageVO> searchMessages(Long tenantId, Long userId, String keyword, int page, int size) {
+    /**
+     * 关键词检索。{@code msgType} 非空时透传做**类型内独立搜索**（PRD D-5 / Q3），
+     * 空白时不带该参数（下游跨类型检索）。
+     */
+    public PageResult<MessageVO> searchMessages(Long tenantId, Long userId, String msgType, String keyword,
+                                                int page, int size) {
         String uri = UriComponentsBuilder.fromPath("/internal/v1/messages/search")
                 .queryParam("tenantId", tenantId)
                 .queryParam("userId", userId)
+                .queryParamIfPresent("msgType", nonBlank(msgType))
                 .queryParam("q", keyword)
                 .queryParam("page", page)
                 .queryParam("size", size)
@@ -171,6 +177,28 @@ public class TaskflowWebClient extends AbstractDownstreamClient {
                 .bodyValue(body).retrieve().bodyToMono(LONG_RESULT));
     }
 
+    /**
+     * 回复消息（PR-18）—— 透传到 mis-taskflow {@code POST /internal/v1/messages/{id}/reply}。
+     *
+     * <p>回复语义由 taskflow 侧负责（回写关联流程的 {@code wf_history COMMENT}）；
+     * {@code operatorName} 空串不透传。
+     */
+    public void replyMessage(Long id, Long tenantId, Long operatorId, String operatorName,
+                             Map<String, Object> body) {
+        String uri = UriComponentsBuilder.fromPath("/internal/v1/messages/{id}/reply")
+                .queryParam("tenantId", tenantId)
+                .queryParamIfPresent("operatorId", Optional.ofNullable(operatorId))
+                .queryParamIfPresent("operatorName", nonBlank(operatorName))
+                .buildAndExpand(id).toUriString();
+        blockVoid(client().post().uri(uri).contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(body).retrieve().bodyToMono(VOID));
+    }
+
+    /** 空串/空白一律视为「不传」，返回空 Optional。 */
+    private static Optional<String> nonBlank(String v) {
+        return Optional.ofNullable(v).filter(s -> !s.isBlank());
+    }
+
     // ------------------------------------------------------------------
     // 代办任务（P3）
     // ------------------------------------------------------------------
@@ -184,21 +212,24 @@ public class TaskflowWebClient extends AbstractDownstreamClient {
                 .bodyValue(body).retrieve().bodyToMono(LONG_RESULT));
     }
 
-    public PageResult<TaskVO> myTasks(Long tenantId, Long assigneeId, String status, int page, int size) {
+    public PageResult<TaskVO> myTasks(Long tenantId, Long assigneeId, String status, String keyword,
+                                      int page, int size) {
         String uri = UriComponentsBuilder.fromPath("/internal/v1/tasks/my")
                 .queryParam("tenantId", tenantId)
                 .queryParam("assigneeId", assigneeId)
                 .queryParamIfPresent("status", Optional.ofNullable(status))
+                .queryParamIfPresent("keyword", nonBlank(keyword))
                 .queryParam("page", page)
                 .queryParam("size", size)
                 .toUriString();
         return block(client().get().uri(uri).retrieve().bodyToMono(TASK_PAGE));
     }
 
-    public PageResult<TaskVO> handledTasks(Long tenantId, Long assigneeId, int page, int size) {
+    public PageResult<TaskVO> handledTasks(Long tenantId, Long assigneeId, String keyword, int page, int size) {
         String uri = UriComponentsBuilder.fromPath("/internal/v1/tasks/handled")
                 .queryParam("tenantId", tenantId)
                 .queryParam("assigneeId", assigneeId)
+                .queryParamIfPresent("keyword", nonBlank(keyword))
                 .queryParam("page", page)
                 .queryParam("size", size)
                 .toUriString();
@@ -508,11 +539,13 @@ public class TaskflowWebClient extends AbstractDownstreamClient {
         return block(client().get().uri(uri).retrieve().bodyToMono(WF_PROCESS_DETAIL));
     }
 
-    public PageResult<WfInstanceVO> myProcesses(Long tenantId, Long initiatorId, String status, int page, int size) {
+    public PageResult<WfInstanceVO> myProcesses(Long tenantId, Long initiatorId, String status, String keyword,
+                                                int page, int size) {
         String uri = UriComponentsBuilder.fromPath("/internal/v1/workflow/instances/my")
                 .queryParam("tenantId", tenantId)
                 .queryParam("initiatorId", initiatorId)
                 .queryParamIfPresent("status", Optional.ofNullable(status))
+                .queryParamIfPresent("keyword", nonBlank(keyword))
                 .queryParam("page", page)
                 .queryParam("size", size)
                 .toUriString();

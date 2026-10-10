@@ -34,29 +34,57 @@ public interface SysTaskRepository extends JpaRepository<SysTask, Long> {
     @Query("select t from SysTask t where t.id = :id and t.deleted = 0")
     Optional<SysTask> findByIdForUpdate(@Param("id") Long id);
 
+    /**
+     * 按处理人分页（可含 status 与 keyword 过滤）。
+     *
+     * <p><b>keyword 过滤为何传「已小写的 LIKE 模式」而非原始关键字</b>：见
+     * {@link #findOpenByAssignee} 的类注释说明——{@code lower(concat('%', :keyword, '%'))}
+     * 在 Hibernate 6 下会因参数类型推断把 null 关键字绑成 {@code bytea}，触发
+     * {@code lower(bytea) does not exist}。故由 Service 层预先算好
+     * {@code "%"+keyword.toLowerCase()+"%"} 直接作为 {@code :pattern} 传入，
+     * {@code :pattern} 仅出现在 {@code like} 右侧（被 LIKE 约束为字符串），类型无歧义。
+     */
     @Query("""
             select t from SysTask t
             where t.tenantId = :tenantId
               and t.assigneeId = :assigneeId
               and t.deleted = 0
               and (:status is null or t.status = :status)
+              and (:pattern is null
+                   or lower(coalesce(t.bizTitle, '')) like :pattern
+                   or lower(coalesce(t.bizType, '')) like :pattern
+                   or lower(coalesce(t.bizRefId, '')) like :pattern
+                   or lower(coalesce(t.assigneeName, '')) like :pattern)
             order by t.priority desc, t.createdAt desc
             """)
     Page<SysTask> findByAssignee(@Param("tenantId") Long tenantId,
                                  @Param("assigneeId") Long assigneeId,
                                  @Param("status") String status,
+                                 @Param("pattern") String pattern,
                                  Pageable pageable);
 
+    /**
+     * 未完成待办分页（PENDING / APPROVING，可含 keyword 过滤）。
+     *
+     * <p>{@code :pattern} 为 {@code null} 时严格退化为原查询（不过滤，零回归）；
+     * 非空时对 {@code biz_title / biz_type / biz_ref_id / assignee_name} 四列做大小写不敏感模糊匹配。
+     */
     @Query("""
             select t from SysTask t
             where t.tenantId = :tenantId
               and t.assigneeId = :assigneeId
               and t.deleted = 0
               and t.status in ('PENDING', 'APPROVING')
+              and (:pattern is null
+                   or lower(coalesce(t.bizTitle, '')) like :pattern
+                   or lower(coalesce(t.bizType, '')) like :pattern
+                   or lower(coalesce(t.bizRefId, '')) like :pattern
+                   or lower(coalesce(t.assigneeName, '')) like :pattern)
             order by t.priority desc, t.createdAt desc
             """)
     Page<SysTask> findOpenByAssignee(@Param("tenantId") Long tenantId,
                                      @Param("assigneeId") Long assigneeId,
+                                     @Param("pattern") String pattern,
                                      Pageable pageable);
 
     @Query("""
@@ -66,17 +94,27 @@ public interface SysTaskRepository extends JpaRepository<SysTask, Long> {
             """)
     long countPending(@Param("tenantId") Long tenantId, @Param("assigneeId") Long assigneeId);
 
-    /** 我处理过的（已通过 / 已驳回），按完成时间倒序——用于「我审批的」。 */
+    /**
+     * 我处理过的（已通过 / 已驳回），按完成时间倒序——用于「我审批的」（可含 keyword 过滤）。
+     *
+     * <p>{@code :pattern} 语义见 {@link #findOpenByAssignee}：null 时退化原查询。
+     */
     @Query("""
             select t from SysTask t
             where t.tenantId = :tenantId
               and t.assigneeId = :assigneeId
               and t.deleted = 0
               and t.status in ('APPROVED', 'REJECTED')
+              and (:pattern is null
+                   or lower(coalesce(t.bizTitle, '')) like :pattern
+                   or lower(coalesce(t.bizType, '')) like :pattern
+                   or lower(coalesce(t.bizRefId, '')) like :pattern
+                   or lower(coalesce(t.assigneeName, '')) like :pattern)
             order by t.completedAt desc, t.createdAt desc
             """)
     Page<SysTask> findHandledByAssignee(@Param("tenantId") Long tenantId,
                                         @Param("assigneeId") Long assigneeId,
+                                        @Param("pattern") String pattern,
                                         Pageable pageable);
 
     @Query("""
