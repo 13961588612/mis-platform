@@ -307,7 +307,8 @@ export function FormDefinitionManagePage() {
       setCatDeleteTarget(null);
       if (selectedCategoryId === target.id) setSelectedCategoryId(null);
       await loadCategories();
-      setCategoryIds((prev) => prev.filter((id) => String(id) !== target.id));
+      // 删除后把该分类从「分类筛选」多选里剔除（状态已由 categoryIds 重构为 filterCategoryIds）。
+      setFilterCategoryIds((prev) => prev.filter((id) => String(id) !== target.id));
     } catch (e) {
       toast.error(e instanceof Error ? e.message : '删除分类失败');
     } finally {
