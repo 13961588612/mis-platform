@@ -5,7 +5,7 @@ import { fetchMyTasks, type TaskItem } from '@/lib/api/tasks';
 import { ListError, ListLoading } from '@/components/common/empty-state';
 import { PriorityBadge } from '@/components/common/priority-badge';
 import { wfInstanceId } from '@/lib/api/wf-instance';
-import { returnPath } from '@/lib/nav/return-path';
+import { TodoDetailDrawer } from './todo-detail-drawer';
 
 interface TaskBoardProps {
   tenantId: string;
@@ -14,12 +14,24 @@ interface TaskBoardProps {
 
 /**
  * 工作台主体：我的待办（现代商务白卡）。
+ *
+ * <p><b>点行的去向（UI 精修轮）</b>：有 `wfInstanceId` 的行 → 就地打开
+ * {@link TodoDetailDrawer}（右侧划入，看表单 + 审批进度，不必离开工作台）；
+ * **无关联流程的行降级为跳 `/task/pending`**（不打开空抽屉，那没有信息量）。
+ * 抽屉临时态**由本组件自持**（`useState`，关闭即销毁、不进 URL），与门户待办 /
+ * 消息 Tab 的自持约定一致，Board 保持自包含、不必由容器层层下传。
+ *
+ * <p>右上角「查看全部」仍是跳转 `/task/pending`（列表页语义，本轮不变）。
  */
 export function TaskBoard({ tenantId, userId }: TaskBoardProps) {
   const navigate = useNavigate();
   const [items, setItems] = useState<TaskItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  // 抽屉临时态：与门户待办 Tab 同约定（不入 URL，关闭即销毁）。
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [drawerInstanceId, setDrawerInstanceId] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     if (!userId) return;
@@ -39,13 +51,21 @@ export function TaskBoard({ tenantId, userId }: TaskBoardProps) {
     void load();
   }, [load]);
 
-  // P0-6：带上来源，详情页面包屑可回到门户工作台
-  const from = returnPath('/portal', '工作台');
-
+  /** 点行：有实例 → 开抽屉；无实例 → 降级跳待办列表页（沿用原降级口径）。 */
   function open(item: TaskItem) {
     const inst = wfInstanceId(item);
-    if (inst) navigate(`/task/process/${inst}`, { state: from });
-    else navigate('/task/pending');
+    if (inst) {
+      setDrawerInstanceId(inst);
+      setDrawerOpen(true);
+      return;
+    }
+    navigate('/task/pending');
+  }
+
+  /** 抽屉内动作成功：关抽屉 + 刷新本板列表。 */
+  function handleDrawerDone() {
+    setDrawerOpen(false);
+    void load();
   }
 
   return (
@@ -99,6 +119,19 @@ export function TaskBoard({ tenantId, userId }: TaskBoardProps) {
           })}
         </ul>
       )}
+
+      {/*
+        右侧划入抽屉（UI 精修轮新增）。`Sheet` 是**独立的浮层层**（portal），与首页
+        `overflow-auto` 容器互不影响；抽屉内容体是唯一滚动容器
+        （`min-h-0 flex-1 overflow-auto`，见 todo-detail-drawer.tsx），内嵌
+        ProcessShell(embedded) 不再加 overflow-auto —— 单层滚动红线保持不变。
+      */}
+      <TodoDetailDrawer
+        open={drawerOpen}
+        onOpenChange={setDrawerOpen}
+        instanceId={drawerInstanceId}
+        onDone={handleDrawerDone}
+      />
     </section>
   );
 }

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 /**
- * HeaderToolkit 单测（T2：为「未读数改真实 stats」铺安全网）。
+ * HeaderToolkit 单测（T2：为「未读数改真实 stats」铺安全网；UI 精修轮扩「下拉合并 20 条」）。
  *
  * 覆盖：
  * 1. 渲染不抛错，搜索 pill / 工作台 / 通知铃铛存在
@@ -10,6 +10,9 @@
  *    `GET /messages/stats`.unread，前端零计算。改造前是
  *    `items.filter(n => !n.read).length` 前端假算，且列表 `size:4` 截断、
  *    待办 `read` 硬编码 false，导致消息超 4 条时铃铛显示个位数而收件箱显示 57。
+ * 5. **UI 精修轮**：下拉 = 待办 + 消息**合计最近 20 条**（两侧各取 20 → 合并按
+ *    `createdAt` 倒序 → 截前 20），且底部按钮文案为「打开消息中心」、点击会
+ *    写门户 Tab store（真正切到消息中心，而不只是跳路由）。
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
@@ -18,6 +21,7 @@ import { HeaderToolkit } from './header-toolkit';
 import * as tasksApi from '@/lib/api/tasks';
 import * as messagesApi from '@/lib/api/messages';
 import { useAuthStore } from '@/stores/auth-store';
+import { usePortalTabStore } from '@/stores/portal-tab-store';
 
 vi.mock('@/lib/api/tasks', () => ({
   fetchMyTasks: vi.fn(),
@@ -99,6 +103,10 @@ describe('HeaderToolkit', () => {
     vi.mocked(messagesApi.fetchInbox).mockResolvedValue(emptyPage);
     vi.mocked(tasksApi.fetchTaskStats).mockResolvedValue({ pending: 0, urgent: 0, overdue: 0 });
     vi.mocked(messagesApi.fetchMessageStats).mockResolvedValue({ unread: 0, total: 0 });
+    // 门户 Tab 激活态是**模块级全局 store**（跨用例共享），必须逐例复位到默认「首页」，
+    // 否则某个用例把它切到 message 后，后续依赖默认态的用例会假失败。
+    // 复位统一放这里而不是用例体内：本文件后续若新增依赖 activeTab 的用例，自动受保护。
+    usePortalTabStore.setState({ activeTab: 'home' });
   });
 
   afterEach(() => {
@@ -113,7 +121,7 @@ describe('HeaderToolkit', () => {
     expect(screen.getByLabelText('通知')).toBeTruthy();
   });
 
-  it('挂载时拉取 /tasks/my 与 /messages/inbox', async () => {
+  it('挂载时拉取 /tasks/my 与 /messages/inbox（各取 20 条以支持合并后截前 20）', async () => {
     renderToolkit();
     await waitFor(() => {
       expect(tasksApi.fetchMyTasks).toHaveBeenCalledWith({
@@ -121,14 +129,14 @@ describe('HeaderToolkit', () => {
         assigneeId: '700001',
         status: 'PENDING',
         page: 1,
-        size: 4,
+        size: 20,
       });
     });
     expect(messagesApi.fetchInbox).toHaveBeenCalledWith({
       tenantId: '1',
       userId: '700001',
       page: 1,
-      size: 4,
+      size: 20,
     });
   });
 
@@ -235,5 +243,88 @@ describe('HeaderToolkit', () => {
     // stats 挂了也不能白屏或出NaN
     expect(screen.getByText('待办 0 · 未读 0')).toBeTruthy();
     expect(screen.getByLabelText('通知').querySelector('span')).toBeNull();
+  });
+
+  // ---------------------------------------------------------------------
+  // UI 精修轮：下拉 = 待办 + 消息合计最近 20 条
+  // ---------------------------------------------------------------------
+
+  /** 造 n 条待办：`createdAt` 随序号递增（第 n 条最新）。 */
+  function makeTasks(n: number, prefix = 'T') {
+    return Array.from({ length: n }, (_, i) => ({
+      ...oneTask,
+      id: `${prefix}-${i}`,
+      bizTitle: `待办-${prefix}-${i}`,
+      // 用可比较的 ISO 串：序号越大越新。
+      createdAt: `2026-10-${String((i % 28) + 1).padStart(2, '0')}T10:00:00`,
+    }));
+  }
+
+  /** 造 n 条消息：`createdAt` 随序号递增（第 n 条最新）。 */
+  function makeMessages(n: number, prefix = 'M') {
+    return Array.from({ length: n }, (_, i) => ({
+      ...oneMessage,
+      id: `${prefix}-${i}`,
+      title: `消息-${prefix}-${i}`,
+      createdAt: `2026-10-${String((i % 28) + 1).padStart(2, '0')}T12:00:00`,
+    }));
+  }
+
+  /** 取下拉列表（`max-h-96 overflow-y-auto` 的那个 `ul`）里的条目按钮。 */
+  function dropdownItems(): HTMLElement[] {
+    const list = document.querySelector('ul.max-h-96');
+    expect(list).toBeTruthy();
+    return Array.from(list!.querySelectorAll('button'));
+  }
+
+  it('下拉最多渲染 20 条：待办 12 + 消息 12 = 24 条合并后截到 20', async () => {
+    vi.mocked(tasksApi.fetchMyTasks).mockResolvedValue({ ...emptyPage, total: 12, list: makeTasks(12) });
+    vi.mocked(messagesApi.fetchInbox).mockResolvedValue({ ...emptyPage, total: 12, list: makeMessages(12) });
+    renderToolkit();
+
+    fireEvent.click(screen.getByLabelText('通知'));
+    await screen.findByText('待办与消息');
+    await waitFor(() => expect(dropdownItems().length).toBeGreaterThan(0));
+
+    // 24 条合并后必须被截到 20（不是 8，也不可能是 24）
+    expect(dropdownItems().length).toBe(20);
+  });
+
+  it('下拉按时间倒序：合并流里最新的那条排在第一', async () => {
+    // 一条很旧的任务 + 一条很新的消息 → 消息应排第一（不是「待办优先」）。
+    vi.mocked(tasksApi.fetchMyTasks).mockResolvedValue({
+      ...emptyPage,
+      total: 1,
+      list: [{ ...oneTask, id: 'T-old', bizTitle: '待办-很旧', createdAt: '2020-01-01T00:00:00' }],
+    });
+    vi.mocked(messagesApi.fetchInbox).mockResolvedValue({
+      ...emptyPage,
+      total: 1,
+      list: [{ ...oneMessage, id: 'M-new', title: '消息-很新', createdAt: '2026-10-08T10:00:00' }],
+    });
+    renderToolkit();
+
+    fireEvent.click(screen.getByLabelText('通知'));
+    await screen.findByText('待办与消息');
+    await waitFor(() => expect(dropdownItems().length).toBe(2));
+
+    const first = dropdownItems()[0];
+    expect(first.textContent).toContain('消息-很新');
+    expect(first.textContent).not.toContain('待办-很旧');
+  });
+
+  it('底部按钮文案为「打开消息中心」，点击后写门户 Tab store（真正切到消息页签）', async () => {
+    // activeTab 的复位统一在 beforeEach 完成，用例体内不再重复。
+    renderToolkit();
+
+    fireEvent.click(screen.getByLabelText('通知'));
+    const btn = await screen.findByText('打开消息中心');
+    // 旧文案不得残留
+    expect(screen.queryByText('打开工作台')).toBeNull();
+
+    fireEvent.click(btn);
+    await waitFor(() => expect(usePortalTabStore.getState().activeTab).toBe('message'));
+    // 下拉同时收起
+    expect(screen.queryByText('待办与消息')).toBeNull();
   });
 });

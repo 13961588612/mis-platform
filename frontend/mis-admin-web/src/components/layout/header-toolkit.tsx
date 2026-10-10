@@ -7,14 +7,17 @@ import { fetchMyTasks, fetchTaskStats, type TaskItem } from '@/lib/api/tasks';
 import { fetchInbox, fetchMessageStats, type MessageItem } from '@/lib/api/messages';
 import { cn } from '@/lib/utils';
 import { UnreadDot } from '@/components/common/unread-dot';
+import { usePortalTabStore } from '@/stores/portal-tab-store';
 
-/** 顶栏通知项：待办优先，其次消息。 */
+/** 顶栏通知项：待办 / 消息合并流（按时间倒序）。 */
 interface NotificationItem {
   id: string;
   kind: 'task' | 'message';
   title: string;
   body: string;
   time: string;
+  /** 排序用的时间戳（ms）；无法解析时为 0，排在最后。 */
+  sortAt: number;
   read?: boolean;
   to: string;
 }
@@ -27,9 +30,25 @@ interface HeaderToolkitProps {
 
 const TENANT_ID = '1';
 
+/**
+ * 下拉预览条数上限。
+ *
+ * <p>待办与消息**各取这么多再合并**（`size: NOTIFICATION_LIMIT`），合并后按
+ * 时间倒序截到 {@link NOTIFICATION_LIMIT} 条——两侧都取满才能保证「最近 N 条」
+ * 是真正的全局最近 N 条（只取 4+4 时，合并结果会被各自截断的窗口污染）。
+ */
+const NOTIFICATION_LIMIT = 20;
+
 /** 铃铛数字的展示上限：超过 9 显示「9+」。 */
 function badgeText(n: number): string {
   return n > 9 ? '9+' : String(n);
+}
+
+/** ISO 时间串 → 毫秒时间戳；无法解析时返回 0（排序时沉底，不抛错）。 */
+function toTimestamp(iso: string | null | undefined): number {
+  if (!iso) return 0;
+  const t = new Date(iso).getTime();
+  return Number.isNaN(t) ? 0 : t;
 }
 
 /**
@@ -41,6 +60,16 @@ function badgeText(n: number): string {
  * `GET /messages/stats` 的 unread），前端不做加总。改造前这里用
  * `items.filter(n => !n.read).length` 前端假算，而列表接口 `size:4` 截断、
  * 待办的 `read` 又恒为 false，导致消息超4 条时铃铛显示「3」而收件箱显示「57」。
+ *
+ * <p><b>下拉列表 = 待办 + 消息合计最近 {@link NOTIFICATION_LIMIT} 条</b>：
+ * 两侧各取 20 条，合并后按 `createdAt` 倒序（`sortAt` 越大越靠前）截取前 20。
+ * 排序键取自两个列表接口都稳定返回的 `createdAt`（`TaskItem.createdAt` /
+ * `MessageItem.createdAt`，均为非空 ISO 串）；无法解析的沉底而非丢条。
+ * 角标数字**仍只取 stats 权威值**，与列表长度无关（列表是预览，角标是全量计数）。
+ *
+ * <p><b>底部按钮「打开消息中心」</b>：`navigate('/portal')` + 写
+ * {@link usePortalTabStore} 的 `activeTab`（门户三 Tab 不进 URL，见该 store 注释）。
+ * 这样从顶栏能真正落到门户的「消息中心」页签，而不是停在默认「首页」。
  */
 export function HeaderToolkit({ onOpenCommand, className, showSearchPill = true }: HeaderToolkitProps) {
   const navigate = useNavigate();
@@ -53,15 +82,25 @@ export function HeaderToolkit({ onOpenCommand, className, showSearchPill = true 
   const [pendingCount, setPendingCount] = useState(0);
   /** 消息未读数（`GET /messages/stats`.unread），铃铛数字的权威来源。 */
   const [unreadCount, setUnreadCount] = useState(0);
+  /** 门户 Tab 激活态写入器：底部「打开消息中心」用它把门户切到消息页签。 */
+  const setPortalTab = usePortalTabStore((s) => s.setActiveTab);
 
   const load = useCallback(async () => {
     if (!userId) return;
     const statsTask = fetchTaskStats(TENANT_ID, userId).catch(() => null);
     const statsMsg = fetchMessageStats(TENANT_ID, userId).catch(() => null);
     try {
+      //两侧各取 NOTIFICATION_LIMIT 条：合并后按时间倒序取前 NOTIFICATION_LIMIT，
+      // 才是真正的「待办 + 消息合计最近 N 条」（任一侧被截断都会污染窗口）。
       const [tasks, messages] = await Promise.allSettled([
-        fetchMyTasks({ tenantId: TENANT_ID, assigneeId: userId, status: 'PENDING', page: 1, size: 4 }),
-        fetchInbox({ tenantId: TENANT_ID, userId, page: 1, size: 4 }),
+        fetchMyTasks({
+          tenantId: TENANT_ID,
+          assigneeId: userId,
+          status: 'PENDING',
+          page: 1,
+          size: NOTIFICATION_LIMIT,
+        }),
+        fetchInbox({ tenantId: TENANT_ID, userId, page: 1, size: NOTIFICATION_LIMIT }),
       ]);
 
       const out: NotificationItem[] = [];
@@ -73,6 +112,8 @@ export function HeaderToolkit({ onOpenCommand, className, showSearchPill = true 
             title: t.bizTitle,
             body: `${t.taskType} · 待你处理`,
             time: t.dueDate ? `截止 ${t.dueDate.replace('T', ' ').slice(5, 16)}` : '',
+            // 排序用列表接口稳定返回的 createdAt（非空 ISO 串），与展示的「截止时间」无关。
+            sortAt: toTimestamp(t.createdAt),
             // 待办列表接口不返回可靠的已读语义（历史实现恒为 false），这里不参与未读计算，
             // 未读数字只看下面的 unreadCount（后端 stats 权威值）。
             to: '/task/pending',
@@ -87,12 +128,16 @@ export function HeaderToolkit({ onOpenCommand, className, showSearchPill = true 
             title: m.title,
             body: m.summary ?? '',
             time: m.createdAt ? m.createdAt.replace('T', ' ').slice(5, 16) : '',
+            sortAt: toTimestamp(m.createdAt),
             read: m.read,
             to: '/task/inbox',
           });
         }
       }
-      setItems(out.slice(0, 8));
+      // 时间倒序（新的在前）。sortAt 相同（都解析失败）时保持入列顺序：
+      // 待办先入、消息后入 —— 这是稳定排序的自然结果，无需额外 tie-break。
+      out.sort((a, b) => b.sortAt - a.sortAt);
+      setItems(out.slice(0, NOTIFICATION_LIMIT));
 
       // 统计与列表并行发出；任一失败都不影响铃铛可用（数字回落 0）。
       const [st, sm] = await Promise.all([statsTask, statsMsg]);
@@ -113,7 +158,8 @@ export function HeaderToolkit({ onOpenCommand, className, showSearchPill = true 
   }, [open, load]);
 
   // 未处理总数 = 待办待处理（权威 stats）+ 消息未读（权威 stats）。
-  // 两个后端计数器的直接呈现，不是「列表长度」的推算：列表只取 4 条做预览用。
+  // 两个后端计数器的直接呈现，不是「列表长度」的推算：列表只取最近若干条做预览用，
+  // 角标反映的是**全量**待处理总量（列表被NOTIFICATION_LIMIT 截断也不影响）。
   const unread = pendingCount + unreadCount;
 
   return (
@@ -190,7 +236,7 @@ export function HeaderToolkit({ onOpenCommand, className, showSearchPill = true 
               {items.length === 0 ? (
                 <div className="px-3 py-6 text-center text-xs text-muted-foreground">暂无待办或消息</div>
               ) : (
-                <ul className="max-h-72 overflow-y-auto py-1">
+                <ul className="max-h-96 overflow-y-auto py-1">
                   {items.map((n) => (
                     <li key={n.id}>
                       <button
@@ -222,15 +268,22 @@ export function HeaderToolkit({ onOpenCommand, className, showSearchPill = true 
                   ))}
                 </ul>
               )}
+              {/*
+                 底部入口：打开门户的「消息中心」页签。
+                 门户三 Tab 不进 URL（keep-alive 直挂，见 portal-tab-store.ts），所以
+                 `navigate` 之后还必须写 store，否则会停在默认「首页」。
+                 两侧只依赖 `stores/`，不产生 layout → features 的跨 feature 依赖。
+               */}
               <button
                 type="button"
                 className="block w-full border-t px-3 py-2 text-center text-xs text-primary"
                 onClick={() => {
                   setOpen(false);
+                  setPortalTab('message');
                   navigate('/portal');
                 }}
               >
-                打开工作台
+                打开消息中心
               </button>
             </div>
           </>

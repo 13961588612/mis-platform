@@ -5,18 +5,32 @@ import { fetchInbox, type MessageItem } from '@/lib/api/messages';
 import { cn } from '@/lib/utils';
 import { ListError, ListLoading } from '@/components/common/empty-state';
 import { UnreadDot } from '@/components/common/unread-dot';
+import { MessageDetailDrawer } from './message-detail-drawer';
 
 interface MessageBoardProps {
   tenantId: string;
   userId: string;
 }
 
-/** 工作台主体：消息与通知。 */
+/**
+ * 工作台主体：消息与通知。
+ *
+ * <p><b>点行的去向（UI 精修轮）</b>：点某条 → 就地打开 {@link MessageDetailDrawer}，
+ * `messageId` 取**该条自己的 id**（此前无论点哪条都只 `navigate('/task/inbox')`，
+ * 属于「点了等于没点」的坏体验）。抽屉临时态**由本组件自持**（`useState`，关闭即
+ * 销毁、不进 URL），与门户消息 Tab 的自持约定一致。
+ *
+ * <p>右上角「查看全部」仍是跳转 `/task/inbox`（收件箱全量列表，本轮不变）。
+ */
 export function MessageBoard({ tenantId, userId }: MessageBoardProps) {
   const navigate = useNavigate();
   const [items, setItems] = useState<MessageItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  // 抽屉临时态：与门户消息 Tab 同约定（不入 URL，关闭即销毁）。
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [drawerMessageId, setDrawerMessageId] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     if (!userId) return;
@@ -35,6 +49,12 @@ export function MessageBoard({ tenantId, userId }: MessageBoardProps) {
   useEffect(() => {
     void load();
   }, [load]);
+
+  /** 点某条消息：开抽屉并带上**这条**的 id（不是固定跳收件箱）。 */
+  function open(item: MessageItem) {
+    setDrawerMessageId(String(item.id));
+    setDrawerOpen(true);
+  }
 
   return (
     <section className="rounded-lg border bg-card shadow-card">
@@ -64,7 +84,7 @@ export function MessageBoard({ tenantId, userId }: MessageBoardProps) {
             <li key={item.id}>
               <button
                 type="button"
-                onClick={() => navigate('/task/inbox')}
+                onClick={() => open(item)}
                 className="flex w-full items-center gap-2.5 px-4 py-2.5 text-left transition hover:bg-muted/60"
               >
                 <UnreadDot read={item.read} className="h-1.5 w-1.5" />
@@ -82,6 +102,17 @@ export function MessageBoard({ tenantId, userId }: MessageBoardProps) {
           ))}
         </ul>
       )}
+
+      {/*
+        右侧划入抽屉（UI 精修轮新增）。`Sheet` 是独立浮层层（portal），与首页
+        `overflow-auto` 容器互不影响；抽屉内容体是唯一滚动容器，内嵌 FormShell
+        不再加 overflow-auto —— 单层滚动红线保持不变。
+      */}
+      <MessageDetailDrawer
+        open={drawerOpen}
+        onOpenChange={setDrawerOpen}
+        messageId={drawerMessageId}
+      />
     </section>
   );
 }

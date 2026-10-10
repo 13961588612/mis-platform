@@ -27,6 +27,7 @@ import * as tasksApi from '@/lib/api/tasks';
 import * as messagesApi from '@/lib/api/messages';
 import * as workflowApi from '@/lib/api/workflow';
 import { useAuthStore } from '@/stores/auth-store';
+import { usePortalTabStore } from '@/stores/portal-tab-store';
 
 vi.mock('next-themes', () => ({
   useTheme: () => ({ setTheme: vi.fn(), resolvedTheme: 'light' }),
@@ -60,6 +61,16 @@ vi.mock('@/lib/nav/iframe-apps', () => ({
   registerIframeApps: vi.fn(),
   getIframeApp: vi.fn(),
   useIframeRegistryVersion: vi.fn(() => 0),
+}));
+
+// UI 精修轮：首页 TaskBoard / ProcessBoard / MessageBoard 现在挂载详情抽屉，
+// 抽屉会 import ProcessShell / FormShell 及其一串接口依赖。本冒烟只关心板块是否
+// 渲染出来，用轻量替身短路抽屉内部（其行为由 portal-tabs.test.tsx 与两个抽屉单测覆盖）。
+vi.mock('@/features/portal/components/todo-detail-drawer', () => ({
+  TodoDetailDrawer: () => null,
+}));
+vi.mock('@/features/portal/components/message-detail-drawer', () => ({
+  MessageDetailDrawer: () => null,
 }));
 
 // HeaderToolkit 真实实现会打接口；这里用极简替身，只保留「工作台」入口语义
@@ -142,6 +153,9 @@ describe('PortalPage 冒烟', () => {
     vi.mocked(messagesApi.fetchInbox).mockResolvedValue(emptyPage);
     vi.mocked(messagesApi.fetchMessageStats).mockResolvedValue({ unread: 2, total: 5 });
     vi.mocked(workflowApi.fetchMyProcesses).mockResolvedValue(emptyPage);
+    // Tab 激活态是模块级全局 store（跨测试文件/用例共享），复位到默认「首页」，
+    // 否则被别的用例切到 message 后，本文件的「首页板块」断言会假失败。
+    usePortalTabStore.setState({ activeTab: 'home' });
   });
 
   afterEach(() => {

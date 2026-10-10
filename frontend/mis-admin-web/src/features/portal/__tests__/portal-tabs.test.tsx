@@ -1,25 +1,31 @@
 // @vitest-environment jsdom
 /**
- * 门户三 Tab 容器测试（T01）。
+ * 门户三 Tab 容器测试（T01；UI 精修轮扩图标/卡片风格 + Tab store 桥接 + 首页板抽屉）。
  *
  * 覆盖：
  * 1. 「首页 / 待办事项 / 消息中心」三个 Tab 均渲染；
- * 2. 默认选中「首页」，且首页内容（欢迎语 + 工作台板块 + AppRail）与现状一致；
- * 3. 点击「待办事项」→ 切到 Todo 壳（首页内容卸载）；点击「消息中心」→ 切到 Message 壳；
- * 4. **不发生路由跳转**：Tab 切换纯本地 `useState`，`useNavigate` 不被调用、pathname 不变。
- *    （这是本批的核心红线：三 Tab 绝不入 URL，规避 keep-alive `PAGE_MAP`/`useParams` 坑。）
- * 5. **T05 集成**：两抽屉可开——待办点行开待办抽屉（携 instanceId）、消息点行开消息抽屉（携 messageId）。
+ * 2. **三Tab 均为「图标 + 文字」**（断言 lucide 渲染出的真实 `svg[data-testid]`，
+ *    不只断文本——断文本锁不住「图标被删」的回归）；
+ * 3. 默认选中「首页」，且首页内容（欢迎语 + 工作台板块 + AppRail）与现状一致；
+ * 4. 点击「待办事项」→ 切到 Todo 壳（首页内容卸载）；点击「消息中心」→ 切到 Message 壳；
+ * 5. **不发生路由跳转**：Tab 切换纯本地态（store），`useNavigate` 不被调用、pathname 不变。
+ *    （核心红线：三 Tab 绝不入 URL，规避 keep-alive `PAGE_MAP`/`useParams` 坑。）
+ * 6. **外部 `setActiveTab('message')` 能驱动门户切页签**（顶栏「打开消息中心」的桥接契约：
+ *    layout 侧只写 store，门户页必须即时响应）。
+ * 7. **T05 集成**：两抽屉可开——待办点行开待办抽屉（携 instanceId）、消息点行开消息抽屉（携 messageId）。
  *    抽屉以轻量替身替换（其内部行为由 `todo-tabs.test.tsx` / `message-reply-drawer.test.tsx` 覆盖）。
+ * 8. **首页三板点行改开抽屉**（取代路由跳转）：TaskBoard/ProcessBoard → TodoDetailDrawer、
+ *    MessageBoard → MessageDetailDrawer（且 messageId 是**被点的那条**，不是固定值）。
  *
  * mock 范式（对齐 `portal-page.smoke.test.tsx`）：
  * - 整体替换 api 模块，避免真实 axios/fetch；
- * - zustand 用 `useAuthStore.setState` 直接塞状态；
+ * - zustand 用 `useAuthStore.setState` / `usePortalTabStore.setState` 直接塞状态；
  * - `next-themes` 显式 mock（子组件可能间接用到）；
  * - `useNavigate` 用 spy 替换，用于断言「未发生跳转」；
  * - 两个抽屉替身（T05）。
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { PortalPage } from '../portal-page';
 import * as platformApi from '@/lib/api/platform';
@@ -27,6 +33,7 @@ import * as tasksApi from '@/lib/api/tasks';
 import * as messagesApi from '@/lib/api/messages';
 import * as workflowApi from '@/lib/api/workflow';
 import { useAuthStore } from '@/stores/auth-store';
+import { usePortalTabStore } from '@/stores/portal-tab-store';
 
 const navigateSpy = vi.fn();
 
@@ -68,7 +75,7 @@ vi.mock('@/lib/api/workflow', () => ({
   fetchMyProcesses: vi.fn(),
 }));
 
-// 两抽屉替身（T05 集成）：本文件只验证「行点击 → 抽屉打开并带对 ID」的接线，
+// 两抽屉替身（T05 集成 + UI 精修轮的首页板抽屉）：本文件只验证「行点击 → 抽屉打开并带对 ID」的接线，
 // 抽屉内部（表单渲染 / 回复回显 / 三动作）由各自单测覆盖。
 vi.mock('@/features/portal/components/todo-detail-drawer', () => ({
   TodoDetailDrawer: ({ open, instanceId }: { open: boolean; instanceId: string | null }) =>
@@ -136,6 +143,9 @@ describe('PortalPage 三 Tab 容器', () => {
     vi.mocked(messagesApi.fetchInbox).mockResolvedValue(emptyPage);
     vi.mocked(messagesApi.fetchMessageStats).mockResolvedValue({ unread: 0, total: 0 });
     vi.mocked(workflowApi.fetchMyProcesses).mockResolvedValue(emptyPage);
+    // Tab 激活态是**模块级全局 store**（跨测试共享），必须逐例复位到默认「首页」，
+    // 否则上一例切到 message 会让下一例的「默认选中首页」断言假失败。
+    usePortalTabStore.setState({ activeTab: 'home' });
   });
 
   afterEach(() => {
@@ -148,6 +158,53 @@ describe('PortalPage 三 Tab 容器', () => {
     expect(await screen.findByRole('tab', { name: '首页' })).toBeTruthy();
     expect(screen.getByRole('tab', { name: '待办事项' })).toBeTruthy();
     expect(screen.getByRole('tab', { name: '消息中心' })).toBeTruthy();
+  });
+
+  it('三个 Tab 均为「图标 + 文字」卡片式风格（断言真实 svg，不只断文本）', async () => {
+    renderPage();
+    const home = await screen.findByRole('tab', { name: '首页' });
+    const todo = screen.getByRole('tab', { name: '待办事项' });
+    const msg = screen.getByRole('tab', { name: '消息中心' });
+
+    // lucide 渲染出的真实 <svg>（tagName 断言可防「用 div 假冒图标」的假绿）。
+    for (const [tab, testid] of [
+      [home, 'portal-tab-icon-home'],
+      [todo, 'portal-tab-icon-todo'],
+      [msg, 'portal-tab-icon-message'],
+    ] as const) {
+      const icon = tab.querySelector(`[data-testid="${testid}"]`);
+      expect(icon).toBeTruthy();
+      expect(icon!.tagName.toLowerCase()).toBe('svg');
+      // 图标必须与文字同色（继承 currentColor）→ 靠 text- 类而非固定 fill。
+      expect(icon!.getAttribute('fill')).toBe('none');
+      // tab 本身要带圆角/边框语义的 class（卡片式风格），且选中态靠 data-state驱动。
+      expect(tab.className).toContain('rounded-none');
+    }
+
+    // 关键：两态**都没有下边框**（`border-x border-t`）、`-mb-px` 挂在基类上（两态都有）
+    // ⇒ 两态盒高相同、切换时无上下跳动；同时选中态的 bg-card 下压 1px 盖住 bar 的 border-b。
+    // 这几条一旦被改回「未选中带下边框 / 只 active 带 -mb-px」，就会出现 2px 跳动。
+    expect(home.className).toContain('border-x');
+    expect(home.className).toContain('border-t');
+    expect(home.className).not.toContain('border-b-0');
+    expect(home.className).toContain('-mb-px');
+    expect(home.getAttribute('data-state')).toBe('active');
+    expect(todo.getAttribute('data-state')).toBe('inactive');
+    // 未选中态同样带 -mb-px 与 border-x/t（保证切过去时盒高/盒宽都不变）
+    expect(todo.className).toContain('-mb-px');
+    expect(todo.className).toContain('border-x');
+    expect(msg.className).toContain('-mb-px');
+
+    // TabsList 必须解除共享组件基类的 h-9 固定高（否则卡片会向上溢出 bar 顶边）。
+    const list = home.closest('[role="tablist"]');
+    expect(list).toBeTruthy();
+    expect(list!.className).toContain('h-auto');
+    expect(list!.className).not.toContain('h-9');
+
+    // tab 不可关闭：不渲染任何关闭按钮（×）。
+    for (const tab of [home, todo, msg]) {
+      expect(tab.querySelector('button')).toBeNull();
+    }
   });
 
   it('默认选中「首页」，首页内容与现状一致（欢迎语 + 工作台板块 + AppRail）', async () => {
@@ -277,5 +334,192 @@ describe('PortalPage 三 Tab 容器', () => {
     // 切 Tab 卸载上一面板 ⇒ 待办抽屉随之关闭（期望语义）。
     expect(screen.queryByTestId('todo-drawer')).toBeNull();
     expect(navigateSpy).not.toHaveBeenCalled();
+  });
+
+  // ---------------------------------------------------------------------
+  // UI 精修轮：Tab 激活态搬到全局 store —— 外部改动必须能驱动门户页
+  // （这是顶栏「打开消息中心」的桥接契约：layout 侧只写 store，门户侧必须即时响应）
+  // ---------------------------------------------------------------------
+
+  it('外部 setActiveTab("message") 驱动门户切到消息中心（首页卸载）', async () => {
+    renderPage();
+    await screen.findByText('你好，测试员');
+
+    // 模拟顶栏：navigate('/portal') + setActiveTab('message')。
+    act(() => {
+      usePortalTabStore.getState().setActiveTab('message');
+    });
+
+    expect(await screen.findByLabelText('消息关键词')).toBeTruthy();
+    expect(screen.queryByText('你好，测试员')).toBeNull();
+    expect(screen.getByRole('tab', { name: '消息中心' }).getAttribute('data-state')).toBe('active');
+  });
+
+  it('外部 setActiveTab("todo") 同样驱动门户切到待办事项（不只message 可桥接）', async () => {
+    renderPage();
+    await screen.findByText('你好，测试员');
+
+    act(() => {
+      usePortalTabStore.getState().setActiveTab('todo');
+    });
+
+    expect(await screen.findByLabelText('待办关键词')).toBeTruthy();
+    expect(screen.queryByText('你好，测试员')).toBeNull();
+  });
+
+  // ---------------------------------------------------------------------
+  // UI 精修轮：首页三板点行改开抽屉（取代路由跳转）
+  // ---------------------------------------------------------------------
+
+  /** 首页 TaskBoard 的待办 fixture：带 `wfInstanceId` → 点行应开抽屉。 */
+  function taskFixture(id: string, title: string, instanceId: number) {
+    return {
+      id,
+      tenantId: '1',
+      taskType: 'APPROVE',
+      bizType: 'PURCHASE_ORDER',
+      bizRefId: 'PO-001',
+      bizTitle: title,
+      targetEntity: null,
+      assigneeId: '700001',
+      assigneeName: '测试员',
+      status: 'PENDING',
+      priority: 2,
+      dueDate: null,
+      metadata: JSON.stringify({ wfInstanceId: instanceId }),
+      result: null,
+      read: false,
+      completedAt: null,
+      createdAt: '2026-10-08T10:00:00',
+    };
+  }
+
+  /** 首页 MessageBoard 的消息 fixture。 */
+  function messageFixture(id: string, title: string) {
+    return {
+      id,
+      tenantId: '1',
+      msgType: 'APPROVAL',
+      category: 'TASK',
+      title,
+      summary: '摘要',
+      senderId: '9',
+      senderName: '系统',
+      referenceTaskId: null,
+      receiverGroupType: 'SINGLE',
+      read: true,
+      readCount: 1,
+      totalCount: 1,
+      createdAt: '2026-10-08T10:00:00',
+      instanceId: null,
+      canReply: false,
+    };
+  }
+
+  it('首页 TaskBoard 点行 → TodoDetailDrawer 打开且 instanceId 为该行的流程实例', async () => {
+    vi.mocked(tasksApi.fetchMyTasks).mockResolvedValue({
+      page: 1,
+      size: 20,
+      total: 1,
+      list: [taskFixture('9001', '待办-甲', 128)],
+    });
+    renderPage();
+    const row = (await screen.findByText('待办-甲')).closest('button');
+    expect(row).toBeTruthy();
+    fireEvent.click(row!);
+
+    expect(await screen.findByTestId('todo-drawer')).toBeTruthy();
+    expect(screen.getByTestId('todo-drawer').getAttribute('data-instance')).toBe('128');
+    // 关键：点行不再触发路由跳转（取代原 navigate('/task/process/128')）
+    expect(navigateSpy).not.toHaveBeenCalled();
+  });
+
+  it('首页 TaskBoard 无关联流程的行 → 降级跳 /task/pending（不开空抽屉）', async () => {
+    vi.mocked(tasksApi.fetchMyTasks).mockResolvedValue({
+      page: 1,
+      size: 20,
+      total: 1,
+      // metadata 为 null ⇒ wfInstanceId(item) === null
+      list: [{ ...taskFixture('9002', '待办-无流程', 1), metadata: null }],
+    });
+    renderPage();
+    const row = (await screen.findByText('待办-无流程')).closest('button');
+    fireEvent.click(row!);
+
+    expect(navigateSpy).toHaveBeenCalledWith('/task/pending');
+    expect(screen.queryByTestId('todo-drawer')).toBeNull();
+  });
+
+  it('首页 MessageBoard 点第 2 条 → MessageDetailDrawer 打开且 messageId 是第 2 条的 id', async () => {
+    // 两条消息，点第2 条：抽屉必须携带第2条的 id（不是固定值、也不是第 1 条）。
+    vi.mocked(messagesApi.fetchInbox).mockResolvedValue({
+      page: 1,
+      size: 20,
+      total: 2,
+      list: [messageFixture('5001', '消息-甲'), messageFixture('5002', '消息-乙')],
+    });
+    renderPage();
+    const row = (await screen.findByText('消息-乙')).closest('button');
+    expect(row).toBeTruthy();
+    fireEvent.click(row!);
+
+    expect(await screen.findByTestId('message-drawer')).toBeTruthy();
+    expect(screen.getByTestId('message-drawer').getAttribute('data-message')).toBe('5002');
+    // 点消息不再统一跳收件箱
+    expect(navigateSpy).not.toHaveBeenCalled();
+  });
+
+  it('首页 ProcessBoard 点行 → TodoDetailDrawer 打开且 instanceId 为该流程实例 id', async () => {
+    vi.mocked(workflowApi.fetchMyProcesses).mockResolvedValue({
+      page: 1,
+      size: 20,
+      total: 1,
+      list: [
+        {
+          id: '128',
+          definitionCode: 'PURCHASE_APPROVAL',
+          startedFormCode: 'PUR_FORM',
+          businessType: 'PURCHASE_ORDER',
+          businessId: 'PO-001',
+          status: 'RUNNING',
+          initiatorId: '100',
+          initiatorName: '发起人',
+          currentNodeCode: 'approve',
+          currentNodeName: null,
+          progress: '50%',
+          postProcessStatus: 'WAITING',
+          postRetryCount: 0,
+          createdAt: '2026-10-08T10:00:00',
+          completedAt: null,
+        },
+      ],
+    });
+    renderPage();
+    // 行文本是 `${businessType} / ${businessId}`
+    const row = (await screen.findByText('PURCHASE_ORDER / PO-001')).closest('button');
+    expect(row).toBeTruthy();
+    fireEvent.click(row!);
+
+    expect(await screen.findByTestId('todo-drawer')).toBeTruthy();
+    expect(screen.getByTestId('todo-drawer').getAttribute('data-instance')).toBe('128');
+    expect(navigateSpy).not.toHaveBeenCalled();
+  });
+
+  it('首页三板「查看全部」跳转保持原样（pending / inbox / my-sent）', async () => {
+    renderPage();
+    await screen.findByText('你好，测试员');
+
+    // 三块板各一个「查看全部」；逐个点，断言仍是原列表页路由。
+    const all = await screen.findAllByText(/^查看全部$/);
+    expect(all.length).toBe(3);
+    fireEvent.click(all[0]);
+    expect(navigateSpy).toHaveBeenCalledWith('/task/pending');
+    fireEvent.click(all[1]);
+    expect(navigateSpy).toHaveBeenCalledWith('/task/inbox');
+    fireEvent.click(all[2]);
+    expect(navigateSpy).toHaveBeenCalledWith('/task/my-sent');
+    // 「查看全部」不该开抽屉
+    expect(screen.queryByTestId('todo-drawer')).toBeNull();
+    expect(screen.queryByTestId('message-drawer')).toBeNull();
   });
 });

@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { ChevronRight, FileClock } from 'lucide-react';
 import { fetchMyProcesses, type WfInstance } from '@/lib/api/workflow';
 import { cn } from '@/lib/utils';
+import { TodoDetailDrawer } from './todo-detail-drawer';
 
 interface ProcessBoardProps {
   tenantId: string;
@@ -16,12 +17,25 @@ const STATUS: Record<string, { text: string; cls: string }> = {
   SUSPENDED: { text: '已挂起', cls: 'bg-warning/10 text-warning' },
 };
 
-/** 工作台主体：我发起的流程。 */
+/**
+ * 工作台主体：我发起的流程。
+ *
+ * <p><b>点行的去向（UI 精修轮）</b>：点某条 → 就地打开 {@link TodoDetailDrawer}，
+ * `instanceId` 直接取该条的 `id`（本板的行本身就是流程实例 `WfInstance`），
+ * 不再跳 `/task/process/{id}` 整页。抽屉临时态**由本组件自持**（`useState`，
+ * 关闭即销毁、不进 URL），与门户其它板自持约定一致。
+ *
+ * <p>右上角「查看全部」仍是跳转 `/task/my-sent`（本轮不变）。
+ */
 export function ProcessBoard({ tenantId, userId }: ProcessBoardProps) {
   const navigate = useNavigate();
   const [items, setItems] = useState<WfInstance[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  // 抽屉临时态：与门户待办 Tab 同约定（不入 URL，关闭即销毁）。
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [drawerInstanceId, setDrawerInstanceId] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     if (!userId) return;
@@ -40,6 +54,18 @@ export function ProcessBoard({ tenantId, userId }: ProcessBoardProps) {
   useEffect(() => {
     void load();
   }, [load]);
+
+  /** 点某条流程：开抽屉，行本身即流程实例（id 直接用）。 */
+  function open(item: WfInstance) {
+    setDrawerInstanceId(String(item.id));
+    setDrawerOpen(true);
+  }
+
+  /** 抽屉内动作成功：关抽屉 + 刷新本板列表。 */
+  function handleDrawerDone() {
+    setDrawerOpen(false);
+    void load();
+  }
 
   return (
     <section className="rounded-lg border bg-card shadow-card">
@@ -76,7 +102,7 @@ export function ProcessBoard({ tenantId, userId }: ProcessBoardProps) {
               <li key={item.id}>
                 <button
                   type="button"
-                  onClick={() => navigate(`/task/process/${item.id}`)}
+                  onClick={() => open(item)}
                   className="flex w-full items-center gap-3 px-4 py-2.5 text-left transition hover:bg-muted/60"
                 >
                   <span className="min-w-0 flex-1 truncate text-[13px]">
@@ -90,6 +116,18 @@ export function ProcessBoard({ tenantId, userId }: ProcessBoardProps) {
           })}
         </ul>
       )}
+
+      {/*
+        右侧划入抽屉（UI 精修轮新增）。`Sheet` 是独立浮层层（portal），与首页
+        `overflow-auto` 容器互不影响；抽屉内容体是唯一滚动容器，内嵌
+        ProcessShell(embedded) 不再加 overflow-auto —— 单层滚动红线保持不变。
+      */}
+      <TodoDetailDrawer
+        open={drawerOpen}
+        onOpenChange={setDrawerOpen}
+        instanceId={drawerInstanceId}
+        onDone={handleDrawerDone}
+      />
     </section>
   );
 }
