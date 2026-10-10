@@ -192,7 +192,7 @@ describe('WorkflowDefinitionPage 发布 / 取消发布', () => {
     expect(screen.queryByText('取消发布')).toBeNull();
   });
 
-  it('分类下拉树多选后 fetchDefinitions 收到 categoryIds 数组并回到第 1 页', async () => {
+  it('勾选分类后点「查询」才请求；选父分类时 categoryIds 含子孙', async () => {
     vi.mocked(wfCategoryApi.fetchWfCategoryTree).mockResolvedValue([
       {
         id: '1',
@@ -203,7 +203,21 @@ describe('WorkflowDefinitionPage 发布 / 取消发布', () => {
         description: null,
         sortOrder: 0,
         config: null,
-        children: null,
+        children: [
+          {
+            id: '2',
+            tenantId: '1',
+            parentId: 1,
+            code: 'SUB',
+            name: '子分类',
+            description: null,
+            sortOrder: 0,
+            config: null,
+            children: null,
+            createdAt: '',
+            updatedAt: '',
+          },
+        ],
         createdAt: '',
         updatedAt: '',
       },
@@ -222,6 +236,19 @@ describe('WorkflowDefinitionPage 发布 / 取消发布', () => {
         createdAt: '',
         updatedAt: '',
       },
+      {
+        id: '2',
+        tenantId: '1',
+        parentId: 1,
+        code: 'SUB',
+        name: '子分类',
+        description: null,
+        sortOrder: 0,
+        config: null,
+        children: null,
+        createdAt: '',
+        updatedAt: '',
+      },
     ]);
     vi.mocked(workflowApi.fetchDefinitions).mockResolvedValue({
       page: 1,
@@ -231,16 +258,28 @@ describe('WorkflowDefinitionPage 发布 / 取消发布', () => {
     });
     renderPage();
 
-    // 等首次加载完成（无分类过滤 → 第四参 undefined）
+    // 等首次加载完成（无过滤 → 第四/五参 undefined）
     await screen.findByText('采购审批流程');
-    expect(workflowApi.fetchDefinitions).toHaveBeenCalledWith('1', 1, 20, undefined);
+    expect(workflowApi.fetchDefinitions).toHaveBeenCalledWith('1', 1, 20, undefined, undefined);
+    const callsAfterLoad = vi.mocked(workflowApi.fetchDefinitions).mock.calls.length;
 
-    // 打开分类下拉树，勾选「流程分类」（id=1）
+    // 勾选父分类后尚未点查询 → 不应新增请求
     fireEvent.click(screen.getByRole('button', { name: '全部分类' }));
-    fireEvent.pointerDown(screen.getByRole('button', { name: '流程分类' }), { button: 0 });
+    fireEvent.pointerDown(await screen.findByRole('button', { name: '流程分类' }), { button: 0 });
+    expect(vi.mocked(workflowApi.fetchDefinitions).mock.calls.length).toBe(callsAfterLoad);
+
+    // 关掉分类 Popover（modal 打开时外层按钮被 aria-hidden，getByRole 找不到「查询」）
+    fireEvent.keyDown(document, { key: 'Escape' });
+    fireEvent.click(await screen.findByRole('button', { name: '查询' }));
 
     await waitFor(() => {
-      expect(workflowApi.fetchDefinitions).toHaveBeenCalledWith('1', 1, 20, [1]);
+      const last = vi.mocked(workflowApi.fetchDefinitions).mock.calls.at(-1);
+      expect(last?.[0]).toBe('1');
+      expect(last?.[1]).toBe(1);
+      expect(last?.[2]).toBe(20);
+      expect(last?.[3]).toEqual(expect.arrayContaining([1, 2]));
+      expect(last?.[3]).toHaveLength(2);
+      expect(last?.[4]).toBeUndefined();
     });
   });
 });

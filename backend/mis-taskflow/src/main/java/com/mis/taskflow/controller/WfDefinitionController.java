@@ -72,7 +72,8 @@ public class WfDefinitionController {
     public Result<PageResult<WfDefinitionDTO>> list(@RequestParam Long tenantId,
                                                      @RequestParam(defaultValue = "1") int page,
                                                      @RequestParam(defaultValue = "20") int size,
-                                                     @RequestParam(required = false) List<Long> categoryIds) {
-        return Result.ok(definitionService.list(tenantId, page, size, categoryIds));
+                                                     @RequestParam(required = false) List<Long> categoryIds,
+                                                     @RequestParam(required = false) String keyword) {
+        return Result.ok(definitionService.list(tenantId, page, size, categoryIds, keyword));
     }
 }

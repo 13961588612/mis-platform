@@ -304,23 +304,32 @@ public class TaskflowWebClient extends AbstractDownstreamClient {
     }
 
     public PageResult<WfDefinitionDTO> workflowDefinitions(Long tenantId, int page, int size) {
-        return workflowDefinitions(tenantId, page, size, java.util.List.of());
+        return workflowDefinitions(tenantId, page, size, java.util.List.of(), null);
     }
 
     /**
-     * 流程定义列表（分页，可选 categoryIds 多值分类过滤）。
+     * 流程定义列表（分页，可选 categoryIds 多值分类过滤 / keyword 名称或编码模糊）。
      *
      * <p>{@code categoryIds} 非空时以<b>单值逗号串</b>传参 {@code categoryIds=1,2}，
      * 下游 mis-taskflow 的 {@code @RequestParam List<Long> categoryIds} 自动拆分。
+     * {@code keyword} 非空时透传给下游做流程名称或编码包含匹配。
      */
     public PageResult<WfDefinitionDTO> workflowDefinitions(Long tenantId, int page, int size,
                                                            java.util.List<Long> categoryIds) {
+        return workflowDefinitions(tenantId, page, size, categoryIds, null);
+    }
+
+    public PageResult<WfDefinitionDTO> workflowDefinitions(Long tenantId, int page, int size,
+                                                           java.util.List<Long> categoryIds, String keyword) {
         UriComponentsBuilder b = UriComponentsBuilder.fromPath("/internal/v1/workflow/definitions")
                 .queryParam("tenantId", tenantId)
                 .queryParam("page", page)
                 .queryParam("size", size);
         if (categoryIds != null && !categoryIds.isEmpty()) {
             b.queryParam("categoryIds", String.join(",", categoryIds.stream().map(String::valueOf).toList()));
+        }
+        if (keyword != null && !keyword.isBlank()) {
+            b.queryParam("keyword", keyword.trim());
         }
         return block(client().get().uri(b.toUriString()).retrieve().bodyToMono(WF_DEFINITION_PAGE));
     }

@@ -22,6 +22,8 @@ import org.springframework.util.StringUtils;
 import java.time.LocalDateTime;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Locale;
+import java.util.stream.Stream;
 
 /**
  * 流程定义管理（P5）：创建 / 更新（草稿）/ 发布 / 查询。
@@ -156,27 +158,50 @@ public class WfDefinitionService {
     }
 
     /**
-     * 分页列表（可选 categoryIds 过滤，决策 B：按流程分类多选筛选）。
+     * 分页列表（可选 categoryIds / keyword 过滤）。
      *
-     * <p>{@code categoryIds} 为空 / null 时走原分页路径；非空时按软引用分类集合筛选
-     * （{@code category_id IN (...)}，集合 IN 的 OR，精确匹配不含子分类），
-     * 因仓储返回的是 List 而非 Page，这里用单次取全量 + 简单分页包装（分类内数据量可控）。
+     * <p>{@code categoryIds} 为空 / null 时不按分类筛；非空时按软引用分类集合筛选
+     * （{@code category_id IN (...)}，集合 IN 的 OR）。调用方若需「选父含子集」应先展开子孙 id。
+     * {@code keyword} 非空时按流程名称或编码做大小写不敏感的包含匹配（模糊搜索）。
+     * 无分类且无关键词时走仓储 Page；否则取候选全量后内存过滤再分页（数据量可控）。
      */
     @Transactional(readOnly = true)
     public PageResult<WfDefinitionDTO> list(Long tenantId, int page, int size, List<Long> categoryIds) {
-        if (categoryIds == null || categoryIds.isEmpty()) {
+        return list(tenantId, page, size, categoryIds, null);
+    }
+
+    @Transactional(readOnly = true)
+    public PageResult<WfDefinitionDTO> list(Long tenantId, int page, int size,
+                                            List<Long> categoryIds, String keyword) {
+        boolean hasCategory = categoryIds != null && !categoryIds.isEmpty();
+        String kw = StringUtils.hasText(keyword) ? keyword.trim().toLowerCase(Locale.ROOT) : null;
+        if (!hasCategory && kw == null) {
             var pageable = PageRequest.of(Math.max(page - 1, 0), Math.min(Math.max(size, 1), 200));
             var p = definitionRepository.findByTenantIdAndDeleted(tenantId, 0, pageable);
             return PageResult.of(page, pageable.getPageSize(), p.getTotalElements(),
                     p.getContent().stream().map(this::toDto).toList());
         }
-        List<WfDefinitionDTO> all = definitionRepository
-                .findByTenantIdAndCategoryIdInAndDeleted(tenantId, categoryIds, 0).stream()
-                .map(this::toDto).toList();
-        int from = Math.max((page - 1) * size, 0);
-        int to = Math.min(from + size, all.size());
+        Stream<WfDefinition> stream = hasCategory
+                ? definitionRepository.findByTenantIdAndCategoryIdInAndDeleted(tenantId, categoryIds, 0).stream()
+                : definitionRepository.findByTenantIdAndDeletedOrderByUpdatedAtDesc(tenantId, 0).stream();
+        if (kw != null) {
+            final String needle = kw;
+            stream = stream.filter(d -> matchesNameOrCode(d, needle));
+        }
+        List<WfDefinitionDTO> all = stream.map(this::toDto).toList();
+        int safeSize = Math.min(Math.max(size, 1), 200);
+        int from = Math.max((page - 1) * safeSize, 0);
+        int to = Math.min(from + safeSize, all.size());
         List<WfDefinitionDTO> content = from >= all.size() ? List.of() : all.subList(from, to);
-        return PageResult.of(page, size, (long) all.size(), content);
+        return PageResult.of(page, safeSize, (long) all.size(), content);
+    }
+
+    /** 名称或编码包含关键词（已小写）。 */
+    private static boolean matchesNameOrCode(WfDefinition d, String needle) {
+        if (d.getName() != null && d.getName().toLowerCase(Locale.ROOT).contains(needle)) {
+            return true;
+        }
+        return d.getCode() != null && d.getCode().toLowerCase(Locale.ROOT).contains(needle);
     }
 
     // ------------------------------------------------------------------

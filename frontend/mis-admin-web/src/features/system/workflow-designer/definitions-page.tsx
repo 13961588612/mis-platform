@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Undo2, FilePlus2, GitBranch, Layers, RefreshCw, Workflow, FolderTree, Pencil, Trash2 } from 'lucide-react';
+import { Undo2, FilePlus2, GitBranch, Layers, RefreshCw, Search, Workflow, FolderTree, Pencil, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { PermissionGate } from '@/components/auth/permission-gate';
 import { PageHeader } from '@/components/common/page-header';
@@ -80,6 +80,24 @@ function collectWfSubtreeIds(nodes: WfCategoryItem[], rootId: string): Set<strin
   return result;
 }
 
+/**
+ * 将勾选的分类展开为「自身 + 全部子孙」id 列表（选父含子集）。
+ * 树中找不到某 id 时仍保留该 id，避免误丢过滤条件。
+ */
+function expandCategoryIdsWithDescendants(tree: WfCategoryItem[], selectedIds: number[]): number[] {
+  if (selectedIds.length === 0) return [];
+  const result = new Set<number>();
+  for (const id of selectedIds) {
+    const subtree = collectWfSubtreeIds(tree, String(id));
+    if (subtree.size === 0) {
+      result.add(id);
+    } else {
+      for (const sid of subtree) result.add(Number(sid));
+    }
+  }
+  return [...result];
+}
+
 interface FlatCat {
   id: string;
   name: string;
@@ -99,7 +117,7 @@ function flattenWfCategories(nodes: WfCategoryItem[], depth = 0, acc: FlatCat[] 
  *
  * <p>两个 Tab：
  * <ul>
- *   <li><b>流程定义</b>：列出自租户流程定义（含表单白名单与节点数），支持按分类筛选、发布与进入编排。</li>
+ *   <li><b>流程定义</b>：列出自租户流程定义（含表单白名单与节点数），支持按分类/名称或编码筛选（点查询才请求；选父含子集）、发布与进入编排。</li>
  *   <li><b>分类管理</b>：维护 `wf_category` 邻接树（新增/编辑/删除），删除被引用的分类会被拦截。</li>
  * </ul>
  */
@@ -113,7 +131,12 @@ export function WorkflowDefinitionPage() {
   const [acting, setActing] = useState<string | null>(null);
   const [page, setPage] = useState(1);
   const [total, setTotal] = useState(0);
-  const [categoryIds, setCategoryIds] = useState<number[]>([]);
+  /** 筛选草稿（改条件不立刻请求；点「查询」后写入 applied*）。 */
+  const [filterCategoryIds, setFilterCategoryIds] = useState<number[]>([]);
+  const [filterKeyword, setFilterKeyword] = useState('');
+  /** 已生效的查询条件（含展开后的分类 id）。 */
+  const [appliedCategoryIds, setAppliedCategoryIds] = useState<number[]>([]);
+  const [appliedKeyword, setAppliedKeyword] = useState('');
   const [createOpen, setCreateOpen] = useState(false);
   const [designer, setDesigner] = useState<DesignerState>(CLOSED);
 
@@ -137,7 +160,8 @@ export function WorkflowDefinitionPage() {
         TENANT_ID,
         page,
         DEF_SIZE,
-        categoryIds.length > 0 ? categoryIds : undefined,
+        appliedCategoryIds.length > 0 ? appliedCategoryIds : undefined,
+        appliedKeyword || undefined,
       );
       setItems(r.list);
       setTotal(r.total);
@@ -146,7 +170,14 @@ export function WorkflowDefinitionPage() {
     } finally {
       setLoading(false);
     }
-  }, [TENANT_ID, page, categoryIds]);
+  }, [page, appliedCategoryIds, appliedKeyword]);
+
+  /** 点「查询」：展开选中分类的子孙后生效，并回到第 1 页。 */
+  const onSearch = useCallback(() => {
+    setAppliedCategoryIds(expandCategoryIdsWithDescendants(categoryTree, filterCategoryIds));
+    setAppliedKeyword(filterKeyword.trim());
+    setPage(1);
+  }, [categoryTree, filterCategoryIds, filterKeyword]);
 
   const loadCategories = useCallback(async () => {
     setCatLoading(true);
@@ -307,17 +338,32 @@ export function WorkflowDefinitionPage() {
 
       {activeTab === 'definitions' ? (
         <>
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="flex flex-nowrap items-center gap-2">
             <CategoryTreeSelect
               tree={categoryTree}
-              value={categoryIds.map(String)}
-              onChange={(ids) => {
-                setCategoryIds(ids.map(Number));
-                setPage(1);
-              }}
+              value={filterCategoryIds.map(String)}
+              onChange={(ids) => setFilterCategoryIds(ids.map(Number))}
               placeholder="全部分类"
+              triggerClassName="w-56"
             />
-            <Button size="sm" onClick={() => setCreateOpen(true)}>
+            <div className="relative shrink-0">
+              <Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                value={filterKeyword}
+                onChange={(e) => setFilterKeyword(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') onSearch();
+                }}
+                placeholder="流程名称或编码"
+                className="h-9 w-64 pl-8"
+                aria-label="流程名称或编码"
+              />
+            </div>
+            <Button size="sm" variant="secondary" className="shrink-0" onClick={onSearch}>
+              <Search className="mr-1 h-3.5 w-3.5" />
+              查询
+            </Button>
+            <Button size="sm" className="ml-auto shrink-0" onClick={() => setCreateOpen(true)}>
               <FilePlus2 className="mr-1 h-3.5 w-3.5" />
               新建流程
             </Button>

@@ -83,6 +83,24 @@ function collectSubtreeIds(nodes: FormCategoryItem[], rootId: string): Set<strin
   return result;
 }
 
+/**
+ * 将勾选的分类展开为「自身 + 全部子孙」id 列表（选父含子集）。
+ * 树中找不到某 id 时仍保留该 id，避免误丢过滤条件。
+ */
+function expandCategoryIdsWithDescendants(tree: FormCategoryItem[], selectedIds: number[]): number[] {
+  if (selectedIds.length === 0) return [];
+  const result = new Set<number>();
+  for (const id of selectedIds) {
+    const subtree = collectSubtreeIds(tree, String(id));
+    if (subtree.size === 0) {
+      result.add(id);
+    } else {
+      for (const sid of subtree) result.add(Number(sid));
+    }
+  }
+  return [...result];
+}
+
 function flattenCategories(nodes: FormCategoryItem[], depth = 0, acc: FlatCategory[] = []): FlatCategory[] {
   for (const n of nodes) {
     acc.push({ id: n.id, name: n.name, depth });
@@ -105,7 +123,8 @@ function buildParentOptions(nodes: FormCategoryItem[], excludeId?: string | null
  * <p>分类已独立成表 `form_category`，是表单的<b>属性</b>（`form_definition.categoryId`），
  * 不再是父级。本页两个 Tab：
  * <ul>
- *   <li><b>表单管理</b>（默认）：右侧表格列全部表单，支持状态/分类/关键字筛选、
+ *   <li><b>表单管理</b>（默认）：右侧表格列全部表单，支持状态/分类/关键字筛选
+ *       （点查询才请求；选父含子集；名称/编码本地模糊）、
  *       分类列解析（null→「未分类」）、编码标红（未关联前端组件者）、新增/编辑/删除。</li>
  *   <li><b>分类管理</b>：左侧分类树（`form_category`）+ 右侧选中节点的新增子分类/编辑/删除。</li>
  * </ul>
@@ -120,9 +139,14 @@ export function FormDefinitionManagePage() {
   const [formList, setFormList] = useState<FormDefinitionItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [statusFilter, setStatusFilter] = useState<string>('all');
-  const [categoryIds, setCategoryIds] = useState<number[]>([]);
-  const [keyword, setKeyword] = useState('');
+  /** 筛选草稿（改条件不立刻请求；点「查询」后写入 applied*）。 */
+  const [filterStatus, setFilterStatus] = useState<string>('all');
+  const [filterCategoryIds, setFilterCategoryIds] = useState<number[]>([]);
+  const [filterKeyword, setFilterKeyword] = useState('');
+  /** 已生效的查询条件（分类为展开后的自身+子孙 id）。 */
+  const [appliedStatus, setAppliedStatus] = useState<string>('all');
+  const [appliedCategoryIds, setAppliedCategoryIds] = useState<number[]>([]);
+  const [appliedKeyword, setAppliedKeyword] = useState('');
   const [deleteTarget, setDeleteTarget] = useState<FormDefinitionItem | null>(null);
   const [deleting, setDeleting] = useState(false);
 
@@ -148,8 +172,8 @@ export function FormDefinitionManagePage() {
     try {
       const forms = await fetchFormDefinitions(
         TENANT_ID,
-        statusFilter === 'all' ? undefined : statusFilter,
-        categoryIds.length > 0 ? categoryIds : undefined,
+        appliedStatus === 'all' ? undefined : appliedStatus,
+        appliedCategoryIds.length > 0 ? appliedCategoryIds : undefined,
       );
       setFormList(forms);
     } catch (e) {
@@ -157,7 +181,7 @@ export function FormDefinitionManagePage() {
     } finally {
       setLoading(false);
     }
-  }, [statusFilter, categoryIds]);
+  }, [appliedStatus, appliedCategoryIds]);
 
   const loadCategories = useCallback(async () => {
     setCatLoading(true);
@@ -184,6 +208,13 @@ export function FormDefinitionManagePage() {
     void loadCategories();
   }, [loadCategories]);
 
+  /** 点「查询」：展开选中分类的子孙后生效（关键词本地过滤，与列表一并刷新口径）。 */
+  const onSearch = useCallback(() => {
+    setAppliedStatus(filterStatus);
+    setAppliedCategoryIds(expandCategoryIdsWithDescendants(categoryTree, filterCategoryIds));
+    setAppliedKeyword(filterKeyword.trim());
+  }, [categoryTree, filterCategoryIds, filterKeyword, filterStatus]);
+
   // 分类 id → name，用于表单列表「分类」列解析（id 是 number，name map 用 string 归一化）。
   const categoryNameMap = useMemo(() => {
     const map = new Map<string, string>();
@@ -192,12 +223,12 @@ export function FormDefinitionManagePage() {
   }, [categoryList]);
 
   const visibleForms = useMemo(() => {
-    const kw = keyword.trim().toLowerCase();
+    const kw = appliedKeyword.toLowerCase();
     return formList.filter((item) => {
       if (kw && !item.name.toLowerCase().includes(kw) && !item.code.toLowerCase().includes(kw)) return false;
       return true;
     });
-  }, [formList, keyword]);
+  }, [formList, appliedKeyword]);
 
   // 表单对话框的「分类」下拉：来自分类树（扁平 + 缩进）。
   const formCategoryOptions: CategorySelectOption[] = useMemo(
@@ -330,9 +361,9 @@ export function FormDefinitionManagePage() {
 
       {activeTab === 'form' ? (
         <div className="flex min-h-0 flex-1 flex-col gap-3">
-          <div className="flex flex-wrap items-center gap-2">
-            <Select value={statusFilter} onValueChange={setStatusFilter}>
-              <SelectTrigger className="w-32">
+          <div className="flex flex-nowrap items-center gap-2">
+            <Select value={filterStatus} onValueChange={setFilterStatus}>
+              <SelectTrigger className="w-32 shrink-0">
                 <SelectValue placeholder="状态" />
               </SelectTrigger>
               <SelectContent>
@@ -343,20 +374,29 @@ export function FormDefinitionManagePage() {
             </Select>
             <CategoryTreeSelect
               tree={categoryTree}
-              value={categoryIds.map(String)}
-              onChange={(ids) => setCategoryIds(ids.map(Number))}
+              value={filterCategoryIds.map(String)}
+              onChange={(ids) => setFilterCategoryIds(ids.map(Number))}
               placeholder="全部分类"
+              triggerClassName="w-56"
             />
-            <div className="relative">
+            <div className="relative shrink-0">
               <Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
               <Input
-                value={keyword}
-                onChange={(e) => setKeyword(e.target.value)}
+                value={filterKeyword}
+                onChange={(e) => setFilterKeyword(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') onSearch();
+                }}
                 placeholder="搜索名称或编码"
                 className="h-9 w-64 pl-8"
+                aria-label="名称或编码"
               />
             </div>
-            <Button size="sm" onClick={openFormCreate}>
+            <Button size="sm" variant="secondary" className="shrink-0" onClick={onSearch}>
+              <Search className="mr-1 h-3.5 w-3.5" />
+              查询
+            </Button>
+            <Button size="sm" className="ml-auto shrink-0" onClick={openFormCreate}>
               <FilePlus2 className="mr-1 h-3.5 w-3.5" />
               新增表单
             </Button>

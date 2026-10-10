@@ -195,7 +195,7 @@ describe('FormDefinitionManagePage', () => {
     expect(formApi.createFormDefinition).not.toHaveBeenCalled();
   });
 
-  it('分类下拉树多选后 fetchFormDefinitions 收到 categoryIds 数组（精确匹配）', async () => {
+  it('勾选分类后点「查询」才请求；选父分类时 categoryIds 含子孙', async () => {
     render(
       <MemoryRouter>
         <FormDefinitionManagePage />
@@ -204,15 +204,24 @@ describe('FormDefinitionManagePage', () => {
     // 等初始加载完成：第一次调用无分类过滤（第三参 undefined）
     await screen.findByText('采购申请单');
     expect(formApi.fetchFormDefinitions).toHaveBeenCalledWith('1', undefined, undefined);
+    const callsAfterLoad = vi.mocked(formApi.fetchFormDefinitions).mock.calls.length;
 
-    // 打开分类下拉树，勾选根分类（id=1）
+    // 打开分类下拉树，勾选根分类（id=1，含子分类 id=2）后尚未点查询 → 不应新增请求
     fireEvent.click(screen.getByRole('button', { name: '全部分类' }));
-    fireEvent.pointerDown(screen.getByRole('button', { name: '根分类' }), { button: 0 });
+    fireEvent.pointerDown(await screen.findByRole('button', { name: '根分类' }), { button: 0 });
+    expect(vi.mocked(formApi.fetchFormDefinitions).mock.calls.length).toBe(callsAfterLoad);
+
+    // 关掉分类 Popover（modal 打开时外层按钮被 aria-hidden）
+    fireEvent.keyDown(document, { key: 'Escape' });
+    fireEvent.click(await screen.findByRole('button', { name: '查询' }));
 
     await waitFor(() => {
-      expect(formApi.fetchFormDefinitions).toHaveBeenCalledWith('1', undefined, [1]);
+      const last = vi.mocked(formApi.fetchFormDefinitions).mock.calls.at(-1);
+      expect(last?.[0]).toBe('1');
+      expect(last?.[1]).toBeUndefined();
+      expect(last?.[2]).toEqual(expect.arrayContaining([1, 2]));
+      expect(last?.[2]).toHaveLength(2);
     });
-    // 表格仍正常渲染
     expect(await screen.findByText('采购申请单')).toBeTruthy();
   });
 });
