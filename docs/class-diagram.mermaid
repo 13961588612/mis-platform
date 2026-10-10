@@ -1,86 +1,242 @@
 classDiagram
-    class KbCategoryAdmin {
+    %% ===== 既有表单注册（决策 B：复用 form_definition + kind 字段） =====
+    class FormDefinition {
         +Long id
-        +Long categoryId
-        +String subjectType
-        +Long subjectId
-        +Long createdBy
-        +Instant createdAt
-        +Instant updatedAt
-    }
-    class KbCategoryAdminRepository {
-        +findByCategoryId(Long) List~KbCategoryAdmin~
-        +existsByCategoryIdAndSubjectTypeAndSubjectId(Long,String,Long) boolean
-        +findBySubjectTypeAndSubjectId(String,Long) List~KbCategoryAdmin~
-        +deleteByCategoryId(Long) void
-    }
-    class NodeAdminResolver {
-        -KbCategoryAdminRepository adminRepository
-        -KbCategoryRepository categoryRepository
-        -KbSubjectClient subjectClient
-        -Set~String~ globalAdminRoleCodes
-        +hasNodeManage(Long userId, Long nodeId) boolean
-        +resolveManageableCategoryIds(Long userId) Set~Long~
-        +canMove(Long userId, Long nodeId, Long newParentId) boolean
-        +hasLibraryManage(Long userId, Long libraryId) boolean
-        +assertNodeManage(Long userId, Long nodeId) void
-        -ancestorChain(Long nodeId) List~Long~
-        -subjectsOf(Long userId) SubjectSet
-    }
-    class KbCategoryAdminService {
-        +list(Long categoryId) List~KbCategoryAdminVO~
-        +grant(Long categoryId, KbCategoryAdminCreateRequest) KbCategoryAdminVO
-        +revoke(Long adminId) void
-    }
-    class KbCategoryService {
-        +listAll() List~KbCategoryVO~
-        +create(KbCategoryCreateRequest) KbCategoryVO
-        +update(Long, KbCategoryUpdateRequest) KbCategoryVO
-        +delete(Long) void
-        +move(Long nodeId, Long newParentId) KbCategoryVO
-    }
-    class KbLibraryService {
-        +hasLibraryManage(Long userId, Long libraryId) boolean
-    }
-    class KbDocumentService {
-        +upload(...) KbDocumentUploadResponse
-        +setEnabled(Long, boolean) void
-        +delete(Long) void
-        +reparseAll(Long) KbReparseAllResult
-    }
-    class KbVisibilityService {
-        +resolveVisibleLibraryIds(Long, Long) List~Long~
-        +hasPermission(Long, Long, String) boolean
-    }
-    class KbSubjectClient {
-        +fetchUserRoleIds(Long) List~Long~
-        +fetchUserDeptIds(Long) List~Long~
-        +fetchUserRoleCodes(Long) List~String~  <<新增>>
-    }
-    class KbAcl {
-        +Long libraryId
-        +String subjectType
-        +Long subjectId
-        +String action
-    }
-    class KbCategory {
-        +Long id
-        +Long parentId
+        +Long tenantId
+        +Long parentId = 0
+        +String code
         +String name
-        +Integer enabled
-        +Integer sort
+        +String description
+        +String status  %% ENABLED / DISABLED
+        +Integer sortOrder
+        +String config  %% JSONB
+        +Integer deleted
+        +Long createdBy
+        +LocalDateTime createdAt
+        +LocalDateTime updatedAt
+        %% —— 新增 ——
+        +String kind    %% CATEGORY / FORM（V131 新增列，默认 FORM）
     }
 
-    KbCategoryAdmin --> KbCategory : categoryId FK(CASCADE)
-    KbCategoryAdminRepository --> KbCategoryAdmin
-    NodeAdminResolver --> KbCategoryAdminRepository
-    NodeAdminResolver --> KbCategoryRepository
-    NodeAdminResolver --> KbSubjectClient
-    NodeAdminResolver ..> KbCategoryAdmin : 祖先链查询
-    KbCategoryAdminService --> KbCategoryAdminRepository
-    KbCategoryAdminService --> NodeAdminResolver : 校验 grant 权限
-    KbCategoryService --> NodeAdminResolver : 管辖校验/move
-    KbCategoryService --> KbCategoryAdminRepository : delete 级联说明
-    KbLibraryService --> NodeAdminResolver : hasLibraryManage 合成
-    KbDocumentService --> KbLibraryService : 写操作管辖校验(hasLibraryManage)
-    KbVisibilityService --> KbAcl : 读语义不变(不依赖 NodeAdminResolver)
+    class FormDefinitionVO {
+        +String id
+        +String tenantId
+        +Long parentId
+        +String code
+        +String name
+        +String description
+        +String status
+        +Integer sortOrder
+        +String config
+        +List~FormDefinitionVO~ children
+        +LocalDateTime createdAt
+        +LocalDateTime updatedAt
+        %% —— 新增 ——
+        +String kind
+    }
+
+    class UpsertFormDefinitionRequest {
+        +Long parentId
+        +String code      %% FORM: 必须 ∈ 前端已注册组件；CATEGORY: 文件夹 key
+        +String name
+        +String description
+        +String status
+        +Integer sortOrder
+        +String config
+        %% —— 新增 ——
+        +String kind     %% CATEGORY / FORM，必填
+    }
+
+    class FormDefinitionService {
+        +list(tenantId) List~FormDefinitionVO~
+        +listEnabled(tenantId) List~FormDefinitionVO~
+        +tree(tenantId) List~FormDefinitionVO~
+        +get(id, tenantId) FormDefinitionVO
+        +create(tenantId, operatorId, req) Long
+        +update(id, tenantId, req) void
+        +delete(id, tenantId) void
+        +assertEnabled(tenantId, formCode) void
+        %% —— 新增 ——
+        -validateKindAndCode(req) void
+    }
+
+    class FormDefinitionRepository {
+        +findByTenantIdAndCode(tenantId, code) Optional
+        +findByIdAndTenantIdAndDeleted(id, tenantId, deleted) Optional
+        +findByTenantIdAndParentIdAndDeleted(...) List
+        +findByTenantIdAndDeletedOrderByParentIdAscSortOrderAscIdAsc(...) List
+        +findByTenantIdAndStatusAndDeleted(...) List
+        +findAliveByTenantIdAndCodes(tenantId, codes) List
+        +countByTenantIdAndParentIdAndDeleted(...) long
+        %% —— 新增 ——
+        +findByTenantIdAndKindAndDeleted(tenantId, kind, deleted) List
+        +countByTenantIdAndKindAndParentIdAndDeleted(...) long
+    }
+
+    %% ===== 新增：流程分类（决策 B：独立 wf_category 邻接树） =====
+    class WfCategory {
+        +Long id
+        +Long tenantId
+        +Long parentId = 0
+        +String code       %% 文件夹 key
+        +String name
+        +String description
+        +Integer sortOrder
+        +String config
+        +Integer deleted
+        +Long createdBy
+        +LocalDateTime createdAt
+        +LocalDateTime updatedAt
+    }
+
+    class WfCategoryVO {
+        +String id
+        +String tenantId
+        +Long parentId
+        +String code
+        +String name
+        +String description
+        +Integer sortOrder
+        +String config
+        +List~WfCategoryVO~ children
+        +LocalDateTime createdAt
+        +LocalDateTime updatedAt
+    }
+
+    class UpsertWfCategoryRequest {
+        +Long parentId
+        +String code
+        +String name
+        +String description
+        +Integer sortOrder
+        +String config
+    }
+
+    class WfCategoryService {
+        +tree(tenantId) List~WfCategoryVO~
+        +list(tenantId) List~WfCategoryVO~
+        +get(id, tenantId) WfCategoryVO
+        +create(tenantId, operatorId, req) Long
+        +update(id, tenantId, req) void
+        +delete(id, tenantId) void   %% 含子节点 / 已关联 wf_definition 时拒绝
+    }
+
+    class WfCategoryRepository {
+        +findByIdAndTenantIdAndDeleted(id, tenantId, deleted) Optional
+        +findByTenantIdAndDeletedOrderByParentIdAscSortOrderAscIdAsc(...) List
+        +countByTenantIdAndParentIdAndDeleted(...) long
+        +countByTenantIdAndCategoryIdAndDeleted(...) long  %% wf_definition 引用计数
+    }
+
+    %% ===== 既有流程定义（决策 B：加 category_id，旧 category 字段保留废弃） =====
+    class WfDefinition {
+        +Long id
+        +Long tenantId
+        +String code
+        +String name
+        +String category = 'APPROVAL'   %% 旧字符串字段，废弃但保留（不删列）
+        +String description
+        +Integer version
+        +String status
+        +String[] supportedFormCodes
+        +String formSchema
+        +String config
+        +Integer deleted
+        +Long createdBy
+        +LocalDateTime createdAt
+        +LocalDateTime updatedAt
+        %% —— 新增 ——
+        +Long categoryId   %% 指向 wf_category.id，可空（旧数据回填前为 NULL）
+    }
+
+    class WfDefinitionDTO {
+        +String id
+        +String tenantId
+        +String code
+        +String name
+        +String category        %% 旧字段，保留
+        +String description
+        +Integer version
+        +String status
+        +List~String~ supportedFormCodes
+        +String formSchema
+        +String config
+        +List~WfNodeDTO~ nodes
+        +List~WfEdgeDTO~ edges
+        +LocalDateTime createdAt
+        +LocalDateTime updatedAt
+        %% —— 新增 ——
+        +Long categoryId
+    }
+
+    class CreateDefinitionRequest {
+        +String code
+        +String name
+        +String category        %% 旧字段入参，保留
+        +String description
+        +List~String~ supportedFormCodes
+        +String config
+        +List~WfNodeDTO~ nodes
+        +List~WfEdgeDTO~ edges
+        %% —— 新增 ——
+        +Long categoryId
+    }
+
+    class WfDefinitionService {
+        +create(tenantId, operatorId, req) Long
+        +update(id, tenantId, req) void
+        +activate(id, tenantId) void
+        +deactivate(id, tenantId) void
+        +get(id, tenantId) WfDefinitionDTO
+        +getByCode(tenantId, code) WfDefinitionDTO
+        +list(tenantId, page, size) PageResult
+    }
+
+    class WfDefinitionRepository {
+        +findByIdAndDeleted(id, deleted) Optional
+        +findFirstByTenantIdAndCodeAndStatusAndDeletedOrderByVersionDesc(...) Optional
+        +findByTenantIdAndDeletedOrderByUpdatedAtDesc(...) List
+        +findByTenantIdAndDeleted(tenantId, deleted, pageable) Page
+        +countBySupportedFormCode(tenantId, code) long
+        %% —— 新增 ——
+        +findByTenantIdAndCategoryIdAndDeleted(tenantId, categoryId, deleted) List
+    }
+
+    %% ===== 前端组件绑定（决策 A） =====
+    class FormLoaders {
+        <<module: form-loaders.ts>>
+        +hasFormLoader(code) bool
+        +listFormLoaderCodes() string[]
+        +loadFormEntry(code) Promise~bool~
+    }
+
+    %% ===== 关系 =====
+    FormDefinition "1" -- "0..*" FormDefinition : parentId 自引用（kind 区分 CATEGORY/FORM）
+    FormDefinitionService ..> FormDefinitionRepository
+    FormDefinitionService ..> FormDefinitionVO : 组装
+    UpsertFormDefinitionRequest ..> FormDefinitionService : 入参
+
+    WfCategory "1" -- "0..*" WfCategory : parentId 自引用（邻接树）
+    WfCategoryService ..> WfCategoryRepository
+    WfCategoryService ..> WfCategoryVO : 组装
+    UpsertWfCategoryRequest ..> WfCategoryService : 入参
+
+    WfDefinition "*" --> "0..1" WfCategory : categoryId 指向（无外键软引用亦可）
+    WfDefinitionService ..> WfDefinitionRepository
+    WfDefinitionService ..> FormDefinitionService : 白名单校验
+    WfDefinitionService ..> WfDefinitionDTO : 组装
+    CreateDefinitionRequest ..> WfDefinitionService : 入参
+
+    FormLoaders ..> FormDefinition : 提供可选 code 清单（仅 FORM）
+
+    %% ===== BFF 透传（TaskflowWebClient → mis-taskflow /internal/v1/...） =====
+    class TaskflowWebClient {
+        <<BFF Feign/WebClient>>
+        +formDefinitionTree(tenantId) List~FormDefinitionVO~
+        +formDefinitions(tenantId, status) List~FormDefinitionVO~
+        +wfCategories(tenantId) List~WfCategoryVO~
+        +wfCategoryTree(tenantId) List~WfCategoryVO~
+        +createWfCategory(tenantId, operatorId, body) Long
+        +updateWfCategory(id, tenantId, body) void
+        +deleteWfCategory(id, tenantId) void
+    }
