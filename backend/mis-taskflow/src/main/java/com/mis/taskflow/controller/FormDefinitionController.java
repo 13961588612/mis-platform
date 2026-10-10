@@ -33,16 +33,16 @@ public class FormDefinitionController {
     }
 
     @GetMapping("/tree")
-    public Result<List<FormDefinitionVO>> tree(@RequestParam Long tenantId) {
-        return Result.ok(formService.tree(tenantId));
+    public Result<List<FormDefinitionVO>> tree(@RequestParam Long tenantId,
+                                               @RequestParam(required = false) String kind) {
+        return Result.ok(formService.tree(tenantId, kind));
     }
 
     @GetMapping
     public Result<List<FormDefinitionVO>> list(@RequestParam Long tenantId,
-                                               @RequestParam(required = false) String status) {
-        return Result.ok("ENABLED".equalsIgnoreCase(status)
-                ? formService.listEnabled(tenantId)
-                : formService.list(tenantId));
+                                               @RequestParam(required = false) String status,
+                                               @RequestParam(required = false) String kind) {
+        return Result.ok(formService.list(tenantId, status, kind));
     }
 
     @GetMapping("/{id}")
