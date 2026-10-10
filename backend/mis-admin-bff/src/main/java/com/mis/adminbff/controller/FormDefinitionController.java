@@ -34,14 +34,16 @@ public class FormDefinitionController {
     }
 
     @GetMapping("/tree")
-    public Result<List<FormDefinitionVO>> tree(@RequestParam(required = false) Long tenantId) {
-        return Result.ok(taskflowWebClient.formDefinitionTree(TaskflowIdentity.tenantId(tenantId)));
+    public Result<List<FormDefinitionVO>> tree(@RequestParam(required = false) Long tenantId,
+                                              @RequestParam(required = false) String kind) {
+        return Result.ok(taskflowWebClient.formDefinitionTree(TaskflowIdentity.tenantId(tenantId), kind));
     }
 
     @GetMapping
     public Result<List<FormDefinitionVO>> list(@RequestParam(required = false) Long tenantId,
-                                               @RequestParam(required = false) String status) {
-        return Result.ok(taskflowWebClient.formDefinitions(TaskflowIdentity.tenantId(tenantId), status));
+                                               @RequestParam(required = false) String status,
+                                               @RequestParam(required = false) String kind) {
+        return Result.ok(taskflowWebClient.formDefinitions(TaskflowIdentity.tenantId(tenantId), status, kind));
     }
 
     @GetMapping("/{id}")

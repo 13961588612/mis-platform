@@ -7,6 +7,7 @@ import java.util.List;
  * 业务表单注册项（透传 mis-taskflow 的 FormDefinitionVO）。
  *
  * @param children 子节点，仅树接口填充
+ * @param kind     CATEGORY / FORM（V131 新增，透传）
  */
 public record FormDefinitionVO(
         String id,
@@ -20,5 +21,6 @@ public record FormDefinitionVO(
         String config,
         List<FormDefinitionVO> children,
         LocalDateTime createdAt,
-        LocalDateTime updatedAt) {
+        LocalDateTime updatedAt,
+        String kind) {
 }

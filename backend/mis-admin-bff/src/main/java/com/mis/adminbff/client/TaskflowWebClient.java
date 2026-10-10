@@ -13,6 +13,7 @@ import com.mis.adminbff.client.model.ProcessDetailVO;
 import com.mis.adminbff.client.model.TaskStatsVO;
 import com.mis.adminbff.client.model.TaskVO;
 import com.mis.adminbff.client.model.WfDefinitionDTO;
+import com.mis.adminbff.client.model.WfCategoryVO;
 import com.mis.adminbff.client.model.WfInstanceVO;
 import com.mis.adminbff.config.BffProperties;
 import com.mis.common.core.result.PageResult;
@@ -64,6 +65,10 @@ public class TaskflowWebClient extends AbstractDownstreamClient {
     private static final ParameterizedTypeReference<Result<WfDefinitionDTO>> WF_DEFINITION =
             new ParameterizedTypeReference<>() {};
     private static final ParameterizedTypeReference<Result<PageResult<WfDefinitionDTO>>> WF_DEFINITION_PAGE =
+            new ParameterizedTypeReference<>() {};
+    private static final ParameterizedTypeReference<Result<java.util.List<WfCategoryVO>>> WF_CATEGORY_LIST =
+            new ParameterizedTypeReference<>() {};
+    private static final ParameterizedTypeReference<Result<WfCategoryVO>> WF_CATEGORY_ONE =
             new ParameterizedTypeReference<>() {};
     private static final ParameterizedTypeReference<Result<ProcessDetailVO>> WF_PROCESS_DETAIL =
             new ParameterizedTypeReference<>() {};
@@ -324,21 +329,78 @@ public class TaskflowWebClient extends AbstractDownstreamClient {
     }
 
     // ------------------------------------------------------------------
+    // 流程分类（wf_category，决策 B：独立邻接树）
+    // ------------------------------------------------------------------
+
+    public java.util.List<WfCategoryVO> wfCategoryTree(Long tenantId) {
+        String uri = UriComponentsBuilder.fromPath("/internal/v1/workflow/categories/tree")
+                .queryParam("tenantId", tenantId).toUriString();
+        return block(client().get().uri(uri).retrieve().bodyToMono(WF_CATEGORY_LIST));
+    }
+
+    public java.util.List<WfCategoryVO> wfCategories(Long tenantId) {
+        String uri = UriComponentsBuilder.fromPath("/internal/v1/workflow/categories")
+                .queryParam("tenantId", tenantId).toUriString();
+        return block(client().get().uri(uri).retrieve().bodyToMono(WF_CATEGORY_LIST));
+    }
+
+    public WfCategoryVO getWfCategory(Long id, Long tenantId) {
+        String uri = UriComponentsBuilder.fromPath("/internal/v1/workflow/categories/{id}")
+                .queryParam("tenantId", tenantId).buildAndExpand(id).toUriString();
+        return block(client().get().uri(uri).retrieve().bodyToMono(WF_CATEGORY_ONE));
+    }
+
+    public Long createWfCategory(Long tenantId, Long operatorId, Map<String, Object> body) {
+        String uri = UriComponentsBuilder.fromPath("/internal/v1/workflow/categories")
+                .queryParam("tenantId", tenantId)
+                .queryParamIfPresent("operatorId", Optional.ofNullable(operatorId))
+                .toUriString();
+        return block(client().post().uri(uri).contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(body).retrieve().bodyToMono(LONG_RESULT));
+    }
+
+    public void updateWfCategory(Long id, Long tenantId, Map<String, Object> body) {
+        String uri = UriComponentsBuilder.fromPath("/internal/v1/workflow/categories/{id}")
+                .queryParam("tenantId", tenantId).buildAndExpand(id).toUriString();
+        blockVoid(client().put().uri(uri).contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(body).retrieve().bodyToMono(VOID));
+    }
+
+    public void deleteWfCategory(Long id, Long tenantId) {
+        String uri = UriComponentsBuilder.fromPath("/internal/v1/workflow/categories/{id}")
+                .queryParam("tenantId", tenantId).buildAndExpand(id).toUriString();
+        blockVoid(client().delete().uri(uri).retrieve().bodyToMono(VOID));
+    }
+
+    // ------------------------------------------------------------------
     // 业务表单注册（form_definition）
     // ------------------------------------------------------------------
 
     public java.util.List<FormDefinitionVO> formDefinitionTree(Long tenantId) {
-        String uri = UriComponentsBuilder.fromPath("/internal/v1/form-definitions/tree")
-                .queryParam("tenantId", tenantId).toUriString();
-        return block(client().get().uri(uri).retrieve().bodyToMono(FORM_DEF_TREE));
+        return formDefinitionTree(tenantId, null);
+    }
+
+    public java.util.List<FormDefinitionVO> formDefinitionTree(Long tenantId, String kind) {
+        UriComponentsBuilder b = UriComponentsBuilder.fromPath("/internal/v1/form-definitions/tree")
+                .queryParam("tenantId", tenantId);
+        if (kind != null && !kind.isBlank()) {
+            b.queryParam("kind", kind);
+        }
+        return block(client().get().uri(b.toUriString()).retrieve().bodyToMono(FORM_DEF_TREE));
     }
 
     public java.util.List<FormDefinitionVO> formDefinitions(Long tenantId, String status) {
-        String uri = UriComponentsBuilder.fromPath("/internal/v1/form-definitions")
+        return formDefinitions(tenantId, status, null);
+    }
+
+    public java.util.List<FormDefinitionVO> formDefinitions(Long tenantId, String status, String kind) {
+        UriComponentsBuilder b = UriComponentsBuilder.fromPath("/internal/v1/form-definitions")
                 .queryParam("tenantId", tenantId)
-                .queryParamIfPresent("status", Optional.ofNullable(status))
-                .toUriString();
-        return block(client().get().uri(uri).retrieve().bodyToMono(FORM_DEF_LIST));
+                .queryParamIfPresent("status", Optional.ofNullable(status));
+        if (kind != null && !kind.isBlank()) {
+            b.queryParam("kind", kind);
+        }
+        return block(client().get().uri(b.toUriString()).retrieve().bodyToMono(FORM_DEF_LIST));
     }
 
     public FormDefinitionVO formDefinition(Long id, Long tenantId) {
