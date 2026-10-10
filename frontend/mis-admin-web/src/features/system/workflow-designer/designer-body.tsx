@@ -31,7 +31,7 @@ const TENANT_ID = '1';
 const DEFAULT_FLOW_META: FlowMeta = {
   code: '',
   name: '',
-  category: 'APPROVAL',
+  categoryId: null,
   description: '',
   supportedFormCodes: '',
 };
@@ -170,7 +170,7 @@ export function DesignerBody({
         setFlowMeta({
           code: d.code,
           name: d.name,
-          category: d.category || 'APPROVAL',
+          categoryId: d.categoryId ?? null,
           description: d.description ?? '',
           supportedFormCodes: (d.supportedFormCodes ?? []).join(','),
         });
@@ -236,7 +236,7 @@ export function DesignerBody({
       const payload = {
         code: flowMeta.code.trim(),
         name: flowMeta.name.trim(),
-        category: flowMeta.category.trim() || 'APPROVAL',
+        categoryId: flowMeta.categoryId,
         description: flowMeta.description,
         supportedFormCodes: flowMeta.supportedFormCodes
           .split(',')

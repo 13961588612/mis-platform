@@ -50,6 +50,7 @@ const existing = {
   code: 'PUR_APPROVAL',
   name: '采购审批流程',
   category: 'APPROVAL',
+  categoryId: null,
   description: null,
   version: 1,
   status: 'DRAFT',

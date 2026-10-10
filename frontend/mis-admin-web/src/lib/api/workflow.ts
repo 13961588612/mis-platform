@@ -36,7 +36,10 @@ export interface WfDefinition {
   tenantId: string;
   code: string;
   name: string;
+  /** 旧分类字符串（V132 起废弃，保留仅作 `categoryId` 为 null 时的回退展示）。 */
   category: string;
+  /** 新分类 id（关联 `wf_category.id` 软引用，V132 新增）。null = 未分类。 */
+  categoryId: number | null;
   description: string | null;
   version: number;
   status: string;
@@ -114,10 +117,19 @@ export interface ProcessDetail {
   formData: string | null;
 }
 
-export async function fetchDefinitions(tenantId: string, page = 1, size = 20): Promise<PageResult<WfDefinition>> {
-  const res = await api.get<ApiResult<PageResult<WfDefinition>>>('/workflow/definitions', {
-    params: { tenantId, page, size },
-  });
+/**
+ * 流程定义列表（分页）。`categoryId` 透传给后端按分类过滤（V132 新增）。
+ * `categoryId` 为 null / undefined 时不带该参数，返回全部分类。
+ */
+export async function fetchDefinitions(
+  tenantId: string,
+  page = 1,
+  size = 20,
+  categoryId?: number | null,
+): Promise<PageResult<WfDefinition>> {
+  const params: Record<string, unknown> = { tenantId, page, size };
+  if (categoryId != null) params.categoryId = categoryId;
+  const res = await api.get<ApiResult<PageResult<WfDefinition>>>('/workflow/definitions', { params });
   return unwrap(res, '获取流程定义失败');
 }
 
@@ -132,7 +144,8 @@ export async function activateDefinition(id: string, tenantId: string): Promise<
  * 取消发布：ACTIVE → DRAFT（后端非 ACTIVE 时幂等返回）。
  *
  * ⚠️ 端点 `POST /api/v1/workflow/definitions/{id}/deactivate` 由 V128 登记为 `sys_api` 95050
- * 并绑到菜单 95007（permission `workflow:definition:edit`）——没绑就会被 deny-unmapped 拦成 403。
+ * 并绑到菜单 95006（permission `workflow:definition:edit`）——V132 把 95007 的菜单/授权合并进
+ * 95006 后，该端点改挂 95006；没绑就会被 deny-unmapped 拦成 403。
  */
 export async function deactivateDefinition(id: string, tenantId: string): Promise<void> {
   const res = await api.post<ApiResult<null>>(`/workflow/definitions/${id}/deactivate`, null, {

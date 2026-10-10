@@ -27,13 +27,13 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { missingFormCodes, useFormCatalog } from './form-catalog';
-import { WF_CATEGORIES } from './property-panel';
+import { useWfCategories } from './wf-category-catalog';
 import { findCodeConflict, validateDefinitionCode } from './save-error';
 
 export interface DefinitionDraft {
   code: string;
   name: string;
-  category: string;
+  categoryId: number | null;
   description: string;
   supportedFormCodes: string[];
 }
@@ -62,7 +62,7 @@ export function DefinitionDialog({
 }: DefinitionDialogProps) {
   const [name, setName] = useState('');
   const [code, setCode] = useState('');
-  const [category, setCategory] = useState<string>(WF_CATEGORIES[0]);
+  const [categoryId, setCategoryId] = useState<number | null>(null);
   const [description, setDescription] = useState('');
   const [formCodes, setFormCodes] = useState<string[]>([]);
   const [query, setQuery] = useState('');
@@ -70,6 +70,7 @@ export function DefinitionDialog({
   const [checking, setChecking] = useState(false);
 
   const { options, loading, notice } = useFormCatalog(tenantId);
+  const { options: categoryOptions, loading: catLoading, error: catError } = useWfCategories(tenantId);
   const missing = missingFormCodes(options, formCodes);
   const q = query.trim().toLowerCase();
   const visible = useMemo(
@@ -83,7 +84,7 @@ export function DefinitionDialog({
   function reset() {
     setName('');
     setCode('');
-    setCategory(WF_CATEGORIES[0]);
+    setCategoryId(null);
     setDescription('');
     setFormCodes([]);
     setErrors({});
@@ -124,7 +125,7 @@ export function DefinitionDialog({
     onSubmit({
       code: trimmedCode,
       name: trimmedName,
-      category,
+      categoryId,
       description: description.trim(),
       supportedFormCodes: formCodes,
     });
@@ -173,17 +174,20 @@ export function DefinitionDialog({
           <div>
             <Label className="mb-1 block text-[12px] text-muted-foreground">分类</Label>
             <select
-              value={category}
-              onChange={(e) => setCategory(e.target.value)}
+              value={categoryId == null ? '' : String(categoryId)}
+              onChange={(e) => setCategoryId(e.target.value === '' ? null : Number(e.target.value))}
+              disabled={catLoading}
               className="h-8 w-full rounded-md border border-input bg-background px-2 text-sm"
               aria-label="分类"
             >
-              {WF_CATEGORIES.map((c) => (
-                <option key={c} value={c}>
-                  {c}
+              <option value="">未分类</option>
+              {categoryOptions.map((c) => (
+                <option key={c.id} value={String(c.id)}>
+                  {c.name}
                 </option>
               ))}
             </select>
+            {catError ? <p className="mt-1 text-[11px] text-warning">{catError}</p> : null}
           </div>
 
           {/*

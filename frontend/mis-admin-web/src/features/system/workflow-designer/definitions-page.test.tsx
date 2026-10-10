@@ -15,6 +15,7 @@ import { MemoryRouter, useLocation } from 'react-router-dom';
 import { WorkflowDefinitionPage } from './definitions-page';
 import * as workflowApi from '@/lib/api/workflow';
 import * as formApi from '@/lib/api/form-definition';
+import * as wfCategoryApi from '@/lib/api/wf-category';
 import api from '@/lib/api/client';
 import { useAuthStore } from '@/stores/auth-store';
 
@@ -43,6 +44,14 @@ vi.mock('@/lib/api/form-definition', () => ({
   FORM_STATUS_DISABLED: 'DISABLED',
 }));
 
+vi.mock('@/lib/api/wf-category', () => ({
+  fetchWfCategoryTree: vi.fn(),
+  fetchWfCategories: vi.fn(),
+  createWfCategory: vi.fn(),
+  updateWfCategory: vi.fn(),
+  deleteWfCategory: vi.fn(),
+}));
+
 vi.mock('@/lib/api/client', () => ({
   default: { get: vi.fn(), post: vi.fn(), put: vi.fn() },
 }));
@@ -54,6 +63,7 @@ function def(overrides: Partial<workflowApi.WfDefinition> = {}): workflowApi.WfD
     code: 'PUR_APPROVAL',
     name: '采购审批流程',
     category: 'APPROVAL',
+    categoryId: null,
     description: null,
     version: 1,
     status: 'DRAFT',
@@ -91,6 +101,8 @@ describe('WorkflowDefinitionPage 发布 / 取消发布', () => {
     vi.mocked(workflowApi.deactivateDefinition).mockResolvedValue(undefined);
     vi.mocked(formApi.fetchEnabledFormDefinitions).mockResolvedValue([]);
     vi.mocked(workflowApi.fetchDefinition).mockRejectedValue(new Error('n/a'));
+    vi.mocked(wfCategoryApi.fetchWfCategoryTree).mockResolvedValue([]);
+    vi.mocked(wfCategoryApi.fetchWfCategories).mockResolvedValue([]);
     vi.mocked(api.post).mockResolvedValue({ data: { code: 0, message: 'ok', data: null } });
     vi.mocked(api.put).mockResolvedValue({ data: { code: 0, message: 'ok', data: null } });
   });

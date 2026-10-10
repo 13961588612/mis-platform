@@ -15,15 +15,17 @@ import {
   useFormCatalog,
   type FormOption,
 } from './form-catalog';
+import { useWfCategories } from './wf-category-catalog';
 import type { WfFlowNode } from './types';
 
-/** 分类枚举：方案 §4.4 字段 3，收敛为枚举（原来是自由文本）。 */
-export const WF_CATEGORIES = ['APPROVAL', 'NOTICE', 'TASK'] as const;
-
+/**
+ * 流程分类：V132 起独立成 `wf_category` 邻接树，设计器只持有 `categoryId`（软引用）。
+ * 旧 `WF_CATEGORIES` 枚举已废弃——分类由后端 `wf_category` 动态下发，不再硬编码。
+ */
 export interface FlowMeta {
   code: string;
   name: string;
-  category: string;
+  categoryId: number | null;
   description: string;
   supportedFormCodes: string;
 }
@@ -43,6 +45,7 @@ export function PropertyPanel({
   onNodeChange,
   onDeleteNode,
 }: PropertyPanelProps) {
+  const { options: categoryOptions, loading: catLoading, error: catError } = useWfCategories('1');
   if (!selected) {
     return (
       <div className="flex h-full w-[280px] shrink-0 flex-col overflow-auto border-l bg-card p-3">
@@ -56,17 +59,28 @@ export function PropertyPanel({
           </Field>
           <Field label="分类">
             <select
-              value={flowMeta.category}
-              onChange={(e) => onFlowMetaChange({ ...flowMeta, category: e.target.value })}
+              aria-label="分类"
+              value={flowMeta.categoryId == null ? '' : String(flowMeta.categoryId)}
+              onChange={(e) =>
+                onFlowMetaChange({
+                  ...flowMeta,
+                  categoryId: e.target.value === '' ? null : Number(e.target.value),
+                })
+              }
+              disabled={catLoading}
               className="h-8 w-full rounded-md border border-input bg-background px-2 text-sm"
             >
-              {WF_CATEGORIES.map((c) => (
-                <option key={c} value={c}>
-                  {c}
+              <option value="">未分类</option>
+              {categoryOptions.map((c) => (
+                <option key={c.id} value={String(c.id)}>
+                  {c.name}
                 </option>
               ))}
             </select>
           </Field>
+          {catError ? (
+            <p className="text-[11px] text-warning">{catError}</p>
+          ) : null}
           <Field label="说明">
             <Input value={flowMeta.description} onChange={(e) => onFlowMetaChange({ ...flowMeta, description: e.target.value })} className="h-8" />
           </Field>

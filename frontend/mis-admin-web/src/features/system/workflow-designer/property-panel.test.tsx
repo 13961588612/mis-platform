@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 /**
- * PropertyPanel 表单白名单（T4.6）+ 分类枚举（§4.4 字段 3）单测。
+ * PropertyPanel 表单白名单（T4.6）+ 分类 wf_category 下拉（T09）单测。
  *
  * 覆盖：
  * 1. 选项来自后端「已启用 ∧ 前端已实现」交集，不再是自由文本框
@@ -8,11 +8,13 @@
  * 3. 后端有但前端没实现的 code 不出现在候选里
  * 4. 已选中但未注册的 code 标红保留，不静默丢弃
  * 5. 勾选后回传的是逗号串（与后端 `CreateDefinitionRequest.supportedFormCodes` 对齐）
+ * 6. 分类是 wf_category 动态下拉（不再是 APPROVAL/NOTICE/TASK 硬编码枚举）
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { PropertyPanel, type FlowMeta } from './property-panel';
 import * as formApi from '@/lib/api/form-definition';
+import * as wfCategoryApi from '@/lib/api/wf-category';
 import { __setFormLoadersForTest } from '@/features/biz/forms/forms/form-loaders';
 
 vi.mock('@/lib/api/form-definition', () => ({
@@ -22,10 +24,44 @@ vi.mock('@/lib/api/form-definition', () => ({
   FORM_STATUS_DISABLED: 'DISABLED',
 }));
 
+vi.mock('@/lib/api/wf-category', () => ({
+  fetchWfCategories: vi.fn(),
+  fetchWfCategoryTree: vi.fn(),
+}));
+
+const CATEGORIES = [
+  {
+    id: '990001',
+    tenantId: '1',
+    parentId: 0,
+    code: 'APPROVAL',
+    name: '审批类',
+    description: null,
+    sortOrder: 0,
+    config: null,
+    children: null,
+    createdAt: '',
+    updatedAt: '',
+  },
+  {
+    id: '990002',
+    tenantId: '1',
+    parentId: 0,
+    code: 'NOTICE',
+    name: '通知类',
+    description: null,
+    sortOrder: 1,
+    config: null,
+    children: null,
+    createdAt: '',
+    updatedAt: '',
+  },
+];
+
 const meta: FlowMeta = {
   code: 'PUR_APPROVAL',
   name: '采购审批',
-  category: 'APPROVAL',
+  categoryId: null,
   description: '',
   supportedFormCodes: '',
 };
@@ -70,6 +106,7 @@ describe('PropertyPanel 表单白名单', () => {
         children: null,
         createdAt: null,
         updatedAt: null,
+        kind: 'FORM',
       },
       {
         id: '960011',
@@ -84,8 +121,10 @@ describe('PropertyPanel 表单白名单', () => {
         children: null,
         createdAt: null,
         updatedAt: null,
+        kind: 'FORM',
       },
     ]);
+    vi.mocked(wfCategoryApi.fetchWfCategories).mockResolvedValue(CATEGORIES);
   });
 
   afterEach(() => {
@@ -97,7 +136,6 @@ describe('PropertyPanel 表单白名单', () => {
     renderPanel();
 
     await waitFor(() => expect(screen.getByTestId('multi-select-trigger')).toBeTruthy());
-    // 自由文本框已从白名单字段上消失（流程编码/名称/说明仍是 Input）
     expect(screen.queryByPlaceholderText('PUR_FORM, PUR_EMERGENCY_FORM')).toBeNull();
   });
 
@@ -118,7 +156,6 @@ describe('PropertyPanel 表单白名单', () => {
     await waitFor(() => expect(screen.getByTestId('multi-select-trigger')).toBeTruthy());
     fireEvent.click(screen.getByTestId('multi-select-trigger'));
 
-    // 不白屏：仍能选到前端已实现的 PUR_FORM
     expect(screen.getByText('PUR_FORM（PUR_FORM）')).toBeTruthy();
     expect(screen.getByText(/后端表单清单不可用/)).toBeTruthy();
   });
@@ -145,11 +182,15 @@ describe('PropertyPanel 表单白名单', () => {
     );
   });
 
-  it('分类收敛为枚举，不再是自由文本', async () => {
+  it('分类是 wf_category 动态下拉（不再是硬编码枚举）', async () => {
     renderPanel();
 
-    // `Field` 的 <Label> 没有 htmlFor，无法用 getByLabelText 关联，按 role 取
-    const select = screen.getAllByRole('combobox')[0] as HTMLSelectElement;
-    expect(Array.from(select.options).map((o) => o.value)).toEqual(['APPROVAL', 'NOTICE', 'TASK']);
+    const select = (await screen.findByLabelText('分类')) as HTMLSelectElement;
+    expect(select.tagName).toBe('SELECT');
+    await waitFor(() => expect(screen.getByRole('option', { name: '审批类' })).toBeTruthy());
+    expect(screen.getByRole('option', { name: '通知类' })).toBeTruthy();
+    // 选择「审批类」→ FlowMeta.categoryId 反映为 990001
+    fireEvent.change(select, { target: { value: '990001' } });
+    expect(screen.getByText('审批类')).toBeTruthy();
   });
 });

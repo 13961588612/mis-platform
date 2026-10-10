@@ -1,19 +1,20 @@
 // @vitest-environment jsdom
 /**
- * DefinitionDialog 单测（T4.4）。
+ * DefinitionDialog 单测（T4.4 + T09 categoryId 下拉）：
  *
  * 覆盖：
- * 1. 四个必填字段齐全才能提交，回调带 trim 后的值
+ * 1. 四个必填字段齐全才能提交，回调带 trim 后的值（categoryId 取代原 category 枚举）
  * 2. 编码格式非法被拒（小写 / 数字开头 / 特殊字符）
  * 3. 表单未选 / 选了未注册项被拒（formCode 已注册校验）
  * 4. 编码重复给出「编码 "XXX" 已存在」友好提示
- * 5. 分类是枚举
+ * 5. 分类是 wf_category 下拉（不再是 APPROVAL/NOTICE/TASK 枚举），提交带 categoryId
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { DefinitionDialog } from './definition-dialog';
 import * as formApi from '@/lib/api/form-definition';
 import * as workflowApi from '@/lib/api/workflow';
+import * as wfCategoryApi from '@/lib/api/wf-category';
 import { __setFormLoadersForTest } from '@/features/biz/forms/forms/form-loaders';
 
 vi.mock('@/lib/api/form-definition', () => ({
@@ -26,6 +27,40 @@ vi.mock('@/lib/api/form-definition', () => ({
 vi.mock('@/lib/api/workflow', () => ({
   fetchDefinitions: vi.fn(),
 }));
+
+vi.mock('@/lib/api/wf-category', () => ({
+  fetchWfCategories: vi.fn(),
+  fetchWfCategoryTree: vi.fn(),
+}));
+
+const CATEGORIES = [
+  {
+    id: '990001',
+    tenantId: '1',
+    parentId: 0,
+    code: 'APPROVAL',
+    name: '审批类',
+    description: null,
+    sortOrder: 0,
+    config: null,
+    children: null,
+    createdAt: '',
+    updatedAt: '',
+  },
+  {
+    id: '990002',
+    tenantId: '1',
+    parentId: 0,
+    code: 'NOTICE',
+    name: '通知类',
+    description: null,
+    sortOrder: 1,
+    config: null,
+    children: null,
+    createdAt: '',
+    updatedAt: '',
+  },
+];
 
 function renderDialog(onSubmit = vi.fn()) {
   render(<DefinitionDialog open onOpenChange={vi.fn()} onSubmit={onSubmit} />);
@@ -60,9 +95,11 @@ describe('DefinitionDialog', () => {
         children: null,
         createdAt: null,
         updatedAt: null,
+        kind: 'FORM',
       },
     ]);
     vi.mocked(workflowApi.fetchDefinitions).mockResolvedValue({ page: 1, size: 100, total: 0, list: [] });
+    vi.mocked(wfCategoryApi.fetchWfCategories).mockResolvedValue(CATEGORIES);
   });
 
   afterEach(() => {
@@ -70,7 +107,7 @@ describe('DefinitionDialog', () => {
     vi.clearAllMocks();
   });
 
-  it('四字段齐全后提交，回调带 trim 后的值', async () => {
+  it('四字段齐全后提交，回调带 trim 后的值（categoryId 取代 category）', async () => {
     const onSubmit = renderDialog();
     fill('流程名称', '  采购审批流程  ');
     fill('流程编码', '  PUR_APPROVAL  ');
@@ -82,7 +119,7 @@ describe('DefinitionDialog', () => {
       expect(onSubmit).toHaveBeenCalledWith({
         code: 'PUR_APPROVAL',
         name: '采购审批流程',
-        category: 'APPROVAL',
+        categoryId: null,
         description: '',
         supportedFormCodes: ['PUR_FORM'],
       }),
@@ -124,6 +161,7 @@ describe('DefinitionDialog', () => {
           code: 'PUR_APPROVAL',
           name: '已存在的流程',
           category: 'APPROVAL',
+          categoryId: 990001,
           description: null,
           version: 1,
           status: 'DRAFT',
@@ -148,9 +186,24 @@ describe('DefinitionDialog', () => {
     expect(onSubmit).not.toHaveBeenCalled();
   });
 
-  it('分类是枚举而非自由文本', () => {
-    renderDialog();
-    const select = screen.getByLabelText('分类') as HTMLSelectElement;
-    expect(Array.from(select.options).map((o) => o.value)).toEqual(['APPROVAL', 'NOTICE', 'TASK']);
+  it('分类是 wf_category 下拉，选项来自后端分类，提交带 categoryId', async () => {
+    const onSubmit = renderDialog();
+    fill('流程名称', '采购审批流程');
+    fill('流程编码', 'PUR_APPROVAL');
+    await pickFirstForm();
+
+    const select = (await screen.findByLabelText('分类')) as HTMLSelectElement;
+    expect(select.tagName).toBe('SELECT');
+    // 候选项来自 wf_category（name），而非旧枚举
+    await waitFor(() => expect(screen.getByRole('option', { name: '审批类' })).toBeTruthy());
+    expect(screen.getByRole('option', { name: '通知类' })).toBeTruthy();
+    // 选择「审批类」（id 990001）
+    fireEvent.change(select, { target: { value: '990001' } });
+
+    fireEvent.click(screen.getByText('下一步：编排'));
+
+    await waitFor(() =>
+      expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ categoryId: 990001 })),
+    );
   });
 });

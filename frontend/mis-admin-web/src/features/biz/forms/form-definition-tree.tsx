@@ -9,16 +9,24 @@ export interface FormDefinitionTreeProps {
   selectedId: string | null;
   /** 选中节点（含点击「全部」置空）。 */
   onSelect: (id: string | null) => void;
+  /** 根节点文字；默认「全部表单」。 */
+  rootLabel?: string;
   loading?: boolean;
 }
 
 /**
  * 表单定义分类树（左侧栏）。
  *
- * <p>复用菜单管理页的「缩进 + 选中高亮」范式：根节点「全部表单」用于清空过滤，
+ * <p>复用菜单管理页的「缩进 + 选中高亮」范式：根节点（默认「全部表单」）用于清空过滤，
  * 其余节点按 `children` 递归渲染并随层级缩进。点击节点通知父组件过滤右侧表格。
  */
-export function FormDefinitionTree({ tree, selectedId, onSelect, loading }: FormDefinitionTreeProps) {
+export function FormDefinitionTree({
+  tree,
+  selectedId,
+  onSelect,
+  rootLabel = '全部表单',
+  loading,
+}: FormDefinitionTreeProps) {
   return (
     <div className="space-y-0.5">
       <button
@@ -32,7 +40,7 @@ export function FormDefinitionTree({ tree, selectedId, onSelect, loading }: Form
         )}
       >
         <Folder className="h-4 w-4 shrink-0 text-muted-foreground" />
-        <span className="truncate">全部表单</span>
+        <span className="truncate">{rootLabel}</span>
       </button>
 
       {loading && tree.length === 0 ? (

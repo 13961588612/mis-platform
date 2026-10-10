@@ -64,12 +64,12 @@ export const SYSTEM_NAV: SystemNavNode[] = [
     icon: 'Workflow',
     children: [
       { path: '/system/workflow/definitions', title: '流程定义', icon: 'GitBranch' },
-      // ⚠️ 编排已 Dialog 化（在流程定义页里打开），本项只作「跳到流程中心」的入口：
-      // designer-page 进来后立刻 `replace` 回 /system/workflow/definitions，不留历史。
-      // 菜单 95007 及它上面绑的 sys_menu_api（取消发布 / PUT 更新定义）**不能删**，
-      // 删了那两个端点就全部 403。
-      // 注：侧栏「流程编排」入口已移除（编排在流程定义页内 Dialog 化），但 designer-page
-      // 路由（keep-alive-outlet 的 PAGE_MAP）**保留**，否则 95007 相关接口回退 403。
+      // ⚠️ 编排已 Dialog 化（在流程定义页里打开），designer-page 进来后立刻 `replace` 回
+      // /system/workflow/definitions，不留历史。
+      // V132 已删除旧菜单 95007，其下「取消发布」(95050) / 「PUT 更新定义」(95056) 两个
+      // sys_menu_api 改挂到菜单 95006（permission `workflow:definition:edit`）。
+      // designer-page 路由（keep-alive-outlet 的 PAGE_MAP）**仍保留**：仅为编排 Dialog 的历史兼容，
+      // 勿删路由或 PAGE_MAP 条目，否则 95006 相关接口回退 403。
     ],
   },
   {
