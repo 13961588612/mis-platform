@@ -1,20 +1,25 @@
 // @vitest-environment jsdom
 /**
- * 门户三 Tab 容器测试（T01；UI 精修轮扩图标/卡片风格 + Tab store 桥接 + 首页板抽屉）。
+ * 门户三 Tab 容器测试（T01；UI 精修轮扩图标/药丸风格 + Tab store 桥接 + 首页板抽屉）。
  *
  * 覆盖：
  * 1. 「首页 / 待办事项 / 消息中心」三个 Tab 均渲染；
  * 2. **三Tab 均为「图标 + 文字」**（断言 lucide 渲染出的真实 `svg[data-testid]`，
  *    不只断文本——断文本锁不住「图标被删」的回归）；
- * 3. 默认选中「首页」，且首页内容（欢迎语 + 工作台板块 + AppRail）与现状一致；
- * 4. 点击「待办事项」→ 切到 Todo 壳（首页内容卸载）；点击「消息中心」→ 切到 Message 壳；
- * 5. **不发生路由跳转**：Tab 切换纯本地态（store），`useNavigate` 不被调用、pathname 不变。
+ * 3. **药丸式样式的关键不变量**（本轮随实现更新，锁的是「切换 tab 零跳动」这件事）：
+ *    白底 tab 栏（`bg-card`）+ 底部 1px 分隔线 + 左对齐；未选中为主色蓝文字、
+ *    选中为浅灰药丸 + 深色文字；两态边框结构一致（完整 `border`）且**不依赖 `-mb-px`
+ *    压盖**；`TabsList` 必须含 `h-auto` 且不含 `h-9`（防「药丸溢出栏顶/底边」的回归）；
+ *    tab 上不渲染关闭按钮；
+ * 4. 默认选中「首页」，且首页内容（欢迎语 + 工作台板块 + AppRail）与现状一致；
+ * 5. 点击「待办事项」→ 切到 Todo 壳（首页内容卸载）；点击「消息中心」→ 切到 Message 壳；
+ * 6. **不发生路由跳转**：Tab 切换纯本地态（store），`useNavigate` 不被调用、pathname 不变。
  *    （核心红线：三 Tab 绝不入 URL，规避 keep-alive `PAGE_MAP`/`useParams` 坑。）
- * 6. **外部 `setActiveTab('message')` 能驱动门户切页签**（顶栏「打开消息中心」的桥接契约：
+ * 7. **外部 `setActiveTab('message')` 能驱动门户切页签**（顶栏「打开消息中心」的桥接契约：
  *    layout 侧只写 store，门户页必须即时响应）。
- * 7. **T05 集成**：两抽屉可开——待办点行开待办抽屉（携 instanceId）、消息点行开消息抽屉（携 messageId）。
+ * 8. **T05 集成**：两抽屉可开——待办点行开待办抽屉（携 instanceId）、消息点行开消息抽屉（携 messageId）。
  *    抽屉以轻量替身替换（其内部行为由 `todo-tabs.test.tsx` / `message-reply-drawer.test.tsx` 覆盖）。
- * 8. **首页三板点行改开抽屉**（取代路由跳转）：TaskBoard/ProcessBoard → TodoDetailDrawer、
+ * 9. **首页三板点行改开抽屉**（取代路由跳转）：TaskBoard/ProcessBoard → TodoDetailDrawer、
  *    MessageBoard → MessageDetailDrawer（且 messageId 是**被点的那条**，不是固定值）。
  *
  * mock 范式（对齐 `portal-page.smoke.test.tsx`）：
@@ -160,11 +165,21 @@ describe('PortalPage 三 Tab 容器', () => {
     expect(screen.getByRole('tab', { name: '消息中心' })).toBeTruthy();
   });
 
-  it('三个 Tab 均为「图标 + 文字」卡片式风格（断言真实 svg，不只断文本）', async () => {
+  it('三个 Tab 均为「图标 + 文字」药丸式风格（断言真实 svg，不只断文本）', async () => {
     renderPage();
     const home = await screen.findByRole('tab', { name: '首页' });
     const todo = screen.getByRole('tab', { name: '待办事项' });
     const msg = screen.getByRole('tab', { name: '消息中心' });
+
+    /**
+     * 把 className 拆成**精确的类名 token 集合**。
+     *
+     * <p>🔴 必须按 token 判等、不能用 `className.toContain(...)` 子串匹配：
+     * `border-transparent` 里**包含**子串 `border-t`；`data-[state=active]:border-border`
+     * 里包含 `border-border`…子串匹配会让「有 `border-t`」这种断言假阳性通过，
+     * 也会让「不含 `border-t`」假失败（上一轮就踩过这个坑）。
+     */
+    const classesOf = (el: Element): Set<string> => new Set(el.className.split(/\s+/).filter(Boolean));
 
     // lucide 渲染出的真实 <svg>（tagName 断言可防「用 div 假冒图标」的假绿）。
     for (const [tab, testid] of [
@@ -177,31 +192,74 @@ describe('PortalPage 三 Tab 容器', () => {
       expect(icon!.tagName.toLowerCase()).toBe('svg');
       // 图标必须与文字同色（继承 currentColor）→ 靠 text- 类而非固定 fill。
       expect(icon!.getAttribute('fill')).toBe('none');
-      // tab 本身要带圆角/边框语义的 class（卡片式风格），且选中态靠 data-state驱动。
-      expect(tab.className).toContain('rounded-none');
+      // 药丸式风格：四角圆角（项目基线 4px = `rounded`），不是方角。
+      const cls = classesOf(tab);
+      expect(cls.has('rounded')).toBe(true);
+      expect(cls.has('rounded-none')).toBe(false);
+      expect(cls.has('rounded-t')).toBe(false);
     }
 
-    // 关键：两态**都没有下边框**（`border-x border-t`）、`-mb-px` 挂在基类上（两态都有）
-    // ⇒ 两态盒高相同、切换时无上下跳动；同时选中态的 bg-card 下压 1px 盖住 bar 的 border-b。
-    // 这几条一旦被改回「未选中带下边框 / 只 active 带 -mb-px」，就会出现 2px 跳动。
-    expect(home.className).toContain('border-x');
-    expect(home.className).toContain('border-t');
-    expect(home.className).not.toContain('border-b-0');
-    expect(home.className).toContain('-mb-px');
+    // ---- 两态盒高/盒宽一致性不变量（切换 tab 零跳动）----
+    // 药丸方案**不依赖** `-mb-px` 压盖：完整 `border`（四边）+ 相同 padding 全部挂在
+    // 基类上，active 变体只改「边框颜色 / 背景 / 文字色 / 去投影」这些**不影响盒模型**的声明。
+    // 一旦被改回「未选中无下边框 / 只 active 带 -mb-px」，两态盒高就会差 1~2px 而在切换时跳动。
+    for (const tab of [home, todo, msg]) {
+      const cls = classesOf(tab);
+      // 两态共有：完整四边框 + 透明边框色（active 只把颜色换成 border-border）
+      expect(cls.has('border')).toBe(true);
+      expect(cls.has('border-transparent')).toBe(true);
+      expect(cls.has('data-[state=active]:border-border')).toBe(true);
+      // 两态共有：相同 padding 与字号（盒高 = 内容行高 + py-2 + 上下 border）
+      expect(cls.has('px-3.5')).toBe(true);
+      expect(cls.has('py-2')).toBe(true);
+      expect(cls.has('text-[13px]')).toBe(true);
+      // 不再依赖负外边距压盖 TabsList 的 border-b
+      expect(cls.has('-mb-px')).toBe(false);
+      // 旧的「白卡 + 无缝相连」结构（边框有缺口/ 只 active 带负外边距）必须已被清除。
+      // 逐个 token 判不存在，而不是子串匹配。
+      for (const stale of [
+        'border-x',
+        'border-t',
+        'border-b',
+        'border-b-0',
+        'border-l',
+        'border-r',
+        'data-[state=active]:rounded-t',
+        'data-[state=active]:bg-card',
+        'data-[state=active]:text-primary',
+      ]) {
+        expect(cls.has(stale)).toBe(false);
+      }
+    }
+
+    // 未选中态：主色蓝文字（`--primary` ≈ #4f46e5，像链接色）+ 透明背景
+    expect(classesOf(todo).has('text-primary')).toBe(true);
     expect(home.getAttribute('data-state')).toBe('active');
     expect(todo.getAttribute('data-state')).toBe('inactive');
-    // 未选中态同样带 -mb-px 与 border-x/t（保证切过去时盒高/盒宽都不变）
-    expect(todo.className).toContain('-mb-px');
-    expect(todo.className).toContain('border-x');
-    expect(msg.className).toContain('-mb-px');
+    expect(msg.getAttribute('data-state')).toBe('inactive');
 
-    // TabsList 必须解除共享组件基类的 h-9 固定高（否则卡片会向上溢出 bar 顶边）。
+    // 选中态：浅灰药丸 `bg-muted` + 深色文字 + 去投影（不是白卡）
+    const activeCls = classesOf(home);
+    expect(activeCls.has('data-[state=active]:bg-muted')).toBe(true);
+    expect(activeCls.has('data-[state=active]:text-foreground')).toBe(true);
+    expect(activeCls.has('data-[state=active]:shadow-none')).toBe(true);
+
+    // TabsList：白底 + 底部 1px 分隔线 + 左对齐；且必须解除共享组件基类的 h-9 固定高
+    // （否则药丸会溢出栏的顶/底边）。
     const list = home.closest('[role="tablist"]');
     expect(list).toBeTruthy();
-    expect(list!.className).toContain('h-auto');
-    expect(list!.className).not.toContain('h-9');
+    const listCls = classesOf(list!);
+    expect(listCls.has('h-auto')).toBe(true);
+    expect(listCls.has('h-9')).toBe(false);
+    expect(listCls.has('bg-card')).toBe(true);   // 白底，不是灰底
+    expect(listCls.has('bg-muted')).toBe(false);
+    expect(listCls.has('bg-muted/50')).toBe(false);
+    expect(listCls.has('border-b')).toBe(true);  // 1px 分隔线贯通整行
+    expect(listCls.has('justify-start')).toBe(true); // tab 左对齐
+    // 新样式下不再用 items-end 底对齐去掩盖溢出
+    expect(listCls.has('items-end')).toBe(false);
 
-    // tab 不可关闭：不渲染任何关闭按钮（×）。
+    // tab 不可关闭：不渲染任何关闭按钮（×）——参考图有，但需求明确要求不做。
     for (const tab of [home, todo, msg]) {
       expect(tab.querySelector('button')).toBeNull();
     }
