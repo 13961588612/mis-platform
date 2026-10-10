@@ -88,23 +88,34 @@ class FormDefinitionMigrationIntegrationTest {
     }
 
     @Test
-    @DisplayName("T1.1：sys_menu_api 新增 7 行绑定")
+    @DisplayName("T1.1：sys_menu_api 绑定（V132 后：编排端点合并进 95006）")
     void sysMenuApiSeeded() {
-        List<Map<String, Object>> rows = jdbc.queryForList("""
-                select ma.id, ma.menu_id, ma.api_id from sys_menu_api ma
-                where ma.id between 95050 and 95056 order by ma.id
+        // 表单 CRUD(95051-95055) 仍挂「表单注册」95011
+        // 注意 95052 在 95006 另有「编排候选清单」额外绑定，故此处限定 menu_id=95011 精确断言
+        List<Map<String, Object>> formRows = jdbc.queryForList("""
+                select ma.api_id, ma.menu_id from sys_menu_api ma
+                where ma.api_id between 95051 and 95055 and ma.menu_id = 95011 order by ma.api_id
                 """);
-        assertEquals(7, rows.size(), "sys_menu_api 应恰好 7 行: " + rows);
-        for (Map<String, Object> r : rows) {
-            assertEquals(r.get("id"), r.get("api_id"), "sys_menu_api.id 应与 api_id 一一对应");
+        assertEquals(5, formRows.size(), "表单 CRUD 应挂 95011: " + formRows);
+        for (Map<String, Object> r : formRows) {
+            assertEquals(95011L, r.get("menu_id"), "表单端点 " + r.get("api_id") + " 应挂 95011");
         }
-        // 取消发布(95050) 与 PUT 更新定义(95056) 挂「流程编排」95007
-        assertEquals(95007L, rows.get(0).get("menu_id"), "取消发布应挂 95007");
-        assertEquals(95007L, rows.get(6).get("menu_id"), "PUT 更新定义应挂 95007");
-        // 表单 CRUD(95051-95055) 挂「表单注册」95011
-        for (int i = 1; i <= 5; i++) {
-            assertEquals(95011L, rows.get(i).get("menu_id"), "第 " + i + " 行应挂 95011");
+
+        // V132：95050/95056（取消发布 / PUT 更新定义）已合并进「流程定义」95006；
+        // 95052（表单定义列表）在 95011 原绑之外额外补绑到 95006（编排候选清单）。
+        // 三者均应有「挂 95006」的绑定（95052 为双绑，此处只校验 95006 那份）。
+        List<Map<String, Object>> wfRows = jdbc.queryForList("""
+                select ma.api_id, ma.menu_id from sys_menu_api ma
+                where ma.api_id in (95050, 95056, 95052) and ma.menu_id = 95006 order by ma.api_id
+                """);
+        assertEquals(3, wfRows.size(), "95050/95056/95052 应均有挂 95006 的绑定: " + wfRows);
+        for (Map<String, Object> r : wfRows) {
+            assertEquals(95006L, r.get("menu_id"), "端点 " + r.get("api_id") + " V132 后应挂 95006");
         }
+
+        // 95007 菜单本身应已删除
+        Integer cnt = jdbc.queryForObject("select count(*) from sys_menu where id = 95007", Integer.class);
+        assertEquals(0, cnt, "95007 应已被删除");
     }
 
     @Test
