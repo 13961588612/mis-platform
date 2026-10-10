@@ -53,8 +53,7 @@ public class FormDefinitionService {
     /** 全量列表（含停用），平铺。 */
     @Transactional(readOnly = true)
     public List<FormDefinitionVO> list(Long tenantId) {
-        return formRepository.findByTenantIdAndDeletedOrderByParentIdAscSortOrderAscIdAsc(tenantId, 0)
-                .stream().map(f -> toVo(f, null)).toList();
+        return list(tenantId, null, null);
     }
 
     /** 启用中的表单——编排弹窗的候选项来源。 */
@@ -66,15 +65,52 @@ public class FormDefinitionService {
     }
 
     /**
+     * 列表（可选 status / kind 过滤）。
+     *
+     * <p>kind 由决策 B 引入：{@code CATEGORY} 仅取文件夹、{@code FORM} 仅取真实表单；
+     * 不传则不过滤（兼容旧行为，含历史数据）。
+     */
+    @Transactional(readOnly = true)
+    public List<FormDefinitionVO> list(Long tenantId, String status, String kind) {
+        List<FormDefinition> all;
+        if ("ENABLED".equalsIgnoreCase(status)) {
+            if (kind == null) {
+                all = formRepository.findByTenantIdAndStatusAndDeletedOrderBySortOrderAscIdAsc(
+                        tenantId, FormDefinition.STATUS_ENABLED, 0);
+            } else {
+                all = formRepository.findByTenantIdAndKindAndDeletedOrderByParentIdAscSortOrderAscIdAsc(
+                                tenantId, kind, 0).stream()
+                        .filter(f -> FormDefinition.STATUS_ENABLED.equals(f.getStatus())).toList();
+            }
+        } else {
+            all = (kind == null)
+                    ? formRepository.findByTenantIdAndDeletedOrderByParentIdAscSortOrderAscIdAsc(tenantId, 0)
+                    : formRepository.findByTenantIdAndKindAndDeletedOrderByParentIdAscSortOrderAscIdAsc(
+                            tenantId, kind, 0);
+        }
+        return all.stream().map(f -> toVo(f, null)).toList();
+    }
+
+    /**
      * 分类树（邻接表在内存里组装）。
      *
      * <p>层级在应用层收敛为「根 → 分类 → 表单」三层（见 {@link #validateParent}），
      * 因此这里用递归即可，不需要防环的 visited 集合。
+     *
+     * <p>kind 过滤时：{@code CATEGORY} 取纯文件夹子树（分类管理 Tab）；
+     * {@code FORM} 取真实表单（其父通常是 CATEGORY，故按 kind 过滤后根下直接挂平铺表单）。
      */
     @Transactional(readOnly = true)
     public List<FormDefinitionVO> tree(Long tenantId) {
-        List<FormDefinition> all = formRepository
-                .findByTenantIdAndDeletedOrderByParentIdAscSortOrderAscIdAsc(tenantId, 0);
+        return tree(tenantId, null);
+    }
+
+    @Transactional(readOnly = true)
+    public List<FormDefinitionVO> tree(Long tenantId, String kind) {
+        List<FormDefinition> all = (kind == null)
+                ? formRepository.findByTenantIdAndDeletedOrderByParentIdAscSortOrderAscIdAsc(tenantId, 0)
+                : formRepository.findByTenantIdAndKindAndDeletedOrderByParentIdAscSortOrderAscIdAsc(
+                        tenantId, kind, 0);
         Map<Long, List<FormDefinition>> byParent = new HashMap<>();
         for (FormDefinition f : all) {
             byParent.computeIfAbsent(f.getParentId(), k -> new ArrayList<>()).add(f);
@@ -111,6 +147,8 @@ public class FormDefinitionService {
                             ? "表单编码「" + code + "」已被删除，不可复用（历史实例仍按此编码渲染）"
                             : "表单编码「" + code + "」已存在");
         });
+        String kind = normalizeKind(req.kind());
+        validateKindAndCode(code, kind);
         validateParent(tenantId, req.parentId(), null);
 
         LocalDateTime now = LocalDateTime.now();
@@ -122,6 +160,7 @@ public class FormDefinitionService {
         f.setName(req.name().trim());
         f.setDescription(req.description());
         f.setStatus(normalizeStatus(req.status()));
+        f.setKind(kind);
         f.setSortOrder(req.sortOrder() == null ? 0 : req.sortOrder());
         f.setConfig(StringUtils.hasText(req.config()) ? req.config() : "{}");
         f.setDeleted(0);
@@ -144,10 +183,13 @@ public class FormDefinitionService {
 
         validateParent(tenantId, req.parentId(), id);
 
+        String kind = normalizeKind(req.kind());
+        validateKindAndCode(f.getCode(), kind);
         f.setParentId(req.parentId() == null ? FormDefinition.ROOT_PARENT_ID : req.parentId());
         f.setName(req.name().trim());
         f.setDescription(req.description());
         f.setStatus(normalizeStatus(req.status()));
+        f.setKind(kind);
         f.setSortOrder(req.sortOrder() == null ? 0 : req.sortOrder());
         f.setConfig(StringUtils.hasText(req.config()) ? req.config() : "{}");
         f.setUpdatedAt(LocalDateTime.now());
@@ -265,11 +307,43 @@ public class FormDefinitionService {
         return s;
     }
 
+    /** kind 归一化：未指定（历史直连 service 的调用点）默认 FORM；非法值直接拒绝。 */
+    private static String normalizeKind(String kind) {
+        if (!StringUtils.hasText(kind)) {
+            return FormDefinition.KIND_FORM;
+        }
+        String k = kind.trim().toUpperCase();
+        if (!FormDefinition.KIND_CATEGORY.equals(k) && !FormDefinition.KIND_FORM.equals(k)) {
+            throw new BusinessException(ResultCode.VALIDATION_ERROR, "节点类型(kind)只能是 CATEGORY 或 FORM");
+        }
+        return k;
+    }
+
+    /**
+     * kind + code 联合校验（决策 A / B）。
+     *
+     * <p>code 的格式（{@code ^[A-Z][A-Z0-9_]{1,63}$}）已由 {@link UpsertFormDefinitionRequest} 的
+     * {@code @Pattern} 在 controller 层保证；这里只补「业务语义」校验：
+     * <ul>
+     *   <li>FORM 的 code 必须 ∈ 前端已注册组件清单（{@code listFormLoaderCodes()}）——但组件注册表由
+     *       前端持有，后端不掌握，故<b>组件存在性由前端保证</b>，后端仅做格式 + 唯一性（已在 create 内）。
+     *       后端若要强校验可在此引入注册表查询，本期留空并标注 TODO。</li>
+     *   <li>CATEGORY 的 code 同为文件夹 key，格式约束同上即可，无额外校验。</li>
+     * </ul>
+     * TODO(后端): 若需后端兜底「FORM code 必须对应已注册组件」，在此注入组件注册表并校验。
+     */
+    private void validateKindAndCode(String code, String kind) {
+        // 当前后端仅做格式/唯一性（已在调用方完成），业务存在性校验依赖前端。占位以保持扩展点。
+        if (FormDefinition.KIND_FORM.equals(kind) && !StringUtils.hasText(code)) {
+            throw new BusinessException(ResultCode.VALIDATION_ERROR, "真实表单(FORM)的 code 不能为空");
+        }
+    }
+
     private static FormDefinitionVO toVo(FormDefinition f, List<FormDefinitionVO> children) {
         return new FormDefinitionVO(
                 String.valueOf(f.getId()), String.valueOf(f.getTenantId()), f.getParentId(),
                 f.getCode(), f.getName(), f.getDescription(), f.getStatus(), f.getSortOrder(),
-                f.getConfig(), children, f.getCreatedAt(), f.getUpdatedAt());
+                f.getConfig(), children, f.getCreatedAt(), f.getUpdatedAt(), f.getKind());
     }
 
     /** 供流程定义白名单校验使用：批量取出已注册且启用的 code 集合。 */

@@ -55,6 +55,7 @@ public class WfDefinitionService {
         def.setCode(req.code().trim());
         def.setName(req.name().trim());
         def.setCategory(StringUtils.hasText(req.category()) ? req.category().trim() : "APPROVAL");
+        def.setCategoryId(req.categoryId());
         def.setDescription(req.description());
         def.setVersion(1);
         def.setStatus(WfDefinition.STATUS_DRAFT);
@@ -81,6 +82,7 @@ public class WfDefinitionService {
         LocalDateTime now = LocalDateTime.now();
         def.setName(req.name().trim());
         def.setCategory(StringUtils.hasText(req.category()) ? req.category().trim() : "APPROVAL");
+        def.setCategoryId(req.categoryId());
         def.setDescription(req.description());
         def.setSupportedFormCodes(toArray(req.supportedFormCodes()));
         def.setConfig(StringUtils.hasText(req.config()) ? req.config() : "{}");
@@ -150,10 +152,30 @@ public class WfDefinitionService {
 
     @Transactional(readOnly = true)
     public PageResult<WfDefinitionDTO> list(Long tenantId, int page, int size) {
-        var pageable = PageRequest.of(Math.max(page - 1, 0), Math.min(Math.max(size, 1), 200));
-        var p = definitionRepository.findByTenantIdAndDeleted(tenantId, 0, pageable);
-        return PageResult.of(page, pageable.getPageSize(), p.getTotalElements(),
-                p.getContent().stream().map(this::toDto).toList());
+        return list(tenantId, page, size, null);
+    }
+
+    /**
+     * 分页列表（可选 categoryId 过滤，决策 B：按流程分类筛选）。
+     *
+     * <p>categoryId 为 {@code null} 时走原分页路径；非 null 时按软引用分类筛选，
+     * 因仓储返回的是 List 而非 Page，这里用单次取全量 + 简单分页包装（分类内数据量可控）。
+     */
+    @Transactional(readOnly = true)
+    public PageResult<WfDefinitionDTO> list(Long tenantId, int page, int size, Long categoryId) {
+        if (categoryId == null) {
+            var pageable = PageRequest.of(Math.max(page - 1, 0), Math.min(Math.max(size, 1), 200));
+            var p = definitionRepository.findByTenantIdAndDeleted(tenantId, 0, pageable);
+            return PageResult.of(page, pageable.getPageSize(), p.getTotalElements(),
+                    p.getContent().stream().map(this::toDto).toList());
+        }
+        List<WfDefinitionDTO> all = definitionRepository
+                .findByTenantIdAndCategoryIdAndDeleted(tenantId, categoryId, 0).stream()
+                .map(this::toDto).toList();
+        int from = Math.max((page - 1) * size, 0);
+        int to = Math.min(from + size, all.size());
+        List<WfDefinitionDTO> content = from >= all.size() ? List.of() : all.subList(from, to);
+        return PageResult.of(page, size, (long) all.size(), content);
     }
 
     // ------------------------------------------------------------------
@@ -266,7 +288,8 @@ public class WfDefinitionService {
                 String.valueOf(def.getId()), String.valueOf(def.getTenantId()), def.getCode(), def.getName(),
                 def.getCategory(), def.getDescription(), def.getVersion(), def.getStatus(),
                 def.getSupportedFormCodes() == null ? List.of() : Arrays.asList(def.getSupportedFormCodes()),
-                def.getFormSchema(), def.getConfig(), nodes, edges, def.getCreatedAt(), def.getUpdatedAt());
+                def.getFormSchema(), def.getConfig(), nodes, edges, def.getCreatedAt(), def.getUpdatedAt(),
+                def.getCategoryId());
     }
 
     private List<WfNodeDTO> toNodeDtos(List<WfNode> nodes) {
