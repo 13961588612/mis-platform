@@ -72,6 +72,13 @@ BFF/mis-taskflow 的 `/api/v1/**` 响应缺字段/值为 null（新字段整个�
 - 本轮（team `software-form-split`，**未 commit**）：**V133** 新建 `form_category` 邻接树（逐列镜像 `wf_category`）；`form_definition` 仅存表单 + 新增 `category_id BIGINT NULL` 软引用（无外键）；旧 `kind`/`parent_id` **保留但代码停读写（软废弃，不 DROP）**——因两个迁移验收测试(`FormDefinitionMigration`/`WfCategoryMigration`)断言这两列/索引存在，DROP 会触红线。BFF 新端点 `/api/v1/form-categories`(tree/list/{id}/POST/PUT/DELETE) 登记 `sys_api 95066–95071` 全绑菜单 **95011**(`biz:form:list`)；`95050–95056` 仍 7 行(95051 休眠保留)、`form-definitions/tree` 端点已移除。
 - 前端：新 `form-category.ts`/`form-category-tree.tsx`；`form-definition-manage-page.tsx` 双TAB(表单管理=表格+分类列+分类筛选 / 分类管理=form_category树)；`form-definition-dialog.tsx`「分类」下拉写 `categoryId`(可空=未分类)；删 `form-definition-tree.tsx`。保留 `hasFormLoader` 标红；必须保留 `fetchEnabledFormDefinitions`(流程编排 `form-catalog.ts` 在用)。
 - 验收：后端 5 类集成测试 **48/0/0/0**、前端 tsc EXIT=0 + **949 passed(1 todo)**；红线(V120–V132 零改动、HEAD 仍 `ff4c86c`)；QA **IS_PASS=YES / NoOne**。
-- ⚠️ **live 待重启**：运行中 8104/8081 仍是拆分前旧进程（`form-definitions` 返旧 `kind`/`parentId`、`/form-categories/*` 路由未映射；判据：请求不存在路径也返 500）。新端点须 `rebuild+restart` 后才有 live 意义。
+- ✅ **live 已生效**：用户已重启后端，实测 8104 返 `categoryId`（无 `kind/parentId`）、`/form-categories/tree` 正常（CS / BG→CRM）。
 - ✅ 更正（实测）：上一会话「V132 残留 95057/95058 孤儿行」为**误判**——`sys_api`/`sys_menu_api` 的 95057–95059 均 0 行（空闲段），无 menu 95007 引用。
-- 未提交文件（待用户决定统一提交）：本轮代码/迁移 `V133`+taskflow+BFF+前端 + `docs/design/form-category-split-*`；更早的 `docs/system_design.md`/`class-diagram.mermaid`/`sequence-diagram.mermaid`；`.workbuddy/memory/MEMORY.md`。
+- ✅ 已提交（分支 `flow`）：`988bd91 feat(form)`+`b30b8fc docs`+`7fa4fff chore(memory)`。
+
+### 增量：分类筛选「下拉树+多选」+ 表格高度修复（team `software-cat-tree-filter`，**未 commit**）
+- 需求：表单管理+流程定义的分类筛选改**通用分类下拉树（多选）**（语义=**精确匹配**：勾选集合 IN 的 OR、不含子分类；不勾选=不过滤；未分类不可选）；修复表单管理表格「单行占满高度」；顺带打通流程定义分类筛选（BFF 此前**没接收** `categoryId`，筛选一直失效）。
+- 表格 Bug 根因：`form-definition-manage-page.tsx` 表格滚动容器**多了 `flex`** → flex 行容器 `align-items:stretch` 把 `<table>` 拉满；移除 `flex` 即修（`definitions-page.tsx` 同容器本就无 `flex`）。
+- 新增通用组件 `components/common/category-tree-select.tsx`（props `tree/value:string[]/onChange/placeholder/triggerClassName/disabled`，数据源全部 prop 传入）。传参**单值逗号串** `categoryIds=1,2`（前端 join → BFF join → taskflow `@RequestParam List<Long>` 自动拆）。只加 query 参数未改路径 ⇒ **无需登记 sys_api**；**无迁移改动**。
+- 验收：后端 148/1/0/0（唯一失败=990001 外部漂移，非本次）、前端 tsc EXIT=0 + 959 passed；QA **IS_PASS=YES / NoOne**。
+- ⚠️ **live 待重启（本轮老坑复现）**：改码后运行进程仍旧——`8104?...&categoryIds=99999999`（不存在分类）**仍返 PUR_FORM** ⇒ 进程不识新参数。须 `rebuild+restart` mis-taskflow/mis-admin-bff 后 live 才有意义。
