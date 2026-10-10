@@ -191,4 +191,56 @@ describe('WorkflowDefinitionPage 发布 / 取消发布', () => {
     expect(screen.queryByText('发布')).toBeNull();
     expect(screen.queryByText('取消发布')).toBeNull();
   });
+
+  it('分类下拉树多选后 fetchDefinitions 收到 categoryIds 数组并回到第 1 页', async () => {
+    vi.mocked(wfCategoryApi.fetchWfCategoryTree).mockResolvedValue([
+      {
+        id: '1',
+        tenantId: '1',
+        parentId: null,
+        code: 'ROOT',
+        name: '流程分类',
+        description: null,
+        sortOrder: 0,
+        config: null,
+        children: null,
+        createdAt: '',
+        updatedAt: '',
+      },
+    ]);
+    vi.mocked(wfCategoryApi.fetchWfCategories).mockResolvedValue([
+      {
+        id: '1',
+        tenantId: '1',
+        parentId: null,
+        code: 'ROOT',
+        name: '流程分类',
+        description: null,
+        sortOrder: 0,
+        config: null,
+        children: null,
+        createdAt: '',
+        updatedAt: '',
+      },
+    ]);
+    vi.mocked(workflowApi.fetchDefinitions).mockResolvedValue({
+      page: 1,
+      size: 20,
+      total: 1,
+      list: [def()],
+    });
+    renderPage();
+
+    // 等首次加载完成（无分类过滤 → 第四参 undefined）
+    await screen.findByText('采购审批流程');
+    expect(workflowApi.fetchDefinitions).toHaveBeenCalledWith('1', 1, 20, undefined);
+
+    // 打开分类下拉树，勾选「流程分类」（id=1）
+    fireEvent.click(screen.getByRole('button', { name: '全部分类' }));
+    fireEvent.pointerDown(screen.getByRole('button', { name: '流程分类' }), { button: 0 });
+
+    await waitFor(() => {
+      expect(workflowApi.fetchDefinitions).toHaveBeenCalledWith('1', 1, 20, [1]);
+    });
+  });
 });

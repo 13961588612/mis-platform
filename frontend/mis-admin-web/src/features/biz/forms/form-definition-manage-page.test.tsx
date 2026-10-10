@@ -12,7 +12,7 @@
  * 注册表（默认含 `PUR_FORM`），不 mock。
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { FormDefinitionManagePage } from './form-definition-manage-page';
 import * as formApi from '@/lib/api/form-definition';
@@ -193,5 +193,26 @@ describe('FormDefinitionManagePage', () => {
     fireEvent.click(screen.getByRole('button', { name: '保存' }));
     expect(await screen.findByText('请选择已注册的表单组件')).toBeTruthy();
     expect(formApi.createFormDefinition).not.toHaveBeenCalled();
+  });
+
+  it('分类下拉树多选后 fetchFormDefinitions 收到 categoryIds 数组（精确匹配）', async () => {
+    render(
+      <MemoryRouter>
+        <FormDefinitionManagePage />
+      </MemoryRouter>,
+    );
+    // 等初始加载完成：第一次调用无分类过滤（第三参 undefined）
+    await screen.findByText('采购申请单');
+    expect(formApi.fetchFormDefinitions).toHaveBeenCalledWith('1', undefined, undefined);
+
+    // 打开分类下拉树，勾选根分类（id=1）
+    fireEvent.click(screen.getByRole('button', { name: '全部分类' }));
+    fireEvent.pointerDown(screen.getByRole('button', { name: '根分类' }), { button: 0 });
+
+    await waitFor(() => {
+      expect(formApi.fetchFormDefinitions).toHaveBeenCalledWith('1', undefined, [1]);
+    });
+    // 表格仍正常渲染
+    expect(await screen.findByText('采购申请单')).toBeTruthy();
   });
 });

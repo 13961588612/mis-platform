@@ -41,6 +41,7 @@ import {
 import { hasFormLoader } from './forms/form-loaders';
 import { FormCategoryTree } from './form-category-tree';
 import { FormDefinitionDialog, type CategorySelectOption } from './form-definition-dialog';
+import { CategoryTreeSelect } from '@/components/common/category-tree-select';
 
 /** 与 definitions-page 一致：本地固定租户（BFF 单租户原型）。 */
 const TENANT_ID = '1';
@@ -120,7 +121,7 @@ export function FormDefinitionManagePage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState<string>('all');
-  const [categoryFilter, setCategoryFilter] = useState<number | null>(null);
+  const [categoryIds, setCategoryIds] = useState<number[]>([]);
   const [keyword, setKeyword] = useState('');
   const [deleteTarget, setDeleteTarget] = useState<FormDefinitionItem | null>(null);
   const [deleting, setDeleting] = useState(false);
@@ -148,7 +149,7 @@ export function FormDefinitionManagePage() {
       const forms = await fetchFormDefinitions(
         TENANT_ID,
         statusFilter === 'all' ? undefined : statusFilter,
-        categoryFilter,
+        categoryIds.length > 0 ? categoryIds : undefined,
       );
       setFormList(forms);
     } catch (e) {
@@ -156,7 +157,7 @@ export function FormDefinitionManagePage() {
     } finally {
       setLoading(false);
     }
-  }, [statusFilter, categoryFilter]);
+  }, [statusFilter, categoryIds]);
 
   const loadCategories = useCallback(async () => {
     setCatLoading(true);
@@ -264,7 +265,7 @@ export function FormDefinitionManagePage() {
     setCatDeleting(true);
     try {
       // 引用校验：若该分类下还有表单则拦截（避免前端与后端错误信息不一致）。
-      const refs = await fetchFormDefinitions(TENANT_ID, undefined, Number(target.id));
+      const refs = await fetchFormDefinitions(TENANT_ID, undefined, [Number(target.id)]);
       if (refs.length > 0) {
         toast.error(`该分类下还有 ${refs.length} 个表单，无法删除`);
         setCatDeleteTarget(null);
@@ -275,7 +276,7 @@ export function FormDefinitionManagePage() {
       setCatDeleteTarget(null);
       if (selectedCategoryId === target.id) setSelectedCategoryId(null);
       await loadCategories();
-      if (categoryFilter != null && String(categoryFilter) === target.id) setCategoryFilter(null);
+      setCategoryIds((prev) => prev.filter((id) => String(id) !== target.id));
     } catch (e) {
       toast.error(e instanceof Error ? e.message : '删除分类失败');
     } finally {
@@ -340,19 +341,12 @@ export function FormDefinitionManagePage() {
                 <SelectItem value={FORM_STATUS_DISABLED}>停用</SelectItem>
               </SelectContent>
             </Select>
-            <select
-              aria-label="按分类筛选"
-              value={categoryFilter == null ? '' : String(categoryFilter)}
-              onChange={(e) => setCategoryFilter(e.target.value === '' ? null : Number(e.target.value))}
-              className="h-9 w-40 rounded-md border border-input bg-background px-2 text-sm"
-            >
-              <option value="">全部分类</option>
-              {categoryList.map((c) => (
-                <option key={c.id} value={String(c.id)}>
-                  {c.name}
-                </option>
-              ))}
-            </select>
+            <CategoryTreeSelect
+              tree={categoryTree}
+              value={categoryIds.map(String)}
+              onChange={(ids) => setCategoryIds(ids.map(Number))}
+              placeholder="全部分类"
+            />
             <div className="relative">
               <Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
               <Input
@@ -368,7 +362,7 @@ export function FormDefinitionManagePage() {
             </Button>
           </div>
 
-          <div className="flex min-h-0 flex-1 overflow-auto rounded-md border bg-card">
+          <div className="min-h-0 flex-1 overflow-auto rounded-md border bg-card">
             {loading ? (
               <div className="flex h-40 w-full items-center justify-center text-sm text-muted-foreground">加载中…</div>
             ) : error ? (

@@ -191,11 +191,52 @@ class FormDefinitionServiceIntegrationTest {
         newFormInCategory(catA, uniqCode("FORM"), "A2");
         newFormInCategory(catB, uniqCode("FORM"), "B1");
 
-        assertEquals(2, formService.list(TENANT, null, catA).size(), "分类 A 下应有 2 个表单");
-        assertEquals(1, formService.list(TENANT, null, catB).size(), "分类 B 下应有 1 个表单");
-        assertTrue(formService.list(TENANT, null, catA).stream()
+        assertEquals(2, formService.list(TENANT, null, List.of(catA)).size(), "分类 A 下应有 2 个表单");
+        assertEquals(1, formService.list(TENANT, null, List.of(catB)).size(), "分类 B 下应有 1 个表单");
+        assertTrue(formService.list(TENANT, null, List.of(catA)).stream()
                         .allMatch(v -> catA.equals(v.categoryId())),
                 "过滤结果应全部属于分类 A");
+    }
+
+    @Test
+    @DisplayName("V133：list 多值分类过滤——勾 2 个分类只返回属于这 2 类的表单（精确匹配、不含子分类）")
+    void listFiltersByMultipleCategories() {
+        Long catA = newCategory("多值分类A");
+        Long catB = newCategory("多值分类B");
+        Long catC = newCategory("多值分类C");
+        Long a1 = newFormInCategory(catA, uniqCode("FORM"), "MA1");
+        Long b1 = newFormInCategory(catB, uniqCode("FORM"), "MB1");
+        newFormInCategory(catC, uniqCode("FORM"), "MC1");
+        // 未分类表单不应被任何分类集合命中
+        newForm(uniqCode("FORM"), "未分类表单");
+
+        var result = formService.list(TENANT, null, List.of(catA, catB));
+        assertEquals(2, result.size(), "勾选 A、B 应只返回这 2 个分类下的表单（集合 IN 的 OR）");
+        assertTrue(result.stream().allMatch(v -> catA.equals(v.categoryId()) || catB.equals(v.categoryId())),
+                "结果应只属于分类 A 或 B");
+        assertTrue(result.stream().anyMatch(v -> a1.equals(Long.valueOf(v.id()))), "应含 A 类表单");
+        assertTrue(result.stream().anyMatch(v -> b1.equals(Long.valueOf(v.id()))), "应含 B 类表单");
+        assertTrue(result.stream().noneMatch(v -> catC.equals(v.categoryId())),
+                "未勾选的分类 C 的表单不得混入（精确匹配，不含子分类）");
+    }
+
+    @Test
+    @DisplayName("V133：list 多值分类过滤 + status=ENABLED 只返回启用项")
+    void listFiltersByMultipleCategoriesAndStatus() {
+        Long catA = newCategory("多值+状态A");
+        Long catB = newCategory("多值+状态B");
+        String enabledA = uniqCode("FORM");
+        String disabledA = uniqCode("FORM");
+        Long enA = newFormInCategory(catA, enabledA, "启用A");
+        Long disA = newFormInCategory(catA, disabledA, "停用A");
+        formService.update(disA, TENANT, new UpsertFormDefinitionRequest(
+                catA, disabledA, "停用A", null, FormDefinition.STATUS_DISABLED, 0, "{}"));
+        newFormInCategory(catB, uniqCode("FORM"), "启用B");
+
+        var enabled = formService.list(TENANT, "ENABLED", List.of(catA, catB));
+        assertEquals(2, enabled.size(), "只应返回 2 条启用项（A 的停用项被过滤）");
+        assertTrue(enabled.stream().anyMatch(v -> enA.equals(Long.valueOf(v.id()))));
+        assertTrue(enabled.stream().noneMatch(v -> disA.equals(Long.valueOf(v.id()))), "停用项不应返回");
     }
 
     @Test

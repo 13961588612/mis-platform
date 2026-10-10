@@ -40,19 +40,20 @@ function unwrapList(res: { data: ApiResult<FormDefinitionItem[] | null> }): Form
 }
 
 /**
- * 全量列表（可带 status / categoryId 过滤）。
+ * 全量列表（可带 status / categoryIds 过滤）。
  *
- * <p>`status` 为空时后端返回全部（含停用）；`categoryId` 为空时返回全部表单，
- * 非空时按分类精确匹配。
+ * <p>`status` 为空时后端返回全部（含停用）；`categoryIds` 为空时返回全部表单，
+ * 非空时按分类集合精确匹配（`categoryId ∈ 集合`，即集合 IN 的 OR，不含子分类）。
+ * 以**单值逗号串**传参（`categoryIds=1,2`），由 BFF / taskflow 各层一致地拆分为集合。
  */
 export async function fetchFormDefinitions(
   tenantId: string,
   status?: string,
-  categoryId?: number | null,
+  categoryIds?: number[] | null,
 ): Promise<FormDefinitionItem[]> {
   const params: Record<string, unknown> = { tenantId };
   if (status) params.status = status;
-  if (categoryId != null) params.categoryId = categoryId;
+  if (categoryIds && categoryIds.length > 0) params.categoryIds = categoryIds.join(',');
   const res = await api.get<ApiResult<FormDefinitionItem[] | null>>('/form-definitions', { params });
   return unwrapList(res);
 }

@@ -54,7 +54,7 @@ public class FormDefinitionService {
     /** 全量列表（含停用），平铺。 */
     @Transactional(readOnly = true)
     public List<FormDefinitionVO> list(Long tenantId) {
-        return list(tenantId, null, null);
+        return list(tenantId, null, List.of());
     }
 
     /** 启用中的表单——编排弹窗的候选项来源。 */
@@ -66,18 +66,19 @@ public class FormDefinitionService {
     }
 
     /**
-     * 列表（可选 status / categoryId 过滤）。
+     * 列表（可选 status / categoryIds 过滤）。
      *
-     * <p>{@code categoryId} 非空时按分类精确匹配（决策 E：精确匹配，不含子分类）；
-     * 不传则不过滤（返回全部）。
+     * <p>{@code categoryIds} 非空时按分类集合精确匹配（决策 E：精确匹配，不含子分类），
+     * 语义为「勾选 N 个分类 ⇒ 只返回 categoryId ∈ 集合 的项」（集合 IN 的 OR）；
+     * 集合为空 / null 则不过滤（返回全部）。
      */
     @Transactional(readOnly = true)
-    public List<FormDefinitionVO> list(Long tenantId, String status, Long categoryId) {
+    public List<FormDefinitionVO> list(Long tenantId, String status, List<Long> categoryIds) {
         List<FormDefinition> all;
         boolean enabledOnly = "ENABLED".equalsIgnoreCase(status);
-        if (categoryId != null) {
-            all = formRepository.findByTenantIdAndCategoryIdAndDeletedOrderBySortOrderAscIdAsc(
-                            tenantId, categoryId, 0).stream()
+        if (categoryIds != null && !categoryIds.isEmpty()) {
+            all = formRepository.findByTenantIdAndCategoryIdInAndDeletedOrderBySortOrderAscIdAsc(
+                            tenantId, categoryIds, 0).stream()
                     .filter(f -> !enabledOnly || FormDefinition.STATUS_ENABLED.equals(f.getStatus()))
                     .toList();
         } else if (enabledOnly) {

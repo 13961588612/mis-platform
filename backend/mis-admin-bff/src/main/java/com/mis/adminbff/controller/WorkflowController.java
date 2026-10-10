@@ -46,8 +46,10 @@ public class WorkflowController {
     @GetMapping("/definitions")
     public Result<PageResult<WfDefinitionDTO>> definitions(@RequestParam(required = false) Long tenantId,
                                                            @RequestParam(defaultValue = "1") int page,
-                                                           @RequestParam(defaultValue = "20") int size) {
-        return Result.ok(taskflowWebClient.workflowDefinitions(TaskflowIdentity.tenantId(tenantId), page, size));
+                                                           @RequestParam(defaultValue = "20") int size,
+                                                           @RequestParam(required = false) java.util.List<Long> categoryIds) {
+        return Result.ok(taskflowWebClient.workflowDefinitions(
+                TaskflowIdentity.tenantId(tenantId), page, size, categoryIds));
     }
 
     @PostMapping("/definitions/{id}/activate")

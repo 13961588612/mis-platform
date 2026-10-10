@@ -31,6 +31,15 @@ public interface FormDefinitionRepository extends JpaRepository<FormDefinition, 
             Long tenantId, Long categoryId, Integer deleted);
 
     /**
+     * 按分类<b>集合</b>过滤的平铺列表（多选筛选：{@code category_id IN (...)}，即集合 IN 的 OR）。
+     *
+     * <p>精确匹配、<b>不含子分类</b>：分类是表单的属性（软引用），不存在父子继承语义。
+     * 未分类（{@code category_id IS NULL}）不属于任何显式分类，故不会被本查询命中。
+     */
+    List<FormDefinition> findByTenantIdAndCategoryIdInAndDeletedOrderBySortOrderAscIdAsc(
+            Long tenantId, Collection<Long> categoryIds, Integer deleted);
+
+    /**
      * 批量按 code 取未软删记录，用于流程定义保存时的白名单强校验（避免逐个查询）。
      */
     @Query("""

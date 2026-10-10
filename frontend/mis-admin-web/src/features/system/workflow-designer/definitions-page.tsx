@@ -35,6 +35,7 @@ import { DefinitionDialog, type DefinitionDraft } from './definition-dialog';
 import { WfCategoryTree } from './wf-category-tree';
 import type { FlowMeta } from './property-panel';
 import { cn } from '@/lib/utils';
+import { CategoryTreeSelect } from '@/components/common/category-tree-select';
 
 /** 流程编排 / 定义编辑的权限码（菜单 95006 `workflow:definition:edit`，V132 由 95007 合并而来）。 */
 const PERM_EDIT = 'workflow:definition:edit';
@@ -112,7 +113,7 @@ export function WorkflowDefinitionPage() {
   const [acting, setActing] = useState<string | null>(null);
   const [page, setPage] = useState(1);
   const [total, setTotal] = useState(0);
-  const [categoryFilter, setCategoryFilter] = useState<number | null>(null);
+  const [categoryIds, setCategoryIds] = useState<number[]>([]);
   const [createOpen, setCreateOpen] = useState(false);
   const [designer, setDesigner] = useState<DesignerState>(CLOSED);
 
@@ -132,7 +133,12 @@ export function WorkflowDefinitionPage() {
     setLoading(true);
     setError(null);
     try {
-      const r = await fetchDefinitions(TENANT_ID, page, DEF_SIZE, categoryFilter);
+      const r = await fetchDefinitions(
+        TENANT_ID,
+        page,
+        DEF_SIZE,
+        categoryIds.length > 0 ? categoryIds : undefined,
+      );
       setItems(r.list);
       setTotal(r.total);
     } catch (e) {
@@ -140,7 +146,7 @@ export function WorkflowDefinitionPage() {
     } finally {
       setLoading(false);
     }
-  }, [TENANT_ID, page, categoryFilter]);
+  }, [TENANT_ID, page, categoryIds]);
 
   const loadCategories = useCallback(async () => {
     setCatLoading(true);
@@ -241,7 +247,7 @@ export function WorkflowDefinitionPage() {
     setCatDeleting(true);
     try {
       // 引用校验：若该分类下还有流程定义则拦截（避免产生孤儿定义）。
-      const ref = await fetchDefinitions(TENANT_ID, 1, 1, Number(target.id));
+      const ref = await fetchDefinitions(TENANT_ID, 1, 1, [Number(target.id)]);
       if (ref.total > 0) {
         toast.error(`该分类下还有 ${ref.total} 个流程定义，无法删除`);
         setCatDeleteTarget(null);
@@ -302,22 +308,15 @@ export function WorkflowDefinitionPage() {
       {activeTab === 'definitions' ? (
         <>
           <div className="flex flex-wrap items-center gap-2">
-            <select
-              aria-label="按分类筛选"
-              value={categoryFilter == null ? '' : String(categoryFilter)}
-              onChange={(e) => {
-                setCategoryFilter(e.target.value === '' ? null : Number(e.target.value));
+            <CategoryTreeSelect
+              tree={categoryTree}
+              value={categoryIds.map(String)}
+              onChange={(ids) => {
+                setCategoryIds(ids.map(Number));
                 setPage(1);
               }}
-              className="h-9 w-48 rounded-md border border-input bg-background px-2 text-sm"
-            >
-              <option value="">全部分类</option>
-              {categoryList.map((c) => (
-                <option key={c.id} value={String(c.id)}>
-                  {c.name}
-                </option>
-              ))}
-            </select>
+              placeholder="全部分类"
+            />
             <Button size="sm" onClick={() => setCreateOpen(true)}>
               <FilePlus2 className="mr-1 h-3.5 w-3.5" />
               新建流程

@@ -304,12 +304,25 @@ public class TaskflowWebClient extends AbstractDownstreamClient {
     }
 
     public PageResult<WfDefinitionDTO> workflowDefinitions(Long tenantId, int page, int size) {
-        String uri = UriComponentsBuilder.fromPath("/internal/v1/workflow/definitions")
+        return workflowDefinitions(tenantId, page, size, java.util.List.of());
+    }
+
+    /**
+     * 流程定义列表（分页，可选 categoryIds 多值分类过滤）。
+     *
+     * <p>{@code categoryIds} 非空时以<b>单值逗号串</b>传参 {@code categoryIds=1,2}，
+     * 下游 mis-taskflow 的 {@code @RequestParam List<Long> categoryIds} 自动拆分。
+     */
+    public PageResult<WfDefinitionDTO> workflowDefinitions(Long tenantId, int page, int size,
+                                                           java.util.List<Long> categoryIds) {
+        UriComponentsBuilder b = UriComponentsBuilder.fromPath("/internal/v1/workflow/definitions")
                 .queryParam("tenantId", tenantId)
                 .queryParam("page", page)
-                .queryParam("size", size)
-                .toUriString();
-        return block(client().get().uri(uri).retrieve().bodyToMono(WF_DEFINITION_PAGE));
+                .queryParam("size", size);
+        if (categoryIds != null && !categoryIds.isEmpty()) {
+            b.queryParam("categoryIds", String.join(",", categoryIds.stream().map(String::valueOf).toList()));
+        }
+        return block(client().get().uri(b.toUriString()).retrieve().bodyToMono(WF_DEFINITION_PAGE));
     }
 
     public void activateWorkflowDefinition(Long id, Long tenantId) {
@@ -424,15 +437,23 @@ public class TaskflowWebClient extends AbstractDownstreamClient {
     // ------------------------------------------------------------------
 
     public java.util.List<FormDefinitionVO> formDefinitions(Long tenantId, String status) {
-        return formDefinitions(tenantId, status, null);
+        return formDefinitions(tenantId, status, java.util.List.of());
     }
 
-    public java.util.List<FormDefinitionVO> formDefinitions(Long tenantId, String status, Long categoryId) {
+    /**
+     * 表单定义列表（可选 status / categoryIds 过滤）。
+     *
+     * <p>{@code categoryIds} 非空时以<b>单值逗号串</b>传参 {@code categoryIds=1,2}
+     * （避免各层对重复参数绑定不一致的问题）；下游 mis-taskflow 的
+     * {@code @RequestParam List<Long> categoryIds} 会自动按逗号拆分。
+     */
+    public java.util.List<FormDefinitionVO> formDefinitions(Long tenantId, String status,
+                                                            java.util.List<Long> categoryIds) {
         UriComponentsBuilder b = UriComponentsBuilder.fromPath("/internal/v1/form-definitions")
                 .queryParam("tenantId", tenantId)
                 .queryParamIfPresent("status", Optional.ofNullable(status));
-        if (categoryId != null) {
-            b.queryParam("categoryId", categoryId);
+        if (categoryIds != null && !categoryIds.isEmpty()) {
+            b.queryParam("categoryIds", String.join(",", categoryIds.stream().map(String::valueOf).toList()));
         }
         return block(client().get().uri(b.toUriString()).retrieve().bodyToMono(FORM_DEF_LIST));
     }

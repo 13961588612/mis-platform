@@ -7,6 +7,7 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 
@@ -24,6 +25,14 @@ public interface WfDefinitionRepository extends JpaRepository<WfDefinition, Long
 
     /** 按流程分类筛选（决策 B：categoryId 软引用，可空）。 */
     List<WfDefinition> findByTenantIdAndCategoryIdAndDeleted(Long tenantId, Long categoryId, Integer deleted);
+
+    /**
+     * 按流程分类<b>集合</b>筛选（多选：{@code category_id IN (...)}，即集合 IN 的 OR）。
+     *
+     * <p>精确匹配、不含子分类：categoryId 是属性（软引用 wf_category.id）。
+     */
+    List<WfDefinition> findByTenantIdAndCategoryIdInAndDeleted(
+            Long tenantId, Collection<Long> categoryIds, Integer deleted);
 
     /**
      * 引用计数：白名单里含该 formCode 的流程定义数（含软删行）。

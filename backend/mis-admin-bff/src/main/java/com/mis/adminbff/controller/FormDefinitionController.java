@@ -24,7 +24,7 @@ import java.util.Map;
  * 路径写错会落成 403。
  *
  * <p>V133：表单不再有树，故 {@code GET /tree} 端点已移除（sys_api 95051 行保留但休眠）；
- * 列表新增 {@code categoryId} 精确过滤。
+ * 列表新增 {@code categoryIds} 多值精确过滤（逗号串，Spring 自动拆分为 List）。
  */
 @RestController
 @RequestMapping("/api/v1/form-definitions")
@@ -39,9 +39,9 @@ public class FormDefinitionController {
     @GetMapping
     public Result<List<FormDefinitionVO>> list(@RequestParam(required = false) Long tenantId,
                                                @RequestParam(required = false) String status,
-                                               @RequestParam(required = false) Long categoryId) {
+                                               @RequestParam(required = false) List<Long> categoryIds) {
         return Result.ok(taskflowWebClient.formDefinitions(
-                TaskflowIdentity.tenantId(tenantId), status, categoryId));
+                TaskflowIdentity.tenantId(tenantId), status, categoryIds));
     }
 
     @GetMapping("/{id}")

@@ -23,7 +23,7 @@ import java.util.List;
  * <p>对外路径由 BFF 暴露为 {@code /api/v1/form-definitions}（登记在 V128 的 sys_api 95051-95055）。
  *
  * <p>V133：表单不再有树，故 {@code GET /tree} 端点已移除（对应 sys_api 95051 行保留但休眠）；
- * 列表新增 {@code categoryId} 精确过滤。
+ * 列表新增 {@code categoryIds} 多值精确过滤（逗号串由前端/BFF 传入，Spring 自动拆分为 List）。
  */
 @RestController
 @RequestMapping("/internal/v1/form-definitions")
@@ -38,8 +38,8 @@ public class FormDefinitionController {
     @GetMapping
     public Result<List<FormDefinitionVO>> list(@RequestParam Long tenantId,
                                                @RequestParam(required = false) String status,
-                                               @RequestParam(required = false) Long categoryId) {
-        return Result.ok(formService.list(tenantId, status, categoryId));
+                                               @RequestParam(required = false) List<Long> categoryIds) {
+        return Result.ok(formService.list(tenantId, status, categoryIds));
     }
 
     @GetMapping("/{id}")

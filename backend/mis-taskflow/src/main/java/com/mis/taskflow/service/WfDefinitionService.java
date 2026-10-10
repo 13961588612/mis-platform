@@ -152,25 +152,26 @@ public class WfDefinitionService {
 
     @Transactional(readOnly = true)
     public PageResult<WfDefinitionDTO> list(Long tenantId, int page, int size) {
-        return list(tenantId, page, size, null);
+        return list(tenantId, page, size, List.of());
     }
 
     /**
-     * 分页列表（可选 categoryId 过滤，决策 B：按流程分类筛选）。
+     * 分页列表（可选 categoryIds 过滤，决策 B：按流程分类多选筛选）。
      *
-     * <p>categoryId 为 {@code null} 时走原分页路径；非 null 时按软引用分类筛选，
+     * <p>{@code categoryIds} 为空 / null 时走原分页路径；非空时按软引用分类集合筛选
+     * （{@code category_id IN (...)}，集合 IN 的 OR，精确匹配不含子分类），
      * 因仓储返回的是 List 而非 Page，这里用单次取全量 + 简单分页包装（分类内数据量可控）。
      */
     @Transactional(readOnly = true)
-    public PageResult<WfDefinitionDTO> list(Long tenantId, int page, int size, Long categoryId) {
-        if (categoryId == null) {
+    public PageResult<WfDefinitionDTO> list(Long tenantId, int page, int size, List<Long> categoryIds) {
+        if (categoryIds == null || categoryIds.isEmpty()) {
             var pageable = PageRequest.of(Math.max(page - 1, 0), Math.min(Math.max(size, 1), 200));
             var p = definitionRepository.findByTenantIdAndDeleted(tenantId, 0, pageable);
             return PageResult.of(page, pageable.getPageSize(), p.getTotalElements(),
                     p.getContent().stream().map(this::toDto).toList());
         }
         List<WfDefinitionDTO> all = definitionRepository
-                .findByTenantIdAndCategoryIdAndDeleted(tenantId, categoryId, 0).stream()
+                .findByTenantIdAndCategoryIdInAndDeleted(tenantId, categoryIds, 0).stream()
                 .map(this::toDto).toList();
         int from = Math.max((page - 1) * size, 0);
         int to = Math.min(from + size, all.size());

@@ -15,6 +15,8 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.util.List;
+
 /**
  * 流程定义内部 API（P5）。
  */
@@ -70,7 +72,7 @@ public class WfDefinitionController {
     public Result<PageResult<WfDefinitionDTO>> list(@RequestParam Long tenantId,
                                                      @RequestParam(defaultValue = "1") int page,
                                                      @RequestParam(defaultValue = "20") int size,
-                                                     @RequestParam(required = false) Long categoryId) {
-        return Result.ok(definitionService.list(tenantId, page, size, categoryId));
+                                                     @RequestParam(required = false) List<Long> categoryIds) {
+        return Result.ok(definitionService.list(tenantId, page, size, categoryIds));
     }
 }

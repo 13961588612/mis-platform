@@ -118,17 +118,17 @@ export interface ProcessDetail {
 }
 
 /**
- * 流程定义列表（分页）。`categoryId` 透传给后端按分类过滤（V132 新增）。
- * `categoryId` 为 null / undefined 时不带该参数，返回全部分类。
+ * 流程定义列表（分页）。`categoryIds` 透传给后端按分类集合过滤（多选精确匹配）。
+ * `categoryIds` 为空 / null 时不带该参数，返回全部分类。以**单值逗号串**传参。
  */
 export async function fetchDefinitions(
   tenantId: string,
   page = 1,
   size = 20,
-  categoryId?: number | null,
+  categoryIds?: number[] | null,
 ): Promise<PageResult<WfDefinition>> {
   const params: Record<string, unknown> = { tenantId, page, size };
-  if (categoryId != null) params.categoryId = categoryId;
+  if (categoryIds && categoryIds.length > 0) params.categoryIds = categoryIds.join(',');
   const res = await api.get<ApiResult<PageResult<WfDefinition>>>('/workflow/definitions', { params });
   return unwrap(res, '获取流程定义失败');
 }
