@@ -21,6 +21,9 @@ import java.util.List;
  * 业务表单注册内部 API。
  *
  * <p>对外路径由 BFF 暴露为 {@code /api/v1/form-definitions}（登记在 V128 的 sys_api 95051-95055）。
+ *
+ * <p>V133：表单不再有树，故 {@code GET /tree} 端点已移除（对应 sys_api 95051 行保留但休眠）；
+ * 列表新增 {@code categoryId} 精确过滤。
  */
 @RestController
 @RequestMapping("/internal/v1/form-definitions")
@@ -32,17 +35,11 @@ public class FormDefinitionController {
         this.formService = formService;
     }
 
-    @GetMapping("/tree")
-    public Result<List<FormDefinitionVO>> tree(@RequestParam Long tenantId,
-                                               @RequestParam(required = false) String kind) {
-        return Result.ok(formService.tree(tenantId, kind));
-    }
-
     @GetMapping
     public Result<List<FormDefinitionVO>> list(@RequestParam Long tenantId,
                                                @RequestParam(required = false) String status,
-                                               @RequestParam(required = false) String kind) {
-        return Result.ok(formService.list(tenantId, status, kind));
+                                               @RequestParam(required = false) Long categoryId) {
+        return Result.ok(formService.list(tenantId, status, categoryId));
     }
 
     @GetMapping("/{id}")

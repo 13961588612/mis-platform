@@ -16,8 +16,12 @@ import java.time.LocalDateTime;
  * 「哪个 formCode 存在、归哪一类、启用没有」；它长什么样由前端注册表负责，
  * 故此处刻意不存字段 schema（不做低代码设计器）。
  *
- * <p>分类树用单表自引用 {@code parentId}（邻接表，{@code 0} 表示根），
- * 与 {@code sys_menu} / {@code kb_category} 的既有做法一致。
+ * <p>分类从「父级」改为「属性」：分类独立成表 {@link FormCategory}，表单只以
+ * {@link #categoryId} 软引用它（{@code NULL} = 未分类），不再有父子层级。
+ *
+ * <p>⚠️ 决策 B：DB 中 {@code kind} / {@code parent_id} 两列为<b>软废弃</b>——
+ * 物理列仍在（保迁移验收测试原样绿、保回滚），但实体已<b>不再映射</b>，
+ * 新行 INSERT 时由 DB 默认值（{@code 'FORM'} / {@code 0}）兜底。业务代码不得重新读写。
  */
 @Entity
 @Table(name = "form_definition")
@@ -26,22 +30,15 @@ public class FormDefinition {
     public static final String STATUS_ENABLED = "ENABLED";
     public static final String STATUS_DISABLED = "DISABLED";
 
-    /** 根分类的 parentId。 */
-    public static final Long ROOT_PARENT_ID = 0L;
-
-    /** 节点类型：纯文件夹（code 为文件夹 key）。 */
-    public static final String KIND_CATEGORY = "CATEGORY";
-    /** 节点类型：真实表单（code 必须 ∈ 前端已注册组件）。 */
-    public static final String KIND_FORM = "FORM";
-
     @Id
     private Long id;
 
     @Column(name = "tenant_id", nullable = false)
     private Long tenantId;
 
-    @Column(name = "parent_id", nullable = false)
-    private Long parentId = ROOT_PARENT_ID;
+    /** 所属分类（软引用 {@code form_category.id}，无外键）；{@code NULL} = 未分类。 */
+    @Column(name = "category_id")
+    private Long categoryId;
 
     /** 表单编码，精确匹配前端注册表 key（大小写敏感），软删后不可复用。 */
     @Column(nullable = false, length = 64)
@@ -56,13 +53,6 @@ public class FormDefinition {
 
     @Column(nullable = false, length = 16)
     private String status = STATUS_ENABLED;
-
-    /**
-     * 节点类型（V131 新增）：{@link #KIND_CATEGORY} 纯文件夹 / {@link #KIND_FORM} 真实表单。
-     * 默认 {@link #KIND_FORM}——历史行与未显式指定 kind 的写入一律按真实表单处理。
-     */
-    @Column(nullable = false, length = 16)
-    private String kind = KIND_FORM;
 
     @Column(name = "sort_order", nullable = false)
     private Integer sortOrder = 0;
@@ -88,8 +78,8 @@ public class FormDefinition {
     public void setId(Long id) { this.id = id; }
     public Long getTenantId() { return tenantId; }
     public void setTenantId(Long tenantId) { this.tenantId = tenantId; }
-    public Long getParentId() { return parentId; }
-    public void setParentId(Long parentId) { this.parentId = parentId; }
+    public Long getCategoryId() { return categoryId; }
+    public void setCategoryId(Long categoryId) { this.categoryId = categoryId; }
     public String getCode() { return code; }
     public void setCode(String code) { this.code = code; }
     public String getName() { return name; }
@@ -98,8 +88,6 @@ public class FormDefinition {
     public void setDescription(String description) { this.description = description; }
     public String getStatus() { return status; }
     public void setStatus(String status) { this.status = status; }
-    public String getKind() { return kind; }
-    public void setKind(String kind) { this.kind = kind; }
     public Integer getSortOrder() { return sortOrder; }
     public void setSortOrder(Integer sortOrder) { this.sortOrder = sortOrder; }
     public String getConfig() { return config; }

@@ -22,6 +22,9 @@ import java.util.Map;
  *
  * <p>路径与 {@code sys_api} 登记（V128 的 95051-95055）逐字一致——{@code deny-unmapped:true} 下
  * 路径写错会落成 403。
+ *
+ * <p>V133：表单不再有树，故 {@code GET /tree} 端点已移除（sys_api 95051 行保留但休眠）；
+ * 列表新增 {@code categoryId} 精确过滤。
  */
 @RestController
 @RequestMapping("/api/v1/form-definitions")
@@ -33,17 +36,12 @@ public class FormDefinitionController {
         this.taskflowWebClient = taskflowWebClient;
     }
 
-    @GetMapping("/tree")
-    public Result<List<FormDefinitionVO>> tree(@RequestParam(required = false) Long tenantId,
-                                              @RequestParam(required = false) String kind) {
-        return Result.ok(taskflowWebClient.formDefinitionTree(TaskflowIdentity.tenantId(tenantId), kind));
-    }
-
     @GetMapping
     public Result<List<FormDefinitionVO>> list(@RequestParam(required = false) Long tenantId,
                                                @RequestParam(required = false) String status,
-                                               @RequestParam(required = false) String kind) {
-        return Result.ok(taskflowWebClient.formDefinitions(TaskflowIdentity.tenantId(tenantId), status, kind));
+                                               @RequestParam(required = false) Long categoryId) {
+        return Result.ok(taskflowWebClient.formDefinitions(
+                TaskflowIdentity.tenantId(tenantId), status, categoryId));
     }
 
     @GetMapping("/{id}")

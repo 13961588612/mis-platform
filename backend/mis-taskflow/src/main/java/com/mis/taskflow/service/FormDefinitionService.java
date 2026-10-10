@@ -3,6 +3,7 @@ package com.mis.taskflow.service;
 import com.mis.common.core.exception.BusinessException;
 import com.mis.common.core.exception.ResultCode;
 import com.mis.taskflow.domain.entity.FormDefinition;
+import com.mis.taskflow.domain.repository.FormCategoryRepository;
 import com.mis.taskflow.domain.repository.FormDefinitionRepository;
 import com.mis.taskflow.domain.repository.WfDefinitionRepository;
 import com.mis.taskflow.domain.repository.WfInstanceRepository;
@@ -14,15 +15,15 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
 import java.time.LocalDateTime;
-import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
 
 /**
  * 业务表单注册表管理。
  *
  * <p>后台只管「哪个 formCode 存在、归哪一类、启用没有」；表单长什么样由前端注册表负责。
+ *
+ * <p>V133 起分类从「父级」改为「属性」：表单不再有父子层级，只以 {@code categoryId}
+ * 软引用独立分类表 {@code form_category}（可空=未分类）。旧的树 / 深度 / kind 逻辑已移除。
  *
  * <p>⚠️ code 是身份：{@code uk_form_def_tenant_code} 不带 {@code WHERE deleted = 0}，
  * 软删后 code 也不可复用——否则历史实例（{@code wf_instance.started_form_code} 是字符串软引用）
@@ -31,17 +32,17 @@ import java.util.Map;
 @Service
 public class FormDefinitionService {
 
-    /** 分类树最大深度：根(0) → 分类(1) → 表单(2)。挂到第 3 层节点下会被拒。 */
-    private static final int MAX_DEPTH = 2;
-
     private final FormDefinitionRepository formRepository;
+    private final FormCategoryRepository categoryRepository;
     private final WfDefinitionRepository definitionRepository;
     private final WfInstanceRepository instanceRepository;
 
     public FormDefinitionService(FormDefinitionRepository formRepository,
+                                 FormCategoryRepository categoryRepository,
                                  WfDefinitionRepository definitionRepository,
                                  WfInstanceRepository instanceRepository) {
         this.formRepository = formRepository;
+        this.categoryRepository = categoryRepository;
         this.definitionRepository = definitionRepository;
         this.instanceRepository = instanceRepository;
     }
@@ -61,76 +62,36 @@ public class FormDefinitionService {
     public List<FormDefinitionVO> listEnabled(Long tenantId) {
         return formRepository.findByTenantIdAndStatusAndDeletedOrderBySortOrderAscIdAsc(
                         tenantId, FormDefinition.STATUS_ENABLED, 0)
-                .stream().map(f -> toVo(f, null)).toList();
+                .stream().map(FormDefinitionService::toVo).toList();
     }
 
     /**
-     * 列表（可选 status / kind 过滤）。
+     * 列表（可选 status / categoryId 过滤）。
      *
-     * <p>kind 由决策 B 引入：{@code CATEGORY} 仅取文件夹、{@code FORM} 仅取真实表单；
-     * 不传则不过滤（兼容旧行为，含历史数据）。
+     * <p>{@code categoryId} 非空时按分类精确匹配（决策 E：精确匹配，不含子分类）；
+     * 不传则不过滤（返回全部）。
      */
     @Transactional(readOnly = true)
-    public List<FormDefinitionVO> list(Long tenantId, String status, String kind) {
+    public List<FormDefinitionVO> list(Long tenantId, String status, Long categoryId) {
         List<FormDefinition> all;
-        if ("ENABLED".equalsIgnoreCase(status)) {
-            if (kind == null) {
-                all = formRepository.findByTenantIdAndStatusAndDeletedOrderBySortOrderAscIdAsc(
-                        tenantId, FormDefinition.STATUS_ENABLED, 0);
-            } else {
-                all = formRepository.findByTenantIdAndKindAndDeletedOrderByParentIdAscSortOrderAscIdAsc(
-                                tenantId, kind, 0).stream()
-                        .filter(f -> FormDefinition.STATUS_ENABLED.equals(f.getStatus())).toList();
-            }
+        boolean enabledOnly = "ENABLED".equalsIgnoreCase(status);
+        if (categoryId != null) {
+            all = formRepository.findByTenantIdAndCategoryIdAndDeletedOrderBySortOrderAscIdAsc(
+                            tenantId, categoryId, 0).stream()
+                    .filter(f -> !enabledOnly || FormDefinition.STATUS_ENABLED.equals(f.getStatus()))
+                    .toList();
+        } else if (enabledOnly) {
+            all = formRepository.findByTenantIdAndStatusAndDeletedOrderBySortOrderAscIdAsc(
+                    tenantId, FormDefinition.STATUS_ENABLED, 0);
         } else {
-            all = (kind == null)
-                    ? formRepository.findByTenantIdAndDeletedOrderByParentIdAscSortOrderAscIdAsc(tenantId, 0)
-                    : formRepository.findByTenantIdAndKindAndDeletedOrderByParentIdAscSortOrderAscIdAsc(
-                            tenantId, kind, 0);
+            all = formRepository.findByTenantIdAndDeletedOrderBySortOrderAscIdAsc(tenantId, 0);
         }
-        return all.stream().map(f -> toVo(f, null)).toList();
-    }
-
-    /**
-     * 分类树（邻接表在内存里组装）。
-     *
-     * <p>层级在应用层收敛为「根 → 分类 → 表单」三层（见 {@link #validateParent}），
-     * 因此这里用递归即可，不需要防环的 visited 集合。
-     *
-     * <p>kind 过滤时：{@code CATEGORY} 取纯文件夹子树（分类管理 Tab）；
-     * {@code FORM} 取真实表单（其父通常是 CATEGORY，故按 kind 过滤后根下直接挂平铺表单）。
-     */
-    @Transactional(readOnly = true)
-    public List<FormDefinitionVO> tree(Long tenantId) {
-        return tree(tenantId, null);
-    }
-
-    @Transactional(readOnly = true)
-    public List<FormDefinitionVO> tree(Long tenantId, String kind) {
-        List<FormDefinition> all = (kind == null)
-                ? formRepository.findByTenantIdAndDeletedOrderByParentIdAscSortOrderAscIdAsc(tenantId, 0)
-                : formRepository.findByTenantIdAndKindAndDeletedOrderByParentIdAscSortOrderAscIdAsc(
-                        tenantId, kind, 0);
-        Map<Long, List<FormDefinition>> byParent = new HashMap<>();
-        for (FormDefinition f : all) {
-            byParent.computeIfAbsent(f.getParentId(), k -> new ArrayList<>()).add(f);
-        }
-        return buildLevel(tenantId, FormDefinition.ROOT_PARENT_ID, byParent);
-    }
-
-    private List<FormDefinitionVO> buildLevel(Long tenantId, Long parentId,
-                                              Map<Long, List<FormDefinition>> byParent) {
-        List<FormDefinitionVO> out = new ArrayList<>();
-        for (FormDefinition f : byParent.getOrDefault(parentId, List.of())) {
-            List<FormDefinitionVO> children = buildLevel(tenantId, f.getId(), byParent);
-            out.add(toVo(f, children.isEmpty() ? null : children));
-        }
-        return out;
+        return all.stream().map(FormDefinitionService::toVo).toList();
     }
 
     @Transactional(readOnly = true)
     public FormDefinitionVO get(Long id, Long tenantId) {
-        return toVo(require(id, tenantId), null);
+        return toVo(require(id, tenantId));
     }
 
     // ------------------------------------------------------------------
@@ -147,20 +108,17 @@ public class FormDefinitionService {
                             ? "表单编码「" + code + "」已被删除，不可复用（历史实例仍按此编码渲染）"
                             : "表单编码「" + code + "」已存在");
         });
-        String kind = normalizeKind(req.kind());
-        validateKindAndCode(code, kind);
-        validateParent(tenantId, req.parentId(), null);
+        validateCategory(tenantId, req.categoryId());
 
         LocalDateTime now = LocalDateTime.now();
         FormDefinition f = new FormDefinition();
         f.setId(IdGenerator.nextId());
         f.setTenantId(tenantId);
-        f.setParentId(req.parentId() == null ? FormDefinition.ROOT_PARENT_ID : req.parentId());
+        f.setCategoryId(req.categoryId());
         f.setCode(code);
         f.setName(req.name().trim());
         f.setDescription(req.description());
         f.setStatus(normalizeStatus(req.status()));
-        f.setKind(kind);
         f.setSortOrder(req.sortOrder() == null ? 0 : req.sortOrder());
         f.setConfig(StringUtils.hasText(req.config()) ? req.config() : "{}");
         f.setDeleted(0);
@@ -181,15 +139,12 @@ public class FormDefinitionService {
             throw new BusinessException(ResultCode.VALIDATION_ERROR, "表单编码不可修改（它是历史实例的引用标识）");
         }
 
-        validateParent(tenantId, req.parentId(), id);
+        validateCategory(tenantId, req.categoryId());
 
-        String kind = normalizeKind(req.kind());
-        validateKindAndCode(f.getCode(), kind);
-        f.setParentId(req.parentId() == null ? FormDefinition.ROOT_PARENT_ID : req.parentId());
+        f.setCategoryId(req.categoryId());
         f.setName(req.name().trim());
         f.setDescription(req.description());
         f.setStatus(normalizeStatus(req.status()));
-        f.setKind(kind);
         f.setSortOrder(req.sortOrder() == null ? 0 : req.sortOrder());
         f.setConfig(StringUtils.hasText(req.config()) ? req.config() : "{}");
         f.setUpdatedAt(LocalDateTime.now());
@@ -199,23 +154,19 @@ public class FormDefinitionService {
     /**
      * 软删表单定义。
      *
-     * <p>⚠️ 有任何引用 ⇒ 拒绝。三类引用：
+     * <p>⚠️ 有任何引用 ⇒ 拒绝。两类引用：
      * <ol>
-     *   <li>子分类：删了会留下孤儿节点</li>
      *   <li>{@code wf_definition.supported_form_codes @> ARRAY[code]}：流程白名单</li>
      *   <li>{@code wf_instance.started_form_code = code}：历史实例已用它发起过流程</li>
      * </ol>
-     * 后两类是字符串软引用（无外键），库里查不到外键约束，只能在这里挡。
+     * 这两类是字符串软引用（无外键），库里查不到外键约束，只能在这里挡。
+     *
+     * <p>分类引用关系是反过来的：表单挂在分类下，删表单不影响分类，无需在此校验。
      */
     @Transactional
     public void delete(Long id, Long tenantId) {
         FormDefinition f = require(id, tenantId);
 
-        long children = formRepository.countByTenantIdAndParentIdAndDeleted(tenantId, id, 0);
-        if (children > 0) {
-            throw new BusinessException(ResultCode.VALIDATION_ERROR,
-                    "表单「" + f.getName() + "」下还有 " + children + " 个子项，请先删除子项");
-        }
         long usedByDefs = definitionRepository.countBySupportedFormCode(tenantId, f.getCode());
         if (usedByDefs > 0) {
             throw new BusinessException(ResultCode.VALIDATION_ERROR,
@@ -246,54 +197,35 @@ public class FormDefinitionService {
         }
     }
 
+    /** 供流程定义白名单校验使用：批量取出已注册且启用的 code 集合。 */
+    @Transactional(readOnly = true)
+    public List<String> listEnabledCodes(Long tenantId, List<String> codes) {
+        if (codes == null || codes.isEmpty()) {
+            return List.of();
+        }
+        return formRepository.findAliveByTenantIdAndCodes(tenantId, codes).stream()
+                .filter(f -> FormDefinition.STATUS_ENABLED.equals(f.getStatus()))
+                .map(FormDefinition::getCode)
+                .toList();
+    }
+
     // ------------------------------------------------------------------
     // 内部
     // ------------------------------------------------------------------
 
-    /**
-     * 父节点校验：层级收敛为「根 → 分类 → 表单」三层（{@link #MAX_DEPTH}）。
-     *
-     * <p>父节点必须存在、未软删，且挂上去之后本节点的深度不超过 {@link #MAX_DEPTH}。
-     *
-     * <p>为什么用应用层而不是 {@code CHECK}：PG 的 CHECK 不能跨行，深度约束天然做不到。
-     *
-     * <p>⚠️ 深度上限同时保证了树里不可能出现「A是B的祖先、B是A的祖先」这种环：
-     * {@link #tree} 的递归因此不需要 visited 集合。
-     */
-    private void validateParent(Long tenantId, Long parentId, Long selfId) {
-        if (parentId == null || FormDefinition.ROOT_PARENT_ID.equals(parentId)) {
+    /** 分类存在性校验：{@code categoryId} 非空时须存在、同租户、未软删。 */
+    private void validateCategory(Long tenantId, Long categoryId) {
+        if (categoryId == null) {
             return;
         }
-        if (parentId.equals(selfId)) {
-            throw new BusinessException(ResultCode.VALIDATION_ERROR, "父分类不能是自己");
-        }
-        FormDefinition parent = formRepository
-                .findByIdAndTenantIdAndDeleted(parentId, tenantId, 0)
-                .orElseThrow(() -> new BusinessException(ResultCode.VALIDATION_ERROR, "父分类不存在: " + parentId));
-        int parentDepth = depthOf(tenantId, parent);
-        if (parentDepth + 1 > MAX_DEPTH) {
-            throw new BusinessException(ResultCode.VALIDATION_ERROR,
-                    "分类层级最多三层（根 → 分类 → 表单），父分类「" + parent.getName() + "」已在第三层");
-        }
-    }
-
-    /** 节点深度：根（{@code parent_id = 0}）为 0，每往下一层 +1。上限 {@link #MAX_DEPTH}，不会死循环。 */
-    private int depthOf(Long tenantId, FormDefinition node) {
-        int depth = 0;
-        Long cursor = node.getParentId();
-        while (cursor != null && !FormDefinition.ROOT_PARENT_ID.equals(cursor) && depth <= MAX_DEPTH) {
-            depth++;
-            cursor = formRepository.findByIdAndTenantIdAndDeleted(cursor, tenantId, 0)
-                    .map(FormDefinition::getParentId)
-                    .orElse(null);
-        }
-        return depth;
+        categoryRepository.findByIdAndTenantIdAndDeleted(categoryId, tenantId, 0)
+                .orElseThrow(() -> new BusinessException(ResultCode.VALIDATION_ERROR,
+                        "分类不存在: " + categoryId));
     }
 
     private FormDefinition require(Long id, Long tenantId) {
-        FormDefinition f = formRepository.findByIdAndTenantIdAndDeleted(id, tenantId, 0)
+        return formRepository.findByIdAndTenantIdAndDeleted(id, tenantId, 0)
                 .orElseThrow(() -> new BusinessException(ResultCode.NOT_FOUND, "表单定义不存在"));
-        return f;
     }
 
     private static String normalizeStatus(String status) {
@@ -307,54 +239,10 @@ public class FormDefinitionService {
         return s;
     }
 
-    /** kind 归一化：未指定（历史直连 service 的调用点）默认 FORM；非法值直接拒绝。 */
-    private static String normalizeKind(String kind) {
-        if (!StringUtils.hasText(kind)) {
-            return FormDefinition.KIND_FORM;
-        }
-        String k = kind.trim().toUpperCase();
-        if (!FormDefinition.KIND_CATEGORY.equals(k) && !FormDefinition.KIND_FORM.equals(k)) {
-            throw new BusinessException(ResultCode.VALIDATION_ERROR, "节点类型(kind)只能是 CATEGORY 或 FORM");
-        }
-        return k;
-    }
-
-    /**
-     * kind + code 联合校验（决策 A / B）。
-     *
-     * <p>code 的格式（{@code ^[A-Z][A-Z0-9_]{1,63}$}）已由 {@link UpsertFormDefinitionRequest} 的
-     * {@code @Pattern} 在 controller 层保证；这里只补「业务语义」校验：
-     * <ul>
-     *   <li>FORM 的 code 必须 ∈ 前端已注册组件清单（{@code listFormLoaderCodes()}）——但组件注册表由
-     *       前端持有，后端不掌握，故<b>组件存在性由前端保证</b>，后端仅做格式 + 唯一性（已在 create 内）。
-     *       后端若要强校验可在此引入注册表查询，本期留空并标注 TODO。</li>
-     *   <li>CATEGORY 的 code 同为文件夹 key，格式约束同上即可，无额外校验。</li>
-     * </ul>
-     * TODO(后端): 若需后端兜底「FORM code 必须对应已注册组件」，在此注入组件注册表并校验。
-     */
-    private void validateKindAndCode(String code, String kind) {
-        // 当前后端仅做格式/唯一性（已在调用方完成），业务存在性校验依赖前端。占位以保持扩展点。
-        if (FormDefinition.KIND_FORM.equals(kind) && !StringUtils.hasText(code)) {
-            throw new BusinessException(ResultCode.VALIDATION_ERROR, "真实表单(FORM)的 code 不能为空");
-        }
-    }
-
-    private static FormDefinitionVO toVo(FormDefinition f, List<FormDefinitionVO> children) {
+    private static FormDefinitionVO toVo(FormDefinition f) {
         return new FormDefinitionVO(
-                String.valueOf(f.getId()), String.valueOf(f.getTenantId()), f.getParentId(),
+                String.valueOf(f.getId()), String.valueOf(f.getTenantId()), f.getCategoryId(),
                 f.getCode(), f.getName(), f.getDescription(), f.getStatus(), f.getSortOrder(),
-                f.getConfig(), children, f.getCreatedAt(), f.getUpdatedAt(), f.getKind());
-    }
-
-    /** 供流程定义白名单校验使用：批量取出已注册且启用的 code 集合。 */
-    @Transactional(readOnly = true)
-    public List<String> listEnabledCodes(Long tenantId, List<String> codes) {
-        if (codes == null || codes.isEmpty()) {
-            return List.of();
-        }
-        return formRepository.findAliveByTenantIdAndCodes(tenantId, codes).stream()
-                .filter(f -> FormDefinition.STATUS_ENABLED.equals(f.getStatus()))
-                .map(FormDefinition::getCode)
-                .toList();
+                f.getConfig(), f.getCreatedAt(), f.getUpdatedAt());
     }
 }

@@ -8,6 +8,7 @@ import com.mis.adminbff.client.model.AuditOpVO;
 import com.mis.adminbff.client.model.AuditStatsVO;
 import com.mis.adminbff.client.model.AuditTimelineItem;
 import com.mis.adminbff.client.model.ExecutionTaskVO;
+import com.mis.adminbff.client.model.FormCategoryVO;
 import com.mis.adminbff.client.model.FormDefinitionVO;
 import com.mis.adminbff.client.model.ProcessDetailVO;
 import com.mis.adminbff.client.model.TaskStatsVO;
@@ -76,9 +77,11 @@ public class TaskflowWebClient extends AbstractDownstreamClient {
             new ParameterizedTypeReference<>() {};
     private static final ParameterizedTypeReference<Result<java.util.List<FormDefinitionVO>>> FORM_DEF_LIST =
             new ParameterizedTypeReference<>() {};
-    private static final ParameterizedTypeReference<Result<java.util.List<FormDefinitionVO>>> FORM_DEF_TREE =
-            new ParameterizedTypeReference<>() {};
     private static final ParameterizedTypeReference<Result<FormDefinitionVO>> FORM_DEF_ONE =
+            new ParameterizedTypeReference<>() {};
+    private static final ParameterizedTypeReference<Result<java.util.List<FormCategoryVO>>> FORM_CATEGORY_LIST =
+            new ParameterizedTypeReference<>() {};
+    private static final ParameterizedTypeReference<Result<FormCategoryVO>> FORM_CATEGORY_ONE =
             new ParameterizedTypeReference<>() {};
     private static final ParameterizedTypeReference<Result<PageResult<ExecutionTaskVO>>> EXEC_PAGE =
             new ParameterizedTypeReference<>() {};
@@ -373,32 +376,63 @@ public class TaskflowWebClient extends AbstractDownstreamClient {
     }
 
     // ------------------------------------------------------------------
-    // 业务表单注册（form_definition）
+    // 表单分类（form_category，决策 B：独立邻接树）
     // ------------------------------------------------------------------
 
-    public java.util.List<FormDefinitionVO> formDefinitionTree(Long tenantId) {
-        return formDefinitionTree(tenantId, null);
+    public java.util.List<FormCategoryVO> formCategoryTree(Long tenantId) {
+        String uri = UriComponentsBuilder.fromPath("/internal/v1/form-categories/tree")
+                .queryParam("tenantId", tenantId).toUriString();
+        return block(client().get().uri(uri).retrieve().bodyToMono(FORM_CATEGORY_LIST));
     }
 
-    public java.util.List<FormDefinitionVO> formDefinitionTree(Long tenantId, String kind) {
-        UriComponentsBuilder b = UriComponentsBuilder.fromPath("/internal/v1/form-definitions/tree")
-                .queryParam("tenantId", tenantId);
-        if (kind != null && !kind.isBlank()) {
-            b.queryParam("kind", kind);
-        }
-        return block(client().get().uri(b.toUriString()).retrieve().bodyToMono(FORM_DEF_TREE));
+    public java.util.List<FormCategoryVO> formCategories(Long tenantId) {
+        String uri = UriComponentsBuilder.fromPath("/internal/v1/form-categories")
+                .queryParam("tenantId", tenantId).toUriString();
+        return block(client().get().uri(uri).retrieve().bodyToMono(FORM_CATEGORY_LIST));
     }
+
+    public FormCategoryVO getFormCategory(Long id, Long tenantId) {
+        String uri = UriComponentsBuilder.fromPath("/internal/v1/form-categories/{id}")
+                .queryParam("tenantId", tenantId).buildAndExpand(id).toUriString();
+        return block(client().get().uri(uri).retrieve().bodyToMono(FORM_CATEGORY_ONE));
+    }
+
+    public Long createFormCategory(Long tenantId, Long operatorId, Map<String, Object> body) {
+        String uri = UriComponentsBuilder.fromPath("/internal/v1/form-categories")
+                .queryParam("tenantId", tenantId)
+                .queryParamIfPresent("operatorId", Optional.ofNullable(operatorId))
+                .toUriString();
+        return block(client().post().uri(uri).contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(body).retrieve().bodyToMono(LONG_RESULT));
+    }
+
+    public void updateFormCategory(Long id, Long tenantId, Map<String, Object> body) {
+        String uri = UriComponentsBuilder.fromPath("/internal/v1/form-categories/{id}")
+                .queryParam("tenantId", tenantId).buildAndExpand(id).toUriString();
+        blockVoid(client().put().uri(uri).contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(body).retrieve().bodyToMono(VOID));
+    }
+
+    public void deleteFormCategory(Long id, Long tenantId) {
+        String uri = UriComponentsBuilder.fromPath("/internal/v1/form-categories/{id}")
+                .queryParam("tenantId", tenantId).buildAndExpand(id).toUriString();
+        blockVoid(client().delete().uri(uri).retrieve().bodyToMono(VOID));
+    }
+
+    // ------------------------------------------------------------------
+    // 业务表单注册（form_definition）
+    // ------------------------------------------------------------------
 
     public java.util.List<FormDefinitionVO> formDefinitions(Long tenantId, String status) {
         return formDefinitions(tenantId, status, null);
     }
 
-    public java.util.List<FormDefinitionVO> formDefinitions(Long tenantId, String status, String kind) {
+    public java.util.List<FormDefinitionVO> formDefinitions(Long tenantId, String status, Long categoryId) {
         UriComponentsBuilder b = UriComponentsBuilder.fromPath("/internal/v1/form-definitions")
                 .queryParam("tenantId", tenantId)
                 .queryParamIfPresent("status", Optional.ofNullable(status));
-        if (kind != null && !kind.isBlank()) {
-            b.queryParam("kind", kind);
+        if (categoryId != null) {
+            b.queryParam("categoryId", categoryId);
         }
         return block(client().get().uri(b.toUriString()).retrieve().bodyToMono(FORM_DEF_LIST));
     }

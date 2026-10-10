@@ -85,17 +85,15 @@ describe('DefinitionDialog', () => {
       {
         id: '960010',
         tenantId: '1',
-        parentId: 0,
+        categoryId: null,
         code: 'PUR_FORM',
         name: '采购申请单',
         description: null,
         status: 'ENABLED',
         sortOrder: 0,
         config: null,
-        children: null,
         createdAt: null,
         updatedAt: null,
-        kind: 'FORM',
       },
     ]);
     vi.mocked(workflowApi.fetchDefinitions).mockResolvedValue({ page: 1, size: 100, total: 0, list: [] });

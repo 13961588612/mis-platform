@@ -21,7 +21,7 @@ public final class FormTestFixtures {
             return code;
         }
         formService.create(tenantId, 1L, new UpsertFormDefinitionRequest(
-                FormDefinition.ROOT_PARENT_ID, code, name, null, FormDefinition.STATUS_ENABLED, 0, "{}"));
+                null, code, name, null, FormDefinition.STATUS_ENABLED, 0, "{}"));
         return code;
     }
 }

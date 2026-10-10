@@ -2,12 +2,14 @@ package com.mis.taskflow.service;
 
 import com.mis.common.core.exception.BusinessException;
 import com.mis.common.core.exception.ResultCode;
+import com.mis.taskflow.domain.entity.FormCategory;
 import com.mis.taskflow.domain.entity.FormDefinition;
 import com.mis.taskflow.domain.entity.WfDefinition;
 import com.mis.taskflow.domain.repository.FormDefinitionRepository;
 import com.mis.taskflow.domain.repository.WfDefinitionRepository;
 import com.mis.taskflow.dto.CreateDefinitionRequest;
 import com.mis.taskflow.dto.StartProcessRequest;
+import com.mis.taskflow.dto.UpsertFormCategoryRequest;
 import com.mis.taskflow.dto.UpsertFormDefinitionRequest;
 import com.mis.taskflow.dto.WfInstanceVO;
 import com.mis.taskflow.dto.WfNodeDTO;
@@ -23,11 +25,16 @@ import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * 业务表单注册表集成测试（form_definition + 取消发布 + 白名单强校验）。真实库，事务回滚。
+ *
+ * <p>V133 起表单不再有树：分类是表单的属性（{@code categoryId}，可空），
+ * 「树 / 父子 / 防环 / 删除子项」用例已随分类拆表平移到
+ * {@code FormCategoryServiceIntegrationTest}（意图保留、不弱化、不 skip）。
  */
 @SpringBootTest
 @Transactional
@@ -38,6 +45,7 @@ class FormDefinitionServiceIntegrationTest {
 
     @Autowired private FormDefinitionService formService;
     @Autowired private FormDefinitionRepository formRepository;
+    @Autowired private FormCategoryService categoryService;
     @Autowired private WfDefinitionService definitionService;
     @Autowired private WfDefinitionRepository definitionRepository;
     @Autowired private ProcessService processService;
@@ -46,14 +54,22 @@ class FormDefinitionServiceIntegrationTest {
         return prefix + "_" + System.nanoTime();
     }
 
+    /** 登记一个未分类的表单。 */
     private Long newForm(String code, String name) {
         return formService.create(TENANT, 1L, new UpsertFormDefinitionRequest(
-                FormDefinition.ROOT_PARENT_ID, code, name, null, FormDefinition.STATUS_ENABLED, 0, "{}"));
+                null, code, name, null, FormDefinition.STATUS_ENABLED, 0, "{}"));
     }
 
-    private Long newFormUnder(Long parentId, String code, String name) {
+    /** 登记一个挂在指定分类下的表单。 */
+    private Long newFormInCategory(Long categoryId, String code, String name) {
         return formService.create(TENANT, 1L, new UpsertFormDefinitionRequest(
-                parentId, code, name, null, FormDefinition.STATUS_ENABLED, 0, "{}"));
+                categoryId, code, name, null, FormDefinition.STATUS_ENABLED, 0, "{}"));
+    }
+
+    /** 造一个测试分类。 */
+    private Long newCategory(String name) {
+        return categoryService.create(TENANT, 1L, new UpsertFormCategoryRequest(
+                FormCategory.ROOT_PARENT_ID, uniqCode("CAT"), name, null, 0, "{}"));
     }
 
     private List<WfNodeDTO> nodes() {
@@ -69,7 +85,7 @@ class FormDefinitionServiceIntegrationTest {
     // ------------------------------------------------------------------
 
     @Test
-    @DisplayName("T1.4：新增后可读回，code 大小写精确匹配")
+    @DisplayName("T1.4：新增后可读回，code 大小写精确匹配（默认未分类）")
     void createAndGet() {
         String code = uniqCode("FORM");
         Long id = newForm(code, "采购表单");
@@ -78,7 +94,7 @@ class FormDefinitionServiceIntegrationTest {
         assertEquals(code, vo.code());
         assertEquals("采购表单", vo.name());
         assertEquals(FormDefinition.STATUS_ENABLED, vo.status());
-        assertEquals(FormDefinition.ROOT_PARENT_ID, vo.parentId());
+        assertNull(vo.categoryId(), "未指定分类时应为「未分类」");
         assertNotNull(vo.createdAt());
     }
 
@@ -113,54 +129,73 @@ class FormDefinitionServiceIntegrationTest {
         Long id = newForm(code, "原名");
 
         formService.update(id, TENANT, new UpsertFormDefinitionRequest(
-                FormDefinition.ROOT_PARENT_ID, code, "改名", "说明", FormDefinition.STATUS_DISABLED, 9, "{}"));
+                null, code, "改名", "说明", FormDefinition.STATUS_DISABLED, 9, "{}"));
         var vo = formService.get(id, TENANT);
         assertEquals("改名", vo.name());
         assertEquals(FormDefinition.STATUS_DISABLED, vo.status());
         assertEquals(9, vo.sortOrder());
 
         BusinessException e = assertThrows(BusinessException.class, () -> formService.update(id, TENANT,
-                new UpsertFormDefinitionRequest(FormDefinition.ROOT_PARENT_ID, uniqCode("OTHER"),
+                new UpsertFormDefinitionRequest(null, uniqCode("OTHER"),
                         "再改", null, null, 0, "{}")));
         assertTrue(e.getMessage().contains("编码不可修改"));
     }
 
-    @Test
-    @DisplayName("T1.4：分类树三层收敛——第四层被拒")
-    void treeDepthLimitedToThree() {
-        String root = uniqCode("CAT");
-        Long l1 = newFormUnder(FormDefinition.ROOT_PARENT_ID, root, "一级分类");
-        Long l2 = newFormUnder(l1, uniqCode("GRP"), "二级分类");
-        Long l3 = newFormUnder(l2, uniqCode("FORM"), "表单");
+    // ------------------------------------------------------------------
+    // V133 分类属性（分类是表单的属性，不再是父级）
+    // ------------------------------------------------------------------
 
-        assertNotNull(l3, "根 → 分类 → 表单三层应允许");
+    @Test
+    @DisplayName("V133：新增表单可关联分类，categoryId 读回一致")
+    void createWithCategoryAssignsCategoryId() {
+        Long catId = newCategory("采购类");
+        String code = uniqCode("FORM");
+        Long id = newFormInCategory(catId, code, "挂分类表单");
+
+        var vo = formService.get(id, TENANT);
+        assertEquals(catId, vo.categoryId(), "表单应记住所属分类 id");
+    }
+
+    @Test
+    @DisplayName("V133：更新可改分类（含改为未分类）")
+    void updateCanChangeCategory() {
+        Long catA = newCategory("分类A");
+        Long catB = newCategory("分类B");
+        String code = uniqCode("FORM");
+        Long id = newFormInCategory(catA, code, "改分类表单");
+
+        formService.update(id, TENANT, new UpsertFormDefinitionRequest(
+                catB, code, "改分类表单", null, FormDefinition.STATUS_ENABLED, 0, "{}"));
+        assertEquals(catB, formService.get(id, TENANT).categoryId());
+
+        formService.update(id, TENANT, new UpsertFormDefinitionRequest(
+                null, code, "改分类表单", null, FormDefinition.STATUS_ENABLED, 0, "{}"));
+        assertNull(formService.get(id, TENANT).categoryId(), "可改回「未分类」");
+    }
+
+    @Test
+    @DisplayName("V133：关联不存在的分类被拒")
+    void createWithUnknownCategoryRejected() {
         BusinessException e = assertThrows(BusinessException.class,
-                () -> newFormUnder(l3, uniqCode("FORM"), "第四层"));
-        assertTrue(e.getMessage().contains("层级最多三层"));
+                () -> newFormInCategory(999999999L, uniqCode("FORM"), "孤儿表单"));
+        assertEquals(ResultCode.VALIDATION_ERROR.getCode(), e.getCode());
+        assertTrue(e.getMessage().contains("分类不存在"));
     }
 
     @Test
-    @DisplayName("T1.4：父分类不存在被拒；父分类不能是自己")
-    void invalidParentRejected() {
-        assertThrows(BusinessException.class,
-                () -> newFormUnder(999999999L, uniqCode("FORM"), "孤儿"));
+    @DisplayName("V133：list 按 categoryId 精确过滤")
+    void listFiltersByCategory() {
+        Long catA = newCategory("过滤分类A");
+        Long catB = newCategory("过滤分类B");
+        newFormInCategory(catA, uniqCode("FORM"), "A1");
+        newFormInCategory(catA, uniqCode("FORM"), "A2");
+        newFormInCategory(catB, uniqCode("FORM"), "B1");
 
-        Long self = newFormUnder(FormDefinition.ROOT_PARENT_ID, uniqCode("CAT"), "分类");
-        assertThrows(BusinessException.class, () -> formService.update(self, TENANT,
-                new UpsertFormDefinitionRequest(self, uniqCode("CAT"), "自环", null, null, 0, "{}")));
-    }
-
-    @Test
-    @DisplayName("T1.4：tree 接口按父子组装 children")
-    void treeAssemblesChildren() {
-        Long rootId = newFormUnder(FormDefinition.ROOT_PARENT_ID, uniqCode("CAT"), "分类");
-        newFormUnder(rootId, uniqCode("FORM"), "子表单A");
-        newFormUnder(rootId, uniqCode("FORM"), "子表单B");
-
-        var roots = formService.tree(TENANT);
-        var root = roots.stream().filter(f -> rootId.toString().equals(f.id())).findFirst().orElseThrow();
-        assertEquals(2, root.children().size(), "该分类下应有 2 个子表单");
-        assertTrue(root.children().stream().allMatch(c -> c.children() == null), "叶子节点不应再挂 children");
+        assertEquals(2, formService.list(TENANT, null, catA).size(), "分类 A 下应有 2 个表单");
+        assertEquals(1, formService.list(TENANT, null, catB).size(), "分类 B 下应有 1 个表单");
+        assertTrue(formService.list(TENANT, null, catA).stream()
+                        .allMatch(v -> catA.equals(v.categoryId())),
+                "过滤结果应全部属于分类 A");
     }
 
     @Test
@@ -171,7 +206,7 @@ class FormDefinitionServiceIntegrationTest {
         newForm(enabledCode, "启用");
         Long off = newForm(disabledCode, "停用");
         formService.update(off, TENANT, new UpsertFormDefinitionRequest(
-                FormDefinition.ROOT_PARENT_ID, disabledCode, "停用", null, FormDefinition.STATUS_DISABLED, 0, "{}"));
+                null, disabledCode, "停用", null, FormDefinition.STATUS_DISABLED, 0, "{}"));
 
         var codes = formService.listEnabled(TENANT).stream().map(v -> v.code()).toList();
         assertTrue(codes.contains(enabledCode));
@@ -201,16 +236,6 @@ class FormDefinitionServiceIntegrationTest {
                 "FLOW_" + System.nanoTime(), "引用流程", "APPROVAL", null, List.of(), "{}", nodes()));
         formService.delete(formId, TENANT);
         assertEquals(1, formRepository.findById(formId).orElseThrow().getDeleted());
-    }
-
-    @Test
-    @DisplayName("T1.4：有子项时删除分类被拒")
-    void deleteRejectedWhenHasChildren() {
-        Long parentId = newFormUnder(FormDefinition.ROOT_PARENT_ID, uniqCode("CAT"), "有子项的分类");
-        newFormUnder(parentId, uniqCode("FORM"), "子表单");
-
-        BusinessException e = assertThrows(BusinessException.class, () -> formService.delete(parentId, TENANT));
-        assertTrue(e.getMessage().contains("子项"));
     }
 
     // ------------------------------------------------------------------
@@ -289,7 +314,7 @@ class FormDefinitionServiceIntegrationTest {
         String code = uniqCode("FORM");
         Long formId = newForm(code, "将被停用");
         formService.update(formId, TENANT, new UpsertFormDefinitionRequest(
-                FormDefinition.ROOT_PARENT_ID, code, "将被停用", null, FormDefinition.STATUS_DISABLED, 0, "{}"));
+                null, code, "将被停用", null, FormDefinition.STATUS_DISABLED, 0, "{}"));
 
         BusinessException e = assertThrows(BusinessException.class, () -> definitionService.create(TENANT, 1L,
                 new CreateDefinitionRequest(uniqCode("FLOW"), "含停用表单", "APPROVAL", null,
@@ -314,14 +339,14 @@ class FormDefinitionServiceIntegrationTest {
         // 停用该表单后，保留它的 update 也应被拒
         Long formId = formRepository.findByTenantIdAndCode(TENANT, code).orElseThrow().getId();
         formService.update(formId, TENANT, new UpsertFormDefinitionRequest(
-                FormDefinition.ROOT_PARENT_ID, code, "表单", null, FormDefinition.STATUS_DISABLED, 0, "{}"));
+                null, code, "表单", null, FormDefinition.STATUS_DISABLED, 0, "{}"));
         assertThrows(BusinessException.class, () -> definitionService.update(defId, TENANT,
                 new CreateDefinitionRequest("FLOW_" + System.nanoTime(), "更新校验流程", "APPROVAL", null,
                         List.of(code), "{}", nodes())));
 
         // 重新启用后放行
         formService.update(formId, TENANT, new UpsertFormDefinitionRequest(
-                FormDefinition.ROOT_PARENT_ID, code, "表单", null, FormDefinition.STATUS_ENABLED, 0, "{}"));
+                null, code, "表单", null, FormDefinition.STATUS_ENABLED, 0, "{}"));
         definitionService.update(defId, TENANT, new CreateDefinitionRequest(
                 "FLOW_" + System.nanoTime(), "改名", "APPROVAL", null, List.of(code), "{}", nodes()));
         assertEquals("改名", definitionService.get(defId, TENANT).name());
