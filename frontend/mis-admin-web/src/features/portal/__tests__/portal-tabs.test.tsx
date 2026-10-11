@@ -1,25 +1,28 @@
 // @vitest-environment jsdom
 /**
- * 门户三 Tab 容器测试（T01；UI 精修轮扩图标/药丸风格 + Tab store 桥接 + 首页板抽屉）。
+ * 门户三 Tab **容器**测试（T01；UI 精修轮扩图标/药丸风格 + Tab store 桥接 + 首页板抽屉）；
+ * 本轮（顶栏改造轮）随结构改动更新。
+ *
+ * <p><b>本轮结构改动</b>：三个 tab 从本页搬到顶栏
+ * `components/layout/portal-tab-switcher.tsx`（Radix `Tabs` 的 `TabsList`/`TabsContent`
+ * 必须在同一 root 内，而顶栏与门户内容区在两棵 React 树，上下文连不通）。
+ * 因此本文件里「tab 的样式 / 图标 / 两态盒模型」一类断言**整体迁移**到
+ * `src/components/layout/__tests__/portal-tab-switcher.test.tsx`
+ * （tab DOM 现在由那个组件产出，在本页里查不到）。本文件转而锁容器侧契约：
  *
  * 覆盖：
- * 1. 「首页 / 待办事项 / 消息中心」三个 Tab 均渲染；
- * 2. **三Tab 均为「图标 + 文字」**（断言 lucide 渲染出的真实 `svg[data-testid]`，
- *    不只断文本——断文本锁不住「图标被删」的回归）；
- * 3. **药丸式样式的关键不变量**（本轮随实现更新，锁的是「切换 tab 零跳动」这件事）：
- *    白底 tab 栏（`bg-card`）+ 底部 1px 分隔线 + 左对齐；未选中为主色蓝文字、
- *    选中为浅灰药丸 + 深色文字；两态边框结构一致（完整 `border`）且**不依赖 `-mb-px`
- *    压盖**；`TabsList` 必须含 `h-auto` 且不含 `h-9`（防「药丸溢出栏顶/底边」的回归）；
- *    tab 上不渲染关闭按钮；
- * 4. 默认选中「首页」，且首页内容（欢迎语 + 工作台板块 + AppRail）与现状一致；
- * 5. 点击「待办事项」→ 切到 Todo 壳（首页内容卸载）；点击「消息中心」→ 切到 Message 壳；
- * 6. **不发生路由跳转**：Tab 切换纯本地态（store），`useNavigate` 不被调用、pathname 不变。
+ * 1. **tab 条的唯一来源在顶栏**：PortalPage 自身**不渲染**任何门户 tab 触发器
+ *    （`role="tab"` 且名为「首页 / 待办事项 / 消息中心」的元素一个都没有）；
+ * 2. 默认选中「首页」，且首页内容（欢迎语 + 工作台板块 + AppRail）与现状一致；
+ * 3. **点顶栏 tab → 写 store → 门户渲染对应内容**（真断言内容切换，不只断 store）：
+ *    点「待办事项」→ Todo 真实组件挂载、首页内容卸载；点「消息中心」→ Message 挂载；
+ * 4. **不发生路由跳转**：Tab 切换纯本地态（store），`useNavigate` 不被调用。
  *    （核心红线：三 Tab 绝不入 URL，规避 keep-alive `PAGE_MAP`/`useParams` 坑。）
- * 7. **外部 `setActiveTab('message')` 能驱动门户切页签**（顶栏「打开消息中心」的桥接契约：
- *    layout 侧只写 store，门户页必须即时响应）。
- * 8. **T05 集成**：两抽屉可开——待办点行开待办抽屉（携 instanceId）、消息点行开消息抽屉（携 messageId）。
+ * 5. **外部 `setActiveTab(...)` 能驱动门户切页签**（顶栏「打开消息中心」的桥接契约：
+ *    layout 侧只写 store，门户页必须即时响应）；
+ * 6. **T05 集成**：两抽屉可开——待办点行开待办抽屉（携 instanceId）、消息点行开消息抽屉（携 messageId）。
  *    抽屉以轻量替身替换（其内部行为由 `todo-tabs.test.tsx` / `message-reply-drawer.test.tsx` 覆盖）。
- * 9. **首页三板点行改开抽屉**（取代路由跳转）：TaskBoard/ProcessBoard → TodoDetailDrawer、
+ * 7. **首页三板点行改开抽屉**（取代路由跳转）：TaskBoard/ProcessBoard → TodoDetailDrawer、
  *    MessageBoard → MessageDetailDrawer（且 messageId 是**被点的那条**，不是固定值）。
  *
  * mock 范式（对齐 `portal-page.smoke.test.tsx`）：
@@ -33,6 +36,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { PortalPage } from '../portal-page';
+import { PortalTabSwitcher } from '@/components/layout/portal-tab-switcher';
 import * as platformApi from '@/lib/api/platform';
 import * as tasksApi from '@/lib/api/tasks';
 import * as messagesApi from '@/lib/api/messages';
@@ -125,6 +129,22 @@ function renderPage() {
   );
 }
 
+/**
+ * 顶栏 tab + 门户页**同树**渲染：用于断言「点顶栏 tab ⇒ 门户内容真的切换」。
+ *
+ * <p>两个组件在真实运行时分处两棵 React 树（顶栏在 `AppLayout`、内容区在
+ * `KeepAliveOutlet` 主槽），但它们唯一的耦合是模块级 `usePortalTabStore`，
+ * 所以在测试里并排渲染即可还原真实联动，无需拉起整个 AppLayout。
+ */
+function renderPageWithHeaderTabs() {
+  return render(
+    <MemoryRouter initialEntries={['/portal']}>
+      <PortalTabSwitcher />
+      <PortalPage />
+    </MemoryRouter>,
+  );
+}
+
 describe('PortalPage 三 Tab 容器', () => {
   beforeEach(() => {
     useAuthStore.setState({
@@ -158,111 +178,31 @@ describe('PortalPage 三 Tab 容器', () => {
     vi.clearAllMocks();
   });
 
-  it('渲染「首页 / 待办事项 / 消息中心」三个 Tab', async () => {
+  // ---------------------------------------------------------------------
+  // 本轮改动：tab 条已搬到顶栏 ⇒ 本容器**自身**不再产出任何门户 tab。
+  //
+  // 🔴 说明（为什么删/改，而不是留着）：
+  // - 原「渲染『首页 / 待办事项 / 消息中心』三个 Tab」用例：tab DOM 现在由
+  //   `PortalTabSwitcher` 产出，PortalPage 里查不到 ⇒ 语义反转为「本页不该有 tab」，
+  //   保留断言价值（锁住「tab 唯一来源在顶栏」），故**改写**而非删除。
+  // - 原「三个 Tab 均为『图标 + 文字』药丸式风格」用例：断言的是 tab DOM 的 className
+  //   （`bg-card` 栏 / `bg-muted` 药丸 / `h-auto` / `-mb-px`…），DOM 已不在本页，
+  //   在本文件里只能断言到「全都没有」——那退化成了空断言。其等价（且更强）的断言
+  //   **整体迁移**到 `components/layout/__tests__/portal-tab-switcher.test.tsx`
+  //   （三个 tab 的图标 svg、`bg-background` 选中态、两态盒模型 token 逐一判等、
+  //   无关闭按钮），故此处**删除**，不是「删了事」。
+  // ---------------------------------------------------------------------
+  it('PortalPage 自身不再渲染门户 tab 条（tab 唯一来源在顶栏）', async () => {
     renderPage();
-    expect(await screen.findByRole('tab', { name: '首页' })).toBeTruthy();
-    expect(screen.getByRole('tab', { name: '待办事项' })).toBeTruthy();
-    expect(screen.getByRole('tab', { name: '消息中心' })).toBeTruthy();
-  });
-
-  it('三个 Tab 均为「图标 + 文字」药丸式风格（断言真实 svg，不只断文本）', async () => {
-    renderPage();
-    const home = await screen.findByRole('tab', { name: '首页' });
-    const todo = screen.getByRole('tab', { name: '待办事项' });
-    const msg = screen.getByRole('tab', { name: '消息中心' });
-
-    /**
-     * 把 className 拆成**精确的类名 token 集合**。
-     *
-     * <p>🔴 必须按 token 判等、不能用 `className.toContain(...)` 子串匹配：
-     * `border-transparent` 里**包含**子串 `border-t`；`data-[state=active]:border-border`
-     * 里包含 `border-border`…子串匹配会让「有 `border-t`」这种断言假阳性通过，
-     * 也会让「不含 `border-t`」假失败（上一轮就踩过这个坑）。
-     */
-    const classesOf = (el: Element): Set<string> => new Set(el.className.split(/\s+/).filter(Boolean));
-
-    // lucide 渲染出的真实 <svg>（tagName 断言可防「用 div 假冒图标」的假绿）。
-    for (const [tab, testid] of [
-      [home, 'portal-tab-icon-home'],
-      [todo, 'portal-tab-icon-todo'],
-      [msg, 'portal-tab-icon-message'],
-    ] as const) {
-      const icon = tab.querySelector(`[data-testid="${testid}"]`);
-      expect(icon).toBeTruthy();
-      expect(icon!.tagName.toLowerCase()).toBe('svg');
-      // 图标必须与文字同色（继承 currentColor）→ 靠 text- 类而非固定 fill。
-      expect(icon!.getAttribute('fill')).toBe('none');
-      // 药丸式风格：四角圆角（项目基线 4px = `rounded`），不是方角。
-      const cls = classesOf(tab);
-      expect(cls.has('rounded')).toBe(true);
-      expect(cls.has('rounded-none')).toBe(false);
-      expect(cls.has('rounded-t')).toBe(false);
-    }
-
-    // ---- 两态盒高/盒宽一致性不变量（切换 tab 零跳动）----
-    // 药丸方案**不依赖** `-mb-px` 压盖：完整 `border`（四边）+ 相同 padding 全部挂在
-    // 基类上，active 变体只改「边框颜色 / 背景 / 文字色 / 去投影」这些**不影响盒模型**的声明。
-    // 一旦被改回「未选中无下边框 / 只 active 带 -mb-px」，两态盒高就会差 1~2px 而在切换时跳动。
-    for (const tab of [home, todo, msg]) {
-      const cls = classesOf(tab);
-      // 两态共有：完整四边框 + 透明边框色（active 只把颜色换成 border-border）
-      expect(cls.has('border')).toBe(true);
-      expect(cls.has('border-transparent')).toBe(true);
-      expect(cls.has('data-[state=active]:border-border')).toBe(true);
-      // 两态共有：相同 padding 与字号（盒高 = 内容行高 + py-2 + 上下 border）
-      expect(cls.has('px-3.5')).toBe(true);
-      expect(cls.has('py-2')).toBe(true);
-      expect(cls.has('text-[13px]')).toBe(true);
-      // 不再依赖负外边距压盖 TabsList 的 border-b
-      expect(cls.has('-mb-px')).toBe(false);
-      // 旧的「白卡 + 无缝相连」结构（边框有缺口/ 只 active 带负外边距）必须已被清除。
-      // 逐个 token 判不存在，而不是子串匹配。
-      for (const stale of [
-        'border-x',
-        'border-t',
-        'border-b',
-        'border-b-0',
-        'border-l',
-        'border-r',
-        'data-[state=active]:rounded-t',
-        'data-[state=active]:bg-card',
-        'data-[state=active]:text-primary',
-      ]) {
-        expect(cls.has(stale)).toBe(false);
-      }
-    }
-
-    // 未选中态：主色蓝文字（`--primary` ≈ #4f46e5，像链接色）+ 透明背景
-    expect(classesOf(todo).has('text-primary')).toBe(true);
-    expect(home.getAttribute('data-state')).toBe('active');
-    expect(todo.getAttribute('data-state')).toBe('inactive');
-    expect(msg.getAttribute('data-state')).toBe('inactive');
-
-    // 选中态：浅灰药丸 `bg-muted` + 深色文字 + 去投影（不是白卡）
-    const activeCls = classesOf(home);
-    expect(activeCls.has('data-[state=active]:bg-muted')).toBe(true);
-    expect(activeCls.has('data-[state=active]:text-foreground')).toBe(true);
-    expect(activeCls.has('data-[state=active]:shadow-none')).toBe(true);
-
-    // TabsList：白底 + 底部 1px 分隔线 + 左对齐；且必须解除共享组件基类的 h-9 固定高
-    // （否则药丸会溢出栏的顶/底边）。
-    const list = home.closest('[role="tablist"]');
-    expect(list).toBeTruthy();
-    const listCls = classesOf(list!);
-    expect(listCls.has('h-auto')).toBe(true);
-    expect(listCls.has('h-9')).toBe(false);
-    expect(listCls.has('bg-card')).toBe(true);   // 白底，不是灰底
-    expect(listCls.has('bg-muted')).toBe(false);
-    expect(listCls.has('bg-muted/50')).toBe(false);
-    expect(listCls.has('border-b')).toBe(true);  // 1px 分隔线贯通整行
-    expect(listCls.has('justify-start')).toBe(true); // tab 左对齐
-    // 新样式下不再用 items-end 底对齐去掩盖溢出
-    expect(listCls.has('items-end')).toBe(false);
-
-    // tab 不可关闭：不渲染任何关闭按钮（×）——参考图有，但需求明确要求不做。
-    for (const tab of [home, todo, msg]) {
-      expect(tab.querySelector('button')).toBeNull();
-    }
+    await screen.findByText('你好，测试员');
+    // 门户三 Tab 的触发器一个都不该出现在页面内（顶栏由 AppLayout 提供）。
+    expect(screen.queryByRole('tab', { name: '首页' })).toBeNull();
+    expect(screen.queryByRole('tab', { name: '待办事项' })).toBeNull();
+    expect(screen.queryByRole('tab', { name: '消息中心' })).toBeNull();
+    expect(screen.queryByTestId('portal-tab-switcher')).toBeNull();
+    // 但内容区（面板）仍在，且带 tabpanel 语义供顶栏 aria-controls 引用。
+    expect(screen.getByRole('tabpanel')).toBeTruthy();
+    expect(screen.getByTestId('portal-tab-panel').getAttribute('id')).toBe('portal-tab-panel');
   });
 
   it('默认选中「首页」，首页内容与现状一致（欢迎语 + 工作台板块 + AppRail）', async () => {
@@ -277,26 +217,35 @@ describe('PortalPage 三 Tab 容器', () => {
     expect(screen.queryByLabelText('消息关键词')).toBeNull();
   });
 
-  it('点击「待办事项」切到 Todo（真实组件），首页内容卸载', async () => {
-    renderPage();
+  // ---------------------------------------------------------------------
+  // 本轮改动：原「点击『待办事项』/『消息中心』」两个用例，点的是**页内** Radix
+  // `TabsTrigger`（必须在 `onMouseDown` 上激活）。tab 搬到顶栏后变成普通 `button`
+  // （`onClick` 写 store），且不在本页里 ⇒ 改为「顶栏 tab + 门户页同树渲染，点顶栏
+  // tab，断言门户内容真的切换」。另**新增**一条专门断言 store 中间态，把
+  // 「点击 → store → 内容」这条链完整钉住。
+  // ---------------------------------------------------------------------
+  it('点顶栏「待办事项」→ store 变 todo → 门户渲染 Todo 真实组件（首页内容卸载）', async () => {
+    renderPageWithHeaderTabs();
     await screen.findByText('你好，测试员');
 
-    // Radix Tabs Trigger 在 onMouseDown 上激活（click 不触发），故用 mouseDown。
-    fireEvent.mouseDown(screen.getByRole('tab', { name: '待办事项' }), { button: 0 });
+    fireEvent.click(screen.getByRole('tab', { name: '待办事项' }));
 
-    // T03a 起「待办事项」为真实组件：以搜索框 + 子 Tab 作为挂载标志。
+    // 中间态：store 确实被写（不只看内容，内容可能由别的原因切换）。
+    expect(usePortalTabStore.getState().activeTab).toBe('todo');
+    // 终态：内容是**真实的** Todo 组件——以搜索框 + 子 Tab 作为挂载标志。
     expect(await screen.findByLabelText('待办关键词')).toBeTruthy();
     expect(screen.getByRole('tab', { name: '待处理' })).toBeTruthy();
     expect(screen.queryByText('你好，测试员')).toBeNull();
   });
 
-  it('点击「消息中心」切到 Message（真实组件），首页内容卸载', async () => {
-    renderPage();
+  it('点顶栏「消息中心」→ store 变 message → 门户渲染 Message 真实组件', async () => {
+    renderPageWithHeaderTabs();
     await screen.findByText('你好，测试员');
 
-    fireEvent.mouseDown(screen.getByRole('tab', { name: '消息中心' }), { button: 0 });
+    fireEvent.click(screen.getByRole('tab', { name: '消息中心' }));
 
-    // T04 起「消息中心」为真实组件：以搜索框 + 四类子 Tab 作为挂载标志。
+    expect(usePortalTabStore.getState().activeTab).toBe('message');
+    // T04 起「消息中心」为真实组件：以搜索框 + 子 Tab 作为挂载标志。
     expect(await screen.findByLabelText('消息关键词')).toBeTruthy();
     expect(screen.getByRole('tab', { name: '审批' })).toBeTruthy();
     expect(screen.getByRole('tab', { name: '系统告警' })).toBeTruthy();
@@ -304,14 +253,15 @@ describe('PortalPage 三 Tab 容器', () => {
     expect(screen.queryByText('你好，测试员')).toBeNull();
   });
 
-  it('Tab 切换不发生路由跳转（useNavigate 未被调用、不新增路由）', async () => {
-    renderPage();
+  it('点顶栏 tab 往返切换不发生路由跳转（useNavigate 未被调用、不新增路由）', async () => {
+    renderPageWithHeaderTabs();
     await screen.findByText('你好，测试员');
 
-    fireEvent.mouseDown(screen.getByRole('tab', { name: '待办事项' }), { button: 0 });
-    fireEvent.mouseDown(screen.getByRole('tab', { name: '消息中心' }), { button: 0 });
-    fireEvent.mouseDown(screen.getByRole('tab', { name: '首页' }), { button: 0 });
+    fireEvent.click(screen.getByRole('tab', { name: '待办事项' }));
+    fireEvent.click(screen.getByRole('tab', { name: '消息中心' }));
+    fireEvent.click(screen.getByRole('tab', { name: '首页' }));
     await screen.findByText('你好，测试员');
+    expect(usePortalTabStore.getState().activeTab).toBe('home');
 
     expect(navigateSpy).not.toHaveBeenCalled();
   });
@@ -370,11 +320,12 @@ describe('PortalPage 三 Tab 容器', () => {
         },
       ],
     });
-    renderPage();
+    renderPageWithHeaderTabs();
     await screen.findByText('你好，测试员');
 
     // 待办 Tab：点行 → 待办抽屉打开，携带该行 instanceId（不由 navigate 承担）。
-    fireEvent.mouseDown(screen.getByRole('tab', { name: '待办事项' }), { button: 0 });
+    // tab 已搬到顶栏（普通 button，onClick 写 store），不再是 Radix 的 onMouseDown。
+    fireEvent.click(screen.getByRole('tab', { name: '待办事项' }));
     const todoRow = (await screen.findByText('采购单审批-甲')).closest('button');
     expect(todoRow).toBeTruthy();
     fireEvent.click(todoRow!);
@@ -383,7 +334,7 @@ describe('PortalPage 三 Tab 容器', () => {
     expect(navigateSpy).not.toHaveBeenCalled();
 
     // 消息 Tab：切过去后待办抽屉随面板卸载；点消息行 → 消息抽屉打开，携带 messageId。
-    fireEvent.mouseDown(screen.getByRole('tab', { name: '消息中心' }), { button: 0 });
+    fireEvent.click(screen.getByRole('tab', { name: '消息中心' }));
     const msgRow = (await screen.findByText('消息-甲')).closest('button');
     expect(msgRow).toBeTruthy();
     fireEvent.click(msgRow!);
@@ -410,7 +361,9 @@ describe('PortalPage 三 Tab 容器', () => {
 
     expect(await screen.findByLabelText('消息关键词')).toBeTruthy();
     expect(screen.queryByText('你好，测试员')).toBeNull();
-    expect(screen.getByRole('tab', { name: '消息中心' }).getAttribute('data-state')).toBe('active');
+    // 不再是 Radix TabsTrigger ⇒ 没有 data-state；选中态只以 store 为准
+    // （顶栏 tab 的 aria-selected 由 `portal-tab-switcher.test.tsx` 覆盖）。
+    expect(usePortalTabStore.getState().activeTab).toBe('message');
   });
 
   it('外部 setActiveTab("todo") 同样驱动门户切到待办事项（不只message 可桥接）', async () => {

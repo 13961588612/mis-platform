@@ -21,6 +21,7 @@ import { TabBar } from '@/components/layout/tab-bar';
 import { SideNav } from '@/components/layout/side-nav';
 import { HeaderToolkit } from '@/components/layout/header-toolkit';
 import { CopilotPanel } from '@/components/layout/copilot-panel';
+import { PortalTabSwitcher } from '@/components/layout/portal-tab-switcher';
 import {
   KeepAliveOutlet,
   KEEP_ALIVE_META,
@@ -76,10 +77,13 @@ export function AppLayout() {
   const location = useLocation();
   const openTab = useTabStore((s) => s.openTab);
 
+  // 本轮三项顶栏改造共用：是否身处门户页。
+  const isOnPortal = location.pathname === '/portal';
+
   // 仅 /portal 隐藏左栏（PRD §9.2 / 设计 §1.3）：门户是三 Tab 全宽工作台，不需要子系统侧栏；
   // 其余路径（/task/*、/kb/*、/system/* …）左栏原样恢复。只影响 <aside> 的条件渲染，
   // navNodes / activeAppCode / TASK_NAV 等逻辑一行不动。
-  const hideSidebar = location.pathname === '/portal';
+  const hideSidebar = isOnPortal;
 
   const activeAppCode = useMemo(
     () => resolveActiveHostAppCode(location.pathname, app?.code),
@@ -250,65 +254,103 @@ export function AppLayout() {
   return (
     <div className="flex h-screen w-full flex-col overflow-hidden bg-background text-foreground">
       <header className="flex h-14 w-full shrink-0 items-center gap-3 border-b border-border bg-card px-4 shadow-[0_1px_3px_-1px_rgb(15_23_42_/_0.06)]">
-        <Link to="/portal" className={shellBtn}>
-          <ArrowLeft className="h-4 w-4 shrink-0" strokeWidth={2} />
-          返回门户
-        </Link>
+        {/*
+          ① 已在门户页时「返回门户」灰化禁用。
+
+          为什么渲染成真正 `disabled` 的 <button>，而不是「保留 <Link> + pointer-events-none
+          opacity-50」：后者只是**看起来**灰了——`pointer-events: none` 只挡鼠标，
+          键盘 Tab 仍能聚焦、回车仍会跳转，读屏也仍把它念成「链接」，属「偷偷没反应
+          的可点元素」，是典型的可访问性反模式；而且 `<a disabled>` 不是合法语义。
+          `<button disabled>` 才是唯一语义正确的禁用态：不可聚焦、不可激活、AT 朗读为
+          dimmed/disabled。灰化沿用下拉项里已有的禁用视觉（cursor-not-allowed opacity-50）。
+        */}
+        {isOnPortal ? (
+          <button
+            type="button"
+            disabled
+            aria-disabled
+            className={cn(shellBtn, 'cursor-not-allowed opacity-50 hover:bg-transparent')}
+          >
+            <ArrowLeft className="h-4 w-4 shrink-0" strokeWidth={2} />
+            返回门户
+          </button>
+        ) : (
+          <Link to="/portal" className={shellBtn}>
+            <ArrowLeft className="h-4 w-4 shrink-0" strokeWidth={2} />
+            返回门户
+          </Link>
+        )}
 
         <div className="relative shrink-0" ref={switcherRef}>
+          {/*
+            ② APP 切换按钮文案固定为「切换APP」（不再显示当前 APP 名）。
+            代价是按钮上看不到当前处于哪个 APP，故做两处低成本补救：
+            (a) 保留当前 APP 的图标（AppIcon）——图形线索还在；
+            (b) 用 title 提供「当前应用：X」的悬浮提示，读屏也能取到；
+            (c) 下拉里当前项已有 `bg-accent` 高亮，打开即可确认。
+          */}
           <button
             type="button"
             className={shellBtn}
             onClick={() => setSwitcherOpen((v) => !v)}
+            title={`当前应用：${activeAppName}`}
+            aria-expanded={switcherOpen}
           >
             <AppIcon className="h-4 w-4 shrink-0" strokeWidth={2} />
-            {activeAppName}
+            切换APP
             <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground" strokeWidth={2} />
           </button>
           {switcherOpen ? (
-            <div className="absolute left-0 top-full z-50 mt-1 max-h-80 w-64 overflow-y-auto rounded-md border bg-popover p-1 shadow-card">
+            // ② 下拉由单列纵向改为**每行两列**：分组标题仍独占一行（保留 APP_GROUP_LABEL
+            // 的分组语义），组内项用 `grid grid-cols-2` 排两列；宽度 w-64 → w-80 容纳两列。
+            <div className="absolute left-0 top-full z-50 mt-1 max-h-80 w-80 overflow-y-auto rounded-md border bg-popover p-1 shadow-card">
               {appsByGroup.map(([group, list]) => (
                 <div key={group} className="mb-1 last:mb-0">
                   <div className="px-2 py-1.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
                     {APP_GROUP_LABEL[group] ?? group}
                   </div>
-                  {list.map((item) => {
-                    const Icon = resolveNavIcon(item.icon);
-                    return (
-                      <button
-                        key={item.id}
-                        type="button"
-                        disabled={!item.enterable}
-                        className={cn(
-                          'flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-sm',
-                          item.code === activeAppCode ? 'bg-accent' : 'hover:bg-accent',
-                          !item.enterable && 'cursor-not-allowed opacity-50',
-                        )}
-                        onClick={() => {
-                          setSwitcherOpen(false);
-                          if (!item.enterable) return;
-                          if (item.runtime === 'iframe' && item.basePath) {
-                            navigate(`/iframe/${item.code}`);
-                            return;
-                          }
-                          if (item.code === 'system' || item.runtime === 'host') {
-                            navigate(resolveAppEntry(item.code, item.basePath));
-                          }
-                        }}
-                      >
-                        <Icon className="h-4 w-4 shrink-0 text-muted-foreground" />
-                        <span className="min-w-0 flex-1 truncate">{item.name}</span>
-                        {!item.enterable ? (
-                          <span className="text-[10px] text-muted-foreground">即将上线</span>
-                        ) : null}
-                      </button>
-                    );
-                  })}
+                  <div className="grid grid-cols-2 gap-1">
+                    {list.map((item) => {
+                      const Icon = resolveNavIcon(item.icon);
+                      return (
+                        <button
+                          key={item.id}
+                          type="button"
+                          disabled={!item.enterable}
+                          className={cn(
+                            'flex w-full min-w-0 items-center gap-2 rounded-md px-2.5 py-2 text-left text-sm',
+                            item.code === activeAppCode ? 'bg-accent' : 'hover:bg-accent',
+                            !item.enterable && 'cursor-not-allowed opacity-50',
+                          )}
+                          onClick={() => {
+                            setSwitcherOpen(false);
+                            if (!item.enterable) return;
+                            if (item.runtime === 'iframe' && item.basePath) {
+                              navigate(`/iframe/${item.code}`);
+                              return;
+                            }
+                            if (item.code === 'system' || item.runtime === 'host') {
+                              navigate(resolveAppEntry(item.code, item.basePath));
+                            }
+                          }}
+                        >
+                          <Icon className="h-4 w-4 shrink-0 text-muted-foreground" />
+                          <span className="min-w-0 flex-1 truncate">{item.name}</span>
+                          {!item.enterable ? (
+                            <span className="text-[10px] text-muted-foreground">即将上线</span>
+                          ) : null}
+                        </button>
+                      );
+                    })}
+                  </div>
                 </div>
               ))}
             </div>
           ) : null}
         </div>
+
+        {/* ③ 门户三 Tab 搬进顶栏，紧挨「切换APP」右侧；组件内部自门限：非 /portal 返回 null。 */}
+        <PortalTabSwitcher />
 
         <HeaderToolkit onOpenCommand={openCommand} className="ml-auto shrink-0" />
 
