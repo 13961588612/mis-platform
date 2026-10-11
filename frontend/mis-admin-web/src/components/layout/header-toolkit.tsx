@@ -4,14 +4,23 @@ import { Bell, CheckSquare, ChevronRight, LayoutDashboard, Search } from 'lucide
 import { Button } from '@/components/ui/button';
 import { useAuthStore } from '@/stores/auth-store';
 import { fetchMyTasks, fetchTaskStats, type TaskItem } from '@/lib/api/tasks';
-import { fetchInbox, fetchMessageStats, type MessageItem } from '@/lib/api/messages';
+import { fetchInbox, fetchMessageStats, markMessagesRead, type MessageItem } from '@/lib/api/messages';
 import { cn } from '@/lib/utils';
 import { UnreadDot } from '@/components/common/unread-dot';
 import { usePortalTabStore } from '@/stores/portal-tab-store';
+import { MessageDetailDrawer } from '@/features/portal/components/message-detail-drawer';
 
 /** 顶栏通知项：待办 / 消息合并流（按时间倒序）。 */
 interface NotificationItem {
   id: string;
+  /**
+   * **原始业务 id**（消息 `messages.id` / 待办 `tasks.id`，无前缀）。
+   *
+   * <p>与 {@link NotificationItem.id} 严格区分：后者是下拉里的 React key，为了让
+   * 待办与消息两类共存而不撞 id 才拼了 `t-` / `m-` 前缀。**业务侧只认 `refId`** ——
+   * 消息抽屉要拿它去查详情，若误传 `m-1001` 会查不到。
+   */
+  refId: string;
   kind: 'task' | 'message';
   title: string;
   body: string;
@@ -19,7 +28,14 @@ interface NotificationItem {
   /** 排序用的时间戳（ms）；无法解析时为 0，排在最后。 */
   sortAt: number;
   read?: boolean;
-  to: string;
+  /**
+   * 点击后的路由跳转目标。
+   *
+   * <p>**只有待办项有**：待办点进「我的待办」列表。消息项点开是就地滑出
+   * {@link MessageDetailDrawer}（与消息中心同款，流程消息还带只读表单），
+   * 不再跳工作台收件箱，故此处为空。
+   */
+  to?: string;
 }
 
 interface HeaderToolkitProps {
@@ -67,6 +83,18 @@ function toTimestamp(iso: string | null | undefined): number {
  * `MessageItem.createdAt`，均为非空 ISO 串）；无法解析的沉底而非丢条。
  * 角标数字**仍只取 stats 权威值**，与列表长度无关（列表是预览，角标是全量计数）。
  *
+ * <p><b>点条目的去向</b>：待办 → `navigate('/task/pending')`（进「我的待办」列表）；
+ * 消息 → **就地滑出 {@link MessageDetailDrawer}**，与门户「消息中心」点消息完全同款。
+ * 改造前消息项也走 `navigate('/task/inbox')`，用户必须自己在列表里再点一次才能看到
+ * 正文，且流程类消息看不到表单内容。现在复用同一个抽屉组件，流程消息（`instanceId != null`）
+ * 会自动拉流程详情并渲染只读 `FormShell`。
+ *
+ * <p><b>点消息还顺手标已读</b>：与门户 `portal-message-tab.tsx` 的 `handleOpen` 同一套
+ * 口径——未读的（`!n.read`）才发 `markMessagesRead(userId, [refId])`，成功后 `load()` 重刷
+ * 角标与列表。这是「和消息中心一个效果」不可缺的一环：否则用户点开一条未读消息看到了详情，
+ * 铃铛角标却纹丝不动，体验上就是「点了没反应」。**失败不阻断**（`.catch(() => undefined)`）：
+ * 标已读是副产物，不能因它失败而挡住用户看详情。
+ *
  * <p><b>底部按钮「打开消息中心」</b>：`navigate('/portal')` + 写
  * {@link usePortalTabStore} 的 `activeTab`（门户三 Tab 不进 URL，见该 store 注释）。
  * 这样从顶栏能真正落到门户的「消息中心」页签，而不是停在默认「首页」。
@@ -82,6 +110,14 @@ export function HeaderToolkit({ onOpenCommand, className, showSearchPill = true 
   const [pendingCount, setPendingCount] = useState(0);
   /** 消息未读数（`GET /messages/stats`.unread），铃铛数字的权威来源。 */
   const [unreadCount, setUnreadCount] = useState(0);
+  /**
+   * 铃铛里被点开的那条消息的**原始 id**（无 `m-` 前缀）；`null` 表示抽屉关闭。
+   *
+   * <p>与门户「消息中心」同款：点消息就地滑出 {@link MessageDetailDrawer}，不再跳
+   * 工作台收件箱。抽屉内部对流程类消息（`instanceId != null`）会额外拉流程详情并渲染
+   * 只读表单，所以「跟流程有关的消息要看到表单内容」这条无需在本文件重复实现。
+   */
+  const [detailMessageId, setDetailMessageId] = useState<string | null>(null);
   /** 门户 Tab 激活态写入器：底部「打开消息中心」用它把门户切到消息页签。 */
   const setPortalTab = usePortalTabStore((s) => s.setActiveTab);
 
@@ -108,6 +144,7 @@ export function HeaderToolkit({ onOpenCommand, className, showSearchPill = true 
         for (const t of tasks.value.list as TaskItem[]) {
           out.push({
             id: `t-${t.id}`,
+            refId: String(t.id),
             kind: 'task',
             title: t.bizTitle,
             body: `${t.taskType} · 待你处理`,
@@ -124,13 +161,15 @@ export function HeaderToolkit({ onOpenCommand, className, showSearchPill = true 
         for (const m of messages.value.list as MessageItem[]) {
           out.push({
             id: `m-${m.id}`,
+            refId: String(m.id),
             kind: 'message',
             title: m.title,
             body: m.summary ?? '',
             time: m.createdAt ? m.createdAt.replace('T', ' ').slice(5, 16) : '',
             sortAt: toTimestamp(m.createdAt),
             read: m.read,
-            to: '/task/inbox',
+            // ⚠️ 消息项**故意不填** `to`：点开是就地滑出消息详情抽屉（见下方
+            // `MessageDetailDrawer`），不再 navigate 到工作台收件箱列表。
           });
         }
       }
@@ -244,7 +283,22 @@ export function HeaderToolkit({ onOpenCommand, className, showSearchPill = true 
                         className={cn('flex w-full items-start gap-2 rounded-md px-3 py-2.5 text-left hover:bg-accent', !n.read && 'bg-primary/5')}
                         onClick={() => {
                           setOpen(false);
-                          navigate(n.to);
+                          if (n.kind === 'message') {
+                            // 消息：就地开详情抽屉（流程消息带只读表单），**不跳路由**。
+                            setDetailMessageId(n.refId);
+                            // 未读的顺手标已读：与门户「消息中心」点消息同款语义
+                            // （`portal-message-tab.tsx` handleOpen），补齐「和消息中心
+                            // 一个效果」里「角标会随之变化」这一环。**失败不阻断查看详情**
+                            // ——标已读只是副产物，用户已经在看抽屉了，不能因它失败而黑屏。
+                            if (!n.read && userId) {
+                              void markMessagesRead(userId, [n.refId])
+                                .then(() => load())
+                                .catch(() => undefined);
+                            }
+                          } else if (n.to) {
+                            // 待办：维持原行为，跳「我的待办」列表。
+                            navigate(n.to);
+                          }
                         }}
                       >
                         {n.kind === 'task' ? (
@@ -272,7 +326,6 @@ export function HeaderToolkit({ onOpenCommand, className, showSearchPill = true 
                  底部入口：打开门户的「消息中心」页签。
                  门户三 Tab 不进 URL（keep-alive 直挂，见 portal-tab-store.ts），所以
                  `navigate` 之后还必须写 store，否则会停在默认「首页」。
-                 两侧只依赖 `stores/`，不产生 layout → features 的跨 feature 依赖。
                */}
               <button
                 type="button"
@@ -289,6 +342,21 @@ export function HeaderToolkit({ onOpenCommand, className, showSearchPill = true 
           </>
         ) : null}
       </div>
+
+      {/*
+         铃铛消息详情抽屉：与门户「消息中心」复用同一个`MessageDetailDrawer`
+         （右侧滑出；流程类消息额外渲染只读表单 + 回复区）。
+         挂在铃铛 dropdown 的**同级**（不塞进 dropdown 内部）：Sheet 自带 portal，
+         嵌进去反而多一层定位上下文。同目录 `keep-alive-outlet.tsx` 已有
+         `components/layout` → `features/*` 的 import 先例。
+       */}
+      <MessageDetailDrawer
+        open={detailMessageId !== null}
+        onOpenChange={(v) => {
+          if (!v) setDetailMessageId(null);
+        }}
+        messageId={detailMessageId}
+      />
     </div>
   );
 }

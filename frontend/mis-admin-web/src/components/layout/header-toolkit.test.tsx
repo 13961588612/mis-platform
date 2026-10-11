@@ -13,6 +13,19 @@
  * 5. **UI 精修轮**：下拉 = 待办 + 消息**合计最近 20 条**（两侧各取 20 → 合并按
  *    `createdAt` 倒序 → 截前 20），且底部按钮文案为「打开消息中心」、点击会
  *    写门户 Tab store（真正切到消息中心，而不只是跳路由）。
+ * 6. **铃铛消息点开改抽屉**：点消息项 → `MessageDetailDrawer` 打开且携带**那条消息自己的
+ *    原始 id**（不是下拉React key 那种 `m-` 前缀形式），且**不发生路由跳转**；
+ *    点待办项仍跳 `/task/pending`（防止改消息时顺手改坏待办）。
+ * 7. **点消息顺手标已读**（对齐门户「消息中心」`handleOpen`）：未读的才发
+ *    `markMessagesRead(userId, [原始 id])` 且成功后重刷；已读的不发；
+ *    标已读**失败不阻断**查看详情（抽屉照开、不跳路由）。
+ *
+ * mock 范式（对齐 `features/portal/__tests__/portal-tabs.test.tsx`）：
+ * - 整体替换 api 模块，避免真实 axios/fetch；
+ * - zustand 用 `useAuthStore.setState` / `usePortalTabStore.setState` 直接塞状态；
+ * - `useNavigate` 用 spy 替换，用于断言「消息项不跳转 / 待办项跳转」；
+ * - `MessageDetailDrawer` 用轻量替身：本文件只验证「点消息 → 抽屉打开并带对ID」的接线，
+ *   抽屉内部（只读表单渲染 / 回复回显）由 `message-reply-drawer.test.tsx` 覆盖。
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
@@ -23,6 +36,13 @@ import * as messagesApi from '@/lib/api/messages';
 import { useAuthStore } from '@/stores/auth-store';
 import { usePortalTabStore } from '@/stores/portal-tab-store';
 
+const navigateSpy = vi.fn();
+
+vi.mock('react-router-dom', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('react-router-dom')>();
+  return { ...actual, useNavigate: () => navigateSpy };
+});
+
 vi.mock('@/lib/api/tasks', () => ({
   fetchMyTasks: vi.fn(),
   fetchTaskStats: vi.fn(),
@@ -31,6 +51,28 @@ vi.mock('@/lib/api/tasks', () => ({
 vi.mock('@/lib/api/messages', () => ({
   fetchInbox: vi.fn(),
   fetchMessageStats: vi.fn(),
+  markMessagesRead: vi.fn(),
+}));
+
+// 抽屉替身：暴露 messageId 到 data-message，断言「点哪条就带哪条的原始 id」；
+// 同时把 onOpenChange 暴露成按钮，用于验证「关闭后 messageId 置空、可再开另一条」。
+vi.mock('@/features/portal/components/message-detail-drawer', () => ({
+  MessageDetailDrawer: ({
+    open,
+    messageId,
+    onOpenChange,
+  }: {
+    open: boolean;
+    messageId: string | null;
+    onOpenChange: (open: boolean) => void;
+  }) =>
+    open ? (
+      <div data-testid="message-drawer" data-message={messageId ?? ''}>
+        <button type="button" onClick={() => onOpenChange(false)}>
+          close-drawer
+        </button>
+      </div>
+    ) : null,
 }));
 
 const emptyPage = { page: 1, size: 4, total: 0, list: [] };
@@ -103,6 +145,7 @@ describe('HeaderToolkit', () => {
     vi.mocked(messagesApi.fetchInbox).mockResolvedValue(emptyPage);
     vi.mocked(tasksApi.fetchTaskStats).mockResolvedValue({ pending: 0, urgent: 0, overdue: 0 });
     vi.mocked(messagesApi.fetchMessageStats).mockResolvedValue({ unread: 0, total: 0 });
+    vi.mocked(messagesApi.markMessagesRead).mockResolvedValue(1);
     // 门户 Tab 激活态是**模块级全局 store**（跨用例共享），必须逐例复位到默认「首页」，
     // 否则某个用例把它切到 message 后，后续依赖默认态的用例会假失败。
     // 复位统一放这里而不是用例体内：本文件后续若新增依赖 activeTab 的用例，自动受保护。
@@ -326,5 +369,156 @@ describe('HeaderToolkit', () => {
     await waitFor(() => expect(usePortalTabStore.getState().activeTab).toBe('message'));
     // 下拉同时收起
     expect(screen.queryByText('待办与消息')).toBeNull();
+  });
+
+  // ---------------------------------------------------------------------
+  // 铃铛消息点开改抽屉（与消息中心同款；流程消息带只读表单由抽屉内部负责）
+  // ---------------------------------------------------------------------
+
+  it('点铃铛里的消息 → 就地打开 MessageDetailDrawer，且带该条消息的原始 id（无 m- 前缀）', async () => {
+    vi.mocked(tasksApi.fetchMyTasks).mockResolvedValue(emptyPage);
+    vi.mocked(messagesApi.fetchInbox).mockResolvedValue({
+      ...emptyPage,
+      total: 2,
+      list: [
+        { ...oneMessage, id: '2002', title: '消息-较新', createdAt: '2026-10-08T12:00:00' },
+        { ...oneMessage, id: '1001', title: '消息-较旧', createdAt: '2026-10-08T10:00:00' },
+      ],
+    });
+    renderToolkit();
+
+    fireEvent.click(screen.getByLabelText('通知'));
+    // 点**较旧的那条**：若实现偷懒「总取第一条/固定值」，这里就会露馅。
+    fireEvent.click(await screen.findByText('消息-较旧'));
+
+    const drawer = await screen.findByTestId('message-drawer');
+    expect(drawer.getAttribute('data-message')).toBe('1001');
+    // 反向红线：绝不能把下拉用的拼接 key（`m-1001`）当业务 id 传下去。
+    expect(drawer.getAttribute('data-message')).not.toBe('m-1001');
+    // 下拉同时收起
+    expect(screen.queryByText('待办与消息')).toBeNull();
+  });
+
+  it('点铃铛里的消息不再跳工作台消息列表（navigate 未被调用）', async () => {
+    vi.mocked(tasksApi.fetchMyTasks).mockResolvedValue(emptyPage);
+    vi.mocked(messagesApi.fetchInbox).mockResolvedValue({ ...emptyPage, total: 1, list: [oneMessage] });
+    renderToolkit();
+
+    fireEvent.click(screen.getByLabelText('通知'));
+    fireEvent.click(await screen.findByText('采购审批待处理'));
+
+    expect(await screen.findByTestId('message-drawer')).toBeTruthy();
+    expect(navigateSpy).not.toHaveBeenCalled();
+    expect(usePortalTabStore.getState().activeTab).toBe('home');
+  });
+
+  it('点待办项仍跳 /task/pending（消息改抽屉不得误伤待办）', async () => {
+    vi.mocked(tasksApi.fetchMyTasks).mockResolvedValue({ ...emptyPage, total: 1, list: [oneTask] });
+    vi.mocked(messagesApi.fetchInbox).mockResolvedValue(emptyPage);
+    renderToolkit();
+
+    fireEvent.click(screen.getByLabelText('通知'));
+    fireEvent.click(await screen.findByText('采购审批 - 服务器采购'));
+
+    expect(navigateSpy).toHaveBeenCalledWith('/task/pending');
+    // 待办不该触发消息抽屉
+    expect(screen.queryByTestId('message-drawer')).toBeNull();
+  });
+
+  it('关闭抽屉后（onOpenChange(false)）messageId 置空，可再次打开另一条', async () => {
+    vi.mocked(tasksApi.fetchMyTasks).mockResolvedValue(emptyPage);
+    vi.mocked(messagesApi.fetchInbox).mockResolvedValue({
+      ...emptyPage,
+      total: 2,
+      list: [
+        { ...oneMessage, id: '2002', title: '消息-甲', createdAt: '2026-10-08T12:00:00' },
+        { ...oneMessage, id: '1001', title: '消息-乙', createdAt: '2026-10-08T10:00:00' },
+      ],
+    });
+    renderToolkit();
+
+    fireEvent.click(screen.getByLabelText('通知'));
+    fireEvent.click(await screen.findByText('消息-甲'));
+    expect((await screen.findByTestId('message-drawer')).getAttribute('data-message')).toBe('2002');
+
+    // 替身把 onOpenChange 暴露成按钮，模拟用户关抽屉
+    fireEvent.click(screen.getByRole('button', { name: 'close-drawer' }));
+    await waitFor(() => expect(screen.queryByTestId('message-drawer')).toBeNull());
+
+    fireEvent.click(screen.getByLabelText('通知'));
+    fireEvent.click(await screen.findByText('消息-乙'));
+    expect((await screen.findByTestId('message-drawer')).getAttribute('data-message')).toBe('1001');
+  });
+
+  // ---------------------------------------------------------------------
+  // 点消息顺手标已读（对齐门户「消息中心」handleOpen：未读才标、失败不阻断）
+  // ---------------------------------------------------------------------
+
+  it('点未读消息 → 调 markMessagesRead(userId, [原始 id])，且成功后重刷列表/角标', async () => {
+    vi.mocked(tasksApi.fetchMyTasks).mockResolvedValue(emptyPage);
+    vi.mocked(messagesApi.fetchInbox).mockResolvedValue({
+      ...emptyPage,
+      total: 1,
+      list: [{ ...oneMessage, id: '1001', read: false }],
+    });
+    renderToolkit();
+
+    fireEvent.click(screen.getByLabelText('通知'));
+    fireEvent.click(await screen.findByText('采购审批待处理'));
+
+    // 传的是**原始业务 id**，不是下拉拼接 key
+    await waitFor(() => expect(messagesApi.markMessagesRead).toHaveBeenCalledWith('700001', ['1001']));
+    const call = vi.mocked(messagesApi.markMessagesRead).mock.calls[0];
+    expect(call[1]).not.toEqual(['m-1001']);
+    // 成功后重刷：fetchInbox 被再次调用（角标随之更新）
+    await waitFor(() =>
+      expect(vi.mocked(messagesApi.fetchInbox).mock.calls.length).toBeGreaterThanOrEqual(2),
+    );
+  });
+
+  it('点已读消息 → 不调 markMessagesRead（不浪费一次写请求）', async () => {
+    vi.mocked(tasksApi.fetchMyTasks).mockResolvedValue(emptyPage);
+    vi.mocked(messagesApi.fetchInbox).mockResolvedValue({
+      ...emptyPage,
+      total: 1,
+      list: [{ ...oneMessage, id: '1001', read: true }],
+    });
+    renderToolkit();
+
+    fireEvent.click(screen.getByLabelText('通知'));
+    fireEvent.click(await screen.findByText('采购审批待处理'));
+
+    expect(await screen.findByTestId('message-drawer')).toBeTruthy();
+    expect(messagesApi.markMessagesRead).not.toHaveBeenCalled();
+  });
+
+  it('标已读失败不阻断查看详情：抽屉照开、不跳路由、不抛未捕获异常', async () => {
+    vi.mocked(tasksApi.fetchMyTasks).mockResolvedValue(emptyPage);
+    vi.mocked(messagesApi.fetchInbox).mockResolvedValue({
+      ...emptyPage,
+      total: 1,
+      list: [{ ...oneMessage, id: '1001', read: false }],
+    });
+    vi.mocked(messagesApi.markMessagesRead).mockRejectedValue(new Error('标记已读失败'));
+    // 失败若未被 catch 住，会冒成 unhandled rejection；这里显式监听并断言「没有」
+    const unhandled = vi.fn();
+    process.on('unhandledRejection', unhandled);
+    renderToolkit();
+
+    try {
+      fireEvent.click(screen.getByLabelText('通知'));
+      fireEvent.click(await screen.findByText('采购审批待处理'));
+
+      // 抽屉已开、带对id、且没有跳转 —— 标已读失败不影响「看详情」这件正事
+      const drawer = await screen.findByTestId('message-drawer');
+      expect(drawer.getAttribute('data-message')).toBe('1001');
+      expect(navigateSpy).not.toHaveBeenCalled();
+      // 失败后不重刷（没有 .then(load)）
+      await waitFor(() => expect(messagesApi.markMessagesRead).toHaveBeenCalled());
+      expect(vi.mocked(messagesApi.fetchInbox).mock.calls.length).toBe(2); // 挂载 1 次 + 开下拉 1 次
+      expect(unhandled).not.toHaveBeenCalled();
+    } finally {
+      process.off('unhandledRejection', unhandled);
+    }
   });
 });
