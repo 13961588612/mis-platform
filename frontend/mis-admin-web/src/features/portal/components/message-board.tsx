@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
 import { Bell, ChevronRight } from 'lucide-react';
 import { fetchInbox, type MessageItem } from '@/lib/api/messages';
 import { cn } from '@/lib/utils';
 import { ListError, ListLoading } from '@/components/common/empty-state';
 import { UnreadDot } from '@/components/common/unread-dot';
 import { MessageDetailDrawer } from './message-detail-drawer';
+import { usePortalEntry } from '../lib/use-portal-entry';
 
 interface MessageBoardProps {
   tenantId: string;
@@ -20,10 +20,12 @@ interface MessageBoardProps {
  * 属于「点了等于没点」的坏体验）。抽屉临时态**由本组件自持**（`useState`，关闭即
  * 销毁、不进 URL），与门户消息 Tab 的自持约定一致。
  *
- * <p>右上角「查看全部」仍是跳转 `/task/inbox`（收件箱全量列表，本轮不变）。
+ * <p><b>本轮改动（门内切 Tab）</b>：右上角「查看全部」原先 `navigate('/task/inbox')`
+ * 跳出门户，现改为经 {@link usePortalEntry} 切到门户「消息中心」Tab，
+ * **URL 恒为 `/portal`**，与另外两块板的「查看全部」口径统一。
  */
 export function MessageBoard({ tenantId, userId }: MessageBoardProps) {
-  const navigate = useNavigate();
+  const entry = usePortalEntry();
   const [items, setItems] = useState<MessageItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -62,7 +64,7 @@ export function MessageBoard({ tenantId, userId }: MessageBoardProps) {
         <h2 className="text-[13px] font-semibold">消息与通知</h2>
         <button
           type="button"
-          onClick={() => navigate('/task/inbox')}
+          onClick={() => entry.open('inbox')}
           className="inline-flex items-center gap-0.5 text-[12px] text-muted-foreground transition hover:text-primary"
         >
           查看全部 <ChevronRight className="h-3.5 w-3.5" />

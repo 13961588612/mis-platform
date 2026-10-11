@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
 import { ChevronRight, FileClock } from 'lucide-react';
 import { fetchMyProcesses, type WfInstance } from '@/lib/api/workflow';
 import { cn } from '@/lib/utils';
 import { TodoDetailDrawer } from './todo-detail-drawer';
+import { usePortalEntry } from '../lib/use-portal-entry';
 
 interface ProcessBoardProps {
   tenantId: string;
@@ -25,10 +25,12 @@ const STATUS: Record<string, { text: string; cls: string }> = {
  * 不再跳 `/task/process/{id}` 整页。抽屉临时态**由本组件自持**（`useState`，
  * 关闭即销毁、不进 URL），与门户其它板自持约定一致。
  *
- * <p>右上角「查看全部」仍是跳转 `/task/my-sent`（本轮不变）。
+ * <p><b>本轮改动（门内切 Tab）</b>：右上角「查看全部」原先 `navigate('/task/my-sent')`
+ * 跳出门户，现改为经 {@link usePortalEntry} 切到门户「待办事项」Tab 的
+ * 「我发起的」子 Tab，**URL 恒为 `/portal`**，与另外两块板的「查看全部」口径统一。
  */
 export function ProcessBoard({ tenantId, userId }: ProcessBoardProps) {
-  const navigate = useNavigate();
+  const entry = usePortalEntry();
   const [items, setItems] = useState<WfInstance[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -73,7 +75,7 @@ export function ProcessBoard({ tenantId, userId }: ProcessBoardProps) {
         <h2 className="text-[13px] font-semibold">我发起的</h2>
         <button
           type="button"
-          onClick={() => navigate('/task/my-sent')}
+          onClick={() => entry.open('mySent')}
           className="inline-flex items-center gap-0.5 text-[12px] text-muted-foreground transition hover:text-primary"
         >
           查看全部 <ChevronRight className="h-3.5 w-3.5" />

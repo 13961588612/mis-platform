@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
 import { ClipboardList, Clock, FileText, Mail } from 'lucide-react';
 import { fetchTaskStats, type TaskStats } from '@/lib/api/tasks';
 import { fetchMessageStats, type MessageStats } from '@/lib/api/messages';
 import { fetchMyProcesses } from '@/lib/api/workflow';
 import { cn } from '@/lib/utils';
+import { usePortalEntry, type PortalEntryTarget } from '../lib/use-portal-entry';
 
 interface WorkbenchOverviewProps {
   tenantId: string;
@@ -18,16 +18,26 @@ interface Metric {
   hint?: string;
   tone?: 'default' | 'danger';
   icon: typeof ClipboardList;
-  to: string;
+  /**
+   * 点击后**门内**切到的目标（不再跳路由）。
+   *
+   * <p>与「查看全部」口径统一：待办类→「待办事项」Tab + 「待处理」子 Tab、
+   * 消息类→「消息中心」Tab、我发起的→「待办事项」Tab + 「我发起的」子 Tab。
+   */
+  target: PortalEntryTarget;
 }
 
 /**
  * 工作台顶部概览条（现代商务：白底 + 浅灰分区）。
  *
  * <p>数据来自 taskflow 真实接口；任一失败仅该指标显示 "—"，不阻塞整体。
+ *
+ * <p><b>本轮改动（门内切 Tab）</b>：四张指标卡原先各自 `navigate('/task/...')`
+ * 跳出门户，现改为经 {@link usePortalEntry} 切门户 Tab / 子 Tab，**URL 恒为
+ * `/portal`**，与三个「查看全部」入口口径统一。
  */
 export function WorkbenchOverview({ tenantId, userId }: WorkbenchOverviewProps) {
-  const navigate = useNavigate();
+  const entry = usePortalEntry();
   const [taskStats, setTaskStats] = useState<TaskStats | null>(null);
   const [msgStats, setMsgStats] = useState<MessageStats | null>(null);
   const [sentTotal, setSentTotal] = useState<number | null>(null);
@@ -53,21 +63,21 @@ export function WorkbenchOverview({ tenantId, userId }: WorkbenchOverviewProps) 
       hint: taskStats && taskStats.urgent > 0 ? `紧急 ${taskStats.urgent}` : undefined,
       tone: taskStats && taskStats.urgent > 0 ? 'danger' : 'default',
       icon: ClipboardList,
-      to: '/task/pending',
+      target: 'pending',
     },
     {
       key: 'unread',
       label: '未读消息',
       value: msgStats?.unread ?? null,
       icon: Mail,
-      to: '/task/inbox',
+      target: 'inbox',
     },
     {
       key: 'sent',
       label: '我发起的',
       value: sentTotal,
       icon: FileText,
-      to: '/task/my-sent',
+      target: 'mySent',
     },
     {
       key: 'overdue',
@@ -75,7 +85,8 @@ export function WorkbenchOverview({ tenantId, userId }: WorkbenchOverviewProps) 
       value: taskStats?.overdue ?? null,
       tone: taskStats && taskStats.overdue > 0 ? 'danger' : 'default',
       icon: Clock,
-      to: '/task/pending',
+      // 逾期口径 = 待办里逾期了的那些 ⇒ 与「我的待办」同落点。
+      target: 'pending',
     },
   ];
 
@@ -87,7 +98,7 @@ export function WorkbenchOverview({ tenantId, userId }: WorkbenchOverviewProps) 
           <button
             key={m.key}
             type="button"
-            onClick={() => navigate(m.to)}
+            onClick={() => entry.open(m.target)}
             className="group flex items-center gap-3 px-4 py-3.5 text-left transition hover:bg-muted/60"
           >
             <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-muted text-muted-foreground transition group-hover:bg-primary/10 group-hover:text-primary">

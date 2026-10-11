@@ -11,8 +11,9 @@ import { TodoDetailDrawer } from '@/features/portal/components/todo-detail-drawe
 import { fetchHandledTasks, fetchMyTasks } from '@/lib/api/tasks';
 import { fetchMyProcesses } from '@/lib/api/workflow';
 import { useAuthStore } from '@/stores/auth-store';
+import { usePortalTodoTabStore } from '@/stores/portal-todo-tab-store';
 import { cn } from '@/lib/utils';
-import { DEFAULT_TODO_TAB_KEY, TODO_TABS } from '../lib/todo-tabs';
+import { TODO_TABS } from '../lib/todo-tabs';
 import { fromHandledTask, fromTaskItem, fromWfInstance } from '../lib/todo-adapters';
 import type { PortalTodoRow } from '../types';
 
@@ -51,6 +52,12 @@ function ProcessStatusBadge({ status }: { status: string }) {
  * （{@link TodoDetailDrawer}，内嵌 `ProcessShell embedded` + 三动作）；无 `instanceId`
  * 时降级提示。**抽屉不入 URL**（keep-alive 坑，设计 §1.2），故用 `useState` 维护临时态。
  *
+ * <p><b>子 Tab 键提升到全局 store（本轮结构改动）</b>：`activeKey` 不再用组件内
+ * `useState`，改为订阅 {@link usePortalTodoTabStore}。原因：首页工作台的
+ * 「查看全部」/ 概览指标卡在**另一棵组件树**（`PortalHomeTab`）里，原先只能靠跳路由
+ * 绕开组件内状态；用户要求这些入口**门内切 Tab**（URL 恒为 `/portal`），
+ * 子 Tab 键必须能被外部写入。初值仍为 store 里的 `DEFAULT_TODO_TAB_KEY`（待处理）。
+ *
  * <p>布局：列表滚动容器**单层**（`min-h-0 flex-1 overflow-auto`），页内不加内层 padding。
  */
 export function PortalTodoTab() {
@@ -59,7 +66,8 @@ export function PortalTodoTab() {
   const tenantId = '1';
   const userId = user?.id ?? '';
 
-  const [activeKey, setActiveKey] = useState<string>(DEFAULT_TODO_TAB_KEY);
+  const activeKey = usePortalTodoTabStore((s) => s.activeKey);
+  const setActiveKey = usePortalTodoTabStore((s) => s.setActiveKey);
   /** 输入框即时值（受控；**不是**数据加载依赖，故打字不触发请求）。 */
   const [draft, setDraft] = useState('');
   /** 已提交的关键词：只有它变化才触发请求（显式搜索语义）。 */

@@ -28,6 +28,7 @@ import * as messagesApi from '@/lib/api/messages';
 import * as workflowApi from '@/lib/api/workflow';
 import { useAuthStore } from '@/stores/auth-store';
 import { usePortalTabStore } from '@/stores/portal-tab-store';
+import { DEFAULT_TODO_TAB_KEY, usePortalTodoTabStore } from '@/stores/portal-todo-tab-store';
 
 vi.mock('next-themes', () => ({
   useTheme: () => ({ setTheme: vi.fn(), resolvedTheme: 'light' }),
@@ -156,6 +157,9 @@ describe('PortalPage 冒烟', () => {
     // Tab 激活态是模块级全局 store（跨测试文件/用例共享），复位到默认「首页」，
     // 否则被别的用例切到 message 后，本文件的「首页板块」断言会假失败。
     usePortalTabStore.setState({ activeTab: 'home' });
+    // 待办子 Tab 键同理（本轮从 PortalTodoTab 的 useState 提升而来）：
+    // 别的文件点过「我发起的 → 查看全部」后会残留 mySent。
+    usePortalTodoTabStore.setState({ activeKey: DEFAULT_TODO_TAB_KEY });
   });
 
   afterEach(() => {

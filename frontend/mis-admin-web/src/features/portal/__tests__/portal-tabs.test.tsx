@@ -24,6 +24,12 @@
  *    抽屉以轻量替身替换（其内部行为由 `todo-tabs.test.tsx` / `message-reply-drawer.test.tsx` 覆盖）。
  * 7. **首页三板点行改开抽屉**（取代路由跳转）：TaskBoard/ProcessBoard → TodoDetailDrawer、
  *    MessageBoard → MessageDetailDrawer（且 messageId 是**被点的那条**，不是固定值）。
+ * 8. **本轮（门内切 Tab 轮）**：三个「查看全部」+ 四张概览指标卡 + TaskBoard 无流程行的
+ *    降级分支，全部由 `navigate('/task/*')` 改为**门内切门户 Tab / 子 Tab**
+ *    （URL 恒为 `/portal`）：待办类 → 「待办事项」+「待处理」，消息类 → 「消息中心」，
+ *    我发起的 → 「待办事项」+「我发起的」。`navigate` 在这些入口上一律不得被调用。
+ *    子 Tab 键因此从 `PortalTodoTab` 的 `useState` 提升到
+ *    `stores/portal-todo-tab-store.ts`（跨组件树可写），复位约定同 `portal-tab-store`。
  *
  * mock 范式（对齐 `portal-page.smoke.test.tsx`）：
  * - 整体替换 api 模块，避免真实 axios/fetch；
@@ -33,7 +39,7 @@
  * - 两个抽屉替身（T05）。
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { PortalPage } from '../portal-page';
 import { PortalTabSwitcher } from '@/components/layout/portal-tab-switcher';
@@ -43,6 +49,7 @@ import * as messagesApi from '@/lib/api/messages';
 import * as workflowApi from '@/lib/api/workflow';
 import { useAuthStore } from '@/stores/auth-store';
 import { usePortalTabStore } from '@/stores/portal-tab-store';
+import { DEFAULT_TODO_TAB_KEY, usePortalTodoTabStore } from '@/stores/portal-todo-tab-store';
 
 const navigateSpy = vi.fn();
 
@@ -130,6 +137,20 @@ function renderPage() {
 }
 
 /**
+ * 首页里**某一块板**的「查看全部」按钮（按板的标题定位其 `<section>` 再向内查）。
+ *
+ * <p>为什么不能像旧用例那样 `findAllByText(/^查看全部$/)[i]` 按下标取：三块板各有
+ * 一个同名按钮，下标顺序依赖渲染顺序（脆弱）；且本轮断言切 Tab 后首页会被卸载，
+ * 一条用例里连点三个已不可行。按标题定位既稳又能自证「点的是哪块板」。
+ */
+function viewAllButtonOf(boardTitle: string): HTMLElement {
+  const heading = screen.getByRole('heading', { name: boardTitle });
+  const section = heading.closest('section');
+  expect(section).toBeTruthy();
+  return within(section as HTMLElement).getByRole('button', { name: /查看全部/ });
+}
+
+/**
  * 顶栏 tab + 门户页**同树**渲染：用于断言「点顶栏 tab ⇒ 门户内容真的切换」。
  *
  * <p>两个组件在真实运行时分处两棵 React 树（顶栏在 `AppLayout`、内容区在
@@ -171,6 +192,10 @@ describe('PortalPage 三 Tab 容器', () => {
     // Tab 激活态是**模块级全局 store**（跨测试共享），必须逐例复位到默认「首页」，
     // 否则上一例切到 message 会让下一例的「默认选中首页」断言假失败。
     usePortalTabStore.setState({ activeTab: 'home' });
+    // 子 Tab 激活态同理：本轮从 `PortalTodoTab` 的组件内 useState 提升到全局 store
+    // （首页板块要能切到指定子 Tab），不复位的话上一例切到 mySent 会污染下一例
+    // 的「默认选中待处理」断言。约定同 `portal-tab-store`。
+    usePortalTodoTabStore.setState({ activeKey: DEFAULT_TODO_TAB_KEY });
   });
 
   afterEach(() => {
@@ -445,7 +470,13 @@ describe('PortalPage 三 Tab 容器', () => {
     expect(navigateSpy).not.toHaveBeenCalled();
   });
 
-  it('首页 TaskBoard 无关联流程的行 → 降级跳 /task/pending（不开空抽屉）', async () => {
+  // ---------------------------------------------------------------------
+  // 本轮改动：该降级分支原先 `navigate('/task/pending')` 跳出门户，现与「查看全部」
+  // 口径统一为**门内切「待办事项」Tab + 「待处理」子 Tab**。断言从「跳了路由」
+  // 反转为「切了 Tab 且 navigate 未被调用」，「不开空抽屉」这条原语义**保留**
+  // （无 instanceId ⇒ 抽屉无内容可拉）。
+  // ---------------------------------------------------------------------
+  it('首页 TaskBoard 无关联流程的行 → 降级门内切「待办事项」+「待处理」（不开空抽屉、不 navigate）', async () => {
     vi.mocked(tasksApi.fetchMyTasks).mockResolvedValue({
       page: 1,
       size: 20,
@@ -457,8 +488,110 @@ describe('PortalPage 三 Tab 容器', () => {
     const row = (await screen.findByText('待办-无流程')).closest('button');
     fireEvent.click(row!);
 
-    expect(navigateSpy).toHaveBeenCalledWith('/task/pending');
+    // 门内切 Tab：主 Tab = todo，子 Tab = 待处理；URL 不动（navigate 未被调用）。
+    expect(usePortalTabStore.getState().activeTab).toBe('todo');
+    expect(usePortalTodoTabStore.getState().activeKey).toBe('pending');
+    expect(await screen.findByLabelText('待办关键词')).toBeTruthy();
+    expect(screen.getByRole('tab', { name: '待处理' }).getAttribute('data-state')).toBe('active');
+    expect(navigateSpy).not.toHaveBeenCalled();
+    // 仍然不开空抽屉（无流程实例 ⇒ 抽屉没有内容可拉，这是降级语义本身）
     expect(screen.queryByTestId('todo-drawer')).toBeNull();
+  });
+
+  // ---------------------------------------------------------------------
+  // 本轮改动：三块板的「查看全部」原先各自跳 `/task/pending` `/task/inbox`
+  // `/task/my-sent`，现全部改为**门内切 Tab**（URL 恒为 `/portal`），口径统一。
+  // 原单个用例（一次点三个、断言三条 navigate）拆成三条独立用例：
+  // 拆开的原因——原用例靠 `findAllByText(/^查看全部$/)` 的**下标顺序**区分三块板，
+  // 一旦断言从「被调用的路由」变成「切到的 Tab / 子 Tab」，三条必须各自
+  // `renderPage()` 重置首屏（切 Tab 会卸载首页，第二个「查看全部」就不在 DOM 里了），
+  // 合在一条里会互相干扰、且失败时定位不到是哪块板。断言也更强：现在逐条钉住
+  // 主 Tab + 子 Tab 两个维度。
+  // ---------------------------------------------------------------------
+  it('首页 TaskBoard「查看全部」→ 门内切「待办事项」Tab +「待处理」子 Tab（不 navigate）', async () => {
+    renderPage();
+    await screen.findByText('你好，测试员');
+
+    fireEvent.click(viewAllButtonOf('我的待办'));
+
+    expect(usePortalTabStore.getState().activeTab).toBe('todo');
+    expect(usePortalTodoTabStore.getState().activeKey).toBe('pending');
+    // 真的挂上了 Todo 组件，且子 Tab 条选中「待处理」
+    expect(await screen.findByLabelText('待办关键词')).toBeTruthy();
+    expect(screen.getByRole('tab', { name: '待处理' }).getAttribute('data-state')).toBe('active');
+    expect(navigateSpy).not.toHaveBeenCalled();
+    expect(screen.queryByTestId('todo-drawer')).toBeNull();
+  });
+
+  it('首页 MessageBoard「查看全部」→ 门内切「消息中心」Tab（不 navigate）', async () => {
+    renderPage();
+    await screen.findByText('你好，测试员');
+
+    fireEvent.click(viewAllButtonOf('消息与通知'));
+
+    expect(usePortalTabStore.getState().activeTab).toBe('message');
+    expect(await screen.findByLabelText('消息关键词')).toBeTruthy();
+    expect(screen.getByRole('tab', { name: '审批' })).toBeTruthy();
+    expect(navigateSpy).not.toHaveBeenCalled();
+    expect(screen.queryByTestId('message-drawer')).toBeNull();
+  });
+
+  it('首页 ProcessBoard「查看全部」→ 门内切「待办事项」Tab +「我发起的」子 Tab（不 navigate）', async () => {
+    renderPage();
+    await screen.findByText('你好，测试员');
+
+    fireEvent.click(viewAllButtonOf('我发起的'));
+
+    // 关键：子 Tab 键从组件内 useState 提升到全局 store 后，首页（另一棵组件树）
+    // 才能把它写成 mySent —— 这条断言就是「状态提升真的生效」的证据。
+    expect(usePortalTabStore.getState().activeTab).toBe('todo');
+    expect(usePortalTodoTabStore.getState().activeKey).toBe('mySent');
+    expect(await screen.findByLabelText('待办关键词')).toBeTruthy();
+    expect(screen.getByRole('tab', { name: '我发起的' }).getAttribute('data-state')).toBe('active');
+    // 子 Tab 生效的下游证据：真的按 sent 源拉了流程实例（page=1, size=20）。
+    await waitFor(() =>
+      expect(workflowApi.fetchMyProcesses).toHaveBeenCalledWith('1', '700001', undefined, 1, 20, undefined),
+    );
+    expect(navigateSpy).not.toHaveBeenCalled();
+  });
+
+  // ---------------------------------------------------------------------
+  // 本轮改动：四张概览指标卡与「查看全部」口径统一（原先也是 navigate 跳列表页）。
+  // ---------------------------------------------------------------------
+  it('概览指标卡「我的待办」→ 门内切「待办事项」+「待处理」（不 navigate）', async () => {
+    renderPage();
+    await screen.findByText('你好，测试员');
+
+    fireEvent.click(screen.getByRole('button', { name: /我的待办/ }));
+
+    expect(usePortalTabStore.getState().activeTab).toBe('todo');
+    expect(usePortalTodoTabStore.getState().activeKey).toBe('pending');
+    expect(await screen.findByLabelText('待办关键词')).toBeTruthy();
+    expect(navigateSpy).not.toHaveBeenCalled();
+  });
+
+  it('概览指标卡「未读消息」→ 门内切「消息中心」（不 navigate）', async () => {
+    renderPage();
+    await screen.findByText('你好，测试员');
+
+    fireEvent.click(screen.getByRole('button', { name: /未读消息/ }));
+
+    expect(usePortalTabStore.getState().activeTab).toBe('message');
+    expect(await screen.findByLabelText('消息关键词')).toBeTruthy();
+    expect(navigateSpy).not.toHaveBeenCalled();
+  });
+
+  it('概览指标卡「我发起的」→ 门内切「待办事项」+「我发起的」（不 navigate）', async () => {
+    renderPage();
+    await screen.findByText('你好，测试员');
+
+    fireEvent.click(screen.getByRole('button', { name: /^我发起的/ }));
+
+    expect(usePortalTabStore.getState().activeTab).toBe('todo');
+    expect(usePortalTodoTabStore.getState().activeKey).toBe('mySent');
+    expect(await screen.findByLabelText('待办关键词')).toBeTruthy();
+    expect(screen.getByRole('tab', { name: '我发起的' }).getAttribute('data-state')).toBe('active');
+    expect(navigateSpy).not.toHaveBeenCalled();
   });
 
   it('首页 MessageBoard 点第 2 条 → MessageDetailDrawer 打开且 messageId 是第 2 条的 id', async () => {
@@ -514,23 +647,5 @@ describe('PortalPage 三 Tab 容器', () => {
     expect(await screen.findByTestId('todo-drawer')).toBeTruthy();
     expect(screen.getByTestId('todo-drawer').getAttribute('data-instance')).toBe('128');
     expect(navigateSpy).not.toHaveBeenCalled();
-  });
-
-  it('首页三板「查看全部」跳转保持原样（pending / inbox / my-sent）', async () => {
-    renderPage();
-    await screen.findByText('你好，测试员');
-
-    // 三块板各一个「查看全部」；逐个点，断言仍是原列表页路由。
-    const all = await screen.findAllByText(/^查看全部$/);
-    expect(all.length).toBe(3);
-    fireEvent.click(all[0]);
-    expect(navigateSpy).toHaveBeenCalledWith('/task/pending');
-    fireEvent.click(all[1]);
-    expect(navigateSpy).toHaveBeenCalledWith('/task/inbox');
-    fireEvent.click(all[2]);
-    expect(navigateSpy).toHaveBeenCalledWith('/task/my-sent');
-    // 「查看全部」不该开抽屉
-    expect(screen.queryByTestId('todo-drawer')).toBeNull();
-    expect(screen.queryByTestId('message-drawer')).toBeNull();
   });
 });

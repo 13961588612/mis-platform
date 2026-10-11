@@ -77,7 +77,16 @@ export function PortalHomeTab() {
 
         {/* 侧栏：模块导航（占 1/3） */}
         <aside className="lg:col-span-1">
-          <div className="lg:sticky lg:top-4">
+          {/*
+            🔴 `lg:top-0` 不要改回 `lg:top-4`：门户页根 `portal-shell` 是**唯一滚动容器**
+            且按布局契约**不带内层 padding**，网格首行的自然顶边 == 滚动容器顶边。
+            sticky 的 `top` 是「顶边至少距滚动口上沿 N px」的约束，N>0 时**在 scrollTop=0
+            就会把侧栏整体下推 N px** —— 实测 `top-4` 下「我的应用」卡片 top=96、
+            左侧欢迎条 top=80，正好低 16px（就是用户反馈的「比左侧低一点」）。
+            改成 `top-0` 后静止态两侧齐平（实测均 80），滚动起来仍照常吸附在滚动口上沿
+            （实测 scrollTop=60/174 时恒为 80），sticky 行为未破坏。
+          */}
+          <div className="lg:sticky lg:top-0">
             {error ? <p className="mb-3 text-[13px] text-destructive">{error}</p> : null}
             {loading ? <p className="mb-3 text-[13px] text-muted-foreground">加载子系统…</p> : null}
             <AppRail apps={apps} currentAppCode={currentApp?.code} onEnter={enterApp} />

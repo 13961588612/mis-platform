@@ -8,17 +8,23 @@
  * 3. 分类 → 接口路由：「我发起的」调 `fetchMyProcesses`、「我审批的」调 `fetchHandledTasks`；
  * 4. 空态 / 错误态渲染；
  * 5. **T03b**：点有实例的行 → 打开右侧抽屉（携带 instanceId），不再 `navigate`。
+ * 6. **本轮（状态提升）**：子 Tab 键由 `PortalTodoTab` 的组件内 `useState` 提升到
+ *    `stores/portal-todo-tab-store.ts`（首页板块要能切到指定子 Tab）——
+ *    故外部 `setActiveKey` 必须能驱动本组件换源，`TODO_TABS` 首项必须与 store 的
+ *    默认键一致，且 `beforeEach` 必须复位该 store。
  *
  * mock 范式：整体替换 `@/lib/api/tasks`、`@/lib/api/workflow`；auth store 用 `useAuthStore.setState`；
  * `next-themes` 显式 mock；抽屉替换为轻量替身；`wfInstanceId` 不 mock（用真实解析，metadata 决定 instanceId）。
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { PortalTodoTab } from '../tabs/portal-todo-tab';
 import * as tasksApi from '@/lib/api/tasks';
 import * as workflowApi from '@/lib/api/workflow';
 import { useAuthStore } from '@/stores/auth-store';
+import { DEFAULT_TODO_TAB_KEY, usePortalTodoTabStore } from '@/stores/portal-todo-tab-store';
+import { TODO_TABS } from '../lib/todo-tabs';
 import type { TaskItem } from '@/lib/api/tasks';
 import type { WfInstance } from '@/lib/api/workflow';
 
@@ -114,6 +120,10 @@ describe('PortalTodoTab（T03a）', () => {
     vi.mocked(tasksApi.fetchMyTasks).mockResolvedValue(emptyPage);
     vi.mocked(tasksApi.fetchHandledTasks).mockResolvedValue(emptyPage);
     vi.mocked(workflowApi.fetchMyProcesses).mockResolvedValue(emptyPage);
+    // 子 Tab 键本轮提升到模块级全局 store（跨测试共享），必须逐例复位到默认
+    // 「待处理」，否则上一例点过「我发起的」会让下一例「默认待处理」断言假失败
+    // （约定同 `portal-tab-store`）。
+    usePortalTodoTabStore.setState({ activeKey: DEFAULT_TODO_TAB_KEY });
   });
 
   afterEach(() => {
@@ -245,5 +255,44 @@ describe('PortalTodoTab（T03a）', () => {
     renderTab();
     expect(await screen.findByText('加载爆炸')).toBeTruthy();
     expect(screen.getByText('重试')).toBeTruthy();
+  });
+
+  // ---------------------------------------------------------------------
+  // 本轮（状态提升）：子 Tab 键从组件内 useState 提升到全局 store
+  // ---------------------------------------------------------------------
+  it('TODO_TABS 首项与 store 的默认子 Tab 键一致（防止两处漂移）', () => {
+    // 默认键已搬到 stores/portal-todo-tab-store.ts 单点定义（子 Tab 初值随状态一起搬），
+    // TODO_TABS[0] 必须仍是它；表中六键的集合也一并钉住。
+    expect(TODO_TABS[0].key).toBe(DEFAULT_TODO_TAB_KEY);
+    expect(TODO_TABS.map((t) => t.key)).toEqual([
+      'pending',
+      'approving',
+      'approved',
+      'rejected',
+      'mySent',
+      'myHandled',
+    ]);
+  });
+
+  it('子 Tab 键提升到 store：外部 setActiveKey("mySent") 驱动本组件换源（首页板块靠这条桥接）', async () => {
+    renderTab();
+    // 默认源：/tasks/my（status=PENDING）
+    await waitFor(() =>
+      expect(tasksApi.fetchMyTasks).toHaveBeenCalledWith(
+        expect.objectContaining({ status: 'PENDING' }),
+      ),
+    );
+
+    // 模拟首页「我发起的 → 查看全部」：只写 store，不碰组件实例。
+    act(() => {
+      usePortalTodoTabStore.getState().setActiveKey('mySent');
+    });
+
+    // 换源生效：走 /workflow/instances/my，且子 Tab 条选中「我发起的」。
+    await waitFor(() =>
+      expect(workflowApi.fetchMyProcesses).toHaveBeenCalledWith('1', '700001', undefined, 1, 20, undefined),
+    );
+    expect(screen.getByRole('tab', { name: '我发起的' }).getAttribute('data-state')).toBe('active');
+    expect(usePortalTodoTabStore.getState().activeKey).toBe('mySent');
   });
 });

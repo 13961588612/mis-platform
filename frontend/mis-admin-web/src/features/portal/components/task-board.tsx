@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
 import { AlertTriangle, ChevronRight, Inbox } from 'lucide-react';
 import { fetchMyTasks, type TaskItem } from '@/lib/api/tasks';
 import { ListError, ListLoading } from '@/components/common/empty-state';
 import { PriorityBadge } from '@/components/common/priority-badge';
 import { wfInstanceId } from '@/lib/api/wf-instance';
 import { TodoDetailDrawer } from './todo-detail-drawer';
+import { usePortalEntry } from '../lib/use-portal-entry';
 
 interface TaskBoardProps {
   tenantId: string;
@@ -17,14 +17,19 @@ interface TaskBoardProps {
  *
  * <p><b>点行的去向（UI 精修轮）</b>：有 `wfInstanceId` 的行 → 就地打开
  * {@link TodoDetailDrawer}（右侧划入，看表单 + 审批进度，不必离开工作台）；
- * **无关联流程的行降级为跳 `/task/pending`**（不打开空抽屉，那没有信息量）。
+ * **无关联流程的行降级为门内切「待办事项」Tab**（不打开空抽屉，那没有信息量 ——
+ * 这正是这里不开抽屉的原因：抽屉靠 `instanceId` 拉流程详情，没有实例时它只能
+ * 是一片空白，给用户的负反馈比「跳到列表自己找」更差）。
  * 抽屉临时态**由本组件自持**（`useState`，关闭即销毁、不进 URL），与门户待办 /
  * 消息 Tab 的自持约定一致，Board 保持自包含、不必由容器层层下传。
  *
- * <p>右上角「查看全部」仍是跳转 `/task/pending`（列表页语义，本轮不变）。
+ * <p><b>本轮改动（门内切 Tab）</b>：右上角「查看全部」与上面那条降级分支原先都
+ * `navigate('/task/pending')` 跳出门户，现统一改为经 {@link usePortalEntry} 切到
+ * 门户「待办事项」Tab 的「待处理」子 Tab，**URL 恒为 `/portal`**，
+ * 与另外两块板的「查看全部」口径统一。
  */
 export function TaskBoard({ tenantId, userId }: TaskBoardProps) {
-  const navigate = useNavigate();
+  const entry = usePortalEntry();
   const [items, setItems] = useState<TaskItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -51,7 +56,10 @@ export function TaskBoard({ tenantId, userId }: TaskBoardProps) {
     void load();
   }, [load]);
 
-  /** 点行：有实例 → 开抽屉；无实例 → 降级跳待办列表页（沿用原降级口径）。 */
+  /**
+   * 点行：有实例 → 开抽屉；无实例 → **降级为门内切「待办事项」Tab 的「待处理」子 Tab**
+   * （不开空抽屉的理由见类注释：抽屉靠 instanceId 拉流程详情，无实例时是空白）。
+   */
   function open(item: TaskItem) {
     const inst = wfInstanceId(item);
     if (inst) {
@@ -59,7 +67,7 @@ export function TaskBoard({ tenantId, userId }: TaskBoardProps) {
       setDrawerOpen(true);
       return;
     }
-    navigate('/task/pending');
+    entry.open('pending');
   }
 
   /** 抽屉内动作成功：关抽屉 + 刷新本板列表。 */
@@ -74,7 +82,7 @@ export function TaskBoard({ tenantId, userId }: TaskBoardProps) {
         <h2 className="text-[13px] font-semibold">我的待办</h2>
         <button
           type="button"
-          onClick={() => navigate('/task/pending')}
+          onClick={() => entry.open('pending')}
           className="inline-flex items-center gap-0.5 text-[12px] text-muted-foreground transition hover:text-primary"
         >
           查看全部 <ChevronRight className="h-3.5 w-3.5" />
