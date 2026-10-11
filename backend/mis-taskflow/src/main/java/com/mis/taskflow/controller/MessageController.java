@@ -43,25 +43,29 @@ public class MessageController {
         return Result.ok(messageService.publish(tenantId, request));
     }
 
-    /** 我的收件箱。 */
+    /** 我的收件箱（可选 appCode / scope 归属过滤；不传 = 现状，零回归）。 */
     @GetMapping("/inbox")
     public Result<PageResult<MessageVO>> inbox(@RequestParam Long tenantId,
                                                @RequestParam Long userId,
                                                @RequestParam(required = false) String msgType,
+                                               @RequestParam(required = false) String appCode,
+                                               @RequestParam(required = false) String scope,
                                                @RequestParam(defaultValue = "1") int page,
                                                @RequestParam(defaultValue = "20") int size) {
-        return Result.ok(messageService.inbox(tenantId, userId, msgType, page, size));
+        return Result.ok(messageService.inbox(tenantId, userId, msgType, appCode, scope, page, size));
     }
 
-    /** 关键词检索（可选 msgType 限定类型内的独立搜索，PRD D-5 / Q3）。 */
+    /** 关键词检索（可选 msgType 限定类型内的独立搜索，PRD D-5 / Q3；可选 appCode / scope 归属过滤）。 */
     @GetMapping("/search")
     public Result<PageResult<MessageVO>> search(@RequestParam Long tenantId,
                                                 @RequestParam Long userId,
                                                 @RequestParam(required = false) String msgType,
                                                 @RequestParam String q,
+                                                @RequestParam(required = false) String appCode,
+                                                @RequestParam(required = false) String scope,
                                                 @RequestParam(defaultValue = "1") int page,
                                                 @RequestParam(defaultValue = "20") int size) {
-        return Result.ok(messageService.search(tenantId, userId, msgType, q, page, size));
+        return Result.ok(messageService.search(tenantId, userId, msgType, q, appCode, scope, page, size));
     }
 
     /** 详情。 */

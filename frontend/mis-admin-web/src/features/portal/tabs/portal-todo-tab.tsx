@@ -19,6 +19,15 @@ import type { PortalTodoRow } from '../types';
 
 const PAGE_SIZE = 20;
 
+/**
+ * P0 参数打通（plumbing）：待办三来源（`my` / `handled` / `sent`）的应用归属过滤通道。
+ *
+ * <p>当前**无**「当前 APP」选择来源 ⇒ 恒为空对象 ⇒ 不传该 query ⇒ 与现状逐字等价（零回归）。
+ * 未来接入 APP 上下文后，仅需在此提供 `{ scope: 'APP', appCode: 'kb' }` 即可自动透传到
+ * URL 查询串。
+ */
+export const APP_SCOPE_FILTER: { scope?: string; appCode?: string } = Object.freeze({});
+
 /** 流程实例状态徽标（`sent` 源用；与 `my-sent-page.tsx` 的口径一致）。 */
 const PROCESS_STATUS: Record<string, { text: string; cls: string }> = {
   RUNNING: { text: '进行中', cls: 'bg-info/10 text-info' },
@@ -101,11 +110,24 @@ export function PortalTodoTab() {
     setError(null);
     try {
       if (tab.source === 'sent') {
-        const r = await fetchMyProcesses(tenantId, userId, undefined, page, PAGE_SIZE, kw);
+        // 参数打通：仅在提供了 scope/appCode 时才追加尾参（缺省 ⇒ 6 参调用 ⇒ 零回归）。
+        const scope = APP_SCOPE_FILTER.scope;
+        const appCode = APP_SCOPE_FILTER.appCode;
+        const r =
+          scope || appCode
+            ? await fetchMyProcesses(tenantId, userId, undefined, page, PAGE_SIZE, kw, scope, appCode)
+            : await fetchMyProcesses(tenantId, userId, undefined, page, PAGE_SIZE, kw);
         setRows(r.list.map(fromWfInstance));
         setTotal(r.total);
       } else if (tab.source === 'handled') {
-        const r = await fetchHandledTasks({ tenantId, assigneeId: userId, page, size: PAGE_SIZE, keyword: kw });
+        const r = await fetchHandledTasks({
+          tenantId,
+          assigneeId: userId,
+          page,
+          size: PAGE_SIZE,
+          keyword: kw,
+          ...APP_SCOPE_FILTER,
+        });
         setRows(r.list.map(fromHandledTask));
         setTotal(r.total);
       } else {
@@ -116,6 +138,7 @@ export function PortalTodoTab() {
           page,
           size: PAGE_SIZE,
           keyword: kw,
+          ...APP_SCOPE_FILTER,
         });
         setRows(r.list.map((it) => fromTaskItem(it, { category: tab.key })));
         setTotal(r.total);

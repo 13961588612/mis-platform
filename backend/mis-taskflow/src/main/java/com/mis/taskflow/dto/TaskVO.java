@@ -4,6 +4,8 @@ import java.time.LocalDateTime;
 
 /**
  * 代办任务视图。
+ *
+ * @param appCode 应用归属（{@code sys_app.code}）；{@code null} = 平台级
  */
 public record TaskVO(
         String id,
@@ -22,6 +24,7 @@ public record TaskVO(
         String result,
         boolean read,
         LocalDateTime completedAt,
-        LocalDateTime createdAt
+        LocalDateTime createdAt,
+        String appCode
 ) {
 }

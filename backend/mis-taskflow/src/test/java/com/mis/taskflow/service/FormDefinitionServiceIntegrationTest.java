@@ -2,14 +2,14 @@ package com.mis.taskflow.service;
 
 import com.mis.common.core.exception.BusinessException;
 import com.mis.common.core.exception.ResultCode;
-import com.mis.taskflow.domain.entity.FormCategory;
+import com.mis.taskflow.domain.entity.BizCategory;
 import com.mis.taskflow.domain.entity.FormDefinition;
 import com.mis.taskflow.domain.entity.WfDefinition;
 import com.mis.taskflow.domain.repository.FormDefinitionRepository;
 import com.mis.taskflow.domain.repository.WfDefinitionRepository;
 import com.mis.taskflow.dto.CreateDefinitionRequest;
 import com.mis.taskflow.dto.StartProcessRequest;
-import com.mis.taskflow.dto.UpsertFormCategoryRequest;
+import com.mis.taskflow.dto.UpsertBizCategoryRequest;
 import com.mis.taskflow.dto.UpsertFormDefinitionRequest;
 import com.mis.taskflow.dto.WfInstanceVO;
 import com.mis.taskflow.dto.WfNodeDTO;
@@ -45,7 +45,7 @@ class FormDefinitionServiceIntegrationTest {
 
     @Autowired private FormDefinitionService formService;
     @Autowired private FormDefinitionRepository formRepository;
-    @Autowired private FormCategoryService categoryService;
+    @Autowired private BizCategoryService categoryService;
     @Autowired private WfDefinitionService definitionService;
     @Autowired private WfDefinitionRepository definitionRepository;
     @Autowired private ProcessService processService;
@@ -68,8 +68,8 @@ class FormDefinitionServiceIntegrationTest {
 
     /** 造一个测试分类。 */
     private Long newCategory(String name) {
-        return categoryService.create(TENANT, 1L, new UpsertFormCategoryRequest(
-                FormCategory.ROOT_PARENT_ID, uniqCode("CAT"), name, null, 0, "{}"));
+        return categoryService.create(TENANT, 1L, new UpsertBizCategoryRequest(
+                BizCategory.ROOT_PARENT_ID, uniqCode("CAT"), name, null, 0, "{}"));
     }
 
     private List<WfNodeDTO> nodes() {
@@ -425,7 +425,7 @@ class FormDefinitionServiceIntegrationTest {
 
         Long instId = processService.startProcess(TENANT, new StartProcessRequest(
                 flowCode, "PURCHASE_ORDER", "PO-" + System.nanoTime(), code,
-                "{\"amount\":128000,\"orderNo\":\"PO-2026-0001\"}", 100L, "发起人"));
+                "{\"amount\":128000,\"orderNo\":\"PO-2026-0001\"}", 100L, "发起人", null));
 
         var detail = processService.detail(instId, TENANT);
         assertNotNull(detail.formData(), "detail 必须带 formData");

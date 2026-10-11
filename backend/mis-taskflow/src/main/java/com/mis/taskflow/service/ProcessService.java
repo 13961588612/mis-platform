@@ -23,6 +23,7 @@ import com.mis.taskflow.dto.StartProcessRequest;
 import com.mis.taskflow.dto.WfHistoryVO;
 import com.mis.taskflow.dto.WfInstanceVO;
 import com.mis.taskflow.dto.WfTaskVO;
+import com.mis.taskflow.support.AppScope;
 import com.mis.taskflow.support.AuditContext;
 import com.mis.taskflow.support.BusinessOperation;
 import com.mis.taskflow.support.IdGenerator;
@@ -123,6 +124,8 @@ public class ProcessService {
         instance.setStartedFormCode(req.startedFormCode().trim());
         instance.setBusinessType(req.businessType().trim());
         instance.setBusinessId(req.businessId().trim());
+        // A1：实例 APP 归属由发起方**显式写入**（StartProcessRequest.appCode）；不再由业务类型推导。
+        instance.setAppCode(AppScope.trimToNull(req.appCode()));
         instance.setStatus(TaskflowStatus.Instance.RUNNING);
         instance.setInitiatorId(req.initiatorId());
         instance.setInitiatorName(req.initiatorName());
@@ -438,6 +441,9 @@ public class ProcessService {
                         instance.getTenantId(), instance.getInitiatorId(),
                         instance.getBusinessType(), instance.getBusinessId()));
 
+        // T2/A2：流程节点分派的待办归属 = **继承实例**的 app_code（不再经绑定表推导）。
+        String appCode = instance.getAppCode();
+
         for (Long assignee : assignees) {
             Long sysTaskId = taskService.createTask(instance.getTenantId(), instance.getInitiatorId(),
                     new CreateTaskRequest(
@@ -452,7 +458,8 @@ public class ProcessService {
                             node.getTimeoutHours() == null ? null : now.plusHours(node.getTimeoutHours()),
                             "{\"wfInstanceId\":" + instance.getId() + ",\"wfNode\":\"" + node.getNodeCode() + "\"}",
                             "待处理：" + node.getNodeName(),
-                            "请及时处理 " + instance.getBusinessId()));
+                            "请及时处理 " + instance.getBusinessId(),
+                            appCode));
 
             WfTask wfTask = new WfTask();
             wfTask.setId(IdGenerator.nextId());
@@ -500,9 +507,12 @@ public class ProcessService {
             return;
         }
         try {
+            // M4/A3：流程结果通知归属 = **继承实例**的 app_code（不再经绑定表推导）。
+            String appCode = instance.getAppCode();
             messageService.publish(instance.getTenantId(), new com.mis.taskflow.dto.PublishMessageRequest(
                     "NOTIFY", "TASK", title, summary, null, null,
-                    null, "系统", List.of(instance.getInitiatorId()), null, instance.getId()));
+                    null, "系统", List.of(instance.getInitiatorId()), null, instance.getId(), appCode,
+                    AppScope.trimToNull(instance.getBusinessType())));
         } catch (Exception ignored) {
             // 通知失败不影响流程
         }
@@ -556,20 +566,44 @@ public class ProcessService {
     @Transactional(readOnly = true)
     public PageResult<WfInstanceVO> myInitiated(Long tenantId, Long initiatorId, String status,
                                                 int page, int size, String keyword) {
+        return myInitiated(tenantId, initiatorId, status, keyword, null, null, page, size);
+    }
+
+    /**
+     * 我发起的流程分页（可选 keyword + 可选应用归属过滤，P0）。
+     *
+     * <p>{@code wf_instance} 已有 {@code app_code} 列（显式写入）。{@code scope} 直接过滤
+     * {@code app_code} 列：{@code APP}&amp;appCode → {@code app_code = :appCode}；
+     * {@code PLATFORM} → {@code app_code IS NULL}；其余 → 原查询（零回归）。
+     */
+    @Transactional(readOnly = true)
+    public PageResult<WfInstanceVO> myInitiated(Long tenantId, Long initiatorId, String status,
+                                                String keyword, String appCode, String scope,
+                                                int page, int size) {
         var pageable = PageRequest.of(Math.max(page - 1, 0), Math.min(Math.max(size, 1), 200));
-        var p = instanceRepository.findByInitiator(tenantId, initiatorId, blankToNull(status),
-                likePattern(keyword), pageable);
+        String st = blankToNull(status);
+        String pattern = likePattern(keyword);
+        String app = blankToNull(appCode);
+        String sc = AppScope.normalizeScope(scope);
+
+        var p = AppScope.SCOPE_APP.equals(sc) && app != null
+                ? instanceRepository.findByInitiatorInApp(tenantId, initiatorId, st, pattern, app, pageable)
+                : AppScope.SCOPE_PLATFORM.equals(sc)
+                        ? instanceRepository.findByInitiatorPlatform(tenantId, initiatorId, st, pattern, pageable)
+                        : instanceRepository.findByInitiator(tenantId, initiatorId, st, pattern, pageable);
         return PageResult.of(page, pageable.getPageSize(), p.getTotalElements(),
                 p.getContent().stream().map(this::toInstanceVo).toList());
     }
 
     private WfInstanceVO toInstanceVo(WfInstance i) {
+        // app_code 直取实例列（显式写入，不再由 business_type 派生的读侧 join/推导）。
+        String appCode = i.getAppCode();
         return new WfInstanceVO(
                 String.valueOf(i.getId()), i.getDefinitionCode(), i.getStartedFormCode(),
                 i.getBusinessType(), i.getBusinessId(), i.getStatus(),
                 nullableId(i.getInitiatorId()), i.getInitiatorName(), i.getCurrentNodeCode(),
                 null, i.getProgress(), i.getPostProcessStatus(), i.getPostRetryCount(),
-                i.getCreatedAt(), i.getCompletedAt());
+                i.getCreatedAt(), i.getCompletedAt(), appCode);
     }
 
     private WfTaskVO toTaskVo(WfTask t) {

@@ -12,6 +12,9 @@ import java.util.List;
  * @param notifyTitle  非空时自动创建一条关联通知消息
  * @param notifySummary 通知摘要
  * @param metadata     可选 JSON 字符串
+ * @param appCode      可选应用归属（{@code sys_app.code}）；{@code null}/空白时由
+ *                     {@code TaskService.createTask} 按 {@code bizType} 查绑定表兜底，
+ *                     再兜不住则落 {@code null}（= 平台级）。末尾追加，兼容既有构造点。
  */
 public record CreateTaskRequest(
         @NotBlank String taskType,
@@ -25,6 +28,7 @@ public record CreateTaskRequest(
         LocalDateTime dueDate,
         String metadata,
         String notifyTitle,
-        String notifySummary
+        String notifySummary,
+        String appCode
 ) {
 }

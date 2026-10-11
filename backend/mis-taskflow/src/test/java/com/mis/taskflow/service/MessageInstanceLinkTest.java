@@ -63,7 +63,7 @@ class MessageInstanceLinkTest {
 
     private Long start(String code, String formCode, String bizId, long initiator) {
         return processService.startProcess(TENANT, new StartProcessRequest(
-                code, "PURCHASE_ORDER", bizId, formCode, "{}", initiator, "发起人"));
+                code, "PURCHASE_ORDER", bizId, formCode, "{}", initiator, "发起人", null));
     }
 
     @Test
@@ -111,7 +111,7 @@ class MessageInstanceLinkTest {
         long receiver = 700603L;
         Long msgId = messageService.publish(TENANT, new PublishMessageRequest(
                 "NOTIFY", "ANNOUNCEMENT", "纯公告", "summary", null, null,
-                1L, "系统", List.of(receiver), null, null));
+                1L, "系统", List.of(receiver), null, null, null, null));
 
         MessageVO vo = messageService.inbox(TENANT, receiver, "NOTIFY", 1, 50).getList().stream()
                 .filter(v -> String.valueOf(msgId).equals(v.id()))
@@ -126,7 +126,7 @@ class MessageInstanceLinkTest {
         long receiver = 700604L;
         Long msgId = messageService.publish(TENANT, new PublishMessageRequest(
                 "APPROVAL", "TASK", "待办提醒", "summary", null, null,
-                1L, "系统", List.of(receiver), null, 700000001L));
+                1L, "系统", List.of(receiver), null, 700000001L, null, null));
 
         MessageVO vo = messageService.inbox(TENANT, receiver, "APPROVAL", 1, 50).getList().stream()
                 .filter(v -> String.valueOf(msgId).equals(v.id()))
@@ -141,7 +141,7 @@ class MessageInstanceLinkTest {
         long receiver = 700605L;
         Long msgId = messageService.publish(TENANT, new PublishMessageRequest(
                 "NOTIFY", "TASK", "流程通知", "summary", null, null,
-                1L, "系统", List.of(receiver), null, 700000002L));
+                1L, "系统", List.of(receiver), null, 700000002L, null, null));
 
         var detail = messageService.detail(msgId, receiver);
         assertEquals("700000002", detail.instanceId(), "详情应透出 instanceId");

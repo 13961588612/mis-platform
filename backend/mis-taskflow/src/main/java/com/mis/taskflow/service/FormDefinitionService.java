@@ -3,7 +3,7 @@ package com.mis.taskflow.service;
 import com.mis.common.core.exception.BusinessException;
 import com.mis.common.core.exception.ResultCode;
 import com.mis.taskflow.domain.entity.FormDefinition;
-import com.mis.taskflow.domain.repository.FormCategoryRepository;
+import com.mis.taskflow.domain.repository.BizCategoryRepository;
 import com.mis.taskflow.domain.repository.FormDefinitionRepository;
 import com.mis.taskflow.domain.repository.WfDefinitionRepository;
 import com.mis.taskflow.domain.repository.WfInstanceRepository;
@@ -22,8 +22,8 @@ import java.util.List;
  *
  * <p>后台只管「哪个 formCode 存在、归哪一类、启用没有」；表单长什么样由前端注册表负责。
  *
- * <p>V133 起分类从「父级」改为「属性」：表单不再有父子层级，只以 {@code categoryId}
- * 软引用独立分类表 {@code form_category}（可空=未分类）。旧的树 / 深度 / kind 逻辑已移除。
+ * <p>分类从「父级」改为「属性」：表单不再有父子层级，只以 {@code categoryId}
+ * 软引用统一业务分类表 {@code biz_category}（可空=未分类）。旧的树 / 深度 / kind 逻辑已移除。
  *
  * <p>⚠️ code 是身份：{@code uk_form_def_tenant_code} 不带 {@code WHERE deleted = 0}，
  * 软删后 code 也不可复用——否则历史实例（{@code wf_instance.started_form_code} 是字符串软引用）
@@ -33,12 +33,12 @@ import java.util.List;
 public class FormDefinitionService {
 
     private final FormDefinitionRepository formRepository;
-    private final FormCategoryRepository categoryRepository;
+    private final BizCategoryRepository categoryRepository;
     private final WfDefinitionRepository definitionRepository;
     private final WfInstanceRepository instanceRepository;
 
     public FormDefinitionService(FormDefinitionRepository formRepository,
-                                 FormCategoryRepository categoryRepository,
+                                 BizCategoryRepository categoryRepository,
                                  WfDefinitionRepository definitionRepository,
                                  WfInstanceRepository instanceRepository) {
         this.formRepository = formRepository;

@@ -1,24 +1,24 @@
 // @vitest-environment jsdom
 /**
- * FormDefinitionManagePage 单测（双 Tab + 分类列 + code 下拉 + 标红）：
- * 1. 默认「表单管理」Tab 显示表单表格（含「编码」「分类」表头），分类列解析分类名/未分类
- * 2. 切到「分类管理」Tab 显示分类树（含「全部分类」根）
- * 3. 「新增表单」对话框的 code 是下拉选「已注册组件」
- * 4. 表单列表里 code 未关联前端组件的行标红 + 「未关联组件」徽标
- * 5. 对话框未选组件时校验报错且不发起创建请求
+ * FormDefinitionManagePage 单测（分类列 + code 下拉 + 标红）：
+ * 1. 表单表格显示（含「编码」「分类」表头），分类列解析分类名/未分类
+ * 2. 「新增表单」对话框的 code 是下拉选「已注册组件」，且含分类下拉
+ * 3. 表单列表里 code 未关联前端组件的行标红 + 「未关联组件」徽标
+ * 4. 对话框未选组件时校验报错且不发起创建请求
+ * 5. 分类筛选：勾选分类后点「查询」才请求；选父分类时 categoryIds 含子孙
  *
- * <p>分类独立成表：mock `@/lib/api/form-category`（树/扁平/增删改）+ 新版
- * `@/lib/api/form-definition`（无树、带 categoryId）。`listFormLoaderCodes()` 取真实
- * 注册表（默认含 `PUR_FORM`），不 mock。
+ * <p>分类已统一为「租户通用业务分类」`biz_category`：mock `@/lib/api/biz-category`
+ * （树/扁平/增删改）+ 新版 `@/lib/api/form-definition`（无树、带 categoryId）。
+ * `listFormLoaderCodes()` 取真实注册表（默认含 `PUR_FORM`），不 mock。
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { FormDefinitionManagePage } from './form-definition-manage-page';
 import * as formApi from '@/lib/api/form-definition';
-import * as formCategoryApi from '@/lib/api/form-category';
+import * as bizCategoryApi from '@/lib/api/biz-category';
 import type { FormDefinitionItem } from '@/lib/api/form-definition';
-import type { FormCategoryItem } from '@/lib/api/form-category';
+import type { BizCategoryItem } from '@/lib/api/biz-category';
 
 vi.mock('@/lib/api/form-definition', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/api/form-definition')>();
@@ -32,20 +32,20 @@ vi.mock('@/lib/api/form-definition', async (importOriginal) => {
   };
 });
 
-vi.mock('@/lib/api/form-category', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@/lib/api/form-category')>();
+vi.mock('@/lib/api/biz-category', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/api/biz-category')>();
   return {
     ...actual,
-    fetchFormCategoryTree: vi.fn(),
-    fetchFormCategories: vi.fn(),
-    getFormCategory: vi.fn(),
-    createFormCategory: vi.fn(),
-    updateFormCategory: vi.fn(),
-    deleteFormCategory: vi.fn(),
+    fetchBizCategoryTree: vi.fn(),
+    fetchBizCategories: vi.fn(),
+    getBizCategory: vi.fn(),
+    createBizCategory: vi.fn(),
+    updateBizCategory: vi.fn(),
+    deleteBizCategory: vi.fn(),
   };
 });
 
-const categoryTree: FormCategoryItem[] = [
+const categoryTree: BizCategoryItem[] = [
   {
     id: '1',
     tenantId: '1',
@@ -75,7 +75,7 @@ const categoryTree: FormCategoryItem[] = [
   },
 ];
 
-const categoryList: FormCategoryItem[] = [
+const categoryList: BizCategoryItem[] = [
   { ...categoryTree[0], children: null },
   { ...categoryTree[0].children![0] },
 ];
@@ -112,8 +112,8 @@ const formList: FormDefinitionItem[] = [
 describe('FormDefinitionManagePage', () => {
   beforeEach(() => {
     vi.mocked(formApi.fetchFormDefinitions).mockResolvedValue(formList);
-    vi.mocked(formCategoryApi.fetchFormCategoryTree).mockResolvedValue(categoryTree);
-    vi.mocked(formCategoryApi.fetchFormCategories).mockResolvedValue(categoryList);
+    vi.mocked(bizCategoryApi.fetchBizCategoryTree).mockResolvedValue(categoryTree);
+    vi.mocked(bizCategoryApi.fetchBizCategories).mockResolvedValue(categoryList);
   });
 
   afterEach(() => {
@@ -121,13 +121,13 @@ describe('FormDefinitionManagePage', () => {
     vi.clearAllMocks();
   });
 
-  it('默认「表单管理」Tab 显示表单表格、「编码」表头与分类列（含未分类）', async () => {
+  it('显示表单表格、「编码」表头与分类列（含未分类）', async () => {
     render(
       <MemoryRouter>
         <FormDefinitionManagePage />
       </MemoryRouter>,
     );
-    expect(await screen.findByText('表单管理')).toBeTruthy();
+    expect(await screen.findByText('表单定义管理')).toBeTruthy();
     // 表头
     expect(screen.getByText('编码')).toBeTruthy();
     expect(screen.getByText('分类')).toBeTruthy();
@@ -137,19 +137,6 @@ describe('FormDefinitionManagePage', () => {
     // 分类列：PUR_FORM → 根分类；UNREGISTERED_FORM → 未分类（限定在表格单元格内，排除筛选下拉的 option）
     expect(screen.getByText('根分类', { selector: 'td' })).toBeTruthy();
     expect(screen.getByText('未分类', { selector: 'td' })).toBeTruthy();
-  });
-
-  it('切到「分类管理」Tab 显示分类树（全部分类根）', async () => {
-    render(
-      <MemoryRouter>
-        <FormDefinitionManagePage />
-      </MemoryRouter>,
-    );
-    fireEvent.click(await screen.findByRole('button', { name: '分类管理' }));
-    expect(await screen.findByText('全部分类')).toBeTruthy();
-    // 根分类 / 子分类出现在分类树
-    expect((await screen.findAllByText('根分类')).length).toBeGreaterThanOrEqual(1);
-    expect(screen.getByText('子分类')).toBeTruthy();
   });
 
   it('「新增表单」对话框的 code 是下拉选已注册组件，且含分类下拉', async () => {

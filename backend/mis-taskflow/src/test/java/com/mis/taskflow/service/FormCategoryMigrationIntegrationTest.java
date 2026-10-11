@@ -6,6 +6,7 @@ import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -25,6 +26,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * <p>不依赖任何 service bean —— 纯 JDBC 读系统表，避免「测试通过但迁移没落地」的假绿。
  */
 @SpringBootTest
+@Transactional
 @EnabledIfEnvironmentVariable(named = "MIS_DB_TEST", matches = "true")
 class FormCategoryMigrationIntegrationTest {
 
@@ -90,21 +92,25 @@ class FormCategoryMigrationIntegrationTest {
     }
 
     @Test
-    @DisplayName("V133：表单 category_id 已回填（PUR_FORM→CRM；E2E_FORM 保持 NULL）")
-    void formCategoryIdBackfilled() {
-        // PUR_FORM 原 parent_id = CRM.id（1791607381266）⇒ category_id 回填后 join 到的分类 code 应为 CRM
-        String crmCode = jdbc.queryForObject("""
-                select fc.code from form_definition fd
-                join form_category fc on fc.id = fd.category_id
-                where fd.tenant_id = 1 and fd.code = 'PUR_FORM'
-                """, String.class);
-        assertEquals("CRM", crmCode, "PUR_FORM.category_id 应回填到分类 CRM");
+    @DisplayName("V138：存量 form_definition.category_id 一律置为兜底节点 991001（不迁移，丢弃旧归属）")
+    void formDefinitionCategoryUnifiedToUncategorized() {
+        // V133 曾把 PUR_FORM 回填到分类 CRM（1791607381266）；业务分类统一化（V138）后，
+        // 存量一律覆盖为 biz_category 兜底节点 991001 —— 此断言反映「全量迁移链」落地的最终态。
+        Long purCategory = jdbc.queryForObject(
+                "select category_id from form_definition where tenant_id = 1 and code = 'PUR_FORM'",
+                Long.class);
+        assertEquals(991001L, purCategory, "PUR_FORM.category_id 应被 V138 统一为 991001");
 
-        // tenant=900002 的 E2E_FORM 原 parent_id=0（根）⇒ category_id 保持 NULL
+        // tenant=900002 的 E2E_FORM 原 parent_id=0（根）⇒ V133 时 category_id 为 NULL；
+        // V138 统一后应为 991001。
         Long e2eCategory = jdbc.queryForObject(
                 "select category_id from form_definition where tenant_id = 900002 and code = 'E2E_FORM'",
                 Long.class);
-        assertEquals(null, e2eCategory, "parent=0 的 E2E_FORM 其 category_id 应保持 NULL");
+        assertEquals(991001L, e2eCategory, "E2E_FORM.category_id 应被 V138 统一为 991001");
+
+        // 兜底节点存在于 biz_category（tenant=1，code=UNCATEGORIZED）
+        assertEquals("UNCATEGORIZED", jdbc.queryForObject(
+                "select code from biz_category where id = 991001", String.class));
     }
 
     @Test

@@ -27,7 +27,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { missingFormCodes, useFormCatalog } from './form-catalog';
-import { useWfCategories } from './wf-category-catalog';
+import { useBizCategories } from './biz-category-catalog';
 import { findCodeConflict, validateDefinitionCode } from './save-error';
 
 export interface DefinitionDraft {
@@ -70,7 +70,7 @@ export function DefinitionDialog({
   const [checking, setChecking] = useState(false);
 
   const { options, loading, notice } = useFormCatalog(tenantId);
-  const { options: categoryOptions, loading: catLoading, error: catError } = useWfCategories(tenantId);
+  const { options: categoryOptions, loading: catLoading, error: catError } = useBizCategories(tenantId);
   const missing = missingFormCodes(options, formCodes);
   const q = query.trim().toLowerCase();
   const visible = useMemo(

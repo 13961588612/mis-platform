@@ -56,6 +56,9 @@ export const SYSTEM_NAV: SystemNavNode[] = [
     children: [
       { path: '/system/dict', title: '字典管理', icon: 'BookOpen' },
       { path: '/system/config', title: '系统参数', icon: 'Settings' },
+      // 业务分类（biz_category）：租户通用邻接树，流程 / 表单 / 消息 / 待办共用的业务类型载体，
+      // 与 APP 无关。菜单 95012 `biz:category:list`（V139 登记）。
+      { path: '/system/biz-category', title: '业务分类', icon: 'FolderTree' },
     ],
   },
   {

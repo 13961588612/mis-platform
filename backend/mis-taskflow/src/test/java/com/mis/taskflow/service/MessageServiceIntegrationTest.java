@@ -46,7 +46,7 @@ class MessageServiceIntegrationTest {
     private Long publish(String title, List<Long> receivers) {
         return messageService.publish(TENANT, new PublishMessageRequest(
                 "NOTIFY", "ANNOUNCEMENT", title, "summary-" + title, null, null,
-                1L, "系统", receivers, null, null));
+                1L, "系统", receivers, null, null, null, null));
     }
 
     @Test
@@ -157,9 +157,9 @@ class MessageServiceIntegrationTest {
         String marker = "ZD" + System.nanoTime();
         // 同关键词、同接收者，两种类型各一条
         messageService.publish(TENANT, new PublishMessageRequest(
-                "APPROVAL", "TASK", marker + "审批类", "s", null, null, 1L, "系统", List.of(u), null, null));
+                "APPROVAL", "TASK", marker + "审批类", "s", null, null, 1L, "系统", List.of(u), null, null, null, null));
         messageService.publish(TENANT, new PublishMessageRequest(
-                "SYSTEM_ALERT", "SYSTEM", marker + "告警类", "s", null, null, 1L, "系统", List.of(u), null, null));
+                "SYSTEM_ALERT", "SYSTEM", marker + "告警类", "s", null, null, 1L, "系统", List.of(u), null, null, null, null));
 
         // 限定 SYSTEM_ALERT ⇒ 只返回该类型
         PageResult<MessageVO> scoped = messageService.search(TENANT, u, "SYSTEM_ALERT", marker, 1, 20);
@@ -204,6 +204,6 @@ class MessageServiceIntegrationTest {
     @DisplayName("P2：空接收者发布被拒绝")
     void emptyReceiversRejected() {
         assertThrows(BusinessException.class, () -> messageService.publish(TENANT,
-                new PublishMessageRequest("NOTIFY", "ANNOUNCEMENT", "空", null, null, null, 1L, "x", List.of(), null, null)));
+                new PublishMessageRequest("NOTIFY", "ANNOUNCEMENT", "空", null, null, null, 1L, "x", List.of(), null, null, null, null)));
     }
 }

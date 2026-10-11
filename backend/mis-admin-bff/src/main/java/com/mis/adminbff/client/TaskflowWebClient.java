@@ -7,14 +7,13 @@ import com.mis.adminbff.client.model.AuditOpDetailVO;
 import com.mis.adminbff.client.model.AuditOpVO;
 import com.mis.adminbff.client.model.AuditStatsVO;
 import com.mis.adminbff.client.model.AuditTimelineItem;
+import com.mis.adminbff.client.model.BizCategoryVO;
 import com.mis.adminbff.client.model.ExecutionTaskVO;
-import com.mis.adminbff.client.model.FormCategoryVO;
 import com.mis.adminbff.client.model.FormDefinitionVO;
 import com.mis.adminbff.client.model.ProcessDetailVO;
 import com.mis.adminbff.client.model.TaskStatsVO;
 import com.mis.adminbff.client.model.TaskVO;
 import com.mis.adminbff.client.model.WfDefinitionDTO;
-import com.mis.adminbff.client.model.WfCategoryVO;
 import com.mis.adminbff.client.model.WfInstanceVO;
 import com.mis.adminbff.config.BffProperties;
 import com.mis.common.core.result.PageResult;
@@ -69,9 +68,9 @@ public class TaskflowWebClient extends AbstractDownstreamClient {
             new ParameterizedTypeReference<>() {};
     private static final ParameterizedTypeReference<Result<PageResult<WfDefinitionDTO>>> WF_DEFINITION_PAGE =
             new ParameterizedTypeReference<>() {};
-    private static final ParameterizedTypeReference<Result<java.util.List<WfCategoryVO>>> WF_CATEGORY_LIST =
+    private static final ParameterizedTypeReference<Result<java.util.List<BizCategoryVO>>> BIZ_CATEGORY_LIST =
             new ParameterizedTypeReference<>() {};
-    private static final ParameterizedTypeReference<Result<WfCategoryVO>> WF_CATEGORY_ONE =
+    private static final ParameterizedTypeReference<Result<BizCategoryVO>> BIZ_CATEGORY_ONE =
             new ParameterizedTypeReference<>() {};
     private static final ParameterizedTypeReference<Result<ProcessDetailVO>> WF_PROCESS_DETAIL =
             new ParameterizedTypeReference<>() {};
@@ -80,10 +79,6 @@ public class TaskflowWebClient extends AbstractDownstreamClient {
     private static final ParameterizedTypeReference<Result<java.util.List<FormDefinitionVO>>> FORM_DEF_LIST =
             new ParameterizedTypeReference<>() {};
     private static final ParameterizedTypeReference<Result<FormDefinitionVO>> FORM_DEF_ONE =
-            new ParameterizedTypeReference<>() {};
-    private static final ParameterizedTypeReference<Result<java.util.List<FormCategoryVO>>> FORM_CATEGORY_LIST =
-            new ParameterizedTypeReference<>() {};
-    private static final ParameterizedTypeReference<Result<FormCategoryVO>> FORM_CATEGORY_ONE =
             new ParameterizedTypeReference<>() {};
     private static final ParameterizedTypeReference<Result<PageResult<ExecutionTaskVO>>> EXEC_PAGE =
             new ParameterizedTypeReference<>() {};
@@ -187,11 +182,27 @@ public class TaskflowWebClient extends AbstractDownstreamClient {
     // ------------------------------------------------------------------
 
     public PageResult<MessageVO> inbox(Long tenantId, Long userId, String msgType, int page, int size) {
+        return inbox(tenantId, userId, msgType, null, null, page, size);
+    }
+
+    /**
+     * 收件箱（可选 appCode / scope 归属过滤）。
+     *
+     * <p>{@code appCode}/{@code scope} 为空/空白时**不透传**该查询参数 ⇒ 下游退化为原查询（零回归）。
+     */
+    public PageResult<MessageVO> inbox(Long tenantId, Long userId, String msgType,
+                                       String appCode, String scope, int page, int size) {
         Map<String, Object> q = new LinkedHashMap<>();
         q.put("tenantId", tenantId);
         q.put("userId", userId);
         if (msgType != null) {
             q.put("msgType", msgType);
+        }
+        if (appCode != null && !appCode.isBlank()) {
+            q.put("appCode", appCode);
+        }
+        if (scope != null && !scope.isBlank()) {
+            q.put("scope", scope);
         }
         q.put("page", page);
         q.put("size", size);
@@ -204,6 +215,16 @@ public class TaskflowWebClient extends AbstractDownstreamClient {
      */
     public PageResult<MessageVO> searchMessages(Long tenantId, Long userId, String msgType, String keyword,
                                                 int page, int size) {
+        return searchMessages(tenantId, userId, msgType, keyword, null, null, page, size);
+    }
+
+    /**
+     * 关键词检索（可选类型内 + 可选 appCode / scope 归属过滤）。
+     *
+     * <p>{@code appCode}/{@code scope} 为空/空白时**不透传**（零回归）。
+     */
+    public PageResult<MessageVO> searchMessages(Long tenantId, Long userId, String msgType, String keyword,
+                                                String appCode, String scope, int page, int size) {
         Map<String, Object> q = new LinkedHashMap<>();
         q.put("tenantId", tenantId);
         q.put("userId", userId);
@@ -211,6 +232,12 @@ public class TaskflowWebClient extends AbstractDownstreamClient {
             q.put("msgType", msgType);
         }
         q.put("q", keyword);
+        if (appCode != null && !appCode.isBlank()) {
+            q.put("appCode", appCode);
+        }
+        if (scope != null && !scope.isBlank()) {
+            q.put("scope", scope);
+        }
         q.put("page", page);
         q.put("size", size);
         return block(client().get().uri(uriOf("/internal/v1/messages/search", q)).retrieve().bodyToMono(MESSAGE_PAGE));
@@ -281,6 +308,14 @@ public class TaskflowWebClient extends AbstractDownstreamClient {
 
     public PageResult<TaskVO> myTasks(Long tenantId, Long assigneeId, String status, String keyword,
                                       int page, int size) {
+        return myTasks(tenantId, assigneeId, status, keyword, null, null, page, size);
+    }
+
+    /**
+     * 我的待办（可选 appCode / scope 归属过滤；空白**不透传** ⇒ 零回归）。
+     */
+    public PageResult<TaskVO> myTasks(Long tenantId, Long assigneeId, String status, String keyword,
+                                      String appCode, String scope, int page, int size) {
         Map<String, Object> q = new LinkedHashMap<>();
         q.put("tenantId", tenantId);
         q.put("assigneeId", assigneeId);
@@ -290,17 +325,37 @@ public class TaskflowWebClient extends AbstractDownstreamClient {
         if (keyword != null && !keyword.isBlank()) {
             q.put("keyword", keyword);
         }
+        if (appCode != null && !appCode.isBlank()) {
+            q.put("appCode", appCode);
+        }
+        if (scope != null && !scope.isBlank()) {
+            q.put("scope", scope);
+        }
         q.put("page", page);
         q.put("size", size);
         return block(client().get().uri(uriOf("/internal/v1/tasks/my", q)).retrieve().bodyToMono(TASK_PAGE));
     }
 
     public PageResult<TaskVO> handledTasks(Long tenantId, Long assigneeId, String keyword, int page, int size) {
+        return handledTasks(tenantId, assigneeId, keyword, null, null, page, size);
+    }
+
+    /**
+     * 我处理过的（可选 appCode / scope 归属过滤；空白**不透传** ⇒ 零回归）。
+     */
+    public PageResult<TaskVO> handledTasks(Long tenantId, Long assigneeId, String keyword,
+                                           String appCode, String scope, int page, int size) {
         Map<String, Object> q = new LinkedHashMap<>();
         q.put("tenantId", tenantId);
         q.put("assigneeId", assigneeId);
         if (keyword != null && !keyword.isBlank()) {
             q.put("keyword", keyword);
+        }
+        if (appCode != null && !appCode.isBlank()) {
+            q.put("appCode", appCode);
+        }
+        if (scope != null && !scope.isBlank()) {
+            q.put("scope", scope);
         }
         q.put("page", page);
         q.put("size", size);
@@ -465,98 +520,50 @@ public class TaskflowWebClient extends AbstractDownstreamClient {
     }
 
     // ------------------------------------------------------------------
-    // 流程分类（wf_category，决策 B：独立邻接树）
+    // 业务分类（biz_category，统一邻接树：租户通用、与 APP 无关）
     // ------------------------------------------------------------------
 
-    public java.util.List<WfCategoryVO> wfCategoryTree(Long tenantId) {
+    public java.util.List<BizCategoryVO> bizCategoryTree(Long tenantId) {
         Map<String, Object> q = new LinkedHashMap<>();
         q.put("tenantId", tenantId);
-        return block(client().get().uri(uriOf("/internal/v1/workflow/categories/tree", q)).retrieve().bodyToMono(WF_CATEGORY_LIST));
+        return block(client().get().uri(uriOf("/internal/v1/biz-categories/tree", q)).retrieve().bodyToMono(BIZ_CATEGORY_LIST));
     }
 
-    public java.util.List<WfCategoryVO> wfCategories(Long tenantId) {
+    public java.util.List<BizCategoryVO> bizCategories(Long tenantId) {
         Map<String, Object> q = new LinkedHashMap<>();
         q.put("tenantId", tenantId);
-        return block(client().get().uri(uriOf("/internal/v1/workflow/categories", q)).retrieve().bodyToMono(WF_CATEGORY_LIST));
+        return block(client().get().uri(uriOf("/internal/v1/biz-categories", q)).retrieve().bodyToMono(BIZ_CATEGORY_LIST));
     }
 
-    public WfCategoryVO getWfCategory(Long id, Long tenantId) {
+    public BizCategoryVO getBizCategory(Long id, Long tenantId) {
         Map<String, Object> q = new LinkedHashMap<>();
         q.put("tenantId", tenantId);
         return block(client().get()
-                .uri(uriOf("/internal/v1/workflow/categories/{id}", pathVars("id", id), q))
-                .retrieve().bodyToMono(WF_CATEGORY_ONE));
+                .uri(uriOf("/internal/v1/biz-categories/{id}", pathVars("id", id), q))
+                .retrieve().bodyToMono(BIZ_CATEGORY_ONE));
     }
 
-    public Long createWfCategory(Long tenantId, Long operatorId, Map<String, Object> body) {
+    public Long createBizCategory(Long tenantId, Long operatorId, Map<String, Object> body) {
         Map<String, Object> q = new LinkedHashMap<>();
         q.put("tenantId", tenantId);
         if (operatorId != null) {
             q.put("operatorId", operatorId);
         }
-        return block(client().post().uri(uriOf("/internal/v1/workflow/categories", q)).contentType(MediaType.APPLICATION_JSON)
+        return block(client().post().uri(uriOf("/internal/v1/biz-categories", q)).contentType(MediaType.APPLICATION_JSON)
                 .bodyValue(body).retrieve().bodyToMono(LONG_RESULT));
     }
 
-    public void updateWfCategory(Long id, Long tenantId, Map<String, Object> body) {
+    public void updateBizCategory(Long id, Long tenantId, Map<String, Object> body) {
         Map<String, Object> q = new LinkedHashMap<>();
         q.put("tenantId", tenantId);
-        blockVoid(client().put().uri(uriOf("/internal/v1/workflow/categories/{id}", pathVars("id", id), q))
+        blockVoid(client().put().uri(uriOf("/internal/v1/biz-categories/{id}", pathVars("id", id), q))
                 .contentType(MediaType.APPLICATION_JSON).bodyValue(body).retrieve().bodyToMono(VOID));
     }
 
-    public void deleteWfCategory(Long id, Long tenantId) {
+    public void deleteBizCategory(Long id, Long tenantId) {
         Map<String, Object> q = new LinkedHashMap<>();
         q.put("tenantId", tenantId);
-        blockVoid(client().delete().uri(uriOf("/internal/v1/workflow/categories/{id}", pathVars("id", id), q))
-                .retrieve().bodyToMono(VOID));
-    }
-
-    // ------------------------------------------------------------------
-    // 表单分类（form_category，决策 B：独立邻接树）
-    // ------------------------------------------------------------------
-
-    public java.util.List<FormCategoryVO> formCategoryTree(Long tenantId) {
-        Map<String, Object> q = new LinkedHashMap<>();
-        q.put("tenantId", tenantId);
-        return block(client().get().uri(uriOf("/internal/v1/form-categories/tree", q)).retrieve().bodyToMono(FORM_CATEGORY_LIST));
-    }
-
-    public java.util.List<FormCategoryVO> formCategories(Long tenantId) {
-        Map<String, Object> q = new LinkedHashMap<>();
-        q.put("tenantId", tenantId);
-        return block(client().get().uri(uriOf("/internal/v1/form-categories", q)).retrieve().bodyToMono(FORM_CATEGORY_LIST));
-    }
-
-    public FormCategoryVO getFormCategory(Long id, Long tenantId) {
-        Map<String, Object> q = new LinkedHashMap<>();
-        q.put("tenantId", tenantId);
-        return block(client().get()
-                .uri(uriOf("/internal/v1/form-categories/{id}", pathVars("id", id), q))
-                .retrieve().bodyToMono(FORM_CATEGORY_ONE));
-    }
-
-    public Long createFormCategory(Long tenantId, Long operatorId, Map<String, Object> body) {
-        Map<String, Object> q = new LinkedHashMap<>();
-        q.put("tenantId", tenantId);
-        if (operatorId != null) {
-            q.put("operatorId", operatorId);
-        }
-        return block(client().post().uri(uriOf("/internal/v1/form-categories", q)).contentType(MediaType.APPLICATION_JSON)
-                .bodyValue(body).retrieve().bodyToMono(LONG_RESULT));
-    }
-
-    public void updateFormCategory(Long id, Long tenantId, Map<String, Object> body) {
-        Map<String, Object> q = new LinkedHashMap<>();
-        q.put("tenantId", tenantId);
-        blockVoid(client().put().uri(uriOf("/internal/v1/form-categories/{id}", pathVars("id", id), q))
-                .contentType(MediaType.APPLICATION_JSON).bodyValue(body).retrieve().bodyToMono(VOID));
-    }
-
-    public void deleteFormCategory(Long id, Long tenantId) {
-        Map<String, Object> q = new LinkedHashMap<>();
-        q.put("tenantId", tenantId);
-        blockVoid(client().delete().uri(uriOf("/internal/v1/form-categories/{id}", pathVars("id", id), q))
+        blockVoid(client().delete().uri(uriOf("/internal/v1/biz-categories/{id}", pathVars("id", id), q))
                 .retrieve().bodyToMono(VOID));
     }
 
@@ -637,6 +644,14 @@ public class TaskflowWebClient extends AbstractDownstreamClient {
 
     public PageResult<WfInstanceVO> myProcesses(Long tenantId, Long initiatorId, String status, String keyword,
                                                 int page, int size) {
+        return myProcesses(tenantId, initiatorId, status, keyword, null, null, page, size);
+    }
+
+    /**
+     * 我发起的流程（可选 appCode / scope 归属过滤；空白**不透传** ⇒ 零回归）。
+     */
+    public PageResult<WfInstanceVO> myProcesses(Long tenantId, Long initiatorId, String status, String keyword,
+                                                String appCode, String scope, int page, int size) {
         Map<String, Object> q = new LinkedHashMap<>();
         q.put("tenantId", tenantId);
         q.put("initiatorId", initiatorId);
@@ -645,6 +660,12 @@ public class TaskflowWebClient extends AbstractDownstreamClient {
         }
         if (keyword != null && !keyword.isBlank()) {
             q.put("keyword", keyword);
+        }
+        if (appCode != null && !appCode.isBlank()) {
+            q.put("appCode", appCode);
+        }
+        if (scope != null && !scope.isBlank()) {
+            q.put("scope", scope);
         }
         q.put("page", page);
         q.put("size", size);

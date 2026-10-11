@@ -178,6 +178,9 @@ export async function fetchProcessDetail(id: string, tenantId: string): Promise<
  * <p>`keyword` 为**尾参**（新增），保证既有 5 参调用（`my-sent-page.tsx`）不破；
  * 非空时按后端 `findByInitiator` 对 `business_id`/`business_type`/`definition_code`/
  * `initiator_name` 做大小写不敏感模糊匹配；空白/空串**不透传**（退化为原查询）。
+ *
+ * <p>`scope` / `appCode`（P0，尾参）：可选应用归属过滤通道。实例无 `app_code` 列，
+ * 归属由 `business_type` 派生的绑定反查；空白**不透传** ⇒ 与现状逐字等价（零回归）。
  */
 export async function fetchMyProcesses(
   tenantId: string,
@@ -186,10 +189,16 @@ export async function fetchMyProcesses(
   page = 1,
   size = 20,
   keyword?: string | null,
+  scope?: string | null,
+  appCode?: string | null,
 ): Promise<PageResult<WfInstance>> {
   const params: Record<string, unknown> = { tenantId, initiatorId, status, page, size };
   const kw = keyword?.trim();
   if (kw) params.keyword = kw;
+  const sc = scope?.trim();
+  if (sc) params.scope = sc;
+  const app = appCode?.trim();
+  if (app) params.appCode = app;
   const res = await api.get<ApiResult<PageResult<WfInstance>>>('/workflow/instances/my', { params });
   return unwrap(res, '获取我发起的流程失败');
 }

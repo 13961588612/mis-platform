@@ -44,7 +44,7 @@ class TaskKeywordSearchTest {
     private Long create(long assignee, String title) {
         return taskService.createTask(TENANT, 1L, new CreateTaskRequest(
                 "PURCHASE_APPROVAL", "PURCHASE_ORDER", "PO-" + System.nanoTime(),
-                title, "PURCHASE_ORDER", assignee, "受理人", (short) 2, null, "{}", null, null));
+                title, "PURCHASE_ORDER", assignee, "受理人", (short) 2, null, "{}", null, null, null));
     }
 
     private String createSingleApprovalFlow(String formCode, long approver) {
@@ -64,7 +64,7 @@ class TaskKeywordSearchTest {
 
     private Long start(String code, String formCode, String bizId, long initiator) {
         return processService.startProcess(TENANT, new StartProcessRequest(
-                code, "PURCHASE_ORDER", bizId, formCode, "{}", initiator, "发起人"));
+                code, "PURCHASE_ORDER", bizId, formCode, "{}", initiator, "发起人", null));
     }
 
     @Test

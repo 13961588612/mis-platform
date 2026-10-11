@@ -133,4 +133,139 @@ public interface SysTaskRepository extends JpaRepository<SysTask, Long> {
     long countOverdue(@Param("tenantId") Long tenantId,
                       @Param("assigneeId") Long assigneeId,
                       @Param("now") LocalDateTime now);
+
+    // ------------------------------------------------------------------
+    // 应用归属过滤（P0）：scope=APP / PLATFORM 各拆独立方法
+    // ------------------------------------------------------------------
+    //
+    // ⚠️ 刻意**不**把 appCode 写成 `(:appCode is null or t.appCode = :appCode)` 的单条查询：
+    //    本仓既有事故（Hibernate 6 参数类型推断把 null 参绑成 bytea，PostgreSQL 报
+    //    `lower(bytea) does not exist` / `could not determine data type of parameter`）。
+    //    拆成「无条件等值 `t.appCode = :appCode`」与「`t.appCode is null`」两条，
+    //    :appCode 仅出现在等值比较处、类型由 varchar 列锚定，零歧义；ALL 直接复用原方法。
+
+    /** 按处理人分页 + 应用级过滤（{@code scope=APP}）：等价 {@link #findByAssignee} 加 {@code and t.appCode = :appCode}。 */
+    @Query("""
+            select t from SysTask t
+            where t.tenantId = :tenantId
+              and t.assigneeId = :assigneeId
+              and t.deleted = 0
+              and t.appCode = :appCode
+              and (:status is null or t.status = :status)
+              and (:pattern is null
+                   or lower(coalesce(t.bizTitle, '')) like :pattern
+                   or lower(coalesce(t.bizType, '')) like :pattern
+                   or lower(coalesce(t.bizRefId, '')) like :pattern
+                   or lower(coalesce(t.assigneeName, '')) like :pattern)
+            order by t.priority desc, t.createdAt desc
+            """)
+    Page<SysTask> findByAssigneeAndApp(@Param("tenantId") Long tenantId,
+                                       @Param("assigneeId") Long assigneeId,
+                                       @Param("status") String status,
+                                       @Param("pattern") String pattern,
+                                       @Param("appCode") String appCode,
+                                       Pageable pageable);
+
+    /** 按处理人分页 + 平台级过滤（{@code scope=PLATFORM}）：等价 {@link #findByAssignee} 加 {@code and t.appCode is null}。 */
+    @Query("""
+            select t from SysTask t
+            where t.tenantId = :tenantId
+              and t.assigneeId = :assigneeId
+              and t.deleted = 0
+              and t.appCode is null
+              and (:status is null or t.status = :status)
+              and (:pattern is null
+                   or lower(coalesce(t.bizTitle, '')) like :pattern
+                   or lower(coalesce(t.bizType, '')) like :pattern
+                   or lower(coalesce(t.bizRefId, '')) like :pattern
+                   or lower(coalesce(t.assigneeName, '')) like :pattern)
+            order by t.priority desc, t.createdAt desc
+            """)
+    Page<SysTask> findByAssigneePlatform(@Param("tenantId") Long tenantId,
+                                         @Param("assigneeId") Long assigneeId,
+                                         @Param("status") String status,
+                                         @Param("pattern") String pattern,
+                                         Pageable pageable);
+
+    /** 未完成待办分页 + 应用级过滤（{@code scope=APP}）：等价 {@link #findOpenByAssignee} 加 {@code and t.appCode = :appCode}。 */
+    @Query("""
+            select t from SysTask t
+            where t.tenantId = :tenantId
+              and t.assigneeId = :assigneeId
+              and t.deleted = 0
+              and t.status in ('PENDING', 'APPROVING')
+              and t.appCode = :appCode
+              and (:pattern is null
+                   or lower(coalesce(t.bizTitle, '')) like :pattern
+                   or lower(coalesce(t.bizType, '')) like :pattern
+                   or lower(coalesce(t.bizRefId, '')) like :pattern
+                   or lower(coalesce(t.assigneeName, '')) like :pattern)
+            order by t.priority desc, t.createdAt desc
+            """)
+    Page<SysTask> findOpenByAssigneeAndApp(@Param("tenantId") Long tenantId,
+                                           @Param("assigneeId") Long assigneeId,
+                                           @Param("pattern") String pattern,
+                                           @Param("appCode") String appCode,
+                                           Pageable pageable);
+
+    /** 未完成待办分页 + 平台级过滤（{@code scope=PLATFORM}）：等价 {@link #findOpenByAssignee} 加 {@code and t.appCode is null}。 */
+    @Query("""
+            select t from SysTask t
+            where t.tenantId = :tenantId
+              and t.assigneeId = :assigneeId
+              and t.deleted = 0
+              and t.status in ('PENDING', 'APPROVING')
+              and t.appCode is null
+              and (:pattern is null
+                   or lower(coalesce(t.bizTitle, '')) like :pattern
+                   or lower(coalesce(t.bizType, '')) like :pattern
+                   or lower(coalesce(t.bizRefId, '')) like :pattern
+                   or lower(coalesce(t.assigneeName, '')) like :pattern)
+            order by t.priority desc, t.createdAt desc
+            """)
+    Page<SysTask> findOpenByAssigneePlatform(@Param("tenantId") Long tenantId,
+                                             @Param("assigneeId") Long assigneeId,
+                                             @Param("pattern") String pattern,
+                                             Pageable pageable);
+
+    /** 我处理过的 + 应用级过滤（{@code scope=APP}）：等价 {@link #findHandledByAssignee} 加 {@code and t.appCode = :appCode}。 */
+    @Query("""
+            select t from SysTask t
+            where t.tenantId = :tenantId
+              and t.assigneeId = :assigneeId
+              and t.deleted = 0
+              and t.status in ('APPROVED', 'REJECTED')
+              and t.appCode = :appCode
+              and (:pattern is null
+                   or lower(coalesce(t.bizTitle, '')) like :pattern
+                   or lower(coalesce(t.bizType, '')) like :pattern
+                   or lower(coalesce(t.bizRefId, '')) like :pattern
+                   or lower(coalesce(t.assigneeName, '')) like :pattern)
+            order by t.completedAt desc, t.createdAt desc
+            """)
+    Page<SysTask> findHandledByAssigneeAndApp(@Param("tenantId") Long tenantId,
+                                              @Param("assigneeId") Long assigneeId,
+                                              @Param("pattern") String pattern,
+                                              @Param("appCode") String appCode,
+                                              Pageable pageable);
+
+    /** 我处理过的 + 平台级过滤（{@code scope=PLATFORM}）：等价 {@link #findHandledByAssignee} 加 {@code and t.appCode is null}。 */
+    @Query("""
+            select t from SysTask t
+            where t.tenantId = :tenantId
+              and t.assigneeId = :assigneeId
+              and t.deleted = 0
+              and t.status in ('APPROVED', 'REJECTED')
+              and t.appCode is null
+              and (:pattern is null
+                   or lower(coalesce(t.bizTitle, '')) like :pattern
+                   or lower(coalesce(t.bizType, '')) like :pattern
+                   or lower(coalesce(t.bizRefId, '')) like :pattern
+                   or lower(coalesce(t.assigneeName, '')) like :pattern)
+            order by t.completedAt desc, t.createdAt desc
+            """)
+    Page<SysTask> findHandledByAssigneePlatform(@Param("tenantId") Long tenantId,
+                                                @Param("assigneeId") Long assigneeId,
+                                                @Param("pattern") String pattern,
+                                                Pageable pageable);
 }

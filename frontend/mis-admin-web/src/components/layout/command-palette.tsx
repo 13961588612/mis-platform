@@ -1,43 +1,70 @@
-import { useEffect, useMemo, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { Fragment, useEffect, useMemo, useState } from 'react';
+import { useLocation, useNavigate } from 'react-router-dom';
 import * as Dialog from '@radix-ui/react-dialog';
 import { Search } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { resolveNavIcon } from '@/lib/nav/icons';
-import { SYSTEM_NAV, flattenSystemNavLeaves } from '@/lib/nav/system-nav';
+import { resolveActiveHostAppCode } from '@/lib/nav/host-apps';
+import { fetchApps } from '@/lib/api/platform';
+import { buildSearchIndex, groupLabel } from '@/lib/search/search-registry';
+import type { SearchItem } from '@/lib/search/types';
+import type { AppItem } from '@/types/api';
+import { useAuthStore } from '@/stores/auth-store';
 
 interface CommandPaletteProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }
 
+/** 分组排序权重：当前 APP 置顶(0) → 其他 APP(1) → 平台级(2)。 */
+function groupRank(item: SearchItem, currentApp: string): number {
+  if (item.appCode === currentApp) return 0;
+  if (item.appCode === null) return 2;
+  return 1;
+}
+
 export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
   const navigate = useNavigate();
+  const location = useLocation();
+  const loginAppCode = useAuthStore((s) => s.app?.code ?? null);
   const [q, setQ] = useState('');
   const [active, setActive] = useState(0);
+  // P0：在面板打开时拉取 APP 列表（含 `type:'app'` 项）；失败静默降级为纯 `*_NAV`。
+  const [apps, setApps] = useState<AppItem[]>([]);
 
+  /** 当前正在使用的 APP（以路由为准，避免登录态 app 跨子系统不更新）。 */
+  const currentApp = resolveActiveHostAppCode(location.pathname, loginAppCode);
+
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    fetchApps()
+      .then((list) => {
+        if (!cancelled) setApps(list);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [open]);
+
+  /** 全量索引（6 份 `*_NAV` + APP 项），随 `apps` 变化重建。 */
+  const index = useMemo(() => buildSearchIndex(apps), [apps]);
+
+  /** 过滤 + 分组排序：当前 APP 优先 → 其他 APP → 平台级最后。 */
   const items = useMemo(() => {
-    const leaves = flattenSystemNavLeaves().map((i) => {
-      const parent = SYSTEM_NAV.find(
-        (n) => n.kind === 'branch' && n.children.some((c) => c.path === i.path),
-      );
-      return {
-        path: i.path,
-        title: i.title,
-        icon: i.icon,
-        group: parent && parent.kind === 'branch' ? parent.title : '导航',
-      };
-    });
-    const base = [
-      { path: '/portal', title: '返回门户', icon: 'Home', group: '快捷' },
-      ...leaves,
-    ];
     const kw = q.trim().toLowerCase();
-    if (!kw) return base;
-    return base.filter(
-      (i) => i.title.toLowerCase().includes(kw) || i.path.toLowerCase().includes(kw),
-    );
-  }, [q]);
+    const filtered = kw
+      ? index.filter(
+          (i) =>
+            i.title.toLowerCase().includes(kw) ||
+            (i.path ?? '').toLowerCase().includes(kw) ||
+            (i.keywords ?? []).some((k) => k.toLowerCase().includes(kw)),
+        )
+      : index; // 无关键词：展示全部（分组），与既有「打开即铺开」行为一致
+    // 稳定排序：同权重内保持原顺序（原顺序按 `*_NAV` 源分组，天然按 APP 连续）。
+    return [...filtered].sort((a, b) => groupRank(a, currentApp) - groupRank(b, currentApp));
+  }, [index, q, currentApp]);
 
   useEffect(() => {
     if (open) {
@@ -70,19 +97,20 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
               setActive((i) => Math.max(0, i - 1));
             } else if (e.key === 'Enter' && items[active]) {
               e.preventDefault();
-              go(items[active].path);
+              const target = items[active];
+              if (target.path) go(target.path);
             }
           }}
         >
           <Dialog.Title className="sr-only">命令面板</Dialog.Title>
-          <Dialog.Description className="sr-only">搜索菜单并快速跳转</Dialog.Description>
+          <Dialog.Description className="sr-only">搜索全部应用的页面与菜单并快速跳转</Dialog.Description>
           <div className="flex items-center gap-2 border-b px-3">
             <Search className="h-4 w-4 text-muted-foreground" />
             <input
               autoFocus
               value={q}
               onChange={(e) => setQ(e.target.value)}
-              placeholder="搜索页面、菜单…"
+              placeholder="搜索页面、菜单、应用…"
               className="h-12 w-full bg-transparent text-sm outline-none"
             />
             <kbd className="hidden rounded border bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground sm:inline">
@@ -95,23 +123,36 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
             ) : (
               items.map((item, idx) => {
                 const Icon = resolveNavIcon(item.icon);
+                const prev = items[idx - 1];
+                const showHeader = !prev || prev.appCode !== item.appCode;
                 return (
-                  <button
-                    key={`${item.path}-${item.title}`}
-                    type="button"
-                    className={cn(
-                      'flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm',
-                      idx === active ? 'bg-accent' : 'hover:bg-accent/70',
-                    )}
-                    onMouseEnter={() => setActive(idx)}
-                    onClick={() => go(item.path)}
-                  >
-                    <Icon className="h-4 w-4 shrink-0 text-muted-foreground" />
-                    <span className="min-w-0 flex-1 truncate font-medium">{item.title}</span>
-                    {item.group ? (
-                      <span className="truncate text-xs text-muted-foreground">{item.group}</span>
+                  <Fragment key={item.id}>
+                    {showHeader ? (
+                      <div className="px-3 pb-1 pt-2 text-[11px] font-medium text-muted-foreground">
+                        {groupLabel(item.appCode, item.appName)}
+                      </div>
                     ) : null}
-                  </button>
+                    <button
+                      type="button"
+                      className={cn(
+                        'flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm',
+                        idx === active ? 'bg-accent' : 'hover:bg-accent/70',
+                        !item.path && 'cursor-default opacity-60',
+                      )}
+                      onMouseEnter={() => setActive(idx)}
+                      onClick={() => {
+                        if (item.path) go(item.path);
+                      }}
+                    >
+                      <Icon className="h-4 w-4 shrink-0 text-muted-foreground" />
+                      <span className="min-w-0 flex-1 truncate font-medium">{item.title}</span>
+                      {item.type === 'app' ? (
+                        <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
+                          应用
+                        </span>
+                      ) : null}
+                    </button>
+                  </Fragment>
                 );
               })
             )}

@@ -93,6 +93,32 @@ public class SysMessage {
     @Column(name = "updated_at", nullable = false)
     private LocalDateTime updatedAt;
 
+    /**
+     * 应用归属（{@code sys_app.code}）；{@code NULL} = 平台级。
+     *
+     * <p><b>语义</b>（见 docs/design/app-scoped-message-task-and-search-design.md §1.1）：
+     * <ul>
+     *   <li>{@code NULL} —— 平台级：系统公告 / 跨应用通知 / 平台运维提醒。</li>
+     *   <li>{@code 'kb'} / {@code 'agent'} … —— 应用级：归属某 APP 的业务消息 / 通知。</li>
+     * </ul>
+     * 存量数据天然 {@code NULL}（= 平台级，不回填，设计 §3.2-c）。写入仅在创建漏斗
+     * （{@code MessageService.publish}）发生；UPDATE 路径（{@code markRead}）**不得**改动，
+     * 否则会清空既有归属。列由 V136 迁移新增。
+     */
+    @Column(name = "app_code", length = 64)
+    private String appCode;
+
+    /**
+     * 业务类型（软引用 {@code biz_category.code}）；{@code NULL} = 未标注。
+     *
+     * <p><b>语义</b>（见 docs/design/biz-category-unification-design.md §1.3 / §2.1）：
+     * 统一「业务分类」树节点的 {@code code} 即业务类型编码；消息在发布漏斗
+     * （{@code MessageService.publish}）写入。写入仅在创建漏斗发生；UPDATE 路径
+     * （{@code markRead}）**不得**改动，否则会清空既有归属。列由 V138 迁移新增。
+     */
+    @Column(name = "biz_type", length = 64)
+    private String bizType;
+
     public Long getId() { return id; }
     public void setId(Long id) { this.id = id; }
     public Long getTenantId() { return tenantId; }
@@ -133,4 +159,8 @@ public class SysMessage {
     public void setCreatedAt(LocalDateTime createdAt) { this.createdAt = createdAt; }
     public LocalDateTime getUpdatedAt() { return updatedAt; }
     public void setUpdatedAt(LocalDateTime updatedAt) { this.updatedAt = updatedAt; }
+    public String getAppCode() { return appCode; }
+    public void setAppCode(String appCode) { this.appCode = appCode; }
+    public String getBizType() { return bizType; }
+    public void setBizType(String bizType) { this.bizType = bizType; }
 }

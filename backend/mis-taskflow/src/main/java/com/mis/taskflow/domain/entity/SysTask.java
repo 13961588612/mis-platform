@@ -89,6 +89,17 @@ public class SysTask {
     @Column(name = "updated_at", nullable = false)
     private LocalDateTime updatedAt;
 
+    /**
+     * 应用归属（{@code sys_app.code}）；{@code NULL} = 平台级。
+     *
+     * <p>原则上待办必来自某业务流程 ⇒ 应有所属 APP；人工/脚本直插的运维待办可为
+     * {@code NULL}（平台级）。写入仅在创建漏斗（{@code TaskService.createTask}）发生；
+     * UPDATE 路径（{@code handleTask} / {@code transferTask}）**不得**改动 `app_code`，
+     * 否则会清空既有归属。列由 V136 迁移新增。
+     */
+    @Column(name = "app_code", length = 64)
+    private String appCode;
+
     public Long getId() { return id; }
     public void setId(Long id) { this.id = id; }
     public Long getTenantId() { return tenantId; }
@@ -131,4 +142,6 @@ public class SysTask {
     public void setCreatedAt(LocalDateTime createdAt) { this.createdAt = createdAt; }
     public LocalDateTime getUpdatedAt() { return updatedAt; }
     public void setUpdatedAt(LocalDateTime updatedAt) { this.updatedAt = updatedAt; }
+    public String getAppCode() { return appCode; }
+    public void setAppCode(String appCode) { this.appCode = appCode; }
 }

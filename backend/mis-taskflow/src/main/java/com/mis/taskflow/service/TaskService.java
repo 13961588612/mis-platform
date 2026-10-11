@@ -12,6 +12,7 @@ import com.mis.taskflow.dto.PublishMessageRequest;
 import com.mis.taskflow.dto.TaskStatsVO;
 import com.mis.taskflow.dto.TaskVO;
 import com.mis.taskflow.dto.TransferTaskRequest;
+import com.mis.taskflow.support.AppScope;
 import com.mis.taskflow.support.AuditContext;
 import com.mis.taskflow.support.BusinessOperation;
 import com.mis.taskflow.support.IdGenerator;
@@ -39,7 +40,8 @@ public class TaskService {
     private final SysTaskRepository taskRepository;
     private final MessageService messageService;
 
-    public TaskService(SysTaskRepository taskRepository, MessageService messageService) {
+    public TaskService(SysTaskRepository taskRepository,
+                       MessageService messageService) {
         this.taskRepository = taskRepository;
         this.messageService = messageService;
     }
@@ -72,12 +74,18 @@ public class TaskService {
         task.setCreatedBy(operatorId);
         task.setCreatedAt(now);
         task.setUpdatedAt(now);
+        // 应用归属：**纯显式**（req.appCode()）；不再由业务类型推导（P0 绑定表已作废）。
+        // 空白归一为 null（= 平台级）。
+        String appCode = AppScope.trimToNull(req.appCode());
+        task.setAppCode(appCode);
         taskRepository.save(task);
 
         if (StringUtils.hasText(req.notifyTitle())) {
+            // M2：关联通知**继承同一任务**的 app_code，保证任务与通知同源，绝不各自推导。
             PublishMessageRequest msg = new PublishMessageRequest(
                     "APPROVAL", "TASK", req.notifyTitle().trim(), trimToNull(req.notifySummary()),
-                    null, null, operatorId, null, List.of(req.assigneeId()), taskId, null);
+                    null, null, operatorId, null, List.of(req.assigneeId()), taskId, null, appCode,
+                    trimToNull(req.bizType()));
             messageService.publish(tenantId, msg);
         }
 
@@ -101,11 +109,40 @@ public class TaskService {
     @Transactional(readOnly = true)
     public PageResult<TaskVO> myTasks(Long tenantId, Long assigneeId, String status,
                                       int page, int size, String keyword) {
+        return myTasks(tenantId, assigneeId, status, keyword, null, null, page, size);
+    }
+
+    /**
+     * 我的待办分页（可选 keyword + 可选应用归属过滤，P0）。
+     *
+     * <p>{@code scope}：{@code APP}&amp;appCode 非空 → {@code app_code = :appCode}；{@code PLATFORM}
+     * → {@code app_code IS NULL}；其余（{@code ALL}/未传）→ 不加条件（与旧行为逐字等价，零回归）。
+     * 与 status 组合共 6 条独立仓储查询（刻意不写 {@code (:appCode is null or ...)}）。
+     */
+    @Transactional(readOnly = true)
+    public PageResult<TaskVO> myTasks(Long tenantId, Long assigneeId, String status, String keyword,
+                                      String appCode, String scope, int page, int size) {
         Pageable pageable = PageRequest.of(Math.max(page - 1, 0), clampSize(size));
         String pattern = likePattern(keyword);
-        Page<SysTask> p = StringUtils.hasText(status)
-                ? taskRepository.findByAssignee(tenantId, assigneeId, status.trim(), pattern, pageable)
-                : taskRepository.findOpenByAssignee(tenantId, assigneeId, pattern, pageable);
+        String app = trimToNull(appCode);
+        String sc = AppScope.normalizeScope(scope);
+        boolean hasStatus = StringUtils.hasText(status);
+        String st = hasStatus ? status.trim() : null;
+
+        Page<SysTask> p;
+        if (AppScope.SCOPE_APP.equals(sc) && app != null) {
+            p = hasStatus
+                    ? taskRepository.findByAssigneeAndApp(tenantId, assigneeId, st, pattern, app, pageable)
+                    : taskRepository.findOpenByAssigneeAndApp(tenantId, assigneeId, pattern, app, pageable);
+        } else if (AppScope.SCOPE_PLATFORM.equals(sc)) {
+            p = hasStatus
+                    ? taskRepository.findByAssigneePlatform(tenantId, assigneeId, st, pattern, pageable)
+                    : taskRepository.findOpenByAssigneePlatform(tenantId, assigneeId, pattern, pageable);
+        } else {
+            p = hasStatus
+                    ? taskRepository.findByAssignee(tenantId, assigneeId, st, pattern, pageable)
+                    : taskRepository.findOpenByAssignee(tenantId, assigneeId, pattern, pageable);
+        }
         return PageResult.of(page, pageable.getPageSize(), p.getTotalElements(),
                 p.getContent().stream().map(this::toVo).toList());
     }
@@ -123,8 +160,30 @@ public class TaskService {
      */
     @Transactional(readOnly = true)
     public PageResult<TaskVO> handledTasks(Long tenantId, Long assigneeId, int page, int size, String keyword) {
+        return handledTasks(tenantId, assigneeId, keyword, null, null, page, size);
+    }
+
+    /**
+     * 我处理的（handled）分页（可选 keyword + 可选应用归属过滤，P0）。
+     *
+     * <p>{@code scope} 语义见 {@link #myTasks(Long, Long, String, String, String, String, int, int)}。
+     */
+    @Transactional(readOnly = true)
+    public PageResult<TaskVO> handledTasks(Long tenantId, Long assigneeId, String keyword,
+                                           String appCode, String scope, int page, int size) {
         Pageable pageable = PageRequest.of(Math.max(page - 1, 0), clampSize(size));
-        Page<SysTask> p = taskRepository.findHandledByAssignee(tenantId, assigneeId, likePattern(keyword), pageable);
+        String pattern = likePattern(keyword);
+        String app = trimToNull(appCode);
+        String sc = AppScope.normalizeScope(scope);
+
+        Page<SysTask> p;
+        if (AppScope.SCOPE_APP.equals(sc) && app != null) {
+            p = taskRepository.findHandledByAssigneeAndApp(tenantId, assigneeId, pattern, app, pageable);
+        } else if (AppScope.SCOPE_PLATFORM.equals(sc)) {
+            p = taskRepository.findHandledByAssigneePlatform(tenantId, assigneeId, pattern, pageable);
+        } else {
+            p = taskRepository.findHandledByAssignee(tenantId, assigneeId, pattern, pageable);
+        }
         return PageResult.of(page, pageable.getPageSize(), p.getTotalElements(),
                 p.getContent().stream().map(this::toVo).toList());
     }
@@ -197,10 +256,12 @@ public class TaskService {
         AuditContext.after("{\"assigneeId\":" + req.newAssigneeId()
                 + ",\"status\":\"" + TaskflowStatus.Task.PENDING + "\"}");
 
-        // 给新处理人补发一条关联通知
+        // 给新处理人补发一条关联通知（M3）：**沿用既有任务**的 app_code，不可重新推导，
+        // 否则转办提醒可能与原待办归属漂移。此处是 UPDATE 路径，task.setAppCode 一律禁止。
         PublishMessageRequest msg = new PublishMessageRequest(
                 "REMIND", "TASK", "转办待办：" + task.getBizTitle(),
-                req.comment(), null, null, operatorId, null, List.of(req.newAssigneeId()), taskId, null);
+                req.comment(), null, null, operatorId, null, List.of(req.newAssigneeId()), taskId, null,
+                task.getAppCode(), trimToNull(task.getBizType()));
         messageService.publish(tenantId, msg);
     }
 
@@ -292,7 +353,8 @@ public class TaskService {
                 t.getResult(),
                 Boolean.TRUE.equals(t.getRead()),
                 t.getCompletedAt(),
-                t.getCreatedAt());
+                t.getCreatedAt(),
+                t.getAppCode());
     }
 
     private static boolean isOpen(String status) {

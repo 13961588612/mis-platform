@@ -41,15 +41,17 @@ public class WfProcessController {
         return Result.ok(processService.detail(id, tenantId));
     }
 
-    /** 我发起的流程（可含 keyword 模糊过滤）。 */
+    /** 我发起的流程（可含 keyword 模糊过滤；可选 appCode / scope 归属过滤，实例归属由 business_type 派生）。 */
     @GetMapping("/instances/my")
     public Result<PageResult<WfInstanceVO>> myInitiated(@RequestParam Long tenantId,
                                                         @RequestParam Long initiatorId,
                                                         @RequestParam(required = false) String status,
                                                         @RequestParam(required = false) String keyword,
+                                                        @RequestParam(required = false) String appCode,
+                                                        @RequestParam(required = false) String scope,
                                                         @RequestParam(defaultValue = "1") int page,
                                                         @RequestParam(defaultValue = "20") int size) {
-        return Result.ok(processService.myInitiated(tenantId, initiatorId, status, page, size, keyword));
+        return Result.ok(processService.myInitiated(tenantId, initiatorId, status, keyword, appCode, scope, page, size));
     }
 
     /** 处理流程任务（同意/驳回）。 */

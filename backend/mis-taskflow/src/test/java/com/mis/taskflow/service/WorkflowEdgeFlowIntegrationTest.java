@@ -77,7 +77,7 @@ class WorkflowEdgeFlowIntegrationTest {
 
         Long instId = processService.startProcess(TENANT, new StartProcessRequest(
                 code, "PURCHASE_ORDER", "EDGE-HIGH-" + System.nanoTime(), formCode,
-                "{\"amount\":80000}", 100L, "发起人"));
+                "{\"amount\":80000}", 100L, "发起人", null));
 
         var pending = wfTaskRepository.findPendingByInstance(instId);
         assertEquals(1, pending.size(), "应只生成一个分支的审批任务");
@@ -95,7 +95,7 @@ class WorkflowEdgeFlowIntegrationTest {
 
         Long instId = processService.startProcess(TENANT, new StartProcessRequest(
                 code, "PURCHASE_ORDER", "EDGE-LOW-" + System.nanoTime(), formCode,
-                "{\"amount\":30000}", 100L, "发起人"));
+                "{\"amount\":30000}", 100L, "发起人", null));
 
         var pending = wfTaskRepository.findPendingByInstance(instId);
         assertEquals(1, pending.size());
@@ -113,7 +113,7 @@ class WorkflowEdgeFlowIntegrationTest {
 
         Long instId = processService.startProcess(TENANT, new StartProcessRequest(
                 code, "PURCHASE_ORDER", "EDGE-CONV-" + System.nanoTime(), formCode,
-                "{\"amount\":80000}", 100L, "发起人"));
+                "{\"amount\":80000}", 100L, "发起人", null));
 
         var task = wfTaskRepository.findPendingByInstance(instId).get(0);
         processService.completeTask(TENANT, task.getId(), new CompleteWfTaskRequest("APPROVE", "同意"), gm);

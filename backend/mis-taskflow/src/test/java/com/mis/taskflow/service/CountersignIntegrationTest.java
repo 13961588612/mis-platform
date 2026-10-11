@@ -60,7 +60,7 @@ class CountersignIntegrationTest {
 
     private Long start(String code, String bizId) {
         return processService.startProcess(TENANT, new StartProcessRequest(
-                code, "CONTRACT", bizId, "CS_FORM", "{}", 100L, "发起人"));
+                code, "CONTRACT", bizId, "CS_FORM", "{}", 100L, "发起人", null));
     }
 
     @Test

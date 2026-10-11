@@ -4,11 +4,11 @@ import java.time.LocalDateTime;
 import java.util.List;
 
 /**
- * 表单分类项（透传 mis-taskflow 的 FormCategoryVO）。
+ * 业务分类项（透传 mis-taskflow 的 BizCategoryVO）。
  *
  * @param children 子节点，仅树接口填充
  */
-public record FormCategoryVO(
+public record BizCategoryVO(
         String id,
         String tenantId,
         Long parentId,
@@ -17,7 +17,7 @@ public record FormCategoryVO(
         String description,
         Integer sortOrder,
         String config,
-        List<FormCategoryVO> children,
+        List<BizCategoryVO> children,
         LocalDateTime createdAt,
         LocalDateTime updatedAt) {
 }

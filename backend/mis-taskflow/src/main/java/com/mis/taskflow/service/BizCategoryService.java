@@ -2,10 +2,10 @@ package com.mis.taskflow.service;
 
 import com.mis.common.core.exception.BusinessException;
 import com.mis.common.core.exception.ResultCode;
-import com.mis.taskflow.domain.entity.FormCategory;
-import com.mis.taskflow.domain.repository.FormCategoryRepository;
-import com.mis.taskflow.dto.FormCategoryVO;
-import com.mis.taskflow.dto.UpsertFormCategoryRequest;
+import com.mis.taskflow.domain.entity.BizCategory;
+import com.mis.taskflow.domain.repository.BizCategoryRepository;
+import com.mis.taskflow.dto.BizCategoryVO;
+import com.mis.taskflow.dto.UpsertBizCategoryRequest;
 import com.mis.taskflow.support.IdGenerator;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -18,20 +18,23 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * 表单分类管理（决策 B：独立 form_category 邻接树）。
+ * 统一「业务分类」管理（租户通用邻接树 {@code biz_category}）。
  *
- * <p>分类是表单的属性（{@code form_definition.category_id}），不再与表单共用一张表。
- * 分类自身保留层级（邻接树，可任意深度）——旧表单模型的「三层上限」已随 MAX_DEPTH 一并作废。
+ * <p><b>删除前校验</b>：分类下有子节点、或已被 {@code wf_definition} / {@code form_definition}
+ * 的 {@code category_id} 引用时拒绝（软引用无外键，只能在此挡）。
  *
- * <p>删除前校验：分类下有子节点、或已被 {@code form_definition.category_id} 引用时拒绝
- * （软引用无外键，只能在此挡）。
+ * <p><b>兜底节点保护</b>：固定「未分类」节点（id=991001，由迁移 V138 建好）由业务代码保护，
+ * 禁止删除、禁止改 code / name（避免运行侧软引用 {@code code} 断裂）。
  */
 @Service
-public class FormCategoryService {
+public class BizCategoryService {
 
-    private final FormCategoryRepository categoryRepository;
+    /** 「未分类」兜底节点固定 id（对齐 V138 种子）。 */
+    public static final Long UNCATEGORIZED_ID = 991001L;
 
-    public FormCategoryService(FormCategoryRepository categoryRepository) {
+    private final BizCategoryRepository categoryRepository;
+
+    public BizCategoryService(BizCategoryRepository categoryRepository) {
         this.categoryRepository = categoryRepository;
     }
 
@@ -41,34 +44,34 @@ public class FormCategoryService {
 
     /** 全量列表，平铺。 */
     @Transactional(readOnly = true)
-    public List<FormCategoryVO> list(Long tenantId) {
+    public List<BizCategoryVO> list(Long tenantId) {
         return categoryRepository.findByTenantIdAndDeletedOrderByParentIdAscSortOrderAscIdAsc(tenantId, 0)
                 .stream().map(c -> toVo(c, null)).toList();
     }
 
     /** 分类树（邻接表在内存组装）。 */
     @Transactional(readOnly = true)
-    public List<FormCategoryVO> tree(Long tenantId) {
-        List<FormCategory> all = categoryRepository
+    public List<BizCategoryVO> tree(Long tenantId) {
+        List<BizCategory> all = categoryRepository
                 .findByTenantIdAndDeletedOrderByParentIdAscSortOrderAscIdAsc(tenantId, 0);
-        Map<Long, List<FormCategory>> byParent = new HashMap<>();
-        for (FormCategory c : all) {
+        Map<Long, List<BizCategory>> byParent = new HashMap<>();
+        for (BizCategory c : all) {
             byParent.computeIfAbsent(c.getParentId(), k -> new ArrayList<>()).add(c);
         }
-        return buildLevel(FormCategory.ROOT_PARENT_ID, byParent);
+        return buildLevel(BizCategory.ROOT_PARENT_ID, byParent);
     }
 
-    private List<FormCategoryVO> buildLevel(Long parentId, Map<Long, List<FormCategory>> byParent) {
-        List<FormCategoryVO> out = new ArrayList<>();
-        for (FormCategory c : byParent.getOrDefault(parentId, List.of())) {
-            List<FormCategoryVO> children = buildLevel(c.getId(), byParent);
+    private List<BizCategoryVO> buildLevel(Long parentId, Map<Long, List<BizCategory>> byParent) {
+        List<BizCategoryVO> out = new ArrayList<>();
+        for (BizCategory c : byParent.getOrDefault(parentId, List.of())) {
+            List<BizCategoryVO> children = buildLevel(c.getId(), byParent);
             out.add(toVo(c, children.isEmpty() ? null : children));
         }
         return out;
     }
 
     @Transactional(readOnly = true)
-    public FormCategoryVO get(Long id, Long tenantId) {
+    public BizCategoryVO get(Long id, Long tenantId) {
         return toVo(require(id, tenantId), null);
     }
 
@@ -77,21 +80,21 @@ public class FormCategoryService {
     // ------------------------------------------------------------------
 
     @Transactional
-    public Long create(Long tenantId, Long operatorId, UpsertFormCategoryRequest req) {
+    public Long create(Long tenantId, Long operatorId, UpsertBizCategoryRequest req) {
         String code = req.code().trim();
         categoryRepository.findByTenantIdAndCode(tenantId, code).ifPresent(existing -> {
             throw new BusinessException(ResultCode.VALIDATION_ERROR,
                     existing.getDeleted() == 1
-                            ? "分类编码「" + code + "」已被删除，不可复用"
-                            : "分类编码「" + code + "」已存在");
+                            ? "业务分类编码「" + code + "」已被删除，不可复用"
+                            : "业务分类编码「" + code + "」已存在");
         });
         validateParent(tenantId, req.parentId(), null);
 
         LocalDateTime now = LocalDateTime.now();
-        FormCategory c = new FormCategory();
+        BizCategory c = new BizCategory();
         c.setId(IdGenerator.nextId());
         c.setTenantId(tenantId);
-        c.setParentId(req.parentId() == null ? FormCategory.ROOT_PARENT_ID : req.parentId());
+        c.setParentId(req.parentId() == null ? BizCategory.ROOT_PARENT_ID : req.parentId());
         c.setCode(code);
         c.setName(req.name().trim());
         c.setDescription(req.description());
@@ -106,20 +109,32 @@ public class FormCategoryService {
     }
 
     @Transactional
-    public void update(Long id, Long tenantId, UpsertFormCategoryRequest req) {
-        FormCategory c = require(id, tenantId);
+    public void update(Long id, Long tenantId, UpsertBizCategoryRequest req) {
+        BizCategory c = require(id, tenantId);
 
         String code = req.code().trim();
+        String name = req.name().trim();
+
+        // 兜底节点保护：不可改 code / 改 name（运行侧软引用 code）
+        if (UNCATEGORIZED_ID.equals(id)) {
+            if (!code.equals(c.getCode())) {
+                throw new BusinessException(ResultCode.VALIDATION_ERROR, "「未分类」兜底节点不可修改编码");
+            }
+            if (!name.equals(c.getName())) {
+                throw new BusinessException(ResultCode.VALIDATION_ERROR, "「未分类」兜底节点不可修改名称");
+            }
+        }
+
         if (!code.equals(c.getCode())) {
             categoryRepository.findByTenantIdAndCode(tenantId, code).ifPresent(existing -> {
-                throw new BusinessException(ResultCode.VALIDATION_ERROR, "分类编码「" + code + "」已存在或已被占用");
+                throw new BusinessException(ResultCode.VALIDATION_ERROR, "业务分类编码「" + code + "」已存在或已被占用");
             });
         }
         validateParent(tenantId, req.parentId(), id);
 
-        c.setParentId(req.parentId() == null ? FormCategory.ROOT_PARENT_ID : req.parentId());
+        c.setParentId(req.parentId() == null ? BizCategory.ROOT_PARENT_ID : req.parentId());
         c.setCode(code);
-        c.setName(req.name().trim());
+        c.setName(name);
         c.setDescription(req.description());
         c.setSortOrder(req.sortOrder() == null ? 0 : req.sortOrder());
         c.setConfig(StringUtils.hasText(req.config()) ? req.config() : "{}");
@@ -128,24 +143,30 @@ public class FormCategoryService {
     }
 
     /**
-     * 软删分类。
+     * 软删业务分类。
      *
-     * <p>⚠️ 有子节点、或已被 {@code form_definition.category_id} 引用 ⇒ 拒绝
-     * （要删分类须先把子分类/表单迁移走）。
+     * <p>⚠️ 兜底节点、有子节点、或已被 {@code wf_definition} / {@code form_definition} 引用 ⇒ 拒绝。
      */
     @Transactional
     public void delete(Long id, Long tenantId) {
-        FormCategory c = require(id, tenantId);
+        BizCategory c = require(id, tenantId);
+
+        if (UNCATEGORIZED_ID.equals(id)) {
+            throw new BusinessException(ResultCode.VALIDATION_ERROR, "「未分类」兜底节点不可删除");
+        }
 
         long children = categoryRepository.countByTenantIdAndParentIdAndDeleted(tenantId, id, 0);
         if (children > 0) {
             throw new BusinessException(ResultCode.VALIDATION_ERROR,
-                    "分类「" + c.getName() + "」下还有 " + children + " 个子分类，请先删除子项");
+                    "业务分类「" + c.getName() + "」下还有 " + children + " 个子分类，请先删除子项");
         }
-        long usedByForms = categoryRepository.countByTenantIdAndCategoryIdAndDeleted(tenantId, id);
-        if (usedByForms > 0) {
+        long usedByWf = categoryRepository.countWfDefinitionsByCategoryId(tenantId, id);
+        long usedByForm = categoryRepository.countFormDefinitionsByCategoryId(tenantId, id);
+        long usedByDefs = usedByWf + usedByForm;
+        if (usedByDefs > 0) {
             throw new BusinessException(ResultCode.VALIDATION_ERROR,
-                    "分类「" + c.getName() + "」已被 " + usedByForms + " 个表单引用，请先修改表单的分类");
+                    "业务分类「" + c.getName() + "」已被 " + usedByDefs
+                            + " 个定义引用（流程 " + usedByWf + " / 表单 " + usedByForm + "），请先修改其分类");
         }
 
         c.setDeleted(1);
@@ -157,39 +178,34 @@ public class FormCategoryService {
     // 内部
     // ------------------------------------------------------------------
 
-    /**
-     * 父节点校验：必须存在、未软删；且挂上去后不得成环。
-     *
-     * <p>防环：沿父链向上回溯，若遇到 {@code selfId} 说明成环。分类树无深度上限。
-     */
     private void validateParent(Long tenantId, Long parentId, Long selfId) {
-        if (parentId == null || FormCategory.ROOT_PARENT_ID.equals(parentId)) {
+        if (parentId == null || BizCategory.ROOT_PARENT_ID.equals(parentId)) {
             return;
         }
         if (parentId.equals(selfId)) {
             throw new BusinessException(ResultCode.VALIDATION_ERROR, "父分类不能是自己");
         }
-        FormCategory parent = categoryRepository
+        BizCategory parent = categoryRepository
                 .findByIdAndTenantIdAndDeleted(parentId, tenantId, 0)
                 .orElseThrow(() -> new BusinessException(ResultCode.VALIDATION_ERROR, "父分类不存在: " + parentId));
         // 防环：沿父链向上回溯，若遇到 selfId 说明成环
         Long cursor = parent.getParentId();
-        while (cursor != null && !FormCategory.ROOT_PARENT_ID.equals(cursor)) {
+        while (cursor != null && !BizCategory.ROOT_PARENT_ID.equals(cursor)) {
             if (cursor.equals(selfId)) {
                 throw new BusinessException(ResultCode.VALIDATION_ERROR, "父分类选择会形成环");
             }
             cursor = categoryRepository.findByIdAndTenantIdAndDeleted(cursor, tenantId, 0)
-                    .map(FormCategory::getParentId).orElse(null);
+                    .map(BizCategory::getParentId).orElse(null);
         }
     }
 
-    private FormCategory require(Long id, Long tenantId) {
+    private BizCategory require(Long id, Long tenantId) {
         return categoryRepository.findByIdAndTenantIdAndDeleted(id, tenantId, 0)
-                .orElseThrow(() -> new BusinessException(ResultCode.NOT_FOUND, "表单分类不存在"));
+                .orElseThrow(() -> new BusinessException(ResultCode.NOT_FOUND, "业务分类不存在"));
     }
 
-    private FormCategoryVO toVo(FormCategory c, List<FormCategoryVO> children) {
-        return new FormCategoryVO(
+    private BizCategoryVO toVo(BizCategory c, List<BizCategoryVO> children) {
+        return new BizCategoryVO(
                 String.valueOf(c.getId()), String.valueOf(c.getTenantId()), c.getParentId(),
                 c.getCode(), c.getName(), c.getDescription(), c.getSortOrder(),
                 c.getConfig(), children, c.getCreatedAt(), c.getUpdatedAt());

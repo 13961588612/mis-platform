@@ -66,7 +66,7 @@ class TaskConcurrencyIntegrationTest {
         return taskService.createTask(TENANT, 1L, new CreateTaskRequest(
                 "PURCHASE_APPROVAL", "PURCHASE_ORDER", "PO-" + System.nanoTime(),
                 "并发测试", "PURCHASE_ORDER", assignee, "处理人", (short) 2, null, "{}",
-                "待审批", "请及时处理"));
+                "待审批", "请及时处理", null));
     }
 
     @Test

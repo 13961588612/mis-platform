@@ -29,6 +29,7 @@ import { AuditOpPage } from '@/features/system/audit/audit-op-page';
 import { ExecMonitorPage } from '@/features/system/exec-monitor/exec-monitor-page';
 import { WorkflowDesignerPage } from '@/features/system/workflow-designer/designer-page';
 import { WorkflowDefinitionPage } from '@/features/system/workflow-designer/definitions-page';
+import { BizCategoryManagePage } from '@/features/system/biz-category/biz-category-manage-page';
 import { FormDefinitionManagePage } from '@/features/biz/forms/form-definition-manage-page';
 import { KbOverviewPage } from '@/features/kb/kb-overview-page';
 import { KbCategoryPage } from '@/features/kb/category/kb-category-page';
@@ -136,6 +137,8 @@ const PAGE_MAP: Record<string, ComponentType> = {
   '/system/menu': MenuManagePage,
   '/system/dict': DictManagePage,
   '/system/config': ConfigPage,
+  // 业务分类（biz_category）：租户通用邻接树，租户通用业务类型载体（与 APP 无关）
+  '/system/biz-category': BizCategoryManagePage,
   '/monitor/login-log': LoginLogListPage,
   '/monitor/oper-log': OperLogListPage,
   '/system/audit-op': AuditOpPage,

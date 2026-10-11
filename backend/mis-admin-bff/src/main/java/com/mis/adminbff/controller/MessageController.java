@@ -36,9 +36,12 @@ public class MessageController {
     public Result<PageResult<MessageVO>> inbox(@RequestParam(required = false) Long tenantId,
                                                @RequestParam(required = false) Long userId,
                                                @RequestParam(required = false) String msgType,
+                                               @RequestParam(required = false) String appCode,
+                                               @RequestParam(required = false) String scope,
                                                @RequestParam(defaultValue = "1") int page,
                                                @RequestParam(defaultValue = "20") int size) {
-        return Result.ok(taskflowWebClient.inbox(TaskflowIdentity.tenantId(tenantId), TaskflowIdentity.userId(userId), msgType, page, size));
+        return Result.ok(taskflowWebClient.inbox(TaskflowIdentity.tenantId(tenantId), TaskflowIdentity.userId(userId),
+                msgType, appCode, scope, page, size));
     }
 
     @GetMapping("/search")
@@ -46,9 +49,12 @@ public class MessageController {
                                                 @RequestParam(required = false) Long userId,
                                                 @RequestParam(required = false) String msgType,
                                                 @RequestParam String q,
+                                                @RequestParam(required = false) String appCode,
+                                                @RequestParam(required = false) String scope,
                                                 @RequestParam(defaultValue = "1") int page,
                                                 @RequestParam(defaultValue = "20") int size) {
-        return Result.ok(taskflowWebClient.searchMessages(TaskflowIdentity.tenantId(tenantId), TaskflowIdentity.userId(userId), msgType, q, page, size));
+        return Result.ok(taskflowWebClient.searchMessages(TaskflowIdentity.tenantId(tenantId), TaskflowIdentity.userId(userId),
+                msgType, q, appCode, scope, page, size));
     }
 
     @GetMapping("/{id}")

@@ -20,6 +20,7 @@ public record TaskVO(
         String result,
         boolean read,
         LocalDateTime completedAt,
-        LocalDateTime createdAt
+        LocalDateTime createdAt,
+        String appCode
 ) {
 }

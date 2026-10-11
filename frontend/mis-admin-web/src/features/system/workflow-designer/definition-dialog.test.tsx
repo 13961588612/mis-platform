@@ -7,14 +7,14 @@
  * 2. 编码格式非法被拒（小写 / 数字开头 / 特殊字符）
  * 3. 表单未选 / 选了未注册项被拒（formCode 已注册校验）
  * 4. 编码重复给出「编码 "XXX" 已存在」友好提示
- * 5. 分类是 wf_category 下拉（不再是 APPROVAL/NOTICE/TASK 枚举），提交带 categoryId
+ * 5. 分类是 biz_category 下拉（不再是 APPROVAL/NOTICE/TASK 枚举），提交带 categoryId
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { DefinitionDialog } from './definition-dialog';
 import * as formApi from '@/lib/api/form-definition';
 import * as workflowApi from '@/lib/api/workflow';
-import * as wfCategoryApi from '@/lib/api/wf-category';
+import * as bizCategoryApi from '@/lib/api/biz-category';
 import { __setFormLoadersForTest } from '@/features/biz/forms/forms/form-loaders';
 
 vi.mock('@/lib/api/form-definition', () => ({
@@ -28,9 +28,9 @@ vi.mock('@/lib/api/workflow', () => ({
   fetchDefinitions: vi.fn(),
 }));
 
-vi.mock('@/lib/api/wf-category', () => ({
-  fetchWfCategories: vi.fn(),
-  fetchWfCategoryTree: vi.fn(),
+vi.mock('@/lib/api/biz-category', () => ({
+  fetchBizCategories: vi.fn(),
+  fetchBizCategoryTree: vi.fn(),
 }));
 
 const CATEGORIES = [
@@ -97,7 +97,7 @@ describe('DefinitionDialog', () => {
       },
     ]);
     vi.mocked(workflowApi.fetchDefinitions).mockResolvedValue({ page: 1, size: 100, total: 0, list: [] });
-    vi.mocked(wfCategoryApi.fetchWfCategories).mockResolvedValue(CATEGORIES);
+    vi.mocked(bizCategoryApi.fetchBizCategories).mockResolvedValue(CATEGORIES);
   });
 
   afterEach(() => {
@@ -184,7 +184,7 @@ describe('DefinitionDialog', () => {
     expect(onSubmit).not.toHaveBeenCalled();
   });
 
-  it('分类是 wf_category 下拉，选项来自后端分类，提交带 categoryId', async () => {
+  it('分类是 biz_category 下拉，选项来自后端分类，提交带 categoryId', async () => {
     const onSubmit = renderDialog();
     fill('流程名称', '采购审批流程');
     fill('流程编码', 'PUR_APPROVAL');

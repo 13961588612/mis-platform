@@ -40,16 +40,24 @@ export interface TaskQuery {
   status?: string;
   /** 关键词模糊匹配（PR-04）；空白/空串**不透传**（见下方 buildQuery）。 */
   keyword?: string;
+  /** 应用归属过滤（P0）：`scope='APP'` 时的 `app_code` 等值目标；空白**不透传**。 */
+  appCode?: string;
+  /** 归属范围（P0）：`ALL`（默认）| `APP` | `PLATFORM`；空白**不透传** ⇒ 零回归。 */
+  scope?: string;
   page?: number;
   size?: number;
 }
 
-/** 构造请求参数：`keyword` 空白（null/undefined/纯空格）时**不带该 query**，退化为原查询。 */
+/** 构造请求参数：`keyword` / `appCode` / `scope` 空白（null/undefined/纯空格）时**不带该 query**，退化为原查询。 */
 function buildQuery(params: TaskQuery): Record<string, unknown> {
-  const { keyword, ...rest } = params;
+  const { keyword, appCode, scope, ...rest } = params;
   const out: Record<string, unknown> = { ...rest };
   const kw = keyword?.trim();
   if (kw) out.keyword = kw;
+  const app = appCode?.trim();
+  if (app) out.appCode = app;
+  const sc = scope?.trim();
+  if (sc) out.scope = sc;
   return out;
 }
 

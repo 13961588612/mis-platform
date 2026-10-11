@@ -100,7 +100,7 @@ class ProcessServiceIntegrationTest {
 
     private Long start(String code, String formCode, String bizId) {
         return processService.startProcess(TENANT, new StartProcessRequest(
-                code, "PURCHASE_ORDER", bizId, formCode, "{}", 100L, "发起人"));
+                code, "PURCHASE_ORDER", bizId, formCode, "{}", 100L, "发起人", null));
     }
 
     @Test
@@ -277,7 +277,7 @@ class ProcessServiceIntegrationTest {
         String bizRefId = "PO-" + System.nanoTime();
         Long taskId = taskService.createTask(TENANT, 1L, new CreateTaskRequest(
                 "PURCHASE_APPROVAL", "PURCHASE_ORDER", bizRefId, "转办审计",
-                "PURCHASE_ORDER", from, "原处理人", (short) 2, null, "{}", null, null));
+                "PURCHASE_ORDER", from, "原处理人", (short) 2, null, "{}", null, null, null));
 
         taskService.transferTask(TENANT, taskId, new TransferTaskRequest(to, "新处理人", "请接手"), from);
 

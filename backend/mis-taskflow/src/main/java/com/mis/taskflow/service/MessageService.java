@@ -12,6 +12,7 @@ import com.mis.taskflow.dto.MessageDetailVO;
 import com.mis.taskflow.dto.MessageStatsVO;
 import com.mis.taskflow.dto.MessageVO;
 import com.mis.taskflow.dto.PublishMessageRequest;
+import com.mis.taskflow.support.AppScope;
 import com.mis.taskflow.support.IdGenerator;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
@@ -83,6 +84,11 @@ public class MessageService {
         msg.setReceiverGroupType(receivers.size() > 1 ? "GROUP" : "SINGLE");
         msg.setReferenceTaskId(req.referenceTaskId());
         msg.setInstanceId(req.instanceId());
+        // 应用归属：**仅按显式值直取**（MessageService 拿不到 bizType，不做推导）；
+        // 需要推导的内部调用者（M2/M3/M4）负责把已解析值传入。blank → NULL（= 平台级）。
+        msg.setAppCode(trimToNull(req.appCode()));
+        // 业务类型：显式写入 sys_message.biz_type（软引用 biz_category.code）。blank → NULL。
+        msg.setBizType(trimToNull(req.bizType()));
         msg.setReadCount(0);
         msg.setTotalCount(receivers.size());
         msg.setCreatedBy(req.senderId());
@@ -109,12 +115,40 @@ public class MessageService {
     }
 
     /**
-     * 收件箱分页（含当前用户已读状态）。
+     * 收件箱分页（含当前用户已读状态）。等价 {@code inbox(..., appCode=null, scope=null, ...)}。
      */
     @Transactional(readOnly = true)
     public PageResult<MessageVO> inbox(Long tenantId, Long userId, String msgType, int page, int size) {
+        return inbox(tenantId, userId, msgType, null, null, page, size);
+    }
+
+    /**
+     * 收件箱分页（可选应用归属过滤）。
+     *
+     * <p>按 {@code scope} 分派到不同仓储查询（**不传=零回归**）：
+     * <ul>
+     *   <li>{@code APP} 且 {@code appCode} 非空 → {@link SysMessageRepository#findInboxByApp}（{@code app_code = :appCode}）</li>
+     *   <li>{@code PLATFORM} → {@link SysMessageRepository#findInboxPlatform}（{@code app_code IS NULL}）</li>
+     *   <li>其余（{@code ALL}/未传/非法） → {@link SysMessageRepository#findInbox}（不加条件，与旧行为逐字等价）</li>
+     * </ul>
+     * 刻意拆成 3 条独立查询而**非**单条 {@code (:appCode IS NULL OR ...)}：见仓储方法注释。
+     */
+    @Transactional(readOnly = true)
+    public PageResult<MessageVO> inbox(Long tenantId, Long userId, String msgType,
+                                       String appCode, String scope, int page, int size) {
         Pageable pageable = PageRequest.of(Math.max(page - 1, 0), clampSize(size));
-        Page<SysMessage> p = messageRepository.findInbox(tenantId, userId, trimToNull(msgType), pageable);
+        String type = trimToNull(msgType);
+        String app = trimToNull(appCode);
+        String sc = AppScope.normalizeScope(scope);
+
+        Page<SysMessage> p;
+        if (AppScope.SCOPE_APP.equals(sc) && app != null) {
+            p = messageRepository.findInboxByApp(tenantId, userId, type, app, pageable);
+        } else if (AppScope.SCOPE_PLATFORM.equals(sc)) {
+            p = messageRepository.findInboxPlatform(tenantId, userId, type, pageable);
+        } else {
+            p = messageRepository.findInbox(tenantId, userId, type, pageable);
+        }
 
         List<Long> ids = p.getContent().stream().map(SysMessage::getId).toList();
         Map<Long, SysMessageReceiver> mine = ids.isEmpty()
@@ -140,14 +174,50 @@ public class MessageService {
      */
     @Transactional(readOnly = true)
     public PageResult<MessageVO> search(Long tenantId, Long userId, String msgType, String keyword, int page, int size) {
+        return search(tenantId, userId, msgType, keyword, null, null, page, size);
+    }
+
+    /**
+     * 关键词检索（标题 + 摘要；可选 msgType 类型内 + 可选应用归属过滤）。
+     *
+     * <p>两条正交维度的分派：
+     * <ul>
+     *   <li>{@code msgType}：非空走类型内查询（各子 Tab 互不串台），空走跨类型（旧行为）。</li>
+     *   <li>{@code scope}：{@code APP}&amp;appCode 非空 → {@code app_code = :appCode}；
+     *       {@code PLATFORM} → {@code app_code IS NULL}；其余 → 不加条件（零回归）。</li>
+     * </ul>
+     * 组合共 6 条独立仓储查询（刻意不用 {@code (:appCode IS NULL OR ...)} 单条写法）。
+     */
+    @Transactional(readOnly = true)
+    public PageResult<MessageVO> search(Long tenantId, Long userId, String msgType, String keyword,
+                                        String appCode, String scope, int page, int size) {
         if (!StringUtils.hasText(keyword)) {
             return PageResult.empty(page, clampSize(size));
         }
         Pageable pageable = PageRequest.of(Math.max(page - 1, 0), clampSize(size));
         String type = trimToNull(msgType);
-        Page<SysMessage> p = (type == null)
-                ? messageRepository.searchInbox(tenantId, userId, keyword.trim(), pageable)
-                : messageRepository.searchInboxByType(tenantId, userId, type, keyword.trim(), pageable);
+        String app = trimToNull(appCode);
+        String sc = AppScope.normalizeScope(scope);
+        String kw = keyword.trim();
+
+        Page<SysMessage> p;
+        if (type == null) {
+            if (AppScope.SCOPE_APP.equals(sc) && app != null) {
+                p = messageRepository.searchInboxByApp(tenantId, userId, kw, app, pageable);
+            } else if (AppScope.SCOPE_PLATFORM.equals(sc)) {
+                p = messageRepository.searchInboxPlatform(tenantId, userId, kw, pageable);
+            } else {
+                p = messageRepository.searchInbox(tenantId, userId, kw, pageable);
+            }
+        } else {
+            if (AppScope.SCOPE_APP.equals(sc) && app != null) {
+                p = messageRepository.searchInboxByTypeAndApp(tenantId, userId, type, kw, app, pageable);
+            } else if (AppScope.SCOPE_PLATFORM.equals(sc)) {
+                p = messageRepository.searchInboxByTypePlatform(tenantId, userId, type, kw, pageable);
+            } else {
+                p = messageRepository.searchInboxByType(tenantId, userId, type, kw, pageable);
+            }
+        }
 
         List<Long> ids = p.getContent().stream().map(SysMessage::getId).toList();
         Map<Long, SysMessageReceiver> mine = ids.isEmpty()
@@ -268,7 +338,9 @@ public class MessageService {
                 m.getTotalCount(),
                 m.getCreatedAt(),
                 nullableId(m.getInstanceId()),
-                canReply(m));
+                canReply(m),
+                m.getAppCode(),
+                m.getBizType());
     }
 
     /**

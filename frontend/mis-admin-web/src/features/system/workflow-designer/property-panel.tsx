@@ -15,12 +15,12 @@ import {
   useFormCatalog,
   type FormOption,
 } from './form-catalog';
-import { useWfCategories } from './wf-category-catalog';
+import { useBizCategories } from './biz-category-catalog';
 import type { WfFlowNode } from './types';
 
 /**
- * 流程分类：V132 起独立成 `wf_category` 邻接树，设计器只持有 `categoryId`（软引用）。
- * 旧 `WF_CATEGORIES` 枚举已废弃——分类由后端 `wf_category` 动态下发，不再硬编码。
+ * 流程分类：租户通用业务分类 `biz_category` 邻接树下发的业务类型（软引用 `categoryId`）。
+ * 旧 `WF_CATEGORIES` 硬编码枚举与 `wf_category` 均已废弃——分类由后端动态下发。
  */
 export interface FlowMeta {
   code: string;
@@ -45,7 +45,7 @@ export function PropertyPanel({
   onNodeChange,
   onDeleteNode,
 }: PropertyPanelProps) {
-  const { options: categoryOptions, loading: catLoading, error: catError } = useWfCategories('1');
+  const { options: categoryOptions, loading: catLoading, error: catError } = useBizCategories('1');
   if (!selected) {
     return (
       <div className="flex h-full w-[280px] shrink-0 flex-col overflow-auto border-l bg-card p-3">

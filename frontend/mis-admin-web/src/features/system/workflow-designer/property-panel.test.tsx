@@ -8,13 +8,13 @@
  * 3. 后端有但前端没实现的 code 不出现在候选里
  * 4. 已选中但未注册的 code 标红保留，不静默丢弃
  * 5. 勾选后回传的是逗号串（与后端 `CreateDefinitionRequest.supportedFormCodes` 对齐）
- * 6. 分类是 wf_category 动态下拉（不再是 APPROVAL/NOTICE/TASK 硬编码枚举）
+ * 6. 分类是 biz_category 动态下拉（不再是 APPROVAL/NOTICE/TASK 硬编码枚举）
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { PropertyPanel, type FlowMeta } from './property-panel';
 import * as formApi from '@/lib/api/form-definition';
-import * as wfCategoryApi from '@/lib/api/wf-category';
+import * as bizCategoryApi from '@/lib/api/biz-category';
 import { __setFormLoadersForTest } from '@/features/biz/forms/forms/form-loaders';
 
 vi.mock('@/lib/api/form-definition', () => ({
@@ -24,9 +24,9 @@ vi.mock('@/lib/api/form-definition', () => ({
   FORM_STATUS_DISABLED: 'DISABLED',
 }));
 
-vi.mock('@/lib/api/wf-category', () => ({
-  fetchWfCategories: vi.fn(),
-  fetchWfCategoryTree: vi.fn(),
+vi.mock('@/lib/api/biz-category', () => ({
+  fetchBizCategories: vi.fn(),
+  fetchBizCategoryTree: vi.fn(),
 }));
 
 const CATEGORIES = [
@@ -120,7 +120,7 @@ describe('PropertyPanel 表单白名单', () => {
         updatedAt: null,
       },
     ]);
-    vi.mocked(wfCategoryApi.fetchWfCategories).mockResolvedValue(CATEGORIES);
+    vi.mocked(bizCategoryApi.fetchBizCategories).mockResolvedValue(CATEGORIES);
   });
 
   afterEach(() => {
@@ -178,7 +178,7 @@ describe('PropertyPanel 表单白名单', () => {
     );
   });
 
-  it('分类是 wf_category 动态下拉（不再是硬编码枚举）', async () => {
+  it('分类是 biz_category 动态下拉（不再是硬编码枚举）', async () => {
     renderPanel();
 
     const select = (await screen.findByLabelText('分类')) as HTMLSelectElement;

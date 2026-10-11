@@ -6,6 +6,7 @@ import com.mis.common.core.result.PageResult;
 import com.mis.taskflow.domain.entity.WfDefinition;
 import com.mis.taskflow.domain.entity.WfEdge;
 import com.mis.taskflow.domain.entity.WfNode;
+import com.mis.taskflow.domain.repository.BizCategoryRepository;
 import com.mis.taskflow.domain.repository.WfDefinitionRepository;
 import com.mis.taskflow.domain.repository.WfEdgeRepository;
 import com.mis.taskflow.domain.repository.WfNodeRepository;
@@ -35,19 +36,23 @@ public class WfDefinitionService {
     private final WfNodeRepository nodeRepository;
     private final WfEdgeRepository edgeRepository;
     private final FormDefinitionService formDefinitionService;
+    private final BizCategoryRepository bizCategoryRepository;
 
     public WfDefinitionService(WfDefinitionRepository definitionRepository, WfNodeRepository nodeRepository,
-                               WfEdgeRepository edgeRepository, FormDefinitionService formDefinitionService) {
+                               WfEdgeRepository edgeRepository, FormDefinitionService formDefinitionService,
+                               BizCategoryRepository bizCategoryRepository) {
         this.definitionRepository = definitionRepository;
         this.nodeRepository = nodeRepository;
         this.edgeRepository = edgeRepository;
         this.formDefinitionService = formDefinitionService;
+        this.bizCategoryRepository = bizCategoryRepository;
     }
 
     @Transactional
     public Long create(Long tenantId, Long operatorId, CreateDefinitionRequest req) {
         validateNodes(req.nodes());
         validateSupportedForms(tenantId, req.supportedFormCodes());
+        validateCategory(tenantId, req.categoryId());
         LocalDateTime now = LocalDateTime.now();
         Long defId = IdGenerator.nextId();
 
@@ -81,6 +86,7 @@ public class WfDefinitionService {
         }
         validateNodes(req.nodes());
         validateSupportedForms(tenantId, req.supportedFormCodes());
+        validateCategory(tenantId, req.categoryId());
         LocalDateTime now = LocalDateTime.now();
         def.setName(req.name().trim());
         def.setCategory(StringUtils.hasText(req.category()) ? req.category().trim() : "APPROVAL");
@@ -293,6 +299,18 @@ public class WfDefinitionService {
                         "审批节点「" + n.nodeName() + "」未配置审批人规则");
             }
         }
+    }
+
+    /**
+     * 分类存在性校验（软引用 {@code biz_category.id}）：{@code categoryId} 非空时须存在、同租户、未软删。
+     */
+    private void validateCategory(Long tenantId, Long categoryId) {
+        if (categoryId == null) {
+            return;
+        }
+        bizCategoryRepository.findByIdAndTenantIdAndDeleted(categoryId, tenantId, 0)
+                .orElseThrow(() -> new BusinessException(ResultCode.VALIDATION_ERROR,
+                        "业务分类不存在: " + categoryId));
     }
 
     private WfDefinition requireDef(Long id, Long tenantId) {

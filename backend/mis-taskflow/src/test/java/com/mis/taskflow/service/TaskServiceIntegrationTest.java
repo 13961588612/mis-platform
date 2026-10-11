@@ -56,7 +56,7 @@ class TaskServiceIntegrationTest {
         return taskService.createTask(TENANT, 1L, new CreateTaskRequest(
                 "PURCHASE_APPROVAL", "PURCHASE_ORDER", "PO-" + System.nanoTime(),
                 title, "PURCHASE_ORDER", assignee, "受理人", (short) 2, null, "{}",
-                "待审批：" + title, "请及时处理"));
+                "待审批：" + title, "请及时处理", null));
     }
 
     @Test
@@ -84,7 +84,7 @@ class TaskServiceIntegrationTest {
         long assignee = nextUser();
         Long taskId = taskService.createTask(TENANT, 1L, new CreateTaskRequest(
                 "LEAVE_APPLICATION", "LEAVE", "LV-" + System.nanoTime(), "不带通知",
-                null, assignee, null, (short) 1, null, "{}", null, null));
+                null, assignee, null, (short) 1, null, "{}", null, null, null));
         assertTrue(taskRepository.findById(taskId).isPresent());
         var task = taskRepository.findById(taskId).orElseThrow();
         assertEquals("PENDING", task.getStatus());
@@ -189,10 +189,10 @@ class TaskServiceIntegrationTest {
         long assignee = nextUser();
         Long urgent = taskService.createTask(TENANT, 1L, new CreateTaskRequest(
                 "PURCHASE_APPROVAL", "PURCHASE_ORDER", "PO-" + System.nanoTime(), "紧急",
-                null, assignee, null, (short) 4, null, "{}", null, null));
+                null, assignee, null, (short) 4, null, "{}", null, null, null));
         taskService.createTask(TENANT, 1L, new CreateTaskRequest(
                 "LEAVE_APPLICATION", "LEAVE", "LV-" + System.nanoTime(), "逾期",
-                null, assignee, null, (short) 1, LocalDateTime.now().minusDays(2), "{}", null, null));
+                null, assignee, null, (short) 1, LocalDateTime.now().minusDays(2), "{}", null, null, null));
 
         TaskStatsVO stats = taskService.stats(TENANT, assignee);
         assertTrue(stats.pending() >= 2, "待处理应 >= 2");

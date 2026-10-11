@@ -50,19 +50,47 @@ export interface MessageQuery {
   tenantId: string;
   userId: string;
   msgType?: string;
+  /**
+   * 应用归属过滤（P0）：`app_code` 等值目标。仅在 `scope='APP'` 时有意义；
+   * 空白（null/undefined/纯空格）**不透传**（见下方 buildQuery）。
+   */
+  appCode?: string;
+  /**
+   * 归属范围（P0）：`ALL`（默认，不加条件）| `APP`（`app_code = appCode`）| `PLATFORM`（`app_code IS NULL`）。
+   * 空白/未设置时**不透传** ⇒ 下游退化为原查询（零回归）。
+   */
+  scope?: string;
   page?: number;
   size?: number;
 }
 
+/**
+ * 构造请求参数：`appCode` / `scope` 空白（null/undefined/纯空格）时**不带该 query**，
+ * 退化为原查询（与 `tasks.ts` 的 `buildQuery` 同范式）。
+ */
+function buildQuery(params: MessageQuery & { q?: string }): Record<string, unknown> {
+  const { appCode, scope, ...rest } = params;
+  const out: Record<string, unknown> = { ...rest };
+  const app = appCode?.trim();
+  if (app) out.appCode = app;
+  const sc = scope?.trim();
+  if (sc) out.scope = sc;
+  return out;
+}
+
 export async function fetchInbox(params: MessageQuery): Promise<PageResult<MessageItem>> {
-  const res = await api.get<ApiResult<PageResult<MessageItem>>>('/messages/inbox', { params });
+  const res = await api.get<ApiResult<PageResult<MessageItem>>>('/messages/inbox', {
+    params: buildQuery(params),
+  });
   return unwrap(res, '获取收件箱失败');
 }
 
 export async function searchMessages(
   params: MessageQuery & { q: string },
 ): Promise<PageResult<MessageItem>> {
-  const res = await api.get<ApiResult<PageResult<MessageItem>>>('/messages/search', { params });
+  const res = await api.get<ApiResult<PageResult<MessageItem>>>('/messages/search', {
+    params: buildQuery(params),
+  });
   return unwrap(res, '搜索消息失败');
 }
 

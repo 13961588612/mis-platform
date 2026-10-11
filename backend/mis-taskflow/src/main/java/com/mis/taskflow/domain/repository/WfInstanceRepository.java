@@ -51,6 +51,57 @@ public interface WfInstanceRepository extends JpaRepository<WfInstance, Long> {
                                      Pageable pageable);
 
     /**
+     * 我发起的流程分页 + 应用级过滤（{@code scope=APP}）。
+     *
+     * <p>{@code wf_instance} **已有 app_code 列**（启动时显式写入）：直接过滤
+     * {@code app_code = :appCode}，不再经 {@code business_type} 子查询（P0 绑定表已作废）。
+     * {@code :appCode} 由 varchar 列锚定，非 native query，无类型推断歧义。
+     */
+    @Query("""
+            select i from WfInstance i
+            where i.tenantId = :tenantId
+              and i.initiatorId = :initiatorId
+              and (:status is null or i.status = :status)
+              and (:pattern is null
+                   or lower(coalesce(i.businessId, '')) like :pattern
+                   or lower(coalesce(i.businessType, '')) like :pattern
+                   or lower(coalesce(i.definitionCode, '')) like :pattern
+                   or lower(coalesce(i.initiatorName, '')) like :pattern)
+              and i.appCode = :appCode
+            order by i.createdAt desc
+            """)
+    Page<WfInstance> findByInitiatorInApp(@Param("tenantId") Long tenantId,
+                                          @Param("initiatorId") Long initiatorId,
+                                          @Param("status") String status,
+                                          @Param("pattern") String pattern,
+                                          @Param("appCode") String appCode,
+                                          Pageable pageable);
+
+    /**
+     * 我发起的流程分页 + 平台级过滤（{@code scope=PLATFORM}）。
+     *
+     * <p>平台级 = {@code app_code IS NULL}（显式列，不再经绑定表反查）。
+     */
+    @Query("""
+            select i from WfInstance i
+            where i.tenantId = :tenantId
+              and i.initiatorId = :initiatorId
+              and (:status is null or i.status = :status)
+              and (:pattern is null
+                   or lower(coalesce(i.businessId, '')) like :pattern
+                   or lower(coalesce(i.businessType, '')) like :pattern
+                   or lower(coalesce(i.definitionCode, '')) like :pattern
+                   or lower(coalesce(i.initiatorName, '')) like :pattern)
+              and i.appCode is null
+            order by i.createdAt desc
+            """)
+    Page<WfInstance> findByInitiatorPlatform(@Param("tenantId") Long tenantId,
+                                             @Param("initiatorId") Long initiatorId,
+                                             @Param("status") String status,
+                                             @Param("pattern") String pattern,
+                                             Pageable pageable);
+
+    /**
      * 引用计数：实际以该 formCode 启动过的实例数。
      *
      * <p>{@code started_form_code} 是无外键的字符串软引用——表单定义删除前必须查，

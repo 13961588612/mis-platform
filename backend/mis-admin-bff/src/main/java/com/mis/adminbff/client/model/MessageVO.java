@@ -19,6 +19,7 @@ public record MessageVO(
         Integer totalCount,
         LocalDateTime createdAt,
         String instanceId,
-        boolean canReply
+        boolean canReply,
+        String appCode
 ) {
 }

@@ -34,19 +34,25 @@ public class TaskController {
                                          @RequestParam(required = false) Long assigneeId,
                                          @RequestParam(required = false) String status,
                                          @RequestParam(required = false) String keyword,
+                                         @RequestParam(required = false) String appCode,
+                                         @RequestParam(required = false) String scope,
                                          @RequestParam(defaultValue = "1") int page,
                                          @RequestParam(defaultValue = "20") int size) {
-        return Result.ok(taskflowWebClient.myTasks(TaskflowIdentity.tenantId(tenantId), TaskflowIdentity.userId(assigneeId), status, keyword, page, size));
+        return Result.ok(taskflowWebClient.myTasks(TaskflowIdentity.tenantId(tenantId), TaskflowIdentity.userId(assigneeId),
+                status, keyword, appCode, scope, page, size));
     }
 
     @GetMapping("/handled")
     public Result<PageResult<TaskVO>> handled(@RequestParam(required = false) Long tenantId,
                                               @RequestParam(required = false) Long assigneeId,
                                               @RequestParam(required = false) String keyword,
+                                              @RequestParam(required = false) String appCode,
+                                              @RequestParam(required = false) String scope,
                                               @RequestParam(defaultValue = "1") int page,
                                               @RequestParam(defaultValue = "20") int size) {
         return Result.ok(taskflowWebClient.handledTasks(
-                TaskflowIdentity.tenantId(tenantId), TaskflowIdentity.userId(assigneeId), keyword, page, size));
+                TaskflowIdentity.tenantId(tenantId), TaskflowIdentity.userId(assigneeId),
+                keyword, appCode, scope, page, size));
     }
 
     @GetMapping("/stats")

@@ -1,32 +1,24 @@
 import { Folder, FolderOpen } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import type { FormCategoryItem } from '@/lib/api/form-category';
+import type { BizCategoryItem } from '@/lib/api/biz-category';
 
-export interface FormCategoryTreeProps {
-  /** 嵌套分类树（来自 `fetchFormCategoryTree`）。 */
-  tree: FormCategoryItem[];
-  /** 当前选中节点 id（字符串，对齐 `FormCategoryVO.id`）；null 表示「全部」。 */
+export interface BizCategoryTreeProps {
+  /** 嵌套分类树（来自 `fetchBizCategoryTree`）。 */
+  tree: BizCategoryItem[];
+  /** 当前选中节点 id（字符串，对齐 `BizCategoryVO.id`）；null 表示「全部」。 */
   selectedId: string | null;
   /** 选中节点（含点击「全部」置空）。 */
   onSelect: (id: string | null) => void;
-  /** 根节点文字；默认「全部分类」。 */
-  rootLabel?: string;
   loading?: boolean;
 }
 
 /**
- * 表单分类树（分类管理 Tab 左侧栏）。
+ * 业务分类树（业务分类管理页左侧栏）。
  *
- * <p>复用流程分类树的「缩进 + 选中高亮」范式：根节点「全部分类」用于清空过滤，
- * 其余节点按 `children` 递归渲染并随层级缩进。点击节点通知父组件过滤/展示。
+ * <p>复用「缩进 + 选中高亮」范式：根节点「全部分类」用于清空选择，其余节点按 `children`
+ * 递归渲染并随层级缩进。点击节点通知父组件展示右侧详情/操作。
  */
-export function FormCategoryTree({
-  tree,
-  selectedId,
-  onSelect,
-  rootLabel = '全部分类',
-  loading,
-}: FormCategoryTreeProps) {
+export function BizCategoryTree({ tree, selectedId, onSelect, loading }: BizCategoryTreeProps) {
   return (
     <div className="space-y-0.5">
       <button
@@ -40,7 +32,7 @@ export function FormCategoryTree({
         )}
       >
         <Folder className="h-4 w-4 shrink-0 text-muted-foreground" />
-        <span className="truncate">{rootLabel}</span>
+        <span className="truncate">全部分类</span>
       </button>
 
       {loading && tree.length === 0 ? (
@@ -55,7 +47,7 @@ export function FormCategoryTree({
 }
 
 interface TreeLevelProps {
-  nodes: FormCategoryItem[];
+  nodes: BizCategoryItem[];
   depth: number;
   selectedId: string | null;
   onSelect: (id: string | null) => void;

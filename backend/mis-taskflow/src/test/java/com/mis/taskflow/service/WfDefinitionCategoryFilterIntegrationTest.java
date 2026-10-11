@@ -1,8 +1,8 @@
 package com.mis.taskflow.service;
 
-import com.mis.taskflow.domain.entity.WfCategory;
+import com.mis.taskflow.domain.entity.BizCategory;
 import com.mis.taskflow.dto.CreateDefinitionRequest;
-import com.mis.taskflow.dto.UpsertWfCategoryRequest;
+import com.mis.taskflow.dto.UpsertBizCategoryRequest;
 import com.mis.taskflow.dto.WfNodeDTO;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -31,16 +31,16 @@ class WfDefinitionCategoryFilterIntegrationTest {
     private static final long TENANT = 900007L;
 
     @Autowired private WfDefinitionService definitionService;
-    @Autowired private WfCategoryService categoryService;
+    @Autowired private BizCategoryService categoryService;
 
     private String uniqCode(String prefix) {
         return prefix + "_" + System.nanoTime();
     }
 
-    /** 造一个测试流程分类。 */
+    /** 造一个测试业务分类。 */
     private Long newCategory(String name) {
-        return categoryService.create(TENANT, 1L, new UpsertWfCategoryRequest(
-                WfCategory.ROOT_PARENT_ID, uniqCode("WFCAT"), name, null, 0, "{}"));
+        return categoryService.create(TENANT, 1L, new UpsertBizCategoryRequest(
+                BizCategory.ROOT_PARENT_ID, uniqCode("BIZCAT"), name, null, 0, "{}"));
     }
 
     /** 造一个挂在指定分类（可为 null=未分类）下的流程定义。 */

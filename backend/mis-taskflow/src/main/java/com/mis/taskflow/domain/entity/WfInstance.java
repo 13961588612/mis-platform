@@ -41,6 +41,17 @@ public class WfInstance {
     @Column(name = "business_id", nullable = false, length = 128)
     private String businessId;
 
+    /**
+     * 应用归属（{@code sys_app.code}）；{@code NULL} = 平台级。
+     *
+     * <p><b>语义</b>（见 docs/design/biz-category-unification-design.md §2.1）：
+     * 流程实例启动时由发起方显式写入（{@code StartProcessRequest.appCode}）；
+     * 其分派待办（{@code ProcessService:assignNode}）与结果通知（{@code ProcessService:notify}）
+     * <b>继承</b>该值。**不由业务类型推导**（P0 绑定表已作废）。列由 V138 迁移新增。
+     */
+    @Column(name = "app_code", length = 64)
+    private String appCode;
+
     @Column(nullable = false, length = 16)
     private String status = TaskflowStatus.Instance.RUNNING;
 
@@ -99,6 +110,8 @@ public class WfInstance {
     public void setBusinessType(String businessType) { this.businessType = businessType; }
     public String getBusinessId() { return businessId; }
     public void setBusinessId(String businessId) { this.businessId = businessId; }
+    public String getAppCode() { return appCode; }
+    public void setAppCode(String appCode) { this.appCode = appCode; }
     public String getStatus() { return status; }
     public void setStatus(String status) { this.status = status; }
     public Long getInitiatorId() { return initiatorId; }

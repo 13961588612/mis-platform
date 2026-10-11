@@ -16,7 +16,7 @@ import java.time.LocalDateTime;
  * 「哪个 formCode 存在、归哪一类、启用没有」；它长什么样由前端注册表负责，
  * 故此处刻意不存字段 schema（不做低代码设计器）。
  *
- * <p>分类从「父级」改为「属性」：分类独立成表 {@link FormCategory}，表单只以
+ * <p>分类从「父级」改为「属性」：分类独立成表「业务分类表」，表单只以
  * {@link #categoryId} 软引用它（{@code NULL} = 未分类），不再有父子层级。
  *
  * <p>⚠️ 决策 B：DB 中 {@code kind} / {@code parent_id} 两列为<b>软废弃</b>——

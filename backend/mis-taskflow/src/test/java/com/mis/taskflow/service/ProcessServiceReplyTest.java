@@ -66,13 +66,13 @@ class ProcessServiceReplyTest {
 
     private Long start(String code, String formCode, String bizId, long initiator) {
         return processService.startProcess(TENANT, new StartProcessRequest(
-                code, "PURCHASE_ORDER", bizId, formCode, "{}", initiator, "发起人"));
+                code, "PURCHASE_ORDER", bizId, formCode, "{}", initiator, "发起人", null));
     }
 
     private Long publishNotify(Long instanceId, long receiver) {
         return messageService.publish(TENANT, new PublishMessageRequest(
                 "NOTIFY", "TASK", "流程通知", "summary", null, null,
-                null, "系统", List.of(receiver), null, instanceId));
+                null, "系统", List.of(receiver), null, instanceId, null, null));
     }
 
     @Test
@@ -135,7 +135,7 @@ class ProcessServiceReplyTest {
         long initiator = 700303L;
         Long msgId = messageService.publish(TENANT, new PublishMessageRequest(
                 "NOTIFY", "TASK", "无关联流程通知", "summary", null, null,
-                null, "系统", List.of(initiator), null, null));
+                null, "系统", List.of(initiator), null, null, null, null));
 
         BusinessException ex = assertThrows(BusinessException.class,
                 () -> processService.replyToMessage(TENANT, msgId, 700403L, "王五", "内容"));

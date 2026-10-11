@@ -1,0 +1,34 @@
+sequenceDiagram
+    autonumber
+    participant U as 用户
+    participant CP as CommandPalette
+    participant REG as SearchRegistry (前端聚合器)
+    participant NAV as *_NAV 静态清单 (兜底)
+    participant API as BFF /api/v1/search (P1+)
+    participant DB as sys_menu / sys_app
+
+    Note over U,DB: P0 · 前端聚合（不调 API）
+    U->>CP: 打开命令面板 / 输入关键词
+    CP->>REG: buildIndex()
+    REG->>NAV: flattenNavLeaves(每份 *_NAV)
+    NAV-->>REG: Leaf[] (path/title/icon) + 注入 app_code
+    REG->>REG: 合并 AppItem[] (app_code→app_name)
+    REG-->>CP: SearchItem[] (带 app_code / app_name)
+    CP->>CP: 按当前 APP 优先排序 + 关键词过滤
+    CP-->>U: 结果（分组：本应用 / 其他应用 / 平台级）
+
+    Note over U,DB: P1+ · 服务端搜索（含未收录菜单）
+    U->>CP: 输入关键词
+    CP->>API: GET /search?q=&appCode=&scope=&types=
+    API->>DB: sys_menu JOIN sys_app ON app_id=id WHERE tenant_id=? AND (appCode 过滤)
+    DB-->>API: 菜单/功能行（含 app code/name）
+    API->>API: 并入消息 / 待办 / 流程实例（按 app_code 过滤）
+    API-->>CP: {code,data:[SearchHit]} 统一信封
+    CP-->>U: 结果（跨实体、带归属标签）
+
+    Note over U,DB: APP 自有首页 · 按 app_code 过滤
+    U->>CP: 进入 /app/:code/home
+    CP->>API: GET /messages/inbox?scope=APP&appCode=:code
+    API->>DB: WHERE tenant_id=? AND app_code=:code
+    DB-->>API: 该 APP 的消息
+    API-->>U: 仅本 APP 消息 + 待办（iframe APP 无导航区）

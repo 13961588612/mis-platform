@@ -15,7 +15,7 @@ import { MemoryRouter, useLocation } from 'react-router-dom';
 import { WorkflowDefinitionPage } from './definitions-page';
 import * as workflowApi from '@/lib/api/workflow';
 import * as formApi from '@/lib/api/form-definition';
-import * as wfCategoryApi from '@/lib/api/wf-category';
+import * as bizCategoryApi from '@/lib/api/biz-category';
 import api from '@/lib/api/client';
 import { useAuthStore } from '@/stores/auth-store';
 
@@ -44,12 +44,12 @@ vi.mock('@/lib/api/form-definition', () => ({
   FORM_STATUS_DISABLED: 'DISABLED',
 }));
 
-vi.mock('@/lib/api/wf-category', () => ({
-  fetchWfCategoryTree: vi.fn(),
-  fetchWfCategories: vi.fn(),
-  createWfCategory: vi.fn(),
-  updateWfCategory: vi.fn(),
-  deleteWfCategory: vi.fn(),
+vi.mock('@/lib/api/biz-category', () => ({
+  fetchBizCategoryTree: vi.fn(),
+  fetchBizCategories: vi.fn(),
+  createBizCategory: vi.fn(),
+  updateBizCategory: vi.fn(),
+  deleteBizCategory: vi.fn(),
 }));
 
 vi.mock('@/lib/api/client', () => ({
@@ -101,8 +101,8 @@ describe('WorkflowDefinitionPage 发布 / 取消发布', () => {
     vi.mocked(workflowApi.deactivateDefinition).mockResolvedValue(undefined);
     vi.mocked(formApi.fetchEnabledFormDefinitions).mockResolvedValue([]);
     vi.mocked(workflowApi.fetchDefinition).mockRejectedValue(new Error('n/a'));
-    vi.mocked(wfCategoryApi.fetchWfCategoryTree).mockResolvedValue([]);
-    vi.mocked(wfCategoryApi.fetchWfCategories).mockResolvedValue([]);
+    vi.mocked(bizCategoryApi.fetchBizCategoryTree).mockResolvedValue([]);
+    vi.mocked(bizCategoryApi.fetchBizCategories).mockResolvedValue([]);
     vi.mocked(api.post).mockResolvedValue({ data: { code: 0, message: 'ok', data: null } });
     vi.mocked(api.put).mockResolvedValue({ data: { code: 0, message: 'ok', data: null } });
   });
@@ -193,7 +193,7 @@ describe('WorkflowDefinitionPage 发布 / 取消发布', () => {
   });
 
   it('勾选分类后点「查询」才请求；选父分类时 categoryIds 含子孙', async () => {
-    vi.mocked(wfCategoryApi.fetchWfCategoryTree).mockResolvedValue([
+    vi.mocked(bizCategoryApi.fetchBizCategoryTree).mockResolvedValue([
       {
         id: '1',
         tenantId: '1',
@@ -222,7 +222,7 @@ describe('WorkflowDefinitionPage 发布 / 取消发布', () => {
         updatedAt: '',
       },
     ]);
-    vi.mocked(wfCategoryApi.fetchWfCategories).mockResolvedValue([
+    vi.mocked(bizCategoryApi.fetchBizCategories).mockResolvedValue([
       {
         id: '1',
         tenantId: '1',

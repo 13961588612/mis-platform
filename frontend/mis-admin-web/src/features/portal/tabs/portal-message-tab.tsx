@@ -21,6 +21,15 @@ import { cn } from '@/lib/utils';
 const PAGE_SIZE = 20;
 
 /**
+ * P0 参数打通（plumbing）：消息查询的应用归属过滤通道（`scope` / `appCode`）。
+ *
+ * <p>当前**无**「当前 APP」选择来源 ⇒ 恒为空对象 ⇒ 不传该 query ⇒ 与现状逐字等价（零回归）。
+ * 未来接入 APP 上下文后，仅需在此提供 `{ scope: 'APP', appCode: 'kb' }` 即可自动透传到
+ * URL 查询串；后端 `scope=APP&appCode=...` 过滤能力已就绪（见 `GET /messages/inbox`）。
+ */
+export const APP_SCOPE_FILTER: { scope?: string; appCode?: string } = Object.freeze({});
+
+/**
  * 消息四类子 Tab（设计 §2.3 / §8.2 T04）。
  *
  * <p>严格四类：审批 `APPROVAL` / 通知 `NOTIFY` / 提醒 `REMIND` / 系统告警 `SYSTEM_ALERT`。
@@ -90,7 +99,7 @@ export function PortalMessageTab() {
     setLoading(true);
     setError(null);
     try {
-      const params = { tenantId, userId, msgType: activeKey, page, size: PAGE_SIZE };
+      const params = { tenantId, userId, msgType: activeKey, page, size: PAGE_SIZE, ...APP_SCOPE_FILTER };
       const result = kw
         ? await searchMessages({ ...params, q: kw })
         : await fetchInbox(params);
