@@ -47,6 +47,7 @@ from src.api.deps import get_current_user
 from src.api.response import error_response, success
 from src.channels.models import WecomBotCreateRequest, WecomBotRecord, WecomBotUpdateRequest
 from src.channels.wecom_binding_service import WecomUserBindingService
+from src.channels.wecom_bot_secret_service import WecomBotSecretService
 from src.channels.wecom_corp_secret_service import WecomCorpSecretService
 from src.channels.wecom_corp_store import (
     WecomCorpCreateRequest,
@@ -172,19 +173,30 @@ async def list_wecom_bots_runtime(
         logger.error("Failed to list wecom bots for gateway", error=str(exc))
         return _store_error_to_response(exc)
 
-    payload: list[dict[str, Any]] = [
-        {
-            "bot_id": r.bot_id,
-            "name": r.name,
-            "enabled": r.enabled,
-            "bot_secret_id": r.bot_secret_id,
-            "secret": r.secret,
-            "bound_agent_id": r.bound_agent_id,
-            "corp_id": r.corp_id,
-            "tenant_id": r.tenant_id,
-        }
-        for r in records
-    ]
+    # 密钥只在 YAML 里存引用；Gateway 需要明文才能建连，故此处解密后下发。
+    # 这是全链路唯一把明文 Bot secret 交给外部的点，由 X-Internal-Token 闸门保护。
+    secret_service = WecomBotSecretService(bot_store=store)
+    payload: list[dict[str, Any]] = []
+    for r in records:
+        secret_plain: str = await secret_service.resolve_secret(r.bot_id)
+        if not secret_plain:
+            # 无密钥的 Bot 不参与长连接（否则 Gateway 会反复鉴权失败刷日志）。
+            logger.warning(
+                "Skip gateway runtime bot without resolvable secret", bot_id=r.bot_id
+            )
+            continue
+        payload.append(
+            {
+                "bot_id": r.bot_id,
+                "name": r.name,
+                "enabled": r.enabled,
+                "bot_secret_id": r.bot_secret_id,
+                "secret": secret_plain,
+                "bound_agent_id": r.bound_agent_id,
+                "corp_id": r.corp_id,
+                "tenant_id": r.tenant_id,
+            }
+        )
     # 只记条数，绝不记内容（含明文 secret）。
     logger.info("Gateway runtime bot list served", count=len(payload), enabled_only=enabled)
     return success(data=payload)
@@ -260,6 +272,17 @@ async def create_wecom_bot(
     """
     try:
         record: WecomBotRecord = await store.create(req)
+        # 明文密钥写入 Vault（YAML 只留引用）；失败则回滚刚建记录，
+        # 避免留下「引用存在但 Vault 无密文」=> Bot 永远连不上的半成品。
+        secret_plain: str = (getattr(req, "secret", "") or "").strip()
+        if secret_plain:
+            try:
+                await WecomBotSecretService(bot_store=store).set_secret(
+                    record.bot_id, secret_plain
+                )
+            except Exception:
+                await store.delete(record.bot_id)
+                raise
         logger.info(
             "WeCom bot created",
             bot_id=record.bot_id,
@@ -302,6 +325,13 @@ async def update_wecom_bot(
     """
     try:
         record: WecomBotRecord = await store.update(bot_id, req)
+        # 密钥轮换 / 清空落在 Vault（YAML 只留引用）。
+        secret_service = WecomBotSecretService(bot_store=store)
+        new_secret: str = (getattr(req, "secret", "") or "").strip()
+        if req.secret_clear:
+            await secret_service.delete_secret(bot_id)
+        elif new_secret:
+            await secret_service.set_secret(bot_id, new_secret)
         logger.info(
             "WeCom bot updated",
             bot_id=bot_id,
@@ -341,6 +371,9 @@ async def delete_wecom_bot(
     """
     try:
         deleted: bool = await store.delete(bot_id)
+        if deleted:
+            # 一并清理 Vault 密文，避免留下无主密钥。
+            await WecomBotSecretService(bot_store=store).delete_secret(bot_id)
         logger.info(
             "WeCom bot deleted",
             bot_id=bot_id,

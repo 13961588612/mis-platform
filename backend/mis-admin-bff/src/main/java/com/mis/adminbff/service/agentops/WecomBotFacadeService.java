@@ -173,16 +173,15 @@ public class WecomBotFacadeService {
      * 组装下游请求体。
      *
      * <p>只在用户本次显式提供 secret 时才带该字段 —— 这是「留空=不修改」语义落地的唯一地方。
-     * name / ws_url / bound_agent_id 始终下发（编辑场景下即便不变也无害，
+     * name / bot_secret_id / bound_agent_id 始终下发（编辑场景下即便不变也无害，
      * 且下游用全量覆盖语义，缺了反而把其它字段抹掉）。
      */
     private Map<String, Object> buildBody(WecomBotUpsertRequest request) {
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("name", request.name());
-        // ws_url 不再是运营输入项（官方 endpoint 固定）：留空时不下发，由下游取默认值。
-        if (request.wsUrl() != null && !request.wsUrl().isBlank()) {
-            body.put("ws_url", request.wsUrl());
-        }
+        // bot_secret_id（企微官方 BotID）是下游创建请求的必填项，必须下发；
+        // 长连接 endpoint 已固定为官方 openws，不再由运营配置 ws_url。
+        body.put("bot_secret_id", request.botSecretId());
         body.put("bound_agent_id", request.boundAgentId());
         if (request.hasSecret()) {
             body.put("secret", request.secret());

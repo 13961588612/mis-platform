@@ -13,19 +13,19 @@ import com.fasterxml.jackson.annotation.JsonProperty;
  * <p>脱敏动作本身由 {@code WecomBotFacadeService} 执行，因为下游（T04）返回的
  * 原始结构里含明文 secret —— BFF 是这条链路上最后一个能拦住它的地方。
  *
- * @param botId        Bot ID
+ * @param botId        Bot ID（平台内部 ID）
+ * @param botSecretId  企微官方 BotID（长连接鉴权）
  * @param name         显示名
  * @param enabled      是否启用
- * @param wsUrl        WebSocket 接入地址
  * @param secretMasked 脱敏后的密钥（形如 {@code abc***xyz}），只读
  * @param boundAgentId 绑定的 Agent
  * @param health       {@code connected} | {@code disconnected} | {@code unknown}
  */
 public record WecomBotVO(
         @JsonProperty("bot_id") String botId,
+        @JsonProperty("bot_secret_id") String botSecretId,
         @JsonProperty("name") String name,
         @JsonProperty("enabled") Boolean enabled,
-        @JsonProperty("ws_url") String wsUrl,
         @JsonProperty("secret_masked") String secretMasked,
         @JsonProperty("bound_agent_id") String boundAgentId,
         @JsonProperty("health") String health) {

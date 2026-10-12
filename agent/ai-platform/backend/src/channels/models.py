@@ -40,7 +40,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 #: 健康状态取值，与前端 ``WecomBot['health']`` 完全一致。
 BotHealth = Literal["connected", "disconnected", "unknown"]
@@ -85,9 +85,15 @@ def mask_secret(secret: str) -> str:
 
 
 class WecomBotRecord(BaseModel):
-    """企微 Bot 的**落盘态**记录（含明文 secret，禁止直接返回给前端）。
+    """企微 Bot 的**落盘态**记录（密钥只存引用，明文不落 YAML）。
 
     对应 ``configs/channels/wecom-bots.yaml`` 中 ``bots[]`` 的一项。
+
+    ``secret_ref`` 默认写规范引用 ``secret://wecom/bot/<bot_id>``，真实明文经
+    :class:`~src.identity.credential_vault.CredentialVault` 加密存到
+    ``ai_platform.credential_mappings``；YAML 里永远只有引用。也兼容部署侧手工
+    写的 ``env:<NAME>`` / 明文（历史数据），由 :class:`WecomBotSecretService`
+    按引用类型分别解析。
     """
 
     bot_id: str = Field(..., description="平台内部唯一 ID（创建时后端生成，不可变更）")
@@ -96,12 +102,15 @@ class WecomBotRecord(BaseModel):
     tenant_id: int | None = Field(default=None, description="对应 MIS 租户 ID")
     name: str = Field(default="", description="展示名称")
     enabled: bool = Field(default=True, description="是否启用（Gateway 只拉取 enabled=true）")
-    secret: str = Field(default="", description="明文 secret（仅落盘，不出响应）")
+    secret_ref: str = Field(
+        default="",
+        description="密钥引用：``secret://wecom/bot/<bot_id>``（Vault）或 env:/明文（部署侧手工）",
+    )
     bound_agent_id: str = Field(default="", description="绑定的 Agent ID；空串表示未绑定")
     created_at: str = Field(default_factory=_utc_now_iso, description="创建时间 ISO-8601")
     updated_at: str = Field(default_factory=_utc_now_iso, description="更新时间 ISO-8601")
 
-    @field_validator("bot_id", "name", "bot_secret_id", "secret", "bound_agent_id", "corp_id", mode="before")
+    @field_validator("bot_id", "name", "bot_secret_id", "secret_ref", "bound_agent_id", "corp_id", mode="before")
     @classmethod
     def _coerce_str(cls, value: Any) -> str:
         """把 ``None`` / 非字符串安全地折叠成字符串，避免 YAML 手改后炸掉。
@@ -141,20 +150,47 @@ class WecomBotRecord(BaseModel):
         """序列化为 YAML 落盘用的字典（字段顺序稳定，便于 diff / Git 审计）。
 
         Returns:
-            含明文 ``secret`` 的字典。
+            只含 ``secret_ref`` 引用的字典 —— 明文密钥永不落 YAML。
         """
         return {
             "bot_id": self.bot_id,
             "name": self.name,
             "enabled": self.enabled,
             "bot_secret_id": self.bot_secret_id,
-            "secret": self.secret,
+            "secret_ref": self.secret_ref,
             "bound_agent_id": self.bound_agent_id,
             "corp_id": self.corp_id,
             "tenant_id": self.tenant_id,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
         }
+
+    @model_validator(mode="before")
+    @classmethod
+    def _migrate_legacy_secret(cls, data: Any) -> Any:
+        """兼容历史 YAML 的 ``secret: <明文>`` 写法（升级到 ``secret_ref`` 前落盘的数据）。
+
+        关键点：**不能把明文丢弃**，否则升级即失联。这里把旧的明文整段搬进
+        ``secret_ref``，由 :class:`WecomBotSecretService` 识别为「明文引用」并按
+        原语义使用；运营台下次保存该 Bot 时即收编进 Vault。
+
+        Args:
+            data: YAML / dict 反序列化出的原始映射。
+
+        Returns:
+            规范化后的映射（存在旧 ``secret`` 且无 ``secret_ref`` 时做字段搬运）。
+        """
+        if not isinstance(data, dict):
+            return data
+        if "secret_ref" in data:
+            return data
+        legacy = data.get("secret")
+        if isinstance(legacy, str) and legacy.strip():
+            migrated = dict(data)
+            migrated["secret_ref"] = legacy.strip()
+            migrated.pop("secret", None)
+            return migrated
+        return data
 
     def to_wire(self, health: str = "unknown") -> dict[str, Any]:
         """转成前端 ``WecomBot`` 契约（snake_case，secret 脱敏）。
@@ -171,7 +207,8 @@ class WecomBotRecord(BaseModel):
             "name": self.name,
             "enabled": self.enabled,
             "bot_secret_id": self.bot_secret_id,
-            "secret_masked": mask_secret(self.secret),
+            # 明文不再进入本进程之外的任何地方：掩码只表达「是否已配置密钥」。
+            "secret_masked": mask_secret(self.secret_ref),
             "health": normalized_health,
         }
         # 前端 `bound_agent_id?: string`：未绑定时不下发该 key，
