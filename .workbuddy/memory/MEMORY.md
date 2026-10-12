@@ -1,10 +1,10 @@
-# MIS 平台记忆（curated v3 — 2026-10-11）
+# MIS 平台记忆（curated v4 — 2026-10-12）
 
 > 只留跨会话黄金知识。详细日志见各 `YYYY-MM-DD.md`。本文件尽量 ≤3k 字符。
 
 ## 端口 / 登录
 前端 5174 · gateway 8080 · BFF 8081 · taskflow 8104 · iqd 8109 · iam 8102 · org 8103 · system 8105 · ai-platform 8000 · WrenAI 9100/9101。
-登录：`captcha?appCode=system`（解 imageBase64 SVG 取 4 位码）→ `login?appCode=system` `{username,password,captchaId,captchaCode}`（admin/Mis@123456）→ Bearer。
+🔴 登录链路**带 `/api/v1/auth` 前缀**：`GET /api/v1/auth/captcha?appCode=system`（`imageBase64` 是 SVG，正则 `<text>` 取 4 位码）→ `POST /api/v1/auth/login` `{appCode,username,password,captchaId,captchaCode}`（admin/Mis@123456）；**token 字段名 `accessToken`**。业务成败看 JSON `code` 字段（HTTP 永远 200）。脚本用 `C:/Users/13961/.workbuddy/binaries/python/versions/3.13.12/python.exe` + urllib 可行。
 沙箱：长服务放单条前台命令(timeout≤600000)；禁 cmd.exe；PowerShell 走 PowerShell 工具。
 
 ## 门禁（🔴 OOM 极具误导）
@@ -12,6 +12,8 @@
 - 测试 `NODE_OPTIONS="--max-old-space-size=700" npx vitest run --pool=threads --poolOptions.threads.singleThread=true`
 - 类型 `node --max-old-space-size=1400 ./node_modules/typescript/bin/tsc --noEmit`；⚠️**高负载时 1400MB 会 OOM 抖动/假挂**，稳妥用 **4096MB**。
 - 🔴 **门禁串行跑、输出重定向到文件再 tail**；并发互抢会假性「挂住」（进程其实已走完，但 `| tail` 管道不关 → 任务永不返回）。vitest 独占约 69s。
+- 🔴 **门禁必须后台独立进程跑（`run_in_background`）+ 绝对路径日志**（`D:/code/mis-platform/tmp/x.log`）：前台会被工具超时/OOM 连带 SIGKILL 父 bash，连 `echo EXIT` 都打不出。判 OOM 特征 = **无 VITEST_EXIT 标记 + 日志停在中间**。
+- 🔴 700MB 跑**大批量目录会整组 OOM kill**（尤其 `biz/forms` 重渲染）；改**精准子集 + 1536MB** 可稳跑（26 文件/305s）。日志路径勿用相对 `../tmp`（解析到 `frontend/tmp` 不存在）。
 Java：JDK17 `D:\software\jdk-17.0.2`；`backend/mvn.sh`；`-Dtest=Y` 加 `-Dsurefire.failIfNoSpecifiedTests=false`；JVM 被杀加 `-Dsurefire.forkCount=0`（仅本机）；集成测试须 `MIS_DB_TEST=true`（否则静默 skip → **假绿**）；Mockito 沙箱不稳加 `JAVA_TOOL_OPTIONS=-Djdk.attach.allowAttachSelf=true`。真实 `Tests run:` 看 `target/surefire-reports/*.txt`。
 
 ## 迁移（Flyway 只追加）
@@ -47,9 +49,11 @@ Java：JDK17 `D:\software\jdk-17.0.2`；`backend/mvn.sh`；`-Dtest=Y` 加 `-Dsur
 单批 ≤2–4 新文件；临时脚本放系统临时目录；禁删测试/skip/`as any`/改 fixture；**主理人验证不信转述，查磁盘+独立跑门禁**；派活前 `git status`+`git log`。三脚本 build/start/stop-dev.ps1 有硬编码服务清单须同步；须 UTF-8 BOM。**成员报 completed≠有产出，必须查磁盘（本轮架构师首轮空转已证）**。
 
 ## 现状 / 里程碑（分支 flow）
-- **最新（已实现 + QA IS_PASS，**未 commit**，工作区 57 项）**：①**门户「全部事项」三源聚合**：`GET /api/v1/tasks/matters`（`sys_task.assignee_id=我` 全状态 ∪ `wf_instance.initiator_id=我`，native `UNION ALL` 外层统一过滤/排序/分页 + 独立 COUNT；`wf_task` 只在 EXISTS/标量子查询，防多行膨胀）；子 Tab 新增「全部」并设**默认**；命令面板点「待办事项」落 `all`。②事项搜索加**发起人/参与人**（姓名模糊，作用**全部子 Tab**，缺省零回归）。③首页三板块改**表格** + 「平台/关联应用」「业务类型」两列。④`V140` 授权菜单 95012 给 role1（修复业务分类按钮被 `PermissionGate` 隐藏）；`V141` 登记 `sys_api 95100` 绑菜单 **95002**。**验证**：tsc EXIT=0；`PortalMattersIntegrationTest 7/7`；前端 `90 files/1107 passed`；变异 3/3 杀死。
-- **上一轮（已整体提交 `01921f3b`）**：①**统一业务分类**（V138/V139）：`biz_category` 树（租户通用、无 APP 维度，**叶子 code=业务类型**），兜底节点固定 `991001/UNCATEGORIZED`，存量 `wf_definition`/`form_definition` 全部挂 991001（不迁移）；`wf_category`/`form_category` 表保留停读写、**代码全删**；旧分类端点 `95060-95071` status=0 休眠；新菜单 `95012`+端点 `95093-95098`。②**app_code 显式化**：`wf_instance.app_code`（`startProcess` 显式写入，`assignNode`/`notify` 继承实例值）、`sys_message.biz_type` 新增；**`sys_app_biz_binding` 已 DROP（V138）**——「靠业务类型找 APP」作废，`AppScopeResolver`→静态 `support/AppScope`。③P0 保留：`sys_message`/`sys_task`.`app_code`（V136）、`scope=ALL/APP/PLATFORM` 拆 3 查询、搜索遍历 6 份 `*_NAV`+APP 分组。**验证：`git status` 干净；分支 flow 未 push。**
+- **最新（已提交 `24ef5f6`，工作区干净）**：门户「全部事项」三源聚合 + 三项增量整体入库（71 文件，+5578/-693）。①`GET /api/v1/tasks/matters`（native `UNION ALL`：`sys_task`(assignee=我,全状态) ∪ `wf_instance`(initiator=我)，外层统一过滤/排序/分页 + 独立 COUNT，`wf_task` 只在 EXISTS/标量子查询防膨胀）；子 Tab 新增「全部」并设**默认**；命令面板点「待办事项」落 `all`。②事项搜索加发起人/参与人（作用全部子 Tab）。③首页三板块改表格 + 「平台/关联应用」「业务类型」列。④**三项增量**：流程/表单「业务分类」改下拉树单选（新增 `CategorySingleTreeSelect`）；待办/消息「全部」Tab 缺省不过滤；命令面板恢复各 APP 菜单（`search-registry` 含 system/agent/kb/iqd/finance，排除工作台 task）+ 按 appCode 分组。⑤`V140` 授权菜单 95012 给 role1；`V141` 登记 `sys_api 95100` 绑菜单 95002。**门禁**：tsc EXIT=0；前端精准子集 `26 files / 260 passed +1 todo` 零失败（1536MB/305s）；接口实测 200/`code:0`/`total:12`。
+  - ⚠️ **踩坑：iqd 分组头与菜单项同名「问数」**（`APP_NAME.iqd==='问数'` 且 `IQD_NAV` 有同名项）→ 老测试 `getByText('问数')` 多匹配报错；已改 `getByRole('button',{name:'问数'})`。**新增分组 UI 后，凡「APP 名 == 菜单项名」的（如 iqd）断文案不能用 `getByText`，须按 role 精确命中。**
+- **上一轮（已提交 `01921f3b`）**：统一业务分类（V138/V139）+ app_code 显式化，详见 `2026-10-11.md`。
 - 门户 UI 精修 / 三 Tab 重构 / 消息抽屉（`e5bd412`/`e9869e8`/`262d13e`）；BFF 双编码修复 `72cfaa5`；表单分类独立成表 V133。
+- **分支 `flow` 领先 origin 3 个 commit，未 push。**
 - 历史雷区先读 `2026-10-09.md`/`2026-10-10.md`。
 
 ## 遗留（非阻塞）
