@@ -257,11 +257,11 @@ afterEach(() => {
 });
 
 describe('[QA-B] 消息中心表 · 两列表头与取值三态', () => {
-  it('表头恰为 [标题, 平台 / 关联应用, 业务类型, 发送人, 时间]', async () => {
+  it('表头恰为 [标题, 平台 / 关联应用, 业务类型, 发送人, 发起时间]', async () => {
     vi.mocked(messagesApi.fetchInbox).mockResolvedValue({ ...emptyPage, total: 1, list: [message()] });
     renderMessageTab();
     await screen.findByText('消息-甲');
-    expect(headerCells()).toEqual(['标题', '平台 / 关联应用', '业务类型', '发送人', '时间']);
+    expect(headerCells()).toEqual(['标题', '平台 / 关联应用', '业务类型', '发送人', '发起时间']);
   });
 
   it('三态取值：null→平台/—；命中→name；未命中→回退 code（逐行）', async () => {
@@ -370,7 +370,7 @@ describe('[QA-B] 消息中心表 · 两列表头与取值三态', () => {
 });
 
 describe('[QA-B] 待办事项表 · 两列表头与取值三态', () => {
-  it('表头恰为 [标题, 业务编号 / 流程, 平台 / 关联应用, 业务类型, 发起人 / 处理人, 时间]', async () => {
+  it('表头恰为 [标题, 业务编号 / 流程, 平台 / 关联应用, 业务类型, 发起人 / 处理人, 发起时间]', async () => {
     vi.mocked(tasksApi.fetchMyTasks).mockResolvedValue({ ...emptyPage, total: 1, list: [task()] });
     renderTodoTab();
     await screen.findByText('待办-甲');
@@ -380,7 +380,7 @@ describe('[QA-B] 待办事项表 · 两列表头与取值三态', () => {
       '平台 / 关联应用',
       '业务类型',
       '发起人 / 处理人',
-      '时间',
+      '发起时间',
     ]);
   });
 

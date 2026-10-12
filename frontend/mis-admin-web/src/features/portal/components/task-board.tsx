@@ -8,6 +8,7 @@ import { TodoDetailDrawer } from './todo-detail-drawer';
 import { PortalMetaTags } from './portal-meta-tags';
 import { usePortalLookups } from '../lib/use-portal-lookups';
 import { usePortalEntry } from '../lib/use-portal-entry';
+import { formatDateTimeSec } from '../lib/format-datetime';
 
 interface TaskBoardProps {
   tenantId: string;
@@ -124,6 +125,12 @@ export function TaskBoard({ tenantId, userId }: TaskBoardProps) {
                       截止 {item.dueDate.replace('T', ' ').slice(5, 16)}
                     </span>
                   ) : null}
+                  <span
+                    className="shrink-0 whitespace-nowrap text-[11px] text-muted-foreground"
+                    title="发起时间"
+                  >
+                    {formatDateTimeSec(item.createdAt)}
+                  </span>
                   <ChevronRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
                 </button>
               </li>

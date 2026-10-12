@@ -18,6 +18,7 @@ import {
 } from '@/lib/api/messages';
 import { useAuthStore } from '@/stores/auth-store';
 import { cn } from '@/lib/utils';
+import { formatDateTimeSec } from '../lib/format-datetime';
 
 const PAGE_SIZE = 20;
 
@@ -48,10 +49,6 @@ export const MSG_TABS = [
 ] as const;
 
 export const DEFAULT_MSG_TAB_KEY = 'ALL';
-
-function formatTime(iso: string | null | undefined): string {
-  return iso ? iso.replace('T', ' ').slice(0, 16) : '-';
-}
 
 /** 表头单元格基础类：13px、左对齐、列间竖线（首列无）。 */
 const TH_CLASS =
@@ -227,7 +224,7 @@ export function PortalMessageTab() {
                 <col style={{ width: '9rem' }} />
                 <col style={{ width: '8rem' }} />
                 <col style={{ width: '7rem' }} />
-                <col style={{ width: '9rem' }} />
+                <col style={{ width: '11rem' }} />
               </colgroup>
               <thead>
                 <tr>
@@ -235,7 +232,7 @@ export function PortalMessageTab() {
                   <th className={TH_CLASS}>平台 / 关联应用</th>
                   <th className={TH_CLASS}>业务类型</th>
                   <th className={TH_CLASS}>发送人</th>
-                  <th className={TH_CLASS}>时间</th>
+                  <th className={TH_CLASS}>发起时间</th>
                 </tr>
               </thead>
               <tbody>
@@ -256,7 +253,7 @@ export function PortalMessageTab() {
                     <td className={cn(TD_CLASS, 'min-w-0')}>
                       <div className="flex items-center gap-2">
                         <UnreadDot read={item.read} unreadClassName="bg-destructive" />
-                        <span className={cn('truncate', !item.read && 'font-semibold')}>
+                        <span className={cn('truncate text-[13px] font-normal', !item.read && 'font-medium')}>
                           {item.title}
                         </span>
                         {item.instanceId ? (
@@ -266,18 +263,18 @@ export function PortalMessageTab() {
                         ) : null}
                       </div>
                       {item.summary ? (
-                        <p className="mt-0.5 truncate text-[12px] text-muted-foreground">{item.summary}</p>
+                        <p className="mt-0.5 truncate text-[11px] text-muted-foreground">{item.summary}</p>
                       ) : null}
                     </td>
-                    <td className={cn(TD_CLASS, 'truncate text-muted-foreground')} title={appNameOf(item.appCode)}>
+                    <td className={cn(TD_CLASS, 'truncate text-[11px] text-muted-foreground')} title={appNameOf(item.appCode)}>
                       {appNameOf(item.appCode)}
                     </td>
-                    <td className={cn(TD_CLASS, 'truncate text-muted-foreground')} title={bizTypeNameOf(item.bizType)}>
+                    <td className={cn(TD_CLASS, 'truncate text-[11px] text-muted-foreground')} title={bizTypeNameOf(item.bizType)}>
                       {bizTypeNameOf(item.bizType)}
                     </td>
-                    <td className={cn(TD_CLASS, 'truncate text-muted-foreground')}>{item.senderName ?? '系统'}</td>
-                    <td className={cn(TD_CLASS, 'whitespace-nowrap text-muted-foreground')}>
-                      {formatTime(item.createdAt)}
+                    <td className={cn(TD_CLASS, 'truncate text-[11px] text-muted-foreground')}>{item.senderName ?? '系统'}</td>
+                    <td className={cn(TD_CLASS, 'whitespace-nowrap text-[11px] text-muted-foreground')}>
+                      {formatDateTimeSec(item.createdAt)}
                     </td>
                   </tr>
                 ))}

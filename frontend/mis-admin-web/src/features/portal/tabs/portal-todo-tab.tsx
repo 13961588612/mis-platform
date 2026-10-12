@@ -16,6 +16,7 @@ import { usePortalTodoTabStore } from '@/stores/portal-todo-tab-store';
 import { cn } from '@/lib/utils';
 import { TODO_TABS } from '../lib/todo-tabs';
 import { fromHandledTask, fromPortalMatter, fromTaskItem, fromWfInstance } from '../lib/todo-adapters';
+import { formatDateTimeSec } from '../lib/format-datetime';
 import type { PortalTodoRow } from '../types';
 
 const PAGE_SIZE = 20;
@@ -314,7 +315,7 @@ export function PortalTodoTab() {
                 <col style={{ width: '9rem' }} />
                 <col style={{ width: '8rem' }} />
                 <col style={{ width: '9rem' }} />
-                <col style={{ width: '9rem' }} />
+                <col style={{ width: '11rem' }} />
               </colgroup>
               <thead>
                 <tr>
@@ -323,7 +324,7 @@ export function PortalTodoTab() {
                   <th className={TH_CLASS}>平台 / 关联应用</th>
                   <th className={TH_CLASS}>业务类型</th>
                   <th className={TH_CLASS}>发起人 / 处理人</th>
-                  <th className={TH_CLASS}>时间</th>
+                  <th className={TH_CLASS}>发起时间</th>
                 </tr>
               </thead>
               <tbody>
@@ -343,7 +344,7 @@ export function PortalTodoTab() {
                   >
                     <td className={cn(TD_CLASS, 'min-w-0')}>
                       <div className="flex items-center gap-2">
-                        <span className="truncate font-medium">{row.title}</span>
+                        <span className="truncate text-[13px] font-normal">{row.title}</span>
                         {row.status ? (
                           // 流程实例行（category='mySent'，来源 sent 或「全部」的 INSTANCE 行）用流程徽标，
                           // 其余用待办徽标。口径见 PortalTodoRow.category 与 fromWfInstance/fromPortalMatter。
@@ -355,16 +356,16 @@ export function PortalTodoTab() {
                         ) : null}
                       </div>
                     </td>
-                    <td className={cn(TD_CLASS, 'truncate text-muted-foreground')}>{row.subtitle ?? '—'}</td>
-                    <td className={cn(TD_CLASS, 'truncate text-muted-foreground')} title={appNameOf(row.appCode)}>
+                    <td className={cn(TD_CLASS, 'truncate text-[11px] text-muted-foreground')}>{row.subtitle ?? '—'}</td>
+                    <td className={cn(TD_CLASS, 'truncate text-[11px] text-muted-foreground')} title={appNameOf(row.appCode)}>
                       {appNameOf(row.appCode)}
                     </td>
-                    <td className={cn(TD_CLASS, 'truncate text-muted-foreground')} title={bizTypeNameOf(row.bizType)}>
+                    <td className={cn(TD_CLASS, 'truncate text-[11px] text-muted-foreground')} title={bizTypeNameOf(row.bizType)}>
                       {bizTypeNameOf(row.bizType)}
                     </td>
-                    <td className={cn(TD_CLASS, 'truncate text-muted-foreground')}>{actorText(row)}</td>
-                    <td className={cn(TD_CLASS, 'whitespace-nowrap text-muted-foreground')}>
-                      {row.createdAt ? row.createdAt.replace('T', ' ').slice(0, 16) : '—'}
+                    <td className={cn(TD_CLASS, 'truncate text-[11px] text-muted-foreground')}>{actorText(row)}</td>
+                    <td className={cn(TD_CLASS, 'whitespace-nowrap text-[11px] text-muted-foreground')}>
+                      {formatDateTimeSec(row.createdAt)}
                     </td>
                   </tr>
                 ))}

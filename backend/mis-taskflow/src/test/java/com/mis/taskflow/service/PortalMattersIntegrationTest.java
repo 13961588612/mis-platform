@@ -120,6 +120,9 @@ class PortalMattersIntegrationTest {
         // 总数为 (分支 A: taskOnly + instSelf 的审批 sys_task) + (分支 B: instSelf + instOther) = 4。
         assertEquals(4L, page.getTotal(), "「全部」应为 4 行：" + rows);
         assertEquals(4, rows.size(), "size=100 时单页应取回全部 4 行");
+        // 发起时间：native 时间列类型转换不得静默丢空（前端「全部」Tab 发起时间列依赖此字段）。
+        assertTrue(rows.stream().allMatch(v -> v.createdAt() != null),
+                "每行 createdAt 非空：" + rows);
 
         // 独立待办：kind=TASK，无实例（instanceId=null）。
         assertTrue(has(rows, "TASK", String.valueOf(s.taskOnly())), "应含独立待办 TASK 行");

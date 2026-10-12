@@ -8,6 +8,7 @@ import { MessageDetailDrawer } from './message-detail-drawer';
 import { PortalMetaTags } from './portal-meta-tags';
 import { usePortalLookups } from '../lib/use-portal-lookups';
 import { usePortalEntry } from '../lib/use-portal-entry';
+import { formatDateTimeSec } from '../lib/format-datetime';
 
 interface MessageBoardProps {
   tenantId: string;
@@ -100,8 +101,11 @@ export function MessageBoard({ tenantId, userId }: MessageBoardProps) {
                   <span className="shrink-0 rounded bg-primary/10 px-1.5 py-0.5 text-[10px] text-primary">待办</span>
                 ) : null}
                 <PortalMetaTags appName={appNameOf(item.appCode)} bizTypeName={bizTypeNameOf(item.bizType)} />
-                <span className="shrink-0 text-[11px] text-muted-foreground">
-                  {item.createdAt?.replace('T', ' ').slice(5, 16)}
+                <span
+                  className="shrink-0 whitespace-nowrap text-[11px] text-muted-foreground"
+                  title="发起时间"
+                >
+                  {formatDateTimeSec(item.createdAt)}
                 </span>
               </button>
             </li>

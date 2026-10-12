@@ -7,7 +7,12 @@ import com.mis.taskflow.support.AppScope;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Instant;
 import java.time.LocalDateTime;
+import java.time.OffsetDateTime;
+import java.time.ZoneId;
+import java.time.ZonedDateTime;
+import java.time.format.DateTimeParseException;
 import java.util.List;
 import java.util.Locale;
 
@@ -94,13 +99,50 @@ public class PortalMattersService {
         return v instanceof String s ? s : String.valueOf(v);
     }
 
-    /** native {@code timestamp} 列 → {@code LocalDateTime}：兼容 {@code java.sql.Timestamp} 与直出 {@code LocalDateTime}。 */
-    private static LocalDateTime toLocalDateTime(Object v) {
+    /**
+     * native {@code timestamp}/{@code timestamptz} 列 → {@code LocalDateTime}。
+     *
+     * <p>Hibernate 6 + PostgreSQL JDBC 下，同一列可能以多种类型出现：
+     * {@link LocalDateTime} / {@link java.sql.Timestamp} / {@link Instant} /
+     * {@link OffsetDateTime} / {@link ZonedDateTime} / {@link java.util.Date} / ISO 字符串。
+     * 旧实现只认前两种 ⇒ 其余类型被静默丢成 {@code null}，前端「全部」Tab 发起时间整列空白。
+     */
+    static LocalDateTime toLocalDateTime(Object v) {
+        if (v == null) {
+            return null;
+        }
         if (v instanceof LocalDateTime dt) {
             return dt;
         }
         if (v instanceof java.sql.Timestamp ts) {
             return ts.toLocalDateTime();
+        }
+        if (v instanceof Instant instant) {
+            return LocalDateTime.ofInstant(instant, ZoneId.systemDefault());
+        }
+        if (v instanceof OffsetDateTime odt) {
+            return odt.toLocalDateTime();
+        }
+        if (v instanceof ZonedDateTime zdt) {
+            return zdt.toLocalDateTime();
+        }
+        if (v instanceof java.util.Date date) {
+            return LocalDateTime.ofInstant(date.toInstant(), ZoneId.systemDefault());
+        }
+        if (v instanceof CharSequence cs) {
+            String s = cs.toString().trim();
+            if (s.isEmpty()) {
+                return null;
+            }
+            try {
+                return LocalDateTime.parse(s.replace(' ', 'T').replaceAll("\\.\\d+$", ""));
+            } catch (DateTimeParseException ignored) {
+                try {
+                    return OffsetDateTime.parse(s).toLocalDateTime();
+                } catch (DateTimeParseException ignored2) {
+                    return null;
+                }
+            }
         }
         return null;
     }
