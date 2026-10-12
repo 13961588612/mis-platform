@@ -8,7 +8,7 @@
  * 3. 后端有但前端没实现的 code 不出现在候选里
  * 4. 已选中但未注册的 code 标红保留，不静默丢弃
  * 5. 勾选后回传的是逗号串（与后端 `CreateDefinitionRequest.supportedFormCodes` 对齐）
- * 6. 分类是 biz_category 动态下拉（不再是 APPROVAL/NOTICE/TASK 硬编码枚举）
+ * 6. 分类是 biz_category 下拉树（与表单编辑弹窗一致，不再是原生 select / 硬编码枚举）
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
@@ -121,6 +121,7 @@ describe('PropertyPanel 表单白名单', () => {
       },
     ]);
     vi.mocked(bizCategoryApi.fetchBizCategories).mockResolvedValue(CATEGORIES);
+    vi.mocked(bizCategoryApi.fetchBizCategoryTree).mockResolvedValue(CATEGORIES);
   });
 
   afterEach(() => {
@@ -178,15 +179,21 @@ describe('PropertyPanel 表单白名单', () => {
     );
   });
 
-  it('分类是 biz_category 动态下拉（不再是硬编码枚举）', async () => {
-    renderPanel();
+  it('分类是 biz_category 下拉树，选中回传 categoryId', async () => {
+    const onChange = renderPanel();
 
-    const select = (await screen.findByLabelText('分类')) as HTMLSelectElement;
-    expect(select.tagName).toBe('SELECT');
-    await waitFor(() => expect(screen.getByRole('option', { name: '审批类' })).toBeTruthy());
-    expect(screen.getByRole('option', { name: '通知类' })).toBeTruthy();
-    // 选择「审批类」→ FlowMeta.categoryId 反映为 990001
-    fireEvent.change(select, { target: { value: '990001' } });
-    expect(screen.getByText('审批类')).toBeTruthy();
+    // 触发器是按钮（与表单编辑弹窗 CategorySingleTreeSelect 一致），未选时显示「未分类」。
+    const trigger = (await screen.findByLabelText('分类')) as HTMLButtonElement;
+    expect(trigger.tagName).toBe('BUTTON');
+    expect(trigger.textContent).toContain('未分类');
+
+    fireEvent.click(trigger);
+    const node = await screen.findByRole('button', { name: '审批类' });
+    expect(screen.getByRole('button', { name: '通知类' })).toBeTruthy();
+    fireEvent.pointerDown(node, { button: 0 });
+
+    await waitFor(() =>
+      expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ categoryId: 990001 })),
+    );
   });
 });

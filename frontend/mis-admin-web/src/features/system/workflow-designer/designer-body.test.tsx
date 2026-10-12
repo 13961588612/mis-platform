@@ -7,6 +7,7 @@
  * 2. 编辑模式按 definitionId 还原 nodes/edges/flowMeta（canvasX/Y → position）
  * 3. 编辑模式保存走 PUT，新建走 POST —— 否则「编排已有定义再保存」必然撞唯一索引
  * 4. 后端把唯一索引冲突兜成 500「系统内部错误」时，界面给出编码冲突的可读提示
+ * 5. 「仅保存」只 PUT/POST，不调 activate；「保存并发布」在 ACTIVE 时先 deactivate 再 PUT+activate
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ComponentProps } from 'react';
@@ -146,7 +147,7 @@ describe('DesignerBody', () => {
     expect(e.target).toBe('n_approve');
   });
 
-  it('编辑模式保存走 PUT，不重复 POST', async () => {
+  it('编辑模式「保存并发布」走 PUT + activate，不重复 POST 创建', async () => {
     renderBody({ definitionId: '1001' });
     await waitFor(() => expect(screen.getByText(/节点 3 · 连线 2/)).toBeTruthy());
 
@@ -155,6 +156,53 @@ describe('DesignerBody', () => {
     await waitFor(() => expect(api.put).toHaveBeenCalled());
     expect(vi.mocked(api.put).mock.calls[0][0]).toBe('/workflow/definitions/1001');
     expect(api.post).not.toHaveBeenCalledWith('/workflow/definitions', expect.anything(), expect.anything());
+    await waitFor(() =>
+      expect(api.post).toHaveBeenCalledWith(
+        '/workflow/definitions/1001/activate',
+        null,
+        expect.anything(),
+      ),
+    );
+  });
+
+  it('「仅保存」只落草稿，不调 activate', async () => {
+    renderBody({ definitionId: '1001' });
+    await waitFor(() => expect(screen.getByText(/节点 3 · 连线 2/)).toBeTruthy());
+
+    fireEvent.click(screen.getByText('仅保存'));
+
+    await waitFor(() => expect(api.put).toHaveBeenCalled());
+    expect(vi.mocked(api.put).mock.calls[0][0]).toBe('/workflow/definitions/1001');
+    expect(api.post).not.toHaveBeenCalledWith(
+      '/workflow/definitions/1001/activate',
+      expect.anything(),
+      expect.anything(),
+    );
+    await waitFor(() => expect(screen.getByText(/已保存为草稿/)).toBeTruthy());
+  });
+
+  it('已发布定义「保存并发布」先 deactivate 再 PUT + activate', async () => {
+    vi.mocked(workflowApi.fetchDefinition).mockResolvedValue({ ...existing, status: 'ACTIVE' });
+    renderBody({ definitionId: '1001' });
+    await waitFor(() => expect(screen.getByText(/节点 3 · 连线 2/)).toBeTruthy());
+
+    fireEvent.click(screen.getByText('保存并发布'));
+
+    await waitFor(() =>
+      expect(api.post).toHaveBeenCalledWith(
+        '/workflow/definitions/1001/deactivate',
+        null,
+        expect.anything(),
+      ),
+    );
+    await waitFor(() => expect(api.put).toHaveBeenCalled());
+    await waitFor(() =>
+      expect(api.post).toHaveBeenCalledWith(
+        '/workflow/definitions/1001/activate',
+        null,
+        expect.anything(),
+      ),
+    );
   });
 
   it('新建模式保存走 POST', async () => {

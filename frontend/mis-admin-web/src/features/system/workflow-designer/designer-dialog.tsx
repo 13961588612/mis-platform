@@ -48,8 +48,8 @@ export interface DesignerDialogProps {
   /** 有 = 编辑已有定义；无 = 新建。 */
   definitionId?: string;
   initialFlowMeta?: Partial<FlowMeta>;
-  /** 保存成功后回调；调用方刷新列表后自行关闭本 Dialog。 */
-  onSaved?: (defId: string) => void;
+  /** 保存成功后回调；`close !== false` 时调用方通常关闭本 Dialog。 */
+  onSaved?: (defId: string, options?: { close?: boolean }) => void;
 }
 
 export function DesignerDialog({

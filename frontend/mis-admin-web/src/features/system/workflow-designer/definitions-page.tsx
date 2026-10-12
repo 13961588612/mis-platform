@@ -195,10 +195,16 @@ export function WorkflowDefinitionPage() {
     }
   }
 
-  const onDesignerSaved = useCallback(async () => {
-    await loadDefinitions();
-    setDesigner(CLOSED);
-  }, [loadDefinitions]);
+  const onDesignerSaved = useCallback(
+    async (_defId: string, options?: { close?: boolean }) => {
+      await loadDefinitions();
+      // 仅保存草稿：刷新列表但保持编排 Dialog，便于继续改；保存并发布后关闭。
+      if (options?.close !== false) {
+        setDesigner(CLOSED);
+      }
+    },
+    [loadDefinitions],
+  );
 
   const totalPages = Math.max(1, Math.ceil(total / DEF_SIZE));
 
@@ -316,8 +322,11 @@ export function WorkflowDefinitionPage() {
                         <Button
                           size="sm"
                           variant="outline"
-                          disabled={def.status === 'ACTIVE'}
-                          title={def.status === 'ACTIVE' ? '已发布流程不可编辑，请先取消发布' : undefined}
+                          title={
+                            def.status === 'ACTIVE'
+                              ? '已发布流程可直接编排；保存时会自动先取消发布再写入'
+                              : undefined
+                          }
                           onClick={() =>
                             setDesigner({
                               open: true,

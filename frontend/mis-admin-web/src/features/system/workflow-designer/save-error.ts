@@ -61,6 +61,9 @@ export async function findCodeConflict(tenantId: string, code: string): Promise<
  */
 export function friendlySaveError(e: unknown, code: string): string {
   const raw = e instanceof Error ? e.message : String(e ?? '');
+  if (/仅草稿状态可修改/.test(raw)) {
+    return '当前流程仍为已发布状态，无法直接覆盖保存。请使用「仅保存 / 保存并发布」（会自动先取消发布），或先在列表点「取消发布」。';
+  }
   const trimmedCode = code.trim();
   const looksLikeConflict =
     /uk_wf_def_tenant_code_ver/i.test(raw) ||

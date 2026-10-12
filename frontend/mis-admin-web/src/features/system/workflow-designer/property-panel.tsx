@@ -4,9 +4,12 @@
  * <p>选中节点时编辑节点属性（名称/审批人规则/超时/条件）；未选节点时编辑流程全局属性
  * （编码/名称/分类/**表单白名单多选**）。表单白名单正是「一个流程对接多个表单」的落地点。
  */
+import { useMemo } from 'react';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { MultiSelect } from '@/components/ui/multi-select';
+import { CategorySingleTreeSelect } from '@/components/common/category-single-tree-select';
+import type { CategoryTreeNode } from '@/components/common/category-tree-select';
 import { cn } from '@/lib/utils';
 import {
   missingFormCodes,
@@ -15,12 +18,13 @@ import {
   useFormCatalog,
   type FormOption,
 } from './form-catalog';
-import { useBizCategories } from './biz-category-catalog';
+import { useBizCategoryTree } from './biz-category-catalog';
 import type { WfFlowNode } from './types';
 
 /**
  * 流程分类：租户通用业务分类 `biz_category` 邻接树下发的业务类型（软引用 `categoryId`）。
- * 旧 `WF_CATEGORIES` 硬编码枚举与 `wf_category` 均已废弃——分类由后端动态下发。
+ * 旧 `WF_CATEGORIES` 硬编码枚举与 `wf_category` 均已废弃——分类由后端动态下发；
+ * 编排属性面板与表单编辑弹窗一致，使用分类下拉树单选。
  */
 export interface FlowMeta {
   code: string;
@@ -38,6 +42,15 @@ export interface PropertyPanelProps {
   onDeleteNode: (id: string) => void;
 }
 
+/** 在分类树中查找某 id 是否存在（编辑时判断当前分类是否仍在候选树里）。 */
+function treeHasId(nodes: CategoryTreeNode[], id: string): boolean {
+  for (const n of nodes) {
+    if (String(n.id) === id) return true;
+    if (n.children?.length && treeHasId(n.children, id)) return true;
+  }
+  return false;
+}
+
 export function PropertyPanel({
   selected,
   flowMeta,
@@ -45,7 +58,14 @@ export function PropertyPanel({
   onNodeChange,
   onDeleteNode,
 }: PropertyPanelProps) {
-  const { options: categoryOptions, loading: catLoading, error: catError } = useBizCategories('1');
+  const { tree: categoryTree, loading: catLoading, error: catError } = useBizCategoryTree('1');
+  // 编辑时若当前分类不在候选项里（分类被删/跨租户），补一条兜底提示，避免下拉显示空白。
+  const categoryMissing = useMemo(() => {
+    if (flowMeta.categoryId == null) return null;
+    const key = String(flowMeta.categoryId);
+    return treeHasId(categoryTree, key) ? null : key;
+  }, [flowMeta.categoryId, categoryTree]);
+
   if (!selected) {
     return (
       <div className="flex h-full w-[280px] shrink-0 flex-col overflow-auto border-l bg-card p-3">
@@ -58,25 +78,21 @@ export function PropertyPanel({
             <Input value={flowMeta.name} onChange={(e) => onFlowMetaChange({ ...flowMeta, name: e.target.value })} placeholder="采购审批流程" className="h-8" />
           </Field>
           <Field label="分类">
-            <select
-              aria-label="分类"
-              value={flowMeta.categoryId == null ? '' : String(flowMeta.categoryId)}
-              onChange={(e) =>
+            <CategorySingleTreeSelect
+              ariaLabel="分类"
+              tree={categoryTree}
+              value={flowMeta.categoryId == null ? null : String(flowMeta.categoryId)}
+              onChange={(id) =>
                 onFlowMetaChange({
                   ...flowMeta,
-                  categoryId: e.target.value === '' ? null : Number(e.target.value),
+                  categoryId: id == null ? null : Number(id),
                 })
               }
+              placeholder="未分类"
               disabled={catLoading}
-              className="h-8 w-full rounded-md border border-input bg-background px-2 text-sm"
-            >
-              <option value="">未分类</option>
-              {categoryOptions.map((c) => (
-                <option key={c.id} value={String(c.id)}>
-                  {c.name}
-                </option>
-              ))}
-            </select>
+              fallbackLabel={categoryMissing ? `分类#${categoryMissing}` : null}
+              triggerClassName="h-8 min-h-8 py-1"
+            />
           </Field>
           {catError ? (
             <p className="text-[11px] text-warning">{catError}</p>

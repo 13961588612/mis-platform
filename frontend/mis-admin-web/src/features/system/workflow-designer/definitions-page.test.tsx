@@ -163,7 +163,7 @@ describe('WorkflowDefinitionPage 发布 / 取消发布', () => {
     expect(workflowApi.fetchDefinition).toHaveBeenCalledWith('1001', '1');
   });
 
-  it('ACTIVE 行的「编排」禁用（后端 update 会拒）', async () => {
+  it('ACTIVE 行的「编排」可点（保存时会先自动取消发布再写入）', async () => {
     vi.mocked(workflowApi.fetchDefinitions).mockResolvedValue({
       page: 1,
       size: 20,
@@ -173,8 +173,8 @@ describe('WorkflowDefinitionPage 发布 / 取消发布', () => {
     renderPage();
 
     const btn = (await screen.findByText('编排')) as HTMLButtonElement;
-    expect(btn.disabled).toBe(true);
-    expect(btn.title).toContain('请先取消发布');
+    expect(btn.disabled).toBe(false);
+    expect(btn.title).toContain('自动先取消发布');
   });
 
   it('无 workflow:definition:edit 时两个按钮都不渲染（隐藏而非禁用）', async () => {
