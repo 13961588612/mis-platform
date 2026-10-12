@@ -402,7 +402,7 @@ export function WorkflowDefinitionPage() {
         definitionId={designer.definitionId}
         initialFlowMeta={designer.initialFlowMeta}
         onOpenChange={(open) => setDesigner((s) => ({ ...s, open }))}
-        onSaved={() => void onDesignerSaved()}
+        onSaved={(defId, options) => void onDesignerSaved(defId, options)}
       />
     </div>
   );

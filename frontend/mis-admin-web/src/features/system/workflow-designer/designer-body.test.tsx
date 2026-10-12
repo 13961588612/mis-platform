@@ -225,4 +225,61 @@ describe('DesignerBody', () => {
 
     await waitFor(() => expect(screen.getByText(/可能已存在/)).toBeTruthy());
   });
+
+  /**
+   * 回归钉子：保存时 source/target 必须写 **nodeCode**，绝不能把画布 id（`n_XXX`）写进库。
+   *
+   * <p>旧实现是 `sourceNode?.data.nodeCode ?? e.source`：一旦端点解析不到节点就把
+   * `n_start` 这种画布 id 当nodeCode 落库；下次加载 {@link toFlowEdge} 再补一层前缀
+   * 变成 `n_n_start`，这条边便永远渲染不出来 —— 「保存后连线全没了」的脏数据成因。
+   */
+  it('保存时连线端点写nodeCode，不把画布 id（n_XXX）写进后端',async () => {
+    renderBody({ definitionId: '1001' });
+    await waitFor(() => expect(screen.getByText(/节点 3 · 连线 2/)).toBeTruthy());
+
+    fireEvent.click(screen.getByText('仅保存'));
+
+    await waitFor(() => expect(api.put).toHaveBeenCalled());
+    const payload = vi.mocked(api.put).mock.calls[0][1] as {
+      edges: { source: string; target: string }[];
+    };
+    expect(payload.edges).toHaveLength(2);
+    expect(payload.edges.map((e) => [e.source, e.target])).toEqual([
+      ['start', 'approve'],
+      ['approve', 'end'],
+    ]);
+    for (const e of payload.edges) {
+      expect(e.source.startsWith('n_')).toBe(false);
+      expect(e.target.startsWith('n_')).toBe(false);
+    }
+  });
+
+  /**
+   * 端点解析不到节点的连线直接丢弃，而不是把 `n_XXX` 当 nodeCode 存脏数据。
+   *
+   * <p>用后端返回「悬空边」模拟：source 指向库里不存在的 nodeCode。
+   * 该边在 React Flow 里本来就渲染不出来，保存时也不该进payload。
+   */
+  it('悬空边（端点不存在）在保存时被丢弃，不写入脏 source', async () => {
+    vi.mocked(workflowApi.fetchDefinition).mockResolvedValue({
+      ...existing,
+      edges: [
+        { source: 'start', target: 'approve', edgeType: 'DEFAULT', label: null, conditionExpr: null, sortOrder: 0 },
+        // start2 在 nodes 里不存在 ⇒ 悬空
+        { source: 'start2', target: 'end', edgeType: 'DEFAULT', label: null, conditionExpr: null, sortOrder: 1 },
+      ],
+    });
+    renderBody({ definitionId: '1001' });
+    await waitFor(() => expect(screen.getByText(/节点 3 · 连线 2/)).toBeTruthy());
+
+    fireEvent.click(screen.getByText('仅保存'));
+
+    await waitFor(() => expect(api.put).toHaveBeenCalled());
+    const payload = vi.mocked(api.put).mock.calls[0][1] as {
+      edges: { source: string; target: string }[];
+    };
+    expect(payload.edges).toEqual([
+      expect.objectContaining({ source: 'start', target: 'approve' }),
+    ]);
+  });
 });

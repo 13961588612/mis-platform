@@ -289,19 +289,24 @@ export function DesignerBody({
                 ? JSON.stringify({ routingStrategy: n.data.routingStrategy ?? 'ALL_PASS' })
                 : '{}',
           })),
-          // 画布连线 → 后端 wf_edge（支撑条件分支图式流转）
-          edges: edges.map((e, idx) => {
+          // 画布连线 → 后端 wf_edge（支撑条件分支图式流转）。
+          //⚠️ 端点解析不到节点的连线直接丢弃，绝不能把画布 id（`n_XXX`）当nodeCode 写进库：
+          // 后端存下`n_XXX` 后，下次加载 toFlowEdge 会再补一层前缀变成 `n_n_XXX`，
+          // 于是这条边永远渲染不出来 —— 正是「保存后连线全没了」的脏数据成因。
+          // 丢弃与 React Flow 自身语义一致：指向不存在节点的边本来就不渲染。
+          edges: edges.flatMap((e, idx) => {
             const sourceNode = nodes.find((n) => n.id === e.source);
             const targetNode = nodes.find((n) => n.id === e.target);
-            const isConditional = sourceNode?.data.kind === 'CONDITIONAL';
-            return {
-              source: sourceNode?.data.nodeCode ?? e.source,
-              target: targetNode?.data.nodeCode ?? e.target,
+            if (!sourceNode || !targetNode) return [];
+            const isConditional = sourceNode.data.kind === 'CONDITIONAL';
+            return [{
+              source: sourceNode.data.nodeCode,
+              target: targetNode.data.nodeCode,
               edgeType: isConditional ? (idx % 2 === 0 ? 'CONDITION_YES' : 'CONDITION_NO') : 'DEFAULT',
               label: typeof e.label === 'string' ? e.label : null,
-              conditionExpr: sourceNode?.data.conditionExpr ?? null,
+              conditionExpr: sourceNode.data.conditionExpr ?? null,
               sortOrder: idx,
-            };
+            }];
           }),
         };
 
