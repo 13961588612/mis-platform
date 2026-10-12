@@ -9,11 +9,20 @@
  * 不在这里吞成空数组——否则下拉会是空白且没有任何「接口坏了」的信号。
  */
 import { useEffect, useState } from 'react';
-import { fetchBizCategories, type BizCategoryItem } from '@/lib/api/biz-category';
+import { fetchBizCategories, fetchBizCategoryTree, type BizCategoryItem } from '@/lib/api/biz-category';
 
 export interface BizCategoryCatalog {
   /** 扁平分类清单（按 sortOrder → name 字典序）。 */
   options: BizCategoryItem[];
+  /** 首次加载中。 */
+  loading: boolean;
+  /** 最近一次加载的错误（null = 正常）。非空时调用方应给出可见提示。 */
+  error: string | null;
+}
+
+export interface BizCategoryTreeCatalog {
+  /** 嵌套分类树（`children` 已填充），供下拉树等按层级渲染。 */
+  tree: BizCategoryItem[];
   /** 首次加载中。 */
   loading: boolean;
   /** 最近一次加载的错误（null = 正常）。非空时调用方应给出可见提示。 */
@@ -56,4 +65,41 @@ export function useBizCategories(tenantId = '1'): BizCategoryCatalog {
   }, [tenantId]);
 
   return { options, loading, error };
+}
+
+/**
+ * 业务分类**树**来源（对标 {@link useBizCategories} 的 tree 版）。
+ *
+ * <p>拉一次 `GET /biz-categories/tree`（嵌套 children）并缓存到 state，供「分类下拉树」
+ * （单 / 多选）按父子层级渲染。降级口径与 {@link useBizCategories} 一致：请求失败时
+ * 置空树并把错误抛给调用方展示，不静默吞掉。
+ */
+export function useBizCategoryTree(tenantId = '1'): BizCategoryTreeCatalog {
+  const [tree, setTree] = useState<BizCategoryItem[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    setLoading(true);
+    setError(null);
+    fetchBizCategoryTree(tenantId)
+      .then((items) => {
+        if (!alive) return;
+        setTree(items);
+      })
+      .catch((e: unknown) => {
+        if (!alive) return;
+        setTree([]);
+        setError(e instanceof Error ? e.message : '获取业务分类失败');
+      })
+      .finally(() => {
+        if (alive) setLoading(false);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [tenantId]);
+
+  return { tree, loading, error };
 }

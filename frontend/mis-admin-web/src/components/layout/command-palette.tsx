@@ -1,70 +1,64 @@
 import { Fragment, useEffect, useMemo, useState } from 'react';
-import { useLocation, useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
 import * as Dialog from '@radix-ui/react-dialog';
 import { Search } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { resolveNavIcon } from '@/lib/nav/icons';
-import { resolveActiveHostAppCode } from '@/lib/nav/host-apps';
-import { fetchApps } from '@/lib/api/platform';
 import { buildSearchIndex, groupLabel } from '@/lib/search/search-registry';
 import type { SearchItem } from '@/lib/search/types';
-import type { AppItem } from '@/types/api';
-import { useAuthStore } from '@/stores/auth-store';
+import { usePortalTabStore } from '@/stores/portal-tab-store';
+import { usePortalTodoTabStore } from '@/stores/portal-todo-tab-store';
 
 interface CommandPaletteProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }
 
-/** 分组排序权重：当前 APP 置顶(0) → 其他 APP(1) → 平台级(2)。 */
-function groupRank(item: SearchItem, currentApp: string): number {
-  if (item.appCode === currentApp) return 0;
-  if (item.appCode === null) return 2;
-  return 1;
+/** 条目分组键：门户三入口自成一组，其余按 `appCode`（`null` → 平台级）。 */
+function groupKey(item: SearchItem): string {
+  return item.portalTab ? '__portal__' : item.appCode ?? '__platform__';
 }
 
+/** 条目分组标题：门户组固定「门户」，其余走 `groupLabel`（appName / 平台级）。 */
+function itemGroupLabel(item: SearchItem): string {
+  return item.portalTab ? '门户' : groupLabel(item.appCode, item.appName);
+}
+
+/**
+ * 命令面板（⌘K）—— 搜索「门户三入口 + 各业务 APP 菜单」。
+ *
+ * <p>索引来源见 `lib/search/search-registry.ts`：门户首页 / 待办事项 / 消息中心 +
+ * system / agent / kb / iqd / finance 五份菜单（**不含工作台 `task`**，也不含 `type:'app'` 项）。
+ *
+ * <p><b>点击跳转（关键）</b>：门户三 Tab **不进 URL**（见 `stores/portal-tab-store.ts`），
+ * 故命中 `portalTab` 的条目必须**先写 store 再跳路由**：`setActiveTab(tab)` → `navigate('/portal')`；
+ * 其余菜单条目直接 `navigate(path)`。
+ *
+ * <p><b>「待办事项」子 Tab 落「全部」</b>：命中 `portalTab==='todo'` 时先写子 Tab
+ * （`setActiveKey('all')`）再写主 Tab，避免待办面板以旧键挂载多打一轮请求
+ * （与 `use-portal-entry.ts` 的写序约定一致）。
+ *
+ * <p>渲染：按分组（`appCode`）展示分组标题；保留 ↑/↓ 高亮、回车跳转、关键词过滤、空态。
+ */
 export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
   const navigate = useNavigate();
-  const location = useLocation();
-  const loginAppCode = useAuthStore((s) => s.app?.code ?? null);
   const [q, setQ] = useState('');
   const [active, setActive] = useState(0);
-  // P0：在面板打开时拉取 APP 列表（含 `type:'app'` 项）；失败静默降级为纯 `*_NAV`。
-  const [apps, setApps] = useState<AppItem[]>([]);
 
-  /** 当前正在使用的 APP（以路由为准，避免登录态 app 跨子系统不更新）。 */
-  const currentApp = resolveActiveHostAppCode(location.pathname, loginAppCode);
+  /** 全量索引（静态，不随渲染变化）。 */
+  const index = useMemo(() => buildSearchIndex(), []);
 
-  useEffect(() => {
-    if (!open) return;
-    let cancelled = false;
-    fetchApps()
-      .then((list) => {
-        if (!cancelled) setApps(list);
-      })
-      .catch(() => undefined);
-    return () => {
-      cancelled = true;
-    };
-  }, [open]);
-
-  /** 全量索引（6 份 `*_NAV` + APP 项），随 `apps` 变化重建。 */
-  const index = useMemo(() => buildSearchIndex(apps), [apps]);
-
-  /** 过滤 + 分组排序：当前 APP 优先 → 其他 APP → 平台级最后。 */
+  /** 关键词过滤（命中标题 / 路径 / 别名即可）。无关键词：展示全部。 */
   const items = useMemo(() => {
     const kw = q.trim().toLowerCase();
-    const filtered = kw
-      ? index.filter(
-          (i) =>
-            i.title.toLowerCase().includes(kw) ||
-            (i.path ?? '').toLowerCase().includes(kw) ||
-            (i.keywords ?? []).some((k) => k.toLowerCase().includes(kw)),
-        )
-      : index; // 无关键词：展示全部（分组），与既有「打开即铺开」行为一致
-    // 稳定排序：同权重内保持原顺序（原顺序按 `*_NAV` 源分组，天然按 APP 连续）。
-    return [...filtered].sort((a, b) => groupRank(a, currentApp) - groupRank(b, currentApp));
-  }, [index, q, currentApp]);
+    if (!kw) return index;
+    return index.filter(
+      (i) =>
+        i.title.toLowerCase().includes(kw) ||
+        (i.path ?? '').toLowerCase().includes(kw) ||
+        (i.keywords ?? []).some((k) => k.toLowerCase().includes(kw)),
+    );
+  }, [index, q]);
 
   useEffect(() => {
     if (open) {
@@ -77,9 +71,17 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
     setActive(0);
   }, [q]);
 
-  const go = (path: string) => {
+  const go = (item: SearchItem) => {
     onOpenChange(false);
-    navigate(path);
+    if (item.portalTab) {
+      if (item.portalTab === 'todo') {
+        usePortalTodoTabStore.getState().setActiveKey('all');
+      }
+      usePortalTabStore.getState().setActiveTab(item.portalTab);
+      navigate('/portal');
+      return;
+    }
+    if (item.path) navigate(item.path);
   };
 
   return (
@@ -97,20 +99,19 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
               setActive((i) => Math.max(0, i - 1));
             } else if (e.key === 'Enter' && items[active]) {
               e.preventDefault();
-              const target = items[active];
-              if (target.path) go(target.path);
+              go(items[active]);
             }
           }}
         >
           <Dialog.Title className="sr-only">命令面板</Dialog.Title>
-          <Dialog.Description className="sr-only">搜索全部应用的页面与菜单并快速跳转</Dialog.Description>
+          <Dialog.Description className="sr-only">搜索门户页面与各应用菜单并快速跳转</Dialog.Description>
           <div className="flex items-center gap-2 border-b px-3">
             <Search className="h-4 w-4 text-muted-foreground" />
             <input
               autoFocus
               value={q}
               onChange={(e) => setQ(e.target.value)}
-              placeholder="搜索页面、菜单、应用…"
+              placeholder="搜索页面、菜单…"
               className="h-12 w-full bg-transparent text-sm outline-none"
             />
             <kbd className="hidden rounded border bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground sm:inline">
@@ -124,12 +125,12 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
               items.map((item, idx) => {
                 const Icon = resolveNavIcon(item.icon);
                 const prev = items[idx - 1];
-                const showHeader = !prev || prev.appCode !== item.appCode;
+                const showHeader = !prev || groupKey(prev) !== groupKey(item);
                 return (
                   <Fragment key={item.id}>
                     {showHeader ? (
                       <div className="px-3 pb-1 pt-2 text-[11px] font-medium text-muted-foreground">
-                        {groupLabel(item.appCode, item.appName)}
+                        {itemGroupLabel(item)}
                       </div>
                     ) : null}
                     <button
@@ -137,20 +138,12 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
                       className={cn(
                         'flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm',
                         idx === active ? 'bg-accent' : 'hover:bg-accent/70',
-                        !item.path && 'cursor-default opacity-60',
                       )}
                       onMouseEnter={() => setActive(idx)}
-                      onClick={() => {
-                        if (item.path) go(item.path);
-                      }}
+                      onClick={() => go(item)}
                     >
                       <Icon className="h-4 w-4 shrink-0 text-muted-foreground" />
                       <span className="min-w-0 flex-1 truncate font-medium">{item.title}</span>
-                      {item.type === 'app' ? (
-                        <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
-                          应用
-                        </span>
-                      ) : null}
                     </button>
                   </Fragment>
                 );

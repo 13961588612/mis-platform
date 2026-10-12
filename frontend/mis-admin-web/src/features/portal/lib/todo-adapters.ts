@@ -1,4 +1,4 @@
-import type { TaskItem } from '@/lib/api/tasks';
+import type { PortalMatterItem, TaskItem } from '@/lib/api/tasks';
 import type { WfInstance } from '@/lib/api/workflow';
 import { wfInstanceId } from '@/lib/api/wf-instance';
 import type { PortalTodoRow } from '../types';
@@ -26,6 +26,8 @@ export function fromTaskItem(item: TaskItem, opts?: { category?: string }): Port
     // 待办源：处理人即当前用户；发起人不在 TaskItem 上（缺失，不臆造）。
     assigneeName: item.assigneeName ?? undefined,
     createdAt: item.createdAt,
+    appCode: item.appCode,
+    bizType: item.bizType,
     instanceId: wfInstanceId(item),
     sysTaskId: item.id,
     wfTaskId: null,
@@ -48,10 +50,41 @@ export function fromWfInstance(inst: WfInstance): PortalTodoRow {
     status: inst.status,
     initiatorName: inst.initiatorName ?? undefined,
     createdAt: inst.createdAt,
+    // 「我发起的」源：业务类型取 `businessType`（实例无独立 bizType 字段）。
+    appCode: inst.appCode,
+    bizType: inst.businessType,
     instanceId: inst.id,
     sysTaskId: null,
     wfTaskId: null,
     category: 'mySent',
     raw: inst,
+  };
+}
+
+/**
+ * `matters` 源（`/tasks/matters`：三源 UNION 聚合「全部」）→ 统一行。
+ *
+ * <p>列已在后端归一（TASK/INSTANCE 两支投影为同名输出列），故本适配器是**纯映射**：
+ * 后端给什么用什么，不做二次解析、不臆造缺失字段。
+ * `key` 加 `kind` 前缀（`task-`/`instance-`），避免同 id 的 TASK 行与 INSTANCE 行 key 冲突
+ * （设计 §8.1：重叠行**字面保留两行**）。
+ * `category` 直接取 VO（TASK=其 `status` 字面；INSTANCE=`'mySent'`，主理人裁定#3）。
+ */
+export function fromPortalMatter(item: PortalMatterItem): PortalTodoRow {
+  return {
+    key: `${item.kind.toLowerCase()}-${item.id}`,
+    title: item.title,
+    subtitle: item.subtitle,
+    status: item.status,
+    initiatorName: item.initiatorName ?? undefined,
+    assigneeName: item.assigneeName ?? undefined,
+    createdAt: item.createdAt,
+    appCode: item.appCode,
+    bizType: item.bizType,
+    instanceId: item.instanceId,
+    sysTaskId: item.sysTaskId,
+    wfTaskId: null,
+    category: item.category,
+    raw: item,
   };
 }

@@ -3,6 +3,8 @@ import { ChevronRight, FileClock } from 'lucide-react';
 import { fetchMyProcesses, type WfInstance } from '@/lib/api/workflow';
 import { cn } from '@/lib/utils';
 import { TodoDetailDrawer } from './todo-detail-drawer';
+import { PortalMetaTags } from './portal-meta-tags';
+import { usePortalLookups } from '../lib/use-portal-lookups';
 import { usePortalEntry } from '../lib/use-portal-entry';
 
 interface ProcessBoardProps {
@@ -31,6 +33,7 @@ const STATUS: Record<string, { text: string; cls: string }> = {
  */
 export function ProcessBoard({ tenantId, userId }: ProcessBoardProps) {
   const entry = usePortalEntry();
+  const { appNameOf, bizTypeNameOf } = usePortalLookups(tenantId);
   const [items, setItems] = useState<WfInstance[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -110,6 +113,7 @@ export function ProcessBoard({ tenantId, userId }: ProcessBoardProps) {
                   <span className="min-w-0 flex-1 truncate text-[13px]">
                     {item.businessType} / {item.businessId}
                   </span>
+                  <PortalMetaTags appName={appNameOf(item.appCode)} bizTypeName={bizTypeNameOf(item.businessType)} />
                   <span className={cn('shrink-0 rounded px-1.5 py-0.5 text-[10px]', st.cls)}>{st.text}</span>
                   <ChevronRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
                 </button>

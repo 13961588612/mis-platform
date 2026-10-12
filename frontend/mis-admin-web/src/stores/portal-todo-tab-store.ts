@@ -1,25 +1,34 @@
 import { create } from 'zustand';
 
 /**
- * 门户「待办事项」六类子 Tab 的键（与 `features/portal/lib/todo-tabs.ts` 的
+ * 门户「待办事项」子 Tab 的键（与 `features/portal/lib/todo-tabs.ts` 的
  * `TODO_TABS` 一一对应）。
  *
  * <p>类型单点定义在本文件（`stores/` 层），`todo-tabs.ts` 的
  * `TodoTabConfig.key` 反过来引用本类型——**依赖方向是 feature → stores**，
  * 与「共享状态放 stores、两侧只依赖 stores」的既有约定一致
  * （同 `portal-tab-store.ts`）。
+ *
+ * <p>本轮新增 `'all'`（「全部」= 三源聚合，`source='matters'`）：它是**首项且默认**。
  */
-export type TodoTabKey = 'pending' | 'approving' | 'approved' | 'rejected' | 'mySent' | 'myHandled';
+export type TodoTabKey =
+  | 'all'
+  | 'pending'
+  | 'approving'
+  | 'approved'
+  | 'rejected'
+  | 'mySent'
+  | 'myHandled';
 
 /**
- * 默认子 Tab（首个：待处理）。
+ * 默认子 Tab（首个：「全部」）。
  *
  * <p>`TODO_TABS` 的首项必须与本值一致：`todo-tabs.ts` 的 `key` 已受
  * {@link TodoTabKey} 约束（字面量写错即编译报错），另有
  * `features/portal/__tests__/todo-tabs.test.tsx` 的「默认键对齐」用例兜底
  * （断言 `TODO_TABS[0].key === DEFAULT_TODO_TAB_KEY`），防止两处漂移。
  */
-export const DEFAULT_TODO_TAB_KEY: TodoTabKey = 'pending';
+export const DEFAULT_TODO_TAB_KEY: TodoTabKey = 'all';
 
 interface PortalTodoTabState {
   /**
@@ -41,7 +50,7 @@ interface PortalTodoTabState {
  *
  * <p><b>为什么需要它</b>（本轮结构改动的核心）：首页工作台的三块板
  * （`TaskBoard` / `ProcessBoard` / `WorkbenchOverview`）与「待办事项」Tab
- * 的六类子 Tab（`PortalTodoTab`）处在**两棵不同的组件树**里——前者挂在
+ * 的子 Tab 条（`PortalTodoTab`）处在**两棵不同的组件树**里——前者挂在
  * `PortalHomeTab`，后者由 `PortalPage` 按 `activeTab` 条件渲染。
  * 子 Tab 键原先是 `PortalTodoTab` 的组件内 `useState`，首页那侧的「查看全部」
  * 根本改不到它，只能靠跳路由（`/task/pending` 等）绕开。用户要求这些入口

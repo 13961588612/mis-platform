@@ -16,6 +16,7 @@ import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import { Outlet, useLocation } from 'react-router-dom';
 import { AppRouter } from './router';
 import { useAuthStore } from '@/stores/auth-store';
+import { bootstrapSession } from '@/lib/auth/bootstrap';
 // 真实解析逻辑（PAGE_MAP + DYNAMIC_PAGES），回归测试必须打真实实现而非替身。
 import {
   resolveDynamicPageMeta,
@@ -213,6 +214,12 @@ describe('回归：/task/process/:id 动态明细路由（错放 PAGE_MAP → �
 
   afterEach(() => {
     cleanup();
+    // [QA 加固] 这两个 describe 原先只 cleanup() 不清 mock 调用记录。其中
+    // `/task/process/:id` 的「路由实渲染」用例会以**已登录 + 空 menus** 渲染 AppRouter，
+    // 从而调用一次 bootstrapSession；该记录若不清理，会被后面的「权限刷新回归」用例
+    // 的 `toHaveBeenCalled()` 误判为通过（空断言）——变异验证实测：把 SessionBootstrap
+    // 改回早退后，整文件跑仍 28 passed，单跑回归用例才失败。故补上 clearAllMocks()。
+    vi.clearAllMocks();
   });
 
   it('/task/process/128 能解析出 ProcessDetailPage（不是 null / 页面不存在）', () => {
@@ -281,6 +288,12 @@ describe('回归：流程详情在无 Route 上下文下从 pathname 取 ID（�
 
   afterEach(() => {
     cleanup();
+    // [QA 加固] 这两个 describe 原先只 cleanup() 不清 mock 调用记录。其中
+    // `/task/process/:id` 的「路由实渲染」用例会以**已登录 + 空 menus** 渲染 AppRouter，
+    // 从而调用一次 bootstrapSession；该记录若不清理，会被后面的「权限刷新回归」用例
+    // 的 `toHaveBeenCalled()` 误判为通过（空断言）——变异验证实测：把 SessionBootstrap
+    // 改回早退后，整文件跑仍 28 passed，单跑回归用例才失败。故补上 clearAllMocks()。
+    vi.clearAllMocks();
   });
 
   it('全链路：/task/process/128 渲染出的页面拿到 ID 128', async () => {
@@ -306,5 +319,51 @@ describe('回归：流程详情在无 Route 上下文下从 pathname 取 ID（�
     goto('/task/process/abc');
     expect(await screen.findByText('流程实例 ID 非法')).toBeTruthy();
     expect(screen.queryByTestId('process-shell')).toBeNull();
+  });
+});
+
+/**
+ * 回归：**登录后权限永不刷新**（`SessionBootstrap` 曾用 `menus.length > 0` 早退）。
+ *
+ * <p>`auth-store` 是 zustand `persist`（`partialize` 含 `permissions` + `menus`）：登录后
+ * `menus` 落 localStorage，此后每次刷新页面旧实现都命中 `menus.length > 0` 直接就绪并
+ * **return，从不调用** `bootstrapSession()` ⇒ `permissions` 永远是上次登录时的旧集合
+ * （例如 V140 授权前的那份）⇒ `PermissionGate` 把「业务分类」菜单的新增 / 编辑 / 删除
+ * 按钮全部隐藏，用户看到「没有编辑按钮」。
+ *
+ * <p>本用例在 store 里预置**非空 `menus` 且已登录**，断言 `bootstrapSession` **仍被调用**。
+ * 旧实现下该断言必失败——这就是本轮 Bug 的回归门。
+ */
+describe('回归：已登录会话每次整页加载都刷新权限（menus 缓存不得早退）', () => {
+  beforeEach(() => {
+    useAuthStore.setState({
+      accessToken: 'test-token',
+      expiresAt: Date.now() + 3_600_000,
+      user: {
+        id: '700001',
+        employeeId: 'E1',
+        username: 'tester',
+        realName: '测试员',
+        avatarUrl: null,
+        deptId: null,
+        deptName: null,
+        roles: [],
+        mustChangePassword: false,
+      },
+      menus: [
+        { id: '1', name: '系统', path: '/system', component: null, meta: { title: '系统' } },
+        { id: '2', name: '业务分类', path: '/system/biz-category', component: null, meta: { title: '业务分类' } },
+      ],
+    });
+  });
+
+  afterEach(() => {
+    cleanup();
+    vi.clearAllMocks();
+  });
+
+  it('预置非空 menus + 已登录：仍调用 bootstrapSession()（旧实现下必失败）', async () => {
+    goto('/portal');
+    await waitFor(() => expect(bootstrapSession).toHaveBeenCalled());
   });
 });

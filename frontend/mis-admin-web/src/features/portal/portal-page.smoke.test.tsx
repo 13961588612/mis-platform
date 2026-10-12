@@ -58,6 +58,12 @@ vi.mock('@/lib/api/workflow', () => ({
   fetchMyProcesses: vi.fn(),
 }));
 
+// 首页三板块表格化后经 `usePortalLookups` 拉取业务分类（应用列表由 platform mock 覆盖），
+// 整体替换该 api 模块避免真实 axios。
+vi.mock('@/lib/api/biz-category', () => ({
+  fetchBizCategories: vi.fn().mockResolvedValue([]),
+}));
+
 vi.mock('@/lib/nav/iframe-apps', () => ({
   registerIframeApps: vi.fn(),
   getIframeApp: vi.fn(),

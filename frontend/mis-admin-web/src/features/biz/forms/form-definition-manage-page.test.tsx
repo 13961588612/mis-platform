@@ -139,7 +139,7 @@ describe('FormDefinitionManagePage', () => {
     expect(screen.getByText('未分类', { selector: 'td' })).toBeTruthy();
   });
 
-  it('「新增表单」对话框的 code 是下拉选已注册组件，且含分类下拉', async () => {
+  it('「新增表单」对话框的 code 是下拉选已注册组件，且分类为下拉树', async () => {
     render(
       <MemoryRouter>
         <FormDefinitionManagePage />
@@ -151,9 +151,13 @@ describe('FormDefinitionManagePage', () => {
     const select = screen.getByLabelText('表单组件') as HTMLSelectElement;
     expect(select.tagName).toBe('SELECT');
     expect(screen.getByRole('option', { name: 'PUR_FORM' })).toBeTruthy();
-    // 分类下拉存在（含「未分类」选项）
-    expect((screen.getByLabelText('分类') as HTMLSelectElement).tagName).toBe('SELECT');
-    expect(screen.getByRole('option', { name: '未分类' })).toBeTruthy();
+    // 分类字段是下拉树触发器（按钮，不再是原生 <select>），未选显示占位「未分类」
+    const categoryTrigger = screen.getByLabelText('分类') as HTMLButtonElement;
+    expect(categoryTrigger.tagName).toBe('BUTTON');
+    expect(categoryTrigger.textContent).toContain('未分类');
+    // 展开后可见分类树节点（父子层级）
+    fireEvent.click(categoryTrigger);
+    expect(await screen.findByRole('button', { name: '根分类' })).toBeTruthy();
   });
 
   it('code 未关联前端组件的行标红并带「未关联组件」徽标', async () => {

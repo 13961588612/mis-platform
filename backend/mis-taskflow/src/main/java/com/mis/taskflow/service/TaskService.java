@@ -115,15 +115,33 @@ public class TaskService {
     /**
      * 我的待办分页（可选 keyword + 可选应用归属过滤，P0）。
      *
-     * <p>{@code scope}：{@code APP}&amp;appCode 非空 → {@code app_code = :appCode}；{@code PLATFORM}
-     * → {@code app_code IS NULL}；其余（{@code ALL}/未传）→ 不加条件（与旧行为逐字等价，零回归）。
-     * 与 status 组合共 6 条独立仓储查询（刻意不写 {@code (:appCode is null or ...)}）。
+     * <p>保留既有 8 参签名（零回归）：委派给带发起人/参与人的新核心（两尾参为 {@code null}）。
      */
     @Transactional(readOnly = true)
     public PageResult<TaskVO> myTasks(Long tenantId, Long assigneeId, String status, String keyword,
                                       String appCode, String scope, int page, int size) {
+        return myTasks(tenantId, assigneeId, status, keyword, appCode, scope, null, null, page, size);
+    }
+
+    /**
+     * 我的待办分页（可选 keyword + 可选发起人/参与人 + 可选应用归属过滤）。
+     *
+     * <p>{@code scope}：{@code APP}&amp;appCode 非空 → {@code app_code = :appCode}；{@code PLATFORM}
+     * → {@code app_code IS NULL}；其余（{@code ALL}/未传）→ 不加条件（与旧行为逐字等价，零回归）。
+     * 与 status 组合共 6 条独立仓储查询（刻意不写 {@code (:appCode is null or ...)}）。
+     *
+     * <p>{@code initiatorName}/{@code participantName}：空白 ⇒ LIKE 模式为 {@code null} ⇒
+     * 仓储查询对应 clause 恒真（零回归）；非空 ⇒ 按「发起人 = 所属实例 initiator_name」
+     * 「参与人 = 该实例任一 wf_task 处理人（或关联 sys_task 处理人）」过滤。
+     */
+    @Transactional(readOnly = true)
+    public PageResult<TaskVO> myTasks(Long tenantId, Long assigneeId, String status, String keyword,
+                                      String appCode, String scope, String initiatorName, String participantName,
+                                      int page, int size) {
         Pageable pageable = PageRequest.of(Math.max(page - 1, 0), clampSize(size));
         String pattern = likePattern(keyword);
+        String initiatorPattern = likePattern(initiatorName);
+        String participantPattern = likePattern(participantName);
         String app = trimToNull(appCode);
         String sc = AppScope.normalizeScope(scope);
         boolean hasStatus = StringUtils.hasText(status);
@@ -132,16 +150,16 @@ public class TaskService {
         Page<SysTask> p;
         if (AppScope.SCOPE_APP.equals(sc) && app != null) {
             p = hasStatus
-                    ? taskRepository.findByAssigneeAndApp(tenantId, assigneeId, st, pattern, app, pageable)
-                    : taskRepository.findOpenByAssigneeAndApp(tenantId, assigneeId, pattern, app, pageable);
+                    ? taskRepository.findByAssigneeAndApp(tenantId, assigneeId, st, pattern, initiatorPattern, participantPattern, app, pageable)
+                    : taskRepository.findOpenByAssigneeAndApp(tenantId, assigneeId, pattern, initiatorPattern, participantPattern, app, pageable);
         } else if (AppScope.SCOPE_PLATFORM.equals(sc)) {
             p = hasStatus
-                    ? taskRepository.findByAssigneePlatform(tenantId, assigneeId, st, pattern, pageable)
-                    : taskRepository.findOpenByAssigneePlatform(tenantId, assigneeId, pattern, pageable);
+                    ? taskRepository.findByAssigneePlatform(tenantId, assigneeId, st, pattern, initiatorPattern, participantPattern, pageable)
+                    : taskRepository.findOpenByAssigneePlatform(tenantId, assigneeId, pattern, initiatorPattern, participantPattern, pageable);
         } else {
             p = hasStatus
-                    ? taskRepository.findByAssignee(tenantId, assigneeId, st, pattern, pageable)
-                    : taskRepository.findOpenByAssignee(tenantId, assigneeId, pattern, pageable);
+                    ? taskRepository.findByAssignee(tenantId, assigneeId, st, pattern, initiatorPattern, participantPattern, pageable)
+                    : taskRepository.findOpenByAssignee(tenantId, assigneeId, pattern, initiatorPattern, participantPattern, pageable);
         }
         return PageResult.of(page, pageable.getPageSize(), p.getTotalElements(),
                 p.getContent().stream().map(this::toVo).toList());
@@ -166,23 +184,37 @@ public class TaskService {
     /**
      * 我处理的（handled）分页（可选 keyword + 可选应用归属过滤，P0）。
      *
-     * <p>{@code scope} 语义见 {@link #myTasks(Long, Long, String, String, String, String, int, int)}。
+     * <p>保留既有 7 参签名（零回归）：委派给带发起人/参与人的新核心（两尾参为 {@code null}）。
      */
     @Transactional(readOnly = true)
     public PageResult<TaskVO> handledTasks(Long tenantId, Long assigneeId, String keyword,
                                            String appCode, String scope, int page, int size) {
+        return handledTasks(tenantId, assigneeId, keyword, appCode, scope, null, null, page, size);
+    }
+
+    /**
+     * 我处理的（handled）分页（可选 keyword + 可选发起人/参与人 + 可选应用归属过滤）。
+     *
+     * <p>{@code scope} 语义同 myTasks；发起人/参与人空白 ⇒ 零回归。
+     */
+    @Transactional(readOnly = true)
+    public PageResult<TaskVO> handledTasks(Long tenantId, Long assigneeId, String keyword,
+                                           String appCode, String scope, String initiatorName, String participantName,
+                                           int page, int size) {
         Pageable pageable = PageRequest.of(Math.max(page - 1, 0), clampSize(size));
         String pattern = likePattern(keyword);
+        String initiatorPattern = likePattern(initiatorName);
+        String participantPattern = likePattern(participantName);
         String app = trimToNull(appCode);
         String sc = AppScope.normalizeScope(scope);
 
         Page<SysTask> p;
         if (AppScope.SCOPE_APP.equals(sc) && app != null) {
-            p = taskRepository.findHandledByAssigneeAndApp(tenantId, assigneeId, pattern, app, pageable);
+            p = taskRepository.findHandledByAssigneeAndApp(tenantId, assigneeId, pattern, initiatorPattern, participantPattern, app, pageable);
         } else if (AppScope.SCOPE_PLATFORM.equals(sc)) {
-            p = taskRepository.findHandledByAssigneePlatform(tenantId, assigneeId, pattern, pageable);
+            p = taskRepository.findHandledByAssigneePlatform(tenantId, assigneeId, pattern, initiatorPattern, participantPattern, pageable);
         } else {
-            p = taskRepository.findHandledByAssignee(tenantId, assigneeId, pattern, pageable);
+            p = taskRepository.findHandledByAssignee(tenantId, assigneeId, pattern, initiatorPattern, participantPattern, pageable);
         }
         return PageResult.of(page, pageable.getPageSize(), p.getTotalElements(),
                 p.getContent().stream().map(this::toVo).toList());

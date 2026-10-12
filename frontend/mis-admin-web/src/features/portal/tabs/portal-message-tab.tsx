@@ -7,6 +7,7 @@ import { EmptyState, ListError, ListLoading } from '@/components/common/empty-st
 import { PaginationFooter } from '@/components/common/pagination-footer';
 import { UnreadDot } from '@/components/common/unread-dot';
 import { MessageDetailDrawer } from '@/features/portal/components/message-detail-drawer';
+import { usePortalLookups } from '@/features/portal/lib/use-portal-lookups';
 import {
   fetchInbox,
   fetchMessageStats,
@@ -30,46 +31,57 @@ const PAGE_SIZE = 20;
 export const APP_SCOPE_FILTER: { scope?: string; appCode?: string } = Object.freeze({});
 
 /**
- * 消息四类子 Tab（设计 §2.3 / §8.2 T04）。
+ * 消息子 Tab（设计 §2.3 / §8.2 T04；本轮新增「全部」并设为默认）。
+ *
+ * <p>首位「全部」为聚合视图：**不传 `msgType`**（后端 BFF `GET /messages/inbox`、`/messages/search`
+ * 的 `msgType` 均为 `required=false`，缺省 = 不过滤类型）；其余四类为业务子类，传对应 `msgType`。
  *
  * <p>严格四类：审批 `APPROVAL` / 通知 `NOTIFY` / 提醒 `REMIND` / 系统告警 `SYSTEM_ALERT`。
- * 用户口语的「通过」= 结果通知，归入 `NOTIFY`，**不是独立类型**。默认第一类「审批」。
+ * 用户口语的「通过」= 结果通知，归入 `NOTIFY`，**不是独立类型**。默认第一类「全部」。
  */
 export const MSG_TABS = [
+  { key: 'ALL', label: '全部' },
   { key: 'APPROVAL', label: '审批' },
   { key: 'NOTIFY', label: '通知' },
   { key: 'REMIND', label: '提醒' },
   { key: 'SYSTEM_ALERT', label: '系统告警' },
 ] as const;
 
-export const DEFAULT_MSG_TAB_KEY = MSG_TABS[0].key;
+export const DEFAULT_MSG_TAB_KEY = 'ALL';
 
 function formatTime(iso: string | null | undefined): string {
   return iso ? iso.replace('T', ' ').slice(0, 16) : '-';
 }
 
+/** 表头单元格基础类：13px、左对齐、列间竖线（首列无）。 */
+const TH_CLASS =
+  'sticky top-0 z-10 h-9 whitespace-nowrap border-l border-border/60 bg-table-header px-3 text-left align-middle text-[13px] font-medium text-muted-foreground first:border-l-0';
+/** 数据单元格基础类：列间竖线（首列无）。 */
+const TD_CLASS = 'border-l border-border/60 px-3 py-2 align-middle first:border-l-0';
+
 /**
  * 门户「消息中心」Tab（T04：四类聚合 + 显式搜索 + 列表 + 详情抽屉）。
  *
- * <p><b>四类如何复用 inbox 范式</b>：结构与 `inbox-page.tsx` 同构（子 Tab + 搜索 + 列表 +
- * 右侧抽屉 + 标已读），差异在：①子 Tab 固定四类且**默认「审批」**（inbox 有「全部」，门户不要）；
- * ②搜索为**显式查询**（点「搜索」/回车才发请求），不是 inbox 的 300ms 防抖；
- * ③抽屉抽成独立组件 `message-detail-drawer.tsx`（承载流程表单 + 回复）。
+ * <p><b>首 Tab 如何复用 inbox 范式</b>：结构与 `inbox-page.tsx` 同构（子 Tab + 搜索 + 列表 +
+ * 右侧抽屉 + 标已读），差异在：①子 Tab 为「全部 + 固定四类」且**默认「全部」**（聚合：不传 msgType）；②搜索为**显式查询**
+ * （点「搜索」/回车才发请求）；③抽屉抽成独立组件 `message-detail-drawer.tsx`。
  *
- * <p><b>显式搜索（沿用 T03a 范式）</b>：输入框只更新 `draft`，它不是数据加载依赖；
- * 只有点「搜索」/回车把 `draft` 提交为 `applied`（并 `setPage(1)`）才触发请求，
- * 故「打字过程中绝不发请求」。**空关键词走 `fetchInbox`，非空走 `searchMessages`**。
+ * <p><b>本轮（列表改表格）</b>：列表由 `<ul>` 卡片行改为 `<table>`，新增两列
+ * **「平台 / 关联应用」**（`appCode == null` → 「平台」，否则应用名，取不到回退 code）与
+ * **「业务类型」**（`bizType == null` → 「—」，否则业务分类名，取不到回退 code）。
+ * 两列取值经 {@link usePortalLookups} 统一映射（两 Tab 复用，避免重复请求）。
  *
- * <p><b>点消息</b>：打开右侧抽屉（`openId` 走 `useState`，**不入 URL**——keep-alive 坑，§1.2），
- * 未读的顺手标已读（失败不阻断查看）。
+ * <p><b>整行可点（R-1）</b>：`<tr>` 配 `role="button"` + `tabIndex` + `onKeyDown`(Enter/Space)，
+ * 点击打开右侧抽屉（保持原逻辑）。
  *
- * <p>布局：列表滚动容器**单层**（`min-h-0 flex-1 overflow-auto`）。
+ * <p>布局：滚动容器**单层**（`min-h-0 flex-1 overflow-auto`），表格 `table-fixed` 不横向溢出。
  */
 export function PortalMessageTab() {
   const user = useAuthStore((s) => s.user);
   // 单租户阶段固定 tenantId=1（与门户其它页同口径）。
   const tenantId = '1';
   const userId = user?.id ?? '';
+  const { appNameOf, bizTypeNameOf } = usePortalLookups(tenantId);
 
   const [activeKey, setActiveKey] = useState<string>(DEFAULT_MSG_TAB_KEY);
   /** 输入框即时值（受控；**不是**数据加载依赖，故打字不触发请求）。 */
@@ -86,7 +98,12 @@ export function PortalMessageTab() {
   // 抽屉临时态（T04）：点消息 → 打开右侧抽屉，**不入 URL**（keep-alive 坑，设计 §1.2）。
   const [openId, setOpenId] = useState<string | null>(null);
 
-  /** 按当前子 Tab 的 msgType 拉取（空关键词 fetchInbox / 非空 searchMessages）。依赖只含 `applied`/`page`/`activeKey`。 */
+  /**
+   * 按当前子 Tab 拉取（空关键词 fetchInbox / 非空 searchMessages）。
+   *
+   * <p><b>「全部」聚合</b>：`activeKey === 'ALL'` 时**不传 `msgType`**（后端缺省 = 不过滤类型），
+   * 其余四类传对应 `msgType`。依赖只含 `applied`/`page`/`activeKey`。
+   */
   const load = useCallback(async () => {
     if (!userId) {
       setItems([]);
@@ -99,7 +116,8 @@ export function PortalMessageTab() {
     setLoading(true);
     setError(null);
     try {
-      const params = { tenantId, userId, msgType: activeKey, page, size: PAGE_SIZE, ...APP_SCOPE_FILTER };
+      const base = { tenantId, userId, page, size: PAGE_SIZE, ...APP_SCOPE_FILTER };
+      const params = activeKey === 'ALL' ? base : { ...base, msgType: activeKey };
       const result = kw
         ? await searchMessages({ ...params, q: kw })
         : await fetchInbox(params);
@@ -190,6 +208,7 @@ export function PortalMessageTab() {
           </Button>
         </div>
 
+        {/* 单层滚动容器：直接放 table，禁 h-full overflow-auto 嵌套。 */}
         <div className="min-h-0 flex-1 overflow-auto rounded-md border bg-card">
           {loading ? (
             <ListLoading />
@@ -202,21 +221,42 @@ export function PortalMessageTab() {
               description={hasKeyword ? `关键词「${applied.trim()}」无结果` : undefined}
             />
           ) : (
-            <ul className="divide-y">
-              {items.map((item) => (
-                <li key={item.id}>
-                  <button
-                    type="button"
+            <table className="w-full table-fixed border-separate border-spacing-0 text-left text-[13px]">
+              <colgroup>
+                <col />
+                <col style={{ width: '9rem' }} />
+                <col style={{ width: '8rem' }} />
+                <col style={{ width: '7rem' }} />
+                <col style={{ width: '9rem' }} />
+              </colgroup>
+              <thead>
+                <tr>
+                  <th className={TH_CLASS}>标题</th>
+                  <th className={TH_CLASS}>平台 / 关联应用</th>
+                  <th className={TH_CLASS}>业务类型</th>
+                  <th className={TH_CLASS}>发送人</th>
+                  <th className={TH_CLASS}>时间</th>
+                </tr>
+              </thead>
+              <tbody>
+                {items.map((item) => (
+                  <tr
+                    key={item.id}
+                    role="button"
+                    tabIndex={0}
                     onClick={() => handleOpen(item)}
-                    className={cn(
-                      'flex w-full items-start gap-3 px-4 py-3 text-left transition hover:bg-muted/40',
-                      !item.read && 'bg-primary/5',
-                    )}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault();
+                        handleOpen(item);
+                      }
+                    }}
+                    className="cursor-pointer border-b border-border/50 even:bg-table-stripe hover:bg-table-hover"
                   >
-                    <UnreadDot read={item.read} unreadClassName="bg-destructive" />
-                    <div className="min-w-0 flex-1">
+                    <td className={cn(TD_CLASS, 'min-w-0')}>
                       <div className="flex items-center gap-2">
-                        <span className={cn('truncate text-[13px]', !item.read && 'font-semibold')}>
+                        <UnreadDot read={item.read} unreadClassName="bg-destructive" />
+                        <span className={cn('truncate', !item.read && 'font-semibold')}>
                           {item.title}
                         </span>
                         {item.instanceId ? (
@@ -228,18 +268,21 @@ export function PortalMessageTab() {
                       {item.summary ? (
                         <p className="mt-0.5 truncate text-[12px] text-muted-foreground">{item.summary}</p>
                       ) : null}
-                      <div className="mt-1 flex items-center gap-2 text-[11px] text-muted-foreground">
-                        <span>{item.category}</span>
-                        <span>·</span>
-                        <span>{item.senderName ?? '系统'}</span>
-                        <span>·</span>
-                        <span>{formatTime(item.createdAt)}</span>
-                      </div>
-                    </div>
-                  </button>
-                </li>
-              ))}
-            </ul>
+                    </td>
+                    <td className={cn(TD_CLASS, 'truncate text-muted-foreground')} title={appNameOf(item.appCode)}>
+                      {appNameOf(item.appCode)}
+                    </td>
+                    <td className={cn(TD_CLASS, 'truncate text-muted-foreground')} title={bizTypeNameOf(item.bizType)}>
+                      {bizTypeNameOf(item.bizType)}
+                    </td>
+                    <td className={cn(TD_CLASS, 'truncate text-muted-foreground')}>{item.senderName ?? '系统'}</td>
+                    <td className={cn(TD_CLASS, 'whitespace-nowrap text-muted-foreground')}>
+                      {formatTime(item.createdAt)}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           )}
         </div>
 

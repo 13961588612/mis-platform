@@ -5,6 +5,8 @@ import { ListError, ListLoading } from '@/components/common/empty-state';
 import { PriorityBadge } from '@/components/common/priority-badge';
 import { wfInstanceId } from '@/lib/api/wf-instance';
 import { TodoDetailDrawer } from './todo-detail-drawer';
+import { PortalMetaTags } from './portal-meta-tags';
+import { usePortalLookups } from '../lib/use-portal-lookups';
 import { usePortalEntry } from '../lib/use-portal-entry';
 
 interface TaskBoardProps {
@@ -30,6 +32,7 @@ interface TaskBoardProps {
  */
 export function TaskBoard({ tenantId, userId }: TaskBoardProps) {
   const entry = usePortalEntry();
+  const { appNameOf, bizTypeNameOf } = usePortalLookups(tenantId);
   const [items, setItems] = useState<TaskItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -111,6 +114,7 @@ export function TaskBoard({ tenantId, userId }: TaskBoardProps) {
                 >
                   <PriorityBadge priority={item.priority} />
                   <span className="min-w-0 flex-1 truncate text-[13px]">{item.bizTitle}</span>
+                  <PortalMetaTags appName={appNameOf(item.appCode)} bizTypeName={bizTypeNameOf(item.bizType)} />
                   {overdue ? (
                     <span className="inline-flex shrink-0 items-center gap-0.5 text-[11px] text-destructive">
                       <AlertTriangle className="h-3 w-3" /> 逾期

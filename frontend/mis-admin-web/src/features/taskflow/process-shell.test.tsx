@@ -55,6 +55,7 @@ const baseDetail = {
     postRetryCount: 0,
     createdAt: '2026-10-08T10:00:00',
     completedAt: null,
+    appCode: null,
   },
   tasks: [
     {
@@ -116,6 +117,7 @@ function pendingTask(id: string, instanceId: string) {
     read: false,
     completedAt: null,
     createdAt: '2026-10-08T10:00:00',
+    appCode: null,
   };
 }
 

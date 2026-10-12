@@ -41,17 +41,25 @@ public class WfProcessController {
         return Result.ok(processService.detail(id, tenantId));
     }
 
-    /** 我发起的流程（可含 keyword 模糊过滤；可选 appCode / scope 归属过滤，实例归属由 business_type 派生）。 */
+    /**
+     * 我发起的流程（可含 keyword 模糊过滤；可选发起人/参与人；可选 appCode / scope 归属过滤）。
+     *
+     * <p>{@code initiatorName}/{@code participantName} 为本轮新增<b>可选</b>尾参：缺省（null/空白）
+     * ⇒ 仓储查询对应 clause 恒真 ⇒ 与现状逐字等价（零回归）。
+     */
     @GetMapping("/instances/my")
     public Result<PageResult<WfInstanceVO>> myInitiated(@RequestParam Long tenantId,
                                                         @RequestParam Long initiatorId,
                                                         @RequestParam(required = false) String status,
                                                         @RequestParam(required = false) String keyword,
+                                                        @RequestParam(required = false) String initiatorName,
+                                                        @RequestParam(required = false) String participantName,
                                                         @RequestParam(required = false) String appCode,
                                                         @RequestParam(required = false) String scope,
                                                         @RequestParam(defaultValue = "1") int page,
                                                         @RequestParam(defaultValue = "20") int size) {
-        return Result.ok(processService.myInitiated(tenantId, initiatorId, status, keyword, appCode, scope, page, size));
+        return Result.ok(processService.myInitiated(tenantId, initiatorId, status, keyword, appCode, scope,
+                initiatorName, participantName, page, size));
     }
 
     /** 处理流程任务（同意/驳回）。 */

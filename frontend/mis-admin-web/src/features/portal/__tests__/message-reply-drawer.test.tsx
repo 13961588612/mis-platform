@@ -3,7 +3,8 @@
  * 门户「消息中心」+ 回复抽屉（T04，设计 §2.3 / §8.2 T04）。
  *
  * 覆盖：
- * 1. 四类子 Tab（审批 / 通知 / 提醒 / 系统告警）均渲染，默认「审批」，切 Tab 以对应 msgType 拉取；
+ * 1. 「全部 + 四类」子 Tab（全部 / 审批 / 通知 / 提醒 / 系统告警）均渲染，默认「全部」（聚合，
+ *    不传 msgType），切 Tab 以对应 msgType 拉取；
  * 2. **显式搜索**：输入本身**不触发请求**；点「搜索」才以 `q` + `page=1` 请求 `searchMessages`；
  *    空关键词走 `fetchInbox`；
  * 3. 点消息 → 抽屉打开 + 调 `fetchMessageDetail`；未读 → 调 `markMessagesRead`；
@@ -21,6 +22,8 @@ import { MemoryRouter } from 'react-router-dom';
 import { PortalMessageTab } from '../tabs/portal-message-tab';
 import * as messagesApi from '@/lib/api/messages';
 import * as workflowApi from '@/lib/api/workflow';
+import * as platformApi from '@/lib/api/platform';
+import * as bizCategoryApi from '@/lib/api/biz-category';
 import { useAuthStore } from '@/stores/auth-store';
 import type { MessageItem } from '@/lib/api/messages';
 
@@ -51,6 +54,16 @@ vi.mock('@/lib/api/workflow', async (importOriginal) => {
   return { ...actual, fetchProcessDetail: vi.fn() };
 });
 
+// 门户表格新增两列（平台/关联应用、业务类型）经 `usePortalLookups` 拉取应用列表与业务分类，
+// 整体替换这两个 api 模块，避免测试触达真实 axios。
+vi.mock('@/lib/api/platform', () => ({
+  fetchApps: vi.fn().mockResolvedValue([]),
+}));
+
+vi.mock('@/lib/api/biz-category', () => ({
+  fetchBizCategories: vi.fn().mockResolvedValue([]),
+}));
+
 vi.mock('sonner', () => ({
   toast: { success: vi.fn(), error: vi.fn() },
 }));
@@ -75,6 +88,8 @@ function msg(overrides: Partial<MessageItem> = {}): MessageItem {
     createdAt: '2026-10-08T10:00:00',
     instanceId: null,
     canReply: false,
+    appCode: null,
+    bizType: null,
     ...overrides,
   };
 }
@@ -137,6 +152,13 @@ describe('PortalMessageTab + MessageDetailDrawer（T04）', () => {
     );
     vi.mocked(messagesApi.replyMessage).mockResolvedValue(undefined);
     vi.mocked(workflowApi.fetchProcessDetail).mockResolvedValue(processDetail() as never);
+    // `usePortalLookups`（门户表格新增两列）在挂载时拉取应用列表 / 业务分类。
+    // 因 `afterEach` 的 `vi.restoreAllMocks()` 会把模块工厂里的 `vi.fn()` 实现清成
+    // 返回 undefined，必须在每个用例的 `beforeEach` 里**重新装配**这两处 resolve，
+    // 否则第一个用例之后的 `fetchApps().then(...)` 会抛 `Cannot read properties of
+    // undefined (reading 'then')`（模块级 mock 被 restore 的典型坑）。
+    vi.mocked(platformApi.fetchApps).mockResolvedValue([]);
+    vi.mocked(bizCategoryApi.fetchBizCategories).mockResolvedValue([]);
     vi.spyOn(console, 'error').mockImplementation(() => {});
   });
 
@@ -146,26 +168,29 @@ describe('PortalMessageTab + MessageDetailDrawer（T04）', () => {
     vi.restoreAllMocks();
   });
 
-  it('渲染四类子 Tab，默认「审批」，以 msgType=APPROVAL 拉取', async () => {
+  it('渲染「全部 + 四类」子 Tab，默认「全部」，聚合拉取不传 msgType', async () => {
     renderTab();
-    for (const label of ['审批', '通知', '提醒', '系统告警']) {
+    for (const label of ['全部', '审批', '通知', '提醒', '系统告警']) {
       expect(await screen.findByRole('tab', { name: label })).toBeTruthy();
     }
     await waitFor(() =>
       expect(messagesApi.fetchInbox).toHaveBeenCalledWith(
-        expect.objectContaining({ tenantId: '1', userId: '700001', msgType: 'APPROVAL', page: 1, size: 20 }),
+        expect.objectContaining({ tenantId: '1', userId: '700001', page: 1, size: 20 }),
       ),
     );
+    // 「全部」为聚合视图：缺省 = 不过滤类型 ⇒ 首拉请求不带 msgType。
+    const firstParams = vi.mocked(messagesApi.fetchInbox).mock.calls[0][0];
+    expect('msgType' in firstParams).toBe(false);
   });
 
-  it('切子 Tab 以对应 msgType 拉取（系统告警）', async () => {
+  it('切子 Tab「审批」以 msgType=APPROVAL 拉取（非「全部」时才带类型）', async () => {
     renderTab();
     await waitFor(() => expect(messagesApi.fetchInbox).toHaveBeenCalled());
 
-    fireEvent.mouseDown(screen.getByRole('tab', { name: '系统告警' }), { button: 0 });
+    fireEvent.mouseDown(screen.getByRole('tab', { name: '审批' }), { button: 0 });
     await waitFor(() =>
       expect(messagesApi.fetchInbox).toHaveBeenLastCalledWith(
-        expect.objectContaining({ msgType: 'SYSTEM_ALERT', page: 1 }),
+        expect.objectContaining({ msgType: 'APPROVAL', page: 1 }),
       ),
     );
   });
@@ -181,9 +206,12 @@ describe('PortalMessageTab + MessageDetailDrawer（T04）', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /搜索/ }));
     await waitFor(() => expect(messagesApi.searchMessages).toHaveBeenCalledTimes(1));
+    // 默认「全部」⇒ 搜索同样不传 msgType（聚合）。
     expect(messagesApi.searchMessages).toHaveBeenLastCalledWith(
-      expect.objectContaining({ q: '采购', page: 1, msgType: 'APPROVAL' }),
+      expect.objectContaining({ q: '采购', page: 1 }),
     );
+    const searchParams = vi.mocked(messagesApi.searchMessages).mock.calls[0][0];
+    expect('msgType' in searchParams).toBe(false);
   });
 
   it('显式搜索：回车同样触发；「重置」清空并回到 fetchInbox', async () => {

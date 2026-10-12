@@ -12,6 +12,20 @@ import java.util.Optional;
 
 public interface WfInstanceRepository extends JpaRepository<WfInstance, Long> {
 
+    // ------------------------------------------------------------------
+    // 发起人 / 参与人过滤片段（本轮新增；JPQL 跨实体相关子查询，本仓首次）
+    // ------------------------------------------------------------------
+    //
+    // 两片段均以「:xxxPattern is null」开头 ⇒ 参数为 null 时整条子句恒真（零回归）。
+    // 语义（设计 §4）：
+    //   发起人 = 本实例自身的 initiator_name（i.initiatorName）；
+    //   参与人 = 本实例任一 wf_task 的处理人（wf_task.assignee_name），
+    //            或其关联 sys_task 的处理人（wf_task.sys_task_id → sys_task.assignee_name）；
+    //            之所以「或」上后者：ProcessService.assignNode 写 wfTask.setAssigneeName(null)
+    //            ⇒ wf_task.assignee_name 实测恒空，纯靠它会「参与人过滤恒空」（主理人裁定#2）。
+    //
+    // ⚠️ wf_task.sys_task_id 无唯一约束 ⇒ 只出现在 exists 子查询内，绝不直接 JOIN sys_task。
+
     Optional<WfInstance> findByIdAndTenantId(Long id, Long tenantId);
 
     List<WfInstance> findByTenantIdAndBusinessTypeAndBusinessIdOrderByCreatedAtDesc(
@@ -42,12 +56,23 @@ public interface WfInstanceRepository extends JpaRepository<WfInstance, Long> {
                    or lower(coalesce(i.businessType, '')) like :pattern
                    or lower(coalesce(i.definitionCode, '')) like :pattern
                    or lower(coalesce(i.initiatorName, '')) like :pattern)
+              and (:initiatorPattern is null
+                   or lower(coalesce(i.initiatorName, '')) like :initiatorPattern)
+              and (:participantPattern is null
+                   or exists (select 1 from WfTask wt
+                              where wt.instanceId = i.id
+                                and ( lower(coalesce(wt.assigneeName, '')) like :participantPattern
+                                      or exists (select 1 from SysTask st2
+                                                 where st2.id = wt.sysTaskId
+                                                   and lower(coalesce(st2.assigneeName, '')) like :participantPattern) )))
             order by i.createdAt desc
             """)
     Page<WfInstance> findByInitiator(@Param("tenantId") Long tenantId,
                                      @Param("initiatorId") Long initiatorId,
                                      @Param("status") String status,
                                      @Param("pattern") String pattern,
+                                     @Param("initiatorPattern") String initiatorPattern,
+                                     @Param("participantPattern") String participantPattern,
                                      Pageable pageable);
 
     /**
@@ -67,6 +92,15 @@ public interface WfInstanceRepository extends JpaRepository<WfInstance, Long> {
                    or lower(coalesce(i.businessType, '')) like :pattern
                    or lower(coalesce(i.definitionCode, '')) like :pattern
                    or lower(coalesce(i.initiatorName, '')) like :pattern)
+              and (:initiatorPattern is null
+                   or lower(coalesce(i.initiatorName, '')) like :initiatorPattern)
+              and (:participantPattern is null
+                   or exists (select 1 from WfTask wt
+                              where wt.instanceId = i.id
+                                and ( lower(coalesce(wt.assigneeName, '')) like :participantPattern
+                                      or exists (select 1 from SysTask st2
+                                                 where st2.id = wt.sysTaskId
+                                                   and lower(coalesce(st2.assigneeName, '')) like :participantPattern) )))
               and i.appCode = :appCode
             order by i.createdAt desc
             """)
@@ -74,6 +108,8 @@ public interface WfInstanceRepository extends JpaRepository<WfInstance, Long> {
                                           @Param("initiatorId") Long initiatorId,
                                           @Param("status") String status,
                                           @Param("pattern") String pattern,
+                                          @Param("initiatorPattern") String initiatorPattern,
+                                          @Param("participantPattern") String participantPattern,
                                           @Param("appCode") String appCode,
                                           Pageable pageable);
 
@@ -92,6 +128,15 @@ public interface WfInstanceRepository extends JpaRepository<WfInstance, Long> {
                    or lower(coalesce(i.businessType, '')) like :pattern
                    or lower(coalesce(i.definitionCode, '')) like :pattern
                    or lower(coalesce(i.initiatorName, '')) like :pattern)
+              and (:initiatorPattern is null
+                   or lower(coalesce(i.initiatorName, '')) like :initiatorPattern)
+              and (:participantPattern is null
+                   or exists (select 1 from WfTask wt
+                              where wt.instanceId = i.id
+                                and ( lower(coalesce(wt.assigneeName, '')) like :participantPattern
+                                      or exists (select 1 from SysTask st2
+                                                 where st2.id = wt.sysTaskId
+                                                   and lower(coalesce(st2.assigneeName, '')) like :participantPattern) )))
               and i.appCode is null
             order by i.createdAt desc
             """)
@@ -99,6 +144,8 @@ public interface WfInstanceRepository extends JpaRepository<WfInstance, Long> {
                                              @Param("initiatorId") Long initiatorId,
                                              @Param("status") String status,
                                              @Param("pattern") String pattern,
+                                             @Param("initiatorPattern") String initiatorPattern,
+                                             @Param("participantPattern") String participantPattern,
                                              Pageable pageable);
 
     /**

@@ -29,7 +29,7 @@ import {
 } from '@/lib/api/form-definition';
 import { fetchBizCategoryTree, fetchBizCategories, type BizCategoryItem } from '@/lib/api/biz-category';
 import { hasFormLoader } from './forms/form-loaders';
-import { FormDefinitionDialog, type CategorySelectOption } from './form-definition-dialog';
+import { FormDefinitionDialog } from './form-definition-dialog';
 import { CategoryTreeSelect } from '@/components/common/category-tree-select';
 
 /** 与 definitions-page 一致：本地固定租户（BFF 单租户原型）。 */
@@ -40,12 +40,6 @@ const STATUS_META: Record<string, { text: string; variant: 'success' | 'outline'
   [FORM_STATUS_ENABLED]: { text: '启用', variant: 'success' },
   [FORM_STATUS_DISABLED]: { text: '停用', variant: 'outline' },
 };
-
-interface FlatCategory {
-  id: string;
-  name: string;
-  depth: number;
-}
 
 /** 收集以 rootId 为根的子树（含自身）所有 id，用于分类筛选展开子孙。 */
 function collectSubtreeIds(nodes: BizCategoryItem[], rootId: string): Set<string> {
@@ -86,14 +80,6 @@ function expandCategoryIdsWithDescendants(tree: BizCategoryItem[], selectedIds: 
     }
   }
   return [...result];
-}
-
-function flattenCategories(nodes: BizCategoryItem[], depth = 0, acc: FlatCategory[] = []): FlatCategory[] {
-  for (const n of nodes) {
-    acc.push({ id: n.id, name: n.name, depth });
-    if (n.children?.length) flattenCategories(n.children, depth + 1, acc);
-  }
-  return acc;
 }
 
 /**
@@ -195,12 +181,7 @@ export function FormDefinitionManagePage() {
     });
   }, [formList, appliedKeyword]);
 
-  // 表单对话框的「分类」下拉：来自业务分类树（扁平 + 缩进）。
-  const formCategoryOptions: CategorySelectOption[] = useMemo(
-    () => flattenCategories(categoryTree).map((c) => ({ id: c.id, name: c.name, depth: c.depth })),
-    [categoryTree],
-  );
-
+  // 表单对话框的「分类」下拉：直接消费业务分类树（嵌套，按层级渲染）。
   function categoryLabel(item: FormDefinitionItem): string {
     if (item.categoryId != null) {
       return categoryNameMap.get(String(item.categoryId)) ?? `分类#${item.categoryId}`;
@@ -378,7 +359,7 @@ export function FormDefinitionManagePage() {
         open={formDialogOpen}
         onOpenChange={setFormDialogOpen}
         initial={editingForm}
-        categoryOptions={formCategoryOptions}
+        categoryTree={categoryTree}
         tenantId={TENANT_ID}
         operatorId={OPERATOR_ID}
         onSaved={() => void loadForms()}

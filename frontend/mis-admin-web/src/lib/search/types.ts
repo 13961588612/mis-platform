@@ -25,6 +25,13 @@ export interface SearchItem {
   appCode: string | null;
   /** 显示用 APP 名（由 `appCode` 映射得到，不落库）。 */
   appName: string | null;
+  /**
+   * 门户 Tab 目标：命中该字段的条目点击时先写 `usePortalTabStore` 再跳 `/portal`。
+   *
+   * <p>门户三 Tab **不进 URL**（见 `stores/portal-tab-store.ts`），故仅凭 `path` 无法定位到具体 Tab，
+   * 需要本字段显式携带目标键。各 APP 菜单项**不设**本字段（它们靠 `path` 直接跳路由）。
+   */
+  portalTab?: 'home' | 'todo' | 'message';
   /** 别名 / 拼音（P2，暂未使用）。 */
   keywords?: string[];
 }

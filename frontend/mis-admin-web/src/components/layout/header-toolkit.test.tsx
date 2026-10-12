@@ -95,6 +95,7 @@ const oneTask = {
   read: false,
   completedAt: null,
   createdAt: '2026-10-08T10:00:00',
+  appCode: null,
 };
 
 const oneMessage = {
@@ -114,6 +115,8 @@ const oneMessage = {
   createdAt: '2026-10-08T10:00:00',
   instanceId: null,
   canReply: false,
+  appCode: null,
+  bizType: null,
 };
 
 function renderToolkit() {

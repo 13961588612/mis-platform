@@ -69,6 +69,11 @@ export interface WfInstance {
   postRetryCount: number;
   createdAt: string;
   completedAt: string | null;
+  /**
+   * 应用归属（`sys_app.code`）；`null` = 平台级。对齐后端 `WfInstanceVO.appCode`（末尾追加）。
+   * 门户待办「我发起的」源「平台 / 关联应用」列据此取值。
+   */
+  appCode: string | null;
 }
 
 export interface WfTask {
@@ -175,12 +180,13 @@ export async function fetchProcessDetail(id: string, tenantId: string): Promise<
 /**
  * 我发起的流程实例分页（PR-04）。
  *
- * <p>`keyword` 为**尾参**（新增），保证既有 5 参调用（`my-sent-page.tsx`）不破；
- * 非空时按后端 `findByInitiator` 对 `business_id`/`business_type`/`definition_code`/
- * `initiator_name` 做大小写不敏感模糊匹配；空白/空串**不透传**（退化为原查询）。
+ * <p>`keyword` / `initiatorName` / `participantName` / `scope` / `appCode` 均为**尾参**（新增），
+ * 保证既有 5 参调用（`my-sent-page.tsx`）不破；非空时按后端
+ * `findByInitiator*` 过滤；空白/空串**不透传**（退化为原查询，零回归）。
  *
- * <p>`scope` / `appCode`（P0，尾参）：可选应用归属过滤通道。实例无 `app_code` 列，
- * 归属由 `business_type` 派生的绑定反查；空白**不透传** ⇒ 与现状逐字等价（零回归）。
+ * <p>`scope` / `appCode`（P0）：可选应用归属过滤通道（`wf_instance.app_code` 显式列）。
+ * `initiatorName` / `participantName`（本轮新增）：发起人按实例 `initiator_name`；
+ * 参与人按该实例任一 `wf_task` 处理人（或关联 `sys_task` 处理人）。
  */
 export async function fetchMyProcesses(
   tenantId: string,
@@ -191,10 +197,16 @@ export async function fetchMyProcesses(
   keyword?: string | null,
   scope?: string | null,
   appCode?: string | null,
+  initiatorName?: string | null,
+  participantName?: string | null,
 ): Promise<PageResult<WfInstance>> {
   const params: Record<string, unknown> = { tenantId, initiatorId, status, page, size };
   const kw = keyword?.trim();
   if (kw) params.keyword = kw;
+  const ini = initiatorName?.trim();
+  if (ini) params.initiatorName = ini;
+  const par = participantName?.trim();
+  if (par) params.participantName = par;
   const sc = scope?.trim();
   if (sc) params.scope = sc;
   const app = appCode?.trim();

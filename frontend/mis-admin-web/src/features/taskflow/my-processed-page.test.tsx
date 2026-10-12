@@ -31,6 +31,7 @@ const approved = {
   read: true,
   completedAt: '2026-10-08T12:00:00',
   createdAt: '2026-10-08T10:00:00',
+  appCode: null,
 };
 
 const rejected = { ...approved, id: '6002', bizTitle: '采购审批 - 已驳回的', status: 'REJECTED' };

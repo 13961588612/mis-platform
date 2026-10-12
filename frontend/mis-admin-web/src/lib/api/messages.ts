@@ -33,6 +33,20 @@ export interface MessageItem {
    * 前端**仅据此**控制回复入口显隐，不自行推断（避免与后端口径漂移）。
    */
   canReply: boolean;
+  /**
+   * 应用归属（`sys_app.code`）；`null` = 平台级。
+   *
+   * <p>对齐后端 `MessageVO.appCode`（末尾追加）。门户消息表「平台 / 关联应用」列据此取值：
+   * `null` → 「平台」，否则经应用名映射取展示名。
+   */
+  appCode: string | null;
+  /**
+   * 业务类型（软引用 `biz_category.code`）；`null` = 未标注。
+   *
+   * <p>对齐后端 `MessageVO.bizType`（末尾追加）。门户消息表「业务类型」列据此取值：
+   * `null` → 「—」，否则经业务分类映射取展示名、取不到回退原始 code。
+   */
+  bizType: string | null;
 }
 
 export interface MessageDetail extends MessageItem {

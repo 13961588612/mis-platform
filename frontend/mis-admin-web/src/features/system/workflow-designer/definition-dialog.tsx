@@ -27,8 +27,9 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { missingFormCodes, useFormCatalog } from './form-catalog';
-import { useBizCategories } from './biz-category-catalog';
+import { useBizCategoryTree } from './biz-category-catalog';
 import { findCodeConflict, validateDefinitionCode } from './save-error';
+import { CategorySingleTreeSelect } from '@/components/common/category-single-tree-select';
 
 export interface DefinitionDraft {
   code: string;
@@ -70,7 +71,7 @@ export function DefinitionDialog({
   const [checking, setChecking] = useState(false);
 
   const { options, loading, notice } = useFormCatalog(tenantId);
-  const { options: categoryOptions, loading: catLoading, error: catError } = useBizCategories(tenantId);
+  const { tree: categoryTree, loading: catLoading, error: catError } = useBizCategoryTree(tenantId);
   const missing = missingFormCodes(options, formCodes);
   const q = query.trim().toLowerCase();
   const visible = useMemo(
@@ -173,20 +174,14 @@ export function DefinitionDialog({
 
           <div>
             <Label className="mb-1 block text-[12px] text-muted-foreground">分类</Label>
-            <select
-              value={categoryId == null ? '' : String(categoryId)}
-              onChange={(e) => setCategoryId(e.target.value === '' ? null : Number(e.target.value))}
+            <CategorySingleTreeSelect
+              tree={categoryTree}
+              value={categoryId == null ? null : String(categoryId)}
+              onChange={(id) => setCategoryId(id == null ? null : Number(id))}
+              placeholder="未分类"
               disabled={catLoading}
-              className="h-8 w-full rounded-md border border-input bg-background px-2 text-sm"
-              aria-label="分类"
-            >
-              <option value="">未分类</option>
-              {categoryOptions.map((c) => (
-                <option key={c.id} value={String(c.id)}>
-                  {c.name}
-                </option>
-              ))}
-            </select>
+              ariaLabel="分类"
+            />
             {catError ? <p className="mt-1 text-[11px] text-warning">{catError}</p> : null}
           </div>
 

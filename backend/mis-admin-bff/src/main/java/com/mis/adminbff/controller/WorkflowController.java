@@ -96,12 +96,14 @@ public class WorkflowController {
                                                         @RequestParam(required = false) Long initiatorId,
                                                         @RequestParam(required = false) String status,
                                                         @RequestParam(required = false) String keyword,
+                                                        @RequestParam(required = false) String initiatorName,
+                                                        @RequestParam(required = false) String participantName,
                                                         @RequestParam(required = false) String appCode,
                                                         @RequestParam(required = false) String scope,
                                                         @RequestParam(defaultValue = "1") int page,
                                                         @RequestParam(defaultValue = "20") int size) {
         return Result.ok(taskflowWebClient.myProcesses(TaskflowIdentity.tenantId(tenantId), TaskflowIdentity.userId(initiatorId),
-                status, keyword, appCode, scope, page, size));
+                status, keyword, appCode, scope, initiatorName, participantName, page, size));
     }
 
     @PostMapping("/tasks/{id}/complete")

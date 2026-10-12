@@ -32,6 +32,15 @@ export interface PortalTodoRow {
   assigneeName?: string;
   /** 创建时间（ISO 字符串）。 */
   createdAt?: string;
+  /** 应用归属（`sys_app.code`）；`null`/`undefined` = 平台级（表格显示「平台」）。 */
+  appCode?: string | null;
+  /**
+   * 业务类型编码（软引用 `biz_category.code`）。
+   *
+   * <p>待办源（`my`/`handled`）取 `TaskItem.bizType`；「我发起的」源取 `WfInstance.businessType`。
+   * `null`/`undefined` = 未标注（表格显示「—」）。
+   */
+  bizType?: string | null;
   /**
    * 关联流程实例 ID。
    *
@@ -49,5 +58,8 @@ export interface PortalTodoRow {
   raw: unknown;
 }
 
-/** 三类数据源标识，对应设计 §1.4 的三条既有接口。 */
-export type PortalTodoSource = 'my' | 'handled' | 'sent';
+/**
+ * 四类数据源标识：`matters`（`/tasks/matters` 三源 UNION 聚合）对应「全部」子 Tab；
+ * 其余三条对应设计 §1.4 的既有接口。
+ */
+export type PortalTodoSource = 'matters' | 'my' | 'handled' | 'sent';

@@ -29,6 +29,7 @@ const runningInstance = {
   postRetryCount: 0,
   createdAt: '2026-10-08T10:00:00',
   completedAt: null,
+  appCode: null,
 };
 
 describe('TaskMySentPage', () => {

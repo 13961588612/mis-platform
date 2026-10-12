@@ -39,6 +39,8 @@ const sampleItem = {
   createdAt: '2026-10-08T10:00:00',
   instanceId: null,
   canReply: false,
+  appCode: null,
+  bizType: null,
 };
 
 const sampleDetail = {

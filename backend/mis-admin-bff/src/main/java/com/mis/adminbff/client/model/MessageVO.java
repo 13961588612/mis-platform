@@ -20,6 +20,10 @@ public record MessageVO(
         LocalDateTime createdAt,
         String instanceId,
         boolean canReply,
-        String appCode
+        String appCode,
+        // 末尾追加：业务类型（软引用 biz_category.code）；null = 未标注。
+        // 必须与下游 mis-taskflow MessageVO 同名透传，否则 Jackson 反序列化时被静默丢弃，
+        // 门户消息表「业务类型」列将恒为空。
+        String bizType
 ) {
 }

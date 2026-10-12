@@ -1,0 +1,46 @@
+sequenceDiagram
+    autonumber
+    participant U as 用户
+    participant CP as CommandPalette
+    participant TT as PortalTodoTab
+    participant API as api/client
+    participant BFF as BFF TaskController
+    participant WC as TaskflowWebClient
+    participant SVC as PortalMattersService
+    participant REPO as PortalMattersRepository
+    participant DB as PostgreSQL
+
+    Note over U,TT: A. 命令面板点「待办事项」→ 子 Tab 落「全部」
+    U->>CP: 点击「待办事项」
+    CP->>CP: usePortalTodoTabStore.setActiveKey('all')
+    CP->>CP: usePortalTabStore.setActiveTab('todo')
+    CP->>U: navigate('/portal')
+
+    Note over TT,DB: B. 「全部」子 Tab 加载（服务端分页聚合）
+    TT->>API: GET /api/v1/tasks/matters?userId=&keyword=&initiatorName=&participantName=&page=&size=
+    API->>BFF: 透传(带 JWT)
+    BFF->>BFF: 鉴权(authOnly, 菜单95002)
+    BFF->>WC: matters(...)
+    WC->>SVC: GET /internal/v1/tasks/matters
+    SVC->>SVC: likePattern(keyword/initiator/participant)
+    SVC->>SVC: AppScope.normalizeScope(scope)
+    SVC->>REPO: findMatters(...) & countMatters(...)
+    REPO->>DB: (A UNION ALL B) 外层过滤 + ORDER BY created_at DESC + LIMIT/OFFSET
+    DB-->>REPO: rows / total
+    REPO-->>SVC: List<Object[]> / long
+    SVC-->>WC: PageResult<PortalMatterVO>
+    WC-->>BFF: Result<PageResult<PortalMatterVO>>
+    BFF-->>API: JSON
+    API-->>TT: data
+    TT->>TT: fromPortalMatter(row) → PortalTodoRow[]
+    TT->>TT: usePortalLookups 映射「平台/关联应用」「业务类型」
+
+    Note over TT,DB: C. 既有 6 子 Tab 带「发起人/参与人」过滤
+    TT->>API: GET /tasks/my?status=&initiatorName=&participantName=... (或 handled / instances/my)
+    API->>BFF: 透传
+    BFF->>WC: myTasks/handledTasks/myProcesses(含两尾参)
+    WC->>SVC: /internal/v1/... (空白参不追加)
+    SVC->>DB: JPQL(缺省⇒无 clause⇒零回归)
+
+    Note over DB: D. 迁移（启动期 Flyway，非运行时）
+    Note over DB: V140 授权菜单95012→role1；V141 登记 sys_api 95100 + sys_menu_api 95002↔95100

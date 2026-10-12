@@ -76,6 +76,7 @@ vi.mock('@/lib/api/tasks', () => ({
   fetchHandledTasks: vi.fn(),
   fetchTaskStats: vi.fn(),
   handleTask: vi.fn(),
+  fetchPortalMatters: vi.fn(),
 }));
 
 vi.mock('@/lib/api/messages', () => ({
@@ -89,6 +90,12 @@ vi.mock('@/lib/api/messages', () => ({
 
 vi.mock('@/lib/api/workflow', () => ({
   fetchMyProcesses: vi.fn(),
+}));
+
+// 门户表格新增两列（平台/关联应用、业务类型）经 `usePortalLookups` 拉取业务分类，
+// 整体替换该 api 模块避免真实 axios（应用列表已由上面的 platform mock 覆盖）。
+vi.mock('@/lib/api/biz-category', () => ({
+  fetchBizCategories: vi.fn().mockResolvedValue([]),
 }));
 
 // 两抽屉替身（T05 集成 + UI 精修轮的首页板抽屉）：本文件只验证「行点击 → 抽屉打开并带对 ID」的接线，
@@ -185,6 +192,7 @@ describe('PortalPage 三 Tab 容器', () => {
     });
     vi.mocked(platformApi.fetchApps).mockResolvedValue(sampleApps);
     vi.mocked(tasksApi.fetchMyTasks).mockResolvedValue(emptyPage);
+    vi.mocked(tasksApi.fetchPortalMatters).mockResolvedValue(emptyPage);
     vi.mocked(tasksApi.fetchTaskStats).mockResolvedValue({ pending: 0, urgent: 0, overdue: 0 });
     vi.mocked(messagesApi.fetchInbox).mockResolvedValue(emptyPage);
     vi.mocked(messagesApi.fetchMessageStats).mockResolvedValue({ unread: 0, total: 0 });
@@ -316,6 +324,7 @@ describe('PortalPage 三 Tab 容器', () => {
           read: false,
           completedAt: null,
           createdAt: '2026-10-08T10:00:00',
+          appCode: null,
         },
       ],
     });
@@ -342,6 +351,8 @@ describe('PortalPage 三 Tab 容器', () => {
           createdAt: '2026-10-08T10:00:00',
           instanceId: null,
           canReply: false,
+          appCode: null,
+          bizType: null,
         },
       ],
     });
@@ -350,8 +361,13 @@ describe('PortalPage 三 Tab 容器', () => {
 
     // 待办 Tab：点行 → 待办抽屉打开，携带该行 instanceId（不由 navigate 承担）。
     // tab 已搬到顶栏（普通 button，onClick 写 store），不再是 Radix 的 onMouseDown。
+    // 本轮「全部」为默认子 Tab（source='matters'），本用例数据走 `my` 源，故先切「待处理」子 Tab。
+    act(() => {
+      usePortalTodoTabStore.setState({ activeKey: 'pending' });
+    });
     fireEvent.click(screen.getByRole('tab', { name: '待办事项' }));
-    const todoRow = (await screen.findByText('采购单审批-甲')).closest('button');
+    // 门户内页（待办事项 Tab）列表仍是表格：整行是 `<tr role="button">`。
+    const todoRow = (await screen.findByText('采购单审批-甲')).closest('tr');
     expect(todoRow).toBeTruthy();
     fireEvent.click(todoRow!);
     expect(await screen.findByTestId('todo-drawer')).toBeTruthy();
@@ -360,7 +376,8 @@ describe('PortalPage 三 Tab 容器', () => {
 
     // 消息 Tab：切过去后待办抽屉随面板卸载；点消息行 → 消息抽屉打开，携带 messageId。
     fireEvent.click(screen.getByRole('tab', { name: '消息中心' }));
-    const msgRow = (await screen.findByText('消息-甲')).closest('button');
+    // 门户内页（消息中心 Tab）列表仍是表格：整行是 `<tr role="button">`。
+    const msgRow = (await screen.findByText('消息-甲')).closest('tr');
     expect(msgRow).toBeTruthy();
     fireEvent.click(msgRow!);
     expect(await screen.findByTestId('message-drawer')).toBeTruthy();
@@ -427,6 +444,7 @@ describe('PortalPage 三 Tab 容器', () => {
       read: false,
       completedAt: null,
       createdAt: '2026-10-08T10:00:00',
+      appCode: null,
     };
   }
 
@@ -449,6 +467,8 @@ describe('PortalPage 三 Tab 容器', () => {
       createdAt: '2026-10-08T10:00:00',
       instanceId: null,
       canReply: false,
+      appCode: null,
+      bizType: null,
     };
   }
 
@@ -635,6 +655,7 @@ describe('PortalPage 三 Tab 容器', () => {
           postRetryCount: 0,
           createdAt: '2026-10-08T10:00:00',
           completedAt: null,
+          appCode: null,
         },
       ],
     });

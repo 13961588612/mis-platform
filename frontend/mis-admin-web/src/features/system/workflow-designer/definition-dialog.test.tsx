@@ -98,6 +98,7 @@ describe('DefinitionDialog', () => {
     ]);
     vi.mocked(workflowApi.fetchDefinitions).mockResolvedValue({ page: 1, size: 100, total: 0, list: [] });
     vi.mocked(bizCategoryApi.fetchBizCategories).mockResolvedValue(CATEGORIES);
+    vi.mocked(bizCategoryApi.fetchBizCategoryTree).mockResolvedValue(CATEGORIES);
   });
 
   afterEach(() => {
@@ -184,19 +185,26 @@ describe('DefinitionDialog', () => {
     expect(onSubmit).not.toHaveBeenCalled();
   });
 
-  it('分类是 biz_category 下拉，选项来自后端分类，提交带 categoryId', async () => {
+  it('分类是 biz_category 下拉树，节点来自后端分类树，选中回传 categoryId', async () => {
     const onSubmit = renderDialog();
     fill('流程名称', '采购审批流程');
     fill('流程编码', 'PUR_APPROVAL');
     await pickFirstForm();
 
-    const select = (await screen.findByLabelText('分类')) as HTMLSelectElement;
-    expect(select.tagName).toBe('SELECT');
-    // 候选项来自 wf_category（name），而非旧枚举
-    await waitFor(() => expect(screen.getByRole('option', { name: '审批类' })).toBeTruthy());
-    expect(screen.getByRole('option', { name: '通知类' })).toBeTruthy();
-    // 选择「审批类」（id 990001）
-    fireEvent.change(select, { target: { value: '990001' } });
+    // 触发器是按钮（不再是原生 <select>），未选时显示占位「未分类」。
+    const trigger = (await screen.findByLabelText('分类')) as HTMLButtonElement;
+    expect(trigger.tagName).toBe('BUTTON');
+    expect(trigger.textContent).toContain('未分类');
+
+    // 展开下拉树：候选节点来自业务分类树（name），而非旧枚举。
+    fireEvent.click(trigger);
+    const node = await screen.findByRole('button', { name: '审批类' });
+    expect(screen.getByRole('button', { name: '通知类' })).toBeTruthy();
+    // 选中「审批类」（id 990001）——节点点击用 pointerdown 双触发范式。
+    fireEvent.pointerDown(node, { button: 0 });
+
+    // 选中后触发器展示已选分类名。
+    await waitFor(() => expect(screen.getByLabelText('分类').textContent).toContain('审批类'));
 
     fireEvent.click(screen.getByText('下一步：编排'));
 

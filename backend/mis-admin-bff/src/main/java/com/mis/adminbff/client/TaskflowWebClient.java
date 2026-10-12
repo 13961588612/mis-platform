@@ -10,6 +10,7 @@ import com.mis.adminbff.client.model.AuditTimelineItem;
 import com.mis.adminbff.client.model.BizCategoryVO;
 import com.mis.adminbff.client.model.ExecutionTaskVO;
 import com.mis.adminbff.client.model.FormDefinitionVO;
+import com.mis.adminbff.client.model.PortalMatterVO;
 import com.mis.adminbff.client.model.ProcessDetailVO;
 import com.mis.adminbff.client.model.TaskStatsVO;
 import com.mis.adminbff.client.model.TaskVO;
@@ -51,6 +52,8 @@ public class TaskflowWebClient extends AbstractDownstreamClient {
     private static final ParameterizedTypeReference<Result<Long>> LONG_RESULT =
             new ParameterizedTypeReference<>() {};
     private static final ParameterizedTypeReference<Result<PageResult<TaskVO>>> TASK_PAGE =
+            new ParameterizedTypeReference<>() {};
+    private static final ParameterizedTypeReference<Result<PageResult<PortalMatterVO>>> MATTER_PAGE =
             new ParameterizedTypeReference<>() {};
     private static final ParameterizedTypeReference<Result<TaskStatsVO>> TASK_STATS =
             new ParameterizedTypeReference<>() {};
@@ -316,6 +319,19 @@ public class TaskflowWebClient extends AbstractDownstreamClient {
      */
     public PageResult<TaskVO> myTasks(Long tenantId, Long assigneeId, String status, String keyword,
                                       String appCode, String scope, int page, int size) {
+        return myTasks(tenantId, assigneeId, status, keyword, appCode, scope, null, null, page, size);
+    }
+
+    /**
+     * 我的待办（可选发起人/参与人 + 可选 appCode / scope 归属过滤）。
+     *
+     * <p>{@code initiatorName}/{@code participantName} 为<b>可选</b>尾参：空白**不透传**
+     * ⇒ 下游退化原查询（零回归）；非空则按「发起人 = 所属实例 {@code initiator_name}」
+     * 「参与人 = 该实例任一 {@code wf_task} 处理人（或关联 {@code sys_task} 处理人）」过滤。
+     */
+    public PageResult<TaskVO> myTasks(Long tenantId, Long assigneeId, String status, String keyword,
+                                      String appCode, String scope,
+                                      String initiatorName, String participantName, int page, int size) {
         Map<String, Object> q = new LinkedHashMap<>();
         q.put("tenantId", tenantId);
         q.put("assigneeId", assigneeId);
@@ -324,6 +340,12 @@ public class TaskflowWebClient extends AbstractDownstreamClient {
         }
         if (keyword != null && !keyword.isBlank()) {
             q.put("keyword", keyword);
+        }
+        if (initiatorName != null && !initiatorName.isBlank()) {
+            q.put("initiatorName", initiatorName);
+        }
+        if (participantName != null && !participantName.isBlank()) {
+            q.put("participantName", participantName);
         }
         if (appCode != null && !appCode.isBlank()) {
             q.put("appCode", appCode);
@@ -345,11 +367,28 @@ public class TaskflowWebClient extends AbstractDownstreamClient {
      */
     public PageResult<TaskVO> handledTasks(Long tenantId, Long assigneeId, String keyword,
                                            String appCode, String scope, int page, int size) {
+        return handledTasks(tenantId, assigneeId, keyword, appCode, scope, null, null, page, size);
+    }
+
+    /**
+     * 我处理过的（可选发起人/参与人 + 可选 appCode / scope 归属过滤）。
+     *
+     * <p>两新增尾参语义同 {@link #myTasks}，空白**不透传** ⇒ 零回归。
+     */
+    public PageResult<TaskVO> handledTasks(Long tenantId, Long assigneeId, String keyword,
+                                           String appCode, String scope,
+                                           String initiatorName, String participantName, int page, int size) {
         Map<String, Object> q = new LinkedHashMap<>();
         q.put("tenantId", tenantId);
         q.put("assigneeId", assigneeId);
         if (keyword != null && !keyword.isBlank()) {
             q.put("keyword", keyword);
+        }
+        if (initiatorName != null && !initiatorName.isBlank()) {
+            q.put("initiatorName", initiatorName);
+        }
+        if (participantName != null && !participantName.isBlank()) {
+            q.put("participantName", participantName);
         }
         if (appCode != null && !appCode.isBlank()) {
             q.put("appCode", appCode);
@@ -360,6 +399,39 @@ public class TaskflowWebClient extends AbstractDownstreamClient {
         q.put("page", page);
         q.put("size", size);
         return block(client().get().uri(uriOf("/internal/v1/tasks/handled", q)).retrieve().bodyToMono(TASK_PAGE));
+    }
+
+    /**
+     * 门户「待办事项 · 全部」聚合（三源 UNION + 服务端分页，透传 mis-taskflow
+     * {@code GET /internal/v1/tasks/matters}）。
+     *
+     * <p>所有过滤参数空白**不透传** ⇒ 下游退化「仅我相关的全部事项」（零回归）。
+     * 外网路径必须与 {@code sys_api.path_pattern} 的 {@code /api/v1/tasks/matters} 对齐。
+     */
+    public PageResult<PortalMatterVO> matters(Long tenantId, Long userId, String keyword,
+                                              String initiatorName, String participantName,
+                                              String appCode, String scope, int page, int size) {
+        Map<String, Object> q = new LinkedHashMap<>();
+        q.put("tenantId", tenantId);
+        q.put("userId", userId);
+        if (keyword != null && !keyword.isBlank()) {
+            q.put("keyword", keyword);
+        }
+        if (initiatorName != null && !initiatorName.isBlank()) {
+            q.put("initiatorName", initiatorName);
+        }
+        if (participantName != null && !participantName.isBlank()) {
+            q.put("participantName", participantName);
+        }
+        if (appCode != null && !appCode.isBlank()) {
+            q.put("appCode", appCode);
+        }
+        if (scope != null && !scope.isBlank()) {
+            q.put("scope", scope);
+        }
+        q.put("page", page);
+        q.put("size", size);
+        return block(client().get().uri(uriOf("/internal/v1/tasks/matters", q)).retrieve().bodyToMono(MATTER_PAGE));
     }
 
     public TaskStatsVO taskStats(Long tenantId, Long assigneeId) {
@@ -652,6 +724,18 @@ public class TaskflowWebClient extends AbstractDownstreamClient {
      */
     public PageResult<WfInstanceVO> myProcesses(Long tenantId, Long initiatorId, String status, String keyword,
                                                 String appCode, String scope, int page, int size) {
+        return myProcesses(tenantId, initiatorId, status, keyword, appCode, scope, null, null, page, size);
+    }
+
+    /**
+     * 我发起的流程（可选发起人/参与人 + 可选 appCode / scope 归属过滤）。
+     *
+     * <p>{@code initiatorName}/{@code participantName} 为<b>可选</b>尾参：空白**不透传**
+     * ⇒ 零回归（发起人按实例 {@code initiator_name}；参与人按该实例任一 {@code wf_task} 处理人）。
+     */
+    public PageResult<WfInstanceVO> myProcesses(Long tenantId, Long initiatorId, String status, String keyword,
+                                                String appCode, String scope,
+                                                String initiatorName, String participantName, int page, int size) {
         Map<String, Object> q = new LinkedHashMap<>();
         q.put("tenantId", tenantId);
         q.put("initiatorId", initiatorId);
@@ -660,6 +744,12 @@ public class TaskflowWebClient extends AbstractDownstreamClient {
         }
         if (keyword != null && !keyword.isBlank()) {
             q.put("keyword", keyword);
+        }
+        if (initiatorName != null && !initiatorName.isBlank()) {
+            q.put("initiatorName", initiatorName);
+        }
+        if (participantName != null && !participantName.isBlank()) {
+            q.put("participantName", participantName);
         }
         if (appCode != null && !appCode.isBlank()) {
             q.put("appCode", appCode);

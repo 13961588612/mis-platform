@@ -572,25 +572,44 @@ public class ProcessService {
     /**
      * 我发起的流程分页（可选 keyword + 可选应用归属过滤，P0）。
      *
-     * <p>{@code wf_instance} 已有 {@code app_code} 列（显式写入）。{@code scope} 直接过滤
-     * {@code app_code} 列：{@code APP}&amp;appCode → {@code app_code = :appCode}；
-     * {@code PLATFORM} → {@code app_code IS NULL}；其余 → 原查询（零回归）。
+     * <p>保留既有 8 参签名（零回归）：委派给带发起人/参与人的新核心（两尾参为 {@code null}）。
      */
     @Transactional(readOnly = true)
     public PageResult<WfInstanceVO> myInitiated(Long tenantId, Long initiatorId, String status,
                                                 String keyword, String appCode, String scope,
                                                 int page, int size) {
+        return myInitiated(tenantId, initiatorId, status, keyword, appCode, scope, null, null, page, size);
+    }
+
+    /**
+     * 我发起的流程分页（可选 keyword + 可选发起人/参与人 + 可选应用归属过滤，P0）。
+     *
+     * <p>{@code wf_instance} 已有 {@code app_code} 列（显式写入）。{@code scope} 直接过滤
+     * {@code app_code} 列：{@code APP}&amp;appCode → {@code app_code = :appCode}；
+     * {@code PLATFORM} → {@code app_code IS NULL}；其余 → 原查询（零回归）。
+     *
+     * <p>{@code initiatorName}/{@code participantName}：空白 ⇒ 零回归；非空 ⇒
+     * 发起人按实例 {@code initiator_name}，参与人按该实例任一 {@code wf_task} 处理人
+     * （或关联 {@code sys_task} 处理人）过滤。
+     */
+    @Transactional(readOnly = true)
+    public PageResult<WfInstanceVO> myInitiated(Long tenantId, Long initiatorId, String status,
+                                                String keyword, String appCode, String scope,
+                                                String initiatorName, String participantName,
+                                                int page, int size) {
         var pageable = PageRequest.of(Math.max(page - 1, 0), Math.min(Math.max(size, 1), 200));
         String st = blankToNull(status);
         String pattern = likePattern(keyword);
+        String initiatorPattern = likePattern(initiatorName);
+        String participantPattern = likePattern(participantName);
         String app = blankToNull(appCode);
         String sc = AppScope.normalizeScope(scope);
 
         var p = AppScope.SCOPE_APP.equals(sc) && app != null
-                ? instanceRepository.findByInitiatorInApp(tenantId, initiatorId, st, pattern, app, pageable)
+                ? instanceRepository.findByInitiatorInApp(tenantId, initiatorId, st, pattern, initiatorPattern, participantPattern, app, pageable)
                 : AppScope.SCOPE_PLATFORM.equals(sc)
-                        ? instanceRepository.findByInitiatorPlatform(tenantId, initiatorId, st, pattern, pageable)
-                        : instanceRepository.findByInitiator(tenantId, initiatorId, st, pattern, pageable);
+                        ? instanceRepository.findByInitiatorPlatform(tenantId, initiatorId, st, pattern, initiatorPattern, participantPattern, pageable)
+                        : instanceRepository.findByInitiator(tenantId, initiatorId, st, pattern, initiatorPattern, participantPattern, pageable);
         return PageResult.of(page, pageable.getPageSize(), p.getTotalElements(),
                 p.getContent().stream().map(this::toInstanceVo).toList());
     }

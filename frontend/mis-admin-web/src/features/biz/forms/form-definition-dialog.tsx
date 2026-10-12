@@ -21,21 +21,16 @@ import {
   type UpsertFormDefinitionRequest,
 } from '@/lib/api/form-definition';
 import { hasFormLoader, listFormLoaderCodes } from './forms/form-loaders';
-
-/** 分类下拉候选项（扁平化，`depth` 控制缩进）。`id` 为分类字符串 id。 */
-export interface CategorySelectOption {
-  id: string;
-  name: string;
-  depth: number;
-}
+import { CategorySingleTreeSelect } from '@/components/common/category-single-tree-select';
+import type { CategoryTreeNode } from '@/components/common/category-tree-select';
 
 export interface FormDefinitionDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   /** null = 新增；否则编辑该条。 */
   initial: FormDefinitionItem | null;
-  /** 可选分类（扁平，来自 form_category）。空选 = 未分类（categoryId: null）。 */
-  categoryOptions: CategorySelectOption[];
+  /** 业务分类树（嵌套 children，来自 biz_category）。空选 = 未分类（categoryId: null）。 */
+  categoryTree: CategoryTreeNode[];
   tenantId: string;
   operatorId: string;
   onSaved: () => void;
@@ -43,6 +38,15 @@ export interface FormDefinitionDialogProps {
 
 const CODE_ERROR = '请选择已注册的表单组件';
 const NAME_ERROR = '请填写名称';
+
+/** 在分类树中查找某 id 是否存在（编辑时判断当前分类是否仍在候选树里）。 */
+function treeHasId(nodes: CategoryTreeNode[], target: string): boolean {
+  for (const n of nodes) {
+    if (String(n.id) === target) return true;
+    if (n.children?.length && treeHasId(n.children, target)) return true;
+  }
+  return false;
+}
 
 /**
  * 表单定义「新增 / 编辑」对话框（仅表单；分类独立为 `form_category`）。
@@ -58,7 +62,7 @@ export function FormDefinitionDialog({
   open,
   onOpenChange,
   initial,
-  categoryOptions,
+  categoryTree,
   tenantId,
   operatorId,
   onSaved,
@@ -103,12 +107,12 @@ export function FormDefinitionDialog({
     [initial, loaderCodes],
   );
 
-  // 编辑时若当前分类不在候选项里（分类被删/跨租户），补一条兜底选项，避免下拉显示空白。
+  // 编辑时若当前分类不在候选项里（分类被删/跨租户），补一条兜底提示，避免下拉显示空白。
   const categoryMissing = useMemo(() => {
     if (initial?.categoryId == null) return null;
     const key = String(initial.categoryId);
-    return categoryOptions.some((o) => o.id === key) ? null : key;
-  }, [initial, categoryOptions]);
+    return treeHasId(categoryTree, key) ? null : key;
+  }, [initial, categoryTree]);
 
   async function handleSubmit() {
     const trimmedName = name.trim();
@@ -225,24 +229,15 @@ export function FormDefinitionDialog({
             <label htmlFor="fd-category" className="block text-sm font-medium text-foreground">
               分类
             </label>
-            <select
+            <CategorySingleTreeSelect
               id="fd-category"
-              aria-label="分类"
-              value={categoryId}
-              onChange={(e) => setCategoryId(e.target.value)}
-              className="h-8 w-full rounded-md border border-input bg-background px-2 text-sm"
-            >
-              <option value="">未分类</option>
-              {categoryOptions.map((opt) => (
-                <option key={opt.id} value={opt.id}>
-                  {' '.repeat(opt.depth * 2)}
-                  {opt.name}
-                </option>
-              ))}
-              {categoryMissing ? (
-                <option value={categoryMissing}>{`分类#${categoryMissing}`}</option>
-              ) : null}
-            </select>
+              ariaLabel="分类"
+              tree={categoryTree}
+              value={categoryId === '' ? null : categoryId}
+              onChange={(id) => setCategoryId(id ?? '')}
+              placeholder="未分类"
+              fallbackLabel={categoryMissing ? `分类#${categoryMissing}` : null}
+            />
           </div>
 
           <div className="grid grid-cols-2 gap-3">
