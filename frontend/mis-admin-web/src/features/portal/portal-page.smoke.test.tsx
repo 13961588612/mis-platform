@@ -46,6 +46,7 @@ vi.mock('@/lib/api/auth', () => ({
 vi.mock('@/lib/api/tasks', () => ({
   fetchMyTasks: vi.fn(),
   fetchTaskStats: vi.fn(),
+  fetchCcTasks: vi.fn(),
   handleTask: vi.fn(),
 }));
 

@@ -45,4 +45,16 @@ public interface WfDefinitionRepository extends JpaRepository<WfDefinition, Long
             where tenant_id = :tenantId and :code = any(supported_form_codes)
             """, nativeQuery = true)
     long countBySupportedFormCode(@Param("tenantId") Long tenantId, @Param("code") String code);
+
+    /**
+     * 查找白名单含指定 formCode 的未软删流程定义（互斥校验用）。
+     *
+     * <p>调用方再排除「当前正在编辑的定义 id」，保证「一个表单只能关联一个流程」。
+     */
+    @Query(value = """
+            select * from wf_definition
+            where tenant_id = :tenantId and deleted = 0
+              and :code = any(supported_form_codes)
+            """, nativeQuery = true)
+    List<WfDefinition> findBySupportedFormCode(@Param("tenantId") Long tenantId, @Param("code") String code);
 }

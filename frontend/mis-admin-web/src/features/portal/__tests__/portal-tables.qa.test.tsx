@@ -55,6 +55,7 @@ vi.mock('@/lib/api/tasks', () => ({
   fetchTaskStats: vi.fn(),
   handleTask: vi.fn(),
   fetchPortalMatters: vi.fn(),
+  fetchCcTasks: vi.fn(),
 }));
 
 vi.mock('@/lib/api/workflow', () => ({
@@ -125,6 +126,8 @@ function task(overrides: Partial<TaskItem> = {}): TaskItem {
     completedAt: null,
     createdAt: '2026-10-08T10:00:00',
     appCode: null,
+    initiatorName: null,
+    initiatorOrgName: null,
     ...overrides,
   };
 }
@@ -139,6 +142,7 @@ function wfInstance(overrides: Partial<WfInstance> = {}): WfInstance {
     status: 'RUNNING',
     initiatorId: '700001',
     initiatorName: '测试员',
+    initiatorOrgName: null,
     currentNodeCode: 'finance',
     currentNodeName: null,
     progress: '50%',
@@ -147,6 +151,7 @@ function wfInstance(overrides: Partial<WfInstance> = {}): WfInstance {
     createdAt: '2026-10-08T10:00:00',
     completedAt: null,
     appCode: null,
+    title: null,
     ...overrides,
   };
 }
@@ -370,7 +375,7 @@ describe('[QA-B] 消息中心表 · 两列表头与取值三态', () => {
 });
 
 describe('[QA-B] 待办事项表 · 两列表头与取值三态', () => {
-  it('表头恰为 [标题, 业务编号 / 流程, 平台 / 关联应用, 业务类型, 发起人 / 处理人, 发起时间]', async () => {
+  it('表头恰为 [标题, 业务编号 / 流程, 平台 / 关联应用, 业务类型, 发起人（公司）, 发起时间]', async () => {
     vi.mocked(tasksApi.fetchMyTasks).mockResolvedValue({ ...emptyPage, total: 1, list: [task()] });
     renderTodoTab();
     await screen.findByText('待办-甲');
@@ -379,7 +384,7 @@ describe('[QA-B] 待办事项表 · 两列表头与取值三态', () => {
       '业务编号 / 流程',
       '平台 / 关联应用',
       '业务类型',
-      '发起人 / 处理人',
+      '发起人（公司）',
       '发起时间',
     ]);
   });

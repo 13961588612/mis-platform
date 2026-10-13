@@ -23,9 +23,17 @@ export type ParsedFormData =
  * `form_data` 约定是扁平对象（§2.6），拿到数组说明数据形状不对，
  * 按对象去渲染会渲染出空表单，比明确报错更糟。
  */
-export function parseFormData(raw: string | null | undefined): ParsedFormData {
+export function parseFormData(raw: unknown): ParsedFormData {
   if (raw === null || raw === undefined) {
     return { ok: false, raw: null };
+  }
+  // 列表/详情偶发直接给出对象（Jackson 把 jsonb 当 JSON 而不是转义字符串）
+  if (typeof raw === 'object') {
+    if (Array.isArray(raw)) return { ok: false, raw: JSON.stringify(raw) };
+    return { ok: true, data: raw as FormData };
+  }
+  if (typeof raw !== 'string') {
+    return { ok: false, raw: String(raw) };
   }
   const text = raw.trim();
   if (text === '') return { ok: false, raw };
@@ -54,8 +62,10 @@ export function parseFormData(raw: string | null | undefined): ParsedFormData {
  * 混为一谈会让「数据被人工改库写坏」这种**真数据故障**显示成「没提交数据」，
  * 排查方向完全跑偏。
  */
-export function isNoData(raw: string | null | undefined): boolean {
-  return raw === null || raw === undefined || raw.trim() === '';
+export function isNoData(raw: unknown): boolean {
+  if (raw === null || raw === undefined) return true;
+  if (typeof raw === 'string') return raw.trim() === '';
+  return false;
 }
 
 /** 判��是否为「有效但为空」的数据（对应降级 ② empty-data）。 */

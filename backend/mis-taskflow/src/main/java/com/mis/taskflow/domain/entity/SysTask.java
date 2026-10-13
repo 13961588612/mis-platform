@@ -24,6 +24,9 @@ import java.time.LocalDateTime;
 @Table(name = "sys_task")
 public class SysTask {
 
+    /** 抄送类任务（与审批待办隔离，见「抄送我的」）。 */
+    public static final String TYPE_CC = "CC";
+
     @Id
     private Long id;
 

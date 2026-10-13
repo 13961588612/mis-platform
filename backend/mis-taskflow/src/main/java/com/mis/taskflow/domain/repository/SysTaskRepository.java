@@ -43,6 +43,7 @@ public interface SysTaskRepository extends JpaRepository<SysTask, Long> {
             where t.tenantId = :tenantId
               and t.assigneeId = :assigneeId
               and t.deleted = 0
+              and t.taskType <> 'CC'
               and (:status is null or t.status = :status)
               and (:pattern is null
                    or lower(coalesce(t.bizTitle, '')) like :pattern
@@ -82,6 +83,7 @@ public interface SysTaskRepository extends JpaRepository<SysTask, Long> {
               and t.assigneeId = :assigneeId
               and t.deleted = 0
               and t.status in ('PENDING', 'APPROVING')
+              and t.taskType <> 'CC'
               and (:pattern is null
                    or lower(coalesce(t.bizTitle, '')) like :pattern
                    or lower(coalesce(t.bizType, '')) like :pattern
@@ -111,6 +113,7 @@ public interface SysTaskRepository extends JpaRepository<SysTask, Long> {
             select count(t) from SysTask t
             where t.tenantId = :tenantId and t.assigneeId = :assigneeId
               and t.deleted = 0 and t.status in ('PENDING', 'APPROVING')
+              and t.taskType <> 'CC'
             """)
     long countPending(@Param("tenantId") Long tenantId, @Param("assigneeId") Long assigneeId);
 
@@ -125,6 +128,7 @@ public interface SysTaskRepository extends JpaRepository<SysTask, Long> {
               and t.assigneeId = :assigneeId
               and t.deleted = 0
               and t.status in ('APPROVED', 'REJECTED')
+              and t.taskType <> 'CC'
               and (:pattern is null
                    or lower(coalesce(t.bizTitle, '')) like :pattern
                    or lower(coalesce(t.bizType, '')) like :pattern
@@ -153,7 +157,8 @@ public interface SysTaskRepository extends JpaRepository<SysTask, Long> {
     @Query("""
             select count(t) from SysTask t
             where t.tenantId = :tenantId and t.assigneeId = :assigneeId
-              and t.deleted = 0 and t.status in ('PENDING', 'APPROVING') and t.priority = 4
+              and t.deleted = 0 and t.status in ('PENDING', 'APPROVING')
+              and t.taskType <> 'CC' and t.priority = 4
             """)
     long countUrgent(@Param("tenantId") Long tenantId, @Param("assigneeId") Long assigneeId);
 
@@ -161,6 +166,7 @@ public interface SysTaskRepository extends JpaRepository<SysTask, Long> {
             select count(t) from SysTask t
             where t.tenantId = :tenantId and t.assigneeId = :assigneeId
               and t.deleted = 0 and t.status in ('PENDING', 'APPROVING')
+              and t.taskType <> 'CC'
               and t.dueDate is not null and t.dueDate < :now
             """)
     long countOverdue(@Param("tenantId") Long tenantId,
@@ -184,6 +190,7 @@ public interface SysTaskRepository extends JpaRepository<SysTask, Long> {
               and t.assigneeId = :assigneeId
               and t.deleted = 0
               and t.appCode = :appCode
+              and t.taskType <> 'CC'
               and (:status is null or t.status = :status)
               and (:pattern is null
                    or lower(coalesce(t.bizTitle, '')) like :pattern
@@ -219,6 +226,7 @@ public interface SysTaskRepository extends JpaRepository<SysTask, Long> {
               and t.assigneeId = :assigneeId
               and t.deleted = 0
               and t.appCode is null
+              and t.taskType <> 'CC'
               and (:status is null or t.status = :status)
               and (:pattern is null
                    or lower(coalesce(t.bizTitle, '')) like :pattern
@@ -253,6 +261,7 @@ public interface SysTaskRepository extends JpaRepository<SysTask, Long> {
               and t.assigneeId = :assigneeId
               and t.deleted = 0
               and t.status in ('PENDING', 'APPROVING')
+              and t.taskType <> 'CC'
               and t.appCode = :appCode
               and (:pattern is null
                    or lower(coalesce(t.bizTitle, '')) like :pattern
@@ -287,6 +296,7 @@ public interface SysTaskRepository extends JpaRepository<SysTask, Long> {
               and t.assigneeId = :assigneeId
               and t.deleted = 0
               and t.status in ('PENDING', 'APPROVING')
+              and t.taskType <> 'CC'
               and t.appCode is null
               and (:pattern is null
                    or lower(coalesce(t.bizTitle, '')) like :pattern
@@ -320,6 +330,7 @@ public interface SysTaskRepository extends JpaRepository<SysTask, Long> {
               and t.assigneeId = :assigneeId
               and t.deleted = 0
               and t.status in ('APPROVED', 'REJECTED')
+              and t.taskType <> 'CC'
               and t.appCode = :appCode
               and (:pattern is null
                    or lower(coalesce(t.bizTitle, '')) like :pattern
@@ -354,6 +365,7 @@ public interface SysTaskRepository extends JpaRepository<SysTask, Long> {
               and t.assigneeId = :assigneeId
               and t.deleted = 0
               and t.status in ('APPROVED', 'REJECTED')
+              and t.taskType <> 'CC'
               and t.appCode is null
               and (:pattern is null
                    or lower(coalesce(t.bizTitle, '')) like :pattern
@@ -379,6 +391,26 @@ public interface SysTaskRepository extends JpaRepository<SysTask, Long> {
                                                 @Param("initiatorPattern") String initiatorPattern,
                                                 @Param("participantPattern") String participantPattern,
                                                 Pageable pageable);
+
+    /**
+     * 抄送我的：{@code taskType=CC}，按创建时间倒序（与待办/已办隔离）。
+     */
+    @Query("""
+            select t from SysTask t
+            where t.tenantId = :tenantId
+              and t.assigneeId = :assigneeId
+              and t.deleted = 0
+              and t.taskType = 'CC'
+              and (:pattern is null
+                   or lower(coalesce(t.bizTitle, '')) like :pattern
+                   or lower(coalesce(t.bizType, '')) like :pattern
+                   or lower(coalesce(t.bizRefId, '')) like :pattern)
+            order by t.createdAt desc
+            """)
+    Page<SysTask> findCcByAssignee(@Param("tenantId") Long tenantId,
+                                   @Param("assigneeId") Long assigneeId,
+                                   @Param("pattern") String pattern,
+                                   Pageable pageable);
 
     /**
      * 悲观行锁读取：处理 / 转办在同把行锁内完成 read-check-write（见 {@code TaskService.requireTask}）。

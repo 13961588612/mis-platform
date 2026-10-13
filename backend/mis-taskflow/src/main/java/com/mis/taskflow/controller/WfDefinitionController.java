@@ -3,6 +3,7 @@ package com.mis.taskflow.controller;
 import com.mis.common.core.result.PageResult;
 import com.mis.common.core.result.Result;
 import com.mis.taskflow.dto.CreateDefinitionRequest;
+import com.mis.taskflow.dto.UpdateSupportedFormsRequest;
 import com.mis.taskflow.dto.WfDefinitionDTO;
 import com.mis.taskflow.service.WfDefinitionService;
 import jakarta.validation.Valid;
@@ -42,6 +43,17 @@ public class WfDefinitionController {
                                @RequestParam Long tenantId,
                                @Valid @RequestBody CreateDefinitionRequest request) {
         definitionService.update(id, tenantId, request);
+        return Result.ok();
+    }
+
+    /**
+     * 仅更新表单关联（草稿/已发布均可）。一个流程可关联多个表单；一个表单只能关联一个流程。
+     */
+    @PutMapping("/{id}/supported-forms")
+    public Result<Void> updateSupportedForms(@PathVariable Long id,
+                                             @RequestParam Long tenantId,
+                                             @RequestBody UpdateSupportedFormsRequest request) {
+        definitionService.updateSupportedForms(id, tenantId, request);
         return Result.ok();
     }
 

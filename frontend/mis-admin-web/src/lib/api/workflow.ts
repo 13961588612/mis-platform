@@ -62,6 +62,8 @@ export interface WfInstance {
   status: string;
   initiatorId: string | null;
   initiatorName: string | null;
+  /** 发起人所属组织/公司名快照；无则 null。 */
+  initiatorOrgName: string | null;
   currentNodeCode: string | null;
   currentNodeName: string | null;
   progress: string | null;
@@ -74,6 +76,32 @@ export interface WfInstance {
    * 门户待办「我发起的」源「平台 / 关联应用」列据此取值。
    */
   appCode: string | null;
+  /** 流程实例展示标题；旧缓存可能缺失，展示侧回退 businessId。 */
+  title: string | null;
+  /**
+   * 发起时提交的表单 JSON。仅 `includeFormData=true` 的列表请求会带；
+   * 门户「我发起的」默认不含（避免分页多传表单体）。
+   */
+  formData?: string | null;
+}
+
+/** 启动流程请求（对齐 BFF `POST /workflow/instances/start`）。 */
+export interface StartProcessRequest {
+  definitionCode: string;
+  businessType: string;
+  businessId: string;
+  startedFormCode: string;
+  formData?: string | null;
+  initiatorId?: number | string | null;
+  initiatorName?: string | null;
+  appCode?: string | null;
+  initiatorOrgName?: string | null;
+  /** 显式标题；空则后端按表单 titleField 从 formData 取。 */
+  title?: string | null;
+  /** 紧急程度 1~4；写入实例并用于分派待办。 */
+  priority?: number | null;
+  /** 过期时间 ISO LocalDateTime（如 2026-10-12T20:00:00）。 */
+  dueDate?: string | null;
 }
 
 export interface WfTask {
@@ -116,8 +144,7 @@ export interface ProcessDetail {
    * `features/biz/forms/parse-form-data.ts` 的 `parseFormData` 负责，
    * 它对非法串返回 `{ ok: false, raw }` 供兜底卡展示原文，不抛。
    *
-   * ⚠️ 刻意**不放在 `WfInstance` 上**：`GET /workflow/instances/my` 分页 20 条，
-   * 挂在那里会让列表接口多传 20 份表单 JSON。
+     * 详情接口始终返回。列表 `WfInstance.formData` 仅 `includeFormData=true` 时填充。
    */
   formData: string | null;
 }
@@ -172,9 +199,37 @@ export async function fetchDefinition(id: string, tenantId: string): Promise<WfD
   return unwrap(res, '获取流程定义失败');
 }
 
+/**
+ * 仅更新流程定义的表单关联（草稿/已发布均可）。
+ *
+ * <p>端点 `PUT /api/v1/workflow/definitions/{id}/supported-forms`（sys_api 95101，V142），
+ * 绑定菜单 95006（`workflow:definition:edit`）。一个表单只能关联一个流程；一个流程可关联多个表单。
+ */
+export async function updateSupportedForms(
+  id: string,
+  tenantId: string,
+  supportedFormCodes: string[],
+): Promise<void> {
+  const res = await api.put<ApiResult<null>>(
+    `/workflow/definitions/${id}/supported-forms`,
+    { supportedFormCodes },
+    { params: { tenantId } },
+  );
+  if (res.data.code !== 0) throw new Error(res.data.message || '关联表单失败');
+}
+
 export async function fetchProcessDetail(id: string, tenantId: string): Promise<ProcessDetail> {
   const res = await api.get<ApiResult<ProcessDetail>>(`/workflow/instances/${id}`, { params: { tenantId } });
   return unwrap(res, '获取流程详情失败');
+}
+
+/** 启动流程实例；成功返回实例 id（字符串）。 */
+export async function startProcess(tenantId: string, body: StartProcessRequest): Promise<string> {
+  const res = await api.post<ApiResult<string | number>>('/workflow/instances/start', body, {
+    params: { tenantId },
+  });
+  const id = unwrap(res, '发起流程失败');
+  return String(id);
 }
 
 /**
@@ -199,6 +254,7 @@ export async function fetchMyProcesses(
   appCode?: string | null,
   initiatorName?: string | null,
   participantName?: string | null,
+  includeFormData?: boolean,
 ): Promise<PageResult<WfInstance>> {
   const params: Record<string, unknown> = { tenantId, initiatorId, status, page, size };
   const kw = keyword?.trim();
@@ -211,6 +267,7 @@ export async function fetchMyProcesses(
   if (sc) params.scope = sc;
   const app = appCode?.trim();
   if (app) params.appCode = app;
+  if (includeFormData) params.includeFormData = true;
   const res = await api.get<ApiResult<PageResult<WfInstance>>>('/workflow/instances/my', { params });
   return unwrap(res, '获取我发起的流程失败');
 }

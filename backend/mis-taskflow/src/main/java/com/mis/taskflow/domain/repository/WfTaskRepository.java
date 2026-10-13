@@ -25,6 +25,9 @@ public interface WfTaskRepository extends JpaRepository<WfTask, Long> {
 
     List<WfTask> findByInstanceIdAndNodeCodeOrderByCreatedAtAsc(Long instanceId, String nodeCode);
 
+    /** 按关联 sys_task 批量反查（门户待办补齐发起人时用；同一 sys_task 多行时取任意一条即可）。 */
+    List<WfTask> findBySysTaskIdIn(List<Long> sysTaskIds);
+
     @Query("""
             select count(t) from WfTask t
             where t.instanceId = :instanceId and t.nodeCode = :nodeCode and t.status = 'PENDING'

@@ -67,6 +67,18 @@ public class TaskController {
     }
 
     /**
+     * 抄送我的（仅 {@code taskType=CC}；可含 keyword；与待办/已办隔离）。
+     */
+    @GetMapping("/cc")
+    public Result<PageResult<TaskVO>> cc(@RequestParam Long tenantId,
+                                         @RequestParam Long assigneeId,
+                                         @RequestParam(required = false) String keyword,
+                                         @RequestParam(defaultValue = "1") int page,
+                                         @RequestParam(defaultValue = "20") int size) {
+        return Result.ok(taskService.ccTasks(tenantId, assigneeId, keyword, page, size));
+    }
+
+    /**
      * 我处理过的（已通过 / 已驳回；可含 keyword 模糊过滤；可选发起人/参与人；可选 appCode / scope 归属过滤）。
      *
      * <p>两新增参数语义同 {@link #my}。

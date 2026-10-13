@@ -103,8 +103,9 @@ DB_HOST=10.254.16.6  DB_PORT=5432  DB_NAME=mis_platform  DB_USER=mis  DB_PASSWOR
    POST /api/v1/workflow/instances/start?tenantId=1
    { "definitionCode":"PURCHASE_APPROVAL_DEMO", "businessType":"PURCHASE_ORDER",
      "businessId":"PO-DEMO-1", "startedFormCode":"PUR_FORM", "formData":"{}",
-     "initiatorId":1, "initiatorName":"演示用户" }
+     "initiatorId":1, "initiatorName":"演示用户", "title":"演示采购审批" }
    ```
+   标题：可显式传 `title`；或配置表单 `config.titleField` 并从 `formData` 取值；都没有则返回「请补录流程标题」。
 3. 到「我的待办」可见该待办；点击进入 ProcessShell → 同意。
 4. 流程完成，实例 `postProcessStatus` 由 `WAITING` →（扫描器执行后）`SUCCESS`。
 5. 「执行监控」可观测后处理任务；「业务审计」可见操作记录。

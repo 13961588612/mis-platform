@@ -67,13 +67,21 @@ public class PortalMattersRepository {
                    (SELECT wt.instance_id FROM wf_task wt
                      WHERE wt.sys_task_id = st.id ORDER BY wt.id LIMIT 1) AS instance_id,
                    st.id AS sys_task_id,
-                   st.biz_title AS title,
+                   COALESCE(
+                     (SELECT wi_t.title FROM wf_instance wi_t
+                       WHERE wi_t.id = (SELECT wt_t.instance_id FROM wf_task wt_t
+                                         WHERE wt_t.sys_task_id = st.id ORDER BY wt_t.id LIMIT 1)),
+                     st.biz_title
+                   ) AS title,
                    st.biz_type || ' / ' || st.biz_ref_id AS subtitle,
                    st.biz_type AS biz_type,
                    st.app_code AS app_code,
                    (SELECT wi.initiator_name FROM wf_instance wi
                      WHERE wi.id = (SELECT wt2.instance_id FROM wf_task wt2
                                      WHERE wt2.sys_task_id = st.id ORDER BY wt2.id LIMIT 1)) AS initiator_name,
+                   (SELECT wi.initiator_org_name FROM wf_instance wi
+                     WHERE wi.id = (SELECT wt2.instance_id FROM wf_task wt2
+                                     WHERE wt2.sys_task_id = st.id ORDER BY wt2.id LIMIT 1)) AS initiator_org_name,
                    st.assignee_name AS assignee_name,
                    st.status AS status,
                    st.created_at AS created_at,
@@ -82,6 +90,7 @@ public class PortalMattersRepository {
              WHERE st.tenant_id = :tenantId
                AND st.assignee_id = :userId
                AND st.deleted = 0
+               AND st.task_type <> 'CC'
             UNION ALL
             SELECT 'INSTANCE' AS kind,
                    wi.id AS id,
@@ -90,11 +99,12 @@ public class PortalMattersRepository {
                    -- ``NULL::bigint`` 误当成「空值 + 命名参数``:bigint``」⇒ 下发 ``NULL:bigint``
                    -- 触发 ``syntax error at or near ":"``（本仓首次，集成测试实测）。
                    CAST(NULL AS bigint) AS sys_task_id,
-                   wi.business_type || ' / ' || wi.business_id AS title,
+                   wi.title AS title,
                    wi.definition_code || ' \u00b7 ' || COALESCE(wi.started_form_code, '-') AS subtitle,
                    wi.business_type AS biz_type,
                    wi.app_code AS app_code,
                    wi.initiator_name AS initiator_name,
+                   wi.initiator_org_name AS initiator_org_name,
                    NULL AS assignee_name,
                    wi.status AS status,
                    wi.created_at AS created_at,

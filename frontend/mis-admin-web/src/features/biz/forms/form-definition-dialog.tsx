@@ -20,9 +20,15 @@ import {
   type FormDefinitionItem,
   type UpsertFormDefinitionRequest,
 } from '@/lib/api/form-definition';
-import { hasFormLoader, listFormLoaderCodes } from './forms/form-loaders';
+import { hasFormLoader, listFormLoaderCodes, loadFormEntry } from './forms/form-loaders';
+import { resolveForm } from './registry';
+import type { FormFieldSchema } from './types';
 import { CategorySingleTreeSelect } from '@/components/common/category-single-tree-select';
 import type { CategoryTreeNode } from '@/components/common/category-tree-select';
+import {
+  readConfigTitleField,
+  withConfigTitleField,
+} from '@/features/taskflow/lib/resolve-process-title';
 
 export interface FormDefinitionDialogProps {
   open: boolean;
@@ -74,6 +80,8 @@ export function FormDefinitionDialog({
   const [categoryId, setCategoryId] = useState<string>('');
   const [status, setStatus] = useState<string>(FORM_STATUS_ENABLED);
   const [sortOrder, setSortOrder] = useState('');
+  const [titleField, setTitleField] = useState('');
+  const [titleFieldOptions, setTitleFieldOptions] = useState<FormFieldSchema[]>([]);
   const [codeError, setCodeError] = useState<string | null>(null);
   const [nameError, setNameError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -88,6 +96,7 @@ export function FormDefinitionDialog({
       setCategoryId(initial.categoryId == null ? '' : String(initial.categoryId));
       setStatus(initial.status === FORM_STATUS_DISABLED ? FORM_STATUS_DISABLED : FORM_STATUS_ENABLED);
       setSortOrder(initial.sortOrder == null ? '' : String(initial.sortOrder));
+      setTitleField(readConfigTitleField(initial.config) ?? '');
     } else {
       setCode('');
       setName('');
@@ -95,10 +104,30 @@ export function FormDefinitionDialog({
       setCategoryId('');
       setStatus(FORM_STATUS_ENABLED);
       setSortOrder('');
+      setTitleField('');
     }
+    setTitleFieldOptions([]);
     setCodeError(null);
     setNameError(null);
   }, [open, initial]);
+
+  // 选中表单组件后加载字段 schema，供「标题字段」下拉。
+  useEffect(() => {
+    if (!open || !code) {
+      setTitleFieldOptions([]);
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      await loadFormEntry(code);
+      if (cancelled) return;
+      const entry = resolveForm(code);
+      setTitleFieldOptions(entry?.fields ?? []);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [open, code]);
 
   // 已注册组件编码清单；以及「initial.code 不在清单里」时的游离选项。
   const loaderCodes = useMemo(() => listFormLoaderCodes(), []);
@@ -123,6 +152,7 @@ export function FormDefinitionDialog({
     setNameError(nErr);
     if (cErr || nErr) return;
 
+    const baseConfig = isEdit && initial ? initial.config : '{}';
     const body: UpsertFormDefinitionRequest = {
       categoryId: categoryId === '' ? null : Number(categoryId),
       code: code.trim(),
@@ -130,7 +160,7 @@ export function FormDefinitionDialog({
       description: description.trim().length === 0 ? null : description.trim(),
       status: status === FORM_STATUS_DISABLED ? FORM_STATUS_DISABLED : FORM_STATUS_ENABLED,
       sortOrder: sortOrder.trim().length === 0 ? null : Number(sortOrder),
-      config: null,
+      config: withConfigTitleField(baseConfig, titleField || null),
     };
 
     setSaving(true);
@@ -268,6 +298,32 @@ export function FormDefinitionDialog({
                 placeholder="0"
               />
             </div>
+          </div>
+
+          <div className="space-y-1.5">
+            <label htmlFor="fd-title-field" className="block text-sm font-medium text-foreground">
+              标题字段
+            </label>
+            <select
+              id="fd-title-field"
+              aria-label="标题字段"
+              value={titleField}
+              onChange={(e) => setTitleField(e.target.value)}
+              className="h-8 w-full rounded-md border border-input bg-background px-2 text-sm"
+            >
+              <option value="">不指定（发起时弹窗补录）</option>
+              {titleFieldOptions.map((f) => (
+                <option key={f.key} value={f.key}>
+                  {f.label}（{f.key}）
+                </option>
+              ))}
+              {titleField && !titleFieldOptions.some((f) => f.key === titleField) ? (
+                <option value={titleField}>{titleField}（未在注册表）</option>
+              ) : null}
+            </select>
+            <p className="text-xs text-muted-foreground">
+              写入 config.titleField；发起流程时优先取该表单字段作为实例标题。
+            </p>
           </div>
 
           <div className="space-y-1.5">

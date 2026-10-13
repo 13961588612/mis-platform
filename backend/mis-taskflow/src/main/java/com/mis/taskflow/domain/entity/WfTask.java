@@ -22,6 +22,11 @@ public class WfTask {
     public static final String STATUS_PENDING = "PENDING";
     public static final String STATUS_COMPLETED = "COMPLETED";
 
+    /** 审批任务。 */
+    public static final String TYPE_APPROVE = "APPROVE";
+    /** 抄送任务（投递即完成，不阻塞）。 */
+    public static final String TYPE_CC = "CC";
+
     @Id
     private Long id;
 

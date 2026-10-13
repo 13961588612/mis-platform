@@ -22,6 +22,7 @@ const runningInstance = {
   status: 'RUNNING',
   initiatorId: '700001',
   initiatorName: '测试员',
+  initiatorOrgName: null,
   currentNodeCode: 'finance',
   currentNodeName: null,
   progress: '50%',
@@ -30,6 +31,7 @@ const runningInstance = {
   createdAt: '2026-10-08T10:00:00',
   completedAt: null,
   appCode: null,
+  title: null,
 };
 
 describe('TaskMySentPage', () => {

@@ -97,12 +97,21 @@ function renderTab() {
 }
 
 describe('[QA·本轮 B1] 子 Tab 结构与默认选中「全部」', () => {
-  it('子 Tab 文案序列恰为 [全部, 待处理, 审批中, 已通过, 已驳回, 我发起的, 我审批的]', () => {
+  it('子 Tab 文案序列恰为 [全部, 待处理, 审批中, 已通过, 已驳回, 抄送我的, 我发起的, 我审批的]', () => {
     renderTab();
     const labellist = within(screen.getByRole('tablist'))
       .getAllByRole('tab')
       .map((t) => (t.textContent ?? '').trim());
-    expect(labellist).toEqual(['全部', '待处理', '审批中', '已通过', '已驳回', '我发起的', '我审批的']);
+    expect(labellist).toEqual([
+      '全部',
+      '待处理',
+      '审批中',
+      '已通过',
+      '已驳回',
+      '抄送我的',
+      '我发起的',
+      '我审批的',
+    ]);
     // 与配置源同序（防止 DOM 与 TODO_TABS 漂移）
     expect(TODO_TABS.map((t) => t.label)).toEqual(labellist);
   });

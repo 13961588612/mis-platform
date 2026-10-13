@@ -1,7 +1,7 @@
 /**
  * 流程设计器主体（T4.1：从 `designer-page.tsx` 原地抽出，逻辑一行未改）。
  *
- * <p>三栏：左 Palette 拖拽建节点 / 中 @xyflow/react 画布 / 右属性面板（含表单白名单）。
+ * <p>三栏：左 Palette 拖拽建节点 / 中 @xyflow/react 画布 / 右属性面板。表单关联在列表「关联表单」中配置。
  * 顶部工具条：撤销、重做、自动布局、校验、仅保存、保存并发布。
  *
  * <p>抽出来的唯一目的是让 `DesignerDialog`（T4.2）能把它整块塞进全屏 Dialog，
@@ -110,15 +110,17 @@ export function DesignerBody({
   const resolve = <T,>(next: Updater<T>, prev: T): T =>
     typeof next === 'function' ? (next as (p: T) => T)(prev) : next;
 
+  // ⚠️ 必须走 graph.set 的函数式更新读 presentRef，不能闭包读 graph.present：
+  // handleNodeChange 等回调若依赖过期的 setNodes，会用初始空数组 resolve，整图画布被清空。
   const setNodes = useCallback(
     (next: Updater<WfFlowNode[]>) =>
-      graph.set({ nodes: resolve(next, graph.present.nodes), edges: graph.present.edges }, 'nodes'),
-    [graph],
+      graph.set((prev) => ({ nodes: resolve(next, prev.nodes), edges: prev.edges }), 'nodes'),
+    [graph.set],
   );
   const setEdges = useCallback(
     (next: Updater<WfFlowEdge[]>) =>
-      graph.set({ nodes: graph.present.nodes, edges: resolve(next, graph.present.edges) }, 'edges'),
-    [graph],
+      graph.set((prev) => ({ nodes: prev.nodes, edges: resolve(next, prev.edges) }), 'edges'),
+    [graph.set],
   );
   const { undo, redo, canUndo, canRedo } = graph;
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
@@ -146,14 +148,17 @@ export function DesignerBody({
     (id: string, patch: Partial<WfFlowNode['data']>) => {
       setNodes((prev) => prev.map((n) => (n.id === id ? { ...n, data: { ...n.data, ...patch } } : n)));
     },
-    [],
+    [setNodes],
   );
 
-  const handleDeleteNode = useCallback((id: string) => {
-    setNodes((prev) => prev.filter((n) => n.id !== id));
-    setEdges((prev) => prev.filter((e) => e.source !== id && e.target !== id));
-    setSelectedNodeId(null);
-  }, []);
+  const handleDeleteNode = useCallback(
+    (id: string) => {
+      setNodes((prev) => prev.filter((n) => n.id !== id));
+      setEdges((prev) => prev.filter((e) => e.source !== id && e.target !== id));
+      setSelectedNodeId(null);
+    },
+    [setNodes, setEdges],
+  );
 
   const handleFlowMetaChange = useCallback((next: FlowMeta) => {
     setFlowMeta(next);
@@ -370,7 +375,7 @@ export function DesignerBody({
     <div className="flex min-h-0 flex-1 flex-col">
       <PageHeader
         title={resolvedDefinitionId ? '编辑流程' : '流程设计器'}
-        description="拖拽编排审批流；表单白名单支持一个流程对接多个表单"
+        description="拖拽编排审批流；表单请在列表「关联表单」中配置"
         actions={
           <div className="flex items-center gap-2">
             <Button size="sm" variant="outline" disabled={!canUndo} onClick={undo} title="撤销 (Ctrl+Z)">

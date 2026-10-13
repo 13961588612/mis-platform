@@ -53,6 +53,7 @@ vi.mock('@/lib/api/tasks', () => ({
   fetchTaskStats: vi.fn(),
   handleTask: vi.fn(),
   fetchPortalMatters: vi.fn(),
+  fetchCcTasks: vi.fn(),
 }));
 
 vi.mock('@/lib/api/workflow', () => ({
@@ -124,6 +125,8 @@ function task(overrides: Partial<TaskItem> = {}): TaskItem {
     completedAt: null,
     createdAt: '2026-10-08T10:00:00',
     appCode: null,
+    initiatorName: null,
+    initiatorOrgName: null,
     ...overrides,
   };
 }
@@ -138,6 +141,7 @@ function wfInstance(overrides: Partial<WfInstance> = {}): WfInstance {
     status: 'RUNNING',
     initiatorId: '700001',
     initiatorName: '测试员',
+    initiatorOrgName: null,
     currentNodeCode: 'finance',
     currentNodeName: null,
     progress: '50%',
@@ -146,6 +150,7 @@ function wfInstance(overrides: Partial<WfInstance> = {}): WfInstance {
     createdAt: '2026-10-08T10:00:00',
     completedAt: null,
     appCode: null,
+    title: null,
     ...overrides,
   };
 }
@@ -273,6 +278,31 @@ describe('[QA·本轮回退] 首页三板块 = 紧凑列表（无表格），行
     expect(tags.total).toBe(2);
     expect(tags.appCount).toBe(1);
     expect(tags.bizCount).toBe(1);
+  });
+
+  it('我的待办 / 我发起的：行内展示发起人（公司）', async () => {
+    vi.mocked(tasksApi.fetchMyTasks).mockResolvedValue({
+      ...emptyPage,
+      total: 1,
+      list: [
+        task({
+          bizTitle: '待办-带发起人',
+          initiatorName: '张三',
+          initiatorOrgName: '华东分公司',
+        }),
+      ],
+    });
+    renderBoard(<TaskBoard tenantId="1" userId="700001" />);
+    expect(await screen.findByText('张三（华东分公司）')).toBeTruthy();
+    cleanup();
+
+    vi.mocked(workflowApi.fetchMyProcesses).mockResolvedValue({
+      ...emptyPage,
+      total: 1,
+      list: [wfInstance({ initiatorName: '李四', initiatorOrgName: '华北分公司' })],
+    });
+    renderBoard(<ProcessBoard tenantId="1" userId="700001" />);
+    expect(await screen.findByText('李四（华北分公司）')).toBeTruthy();
   });
 });
 

@@ -259,18 +259,24 @@ describe('DesignerBody', () => {
    *
    * <p>用后端返回「悬空边」模拟：source 指向库里不存在的 nodeCode。
    * 该边在 React Flow 里本来就渲染不出来，保存时也不该进payload。
+   *
+   * <p>⚠️ 悬空边必须**叠加**在 `start→approve→end` 合法链路之外（作为第 3 条），
+   * 不能替换其中的合法边 —— 否则 `end` 从 START 不可达，会先被可达性校验拦下
+   * （`校验未通过：节点「结束」无法从开始节点到达`），压根走不到保存，
+   * 也就测不到 flatMap 的丢弃逻辑。
    */
   it('悬空边（端点不存在）在保存时被丢弃，不写入脏 source', async () => {
     vi.mocked(workflowApi.fetchDefinition).mockResolvedValue({
       ...existing,
       edges: [
         { source: 'start', target: 'approve', edgeType: 'DEFAULT', label: null, conditionExpr: null, sortOrder: 0 },
-        // start2 在 nodes 里不存在 ⇒ 悬空
-        { source: 'start2', target: 'end', edgeType: 'DEFAULT', label: null, conditionExpr: null, sortOrder: 1 },
+        { source: 'approve', target: 'end', edgeType: 'DEFAULT', label: null, conditionExpr: null, sortOrder: 1 },
+        // start2 在 nodes 里不存在 ⇒ 悬空；叠加在合法链路旁，不破坏连通性
+        { source: 'start2', target: 'end', edgeType: 'DEFAULT', label: null, conditionExpr: null, sortOrder: 2 },
       ],
     });
     renderBody({ definitionId: '1001' });
-    await waitFor(() => expect(screen.getByText(/节点 3 · 连线 2/)).toBeTruthy());
+    await waitFor(() => expect(screen.getByText(/节点 3 · 连线 3/)).toBeTruthy());
 
     fireEvent.click(screen.getByText('仅保存'));
 
@@ -278,8 +284,14 @@ describe('DesignerBody', () => {
     const payload = vi.mocked(api.put).mock.calls[0][1] as {
       edges: { source: string; target: string }[];
     };
+    // 悬空边被 flatMap 丢弃，只剩 2 条合法边，且不出现脏 source
     expect(payload.edges).toEqual([
       expect.objectContaining({ source: 'start', target: 'approve' }),
+      expect.objectContaining({ source: 'approve', target: 'end' }),
     ]);
+    for (const e of payload.edges) {
+      expect(e.source.startsWith('n_')).toBe(false);
+      expect(e.target.startsWith('n_')).toBe(false);
+    }
   });
 });

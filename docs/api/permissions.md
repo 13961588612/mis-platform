@@ -186,7 +186,15 @@ if (hasPermission('system:user:edit')) { ... }
 - [x] 内置仅 `TENANT_ADMIN`；平台 **superadmin** 独立账号
 - [x] admin 不可删除自己
 
-## 9. 关联文档
+## 9. 流程定义（摘录）
+
+| permission | 类型 | 说明 |
+|------------|------|------|
+| workflow:definition:edit | 菜单 95006 | 流程定义列表 / 编排 / 发布 / 关联表单 |
+
+关联 API（经 `sys_menu_api`）：含 `PUT /api/v1/workflow/definitions/{id}/supported-forms`（sys_api **95101**，V142）。
+
+## 10. 关联文档
 
 - [接口规范](api-specification.md)
 - [种子数据](../database/seed-data.md)

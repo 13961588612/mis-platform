@@ -2,24 +2,20 @@
  * 右侧属性面板（P7）。
  *
  * <p>选中节点时编辑节点属性（名称/审批人规则/超时/条件）；未选节点时编辑流程全局属性
- * （编码/名称/分类/**表单白名单多选**）。表单白名单正是「一个流程对接多个表单」的落地点。
+ * （编码/名称/分类/说明）。表单关联已移至列表「关联表单」弹窗，编排内不再编辑。
  */
 import { useMemo } from 'react';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { MultiSelect } from '@/components/ui/multi-select';
 import { CategorySingleTreeSelect } from '@/components/common/category-single-tree-select';
 import type { CategoryTreeNode } from '@/components/common/category-tree-select';
 import { cn } from '@/lib/utils';
-import {
-  missingFormCodes,
-  parseFormCodes,
-  serializeFormCodes,
-  useFormCatalog,
-  type FormOption,
-} from './form-catalog';
 import { useBizCategoryTree } from './biz-category-catalog';
+import { AssigneeRuleEditor } from './assignee-rule-editor';
+import { TIMEOUT_PRESETS } from './timeout-presets';
 import type { WfFlowNode } from './types';
+
+export { TIMEOUT_PRESETS, formatTimeoutHours } from './timeout-presets';
 
 /**
  * 流程分类：租户通用业务分类 `biz_category` 邻接树下发的业务类型（软引用 `categoryId`）。
@@ -100,12 +96,8 @@ export function PropertyPanel({
           <Field label="说明">
             <Input value={flowMeta.description} onChange={(e) => onFlowMetaChange({ ...flowMeta, description: e.target.value })} className="h-8" />
           </Field>
-          <FormWhitelistField
-            supportedFormCodes={flowMeta.supportedFormCodes}
-            onChange={(codes) => onFlowMetaChange({ ...flowMeta, supportedFormCodes: serializeFormCodes(codes) })}
-          />
           <p className="text-[11px] text-muted-foreground">
-            一个流程可绑定多个表单；启动实例时表单代码必须在此白名单内。
+            表单关联请在流程定义列表中操作「关联表单」；编排保存会保留已关联的表单，不在此修改。
           </p>
         </div>
       </div>
@@ -124,21 +116,12 @@ export function PropertyPanel({
           <Input value={data.nodeName} onChange={(e) => onNodeChange(selected.id, { nodeName: e.target.value })} className="h-8" />
         </Field>
 
-        {(data.kind === 'APPROVAL' || data.kind === 'ROUTING') && (
-          <>
-            <Field label="审批人规则（JSON）">
-              <textarea
-                value={data.assigneeRule}
-                onChange={(e) => onNodeChange(selected.id, { assigneeRule: e.target.value })}
-                rows={3}
-                className="w-full rounded-md border border-input bg-background px-2 py-1.5 font-mono text-[12px]"
-                placeholder='{"type":"FIXED","value":123}'
-              />
-            </Field>
-            <p className="text-[11px] text-muted-foreground">
-              支持 SELF / FIXED / USER_LIST / SUPERVISOR / ROLE / DEPT_LEADER
-            </p>
-          </>
+        {(data.kind === 'APPROVAL' || data.kind === 'ROUTING' || data.kind === 'CC') && (
+          <AssigneeRuleEditor
+            value={data.assigneeRule}
+            nodeKind={data.kind}
+            onChange={(json) => onNodeChange(selected.id, { assigneeRule: json })}
+          />
         )}
 
         {data.kind === 'ROUTING' && (
@@ -160,10 +143,41 @@ export function PropertyPanel({
           <Field label="超时（小时）">
             <Input
               type="number"
+              min={1}
               value={data.timeoutHours ?? ''}
-              onChange={(e) => onNodeChange(selected.id, { timeoutHours: e.target.value ? Number(e.target.value) : null })}
+              onChange={(e) =>
+                onNodeChange(selected.id, {
+                  timeoutHours: e.target.value ? Number(e.target.value) : null,
+                })
+              }
               className="h-8"
+              aria-label="超时小时数"
             />
+            <div className="mt-1.5 flex flex-wrap gap-1">
+              {TIMEOUT_PRESETS.map((p) => {
+                const active = data.timeoutHours === p.hours;
+                return (
+                  <button
+                    key={p.label}
+                    type="button"
+                    data-testid="timeout-preset"
+                    aria-pressed={active}
+                    onClick={() => onNodeChange(selected.id, { timeoutHours: p.hours })}
+                    className={cn(
+                      'rounded border px-1.5 py-0.5 text-[11px] transition',
+                      active
+                        ? 'border-primary bg-primary/10 font-medium text-primary'
+                        : 'border-input bg-background text-muted-foreground hover:bg-accent hover:text-foreground',
+                    )}
+                  >
+                    {p.label}
+                  </button>
+                );
+              })}
+            </div>
+            <p className="mt-1 text-[11px] text-muted-foreground">
+              可手输小时，或点快捷：按 1 天=24 小时、1 月=30 天、1 年=365 天折算。
+            </p>
           </Field>
         )}
 
@@ -186,50 +200,6 @@ export function PropertyPanel({
         </button>
       </div>
     </div>
-  );
-}
-
-/**
- * 表单白名单：下拉多选（T4.6）。
- *
- * <p>候选项来自后端「已启用」清单与前端「已实现」清单的**交集**，不再允许手打字符串
- * ——手打能绕过任何前端校验，拼错了只能等保存时被后端拒。
- *
- * <p>⚠️ 后端不就绪时降级为「前端已实现清单」并打出可见提示，绝不白屏。
- */
-export function FormWhitelistField({
-  supportedFormCodes,
-  onChange,
-  tenantId = '1',
-}: {
-  supportedFormCodes: string;
-  onChange: (codes: string[]) => void;
-  tenantId?: string;
-}) {
-  const { options, loading, notice } = useFormCatalog(tenantId);
-  const selected = parseFormCodes(supportedFormCodes);
-  const missing = missingFormCodes(options, selected);
-  const selectOptions = [
-    ...options.map((o: FormOption) => ({ value: o.code, label: `${o.name}（${o.code}）` })),
-    ...missing.map((code) => ({ value: code, label: `${code}（未注册或已停用）` })),
-  ];
-
-  return (
-    <Field label="表单白名单">
-      <MultiSelect
-        options={selectOptions}
-        value={selected}
-        onChange={onChange}
-        placeholder={loading ? '加载表单清单…' : '选择表单（可多选）'}
-        disabled={loading}
-      />
-      {notice ? <p className="mt-1 text-[11px] text-warning">{notice}</p> : null}
-      {missing.length > 0 ? (
-        <p className="mt-1 text-[11px] text-destructive">
-          已选中的 {missing.join('、')} 未注册或已停用，保存会被后端拒绝。
-        </p>
-      ) : null}
-    </Field>
   );
 }
 

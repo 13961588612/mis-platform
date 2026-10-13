@@ -11,7 +11,6 @@ import com.mis.taskflow.dto.CreateDefinitionRequest;
 import com.mis.taskflow.dto.StartProcessRequest;
 import com.mis.taskflow.dto.UpsertBizCategoryRequest;
 import com.mis.taskflow.dto.UpsertFormDefinitionRequest;
-import com.mis.taskflow.dto.WfInstanceVO;
 import com.mis.taskflow.dto.WfNodeDTO;
 import com.mis.taskflow.support.FormTestFixtures;
 import org.junit.jupiter.api.DisplayName;
@@ -414,7 +413,7 @@ class FormDefinitionServiceIntegrationTest {
     }
 
     @Test
-    @DisplayName("T1.6：ProcessDetailVO.formData 只在 detail 填，列表接口不含")
+    @DisplayName("T1.6：列表默认不带 formData；includeFormData=true 才填充")
     void detailCarriesFormDataOnlyInDetail() {
         String code = uniqCode("FORM");
         FormTestFixtures.register(formService, TENANT, code, "带数据表单");
@@ -425,18 +424,20 @@ class FormDefinitionServiceIntegrationTest {
 
         Long instId = processService.startProcess(TENANT, new StartProcessRequest(
                 flowCode, "PURCHASE_ORDER", "PO-" + System.nanoTime(), code,
-                "{\"amount\":128000,\"orderNo\":\"PO-2026-0001\"}", 100L, "发起人", null));
+                "{\"amount\":128000,\"orderNo\":\"PO-2026-0001\"}", 100L, "发起人", null, null, "测试标题", null, null));
 
         var detail = processService.detail(instId, TENANT);
         assertNotNull(detail.formData(), "detail 必须带 formData");
         assertTrue(detail.formData().contains("128000"), "formData 应原样透出表单 JSON: " + detail.formData());
 
-        // WfInstanceVO 里没有 formData 分量 ⇒ my 分页 20 条不会多传 20 份表单 JSON
-        assertEquals(0, java.util.Arrays.stream(WfInstanceVO.class.getRecordComponents())
-                        .filter(c -> "formData".equals(c.getName())).count(),
-                "WfInstanceVO 不应有 formData 分量");
         var page = processService.myInitiated(TENANT, 100L, null, 1, 50);
         var vo = page.getList().stream().filter(v -> v.id().equals(String.valueOf(instId))).findFirst().orElseThrow();
         assertEquals(code, vo.startedFormCode());
+        assertNull(vo.formData(), "默认列表不带 formData");
+
+        var withForm = processService.myInitiated(TENANT, 100L, null, null, null, null, null, null, 1, 50, true);
+        var voForm = withForm.getList().stream().filter(v -> v.id().equals(String.valueOf(instId))).findFirst().orElseThrow();
+        assertNotNull(voForm.formData(), "includeFormData=true 应带 formData");
+        assertTrue(voForm.formData().contains("128000"), "列表 formData 应原样透出: " + voForm.formData());
     }
 }

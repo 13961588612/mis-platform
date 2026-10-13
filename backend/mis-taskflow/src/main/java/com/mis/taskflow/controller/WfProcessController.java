@@ -57,9 +57,10 @@ public class WfProcessController {
                                                         @RequestParam(required = false) String appCode,
                                                         @RequestParam(required = false) String scope,
                                                         @RequestParam(defaultValue = "1") int page,
-                                                        @RequestParam(defaultValue = "20") int size) {
+                                                        @RequestParam(defaultValue = "20") int size,
+                                                        @RequestParam(defaultValue = "false") boolean includeFormData) {
         return Result.ok(processService.myInitiated(tenantId, initiatorId, status, keyword, appCode, scope,
-                initiatorName, participantName, page, size));
+                initiatorName, participantName, page, size, includeFormData));
     }
 
     /** 处理流程任务（同意/驳回）。 */

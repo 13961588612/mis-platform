@@ -45,6 +45,18 @@ public class TaskController {
                 status, keyword, appCode, scope, initiatorName, participantName, page, size));
     }
 
+    /** 抄送我的（仅 taskType=CC，与待办隔离）。 */
+    @GetMapping("/cc")
+    public Result<PageResult<TaskVO>> cc(@RequestParam(required = false) Long tenantId,
+                                         @RequestParam(required = false) Long assigneeId,
+                                         @RequestParam(required = false) String keyword,
+                                         @RequestParam(defaultValue = "1") int page,
+                                         @RequestParam(defaultValue = "20") int size) {
+        return Result.ok(taskflowWebClient.ccTasks(
+                TaskflowIdentity.tenantId(tenantId), TaskflowIdentity.userId(assigneeId),
+                keyword, page, size));
+    }
+
     @GetMapping("/handled")
     public Result<PageResult<TaskVO>> handled(@RequestParam(required = false) Long tenantId,
                                               @RequestParam(required = false) Long assigneeId,

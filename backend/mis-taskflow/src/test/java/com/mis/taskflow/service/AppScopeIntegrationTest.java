@@ -215,7 +215,7 @@ class AppScopeIntegrationTest {
 
         Long instId = processService.startProcess(TENANT, new com.mis.taskflow.dto.StartProcessRequest(
                 flowCode, "PURCHASE_ORDER", "QA-" + System.nanoTime(), formCode,
-                "{}", 100L, "发起人", "kb"));
+                "{}", 100L, "发起人", "kb", null, "测试标题", null, null));
 
         // A1：实例显式落库
         // QA 修复（测试代码缺陷，非功能缺陷）：startProcess 的 wf_instance INSERT 在本测试事务内

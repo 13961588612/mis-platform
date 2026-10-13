@@ -19,15 +19,16 @@ import java.time.LocalDateTime;
  * @param id            TASK={@code sys_task.id}；INSTANCE={@code wf_instance.id}
  * @param instanceId    关联实例 id（TASK=经 {@code wf_task} 解析，无实例则 {@code null}；INSTANCE={@code = id}）
  * @param sysTaskId     TASK={@code sys_task.id}（供抽屉「转办」）；INSTANCE={@code null}
- * @param title         TASK={@code biz_title}；INSTANCE={@code business_type + ' / ' + business_id}
+ * @param title         TASK={@code coalesce(关联实例.title, biz_title)}；INSTANCE={@code wf_instance.title}
  * @param subtitle      TASK={@code biz_type + ' / ' + biz_ref_id}；INSTANCE={@code definition_code + ' · ' + coalesce(started_form_code,'-')}
  * @param bizType       业务类型（软引用 {@code biz_category.code}）；TASK={@code sys_task.biz_type}；INSTANCE={@code wf_instance.business_type}
  * @param appCode       应用归属（{@code sys_app.code}）；{@code null} = 平台级（前端显示「平台」）
- * @param initiatorName 所属实例发起人（TASK 无实例则 {@code null}）
- * @param assigneeName  TASK={@code sys_task.assignee_name}；INSTANCE={@code null}
- * @param status        TASK={@code sys_task.status}；INSTANCE={@code wf_instance.status}
- * @param createdAt     创建时间（TASK={@code sys_task.created_at}；INSTANCE={@code wf_instance.created_at}）
- * @param category      TASK=其 {@code status} 字面；INSTANCE={@code 'mySent'}（对齐既有 {@code fromWfInstance} 口径）
+ * @param initiatorName    所属实例发起人（TASK 无实例则 {@code null}）
+ * @param initiatorOrgName 发起人所属组织/公司名快照（无则 {@code null}）
+ * @param assigneeName     TASK={@code sys_task.assignee_name}；INSTANCE={@code null}
+ * @param status           TASK={@code sys_task.status}；INSTANCE={@code wf_instance.status}
+ * @param createdAt        创建时间（TASK={@code sys_task.created_at}；INSTANCE={@code wf_instance.created_at}）
+ * @param category         TASK=其 {@code status} 字面；INSTANCE={@code 'mySent'}（对齐既有 {@code fromWfInstance} 口径）
  */
 public record PortalMatterVO(
         String kind,
@@ -39,6 +40,7 @@ public record PortalMatterVO(
         String bizType,
         String appCode,
         String initiatorName,
+        String initiatorOrgName,
         String assigneeName,
         String status,
         LocalDateTime createdAt,

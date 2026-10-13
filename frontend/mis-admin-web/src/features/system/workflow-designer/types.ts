@@ -6,6 +6,7 @@ import type { Node, Edge } from '@xyflow/react';
 export type WfNodeKind =
   | 'START'
   | 'APPROVAL'
+  | 'CC'
   | 'CONDITIONAL'
   | 'ROUTING'
   | 'AUTOMATION'
@@ -14,6 +15,7 @@ export type WfNodeKind =
 export const WF_NODE_TYPES: Record<string, string> = {
   START: 'wfStart',
   APPROVAL: 'wfApproval',
+  CC: 'wfCc',
   CONDITIONAL: 'wfConditional',
   ROUTING: 'wfRouting',
   AUTOMATION: 'wfAutomation',
@@ -23,6 +25,7 @@ export const WF_NODE_TYPES: Record<string, string> = {
 export const NODE_LABELS: Record<WfNodeKind, string> = {
   START: '开始',
   APPROVAL: '审批',
+  CC: '抄送',
   CONDITIONAL: '条件分支',
   ROUTING: '会签/路由',
   AUTOMATION: '自动化',
@@ -71,7 +74,8 @@ export function defaultNodeData(kind: WfNodeKind): WfNodeData {
     kind,
     nodeCode: `${kind.toLowerCase()}_${Date.now().toString(36)}`,
     nodeName: NODE_LABELS[kind],
-    assigneeRule: kind === 'APPROVAL' || kind === 'ROUTING' ? DEFAULT_ASSIGNEE_RULE : '{}',
+    assigneeRule:
+      kind === 'APPROVAL' || kind === 'ROUTING' || kind === 'CC' ? DEFAULT_ASSIGNEE_RULE : '{}',
     conditionExpr: kind === 'CONDITIONAL' ? '${amount > 50000}' : undefined,
     timeoutHours: kind === 'APPROVAL' ? 24 : null,
     routingStrategy: kind === 'ROUTING' ? 'ALL_PASS' : undefined,

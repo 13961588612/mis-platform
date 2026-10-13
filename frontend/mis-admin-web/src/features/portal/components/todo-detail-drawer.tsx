@@ -1,6 +1,6 @@
 import { useCallback, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
 import { ExternalLink } from 'lucide-react';
+import { toast } from 'sonner';
 import {
   Sheet,
   SheetContent,
@@ -38,16 +38,38 @@ export interface TodoDetailDrawerProps {
  * （`min-h-0 flex-1 overflow-auto`），其内的 `ProcessShell(embedded)` / `FormShell`
  * 一律不再加 `overflow-auto`/`max-h`（单层滚动红线，设计 §2.1 / 共享约定 §5）。
  *
- * <p>业务单号 + 状态徽标放在 `SheetHeader`：由 `ProcessShell` 加载详情后经 `onLoaded`
- * 回调把 `instance` 交上来填充（避免抽屉二次请求流程详情）。
+ * <p>标题 + 状态徽标放在 `SheetHeader`：由 `ProcessShell` 加载详情后经 `onLoaded`
+ * 回调把 `instance` 交上来填充（避免抽屉二次请求流程详情）。单号 / 流程编码 / 表单在「流程信息」面板。
  */
 export function TodoDetailDrawer({ open, onOpenChange, instanceId, onDone }: TodoDetailDrawerProps) {
-  const navigate = useNavigate();
   const [header, setHeader] = useState<WfInstance | null>(null);
 
   const handleLoaded = useCallback((inst: WfInstance) => setHeader(inst), []);
 
   const statusMeta = header ? PROCESS_STATUS[header.status] ?? PROCESS_STATUS.RUNNING : null;
+
+  /**
+   * 打开流程裸页：用命名窗口复用同一 instance 的标签。
+   * 再次点击会聚焦已有页（浏览器原生行为），而非再开一页。
+   */
+  function openFullPage() {
+    if (!instanceId) return;
+    const path = `/task/process-view/${instanceId}`;
+    const url = `${window.location.origin}${path}`;
+    const name = `mis-process-view-${instanceId}`;
+    const win = window.open(url, name);
+    if (win) {
+      try {
+        win.focus();
+      } catch {
+        /* ignore */
+      }
+    } else {
+      toast.error('无法打开完整页', {
+        description: '可能已被浏览器拦截，或该流程已在其他标签中打开，请检查标签栏。',
+      });
+    }
+  }
 
   return (
     <Sheet
@@ -60,11 +82,13 @@ export function TodoDetailDrawer({ open, onOpenChange, instanceId, onDone }: Tod
     >
       <SheetContent side="right" className="w-full max-w-[560px]">
         <SheetHeader>
-          <SheetTitle>{header ? header.businessId : '待办详情'}</SheetTitle>
-          <SheetDescription>
+          <SheetTitle>
             {header
-              ? `${header.definitionCode} · 表单 ${header.startedFormCode ?? '-'}`
-              : '加载中…'}
+              ? header.title?.trim() || header.businessId
+              : '待办详情'}
+          </SheetTitle>
+          <SheetDescription className={header ? 'sr-only' : undefined}>
+            {header ? '流程详情' : '加载中…'}
           </SheetDescription>
           {statusMeta ? (
             <span
@@ -95,15 +119,7 @@ export function TodoDetailDrawer({ open, onOpenChange, instanceId, onDone }: Tod
 
         {instanceId ? (
           <SheetFooter>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => {
-                // PR-11：在完整页打开（保留既有全页入口）。先关抽屉再导航。
-                onOpenChange(false);
-                navigate(`/task/process/${instanceId}`);
-              }}
-            >
+            <Button variant="outline" size="sm" onClick={openFullPage}>
               <ExternalLink className="mr-1 h-3.5 w-3.5" />
               在完整页打开
             </Button>

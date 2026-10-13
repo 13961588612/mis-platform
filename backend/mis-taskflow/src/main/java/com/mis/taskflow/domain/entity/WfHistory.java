@@ -19,6 +19,8 @@ public class WfHistory {
     public static final String OP_REJECT = "REJECT";
     public static final String OP_FORWARD = "FORWARD";
     public static final String OP_SKIP = "SKIP";
+    /** 抄送节点已投递（不阻塞流程）。 */
+    public static final String OP_CC_DISPATCH = "CC_DISPATCH";
     /** 纯评论：由「消息回复」回写（PR-18），不改变流程状态、不推进节点。 */
     public static final String OP_COMMENT = "COMMENT";
 

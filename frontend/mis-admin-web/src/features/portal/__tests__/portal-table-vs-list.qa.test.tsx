@@ -48,6 +48,7 @@ vi.mock('@/lib/api/tasks', () => ({
   fetchTaskStats: vi.fn(),
   handleTask: vi.fn(),
   fetchPortalMatters: vi.fn(),
+  fetchCcTasks: vi.fn(),
 }));
 vi.mock('@/lib/api/workflow', () => ({ fetchMyProcesses: vi.fn() }));
 vi.mock('@/lib/api/platform', () => ({ fetchApps: vi.fn(), fetchDashboardStats: vi.fn() }));
@@ -81,6 +82,8 @@ function task(overrides: Partial<TaskItem> = {}): TaskItem {
     completedAt: null,
     createdAt: '2026-10-08T10:00:00',
     appCode: null,
+    initiatorName: null,
+    initiatorOrgName: null,
     ...overrides,
   };
 }
@@ -117,6 +120,7 @@ function wf(overrides: Partial<WfInstance> = {}): WfInstance {
     status: 'RUNNING',
     initiatorId: '700001',
     initiatorName: '测试员',
+    initiatorOrgName: null,
     currentNodeCode: 'finance',
     currentNodeName: null,
     progress: '50%',
@@ -125,6 +129,7 @@ function wf(overrides: Partial<WfInstance> = {}): WfInstance {
     createdAt: '2026-10-08T10:00:00',
     completedAt: null,
     appCode: null,
+    title: null,
     ...overrides,
   };
 }

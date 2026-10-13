@@ -30,12 +30,34 @@ describe('validateWorkflow', () => {
     expect(r.errors.some((e) => e.message.includes('多个开始节点'))).toBe(true);
   });
 
-  it('审批节点未配置审批人规则报错', () => {
+  it('审批节点未配置处理人规则报错', () => {
     const r = validateWorkflow(
       [node('s', 'START'), node('a', 'APPROVAL'), node('e', 'END')],
       [edge('s', 'a'), edge('a', 'e')],
     );
-    expect(r.errors.some((e) => e.message.includes('未配置审批人规则'))).toBe(true);
+    expect(r.errors.some((e) => e.message.includes('未配置处理人规则'))).toBe(true);
+  });
+
+  it('抄送节点未配置处理人规则报错', () => {
+    const r = validateWorkflow(
+      [node('s', 'START'), node('c', 'CC'), node('e', 'END')],
+      [edge('s', 'c'), edge('c', 'e')],
+    );
+    expect(r.errors.some((e) => e.message.includes('抄送') && e.message.includes('未配置处理人规则'))).toBe(
+      true,
+    );
+  });
+
+  it('抄送节点配置完整则通过', () => {
+    const r = validateWorkflow(
+      [
+        node('s', 'START'),
+        node('c', 'CC', { assigneeRule: '{"type":"USER_LIST","value":[1]}' }),
+        node('e', 'END'),
+      ],
+      [edge('s', 'c'), edge('c', 'e')],
+    );
+    expect(r.valid).toBe(true);
   });
 
   it('不可达节点报错', () => {
@@ -48,7 +70,7 @@ describe('validateWorkflow', () => {
 
   it('完整流程校验通过', () => {
     const r = validateWorkflow(
-      [node('s', 'START'), node('a', 'APPROVAL', { assigneeRule: '{"type":"FIXED","value":1}' }), node('e', 'END')],
+      [node('s', 'START'), node('a', 'APPROVAL', { assigneeRule: '{"type":"USER_LIST","value":[1]}' }), node('e', 'END')],
       [edge('s', 'a'), edge('a', 'e')],
     );
     expect(r.valid).toBe(true);

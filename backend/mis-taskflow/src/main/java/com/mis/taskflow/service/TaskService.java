@@ -4,7 +4,11 @@ import com.mis.common.core.exception.BusinessException;
 import com.mis.common.core.exception.ResultCode;
 import com.mis.common.core.result.PageResult;
 import com.mis.taskflow.domain.entity.SysTask;
+import com.mis.taskflow.domain.entity.WfInstance;
+import com.mis.taskflow.domain.entity.WfTask;
 import com.mis.taskflow.domain.repository.SysTaskRepository;
+import com.mis.taskflow.domain.repository.WfInstanceRepository;
+import com.mis.taskflow.domain.repository.WfTaskRepository;
 import com.mis.taskflow.dto.BatchHandleTaskRequest;
 import com.mis.taskflow.dto.CreateTaskRequest;
 import com.mis.taskflow.dto.HandleTaskRequest;
@@ -25,8 +29,11 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
 import java.time.LocalDateTime;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
+import java.util.Objects;
 
 /**
  * 代办任务中心（P3）。
@@ -38,11 +45,17 @@ import java.util.Locale;
 public class TaskService {
 
     private final SysTaskRepository taskRepository;
+    private final WfTaskRepository wfTaskRepository;
+    private final WfInstanceRepository instanceRepository;
     private final MessageService messageService;
 
     public TaskService(SysTaskRepository taskRepository,
+                       WfTaskRepository wfTaskRepository,
+                       WfInstanceRepository instanceRepository,
                        MessageService messageService) {
         this.taskRepository = taskRepository;
+        this.wfTaskRepository = wfTaskRepository;
+        this.instanceRepository = instanceRepository;
         this.messageService = messageService;
     }
 
@@ -161,8 +174,40 @@ public class TaskService {
                     ? taskRepository.findByAssignee(tenantId, assigneeId, st, pattern, initiatorPattern, participantPattern, pageable)
                     : taskRepository.findOpenByAssignee(tenantId, assigneeId, pattern, initiatorPattern, participantPattern, pageable);
         }
-        return PageResult.of(page, pageable.getPageSize(), p.getTotalElements(),
-                p.getContent().stream().map(this::toVo).toList());
+        return PageResult.of(page, pageable.getPageSize(), p.getTotalElements(), toVoList(p.getContent()));
+    }
+
+    /**
+     * 抄送我的：仅 {@code taskType=CC}，按创建时间倒序（与待办/已办隔离）。
+     */
+    @Transactional(readOnly = true)
+    public PageResult<TaskVO> ccTasks(Long tenantId, Long assigneeId, String keyword, int page, int size) {
+        Pageable pageable = PageRequest.of(Math.max(page - 1, 0), clampSize(size));
+        Page<SysTask> p = taskRepository.findCcByAssignee(tenantId, assigneeId, likePattern(keyword), pageable);
+        return PageResult.of(page, pageable.getPageSize(), p.getTotalElements(), toVoList(p.getContent()));
+    }
+
+    /**
+     * 流程驳回/终止时关闭抄送 sys_task（保持可查阅，状态标为已关闭）。
+     */
+    @Transactional
+    public void closeCcTask(Long tenantId, Long sysTaskId) {
+        if (sysTaskId == null) {
+            return;
+        }
+        taskRepository.findById(sysTaskId).ifPresent(t -> {
+            if (!tenantId.equals(t.getTenantId()) || !SysTask.TYPE_CC.equals(t.getTaskType())) {
+                return;
+            }
+            if (!isOpen(t.getStatus())) {
+                return;
+            }
+            LocalDateTime now = LocalDateTime.now();
+            t.setStatus(TaskflowStatus.Task.CANCELLED);
+            t.setCompletedAt(now);
+            t.setUpdatedAt(now);
+            taskRepository.save(t);
+        });
     }
 
     /**
@@ -217,7 +262,7 @@ public class TaskService {
             p = taskRepository.findHandledByAssignee(tenantId, assigneeId, pattern, initiatorPattern, participantPattern, pageable);
         }
         return PageResult.of(page, pageable.getPageSize(), p.getTotalElements(),
-                p.getContent().stream().map(this::toVo).toList());
+                toVoList(p.getContent()));
     }
 
     /**
@@ -231,6 +276,9 @@ public class TaskService {
             captureBefore = true, captureAfter = true)
     public void handleTask(Long tenantId, Long taskId, HandleTaskRequest req, Long operatorId) {
         SysTask task = requireTask(taskId, tenantId, operatorId);
+        if (SysTask.TYPE_CC.equals(task.getTaskType())) {
+            throw new BusinessException(ResultCode.VALIDATION_ERROR, "抄送记录不可审批");
+        }
         if (!isOpen(task.getStatus())) {
             throw new BusinessException(ResultCode.VALIDATION_ERROR, "该代办已处理，无法重复操作");
         }
@@ -269,6 +317,9 @@ public class TaskService {
             captureBefore = true, captureAfter = true)
     public void transferTask(Long tenantId, Long taskId, TransferTaskRequest req, Long operatorId) {
         SysTask task = requireTask(taskId, tenantId, operatorId);
+        if (SysTask.TYPE_CC.equals(task.getTaskType())) {
+            throw new BusinessException(ResultCode.VALIDATION_ERROR, "抄送记录不可转办");
+        }
         if (!isOpen(task.getStatus())) {
             throw new BusinessException(ResultCode.VALIDATION_ERROR, "该代办已处理，无法转办");
         }
@@ -367,14 +418,89 @@ public class TaskService {
         return "{\"comment\":\"" + comment.replace("\\", "\\\\").replace("\"", "\\\"") + "\"}";
     }
 
-    private TaskVO toVo(SysTask t) {
+    /** 批量映射，并从关联 wf_instance 补齐发起人（公司）。 */
+    private List<TaskVO> toVoList(List<SysTask> tasks) {
+        if (tasks == null || tasks.isEmpty()) {
+            return List.of();
+        }
+        List<Long> sysIds = tasks.stream().map(SysTask::getId).filter(Objects::nonNull).toList();
+        Map<Long, Long> sysToInstance = new HashMap<>();
+        if (!sysIds.isEmpty()) {
+            for (WfTask wt : wfTaskRepository.findBySysTaskIdIn(sysIds)) {
+                if (wt.getSysTaskId() != null && wt.getInstanceId() != null) {
+                    sysToInstance.putIfAbsent(wt.getSysTaskId(), wt.getInstanceId());
+                }
+            }
+        }
+        // 兜底：演示/历史数据偶发缺 wf_task.sys_task_id，仍可从 metadata.wfInstanceId 反查。
+        for (SysTask t : tasks) {
+            if (sysToInstance.containsKey(t.getId())) {
+                continue;
+            }
+            Long fromMeta = parseWfInstanceId(t.getMetadata());
+            if (fromMeta != null) {
+                sysToInstance.put(t.getId(), fromMeta);
+            }
+        }
+        Map<Long, WfInstance> instances = new HashMap<>();
+        if (!sysToInstance.isEmpty()) {
+            for (WfInstance wi : instanceRepository.findAllById(sysToInstance.values())) {
+                instances.put(wi.getId(), wi);
+            }
+        }
+        return tasks.stream().map(t -> {
+            WfInstance wi = null;
+            Long instId = sysToInstance.get(t.getId());
+            if (instId != null) {
+                wi = instances.get(instId);
+            }
+            return toVo(t, wi);
+        }).toList();
+    }
+
+    /** 从 {@code sys_task.metadata} 解析 {@code wfInstanceId}；非法 JSON / 缺字段 → null。 */
+    private static Long parseWfInstanceId(String metadata) {
+        if (!StringUtils.hasText(metadata) || "{}".equals(metadata.trim())) {
+            return null;
+        }
+        try {
+            // 轻量抽取，避免为单字段引入 ObjectMapper 依赖耦合
+            String key = "\"wfInstanceId\"";
+            int i = metadata.indexOf(key);
+            if (i < 0) {
+                return null;
+            }
+            int colon = metadata.indexOf(':', i + key.length());
+            if (colon < 0) {
+                return null;
+            }
+            int end = colon + 1;
+            while (end < metadata.length() && Character.isWhitespace(metadata.charAt(end))) {
+                end++;
+            }
+            int start = end;
+            while (end < metadata.length() && Character.isDigit(metadata.charAt(end))) {
+                end++;
+            }
+            if (start == end) {
+                return null;
+            }
+            return Long.parseLong(metadata.substring(start, end));
+        } catch (Exception ex) {
+            return null;
+        }
+    }
+
+    private TaskVO toVo(SysTask t, WfInstance wi) {
+        // 关联流程实例时优先展示实例 TITLE（覆盖存量「节点名 · 单号」快照，与门户一致）。
+        String displayTitle = displayBizTitle(t, wi);
         return new TaskVO(
                 String.valueOf(t.getId()),
                 String.valueOf(t.getTenantId()),
                 t.getTaskType(),
                 t.getBizType(),
                 t.getBizRefId(),
-                t.getBizTitle(),
+                displayTitle,
                 t.getTargetEntity(),
                 String.valueOf(t.getAssigneeId()),
                 t.getAssigneeName(),
@@ -386,7 +512,24 @@ public class TaskService {
                 Boolean.TRUE.equals(t.getRead()),
                 t.getCompletedAt(),
                 t.getCreatedAt(),
-                t.getAppCode());
+                t.getAppCode(),
+                wi == null ? null : wi.getInitiatorName(),
+                wi == null ? null : wi.getInitiatorOrgName());
+    }
+
+    /**
+     * 列表展示标题：有实例 {@code title} 时用之；抄送加「抄送 · 」前缀；否则回退
+     * {@code sys_task.biz_title}。
+     */
+    private static String displayBizTitle(SysTask t, WfInstance wi) {
+        if (wi != null && StringUtils.hasText(wi.getTitle())) {
+            String title = wi.getTitle().trim();
+            if (SysTask.TYPE_CC.equals(t.getTaskType())) {
+                return title.startsWith("抄送") ? title : "抄送 · " + title;
+            }
+            return title;
+        }
+        return t.getBizTitle();
     }
 
     private static boolean isOpen(String status) {

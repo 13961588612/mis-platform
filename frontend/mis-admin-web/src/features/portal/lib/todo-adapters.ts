@@ -23,7 +23,9 @@ export function fromTaskItem(item: TaskItem, opts?: { category?: string }): Port
     title: item.bizTitle,
     subtitle: `${item.bizType} / ${item.bizRefId}`,
     status: item.status,
-    // 待办源：处理人即当前用户；发起人不在 TaskItem 上（缺失，不臆造）。
+    // 待办源：处理人即当前用户；发起人由后端经关联 wf_instance 回填。
+    initiatorName: item.initiatorName ?? undefined,
+    initiatorOrgName: item.initiatorOrgName ?? undefined,
     assigneeName: item.assigneeName ?? undefined,
     createdAt: item.createdAt,
     appCode: item.appCode,
@@ -41,14 +43,20 @@ export function fromHandledTask(item: TaskItem): PortalTodoRow {
   return fromTaskItem(item, { category: 'myHandled' });
 }
 
+/** `cc` 源（`/tasks/cc`：抄送我的，只读）→ 统一行。 */
+export function fromCcTask(item: TaskItem): PortalTodoRow {
+  return fromTaskItem(item, { category: 'cc' });
+}
+
 /** `sent` 源（`/workflow/instances/my`：我发起的）→ 统一行。 */
 export function fromWfInstance(inst: WfInstance): PortalTodoRow {
   return {
     key: `wf-${inst.id}`,
-    title: `${inst.businessType} / ${inst.businessId}`,
+    title: inst.title?.trim() || `${inst.businessType} / ${inst.businessId}`,
     subtitle: `${inst.definitionCode} · 表单 ${inst.startedFormCode ?? '-'}`,
     status: inst.status,
     initiatorName: inst.initiatorName ?? undefined,
+    initiatorOrgName: inst.initiatorOrgName ?? undefined,
     createdAt: inst.createdAt,
     // 「我发起的」源：业务类型取 `businessType`（实例无独立 bizType 字段）。
     appCode: inst.appCode,
@@ -77,6 +85,7 @@ export function fromPortalMatter(item: PortalMatterItem): PortalTodoRow {
     subtitle: item.subtitle,
     status: item.status,
     initiatorName: item.initiatorName ?? undefined,
+    initiatorOrgName: item.initiatorOrgName ?? undefined,
     assigneeName: item.assigneeName ?? undefined,
     createdAt: item.createdAt,
     appCode: item.appCode,

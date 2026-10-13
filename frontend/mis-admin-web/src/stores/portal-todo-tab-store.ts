@@ -17,6 +17,7 @@ export type TodoTabKey =
   | 'approving'
   | 'approved'
   | 'rejected'
+  | 'cc'
   | 'mySent'
   | 'myHandled';
 

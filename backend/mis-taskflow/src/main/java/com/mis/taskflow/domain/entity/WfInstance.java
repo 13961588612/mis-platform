@@ -41,6 +41,10 @@ public class WfInstance {
     @Column(name = "business_id", nullable = false, length = 128)
     private String businessId;
 
+    /** 流程实例展示标题（发起时写入；列表/待办展示）。 */
+    @Column(name = "title", nullable = false, length = 256)
+    private String title;
+
     /**
      * 应用归属（{@code sys_app.code}）；{@code NULL} = 平台级。
      *
@@ -60,6 +64,10 @@ public class WfInstance {
 
     @Column(name = "initiator_name", length = 64)
     private String initiatorName;
+
+    /** 发起人所属组织/公司名称快照（启动时写入，供门户「发起人（公司）」展示）。 */
+    @Column(name = "initiator_org_name", length = 128)
+    private String initiatorOrgName;
 
     @Column(name = "current_node_code", length = 64)
     private String currentNodeCode;
@@ -110,6 +118,8 @@ public class WfInstance {
     public void setBusinessType(String businessType) { this.businessType = businessType; }
     public String getBusinessId() { return businessId; }
     public void setBusinessId(String businessId) { this.businessId = businessId; }
+    public String getTitle() { return title; }
+    public void setTitle(String title) { this.title = title; }
     public String getAppCode() { return appCode; }
     public void setAppCode(String appCode) { this.appCode = appCode; }
     public String getStatus() { return status; }
@@ -118,6 +128,8 @@ public class WfInstance {
     public void setInitiatorId(Long initiatorId) { this.initiatorId = initiatorId; }
     public String getInitiatorName() { return initiatorName; }
     public void setInitiatorName(String initiatorName) { this.initiatorName = initiatorName; }
+    public String getInitiatorOrgName() { return initiatorOrgName; }
+    public void setInitiatorOrgName(String initiatorOrgName) { this.initiatorOrgName = initiatorOrgName; }
     public String getCurrentNodeCode() { return currentNodeCode; }
     public void setCurrentNodeCode(String currentNodeCode) { this.currentNodeCode = currentNodeCode; }
     public String getFormData() { return formData; }

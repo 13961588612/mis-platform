@@ -100,7 +100,7 @@ class ProcessServiceIntegrationTest {
 
     private Long start(String code, String formCode, String bizId) {
         return processService.startProcess(TENANT, new StartProcessRequest(
-                code, "PURCHASE_ORDER", bizId, formCode, "{}", 100L, "发起人", null));
+                code, "PURCHASE_ORDER", bizId, formCode, "{}", 100L, "发起人", null, null, "测试标题", null, null));
     }
 
     @Test
@@ -411,5 +411,87 @@ class ProcessServiceIntegrationTest {
                                 new WfNodeDTO("start", "提交", "START", 0, null, null, null, "{}", null, "{}"),
                                 new WfNodeDTO("approve", "审批", "APPROVAL", 1, null, null, null, "{}", null, "{}"),
                                 new WfNodeDTO("end", "归档", "END", 2, null, null, null, "{}", null, "{}")))));
+    }
+
+    @Test
+    @DisplayName("TITLE：显式 title 写入实例，待办 biz_title 对齐")
+    void explicitTitleWrittenAndAssigned() {
+        long approver = 700101L;
+        String formCode = "FORM_" + System.nanoTime();
+        String code = createSingleApprovalFlow(formCode, approver);
+        Long instId = processService.startProcess(TENANT, new StartProcessRequest(
+                code, "PURCHASE_ORDER", "PO-T1", formCode, "{}", 100L, "发起人",
+                null, null, "采购审批标题", (short) 3, null));
+
+        assertEquals("采购审批标题", instanceRepository.findById(instId).orElseThrow().getTitle());
+        var pending = wfTaskRepository.findPendingByInstance(instId);
+        assertEquals(1, pending.size());
+        Long sysTaskId = pending.get(0).getSysTaskId();
+        assertNotNull(sysTaskId);
+        var sysTask = sysTaskRepository.findById(sysTaskId).orElseThrow();
+        assertEquals("采购审批标题", sysTask.getBizTitle());
+        assertEquals((short) 3, sysTask.getPriority());
+    }
+
+    @Test
+    @DisplayName("TITLE：config.titleField + formData 取值；缺标题失败")
+    void titleFromFormFieldOrReject() {
+        long approver = 700102L;
+        String formCode = "FORM_TF_" + System.nanoTime();
+        formDefinitionService.create(TENANT, 1L, new com.mis.taskflow.dto.UpsertFormDefinitionRequest(
+                null, formCode, "带标题字段表单", null, "ENABLED", 0, "{\"titleField\":\"orderNo\"}"));
+        String code = uniqueCode();
+        Long defId = definitionService.create(TENANT, 1L, new CreateDefinitionRequest(
+                code, "标题字段流", "APPROVAL", null, List.of(formCode), "{}",
+                List.of(
+                        new WfNodeDTO("start", "提交", "START", 0, null, null, null, "{}", null, "{}"),
+                        new WfNodeDTO("approve", "主管审批", "APPROVAL", 1, null, null, null,
+                                "{\"type\":\"FIXED\",\"value\":" + approver + "}", 24, "{}"),
+                        new WfNodeDTO("end", "归档", "END", 2, null, null, null, "{}", null, "{}")
+                )));
+        definitionService.activate(defId, TENANT);
+
+        Long instId = processService.startProcess(TENANT, new StartProcessRequest(
+                code, "PURCHASE_ORDER", "PO-T2", formCode,
+                "{\"orderNo\":\"PO-2026-TITLE\"}", 100L, "发起人", null, null, null, null, null));
+        assertEquals("PO-2026-TITLE", instanceRepository.findById(instId).orElseThrow().getTitle());
+
+        BusinessException ex = assertThrows(BusinessException.class, () -> processService.startProcess(TENANT,
+                new StartProcessRequest(code, "PURCHASE_ORDER", "PO-T3", formCode, "{}", 100L, "发起人",
+                        null, null, null, null, null)));
+        assertEquals(ProcessService.TITLE_REQUIRED_MESSAGE, ex.getMessage());
+    }
+
+    @Test
+    @DisplayName("CC：抄送节点分发后自动推进；抄送 biz_title 带实例标题")
+    void ccAutoAdvanceAndTitle() {
+        long approver = 700103L;
+        long ccUser = 700104L;
+        String formCode = "FORM_CC_" + System.nanoTime();
+        FormTestFixtures.register(formDefinitionService, TENANT, formCode, "抄送后审批表单");
+        String code = uniqueCode();
+        Long defId = definitionService.create(TENANT, 1L, new CreateDefinitionRequest(
+                code, "抄送后审批", "APPROVAL", null, List.of(formCode), "{}",
+                List.of(
+                        new WfNodeDTO("start", "提交", "START", 0, null, null, null, "{}", null, "{}"),
+                        new WfNodeDTO("cc1", "抄送知会", "CC", 1, null, null, null,
+                                "{\"type\":\"FIXED\",\"value\":" + ccUser + "}", null, "{}"),
+                        new WfNodeDTO("approve", "主管审批", "APPROVAL", 2, null, null, null,
+                                "{\"type\":\"FIXED\",\"value\":" + approver + "}", 24, "{}"),
+                        new WfNodeDTO("end", "归档", "END", 3, null, null, null, "{}", null, "{}")
+                )));
+        definitionService.activate(defId, TENANT);
+
+        Long instId = processService.startProcess(TENANT, new StartProcessRequest(
+                code, "PURCHASE_ORDER", "PO-CC", formCode, "{}", 100L, "发起人",
+                null, null, "抄送流程标题", null, null));
+
+        var pendingWf = wfTaskRepository.findPendingByInstance(instId);
+        assertEquals(1, pendingWf.size(), "抄送不阻塞，应只剩审批待办");
+        assertEquals("approve", pendingWf.get(0).getNodeCode());
+
+        var ccPage = taskService.ccTasks(TENANT, ccUser, null, 1, 20);
+        assertTrue(ccPage.getTotal() >= 1, "被抄送人应在「抄送我的」看到记录");
+        assertTrue(ccPage.getList().stream().anyMatch(t -> "抄送 · 抄送流程标题".equals(t.bizTitle())));
     }
 }

@@ -81,6 +81,7 @@ export const SYSTEM_NAV: SystemNavNode[] = [
     icon: 'FileStack',
     children: [
       { path: '/system/forms', title: '表单注册', icon: 'ListTree' },
+      { path: '/system/form-test', title: '测试表单', icon: 'ClipboardList' },
     ],
   },
   {

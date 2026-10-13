@@ -12,7 +12,8 @@ import java.time.LocalDateTime;
 /**
  * 流程定义 {@code wf_definition}。
  *
- * <p>{@code supportedFormCodes} 为表单白名单（TEXT[]）：一个流程可被多个表单复用；
+ * <p>{@code supportedFormCodes} 为表单关联白名单（TEXT[]）：
+ * <b>一个流程可关联多个表单；一个表单只能关联一个流程</b>。
  * 启动实例时校验 {@code startedFormCode} 必须在白名单内。
  */
 @Entity

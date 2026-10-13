@@ -43,4 +43,24 @@ describe('useUndoRedo', () => {
     expect(result.current.present).toBe(5);
     expect(result.current.canUndo).toBe(false);
   });
+
+  it('函数式 set 始终基于最新 present（避免闭包清空画布）', () => {
+    const { result } = renderHook(() =>
+      useUndoRedo<{ nodes: string[]; edges: string[] }>({ nodes: [], edges: [] }),
+    );
+    // 捕获首轮 set（模拟 handleNodeChange 空依赖闭包）
+    const staleSet = result.current.set;
+    act(() => result.current.set({ nodes: ['a', 'b'], edges: ['e1'] }));
+    expect(result.current.present.nodes).toEqual(['a', 'b']);
+
+    // 即使用「旧」的 set 引用，函数式更新也应读到最新节点，而不是初始 []
+    act(() =>
+      staleSet((prev) => ({
+        nodes: prev.nodes.map((n) => (n === 'a' ? 'a2' : n)),
+        edges: prev.edges,
+      })),
+    );
+    expect(result.current.present.nodes).toEqual(['a2', 'b']);
+    expect(result.current.present.edges).toEqual(['e1']);
+  });
 });

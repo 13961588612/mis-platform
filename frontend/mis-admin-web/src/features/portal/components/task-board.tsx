@@ -9,6 +9,7 @@ import { PortalMetaTags } from './portal-meta-tags';
 import { usePortalLookups } from '../lib/use-portal-lookups';
 import { usePortalEntry } from '../lib/use-portal-entry';
 import { formatDateTimeSec } from '../lib/format-datetime';
+import { formatInitiatorCompany } from '../lib/format-initiator';
 
 interface TaskBoardProps {
   tenantId: string;
@@ -106,6 +107,7 @@ export function TaskBoard({ tenantId, userId }: TaskBoardProps) {
         <ul className="divide-y">
           {items.map((item) => {
             const overdue = item.dueDate != null && new Date(item.dueDate) < new Date();
+            const initiator = formatInitiatorCompany(item.initiatorName, item.initiatorOrgName);
             return (
               <li key={item.id}>
                 <button
@@ -116,6 +118,12 @@ export function TaskBoard({ tenantId, userId }: TaskBoardProps) {
                   <PriorityBadge priority={item.priority} />
                   <span className="min-w-0 flex-1 truncate text-[13px]">{item.bizTitle}</span>
                   <PortalMetaTags appName={appNameOf(item.appCode)} bizTypeName={bizTypeNameOf(item.bizType)} />
+                  <span
+                    className="max-w-[10rem] shrink-0 truncate text-[11px] text-muted-foreground"
+                    title="发起人（公司）"
+                  >
+                    {initiator ?? '—'}
+                  </span>
                   {overdue ? (
                     <span className="inline-flex shrink-0 items-center gap-0.5 text-[11px] text-destructive">
                       <AlertTriangle className="h-3 w-3" /> 逾期
