@@ -18,8 +18,11 @@ import com.mis.adminbff.dto.iqd.IqdMaskRuleVO;
 import com.mis.adminbff.dto.iqd.IqdScopeDimensionVO;
 import com.mis.adminbff.dto.iqd.IqdScopePolicySaveRequest;
 import com.mis.adminbff.dto.iqd.IqdScopePolicyVO;
+import com.mis.adminbff.dto.iqd.IqdSqlPairCategorySaveRequest;
+import com.mis.adminbff.dto.iqd.IqdSqlPairCategoryVO;
 import com.mis.adminbff.dto.iqd.IqdSqlPairSaveRequest;
 import com.mis.adminbff.dto.iqd.IqdSqlPairVO;
+import com.mis.common.core.result.PageResult;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.core.ParameterizedTypeReference;
 import org.springframework.http.MediaType;
@@ -85,9 +88,13 @@ public class IqdClient extends AbstractDownstreamClient {
             new ParameterizedTypeReference<>() {};
     private static final ParameterizedTypeReference<com.mis.common.core.result.Result<IqdAskLogVO>> ASK_LOG_VO =
             new ParameterizedTypeReference<>() {};
-    private static final ParameterizedTypeReference<com.mis.common.core.result.Result<List<IqdSqlPairVO>>> SQL_PAIR_LIST =
+    private static final ParameterizedTypeReference<com.mis.common.core.result.Result<PageResult<IqdSqlPairVO>>> SQL_PAIR_PAGE =
             new ParameterizedTypeReference<>() {};
     private static final ParameterizedTypeReference<com.mis.common.core.result.Result<IqdSqlPairVO>> SQL_PAIR_VO =
+            new ParameterizedTypeReference<>() {};
+    private static final ParameterizedTypeReference<com.mis.common.core.result.Result<List<IqdSqlPairCategoryVO>>> SQL_PAIR_CATEGORY_TREE =
+            new ParameterizedTypeReference<>() {};
+    private static final ParameterizedTypeReference<com.mis.common.core.result.Result<IqdSqlPairCategoryVO>> SQL_PAIR_CATEGORY_VO =
             new ParameterizedTypeReference<>() {};
     private static final ParameterizedTypeReference<com.mis.common.core.result.Result<List<IqdKnowledgeVO>>> KNOWLEDGE_LIST =
             new ParameterizedTypeReference<>() {};
@@ -430,16 +437,89 @@ public class IqdClient extends AbstractDownstreamClient {
     // ------------------------------------------------------------------ 管理面（W4：增强物料）
 
     /**
-     * 查询连接下样本对（需 iqd:enhance:view）。
+     * 查询连接下样本对分类树（需 iqd:enhance:view）。
      */
-    public List<IqdSqlPairVO> listSqlPairs(Long connectionId) {
+    public List<IqdSqlPairCategoryVO> listSqlPairCategoryTree(Long connectionId) {
         return block(client().get()
-                .uri(uriBuilder -> uriBuilder.path("/api/v1/iqd/sql-pairs")
+                .uri(uriBuilder -> uriBuilder.path("/api/v1/iqd/sql-pair-categories/tree")
                         .queryParam("connectionId", connectionId)
                         .build())
                 .headers(loginContextHeaders())
                 .retrieve()
-                .bodyToMono(SQL_PAIR_LIST));
+                .bodyToMono(SQL_PAIR_CATEGORY_TREE));
+    }
+
+    /**
+     * 新建样本对分类（需 iqd:enhance:save）。
+     */
+    public IqdSqlPairCategoryVO createSqlPairCategory(IqdSqlPairCategorySaveRequest dto) {
+        return block(client().post()
+                .uri("/api/v1/iqd/sql-pair-categories")
+                .headers(loginContextHeaders())
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(dto)
+                .retrieve()
+                .bodyToMono(SQL_PAIR_CATEGORY_VO));
+    }
+
+    /**
+     * 更新样本对分类（需 iqd:enhance:save）。
+     */
+    public IqdSqlPairCategoryVO updateSqlPairCategory(Long id, IqdSqlPairCategorySaveRequest dto) {
+        return block(client().put()
+                .uri("/api/v1/iqd/sql-pair-categories/{id}", id)
+                .headers(loginContextHeaders())
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(dto)
+                .retrieve()
+                .bodyToMono(SQL_PAIR_CATEGORY_VO));
+    }
+
+    /**
+     * 删除样本对分类（需 iqd:enhance:save）。
+     */
+    public void deleteSqlPairCategory(Long id) {
+        blockVoid(delete(loginContextHeaders(), "/api/v1/iqd/sql-pair-categories/{id}", id));
+    }
+
+    /**
+     * 分页查询连接下样本对（需 iqd:enhance:view；可选分类 / 关键词 / 方言）。
+     */
+    public PageResult<IqdSqlPairVO> listSqlPairs(
+            Long connectionId,
+            Long categoryId,
+            Boolean includeDescendants,
+            String keyword,
+            String sourceDialect,
+            Integer page,
+            Integer size) {
+        return block(client().get()
+                .uri(uriBuilder -> {
+                    var b = uriBuilder.path("/api/v1/iqd/sql-pairs")
+                            .queryParam("connectionId", connectionId);
+                    if (categoryId != null) {
+                        b.queryParam("categoryId", categoryId);
+                    }
+                    if (includeDescendants != null) {
+                        b.queryParam("includeDescendants", includeDescendants);
+                    }
+                    if (keyword != null && !keyword.isBlank()) {
+                        b.queryParam("keyword", keyword);
+                    }
+                    if (sourceDialect != null && !sourceDialect.isBlank()) {
+                        b.queryParam("sourceDialect", sourceDialect);
+                    }
+                    if (page != null) {
+                        b.queryParam("page", page);
+                    }
+                    if (size != null) {
+                        b.queryParam("size", size);
+                    }
+                    return b.build();
+                })
+                .headers(loginContextHeaders())
+                .retrieve()
+                .bodyToMono(SQL_PAIR_PAGE));
     }
 
     /**

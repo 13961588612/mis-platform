@@ -57,6 +57,7 @@ class IqdInternalPrimaryConnectionTest {
     @Mock com.mis.iqd.domain.repository.IqdMaskRuleRepository maskRuleRepository;
     @Mock com.mis.iqd.domain.repository.IqdRowScopeDimensionRepository dimensionRepository;
     @Mock com.mis.iqd.domain.repository.IqdSqlPairRepository sqlPairRepository;
+    @Mock com.mis.iqd.domain.repository.IqdSqlPairCategoryRepository sqlPairCategoryRepository;
     @Mock com.mis.iqd.domain.repository.IqdKnowledgeRepository knowledgeRepository;
     @Mock com.mis.iqd.domain.repository.IqdSyncJobRepository syncJobRepository;
     @Mock com.mis.iqd.domain.repository.IqdEditIdempotencyRepository editIdempotencyRepository;

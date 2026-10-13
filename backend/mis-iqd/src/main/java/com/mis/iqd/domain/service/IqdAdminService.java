@@ -4,6 +4,7 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.mis.common.core.exception.BusinessException;
 import com.mis.common.core.exception.ResultCode;
+import com.mis.common.core.result.PageResult;
 import com.mis.iqd.api.dto.IqdAclSaveRequest;
 import com.mis.iqd.api.dto.IqdAclVO;
 import com.mis.iqd.api.dto.IqdAskLogVO;
@@ -19,6 +20,8 @@ import com.mis.iqd.api.dto.IqdMaskRuleVO;
 import com.mis.iqd.api.dto.IqdScopeDimensionVO;
 import com.mis.iqd.api.dto.IqdScopePolicySaveRequest;
 import com.mis.iqd.api.dto.IqdScopePolicyVO;
+import com.mis.iqd.api.dto.IqdSqlPairCategorySaveRequest;
+import com.mis.iqd.api.dto.IqdSqlPairCategoryVO;
 import com.mis.iqd.api.dto.IqdSqlPairSaveRequest;
 import com.mis.iqd.api.dto.IqdSqlPairVO;
 import com.mis.iqd.api.dto.IqdSyncJobVO;
@@ -32,6 +35,7 @@ import com.mis.iqd.domain.entity.IqdMaskRule;
 import com.mis.iqd.domain.entity.IqdRowScopeDimension;
 import com.mis.iqd.domain.entity.IqdScopePolicy;
 import com.mis.iqd.domain.entity.IqdSqlPair;
+import com.mis.iqd.domain.entity.IqdSqlPairCategory;
 import com.mis.iqd.domain.entity.IqdSyncJob;
 import com.mis.iqd.domain.entity.IqdTableAcl;
 import com.mis.iqd.domain.repository.IqdAskLogRepository;
@@ -42,6 +46,7 @@ import com.mis.iqd.domain.repository.IqdKnowledgeRepository;
 import com.mis.iqd.domain.repository.IqdMaskRuleRepository;
 import com.mis.iqd.domain.repository.IqdRowScopeDimensionRepository;
 import com.mis.iqd.domain.repository.IqdScopePolicyRepository;
+import com.mis.iqd.domain.repository.IqdSqlPairCategoryRepository;
 import com.mis.iqd.domain.repository.IqdSqlPairRepository;
 import com.mis.iqd.domain.repository.IqdSyncJobRepository;
 import com.mis.iqd.domain.repository.IqdEditIdempotencyRepository;
@@ -62,6 +67,8 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -112,11 +119,15 @@ public class IqdAdminService {
     private final IqdMaskRuleRepository maskRuleRepository;
     private final IqdRowScopeDimensionRepository dimensionRepository;
     private final IqdSqlPairRepository sqlPairRepository;
+    private final IqdSqlPairCategoryRepository sqlPairCategoryRepository;
     private final IqdKnowledgeRepository knowledgeRepository;
     private final IqdSyncJobRepository syncJobRepository;
     private final IqdEditIdempotencyRepository editIdempotencyRepository;
     private final IqdChangeEventPublisher changeEventPublisher;
     private final ObjectMapper objectMapper;
+
+    /** 列表筛选：{@code categoryId = 0} 表示仅「未分类」（{@code category_id IS NULL}）。 */
+    public static final long SQL_PAIR_CATEGORY_UNCATEGORIZED = 0L;
 
     @PersistenceContext
     private EntityManager entityManager;
@@ -131,6 +142,7 @@ public class IqdAdminService {
             IqdMaskRuleRepository maskRuleRepository,
             IqdRowScopeDimensionRepository dimensionRepository,
             IqdSqlPairRepository sqlPairRepository,
+            IqdSqlPairCategoryRepository sqlPairCategoryRepository,
             IqdKnowledgeRepository knowledgeRepository,
             IqdSyncJobRepository syncJobRepository,
             IqdEditIdempotencyRepository editIdempotencyRepository,
@@ -145,6 +157,7 @@ public class IqdAdminService {
         this.maskRuleRepository = maskRuleRepository;
         this.dimensionRepository = dimensionRepository;
         this.sqlPairRepository = sqlPairRepository;
+        this.sqlPairCategoryRepository = sqlPairCategoryRepository;
         this.knowledgeRepository = knowledgeRepository;
         this.syncJobRepository = syncJobRepository;
         this.editIdempotencyRepository = editIdempotencyRepository;
@@ -1571,16 +1584,270 @@ public class IqdAdminService {
         return toAskLogVO(entity);
     }
 
+    // ================================================================ 样本对分类（管理面树）
+
+    /**
+     * 连接下样本对分类树（邻接表内存组装）。
+     */
+    @Transactional(readOnly = true)
+    public List<IqdSqlPairCategoryVO> listSqlPairCategoryTree(Long connectionId) {
+        ensureConnection(connectionId);
+        List<IqdSqlPairCategory> all =
+                sqlPairCategoryRepository.findByConnectionIdOrderByParentIdAscSortOrderAscIdAsc(connectionId);
+        Map<Long, List<IqdSqlPairCategory>> byParent = new HashMap<>();
+        for (IqdSqlPairCategory c : all) {
+            byParent.computeIfAbsent(c.getParentId(), k -> new ArrayList<>()).add(c);
+        }
+        return buildSqlPairCategoryLevel(IqdSqlPairCategory.ROOT_PARENT_ID, byParent);
+    }
+
+    private List<IqdSqlPairCategoryVO> buildSqlPairCategoryLevel(
+            Long parentId, Map<Long, List<IqdSqlPairCategory>> byParent) {
+        List<IqdSqlPairCategoryVO> out = new ArrayList<>();
+        for (IqdSqlPairCategory c : byParent.getOrDefault(parentId, List.of())) {
+            List<IqdSqlPairCategoryVO> children = buildSqlPairCategoryLevel(c.getId(), byParent);
+            out.add(toSqlPairCategoryVO(c, children.isEmpty() ? null : children));
+        }
+        return out;
+    }
+
+    /**
+     * 新建样本对分类。
+     */
+    @Transactional
+    public IqdSqlPairCategoryVO createSqlPairCategory(IqdSqlPairCategorySaveRequest dto) {
+        Long connectionId = dto.connectionId();
+        if (connectionId == null) {
+            throw new BusinessException(ResultCode.VALIDATION_ERROR, "connection_id 不能为空");
+        }
+        ensureConnection(connectionId);
+        String code = dto.code() == null ? "" : dto.code().trim();
+        String name = dto.name() == null ? "" : dto.name().trim();
+        if (code.isEmpty() || name.isEmpty()) {
+            throw new BusinessException(ResultCode.VALIDATION_ERROR, "code 与 name 不能为空");
+        }
+        sqlPairCategoryRepository.findByConnectionIdAndCode(connectionId, code).ifPresent(existing -> {
+            throw new BusinessException(ResultCode.VALIDATION_ERROR, "分类编码「" + code + "」已存在");
+        });
+        Long parentId = normalizeSqlPairCategoryParentId(dto.parentId());
+        validateSqlPairCategoryParent(connectionId, parentId, null);
+
+        Instant now = Instant.now();
+        IqdSqlPairCategory c = new IqdSqlPairCategory();
+        c.setId(IdGenerator.nextId());
+        c.setConnectionId(connectionId);
+        c.setParentId(parentId);
+        c.setCode(code);
+        c.setName(name);
+        c.setSortOrder(dto.sortOrder() == null ? 0 : dto.sortOrder());
+        c.setEnabled(dto.enabled() == null || dto.enabled() ? 1 : 0);
+        c.setCreatedAt(now);
+        c.setUpdatedAt(now);
+        sqlPairCategoryRepository.save(c);
+        return toSqlPairCategoryVO(c, null);
+    }
+
+    /**
+     * 更新样本对分类（含改父节点 / 重命名）。
+     */
+    @Transactional
+    public IqdSqlPairCategoryVO updateSqlPairCategory(Long id, IqdSqlPairCategorySaveRequest dto) {
+        IqdSqlPairCategory c = sqlPairCategoryRepository.findById(id)
+                .orElseThrow(() -> new BusinessException(ResultCode.NOT_FOUND, "样本对分类不存在: " + id));
+        Long connectionId = dto.connectionId() != null ? dto.connectionId() : c.getConnectionId();
+        if (!connectionId.equals(c.getConnectionId())) {
+            throw new BusinessException(ResultCode.VALIDATION_ERROR, "不可跨连接移动分类");
+        }
+        ensureConnection(connectionId);
+        String code = dto.code() == null ? "" : dto.code().trim();
+        String name = dto.name() == null ? "" : dto.name().trim();
+        if (code.isEmpty() || name.isEmpty()) {
+            throw new BusinessException(ResultCode.VALIDATION_ERROR, "code 与 name 不能为空");
+        }
+        if (!code.equals(c.getCode())) {
+            sqlPairCategoryRepository.findByConnectionIdAndCode(connectionId, code).ifPresent(existing -> {
+                throw new BusinessException(ResultCode.VALIDATION_ERROR, "分类编码「" + code + "」已存在");
+            });
+        }
+        Long parentId = normalizeSqlPairCategoryParentId(dto.parentId());
+        validateSqlPairCategoryParent(connectionId, parentId, id);
+
+        c.setParentId(parentId);
+        c.setCode(code);
+        c.setName(name);
+        if (dto.sortOrder() != null) {
+            c.setSortOrder(dto.sortOrder());
+        }
+        if (dto.enabled() != null) {
+            c.setEnabled(dto.enabled() ? 1 : 0);
+        }
+        c.setUpdatedAt(Instant.now());
+        sqlPairCategoryRepository.save(c);
+        return toSqlPairCategoryVO(c, null);
+    }
+
+    /**
+     * 删除样本对分类：有子节点或仍有样本挂载则拒绝。
+     */
+    @Transactional
+    public void deleteSqlPairCategory(Long id) {
+        IqdSqlPairCategory c = sqlPairCategoryRepository.findById(id)
+                .orElseThrow(() -> new BusinessException(ResultCode.NOT_FOUND, "样本对分类不存在: " + id));
+        long children = sqlPairCategoryRepository.countByConnectionIdAndParentId(c.getConnectionId(), id);
+        if (children > 0) {
+            throw new BusinessException(ResultCode.VALIDATION_ERROR,
+                    "分类「" + c.getName() + "」下还有 " + children + " 个子分类，请先删除子项");
+        }
+        long refs = sqlPairRepository.countByCategoryId(id);
+        if (refs > 0) {
+            throw new BusinessException(ResultCode.VALIDATION_ERROR,
+                    "分类「" + c.getName() + "」下还有 " + refs + " 条样本对，请先改挂载或置未分类");
+        }
+        sqlPairCategoryRepository.delete(c);
+    }
+
+    private Long normalizeSqlPairCategoryParentId(Long parentId) {
+        if (parentId == null || parentId == 0L) {
+            return IqdSqlPairCategory.ROOT_PARENT_ID;
+        }
+        return parentId;
+    }
+
+    private void validateSqlPairCategoryParent(Long connectionId, Long parentId, Long selfId) {
+        if (parentId == null || parentId.equals(IqdSqlPairCategory.ROOT_PARENT_ID)) {
+            return;
+        }
+        if (selfId != null && parentId.equals(selfId)) {
+            throw new BusinessException(ResultCode.VALIDATION_ERROR, "父分类不能是自己");
+        }
+        IqdSqlPairCategory parent = sqlPairCategoryRepository.findById(parentId)
+                .orElseThrow(() -> new BusinessException(ResultCode.VALIDATION_ERROR, "父分类不存在: " + parentId));
+        if (!connectionId.equals(parent.getConnectionId())) {
+            throw new BusinessException(ResultCode.VALIDATION_ERROR, "父分类不属于当前连接");
+        }
+        Long cursor = parent.getParentId();
+        while (cursor != null && !cursor.equals(IqdSqlPairCategory.ROOT_PARENT_ID)) {
+            if (selfId != null && cursor.equals(selfId)) {
+                throw new BusinessException(ResultCode.VALIDATION_ERROR, "父分类选择会形成环");
+            }
+            cursor = sqlPairCategoryRepository.findById(cursor)
+                    .map(IqdSqlPairCategory::getParentId)
+                    .orElse(null);
+        }
+    }
+
+    private void ensureSqlPairCategoryBelongs(Long connectionId, Long categoryId) {
+        if (categoryId == null) {
+            return;
+        }
+        IqdSqlPairCategory c = sqlPairCategoryRepository.findById(categoryId)
+                .orElseThrow(() -> new BusinessException(ResultCode.VALIDATION_ERROR, "样本对分类不存在: " + categoryId));
+        if (!connectionId.equals(c.getConnectionId())) {
+            throw new BusinessException(ResultCode.VALIDATION_ERROR, "样本对分类不属于当前连接");
+        }
+    }
+
     // ================================================================ 样本对（W4）
 
     /**
-     * 查询连接下的样本对（W4 /sql-pairs）。
+     * 查询连接下的样本对（W4 /sql-pairs；Worker / 内部全量，不按分类裁剪）。
      */
     @Transactional(readOnly = true)
     public List<IqdSqlPairVO> listSqlPairs(Long connectionId) {
         ensureConnection(connectionId);
         return sqlPairRepository.findByConnectionIdOrderByIdDesc(connectionId)
                 .stream().map(this::toSqlPairVO).toList();
+    }
+
+    /**
+     * 管理面样本对分页列表（可选按分类 / 关键词 / 方言筛选）。
+     *
+     * @param categoryId          null=全部；{@link #SQL_PAIR_CATEGORY_UNCATEGORIZED}=未分类；其它=分类 id
+     * @param includeDescendants  为 true 时含子孙分类（默认 true）；未分类时忽略
+     */
+    @Transactional(readOnly = true)
+    public PageResult<IqdSqlPairVO> pageSqlPairs(
+            Long connectionId,
+            Long categoryId,
+            Boolean includeDescendants,
+            String keyword,
+            String sourceDialect,
+            Integer page,
+            Integer size) {
+        ensureConnection(connectionId);
+        int p = page == null || page < 1 ? 1 : page;
+        int s = size == null || size < 1 ? 50 : Math.min(size, 200);
+        boolean withDesc = includeDescendants == null || includeDescendants;
+
+        List<IqdSqlPair> all = sqlPairRepository.findByConnectionIdOrderByIdDesc(connectionId);
+        Set<Long> categoryIds = null;
+        if (categoryId != null) {
+            if (categoryId.equals(SQL_PAIR_CATEGORY_UNCATEGORIZED)) {
+                categoryIds = Set.of(); // 空集合语义：仅 category_id IS NULL
+            } else {
+                ensureSqlPairCategoryBelongs(connectionId, categoryId);
+                if (withDesc) {
+                    categoryIds = collectSqlPairCategorySubtreeIds(connectionId, categoryId);
+                } else {
+                    categoryIds = Set.of(categoryId);
+                }
+            }
+        }
+        final Set<Long> catFilter = categoryIds;
+        final boolean uncategorizedOnly =
+                categoryId != null && categoryId.equals(SQL_PAIR_CATEGORY_UNCATEGORIZED);
+        String kw = keyword == null ? "" : keyword.trim().toLowerCase(Locale.ROOT);
+        String dialect = sourceDialect == null || sourceDialect.isBlank() || "all".equalsIgnoreCase(sourceDialect)
+                ? null
+                : sourceDialect.trim();
+
+        List<IqdSqlPair> filtered = all.stream()
+                .filter(pair -> {
+                    if (uncategorizedOnly) {
+                        if (pair.getCategoryId() != null) {
+                            return false;
+                        }
+                    } else if (catFilter != null && !catFilter.contains(pair.getCategoryId())) {
+                        return false;
+                    }
+                    if (!kw.isEmpty()) {
+                        String q = pair.getQuestion() == null ? "" : pair.getQuestion().toLowerCase(Locale.ROOT);
+                        if (!q.contains(kw)) {
+                            return false;
+                        }
+                    }
+                    if (dialect != null && !dialect.equals(pair.getSourceDialect())) {
+                        return false;
+                    }
+                    return true;
+                })
+                .toList();
+
+        long total = filtered.size();
+        int from = Math.min((p - 1) * s, filtered.size());
+        int to = Math.min(from + s, filtered.size());
+        List<IqdSqlPairVO> slice = filtered.subList(from, to).stream().map(this::toSqlPairVO).toList();
+        return PageResult.of(p, s, total, slice);
+    }
+
+    private Set<Long> collectSqlPairCategorySubtreeIds(Long connectionId, Long rootId) {
+        List<IqdSqlPairCategory> all =
+                sqlPairCategoryRepository.findByConnectionIdOrderByParentIdAscSortOrderAscIdAsc(connectionId);
+        Map<Long, List<Long>> children = new HashMap<>();
+        for (IqdSqlPairCategory c : all) {
+            children.computeIfAbsent(c.getParentId(), k -> new ArrayList<>()).add(c.getId());
+        }
+        Set<Long> out = new HashSet<>();
+        ArrayList<Long> stack = new ArrayList<>();
+        stack.add(rootId);
+        while (!stack.isEmpty()) {
+            Long id = stack.remove(stack.size() - 1);
+            if (!out.add(id)) {
+                continue;
+            }
+            stack.addAll(children.getOrDefault(id, List.of()));
+        }
+        return out;
     }
 
     /**
@@ -1601,6 +1868,7 @@ public class IqdAdminService {
         if (question.isEmpty() || wrenSql.isEmpty()) {
             throw new BusinessException(ResultCode.VALIDATION_ERROR, "question 与 wren_sql 不能为空");
         }
+        ensureSqlPairCategoryBelongs(connectionId, dto.categoryId());
         IqdSqlPair pair;
         if (dto.id() != null) {
             pair = sqlPairRepository.findById(dto.id())
@@ -1634,6 +1902,7 @@ public class IqdAdminService {
         pair.setWrenSql(wrenSql);
         pair.setRemark(dto.remark());
         pair.setEnabled(nextEnabled);
+        pair.setCategoryId(dto.categoryId());
         pair.setUpdatedAt(Instant.now());
         if (deliveryChanged) {
             markSqlPairPending(pair);
@@ -2909,6 +3178,7 @@ public class IqdAdminService {
         IqdSqlPairVO vo = new IqdSqlPairVO();
         vo.setId(entity.getId());
         vo.setConnectionId(entity.getConnectionId());
+        vo.setCategoryId(entity.getCategoryId());
         vo.setQuestion(entity.getQuestion());
         vo.setSourceDialect(entity.getSourceDialect());
         vo.setNativeSql(entity.getNativeSql());
@@ -2919,6 +3189,22 @@ public class IqdAdminService {
         vo.setSyncStatus(entity.getSyncStatus());
         vo.setSyncedAt(entity.getSyncedAt());
         vo.setCreatedBy(entity.getCreatedBy());
+        vo.setCreatedAt(entity.getCreatedAt());
+        vo.setUpdatedAt(entity.getUpdatedAt());
+        return vo;
+    }
+
+    private IqdSqlPairCategoryVO toSqlPairCategoryVO(
+            IqdSqlPairCategory entity, List<IqdSqlPairCategoryVO> children) {
+        IqdSqlPairCategoryVO vo = new IqdSqlPairCategoryVO();
+        vo.setId(entity.getId());
+        vo.setConnectionId(entity.getConnectionId());
+        vo.setParentId(entity.getParentId());
+        vo.setCode(entity.getCode());
+        vo.setName(entity.getName());
+        vo.setSortOrder(entity.getSortOrder());
+        vo.setEnabled(entity.getEnabled() != null && entity.getEnabled() == 1);
+        vo.setChildren(children);
         vo.setCreatedAt(entity.getCreatedAt());
         vo.setUpdatedAt(entity.getUpdatedAt());
         return vo;

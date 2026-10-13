@@ -194,6 +194,15 @@ if (hasPermission('system:user:edit')) { ... }
 
 关联 API（经 `sys_menu_api`）：含 `PUT /api/v1/workflow/definitions/{id}/supported-forms`（sys_api **95101**，V142）。
 
+## 9.1 问数增强 / 样本对分类（摘录，V148）
+
+| permission | 类型 | 说明 |
+|------------|------|------|
+| iqd:enhance:view | 菜单 92521 | 含 `GET /api/v1/iqd/sql-pair-categories/tree`、`GET /api/v1/iqd/sql-pairs` |
+| iqd:enhance:save | 菜单 92522 | 含样本对分类 POST/PUT/DELETE（sys_api **92981–92983**）与样本保存 |
+
+分类 API：`sys_api` **92980–92983** / `sys_menu_api` **92984–92987**（V148）。
+
 ## 10. 关联文档
 
 - [接口规范](api-specification.md)

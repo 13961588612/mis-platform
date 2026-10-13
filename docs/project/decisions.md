@@ -56,6 +56,16 @@
 | 下游 | 仍调 `bip-bank-receipt`；浏览器不直连旧网关；BFF 反代 + `sys_api` 鉴权 |
 | 老令牌 | BFF 经共享 `SmpTokenExchangeService`（`mis.bff.smp`）兑令牌；头默认 `HC-SMP-Authorization`；令牌不下发浏览器 |
 
+## 5.1 问数样本对分类（2026-10-13）
+
+| 项 | 决策 |
+|----|------|
+| 入口 | 问数 App → 知识与规则 → 样本对 Tab（`/iqd/enhance?tab=sqlpair`）；分类管理内嵌该 Tab，不另开菜单 |
+| 作用域 | **按连接（项目）一棵树**（`iqd_sql_pair_category.connection_id`）；不与 `biz_category` / `kb_category` 复用表 |
+| 挂载 | `iqd_sql_pair.category_id` 可空软引用；「未分类」为 UI 虚拟节点（`category_id IS NULL`） |
+| 运行时 | **不改变** Wren sync / Worker few-shot 注入范围（仍按连接全量拉取） |
+| 删分类 | 有子节点或有样本挂载时拒绝 |
+
 ## 6. 待定
 
 | 项 | 状态 |

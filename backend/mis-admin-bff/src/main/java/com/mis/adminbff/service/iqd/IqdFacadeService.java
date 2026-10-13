@@ -22,8 +22,11 @@ import com.mis.adminbff.dto.iqd.IqdDimensionValueMapVO;
 import com.mis.adminbff.dto.iqd.IqdScopeDimensionVO;
 import com.mis.adminbff.dto.iqd.IqdScopePolicySaveRequest;
 import com.mis.adminbff.dto.iqd.IqdScopePolicyVO;
+import com.mis.adminbff.dto.iqd.IqdSqlPairCategorySaveRequest;
+import com.mis.adminbff.dto.iqd.IqdSqlPairCategoryVO;
 import com.mis.adminbff.dto.iqd.IqdSqlPairSaveRequest;
 import com.mis.adminbff.dto.iqd.IqdSqlPairVO;
+import com.mis.common.core.result.PageResult;
 import com.mis.adminbff.security.UserPermissionLoader;
 import com.mis.adminbff.service.KbSubjectProxyService;
 import com.mis.adminbff.support.RequestContext;
@@ -297,11 +300,51 @@ public class IqdFacadeService {
     // ================================================================ W4 增强物料
 
     /**
-     * 查询连接下样本对（需 iqd:enhance:view）。
+     * 查询连接下样本对分类树（需 iqd:enhance:view）。
      */
-    public List<IqdSqlPairVO> listSqlPairs(Long connectionId) {
+    public List<IqdSqlPairCategoryVO> listSqlPairCategoryTree(Long connectionId) {
         requirePermission(properties.getEnhanceViewPermission());
-        return iqdClient.listSqlPairs(connectionId);
+        return iqdClient.listSqlPairCategoryTree(connectionId);
+    }
+
+    /**
+     * 新建样本对分类（需 iqd:enhance:save）。
+     */
+    public IqdSqlPairCategoryVO createSqlPairCategory(IqdSqlPairCategorySaveRequest dto) {
+        requirePermission(properties.getEnhanceSavePermission());
+        return iqdClient.createSqlPairCategory(dto);
+    }
+
+    /**
+     * 更新样本对分类（需 iqd:enhance:save）。
+     */
+    public IqdSqlPairCategoryVO updateSqlPairCategory(Long id, IqdSqlPairCategorySaveRequest dto) {
+        requirePermission(properties.getEnhanceSavePermission());
+        return iqdClient.updateSqlPairCategory(id, dto);
+    }
+
+    /**
+     * 删除样本对分类（需 iqd:enhance:save）。
+     */
+    public void deleteSqlPairCategory(Long id) {
+        requirePermission(properties.getEnhanceSavePermission());
+        iqdClient.deleteSqlPairCategory(id);
+    }
+
+    /**
+     * 分页查询连接下样本对（需 iqd:enhance:view）。
+     */
+    public PageResult<IqdSqlPairVO> listSqlPairs(
+            Long connectionId,
+            Long categoryId,
+            Boolean includeDescendants,
+            String keyword,
+            String sourceDialect,
+            Integer page,
+            Integer size) {
+        requirePermission(properties.getEnhanceViewPermission());
+        return iqdClient.listSqlPairs(
+                connectionId, categoryId, includeDescendants, keyword, sourceDialect, page, size);
     }
 
     /**

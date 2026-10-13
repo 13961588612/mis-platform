@@ -1,5 +1,6 @@
 package com.mis.iqd.api.controller;
 
+import com.mis.common.core.result.PageResult;
 import com.mis.common.core.result.Result;
 import com.mis.iqd.api.dto.IqdAclSaveRequest;
 import com.mis.iqd.api.dto.IqdAclVO;
@@ -18,6 +19,8 @@ import com.mis.iqd.api.dto.IqdMaskRuleVO;
 import com.mis.iqd.api.dto.IqdScopeDimensionVO;
 import com.mis.iqd.api.dto.IqdScopePolicySaveRequest;
 import com.mis.iqd.api.dto.IqdScopePolicyVO;
+import com.mis.iqd.api.dto.IqdSqlPairCategorySaveRequest;
+import com.mis.iqd.api.dto.IqdSqlPairCategoryVO;
 import com.mis.iqd.api.dto.IqdSqlPairSaveRequest;
 import com.mis.iqd.api.dto.IqdSqlPairVO;
 import com.mis.iqd.api.dto.IqdSyncJobVO;
@@ -331,14 +334,61 @@ public class IqdController {
         return Result.ok(adminService.getAskLog(id));
     }
 
+    // ================================================================ 样本对分类（管理面树）
+
+    /**
+     * 连接下样本对分类树。
+     */
+    @GetMapping("/sql-pair-categories/tree")
+    public Result<List<IqdSqlPairCategoryVO>> listSqlPairCategoryTree(@RequestParam Long connectionId) {
+        return Result.ok(adminService.listSqlPairCategoryTree(connectionId));
+    }
+
+    /**
+     * 新建样本对分类。
+     */
+    @PostMapping("/sql-pair-categories")
+    public Result<IqdSqlPairCategoryVO> createSqlPairCategory(
+            @Valid @RequestBody IqdSqlPairCategorySaveRequest dto) {
+        return Result.ok(adminService.createSqlPairCategory(dto));
+    }
+
+    /**
+     * 更新样本对分类。
+     */
+    @PutMapping("/sql-pair-categories/{id}")
+    public Result<IqdSqlPairCategoryVO> updateSqlPairCategory(
+            @PathVariable Long id, @Valid @RequestBody IqdSqlPairCategorySaveRequest dto) {
+        return Result.ok(adminService.updateSqlPairCategory(id, dto));
+    }
+
+    /**
+     * 删除样本对分类（有子节点或挂载样本时拒绝）。
+     */
+    @DeleteMapping("/sql-pair-categories/{id}")
+    public Result<Void> deleteSqlPairCategory(@PathVariable Long id) {
+        adminService.deleteSqlPairCategory(id);
+        return Result.ok();
+    }
+
     // ================================================================ 样本对（W4）
 
     /**
-     * 查询连接下的样本对（W4：few-shot 增强物料）。
+     * 查询连接下的样本对（管理面分页；可选分类 / 关键词 / 方言）。
+     *
+     * <p>{@code categoryId=0} 表示仅未分类；缺省为全部分类。Worker 内部仍走全量接口。
      */
     @GetMapping("/sql-pairs")
-    public Result<List<IqdSqlPairVO>> listSqlPairs(@RequestParam Long connectionId) {
-        return Result.ok(adminService.listSqlPairs(connectionId));
+    public Result<PageResult<IqdSqlPairVO>> listSqlPairs(
+            @RequestParam Long connectionId,
+            @RequestParam(required = false) Long categoryId,
+            @RequestParam(required = false, defaultValue = "true") Boolean includeDescendants,
+            @RequestParam(required = false) String keyword,
+            @RequestParam(required = false) String sourceDialect,
+            @RequestParam(required = false, defaultValue = "1") Integer page,
+            @RequestParam(required = false, defaultValue = "50") Integer size) {
+        return Result.ok(adminService.pageSqlPairs(
+                connectionId, categoryId, includeDescendants, keyword, sourceDialect, page, size));
     }
 
     /**

@@ -61,6 +61,7 @@ class IqdRowScopeColumnOverrideTest {
                 mock(IqdMaskRuleRepository.class),
                 dimensionRepo,
                 mock(IqdSqlPairRepository.class),
+                mock(com.mis.iqd.domain.repository.IqdSqlPairCategoryRepository.class),
                 mock(IqdKnowledgeRepository.class),
                 mock(IqdSyncJobRepository.class),
                 mock(IqdEditIdempotencyRepository.class),

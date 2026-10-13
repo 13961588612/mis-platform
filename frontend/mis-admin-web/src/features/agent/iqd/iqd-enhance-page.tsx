@@ -23,12 +23,13 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { Pencil, Plus, RefreshCw, Save, Send, Trash2, Upload } from 'lucide-react';
+import { FolderPlus, Pencil, Plus, RefreshCw, Save, Send, Trash2, Upload } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { PageHeader } from '@/components/common/page-header';
+import { CategorySingleTreeSelect } from '@/components/common/category-single-tree-select';
 import { ProjectSwitcher } from './components/shared/ProjectSwitcher';
 import { useActiveProjectId } from './hooks/useActiveProject';
 import { buildAppBreadcrumbs } from '@/components/common/app-breadcrumbs';
@@ -48,16 +49,19 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import {
+  createIqdSqlPairCategory,
   deleteIqdDimension,
   deleteIqdKnowledge,
   deleteIqdMaskRule,
   deleteIqdSqlPair,
+  deleteIqdSqlPairCategory,
   importIqdKnowledgeS07,
   listIqdDictSyncStatus,
   listIqdDimensions,
   listIqdKnowledge,
   listIqdMaskRules,
-  listIqdSqlPairs,
+  listIqdSqlPairCategoryTree,
+  pageIqdSqlPairs,
   pushIqdEnhancements,
   saveIqdDimension,
   saveIqdKnowledge,
@@ -66,15 +70,23 @@ import {
   syncIqdDimension,
   translateSqlPair,
   trialSqlPair,
+  updateIqdSqlPairCategory,
   type IqdDictSyncStatus,
   type IqdKnowledge,
   type IqdMaskRule,
   type IqdScopeDimension,
   type IqdSqlPair,
+  type IqdSqlPairCategory,
   type IqdTrialResult,
 } from '@/lib/api/iqd';
 import { SyncStatusBar } from './components/SyncStatusBar';
 import { SqlEditor } from './components/enhance/SqlEditor';
+import {
+  selectionToCategoryId,
+  SqlPairCategoryTree,
+  toCategoryTreeSelectNodes,
+  type SqlPairCategorySelection,
+} from './components/enhance/SqlPairCategoryTree';
 import {
   ENHANCE_TAB_VIEW_PERMISSIONS,
   S07_IMPORT_READY,
@@ -195,11 +207,20 @@ export function IqdEnhancePage() {
   const [dimHeader, setDimHeader] = useState('');
   const [dimDictTable, setDimDictTable] = useState('');
 
-  // 样本对查询条件与弹窗状态（W4 / v1.10 方言转化 + 试运行）
+  // 样本对查询条件与弹窗状态（W4 / v1.10 方言转化 + 试运行 + 分类树）
   const [pairKeyword, setPairKeyword] = useState('');
   const [pairDialectFilter, setPairDialectFilter] = useState('all');
   const [pairDialogOpen, setPairDialogOpen] = useState(false);
   const [pairEditing, setPairEditing] = useState<IqdSqlPair | null>(null);
+  const [pairCategoryTree, setPairCategoryTree] = useState<IqdSqlPairCategory[]>([]);
+  const [pairCategorySel, setPairCategorySel] = useState<SqlPairCategorySelection>('all');
+  const [pairTotal, setPairTotal] = useState(0);
+  const [pairPage, setPairPage] = useState(1);
+  const [catDialogOpen, setCatDialogOpen] = useState(false);
+  const [catEditing, setCatEditing] = useState<IqdSqlPairCategory | null>(null);
+  const [catCode, setCatCode] = useState('');
+  const [catName, setCatName] = useState('');
+  const [catParentId, setCatParentId] = useState<string | null>(null);
 
   // 知识/术语查询条件与弹窗状态（W4；**与样本对同构**：筛选栏 + 表格 + 编辑弹窗）
   const [kbKeyword, setKbKeyword] = useState('');
@@ -251,6 +272,25 @@ export function IqdEnhancePage() {
     return connectionId;
   }, [connectionId]);
 
+  const loadSqlPairs = useCallback(
+    async (cid: number, page = 1) => {
+      const categoryId = selectionToCategoryId(pairCategorySel);
+      const result = await pageIqdSqlPairs({
+        connectionId: cid,
+        categoryId: categoryId ?? null,
+        includeDescendants: true,
+        keyword: pairKeyword.trim() || undefined,
+        sourceDialect: pairDialectFilter,
+        page,
+        size: 50,
+      });
+      setSqlPairs(result.list);
+      setPairTotal(result.total);
+      setPairPage(result.page);
+    },
+    [pairCategorySel, pairDialectFilter, pairKeyword],
+  );
+
   const loadEnhance = useCallback(async () => {
     setLoading(true);
     setError(null);
@@ -260,18 +300,33 @@ export function IqdEnhancePage() {
         setLoading(false);
         return;
       }
-      const [pairs, knowledgeItems] = await Promise.all([
-        listIqdSqlPairs(cid),
+      const [tree, knowledgeItems] = await Promise.all([
+        listIqdSqlPairCategoryTree(cid),
         listIqdKnowledge(cid),
       ]);
-      setSqlPairs(pairs);
+      setPairCategoryTree(tree);
+      await loadSqlPairs(cid, 1);
       setKnowledge(knowledgeItems);
     } catch (e) {
       setError(e instanceof Error ? e.message : '加载增强物料失败');
     } finally {
       setLoading(false);
     }
-  }, [ensureConnection]);
+  }, [ensureConnection, loadSqlPairs]);
+
+  const reloadSqlPairsOnly = useCallback(async () => {
+    const cid = await ensureConnection();
+    if (cid == null) return;
+    setLoading(true);
+    setError(null);
+    try {
+      await loadSqlPairs(cid, 1);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : '加载样本对失败');
+    } finally {
+      setLoading(false);
+    }
+  }, [ensureConnection, loadSqlPairs]);
 
   const switchTab = useCallback(
     (next: Tab) => {
@@ -424,16 +479,105 @@ export function IqdEnhancePage() {
     setPairEditing(null);
   }, [loadEnhance]);
 
-  // 客户端过滤：按问题关键词（模糊）+ 方言
-  const filteredPairs = useMemo(() => {
-    const kw = pairKeyword.trim().toLowerCase();
-    return sqlPairs.filter((p) => {
-      const matchKw = kw === '' || (p.question ?? '').toLowerCase().includes(kw);
-      const matchDialect =
-        pairDialectFilter === 'all' || (p.source_dialect ?? '') === pairDialectFilter;
-      return matchKw && matchDialect;
-    });
-  }, [pairDialectFilter, pairKeyword, sqlPairs]);
+  // 切换分类树节点时按服务端筛选重载样本列表
+  useEffect(() => {
+    if (tab !== 'sqlpair') return;
+    void reloadSqlPairsOnly();
+    // 仅跟分类选择：关键词/方言靠「查询」按钮
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- 刻意只响应分类切换
+  }, [pairCategorySel]);
+
+  // 切换项目时清空分类选择并重载增强物料
+  useEffect(() => {
+    setPairCategorySel('all');
+    setPairCategoryTree([]);
+    setSqlPairs([]);
+    setPairTotal(0);
+    if (tab === 'sqlpair' || tab === 'knowledge') {
+      void loadEnhance();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- 仅响应项目切换
+  }, [connectionId]);
+
+  const openCatDialog = useCallback(
+    (row: IqdSqlPairCategory | null) => {
+      setCatEditing(row);
+      setCatCode(row?.code ?? '');
+      setCatName(row?.name ?? '');
+      setCatParentId(
+        row?.parent_id && row.parent_id !== 0 ? String(row.parent_id) : null,
+      );
+      setCatDialogOpen(true);
+    },
+    [],
+  );
+
+  const saveCategory = useCallback(async () => {
+    const cid = await ensureConnection();
+    if (cid == null) return;
+    if (!catCode.trim() || !catName.trim()) {
+      setError('分类编码与名称不能为空');
+      return;
+    }
+    setSaving(true);
+    setError(null);
+    try {
+      const body = {
+        connection_id: cid,
+        parent_id: catParentId ? Number(catParentId) : 0,
+        code: catCode.trim(),
+        name: catName.trim(),
+        sort_order: 0,
+        enabled: true,
+      };
+      if (catEditing?.id != null) {
+        await updateIqdSqlPairCategory(catEditing.id, body);
+      } else {
+        await createIqdSqlPairCategory(body);
+      }
+      setCatDialogOpen(false);
+      setCatEditing(null);
+      const tree = await listIqdSqlPairCategoryTree(cid);
+      setPairCategoryTree(tree);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : '保存分类失败');
+    } finally {
+      setSaving(false);
+    }
+  }, [catCode, catEditing, catName, catParentId, ensureConnection]);
+
+  const removeCategory = useCallback(async () => {
+    if (pairCategorySel === 'all' || pairCategorySel === 'uncategorized') return;
+    const id = Number(pairCategorySel);
+    if (!Number.isFinite(id)) return;
+    setError(null);
+    try {
+      await deleteIqdSqlPairCategory(id);
+      setPairCategorySel('all');
+      const cid = await ensureConnection();
+      if (cid != null) {
+        setPairCategoryTree(await listIqdSqlPairCategoryTree(cid));
+        await loadSqlPairs(cid, 1);
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : '删除分类失败');
+    }
+  }, [ensureConnection, loadSqlPairs, pairCategorySel]);
+
+  const selectedCategoryNode = useMemo(() => {
+    if (pairCategorySel === 'all' || pairCategorySel === 'uncategorized') return null;
+    const walk = (nodes: IqdSqlPairCategory[]): IqdSqlPairCategory | null => {
+      for (const n of nodes) {
+        if (String(n.id) === pairCategorySel) return n;
+        if (n.children?.length) {
+          const hit = walk(n.children);
+          if (hit) return hit;
+        }
+      }
+      return null;
+    };
+    return walk(pairCategoryTree);
+  }, [pairCategorySel, pairCategoryTree]);
 
   const removePair = useCallback(
     async (id: number | undefined) => {
@@ -529,7 +673,7 @@ export function IqdEnhancePage() {
     { key: 'mask', label: `脱敏规则（${maskRules.length}）` },
     { key: 'dimension', label: `行级维度（${dimensions.length}）` },
     { key: 'sync', label: '字典同步' },
-    { key: 'sqlpair', label: `样本对（${sqlPairs.length}）` },
+    { key: 'sqlpair', label: `样本对（${pairTotal || sqlPairs.length}）` },
     { key: 'knowledge', label: `知识/术语（${knowledge.length}）` },
     { key: 'instruction', label: `指令（${instructionCount}）` },
   ];
@@ -937,136 +1081,276 @@ export function IqdEnhancePage() {
               </div>
             ) : null}
 
-            {/* ================= 样本对（W4）================= */}
+            {/* ================= 样本对（W4：左树 + 右表）================= */}
             {tab === 'sqlpair' ? (
-              <div className="space-y-3">
-                {/* 查询条件 */}
-                <div className="flex flex-wrap items-center gap-2 rounded-lg border bg-card p-3">
-                  <Input
-                    className="h-9 w-full sm:w-64"
-                    placeholder="按问题关键词过滤"
-                    value={pairKeyword}
-                    onChange={(e) => setPairKeyword(e.target.value)}
-                  />
-                  <select
-                    className="h-9 rounded-md border border-input bg-card px-2.5 text-sm"
-                    value={pairDialectFilter}
-                    onChange={(e) => setPairDialectFilter(e.target.value)}
-                    aria-label="方言筛选"
-                  >
-                    <option value="all">全部方言</option>
-                    <option value="oracle">Oracle</option>
-                    <option value="mysql">MySQL</option>
-                    <option value="postgres">PostgreSQL</option>
-                    <option value="clickhouse">ClickHouse</option>
-                  </select>
-                  <Button size="sm" onClick={() => openPairDialog(null)} disabled={saving}>
-                    <Plus className="h-4 w-4" />
-                    新增
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() => void loadEnhance()}
-                    disabled={loading}
-                  >
-                    <RefreshCw className={cn('h-4 w-4', loading && 'animate-spin')} />
-                    刷新
-                  </Button>
-                </div>
+              <div className="flex min-h-0 flex-1 gap-3">
+                <aside className="flex w-56 shrink-0 flex-col gap-2 rounded-lg border bg-card p-2">
+                  <div className="flex items-center gap-1 px-1">
+                    <span className="flex-1 text-xs font-medium text-muted-foreground">分类</span>
+                    <Button
+                      size="icon"
+                      variant="ghost"
+                      className="h-7 w-7"
+                      disabled={!canPairSave}
+                      title="新建分类"
+                      onClick={() => openCatDialog(null)}
+                    >
+                      <FolderPlus className="h-3.5 w-3.5" />
+                    </Button>
+                    <Button
+                      size="icon"
+                      variant="ghost"
+                      className="h-7 w-7"
+                      disabled={!canPairSave || !selectedCategoryNode}
+                      title="重命名"
+                      onClick={() => selectedCategoryNode && openCatDialog(selectedCategoryNode)}
+                    >
+                      <Pencil className="h-3.5 w-3.5" />
+                    </Button>
+                    <Button
+                      size="icon"
+                      variant="ghost"
+                      className="h-7 w-7 text-muted-foreground hover:text-destructive"
+                      disabled={!canPairSave || !selectedCategoryNode}
+                      title="删除分类"
+                      onClick={() => void removeCategory()}
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </Button>
+                  </div>
+                  <div className="min-h-0 flex-1 overflow-y-auto">
+                    <SqlPairCategoryTree
+                      tree={pairCategoryTree}
+                      selected={pairCategorySel}
+                      onSelect={(sel) => {
+                        setPairCategorySel(sel);
+                      }}
+                      loading={loading}
+                    />
+                  </div>
+                </aside>
 
-                {/* 查询结果 */}
-                <div className="rounded-lg border bg-card">
-                  <table className="w-full border-separate border-spacing-0 bg-table-surface text-left text-sm">
-                    <thead className="border-b-2 border-foreground/20 bg-table-header text-muted-foreground">
-                      <tr>
-                        <th className="px-3 py-2 font-bold">问题</th>
-                        <th className="px-3 py-2 font-bold">方言</th>
-                        <th className="px-3 py-2 font-bold">SQL</th>
-                        <th className="px-3 py-2 font-bold">状态</th>
-                        <th className="px-3 py-2 font-bold">Wren ref</th>
-                        <th className="w-[7rem] px-3 py-2" />
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {filteredPairs.length === 0 ? (
+                <div className="min-w-0 flex-1 space-y-3">
+                  <div className="flex flex-wrap items-center gap-2 rounded-lg border bg-card p-3">
+                    <Input
+                      className="h-9 w-full sm:w-64"
+                      placeholder="按问题关键词过滤"
+                      value={pairKeyword}
+                      onChange={(e) => setPairKeyword(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') void reloadSqlPairsOnly();
+                      }}
+                    />
+                    <select
+                      className="h-9 rounded-md border border-input bg-card px-2.5 text-sm"
+                      value={pairDialectFilter}
+                      onChange={(e) => setPairDialectFilter(e.target.value)}
+                      aria-label="方言筛选"
+                    >
+                      <option value="all">全部方言</option>
+                      <option value="oracle">Oracle</option>
+                      <option value="mysql">MySQL</option>
+                      <option value="postgres">PostgreSQL</option>
+                      <option value="clickhouse">ClickHouse</option>
+                    </select>
+                    <Button size="sm" variant="outline" onClick={() => void reloadSqlPairsOnly()}>
+                      查询
+                    </Button>
+                    <Button size="sm" onClick={() => openPairDialog(null)} disabled={saving}>
+                      <Plus className="h-4 w-4" />
+                      新增
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => void loadEnhance()}
+                      disabled={loading}
+                    >
+                      <RefreshCw className={cn('h-4 w-4', loading && 'animate-spin')} />
+                      刷新
+                    </Button>
+                    <span className="ml-auto text-xs text-muted-foreground">共 {pairTotal} 条</span>
+                  </div>
+
+                  <div className="rounded-lg border bg-card">
+                    <table className="w-full border-separate border-spacing-0 bg-table-surface text-left text-sm">
+                      <thead className="border-b-2 border-foreground/20 bg-table-header text-muted-foreground">
                         <tr>
-                          <td colSpan={6} className="px-3 py-8 text-center text-muted-foreground">
-                            暂无样本对
-                          </td>
+                          <th className="px-3 py-2 font-bold">问题</th>
+                          <th className="px-3 py-2 font-bold">方言</th>
+                          <th className="px-3 py-2 font-bold">SQL</th>
+                          <th className="px-3 py-2 font-bold">状态</th>
+                          <th className="px-3 py-2 font-bold">Wren ref</th>
+                          <th className="w-[7rem] px-3 py-2" />
                         </tr>
-                      ) : (
-                        filteredPairs.map((p) => (
-                          <tr
-                            key={p.id}
-                            className="border-b border-border/50 bg-table-row last:border-0 even:bg-table-stripe"
-                          >
-                            <td
-                              className="max-w-[14rem] truncate px-3 py-2 text-xs"
-                              title={p.question}
-                            >
-                              {p.question}
-                            </td>
-                            <td className="px-3 py-2 text-xs">
-                              {DIALECT_LABEL[p.source_dialect ?? ''] ?? p.source_dialect}
-                            </td>
-                            <td
-                              className="max-w-[24rem] truncate px-3 py-2 font-mono text-xs"
-                              title={p.wren_sql}
-                            >
-                              {p.wren_sql}
-                            </td>
-                            <td className="px-3 py-2 text-xs">
-                              <Badge
-                                variant={
-                                  p.sync_status === 'synced'
-                                    ? 'default'
-                                    : p.sync_status === 'failed'
-                                      ? 'destructive'
-                                      : 'secondary'
-                                }
-                              >
-                                {SYNC_LABEL[p.sync_status ?? ''] ?? p.sync_status}
-                              </Badge>
-                            </td>
-                            <td className="px-3 py-2 font-mono text-xs">{p.wren_ref_id ?? '—'}</td>
-                            <td className="px-3 py-2">
-                              <div className="flex items-center gap-1">
-                                <Button
-                                  size="sm"
-                                  variant="outline"
-                                  className="h-8"
-                                  onClick={() => openPairDialog(p)}
-                                  disabled={!canPairSave}
-                                >
-                                  编辑
-                                </Button>
-                                <Button
-                                  size="icon"
-                                  variant="ghost"
-                                  className="h-8 w-8 text-muted-foreground hover:text-destructive"
-                                  onClick={() => void removePair(p.id)}
-                                  disabled={!canPairSave}
-                                  title={canPairSave ? '删除' : '需 iqd:enhance:save'}
-                                >
-                                  <Trash2 className="h-4 w-4" />
-                                </Button>
-                              </div>
+                      </thead>
+                      <tbody>
+                        {sqlPairs.length === 0 ? (
+                          <tr>
+                            <td colSpan={6} className="px-3 py-8 text-center text-muted-foreground">
+                              暂无样本对
                             </td>
                           </tr>
-                        ))
-                      )}
-                    </tbody>
-                  </table>
-                </div>
+                        ) : (
+                          sqlPairs.map((p) => (
+                            <tr
+                              key={p.id}
+                              className="border-b border-border/50 bg-table-row last:border-0 even:bg-table-stripe"
+                            >
+                              <td
+                                className="max-w-[14rem] truncate px-3 py-2 text-xs"
+                                title={p.question}
+                              >
+                                {p.question}
+                              </td>
+                              <td className="px-3 py-2 text-xs">
+                                {DIALECT_LABEL[p.source_dialect ?? ''] ?? p.source_dialect}
+                              </td>
+                              <td
+                                className="max-w-[24rem] truncate px-3 py-2 font-mono text-xs"
+                                title={p.wren_sql}
+                              >
+                                {p.wren_sql}
+                              </td>
+                              <td className="px-3 py-2 text-xs">
+                                <Badge
+                                  variant={
+                                    p.sync_status === 'synced'
+                                      ? 'default'
+                                      : p.sync_status === 'failed'
+                                        ? 'destructive'
+                                        : 'secondary'
+                                  }
+                                >
+                                  {SYNC_LABEL[p.sync_status ?? ''] ?? p.sync_status}
+                                </Badge>
+                              </td>
+                              <td className="px-3 py-2 font-mono text-xs">{p.wren_ref_id ?? '—'}</td>
+                              <td className="px-3 py-2">
+                                <div className="flex items-center gap-1">
+                                  <Button
+                                    size="sm"
+                                    variant="outline"
+                                    className="h-8"
+                                    onClick={() => openPairDialog(p)}
+                                    disabled={!canPairSave}
+                                  >
+                                    编辑
+                                  </Button>
+                                  <Button
+                                    size="icon"
+                                    variant="ghost"
+                                    className="h-8 w-8 text-muted-foreground hover:text-destructive"
+                                    onClick={() => void removePair(p.id)}
+                                    disabled={!canPairSave}
+                                    title={canPairSave ? '删除' : '需 iqd:enhance:save'}
+                                  >
+                                    <Trash2 className="h-4 w-4" />
+                                  </Button>
+                                </div>
+                              </td>
+                            </tr>
+                          ))
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
 
-                <IqdSqlPairDialog
-                  open={pairDialogOpen}
-                  initial={pairEditing}
-                  onClose={closePairDialog}
-                  onSaved={handlePairSaved}
-                  ensureConnection={ensureConnection}
-                />
+                  {pairTotal > 50 ? (
+                    <div className="flex items-center justify-end gap-2">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        disabled={pairPage <= 1 || loading}
+                        onClick={() => {
+                          void (async () => {
+                            const cid = await ensureConnection();
+                            if (cid != null) await loadSqlPairs(cid, pairPage - 1);
+                          })();
+                        }}
+                      >
+                        上一页
+                      </Button>
+                      <span className="text-xs text-muted-foreground">
+                        第 {pairPage} / {Math.max(1, Math.ceil(pairTotal / 50))} 页
+                      </span>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        disabled={pairPage * 50 >= pairTotal || loading}
+                        onClick={() => {
+                          void (async () => {
+                            const cid = await ensureConnection();
+                            if (cid != null) await loadSqlPairs(cid, pairPage + 1);
+                          })();
+                        }}
+                      >
+                        下一页
+                      </Button>
+                    </div>
+                  ) : null}
+
+                  <IqdSqlPairDialog
+                    open={pairDialogOpen}
+                    initial={pairEditing}
+                    categoryTree={pairCategoryTree}
+                    defaultCategoryId={
+                      pairCategorySel !== 'all' && pairCategorySel !== 'uncategorized'
+                        ? Number(pairCategorySel)
+                        : null
+                    }
+                    onClose={closePairDialog}
+                    onSaved={handlePairSaved}
+                    ensureConnection={ensureConnection}
+                  />
+
+                  <Dialog open={catDialogOpen} onOpenChange={(v) => !v && setCatDialogOpen(false)}>
+                    <DialogContent className="max-w-md">
+                      <DialogHeader>
+                        <DialogTitle>
+                          {catEditing?.id != null ? '重命名分类' : '新建分类'}
+                        </DialogTitle>
+                      </DialogHeader>
+                      <div className="space-y-3 py-2">
+                        <div className="flex flex-col gap-1">
+                          <span className="text-xs text-muted-foreground">编码</span>
+                          <Input
+                            value={catCode}
+                            onChange={(e) => setCatCode(e.target.value)}
+                            disabled={catEditing?.id != null}
+                            placeholder="如 sales"
+                          />
+                        </div>
+                        <div className="flex flex-col gap-1">
+                          <span className="text-xs text-muted-foreground">名称</span>
+                          <Input
+                            value={catName}
+                            onChange={(e) => setCatName(e.target.value)}
+                            placeholder="如 销售"
+                          />
+                        </div>
+                        <div className="flex flex-col gap-1">
+                          <span className="text-xs text-muted-foreground">父分类</span>
+                          <CategorySingleTreeSelect
+                            tree={toCategoryTreeSelectNodes(pairCategoryTree)}
+                            value={catParentId}
+                            onChange={setCatParentId}
+                            placeholder="根分类"
+                            ariaLabel="父分类"
+                          />
+                        </div>
+                      </div>
+                      <DialogFooter>
+                        <Button variant="outline" onClick={() => setCatDialogOpen(false)}>
+                          取消
+                        </Button>
+                        <Button onClick={() => void saveCategory()} disabled={saving}>
+                          保存
+                        </Button>
+                      </DialogFooter>
+                    </DialogContent>
+                  </Dialog>
+                </div>
               </div>
             ) : null}
 
@@ -1287,6 +1571,9 @@ export function IqdEnhancePage() {
 interface IqdSqlPairDialogProps {
   open: boolean;
   initial: IqdSqlPair | null;
+  categoryTree: IqdSqlPairCategory[];
+  /** 新增时默认挂载的分类（当前树选中节点）。 */
+  defaultCategoryId?: number | null;
   onClose: () => void;
   onSaved: () => void;
   ensureConnection: () => Promise<number | null>;
@@ -1295,6 +1582,8 @@ interface IqdSqlPairDialogProps {
 function IqdSqlPairDialog({
   open,
   initial,
+  categoryTree,
+  defaultCategoryId = null,
   onClose,
   onSaved,
   ensureConnection,
@@ -1311,6 +1600,7 @@ function IqdSqlPairDialog({
   const [warnings, setWarnings] = useState<string[]>([]);
   const [trialResult, setTrialResult] = useState<IqdTrialResult | null>(null);
   const [remark, setRemark] = useState('');
+  const [categoryId, setCategoryId] = useState<string | null>(null);
   const [translating, setTranslating] = useState(false);
   const [trialing, setTrialing] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -1326,8 +1616,15 @@ function IqdSqlPairDialog({
     setWarnings([]);
     setTrialResult(null);
     setRemark(initial?.remark ?? '');
+    const cat =
+      initial?.category_id != null
+        ? String(initial.category_id)
+        : defaultCategoryId != null
+          ? String(defaultCategoryId)
+          : null;
+    setCategoryId(cat);
     setError(null);
-  }, [open, initial]);
+  }, [open, initial, defaultCategoryId]);
 
   // v1.10 方言转化：调 BFF 翻译回填可编辑 wren_sql
   const translate = useCallback(async () => {
@@ -1386,6 +1683,7 @@ function IqdSqlPairDialog({
         wren_sql: wrenSql.trim(),
         remark: remark.trim() || null,
         enabled: true,
+        category_id: categoryId ? Number(categoryId) : null,
       });
       onSaved();
     } catch (e) {
@@ -1393,7 +1691,17 @@ function IqdSqlPairDialog({
     } finally {
       setSaving(false);
     }
-  }, [ensureConnection, initial, onSaved, question, remark, sourceDialect, nativeSql, wrenSql]);
+  }, [
+    categoryId,
+    ensureConnection,
+    initial,
+    onSaved,
+    question,
+    remark,
+    sourceDialect,
+    nativeSql,
+    wrenSql,
+  ]);
 
   return (
     <Dialog
@@ -1416,6 +1724,17 @@ function IqdSqlPairDialog({
               placeholder="问题（如：本月各渠道销售额？）"
               value={question}
               onChange={(e) => setQuestion(e.target.value)}
+            />
+          </div>
+
+          <div className="flex flex-col gap-1">
+            <span className="text-xs text-muted-foreground">所属分类</span>
+            <CategorySingleTreeSelect
+              tree={toCategoryTreeSelectNodes(categoryTree)}
+              value={categoryId}
+              onChange={setCategoryId}
+              placeholder="未分类"
+              ariaLabel="所属分类"
             />
           </div>
 

@@ -15,12 +15,15 @@ import com.mis.adminbff.dto.iqd.IqdScopeDimensionVO;
 import com.mis.adminbff.dto.iqd.IqdScopePolicySaveRequest;
 import com.mis.adminbff.dto.iqd.IqdScopePolicyVO;
 import com.mis.adminbff.client.AiPlatformClient;
+import com.mis.adminbff.dto.iqd.IqdSqlPairCategorySaveRequest;
+import com.mis.adminbff.dto.iqd.IqdSqlPairCategoryVO;
 import com.mis.adminbff.dto.iqd.IqdSqlPairSaveRequest;
 import com.mis.adminbff.dto.iqd.IqdSqlPairVO;
 import com.mis.adminbff.service.iqd.IqdFacadeService;
 import com.mis.common.core.constant.SecurityConstants;
 import com.mis.common.core.exception.BusinessException;
 import com.mis.common.core.exception.ResultCode;
+import com.mis.common.core.result.PageResult;
 import com.mis.common.core.result.Result;
 import jakarta.validation.Valid;
 import org.springframework.web.bind.annotation.DeleteMapping;
@@ -250,11 +253,54 @@ public class IqdAclController {
     // ================================================================ 增强物料（W4）
 
     /**
-     * 查询连接下样本对（需 iqd:enhance:view）。
+     * 连接下样本对分类树（需 iqd:enhance:view）。
+     */
+    @GetMapping("/sql-pair-categories/tree")
+    public Result<List<IqdSqlPairCategoryVO>> listSqlPairCategoryTree(@RequestParam Long connectionId) {
+        return Result.ok(iqdFacadeService.listSqlPairCategoryTree(connectionId));
+    }
+
+    /**
+     * 新建样本对分类（需 iqd:enhance:save）。
+     */
+    @PostMapping("/sql-pair-categories")
+    public Result<IqdSqlPairCategoryVO> createSqlPairCategory(
+            @Valid @RequestBody IqdSqlPairCategorySaveRequest dto) {
+        return Result.ok(iqdFacadeService.createSqlPairCategory(dto));
+    }
+
+    /**
+     * 更新样本对分类（需 iqd:enhance:save）。
+     */
+    @PutMapping("/sql-pair-categories/{id}")
+    public Result<IqdSqlPairCategoryVO> updateSqlPairCategory(
+            @PathVariable Long id, @Valid @RequestBody IqdSqlPairCategorySaveRequest dto) {
+        return Result.ok(iqdFacadeService.updateSqlPairCategory(id, dto));
+    }
+
+    /**
+     * 删除样本对分类（需 iqd:enhance:save）。
+     */
+    @DeleteMapping("/sql-pair-categories/{id}")
+    public Result<Void> deleteSqlPairCategory(@PathVariable Long id) {
+        iqdFacadeService.deleteSqlPairCategory(id);
+        return Result.ok();
+    }
+
+    /**
+     * 分页查询连接下样本对（需 iqd:enhance:view；可选分类 / 关键词 / 方言）。
      */
     @GetMapping("/sql-pairs")
-    public Result<List<IqdSqlPairVO>> listSqlPairs(@RequestParam Long connectionId) {
-        return Result.ok(iqdFacadeService.listSqlPairs(connectionId));
+    public Result<PageResult<IqdSqlPairVO>> listSqlPairs(
+            @RequestParam Long connectionId,
+            @RequestParam(required = false) Long categoryId,
+            @RequestParam(required = false, defaultValue = "true") Boolean includeDescendants,
+            @RequestParam(required = false) String keyword,
+            @RequestParam(required = false) String sourceDialect,
+            @RequestParam(required = false, defaultValue = "1") Integer page,
+            @RequestParam(required = false, defaultValue = "50") Integer size) {
+        return Result.ok(iqdFacadeService.listSqlPairs(
+                connectionId, categoryId, includeDescendants, keyword, sourceDialect, page, size));
     }
 
     /**

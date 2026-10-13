@@ -71,6 +71,7 @@ class IqdAdminServiceCloseLoopTest {
     @Mock IqdMaskRuleRepository maskRuleRepository;
     @Mock IqdRowScopeDimensionRepository dimensionRepository;
     @Mock IqdSqlPairRepository sqlPairRepository;
+    @Mock com.mis.iqd.domain.repository.IqdSqlPairCategoryRepository sqlPairCategoryRepository;
     @Mock IqdKnowledgeRepository knowledgeRepository;
     @Mock IqdSyncJobRepository syncJobRepository;
     @Mock IqdChangeEventPublisher changeEventPublisher;

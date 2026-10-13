@@ -68,6 +68,7 @@ class IqdAdminEditTest {
     @Mock IqdConnectionRepository connectionRepository;
     @Mock IqdCatalogItemRepository catalogItemRepository;
     @Mock IqdSqlPairRepository sqlPairRepository;
+    @Mock com.mis.iqd.domain.repository.IqdSqlPairCategoryRepository sqlPairCategoryRepository;
     @Mock IqdKnowledgeRepository knowledgeRepository;
     @Mock IqdSyncJobRepository syncJobRepository;
     @Mock IqdEditIdempotencyRepository editIdempotencyRepository;

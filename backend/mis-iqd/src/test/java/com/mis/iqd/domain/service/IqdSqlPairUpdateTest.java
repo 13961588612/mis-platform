@@ -55,6 +55,7 @@ class IqdSqlPairUpdateTest {
     @Mock IqdMaskRuleRepository maskRuleRepository;
     @Mock IqdRowScopeDimensionRepository dimensionRepository;
     @Mock IqdSqlPairRepository sqlPairRepository;
+    @Mock com.mis.iqd.domain.repository.IqdSqlPairCategoryRepository sqlPairCategoryRepository;
     @Mock IqdKnowledgeRepository knowledgeRepository;
     @Mock IqdSyncJobRepository syncJobRepository;
     @Mock IqdEditIdempotencyRepository editIdempotencyRepository;
@@ -91,7 +92,7 @@ class IqdSqlPairUpdateTest {
 
     private IqdSqlPairSaveRequest request(String wrenSql, Boolean enabled) {
         return new IqdSqlPairSaveRequest(
-                CONNECTION_ID, QUESTION, "mysql", wrenSql, wrenSql, "r", enabled, PAIR_ID);
+                CONNECTION_ID, QUESTION, "mysql", wrenSql, wrenSql, "r", enabled, PAIR_ID, null);
     }
 
     @Test

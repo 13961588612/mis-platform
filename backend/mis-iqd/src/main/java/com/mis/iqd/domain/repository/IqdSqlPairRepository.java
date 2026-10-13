@@ -18,4 +18,6 @@ public interface IqdSqlPairRepository extends JpaRepository<IqdSqlPair, Long> {
 
     Optional<IqdSqlPair> findByConnectionIdAndQuestionAndWrenSql(
             Long connectionId, String question, String wrenSql);
+
+    long countByCategoryId(Long categoryId);
 }

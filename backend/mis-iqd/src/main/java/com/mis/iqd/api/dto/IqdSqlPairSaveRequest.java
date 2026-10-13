@@ -16,6 +16,7 @@ import com.fasterxml.jackson.annotation.JsonProperty;
  * @param remark       备注（可空）
  * @param enabled      是否启用（缺省 true；Boolean，与 BFF/前端及兄弟 DTO 对齐，避免 mis-iqd 反序列化 Boolean→Integer 失败）
  * @param id           样本对 id（编辑时透传；为空表示新增，按 连接+question+wren_sql 去重新建）
+ * @param categoryId   所属分类 id（可空 = 未分类；软引用）
  */
 public record IqdSqlPairSaveRequest(
         @JsonProperty("connection_id") Long connectionId,
@@ -25,5 +26,6 @@ public record IqdSqlPairSaveRequest(
         @JsonProperty("wren_sql") String wrenSql,
         String remark,
         Boolean enabled,
-        @JsonProperty("id") Long id) {
+        @JsonProperty("id") Long id,
+        @JsonProperty("category_id") Long categoryId) {
 }

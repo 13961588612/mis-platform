@@ -17,6 +17,7 @@ public class IqdSqlPairVO {
 
     private Long id;
     private Long connectionId;
+    private Long categoryId;
     private String question;
     private String sourceDialect;
     private String nativeSql;
@@ -45,6 +46,15 @@ public class IqdSqlPairVO {
 
     public void setConnectionId(Long connectionId) {
         this.connectionId = connectionId;
+    }
+
+    @JsonProperty("category_id")
+    public Long getCategoryId() {
+        return categoryId;
+    }
+
+    public void setCategoryId(Long categoryId) {
+        this.categoryId = categoryId;
     }
 
     public String getQuestion() {

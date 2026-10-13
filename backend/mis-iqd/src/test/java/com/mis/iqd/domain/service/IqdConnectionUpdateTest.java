@@ -37,21 +37,21 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
- * 建模台 T06「按 id 更新连接」Java 逻辑单测（契约守卫）。
+ * å»ºæ¨¡å° T06ãæ id æ´æ°è¿æ¥ãJava é»è¾åæµï¼å¥çº¦å®å«ï¼ã
  *
- * <p>纯 Mockito 单测（不加载 Spring、不依赖活体 DB / WrenAI），聚焦
- * {@link IqdAdminService#updateConnection(Long, IqdConnectionUpdateRequest)} 的核心契约
- * （system-design §14.1 / §14.5 / §14.5.1 A）：
+ * <p>çº¯ Mockito åæµï¼ä¸å è½½ Springãä¸ä¾èµæ´»ä½ DB / WrenAIï¼ï¼èç¦
+ * {@link IqdAdminService#updateConnection(Long, IqdConnectionUpdateRequest)} çæ ¸å¿å¥çº¦
+ * ï¼system-design Â§14.1 / Â§14.5 / Â§14.5.1 Aï¼ï¼
  * <ul>
- *   <li><b>局部更新</b>：只提交 {@code name} ⇒ 其余字段（{@code base_url} / {@code auth_type} /
- *       {@code timeout_seconds} / {@code language} / {@code enabled}）全部保持原值
- *       （守卫「新 DTO 无默认值」这一 §14.1 裁决）；</li>
- *   <li><b>40900</b>：改名撞 {@code uk_iqd_connection_name}（先查后报，库中名未变、无 50000）；</li>
- *   <li>改名同值 → 跳过唯一校验（不误报 40900）；</li>
- *   <li><b>42200</b>：{@code id} 为空 / 连接不存在 / {@code timeout_seconds <= 0}；</li>
- *   <li><b>secret_ref 留空保留原值</b>（{@code null}/{@code ******}/空白 → 不改；非空非占位 → 写入）；</li>
- *   <li><b>enabled 切换只写本行</b>（不联动其它连接，§14.5）；</li>
- *   <li><b>主连接迁移日志</b>（§14.5.1 A）：改名离开/占用 {@code default} ⇒ 打结构化日志。</li>
+ *   <li><b>å±é¨æ´æ°</b>ï¼åªæäº¤ {@code name} â å¶ä½å­æ®µï¼{@code base_url} / {@code auth_type} /
+ *       {@code timeout_seconds} / {@code language} / {@code enabled}ï¼å¨é¨ä¿æåå¼
+ *       ï¼å®å«ãæ° DTO æ é»è®¤å¼ãè¿ä¸ Â§14.1 è£å³ï¼ï¼</li>
+ *   <li><b>40900</b>ï¼æ¹åæ {@code uk_iqd_connection_name}ï¼åæ¥åæ¥ï¼åºä¸­åæªåãæ  50000ï¼ï¼</li>
+ *   <li>æ¹ååå¼ â è·³è¿å¯ä¸æ ¡éªï¼ä¸è¯¯æ¥ 40900ï¼ï¼</li>
+ *   <li><b>42200</b>ï¼{@code id} ä¸ºç©º / è¿æ¥ä¸å­å¨ / {@code timeout_seconds <= 0}ï¼</li>
+ *   <li><b>secret_ref çç©ºä¿çåå¼</b>ï¼{@code null}/{@code ******}/ç©ºç½ â ä¸æ¹ï¼éç©ºéå ä½ â åå¥ï¼ï¼</li>
+ *   <li><b>enabled åæ¢åªåæ¬è¡</b>ï¼ä¸èå¨å¶å®è¿æ¥ï¼Â§14.5ï¼ï¼</li>
+ *   <li><b>ä¸»è¿æ¥è¿ç§»æ¥å¿</b>ï¼Â§14.5.1 Aï¼ï¼æ¹åç¦»å¼/å ç¨ {@code default} â æç»æåæ¥å¿ã</li>
  * </ul>
  */
 @ExtendWith(MockitoExtension.class)
@@ -62,7 +62,7 @@ class IqdConnectionUpdateTest {
     @Mock IqdChangeEventPublisher changeEventPublisher;
     @Mock ObjectMapper objectMapper;
 
-    // 其余构造参数（本期测试不直接触达，mock 以满足 InjectMocks 构造）
+    // å¶ä½æé åæ°ï¼æ¬ææµè¯ä¸ç´æ¥è§¦è¾¾ï¼mock ä»¥æ»¡è¶³ InjectMocks æé ï¼
     @Mock com.mis.iqd.domain.repository.IqdAskLogRepository askLogRepository;
     @Mock com.mis.iqd.domain.repository.IqdCatalogItemRepository catalogItemRepository;
     @Mock com.mis.iqd.domain.repository.IqdScopePolicyRepository scopePolicyRepository;
@@ -70,6 +70,7 @@ class IqdConnectionUpdateTest {
     @Mock com.mis.iqd.domain.repository.IqdMaskRuleRepository maskRuleRepository;
     @Mock com.mis.iqd.domain.repository.IqdRowScopeDimensionRepository dimensionRepository;
     @Mock com.mis.iqd.domain.repository.IqdSqlPairRepository sqlPairRepository;
+    @Mock com.mis.iqd.domain.repository.IqdSqlPairCategoryRepository sqlPairCategoryRepository;
     @Mock com.mis.iqd.domain.repository.IqdKnowledgeRepository knowledgeRepository;
     @Mock com.mis.iqd.domain.repository.IqdSyncJobRepository syncJobRepository;
     @Mock com.mis.iqd.domain.repository.IqdEditIdempotencyRepository editIdempotencyRepository;
@@ -79,7 +80,7 @@ class IqdConnectionUpdateTest {
 
     private static final long CONN_ID = 7L;
 
-    /** 构造一条「字段齐全」的既有连接，便于断言「未提交字段保持不变」。 */
+    /** æé ä¸æ¡ãå­æ®µé½å¨ãçæ¢æè¿æ¥ï¼ä¾¿äºæ­è¨ãæªæäº¤å­æ®µä¿æä¸åãã */
     private IqdConnection existingConnection(long id, String name) {
         IqdConnection c = new IqdConnection();
         c.setId(id);
@@ -101,7 +102,7 @@ class IqdConnectionUpdateTest {
         when(connectionRepository.save(any(IqdConnection.class))).thenAnswer(inv -> inv.getArgument(0));
     }
 
-    // ------------------------------------------------------------ 局部更新：只改名不污染其它字段
+    // ------------------------------------------------------------ å±é¨æ´æ°ï¼åªæ¹åä¸æ±¡æå¶å®å­æ®µ
 
     @Test
     void updateConnection_partialUpdate_onlyChangesName_keepsOtherFields() {
@@ -110,13 +111,13 @@ class IqdConnectionUpdateTest {
         when(connectionRepository.existsByName("X2")).thenReturn(false);
 
         IqdConnectionUpdateRequest dto = new IqdConnectionUpdateRequest();
-        dto.setName("X2"); // 只提交 name
+        dto.setName("X2"); // åªæäº¤ name
 
         IqdConnectionVO vo = service.updateConnection(CONN_ID, dto);
 
-        // 提交字段已变更
+        // æäº¤å­æ®µå·²åæ´
         assertEquals("X2", c.getName());
-        // 未提交字段全部保持原值（守卫「新 DTO 无 Java 默认值」裁决）
+        // æªæäº¤å­æ®µå¨é¨ä¿æåå¼ï¼å®å«ãæ° DTO æ  Java é»è®¤å¼ãè£å³ï¼
         assertEquals("http://old:3000", c.getBaseUrl());
         assertEquals("basic", c.getAuthType());
         assertEquals("sec-old", c.getSecretRef());
@@ -125,7 +126,7 @@ class IqdConnectionUpdateTest {
         assertEquals(90, c.getTimeoutSeconds().intValue());
         assertEquals("en", c.getLanguage());
         assertEquals(1, c.getEnabled().intValue());
-        // 响应与 GET /connections 元素同形（凭证恒 ******）
+        // ååºä¸ GET /connections åç´ åå½¢ï¼å­è¯æ ******ï¼
         assertEquals(CONN_ID, vo.getId());
         assertEquals("X2", vo.getName());
         assertEquals("http://old:3000", vo.getBaseUrl());
@@ -133,17 +134,17 @@ class IqdConnectionUpdateTest {
         assertEquals("******", vo.getSecretRef());
         assertEquals(90, vo.getTimeoutSeconds().intValue());
         assertEquals(Boolean.TRUE, vo.getEnabled());
-        // 变更事件已发（Worker 缓存刷新）
+        // åæ´äºä»¶å·²åï¼Worker ç¼å­å·æ°ï¼
         verify(changeEventPublisher, times(1)).publish(eq("iqd.config.changed"), anyString());
     }
 
-    // ------------------------------------------------------------ 改名撞唯一约束 → 40900（先查后报）
+    // ------------------------------------------------------------ æ¹åæå¯ä¸çº¦æ â 40900ï¼åæ¥åæ¥ï¼
 
     @Test
     void updateConnection_renameConflict_throws409_andDoesNotSave() {
         IqdConnection c = existingConnection(CONN_ID, "A");
         when(connectionRepository.findById(CONN_ID)).thenReturn(Optional.of(c));
-        when(connectionRepository.existsByName("B")).thenReturn(true); // B 已被占用
+        when(connectionRepository.existsByName("B")).thenReturn(true); // B å·²è¢«å ç¨
 
         IqdConnectionUpdateRequest dto = new IqdConnectionUpdateRequest();
         dto.setName("B");
@@ -156,7 +157,7 @@ class IqdConnectionUpdateTest {
         Map<String, Object> data = (Map<String, Object>) ex.getData();
         assertNotNull(data);
         assertEquals("B", data.get("name"));
-        // 先查后报：库中名未变、不落库、不发事件（无约束异常、无 50000）
+        // åæ¥åæ¥ï¼åºä¸­åæªåãä¸è½åºãä¸åäºä»¶ï¼æ çº¦æå¼å¸¸ãæ  50000ï¼
         assertEquals("A", c.getName());
         verify(connectionRepository, never()).save(any(IqdConnection.class));
         verify(changeEventPublisher, never()).publish(anyString(), anyString());
@@ -168,17 +169,17 @@ class IqdConnectionUpdateTest {
         stubFound(c);
 
         IqdConnectionUpdateRequest dto = new IqdConnectionUpdateRequest();
-        dto.setName("A"); // 改成自身同名
+        dto.setName("A"); // æ¹æèªèº«åå
 
         IqdConnectionVO vo = service.updateConnection(CONN_ID, dto);
 
         assertEquals("A", vo.getName());
-        // 同值改名跳过唯一校验（不误报 40900）
+        // åå¼æ¹åè·³è¿å¯ä¸æ ¡éªï¼ä¸è¯¯æ¥ 40900ï¼
         verify(connectionRepository, never()).existsByName(anyString());
         verify(connectionRepository, times(1)).save(any(IqdConnection.class));
     }
 
-    // ------------------------------------------------------------ 连接不存在 / id 空 → 42200
+    // ------------------------------------------------------------ è¿æ¥ä¸å­å¨ / id ç©º â 42200
 
     @Test
     void updateConnection_notFound_throws422() {
@@ -187,7 +188,7 @@ class IqdConnectionUpdateTest {
         BusinessException ex = assertThrows(BusinessException.class,
                 () -> service.updateConnection(999999L, new IqdConnectionUpdateRequest()));
 
-        assertEquals(42200, ex.getCode()); // 对齐建模台节点族（非 40400）
+        assertEquals(42200, ex.getCode()); // å¯¹é½å»ºæ¨¡å°èç¹æï¼é 40400ï¼
         verify(connectionRepository, never()).save(any(IqdConnection.class));
     }
 
@@ -200,7 +201,7 @@ class IqdConnectionUpdateTest {
         verify(connectionRepository, never()).save(any(IqdConnection.class));
     }
 
-    // ------------------------------------------------------------ timeout <= 0 → 42200（零副作用）
+    // ------------------------------------------------------------ timeout <= 0 â 42200ï¼é¶å¯ä½ç¨ï¼
 
     @Test
     void updateConnection_nonPositiveTimeout_throws422_noSideEffect() {
@@ -217,11 +218,11 @@ class IqdConnectionUpdateTest {
         @SuppressWarnings("unchecked")
         Map<String, Object> data = (Map<String, Object>) ex.getData();
         assertEquals("timeout_seconds", data.get("field"));
-        assertEquals(90, c.getTimeoutSeconds().intValue()); // 原值未变
+        assertEquals(90, c.getTimeoutSeconds().intValue()); // åå¼æªå
         verify(connectionRepository, never()).save(any(IqdConnection.class));
     }
 
-    // ------------------------------------------------------------ secret_ref：留空/占位 = 保留原值
+    // ------------------------------------------------------------ secret_refï¼çç©º/å ä½ = ä¿çåå¼
 
     @Test
     void updateConnection_secretRefPlaceholderOrBlank_keepsOriginal() {
@@ -231,12 +232,12 @@ class IqdConnectionUpdateTest {
         IqdConnectionUpdateRequest placeholder = new IqdConnectionUpdateRequest();
         placeholder.setSecretRef("******");
         service.updateConnection(CONN_ID, placeholder);
-        assertEquals("sec-old", c.getSecretRef(), "占位符 ****** 必须保留原值");
+        assertEquals("sec-old", c.getSecretRef(), "å ä½ç¬¦ ****** å¿é¡»ä¿çåå¼");
 
         IqdConnectionUpdateRequest blank = new IqdConnectionUpdateRequest();
         blank.setSecretRef("   ");
         service.updateConnection(CONN_ID, blank);
-        assertEquals("sec-old", c.getSecretRef(), "空白必须保留原值");
+        assertEquals("sec-old", c.getSecretRef(), "ç©ºç½å¿é¡»ä¿çåå¼");
     }
 
     @Test
@@ -250,17 +251,17 @@ class IqdConnectionUpdateTest {
         IqdConnectionVO vo = service.updateConnection(CONN_ID, dto);
 
         assertEquals("sec-new", c.getSecretRef());
-        // 响应仍恒回占位符，不泄露明值
+        // ååºä»æåå ä½ç¬¦ï¼ä¸æ³é²æå¼
         assertEquals("******", vo.getSecretRef());
     }
 
-    // ------------------------------------------------------------ enabled 只写本行（不联动其它连接）
+    // ------------------------------------------------------------ enabled åªåæ¬è¡ï¼ä¸èå¨å¶å®è¿æ¥ï¼
 
     @Test
     void updateConnection_enable_togglesOnlyTargetRow_noCrossLink() {
-        IqdConnection a = existingConnection(1L, "A"); // 已 enabled
+        IqdConnection a = existingConnection(1L, "A"); // å·² enabled
         IqdConnection b = existingConnection(2L, "B");
-        b.setEnabled(0); // B 当前停用
+        b.setEnabled(0); // B å½ååç¨
         when(connectionRepository.findById(2L)).thenReturn(Optional.of(b));
         when(connectionRepository.save(any(IqdConnection.class))).thenAnswer(inv -> inv.getArgument(0));
 
@@ -269,16 +270,16 @@ class IqdConnectionUpdateTest {
 
         IqdConnectionVO vo = service.updateConnection(2L, dto);
 
-        assertEquals(1, b.getEnabled().intValue());          // 目标行已启用
-        assertEquals(1, a.getEnabled().intValue());          // 另一连接不受影响（无自动停用）
+        assertEquals(1, b.getEnabled().intValue());          // ç®æ è¡å·²å¯ç¨
+        assertEquals(1, a.getEnabled().intValue());          // å¦ä¸è¿æ¥ä¸åå½±åï¼æ èªå¨åç¨ï¼
         assertEquals(Boolean.TRUE, vo.getEnabled());
-        // 仅写目标行：save 恰一次，且保存的是 B
+        // ä»åç®æ è¡ï¼save æ°ä¸æ¬¡ï¼ä¸ä¿å­çæ¯ B
         ArgumentCaptor<IqdConnection> captor = ArgumentCaptor.forClass(IqdConnection.class);
         verify(connectionRepository, times(1)).save(captor.capture());
         assertEquals(2L, captor.getValue().getId());
     }
 
-    // ------------------------------------------------------------ 主连接迁移日志（§14.5.1 A）
+    // ------------------------------------------------------------ ä¸»è¿æ¥è¿ç§»æ¥å¿ï¼Â§14.5.1 Aï¼
 
     @Test
     void updateConnection_renameAwayFromDefault_logsPrimaryMigrated() {
@@ -297,7 +298,7 @@ class IqdConnectionUpdateTest {
 
         assertTrue(appender.list.stream()
                         .anyMatch(e -> e.getFormattedMessage().contains("primary migrated by rename")),
-                "改名离开 default 必须打 'primary migrated by rename' 结构化日志");
+                "æ¹åç¦»å¼ default å¿é¡»æ 'primary migrated by rename' ç»æåæ¥å¿");
     }
 
     @Test
@@ -317,7 +318,7 @@ class IqdConnectionUpdateTest {
 
         assertTrue(appender.list.stream()
                         .anyMatch(e -> e.getFormattedMessage().contains("primary claimed by rename")),
-                "改名占用 default 必须打 'primary claimed by rename' 结构化日志");
+                "æ¹åå ç¨ default å¿é¡»æ 'primary claimed by rename' ç»æåæ¥å¿");
     }
 
     @Test
@@ -338,10 +339,10 @@ class IqdConnectionUpdateTest {
         assertFalse(appender.list.stream().anyMatch(e ->
                         e.getFormattedMessage().contains("primary migrated by rename")
                                 || e.getFormattedMessage().contains("primary claimed by rename")),
-                "非 default 之间的改名不得打主连接迁移日志");
+                "é default ä¹é´çæ¹åä¸å¾æä¸»è¿æ¥è¿ç§»æ¥å¿");
     }
 
-    // ------------------------------------------------------------ 辅助：logback 日志捕获
+    // ------------------------------------------------------------ è¾å©ï¼logback æ¥å¿æè·
 
     private ListAppender<ILoggingEvent> attachAppender() {
         Logger serviceLogger = (Logger) LoggerFactory.getLogger(IqdAdminService.class);

@@ -27,6 +27,13 @@ public class IqdSqlPair {
     @Column(name = "connection_id", nullable = false)
     private Long connectionId;
 
+    /**
+     * 所属分类（软引用 {@code iqd_sql_pair_category.id}；null = 未分类）。
+     * 仅服务管理面筛选，不参与 Wren / few-shot 裁剪。
+     */
+    @Column(name = "category_id")
+    private Long categoryId;
+
     @Column(nullable = false)
     private String question;
 
@@ -81,6 +88,14 @@ public class IqdSqlPair {
 
     public void setConnectionId(Long connectionId) {
         this.connectionId = connectionId;
+    }
+
+    public Long getCategoryId() {
+        return categoryId;
+    }
+
+    public void setCategoryId(Long categoryId) {
+        this.categoryId = categoryId;
     }
 
     public String getQuestion() {

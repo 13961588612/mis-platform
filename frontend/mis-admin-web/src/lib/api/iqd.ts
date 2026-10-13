@@ -7,7 +7,7 @@
  */
 
 import api from '@/lib/api/client';
-import type { ApiResult } from '@/types/api';
+import type { ApiResult, PageResult } from '@/types/api';
 
 function unwrap<T>(res: { data: ApiResult<T> }, fallback: string): T {
   if (res.data.code !== 0 || res.data.data === undefined || res.data.data === null) {
@@ -243,10 +243,35 @@ export interface IqdAskLog {
   created_at?: string | null;
 }
 
+/** 问数样本对分类树节点（/sql-pair-categories/tree）。 */
+export interface IqdSqlPairCategory {
+  id: number;
+  connection_id?: number;
+  parent_id?: number;
+  code: string;
+  name: string;
+  sort_order?: number;
+  enabled?: boolean;
+  children?: IqdSqlPairCategory[];
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+export interface IqdSqlPairCategorySavePayload {
+  connection_id: number;
+  parent_id?: number | null;
+  code: string;
+  name: string;
+  sort_order?: number;
+  enabled?: boolean;
+}
+
 /** 问数样本对（W4 /sql-pairs；v1.10 增 source_dialect / native_sql / wren_sql）。 */
 export interface IqdSqlPair {
   id?: number;
   connection_id?: number;
+  /** 所属分类；null/缺省 = 未分类。 */
+  category_id?: number | null;
   question: string;
   source_dialect?: string | null;
   native_sql?: string | null;
@@ -270,6 +295,18 @@ export interface IqdSqlPairSavePayload {
   wren_sql: string;
   remark?: string | null;
   enabled?: boolean;
+  category_id?: number | null;
+}
+
+export interface IqdSqlPairListQuery {
+  connectionId: number;
+  /** null=全部；0=未分类；其它=分类 id。 */
+  categoryId?: number | null;
+  includeDescendants?: boolean;
+  keyword?: string;
+  sourceDialect?: string;
+  page?: number;
+  size?: number;
 }
 
 /** v1.10 样本对方言转化结果（POST /sql-pairs/translate）。 */
@@ -664,11 +701,62 @@ export async function getIqdTrace(id: number): Promise<IqdAskLog> {
   return unwrap(res, '获取问数审计详情失败');
 }
 
+// ================================================================ 样本对分类
+
+export async function listIqdSqlPairCategoryTree(
+  connectionId: number,
+): Promise<IqdSqlPairCategory[]> {
+  const res = await api.get<ApiResult<IqdSqlPairCategory[]>>('/iqd/sql-pair-categories/tree', {
+    params: { connectionId },
+  });
+  return unwrap(res, '获取样本对分类树失败');
+}
+
+export async function createIqdSqlPairCategory(
+  body: IqdSqlPairCategorySavePayload,
+): Promise<IqdSqlPairCategory> {
+  const res = await api.post<ApiResult<IqdSqlPairCategory>>('/iqd/sql-pair-categories', body);
+  return unwrap(res, '新建样本对分类失败');
+}
+
+export async function updateIqdSqlPairCategory(
+  id: number,
+  body: IqdSqlPairCategorySavePayload,
+): Promise<IqdSqlPairCategory> {
+  const res = await api.put<ApiResult<IqdSqlPairCategory>>(`/iqd/sql-pair-categories/${id}`, body);
+  return unwrap(res, '更新样本对分类失败');
+}
+
+export async function deleteIqdSqlPairCategory(id: number): Promise<void> {
+  const res = await api.delete<ApiResult<null>>(`/iqd/sql-pair-categories/${id}`);
+  if (res.data.code !== 0) throw new Error(res.data.message || '删除样本对分类失败');
+}
+
 // ================================================================ 样本对（W4）
 
-export async function listIqdSqlPairs(connectionId: number): Promise<IqdSqlPair[]> {
-  const res = await api.get<ApiResult<IqdSqlPair[]>>('/iqd/sql-pairs', {
-    params: { connectionId },
+export async function listIqdSqlPairs(
+  connectionIdOrQuery: number | IqdSqlPairListQuery,
+): Promise<IqdSqlPair[]> {
+  const page = await pageIqdSqlPairs(
+    typeof connectionIdOrQuery === 'number'
+      ? { connectionId: connectionIdOrQuery, page: 1, size: 200 }
+      : connectionIdOrQuery,
+  );
+  return page.list;
+}
+
+export async function pageIqdSqlPairs(query: IqdSqlPairListQuery): Promise<PageResult<IqdSqlPair>> {
+  const res = await api.get<ApiResult<PageResult<IqdSqlPair>>>('/iqd/sql-pairs', {
+    params: {
+      connectionId: query.connectionId,
+      categoryId: query.categoryId ?? undefined,
+      includeDescendants: query.includeDescendants ?? true,
+      keyword: query.keyword || undefined,
+      sourceDialect:
+        query.sourceDialect && query.sourceDialect !== 'all' ? query.sourceDialect : undefined,
+      page: query.page ?? 1,
+      size: query.size ?? 50,
+    },
   });
   return unwrap(res, '获取样本对失败');
 }
