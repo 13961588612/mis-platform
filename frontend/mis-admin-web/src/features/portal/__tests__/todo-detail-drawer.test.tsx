@@ -3,13 +3,13 @@
  * 待办详情抽屉（T03b，设计 §2.1 / §2.2 / §2.4）。
  *
  * 覆盖：
- * 1. 打开抽屉 → 拉流程详情，`SheetHeader` 由 `onLoaded` 回调填业务单号 + 状态徽标；
- * 2. 内容体渲染 **embedded 变体** ProcessShell：三区竖向堆叠（①审批进度 ②只读表单 ③审批历史），
+ * 1. 打开抽屉 → 拉流程详情，`SheetHeader` 由 `onLoaded` 填流程 title + 状态徽标；单号等字段在流程信息面板；
+ * 2. 内容体渲染 **embedded** ProcessShell：纵向（表单→底部操作；审批历史在「流程信息」内），
  *    且**无 `PageHeader`**（面包屑「流程详情」不出现）；
  * 3. 同意/驳回走 **wfTask** 端点 `/workflow/tasks/{wfTaskId}/complete`，成功后回调 `onDone`；
  * 4. 转办走 **sysTask** 端点 `transferTask(sysTaskId, ...)`；
  * 5. `sysTaskId == null` → 转办按钮**置灰**（降级，不发请求）；
- * 6. 抽屉宽度 `max-w-[560px]`，底部「在完整页打开」入口存在。
+ * 6. 抽屉宽度 `max-w-[560px]`，底部「在完整页打开」用命名 window.open 复用标签。
  *
  * mock 范式：真实 `ProcessShell`（是 embedded 变体的集成验证），故需 mock 其全部接口依赖：
  * `@/lib/api/workflow` 只换 `fetchProcessDetail`；`@/lib/api/tasks` 提供 `fetchMyTasks`（embedded 不用，
@@ -18,6 +18,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
+import { toast } from 'sonner';
 import { TodoDetailDrawer } from '../components/todo-detail-drawer';
 import * as workflowApi from '@/lib/api/workflow';
 import * as tasksApi from '@/lib/api/tasks';
@@ -37,8 +38,58 @@ class ResizeObserverStub {
 
 vi.mock('@/lib/api/workflow', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/api/workflow')>();
-  return { ...actual, fetchProcessDetail: vi.fn() };
+  return {
+    ...actual,
+    fetchProcessDetail: vi.fn(),
+    fetchDefinitions: vi.fn(),
+    fetchDefinition: vi.fn(),
+  };
 });
+
+/** 进度看板 / 待办后续节点共用的定义 fixture。 */
+const defFixture = {
+  id: 'def-1',
+  tenantId: '1',
+  code: 'PURCHASE_APPROVAL',
+  name: '采购审批',
+  category: '',
+  categoryId: null,
+  description: null,
+  version: 1,
+  status: 'ACTIVE',
+  supportedFormCodes: ['PUR_FORM'],
+  formSchema: null,
+  config: '{}',
+  nodes: [
+    {
+      nodeCode: 'start',
+      nodeName: '开始',
+      nodeType: 'START',
+      sortOrder: 0,
+      canvasX: null,
+      canvasY: null,
+      conditionExpr: null,
+      assigneeRule: '{}',
+      timeoutHours: null,
+      config: '{}',
+    },
+    {
+      nodeCode: 'approve',
+      nodeName: '主管审批',
+      nodeType: 'APPROVAL',
+      sortOrder: 1,
+      canvasX: null,
+      canvasY: null,
+      conditionExpr: null,
+      assigneeRule: '{"type":"SUPERVISOR"}',
+      timeoutHours: null,
+      config: '{}',
+    },
+  ],
+  edges: null,
+  createdAt: '2026-10-01T00:00:00',
+  updatedAt: '2026-10-01T00:00:00',
+};
 
 vi.mock('@/lib/api/tasks', () => ({
   fetchMyTasks: vi.fn(),
@@ -65,6 +116,7 @@ function detailFixture(overrides: { sysTaskId?: string | null } = {}) {
       status: 'RUNNING',
       initiatorId: '100',
       initiatorName: '发起人',
+      initiatorOrgName: null,
       currentNodeCode: 'approve',
       currentNodeName: null,
       progress: '50%',
@@ -72,6 +124,8 @@ function detailFixture(overrides: { sysTaskId?: string | null } = {}) {
       postRetryCount: 0,
       createdAt: '2026-10-08T10:00:00',
       completedAt: null,
+      appCode: null,
+      title: '华东电子采购申请',
     },
     tasks: [
       {
@@ -144,6 +198,13 @@ describe('TodoDetailDrawer（T03b）', () => {
     __resetRegistryForTest();
     __setFormLoadersForTest({});
     vi.mocked(workflowApi.fetchProcessDetail).mockResolvedValue(detailFixture() as never);
+    vi.mocked(workflowApi.fetchDefinitions).mockResolvedValue({
+      page: 1,
+      size: 20,
+      total: 1,
+      list: [defFixture],
+    } as never);
+    vi.mocked(workflowApi.fetchDefinition).mockResolvedValue(defFixture as never);
     vi.mocked(tasksApi.fetchMyTasks).mockResolvedValue({ page: 1, size: 20, total: 0, list: [] });
     vi.mocked(tasksApi.transferTask).mockResolvedValue(undefined);
     vi.mocked(api.post).mockResolvedValue({ data: { code: 0, data: null, message: '' } } as never);
@@ -163,16 +224,19 @@ describe('TodoDetailDrawer（T03b）', () => {
     await waitFor(() => expect(screen.getAllByRole('dialog').length).toBeGreaterThan(0));
     expect(screen.getAllByRole('dialog')[0].className).toContain('max-w-[560px]');
 
-    // onLoaded 回调把 instance 交给抽屉 → SheetTitle（h2）由占位「待办详情」填成业务单号
-    await waitFor(() => expect(screen.getAllByText('PO-001').length).toBeGreaterThan(0));
+    // onLoaded → SheetTitle 优先展示流程 title
+    await waitFor(() => expect(screen.getByText('华东电子采购申请')).toBeTruthy());
     const dialog = screen.getAllByRole('dialog')[0];
-    expect(within(dialog).getByRole('heading', { level: 2 }).textContent).toBe('PO-001');
+    expect(within(dialog).getByRole('heading', { level: 2 }).textContent).toBe('华东电子采购申请');
+    expect(screen.queryByText(/单号 PO-001/)).toBeNull();
     expect(screen.getByText('进行中')).toBeTruthy();
-
-    // 三区：①审批进度（节点名）②业务表单（form-shell 标题）③审批历史
-    expect(screen.getByText('主管审批')).toBeTruthy();
+    // 抽屉布局：默认表单 + 底部「当前待办」与同意；审批历史在「流程信息」面板内
+    expect(screen.getByText(/当前待办：\s*主管审批/)).toBeTruthy();
     expect(screen.getByText('业务表单')).toBeTruthy();
-    expect(screen.getByText('审批历史')).toBeTruthy();
+    expect(screen.queryByText('审批历史')).toBeNull();
+    expect(screen.getByText('同意')).toBeTruthy();
+    expect(screen.queryByTestId('process-approve-panel')).toBeNull();
+    expect(screen.queryByTestId('process-node-timeline')).toBeNull();
 
     expect(workflowApi.fetchProcessDetail).toHaveBeenCalledWith('128', '1');
   });
@@ -180,7 +244,7 @@ describe('TodoDetailDrawer（T03b）', () => {
   it('embedded 变体：不渲染 PageHeader（无面包屑「流程详情」）', async () => {
     renderDrawer();
     await screen.findByText('业务表单');
-    expect(screen.queryByText('流程详情')).toBeNull();
+    expect(screen.queryByLabelText('面包屑')).toBeNull();
   });
 
   it('同意：走 wfTask 端点 /workflow/tasks/{id}/complete，成功后回调 onDone', async () => {
@@ -236,9 +300,58 @@ describe('TodoDetailDrawer（T03b）', () => {
     expect(tasksApi.transferTask).not.toHaveBeenCalled();
   });
 
-  it('底部提供「在完整页打开」入口', async () => {
+  it('查看流程信息：审批历史在待办及后续上方；图标可切到进度情况', async () => {
     renderDrawer();
     await screen.findByText('业务表单');
-    expect(screen.getByText('在完整页打开')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /查看进度情况/ })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: /查看流程信息/ }));
+    const meta = await screen.findByTestId('process-meta');
+    const fields = within(meta).getByTestId('process-meta-fields');
+    expect(within(fields).getByText('业务单号')).toBeTruthy();
+    expect(within(fields).getByText('PO-001')).toBeTruthy();
+    expect(within(fields).getByText('流程编码')).toBeTruthy();
+    expect(within(fields).getByText('PURCHASE_APPROVAL')).toBeTruthy();
+    expect(within(fields).getByText('表单')).toBeTruthy();
+    expect(within(fields).getByText('PUR_FORM')).toBeTruthy();
+    const history = within(meta).getByTestId('process-meta-history');
+    const upcoming = await within(meta).findByTestId('process-meta-upcoming');
+    expect(within(history).getByText('审批历史')).toBeTruthy();
+    expect(within(history).getByText('SUBMIT')).toBeTruthy();
+    expect(
+      history.compareDocumentPosition(upcoming) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: '切换到进度情况' }));
+    expect(await within(meta).findByTestId('process-progress-board')).toBeTruthy();
+    expect(within(meta).queryByTestId('process-meta-timeline')).toBeNull();
+  });
+
+  it('底部「在完整页打开」→ 命名窗口并 focus', async () => {
+    const focus = vi.fn();
+    const openSpy = vi
+      .spyOn(window, 'open')
+      .mockReturnValue({ focus } as unknown as Window);
+    renderDrawer();
+    await screen.findByText('业务表单');
+    fireEvent.click(screen.getByText('在完整页打开'));
+    expect(openSpy).toHaveBeenCalledWith(
+      expect.stringMatching(/\/task\/process-view\/128$/),
+      'mis-process-view-128',
+    );
+    expect(focus).toHaveBeenCalled();
+    openSpy.mockRestore();
+  });
+
+  it('完整页 window.open 被拦截 → toast 提示', async () => {
+    const openSpy = vi.spyOn(window, 'open').mockReturnValue(null);
+    renderDrawer();
+    await screen.findByText('业务表单');
+    fireEvent.click(screen.getByText('在完整页打开'));
+    expect(toast.error).toHaveBeenCalledWith(
+      '无法打开完整页',
+      expect.objectContaining({
+        description: expect.stringContaining('浏览器拦截'),
+      }),
+    );
+    openSpy.mockRestore();
   });
 });

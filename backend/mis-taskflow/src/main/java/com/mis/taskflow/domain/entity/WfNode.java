@@ -12,8 +12,8 @@ import java.time.LocalDateTime;
 /**
  * 流程节点 {@code wf_node}。
  *
- * <p>{@code nodeType}：START / APPROVAL / ROUTING / CONDITIONAL / AUTOMATION / END。
- * {@code assigneeRule} 为审批人规则 JSON。
+ * <p>{@code nodeType}：START / APPROVAL / ROUTING / CONDITIONAL / AUTOMATION / CC / END。
+ * {@code assigneeRule} 为审批人/抄送人规则 JSON。
  */
 @Entity
 @Table(name = "wf_node")
@@ -24,6 +24,8 @@ public class WfNode {
     public static final String TYPE_ROUTING = "ROUTING";
     public static final String TYPE_CONDITIONAL = "CONDITIONAL";
     public static final String TYPE_AUTOMATION = "AUTOMATION";
+    /** 抄送节点：到达即分发，不阻塞推进。 */
+    public static final String TYPE_CC = "CC";
     public static final String TYPE_END = "END";
 
     @Id

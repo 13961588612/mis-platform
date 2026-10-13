@@ -3,6 +3,7 @@
  *
  * <p>对齐设计文档 §8：发布前必须通过校验。返回 errors（阻止发布）与 warnings（可忽略）。
  */
+import { isAssigneeRuleConfigured } from '../assignee-rule';
 import type { WfFlowNode, WfFlowEdge } from '../types';
 
 export interface ValidationIssue {
@@ -48,13 +49,15 @@ export function validateWorkflow(nodes: WfFlowNode[], edges: WfFlowEdge[]): Vali
     });
   }
 
-  // 审批节点必须有审批人规则
-  nodes.filter((n) => n.data.kind === 'APPROVAL').forEach((n) => {
-    const rule = (n.data.assigneeRule ?? '').trim();
-    if (!rule || rule === '{}') {
-      errors.push({ nodeId: n.id, message: `审批节点「${n.data.nodeName}」未配置审批人规则` });
-    }
-  });
+  // 审批 / 会签 / 抄送节点必须有完整处理人规则
+  nodes
+    .filter((n) => n.data.kind === 'APPROVAL' || n.data.kind === 'ROUTING' || n.data.kind === 'CC')
+    .forEach((n) => {
+      if (!isAssigneeRuleConfigured(n.data.assigneeRule)) {
+        const label = n.data.kind === 'CC' ? '抄送' : n.data.kind === 'ROUTING' ? '会签' : '审批';
+        errors.push({ nodeId: n.id, message: `${label}节点「${n.data.nodeName}」未配置处理人规则` });
+      }
+    });
 
   // 孤立节点（无进出边）
   nodes.forEach((n) => {

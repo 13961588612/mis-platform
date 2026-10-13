@@ -34,6 +34,7 @@ vi.mock('@/lib/api/tasks', () => ({
   fetchMyTasks: vi.fn(),
   fetchHandledTasks: vi.fn(),
   fetchPortalMatters: vi.fn(),
+  fetchCcTasks: vi.fn(),
 }));
 
 vi.mock('@/lib/api/workflow', () => ({
@@ -79,6 +80,8 @@ function task(overrides: Partial<TaskItem> = {}): TaskItem {
     completedAt: null,
     createdAt: '2026-10-08T10:00:00',
     appCode: null,
+    initiatorName: null,
+    initiatorOrgName: null,
     ...overrides,
   };
 }
@@ -93,6 +96,7 @@ function wfInstance(overrides: Partial<WfInstance> = {}): WfInstance {
     status: 'RUNNING',
     initiatorId: '700001',
     initiatorName: '测试员',
+    initiatorOrgName: null,
     currentNodeCode: 'finance',
     currentNodeName: null,
     progress: '50%',
@@ -101,6 +105,7 @@ function wfInstance(overrides: Partial<WfInstance> = {}): WfInstance {
     createdAt: '2026-10-08T10:00:00',
     completedAt: null,
     appCode: null,
+    title: null,
     ...overrides,
   };
 }
@@ -116,6 +121,7 @@ function matter(overrides: Partial<PortalMatterItem> = {}): PortalMatterItem {
     bizType: 'PURCHASE_ORDER',
     appCode: null,
     initiatorName: '发起人甲',
+    initiatorOrgName: null,
     assigneeName: '测试员',
     status: 'PENDING',
     createdAt: '2026-10-08T10:00:00',
@@ -150,6 +156,7 @@ describe('PortalTodoTab（T03a）', () => {
     vi.mocked(tasksApi.fetchMyTasks).mockResolvedValue(emptyPage);
     vi.mocked(tasksApi.fetchHandledTasks).mockResolvedValue(emptyPage);
     vi.mocked(tasksApi.fetchPortalMatters).mockResolvedValue(emptyPage);
+    vi.mocked(tasksApi.fetchCcTasks).mockResolvedValue(emptyPage);
     vi.mocked(workflowApi.fetchMyProcesses).mockResolvedValue(emptyPage);
     // 子 Tab 键本轮提升到模块级全局 store（跨测试共享），必须逐例复位到默认
     // 「全部」，否则上一例点过「我发起的」会让下一例「默认全部」断言假失败
@@ -162,9 +169,18 @@ describe('PortalTodoTab（T03a）', () => {
     vi.clearAllMocks();
   });
 
-  it('渲染全部子 Tab（含「全部」）', async () => {
+  it('渲染全部子 Tab（含「全部」与「抄送我的」）', async () => {
     renderTab();
-    for (const label of ['全部', '待处理', '审批中', '已通过', '已驳回', '我发起的', '我审批的']) {
+    for (const label of [
+      '全部',
+      '待处理',
+      '审批中',
+      '已通过',
+      '已驳回',
+      '抄送我的',
+      '我发起的',
+      '我审批的',
+    ]) {
       expect(await screen.findByRole('tab', { name: label })).toBeTruthy();
     }
   });
@@ -190,6 +206,23 @@ describe('PortalTodoTab（T03a）', () => {
     renderTab();
     expect(await screen.findByText('聚合待办-甲')).toBeTruthy();
     expect(screen.getByText('PURCHASE_ORDER / PO-001')).toBeTruthy();
+  });
+
+  it('流程类行展示发起人（公司）', async () => {
+    vi.mocked(tasksApi.fetchPortalMatters).mockResolvedValue({
+      page: 1,
+      size: 20,
+      total: 1,
+      list: [
+        matter({
+          title: '带公司的待办',
+          initiatorName: '张三',
+          initiatorOrgName: '华东分公司',
+        }),
+      ],
+    });
+    renderTab();
+    expect(await screen.findByText('张三（华东分公司）')).toBeTruthy();
   });
 
   it('发起人/参与人 搜索：输入不请求，点「搜索」才把两值透传给 /tasks/matters', async () => {
@@ -239,6 +272,19 @@ describe('PortalTodoTab（T03a）', () => {
     expect(tasksApi.fetchMyTasks).toHaveBeenLastCalledWith(
       expect.objectContaining({ keyword: 'ENT', page: 1 }),
     );
+  });
+
+  it('「抄送我的」调 fetchCcTasks，不进待办 my', async () => {
+    renderTab();
+    await waitFor(() => expect(tasksApi.fetchPortalMatters).toHaveBeenCalled());
+
+    fireEvent.mouseDown(screen.getByRole('tab', { name: '抄送我的' }), { button: 0 });
+    await waitFor(() =>
+      expect(tasksApi.fetchCcTasks).toHaveBeenCalledWith(
+        expect.objectContaining({ tenantId: '1', assigneeId: '700001', page: 1, size: 20 }),
+      ),
+    );
+    expect(tasksApi.fetchMyTasks).not.toHaveBeenCalled();
   });
 
   it('「我发起的」调 fetchMyProcesses、「我审批的」调 fetchHandledTasks', async () => {
@@ -338,6 +384,7 @@ describe('PortalTodoTab（T03a）', () => {
       'approving',
       'approved',
       'rejected',
+      'cc',
       'mySent',
       'myHandled',
     ]);

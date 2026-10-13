@@ -117,6 +117,8 @@ export interface UserView {
   orgIds?: string[];
   /** 归属部门 id 列表（多部门，首项主部门）；用于权限 Sheet 正确回填（N7/USR-01/03） */
   deptIds?: string[];
+  /** 主职岗位名（BFF 从员工任职解析；未绑定/无岗位时为 null） */
+  postName?: string | null;
   createdAt: string | null;
 }
 

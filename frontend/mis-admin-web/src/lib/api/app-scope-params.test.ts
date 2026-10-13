@@ -99,6 +99,12 @@ describe('workflow API · fetchMyProcesses 尾参打通', () => {
     expect(p).toMatchObject({ tenantId: '1', initiatorId: '1', page: 1, size: 20, keyword: 'kw' });
     expect(p).not.toHaveProperty('scope');
     expect(p).not.toHaveProperty('appCode');
+    expect(p).not.toHaveProperty('includeFormData');
+  });
+
+  it('includeFormData=true ⇒ 透传', async () => {
+    await workflowApi.fetchMyProcesses('1', '1', undefined, 1, 20, undefined, undefined, undefined, undefined, undefined, true);
+    expect(lastParams().includeFormData).toBe(true);
   });
 
   it('传 scope/appCode ⇒ 追加透传', async () => {

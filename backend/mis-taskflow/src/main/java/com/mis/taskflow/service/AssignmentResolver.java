@@ -20,9 +20,10 @@ import java.util.List;
  *   <li>{@code SUPERVISOR} —— 上级主管（委托 {@link AssigneeProvider}）</li>
  *   <li>{@code ROLE}       —— 角色（委托 {@link AssigneeProvider}）</li>
  *   <li>{@code DEPT_LEADER}—— 部门领导（委托 {@link AssigneeProvider}）</li>
+ *   <li>{@code ORG_POST}   —— 公司+部门+岗位（value = [{orgId,deptId,postId},...] 或单对象，委托 {@link AssigneeProvider}）</li>
  * </ul>
  *
- * <p>需要组织/角色数据的规则通过 {@link AssigneeProvider} 扩展点解析（当前默认实现
+ * <p>需要组织/角色/岗位数据的规则通过 {@link AssigneeProvider} 扩展点解析（当前默认实现
  * 从规则 value 直接取 userId，便于本地联调；接入 org/iam 后替换实现即可）。
  */
 @Component
@@ -55,11 +56,16 @@ public class AssignmentResolver {
             case "SELF" -> List.of(context.initiatorId());
             case "FIXED" -> List.of(requireLong(rule, "value"));
             case "USER_LIST" -> readUserList(rule);
-            case "SUPERVISOR", "ROLE", "DEPT_LEADER" -> {
+            case "SUPERVISOR", "ROLE", "DEPT_LEADER", "ORG_POST" -> {
+                if ("ORG_POST".equals(type)) {
+                    validateOrgPostValue(rule.get("value"));
+                }
                 List<Long> resolved = provider.resolve(type, rule, context);
                 if (resolved == null || resolved.isEmpty()) {
                     throw new BusinessException(ResultCode.VALIDATION_ERROR,
-                            "无法解析审批人规则 type=" + type + " value=" + rule.path("value").asText());
+                            "ORG_POST".equals(type)
+                                    ? "无法按组织/部门/岗位解析审批人，请确认岗位已配置任职人员且组织服务已接入"
+                                    : "无法解析审批人规则 type=" + type + " value=" + rule.path("value").asText());
                 }
                 yield resolved;
             }
@@ -90,6 +96,36 @@ public class AssignmentResolver {
             throw new BusinessException(ResultCode.VALIDATION_ERROR, "USER_LIST 规则解析结果为空");
         }
         return ids;
+    }
+
+    /**
+     * ORG_POST value：支持 {@code [{orgId,deptId,postId},...]}，兼容旧版单对象。
+     */
+    private static void validateOrgPostValue(JsonNode value) {
+        if (value == null || value.isNull()) {
+            throw new BusinessException(ResultCode.VALIDATION_ERROR,
+                    "ORG_POST 规则的 value 须为 [{orgId, deptId, postId},...] 或单对象");
+        }
+        if (value.isArray()) {
+            if (value.isEmpty()) {
+                throw new BusinessException(ResultCode.VALIDATION_ERROR, "ORG_POST 规则至少选择一个岗位");
+            }
+            for (JsonNode item : value) {
+                requireOrgPostObject(item);
+            }
+            return;
+        }
+        requireOrgPostObject(value);
+    }
+
+    private static void requireOrgPostObject(JsonNode v) {
+        if (v == null || !v.isObject()
+                || !v.path("orgId").canConvertToLong()
+                || !v.path("deptId").canConvertToLong()
+                || !v.path("postId").canConvertToLong()) {
+            throw new BusinessException(ResultCode.VALIDATION_ERROR,
+                    "ORG_POST 规则的 value 项须为 {orgId, deptId, postId}");
+        }
     }
 
     /** 审批人解析上下文。 */

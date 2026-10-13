@@ -2,15 +2,16 @@
  * 左侧节点面板（P7）：HTML5 拖拽 + 搜索过滤。
  */
 import { useMemo, useState } from 'react';
-import { GitBranch, Play, Settings, Flag, Users, CheckSquare, Search } from 'lucide-react';
+import { GitBranch, Play, Settings, Flag, Users, CheckSquare, Search, Mail } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { NODE_LABELS, type WfNodeKind } from './types';
 
-const KINDS: WfNodeKind[] = ['START', 'APPROVAL', 'CONDITIONAL', 'ROUTING', 'AUTOMATION', 'END'];
+const KINDS: WfNodeKind[] = ['START', 'APPROVAL', 'CC', 'CONDITIONAL', 'ROUTING', 'AUTOMATION', 'END'];
 
 const ICONS: Record<WfNodeKind, typeof Play> = {
   START: Play,
   APPROVAL: CheckSquare,
+  CC: Mail,
   CONDITIONAL: GitBranch,
   ROUTING: Users,
   AUTOMATION: Settings,

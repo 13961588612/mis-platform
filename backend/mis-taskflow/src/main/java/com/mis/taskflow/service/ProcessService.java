@@ -3,12 +3,17 @@ package com.mis.taskflow.service;
 import com.mis.common.core.exception.BusinessException;
 import com.mis.common.core.exception.ResultCode;
 import com.mis.common.core.result.PageResult;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.mis.taskflow.domain.entity.FormDefinition;
+import com.mis.taskflow.domain.entity.SysTask;
 import com.mis.taskflow.domain.entity.WfDefinition;
 import com.mis.taskflow.domain.entity.WfEdge;
 import com.mis.taskflow.domain.entity.WfHistory;
 import com.mis.taskflow.domain.entity.WfInstance;
 import com.mis.taskflow.domain.entity.WfNode;
 import com.mis.taskflow.domain.entity.WfTask;
+import com.mis.taskflow.domain.repository.FormDefinitionRepository;
 import com.mis.taskflow.domain.repository.WfDefinitionRepository;
 import com.mis.taskflow.domain.repository.WfEdgeRepository;
 import com.mis.taskflow.domain.repository.WfHistoryRepository;
@@ -61,12 +66,19 @@ public class ProcessService {
 
     private static final Logger log = LoggerFactory.getLogger(ProcessService.class);
 
+    /** 启动时标题缺失的固定文案（前端据此弹窗补录）。 */
+    public static final String TITLE_REQUIRED_MESSAGE = "请补录流程标题";
+
+    private static final ObjectMapper JSON = new ObjectMapper();
+    private static final int TITLE_MAX_LEN = 256;
+
     private final WfDefinitionRepository definitionRepository;
     private final WfNodeRepository nodeRepository;
     private final WfEdgeRepository edgeRepository;
     private final WfInstanceRepository instanceRepository;
     private final WfTaskRepository wfTaskRepository;
     private final WfHistoryRepository historyRepository;
+    private final FormDefinitionRepository formDefinitionRepository;
     private final AssignmentResolver assignmentResolver;
     private final TaskService taskService;
     private final MessageService messageService;
@@ -78,6 +90,7 @@ public class ProcessService {
                           WfInstanceRepository instanceRepository,
                           WfTaskRepository wfTaskRepository,
                           WfHistoryRepository historyRepository,
+                          FormDefinitionRepository formDefinitionRepository,
                           AssignmentResolver assignmentResolver,
                           TaskService taskService,
                           MessageService messageService,
@@ -88,6 +101,7 @@ public class ProcessService {
         this.instanceRepository = instanceRepository;
         this.wfTaskRepository = wfTaskRepository;
         this.historyRepository = historyRepository;
+        this.formDefinitionRepository = formDefinitionRepository;
         this.assignmentResolver = assignmentResolver;
         this.taskService = taskService;
         this.messageService = messageService;
@@ -115,6 +129,8 @@ public class ProcessService {
                 .findFirst()
                 .orElseThrow(() -> new BusinessException(ResultCode.VALIDATION_ERROR, "流程缺少开始节点"));
 
+        String title = resolveInstanceTitle(tenantId, req);
+
         LocalDateTime now = LocalDateTime.now();
         WfInstance instance = new WfInstance();
         instance.setId(IdGenerator.nextId());
@@ -124,12 +140,15 @@ public class ProcessService {
         instance.setStartedFormCode(req.startedFormCode().trim());
         instance.setBusinessType(req.businessType().trim());
         instance.setBusinessId(req.businessId().trim());
+        instance.setTitle(title);
         // A1：实例 APP 归属由发起方**显式写入**（StartProcessRequest.appCode）；不再由业务类型推导。
         instance.setAppCode(AppScope.trimToNull(req.appCode()));
         instance.setStatus(TaskflowStatus.Instance.RUNNING);
         instance.setInitiatorId(req.initiatorId());
         instance.setInitiatorName(req.initiatorName());
+        instance.setInitiatorOrgName(blankToNull(req.initiatorOrgName()));
         instance.setFormData(req.formData());
+        instance.setExtraContext(buildStartExtraContext(req.priority(), req.dueDate()));
         instance.setCurrentNodeCode(startNode.getNodeCode());
         instance.setPostProcessStatus(TaskflowStatus.PostProcess.WAITING);
         instance.setCreatedAt(now);
@@ -192,6 +211,7 @@ public class ProcessService {
             notify(instance, "REJECT", "申请被驳回", trimDefault(req.comment(), "您的申请已被驳回"));
 
             syncLinkedSysTask(tenantId, wfTask, action, req.comment(), operatorId);
+            closeCcSysTasks(tenantId, instance.getId());
             AuditContext.after(auditSnapshot(instance));
             return;
         }
@@ -307,6 +327,15 @@ public class ProcessService {
         }
     }
 
+    /** 实例终止时关闭关联抄送 sys_task（抄送记录仍可在「抄送我的」查阅）。 */
+    private void closeCcSysTasks(Long tenantId, Long instanceId) {
+        for (WfTask wt : wfTaskRepository.findByInstanceIdOrderByCreatedAtAsc(instanceId)) {
+            if (WfTask.TYPE_CC.equals(wt.getTaskType()) && wt.getSysTaskId() != null) {
+                taskService.closeCcTask(tenantId, wt.getSysTaskId());
+            }
+        }
+    }
+
     /**
      * 判断会签/路由节点是否已满足聚合条件。
      *
@@ -389,6 +418,9 @@ public class ProcessService {
 
         if (WfNode.TYPE_APPROVAL.equals(next.getNodeType()) || WfNode.TYPE_ROUTING.equals(next.getNodeType())) {
             assignNode(instance, next, now);
+        } else if (WfNode.TYPE_CC.equals(next.getNodeType())) {
+            dispatchCcNode(instance, next, currentNode, now);
+            advanceToNext(instance, nodes, next, now);
         } else {
             // 非审批节点（CONDITIONAL / AUTOMATION）自动跳过并继续推进
             recordHistory(instance.getId(), next.getNodeCode(), null, null,
@@ -444,18 +476,21 @@ public class ProcessService {
         // T2/A2：流程节点分派的待办归属 = **继承实例**的 app_code（不再经绑定表推导）。
         String appCode = instance.getAppCode();
 
+        String taskTitle = instance.getTitle();
+        short priority = resolveStartPriority(instance);
+        LocalDateTime due = resolveTaskDue(instance, node, now);
         for (Long assignee : assignees) {
             Long sysTaskId = taskService.createTask(instance.getTenantId(), instance.getInitiatorId(),
                     new CreateTaskRequest(
                             instance.getDefinitionCode(),
                             instance.getBusinessType(),
                             instance.getBusinessId(),
-                            node.getNodeName() + " · " + instance.getBusinessId(),
+                            taskTitle,
                             node.getNodeCode(),
                             assignee,
                             null,
-                            (short) 2,
-                            node.getTimeoutHours() == null ? null : now.plusHours(node.getTimeoutHours()),
+                            priority,
+                            due,
                             "{\"wfInstanceId\":" + instance.getId() + ",\"wfNode\":\"" + node.getNodeCode() + "\"}",
                             "待处理：" + node.getNodeName(),
                             "请及时处理 " + instance.getBusinessId(),
@@ -467,15 +502,86 @@ public class ProcessService {
             wfTask.setInstanceId(instance.getId());
             wfTask.setNodeCode(node.getNodeCode());
             wfTask.setNodeName(node.getNodeName());
-            wfTask.setTaskType("APPROVE");
+            wfTask.setTaskType(WfTask.TYPE_APPROVE);
             wfTask.setSysTaskId(sysTaskId);
             wfTask.setAssigneeId(assignee);
             wfTask.setAssigneeName(null);
             wfTask.setStatus(WfTask.STATUS_PENDING);
-            wfTask.setDueDate(node.getTimeoutHours() == null ? null : now.plusHours(node.getTimeoutHours()));
+            wfTask.setDueDate(due);
             wfTask.setCreatedAt(now);
             wfTaskRepository.save(wfTask);
         }
+    }
+
+    /**
+     * 抄送节点：按规则分发 {@code taskType=CC} 记录后立即继续推进（不阻塞）。
+     *
+     * <p>解析失败或无人可抄送时记历史并跳过，避免卡死流程。
+     */
+    private void dispatchCcNode(WfInstance instance, WfNode node, WfNode fromNode, LocalDateTime now) {
+        List<Long> recipients;
+        try {
+            recipients = assignmentResolver.resolve(node.getAssigneeRule(),
+                    new AssignmentResolver.AssignmentContext(
+                            instance.getTenantId(), instance.getInitiatorId(),
+                            instance.getBusinessType(), instance.getBusinessId()));
+        } catch (BusinessException ex) {
+            log.warn("抄送节点解析失败，跳过: instanceId={}, node={}, reason={}",
+                    instance.getId(), node.getNodeCode(), ex.getMessage());
+            recordHistory(instance.getId(), node.getNodeCode(), null, null,
+                    WfHistory.OP_CC_DISPATCH, fromNode.getNodeCode(), node.getNodeCode(),
+                    "抄送跳过：" + ex.getMessage(), now);
+            return;
+        }
+        if (recipients == null || recipients.isEmpty()) {
+            recordHistory(instance.getId(), node.getNodeCode(), null, null,
+                    WfHistory.OP_CC_DISPATCH, fromNode.getNodeCode(), node.getNodeCode(),
+                    "抄送跳过：无抄送人", now);
+            return;
+        }
+
+        String appCode = instance.getAppCode();
+        String ccTitle = "抄送 · " + instance.getTitle();
+        short priority = resolveStartPriority(instance);
+        for (Long recipient : recipients) {
+            Long sysTaskId = taskService.createTask(instance.getTenantId(), instance.getInitiatorId(),
+                    new CreateTaskRequest(
+                            SysTask.TYPE_CC,
+                            instance.getBusinessType(),
+                            instance.getBusinessId(),
+                            ccTitle,
+                            node.getNodeCode(),
+                            recipient,
+                            null,
+                            priority,
+                            null,
+                            "{\"wfInstanceId\":" + instance.getId()
+                                    + ",\"wfNode\":\"" + node.getNodeCode()
+                                    + "\",\"taskKind\":\"CC\"}",
+                            "抄送：" + node.getNodeName(),
+                            "您有一条流程抄送 " + instance.getBusinessId(),
+                            appCode));
+
+            WfTask wfTask = new WfTask();
+            wfTask.setId(IdGenerator.nextId());
+            wfTask.setTenantId(instance.getTenantId());
+            wfTask.setInstanceId(instance.getId());
+            wfTask.setNodeCode(node.getNodeCode());
+            wfTask.setNodeName(node.getNodeName());
+            wfTask.setTaskType(WfTask.TYPE_CC);
+            wfTask.setSysTaskId(sysTaskId);
+            wfTask.setAssigneeId(recipient);
+            wfTask.setAssigneeName(null);
+            // 抄送不阻塞：wf 侧立即完成
+            wfTask.setStatus(WfTask.STATUS_COMPLETED);
+            wfTask.setCompletedAt(now);
+            wfTask.setDueDate(null);
+            wfTask.setCreatedAt(now);
+            wfTaskRepository.save(wfTask);
+        }
+        recordHistory(instance.getId(), node.getNodeCode(), null, null,
+                WfHistory.OP_CC_DISPATCH, fromNode.getNodeCode(), node.getNodeCode(),
+                "已抄送 " + recipients.size() + " 人", now);
     }
 
     private WfNode linearNext(List<WfNode> nodes, WfNode current) {
@@ -597,6 +703,20 @@ public class ProcessService {
                                                 String keyword, String appCode, String scope,
                                                 String initiatorName, String participantName,
                                                 int page, int size) {
+        return myInitiated(tenantId, initiatorId, status, keyword, appCode, scope,
+                initiatorName, participantName, page, size, false);
+    }
+
+    /**
+     * 我发起的流程分页。
+     *
+     * @param includeFormData {@code true} 时在 VO 末尾带上 {@code form_data}（表单模块列表用）；
+     *                        默认 {@code false}，门户列表不传表单 JSON。
+     */
+    public PageResult<WfInstanceVO> myInitiated(Long tenantId, Long initiatorId, String status,
+                                                String keyword, String appCode, String scope,
+                                                String initiatorName, String participantName,
+                                                int page, int size, boolean includeFormData) {
         var pageable = PageRequest.of(Math.max(page - 1, 0), Math.min(Math.max(size, 1), 200));
         String st = blankToNull(status);
         String pattern = likePattern(keyword);
@@ -611,18 +731,174 @@ public class ProcessService {
                         ? instanceRepository.findByInitiatorPlatform(tenantId, initiatorId, st, pattern, initiatorPattern, participantPattern, pageable)
                         : instanceRepository.findByInitiator(tenantId, initiatorId, st, pattern, initiatorPattern, participantPattern, pageable);
         return PageResult.of(page, pageable.getPageSize(), p.getTotalElements(),
-                p.getContent().stream().map(this::toInstanceVo).toList());
+                p.getContent().stream().map(i -> toInstanceVo(i, includeFormData)).toList());
     }
 
     private WfInstanceVO toInstanceVo(WfInstance i) {
+        return toInstanceVo(i, false);
+    }
+
+    private WfInstanceVO toInstanceVo(WfInstance i, boolean includeFormData) {
         // app_code 直取实例列（显式写入，不再由 business_type 派生的读侧 join/推导）。
         String appCode = i.getAppCode();
         return new WfInstanceVO(
                 String.valueOf(i.getId()), i.getDefinitionCode(), i.getStartedFormCode(),
                 i.getBusinessType(), i.getBusinessId(), i.getStatus(),
-                nullableId(i.getInitiatorId()), i.getInitiatorName(), i.getCurrentNodeCode(),
+                nullableId(i.getInitiatorId()), i.getInitiatorName(), i.getInitiatorOrgName(),
+                i.getCurrentNodeCode(),
                 null, i.getProgress(), i.getPostProcessStatus(), i.getPostRetryCount(),
-                i.getCreatedAt(), i.getCompletedAt(), appCode);
+                i.getCreatedAt(), i.getCompletedAt(), appCode, i.getTitle(),
+                includeFormData ? i.getFormData() : null);
+    }
+
+    /**
+     * 解析实例标题：显式 {@code title} 优先；否则读表单 {@code config.titleField} 对应
+     * {@code formData} 字段；仍取不到则校验失败（固定文案 {@link #TITLE_REQUIRED_MESSAGE}）。
+     */
+    private String resolveInstanceTitle(Long tenantId, StartProcessRequest req) {
+        String explicit = blankToNull(req.title());
+        if (explicit != null) {
+            return truncateTitle(explicit);
+        }
+        String formCode = req.startedFormCode() == null ? null : req.startedFormCode().trim();
+        if (StringUtils.hasText(formCode)) {
+            String fromForm = extractTitleFromForm(tenantId, formCode, req.formData());
+            if (fromForm != null) {
+                return truncateTitle(fromForm);
+            }
+        }
+        throw new BusinessException(ResultCode.VALIDATION_ERROR, TITLE_REQUIRED_MESSAGE);
+    }
+
+    private String extractTitleFromForm(Long tenantId, String formCode, String formDataJson) {
+        FormDefinition form = formDefinitionRepository.findByTenantIdAndCode(tenantId, formCode).orElse(null);
+        if (form == null) {
+            return null;
+        }
+        String titleField = readConfigTitleField(form.getConfig());
+        if (titleField == null) {
+            return null;
+        }
+        return readFormDataField(formDataJson, titleField);
+    }
+
+    private static String readConfigTitleField(String configJson) {
+        if (!StringUtils.hasText(configJson) || "{}".equals(configJson.trim())) {
+            return null;
+        }
+        try {
+            JsonNode root = JSON.readTree(configJson);
+            JsonNode field = root.get("titleField");
+            if (field == null || field.isNull()) {
+                return null;
+            }
+            String v = field.asText(null);
+            return StringUtils.hasText(v) ? v.trim() : null;
+        } catch (Exception ex) {
+            return null;
+        }
+    }
+
+    private static String readFormDataField(String formDataJson, String fieldKey) {
+        if (!StringUtils.hasText(formDataJson) || !StringUtils.hasText(fieldKey)) {
+            return null;
+        }
+        try {
+            JsonNode root = JSON.readTree(formDataJson);
+            JsonNode node = root.get(fieldKey);
+            if (node == null || node.isNull()) {
+                return null;
+            }
+            if (node.isValueNode()) {
+                String v = node.asText(null);
+                return StringUtils.hasText(v) ? v.trim() : null;
+            }
+            return null;
+        } catch (Exception ex) {
+            return null;
+        }
+    }
+
+    private static String truncateTitle(String title) {
+        if (title.length() <= TITLE_MAX_LEN) {
+            return title;
+        }
+        return title.substring(0, TITLE_MAX_LEN);
+    }
+
+    /** 发起时把 priority / dueDate 快照进 extra_context，供后续分派待办继承。 */
+    private static String buildStartExtraContext(Short priority, LocalDateTime dueDate) {
+        try {
+            var root = JSON.createObjectNode();
+            if (priority != null) {
+                short p = priority;
+                if (p < 1) {
+                    p = 1;
+                } else if (p > 4) {
+                    p = 4;
+                }
+                root.put("startPriority", p);
+            }
+            if (dueDate != null) {
+                root.put("startDueAt", dueDate.toString());
+            }
+            return root.isEmpty() ? "{}" : JSON.writeValueAsString(root);
+        } catch (Exception ex) {
+            return "{}";
+        }
+    }
+
+    private static short resolveStartPriority(WfInstance instance) {
+        Short fromCtx = readStartPriority(instance.getExtraContext());
+        return fromCtx == null ? (short) 2 : fromCtx;
+    }
+
+    private static Short readStartPriority(String extraContext) {
+        if (!StringUtils.hasText(extraContext) || "{}".equals(extraContext.trim())) {
+            return null;
+        }
+        try {
+            JsonNode n = JSON.readTree(extraContext).get("startPriority");
+            if (n == null || !n.isNumber()) {
+                return null;
+            }
+            int v = n.asInt();
+            if (v < 1) {
+                return 1;
+            }
+            if (v > 4) {
+                return 4;
+            }
+            return (short) v;
+        } catch (Exception ex) {
+            return null;
+        }
+    }
+
+    private static LocalDateTime resolveTaskDue(WfInstance instance, WfNode node, LocalDateTime now) {
+        LocalDateTime fromStart = readStartDueAt(instance.getExtraContext());
+        if (fromStart != null) {
+            return fromStart;
+        }
+        if (node.getTimeoutHours() == null) {
+            return null;
+        }
+        return now.plusHours(node.getTimeoutHours());
+    }
+
+    private static LocalDateTime readStartDueAt(String extraContext) {
+        if (!StringUtils.hasText(extraContext) || "{}".equals(extraContext.trim())) {
+            return null;
+        }
+        try {
+            JsonNode n = JSON.readTree(extraContext).get("startDueAt");
+            if (n == null || n.isNull() || !StringUtils.hasText(n.asText())) {
+                return null;
+            }
+            return LocalDateTime.parse(n.asText().trim());
+        } catch (Exception ex) {
+            return null;
+        }
     }
 
     private WfTaskVO toTaskVo(WfTask t) {

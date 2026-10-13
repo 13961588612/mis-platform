@@ -77,6 +77,7 @@ vi.mock('@/lib/api/tasks', () => ({
   fetchTaskStats: vi.fn(),
   handleTask: vi.fn(),
   fetchPortalMatters: vi.fn(),
+  fetchCcTasks: vi.fn(),
 }));
 
 vi.mock('@/lib/api/messages', () => ({
@@ -325,6 +326,8 @@ describe('PortalPage 三 Tab 容器', () => {
           completedAt: null,
           createdAt: '2026-10-08T10:00:00',
           appCode: null,
+          initiatorName: null,
+          initiatorOrgName: null,
         },
       ],
     });
@@ -445,6 +448,8 @@ describe('PortalPage 三 Tab 容器', () => {
       completedAt: null,
       createdAt: '2026-10-08T10:00:00',
       appCode: null,
+      initiatorName: null,
+      initiatorOrgName: null,
     };
   }
 
@@ -648,6 +653,7 @@ describe('PortalPage 三 Tab 容器', () => {
           status: 'RUNNING',
           initiatorId: '100',
           initiatorName: '发起人',
+          initiatorOrgName: null,
           currentNodeCode: 'approve',
           currentNodeName: null,
           progress: '50%',
@@ -656,11 +662,12 @@ describe('PortalPage 三 Tab 容器', () => {
           createdAt: '2026-10-08T10:00:00',
           completedAt: null,
           appCode: null,
+          title: null,
         },
       ],
     });
     renderPage();
-    // 行文本是 `${businessType} / ${businessId}`
+    // 行文本：无 title 时回退 `${businessType} / ${businessId}`
     const row = (await screen.findByText('PURCHASE_ORDER / PO-001')).closest('button');
     expect(row).toBeTruthy();
     fireEvent.click(row!);

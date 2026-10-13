@@ -85,10 +85,11 @@ public class PortalMattersService {
                 str(r[6]),   // biz_type
                 str(r[7]),   // app_code
                 str(r[8]),   // initiator_name
-                str(r[9]),   // assignee_name
-                str(r[10]),  // status
-                toLocalDateTime(r[11]), // created_at
-                str(r[12])); // category
+                str(r[9]),   // initiator_org_name
+                str(r[10]),  // assignee_name
+                str(r[11]),  // status
+                toLocalDateTime(r[12]), // created_at
+                str(r[13])); // category
     }
 
     /** native 列值 → 字符串：{@code String} 原样；其它非空值 {@code String.valueOf}；{@code null} 透传。 */

@@ -35,6 +35,7 @@ vi.mock('@/lib/api/workflow', () => ({
   activateDefinition: vi.fn(),
   deactivateDefinition: vi.fn(),
   fetchDefinition: vi.fn(),
+  updateSupportedForms: vi.fn(),
 }));
 
 vi.mock('@/lib/api/form-definition', () => ({
@@ -177,7 +178,7 @@ describe('WorkflowDefinitionPage 发布 / 取消发布', () => {
     expect(btn.title).toContain('自动先取消发布');
   });
 
-  it('无 workflow:definition:edit 时两个按钮都不渲染（隐藏而非禁用）', async () => {
+  it('无 workflow:definition:edit 时发布/取消发布/关联表单都不渲染（隐藏而非禁用）', async () => {
     useAuthStore.setState({ permissions: [] });
     vi.mocked(workflowApi.fetchDefinitions).mockResolvedValue({
       page: 1,
@@ -190,6 +191,20 @@ describe('WorkflowDefinitionPage 发布 / 取消发布', () => {
     await screen.findByText('采购审批流程');
     expect(screen.queryByText('发布')).toBeNull();
     expect(screen.queryByText('取消发布')).toBeNull();
+    expect(screen.queryByText('关联表单')).toBeNull();
+  });
+
+  it('有权限时显示「关联表单」并打开弹窗', async () => {
+    vi.mocked(workflowApi.fetchDefinitions).mockResolvedValue({
+      page: 1,
+      size: 20,
+      total: 1,
+      list: [def()],
+    });
+    renderPage();
+
+    fireEvent.click(await screen.findByText('关联表单'));
+    await waitFor(() => expect(screen.getByText(/一个表单只能关联一个流程/)).toBeTruthy());
   });
 
   it('勾选分类后点「查询」才请求；选父分类时 categoryIds 含子孙', async () => {

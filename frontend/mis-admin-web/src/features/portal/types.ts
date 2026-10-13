@@ -26,8 +26,10 @@ export interface PortalTodoRow {
   subtitle?: string;
   /** 业务/流程状态原始值（`PENDING` / `APPROVING` / `APPROVED` / `REJECTED` / `RUNNING` …）。 */
   status?: string;
-  /** 发起人（仅「我发起的」源有）。 */
+  /** 发起人（流程类行：matters / sent；待办源经实例回填时也有）。 */
   initiatorName?: string;
+  /** 发起人所属组织/公司名（有则展示为「姓名（公司）」）。 */
+  initiatorOrgName?: string;
   /** 处理人（仅待办源有）。 */
   assigneeName?: string;
   /** 创建时间（ISO 字符串）。 */
@@ -62,4 +64,4 @@ export interface PortalTodoRow {
  * 四类数据源标识：`matters`（`/tasks/matters` 三源 UNION 聚合）对应「全部」子 Tab；
  * 其余三条对应设计 §1.4 的既有接口。
  */
-export type PortalTodoSource = 'matters' | 'my' | 'handled' | 'sent';
+export type PortalTodoSource = 'matters' | 'my' | 'handled' | 'sent' | 'cc';

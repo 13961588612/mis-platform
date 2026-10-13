@@ -7,6 +7,7 @@ import { PortalMetaTags } from './portal-meta-tags';
 import { usePortalLookups } from '../lib/use-portal-lookups';
 import { usePortalEntry } from '../lib/use-portal-entry';
 import { formatDateTimeSec } from '../lib/format-datetime';
+import { formatInitiatorCompany } from '../lib/format-initiator';
 
 interface ProcessBoardProps {
   tenantId: string;
@@ -104,6 +105,7 @@ export function ProcessBoard({ tenantId, userId }: ProcessBoardProps) {
         <ul className="divide-y">
           {items.map((item) => {
             const st = STATUS[item.status] ?? STATUS.RUNNING;
+            const initiator = formatInitiatorCompany(item.initiatorName, item.initiatorOrgName);
             return (
               <li key={item.id}>
                 <button
@@ -112,9 +114,15 @@ export function ProcessBoard({ tenantId, userId }: ProcessBoardProps) {
                   className="flex w-full items-center gap-3 px-4 py-2.5 text-left transition hover:bg-muted/60"
                 >
                   <span className="min-w-0 flex-1 truncate text-[13px]">
-                    {item.businessType} / {item.businessId}
+                    {item.title?.trim() || `${item.businessType} / ${item.businessId}`}
                   </span>
                   <PortalMetaTags appName={appNameOf(item.appCode)} bizTypeName={bizTypeNameOf(item.businessType)} />
+                  <span
+                    className="max-w-[10rem] shrink-0 truncate text-[11px] text-muted-foreground"
+                    title="发起人（公司）"
+                  >
+                    {initiator ?? '—'}
+                  </span>
                   <span className={cn('shrink-0 rounded px-1.5 py-0.5 text-[10px]', st.cls)}>{st.text}</span>
                   <span
                     className="shrink-0 whitespace-nowrap text-[11px] text-muted-foreground"

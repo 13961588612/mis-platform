@@ -4,6 +4,7 @@ import { GuestRoute, ProtectedRoute } from '@/components/auth/protected-route';
 import { AppLayout } from '@/components/layout/app-layout';
 import { LoginPage } from '@/features/auth/login-page';
 import { ChangePasswordPage } from '@/features/auth/change-password-page';
+import { ProcessBarePage } from '@/features/taskflow/process-bare-page';
 import { bootstrapSession } from '@/lib/auth/bootstrap';
 import { useAuthStore } from '@/stores/auth-store';
 import { AIProvider } from '@/features/ai/ai-context';
@@ -66,6 +67,8 @@ export function AppRouter() {
           </Route>
           <Route element={<ProtectedRoute />}>
             <Route path="/change-password" element={<ChangePasswordPage />} />
+            {/* 流程裸页：抽屉「在完整页打开」新标签用，无 AppLayout 壳（顶栏/侧栏/Tab） */}
+            <Route path="/task/process-view/:id" element={<ProcessBarePage />} />
             {/* 子路由仅作路径匹配；页面由 AppLayout 内 KeepAliveOutlet 渲染 */}
             <Route element={<AppLayout />}>
               {/* P0-5：/portal 归位进 AppLayout（此前裸挂，自造了一套 header）。

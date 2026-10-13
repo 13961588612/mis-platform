@@ -24,13 +24,17 @@ import {
 import '@xyflow/react/dist/style.css';
 import { cn } from '@/lib/utils';
 import {
+  DEFAULT_ASSIGNEE_RULE,
+  NODE_LABELS,
   WF_NODE_TYPES,
+  defaultNodeData,
   type WfFlowEdge,
   type WfFlowNode,
   type WfNodeKind,
 } from './types';
 import { WfStartNode } from './nodes/WfStartNode';
 import { WfApprovalNode } from './nodes/WfApprovalNode';
+import { WfCcNode } from './nodes/WfCcNode';
 import { WfConditionalNode } from './nodes/WfConditionalNode';
 import { WfRoutingNode } from './nodes/WfRoutingNode';
 import { WfAutomationNode } from './nodes/WfAutomationNode';
@@ -39,6 +43,7 @@ import { WfEndNode } from './nodes/WfEndNode';
 const NODE_TYPES = {
   wfStart: WfStartNode,
   wfApproval: WfApprovalNode,
+  wfCc: WfCcNode,
   wfConditional: WfConditionalNode,
   wfRouting: WfRoutingNode,
   wfAutomation: WfAutomationNode,
@@ -109,12 +114,12 @@ function CanvasInner({
         type: WF_NODE_TYPES[kind],
         position,
         data: {
-          kind,
-          nodeCode: `${kind.toLowerCase()}_${Date.now().toString(36)}`,
-          nodeName: { START: '开始', APPROVAL: '审批', CONDITIONAL: '条件分支', ROUTING: '会签/路由', AUTOMATION: '自动化', END: '结束' }[kind],
-          assigneeRule: kind === 'APPROVAL' || kind === 'ROUTING' ? '{"type":"SELF"}' : '{}',
-          conditionExpr: kind === 'CONDITIONAL' ? '${amount > 50000}' : undefined,
-          timeoutHours: kind === 'APPROVAL' ? 24 : null,
+          ...defaultNodeData(kind),
+          nodeName: NODE_LABELS[kind],
+          assigneeRule:
+            kind === 'APPROVAL' || kind === 'ROUTING' || kind === 'CC'
+              ? DEFAULT_ASSIGNEE_RULE
+              : '{}',
         },
       };
       onNodesChange([...nodes, newNode]);

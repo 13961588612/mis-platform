@@ -7,9 +7,11 @@
 import { type ReactNode } from 'react';
 import { Handle, Position, type Node, type NodeProps } from '@xyflow/react';
 import { cn } from '@/lib/utils';
+import { assigneeRuleLabel } from '../assignee-rule';
+import { formatTimeoutHours } from '../timeout-presets';
 import { NODE_LABELS, type WfNodeData } from '../types';
 
-export type NodeTheme = 'green' | 'blue' | 'amber' | 'purple' | 'gray' | 'red';
+export type NodeTheme = 'green' | 'blue' | 'amber' | 'purple' | 'gray' | 'red' | 'teal';
 
 const THEME: Record<NodeTheme, { border: string; bg: string; icon: string }> = {
   green: { border: 'border-primary', bg: 'bg-primary/5', icon: 'bg-primary text-primary-foreground' },
@@ -18,6 +20,7 @@ const THEME: Record<NodeTheme, { border: string; bg: string; icon: string }> = {
   purple: { border: 'border-purple-400', bg: 'bg-purple-50', icon: 'bg-purple-100 text-purple-600' },
   gray: { border: 'border-gray-400', bg: 'bg-gray-50', icon: 'bg-gray-100 text-gray-600' },
   red: { border: 'border-red-400', bg: 'bg-red-50', icon: 'bg-red-100 text-red-600' },
+  teal: { border: 'border-teal-500', bg: 'bg-teal-50', icon: 'bg-teal-100 text-teal-700' },
 };
 
 export interface WfBaseNodeProps {
@@ -57,7 +60,12 @@ export function renderBaseNode(
 
       {data.kind === 'APPROVAL' && data.timeoutHours ? (
         <div className="border-t border-border/50 px-2.5 py-1 text-[11px] text-muted-foreground">
-          ⏱ 超时 {data.timeoutHours}h · 规则 {shortRule(data.assigneeRule)}
+          ⏱ 超时 {formatTimeoutHours(data.timeoutHours)} · 规则 {shortRule(data.assigneeRule)}
+        </div>
+      ) : null}
+      {data.kind === 'CC' ? (
+        <div className="border-t border-border/50 px-2.5 py-1 text-[11px] text-muted-foreground">
+          抄送 · {shortRule(data.assigneeRule)} · 不阻塞
         </div>
       ) : null}
       {data.kind === 'CONDITIONAL' && data.conditionExpr ? (
@@ -70,6 +78,5 @@ export function renderBaseNode(
 }
 
 function shortRule(rule: string): string {
-  const m = /"type"\s*:\s*"([^"]+)"/.exec(rule ?? '');
-  return m ? m[1] : '未配置';
+  return assigneeRuleLabel(rule);
 }

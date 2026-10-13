@@ -21,6 +21,8 @@ public record TaskVO(
         boolean read,
         LocalDateTime completedAt,
         LocalDateTime createdAt,
-        String appCode
+        String appCode,
+        String initiatorName,
+        String initiatorOrgName
 ) {
 }

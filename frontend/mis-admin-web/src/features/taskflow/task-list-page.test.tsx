@@ -49,6 +49,8 @@ const sampleTask = {
   completedAt: null,
   createdAt: '2026-10-08T10:00:00',
   appCode: null,
+  initiatorName: null,
+  initiatorOrgName: null,
 };
 
 /** 已办态：流程已结束，行内只剩状态徽标（曾因无 onClick 而完全点不动）。 */

@@ -71,6 +71,12 @@ describe('parseFormData', () => {
     if (r.ok) expect(r.data).toEqual({ a: 1, b: 'x' });
   });
 
+  it('已是对象时直接采用（列表 jsonb 偶发非字符串）', () => {
+    const r = parseFormData({ orderNo: 'PO-1', amount: 1 });
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.data).toEqual({ orderNo: 'PO-1', amount: 1 });
+  });
+
   it('null / undefined / 空串判为失败', () => {
     expect(parseFormData(null).ok).toBe(false);
     expect(parseFormData(undefined).ok).toBe(false);

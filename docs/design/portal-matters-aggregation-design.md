@@ -92,7 +92,7 @@
 | `id` | `String` | TASK=`sys_task.id`；INSTANCE=`wf_instance.id` |
 | `instanceId` | `String`(nullable) | TASK=经 `wf_task` 解析的实例 id（无则 `null`）；INSTANCE=`= id` |
 | `sysTaskId` | `String`(nullable) | TASK=`sys_task.id`（供抽屉「转办」）；INSTANCE=`null` |
-| `title` | `String` | TASK=`biz_title`；INSTANCE=`business_type + ' / ' + business_id` |
+| `title` | `String` | TASK=`biz_title`；INSTANCE=`wf_instance.title` |
 | `subtitle` | `String` | TASK=`biz_type + ' / ' + biz_ref_id`；INSTANCE=`definition_code + ' · ' + coalesce(started_form_code,'-')` |
 | `bizType` | `String`(nullable) | TASK=`sys_task.biz_type`；INSTANCE=`wf_instance.business_type` |
 | `appCode` | `String`(nullable) | TASK=`sys_task.app_code`；INSTANCE=`wf_instance.app_code`（`null`⇒前端「平台」） |
@@ -142,7 +142,7 @@ SELECT 'INSTANCE' AS kind,
        wi.id AS id,
        wi.id AS instance_id,
        NULL::bigint AS sys_task_id,
-       wi.business_type || ' / ' || wi.business_id AS title,
+       wi.title AS title,
        wi.definition_code || ' · ' || COALESCE(wi.started_form_code,'-') AS subtitle,
        wi.business_type AS biz_type,
        wi.app_code  AS app_code,

@@ -9,14 +9,15 @@ import { PaginationFooter } from '@/components/common/pagination-footer';
 import { TaskStatusBadge } from '@/features/taskflow/task-status';
 import { TodoDetailDrawer } from '@/features/portal/components/todo-detail-drawer';
 import { usePortalLookups } from '@/features/portal/lib/use-portal-lookups';
-import { fetchHandledTasks, fetchMyTasks, fetchPortalMatters } from '@/lib/api/tasks';
+import { fetchCcTasks, fetchHandledTasks, fetchMyTasks, fetchPortalMatters } from '@/lib/api/tasks';
 import { fetchMyProcesses } from '@/lib/api/workflow';
 import { useAuthStore } from '@/stores/auth-store';
 import { usePortalTodoTabStore } from '@/stores/portal-todo-tab-store';
 import { cn } from '@/lib/utils';
 import { TODO_TABS } from '../lib/todo-tabs';
-import { fromHandledTask, fromPortalMatter, fromTaskItem, fromWfInstance } from '../lib/todo-adapters';
+import { fromCcTask, fromHandledTask, fromPortalMatter, fromTaskItem, fromWfInstance } from '../lib/todo-adapters';
 import { formatDateTimeSec } from '../lib/format-datetime';
+import { formatInitiatorCompany } from '../lib/format-initiator';
 import type { PortalTodoRow } from '../types';
 
 const PAGE_SIZE = 20;
@@ -160,6 +161,16 @@ export function PortalTodoTab() {
         });
         setRows(r.list.map(fromHandledTask));
         setTotal(r.total);
+      } else if (tab.source === 'cc') {
+        const r = await fetchCcTasks({
+          tenantId,
+          assigneeId: userId,
+          page,
+          size: PAGE_SIZE,
+          keyword: kw,
+        });
+        setRows(r.list.map(fromCcTask));
+        setTotal(r.total);
       } else {
         const r = await fetchMyTasks({
           tenantId,
@@ -212,9 +223,10 @@ export function PortalTodoTab() {
     setPage(1);
   }
 
-  /** 发起人 / 处理人展示文案（发起人优先，其次处理人，否则「—」）。 */
+  /** 发起人（公司）/ 处理人展示：有发起人时显示「姓名（公司）」；否则回退处理人。 */
   function actorText(row: PortalTodoRow): string {
-    if (row.initiatorName) return `发起人 ${row.initiatorName}`;
+    const initiator = formatInitiatorCompany(row.initiatorName, row.initiatorOrgName);
+    if (initiator) return initiator;
     if (row.assigneeName) return `处理人 ${row.assigneeName}`;
     return '—';
   }
@@ -314,7 +326,7 @@ export function PortalTodoTab() {
                 <col style={{ width: '12rem' }} />
                 <col style={{ width: '9rem' }} />
                 <col style={{ width: '8rem' }} />
-                <col style={{ width: '9rem' }} />
+                <col style={{ width: '11rem' }} />
                 <col style={{ width: '11rem' }} />
               </colgroup>
               <thead>
@@ -323,7 +335,7 @@ export function PortalTodoTab() {
                   <th className={TH_CLASS}>业务编号 / 流程</th>
                   <th className={TH_CLASS}>平台 / 关联应用</th>
                   <th className={TH_CLASS}>业务类型</th>
-                  <th className={TH_CLASS}>发起人 / 处理人</th>
+                  <th className={TH_CLASS}>发起人（公司）</th>
                   <th className={TH_CLASS}>发起时间</th>
                 </tr>
               </thead>

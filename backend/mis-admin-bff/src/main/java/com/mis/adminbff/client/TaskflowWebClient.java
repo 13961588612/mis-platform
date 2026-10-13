@@ -358,6 +358,19 @@ public class TaskflowWebClient extends AbstractDownstreamClient {
         return block(client().get().uri(uriOf("/internal/v1/tasks/my", q)).retrieve().bodyToMono(TASK_PAGE));
     }
 
+    /** 抄送我的：透传 {@code GET /internal/v1/tasks/cc}。 */
+    public PageResult<TaskVO> ccTasks(Long tenantId, Long assigneeId, String keyword, int page, int size) {
+        Map<String, Object> q = new LinkedHashMap<>();
+        q.put("tenantId", tenantId);
+        q.put("assigneeId", assigneeId);
+        if (keyword != null && !keyword.isBlank()) {
+            q.put("keyword", keyword);
+        }
+        q.put("page", page);
+        q.put("size", size);
+        return block(client().get().uri(uriOf("/internal/v1/tasks/cc", q)).retrieve().bodyToMono(TASK_PAGE));
+    }
+
     public PageResult<TaskVO> handledTasks(Long tenantId, Long assigneeId, String keyword, int page, int size) {
         return handledTasks(tenantId, assigneeId, keyword, null, null, page, size);
     }
@@ -584,6 +597,15 @@ public class TaskflowWebClient extends AbstractDownstreamClient {
                 .contentType(MediaType.APPLICATION_JSON).bodyValue(body).retrieve().bodyToMono(VOID));
     }
 
+    /** 仅更新流程定义表单关联（下游 {@code PUT .../supported-forms}）。 */
+    public void updateWorkflowSupportedForms(Long id, Long tenantId, Map<String, Object> body) {
+        Map<String, Object> q = new LinkedHashMap<>();
+        q.put("tenantId", tenantId);
+        blockVoid(client().put()
+                .uri(uriOf("/internal/v1/workflow/definitions/{id}/supported-forms", pathVars("id", id), q))
+                .contentType(MediaType.APPLICATION_JSON).bodyValue(body).retrieve().bodyToMono(VOID));
+    }
+
     public void deactivateWorkflowDefinition(Long id, Long tenantId) {
         Map<String, Object> q = new LinkedHashMap<>();
         q.put("tenantId", tenantId);
@@ -736,6 +758,14 @@ public class TaskflowWebClient extends AbstractDownstreamClient {
     public PageResult<WfInstanceVO> myProcesses(Long tenantId, Long initiatorId, String status, String keyword,
                                                 String appCode, String scope,
                                                 String initiatorName, String participantName, int page, int size) {
+        return myProcesses(tenantId, initiatorId, status, keyword, appCode, scope,
+                initiatorName, participantName, page, size, false);
+    }
+
+    public PageResult<WfInstanceVO> myProcesses(Long tenantId, Long initiatorId, String status, String keyword,
+                                                String appCode, String scope,
+                                                String initiatorName, String participantName, int page, int size,
+                                                boolean includeFormData) {
         Map<String, Object> q = new LinkedHashMap<>();
         q.put("tenantId", tenantId);
         q.put("initiatorId", initiatorId);
@@ -759,6 +789,9 @@ public class TaskflowWebClient extends AbstractDownstreamClient {
         }
         q.put("page", page);
         q.put("size", size);
+        if (includeFormData) {
+            q.put("includeFormData", true);
+        }
         return block(client().get().uri(uriOf("/internal/v1/workflow/instances/my", q)).retrieve().bodyToMono(WF_INSTANCE_PAGE));
     }
 

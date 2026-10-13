@@ -21,7 +21,12 @@ import type { FormComponent } from '@/features/biz/forms/types';
 
 vi.mock('@/lib/api/workflow', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/api/workflow')>();
-  return { ...actual, fetchProcessDetail: vi.fn() };
+  return {
+    ...actual,
+    fetchProcessDetail: vi.fn(),
+    fetchDefinitions: vi.fn(),
+    fetchDefinition: vi.fn(),
+  };
 });
 
 vi.mock('@/lib/api/tasks', () => ({
@@ -48,6 +53,7 @@ const baseDetail = {
     status: 'RUNNING',
     initiatorId: '100',
     initiatorName: '发起人',
+    initiatorOrgName: null,
     currentNodeCode: 'approve',
     currentNodeName: null,
     progress: '50%',
@@ -56,6 +62,7 @@ const baseDetail = {
     createdAt: '2026-10-08T10:00:00',
     completedAt: null,
     appCode: null,
+    title: '华东电子采购申请',
   },
   tasks: [
     {
@@ -118,6 +125,8 @@ function pendingTask(id: string, instanceId: string) {
     completedAt: null,
     createdAt: '2026-10-08T10:00:00',
     appCode: null,
+    initiatorName: null,
+    initiatorOrgName: null,
   };
 }
 
@@ -159,21 +168,178 @@ describe('ProcessShell', () => {
         <ProcessShell instanceId="128" />
       </MemoryRouter>,
     );
+    // page 变体 PageHeader 展示流程 title
+    expect(await screen.findByText('华东电子采购申请')).toBeTruthy();
     expect((await screen.findAllByText('PO-001')).length).toBeGreaterThan(0);
-    expect(screen.getByText('主管审批')).toBeTruthy();
+    // 完整页「节点处理」列表展示当前节点名
+    expect(screen.getAllByText('主管审批').length).toBeGreaterThan(0);
     expect(screen.getByText('业务表单')).toBeTruthy();
-    expect(screen.getByText('PURCHASE_ORDER')).toBeTruthy();
+    // 业务类型在「流程信息」面板，默认表单态不展示
+    expect(screen.queryByText('PURCHASE_ORDER')).toBeNull();
   });
 
-  it('处理人本人显示审批栏', async () => {
+  it('bare 变体顶部展示流程 title', async () => {
+    setUser('700001');
+    render(
+      <MemoryRouter>
+        <ProcessShell instanceId="128" variant="bare" />
+      </MemoryRouter>,
+    );
+    const bare = await screen.findByTestId('process-bare-title');
+    expect(within(bare).getByRole('heading', { level: 1 }).textContent).toBe('华东电子采购申请');
+    expect(within(bare).queryByText(/单号 PO-001/)).toBeNull();
+  });
+
+  it('流程信息内图标切换：审批历史与待办 ⇄ 进度情况', async () => {
+    setUser('700001');
+    vi.mocked(workflowApi.fetchDefinitions).mockResolvedValue({
+      page: 1,
+      size: 20,
+      total: 1,
+      list: [
+        {
+          id: 'def-1',
+          tenantId: '1',
+          code: 'PURCHASE_APPROVAL',
+          name: '采购审批',
+          category: '',
+          categoryId: null,
+          description: null,
+          version: 1,
+          status: 'ACTIVE',
+          supportedFormCodes: ['PUR_FORM'],
+          formSchema: null,
+          config: '{}',
+          nodes: [
+            {
+              nodeCode: 'start',
+              nodeName: '开始',
+              nodeType: 'START',
+              sortOrder: 0,
+              canvasX: null,
+              canvasY: null,
+              conditionExpr: null,
+              assigneeRule: '{}',
+              timeoutHours: null,
+              config: '{}',
+            },
+            {
+              nodeCode: 'approve',
+              nodeName: '主管审批',
+              nodeType: 'APPROVAL',
+              sortOrder: 1,
+              canvasX: null,
+              canvasY: null,
+              conditionExpr: null,
+              assigneeRule: '{"type":"SUPERVISOR"}',
+              timeoutHours: null,
+              config: '{}',
+            },
+          ],
+          edges: null,
+          createdAt: '2026-10-01T00:00:00',
+          updatedAt: '2026-10-01T00:00:00',
+        },
+      ],
+    } as never);
+    vi.mocked(workflowApi.fetchDefinition).mockResolvedValue({
+      id: 'def-1',
+      tenantId: '1',
+      code: 'PURCHASE_APPROVAL',
+      name: '采购审批',
+      category: '',
+      categoryId: null,
+      description: null,
+      version: 1,
+      status: 'ACTIVE',
+      supportedFormCodes: ['PUR_FORM'],
+      formSchema: null,
+      config: '{}',
+      nodes: [
+        {
+          nodeCode: 'start',
+          nodeName: '开始',
+          nodeType: 'START',
+          sortOrder: 0,
+          canvasX: null,
+          canvasY: null,
+          conditionExpr: null,
+          assigneeRule: '{}',
+          timeoutHours: null,
+          config: '{}',
+        },
+        {
+          nodeCode: 'approve',
+          nodeName: '主管审批',
+          nodeType: 'APPROVAL',
+          sortOrder: 1,
+          canvasX: null,
+          canvasY: null,
+          conditionExpr: null,
+          assigneeRule: '{"type":"SUPERVISOR"}',
+          timeoutHours: null,
+          config: '{}',
+        },
+      ],
+      edges: null,
+      createdAt: '2026-10-01T00:00:00',
+      updatedAt: '2026-10-01T00:00:00',
+    } as never);
+
+    render(
+      <MemoryRouter>
+        <ProcessShell instanceId="128" />
+      </MemoryRouter>,
+    );
+    await screen.findByTestId('form-shell');
+    expect(screen.queryByRole('button', { name: /查看进度情况/ })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: /查看流程信息/ }));
+    const meta = await screen.findByTestId('process-meta');
+    expect(within(meta).getByTestId('process-meta-timeline')).toBeTruthy();
+    expect(within(meta).queryByTestId('process-progress-board')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: '切换到进度情况' }));
+    expect(await within(meta).findByTestId('process-progress-board')).toBeTruthy();
+    expect(within(meta).queryByTestId('process-meta-timeline')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: '切换到审批历史与待办' }));
+    expect(await within(meta).findByTestId('process-meta-timeline')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: /返回表单/ }));
+    expect(await screen.findByTestId('form-shell')).toBeTruthy();
+    expect(screen.queryByTestId('process-progress-board')).toBeNull();
+  });
+
+  it('处理人本人显示右栏本次审批', async () => {
     setUser('700001');
     render(
       <MemoryRouter>
         <ProcessShell instanceId="128" />
       </MemoryRouter>,
     );
-    expect(await screen.findByText('同意')).toBeTruthy();
-    expect(screen.getByText('驳回')).toBeTruthy();
+    const panel = await screen.findByTestId('process-approve-panel');
+    expect(within(panel).getByText('本次审批')).toBeTruthy();
+    expect(within(panel).getByLabelText('审批建议')).toBeTruthy();
+    expect(within(panel).getByText('同意')).toBeTruthy();
+    expect(within(panel).getByText('驳回')).toBeTruthy();
+  });
+
+  it('同意时提交审批建议 comment', async () => {
+    setUser('700001');
+    render(
+      <MemoryRouter>
+        <ProcessShell instanceId="128" />
+      </MemoryRouter>,
+    );
+    const panel = await screen.findByTestId('process-approve-panel');
+    fireEvent.change(within(panel).getByLabelText('审批建议'), {
+      target: { value: '资料齐全，同意归档' },
+    });
+    fireEvent.click(within(panel).getByText('同意'));
+    await waitFor(() => {
+      expect(api.post).toHaveBeenCalledWith(
+        '/workflow/tasks/501/complete',
+        { action: 'APPROVE', comment: '资料齐全，同意归档' },
+        expect.objectContaining({ params: expect.objectContaining({ tenantId: '1', operatorId: '700001' }) }),
+      );
+    });
   });
 
   it('非处理人不显示审批栏', async () => {
@@ -288,15 +454,26 @@ describe('ProcessShell · 套壳接入（T3.2）', () => {
     vi.restoreAllMocks();
   });
 
-  /** 套壳所在的卡片：应当占 lg:grid-cols-3 里的 2 列。 */
-  function shellCard(): HTMLElement {
-    const shell = screen.getByTestId('form-shell');
-    const card = shell.closest('div.lg\\:col-span-2');
-    if (!card) throw new Error('套壳未放在 lg:col-span-2 的卡片里');
-    return card as HTMLElement;
-  }
+  it('表单在左栏主列；节点处理与审批历史在表单下方纵向排列；可审时右栏有操作框', async () => {
+    setUser('700001');
+    render(
+      <MemoryRouter>
+        <ProcessShell instanceId="128" />
+      </MemoryRouter>,
+    );
 
-  it('套壳放在 lg:col-span-2 的左栏（右栏是窄的审批历史，放不下多行文本）', async () => {
+    const main = await screen.findByTestId('process-main-column');
+    expect(within(main).getByTestId('form-shell')).toBeTruthy();
+    expect(within(main).getByTestId('process-node-timeline')).toBeTruthy();
+    expect(within(main).getByText('审批历史')).toBeTruthy();
+    // 可审：操作在右栏，不在主列内
+    const panel = screen.getByTestId('process-approve-panel');
+    expect(panel).toBeTruthy();
+    expect(within(panel).getByText('同意')).toBeTruthy();
+    expect(within(main).queryByText('同意')).toBeNull();
+  });
+
+  it('查看流程信息 ⇄ 返回表单：元信息在独立面板', async () => {
     setUser('700001');
     render(
       <MemoryRouter>
@@ -305,31 +482,24 @@ describe('ProcessShell · 套壳接入（T3.2）', () => {
     );
 
     await screen.findByTestId('form-shell');
-    expect(shellCard()).toBeTruthy();
-    // 右栏审批历史不占 2 列
-    expect(screen.getByText('审批历史').closest('div.lg\\:col-span-2')).toBeNull();
-  });
-
-  it('4 个流程元信息收进 details 且**默认收起**', async () => {
-    setUser('700001');
-    render(
-      <MemoryRouter>
-        <ProcessShell instanceId="128" />
-      </MemoryRouter>,
-    );
-
-    const details = await screen.findByTestId('process-meta');
-    // 默认收起：没有 open 属性。审批人 90% 注意力在业务数据
-    expect(details.hasAttribute('open')).toBe(false);
-    expect(details.tagName).toBe('DETAILS');
-    // 内容仍在 DOM 里（收起 ≠ 不渲染，查证时不需要额外请求）
-    // ⚠️ 用 within 限定在字段容器内：details 的 summary 文字里也含「发起人」等词
-    const fields = within(details).getByTestId('process-meta-fields');
+    // 默认表单面板，不展示流程信息字段
+    expect(screen.queryByTestId('process-meta')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: /查看流程信息/ }));
+    const meta = await screen.findByTestId('process-meta');
+    const fields = within(meta).getByTestId('process-meta-fields');
     expect(within(fields).getByText('业务类型')).toBeTruthy();
     expect(within(fields).getByText('业务单号')).toBeTruthy();
+    expect(within(fields).getByText('流程编码')).toBeTruthy();
+    expect(within(fields).getByText('PURCHASE_APPROVAL')).toBeTruthy();
+    expect(within(fields).getByText('表单')).toBeTruthy();
+    expect(within(fields).getByText('PUR_FORM')).toBeTruthy();
     expect(within(fields).getByText('当前节点')).toBeTruthy();
-    // 4 个字段齐全：发起人 label + 其值（fixture 里两者文字相同，故用 getAllByText计数）
-    expect(within(fields).getAllByText('发起人')).toHaveLength(2);
+    expect(within(fields).getByText('发起人（公司）')).toBeTruthy();
+    expect(within(fields).getByText('发起人')).toBeTruthy();
+    expect(screen.queryByTestId('form-shell')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: /返回表单/ }));
+    expect(await screen.findByTestId('form-shell')).toBeTruthy();
+    expect(screen.queryByTestId('process-meta')).toBeNull();
   });
 
   it('⚠️ 表单渲染抛错时，同意/驳回依然可点并真的发起审批', async () => {

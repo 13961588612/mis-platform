@@ -25,6 +25,7 @@ import { TaskMyProcessedPage } from '@/features/taskflow/my-processed-page';
 import { InboxPage } from '@/features/taskflow/inbox-page';
 import { TaskListPage } from '@/features/taskflow/task-list-page';
 import { ProcessDetailPage } from '@/features/taskflow/process-detail-page';
+import { FormTestPage } from '@/features/taskflow/form-test-page';
 import { AuditOpPage } from '@/features/system/audit/audit-op-page';
 import { ExecMonitorPage } from '@/features/system/exec-monitor/exec-monitor-page';
 import { WorkflowDesignerPage } from '@/features/system/workflow-designer/designer-page';
@@ -67,6 +68,7 @@ import { flattenKbNavLeaves } from '@/lib/nav/kb-nav';
 import { flattenAgentNavLeaves } from '@/lib/nav/agent-nav';
 import { flattenIqdNavLeaves } from '@/lib/nav/iqd-nav';
 import { flattenFinanceNavLeaves } from '@/lib/nav/finance-nav';
+import { flattenTaskNavLeaves } from '@/lib/nav/task-nav';
 
 // ---------------------------------------------------------------------------
 // T09/T10 存量页：路由级懒加载（React.lazy + Suspense，每路由独立 chunk ≤80KB/页）。
@@ -150,6 +152,7 @@ const PAGE_MAP: Record<string, ComponentType> = {
   '/task/pending': TaskListPage,
   '/task/my-sent': TaskMySentPage,
   '/task/my-processed': TaskMyProcessedPage,
+  '/system/form-test': FormTestPage,
   // 编排已 Dialog 化：本路由保留为重定向壳（进来后 replace 回流程定义页），
   // 但 **不能注销** —— V123 的 sys_menu 95007 与 V128 绑在它上面的两个 sys_menu_api
   //（取消发布 / PUT 更新定义）都还指着这个 path，注销会让菜单解析不到页面。
@@ -211,6 +214,7 @@ export const KEEP_ALIVE_META: Record<string, { title: string; icon?: string }> =
     ...flattenAgentNavLeaves(),
     ...flattenIqdNavLeaves(),
     ...flattenFinanceNavLeaves(),
+    ...flattenTaskNavLeaves(),
   ].map((i) => [i.path, { title: i.title, icon: i.icon }]),
 );
 

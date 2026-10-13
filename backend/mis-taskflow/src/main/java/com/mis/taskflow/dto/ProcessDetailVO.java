@@ -9,8 +9,8 @@ import java.util.List;
  * @param tasks     待办/已完成任务
  * @param history   审批历史
  * @param formData  本次发起提交的业务表单数据（{@code wf_instance.form_data} 原样透出，JSON 串）。
- *                  <p>⚠️ 只在 detail 接口填，<b>刻意不进 {@link WfInstanceVO}</b>：
- *                  {@code GET /workflow/instances/my} 分页 20 条，若挂在 instance 上会多传 20 份表单 JSON。
+ *                  <p>详情接口始终填充。列表 {@link WfInstanceVO#formData} 仅
+ *                  {@code includeFormData=true} 时填充，默认仍为 {@code null}。
  *                  <p>原样透出（不做解析/裁剪）：前端按 JSON 容错解析，失败降级为原文展示。
  */
 public record ProcessDetailVO(

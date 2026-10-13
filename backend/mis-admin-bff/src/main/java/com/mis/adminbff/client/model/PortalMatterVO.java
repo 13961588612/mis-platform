@@ -18,11 +18,12 @@ import java.time.LocalDateTime;
  * @param subtitle      副标题
  * @param bizType       业务类型（软引用 {@code biz_category.code}）
  * @param appCode       应用归属（{@code null} = 平台级）
- * @param initiatorName 所属实例发起人
- * @param assigneeName  处理人（TASK）
- * @param status        状态
- * @param createdAt     创建时间
- * @param category      分类（TASK={@code status} 字面；INSTANCE={@code 'mySent'}）
+ * @param initiatorName    所属实例发起人
+ * @param initiatorOrgName 发起人所属组织/公司名
+ * @param assigneeName     处理人（TASK）
+ * @param status           状态
+ * @param createdAt        创建时间
+ * @param category         分类（TASK={@code status} 字面；INSTANCE={@code 'mySent'}）
  */
 public record PortalMatterVO(
         String kind,
@@ -34,6 +35,7 @@ public record PortalMatterVO(
         String bizType,
         String appCode,
         String initiatorName,
+        String initiatorOrgName,
         String assigneeName,
         String status,
         LocalDateTime createdAt,

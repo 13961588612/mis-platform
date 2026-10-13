@@ -13,6 +13,7 @@ import {
 import { fetchBizCategoryTree, fetchBizCategories, type BizCategoryItem } from '@/lib/api/biz-category';
 import { DesignerDialog } from './designer-dialog';
 import { DefinitionDialog, type DefinitionDraft } from './definition-dialog';
+import { LinkFormsDialog } from './link-forms-dialog';
 import type { FlowMeta } from './property-panel';
 import { cn } from '@/lib/utils';
 import { CategoryTreeSelect } from '@/components/common/category-tree-select';
@@ -80,8 +81,8 @@ function expandCategoryIdsWithDescendants(tree: BizCategoryItem[], selectedIds: 
 /**
  * 系统管理 · 流程中心：流程定义列表。
  *
- * <p>列出自租户流程定义（含表单白名单与节点数），支持按业务分类 / 名称或编码筛选
- * （点查询才请求；选父含子集）、发布与进入编排。
+ * <p>列出自租户流程定义（含关联表单与节点数），支持按业务分类 / 名称或编码筛选
+ * （点查询才请求；选父含子集）、关联表单、发布与进入编排。
  *
  * <p>分类为「租户通用业务分类」（`biz_category`），独立在系统管理「业务分类」页维护；
  * 本页仅消费分类数据（筛选下拉 + 列表「分类」列解析），不再内嵌分类管理面板。
@@ -102,6 +103,7 @@ export function WorkflowDefinitionPage() {
   const [appliedKeyword, setAppliedKeyword] = useState('');
   const [createOpen, setCreateOpen] = useState(false);
   const [designer, setDesigner] = useState<DesignerState>(CLOSED);
+  const [linkFormsDef, setLinkFormsDef] = useState<WfDefinition | null>(null);
 
   // 业务分类数据（筛选树 + 名称解析）
   const [categoryTree, setCategoryTree] = useState<BizCategoryItem[]>([]);
@@ -212,7 +214,7 @@ export function WorkflowDefinitionPage() {
     <div className="flex h-full flex-col gap-4">
       <PageHeader
         title="流程中心"
-        description="流程定义、画布编排与表单白名单配置"
+        description="流程定义、画布编排与表单关联配置"
         actions={
           <div className="flex items-center gap-2">
             <Button size="sm" variant="outline" onClick={() => void loadDefinitions()}>
@@ -344,6 +346,9 @@ export function WorkflowDefinitionPage() {
                           编排
                         </Button>
                         <PermissionGate permission={PERM_EDIT}>
+                          <Button size="sm" variant="outline" onClick={() => setLinkFormsDef(def)}>
+                            关联表单
+                          </Button>
                           {def.status !== 'ACTIVE' ? (
                             <Button size="sm" disabled={acting === def.id} onClick={() => void onActivate(def)}>
                               {acting === def.id ? '发布中…' : '发布'}
@@ -395,6 +400,17 @@ export function WorkflowDefinitionPage() {
               initialFlowMeta: { ...draft, supportedFormCodes: draft.supportedFormCodes.join(',') },
             })
           }
+        />
+      ) : null}
+      {linkFormsDef ? (
+        <LinkFormsDialog
+          open
+          definition={linkFormsDef}
+          tenantId={TENANT_ID}
+          onOpenChange={(open) => {
+            if (!open) setLinkFormsDef(null);
+          }}
+          onSaved={() => void loadDefinitions()}
         />
       ) : null}
       <DesignerDialog

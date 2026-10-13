@@ -11,6 +11,7 @@ import com.mis.taskflow.domain.repository.WfDefinitionRepository;
 import com.mis.taskflow.domain.repository.WfEdgeRepository;
 import com.mis.taskflow.domain.repository.WfNodeRepository;
 import com.mis.taskflow.dto.CreateDefinitionRequest;
+import com.mis.taskflow.dto.UpdateSupportedFormsRequest;
 import com.mis.taskflow.dto.WfDefinitionDTO;
 import com.mis.taskflow.dto.WfEdgeDTO;
 import com.mis.taskflow.dto.WfNodeDTO;
@@ -51,7 +52,7 @@ public class WfDefinitionService {
     @Transactional
     public Long create(Long tenantId, Long operatorId, CreateDefinitionRequest req) {
         validateNodes(req.nodes());
-        validateSupportedForms(tenantId, req.supportedFormCodes());
+        validateSupportedForms(tenantId, req.supportedFormCodes(), null);
         validateCategory(tenantId, req.categoryId());
         LocalDateTime now = LocalDateTime.now();
         Long defId = IdGenerator.nextId();
@@ -85,7 +86,7 @@ public class WfDefinitionService {
             throw new BusinessException(ResultCode.VALIDATION_ERROR, "仅草稿状态可修改，已发布流程请先取消发布或创建新版本");
         }
         validateNodes(req.nodes());
-        validateSupportedForms(tenantId, req.supportedFormCodes());
+        validateSupportedForms(tenantId, req.supportedFormCodes(), id);
         validateCategory(tenantId, req.categoryId());
         LocalDateTime now = LocalDateTime.now();
         def.setName(req.name().trim());
@@ -140,6 +141,21 @@ public class WfDefinitionService {
             return;
         }
         def.setStatus(WfDefinition.STATUS_DRAFT);
+        def.setUpdatedAt(LocalDateTime.now());
+        definitionRepository.save(def);
+    }
+
+    /**
+     * 仅更新表单关联（白名单）。草稿与已发布均可改，不触碰节点/边。
+     *
+     * <p>强校验：表单须已启用；且同一租户下「一个表单只能关联一个流程」（排除当前定义自身）。
+     */
+    @Transactional
+    public void updateSupportedForms(Long id, Long tenantId, UpdateSupportedFormsRequest req) {
+        WfDefinition def = requireDef(id, tenantId);
+        List<String> codes = req == null ? List.of() : req.supportedFormCodes();
+        validateSupportedForms(tenantId, codes, id);
+        def.setSupportedFormCodes(toArray(codes));
         def.setUpdatedAt(LocalDateTime.now());
         definitionRepository.save(def);
     }
@@ -257,12 +273,16 @@ public class WfDefinitionService {
     }
 
     /**
-     * 白名单强校验：每个 formCode 必须已在 {@code form_definition} 注册、未软删且 {@code status=ENABLED}。
+     * 白名单强校验：每个 formCode 必须已在 {@code form_definition} 注册、未软删且 {@code status=ENABLED}；
+     * 且同一租户下未被其他流程定义占用（一个表单只能关联一个流程）。
+     *
+     * <p>{@code excludeDefinitionId} 为当前正在写入的定义 id（创建时传 {@code null}），
+     * 用于允许「本流程已关联的表单」在更新时保留。
      *
      * <p>这是「后台定义了 formCode 但前端没注册」双保险里的<b>权威层</b>（前端拦截只是提效）。
-     * 绕过前端直调API 也能挡住脏数据。
+     * 绕过前端直调 API 也能挡住脏数据。
      */
-    private void validateSupportedForms(Long tenantId, List<String> codes) {
+    private void validateSupportedForms(Long tenantId, List<String> codes, Long excludeDefinitionId) {
         if (codes == null || codes.isEmpty()) {
             return;
         }
@@ -275,6 +295,13 @@ public class WfDefinitionService {
             if (!enabled.contains(code)) {
                 throw new BusinessException(ResultCode.VALIDATION_ERROR,
                         "表单「" + code + "」未注册或已停用，请先在表单管理中登记并启用");
+            }
+            for (WfDefinition other : definitionRepository.findBySupportedFormCode(tenantId, code)) {
+                if (excludeDefinitionId != null && excludeDefinitionId.equals(other.getId())) {
+                    continue;
+                }
+                throw new BusinessException(ResultCode.VALIDATION_ERROR,
+                        "表单「" + code + "」已关联流程「" + other.getName() + "」，一个表单只能关联一个流程");
             }
         }
     }
@@ -297,6 +324,11 @@ public class WfDefinitionService {
                     && (!StringUtils.hasText(n.assigneeRule()) || "{}".equals(n.assigneeRule().trim()))) {
                 throw new BusinessException(ResultCode.VALIDATION_ERROR,
                         "审批节点「" + n.nodeName() + "」未配置审批人规则");
+            }
+            if (WfNode.TYPE_CC.equalsIgnoreCase(n.nodeType())
+                    && (!StringUtils.hasText(n.assigneeRule()) || "{}".equals(n.assigneeRule().trim()))) {
+                throw new BusinessException(ResultCode.VALIDATION_ERROR,
+                        "抄送节点「" + n.nodeName() + "」未配置抄送人规则");
             }
         }
     }

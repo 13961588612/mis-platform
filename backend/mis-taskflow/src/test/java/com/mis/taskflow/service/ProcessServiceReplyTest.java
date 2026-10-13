@@ -66,7 +66,7 @@ class ProcessServiceReplyTest {
 
     private Long start(String code, String formCode, String bizId, long initiator) {
         return processService.startProcess(TENANT, new StartProcessRequest(
-                code, "PURCHASE_ORDER", bizId, formCode, "{}", initiator, "发起人", null));
+                code, "PURCHASE_ORDER", bizId, formCode, "{}", initiator, "发起人", null, null, "测试标题", null, null));
     }
 
     private Long publishNotify(Long instanceId, long receiver) {

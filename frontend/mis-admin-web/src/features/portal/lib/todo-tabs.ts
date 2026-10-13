@@ -36,6 +36,7 @@ export const TODO_TABS: TodoTabConfig[] = [
   { key: 'approving', label: '审批中', source: 'my', status: 'APPROVING' },
   { key: 'approved', label: '已通过', source: 'my', status: 'APPROVED' },
   { key: 'rejected', label: '已驳回', source: 'my', status: 'REJECTED' },
+  { key: 'cc', label: '抄送我的', source: 'cc' },
   { key: 'mySent', label: '我发起的', source: 'sent' },
   { key: 'myHandled', label: '我审批的', source: 'handled' },
 ];

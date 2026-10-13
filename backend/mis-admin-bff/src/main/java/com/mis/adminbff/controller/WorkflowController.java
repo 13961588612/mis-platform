@@ -1,6 +1,8 @@
 package com.mis.adminbff.controller;
 
 import com.mis.adminbff.client.TaskflowWebClient;
+import com.mis.adminbff.dto.UserView;
+import com.mis.adminbff.service.UserAggregateService;
 import com.mis.adminbff.support.TaskflowIdentity;
 import com.mis.adminbff.client.model.ProcessDetailVO;
 import com.mis.adminbff.client.model.WfDefinitionDTO;
@@ -16,6 +18,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.util.LinkedHashMap;
 import java.util.Map;
 
 /**
@@ -26,9 +29,12 @@ import java.util.Map;
 public class WorkflowController {
 
     private final TaskflowWebClient taskflowWebClient;
+    private final UserAggregateService userAggregateService;
 
-    public WorkflowController(TaskflowWebClient taskflowWebClient) {
+    public WorkflowController(TaskflowWebClient taskflowWebClient,
+                              UserAggregateService userAggregateService) {
         this.taskflowWebClient = taskflowWebClient;
+        this.userAggregateService = userAggregateService;
     }
 
     @PostMapping("/definitions")
@@ -74,6 +80,19 @@ public class WorkflowController {
         return Result.ok();
     }
 
+    /**
+     * 仅更新流程定义的表单关联（草稿/已发布均可）。
+     *
+     * <p>sys_api 95101（V142）绑定菜单 95006。
+     */
+    @PutMapping("/definitions/{id}/supported-forms")
+    public Result<Void> updateSupportedForms(@PathVariable Long id,
+                                             @RequestParam(required = false) Long tenantId,
+                                             @RequestBody Map<String, Object> body) {
+        taskflowWebClient.updateWorkflowSupportedForms(id, TaskflowIdentity.tenantId(tenantId), body);
+        return Result.ok();
+    }
+
     /** 取消发布：ACTIVE → DRAFT。非ACTIVE 幂等。 */
     @PostMapping("/definitions/{id}/deactivate")
     public Result<Void> deactivate(@PathVariable Long id, @RequestParam(required = false) Long tenantId) {
@@ -83,7 +102,21 @@ public class WorkflowController {
 
     @PostMapping("/instances/start")
     public Result<Long> start(@RequestParam(required = false) Long tenantId, @RequestBody Map<String, Object> body) {
-        return Result.ok(taskflowWebClient.startProcess(TaskflowIdentity.tenantId(tenantId), body));
+        Map<String, Object> payload = body == null ? new LinkedHashMap<>() : new LinkedHashMap<>(body);
+        // 门户「发起人（公司）」：启动时把当前用户主组织名写入实例快照（调用方未显式传时兜底）。
+        Object orgObj = payload.get("initiatorOrgName");
+        if (orgObj == null || String.valueOf(orgObj).isBlank()) {
+            Long userId = TaskflowIdentity.userId(null);
+            try {
+                UserView user = userAggregateService.get(userId);
+                if (user.orgName() != null && !user.orgName().isBlank()) {
+                    payload.put("initiatorOrgName", user.orgName());
+                }
+            } catch (Exception ignored) {
+                // 组织解析失败不阻断启动；列表侧公司列可为空。
+            }
+        }
+        return Result.ok(taskflowWebClient.startProcess(TaskflowIdentity.tenantId(tenantId), payload));
     }
 
     @GetMapping("/instances/{id}")
@@ -101,9 +134,10 @@ public class WorkflowController {
                                                         @RequestParam(required = false) String appCode,
                                                         @RequestParam(required = false) String scope,
                                                         @RequestParam(defaultValue = "1") int page,
-                                                        @RequestParam(defaultValue = "20") int size) {
+                                                        @RequestParam(defaultValue = "20") int size,
+                                                        @RequestParam(defaultValue = "false") boolean includeFormData) {
         return Result.ok(taskflowWebClient.myProcesses(TaskflowIdentity.tenantId(tenantId), TaskflowIdentity.userId(initiatorId),
-                status, keyword, appCode, scope, initiatorName, participantName, page, size));
+                status, keyword, appCode, scope, initiatorName, participantName, page, size, includeFormData));
     }
 
     @PostMapping("/tasks/{id}/complete")

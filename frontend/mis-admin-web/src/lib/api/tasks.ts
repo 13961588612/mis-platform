@@ -31,6 +31,10 @@ export interface TaskItem {
    * 门户待办表「平台 / 关联应用」列据此取值：`null` → 「平台」，否则经应用名映射取展示名。
    */
   appCode: string | null;
+  /** 关联流程实例发起人；无实例则 null。 */
+  initiatorName: string | null;
+  /** 发起人所属组织/公司名快照；无则 null。 */
+  initiatorOrgName: string | null;
 }
 
 export interface TaskStats {
@@ -87,6 +91,12 @@ export async function fetchHandledTasks(params: TaskQuery): Promise<PageResult<T
   return unwrap(res, '获取审批记录失败');
 }
 
+/** 抄送我的（仅 taskType=CC，与待办/已办隔离）。 */
+export async function fetchCcTasks(params: TaskQuery): Promise<PageResult<TaskItem>> {
+  const res = await api.get<ApiResult<PageResult<TaskItem>>>('/tasks/cc', { params: buildQuery(params) });
+  return unwrap(res, '获取抄送记录失败');
+}
+
 /**
  * 门户「待办事项 · 全部」聚合行（对齐后端 `PortalMatterVO`，设计 §2.3）。
  *
@@ -104,6 +114,8 @@ export interface PortalMatterItem {
   bizType: string | null;
   appCode: string | null;
   initiatorName: string | null;
+  /** 发起人所属组织/公司名快照；无则 null。 */
+  initiatorOrgName: string | null;
   assigneeName: string | null;
   status: string;
   createdAt: string;

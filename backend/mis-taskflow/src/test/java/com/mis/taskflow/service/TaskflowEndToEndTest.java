@@ -74,7 +74,7 @@ class TaskflowEndToEndTest {
         try {
             // 1. 提交（启动流程）
             instId = processService.startProcess(TENANT, new StartProcessRequest(
-                    code, "PURCHASE_ORDER", bizId, formCode, "{\"amount\":50000}", 100L, "发起人", null));
+                    code, "PURCHASE_ORDER", bizId, formCode, "{\"amount\":50000}", 100L, "发起人", null, null, "测试标题", null, null));
 
             // 2. 生成 wf_task + 用户视角 sys_task
             var wfTasks = wfTaskRepository.findPendingByInstance(instId);

@@ -1,20 +1,15 @@
 /**
- * 「新增流程定义」弹窗（方案 §4.4 / T4.4）。
+ * 「新增流程定义」弹窗。
  *
- * <p>字段：名称 / 编码 / 分类 / 表单多选（+ 可选说明）。
+ * <p>字段：名称 / 编码 / 分类 / 可选说明。表单关联已移至列表「关联表单」弹窗，本弹窗不再选表单。
  *
  * <p>⚠️ **本弹窗不直接调 `POST /workflow/definitions`**：
  * 后端 `CreateDefinitionRequest.nodes` 是 `@NotEmpty`，
  * 且 `WfDefinitionService.validateNodes` 要求「恰好 1 个 START + 至少 1 个 END」。
  * 只填元数据就落库必然 400 ⇒ 弹窗只收集元数据，交给编排 Dialog 画完节点再保存。
- *
- * <p>⚠️ 表单多选**只能选候选项里的**（后端 ENABLED ∧ 前端已实现）。
- * 这一条同时是 §2.4 保险 A「保存时校验 formCode 已注册」的落地点：
- * 下拉里根本不会出现未注册的 code，就不需要在保存时再校验一遍。
  */
-import { useMemo, useState } from 'react';
+import { useState } from 'react';
 import { Button } from '@/components/ui/button';
-import { Checkbox } from '@/components/ui/checkbox';
 import {
   Dialog,
   DialogContent,
@@ -26,7 +21,6 @@ import {
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
-import { missingFormCodes, useFormCatalog } from './form-catalog';
 import { useBizCategoryTree } from './biz-category-catalog';
 import { findCodeConflict, validateDefinitionCode } from './save-error';
 import { CategorySingleTreeSelect } from '@/components/common/category-single-tree-select';
@@ -36,6 +30,7 @@ export interface DefinitionDraft {
   name: string;
   categoryId: number | null;
   description: string;
+  /** 新建时恒为空；关联表单在列表「关联表单」中完成。 */
   supportedFormCodes: string[];
 }
 
@@ -52,7 +47,7 @@ const DESCRIPTION_MAX = 512;
 interface Errors {
   name?: string;
   code?: string;
-  forms?: string;
+  description?: string;
 }
 
 export function DefinitionDialog({
@@ -65,35 +60,17 @@ export function DefinitionDialog({
   const [code, setCode] = useState('');
   const [categoryId, setCategoryId] = useState<number | null>(null);
   const [description, setDescription] = useState('');
-  const [formCodes, setFormCodes] = useState<string[]>([]);
-  const [query, setQuery] = useState('');
   const [errors, setErrors] = useState<Errors>({});
   const [checking, setChecking] = useState(false);
 
-  const { options, loading, notice } = useFormCatalog(tenantId);
   const { tree: categoryTree, loading: catLoading, error: catError } = useBizCategoryTree(tenantId);
-  const missing = missingFormCodes(options, formCodes);
-  const q = query.trim().toLowerCase();
-  const visible = useMemo(
-    () =>
-      options.filter(
-        (o) => !q || o.code.toLowerCase().includes(q) || o.name.toLowerCase().includes(q),
-      ),
-    [options, q],
-  );
 
   function reset() {
     setName('');
     setCode('');
     setCategoryId(null);
     setDescription('');
-    setFormCodes([]);
     setErrors({});
-    setQuery('');
-  }
-
-  function toggleForm(code: string) {
-    setFormCodes((prev) => (prev.includes(code) ? prev.filter((c) => c !== code) : [...prev, code]));
   }
 
   async function handleSubmit() {
@@ -102,9 +79,9 @@ export function DefinitionDialog({
     if (!trimmedName || trimmedName.length > 128) next.name = '请填写流程名称（1-128 字符）';
     const codeError = validateDefinitionCode(code);
     if (codeError) next.code = codeError;
-    if (formCodes.length === 0) next.forms = '请至少选择一个表单';
-    else if (missing.length > 0) next.forms = `${missing.join('、')} 未注册或已停用，请取消勾选`;
-    if (description.trim().length > DESCRIPTION_MAX) next.forms = `说明不能超过 ${DESCRIPTION_MAX} 字符`;
+    if (description.trim().length > DESCRIPTION_MAX) {
+      next.description = `说明不能超过 ${DESCRIPTION_MAX} 字符`;
+    }
     if (Object.keys(next).length > 0) {
       setErrors(next);
       return;
@@ -128,7 +105,7 @@ export function DefinitionDialog({
       name: trimmedName,
       categoryId,
       description: description.trim(),
-      supportedFormCodes: formCodes,
+      supportedFormCodes: [],
     });
     reset();
   }
@@ -144,7 +121,9 @@ export function DefinitionDialog({
       <DialogContent className="sm:max-w-[520px]">
         <DialogHeader>
           <DialogTitle>新增流程定义</DialogTitle>
-          <DialogDescription>先登记流程身份与可用表单，下一步在画布上编排节点。</DialogDescription>
+          <DialogDescription>
+            先登记流程身份，下一步在画布上编排节点；表单请在列表「关联表单」中配置。
+          </DialogDescription>
         </DialogHeader>
 
         <div className="space-y-3">
@@ -185,45 +164,6 @@ export function DefinitionDialog({
             {catError ? <p className="mt-1 text-[11px] text-warning">{catError}</p> : null}
           </div>
 
-          {/*
-            ⚠️ 这里刻意用「可搜索 Checkbox 组」而不是 MultiSelect（Popover + Checkbox）：
-            Radix Popover 嵌在 Radix Dialog 里要靠外部点击/焦点管理才能正常展开，
-            而 §4.4 字段 5 本来写的就是「可搜索多选（Checkbox 组）」。
-          */}
-          <div>
-            <Label className="mb-1 block text-[12px] text-muted-foreground">表单（可多选，至少 1 项）</Label>
-            <Input
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder="搜索表单"
-              className="mb-1.5 h-8"
-              aria-label="搜索表单"
-            />
-            <div className="max-h-40 overflow-auto rounded-md border border-input p-1.5">
-              {loading ? (
-                <p className="px-1 py-2 text-[12px] text-muted-foreground">加载表单清单…</p>
-              ) : visible.length === 0 ? (
-                <p className="px-1 py-2 text-[12px] text-muted-foreground">暂无可选项</p>
-              ) : (
-                visible.map((o) => (
-                  <label
-                    key={o.code}
-                    data-testid="form-option"
-                    className="flex cursor-pointer items-center gap-2 rounded-sm px-1 py-1 text-sm hover:bg-accent"
-                  >
-                    <Checkbox
-                      checked={formCodes.includes(o.code)}
-                      onCheckedChange={() => toggleForm(o.code)}
-                    />
-                    <span className="min-w-0 flex-1 truncate">{o.name}（{o.code}）</span>
-                  </label>
-                ))
-              )}
-            </div>
-            {notice ? <p className="mt-1 text-[11px] text-warning">{notice}</p> : null}
-            {errors.forms ? <p className="mt-1 text-[11px] text-destructive">{errors.forms}</p> : null}
-          </div>
-
           <div>
             <Label className="mb-1 block text-[12px] text-muted-foreground">说明（可选）</Label>
             <Textarea
@@ -233,6 +173,9 @@ export function DefinitionDialog({
               maxLength={DESCRIPTION_MAX}
               aria-label="说明"
             />
+            {errors.description ? (
+              <p className="mt-1 text-[11px] text-destructive">{errors.description}</p>
+            ) : null}
           </div>
         </div>
 
