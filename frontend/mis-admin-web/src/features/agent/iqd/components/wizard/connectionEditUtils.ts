@@ -223,7 +223,7 @@ export function buildCreateRequest(draft: ConnectionDraft): CreateConnectionRequ
     auth_type: draft.authType,
     secret_ref: draft.secretRef.trim() || null,
     project_id: draft.projectId.trim() || null,
-    profile_id: parsePort(draft.profileId),
+    profile_id: parseId(draft.profileId),
     enabled: true,
     db_type: draft.dbType.trim() || null,
     db_host: draft.dbHost.trim() || null,
@@ -238,6 +238,22 @@ export function buildCreateRequest(draft: ConnectionDraft): CreateConnectionRequ
 export function parsePort(value: string): number | null {
   const n = Number.parseInt(value.trim(), 10);
   return Number.isFinite(n) && n > 0 && n < 65536 ? n : null;
+}
+
+/**
+ * 主键 ID 解析（`profile_id` 等）：非正整数 → null。
+ *
+ * <p><b>为什么不复用 {@link parsePort}</b>：`iqd_db_profile.id` 是 BIGINT
+ * （如 `9000000000000001`，14 位），端口校验的 `< 65536` 上界会把它判成非法 →
+ * `profile_id` 被静默丢弃 → 项目永远显示「未绑定连接」。
+ *
+ * <p>上界取 `Number.MAX_SAFE_INTEGER`：超出该值的 ID 经 `JSON.parse` 会舍入丢精度
+ * （见 Flyway V110），此时**宁可返回 null 也不提交被舍入的错值** —— 绑错 profile 会把
+ * 项目接到另一个库的凭证上，比不绑定更危险。
+ */
+export function parseId(value: string): number | null {
+  const n = Number.parseInt(value.trim(), 10);
+  return Number.isSafeInteger(n) && n > 0 ? n : null;
 }
 
 /** 可"留空 = 保留原值"的文本字段（`name` 单独处理；`secret_ref` 单独处理）。 */
@@ -320,7 +336,7 @@ export function buildUpdateRequest(
   assignText(payload, 'auth_type', draft.authType, original.auth_type ?? null);
 
   // ---- profile_id（分层）：非空且与当前不同才提交
-  const profileIdNum = parsePort(draft.profileId);
+  const profileIdNum = parseId(draft.profileId);
   if (profileIdNum != null && profileIdNum !== (original.profile_id ?? null)) {
     payload.profile_id = profileIdNum;
   }

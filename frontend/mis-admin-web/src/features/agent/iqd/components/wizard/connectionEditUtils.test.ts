@@ -30,6 +30,8 @@ import {
   describeConnectionUpdateError,
   EMPTY_DRAFT,
   normalizeTimeout,
+  parseId,
+  parsePort,
   SECRET_PLACEHOLDER,
   type ConnectionDraft,
   type PendingConfirm,
@@ -277,6 +279,65 @@ describe('buildCreateRequest（新建载荷，行为与既有 ensureCreated 逐�
     expect(payload.secret_ref).toBe('vault://x');
     expect(payload.project_id).toBe('p');
     expect(payload.timeout_seconds).toBe(60); // 非法值归一
+  });
+});
+
+/**
+ * `profile_id` 绑定回归（2026-10-13 真机 bug）。
+ *
+ * <p>症状：编辑弹窗选了「数据库连接配置」并保存，列表仍显示「未绑定连接」。
+ * <p>根因：`buildUpdateRequest` / `buildCreateRequest` 错用 `parsePort` 解析 profile ID，
+ * 而 `parsePort` 带端口上界 `< 65536`；profile ID 是 14 位 BIGINT ⇒ 恒判非法 ⇒
+ * `profile_id` 被静默丢弃（后端按「null = 保留原值」处理，绑定永远存不进去）。
+ *
+ * <p>**不报错**：请求照发、后端返回 200，只有绑定的字段悄悄没了。
+ */
+describe('profile_id 绑定（★ 回归：14 位 BIGINT 不得被当成端口）', () => {
+  // 真实量级：V110 把 id 规整到 9000000000000000+ 区间（仍 < 2^53）
+  const REAL_PROFILE_ID = '9000000000000001';
+
+  it('parseId 接受 14 位 BIGINT；parsePort 判其非法（钉住两者差异）', () => {
+    expect(parseId(REAL_PROFILE_ID)).toBe(9000000000000001);
+    // 这条断言固化"为什么不能复用 parsePort"：端口上界会吞掉真实 ID
+    expect(parsePort(REAL_PROFILE_ID)).toBeNull();
+  });
+
+  it('parseId 拒绝非正数 / 非数字 / 超安全整数', () => {
+    expect(parseId('')).toBeNull();
+    expect(parseId('abc')).toBeNull();
+    expect(parseId('0')).toBeNull();
+    expect(parseId('-1')).toBeNull();
+    // 超 MAX_SAFE_INTEGER：宁可 null，也不提交被 JSON.parse 舍入的错值
+    expect(parseId('9007199254740993')).toBeNull();
+  });
+
+  it('★ buildUpdateRequest 在 profile 变化时**必须带上 profile_id**', () => {
+    const payload = buildUpdateRequest(
+      { ...EMPTY_DRAFT, profileId: REAL_PROFILE_ID },
+      connection({ profile_id: null }),
+    );
+    expect(payload.profile_id).toBe(9000000000000001);
+  });
+
+  it('★ buildCreateRequest 新建时也必须带上 profile_id', () => {
+    const payload = buildCreateRequest({ ...EMPTY_DRAFT, profileId: REAL_PROFILE_ID });
+    expect(payload.profile_id).toBe(9000000000000001);
+  });
+
+  it('值未变化 ⇒ 不提交（保持"只传改过的字段"语义）', () => {
+    const payload = buildUpdateRequest(
+      { ...EMPTY_DRAFT, profileId: REAL_PROFILE_ID },
+      connection({ profile_id: 9000000000000001 }),
+    );
+    expect(payload.profile_id).toBeUndefined();
+  });
+
+  it('未选（空串）⇒ 不提交（不误清空既有绑定）', () => {
+    const payload = buildUpdateRequest(
+      { ...EMPTY_DRAFT, profileId: '' },
+      connection({ profile_id: 9000000000000001 }),
+    );
+    expect(payload.profile_id).toBeUndefined();
   });
 });
 
