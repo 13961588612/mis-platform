@@ -5,8 +5,7 @@ import java.time.LocalDateTime;
 /**
  * 业务表单注册项（透传 mis-taskflow 的 FormDefinitionVO）。
  *
- * <p>V133 起分类是表单的属性：{@code categoryId} 软引用 {@code form_category.id}
- * （{@code null}=未分类）。旧的 {@code parentId} / {@code kind} / {@code children} 已移除。
+ * <p>V149：工作流关联字段（NONE/LOCAL/EXTERNAL）一并透传。
  */
 public record FormDefinitionVO(
         String id,
@@ -18,6 +17,10 @@ public record FormDefinitionVO(
         String status,
         Integer sortOrder,
         String config,
+        String workflowBindingType,
+        String workflowDefinitionId,
+        String externalWorkflowSystem,
+        String externalWorkflowRef,
         LocalDateTime createdAt,
         LocalDateTime updatedAt) {
 }

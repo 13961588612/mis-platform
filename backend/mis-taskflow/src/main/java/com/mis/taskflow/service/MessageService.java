@@ -5,8 +5,10 @@ import com.mis.common.core.exception.ResultCode;
 import com.mis.common.core.result.PageResult;
 import com.mis.taskflow.domain.entity.SysMessage;
 import com.mis.taskflow.domain.entity.SysMessageReceiver;
+import com.mis.taskflow.domain.entity.WfTask;
 import com.mis.taskflow.domain.repository.SysMessageReceiverRepository;
 import com.mis.taskflow.domain.repository.SysMessageRepository;
+import com.mis.taskflow.domain.repository.WfTaskRepository;
 import com.mis.taskflow.dto.MarkReadRequest;
 import com.mis.taskflow.dto.MessageDetailVO;
 import com.mis.taskflow.dto.MessageStatsVO;
@@ -44,11 +46,14 @@ public class MessageService {
 
     private final SysMessageRepository messageRepository;
     private final SysMessageReceiverRepository receiverRepository;
+    private final WfTaskRepository wfTaskRepository;
 
     public MessageService(SysMessageRepository messageRepository,
-                          SysMessageReceiverRepository receiverRepository) {
+                          SysMessageReceiverRepository receiverRepository,
+                          WfTaskRepository wfTaskRepository) {
         this.messageRepository = messageRepository;
         this.receiverRepository = receiverRepository;
+        this.wfTaskRepository = wfTaskRepository;
     }
 
     /**
@@ -156,8 +161,9 @@ public class MessageService {
                 : receiverRepository.findByMessageIdInAndUserId(ids, userId).stream()
                         .collect(Collectors.toMap(SysMessageReceiver::getMessageId, Function.identity(), (a, b) -> a));
 
+        Map<Long, Long> taskToInstance = resolveInstanceByReferenceTasks(p.getContent());
         List<MessageVO> list = p.getContent().stream()
-                .map(m -> toVo(m, mine.get(m.getId())))
+                .map(m -> toVo(m, mine.get(m.getId()), effectiveInstanceId(m, taskToInstance)))
                 .toList();
         return PageResult.of(page, pageable.getPageSize(), p.getTotalElements(), list);
     }
@@ -225,8 +231,9 @@ public class MessageService {
                 : receiverRepository.findByMessageIdInAndUserId(ids, userId).stream()
                         .collect(Collectors.toMap(SysMessageReceiver::getMessageId, Function.identity(), (a, b) -> a));
 
+        Map<Long, Long> taskToInstance = resolveInstanceByReferenceTasks(p.getContent());
         List<MessageVO> list = p.getContent().stream()
-                .map(m -> toVo(m, mine.get(m.getId())))
+                .map(m -> toVo(m, mine.get(m.getId()), effectiveInstanceId(m, taskToInstance)))
                 .toList();
         return PageResult.of(page, pageable.getPageSize(), p.getTotalElements(), list);
     }
@@ -242,6 +249,7 @@ public class MessageService {
         List<String> receivers = receiverRepository.findByMessageId(messageId).stream()
                 .map(r -> String.valueOf(r.getUserId()))
                 .toList();
+        Long instanceId = resolveInstanceId(msg);
         return new MessageDetailVO(
                 String.valueOf(msg.getId()),
                 msg.getMsgType(),
@@ -256,8 +264,8 @@ public class MessageService {
                 Boolean.TRUE.equals(mine.getRead()),
                 receivers,
                 msg.getCreatedAt(),
-                nullableId(msg.getInstanceId()),
-                canReply(msg));
+                nullableId(instanceId),
+                canReply(instanceId));
     }
 
     /**
@@ -312,7 +320,7 @@ public class MessageService {
      */
     @Transactional(readOnly = true)
     public Long instanceIdOf(Long messageId) {
-        return requireMessage(messageId).getInstanceId();
+        return resolveInstanceId(requireMessage(messageId));
     }
 
     private SysMessage requireMessage(Long messageId) {
@@ -321,7 +329,7 @@ public class MessageService {
                 .orElseThrow(() -> new BusinessException(ResultCode.NOT_FOUND, "消息不存在"));
     }
 
-    private MessageVO toVo(SysMessage m, SysMessageReceiver mine) {
+    private MessageVO toVo(SysMessage m, SysMessageReceiver mine, Long instanceId) {
         return new MessageVO(
                 String.valueOf(m.getId()),
                 String.valueOf(m.getTenantId()),
@@ -337,19 +345,59 @@ public class MessageService {
                 m.getReadCount(),
                 m.getTotalCount(),
                 m.getCreatedAt(),
-                nullableId(m.getInstanceId()),
-                canReply(m),
+                nullableId(instanceId),
+                canReply(instanceId),
                 m.getAppCode(),
                 m.getBizType());
     }
 
     /**
-     * 可回复判定（服务端权威口径）：仅「通知类 + 已关联流程实例」的消息可回复。
-     *
-     * <p>回复语义锚点是流程审批意见（PR-18），无实例则语义落空，前端据此隐藏入口。
+     * 独立「回复」入口已关闭：流程意见由当前审批人在审批栏填写（同意/驳回 comment）。
+     * {@code canReply} 恒为 false，保留字段以免破坏前端契约。
      */
-    private static boolean canReply(SysMessage m) {
-        return "NOTIFY".equals(m.getMsgType()) && m.getInstanceId() != null;
+    private static boolean canReply(Long instanceId) {
+        return false;
+    }
+
+    /** 消息上的 instance_id；缺省时用 reference_task_id → wf_task 反查（兼容旧数据）。 */
+    private Long resolveInstanceId(SysMessage msg) {
+        if (msg.getInstanceId() != null) {
+            return msg.getInstanceId();
+        }
+        if (msg.getReferenceTaskId() == null) {
+            return null;
+        }
+        return wfTaskRepository.findFirstBySysTaskId(msg.getReferenceTaskId())
+                .map(WfTask::getInstanceId)
+                .orElse(null);
+    }
+
+    private static Long effectiveInstanceId(SysMessage m, Map<Long, Long> taskToInstance) {
+        if (m.getInstanceId() != null) {
+            return m.getInstanceId();
+        }
+        if (m.getReferenceTaskId() == null) {
+            return null;
+        }
+        return taskToInstance.get(m.getReferenceTaskId());
+    }
+
+    private Map<Long, Long> resolveInstanceByReferenceTasks(List<SysMessage> messages) {
+        List<Long> taskIds = messages.stream()
+                .filter(m -> m.getInstanceId() == null && m.getReferenceTaskId() != null)
+                .map(SysMessage::getReferenceTaskId)
+                .distinct()
+                .toList();
+        if (taskIds.isEmpty()) {
+            return Map.of();
+        }
+        Map<Long, Long> map = new java.util.HashMap<>();
+        for (WfTask wt : wfTaskRepository.findBySysTaskIdIn(taskIds)) {
+            if (wt.getSysTaskId() != null && wt.getInstanceId() != null) {
+                map.putIfAbsent(wt.getSysTaskId(), wt.getInstanceId());
+            }
+        }
+        return map;
     }
 
     private static List<Long> dedupe(List<Long> ids) {

@@ -1,6 +1,6 @@
 # 运维与部署文档
 
-> 最后更新：2026-08-05
+> 最后更新：2026-10-14
 
 本目录说明如何在 **本地**、**测试**、**正式** 三类环境中运行 MIS Platform。
 
@@ -31,7 +31,8 @@
 | **[远端基础设施 + 本机代码](remote-infra-local-dev.md)** | PG/Redis/Nacos/MinIO/Embedding/Qdrant/RAGFlow 在远端的初始化与本地配置 |
 | **[混合联调](integration-test.md)** | 容器栈 + IDE 被测服务、集成测试 |
 | **[测试环境部署](test-deploy.md)** | 推送 test 配置、构建镜像、启动与验收 |
-| **[正式环境部署](prod-deploy.md)** | 推送 prod 配置、密钥、发版与回滚 |
+| **[正式环境部署](prod-deploy.md)** | 五机规划（S1–S5）、各机软件与外部版本钉扎、prod 配置/密钥/发版与回滚 |
+| **[Agent Backend 部署](ai-platform-backend-deploy.md)** | ai-platform Backend（Agent Core `:8000`）安装、`.env`、Alembic、Docker/裸机 |
 | [配置管理策略](configuration.md) | Nacos 数据流、Data ID 约定、新服务接入 |
 | [CI/CD](ci-cd.md) | 流水线与质量门禁（规划） |
 | [知识库完整规划](../backend/knowledge-base-app-plan.md) | APP 功能清单、方案 B、mis-kb、RAGFlow Docker 交付 |

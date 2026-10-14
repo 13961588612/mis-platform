@@ -21,13 +21,12 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
-import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * PR-08 / PR-18 消息↔流程实例关联集成测试 —— 真实库，事务回滚。
+ * 消息↔流程实例关联集成测试 —— 真实库，事务回滚。
  *
- * <p>验签：{@code ProcessService.notify} 产生的 NOTIFY 消息 {@code instanceId} 非空、
- * {@code canReply=true}；无实例或非 NOTIFY 的消息 {@code canReply=false}（前端隐藏回复入口的权威口径）。
+ * <p>验签：{@code ProcessService.notify} 产生的 NOTIFY 消息 {@code instanceId} 非空；
+ * 独立「回复」入口已关闭，{@code canReply} 恒为 {@code false}（意见走审批栏）。
  */
 @SpringBootTest
 @Transactional
@@ -67,8 +66,8 @@ class MessageInstanceLinkTest {
     }
 
     @Test
-    @DisplayName("PR-08：审批通过触发 notify，其 NOTIFY 消息 instanceId 非空且 canReply=true")
-    void notifyCarriesInstanceAndIsReplyable() {
+    @DisplayName("PR-08：审批通过触发 notify，其 NOTIFY 消息 instanceId 非空且 canReply=false")
+    void notifyCarriesInstanceAndIsNotFreeReplyable() {
         long approver = 700501L;
         long initiator = 700601L;
         String formCode = "FORM_" + System.nanoTime();
@@ -83,11 +82,11 @@ class MessageInstanceLinkTest {
                 .findFirst()
                 .orElseThrow(() -> new AssertionError("notify 应产生一条 instanceId 指向该实例的 NOTIFY 消息"));
         assertNotNull(vo.instanceId(), "NOTIFY 消息应携带实例线索");
-        assertTrue(vo.canReply(), "有关联实例的 NOTIFY 消息应可回复");
+        assertFalse(vo.canReply(), "独立回复入口已关闭");
     }
 
     @Test
-    @DisplayName("PR-08：驳回触发 notify，其 NOTIFY 消息同样携带 instanceId 且可回复")
+    @DisplayName("PR-08：驳回触发 notify，其 NOTIFY 消息同样携带 instanceId，canReply=false")
     void rejectNotifyCarriesInstance() {
         long approver = 700502L;
         long initiator = 700602L;
@@ -102,11 +101,11 @@ class MessageInstanceLinkTest {
                 .filter(v -> String.valueOf(instId).equals(v.instanceId()))
                 .findFirst()
                 .orElseThrow(() -> new AssertionError("驳回通知应携带实例线索"));
-        assertTrue(vo.canReply(), "有关联实例的驳回通知应可回复");
+        assertFalse(vo.canReply(), "独立回复入口已关闭");
     }
 
     @Test
-    @DisplayName("PR-18：无实例的 NOTIFY 消息 canReply=false、instanceId=null")
+    @DisplayName("无实例的 NOTIFY 消息 canReply=false、instanceId=null")
     void notifyWithoutInstanceNotReplyable() {
         long receiver = 700603L;
         Long msgId = messageService.publish(TENANT, new PublishMessageRequest(
@@ -117,12 +116,12 @@ class MessageInstanceLinkTest {
                 .filter(v -> String.valueOf(msgId).equals(v.id()))
                 .findFirst().orElseThrow();
         assertNull(vo.instanceId(), "无关联实例应为 null");
-        assertFalse(vo.canReply(), "无实例的 NOTIFY 不应可回复");
+        assertFalse(vo.canReply(), "独立回复入口已关闭");
     }
 
     @Test
-    @DisplayName("PR-18：非 NOTIFY 消息即使带 instanceId 也 canReply=false（口径：msgType=='NOTIFY'）")
-    void nonNotifyNotReplyable() {
+    @DisplayName("带 instanceId 的 APPROVAL 消息 canReply 仍为 false")
+    void approvalWithInstanceNotFreeReplyable() {
         long receiver = 700604L;
         Long msgId = messageService.publish(TENANT, new PublishMessageRequest(
                 "APPROVAL", "TASK", "待办提醒", "summary", null, null,
@@ -132,12 +131,12 @@ class MessageInstanceLinkTest {
                 .filter(v -> String.valueOf(msgId).equals(v.id()))
                 .findFirst().orElseThrow();
         assertNotNull(vo.instanceId(), "实例线索应保留");
-        assertFalse(vo.canReply(), "非 NOTIFY 消息不可回复");
+        assertFalse(vo.canReply(), "独立回复入口已关闭");
     }
 
     @Test
-    @DisplayName("PR-08：消息详情同样透出 instanceId / canReply")
-    void detailExposesInstanceIdAndCanReply() {
+    @DisplayName("消息详情同样透出 instanceId，canReply=false")
+    void detailExposesInstanceIdAndCanReplyFalse() {
         long receiver = 700605L;
         Long msgId = messageService.publish(TENANT, new PublishMessageRequest(
                 "NOTIFY", "TASK", "流程通知", "summary", null, null,
@@ -145,6 +144,6 @@ class MessageInstanceLinkTest {
 
         var detail = messageService.detail(msgId, receiver);
         assertEquals("700000002", detail.instanceId(), "详情应透出 instanceId");
-        assertTrue(detail.canReply(), "详情 canReply 应与列表一致");
+        assertFalse(detail.canReply(), "详情 canReply 恒为 false");
     }
 }

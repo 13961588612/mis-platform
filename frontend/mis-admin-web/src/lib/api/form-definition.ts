@@ -17,6 +17,9 @@ import type { ApiResult } from '@/types/api';
 export const FORM_STATUS_ENABLED = 'ENABLED';
 export const FORM_STATUS_DISABLED = 'DISABLED';
 
+/** 工作流关联：纯表单 / 本地流程 / 外部工作流。 */
+export type WorkflowBindingType = 'NONE' | 'LOCAL' | 'EXTERNAL';
+
 export interface FormDefinitionItem {
   id: string;
   tenantId: string;
@@ -30,6 +33,12 @@ export interface FormDefinitionItem {
   status: string;
   sortOrder: number | null;
   config: string | null;
+  /** V149：NONE / LOCAL / EXTERNAL。 */
+  workflowBindingType?: WorkflowBindingType | string | null;
+  /** LOCAL 时本地流程定义 id。 */
+  workflowDefinitionId?: string | null;
+  externalWorkflowSystem?: string | null;
+  externalWorkflowRef?: string | null;
   createdAt: string | null;
   updatedAt: string | null;
 }
@@ -87,6 +96,10 @@ export interface UpsertFormDefinitionRequest {
   status: 'ENABLED' | 'DISABLED';
   sortOrder: number | null;
   config: string | null;
+  workflowBindingType: WorkflowBindingType;
+  workflowDefinitionId: number | null;
+  externalWorkflowSystem: string | null;
+  externalWorkflowRef: string | null;
 }
 
 /** 编码正则：以大写字母开头，仅含大写字母/数字/下划线，长度 2-64。大小写敏感。 */

@@ -114,14 +114,17 @@ export function MessageBoard({ tenantId, userId }: MessageBoardProps) {
       )}
 
       {/*
-        右侧划入抽屉（UI 精修轮新增）。`Sheet` 是独立浮层层（portal），与首页
-        `overflow-auto` 容器互不影响；抽屉内容体是唯一滚动容器，内嵌 FormShell
-        不再加 overflow-auto —— 单层滚动红线保持不变。
+        右侧划入抽屉。`Sheet` 是独立浮层层（portal）；内容体是唯一滚动容器，
+        关联流程时内嵌 ProcessShell(embedded) 不再加 overflow-auto。
       */}
       <MessageDetailDrawer
         open={drawerOpen}
         onOpenChange={setDrawerOpen}
         messageId={drawerMessageId}
+        onDone={() => {
+          setDrawerOpen(false);
+          void load();
+        }}
       />
     </section>
   );

@@ -24,13 +24,13 @@ export interface MessageItem {
   totalCount: number;
   createdAt: string;
   /**
-   * 关联流程实例 ID（无关联时为 `null`）。由 V134 新增列 `sys_message.instance_id` 透出。
-   * 门户消息抽屉据此判定「流程通知形态」（展示只读表单 + 回复区）还是「普通消息形态」。
+   * 关联流程实例 ID（无关联时为 `null`）。缺省时后端可由 `reference_task_id → wf_task` 反查。
+   * 门户消息抽屉：有值 → 嵌入 ProcessShell；无值 → 普通正文（无独立回复）。
    */
   instanceId: string | null;
   /**
-   * 是否可回复（后端口径：`msgType==='NOTIFY' && instanceId!=null`）。
-   * 前端**仅据此**控制回复入口显隐，不自行推断（避免与后端口径漂移）。
+   * 独立「回复」入口已关闭（后端恒 `false`）。流程意见由当前审批人在 ProcessShell 审批栏填写。
+   * 字段保留以免破坏契约。
    */
   canReply: boolean;
   /**

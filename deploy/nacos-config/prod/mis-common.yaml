@@ -1,14 +1,17 @@
-# Shared config for all services (datasource, Redis, JWT public key, etc.)
+# Shared config for all services (prod bare-metal S1–S5).
+# Topology in Nacos; secrets: set real values in Nacos console after push (or env override).
+# Do NOT commit real production passwords to Git.
 
 spring:
   datasource:
-    url: "jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:mis_platform}?tcpKeepAlive=true&ApplicationName=${spring.application.name}&loginTimeout=10"
-    username: ${DB_USER:mis}
-    password: ${DB_PASSWORD:mis123}
+    url: "jdbc:postgresql://10.254.26.36:5432/mis_platform?tcpKeepAlive=true&ApplicationName=${spring.application.name}&loginTimeout=10"
+    username: mis
+    # Fill in Nacos console after push, or export DB_PASSWORD on host
+    password: ${DB_PASSWORD:}
     driver-class-name: org.postgresql.Driver
     hikari:
-      maximum-pool-size: ${DB_POOL_SIZE:5}
-      minimum-idle: ${DB_POOL_MIN_IDLE:1}
+      maximum-pool-size: 10
+      minimum-idle: 2
       connection-timeout: 25000
       idle-timeout: 600000
       max-lifetime: 1800000
@@ -17,9 +20,10 @@ spring:
       validation-timeout: 5000
   data:
     redis:
-      host: ${REDIS_HOST:localhost}
-      port: ${REDIS_PORT:6379}
+      host: 10.254.26.36
+      port: 6379
       database: 0
+      # password: ${REDIS_PASSWORD:}   # enable if Redis AUTH is on
   jpa:
     open-in-view: false
     hibernate:
@@ -33,4 +37,5 @@ spring:
 mis:
   security:
     jwt:
-      public-key-path: ${JWT_PUBLIC_KEY_PATH:/etc/mis/keys/public.pem}
+      # Shared key dir on every app host
+      public-key-path: /usr/local/app/keys/public.pem

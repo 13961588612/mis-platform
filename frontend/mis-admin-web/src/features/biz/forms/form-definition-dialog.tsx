@@ -19,7 +19,9 @@ import {
   FORM_STATUS_DISABLED,
   type FormDefinitionItem,
   type UpsertFormDefinitionRequest,
+  type WorkflowBindingType,
 } from '@/lib/api/form-definition';
+import type { WfDefinition } from '@/lib/api/workflow';
 import { hasFormLoader, listFormLoaderCodes, loadFormEntry } from './forms/form-loaders';
 import { resolveForm } from './registry';
 import type { FormFieldSchema } from './types';
@@ -37,6 +39,8 @@ export interface FormDefinitionDialogProps {
   initial: FormDefinitionItem | null;
   /** 业务分类树（嵌套 children，来自 biz_category）。空选 = 未分类（categoryId: null）。 */
   categoryTree: CategoryTreeNode[];
+  /** 本地流程定义候选（LOCAL 绑定时选择）。 */
+  workflowDefinitions: WfDefinition[];
   tenantId: string;
   operatorId: string;
   onSaved: () => void;
@@ -57,8 +61,8 @@ function treeHasId(nodes: CategoryTreeNode[], target: string): boolean {
 /**
  * 表单定义「新增 / 编辑」对话框（仅表单；分类独立为 `form_category`）。
  *
- * <p>字段：code（下拉选已注册组件）、name、categoryId（分类下拉，可空 = 未分类）、
- * status（ENABLED/DISABLED）、sortOrder（number）、description。
+ * <p>V149：工作流关联写在 {@code form_definition}（NONE / LOCAL / EXTERNAL）；
+ * 流程定义侧仅反查。LOCAL 须启用表单并选择本地流程定义。
  *
  * <p>⚠️ `code` 仍从 `listFormLoaderCodes()` 选择。若 `initial.code` 不在候选里
  * （如种子数据 `PURCHASE_APPROVAL_DEMO`），保留一条红色「未关联组件：<code>」
@@ -69,6 +73,7 @@ export function FormDefinitionDialog({
   onOpenChange,
   initial,
   categoryTree,
+  workflowDefinitions,
   tenantId,
   operatorId,
   onSaved,
@@ -82,11 +87,16 @@ export function FormDefinitionDialog({
   const [sortOrder, setSortOrder] = useState('');
   const [titleField, setTitleField] = useState('');
   const [titleFieldOptions, setTitleFieldOptions] = useState<FormFieldSchema[]>([]);
+  const [bindingType, setBindingType] = useState<WorkflowBindingType>('NONE');
+  const [workflowDefId, setWorkflowDefId] = useState('');
+  const [externalSystem, setExternalSystem] = useState('');
+  const [externalRef, setExternalRef] = useState('');
   const [codeError, setCodeError] = useState<string | null>(null);
   const [nameError, setNameError] = useState<string | null>(null);
+  const [workflowError, setWorkflowError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
-  // 每次打开时根据 initial 重置表单。
+  // 每次打开时根据 initial 重置表单，并回填工作流关联。
   useEffect(() => {
     if (!open) return;
     if (initial) {
@@ -97,6 +107,11 @@ export function FormDefinitionDialog({
       setStatus(initial.status === FORM_STATUS_DISABLED ? FORM_STATUS_DISABLED : FORM_STATUS_ENABLED);
       setSortOrder(initial.sortOrder == null ? '' : String(initial.sortOrder));
       setTitleField(readConfigTitleField(initial.config) ?? '');
+      const bt = (initial.workflowBindingType ?? 'NONE').toUpperCase() as WorkflowBindingType;
+      setBindingType(bt === 'LOCAL' || bt === 'EXTERNAL' ? bt : 'NONE');
+      setWorkflowDefId(initial.workflowDefinitionId ?? '');
+      setExternalSystem(initial.externalWorkflowSystem ?? '');
+      setExternalRef(initial.externalWorkflowRef ?? '');
     } else {
       setCode('');
       setName('');
@@ -105,10 +120,15 @@ export function FormDefinitionDialog({
       setStatus(FORM_STATUS_ENABLED);
       setSortOrder('');
       setTitleField('');
+      setBindingType('NONE');
+      setWorkflowDefId('');
+      setExternalSystem('');
+      setExternalRef('');
     }
     setTitleFieldOptions([]);
     setCodeError(null);
     setNameError(null);
+    setWorkflowError(null);
   }, [open, initial]);
 
   // 选中表单组件后加载字段 schema，供「标题字段」下拉。
@@ -145,12 +165,22 @@ export function FormDefinitionDialog({
 
   async function handleSubmit() {
     const trimmedName = name.trim();
-    // 必须选一个已注册组件（含历史游离 code 的情况）。
     const cErr = !code || !hasFormLoader(code) ? CODE_ERROR : null;
     const nErr = trimmedName.length === 0 ? NAME_ERROR : null;
+    const enabled = status !== FORM_STATUS_DISABLED;
+    let wErr: string | null = null;
+    if (bindingType === 'LOCAL') {
+      if (!enabled) wErr = '关联本地流程前请先将表单设为启用';
+      else if (!workflowDefId.trim()) wErr = '请选择本地流程定义';
+    } else if (bindingType === 'EXTERNAL') {
+      if (!externalSystem.trim() || !externalRef.trim()) {
+        wErr = '请填写外部工作流系统与流程标识';
+      }
+    }
     setCodeError(cErr);
     setNameError(nErr);
-    if (cErr || nErr) return;
+    setWorkflowError(wErr);
+    if (cErr || nErr || wErr) return;
 
     const baseConfig = isEdit && initial ? initial.config : '{}';
     const body: UpsertFormDefinitionRequest = {
@@ -161,17 +191,22 @@ export function FormDefinitionDialog({
       status: status === FORM_STATUS_DISABLED ? FORM_STATUS_DISABLED : FORM_STATUS_ENABLED,
       sortOrder: sortOrder.trim().length === 0 ? null : Number(sortOrder),
       config: withConfigTitleField(baseConfig, titleField || null),
+      workflowBindingType: bindingType,
+      workflowDefinitionId:
+        bindingType === 'LOCAL' && workflowDefId.trim() ? Number(workflowDefId) : null,
+      externalWorkflowSystem:
+        bindingType === 'EXTERNAL' ? externalSystem.trim() : null,
+      externalWorkflowRef: bindingType === 'EXTERNAL' ? externalRef.trim() : null,
     };
 
     setSaving(true);
     try {
       if (isEdit && initial) {
         await updateFormDefinition(initial.id, tenantId, body);
-        toast.success('已更新表单定义');
       } else {
         await createFormDefinition(tenantId, operatorId, body);
-        toast.success('已创建表单定义');
       }
+      toast.success(isEdit ? '已更新表单定义' : '已创建表单定义');
       onSaved();
       onOpenChange(false);
     } catch (e) {
@@ -298,6 +333,72 @@ export function FormDefinitionDialog({
                 placeholder="0"
               />
             </div>
+          </div>
+
+          <div className="space-y-1.5">
+            <label htmlFor="fd-binding" className="block text-sm font-medium text-foreground">
+              工作流关联
+            </label>
+            <select
+              id="fd-binding"
+              aria-label="工作流关联"
+              value={bindingType}
+              onChange={(e) => {
+                setBindingType(e.target.value as WorkflowBindingType);
+                if (workflowError) setWorkflowError(null);
+              }}
+              className={cn(
+                'h-8 w-full rounded-md border border-input bg-background px-2 text-sm',
+                workflowError && 'border-destructive focus-visible:ring-destructive',
+              )}
+            >
+              <option value="NONE">纯表单（不关联工作流）</option>
+              <option value="LOCAL">关联本地流程</option>
+              <option value="EXTERNAL">关联外部工作流</option>
+            </select>
+            {bindingType === 'LOCAL' ? (
+              <select
+                id="fd-workflow"
+                aria-label="本地流程定义"
+                value={workflowDefId}
+                onChange={(e) => {
+                  setWorkflowDefId(e.target.value);
+                  if (workflowError) setWorkflowError(null);
+                }}
+                className="h-8 w-full rounded-md border border-input bg-background px-2 text-sm"
+              >
+                <option value="">选择本地流程定义</option>
+                {workflowDefinitions.map((d) => (
+                  <option key={d.id} value={d.id}>
+                    {d.name}（{d.code}）
+                    {d.status === 'ACTIVE' ? '' : ` · ${d.status === 'DRAFT' ? '草稿' : d.status}`}
+                  </option>
+                ))}
+              </select>
+            ) : null}
+            {bindingType === 'EXTERNAL' ? (
+              <div className="grid grid-cols-2 gap-2">
+                <Input
+                  aria-label="外部工作流系统"
+                  value={externalSystem}
+                  onChange={(e) => setExternalSystem(e.target.value)}
+                  placeholder="外部系统编码"
+                />
+                <Input
+                  aria-label="外部工作流标识"
+                  value={externalRef}
+                  onChange={(e) => setExternalRef(e.target.value)}
+                  placeholder="外部流程标识"
+                />
+              </div>
+            ) : null}
+            {workflowError ? (
+              <p className="text-xs text-destructive">{workflowError}</p>
+            ) : (
+              <p className="text-xs text-muted-foreground">
+                关联写在表单定义上；流程中心仅可查看。一个表单只能选一种形态。
+              </p>
+            )}
           </div>
 
           <div className="space-y-1.5">

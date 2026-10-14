@@ -10,6 +10,8 @@
 |------|------|------|
 | 1 | [docs/README.md](README.md) | 文档中心索引与状态 |
 | 2 | [project/decisions.md](project/decisions.md) | 已确认的全局技术决策 |
+| 2b | [project/decisions-portal-todo-message.md](project/decisions-portal-todo-message.md) | 门户待办事项 / 消息中心产品决策纪要 |
+| 2c | [project/decisions-form-workflow.md](project/decisions-form-workflow.md) | 表单 · 流程（工作流）产品与架构决策纪要 |
 | 3 | [project/conventions.md](project/conventions.md) | 编码规范与命名约定 |
 | 4 | [architecture/01-overview.md](architecture/01-overview.md) | 项目目标与范围 |
 | 5 | [architecture/02-system-architecture.md](architecture/02-system-architecture.md) | 分层、服务拓扑、仓库结构 |

@@ -55,9 +55,11 @@ Data ID **不带 `.yaml`** 扩展名。
 | **mis-admin-bff** | `server.port`、下游 `mis.bff.*-base-url` + discovery 开关、`aggregate-timeout-ms`、`api-permission.*`、`mis.ai-platform.*`（非密钥）、`mis.agent-ops.*`（含 `chat-timeout-ms`）、`mis.mcp.servers` | `service-token` / `MIS_JWT_PUBLIC_KEY` / 默认密码等密钥类 |
 
 原则：
-1. **端口、路由、下游地址、超时、功能开关** → Nacos
-2. **密钥、私钥/公钥路径、默认口令** → 环境变量 / Secret，Nacos 里只写 `${VAR}` 占位
-3. **本机纯 local**：显式 `MIS_REMOTE=false`，仍用各模块 `application.yml`；不设该变量时**默认连 Nacos**（`${MIS_REMOTE:true}`）
+1. **端口、路由、下游地址、超时、功能开关、生产拓扑（主机 IP）** → Nacos（尽量多放，少靠本机 env）
+2. **密钥类**（DB 密码、共享 token、默认口令）→ 优先 **推送后在 Nacos 控制台填写**；Git 源文件只留 `${VAR:}` 占位，禁止把真实生产密钥提交仓库。本机 env 仅作覆盖兜底
+3. **公钥/私钥路径**（非密钥内容）→ 可写进 Nacos（如 `/usr/local/app/keys/*.pem`）
+4. **本机仍须 env 的只有**：连上 Nacos 本身（`MIS_REMOTE` / `NACOS_SERVER` / `NACOS_NAMESPACE`）+ 外置 `logging.config` 路径
+5. **本机纯 local**：显式 `MIS_REMOTE=false`，仍用各模块 `application.yml`；不设该变量时**默认连 Nacos**（`${MIS_REMOTE:true}`）
 
 ### 推送
 

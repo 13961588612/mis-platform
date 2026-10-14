@@ -17,6 +17,7 @@ import { MemoryRouter } from 'react-router-dom';
 import { FormDefinitionManagePage } from './form-definition-manage-page';
 import * as formApi from '@/lib/api/form-definition';
 import * as bizCategoryApi from '@/lib/api/biz-category';
+import * as workflowApi from '@/lib/api/workflow';
 import type { FormDefinitionItem } from '@/lib/api/form-definition';
 import type { BizCategoryItem } from '@/lib/api/biz-category';
 
@@ -42,6 +43,15 @@ vi.mock('@/lib/api/biz-category', async (importOriginal) => {
     createBizCategory: vi.fn(),
     updateBizCategory: vi.fn(),
     deleteBizCategory: vi.fn(),
+  };
+});
+
+vi.mock('@/lib/api/workflow', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/api/workflow')>();
+  return {
+    ...actual,
+    fetchDefinitions: vi.fn(),
+    updateSupportedForms: vi.fn(),
   };
 });
 
@@ -91,6 +101,10 @@ const formList: FormDefinitionItem[] = [
     status: 'ENABLED',
     sortOrder: 0,
     config: null,
+    workflowBindingType: 'LOCAL',
+    workflowDefinitionId: '100',
+    externalWorkflowSystem: null,
+    externalWorkflowRef: null,
     createdAt: null,
     updatedAt: null,
   },
@@ -104,6 +118,10 @@ const formList: FormDefinitionItem[] = [
     status: 'ENABLED',
     sortOrder: 1,
     config: null,
+    workflowBindingType: 'NONE',
+    workflowDefinitionId: null,
+    externalWorkflowSystem: null,
+    externalWorkflowRef: null,
     createdAt: null,
     updatedAt: null,
   },
@@ -114,6 +132,32 @@ describe('FormDefinitionManagePage', () => {
     vi.mocked(formApi.fetchFormDefinitions).mockResolvedValue(formList);
     vi.mocked(bizCategoryApi.fetchBizCategoryTree).mockResolvedValue(categoryTree);
     vi.mocked(bizCategoryApi.fetchBizCategories).mockResolvedValue(categoryList);
+    vi.mocked(workflowApi.fetchDefinitions).mockResolvedValue({
+      page: 1,
+      size: 200,
+      total: 1,
+      list: [
+        {
+          id: '100',
+          tenantId: '1',
+          code: 'PUR_APPROVAL',
+          name: '采购审批流',
+          category: '',
+          categoryId: null,
+          description: null,
+          version: 1,
+          status: 'ACTIVE',
+          supportedFormCodes: ['PUR_FORM'],
+          formSchema: null,
+          config: '{}',
+          nodes: [],
+          edges: null,
+          createdAt: '',
+          updatedAt: '',
+        },
+      ],
+    });
+    vi.mocked(workflowApi.updateSupportedForms).mockResolvedValue(undefined);
   });
 
   afterEach(() => {
@@ -139,25 +183,30 @@ describe('FormDefinitionManagePage', () => {
     expect(screen.getByText('未分类', { selector: 'td' })).toBeTruthy();
   });
 
-  it('「新增表单」对话框的 code 是下拉选已注册组件，且分类为下拉树', async () => {
+  it('「新增表单」对话框含组件下拉、分类触发器与工作流关联', async () => {
     render(
       <MemoryRouter>
         <FormDefinitionManagePage />
       </MemoryRouter>,
     );
+    expect(await screen.findByText('采购审批流', { selector: 'td' })).toBeTruthy();
+    expect(screen.getByText('关联流程', { selector: 'th' })).toBeTruthy();
+
     fireEvent.click(await screen.findByRole('button', { name: '新增表单' }));
     expect(await screen.findByText('新增表单定义')).toBeTruthy();
-    // code 字段是「表单组件」下拉，候选含已注册组件 PUR_FORM
     const select = screen.getByLabelText('表单组件') as HTMLSelectElement;
     expect(select.tagName).toBe('SELECT');
     expect(screen.getByRole('option', { name: 'PUR_FORM' })).toBeTruthy();
-    // 分类字段是下拉树触发器（按钮，不再是原生 <select>），未选显示占位「未分类」
     const categoryTrigger = screen.getByLabelText('分类') as HTMLButtonElement;
     expect(categoryTrigger.tagName).toBe('BUTTON');
     expect(categoryTrigger.textContent).toContain('未分类');
-    // 展开后可见分类树节点（父子层级）
-    fireEvent.click(categoryTrigger);
-    expect(await screen.findByRole('button', { name: '根分类' })).toBeTruthy();
+    const binding = screen.getByLabelText('工作流关联') as HTMLSelectElement;
+    expect(binding.value).toBe('NONE');
+    fireEvent.change(binding, { target: { value: 'LOCAL' } });
+    const wfSelect = screen.getByLabelText('本地流程定义') as HTMLSelectElement;
+    expect(Array.from(wfSelect.options).some((o) => o.textContent?.includes('采购审批流'))).toBe(
+      true,
+    );
   });
 
   it('code 未关联前端组件的行标红并带「未关联组件」徽标', async () => {

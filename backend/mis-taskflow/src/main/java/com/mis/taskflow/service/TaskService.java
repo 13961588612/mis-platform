@@ -94,11 +94,11 @@ public class TaskService {
         taskRepository.save(task);
 
         if (StringUtils.hasText(req.notifyTitle())) {
-            // M2：关联通知**继承同一任务**的 app_code，保证任务与通知同源，绝不各自推导。
+            // M2：关联通知**继承同一任务**的 app_code；instanceId 供消息抽屉打开流程/表单。
             PublishMessageRequest msg = new PublishMessageRequest(
                     "APPROVAL", "TASK", req.notifyTitle().trim(), trimToNull(req.notifySummary()),
-                    null, null, operatorId, null, List.of(req.assigneeId()), taskId, null, appCode,
-                    trimToNull(req.bizType()));
+                    null, null, operatorId, null, List.of(req.assigneeId()), taskId, req.instanceId(),
+                    appCode, trimToNull(req.bizType()));
             messageService.publish(tenantId, msg);
         }
 

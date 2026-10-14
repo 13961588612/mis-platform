@@ -47,6 +47,7 @@ agent/ai-platform/configs/.runtime/
 deploy/nacos/runtime/
 deploy/nacos/_last-boot.txt
 deploy/nacos/plugins/
+deploy/nacos/nacos-server-*.zip
 
 # 运行时日志目录（后台服务持续写入，物理清理需先停服务）
 /backend/logs/

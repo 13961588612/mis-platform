@@ -9,15 +9,18 @@
 | 业务 Client | SCA 引入的 2.3.2 | 跑在业务进程的 JDK 17 内，协议连 Server |
 
 > 兼容指 **协议/大版本**（Client 2.3.x ↔ Server 2.3.x），不是「必须塞进同一个 JVM」。  
-> Server 用 JDK 17 跑 2.3.2 发行包（Java 8 字节码可在 17 上运行）；PG 插件须为 **Java 17** 编译（`0.0.7`）。
+> Server 用 JDK 17 跑 2.3.2 发行包；PG 插件须与 Server 对齐：**2.3.2 → `0.0.3`**（`0.0.7` 仅 Nacos 3.x，混用会 `ConfigInfoGrayMapper`）。
 
 镜像：`mis-nacos:2.3.2-jdk17`（`deploy/nacos/Dockerfile`）。
+
+> **构建不拉 GitHub：** 先把 `nacos-server-2.3.2.zip` 放到 `deploy/nacos/`（gitignore），Dockerfile 只 `COPY` 本地 zip。
 
 ## 文件
 
 | 文件 | 用途 |
 |------|------|
-| `Dockerfile` / `docker-entrypoint.sh` | JDK 17 自建镜像 |
+| `Dockerfile` / `docker-entrypoint.sh` | JDK 17 自建镜像（COPY 本地 zip） |
+| `nacos-server-*.zip` | 官方发行包（构建前放入，不入库） |
 | `nacos-standalone-embedded.env` | 本地默认（内嵌） |
 | `nacos-standalone-pg.env` | PG 外置环境变量 |
 | `server/application.properties` | 容器内 PG（主机名 `postgres`） |

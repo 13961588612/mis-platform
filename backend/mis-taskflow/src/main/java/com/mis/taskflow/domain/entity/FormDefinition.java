@@ -30,6 +30,13 @@ public class FormDefinition {
     public static final String STATUS_ENABLED = "ENABLED";
     public static final String STATUS_DISABLED = "DISABLED";
 
+    /** 纯表单，未关联任何工作流。 */
+    public static final String BINDING_NONE = "NONE";
+    /** 关联本地 {@code wf_definition}。 */
+    public static final String BINDING_LOCAL = "LOCAL";
+    /** 关联外部工作流系统（运行时对接后续迭代）。 */
+    public static final String BINDING_EXTERNAL = "EXTERNAL";
+
     @Id
     private Long id;
 
@@ -62,6 +69,25 @@ public class FormDefinition {
     @Column(columnDefinition = "jsonb", nullable = false)
     private String config = "{}";
 
+    /**
+     * 工作流关联类型：{@link #BINDING_NONE} / {@link #BINDING_LOCAL} / {@link #BINDING_EXTERNAL}。
+     * 真相源在本表；{@code wf_definition.supported_form_codes} 已软废弃。
+     */
+    @Column(name = "workflow_binding_type", nullable = false, length = 16)
+    private String workflowBindingType = BINDING_NONE;
+
+    /** LOCAL 时软引用 {@code wf_definition.id}；其它类型必须为 null。 */
+    @Column(name = "workflow_definition_id")
+    private Long workflowDefinitionId;
+
+    /** EXTERNAL 时外部系统编码。 */
+    @Column(name = "external_workflow_system", length = 64)
+    private String externalWorkflowSystem;
+
+    /** EXTERNAL 时外部流程标识。 */
+    @Column(name = "external_workflow_ref", length = 256)
+    private String externalWorkflowRef;
+
     @Column(nullable = false)
     private Integer deleted = 0;
 
@@ -92,6 +118,14 @@ public class FormDefinition {
     public void setSortOrder(Integer sortOrder) { this.sortOrder = sortOrder; }
     public String getConfig() { return config; }
     public void setConfig(String config) { this.config = config; }
+    public String getWorkflowBindingType() { return workflowBindingType; }
+    public void setWorkflowBindingType(String workflowBindingType) { this.workflowBindingType = workflowBindingType; }
+    public Long getWorkflowDefinitionId() { return workflowDefinitionId; }
+    public void setWorkflowDefinitionId(Long workflowDefinitionId) { this.workflowDefinitionId = workflowDefinitionId; }
+    public String getExternalWorkflowSystem() { return externalWorkflowSystem; }
+    public void setExternalWorkflowSystem(String externalWorkflowSystem) { this.externalWorkflowSystem = externalWorkflowSystem; }
+    public String getExternalWorkflowRef() { return externalWorkflowRef; }
+    public void setExternalWorkflowRef(String externalWorkflowRef) { this.externalWorkflowRef = externalWorkflowRef; }
     public Integer getDeleted() { return deleted; }
     public void setDeleted(Integer deleted) { this.deleted = deleted; }
     public Long getCreatedBy() { return createdBy; }

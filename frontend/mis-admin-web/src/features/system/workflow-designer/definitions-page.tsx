@@ -347,7 +347,7 @@ export function WorkflowDefinitionPage() {
                         </Button>
                         <PermissionGate permission={PERM_EDIT}>
                           <Button size="sm" variant="outline" onClick={() => setLinkFormsDef(def)}>
-                            关联表单
+                            查看关联表单
                           </Button>
                           {def.status !== 'ACTIVE' ? (
                             <Button size="sm" disabled={acting === def.id} onClick={() => void onActivate(def)}>

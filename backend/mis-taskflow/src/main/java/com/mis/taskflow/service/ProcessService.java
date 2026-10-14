@@ -41,7 +41,6 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
 import java.time.LocalDateTime;
-import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
 
@@ -79,6 +78,7 @@ public class ProcessService {
     private final WfTaskRepository wfTaskRepository;
     private final WfHistoryRepository historyRepository;
     private final FormDefinitionRepository formDefinitionRepository;
+    private final FormDefinitionService formDefinitionService;
     private final AssignmentResolver assignmentResolver;
     private final TaskService taskService;
     private final MessageService messageService;
@@ -91,6 +91,7 @@ public class ProcessService {
                           WfTaskRepository wfTaskRepository,
                           WfHistoryRepository historyRepository,
                           FormDefinitionRepository formDefinitionRepository,
+                          FormDefinitionService formDefinitionService,
                           AssignmentResolver assignmentResolver,
                           TaskService taskService,
                           MessageService messageService,
@@ -102,6 +103,7 @@ public class ProcessService {
         this.wfTaskRepository = wfTaskRepository;
         this.historyRepository = historyRepository;
         this.formDefinitionRepository = formDefinitionRepository;
+        this.formDefinitionService = formDefinitionService;
         this.assignmentResolver = assignmentResolver;
         this.taskService = taskService;
         this.messageService = messageService;
@@ -494,7 +496,8 @@ public class ProcessService {
                             "{\"wfInstanceId\":" + instance.getId() + ",\"wfNode\":\"" + node.getNodeCode() + "\"}",
                             "待处理：" + node.getNodeName(),
                             "请及时处理 " + instance.getBusinessId(),
-                            appCode));
+                            appCode,
+                            instance.getId()));
 
             WfTask wfTask = new WfTask();
             wfTask.setId(IdGenerator.nextId());
@@ -560,7 +563,8 @@ public class ProcessService {
                                     + "\",\"taskKind\":\"CC\"}",
                             "抄送：" + node.getNodeName(),
                             "您有一条流程抄送 " + instance.getBusinessId(),
-                            appCode));
+                            appCode,
+                            instance.getId()));
 
             WfTask wfTask = new WfTask();
             wfTask.setId(IdGenerator.nextId());
@@ -596,16 +600,8 @@ public class ProcessService {
         if (!StringUtils.hasText(formCode)) {
             throw new BusinessException(ResultCode.VALIDATION_ERROR, "startedFormCode 不能为空");
         }
-        String[] allowed = def.getSupportedFormCodes();
-        if (allowed == null || allowed.length == 0) {
-            throw new BusinessException(ResultCode.VALIDATION_ERROR,
-                    "流程「" + def.getCode() + "」未配置表单白名单，无法启动");
-        }
-        boolean ok = Arrays.stream(allowed).anyMatch(f -> f.equalsIgnoreCase(formCode.trim()));
-        if (!ok) {
-            throw new BusinessException(ResultCode.VALIDATION_ERROR,
-                    "表单 " + formCode + " 不在流程「" + def.getCode() + "」的白名单内");
-        }
+        // V149：表单须 LOCAL 绑定到本定义（真相源 form_definition）
+        formDefinitionService.assertBoundToLocalDefinition(def.getTenantId(), formCode.trim(), def.getId());
     }
 
     private void notify(WfInstance instance, String result, String title, String summary) {

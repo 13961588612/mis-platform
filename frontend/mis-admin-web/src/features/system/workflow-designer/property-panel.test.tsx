@@ -81,7 +81,7 @@ describe('PropertyPanel 全局属性', () => {
   it('编排内不再展示表单白名单多选', () => {
     renderPanel();
     expect(screen.queryByTestId('multi-select-trigger')).toBeNull();
-    expect(screen.getByText(/表单关联请在流程定义列表中操作/)).toBeTruthy();
+    expect(screen.getByText(/表单关联请在「表单注册」中维护/)).toBeTruthy();
   });
 
   it('分类是 biz_category 下拉树，选中回传 categoryId', async () => {

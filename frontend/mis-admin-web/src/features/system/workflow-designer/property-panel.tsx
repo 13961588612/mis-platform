@@ -97,7 +97,7 @@ export function PropertyPanel({
             <Input value={flowMeta.description} onChange={(e) => onFlowMetaChange({ ...flowMeta, description: e.target.value })} className="h-8" />
           </Field>
           <p className="text-[11px] text-muted-foreground">
-            表单关联请在流程定义列表中操作「关联表单」；编排保存会保留已关联的表单，不在此修改。
+            表单关联请在「表单注册」中维护（NONE / 本地 / 外部）；流程列表可「查看关联表单」，编排不改关联。
           </p>
         </div>
       </div>

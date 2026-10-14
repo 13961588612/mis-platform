@@ -21,6 +21,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -186,6 +187,6 @@ class ProcessServiceReplyTest {
                 .filter(v -> String.valueOf(instId).equals(v.instanceId()))
                 .findFirst()
                 .orElseThrow(() -> new AssertionError("应存在一条 instanceId 指向该实例的通知"));
-        assertTrue(msg.canReply(), "关联流程的通知应可回复");
+        assertFalse(msg.canReply(), "独立回复入口已关闭；意见走审批栏");
     }
 }

@@ -22,7 +22,6 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
 import java.time.LocalDateTime;
-import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
 import java.util.stream.Stream;
@@ -52,7 +51,6 @@ public class WfDefinitionService {
     @Transactional
     public Long create(Long tenantId, Long operatorId, CreateDefinitionRequest req) {
         validateNodes(req.nodes());
-        validateSupportedForms(tenantId, req.supportedFormCodes(), null);
         validateCategory(tenantId, req.categoryId());
         LocalDateTime now = LocalDateTime.now();
         Long defId = IdGenerator.nextId();
@@ -67,7 +65,8 @@ public class WfDefinitionService {
         def.setDescription(req.description());
         def.setVersion(1);
         def.setStatus(WfDefinition.STATUS_DRAFT);
-        def.setSupportedFormCodes(toArray(req.supportedFormCodes()));
+        // V149：关联真相源在 form_definition；本列软废弃，恒写空。请求里若仍带 codes，创建后回写表单侧（兼容旧测试/调用方）。
+        def.setSupportedFormCodes(new String[0]);
         def.setConfig(StringUtils.hasText(req.config()) ? req.config() : "{}");
         def.setCreatedBy(operatorId);
         def.setCreatedAt(now);
@@ -76,6 +75,9 @@ public class WfDefinitionService {
 
         saveNodes(defId, req.nodes(), now);
         saveEdges(defId, req.edges(), now);
+        if (req.supportedFormCodes() != null && !req.supportedFormCodes().isEmpty()) {
+            formDefinitionService.replaceLocalBindings(tenantId, defId, req.supportedFormCodes());
+        }
         return defId;
     }
 
@@ -86,14 +88,13 @@ public class WfDefinitionService {
             throw new BusinessException(ResultCode.VALIDATION_ERROR, "仅草稿状态可修改，已发布流程请先取消发布或创建新版本");
         }
         validateNodes(req.nodes());
-        validateSupportedForms(tenantId, req.supportedFormCodes(), id);
         validateCategory(tenantId, req.categoryId());
         LocalDateTime now = LocalDateTime.now();
         def.setName(req.name().trim());
         def.setCategory(StringUtils.hasText(req.category()) ? req.category().trim() : "APPROVAL");
         def.setCategoryId(req.categoryId());
         def.setDescription(req.description());
-        def.setSupportedFormCodes(toArray(req.supportedFormCodes()));
+        def.setSupportedFormCodes(new String[0]);
         def.setConfig(StringUtils.hasText(req.config()) ? req.config() : "{}");
         def.setUpdatedAt(now);
         definitionRepository.save(def);
@@ -106,6 +107,7 @@ public class WfDefinitionService {
         edgeRepository.flush();
         saveNodes(id, req.nodes(), now);
         saveEdges(id, req.edges(), now);
+        // V149：编排保存不改表单关联（关联只在表单注册 / updateSupportedForms 过渡接口维护）
     }
 
     /** 发布：DRAFT -> ACTIVE。 */
@@ -146,16 +148,17 @@ public class WfDefinitionService {
     }
 
     /**
-     * 仅更新表单关联（白名单）。草稿与已发布均可改，不触碰节点/边。
-     *
-     * <p>强校验：表单须已启用；且同一租户下「一个表单只能关联一个流程」（排除当前定义自身）。
+     * @deprecated V149 起关联真相源在 {@code form_definition}；本方法改为回写表单侧 LOCAL 绑定，
+     *             UI 应改走表单注册。草稿与已发布均可。
      */
+    @Deprecated
     @Transactional
     public void updateSupportedForms(Long id, Long tenantId, UpdateSupportedFormsRequest req) {
-        WfDefinition def = requireDef(id, tenantId);
+        requireDef(id, tenantId);
         List<String> codes = req == null ? List.of() : req.supportedFormCodes();
-        validateSupportedForms(tenantId, codes, id);
-        def.setSupportedFormCodes(toArray(codes));
+        formDefinitionService.replaceLocalBindings(tenantId, id, codes);
+        WfDefinition def = requireDef(id, tenantId);
+        def.setSupportedFormCodes(new String[0]);
         def.setUpdatedAt(LocalDateTime.now());
         definitionRepository.save(def);
     }
@@ -272,40 +275,6 @@ public class WfDefinitionService {
         }
     }
 
-    /**
-     * 白名单强校验：每个 formCode 必须已在 {@code form_definition} 注册、未软删且 {@code status=ENABLED}；
-     * 且同一租户下未被其他流程定义占用（一个表单只能关联一个流程）。
-     *
-     * <p>{@code excludeDefinitionId} 为当前正在写入的定义 id（创建时传 {@code null}），
-     * 用于允许「本流程已关联的表单」在更新时保留。
-     *
-     * <p>这是「后台定义了 formCode 但前端没注册」双保险里的<b>权威层</b>（前端拦截只是提效）。
-     * 绕过前端直调 API 也能挡住脏数据。
-     */
-    private void validateSupportedForms(Long tenantId, List<String> codes, Long excludeDefinitionId) {
-        if (codes == null || codes.isEmpty()) {
-            return;
-        }
-        List<String> wanted = codes.stream().filter(StringUtils::hasText).map(String::trim).distinct().toList();
-        if (wanted.isEmpty()) {
-            return;
-        }
-        List<String> enabled = formDefinitionService.listEnabledCodes(tenantId, wanted);
-        for (String code : wanted) {
-            if (!enabled.contains(code)) {
-                throw new BusinessException(ResultCode.VALIDATION_ERROR,
-                        "表单「" + code + "」未注册或已停用，请先在表单管理中登记并启用");
-            }
-            for (WfDefinition other : definitionRepository.findBySupportedFormCode(tenantId, code)) {
-                if (excludeDefinitionId != null && excludeDefinitionId.equals(other.getId())) {
-                    continue;
-                }
-                throw new BusinessException(ResultCode.VALIDATION_ERROR,
-                        "表单「" + code + "」已关联流程「" + other.getName() + "」，一个表单只能关联一个流程");
-            }
-        }
-    }
-
     /** 校验：恰一个 START、至少一个 END、审批节点需有审批人规则。 */
     private void validateNodes(List<WfNodeDTO> nodes) {
         if (nodes == null || nodes.isEmpty()) {
@@ -360,10 +329,13 @@ public class WfDefinitionService {
                 .map(e -> new WfEdgeDTO(e.getSourceNode(), e.getTargetNode(), e.getEdgeType(),
                         e.getLabel(), e.getConditionExpr(), e.getSortOrder()))
                 .toList();
+        // V149：supportedFormCodes 为反查投影，非列真相源
+        List<String> formCodes = formDefinitionService.listFormCodesByWorkflowDefinitionId(
+                def.getTenantId(), def.getId());
         return new WfDefinitionDTO(
                 String.valueOf(def.getId()), String.valueOf(def.getTenantId()), def.getCode(), def.getName(),
                 def.getCategory(), def.getDescription(), def.getVersion(), def.getStatus(),
-                def.getSupportedFormCodes() == null ? List.of() : Arrays.asList(def.getSupportedFormCodes()),
+                formCodes,
                 def.getFormSchema(), def.getConfig(), nodes, edges, def.getCreatedAt(), def.getUpdatedAt(),
                 def.getCategoryId());
     }
@@ -375,7 +347,4 @@ public class WfDefinitionService {
                 n.getTimeoutHours(), n.getConfig())).toList();
     }
 
-    private static String[] toArray(List<String> list) {
-        return list == null ? new String[0] : list.stream().filter(StringUtils::hasText).toArray(String[]::new);
-    }
 }

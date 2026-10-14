@@ -1,40 +1,56 @@
-# Nacos config: mis-admin-bff (prod)
-# ASCII comments only. Fused-deploy ai-platform on docker network.
+# Nacos config: mis-admin-bff (prod bare-metal)
+# Prefer Nacos for topology; host env only for Nacos bootstrap + optional secret override.
+# Log format: external file next to JAR (not here)
+#   --logging.config=file:/usr/local/app/mis-admin-bff/logback-spring.xml
+
 server:
   port: 8081
 
 mis:
+  security:
+    jwt:
+      # Embed identity exchange (RS256). Same key pair as mis-auth.
+      private-key-path: /usr/local/app/keys/private.pem
+      access-token-ttl-seconds: 1800
+
   bff:
+    # discovery=true → Nacos lb://; base-url = same-host fallback if discovery misses
     iam-discovery-enabled: true
     iam-service-id: mis-iam
-    iam-base-url: http://mis-iam:8102
+    iam-base-url: http://127.0.0.1:8102
     org-discovery-enabled: true
     org-service-id: mis-org
-    org-base-url: http://mis-org:8103
+    org-base-url: http://127.0.0.1:8103
     system-discovery-enabled: true
     system-service-id: mis-system
-    system-base-url: http://mis-system:8105
+    system-base-url: http://127.0.0.1:8105
     audit-discovery-enabled: true
     audit-service-id: mis-audit
-    audit-base-url: http://mis-audit:8106
+    audit-base-url: http://127.0.0.1:8106
     auth-discovery-enabled: true
     auth-service-id: mis-auth
-    auth-base-url: http://mis-auth:8101
+    auth-base-url: http://127.0.0.1:8101
     kb-discovery-enabled: true
     kb-service-id: mis-kb
-    kb-base-url: http://mis-kb:8108
+    kb-base-url: http://127.0.0.1:8108
+    taskflow-discovery-enabled: true
+    taskflow-service-id: mis-taskflow
+    taskflow-base-url: http://127.0.0.1:8104
     aggregate-timeout-ms: 3000
+    # Set in Nacos console after push (do not commit real value)
     default-password: ${MIS_DEFAULT_PASSWORD:}
+
   api-permission:
     enabled: true
-    # SEC-01: prod already fail-closed (commit 6db58b0). V32 registers KB 28 endpoints; keep true.
     deny-unmapped: true
     refresh-interval-seconds: 300
+
+  # Agent on S1 same host; gateway on S2
   ai-platform:
-    base-url: ${AI_PLATFORM_BASE_URL:http://ai-platform-backend:8000}
+    base-url: http://127.0.0.1:8000
     enabled: true
     chat-timeout-ms: 1800000
-    sse-enabled: ${AI_PLATFORM_SSE_ENABLED:true}
+    sse-enabled: true
     health-check-interval-ms: 15000
     features:
       chat: true
@@ -42,21 +58,39 @@ mis:
       extract: true
       rag: true
       nl2sql: false
-    reverse-trust-enabled: ${AI_PLATFORM_REVERSE_TRUST_ENABLED:true}
+    reverse-trust-enabled: true
+    # Set in Nacos console after push
     service-token: ${AI_PLATFORM_BFF_SHARED_SECRET:}
-    trusted-network: ${AI_PLATFORM_TRUSTED_NETWORK:}
-    mis-jwt-issuer: ${MIS_JWT_ISSUER:mis-platform}
-    mis-jwt-public-key: ${MIS_JWT_PUBLIC_KEY:}
-    doc-service-base-url: ${AI_PLATFORM_DOC_SERVICE_BASE_URL:}
+    trusted-network: 10.254.26.0/24
+    mis-jwt-issuer: mis-platform
+    # Prefer file-based verify via mis-common public-key-path; PEM inline optional:
+    # mis-jwt-public-key: |
+    #   -----BEGIN PUBLIC KEY-----
+    #   ...
+    #   -----END PUBLIC KEY-----
+    doc-service-base-url: ""
+
   agent-ops:
-    backend-base-url: ${AGENT_OPS_BACKEND_BASE_URL:http://ai-platform-backend:8000}
-    gateway-base-url: ${AGENT_OPS_GATEWAY_BASE_URL:http://ai-platform-gateway:3100}
-    timeout-ms: ${AGENT_OPS_TIMEOUT_MS:15000}
-    chat-timeout-ms: ${AGENT_OPS_CHAT_TIMEOUT_MS:1800000}
+    backend-base-url: http://127.0.0.1:8000
+    gateway-base-url: http://10.254.26.34:3100
+    timeout-ms: 15000
+    chat-timeout-ms: 1800000
+
   mcp:
     servers:
-      org: http://mis-org:8103
-      system: http://mis-system:8105
-      iam: http://mis-iam:8102
+      org: http://127.0.0.1:8103
+      system: http://127.0.0.1:8105
+      iam: http://127.0.0.1:8102
+
   iqd:
+    base-url: http://127.0.0.1:8109
+    timeout-ms: 5000
+    sse-enabled: true
+    ask-timeout-ms: 180000
+    admin-view-permission: iqd:trace:view
+    config-view-permission: iqd:config:view
+    config-save-permission: iqd:config:save
+    config-test-permission: iqd:config:test
+    ask-permission: ai:chat:use
+    agent-id: mis-iqd
     mdl-writeback-enabled: true

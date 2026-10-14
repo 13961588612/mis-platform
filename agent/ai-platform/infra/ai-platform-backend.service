@@ -1,0 +1,53 @@
+# ai-platform Backend (Agent Core) — systemd
+#
+# 前置：
+#   1) 安装 uv 并链到 /usr/local/bin（见 docs/devops/ai-platform-backend-deploy.md）
+#   2) 代码与 .env 就绪；已在 WorkingDirectory 执行过 uv sync
+#   3) Alembic 已 upgrade head
+#
+# 安装：
+#   sudo cp ai-platform-backend.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now ai-platform-backend
+#   sudo systemctl status ai-platform-backend
+#
+# 启停：
+#   sudo systemctl start|stop|restart ai-platform-backend
+#   journalctl -u ai-platform-backend -f
+
+[Unit]
+Description=MIS ai-platform Backend (Agent Core :8000)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# 按实际部署用户调整；密钥目录 /usr/local/app/keys 须对该用户可读
+User=root
+Group=root
+WorkingDirectory=/usr/local/app/ai-platform-backend/agent/ai-platform/backend
+
+# 应用环境（密码等）；缺省文件不导致失败
+EnvironmentFile=-/usr/local/app/ai-platform-backend/.env
+
+# 保证 systemd 能找到 uv（不依赖登录 shell 的 PATH）
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+Environment=HOME=/root
+
+# 优先用项目 .venv（uv sync 后生成）；比每次 uv run 更稳
+# 若尚无 .venv，可改为：
+#   ExecStart=/usr/local/bin/uv run uvicorn src.main:app --host 0.0.0.0 --port 8000 --workers 4
+ExecStart=/usr/local/app/ai-platform-backend/agent/ai-platform/backend/.venv/bin/uvicorn \
+  src.main:app --host 0.0.0.0 --port 8000 --workers 4
+
+Restart=always
+RestartSec=5
+UMask=0077
+
+# 日志进 journal；也可在 .env 里配 LOG_FILE
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=ai-platform-backend
+
+[Install]
+WantedBy=multi-user.target

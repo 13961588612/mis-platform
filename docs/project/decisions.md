@@ -8,7 +8,7 @@
 |----|------|
 | Phase 1 数据库 | 单库 `mis_platform`（ADR-001） |
 | Phase 1 功能 | F1/F2 不做；F3/F4/F5/F6 做（改密、个人中心、**多 Tab**、**AI 占位**）；**门户九宫格 + APP 切换**（仅 `system` 可进，其它占位） |
-| 流程引擎 | Phase 2 Flowable |
+| 流程引擎 | **自研 `mis-taskflow`（`wf_*`）**；早期「Phase 2 Flowable」作废，详见 §5.3 |
 | UI 语言 | 默认中文，i18n 预留 |
 | 生产部署 | Kubernetes |
 | LLM | Phase 3 |
@@ -65,6 +65,35 @@
 | 挂载 | `iqd_sql_pair.category_id` 可空软引用；「未分类」为 UI 虚拟节点（`category_id IS NULL`） |
 | 运行时 | **不改变** Wren sync / Worker few-shot 注入范围（仍按连接全量拉取） |
 | 删分类 | 有子节点或有样本挂载时拒绝 |
+
+## 5.2 门户 · 待办事项 · 消息中心（2026-10-10）
+
+| 项 | 决策 |
+|----|------|
+| 定位 | `/portal` 为个人工作聚合台：三 Tab「首页 / 待办事项 / 消息中心」；详情用右侧抽屉，不整页跳转离开门户壳 |
+| 左栏 | **仅门户**隐藏 sidebar；其它子系统保留 |
+| 待办 | 六类子 Tab 字面独立 + 各 Tab 内搜索；增量「全部」= 服务端 UNION 分页（禁前端拼页） |
+| 消息 | 四类 `APPROVAL/NOTIFY/REMIND/SYSTEM_ALERT`；「通过」= `NOTIFY`；搜索按子 Tab `msgType` 作用域 |
+| 关联 | 消息须能关联流程实例；回复 = 回写流程审批意见；无关联则无回复入口 |
+| 抽屉动作 | 同意 / 驳回 / 转办；**不做**退回发起人；驳回=终止实例 |
+| 旧页 | `/task/pending|inbox|my-sent|my-processed` 保留共存 |
+
+**全文纪要**：[decisions-portal-todo-message.md](decisions-portal-todo-message.md)  
+**PRD / 设计**：`docs/prd/portal-restructure-prd.md`、`docs/design/portal-restructure-design.md`、`docs/design/portal-matters-aggregation-design.md`
+
+## 5.3 表单 · 流程 / 工作流（2026-10-14）
+
+| 项 | 决策 |
+|----|------|
+| 引擎 | 自研轻量引擎在 **`mis-taskflow`**；表单同模块（`form_definition` + `form_category`） |
+| 真相源 | **`sys_task`** = 用户待办；**`wf_task`** = 引擎状态机（会签/或签），二者独立流转；门面调度，禁止 Task↔Process 循环依赖 |
+| 绑定 | 真相源在 **`form_definition`（NONE/LOCAL/EXTERNAL）**；流程侧只读反查；`supported_form_codes` 软废弃（V149） |
+| 表单分类 | **`form_category` + `category_id` 软引用**（V133）；旧 `parent_id`/`kind` 停写不 DROP |
+| 前端 | **ProcessShell** 管审批动作；表单只渲数据；设计器 **@xyflow/react** |
+| 驳回 | 终止实例（非退回发起人）；实时推送不以 WebSocket 为准 |
+
+**全文纪要**：[decisions-form-workflow.md](decisions-form-workflow.md)  
+**权威上游**：`docs/architecture/msg-log-workflow/12-complete-design.md`、`docs/design/form-category-split-design.md`
 
 ## 6. 待定
 

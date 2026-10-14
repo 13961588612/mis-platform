@@ -69,6 +69,8 @@ docs/
 │   └── ci-cd.md                       # 📝 CI/CD
 ├── project/
 │   ├── decisions.md                   # ✅ 全局决策
+│   ├── decisions-portal-todo-message.md  # ✅ 门户待办/消息中心决策纪要
+│   ├── decisions-form-workflow.md     # ✅ 表单·流程/工作流决策纪要
 │   ├── sprint-plan.md                 # 📝 Sprint 计划
 │   ├── modules-guide.md               # 📝 各项目/模块详细说明
 │   └── conventions.md                 # 📝 编码规范

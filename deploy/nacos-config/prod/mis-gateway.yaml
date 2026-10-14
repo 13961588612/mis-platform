@@ -33,4 +33,4 @@ mis:
     gateway:
       enabled: true
     jwt:
-      public-key-path: ${JWT_PUBLIC_KEY_PATH:/etc/mis/keys/public.pem}
+      public-key-path: ${JWT_PUBLIC_KEY_PATH:/usr/local/app/keys/public.pem}

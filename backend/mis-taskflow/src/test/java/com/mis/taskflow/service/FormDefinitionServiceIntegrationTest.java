@@ -259,21 +259,14 @@ class FormDefinitionServiceIntegrationTest {
     // ------------------------------------------------------------------
 
     @Test
-    @DisplayName("T1.4：被流程白名单引用时删除被拒")
-    void deleteRejectedWhenReferencedByDefinition() {
+    @DisplayName("T1.4：仅 LOCAL 绑定、无实例时仍可删（关联真相源在表单侧）")
+    void deleteAllowedWhenOnlyLocalBound() {
         String code = uniqCode("FORM");
         Long formId = newForm(code, "被引用表单");
-        Long defId = definitionService.create(TENANT, 1L,
+        definitionService.create(TENANT, 1L,
                 new CreateDefinitionRequest(uniqCode("FLOW"), "引用流程", "APPROVAL", null,
                         List.of(code), "{}", nodes()));
 
-        BusinessException e = assertThrows(BusinessException.class, () -> formService.delete(formId, TENANT));
-        assertEquals(ResultCode.VALIDATION_ERROR.getCode(), e.getCode());
-        assertTrue(e.getMessage().contains("流程定义引用"));
-
-        // 清掉引用后可删
-        definitionService.update(defId, TENANT, new CreateDefinitionRequest(
-                "FLOW_" + System.nanoTime(), "引用流程", "APPROVAL", null, List.of(), "{}", nodes()));
         formService.delete(formId, TENANT);
         assertEquals(1, formRepository.findById(formId).orElseThrow().getDeleted());
     }
@@ -335,21 +328,21 @@ class FormDefinitionServiceIntegrationTest {
     }
 
     // ------------------------------------------------------------------
-    // T1.5 白名单强校验
+    // T1.5 表单侧 LOCAL 绑定（创建流程时可兼容传入 codes → 回写 form_definition）
     // ------------------------------------------------------------------
 
     @Test
-    @DisplayName("T1.5：白名单含未注册 formCode ⇒ VALIDATION_ERROR")
+    @DisplayName("T1.5：创建时带未注册 formCode ⇒ VALIDATION_ERROR")
     void createRejectsUnregisteredFormCode() {
         BusinessException e = assertThrows(BusinessException.class, () -> definitionService.create(TENANT, 1L,
                 new CreateDefinitionRequest(uniqCode("FLOW"), "含未注册表单", "APPROVAL", null,
                         List.of(uniqCode("NOPE")), "{}", nodes())));
         assertEquals(ResultCode.VALIDATION_ERROR.getCode(), e.getCode());
-        assertTrue(e.getMessage().contains("未注册或已停用"));
+        assertTrue(e.getMessage().contains("未注册") || e.getMessage().contains("停用"));
     }
 
     @Test
-    @DisplayName("T1.5：白名单含已停用 formCode ⇒ VALIDATION_ERROR")
+    @DisplayName("T1.5：创建时带已停用 formCode ⇒ VALIDATION_ERROR")
     void createRejectsDisabledFormCode() {
         String code = uniqCode("FORM");
         Long formId = newForm(code, "将被停用");
@@ -359,41 +352,28 @@ class FormDefinitionServiceIntegrationTest {
         BusinessException e = assertThrows(BusinessException.class, () -> definitionService.create(TENANT, 1L,
                 new CreateDefinitionRequest(uniqCode("FLOW"), "含停用表单", "APPROVAL", null,
                         List.of(code), "{}", nodes())));
-        assertTrue(e.getMessage().contains("未注册或已停用"));
+        assertTrue(e.getMessage().contains("停用") || e.getMessage().contains("未注册"));
     }
 
     @Test
-    @DisplayName("T1.5：update 同样强校验；已停用后重新启用即可保存")
-    void updateAlsoValidatesWhitelist() {
+    @DisplayName("T1.5：编排 update 不改关联；关联靠 updateSupportedForms / 表单注册")
+    void canvasUpdateDoesNotTouchBindings() {
         String code = uniqCode("FORM");
         newForm(code, "表单");
         Long defId = definitionService.create(TENANT, 1L,
                 new CreateDefinitionRequest(uniqCode("FLOW"), "更新校验流程", "APPROVAL", null,
                         List.of(code), "{}", nodes()));
+        assertEquals(List.of(code), definitionService.get(defId, TENANT).supportedFormCodes());
 
-        //换成未注册的 code
-        assertThrows(BusinessException.class, () -> definitionService.update(defId, TENANT,
-                new CreateDefinitionRequest("FLOW_" + System.nanoTime(), "更新校验流程", "APPROVAL", null,
-                        List.of(uniqCode("NOPE")), "{}", nodes())));
-
-        // 停用该表单后，保留它的 update 也应被拒
-        Long formId = formRepository.findByTenantIdAndCode(TENANT, code).orElseThrow().getId();
-        formService.update(formId, TENANT, new UpsertFormDefinitionRequest(
-                null, code, "表单", null, FormDefinition.STATUS_DISABLED, 0, "{}"));
-        assertThrows(BusinessException.class, () -> definitionService.update(defId, TENANT,
-                new CreateDefinitionRequest("FLOW_" + System.nanoTime(), "更新校验流程", "APPROVAL", null,
-                        List.of(code), "{}", nodes())));
-
-        // 重新启用后放行
-        formService.update(formId, TENANT, new UpsertFormDefinitionRequest(
-                null, code, "表单", null, FormDefinition.STATUS_ENABLED, 0, "{}"));
         definitionService.update(defId, TENANT, new CreateDefinitionRequest(
-                "FLOW_" + System.nanoTime(), "改名", "APPROVAL", null, List.of(code), "{}", nodes()));
+                "FLOW_" + System.nanoTime(), "改名", "APPROVAL", null, List.of(), "{}", nodes()));
         assertEquals("改名", definitionService.get(defId, TENANT).name());
+        // 编排保存传空白名单也不卸绑
+        assertEquals(List.of(code), definitionService.get(defId, TENANT).supportedFormCodes());
     }
 
     @Test
-    @DisplayName("T1.5：白名单为空时不做校验（老流程定义可继续编辑）")
+    @DisplayName("T1.5：无关联 codes 时可创建流程")
     void emptyWhitelistSkipsValidation() {
         Long defId = definitionService.create(TENANT, 1L,
                 new CreateDefinitionRequest(uniqCode("FLOW"), "无白名单流程", "APPROVAL", null,
@@ -402,7 +382,7 @@ class FormDefinitionServiceIntegrationTest {
     }
 
     @Test
-    @DisplayName("T1.5：已注册启用的表单可正常保存")
+    @DisplayName("T1.5：已注册启用的表单可在创建时绑定并反查")
     void createAcceptsRegisteredFormCode() {
         String code = uniqCode("FORM");
         FormTestFixtures.register(formService, TENANT, code, "合法表单");
@@ -410,6 +390,9 @@ class FormDefinitionServiceIntegrationTest {
                 new CreateDefinitionRequest(uniqCode("FLOW"), "合法流程", "APPROVAL", null,
                         List.of(code), "{}", nodes()));
         assertEquals(List.of(code), definitionService.get(defId, TENANT).supportedFormCodes());
+        var vo = formService.list(TENANT).stream().filter(f -> code.equals(f.code())).findFirst().orElseThrow();
+        assertEquals("LOCAL", vo.workflowBindingType());
+        assertEquals(String.valueOf(defId), vo.workflowDefinitionId());
     }
 
     @Test

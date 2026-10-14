@@ -28,6 +28,9 @@ public interface WfTaskRepository extends JpaRepository<WfTask, Long> {
     /** 按关联 sys_task 批量反查（门户待办补齐发起人时用；同一 sys_task 多行时取任意一条即可）。 */
     List<WfTask> findBySysTaskIdIn(List<Long> sysTaskIds);
 
+    /** 单条反查：消息 reference_task_id → 流程实例。 */
+    Optional<WfTask> findFirstBySysTaskId(Long sysTaskId);
+
     @Query("""
             select count(t) from WfTask t
             where t.instanceId = :instanceId and t.nodeCode = :nodeCode and t.status = 'PENDING'

@@ -6,8 +6,8 @@ import java.util.List;
 /**
  * 消息详情（含内容与附件）。
  *
- * @param instanceId 关联流程实例 ID（无关联时为 {@code null}）
- * @param canReply   是否可回复（{@code msgType=='NOTIFY' && instanceId!=null}）
+ * @param instanceId 关联流程实例 ID（无关联时为 {@code null}；可由 reference_task 反查）
+ * @param canReply   独立回复入口已关闭，恒为 {@code false}（意见走审批栏）
  */
 public record MessageDetailVO(
         String id,

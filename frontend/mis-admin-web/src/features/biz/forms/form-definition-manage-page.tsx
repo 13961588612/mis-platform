@@ -28,6 +28,7 @@ import {
   type FormDefinitionItem,
 } from '@/lib/api/form-definition';
 import { fetchBizCategoryTree, fetchBizCategories, type BizCategoryItem } from '@/lib/api/biz-category';
+import { fetchDefinitions, type WfDefinition } from '@/lib/api/workflow';
 import { hasFormLoader } from './forms/form-loaders';
 import { FormDefinitionDialog } from './form-definition-dialog';
 import { CategoryTreeSelect } from '@/components/common/category-tree-select';
@@ -114,6 +115,8 @@ export function FormDefinitionManagePage() {
   // 业务分类数据（筛选树 + 名称解析 + 对话框下拉）
   const [categoryTree, setCategoryTree] = useState<BizCategoryItem[]>([]);
   const [categoryList, setCategoryList] = useState<BizCategoryItem[]>([]);
+  /** 流程定义列表（LOCAL 下拉 + 关联列名解析）。 */
+  const [workflowDefinitions, setWorkflowDefinitions] = useState<WfDefinition[]>([]);
 
   // 表单新增/编辑对话框
   const [formDialogOpen, setFormDialogOpen] = useState(false);
@@ -129,6 +132,13 @@ export function FormDefinitionManagePage() {
         appliedCategoryIds.length > 0 ? appliedCategoryIds : undefined,
       );
       setFormList(forms);
+      // 流程列表为 LOCAL 下拉增强信息：失败不阻断表单列表。
+      try {
+        const defPage = await fetchDefinitions(TENANT_ID, 1, 200);
+        setWorkflowDefinitions(defPage?.list ?? []);
+      } catch {
+        setWorkflowDefinitions([]);
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : '加载失败');
     } finally {
@@ -187,6 +197,27 @@ export function FormDefinitionManagePage() {
       return categoryNameMap.get(String(item.categoryId)) ?? `分类#${item.categoryId}`;
     }
     return '未分类';
+  }
+
+  const workflowNameById = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const d of workflowDefinitions) map.set(d.id, d.name);
+    return map;
+  }, [workflowDefinitions]);
+
+  function workflowBindingLabel(item: FormDefinitionItem): string {
+    const t = (item.workflowBindingType ?? 'NONE').toUpperCase();
+    if (t === 'LOCAL') {
+      const id = item.workflowDefinitionId;
+      if (!id) return '本地流程（未指定）';
+      return workflowNameById.get(id) ?? `流程#${id}`;
+    }
+    if (t === 'EXTERNAL') {
+      const sys = item.externalWorkflowSystem ?? '?';
+      const ref = item.externalWorkflowRef ?? '?';
+      return `外部：${sys}/${ref}`;
+    }
+    return '—';
   }
 
   function openFormCreate() {
@@ -297,6 +328,7 @@ export function FormDefinitionManagePage() {
                   <th className="px-3 py-2 font-medium">名称</th>
                   <th className="px-3 py-2 font-medium">编码</th>
                   <th className="px-3 py-2 font-medium">分类</th>
+                  <th className="px-3 py-2 font-medium">关联流程</th>
                   <th className="px-3 py-2 font-medium">状态</th>
                   <th className="px-3 py-2 font-medium">排序</th>
                   <th className="px-3 py-2 text-right font-medium">操作</th>
@@ -325,6 +357,9 @@ export function FormDefinitionManagePage() {
                         ) : null}
                       </td>
                       <td className="px-3 py-2 text-[12px]">{categoryLabel(item)}</td>
+                      <td className="px-3 py-2 text-[12px] text-muted-foreground">
+                        {workflowBindingLabel(item)}
+                      </td>
                       <td className="px-3 py-2">
                         <Badge variant={st.variant}>{st.text}</Badge>
                       </td>
@@ -360,6 +395,7 @@ export function FormDefinitionManagePage() {
         onOpenChange={setFormDialogOpen}
         initial={editingForm}
         categoryTree={categoryTree}
+        workflowDefinitions={workflowDefinitions}
         tenantId={TENANT_ID}
         operatorId={OPERATOR_ID}
         onSaved={() => void loadForms()}

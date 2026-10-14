@@ -48,4 +48,8 @@ public interface FormDefinitionRepository extends JpaRepository<FormDefinition, 
             """)
     List<FormDefinition> findAliveByTenantIdAndCodes(@Param("tenantId") Long tenantId,
                                                       @Param("codes") Collection<String> codes);
+
+    /** 反查：挂到指定本地流程定义的表单（LOCAL 绑定）。 */
+    List<FormDefinition> findByTenantIdAndWorkflowDefinitionIdAndDeletedOrderBySortOrderAscIdAsc(
+            Long tenantId, Long workflowDefinitionId, Integer deleted);
 }

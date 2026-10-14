@@ -212,7 +212,7 @@
 #### 3.3 接口透出字段 + 迁移号
 
 - **VO 透出（新增两字段）**：`MessageVO`、`MessageDetailVO` += `instanceId: String`、`canReply: boolean`。
-  - `canReply` 判定（服务端计算）：`msgType == 'NOTIFY' && instanceId != null` ⇒ `true`；否则 `false`。（普通消息/无实例一律 `false`，前端据此隐藏回复入口，落空 §5.2 降级定义。）
+  - **现行口径（覆写原 PR-18 独立回复）**：`canReply` **恒为 `false`**（字段保留以免破坏契约）。关联流程的消息抽屉嵌入 `ProcessShell(embedded)`：当前审批人可同意/驳回（意见=审批栏 comment）；非审批人只读。无 `instanceId` 则仅展示正文。
 - **迁移版本：`V134`**（当前最新 V133）。文件 `backend/mis-migrator/src/main/resources/db/migration/V134__message_instance_link_and_reply_api.sql`，**只追加，绝不改 V120–V133**。内容：
   1. `ALTER TABLE sys_message ADD COLUMN IF NOT EXISTS instance_id BIGINT NULL;`
   2. `CREATE INDEX IF NOT EXISTS idx_msg_instance ON sys_message (instance_id);`
@@ -268,10 +268,12 @@
 - **BFF**：`MessageController` 新增 `@PostMapping("/{id}/reply")` → `TaskflowWebClient.replyMessage`。
 - **权限**：新端点已登记 `sys_api 95072` 并绑菜单 95003（`deny-unmapped:true` 下必须），否则 403。
 
-#### 4.3 前端入口显隐规则
+#### 4.3 前端入口显隐规则（现行）
 
-- 消息抽屉内：`detail.canReply === true` ⇒ 显示回复输入框 + 提交按钮；否则**隐藏入口**并可提示「该消息无关联流程，暂不支持回复」（§5.2 降级）。
-- 提交成功：**就地回显**本条回复（本地 echo）+ `toast`；若抽屉已加载流程详情，则**重新拉 `fetchProcessDetail`** 刷新「审批信息」区（回复已作为 `COMMENT` 出现在 `wf_history`）。
+- **独立「回复」入口已关闭**（不再按 `canReply` 显示输入框）。
+- `detail.instanceId != null` ⇒ 嵌入 `ProcessShell(embedded)`（与待办抽屉同构）：可批则同意/驳回，否则只读。
+- `detail.instanceId == null` ⇒ 普通正文；无回复入口。
+- 历史 `POST /messages/{id}/reply` 端点可保留（兼容），门户 UI 不再调用。
 
 ---
 
@@ -284,7 +286,7 @@
 - `src/features/portal/tabs/portal-todo-tab.tsx`（六类子 Tab + 搜索 + 列表 + 抽屉宿主）
 - `src/features/portal/tabs/portal-message-tab.tsx`（四类子 Tab + 搜索 + 列表 + 抽屉宿主）
 - `src/features/portal/components/todo-detail-drawer.tsx`（待办抽屉：Sheet `max-w-[560px]` + `ProcessShell embedded` + 三动作 + 转办输入框 + 「在完整页打开」入口）
-- `src/features/portal/components/message-detail-drawer.tsx`（消息抽屉：正文 + 流程表单 + 回复区）
+- `src/features/portal/components/message-detail-drawer.tsx`（消息抽屉：关联流程 → ProcessShell；否则正文）
 - `src/features/portal/lib/todo-tabs.ts`（`TodoTabConfig[]` 六类配置）
 - `src/features/portal/lib/todo-adapters.ts`（`fromTaskItem`/`fromHandledTask`/`fromWfInstance`）
 - `src/features/portal/types.ts`（`PortalTodoRow` 视图模型）
@@ -400,15 +402,15 @@ WfHistory.OP_COMMENT = "COMMENT"                # 新常量
 
 **T02 · 后端：消息↔流程关联 + 回复回写 + 搜索 keyword** ｜ P0 ｜ 依赖：无（可与 T01 并行）
 - 文件：迁移 `V134__message_instance_link_and_reply_api.sql`；taskflow：`SysMessage`、`WfHistory`、`PublishMessageRequest`、`ReplyMessageRequest`、`MessageVO`、`MessageDetailVO`、`MessageService`、`ProcessService`、`TaskService`、`MessageController`、`TaskController`、`WfProcessController`、`SysTaskRepository`、`WfInstanceRepository`；BFF：`TaskflowWebClient`、`MessageController`、`TaskController`、`WorkflowController`、`client/model/MessageVO`&`MessageDetailVO`；测试 3 个。
-- 验收：`notify` 产生的 NOTIFY 消息 `instance_id` 非空、`canReply=true`；`POST /messages/{id}/reply` 追加一条 `wf_history(operation=COMMENT)` 且出现在 `GET /workflow/instances/{id}` 的 history；三接口 `keyword` 生效且不传时**行为与现状完全一致**；`V134` 幂等可重跑、`sys_api 95072` 已登记并绑 95003；`MigrationIdempotency` 类测试保持绿；**未修改任何历史迁移**。
+- 验收：`notify` 产生的 NOTIFY 消息 `instance_id` 非空、`canReply=false`（独立回复关闭）；`POST /messages/{id}/reply` 仍可追加 `wf_history(COMMENT)`（兼容）；三接口 `keyword` 生效且不传时**行为与现状完全一致**；`V134` 幂等可重跑、`sys_api 95072` 已登记并绑 95003；`MigrationIdempotency` 类测试保持绿；**未修改任何历史迁移**。
 
 **T03 · 前端：待办六类聚合 + 搜索 + 待办抽屉（含 ProcessShell embedded + 三动作 + 完整页入口）** ｜ P0 ｜ 依赖：T01（搜索完整功能软依赖 T02）
 - 文件：`portal-todo-tab.tsx`、`todo-detail-drawer.tsx`、`lib/todo-tabs.ts`、`lib/todo-adapters.ts`、`types.ts`、`process-shell.tsx`（embedded/动作分派/转办/完整页入口）、`tasks.ts`、`workflow.ts`；测试 `todo-tabs.test.tsx`。
 - 验收：六类子 Tab 字面独立、各自计数/筛选正确（D-6）；每类支持关键词搜索（**显式查询**：点「搜索」/回车才发起请求、发起时重置到第 1 页、另设「重置」清空并回第 1 页；**不做 300ms 防抖**）；点击行**不整页跳转**，右侧划入抽屉展示①审批进度②只读表单③审批信息；「待处理/审批中」态显示三动作，同意/驳回走 `/workflow/tasks/{id}/complete`、转办走 `/tasks/{id}/transfer`（**转办弹「输入工号/用户 ID」输入框**）；`sysTaskId==null` 时转办置灰；抽屉底部保留「在完整页打开」入口跳 `/task/process/{instanceId}`（PR-11）；`page` 变体（旧 `/task/process/{id}`）零回归；单层滚动。
 
-**T04 · 前端：消息四类 + 抽屉流程表单 + 回复回写** ｜ P0 ｜ 依赖：T01、T02
+**T04 · 前端：消息四类 + 抽屉嵌入 ProcessShell** ｜ P0 ｜ 依赖：T01、T02
 - 文件：`portal-message-tab.tsx`、`message-detail-drawer.tsx`、`messages.ts`；测试 `message-reply-drawer.test.tsx`；**v1.3 补记本批后端改动**——taskflow：`SysMessageRepository.java`（+`searchInboxByType`）、`MessageService.java`（`search` +`msgType`）、`MessageController.java`（`/search` +`msgType`）；BFF：`TaskflowWebClient.java`（`searchMessages` +`msgType`）、`controller/MessageController.java`（`/search` +`msgType`）。
-- 验收：四类子 Tab（审批/通知/提醒/系统告警），**搜索按当前子 Tab 的 `msgType` 作用域**（各子 Tab 内独立搜索，对齐 PRD D-5 / Q3，**不做跨类型/跨 Tab 全局**；`/messages/search` 带当前 `msgType`，缺省才跨类型）；点击划入抽屉；`canReply=true` 显示回复入口并可提交，提交后**就地回显**且流程「审批信息」区出现该 `COMMENT`；`canReply=false` 隐藏入口并提示；流程通知抽屉展示只读表单。
+- 验收：四类子 Tab（审批/通知/提醒/系统告警），**搜索按当前子 Tab 的 `msgType` 作用域**；点击划入抽屉；有 `instanceId` → 嵌入 `ProcessShell(embedded)`（当前审批人可批，否则只读）；无独立回复框；无 `instanceId` → 仅正文。
 
 **T05 · 集成、样式统一与回归** ｜ P0 ｜ 依赖：T01、T02、T03、T04
 - 文件：`portal-*` 收口微调、`ui/tabs` 统一接入（PR-10）、全局样式核对（主色 `#4f46e5`/圆角 4px/表头标签 13px/单层滚动）、测试 `portal-tabs.test.tsx`、`app-layout-portal.test.tsx`；`tabs.tsx`（如需）。

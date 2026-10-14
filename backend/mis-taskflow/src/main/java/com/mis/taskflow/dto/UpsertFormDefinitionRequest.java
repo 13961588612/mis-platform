@@ -8,10 +8,9 @@ import jakarta.validation.constraints.Size;
  * 新增/更新表单定义请求。
  *
  * <p>code 的格式约束与流程定义 code 保持同一套规则：{@code ^[A-Z][A-Z0-9_]{1,63}$}。
- * code 大小写敏感（前端注册表 key 精确匹配），故只允许大写。
  *
- * <p>V133 起分类是表单的<b>属性</b>：{@code categoryId} 软引用 {@code form_category.id}，
- * 可空（null=未分类）。旧模型里的 {@code parentId} / {@code kind} 已移除。
+ * <p>V149：工作流关联在本请求维护（{@code workflowBindingType} + 对应字段）；
+ * 流程定义侧不再写关联。
  */
 public record UpsertFormDefinitionRequest(
         Long categoryId,
@@ -25,6 +24,21 @@ public record UpsertFormDefinitionRequest(
         String description,
         String status,
         Integer sortOrder,
-        String config
+        String config,
+        /** NONE / LOCAL / EXTERNAL；null 视为 NONE。 */
+        String workflowBindingType,
+        /** LOCAL 时必填：本地 {@code wf_definition.id}。 */
+        Long workflowDefinitionId,
+        /** EXTERNAL 时必填。 */
+        @Size(max = 64, message = "外部工作流系统编码最长 64 字符")
+        String externalWorkflowSystem,
+        /** EXTERNAL 时必填。 */
+        @Size(max = 256, message = "外部工作流标识最长 256 字符")
+        String externalWorkflowRef
 ) {
+    /** 兼容旧调用方（无工作流关联字段 → NONE）。 */
+    public UpsertFormDefinitionRequest(Long categoryId, String code, String name, String description,
+                                       String status, Integer sortOrder, String config) {
+        this(categoryId, code, name, description, status, sortOrder, config, "NONE", null, null, null);
+    }
 }

@@ -286,8 +286,16 @@ export function PortalMessageTab() {
         <PaginationFooter total={total} page={page} totalPages={totalPages} onPageChange={setPage} />
       </Tabs>
 
-      {/* 右侧划入抽屉（T04）：不入 URL，靠 useState 打开。 */}
-      <MessageDetailDrawer open={openId !== null} onOpenChange={(v) => !v && setOpenId(null)} messageId={openId} />
+      {/* 右侧划入抽屉：不入 URL；关联流程时动作成功关抽屉并刷新。 */}
+      <MessageDetailDrawer
+        open={openId !== null}
+        onOpenChange={(v) => !v && setOpenId(null)}
+        messageId={openId}
+        onDone={() => {
+          setOpenId(null);
+          void load();
+        }}
+      />
     </div>
   );
 }
