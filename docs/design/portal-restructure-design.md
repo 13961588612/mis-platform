@@ -2,11 +2,11 @@
 
 | 项 | 内容 |
 |---|---|
-| 版本 | v1.3（承接 PRD v0.2，仅设计、不写实现；§11 已按用户拍板回填为结论；v1.1→v1.2→v1.3 实现回填，见下方「变更记录」） |
-| 日期 | 2026-10-10（v1.2 修订 2026-10-11；v1.3 修订 2026-10-11） |
+| 版本 | v1.4（承接 PRD v0.3；消息抽屉嵌入 ProcessShell，关闭独立回复） |
+| 日期 | 2026-10-10（v1.2/v1.3 修订 2026-10-11；**v1.4 修订 2026-10-14**） |
 | 作者 | 高见远（架构师） |
-| 上游 | `docs/prd/portal-restructure-prd.md`（v0.2） |
-| 关联模块 | mis-admin-web（门户/待办/消息）、mis-admin-bff（透传）、mis-taskflow（消息↔流程关联/回复回写）、mis-migrator（Flyway） |
+| 上游 | `docs/prd/portal-restructure-prd.md`（v0.3）、`docs/project/decisions-portal-todo-message.md` |
+| 关联模块 | mis-admin-web（门户/待办/消息）、mis-admin-bff（透传）、mis-taskflow（消息↔流程关联 / ProcessShell）、mis-migrator（Flyway） |
 | 配套图 | `portal-restructure-class.mermaid`、`portal-restructure-sequence.mermaid` |
 
 > 本设计**严格采信** PRD 与现状侦察结论（含文件路径/行号）。硬约束：**Flyway 只追加（新迁移从 V134 起）**、**旧四页保留共存**、**仅门户隐藏左栏**、**只读态不实例化业务组件**、**单层滚动**、**「回退发起人」本轮不做**。
@@ -18,6 +18,7 @@
 | v1.1 | 2026-10-10 | 承接 PRD v0.2；§11「待明确事项」按用户拍板回填为结论（§2.2/§2.3/§2.4/§8 T03 已同步）。 |
 | **v1.2** | **2026-10-11** | **实现阶段回填（三项，只改文档）**：<br>①**§1.5 修正 keyword 的 JPQL 写法（必改）**——废弃 `lower(concat('%', :keyword, '%'))`（Hibernate 6 下 null 参数被推断为 `bytea` → PostgreSQL 报 `function lower(bytea) does not exist`，T02 实测踩到并已修复），改为 **Service 层预算小写 `:pattern`、JPQL 中 `:keyword` 仅判空、模糊匹配用 `like :pattern`**；并立**红线**：禁止 `lower(concat('%', :keyword, '%'))`。<br>②**搜索触发语义 → 显式查询（必改）**——§1.5 / §8 T03 / §10-3 的「300ms 防抖」全部改为**显式查询**（输入框 + 「搜索」按钮，回车亦可；仅点搜索/回车才发请求；发起时重置到第 1 页；另提供「重置」）；对齐用户提交 `e1f8632` 给管理页做的一致范式；保留「空串不透传」。<br>③**§1.5 补充说明**——用户 `e1f8632` 已让管理页支持 `keyword` 与「选父含子集」（`lib/api/workflow.ts` 的 `fetchDefinitions` 注释已注明「选父含子集」由调用方展开自身+子孙后传入）；**门户待办页无分类树筛选、不涉及该语义**，两处一致/差异在此写明，避免后续误改。 |
 | **v1.3** | **2026-10-11** | **实现阶段回填（消息搜索按子 Tab 作用域）**：T04「消息中心」的搜索语义在 v1.2 中仅表述为「搜索复用」，措辞含糊，导致实现只在前端传了 `msgType`、未打通到后端 `/messages/search`，出现**跨类型串结果 + 静默失效**。本次据 PRD **D-5 / Q3**（各 Tab 内独立搜索、不做跨 Tab 全局）改写 **§8 T04 验收**，并**新增 §3.5「消息搜索的 msgType 作用域」契约**（`/messages/search` 新增**可选** `msgType`；空/缺省跨类型兼容、非空按类型过滤；taskflow `MessageService.search` 空走 `searchInbox`、非空走新增 `searchInboxByType`）；**立 native query 红线**（延续 §1.5 同源教训）：**绑定参数须至少一处被 `=` / 显式 `CAST` 锚定类型**，禁止只出现在 `concat(...)` / `IS NULL` 等不约束类型的语境中；`searchInboxByType` 采用「空值分流放 Service 层 + 无条件等值 `m.msg_type = :msgType`」。**（红线措辞于同轮精修为「锚定」口径：既有 `findInbox` 的 `(:msgType IS NULL OR m.msg_type = :msgType)` 因 `=` 锚定而合规、勿动。）** 同步补记 **§5.2 / §5.3** 本批后端文件（`SysMessageRepository` / `MessageService` / `MessageController` / BFF `TaskflowWebClient` / BFF `MessageController`）。 |
+| **v1.4** | **2026-10-14** | **产品修订（D-9）**：关闭消息抽屉独立「回复」；有 `instanceId` → 嵌入 `ProcessShell(embedded)`（当前审批人可批，意见=审批栏；否则只读）；`canReply` 恒 false。同步 §3.3 / §4.3 / §8 T02·T04 与 PRD v0.3、决策纪要 §2.4。 |
 
 ---
 
