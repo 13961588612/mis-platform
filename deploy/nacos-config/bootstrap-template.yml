@@ -2,6 +2,7 @@
 #
 # 默认连 Nacos（MIS_REMOTE 默认 true）。纯本地不连 Nacos 时显式设 MIS_REMOTE=false
 # remote：MIS_REMOTE=true（默认）+ NACOS_NAMESPACE + NACOS_SERVER
+# 鉴权开启时：NACOS_USERNAME / NACOS_PASSWORD（生产务必覆盖默认口令）
 
 spring:
   application:
@@ -12,6 +13,8 @@ spring:
         enabled: ${MIS_REMOTE:true}
         server-addr: ${NACOS_SERVER:10.254.16.6:8848}
         namespace: ${NACOS_NAMESPACE:dev}
+        username: ${NACOS_USERNAME:nacos}
+        password: ${NACOS_PASSWORD:nacos}
         group: ${NACOS_CONFIG_GROUP:MIS_GROUP}
         file-extension: yaml
         shared-configs:
@@ -26,3 +29,5 @@ spring:
         enabled: ${MIS_REMOTE:true}
         server-addr: ${NACOS_SERVER:10.254.16.6:8848}
         namespace: ${NACOS_NAMESPACE:dev}
+        username: ${NACOS_USERNAME:nacos}
+        password: ${NACOS_PASSWORD:nacos}

@@ -7,6 +7,8 @@ spring:
         enabled: ${MIS_REMOTE:true}
         server-addr: ${NACOS_SERVER:10.254.16.6:8848}
         namespace: ${NACOS_NAMESPACE:dev}
+        username: ${NACOS_USERNAME:nacos}
+        password: ${NACOS_PASSWORD:nacos}
         group: ${NACOS_CONFIG_GROUP:MIS_GROUP}
         file-extension: yaml
         shared-configs:
@@ -21,6 +23,8 @@ spring:
         enabled: ${MIS_REMOTE:true}
         server-addr: ${NACOS_SERVER:10.254.16.6:8848}
         namespace: ${NACOS_NAMESPACE:dev}
+        username: ${NACOS_USERNAME:nacos}
+        password: ${NACOS_PASSWORD:nacos}
 
 # 引擎连接（S-04）：优先由 Nacos 的 mis.kb.engine.* 覆盖；本地/CI 默认 noop（无 RAGFlow 实例）。
 # 不建配置表；ragflow.api-key 仅服务端持有，禁止进 Git。

@@ -48,6 +48,22 @@ Java：JDK17 `D:\software\jdk-17.0.2`；`backend/mvn.sh`；`-Dtest=Y` 加 `-Dsur
 ## 多 Agent 纪律
 单批 ≤2–4 新文件；临时脚本放系统临时目录；禁删测试/skip/`as any`/改 fixture；**主理人验证不信转述，查磁盘+独立跑门禁**；派活前 `git status`+`git log`。三脚本 build/start/stop-dev.ps1 有硬编码服务清单须同步；须 UTF-8 BOM。**成员报 completed≠有产出，必须查磁盘（本轮架构师首轮空转已证）**。
 
+## 🔴 智能体调度 / 问数架构要点（百购规划核实所得）
+- **Worker 不可再 spawn 其他 Agent**：`coordinator-worker/spec.md` §3 + `invoke_agent.py` L267/281，`INVOKE_AGENT_MAX_DEPTH=1`，`role:worker` 剥离 spawn 工具。**新业务域智能体要取数只能「持 `iqd__ask` 工具」，不能「委派 mis-iqd Agent」**。
+- **iqd 是两层**：Java `backend/mis-iqd`(8109)=**管理面**（配置/ACL/脱敏/样本/审计，yml 明写不直连 WrenAI）；Python `agent/ai-platform/backend/src/agent/mis_iqd/`=**执行面**（orchestrator/nl2sql/sql_guard/masking/scope_resolver）。改造先分清哪层。
+- **`iqd__ask` 已支持 `connection_id` 入参**（`mis_iqd/tools.py` L131）⇒ 多域路由靠它，工具层无需改造。
+- ⚠️ `IqdInternalController` 6 个内部读端点**全走 `resolvePrimaryConnectionId()` 单连接**，不按 connection 取 ⇒ 非主连接域的 catalog/scope/样本对/术语取不到；多连接 PRD 仍 🔶 草案。
+- Coordinator=`mis-copilot`（`configs/agents/mis-copilot/coordination.yaml`：worker_ids + timeout 1680）；`mis-iqd` Worker 零领域知识（仅 `business.analysis`）；行级维度 dept/store（头 X-Mis-Dept-Scope / X-Mis-Stores），fail-closed 45204。
+- Doris 已跑通：连接 `900001`/wren 0.13.3；`service.py` 有 `starrocks→doris` 映射；wren 不接受 LIMIT（见 `sql_guard.py`）。
+- 百购方案书：`deliverables/百购分析智能体_落地方案书_v1.md`（2026-10-13，未开发）。Skill 源码：`D:\project\AI数据分析\百购问数上线\skills\`（8 个已按新架构适配）。
+- 🔴 **custom skill 失效点**：frontmatter **必须含 `skill_id`**，缺则 `load_custom_skills_from_disk` 直接 `continue` 跳过、只打一条 warning（`custom_store.py` L133-135）→ **文件在磁盘上但技能永远不生效**。
+- ✅ **更正**：`category` **不是枚举硬校验**——`models.py` L61 是 `category: str = SkillCategory.BUILT_IN`，任意字符串合法（现网 business-analysis 就用 `category: iqd`，不在枚举内）。它的作用是参与检索综合分（`category_match` 权重 0.15，L174/L182），选有语义的值利于召回。
+- 🔴 **技能要进 OpenHarness 视图必须放 `configs/skills/packages/<域>/<skill_id>/SKILL.md`**：`materialize_oh_skill_view` 只扫 packages（rglob），**不扫 custom 落盘目录 `data/skills/`** ⇒ 放 custom 目录的技能不进 OH `Available Skills`、`skill` 工具永远加载不到，**且无任何报错**。验证：看 `configs/.runtime/oh-skills/<agent>/` 下有无对应目录。OH 用**父目录名作 command_name（粗体主名）** ⇒ 目录名必须严格 = skill_id。
+- **OH/package 范式 frontmatter**（范式源 `configs/skills/packages/iqd/business-analysis/SKILL.md`）：`name` / `skill_id` / `description` / `version:"1.0.0"` / `category` / `tags`(末位放自身 skill_id) / `source: package` / `status` / `timeout:120` / `requires_approval` / `required_permissions`。**不含** `handler`/`parameters`/`priority`/`agent_created`（那是 custom 路径字段）。
+- 🔴 **Skill 层拿不到 SQL**：`projector.py` L51/106/114 在 `view=user` 删 `sql`/`sql_dialect` ⇒ Skill 里禁止写任何「解析/校验 SQL」的规则（永远不触发的死规则，还会让人误以为有防护）；表级校验必须在 iqd 侧做。
+- Skill 落盘 `{SKILL_CUSTOM_STORE_DIR}/{skill_id}/SKILL.md`（默认 `data/skills`，相对 cwd）；**启用**在该 agent 的 `skills/enabled-skills.yaml` —— 两处，别只搬文件。
+- 🔴 **`iqd__ask` 的 question 有三重消费**（`orchestrator.py`，iqd 全程原样传递、不改写）：① 喂 WrenAI 生成 SQL；② `recall_queries` 召回样本；③ `_rank_model_candidates` 候选表打分。后两处在 iqd 内部 ⇒ Skill 侧改写**直接影响选表与召回**。因此：改写须**保留中文业务词**（销售/门店/订单/客户/成本/季度，英文别名映射见 `_rank_model_candidates` L1160 附近——换成英文列名会丢别名导致打分退化）；`【S#】` 前缀仅在样本库同格式时才有用，两边必须同进同出。
+
 ## 现状 / 里程碑（分支 flow）
 - **最新（已提交 `24ef5f6`，工作区干净）**：门户「全部事项」三源聚合 + 三项增量整体入库（71 文件，+5578/-693）。①`GET /api/v1/tasks/matters`（native `UNION ALL`：`sys_task`(assignee=我,全状态) ∪ `wf_instance`(initiator=我)，外层统一过滤/排序/分页 + 独立 COUNT，`wf_task` 只在 EXISTS/标量子查询防膨胀）；子 Tab 新增「全部」并设**默认**；命令面板点「待办事项」落 `all`。②事项搜索加发起人/参与人（作用全部子 Tab）。③首页三板块改表格 + 「平台/关联应用」「业务类型」列。④**三项增量**：流程/表单「业务分类」改下拉树单选（新增 `CategorySingleTreeSelect`）；待办/消息「全部」Tab 缺省不过滤；命令面板恢复各 APP 菜单（`search-registry` 含 system/agent/kb/iqd/finance，排除工作台 task）+ 按 appCode 分组。⑤`V140` 授权菜单 95012 给 role1；`V141` 登记 `sys_api 95100` 绑菜单 95002。**门禁**：tsc EXIT=0；前端精准子集 `26 files / 260 passed +1 todo` 零失败（1536MB/305s）；接口实测 200/`code:0`/`total:12`。
   - ⚠️ **踩坑：iqd 分组头与菜单项同名「问数」**（`APP_NAME.iqd==='问数'` 且 `IQD_NAV` 有同名项）→ 老测试 `getByText('问数')` 多匹配报错；已改 `getByRole('button',{name:'问数'})`。**新增分组 UI 后，凡「APP 名 == 菜单项名」的（如 iqd）断文案不能用 `getByText`，须按 role 精确命中。**

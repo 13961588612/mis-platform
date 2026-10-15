@@ -58,7 +58,7 @@ Data ID **不带 `.yaml`** 扩展名。
 1. **端口、路由、下游地址、超时、功能开关、生产拓扑（主机 IP）** → Nacos（尽量多放，少靠本机 env）
 2. **密钥类**（DB 密码、共享 token、默认口令）→ 优先 **推送后在 Nacos 控制台填写**；Git 源文件只留 `${VAR:}` 占位，禁止把真实生产密钥提交仓库。本机 env 仅作覆盖兜底
 3. **公钥/私钥路径**（非密钥内容）→ 可写进 Nacos（如 `/usr/local/app/keys/*.pem`）
-4. **本机仍须 env 的只有**：连上 Nacos 本身（`MIS_REMOTE` / `NACOS_SERVER` / `NACOS_NAMESPACE`）+ 外置 `logging.config` 路径
+4. **本机仍须 env 的只有**：连上 Nacos 本身（`MIS_REMOTE` / `NACOS_SERVER` / `NACOS_NAMESPACE`；鉴权开启时另加 `NACOS_USERNAME` / `NACOS_PASSWORD`）+ 外置 `logging.config` 路径
 5. **本机纯 local**：显式 `MIS_REMOTE=false`，仍用各模块 `application.yml`；不设该变量时**默认连 Nacos**（`${MIS_REMOTE:true}`）
 
 ### 推送
@@ -90,9 +90,10 @@ remote（`MIS_REMOTE=true`）时：Nacos（`mis-common` + 本服务 Data ID）�
 ```yaml
 spring.application.name          # 与 Nacos Data ID 一致，如 mis-auth
 spring.cloud.nacos.config.*      # enabled=${MIS_REMOTE:true}、server-addr、namespace、group
+                                 # username/password=${NACOS_USERNAME|PASSWORD:nacos}
                                  # shared-configs: mis-common
                                  # extension-configs: ${spring.application.name}
-spring.cloud.nacos.discovery.*   # enabled 与 config 同步；server-addr / namespace
+spring.cloud.nacos.discovery.*   # enabled 与 config 同步；server-addr / namespace / username / password
 ```
 
 **禁止** 在 `bootstrap.yml` 写：`server.port`、数据源、业务 `mis.*`、路由表。

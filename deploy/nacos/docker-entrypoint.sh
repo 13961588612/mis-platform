@@ -12,19 +12,40 @@ JVM_XMS="${JVM_XMS:-256m}"
 JVM_XMX="${JVM_XMX:-512m}"
 JVM_XMN="${JVM_XMN:-128m}"
 NACOS_AUTH_ENABLE="${NACOS_AUTH_ENABLE:-false}"
+# Base64(≥32 bytes)。生产开启鉴权必填；2.3 JwtTokenManager 建 bean 时也会校验
+NACOS_AUTH_TOKEN="${NACOS_AUTH_TOKEN:-}"
+NACOS_AUTH_IDENTITY_KEY="${NACOS_AUTH_IDENTITY_KEY:-serverIdentity}"
+NACOS_AUTH_IDENTITY_VALUE="${NACOS_AUTH_IDENTITY_VALUE:-}"
 MODE="${MODE:-standalone}"
 PREFER_HOST_MODE="${PREFER_HOST_MODE:-hostname}"
 SPRING_DATASOURCE_PLATFORM="${SPRING_DATASOURCE_PLATFORM:-}"
+
+if [[ "${NACOS_AUTH_ENABLE}" == "true" && -z "${NACOS_AUTH_TOKEN}" ]]; then
+  echo "ERROR: NACOS_AUTH_ENABLE=true 时必须设置 NACOS_AUTH_TOKEN（Base64，解码后 ≥32 字节）" >&2
+  echo "  生成: openssl rand -base64 32" >&2
+  echo "  文档: https://nacos.io/zh-cn/docs/v2/guide/user/auth.html" >&2
+  exit 1
+fi
 
 # JDK 17：用 G1，避免官方镜像里 CMS + Xmn≈Xmx 打满 CPU
 JAVA_OPT="-server -Xms${JVM_XMS} -Xmx${JVM_XMX} -Xmn${JVM_XMN}"
 JAVA_OPT="${JAVA_OPT} -XX:+UseG1GC -XX:MaxGCPauseMillis=200"
 JAVA_OPT="${JAVA_OPT} -Dnacos.standalone=true"
 JAVA_OPT="${JAVA_OPT} -Dnacos.core.auth.enabled=${NACOS_AUTH_ENABLE}"
+JAVA_OPT="${JAVA_OPT} -Dnacos.core.auth.system.type=nacos"
 JAVA_OPT="${JAVA_OPT} -Dnacos.preferHostnameOverIp=true"
 JAVA_OPT="${JAVA_OPT} -Dloader.path=${NACOS_HOME}/plugins"
 JAVA_OPT="${JAVA_OPT} -Dnacos.home=${NACOS_HOME}"
 JAVA_OPT="${JAVA_OPT} -Duser.timezone=${TZ:-Asia/Shanghai}"
+
+# JWT / 节点身份：优先环境变量（-D 覆盖 conf 里空值）
+if [[ -n "${NACOS_AUTH_TOKEN}" ]]; then
+  JAVA_OPT="${JAVA_OPT} -Dnacos.core.auth.plugin.nacos.token.secret.key=${NACOS_AUTH_TOKEN}"
+fi
+if [[ -n "${NACOS_AUTH_IDENTITY_VALUE}" ]]; then
+  JAVA_OPT="${JAVA_OPT} -Dnacos.core.auth.server.identity.key=${NACOS_AUTH_IDENTITY_KEY}"
+  JAVA_OPT="${JAVA_OPT} -Dnacos.core.auth.server.identity.value=${NACOS_AUTH_IDENTITY_VALUE}"
+fi
 
 # PG 模式直接用 application-pg.properties，避免 cp 覆盖可能被 bind-mount 的 application.properties
 CONFIG_NAME=application

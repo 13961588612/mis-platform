@@ -90,6 +90,8 @@ scripts/
 | `MIS_REMOTE` | 是 | `true` |
 | `NACOS_NAMESPACE` | 是 | `test` / `prod` / `integration` |
 | `NACOS_SERVER` | 是 | `nacos:8848` |
+| `NACOS_USERNAME` | 鉴权开启时 | `nacos`（默认） |
+| `NACOS_PASSWORD` | 鉴权开启时 | 生产勿用默认 `nacos` |
 | `JWT_PRIVATE_KEY_PATH` | mis-auth | `/keys/private.pem` |
 | `JWT_PUBLIC_KEY_PATH` | gateway / 验签 | `/keys/public.pem` |
 | `DB_HOST` 等 | 视 Nacos 配置 | 可在 `mis-common` 或 env 注入 |

@@ -212,6 +212,8 @@ sudo mkdir -p /opt/mis/{apps,logs,keys}
 export MIS_REMOTE=true
 export NACOS_NAMESPACE=prod
 export NACOS_SERVER=10.254.26.36:8848
+export NACOS_USERNAME=nacos
+export NACOS_PASSWORD='<改成控制台真实口令>'   # 开鉴权后必填；勿提交仓库
 export JWT_PUBLIC_KEY_PATH=/usr/local/app/keys/public.pem   # 多服务共享
 # mis-auth / BFF 嵌入兑换另需：export JWT_PRIVATE_KEY_PATH=/usr/local/app/keys/private.pem
 # 或 MIS_JWT_PRIVATE_KEY_PATH（BFF application.yml）
@@ -618,24 +620,34 @@ cp /data/mis-nacos/server/application.properties /data/mis-nacos/conf/applicatio
 # 编辑 db.url.0 / db.user.0 / db.password.0（postgres 主机名或 10.254.26.36）
 vi /data/mis-nacos/conf/application-pg.properties
 
-docker network create mis-net 2>/dev/null || true
-docker network connect mis-net mis-postgres 2>/dev/null || true
-docker network connect --alias postgres mis-net mis-postgres 2>/dev/null || true
 
+# 2. 生成密钥（保存好，重启要复用同一套）
+export NACOS_AUTH_TOKEN="$(openssl rand -base64 32)"
+export NACOS_AUTH_IDENTITY_VALUE="$(openssl rand -hex 16)"
+mkdir -p /data/mis-nacos/conf
+umask 077
+printf '%s\n' "$NACOS_AUTH_TOKEN" > /data/mis-nacos/conf/.nacos-auth-token
+printf '%s\n' "$NACOS_AUTH_IDENTITY_VALUE" > /data/mis-nacos/conf/.nacos-auth-identity
+echo "TOKEN=$NACOS_AUTH_TOKEN"
+echo "IDENT=$NACOS_AUTH_IDENTITY_VALUE"
+# 3. 带 token 启动（其余参数按你现网补全）
 docker run -d --name mis-nacos --restart unless-stopped \
-  --network mis-net \
   -p 8848:8848 -p 9848:9848 \
   -e MODE=standalone \
   -e SPRING_DATASOURCE_PLATFORM=postgresql \
-  -e NACOS_AUTH_ENABLE=false \
-  -e JVM_XMS=1024m -e JVM_XMX=1024m -e JVM_XMN=256m \
-  -v /data/mis-nacos/logs:/home/nacos/logs \
+  -e NACOS_AUTH_ENABLE=true \
+  -e NACOS_AUTH_TOKEN \
+  -e NACOS_AUTH_IDENTITY_KEY=serverIdentity \
+  -e NACOS_AUTH_IDENTITY_VALUE \
+  -e JVM_XMS=1024m -e JVM_XMX=1024m \
+  -v /data/mis-nacos/plugins:/home/nacos/plugins:ro \
   -v /data/mis-nacos/conf/application-pg.properties:/home/nacos/conf/application-pg.properties:ro \
+  -v /data/mis-nacos/logs:/home/nacos/logs \
   mis-nacos:2.3.2-jdk17
-```
 
-> 自建镜像已在 **build 时 COPY plugins/**，一般**不必**再 `-v plugins`；改插件后需 **重新 build** 镜像。  
-> 自定义 JDBC 靠挂载 `application-pg.properties`（entrypoint 在 PG 模式下会拷为 `application.properties`）。
+> **鉴权**：`NACOS_AUTH_ENABLE=true` 时必须带 `NACOS_AUTH_TOKEN`（entrypoint 会 `-D` 注入；缺则启动前直接 exit）。不改镜像时，也可把同名项写进挂载的 `application-pg.properties`。  
+> 自建镜像已在 **build 时 COPY plugins/**，一般**不必**再 `-v plugins`；改插件 / entrypoint 后需 **重新 build** 镜像。  
+> 自定义 JDBC 靠挂载 `application-pg.properties`。
 
 ##### 步骤 5 — 验收与推送 `prod`
 
