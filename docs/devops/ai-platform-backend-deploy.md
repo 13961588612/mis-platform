@@ -245,7 +245,7 @@ BFF 侧 Nacos 已配：`mis.ai-platform.base-url: http://127.0.0.1:8000`（同�
 | 组件 | 部署位置 | 文档 |
 |------|----------|------|
 | Embedding | S1 `:8001` | [prod-deploy.md](prod-deploy.md) Embedding 小节 |
-| ai-platform-gateway | S2 `:3100` | `agent/ai-platform/gateway/`，compose / 单独 Node 部署 |
+| ai-platform-gateway | S2 `:3100` | [ai-platform-gateway-deploy.md](ai-platform-gateway-deploy.md) |
 | WrenMcpAgent | S5 | [wren-mcp-agent-deploy.md](../ai-fusion/wrenai/wren-mcp-agent-deploy.md) |
 | Squid | S2 `:3128` | prod-deploy S2 |
 

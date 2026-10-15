@@ -1,0 +1,46 @@
+# mis-gateway — systemd (S2 ai-portal)
+#
+# 前置：
+#   1) 宿主机已装 Java 17（JRE 即可）
+#   2) JAR：/usr/local/app/mis-gateway/mis-gateway.jar
+#   3) 环境：/usr/local/app/mis-gateway/mis-gateway.env（自 mis-gateway.env.example 复制）
+#   4) JWT 公钥：/usr/local/app/keys/public.pem（对该 User 可读）
+#
+# 安装：
+#   sudo cp deploy/systemd/mis-gateway.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now mis-gateway
+#   sudo systemctl status mis-gateway
+#
+# 日志：journalctl -u mis-gateway -f
+
+[Unit]
+Description=MIS API Gateway (mis-gateway :8080)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+WorkingDirectory=/usr/local/app/mis-gateway
+
+EnvironmentFile=-/usr/local/app/mis-gateway/mis-gateway.env
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+
+# JAVA_HOME 若已写 /etc/profile.d/java17.sh，systemd 不会自动加载；需要时取消下一行注释并改路径
+# Environment=JAVA_HOME=/usr/lib/jvm/java-17-openjdk
+# Environment=PATH=/usr/lib/jvm/java-17-openjdk/bin:/usr/local/bin:/usr/bin:/bin
+
+ExecStart=/usr/bin/java -Xms512m -Xmx1024m -jar /usr/local/app/mis-gateway/mis-gateway.jar
+
+Restart=always
+RestartSec=5
+UMask=0077
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=mis-gateway
+
+[Install]
+WantedBy=multi-user.target

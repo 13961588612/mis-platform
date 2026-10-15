@@ -312,6 +312,109 @@ Agent：`EMBEDDING_SERVICE_URL=http://127.0.0.1:8001`。
 - **Squid** 仅对内网（尤其 **S1**）开放 **3128**，勿对公网；白名单见 `agent/ai-platform/infra/outbound-proxy/squid.conf`。
 - 前端构建机 Node **20+** 即可；S2 运行时需要 Node **22**（Gateway）+ Nginx + JRE 17 + Squid。
 
+#### mis-gateway 裸跑（S2 · JAR + systemd）
+
+前置：§1.2 已装 **Java 17**；S4 Nacos/`mis-common`+`mis-gateway` 已推；S1 上 `mis-auth` / `mis-admin-bff` 等已注册；JWT **公钥**已放到 S2。
+
+| 项 | 路径 |
+|----|------|
+| 安装目录 | `/usr/local/app/mis-gateway/` |
+| JAR | `mis-gateway.jar` |
+| 环境变量 | `mis-gateway.env`（模板 `deploy/env/prod/mis-gateway.env.example`） |
+| systemd | `deploy/systemd/mis-gateway.service` → `/etc/systemd/system/` |
+| JWT 公钥 | `/usr/local/app/keys/public.pem` |
+
+**① 构建机打制品**
+
+```bash
+cd /path/to/mis-platform/backend
+./mvn.ps1 package -pl mis-gateway -am -DskipTests -Pprod   # Windows: .\mvn.ps1 ...
+# 产物：backend/mis-gateway/target/mis-gateway-*.jar（以实际文件名为准）
+```
+
+**② S2 落盘**
+
+```bash
+sudo mkdir -p /usr/local/app/mis-gateway/logs /usr/local/app/keys
+# scp JAR → /usr/local/app/mis-gateway/mis-gateway.jar
+# scp public.pem → /usr/local/app/keys/public.pem
+# scp deploy/env/prod/mis-gateway.env.example → /usr/local/app/mis-gateway/mis-gateway.env
+sudo chmod 600 /usr/local/app/mis-gateway/mis-gateway.env
+sudo chmod 644 /usr/local/app/keys/public.pem
+```
+
+编辑 `mis-gateway.env`（必填）：
+
+```bash
+MIS_REMOTE=true
+NACOS_SERVER=10.254.26.36:8848
+NACOS_NAMESPACE=prod
+NACOS_CONFIG_GROUP=MIS_GROUP
+NACOS_USERNAME=nacos
+NACOS_PASSWORD='<Nacos 控制台口令>'
+REDIS_PASSWORD='<与 Redis requirepass 一致>'
+JWT_PUBLIC_KEY_PATH=/usr/local/app/keys/public.pem
+```
+
+**③ systemd 启动**
+
+```bash
+sudo cp /path/to/mis-platform/deploy/systemd/mis-gateway.service /etc/systemd/system/
+# 若 java 不在 /usr/bin/java：编辑 unit 里 ExecStart，或取消 JAVA_HOME 注释
+sudo systemctl daemon-reload
+sudo systemctl enable --now mis-gateway
+sudo systemctl status mis-gateway
+journalctl -u mis-gateway -f
+```
+
+**④ 验收**
+
+```bash
+curl -fsS http://127.0.0.1:8080/actuator/health
+# Nacos 控制台：mis-gateway 实例 IP 应为 10.254.26.34
+```
+
+临时前台调试（不用 systemd 时）：
+
+```bash
+cd /usr/local/app/mis-gateway
+set -a && source ./mis-gateway.env && set +a
+java -Xms512m -Xmx1024m -jar mis-gateway.jar
+```
+
+#### ai-platform-gateway 裸跑（S2 · Node 22 + systemd）
+
+> 全文见 [ai-platform-gateway-deploy.md](ai-platform-gateway-deploy.md)。
+
+前置：S2 **Node.js 22**；S1 Agent Core `:8000`；S4 Redis DB **2**（含密码）；JWT 公钥已就位。
+
+| 项 | 路径 |
+|----|------|
+| 工作目录 | `/usr/local/app/ai-platform-gateway/agent/ai-platform/gateway/` |
+| 环境变量 | `.env`（模板 `deploy/env/prod/ai-platform-gateway.env.example`） |
+| systemd | `agent/ai-platform/infra/ai-platform-gateway.service` |
+| 监听 | **3100**（⚠ 代码默认 `GATEWAY_PORT=8080`，生产必须显式设 3100） |
+
+```bash
+# 安装 Node 22 后：
+cd /usr/local/app/ai-platform-gateway/agent/ai-platform/gateway
+cp /path/to/deploy/env/prod/ai-platform-gateway.env.example .env
+# 编辑 REDIS_URL / JWT_SECRET / AGENT_CORE_API_URL / GATEWAY_INTERNAL_TOKEN / GATEWAY_PORT=3100
+chmod 600 .env
+npm ci && npm run build
+
+# 试跑
+node dist/index.js
+# curl -fsS http://127.0.0.1:3100/health
+
+# 常驻
+sudo cp /path/to/agent/ai-platform/infra/ai-platform-gateway.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now ai-platform-gateway
+```
+
+`GATEWAY_INTERNAL_TOKEN` 须与 S1 Backend `.env` **完全一致**。
+
 ### 2.3 S3 — `ai-rag`（10.254.26.35）知识库 RAGFlow
 
 > 交付目录：`[deploy/ragflow/](../../deploy/ragflow/)` · 版本表以该目录 README / `.env.example` 为准。

@@ -24,7 +24,9 @@ spring:
       host: 10.254.26.36
       port: 6379
       database: 0
-      # password: ${REDIS_PASSWORD:}   # enable if Redis AUTH is on
+      # Fill in Nacos console after push (quote if value contains #: "mis#redis1014"),
+      # or export REDIS_PASSWORD on each app host
+      password: ${REDIS_PASSWORD:}
   jpa:
     open-in-view: false
     hibernate:
