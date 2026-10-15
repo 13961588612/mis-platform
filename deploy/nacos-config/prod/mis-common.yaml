@@ -6,7 +6,8 @@ spring:
   datasource:
     url: "jdbc:postgresql://10.254.26.36:5432/mis_platform?tcpKeepAlive=true&ApplicationName=${spring.application.name}&loginTimeout=10"
     username: mis
-    # Fill in Nacos console after push, or export DB_PASSWORD on host
+    # Fill in Nacos console after push (quote if value contains #: "mis#1014"),
+    # or export DB_PASSWORD on host
     password: ${DB_PASSWORD:}
     driver-class-name: org.postgresql.Driver
     hikari:

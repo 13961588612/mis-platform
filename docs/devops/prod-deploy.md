@@ -755,6 +755,7 @@ docker logs mis-nacos --tail 80
 | `mis-auth`                                                             | `captcha-enabled: true`、`cookie.secure: true`                |
 | `mis-iam` / `mis-org` / `mis-audit` / `mis-admin-bff` / `mis-system` 等 | 各域业务配置                                                       |
 | `mis-kb`                                                               | `engine.type=ragflow`，`base-url` / `api-key` **运维注入**，不进 Git |
+| `mis-iqd`                                                              | 端口 `8109`；`ddl-auto=validate`；DB/Redis 走 `mis-common`          |
 
 
 源目录：`deploy/nacos-config/prod/`。

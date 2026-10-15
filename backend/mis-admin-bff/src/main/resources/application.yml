@@ -4,6 +4,21 @@ server:
 spring:
   application:
     name: mis-admin-bff
+  config:
+    # Boot 3 ConfigData: imported wins over this file; remote uses Nacos mis-common
+    # local: MIS_REMOTE=false + optional; test/prod: NACOS_NAMESPACE=test|prod
+    import:
+      - optional:nacos:mis-common?group=${NACOS_CONFIG_GROUP:MIS_GROUP}&refreshEnabled=true
+      - optional:nacos:${spring.application.name}?group=${NACOS_CONFIG_GROUP:MIS_GROUP}&refreshEnabled=true
+  cloud:
+    nacos:
+      config:
+        server-addr: ${NACOS_SERVER:10.254.16.6:8848}
+        namespace: ${NACOS_NAMESPACE:dev}
+        username: ${NACOS_USERNAME:nacos}
+        password: ${NACOS_PASSWORD:nacos}
+        group: ${NACOS_CONFIG_GROUP:MIS_GROUP}
+        file-extension: yaml
   datasource:
     # D12：嵌入身份兑换直读共享平台库（agent_external_host / agent_external_identity）
     # 与 mis-iqd 等一致：优先 SPRING_DATASOURCE_*，否则走 DB_HOST/DB_USER（.env.integration）

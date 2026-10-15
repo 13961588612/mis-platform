@@ -4,6 +4,12 @@ server:
 spring:
   application:
     name: mis-gateway
+  config:
+    # Boot 3 ConfigData: imported wins over this file; remote uses Nacos mis-common
+    # local: MIS_REMOTE=false + optional; test/prod: NACOS_NAMESPACE=test|prod
+    import:
+      - optional:nacos:mis-common?group=${NACOS_CONFIG_GROUP:MIS_GROUP}&refreshEnabled=true
+      - optional:nacos:${spring.application.name}?group=${NACOS_CONFIG_GROUP:MIS_GROUP}&refreshEnabled=true
   main:
     web-application-type: reactive
   data:
@@ -12,6 +18,14 @@ spring:
       port: ${REDIS_PORT:6379}
       database: 0
   cloud:
+    nacos:
+      config:
+        server-addr: ${NACOS_SERVER:10.254.16.6:8848}
+        namespace: ${NACOS_NAMESPACE:dev}
+        username: ${NACOS_USERNAME:nacos}
+        password: ${NACOS_PASSWORD:nacos}
+        group: ${NACOS_CONFIG_GROUP:MIS_GROUP}
+        file-extension: yaml
     gateway:
       httpclient:
         # 问数 / Agent chat 可达 180s；未配置时长请求可能被提前断连

@@ -28,7 +28,7 @@ Group=root
 WorkingDirectory=/usr/local/app/ai-platform-backend/agent/ai-platform/backend
 
 # 应用环境（密码等）；缺省文件不导致失败
-EnvironmentFile=-/usr/local/app/ai-platform-backend/.env
+EnvironmentFile=-/usr/local/app/ai-platform-backend/agent/ai-platform/backend/.env
 
 # 保证 systemd 能找到 uv（不依赖登录 shell 的 PATH）
 Environment=PATH=/usr/local/bin:/usr/bin:/bin

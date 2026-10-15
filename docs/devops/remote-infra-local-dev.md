@@ -168,7 +168,7 @@ alembic upgrade head
 .\scripts\nacos-push.ps1 -Namespace integration -NacosServer "http://<INFRA_HOST>:8848"
 ```
 
-应有 Data ID：`mis-common`、`mis-gateway`、`mis-auth`、`mis-iam`、`mis-org`、`mis-audit`、`mis-admin-bff`、`mis-kb`（有知识库时）。配置源目录：`deploy/nacos-config/{integration|test}/`。
+应有 Data ID：`mis-common`、`mis-gateway`、`mis-auth`、`mis-iam`、`mis-org`、`mis-audit`、`mis-admin-bff`、`mis-kb`（有知识库时）、`mis-iqd`（有问数时）。配置源目录：`deploy/nacos-config/{integration|test}/`。
 
 控制台：`http://<INFRA_HOST>:8848/nacos`。
 

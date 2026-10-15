@@ -13,7 +13,7 @@
 flowchart LR
     Git["deploy/nacos-config/{env}/"] -->|nacos-push| Nacos["Nacos Server"]
     Nacos -->|JDBC| PG[("PostgreSQL nacos 库")]
-    MS["微服务 MIS_REMOTE=true"] -->|bootstrap 拉取| Nacos
+    MS["微服务 MIS_REMOTE=true"] -->|spring.config.import| Nacos
 ```
 
 ## 2. 配置 Git 源
@@ -36,6 +36,7 @@ deploy/nacos-config/
 | `mis-system.yaml` | `mis-system` | `MIS_GROUP` | 8105 |
 | `mis-audit.yaml` | `mis-audit` | `MIS_GROUP` | 8106 |
 | `mis-kb.yaml` | `mis-kb` | `MIS_GROUP` | 8108 |
+| `mis-iqd.yaml` | `mis-iqd` | `MIS_GROUP` | 8109 |
 | `mis-admin-bff.yaml` | `mis-admin-bff` | `MIS_GROUP` | 8081 |
 
 Data ID **不带 `.yaml`** 扩展名。
@@ -52,6 +53,7 @@ Data ID **不带 `.yaml`** 扩展名。
 | **mis-system** | `server.port` | —（业务配置较少） |
 | **mis-audit** | `server.port` | — |
 | **mis-kb** | `server.port`、`mis.kb.iam.base-url`、`mis.kb.engine.type/base-url/rerank-model-id` | `MIS_KB_ENGINE_API_KEY`（密钥用 env 注入）；`MIS_KB_IAM_BASE_URL` 可选覆盖 IAM 地址 |
+| **mis-iqd** | `server.port`、`spring.jpa.hibernate.ddl-auto=validate`（表由 migrator 建） | DB/Redis 走 `mis-common`；问数凭证不进本 Data ID |
 | **mis-admin-bff** | `server.port`、下游 `mis.bff.*-base-url` + discovery 开关、`aggregate-timeout-ms`、`api-permission.*`、`mis.ai-platform.*`（非密钥）、`mis.agent-ops.*`（含 `chat-timeout-ms`）、`mis.mcp.servers` | `service-token` / `MIS_JWT_PUBLIC_KEY` / 默认密码等密钥类 |
 
 原则：
@@ -81,7 +83,7 @@ Data ID **不带 `.yaml`** 扩展名。
 | `bootstrap.yml` | **保留** | 仅负责：应用名 + 是否连 Nacos + Nacos 地址/命名空间/Group；**不写业务配置** |
 | `application.yml` | **保留** | **local 完整可跑画像**：`MIS_REMOTE=false` 时唯一权威；本机 Docker PG/Redis、localhost 直连下游 |
 
-remote（`MIS_REMOTE=true`）时：Nacos（`mis-common` + 本服务 Data ID）覆盖同名键；`application.yml` 仍打进 jar，作未迁入键的兜底，**不以删空 jar 配置为目标**。
+remote（`MIS_REMOTE=true`）时：经 `spring.config.import` 拉取 Nacos（`mis-common` + 本服务 Data ID），**imported 优先于** jar 内同名键；`application.yml` 仍保留 local 兜底，**不以删空 jar 配置为目标**。
 
 ### 3.1 `bootstrap.yml` 应写内容（全服务同构）
 
@@ -91,10 +93,19 @@ remote（`MIS_REMOTE=true`）时：Nacos（`mis-common` + 本服务 Data ID）�
 spring.application.name          # 与 Nacos Data ID 一致，如 mis-auth
 spring.cloud.nacos.config.*      # enabled=${MIS_REMOTE:true}、server-addr、namespace、group
                                  # username/password=${NACOS_USERNAME|PASSWORD:nacos}
-                                 # shared-configs: mis-common
-                                 # extension-configs: ${spring.application.name}
+                                 # （不再写 shared-configs / extension-configs）
 spring.cloud.nacos.discovery.*   # enabled 与 config 同步；server-addr / namespace / username / password
 ```
+
+配置拉取改在各服务 `application.yml`（Boot 3 ConfigData，保证覆盖本地同名键）：
+
+```yaml
+spring.config.import:
+  - optional:nacos:mis-common?group=${NACOS_CONFIG_GROUP:MIS_GROUP}&refreshEnabled=true
+  - optional:nacos:${spring.application.name}?group=${NACOS_CONFIG_GROUP:MIS_GROUP}&refreshEnabled=true
+```
+
+`optional`：`MIS_REMOTE=false` 时不阻断本地启动。Data ID **无** `.yaml` 后缀（与 `nacos-push` 一致）。
 
 **禁止** 在 `bootstrap.yml` 写：`server.port`、数据源、业务 `mis.*`、路由表。
 
@@ -185,7 +196,7 @@ PostgreSQL
 | 层 | 时机 | 做什么 | 通过标准 |
 |----|------|--------|----------|
 | **L1 静态** | push 前 | 三环境同名 yaml **键集合**一致；`rg` 扫 `nacos-config` 无真实密钥；`application.yml`/`bootstrap.yml` 未被掏空 | 仅允许 host/url 等**值**因环境不同；密钥只有 `${VAR}` |
-| **L2 推送** | `nacos-push` 后 | OpenAPI 列出 Data ID；逐个拉取正文与 Git 源 diff；抽查本批关键键 | 9 个 Data ID 齐全；无控制台手工漂移（以 Git 为准） |
+| **L2 推送** | `nacos-push` 后 | OpenAPI 列出 Data ID；逐个拉取正文与 Git 源 diff；抽查本批关键键 | 10 个 Data ID 齐全（含 `mis-iqd`）；无控制台手工漂移（以 Git 为准） |
 | **L3 运行** | 重启本批服务后 | **local**：`MIS_REMOTE=false` 能登录；**remote**：默认/`true` + `.env.integration` 起服务后行为来自 Nacos | 冒烟：登录 → Gateway 路由 →（若涉及）KB → Agent Ops 对话约 180s |
 
 **每批最小包**：B1 盯 BFF+对话；B2 盯登录/组织权限；B3 盯明文清零 + 缺 Secret 负向；B4 对 test/prod 重复 L2 并做一次 Nacos 历史回滚演练。

@@ -1,8 +1,9 @@
-# 复制到各微服务 src/main/resources/bootstrap.yml，并修改 spring.application.name
+# Copy to each service src/main/resources/bootstrap.yml and set spring.application.name
 #
-# 默认连 Nacos（MIS_REMOTE 默认 true）。纯本地不连 Nacos 时显式设 MIS_REMOTE=false
-# remote：MIS_REMOTE=true（默认）+ NACOS_NAMESPACE + NACOS_SERVER
-# 鉴权开启时：NACOS_USERNAME / NACOS_PASSWORD（生产务必覆盖默认口令）
+# MIS_REMOTE=true (default) connects Nacos; local must set MIS_REMOTE=false
+# Config payloads: application.yml spring.config.import (Boot 3 ConfigData)
+# remote: NACOS_NAMESPACE=test|prod|integration + NACOS_SERVER
+# auth: NACOS_USERNAME / NACOS_PASSWORD
 
 spring:
   application:
@@ -17,14 +18,6 @@ spring:
         password: ${NACOS_PASSWORD:nacos}
         group: ${NACOS_CONFIG_GROUP:MIS_GROUP}
         file-extension: yaml
-        shared-configs:
-          - data-id: mis-common
-            group: ${NACOS_CONFIG_GROUP:MIS_GROUP}
-            refresh: true
-        extension-configs:
-          - data-id: ${spring.application.name}
-            group: ${NACOS_CONFIG_GROUP:MIS_GROUP}
-            refresh: true
       discovery:
         enabled: ${MIS_REMOTE:true}
         server-addr: ${NACOS_SERVER:10.254.16.6:8848}

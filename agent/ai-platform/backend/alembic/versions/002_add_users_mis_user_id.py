@@ -23,6 +23,9 @@ T03 #15-a：企微渠道（``user_id = wecom_{wecom_user_id}``）没有 MIS user
 
 配套 ORM 改动见 ``src/models/user.py::UserModel.mis_user_id``（F32：加列走迁移，
 不依赖 ``create_all``）。
+
+绿库说明：历史链上 ``users`` 要到 005 才建表。本修订若发现表不存在则 **no-op**，
+由 005 建整表（已含 ``mis_user_id``）；若表已存在（旧环境）则补列。
 """
 from __future__ import annotations
 
@@ -43,8 +46,28 @@ TABLE_NAME: str = "users"
 COLUMN_NAME: str = "mis_user_id"
 
 
+def _users_table_exists() -> bool:
+    bind = op.get_bind()
+    inspector = sa.inspect(bind)
+    return TABLE_NAME in inspector.get_table_names()
+
+
+def _column_exists() -> bool:
+    bind = op.get_bind()
+    inspector = sa.inspect(bind)
+    cols = {c["name"] for c in inspector.get_columns(TABLE_NAME)}
+    return COLUMN_NAME in cols
+
+
 def upgrade() -> None:
-    """Add the nullable, uniquely-indexed ``users.mis_user_id`` column."""
+    """Add the nullable, uniquely-indexed ``users.mis_user_id`` column.
+
+    绿库无 ``users`` 时跳过（005 建表已含该列）；旧库有表无列时补列。
+    """
+    if not _users_table_exists():
+        return
+    if _column_exists():
+        return
     op.add_column(
         TABLE_NAME,
         sa.Column(COLUMN_NAME, sa.BigInteger(), nullable=True),
@@ -59,5 +82,7 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     """Drop the ``users.mis_user_id`` column and its unique index."""
+    if not _users_table_exists() or not _column_exists():
+        return
     op.drop_index(INDEX_NAME, table_name=TABLE_NAME)
     op.drop_column(TABLE_NAME, COLUMN_NAME)

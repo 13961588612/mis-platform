@@ -1,3 +1,6 @@
+# MIS_REMOTE=true (default) connects Nacos; local must set MIS_REMOTE=false
+# Config payloads via application.yml spring.config.import (Boot 3 ConfigData)
+# test/prod: NACOS_NAMESPACE=test|prod + NACOS_SERVER; auth: NACOS_USERNAME/PASSWORD
 spring:
   application:
     name: mis-taskflow
@@ -11,14 +14,6 @@ spring:
         password: ${NACOS_PASSWORD:nacos}
         group: ${NACOS_CONFIG_GROUP:MIS_GROUP}
         file-extension: yaml
-        shared-configs:
-          - data-id: mis-common
-            group: ${NACOS_CONFIG_GROUP:MIS_GROUP}
-            refresh: true
-        extension-configs:
-          - data-id: ${spring.application.name}
-            group: ${NACOS_CONFIG_GROUP:MIS_GROUP}
-            refresh: true
       discovery:
         enabled: ${MIS_REMOTE:true}
         server-addr: ${NACOS_SERVER:10.254.16.6:8848}

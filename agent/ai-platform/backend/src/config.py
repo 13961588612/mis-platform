@@ -13,7 +13,7 @@ from enum import Enum
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import AliasChoices, BeforeValidator, Field, field_validator
+from pydantic import AliasChoices, BeforeValidator, Field
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
@@ -26,7 +26,10 @@ def _wren_env(*names: str) -> AliasChoices:
 
 
 def _parse_str_list(v: Any) -> list[str]:
-    """解析 list 环境变量：支持 JSON 数组、逗号分隔，或已是 list。"""
+    """解析 list 环境变量：支持 JSON 数组、逗号分隔，或已是 list。
+
+    兼容 ``source .env`` 把 ``["--force"]`` 吃成 ``[--force]`` 的伪 JSON。
+    """
     if v is None or v == "":
         return []
     if isinstance(v, list):
@@ -36,10 +39,20 @@ def _parse_str_list(v: Any) -> list[str]:
         if s.startswith("["):
             import json
 
-            parsed = json.loads(s)
-            if isinstance(parsed, list):
-                return [str(x).strip() for x in parsed if str(x).strip()]
-        return [part.strip() for part in s.split(",") if part.strip()]
+            try:
+                parsed = json.loads(s)
+                if isinstance(parsed, list):
+                    return [str(x).strip() for x in parsed if str(x).strip()]
+            except json.JSONDecodeError:
+                inner = s[1:-1].strip() if s.endswith("]") else s[1:]
+                if not inner:
+                    return []
+                return [
+                    part.strip().strip("'\"")
+                    for part in inner.split(",")
+                    if part.strip()
+                ]
+        return [part.strip().strip("'\"") for part in s.split(",") if part.strip()]
     return v
 
 
@@ -235,17 +248,24 @@ class IqdMcpSettings(BaseSettings):
     )
 
     # ------------------------------------------------------------------ 运维自愈三按钮（Q5：可选 flag 仅来自配置，方法体不得硬编码）
-    self_heal_force_build_args: list[str] = Field(
+    # NoDecode：.env 可用逗号分隔或 JSON；避免 source 后伪 JSON 被 EnvSettingsSource 直接 json.loads
+    self_heal_force_build_args: Annotated[
+        list[str], NoDecode, BeforeValidator(_parse_str_list)
+    ] = Field(
         default_factory=list,
         description="运维自愈 force-rebuild 时附加给 `wren context build` 的可选 flag（如 ['--force']）；"
         "W0 真机实测后由运维在 backend/.env 回填，默认空（退化普通增量 build）",
     )
-    self_heal_memory_reset_args: list[str] = Field(
+    self_heal_memory_reset_args: Annotated[
+        list[str], NoDecode, BeforeValidator(_parse_str_list)
+    ] = Field(
         default_factory=lambda: ["--force"],
         description="运维自愈 re-index 时附加给 `wren memory reset` 的可选参数；"
         "W0 实测：非 TTY 无确认会 stderr=Aborted，须 `--force`/`-f` 跳过确认",
     )
-    self_heal_context_validate_args: list[str] = Field(
+    self_heal_context_validate_args: Annotated[
+        list[str], NoDecode, BeforeValidator(_parse_str_list)
+    ] = Field(
         default_factory=list,
         description="运维自愈 validate 时附加给 `wren context validate` 的可选参数；W0 实测后回填，默认空",
     )
@@ -344,7 +364,8 @@ class Settings(BaseSettings):
     PORT: int = 8000
     WORKERS: int = 1
     RELOAD: bool = False
-    CORS_ORIGINS: list[str] = Field(
+    # NoDecode：避免 pydantic-settings 先按 JSON 解析，从而支持 .env 逗号分隔写法
+    CORS_ORIGINS: Annotated[list[str], NoDecode, BeforeValidator(_parse_str_list)] = Field(
         default_factory=lambda: [
             "http://localhost:3000",
             "http://127.0.0.1:3000",
@@ -571,7 +592,9 @@ class Settings(BaseSettings):
     # 上游 MIS RS256 JWT 的回放头名（与 BFF ReverseTrustInterceptor 对齐）。
     MIS_JWT_REPLAY_HEADER: str = "X-Mis-Upstream-Jwt"
     # P0 允许的 FormFill Skill ID 白名单（意图 → skillId 由工具内部映射）。
-    FORMFILL_ALLOWED_SKILLS: list[str] = Field(
+    FORMFILL_ALLOWED_SKILLS: Annotated[
+        list[str], NoDecode, BeforeValidator(_parse_str_list)
+    ] = Field(
         default_factory=lambda: ["user-fill"],
         description="P0 允许触发的 MIS FormFill 引擎 Skill ID 白名单",
     )
@@ -606,7 +629,9 @@ class Settings(BaseSettings):
     # 运行时执行码 = ai:mcp:call，运营台手动调用码 = agent:mcp:call（Q7 方案 B+）。
     MIS_ACL_MCP_FALLBACK_PERMISSION: str = "ai:mcp:call"
     # 超管豁免角色码；**默认空 = 豁免关闭**（§4.2 规则 4）。显式配置后命中角色方可绕过。
-    MIS_ACL_SUPERADMIN_BYPASS_ROLE_CODES: list[str] = Field(
+    MIS_ACL_SUPERADMIN_BYPASS_ROLE_CODES: Annotated[
+        list[str], NoDecode, BeforeValidator(_parse_str_list)
+    ] = Field(
         default_factory=list,
         description="超管豁免角色码白名单；默认空集合表示豁免关闭（fail-closed）",
     )
@@ -648,7 +673,9 @@ class Settings(BaseSettings):
     # 加入承接其能力的 mis-user-helper；**绝不**包含 mis-admin-helper
     # （后台操作员专属，只经 create_session 直达，copilot 全链路 fail-closed）。
     # v1.9（B1）：追加 mis-iqd（问数 Worker，role=worker、max_depth=1）。
-    INVOKE_AGENT_WHITELIST: list[str] = Field(
+    INVOKE_AGENT_WHITELIST: Annotated[
+        list[str], NoDecode, BeforeValidator(_parse_str_list)
+    ] = Field(
         default_factory=lambda: [
             "mis-rag",
             "crm-assistant",
@@ -682,7 +709,9 @@ class Settings(BaseSettings):
         default=10.0,
         description="generic_api provider 单次请求超时（秒）",
     )
-    SEARCH_SPECIFIED_URLS: list[str] = Field(
+    SEARCH_SPECIFIED_URLS: Annotated[
+        list[str], NoDecode, BeforeValidator(_parse_str_list)
+    ] = Field(
         default_factory=list,
         description="specified_urls provider 的定向 URL 列表（P2 待实现）",
     )
@@ -859,16 +888,6 @@ class Settings(BaseSettings):
     SENTRY_DSN: str = ""
     JAEGER_AGENT_HOST: str = ""
     JAEGER_AGENT_PORT: int = 6831
-
-    # ===== 属性验证器 =====
-
-    @field_validator("CORS_ORIGINS", mode="before")
-    @classmethod
-    def parse_cors_origins(cls, v: Any) -> list[str]:
-        """从逗号分隔字符串或列表中解析 CORS Origins。"""
-        if isinstance(v, str):
-            return [origin.strip() for origin in v.split(",") if origin.strip()]
-        return v
 
     # ===== 派生属性 =====
 

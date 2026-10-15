@@ -20,6 +20,7 @@
 | `mis-system.yaml` | `mis-system` |
 | `mis-audit.yaml` | `mis-audit` |
 | `mis-kb.yaml` | `mis-kb` |
+| `mis-iqd.yaml` | `mis-iqd` |
 | `mis-admin-bff.yaml` | `mis-admin-bff` |
 
 ## 推送与核对
@@ -35,7 +36,7 @@
 ## 注意
 
 - 配置通过 Nacos 下发，**不**与 JAR 打包进业务容器
-- 微服务 `bootstrap` 默认 `MIS_REMOTE=true`，从 Nacos 拉取
+- 微服务默认 `MIS_REMOTE=true`；经 `application.yml` 的 `spring.config.import` 拉 `mis-common` + 本服务 Data ID（Boot 3）
 - 纯本地开发须显式 `MIS_REMOTE=false`，见 [本地开发](../../docs/devops/local-dev.md)
 
 完整说明：[配置管理策略](../../docs/devops/configuration.md) · [运维总览](../../docs/devops/README.md)
