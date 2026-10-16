@@ -6,6 +6,7 @@ import com.mis.recon.repository.ConnectionRepository;
 import com.mis.recon.repository.DatasourceRepository;
 import com.mis.recon.repository.ScenarioRepository;
 import com.mis.recon.service.engine.CustomLoader;
+import com.mis.recon.service.support.ConnectionPoolManager;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
@@ -31,7 +32,8 @@ class FetchValidationTest {
         DatasourceRepository dsRepo = Mockito.mock(DatasourceRepository.class);
         ScenarioRepository scenarioRepo = Mockito.mock(ScenarioRepository.class);
         CustomLoader realLoader = new CustomLoader(Mockito.mock(ApplicationContext.class));
-        service = new ConfigValidationService(connRepo, dsRepo, scenarioRepo, realLoader);
+        service = new ConfigValidationService(connRepo, dsRepo, scenarioRepo, realLoader,
+                Mockito.mock(ConnectionPoolManager.class));
     }
 
     private DatasourceSaveReq apiDs(String cfg) {

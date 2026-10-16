@@ -93,12 +93,12 @@ public class ReportDao {
                 """.formatted(placeholders), detailIds.toArray());
     }
 
-    /** 收尾：send_status + diff_count + err_msg。 */
-    public void finishReportRun(long reportRunId, String sendStatus, int diffCount, String errMsg) {
+    /** 收尾：send_status + diff_count + diff_amount_sum（分）+ err_msg。 */
+    public void finishReportRun(long reportRunId, String sendStatus, int diffCount, long diffAmountSum, String errMsg) {
         jdbcTemplate.update("""
                 UPDATE recon_report_run
-                   SET send_status = ?, diff_count = ?, err_msg = ?, finished_at = now()
+                   SET send_status = ?, diff_count = ?, diff_amount_sum = ?, err_msg = ?, finished_at = now()
                  WHERE id = ?
-                """, sendStatus, diffCount, errMsg, reportRunId);
+                """, sendStatus, diffCount, diffAmountSum, errMsg, reportRunId);
     }
 }

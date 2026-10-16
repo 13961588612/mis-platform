@@ -9,8 +9,10 @@ interface MicroAppWindowApi {
   addDataListener: (listener: (data: Record<string, unknown>) => void) => void;
   /** 启动时拉取壳子已下发的最新数据 */
   getData: () => Record<string, unknown> | undefined;
-  /** 子应用控制壳子路由（如退出登录跳 /login），仅壳内存在 */
-  router?: { push: (path: string) => void };
+  /** 子应用注册名（壳子 sys_app.code，如 recon），用于 router 跳转 */
+  appName?: string;
+  /** 子应用控制壳子路由（如下钻差异处理同步侧栏选中），仅壳内存在；对象形式 {name, path}，兼容历史字符串调用 */
+  router?: { push: (params: { name: string; path: string } | string) => Promise<void> };
 }
 
 interface Window {

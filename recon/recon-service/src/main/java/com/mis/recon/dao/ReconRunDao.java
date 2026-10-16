@@ -47,7 +47,8 @@ public class ReconRunDao {
                        consumed_seq_json = CAST(? AS jsonb),
                        status = ?, err_msg = ?, finished_at = now()
                  WHERE id = ?
-                """, matchedCount, diffCount, resolvedCount, toJson(consumedByCheck), status, errMsg, runId);
+                """, matchedCount, diffCount, resolvedCount, toJson(consumedByCheck),
+                status, errMsg, runId);
     }
 
     /** skip（健康闸门，游标不推进） */

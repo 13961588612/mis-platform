@@ -277,6 +277,8 @@ export interface ReportRunRow {
   scenario_code: string;
   report_type: string;
   diff_count: number;
+  /** 差异金额合计（分，报告中心 R84 diff_amount_sum 落列） */
+  diff_amount_sum: number;
   send_status: string;
   err_msg?: string | null;
   started_at?: string;
@@ -307,6 +309,24 @@ export interface ReconRunRow {
   err_msg?: string | null;
   started_at?: string;
   finished_at?: string | null;
+}
+
+/* ---------------- 对账汇总（v6.6/v6.7） ---------------- */
+
+/** 对账汇总行：每 check 一行（checkErrMsg 非空 = 该 check 本轮执行失败，整行标红） */
+export interface SummaryRow {
+  scenario_code: string;
+  check_name: string;
+  strategy: string; // exact_key / composite_key / sum_check / custom / custom_check
+  latest_run_id?: number | null;
+  latest_run_time?: string | null;
+  run_status?: string | null; // success / failed / running / skipped；null = 未运行
+  err_msg?: string | null;
+  // 整体累计（v1.3，恒自洽 total = success + diff + fail）；主数据源未配置 → null（前端显示 —）
+  total?: number | null;
+  success?: number | null;
+  diff?: number | null; // 当前未处理差异池存量（不含 anomaly，跨轮累计）
+  fail?: number | null; // 池中 anomaly 存量
 }
 
 export interface PullRunRow {

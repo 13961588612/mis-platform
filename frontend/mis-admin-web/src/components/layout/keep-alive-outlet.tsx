@@ -1,4 +1,4 @@
-import { useEffect, type ComponentType } from 'react';
+import { useCallback, useEffect, type ComponentType } from 'react';
 import { useLocation } from 'react-router-dom';
 import microApp from '@micro-zoe/micro-app';
 import { cn } from '@/lib/utils';
@@ -92,6 +92,13 @@ function RemotePage({ code }: { code: string }) {
   const token = useAuthStore((s) => s.accessToken);
   const user = useAuthStore((s) => s.user);
   const permissions = useAuthStore((s) => s.permissions);
+  // iframe 模式下 setData 早于子应用就绪会丢数据（无 web-component 模式的缓存补投递），
+  // 因此在 micro-app mounted 事件（iframe 加载完成、子应用 main.tsx 已执行）时
+  // 用 forceSetData 强制重发一次，确保会话数据必达。
+  const pushSession = useCallback(() => {
+    if (!token) return;
+    microApp.forceSetData(code, { type: 'AUTH_TOKEN', token, user, permissions });
+  }, [code, token, user, permissions]);
   useEffect(() => {
     if (token) {
       // 会话数据整体下发：token + 用户信息 + 权限码（阶段 2：子应用免调 /auth/me 即可展示身份/判权限）
@@ -108,6 +115,7 @@ function RemotePage({ code }: { code: string }) {
       keep-alive
       iframe
       className="flex-1 min-h-0 block w-full"
+      onMounted={pushSession}
     />
   );
 }

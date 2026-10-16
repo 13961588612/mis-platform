@@ -11,7 +11,9 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.reactive.function.client.WebClient;
+import org.springframework.web.util.UriComponentsBuilder;
 
+import java.net.URI;
 import java.time.Duration;
 
 /**
@@ -44,12 +46,14 @@ public class ReconProxyController {
 
     private final WebClient webClient;
     private final Duration timeout;
+    private final ReconProperties properties;
 
     public ReconProxyController(
             @Qualifier("plainWebClientBuilder") WebClient.Builder plainBuilder,
             ReconProperties properties) {
         this.webClient = plainBuilder.clone().baseUrl(properties.getBaseUrl()).build();
         this.timeout = Duration.ofMillis(Math.max(properties.getTimeoutMs(), 500));
+        this.properties = properties;
     }
 
     /**
@@ -59,6 +63,13 @@ public class ReconProxyController {
      * query string 原样带上；body（POST/PUT）原样转发；请求上下文头
      * （X-User-Id / X-Tenant-Id 等）由 {@link AbstractDownstreamClient#loginContextHeaders()}
      * 透传，供 recon-service 未来做操作人/数据权限时使用。
+     *
+     * <p><b>query 透传必须防二次编码</b>：入站 query 是前端已编码的（如中文 checkName
+     * {@code %E5%82%A8...}）。不能走 {@code uriBuilder.replaceQuery(query)} + 默认
+     * {@code DefaultUriBuilderFactory}（TEMPLATE_AND_VALUES 会把 {@code %} 再编码成
+     * {@code %25}，中文参数到下游变乱码，参见 KbWebClientUriEncodingTest）。
+     * 这里把 baseUrl + 路径 + 已编码 query 拼成绝对 URI 后 {@code build(true)}（视输入
+     * 为已编码，不再二次编码），再用 {@code uri(URI)} 直接发送（绝对地址不丢 baseUrl）。</p>
      */
     @RequestMapping("/**")
     public ResponseEntity<String> proxy(
@@ -67,15 +78,14 @@ public class ReconProxyController {
         String upstreamPath = buildUpstreamPath(request.getRequestURI());
         String query = request.getQueryString();
 
+        URI uri = UriComponentsBuilder.fromHttpUrl(properties.getBaseUrl())
+                .path(upstreamPath)
+                .replaceQuery(query == null || query.isBlank() ? null : query)
+                .build(true)
+                .toUri();
+
         WebClient.RequestBodySpec spec = webClient.method(HttpMethod.valueOf(request.getMethod()))
-                .uri(uriBuilder -> {
-                    uriBuilder.path(upstreamPath);
-                    if (query != null && !query.isBlank()) {
-                        // 原样拼接 query string：由调用方负责编码，透传层不加工
-                        uriBuilder.replaceQuery(query);
-                    }
-                    return uriBuilder.build();
-                })
+                .uri(uri)
                 .headers(AbstractDownstreamClient.loginContextHeadersStatic());
 
         WebClient.RequestHeadersSpec<?> requestSpec = (body == null || body.length == 0)

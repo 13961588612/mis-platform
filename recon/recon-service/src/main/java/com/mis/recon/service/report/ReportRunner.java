@@ -55,13 +55,17 @@ public class ReportRunner {
         long reportRunId = reportDao.insertReportRun(scenarioCode, scenario.getReportType());
         List<ReportRow> rows = reportDao.scanForReport(scenarioCode);
         if (rows.isEmpty()) {
-            reportDao.finishReportRun(reportRunId, "success", 0, null);
+            reportDao.finishReportRun(reportRunId, "success", 0, 0, null);
             return resp(reportRunId, 0, "success");
         }
         String scenarioName = StringUtils.hasText(scenario.getName()) ? scenario.getName() : scenarioCode;
         Map<String, List<ReportRow>> groups = groupByCheck(rows);
 
         int diffCount = rows.size();
+        // 差异金额合计（分，报告中心 R84 diff_amount_sum 落列）
+        long diffAmountSum = rows.stream()
+                .mapToLong(r -> r.diffAmountCent == null ? 0 : r.diffAmountCent)
+                .sum();
         int successGroups = 0;
         List<String> errors = new ArrayList<>();
         for (Map.Entry<String, List<ReportRow>> e : groups.entrySet()) {
@@ -74,7 +78,7 @@ public class ReportRunner {
             }
         }
         String sendStatus = errors.isEmpty() ? "success" : successGroups == 0 ? "failed" : "partial";
-        reportDao.finishReportRun(reportRunId, sendStatus, diffCount,
+        reportDao.finishReportRun(reportRunId, sendStatus, diffCount, diffAmountSum,
                 errors.isEmpty() ? null : String.join("; ", errors));
         log.info("[report] scenario={} runId={} diffCount={} sendStatus={}", scenarioCode, reportRunId, diffCount, sendStatus);
         return resp(reportRunId, diffCount, sendStatus);

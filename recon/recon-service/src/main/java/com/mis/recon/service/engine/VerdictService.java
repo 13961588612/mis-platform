@@ -31,7 +31,7 @@ public class VerdictService {
 
     private static final Logger log = LoggerFactory.getLogger(VerdictService.class);
 
-    /** 本轮判定统计 */
+    /** 本轮判定统计（diff 含 anomaly，供 recon_run.diff_count 既有口径） */
     public static class Stats {
         public int matched;
         public int diff;
@@ -91,10 +91,12 @@ public class VerdictService {
             }
         }
         for (LedgerRow row : result.getUnmatchedLeft()) {
-            handleUnmatched(scenario, check, row, "unmatched_left", rightDs, leftAlias, stats, customCtx);
+            // 左侧有、右侧无 → 右侧缺失（需求口径 diff_type=unmatched_right）；row 属左
+            handleUnmatched(scenario, check, row, "unmatched_right", rightDs, leftAlias, "left", stats, customCtx);
         }
         for (LedgerRow row : result.getUnmatchedRight()) {
-            handleUnmatched(scenario, check, row, "unmatched_right", leftDs, rightAlias, stats, customCtx);
+            // 右侧有、左侧无 → 左侧缺失（需求口径 diff_type=unmatched_left）；row 属右
+            handleUnmatched(scenario, check, row, "unmatched_left", leftDs, rightAlias, "right", stats, customCtx);
         }
         for (AnomalyRow a : result.getAnomalies()) {
             handleAnomaly(scenario, check, a, stats, customCtx);
@@ -205,12 +207,13 @@ public class VerdictService {
     // ---- 未匹配：两轮确认 ----
 
     private void handleUnmatched(ConfigSnapshot.LoadedScenario scenario, ConfigSnapshot.CheckSpec check,
-                                 LedgerRow row, String diffType, String peerDs, String alias, Stats stats,
-                                 Map<String, Object> customCtx) {
+                                 LedgerRow row, String diffType, String peerDs, String alias, String side,
+                                 Stats stats, Map<String, Object> customCtx) {
         String hash = row.getMatchKeyHash() != null ? row.getMatchKeyHash()
                 : HashUtil.sha256Hex(row.getMatchKeyDisplay() == null ? "" : row.getMatchKeyDisplay());
         String display = row.getMatchKeyDisplay() == null ? "" : row.getMatchKeyDisplay();
-        String side = "unmatched_left".equals(diffType) ? "left" : "right";
+        // side = row 实际所在侧（left=左行/right=右行），决定数据面板与金额字段读取；
+        // diffType 按需求口径以"缺失的侧"命名（左行→右侧缺失 unmatched_right，右行→左侧缺失 unmatched_left）。
 
         // 金额=0 视为对账一致：不写 diff、不增计数、不写索引。
         // 语义：0 金额 = 无交易量，对端无记录等价（金额差=0）；积分对账里 0 积分订单即此态。

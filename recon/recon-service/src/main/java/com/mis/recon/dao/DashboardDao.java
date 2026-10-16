@@ -144,30 +144,34 @@ public class DashboardDao {
                 }, scenarioCode, from, to);
     }
 
-    /** 场景最近成功对账轮（无则 null）。 */
-    public ReconRunDetailRow latestSuccessRun(String scenarioCode) {
+    /** 平衡表（R87 参数化）：窗口内最近成功对账轮（无则 null）——对账结果/平衡结论以所选日期窗口为准。 */
+    public ReconRunDetailRow latestSuccessRunInWindow(String scenarioCode, LocalDateTime from, LocalDateTime to) {
         List<ReconRunDetailRow> rows = jdbcTemplate.query("""
                 SELECT id, scenario_code, status, matched_count, diff_count, resolved_count,
                        err_msg, consumed_seq_json::text AS consumed_seq_json,
                        started_at, finished_at
                 FROM recon_run
                 WHERE scenario_code = ? AND status = 'success'
+                  AND started_at >= ? AND started_at <= ?
                 ORDER BY id DESC
                 LIMIT 1
                 """, (rs, i) -> new ReconRunDetailRow(
                 rs.getLong("id"), rs.getString("scenario_code"), rs.getString("status"),
                 rs.getInt("matched_count"), rs.getInt("diff_count"), rs.getInt("resolved_count"),
                 rs.getString("err_msg"), rs.getString("consumed_seq_json"),
-                time(rs, "started_at"), time(rs, "finished_at")), scenarioCode);
+                time(rs, "started_at"), time(rs, "finished_at")), scenarioCode, from, to);
         return rows.isEmpty() ? null : rows.get(0);
     }
 
-    /** 当前差异池按 diff_type 计数（status <> 'resolved'）。 */
-    public Map<String, Long> diffTypeCounts(String scenarioCode) {
+    /** 平衡表（R87 参数化）：窗口结束时刻差异池按 diff_type 分布（期末池口径）。 */
+    public Map<String, Long> poolCountsAtWindow(String scenarioCode, LocalDateTime windowEnd) {
         List<Object[]> rows = jdbcTemplate.query("""
                 SELECT diff_type, COUNT(*) AS cnt
                 FROM recon_detail
-                WHERE scenario_code = ? AND status <> 'resolved'
+                WHERE scenario_code = ?
+                  AND status <> 'resolved'
+                  AND first_seen_at <= ?
+                  AND (resolved_at IS NULL OR resolved_at > ?)
                 GROUP BY diff_type
                 """, rs -> {
                     List<Object[]> list = new ArrayList<>();
@@ -175,12 +179,70 @@ public class DashboardDao {
                         list.add(new Object[]{rs.getString("diff_type"), rs.getLong("cnt")});
                     }
                     return list;
-                }, scenarioCode);
+                }, scenarioCode, windowEnd, windowEnd);
         Map<String, Long> map = new java.util.HashMap<>();
         for (Object[] row : rows) {
             map.put((String) row[0], (Long) row[1]);
         }
         return map;
+    }
+
+    /**
+     * 平衡表（R87 参数化）：窗口内各数据源最近一次拉取健康（参与数据源健康区块随所选日期与场景联动）。
+     * 参与数据源以 recon_scenario.uses_json 为准（G12 由 check 参与数据源自动汇总）。
+     */
+    public List<DatasourceHealthRow> datasourceHealthInWindow(String scenarioCode, LocalDateTime from, LocalDateTime to) {
+        List<String> dsCodes = scenarioDsCodes(scenarioCode);
+        if (dsCodes.isEmpty()) {
+            return new ArrayList<>();
+        }
+        String in = String.join(",", java.util.Collections.nCopies(dsCodes.size(), "?"));
+        // 参数顺序须与 SQL 中 ? 出现顺序一致：两个 LATERAL 各 2 个时间参数在前，IN 列表的 ds_code 在后
+        List<Object> args = new ArrayList<>();
+        args.add(from);
+        args.add(to);
+        args.add(from);
+        args.add(to);
+        args.addAll(dsCodes);
+        return jdbcTemplate.query("""
+                SELECT d.ds_code, d.name AS ds_name,
+                       COALESCE(l.health_status, 'none') AS health_status,
+                       l.err_msg AS last_err_msg,
+                       COALESCE(t.cnt, 0) AS today_success_count,
+                       l.finished_at AS last_pull_at
+                FROM recon_datasource d
+                LEFT JOIN LATERAL (
+                    SELECT p.health_status, p.err_msg, p.finished_at
+                    FROM recon_pull_run p
+                    WHERE p.ds_code = d.ds_code AND p.started_at >= ? AND p.started_at <= ?
+                    ORDER BY p.id DESC
+                    LIMIT 1
+                ) l ON true
+                LEFT JOIN LATERAL (
+                    SELECT COUNT(*) AS cnt
+                    FROM recon_pull_run p
+                    WHERE p.ds_code = d.ds_code AND p.status = 'success'
+                      AND p.started_at >= ? AND p.started_at <= ?
+                ) t ON true
+                WHERE d.enabled = 1
+                  AND d.ds_code IN (""" + in + """
+                  )
+                ORDER BY d.ds_code
+                """, (rs, i) -> new DatasourceHealthRow(
+                rs.getString("ds_code"), rs.getString("ds_name"),
+                rs.getString("health_status"), rs.getString("last_err_msg"),
+                rs.getLong("today_success_count"), time(rs, "last_pull_at")), args.toArray());
+    }
+
+    /** 场景参与数据源 ds_code 列表（uses_json[{ds,alias,use_fields}]，G12 派生汇总）。 */
+    private List<String> scenarioDsCodes(String scenarioCode) {
+        return jdbcTemplate.query("""
+                SELECT value ->> 'ds' AS ds_code
+                FROM recon_scenario, jsonb_array_elements(uses_json) AS value
+                WHERE scenario_code = ?
+                  AND value ->> 'ds' IS NOT NULL
+                """, (rs, i) -> rs.getString("ds_code"), scenarioCode)
+                .stream().filter(ds -> !ds.isBlank()).distinct().toList();
     }
 
     /** 场景窗口内按时间列计数（col ∈ first_seen_at / resolved_at）。 */
@@ -189,14 +251,6 @@ public class DashboardDao {
                 "SELECT COUNT(*) FROM recon_detail WHERE scenario_code = ? AND "
                         + col + " >= ? AND " + col + " <= ?",
                 Long.class, scenarioCode, from, to);
-        return cnt == null ? 0 : cnt;
-    }
-
-    /** 当前差异池总数（status <> 'resolved'）。 */
-    public long countPool(String scenarioCode) {
-        Long cnt = jdbcTemplate.queryForObject(
-                "SELECT COUNT(*) FROM recon_detail WHERE scenario_code = ? AND status <> 'resolved'",
-                Long.class, scenarioCode);
         return cnt == null ? 0 : cnt;
     }
 

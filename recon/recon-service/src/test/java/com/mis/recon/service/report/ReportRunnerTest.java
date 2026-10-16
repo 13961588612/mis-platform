@@ -90,7 +90,7 @@ class ReportRunnerTest {
 
         assertEquals(0, resp.getDiffCount());
         assertEquals("success", resp.getSendStatus());
-        verify(reportDao).finishReportRun(11L, "success", 0, null);
+        verify(reportDao).finishReportRun(11L, "success", 0, 0L, null);
         verify(reporterFactory, never()).get(any());
     }
 
@@ -109,7 +109,7 @@ class ReportRunnerTest {
         verify(alertLogService).record(eq("sc1"), eq("order_check"), anyList(), eq("info"),
                 eq(null), eq("fp1"), anyString(), eq("success"), eq(null));
         verify(reportDao).markReported(List.of(1L));
-        verify(reportDao).finishReportRun(11L, "success", 1, null);
+        verify(reportDao).finishReportRun(11L, "success", 1, 100L, null);
     }
 
     @Test

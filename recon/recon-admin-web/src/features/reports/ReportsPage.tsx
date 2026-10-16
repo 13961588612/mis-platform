@@ -1,6 +1,6 @@
-import { useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { FileBarChart2, FileText, Play, Plus, RefreshCw, Send, Trash2 } from 'lucide-react';
+import { FileBarChart2, FileText, Play, Plus, RefreshCw, Scale, Send, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { runsApi, reportersApi } from '@/lib/api/reports';
 import { scenariosApi } from '@/lib/api/scenarios';
@@ -60,17 +60,14 @@ export function ReportsPage() {
   const [sendStatus, setSendStatus] = useState('');
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
-  const [alertSeverity, setAlertSeverity] = useState('');
-  const [alertChannel, setAlertChannel] = useState('');
   const [triggerCode, setTriggerCode] = useState('');
   const [runPage] = useState({ page: 1, size: 20 });
-  const [alertPage] = useState({ page: 1, size: 20 });
   const [reporterPage] = useState({ page: 1, size: 20 });
   const [createOpen, setCreateOpen] = useState(false);
   const [detailId, setDetailId] = useState<number | null>(null);
-  const [alertContent, setAlertContent] = useState<{ id: number; content?: string | null } | null>(null);
+  // 平衡表参数化（R87）：场景 + 日期（默认最近一次对账运行日）
   const [balanceScenario, setBalanceScenario] = useState('');
-  const [balanceDays, setBalanceDays] = useState('1');
+  const [balanceDate, setBalanceDate] = useState('');
 
   const { data: detail, isLoading: detailLoading } = useQuery({
     queryKey: ['report-detail', detailId],
@@ -82,6 +79,37 @@ export function ReportsPage() {
     queryKey: ['scenarios'],
     queryFn: () => scenariosApi.list({ page: 1, size: 100 }),
   });
+
+  // 最近对账运行（平衡表日期下拉项，默认最近一次）
+  const { data: recentRuns } = useQuery({
+    queryKey: ['recon-runs', { page: 1, size: 10 }],
+    queryFn: () => runsApi.reconRuns({ page: 1, size: 10 }),
+  });
+  const runDateOptions = useMemo(() => {
+    const seen = new Set<string>();
+    const dates: string[] = [];
+    for (const r of recentRuns?.list ?? []) {
+      const d = r.started_at?.slice(0, 10);
+      if (d && !seen.has(d)) {
+        seen.add(d);
+        dates.push(d);
+      }
+    }
+    return dates.slice(0, 5);
+  }, [recentRuns]);
+  // 日期选项就绪且未手动选择 → 默认最近一次
+  useEffect(() => {
+    if (!balanceDate && runDateOptions.length > 0) {
+      setBalanceDate(runDateOptions[0]);
+    }
+  }, [runDateOptions, balanceDate]);
+  // 平衡表场景必选（v6.10 R88）：加载后默认选中第一个启用场景，值异常时兜底不落空
+  useEffect(() => {
+    const enabledScenarios = scenarios?.list.filter((s) => s.enabled !== 0) ?? [];
+    if (enabledScenarios.length > 0 && !enabledScenarios.some((s) => s.scenario_code === balanceScenario)) {
+      setBalanceScenario(enabledScenarios[0].scenario_code);
+    }
+  }, [scenarios, balanceScenario]);
 
   const { data: runs, isLoading: runsLoading, refetch: refetchRuns } = useQuery({
     queryKey: ['report-runs', runPage, scenarioCode, reportType, sendStatus, dateFrom, dateTo],
@@ -95,24 +123,14 @@ export function ReportsPage() {
         dateTo: dateTo || undefined,
       }),
   });
-  const { data: alerts, isLoading: alertsLoading, refetch: refetchAlerts } = useQuery({
-    queryKey: ['alert-logs', alertPage, scenarioCode, alertSeverity, alertChannel],
-    queryFn: () =>
-      runsApi.alertLogs({
-        ...alertPage,
-        scenarioCode: scenarioCode || undefined,
-        severity: alertSeverity || undefined,
-        channel: alertChannel || undefined,
-      }),
-  });
   const { data: reporters, isLoading: reportersLoading, refetch: refetchReporters } = useQuery({
     queryKey: ['reporters', reporterPage, scenarioCode],
     queryFn: () => reportersApi.list({ ...reporterPage, scenarioCode: scenarioCode || undefined }),
   });
-  const { data: balance, isLoading: balanceLoading } = useQuery({
-    queryKey: ['balance', balanceScenario, balanceDays],
-    queryFn: () => runsApi.balance(balanceScenario, Number(balanceDays)),
-    enabled: !!balanceScenario,
+  const { data: balance, isLoading: balanceLoading, refetch: refetchBalance } = useQuery({
+    queryKey: ['balance', balanceScenario, balanceDate],
+    queryFn: () => runsApi.balance(balanceScenario, balanceDate || undefined),
+    enabled: !!balanceScenario && !!balanceDate,
   });
 
   const qc = useQueryClient();
@@ -160,7 +178,9 @@ export function ReportsPage() {
               <FileBarChart2 className="h-4 w-4 text-primary" />
               报告中心
             </CardTitle>
-            <CardDescription>报告运行 / 平衡表（零差异证明）/ 告警留痕 / 渠道配置（T07）</CardDescription>
+            <CardDescription>
+              平台对外正式文书：报告记录 · 平衡表（零差异证明）；告警留痕已归运行监控页（引擎自省信号）
+            </CardDescription>
           </div>
           <div className="flex items-center gap-2">
             <Select value={triggerCode} onValueChange={setTriggerCode}>
@@ -185,9 +205,8 @@ export function ReportsPage() {
 
       <Tabs value={tab} onValueChange={setTab}>
         <TabsList>
-          <TabsTrigger value="runs">报告运行</TabsTrigger>
+          <TabsTrigger value="runs">报告记录</TabsTrigger>
           <TabsTrigger value="balance">平衡表 · 零差异证明</TabsTrigger>
-          <TabsTrigger value="alerts">告警留痕</TabsTrigger>
           <TabsTrigger value="reporters">渠道配置</TabsTrigger>
         </TabsList>
 
@@ -242,6 +261,9 @@ export function ReportsPage() {
                     <TableHead>场景</TableHead>
                     <TableHead>类型</TableHead>
                     <TableHead className="text-right">差异数</TableHead>
+                    <TableHead className="text-right" title="分÷100 转元显示、右对齐；按接口聚合返回，待 recon_report_run 落列 diff_amount_sum 后可排序/检索">
+                      差异金额合计 diff_amount_sum
+                    </TableHead>
                     <TableHead>发送状态</TableHead>
                     <TableHead>起止时间</TableHead>
                     <TableHead>错误</TableHead>
@@ -251,12 +273,12 @@ export function ReportsPage() {
                 <TableBody>
                   {runsLoading && (
                     <TableRow>
-                      <TableCell colSpan={8} className="py-8 text-center text-muted-foreground">加载中…</TableCell>
+                      <TableCell colSpan={9} className="py-8 text-center text-muted-foreground">加载中…</TableCell>
                     </TableRow>
                   )}
                   {!runsLoading && (runs?.list.length ?? 0) === 0 && (
                     <TableRow>
-                      <TableCell colSpan={8} className="py-8 text-center text-muted-foreground">
+                      <TableCell colSpan={9} className="py-8 text-center text-muted-foreground">
                         暂无报告运行记录（手动触发或 report_cron 调度后生成）
                       </TableCell>
                     </TableRow>
@@ -271,6 +293,7 @@ export function ReportsPage() {
                         </Badge>
                       </TableCell>
                       <TableCell className="text-right font-mono text-xs">{r.diff_count}</TableCell>
+                      <TableCell className="text-right font-mono text-xs font-medium">{yuan(r.diff_amount_sum ?? 0)}</TableCell>
                       <TableCell>
                         <Badge variant={tagValue[r.send_status]?.variant ?? 'secondary'}>
                           {tagValue[r.send_status]?.label ?? r.send_status}
@@ -286,6 +309,19 @@ export function ReportsPage() {
                         <Button variant="ghost" size="sm" onClick={() => setDetailId(r.id)}>
                           <FileText className="mr-1 h-3.5 w-3.5" /> 详情
                         </Button>
+                        {(r.report_type === 'balance' || r.report_type === 'both') && (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => {
+                              setTab('balance');
+                              setBalanceScenario(r.scenario_code);
+                              setBalanceDate(r.started_at?.slice(0, 10) ?? '');
+                            }}
+                          >
+                            <Scale className="mr-1 h-3.5 w-3.5" /> 查看平衡
+                          </Button>
+                        )}
                         <Button
                           variant="ghost"
                           size="sm"
@@ -297,6 +333,18 @@ export function ReportsPage() {
                       </TableCell>
                     </TableRow>
                   ))}
+                  {!runsLoading && (runs?.list.length ?? 0) > 0 && (
+                    <TableRow className="border-t-2 font-medium">
+                      <TableCell colSpan={3}>合计（当前页）</TableCell>
+                      <TableCell className="text-right font-mono text-xs">
+                        {runs?.list.reduce((s, r) => s + r.diff_count, 0) ?? 0}
+                      </TableCell>
+                      <TableCell className="text-right font-mono text-xs font-semibold">
+                        {yuan(runs?.list.reduce((s, r) => s + (r.diff_amount_sum ?? 0), 0) ?? 0)}
+                      </TableCell>
+                      <TableCell colSpan={4} />
+                    </TableRow>
+                  )}
                 </TableBody>
               </Table>
             </CardContent>
@@ -324,138 +372,34 @@ export function ReportsPage() {
                         .map((s) => (
                           <SelectItem key={s.scenario_code} value={s.scenario_code}>
                             {s.scenario_code}
+                            {s.name ? ` · ${s.name}` : ''}
                           </SelectItem>
                         ))}
                     </SelectContent>
                   </Select>
                 </div>
                 <div className="grid gap-1.5">
-                  <Label>统计窗口</Label>
-                  <Select value={balanceDays} onValueChange={setBalanceDays}>
-                    <SelectTrigger className="w-40">
-                      <SelectValue />
+                  <Label>日期</Label>
+                  <Select value={balanceDate} onValueChange={setBalanceDate}>
+                    <SelectTrigger className="w-44">
+                      <SelectValue placeholder="选择日期（默认最近一次）" />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="1">近 1 天</SelectItem>
-                      <SelectItem value="7">近 7 天</SelectItem>
-                      <SelectItem value="30">近 30 天</SelectItem>
+                      {runDateOptions.map((d, i) => (
+                        <SelectItem key={d} value={d}>
+                          {i === 0 ? `最近一次（${d}）` : d}
+                        </SelectItem>
+                      ))}
                     </SelectContent>
                   </Select>
                 </div>
-              </div>
-
-              {balanceLoading && <div className="py-8 text-center text-sm text-muted-foreground">加载中…</div>}
-              {!balanceLoading && !balanceScenario && (
-                <div className="rounded border border-dashed p-8 text-center text-sm text-muted-foreground">
-                  请先选择场景，系统将聚合窗口内对账轮次出具平衡证明
-                </div>
-              )}
-              {!balanceLoading && balanceScenario && balance && <BalanceView balance={balance} />}
-            </CardContent>
-          </Card>
-        </TabsContent>
-
-        {/* ---------------- 告警留痕 ---------------- */}
-        <TabsContent value="alerts">
-          <Card>
-            <CardHeader className="pb-3">
-              <CardTitle className="text-sm">recon_alert_log（含 ops 运维告警）</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="mb-3 grid grid-cols-2 gap-2 md:grid-cols-4">
-                <Select value={scenarioCode || 'all'} onValueChange={(v) => setScenarioCode(v === 'all' ? '' : v)}>
-                  <SelectTrigger className="w-full"><SelectValue placeholder="场景" /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="all">全部场景</SelectItem>
-                    {scenarios?.list.map((s) => (
-                      <SelectItem key={s.scenario_code} value={s.scenario_code}>
-                        {s.scenario_code}
-                        {s.name ? ` · ${s.name}` : ''}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                <Select value={alertSeverity || 'all'} onValueChange={(v) => setAlertSeverity(v === 'all' ? '' : v)}>
-                  <SelectTrigger><SelectValue placeholder="级别" /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="all">全部级别</SelectItem>
-                    <SelectItem value="info">一般 info</SelectItem>
-                    <SelectItem value="warn">警告 warn</SelectItem>
-                    <SelectItem value="critical">严重 critical</SelectItem>
-                  </SelectContent>
-                </Select>
-                <Select value={alertChannel || 'all'} onValueChange={(v) => setAlertChannel(v === 'all' ? '' : v)}>
-                  <SelectTrigger><SelectValue placeholder="渠道" /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="all">全部渠道</SelectItem>
-                    <SelectItem value="email">邮件 email</SelectItem>
-                    <SelectItem value="webhook">Webhook</SelectItem>
-                  </SelectContent>
-                </Select>
-                <Button variant="outline" size="sm" onClick={() => refetchAlerts()}>
+                <Button variant="outline" size="sm" onClick={() => refetchBalance()}>
                   <RefreshCw className="mr-1 h-3.5 w-3.5" /> 查询
                 </Button>
               </div>
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>ID</TableHead>
-                    <TableHead>场景 / 检查</TableHead>
-                    <TableHead>级别</TableHead>
-                    <TableHead>渠道</TableHead>
-                    <TableHead>发送 / 重试</TableHead>
-                    <TableHead>内容</TableHead>
-                    <TableHead>发送时间</TableHead>
-                    <TableHead>关联差异</TableHead>
-                    <TableHead className="text-right">操作</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {alertsLoading && (
-                    <TableRow>
-                      <TableCell colSpan={9} className="py-8 text-center text-muted-foreground">加载中…</TableCell>
-                    </TableRow>
-                  )}
-                  {!alertsLoading && (alerts?.list.length ?? 0) === 0 && (
-                    <TableRow>
-                      <TableCell colSpan={9} className="py-8 text-center text-muted-foreground">暂无告警记录</TableCell>
-                    </TableRow>
-                  )}
-                  {alerts?.list.map((a) => (
-                    <TableRow key={a.id}>
-                      <TableCell className="font-mono text-xs">{a.id}</TableCell>
-                      <TableCell>
-                        <div className="text-[13px]">{a.scenario_code ?? '-'}</div>
-                        <div className="font-mono text-[11px] text-muted-foreground">{a.check_name ?? ''}</div>
-                      </TableCell>
-                      <TableCell>
-                        <Badge variant={SEVERITY_BADGE[a.severity]?.variant ?? 'secondary'}>
-                          {SEVERITY_BADGE[a.severity]?.label ?? a.severity}
-                        </Badge>
-                      </TableCell>
-                      <TableCell className="text-xs">{a.channel ?? '-'}</TableCell>
-                      <TableCell>
-                        <Badge variant={a.send_status === 'success' ? 'success' : 'destructive'}>
-                          {a.send_status === 'success' ? '成功' : '失败'}
-                        </Badge>
-                        <span className="ml-1 text-[11px] text-muted-foreground">· {a.retry_count} 次</span>
-                      </TableCell>
-                      <TableCell className="max-w-[200px]">
-                        <div className="truncate text-xs" title={a.content ?? ''}>{a.content ?? '-'}</div>
-                      </TableCell>
-                      <TableCell className="whitespace-nowrap font-mono text-[11px] text-muted-foreground">
-                        {fmt(a.sent_at)}
-                      </TableCell>
-                      <TableCell className="font-mono text-[11px] text-muted-foreground">{a.detail_ids_json ?? '-'}</TableCell>
-                      <TableCell className="text-right">
-                        <Button variant="ghost" size="sm" onClick={() => setAlertContent({ id: a.id, content: a.content })}>
-                          <FileText className="mr-1 h-3.5 w-3.5" /> 查看内容
-                        </Button>
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
+
+              {balanceLoading && <div className="py-8 text-center text-sm text-muted-foreground">加载中…</div>}
+              {!balanceLoading && balanceScenario && balance && <BalanceView balance={balance} scenarios={scenarios?.list} />}
             </CardContent>
           </Card>
         </TabsContent>
@@ -529,7 +473,6 @@ export function ReportsPage() {
       </Tabs>
 
       <ReportDetailDialog id={detailId} detail={detail} loading={detailLoading} onClose={() => setDetailId(null)} />
-      <AlertContentDialog alert={alertContent} onClose={() => setAlertContent(null)} />
       <ReporterCreateDialog
         open={createOpen}
         scenarios={scenarios?.list ?? []}
@@ -542,28 +485,41 @@ export function ReportsPage() {
 
 /* ---------------- 平衡表视图 ---------------- */
 
-function BalanceView({ balance }: { balance: BalanceResp }) {
+function BalanceView({ balance, scenarios }: { balance: BalanceResp; scenarios?: ReconScenario[] }) {
   const conclusionVariant =
     balance.conclusion === 'balanced' ? 'success' : balance.conclusion === 'unbalanced' ? 'destructive' : 'secondary';
   const conclusionLabel =
     balance.conclusion === 'balanced' ? '对平（零差异）' : balance.conclusion === 'unbalanced' ? '未对平' : '暂无运行';
+  // 场景显示名（v6.10 R88）：banner 场景名取映射显示名，如 online_order · 线上订单
+  const sceneDisplay = (() => {
+    const s = scenarios?.find((x) => x.scenario_code === balance.scenario_code);
+    return s?.name ? `${balance.scenario_code} · ${s.name}` : balance.scenario_code;
+  })();
+  const conclusionText = balance.conclusion_text?.startsWith(balance.scenario_code)
+    ? sceneDisplay + balance.conclusion_text.slice(balance.scenario_code.length)
+    : balance.conclusion_text;
   const dsRows = balance.datasource_health ?? [];
 
   const stats: Array<{ label: string; value: number }> = [
-    { label: 'matched_count', value: balance.matched_count },
+    { label: '匹配成功', value: balance.matched_count },
     { label: '字段不一致', value: balance.field_mismatch },
     { label: '左侧缺失', value: balance.unmatched_left },
     { label: '右侧缺失', value: balance.unmatched_right },
     { label: '数据异常', value: balance.anomaly },
-    { label: 'resolved_count', value: balance.resolved_count },
+    { label: '已解决', value: balance.resolved_count },
   ];
 
   return (
     <div className="space-y-3">
       <div className="flex items-center justify-between rounded border border-green-200 bg-green-50 p-3 text-sm text-green-800">
         <div className="flex items-center gap-2 font-medium">{conclusionLabel}</div>
-        <div>{balance.conclusion_text}</div>
+        <div>{conclusionText}</div>
       </div>
+      {balance.failed_rounds > 0 && (
+        <div className="rounded border border-amber-300 bg-amber-50 p-3 text-sm text-amber-800">
+          该期包含 {balance.failed_rounds} 个 failed 轮次 —— 该期不完整，审计请谨慎引用
+        </div>
+      )}
       <div className="grid gap-3 md:grid-cols-2">
         <div className="rounded border p-3">
           <div className="mb-2 text-xs font-medium text-muted-foreground">覆盖窗口</div>
@@ -604,8 +560,7 @@ function BalanceView({ balance }: { balance: BalanceResp }) {
                 <span className="w-44 truncate font-mono">{d.ds_code}</span>
                 <span className="w-32 truncate text-muted-foreground">{d.ds_name ?? '-'}</span>
                 <HealthBadge status={d.health_status} />
-                <span className="ml-auto text-[11px] text-muted-foreground">今日成功 {d.today_success_count}</span>
-                <span className="font-mono text-[11px] text-muted-foreground">{fmt(d.last_pull_at)}</span>
+                <span className="ml-auto font-mono text-[11px] text-muted-foreground">{fmt(d.last_pull_at)}</span>
               </div>
             ))}
           </div>
@@ -632,6 +587,8 @@ function HealthBadge({ status }: { status: string }) {
     degraded: { label: '质量降级', variant: 'warning' },
     empty: { label: '空窗口', variant: 'warning' },
     error: { label: '拉取失败', variant: 'destructive' },
+    none: { label: '未拉取', variant: 'secondary' },
+    unknown: { label: '未知', variant: 'secondary' },
   };
   return <Badge variant={map[status]?.variant ?? 'secondary'}>{map[status]?.label ?? status}</Badge>;
 }
@@ -747,27 +704,6 @@ function ReportDetailDialog({
             </div>
           </div>
         )}
-        <DialogFooter>
-          <Button variant="outline" onClick={onClose}>关闭</Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-/* ---------------- 告警内容弹窗 ---------------- */
-
-function AlertContentDialog({ alert, onClose }: { alert: { id: number; content?: string | null } | null; onClose: () => void }) {
-  return (
-    <Dialog open={alert != null} onOpenChange={(open) => !open && onClose()}>
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>告警内容 #{alert?.id ?? ''}</DialogTitle>
-          <DialogDescription>告警留痕正文（发送的内容快照）</DialogDescription>
-        </DialogHeader>
-        <pre className="max-h-96 overflow-auto whitespace-pre-wrap rounded bg-muted/40 p-3 font-mono text-xs leading-relaxed">
-          {alert?.content || '(空)'}
-        </pre>
         <DialogFooter>
           <Button variant="outline" onClick={onClose}>关闭</Button>
         </DialogFooter>

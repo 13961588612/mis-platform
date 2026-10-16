@@ -67,6 +67,7 @@ spring:
     username: ${MAIL_USERNAME:}
     password: ${MAIL_PASSWORD:}
     properties:
+      mail.from: ${MAIL_FROM:}
       mail.smtp.auth: true
       mail.smtp.ssl.enable: true
 
@@ -81,6 +82,9 @@ mis:
       # 调度总开关：默认 true（T02 建表后 QRTZ_* 已就绪）；环境变量 RECON_SCHEDULER_ENABLED 可覆盖
       enabled: ${RECON_SCHEDULER_ENABLED:true}
     notify:
+      # mock-enabled：false（默认）= 渠道未配置（邮件收件人 / webhook url 为空）时显式失败（P0-2），
+      # 防止生产"假成功"导致平衡表/告警审计证据链断裂；仅本地开发需 mock 时显式置 true。
+      mock-enabled: ${RECON_NOTIFY_MOCK_ENABLED:false}
       mail:
         to: ${RECON_NOTIFY_MAIL_TO:}
       webhook:

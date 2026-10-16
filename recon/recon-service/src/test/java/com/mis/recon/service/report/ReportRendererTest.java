@@ -30,7 +30,7 @@ class ReportRendererTest {
         assertTrue(c.getBody().contains("差异数：2"));
         assertTrue(c.getBody().contains("金额合计：¥128.45"));
         assertTrue(c.getBody().contains("字段不一致"));
-        assertTrue(c.getBody().contains("仅左端有"));
+        assertTrue(c.getBody().contains("仅右端有"));
         assertEquals(List.of(1L, 2L), c.getDetailIds());
     }
 

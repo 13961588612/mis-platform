@@ -9,6 +9,7 @@ import com.mis.recon.repository.ConnectionRepository;
 import com.mis.recon.repository.DatasourceRepository;
 import com.mis.recon.repository.ScenarioRepository;
 import com.mis.recon.service.engine.CustomLoader;
+import com.mis.recon.service.support.ConnectionPoolManager;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
@@ -35,7 +36,7 @@ class ConfigValidationServiceTest {
         DatasourceRepository dsRepo = Mockito.mock(DatasourceRepository.class);
         ScenarioRepository scenarioRepo = Mockito.mock(ScenarioRepository.class);
         service = new ConfigValidationService(connRepo, dsRepo, scenarioRepo,
-                Mockito.mock(CustomLoader.class));
+                Mockito.mock(CustomLoader.class), Mockito.mock(ConnectionPoolManager.class));
     }
 
     // ==================== V20 窗口参数 ====================
@@ -207,7 +208,7 @@ class ConfigValidationServiceTest {
 
     @Test
     void v35AssertionCallable() {
-        assertDoesNotThrow(() -> service.validateUnionAmountType("SELECT amount FROM t1 UNION ALL SELECT amount FROM t2"));
+        assertDoesNotThrow(() -> service.validateUnionAmountType("conn1", "SELECT amount FROM t1 UNION ALL SELECT amount FROM t2"));
     }
 
     // ==================== consume mode 一致 / 禁改 / time_field / 窗口 / record_key ====================
@@ -281,7 +282,7 @@ class ConfigValidationServiceTest {
         Mockito.when(dsRepo.existsByDsCode("d1")).thenReturn(true);
         Mockito.when(scenarioRepo.existsByScenarioCode("s1")).thenReturn(true);
         ConfigValidationService svc = new ConfigValidationService(connRepo, dsRepo, scenarioRepo,
-                Mockito.mock(CustomLoader.class));
+                Mockito.mock(CustomLoader.class), Mockito.mock(ConnectionPoolManager.class));
         assertTrue(svc.existsConnCode("c1"));
         assertTrue(svc.existsDsCode("d1"));
         assertTrue(svc.existsScenarioCode("s1"));

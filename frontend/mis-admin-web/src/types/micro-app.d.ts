@@ -22,6 +22,8 @@ declare global {
         inline?: boolean;
         /** vite 子应用需 iframe 沙箱隔离（ESM 无法被 Proxy 沙箱拦截） */
         iframe?: boolean;
+        /** 子应用首次挂载完成回调（keep-alive-outlet 用于下发会话令牌） */
+        onMounted?: () => void;
       };
     }
   }

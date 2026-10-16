@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { useTheme } from 'next-themes';
+import microApp from '@micro-zoe/micro-app';
 import {
   ArrowLeft,
   ChevronDown,
@@ -52,7 +53,7 @@ import {
   registerRemoteApps,
   remoteCodeFromPath,
 } from '@/lib/nav/remote-apps';
-import { RECON_NAV } from '@/lib/nav/recon-nav';
+import { RECON_NAV, filterReconNavByPermission } from '@/lib/nav/recon-nav';
 import { useTabStore } from '@/stores/tab-store';
 
 /** 原型 .btn.btn-ghost：text-sm / font-medium / gap-2 / 无描边 */
@@ -75,10 +76,30 @@ export function AppLayout() {
   const app = useAuthStore((s) => s.app);
   const user = useAuthStore((s) => s.user);
   const menus = useAuthStore((s) => s.menus);
+  const permissions = useAuthStore((s) => s.permissions);
   const clearSession = useAuthStore((s) => s.clearSession);
   const navigate = useNavigate();
   const location = useLocation();
   const openTab = useTabStore((s) => s.openTab);
+
+  // iframe 模式 remote 子应用内部跳转（如对账汇总下钻差异处理）经 microApp.router.push
+  // 用原生 pushState 改壳子 URL，React Router 不感知 → 侧栏选中态不切、返回失效。
+  // micro-app 在 push 流程（handleNavigate → updateMicroLocation）会触发 router.afterEach
+  // 守卫，这里把子应用目标路径同步回 React Router。
+  useEffect(() => {
+    const unlisten = microApp.router?.afterEach?.((to, _from, appName) => {
+      if (appName !== 'recon') return;
+      const target = `${String(to?.pathname ?? '')}${String(to?.search ?? '')}`;
+      if (target && target !== `${location.pathname}${location.search}`) {
+        navigate(target);
+      }
+    });
+    return () => {
+      unlisten?.();
+    };
+    // location 变化会重注册守卫；navigate 为稳定引用
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [location.pathname, location.search, navigate]);
 
   const activeAppCode = useMemo(
     () => resolveActiveHostAppCode(location.pathname, app?.code),
@@ -96,13 +117,13 @@ export function AppLayout() {
           : activeAppCode === 'system'
             ? SYSTEM_NAV
             : activeAppCode === 'recon'
-              ? RECON_NAV
+              ? filterReconNavByPermission(RECON_NAV, permissions)
               : null;
     const dyn = routerMenusToSystemNav(menus);
     if (!dyn) return fallback ?? SYSTEM_NAV;
     if (fallback) return mergeNavWithFallback(fallback, dyn);
     return dyn;
-  }, [menus, activeAppCode]);
+  }, [menus, activeAppCode, permissions]);
 
   const navItem = useMemo(() => {
     // 最长命中优先：否则 /agent/skills/permissions 会先命中短路径「技能池」

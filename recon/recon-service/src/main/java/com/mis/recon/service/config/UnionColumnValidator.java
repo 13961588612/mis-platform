@@ -54,7 +54,8 @@ final class UnionColumnValidator {
         }
     }
 
-    private static String extractSelectColumns(String side) {
+    /** 供 UnionAmountTypeValidator（V35 T04）复用：提取 SELECT 列清单。 */
+    static String extractSelectColumns(String side) {
         int sel = indexOfIgnoreCase(side, "select");
         if (sel < 0) {
             return null;
@@ -75,7 +76,8 @@ final class UnionColumnValidator {
         return cols;
     }
 
-    private static String normalizeColumn(String col) {
+    /** 供 UnionAmountTypeValidator（V35 T04）复用：列名规范化（去别名/表前缀/转小写）。 */
+    static String normalizeColumn(String col) {
         String c = col.trim();
         int as = indexOfIgnoreCase(c, " as ");
         if (as >= 0) {

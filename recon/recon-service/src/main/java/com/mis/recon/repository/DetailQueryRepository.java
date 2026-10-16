@@ -17,8 +17,7 @@ public interface DetailQueryRepository extends JpaRepository<ReconDetailEntity, 
         JpaSpecificationExecutor<ReconDetailEntity> {
 
     /**
-     * 统计条（待办口径）：status <> 'resolved' AND handle_status='unhandled'。
-     * 与列表默认"当前差异池"口径一致（resolved=配平出池终态，不属待办；见 DetailDao 配平出池）。
+     * 统计条（待办口径）：status <> 'resolved' AND handle_status='unhandled'，按场景过滤（与列表联动）。
      * 返回 (status, diff_type, count) 三元组行，由 Controller 汇总成 diffTypeRatio + totalConfirmedUnhandled。
      */
     @Query("""
@@ -26,9 +25,10 @@ public interface DetailQueryRepository extends JpaRepository<ReconDetailEntity, 
               FROM ReconDetailEntity d
              WHERE d.status <> 'resolved'
                AND d.handleStatus = 'unhandled'
+               AND (:scenarioCode IS NULL OR d.scenarioCode = :scenarioCode)
              GROUP BY d.status, d.diffType
             """)
-    List<Object[]> countUnhandledGroupBy();
+    List<Object[]> countUnhandledGroupBy(@Param("scenarioCode") String scenarioCode);
 
     /** 按场景过滤的未处理金额合计（分），供统计条：无数据返回 0。 */
     @Query("""

@@ -1,39 +1,105 @@
+import { useEffect, useState } from 'react';
 import { NavLink, Outlet, useLocation } from 'react-router-dom';
 import {
+  Activity,
+  BarChart3,
   Cable,
   Database,
   FileBarChart2,
   GitCompareArrows,
   ListChecks,
-  Activity,
   LogOut,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useAuthStore } from '@/stores/auth-store';
+import { summaryApi } from '@/lib/api/summary';
+import { runsApi } from '@/lib/api/reports';
+import type { DatasourceHealthRow, SummaryRow } from '@/types/api';
 
-const NAV_ITEMS = [
+interface NavItem {
+  to: string;
+  label: string;
+  icon: typeof Cable;
+  /** 菜单角标（第一批 §1.1）：open-diff=未处理差异数红角标；pull-warn=拉取失败橙 ! 角标 */
+  badge?: 'open-diff' | 'pull-warn';
+}
+
+const NAV_ITEMS: NavItem[] = [
   { to: '/connections', label: '连接管理', icon: Cable },
   { to: '/datasources', label: '数据源管理', icon: Database },
   { to: '/scenarios', label: '场景与检查', icon: ListChecks },
-  { to: '/diffs', label: '差异查询', icon: GitCompareArrows },
+  { to: '/summary', label: '对账汇总', icon: BarChart3 },
+  { to: '/diffs', label: '差异处理', icon: GitCompareArrows, badge: 'open-diff' },
   { to: '/reports', label: '报告中心', icon: FileBarChart2 },
-  { to: '/monitor', label: '运行监控', icon: Activity },
+  { to: '/monitor', label: '运行监控', icon: Activity, badge: 'pull-warn' },
 ];
 
 const PAGE_TITLES: Record<string, string> = {
   '/connections': '连接管理',
   '/datasources': '数据源管理',
   '/scenarios': '场景与检查',
-  '/diffs': '差异查询',
+  '/summary': '对账汇总',
+  '/diffs': '差异处理',
   '/reports': '报告中心',
   '/monitor': '运行监控',
 };
+
+/** 菜单角标：红数字 = 未处理差异数（差异池存量，>99 显示 99+）；橙 ! = 拉取失败告警。 */
+function NavBadge({ kind, openDiff, pullWarn }: { kind: 'open-diff' | 'pull-warn'; openDiff: number; pullWarn: boolean }) {
+  if (kind === 'pull-warn') {
+    if (!pullWarn) return null;
+    return (
+      <span
+        className="ml-auto flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-orange-500 text-[10px] font-bold leading-none text-white"
+        title="最近拉取失败"
+      >
+        !
+      </span>
+    );
+  }
+  if (openDiff <= 0) return null;
+  return (
+    <span
+      className="ml-auto flex h-[18px] min-w-[18px] shrink-0 items-center justify-center rounded-full bg-red-500 px-1 text-[10px] font-semibold leading-none text-white"
+      title="未处理差异数"
+    >
+      {openDiff > 99 ? '99+' : openDiff}
+    </span>
+  );
+}
 
 export function AppLayout() {
   const location = useLocation();
   const current = PAGE_TITLES[location.pathname] ?? '对账平台';
   // 阶段 2：用户信息来自壳子 microApp.setData 下发（独立运行时为 null，隐藏用户区）
   const user = useAuthStore((s) => s.user);
+
+  // 菜单角标：差异池存量（红）+ 拉取失败告警（橙 !），60s 轮询；失败静默不阻塞导航
+  const [openDiff, setOpenDiff] = useState(0);
+  const [pullWarn, setPullWarn] = useState(false);
+
+  useEffect(() => {
+    let disposed = false;
+    const load = async () => {
+      const [rows, health] = await Promise.all([
+        summaryApi.list({}).catch(() => [] as SummaryRow[]),
+        runsApi.healthOverview().catch(() => [] as DatasourceHealthRow[]),
+      ]);
+      if (disposed) return;
+      setOpenDiff(rows.reduce((sum, r) => sum + Number(r.diff ?? 0), 0));
+      setPullWarn(
+        health.some(
+          (h) => h.health_status === 'error' || (h.last_err_msg != null && h.last_err_msg.trim().length > 0),
+        ),
+      );
+    };
+    void load();
+    const timer = window.setInterval(load, 60_000);
+    return () => {
+      disposed = true;
+      window.clearInterval(timer);
+    };
+  }, []);
 
   function handleLogout() {
     // 壳内：跳壳子登录页（壳子已登录态会被 GuestRoute 拦截跳 portal）
@@ -68,8 +134,9 @@ export function AppLayout() {
                 )
               }
             >
-              <item.icon className="h-4 w-4" />
-              {item.label}
+              <item.icon className="h-4 w-4 shrink-0" />
+              <span className="min-w-0 flex-1 truncate">{item.label}</span>
+              {item.badge ? <NavBadge kind={item.badge} openDiff={openDiff} pullWarn={pullWarn} /> : null}
             </NavLink>
           ))}
         </nav>

@@ -75,8 +75,9 @@ public class ReportRenderer {
         }
         return switch (type) {
             case "field_mismatch" -> "字段不一致";
-            case "unmatched_left" -> "仅左端有";
-            case "unmatched_right" -> "仅右端有";
+            // diff_type 按"缺失的侧"命名：unmatched_left=右有左无（仅右端有）；unmatched_right=左有右无（仅左端有）
+            case "unmatched_left" -> "仅右端有";
+            case "unmatched_right" -> "仅左端有";
             case "anomaly" -> "数据异常";
             default -> type;
         };

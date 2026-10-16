@@ -1,9 +1,10 @@
-import { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useMemo, useState } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Check, GitCompareArrows, RefreshCw } from 'lucide-react';
 import { toast } from 'sonner';
 import { diffsApi } from '@/lib/api/diffs';
+import { syncShellRoute } from '@/lib/router/shell-nav';
 import { PermissionGate } from '@/components/auth/permission-gate';
 import { P } from '@/lib/permissions';
 import { checksApi } from '@/lib/api/checks';
@@ -24,21 +25,69 @@ import {
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { STATUS_BADGE, DIFF_TYPE_LABEL, TYPE_BADGE, HANDLE_BADGE } from './constants';
 
+interface FilterState {
+  scenarioCode: string;
+  checkName: string;
+  status: string;
+  diffType: string;
+  handleStatus: string;
+  matchKey: string;
+  dateFrom: string;
+  dateTo: string;
+  amountFrom: string;
+  amountTo: string;
+}
+
+const EMPTY_FILTERS: FilterState = {
+  scenarioCode: '',
+  checkName: '',
+  status: '',
+  diffType: '',
+  handleStatus: '',
+  matchKey: '',
+  dateFrom: '',
+  dateTo: '',
+  amountFrom: '',
+  amountTo: '',
+};
+
+/** 从 URL 读取下钻预筛选参数（对账汇总 / 差异处理互跳，v6.6 §4.2） */
+function filtersFromUrl(sp: URLSearchParams): FilterState {
+  return {
+    scenarioCode: sp.get('scenarioCode') ?? '',
+    checkName: sp.get('checkName') ?? '',
+    status: sp.get('status') ?? '',
+    diffType: sp.get('diffType') ?? '',
+    handleStatus: sp.get('handleStatus') ?? '',
+    matchKey: sp.get('matchKey') ?? '',
+    dateFrom: sp.get('dateFrom') ?? '',
+    dateTo: sp.get('dateTo') ?? '',
+    amountFrom: sp.get('amountFrom') ?? '',
+    amountTo: sp.get('amountTo') ?? '',
+  };
+}
+
+function buildParams(filters: FilterState): DiffQueryParams {
+  const next: DiffQueryParams = { page: 1, size: 20 };
+  if (filters.scenarioCode) next.scenarioCode = filters.scenarioCode;
+  if (filters.checkName) next.checkName = filters.checkName;
+  if (filters.status) next.status = filters.status as DiffStatus;
+  if (filters.diffType) next.diffType = filters.diffType as DiffType;
+  if (filters.handleStatus) next.handleStatus = filters.handleStatus as HandleStatus;
+  if (filters.matchKey.trim()) next.matchKey = filters.matchKey.trim();
+  if (filters.dateFrom) next.dateFrom = filters.dateFrom.replace('T', ' ');
+  if (filters.dateTo) next.dateTo = filters.dateTo.replace('T', ' ');
+  if (filters.amountFrom.trim()) next.diffAmountCentFrom = Math.round(Number(filters.amountFrom) * 100);
+  if (filters.amountTo.trim()) next.diffAmountCentTo = Math.round(Number(filters.amountTo) * 100);
+  return next;
+}
+
 export function DiffsPage() {
   const navigate = useNavigate();
-  const [params, setParams] = useState<DiffQueryParams>({ page: 1, size: 20 });
-  const [filters, setFilters] = useState({
-    scenarioCode: '',
-    checkName: '',
-    status: '',
-    diffType: '',
-    handleStatus: '',
-    matchKey: '',
-    dateFrom: '',
-    dateTo: '',
-    amountFrom: '',
-    amountTo: '',
-  });
+  const [searchParams] = useSearchParams();
+  const urlFilters = useMemo(() => filtersFromUrl(searchParams), [searchParams]);
+  const [params, setParams] = useState<DiffQueryParams>(() => buildParams(urlFilters));
+  const [filters, setFilters] = useState<FilterState>(urlFilters);
   const [expanded, setExpanded] = useState<number | null>(null);
   const [handleForm, setHandleForm] = useState<DiffHandleReq>({ handle_status: 'handled', remark: '' });
 
@@ -77,33 +126,11 @@ export function DiffsPage() {
   });
 
   function applyFilter() {
-    const next: DiffQueryParams = { page: 1, size: 20 };
-    if (filters.scenarioCode) next.scenarioCode = filters.scenarioCode;
-    if (filters.checkName) next.checkName = filters.checkName;
-    if (filters.status) next.status = filters.status as DiffStatus;
-    if (filters.diffType) next.diffType = filters.diffType as DiffType;
-    if (filters.handleStatus) next.handleStatus = filters.handleStatus as HandleStatus;
-    if (filters.matchKey.trim()) next.matchKey = filters.matchKey.trim();
-    if (filters.dateFrom) next.dateFrom = filters.dateFrom.replace('T', ' ');
-    if (filters.dateTo) next.dateTo = filters.dateTo.replace('T', ' ');
-    if (filters.amountFrom.trim()) next.diffAmountCentFrom = Math.round(Number(filters.amountFrom) * 100);
-    if (filters.amountTo.trim()) next.diffAmountCentTo = Math.round(Number(filters.amountTo) * 100);
-    setParams(next);
+    setParams(buildParams(filters));
   }
 
   function resetFilter() {
-    setFilters({
-      scenarioCode: '',
-      checkName: '',
-      status: '',
-      diffType: '',
-      handleStatus: '',
-      matchKey: '',
-      dateFrom: '',
-      dateTo: '',
-      amountFrom: '',
-      amountTo: '',
-    });
+    setFilters({ ...EMPTY_FILTERS });
     setParams({ page: 1, size: 20 });
   }
 
@@ -163,7 +190,8 @@ export function DiffsPage() {
           <div>
             <CardTitle className="flex items-center gap-2">
               <GitCompareArrows className="h-4 w-4 text-primary" />
-              差异查询
+              差异处理
+              <span className="text-[11px] font-normal text-muted-foreground">（差异处理 · 列表视图）</span>
             </CardTitle>
             <CardDescription>只读查询 + 人工处理（T07）；匹配键支持模糊搜索</CardDescription>
           </div>
@@ -351,7 +379,7 @@ export function DiffsPage() {
                           className="text-xs text-blue-600 hover:underline"
                           onClick={(e) => {
                             e.stopPropagation();
-                            navigate(`/diffs/${row.id}`);
+                            if (!syncShellRoute(`/diffs/${row.id}`)) navigate(`/diffs/${row.id}`);
                           }}
                         >
                           详情

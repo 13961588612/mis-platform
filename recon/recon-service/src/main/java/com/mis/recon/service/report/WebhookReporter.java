@@ -13,7 +13,10 @@ import org.springframework.web.client.RestClient;
 
 /**
  * Webhook 渠道（F101，T07-spec §3.3）：POST JSON 到 content.configJson.url，未配置降级应用级
- * mis.recon.notify.webhook.url；两处均未配置 → 日志模拟成功（dev 期 mock）。
+ * mis.recon.notify.webhook.url。
+ * <p>P0-2：渠道未配置时不再静默 mock 成功——仅当显式开启
+ * {@code mis.recon.notify.mock-enabled=true}（本地开发）才 mock；默认 false 时
+ * 返回显式失败（报告任务记 failed + 告警），避免生产平衡表/告警"假成功"导致审计证据链断裂。</p>
  */
 @Slf4j
 @Component
@@ -23,11 +26,14 @@ public class WebhookReporter implements Reporter {
 
     private final RestClient restClient;
     private final String appDefaultUrl;
+    private final boolean mockEnabled;
 
     public WebhookReporter(RestClient.Builder builder,
-                           @Value("${mis.recon.notify.webhook.url:}") String appDefaultUrl) {
+                           @Value("${mis.recon.notify.webhook.url:}") String appDefaultUrl,
+                           @Value("${mis.recon.notify.mock-enabled:false}") boolean mockEnabled) {
         this.restClient = builder.build();
         this.appDefaultUrl = appDefaultUrl;
+        this.mockEnabled = mockEnabled;
     }
 
     @Override
@@ -39,8 +45,12 @@ public class WebhookReporter implements Reporter {
     public SendResult send(ReportContent content) {
         String url = resolveUrl(content);
         if (!StringUtils.hasText(url)) {
-            log.info("[report][webhook] no url configured, mock send: title={}", content.getTitle());
-            return SendResult.ok();
+            if (mockEnabled) {
+                log.info("[report][webhook] no url configured, mock send: title={}", content.getTitle());
+                return SendResult.ok();
+            }
+            return SendResult.fail("webhook channel not configured: no url "
+                    + "(set mis.recon.notify.webhook.url or reporter config url)");
         }
         String payload = buildPayload(content);
         try {

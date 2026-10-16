@@ -8,6 +8,9 @@ importers:
 
   .:
     dependencies:
+      '@micro-zoe/micro-app':
+        specifier: 1.0.0-rc.32
+        version: 1.0.0-rc.32
       '@microsoft/fetch-event-source':
         specifier: ^2.0.1
         version: 2.0.1
@@ -542,6 +545,9 @@ packages:
 
   '@jridgewell/trace-mapping@0.3.31':
     resolution: {integrity: sha512-zzNR+SdQSDJzc8joaeP8QQoCQr8NuYx2dIIytl1QeBEZHJ9uW6hebsrYgbz8hJwUQao3TWCMtmfV8Nu1twOLAw==}
+
+  '@micro-zoe/micro-app@1.0.0-rc.32':
+    resolution: {integrity: sha512-1M34tdcZB9yEvOozMJ/1tOnFVnX3QJtWe4kDevpO/GjNJ5oFjq6gE9jiInJSvvcYZcZTKrIWcM9xUzbFbIFG0A==}
 
   '@microsoft/fetch-event-source@2.0.1':
     resolution: {integrity: sha512-W6CLUJ2eBMw3Rec70qrsEW0jOm/3twwJv21mrmj2yORiaVmVYGS4sSS5yUwvQc1ZlDLYGPnClVWmUUMagKNsfA==}
@@ -3508,6 +3514,8 @@ snapshots:
     dependencies:
       '@jridgewell/resolve-uri': 3.1.2
       '@jridgewell/sourcemap-codec': 1.5.5
+
+  '@micro-zoe/micro-app@1.0.0-rc.32': {}
 
   '@microsoft/fetch-event-source@2.0.1': {}
 

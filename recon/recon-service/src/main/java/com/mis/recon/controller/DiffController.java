@@ -72,7 +72,7 @@ public class DiffController {
 
         Map<String, Long> ratio = new LinkedHashMap<>();
         long confirmed = 0;
-        for (Object[] row : detailQueryRepository.countUnhandledGroupBy()) {
+        for (Object[] row : detailQueryRepository.countUnhandledGroupBy(scenarioCode)) {
             String s = (String) row[0];
             String type = (String) row[1];
             long cnt = ((Number) row[2]).longValue();

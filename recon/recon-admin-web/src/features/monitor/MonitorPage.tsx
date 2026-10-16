@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { useMutation, useQuery } from '@tanstack/react-query';
-import { Activity, ActivitySquare, Download, Zap } from 'lucide-react';
+import { Activity, ActivitySquare, BellRing, Download, Zap } from 'lucide-react';
 import { toast } from 'sonner';
 import { runsApi } from '@/lib/api/reports';
 import { scenariosApi } from '@/lib/api/scenarios';
@@ -82,6 +82,10 @@ export function MonitorPage() {
   // 对账：同上
   const [reconFilters, setReconFilters] = useState({ scenarioCode: '', status: '', dateFrom: '', dateTo: '' });
   const [reconParams, setReconParams] = useState<ReconRunQuery>({ page: 1, size: 20 });
+  // 告警留痕（v6.9 R85 迁入监控页第 3 tab）：草稿筛选 + 应用参数分离
+  const [alertFilters, setAlertFilters] = useState({ severity: '', channel: '', dateFrom: '', dateTo: '' });
+  const [alertParams, setAlertParams] = useState<{ page: number; size: number; severity?: string; channel?: string; dateFrom?: string; dateTo?: string }>({ page: 1, size: 20 });
+  const [alertContent, setAlertContent] = useState<{ id: number; content?: string | null } | null>(null);
   const [manualPullOpen, setManualPullOpen] = useState(false);
   const [manualReconOpen, setManualReconOpen] = useState(false);
   const [runDetailId, setRunDetailId] = useState<number | null>(null);
@@ -124,6 +128,20 @@ export function MonitorPage() {
   const { data: alerts } = useQuery({
     queryKey: ['alert-feed'],
     queryFn: () => runsApi.alertLogs({ page: 1, size: 5 }),
+  });
+  // 告警留痕主列表（第 3 tab）
+  const { data: alertList, isLoading: alertsLoading, refetch: refetchAlerts } = useQuery({
+    queryKey: ['alert-logs', alertParams],
+    queryFn: () => runsApi.alertLogs(alertParams),
+  });
+  // 重发：同一场景重新扫描未报告差异（reported_at 防重）
+  const resend = useMutation({
+    mutationFn: (code: string) => runsApi.resendReport(code),
+    onSuccess: (r) => {
+      toast.success(`已重发：diff=${r.diff_count} send=${r.send_status}`);
+      refetchAlerts();
+    },
+    onError: (e) => toast.error(errMsg(e)),
   });
   const { data: runDetail, isLoading: runDetailLoading } = useQuery({
     queryKey: ['recon-run-detail', runDetailId],
@@ -176,6 +194,24 @@ export function MonitorPage() {
   function resetReconFilter() {
     setReconFilters({ scenarioCode: '', status: '', dateFrom: '', dateTo: '' });
     setReconParams({ page: 1, size: 20 });
+  }
+
+  /** 应用告警筛选（v6.9 R85：级别 / 渠道 / 发送时间 sent_at） */
+  function applyAlertFilter() {
+    const next: typeof alertParams = { page: 1, size: 20 };
+    if (alertFilters.severity) next.severity = alertFilters.severity;
+    if (alertFilters.channel) next.channel = alertFilters.channel;
+    if (alertFilters.dateFrom) next.dateFrom = alertFilters.dateFrom;
+    if (alertFilters.dateTo) next.dateTo = alertFilters.dateTo;
+    setAlertParams(next);
+    if (JSON.stringify(next) === JSON.stringify(alertParams)) {
+      refetchAlerts();
+    }
+  }
+
+  function resetAlertFilter() {
+    setAlertFilters({ severity: '', channel: '', dateFrom: '', dateTo: '' });
+    setAlertParams({ page: 1, size: 20 });
   }
 
   const manualPull = useMutation({
@@ -253,8 +289,8 @@ export function MonitorPage() {
       </div>
 
       {/* 趋势 + 账龄 + 告警 feed */}
-      <div className="grid gap-4 lg:grid-cols-[1.2fr_1fr]">
-        <Card>
+      <div className="grid gap-4 lg:grid-cols-7">
+        <Card className="lg:col-span-2">
           <CardHeader className="pb-2">
             <CardTitle className="text-sm">对账成功率趋势 · 近 7 天</CardTitle>
           </CardHeader>
@@ -262,7 +298,7 @@ export function MonitorPage() {
             <TrendChart rows={trend ?? []} loading={trendLoading} />
           </CardContent>
         </Card>
-        <div className="space-y-4">
+        <div className="flex flex-col gap-3 min-w-0 lg:col-span-5">
           <Card>
             <CardHeader className="pb-2">
               <CardTitle className="text-sm">差异池账龄分布（按 first_seen_at）</CardTitle>
@@ -273,12 +309,17 @@ export function MonitorPage() {
           </Card>
           <Card>
             <CardHeader className="pb-2">
-              <CardTitle className="text-sm">最新告警（点击跳报告页告警留痕）</CardTitle>
+              <CardTitle className="text-sm">最新告警（点击切换本页「告警留痕」tab）</CardTitle>
             </CardHeader>
             <CardContent className="space-y-1">
               {(alerts?.list.length ?? 0) === 0 && <div className="py-3 text-center text-xs text-muted-foreground">暂无告警</div>}
               {alerts?.list.map((a) => (
-                <div key={a.id} className="flex items-start gap-2 rounded p-1.5 text-[12px] hover:bg-accent/40">
+                <button
+                  key={a.id}
+                  type="button"
+                  onClick={() => setTab('alert')}
+                  className="flex w-full items-start gap-2 rounded p-1.5 text-left text-[12px] hover:bg-accent/40"
+                >
                   <Badge variant={SEV[a.severity]?.variant ?? 'secondary'} className="h-[18px] shrink-0 px-1.5">
                     {SEV[a.severity]?.label ?? a.severity}
                   </Badge>
@@ -286,7 +327,7 @@ export function MonitorPage() {
                     {a.content ?? '-'}
                   </span>
                   <span className="shrink-0 font-mono text-[10px] text-muted-foreground">{fmtShort(a.sent_at)}</span>
-                </div>
+                </button>
               ))}
             </CardContent>
           </Card>
@@ -297,6 +338,7 @@ export function MonitorPage() {
         <TabsList>
           <TabsTrigger value="pull">拉取运行</TabsTrigger>
           <TabsTrigger value="recon">对账运行</TabsTrigger>
+          <TabsTrigger value="alert">告警留痕</TabsTrigger>
         </TabsList>
 
         {/* 拉取运行 */}
@@ -590,6 +632,132 @@ export function MonitorPage() {
             </CardContent>
           </Card>
         </TabsContent>
+
+        {/* 告警留痕（v6.9 R85 迁入监控页第 3 tab） */}
+        <TabsContent value="alert">
+          <Card>
+            <CardHeader className="pb-3">
+              <CardTitle className="text-sm">recon_alert_log 告警留痕</CardTitle>
+              <CardDescription>
+                告警 = 引擎自省信号（发送留痕与重试记录）；对外正式文书在报告中心页（报告记录 · 平衡表）
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="mb-3 grid grid-cols-2 gap-2 md:grid-cols-5">
+                <Select
+                  value={alertFilters.severity || 'all'}
+                  onValueChange={(v) => setAlertFilters({ ...alertFilters, severity: v === 'all' ? '' : v })}
+                >
+                  <SelectTrigger><SelectValue placeholder="级别" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">级别:全部</SelectItem>
+                    <SelectItem value="info">一般 info</SelectItem>
+                    <SelectItem value="warn">警告 warn</SelectItem>
+                    <SelectItem value="critical">严重 critical</SelectItem>
+                  </SelectContent>
+                </Select>
+                <Select
+                  value={alertFilters.channel || 'all'}
+                  onValueChange={(v) => setAlertFilters({ ...alertFilters, channel: v === 'all' ? '' : v })}
+                >
+                  <SelectTrigger><SelectValue placeholder="渠道" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">渠道:全部</SelectItem>
+                    <SelectItem value="email">邮件 email</SelectItem>
+                    <SelectItem value="webhook">Webhook</SelectItem>
+                    <SelectItem value="ops">运维 ops</SelectItem>
+                  </SelectContent>
+                </Select>
+                <DateTimeInput
+                  value={alertFilters.dateFrom}
+                  onChange={(v) => setAlertFilters({ ...alertFilters, dateFrom: v })}
+                />
+                <DateTimeInput
+                  value={alertFilters.dateTo}
+                  onChange={(v) => setAlertFilters({ ...alertFilters, dateTo: v })}
+                />
+                <div className="flex gap-2">
+                  <Button size="sm" onClick={applyAlertFilter}>
+                    查询
+                  </Button>
+                  <Button size="sm" variant="outline" onClick={resetAlertFilter}>
+                    重置
+                  </Button>
+                </div>
+              </div>
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>告警 ID</TableHead>
+                    <TableHead>场景 · 检查</TableHead>
+                    <TableHead>级别</TableHead>
+                    <TableHead>渠道</TableHead>
+                    <TableHead>发送状态 · 重试</TableHead>
+                    <TableHead>发送时间</TableHead>
+                    <TableHead>关联差异</TableHead>
+                    <TableHead className="text-right">操作</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {alertsLoading && (
+                    <TableRow>
+                      <TableCell colSpan={8} className="py-8 text-center text-muted-foreground">加载中…</TableCell>
+                    </TableRow>
+                  )}
+                  {!alertsLoading && (alertList?.list.length ?? 0) === 0 && (
+                    <TableRow>
+                      <TableCell colSpan={8} className="py-8 text-center text-muted-foreground">暂无告警记录</TableCell>
+                    </TableRow>
+                  )}
+                  {alertList?.list.map((a) => (
+                    <TableRow key={a.id} className={a.send_status === 'failed' ? 'bg-red-50/60' : ''}>
+                      <TableCell className="font-mono text-xs">{a.id}</TableCell>
+                      <TableCell>
+                        <div className="text-[13px]">{a.scenario_code ?? '-'}</div>
+                        <div className="font-mono text-[11px] text-muted-foreground">{a.check_name ?? ''}</div>
+                      </TableCell>
+                      <TableCell>
+                        <Badge variant={SEV[a.severity]?.variant ?? 'secondary'}>
+                          {SEV[a.severity]?.label ?? a.severity}
+                        </Badge>
+                      </TableCell>
+                      <TableCell className="text-xs">{a.channel ?? '-'}</TableCell>
+                      <TableCell>
+                        <Badge variant={a.send_status === 'success' ? 'success' : 'destructive'}>
+                          {a.send_status === 'success' ? '成功' : '失败'}
+                        </Badge>
+                        <span className="ml-1 text-[11px] text-muted-foreground">· {a.retry_count} 次</span>
+                      </TableCell>
+                      <TableCell className="whitespace-nowrap font-mono text-[11px] text-muted-foreground">
+                        {fmt(a.sent_at)}
+                      </TableCell>
+                      <TableCell className="font-mono text-[11px] text-muted-foreground">
+                        {a.detail_ids_json ?? '-'}
+                      </TableCell>
+                      <TableCell className="text-right">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => setAlertContent({ id: a.id, content: a.content })}
+                        >
+                          <BellRing className="mr-1 h-3.5 w-3.5" /> 查看内容
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          disabled={!a.scenario_code || resend.isPending}
+                          onClick={() => a.scenario_code && resend.mutate(a.scenario_code)}
+                        >
+                          <Zap className="mr-1 h-3.5 w-3.5" /> 重发
+                        </Button>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </CardContent>
+          </Card>
+        </TabsContent>
       </Tabs>
 
       <ManualPullDialog
@@ -608,6 +776,7 @@ export function MonitorPage() {
       />
       <RunDetailDialog id={runDetailId} detail={runDetail} loading={runDetailLoading} onClose={() => setRunDetailId(null)} />
       <PullHealthDialog row={healthRow} onClose={() => setHealthRow(null)} />
+      <AlertContentDialog row={alertContent} onClose={() => setAlertContent(null)} />
     </div>
   );
 }
@@ -621,30 +790,67 @@ const TREND_SEG: Record<string, { label: string; bg: string }> = {
 };
 
 function TrendChart({ rows, loading }: { rows: Array<{ day: string; status: string; cnt: number }>; loading: boolean }) {
+  const [hoverIdx, setHoverIdx] = useState<number | null>(null);
   const data = useMemo(() => {
     const map = new Map<string, { day: string; success: number; skipped: number; failed: number }>();
     for (const r of rows) {
       const cur = map.get(r.day) ?? { day: r.day, success: 0, skipped: 0, failed: 0 };
-      if (r.status === 'success') cur.success += r.cnt;
-      else if (r.status === 'skipped') cur.skipped += r.cnt;
-      else cur.failed += r.cnt;
+      const n = Number(r.cnt) || 0;
+      if (r.status === 'success') cur.success += n;
+      else if (r.status === 'skipped') cur.skipped += n;
+      else cur.failed += n;
       map.set(r.day, cur);
     }
     return [...map.values()].sort((a, b) => (a.day < b.day ? -1 : 1));
   }, [rows]);
-  const max = Math.max(1, ...data.map((d) => d.success + d.skipped + d.failed));
 
   if (loading) return <div className="py-8 text-center text-sm text-muted-foreground">加载中…</div>;
   if (data.length === 0) return <div className="py-8 text-center text-sm text-muted-foreground">暂无对账运行数据</div>;
 
   return (
     <div>
-      <div className="flex h-28 items-end gap-2">
-        {data.map((d) => {
-          const seg = (v: number) => (v <= 0 ? 0 : Math.max(2, Math.round((v / max) * 100)));
+      {/* 图例 */}
+      <div className="mb-2 flex items-center gap-5 text-[12px]">
+        {Object.entries(TREND_SEG).map(([k, v]) => (
+          <span key={k} className="flex items-center gap-1.5">
+            <span className="inline-block h-2.5 w-2.5 rounded-sm" style={{ background: v.bg }} />
+            {v.label}
+          </span>
+        ))}
+      </div>
+      {/* 竖向柱状图 */}
+      <div className="flex items-end gap-2">
+        {data.map((d, i) => {
+          const total = d.success + d.skipped + d.failed;
+          const seg = (v: number) => (v <= 0 ? 0 : Math.max(2, Math.round((v / total) * 100)));
           return (
-            <div key={d.day} className="flex flex-1 flex-col items-center gap-1">
-              <div className="flex w-full flex-col justify-end overflow-hidden rounded-sm bg-muted" style={{ height: 104 }}>
+            <div
+              key={d.day}
+              className="relative flex flex-1 flex-col items-center gap-1"
+              onMouseEnter={() => setHoverIdx(i)}
+              onMouseLeave={() => setHoverIdx(null)}
+            >
+              {/* 悬浮 Tooltip */}
+              {hoverIdx === i && (
+                <div className="pointer-events-none absolute bottom-full left-1/2 z-10 mb-1 -translate-x-1/2 whitespace-nowrap rounded-md border bg-popover px-2.5 py-1.5 text-[11px] shadow-md">
+                  <div className="mb-0.5 font-medium">{d.day}</div>
+                  {Object.entries(TREND_SEG).map(([k, v]) => {
+                    const val = d[k as keyof typeof d] as number;
+                    return (
+                      <div key={k} className="flex items-center gap-1.5">
+                        <span className="inline-block h-2 w-2 rounded-sm" style={{ background: v.bg }} />
+                        <span>{v.label}：</span>
+                        <span className="font-mono font-medium">{val}</span>
+                        <span className="text-muted-foreground">（{total > 0 ? Math.round((val / total) * 100) : 0}%）</span>
+                      </div>
+                    );
+                  })}
+                  <div className="mt-0.5 border-t pt-0.5 text-muted-foreground">
+                    合计：<span className="font-mono font-medium text-foreground">{total}</span>
+                  </div>
+                </div>
+              )}
+              <div className="flex w-full flex-col justify-end overflow-hidden rounded-sm bg-muted" style={{ height: 80 }}>
                 {d.failed > 0 && <div className="w-full" style={{ height: seg(d.failed), background: TREND_SEG.failed.bg }} />}
                 {d.skipped > 0 && <div className="w-full" style={{ height: seg(d.skipped), background: TREND_SEG.skipped.bg }} />}
                 {d.success > 0 && <div className="w-full" style={{ height: seg(d.success), background: TREND_SEG.success.bg }} />}
@@ -653,14 +859,6 @@ function TrendChart({ rows, loading }: { rows: Array<{ day: string; status: stri
             </div>
           );
         })}
-      </div>
-      <div className="mt-2 flex items-center gap-4 text-[11px] text-muted-foreground">
-        {Object.entries(TREND_SEG).map(([k, v]) => (
-          <span key={k} className="flex items-center gap-1">
-            <span className="inline-block h-2 w-2 rounded-sm" style={{ background: v.bg }} />
-            {v.label}
-          </span>
-        ))}
       </div>
     </div>
   );
@@ -969,6 +1167,33 @@ function parseConsumed(json?: string | null): Map<string, Record<string, number>
     // 解析失败保持空
   }
   return map;
+}
+
+/* ---------------- 告警内容弹窗（告警留痕 · 查看内容） ---------------- */
+
+function AlertContentDialog({
+  row,
+  onClose,
+}: {
+  row: { id: number; content?: string | null } | null;
+  onClose: () => void;
+}) {
+  return (
+    <Dialog open={row != null} onOpenChange={(open) => !open && onClose()}>
+      <DialogContent className="max-w-2xl">
+        <DialogHeader>
+          <DialogTitle>告警内容 #{row?.id ?? ''}</DialogTitle>
+          <DialogDescription>recon_alert_log 该条告警发送的正文内容</DialogDescription>
+        </DialogHeader>
+        <pre className="max-h-80 overflow-auto whitespace-pre-wrap rounded bg-muted/40 p-3 font-mono text-xs leading-relaxed">
+          {row?.content || '(空)'}
+        </pre>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>关闭</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
 }
 
 /* ---------------- 拉取健康详情弹窗 ---------------- */

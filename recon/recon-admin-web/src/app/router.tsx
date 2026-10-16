@@ -3,6 +3,7 @@ import { AppLayout } from '@/components/layout/AppLayout';
 import { ConnectionsPage } from '@/features/connections/ConnectionsPage';
 import { DatasourcesPage } from '@/features/datasources/DatasourcesPage';
 import { ScenariosPage } from '@/features/scenarios/ScenariosPage';
+import { SummaryPage } from '@/features/summary/SummaryPage';
 import { DiffsPage } from '@/features/diffs/DiffsPage';
 import { DiffDetailPage } from '@/features/diffs/DiffDetailPage';
 import { ReportsPage } from '@/features/reports/ReportsPage';
@@ -38,7 +39,8 @@ const router = createBrowserRouter(
       path: '/',
       element: IS_MICRO ? <MicroLayout /> : <AppLayout />,
       children: [
-        { index: true, element: <Navigate to="connections" replace /> },
+        { index: true, element: <Navigate to="summary" replace /> },
+        { path: 'summary', element: <SummaryPage /> },
         { path: 'connections', element: <ConnectionsPage /> },
         { path: 'datasources', element: <DatasourcesPage /> },
         { path: 'scenarios', element: <ScenariosPage /> },

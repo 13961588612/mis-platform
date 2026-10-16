@@ -37,7 +37,7 @@ export const runsApi = {
   /** 报告详情：运行记录 + 该次发送的报告正文 + 按检查分组差异汇总 */
   reportDetail: (id: number) => client.get<ReportDetailResp>(`/report-runs/${id}/detail`),
 
-  alertLogs: (params: { scenarioCode?: string; severity?: string; channel?: string } & PageParams) =>
+  alertLogs: (params: { scenarioCode?: string; severity?: string; channel?: string; dateFrom?: string; dateTo?: string } & PageParams) =>
     client.get<PageResult<AlertLogRow>>('/alert-logs', { params }),
 
   reconRuns: (params: { scenarioCode?: string; status?: string; dateFrom?: string; dateTo?: string } & PageParams) =>
@@ -72,7 +72,7 @@ export const runsApi = {
   /** 对账运行详情（含 consumed_seq_json 消费进度） */
   reconRunDetail: (id: number) => client.get<ReconRunDetailRow>(`/recon-runs/${id}/detail`),
 
-  /** 平衡表（零差异证明） */
-  balance: (scenarioCode: string, days = 1) =>
-    client.get<BalanceResp>('/balance', { params: { scenarioCode, days } }),
+  /** 平衡表（零差异证明）；date=yyyy-MM-dd 指定某期（报告中心 R87 参数化），缺省后端回退近 N 天窗口 */
+  balance: (scenarioCode: string, date?: string) =>
+    client.get<BalanceResp>('/balance', { params: { scenarioCode, date } }),
 };

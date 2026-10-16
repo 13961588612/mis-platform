@@ -13,18 +13,21 @@ import com.mis.recon.dao.RunAuditDao.AlertLogRow;
 import com.mis.recon.dao.RunAuditDao.PullRunRow;
 import com.mis.recon.dao.RunAuditDao.ReconRunRow;
 import com.mis.recon.dao.RunAuditDao.ReportRunRow;
+import com.mis.recon.dao.SummaryDao;
 import com.mis.recon.domain.dto.BalanceResp;
 import com.mis.recon.domain.dto.ReportDetailResp;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.PageRequest;
+import org.springframework.util.StringUtils;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
@@ -47,7 +50,23 @@ public class ObservabilityController {
 
     private final RunAuditDao runAuditDao;
     private final DashboardDao dashboardDao;
+    private final SummaryDao summaryDao;
     private final ObjectMapper objectMapper;
+
+    /**
+     * 对账汇总：每 check 一行（对账汇总 R13~R15，v1.3 整体累计口径）。
+     * <p>入参 scenarioCode / status 可选（runId 保留供调试，界面不暴露）；
+     * 出参每 check 一行 {scenarioCode, checkName, strategy, latestRunId, latestRunTime,
+     * runStatus, errMsg, total, success, diff, fail}，整体累计恒自洽 total = success + diff + fail；
+     * 主数据源未配置 → total/success/diff/fail 为 null（前端显示「—」）。</p>
+     */
+    @GetMapping("/summary")
+    public ApiResponse<List<SummaryDao.SummaryRow>> summary(
+            @RequestParam(required = false) String scenarioCode,
+            @RequestParam(required = false) Long runId,
+            @RequestParam(required = false) String status) {
+        return ApiResponse.ok(summaryDao.summary(scenarioCode, status));
+    }
 
     @GetMapping("/report-runs")
     public ApiResponse<PageResult<ReportRunRow>> reportRuns(
@@ -68,11 +87,13 @@ public class ObservabilityController {
             @RequestParam(required = false) String scenarioCode,
             @RequestParam(required = false) String severity,
             @RequestParam(required = false) String channel,
+            @RequestParam(required = false) String dateFrom,
+            @RequestParam(required = false) String dateTo,
             @RequestParam(defaultValue = "1") int page,
             @RequestParam(defaultValue = "20") int size) {
         PageRequest pr = PageSupport.normalize(page, size);
         return ApiResponse.ok(runAuditDao.alertLogs(scenarioCode, severity, channel,
-                pr.getPageNumber() + 1, pr.getPageSize()));
+                parseOrNull(dateFrom), parseOrNull(dateTo), pr.getPageNumber() + 1, pr.getPageSize()));
     }
 
     @GetMapping("/recon-runs")
@@ -149,16 +170,32 @@ public class ObservabilityController {
     /**
      * 平衡表（零差异证明）：按场景输出覆盖窗口/覆盖轮次/平衡结论/数据源健康/对账结果/本期变动/轮次完整性。
      *
+     * @param date 指定日期 yyyy-MM-dd（报告中心 R87 参数化，默认最近一次由前端给值）；
+     *             date 为空时回退 days 窗口语义
      * @param days 统计窗口天数（默认 1 = 当日窗口，最大 30）
      */
     @GetMapping("/balance")
     public ApiResponse<BalanceResp> balance(
             @RequestParam String scenarioCode,
+            @RequestParam(required = false) String date,
             @RequestParam(defaultValue = "1") int days) {
         int d = Math.min(Math.max(days, 1), 30);
-        LocalDateTime now = LocalDateTime.now();
-        LocalDateTime windowStart = now.minusDays(d - 1L).withHour(0).withMinute(0).withSecond(0).withNano(0);
-        LocalDateTime windowEnd = now;
+        LocalDateTime windowStart;
+        LocalDateTime windowEnd;
+        if (StringUtils.hasText(date)) {
+            try {
+                LocalDate day = LocalDate.parse(date.trim(), DateTimeFormatter.ISO_LOCAL_DATE);
+                windowStart = day.atStartOfDay();
+                windowEnd = day.plusDays(1).atStartOfDay().minusNanos(1);
+            } catch (DateTimeParseException e) {
+                throw new BizException(ErrorCode.REQUEST_BODY_INVALID,
+                        "日期格式应为 yyyy-MM-dd（当前: " + date + "）");
+            }
+        } else {
+            LocalDateTime now = LocalDateTime.now();
+            windowStart = now.minusDays(d - 1L).withHour(0).withMinute(0).withSecond(0).withNano(0);
+            windowEnd = now;
+        }
 
         // 覆盖轮次 / 完整性：窗口内 recon_run 按状态计数
         List<Object[]> statusCounts = dashboardDao.runStatusCounts(scenarioCode, windowStart, windowEnd);
@@ -171,30 +208,33 @@ public class ObservabilityController {
         long failed = byStatus.getOrDefault("failed", 0L);
         long total = statusCounts.stream().mapToLong(r -> (Long) r[1]).sum();
 
-        // 最近成功轮：平衡结论 + matched/resolved
-        DashboardDao.ReconRunDetailRow latest = dashboardDao.latestSuccessRun(scenarioCode);
-        boolean balanced = latest != null && latest.diffCount() == 0;
+        // 窗口内最近成功轮：平衡结论 + matched/resolved（随所选日期联动，2026-08-29 口径）
+        DashboardDao.ReconRunDetailRow latest =
+                dashboardDao.latestSuccessRunInWindow(scenarioCode, windowStart, windowEnd);
+
+        // 窗口结束时刻差异池（期末池口径，按 diff_type 分布 + 总数）
+        Map<String, Long> diffTypes = dashboardDao.poolCountsAtWindow(scenarioCode, windowEnd);
+        long endPool = diffTypes.values().stream().mapToLong(Long::longValue).sum();
+
         String conclusion;
         String conclusionText;
         if (latest == null) {
             conclusion = "no_run";
-            conclusionText = "无成功对账轮次，暂无法出具平衡证明";
-        } else if (balanced) {
+            conclusionText = total > 0
+                    ? "窗口内无成功对账轮次（skipped/failed " + (skipped + failed) + " 轮），无法出具平衡证明"
+                    : "所选日期窗口内无对账轮次，暂无法出具平衡证明";
+        } else if (endPool == 0) {
             conclusion = "balanced";
-            conclusionText = latest.scenarioCode() + " 最近一次对账于 "
-                    + (latest.finishedAt() == null ? "-" : latest.finishedAt().format(TIME_FMT))
-                    + " 对平，差异池 "
-                    + dashboardDao.countPool(scenarioCode) + " 条待处理";
+            conclusionText = scenarioCode + " 于 " + windowStart.toLocalDate() + " 全量窗口对平，无待处理差异";
         } else {
             conclusion = "unbalanced";
-            conclusionText = latest.scenarioCode() + " 最近一次对账存在 "
-                    + latest.diffCount() + " 条差异未对平";
+            conclusionText = scenarioCode + " 于 " + windowStart.toLocalDate() + " 存在 "
+                    + endPool + " 条待处理差异，未对平";
         }
 
-        // 对账结果：最近成功轮 matched/resolved + 当前池按 diff_type 分布
+        // 对账结果：窗口内最近成功轮 matched/resolved + 窗口期末池按 diff_type 分布
         long matched = latest == null ? 0 : Math.max(latest.matchedCount(), 0);
         long resolved = latest == null ? 0 : Math.max(latest.resolvedCount(), 0);
-        Map<String, Long> diffTypes = dashboardDao.diffTypeCounts(scenarioCode);
 
         BalanceResp resp = BalanceResp.builder()
                 .scenarioCode(scenarioCode)
@@ -204,7 +244,7 @@ public class ObservabilityController {
                 .totalRounds((int) total)
                 .conclusion(conclusion)
                 .conclusionText(conclusionText)
-                .datasourceHealth(dashboardDao.datasourceHealth())
+                .datasourceHealth(dashboardDao.datasourceHealthInWindow(scenarioCode, windowStart, windowEnd))
                 .matchedCount(matched)
                 .fieldMismatch(diffTypes.getOrDefault("field_mismatch", 0L))
                 .unmatchedLeft(diffTypes.getOrDefault("unmatched_left", 0L))
@@ -213,7 +253,7 @@ public class ObservabilityController {
                 .resolvedCount(resolved)
                 .newDiff(dashboardDao.countByTimeCol(scenarioCode, "first_seen_at", windowStart, windowEnd))
                 .resolvedDiff(dashboardDao.countByTimeCol(scenarioCode, "resolved_at", windowStart, windowEnd))
-                .endPoolCount(dashboardDao.countPool(scenarioCode))
+                .endPoolCount(endPool)
                 .skippedRounds(skipped)
                 .failedRounds(failed)
                 .build();

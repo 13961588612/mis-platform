@@ -30,7 +30,7 @@ public class RunAuditDao {
 
     /** 报告运行记录 */
     public record ReportRunRow(long id, String scenarioCode, String reportType,
-                               int diffCount, String sendStatus, String errMsg,
+                               int diffCount, long diffAmountSum, String sendStatus, String errMsg,
                                LocalDateTime startedAt, LocalDateTime finishedAt) {
     }
 
@@ -93,13 +93,16 @@ public class RunAuditDao {
     }
 
     public PageResult<AlertLogRow> alertLogs(String scenarioCode, String severity, String channel,
+                                             LocalDateTime dateFrom, LocalDateTime dateTo,
                                              int page, int size) {
         List<Object> args = new ArrayList<>();
         StringBuilder sql = new StringBuilder(alertLogSelect());
         boolean first = true;
         first = textCond(sql, args, first, "scenario_code", scenarioCode);
         first = textCond(sql, args, first, "severity", severity);
-        textCond(sql, args, first, "channel", channel);
+        first = textCond(sql, args, first, "channel", channel);
+        first = timeCond(sql, args, first, "sent_at", dateFrom, ">=");
+        timeCond(sql, args, first, "sent_at", dateTo, "<=");
         sql.append(" ORDER BY id DESC");
         return queryPage(sql.toString(), alertLogMap(), args.toArray(), page, size);
     }
@@ -136,14 +139,15 @@ public class RunAuditDao {
     // ---------------- SQL 与 RowMapper ----------------
 
     private static String reportRunSelect() {
-        return "SELECT id, scenario_code, report_type, diff_count, send_status, err_msg, "
+        return "SELECT id, scenario_code, report_type, diff_count, diff_amount_sum, send_status, err_msg, "
                 + "started_at, finished_at FROM recon_report_run";
     }
 
     private RowMapper<ReportRunRow> reportRunMap() {
         return (rs, i) -> new ReportRunRow(rs.getLong("id"), rs.getString("scenario_code"),
-                rs.getString("report_type"), rs.getInt("diff_count"), rs.getString("send_status"),
-                rs.getString("err_msg"), time(rs, "started_at"), time(rs, "finished_at"));
+                rs.getString("report_type"), rs.getInt("diff_count"), rs.getLong("diff_amount_sum"),
+                rs.getString("send_status"), rs.getString("err_msg"),
+                time(rs, "started_at"), time(rs, "finished_at"));
     }
 
     private static String alertLogSelect() {

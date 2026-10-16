@@ -19,6 +19,7 @@ import com.mis.recon.repository.ConnectionRepository;
 import com.mis.recon.repository.DatasourceRepository;
 import com.mis.recon.repository.ScenarioRepository;
 import com.mis.recon.service.engine.CustomLoader;
+import com.mis.recon.service.support.ConnectionPoolManager;
 import lombok.RequiredArgsConstructor;
 import com.mis.recon.util.WindowExprResolver;
 import org.quartz.CronExpression;
@@ -59,6 +60,7 @@ public class ConfigValidationService {
     private final DatasourceRepository datasourceRepository;
     private final ScenarioRepository scenarioRepository;
     private final CustomLoader customLoader;
+    private final ConnectionPoolManager connectionPoolManager;
 
     // ==================== 唯一性辅助（2001/3001/4001） ====================
 
@@ -95,7 +97,7 @@ public class ConfigValidationService {
                 validateV22(req.getGrain(), req.getAggSql());
                 for (String sql : sqls) {
                     UnionColumnValidator.validate(sql);
-                    validateUnionAmountType(sql);
+                    validateUnionAmountType(req.getConnCode(), sql);
                 }
             }
         }
@@ -282,12 +284,9 @@ public class ConfigValidationService {
         return sqls;
     }
 
-    /**
-     * V35 断言位：T03 无源库元数据访问能力（ConnectionPoolManager 仅连通性），恒通过。
-     * TODO(T04): 连接源库 information_schema 校验 UNION 两侧金额字段类型一致（同为 DECIMAL 或同为整数）。
-     */
-    public void validateUnionAmountType(String sql) {
-        // TODO(T04)
+    /** V35：连源库校验 UNION 两侧金额字段类型一致（T04 落地；能力不可及静默放行）。 */
+    public void validateUnionAmountType(String connCode, String sql) {
+        UnionAmountTypeValidator.validate(connectionPoolManager, connCode, sql);
     }
 
     /** V33：unit=point/non_monetary 且 role=primary -> 6204。amount_fields_json 结构 {field:{unit,role,...}}。 */
