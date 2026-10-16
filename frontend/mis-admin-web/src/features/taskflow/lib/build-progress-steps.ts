@@ -49,6 +49,7 @@ const TASK_STATUS_LABEL: Record<string, string> = {
   PENDING: '待处理',
   COMPLETED: '已完成',
   CANCELLED: '已取消',
+  WITHDRAW: '撤回',
   TRANSFERRED: '已转办',
 };
 

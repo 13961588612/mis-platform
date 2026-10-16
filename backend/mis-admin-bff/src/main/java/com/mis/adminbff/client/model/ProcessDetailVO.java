@@ -9,5 +9,9 @@ import java.util.List;
  * 仅 {@code includeFormData=true} 时填充。
  */
 public record ProcessDetailVO(
-        WfInstanceVO instance, List<WfTaskVO> tasks, List<WfHistoryVO> history, String formData) {
+        WfInstanceVO instance,
+        List<WfTaskVO> tasks,
+        List<WfHistoryVO> history,
+        String formData,
+        Boolean canWithdraw) {
 }

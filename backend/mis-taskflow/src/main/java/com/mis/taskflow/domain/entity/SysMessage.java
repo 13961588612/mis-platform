@@ -119,6 +119,13 @@ public class SysMessage {
     @Column(name = "biz_type", length = 64)
     private String bizType;
 
+    /**
+     * 后台发送的圈人快照。{@code NULL} 表示流程或其他系统通知，不进入发送记录。
+     */
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(columnDefinition = "jsonb")
+    private String audience;
+
     public Long getId() { return id; }
     public void setId(Long id) { this.id = id; }
     public Long getTenantId() { return tenantId; }
@@ -163,4 +170,6 @@ public class SysMessage {
     public void setAppCode(String appCode) { this.appCode = appCode; }
     public String getBizType() { return bizType; }
     public void setBizType(String bizType) { this.bizType = bizType; }
+    public String getAudience() { return audience; }
+    public void setAudience(String audience) { this.audience = audience; }
 }

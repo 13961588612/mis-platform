@@ -35,6 +35,10 @@ public class WfInstance {
     @Column(name = "started_form_code", length = 64)
     private String startedFormCode;
 
+    /** 关联表单单据；无单据发起时可为 null。 */
+    @Column(name = "form_record_id")
+    private Long formRecordId;
+
     @Column(name = "business_type", nullable = false, length = 64)
     private String businessType;
 
@@ -114,6 +118,8 @@ public class WfInstance {
     public void setDefinitionCode(String definitionCode) { this.definitionCode = definitionCode; }
     public String getStartedFormCode() { return startedFormCode; }
     public void setStartedFormCode(String startedFormCode) { this.startedFormCode = startedFormCode; }
+    public Long getFormRecordId() { return formRecordId; }
+    public void setFormRecordId(Long formRecordId) { this.formRecordId = formRecordId; }
     public String getBusinessType() { return businessType; }
     public void setBusinessType(String businessType) { this.businessType = businessType; }
     public String getBusinessId() { return businessId; }

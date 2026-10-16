@@ -62,6 +62,8 @@ public class OrgWebClient extends AbstractDownstreamClient {
             new ParameterizedTypeReference<>() {};
     private static final ParameterizedTypeReference<Result<UserDataSetScopeVO>> DATA_SCOPE =
             new ParameterizedTypeReference<>() {};
+    private static final ParameterizedTypeReference<Result<List<Long>>> LONG_LIST =
+            new ParameterizedTypeReference<>() {};
 
         private static final ParameterizedTypeReference<Result<Void>> VOID =
             new ParameterizedTypeReference<>() {};
@@ -350,6 +352,21 @@ public class OrgWebClient extends AbstractDownstreamClient {
                 .uri("/internal/v1/orgs/users/{userId}/data-scope", userId)
                 .retrieve()
                 .bodyToMono(DATA_SCOPE));
+    }
+
+    /** 消息圈人：部门（含子部门）与岗位类型解析出的员工 ID 并集。 */
+    public List<Long> audienceEmployeeIds(Long tenantId, List<Long> deptIds, List<Long> postTypeIds) {
+        Map<String, Object> body = new HashMap<>();
+        body.put("tenantId", tenantId);
+        body.put("deptIds", deptIds == null ? List.of() : deptIds);
+        body.put("postTypeIds", postTypeIds == null ? List.of() : postTypeIds);
+        List<Long> data = block(client().post()
+                .uri("/internal/v1/audience/employees")
+                .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+                .bodyValue(body)
+                .retrieve()
+                .bodyToMono(LONG_LIST));
+        return data != null ? data : List.of();
     }
 
 }

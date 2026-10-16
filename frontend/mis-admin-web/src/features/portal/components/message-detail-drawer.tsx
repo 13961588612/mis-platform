@@ -18,6 +18,8 @@ import {
   type MessageDetail,
 } from '@/lib/api/messages';
 import { fetchProcessDetail, type ProcessDetail } from '@/lib/api/workflow';
+import { downloadMessageFile } from '@/lib/api/message-manage';
+import { MessageHtmlView, messageHtmlBody, parseAttachmentList } from '@/features/portal/components/message-html-view';
 import { useAuthStore } from '@/stores/auth-store';
 
 function formatTime(iso: string | null | undefined): string {
@@ -177,16 +179,40 @@ export function MessageDetailDrawer({ open, onOpenChange, messageId }: MessageDe
               {/* 正文（完整，不截断） */}
               <div className="space-y-1">
                 <h4 className="text-[13px] font-semibold">正文</h4>
-                <div className="whitespace-pre-wrap break-words text-[13px] leading-relaxed">
-                  {detail.content || detail.summary || '（无正文）'}
-                </div>
+                {messageHtmlBody(detail.content) ? (
+                  <MessageHtmlView html={messageHtmlBody(detail.content) ?? ''} />
+                ) : (
+                  <div className="whitespace-pre-wrap break-words text-[13px] leading-relaxed">
+                    {detail.content || detail.summary || '（无正文）'}
+                  </div>
+                )}
               </div>
 
-              {/* 附件（若有） */}
-              {detail.attachments ? (
+              {parseAttachmentList(detail.attachments).length > 0 ? (
                 <div className="space-y-1">
                   <h4 className="text-[13px] font-semibold">附件</h4>
-                  <div className="break-words text-[13px] text-muted-foreground">{detail.attachments}</div>
+                  <ul className="text-[13px]">
+                    {parseAttachmentList(detail.attachments).map((file) => (
+                      <li key={file.fileId}>
+                        <button
+                          type="button"
+                          className="text-primary underline"
+                          onClick={() => {
+                            void downloadMessageFile(file.fileId).then((blob) => {
+                              const url = URL.createObjectURL(blob);
+                              const a = document.createElement('a');
+                              a.href = url;
+                              a.download = file.name;
+                              a.click();
+                              URL.revokeObjectURL(url);
+                            });
+                          }}
+                        >
+                          {file.name}
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
                 </div>
               ) : null}
 

@@ -272,4 +272,21 @@ public interface SysMessageRepository extends JpaRepository<SysMessage, Long> {
                                                @Param("msgType") String msgType,
                                                @Param("keyword") String keyword,
                                                Pageable pageable);
+
+    /** 后台发送记录：仅 audience 非空。 */
+    @Query(value = """
+            SELECT * FROM sys_message m
+            WHERE m.tenant_id = :tenantId
+              AND m.deleted = 0
+              AND m.audience IS NOT NULL
+            ORDER BY m.created_at DESC
+            """,
+            countQuery = """
+            SELECT count(*) FROM sys_message m
+            WHERE m.tenant_id = :tenantId
+              AND m.deleted = 0
+              AND m.audience IS NOT NULL
+            """,
+            nativeQuery = true)
+    Page<SysMessage> findSent(@Param("tenantId") Long tenantId, Pageable pageable);
 }

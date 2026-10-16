@@ -23,6 +23,8 @@ public class WfHistory {
     public static final String OP_CC_DISPATCH = "CC_DISPATCH";
     /** 纯评论：由「消息回复」回写（PR-18），不改变流程状态、不推进节点。 */
     public static final String OP_COMMENT = "COMMENT";
+    /** 发起人撤回（首节点无人审过）。 */
+    public static final String OP_WITHDRAW = "WITHDRAW";
 
     @Id
     private Long id;

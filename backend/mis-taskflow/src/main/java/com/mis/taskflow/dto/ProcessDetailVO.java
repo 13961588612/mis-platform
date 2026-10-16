@@ -17,6 +17,8 @@ public record ProcessDetailVO(
         WfInstanceVO instance,
         List<WfTaskVO> tasks,
         List<WfHistoryVO> history,
-        String formData
+        String formData,
+        /** 当前用户是否可撤回（发起人 + RUNNING + 无人 APPROVE）。 */
+        Boolean canWithdraw
 ) {
 }

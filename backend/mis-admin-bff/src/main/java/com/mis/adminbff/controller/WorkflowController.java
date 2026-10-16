@@ -120,8 +120,11 @@ public class WorkflowController {
     }
 
     @GetMapping("/instances/{id}")
-    public Result<ProcessDetailVO> detail(@PathVariable Long id, @RequestParam(required = false) Long tenantId) {
-        return Result.ok(taskflowWebClient.processDetail(id, TaskflowIdentity.tenantId(tenantId)));
+    public Result<ProcessDetailVO> detail(@PathVariable Long id,
+                                          @RequestParam(required = false) Long tenantId,
+                                          @RequestParam(required = false) Long viewerId) {
+        return Result.ok(taskflowWebClient.processDetail(
+                id, TaskflowIdentity.tenantId(tenantId), TaskflowIdentity.userId(viewerId)));
     }
 
     @GetMapping("/instances/my")
@@ -146,6 +149,16 @@ public class WorkflowController {
                                      @RequestParam(required = false) Long operatorId,
                                      @RequestBody Map<String, Object> body) {
         taskflowWebClient.completeWfTask(id, TaskflowIdentity.tenantId(tenantId), TaskflowIdentity.operatorId(operatorId), body);
+        return Result.ok();
+    }
+
+    /** 发起人撤回（首节点无人审过）。 */
+    @PostMapping("/instances/{id}/withdraw")
+    public Result<Void> withdraw(@PathVariable Long id,
+                                 @RequestParam(required = false) Long tenantId,
+                                 @RequestParam(required = false) Long operatorId) {
+        taskflowWebClient.withdrawProcess(
+                id, TaskflowIdentity.tenantId(tenantId), TaskflowIdentity.operatorId(operatorId));
         return Result.ok();
     }
 }

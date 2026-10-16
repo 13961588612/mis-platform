@@ -50,6 +50,36 @@ public interface SysUserRepository extends JpaRepository<SysUser, Long> {
     List<SysUser> findByEmployeeId(Long employeeId);
 
     @Query("""
+            SELECT u.id FROM SysUser u
+            WHERE u.tenantId = :tenantId AND u.appId = :appId AND u.status = 1
+            """)
+    List<Long> findEnabledIds(@Param("tenantId") Long tenantId, @Param("appId") Long appId);
+
+    @Query("""
+            SELECT u.id FROM SysUser u
+            WHERE u.tenantId = :tenantId AND u.appId = :appId AND u.status = 1
+              AND u.id IN :ids
+            """)
+    List<Long> findEnabledIdsAmong(@Param("tenantId") Long tenantId,
+                                   @Param("appId") Long appId,
+                                   @Param("ids") Collection<Long> ids);
+
+    @Query("""
+            SELECT u.id FROM SysUser u
+            WHERE u.tenantId = :tenantId AND u.appId = :appId AND u.status = 1
+              AND u.employeeId IN :employeeIds
+            """)
+    List<Long> findEnabledIdsByEmployeeIds(@Param("tenantId") Long tenantId,
+                                           @Param("appId") Long appId,
+                                           @Param("employeeIds") Collection<Long> employeeIds);
+
+    @Query("""
+            SELECT u FROM SysUser u
+            WHERE u.tenantId = :tenantId AND u.id IN :ids
+            """)
+    List<SysUser> findByTenantIdAndIdIn(@Param("tenantId") Long tenantId, @Param("ids") Collection<Long> ids);
+
+    @Query("""
             SELECT u FROM SysUser u
             WHERE u.tenantId = :tenantId AND u.appId = :appId
               AND (:status IS NULL OR u.status = :status)

@@ -22,6 +22,7 @@ import { ProcessProgressBoard } from './components/process-progress-board';
 import { ProcessMetaUpcomingNodes } from './components/process-meta-upcoming-nodes';
 import {
   fetchProcessDetail,
+  withdrawProcess,
   type ProcessDetail,
   type WfInstance,
   type WfTask,
@@ -104,7 +105,7 @@ export function ProcessShell({
     setLoading(true);
     setError(null);
     try {
-      const d = await fetchProcessDetail(instanceId, TENANT_ID);
+      const d = await fetchProcessDetail(instanceId, TENANT_ID, userId || undefined);
       setDetail(d);
       onLoadedRef.current?.(d.instance);
     } catch (e) {
@@ -112,7 +113,7 @@ export function ProcessShell({
     } finally {
       setLoading(false);
     }
-  }, [instanceId]);
+  }, [instanceId, userId]);
 
   useEffect(() => {
     void load();
@@ -147,6 +148,22 @@ export function ProcessShell({
       detail.tasks.find((t) => t.status === 'PENDING' && t.assigneeId === userId) ?? null
     );
   }, [detail, userId]);
+
+  const withdraw = useCallback(async () => {
+    if (!userId || !detail?.canWithdraw) return;
+    if (!window.confirm('确认撤回？撤回后单据回到保存态，可修改后重新发起。')) return;
+    setActing(true);
+    try {
+      await withdrawProcess(instanceId, TENANT_ID, userId);
+      toast.success('已撤回');
+      onActionDone?.();
+      await load();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : '撤回失败');
+    } finally {
+      setActing(false);
+    }
+  }, [userId, detail?.canWithdraw, instanceId, onActionDone, load]);
 
   const handle = useCallback(
     async (action: 'APPROVE' | 'REJECT') => {
@@ -458,8 +475,19 @@ export function ProcessShell({
             ) : null}
           </div>
         ) : (
-          <div className="rounded-md border bg-muted/20 p-3 text-center text-[12px] text-muted-foreground">
-            {instance.status === 'RUNNING' ? '当前节点由他人处理' : '流程已结束'}
+          <div className="flex flex-col items-center gap-2 rounded-md border bg-muted/20 p-3 text-[12px] text-muted-foreground">
+            <span>
+              {instance.status === 'RUNNING'
+                ? '当前节点由他人处理'
+                : instance.status === 'WITHDRAWN'
+                  ? '已撤回'
+                  : '流程已结束'}
+            </span>
+            {detail.canWithdraw ? (
+              <Button variant="destructive" size="sm" disabled={acting} onClick={() => void withdraw()}>
+                撤回申请
+              </Button>
+            ) : null}
           </div>
         )}
       </div>
@@ -565,8 +593,19 @@ export function ProcessShell({
           ) : null}
 
           {!canApprove && (variant !== 'page' || doneCount === 0 || queue.length > 0) ? (
-            <div className="rounded-md border bg-muted/20 p-3 text-center text-[12px] text-muted-foreground">
-              {instance.status === 'RUNNING' ? '当前节点由他人处理' : '流程已结束'}
+            <div className="flex flex-col items-center gap-2 rounded-md border bg-muted/20 p-3 text-[12px] text-muted-foreground">
+              <span>
+                {instance.status === 'RUNNING'
+                  ? '当前节点由他人处理'
+                  : instance.status === 'WITHDRAWN'
+                    ? '已撤回'
+                    : '流程已结束'}
+              </span>
+              {detail.canWithdraw ? (
+                <Button variant="destructive" size="sm" disabled={acting} onClick={() => void withdraw()}>
+                  撤回申请
+                </Button>
+              ) : null}
             </div>
           ) : null}
         </div>

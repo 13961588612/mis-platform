@@ -11,6 +11,10 @@ spring:
     username: ${SPRING_DATASOURCE_USERNAME:${DB_USER:postgres}}
     password: ${SPRING_DATASOURCE_PASSWORD:${DB_PASSWORD:postgres}}
     driver-class-name: org.postgresql.Driver
+  servlet:
+    multipart:
+      max-file-size: 20MB
+      max-request-size: 21MB
   data:
     redis:
       host: ${REDIS_HOST:localhost}

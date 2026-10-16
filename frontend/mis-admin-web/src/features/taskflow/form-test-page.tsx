@@ -1,7 +1,8 @@
 /**
- * 「测试表单」联调页 —— 模拟真实业务表单模块：
- * 1) 先在「表单注册」登记并启用；2) 在「流程定义」关联表单并发布；
- * 3) 本页：表格列出表单字段 + 流程审批列；新建提交；点行右侧划入查看进度。
+ * 「测试表单」联调页：
+ * 1) 保存 → form_record(SAVED) + 专用宽表；
+ * 2) 发起流程 → IN_PROCESS；
+ * 3) 首节点无人审过可撤回 → 回 SAVED，可改后再发。
  */
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
@@ -33,44 +34,35 @@ import {
   fetchEnabledFormDefinitions,
   type FormDefinitionItem,
 } from '@/lib/api/form-definition';
+import { fetchDefinition, fetchDefinitions, type WfDefinition } from '@/lib/api/workflow';
 import {
-  fetchDefinition,
-  fetchDefinitions,
-  fetchMyProcesses,
-  fetchProcessDetail,
-  type WfDefinition,
-  type WfInstance,
-} from '@/lib/api/workflow';
+  createFormRecord,
+  fetchFormRecords,
+  startFormRecordProcess,
+  updateFormRecord,
+  type FormRecord,
+} from '@/lib/api/form-records';
 import { hasFormLoader, loadFormEntry } from '@/features/biz/forms/forms/form-loaders';
 import { resolveForm } from '@/features/biz/forms/registry';
 import type { FormData, FormFieldSchema } from '@/features/biz/forms/types';
-import { parseFormData } from '@/features/biz/forms/parse-form-data';
 import { cn } from '@/lib/utils';
 import { TodoDetailDrawer } from '@/features/portal/components/todo-detail-drawer';
-import { formatInitiatorCompany } from '@/features/portal/lib/format-initiator';
 import { ProcessStartDialog, type ProcessStartConfirm } from './components/process-start-dialog';
 import { resolveProcessTitle } from './lib/resolve-process-title';
 import { defaultDueFromDefinition, toDatetimeLocalValue } from './lib/default-due-from-definition';
-import { startProcessWithTitle } from './lib/start-process-with-title';
 import { formatFormCellValue, mergeFormListFields } from './lib/format-form-cell';
 
 const TENANT = '1';
 const PAGE_SIZE = 20;
 
-function hasFormPayload(raw: unknown): boolean {
-  if (raw == null) return false;
-  if (typeof raw === 'string') return raw.trim() !== '';
-  return typeof raw === 'object';
-}
-
-const STATUS_LABEL: Record<string, { text: string; cls: string }> = {
-  RUNNING: { text: '进行中', cls: 'bg-info/10 text-info' },
-  COMPLETED: { text: '已完成', cls: 'bg-success/10 text-success' },
-  TERMINATED: { text: '已终止', cls: 'bg-destructive/10 text-destructive' },
-  SUSPENDED: { text: '已挂起', cls: 'bg-warning/10 text-warning' },
+const RECORD_STATUS: Record<string, { text: string; cls: string }> = {
+  SAVED: { text: '保存态', cls: 'bg-muted text-muted-foreground' },
+  IN_PROCESS: { text: '审批中', cls: 'bg-info/10 text-info' },
+  IN_AUDIT: { text: '审核中', cls: 'bg-warning/10 text-warning' },
+  APPROVED: { text: '已通过', cls: 'bg-success/10 text-success' },
+  REJECTED: { text: '已驳回', cls: 'bg-destructive/10 text-destructive' },
 };
 
-/** 已启用且存在「已发布流程绑定」的表单选项。 */
 type BoundFormOption = {
   form: FormDefinitionItem;
   definition: WfDefinition;
@@ -78,15 +70,13 @@ type BoundFormOption = {
 
 export function FormTestPage() {
   const user = useAuthStore((s) => s.user);
-  const initiatorId = user?.id ?? '';
+  const userId = user?.id ?? '';
 
-  // —— 元数据：注册表单 + 已发布流程 ——
   const [forms, setForms] = useState<FormDefinitionItem[]>([]);
   const [defs, setDefs] = useState<WfDefinition[]>([]);
   const [metaLoading, setMetaLoading] = useState(true);
 
-  // —— 列表查询 ——
-  const [items, setItems] = useState<WfInstance[]>([]);
+  const [items, setItems] = useState<FormRecord[]>([]);
   const [listLoading, setListLoading] = useState(false);
   const [listError, setListError] = useState<string | null>(null);
   const [page, setPage] = useState(1);
@@ -96,94 +86,96 @@ export function FormTestPage() {
   const [statusFilter, setStatusFilter] = useState('');
   const [formCodeFilter, setFormCodeFilter] = useState('');
 
-  // —— 进度抽屉（与门户首页点行同约定：右侧划入，不入 URL）——
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [drawerInstanceId, setDrawerInstanceId] = useState<string | null>(null);
 
-  // —— 新建 ——
   const [createOpen, setCreateOpen] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
   const [formCode, setFormCode] = useState('');
-  const [selectedDef, setSelectedDef] = useState<WfDefinition | null>(null);
+  const [businessId, setBusinessId] = useState('');
   const [formValues, setFormValues] = useState<FormData>({});
   const [formReady, setFormReady] = useState(false);
-  const [businessId, setBusinessId] = useState('');
-  const [startDialogOpen, setStartDialogOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [startDialogOpen, setStartDialogOpen] = useState(false);
+  const [pendingStartRecordId, setPendingStartRecordId] = useState<string | null>(null);
 
-  const boundOptions = useMemo((): BoundFormOption[] => {
-    const active = defs.filter((d) => d.status === 'ACTIVE');
+  const boundOptions = useMemo<BoundFormOption[]>(() => {
+    const enabled = forms.filter((f) => f.status === 'ENABLED');
     const out: BoundFormOption[] = [];
-    for (const form of forms) {
-      const def = active.find((d) => (d.supportedFormCodes ?? []).includes(form.code));
-      if (def) out.push({ form, definition: def });
+    for (const form of enabled) {
+      if (!hasFormLoader(form.code)) continue;
+      const def = defs.find(
+        (d) =>
+          d.status === 'ACTIVE' &&
+          (d.supportedFormCodes?.includes(form.code) ||
+            // LOCAL 绑定以表单侧为准时仍可能只有前端注册表关联
+            false),
+      );
+      // 回退：任意 ACTIVE 定义含该 formCode
+      const def2 =
+        def ??
+        defs.find((d) => d.status === 'ACTIVE' && (d.supportedFormCodes ?? []).includes(form.code));
+      if (def2) out.push({ form, definition: def2 });
     }
     return out;
   }, [forms, defs]);
 
+  const selectedDef = useMemo(
+    () => boundOptions.find((o) => o.form.code === formCode)?.definition ?? null,
+    [boundOptions, formCode],
+  );
   const formMeta = useMemo(
     () => boundOptions.find((o) => o.form.code === formCode)?.form ?? null,
     [boundOptions, formCode],
   );
   const entry = formCode ? resolveForm(formCode) : null;
-  const FormComp = entry?.component;
+  const FormComp = entry?.component ?? null;
 
   const loadMeta = useCallback(async () => {
     setMetaLoading(true);
     try {
       const [f, d] = await Promise.all([
         fetchEnabledFormDefinitions(TENANT),
-        fetchDefinitions(TENANT, 1, 200),
+        fetchDefinitions(TENANT, 1, 100),
       ]);
       setForms(f);
-      setDefs(d.list ?? []);
+      setDefs(d.list);
+      // 补全定义详情里的 supportedFormCodes（列表可能不全）
+      const details = await Promise.all(
+        d.list.filter((x) => x.status === 'ACTIVE').slice(0, 30).map((x) => fetchDefinition(x.id, TENANT)),
+      );
+      setDefs((prev) => {
+        const map = new Map(prev.map((x) => [x.id, x]));
+        for (const det of details) map.set(det.id, det);
+        return [...map.values()];
+      });
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : '加载表单/流程失败');
+      toast.error(e instanceof Error ? e.message : '加载元数据失败');
     } finally {
       setMetaLoading(false);
     }
   }, []);
 
   const loadList = useCallback(async () => {
-    if (!initiatorId) return;
+    if (!userId) return;
     setListLoading(true);
     setListError(null);
     try {
-      const result = await fetchMyProcesses(
-        TENANT,
-        initiatorId,
-        statusFilter || undefined,
+      const result = await fetchFormRecords(TENANT, userId, {
+        status: statusFilter || undefined,
+        formCode: formCodeFilter || undefined,
         page,
-        PAGE_SIZE,
-        keyword || null,
-        null,
-        null,
-        null,
-        null,
-        true,
-      );
-      let list = result.list ?? [];
-      if (formCodeFilter) {
-        // 后端列表暂无 formCode 参，先对本页结果做客户端筛选（联调够用）
-        list = list.filter((i) => i.startedFormCode === formCodeFilter);
-      }
-      // 旧 BFF/未带 includeFormData 时列表无 form_data，按详情补齐本页
-      const missing = list.filter((i) => !hasFormPayload(i.formData));
-      if (missing.length > 0) {
-        const filled = await Promise.all(
-          missing.map(async (i) => {
-            try {
-              const d = await fetchProcessDetail(String(i.id), TENANT);
-              return [String(i.id), d.formData] as const;
-            } catch {
-              return [String(i.id), null] as const;
-            }
-          }),
+        size: PAGE_SIZE,
+      });
+      let list = result.list;
+      if (keyword) {
+        const k = keyword.toLowerCase();
+        list = list.filter(
+          (r) =>
+            (r.title ?? '').toLowerCase().includes(k) ||
+            r.id.includes(k) ||
+            r.formCode.toLowerCase().includes(k),
         );
-        const byId = new Map(filled);
-        list = list.map((i) => {
-          const extra = byId.get(String(i.id));
-          return extra != null ? { ...i, formData: extra } : i;
-        });
       }
       setItems(list);
       setTotal(result.total);
@@ -192,7 +184,7 @@ export function FormTestPage() {
     } finally {
       setListLoading(false);
     }
-  }, [initiatorId, page, keyword, statusFilter, formCodeFilter]);
+  }, [userId, page, keyword, statusFilter, formCodeFilter]);
 
   useEffect(() => {
     void loadMeta();
@@ -209,7 +201,6 @@ export function FormTestPage() {
     }
     let cancelled = false;
     setFormReady(false);
-    setFormValues({});
     void (async () => {
       if (hasFormLoader(formCode)) await loadFormEntry(formCode);
       if (!cancelled) setFormReady(true);
@@ -219,34 +210,6 @@ export function FormTestPage() {
     };
   }, [createOpen, formCode]);
 
-  useEffect(() => {
-    if (!createOpen || !formCode) {
-      setSelectedDef(null);
-      return;
-    }
-    const opt = boundOptions.find((o) => o.form.code === formCode);
-    if (!opt) {
-      setSelectedDef(null);
-      return;
-    }
-    let cancelled = false;
-    void (async () => {
-      try {
-        // 详情含 nodes，用于默认过期时间
-        const d = await fetchDefinition(opt.definition.id, TENANT);
-        if (!cancelled) setSelectedDef(d);
-      } catch (e) {
-        if (!cancelled) {
-          setSelectedDef(opt.definition);
-          toast.error(e instanceof Error ? e.message : '加载流程定义失败');
-        }
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [createOpen, formCode, boundOptions]);
-
   const suggestedTitle = resolveProcessTitle({
     formConfig: formMeta?.config,
     formData: formValues,
@@ -254,57 +217,117 @@ export function FormTestPage() {
 
   function openCreate() {
     if (boundOptions.length === 0) {
-      toast.error('没有可提交的表单：请先在表单注册启用，并在流程定义中关联且发布');
+      toast.error('没有可提交的表单：请先注册表单、绑定已发布流程，且前端已注册 FormStructuredStore（如 PUR_FORM）');
       return;
     }
+    setEditingId(null);
     setFormCode(boundOptions[0].form.code);
     setBusinessId(`TEST-${Date.now()}`);
     setFormValues({});
     setCreateOpen(true);
   }
 
-  function openStartDialog() {
-    if (!formCode) {
-      toast.error('请选择表单');
+  function openEdit(record: FormRecord) {
+    if (!record.canEdit) {
+      if (record.currentInstanceId) {
+        setDrawerInstanceId(record.currentInstanceId);
+        setDrawerOpen(true);
+      }
       return;
     }
-    if (!selectedDef) {
-      toast.error('该表单尚未绑定已发布流程，请先在流程定义中关联');
-      return;
-    }
+    setEditingId(record.id);
+    setFormCode(record.formCode);
+    setBusinessId(`FR-${record.id}`);
+    setFormValues({ ...(record.values as FormData) });
+    setCreateOpen(true);
+  }
+
+  async function handleSaveOnly() {
+    if (!formCode || !user || !formMeta) return;
     if (!hasFormLoader(formCode) || !FormComp) {
       toast.error(`前端未注册表单组件：${formCode}`);
       return;
     }
-    setStartDialogOpen(true);
+    setSubmitting(true);
+    try {
+      if (editingId) {
+        await updateFormRecord(editingId, TENANT, user.id, {
+          formCode,
+          values: formValues,
+          title: suggestedTitle || undefined,
+        });
+        toast.success('已保存到宽表（保存态）');
+      } else {
+        const id = await createFormRecord(TENANT, {
+          formCode,
+          values: formValues,
+          title: suggestedTitle || undefined,
+          createdBy: user.id,
+          createdByName: user.realName || user.username,
+        });
+        setEditingId(id);
+        toast.success('已保存单据，可继续发起流程');
+      }
+      await loadList();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : '保存失败');
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  function openStartDialog() {
+    if (!formCode || !selectedDef) {
+      toast.error('请选择已绑定流程的表单');
+      return;
+    }
+    void (async () => {
+      setSubmitting(true);
+      try {
+        let recordId = editingId;
+        if (!recordId) {
+          recordId = await createFormRecord(TENANT, {
+            formCode,
+            values: formValues,
+            title: suggestedTitle || undefined,
+            createdBy: user!.id,
+            createdByName: user!.realName || user!.username,
+          });
+          setEditingId(recordId);
+        } else {
+          await updateFormRecord(recordId, TENANT, user!.id, {
+            formCode,
+            values: formValues,
+            title: suggestedTitle || undefined,
+          });
+        }
+        setPendingStartRecordId(recordId);
+        setStartDialogOpen(true);
+      } catch (e) {
+        toast.error(e instanceof Error ? e.message : '保存失败');
+      } finally {
+        setSubmitting(false);
+      }
+    })();
   }
 
   async function handleConfirm(confirm: ProcessStartConfirm) {
-    if (!selectedDef || !user || !formMeta) return;
+    if (!selectedDef || !user || !pendingStartRecordId) return;
     setSubmitting(true);
     try {
-      const r = await startProcessWithTitle({
-        tenantId: TENANT,
+      const instanceId = await startFormRecordProcess(pendingStartRecordId, TENANT, {
         definitionCode: selectedDef.code,
-        businessType: formMeta.code,
-        businessId: businessId.trim() || `TEST-${Date.now()}`,
-        startedFormCode: formCode,
-        formConfig: formMeta.config,
-        formDataObject: formValues,
-        initiatorId: user.id,
-        initiatorName: user.realName || user.username,
-        confirmed: true,
-        explicitTitle: confirm.title,
+        businessId: businessId.trim() || `FR-${pendingStartRecordId}`,
+        title: confirm.title,
         priority: confirm.priority,
         dueDate: confirm.dueDate,
+        initiatorId: user.id,
+        initiatorName: user.realName || user.username,
       });
-      if (!r.ok) {
-        toast.error(r.needConfirm ? '请填写流程标题' : r.error);
-        return;
-      }
-      toast.success('已提交，可在列表查看进度');
+      toast.success(`已发起流程 ${instanceId}`);
       setStartDialogOpen(false);
       setCreateOpen(false);
+      setPendingStartRecordId(null);
       setPage(1);
       await loadList();
     } catch (e) {
@@ -314,9 +337,13 @@ export function FormTestPage() {
     }
   }
 
-  /** 点行 / 查看进度：右侧划入抽屉（对齐门户首页 TodoDetailDrawer）。 */
-  function openProgress(item: WfInstance) {
-    setDrawerInstanceId(String(item.id));
+  function openProgress(record: FormRecord) {
+    const inst = record.currentInstanceId ?? record.lastInstanceId;
+    if (!inst) {
+      openEdit(record);
+      return;
+    }
+    setDrawerInstanceId(inst);
     setDrawerOpen(true);
   }
 
@@ -336,7 +363,7 @@ export function FormTestPage() {
   useEffect(() => {
     const codes = formCodeFilter
       ? [formCodeFilter]
-      : [...new Set(items.map((i) => i.startedFormCode).filter((c): c is string => Boolean(c)))];
+      : [...new Set(items.map((i) => i.formCode).filter(Boolean))];
     let cancelled = false;
     void (async () => {
       const fields: FormFieldSchema[] = [];
@@ -350,10 +377,7 @@ export function FormTestPage() {
           fields.push(f);
         }
       }
-      const rows = items.map((i) => {
-        const parsed = parseFormData(i.formData);
-        return parsed.ok ? parsed.data : {};
-      });
+      const rows = items.map((i) => i.values ?? {});
       if (!cancelled) setListFields(mergeFormListFields(fields, rows));
     })();
     return () => {
@@ -369,22 +393,22 @@ export function FormTestPage() {
     <div className="flex h-full flex-col gap-4 p-4">
       <PageHeader
         title="测试表单"
-        description="表格展示表单字段与流程审批状态；点行查看进度。"
+        description="保存写入专用宽表；发起挂流程；撤回后回保存态可改再发。"
       />
 
       <div className="rounded-md border border-dashed bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
-        使用前请确认：
+        PUR_FORM 已接结构化宽表 <code className="mx-0.5">biz_form_pur_form</code>。使用前请确认
         <Link className="mx-1 text-primary underline-offset-2 hover:underline" to="/system/forms">
           表单注册
         </Link>
-        已启用表单，并在
+        与
         <Link
           className="mx-1 text-primary underline-offset-2 hover:underline"
           to="/system/workflow/definitions"
         >
           流程定义
         </Link>
-        中关联该表单且已发布。当前可提交 {metaLoading ? '…' : boundOptions.length} 个表单。
+        已关联发布。当前可提交 {metaLoading ? '…' : boundOptions.length} 个表单。
       </div>
 
       <div className="flex flex-wrap items-end gap-2">
@@ -396,7 +420,7 @@ export function FormTestPage() {
             id="ft-kw"
             aria-label="关键字"
             className="h-8 w-48"
-            placeholder="标题 / 业务编号"
+            placeholder="标题 / 单据号"
             value={keywordDraft}
             onChange={(e) => setKeywordDraft(e.target.value)}
             onKeyDown={(e) => {
@@ -406,11 +430,11 @@ export function FormTestPage() {
         </div>
         <div className="space-y-1">
           <label htmlFor="ft-status" className="text-xs text-muted-foreground">
-            状态
+            单据状态
           </label>
           <select
             id="ft-status"
-            aria-label="状态"
+            aria-label="单据状态"
             className="h-8 rounded-md border border-input bg-background px-2 text-sm"
             value={statusFilter}
             onChange={(e) => {
@@ -419,10 +443,10 @@ export function FormTestPage() {
             }}
           >
             <option value="">全部</option>
-            <option value="RUNNING">进行中</option>
-            <option value="COMPLETED">已完成</option>
-            <option value="TERMINATED">已终止</option>
-            <option value="SUSPENDED">已挂起</option>
+            <option value="SAVED">保存态</option>
+            <option value="IN_PROCESS">审批中</option>
+            <option value="APPROVED">已通过</option>
+            <option value="REJECTED">已驳回</option>
           </select>
         </div>
         <div className="space-y-1">
@@ -451,20 +475,14 @@ export function FormTestPage() {
           <Search className="h-3.5 w-3.5" />
           查询
         </Button>
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          className="h-8 gap-1"
-          onClick={() => void loadList()}
-        >
+        <Button type="button" variant="outline" size="sm" className="h-8 gap-1" onClick={() => void loadList()}>
           <RefreshCw className="h-3.5 w-3.5" />
           刷新
         </Button>
         <div className="flex-1" />
         <Button type="button" size="sm" className="h-8 gap-1" onClick={openCreate}>
           <FilePlus2 className="h-3.5 w-3.5" />
-          新建提交
+          新建单据
         </Button>
       </div>
 
@@ -474,10 +492,7 @@ export function FormTestPage() {
         ) : listError ? (
           <ListError message={listError} onRetry={() => void loadList()} />
         ) : items.length === 0 ? (
-          <EmptyState
-            title="暂无提交记录"
-            description="点击右上角「新建提交」发起一笔联调单据。"
-          />
+          <EmptyState title="暂无单据" description="点击「新建单据」保存到宽表，再发起流程。" />
         ) : (
           <Table data-testid="form-process-table">
             <TableHeader>
@@ -487,21 +502,17 @@ export function FormTestPage() {
                     {f.label}
                   </TableHead>
                 ))}
-                <TableHead className="whitespace-nowrap">流程代码</TableHead>
-                <TableHead className="whitespace-nowrap">表单代码</TableHead>
-                <TableHead className="whitespace-nowrap">发起人</TableHead>
-                <TableHead className="whitespace-nowrap">发起时间</TableHead>
-                <TableHead className="whitespace-nowrap">审批状态</TableHead>
-                <TableHead className="whitespace-nowrap">当前审批节点</TableHead>
-                <TableHead className="whitespace-nowrap">结束审批时间</TableHead>
+                <TableHead className="whitespace-nowrap">表单</TableHead>
+                <TableHead className="whitespace-nowrap">单据状态</TableHead>
+                <TableHead className="whitespace-nowrap">当前流程</TableHead>
+                <TableHead className="whitespace-nowrap">更新时间</TableHead>
                 <TableHead className="whitespace-nowrap">操作</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {items.map((item) => {
-                const st = STATUS_LABEL[item.status] ?? STATUS_LABEL.RUNNING;
-                const parsed = parseFormData(item.formData);
-                const data = parsed.ok ? parsed.data : {};
+                const st = RECORD_STATUS[item.status] ?? RECORD_STATUS.SAVED;
+                const data = item.values ?? {};
                 return (
                   <TableRow
                     key={item.id}
@@ -509,36 +520,51 @@ export function FormTestPage() {
                     onClick={() => openProgress(item)}
                   >
                     {listFields.map((f) => (
-                      <TableCell key={f.key} className="max-w-[180px] truncate" title={formatFormCellValue(f, data[f.key])}>
+                      <TableCell
+                        key={f.key}
+                        className="max-w-[180px] truncate"
+                        title={formatFormCellValue(f, data[f.key])}
+                      >
                         {formatFormCellValue(f, data[f.key])}
                       </TableCell>
                     ))}
-                    <TableCell className="whitespace-nowrap">{item.definitionCode || '—'}</TableCell>
-                    <TableCell className="whitespace-nowrap">{item.startedFormCode || '—'}</TableCell>
-                    <TableCell className="whitespace-nowrap">
-                      {formatInitiatorCompany(item.initiatorName, item.initiatorOrgName) ?? '—'}
-                    </TableCell>
-                    <TableCell className="whitespace-nowrap">{fmtDt(item.createdAt)}</TableCell>
+                    <TableCell className="whitespace-nowrap">{item.formCode}</TableCell>
                     <TableCell>
                       <span className={cn('rounded px-1.5 py-0.5 text-[10px]', st.cls)}>{st.text}</span>
                     </TableCell>
                     <TableCell className="whitespace-nowrap">
-                      {item.currentNodeName ?? item.currentNodeCode ?? '—'}
+                      {item.currentInstanceId ?? item.lastInstanceId ?? '—'}
                     </TableCell>
-                    <TableCell className="whitespace-nowrap">{fmtDt(item.completedAt)}</TableCell>
-                    <TableCell>
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        className="h-7 text-xs text-primary border-primary/40 hover:bg-primary/10 hover:text-primary"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          openProgress(item);
-                        }}
-                      >
-                        查看进度
-                      </Button>
+                    <TableCell className="whitespace-nowrap">{fmtDt(item.updatedAt)}</TableCell>
+                    <TableCell className="space-x-1">
+                      {item.canEdit ? (
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          className="h-7 text-xs"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            openEdit(item);
+                          }}
+                        >
+                          编辑
+                        </Button>
+                      ) : null}
+                      {item.currentInstanceId || item.lastInstanceId ? (
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          className="h-7 text-xs text-primary border-primary/40"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            openProgress(item);
+                          }}
+                        >
+                          流程
+                        </Button>
+                      ) : null}
                     </TableCell>
                   </TableRow>
                 );
@@ -553,14 +579,13 @@ export function FormTestPage() {
       <Dialog open={createOpen} onOpenChange={setCreateOpen}>
         <DialogContent
           className={cn(
-            // p-0 时必须抵消 Header/Footer 默认 -m-6，否则标题/按钮被 overflow 裁切
             'flex max-h-[85vh] max-w-3xl flex-col gap-0 overflow-hidden p-0 sm:max-w-3xl',
           )}
         >
           <DialogHeader className="m-0 shrink-0 space-y-0 border-b px-4 py-3 pr-10">
-            <DialogTitle>新建提交</DialogTitle>
+            <DialogTitle>{editingId ? '编辑单据' : '新建单据'}</DialogTitle>
             <DialogDescription>
-              仅展示已注册且已绑定已发布流程的表单。提交前将确认标题、过期时间与紧急程度。
+              先「保存」写入宽表（保存态）；再「保存并发起」启动本地流程。仅 PUR_FORM 等已注册 Store 的表单可落库。
             </DialogDescription>
           </DialogHeader>
           <div className="min-h-0 flex-1 space-y-4 overflow-auto px-4 py-3">
@@ -574,6 +599,7 @@ export function FormTestPage() {
                   aria-label="选择表单"
                   className="h-8 w-full rounded-md border border-input bg-background px-2 text-sm"
                   value={formCode}
+                  disabled={!!editingId}
                   onChange={(e) => setFormCode(e.target.value)}
                 >
                   {boundOptions.map((o) => (
@@ -582,27 +608,10 @@ export function FormTestPage() {
                     </option>
                   ))}
                 </select>
-                {boundOptions.length === 0 ? (
-                  <p className="text-xs text-destructive">
-                    无可用表单。请先完成
-                    <Link className="mx-0.5 underline" to="/system/forms" onClick={() => setCreateOpen(false)}>
-                      表单注册
-                    </Link>
-                    与
-                    <Link
-                      className="mx-0.5 underline"
-                      to="/system/workflow/definitions"
-                      onClick={() => setCreateOpen(false)}
-                    >
-                      流程绑定
-                    </Link>
-                    。
-                  </p>
-                ) : null}
               </div>
               <div className="space-y-1.5">
                 <label htmlFor="ft-biz-id" className="text-sm font-medium">
-                  业务编号
+                  业务编号（发起时使用）
                 </label>
                 <Input
                   id="ft-biz-id"
@@ -630,12 +639,24 @@ export function FormTestPage() {
               )}
             </div>
           </div>
-          <DialogFooter className="m-0 shrink-0 border-t px-4 py-3">
+          <DialogFooter className="m-0 shrink-0 gap-2 border-t px-4 py-3">
             <Button type="button" variant="outline" onClick={() => setCreateOpen(false)}>
               取消
             </Button>
-            <Button type="button" onClick={openStartDialog} disabled={!formCode || !selectedDef}>
-              提交并发起
+            <Button
+              type="button"
+              variant="secondary"
+              disabled={!formCode || submitting}
+              onClick={() => void handleSaveOnly()}
+            >
+              {submitting ? '保存中…' : '保存'}
+            </Button>
+            <Button
+              type="button"
+              disabled={!formCode || !selectedDef || submitting}
+              onClick={openStartDialog}
+            >
+              保存并发起
             </Button>
           </DialogFooter>
         </DialogContent>
