@@ -415,6 +415,34 @@ sudo systemctl enable --now ai-platform-gateway
 
 `GATEWAY_INTERNAL_TOKEN` 须与 S1 Backend `.env` **完全一致**。
 
+#### mis-admin-web 静态 + Nginx（S2）
+
+> 全文见 [mis-admin-web-deploy.md](mis-admin-web-deploy.md)。
+
+前置：本机 `mis-gateway:8080`、`ai-platform-gateway:3100` 已健康。
+
+| 项 | 路径 |
+|----|------|
+| 静态根 | `/usr/local/app/mis-admin-web/dist/` |
+| Nginx | `deploy/nginx/mis-admin-web.conf` → `/etc/nginx/conf.d/` |
+| 构建变量 | `frontend/mis-admin-web/.env.production.example` |
+
+```bash
+# 构建机（Node 20+）
+cd frontend/mis-admin-web
+cp .env.production.example .env.production   # 改 VITE_PARENT_ORIGINS
+npm ci && npm run build
+rsync -avz --delete dist/ root@10.254.26.34:/usr/local/app/mis-admin-web/dist/
+
+# S2
+sudo cp deploy/nginx/mis-admin-web.conf /etc/nginx/conf.d/
+# 改 server_name / 按需开 TLS
+sudo nginx -t && sudo systemctl enable --now nginx && sudo systemctl reload nginx
+curl -fsS http://127.0.0.1/nginx-health
+```
+
+分流：`/api/events|messages` + `/ws` → `:3100`；其余 `/api/` → `:8080`；`/embed` → `embed.html`；其它 SPA。
+
 ### 2.3 S3 — `ai-rag`（10.254.26.35）知识库 RAGFlow
 
 > 交付目录：`[deploy/ragflow/](../../deploy/ragflow/)` · 版本表以该目录 README / `.env.example` 为准。
@@ -533,7 +561,7 @@ docker run -d --name mis-redis --restart unless-stopped \
 应用侧配置：
 
 - Java：`deploy/nacos-config/prod/mis-common.yaml` → `spring.data.redis.host/port`（`REDIS_HOST=10.254.26.36`），密码用 `${REDIS_PASSWORD}` 注入；`database: 0`。
-- Agent：`REDIS_HOST` / `REDIS_URL=redis://:<密码>@10.254.26.36:6379/2`（必须带 `**/2**`）。
+- Agent：`.env` 用 `REDIS_HOST` / `REDIS_PORT` / `REDIS_DB=2` / `REDIS_PASSWORD=...`（密码含 `#` 写 `%23`，如 `mis%23redis1014`；勿手写未编码的 `REDIS_URL`）。库号必须是 **/2**。
 
 #### MinIO 部署（S4 · MIS 对象存储）
 

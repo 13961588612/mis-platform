@@ -6,9 +6,8 @@ spring:
   datasource:
     url: "jdbc:postgresql://10.254.26.36:5432/mis_platform?tcpKeepAlive=true&ApplicationName=${spring.application.name}&loginTimeout=10"
     username: mis
-    # Fill in Nacos console after push (quote if value contains #: "mis#1014"),
-    # or export DB_PASSWORD on host
-    password: ${DB_PASSWORD:}
+    # Quote required when password contains #.
+    password: "mis#1014"
     driver-class-name: org.postgresql.Driver
     hikari:
       maximum-pool-size: 10
@@ -24,9 +23,8 @@ spring:
       host: 10.254.26.36
       port: 6379
       database: 0
-      # Fill in Nacos console after push (quote if value contains #: "mis#redis1014"),
-      # or export REDIS_PASSWORD on each app host
-      password: ${REDIS_PASSWORD:}
+      # Quote required when password contains #.
+      password: "mis#redis1014"
   jpa:
     open-in-view: false
     hibernate:

@@ -909,7 +909,12 @@ class Settings(BaseSettings):
 
     @property
     def redis_url(self) -> str:
-        """Redis 连接 URL。"""
+        """Redis 连接 URL。
+
+        密码含 ``#`` / ``@`` / ``/`` 时，请在环境变量里写百分号编码（如 ``mis%23redis1014``），
+        本属性不做二次编码；裸 ``#`` 会导致 URL 被截断
+        （典型报错：``Port could not be cast to integer value as 'mis'``）。
+        """
         if self.REDIS_PASSWORD:
             return (
                 f"redis://:{self.REDIS_PASSWORD}"

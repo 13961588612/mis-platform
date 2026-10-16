@@ -34,6 +34,7 @@
 | **[正式环境部署](prod-deploy.md)** | 五机规划（S1–S5）、各机软件与外部版本钉扎、prod 配置/密钥/发版与回滚 |
 | **[Agent Backend 部署](ai-platform-backend-deploy.md)** | ai-platform Backend（Agent Core `:8000`）安装、`.env`、Alembic、Docker/裸机 |
 | **[Agent Gateway 部署](ai-platform-gateway-deploy.md)** | ai-platform Gateway（S2 `:3100`）Node 22、`.env`、systemd |
+| **[管理台前端部署](mis-admin-web-deploy.md)** | mis-admin-web 静态产物 + S2 Nginx 分流 |
 | [配置管理策略](configuration.md) | Nacos 数据流、Data ID 约定、新服务接入 |
 | [CI/CD](ci-cd.md) | 流水线与质量门禁（规划） |
 | [知识库完整规划](../backend/knowledge-base-app-plan.md) | APP 功能清单、方案 B、mis-kb、RAGFlow Docker 交付 |

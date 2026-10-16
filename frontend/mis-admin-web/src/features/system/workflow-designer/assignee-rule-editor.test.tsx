@@ -102,6 +102,8 @@ describe('AssigneeRuleEditor', () => {
         leaderEmployeeId: null,
         linkedOrgId: null,
         linkedOrgName: null,
+        createdAt: null,
+        updatedAt: null,
         children: [],
       },
     ]);
@@ -226,6 +228,8 @@ describe('AssigneeRuleEditor', () => {
         leaderEmployeeId: null,
         linkedOrgId: null,
         linkedOrgName: null,
+        createdAt: null,
+        updatedAt: null,
         children: [
           {
             id: '21',
@@ -242,6 +246,8 @@ describe('AssigneeRuleEditor', () => {
             leaderEmployeeId: null,
             linkedOrgId: null,
             linkedOrgName: null,
+            createdAt: null,
+            updatedAt: null,
             children: [],
           },
         ],

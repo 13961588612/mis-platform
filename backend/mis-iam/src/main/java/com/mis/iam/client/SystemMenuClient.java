@@ -25,7 +25,7 @@ public class SystemMenuClient {
 
     public SystemMenuClient(
             @Qualifier("plainRestClientBuilder") RestClient.Builder plainBuilder,
-            RestClient.Builder loadBalancedBuilder,
+            @Qualifier("loadBalancedRestClientBuilder") RestClient.Builder loadBalancedBuilder,
             IamProperties properties) {
         RestClient.Builder builder = properties.isSystemDiscoveryEnabled() ? loadBalancedBuilder : plainBuilder;
         String baseUrl = properties.isSystemDiscoveryEnabled()

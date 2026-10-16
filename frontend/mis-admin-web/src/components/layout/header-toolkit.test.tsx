@@ -96,6 +96,8 @@ const oneTask = {
   completedAt: null,
   createdAt: '2026-10-08T10:00:00',
   appCode: null,
+  initiatorName: null,
+  initiatorOrgName: null,
 };
 
 const oneMessage = {

@@ -77,6 +77,10 @@ POSTGRES_PASSWORD=<生产密码>
 REDIS_HOST=10.254.26.36
 REDIS_PORT=6379
 REDIS_DB=2
+# 密码含 # 时写百分号编码（config 不做二次编码；裸 # 会截断 URL / 被 systemd 当注释）：
+#   REDIS_PASSWORD=mis%23redis1014
+# 否则日志：Skills/MCP init deferred ... Port could not be cast to integer value as 'mis'
+REDIS_PASSWORD=<与 Redis requirepass 一致；含#则用%23>
 
 QDRANT_HOST=10.254.26.36
 QDRANT_PORT=6333
@@ -259,6 +263,7 @@ BFF 侧 Nacos 已配：`mis.ai-platform.base-url: http://127.0.0.1:8000`（同�
 | 连不上库 | `.env` 的 `POSTGRES_*`；S4 防火墙；Alembic 是否已 `upgrade head` |
 | LLM 超时 | Squid `OUTBOUND_PROXY_*`；S2:3128 是否对 S1 放行；API Key |
 | 向量相关失败 | Embedding `:8001`、`QDRANT_*`、`EMBEDDING_DIMENSION=512` |
+| Skills/MCP / HITL deferred，`Port ... as 'mis'` | `.env` 中 `REDIS_PASSWORD` 含裸 `#`；改为百分号编码（如 `mis%23redis1014`）后 restart |
 
 ---
 
