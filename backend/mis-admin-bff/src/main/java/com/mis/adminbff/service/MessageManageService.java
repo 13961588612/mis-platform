@@ -8,7 +8,9 @@ import com.mis.adminbff.client.TaskflowWebClient;
 import com.mis.adminbff.client.model.SentMessageDetailVO;
 import com.mis.adminbff.client.model.SentMessageVO;
 import com.mis.adminbff.client.model.UserBrief;
+import com.mis.adminbff.client.model.PhoneUser;
 import com.mis.adminbff.dto.MessageSendRequest;
+import com.mis.adminbff.dto.PhoneResolveResult;
 import com.mis.common.core.exception.BusinessException;
 import com.mis.common.core.exception.ResultCode;
 import com.mis.common.core.result.PageResult;
@@ -17,8 +19,10 @@ import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * 后台发消息：在 BFF 把全员、部门、岗位类型、指定人解析成并集，再交给 taskflow 落库。
@@ -64,8 +68,54 @@ public class MessageManageService {
         return taskflowWebClient.sendManagedMessage(user.getTenantId(), body);
     }
 
-    public PageResult<SentMessageVO> sent(LoginUser user, int page, int size) {
-        return taskflowWebClient.sentMessages(user.getTenantId(), page, size);
+    public PhoneResolveResult resolvePhones(LoginUser user, List<String> phones) {
+        if (user.getTenantId() == null || user.getAppId() == null) {
+            throw new BusinessException(ResultCode.VALIDATION_ERROR, "缺少租户或应用");
+        }
+        List<String> normalized = new ArrayList<>();
+        Set<String> seen = new LinkedHashSet<>();
+        if (phones != null) {
+            for (String raw : phones) {
+                if (raw == null) {
+                    continue;
+                }
+                String phone = raw.trim().replaceAll("\\s+", "");
+                if (phone.isEmpty() || !seen.add(phone)) {
+                    continue;
+                }
+                normalized.add(phone);
+            }
+        }
+        if (normalized.isEmpty()) {
+            throw new BusinessException(ResultCode.VALIDATION_ERROR, "请填写手机号");
+        }
+        if (normalized.size() > 200) {
+            throw new BusinessException(ResultCode.VALIDATION_ERROR, "一次最多导入 200 个手机号");
+        }
+        Map<String, PhoneUser> byPhone = new LinkedHashMap<>();
+        for (List<String> chunk : chunksOf(normalized)) {
+            for (PhoneUser row : iamWebClient.enabledUsersByPhones(user.getTenantId(), user.getAppId(), chunk)) {
+                if (row.phone() != null) {
+                    byPhone.putIfAbsent(row.phone(), row);
+                }
+            }
+        }
+        List<PhoneResolveResult.MatchedUser> matched = new ArrayList<>();
+        List<String> missing = new ArrayList<>();
+        for (String phone : normalized) {
+            PhoneUser row = byPhone.get(phone);
+            if (row == null || row.id() == null) {
+                missing.add(phone);
+                continue;
+            }
+            String name = row.realName() != null && !row.realName().isBlank() ? row.realName() : row.username();
+            matched.add(new PhoneResolveResult.MatchedUser(String.valueOf(row.id()), name, phone));
+        }
+        return new PhoneResolveResult(matched, missing);
+    }
+
+    public PageResult<SentMessageVO> sent(LoginUser user, String keyword, int page, int size) {
+        return taskflowWebClient.sentMessages(user.getTenantId(), keyword, page, size);
     }
 
     public SentMessageDetailVO sentDetail(LoginUser user, Long id) {
@@ -99,10 +149,12 @@ public class MessageManageService {
         if (tenantId == null || appId == null) {
             throw new BusinessException(ResultCode.VALIDATION_ERROR, "缺少租户或应用");
         }
+        List<MessageSendRequest.ScopeCondition> scopes = validScopes(request.scopes());
         boolean any = request.all()
                 || notEmpty(request.userIds())
                 || notEmpty(request.deptIds())
-                || notEmpty(request.postTypeIds());
+                || notEmpty(request.postTypeIds())
+                || !scopes.isEmpty();
         if (!any) {
             throw new BusinessException(ResultCode.VALIDATION_ERROR, "请选择接收范围");
         }
@@ -115,12 +167,18 @@ public class MessageManageService {
             }
         }
         List<Long> fromEmployees = List.of();
-        if (notEmpty(request.deptIds()) || notEmpty(request.postTypeIds())) {
-            List<Long> employees = orgWebClient.audienceEmployeeIds(tenantId, request.deptIds(), request.postTypeIds());
-            fromEmployees = new ArrayList<>();
-            for (List<Long> chunk : chunks(employees)) {
-                fromEmployees.addAll(iamWebClient.enabledUserIdsByEmployees(tenantId, appId, chunk));
-            }
+        if (!scopes.isEmpty()) {
+            List<Map<String, Long>> body = scopes.stream().map(scope -> {
+                Map<String, Long> item = new LinkedHashMap<>();
+                item.put("deptId", scope.deptId());
+                item.put("postTypeId", scope.postTypeId());
+                return item;
+            }).toList();
+            List<Long> employees = orgWebClient.audienceEmployeeIds(tenantId, body);
+            fromEmployees = usersOfEmployees(tenantId, appId, employees);
+        } else if (notEmpty(request.deptIds()) || notEmpty(request.postTypeIds())) {
+            List<Long> employees = orgWebClient.audienceEmployeeIdsLegacy(tenantId, request.deptIds(), request.postTypeIds());
+            fromEmployees = usersOfEmployees(tenantId, appId, employees);
         }
         List<Long> userIds = MessageAudienceMerger.merge(request.all(), allUsers, explicit, fromEmployees);
         return new Resolved(userIds, audienceJson(request));
@@ -133,6 +191,14 @@ public class MessageManageService {
             node.set("userIds", objectMapper.valueToTree(ids(request.userIds())));
             node.set("deptIds", objectMapper.valueToTree(ids(request.deptIds())));
             node.set("postTypeIds", objectMapper.valueToTree(ids(request.postTypeIds())));
+            node.set("scopes", objectMapper.valueToTree(validScopes(request.scopes()).stream().map(scope -> {
+                Map<String, String> item = new LinkedHashMap<>();
+                item.put("deptId", String.valueOf(scope.deptId()));
+                item.put("postTypeId", String.valueOf(scope.postTypeId()));
+                item.put("deptName", scope.deptName() == null ? "" : scope.deptName());
+                item.put("postTypeName", scope.postTypeName() == null ? "" : scope.postTypeName());
+                return item;
+            }).toList()));
             return objectMapper.writeValueAsString(node);
         } catch (Exception ex) {
             throw new BusinessException(ResultCode.INTERNAL_ERROR, "圈人快照写入失败");
@@ -146,6 +212,31 @@ public class MessageManageService {
         return values.stream().map(String::valueOf).toList();
     }
 
+    private List<Long> usersOfEmployees(Long tenantId, Long appId, List<Long> employees) {
+        List<Long> users = new ArrayList<>();
+        for (List<Long> chunk : chunks(employees)) {
+            users.addAll(iamWebClient.enabledUserIdsByEmployees(tenantId, appId, chunk));
+        }
+        return users;
+    }
+
+    private static List<MessageSendRequest.ScopeCondition> validScopes(List<MessageSendRequest.ScopeCondition> scopes) {
+        if (scopes == null || scopes.isEmpty()) {
+            return List.of();
+        }
+        List<MessageSendRequest.ScopeCondition> valid = new ArrayList<>();
+        for (MessageSendRequest.ScopeCondition scope : scopes) {
+            if (scope == null || scope.deptId() == null || scope.postTypeId() == null) {
+                continue;
+            }
+            valid.add(scope);
+        }
+        if (valid.size() > 50) {
+            throw new BusinessException(ResultCode.VALIDATION_ERROR, "部门岗位条件最多 50 条");
+        }
+        return valid;
+    }
+
     private static boolean notEmpty(List<?> list) {
         return list != null && !list.isEmpty();
     }
@@ -157,6 +248,14 @@ public class MessageManageService {
         }
         for (int i = 0; i < ids.size(); i += CHUNK) {
             parts.add(ids.subList(i, Math.min(i + CHUNK, ids.size())));
+        }
+        return parts;
+    }
+
+    private static List<List<String>> chunksOf(List<String> values) {
+        List<List<String>> parts = new ArrayList<>();
+        for (int i = 0; i < values.size(); i += CHUNK) {
+            parts.add(values.subList(i, Math.min(i + CHUNK, values.size())));
         }
         return parts;
     }

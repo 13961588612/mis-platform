@@ -45,16 +45,50 @@ public class MessageAudienceService {
     @Transactional(readOnly = true)
     public List<Long> employeeIds(Long tenantId, List<Long> deptIds, List<Long> postTypeIds) {
         Set<Long> employees = new LinkedHashSet<>();
-        Set<Long> depts = expandDepts(tenantId, deptIds);
+        employees.addAll(employeesInDepts(tenantId, expandDepts(tenantId, deptIds)));
+        employees.addAll(employeesInPostTypes(tenantId, expandPostTypes(tenantId, postTypeIds)));
+        return List.copyOf(employees);
+    }
+
+    /**
+     * 每条条件是「部门（含子部门）且 岗位类型（含下级、含兼职）」，多条条件取并集。
+     */
+    @Transactional(readOnly = true)
+    public List<Long> employeeIdsByScopes(Long tenantId, List<Scope> scopes) {
+        Set<Long> employees = new LinkedHashSet<>();
+        if (scopes == null) {
+            return List.of();
+        }
+        for (Scope scope : scopes) {
+            if (scope == null || scope.deptId() == null || scope.postTypeId() == null) {
+                continue;
+            }
+            Set<Long> inDepts = employeesInDepts(tenantId, expandDepts(tenantId, List.of(scope.deptId())));
+            Set<Long> inTypes = employeesInPostTypes(tenantId, expandPostTypes(tenantId, List.of(scope.postTypeId())));
+            inDepts.retainAll(inTypes);
+            employees.addAll(inDepts);
+        }
+        return List.copyOf(employees);
+    }
+
+    public record Scope(Long deptId, Long postTypeId) {
+    }
+
+    private Set<Long> employeesInDepts(Long tenantId, Set<Long> depts) {
+        Set<Long> employees = new LinkedHashSet<>();
         for (List<Long> chunk : chunks(depts)) {
             employees.addAll(employeeRepository.findActiveIdsInDepts(tenantId, chunk));
         }
-        Set<Long> types = expandPostTypes(tenantId, postTypeIds);
+        return employees;
+    }
+
+    private Set<Long> employeesInPostTypes(Long tenantId, Set<Long> types) {
+        Set<Long> employees = new LinkedHashSet<>();
         LocalDate today = LocalDate.now();
         for (List<Long> chunk : chunks(types)) {
             employees.addAll(employeePostRepository.findActiveEmployeeIdsByPostTypes(tenantId, chunk, today));
         }
-        return List.copyOf(employees);
+        return employees;
     }
 
     private Set<Long> expandDepts(Long tenantId, List<Long> deptIds) {

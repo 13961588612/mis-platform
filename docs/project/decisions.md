@@ -66,11 +66,27 @@
 | 运行时 | **不改变** Wren sync / Worker few-shot 注入范围（仍按连接全量拉取） |
 | 删分类 | 有子节点或有样本挂载时拒绝 |
 
+## 5.2 表单外部工作流（2026-10-16）
+
+| 项 | 决策 |
+|----|------|
+| 绑定模型 | `workflow_runtime` = NONE / LOCAL / EXTERNAL；EXTERNAL 时本地流程定义仅作**节点蓝图**，审批在外部跑（ADR-022，提议中） |
+| P0 外部系统 | 致远 Seeyon A8+ 集团版 V9 |
+| 注入形态 | FORM_JSON / RICH_HTML / EMBED_URL（表单级三选一）；P0 无附件 |
+| 发起人 | 预解析为外部账号并作为外部流程发起人写入，使其在外部「已发」中可直接打开；解析失败禁止提交 |
+| 双待办 | **已定**：EXTERNAL **完全取消**本地待办，不写 `sys_task`，不进本地收件箱待办 |
+| 外部驳回 | **已定**：`form_record=REJECTED` 终态，不回 `SAVED`，本单不可再提；终止/撤销不记成驳回 |
+| 发起时机 | **已定**：保存只落本地；发起人点「提交」才走外部发起序列（预解析→start→拼节点→activate） |
+| 抄送缺人 | **已定**：警告可提交；审批缺人 / 发起人缺号禁止 |
+| 规划全文 | [`docs/architecture/msg-log-workflow/19-external-workflow-integration-plan.md`](../architecture/msg-log-workflow/19-external-workflow-integration-plan.md) |
+| 相对 V149 | 演进互斥 CHECK：EXTERNAL 可同时持有蓝图 `workflow_definition_id` 与外部模板字段（追加迁移，不改已发布脚本） |
+
 ## 6. 待定
 
 | 项 | 状态 |
 |----|------|
 | 团队分工 | 待定 |
+| 致远离开开始节点 / 发起人指定方式 / 会签 | **待架构**对照致远 A8+ V9 文档核实，见规划 §10.1 |
 
 ## 7. Schema 状态
 

@@ -8,11 +8,19 @@ function unwrap<T>(res: { data: ApiResult<T> }, fallback: string): T {
   return res.data.data;
 }
 
+export interface AudienceScope {
+  deptId: string;
+  postTypeId: string;
+  deptName: string;
+  postTypeName: string;
+}
+
 export interface MessageAudienceInput {
   all: boolean;
   userIds: string[];
   deptIds: string[];
   postTypeIds: string[];
+  scopes: AudienceScope[];
 }
 
 export interface MessageFileItem {
@@ -60,6 +68,7 @@ function audienceBody(input: MessageAudienceInput, extra?: Record<string, unknow
     userIds: input.userIds.map((id) => id),
     deptIds: input.deptIds,
     postTypeIds: input.postTypeIds,
+    scopes: input.scopes,
     ...extra,
   };
 }
@@ -94,9 +103,22 @@ export async function uploadMessageFile(file: File, kind: 'file' | 'image'): Pro
   return unwrap(res, '上传失败');
 }
 
-export async function fetchSentMessages(page: number, size: number): Promise<PageResult<SentMessageItem>> {
-  const res = await api.get<ApiResult<PageResult<SentMessageItem>>>('/messages/manage/sent', { params: { page, size } });
+export async function fetchSentMessages(page: number, size: number, q?: string): Promise<PageResult<SentMessageItem>> {
+  const res = await api.get<ApiResult<PageResult<SentMessageItem>>>('/messages/manage/sent', {
+    params: { page, size, q: q?.trim() || undefined },
+  });
   return unwrap(res, '加载发送记录失败');
+}
+
+export async function resolvePhones(phones: string[]): Promise<{
+  matched: { userId: string; name: string | null; phone: string }[];
+  missing: string[];
+}> {
+  const res = await api.post<ApiResult<{
+    matched: { userId: string; name: string | null; phone: string }[];
+    missing: string[];
+  }>>('/messages/manage/resolve-phones', { phones });
+  return unwrap(res, '按手机号解析失败');
 }
 
 export async function fetchSentMessageDetail(id: string): Promise<SentMessageDetail> {
@@ -117,12 +139,14 @@ export function audienceLabel(raw: string | null): string {
       userIds?: string[];
       deptIds?: string[];
       postTypeIds?: string[];
+      scopes?: { deptId: string; postTypeId: string }[];
     };
     const parts: string[] = [];
     if (parsed.all) parts.push('全员');
+    if (parsed.scopes?.length) parts.push(`部门岗位 ${parsed.scopes.length}`);
     if (parsed.deptIds?.length) parts.push(`部门 ${parsed.deptIds.length}`);
     if (parsed.postTypeIds?.length) parts.push(`岗位类型 ${parsed.postTypeIds.length}`);
-    if (parsed.userIds?.length) parts.push(`指定 ${parsed.userIds.length}`);
+    if (parsed.userIds?.length) parts.push(`手机号 ${parsed.userIds.length}`);
     return parts.length ? parts.join('、') : '—';
   } catch {
     return '—';

@@ -22,9 +22,14 @@ public final class HtmlMessageSanitizer {
     private static final int SUMMARY_MAX = 120;
 
     private static final Safelist SAFELIST = Safelist.none()
-            .addTags("p", "br", "strong", "b", "em", "i", "u", "ul", "ol", "li", "a", "h2", "h3", "blockquote", "img", "span")
+            .addTags("p", "br", "strong", "b", "em", "i", "u", "s", "strike", "ul", "ol", "li", "a", "h1", "h2", "h3", "blockquote", "img", "span", "code", "pre", "hr")
             .addAttributes("a", "href", "rel")
             .addAttributes("img", "src", "alt")
+            .addAttributes("p", "style")
+            .addAttributes("h1", "style")
+            .addAttributes("h2", "style")
+            .addAttributes("h3", "style")
+            .addAttributes("li", "style")
             .addProtocols("a", "href", "http", "https");
 
     private HtmlMessageSanitizer() {
@@ -35,6 +40,20 @@ public final class HtmlMessageSanitizer {
         String raw = html == null ? "" : html;
         String cleaned = Jsoup.clean(raw, "", SAFELIST, new Document.OutputSettings().prettyPrint(false));
         Document doc = Jsoup.parseBodyFragment(cleaned);
+        for (Element el : doc.select("p, h1, h2, h3, li")) {
+            String align = null;
+            for (String part : el.attr("style").split(";")) {
+                String item = part.replaceAll("\\s+", "").toLowerCase(java.util.Locale.ROOT);
+                if (item.matches("text-align:(left|center|right|justify)")) {
+                    align = item.substring("text-align:".length());
+                }
+            }
+            if (align != null) {
+                el.attr("style", "text-align: " + align);
+            } else {
+                el.removeAttr("style");
+            }
+        }
         for (Element img : doc.select("img")) {
             String src = img.attr("src");
             if (!src.matches("/api/v1/messages/files/\\d+")) {

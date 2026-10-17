@@ -81,6 +81,15 @@ public interface SysUserRepository extends JpaRepository<SysUser, Long> {
 
     @Query("""
             SELECT u FROM SysUser u
+            WHERE u.tenantId = :tenantId AND u.appId = :appId AND u.status = 1
+              AND u.phone IN :phones
+            """)
+    List<SysUser> findEnabledByPhones(@Param("tenantId") Long tenantId,
+                                      @Param("appId") Long appId,
+                                      @Param("phones") Collection<String> phones);
+
+    @Query("""
+            SELECT u FROM SysUser u
             WHERE u.tenantId = :tenantId AND u.appId = :appId
               AND (:status IS NULL OR u.status = :status)
               AND (:username = '' OR u.username LIKE CONCAT('%', :username, '%'))

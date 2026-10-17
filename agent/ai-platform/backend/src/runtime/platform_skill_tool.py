@@ -128,9 +128,11 @@ class PlatformSkillTool(BaseTool):
                 is_error=True,
             )
 
-        # 委托原生加载逻辑（按 OH registry 的 name=frontmatter name / skill_id）
+        # 委托原生加载逻辑（按 OH registry 的 name=frontmatter name / skill_id）。
+        # input_model 已是 Pydantic 模型类，直接实例化。
+        # 再套 type() 会拿到 ModelMetaclass，调用时缺少 name/bases/namespace。
         inner = SkillTool()
         return await inner.execute(
-            type(inner.input_model)(name=canonical),
+            inner.input_model(name=canonical),
             context,
         )

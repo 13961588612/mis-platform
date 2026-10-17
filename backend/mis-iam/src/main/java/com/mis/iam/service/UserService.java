@@ -523,6 +523,19 @@ public class UserService {
     }
 
 
+    @Transactional(readOnly = true)
+    public List<PhoneUser> enabledByPhones(Long tenantId, Long appId, List<String> phones) {
+        if (phones == null || phones.isEmpty()) {
+            return List.of();
+        }
+        return userRepository.findEnabledByPhones(tenantId, appId, phones).stream()
+                .map(u -> new PhoneUser(u.getId(), u.getPhone(), u.getUsername(), u.getRealName()))
+                .toList();
+    }
+
+    public record PhoneUser(Long id, String phone, String username, String realName) {
+    }
+
     /** 当前应用下启用用户，供消息全员发送。 */
     @Transactional(readOnly = true)
     public List<Long> enabledIds(Long tenantId, Long appId) {

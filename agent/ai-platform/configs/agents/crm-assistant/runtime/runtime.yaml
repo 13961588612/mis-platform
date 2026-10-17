@@ -17,5 +17,6 @@ runtime:
   prompts:
     system: runtime/prompts/system.md
     turn_reminder: |
-      【强制】本轮若涉及会员/积分/券/等级/画像等 CRM 数据，必须先调用工具（skill 与/或 mcp__mcp-api-suite__callApi）获取实时结果后再回答；禁止仅根据对话历史中的业务数据作答，也不得说「与之前一致」。
+      【强制】本轮若涉及会员/积分/券/等级/画像等 CRM 数据，必须先 skill 加载对应技能，再调用 mcp__mcp-api-suite__callApi。禁止未加载 Skill 就调用 callApi。apiName 必须从本轮 Skill 返回正文原样复制，禁止使用正文中未出现的名称。禁止仅根据对话历史作答，也不得说「与之前一致」。
+      顾客只给一串数字、没说是什么时，先按这个方向理解再查：11 位且以 1 开头（如 139）多半是手机号；以 8 开头多半是会员卡号。用户说了类型就按用户的。这样查不到时可以换一种理解再试，不要把这串数字直接当成 vipId。
   middleware: {}

@@ -24,6 +24,10 @@
 | 13 | [14-replan-delivery.md](./14-replan-delivery.md) | 重做规划交付说明 | ✅ 完成 |
 | 14 | [15-qa-verification.md](./15-qa-verification.md) | QA 交叉验收报告（含发现的 P1） | ✅ 完成 |
 | 15 | [16-final-delivery.md](./16-final-delivery.md) | **改造最终交付总结** | ✅ 完成 |
+| 16 | [17-form-and-designer-plan.md](./17-form-and-designer-plan.md) | 表单与设计器规划 | ✅ |
+| 17 | [18-final-delivery.md](./18-final-delivery.md) | 后续交付补充 | ✅ |
+| 18 | [19-external-workflow-integration-plan.md](./19-external-workflow-integration-plan.md) | **本地表单对接外部工作流（致远等）规划** | 📝 规划定稿 |
+| — | [ADR-022](../../adr/ADR-022-external-workflow-binding.md) | 外部工作流绑定决策（运行时 / 蓝图分离） | 提议中 |
 
 > # ✅ 实施完成（2026-10-09）
 >

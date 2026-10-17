@@ -102,9 +102,13 @@ public class MessageAdminService {
     }
 
     @Transactional(readOnly = true)
-    public PageResult<SentMessageVO> sent(Long tenantId, int page, int size) {
+    public PageResult<SentMessageVO> sent(Long tenantId, String keyword, int page, int size) {
         int pageSize = Math.min(Math.max(size, 1), 100);
-        Page<SysMessage> result = messageRepository.findSent(tenantId, PageRequest.of(Math.max(page - 1, 0), pageSize));
+        var pageable = PageRequest.of(Math.max(page - 1, 0), pageSize);
+        String q = keyword == null ? "" : keyword.trim();
+        Page<SysMessage> result = q.isEmpty()
+                ? messageRepository.findSent(tenantId, pageable)
+                : messageRepository.findSentByKeyword(tenantId, q, pageable);
         List<SentMessageVO> list = result.getContent().stream()
                 .map(m -> new SentMessageVO(
                         String.valueOf(m.getId()),

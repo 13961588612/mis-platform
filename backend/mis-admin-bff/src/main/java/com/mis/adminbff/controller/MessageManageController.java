@@ -20,6 +20,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
 
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -49,9 +50,16 @@ public class MessageManageController {
     }
 
     @GetMapping("/manage/sent")
-    public Result<PageResult<SentMessageVO>> sent(@RequestParam(defaultValue = "1") int page,
+    public Result<PageResult<SentMessageVO>> sent(@RequestParam(required = false) String q,
+                                                  @RequestParam(defaultValue = "1") int page,
                                                   @RequestParam(defaultValue = "20") int size) {
-        return Result.ok(messageManageService.sent(RequestContext.requireLoginUser(), page, size));
+        return Result.ok(messageManageService.sent(RequestContext.requireLoginUser(), q, page, size));
+    }
+
+    @PostMapping("/manage/resolve-phones")
+    public Result<com.mis.adminbff.dto.PhoneResolveResult> resolvePhones(@RequestBody Map<String, List<String>> body) {
+        List<String> phones = body == null ? List.of() : body.getOrDefault("phones", List.of());
+        return Result.ok(messageManageService.resolvePhones(RequestContext.requireLoginUser(), phones));
     }
 
     @GetMapping("/manage/sent/{id}")

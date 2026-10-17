@@ -47,9 +47,10 @@ public class MessageAdminController {
 
     @GetMapping("/manage/sent")
     public Result<PageResult<SentMessageVO>> sent(@RequestParam Long tenantId,
+                                                  @RequestParam(required = false) String q,
                                                   @RequestParam(defaultValue = "1") int page,
                                                   @RequestParam(defaultValue = "20") int size) {
-        return Result.ok(adminService.sent(tenantId, page, size));
+        return Result.ok(adminService.sent(tenantId, q, page, size));
     }
 
     @GetMapping("/manage/sent/{id}")

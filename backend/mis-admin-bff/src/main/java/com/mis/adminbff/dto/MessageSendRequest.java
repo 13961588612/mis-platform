@@ -13,6 +13,10 @@ public record MessageSendRequest(
         boolean all,
         List<Long> userIds,
         List<Long> deptIds,
-        List<Long> postTypeIds
+        List<Long> postTypeIds,
+        List<ScopeCondition> scopes
 ) {
+    /** 一条接收条件：该部门（含子部门）且该岗位类型（含下级）。 */
+    public record ScopeCondition(Long deptId, Long postTypeId, String deptName, String postTypeName) {
+    }
 }

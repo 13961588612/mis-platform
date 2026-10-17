@@ -294,9 +294,12 @@ public class TaskflowWebClient extends AbstractDownstreamClient {
                 .bodyValue(body).retrieve().bodyToMono(LONG_RESULT));
     }
 
-    public PageResult<com.mis.adminbff.client.model.SentMessageVO> sentMessages(Long tenantId, int page, int size) {
+    public PageResult<com.mis.adminbff.client.model.SentMessageVO> sentMessages(Long tenantId, String keyword, int page, int size) {
         Map<String, Object> q = new LinkedHashMap<>();
         q.put("tenantId", tenantId);
+        if (keyword != null && !keyword.isBlank()) {
+            q.put("q", keyword.trim());
+        }
         q.put("page", page);
         q.put("size", size);
         return block(client().get().uri(uriOf("/internal/v1/messages/manage/sent", q)).retrieve().bodyToMono(SENT_PAGE));

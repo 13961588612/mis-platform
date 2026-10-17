@@ -24,9 +24,18 @@ public class MessageAudienceController {
 
     @PostMapping("/employees")
     public Result<List<Long>> employees(@RequestBody AudienceEmployeeRequest request) {
+        if (request.scopes() != null && !request.scopes().isEmpty()) {
+            List<MessageAudienceService.Scope> scopes = request.scopes().stream()
+                    .map(scope -> new MessageAudienceService.Scope(scope.deptId(), scope.postTypeId()))
+                    .toList();
+            return Result.ok(audienceService.employeeIdsByScopes(request.tenantId(), scopes));
+        }
         return Result.ok(audienceService.employeeIds(request.tenantId(), request.deptIds(), request.postTypeIds()));
     }
 
-    public record AudienceEmployeeRequest(Long tenantId, List<Long> deptIds, List<Long> postTypeIds) {
+    public record AudienceEmployeeRequest(Long tenantId, List<Long> deptIds, List<Long> postTypeIds, List<ScopeItem> scopes) {
+    }
+
+    public record ScopeItem(Long deptId, Long postTypeId) {
     }
 }
