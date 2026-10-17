@@ -147,6 +147,8 @@ export interface ProcessDetail {
      * 详情接口始终返回。列表 `WfInstance.formData` 仅 `includeFormData=true` 时填充。
    */
   formData: string | null;
+  /** 发起人且首节点无人审过时可撤。 */
+  canWithdraw?: boolean | null;
 }
 
 /**
@@ -218,9 +220,27 @@ export async function updateSupportedForms(
   if (res.data.code !== 0) throw new Error(res.data.message || '关联表单失败');
 }
 
-export async function fetchProcessDetail(id: string, tenantId: string): Promise<ProcessDetail> {
-  const res = await api.get<ApiResult<ProcessDetail>>(`/workflow/instances/${id}`, { params: { tenantId } });
+export async function fetchProcessDetail(
+  id: string,
+  tenantId: string,
+  viewerId?: string | null,
+): Promise<ProcessDetail> {
+  const params: Record<string, string> = { tenantId };
+  if (viewerId) params.viewerId = viewerId;
+  const res = await api.get<ApiResult<ProcessDetail>>(`/workflow/instances/${id}`, { params });
   return unwrap(res, '获取流程详情失败');
+}
+
+/** 发起人撤回（首节点无人审过）。 */
+export async function withdrawProcess(
+  id: string,
+  tenantId: string,
+  operatorId: string,
+): Promise<void> {
+  const res = await api.post<ApiResult<null>>(`/workflow/instances/${id}/withdraw`, null, {
+    params: { tenantId, operatorId },
+  });
+  if (res.data.code !== 0) throw new Error(res.data.message || '撤回失败');
 }
 
 /** 启动流程实例；成功返回实例 id（字符串）。 */

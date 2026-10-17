@@ -272,4 +272,44 @@ public interface SysMessageRepository extends JpaRepository<SysMessage, Long> {
                                                @Param("msgType") String msgType,
                                                @Param("keyword") String keyword,
                                                Pageable pageable);
+
+    /** 后台发送记录：仅 audience 非空。 */
+    @Query(value = """
+            SELECT * FROM sys_message m
+            WHERE m.tenant_id = :tenantId
+              AND m.deleted = 0
+              AND m.audience IS NOT NULL
+            ORDER BY m.created_at DESC
+            """,
+            countQuery = """
+            SELECT count(*) FROM sys_message m
+            WHERE m.tenant_id = :tenantId
+              AND m.deleted = 0
+              AND m.audience IS NOT NULL
+            """,
+            nativeQuery = true)
+    Page<SysMessage> findSent(@Param("tenantId") Long tenantId, Pageable pageable);
+
+    /** 发送记录按标题或摘要检索。keyword 由调用方保证非空，避免 native query 的空参数类型问题。 */
+    @Query(value = """
+            SELECT * FROM sys_message m
+            WHERE m.tenant_id = :tenantId
+              AND m.deleted = 0
+              AND m.audience IS NOT NULL
+              AND (lower(m.title) LIKE lower(concat('%', :keyword, '%'))
+                   OR lower(coalesce(m.summary, '')) LIKE lower(concat('%', :keyword, '%')))
+            ORDER BY m.created_at DESC
+            """,
+            countQuery = """
+            SELECT count(*) FROM sys_message m
+            WHERE m.tenant_id = :tenantId
+              AND m.deleted = 0
+              AND m.audience IS NOT NULL
+              AND (lower(m.title) LIKE lower(concat('%', :keyword, '%'))
+                   OR lower(coalesce(m.summary, '')) LIKE lower(concat('%', :keyword, '%')))
+            """,
+            nativeQuery = true)
+    Page<SysMessage> findSentByKeyword(@Param("tenantId") Long tenantId,
+                                       @Param("keyword") String keyword,
+                                       Pageable pageable);
 }

@@ -61,6 +61,38 @@ public class UserController {
         return Result.ok(PageMapper.toPageResult(result));
     }
 
+    /** 消息圈人：当前应用启用用户。 */
+    @GetMapping("/enabled-ids")
+    public Result<List<Long>> enabledIds(@RequestParam Long tenantId, @RequestParam Long appId) {
+        return Result.ok(userService.enabledIds(tenantId, appId));
+    }
+
+    @PostMapping("/enabled-ids/among")
+    public Result<List<Long>> enabledIdsAmong(@RequestBody EnabledUserQuery query) {
+        return Result.ok(userService.enabledIdsAmong(query.tenantId(), query.appId(), query.ids()));
+    }
+
+    @PostMapping("/enabled-ids/by-employees")
+    public Result<List<Long>> enabledIdsByEmployees(@RequestBody EnabledUserQuery query) {
+        return Result.ok(userService.enabledIdsByEmployees(query.tenantId(), query.appId(), query.ids()));
+    }
+
+    @PostMapping("/enabled-by-phones")
+    public Result<List<UserService.PhoneUser>> enabledByPhones(@RequestBody PhoneQuery query) {
+        return Result.ok(userService.enabledByPhones(query.tenantId(), query.appId(), query.phones()));
+    }
+
+    @PostMapping("/briefs")
+    public Result<List<UserService.UserBrief>> briefs(@RequestBody EnabledUserQuery query) {
+        return Result.ok(userService.briefs(query.tenantId(), query.ids()));
+    }
+
+    public record EnabledUserQuery(Long tenantId, Long appId, List<Long> ids) {
+    }
+
+    public record PhoneQuery(Long tenantId, Long appId, List<String> phones) {
+    }
+
     /** 员工绑定预检（D1）：该员工是否已在指定「租户 + APP」内被其他账号绑定。 */
     @GetMapping("/check-employee-binding")
     public Result<EmployeeBindingCheck> checkEmployeeBinding(

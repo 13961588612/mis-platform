@@ -10,6 +10,7 @@ import com.mis.adminbff.client.model.AuditTimelineItem;
 import com.mis.adminbff.client.model.BizCategoryVO;
 import com.mis.adminbff.client.model.ExecutionTaskVO;
 import com.mis.adminbff.client.model.FormDefinitionVO;
+import com.mis.adminbff.client.model.FormRecordVO;
 import com.mis.adminbff.client.model.PortalMatterVO;
 import com.mis.adminbff.client.model.ProcessDetailVO;
 import com.mis.adminbff.client.model.TaskStatsVO;
@@ -51,6 +52,12 @@ public class TaskflowWebClient extends AbstractDownstreamClient {
             new ParameterizedTypeReference<>() {};
     private static final ParameterizedTypeReference<Result<Long>> LONG_RESULT =
             new ParameterizedTypeReference<>() {};
+    private static final ParameterizedTypeReference<Result<PageResult<com.mis.adminbff.client.model.SentMessageVO>>> SENT_PAGE =
+            new ParameterizedTypeReference<>() {};
+    private static final ParameterizedTypeReference<Result<com.mis.adminbff.client.model.SentMessageDetailVO>> SENT_DETAIL =
+            new ParameterizedTypeReference<>() {};
+    private static final ParameterizedTypeReference<Result<com.mis.adminbff.client.model.MessageFileVO>> MESSAGE_FILE =
+            new ParameterizedTypeReference<>() {};
     private static final ParameterizedTypeReference<Result<PageResult<TaskVO>>> TASK_PAGE =
             new ParameterizedTypeReference<>() {};
     private static final ParameterizedTypeReference<Result<PageResult<PortalMatterVO>>> MATTER_PAGE =
@@ -76,6 +83,10 @@ public class TaskflowWebClient extends AbstractDownstreamClient {
     private static final ParameterizedTypeReference<Result<BizCategoryVO>> BIZ_CATEGORY_ONE =
             new ParameterizedTypeReference<>() {};
     private static final ParameterizedTypeReference<Result<ProcessDetailVO>> WF_PROCESS_DETAIL =
+            new ParameterizedTypeReference<>() {};
+    private static final ParameterizedTypeReference<Result<PageResult<FormRecordVO>>> FORM_RECORD_PAGE =
+            new ParameterizedTypeReference<>() {};
+    private static final ParameterizedTypeReference<Result<FormRecordVO>> FORM_RECORD_ONE =
             new ParameterizedTypeReference<>() {};
     private static final ParameterizedTypeReference<Result<PageResult<WfInstanceVO>>> WF_INSTANCE_PAGE =
             new ParameterizedTypeReference<>() {};
@@ -273,6 +284,69 @@ public class TaskflowWebClient extends AbstractDownstreamClient {
         q.put("tenantId", tenantId);
         return block(client().post().uri(uriOf("/internal/v1/messages", q)).contentType(MediaType.APPLICATION_JSON)
                 .bodyValue(body).retrieve().bodyToMono(LONG_RESULT));
+    }
+
+    public Long sendManagedMessage(Long tenantId, Map<String, Object> body) {
+        Map<String, Object> q = new LinkedHashMap<>();
+        q.put("tenantId", tenantId);
+        return block(client().post().uri(uriOf("/internal/v1/messages/manage/send", q))
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(body).retrieve().bodyToMono(LONG_RESULT));
+    }
+
+    public PageResult<com.mis.adminbff.client.model.SentMessageVO> sentMessages(Long tenantId, String keyword, int page, int size) {
+        Map<String, Object> q = new LinkedHashMap<>();
+        q.put("tenantId", tenantId);
+        if (keyword != null && !keyword.isBlank()) {
+            q.put("q", keyword.trim());
+        }
+        q.put("page", page);
+        q.put("size", size);
+        return block(client().get().uri(uriOf("/internal/v1/messages/manage/sent", q)).retrieve().bodyToMono(SENT_PAGE));
+    }
+
+    public com.mis.adminbff.client.model.SentMessageDetailVO sentMessageDetail(Long tenantId, Long id) {
+        Map<String, Object> q = new LinkedHashMap<>();
+        q.put("tenantId", tenantId);
+        return block(client().get()
+                .uri(uriOf("/internal/v1/messages/manage/sent/{id}", pathVars("id", id), q))
+                .retrieve().bodyToMono(SENT_DETAIL));
+    }
+
+    public com.mis.adminbff.client.model.MessageFileVO uploadMessageFile(Long tenantId, Long userId, String kind,
+                                                                        String filename, String contentType, byte[] bytes) {
+        var builder = new org.springframework.http.client.MultipartBodyBuilder();
+        var resource = new org.springframework.core.io.ByteArrayResource(bytes) {
+            @Override
+            public String getFilename() {
+                return filename;
+            }
+        };
+        var part = builder.part("file", resource);
+        if (contentType != null && !contentType.isBlank()) {
+            part.contentType(MediaType.parseMediaType(contentType));
+        }
+        Map<String, Object> q = new LinkedHashMap<>();
+        q.put("tenantId", tenantId);
+        q.put("userId", userId);
+        q.put("kind", kind);
+        return block(client().post()
+                .uri(uriOf("/internal/v1/messages/manage/files", q))
+                .contentType(MediaType.MULTIPART_FORM_DATA)
+                .body(org.springframework.web.reactive.function.BodyInserters.fromMultipartData(builder.build()))
+                .retrieve()
+                .bodyToMono(MESSAGE_FILE));
+    }
+
+    public org.springframework.http.ResponseEntity<byte[]> downloadMessageFile(Long tenantId, Long userId, Long id) {
+        Map<String, Object> q = new LinkedHashMap<>();
+        q.put("tenantId", tenantId);
+        q.put("userId", userId);
+        return client().get()
+                .uri(uriOf("/internal/v1/messages/files/{id}", pathVars("id", id), q))
+                .retrieve()
+                .toEntity(byte[].class)
+                .block(timeout());
     }
 
     /**
@@ -729,8 +803,15 @@ public class TaskflowWebClient extends AbstractDownstreamClient {
     }
 
     public ProcessDetailVO processDetail(Long id, Long tenantId) {
+        return processDetail(id, tenantId, null);
+    }
+
+    public ProcessDetailVO processDetail(Long id, Long tenantId, Long viewerId) {
         Map<String, Object> q = new LinkedHashMap<>();
         q.put("tenantId", tenantId);
+        if (viewerId != null) {
+            q.put("viewerId", viewerId);
+        }
         return block(client().get()
                 .uri(uriOf("/internal/v1/workflow/instances/{id}", pathVars("id", id), q))
                 .retrieve().bodyToMono(WF_PROCESS_DETAIL));
@@ -803,6 +884,71 @@ public class TaskflowWebClient extends AbstractDownstreamClient {
         }
         blockVoid(client().post().uri(uriOf("/internal/v1/workflow/tasks/{id}/complete", pathVars("id", id), q))
                 .contentType(MediaType.APPLICATION_JSON).bodyValue(body).retrieve().bodyToMono(VOID));
+    }
+
+    public void withdrawProcess(Long id, Long tenantId, Long operatorId) {
+        Map<String, Object> q = new LinkedHashMap<>();
+        q.put("tenantId", tenantId);
+        q.put("operatorId", operatorId);
+        blockVoid(client().post()
+                .uri(uriOf("/internal/v1/workflow/instances/{id}/withdraw", pathVars("id", id), q))
+                .retrieve().bodyToMono(VOID));
+    }
+
+    // ------------------------------------------------------------------
+    // 表单单据 form_record
+    // ------------------------------------------------------------------
+
+    public PageResult<FormRecordVO> formRecords(Long tenantId, Long createdBy, String status, String formCode,
+                                                int page, int size) {
+        Map<String, Object> q = new LinkedHashMap<>();
+        q.put("tenantId", tenantId);
+        q.put("createdBy", createdBy);
+        if (status != null && !status.isBlank()) {
+            q.put("status", status);
+        }
+        if (formCode != null && !formCode.isBlank()) {
+            q.put("formCode", formCode);
+        }
+        q.put("page", page);
+        q.put("size", size);
+        return block(client().get().uri(uriOf("/internal/v1/form-records", q)).retrieve().bodyToMono(FORM_RECORD_PAGE));
+    }
+
+    public FormRecordVO formRecord(Long id, Long tenantId, Long viewerId) {
+        Map<String, Object> q = new LinkedHashMap<>();
+        q.put("tenantId", tenantId);
+        if (viewerId != null) {
+            q.put("viewerId", viewerId);
+        }
+        return block(client().get()
+                .uri(uriOf("/internal/v1/form-records/{id}", pathVars("id", id), q))
+                .retrieve().bodyToMono(FORM_RECORD_ONE));
+    }
+
+    public Long createFormRecord(Long tenantId, Map<String, Object> body) {
+        Map<String, Object> q = new LinkedHashMap<>();
+        q.put("tenantId", tenantId);
+        return block(client().post().uri(uriOf("/internal/v1/form-records", q))
+                .contentType(MediaType.APPLICATION_JSON).bodyValue(body).retrieve().bodyToMono(LONG_RESULT));
+    }
+
+    public void updateFormRecord(Long id, Long tenantId, Long operatorId, Map<String, Object> body) {
+        Map<String, Object> q = new LinkedHashMap<>();
+        q.put("tenantId", tenantId);
+        if (operatorId != null) {
+            q.put("operatorId", operatorId);
+        }
+        blockVoid(client().put().uri(uriOf("/internal/v1/form-records/{id}", pathVars("id", id), q))
+                .contentType(MediaType.APPLICATION_JSON).bodyValue(body).retrieve().bodyToMono(VOID));
+    }
+
+    public Long startFormRecordProcess(Long id, Long tenantId, Map<String, Object> body) {
+        Map<String, Object> q = new LinkedHashMap<>();
+        q.put("tenantId", tenantId);
+        return block(client().post()
+                .uri(uriOf("/internal/v1/form-records/{id}/start-process", pathVars("id", id), q))
+                .contentType(MediaType.APPLICATION_JSON).bodyValue(body).retrieve().bodyToMono(LONG_RESULT));
     }
 
     // ------------------------------------------------------------------

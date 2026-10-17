@@ -37,8 +37,10 @@ public class WfProcessController {
 
     /** 流程实例详情（ProcessShell 用）。 */
     @GetMapping("/instances/{id}")
-    public Result<ProcessDetailVO> detail(@PathVariable Long id, @RequestParam Long tenantId) {
-        return Result.ok(processService.detail(id, tenantId));
+    public Result<ProcessDetailVO> detail(@PathVariable Long id,
+                                          @RequestParam Long tenantId,
+                                          @RequestParam(required = false) Long viewerId) {
+        return Result.ok(processService.detail(id, tenantId, viewerId));
     }
 
     /**
@@ -70,6 +72,15 @@ public class WfProcessController {
                                  @RequestParam(required = false) Long operatorId,
                                  @Valid @RequestBody CompleteWfTaskRequest request) {
         processService.completeTask(tenantId, id, request, operatorId);
+        return Result.ok();
+    }
+
+    /** 发起人撤回（首节点无人审过）。 */
+    @PostMapping("/instances/{id}/withdraw")
+    public Result<Void> withdraw(@PathVariable Long id,
+                                 @RequestParam Long tenantId,
+                                 @RequestParam Long operatorId) {
+        processService.withdraw(tenantId, id, operatorId);
         return Result.ok();
     }
 }

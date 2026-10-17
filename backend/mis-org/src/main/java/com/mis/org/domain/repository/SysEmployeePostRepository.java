@@ -7,6 +7,7 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 import java.time.LocalDate;
+import java.util.Collection;
 import java.util.List;
 
 public interface SysEmployeePostRepository extends JpaRepository<SysEmployeePost, Long> {
@@ -45,4 +46,19 @@ public interface SysEmployeePostRepository extends JpaRepository<SysEmployeePost
             ORDER BY ep.startDate ASC
             """)
     List<SysEmployeePost> findActivePostsAsOfToday(@Param("employeeId") Long employeeId, @Param("today") LocalDate today);
+
+    /** 岗位类型下的在职任职（含兼职，endDate 为空或未到期）。 */
+    @Query("""
+            SELECT DISTINCT ep.employeeId FROM SysEmployeePost ep, SysPost p
+            WHERE ep.postId = p.id
+              AND ep.tenantId = :tenantId
+              AND ep.status = 1
+              AND (ep.endDate IS NULL OR ep.endDate >= :today)
+              AND p.tenantId = :tenantId
+              AND p.status = 1
+              AND p.postTypeId IN :postTypeIds
+            """)
+    List<Long> findActiveEmployeeIdsByPostTypes(@Param("tenantId") Long tenantId,
+                                                @Param("postTypeIds") Collection<Long> postTypeIds,
+                                                @Param("today") LocalDate today);
 }

@@ -31,6 +31,7 @@ Architecture Decision Record，记录重要架构决策的**背景、选项、�
 | [ADR-019](ADR-019-wren-query-acl-ai-platform.md) | WrenAI 问数 ACL 归属 ai-platform 的架构一致性裁定 | 已替代（→ ADR-020） | 2026-08-22 |
 | [ADR-020](ADR-020-iqd-query-acl-mis-platform.md) | 问数（mis-iqd）ACL 等配置落 mis_platform、对齐 mis_kb 项目范式（A1 业务改判） | 已接受 | 2026-08-22 |
 | [ADR-021](ADR-021-finance-pos-account-bff-legacy-token.md) | 财务辅助 POS 对账迁入 host + BFF 反代 + 老 auth 令牌兑换（MIS 手机号桥接） | 已接受 | 2026-09-09 |
+| [ADR-022](ADR-022-external-workflow-binding.md) | 表单外部工作流：运行时与本地蓝图分离（致远等） | 提议中 | 2026-10-16 |
 
 ## ADR 模板
 

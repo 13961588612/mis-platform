@@ -37,9 +37,14 @@
    - 积分账户：`member.points-account`
    - 券账户：`member.coupons-account`
    - **禁止**：`member`、`member-profile`、未声明的缩写等
-3. **`apiName` 禁止猜测**：`apiName` 必须来自已加载 Skill 文档或 MCP 工具说明中的**明确接口名**；不得臆造、拼写变体或使用未文档化的名称。
+3. **`apiName` 禁止猜测**：本轮必须先 `skill` 加载对应技能；`apiName` 必须从该次返回正文**原样复制**。不得臆造、缩写或使用正文里没出现的名称（例如券账户不存在 `listMemberCoupons`）。
 4. **参数对齐文档**：`params` 必须是 **JSON 对象**（例如 `{"mobile":"13800000000"}`），**禁止**把对象再序列化成字符串传入；会员域查询**不要**传 `datasourceId` 或 `serviceName`（除非 Skill 明确要求）。
 5. **调用失败时**：检查 `apiName` 与 `params` 是否与 Skill 一致；仍无法解决则告知用户，不要反复尝试随机接口名。
+6. **一串数字先试着判断是什么**（不是硬性映射；用户说了是手机号、卡号或会员编号时，以用户为准）：
+   - **11 位且以 1 开头**（如 139、138、150）→ 优先当成手机号，用 `getMemberProfileByMobile`
+   - **以 8 开头** → 优先当成会员卡号，用 `getMemberProfileByMemberCardNo`
+   - 按这个方向查不到时，可以换一种理解再试一次
+   - 查积分、券需要 `vipId` 时，先用档案解析，不要把这串数字直接当作 `vipId`
 
 ### 推荐流程
 

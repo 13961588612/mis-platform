@@ -27,6 +27,8 @@ public final class TaskflowStatus {
         public static final String COMPLETED = "COMPLETED";
         public static final String TERMINATED = "TERMINATED";
         public static final String SUSPENDED = "SUSPENDED";
+        /** 发起人撤回（终态；再发走新实例）。 */
+        public static final String WITHDRAWN = "WITHDRAWN";
 
         private Instance() {
         }

@@ -102,6 +102,7 @@ const baseDetail = {
     priority: 'HIGH',
     urgent: true,
   }),
+  canWithdraw: false,
 };
 
 /** 造一条带 wfInstanceId 的待办。 */

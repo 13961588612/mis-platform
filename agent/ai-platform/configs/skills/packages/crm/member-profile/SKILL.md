@@ -71,8 +71,9 @@ inputSchema:
 
 ## 身份字段默认约定
 
-- 当顾客询问**会员相关信息**，只提供一串 **11 位数字**且**未说明**是会员编号（`vipId`）、会员卡号（`memberCardNo`）还是手机号（`mobile`）时，**默认按手机号码**处理：使用接口 **`getMemberProfileByMobile`**，`params` 中传 **`mobile`** 为该 11 位字符串。
-- 若用户随后明确实为其它字段，再改用 **2.1 / 2.2** 对应接口。
+- 顾客只给一串数字、**没说**是会员编号（`vipId`）、会员卡号（`memberCardNo`）还是手机号（`mobile`）时，先按下面的方向理解并查询；这不是唯一映射，查不到可以换一种理解再试。用户说明了类型时以用户为准。
+  - **11 位且以 1 开头**（如 139、138）→ 优先当手机号：`getMemberProfileByMobile`，`params.mobile` 为该字符串。
+  - **以 8 开头** → 优先当会员卡号：`getMemberProfileByMemberCardNo`，`params.memberCardNo` 为该字符串。
 
 ## 1 数据与字段说明
 

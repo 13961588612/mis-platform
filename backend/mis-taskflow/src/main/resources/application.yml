@@ -32,6 +32,10 @@ spring:
       leak-detection-threshold: 15000
       connection-init-sql: "SET application_name = '${spring.application.name}'"
       validation-timeout: 5000
+  servlet:
+    multipart:
+      max-file-size: 20MB
+      max-request-size: 21MB
   jpa:
     open-in-view: false
     hibernate:
@@ -49,3 +53,12 @@ management:
 logging:
   level:
     com.mis.taskflow: DEBUG
+
+# 消息附件与正文图片。本地 MinIO 默认与 deploy/docker-compose.dev.yml 一致。
+mis:
+  message:
+    storage:
+      endpoint: ${MINIO_ENDPOINT:http://127.0.0.1:9000}
+      access-key: ${MINIO_ACCESS_KEY:minioadmin}
+      secret-key: ${MINIO_SECRET_KEY:minioadmin}
+      bucket: ${MINIO_MESSAGE_BUCKET:mis-message}

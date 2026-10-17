@@ -203,7 +203,16 @@ if (hasPermission('system:user:edit')) { ... }
 
 分类 API：`sys_api` **92980–92983** / `sys_menu_api` **92984–92987**（V148）。
 
-## 10. 关联文档
+## 10. 消息管理
+
+| permission | 菜单 | API |
+|------------|------|-----|
+| `taskflow:message:manage` | 95131（挂在消息与待办 95003 下，侧栏不展示） | 预览 / 发送 / 发送记录 / 上传：`sys_api` **95141–95145**；按手机号解析：`sys_api` **95148**（V152） |
+| （收件人下载） | 95003 与 95131 均绑定 | `GET /api/v1/messages/files/{id}`，`sys_api` **95146** |
+
+接收范围可同时选全员、部门（含子部门）、岗位类型（含下级类型与兼职）、指定用户，按并集去重。内置管理员角色（role_id=1）已授权。
+
+## 11. 关联文档
 
 - [接口规范](api-specification.md)
 - [种子数据](../database/seed-data.md)

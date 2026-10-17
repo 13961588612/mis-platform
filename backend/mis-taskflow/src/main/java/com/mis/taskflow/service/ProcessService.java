@@ -6,6 +6,7 @@ import com.mis.common.core.result.PageResult;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.mis.taskflow.domain.entity.FormDefinition;
+import com.mis.taskflow.domain.entity.FormRecord;
 import com.mis.taskflow.domain.entity.SysTask;
 import com.mis.taskflow.domain.entity.WfDefinition;
 import com.mis.taskflow.domain.entity.WfEdge;
@@ -14,6 +15,7 @@ import com.mis.taskflow.domain.entity.WfInstance;
 import com.mis.taskflow.domain.entity.WfNode;
 import com.mis.taskflow.domain.entity.WfTask;
 import com.mis.taskflow.domain.repository.FormDefinitionRepository;
+import com.mis.taskflow.domain.repository.FormRecordRepository;
 import com.mis.taskflow.domain.repository.WfDefinitionRepository;
 import com.mis.taskflow.domain.repository.WfEdgeRepository;
 import com.mis.taskflow.domain.repository.WfHistoryRepository;
@@ -79,6 +81,7 @@ public class ProcessService {
     private final WfHistoryRepository historyRepository;
     private final FormDefinitionRepository formDefinitionRepository;
     private final FormDefinitionService formDefinitionService;
+    private final FormRecordRepository formRecordRepository;
     private final AssignmentResolver assignmentResolver;
     private final TaskService taskService;
     private final MessageService messageService;
@@ -92,6 +95,7 @@ public class ProcessService {
                           WfHistoryRepository historyRepository,
                           FormDefinitionRepository formDefinitionRepository,
                           FormDefinitionService formDefinitionService,
+                          FormRecordRepository formRecordRepository,
                           AssignmentResolver assignmentResolver,
                           TaskService taskService,
                           MessageService messageService,
@@ -104,6 +108,7 @@ public class ProcessService {
         this.historyRepository = historyRepository;
         this.formDefinitionRepository = formDefinitionRepository;
         this.formDefinitionService = formDefinitionService;
+        this.formRecordRepository = formRecordRepository;
         this.assignmentResolver = assignmentResolver;
         this.taskService = taskService;
         this.messageService = messageService;
@@ -140,6 +145,7 @@ public class ProcessService {
         instance.setDefinitionId(def.getId());
         instance.setDefinitionCode(def.getCode());
         instance.setStartedFormCode(req.startedFormCode().trim());
+        instance.setFormRecordId(req.formRecordId());
         instance.setBusinessType(req.businessType().trim());
         instance.setBusinessId(req.businessId().trim());
         instance.setTitle(title);
@@ -214,6 +220,7 @@ public class ProcessService {
 
             syncLinkedSysTask(tenantId, wfTask, action, req.comment(), operatorId);
             closeCcSysTasks(tenantId, instance.getId());
+            syncFormRecordStatus(tenantId, instance, FormRecord.STATUS_SAVED);
             AuditContext.after(auditSnapshot(instance));
             return;
         }
@@ -431,6 +438,83 @@ public class ProcessService {
         }
     }
 
+    /**
+     * 发起人撤回：仅 RUNNING + 本人 + 尚无 APPROVE 历史。
+     * 实例 → WITHDRAWN；关联单据 → SAVED。
+     */
+    @Transactional
+    @BusinessOperation(module = "流程审批", type = "WITHDRAW",
+            businessType = "WF_INSTANCE", description = "发起人撤回流程",
+            captureBefore = true, captureAfter = true)
+    public void withdraw(Long tenantId, Long instanceId, Long operatorId) {
+        if (operatorId == null) {
+            throw new BusinessException(ResultCode.VALIDATION_ERROR, "操作人不能为空");
+        }
+        WfInstance instance = instanceRepository.findByIdAndTenantId(instanceId, tenantId)
+                .orElseThrow(() -> new BusinessException(ResultCode.NOT_FOUND, "流程实例不存在"));
+        if (!TaskflowStatus.Instance.RUNNING.equals(instance.getStatus())) {
+            throw new BusinessException(ResultCode.VALIDATION_ERROR, "仅进行中的流程可撤回");
+        }
+        if (!operatorId.equals(instance.getInitiatorId())) {
+            throw new BusinessException(ResultCode.FORBIDDEN, "仅发起人可撤回");
+        }
+        boolean approved = historyRepository.findByInstanceIdOrderByCreatedAtAsc(instanceId).stream()
+                .anyMatch(h -> WfHistory.OP_APPROVE.equals(h.getOperation()));
+        if (approved) {
+            throw new BusinessException(ResultCode.VALIDATION_ERROR, "仅首节点无人审批通过时可撤回");
+        }
+
+        AuditContext.businessId(instance.getBusinessType() + "/" + instance.getBusinessId());
+        AuditContext.before(auditSnapshot(instance));
+
+        LocalDateTime now = LocalDateTime.now();
+        for (WfTask t : wfTaskRepository.findByInstanceIdOrderByCreatedAtAsc(instanceId)) {
+            if (WfTask.STATUS_PENDING.equals(t.getStatus())) {
+                t.setStatus("CANCELLED");
+                t.setCompletedAt(now);
+                wfTaskRepository.save(t);
+                if (t.getSysTaskId() != null) {
+                    try {
+                        taskService.handleTask(tenantId, t.getSysTaskId(),
+                                new HandleTaskRequest("REJECT", "发起人已撤回", null), operatorId);
+                    } catch (BusinessException e) {
+                        log.warn("撤回时关闭 sys_task 失败: sysTaskId={}, reason={}", t.getSysTaskId(), e.getMessage());
+                        taskService.closeCcTask(tenantId, t.getSysTaskId());
+                    }
+                }
+            }
+        }
+        closeCcSysTasks(tenantId, instanceId);
+
+        instance.setStatus(TaskflowStatus.Instance.WITHDRAWN);
+        instance.setCompletedAt(now);
+        instance.setUpdatedAt(now);
+        instanceRepository.save(instance);
+
+        String node = instance.getCurrentNodeCode() != null ? instance.getCurrentNodeCode() : "start";
+        recordHistory(instance.getId(), node, operatorId, instance.getInitiatorName(),
+                WfHistory.OP_WITHDRAW, node, null, "发起人撤回", now);
+        notify(instance, "WITHDRAW", "申请已撤回", "发起人已撤回该申请");
+        syncFormRecordStatus(tenantId, instance, FormRecord.STATUS_SAVED);
+        AuditContext.after(auditSnapshot(instance));
+    }
+
+    private void syncFormRecordStatus(Long tenantId, WfInstance instance, String targetStatus) {
+        if (instance.getFormRecordId() == null) {
+            return;
+        }
+        formRecordRepository.findByIdAndTenantIdAndDeleted(instance.getFormRecordId(), tenantId, 0)
+                .ifPresent(record -> {
+                    record.setStatus(targetStatus);
+                    record.setLastInstanceId(instance.getId());
+                    if (instance.getId().equals(record.getCurrentInstanceId())) {
+                        record.setCurrentInstanceId(null);
+                    }
+                    record.setUpdatedAt(LocalDateTime.now());
+                    formRecordRepository.save(record);
+                });
+    }
+
     /** 结束实例：置 COMPLETED、写历史、投递后处理任务并通知。 */
     private void completeInstance(WfInstance instance, WfNode currentNode, WfNode endNode, LocalDateTime now) {
         instance.setStatus(TaskflowStatus.Instance.COMPLETED);
@@ -439,6 +523,7 @@ public class ProcessService {
         instance.setUpdatedAt(now);
         instance.setProgress("100%");
         instanceRepository.save(instance);
+        syncFormRecordStatus(instance.getTenantId(), instance, FormRecord.STATUS_APPROVED);
 
         if (endNode != null) {
             recordHistory(instance.getId(), endNode.getNodeCode(), null, null,
@@ -642,6 +727,11 @@ public class ProcessService {
 
     @Transactional(readOnly = true)
     public ProcessDetailVO detail(Long instanceId, Long tenantId) {
+        return detail(instanceId, tenantId, null);
+    }
+
+    @Transactional(readOnly = true)
+    public ProcessDetailVO detail(Long instanceId, Long tenantId, Long viewerId) {
         WfInstance instance = instanceRepository.findByIdAndTenantId(instanceId, tenantId)
                 .orElseThrow(() -> new BusinessException(ResultCode.NOT_FOUND, "流程实例不存在"));
         List<WfTaskVO> tasks = wfTaskRepository.findByInstanceIdOrderByCreatedAtAsc(instanceId).stream()
@@ -651,7 +741,11 @@ public class ProcessService {
                         h.getOperatorName(), h.getOperation(), h.getFromNode(), h.getToNode(),
                         h.getComment(), h.getCreatedAt()))
                 .toList();
-        return new ProcessDetailVO(toInstanceVo(instance), tasks, history, instance.getFormData());
+        boolean canWithdraw = TaskflowStatus.Instance.RUNNING.equals(instance.getStatus())
+                && viewerId != null
+                && viewerId.equals(instance.getInitiatorId())
+                && history.stream().noneMatch(h -> WfHistory.OP_APPROVE.equals(h.operation()));
+        return new ProcessDetailVO(toInstanceVo(instance), tasks, history, instance.getFormData(), canWithdraw);
     }
 
     @Transactional(readOnly = true)

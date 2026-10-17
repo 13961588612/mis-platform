@@ -94,6 +94,7 @@ public class MessageService {
         msg.setAppCode(trimToNull(req.appCode()));
         // 业务类型：显式写入 sys_message.biz_type（软引用 biz_category.code）。blank → NULL。
         msg.setBizType(trimToNull(req.bizType()));
+        msg.setAudience(trimToNull(req.audience()));
         msg.setReadCount(0);
         msg.setTotalCount(receivers.size());
         msg.setCreatedBy(req.senderId());

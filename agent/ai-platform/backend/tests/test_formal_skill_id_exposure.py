@@ -8,8 +8,8 @@ from types import SimpleNamespace
 import pytest
 
 import src.config_manager.loader as config_loader_mod
-from openharness.tools.base import ToolExecutionContext
-from pydantic import ValidationError
+from openharness.tools.base import ToolExecutionContext, ToolResult
+from pydantic import BaseModel, ValidationError
 
 from src.agent.config import AgentConfig, SkillRef
 from src.config_manager.loader import ConfigLoader
@@ -153,6 +153,40 @@ async def test_platform_skill_tool_rejects_unknown_when_allowed(
     assert result.is_error
     assert "member.profile" in (result.output or "")
     assert "member" in (result.output or "")
+
+
+@pytest.mark.asyncio
+async def test_platform_skill_tool_delegates_model_instance(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """成功路径必须实例化 SkillTool.input_model，不能调用其元类。"""
+    captured: dict[str, object] = {}
+
+    class _Input(BaseModel):
+        name: str
+
+    class _FakeSkillTool:
+        input_model = _Input
+
+        def __init__(self) -> None:
+            return None
+
+        async def execute(self, arguments: BaseModel, context: ToolExecutionContext) -> ToolResult:
+            del context
+            captured["arguments"] = arguments
+            return ToolResult(output="skill body")
+
+    monkeypatch.setattr("src.runtime.platform_skill_tool.SkillTool", _FakeSkillTool)
+    tool = PlatformSkillTool(allowed_skill_ids=["member.coupons-account"])
+    result = await tool.execute(
+        tool.input_model(name="member.coupons-account"),
+        ToolExecutionContext(cwd=Path("."), metadata={}),
+    )
+    assert result.is_error is False
+    assert result.output == "skill body"
+    arguments = captured["arguments"]
+    assert isinstance(arguments, _Input)
+    assert arguments.name == "member.coupons-account"
 
 
 def test_create_agent_source_registry_registers_platform_skill_tool() -> None:

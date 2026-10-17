@@ -17,6 +17,7 @@ import {
   type MessageStats,
 } from '@/lib/api/messages';
 import { useAuthStore } from '@/stores/auth-store';
+import { MessageManagePanel } from '@/features/portal/components/message-manage-panel';
 import { cn } from '@/lib/utils';
 import { formatDateTimeSec } from '../lib/format-datetime';
 
@@ -75,6 +76,8 @@ const TD_CLASS = 'border-l border-border/60 px-3 py-2 align-middle first:border-
  */
 export function PortalMessageTab() {
   const user = useAuthStore((s) => s.user);
+  const canManage = useAuthStore((s) => s.hasPermission('taskflow:message:manage'));
+  const [manageOpen, setManageOpen] = useState(false);
   // 单租户阶段固定 tenantId=1（与门户其它页同口径）。
   const tenantId = '1';
   const userId = user?.id ?? '';
@@ -164,6 +167,14 @@ export function PortalMessageTab() {
 
   const hasKeyword = applied.trim().length > 0;
 
+  if (manageOpen) {
+    return (
+      <div className="flex h-full flex-col">
+        <MessageManagePanel onClose={() => setManageOpen(false)} />
+      </div>
+    );
+  }
+
   return (
     <div className="flex h-full flex-col gap-4">
       <Tabs
@@ -179,7 +190,12 @@ export function PortalMessageTab() {
               </TabsTrigger>
             ))}
           </TabsList>
-          <span className="ml-auto text-[12px] text-muted-foreground">
+          <span className="ml-auto flex items-center gap-3 text-[12px] text-muted-foreground">
+            {canManage ? (
+              <Button size="sm" variant="outline" onClick={() => setManageOpen(true)}>
+                消息管理
+              </Button>
+            ) : null}
             未读 <span className="font-semibold text-destructive">{stats.unread}</span> / 共 {stats.total}
           </span>
         </div>

@@ -34,6 +34,10 @@ public class IamWebClient extends AbstractDownstreamClient {
             new ParameterizedTypeReference<>() {};
     private static final ParameterizedTypeReference<Result<List<Long>>> LONG_LIST =
             new ParameterizedTypeReference<>() {};
+    private static final ParameterizedTypeReference<Result<List<com.mis.adminbff.client.model.UserBrief>>> USER_BRIEFS =
+            new ParameterizedTypeReference<>() {};
+    private static final ParameterizedTypeReference<Result<List<com.mis.adminbff.client.model.PhoneUser>>> PHONE_USERS =
+            new ParameterizedTypeReference<>() {};
     private static final ParameterizedTypeReference<Result<UserPermissionsDTO>> USER_PERMISSIONS =
             new ParameterizedTypeReference<>() {};
     private static final ParameterizedTypeReference<Result<RoleDataScopeVO>> ROLE_DATA_SCOPE =
@@ -275,6 +279,65 @@ public class IamWebClient extends AbstractDownstreamClient {
                 .uri(queryUri("/internal/v1/apps", "tenantId", tenantId, "kind", kind))
                 .retrieve()
                 .bodyToMono(APP_LIST));
+        return data != null ? data : List.of();
+    }
+
+    public List<Long> enabledUserIds(Long tenantId, Long appId) {
+        List<Long> data = block(client().get()
+                .uri(uriBuilder -> uriBuilder.path("/internal/v1/users/enabled-ids")
+                        .queryParam("tenantId", tenantId)
+                        .queryParam("appId", appId)
+                        .build())
+                .retrieve().bodyToMono(LONG_LIST));
+        return data != null ? data : List.of();
+    }
+
+    public List<Long> enabledUserIdsAmong(Long tenantId, Long appId, List<Long> ids) {
+        return postEnabled("/internal/v1/users/enabled-ids/among", tenantId, appId, ids);
+    }
+
+    public List<Long> enabledUserIdsByEmployees(Long tenantId, Long appId, List<Long> employeeIds) {
+        return postEnabled("/internal/v1/users/enabled-ids/by-employees", tenantId, appId, employeeIds);
+    }
+
+    public List<com.mis.adminbff.client.model.PhoneUser> enabledUsersByPhones(Long tenantId, Long appId, List<String> phones) {
+        Map<String, Object> body = new HashMap<>();
+        body.put("tenantId", tenantId);
+        body.put("appId", appId);
+        body.put("phones", phones);
+        List<com.mis.adminbff.client.model.PhoneUser> data = block(client().post()
+                .uri("/internal/v1/users/enabled-by-phones")
+                .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+                .bodyValue(body)
+                .retrieve()
+                .bodyToMono(PHONE_USERS));
+        return data != null ? data : List.of();
+    }
+
+    public List<com.mis.adminbff.client.model.UserBrief> userBriefs(Long tenantId, List<Long> ids) {
+        Map<String, Object> body = new HashMap<>();
+        body.put("tenantId", tenantId);
+        body.put("ids", ids);
+        List<com.mis.adminbff.client.model.UserBrief> data = block(client().post()
+                .uri("/internal/v1/users/briefs")
+                .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+                .bodyValue(body)
+                .retrieve()
+                .bodyToMono(USER_BRIEFS));
+        return data != null ? data : List.of();
+    }
+
+    private List<Long> postEnabled(String path, Long tenantId, Long appId, List<Long> ids) {
+        Map<String, Object> body = new HashMap<>();
+        body.put("tenantId", tenantId);
+        body.put("appId", appId);
+        body.put("ids", ids);
+        List<Long> data = block(client().post()
+                .uri(path)
+                .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+                .bodyValue(body)
+                .retrieve()
+                .bodyToMono(LONG_LIST));
         return data != null ? data : List.of();
     }
 

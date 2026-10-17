@@ -29,6 +29,7 @@
 | **多窗口 Agent 团队（PM/DEV/QA/OPS）** | **[agents/README](agents/README.md)** · [定稿方案](agents/大型项目cursor方案.md) |
 | 财务辅助 / POS 对账迁入 | [ADR-021](adr/ADR-021-finance-pos-account-bff-legacy-token.md) · [老 auth 兑换](integration/smp-auth-service-exchange.md) · [MIS 回查手机号](integration/mis-legacy-auth-me.md) · 迁移 `V86__finance_pos_account_seed.sql` |
 | 外部 iframe 嵌入 Copilot | [embed-copilot](integration/embed-copilot.md) · [A2UI 架构 D12/D14](ai-fusion/a2ui/01-architecture.md) · demo `frontend/mis-admin-web/public/embed-host-demo.html` |
+| 本地表单对接外部工作流（致远等） | [规划 19](architecture/msg-log-workflow/19-external-workflow-integration-plan.md) · [ADR-022](adr/ADR-022-external-workflow-binding.md) |
 
 ---
 
