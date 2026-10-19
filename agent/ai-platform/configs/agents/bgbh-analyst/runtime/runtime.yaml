@@ -1,0 +1,16 @@
+runtime:
+  type: openharness
+  version: "1.0.0"
+  allowed_tools:
+    - skill
+    - iqd__ask
+    - iqd__describe_scope
+  params:
+    maxSteps: 16
+    temperature: 0.2
+    maxTokens: 4096
+    # 问数「项目配置」里的项目名。iqd__ask 按该名称解析成连接 id。
+    bgbhConnectionId: bg-data
+  prompts:
+    system: runtime/prompts/system.md
+  middleware: {}

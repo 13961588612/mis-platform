@@ -21,11 +21,12 @@ import com.fasterxml.jackson.annotation.JsonProperty;
  * @param channel      按渠道过滤
  * @param userId       按用户过滤（Copilot 侧栏收口本用户）
  * @param keyword      关键词（标题 / 内容）
- * @param from         起始时间（ISO-8601）
- * @param to           截止时间（ISO-8601）
- * @param includeEmpty 为 true 时包含 message_count=0 的空会话（用于清理）
- * @param page         页码，从 1 开始
- * @param pageSize     每页条数
+ * @param from                   更新时间下界（ISO-8601）
+ * @param to                     更新时间上界（ISO-8601）
+ * @param includeEmpty           为 true 时包含 message_count=0 的空会话（用于清理）
+ * @param includeWorkerSessions  为 true 时包含 Worker 子会话与 mis_bff 旁路孤儿
+ * @param page                   页码，从 1 开始
+ * @param pageSize               每页条数
  */
 public record SessionQuery(
         @JsonProperty("agent_id") String agentId,
@@ -35,6 +36,7 @@ public record SessionQuery(
         @JsonProperty("from") String from,
         @JsonProperty("to") String to,
         @JsonProperty("include_empty") Boolean includeEmpty,
+        @JsonProperty("include_worker_sessions") Boolean includeWorkerSessions,
         @JsonProperty("page") Integer page,
         @JsonProperty("page_size") Integer pageSize) {
 

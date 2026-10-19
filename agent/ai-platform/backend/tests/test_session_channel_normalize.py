@@ -23,6 +23,15 @@ def test_unknown_stays_unknown() -> None:
     assert normalize_channel("foo") == "unknown"
 
 
+def test_ops_test_channels_passthrough() -> None:
+    assert normalize_channel("iqd_test") == "iqd_test"
+    assert normalize_channel("kb_test") == "kb_test"
+
+
+def test_legacy_mis_bff_maps_unknown() -> None:
+    assert normalize_channel("mis_bff") == "unknown"
+
+
 def test_resolve_recovers_from_raw_channel_metadata() -> None:
     """历史双写：channel=unknown + metadata.raw_channel=h5 → 展示 web。"""
     assert (

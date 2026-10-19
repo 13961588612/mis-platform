@@ -195,6 +195,105 @@ function fmtMs(ms: number | null | undefined): string {
   return `${(ms / 1000).toFixed(2)}s`;
 }
 
+/** 从本条助手消息往前找最近一条 user，算墙钟耗时（A2UI 无 Redis 采样时的兜底）。 */
+function wallClockMsBefore(messages: SessionMessage[], assistantIndex: number): number | null {
+  const assistant = messages[assistantIndex];
+  if (!assistant || assistant.role !== 'assistant') return null;
+  const end = Date.parse(assistant.timestamp);
+  if (!Number.isFinite(end)) return null;
+  for (let i = assistantIndex - 1; i >= 0; i -= 1) {
+    const prev = messages[i];
+    if (prev.role !== 'user') continue;
+    const start = Date.parse(prev.timestamp);
+    if (!Number.isFinite(start) || end < start) return null;
+    return Math.round(end - start);
+  }
+  return null;
+}
+
+/** 问数 AskResponse.plan 单步（落在 assistant JSON 正文里）。 */
+interface IqdPlanStep {
+  seq?: number;
+  code?: string;
+  label: string;
+  status?: string;
+  duration_ms?: number | null;
+  detail?: string | null;
+}
+
+/** 从助手正文尝试解析问数 plan 步骤（失败返回 null）。 */
+function parseIqdPlanSteps(content: string): IqdPlanStep[] | null {
+  const raw = (content || '').trim();
+  if (!raw.startsWith('{')) return null;
+  try {
+    const parsed = JSON.parse(raw) as { plan?: unknown };
+    if (!Array.isArray(parsed.plan) || parsed.plan.length === 0) return null;
+    const steps: IqdPlanStep[] = [];
+    for (const item of parsed.plan) {
+      if (!item || typeof item !== 'object') continue;
+      const row = item as Record<string, unknown>;
+      const label =
+        typeof row.label === 'string' && row.label.trim()
+          ? row.label.trim()
+          : typeof row.code === 'string'
+            ? row.code
+            : '';
+      if (!label) continue;
+      const duration =
+        typeof row.duration_ms === 'number'
+          ? row.duration_ms
+          : row.duration_ms === null
+            ? null
+            : undefined;
+      steps.push({
+        seq: typeof row.seq === 'number' ? row.seq : undefined,
+        code: typeof row.code === 'string' ? row.code : undefined,
+        label,
+        status: typeof row.status === 'string' ? row.status : undefined,
+        duration_ms: duration,
+        detail: typeof row.detail === 'string' ? row.detail : null,
+      });
+    }
+    return steps.length > 0 ? steps : null;
+  } catch {
+    return null;
+  }
+}
+
+/** 问数业务步骤耗时条（与平台 5 阶段 TimingBlock 并存）。 */
+function IqdPlanTimingBlock({ steps }: { steps: IqdPlanStep[] }): ReactElement {
+  const total = steps.reduce(
+    (s, step) => s + (typeof step.duration_ms === 'number' ? step.duration_ms : 0),
+    0,
+  );
+  return (
+    <div className="mb-2 rounded-md border border-dashed bg-muted/30 px-2 py-1 text-[0.7rem]">
+      <div className="mb-1 flex flex-wrap items-center gap-1.5">
+        <span className="text-muted-foreground">问数步骤</span>
+        <span className="font-medium text-foreground">{fmtMs(total)}</span>
+      </div>
+      <div className="flex flex-wrap items-center gap-1.5">
+        {steps.map((step, idx) => (
+          <span
+            key={`${step.code ?? step.label}-${idx}`}
+            className="inline-flex items-center rounded bg-card px-1.5 py-0.5"
+            title={step.detail || step.status || step.label}
+          >
+            <span className="text-muted-foreground">
+              {step.seq != null ? `${step.seq}.` : ''}
+              {step.label}
+            </span>
+            <span className="ml-1 font-medium text-foreground">{fmtMs(step.duration_ms)}</span>
+            {step.status ? (
+              <span className="ml-1 text-[0.6rem] opacity-60">{step.status}</span>
+            ) : null}
+          </span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 /** 单阶段耗时单元格（2.1 内联）。可点击展开子阶段下钻。 */
 function InlineTimingCell({
   label,
@@ -425,7 +524,7 @@ export function AgentMessageStream({
 
   return (
     <div className={cn('flex flex-col gap-2', className)}>
-      {messages.map((msg) => {
+      {messages.map((msg, idx) => {
         const isAssistant = msg.role === 'assistant';
         const turnIndex = isAssistant ? (assistantTurn += 1) : undefined;
         const spec = ROLE_SPECS[msg.role] ?? FALLBACK_SPEC;
@@ -436,6 +535,11 @@ export function AgentMessageStream({
         // 2.1：assistant 消息按 message.id 在按轮 map 中查本轮耗时。
         const turn = msg.role === 'assistant' ? timingByMessageId?.[msg.id] : undefined;
         const turnMissing = msg.role === 'assistant' && !turn;
+        const iqdPlan =
+          msg.role === 'assistant' && msg.content ? parseIqdPlanSteps(msg.content) : null;
+        // Copilot A2UI 主路径（a2ui_run）不写 Redis 五阶段耗时；用上一轮用户→本条助手的墙钟差兜底。
+        const wallClockMs =
+          turnMissing && !iqdPlan ? wallClockMsBefore(messages, idx) : null;
 
         return (
           <div key={msg.id} className={cn('min-w-0 overflow-hidden rounded-lg border p-3', spec.bubble)}>
@@ -460,17 +564,36 @@ export function AgentMessageStream({
               ) : null}
             </div>
 
-            {turn ? (
-              <TimingBlock turn={turn} />
-            ) : null}
-            {turnMissing ? (
-              <div className="mb-2 text-[0.7rem] text-muted-foreground">本轮耗时：—</div>
+            {turn ? <TimingBlock turn={turn} /> : null}
+            {iqdPlan ? <IqdPlanTimingBlock steps={iqdPlan} /> : null}
+            {turnMissing && !iqdPlan ? (
+              <div className="mb-2 text-[0.7rem] text-muted-foreground">
+                {wallClockMs != null ? (
+                  <>
+                    本轮耗时约 {fmtMs(wallClockMs)}
+                    <span className="opacity-70">（墙钟：用户提问→本条回复；A2UI 路径无阶段采样）</span>
+                  </>
+                ) : (
+                  <>本轮平台耗时：—（A2UI/调试态未采样，且无法从消息时间推算）</>
+                )}
+              </div>
             ) : null}
 
             {msg.content ? (
               msg.role === 'assistant' ? (
                 <>
-                  <AssistantMarkdown content={msg.content} />
+                  {iqdPlan ? (
+                    <details className="mb-2">
+                      <summary className="cursor-pointer text-[0.7rem] text-muted-foreground hover:text-foreground">
+                        查看问数原始 JSON
+                      </summary>
+                      <pre className="mt-1 max-h-56 max-w-full overflow-auto whitespace-pre-wrap break-words rounded-md border bg-card p-2 font-mono text-[0.7rem] leading-relaxed">
+                        {msg.content}
+                      </pre>
+                    </details>
+                  ) : (
+                    <AssistantMarkdown content={msg.content} />
+                  )}
                   {/* CF-02：assistant 消息的 feedback 结构化徽标（无反馈时渲染 null） */}
                   <FeedbackBadge meta={msg.metadata} />
                 </>

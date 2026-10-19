@@ -49,7 +49,7 @@ import { AttachmentChips } from '@/components/chat/AttachmentChips';
 import { AttachmentList } from '@/components/chat/AttachmentList';
 import { AssistantAvatar, UserAvatar } from '@/components/chat/CopilotAvatars';
 import { MessageFeedbackBar } from '@/components/chat/MessageFeedbackBar';
-import { SurfaceRenderer } from '@/lib/a2ui/SurfaceRenderer';
+import { SurfaceRenderer, surfaceHasVisibleContent } from '@/lib/a2ui/SurfaceRenderer';
 import { useSurfaceStore } from '@/lib/a2ui/surface-store';
 import { A2uiProvider } from '@/components/a2ui/A2uiProvider';
 import { A2uiPermissionGate } from '@/components/a2ui/A2uiPermissionGate';
@@ -240,6 +240,9 @@ export function CopilotPanel({
   const [dragOver, setDragOver] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
+  const messagesScrollRef = useRef<HTMLDivElement | null>(null);
+  /** 用户贴在底部时才自动跟随；上翻阅读历史时不抢滚动。 */
+  const stickToBottomRef = useRef(true);
 
   // 放大模式：会话列表状态（仅放大时拉取，避免普通模式无谓请求）
   const [sessions, setSessions] = useState<Session[]>([]);
@@ -338,11 +341,17 @@ export function CopilotPanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // 新消息 / 流式更新 / 思考态 → 滚到底部
+  // 新消息 / 流式更新 / 思考态 → 仅在贴底时跟随；用 auto 避免「从顶 smooth 滑到底」
   const lastContentLen =
     chat.messages.length > 0 ? (chat.messages[chat.messages.length - 1]?.content?.length ?? 0) : 0;
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ block: 'end', behavior: 'smooth' });
+    if (!stickToBottomRef.current) return;
+    const root = messagesScrollRef.current;
+    if (root) {
+      root.scrollTop = root.scrollHeight;
+      return;
+    }
+    messagesEndRef.current?.scrollIntoView({ block: 'end', behavior: 'auto' });
   }, [chat.messages.length, lastContentLen, chat.isGenerating, orphanSurface]);
 
   const canSend =
@@ -353,6 +362,7 @@ export function CopilotPanel({
 
   const handleSend = (): void => {
     if (!canSend) return;
+    stickToBottomRef.current = true;
     const ready = composer.attachments.filter((a) => a.status === 'done');
     const text = input.trim();
     const sid = chat.sessionId;
@@ -535,7 +545,16 @@ export function CopilotPanel({
           ) : null}
 
           {/* 消息区：单层滚动，禁内层滚动（放大模式宽度自适应，不强制收窄） */}
-          <div className="min-h-0 flex-1 overflow-auto px-3 py-3">
+          <div
+            ref={messagesScrollRef}
+            className="min-h-0 flex-1 overflow-auto px-3 py-3"
+            onScroll={() => {
+              const el = messagesScrollRef.current;
+              if (!el) return;
+              const gap = el.scrollHeight - el.scrollTop - el.clientHeight;
+              stickToBottomRef.current = gap < 96;
+            }}
+          >
             {chat.historyState === 'loading' ? (
               // 历史加载骨架屏（P0-2.1）：含头像占位，避免「提问头像消失」的错觉
               <div className="space-y-3">
@@ -779,9 +798,20 @@ function ChatBubble({
     );
   }
 
-  const hasSurface = Boolean(message.surfaceId) || Boolean(message.a2ui);
+  // surfaceId 存在但过滤后无可视节点（如空 data-table）→ 不当作有效 UI，避免空白框
+  const surfaceVisible = surfaceHasVisibleContent(surface?.components);
+  const surfacePending =
+    Boolean(message.surfaceId) && surface == null && isStreaming;
+  const hasEffectiveSurface =
+    Boolean(message.a2ui) || surfaceVisible || surfacePending;
+  /** 布局用：仍按「挂了 surface」占满宽，即使暂时还在 pending。 */
+  const hasSurfaceSlot = Boolean(message.surfaceId) || Boolean(message.a2ui);
   const showThinkingPlaceholder =
-    !isUser && isStreaming && body.trim().length === 0 && !hasSurface && sources.length === 0;
+    !isUser &&
+    isStreaming &&
+    body.trim().length === 0 &&
+    !hasEffectiveSurface &&
+    sources.length === 0;
 
   const showBody = isUser
     ? Boolean(
@@ -789,13 +819,13 @@ function ChatBubble({
           rawContent !== '（附件）' &&
           !(message.attachments?.length && rawContent.startsWith('（用户发送了附件）')),
       )
-    : body.trim().length > 0 || showThinkingPlaceholder || hasSurface;
+    : body.trim().length > 0 || showThinkingPlaceholder || hasEffectiveSurface;
 
   const showEmptyDeliveredHint =
     !isUser &&
     !isStreaming &&
     body.trim().length === 0 &&
-    !hasSurface &&
+    !hasEffectiveSurface &&
     sources.length === 0 &&
     message.status === 'delivered';
 
@@ -804,7 +834,7 @@ function ChatBubble({
       className={cn(
         'rounded-2xl px-3.5 py-2.5 text-sm',
         // 含 A2UI/Surface 时占满行宽，避免 data-table 在 85% 气泡内被压扁
-        isUser || !hasSurface ? 'max-w-[85%]' : 'min-w-0 w-full max-w-full',
+        isUser || !hasSurfaceSlot ? 'max-w-[85%]' : 'min-w-0 w-full max-w-full',
         isUser
           ? 'bg-primary text-primary-foreground'
           : 'border bg-card text-foreground shadow-sm',
@@ -823,7 +853,9 @@ function ChatBubble({
             {body.trim().length > 0 ? (
               <MarkdownView content={body} className="prose prose-sm max-w-none dark:prose-invert" />
             ) : showEmptyDeliveredHint ? (
-              <p className="text-xs text-muted-foreground">未收到有效回复，可重试提问</p>
+              <p className="text-xs text-muted-foreground">
+                未收到有效回复（界面为空或无文字），可重试提问
+              </p>
             ) : showThinkingPlaceholder ? (
               <div className="flex items-center gap-1 text-muted-foreground">
                 <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -849,7 +881,7 @@ function ChatBubble({
           </div>
         ) : null}
 
-        {!isUser && message.surfaceId ? (
+        {!isUser && message.surfaceId && (surfaceVisible || surfacePending) ? (
           <div className={cn(body.trim().length > 0 || showThinkingPlaceholder ? 'mt-2' : undefined)}>
             <SurfaceRenderer surfaceId={message.surfaceId} />
           </div>

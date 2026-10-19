@@ -25,6 +25,7 @@ from pydantic import BaseModel, Field
 
 from src.agent.mis_iqd.scope_resolver import AskIdentity, ScopeResolver
 from src.api.deps import get_current_user, get_trace_id
+from src.identity.models import verified_mis_user_id, verified_role_header
 from src.api.response import error_response, success
 from src.utils.logging import get_logger
 
@@ -70,7 +71,16 @@ async def preview_row_scope(
         ``{code:0, data:{items, degraded:false, note, subject, connection_id}}``。
     """
     try:
-        identity = AskIdentity.from_headers(req.headers or {})
+        headers = dict(req.headers or {})
+        if not str(headers.get("X-Mis-Roles") or "").strip():
+            role_header = verified_role_header(current_user)
+            if role_header:
+                headers["X-Mis-Roles"] = role_header
+        identity = AskIdentity.from_headers(headers)
+        if identity.user_id is None:
+            mis_user_id = verified_mis_user_id(current_user)
+            if mis_user_id is not None:
+                identity.user_id = mis_user_id
         # 模拟角色：与 tools._build_identity 同一路径（覆写 role_codes，保留真实 user_id）
         if req.role_code and req.role_code.strip():
             identity = identity.with_simulated_role(req.role_code.strip())

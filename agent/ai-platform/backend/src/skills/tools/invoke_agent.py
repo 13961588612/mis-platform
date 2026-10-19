@@ -976,9 +976,12 @@ async def _run_child_agent(
     # 父身份缺失（None）时保留子会话既有值，不清空、不回退 user_id。
     if mis_user_id is not None:
         child_session.mis_user_id = mis_user_id
-    # 标记委托会话，便于排障
+    # 标记委托会话：runtime state → PG metadata（列表折叠 / 详情父链）
     child_session.state["delegated_from"] = "mis-copilot"
-    child_session.state["parent_hint"] = metadata.get("parent_session_id")
+    parent_sid = str(metadata.get("parent_session_id") or "").strip()
+    child_session.state["parent_hint"] = parent_sid or None
+    if parent_sid:
+        child_session.state["parent_session_id"] = parent_sid
     await session_manager.save_session(child_session)
 
     instance = await agent_manager.ensure_agent_ready(agent_id)

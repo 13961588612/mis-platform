@@ -1,0 +1,26 @@
+[
+  {
+    "id": 1792061563780,
+    "created_at": "2026-10-19T00:52:39.126741Z",
+    "latency_ms": 62287,
+    "error_code": "45205",
+    "error_message": null,
+    "summary": null,
+    "question": "宜兴地区有哪几家店",
+    "plan_steps": null,
+    "wren_status_trail": null,
+    "sql_text": null
+  },
+  {
+    "id": 1792061563779,
+    "created_at": "2026-10-19T00:51:34.971978Z",
+    "latency_ms": 61774,
+    "error_code": "45205",
+    "error_message": null,
+    "summary": null,
+    "question": "宜兴地区有哪几家店",
+    "plan_steps": null,
+    "wren_status_trail": null,
+    "sql_text": null
+  }
+]

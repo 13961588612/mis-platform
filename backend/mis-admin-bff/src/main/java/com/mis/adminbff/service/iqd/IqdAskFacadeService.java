@@ -22,6 +22,8 @@ import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Set;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * 问数 Ask 门面（BFF 转发 Worker 编排链 + view 裁定 + 双闸门）。
@@ -41,6 +43,11 @@ import java.util.Set;
 public class IqdAskFacadeService {
 
     private static final Logger log = LoggerFactory.getLogger(IqdAskFacadeService.class);
+
+    /** 问数领域错误码（45201–45208），用于从自然语言回复里回填 error_code。 */
+    private static final Pattern IQD_ERROR_CODE = Pattern.compile("4520[1-8]");
+
+    private static final int UNSTRUCTURED_TEXT_LIMIT = 2000;
 
     /**
      * Worker 端 mis-iqd Agent 的默认 agentId（可经 mis.iqd.agent-id 覆盖）。
@@ -225,10 +232,45 @@ public class IqdAskFacadeService {
             return parsed;
         } catch (Exception ex) {
             log.warn("Failed to parse iqd ask response, raw={}", raw, ex);
+            String stripped = stripJsonFences(raw);
+            // 模型按系统提示写了自然语言（例如 45204 无权限说明）。测试台要展示这段说明，
+            // 而不是 Jackson 的 Unrecognized token。
+            if (!stripped.startsWith("{") && !stripped.startsWith("[")) {
+                fillUnstructuredWorkerText(resp, stripped);
+                return resp;
+            }
             resp.setStatus("error");
             resp.setErrorCode("45299");
-            resp.setErrorMessage("Worker 响应解析失败: " + ex.getMessage());
+            resp.setErrorMessage("Worker 响应解析失败");
             return resp;
+        }
+    }
+
+    /**
+     * 把非 JSON 的 Worker 正文填成测试台可展示的失败帧。
+     *
+     * @param resp 已初始化空 scope/plan 的响应
+     * @param raw  去掉代码围栏后的正文
+     */
+    static void fillUnstructuredWorkerText(IqdAskResponse resp, String raw) {
+        String prose = raw == null ? "" : raw.strip();
+        if (prose.length() > UNSTRUCTURED_TEXT_LIMIT) {
+            prose = prose.substring(0, UNSTRUCTURED_TEXT_LIMIT) + "…";
+        }
+        String code = "45299";
+        if (!prose.isEmpty()) {
+            Matcher matcher = IQD_ERROR_CODE.matcher(prose);
+            if (matcher.find()) {
+                code = matcher.group();
+            }
+        }
+        resp.setStatus("failed");
+        resp.setErrorCode(code);
+        resp.setErrorMessage(prose.isEmpty() ? "Worker 返回了无法解析的响应" : prose);
+        resp.setAnswerSummary(prose);
+        if ("45204".equals(code)) {
+            resp.setScope(new IqdScopeResolutionPayload(
+                    "deny", Collections.emptyList(), Collections.emptyList(), prose, null));
         }
     }
 

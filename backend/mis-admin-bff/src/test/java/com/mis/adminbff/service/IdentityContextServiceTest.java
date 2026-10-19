@@ -63,6 +63,20 @@ class IdentityContextServiceTest {
     }
 
     @Test
+    @DisplayName("组织数据范围不可用时仍保留 IAM 角色头")
+    void orgScopeDownKeepsRoles() {
+        when(iamWebClient.getUser(1L)).thenReturn(userWithRoles(
+                new IamRoleVO("82", "1", "10", "TENANT_ADMIN", "a", 1, 1, 1, null, null)));
+        when(orgWebClient.getUserDataSetScope(1L)).thenThrow(new RuntimeException("org down"));
+
+        IdentityAskContext ctx = service.resolve(1L, null);
+
+        String roles = ctx.headers().get(IdentityContextService.HEADER_MIS_ROLES);
+        assertTrue(roles.contains("\"code\":\"TENANT_ADMIN\""));
+        assertFalse(ctx.headers().containsKey(IdentityContextService.HEADER_MIS_DATA_SCOPE));
+    }
+
+    @Test
     @DisplayName("用户不存在 → headers 无角色（合法空，交由问数 45204）")
     void missingUserHasEmptyRoles() {
         when(iamWebClient.getUser(7L)).thenReturn(null);

@@ -67,7 +67,13 @@ public class IdentityContextService {
             putJson(headers, HEADER_MIS_ORGS, buildOrgs(iamUser, tenantIdOverride));
             putJson(headers, HEADER_MIS_ROLES, buildRoles(iamUser));
         }
-        injectDataRowScope(headers, userId);
+        // 行级范围源失败时仍保留角色头。此前整段 resolve 抛错后被调用方吞掉，
+        // 问数身份变成「有 userId、无角色」，角色上的表授权全部对不上。
+        try {
+            injectDataRowScope(headers, userId);
+        } catch (BusinessException ex) {
+            log.warn("行级范围头未注入，角色头仍保留: userId={}, cause={}", userId, ex.toString());
+        }
         return new IdentityAskContext(userId, headers);
     }
 

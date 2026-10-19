@@ -35,7 +35,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Sequence
 
-from sqlalchemy import Select, case, delete, func, select, update
+from sqlalchemy import Select, and_, case, delete, func, not_, or_, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -65,7 +65,10 @@ logger = get_logger("agent.session_store")
 
 #: 允许出现在 wire 上的渠道值，与前端 ``SessionChannel`` 联合类型一一对应。
 #: 运行时内部渠道（``wecom_bot`` / ``wecom_h5`` / Gateway ``h5``）会被归一。
-WIRE_CHANNELS: frozenset[str] = frozenset({"web", "wecom", "api", "unknown"})
+#: ``iqd_test`` / ``kb_test``：BFF 直调问数 / 知识问答旁路（运营台可筛）。
+WIRE_CHANNELS: frozenset[str] = frozenset(
+    {"web", "wecom", "api", "iqd_test", "kb_test", "unknown"}
+)
 
 #: 运行时渠道 → 前端 wire 渠道 的归一映射。
 #: Gateway Redis 入站用 ``h5`` / ``wecom-h5`` / ``wecom-bot``（见 redis_stream.GATEWAY_CHANNEL_MAP）；
@@ -80,6 +83,10 @@ _CHANNEL_TO_WIRE: dict[str, str] = {
     "wecom-h5": "wecom",
     "api": "api",
     "openapi": "api",
+    "iqd_test": "iqd_test",
+    "kb_test": "kb_test",
+    # 历史 BFF 默认值：无 Agent 映射时仍落 unknown；有映射的写入侧已改用 iqd_test/kb_test
+    "mis_bff": "unknown",
 }
 
 #: wire 渠道 → 运行时渠道集合。列表页按 ``wecom`` 过滤时要同时命中
@@ -88,14 +95,16 @@ _WIRE_TO_STORED: dict[str, tuple[str, ...]] = {
     "web": ("web", "h5"),
     "wecom": ("wecom", "wecom_bot", "wecom_h5", "wecom-bot", "wecom-h5"),
     "api": ("api", "openapi"),
-    "unknown": ("unknown", ""),
+    "iqd_test": ("iqd_test",),
+    "kb_test": ("kb_test",),
+    "unknown": ("unknown", "", "mis_bff"),
 }
 
 
 def normalize_channel(channel: str | None) -> str:
     """把运行时渠道值归一为前端认识的 ``SessionChannel``。
 
-    前端 ``CHANNEL_LABELS`` 只认 ``web | wecom | api | unknown`` 四个值，
+    前端认 ``web | wecom | api | iqd_test | kb_test | unknown``；
     传 ``wecom_bot`` / ``h5`` 过去会渲染成空白或「未知」。归一放在写入侧做，
     读侧对历史 ``unknown`` + ``metadata.raw_channel`` 再兜底一次。
 
@@ -103,11 +112,37 @@ def normalize_channel(channel: str | None) -> str:
         channel: 运行时渠道值，可能为 ``None``。
 
     Returns:
-        四个合法 wire 渠道值之一。
+        合法 wire 渠道值之一。
     """
     if not channel:
         return "unknown"
     return _CHANNEL_TO_WIRE.get(channel.strip().lower(), "unknown")
+
+
+#: BFF 直调 Agent → 运营台可识别渠道
+_AGENT_OPS_CHANNEL: dict[str, str] = {
+    "mis-iqd": "iqd_test",
+    "mis-rag": "kb_test",
+}
+
+
+def resolve_mis_ops_channel(agent_id: str, current: str | None) -> str:
+    """解析 MIS 能力口会话渠道（问数/问答旁路有独立 wire 值）。
+
+    Args:
+        agent_id: 目标 Agent。
+        current: 身份上下文里的 channel（常为 ``mis_bff``）。
+
+    Returns:
+        ``iqd_test`` / ``kb_test`` / 保留的原渠道 / ``api``。
+    """
+    mapped = _AGENT_OPS_CHANNEL.get((agent_id or "").strip())
+    if mapped:
+        return mapped
+    cur = (current or "").strip()
+    if cur and cur not in ("mis_bff", "unknown"):
+        return cur
+    return "api"
 
 
 def resolve_wire_channel(
@@ -137,6 +172,16 @@ def resolve_wire_channel(
                 return recovered
     return "unknown"
 
+def _parent_session_id_from_meta(meta: dict[str, Any] | None) -> str | None:
+    """从会话 metadata 抽出父会话 id（委派子会话）。"""
+    if not isinstance(meta, dict):
+        return None
+    raw = meta.get("parent_session_id")
+    if isinstance(raw, str) and raw.strip():
+        return raw.strip()
+    return None
+
+
 def session_row_to_wire(row: "AgentSessionModel") -> dict[str, Any]:
     """``AgentSessionModel`` → 前端 Session dict，并修复历史渠道 ``unknown``。
 
@@ -149,6 +194,9 @@ def session_row_to_wire(row: "AgentSessionModel") -> dict[str, Any]:
     wire = row.to_wire()
     meta = row.metadata_ if isinstance(getattr(row, "metadata_", None), dict) else {}
     wire["channel"] = resolve_wire_channel(getattr(row, "channel", None), meta)
+    wire["parent_session_id"] = _parent_session_id_from_meta(meta)
+    # 列表项默认空；详情接口会从 Redis 补齐 worker_sessions。
+    wire.setdefault("worker_sessions", [])
     return wire
 
 
@@ -211,6 +259,8 @@ class SessionListQuery:
     include_deleted: bool = False
     """默认隐藏无消息空会话（历史 ensure 落库的「未命名」噪音）。"""
     min_message_count: int = 1
+    """为 true 时包含 Worker 子会话与 mis_bff 旁路孤儿；默认隐藏。"""
+    include_worker_sessions: bool = False
 
     def offset(self) -> int:
         """返回 SQL OFFSET 值。"""
@@ -1072,10 +1122,11 @@ class SessionPgStore:
                 query.channel, (query.channel,)
             )
             conditions.append(AgentSessionModel.channel.in_(list(stored)))
+        # 运营台日期筛选按「更新时间」：今天聊过、更早创建的会话也要进列表。
         if query.time_from is not None:
-            conditions.append(AgentSessionModel.created_at >= _as_aware(query.time_from))
+            conditions.append(AgentSessionModel.updated_at >= _as_aware(query.time_from))
         if query.time_to is not None:
-            conditions.append(AgentSessionModel.created_at <= _as_aware(query.time_to))
+            conditions.append(AgentSessionModel.updated_at <= _as_aware(query.time_to))
         if query.keyword:
             pattern: str = f"%{query.keyword.strip()}%"
             conditions.append(
@@ -1087,6 +1138,19 @@ class SessionPgStore:
             conditions.append(
                 AgentSessionModel.message_count >= query.min_message_count
             )
+        if not query.include_worker_sessions:
+            # 正规委派子会话（metadata 已落 parent / delegated_from）
+            meta = AgentSessionModel.metadata_
+            is_child = or_(
+                meta.has_key("parent_session_id"),  # noqa: W601 — JSONB API
+                meta.has_key("delegated_from"),  # noqa: W601
+            )
+            # BFF 旁路孤儿：渠道归一后为 unknown，且非 Copilot 主会话
+            is_orphan = and_(
+                AgentSessionModel.channel == "unknown",
+                AgentSessionModel.agent_id != "mis-copilot",
+            )
+            conditions.append(not_(or_(is_child, is_orphan)))
         return conditions
 
     def _build_feedback_conditions(self, query: FeedbackQuery) -> list[Any]:
@@ -1281,6 +1345,15 @@ class SessionPgStore:
         if raw_channel and normalize_channel(raw_channel) != raw_channel:
             # 归一后丢失了原始渠道信息，留一份在 metadata 里方便排障。
             metadata["raw_channel"] = raw_channel
+        # 委派子会话：从 runtime state 投影到 PG，供列表默认折叠与详情父链。
+        state: dict[str, Any] = getattr(session, "state", None) or {}
+        if isinstance(state, dict):
+            parent_raw = state.get("parent_session_id") or state.get("parent_hint")
+            if isinstance(parent_raw, str) and parent_raw.strip():
+                metadata["parent_session_id"] = parent_raw.strip()
+            delegated = state.get("delegated_from")
+            if isinstance(delegated, str) and delegated.strip():
+                metadata["delegated_from"] = delegated.strip()
         return metadata
 
 

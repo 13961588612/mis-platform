@@ -1,0 +1,52 @@
+[
+  {
+    "id": 1792061563783,
+    "created_at": "2026-10-19T01:22:14.326239Z",
+    "latency_ms": 54,
+    "error_code": "45204",
+    "question": "溧阳地区有哪几家店",
+    "status": "failed",
+    "sql_text": null,
+    "summary": null
+  },
+  {
+    "id": 1792061563782,
+    "created_at": "2026-10-19T01:21:32.707685Z",
+    "latency_ms": 6,
+    "error_code": "45204",
+    "question": "宜兴地区有哪几家店",
+    "status": "failed",
+    "sql_text": null,
+    "summary": null
+  },
+  {
+    "id": 1792061563781,
+    "created_at": "2026-10-19T01:21:28.721944Z",
+    "latency_ms": 56,
+    "error_code": "45204",
+    "question": "宜兴地区有哪几家店",
+    "status": "failed",
+    "sql_text": null,
+    "summary": null
+  },
+  {
+    "id": 1792061563780,
+    "created_at": "2026-10-19T00:52:39.126741Z",
+    "latency_ms": 62287,
+    "error_code": "45205",
+    "question": "宜兴地区有哪几家店",
+    "status": "failed",
+    "sql_text": null,
+    "summary": null
+  },
+  {
+    "id": 1792061563779,
+    "created_at": "2026-10-19T00:51:34.971978Z",
+    "latency_ms": 61774,
+    "error_code": "45205",
+    "question": "宜兴地区有哪几家店",
+    "status": "failed",
+    "sql_text": null,
+    "summary": null
+  }
+]

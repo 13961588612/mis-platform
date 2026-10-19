@@ -1,0 +1,81 @@
+{
+  "id": 1792061563793,
+  "q": "大统华溧阳城东店 4月销售情况",
+  "err": "未能生成有效查询: wren MCP 工具失败: dry_run -> unhandled errors in a TaskGroup (1 sub-exception)",
+  "sql": "SELECT store_name, stats_period, mid_category_name, brand_name, mbr_cnt, brand_csmpt_cnt, brand_csmpt_cnt_yoy, mbr_avg_price, mbr_avg_price_yoy, ord_sale_margin_rate, sales_per_square_meter, store_sale_rate FROM ads_csmr_store_brand_whole_sale_df WHERE store_name = '大统华溧阳城东店' AND (stats_period = '2026-04' OR stats_period = '202604' OR stats_period LIKE '2026-04%') ORDER BY brand_csmpt_cnt DESC",
+  "steps": [
+    {
+      "seq": 1,
+      "sql": null,
+      "code": "scope_check",
+      "label": "校验可问数据范围",
+      "detail": "命中 61 张授权表",
+      "status": "done",
+      "duration_ms": 0
+    },
+    {
+      "seq": 2,
+      "sql": null,
+      "code": "understanding",
+      "label": "理解你的问题",
+      "detail": null,
+      "status": "done",
+      "duration_ms": 0
+    },
+    {
+      "seq": 3,
+      "sql": null,
+      "code": "searching",
+      "label": "检索相关语义模型",
+      "detail": "语义上下文不可得，已降级：wren MCP 工具失败: get_context -> unhandled errors in a TaskGroup (1 sub-exception)",
+      "status": "skipped",
+      "duration_ms": 5014
+    },
+    {
+      "seq": 4,
+      "sql": "SELECT store_name, stats_period, mid_category_name, brand_name, mbr_cnt, brand_csmpt_cnt, brand_csmpt_cnt_yoy, mbr_avg_price, mbr_avg_price_yoy, ord_sale_margin_rate, sales_per_square_meter, store_sale_rate FROM ads_csmr_store_brand_whole_sale_df WHERE store_name = '大统华溧阳城东店' AND (stats_period = '2026-04' OR stats_period = '202604' OR stats_period LIKE '2026-04%') ORDER BY brand_csmpt_cnt DESC",
+      "code": "generating",
+      "label": "生成查询",
+      "detail": "SQL 已生成",
+      "status": "done",
+      "duration_ms": 49998
+    },
+    {
+      "seq": 5,
+      "sql": null,
+      "code": "lineage_check",
+      "label": "复核查询涉及的数据范围",
+      "detail": "涉及 1 张表，全部在授权范围内",
+      "status": "done",
+      "duration_ms": 3
+    },
+    {
+      "seq": 6,
+      "sql": null,
+      "code": "executing",
+      "label": "执行并汇总结果",
+      "detail": "SQL 预检失败",
+      "status": "failed",
+      "duration_ms": 5017
+    },
+    {
+      "seq": 7,
+      "sql": null,
+      "code": "masking",
+      "label": "敏感字段处理",
+      "detail": null,
+      "status": "running",
+      "duration_ms": 0
+    },
+    {
+      "seq": 8,
+      "sql": null,
+      "code": "finished",
+      "label": "完成",
+      "detail": null,
+      "status": "done",
+      "duration_ms": 0
+    }
+  ],
+  "citations": "[]"
+}

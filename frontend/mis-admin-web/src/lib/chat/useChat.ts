@@ -93,12 +93,23 @@ function normalizeChatRole(raw: unknown): ChatMessage['role'] {
   return 'assistant';
 }
 
+/**
+ * 是否已有正文或旧协议卡片。
+ * 不含仅挂 surfaceId：空 data-table 也会挂 surface，若据此跳过历史回填，
+ * Copilot 会空白而会话管理详情仍能看到落库正文。
+ */
+function hasAssistantTextPayload(msg: ChatMessage | undefined): boolean {
+  if (!msg) return false;
+  if (msg.content.trim().length > 0) return true;
+  if (msg.a2ui) return true;
+  return false;
+}
+
 /** 助手气泡是否已有可展示内容（正文 / surface / 旧协议卡片）。 */
 function hasVisibleAssistantPayload(msg: ChatMessage | undefined): boolean {
   if (!msg) return false;
-  if (msg.content.trim().length > 0) return true;
+  if (hasAssistantTextPayload(msg)) return true;
   if (msg.surfaceId) return true;
-  if (msg.a2ui) return true;
   return false;
 }
 
@@ -175,7 +186,9 @@ export function useChat(options?: UseChatOptions): UseChatReturn {
   const tokenRef = useRef<string | null>(token);
   const handleEventRef = useRef<(event: ChatStreamEvent) => void>(() => undefined);
   /** loadHistory 晚于 handleEvent 定义；经 ref 供 done/超时回填。 */
-  const loadHistoryRef = useRef<() => Promise<void>>(async () => undefined);
+  const loadHistoryRef = useRef<(opts?: { silent?: boolean }) => Promise<void>>(
+    async () => undefined,
+  );
   sessionIdRef.current = sessionId;
   tokenRef.current = token;
 
@@ -279,6 +292,10 @@ export function useChat(options?: UseChatOptions): UseChatReturn {
           store.setGenerating(false);
           store.setError(null);
           sendLockRef.current = false;
+          // 仅有 surface、无正文：静默回拉，避免 loading 骨架把列表顶掉再 smooth 滚到底
+          if (!hasAssistantTextPayload(streamingMsg)) {
+            await loadHistoryRef.current({ silent: true });
+          }
           return;
         }
 
@@ -286,7 +303,7 @@ export function useChat(options?: UseChatOptions): UseChatReturn {
         streamingMessageIdRef.current = null;
         store.setGenerating(false);
         sendLockRef.current = false;
-        await loadHistoryRef.current();
+        await loadHistoryRef.current({ silent: true });
         const after = useChatStore.getState();
         const lastAssistant = [...after.messages]
           .reverse()
@@ -414,8 +431,12 @@ export function useChat(options?: UseChatOptions): UseChatReturn {
           armGenerateTimeout();
           break;
         }
+        // 无正文时回拉：含「只有 surfaceId」——空表过滤后 Copilot 空白，落库正文在会话详情可见。
         const needHistoryReconcile = Boolean(
-          streamingId && streamingMsg && !visible && event.messageId,
+          streamingId &&
+            streamingMsg &&
+            event.messageId &&
+            !hasAssistantTextPayload(streamingMsg),
         );
         clearGenerateTimeout();
         finalizeStreamingAssistant(streamingId, streamingMsg, {
@@ -431,7 +452,7 @@ export function useChat(options?: UseChatOptions): UseChatReturn {
           lastSentTextRef.current = { ...lastSentTextRef.current, at: Date.now() };
         }
         if (needHistoryReconcile) {
-          void loadHistoryRef.current();
+          void loadHistoryRef.current({ silent: true });
         }
         break;
       }
@@ -656,15 +677,19 @@ export function useChat(options?: UseChatOptions): UseChatReturn {
    * P0-2 拉取历史并渲染（复用 #29 `GET /api/v1/agent-ops/sessions/{id}/messages`）。
    *
    * <p>三态：loading → loaded（setMessages 渲染） / error（404 / 失败降级空会话不阻塞）。
+   * {@code silent: true} 时不切 loading 骨架（答完回填用），避免消息区被顶掉后再滚到底。
    * await 返回后校验发起时的 sid 仍为当前会话，否则丢弃结果（防新建/切换串会话）。
    */
-  const loadHistory = useCallback(async (): Promise<void> => {
+  const loadHistory = useCallback(async (opts?: { silent?: boolean }): Promise<void> => {
+    const silent = opts?.silent === true;
     const requestedSid = sessionIdRef.current ?? useChatStore.getState().sessionId;
     if (!requestedSid) return;
     const store = useChatStore.getState();
     // 用世代号打断旧请求：切换会话时不得被「loading 中」挡住新拉取
     const reqGen = (historyLoadGenRef.current += 1);
-    store.setHistoryState('loading');
+    if (!silent) {
+      store.setHistoryState('loading');
+    }
     const isStale = (): boolean =>
       reqGen !== historyLoadGenRef.current ||
       (sessionIdRef.current ?? useChatStore.getState().sessionId) !== requestedSid;
@@ -699,13 +724,40 @@ export function useChat(options?: UseChatOptions): UseChatReturn {
       }
       const history = rawList.map(mapSessionMessage);
       if (isStale()) return;
+      const latest = useChatStore.getState();
       // 生成中勿回填：否则会冲掉进行中的空助手气泡并表现为「忽然结束」。
-      if (useChatStore.getState().isGenerating || streamingMessageIdRef.current) {
-        store.setHistoryState('loaded');
+      if (latest.isGenerating || streamingMessageIdRef.current) {
+        latest.setHistoryState('loaded');
         return;
       }
-      store.setMessages(history);
-      store.setHistoryState('loaded');
+      // 静默回填：优先给「空正文」助手气泡补字，避免整表替换导致滚动条从顶滑到底
+      if (silent && latest.messages.length > 0) {
+        let patched = false;
+        for (const remote of history) {
+          if (remote.role !== 'assistant' || !remote.content.trim()) continue;
+          const local = latest.messages.find(
+            (m) =>
+              m.role === 'assistant' &&
+              (m.backendMessageId === remote.id || m.id === remote.id) &&
+              !(m.content?.trim()),
+          );
+          if (local) {
+            latest.updateMessage(local.id, {
+              content: remote.content,
+              backendMessageId: remote.backendMessageId ?? remote.id,
+              backendSessionId: remote.backendSessionId ?? remote.sessionId,
+              feedback: remote.feedback ?? local.feedback,
+            });
+            patched = true;
+          }
+        }
+        if (patched) {
+          latest.setHistoryState('loaded');
+          return;
+        }
+      }
+      latest.setMessages(history);
+      latest.setHistoryState('loaded');
     } catch {
       if (isStale()) return;
       store.setHistoryState('error');

@@ -67,6 +67,7 @@
 - 文档中心：`docs/README.md`
 - 多窗口 Agent 团队：`docs/agents/README.md`
 - AI 融合 / 调度基座：`docs/ai-fusion/coordinator-worker/`
+- 百购分析智能体：`docs/ai-fusion/bgbh-analyst/`
 - 智能体运营控制台：`docs/ai-fusion/agent-ops-console/`
 - 代码阅读：`docs/CODE-READING-GUIDE.md`
 - 本地开发：`docs/devops/local-dev.md`

@@ -1,0 +1,12 @@
+skills:
+  enabled:
+  - bgbh-router
+  - bgbh-s1-daily-report
+  - bgbh-s2-member
+  - bgbh-s3-brand-newcust
+  - bgbh-s4-brand-link
+  - bgbh-s5-member-drain
+  - bgbh-s6-flow-parking
+  - bgbh-s7-private-domain
+  custom_skills_dir: skills/custom-skills/
+  overrides_dir: skills/skill-overrides/

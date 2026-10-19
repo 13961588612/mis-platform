@@ -629,6 +629,11 @@ function AddPermissionWizard({
     };
   }, [open, target]);
 
+  // 用稳定签名驱动回填，避免 edit 对象引用抖动；编辑时随 selectedFieldKeys 更新（如 catalog 稍后到达）
+  const editFieldSig = edit
+    ? `${edit.objectKey}|${[...edit.selectedFieldKeys].sort().join(',')}`
+    : '';
+
   useEffect(() => {
     if (!open) return;
     if (edit) {
@@ -644,7 +649,8 @@ function AddPermissionWizard({
     setSelectedKeys(new Set());
     setFieldSelection({});
     setRowScopeDraft({});
-  }, [open, edit]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- 用 editFieldSig 表达勾选内容变化
+  }, [open, editFieldSig]);
 
   const objects = useMemo<ObjectDef[]>(() => {
     const build = (it: IqdCatalogItem, kind: ObjectKind): ObjectDef => ({
@@ -787,7 +793,9 @@ function AddPermissionWizard({
                   ? '第二步：选择权限对象（可多选；表 / 模型 / Cube）'
                   : target === 'acl'
                     ? '第三步：配置每个对象的行级范围 row_scope（留空=全行可见）'
-                    : '列出该表/模型的全部字段；勾选表示可访问（默认全部选中）'}
+                    : edit
+                      ? '列出该表/模型的全部字段；已有权限的字段已自动勾选，可继续调整后保存'
+                      : '列出该表/模型的全部字段；勾选表示可访问（新建时默认全部选中）'}
             </DialogDescription>
           </DialogHeader>
 
@@ -1154,14 +1162,17 @@ export function IqdScopePage() {
   const policyRows = useMemo<DisplayRow[]>(() => {
     // 含 global（清单「纳入问数」同步）与角色/用户主体模板；用「主体类型」过滤可只看 global。
     const tops = rawPolicies.filter((p) => !fieldKeySet.has(p.item_key));
+    // 按「对象字段列表包含该 item_key」归属，避免 table/model 共用列时 fieldToObject 互相覆盖导致 rawFieldKeys 为空。
     const fieldsByObject = new Map<string, string[]>();
     for (const p of rawPolicies) {
-      const owner = fieldToObject.get(p.item_key);
-      if (!owner) continue;
-      const bucket = `${p.subject_type}:${p.subject_id}:${owner}`;
-      const list = fieldsByObject.get(bucket) ?? [];
-      list.push(p.item_key);
-      fieldsByObject.set(bucket, list);
+      if (!fieldKeySet.has(p.item_key)) continue;
+      for (const obj of objectFields.values()) {
+        if (!obj.fields.some((f) => f.itemKey === p.item_key)) continue;
+        const bucket = `${p.subject_type}:${p.subject_id}:${obj.itemKey}`;
+        const list = fieldsByObject.get(bucket) ?? [];
+        if (!list.includes(p.item_key)) list.push(p.item_key);
+        fieldsByObject.set(bucket, list);
+      }
     }
     return tops.map<DisplayRow>((p, i) => {
       const kind = objectKindOf(p.item_key);
@@ -1183,7 +1194,7 @@ export function IqdScopePage() {
         rawFieldKeys: selected ?? [],
       };
     });
-  }, [rawPolicies, fieldKeySet, fieldToObject, objectFields, subjectName]);
+  }, [rawPolicies, fieldKeySet, objectFields, subjectName]);
 
   const aclRows = useMemo<DisplayRow[]>(() => {
     // 方案 A：行级范围只看对象级行（field_key 为空），不再处理字段级子行。
@@ -1309,7 +1320,13 @@ export function IqdScopePage() {
 
   const editPolicyContext: EditContext | null = useMemo(() => {
     if (!editPolicy) return null;
-    const selected = new Set(editPolicy.rawFieldKeys);
+    const obj = objectFields.get(editPolicy.objectKey);
+    const allKeys = (obj?.fields ?? []).map((f) => f.itemKey);
+    // 仅对象级策略（无字段子行）→ 视为全部可访问，打开弹窗时全勾
+    const selected =
+      editPolicy.fieldCount == null
+        ? new Set(allKeys)
+        : new Set(editPolicy.rawFieldKeys.filter((k) => allKeys.length === 0 || allKeys.includes(k)));
     return {
       subject: { kind: editPolicy.subjectType as SubjectKind, id: editPolicy.subjectId, name: editPolicy.subjectName },
       objectKey: editPolicy.objectKey,
@@ -1317,7 +1334,7 @@ export function IqdScopePage() {
       objectKind: editPolicy.objectKind,
       selectedFieldKeys: selected,
     };
-  }, [editPolicy]);
+  }, [editPolicy, objectFields]);
 
   const editAclContext: EditContext | null = useMemo(() => {
     if (!editAcl) return null;

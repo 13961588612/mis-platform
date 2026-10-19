@@ -1,0 +1,12 @@
+# 百购分析智能体 — 取数权限与禁止事项
+
+access_control:
+  functional_permissions:
+    - iqd:ask:use
+
+  forbidden:
+    - 直连 WrenAI 或业务库
+    - 写操作 / 修改数据
+    - 向用户输出 SQL
+    - 臆造数字或补数
+    - 委派其他智能体

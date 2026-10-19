@@ -322,23 +322,28 @@ async def list_sessions(
         default=None, description="关键字，匹配标题 / session_id / user_id"
     ),
     time_from: str | None = Query(
-        default=None, alias="from", description="创建时间下界（ISO 8601）"
+        default=None, alias="from", description="更新时间下界（ISO 8601）"
     ),
     time_to: str | None = Query(
-        default=None, alias="to", description="创建时间上界（ISO 8601）"
+        default=None, alias="to", description="更新时间上界（ISO 8601）"
     ),
     include_empty: bool = Query(
         default=False,
         description="为 true 时包含 message_count=0 的空会话；默认隐藏",
     ),
+    include_worker_sessions: bool = Query(
+        default=False,
+        description="为 true 时包含 Worker 子会话与 mis_bff 旁路孤儿；默认隐藏",
+    ),
     session_manager: SessionManager = Depends(get_session_manager_dep),
     _user: dict[str, Any] = Depends(get_current_user),
 ) -> dict[str, Any]:
-    """#27 会话列表：分页 + 按 Agent / 渠道 / 用户 / 关键字 / 时间范围过滤。
+    """#27 会话列表：分页 + 按 Agent / 渠道 / 用户 / 关键字 / 更新时间过滤。
 
     数据来自 PostgreSQL ``agent_session``（Redis 无分页与范围查询能力）。
     查询参数名与前端 ``SessionQuery`` 完全一致，其中 ``from`` 是 Python 关键字，
-    故用 ``alias`` 映射到 ``time_from``。默认不返回无消息空会话。
+    故用 ``alias`` 映射到 ``time_from``。``from``/``to`` 按 ``updated_at`` 过滤。
+    默认不返回无消息空会话，也不返回 Worker/旁路子会话。
 
     Returns:
         ``AgentPage<Session>`` 形状：``{items, total, page, page_size}``。
@@ -372,6 +377,7 @@ async def list_sessions(
         time_from=parsed_from,
         time_to=parsed_to,
         min_message_count=0 if include_empty else 1,
+        include_worker_sessions=bool(include_worker_sessions),
     )
 
     try:

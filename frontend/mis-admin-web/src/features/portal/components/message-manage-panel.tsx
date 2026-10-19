@@ -184,13 +184,15 @@ export function MessageManagePanel({ onClose }: { onClose: () => void }) {
     setPostFilter('');
   }
 
-  async function recognizePhones(raw: string) {
+  async function recognizePhones(
+    raw: string,
+  ): Promise<{ matched: { userId: string; name: string; phone: string }[]; missing: string[] }> {
     const phones = splitPhones(raw);
     if (phones.length === 0) {
       setMatchedPhones([]);
       setMissingPhones([]);
       setCount(null);
-      return [];
+      return { matched: [], missing: [] };
     }
     const result = await resolvePhones(phones);
     const matched = result.matched.map((row) => ({

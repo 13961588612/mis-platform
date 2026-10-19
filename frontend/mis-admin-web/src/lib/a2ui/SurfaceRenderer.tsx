@@ -66,6 +66,17 @@ function filterSurfaceNodes(nodes: A2uiComponentNode[]): A2uiComponentNode[] {
   return out;
 }
 
+/**
+ * Surface 过滤后是否还有可展示节点。
+ * 有 surfaceId 但只剩空 data-table 时为 false —— Copilot 应用「未收到有效回复」而非空白框。
+ */
+export function surfaceHasVisibleContent(
+  components: A2uiComponentNode[] | null | undefined,
+): boolean {
+  if (!components || components.length === 0) return false;
+  return filterSurfaceNodes(components).length > 0;
+}
+
 /** 渲染单个 A2UI Surface。 */
 export function SurfaceRenderer({ surfaceId, empty, className }: SurfaceRendererProps) {
   const { activeSurfaceId } = useA2ui();

@@ -385,7 +385,7 @@ class ScopeResolver:
     async def resolve_effective(
         self,
         identity: AskIdentity,
-        connection_id: int | None = None,
+        connection_id: int | str | None = None,
         *,
         scope_hint: list[str] | None = None,
     ) -> IqdScopeResolution:
@@ -406,7 +406,7 @@ class ScopeResolver:
 
         Args:
             identity: 问数身份（可能处于模拟状态）。
-            connection_id: 指定连接；缺省取 enabled 连接。
+            connection_id: 数字连接 id，或项目配置里的项目名；缺省取已启用连接。
             scope_hint: 后台测试页限定表集合（与允许集求交）。
 
         Returns:
@@ -454,7 +454,7 @@ class ScopeResolver:
     async def resolve(
         self,
         identity: AskIdentity,
-        connection_id: int | None = None,
+        connection_id: int | str | None = None,
         *,
         scope_hint: list[str] | None = None,
     ) -> IqdScopeResolution:
@@ -464,7 +464,7 @@ class ScopeResolver:
 
         Args:
             identity: 问数身份。
-            connection_id: 指定连接；缺省取 enabled 连接。
+            connection_id: 数字连接 id，或项目配置里的项目名；缺省取已启用连接。
             scope_hint: 后台测试页限定表集合（与允许集求交）。
 
         Returns:
@@ -1346,7 +1346,7 @@ class ScopeResolver:
     # ================================================================ 配置加载
 
     async def _load_allowed_and_row_scope(
-        self, identity: AskIdentity, connection_id: int | None
+        self, identity: AskIdentity, connection_id: int | str | None
     ) -> tuple[list[str], dict[str, list[dict[str, Any]]]]:
         """从配置缓存读取允许键集合与行级规则。
 
@@ -1453,15 +1453,36 @@ class ScopeResolver:
         return allowed, row_scope_rules, cid
 
     @staticmethod
-    def _pick_connection(configs: list[dict[str, Any]], connection_id: int | None) -> dict[str, Any]:
-        """取连接：优先指定 id → 第一条 enabled=1 → 任意第一条（对齐 Java findPrimaryConnection）。"""
-        if connection_id is not None:
+    def _pick_connection(
+        configs: list[dict[str, Any]], connection_id: int | str | None
+    ) -> dict[str, Any]:
+        """取连接：数字 id 精确匹配；非数字按项目名精确匹配；缺省取第一条 enabled。
+
+        项目名匹配不到或同名不止一条时抛 :class:`WrenaiNotConfiguredError`，
+        不回退到其他项目。数字 id 未命中时保持原行为：回退到第一条 enabled
+        （对齐 Java ``findPrimaryConnection``）。纯数字字符串按 id 处理。
+        """
+        selector = _connection_selector(connection_id)
+        if isinstance(selector, int):
             for conn in configs:
                 try:
-                    if int(conn.get("id")) == int(connection_id):
+                    if int(conn.get("id")) == selector:
                         return conn
                 except (TypeError, ValueError):
                     continue
+        elif isinstance(selector, str):
+            matches = [
+                conn
+                for conn in configs
+                if str(conn.get("name") or "").strip() == selector
+            ]
+            if len(matches) == 1:
+                return matches[0]
+            if not matches:
+                raise WrenaiNotConfiguredError(f"未找到名为 {selector} 的已启用问数项目")
+            raise WrenaiNotConfiguredError(
+                f"问数项目名 {selector} 对应多条已启用连接，请改用数字 id"
+            )
         for conn in configs:
             if _as_bool(conn.get("enabled")):
                 return conn
@@ -1561,6 +1582,24 @@ def _is_effective(raw: dict[str, Any]) -> bool:
     if isinstance(eff, bool):
         return eff
     return eff not in (0, "0", False)
+
+
+def _connection_selector(value: Any) -> int | str | None:
+    """把调用方传入的连接选择规约为数字 id 或项目名。
+
+    ``None``、空串视为未指定。``bool`` 不是合法 id。纯数字（含数字字符串）
+    按连接 id；其余非空字符串按项目名（去掉首尾空白）。
+    """
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    text = str(value).strip()
+    if not text:
+        return None
+    if text.isdigit():
+        return int(text)
+    return text
 
 
 def _as_bool(value: Any) -> bool:

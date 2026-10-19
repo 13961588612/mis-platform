@@ -48,6 +48,10 @@ CHANNEL_PREFIXES: dict[str, str] = {
     "web": "web-",
     "wecom_h5": "wecom-h5-",
     "wecom_bot": "wecom-bot-",
+    "iqd_test": "iqd-",
+    "kb_test": "kb-",
+    "api": "api-",
+    "mis_bff": "mis_bff-",
 }
 
 
@@ -752,13 +756,16 @@ class SessionManager:
                 error=str(exc),
             )
         if record is not None:
+            await self._enrich_session_links(record)
             return record
 
         try:
             session: Session = await self.get_session(session_id)
         except SessionNotFoundError:
             return None
-        return self._session_to_wire(session)
+        wire = self._session_to_wire(session)
+        await self._enrich_session_links(wire, runtime=session)
+        return wire
 
     async def list_session_messages(
         self,
@@ -941,6 +948,45 @@ class SessionManager:
             feedback_ids, status, handler_id, handler_name, note
         )
 
+    async def _enrich_session_links(
+        self,
+        record: dict[str, Any],
+        *,
+        runtime: Session | None = None,
+    ) -> None:
+        """补齐父会话 / Worker 子会话链接（详情抽屉串联用）。
+
+        Args:
+            record: 待原地补齐的 wire dict。
+            runtime: 可选已加载的 Redis 会话，避免重复读。
+        """
+        if not record.get("parent_session_id") and runtime is not None:
+            state = getattr(runtime, "state", None) or {}
+            if isinstance(state, dict):
+                parent_raw = state.get("parent_session_id") or state.get("parent_hint")
+                if isinstance(parent_raw, str) and parent_raw.strip():
+                    record["parent_session_id"] = parent_raw.strip()
+        record.setdefault("parent_session_id", None)
+        record.setdefault("worker_sessions", [])
+        sid = str(record.get("session_id") or "").strip()
+        if not sid:
+            return
+        try:
+            from src.coordinator.sessions import get_worker_session_registry
+
+            workers = await get_worker_session_registry().list_active(sid)
+            record["worker_sessions"] = [
+                {"worker_id": wid, "session_id": child_id}
+                for wid, child_id in workers.items()
+                if child_id
+            ]
+        except Exception as exc:  # noqa: BLE001 - 链接补齐失败不影响详情主体
+            logger.debug(
+                "Enrich worker_sessions skipped",
+                session_id=sid,
+                error=str(exc),
+            )
+
     @staticmethod
     def _session_to_wire(session: Session) -> dict[str, Any]:
         """把 Redis 里的运行时会话拼成前端 ``Session`` 契约（兜底路径用）。
@@ -961,6 +1007,13 @@ class SessionManager:
                 title = flattened[:60] + ("…" if len(flattened) > 60 else "")
                 break
 
+        state = getattr(session, "state", None) or {}
+        parent_sid: str | None = None
+        if isinstance(state, dict):
+            parent_raw = state.get("parent_session_id") or state.get("parent_hint")
+            if isinstance(parent_raw, str) and parent_raw.strip():
+                parent_sid = parent_raw.strip()
+
         return {
             "session_id": session.session_id,
             "agent_id": session.agent_id,
@@ -975,6 +1028,8 @@ class SessionManager:
             "message_count": len(session.messages),
             "created_at": session.created_at.isoformat(),
             "updated_at": session.updated_at.isoformat(),
+            "parent_session_id": parent_sid,
+            "worker_sessions": [],
         }
 
 

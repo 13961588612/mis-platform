@@ -17,7 +17,6 @@ import {
   type MessageDetail,
 } from '@/lib/api/messages';
 import type { WfInstance } from '@/lib/api/workflow';
-import { fetchProcessDetail, type ProcessDetail } from '@/lib/api/workflow';
 import { downloadMessageFile } from '@/lib/api/message-manage';
 import { MessageHtmlView, messageHtmlBody, parseAttachmentList } from '@/features/portal/components/message-html-view';
 import { useAuthStore } from '@/stores/auth-store';

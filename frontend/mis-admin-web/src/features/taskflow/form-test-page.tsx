@@ -44,7 +44,7 @@ import {
 } from '@/lib/api/form-records';
 import { hasFormLoader, loadFormEntry } from '@/features/biz/forms/forms/form-loaders';
 import { resolveForm } from '@/features/biz/forms/registry';
-import type { FormData, FormFieldSchema } from '@/features/biz/forms/types';
+import type { FormData, FormFieldSchema, FormFieldValue } from '@/features/biz/forms/types';
 import { cn } from '@/lib/utils';
 import { TodoDetailDrawer } from '@/features/portal/components/todo-detail-drawer';
 import { ProcessStartDialog, type ProcessStartConfirm } from './components/process-start-dialog';
@@ -377,7 +377,7 @@ export function FormTestPage() {
           fields.push(f);
         }
       }
-      const rows = items.map((i) => i.values ?? {});
+      const rows = items.map((i) => (i.values ?? {}) as FormData);
       if (!cancelled) setListFields(mergeFormListFields(fields, rows));
     })();
     return () => {
@@ -523,9 +523,9 @@ export function FormTestPage() {
                       <TableCell
                         key={f.key}
                         className="max-w-[180px] truncate"
-                        title={formatFormCellValue(f, data[f.key])}
+                        title={formatFormCellValue(f, data[f.key] as FormFieldValue | undefined)}
                       >
-                        {formatFormCellValue(f, data[f.key])}
+                        {formatFormCellValue(f, data[f.key] as FormFieldValue | undefined)}
                       </TableCell>
                     ))}
                     <TableCell className="whitespace-nowrap">{item.formCode}</TableCell>

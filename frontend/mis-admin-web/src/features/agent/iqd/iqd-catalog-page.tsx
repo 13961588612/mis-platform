@@ -200,6 +200,25 @@ export function IqdCatalogPage() {
     });
   }, []);
 
+  /** 全选 / 取消全选：仅作用于当前 Tab 可见行。 */
+  const allTabSelected =
+    tabRows.length > 0 && tabRows.every((it) => selected.has(it.item_key));
+  const someTabSelected = tabRows.some((it) => selected.has(it.item_key));
+
+  const toggleSelectAll = useCallback(
+    (checked: boolean) => {
+      setSelected((prev) => {
+        const next = new Set(prev);
+        for (const it of tabRows) {
+          if (checked) next.add(it.item_key);
+          else next.delete(it.item_key);
+        }
+        return next;
+      });
+    },
+    [tabRows],
+  );
+
   const applyScope = useCallback(
     async (inScope: boolean) => {
       if (connectionId == null || selected.size === 0) return;
@@ -470,7 +489,19 @@ export function IqdCatalogPage() {
         <table className="w-full border-separate border-spacing-0 bg-table-surface text-left text-sm">
           <thead className="sticky top-0 z-10 border-b-2 border-foreground/20 bg-table-header text-muted-foreground">
             <tr>
-              <th className="w-10 px-3 py-2" />
+              <th className="w-10 px-3 py-2">
+                <input
+                  type="checkbox"
+                  className="h-4 w-4"
+                  aria-label="全选当前列表"
+                  disabled={tabRows.length === 0}
+                  checked={allTabSelected}
+                  ref={(el) => {
+                    if (el) el.indeterminate = someTabSelected && !allTabSelected;
+                  }}
+                  onChange={(e) => toggleSelectAll(e.target.checked)}
+                />
+              </th>
               <th className="px-3 py-2 font-bold">类型</th>
               <th className="px-3 py-2 font-bold">item_key</th>
               <th className="px-3 py-2 font-bold">展示名</th>
@@ -742,11 +773,24 @@ function FieldScopeDialog({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  /** 字段 key + in_scope 签名：打开弹窗或保存回写后同步勾选，避免 columns 引用抖动反复清空。 */
+  const scopeSignature = useMemo(
+    () =>
+      columns
+        .map((c) => `${c.item_key}:${c.in_scope ? 1 : 0}`)
+        .sort()
+        .join('|'),
+    [columns],
+  );
+
   useEffect(() => {
     if (!open) return;
-    setPicked(new Set());
+    // 已纳入字段默认打勾，便于继续批量维护 / 移出
+    setPicked(new Set(columns.filter((c) => c.in_scope).map((c) => c.item_key)));
     setError(null);
-  }, [open, host?.item_key]);
+    // 刻意不用 columns 引用：父组件每次 render 都会 new 数组，会冲掉用户勾选
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- 同步点由 scopeSignature 表达
+  }, [open, host?.item_key, scopeSignature]);
 
   const toggle = (key: string) => {
     setPicked((prev) => {
@@ -766,7 +810,7 @@ function FieldScopeDialog({
     setError(null);
     try {
       await setIqdCatalogInScope(connectionId, inScope, [...picked]);
-      setPicked(new Set());
+      // 勾选态由 onSaved→load 后的 scopeSignature 重新同步（已纳入保持勾选）
       onSaved();
     } catch (e) {
       setError(e instanceof Error ? e.message : '更新字段范围失败');
@@ -793,7 +837,8 @@ function FieldScopeDialog({
             ) : null}
           </DialogTitle>
           <DialogDescription className="text-[12px]">
-            勾选批量维护纳入范围；铅笔编辑字段业务描述（需连接已开启 MDL 写回）。
+            已纳入字段会自动勾选；可继续勾选后批量纳入 / 移出。铅笔编辑字段业务描述（需连接已开启
+            MDL 写回）。
           </DialogDescription>
         </DialogHeader>
 

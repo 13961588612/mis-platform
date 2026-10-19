@@ -1,0 +1,35 @@
+{
+  "status": "succeeded",
+  "answer": "查询返回 1 行结果。",
+  "columns": [
+    {
+      "item_key": "store_id",
+      "data_type": "",
+      "display_name": "store_id",
+      "name": "store_id",
+      "masked": false
+    },
+    {
+      "item_key": "store_name",
+      "data_type": "",
+      "display_name": "store_name",
+      "name": "store_name",
+      "masked": false
+    },
+    {
+      "item_key": "city",
+      "data_type": "",
+      "display_name": "city",
+      "name": "city",
+      "masked": false
+    }
+  ],
+  "rows": [
+    [
+      "1057",
+      "无锡八佰伴城市超市",
+      null
+    ]
+  ],
+  "sql": null
+}

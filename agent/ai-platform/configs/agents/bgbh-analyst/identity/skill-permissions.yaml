@@ -1,0 +1,17 @@
+skill_permissions:
+  bgbh-router:
+    required: [iqd:ask:use]
+  bgbh-s1-daily-report:
+    required: [iqd:ask:use]
+  bgbh-s2-member:
+    required: [iqd:ask:use]
+  bgbh-s3-brand-newcust:
+    required: [iqd:ask:use]
+  bgbh-s4-brand-link:
+    required: [iqd:ask:use]
+  bgbh-s5-member-drain:
+    required: [iqd:ask:use]
+  bgbh-s6-flow-parking:
+    required: [iqd:ask:use]
+  bgbh-s7-private-domain:
+    required: [iqd:ask:use]

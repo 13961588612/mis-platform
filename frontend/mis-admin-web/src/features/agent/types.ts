@@ -503,7 +503,8 @@ export interface WorkerCatalog {
 
 // ------------------------------------------------------------------ 会话（UI#4）
 
-export type SessionChannel = 'web' | 'wecom' | 'api' | 'unknown';
+/** 运营台会话渠道。`iqd_test`/`kb_test` 为 BFF 直调问数/问答旁路。 */
+export type SessionChannel = 'web' | 'wecom' | 'api' | 'iqd_test' | 'kb_test' | 'unknown';
 
 /**
  * 会话。
@@ -511,6 +512,12 @@ export type SessionChannel = 'web' | 'wecom' | 'api' | 'unknown';
  * <p>主理人决策 ①：会话列表的**存储与检索在 T04 落地**，但类型按"全量可查"定义 ——
  * 即列表不限于内存中的活跃会话，历史会话同样可检索，故这里带齐时间与统计字段。
  */
+/** 父会话绑定的 Worker 子会话（详情 Redis 补齐）。 */
+export interface SessionWorkerLink {
+  worker_id: string;
+  session_id: string;
+}
+
 export interface Session {
   /**
    * 会话主键。**wire 上是 `session_id`**（ai-platform `SessionResponse.session_id`，
@@ -526,6 +533,10 @@ export interface Session {
   message_count: number;
   created_at: string;
   updated_at: string;
+  /** 委派子会话的父会话 id；主会话为 null。 */
+  parent_session_id?: string | null;
+  /** 父会话当前绑定的 Worker 子会话列表（详情接口补齐）。 */
+  worker_sessions?: SessionWorkerLink[];
 }
 
 export type MessageRole = 'user' | 'assistant' | 'system' | 'tool';
@@ -553,10 +564,14 @@ export interface SessionQuery extends AgentPageQuery {
   /** 按用户过滤（Copilot 侧栏收口本用户）。 */
   user_id?: string;
   keyword?: string;
+  /** 更新时间下界（ISO UTC）。 */
   from?: string;
+  /** 更新时间上界（ISO UTC）。 */
   to?: string;
   /** 为 true 时包含 message_count=0 的空会话（清理用）。 */
   include_empty?: boolean;
+  /** 为 true 时包含 Worker 子会话与 mis_bff 旁路孤儿；默认隐藏。 */
+  include_worker_sessions?: boolean;
 }
 
 // ------------------------------------------------------------------ 会话反馈（CF-01 / CF-03 / CF-05）

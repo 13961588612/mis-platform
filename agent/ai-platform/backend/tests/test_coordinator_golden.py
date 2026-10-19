@@ -67,8 +67,9 @@ EXPECTED_ROLES: dict[str, AgentRole] = {
     "mis-admin-helper": AgentRole.WORKER,
     "mis-user-helper": AgentRole.WORKER,
     "mis-iqd": AgentRole.WORKER,
+    "bgbh-analyst": AgentRole.WORKER,
 }
-"""8 个 Agent 的期望调度角色（T04 验收：role 解析正确；1.3/1.4 新增两个 helper；v1.9/B1 新增 mis-iqd 问数 Worker）。"""
+"""9 个 Agent 的期望调度角色（含百购分析 Worker bgbh-analyst）。"""
 
 LAZY_DELEGATION_CORPUS: tuple[str, ...] = (
     "帮我查一下",
@@ -779,7 +780,7 @@ async def test_too_short_goal_is_rejected_in_strict_mode() -> None:
 
 
 async def test_repo_configs_load_five_agents_without_warning() -> None:
-    """真实 configs 目录可加载 8 个 Agent，且加载过程无告警/报错。"""
+    """真实 configs 目录可加载全部 Agent，且加载过程无告警/报错。"""
     configs, logger_spy = await _load_configs(REPO_CONFIGS)
     agent_ids = sorted(config.agent_id for config in configs)
 
@@ -789,7 +790,7 @@ async def test_repo_configs_load_five_agents_without_warning() -> None:
 
 
 async def test_repo_configs_declare_expected_roles() -> None:
-    """8 个 Agent 的 role 解析正确：1 个 Coordinator + 7 个 Worker。"""
+    """全部 Agent 的 role 解析正确：1 个 Coordinator，其余为 Worker。"""
     configs, _ = await _load_configs(REPO_CONFIGS)
     roles = {config.agent_id: config.role for config in configs}
 
@@ -798,7 +799,7 @@ async def test_repo_configs_declare_expected_roles() -> None:
 
 
 async def test_worker_metadata_declares_delegation_contract() -> None:
-    """7 个 Worker 的委派契约齐备，且 when_to_use 互不重复。"""
+    """Worker 的委派契约齐备，且 when_to_use 互不重复。"""
     configs, _ = await _load_configs(REPO_CONFIGS)
     workers = {
         config.agent_id: config.metadata
@@ -806,7 +807,13 @@ async def test_worker_metadata_declares_delegation_contract() -> None:
         if config.role is AgentRole.WORKER
     }
 
-    assert set(workers) == {*DEFAULT_WHITELIST, "mis-admin-helper", "mis-user-helper", "mis-iqd"}
+    assert set(workers) == {
+        *DEFAULT_WHITELIST,
+        "mis-admin-helper",
+        "mis-user-helper",
+        "mis-iqd",
+        "bgbh-analyst",
+    }
     hints: list[str] = []
     for agent_id, metadata in workers.items():
         assert metadata is not None, agent_id

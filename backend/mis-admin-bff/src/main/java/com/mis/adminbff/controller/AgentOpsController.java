@@ -234,10 +234,20 @@ public class AgentOpsController {
             @RequestParam(required = false) String from,
             @RequestParam(required = false) String to,
             @RequestParam(required = false) Boolean include_empty,
+            @RequestParam(required = false) Boolean include_worker_sessions,
             @RequestParam(required = false) Integer page,
             @RequestParam(required = false) Integer page_size) {
         SessionQuery query = new SessionQuery(
-                agent_id, channel, user_id, keyword, from, to, include_empty, page, page_size);
+                agent_id,
+                channel,
+                user_id,
+                keyword,
+                from,
+                to,
+                include_empty,
+                include_worker_sessions,
+                page,
+                page_size);
         return Result.ok(facade.listSessions(query));
     }
 

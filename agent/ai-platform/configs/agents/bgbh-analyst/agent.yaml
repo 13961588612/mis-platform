@@ -1,0 +1,56 @@
+# =============================================================================
+# bgbh-analyst — 百购分析智能体
+# 规划：D:\project\AI数据分析\百购问数上线\06_智能体协作架构设计.md
+# 供 mis-copilot 委派。取数只走 iqd__ask，不直连 WrenAI、不写 SQL。
+# =============================================================================
+
+agent:
+  name: bgbh-analyst
+  display_name: 百购分析智能体
+  description: >
+    百购商场经营分析：把日报、会员、品牌、流失、客流、私域等问题路由到对应技能，
+    补全槽位后经 iqd__ask 取数，再组织结论、表格与追问。不写 SQL，不直连库。
+  version: "1.0.0"
+  tags:
+    - mis
+    - bgbh
+    - analyst
+
+  role: worker
+
+  includes:
+    runtime: runtime/runtime.yaml
+    system: system/model.yaml
+
+  routing:
+    enabled: true
+    priority: 25
+    keywords:
+      - 百购
+      - 百货
+      - 经营日报
+      - 卖了多少
+      - 坪效
+      - 会员流失
+      - 客流
+      - 车流
+      - 私域
+      - 品牌关联
+
+  memory:
+    static:
+      enabled: true
+      personality: memory/personality.md
+      facts_dir: memory/facts/
+    dynamic:
+      enabled: false
+      collection: agent_memory_index
+      top_k: 3
+      write_back: false
+      user_level: false
+      ttl_days: 7
+      max_per_user: 50
+
+  push:
+    enabled: false
+    channels: []

@@ -1,0 +1,9 @@
+{
+  "status": null,
+  "error_code": null,
+  "error_message": null,
+  "sql": null,
+  "latency": null,
+  "nl2sql_debug": null,
+  "plan": null
+}

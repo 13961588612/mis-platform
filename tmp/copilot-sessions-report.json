@@ -1,0 +1,596 @@
+{
+  "recent20": [
+    {
+      "session_id": "web-mv9bcgh2-44amr5qf",
+      "title": "大统华溧阳城东店 4月销售情况",
+      "channel": "web",
+      "agent_id": "mis-copilot",
+      "user_id": "1",
+      "message_count": 12,
+      "created_at": "2026-10-16T01:31:51.075757+00:00",
+      "updated_at": "2026-10-19T06:59:15.837396+00:00"
+    },
+    {
+      "session_id": "mis_bff-762b41d4-a620-42ee-8885-d42eacbcd19c",
+      "title": null,
+      "channel": "unknown",
+      "agent_id": "mis-iqd",
+      "user_id": "1",
+      "message_count": 1,
+      "created_at": "2026-10-19T06:54:56.646321+00:00",
+      "updated_at": "2026-10-19T06:55:13.015121+00:00"
+    },
+    {
+      "session_id": "mis_bff-ebaee0b5-666e-408b-aaeb-784b26ab5ed9",
+      "title": null,
+      "channel": "unknown",
+      "agent_id": "mis-iqd",
+      "user_id": "1",
+      "message_count": 1,
+      "created_at": "2026-10-19T05:47:14.439035+00:00",
+      "updated_at": "2026-10-19T05:47:41.329811+00:00"
+    },
+    {
+      "session_id": "mis_bff-599e0465-4113-43ad-9229-c8e5455f31de",
+      "title": null,
+      "channel": "unknown",
+      "agent_id": "mis-iqd",
+      "user_id": "1",
+      "message_count": 1,
+      "created_at": "2026-10-19T02:54:11.353638+00:00",
+      "updated_at": "2026-10-19T02:54:28.650292+00:00"
+    },
+    {
+      "session_id": "mis_bff-11be40a6-9ca5-4a95-b386-d1ac46853fdc",
+      "title": null,
+      "channel": "unknown",
+      "agent_id": "mis-iqd",
+      "user_id": "1",
+      "message_count": 1,
+      "created_at": "2026-10-19T02:53:22.045258+00:00",
+      "updated_at": "2026-10-19T02:53:39.078472+00:00"
+    },
+    {
+      "session_id": "mis_bff-25f71418-4b2e-471b-8c85-83623cc1e0c7",
+      "title": null,
+      "channel": "unknown",
+      "agent_id": "mis-iqd",
+      "user_id": "1",
+      "message_count": 1,
+      "created_at": "2026-10-19T02:43:24.669570+00:00",
+      "updated_at": "2026-10-19T02:43:33.411454+00:00"
+    },
+    {
+      "session_id": "mis_bff-28847469-9407-481a-92b9-b7222542488a",
+      "title": null,
+      "channel": "unknown",
+      "agent_id": "mis-iqd",
+      "user_id": "1",
+      "message_count": 1,
+      "created_at": "2026-10-19T02:05:13.300929+00:00",
+      "updated_at": "2026-10-19T02:05:21.643305+00:00"
+    },
+    {
+      "session_id": "mis_bff-82468854-b92b-4e88-8d4d-6f6b5693533b",
+      "title": null,
+      "channel": "unknown",
+      "agent_id": "mis-iqd",
+      "user_id": "1",
+      "message_count": 1,
+      "created_at": "2026-10-19T01:56:35.844691+00:00",
+      "updated_at": "2026-10-19T01:58:44.794616+00:00"
+    },
+    {
+      "session_id": "mis_bff-d1bf49bf-f992-4122-aca1-75c9e70be685",
+      "title": null,
+      "channel": "unknown",
+      "agent_id": "mis-iqd",
+      "user_id": "1",
+      "message_count": 1,
+      "created_at": "2026-10-19T01:48:23.771509+00:00",
+      "updated_at": "2026-10-19T01:50:31.168084+00:00"
+    },
+    {
+      "session_id": "web-mvel8yr3-sujszd3l",
+      "title": "上季度无锡店销售额多少",
+      "channel": "web",
+      "agent_id": "mis-copilot",
+      "user_id": "1",
+      "message_count": 2,
+      "created_at": "2026-10-19T01:40:32.534873+00:00",
+      "updated_at": "2026-10-19T01:42:35.760599+00:00"
+    },
+    {
+      "session_id": "mis_bff-79ed689e-caa5-4657-8de1-d6a3f17034cb",
+      "title": null,
+      "channel": "unknown",
+      "agent_id": "mis-iqd",
+      "user_id": "1",
+      "message_count": 1,
+      "created_at": "2026-10-19T01:39:51.110719+00:00",
+      "updated_at": "2026-10-19T01:40:06.859901+00:00"
+    },
+    {
+      "session_id": "mis_bff-bbee553f-e646-4702-92ab-9745b411a652",
+      "title": null,
+      "channel": "unknown",
+      "agent_id": "mis-iqd",
+      "user_id": "1",
+      "message_count": 1,
+      "created_at": "2026-10-19T01:38:42.144403+00:00",
+      "updated_at": "2026-10-19T01:39:05.426653+00:00"
+    },
+    {
+      "session_id": "mis_bff-40f19892-07f9-4f64-9086-f1d84f15b237",
+      "title": null,
+      "channel": "unknown",
+      "agent_id": "mis-iqd",
+      "user_id": "1",
+      "message_count": 1,
+      "created_at": "2026-10-19T01:28:54.201136+00:00",
+      "updated_at": "2026-10-19T01:31:03.190140+00:00"
+    },
+    {
+      "session_id": "mis_bff-c6e6ee0a-5d38-4968-b7d5-432d737a5c11",
+      "title": null,
+      "channel": "unknown",
+      "agent_id": "mis-iqd",
+      "user_id": "1",
+      "message_count": 1,
+      "created_at": "2026-10-19T01:22:12.752404+00:00",
+      "updated_at": "2026-10-19T01:22:17.571186+00:00"
+    },
+    {
+      "session_id": "mis_bff-556ea7b3-e470-4d7f-85fb-7288f9fb1662",
+      "title": null,
+      "channel": "unknown",
+      "agent_id": "mis-iqd",
+      "user_id": "1",
+      "message_count": 1,
+      "created_at": "2026-10-19T01:21:26.971293+00:00",
+      "updated_at": "2026-10-19T01:21:35.991212+00:00"
+    },
+    {
+      "session_id": "mis_bff-a23ae66f-063c-4a6b-978f-efab1f342fc1",
+      "title": null,
+      "channel": "unknown",
+      "agent_id": "mis-iqd",
+      "user_id": "1",
+      "message_count": 1,
+      "created_at": "2026-10-19T00:50:31.718993+00:00",
+      "updated_at": "2026-10-19T00:52:42.121043+00:00"
+    },
+    {
+      "session_id": "mis_bff-eaa0eda2-bc64-485a-88c0-de7596eaa45a",
+      "title": null,
+      "channel": "unknown",
+      "agent_id": "mis-iqd",
+      "user_id": "1",
+      "message_count": 1,
+      "created_at": "2026-10-19T00:45:49.107621+00:00",
+      "updated_at": "2026-10-19T00:45:56.265564+00:00"
+    },
+    {
+      "session_id": "mis_bff-ea4c78fb-f98a-4cbe-a852-37c9506b2b90",
+      "title": null,
+      "channel": "unknown",
+      "agent_id": "mis-iqd",
+      "user_id": "1",
+      "message_count": 1,
+      "created_at": "2026-10-17T10:04:09.459493+00:00",
+      "updated_at": "2026-10-17T10:04:14.132956+00:00"
+    },
+    {
+      "session_id": "mis_bff-92406b11-274f-4a80-a63e-ad6969d96d75",
+      "title": null,
+      "channel": "unknown",
+      "agent_id": "mis-iqd",
+      "user_id": "1",
+      "message_count": 1,
+      "created_at": "2026-10-17T09:47:04.142862+00:00",
+      "updated_at": "2026-10-17T09:47:11.233563+00:00"
+    },
+    {
+      "session_id": "mis_bff-eff71332-910d-48ad-81ba-ab00e4ab8a99",
+      "title": null,
+      "channel": "unknown",
+      "agent_id": "mis-iqd",
+      "user_id": "1",
+      "message_count": 1,
+      "created_at": "2026-10-17T09:39:58.292260+00:00",
+      "updated_at": "2026-10-17T09:40:06.097576+00:00"
+    }
+  ],
+  "details": [
+    {
+      "list": {
+        "session_id": "web-mv9bcgh2-44amr5qf",
+        "title": "大统华溧阳城东店 4月销售情况",
+        "channel": "web",
+        "agent_id": "mis-copilot",
+        "user_id": "1",
+        "message_count": 12,
+        "created_at": "2026-10-16T01:31:51.075757+00:00",
+        "updated_at": "2026-10-19T06:59:15.837396+00:00"
+      },
+      "detail_err": null,
+      "detail_title": "大统华溧阳城东店 4月销售情况",
+      "detail_channel": "web",
+      "messages_err": null,
+      "messages_n": 34,
+      "messages": [
+        {
+          "role": "user",
+          "content_len": 5,
+          "content_preview": "hello",
+          "meta_keys": []
+        },
+        {
+          "role": "assistant",
+          "content_len": 279,
+          "content_preview": "你好！我是 MIS 企业管理平台的智能助手 👋  我可以帮你处理这些事：  - **制度/规章查询**：差旅报销、审批流程、考勤假期等规定，我会给出具体条款依据 - **业务数据查询**：销售额、销量、同比、渠道/门店等统计汇总 - **CRM 相关**：会员、积分、等级、标签、客户画像、营销活动 - **文本处理**：从一段文字里抽取表单字段，或对审批意见做要点摘要 - **表单填写**：帮你补全采购单等业务单据的字段  直接说你想做什么就行～ 比如「差旅报销标准是多少」「帮我看看上个月的销售额」，或者告诉我你现在在哪个页面上，我结合上下文帮你处理。",
+          "meta_keys": []
+        },
+        {
+          "role": "user",
+          "content_len": 7,
+          "content_preview": "现在是什么模型",
+          "meta_keys": []
+        },
+        {
+          "role": "assistant",
+          "content_len": 138,
+          "content_preview": "我是 MIS 企业管理平台的智能对话助手，负责帮你查制度、看业务数据、处理 CRM 信息和填单等事务。  至于底层具体用的是哪个模型版本，我这边没有可确认的信息，不好给你一个准确的名称——避免说错。如果你需要了解技术细节，可以联系平台管理员确认。  有业务上的问题随时问我 😊",
+          "meta_keys": []
+        },
+        {
+          "role": "user",
+          "content_len": 12,
+          "content_preview": "无锡梅园灯展 几号到几号",
+          "meta_keys": []
+        },
+        {
+          "role": "assistant",
+          "content_len": 227,
+          "content_preview": "这个我帮不上准确答案——梅园灯展的具体举办日期属于活动主办方的实时信息，我这边没有可靠数据源，不能凭印象给你报日期，免得说错耽误你行程。  建议通过这几个渠道确认：  - **无锡梅园官方公众号**（一般会提前发布灯展档期和票务信息） - **景区官方电话**，直接问档期最稳妥 - 本地文旅官方平台（如「无锡文旅」等）的活动公告  如果你是想**申请活动相关的费用报销或请假**，那我可以帮你：查差旅/报销制度依据，或说明请假流程。需要的话告诉我就行。",
+          "meta_keys": []
+        },
+        {
+          "role": "user",
+          "content_len": 22,
+          "content_preview": "手机号码 13961588612 会员的资料",
+          "meta_keys": []
+        },
+        {
+          "role": "assistant",
+          "content_len": 395,
+          "content_preview": "这次**没能查到**该会员的资料，需要如实说明原因。  **情况说明**  查询请求没能成功返回数据——不是「该手机号没有对应会员」，而是平台的**权限校验服务当前不可用**，导致所有数据访问通道（技能加载、会员档案接口、连通性探测）都被统一拦截。属于平台侧故障，与手机号本身是否匹配无关，所以**不能据此判断这个会员不存在**。  **建议的下一步**  1. **稍后重试**：权限服务恢复后我立刻帮你重新查一次； 2. 若急需，可**联系 CRM 管理员 / 运维**，反馈「权限服务暂不可用」，确认是服务故障还是会话授权配置异常。  服务恢复后，我可一次性返回：会员标识（手机号按规范脱敏为 ",
+          "meta_keys": []
+        },
+        {
+          "role": "user",
+          "content_len": 4,
+          "content_preview": "再次查询",
+          "meta_keys": []
+        },
+        {
+          "role": "assistant",
+          "content_len": 440,
+          "content_preview": "我又试了一次，**结果仍然是：查询未能完成**。  **情况说明**  失败原因和上次一样——**权限/鉴权服务侧不可用**。查询请求在鉴权环节就被拦下了，根本没有真正到达会员档案库，因此：  - 我**无法判断** 139****8612 是否对应会员； - 这**属于「服务不可用」，而不是「无此会员」**，两者不能混为一谈； - 按规范我不会用历史数据或推测去填补，本轮**不输出任何会员字段**。  **建议的下一步**  1. **稍后重试**：等服务恢复我再帮你查一次； 2. 换检索条件：如果你有**会员卡号 / VIP 编号**，可以试试； 3. **联系 CRM 管理员或运维**，",
+          "meta_keys": []
+        },
+        {
+          "role": "user",
+          "content_len": 22,
+          "content_preview": "手机号码 13961588612 会员的资料",
+          "meta_keys": []
+        },
+        {
+          "role": "assistant",
+          "content_len": 592,
+          "content_preview": "我又通过会员档案通道重新查了一次，**结果依然是数据不可用**，如实告知：  **本次查询情况**  | 项目 | 状态 | |------|------| | 查询条件 | 手机号 139****8612 | | 会员档案技能加载 | 失败：权限服务暂不可用 | | 会员档案接口查询 | 失败：权限服务暂不可用 | | 姓名 / 等级 / 权益 / 积分 / 标签画像 | 本轮均未获取 |  **结论**：三次查询都在**鉴权层**被拦截，返回「权限服务暂不可用，已按最小权限原则拒绝执行」——这是**鉴权服务故障**，**不等于「查无此会员」**。所以我既不能确认该手机号有档案，也不能确认没",
+          "meta_keys": []
+        },
+        {
+          "role": "user",
+          "content_len": 4,
+          "content_preview": "再次查询",
+          "meta_keys": []
+        },
+        {
+          "role": "assistant",
+          "content_len": 819,
+          "content_preview": "这次查询成功了 ✅ 以下是该手机号对应的会员档案（服务已恢复，本次通过会员档案接口实时获取）：  ## 会员档案  | 字段 | 内容 | |------|------| | 会员编号（vipId） | 813105524 | | 会员卡号 | 811941007998 | | 姓名 | 宝大 | | 手机号 | 139****8612 | | 性别 | 男 | | 卡类型 | 积分卡 | | 归属门店 | 宜兴八佰伴超市 | | 注册时间 | 2020-08-16 09:23:47 | | 生日 | 2020-08-21 | | 绑定车牌 | 无 |  ## 积分余额  - 总积分：**21",
+          "meta_keys": []
+        },
+        {
+          "role": "user",
+          "content_len": 6,
+          "content_preview": "看下积分明细",
+          "meta_keys": []
+        }
+      ]
+    },
+    {
+      "list": {
+        "session_id": "mis_bff-762b41d4-a620-42ee-8885-d42eacbcd19c",
+        "title": null,
+        "channel": "unknown",
+        "agent_id": "mis-iqd",
+        "user_id": "1",
+        "message_count": 1,
+        "created_at": "2026-10-19T06:54:56.646321+00:00",
+        "updated_at": "2026-10-19T06:55:13.015121+00:00"
+      },
+      "detail_err": null,
+      "detail_title": null,
+      "detail_channel": "unknown",
+      "messages_err": null,
+      "messages_n": 1,
+      "messages": [
+        {
+          "role": "assistant",
+          "content_len": 4300,
+          "content_preview": "{\"query_id\": \"q-ee8810b9a90f\", \"thread_id\": null, \"agent_id\": \"mis-iqd\", \"status\": \"failed\", \"answer_summary\": \"未能生成有效查询\", \"data\": {\"columns\": [], \"rows\": [], \"row_count\": 0, \"truncated\": false, \"preview_rows\": 0}, \"citations\": [], \"plan\": [{\"seq\": 1, \"code\": \"scope_check\", \"label\": \"校验可问数据范围\", \"det",
+          "meta_keys": []
+        }
+      ]
+    },
+    {
+      "list": {
+        "session_id": "mis_bff-ebaee0b5-666e-408b-aaeb-784b26ab5ed9",
+        "title": null,
+        "channel": "unknown",
+        "agent_id": "mis-iqd",
+        "user_id": "1",
+        "message_count": 1,
+        "created_at": "2026-10-19T05:47:14.439035+00:00",
+        "updated_at": "2026-10-19T05:47:41.329811+00:00"
+      },
+      "detail_err": null,
+      "detail_title": null,
+      "detail_channel": "unknown",
+      "messages_err": null,
+      "messages_n": 1,
+      "messages": [
+        {
+          "role": "assistant",
+          "content_len": 4300,
+          "content_preview": "{\"query_id\": \"q-ef4d527bfa78\", \"thread_id\": null, \"agent_id\": \"mis-iqd\", \"status\": \"failed\", \"answer_summary\": \"未能生成有效查询\", \"data\": {\"columns\": [], \"rows\": [], \"row_count\": 0, \"truncated\": false, \"preview_rows\": 0}, \"citations\": [], \"plan\": [{\"seq\": 1, \"code\": \"scope_check\", \"label\": \"校验可问数据范围\", \"det",
+          "meta_keys": []
+        }
+      ]
+    },
+    {
+      "list": {
+        "session_id": "mis_bff-599e0465-4113-43ad-9229-c8e5455f31de",
+        "title": null,
+        "channel": "unknown",
+        "agent_id": "mis-iqd",
+        "user_id": "1",
+        "message_count": 1,
+        "created_at": "2026-10-19T02:54:11.353638+00:00",
+        "updated_at": "2026-10-19T02:54:28.650292+00:00"
+      },
+      "detail_err": null,
+      "detail_title": null,
+      "detail_channel": "unknown",
+      "messages_err": null,
+      "messages_n": 1,
+      "messages": [
+        {
+          "role": "assistant",
+          "content_len": 4300,
+          "content_preview": "{\"query_id\": \"q-f4dbdd96a145\", \"thread_id\": null, \"agent_id\": \"mis-iqd\", \"status\": \"failed\", \"answer_summary\": \"未能生成有效查询\", \"data\": {\"columns\": [], \"rows\": [], \"row_count\": 0, \"truncated\": false, \"preview_rows\": 0}, \"citations\": [], \"plan\": [{\"seq\": 1, \"code\": \"scope_check\", \"label\": \"校验可问数据范围\", \"det",
+          "meta_keys": []
+        }
+      ]
+    },
+    {
+      "list": {
+        "session_id": "mis_bff-11be40a6-9ca5-4a95-b386-d1ac46853fdc",
+        "title": null,
+        "channel": "unknown",
+        "agent_id": "mis-iqd",
+        "user_id": "1",
+        "message_count": 1,
+        "created_at": "2026-10-19T02:53:22.045258+00:00",
+        "updated_at": "2026-10-19T02:53:39.078472+00:00"
+      },
+      "detail_err": null,
+      "detail_title": null,
+      "detail_channel": "unknown",
+      "messages_err": null,
+      "messages_n": 1,
+      "messages": [
+        {
+          "role": "assistant",
+          "content_len": 4300,
+          "content_preview": "{\"query_id\": \"q-4492b50635cb\", \"thread_id\": null, \"agent_id\": \"mis-iqd\", \"status\": \"failed\", \"answer_summary\": \"未能生成有效查询\", \"data\": {\"columns\": [], \"rows\": [], \"row_count\": 0, \"truncated\": false, \"preview_rows\": 0}, \"citations\": [], \"plan\": [{\"seq\": 1, \"code\": \"scope_check\", \"label\": \"校验可问数据范围\", \"det",
+          "meta_keys": []
+        }
+      ]
+    },
+    {
+      "list": {
+        "session_id": "mis_bff-25f71418-4b2e-471b-8c85-83623cc1e0c7",
+        "title": null,
+        "channel": "unknown",
+        "agent_id": "mis-iqd",
+        "user_id": "1",
+        "message_count": 1,
+        "created_at": "2026-10-19T02:43:24.669570+00:00",
+        "updated_at": "2026-10-19T02:43:33.411454+00:00"
+      },
+      "detail_err": null,
+      "detail_title": null,
+      "detail_channel": "unknown",
+      "messages_err": null,
+      "messages_n": 1,
+      "messages": [
+        {
+          "role": "assistant",
+          "content_len": 4651,
+          "content_preview": "{\"query_id\": \"q-5fd07744c50c\", \"thread_id\": null, \"agent_id\": \"mis-iqd\", \"status\": \"succeeded\", \"answer_summary\": \"查询返回 1 行结果。\", \"data\": {\"columns\": [{\"name\": \"store_id\", \"item_key\": \"store_id\", \"data_type\": \"\", \"display_name\": \"store_id\", \"masked\": false}, {\"name\": \"store_name\", \"item_key\": \"store_",
+          "meta_keys": []
+        }
+      ]
+    },
+    {
+      "list": {
+        "session_id": "mis_bff-28847469-9407-481a-92b9-b7222542488a",
+        "title": null,
+        "channel": "unknown",
+        "agent_id": "mis-iqd",
+        "user_id": "1",
+        "message_count": 1,
+        "created_at": "2026-10-19T02:05:13.300929+00:00",
+        "updated_at": "2026-10-19T02:05:21.643305+00:00"
+      },
+      "detail_err": null,
+      "detail_title": null,
+      "detail_channel": "unknown",
+      "messages_err": null,
+      "messages_n": 1,
+      "messages": [
+        {
+          "role": "assistant",
+          "content_len": 4650,
+          "content_preview": "{\"query_id\": \"q-0ece53540041\", \"thread_id\": null, \"agent_id\": \"mis-iqd\", \"status\": \"succeeded\", \"answer_summary\": \"查询返回 1 行结果。\", \"data\": {\"columns\": [{\"name\": \"store_id\", \"item_key\": \"store_id\", \"data_type\": \"\", \"display_name\": \"store_id\", \"masked\": false}, {\"name\": \"store_name\", \"item_key\": \"store_",
+          "meta_keys": []
+        }
+      ]
+    },
+    {
+      "list": {
+        "session_id": "mis_bff-82468854-b92b-4e88-8d4d-6f6b5693533b",
+        "title": null,
+        "channel": "unknown",
+        "agent_id": "mis-iqd",
+        "user_id": "1",
+        "message_count": 1,
+        "created_at": "2026-10-19T01:56:35.844691+00:00",
+        "updated_at": "2026-10-19T01:58:44.794616+00:00"
+      },
+      "detail_err": null,
+      "detail_title": null,
+      "detail_channel": "unknown",
+      "messages_err": null,
+      "messages_n": 1,
+      "messages": [
+        {
+          "role": "assistant",
+          "content_len": 4564,
+          "content_preview": "{\"query_id\": \"q-2189ecd13802\", \"thread_id\": null, \"agent_id\": \"mis-iqd\", \"status\": \"failed\", \"answer_summary\": \"未能生成有效查询: wren MCP 工具失败: dry_run -> unhandled errors in a TaskGroup (1 sub-exception)\", \"data\": {\"columns\": [], \"rows\": [], \"row_count\": 0, \"truncated\": false, \"preview_rows\": 0}, \"citatio",
+          "meta_keys": []
+        }
+      ]
+    },
+    {
+      "list": {
+        "session_id": "mis_bff-d1bf49bf-f992-4122-aca1-75c9e70be685",
+        "title": null,
+        "channel": "unknown",
+        "agent_id": "mis-iqd",
+        "user_id": "1",
+        "message_count": 1,
+        "created_at": "2026-10-19T01:48:23.771509+00:00",
+        "updated_at": "2026-10-19T01:50:31.168084+00:00"
+      },
+      "detail_err": null,
+      "detail_title": null,
+      "detail_channel": "unknown",
+      "messages_err": null,
+      "messages_n": 1,
+      "messages": [
+        {
+          "role": "assistant",
+          "content_len": 4564,
+          "content_preview": "{\"query_id\": \"q-fc653da9e516\", \"thread_id\": null, \"agent_id\": \"mis-iqd\", \"status\": \"failed\", \"answer_summary\": \"未能生成有效查询: wren MCP 工具失败: dry_run -> unhandled errors in a TaskGroup (1 sub-exception)\", \"data\": {\"columns\": [], \"rows\": [], \"row_count\": 0, \"truncated\": false, \"preview_rows\": 0}, \"citatio",
+          "meta_keys": []
+        }
+      ]
+    },
+    {
+      "list": {
+        "session_id": "web-mvel8yr3-sujszd3l",
+        "title": "上季度无锡店销售额多少",
+        "channel": "web",
+        "agent_id": "mis-copilot",
+        "user_id": "1",
+        "message_count": 2,
+        "created_at": "2026-10-19T01:40:32.534873+00:00",
+        "updated_at": "2026-10-19T01:42:35.760599+00:00"
+      },
+      "detail_err": null,
+      "detail_title": "上季度无锡店销售额多少",
+      "detail_channel": "web",
+      "messages_err": null,
+      "messages_n": 2,
+      "messages": [
+        {
+          "role": "user",
+          "content_len": 11,
+          "content_preview": "上季度无锡店销售额多少",
+          "meta_keys": []
+        },
+        {
+          "role": "assistant",
+          "content_len": 407,
+          "content_preview": "这次没能取到数据，如实说明情况：  **查询失败**：「上季度无锡店销售额」未能返回任何金额数据，问数引擎两次尝试均返回错误码 `45205`（未能生成有效查询）。原因是语义模型检索阶段异常（上下文获取失败）导致未生成查询 SQL；权限范围校验是通过的（命中 61 张授权表），所以不是权限问题，属于语义层临时不可用。  因此我不会给出任何估算值——查不到就是查不到。  **原本会采用的口径**（供你确认）：以今天计，「上季度」= 2026-Q3，即 2026-07-01 至 2026-09-30；门店取名称中含「无锡」的门店；销售额按平台标准指标口径聚合。  **建议下一步**（任选其一）： ",
+          "meta_keys": []
+        }
+      ]
+    },
+    {
+      "list": {
+        "session_id": "mis_bff-79ed689e-caa5-4657-8de1-d6a3f17034cb",
+        "title": null,
+        "channel": "unknown",
+        "agent_id": "mis-iqd",
+        "user_id": "1",
+        "message_count": 1,
+        "created_at": "2026-10-19T01:39:51.110719+00:00",
+        "updated_at": "2026-10-19T01:40:06.859901+00:00"
+      },
+      "detail_err": null,
+      "detail_title": null,
+      "detail_channel": "unknown",
+      "messages_err": null,
+      "messages_n": 1,
+      "messages": [
+        {
+          "role": "assistant",
+          "content_len": 4300,
+          "content_preview": "{\"query_id\": \"q-bf4d4c8f16f9\", \"thread_id\": null, \"agent_id\": \"mis-iqd\", \"status\": \"failed\", \"answer_summary\": \"未能生成有效查询\", \"data\": {\"columns\": [], \"rows\": [], \"row_count\": 0, \"truncated\": false, \"preview_rows\": 0}, \"citations\": [], \"plan\": [{\"seq\": 1, \"code\": \"scope_check\", \"label\": \"校验可问数据范围\", \"det",
+          "meta_keys": []
+        }
+      ]
+    },
+    {
+      "list": {
+        "session_id": "mis_bff-bbee553f-e646-4702-92ab-9745b411a652",
+        "title": null,
+        "channel": "unknown",
+        "agent_id": "mis-iqd",
+        "user_id": "1",
+        "message_count": 1,
+        "created_at": "2026-10-19T01:38:42.144403+00:00",
+        "updated_at": "2026-10-19T01:39:05.426653+00:00"
+      },
+      "detail_err": null,
+      "detail_title": null,
+      "detail_channel": "unknown",
+      "messages_err": null,
+      "messages_n": 1,
+      "messages": [
+        {
+          "role": "assistant",
+          "content_len": 5883,
+          "content_preview": "{\"query_id\": \"q-0d1fed84a80e\", \"thread_id\": null, \"agent_id\": \"mis-iqd\", \"status\": \"succeeded\", \"answer_summary\": \"查询返回 32 行结果。（结果共 32 行，工具回传仅含前 20 行预览；请基于 answer_summary 与预览作答，勿要求全量 rows。）\", \"data\": {\"columns\": [{\"name\": \"store_id\", \"item_key\": \"store_id\", \"data_type\": \"\", \"display_name\": \"store_id",
+          "meta_keys": []
+        }
+      ]
+    }
+  ]
+}

@@ -39,6 +39,7 @@ from src.runtime.a2ui_run import (
     execute_render_a2ui,
 )
 from src.llm.models import LLMMessage, LLMResponse, LLMRole
+from src.queue.a2ui_outbound import A2uiOutboundPublisher, a2ui_outbound_key
 from src.runtime.events import AgentEvent
 from src.runtime.tool_registry_builder import SafeToolWrapper
 from src.skills.acl import SkillAclDenied
@@ -579,12 +580,8 @@ def test_a2ui_run_loop_tool_then_text(redis):
     asyncio.run(run())
 
 
-def test_a2ui_done_without_assistant_text_omits_message_id(redis):
-    """assistant 无正文（仅工具调用）→ done 携带 session_id 但省略 message_id。
-
-    没有可评价的 assistant 消息时，透传 message_id 会产生悬空锚点；此时前端
-    评价按钮按缺失 messageId 降级禁用（feedback-enhance §2.2 方案 C）。
-    """
+def test_a2ui_done_empty_llm_text_gets_fallback_message_id(redis):
+    """LLM 未吐正文时补可读兜底句，done 仍带 message_id（与落库 UUID 一致）。"""
 
     async def run():
         gateway = _FakeGateway(
@@ -636,13 +633,18 @@ def test_a2ui_done_without_assistant_text_omits_message_id(redis):
         done = events[-1]
         assert done["type"] == "done"
         assert done["session_id"] == "sess-empty-text"
-        assert "message_id" not in done, "无 assistant 正文时不应透传 message_id"
+        assert isinstance(done.get("message_id"), str) and done["message_id"]
+        assistant_persisted = [
+            m for m in loop._session_manager.persisted if m["role"] == "assistant"
+        ]
+        assert len(assistant_persisted) == 1
+        assert assistant_persisted[0]["message_id"] == done["message_id"]
 
     asyncio.run(run())
 
 
 def test_a2ui_run_loop_llm_failure_publishes_error(redis):
-    """LLM 调用抛异常 → error + done 回包（Gateway 靠 error 终止 Observable）。"""
+    """LLM 调用抛异常 → 可读正文 + error + done（Gateway 靠 error/done 终止 Observable）。"""
 
     async def run():
         class _RaisingGateway:
@@ -662,10 +664,61 @@ def test_a2ui_run_loop_llm_failure_publishes_error(redis):
             run_agent_input={"messages": [{"role": "user", "content": "hi"}]},
         )
         events = await _stream_events(redis, "sess-err2")
-        assert events[0]["type"] == "error"
-        assert events[0]["error_code"] == "A2UI_RUN_ERROR"
-        assert "provider down" in events[0]["message"]
-        assert events[1]["type"] == "done"
+        types = [e["type"] for e in events]
+        assert "text.delta" in types
+        assert "error" in types
+        assert types[-1] == "done"
+        err = next(e for e in events if e["type"] == "error")
+        assert err["error_code"] == "A2UI_RUN_ERROR"
+        assert "provider down" in err["message"]
+        assert isinstance(events[-1].get("message_id"), str) and events[-1]["message_id"]
+
+    asyncio.run(run())
+
+
+def test_a2ui_run_saves_session_timing(redis, monkeypatch):
+    """A2UI run 成功结束时按 turn_key=assistant message_id 写入 Redis 耗时。"""
+    from src.agent import session_timing as timing_mod
+
+    saved: list[tuple[str, str, dict[str, Any]]] = []
+
+    class _CaptureStore:
+        def __init__(self, *_a: Any, **_k: Any) -> None:
+            pass
+
+        async def save(self, session_id: str, turn_key: str, timing: dict[str, Any]) -> None:
+            saved.append((session_id, turn_key, timing))
+
+    monkeypatch.setattr(timing_mod, "RedisTimingStore", _CaptureStore)
+    # a2ui_run 内 from 的是模块级绑定，需同步 patch 运行时模块引用
+    import src.runtime.a2ui_run as a2ui_mod
+
+    monkeypatch.setattr(a2ui_mod, "RedisTimingStore", _CaptureStore)
+
+    async def run():
+        gateway = _FakeGateway(
+            [LLMResponse(content="溧阳有若干门店", finish_reason="stop")]
+        )
+        publisher = A2uiOutboundPublisher(redis)
+        loop = A2uiRunLoop(
+            gateway,
+            publisher,
+            model="test-model",
+            session_manager=_FakeSessionManager(),
+        )
+        await loop.run(
+            session_id="sess-timing",
+            user_id="u1",
+            run_agent_input={"messages": [{"role": "user", "content": "溧阳地区有哪些门店"}]},
+        )
+        events = await _stream_events(redis, "sess-timing")
+        done = events[-1]
+        assert done["type"] == "done"
+        mid = done["message_id"]
+        assert saved, "应写入一轮 session timing"
+        assert saved[0][0] == "sess-timing"
+        assert saved[0][1] == mid
+        assert isinstance(saved[0][2].get("total_ms"), (int, float))
 
     asyncio.run(run())
 

@@ -532,17 +532,28 @@ public class AiPlatformClient extends AbstractDownstreamClient {
                 .bodyToMono(MAP_RESULT_TYPE));
     }
 
-    /** 组合转发头：复用基类 loginContextHeaders() + Authorization + X-Trace-Id + MIS 身份 enrichment 头。 */
+    /**
+     * 组合转发头：登录上下文 + Authorization + X-Trace-Id + MIS 身份 enrichment。
+     *
+     * <p>身份头在当前请求线程先拍平。WebClient 的 headers 回调可能跑在别的线程上，
+     * 那里读不到 SecurityContext，角色头会丢，问数就被当成零授权。
+     */
     private Consumer<HttpHeaders> buildHeaders(String authorization, String traceId) {
+        HttpHeaders captured = new HttpHeaders();
+        loginContextHeaders().accept(captured);
+        buildMisEnrichmentHeaders().accept(captured);
         return headers -> {
-            loginContextHeaders().accept(headers);
+            captured.forEach((name, values) -> {
+                if (values != null && !values.isEmpty()) {
+                    headers.put(name, List.copyOf(values));
+                }
+            });
             if (authorization != null && !authorization.isBlank()) {
                 headers.set(SecurityConstants.AUTHORIZATION_HEADER, authorization);
             }
             if (traceId != null && !traceId.isBlank()) {
                 headers.set(SecurityConstants.HEADER_TRACE_ID, traceId);
             }
-            buildMisEnrichmentHeaders().accept(headers);   // T4：注入 X-Mis-*
         };
     }
 

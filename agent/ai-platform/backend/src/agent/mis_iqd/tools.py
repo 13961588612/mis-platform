@@ -128,7 +128,15 @@ class IqdAskInput(BaseModel):
             "仅数据类问题可调用本工具；闲聊/文案类问题不要调用。"
         ),
     )
-    connection_id: int | None = Field(default=None, description="连接 ID（缺省取 enabled）")
+    connection_id: int | str | None = Field(
+        default=None,
+        description=(
+            "问数项目名（项目配置里的名称，如 bg-data）或数字连接 id。"
+            "纯数字按 id 匹配；其余按项目名精确匹配。"
+            "项目名匹配不到或同名多条时直接报错，不回退到其他项目。"
+            "缺省取已启用连接。"
+        ),
+    )
     view: str = Field(
         default="user",
         description="视图：user（默认，无 SQL）| admin（含 SQL，仅后台测试用）",
@@ -146,6 +154,10 @@ class IqdDescribeScopeInput(BaseModel):
         default="",
         description="可空：想判断的问题，便于返回更贴近的可问范围描述。",
     )
+    connection_id: int | str | None = Field(
+        default=None,
+        description="问数项目名（如 bg-data）或数字连接 id；缺省取已启用连接。",
+    )
 
 
 class IqdAskTool(BaseTool):
@@ -158,9 +170,10 @@ class IqdAskTool(BaseTool):
         "**调用纪律**：\n"
         "1. 仅数据类问题（销售额/统计/对比/明细）才调用；\n"
         "2. `question` 必须传用户原始问题原文，不得改写；\n"
-        "3. 返回 JSON 含 `answer_summary` / `citations` / `plan` / `data`，"
+        "3. 指定项目时 `connection_id` 传项目名（如 bg-data）或数字 id；\n"
+        "4. 返回 JSON 含 `answer_summary` / `citations` / `plan` / `data`，"
         "`view=user` 时不含 `sql`；\n"
-        "4. 工具失败（452xx）时如实报告错误，禁止编造数据。"
+        "5. 工具失败（452xx）时如实报告错误，禁止编造数据。"
     )
     input_model = IqdAskInput
 
@@ -255,7 +268,7 @@ class IqdDescribeScopeTool(BaseTool):
     name = TOOL_IQD_DESCRIBE_SCOPE
     description = (
         "描述当前用户/角色可问的数据范围（表集合），用于判断某问题是否在可问范围内。"
-        "只读、不执行查询。"
+        "只读、不执行查询。指定项目时 `connection_id` 传项目名（如 bg-data）或数字 id。"
     )
     input_model = IqdDescribeScopeInput
 
@@ -283,7 +296,7 @@ class IqdDescribeScopeTool(BaseTool):
         resolver = ScopeResolver()
         try:
             # 使用 resolve_effective：模拟角色时按模拟 role_codes 裁定并做不放大收紧
-            resolution = await resolver.resolve_effective(identity, None)
+            resolution = await resolver.resolve_effective(identity, arguments.connection_id)
             payload: dict[str, Any] = {
                 "decision": resolution.decision,
                 "allowed_item_keys": resolution.allowed_item_keys,

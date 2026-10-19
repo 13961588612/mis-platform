@@ -34,6 +34,7 @@ from src.agent.mis_rag import (
     is_kb_qa_request,
 )
 from src.agent.session import Message, SessionManager, get_session_manager
+from src.agent.session_store import resolve_mis_ops_channel
 from src.api.deps import get_current_user, get_trace_id, resolve_mis_user_id_with_db
 from src.api.response import error_response, success
 from src.cluster.session_lock import get_shared_redis_session_lock
@@ -43,6 +44,7 @@ from src.coordinator.trace import (
     dispatch_trace_sse_enabled,
     take_last_turn_traces,
 )
+from src.identity.models import verified_mis_user_id, verified_role_header
 from src.runtime.events import AgentEventType
 from src.utils.exceptions import AgentNotFoundError
 from src.utils.logging import get_logger
@@ -58,6 +60,7 @@ router = APIRouter(tags=["mis-capability"])
 def _merge_identity_headers_into_metadata(
     metadata: dict[str, Any] | None,
     *,
+    current_user: dict[str, Any] | None = None,
     x_mis_roles: str = "",
     x_mis_depts: str = "",
     x_mis_orgs: str = "",
@@ -87,6 +90,15 @@ def _merge_identity_headers_into_metadata(
     ):
         if isinstance(value, str) and value.strip():
             merged[key] = value
+    # 头缺失时用已验签 JWT 的角色。否则问数身份只有 userId，角色表授权对不上，测试台显示 0 张。
+    if not str(merged.get("X-Mis-Roles") or "").strip():
+        role_header = verified_role_header(current_user)
+        if role_header:
+            merged["X-Mis-Roles"] = role_header
+    if not str(merged.get("X-User-Id") or "").strip():
+        mis_user_id = verified_mis_user_id(current_user)
+        if mis_user_id is not None:
+            merged["X-User-Id"] = str(mis_user_id)
     return merged
 
 
@@ -112,6 +124,67 @@ def _sse_frame(event: str, data: dict[str, Any]) -> str:
 # ===== Agent 运行辅助 =====
 
 
+def iqd_ask_wire_json(result: dict[str, Any]) -> str | None:
+    """把 ``iqd__ask`` 工具结果收成 BFF 可解析的 AskResponse JSON。
+
+    成功时 ``output`` 已是 AskResponse。范围拒绝等失败时工具 ``is_error=True``，
+    ``output`` 只有 ``{"code": 45204, "message": "..."}``。测试台按 AskResponse
+    解析；若丢掉这份 JSON、改用模型事后写的自然语言，BFF 会报「响应解析失败」。
+
+    Args:
+        result: ``tool.result`` 事件的 result（含 ``output``，失败时另有 ``error``）。
+
+    Returns:
+        AskResponse JSON 字符串；不是问数结构化结果时返回 ``None``。
+    """
+    raw: Any = result.get("output")
+    if raw is None:
+        raw = result.get("error")
+    payload: dict[str, Any] | None = None
+    if isinstance(raw, dict):
+        payload = raw
+    elif isinstance(raw, str):
+        text = raw.strip()
+        if not text.startswith("{"):
+            return None
+        try:
+            parsed: Any = json.loads(text)
+        except json.JSONDecodeError:
+            return None
+        if isinstance(parsed, dict):
+            payload = parsed
+    if not payload:
+        return None
+    if any(key in payload for key in ("status", "error_code", "answer_summary")):
+        return json.dumps(payload, ensure_ascii=False)
+
+    code = payload.get("code")
+    message = payload.get("message")
+    if code is None and not message:
+        return json.dumps(payload, ensure_ascii=False)
+
+    code_str = str(code) if code is not None else "45299"
+    msg = str(message or "问数失败")
+    normalized: dict[str, Any] = {
+        "status": "failed",
+        "answer_summary": msg,
+        "error_code": code_str,
+        "error_message": msg,
+        "scope": {
+            "decision": "deny" if code_str == "45204" else "allow",
+            "allowed_item_keys": [],
+            "denied_item_keys": [],
+            "reason": msg,
+            "subject_summary": "",
+        },
+        "plan": [],
+        "citations": [],
+        "masked_columns": [],
+        "data": {"columns": [], "rows": [], "row_count": 0, "truncated": False},
+    }
+    return json.dumps(normalized, ensure_ascii=False)
+
+
 async def _collect_agent_response(
     instance: Any,
     session: Any,
@@ -130,8 +203,9 @@ async def _collect_agent_response(
 
     Returns:
         ``(response_text, runtime_error, tool_errors)``。
-        若本轮调用了 ``iqd__ask`` 且工具成功返回 JSON，**优先采用工具原文**
-        （避免 LLM 重写时丢掉 ``plan[].duration_ms`` / ``data`` / ``sql`` 等字段）。
+        若本轮调用了 ``iqd__ask``，**优先采用工具 JSON**（含 452xx 失败帧），
+        避免模型把拒绝说明改写成自然语言后，测试台无法解析
+        ``plan`` / ``data`` / ``sql`` / ``error_code``。
     """
     response_parts: list[str] = []
     runtime_error: str | None = None
@@ -144,15 +218,13 @@ async def _collect_agent_response(
         if event.type == AgentEventType.TEXT_DELTA and event.content:
             response_parts.append(event.content)
         elif event.type == AgentEventType.TOOL_RESULT and event.result:
+            if event.tool_name == "iqd__ask":
+                wire = iqd_ask_wire_json(event.result)
+                if wire:
+                    last_iqd_ask_json = wire
             err: Any | None = event.result.get("error")
             if err:
                 tool_errors.append(f"{event.tool_name}: {err}")
-            elif event.tool_name == "iqd__ask":
-                raw_out: Any = event.result.get("output")
-                if isinstance(raw_out, dict):
-                    last_iqd_ask_json = json.dumps(raw_out, ensure_ascii=False)
-                elif isinstance(raw_out, str) and raw_out.strip().startswith("{"):
-                    last_iqd_ask_json = raw_out.strip()
         elif event.type == AgentEventType.ERROR:
             runtime_error = event.message or "Agent runtime error"
 
@@ -396,6 +468,7 @@ async def agent_chat(
     try:
         req.metadata = _merge_identity_headers_into_metadata(
             req.metadata,
+            current_user=current_user,
             x_mis_roles=x_mis_roles,
             x_mis_depts=x_mis_depts,
             x_mis_orgs=x_mis_orgs,
@@ -406,7 +479,9 @@ async def agent_chat(
         session_manager: SessionManager = get_session_manager()
         agent_manager: AgentManager = get_agent_manager()
         user_id: str = current_user.get("user_id", "mis-user")
-        channel: str = current_user.get("channel", "mis_bff")
+        channel: str = resolve_mis_ops_channel(
+            agent_id, current_user.get("channel", "mis_bff")
+        )
 
         # T03 S9：MIS RS256 身份 → profile["mis_user_id"]（档 1），在创建点解析并落会话。
         session = await session_manager.create_session(
@@ -465,8 +540,19 @@ async def agent_chat(
                 trace_id=trace_id,
             )
 
-        async def _persist_assistant() -> None:
+        user_content = str(req.content or "")
+        user_meta = dict(req.metadata or {}) if isinstance(req.metadata, dict) else {}
+
+        async def _persist_turn() -> None:
             try:
+                # 先落 user：会话标题取自首条用户问句，避免旁路「（无标题）」
+                if user_content.strip():
+                    await session_manager.add_message(
+                        session_id=session.session_id,
+                        role="user",
+                        content=user_content,
+                        metadata=user_meta or None,
+                    )
                 await session_manager.add_message(
                     session_id=session.session_id,
                     role="assistant",
@@ -477,17 +563,17 @@ async def agent_chat(
                 if isinstance(save_exc, (KeyboardInterrupt, SystemExit)):
                     raise
                 logger.error(
-                    "Failed to persist assistant message; response already returned",
+                    "Failed to persist chat turn; response already returned",
                     error=str(save_exc),
                     agent_id=agent_id,
                     session_id=session.session_id,
                 )
 
         try:
-            asyncio.create_task(_persist_assistant())
+            asyncio.create_task(_persist_turn())
         except Exception as schedule_exc:  # noqa: BLE001
             logger.warning(
-                "Failed to schedule assistant persist",
+                "Failed to schedule chat turn persist",
                 error=str(schedule_exc),
             )
 
@@ -540,6 +626,7 @@ async def agent_chat_stream(
         try:
             req.metadata = _merge_identity_headers_into_metadata(
                 req.metadata,
+                current_user=current_user,
                 x_mis_roles=x_mis_roles,
                 x_mis_depts=x_mis_depts,
                 x_mis_orgs=x_mis_orgs,
@@ -550,7 +637,9 @@ async def agent_chat_stream(
             session_manager: SessionManager = get_session_manager()
             agent_manager: AgentManager = get_agent_manager()
             user_id: str = current_user.get("user_id", "mis-user")
-            channel: str = current_user.get("channel", "mis_bff")
+            channel: str = resolve_mis_ops_channel(
+                agent_id, current_user.get("channel", "mis_bff")
+            )
 
             # T03 S9：与非流式分支同源，创建点解析一次 MIS userId 后全链透传。
             session = await session_manager.create_session(
@@ -599,6 +688,18 @@ async def agent_chat_stream(
                         return
 
                 try:
+                    user_content = str(req.content or "")
+                    if user_content.strip():
+                        await session_manager.add_message(
+                            session_id=session_id,
+                            role="user",
+                            content=user_content,
+                            metadata=(
+                                dict(req.metadata)
+                                if isinstance(req.metadata, dict)
+                                else None
+                            ),
+                        )
                     await session_manager.add_message(
                         session_id=session_id,
                         role="assistant",
@@ -609,7 +710,7 @@ async def agent_chat_stream(
                     if isinstance(save_exc, (KeyboardInterrupt, SystemExit)):
                         raise
                     logger.error(
-                        "Failed to persist streamed assistant message; still emitting done",
+                        "Failed to persist streamed chat turn; still emitting done",
                         error=str(save_exc),
                         agent_id=agent_id,
                         session_id=session_id,

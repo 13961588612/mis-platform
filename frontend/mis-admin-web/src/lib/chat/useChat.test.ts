@@ -296,6 +296,66 @@ describe('空 done + messageId / 安全超时回填', () => {
     vi.useRealTimers();
   });
 
+  it('仅有 surfaceId、无正文的 done：仍回拉历史正文（避免 Copilot 空白框）', async () => {
+    const historyPayload = {
+      code: 0,
+      data: [
+        {
+          id: 'u1',
+          session_id: SID,
+          role: 'user',
+          content: '13961588612 查下会员资料',
+          timestamp: '2026-01-01T00:00:00Z',
+          metadata: {},
+        },
+        {
+          id: 'a1',
+          session_id: SID,
+          role: 'assistant',
+          content: '已查到该会员，资料见上方表格。\n\n- 姓名：宝大',
+          timestamp: '2026-01-01T00:00:01Z',
+          metadata: {},
+        },
+      ],
+    };
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({ ok: true, json: async () => historyPayload }) as never),
+    );
+
+    const { result } = renderHook(() => useChat({ autoConnect: true }));
+    await waitFor(() => expect(sseHarness.getOnEvent()).toBeTruthy());
+
+    act(() => {
+      result.current.sendMessage('13961588612 查下会员资料');
+    });
+    const assistant = useChatStore.getState().messages.find((m) => m.role === 'assistant');
+    expect(assistant?.content).toBe('');
+
+    act(() => {
+      useChatStore.getState().updateMessage(assistant!.id, {
+        surfaceId: 'sfc-member-empty-table',
+        status: 'streaming',
+      });
+    });
+
+    await act(async () => {
+      sseHarness.getOnEvent()?.({
+        type: 'done',
+        messageId: 'a1',
+        sessionId: SID,
+      });
+    });
+
+    await waitFor(() => {
+      expect(useChatStore.getState().isGenerating).toBe(false);
+      expect(
+        useChatStore.getState().messages.some((m) => m.content.includes('已查到该会员')),
+      ).toBe(true);
+      expect(useChatStore.getState().error).toBeNull();
+    });
+  });
+
   it('空 done 带 messageId：解锁并回拉历史正文（不误报失败）', async () => {
     const historyPayload = {
       code: 0,

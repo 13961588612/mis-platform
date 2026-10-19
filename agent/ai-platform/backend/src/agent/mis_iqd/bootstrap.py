@@ -121,9 +121,12 @@ async def start_iqd_mcp_reconciler(
 ) -> tuple[asyncio.Event, asyncio.Task[Any]]:
     """启动后台跨机器部署 reconcile 循环（仅远程模式生效；决策 ①⑧）。
 
-    ai-platform 侧对每条远程部署周期性调用 :meth:`WrenMcpAgentClient.status` 取健康快照，
-    更新本地跨机器注册表状态并回写 mis-iqd ``mcp_status``（可观测 + 前端定位）。wren 机
-    侧崩溃自愈由 agent 自身负责（决策 ①），本循环只做状态对账（不重拉进程）。
+    ai-platform 侧周期性：
+    1. 对已登记部署调用 :meth:`WrenMcpAgentClient.status` 对账并回写 mis-iqd；
+    2. 若期望 ``running`` 但 WrenMcpAgent 侧已丢失（重启后内存清空返回
+       ``stopped`` / 不可达），自动 :meth:`IqdMcpLifecycleService.ensure_connection`
+       重推凭证并拉起 ``wren serve mcp``——避免运维手工再点「启用」。
+    3. 本地注册表为空时兜底 ``bulk_start_enabled_iqd_mcp``（按启用连接重拉）。
 
     Args:
         stop_event: 外部停止信号（``set()`` 后退出循环）；缺省内部新建。
@@ -156,28 +159,68 @@ async def _run_reconcile_loop(stop_event: asyncio.Event) -> None:
             break
 
 
+_RUNNING_OK = frozenset({"running"})
+
+
 async def _reconcile_once() -> None:
-    """单次 reconcile：遍历远程部署，刷新状态 + 回写 mis-iqd（单连接失败仅告警）。"""
-    registry = get_agent_registry()
-    deployments = registry.list()
-    if not deployments:
-        return
+    """单次 reconcile：对账状态；期望 running 但 wren 机丢失时自动重 ensure。"""
     agent_client = WrenMcpAgentClient()
     if not agent_client.enabled:
         return
-    from src.adapters.iqd_config_client import IqdConfigClient
 
+    registry = get_agent_registry()
+    deployments = registry.list()
+    if not deployments:
+        # ai-platform 注册表空（偶发丢失 / 对账起点）：按启用连接 bulk ensure
+        await bulk_start_enabled_iqd_mcp()
+        return
+
+    from src.adapters.iqd_config_client import IqdConfigClient
+    from src.agent.mis_iqd.mcp_lifecycle import IqdMcpLifecycleService
+
+    service = IqdMcpLifecycleService()
     for dep in deployments:
         conn_id = dep.get("conn_id")
         if conn_id is None:
             continue
+        desired = str(dep.get("desired_state") or "running").strip().lower()
         try:
             status = await agent_client.status(conn_id)
+            agent_status = str(status.status or "").strip().lower()
             registry.set_status(conn_id, status.status, health_msg=status.last_health_msg)
+
+            if desired == "running" and agent_status not in _RUNNING_OK:
+                # WrenMcpAgent 重启后内存无连接 → status=stopped；此处自动重推凭证拉起。
+                logger.warning(
+                    "IQD MCP reconcile: agent lost running connection; re-ensure",
+                    connection_id=conn_id,
+                    agent_status=agent_status or "empty",
+                )
+                await service.ensure_connection(int(conn_id), wait=False)
+                continue
+
             await IqdConfigClient().report_mcp_deployment(
-                int(conn_id), status.mcp_endpoint, status.agent_handle, status.status
+                int(conn_id),
+                status.mcp_endpoint,
+                status.agent_handle,
+                status.status,
             )
         except Exception as exc:  # noqa: BLE001
+            if desired == "running":
+                try:
+                    logger.warning(
+                        "IQD MCP reconcile status failed; re-ensure",
+                        connection_id=conn_id,
+                        error=str(exc),
+                    )
+                    await service.ensure_connection(int(conn_id), wait=False)
+                    continue
+                except Exception as ensure_exc:  # noqa: BLE001
+                    logger.warning(
+                        "IQD MCP reconcile re-ensure failed",
+                        connection_id=conn_id,
+                        error=str(ensure_exc),
+                    )
             logger.warning(
                 "IQD MCP reconcile connection failed", connection_id=conn_id, error=str(exc)
             )

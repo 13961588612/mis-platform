@@ -24,6 +24,7 @@ import pytest
 
 from src.adapters.wren_mcp_registry import WrenMcpProcessManager
 from src.agent.mis_iqd.bootstrap import (
+    _reconcile_once,
     bulk_start_enabled_iqd_mcp,
     mcp_status_reporter,
     shutdown_iqd_mcp,
@@ -294,3 +295,63 @@ async def test_shutdown_calls_stop_all() -> None:
     with patch("src.agent.mis_iqd.bootstrap.get_process_manager", return_value=mgr_mock):
         await shutdown_iqd_mcp(stop_event=None, task=None)
     mgr_mock.stop_all.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_reconcile_reensures_when_agent_reports_stopped() -> None:
+    """WrenMcpAgent 重启后 status=stopped → reconcile 自动 ensure，无需手工启用。"""
+    registry = MagicMock()
+    registry.list.return_value = [
+        {
+            "conn_id": "1792061562063",
+            "desired_state": "running",
+            "mcp_endpoint": "http://10.254.26.37:9101",
+            "agent_handle": "old",
+            "status": "running",
+        }
+    ]
+    registry.set_status = MagicMock()
+
+    agent = MagicMock()
+    agent.enabled = True
+    agent.status = AsyncMock(
+        return_value=MagicMock(
+            status="stopped",
+            mcp_endpoint="",
+            agent_handle="",
+            last_health_msg="",
+        )
+    )
+
+    service = MagicMock()
+    service.ensure_connection = AsyncMock(
+        return_value={"connection_id": 1792061562063, "mcp_status": "running"}
+    )
+
+    with patch("src.agent.mis_iqd.bootstrap.get_agent_registry", return_value=registry), patch(
+        "src.agent.mis_iqd.bootstrap.WrenMcpAgentClient", return_value=agent
+    ), patch(
+        "src.agent.mis_iqd.mcp_lifecycle.IqdMcpLifecycleService", return_value=service
+    ):
+        await _reconcile_once()
+
+    service.ensure_connection.assert_awaited_once_with(1792061562063, wait=False)
+
+
+@pytest.mark.asyncio
+async def test_reconcile_empty_registry_falls_back_to_bulk_start() -> None:
+    """注册表为空时 reconcile 走 bulk_start，按启用连接重拉。"""
+    registry = MagicMock()
+    registry.list.return_value = []
+    agent = MagicMock()
+    agent.enabled = True
+
+    with patch("src.agent.mis_iqd.bootstrap.get_agent_registry", return_value=registry), patch(
+        "src.agent.mis_iqd.bootstrap.WrenMcpAgentClient", return_value=agent
+    ), patch(
+        "src.agent.mis_iqd.bootstrap.bulk_start_enabled_iqd_mcp",
+        new=AsyncMock(return_value=1),
+    ) as bulk:
+        await _reconcile_once()
+
+    bulk.assert_awaited_once()

@@ -278,6 +278,10 @@ public class AgentOpsFacadeService {
                 "to", query.to(),
                 "include_empty",
                 query.includeEmpty() == null ? null : String.valueOf(query.includeEmpty()),
+                "include_worker_sessions",
+                query.includeWorkerSessions() == null
+                        ? null
+                        : String.valueOf(query.includeWorkerSessions()),
                 "page", query.normalizedPage(),
                 "page_size", query.normalizedPageSize());
         return client.listSessions(params);

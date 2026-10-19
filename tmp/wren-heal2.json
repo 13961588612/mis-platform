@@ -1,0 +1,205 @@
+{
+  "steps": [
+    {
+      "step": "mcp_stop",
+      "err": null,
+      "data": {
+        "connection_id": 1792061562063,
+        "mcp_status": "stopped"
+      }
+    },
+    {
+      "step": "mcp_start",
+      "err": null,
+      "data": {
+        "connection_id": 1792061562063,
+        "mcp_status": "running",
+        "mcp_host": "http://10.254.26.37:9101",
+        "agent_handle": "4d51d238664b4db385068c2985163e79",
+        "remote": true
+      }
+    },
+    {
+      "step": "mcp_status",
+      "err": null,
+      "data": {
+        "connection_id": 1792061562063,
+        "mcp_status": "running",
+        "host": "10.254.26.37",
+        "port": 9101,
+        "mcp_endpoint": "http://10.254.26.37:9101",
+        "agent_handle": "4d51d238664b4db385068c2985163e79",
+        "project_home": "/var/lib/mis-iqd/wren-projects/1792061562063",
+        "last_health_at": 0.0,
+        "last_health_msg": "",
+        "remote": true
+      }
+    },
+    {
+      "step": "enhance_sync_async",
+      "err": null,
+      "data": {
+        "connection_id": 1792061562063,
+        "coalesced": false,
+        "build_status": "pending",
+        "index_status": "pending",
+        "build_mdl_hash": null,
+        "synced_sql_pair_count": 0,
+        "synced_knowledge_count": 0,
+        "build_error": null,
+        "index_error": null,
+        "warnings": [],
+        "summary": null,
+        "raw": null,
+        "unmatched_edit_count": 0,
+        "unmatched_edits": []
+      }
+    }
+  ],
+  "polls": [
+    {
+      "i": 0,
+      "err": null,
+      "build_status": "success",
+      "index_status": "skipped",
+      "build_error": null,
+      "synced_sql_pair_count": 0,
+      "synced_knowledge_count": 0,
+      "action": "validate",
+      "build_at": "2026-10-19T04:31:17.319115Z",
+      "updated_at": "2026-10-19T04:31:17.319115Z"
+    },
+    {
+      "i": 1,
+      "err": null,
+      "build_status": "success",
+      "index_status": "skipped",
+      "build_error": null,
+      "synced_sql_pair_count": 0,
+      "synced_knowledge_count": 0,
+      "action": "validate",
+      "build_at": "2026-10-19T04:31:17.319115Z",
+      "updated_at": "2026-10-19T04:31:17.319115Z"
+    },
+    {
+      "i": 2,
+      "err": null,
+      "build_status": "success",
+      "index_status": "skipped",
+      "build_error": null,
+      "synced_sql_pair_count": 0,
+      "synced_knowledge_count": 0,
+      "action": "validate",
+      "build_at": "2026-10-19T04:31:17.319115Z",
+      "updated_at": "2026-10-19T04:31:17.319115Z"
+    },
+    {
+      "i": 3,
+      "err": null,
+      "build_status": "failed",
+      "index_status": "skipped",
+      "build_error": "WrenMcpAgent 调用超时: /cli",
+      "synced_sql_pair_count": 0,
+      "synced_knowledge_count": 0,
+      "action": "validate",
+      "build_at": "2026-10-19T04:42:06.655876Z",
+      "updated_at": "2026-10-19T04:42:06.655876Z"
+    },
+    {
+      "i": 4,
+      "err": null,
+      "build_status": "failed",
+      "index_status": "skipped",
+      "build_error": "WrenMcpAgent 调用超时: /cli",
+      "synced_sql_pair_count": 0,
+      "synced_knowledge_count": 0,
+      "action": "validate",
+      "build_at": "2026-10-19T04:42:06.655876Z",
+      "updated_at": "2026-10-19T04:42:06.655876Z"
+    },
+    {
+      "i": 5,
+      "err": null,
+      "build_status": "failed",
+      "index_status": "skipped",
+      "build_error": "WrenMcpAgent 调用超时: /cli",
+      "synced_sql_pair_count": 0,
+      "synced_knowledge_count": 0,
+      "action": "validate",
+      "build_at": "2026-10-19T04:42:06.655876Z",
+      "updated_at": "2026-10-19T04:42:06.655876Z"
+    },
+    {
+      "i": 6,
+      "err": null,
+      "build_status": "failed",
+      "index_status": "skipped",
+      "build_error": "WrenMcpAgent 调用超时: /cli",
+      "synced_sql_pair_count": 0,
+      "synced_knowledge_count": 0,
+      "action": "validate",
+      "build_at": "2026-10-19T04:42:06.655876Z",
+      "updated_at": "2026-10-19T04:42:06.655876Z"
+    },
+    {
+      "i": 7,
+      "err": null,
+      "build_status": "failed",
+      "index_status": "skipped",
+      "build_error": "WrenMcpAgent 调用超时: /cli",
+      "synced_sql_pair_count": 0,
+      "synced_knowledge_count": 0,
+      "action": "validate",
+      "build_at": "2026-10-19T04:43:42.008268Z",
+      "updated_at": "2026-10-19T04:43:42.008268Z"
+    },
+    {
+      "i": 8,
+      "err": null,
+      "build_status": "failed",
+      "index_status": "skipped",
+      "build_error": "WrenMcpAgent 调用超时: /cli",
+      "synced_sql_pair_count": 0,
+      "synced_knowledge_count": 0,
+      "action": "validate",
+      "build_at": "2026-10-19T04:43:42.008268Z",
+      "updated_at": "2026-10-19T04:43:42.008268Z"
+    },
+    {
+      "i": 9,
+      "err": null,
+      "build_status": "failed",
+      "index_status": "skipped",
+      "build_error": "WrenMcpAgent 调用超时: /cli",
+      "synced_sql_pair_count": 0,
+      "synced_knowledge_count": 0,
+      "action": "validate",
+      "build_at": "2026-10-19T04:43:42.008268Z",
+      "updated_at": "2026-10-19T04:43:42.008268Z"
+    },
+    {
+      "i": 10,
+      "err": null,
+      "build_status": "failed",
+      "index_status": "skipped",
+      "build_error": "WrenMcpAgent 调用超时: /cli",
+      "synced_sql_pair_count": 0,
+      "synced_knowledge_count": 0,
+      "action": "validate",
+      "build_at": "2026-10-19T04:43:42.008268Z",
+      "updated_at": "2026-10-19T04:43:42.008268Z"
+    },
+    {
+      "i": 11,
+      "err": null,
+      "build_status": "failed",
+      "index_status": "skipped",
+      "build_error": "WrenMcpAgent 调用超时: /cli",
+      "synced_sql_pair_count": 0,
+      "synced_knowledge_count": 0,
+      "action": "validate",
+      "build_at": "2026-10-19T04:43:42.008268Z",
+      "updated_at": "2026-10-19T04:43:42.008268Z"
+    }
+  ]
+}

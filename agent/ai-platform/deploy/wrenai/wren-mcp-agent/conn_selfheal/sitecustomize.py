@@ -24,7 +24,9 @@ phase=SQL_DRY_RUN``，而业务库本身完全正常（直连 0.03s，``wait_tim
 
 * 只在捕获到**连接类异常**时才重建连接并重试一次；
 * 其它异常原样抛出（不改 SQL 错误语义，上层照常 fail-closed）；
-* 成功路径**零额外开销**（不做用前 ping）。
+* 成功路径**零额外开销**（不做用前 ping）；
+* 建连成功后给底层 socket 加上读写超时（``WREN_CONN_IO_TIMEOUT_SECONDS``，默认 120）。
+  网络黑洞时 ``recv`` 会一直堵住，补丁等不到异常；超时后按连接错误重连一次。
 
 ## 如何注入
 
@@ -45,6 +47,7 @@ from __future__ import annotations
 import importlib.abc
 import importlib.machinery
 import os
+import socket
 import sys
 import threading
 
@@ -79,7 +82,71 @@ _CONN_ERROR_MARKERS: tuple[str, ...] = (
     "2003",
     "eof detected",
     "consuming input failed",
+    "timed out",
 )
+
+
+def _io_timeout_seconds() -> float:
+    """读写超时秒数。``0`` 或负数表示不设置。"""
+    raw = os.environ.get("WREN_CONN_IO_TIMEOUT_SECONDS", "120").strip()
+    try:
+        return float(raw)
+    except ValueError:
+        return 120.0
+
+
+def _arm_socket(sock: object, seconds: float) -> bool:
+    if not isinstance(sock, socket.socket):
+        return False
+    try:
+        sock.settimeout(seconds)
+    except Exception:  # noqa: BLE001
+        return False
+    return True
+
+
+def _arm_io_timeout(dbapi_conn: object) -> None:
+    """给已建立的连接加读写超时。失败静默，不影响 wren 启动。
+
+    只改已有的 ``read_timeout`` / ``write_timeout`` 数值字段和底层 socket。
+    不覆盖同名方法，也不长期改 ``socket.setdefaulttimeout``（会波及 MCP 端口）。
+    """
+    seconds = _io_timeout_seconds()
+    if dbapi_conn is None or seconds <= 0:
+        return
+    for attr in ("read_timeout", "write_timeout"):
+        current = getattr(dbapi_conn, attr, None)
+        if current is not None and not isinstance(current, (int, float)):
+            continue
+        try:
+            setattr(dbapi_conn, attr, seconds)
+        except Exception:  # noqa: BLE001
+            pass
+    if _arm_socket(getattr(dbapi_conn, "_sock", None), seconds):
+        return
+    mysql_sock = getattr(dbapi_conn, "_socket", None)
+    inner = getattr(mysql_sock, "sock", mysql_sock)
+    if _arm_socket(inner, seconds):
+        return
+    if _arm_socket(getattr(dbapi_conn, "socket", None), seconds):
+        return
+    fileno = getattr(dbapi_conn, "fileno", None)
+    if not callable(fileno):
+        return
+    try:
+        fd = fileno()
+    except Exception:  # noqa: BLE001
+        return
+    if not isinstance(fd, int) or fd < 0:
+        return
+    # socket(fileno=) 析构会关闭 fd；设完超时必须 detach，所有权留在驱动里。
+    wrapped = socket.socket(fileno=fd)
+    try:
+        wrapped.settimeout(seconds)
+    except Exception:  # noqa: BLE001
+        pass
+    finally:
+        wrapped.detach()
 
 
 def _looks_like_conn_error(exc: BaseException) -> bool:
@@ -107,6 +174,7 @@ def _iqd_rebuild_instance(conn) -> bool:  # noqa: ANN001
         try:
             orig_init(conn, *conn._iqd_init_args, **conn._iqd_init_kwargs)
             conn._closed = False
+            _arm_io_timeout(getattr(conn, "connection", None))
             return True
         except Exception:  # noqa: BLE001 - 重建失败按原错误上抛
             return False
@@ -152,6 +220,7 @@ def _wrap_connector_class(cls: type) -> None:
             self._iqd_init_kwargs = kwargs
             self._iqd_orig_init = own_init
             self._iqd_rebuild_lock = threading.Lock()
+            _arm_io_timeout(getattr(self, "connection", None))
 
         cls.__init__ = __init__
 

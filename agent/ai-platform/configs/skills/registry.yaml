@@ -20,3 +20,43 @@ skills:
     package: crm/member-coupon-account
     name: 会员券账户与流水查询
     status: active
+  - id: bgbh-router
+    category: department_store
+    package: bgbh/bgbh-router
+    name: 百购问数总控路由
+    status: active
+  - id: bgbh-s1-daily-report
+    category: department_store
+    package: bgbh/bgbh-s1-daily-report
+    name: 百购经营日报
+    status: active
+  - id: bgbh-s2-member
+    category: department_store
+    package: bgbh/bgbh-s2-member
+    name: 百购会员经营
+    status: active
+  - id: bgbh-s3-brand-newcust
+    category: department_store
+    package: bgbh/bgbh-s3-brand-newcust
+    name: 百购品牌与新客
+    status: active
+  - id: bgbh-s4-brand-link
+    category: department_store
+    package: bgbh/bgbh-s4-brand-link
+    name: 百购品牌关联
+    status: active
+  - id: bgbh-s5-member-drain
+    category: department_store
+    package: bgbh/bgbh-s5-member-drain
+    name: 百购会员流失
+    status: active
+  - id: bgbh-s6-flow-parking
+    category: department_store
+    package: bgbh/bgbh-s6-flow-parking
+    name: 百购客流车流
+    status: active
+  - id: bgbh-s7-private-domain
+    category: department_store
+    package: bgbh/bgbh-s7-private-domain
+    name: 百购私域与投入
+    status: active

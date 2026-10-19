@@ -52,6 +52,8 @@ SESSION_WIRE_KEYS: frozenset[str] = frozenset(
         "message_count",
         "created_at",
         "updated_at",
+        "parent_session_id",
+        "worker_sessions",
     }
 )
 
@@ -81,6 +83,8 @@ def _session_wire(
         "message_count": 3,
         "created_at": "2025-07-01T00:00:00+00:00",
         "updated_at": "2025-07-01T00:05:00+00:00",
+        "parent_session_id": None,
+        "worker_sessions": [],
     }
 
 
@@ -209,6 +213,32 @@ def test_list_sessions_include_empty_sets_min_message_count_zero(
     assert resp.status_code == 200
     query = manager.list_sessions.await_args.args[0]
     assert query.min_message_count == 0
+
+
+def test_list_sessions_include_worker_sessions_defaults_false(
+    session_client: tuple[TestClient, MagicMock],
+) -> None:
+    client, manager = session_client
+    manager.list_sessions.return_value = SessionPage(items=[], total=0, page=1, page_size=20)
+
+    resp = client.get("/api/v1/sessions")
+
+    assert resp.status_code == 200
+    query = manager.list_sessions.await_args.args[0]
+    assert query.include_worker_sessions is False
+
+
+def test_list_sessions_include_worker_sessions_true(
+    session_client: tuple[TestClient, MagicMock],
+) -> None:
+    client, manager = session_client
+    manager.list_sessions.return_value = SessionPage(items=[], total=0, page=1, page_size=20)
+
+    resp = client.get("/api/v1/sessions?include_worker_sessions=true")
+
+    assert resp.status_code == 200
+    query = manager.list_sessions.await_args.args[0]
+    assert query.include_worker_sessions is True
 
 
 def test_list_sessions_rejects_unsupported_channel(

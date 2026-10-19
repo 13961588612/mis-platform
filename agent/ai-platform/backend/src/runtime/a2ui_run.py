@@ -39,6 +39,7 @@ from pathlib import Path
 from openharness.tools.base import ToolExecutionContext, ToolRegistry
 
 from src.agent.session import SessionManager, get_session_manager
+from src.agent.session_timing import RedisTimingStore, SessionTimingRecorder
 from src.config import get_settings
 from src.llm.gateway import LLMGateway
 from src.llm.models import LLMMessage, LLMRequest, LLMRole, LLMResponse
@@ -586,200 +587,224 @@ class A2uiRunLoop:
             )
             await self._publisher.publish(session_id, AgentEvent.done())
             return
-        llm_messages: list[LLMMessage] = ensure_a2ui_system_hint(
-            ensure_coordinator_system_prompt(combined, resolved_agent_id)
-        )
 
-        # 持久化本轮用户文本（工具/系统消息不入历史，保持上下文干净）
-        for msg in messages:
-            if isinstance(msg, dict) and msg.get("role") == "user":
-                user_text: str = _agui_content_to_text(msg.get("content")).strip()
-                if user_text:
-                    await self._persist_user(session_id, user_text)
+        # 与文本通道对齐：预先生成 assistant 消息 UUID，计时 turn_key / 落库 / done 共用。
+        assistant_message_id: str = str(uuid.uuid4())
+        recorder = SessionTimingRecorder(session_id, assistant_message_id)
+        store = RedisTimingStore(get_settings())
 
-        # Gateway 注入 render_a2ui + 平台委派工具（agent__invoke 等）。
-        # 缺后者时 LLM 只会瞎编 A2UI /「外部资料」，走不到 mis-rag。
-        agui_openai: list[dict[str, Any]] = agui_tools_to_openai_tools(tools)
-        platform_openai: list[dict[str, Any]] = []
-        registry: ToolRegistry | None = await self._ensure_tool_registry(resolved_agent_id)
-        if registry is not None:
-            platform_openai = platform_registry_to_openai_tools(registry)
-        openai_tools: list[dict[str, Any]] = merge_openai_tools(agui_openai, platform_openai)
-        total_usage: TokenUsage = TokenUsage()
-        assistant_parts: list[str] = []
-        error_message: str | None = None
-        completed: bool = False
-
-        for turn in range(1, self._max_turns + 1):
+        async def emit(event: AgentEvent) -> None:
+            """出站发布同时喂给 SessionTimingRecorder（失败不阻断主链路）。"""
             try:
-                response: LLMResponse = await self._gateway.chat(
-                    LLMRequest(
-                        messages=llm_messages,
-                        model=model,
-                        temperature=self._temperature,
-                        max_tokens=self._max_tokens,
-                        tools=openai_tools,
-                        tool_choice="auto" if openai_tools else "none",
-                        session_id=session_id,
-                        user_id=user_id,
-                    )
-                )
-            except Exception as exc:  # noqa: BLE001 - LLM 失败统一回 error 事件
-                logger.error(
-                    "A2UI LLM call failed",
-                    session_id=session_id,
-                    turn=turn,
-                    error=str(exc),
-                    exc_info=True,
-                )
-                error_message = f"LLM 调用失败：{exc}"
-                break
+                recorder.observe(event)
+            except Exception:  # noqa: BLE001
+                pass
+            await self._publisher.publish(session_id, event)
 
-            if response.usage.total_tokens > 0:
-                total_usage += TokenUsage(
-                    prompt=response.usage.prompt_tokens,
-                    completion=response.usage.completion_tokens,
-                    total=response.usage.total_tokens,
-                )
-
-            if response.content:
-                assistant_parts.append(response.content)
-                await self._publisher.publish(
-                    session_id, AgentEvent.text_delta(response.content)
-                )
-
-            if not response.tool_calls:
-                completed = True
-                break
-
-            llm_messages.append(
-                LLMMessage(
-                    role=LLMRole.ASSISTANT,
-                    content=response.content or "",
-                    tool_calls=response.tool_calls,
-                )
+        try:
+            llm_messages: list[LLMMessage] = ensure_a2ui_system_hint(
+                ensure_coordinator_system_prompt(combined, resolved_agent_id)
             )
 
-            processed: bool = False
-            for tc in response.tool_calls:
-                function: Any = tc.get("function") if isinstance(tc, dict) else None
-                if not isinstance(function, dict):
-                    continue
-                tool_name: str = str(function.get("name") or "")
-                tool_call_id: str = str(tc.get("id") or "")
-                args: dict[str, Any] = _parse_tool_args(function.get("arguments", "{}"))
-                processed = True
-                await self._publisher.publish(
-                    session_id, AgentEvent.tool_call(tool_name, args)
-                )
-                result: dict[str, Any] = await self._execute_tool(
-                    tool_name,
-                    args,
-                    session_id,
-                    identity=identity,
-                    agent_id=resolved_agent_id,
-                    ask_tool_metadata=ask_meta,
-                )
-                await self._publisher.publish(
-                    session_id, AgentEvent.tool_result(tool_name, result)
-                )
+            # 持久化本轮用户文本（工具/系统消息不入历史，保持上下文干净）
+            for msg in messages:
+                if isinstance(msg, dict) and msg.get("role") == "user":
+                    user_text: str = _agui_content_to_text(msg.get("content")).strip()
+                    if user_text:
+                        await self._persist_user(session_id, user_text)
+
+            # Gateway 注入 render_a2ui + 平台委派工具（agent__invoke 等）。
+            # 缺后者时 LLM 只会瞎编 A2UI /「外部资料」，走不到 mis-rag。
+            agui_openai: list[dict[str, Any]] = agui_tools_to_openai_tools(tools)
+            platform_openai: list[dict[str, Any]] = []
+            registry: ToolRegistry | None = await self._ensure_tool_registry(
+                resolved_agent_id
+            )
+            if registry is not None:
+                platform_openai = platform_registry_to_openai_tools(registry)
+            openai_tools: list[dict[str, Any]] = merge_openai_tools(
+                agui_openai, platform_openai
+            )
+            total_usage: TokenUsage = TokenUsage()
+            assistant_parts: list[str] = []
+            error_message: str | None = None
+            completed: bool = False
+
+            for turn in range(1, self._max_turns + 1):
+                try:
+                    response: LLMResponse = await self._gateway.chat(
+                        LLMRequest(
+                            messages=llm_messages,
+                            model=model,
+                            temperature=self._temperature,
+                            max_tokens=self._max_tokens,
+                            tools=openai_tools,
+                            tool_choice="auto" if openai_tools else "none",
+                            session_id=session_id,
+                            user_id=user_id,
+                        )
+                    )
+                except Exception as exc:  # noqa: BLE001 - LLM 失败统一回 error 事件
+                    logger.error(
+                        "A2UI LLM call failed",
+                        session_id=session_id,
+                        turn=turn,
+                        error=str(exc),
+                        exc_info=True,
+                    )
+                    error_message = f"LLM 调用失败：{exc}"
+                    break
+
+                if response.usage.total_tokens > 0:
+                    total_usage += TokenUsage(
+                        prompt=response.usage.prompt_tokens,
+                        completion=response.usage.completion_tokens,
+                        total=response.usage.total_tokens,
+                    )
+
+                if response.content:
+                    assistant_parts.append(response.content)
+                    await emit(AgentEvent.text_delta(response.content))
+
+                if not response.tool_calls:
+                    completed = True
+                    break
+
                 llm_messages.append(
                     LLMMessage(
-                        role=LLMRole.TOOL,
-                        content=json.dumps(result, ensure_ascii=False),
-                        tool_call_id=tool_call_id,
+                        role=LLMRole.ASSISTANT,
+                        content=response.content or "",
+                        tool_calls=response.tool_calls,
                     )
                 )
-            if not processed:
-                error_message = "A2UI run 工具调用格式无法解析"
-                break
-            # 本轮有工具调用 → 继续下一轮 LLM（直到无工具调用或达到轮数上限）
 
-        if not completed and error_message is None:
-            error_message = f"A2UI run 达到最大执行轮数（{self._max_turns}）"
+                processed: bool = False
+                for tc in response.tool_calls:
+                    function: Any = tc.get("function") if isinstance(tc, dict) else None
+                    if not isinstance(function, dict):
+                        continue
+                    tool_name: str = str(function.get("name") or "")
+                    tool_call_id: str = str(tc.get("id") or "")
+                    args: dict[str, Any] = _parse_tool_args(
+                        function.get("arguments", "{}")
+                    )
+                    processed = True
+                    await emit(AgentEvent.tool_call(tool_name, args))
+                    result: dict[str, Any] = await self._execute_tool(
+                        tool_name,
+                        args,
+                        session_id,
+                        identity=identity,
+                        agent_id=resolved_agent_id,
+                        ask_tool_metadata=ask_meta,
+                    )
+                    await emit(AgentEvent.tool_result(tool_name, result))
+                    llm_messages.append(
+                        LLMMessage(
+                            role=LLMRole.TOOL,
+                            content=json.dumps(result, ensure_ascii=False),
+                            tool_call_id=tool_call_id,
+                        )
+                    )
+                if not processed:
+                    error_message = "A2UI run 工具调用格式无法解析"
+                    break
+                # 本轮有工具调用 → 继续下一轮 LLM（直到无工具调用或达到轮数上限）
 
-        if error_message is not None:
-            logger.warning(
-                "A2UI run failed",
-                session_id=session_id,
-                error=error_message,
-            )
-            # 同时下发可读正文 + done，避免前端只拿到 error 条或空气泡
-            # 「未收到有效回复」。
-            user_facing = (
-                f"抱歉，本轮回复失败：{error_message}\n"
-                "请重试提问；若刚查询了较多数据，可缩小时间范围或门店后再问。"
-            )
-            await self._publisher.publish(
-                session_id, AgentEvent.text_delta(user_facing)
-            )
-            await self._publisher.publish_error(
-                session_id, "A2UI_RUN_ERROR", error_message
-            )
-            fail_message_id = str(uuid.uuid4())
-            await self._persist_assistant(
-                session_id, user_facing, message_id=fail_message_id
-            )
-            await self._publisher.publish(
-                session_id,
-                AgentEvent.done(
-                    total_usage,
-                    message_id=fail_message_id,
+            if not completed and error_message is None:
+                error_message = f"A2UI run 达到最大执行轮数（{self._max_turns}）"
+
+            if error_message is not None:
+                logger.warning(
+                    "A2UI run failed",
                     session_id=session_id,
-                ),
-            )
-            return
+                    error=error_message,
+                )
+                # 同时下发可读正文 + done，避免前端只拿到 error 条或空气泡。
+                # 不用 publish_error（其内部会再发无锚点 done），改由 emit 统一观测。
+                user_facing = (
+                    f"抱歉，本轮回复失败：{error_message}\n"
+                    "请重试提问；若刚查询了较多数据，可缩小时间范围或门店后再问。"
+                )
+                await emit(AgentEvent.text_delta(user_facing))
+                await emit(AgentEvent.error("A2UI_RUN_ERROR", error_message))
+                await self._persist_assistant(
+                    session_id, user_facing, message_id=assistant_message_id
+                )
+                await emit(
+                    AgentEvent.done(
+                        total_usage,
+                        message_id=assistant_message_id,
+                        session_id=session_id,
+                    )
+                )
+                return
 
-        # 与文本通道 inbound_worker 对齐：委派 mis-rag 时 pending_kb_sources_fence
-        # 可能落在会话 state；A2UI 常只 render_a2ui 不回 Markdown，须在 done 前补发围栏。
-        # 若模型已写瘦身围栏（无 chunk），仍追加权威 pending（前端取最后一次围栏）。
-        pending_fence = await self._take_pending_kb_sources_fence(session_id)
-        assembled_so_far = "".join(assistant_parts)
-        from src.agent.mis_rag.qa_pipeline import should_append_pending_kb_sources_fence
+            # 与文本通道 inbound_worker 对齐：委派 mis-rag 时 pending_kb_sources_fence
+            # 可能落在会话 state；A2UI 常只 render_a2ui 不回 Markdown，须在 done 前补发围栏。
+            pending_fence = await self._take_pending_kb_sources_fence(session_id)
+            assembled_so_far = "".join(assistant_parts)
+            from src.agent.mis_rag.qa_pipeline import (
+                should_append_pending_kb_sources_fence,
+            )
 
-        if pending_fence and should_append_pending_kb_sources_fence(
-            assembled_so_far, pending_fence
-        ):
-            fence_text = (
-                pending_fence
-                if pending_fence.startswith("\n")
-                else f"\n\n{pending_fence}"
-            )
-            await self._publisher.publish(
-                session_id, AgentEvent.text_delta(fence_text)
-            )
-            assistant_parts.append(fence_text)
+            if pending_fence and should_append_pending_kb_sources_fence(
+                assembled_so_far, pending_fence
+            ):
+                fence_text = (
+                    pending_fence
+                    if pending_fence.startswith("\n")
+                    else f"\n\n{pending_fence}"
+                )
+                await emit(AgentEvent.text_delta(fence_text))
+                assistant_parts.append(fence_text)
 
-        assistant_text: str = "".join(assistant_parts).strip()
-        # 成功结束但无任何正文/围栏：补一句可读提示，避免「未收到有效回复」空壳。
-        if not assistant_text:
-            assistant_text = (
-                "未生成有效文字回复。若查询已成功，请重试让我整理结论；"
-                "也可缩小范围后再问。"
-            )
-            await self._publisher.publish(
-                session_id, AgentEvent.text_delta(assistant_text)
-            )
-            assistant_parts.append(assistant_text)
+            assistant_text: str = "".join(assistant_parts).strip()
+            # 成功结束但无任何正文/围栏：补一句可读提示，避免「未收到有效回复」空壳。
+            if not assistant_text:
+                assistant_text = (
+                    "未生成有效文字回复。若查询已成功，请重试让我整理结论；"
+                    "也可缩小范围后再问。"
+                )
+                await emit(AgentEvent.text_delta(assistant_text))
+                assistant_parts.append(assistant_text)
 
-        # 评价锚点（feedback-enhance §2.2 方案 C）：预生成 assistant 消息 UUID，
-        # 落库（_persist_assistant → add_message(message_id=...)）与 done 事件
-        # 透传共用同一 UUID，保证 agent_feedback 评价回放能精确命中该条消息。
-        assistant_message_id: str | None = None
-        if assistant_text:
-            assistant_message_id = str(uuid.uuid4())
+            # 评价锚点：落库与 done / 计时 turn_key 共用开局预生成的 UUID。
             await self._persist_assistant(
                 session_id, assistant_text, message_id=assistant_message_id
             )
-
-        await self._publisher.publish(
-            session_id,
-            AgentEvent.done(
-                total_usage,
-                message_id=assistant_message_id,
-                session_id=session_id,
-            ),
-        )
+            await emit(
+                AgentEvent.done(
+                    total_usage,
+                    message_id=assistant_message_id,
+                    session_id=session_id,
+                )
+            )
+        except Exception:
+            recorder.fail()
+            raise
+        finally:
+            # 与 AgentInstance.process_message 同口径：按轮写入 Redis（TTL 24h）。
+            try:
+                recorder.step_start("db_persist")
+                recorder.step_end("db_persist")
+                recorder.step_start("redis_write")
+                recorder.step_end("redis_write")
+                recorder.step_start("timing_save")
+                await store.save(
+                    session_id,
+                    assistant_message_id,
+                    recorder.snapshot(),
+                )
+                recorder.step_end("timing_save")
+            except Exception as save_exc:  # noqa: BLE001
+                logger.warning(
+                    "A2UI session timing save failed (degraded)",
+                    session_id=session_id,
+                    error=str(save_exc),
+                )
+            finally:
+                recorder.close()
 
     # ------------------------------------------------------------------ 工具执行
 

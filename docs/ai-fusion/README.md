@@ -44,6 +44,7 @@
 |--------|------|
 | **Coordinator–Worker 全套文档（需求/架构/决策/规范）** | **[coordinator-worker/](coordinator-worker/README.md)** |
 | **智能体运营控制台全套文档（需求/界面/架构/决策/规范）** | **[agent-ops-console/](agent-ops-console/README.md)** · [界面设计](agent-ops-console/ui.md) |
+| **百购分析智能体（Worker `bgbh-analyst`）** | **[bgbh-analyst/](bgbh-analyst/README.md)** |
 | 融合部署架构决策（H5 入口 / A2UI / PG·Redis 共享 / 去 nginx） | [decisions/deploy.md](decisions/deploy.md) |
 | JWT / 身份建模澄清决策 | [decisions/identity-jwt.md](decisions/identity-jwt.md) |
 | 阶段5 前端融合 PRD | [specs/phase5-frontend-prd.md](specs/phase5-frontend-prd.md) |
@@ -61,5 +62,6 @@
 - `specs/`：各阶段需求 / 设计 / 审计快照，按阶段归档。
 - `coordinator-worker/`：**对话调度基座**专题（PRD / 架构 / ADR / Spec 齐套）
 - `agent-ops-console/`：**智能体运营控制台**（host App 优先 + ai-platform 运行时；PRD / UI / 架构 / ADR / Spec）
+- `bgbh-analyst/`：**百购分析智能体**（落地说明 + 问数上线规划原文）
 - `archive/`：已完成或已过时的历史交付物，仅供追溯。
 - 早期探索稿（能力蓝图 PRD、集成架构、可行性评估、阶段1-2 设计）已于 2026-07-24 文档整理时移除——它们已被后续阶段5 的具体 PRD / 设计 / 实现完全取代。

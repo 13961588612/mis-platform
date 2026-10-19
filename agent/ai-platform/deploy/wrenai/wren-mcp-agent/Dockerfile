@@ -12,6 +12,7 @@ COPY requirements.txt /opt/wren-mcp-agent/requirements.txt
 RUN pip install -r requirements.txt
 
 COPY utils /opt/wren-mcp-agent/utils
+COPY conn_selfheal /opt/wren-mcp-agent/conn_selfheal
 COPY agent.py /opt/wren-mcp-agent/agent.py
 
 # 持久卷：project 目录 + 凭证临时文件（即用即删，但 volume 保证重启不丢 project）

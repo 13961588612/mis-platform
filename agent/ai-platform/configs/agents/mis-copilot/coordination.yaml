@@ -17,8 +17,10 @@ delegation:
   # 硬约束（R4/R8）：mis-admin-helper 不进 copilot（后台操作员专属，fail-closed）。
   # 旧 mis-extract / mis-summary 已灰度下线（enabled:false），由 mis-user-helper 承接。
   # v1.9 / B1：追加 mis-iqd（问数 Worker，role=worker、max_depth=1）。
+  # 百购经营分析走 bgbh-analyst，不把百购口径塞进 mis-iqd。
   worker_ids:
   - crm-assistant
   - mis-rag
   - mis-user-helper
   - mis-iqd
+  - bgbh-analyst

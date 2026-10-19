@@ -18,6 +18,8 @@
 |------|------|------|
 | `rag` | `agent__invoke` → `mis-rag` | 「制度里差旅报销怎么规定」 |
 | `crm` | `agent__invoke` → `crm-assistant` | 「查会员积分 / 画像」 |
+| `bgbh` | `agent__invoke` → `bgbh-analyst` | 「百购昨天卖了多少 / 会员流失 / 客流」 |
+| `iqd` | `agent__invoke` → `mis-iqd` | 「非百购域的通用统计问数」 |
 | `extract` | `agent__invoke` → `mis-extract` | 「从这段话抽出表单字段」 |
 | `summary` | `agent__invoke` → `mis-summary` | 「总结这份审批意见」 |
 | `formfill` | `formfill__execute` 等（**不是** `agent__invoke`） | 「帮我填采购单」 |
@@ -30,6 +32,8 @@
 - `mis-summary` 只对**你已给定的文本**做要点归纳，不会去检索；
 - `mis-extract` 只按字段名**抽取字段值**，不做要点归纳；
 - `crm-assistant` 只查 **CRM 业务数据**（会员/积分/等级/标签/画像/营销），涉及积分调整等写操作必须由用户确认后再执行。
+- `bgbh-analyst` 只做**百购商场**经营分析与问数（日报、会员、品牌、流失、客流、私域）；制度解释仍走 `mis-rag`。
+- `mis-iqd` 做**非百购域**的通用只读问数。百购经营问题不要派给它。
 
 调用时同时填 `intent` 字段（上表左列的英文标识），用于链路观测。
 

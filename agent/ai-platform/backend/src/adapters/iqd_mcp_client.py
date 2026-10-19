@@ -394,7 +394,14 @@ class IqdMcpClient:
 
         url = f"http://{self._host}:{self._port}{self._path}"
         headers = {"Authorization": f"Bearer {self._token}"} if self._token else None
-        timeout = httpx.Timeout(self._timeout, read=max(self._timeout * 2, 60.0))
+        # connect 须短：agent 不可达时不应干等满工具超时（默认 60s）。
+        # read 须长：streamable-HTTP 可能以 SSE 回包，空闲间隔按工具超时放宽。
+        timeout = httpx.Timeout(
+            connect=min(5.0, self._timeout),
+            read=max(self._timeout * 2, 60.0),
+            write=min(30.0, max(5.0, self._timeout)),
+            pool=min(5.0, self._timeout),
+        )
 
         async with contextlib.AsyncExitStack() as stack:
             http_client = create_mcp_http_client(headers=headers, timeout=timeout)
@@ -427,7 +434,12 @@ class IqdMcpClient:
 
         url = f"http://{self._host}:{self._port}{self._path}"
         headers = {"Authorization": f"Bearer {self._token}"} if self._token else None
-        timeout = httpx.Timeout(self._timeout, read=max(self._timeout * 2, 60.0))
+        timeout = httpx.Timeout(
+            connect=min(5.0, self._timeout),
+            read=max(self._timeout * 2, 60.0),
+            write=min(30.0, max(5.0, self._timeout)),
+            pool=min(5.0, self._timeout),
+        )
 
         async with contextlib.AsyncExitStack() as stack:
             http_client = create_mcp_http_client(headers=headers, timeout=timeout)

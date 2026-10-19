@@ -53,7 +53,10 @@ class AskRequest(BaseModel):
     question: str = Field(..., min_length=1, description="用户原始问题（不改写语义）")
     session_id: str | None = Field(default=None, description="MIS 会话 ID（多轮上下文）")
     thread_id: str | None = Field(default=None, description="WrenAI 侧线程（追问）")
-    connection_id: int | None = Field(default=None, description="缺省取 enabled 连接")
+    connection_id: int | str | None = Field(
+        default=None,
+        description="问数项目名或数字连接 id；缺省取已启用连接",
+    )
     view: ViewMode = Field(default="user", description="建议值；服务端按权限码最终裁定")
     simulate_role_code: str | None = Field(
         default=None, description="仅后台测试页，需 iqd:test:use"

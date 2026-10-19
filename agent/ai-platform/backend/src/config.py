@@ -681,6 +681,7 @@ class Settings(BaseSettings):
             "crm-assistant",
             "mis-user-helper",
             "mis-iqd",
+            "bgbh-analyst",
         ],
         description="mis-copilot 可委托的目标 Agent 白名单（不含 mis-admin-helper）",
     )

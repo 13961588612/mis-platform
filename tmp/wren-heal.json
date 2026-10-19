@@ -1,0 +1,78 @@
+{
+  "steps": [
+    {
+      "step": "mcp_status_before",
+      "err": null,
+      "data": {
+        "connection_id": 1792061562063,
+        "mcp_status": "running",
+        "host": "10.254.26.37",
+        "port": 9101,
+        "mcp_endpoint": "http://10.254.26.37:9101",
+        "agent_handle": "4d51d238664b4db385068c2985163e79",
+        "project_home": "/var/lib/mis-iqd/wren-projects/1792061562063",
+        "last_health_at": 1792384222.6049535,
+        "last_health_msg": "",
+        "remote": true
+      }
+    },
+    {
+      "step": "mcp_restart",
+      "err": null,
+      "data": {
+        "connection_id": 1792061562063,
+        "mcp_status": "running",
+        "mcp_host": "http://10.254.26.37:9101",
+        "agent_handle": "4d51d238664b4db385068c2985163e79",
+        "remote": true
+      }
+    },
+    {
+      "step": "mcp_status_after",
+      "err": null,
+      "data": {
+        "connection_id": 1792061562063,
+        "mcp_status": "running",
+        "host": "10.254.26.37",
+        "port": 9101,
+        "mcp_endpoint": "http://10.254.26.37:9101",
+        "agent_handle": "4d51d238664b4db385068c2985163e79",
+        "project_home": "/var/lib/mis-iqd/wren-projects/1792061562063",
+        "last_health_at": 0.0,
+        "last_health_msg": "",
+        "remote": true
+      }
+    },
+    {
+      "step": "force_rebuild",
+      "err": "HTTP 504",
+      "data": {
+        "timestamp": "2026-10-19T04:36:07.059+00:00",
+        "path": "/api/v1/iqd/self-heal/force-rebuild",
+        "status": 504,
+        "error": "Gateway Timeout",
+        "requestId": "bb8f942b-10801"
+      }
+    },
+    {
+      "step": "sync_status",
+      "err": null,
+      "data": {
+        "id": 1792061562817,
+        "connection_id": 1792061562063,
+        "build_status": "success",
+        "build_mdl_hash": "wqd-20261017085938-23e7a2df",
+        "index_status": "skipped",
+        "build_at": "2026-10-19T04:31:17.319115Z",
+        "index_at": "2026-10-19T01:45:30.271573Z",
+        "synced_sql_pair_count": 0,
+        "synced_knowledge_count": 0,
+        "build_error": null,
+        "index_error": null,
+        "updated_at": "2026-10-19T04:31:17.319115Z",
+        "action": "validate",
+        "publish_warnings": null
+      }
+    }
+  ]
+}

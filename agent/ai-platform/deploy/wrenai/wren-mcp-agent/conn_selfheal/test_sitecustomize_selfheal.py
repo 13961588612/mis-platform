@@ -131,3 +131,42 @@ def test_idempotent_patch(patched) -> None:
     c = MySqlConnector()
     assert c.query("SELECT 1") == ("ok", "SELECT 1")
     assert state["opens"] == 2, "幂等：不得因重复打补丁而多重建"
+
+
+def test_timed_out_counts_as_conn_error(patched) -> None:
+    sc = patched[0]
+    assert sc._looks_like_conn_error(TimeoutError("timed out")) is True
+    assert sc._looks_like_conn_error(ValueError("column missing")) is False
+
+
+def test_arm_io_timeout_sets_socket(monkeypatch, patched) -> None:
+    import socket
+
+    sc = patched[0]
+    monkeypatch.setenv("WREN_CONN_IO_TIMEOUT_SECONDS", "15")
+    left, right = socket.socketpair()
+    try:
+        conn = types.SimpleNamespace(_sock=left, read_timeout=None, write_timeout=None)
+        sc._arm_io_timeout(conn)
+        assert left.gettimeout() == 15
+        assert conn.read_timeout == 15
+        assert conn.write_timeout == 15
+    finally:
+        left.close()
+        right.close()
+
+
+def test_arm_io_timeout_disabled(monkeypatch, patched) -> None:
+    import socket
+
+    sc = patched[0]
+    monkeypatch.setenv("WREN_CONN_IO_TIMEOUT_SECONDS", "0")
+    left, right = socket.socketpair()
+    try:
+        conn = types.SimpleNamespace(_sock=left, read_timeout=None)
+        sc._arm_io_timeout(conn)
+        assert left.gettimeout() is None
+        assert conn.read_timeout is None
+    finally:
+        left.close()
+        right.close()

@@ -33,6 +33,12 @@ from src.agent.mis_iqd.errors import (
     SqlFailedError,
     WrenaiUnreachableError,
 )
+from src.agent.mis_iqd.catalog_schema import (
+    columns_for_sql,
+    index_catalog_columns,
+    render_catalog_schema,
+    unknown_sql_columns,
+)
 from src.agent.mis_iqd.lineage import CitationBuilder, LineageExtractor
 from src.agent.mis_iqd.mcp_watchdog import McpConnectionWatchdog
 from src.agent.mis_iqd.masking import MaskingEngine, MaskOutcome
@@ -177,6 +183,22 @@ class AskOrchestrator:
 
         mcp = self._get_mcp_client(resolution.connection_id)
         plan = self._plan_mapper
+        if self._is_degraded_mock(mcp):
+            # 端点未就绪时 client 会降级成离线 mock，固定吐出 orders 示例 SQL。
+            # 这张表不在授权范围内，血缘会误报成「当前角色无权」。这里直接说明服务没启动。
+            message = "问数服务未启动，请先启用该连接的 Wren MCP 后再提问"
+            plan.mark(steps, "searching", "failed", detail=message)
+            return self._failed_ask_result(
+                query_id=query_id,
+                request=request,
+                resolution=resolution,
+                steps=steps,
+                started_at=started_at,
+                message=message,
+                nl2sql_attempts=[],
+                sql=None,
+                error_code="45202",
+            )
 
         # ===== understanding + searching（get_context）=====
         plan.mark_done(steps, "understanding")
@@ -227,11 +249,15 @@ class AskOrchestrator:
 
         # ===== NL→SQL（平台 LLM Gateway）+ dry_plan（Wren 方言转译）=====
         plan.mark(steps, "generating", "running")
+        column_index = await self._load_catalog_columns(
+            getattr(resolution, "connection_id", None)
+        )
         context_text, described_models = await self._build_nl2sql_context(
             mcp,
             native,
             resolution.allowed_item_keys,
             question=request.question,
+            column_index=column_index,
         )
         # 授权 item_key 若无法在 Wren 落成模型（如 pg_main.public.orders），
         # 本轮 describe 成功的模型名并入血缘放行集，避免「有列上下文却被 45204 挡住」。
@@ -333,6 +359,30 @@ class AskOrchestrator:
                 message="未能生成有效查询",
                 nl2sql_attempts=nl2sql_attempts,
                 sql=None,
+                context_text=context_text,
+            )
+
+        sql, column_error = await self._repair_unknown_columns(
+            sql,
+            column_index,
+            nl2sql=nl2sql,
+            request=request,
+            identity=identity,
+            query_id=query_id,
+            nl2sql_attempts=nl2sql_attempts,
+            record_attempt=_record_attempt,
+        )
+        if column_error:
+            plan.mark(steps, "generating", "failed", detail=column_error)
+            return self._failed_ask_result(
+                query_id=query_id,
+                request=request,
+                resolution=resolution,
+                steps=steps,
+                started_at=started_at,
+                message=column_error,
+                nl2sql_attempts=nl2sql_attempts,
+                sql=sql,
                 context_text=context_text,
             )
 
@@ -808,6 +858,7 @@ class AskOrchestrator:
         allowed_tables: list[str] | None,
         *,
         question: str = "",
+        column_index: dict[str, list[str]] | None = None,
     ) -> tuple[str, list[str]]:
         """组装 NL→SQL 上下文：get_context + 授权表 + list_models + describe_model 列清单。
 
@@ -916,11 +967,98 @@ class AskOrchestrator:
                 described_names.append(model_name)
                 parts.append(block)
 
+        catalog_block = ""
+        if not described_names and column_index:
+            ranked_catalog = self._rank_model_candidates(
+                list(column_index.keys()),
+                question=question,
+                allowed=tables,
+            )
+            catalog_block = render_catalog_schema(column_index, ranked_catalog[:3])
+            if catalog_block:
+                parts.append(catalog_block)
+
         if not described_names and listed_names:
             parts.append("available_models:")
             parts.extend(f"- {n}" for n in listed_names[:40])
 
-        return "\n".join(parts)[:8000], described_names
+        text = "\n".join(parts)
+        # 授权表名单很长时，列清单在尾部会被 8000 字截掉，模型又会去猜字段。
+        if catalog_block and catalog_block not in text[:8000]:
+            text = catalog_block + "\n" + text
+        return text[:8000], described_names
+
+    async def _load_catalog_columns(self, connection_id: int | None) -> dict[str, list[str]]:
+        """从平台清单读取列。Wren 上下文超时时，用这份列名单约束 SQL。"""
+        try:
+            client = self._get_scope_resolver()._get_client()
+            items = await client.get_catalog_meta(connection_id)
+        except Exception as exc:  # noqa: BLE001 - 清单不可得时保持原降级路径
+            logger.warning("IQD catalog columns unavailable", error=str(exc))
+            return {}
+        if not isinstance(items, list):
+            return {}
+        return index_catalog_columns(items)
+
+    async def _repair_unknown_columns(
+        self,
+        sql: str,
+        column_index: dict[str, list[str]],
+        *,
+        nl2sql: Nl2SqlGenerator,
+        request: AskRequest,
+        identity: AskIdentity,
+        query_id: str,
+        nl2sql_attempts: list[dict[str, Any]],
+        record_attempt: Any,
+    ) -> tuple[str, str | None]:
+        """清单里没有的列先重生成一次；仍然对不上就返回明确错误，不再拿去执行。"""
+        del nl2sql_attempts
+        missing = unknown_sql_columns(sql, column_index)
+        if not missing:
+            return sql, None
+        scoped = columns_for_sql(sql, column_index)
+        hint = (
+            f"previous_sql:\n{sql}\n\n"
+            f"columns_not_in_table: {', '.join(missing)}\n"
+            f"{render_catalog_schema(scoped, list(scoped))}\n"
+            "Rewrite using only the listed column names."
+        )
+        try:
+            repaired = await nl2sql.generate(
+                question=request.question,
+                context=hint,
+                allowed_tables=[],
+                user_id=str(identity.user_id or ""),
+                session_id=str(request.thread_id or query_id),
+                repair_hint=hint,
+            )
+            record_attempt(repaired, label="column_repair")
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("IQD unknown-column repair failed", error=str(exc))
+            return sql, self._unknown_column_message(sql, missing, column_index)
+        repaired_sql = (getattr(repaired, "sql", None) or "").strip()
+        if not repaired_sql or str(getattr(repaired, "type", "") or "").upper() == "GENERAL":
+            return sql, self._unknown_column_message(sql, missing, column_index)
+        still = unknown_sql_columns(repaired_sql, column_index)
+        if still:
+            return repaired_sql, self._unknown_column_message(repaired_sql, still, column_index)
+        return repaired_sql, None
+
+    @staticmethod
+    def _unknown_column_message(
+        sql: str,
+        missing: list[str],
+        column_index: dict[str, list[str]],
+    ) -> str:
+        """告诉用户哪个字段不在表里，并列出这条 SQL 所在表的可用列。"""
+        scoped = columns_for_sql(sql, column_index)
+        names = ", ".join(missing)
+        if not scoped:
+            return f"查询使用了表中不存在的字段：{names}。"
+        table, cols = next(iter(scoped.items()))
+        shown = ", ".join(cols[:40])
+        return f"查询使用了 {table} 中不存在的字段：{names}。可用列：{shown}。"
 
     async def _try_cube_query(
         self,
@@ -1155,6 +1293,7 @@ class AskOrchestrator:
         for word, aliases in (
             ("销售", ("sale", "sales", "gmv", "trd", "order")),
             ("门店", ("store", "shop", "spm")),
+            ("店", ("store", "shop")),
             ("订单", ("order", "ord", "trd")),
             ("客户", ("customer", "cust", "user", "member")),
             ("成本", ("cost",)),
@@ -1398,6 +1537,10 @@ class AskOrchestrator:
         )
 
     # ================================================================ 依赖
+
+    def _is_degraded_mock(self, mcp: IqdMcpClient) -> bool:
+        """端点未就绪时降级出来的 mock。测试显式注入的 mock client 不算。"""
+        return bool(getattr(mcp, "_mock", False)) and self._mcp_client is None
 
     def _get_mcp_client(self, connection_id: int | str | None = None) -> IqdMcpClient:
         """按 connection_id 取该连接专属 MCP client（方案 A 多连接路由）。

@@ -23,7 +23,9 @@ import asyncio
 import json
 import os
 import re
+import signal
 import tempfile
+import threading
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -149,6 +151,14 @@ class AgentSettings(BaseSettings):
             "连接自愈补丁目录（内含 sitecustomize.py）；缺省取 agent.py 同级 conn_selfheal/"
         ),
     )
+    proxy_connect_timeout_seconds: float = Field(
+        default=5.0,
+        description="数据面反代连接本机 wren 的超时（秒）",
+    )
+    proxy_read_timeout_seconds: float = Field(
+        default=120.0,
+        description="数据面反代读取上游的超时（秒）；SSE 空闲超过该值即断开",
+    )
 
 
 _settings = AgentSettings()
@@ -194,6 +204,257 @@ def _reachable_host() -> str:
     （决策 ①⑧：跨机器数据面可达性）。
     """
     return _settings.public_host or _settings.bind_host
+
+
+# 子进程日志：独立文件 + 上限。禁止继承父进程 stdout（journal 管道写满会堵住 wren），
+# 也禁止无人读取的 PIPE（缓冲满后子进程停在 write）。
+_CHILD_LOG_MAX_BYTES = 8 * 1024 * 1024
+_CHILD_LOG_KEEP_BYTES = 256 * 1024
+_LOG_TAIL_BYTES = 32 * 1024
+_CLI_OUTPUT_MAX_BYTES = 256 * 1024
+_PORT_IN_CMD = re.compile(r"--port(?:=|\s+)(\d+)")
+
+
+def _session_kwargs() -> dict[str, bool]:
+    """POSIX 上让子进程自成会话，便于超时后按进程组杀掉子孙进程。"""
+    if os.name == "nt":
+        return {}
+    return {"start_new_session": True}
+
+
+async def _kill_proc_tree(proc: Any) -> None:
+    """结束子进程。新会话时杀整个进程组，避免只杀掉 wren 外壳、孙进程继续占端口。"""
+    if proc is None or proc.returncode is not None:
+        return
+    pid = getattr(proc, "pid", None)
+    new_session = bool(getattr(proc, "_iqd_new_session", False))
+    if new_session and pid:
+        try:
+            os.killpg(pid, signal.SIGTERM)
+        except (ProcessLookupError, PermissionError, OSError):
+            try:
+                proc.terminate()
+            except ProcessLookupError:
+                return
+    else:
+        try:
+            proc.terminate()
+        except ProcessLookupError:
+            return
+    try:
+        await asyncio.wait_for(proc.wait(), timeout=10.0)
+        return
+    except (asyncio.TimeoutError, TimeoutError, ProcessLookupError):
+        pass
+    if new_session and pid:
+        try:
+            os.killpg(pid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError, OSError):
+            try:
+                proc.kill()
+            except ProcessLookupError:
+                pass
+    else:
+        try:
+            proc.kill()
+        except ProcessLookupError:
+            pass
+    try:
+        await asyncio.wait_for(proc.wait(), timeout=5.0)
+    except (asyncio.TimeoutError, TimeoutError, ProcessLookupError):
+        pass
+
+
+def _mark_session(proc: Any) -> Any:
+    proc._iqd_new_session = os.name != "nt"  # type: ignore[attr-defined]
+    return proc
+
+
+def _child_log_path(project_home: str) -> str:
+    directory = os.path.join(project_home, ".logs")
+    os.makedirs(directory, exist_ok=True)
+    return os.path.join(directory, "wren-mcp.log")
+
+
+def _append_capped_log(
+    path: str,
+    chunk: bytes,
+    *,
+    max_bytes: int = _CHILD_LOG_MAX_BYTES,
+    keep_bytes: int = _CHILD_LOG_KEEP_BYTES,
+) -> None:
+    """追加一段日志；超过上限时只留尾部。调用方须保证同一 path 只有一个写入者。"""
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "ab", buffering=0) as out:
+        out.write(chunk)
+        size = out.tell()
+    if size <= max_bytes:
+        return
+    keep_from = max(0, size - keep_bytes)
+    with open(path, "rb") as inp:
+        inp.seek(keep_from)
+        tail = inp.read()
+    if keep_from > 0 and tail:
+        newline = tail.find(b"\n")
+        if newline != -1 and newline + 1 < len(tail):
+            tail = tail[newline + 1 :]
+    # 关掉追加句柄后再整体重写。Windows 上 "ab" 的 seek 不影响写入位置。
+    with open(path, "wb", buffering=0) as out:
+        out.write(b"[log truncated]\n")
+        out.write(tail)
+
+
+def _drain_child_log(fd: int, path: str) -> None:
+    """在独立线程里抽干子进程管道，避免事件循环卡住时管道写满。"""
+    try:
+        while True:
+            try:
+                chunk = os.read(fd, 65536)
+            except OSError:
+                break
+            if not chunk:
+                break
+            try:
+                _append_capped_log(path, chunk)
+            except OSError as exc:
+                logger.warning("agent child log write failed", path=path, error=str(exc))
+                break
+    finally:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+
+
+def _read_log_tail(project_home: str, limit: int = _LOG_TAIL_BYTES) -> str:
+    path = os.path.join(project_home, ".logs", "wren-mcp.log")
+    try:
+        size = os.path.getsize(path)
+        with open(path, "rb") as fh:
+            if size > limit:
+                fh.seek(size - limit)
+            data = fh.read()
+    except OSError:
+        return ""
+    return data.decode("utf-8", errors="replace")
+
+
+def _orphan_cmdline_port(cmdline: str, ports: set[int]) -> int | None:
+    """cmdline 属于本 agent 端口段上的 ``wren serve mcp`` 时返回端口，否则 None。"""
+    if "wren" not in cmdline or "serve" not in cmdline or "mcp" not in cmdline:
+        return None
+    match = _PORT_IN_CMD.search(cmdline)
+    if not match:
+        return None
+    port = int(match.group(1))
+    if port not in ports:
+        return None
+    return port
+
+
+def _read_proc_cmdline(pid: int) -> str:
+    try:
+        with open(f"/proc/{pid}/cmdline", "rb") as fh:
+            return fh.read().replace(b"\x00", b" ").decode("utf-8", errors="replace")
+    except OSError:
+        return ""
+
+
+def _reap_orphan_wren(ports: set[int]) -> list[int]:
+    """启动时清掉仍占着本端口段的上一轮 ``wren serve mcp``（仅 Linux /proc）。"""
+    if os.name == "nt" or not os.path.isdir("/proc"):
+        return []
+    targets: list[int] = []
+    for name in os.listdir("/proc"):
+        if not name.isdigit():
+            continue
+        pid = int(name)
+        if pid == os.getpid():
+            continue
+        if _orphan_cmdline_port(_read_proc_cmdline(pid), ports) is None:
+            continue
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except (ProcessLookupError, PermissionError, OSError):
+            continue
+        targets.append(pid)
+    if not targets:
+        return []
+    deadline = time.monotonic() + 3.0
+    alive = list(targets)
+    while alive and time.monotonic() < deadline:
+        still: list[int] = []
+        for pid in alive:
+            try:
+                os.kill(pid, 0)
+            except ProcessLookupError:
+                continue
+            except PermissionError:
+                still.append(pid)
+            else:
+                still.append(pid)
+        alive = still
+        if alive:
+            time.sleep(0.2)
+    for pid in alive:
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError, OSError):
+            pass
+    return targets
+
+
+async def _wait_port_open(port: int, timeout: float) -> bool:
+    """等到 127.0.0.1:port 可连接。wren 尚未 listen 时直接标 running 会让问数耗满反代超时。"""
+    deadline = time.monotonic() + max(0.5, timeout)
+    while time.monotonic() < deadline:
+        try:
+            _reader, writer = await asyncio.wait_for(
+                asyncio.open_connection("127.0.0.1", port),
+                timeout=1.0,
+            )
+        except (OSError, asyncio.TimeoutError):
+            await asyncio.sleep(0.25)
+            continue
+        writer.close()
+        try:
+            await writer.wait_closed()
+        except OSError:
+            pass
+        return True
+    return False
+
+
+async def _read_process_output(proc: Any, cap: int) -> tuple[bytes, bytes, bool]:
+    """并发读 stdout/stderr，超过 cap 的部分丢掉但继续抽干，避免管道写满。"""
+
+    async def _read(stream: Any) -> tuple[bytes, bool]:
+        if stream is None:
+            return b"", False
+        buf = bytearray()
+        truncated = False
+        while True:
+            chunk = await stream.read(65536)
+            if not chunk:
+                break
+            room = cap - len(buf)
+            if room > 0:
+                buf.extend(chunk[:room])
+            if len(chunk) > max(room, 0):
+                truncated = True
+        return bytes(buf), truncated
+
+    out_task = asyncio.create_task(_read(proc.stdout))
+    err_task = asyncio.create_task(_read(proc.stderr))
+    try:
+        stdout_b, out_truncated = await out_task
+        stderr_b, err_truncated = await err_task
+    except BaseException:
+        out_task.cancel()
+        err_task.cancel()
+        raise
+    await proc.wait()
+    return stdout_b, stderr_b, out_truncated or err_truncated
 
 
 # ================================================================ 鉴权
@@ -250,6 +511,9 @@ class PortAllocator:
         self._used: set[int] = set()
         self._lock = asyncio.Lock()
 
+    def owned_ports(self) -> set[int]:
+        return set(self._all)
+
     async def allocate(self, conn_id: str) -> int:
         async with self._lock:
             for p in sorted(self._all):
@@ -282,6 +546,7 @@ class AgentProcessEntry:
     command: list[str] = field(default_factory=list)
     credential: dict[str, str] = field(default_factory=dict)  # 仅驻内存，绝不落盘
     profile: str = ""  # wren profile 名（serve mcp --profile 用）
+    port_held: bool = True  # False 表示端口已归还，再次拉起须重新分配
     started_at: float = 0.0
     last_health_at: float = 0.0
     failure_count: int = 0
@@ -294,6 +559,11 @@ class WrenMcpSupervisor:
         self._ports = PortAllocator(_settings.wren_port_range)
         self._entries: dict[str, AgentProcessEntry] = {}
         self._lock = asyncio.Lock()
+        self._op_locks: dict[str, asyncio.Lock] = {}
+
+    def _op_lock(self, conn_id: str) -> asyncio.Lock:
+        """同一连接的启动/停止/重启互斥。避免自愈与 ensure 各起一个 wren 抢端口。"""
+        return self._op_locks.setdefault(conn_id, asyncio.Lock())
 
     # ---- 凭证临时文件：chmod 600 即用即删（S1，不落盘） ----
     def _build_env(self, credential: dict[str, str], project_home: str) -> dict[str, str] | None:
@@ -403,13 +673,18 @@ class WrenMcpSupervisor:
             with os.fdopen(fd, "w", encoding="utf-8") as fh:
                 json.dump(profile_doc, fh, ensure_ascii=False)
             async with _get_profile_lock():
-                proc = await asyncio.create_subprocess_exec(
+                proc = _mark_session(await asyncio.create_subprocess_exec(
                     _settings.wren_cli_bin, "profile", "add", profile_name, "--from-file", tmp_path,
                     cwd=entry.project_home,
                     env=_with_conn_selfheal(env),
                     stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
-                )
-                _out, err_b = await asyncio.wait_for(proc.communicate(), timeout=30.0)
+                    **_session_kwargs(),
+                ))
+                try:
+                    _out, err_b = await asyncio.wait_for(proc.communicate(), timeout=30.0)
+                except (asyncio.TimeoutError, TimeoutError):
+                    await _kill_proc_tree(proc)
+                    raise
             if proc.returncode not in (0, None):
                 # profile add 对「校验失败」仍返回 0；非 0 才是写入失败
                 logger.warning(
@@ -429,28 +704,71 @@ class WrenMcpSupervisor:
         """确认 profile 已就位（``wren profile debug <name>`` exit 0）。"""
         if not name:
             return False
+        proc = None
         try:
-            proc = await asyncio.create_subprocess_exec(
+            proc = _mark_session(await asyncio.create_subprocess_exec(
                 _settings.wren_cli_bin, "profile", "debug", name,
                 env=_with_conn_selfheal(None),
                 stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL,
-            )
+                **_session_kwargs(),
+            ))
             await asyncio.wait_for(proc.wait(), timeout=15.0)
             return proc.returncode == 0
+        except (asyncio.TimeoutError, TimeoutError):
+            await _kill_proc_tree(proc)
+            return False
         except Exception:  # noqa: BLE001
+            await _kill_proc_tree(proc)
             return False
 
     async def _launcher(self, command: list[str], env: dict[str, str] | None, cwd: str) -> Any:
-        # 子进程日志交由 systemd/journal（或 Docker logs）统一采集。
-        # 先前使用 DEVNULL 会让 wren serve mcp 的 SQL/数据库错误完全消失。
+        # 日志直接落到 {project}/.logs/wren-mcp.log（O_APPEND）。
+        # 不用 PIPE：无人读会堵死；继承 journal 又会在管道满时卡死整个 agent。
         # 连接自愈补丁经 PYTHONPATH 注入（wren connector 无连接池/无失效检测）。
-        return await asyncio.create_subprocess_exec(
-            *command,
-            env=_with_conn_selfheal(env),
-            cwd=cwd,
-            stdout=None,
-            stderr=None,
-        )
+        log_path = await asyncio.to_thread(_child_log_path, cwd)
+
+        def _open_log() -> int:
+            # 启动前若已超上限，先裁尾，避免无限涨盘。
+            try:
+                if os.path.isfile(log_path) and os.path.getsize(log_path) > _CHILD_LOG_MAX_BYTES:
+                    _append_capped_log(log_path, b"", max_bytes=0, keep_bytes=_CHILD_LOG_KEEP_BYTES)
+            except OSError:
+                pass
+            return os.open(
+                log_path,
+                os.O_WRONLY | os.O_CREAT | os.O_APPEND | getattr(os, "O_CLOEXEC", 0),
+                0o600,
+            )
+
+        log_fd = await asyncio.to_thread(_open_log)
+        # create_subprocess_exec 会 dup 这个 fd；父进程随后关掉自己的副本。
+        os.set_inheritable(log_fd, True)
+        try:
+            # 启动分隔行，方便对照「哪一次拉起」
+            try:
+                os.write(
+                    log_fd,
+                    f"\n----- start {time.strftime('%Y-%m-%dT%H:%M:%S')} "
+                    f"cmd={' '.join(command)} -----\n".encode("utf-8", errors="replace"),
+                )
+            except OSError:
+                pass
+            proc = _mark_session(await asyncio.create_subprocess_exec(
+                *command,
+                env=_with_conn_selfheal(env),
+                cwd=cwd,
+                stdout=log_fd,
+                stderr=log_fd,
+                **_session_kwargs(),
+            ))
+        except Exception:
+            raise
+        finally:
+            try:
+                os.close(log_fd)
+            except OSError:
+                pass
+        return proc
 
     async def ensure(
         self,
@@ -487,9 +805,15 @@ class WrenMcpSupervisor:
         return entry
 
     async def _start_locked(self, entry: AgentProcessEntry) -> None:
-        """拉起（或重拉）进程；调用方须已持锁或仅本协程操作该 entry。"""
+        """拉起（或重拉）进程。同一连接与 stop/restart 互斥。"""
+        async with self._op_lock(entry.conn_id):
+            await self._start_body(entry)
+
+    async def _start_body(self, entry: AgentProcessEntry) -> None:
+        """实际拉起。调用方已持有该连接的 op 锁。"""
+        if entry.desired_state != "running":
+            return
         async with self._lock:
-            # 已在运行且存活 → 跳过
             if (
                 entry.proc is not None
                 and entry.proc.returncode is None
@@ -497,10 +821,13 @@ class WrenMcpSupervisor:
             ):
                 return
             entry.status = "starting"
+        if not entry.port_held:
+            entry.port = await self._ports.allocate(entry.conn_id)
+            entry.port_held = True
         project_home = entry.project_home
-        os.makedirs(project_home, exist_ok=True)
+        await asyncio.to_thread(os.makedirs, project_home, exist_ok=True)
         # ① 先解析 env（profile 占位与 serve mcp 都靠它；明文只经 env，不落盘）
-        env = self._build_env(entry.credential, project_home)
+        env = await asyncio.to_thread(self._build_env, entry.credential, project_home)
         # ② 建/刷新本连接 profile（占位，明文不落盘）；失败不阻断（可能已有手工 profile）
         #    仅当凭据齐全、profile 确已建好时才传 --profile：
         #    无凭据（如历史手工 profile 连接）→ 不传，沿用全局 active profile（保持旧行为）。
@@ -518,6 +845,8 @@ class WrenMcpSupervisor:
                     conn_id=entry.conn_id, error=str(exc),
                 )
                 profile_name = None
+        if entry.desired_state != "running":
+            return
         command = [
             _settings.wren_cli_bin,
             "serve", "mcp",
@@ -534,8 +863,35 @@ class WrenMcpSupervisor:
         except Exception as exc:  # noqa: BLE001
             async with self._lock:
                 entry.status = "crashed"
+                entry.failure_count += 1
             logger.error("agent start failed", conn_id=entry.conn_id, error=str(exc))
             raise
+        if entry.desired_state != "running":
+            await _kill_proc_tree(proc)
+            return
+        ready = await _wait_port_open(entry.port, _settings.start_timeout_seconds)
+        if entry.desired_state != "running":
+            await _kill_proc_tree(proc)
+            return
+        if not ready or proc.returncode is not None:
+            rc = proc.returncode
+            await _kill_proc_tree(proc)
+            async with self._lock:
+                entry.proc = None
+                entry.status = "crashed"
+                entry.failure_count += 1
+            log_tail = await asyncio.to_thread(_read_log_tail, entry.project_home, 2000)
+            logger.error(
+                "agent wren serve mcp not listening",
+                conn_id=entry.conn_id,
+                port=entry.port,
+                returncode=rc,
+                log_tail=log_tail[-500:] if log_tail else "",
+            )
+            raise RuntimeError(
+                f"wren mcp 未在 127.0.0.1:{entry.port} 监听 "
+                f"(returncode={rc}); log_tail={log_tail[-300:]!r}"
+            )
         async with self._lock:
             entry.proc = proc
             entry.status = "running"
@@ -545,55 +901,52 @@ class WrenMcpSupervisor:
         logger.info("agent wren serve mcp started", conn_id=entry.conn_id, port=entry.port)
 
     async def stop(self, conn_id: str) -> None:
-        async with self._lock:
-            entry = self._entries.get(conn_id)
-            if entry is None:
-                return
-            entry.desired_state = "stopped"
-            proc = entry.proc
-            port = entry.port
-            entry.status = "stopped"
-            entry.proc = None
-        if proc is not None:
-            await self._terminate(proc)
-        await self._ports.release(port)
-        logger.info("agent wren serve mcp stopped", conn_id=conn_id, port=port)
+        async with self._op_lock(conn_id):
+            async with self._lock:
+                entry = self._entries.get(conn_id)
+                if entry is None:
+                    return
+                entry.desired_state = "stopped"
+                proc = entry.proc
+                port = entry.port
+                held = entry.port_held
+                entry.status = "stopped"
+                entry.proc = None
+            if proc is not None:
+                await _kill_proc_tree(proc)
+            if held and (proc is None or proc.returncode is not None):
+                await self._ports.release(port)
+                entry.port_held = False
+                logger.info("agent wren serve mcp stopped", conn_id=conn_id, port=port)
+            elif proc is not None and proc.returncode is None:
+                logger.error(
+                    "agent process survived kill; port retained",
+                    conn_id=conn_id, port=port, pid=getattr(proc, "pid", None),
+                )
 
-    async def restart(self, conn_id: str) -> AgentProcessEntry | None:
-        async with self._lock:
-            entry = self._entries.get(conn_id)
-        if entry is None:
-            return None
-        # 终止旧进程（保留端口），重注凭证后拉起
-        async with self._lock:
-            proc = entry.proc
-        if proc is not None:
-            await self._terminate(proc)
-        await self._start_locked(entry)
-        return entry
-
-    async def _terminate(self, proc: Any) -> None:
-        try:
-            if proc.returncode is None:
-                try:
-                    proc.terminate()
-                except ProcessLookupError:
-                    pass
-                try:
-                    await asyncio.wait_for(proc.wait(), timeout=10.0)
-                except (asyncio.TimeoutError, ProcessLookupError):
-                    try:
-                        proc.kill()
-                    except ProcessLookupError:
-                        pass
-                    try:
-                        await asyncio.wait_for(proc.wait(), timeout=5.0)
-                    except (asyncio.TimeoutError, ProcessLookupError):
-                        pass
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("agent terminate error", error=str(exc))
-        finally:
-            pass
+    async def restart(
+        self, conn_id: str, credential: dict[str, str] | None = None
+    ) -> AgentProcessEntry | None:
+        async with self._op_lock(conn_id):
+            async with self._lock:
+                entry = self._entries.get(conn_id)
+                if entry is None:
+                    return None
+                if credential:
+                    entry.credential = credential
+                entry.desired_state = "running"
+                proc = entry.proc
+                entry.proc = None
+                entry.status = "starting"
+            if proc is not None:
+                await _kill_proc_tree(proc)
+                if proc.returncode is None:
+                    logger.error(
+                        "agent restart: old process survived",
+                        conn_id=conn_id, port=entry.port,
+                    )
+            await self._start_body(entry)
+            return entry
 
     def get(self, conn_id: str) -> AgentProcessEntry | None:
         return self._entries.get(conn_id)
@@ -602,17 +955,33 @@ class WrenMcpSupervisor:
         return list(self._entries.values())
 
     async def health_iteration(self) -> None:
-        """单次自愈迭代：崩溃/期望 running 未存活 → 重启。"""
+        """单次自愈迭代：崩溃/期望 running 未存活 → 重启。
+
+        正在启动或停止的连接跳过，避免和 ensure 各起一个进程。
+        连续失败按次数退避，上限为一个健康周期，避免端口被占时打满。
+        """
         snapshot = list(self._entries.values())
         for entry in snapshot:
             if entry.desired_state != "running":
+                continue
+            if self._op_lock(entry.conn_id).locked():
                 continue
             alive = entry.proc is not None and entry.proc.returncode is None
             async with self._lock:
                 if not alive and entry.status == "running":
                     entry.status = "crashed"
+                    entry.failure_count += 1
             if not alive:
-                logger.warning("agent process crashed, self-healing", conn_id=entry.conn_id, port=entry.port)
+                if entry.failure_count > 0:
+                    await asyncio.sleep(
+                        min(2.0 * entry.failure_count, _settings.health_interval_seconds)
+                    )
+                    if entry.desired_state != "running" or self._op_lock(entry.conn_id).locked():
+                        continue
+                logger.warning(
+                    "agent process crashed, self-healing",
+                    conn_id=entry.conn_id, port=entry.port,
+                )
                 try:
                     await self._start_locked(entry)
                 except Exception as exc:  # noqa: BLE001
@@ -856,6 +1225,9 @@ proxy_app.add_exception_handler(UnauthorizedError, _unauthorized_handler)
 
 @app.on_event("startup")
 async def _startup() -> None:  # pragma: no cover - 进程级
+    killed = await asyncio.to_thread(_reap_orphan_wren, supervisor._ports.owned_ports())
+    if killed:
+        logger.warning("agent reaped orphan wren", pids=killed)
     asyncio.create_task(_health_loop())
 
 
@@ -930,7 +1302,7 @@ async def api_stop(req: StopRequest, _: None = Depends(require_bearer)) -> JSONR
 @app.post("/internal/v1/wren-mcp/restart")
 async def api_restart(req: RestartRequest, _: None = Depends(require_bearer)) -> JSONResponse:
     """重启（复用端口 + 重注凭证）。"""
-    entry = await supervisor.restart(req.conn_id)
+    entry = await supervisor.restart(req.conn_id, req.credential or None)
     if entry is None:
         return JSONResponse({"code": 0, "data": {"conn_id": req.conn_id, "status": "stopped"}})
     view = _entry_view(entry)
@@ -957,7 +1329,9 @@ async def api_status(conn_id: str, _: None = Depends(require_bearer)) -> JSONRes
         return JSONResponse(
             {"code": 0, "data": {"conn_id": conn_id, "status": "stopped", "wren_host": "127.0.0.1"}}
         )
-    return JSONResponse({"code": 0, "data": _entry_view(entry)})
+    view = _entry_view(entry)
+    view["log_tail"] = await asyncio.to_thread(_read_log_tail, entry.project_home)
+    return JSONResponse({"code": 0, "data": view})
 
 
 @app.post("/internal/v1/wren-mcp/heartbeat")
@@ -1010,7 +1384,7 @@ async def _api_cli_locked(req: CliRequest) -> JSONResponse:
     listed_files: List[dict] = []
     try:
         if req.files:
-            written_files = _write_project_files(project_home, req.files)
+            written_files = await asyncio.to_thread(_write_project_files, project_home, req.files)
             logger.info(
                 "agent cli wrote project files",
                 conn_id=req.conn_id,
@@ -1018,7 +1392,9 @@ async def _api_cli_locked(req: CliRequest) -> JSONResponse:
                 files=written_files,
             )
         if req.delete_paths:
-            deleted_files = _delete_project_files(project_home, req.delete_paths)
+            deleted_files = await asyncio.to_thread(
+                _delete_project_files, project_home, req.delete_paths
+            )
             logger.info(
                 "agent cli deleted project files",
                 conn_id=req.conn_id,
@@ -1026,13 +1402,17 @@ async def _api_cli_locked(req: CliRequest) -> JSONResponse:
                 files=deleted_files,
             )
         if req.list_path:
-            listed_files = _list_project_files(project_home, req.list_path, req.list_prefix)
+            listed_files = await asyncio.to_thread(
+                _list_project_files, project_home, req.list_path, req.list_prefix
+            )
             logger.info(
                 "agent cli listed project files",
                 conn_id=req.conn_id,
                 path=req.list_path,
                 count=len(listed_files),
             )
+    except HTTPException:
+        raise
     except Exception as exc:  # noqa: BLE001 - 转成可读错误，别只留裸 500
         logger.error("agent cli project files op failed", conn_id=req.conn_id, error=str(exc))
         return JSONResponse(
@@ -1068,10 +1448,14 @@ async def _api_cli_locked(req: CliRequest) -> JSONResponse:
     if req.mdl_manifest:
         # 新版 wren context build 无 --mdl；平台派生的完整 MDL 直接落 target/mdl.json
         target_dir = os.path.join(project_home, "target")
-        os.makedirs(target_dir, exist_ok=True)
         mdl_path = os.path.join(target_dir, "mdl.json")
-        with open(mdl_path, "w", encoding="utf-8") as fh:
-            fh.write(req.mdl_manifest)
+
+        def _write_mdl() -> None:
+            os.makedirs(target_dir, exist_ok=True)
+            with open(mdl_path, "w", encoding="utf-8") as fh:
+                fh.write(req.mdl_manifest or "")
+
+        await asyncio.to_thread(_write_mdl)
         deployed_mdl = True
         logger.info("agent cli wrote target/mdl.json", conn_id=req.conn_id, path=mdl_path)
         # 剥掉调用方残留的 --mdl <path>
@@ -1108,7 +1492,7 @@ async def _api_cli_locked(req: CliRequest) -> JSONResponse:
         )
 
     # 确保工程骨架（wren_project.yml）存在，否则 context build/show 会报 no wren project found
-    _ensure_project_skeleton(project_home, req.conn_id)
+    await asyncio.to_thread(_ensure_project_skeleton, project_home, req.conn_id)
 
     command = [_settings.wren_cli_bin, *args]
     logger.info(
@@ -1118,13 +1502,14 @@ async def _api_cli_locked(req: CliRequest) -> JSONResponse:
         cwd=project_home,
     )
     try:
-        proc = await asyncio.create_subprocess_exec(
+        proc = _mark_session(await asyncio.create_subprocess_exec(
             *command,
             cwd=project_home,
             env=_with_conn_selfheal(None),
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
-        )
+            **_session_kwargs(),
+        ))
     except FileNotFoundError:
         return JSONResponse(
             {
@@ -1138,18 +1523,15 @@ async def _api_cli_locked(req: CliRequest) -> JSONResponse:
     timeout = max(5.0, float(req.timeout_seconds or 120.0))
     stdout_b = b""
     stderr_b = b""
+    truncated = False
     try:
         try:
-            stdout_b, stderr_b = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+            stdout_b, stderr_b, truncated = await asyncio.wait_for(
+                _read_process_output(proc, _CLI_OUTPUT_MAX_BYTES),
+                timeout=timeout,
+            )
         except (asyncio.TimeoutError, TimeoutError):
-            try:
-                proc.kill()
-            except ProcessLookupError:
-                pass
-            try:
-                await proc.wait()
-            except Exception:  # noqa: BLE001
-                pass
+            await _kill_proc_tree(proc)
             return JSONResponse(
                 {
                     "code": 50002,
@@ -1164,6 +1546,8 @@ async def _api_cli_locked(req: CliRequest) -> JSONResponse:
 
     stdout = (stdout_b or b"").decode("utf-8", errors="replace")
     stderr = (stderr_b or b"").decode("utf-8", errors="replace")
+    if truncated:
+        stderr = stderr + "\n[output truncated]\n"
     exit_code = int(proc.returncode or 0)
     logger.info(
         "agent cli done",
@@ -1242,19 +1626,73 @@ async def mcp_proxy(conn_id: str, request: Request, _: None = Depends(require_be
     headers = {
         k: v for k, v in request.headers.items() if k.lower() not in ("host", "authorization")
     }
-    async with httpx.AsyncClient(timeout=_settings.start_timeout_seconds) as client:
-        upstream = await client.request(
-            request.method, target, content=body, headers=headers,
-            params=request.query_params,
+    timeout = httpx.Timeout(
+        connect=_settings.proxy_connect_timeout_seconds,
+        read=_settings.proxy_read_timeout_seconds,
+        write=_settings.proxy_read_timeout_seconds,
+        pool=_settings.proxy_connect_timeout_seconds,
+    )
+    client = httpx.AsyncClient(timeout=timeout)
+    try:
+        upstream = await client.send(
+            client.build_request(
+                request.method,
+                target,
+                content=body,
+                headers=headers,
+                params=request.query_params,
+            ),
+            stream=True,
         )
+    except httpx.TimeoutException as exc:
+        await client.aclose()
+        logger.warning("mcp proxy timeout", conn_id=conn_id, error=str(exc))
+        return JSONResponse(
+            {"code": 504, "message": "upstream timeout"},
+            status_code=504,
+        )
+    except httpx.HTTPError as exc:
+        await client.aclose()
+        logger.warning("mcp proxy unreachable", conn_id=conn_id, error=str(exc))
+        return JSONResponse(
+            {"code": 502, "message": "upstream unreachable"},
+            status_code=502,
+        )
+
+    # Streamable HTTP 常以 text/event-stream 回包且不立刻关连接。
+    # 旧实现对上游用 request() 整包缓冲，会干等到 start_timeout(60s)；
+    # 必须边收边推，并关掉反向代理缓冲。
+    hop = {
+        "content-length",
+        "transfer-encoding",
+        "connection",
+        "keep-alive",
+        "proxy-authenticate",
+        "proxy-authorization",
+        "te",
+        "trailers",
+        "upgrade",
+        "content-encoding",
+    }
+    out_headers = {
+        k: v for k, v in upstream.headers.items() if k.lower() not in hop
+    }
+    out_headers["X-Accel-Buffering"] = "no"
+    out_headers.setdefault("Cache-Control", "no-cache")
+
+    async def _forward():
+        try:
+            async for chunk in upstream.aiter_bytes():
+                if chunk:
+                    yield chunk
+        finally:
+            await upstream.aclose()
+            await client.aclose()
+
     return StreamingResponse(
-        content=iter([upstream.content]),
+        content=_forward(),
         status_code=upstream.status_code,
-        headers={
-            k: v
-            for k, v in upstream.headers.items()
-            if k.lower() not in ("content-length", "transfer-encoding", "connection")
-        },
+        headers=out_headers,
         media_type=upstream.headers.get("content-type"),
     )
 
