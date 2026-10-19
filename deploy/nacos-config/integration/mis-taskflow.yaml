@@ -1,0 +1,11 @@
+# Nacos config: mis-taskflow (integration)
+server:
+  port: 8104
+
+mis:
+  message:
+    storage:
+      endpoint: ${MINIO_ENDPOINT:http://127.0.0.1:9000}
+      access-key: ${MINIO_ACCESS_KEY:minioadmin}
+      secret-key: ${MINIO_SECRET_KEY:minioadmin}
+      bucket: ${MINIO_MESSAGE_BUCKET:mis-message}

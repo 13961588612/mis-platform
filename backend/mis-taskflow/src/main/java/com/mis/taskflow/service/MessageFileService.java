@@ -13,6 +13,8 @@ import io.minio.GetObjectArgs;
 import io.minio.MakeBucketArgs;
 import io.minio.MinioClient;
 import io.minio.PutObjectArgs;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -29,6 +31,8 @@ import java.util.Set;
  */
 @Service
 public class MessageFileService {
+
+    private static final Logger log = LoggerFactory.getLogger(MessageFileService.class);
 
     public static final long MAX_BYTES = 20L * 1024 * 1024;
     public static final int MAX_ATTACHMENTS = 10;
@@ -175,6 +179,8 @@ public class MessageFileService {
                     .contentType(mime)
                     .build());
         } catch (Exception ex) {
+            log.error("MinIO putObject failed: bucket={}, key={}, endpoint配置见 mis.message.storage",
+                    storage.getBucket(), key, ex);
             throw new BusinessException(ResultCode.INTERNAL_ERROR, "上传到对象存储失败");
         }
     }
