@@ -60,9 +60,23 @@ export function MessageHtmlView({ html }: { html: string }) {
   }, [html]);
 
   return (
-    <div
-      className="prose prose-sm max-w-none break-words text-[13px] leading-relaxed"
-      dangerouslySetInnerHTML={{ __html: markup }}
-    />
+    <>
+      <style>{`
+        .msg-html-view table { border-collapse: collapse; width: 100%; margin: 0.5rem 0; }
+        .msg-html-view th, .msg-html-view td {
+          border: 1px solid #cbd5e1;
+          padding: 0.35rem 0.5rem;
+          vertical-align: top;
+        }
+        .msg-html-view th { background: #f8fafc; font-weight: 600; }
+        .msg-html-view mark { background: #fef08a; padding: 0 0.1em; border-radius: 2px; }
+        .msg-html-view img { max-width: 100%; height: auto; }
+        .msg-html-view hr { border: none; border-top: 1px solid #cbd5e1; margin: 0.75rem 0; }
+      `}</style>
+      <div
+        className="msg-html-view prose prose-sm max-w-none break-words text-[13px] leading-relaxed"
+        dangerouslySetInnerHTML={{ __html: markup }}
+      />
+    </>
   );
 }
