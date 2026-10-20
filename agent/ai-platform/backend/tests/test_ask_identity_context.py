@@ -126,6 +126,109 @@ async def test_enrich_replaces_spoofed_roles(monkeypatch: pytest.MonkeyPatch) ->
 
 
 @pytest.mark.asyncio
+async def test_enrich_falls_back_to_verified_roles_when_bff_empty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """BFF 返回空角色时，用 Gateway verified_roles 兜底（对齐 Copilot 45204 根因）。"""
+
+    async def fake_fetch(user_id: int, **_kwargs: Any) -> dict[str, str]:
+        del user_id
+        return {}
+
+    async def fake_conns() -> list[int]:
+        return [11]
+
+    monkeypatch.setattr(
+        "src.identity.ask_identity_context.fetch_ask_identity_headers", fake_fetch
+    )
+    monkeypatch.setattr(
+        "src.identity.ask_identity_context._enabled_connection_ids", fake_conns
+    )
+
+    meta = await enrich_inbound_ask_identity(
+        {"verified_roles": ["TENANT_ADMIN", "IT-TESTER"]},
+        mis_user_id=1,
+    )
+    assert "TENANT_ADMIN" in meta["X-Mis-Roles"]
+    assert "IT-TESTER" in meta["X-Mis-Roles"]
+    identity = _build_identity(meta)
+    assert identity.role_codes == ["TENANT_ADMIN", "IT-TESTER"]
+
+
+@pytest.mark.asyncio
+async def test_enrich_falls_back_when_bff_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_fetch(user_id: int, **_kwargs: Any) -> dict[str, str]:
+        del user_id
+        raise AskIdentityUnavailable("身份源连接失败", 1, "timeout")
+
+    async def fake_conns() -> list[int]:
+        return [11]
+
+    monkeypatch.setattr(
+        "src.identity.ask_identity_context.fetch_ask_identity_headers", fake_fetch
+    )
+    monkeypatch.setattr(
+        "src.identity.ask_identity_context._enabled_connection_ids", fake_conns
+    )
+
+    meta = await enrich_inbound_ask_identity(
+        {"verified_roles": ["TENANT_ADMIN"]},
+        mis_user_id=1,
+    )
+    assert "TENANT_ADMIN" in meta["X-Mis-Roles"]
+
+
+@pytest.mark.asyncio
+async def test_enrich_raises_when_bff_fails_and_no_jwt_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """回源失败且无 JWT 角色 → 立刻抛错，禁止带着空角色继续进 LLM。"""
+
+    async def fake_fetch(user_id: int, **_kwargs: Any) -> dict[str, str]:
+        del user_id
+        raise AskIdentityUnavailable("身份源连接失败", 1, "ConnectTimeout")
+
+    async def fake_conns() -> list[int]:
+        return [11]
+
+    monkeypatch.setattr(
+        "src.identity.ask_identity_context.fetch_ask_identity_headers", fake_fetch
+    )
+    monkeypatch.setattr(
+        "src.identity.ask_identity_context._enabled_connection_ids", fake_conns
+    )
+
+    with pytest.raises(AskIdentityUnavailable) as ei:
+        await enrich_inbound_ask_identity({}, mis_user_id=1, session_id="web-test")
+    assert "身份源连接失败" in ei.value.reason
+    assert "ASK_IDENTITY_UNAVAILABLE" in ei.value.user_message()
+
+
+@pytest.mark.asyncio
+async def test_enrich_raises_when_bff_returns_empty_and_no_jwt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_fetch(user_id: int, **_kwargs: Any) -> dict[str, str]:
+        del user_id
+        return {}
+
+    async def fake_conns() -> list[int]:
+        return [11]
+
+    monkeypatch.setattr(
+        "src.identity.ask_identity_context.fetch_ask_identity_headers", fake_fetch
+    )
+    monkeypatch.setattr(
+        "src.identity.ask_identity_context._enabled_connection_ids", fake_conns
+    )
+
+    with pytest.raises(AskIdentityUnavailable):
+        await enrich_inbound_ask_identity({}, mis_user_id=1)
+
+
+@pytest.mark.asyncio
 async def test_hint_outside_enabled_falls_back_to_default(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

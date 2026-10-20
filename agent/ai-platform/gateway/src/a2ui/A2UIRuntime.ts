@@ -135,6 +135,7 @@ export class A2UIRuntime {
       redis: this.redis,
       sessionId: params.sessionId,
       userId: params.user.userId,
+      roles: params.user.roles,
       messageRouter: this.messageRouter,
       eventConverter: this.eventConverter,
     });

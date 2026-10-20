@@ -814,12 +814,34 @@ class InboundStreamWorker:
                 "：" + "、".join(att_names) if att_names else ""
             )
 
-        from src.identity.ask_identity_context import enrich_inbound_ask_identity
-
-        ask_metadata: dict[str, Any] = await enrich_inbound_ask_identity(
-            inbound.metadata if isinstance(inbound.metadata, dict) else {},
-            mis_user_id=session.mis_user_id,
+        from src.identity.ask_identity_context import (
+            AskIdentityUnavailable,
+            enrich_inbound_ask_identity,
         )
+
+        try:
+            ask_metadata: dict[str, Any] = await enrich_inbound_ask_identity(
+                inbound.metadata if isinstance(inbound.metadata, dict) else {},
+                mis_user_id=session.mis_user_id,
+                session_id=session.session_id,
+            )
+        except AskIdentityUnavailable as exc:
+            logger.error(
+                "Inbound ask-identity blocked; stop before agent",
+                event_code="ask_identity_blocked",
+                session_id=session.session_id,
+                user_id=session.mis_user_id,
+                reason=exc.reason,
+                detail=exc.detail or None,
+            )
+            await self._publish_error(
+                producer,
+                inbound,
+                resolved_agent_id,
+                "ASK_IDENTITY_UNAVAILABLE",
+                exc.user_message(),
+            )
+            return
         user_msg: Message = await session_manager.add_message(
             session_id=session.session_id,
             role="user",
@@ -1124,12 +1146,34 @@ class InboundStreamWorker:
         mis_user_id: int | None = await _resolve_inbound_mis_user_id(inbound)
         # Copilot / embed 主路径是 a2ui_run（不是普通 text 入站）；问数身份必须在此补齐，
         # 否则 agent__invoke → mis-iqd 的 tool_metadata 无 X-Mis-Roles → 45204。
-        from src.identity.ask_identity_context import enrich_inbound_ask_identity
-
-        ask_tool_metadata: dict[str, Any] = await enrich_inbound_ask_identity(
-            inbound.metadata if isinstance(inbound.metadata, dict) else {},
-            mis_user_id=mis_user_id,
+        # 回源失败且无 JWT 角色兜底 → 立刻提示用户并停住，禁止继续进 LLM。
+        from src.identity.ask_identity_context import (
+            AskIdentityUnavailable,
+            enrich_inbound_ask_identity,
         )
+
+        try:
+            ask_tool_metadata: dict[str, Any] = await enrich_inbound_ask_identity(
+                inbound.metadata if isinstance(inbound.metadata, dict) else {},
+                mis_user_id=mis_user_id,
+                redis=redis,
+                session_id=inbound.session_id,
+            )
+        except AskIdentityUnavailable as exc:
+            logger.error(
+                "A2UI ask-identity blocked; stop before run",
+                event_code="ask_identity_blocked",
+                session_id=inbound.session_id,
+                user_id=mis_user_id,
+                reason=exc.reason,
+                detail=exc.detail or None,
+            )
+            await publisher.publish_error(
+                inbound.session_id,
+                "ASK_IDENTITY_UNAVAILABLE",
+                exc.user_message(),
+            )
+            return
         timeout_sec: Any = self._settings.AGENT_MESSAGE_TIMEOUT
         from src.runtime.a2ui_run_registry import register_a2ui_run, unregister_a2ui_run
 
@@ -1287,12 +1331,34 @@ class InboundStreamWorker:
 
         if outcome.kind == "continue":
             # 续跑：把 apply 结果作为用户消息，继续驱动 agent
-            from src.identity.ask_identity_context import enrich_inbound_ask_identity
-
-            ff_meta: dict[str, Any] = await enrich_inbound_ask_identity(
-                inbound.metadata if isinstance(inbound.metadata, dict) else {},
-                mis_user_id=session.mis_user_id,
+            from src.identity.ask_identity_context import (
+                AskIdentityUnavailable,
+                enrich_inbound_ask_identity,
             )
+
+            try:
+                ff_meta: dict[str, Any] = await enrich_inbound_ask_identity(
+                    inbound.metadata if isinstance(inbound.metadata, dict) else {},
+                    mis_user_id=session.mis_user_id,
+                    session_id=session.session_id,
+                )
+            except AskIdentityUnavailable as exc:
+                logger.error(
+                    "FormFill ask-identity blocked; stop before continue",
+                    event_code="ask_identity_blocked",
+                    session_id=session.session_id,
+                    user_id=session.mis_user_id,
+                    reason=exc.reason,
+                    detail=exc.detail or None,
+                )
+                await self._publish_error(
+                    producer,
+                    inbound,
+                    resolved_agent_id,
+                    "ASK_IDENTITY_UNAVAILABLE",
+                    exc.user_message(),
+                )
+                return
             user_msg = await session_manager.add_message(
                 session_id=session.session_id,
                 role="user",

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import time
 from typing import Any
 
 import httpx
@@ -22,17 +23,36 @@ X_MIS_HEADER_KEYS: tuple[str, ...] = (
     "X-Mis-Data-Scope",
 )
 
+#: Gateway 验签后写入入站 metadata 的角色码列表（不可被客户端伪造冒充 X-Mis-*）。
+#: enrich 在 BFF ask-context 失败/空角色时用它兜底，避免 Copilot→mis-iqd 变成
+#: ``user_id 有值、role_codes=[]`` → 45204。
+VERIFIED_ROLES_META_KEY: str = "verified_roles"
+
 BIZ_CODE_UNAVAILABLE: str = "40303"
+
+#: 用户可见错误码（前端 / 日志检索统一用这个串）。
+USER_ERROR_CODE: str = "ASK_IDENTITY_UNAVAILABLE"
+
+#: 用户可见文案（入站立刻提示并停住，不再进 LLM / Worker）。
+USER_ERROR_MESSAGE: str = (
+    "身份服务暂时不可用，无法确认您的数据权限，本次问答已停止。"
+    "请稍后重试；若持续出现请联系管理员。"
+    f"（错误码 {USER_ERROR_CODE}）"
+)
 
 
 class AskIdentityUnavailable(Exception):
-    """BFF 问数身份源不可用（超时 / 非 2xx / 解析失败）。"""
+    """BFF 问数身份源不可用（超时 / 非 2xx / 解析失败 / 最终无角色）。"""
 
     def __init__(self, reason: str, user_id: int | str = "", detail: str = "") -> None:
         super().__init__(reason)
         self.reason = reason
         self.user_id = user_id
         self.detail = detail
+
+    def user_message(self) -> str:
+        """返回可直接展示给终端用户的说明。"""
+        return USER_ERROR_MESSAGE
 
 
 def _settings() -> Settings:
@@ -92,6 +112,19 @@ def _parse_headers_payload(payload: Any) -> dict[str, str]:
     return out
 
 
+def _role_count(headers: dict[str, str]) -> int:
+    raw = str(headers.get("X-Mis-Roles") or "").strip()
+    if not raw:
+        return 0
+    try:
+        parsed: Any = json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        return 1 if raw else 0
+    if isinstance(parsed, list):
+        return len(parsed)
+    return 1
+
+
 async def fetch_ask_identity_headers(
     user_id: int,
     *,
@@ -109,9 +142,25 @@ async def fetch_ask_identity_headers(
             if isinstance(cached, str) and cached:
                 parsed = json.loads(cached)
                 if isinstance(parsed, dict):
-                    return {str(k): str(v) for k, v in parsed.items() if v}
+                    cached_roles = str(parsed.get("X-Mis-Roles") or "").strip()
+                    # 忽略历史空角色缓存（曾导致 Copilot 连续 45204）
+                    if cached_roles:
+                        logger.info(
+                            "ask-identity cache hit",
+                            event_code="ask_identity_cache_hit",
+                            user_id=user_id,
+                            role_count=_role_count(
+                                {str(k): str(v) for k, v in parsed.items() if v}
+                            ),
+                        )
+                        return {str(k): str(v) for k, v in parsed.items() if v}
         except Exception:  # noqa: BLE001
-            logger.warning("ask-identity cache read failed", user_id=user_id, exc_info=True)
+            logger.warning(
+                "ask-identity cache read failed",
+                event_code="ask_identity_cache_read_fail",
+                user_id=user_id,
+                exc_info=True,
+            )
 
     base: str = str(getattr(cfg, "MIS_ADMIN_BFF_BASE_URL", "") or "").rstrip("/")
     path: str = str(
@@ -119,6 +168,12 @@ async def fetch_ask_identity_headers(
         or "/internal/identity/ask-context"
     )
     if not base:
+        logger.error(
+            "ask-identity misconfigured",
+            event_code="ask_identity_fetch_fail",
+            user_id=user_id,
+            reason="MIS_ADMIN_BFF_BASE_URL 未配置",
+        )
         raise AskIdentityUnavailable("MIS_ADMIN_BFF_BASE_URL 未配置", user_id)
     url = f"{base}{path if path.startswith('/') else '/' + path}"
     secret: str = str(getattr(cfg, "AI_PLATFORM_BFF_SHARED_SECRET", "") or "").strip()
@@ -127,6 +182,7 @@ async def fetch_ask_identity_headers(
         headers["X-Platform-Token"] = secret
     timeout: float = float(getattr(cfg, "MIS_ACL_HTTP_TIMEOUT", 3.0) or 3.0)
 
+    t0 = time.perf_counter()
     try:
         if http is not None:
             response = await http.get(
@@ -138,23 +194,92 @@ async def fetch_ask_identity_headers(
                     url, params={"userId": str(user_id)}, headers=headers
                 )
     except httpx.HTTPError as exc:
+        latency_ms = int((time.perf_counter() - t0) * 1000)
+        logger.error(
+            "ask-identity fetch failed",
+            event_code="ask_identity_fetch_fail",
+            user_id=user_id,
+            reason="身份源连接失败",
+            detail=str(exc),
+            bff_base=base,
+            latency_ms=latency_ms,
+            timeout_sec=timeout,
+        )
         raise AskIdentityUnavailable("身份源连接失败", user_id, str(exc)) from exc
 
+    latency_ms = int((time.perf_counter() - t0) * 1000)
     if response.status_code < 200 or response.status_code >= 300:
-        raise AskIdentityUnavailable(
-            "身份源非 2xx", user_id, f"HTTP {response.status_code} {response.text[:200]}"
+        detail = f"HTTP {response.status_code} {response.text[:200]}"
+        logger.error(
+            "ask-identity fetch failed",
+            event_code="ask_identity_fetch_fail",
+            user_id=user_id,
+            reason="身份源非 2xx",
+            detail=detail,
+            bff_base=base,
+            http_status=response.status_code,
+            latency_ms=latency_ms,
         )
+        raise AskIdentityUnavailable("身份源非 2xx", user_id, detail)
     try:
         payload = response.json()
     except Exception as exc:  # noqa: BLE001
+        logger.error(
+            "ask-identity fetch failed",
+            event_code="ask_identity_fetch_fail",
+            user_id=user_id,
+            reason="身份源非 JSON",
+            bff_base=base,
+            latency_ms=latency_ms,
+        )
         raise AskIdentityUnavailable("身份源非 JSON", user_id) from exc
 
-    out = _parse_headers_payload(payload)
-    if cache_redis is not None:
+    try:
+        out = _parse_headers_payload(payload)
+    except AskIdentityUnavailable as exc:
+        logger.error(
+            "ask-identity fetch failed",
+            event_code="ask_identity_fetch_fail",
+            user_id=user_id,
+            reason=exc.reason,
+            detail=exc.detail or None,
+            bff_base=base,
+            latency_ms=latency_ms,
+        )
+        raise
+
+    # 空角色快照不缓存：否则 60s 内 Copilot 会持续以零授权问数 → 45204。
+    roles_raw = str(out.get("X-Mis-Roles") or "").strip()
+    role_count = _role_count(out)
+    if cache_redis is not None and roles_raw:
         try:
             await cache_redis.setex(_cache_key(user_id, cfg), ttl, json.dumps(out, ensure_ascii=False))
         except Exception:  # noqa: BLE001
-            logger.warning("ask-identity cache write failed", user_id=user_id, exc_info=True)
+            logger.warning(
+                "ask-identity cache write failed",
+                event_code="ask_identity_cache_write_fail",
+                user_id=user_id,
+                exc_info=True,
+            )
+    if roles_raw:
+        logger.info(
+            "ask-identity fetch ok",
+            event_code="ask_identity_fetch_ok",
+            user_id=user_id,
+            role_count=role_count,
+            bff_base=base,
+            latency_ms=latency_ms,
+            source="bff",
+        )
+    else:
+        logger.warning(
+            "ask-identity returned empty X-Mis-Roles",
+            event_code="ask_identity_fetch_empty_roles",
+            user_id=user_id,
+            bff_base=base,
+            latency_ms=latency_ms,
+            source="bff",
+        )
     return out
 
 
@@ -232,6 +357,32 @@ async def inject_connection_id(metadata: dict[str, Any]) -> dict[str, Any]:
     return merged
 
 
+def _roles_header_from_verified(metadata: dict[str, Any]) -> str:
+    """把 Gateway 验签写入的 ``verified_roles`` 收成 ``X-Mis-Roles`` JSON。"""
+    raw = metadata.get(VERIFIED_ROLES_META_KEY)
+    codes: list[str] = []
+    if isinstance(raw, str) and raw.strip():
+        try:
+            parsed: Any = json.loads(raw)
+        except (json.JSONDecodeError, TypeError):
+            parsed = [p.strip() for p in raw.split(",") if p.strip()]
+        if isinstance(parsed, list):
+            raw = parsed
+        else:
+            raw = [raw.strip()]
+    if isinstance(raw, (list, tuple, set)):
+        for item in raw:
+            if isinstance(item, str) and item.strip():
+                codes.append(item.strip())
+            elif isinstance(item, dict):
+                code = item.get("code") or item.get("id")
+                if code is not None and str(code).strip():
+                    codes.append(str(code).strip())
+    if not codes:
+        return ""
+    return json.dumps([{"code": code} for code in codes], ensure_ascii=False)
+
+
 async def enrich_inbound_ask_identity(
     metadata: dict[str, Any] | None,
     *,
@@ -239,21 +390,64 @@ async def enrich_inbound_ask_identity(
     http: httpx.AsyncClient | None = None,
     redis: aioredis.Redis | None = None,
     settings: Settings | None = None,
+    session_id: str | None = None,
+    require_roles: bool = True,
 ) -> dict[str, Any]:
-    """WS 入站：剥伪造头 → 回源 BFF → 注入默认连接。源失败则保持无角色（问数 45204）。"""
+    """WS 入站：剥伪造头 → 回源 BFF → JWT 角色兜底 → 注入默认连接。
+
+    BFF ask-context 失败或返回空角色时，回落到 Gateway 验签写入的
+    ``verified_roles``。若 ``mis_user_id`` 已解析且 ``require_roles=True``，
+    最终仍无 ``X-Mis-Roles`` 则抛 :class:`AskIdentityUnavailable`——调用方必须
+    **立刻提示用户并停住**，不得继续进 LLM / Worker（否则会伪装成 45204）。
+    """
     merged = strip_untrusted_ask_fields(metadata)
     if mis_user_id is None:
         return await inject_connection_id(merged)
+
+    bff_fail_reason: str | None = None
+    bff_fail_detail: str | None = None
     try:
         headers = await fetch_ask_identity_headers(
             mis_user_id, http=http, redis=redis, settings=settings
         )
         merged.update(headers)
     except AskIdentityUnavailable as exc:
-        logger.warning(
-            "ask-identity enrichment failed; IQD will fail-closed",
+        bff_fail_reason = exc.reason
+        bff_fail_detail = exc.detail or None
+        logger.error(
+            "ask-identity enrichment bff failed; try JWT role fallback",
+            event_code="ask_identity_fetch_fail",
             user_id=mis_user_id,
+            session_id=session_id,
             reason=exc.reason,
             detail=exc.detail or None,
         )
+
+    if not str(merged.get("X-Mis-Roles") or "").strip():
+        fallback = _roles_header_from_verified(merged)
+        if fallback:
+            merged["X-Mis-Roles"] = fallback
+            logger.warning(
+                "ask-identity used verified_roles fallback",
+                event_code="ask_identity_fallback_jwt",
+                user_id=mis_user_id,
+                session_id=session_id,
+                role_count=_role_count(merged),
+                bff_fail_reason=bff_fail_reason,
+                bff_fail_detail=bff_fail_detail,
+            )
+        elif require_roles:
+            reason = bff_fail_reason or "问数身份无角色"
+            detail = bff_fail_detail or "bff_empty_roles_and_no_jwt_fallback"
+            logger.error(
+                "ask-identity blocked: no roles after bff+fallback",
+                event_code="ask_identity_blocked",
+                user_id=mis_user_id,
+                session_id=session_id,
+                reason=reason,
+                detail=detail,
+                error_code=USER_ERROR_CODE,
+            )
+            raise AskIdentityUnavailable(reason, mis_user_id, detail)
+
     return await inject_connection_id(merged)

@@ -15,10 +15,11 @@
 import { useCallback, useEffect, useRef } from 'react';
 import { useAuthStore } from '@/stores/auth-store';
 import { useChatStore } from '@/stores/chat-store';
+import { hydrateA2uiFromMetadata } from '@/lib/a2ui/hydrateFromHistory';
+import { processA2uiMessage } from '@/lib/a2ui/MessageProcessor';
 import { useSurfaceStore, scopeSurfaceToMessage } from '@/lib/a2ui/surface-store';
 import { subscribeChatStream, type ChatSseController } from './sse-client';
 import { ChatWsClient } from './ws-client';
-import { processA2uiMessage } from '@/lib/a2ui/MessageProcessor';
 import { generateClientId, type Attachment, type ChatMessage, type ChatStreamEvent, type InboundMessage, type SessionMessage, type UseChatReturn } from './types';
 import { useEmbedStore } from '@/embed/embedStore';
 
@@ -620,9 +621,8 @@ export function useChat(options?: UseChatOptions): UseChatReturn {
   /**
    * 历史恢复：单条 {@link SessionMessage} → {@link ChatMessage}。
    *
-   * <p>含附件（metadata.attachments → attachments）+ A2UI 还原（按现有渲染层约定：
-   * 旧协议 ui.render 在 metadata，新协议 A2UI surface 在历史中暂无 surfaceId，
-   * 仅还原可见文本/旧协议卡片；A2UI surface 历史恢复为 P1 评估，见架构文档 §9-3）。
+   * <p>含附件（metadata.attachments）与评价；A2UI 表格由 {@link loadHistory}
+   * 在防串会话校验后按 metadata.a2ui 回填 SurfaceStore。
    *
    * @param raw 历史原始消息（#29 端点返回）
    * @return 可直入 chat-store 的 ChatMessage
@@ -756,6 +756,15 @@ export function useChat(options?: UseChatOptions): UseChatReturn {
           return;
         }
       }
+      // 校验通过后再 hydrate：切会话会先 clear SurfaceStore，此处按历史 a2ui 还原表格
+      for (let i = 0; i < history.length; i += 1) {
+        const msg = history[i];
+        const raw = rawList[i];
+        if (msg.role !== 'assistant' || raw?.metadata?.a2ui == null) continue;
+        const scoped = hydrateA2uiFromMetadata(raw.metadata.a2ui, msg.id);
+        if (scoped) msg.surfaceId = scoped;
+      }
+      if (isStale()) return;
       latest.setMessages(history);
       latest.setHistoryState('loaded');
     } catch {

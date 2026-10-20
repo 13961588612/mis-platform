@@ -13,11 +13,14 @@
  * 不做流式打字机、消息编辑。
  */
 import type { ReactElement, ReactNode } from 'react';
-import { useState } from 'react';
+import { useCallback, useState } from 'react';
 import { Bot, Terminal, ThumbsDown, ThumbsUp, User, Wrench } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { MarkdownView } from '@/components/common/markdown-view';
 import { KbChatSourceFigures, KbChatSourceList, splitKbSources } from '@/components/common/kb-chat-sources';
+import { A2uiProvider } from '@/components/a2ui/A2uiProvider';
+import { SurfaceRenderer } from '@/lib/a2ui/SurfaceRenderer';
+import { A2UI_ERROR_CODES, type A2uiClientAction, type BffActionResult } from '@/lib/a2ui/types';
 import { formatTime } from '../types';
 import type {
   MessageRole,
@@ -179,6 +182,11 @@ export interface AgentMessageStreamProps {
   messages: SessionMessage[];
   /** 按轮耗时 map（key = assistant 消息 id）。2.1：逐条内联展示，缺失显示「—」。 */
   timingByMessageId?: Record<string, SessionTiming>;
+  /**
+   * 运营回放：assistant 消息 id → 已 hydrate 的 A2UI surfaceId。
+   * 有值时在正文下方只读渲染表格/卡片（不写回 Gateway）。
+   */
+  a2uiSurfaceByMessageId?: Record<string, string>;
   /** 空态文案。 */
   emptyText?: string;
   /** 挂在列表末尾的内容（如"正在生成…"指示器）。 */
@@ -187,6 +195,17 @@ export interface AgentMessageStreamProps {
   showTurnIndex?: boolean;
   className?: string;
 }
+
+/** 运营回放只读：吞掉用户操作，禁止调 BFF。 */
+const OPS_READ_ONLY_BFF = async (): Promise<BffActionResult> => ({
+  ok: false,
+  error: {
+    code: A2UI_ERROR_CODES.POLICY_UNMAPPED,
+    message: '会话回放为只读，不支持操作',
+    missingPermissions: [],
+    permissionDenied: true,
+  },
+});
 
 /** 毫秒 → 可读串（2.1 内联耗时）。null 表示阶段未发生，显示「—」。 */
 function fmtMs(ms: number | null | undefined): string {
@@ -510,11 +529,16 @@ function SubStageDrillForStage({
 export function AgentMessageStream({
   messages,
   timingByMessageId,
+  a2uiSurfaceByMessageId,
   emptyText = '暂无消息',
   footer,
   showTurnIndex = false,
   className,
 }: AgentMessageStreamProps) {
+  const noopDispatch = useCallback((_action: A2uiClientAction) => {
+    /* 会话回放只读，不回传 Gateway */
+  }, []);
+
   if (messages.length === 0 && !footer) {
     return <p className="py-10 text-center text-sm text-muted-foreground">{emptyText}</p>;
   }
@@ -522,7 +546,7 @@ export function AgentMessageStream({
   // 会话内助手消息的 1-based 顺序号（对话编号），与反馈列表 turn_index 口径一致。
   let assistantTurn = 0;
 
-  return (
+  const stream = (
     <div className={cn('flex flex-col gap-2', className)}>
       {messages.map((msg, idx) => {
         const isAssistant = msg.role === 'assistant';
@@ -602,9 +626,15 @@ export function AgentMessageStream({
                   {msg.content}
                 </p>
               )
-            ) : (
+            ) : a2uiSurfaceByMessageId?.[msg.id] ? null : (
               <p className="text-sm italic text-muted-foreground">（空消息体）</p>
             )}
+
+            {isAssistant && a2uiSurfaceByMessageId?.[msg.id] ? (
+              <div className="mt-2 min-w-0" data-testid={`ops-a2ui-${msg.id}`}>
+                <SurfaceRenderer surfaceId={a2uiSurfaceByMessageId[msg.id]} />
+              </div>
+            ) : null}
 
             {/* tool 消息：先给一行入参摘要，完整 meta 收进 details 避免刷屏 */}
             {isTool && argsSummary ? (
@@ -632,4 +662,14 @@ export function AgentMessageStream({
       {footer}
     </div>
   );
+
+  // 有 A2UI 回放时包只读 Provider，供 DataTable 等组件取 context
+  if (a2uiSurfaceByMessageId && Object.keys(a2uiSurfaceByMessageId).length > 0) {
+    return (
+      <A2uiProvider dispatchAction={noopDispatch} executeBffAction={OPS_READ_ONLY_BFF}>
+        {stream}
+      </A2uiProvider>
+    );
+  }
+  return stream;
 }

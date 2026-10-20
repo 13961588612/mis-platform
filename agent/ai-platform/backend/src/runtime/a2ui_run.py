@@ -477,6 +477,33 @@ async def execute_render_a2ui(
     }
 
 
+def _snapshot_render_a2ui_args(args: dict[str, Any]) -> dict[str, Any] | None:
+    """从成功的 ``render_a2ui`` 入参抽出可落库快照（切会话后前端还原表格）。
+
+    Args:
+        args: 已解析的 render_a2ui 工具入参。
+
+    Returns:
+        ``{surfaceId, components, data?}``；缺关键字段时 ``None``。
+    """
+    if not isinstance(args, dict):
+        return None
+    surface_id: Any = args.get("surfaceId") or args.get("surface_id")
+    components: Any = args.get("components")
+    if not isinstance(surface_id, str) or not surface_id:
+        return None
+    if not isinstance(components, list):
+        return None
+    snap: dict[str, Any] = {
+        "surfaceId": surface_id,
+        "components": components,
+    }
+    data: Any = args.get("data")
+    if data is not None:
+        snap["data"] = data
+    return snap
+
+
 # ============================================================================
 # A2UI run 循环
 # ============================================================================
@@ -627,6 +654,8 @@ class A2uiRunLoop:
             )
             total_usage: TokenUsage = TokenUsage()
             assistant_parts: list[str] = []
+            # 本轮成功 render_a2ui 快照，写入 assistant metadata.a2ui 供历史还原。
+            a2ui_surfaces: list[dict[str, Any]] = []
             error_message: str | None = None
             completed: bool = False
 
@@ -698,6 +727,11 @@ class A2uiRunLoop:
                         agent_id=resolved_agent_id,
                         ask_tool_metadata=ask_meta,
                     )
+                    # 快照成功的 render_a2ui，供切会话后历史还原表格/卡片。
+                    if tool_name == RENDER_A2UI_TOOL_NAME and result.get("ok"):
+                        snap = _snapshot_render_a2ui_args(args)
+                        if snap is not None:
+                            a2ui_surfaces.append(snap)
                     await emit(AgentEvent.tool_result(tool_name, result))
                     llm_messages.append(
                         LLMMessage(
@@ -770,8 +804,15 @@ class A2uiRunLoop:
                 assistant_parts.append(assistant_text)
 
             # 评价锚点：落库与 done / 计时 turn_key 共用开局预生成的 UUID。
+            # metadata.a2ui：切会话后前端按 surfaces 回填可翻页表 / 卡片。
+            persist_meta: dict[str, Any] | None = (
+                {"a2ui": {"surfaces": a2ui_surfaces}} if a2ui_surfaces else None
+            )
             await self._persist_assistant(
-                session_id, assistant_text, message_id=assistant_message_id
+                session_id,
+                assistant_text,
+                message_id=assistant_message_id,
+                metadata=persist_meta,
             )
             await emit(
                 AgentEvent.done(
@@ -1113,6 +1154,7 @@ class A2uiRunLoop:
         content: str,
         *,
         message_id: str | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> None:
         """持久化助手文本到会话历史（失败仅告警，不阻断）。
 
@@ -1121,6 +1163,7 @@ class A2uiRunLoop:
             content: 助手正文。
             message_id: 预生成的 assistant 消息 UUID（评价锚点）；传 None 时由
                 ``add_message`` 内部生成（无锚点场景）。
+            metadata: 可选元数据（如 ``a2ui.surfaces`` 历史还原快照）。
         """
         session_manager: SessionManager = self._session_manager or get_session_manager()
         try:
@@ -1128,6 +1171,7 @@ class A2uiRunLoop:
                 session_id=session_id,
                 role="assistant",
                 content=content,
+                metadata=metadata,
                 message_id=message_id,
             )
         except Exception as exc:  # noqa: BLE001 - 持久化失败降级

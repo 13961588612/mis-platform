@@ -11,7 +11,7 @@
  * <p>#28 与 #29 用 `Promise.allSettled` 并行拉取：**消息拉不到才算失败**，
  * 元信息（标题 / 渠道 / 用户）失败只让头部少几个字段，不该把整个回放拦掉。
  */
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { RefreshCw } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
@@ -26,6 +26,10 @@ import {
 } from '../api/agent-ops-api';
 import { agentErrorMessage, formatTime } from '../types';
 import type { Session, SessionMessage, SessionTimingMap } from '../types';
+import {
+  cleanupOpsSessionA2ui,
+  hydrateOpsSessionA2ui,
+} from './hydrate-session-a2ui';
 
 /** 渠道枚举 → 中文（与列表页共用同一份口径）。 */
 const CHANNEL_LABELS: Record<Session['channel'], string> = {
@@ -87,10 +91,22 @@ export function AgentSessionDetailDialog({
   const [timingStatus, setTimingStatus] = useState<TimingStatus>('never');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /** assistant 消息 id → 运营回放私有 surfaceId（metadata.a2ui hydrate）。 */
+  const [a2uiByMsg, setA2uiByMsg] = useState<Record<string, string>>({});
+  /** 当前已 hydrate 的会话 id，关闭/切换时按此清理，不 clear 全局 SurfaceStore。 */
+  const hydratedSessionRef = useRef('');
 
   useEffect(() => {
     if (open) setActiveId(sessionId);
   }, [open, sessionId]);
+
+  const releaseA2ui = useCallback((sid: string) => {
+    if (!sid) return;
+    cleanupOpsSessionA2ui(sid);
+    if (hydratedSessionRef.current === sid) {
+      hydratedSessionRef.current = '';
+    }
+  }, []);
 
   const load = useCallback(async () => {
     if (!activeId) return;
@@ -130,22 +146,55 @@ export function AgentSessionDetailDialog({
       const turnMap = Object.keys(turns).length > 0 ? turns : null;
       setTiming(turnMap);
       setTimingStatus(resolveTimingStatus(timingResult, turnMap, msgs));
+
+      // A2UI 表格回放：先清本会话旧副本，再按 metadata.a2ui 重建（与 Copilot 隔离）
+      const prevHydrated = hydratedSessionRef.current;
+      if (prevHydrated && prevHydrated !== activeId) {
+        releaseA2ui(prevHydrated);
+      } else {
+        cleanupOpsSessionA2ui(activeId);
+      }
+      const surfaceMap = hydrateOpsSessionA2ui(msgs, activeId);
+      setA2uiByMsg(surfaceMap);
+      hydratedSessionRef.current = activeId;
     } catch (e) {
       setMessages([]);
+      setA2uiByMsg({});
       setError(agentErrorMessage(e, '获取会话消息失败'));
     } finally {
       setLoading(false);
     }
-  }, [activeId]);
+  }, [activeId, releaseA2ui]);
 
   useEffect(() => {
     if (!open) return;
     setSession(null);
     setMessages([]);
+    setA2uiByMsg({});
     setTiming(null);
     setTimingStatus('never');
     void load();
   }, [open, load]);
+
+  // 关抽屉：只清运营回放 surface，不动 Copilot
+  useEffect(() => {
+    if (open) return;
+    const sid = hydratedSessionRef.current;
+    if (sid) releaseA2ui(sid);
+    setA2uiByMsg({});
+  }, [open, releaseA2ui]);
+
+  const handleOpenChange = useCallback(
+    (next: boolean) => {
+      if (!next) {
+        const sid = hydratedSessionRef.current;
+        if (sid) releaseA2ui(sid);
+        setA2uiByMsg({});
+      }
+      onOpenChange(next);
+    },
+    [onOpenChange, releaseA2ui],
+  );
 
   const shown = useMemo(() => {
     if (session) return session;
@@ -157,7 +206,7 @@ export function AgentSessionDetailDialog({
   const workers = shown?.worker_sessions ?? [];
 
   return (
-    <Sheet open={open} onOpenChange={onOpenChange}>
+    <Sheet open={open} onOpenChange={handleOpenChange}>
       <SheetContent className="flex w-[min(46rem,96vw)] max-w-none flex-col gap-0 overflow-hidden p-0">
         <SheetHeader className="border-b p-4">
           <SheetTitle className="truncate pr-8">
@@ -245,6 +294,7 @@ export function AgentSessionDetailDialog({
               className="min-w-0"
               messages={messages}
               timingByMessageId={timing ?? undefined}
+              a2uiSurfaceByMessageId={a2uiByMsg}
               showTurnIndex
             />
           </AgentContentState>

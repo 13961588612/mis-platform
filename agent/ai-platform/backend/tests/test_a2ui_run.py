@@ -32,6 +32,7 @@ from src.runtime.a2ui_run import (
     A2UI_COORDINATOR_HINT,
     A2uiRunLoop,
     _parse_tool_args,
+    _snapshot_render_a2ui_args,
     agui_messages_to_llm,
     agui_tools_to_openai_tools,
     ensure_a2ui_system_hint,
@@ -576,8 +577,33 @@ def test_a2ui_run_loop_tool_then_text(redis):
         assert assistant_persisted[0]["message_id"] == done_message_id, (
             "done.message_id 必须与 agent_session_message 落库 UUID 一致"
         )
+        # 切会话还原：成功 render_a2ui 须写入 metadata.a2ui.surfaces
+        meta = assistant_persisted[0].get("metadata") or {}
+        surfaces = (meta.get("a2ui") or {}).get("surfaces") or []
+        assert len(surfaces) == 1
+        assert surfaces[0]["surfaceId"] == "s1"
+        assert surfaces[0]["components"][0]["component"] == "data-table"
 
     asyncio.run(run())
+
+
+def test_snapshot_render_a2ui_args():
+    """落库快照保留 surfaceId/components/data；缺字段返回 None。"""
+    snap = _snapshot_render_a2ui_args(
+        {
+            "surfaceId": "main",
+            "components": [{"id": "t", "component": "data-table", "props": {}}],
+            "data": {"rows": [1]},
+        }
+    )
+    assert snap is not None
+    assert snap["surfaceId"] == "main"
+    assert snap["data"] == {"rows": [1]}
+    assert _snapshot_render_a2ui_args({"surface_id": "s2", "components": []})[
+        "surfaceId"
+    ] == "s2"
+    assert _snapshot_render_a2ui_args({"surfaceId": "x"}) is None
+    assert _snapshot_render_a2ui_args({}) is None
 
 
 def test_a2ui_done_empty_llm_text_gets_fallback_message_id(redis):

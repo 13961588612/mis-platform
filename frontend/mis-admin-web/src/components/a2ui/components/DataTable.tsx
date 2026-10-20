@@ -1,11 +1,11 @@
 /**
- * DataTable ¡ª A2UI `data-table` ×é¼ş£¨shadcn + TanStack Table£¬T06'£©¡£
+ * DataTable â€” A2UI `data-table` ç»„ä»¶ï¼ˆshadcn + TanStack Tableï¼ŒT06'ï¼‰ã€‚
  *
- * <p>P1 ²ÉÄÉ @tanstack/react-table[24-open-source-reuse.md] ¡ì2 ½¨Òé 1£ºÃâ×ÔÑĞ·ÖÒ³/ÅÅĞò/ÁĞÄ£ĞÍ£¬
- * shadcn ¹Ù·½ data-table Ä£Ê½£©¡£äÖÈ¾È¨ÏŞ£ºÄ¬ÈÏ¿É¼û£¨Ö»¶ÁÕ¹Ê¾£©¡£
+ * <p>P1 é‡‡çº³ @tanstack/react-table[24-open-source-reuse.md] Â§2 å»ºè®® 1ï¼šå…è‡ªç ”åˆ†é¡µ/æ’åº/åˆ—æ¨¡å‹ï¼Œ
+ * shadcn å®˜æ–¹ data-table æ¨¡å¼ï¼‰ã€‚æ¸²æŸ“æƒé™ï¼šé»˜è®¤å¯è§ï¼ˆåªè¯»å±•ç¤ºï¼‰ã€‚
  *
- * <p>UI ¹æ·¶£ºÍâ²ãºá¹ö¡¢ÁĞ min-width + nowrap£¬±ÜÃâÕ­ÆøÅİÄÚ¶àÁĞ¼·³ÉÒ»ÍÅ£»
- * µ¥ĞĞÇÒÁĞÊı ¡İ {@link PROFILE_COLUMN_THRESHOLD} Ê±¸ÄäÖÈ¾Îª¼üÖµÏêÇé¿¨£¨CRM »áÔ±µµ°¸µÈ£©¡£
+ * <p>UI è§„èŒƒï¼šå¤–å±‚æ¨ªæ»šã€åˆ— min-width + nowrapï¼Œé¿å…çª„æ°”æ³¡å†…å¤šåˆ—æŒ¤æˆä¸€å›¢ï¼›
+ * å•è¡Œä¸”åˆ—æ•° â‰¥ {@link PROFILE_COLUMN_THRESHOLD} æ—¶æ”¹æ¸²æŸ“ä¸ºé”®å€¼è¯¦æƒ…å¡ï¼ˆCRM ä¼šå‘˜æ¡£æ¡ˆç­‰ï¼‰ã€‚
  */
 
 import { useMemo, useState } from 'react';
@@ -33,10 +33,10 @@ interface Row {
   [key: string]: unknown;
 }
 
-/** µ¥ĞĞÇÒ´ïµ½¸ÃÁĞÊıÊ±£¬¸ÄÎª¼üÖµÏêÇé¿¨£¨±ÜÃâ¿í±íÔÚ¶Ô»°ÆøÅİÀï¼·±â£©¡£*/
+/** å•è¡Œä¸”è¾¾åˆ°è¯¥åˆ—æ•°æ—¶ï¼Œæ”¹ä¸ºé”®å€¼è¯¦æƒ…å¡ï¼ˆé¿å…å®½è¡¨åœ¨å¯¹è¯æ°”æ³¡é‡ŒæŒ¤æ‰ï¼‰ã€‚*/
 const PROFILE_COLUMN_THRESHOLD = 8;
 
-/** ±íÍ·/µ¥Ôª¸ñ×îĞ¡ÁĞ¿í£¨°´ÄÚÈİ³Å¿ª + Íâ²ãºá¹ö£©¡£*/
+/** è¡¨å¤´/å•å…ƒæ ¼æœ€å°åˆ—å®½ï¼ˆæŒ‰å†…å®¹æ’‘å¼€ + å¤–å±‚æ¨ªæ»šï¼‰ã€‚*/
 const COL_MIN_WIDTH_CLASS = 'min-w-[5.5rem]';
 
 export function DataTable({ props }: A2uiComponentProps) {
@@ -44,12 +44,12 @@ export function DataTable({ props }: A2uiComponentProps) {
   const columns = useMemo<ColumnSpec[]>(() => {
     if (!Array.isArray(props.columns)) return [];
 
-    // ½« string | ColumnSpec Í³Ò»Îª ColumnSpec
+    // å°† string | ColumnSpec ç»Ÿä¸€ä¸º ColumnSpec
     const all: ColumnSpec[] = (props.columns as Array<string | ColumnSpec>).map((c) =>
       typeof c === 'string' ? { key: c, label: c } : { key: c.key, label: c.label ?? c.key },
     );
 
-    // È¥ÖØ£ºÍ¬Ò» key Ö»±£ÁôÊ×´Î³öÏÖ£¨Ó¦¶Ô LLM Éú³ÉÖØ¸´ÁĞÃû£©
+    // å»é‡ï¼šåŒä¸€ key åªä¿ç•™é¦–æ¬¡å‡ºç°ï¼ˆåº”å¯¹ LLM ç”Ÿæˆé‡å¤åˆ—åï¼‰
     const seen = new Set<string>();
     const deduped: ColumnSpec[] = [];
     for (const col of all) {
@@ -101,13 +101,13 @@ export function DataTable({ props }: A2uiComponentProps) {
     initialState: { pagination: { pageSize: 10 } },
   });
 
-  // LLM ³£Îª¡¸È·ÈÏÇåµ¥¡¹Îó²å¿Õ data-table£¨½ö columns¡¢ÎŞ rows£©£¬
-  // »áÔÚ¶Ô»°ÀïÁôÏÂ´ó¿é¡¸ÔİÎŞÊı¾İ¡¹¿Õ°×£»ÎŞĞĞÊ±²»äÖÈ¾¡£
+  // LLM å¸¸ä¸ºã€Œç¡®è®¤æ¸…å•ã€è¯¯æ’ç©º data-tableï¼ˆä»… columnsã€æ—  rowsï¼‰ï¼Œ
+  // ä¼šåœ¨å¯¹è¯é‡Œç•™ä¸‹å¤§å—ã€Œæš‚æ— æ•°æ®ã€ç©ºç™½ï¼›æ— è¡Œæ—¶ä¸æ¸²æŸ“ã€‚
   if (rows.length === 0) {
     return null;
   }
 
-  // µ¥¶ÔÏó¿í×Ö¶Î£¨Èç CRM »áÔ±µµ°¸£©£º¼üÖµÏêÇé¿¨±ÈºáÏò¿í±í¸üÒ×¶Á¡£
+  // å•å¯¹è±¡å®½å­—æ®µï¼ˆå¦‚ CRM ä¼šå‘˜æ¡£æ¡ˆï¼‰ï¼šé”®å€¼è¯¦æƒ…å¡æ¯”æ¨ªå‘å®½è¡¨æ›´æ˜“è¯»ã€‚
   if (rows.length === 1 && keys.length >= PROFILE_COLUMN_THRESHOLD) {
     return (
       <ProfileDetailCard
@@ -166,7 +166,7 @@ export function DataTable({ props }: A2uiComponentProps) {
             {table.getRowModel().rows.length === 0 ? (
               <TableRow>
                 <TableCell colSpan={keys.length} className="h-16 text-center text-muted-foreground">
-                  ÔİÎŞÊı¾İ
+                  æš‚æ— æ•°æ®
                 </TableCell>
               </TableRow>
             ) : (
@@ -190,8 +190,8 @@ export function DataTable({ props }: A2uiComponentProps) {
       {rows.length > 10 ? (
         <div className="flex items-center justify-between border-t px-3 py-1.5">
           <div className="text-xs text-muted-foreground">
-            ¹² {rows.length} Ìõ ¡¤ µÚ {table.getState().pagination.pageIndex + 1} /{' '}
-            {Math.max(1, table.getPageCount())} Ò³
+            å…± {rows.length} æ¡ Â· ç¬¬ {table.getState().pagination.pageIndex + 1} /{' '}
+            {Math.max(1, table.getPageCount())} é¡µ
           </div>
           <div className="flex items-center gap-1">
             <Button
@@ -202,7 +202,7 @@ export function DataTable({ props }: A2uiComponentProps) {
               disabled={!table.getCanPreviousPage()}
               onClick={() => table.previousPage()}
             >
-              ÉÏÒ»Ò³
+              ä¸Šä¸€é¡µ
             </Button>
             <Button
               type="button"
@@ -212,7 +212,7 @@ export function DataTable({ props }: A2uiComponentProps) {
               disabled={!table.getCanNextPage()}
               onClick={() => table.nextPage()}
             >
-              ÏÂÒ»Ò³
+              ä¸‹ä¸€é¡µ
             </Button>
           </div>
         </div>
@@ -221,7 +221,7 @@ export function DataTable({ props }: A2uiComponentProps) {
   );
 }
 
-/** µ¥ĞĞ¿í×Ö¶Î ¡ú ×Ö¶ÎÃû/ÖµÁ½ÁĞÏêÇé¿¨¡£*/
+/** å•è¡Œå®½å­—æ®µ â†’ å­—æ®µå/å€¼ä¸¤åˆ—è¯¦æƒ…å¡ã€‚*/
 function ProfileDetailCard({
   title,
   fields,
@@ -245,7 +245,7 @@ function ProfileDetailCard({
               className="break-words text-[13px] leading-relaxed text-foreground"
               title={field.value.length > 80 ? field.value : undefined}
             >
-              {field.value || '¡ª'}
+              {field.value || 'â€”'}
             </dd>
           </div>
         ))}
@@ -254,7 +254,7 @@ function ProfileDetailCard({
   );
 }
 
-/** µ¥Ôª¸ñÏÔÊ¾£º³¤ÎÄ±¾½Ø¶Ï + title ĞüÍ£È«ÎÄ¡£*/
+/** å•å…ƒæ ¼æ˜¾ç¤ºï¼šé•¿æ–‡æœ¬æˆªæ–­ + title æ‚¬åœå…¨æ–‡ã€‚*/
 function CellDisplay({ value }: { value: unknown }) {
   const text = formatCellValue(value);
   if (!text) return null;
@@ -268,7 +268,7 @@ function CellDisplay({ value }: { value: unknown }) {
   );
 }
 
-/** µ¥Ôª¸ñÖµ¸ñÊ½»¯£¨¶ÔÏó/Êı×é ¡ú ½ô´Õ JSON£¬ÆäËü ¡ú String£©¡£*/
+/** å•å…ƒæ ¼å€¼æ ¼å¼åŒ–ï¼ˆå¯¹è±¡/æ•°ç»„ â†’ ç´§å‡‘ JSONï¼Œå…¶å®ƒ â†’ Stringï¼‰ã€‚*/
 function formatCellValue(value: unknown): string {
   if (value === null || value === undefined) return '';
   if (typeof value === 'object') {

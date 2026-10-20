@@ -63,6 +63,12 @@ export interface RedisStreamAgentParams {
   sessionId: string;
   /** 用户 ID（**仅来自 JWT 验签结果**，P4：绝不信消息体/工具里的 userId） */
   userId: string;
+  /**
+   * JWT 验签后的角色码（MIS RS256 ``roles``）。
+   * 写入入站 ``metadata.verified_roles``，供 Agent Core 在 BFF ask-context
+   * 失败/空角色时兜底，避免 Copilot 问数变成零授权 45204。
+   */
+  roles?: string[];
   /** 消息路由器（复用流名/亲和键约定；缺省直接写渠道入站流） */
   messageRouter?: MessageRouter;
   /** 事件转换器（可注入以复用 toolCallId 关联；缺省新建） */
@@ -80,6 +86,7 @@ export class RedisStreamAgent extends AbstractAgent {
   private readonly redis: Redis;
   private readonly sessionId: string;
   private readonly userId: string;
+  private readonly roles: string[];
   private readonly messageRouter: MessageRouter | null;
   private readonly eventConverter: EventConverter;
 
@@ -91,6 +98,9 @@ export class RedisStreamAgent extends AbstractAgent {
     this.redis = params.redis;
     this.sessionId = params.sessionId;
     this.userId = params.userId;
+    this.roles = Array.isArray(params.roles)
+      ? params.roles.map((r) => String(r).trim()).filter((r) => r.length > 0)
+      : [];
     this.messageRouter = params.messageRouter ?? null;
     this.eventConverter = params.eventConverter ?? new EventConverter();
   }
@@ -230,6 +240,8 @@ export class RedisStreamAgent extends AbstractAgent {
       metadata: {
         a2ui: meta,
         ...(misUserId != null ? { misUserId } : {}),
+        // 验签角色兜底（非客户端 X-Mis-*）；Core enrich 在 BFF 空角色时消费。
+        ...(this.roles.length > 0 ? { verified_roles: this.roles } : {}),
       },
     });
 
