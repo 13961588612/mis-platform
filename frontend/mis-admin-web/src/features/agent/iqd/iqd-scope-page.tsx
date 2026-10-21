@@ -33,6 +33,8 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { PageHeader } from '@/components/common/page-header';
 import { buildAppBreadcrumbs } from '@/components/common/app-breadcrumbs';
 import { FilterMultiSelect } from '@/components/common/filter-multi-select';
+import { SortIndicator } from '@/components/common/sort-indicator';
+import { useClientSort } from '@/components/common/use-client-sort';
 import {
   deleteIqdAcl,
   deleteIqdScopePolicy,
@@ -1508,16 +1510,261 @@ export function IqdScopePage() {
     [rawAcls, fieldToObject, load],
   );
 
-  const renderTable = (
-    rows: DisplayRow[],
-    empty: string,
-    withAction: boolean,
-    onEdit?: (row: DisplayRow) => void,
-    selected?: Set<string>,
-    onToggle?: (key: string, checked: boolean) => void,
-    onToggleAll?: (checked: boolean) => void,
-    variant: 'policy' | 'acl' = 'policy',
-  ) => (
+  return (
+    <div className="flex h-full min-h-0 flex-col">
+      <PageHeader
+        title="问数范围与权限"
+        description="可问 = 角色/用户范围策略 ∩ 清单「纳入问数」。仅勾纳入不会放行；须在本页为角色或用户配置策略。行级范围另配 row_scope。"
+        breadcrumbs={buildAppBreadcrumbs({ app: 'agent', title: '问数范围与权限' })}
+        actions={
+          <div className="flex items-center gap-2">
+            <ProjectSwitcher />
+            <Button size="sm" variant="outline" onClick={() => void load()} disabled={loading}>
+              <RefreshCw className={cn('h-4 w-4', loading && 'animate-spin')} />
+              刷新
+            </Button>
+          </div>
+        }
+      />
+
+      {error ? (
+        <div className="mb-3 rounded border border-destructive/30 bg-destructive/5 p-3 text-xs text-destructive">
+          {error}
+        </div>
+      ) : null}
+
+      <Tabs defaultValue="policy" className="flex min-h-0 flex-1 flex-col">
+        <TabsList className="mb-3 grid w-full max-w-md grid-cols-2">
+          <TabsTrigger value="policy">范围策略</TabsTrigger>
+          <TabsTrigger value="acl">行级范围</TabsTrigger>
+        </TabsList>
+
+        <div className="mb-3 flex flex-wrap items-center gap-3 rounded-lg border bg-card p-3">
+          <div className="flex items-center gap-2">
+            <span className="text-xs font-medium text-muted-foreground">主体类型</span>
+            <select
+              className="h-9 rounded-md border border-input bg-background px-2 text-sm"
+              aria-label="主体类型过滤"
+              value={subjectTypeFilter}
+              onChange={(e) =>
+                setSubjectTypeFilter(e.target.value as 'all' | 'global' | 'role' | 'user')
+              }
+            >
+              <option value="all">全部</option>
+              <option value="global">只看全局</option>
+              <option value="role">只看角色</option>
+              <option value="user">只看用户</option>
+            </select>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="text-xs font-medium text-muted-foreground">角色</span>
+            <div
+              className={cn(
+                (subjectTypeFilter === 'global' || subjectTypeFilter === 'user') &&
+                  'pointer-events-none opacity-50',
+              )}
+            >
+              <FilterMultiSelect
+                options={roleOptions}
+                value={roleFilter}
+                onChange={(v) => setRoleFilter(Array.isArray(v) ? (v as string[]) : [])}
+                triggerClassName="w-64"
+              />
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="text-xs font-medium text-muted-foreground">用户姓名</span>
+            <Input
+              className="h-9 w-56"
+              placeholder="按用户姓名过滤"
+              value={userKeyword}
+              onChange={(e) => setUserKeyword(e.target.value)}
+              disabled={subjectTypeFilter === 'global' || subjectTypeFilter === 'role'}
+            />
+          </div>
+          <span className="text-xs text-muted-foreground">
+            范围策略 {filteredPolicyRows.length} 条 · 行级范围 {filteredAclRows.length} 条
+          </span>
+        </div>
+
+        <TabsContent value="policy" className="mt-0 flex min-h-0 flex-1 flex-col">
+          <div className="flex min-h-0 flex-1 flex-col rounded border bg-card">
+            <div className="flex items-center justify-between border-b px-3 py-2">
+              <div className="flex items-center gap-2 text-[13px] font-medium">
+                <ShieldCheck className="h-4 w-4 text-primary" />
+                范围策略
+                {selectedPolicyRows.size > 0 ? (
+                  <Badge variant="secondary" className="rounded">
+                    已选 {selectedPolicyRows.size}
+                  </Badge>
+                ) : null}
+              </div>
+              <div className="flex items-center gap-2">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={selectedPolicyRows.size === 0 || bulkDeleting}
+                  onClick={() =>
+                    void removePolicyRows(
+                      filteredPolicyRows.filter((row) => selectedPolicyRows.has(row.key)),
+                    )
+                  }
+                >
+                  <Trash2 className="h-4 w-4" />
+                  删除选中
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => setPolicyWizardOpen(true)}
+                  disabled={connectionId == null}
+                >
+                  <Plus className="h-4 w-4" />
+                  新增范围策略
+                </Button>
+              </div>
+            </div>
+            <ScopeDisplayTable
+              rows={filteredPolicyRows}
+              empty="暂无范围策略"
+              withAction={false}
+              onEdit={openEditPolicy}
+              selected={selectedPolicyRows}
+              onToggle={togglePolicySelection}
+              onToggleAll={toggleAllPolicyRows}
+              variant="policy"
+            />
+          </div>
+        </TabsContent>
+
+        <TabsContent value="acl" className="mt-0 flex min-h-0 flex-1 flex-col">
+          <div className="flex min-h-0 flex-1 flex-col rounded border bg-card">
+            <div className="flex items-center justify-between border-b px-3 py-2">
+              <div className="flex items-center gap-2 text-[13px] font-medium">
+                <ShieldCheck className="h-4 w-4 text-primary" />
+                行级范围
+                {selectedAclRows.size > 0 ? (
+                  <Badge variant="secondary" className="rounded">
+                    已选 {selectedAclRows.size}
+                  </Badge>
+                ) : null}
+              </div>
+              <div className="flex items-center gap-2">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={selectedAclRows.size === 0 || bulkDeleting}
+                  onClick={() =>
+                    void removeAclRows(filteredAclRows.filter((row) => selectedAclRows.has(row.key)))
+                  }
+                >
+                  <Trash2 className="h-4 w-4" />
+                  删除选中
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => setAclWizardOpen(true)}
+                  disabled={connectionId == null}
+                >
+                  <Plus className="h-4 w-4" />
+                  新增行级范围
+                </Button>
+              </div>
+            </div>
+            <ScopeDisplayTable
+              rows={filteredAclRows}
+              empty="暂无行级范围"
+              withAction={false}
+              onEdit={openEditAcl}
+              selected={selectedAclRows}
+              onToggle={toggleAclSelection}
+              onToggleAll={toggleAllAclRows}
+              variant="acl"
+            />
+          </div>
+        </TabsContent>
+      </Tabs>
+
+      <AddPermissionWizard
+        open={policyWizardOpen}
+        target="policy"
+        catalog={catalog}
+        catalogLoading={catalogLoading}
+        edit={editPolicyContext}
+        onOpenChange={closePolicyWizard}
+        onSubmit={submitPolicy}
+      />
+      <AddPermissionWizard
+        open={aclWizardOpen}
+        target="acl"
+        catalog={catalog}
+        catalogLoading={catalogLoading}
+        edit={editAclContext}
+        onOpenChange={closeAclWizard}
+        onSubmit={submitAcl}
+      />
+    </div>
+  );
+}
+
+/** 范围策略 / 行级范围表格：支持点击列标题三态排序（无 → 升 → 降 → 无）。 */
+function ScopeDisplayTable({
+  rows,
+  empty,
+  withAction,
+  onEdit,
+  selected,
+  onToggle,
+  onToggleAll,
+  variant = 'policy',
+}: {
+  rows: DisplayRow[];
+  empty: string;
+  withAction: boolean;
+  onEdit?: (row: DisplayRow) => void;
+  selected?: Set<string>;
+  onToggle?: (key: string, checked: boolean) => void;
+  onToggleAll?: (checked: boolean) => void;
+  variant?: 'policy' | 'acl';
+}) {
+  const getSortValue = useCallback((row: DisplayRow, key: string): unknown => {
+    switch (key) {
+      case 'subjectType':
+        return SUBJECT_TYPE_LABEL[row.subjectType] ?? row.subjectType;
+      case 'subjectId':
+        return row.subjectId;
+      case 'subjectName':
+        return row.subjectName;
+      case 'objectKind':
+        return OBJECT_TYPE_LABEL[row.objectKind] ?? row.objectKind;
+      case 'objectName':
+        return `${row.objectName}\u0000${row.objectKey}`;
+      case 'extra': {
+        if (variant !== 'acl') return formatFieldAccessSummary(row).text;
+        const summary = summarizeRowScope(row.rowScope);
+        return summary.badges.map((b) => b.label).join(',') || (summary.hasRowScope ? 'scoped' : '全行可见');
+      }
+      case 'action':
+        return row.action ?? '';
+      default:
+        return '';
+    }
+  }, [variant]);
+
+  const { sorted, sortKey, sortDir, toggleSort } = useClientSort(rows, getSortValue);
+
+  const columns: { key: string; label: string }[] = [
+    { key: 'subjectType', label: '主体类型' },
+    { key: 'subjectId', label: '主体 ID' },
+    { key: 'subjectName', label: '主体名' },
+    { key: 'objectKind', label: '权限对象类型' },
+    { key: 'objectName', label: '对象名' },
+    { key: 'extra', label: variant === 'acl' ? '行级范围' : '字段访问' },
+  ];
+  if (withAction) columns.push({ key: 'action', label: '动作' });
+
+  return (
     <div className="min-h-0 flex-1 overflow-auto">
       <table className="w-full border-separate border-spacing-0 text-left text-sm">
         <thead className="sticky top-0 z-10 border-b-2 border-foreground/20 bg-table-header text-[13px] text-muted-foreground">
@@ -1532,24 +1779,39 @@ export function IqdScopePage() {
                 />
               </th>
             ) : null}
-            <th className="px-3 py-2 font-bold">主体类型</th>
-            <th className="border-l border-border/60 px-3 py-2 font-bold">主体 ID</th>
-            <th className="border-l border-border/60 px-3 py-2 font-bold">主体名</th>
-            <th className="border-l border-border/60 px-3 py-2 font-bold">权限对象类型</th>
-            <th className="border-l border-border/60 px-3 py-2 font-bold">对象名</th>
-            <th className="border-l border-border/60 px-3 py-2 font-bold">
-              {variant === 'acl' ? '行级范围' : '字段访问'}
-            </th>
-            {withAction ? (
-              <th className="border-l border-border/60 px-3 py-2 font-bold">动作</th>
-            ) : null}
+            {columns.map((col, ci) => {
+              const active = sortKey === col.key;
+              return (
+                <th
+                  key={col.key}
+                  aria-sort={active ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'none'}
+                  className={cn(
+                    'px-0 py-0 font-bold',
+                    ci > 0 && 'border-l border-border/60',
+                  )}
+                >
+                  <button
+                    type="button"
+                    onClick={() => toggleSort(col.key)}
+                    className={cn(
+                      'flex w-full items-center gap-1 px-3 py-2 text-left font-bold transition-colors',
+                      active ? 'text-foreground' : 'text-muted-foreground hover:text-foreground',
+                    )}
+                    aria-label={`按${col.label}排序`}
+                  >
+                    {col.label}
+                    <SortIndicator state={active ? sortDir : 'none'} />
+                  </button>
+                </th>
+              );
+            })}
             {onEdit ? (
               <th className="w-12 border-l border-border/60 px-3 py-2 font-bold" />
             ) : null}
           </tr>
         </thead>
         <tbody>
-          {rows.length === 0 ? (
+          {sorted.length === 0 ? (
             <tr>
               <td
                 colSpan={(withAction ? 7 : 6) + (onEdit ? 1 : 0) + (onToggle ? 1 : 0)}
@@ -1559,7 +1821,7 @@ export function IqdScopePage() {
               </td>
             </tr>
           ) : (
-            rows.map((row) => (
+            sorted.map((row) => (
               <tr
                 key={row.key}
                 className="border-b border-border/50 bg-table-row last:border-0 even:bg-table-stripe"
@@ -1676,202 +1938,6 @@ export function IqdScopePage() {
           )}
         </tbody>
       </table>
-    </div>
-  );
-
-  return (
-    <div className="flex h-full min-h-0 flex-col">
-      <PageHeader
-        title="问数范围与权限"
-        description="可问 = 角色/用户范围策略 ∩ 清单「纳入问数」。仅勾纳入不会放行；须在本页为角色或用户配置策略。行级范围另配 row_scope。"
-        breadcrumbs={buildAppBreadcrumbs({ app: 'agent', title: '问数范围与权限' })}
-        actions={
-          <div className="flex items-center gap-2">
-            <ProjectSwitcher />
-            <Button size="sm" variant="outline" onClick={() => void load()} disabled={loading}>
-              <RefreshCw className={cn('h-4 w-4', loading && 'animate-spin')} />
-              刷新
-            </Button>
-          </div>
-        }
-      />
-
-      {error ? (
-        <div className="mb-3 rounded border border-destructive/30 bg-destructive/5 p-3 text-xs text-destructive">
-          {error}
-        </div>
-      ) : null}
-
-      <Tabs defaultValue="policy" className="flex min-h-0 flex-1 flex-col">
-        <TabsList className="mb-3 grid w-full max-w-md grid-cols-2">
-          <TabsTrigger value="policy">范围策略</TabsTrigger>
-          <TabsTrigger value="acl">行级范围</TabsTrigger>
-        </TabsList>
-
-        <div className="mb-3 flex flex-wrap items-center gap-3 rounded-lg border bg-card p-3">
-          <div className="flex items-center gap-2">
-            <span className="text-xs font-medium text-muted-foreground">主体类型</span>
-            <select
-              className="h-9 rounded-md border border-input bg-background px-2 text-sm"
-              aria-label="主体类型过滤"
-              value={subjectTypeFilter}
-              onChange={(e) =>
-                setSubjectTypeFilter(e.target.value as 'all' | 'global' | 'role' | 'user')
-              }
-            >
-              <option value="all">全部</option>
-              <option value="global">只看全局</option>
-              <option value="role">只看角色</option>
-              <option value="user">只看用户</option>
-            </select>
-          </div>
-          <div className="flex items-center gap-2">
-            <span className="text-xs font-medium text-muted-foreground">角色</span>
-            <div
-              className={cn(
-                (subjectTypeFilter === 'global' || subjectTypeFilter === 'user') &&
-                  'pointer-events-none opacity-50',
-              )}
-            >
-              <FilterMultiSelect
-                options={roleOptions}
-                value={roleFilter}
-                onChange={(v) => setRoleFilter(Array.isArray(v) ? (v as string[]) : [])}
-                triggerClassName="w-64"
-              />
-            </div>
-          </div>
-          <div className="flex items-center gap-2">
-            <span className="text-xs font-medium text-muted-foreground">用户姓名</span>
-            <Input
-              className="h-9 w-56"
-              placeholder="按用户姓名过滤"
-              value={userKeyword}
-              onChange={(e) => setUserKeyword(e.target.value)}
-              disabled={subjectTypeFilter === 'global' || subjectTypeFilter === 'role'}
-            />
-          </div>
-          <span className="text-xs text-muted-foreground">
-            范围策略 {filteredPolicyRows.length} 条 · 行级范围 {filteredAclRows.length} 条
-          </span>
-        </div>
-
-        <TabsContent value="policy" className="mt-0 flex min-h-0 flex-1 flex-col">
-          <div className="flex min-h-0 flex-1 flex-col rounded border bg-card">
-            <div className="flex items-center justify-between border-b px-3 py-2">
-              <div className="flex items-center gap-2 text-[13px] font-medium">
-                <ShieldCheck className="h-4 w-4 text-primary" />
-                范围策略
-                {selectedPolicyRows.size > 0 ? (
-                  <Badge variant="secondary" className="rounded">
-                    已选 {selectedPolicyRows.size}
-                  </Badge>
-                ) : null}
-              </div>
-              <div className="flex items-center gap-2">
-                <Button
-                  size="sm"
-                  variant="outline"
-                  disabled={selectedPolicyRows.size === 0 || bulkDeleting}
-                  onClick={() =>
-                    void removePolicyRows(
-                      filteredPolicyRows.filter((row) => selectedPolicyRows.has(row.key)),
-                    )
-                  }
-                >
-                  <Trash2 className="h-4 w-4" />
-                  删除选中
-                </Button>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={() => setPolicyWizardOpen(true)}
-                  disabled={connectionId == null}
-                >
-                  <Plus className="h-4 w-4" />
-                  新增范围策略
-                </Button>
-              </div>
-            </div>
-            {renderTable(
-              filteredPolicyRows,
-              '暂无范围策略',
-              false,
-              openEditPolicy,
-              selectedPolicyRows,
-              togglePolicySelection,
-              toggleAllPolicyRows,
-            )}
-          </div>
-        </TabsContent>
-
-        <TabsContent value="acl" className="mt-0 flex min-h-0 flex-1 flex-col">
-          <div className="flex min-h-0 flex-1 flex-col rounded border bg-card">
-            <div className="flex items-center justify-between border-b px-3 py-2">
-              <div className="flex items-center gap-2 text-[13px] font-medium">
-                <ShieldCheck className="h-4 w-4 text-primary" />
-                行级范围
-                {selectedAclRows.size > 0 ? (
-                  <Badge variant="secondary" className="rounded">
-                    已选 {selectedAclRows.size}
-                  </Badge>
-                ) : null}
-              </div>
-              <div className="flex items-center gap-2">
-                <Button
-                  size="sm"
-                  variant="outline"
-                  disabled={selectedAclRows.size === 0 || bulkDeleting}
-                  onClick={() =>
-                    void removeAclRows(filteredAclRows.filter((row) => selectedAclRows.has(row.key)))
-                  }
-                >
-                  <Trash2 className="h-4 w-4" />
-                  删除选中
-                </Button>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={() => setAclWizardOpen(true)}
-                  disabled={connectionId == null}
-                >
-                  <Plus className="h-4 w-4" />
-                  新增行级范围
-                </Button>
-              </div>
-            </div>
-            {renderTable(
-              filteredAclRows,
-              '暂无行级范围',
-              false,
-              openEditAcl,
-              selectedAclRows,
-              toggleAclSelection,
-              toggleAllAclRows,
-              'acl',
-            )}
-          </div>
-        </TabsContent>
-      </Tabs>
-
-      <AddPermissionWizard
-        open={policyWizardOpen}
-        target="policy"
-        catalog={catalog}
-        catalogLoading={catalogLoading}
-        edit={editPolicyContext}
-        onOpenChange={closePolicyWizard}
-        onSubmit={submitPolicy}
-      />
-      <AddPermissionWizard
-        open={aclWizardOpen}
-        target="acl"
-        catalog={catalog}
-        catalogLoading={catalogLoading}
-        edit={editAclContext}
-        onOpenChange={closeAclWizard}
-        onSubmit={submitAcl}
-      />
     </div>
   );
 }
