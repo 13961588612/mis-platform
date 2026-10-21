@@ -9,6 +9,8 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import {
   buildEmbedSessionId,
   clearEmbedSession,
+  resolveHostIdFromLocation,
+  resolvePathHostId,
   resolveRouteSessionId,
   sanitizeHostId,
 } from './embed-session';
@@ -30,6 +32,25 @@ describe('embed-session sanitizeHostId', () => {
     expect(sanitizeHostId('')).toBe('');
     expect(sanitizeHostId(null)).toBe('');
     expect(sanitizeHostId('x'.repeat(100))).toHaveLength(64);
+  });
+});
+
+describe('embed-session resolvePathHostId / resolveHostIdFromLocation', () => {
+  it('路径 /embed/{hostId}/chat → hostId', () => {
+    expect(resolvePathHostId('/embed/seeyon-a8/chat')).toBe('seeyon-a8');
+    expect(resolvePathHostId('/embed/seeyon-a8/chat/')).toBe('seeyon-a8');
+    expect(resolvePathHostId('/embed/seeyon-a8/chat/sess-1')).toBe('seeyon-a8');
+  });
+
+  it('旧路径 /embed/chat 不误判 hostId=chat', () => {
+    expect(resolvePathHostId('/embed/chat')).toBe('');
+    expect(resolvePathHostId('/embed/chat/sess-1')).toBe('');
+  });
+
+  it('路径优先于 query；无路径时回落 query', () => {
+    expect(resolveHostIdFromLocation('/embed/seeyon-a8/chat', '?hostId=other')).toBe('seeyon-a8');
+    expect(resolveHostIdFromLocation('/embed/chat', '?hostId=seeyon-a8')).toBe('seeyon-a8');
+    expect(resolveHostIdFromLocation('/embed/chat', '')).toBe('');
   });
 });
 

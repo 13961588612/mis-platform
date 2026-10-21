@@ -65,6 +65,16 @@ mis:
     phone-match-enabled: ${MIS_EMBED_PHONE_MATCH_ENABLED:true}
     # 兑换限流：同一 hostId 每分钟最大请求数（R6 防撞库）
     rate-limit-per-minute: ${MIS_EMBED_RATE_LIMIT_PER_MINUTE:60}
+    # ticket-pull 宿主（致远 A8）：docs/integration/seeyon-a8-ticket-sso.md
+    # base-url / REST 账号未配齐时 ticket-exchange 返回 40102
+    ticket-hosts:
+      seeyon-a8:
+        provider: seeyon
+        base-url: ${MIS_EMBED_SEEYON_BASE_URL:}
+        rest-username: ${MIS_EMBED_SEEYON_REST_USER:}
+        rest-password: ${MIS_EMBED_SEEYON_REST_PASSWORD:}
+        connect-timeout-ms: ${MIS_EMBED_SEEYON_CONNECT_TIMEOUT_MS:5000}
+        read-timeout-ms: ${MIS_EMBED_SEEYON_READ_TIMEOUT_MS:10000}
   bff:
     iam-discovery-enabled: false
     iam-service-id: mis-iam

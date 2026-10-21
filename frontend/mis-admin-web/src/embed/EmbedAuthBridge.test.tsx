@@ -43,11 +43,32 @@ describe('EmbedAuthBridge 鉴权态机', () => {
     originalPostMessage = window.postMessage;
     useEmbedStore.getState().reset();
     useAuthStore.getState().clearSession();
+    // hydrateEmbedUser 走 /auth/me；单测默认 stub，避免未 mock 的网络
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          code: 0,
+          data: {
+            id: '42',
+            username: 'embed_user',
+            realName: '嵌入用户',
+            avatarUrl: null,
+            roles: [],
+            permVersion: 0,
+            permissions: ['agent:chat:use'],
+          },
+        }),
+      })),
+    );
   });
 
   afterEach(() => {
     window.postMessage = originalPostMessage;
     vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
     vi.useRealTimers();
     vi.restoreAllMocks();
   });
@@ -59,12 +80,16 @@ describe('EmbedAuthBridge 鉴权态机', () => {
     expect(spy).toHaveBeenCalledWith({ type: 'AUTH_READY' }, '*');
   });
 
-  it('合法 AUTH_TOKEN（白名单 origin）→ authenticated + auth-store accessToken 同步', () => {
+  it('合法 AUTH_TOKEN（白名单 origin）→ authenticated + auth-store accessToken 同步', async () => {
     render(<EmbedAuthBridge />);
     post({ type: 'AUTH_TOKEN', token: VALID_TOKEN }, PARENT_ORIGIN);
     expect(useEmbedStore.getState().authState).toBe('authenticated');
     expect(useEmbedStore.getState().parentOrigin).toBe(PARENT_ORIGIN);
     expect(useAuthStore.getState().accessToken).toBe(VALID_TOKEN);
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(useAuthStore.getState().user?.realName).toBe('嵌入用户');
   });
 
   it('非白名单 origin 的 AUTH_TOKEN → rejected（fail-closed）', () => {

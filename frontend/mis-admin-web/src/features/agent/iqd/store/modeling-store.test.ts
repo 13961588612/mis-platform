@@ -39,6 +39,16 @@ describe('ModelingStore 初值', () => {
     expect(s.wizardStep).toBeNull();
     expect(s.wizardHistory).toEqual([]);
     expect(s.viewport).toEqual({ x: 0, y: 0, zoom: 1 });
+    expect(s.layoutApplyEpoch).toBe(0);
+  });
+});
+
+describe('ModelingStore requestLayoutApply', () => {
+  it('单调递增 layoutApplyEpoch', () => {
+    useModelingStore.getState().requestLayoutApply();
+    expect(useModelingStore.getState().layoutApplyEpoch).toBe(1);
+    useModelingStore.getState().requestLayoutApply();
+    expect(useModelingStore.getState().layoutApplyEpoch).toBe(2);
   });
 });
 

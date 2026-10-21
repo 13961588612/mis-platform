@@ -313,9 +313,10 @@ class BffApiRegistryDiffSurveyTest {
                         "POST /api/v1/agent-ops/agents/{id}/{action}",
                         "POST /api/v1/agent-ops/channels/wecom/bots/{botId}/{action}",
                         "POST /api/v1/agent-ops/mcp/servers/{name}/{action}",
-                        "POST /api/v1/embed/identity/exchange"),
+                        "POST /api/v1/embed/identity/exchange",
+                        "POST /api/v1/embed/identity/ticket-exchange"),
                 nonKbUnregistered,
-                "非 KB 未登记应只剩 agent-ops 动作变量端点（拆行登记已覆盖）+ D12 exchange 豁免端点；"
+                "非 KB 未登记应只剩 agent-ops 动作变量端点（拆行登记已覆盖）+ D12 exchange/ticket-exchange 豁免端点；"
                         + "modules 10 应已 V35 登记、roles/apps/employees 应已登记纠偏："
                         + nonKbUnregistered);
 
@@ -530,8 +531,8 @@ class BffApiRegistryDiffSurveyTest {
         DISPOSITIONS.put("modules", "V35 已补登：modules 10 端点（catalog 91157 + api 91158-91167）已登记，复用 V8 system:module:* 四码");
         DISPOSITIONS.put("roles", "已登记（V2 建 3008/3009，V4 改名 /roles/{id}/menus，menu 234 system:role:assignMenu）：差集误报已纠偏，V35 不重复补");
         DISPOSITIONS.put("internal", "豁免：/internal/** 由 InternalServiceTrustInterceptor 管理，不属 ApiPermissionInterceptor 域");
-        DISPOSITIONS.put("embed", "豁免：/api/v1/embed/identity/exchange 由外部系统后端直调（无 MIS JWT），"
-                + "以宿主自签 externalToken(HS256) 验签鉴权（D12 R1），刻意不登记 sys_api——"
+        DISPOSITIONS.put("embed", "豁免：/api/v1/embed/identity/exchange 与 /ticket-exchange（无 MIS JWT），"
+                + "前者宿主自签 externalToken(HS256)，后者 BFF 出站验票；刻意不登记 sys_api——"
                 + "登记会因拦截器缺 LoginUser 直接 401，且已在 ApiPermissionConfiguration excludePathPatterns 豁免");
         DISPOSITIONS.put("menus", "已登记（V2 seed authOnly）或待运营评估");
         DISPOSITIONS.put("oper-logs", "已登记（V2 seed）");

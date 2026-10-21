@@ -215,7 +215,9 @@ export function TableImportWizard({
   };
 
   const handleNext = () => {
+    // 最后一步「完成」：关闭向导（此前 return 空操作 → 弹窗关不掉）
     if (currentStep === STEPS[3].key) {
+      onOpenChange(false);
       return;
     }
     if (currentStep === STEPS[2].key) {

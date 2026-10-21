@@ -39,37 +39,84 @@ const PROFILE_COLUMN_THRESHOLD = 8;
 /** 表头/单元格最小列宽（按内容撑开 + 外层横滚）。*/
 const COL_MIN_WIDTH_CLASS = 'min-w-[5.5rem]';
 
+/**
+ * 把 LLM / 问数回传的行规约成「列 key → 值」对象。
+ *
+ * <p>iqd__ask 的 ``data.rows`` 常为**数组行**（与 columns 下标对齐），而 data-table
+ * 用 ``accessorKey`` 读对象字段。若直接把数组当 Row，会出现「共 N 条 / 多页但单元格空白」。
+ */
+export function normalizeDataTableRows(rawRows: unknown[], columnKeys: string[]): Row[] {
+  const out: Row[] = [];
+  for (const raw of rawRows) {
+    if (raw == null) continue;
+    if (Array.isArray(raw)) {
+      const obj: Row = {};
+      if (columnKeys.length > 0) {
+        columnKeys.forEach((key, index) => {
+          obj[key] = raw[index];
+        });
+      } else {
+        raw.forEach((value, index) => {
+          obj[`col_${index}`] = value;
+        });
+      }
+      out.push(obj);
+      continue;
+    }
+    if (typeof raw === 'object') {
+      out.push(raw as Row);
+    }
+  }
+  return out;
+}
+
+function coerceColumnSpec(c: string | ColumnSpec | Record<string, unknown>): ColumnSpec | null {
+  if (typeof c === 'string') {
+    const key = c.trim();
+    return key ? { key, label: key } : null;
+  }
+  if (c == null || typeof c !== 'object') return null;
+  const rec = c as Record<string, unknown>;
+  const key = String(rec.key ?? rec.name ?? rec.item_key ?? '').trim();
+  if (!key) return null;
+  const label = String(rec.label ?? rec.title ?? rec.display_name ?? key);
+  return { key, label };
+}
+
 export function DataTable({ props }: A2uiComponentProps) {
   const title = typeof props.title === 'string' ? props.title : '';
   const columns = useMemo<ColumnSpec[]>(() => {
     if (!Array.isArray(props.columns)) return [];
 
-    // 将 string | ColumnSpec 统一为 ColumnSpec
-    const all: ColumnSpec[] = (props.columns as Array<string | ColumnSpec>).map((c) =>
-      typeof c === 'string' ? { key: c, label: c } : { key: c.key, label: c.label ?? c.key },
-    );
+    const all: ColumnSpec[] = [];
+    for (const c of props.columns as Array<string | ColumnSpec | Record<string, unknown>>) {
+      const spec = coerceColumnSpec(c);
+      if (spec) all.push(spec);
+    }
 
     // 去重：同一 key 只保留首次出现（应对 LLM 生成重复列名）
     const seen = new Set<string>();
     const deduped: ColumnSpec[] = [];
     for (const col of all) {
-      if (seen.has(col.key)) continue; // skip duplicate column
+      if (seen.has(col.key)) continue;
       seen.add(col.key);
       deduped.push(col);
     }
     return deduped;
   }, [props.columns]);
 
+  const columnKeys = useMemo(() => columns.map((c) => c.key), [columns]);
+
   const rows = useMemo<Row[]>(() => {
     if (!Array.isArray(props.rows)) return [];
-    return props.rows.filter((r): r is Row => r != null && typeof r === 'object');
-  }, [props.rows]);
+    return normalizeDataTableRows(props.rows, columnKeys);
+  }, [props.rows, columnKeys]);
 
   const keys = useMemo<string[]>(() => {
-    if (columns.length > 0) return columns.map((c) => c.key);
+    if (columnKeys.length > 0) return columnKeys;
     if (rows.length > 0) return Object.keys(rows[0]);
     return [];
-  }, [columns, rows]);
+  }, [columnKeys, rows]);
 
   const labelByKey = useMemo(() => {
     const map = new Map<string, string>();

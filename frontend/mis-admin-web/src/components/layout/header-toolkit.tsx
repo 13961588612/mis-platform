@@ -5,10 +5,12 @@ import { Button } from '@/components/ui/button';
 import { useAuthStore } from '@/stores/auth-store';
 import { fetchMyTasks, fetchTaskStats, type TaskItem } from '@/lib/api/tasks';
 import { fetchInbox, fetchMessageStats, markMessagesRead, type MessageItem } from '@/lib/api/messages';
+import { wfInstanceId } from '@/lib/api/wf-instance';
 import { cn } from '@/lib/utils';
 import { UnreadDot } from '@/components/common/unread-dot';
 import { usePortalTabStore } from '@/stores/portal-tab-store';
 import { MessageDetailDrawer } from '@/features/portal/components/message-detail-drawer';
+import { TodoDetailDrawer } from '@/features/portal/components/todo-detail-drawer';
 
 /** 顶栏通知项：待办 / 消息合并流（按时间倒序）。 */
 interface NotificationItem {
@@ -29,11 +31,16 @@ interface NotificationItem {
   sortAt: number;
   read?: boolean;
   /**
-   * 点击后的路由跳转目标。
+   * 待办关联的流程实例 id（从 `TaskItem.metadata.wfInstanceId` 解析）。
    *
-   * <p>**只有待办项有**：待办点进「我的待办」列表。消息项点开是就地滑出
-   * {@link MessageDetailDrawer}（与消息中心同款，流程消息还带只读表单），
-   * 不再跳工作台收件箱，故此处为空。
+   * <p>有值 → 点开就地滑出 {@link TodoDetailDrawer}（与门户「我的待办」同款）；
+   * 无值 → 降级 {@link NotificationItem.to} 跳「我的待办」列表。
+   */
+  instanceId?: string | null;
+  /**
+   * 点击后的路由跳转目标（仅待办、且无 instanceId 时的降级）。
+   *
+   * <p>消息项点开是就地滑出 {@link MessageDetailDrawer}，故意不填。
    */
   to?: string;
 }
@@ -83,11 +90,11 @@ function toTimestamp(iso: string | null | undefined): number {
  * `MessageItem.createdAt`，均为非空 ISO 串）；无法解析的沉底而非丢条。
  * 角标数字**仍只取 stats 权威值**，与列表长度无关（列表是预览，角标是全量计数）。
  *
- * <p><b>点条目的去向</b>：待办 → `navigate('/task/pending')`（进「我的待办」列表）；
- * 消息 → **就地滑出 {@link MessageDetailDrawer}**，与门户「消息中心」点消息完全同款。
- * 改造前消息项也走 `navigate('/task/inbox')`，用户必须自己在列表里再点一次才能看到
- * 正文，且流程类消息看不到表单内容。现在复用同一个抽屉组件，流程消息（`instanceId != null`）
- * 会自动拉流程详情并渲染只读 `FormShell`。
+ * <p><b>点条目的去向</b>：
+ * 消息 → 就地滑出 {@link MessageDetailDrawer}（与消息中心同款）；
+ * 待办（有 `wfInstanceId`）→ 就地滑出 {@link TodoDetailDrawer}（与门户「我的待办」同款）；
+ * 待办（无实例）→ 降级 `navigate('/task/pending')`。
+ * 改造前待办一律跳「我的待办」整页，铃铛里点采购审批等会离开当前页，体验与门户不一致。
  *
  * <p><b>点消息还顺手标已读</b>：与门户 `portal-message-tab.tsx` 的 `handleOpen` 同一套
  * 口径——未读的（`!n.read`）才发 `markMessagesRead(userId, [refId])`，成功后 `load()` 重刷
@@ -118,6 +125,11 @@ export function HeaderToolkit({ onOpenCommand, className, showSearchPill = true 
    * 只读表单，所以「跟流程有关的消息要看到表单内容」这条无需在本文件重复实现。
    */
   const [detailMessageId, setDetailMessageId] = useState<string | null>(null);
+  /**
+   * 铃铛里被点开的待办对应流程实例 id；`null` 表示待办抽屉关闭。
+   * 与门户 {@link TodoDetailDrawer} 同款。
+   */
+  const [detailInstanceId, setDetailInstanceId] = useState<string | null>(null);
   /** 门户 Tab 激活态写入器：底部「打开消息中心」用它把门户切到消息页签。 */
   const setPortalTab = usePortalTabStore((s) => s.setActiveTab);
 
@@ -153,6 +165,8 @@ export function HeaderToolkit({ onOpenCommand, className, showSearchPill = true 
             sortAt: toTimestamp(t.createdAt),
             // 待办列表接口不返回可靠的已读语义（历史实现恒为 false），这里不参与未读计算，
             // 未读数字只看下面的 unreadCount（后端 stats 权威值）。
+            instanceId: wfInstanceId(t),
+            // 无流程实例时的降级跳转（有 instanceId 时点开抽屉，不用 to）。
             to: '/task/pending',
           });
         }
@@ -295,8 +309,11 @@ export function HeaderToolkit({ onOpenCommand, className, showSearchPill = true 
                                 .then(() => load())
                                 .catch(() => undefined);
                             }
+                          } else if (n.kind === 'task' && n.instanceId) {
+                            // 待办（有流程实例）：就地开 TodoDetailDrawer，与门户「我的待办」同款。
+                            setDetailInstanceId(n.instanceId);
                           } else if (n.to) {
-                            // 待办：维持原行为，跳「我的待办」列表。
+                            // 待办无实例：降级跳「我的待办」列表。
                             navigate(n.to);
                           }
                         }}
@@ -356,6 +373,18 @@ export function HeaderToolkit({ onOpenCommand, className, showSearchPill = true 
           if (!v) setDetailMessageId(null);
         }}
         messageId={detailMessageId}
+      />
+
+      <TodoDetailDrawer
+        open={detailInstanceId !== null}
+        onOpenChange={(v) => {
+          if (!v) setDetailInstanceId(null);
+        }}
+        instanceId={detailInstanceId}
+        onDone={() => {
+          setDetailInstanceId(null);
+          void load();
+        }}
       />
     </div>
   );

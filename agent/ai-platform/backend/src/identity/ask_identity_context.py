@@ -313,7 +313,18 @@ def _hint_connection_id(metadata: dict[str, Any]) -> int | None:
     return None
 
 
+def _connection_row_enabled(row: dict[str, Any]) -> bool:
+    """连接是否启用（缺省视为启用；显式 0/false/off 为停用）。"""
+    flag = row.get("enabled", 1)
+    if isinstance(flag, bool):
+        return flag
+    if flag in (0, "0", False):
+        return False
+    return str(flag).strip().lower() not in ("false", "no", "off")
+
+
 async def _enabled_connection_ids() -> list[int]:
+    """仅返回已启用问数连接 id（停用项目绝不进入 Copilot 默认/候选）。"""
     try:
         from src.adapters.iqd_config_client import IqdConfigClient
 
@@ -322,38 +333,40 @@ async def _enabled_connection_ids() -> list[int]:
         logger.warning("list IQD connections for default id failed", exc_info=True)
         return []
     enabled: list[int] = []
-    others: list[int] = []
     for row in rows or []:
         if not isinstance(row, dict):
             continue
-        cid = _coerce_connection_id(row.get("id"))
-        if cid is None:
+        if not _connection_row_enabled(row):
             continue
-        flag = row.get("enabled")
-        if flag in (1, True, "1", "true", "TRUE"):
+        cid = _coerce_connection_id(row.get("id"))
+        if cid is not None:
             enabled.append(cid)
-        else:
-            others.append(cid)
-    return enabled or others
+    return enabled
 
 
 async def inject_connection_id(metadata: dict[str, Any]) -> dict[str, Any]:
-    """注入默认 / 校验过的 connection_id（hint 必须落在 enabled 连接内）。"""
+    """注入默认 / 校验过的 connection_id（hint 与当前值必须落在**启用**连接内）。
+
+    停用项目一律剔除：过期 hint、会话里残留的停用 ``connection_id`` 都不会放行，
+    回退到启用清单首条；若无任何启用连接则清除无效 id，交给下游 45201。
+    """
     merged = dict(metadata)
     enabled = await _enabled_connection_ids()
     hint = _hint_connection_id(merged)
     iqd = dict(merged.get("iqd") or {}) if isinstance(merged.get("iqd"), dict) else {}
     current = _coerce_connection_id(iqd.get("connection_id"))
     chosen: int | None = None
-    if current is not None and (not enabled or current in enabled):
+    if current is not None and current in enabled:
         chosen = current
-    elif hint is not None and (not enabled or hint in enabled):
+    elif hint is not None and hint in enabled:
         chosen = hint
     elif enabled:
         chosen = enabled[0]
     if chosen is not None:
         iqd["connection_id"] = chosen
-        merged["iqd"] = iqd
+    else:
+        iqd.pop("connection_id", None)
+    merged["iqd"] = iqd
     return merged
 
 

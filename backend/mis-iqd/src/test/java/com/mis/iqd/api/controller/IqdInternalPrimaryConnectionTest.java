@@ -198,7 +198,47 @@ class IqdInternalPrimaryConnectionTest {
         assertTrue(controller.getConnections().getData().isEmpty());
         assertEquals(null, authoritativePrimaryId(), "表空 ⇒ 无主连接（GET /config 回空视图）");
         // 6 处内部读面之一：无主连接 ⇒ 返回空数组（resolvePrimaryConnectionId 返回 null 路径）
-        assertTrue(controller.getAcls().getData().isEmpty());
+        assertTrue(controller.getAcls(null).getData().isEmpty());
+    }
+
+    /**
+     * 多连接增强同步：显式 connection_id 必须命中该连接，绝不可静默落到主连接。
+     *
+     * <p>现网反例：sm-data 点「样本同步」时 Worker 已传 connection_id，但内部面忽略参数、
+     * 只拉主连接（bg-data）样本 ⇒ pending 全在 sm-data 上、synced_sql_pair_count=0。
+     */
+    @Test
+    void getSqlPairs_explicitConnectionId_doesNotFallBackToPrimary() {
+        IqdConnection primary = conn(1L, "bg-data", 1);
+        IqdConnection smData = conn(2L, "sm-data", 1);
+        when(connectionRepository.findByName("default")).thenReturn(Optional.empty());
+        when(connectionRepository.findByEnabledOrderByIdAsc(1)).thenReturn(List.of(primary, smData));
+
+        IqdAdminService mockAdmin = org.mockito.Mockito.mock(IqdAdminService.class);
+        when(mockAdmin.listSqlPairs(2L)).thenReturn(List.of());
+        controller = new IqdInternalController(
+                connectionRepository, mockAdmin, scopeSyncJobService, catalogNodeService,
+                dimensionValueResolveService);
+
+        assertTrue(controller.getSqlPairs(2L).getData().isEmpty());
+        org.mockito.Mockito.verify(mockAdmin).listSqlPairs(2L);
+        org.mockito.Mockito.verify(mockAdmin, org.mockito.Mockito.never()).listSqlPairs(1L);
+    }
+
+    @Test
+    void getSqlPairs_nullConnectionId_fallsBackToPrimary() {
+        IqdConnection primary = conn(1L, "bg-data", 1);
+        when(connectionRepository.findByName("default")).thenReturn(Optional.empty());
+        when(connectionRepository.findByEnabledOrderByIdAsc(1)).thenReturn(List.of(primary));
+
+        IqdAdminService mockAdmin = org.mockito.Mockito.mock(IqdAdminService.class);
+        when(mockAdmin.listSqlPairs(1L)).thenReturn(List.of());
+        controller = new IqdInternalController(
+                connectionRepository, mockAdmin, scopeSyncJobService, catalogNodeService,
+                dimensionValueResolveService);
+
+        assertTrue(controller.getSqlPairs(null).getData().isEmpty());
+        org.mockito.Mockito.verify(mockAdmin).listSqlPairs(1L);
     }
 
     // --------------------------------------------- 向后兼容：既有键不变 + is_primary 追加末尾

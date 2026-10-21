@@ -165,7 +165,7 @@
 
       <section class="frame-wrap">
         <header>
-          <strong>iframe · /embed/chat</strong>
+          <strong>iframe · /embed/{hostId}/chat</strong>
           <div class="hint" id="frameStatus">未加载</div>
         </header>
         <iframe
@@ -249,7 +249,7 @@
         function loadFrame() {
           const origin = $('embedOrigin').value.trim() || defaultOrigin();
           const hostId = encodeURIComponent($('hostId').value.trim() || 'embed-demo');
-          const src = origin.replace(/\/$/, '') + '/embed/chat?hostId=' + hostId;
+          const src = origin.replace(/\/$/, '') + '/embed/' + hostId + '/chat';
           frame.src = src;
           statusEl.textContent = '加载中: ' + src;
           log('加载 iframe: ' + src);

@@ -799,7 +799,15 @@ function AddPermissionWizard({
             </DialogDescription>
           </DialogHeader>
 
-          <div className="min-h-0 flex-1 overflow-auto py-2">
+          <div
+            className={cn(
+              'min-h-0 flex-1 py-2',
+              // 编辑 / 单对象字段步：把高度交给内层列表撑满，避免 max-h-48 + 85vh 大片留白
+              step === 'fields' && selectedObjects.length === 1
+                ? 'flex flex-col overflow-hidden'
+                : 'overflow-auto',
+            )}
+          >
             {step === 'subject' ? (
               <div className="grid grid-cols-2 gap-4">
                 <button
@@ -880,7 +888,8 @@ function AddPermissionWizard({
             {step === 'fields' ? (
               <div
                 className={cn(
-                  'flex h-full min-h-0 flex-col gap-3',
+                  'flex min-h-0 flex-col gap-3',
+                  selectedObjects.length === 1 && 'h-full flex-1',
                 )}
               >
                 {selectedObjects.length === 0 ? (
@@ -890,37 +899,58 @@ function AddPermissionWizard({
                     const selected =
                       fieldSelection[obj.itemKey] ?? new Set(obj.fields.map((f) => f.itemKey));
                     const checkedCount = obj.fields.filter((f) => selected.has(f.itemKey)).length;
+                    const fillHeight = selectedObjects.length === 1;
                     return (
                       <div
                         key={obj.itemKey}
-                        className="flex min-h-0 flex-1 flex-col rounded-md border p-3"
+                        className={cn(
+                          'flex flex-col rounded-md border p-3',
+                          fillHeight && 'min-h-0 flex-1',
+                        )}
                       >
-                        <div className="mb-2 flex shrink-0 items-center gap-2">
-                          <Badge variant="secondary" className="rounded">
-                            {OBJECT_TYPE_LABEL[obj.kind]}
-                          </Badge>
-                          <span className="text-sm font-medium">{obj.name}</span>
-                          <span className="font-mono text-xs text-muted-foreground">{obj.itemKey}</span>
-                          {target === 'policy' ? (
-                          <span className="ml-auto flex items-center gap-2 text-xs">
-                            <span className="text-muted-foreground">
-                              已选 {checkedCount}/{obj.fields.length}
+                        {/*
+                          标题行：左信息可截断，右操作 shrink-0 钉住。
+                          单对象（含「修改可访问字段」）：字段列表 flex-1 撑满弹窗剩余高度。
+                          多对象新建：每卡 max-h-48，避免互相 flex-1 均分挤没列表。
+                        */}
+                        <div className="mb-2 flex shrink-0 items-center gap-3">
+                          <div className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden">
+                            <Badge variant="secondary" className="shrink-0 rounded">
+                              {OBJECT_TYPE_LABEL[obj.kind]}
+                            </Badge>
+                            <span
+                              className="min-w-0 truncate text-sm font-medium"
+                              title={obj.name}
+                            >
+                              {obj.name}
                             </span>
-                            <button
-                              type="button"
-                              className="rounded border border-input px-2 py-0.5 hover:bg-accent"
-                              onClick={() => setAllFields(obj.itemKey, true)}
+                            <span
+                              className="hidden min-w-0 truncate font-mono text-xs text-muted-foreground sm:inline"
+                              title={obj.itemKey}
                             >
-                              全选
-                            </button>
-                            <button
-                              type="button"
-                              className="rounded border border-input px-2 py-0.5 hover:bg-accent"
-                              onClick={() => setAllFields(obj.itemKey, false)}
-                            >
-                              清空
-                            </button>
-                          </span>
+                              {obj.itemKey}
+                            </span>
+                          </div>
+                          {target === 'policy' ? (
+                            <div className="flex shrink-0 items-center gap-2 text-xs">
+                              <span className="whitespace-nowrap text-muted-foreground">
+                                已选 {checkedCount}/{obj.fields.length}
+                              </span>
+                              <button
+                                type="button"
+                                className="rounded border border-input px-2 py-0.5 hover:bg-accent"
+                                onClick={() => setAllFields(obj.itemKey, true)}
+                              >
+                                全选
+                              </button>
+                              <button
+                                type="button"
+                                className="rounded border border-input px-2 py-0.5 hover:bg-accent"
+                                onClick={() => setAllFields(obj.itemKey, false)}
+                              >
+                                清空
+                              </button>
+                            </div>
                           ) : null}
                         </div>
                         {target === 'acl' ? (
@@ -938,7 +968,12 @@ function AddPermissionWizard({
                         ) : obj.fields.length === 0 ? (
                           <p className="text-xs text-muted-foreground">该对象暂无可选字段</p>
                         ) : (
-                          <div className="min-h-0 flex-1 space-y-0.5 overflow-auto rounded-md border p-1">
+                          <div
+                            className={cn(
+                              'space-y-0.5 overflow-auto rounded-md border p-1',
+                              fillHeight ? 'min-h-0 flex-1' : 'max-h-48',
+                            )}
+                          >
                             {obj.fields.map((f) => {
                               const on = selected.has(f.itemKey);
                               return (
@@ -957,7 +992,7 @@ function AddPermissionWizard({
                                     className="shrink-0"
                                   />
                                   <span className="min-w-0 flex-1 truncate font-medium">{f.name}</span>
-                                  <span className="max-w-[55%] truncate font-mono text-xs text-muted-foreground">
+                                  <span className="max-w-[45%] shrink truncate font-mono text-xs text-muted-foreground">
                                     {f.itemKey}
                                   </span>
                                   {on ? (

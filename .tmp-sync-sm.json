@@ -1,0 +1,22 @@
+﻿{
+    "code":  0,
+    "message":  "ok",
+    "data":  {
+                 "id":  1792061564072,
+                 "connection_id":  1792061563975,
+                 "build_status":  "success",
+                 "build_mdl_hash":  "wqd-20261021051355-c8240967",
+                 "index_status":  "success",
+                 "build_at":  "2026-10-21T05:14:07.921434Z",
+                 "index_at":  "2026-10-21T05:14:07.921434Z",
+                 "synced_sql_pair_count":  2,
+                 "synced_knowledge_count":  0,
+                 "build_error":  null,
+                 "index_error":  null,
+                 "updated_at":  "2026-10-21T05:14:07.921434Z",
+                 "action":  "reindex",
+                 "publish_warnings":  null
+             },
+    "traceId":  null,
+    "success":  true
+}

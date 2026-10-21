@@ -20,6 +20,34 @@ export function sanitizeHostId(raw: string | null | undefined): string {
   return cleaned.slice(0, 64);
 }
 
+/**
+ * 从路径解析 hostId：`/embed/{hostId}/chat` 或 `/embed/{hostId}/chat/{sessionId}`。
+ * 不含路径宿主时返回空串（再回落 query `?hostId=`，兼容旧链）。
+ */
+export function resolvePathHostId(pathname: string): string {
+  const m = pathname.match(/^\/embed\/([^/]+)\/chat(?:\/|$)/i);
+  if (!m?.[1]) return '';
+  // 避免把旧路径 `/embed/chat` 误判为 hostId=chat（该路径由静态路由承接）
+  if (m[1].toLowerCase() === 'chat') return '';
+  return sanitizeHostId(m[1]);
+}
+
+/**
+ * 解析当前页 hostId：路径段优先，其次 query `hostId`。
+ */
+export function resolveHostIdFromLocation(
+  pathname: string = typeof window !== 'undefined' ? window.location.pathname : '',
+  search: string = typeof window !== 'undefined' ? window.location.search : '',
+): string {
+  const fromPath = resolvePathHostId(pathname);
+  if (fromPath) return fromPath;
+  try {
+    return sanitizeHostId(new URLSearchParams(search).get('hostId'));
+  } catch {
+    return '';
+  }
+}
+
 function storageKey(hostId: string): string {
   return `${EMBED_SESSION_STORAGE_PREFIX}.${hostId}`;
 }
@@ -66,7 +94,7 @@ export function clearEmbedSession(hostId: string): void {
   }
 }
 
-/** 从路由参数恢复会话（/embed/chat/:sessionId 续接）。 */
+/** 从路由参数恢复会话（`/embed/.../chat/:sessionId` 续接）。 */
 export function resolveRouteSessionId(param: string | undefined): string | null {
   if (!param) return null;
   return SESSION_ID_PATTERN.test(param) ? param : null;

@@ -12,6 +12,9 @@ import { getJwtExpiry } from './embed-auth';
 
 export type EmbedAuthState = 'waiting' | 'authenticated' | 'rejected' | 'timeout';
 
+/** 鉴权来源：postMessage 宿主推送 vs ticket SSO 同源兑换。 */
+export type EmbedAuthMode = 'postMessage' | 'ticket';
+
 /** PAGE_CONTEXT（01-architecture.md §5.2 扩展字段）。 */
 export interface EmbedPageContext {
   /** 宿主标识（crm-web / supply-chain-web），用于会话隔离。 */
@@ -33,6 +36,7 @@ export interface EmbedPageContext {
 
 interface EmbedState {
   authState: EmbedAuthState;
+  authMode: EmbedAuthMode;
   /** 父页推送的 MIS RS256 JWT。 */
   token: string | null;
   /** JWT 过期时间（ms epoch）；来自 token.exp。 */
@@ -43,7 +47,7 @@ interface EmbedState {
   authError: string | null;
   /** 是否正在等待父页响应 AUTH_TOKEN_REQUEST。 */
   refreshPending: boolean;
-  setAuthenticated: (token: string, parentOrigin: string) => void;
+  setAuthenticated: (token: string, parentOrigin: string, authMode?: EmbedAuthMode) => void;
   /** 续期热替换：保持 parentOrigin / session，仅换 token。 */
   refreshToken: (token: string) => void;
   setPageContext: (ctx: EmbedPageContext) => void;
@@ -55,6 +59,7 @@ interface EmbedState {
 
 export const useEmbedStore = create<EmbedState>((set, get) => ({
   authState: 'waiting',
+  authMode: 'postMessage',
   token: null,
   tokenExpiresAt: null,
   parentOrigin: null,
@@ -62,7 +67,7 @@ export const useEmbedStore = create<EmbedState>((set, get) => ({
   authError: null,
   refreshPending: false,
 
-  setAuthenticated: (token, parentOrigin) => {
+  setAuthenticated: (token, parentOrigin, authMode = 'postMessage') => {
     const expiresAt = getJwtExpiry(token);
     // 同步 chat-core 依赖的 auth-store（embed 入口已将其持久化切到内存，不污染 admin 本地会话）
     useAuthStore.setState({
@@ -71,6 +76,7 @@ export const useEmbedStore = create<EmbedState>((set, get) => ({
     });
     set({
       authState: 'authenticated',
+      authMode,
       token,
       tokenExpiresAt: expiresAt,
       parentOrigin,
@@ -120,6 +126,7 @@ export const useEmbedStore = create<EmbedState>((set, get) => ({
   reset: () =>
     set({
       authState: 'waiting',
+      authMode: 'postMessage',
       token: null,
       tokenExpiresAt: null,
       parentOrigin: null,

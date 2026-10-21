@@ -22,6 +22,8 @@ export {
 export {
   buildEmbedSessionId,
   clearEmbedSession,
+  resolveHostIdFromLocation,
+  resolvePathHostId,
   resolveRouteSessionId,
   sanitizeHostId,
 } from './embed-session';

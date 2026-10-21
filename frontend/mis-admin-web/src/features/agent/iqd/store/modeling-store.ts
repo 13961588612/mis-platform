@@ -40,6 +40,13 @@ export interface ModelingUiState {
   wizardStep: string | null;
   /** 向导步骤历史（`popWizardStep` 回退栈）。 */
   wizardHistory: string[];
+  /**
+   * 强制画布套用已持久化 / 缓存中的布局坐标（单调递增）。
+   *
+   * <p>「一键整理」写回 Query 缓存后，画布默认仍优先本地坐标（防拖拽弹回），
+   * 须 bump 本计数才能 `preferPersisted` 一次。
+   */
+  layoutApplyEpoch: number;
 }
 
 /** 建模台 UI 态**动作**（§5 类图 + 连接上下文/视口 setter）。 */
@@ -70,6 +77,8 @@ export interface ModelingActions {
   setSelectedNodeIds: (ids: Set<string>) => void;
   /** 设置发布中标记。 */
   setIsPublishing: (isPublishing: boolean) => void;
+  /** 请求画布强制套用当前布局缓存坐标（一键整理 / 外部改布局后调用）。 */
+  requestLayoutApply: () => void;
 }
 
 /** 建模台 UI 态 store 接口（数据 + 动作）。 */
@@ -87,6 +96,7 @@ function initialState(): ModelingUiState {
     isPublishing: false,
     wizardStep: null,
     wizardHistory: [],
+    layoutApplyEpoch: 0,
   };
 }
 
@@ -177,6 +187,9 @@ export const useModelingStore = create<ModelingState>()((set, get) => ({
   setSelectedNodeIds: (ids) => set(() => ({ selectedNodeIds: new Set<string>(ids) })),
 
   setIsPublishing: (isPublishing) => set(() => ({ isPublishing })),
+
+  requestLayoutApply: () =>
+    set((state) => ({ layoutApplyEpoch: state.layoutApplyEpoch + 1 })),
 }));
 
 /** 便捷 selector：当前是否处于脏状态（存在未提交草稿）。 */

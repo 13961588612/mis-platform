@@ -133,6 +133,7 @@ class IqdAskInput(BaseModel):
         description=(
             "问数项目名（项目配置里的名称，如 bg-data）或数字连接 id。"
             "纯数字按 id 匹配；其余按项目名精确匹配。"
+            "仅已启用项目可选；已停用项目视为不存在并报错。"
             "项目名匹配不到或同名多条时直接报错，不回退到其他项目。"
             "缺省取已启用连接。"
         ),
@@ -156,7 +157,9 @@ class IqdDescribeScopeInput(BaseModel):
     )
     connection_id: int | str | None = Field(
         default=None,
-        description="问数项目名（如 bg-data）或数字连接 id；缺省取已启用连接。",
+        description=(
+            "问数项目名（如 bg-data）或数字连接 id；仅已启用项目可选，缺省取已启用连接。"
+        ),
     )
 
 
@@ -170,7 +173,8 @@ class IqdAskTool(BaseTool):
         "**调用纪律**：\n"
         "1. 仅数据类问题（销售额/统计/对比/明细）才调用；\n"
         "2. `question` 必须传用户原始问题原文，不得改写；\n"
-        "3. 指定项目时 `connection_id` 传项目名（如 bg-data）或数字 id；\n"
+        "3. 指定项目时 `connection_id` 传项目名（如 bg-data）或数字 id；"
+        "不要选择已停用项目；\n"
         "4. 返回 JSON 含 `answer_summary` / `citations` / `plan` / `data`，"
         "`view=user` 时不含 `sql`；\n"
         "5. 工具失败（452xx）时如实报告错误，禁止编造数据。"

@@ -14,18 +14,18 @@
  *    `createdAt` 倒序 → 截前 20），且底部按钮文案为「打开消息中心」、点击会
  *    写门户 Tab store（真正切到消息中心，而不只是跳路由）。
  * 6. **铃铛消息点开改抽屉**：点消息项 → `MessageDetailDrawer` 打开且携带**那条消息自己的
- *    原始 id**（不是下拉React key 那种 `m-` 前缀形式），且**不发生路由跳转**；
- *    点待办项仍跳 `/task/pending`（防止改消息时顺手改坏待办）。
- * 7. **点消息顺手标已读**（对齐门户「消息中心」`handleOpen`）：未读的才发
+ *    原始 id**（不是下拉React key 那种 `m-` 前缀形式），且**不发生路由跳转**。
+ * 7. **铃铛待办点开改抽屉**：有 `wfInstanceId` → `TodoDetailDrawer`（与门户同款）；
+ *    无实例 → 仍降级跳 `/task/pending`。
+ * 8. **点消息顺手标已读**（对齐门户「消息中心」`handleOpen`）：未读的才发
  *    `markMessagesRead(userId, [原始 id])` 且成功后重刷；已读的不发；
  *    标已读**失败不阻断**查看详情（抽屉照开、不跳路由）。
  *
  * mock 范式（对齐 `features/portal/__tests__/portal-tabs.test.tsx`）：
  * - 整体替换 api 模块，避免真实 axios/fetch；
  * - zustand 用 `useAuthStore.setState` / `usePortalTabStore.setState` 直接塞状态；
- * - `useNavigate` 用 spy 替换，用于断言「消息项不跳转 / 待办项跳转」；
- * - `MessageDetailDrawer` 用轻量替身：本文件只验证「点消息 → 抽屉打开并带对ID」的接线，
- *   抽屉内部（只读表单渲染 / 回复回显）由 `message-reply-drawer.test.tsx` 覆盖。
+ * - `useNavigate` 用 spy 替换，用于断言「消息/有实例待办不跳转」；
+ * - `MessageDetailDrawer` / `TodoDetailDrawer` 用轻量替身。
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
@@ -70,6 +70,25 @@ vi.mock('@/features/portal/components/message-detail-drawer', () => ({
       <div data-testid="message-drawer" data-message={messageId ?? ''}>
         <button type="button" onClick={() => onOpenChange(false)}>
           close-drawer
+        </button>
+      </div>
+    ) : null,
+}));
+
+vi.mock('@/features/portal/components/todo-detail-drawer', () => ({
+  TodoDetailDrawer: ({
+    open,
+    instanceId,
+    onOpenChange,
+  }: {
+    open: boolean;
+    instanceId: string | null;
+    onOpenChange: (open: boolean) => void;
+  }) =>
+    open ? (
+      <div data-testid="todo-drawer" data-instance={instanceId ?? ''}>
+        <button type="button" onClick={() => onOpenChange(false)}>
+          close-todo-drawer
         </button>
       </div>
     ) : null,
@@ -417,7 +436,7 @@ describe('HeaderToolkit', () => {
     expect(usePortalTabStore.getState().activeTab).toBe('home');
   });
 
-  it('点待办项仍跳 /task/pending（消息改抽屉不得误伤待办）', async () => {
+  it('点无流程实例的待办 → 降级跳 /task/pending（不开空抽屉）', async () => {
     vi.mocked(tasksApi.fetchMyTasks).mockResolvedValue({ ...emptyPage, total: 1, list: [oneTask] });
     vi.mocked(messagesApi.fetchInbox).mockResolvedValue(emptyPage);
     renderToolkit();
@@ -426,7 +445,25 @@ describe('HeaderToolkit', () => {
     fireEvent.click(await screen.findByText('采购审批 - 服务器采购'));
 
     expect(navigateSpy).toHaveBeenCalledWith('/task/pending');
-    // 待办不该触发消息抽屉
+    expect(screen.queryByTestId('message-drawer')).toBeNull();
+    expect(screen.queryByTestId('todo-drawer')).toBeNull();
+  });
+
+  it('点有 wfInstanceId 的待办 → 就地打开 TodoDetailDrawer，不跳路由', async () => {
+    vi.mocked(tasksApi.fetchMyTasks).mockResolvedValue({
+      ...emptyPage,
+      total: 1,
+      list: [{ ...oneTask, metadata: '{"wfInstanceId":960101}' }],
+    });
+    vi.mocked(messagesApi.fetchInbox).mockResolvedValue(emptyPage);
+    renderToolkit();
+
+    fireEvent.click(screen.getByLabelText('通知'));
+    fireEvent.click(await screen.findByText('采购审批 - 服务器采购'));
+
+    const drawer = await screen.findByTestId('todo-drawer');
+    expect(drawer.getAttribute('data-instance')).toBe('960101');
+    expect(navigateSpy).not.toHaveBeenCalled();
     expect(screen.queryByTestId('message-drawer')).toBeNull();
   });
 

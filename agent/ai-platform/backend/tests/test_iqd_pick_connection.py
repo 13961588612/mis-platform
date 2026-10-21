@@ -46,3 +46,34 @@ def test_omitted_selector_uses_first_enabled() -> None:
 
 def test_unknown_numeric_id_still_falls_back() -> None:
     assert ScopeResolver._pick_connection(CONFIGS, 999)["id"] == 11
+
+
+def test_disabled_project_by_name_rejected() -> None:
+    mixed = [
+        *CONFIGS,
+        {"id": 99, "name": "sm-data", "enabled": 0},
+    ]
+    with pytest.raises(WrenaiNotConfiguredError, match="已停用"):
+        ScopeResolver._pick_connection(mixed, "sm-data")
+
+
+def test_disabled_project_by_id_rejected() -> None:
+    mixed = [
+        *CONFIGS,
+        {"id": 99, "name": "sm-data", "enabled": False},
+    ]
+    with pytest.raises(WrenaiNotConfiguredError, match="已停用"):
+        ScopeResolver._pick_connection(mixed, 99)
+
+
+def test_default_skips_disabled_rows() -> None:
+    mixed = [
+        {"id": 1, "name": "off", "enabled": 0},
+        {"id": 2, "name": "on", "enabled": 1},
+    ]
+    assert ScopeResolver._pick_connection(mixed, None)["id"] == 2
+
+
+def test_all_disabled_raises() -> None:
+    with pytest.raises(WrenaiNotConfiguredError):
+        ScopeResolver._pick_connection([{"id": 1, "name": "off", "enabled": 0}], None)

@@ -4,8 +4,10 @@ import com.mis.adminbff.client.IamWebClient;
 import com.mis.adminbff.client.model.IamRoleVO;
 import com.mis.adminbff.client.model.IamUserVO;
 import com.mis.adminbff.config.EmbedIdentityProperties;
+import com.mis.adminbff.config.EmbedIdentityProperties.TicketHostConfig;
 import com.mis.adminbff.dto.embed.EmbedExchangeRequest;
 import com.mis.adminbff.dto.embed.EmbedExchangeResponse;
+import com.mis.adminbff.dto.embed.EmbedTicketExchangeRequest;
 import com.mis.adminbff.embed.AgentExternalHost;
 import com.mis.adminbff.embed.AgentExternalIdentity;
 import com.mis.adminbff.embed.AgentExternalMapper;
@@ -15,6 +17,9 @@ import com.mis.adminbff.support.embed.EmbedExchangeRateLimiter;
 import com.mis.adminbff.support.embed.ExternalTokenClaims;
 import com.mis.adminbff.support.embed.ExternalTokenVerifier;
 import com.mis.adminbff.support.embed.PhoneHash;
+import com.mis.adminbff.support.embed.seeyon.SeeyonTicketClient;
+import com.mis.adminbff.support.embed.ticket.ExternalTicketIdentity;
+import com.mis.adminbff.support.embed.ticket.TicketFingerprint;
 import com.mis.common.core.exception.BusinessException;
 import com.mis.common.core.exception.ResultCode;
 import com.mis.common.security.jwt.AccessTokenClaims;
@@ -63,6 +68,7 @@ public class EmbedIdentityService {
     private final ExternalTokenVerifier tokenVerifier;
     private final EmbedExchangeRateLimiter rateLimiter;
     private final ObjectProvider<JwtIssuer> jwtIssuerProvider;
+    private final SeeyonTicketClient seeyonTicketClient;
 
     public EmbedIdentityService(
             EmbedIdentityProperties properties,
@@ -71,7 +77,8 @@ public class EmbedIdentityService {
             SkillPermissionChecker skillPermissionChecker,
             ExternalTokenVerifier tokenVerifier,
             EmbedExchangeRateLimiter rateLimiter,
-            ObjectProvider<JwtIssuer> jwtIssuerProvider) {
+            ObjectProvider<JwtIssuer> jwtIssuerProvider,
+            SeeyonTicketClient seeyonTicketClient) {
         this.properties = properties;
         this.mapper = mapper;
         this.iamWebClient = iamWebClient;
@@ -79,6 +86,7 @@ public class EmbedIdentityService {
         this.tokenVerifier = tokenVerifier;
         this.rateLimiter = rateLimiter;
         this.jwtIssuerProvider = jwtIssuerProvider;
+        this.seeyonTicketClient = seeyonTicketClient;
     }
 
     /**
@@ -161,6 +169,101 @@ public class EmbedIdentityService {
 
         audit(hostId, externalUserId, phoneHash, "unmapped", null);
         throw reject(hostId, externalUserId, "unmapped");
+    }
+
+    /**
+     * Ticket 兑换入口（致远等 ticket-pull）：出站验票 → 三级映射 → 签发 RS256 MIS JWT。
+     *
+     * <p>浏览器同源调用，无 client_secret；可信性来自 BFF 持凭证调外部验票成功。
+     */
+    public EmbedExchangeResponse exchangeByTicket(EmbedTicketExchangeRequest request) {
+        String hostId = request.hostId() == null ? "" : request.hostId().trim();
+        String ticket = request.ticket() == null ? "" : request.ticket().trim();
+        String ticketFp = TicketFingerprint.of(ticket);
+        long t0 = System.currentTimeMillis();
+
+        if (hostId.isEmpty()) {
+            throw new BusinessException(ResultCode.VALIDATION_ERROR, "缺少 hostId");
+        }
+        if (ticket.isEmpty()) {
+            throw new BusinessException(ResultCode.VALIDATION_ERROR, "缺少 ticket");
+        }
+
+        log.info("embed ticket-exchange start: hostId={}, ticketFp={}", hostId, ticketFp);
+
+        AgentExternalHost host = mapper.findHost(hostId)
+                .orElseThrow(() -> rejectTicket(hostId, ticketFp, null, "host_not_registered"));
+        if (!host.isActive()) {
+            throw rejectTicket(hostId, ticketFp, host.clientId(), "host_inactive");
+        }
+
+        TicketHostConfig ticketConfig = properties.getTicketHosts().get(hostId);
+        if (ticketConfig == null || !ticketConfig.isConfigured()) {
+            log.error("embed ticket-exchange host ticket config missing: hostId={}, ticketFp={}",
+                    hostId, ticketFp);
+            throw rejectTicket(hostId, ticketFp, host.clientId(), "ticket_host_not_configured");
+        }
+        if (!"seeyon".equalsIgnoreCase(ticketConfig.getProvider())) {
+            log.error("embed ticket-exchange unsupported provider: hostId={}, provider={}, ticketFp={}",
+                    hostId, ticketConfig.getProvider(), ticketFp);
+            throw rejectTicket(hostId, ticketFp, host.clientId(), "ticket_provider_unsupported");
+        }
+
+        rateLimiter.assertAllowed(hostId, host.clientId());
+
+        ExternalTicketIdentity identity = seeyonTicketClient.resolve(hostId, ticket, ticketConfig);
+        String externalUserId = identity.externalUserId();
+        String phone = identity.phone();
+        String phoneHash = PhoneHash.hash(phone, properties.getSalt());
+
+        log.info("embed ticket-exchange identity ok: hostId={}, ticketFp={}, externalUserId={}, "
+                        + "phoneHashPresent={}, elapsedMs={}",
+                hostId, ticketFp, maskExternalUserId(externalUserId),
+                phoneHash != null && !phoneHash.isBlank(), System.currentTimeMillis() - t0);
+
+        // ① 显式映射
+        AgentExternalIdentity mapping = mapper.findIdentityMapping(hostId, externalUserId).orElse(null);
+        if (mapping != null && mapping.isActive()) {
+            EmbedExchangeResponse resp = finish(
+                    host, mapping.misUserId(), "explicit", externalUserId, phoneHash, null);
+            log.info("embed ticket-exchange done: hostId={}, ticketFp={}, mappedBy=explicit, "
+                            + "mappedUserId={}, elapsedMs={}",
+                    hostId, ticketFp, resp.mappedUserId(), System.currentTimeMillis() - t0);
+            return resp;
+        }
+
+        // ② 手机号匹配（一期主路径）
+        if (properties.isPhoneMatchEnabled() && phone != null && !phone.isBlank() && host.tenantId() != null) {
+            List<IamUserVO> users = iamWebClient.findNormalUsersByPhone(host.tenantId(), phone);
+            if (users.size() > 1) {
+                auditTicket(hostId, ticketFp, externalUserId, phoneHash, "phone_ambiguous", null);
+                throw rejectTicket(hostId, ticketFp, externalUserId, "phone_ambiguous");
+            }
+            if (users.size() == 1) {
+                IamUserVO user = users.get(0);
+                EmbedExchangeResponse resp = finish(
+                        host, parseUserId(user.id()), "phone", externalUserId, phoneHash, null);
+                log.info("embed ticket-exchange done: hostId={}, ticketFp={}, mappedBy=phone, "
+                                + "mappedUserId={}, elapsedMs={}",
+                        hostId, ticketFp, resp.mappedUserId(), System.currentTimeMillis() - t0);
+                return resp;
+            }
+            auditTicket(hostId, ticketFp, externalUserId, phoneHash, "phone_not_found", null);
+            throw rejectTicket(hostId, ticketFp, externalUserId, "phone_not_found");
+        }
+
+        // ③ 影子账号
+        if (host.shadowMisUserId() != null && !host.shadowMisUserId().isBlank()) {
+            EmbedExchangeResponse resp = finish(
+                    host, parseUserId(host.shadowMisUserId()), "shadow", externalUserId, phoneHash, null);
+            log.info("embed ticket-exchange done: hostId={}, ticketFp={}, mappedBy=shadow, "
+                            + "mappedUserId={}, elapsedMs={}",
+                    hostId, ticketFp, resp.mappedUserId(), System.currentTimeMillis() - t0);
+            return resp;
+        }
+
+        auditTicket(hostId, ticketFp, externalUserId, phoneHash, "unmapped", null);
+        throw rejectTicket(hostId, ticketFp, externalUserId, "unmapped");
     }
 
     // ============================================================================
@@ -303,6 +406,21 @@ public class EmbedIdentityService {
         return new BusinessException(AgentOpsErrorCodes.SKILL_FORBIDDEN, "外部身份未映射，零权限");
     }
 
+    /** Ticket 兑换拒绝：配置/宿主问题 → 40102；映射失败 → 40301。 */
+    private static BusinessException rejectTicket(
+            String hostId, String ticketFp, String externalUserId, String reason) {
+        log.warn("embed ticket-exchange rejected: hostId={}, ticketFp={}, externalUserId={}, reason={}",
+                hostId, ticketFp, maskExternalUserId(externalUserId), reason);
+        boolean ticketInvalid = "host_not_registered".equals(reason)
+                || "host_inactive".equals(reason)
+                || "ticket_host_not_configured".equals(reason)
+                || "ticket_provider_unsupported".equals(reason);
+        if (ticketInvalid) {
+            return new BusinessException(AgentOpsErrorCodes.EMBED_TICKET_INVALID, "外部 ticket 无效");
+        }
+        return new BusinessException(AgentOpsErrorCodes.SKILL_FORBIDDEN, "外部身份未映射，零权限");
+    }
+
     /** 审计日志（R6：hostId + externalUserId + mappedBy + 脱敏号/hash；R3 不落明文手机号）。 */
     private static void audit(
             String hostId,
@@ -313,6 +431,23 @@ public class EmbedIdentityService {
         log.info("embed identity exchange audit: hostId={}, externalUserId={}, phoneHash={}, "
                         + "outcome={}, mappedUserId={}",
                 hostId,
+                maskExternalUserId(externalUserId),
+                phoneHash == null ? "" : phoneHash,
+                outcome,
+                mappedUserId == null ? "" : mappedUserId);
+    }
+
+    private static void auditTicket(
+            String hostId,
+            String ticketFp,
+            String externalUserId,
+            String phoneHash,
+            String outcome,
+            Long mappedUserId) {
+        log.info("embed ticket-exchange audit: hostId={}, ticketFp={}, externalUserId={}, phoneHash={}, "
+                        + "outcome={}, mappedUserId={}",
+                hostId,
+                ticketFp,
                 maskExternalUserId(externalUserId),
                 phoneHash == null ? "" : phoneHash,
                 outcome,

@@ -588,6 +588,11 @@ export function ConnectionWizard({ open, onOpenChange, onConnectionReady, editTa
 
   /** 下一步：从「数据源」进入「连通测试」前先把连接落库（含凭证写 vault），失败则留在原步。 */
   const handleNext = async () => {
+    // 最后一步「完成」：关闭向导（此前无 next → 空操作，弹窗关不掉）
+    if (stepIndex >= STEPS.length - 1) {
+      onOpenChange(false);
+      return;
+    }
     if (currentStep === STEPS[1].key) {
       const id = await ensureCreated();
       if (id == null) {

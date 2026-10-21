@@ -109,4 +109,12 @@ public final class AgentOpsErrorCodes {
      * 若后续需要消除撞码，需由架构侧统一调整 A2UI 协议错误码，本交付不擅改文档口径。
      */
     public static final int EMBED_TOKEN_INVALID = 40101;
+
+    /**
+     * 嵌入 Ticket 无效（致远等 ticket-pull 验票失败 / 过期 / 已用 / host 未启用 ticket）。
+     *
+     * <p>数值与 {@link com.mis.common.core.exception.ResultCode#LOGIN_FAILED}（40102）撞码：
+     * 场景不相交（管理台账密登录失败 vs embed ticket 兑换），按 docs/integration/seeyon-a8-ticket-sso.md 登记。
+     */
+    public static final int EMBED_TICKET_INVALID = 40102;
 }

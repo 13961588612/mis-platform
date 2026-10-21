@@ -48,6 +48,7 @@ import { useAttachmentComposer } from '@/lib/chat/useAttachmentComposer';
 import { AttachmentChips } from '@/components/chat/AttachmentChips';
 import { AttachmentList } from '@/components/chat/AttachmentList';
 import { AssistantAvatar, UserAvatar } from '@/components/chat/CopilotAvatars';
+import { CopilotCurrentUser, useCopilotUserLabel } from '@/components/chat/CopilotCurrentUser';
 import { MessageFeedbackBar } from '@/components/chat/MessageFeedbackBar';
 import { SurfaceRenderer, surfaceHasVisibleContent } from '@/lib/a2ui/SurfaceRenderer';
 import { useSurfaceStore } from '@/lib/a2ui/surface-store';
@@ -496,6 +497,7 @@ export function CopilotPanel({
           <div className="flex shrink-0 items-center gap-2 border-b px-4 py-2.5">
             <Sparkles className="h-4 w-4 shrink-0 text-primary" />
             <span className="truncate text-sm font-semibold">AI Copilot</span>
+            <CopilotCurrentUser className="hidden sm:flex" compact />
             <span className="ml-auto flex shrink-0 items-center gap-1.5">
               {statusBadge}
               <Button
@@ -742,8 +744,7 @@ function ChatBubble({
   /** 后面已有带内容的助手气泡时，隐藏本条空气泡（避免双「正在思考」）。 */
   hideEmptyDuplicate?: boolean;
 }) {
-  const userLabel =
-    useAuthStore((s) => s.user?.realName || s.user?.username) ?? null;
+  const userLabel = useCopilotUserLabel();
   const surface = useSurfaceStore((s) =>
     message.surfaceId ? s.surfaces[message.surfaceId] : undefined,
   );

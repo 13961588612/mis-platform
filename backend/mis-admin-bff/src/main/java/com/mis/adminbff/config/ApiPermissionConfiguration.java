@@ -43,9 +43,11 @@ public class ApiPermissionConfiguration {
             public void addInterceptors(InterceptorRegistry registry) {
                 registry.addInterceptor(interceptor)
                         .addPathPatterns("/api/v1/**")
-                        // D12：嵌入身份兑换端点由外部系统后端直调（无 MIS JWT，
-                        // 携带宿主自签 externalToken 验签），豁免 MIS-JWT 权限拦截。
-                        .excludePathPatterns("/api/v1/embed/identity/exchange");
+                        // D12：嵌入身份兑换端点无 MIS JWT（externalToken 或 ticket 出站验票），
+                        // 豁免 MIS-JWT 权限拦截。
+                        .excludePathPatterns(
+                                "/api/v1/embed/identity/exchange",
+                                "/api/v1/embed/identity/ticket-exchange");
             }
         };
     }

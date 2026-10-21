@@ -15,6 +15,7 @@ import com.mis.adminbff.support.embed.EmbedExchangeRateLimiter;
 import com.mis.adminbff.support.embed.ExternalTokenClaims;
 import com.mis.adminbff.support.embed.ExternalTokenVerifier;
 import com.mis.adminbff.support.embed.PhoneHash;
+import com.mis.adminbff.support.embed.seeyon.SeeyonTicketClient;
 import com.mis.common.core.exception.BusinessException;
 import com.mis.common.security.jwt.IssuedAccessToken;
 import com.mis.common.security.jwt.JwtIssuer;
@@ -66,6 +67,8 @@ class EmbedIdentityServiceTest {
     private ObjectProvider<JwtIssuer> jwtIssuerProvider;
     @Mock
     private JwtIssuer jwtIssuer;
+    @Mock
+    private SeeyonTicketClient seeyonTicketClient;
 
     private EmbedIdentityService service;
 
@@ -78,7 +81,7 @@ class EmbedIdentityServiceTest {
     void setUp() throws Exception {
         service = new EmbedIdentityService(
                 properties, mapper, iamWebClient, skillPermissionChecker,
-                tokenVerifier, rateLimiter, jwtIssuerProvider);
+                tokenVerifier, rateLimiter, jwtIssuerProvider, seeyonTicketClient);
         lenient().when(properties.getSalt()).thenReturn("test-salt");
         lenient().when(properties.isPhoneMatchEnabled()).thenReturn(true);
         lenient().when(jwtIssuerProvider.getIfAvailable()).thenReturn(jwtIssuer);

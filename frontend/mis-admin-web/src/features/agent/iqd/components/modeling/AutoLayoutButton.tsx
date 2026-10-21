@@ -12,9 +12,10 @@
  *
  * <h2>与画布的关系（本组件不碰画布）</h2>
  * 本组件**不**接收画布的节点 state；它自己用 {@link useCatalogNodes} 派生同一份
- * nodes/edges（同一 Query 缓存 = 同一真值），算出坐标后经 {@link useModelLayout.persist}
- * 写回。画布下一次合并时（`mergeDerivedNodes`：**已持久化坐标优先**）即套用新坐标 ——
- * 所以「整理」不需要画布配合，也不会破坏「本地既有 > 服务端」的防弹回规则。
+ * nodes/edges（同一 Query 缓存 = 同一真值），算出坐标后：① 乐观写入 layout Query
+ * 缓存；② {@link useModelingStore.requestLayoutApply} 强制画布 `preferPersisted`；
+ * ③ {@link useModelLayout.persist} 防抖落库。仅 persist 不够——画布默认「本地坐标优先」，
+ * 同连接 version bump 不会抢坐标，必须 bump epoch。
  *
  * <h2>两处必须说清的实现细节</h2>
  * <ol>
@@ -30,12 +31,20 @@
  * </ol>
  */
 import { useCallback, useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { graphlib, layout as dagreLayout } from '@dagrejs/dagre';
 import type { Edge, Node } from '@xyflow/react';
 import { Loader2, RotateCcw, Wand2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { MODEL_NODE_WIDTH, useCatalogNodes, type CatalogNodeData } from '../../hooks/useCatalogNodes';
-import { useModelLayout } from '../../hooks/useModelLayout';
+import {
+  normalizeLayout,
+  toLayoutEdges,
+  toLayoutNodes,
+  useModelLayout,
+} from '../../hooks/useModelLayout';
+import { useModelingStore } from '../../store/modeling-store';
+import { iqdKeys } from '../../queries/iqd-keys';
 
 /** dagre 布局方向（A-02：ER 语义的阅读方向是左→右）。 */
 export type LayoutDirection = 'LR' | 'TB';
@@ -166,12 +175,14 @@ export function AutoLayoutButton({
 }: AutoLayoutButtonProps) {
   const { nodes, edges, isLoading } = useCatalogNodes(connectionId);
   const layout = useModelLayout({ connectionId, enabled: canEdit });
+  const queryClient = useQueryClient();
+  const requestLayoutApply = useModelingStore((s) => s.requestLayoutApply);
   const [localError, setLocalError] = useState<string | null>(null);
 
   const disabled = !canEdit || connectionId == null || isLoading || nodes.length === 0;
 
   const arrange = useCallback(() => {
-    if (disabled) {
+    if (disabled || connectionId == null) {
       return;
     }
     setLocalError(null);
@@ -181,12 +192,26 @@ export function AutoLayoutButton({
         setLocalError('没有可整理的节点');
         return;
       }
-      // 复用统一写路径：600ms 尾部防抖 + base_version 乐观并发 + 成功回写缓存
-      layout.persist(applyPositions(nodes, positions), edges, layout.viewport);
+      const arranged = applyPositions(nodes, positions);
+      // ① 乐观写缓存：画布立刻能读到新坐标（不必等 600ms PUT）
+      queryClient.setQueryData(iqdKeys.modelLayout(connectionId), (prev: unknown) => {
+        const base = normalizeLayout(
+          prev && typeof prev === 'object' ? (prev as Record<string, unknown>) : null,
+        );
+        return {
+          ...base,
+          nodes: toLayoutNodes(arranged),
+          edges: toLayoutEdges(edges),
+        };
+      });
+      // ② 强制画布本轮 preferPersisted（否则本地旧坐标吃掉整理结果）
+      requestLayoutApply();
+      // ③ 防抖落库
+      layout.persist(arranged, edges, layout.viewport);
     } catch (err) {
       setLocalError(err instanceof Error ? err.message : '自动布局计算失败');
     }
-  }, [disabled, nodes, edges, direction, layout]);
+  }, [disabled, connectionId, nodes, edges, direction, layout, queryClient, requestLayoutApply]);
 
   if (!canEdit) {
     return null;
@@ -218,7 +243,9 @@ export function AutoLayoutButton({
           variant="ghost"
           className="h-8 gap-1 text-[12px] text-amber-700"
           title={`布局已被他人修改（服务端版本 ${layout.conflict.currentVersion}）。重载后本地未落盘的排布会丢失。`}
-          onClick={() => void layout.reload()}
+          onClick={() => {
+            void layout.reload().then(() => requestLayoutApply());
+          }}
         >
           <RotateCcw className="h-3.5 w-3.5" />
           重载布局

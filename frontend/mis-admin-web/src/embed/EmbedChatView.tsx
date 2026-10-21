@@ -20,6 +20,7 @@ import { SurfaceRenderer } from '@/lib/a2ui/SurfaceRenderer';
 import { A2uiProvider } from '@/components/a2ui/A2uiProvider';
 import { A2uiPermissionGate } from '@/components/a2ui/A2uiPermissionGate';
 import { getA2uiRegistryEntry, isKnownA2uiComponent } from '@/components/a2ui/registry';
+import { CopilotCurrentUser } from '@/components/chat/CopilotCurrentUser';
 import { createEmbedBffAdapter, onA2uiEventResult, type EmbedWriteMode } from './embed-bridge';
 import type { A2uiComponentName } from '@/lib/a2ui/types';
 import type { ChatMessage } from '@/lib/chat/types';
@@ -121,6 +122,7 @@ export function EmbedChatView({ hostId, sessionId, onNewSession }: EmbedChatView
               {hostId}
             </Badge>
           ) : null}
+          <CopilotCurrentUser compact />
           <span className="ml-auto flex items-center gap-2">{statusBadge}</span>
           <Button
             type="button"

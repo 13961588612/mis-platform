@@ -1,22 +1,23 @@
 /**
- * EmbedAuthBridge — 外部宿主 iframe 鉴权桥（T07'，从 旧版独立前端 迁移扩展）。
+ * EmbedAuthBridge — 外部宿主 iframe 鉴权桥（T07' + 致远 ticket SSO）。
  *
- * <p>协议（01-architecture.md §5.2，继承 + 扩展）：
- * - iframe 加载后发 `AUTH_READY` 通知父页
- * - 父页回 `AUTH_TOKEN`（外部系统先调 BFF POST /api/v1/embed/identity/exchange 换的 MIS JWT）
- * - 父页回 `PAGE_CONTEXT`（hostId / embedMode / contextRef / sessionHint 扩展）
- * - 临期发 `AUTH_TOKEN_REQUEST`；父页再推 `AUTH_TOKEN` 热替换（session 不变）
+ * <p>协议分支：
+ * 1. URL 含 {@code ticket} + {@code hostId} → 同源 ticket-exchange（不依赖 postMessage）
+ * 2. 否则走宿主 postMessage：AUTH_READY → AUTH_TOKEN / PAGE_CONTEXT；临期 AUTH_TOKEN_REQUEST
  *
- * <p>安全（§5.3）：
- * - 只接受 `VITE_PARENT_ORIGINS` 白名单内 origin（空白名单 = 拒绝一切）
- * - token 结构/有效期不可验 → 明确拒绝 + 告警日志（Gateway 才是验签权威）
- * - 父页超时无响应 → timeout / 续期失败错误态
+ * <p>安全：postMessage 只接受 VITE_PARENT_ORIGINS；ticket 兑换成功后立即从 URL 移除。
  */
 
 import { useEffect, useRef } from 'react';
-import { isAllowedParentOrigin } from './embed-env';
+import { isAllowedParentOrigin, isEmbeddedFrame } from './embed-env';
 import { isValidJwtShape } from './embed-auth';
-import { sanitizeHostId } from './embed-session';
+import { hydrateEmbedUser } from './embed-hydrate-user';
+import { resolveHostIdFromLocation, sanitizeHostId } from './embed-session';
+import {
+  exchangeEmbedTicket,
+  stripTicketFromUrl,
+  type TicketExchangeError,
+} from './embed-ticket-exchange';
 import { useEmbedStore, type EmbedPageContext } from './embedStore';
 
 /** 等待父页首个 AUTH_TOKEN 的超时阈值（ms）。 */
@@ -62,6 +63,19 @@ function requestTokenRefresh(parentOrigin: string): void {
   }
 }
 
+function readTicketParams(): { hostId: string; ticket: string } | null {
+  try {
+    const params = new URLSearchParams(window.location.search);
+    const ticket = (params.get('ticket') || '').trim();
+    // hostId：路径 `/embed/{hostId}/chat` 优先，兼容旧 query `?hostId=`
+    const hostId = resolveHostIdFromLocation();
+    if (!ticket || !hostId) return null;
+    return { hostId, ticket };
+  } catch {
+    return null;
+  }
+}
+
 export function EmbedAuthBridge(): null {
   const setAuthenticated = useEmbedStore((s) => s.setAuthenticated);
   const refreshToken = useEmbedStore((s) => s.refreshToken);
@@ -85,7 +99,17 @@ export function EmbedAuthBridge(): null {
       }
     };
 
-    const scheduleRefresh = (expiresAt: number | null): void => {
+    const scheduleTicketExpiry = (expiresAt: number | null): void => {
+      clearRefreshTimers();
+      if (expiresAt == null || !Number.isFinite(expiresAt)) return;
+      const delay = Math.max(0, expiresAt - Date.now());
+      refreshTimerRef.current = window.setTimeout(() => {
+        console.warn('[EmbedTicket] JWT expired — ask user to reopen from OA');
+        setRejected('会话已过期，请从致远 OA（业务系统）重新打开');
+      }, delay);
+    };
+
+    const scheduleParentRefresh = (expiresAt: number | null): void => {
       clearRefreshTimers();
       if (expiresAt == null || !Number.isFinite(expiresAt)) return;
 
@@ -93,8 +117,9 @@ export function EmbedAuthBridge(): null {
       const delay = Math.max(0, fireAt - Date.now());
 
       refreshTimerRef.current = window.setTimeout(() => {
-        const { authState, parentOrigin } = useEmbedStore.getState();
-        if (authState !== 'authenticated' || !parentOrigin) return;
+        const { authState, parentOrigin, authMode } = useEmbedStore.getState();
+        if (authState !== 'authenticated' || authMode === 'ticket') return;
+        if (!parentOrigin) return;
 
         setRefreshPending(true);
         requestTokenRefresh(parentOrigin);
@@ -106,6 +131,46 @@ export function EmbedAuthBridge(): null {
         }, EMBED_TOKEN_REFRESH_TIMEOUT_MS);
       }, delay);
     };
+
+    const ticketParams = readTicketParams();
+    if (ticketParams) {
+      let cancelled = false;
+      console.info('[EmbedAuthBridge] ticket mode detected', { hostId: ticketParams.hostId });
+      void (async () => {
+        try {
+          const data = await exchangeEmbedTicket(ticketParams);
+          if (cancelled) return;
+          if (!isValidJwtShape(data.misJwt)) {
+            setRejected('ticket 兑换返回的令牌无效');
+            return;
+          }
+          stripTicketFromUrl();
+          setAuthenticated(data.misJwt, window.location.origin, 'ticket');
+          setPageContext({
+            hostId: ticketParams.hostId,
+            embedMode: isEmbeddedFrame() ? 'iframe' : 'standalone',
+            permissions: data.permissions,
+            mappedUserId: data.mappedUserId,
+          });
+          // MIS JWT 已落盘后再拉 /auth/me（展示用；失败不阻断对话）
+          void hydrateEmbedUser(data.misJwt);
+          scheduleTicketExpiry(useEmbedStore.getState().tokenExpiresAt);
+        } catch (err) {
+          if (cancelled) return;
+          const e = err as TicketExchangeError;
+          const msg =
+            typeof e?.message === 'string' && e.message
+              ? e.message
+              : 'ticket 登录失败，请从业务系统重新打开';
+          console.warn('[EmbedAuthBridge] ticket exchange error', e);
+          setRejected(msg);
+        }
+      })();
+      return () => {
+        cancelled = true;
+        clearRefreshTimers();
+      };
+    }
 
     const handler = (event: MessageEvent): void => {
       const data = event.data as { type?: unknown; token?: unknown; context?: unknown } | null;
@@ -133,13 +198,13 @@ export function EmbedAuthBridge(): null {
 
         const prev = useEmbedStore.getState();
         if (prev.authState === 'authenticated' && prev.parentOrigin === event.origin) {
-          // 续期热替换：保持 session，只换 token
           refreshToken(data.token);
         } else {
-          setAuthenticated(data.token, event.origin);
+          setAuthenticated(data.token, event.origin, 'postMessage');
         }
+        void hydrateEmbedUser(data.token);
         const expiresAt = useEmbedStore.getState().tokenExpiresAt;
-        scheduleRefresh(expiresAt);
+        scheduleParentRefresh(expiresAt);
         return;
       }
 
@@ -150,7 +215,6 @@ export function EmbedAuthBridge(): null {
     };
 
     window.addEventListener('message', handler);
-    // 非敏感：告知父页已就绪，可推令牌
     try {
       window.parent?.postMessage({ type: 'AUTH_READY' }, '*');
     } catch {

@@ -34,12 +34,15 @@ _TABLE_RE = re.compile(
 
 
 def _normalize_table(name: str) -> str:
-    """规约表名为 item_key：去引号、去 schema 之外的默认目录。
+    """规约表名为 item_key：去引号、去别名、去 schema 之外的默认目录。
 
     ``pg_main.public.orders`` → ``pg_main.public.orders``；
-    ``"orders"`` → ``orders``。
+    ``"orders"`` → ``orders``；
+    ``dim_xxx AS c`` → ``dim_xxx``。
     """
     cleaned = name.strip().strip('"').strip("`")
+    if re.search(r"\s+[Aa][Ss]\s+", cleaned):
+        cleaned = re.split(r"\s+[Aa][Ss]\s+", cleaned, maxsplit=1)[0].strip()
     parts = [p.strip().strip('"').strip("`") for p in cleaned.split(".") if p.strip()]
     if not parts:
         return cleaned
@@ -73,14 +76,28 @@ class LineageExtractor:
     # ================================================================ 内部
 
     def _extract_with_sqlglot(self, sql: str, dialect: str) -> list[str]:
-        """sqlglot 解析（B2 表级：遍历 FROM/JOIN 节点）。"""
+        """sqlglot 解析（B2 表级：遍历 FROM/JOIN 节点）。
+
+        必须用 ``catalog/db/name`` 拼表名，**不能** ``node.sql()``：后者会带上
+        ``AS alias``（如 ``dim_xxx AS c``），导致血缘断言把已授权表误判为越权
+        （现网 45204：``dim_spmrkt_chl_category_df AS c``）。
+        """
         import sqlglot
 
         expression = sqlglot.parse_one(sql, read=dialect or DEFAULT_DIALECT)
         tables: list[str] = []
         seen: set[str] = set()
         for node in expression.find_all(sqlglot.exp.Table):
-            name = _normalize_table(node.sql(dialect=dialect))
+            parts = [
+                str(p).strip()
+                for p in (node.catalog, node.db, node.name)
+                if p is not None and str(p).strip()
+            ]
+            name = _normalize_table(".".join(parts) if parts else node.sql(dialect=dialect))
+            # 兜底：若仍混入别名，剥掉 `` AS xxx``
+            if " as " in name.lower():
+                name = re.split(r"\s+[Aa][Ss]\s+", name, maxsplit=1)[0].strip()
+                name = _normalize_table(name)
             if not name:
                 continue
             if name not in seen:

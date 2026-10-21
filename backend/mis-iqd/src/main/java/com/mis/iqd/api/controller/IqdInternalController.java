@@ -135,51 +135,62 @@ public class IqdInternalController {
 
     /**
      * 拉取表级 ACL（W2：全量，含 row_scope）。
+     *
+     * @param connectionId 问数连接 id；缺省回退主连接（Worker 无上下文兜底）
      */
     @GetMapping("/get-acls")
-    public Result<List<IqdAclVO>> getAcls() {
-        // 取主连接（Worker 单连接场景）；无连接返回空数组
-        Long connectionId = resolvePrimaryConnectionId();
-        if (connectionId == null) {
+    public Result<List<IqdAclVO>> getAcls(
+            @RequestParam(value = "connection_id", required = false) Long connectionId) {
+        Long cid = resolveConnectionId(connectionId);
+        if (cid == null) {
             return Result.ok(List.of());
         }
-        return Result.ok(adminService.listAcls(connectionId));
+        return Result.ok(adminService.listAcls(cid));
     }
 
     /**
      * 拉取范围策略（W2：全量，含 global/主体模板）。
+     *
+     * @param connectionId 问数连接 id；缺省回退主连接
      */
     @GetMapping("/get-scope-policies")
-    public Result<List<IqdScopePolicyVO>> getScopePolicies() {
-        Long connectionId = resolvePrimaryConnectionId();
-        if (connectionId == null) {
+    public Result<List<IqdScopePolicyVO>> getScopePolicies(
+            @RequestParam(value = "connection_id", required = false) Long connectionId) {
+        Long cid = resolveConnectionId(connectionId);
+        if (cid == null) {
             return Result.ok(List.of());
         }
-        return Result.ok(adminService.listScopePolicies(connectionId));
+        return Result.ok(adminService.listScopePolicies(cid));
     }
 
     /**
      * 拉取纳入问数范围的清单项（W2：in_scope=1；范围裁定消费）。
+     *
+     * @param connectionId 问数连接 id；缺省回退主连接
      */
     @GetMapping("/get-catalog-in-scope")
-    public Result<List<IqdCatalogItemVO>> getCatalogInScope() {
-        Long connectionId = resolvePrimaryConnectionId();
-        if (connectionId == null) {
+    public Result<List<IqdCatalogItemVO>> getCatalogInScope(
+            @RequestParam(value = "connection_id", required = false) Long connectionId) {
+        Long cid = resolveConnectionId(connectionId);
+        if (cid == null) {
             return Result.ok(List.of());
         }
-        return Result.ok(adminService.listCatalogInScope(connectionId));
+        return Result.ok(adminService.listCatalogInScope(cid));
     }
 
     /**
      * 拉取清单元数据（W2：item_key/kind/mask_rule/sensitive_level/data_type；脱敏消费）。
+     *
+     * @param connectionId 问数连接 id；缺省回退主连接
      */
     @GetMapping("/get-catalog-meta")
-    public Result<List<IqdCatalogItemVO>> getCatalogMeta() {
-        Long connectionId = resolvePrimaryConnectionId();
-        if (connectionId == null) {
+    public Result<List<IqdCatalogItemVO>> getCatalogMeta(
+            @RequestParam(value = "connection_id", required = false) Long connectionId) {
+        Long cid = resolveConnectionId(connectionId);
+        if (cid == null) {
             return Result.ok(List.of());
         }
-        return Result.ok(adminService.listCatalog(connectionId));
+        return Result.ok(adminService.listCatalog(cid));
     }
 
     /**
@@ -219,26 +230,36 @@ public class IqdInternalController {
 
     /**
      * 拉取样本对（W4：增强物料 few-shot；Worker 经 IqdConfigClient 缓存消费）。
+     *
+     * <p>方案 A 多连接：Worker {@code enhance/sync} 会传 {@code connection_id}；
+     * 若不识别该参数，非主连接（如 sm-data）的 pending 样本会被静默丢掉，表现为
+     * {@code synced_sql_pair_count=0} 而界面仍显示 pending。
+     *
+     * @param connectionId 问数连接 id；缺省回退主连接
      */
     @GetMapping("/get-sql-pairs")
-    public Result<List<IqdSqlPairVO>> getSqlPairs() {
-        Long connectionId = resolvePrimaryConnectionId();
-        if (connectionId == null) {
+    public Result<List<IqdSqlPairVO>> getSqlPairs(
+            @RequestParam(value = "connection_id", required = false) Long connectionId) {
+        Long cid = resolveConnectionId(connectionId);
+        if (cid == null) {
             return Result.ok(List.of());
         }
-        return Result.ok(adminService.listSqlPairs(connectionId));
+        return Result.ok(adminService.listSqlPairs(cid));
     }
 
     /**
      * 拉取知识/术语/口径（W4：增强物料 instructions；Worker 经 IqdConfigClient 缓存消费）。
+     *
+     * @param connectionId 问数连接 id；缺省回退主连接
      */
     @GetMapping("/get-knowledge")
-    public Result<List<IqdKnowledgeVO>> getKnowledge() {
-        Long connectionId = resolvePrimaryConnectionId();
-        if (connectionId == null) {
+    public Result<List<IqdKnowledgeVO>> getKnowledge(
+            @RequestParam(value = "connection_id", required = false) Long connectionId) {
+        Long cid = resolveConnectionId(connectionId);
+        if (cid == null) {
             return Result.ok(List.of());
         }
-        return Result.ok(adminService.listKnowledge(connectionId, null));
+        return Result.ok(adminService.listKnowledge(cid, null));
     }
 
     /**
@@ -428,9 +449,20 @@ public class IqdInternalController {
     }
 
     /**
+     * 解析读面连接 id：显式 {@code connection_id} 优先，否则回退主连接。
+     *
+     * <p>Worker {@code IqdConfigClient._cached_get} 已按连接分桶并传 query
+     * {@code connection_id}；内部面必须认该参数，否则多连接场景下非主连接物料
+     * （样本 / 知识 / ACL / 清单）会被静默替换为主连接数据。
+     */
+    private Long resolveConnectionId(Long connectionId) {
+        return connectionId != null ? connectionId : resolvePrimaryConnectionId();
+    }
+
+    /**
      * 取主连接 id（W2 全量拉取面 / 无连接上下文的**服务间兜底**）。
      *
-     * <p><b>契约（§14.5.1 B，行为一字不改）</b>：三级**确定**回退，与
+     * <p><b>契约（§14.5.1 B）</b>：三级**确定**回退，与
      * {@link IqdAdminService#findPrimaryConnection()} **同构** ——
      * <ol>
      *   <li>① {@code name='default'}（**主连接显式标识**；**不筛 {@code enabled}**）；</li>
@@ -438,10 +470,8 @@ public class IqdInternalController {
      *   <li>③ 否则任意首行（{@code findAll().findFirst()}）；表空 ⇒ {@code null}。</li>
      * </ol>
      *
-     * <p>调用方（6 处内部读面，grep 核实）：{@code get-acls} / {@code get-scope-policies} /
-     * {@code get-catalog-in-scope} / {@code get-catalog-meta} / {@code get-sql-pairs} /
-     * {@code get-knowledge}。**本次仅补契约注释，行为不变**（放开多条 {@code enabled} 后仍
-     * 确定：① 优先 ⇒ 不受 {@code enabled} 条数影响）。
+     * <p>调用方：6 处内部读面在**未传** {@code connection_id} 时走本方法；传了则走
+     * {@link #resolveConnectionId(Long)} 直通。
      */
     private Long resolvePrimaryConnectionId() {
         return connectionRepository.findByName("default")

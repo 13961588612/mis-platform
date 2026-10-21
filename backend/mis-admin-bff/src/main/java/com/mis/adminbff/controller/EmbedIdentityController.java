@@ -2,31 +2,32 @@ package com.mis.adminbff.controller;
 
 import com.mis.adminbff.dto.embed.EmbedExchangeRequest;
 import com.mis.adminbff.dto.embed.EmbedExchangeResponse;
+import com.mis.adminbff.dto.embed.EmbedTicketExchangeRequest;
 import com.mis.adminbff.service.EmbedIdentityService;
 import com.mis.common.core.result.Result;
 import jakarta.validation.Valid;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
- * D12 嵌入身份兑换端点（POST /api/v1/embed/identity/exchange）。
+ * D12 嵌入身份兑换端点。
  *
- * <p><b>鉴权方式与其它 /api/v1 端点不同</b>：调用方是<b>外部系统后端</b>
- * （内网/HTTPS，01-architecture §4.1 方案①），没有 MIS JWT，携带宿主自签
- * externalToken（HS256）验证身份。因此本端点已从
- * {@code ApiPermissionInterceptor}（MIS-JWT 权限拦截）中豁免
- * （见 {@code ApiPermissionConfiguration} 的 excludePathPatterns），
- * 改由 {@link EmbedIdentityService} 内部完成「externalToken 验签 + 三级映射 +
- * 签发 RS256 MIS JWT」全流程，且不登记 sys_api（登记会使外部无 MIS JWT 调用
- * 在拦截器即 401，详见交付说明）。
+ * <ul>
+ *   <li>{@code POST /exchange}：外部系统后端自签 externalToken（无 MIS JWT）</li>
+ *   <li>{@code POST /ticket-exchange}：MIS embed 同源页传 ticket，BFF 出站验票（无 MIS JWT）</li>
+ * </ul>
  *
- * <p>安全红线 R1-R6 落点在 {@code EmbedIdentityService}；本类只做参数转发。
+ * <p>二者均从 {@code ApiPermissionInterceptor} 豁免；安全落点在 {@link EmbedIdentityService}。
  */
 @RestController
 @RequestMapping("/api/v1/embed/identity")
 public class EmbedIdentityController {
+
+    private static final Logger log = LoggerFactory.getLogger(EmbedIdentityController.class);
 
     private final EmbedIdentityService embedIdentityService;
 
@@ -43,5 +44,16 @@ public class EmbedIdentityController {
     @PostMapping("/exchange")
     public Result<EmbedExchangeResponse> exchange(@Valid @RequestBody EmbedExchangeRequest request) {
         return Result.ok(embedIdentityService.exchange(request));
+    }
+
+    /**
+     * Ticket 兑换：hostId + ticket → 出站验票 → 三级映射 → 短时 RS256 MIS JWT。
+     */
+    @PostMapping("/ticket-exchange")
+    public Result<EmbedExchangeResponse> ticketExchange(
+            @Valid @RequestBody EmbedTicketExchangeRequest request) {
+        String hostId = request.hostId() == null ? "" : request.hostId().trim();
+        log.info("embed ticket-exchange http: hostId={}", hostId);
+        return Result.ok(embedIdentityService.exchangeByTicket(request));
     }
 }

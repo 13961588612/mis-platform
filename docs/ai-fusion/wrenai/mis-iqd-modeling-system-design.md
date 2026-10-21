@@ -1402,6 +1402,7 @@ PUT /api/v1/iqd/connections/{id}
 | 场景性质 | Worker **W2 全量拉取面**（无 UI 上下文）；代码注释自陈「**Worker 单连接场景**」 |
 | **去留裁决** | ✅ **保留**：① 放开多条后仍**确定**（① `name='default'` 优先 ⇒ 不受 enabled 条数影响）；② 无回归理由；③ **必须补契约注释**（现注释未写明"有序"与"三级"） |
 | **为何不收敛为显式 id** | 收敛 = 这 6 个端点加 `connectionId` 参数 + Worker 遍历全部 enabled 连接逐条拉取 + 缓存按连接分桶改造 ⇒ 属**"多连接全量收敛"独立工程（二期）**，非本补丁范围 |
+| **补丁（2026-10-21）** | Worker `IqdConfigClient._cached_get` **已按连接传** `?connection_id=`；内部 6 读面改为**可选** `connection_id`（有则直通、无则仍回退主连接）。否则非主连接 `enhance/sync` 会静默拉到主连接物料（`synced_sql_pair_count=0`） |
 
 **⚠️ C. 隐藏坑（本次新增发现，上游事实清单未覆盖）：Python 侧「主连接」口径与 Java 不一致**
 

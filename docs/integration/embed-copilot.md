@@ -6,6 +6,8 @@
 
 外部系统通过 **iframe** 嵌入 MIS Copilot（对话 + A2UI）。管理后台 Copilot Sheet **不是**对外出口。
 
+> **另一种入站**：外部只配 URL + 传 `ticket`，由 MIS 后端验票并登录 → 见 [`embed-ticket-sso.md`](embed-ticket-sso.md)（设计稿）。与本文「宿主兑换 JWT + postMessage」并存，按宿主能力择一。
+
 ---
 
 ## 1. 端到端流程
@@ -18,7 +20,7 @@
                                                       ▼
 宿主前端 ◄── misJwt / permissions / mappedBy ─────────┘
    │
-   │ iframe src = {MIS_WEB}/embed/chat?hostId={hostId}
+   │ iframe src = {MIS_WEB}/embed/{hostId}/chat
    │
    ▼
 embed 页 ──AUTH_READY──► 宿主
@@ -46,7 +48,7 @@ embed ──WS/SSE Bearer misJwt──► Gateway（agentId=mis-copilot）
 ```html
 <iframe
   id="mis-copilot"
-  src="https://mis.example.com/embed/chat?hostId=embed-demo"
+  src="https://mis.example.com/embed/embed-demo/chat"
   sandbox="allow-scripts allow-same-origin allow-forms"
   style="width:420px;height:640px;border:0"
   title="MIS Copilot"
@@ -55,9 +57,11 @@ embed ──WS/SSE Bearer misJwt──► Gateway（agentId=mis-copilot）
 
 | 参数 | 说明 |
 |------|------|
-| `hostId` | 已注册宿主 ID（与 `agent_external_host.host_id` 一致） |
-| `writeMode` | 缺省 `bridge`；`direct` 为备选（需 CORS，不推荐首接） |
-| `:sessionId` | 可选路径 `/embed/chat/:sessionId` 续接指定会话 |
+| 路径 `{hostId}` | 已注册宿主 ID（与 `agent_external_host.host_id` 一致）；推荐 `/embed/{hostId}/chat` |
+| `writeMode` | 缺省 `bridge`；`direct` 为备选（需 CORS，不推荐首接）；可用 query |
+| `:sessionId` | 可选路径 `/embed/{hostId}/chat/:sessionId` 续接指定会话 |
+
+兼容旧链：`/embed/chat?hostId=`。
 
 **sandbox**：不要开 `allow-top-navigation`。
 
@@ -293,3 +297,13 @@ window.addEventListener('message', async (e) => {
 - [ ] 临期可续期；未续期有明确错误态  
 - [ ] `A2UI_EVENT` → 宿主处理 → `A2UI_EVENT_RESULT` 回写成功/403  
 - [ ] 密钥仅在宿主后端；浏览器网络面板看不到 `client_secret`
+
+---
+
+## 9. 相关文档
+
+| 文档 | 说明 |
+|------|------|
+| [`embed-ticket-sso.md`](embed-ticket-sso.md) | URL + ticket → MIS 拉验票登录（外部几乎零前端） |
+| [`seeyon-a8-ticket-sso.md`](seeyon-a8-ticket-sso.md) | 致远 OA A8：验票 / REST / 手机号映射；**§8 编译部署联调逐步清单** |
+| [A2UI 权限 / D12](../ai-fusion/a2ui/03-permission-design.md) | 三级映射与 R1–R6 红线 |

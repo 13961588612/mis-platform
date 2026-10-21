@@ -2,7 +2,7 @@
  * embed-auth JWT 校验测试（QA 严过关，T07' 独立验证）。
  *
  * <p>口径：token 不可验签 → 明确拒绝（浏览器端防呆，Gateway 才是验签权威）；
- * P4：不设置 authStore.user（外部身份不受信）。
+ * P4：鉴权瞬间不写宿主外身份到 authStore.user；展示名由后续 /auth/me（MIS）回填。
  */
 import { describe, it, expect } from 'vitest';
 import { getJwtExpiry, isValidJwtShape } from './embed-auth';
@@ -52,8 +52,9 @@ describe('embed-auth isValidJwtShape', () => {
     expect(isValidJwtShape('x'.repeat(300))).toBe(false);
   });
 
-  it('P4：embed 鉴权不设置 authStore.user（外部身份不受信）', () => {
+  it('P4：纯 JWT 工具不写 authStore.user（展示依赖 hydrateEmbedUser）', () => {
     useAuthStore.setState({ user: null });
+    expect(isValidJwtShape(makeJwt({ exp: FUTURE_EXP }))).toBe(true);
     expect(useAuthStore.getState().user).toBeNull();
   });
 });

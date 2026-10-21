@@ -1375,6 +1375,7 @@ class ScopeResolver:
                 from src.agent.mis_iqd.errors import WrenaiNotConfiguredError
 
                 raise WrenaiNotConfiguredError()
+            # _pick_connection 内剔除停用；显式点到停用项目时抛「已停用」而非静默换项目。
             conn = self._pick_connection(configs, connection_id)
             cid: int = int(conn.get("id"))
             policies_raw = await client.get_scope_policies(cid)
@@ -1458,35 +1459,53 @@ class ScopeResolver:
     ) -> dict[str, Any]:
         """取连接：数字 id 精确匹配；非数字按项目名精确匹配；缺省取第一条 enabled。
 
+        <p>**停用剔除**：只在 ``enabled`` 为真的连接中匹配。调用方若显式指定了
+        已停用项目（缓存尚未失效时仍可能见到该行），抛
+        :class:`WrenaiNotConfiguredError`（「已停用」），绝不把停用项目交给问数编排。
+
         项目名匹配不到或同名不止一条时抛 :class:`WrenaiNotConfiguredError`，
-        不回退到其他项目。数字 id 未命中时保持原行为：回退到第一条 enabled
-        （对齐 Java ``findPrimaryConnection``）。纯数字字符串按 id 处理。
+        不回退到其他项目。数字 id 在**启用集合**中未命中时保持原行为：回退到第一条
+        enabled（对齐 Java ``findPrimaryConnection``）。纯数字字符串按 id 处理。
         """
+        enabled = [
+            c for c in configs if isinstance(c, dict) and _as_bool(c.get("enabled", 1))
+        ]
+        if not enabled:
+            raise WrenaiNotConfiguredError()
+
         selector = _connection_selector(connection_id)
         if isinstance(selector, int):
             for conn in configs:
+                if not isinstance(conn, dict):
+                    continue
                 try:
-                    if int(conn.get("id")) == selector:
-                        return conn
+                    if int(conn.get("id")) != selector:
+                        continue
                 except (TypeError, ValueError):
                     continue
-        elif isinstance(selector, str):
-            matches = [
+                if not _as_bool(conn.get("enabled", 1)):
+                    raise WrenaiNotConfiguredError(f"问数项目 id={selector} 已停用")
+                return conn
+            # 启用清单里没有该 id ⇒ 回退主/首条启用（历史行为；常见于 hint 过期）
+            return enabled[0]
+        if isinstance(selector, str):
+            matches_all = [
                 conn
                 for conn in configs
-                if str(conn.get("name") or "").strip() == selector
+                if isinstance(conn, dict)
+                and str(conn.get("name") or "").strip() == selector
             ]
+            matches = [c for c in matches_all if _as_bool(c.get("enabled", 1))]
             if len(matches) == 1:
                 return matches[0]
-            if not matches:
-                raise WrenaiNotConfiguredError(f"未找到名为 {selector} 的已启用问数项目")
-            raise WrenaiNotConfiguredError(
-                f"问数项目名 {selector} 对应多条已启用连接，请改用数字 id"
-            )
-        for conn in configs:
-            if _as_bool(conn.get("enabled")):
-                return conn
-        return configs[0]
+            if len(matches) > 1:
+                raise WrenaiNotConfiguredError(
+                    f"问数项目名 {selector} 对应多条已启用连接，请改用数字 id"
+                )
+            if matches_all:
+                raise WrenaiNotConfiguredError(f"问数项目 {selector} 已停用")
+            raise WrenaiNotConfiguredError(f"未找到名为 {selector} 的已启用问数项目")
+        return enabled[0]
 
     async def _load_dimensions(self) -> list[RowScopeDimension]:
         """从配置缓存读取维度注册表（缺省回退内置种子）。"""

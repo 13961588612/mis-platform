@@ -115,6 +115,8 @@ function ModelCanvasInner({ connectionId }: ModelCanvasProps) {
   const { setViewport: applyReactFlowViewport } = useReactFlow();
   const sync = useSyncStatus(connectionId);
   const setSelected = useModelingStore((state) => state.setSelected);
+  /** 一键整理等外部写布局后 bump，强制本轮 preferPersisted。 */
+  const layoutApplyEpoch = useModelingStore((state) => state.layoutApplyEpoch);
 
   const layout = useModelLayout({ connectionId, enabled: canEdit });
 
@@ -132,6 +134,8 @@ function ModelCanvasInner({ connectionId }: ModelCanvasProps) {
    * 才 `preferPersisted`；平常 catalog 轮询只合语义、不抢坐标。
    */
   const appliedLayoutVersionRef = useRef<string>('');
+  /** 上次已消费的 layoutApplyEpoch（一键整理强制套坐标）。 */
+  const appliedLayoutEpochRef = useRef(0);
 
   /** 关系弹窗状态：create = 拖拽连线；view = 点击既有边。 */
   const [dialog, setDialog] = useState<{
@@ -157,16 +161,29 @@ function ModelCanvasInner({ connectionId }: ModelCanvasProps) {
     const versionKey = `${connectionId}:${layout.version}`;
     const sameConnection = appliedLayoutVersionRef.current.startsWith(`${connectionId}:`);
     const force = forceViewportReloadRef.current;
-    // 与视口同口径：仅首载 / 强制重载吃服务端坐标；本端保存 version bump 不抢本地
+    const forceByEpoch = layoutApplyEpoch !== appliedLayoutEpochRef.current;
+    if (forceByEpoch) {
+      appliedLayoutEpochRef.current = layoutApplyEpoch;
+    }
+    // 与视口同口径：仅首载 / 强制重载吃服务端坐标；本端拖拽保存 version bump 不抢本地。
+    // 一键整理会 bump layoutApplyEpoch，必须 preferPersisted，否则写库了画布仍停在旧坐标。
     const preferPersisted =
-      appliedLayoutVersionRef.current !== versionKey && (!sameConnection || force);
+      forceByEpoch ||
+      (appliedLayoutVersionRef.current !== versionKey && (!sameConnection || force));
     if (appliedLayoutVersionRef.current !== versionKey) {
       appliedLayoutVersionRef.current = versionKey;
     }
     setNodes((prev) =>
       mergeDerivedNodes(derivedNodes, prev, layout.positions, { preferPersisted }),
     );
-  }, [connectionId, derivedNodes, layout.positions, layout.version, layout.isLoading]);
+  }, [
+    connectionId,
+    derivedNodes,
+    layout.positions,
+    layout.version,
+    layout.isLoading,
+    layoutApplyEpoch,
+  ]);
 
   useEffect(() => {
     setEdges((prev) => mergeEdges(derivedEdges, prev));

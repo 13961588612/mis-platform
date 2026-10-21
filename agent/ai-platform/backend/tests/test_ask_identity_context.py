@@ -242,6 +242,36 @@ async def test_hint_outside_enabled_falls_back_to_default(
     assert meta["iqd"]["connection_id"] == 11
 
 
+@pytest.mark.asyncio
+async def test_disabled_current_connection_is_stripped(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """会话残留的停用 connection_id 不得继续注入问数。"""
+
+    async def fake_conns() -> list[int]:
+        return [11]
+
+    monkeypatch.setattr(
+        "src.identity.ask_identity_context._enabled_connection_ids", fake_conns
+    )
+    meta = await inject_connection_id({"iqd": {"connection_id": 99}})
+    assert meta["iqd"]["connection_id"] == 11
+
+
+@pytest.mark.asyncio
+async def test_no_enabled_connection_clears_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_conns() -> list[int]:
+        return []
+
+    monkeypatch.setattr(
+        "src.identity.ask_identity_context._enabled_connection_ids", fake_conns
+    )
+    meta = await inject_connection_id({"iqd": {"connection_id": 99}})
+    assert "connection_id" not in meta["iqd"]
+
+
 def test_invoke_agent_forwards_x_mis_roles_into_child_meta() -> None:
     """agent__invoke 须把父上下文 X-Mis-Roles 写入 child_meta（A2UI Copilot 路径）。"""
     from src.identity.ask_identity_context import X_MIS_HEADER_KEYS
