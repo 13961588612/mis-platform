@@ -65,11 +65,11 @@
 
 | 菜单文案 | 路径 | UI# | 建议 permission |
 |----------|------|-----|-----------------|
-| Agent 总览 | `/agent/agents` | — | `agent:agent:list` |
+| Agent 总览 | `/agent/agents` | — / #10 只读摘要 | `agent:agent:list`（调度列另需 `agent:catalog:list`） |
 | （详情子路由，可无独立菜单） | `/agent/agents/:id/skills` | #5 | `agent:agent:skills` |
 | | `/agent/agents/:id/config` | #9 | `agent:agent:config` |
 | | `/agent/agents/:id/coordination` | #10 | `agent:agent:coordination` |
-| Worker Catalog | `/agent/catalog` | #10 | `agent:catalog:list` |
+| （已并入总览，侧栏隐藏；书签重定向） | `/agent/catalog` | #10 | `agent:catalog:list` |
 | 调度观测 | `/agent/dispatch` | — | `agent:dispatch:list` |
 
 ### 2.3 技能与工具
@@ -112,8 +112,9 @@
 
 ### 3.9 C–W 调度配置（#10）
 
-- `/agent/agents/:id/coordination`：Coordinator / Worker 分表单（role、白名单、TaskBrief、when_to_use…）  
-- `/agent/catalog`：全局 Catalog，编辑深链到 coordination  
+- `/agent/agents/:id/coordination`：Coordinator / Worker 分表单（role、白名单、TaskBrief、when_to_use…）——**唯一写路径**  
+- `/agent/agents`：总览合并 Catalog 指标（执行者/协调者/可调度/需人工审批）与调度只读列；操作列「调度配置」深链 coordination  
+- `/agent/catalog`：已下线独立页，`Navigate` → `/agent/agents`（V154 菜单 visible=0）  
 
 字段对齐 C–W Spec，同原 ui.md §3.9。
 

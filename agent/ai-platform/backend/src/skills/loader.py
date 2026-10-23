@@ -178,12 +178,16 @@ async def load_skills_from_files(
     registry: SkillRegistry,
     *,
     config_base: Path | None = None,
-    enabled_only: bool = True,
+    enabled_only: bool = False,
 ) -> int:
     """
     加载 Skill 并注册（渐进式披露阶段一）。
 
     扫描 ``packages/*/SKILL.md``，仅解析 Front Matter 元数据，不加载 Markdown 正文。
+
+    默认 ``enabled_only=False``：技能池展示 packages 全量；某 Agent 是否可用由
+    ``agents/<id>/skills/enabled-skills.yaml``（运营台「可用技能」）单独约束，
+    不应挡在全局注册之外。传 ``True`` 仅用于需要「只加载已被某 Agent 引用」的特例。
     """
     base: Any = config_base or Path(get_settings().CONFIG_BASE_PATH)
     enabled_ids: set[str] | set[Any] = load_enabled_skill_ids(base) if enabled_only else set()

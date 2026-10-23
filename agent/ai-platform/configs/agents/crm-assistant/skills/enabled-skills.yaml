@@ -4,5 +4,8 @@ skills:
   - member.coupons-account
   - member.points-account
   - member.profile
+  - orders.member-all
+  - orders-detail.crm
+  - orders-detail.ecommerce
   custom_skills_dir: skills/custom-skills/
   overrides_dir: skills/skill-overrides/

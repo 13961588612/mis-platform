@@ -366,7 +366,7 @@ export function AgentSkillPoolPage() {
             className="border-separate border-spacing-0 bg-table-surface text-left text-sm"
             style={tableStyle}
           >
-            <thead className="border-b-2 border-foreground/20 bg-table-header text-muted-foreground">
+            <thead className="sticky top-0 z-10 border-b-2 border-foreground/20 bg-table-header text-muted-foreground">
               <tr>
                 {SKILL_COLS.map((c, ci) => {
                   const active = sortKey === c.key;

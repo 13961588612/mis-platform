@@ -86,7 +86,7 @@
 | UC-CW-1 Agent 调度角色 | P0 | #10 | 设置 `role=coordinator\|worker` |
 | UC-CW-2 Coordinator 委派白名单 | P0 | #10 | 勾选可委派 Worker；禁自调 |
 | UC-CW-3 Worker Catalog 元数据 | P0 | #10 | when_to_use、capabilities、契约、超时、enabled |
-| UC-CW-4 全局 Catalog 页 | P0 | #10 | `/agent/catalog` 浏览/启停；深链到 Agent 调度配置 |
+| UC-CW-4 Catalog 浏览（并入总览） | P0 | #10 | `/agent/agents` 展示 Catalog 指标与只读列；写操作深链 coordination |
 | UC-CW-5 TaskBrief/超时/depth | P1 | #10 | Coordinator 侧治理开关与数值 |
 | UC-AG-3 Agent 列表启停 | P0 | — | `/agent/agents` |
 | UC-MCP-1 MCP 管理 | P0 | #8 | `/agent/mcp` 注册/连接/工具 |
@@ -119,7 +119,7 @@
 | Agent 可用技能 | `/agent/agents/:id/skills` | #5 |
 | Agent 人设与配置 | `/agent/agents/:id/config` | #9 |
 | Agent 调度配置（C–W） | `/agent/agents/:id/coordination` | #10 |
-| Worker Catalog | `/agent/catalog` | #10 |
+| Worker Catalog（已并入 Agent 总览） | `/agent/agents`（旧 `/agent/catalog` 重定向） | #10 |
 | 调度观测 | `/agent/dispatch` | — |
 | 技能池 | `/agent/skills` | #1 #7 |
 | 技能权限 | `/agent/skills/permissions` | #2 |

@@ -39,7 +39,7 @@
 | `/agent/agents/:id/skills` | 可用技能 | #5 |
 | `/agent/agents/:id/config` | 人设与配置 | #9 |
 | `/agent/agents/:id/coordination` | C–W 调度配置 | #10 |
-| `/agent/catalog` | Worker Catalog | #10 |
+| `/agent/agents`（含原 Catalog 摘要；`/agent/catalog` 重定向） | Agent 总览 + Worker Catalog 只读 | #10 |
 | `/agent/dispatch` | 调度观测 | — |
 | `/agent/skills` | 技能池 | #1 #7 |
 | `/agent/skills/permissions` | 技能权限 | #2 |

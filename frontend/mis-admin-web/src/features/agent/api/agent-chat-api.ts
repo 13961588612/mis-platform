@@ -8,6 +8,7 @@
 import axios, { type AxiosError, type InternalAxiosRequestConfig } from 'axios';
 import type { ApiResult, TokenResponse } from '@/types/api';
 import { useAuthStore } from '@/stores/auth-store';
+import { recordAuthKick } from '@/lib/auth/auth-kick-log';
 import { listSkills } from './agent-ops-api';
 import type {
   Session,
@@ -35,20 +36,32 @@ chatApi.interceptors.request.use((config: InternalAxiosRequestConfig) => {
 });
 
 let refreshPromise: Promise<string | null> | null = null;
+let lastRefreshError: string | null = null;
 
 async function refreshAccessToken(): Promise<string | null> {
   if (!refreshPromise) {
+    lastRefreshError = null;
     refreshPromise = chatApi
       .post<ApiResult<TokenResponse>>('/auth/refresh', {})
       .then((res) => {
         if (res.data.code !== 0 || !res.data.data) {
-          throw new Error(res.data.message || 'refresh failed');
+          throw new Error(res.data.message || `refresh code=${res.data.code}`);
         }
         const { accessToken, expiresIn } = res.data.data;
         useAuthStore.getState().setAccessToken(accessToken, expiresIn);
         return accessToken;
       })
-      .catch(() => {
+      .catch((err: unknown) => {
+        const ax = err as AxiosError<ApiResult<unknown>>;
+        lastRefreshError =
+          ax.response?.data?.message ||
+          ax.message ||
+          (err instanceof Error ? err.message : 'refresh failed');
+        console.warn('[auth-kick] chat /auth/refresh 失败', {
+          status: ax.response?.status,
+          code: ax.response?.data?.code,
+          message: lastRefreshError,
+        });
         useAuthStore.getState().clearSession();
         return null;
       })
@@ -73,8 +86,24 @@ chatApi.interceptors.response.use(
       return Promise.reject(error);
     }
     (original as InternalAxiosRequestConfig & { _retry?: boolean })._retry = true;
+    console.warn('[auth-kick] chat 收到 401/40101，尝试 refresh', {
+      url: original.url,
+      method: original.method,
+      status,
+      code,
+      message: error.response?.data?.message,
+    });
     const newToken = await refreshAccessToken();
     if (!newToken) {
+      recordAuthKick({
+        client: 'chat',
+        triggerUrl: original.url,
+        triggerMethod: original.method?.toUpperCase(),
+        httpStatus: status,
+        bizCode: code,
+        bizMessage: error.response?.data?.message,
+        refreshError: lastRefreshError ?? undefined,
+      });
       window.location.href = '/login';
       return Promise.reject(error);
     }

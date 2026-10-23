@@ -537,29 +537,89 @@ def _write_yaml_file(path: Path, data: dict[str, Any]) -> None:
         yaml.dump(data, f, allow_unicode=True, default_flow_style=False, sort_keys=False)
 
 
+def _agent_config_exists(agent_id: str) -> bool:
+    """Agent 配置目录是否存在（不要求运行时实例已启动）。"""
+    return (agent_dir(agent_id) / "agent.yaml").is_file()
+
+
+def _enabled_skills_path(agent_id: str) -> Path:
+    return agent_dir(agent_id) / "skills" / "enabled-skills.yaml"
+
+
+def _read_enabled_skill_ids(agent_id: str) -> list[str]:
+    """从 ``skills/enabled-skills.yaml`` 读取启用技能 ID（磁盘为绑定真值源）。
+
+    运营台保存后若热重载失败，内存 ``instance.config.skills`` 可能仍是旧值；
+    GET 必须读盘，否则「保存成功 → 离开再进 → 绑定未增加」。
+    """
+    raw: dict[str, Any] = _read_yaml_file(_enabled_skills_path(agent_id))
+    skills_section: Any = raw.get("skills", raw) if isinstance(raw, dict) else {}
+    if not isinstance(skills_section, dict):
+        return []
+    enabled: Any = skills_section.get("enabled", [])
+    if not isinstance(enabled, list):
+        return []
+    out: list[str] = []
+    for item in enabled:
+        if isinstance(item, str):
+            sid = item.strip()
+            if sid:
+                out.append(sid)
+            continue
+        if isinstance(item, dict) and item.get("skill_id") and item.get("enabled", True):
+            sid = str(item["skill_id"]).strip()
+            if sid:
+                out.append(sid)
+    return out
+
+
+def _sync_instance_skills(agent_manager: AgentManager, agent_id: str, skill_ids: list[str]) -> None:
+    """尽最大努力把运行中实例的 ``config.skills`` 与磁盘对齐（热重载失败时的兜底）。"""
+    from src.agent.config import SkillRef
+
+    if not agent_manager.has_instance(agent_id):
+        return
+    try:
+        instance: Any = agent_manager.get_agent(agent_id)
+        config: Any = getattr(instance, "config", None)
+        if config is None:
+            return
+        config.skills = [SkillRef(skill_id=sid, enabled=True) for sid in skill_ids]
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "update_agent_skills: sync instance skills skipped",
+            agent_id=agent_id,
+            error=str(exc),
+        )
+
+
 @router.get("/{agent_id}/skills")
 async def get_agent_skills(
     agent_id: str,
     agent_manager: AgentManager = Depends(get_agent_manager_dep),
     user: dict[str, Any] = Depends(get_current_user),
 ) -> dict[str, Any]:
-    """获取 Agent 当前启用技能 + 池内可选集（仅 status=active）。"""
-    try:
-        instance: dict[str, Any] = agent_manager.get_agent(agent_id)
-    except AgentNotFoundError as exc:
-        return error_response(exc.code, exc.message, status.HTTP_404_NOT_FOUND)
+    """获取 Agent 当前启用技能 + 池内可选集（仅 status=active）。
 
-    config: Any = instance.config
-    enabled_ids: list[str] = [
-        s.skill_id for s in getattr(config, "skills", []) if getattr(s, "enabled", True)
-    ]
+    启用列表以 ``enabled-skills.yaml`` 为准；不要求 Agent 正在运行。
+    """
+    if not _agent_config_exists(agent_id):
+        # 兼容：配置文件缺失时仍尝试运行中实例（测试 stub / 特殊部署）
+        try:
+            agent_manager.get_agent(agent_id)
+        except AgentNotFoundError as exc:
+            return error_response(exc.code, exc.message, status.HTTP_404_NOT_FOUND)
+
+    enabled_ids: list[str] = _read_enabled_skill_ids(agent_id)
 
     pool: list[SkillPoolItem] = []
+    seen: set[str] = set()
     from src.bootstrap.skills_mcp import get_skill_registry
 
     registry = get_skill_registry()
     if registry is not None:
-        for skill in registry.list_active():
+        # 含 MCP discover 注册的技能；用 list_all 避免仅 active 时漏展示
+        for skill in registry.list_all():
             status_val: str = (
                 skill.status.value if hasattr(skill.status, "value") else str(skill.status)
             )
@@ -573,6 +633,28 @@ async def get_agent_skills(
                     enabled=skill.skill_id in enabled_ids,
                 )
             )
+            seen.add(skill.skill_id)
+
+    # 已绑定但不在注册表：常见于 MCP 动态发现后进程重启未再「发现」
+    for sid in enabled_ids:
+        if sid in seen:
+            continue
+        is_mcp = sid.startswith("mcp-")
+        tool_name = sid.rsplit("-", 1)[-1] if is_mcp else sid
+        pool.append(
+            SkillPoolItem(
+                skill_id=sid,
+                name=tool_name,
+                description=(
+                    "MCP 工具未加载到技能注册表，请到「MCP 管理」重新「发现」后再绑定"
+                    if is_mcp
+                    else "技能未在注册表中，可能已删除或未同步"
+                ),
+                category="mcp" if is_mcp else "",
+                status="missing",
+                enabled=True,
+            )
+        )
 
     return success(
         data={
@@ -591,11 +673,16 @@ async def update_agent_skills(
     config_manager: ConfigManager = Depends(get_config_manager_dep),
     user: dict[str, Any] = Depends(get_current_user),
 ) -> dict[str, Any]:
-    """更新 Agent 绑定的技能（持久化到 skills/enabled-skills.yaml + 热更新）。"""
-    try:
-        agent_manager.get_agent(agent_id)
-    except AgentNotFoundError as exc:
-        return error_response(exc.code, exc.message, status.HTTP_404_NOT_FOUND)
+    """更新 Agent 绑定的技能（持久化到 skills/enabled-skills.yaml + 热更新）。
+
+    以磁盘写入为准；Agent 未启动也可保存。热重载失败时仍返回已落盘的 ID，
+    并尝试直接改写运行中实例的 ``config.skills``。
+    """
+    if not _agent_config_exists(agent_id):
+        try:
+            agent_manager.get_agent(agent_id)
+        except AgentNotFoundError as exc:
+            return error_response(exc.code, exc.message, status.HTTP_404_NOT_FOUND)
 
     # 校验：所有请求的技能必须在池内且 status=active
     from src.bootstrap.skills_mcp import get_skill_registry
@@ -612,12 +699,14 @@ async def update_agent_skills(
                 )
 
     # 写回 enabled-skills.yaml（保留 custom_skills_dir / overrides_dir）
-    path: Path = agent_dir(agent_id) / "skills" / "enabled-skills.yaml"
+    path: Path = _enabled_skills_path(agent_id)
     existing: dict[str, Any] = _read_yaml_file(path)
     skills_section: dict[str, Any] = existing.get("skills", {}) if isinstance(existing, dict) else {}
     if not isinstance(skills_section, dict):
         skills_section = {}
-    skills_section["enabled"] = list(req.skill_ids)
+    # 去重且保序，避免重复 ID 污染
+    deduped: list[str] = list(dict.fromkeys(sid.strip() for sid in req.skill_ids if sid and sid.strip()))
+    skills_section["enabled"] = deduped
     if "custom_skills_dir" not in skills_section:
         skills_section["custom_skills_dir"] = "skills/custom-skills/"
     if "overrides_dir" not in skills_section:
@@ -625,14 +714,34 @@ async def update_agent_skills(
     _write_yaml_file(path, {"skills": skills_section})
 
     # 触发配置热更新链路（含 WorkerCatalog 刷新）
+    reload_ok = True
+    reload_warning: str | None = None
     try:
-        await config_manager.reload_agent(agent_id)
+        reloaded, runtime_error = await config_manager.reload_agent(agent_id)
+        if runtime_error:
+            reload_ok = False
+            reload_warning = (
+                f"{runtime_error}。绑定已写入配置，新会话或重启 Agent 后生效。"
+            )
+        elif reloaded is None and _agent_config_exists(agent_id):
+            reload_ok = False
+            reload_warning = "配置热重载失败：未能重新加载 Agent。绑定已写入配置，新会话或重启后生效。"
     except Exception as exc:  # noqa: BLE001
+        reload_ok = False
+        reload_warning = f"配置热重载异常：{exc}。绑定已写入配置，新会话或重启 Agent 后生效。"
         logger.warning("update_agent_skills: reload_agent failed", agent_id=agent_id, error=str(exc))
 
+    persisted: list[str] = _read_enabled_skill_ids(agent_id)
+    _sync_instance_skills(agent_manager, agent_id, persisted)
+
     return success(
-        data={"agent_id": agent_id, "enabled_skill_ids": list(req.skill_ids)},
-        message="Agent skills updated",
+        data={
+            "agent_id": agent_id,
+            "enabled_skill_ids": persisted,
+            "reload_ok": reload_ok,
+            "reload_warning": reload_warning,
+        },
+        message="Agent skills updated" if reload_ok else "Agent skills saved with reload warning",
     )
 
 

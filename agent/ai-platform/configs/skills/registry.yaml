@@ -20,6 +20,21 @@ skills:
     package: crm/member-coupon-account
     name: 会员券账户与流水查询
     status: active
+  - id: orders.member-all
+    category: crm
+    package: crm/orders-member-all
+    name: 会员聚合订单查询
+    status: active
+  - id: orders-detail.crm
+    category: crm
+    package: crm/orders-detail-crm
+    name: CRM 订单详情查询
+    status: active
+  - id: orders-detail.ecommerce
+    category: crm
+    package: crm/orders-detail-ecommerce
+    name: 智慧购订单详情查询
+    status: active
   - id: bgbh-router
     category: department_store
     package: bgbh/bgbh-router

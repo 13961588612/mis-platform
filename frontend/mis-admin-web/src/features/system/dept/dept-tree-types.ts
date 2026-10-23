@@ -107,9 +107,17 @@ export function normalizeDeptNode(node: DeptNode, chain: string[] = []): DeptTre
   };
 }
 
+/** 同级按排序号升序（与后端 DeptService.childrenOf 对齐）。 */
+function bySortAsc<T extends { sort?: number | null; id?: string }>(a: T, b: T): number {
+  const sa = a.sort ?? 0;
+  const sb = b.sort ?? 0;
+  if (sa !== sb) return sa - sb;
+  return String(a.id ?? '').localeCompare(String(b.id ?? ''));
+}
+
 /** 本地部门 forest → 统一渲染行数组。 */
 export function normalizeDeptNodes(nodes: DeptNode[], chain: string[] = []): DeptTreeRow[] {
-  return nodes.map((n) => normalizeDeptNode(n, chain));
+  return [...nodes].sort(bySortAsc).map((n) => normalizeDeptNode(n, chain));
 }
 
 /**
@@ -146,7 +154,7 @@ export function normalizePierceNode(node: DeptPierceNode, chain: string[]): Dept
 
 /** 穿透 forest → 只读渲染行数组（全深度递归，共享同一祖先组织链）。 */
 export function normalizePierceForest(nodes: DeptPierceNode[], chain: string[]): DeptTreeRow[] {
-  return nodes.map((n) => normalizePierceNode(n, chain));
+  return [...nodes].sort(bySortAsc).map((n) => normalizePierceNode(n, chain));
 }
 
 /**

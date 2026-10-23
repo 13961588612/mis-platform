@@ -223,7 +223,7 @@ class ConfigManager:
                     error=str(exc),
                 )
 
-    async def reload_agent(self, agent_id: str) -> AgentConfig | None:
+    async def reload_agent(self, agent_id: str) -> tuple[AgentConfig | None, str | None]:
         """重新加载单个 Agent 配置并触发热更新链路。
 
         用于运营台直接改文件（配置文件 / coordination / skills 绑定）后，
@@ -234,12 +234,15 @@ class ConfigManager:
             agent_id: Agent ID（= 目录名）。
 
         Returns:
-            重新加载后的 AgentConfig；文件已删除时返回 ``None``。
+            ``(config, runtime_error)``：
+            - ``config``：重新加载后的 AgentConfig；文件已删除/解析失败时为 ``None``；
+            - ``runtime_error``：运行时热重载失败原因；成功或无运行实例时为 ``None``。
         """
         from src.agent.manager import get_agent_manager
 
         config: AgentConfig | None = None
         change_type: str = "updated"
+        runtime_error: str | None = None
         try:
             config = await self._loader.load_agent_config(agent_id)
             self._configs[agent_id] = config
@@ -248,6 +251,7 @@ class ConfigManager:
             self._configs.pop(agent_id, None)
             config = None
             change_type = "deleted"
+            runtime_error = f"未能重新加载配置：{exc}"
             logger.warning(
                 "reload_agent: config reload failed, treating as deleted",
                 agent_id=agent_id,
@@ -274,13 +278,14 @@ class ConfigManager:
                 if manager.has_instance(agent_id):
                     await manager.reload_config(agent_id, config)
             except Exception as exc:
+                runtime_error = f"运行时热重载失败：{exc}"
                 logger.warning(
                     "reload_agent: agent runtime hot-reload skipped",
                     agent_id=agent_id,
                     error=str(exc),
                 )
 
-        return config
+        return config, runtime_error
 
     async def _save_to_file(self, config: AgentConfig) -> None:
         """将配置保存到文件系统。"""

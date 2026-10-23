@@ -13,8 +13,8 @@
  *   ④ `V19__agent_ops_seed.sql` 的 sys_menu 种子（菜单文案 + permission 码）
  * 少改任何一处的表现是「菜单点了没反应」或「页面存在但侧栏不显示」。
  *
- * <p>本清单只含 **visible=1 的 12 个侧栏页面**。以下三条详情子路由
- * 在 V19 中是 `type=2 + visible=0`（不进侧栏、permission 仍生效），
+ * <p>本清单只含 **visible=1 的侧栏页面**（V154 起 Catalog `/agent/catalog` 已隐藏并入总览）。
+ * 以下三条详情子路由在 V19 中是 `type=2 + visible=0`（不进侧栏、permission 仍生效），
  * 故**刻意不出现在这里**，由 `DYNAMIC_PAGES` 提供 Tab 标题：
  *   `/agent/agents/:id/skills`、`/agent/agents/:id/config`、`/agent/agents/:id/coordination`
  *
@@ -30,9 +30,8 @@ export const AGENT_NAV: SystemNavNode[] = [
   { kind: 'leaf', path: '/agent/sessions', title: '会话管理', icon: 'History' },
   // 会话反馈（V43: 92046，icon MessageSquareWarning 已登记到 lib/nav/icons.ts）
   { kind: 'leaf', path: '/agent/feedback', title: '会话反馈', icon: 'MessageSquareWarning' },
-  // ui.md §2.2 智能体与调度（V19: 92034–92036）
+  // ui.md §2.2 智能体与调度（V19: 92034–92036；92035 Catalog 已并入总览，见 V154）
   { kind: 'leaf', path: '/agent/agents', title: 'Agent 总览', icon: 'Bot' },
-  { kind: 'leaf', path: '/agent/catalog', title: 'Worker Catalog', icon: 'Boxes' },
   { kind: 'leaf', path: '/agent/dispatch', title: '调度观测', icon: 'Route' },
   // ui.md §2.3 技能与工具（V19: 92037–92039）
   { kind: 'leaf', path: '/agent/skills', title: '技能池', icon: 'Sparkles' },

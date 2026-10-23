@@ -101,12 +101,20 @@ async def list_skills(
     if status_filter:
         skills: list[Any] = [s for s in skills if s.status == status_filter]
     if source:
-        skills: list[Any] = [s for s in skills if s.source == source]
+        # source 查询串与 SkillSource 枚举值比对（mcp / package / custom / builtin）
+        skills = [
+            s
+            for s in skills
+            if (s.source.value if hasattr(s.source, "value") else str(s.source)) == source
+        ]
     if keyword:
         kw_lower: str = keyword.lower()
         skills: list[Any] = [
-            s for s in skills
-            if kw_lower in s.name.lower() or kw_lower in s.description.lower()
+            s
+            for s in skills
+            if kw_lower in s.name.lower()
+            or kw_lower in s.description.lower()
+            or kw_lower in s.skill_id.lower()
         ]
 
     total: Any = len(skills)

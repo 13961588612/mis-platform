@@ -18,6 +18,8 @@ import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { PageHeader } from '@/components/common/page-header';
 import { buildAppBreadcrumbs } from '@/components/common/app-breadcrumbs';
+import { SortIndicator } from '@/components/common/sort-indicator';
+import { useClientSort } from '@/components/common/use-client-sort';
 import { Badge } from '@/components/ui/badge';
 import {
   Dialog,
@@ -176,6 +178,45 @@ export function IqdCatalogPage() {
       return OTHER_KINDS.has(it.kind);
     });
   }, [filtered, tab]);
+
+  const getCatalogSortValue = useCallback((row: IqdCatalogItem, key: string): unknown => {
+    switch (key) {
+      case 'kind':
+        return KIND_LABEL[row.kind] ?? row.kind;
+      case 'item_key':
+        return row.item_key;
+      case 'display_name':
+        return row.display_name ?? '';
+      case 'sensitive_level':
+        // 高 > 低 > 无：用序数便于与展示文案一致的直观排序
+        return row.sensitive_level === 'high' ? 2 : row.sensitive_level === 'low' ? 1 : 0;
+      case 'mask_rule':
+        return row.mask_rule ?? '';
+      case 'in_scope':
+        return Boolean(row.in_scope);
+      default:
+        return '';
+    }
+  }, []);
+
+  const {
+    sorted: sortedTabRows,
+    sortKey,
+    sortDir,
+    toggleSort,
+  } = useClientSort(tabRows, getCatalogSortValue);
+
+  const CATALOG_SORT_COLS: { key: string; label: string }[] = useMemo(
+    () => [
+      { key: 'kind', label: '类型' },
+      { key: 'item_key', label: 'item_key' },
+      { key: 'display_name', label: '展示名' },
+      { key: 'sensitive_level', label: '敏感等级' },
+      { key: 'mask_rule', label: '脱敏规则' },
+      { key: 'in_scope', label: '纳入范围' },
+    ],
+    [],
+  );
 
   const tabCounts = useMemo(() => {
     const base = filtered.filter((it) => it.kind !== 'column');
@@ -502,12 +543,29 @@ export function IqdCatalogPage() {
                   onChange={(e) => toggleSelectAll(e.target.checked)}
                 />
               </th>
-              <th className="px-3 py-2 font-bold">类型</th>
-              <th className="px-3 py-2 font-bold">item_key</th>
-              <th className="px-3 py-2 font-bold">展示名</th>
-              <th className="px-3 py-2 font-bold">敏感等级</th>
-              <th className="px-3 py-2 font-bold">脱敏规则</th>
-              <th className="px-3 py-2 font-bold">纳入范围</th>
+              {CATALOG_SORT_COLS.map((col) => {
+                const active = sortKey === col.key;
+                return (
+                  <th
+                    key={col.key}
+                    aria-sort={active ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'none'}
+                    className="px-0 py-0 font-bold"
+                  >
+                    <button
+                      type="button"
+                      onClick={() => toggleSort(col.key)}
+                      className={cn(
+                        'flex w-full items-center gap-1 px-3 py-2 text-left font-bold transition-colors',
+                        active ? 'text-foreground' : 'text-muted-foreground hover:text-foreground',
+                      )}
+                      aria-label={`按${col.label}排序`}
+                    >
+                      {col.label}
+                      <SortIndicator state={active ? sortDir : 'none'} />
+                    </button>
+                  </th>
+                );
+              })}
               <th className="w-40 px-3 py-2 font-bold">操作</th>
             </tr>
           </thead>
@@ -518,7 +576,7 @@ export function IqdCatalogPage() {
                   加载中…
                 </td>
               </tr>
-            ) : tabRows.length === 0 ? (
+            ) : sortedTabRows.length === 0 ? (
               <tr>
                 <td colSpan={8} className="px-3 py-10 text-center text-muted-foreground">
                   {items.length === 0
@@ -527,7 +585,7 @@ export function IqdCatalogPage() {
                 </td>
               </tr>
             ) : (
-              tabRows.map((it) => {
+              sortedTabRows.map((it) => {
                 const hostFields =
                   it.kind === 'table' || it.kind === 'model' ? columnsOfHost(items, it) : [];
                 const fieldInScope = hostFields.filter((c) => c.in_scope).length;
@@ -804,6 +862,35 @@ function FieldScopeDialog({
   const selectAll = () => setPicked(new Set(columns.map((c) => c.item_key)));
   const clearAll = () => setPicked(new Set());
 
+  const getFieldSortValue = useCallback((row: IqdCatalogItem, key: string): unknown => {
+    switch (key) {
+      case 'field':
+        return row.display_name || row.item_key;
+      case 'type':
+        return row.data_type ?? '';
+      case 'description':
+        return row.description ?? '';
+      case 'in_scope':
+        return Boolean(row.in_scope);
+      default:
+        return '';
+    }
+  }, []);
+
+  const {
+    sorted: sortedColumns,
+    sortKey: fieldSortKey,
+    sortDir: fieldSortDir,
+    toggleSort: toggleFieldSort,
+  } = useClientSort(columns, getFieldSortValue);
+
+  const FIELD_SORT_COLS: { key: string; label: string }[] = [
+    { key: 'field', label: '字段' },
+    { key: 'type', label: '类型' },
+    { key: 'description', label: '业务描述' },
+    { key: 'in_scope', label: '纳入' },
+  ];
+
   const apply = async (inScope: boolean) => {
     if (connectionId == null || picked.size === 0) return;
     setSaving(true);
@@ -862,15 +949,38 @@ function FieldScopeDialog({
               <thead className="sticky top-0 bg-background text-muted-foreground">
                 <tr className="border-b">
                   <th className="w-10 px-2 py-1.5" />
-                  <th className="px-2 py-1.5 font-medium">字段</th>
-                  <th className="px-2 py-1.5 font-medium">类型</th>
-                  <th className="px-2 py-1.5 font-medium">业务描述</th>
-                  <th className="px-2 py-1.5 font-medium">纳入</th>
+                  {FIELD_SORT_COLS.map((col) => {
+                    const active = fieldSortKey === col.key;
+                    return (
+                      <th
+                        key={col.key}
+                        aria-sort={
+                          active ? (fieldSortDir === 'asc' ? 'ascending' : 'descending') : 'none'
+                        }
+                        className="px-0 py-0 font-medium"
+                      >
+                        <button
+                          type="button"
+                          onClick={() => toggleFieldSort(col.key)}
+                          className={cn(
+                            'flex w-full items-center gap-1 px-2 py-1.5 text-left font-medium transition-colors',
+                            active
+                              ? 'text-foreground'
+                              : 'text-muted-foreground hover:text-foreground',
+                          )}
+                          aria-label={`按${col.label}排序`}
+                        >
+                          {col.label}
+                          <SortIndicator state={active ? fieldSortDir : 'none'} />
+                        </button>
+                      </th>
+                    );
+                  })}
                   <th className="w-12 px-2 py-1.5 font-medium" />
                 </tr>
               </thead>
               <tbody>
-                {columns.map((col) => (
+                {sortedColumns.map((col) => (
                   <tr key={col.item_key} className="border-b border-border/40">
                     <td className="px-2 py-1.5">
                       <input

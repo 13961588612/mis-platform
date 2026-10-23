@@ -3,12 +3,20 @@ import { useNavigate } from 'react-router-dom';
 import { AlertCircle } from 'lucide-react';
 import { fetchCaptcha, login } from '@/lib/api/auth';
 import { bootstrapSession } from '@/lib/auth/bootstrap';
+import { readLastAuthKick, type AuthKickEntry } from '@/lib/auth/auth-kick-log';
 import { useAuthStore } from '@/stores/auth-store';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { SubmitButton } from '@/components/common/submit-button';
+
+function formatKickHint(kick: AuthKickEntry): string {
+  const when = kick.at ? new Date(kick.at).toLocaleString() : '';
+  const trigger = [kick.triggerMethod, kick.triggerUrl].filter(Boolean).join(' ');
+  const detail = kick.refreshError || kick.bizMessage || `HTTP ${kick.httpStatus ?? '?'}`;
+  return `会话已失效并自动退出（${when}）。触发：${trigger || '未知'}；原因：${detail}`;
+}
 
 export function LoginPage() {
   const navigate = useNavigate();
@@ -20,6 +28,7 @@ export function LoginPage() {
   const [captchaImage, setCaptchaImage] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [kickHint, setKickHint] = useState<string | null>(null);
 
   const loadCaptcha = async () => {
     try {
@@ -34,6 +43,13 @@ export function LoginPage() {
 
   useEffect(() => {
     void loadCaptcha();
+    const last = readLastAuthKick();
+    if (!last?.at) return;
+    const ageMs = Date.now() - Date.parse(last.at);
+    // 仅展示 24h 内的自动踢登录，避免旧记录打扰
+    if (Number.isFinite(ageMs) && ageMs >= 0 && ageMs < 24 * 60 * 60 * 1000) {
+      setKickHint(formatKickHint(last));
+    }
   }, []);
 
   const handleSubmit = async (event: React.FormEvent) => {
@@ -94,6 +110,13 @@ export function LoginPage() {
           </CardHeader>
           <CardContent>
             <form className="space-y-4" onSubmit={handleSubmit}>
+              {kickHint ? (
+                <Alert>
+                  <AlertDescription className="text-xs leading-relaxed text-muted-foreground">
+                    {kickHint}
+                  </AlertDescription>
+                </Alert>
+              ) : null}
               {error ? (
                 <Alert variant="destructive">
                   <AlertDescription className="flex items-center gap-2">

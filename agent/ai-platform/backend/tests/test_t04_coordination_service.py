@@ -87,7 +87,7 @@ def make_coord_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 
         fake_cm = MagicMock()
         fake_cm.get_config = AsyncMock(return_value=config_obj)
-        fake_cm.reload_agent = AsyncMock(return_value=None)
+        fake_cm.reload_agent = AsyncMock(return_value=(None, None))
         monkeypatch.setattr(coord_mod, "get_config_manager", lambda: fake_cm)
         # 避免真实 catalog 重建副作用
         monkeypatch.setattr(coord_mod, "refresh_worker_catalog", lambda: None)

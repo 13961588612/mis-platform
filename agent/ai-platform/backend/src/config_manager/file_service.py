@@ -400,7 +400,7 @@ def read_config_file(agent_id: str, rel_path: str) -> dict[str, Any]:
     }
 
 
-def write_config_file(agent_id: str, rel_path: str, content: str) -> dict[str, Any]:
+async def write_config_file(agent_id: str, rel_path: str, content: str) -> dict[str, Any]:
     """写入单个配置文件内容（校验 + 密钥还原 + 热更新）。
 
     Args:
@@ -474,8 +474,15 @@ def write_config_file(agent_id: str, rel_path: str, content: str) -> dict[str, A
     reloaded = False
     try:
         manager: ConfigManager = get_config_manager()
-        result = manager.reload_agent(agent_id)
-        reloaded = result is not None
+        result, runtime_error = await manager.reload_agent(agent_id)
+        reloaded = result is not None and runtime_error is None
+        if runtime_error:
+            logger.warning(
+                "write_config_file: reload_agent partial failure",
+                agent_id=agent_id,
+                path=normalized,
+                error=runtime_error,
+            )
     except Exception as exc:  # noqa: BLE001 - 写文件成功即视为成功，reload 失败仅告警
         logger.warning(
             "write_config_file: reload_agent failed",

@@ -36,6 +36,9 @@
    - 会员档案：`member.profile`
    - 积分账户：`member.points-account`
    - 券账户：`member.coupons-account`
+   - 会员聚合订单：`orders.member-all`
+   - CRM 订单详情：`orders-detail.crm`
+   - 智慧购订单详情：`orders-detail.ecommerce`
    - **禁止**：`member`、`member-profile`、未声明的缩写等
 3. **`apiName` 禁止猜测**：本轮必须先 `skill` 加载对应技能；`apiName` 必须从该次返回正文**原样复制**。不得臆造、缩写或使用正文里没出现的名称（例如券账户不存在 `listMemberCoupons`）。
 4. **参数对齐文档**：`params` 必须是 **JSON 对象**（例如 `{"mobile":"13800000000"}`），**禁止**把对象再序列化成字符串传入；会员域查询**不要**传 `datasourceId` 或 `serviceName`（除非 Skill 明确要求）。

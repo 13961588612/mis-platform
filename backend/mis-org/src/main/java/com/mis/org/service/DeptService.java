@@ -61,8 +61,7 @@ public class DeptService {
                 .collect(Collectors.groupingBy(SysDept::getParentId));
         Map<Long, String> orgNames = resolveLinkedOrgNames(all);
         Map<Long, String> deptTypeNameMap = buildDeptTypeNameMap(all);
-        List<SysDept> roots = parentMap.getOrDefault(0L, List.of());
-        return roots.stream()
+        return childrenOf(parentMap, 0L).stream()
                 .map(d -> toVoTree(d, parentMap, orgNames, deptTypeNameMap))
                 .toList();
     }
@@ -83,8 +82,7 @@ public class DeptService {
         Map<Long, String> orgNames = resolveLinkedOrgNames(all);
         // V54 一次性批量解析部门类型名（避免 N+1），穿透只读 forest 每层递归透传
         Map<Long, String> deptTypeNameMap = buildDeptTypeNameMap(all);
-        List<SysDept> roots = parentMap.getOrDefault(0L, List.of());
-        return roots.stream()
+        return childrenOf(parentMap, 0L).stream()
                 .map(d -> toPierceVo(d, parentMap, orgName, orgNames, deptTypeNameMap))
                 .toList();
     }
@@ -282,10 +280,19 @@ public class DeptService {
                 .collect(Collectors.toMap(SysDeptType::getId, SysDeptType::getName, (a, b) -> a));
     }
 
+    /** 同级子部门：按 sort 升序，null 靠后；sort 相同再按 id 稳定排序。 */
+    private static List<SysDept> childrenOf(Map<Long, List<SysDept>> parentMap, Long parentId) {
+        return parentMap.getOrDefault(parentId, List.of()).stream()
+                .sorted(Comparator
+                        .comparing(SysDept::getSort, Comparator.nullsLast(Integer::compareTo))
+                        .thenComparing(SysDept::getId, Comparator.nullsLast(Long::compareTo)))
+                .toList();
+    }
+
     private DeptPierceVO toPierceVo(SysDept dept, Map<Long, List<SysDept>> parentMap,
                                     String orgName, Map<Long, String> orgNames,
                                     Map<Long, String> deptTypeNameMap) {
-        List<DeptPierceVO> children = parentMap.getOrDefault(dept.getId(), List.of()).stream()
+        List<DeptPierceVO> children = childrenOf(parentMap, dept.getId()).stream()
                 .map(d -> toPierceVo(d, parentMap, orgName, orgNames, deptTypeNameMap))
                 .toList();
         Long linked = dept.getLinkedOrgId();
@@ -441,10 +448,10 @@ public class DeptService {
         return buildDeptPath(parent, selfId);
     }
 
-    /** 树递归构造：children 由 parentMap 递归展开；isLeaf 按「有无子部门」计算。 */
+    /** 树递归构造：children 由 parentMap 递归展开（同级按 sort 升序）；isLeaf 按「有无子部门」计算。 */
     private DeptVO toVoTree(SysDept dept, Map<Long, List<SysDept>> parentMap, Map<Long, String> orgNames,
                             Map<Long, String> deptTypeNameMap) {
-        List<DeptVO> children = parentMap.getOrDefault(dept.getId(), List.of()).stream()
+        List<DeptVO> children = childrenOf(parentMap, dept.getId()).stream()
                 .map(d -> toVoTree(d, parentMap, orgNames, deptTypeNameMap))
                 .toList();
         int isLeaf = children.isEmpty() ? 1 : 0;

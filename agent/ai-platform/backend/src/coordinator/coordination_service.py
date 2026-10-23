@@ -299,7 +299,13 @@ async def write_coordination(
 
     # ---- 触发 WorkerCatalog 重建 + 配置热更新链路 ----
     try:
-        await manager.reload_agent(agent_id)
+        _, runtime_error = await manager.reload_agent(agent_id)
+        if runtime_error:
+            logger.warning(
+                "write_coordination: reload_agent partial failure",
+                agent_id=agent_id,
+                error=runtime_error,
+            )
     except Exception as exc:  # noqa: BLE001
         logger.warning("write_coordination: reload_agent failed", agent_id=agent_id, error=str(exc))
     refresh_worker_catalog()
